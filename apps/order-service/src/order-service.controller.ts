@@ -849,6 +849,20 @@ export class OrderServiceController {
     );
   }
 
+  /**
+   * DxdZFdIk — kargo to'lovi bekor qilinganda o'sha buyurtmalarning "HQ'ga
+   * yetdi" holatini qaytarish (`provider_settled` ning teskarisi).
+   */
+  @MessagePattern({ cmd: 'order.settlement.provider_unsettled' })
+  settlementProviderUnsettled(
+    @Payload() data: { order_ids?: string[]; requester_id?: string },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.settlementService.revertProviderSettledToHq(data ?? {}),
+    );
+  }
+
   @MessagePattern({ cmd: 'order.initiate_return' })
   initiateReturn(
     @Payload()
@@ -1045,6 +1059,17 @@ export class OrderServiceController {
   ) {
     return this.executeAndAck(context, () =>
       this.orderService.findAllExternal(data.query ?? {}),
+    );
+  }
+
+  // 0d11ewk7 — kuryer tablari badge'i (waiting/all/cancelled) bitta so'rovda.
+  @MessagePattern({ cmd: 'order.courier_counts' })
+  courierOrderCounts(
+    @Payload() data: { courier_id?: string; post_ids?: string[] },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.orderService.courierOrderCounts(data ?? {}),
     );
   }
 
@@ -1573,6 +1598,76 @@ export class OrderServiceController {
   ) {
     return this.executeAndAck(context, () =>
       this.orderAnalyticsService.getFulfillmentStats(
+        data?.startDate,
+        data?.endDate,
+        data?.branch_id,
+      ),
+    );
+  }
+
+  /** (W20LoskP) Buyurtmalar hisoboti: barcha statuslar — bitta GROUP BY. */
+  @MessagePattern({ cmd: 'order.analytics.status_distribution' })
+  analyticsStatusDistribution(
+    @Payload()
+    data: { startDate?: string; endDate?: string; branch_id?: string },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.orderAnalyticsService.getOrderStatusDistribution(
+        data?.startDate,
+        data?.endDate,
+        data?.branch_id,
+      ),
+    );
+  }
+
+  /** (W20LoskP) Buyurtmalar hisoboti: viloyat kesimi — GROUP BY region_id. */
+  @MessagePattern({ cmd: 'order.analytics.by_region' })
+  analyticsByRegion(
+    @Payload()
+    data: { startDate?: string; endDate?: string; branch_id?: string },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.orderAnalyticsService.getOrdersByRegion(
+        data?.startDate,
+        data?.endDate,
+        data?.branch_id,
+      ),
+    );
+  }
+
+  /** (W20LoskP) Buyurtmalar hisoboti: top mahsulotlar — SUM(quantity). */
+  @MessagePattern({ cmd: 'order.analytics.top_products' })
+  analyticsTopProducts(
+    @Payload()
+    data: {
+      startDate?: string;
+      endDate?: string;
+      branch_id?: string;
+      limit?: number;
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.orderAnalyticsService.getTopOrderedProducts(
+        data?.startDate,
+        data?.endDate,
+        data?.branch_id,
+        data?.limit,
+      ),
+    );
+  }
+
+  /** (Celz3rKJ) AI xarajat paneli: davr buyurtmalari manba bo'yicha. */
+  @MessagePattern({ cmd: 'order.analytics.source_distribution' })
+  analyticsSourceDistribution(
+    @Payload()
+    data: { startDate?: string; endDate?: string; branch_id?: string },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.orderAnalyticsService.getOrderSourceDistribution(
         data?.startDate,
         data?.endDate,
         data?.branch_id,

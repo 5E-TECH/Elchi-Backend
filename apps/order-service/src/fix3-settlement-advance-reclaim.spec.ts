@@ -608,4 +608,94 @@ describe('M8 — servis: advance tokenining "applied" belgisi', () => {
     });
     expect(other.store[0].courier_to_branch_by).toBe('17');
   });
+
+  /**
+   * gEdrZxMz — kuryerning CLICK_TO_MARKET to'lovi finance'dan IKKITA siljish
+   * yuboradi: `courier_to_branch` (token) va `hq_to_market` (`token:m`).
+   * Qator MARKET_SETTLED bo'ladi (market_payable faqat PENDING /
+   * COURIER_SETTLED / BRANCH_SETTLED dan yig'iladi), takroriy yetkazishda har
+   * ikkalasi bir marta qo'llanadi. Suffikssiz (bir xil token) bo'lsa ikkinchi
+   * siljish dedup bo'lib ketardi — shuning uchun `:m`.
+   */
+  it('gEdrZxMz: click_to_market — courier_to_branch + hq_to_market (`:m`) qatorni MARKET_SETTLED qiladi, takror bir marta', async () => {
+    const hqRows = (): Partial<OrderSettlement>[] => [
+      {
+        order_id: '201',
+        courier_id: '263',
+        branch_id: null as never,
+        market_id: '191',
+        courier_amount: 300,
+        market_amount: 300,
+      },
+    ];
+    const { service, store, committed } = makeService(hqRows());
+
+    const courierLeg = {
+      level: 'courier_to_branch' as const,
+      match_value: '263',
+      amount: 300,
+      requester_id: '7',
+      request_id: 'pay-ctm',
+    };
+    const marketLeg = {
+      level: 'hq_to_market' as const,
+      match_value: '191',
+      amount: 300,
+      requester_id: '7',
+      request_id: 'pay-ctm:m',
+    };
+
+    await service.advanceSettlement(courierLeg);
+    expect(store[0].status).toBe(SettlementStatus.BRANCH_SETTLED);
+
+    const market = (await service.advanceSettlement(marketLeg)) as {
+      data: Record<string, unknown>;
+    };
+    expect(market.data.settled_order_ids).toEqual(['201']);
+    expect(store[0].status).toBe(SettlementStatus.MARKET_SETTLED);
+    expect(committed.has(appliedKey('pay-ctm'))).toBe(true);
+    expect(committed.has(appliedKey('pay-ctm:m'))).toBe(true);
+
+    // Takroriy yetkazish (outbox relay + tezkor yo'l) — ikkalasi ham replay.
+    const replayCourier = (await service.advanceSettlement(courierLeg)) as {
+      message: string;
+    };
+    const replayMarket = (await service.advanceSettlement(marketLeg)) as {
+      message: string;
+    };
+    expect(replayCourier.message).toBe('Settlement already advanced');
+    expect(replayMarket.message).toBe('Settlement already advanced');
+    expect(store[0].status).toBe(SettlementStatus.MARKET_SETTLED);
+  });
+
+  it('gEdrZxMz: suffikssiz (bir xil token) hq_to_market dedup bo`lib qolardi — `:m` shart', async () => {
+    const { service, store } = makeService([
+      {
+        order_id: '201',
+        courier_id: '263',
+        branch_id: null as never,
+        market_id: '191',
+        courier_amount: 300,
+        market_amount: 300,
+      },
+    ]);
+
+    await service.advanceSettlement({
+      level: 'courier_to_branch',
+      match_value: '263',
+      amount: 300,
+      requester_id: '7',
+      request_id: 'same-token',
+    });
+    const res = (await service.advanceSettlement({
+      level: 'hq_to_market',
+      match_value: '191',
+      amount: 300,
+      requester_id: '7',
+      request_id: 'same-token',
+    })) as { message: string };
+
+    expect(res.message).toBe('Settlement already advanced');
+    expect(store[0].status).toBe(SettlementStatus.BRANCH_SETTLED);
+  });
 });

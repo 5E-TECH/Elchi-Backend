@@ -14,9 +14,9 @@ import { AuditEnrichmentService } from './audit/audit-enrichment.service';
  * amallarini yozgan servislarda `user_name` NULL bo'lgani uchun UI'da "1"
  * chiqardi.
  *
- * Tuzatish: actor/entity endi ichki `identity.user.find_by_ids` (barcha
- * rollar) orqali olinadi. Eski identity (deploy oralig'i) uchun find_all'ga
- * qaytiladi.
+ * Tuzatish: actor/entity endi ichki `identity.user.summary_by_ids` (barcha
+ * rollar, faqat id/name/role — y8CxCtcK) orqali olinadi. Eski identity
+ * (deploy oralig'i) uchun `identity.user.find_by_ids` ga qaytiladi.
  */
 type Row = Record<string, unknown>;
 
@@ -90,6 +90,13 @@ function makeIdentity(
         return of({ data: { items, meta: { total: items.length } } });
       }
       if (pattern.cmd === 'identity.user.find_by_ids') {
+        const ids: string[] = payload?.ids ?? [];
+        return of({
+          success: true,
+          data: ids.map((id) => USERS[id]).filter(Boolean),
+        });
+      }
+      if (pattern.cmd === 'identity.user.summary_by_ids') {
         if (opts.findByIdsTimeout) {
           return throwError(() => new TimeoutError());
         }
@@ -101,7 +108,10 @@ function makeIdentity(
         const ids: string[] = payload?.ids ?? [];
         return of({
           success: true,
-          data: ids.map((id) => USERS[id]).filter(Boolean),
+          data: ids
+            .map((id) => USERS[id])
+            .filter(Boolean)
+            .map((u) => ({ id: u.id, name: u.name, role: u.role })),
         });
       }
       return of({ data: [] });
@@ -181,18 +191,19 @@ describe('GET /activity-logs — superadmin "Kim" ustuni (2WRzdWpZ audit-actor-n
     expect(updated.entity).toMatchObject({ id: '1', name: 'Dilshod' });
   });
 
-  it('sahifadagi barcha foydalanuvchi id lari BITTA find_by_ids chaqiruvida', async () => {
+  it('sahifadagi barcha foydalanuvchi id lari BITTA summary_by_ids chaqiruvida', async () => {
     const { controller, idLeg } = makeController(makeIdentity());
 
     await controller.list({});
 
-    const calls = cmdCalls(idLeg, 'identity.user.find_by_ids');
+    expect(cmdCalls(idLeg, 'identity.user.find_by_ids')).toHaveLength(0);
+    const calls = cmdCalls(idLeg, 'identity.user.summary_by_ids');
     expect(calls).toHaveLength(1);
     expect((calls[0][1] as { ids: string[] }).ids.sort()).toEqual(['1', '37']);
     expect(cmdCalls(idLeg, 'identity.user.find_all')).toHaveLength(0);
   });
 
-  it('eski identity (find_by_ids yo`q): find_all ga qaytadi, ro`yxat yiqilmaydi', async () => {
+  it('eski identity (summary_by_ids yo`q): find_by_ids ga qaytadi, telefon actor`ga chiqmaydi', async () => {
     const { controller, idLeg } = makeController(
       makeIdentity({ findByIdsFails: true }),
     );
@@ -200,10 +211,15 @@ describe('GET /activity-logs — superadmin "Kim" ustuni (2WRzdWpZ audit-actor-n
     const res = await controller.list({});
     const created = (res.data.items as Row[]).find((r) => r.id === '407')!;
 
-    expect(cmdCalls(idLeg, 'identity.user.find_all')).toHaveLength(1);
-    // Market find_all orqali topiladi; superadmin esa avvalgi zaxira shaklida.
+    expect(cmdCalls(idLeg, 'identity.user.find_by_ids')).toHaveLength(1);
+    expect(cmdCalls(idLeg, 'identity.user.find_all')).toHaveLength(0);
     expect(created.entity).toMatchObject({ id: '37' });
-    expect(created.actor).toMatchObject({ id: '1', role: 'superadmin' });
+    expect(created.actor).toMatchObject({
+      id: '1',
+      name: 'Dilshod',
+      role: 'superadmin',
+      phone_number: null,
+    });
   });
 
   it('identity timeout: find_all ga qayta urinilmaydi (kutish ikki baravar bo`lmaydi)', async () => {
@@ -238,7 +254,7 @@ describe('AuditEnrichmentService — foydalanuvchi id larini tozalash (2WRzdWpZ)
       { id: 'c', user_id: '1', entity_type: 'X' },
     ]);
 
-    const calls = cmdCalls(identity, 'identity.user.find_by_ids');
+    const calls = cmdCalls(identity, 'identity.user.summary_by_ids');
     expect(calls).toHaveLength(1);
     expect((calls[0][1] as { ids: string[] }).ids).toEqual(['1']);
     // Raqamsiz id li qator denormal ustunlarga tayanadi (o'zgarmagan xulq).

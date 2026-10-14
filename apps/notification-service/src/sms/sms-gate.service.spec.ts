@@ -1,6 +1,7 @@
 import {
   SmsBlockedError,
   SmsGateService,
+  smsQuotaStream,
   tashkentMinuteOfDay,
 } from './sms-gate.service';
 import { SmsConfigService } from './sms-config.service';
@@ -49,6 +50,57 @@ describe('SmsGateService', () => {
     const where = outbox.count.mock.calls[0][0].where.created_at;
     // Toshkent 00:00 = UTC 19:00 oldingi kun — UTC yarim tuni EMAS.
     expect(where.value).toEqual(new Date('2026-10-05T19:00:00Z'));
+  });
+
+  describe('rkz0yBxr — OTP alohida kvota oqimi', () => {
+    it('security sinfi `otp` oqimiga, qolganlari `general` ga tushadi', () => {
+      expect(smsQuotaStream('security')).toBe('otp');
+      expect(smsQuotaStream('promo')).toBe('general');
+      expect(smsQuotaStream('transactional')).toBe('general');
+    });
+
+    it('umumiy kvota OTP qatorlarini SANAMAYDI, OTP kvotasi faqat OTP ni sanaydi', async () => {
+      const g = gate({ SMS_ENABLED: 'true' });
+      await g.usedToday(new Date(), undefined, 'general');
+      await g.usedToday(new Date(), undefined, 'otp');
+      const general = outbox.count.mock.calls[0][0].where.message_class;
+      const otp = outbox.count.mock.calls[1][0].where.message_class;
+      // Not(In(['security'])) va In(['security']).
+      expect(general.type).toBe('not');
+      expect(general.child.type).toBe('in');
+      expect(general.value).toEqual(['security']);
+      expect(otp.type).toBe('in');
+      expect(otp.value).toEqual(['security']);
+    });
+
+    it('umumiy kvota to‘la (500/500) — OTP o‘z chegarasi (SMS_OTP_DAILY_CAP) bilan o‘tadi', async () => {
+      const g = gate({
+        SMS_ENABLED: 'true',
+        SMS_DAILY_CAP: '500',
+        SMS_OTP_DAILY_CAP: '50',
+      });
+      outbox.count.mockImplementation(({ where }) =>
+        Promise.resolve(where.message_class.type === 'not' ? 500 : 49),
+      );
+      await expect(
+        g.assertCanEnqueue(1, new Date(), undefined, 'general'),
+      ).rejects.toMatchObject({ reason: 'daily_cap_exceeded' });
+      await expect(
+        g.assertCanEnqueue(1, new Date(), undefined, 'otp'),
+      ).resolves.toBeUndefined();
+      await expect(
+        g.assertCanEnqueue(2, new Date(), undefined, 'otp'),
+      ).rejects.toMatchObject({
+        reason: 'daily_cap_exceeded',
+        details: { stream: 'otp', cap: 50, used: 49 },
+      });
+    });
+
+    it('SMS_OTP_DAILY_CAP berilmasa sukut 500 (umumiy kvotadan mustaqil)', () => {
+      const g = gate({ SMS_ENABLED: 'true', SMS_DAILY_CAP: '3' });
+      expect(g.dailyCapFor('otp')).toBe(500);
+      expect(g.dailyCapFor('general')).toBe(3);
+    });
   });
 
   it('Tashkent minute-of-day uses the fixed +5 offset', () => {

@@ -260,6 +260,25 @@ export class NotificationGatewayController {
   }
 
   /**
+   * (rCFZAmOz #1) Shaxsiy Telegram'ni ulash — istalgan tizimga kirgan
+   * foydalanuvchi O'Z akkaunti uchun 15 daqiqalik havola oladi
+   * (`user_id` faqat JWT'dan). Bot `/start <token>` → `users.telegram_id`.
+   */
+  @Post('telegram/link')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary:
+      'Personal Telegram link for the current user: { deep_link, command, expires_at } (15 min)',
+  })
+  telegramLink(@Req() req: AuthedRequest) {
+    return this.send(
+      { cmd: 'notification.telegram.link_token' },
+      { user_id: this.requireUserId(req) },
+    );
+  }
+
+  /**
    * Bildirishnoma turlari reyestri (Eh8y21Ha) — frontend katalogni qo'lda
    * takrorlamasin, shu yerdan olsin. Autentifikatsiya bilan (`@Public` emas).
    * ⚠️ `:id` marshrutidan OLDIN e'lon qilingan.

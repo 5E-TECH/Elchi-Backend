@@ -1319,7 +1319,16 @@ export class OrderLifecycleService {
     await this.outbox.enqueue(
       'FINANCE',
       'finance.cashbox.update_balance',
-      { ...data, payment_method: PaymentMethod.CASH },
+      {
+        ...data,
+        payment_method: PaymentMethod.CASH,
+        // (i75GDixP) Tizim oyog'i: filial ulushli sotuv/bekor qilish BRANCH
+        // kassasini qonuniy manfiyga olib borishi mumkin — finance-service
+        // bu oyoqni rad etmasin (aks holda outbox poison-drop). Bu ANIQ
+        // bayroqni faqat shu yo'l yuboradi; gateway va qo'lda kirim/chiqim
+        // doimo `false`.
+        allow_negative: true,
+      },
       { manager },
     );
   }
@@ -2507,11 +2516,16 @@ export class OrderLifecycleService {
       this.lookup
         .getMarketsByIds([String(order.market_id)])
         .then((rows) => rows[0]),
+      // hEjjuJaT: super-kuryer — buyurtma viloyati tarifi (snapshot bo'lmasa).
       saleCourierId
-        ? this.lookup.getCouriersByIds([saleCourierId]).then((rows) => rows[0])
+        ? this.lookup
+            .getCouriersByIds([saleCourierId], { region_id: order.region_id })
+            .then((rows) => rows[0])
         : isManagerRequester
           ? this.lookup.getUserById(String(requester.id))
-          : this.lookup.getCouriersByIds([courierId]).then((rows) => rows[0]),
+          : this.lookup
+              .getCouriersByIds([courierId], { region_id: order.region_id })
+              .then((rows) => rows[0]),
     ]);
     if (!market) {
       this.notFound('Market not found');
@@ -4999,6 +5013,8 @@ export class OrderLifecycleService {
       assigned_branch?: string;
       total_price: number;
     }> = [];
+    // YfWZXu9g: buyurtma → aniqlangan hudud (pastda bo'sh region_id ga yoziladi).
+    const regionByOrderId = new Map<string, string>();
     for (const order of orders) {
       const district = districtMap.get(order.district_id!);
       const assignedRegion =
@@ -5009,6 +5025,9 @@ export class OrderLifecycleService {
         this.notFound(
           `District/assigned region not found for order #${order.id}`,
         );
+      }
+      if (/^\d+$/.test(String(assignedRegion).trim())) {
+        regionByOrderId.set(String(order.id), String(assignedRegion).trim());
       }
       logisticsPayload.push({
         order_id: order.id,
@@ -5072,12 +5091,26 @@ export class OrderLifecycleService {
           branchId: order.holder_branch_id ?? null,
           courierId: order.holder_courier_id ?? null,
         };
+        /**
+         * ⚠️ YfWZXu9g — `region_id` QABULDA TO'LDIRILADI. Hudud yuqorida
+         * tumandan (`assigned_region`) aniqlanib FAQAT pochtaga uzatilardi,
+         * buyurtmaning o'ziga yozilmasdi: HQ'da yaratilgan (region_id
+         * yuborilmagan) buyurtma NULL hudud bilan qolardi (jonli E2E #31) —
+         * filialga dispatch va hudud filtrlari unga tayanadi. Faqat BO'SH
+         * bo'lsa yoziladi (yaratishda berilgan hudud ustidan yozilmaydi);
+         * qiymat — pochta tanlangan hudud (LC-13 `resolveRegionIdForDistrict`
+         * bilan bir xil tartib: avval `assigned_region`).
+         */
+        const regionFill = String(order.region_id ?? '').trim()
+          ? null
+          : (regionByOrderId.get(String(order.id)) ?? null);
         await queryRunner.manager
           .createQueryBuilder()
           .update(Order)
           .set({
             status: nextStatus,
             post_id: postId ?? null,
+            ...(regionFill ? { region_id: regionFill } : {}),
             holder_type: receiverHolder.holder_type,
             holder_branch_id: receiverHolder.holder_branch_id,
             holder_courier_id: receiverHolder.holder_courier_id,
@@ -5127,6 +5160,9 @@ export class OrderLifecycleService {
         }
         order.status = nextStatus;
         order.post_id = postId ?? null;
+        if (regionFill) {
+          order.region_id = regionFill;
+        }
         order.holder_type = receiverHolder.holder_type;
         order.holder_branch_id = receiverHolder.holder_branch_id;
         order.holder_courier_id = receiverHolder.holder_courier_id;
@@ -6273,8 +6309,10 @@ export class OrderLifecycleService {
         .then((rows) => rows[0]),
       isManagerRequester
         ? this.lookup.getUserById(String(requester.id))
-        : this.lookup
-            .getCouriersByIds([actorCourierId])
+        : // hEjjuJaT: super-kuryer — buyurtma viloyati tarifi (courier_regions
+          // ?? yassi); natija `courier_tariff` ga snapshot bo'ladi.
+          this.lookup
+            .getCouriersByIds([actorCourierId], { region_id: order.region_id })
             .then((rows) => rows[0]),
     ]);
     if (!market) {
@@ -6838,8 +6876,10 @@ export class OrderLifecycleService {
         .then((rows) => rows[0]),
       isManagerRequester
         ? this.lookup.getUserById(String(requester.id))
-        : this.lookup
-            .getCouriersByIds([actorCourierId])
+        : // hEjjuJaT: super-kuryer — buyurtma viloyati tarifi (courier_regions
+          // ?? yassi); natija `courier_tariff` ga snapshot bo'ladi.
+          this.lookup
+            .getCouriersByIds([actorCourierId], { region_id: order.region_id })
             .then((rows) => rows[0]),
     ]);
     if (!market) {
@@ -7725,8 +7765,10 @@ export class OrderLifecycleService {
         .then((rows) => rows[0]),
       isManagerRequester
         ? this.lookup.getUserById(String(requester.id))
-        : this.lookup
-            .getCouriersByIds([actorCourierId])
+        : // hEjjuJaT: super-kuryer — buyurtma viloyati tarifi (courier_regions
+          // ?? yassi); natija `courier_tariff` ga snapshot bo'ladi.
+          this.lookup
+            .getCouriersByIds([actorCourierId], { region_id: order.region_id })
             .then((rows) => rows[0]),
     ]);
     if (!market) {
@@ -8703,6 +8745,25 @@ export class OrderLifecycleService {
 
     // Prevent TypeORM cascade on stale one-to-many relation from nulling order_id.
     delete (order as Partial<Order> & { items?: OrderItem[] }).items;
+
+    /**
+     * ⚠️ hn9zr9A1 — `branch_id` O'ZGARSA, ESKI `branch` RELATSIYASI OLIB
+     * TASHLANADI.
+     *
+     * `findById` buyurtmani `branch` relatsiyasi bilan yuklaydi, `branch_id`
+     * ustuni esa shu relatsiyaning JoinColumn'i. TypeORM `save()` da FK
+     * qiymatini relatsiya OBYEKTIDAN oladi (`ColumnMetadata.getEntityValue`),
+     * ya'ni `order.branch_id = '15'` yozilsa ham eski `order.branch` (HQ)
+     * qiymati saqlanardi. Jonli E2E (buyurtma #31): dispatch / receivePost
+     * `branch_id=15` yuborardi, `holder_branch_id` 15 ga o'tardi (u
+     * relatsiyasiz ustun), `branch_id` esa HQ'da qolardi — filialning
+     * `branch_id` bo'yicha ro'yxat/analitikasida buyurtma ko'rinmasdi.
+     * Relatsiya olib tashlansa, TypeORM ustun qiymatini yozadi. Pul oqimi
+     * (`holder_*`) bu yerda o'zgarmaydi — u yuqorida avvalgidek hisoblanadi.
+     */
+    if (typeof dto.branch_id !== 'undefined') {
+      delete (order as Partial<Order>).branch;
+    }
 
     const writeOrderChanges = async (manager: EntityManager): Promise<void> => {
       const orderRepo = manager.getRepository(Order);

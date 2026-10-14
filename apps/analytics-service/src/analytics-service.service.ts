@@ -3,6 +3,7 @@ import { ClientProxy, RpcException } from '@nestjs/microservices';
 import {
   Order_status,
   Roles,
+  RmqSendOptions,
   TASHKENT_OFFSET_MINUTES,
   endOfTashkentDay,
   parseDateOnly,
@@ -57,6 +58,17 @@ export const ANALYTICS_READ_OPTIONS = Object.freeze({
   deadlineMs: 2500,
 });
 
+/**
+ * (W20LoskP) "Buyurtmalar hisoboti" (`getOrderReport`): bitta PARALLEL
+ * bosqich (5 ta SQL agregat), 8 s < gateway `timeout(12000)`. Hisobot oynasi
+ * dashboarddan keng (366 kungacha), shuning uchun 2,5 s emas.
+ */
+export const REPORT_READ_OPTIONS = Object.freeze({
+  timeoutMs: 8000,
+  retries: 0,
+  deadlineMs: 8000,
+});
+
 /** (5tUEVG1B) Kuryer dashboardidagi reytingda ko'rsatiladigan qatorlar. */
 const COURIER_LEADERBOARD_SIZE = 10;
 /**
@@ -93,14 +105,10 @@ export class AnalyticsServiceService {
     payload: unknown,
     failedParts: string[],
     part: string,
+    options: RmqSendOptions = ANALYTICS_READ_OPTIONS,
   ): Promise<unknown> {
     try {
-      const result = await rmqSend(
-        client,
-        { cmd },
-        payload,
-        ANALYTICS_READ_OPTIONS,
-      );
+      const result = await rmqSend(client, { cmd }, payload, options);
       if (result !== null && result !== undefined) return result;
     } catch (error) {
       this.logger.warn(
@@ -548,87 +556,6 @@ export class AnalyticsServiceService {
     if (!value) return null;
     const d = value instanceof Date ? value : new Date(value);
     return Number.isNaN(d.getTime()) ? null : d;
-  }
-
-  private async requestOrderPage(query: Record<string, any>) {
-    const response = await rmqSend<any>(
-      this.orderClient,
-      { cmd: 'order.find_all' },
-      { query },
-      ANALYTICS_READ_OPTIONS,
-    );
-    if (
-      response &&
-      typeof response === 'object' &&
-      Array.isArray(response.data)
-    ) {
-      return {
-        data: response.data as any[],
-        total: this.parseNumber(response.total, 0),
-        page: this.parseNumber(response.page, query.page ?? 1),
-        limit: this.parseNumber(response.limit, query.limit ?? 20),
-      };
-    }
-
-    const wrapped = this.unwrap<any>(response);
-    if (wrapped && typeof wrapped === 'object' && Array.isArray(wrapped.data)) {
-      return {
-        data: wrapped.data as any[],
-        total: this.parseNumber(wrapped.total, 0),
-        page: this.parseNumber(wrapped.page, query.page ?? 1),
-        limit: this.parseNumber(wrapped.limit, query.limit ?? 20),
-      };
-    }
-
-    return {
-      data: [],
-      total: 0,
-      page: this.parseNumber(query.page, 1),
-      limit: this.parseNumber(query.limit, 20),
-    };
-  }
-
-  /**
-   * ⚠️ (mKS1mjNr) KPI yo'lidan olib tashlandi (`fulfillment_stats` SQL).
-   * Hozir FAQAT `getOrderReport` (`byRegion`, `topProducts`) ishlatadi —
-   * oraliqdagi barcha buyurtmalar `order.items` bilan 200 talik sahifalarda
-   * (≤ 20 000 qator) RMQ orqali tortiladi; `getFinanceReport` ishlatmaydi.
-   * Reja: order-service'da `order.analytics.region_distribution`
-   * (`GROUP BY region_id`) va `order.analytics.top_products`
-   * (`order_items` ⋈ `orders`, `SUM(quantity) GROUP BY product_id LIMIT 10`)
-   * agregatlari, `countOrdersByStatus` dagi 9 ta chaqiruv o'rniga bitta
-   * `GROUP BY status` — shunda hisobot ham ≤ 5 RMQ chaqiruv bo'ladi.
-   */
-  private async collectOrders(query: Record<string, any>) {
-    const limit = 200;
-    let page = 1;
-    let total = 0;
-    const items: any[] = [];
-
-    while (true) {
-      const res = await this.requestOrderPage({ ...query, page, limit });
-      total = res.total;
-      items.push(...res.data);
-      if (items.length >= total || res.data.length === 0) break;
-      page += 1;
-      if (page > 100) break;
-    }
-
-    return { items, total };
-  }
-
-  private async countOrdersByStatus(
-    status: Order_status,
-    range: { startDate: string; endDate: string },
-  ) {
-    const response = await this.requestOrderPage({
-      status,
-      start_day: range.startDate,
-      end_day: range.endDate,
-      page: 1,
-      limit: 1,
-    });
-    return response.total;
   }
 
   private normalizePagedResponse(response: any): {
@@ -1201,85 +1128,117 @@ export class AnalyticsServiceService {
   ) {
     this.assertFinancialAccess(requester);
     const normalized = this.normalizeDateRangeAny(filter);
-    const [overview, topMarkets] = await Promise.all([
-      rmqSend(
-        this.orderClient,
-        { cmd: 'order.analytics.overview' },
-        normalized,
-      ).catch(() => null),
-      rmqSend(
-        this.orderClient,
-        { cmd: 'order.analytics.top_markets' },
-        { limit: 10, ...normalized, include_meta: true },
-      ).catch(() => null),
-    ]);
+    const failedParts: string[] = [];
+    /**
+     * (W20LoskP) Order-service'ga JAMI 5 ta chaqiruv, hammasi PARALLEL
+     * (bitta bosqich, `REPORT_READ_OPTIONS` < gateway `timeout(12000)`).
+     *
+     * ⚠️ ILGARI viloyat va top mahsulotlar uchun davrdagi barcha buyurtmalar
+     * `order.find_all` bilan sahifalab tortilardi (`collectOrders`: 100
+     * sahifa × 100 = eng ko'pi 10 000 qator, 100 ta ketma-ket RMQ) — undan
+     * katta davrda natija JIM kesilardi. Status taqsimoti esa 9 ta qo'lda
+     * yozilgan status bo'yicha 9 ta alohida chaqiruv edi (CREATED, WAITING,
+     * WAITING_CUSTOMER, RETURNED_TO_MARKET umuman yo'q edi). Endi uchalasi
+     * order-service'da SQL GROUP BY — to'liq, kesilmaydi.
+     */
+    const [overview, topMarkets, statusRes, regionRes, productRes] =
+      await Promise.all([
+        this.readPart(
+          this.orderClient,
+          'order.analytics.overview',
+          normalized,
+          failedParts,
+          'overview',
+          REPORT_READ_OPTIONS,
+        ),
+        this.readPart(
+          this.orderClient,
+          'order.analytics.top_markets',
+          { limit: 10, ...normalized, include_meta: true },
+          failedParts,
+          'topMarkets',
+          REPORT_READ_OPTIONS,
+        ),
+        this.readPart(
+          this.orderClient,
+          'order.analytics.status_distribution',
+          normalized,
+          failedParts,
+          'statusDistribution',
+          REPORT_READ_OPTIONS,
+        ),
+        this.readPart(
+          this.orderClient,
+          'order.analytics.by_region',
+          normalized,
+          failedParts,
+          'byRegion',
+          REPORT_READ_OPTIONS,
+        ),
+        this.readPart(
+          this.orderClient,
+          'order.analytics.top_products',
+          { ...normalized, limit: 10 },
+          failedParts,
+          'topProducts',
+          REPORT_READ_OPTIONS,
+        ),
+      ]);
 
-    const statuses: Order_status[] = [
-      Order_status.NEW,
-      Order_status.RECEIVED,
-      Order_status.ON_THE_ROAD,
-      Order_status.SOLD,
-      Order_status.PAID,
-      Order_status.PARTLY_PAID,
-      Order_status.CANCELLED,
-      Order_status.CANCELLED_SENT,
-      Order_status.CLOSED,
-    ];
-
-    const counts = await Promise.all(
-      statuses.map((status) => this.countOrdersByStatus(status, normalized)),
-    );
-    const statusDistribution = statuses.reduce<Record<string, number>>(
-      (acc, status, index) => {
-        acc[status] = counts[index];
-        return acc;
-      },
-      {},
-    );
-
-    const allOrders = await this.collectOrders({
-      start_day: normalized.startDate,
-      end_day: normalized.endDate,
-    });
-
-    const regionMap = new Map<string, number>();
-    const productMap = new Map<
-      string,
-      { product_id: string; total_quantity: number }
-    >();
-    for (const order of allOrders.items) {
-      const regionId = String(order?.region_id ?? 'unknown');
-      regionMap.set(regionId, (regionMap.get(regionId) ?? 0) + 1);
-
-      const items = Array.isArray(order?.items) ? order.items : [];
-      for (const item of items) {
-        const productId = String(item?.product_id ?? 'unknown');
-        const quantity = this.parseNumber(item?.quantity, 1);
-        const current = productMap.get(productId) ?? {
-          product_id: productId,
-          total_quantity: 0,
-        };
-        current.total_quantity += quantity;
-        productMap.set(productId, current);
+    // Har bir `Order_status` kaliti javobda bor (0 bo'lsa ham). Bo'lak
+    // olinmasa — `null` (nollar bilan "bo'sh" deb ko'rsatilmaydi) va
+    // `degraded` / `failed_parts` da ko'rinadi.
+    const statusData = this.unwrap<any>(statusRes as any);
+    let statusDistribution: Record<string, number> | null = null;
+    if (statusRes !== null) {
+      statusDistribution = {};
+      for (const status of Object.values(Order_status)) {
+        statusDistribution[status] = 0;
+      }
+      const source =
+        statusData?.distribution && typeof statusData.distribution === 'object'
+          ? (statusData.distribution as Record<string, unknown>)
+          : {};
+      for (const [status, count] of Object.entries(source)) {
+        statusDistribution[status] = this.parseNumber(count);
       }
     }
+    const statusDistributionTotal = statusDistribution
+      ? Object.values(statusDistribution).reduce((sum, n) => sum + n, 0)
+      : null;
 
-    const byRegion = Array.from(regionMap.entries())
-      .map(([region_id, total_orders]) => ({ region_id, total_orders }))
-      .sort((a, b) => b.total_orders - a.total_orders);
-    const topProducts = Array.from(productMap.values())
-      .sort((a, b) => b.total_quantity - a.total_quantity)
-      .slice(0, 10);
+    const regionData = this.unwrap<any>(regionRes as any);
+    const byRegion = (
+      Array.isArray(regionData?.items) ? (regionData.items as any[]) : []
+    ).map((row) => ({
+      region_id: String(row?.region_id ?? 'unknown'),
+      total_orders: this.parseNumber(row?.total_orders),
+    }));
+
+    const productData = this.unwrap<any>(productRes as any);
+    const topProducts = (
+      Array.isArray(productData?.items) ? (productData.items as any[]) : []
+    ).map((row) => ({
+      product_id: String(row?.product_id ?? 'unknown'),
+      total_quantity: this.parseNumber(row?.total_quantity),
+    }));
 
     return successRes(
       {
         range: normalized,
         overview: this.unwrap(overview as any),
         statusDistribution,
+        statusDistributionTotal,
         byRegion,
         topMarkets: this.ranking(topMarkets).items,
         topMarketsMeta: this.ranking(topMarkets).meta,
         topProducts,
+        // Order-service 366 kunlik oynasi (`clamped`) — status/viloyat/
+        // mahsulot kesimlari overview bilan AYNI oynada hisoblanadi.
+        applied_range:
+          statusData?.applied_range ?? regionData?.applied_range ?? null,
+        degraded: failedParts.length > 0,
+        failed_parts: failedParts.sort(),
       },
       200,
       'Order report',

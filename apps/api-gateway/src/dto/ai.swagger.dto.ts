@@ -1,10 +1,12 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
+  IsInt,
   IsNotEmpty,
   IsNumber,
   IsOptional,
   IsString,
   Matches,
+  Max,
   MaxLength,
   Min,
 } from 'class-validator';
@@ -82,4 +84,44 @@ export class AiUsageSummaryQueryDto {
   @IsString({ message: "to matn bo'lishi kerak" })
   @Matches(YMD_RE, { message: "to YYYY-MM-DD formatida bo'lishi kerak" })
   to?: string;
+}
+
+/**
+ * (Celz3rKJ) `GET /ai-usage/dashboard?fromDate&toDate` — "Moliyaviy balans →
+ * AI xarajat" paneli. Davr Toshkent sanalarida, ikkala chet ham kiradi;
+ * berilmasa oxirgi 30 kun (BeePost `ai-usage/dashboard` bilan bir xil nomlar).
+ */
+export class AiUsageDashboardQueryDto {
+  @ApiPropertyOptional({
+    example: '2026-09-15',
+    description: 'Boshlanish sanasi (YYYY-MM-DD, Toshkent).',
+  })
+  @Transform(trimOptional)
+  @IsOptional()
+  @IsString({ message: "fromDate matn bo'lishi kerak" })
+  @Matches(YMD_RE, { message: "fromDate YYYY-MM-DD formatida bo'lishi kerak" })
+  fromDate?: string;
+
+  @ApiPropertyOptional({
+    example: '2026-10-14',
+    description: 'Tugash sanasi (YYYY-MM-DD, Toshkent), shu kun ham kiradi.',
+  })
+  @Transform(trimOptional)
+  @IsOptional()
+  @IsString({ message: "toDate matn bo'lishi kerak" })
+  @Matches(YMD_RE, { message: "toDate YYYY-MM-DD formatida bo'lishi kerak" })
+  toDate?: string;
+}
+
+/** (Celz3rKJ) `GET /ai-usage/ai-orders?fromDate&toDate&limit` (limit 1..100). */
+export class AiUsageAiOrdersQueryDto extends AiUsageDashboardQueryDto {
+  @ApiPropertyOptional({ example: 100, minimum: 1, maximum: 100 })
+  @Transform(({ value }: { value: unknown }) =>
+    value === undefined || value === '' ? undefined : Number(value),
+  )
+  @IsOptional()
+  @IsInt({ message: "limit butun son bo'lishi kerak" })
+  @Min(1, { message: "limit kamida 1 bo'lishi kerak" })
+  @Max(100, { message: 'limit 100 dan oshmasligi kerak' })
+  limit?: number;
 }

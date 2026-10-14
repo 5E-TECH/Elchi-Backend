@@ -361,17 +361,19 @@ describe('pruneActivityLogsBatched — umumiy muddat DELETE (f2Ud5tju, prune-del
     )
       .replace(/\/\*[\s\S]*?\*\//g, '')
       .replace(/\/\/.*$/gm, '');
-    // DELETE — faqat helper (muddat va partiya env'dan)
+    // (i6Nyedea) DELETE — faqat siyosat helper'i (fe'l sinfi bo'yicha muddat,
+    // partiya va pauza env'dan) va FAQAT ACTIVITY_LOG_PRUNE_ENABLED bilan.
     expect(src).toMatch(
-      /pruneActivityLogsBatched\(\s*run,\s*table,\s*retentionDays,\s*batchSize,?\s*\)/,
+      /pruneByRuleBatched\(\s*run,\s*table,\s*rule,\s*\{\s*batchSize,\s*pauseMs,?\s*\}\s*,?\s*\)/,
     );
+    expect(src).toMatch(/deleteEnabled\s*=\s*isActivityLogPruneEnabled\(\)/);
     expect(src).not.toMatch(/\bDELETE\b/);
     expect(src).not.toMatch(/\bRETURNING\b/);
     expect(src).not.toMatch(/interval '/); // cutoff interpolatsiyasi yo'q
-    // --dry-run: o'sha shart, o'sha muddat
-    expect(src).toMatch(
-      /buildActivityLogPruneCountSql\(table\),\s*\[retentionDays\]/,
-    );
+    // dry-run (bayroq o'chiq yoki --dry-run): AYNI shart bilan sanash
+    expect(src).toMatch(/countByRule\(\s*run,\s*table,\s*rule\s*\)/);
+    // Eski "hammasini 365 kundan keyin o'chir" yo'li yo'q.
+    expect(src).not.toMatch(/pruneActivityLogsBatched\(/);
     // ip/qurilma strip (ACTIVITY_LOG_DEVICE_RETENTION_DAYS) — o'zgarmagan
     expect(src).toContain('ACTIVITY_LOG_DEVICE_RETENTION_ENV');
     expect(src).toMatch(

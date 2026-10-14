@@ -12,6 +12,7 @@ import {
   Param,
   Patch,
   Post,
+  Put,
   Query,
   Req,
   UseGuards,
@@ -54,6 +55,8 @@ import {
   UpdateMarketExpenseProofRequestDto,
   UpdateUserStatusRequestDto,
 } from './dto/identity.swagger.dto';
+import { SetCourierRegionsRequestDto } from './dto/courier-regions.swagger.dto';
+import { ParseBigintIdPipe } from './pipes/parse-bigint-id.pipe';
 
 interface JwtUser {
   sub: string;
@@ -783,6 +786,45 @@ export class ApiGatewayController {
     );
 
     return response;
+  }
+
+  // hEjjuJaT — super-kuryer (ko'p viloyat) va viloyat bo'yicha tarif.
+  // Faqat SUPERADMIN / ADMIN (kuryer tarifi — pul sozlamasi).
+  @Get('couriers/:id/regions')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Super-kuryer viloyatlari va viloyat tariflari (hEjjuJaT)',
+  })
+  @ApiParam({ name: 'id', description: 'Courier ID' })
+  getCourierRegions(@Param('id', ParseBigintIdPipe) id: string) {
+    return this.identityClient
+      .send({ cmd: 'identity.courier.regions.get' }, { id })
+      .pipe(timeout(8000));
+  }
+
+  @Put('couriers/:id/regions')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary:
+      "Super-kuryer bayroqlari va viloyatlar ro'yxatini to'liq almashtirish (hEjjuJaT)",
+  })
+  @ApiParam({ name: 'id', description: 'Courier ID' })
+  @ApiBody({ type: SetCourierRegionsRequestDto })
+  setCourierRegions(
+    @Param('id', ParseBigintIdPipe) id: string,
+    @Body() dto: SetCourierRegionsRequestDto,
+    @Req() req: { user: JwtUser },
+  ) {
+    return this.identityClient
+      .send(
+        { cmd: 'identity.courier.regions.set' },
+        { id, dto, requester: this.toRequester(req) },
+      )
+      .pipe(timeout(8000));
   }
 
   @Get('couriers/region/:id')

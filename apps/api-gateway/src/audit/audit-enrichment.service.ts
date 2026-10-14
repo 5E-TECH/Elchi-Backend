@@ -1,6 +1,10 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { ClientProxy } from '@nestjs/microservices';
 import { firstValueFrom, TimeoutError, timeout } from 'rxjs';
+import {
+  USER_SUMMARY_BY_IDS_PATTERN,
+  describeActivityAction,
+} from '@app/common';
 
 type Row = Record<string, any>;
 
@@ -200,16 +204,10 @@ export class AuditEnrichmentService {
     };
 
     return rows.map((row) => {
-      // actor: prefer freshly-resolved user, fall back to denormalised columns.
-      const actor =
-        this.userSummary(userMap.get(String(row.user_id ?? ''))) ??
-        (row.user_id || row.user_name
-          ? {
-              id: row.user_id ?? null,
-              name: row.user_name ?? null,
-              role: row.user_role ?? null,
-            }
-          : null);
+      const { actor, actor_status } = this.buildActor(
+        row,
+        userMap.get(toIdString(row.user_id).trim()),
+      );
 
       // entity: resolve the row's primary subject by its type.
       let entity: Row | null = null;
@@ -245,10 +243,58 @@ export class AuditEnrichmentService {
       return {
         ...row,
         actor,
+        actor_status,
+        // y8CxCtcK — fe'lning o'zbekcha yorlig'i/kategoriyasi/ikona/toni
+        // (reyestrda yo'q eski fe'l — humanize, `known: false`).
+        action_meta: describeActivityAction(String(row.action ?? '')),
         entity,
         references: Object.keys(references).length ? references : null,
       };
     });
+  }
+
+  /**
+   * "Kim" ustuni (fQi6NNUL / y8CxCtcK).
+   *
+   * - Qatorning O'ZIDAGI `user_name` / `user_role` (yozilgan paytdagi holat)
+   *   USTUN: keyin rol yoki ism o'zgarsa ham eski audit qatori o'zgarmaydi;
+   *   ular bo'sh bo'lsa — identity'dan hal qilingan qiymat.
+   * - `actor_status` — UI jim qolmasin:
+   *   `snapshot` (qatordagi ism), `resolved` (identity'dan),
+   *   `unresolved` (id bor, ism topilmadi — o'chirilgan/identity javob
+   *   bermadi), `system` (aktyorsiz: cron/outbox/webhook).
+   */
+  private buildActor(
+    row: Row,
+    resolved: Row | undefined,
+  ): {
+    actor: Row | null;
+    actor_status: 'snapshot' | 'resolved' | 'unresolved' | 'system';
+  } {
+    const userId = toIdString(row.user_id).trim() || null;
+    const snapName = toIdString(row.user_name).trim() || null;
+    const snapRole = toIdString(row.user_role).trim() || null;
+    if (!userId && !snapName) {
+      return { actor: null, actor_status: 'system' };
+    }
+    const summary = this.userSummary(resolved);
+    const name = snapName ?? summary?.name ?? null;
+    return {
+      actor: {
+        id: userId ?? summary?.id ?? null,
+        name,
+        username: summary?.username ?? null,
+        phone_number: summary?.phone_number ?? null,
+        role: snapRole ?? summary?.role ?? null,
+        status: summary?.status ?? null,
+        resolved: Boolean(name),
+      },
+      actor_status: snapName
+        ? 'snapshot'
+        : summary?.name
+          ? 'resolved'
+          : 'unresolved',
+    };
   }
 
   // ---- resolvers -------------------------------------------------------
@@ -260,7 +306,11 @@ export class AuditEnrichmentService {
    * (GET /users ro'yxati) ishlatilardi. U SUPERADMIN va mijozni ataylab
    * chiqarib tashlaydi, shuning uchun superadmin amallari "Kim" ustunida
    * ism o'rniga "1" bo'lib ko'rinardi (actor zaxira shakli, `user_name` NULL).
-   * Endi ichki `identity.user.find_by_ids` ishlatiladi.
+   * Endi ichki batch ishlatiladi.
+   *
+   * (y8CxCtcK) Asosiy yo'l — `identity.user.summary_by_ids`: faqat
+   * `{ id, name, role }`, telefon QAYTMAYDI. Deploy oralig'ida (identity
+   * hali eski) — `identity.user.find_by_ids` ga qaytiladi.
    */
   private async resolveUsers(ids: Set<string>): Promise<Map<string, Row>> {
     const map = new Map<string, Row>();
@@ -279,7 +329,7 @@ export class AuditEnrichmentService {
   }
 
   private async findUsersChunk(chunk: string[]): Promise<Row[]> {
-    const cmd = 'identity.user.find_by_ids';
+    const cmd = USER_SUMMARY_BY_IDS_PATTERN;
     try {
       const res = await firstValueFrom(
         this.identity.send({ cmd }, { ids: chunk }).pipe(timeout(this.TIMEOUT)),
@@ -292,17 +342,22 @@ export class AuditEnrichmentService {
         this.logger.warn(`enrich leg ${cmd} failed: ${message}`);
         return [];
       }
-      // (2WRzdWpZ) Eski identity (deploy oralig'ida handler hali yo'q) —
-      // avvalgi yo'l: superadminsiz, lekin qolgan ismlar yo'qolmaydi.
+      // (y8CxCtcK) Eski identity (deploy oralig'ida handler hali yo'q) —
+      // avvalgi ichki batch (2WRzdWpZ, rol filtrisiz). Telefon esa actor'ga
+      // baribir chiqmaydi (`buildActor`).
       this.logger.warn(
-        `enrich leg ${cmd} failed: ${message}; identity.user.find_all ga qaytildi`,
+        `enrich leg ${cmd} failed: ${message}; identity.user.find_by_ids ga qaytildi`,
       );
       const legacy = await this.sendSafe(
         this.identity,
-        'identity.user.find_all',
-        { query: { user_ids: chunk, limit: 100 } },
+        'identity.user.find_by_ids',
+        { ids: chunk },
       );
-      return this.userItems(legacy);
+      return this.userItems(legacy).map((u) => ({
+        id: u.id,
+        name: u.name ?? null,
+        role: u.role ?? null,
+      }));
     }
   }
 

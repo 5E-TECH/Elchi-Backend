@@ -3347,6 +3347,54 @@ export class OrderGatewayController {
     );
   }
 
+  /**
+   * 0d11ewk7 — kuryer tablari badge'i: «Kutilayotgan» (waiting), «Hammasi»
+   * (all), «Bekor qilingan» (cancelled) sonlari bitta so'rovda (BeePost
+   * `courier/orders/counts` bilan bir xil shakl).
+   *
+   * Pochtalar ro'yxati GET /orders/courier/orders bilan AYNI yo'l
+   * (findAllCourierPostIds), sanash esa order-service'da o'sha findAll
+   * so'rovlari bilan — badge va ro'yxat `total`i bir-biridan farq qilmaydi.
+   * Faqat COURIER: doira — JWT `sub`, query'dan id olinmaydi.
+   */
+  @Get('courier/orders/counts')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.COURIER)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Courier tab counts (waiting / all / cancelled)',
+  })
+  @ApiOkResponse({
+    schema: {
+      example: {
+        statusCode: 200,
+        message: 'Courier order counts',
+        data: { waiting: 12, all: 340, cancelled: 3 },
+      },
+    },
+  })
+  async courierOrderCounts(@Req() req: { user: JwtUser }) {
+    const courierId = String(req?.user?.sub ?? '').trim();
+    const postIds = await this.findAllCourierPostIds(req?.user);
+    const counts = (await this.sendOrderWithTimeout(
+      { cmd: 'order.courier_counts' },
+      { courier_id: courierId, post_ids: postIds },
+    )) as Partial<Record<'waiting' | 'all' | 'cancelled', unknown>> | null;
+    const toCount = (value: unknown) => {
+      const parsed = Number(value);
+      return Number.isFinite(parsed) && parsed > 0 ? Math.trunc(parsed) : 0;
+    };
+    return successRes(
+      {
+        waiting: toCount(counts?.waiting),
+        all: toCount(counts?.all),
+        cancelled: toCount(counts?.cancelled),
+      },
+      200,
+      'Courier order counts',
+    );
+  }
+
   @Get('courier/orders')
   @Get('courier-orders')
   @UseGuards(JwtAuthGuard)

@@ -34,6 +34,8 @@ export interface UserContact {
   phone_number: string | null;
   role: string | null;
   language: string | null;
+  /** (rCFZAmOz) Shaxsiy Telegram chat id — bot orqali ulangan bo'lsa. */
+  telegram_id?: string | null;
 }
 
 /** SMS'ga sig'adigan qisqa matn — sarlavha + tana. */

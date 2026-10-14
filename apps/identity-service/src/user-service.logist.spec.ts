@@ -141,12 +141,23 @@ describe('(dzyVftBx) Roles.LOGIST', () => {
   it('GET /logists filtri: role=logist 400 bermaydi (enum filtrida bor)', async () => {
     const { service } = makeService();
     const qb: Record<string, jest.Mock> = {};
-    for (const method of ['where', 'andWhere', 'orderBy', 'skip', 'take']) {
+    // nFmup26a: select/addSelect/groupBy/getRawMany — meta rol kesimi.
+    for (const method of [
+      'where',
+      'andWhere',
+      'orderBy',
+      'skip',
+      'take',
+      'select',
+      'addSelect',
+      'groupBy',
+    ]) {
       qb[method] = jest.fn(() => qb);
     }
     qb.clone = jest.fn(() => qb);
     qb.getManyAndCount = jest.fn().mockResolvedValue([[], 0]);
     qb.getCount = jest.fn().mockResolvedValue(0);
+    qb.getRawMany = jest.fn().mockResolvedValue([]);
     (service as any).users.createQueryBuilder = jest.fn(() => qb);
 
     const res: any = await service.findAllAdmins({ role: 'logist' });

@@ -176,6 +176,32 @@ export class AiServiceController implements OnApplicationBootstrap {
     );
   }
 
+  /** (Celz3rKJ) "Moliyaviy balans → AI xarajat" paneli (gateway: SUPERADMIN/ADMIN). */
+  @MessagePattern({ cmd: 'ai.usage.dashboard' })
+  usageDashboard(
+    @Payload() data: { from?: string; to?: string } | null,
+    @Ctx() ctx: RmqContext,
+  ) {
+    return executeAndAck(this.rmqService, ctx, () =>
+      this.adminCall('ai.usage.dashboard', () =>
+        this.usage.dashboard(data?.from, data?.to),
+      ),
+    );
+  }
+
+  /** (Celz3rKJ) AI orqali yaratilgan buyurtmalar ro'yxati. */
+  @MessagePattern({ cmd: 'ai.usage.ai_orders' })
+  usageAiOrders(
+    @Payload() data: { from?: string; to?: string; limit?: number } | null,
+    @Ctx() ctx: RmqContext,
+  ) {
+    return executeAndAck(this.rmqService, ctx, () =>
+      this.adminCall('ai.usage.ai_orders', () =>
+        this.usage.aiOrders(data?.from, data?.to, data?.limit),
+      ),
+    );
+  }
+
   /**
    * ai-confirm natijasi: xarajat jurnaliga order_ids va (vncdmXOy) audit
    * iziga `ai_order_draft_item` (order_id, item_index, edited_fields).

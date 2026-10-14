@@ -223,6 +223,37 @@ describe('markProfitPaid', () => {
     );
   });
 
+  it.each([
+    ['requester yo`q', undefined],
+    ['requester null', null],
+    ['id yo`q', { roles: ['admin'] }],
+    ["id = '0'", { id: '0', roles: ['admin'] }],
+    ['id raqam emas', { id: 'abc', roles: ['admin'] }],
+  ])(
+    '⭐ GADgsW5G: %s → 403, kassaga ham, qatorga ham tegilmaydi',
+    async (_label, requester) => {
+      const { service, profitShareRepo, financeSent } = makeService({});
+      profitShareRepo.findOne.mockResolvedValue({
+        id: 'ps9',
+        investor_id: '42',
+        amount: 250000,
+        is_paid: false,
+        isDeleted: false,
+      });
+
+      const err = await service
+        .markProfitPaid('ps9', requester as never)
+        .then(() => null)
+        .catch((e) => e);
+
+      expect(statusOf(err)).toBe(403);
+      expect(financeSent).toHaveLength(0);
+      expect(profitShareRepo.save).not.toHaveBeenCalled();
+      // '0' foydalanuvchi nomidan chiqim endi umuman yuborilmaydi.
+      expect(JSON.stringify(financeSent)).not.toContain('"user_id":"0"');
+    },
+  );
+
   it('allaqachon to`langan qatorni ikkinchi marta yechmaydi', async () => {
     const { service, profitShareRepo, financeSent } = makeService({});
     profitShareRepo.findOne.mockResolvedValue({

@@ -1245,6 +1245,66 @@ export class OrderServiceService {
     });
   }
 
+  /**
+   * 0d11ewk7 — kuryer tablari badge'i: «Kutilayotgan» / «Hammasi» /
+   * «Bekor qilingan» sonlari BITTA so'rovda.
+   *
+   * ⚠️ Sonlar ro'yxat bilan AYNAN bir xil bo'lishi shart — shuning uchun
+   * alohida COUNT SQL yozilmadi: har tab gateway'dagi GET
+   * /orders/courier/orders yuboradigan AYNI `findAll` so'rovi bilan
+   * (limit 1) sanaladi, `total` — o'sha `countQb.getCount()`:
+   * - waiting   — post_ids + status WAITING;
+   * - all       — post_ids, CREATED/NEW/RECEIVED/ON_THE_ROAD dan tashqari;
+   * - cancelled — findCourierCancelledRows doirasi (9Rdi2gJF: kuryer /
+   *   ushlab turgan kuryer / eski pochta, courier_cancelled_tab).
+   * Pochtasi yo'q kuryer: waiting/all = 0 (ro'yxat ham bo'sh), cancelled —
+   * baribir sanaladi (bekor tabi post_ids ga bog'liq emas).
+   */
+  async courierOrderCounts(payload: {
+    courier_id?: string;
+    post_ids?: string[];
+  }): Promise<{ waiting: number; all: number; cancelled: number }> {
+    const courierId = String(payload?.courier_id ?? '').trim();
+    if (!/^\d+$/.test(courierId) || courierId === '0') {
+      this.badRequest("courier_id noto'g'ri");
+    }
+    const postIds = [
+      ...new Set(
+        (Array.isArray(payload?.post_ids) ? payload.post_ids : [])
+          .map((id) => String(id ?? '').trim())
+          .filter((id) => /^\d+$/.test(id)),
+      ),
+    ];
+    const countOf = async (query: Parameters<typeof this.findAll>[0]) =>
+      Number((await this.findAll({ ...query, page: 1, limit: 1 })).total ?? 0);
+
+    const [waiting, all, cancelled] = await Promise.all([
+      postIds.length
+        ? countOf({ post_ids: postIds, status: [Order_status.WAITING] })
+        : 0,
+      postIds.length
+        ? countOf({
+            post_ids: postIds,
+            exclude_statuses: [
+              Order_status.CREATED,
+              Order_status.NEW,
+              Order_status.RECEIVED,
+              Order_status.ON_THE_ROAD,
+            ],
+          })
+        : 0,
+      countOf({
+        status: [Order_status.CANCELLED],
+        courier_ids: [courierId],
+        holder_courier_ids: [courierId],
+        courier_scope: 'any',
+        courier_post_history: true,
+        courier_cancelled_tab: true,
+      }),
+    ]);
+    return { waiting, all, cancelled };
+  }
+
   async findById(id: string) {
     let order: Order | null;
     try {

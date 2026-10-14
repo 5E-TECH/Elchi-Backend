@@ -261,6 +261,8 @@ export class FinanceServiceController {
       cashbox_type?: Cashbox_type;
       created_by?: string;
       dedup_epoch?: string;
+      // IgR4FVsR — gateway'ning qo'lda chiqimi: P&L daftariga ham yoziladi.
+      financial_ledger?: boolean;
     },
     @Ctx() context: RmqContext,
   ) {
@@ -280,6 +282,8 @@ export class FinanceServiceController {
       cashbox_type?: Cashbox_type;
       created_by?: string;
       dedup_epoch?: string;
+      // IgR4FVsR — gateway'ning qo'lda kirimi: P&L daftariga ham yoziladi.
+      financial_ledger?: boolean;
     },
     @Ctx() context: RmqContext,
   ) {
@@ -299,6 +303,17 @@ export class FinanceServiceController {
   closeShift(@Payload() data: CloseShiftDto, @Ctx() context: RmqContext) {
     return this.executeAndAck(context, () =>
       this.financeService.closeShift(data),
+    );
+  }
+
+  // (kfdfYDik) Kassaning (sukut MAIN) joriy ochiq smenasi + darvoza holati.
+  @MessagePattern({ cmd: 'finance.shift.current' })
+  currentShift(
+    @Payload() data: { cashbox_user_id?: string } | undefined,
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.financeService.currentShift(data ?? {}),
     );
   }
 

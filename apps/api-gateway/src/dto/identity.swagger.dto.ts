@@ -3,6 +3,7 @@ import {
   Equals,
   IsArray,
   IsEnum,
+  IsIn,
   IsNumber,
   IsOptional,
   IsPhoneNumber,
@@ -61,6 +62,12 @@ export class CreateRegistratorRequestDto extends CreateAdminRequestDto {
 }
 
 export class UpdateAdminRequestDto {
+  /** (C4R3YyvH) Bildirishnoma/SMS tili — `PATCH /auth/my-profile` da ham. */
+  @ApiPropertyOptional({ example: 'ru', enum: ['uz', 'ru', 'en'] })
+  @IsOptional()
+  @IsIn(['uz', 'ru', 'en'])
+  language?: 'uz' | 'ru' | 'en';
+
   @ApiPropertyOptional({ example: 'Admin User Updated' })
   @IsOptional()
   @IsString()

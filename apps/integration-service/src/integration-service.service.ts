@@ -1,7 +1,15 @@
 import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import { ClientProxy, RpcException } from '@nestjs/microservices';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Between, In, IsNull, LessThanOrEqual, Not, Repository } from 'typeorm';
+import {
+  Between,
+  In,
+  IsNull,
+  LessThanOrEqual,
+  MoreThanOrEqual,
+  Not,
+  Repository,
+} from 'typeorm';
 import { firstValueFrom, timeout, TimeoutError } from 'rxjs';
 import {
   createCipheriv,
@@ -27,6 +35,7 @@ import {
   normalizeUzPhone,
   maskPiiPayload,
   resolvePartnerMoneyFields,
+  tashkentDayRange,
 } from '@app/common';
 import {
   ExternalIntegration,
@@ -42,7 +51,10 @@ import {
   ProviderReceivable,
   ReceivableStatus,
 } from './entities/provider-receivable.entity';
-import { ProviderRemittance } from './entities/provider-remittance.entity';
+import {
+  ProviderRemittance,
+  RemittanceStatus,
+} from './entities/provider-remittance.entity';
 import { Partner } from './entities/partner.entity';
 import { PartnerMarketRef } from './entities/partner-market-ref.entity';
 import { PartnerShipmentRef } from './entities/partner-shipment-ref.entity';
@@ -2784,9 +2796,10 @@ export class IntegrationServiceService {
   }
 
   /**
-   * Davriy RETENTION (3nZ3dsgR): eski `provider_webhook_logs` + `activity_logs`
-   * ni tozalaydi. Ilgari ikkisida ham retention YO'Q edi — `prune()` ni hech
-   * kim chaqirmasdi va jadvallar cheksiz o'sardi (disk, sekin so'rov).
+   * Davriy RETENTION (3nZ3dsgR): eski `provider_webhook_logs` ni tozalaydi.
+   * (i6Nyedea) `activity_logs` endi bu yerda emas — umumiy siyosat cron'i
+   * (`ActivityLogRetentionScheduler`, sukut DRY-RUN); `activityLogs` har
+   * doim 0 (javob shakli saqlangan).
    *
    * Scheduler tick'idan (har 30s) chaqiriladi, lekin O'ZI gate qiladi: DELETE
    * sukut bo'yicha soatiga ~1 marta bajariladi. Barcha xato YUTILADI — retention
@@ -2818,16 +2831,15 @@ export class IntegrationServiceService {
       );
     }
 
-    let activityLogs = 0;
-    try {
-      activityLogs = await this.activityLog.prune(
-        this.getActivityLogRetentionMs(),
-      );
-    } catch (e) {
-      this.logger.warn(`activity_logs retention xato: ${(e as Error).message}`);
-    }
+    // i6Nyedea — `activity_logs` bu yerda ENDI o'chirilmaydi. Avval har soatda
+    // integratsiya jurnalining 90 kundan eski BARCHA qatorlari (moliyaviy
+    // `external_sync`/webhook dalillari ham) o'chirilardi. Endi — umumiy
+    // fe'l-sinfi siyosati (`ActivityLogRetentionScheduler`, har servisda
+    // kunlik cron) va u ham `ACTIVITY_LOG_PRUNE_ENABLED=true` bo'lmaguncha
+    // faqat DRY-RUN. `ACTIVITY_LOG_RETENTION_MS` env'i e'tiborsiz.
+    const activityLogs = 0;
 
-    if (webhookLogs || activityLogs) {
+    if (webhookLogs) {
       this.logger.log(
         `retention: provider_webhook_logs=${webhookLogs}, activity_logs=${activityLogs} o'chirildi`,
       );
@@ -2841,10 +2853,6 @@ export class IntegrationServiceService {
   private getProviderWebhookLogRetentionMs(): number {
     const raw = Number(process.env.PROVIDER_WEBHOOK_LOG_RETENTION_MS);
     return Number.isFinite(raw) && raw > 0 ? raw : 30 * 24 * 60 * 60 * 1000; // 30 kun (replay/debug oynasi)
-  }
-  private getActivityLogRetentionMs(): number {
-    const raw = Number(process.env.ACTIVITY_LOG_RETENTION_MS);
-    return Number.isFinite(raw) && raw > 0 ? raw : 90 * 24 * 60 * 60 * 1000; // 90 kun (audit tarixi)
   }
 
   /**
@@ -9602,7 +9610,14 @@ export class IntegrationServiceService {
           settledCount += 1;
         }
 
+        /**
+         * utIffRFx — qoldiq endi TARIXDA ham qoladi (migratsiya 080):
+         * ilgari faqat javobda qaytardi va yo'qolardi.
+         */
+        const unappliedAmount = Number((amount - settledAmount).toFixed(2));
         remittance.settled_count = settledCount;
+        remittance.settled_amount = settledAmount.toFixed(2);
+        remittance.unapplied_amount = unappliedAmount.toFixed(2);
         await remittanceRepo.save(remittance);
 
         return {
@@ -9611,9 +9626,10 @@ export class IntegrationServiceService {
               remittance_id: remittance.id,
               integration_id: integrationId,
               remitted_amount: amount,
-              settled_amount: settledAmount,
+              settled_amount: Number(settledAmount.toFixed(2)),
               settled_count: settledCount,
-              unapplied_amount: Number((amount - settledAmount).toFixed(2)),
+              unapplied_amount: unappliedAmount,
+              ...this.remittanceWarning(unappliedAmount),
             },
             201,
             'Remittance recorded',
@@ -9668,6 +9684,20 @@ export class IntegrationServiceService {
       );
     }
 
+    // DxdZFdIk — bekor qilishda kassani teskari yozish kerakmi — shu bayroq.
+    // Saqlanmasa NULL qoladi: bekor qilishda operator `reverse_cashbox` ni
+    // aniq beradi (409) — xavfsiz tomonga.
+    try {
+      await this.remittanceRepo.update(
+        { id: String(result.remittance_id) },
+        { cashbox_posted: cashboxPosted },
+      );
+    } catch (err) {
+      this.logger.warn(
+        `remittance ${String(result.remittance_id)} cashbox_posted saqlanmadi: ${(err as Error)?.message ?? err}`,
+      );
+    }
+
     if (settledOrderIds.length) {
       await rmqSend(
         this.orderClient,
@@ -9714,6 +9744,352 @@ export class IntegrationServiceService {
         // false — yozilmadi, qo'lda tekshirish kerak.
         cashbox_posted: cashboxPosted,
       },
+    };
+  }
+
+  /**
+   * utIffRFx — to'lov qarzga AYNAN mos kelmasa javobga `warning`.
+   *   • qoldiq > 0 — kargo qarzdan ortiq yubordi yoki FIFO butun qatorga
+   *     sig'dira olmadi: kassaga to'liq summa kirdi, qarz daftari esa
+   *     kamroq yopildi (qoldiq `unapplied_amount` da saqlanadi);
+   *   • qoldiq < 0 — aniq buyurtmalar ro'yxati to'lovdan ko'p qarzni yopdi.
+   */
+  private remittanceWarning(unappliedAmount: number): { warning?: string } {
+    if (unappliedAmount > 0) {
+      return {
+        warning: `To'lovning ${unappliedAmount} so'mi hech bir qarz qatoriga sig'madi (qarzdan ortiq yoki butun qatorga yetmadi). Kassaga to'liq summa yozildi — qoldiqni tekshiring.`,
+      };
+    }
+    if (unappliedAmount < 0) {
+      return {
+        warning: `Yopilgan qarz qatorlari to'lovdan ${Math.abs(unappliedAmount)} so'mga ko'p (aniq buyurtmalar ro'yxati). Kassaga faqat to'lov summasi yozildi.`,
+      };
+    }
+    return {};
+  }
+
+  /**
+   * DxdZFdIk — kargo to'lovlari RO'YXATI (ilgari yozuv WRITE-ONLY edi:
+   * `reference`/`note` faqat bazada yotardi, nizoda dalilni chiqarib
+   * bo'lmasdi). Sana — Toshkent kuni (`YYYY-MM-DD`), yangisi birinchi.
+   */
+  async listRemittances(query: {
+    integration_id: string;
+    status?: string;
+    from_date?: string;
+    to_date?: string;
+    page?: number;
+    limit?: number;
+  }) {
+    const integrationId = String(query?.integration_id ?? '').trim();
+    if (!/^\d+$/.test(integrationId)) {
+      this.badRequest('integration_id is required');
+    }
+    const page = Number(query.page) > 0 ? Math.floor(Number(query.page)) : 1;
+    const limit =
+      Number(query.limit) > 0
+        ? Math.min(Math.floor(Number(query.limit)), 100)
+        : 20;
+    if (
+      query.status &&
+      !(Object.values(RemittanceStatus) as string[]).includes(query.status)
+    ) {
+      this.badRequest(`status noto'g'ri: ${String(query.status)}`);
+    }
+    const { start, end } = tashkentDayRange(query.from_date, query.to_date);
+    if (
+      (start && Number.isNaN(start.getTime())) ||
+      (end && Number.isNaN(end.getTime()))
+    ) {
+      this.badRequest("from_date / to_date noto'g'ri (YYYY-MM-DD)");
+    }
+
+    const where: Record<string, unknown> = {
+      integration_id: integrationId,
+      isDeleted: false,
+    };
+    if (query.status) {
+      where.status = query.status;
+    }
+    if (start && end) {
+      where.createdAt = Between(start, end);
+    } else if (start) {
+      where.createdAt = MoreThanOrEqual(start);
+    } else if (end) {
+      where.createdAt = LessThanOrEqual(end);
+    }
+
+    const [rows, total] = await this.remittanceRepo.findAndCount({
+      where,
+      order: { createdAt: 'DESC', id: 'DESC' },
+      skip: (page - 1) * limit,
+      take: limit,
+    });
+
+    const num = (value: unknown) =>
+      value === null || value === undefined ? null : Number(value);
+    const items = rows.map((row) => ({
+      id: row.id,
+      integration_id: row.integration_id,
+      created_at: row.createdAt,
+      amount: Number(row.amount),
+      settled_count: Number(row.settled_count ?? 0),
+      settled_amount: num(row.settled_amount),
+      unapplied_amount: num(row.unapplied_amount),
+      reference: row.reference ?? null,
+      note: row.note ?? null,
+      created_by: row.created_by ?? null,
+      status: row.status ?? RemittanceStatus.ACTIVE,
+      cashbox_posted: row.cashbox_posted ?? null,
+      cancelled_at: row.cancelled_at ?? null,
+      cancelled_by: row.cancelled_by ?? null,
+      cancel_reason: row.cancel_reason ?? null,
+    }));
+
+    return successRes(
+      {
+        items,
+        pagination: {
+          total,
+          page,
+          limit,
+          totalPages: Math.ceil(total / limit),
+        },
+      },
+      200,
+      'Provider remittances',
+    );
+  }
+
+  /**
+   * DxdZFdIk — kargo to'lovini BEKOR QILISH (to'liq DELETE emas).
+   *
+   * Yozuv o'zgarmas qoladi: `status = cancelled` + kim/qachon/sabab. Shu
+   * to'lov yopgan qarz qatorlari PENDING ga qaytadi ("kargo bizga qarz"
+   * shuncha ORTADI) va MAIN kassadan TESKARI chiqim yoziladi (to'lov kassaga
+   * kirim bo'lgan bo'lsa).
+   *
+   * Tartib — pul avval, chunki u boshqa servisda:
+   *   1. yozuv tekshiriladi (bor, shu kargoniki, bekor qilinmagan);
+   *   2. kassa teskari chiqimi — idempotent token
+   *      `provider-remittance-cancel:<id>` (finance kassa qatori qulfi
+   *      ostida dedup qiladi): MAIN kassada mablag' yetmasa xato va HECH
+   *      NARSA o'zgarmaydi; qayta urinish / parallel bosish pulni ikki
+   *      marta yechmaydi;
+   *   3. tranzaksiya: yozuv QULFLANADI, qayta tekshiriladi, qarz qatorlari
+   *      PENDING, yozuv CANCELLED. 3-qadam yiqilsa qayta bosish xavfsiz
+   *      (2-qadam takrorlanmaydi).
+   *   4. order-service: kargo buyurtmalarining "HQ'ga yetdi" holati qaytariladi
+   *      (best-effort; marketga to'lab bo'lingan qatorlar o'zgarmaydi).
+   *
+   * Migratsiyadan oldingi yozuvda (`cashbox_posted = NULL`) kassa yozilgan-
+   * yozilmagani noma'lum — operator `reverse_cashbox` ni ANIQ beradi, aks
+   * holda 409.
+   */
+  async cancelRemittance(input: {
+    integration_id: string;
+    remittance_id: string;
+    reason?: string | null;
+    reverse_cashbox?: boolean | null;
+    cancelled_by?: string | null;
+  }) {
+    const integrationId = String(input?.integration_id ?? '').trim();
+    const remittanceId = String(input?.remittance_id ?? '').trim();
+    if (!/^\d+$/.test(integrationId) || !/^\d+$/.test(remittanceId)) {
+      this.badRequest("integration_id va remittance_id raqam bo'lishi shart");
+    }
+    const cancelledBy =
+      input.cancelled_by && /^\d+$/.test(String(input.cancelled_by))
+        ? String(input.cancelled_by)
+        : null;
+
+    const existing = await this.remittanceRepo.findOne({
+      where: {
+        id: remittanceId,
+        integration_id: integrationId,
+        isDeleted: false,
+      },
+    });
+    if (!existing) {
+      this.notFound('Remittance not found');
+    }
+    if (existing.status === RemittanceStatus.CANCELLED) {
+      return successRes(
+        { ...this.mapCancelledRemittance(existing), idempotent: true },
+        200,
+        "To'lov allaqachon bekor qilingan",
+      );
+    }
+
+    let reverseCashbox: boolean;
+    if (existing.cashbox_posted === true || existing.cashbox_posted === false) {
+      reverseCashbox = existing.cashbox_posted;
+    } else if (typeof input.reverse_cashbox === 'boolean') {
+      reverseCashbox = input.reverse_cashbox;
+    } else {
+      this.conflict(
+        "Bu to'lov kassaga yozilgan-yozilmagani noma'lum (eski yozuv). MAIN kassa tarixini tekshirib, reverse_cashbox: true (kassadan teskari chiqim) yoki false ni aniq yuboring.",
+      );
+    }
+
+    const amount = Number(existing.amount);
+    const cashboxReversed = reverseCashbox && amount > 0;
+    if (cashboxReversed) {
+      try {
+        await rmqSend(
+          this.financeClient,
+          { cmd: 'finance.cashbox.spend' },
+          {
+            user_id: cancelledBy ?? '0',
+            cashbox_type: Cashbox_type.MAIN,
+            amount,
+            comment: `Kargo to'lovi #${remittanceId} bekor qilindi${
+              input.reason ? `: ${String(input.reason)}` : ''
+            }`,
+            created_by: cancelledBy,
+            dedup_epoch: `provider-remittance-cancel:${remittanceId}`,
+          },
+        );
+      } catch (err) {
+        // Hech narsa o'zgarmagan: qarz qatorlari ham, yozuv ham avvalgidek.
+        const remote = (err instanceof RpcException ? err.getError() : err) as {
+          statusCode?: number;
+          message?: string;
+        } | null;
+        const status = Number(remote?.statusCode);
+        throw new RpcException(
+          errorRes(
+            `Kassadan teskari chiqim yozilmadi — to'lov bekor qilinmadi: ${
+              remote?.message ?? (err as Error)?.message ?? 'finance xatosi'
+            }`,
+            status >= 400 && status < 500 ? status : 502,
+          ),
+        );
+      }
+    }
+
+    const reopenedOrderIds: string[] = [];
+    let outcome: {
+      remittance: ProviderRemittance;
+      alreadyCancelled: boolean;
+    };
+    try {
+      outcome = await this.receivableRepo.manager.transaction(
+        async (manager) => {
+          const remittanceRepo = manager.getRepository(ProviderRemittance);
+          const receivableRepo = manager.getRepository(ProviderReceivable);
+          const locked = await remittanceRepo.findOne({
+            where: { id: remittanceId, isDeleted: false },
+            lock: { mode: 'pessimistic_write' },
+          });
+          if (!locked) {
+            this.notFound('Remittance not found');
+          }
+          if (locked.status === RemittanceStatus.CANCELLED) {
+            return { remittance: locked, alreadyCancelled: true };
+          }
+
+          const settled = await receivableRepo.find({
+            where: {
+              remittance_id: remittanceId,
+              status: ReceivableStatus.SETTLED,
+              isDeleted: false,
+            },
+          });
+          for (const row of settled) {
+            row.status = ReceivableStatus.PENDING;
+            row.remittance_id = null;
+            row.settled_at = null;
+            await receivableRepo.save(row);
+            reopenedOrderIds.push(String(row.order_id));
+          }
+
+          locked.status = RemittanceStatus.CANCELLED;
+          locked.cancelled_at = new Date();
+          locked.cancelled_by = cancelledBy;
+          locked.cancel_reason = input.reason ? String(input.reason) : null;
+          const saved = await remittanceRepo.save(locked);
+          return { remittance: saved, alreadyCancelled: false };
+        },
+      );
+    } catch (err) {
+      if (cashboxReversed) {
+        this.logger.error(
+          `remittance ${remittanceId}: kassadan teskari chiqim YOZILDI, lekin bekor qilish tranzaksiyasi yiqildi — qayta bosing (chiqim takrorlanmaydi): ${(err as Error)?.message ?? err}`,
+        );
+      }
+      throw err;
+    }
+
+    if (outcome.alreadyCancelled) {
+      return successRes(
+        {
+          ...this.mapCancelledRemittance(outcome.remittance),
+          idempotent: true,
+        },
+        200,
+        "To'lov allaqachon bekor qilingan",
+      );
+    }
+
+    let settlementReverted = reopenedOrderIds.length === 0;
+    if (reopenedOrderIds.length) {
+      try {
+        await rmqSend(
+          this.orderClient,
+          { cmd: 'order.settlement.provider_unsettled' },
+          {
+            order_ids: reopenedOrderIds,
+            requester_id: cancelledBy ?? 'system',
+          },
+        );
+        settlementReverted = true;
+      } catch (err) {
+        this.logger.warn(
+          `remittance ${remittanceId} bekor qilindi, lekin settlement holati qaytarilmadi: ${(err as Error)?.message ?? err}`,
+        );
+      }
+    }
+
+    await this.activityLog.log({
+      entity_type: 'ProviderRemittance',
+      entity_id: remittanceId,
+      action: ActivityAction.STATUS_CHANGE,
+      old_value: { status: RemittanceStatus.ACTIVE },
+      new_value: { status: RemittanceStatus.CANCELLED },
+      user_id: cancelledBy,
+      metadata: {
+        integration_id: integrationId,
+        amount,
+        reopened_count: reopenedOrderIds.length,
+        order_ids: reopenedOrderIds.slice(0, 10),
+        cashbox_reversed: cashboxReversed,
+        reason: input.reason ?? null,
+      },
+    });
+
+    return successRes(
+      {
+        ...this.mapCancelledRemittance(outcome.remittance),
+        reopened_count: reopenedOrderIds.length,
+        reopened_order_ids: reopenedOrderIds,
+        cashbox_reversed: cashboxReversed,
+        settlement_reverted: settlementReverted,
+      },
+      200,
+      "To'lov bekor qilindi",
+    );
+  }
+
+  private mapCancelledRemittance(row: ProviderRemittance) {
+    return {
+      remittance_id: row.id,
+      integration_id: row.integration_id,
+      amount: Number(row.amount),
+      status: row.status,
+      cancelled_at: row.cancelled_at ?? null,
+      cancelled_by: row.cancelled_by ?? null,
+      cancel_reason: row.cancel_reason ?? null,
     };
   }
 }

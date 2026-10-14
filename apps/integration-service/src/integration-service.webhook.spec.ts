@@ -296,8 +296,16 @@ describe('IntegrationServiceService.receiveWebhook', () => {
     const input = bodyToInput('takror-slug', BODY, { 'x-signature': 'x' });
     const r1 = await service.receiveWebhook(input);
     const r2 = await service.receiveWebhook(input);
-    expect(r1).toMatchObject({ ok: false, code: 401, reason: 'unknown_provider' });
-    expect(r2).toMatchObject({ ok: false, code: 401, reason: 'unknown_provider' });
+    expect(r1).toMatchObject({
+      ok: false,
+      code: 401,
+      reason: 'unknown_provider',
+    });
+    expect(r2).toMatchObject({
+      ok: false,
+      code: 401,
+      reason: 'unknown_provider',
+    });
     // Suiiste'mol seli emas — oyna ichida faqat BIR qator yoziladi.
     expect(webhookLogRepo.save).toHaveBeenCalledTimes(1);
   });
@@ -373,7 +381,11 @@ describe('IntegrationServiceService.receiveWebhook', () => {
     );
 
     // Sizib chiqqan eski sekret endi ABADIY amal qilmaydi.
-    expect(res).toMatchObject({ ok: false, code: 401, reason: 'invalid_signature' });
+    expect(res).toMatchObject({
+      ok: false,
+      code: 401,
+      reason: 'invalid_signature',
+    });
     expect(webhookLogRepo.save).toHaveBeenCalledWith(
       expect.objectContaining({ signature_valid: false, status: 'rejected' }),
     );
@@ -950,17 +962,27 @@ describe("⭐ BIR VAQTDA kelgan nusxa — hodisa QO'LLANMAYDI (audit P1)", () =>
 });
 
 describe('IntegrationServiceService — retention prune (3nZ3dsgR)', () => {
-  it('⭐ maybePruneWebhookRetention: provider_webhook_logs + activity_logs ni tozalaydi', async () => {
+  it('⭐ maybePruneWebhookRetention: provider_webhook_logs ni tozalaydi; activity_logs ga TEGMAYDI (i6Nyedea)', async () => {
     const { service, webhookLogRepo, activityLog } = makeService(null);
     webhookLogRepo.delete = jest.fn().mockResolvedValue({ affected: 12 });
     activityLog.prune = jest.fn().mockResolvedValue(5);
+    process.env.ACTIVITY_LOG_PRUNE_ENABLED = 'true';
+    process.env.ACTIVITY_LOG_RETENTION_MS = '1000';
 
-    const res: any = await service.maybePruneWebhookRetention();
+    try {
+      const res: any = await service.maybePruneWebhookRetention();
 
-    expect(res.webhookLogs).toBe(12);
-    expect(res.activityLogs).toBe(5);
-    expect(webhookLogRepo.delete).toHaveBeenCalled();
-    expect(activityLog.prune).toHaveBeenCalled();
+      expect(res.webhookLogs).toBe(12);
+      // i6Nyedea: integratsiya jurnalining 90 kunlik "hammasini o'chir"
+      // yo'li olib tashlandi — bayroq yoqilgan bo'lsa ham. activity_logs
+      // endi faqat umumiy siyosat cron'i orqali (ActivityLogRetentionScheduler).
+      expect(res.activityLogs).toBe(0);
+      expect(webhookLogRepo.delete).toHaveBeenCalled();
+      expect(activityLog.prune).not.toHaveBeenCalled();
+    } finally {
+      delete process.env.ACTIVITY_LOG_PRUNE_ENABLED;
+      delete process.env.ACTIVITY_LOG_RETENTION_MS;
+    }
   });
 
   it('⭐ oyna ichida IKKINCHI chaqiruv SKIP qiladi (gate — har tick emas)', async () => {
@@ -977,9 +999,7 @@ describe('IntegrationServiceService — retention prune (3nZ3dsgR)', () => {
 
   it('retention xatosi YUTILADI (tick yiqilmasin)', async () => {
     const { service, webhookLogRepo, activityLog } = makeService(null);
-    webhookLogRepo.delete = jest
-      .fn()
-      .mockRejectedValue(new Error('db down'));
+    webhookLogRepo.delete = jest.fn().mockRejectedValue(new Error('db down'));
     activityLog.prune = jest.fn().mockResolvedValue(0);
 
     // throw qilmasligi kerak

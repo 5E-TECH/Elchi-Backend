@@ -12,7 +12,12 @@ import { SmsOutbox } from '../entities/sms-outbox.entity';
 import { Notification } from '../entities/notification.entity';
 import { SmsConfigService } from './sms-config.service';
 import { SmsConsentService } from './sms-consent.service';
-import { SmsBlockedError, SmsGateService } from './sms-gate.service';
+import {
+  SmsBlockedError,
+  SmsGateService,
+  SmsQuotaStream,
+  smsQuotaStream,
+} from './sms-gate.service';
 import { countSmsSegments } from './sms-segments.util';
 import { maskPhone, normalizeSmsPhone } from './sms-phone.util';
 import {
@@ -67,6 +72,17 @@ const INSERT_CHUNK = 500;
  * (`notification.sms-outbox.tick`) va integration-service qulfidan BOSHQA nom.
  */
 export const SMS_QUOTA_LOCK_NAME = 'notification.sms-outbox.quota';
+/**
+ * (rkz0yBxr) OTP oqimining ALOHIDA kvota qulfi: katta reklama/tranzaksion
+ * INSERT umumiy qulfni ushlab turganda ham login kodi kutib qolmaydi.
+ */
+export const SMS_OTP_QUOTA_LOCK_NAME = 'notification.sms-outbox.quota.otp';
+const QUOTA_LOCKS: Record<SmsQuotaStream, string> = {
+  general: SMS_QUOTA_LOCK_NAME,
+  otp: SMS_OTP_QUOTA_LOCK_NAME,
+};
+/** Qulf olish tartibi doim bir xil (deadlock bo'lmasin). */
+const QUOTA_STREAM_ORDER: SmsQuotaStream[] = ['general', 'otp'];
 const MAX_ERROR = 500;
 
 /**
@@ -220,11 +236,21 @@ export class SmsOutboxService {
     // dispatch ikkalasi ham "bugun 490/500" ni ko'rib, birgalikda kvotadan
     // oshib ketardi (pul). Qulf COMMIT/ROLLBACK da o'zi bo'shaydi; chaqiruvchi
     // tranzaksiyasi (`manager`) bo'lsa — o'sha tranzaksiya oxirigacha turadi.
+    // (rkz0yBxr) Har oqim — o'z qulfi va o'z kvotasi (OTP reklama bilan umumiy EMAS).
+    const perStream = new Map<SmsQuotaStream, number>();
+    for (const input of valid) {
+      const stream = smsQuotaStream(input.messageClass);
+      perStream.set(stream, (perStream.get(stream) ?? 0) + 1);
+    }
     const write = async (manager: EntityManager): Promise<string[]> => {
-      await manager.query('SELECT pg_advisory_xact_lock(hashtext($1))', [
-        SMS_QUOTA_LOCK_NAME,
-      ]);
-      await this.gate.assertCanEnqueue(valid.length, now, manager);
+      for (const stream of QUOTA_STREAM_ORDER) {
+        const count = perStream.get(stream);
+        if (!count) continue;
+        await manager.query('SELECT pg_advisory_xact_lock(hashtext($1))', [
+          QUOTA_LOCKS[stream],
+        ]);
+        await this.gate.assertCanEnqueue(count, now, manager, stream);
+      }
       const repo = manager.getRepository(SmsOutbox);
       const ids: string[] = [];
       for (let start = 0; start < rows.length; start += INSERT_CHUNK) {
@@ -271,6 +297,8 @@ export class SmsOutboxService {
   /**
    * Yuborish uchun qatorlarni EGALLAYDI: `FOR UPDATE SKIP LOCKED` — ikkita
    * nusxa bir qatorni ikki marta ololmaydi (advisory lock bilan birga).
+   * (rkz0yBxr) OTP (`security`) ALOHIDA oqim — navbat boshiga: minglab
+   * reklama qatori kutib turgan bo'lsa ham login kodi keyingi tikda ketadi.
    */
   async claimDue(limit: number, now = new Date()): Promise<SmsOutbox[]> {
     await this.recoverStuck(now);
@@ -282,7 +310,7 @@ export class SmsOutboxService {
            WHERE "status" = 'pending'
              AND "scheduled_at" <= $1
              AND ("next_retry_at" IS NULL OR "next_retry_at" <= $1)
-           ORDER BY "scheduled_at" ASC, "id" ASC
+           ORDER BY ("message_class" = 'security') DESC, "scheduled_at" ASC, "id" ASC
            LIMIT $2
            FOR UPDATE SKIP LOCKED
         )

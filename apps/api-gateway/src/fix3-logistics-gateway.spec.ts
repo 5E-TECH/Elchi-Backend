@@ -62,14 +62,17 @@ describe('FIX3 LC-08 — PATCH district/:id', () => {
 /**
  * FIX3 RBAC-14 — hudud statistikasi: market (tashqi) hech birini o'qimaydi;
  * kuryer batafsil statistikani (har bir kuryerning ismi, telefoni,
- * daromadi) o'qimaydi. Kuryerning /regions sahifasi faqat stats/all
- * agregatlarini o'qiydi (kuryer PII yo'q).
+ * daromadi) o'qimaydi. (uherIk8r) Kuryer stats/all ni ham o'qimaydi —
+ * o'z viloyati uchun GET /region/my/district-stats.
  */
 describe('FIX3 RBAC-14 — region stats rollari', () => {
-  it('stats/all: market yo‘q, kuryer qoladi', () => {
+  it("stats/all: market yo'q; kuryer faqat o'tish davri flagi uchun (uherIk8r)", () => {
     const roles = rolesOf('getAllRegionStats');
 
     expect(roles).not.toContain('market');
+    // uherIk8r: kuryer @Roles'da qoldi, lekin 403 handler'da
+    // (REGION_STATS_COURIER_COMPAT=true bo'lmasa) — HTTP darajasidagi tekshiruv:
+    // logistics-gateway.region-stats-scope.spec.ts.
     expect(roles).toEqual(
       expect.arrayContaining([
         'admin',
@@ -79,6 +82,10 @@ describe('FIX3 RBAC-14 — region stats rollari', () => {
         'courier',
       ]),
     );
+  });
+
+  it('my/district-stats: faqat kuryer va menejer (uherIk8r)', () => {
+    expect(rolesOf('getMyRegionDistrictStats')).toEqual(['courier', 'manager']);
   });
 
   it('stats/:id: market ham, kuryer ham yo‘q', () => {

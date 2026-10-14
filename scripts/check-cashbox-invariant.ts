@@ -166,6 +166,86 @@ async function main(): Promise<void> {
   );
 
   // -----------------------------------------------------------------
+  // I3 (1bz6tOle) — usul bo'yicha qoldiq. MAIN kassada naqd yoki karta
+  // chelagi manfiy bo'lmasligi kerak (kod buni taqiqlaydi) — bu reconcile-
+  // strict'da XATO. BRANCH manfiy bo'lishi mumkin (sotuv oyoqlari, I13) —
+  // faqat ma'lumot. FOR_COURIER / FOR_MARKET — qarz hisobi: karta chelagi 0
+  // bo'lishi kerak; eski (bo'lingan) qoldiq keyingi harakatda o'zi
+  // yig'iladi — faqat ma'lumot.
+  // -----------------------------------------------------------------
+  const methodRows: Array<{
+    cashbox_id: string;
+    cashbox_type: string;
+    balance_cash: string;
+    balance_card: string;
+  }> = await ds.query(`
+    SELECT cb.id AS cashbox_id, cb.cashbox_type::text AS cashbox_type,
+           cb.balance_cash::text AS balance_cash,
+           cb.balance_card::text AS balance_card
+    FROM ${SCHEMA}.cashboxes cb
+    WHERE cb.is_deleted = false
+      AND (
+        (cb.cashbox_type::text IN ('main', 'branch')
+          AND (cb.balance_cash < 0 OR cb.balance_card < 0))
+        OR (cb.cashbox_type::text IN ('couriers', 'markets')
+          AND cb.balance_card <> 0)
+      )
+    ORDER BY cb.cashbox_type, cb.id
+  `);
+  const mainMethodNegative = methodRows.filter(
+    (r) => r.cashbox_type === 'main',
+  );
+  for (const r of methodRows) {
+    console.log(
+      `${r.cashbox_type === 'main' ? '⚠️ ' : 'ℹ️ '} [I3] ${r.cashbox_type} ${r.cashbox_id}  cash=${r.balance_cash}  card=${r.balance_card}`,
+    );
+  }
+
+  // -----------------------------------------------------------------
+  // IgR4FVsR — qo'lda kirim/chiqim ↔ P&L daftari (INFORMATIONAL). Gateway
+  // orqali qilingan har bir MAIN/BRANCH qo'lda harakati FBH'da
+  // `dedup_key = 'cashbox-history:<id>'` yozuviga ega bo'lishi kerak. Faqat
+  // birinchi shunday yozuvdan keyingi qatorlar tekshiriladi (undan oldingi
+  // tarix daftarga tushmagan — ma'lum). Investor to'lovi (o'zi FBH yozadi)
+  // va kargo remittance'i (debitor yig'imi) chiqarib tashlanadi.
+  // -----------------------------------------------------------------
+  try {
+    const [manualGap]: Array<{ n: string; total: string }> = await ds.query(`
+      WITH cutoff AS (
+        SELECT MIN(f."createdAt") AS since
+        FROM ${SCHEMA}.financial_balance_history f
+        WHERE f.dedup_key LIKE 'cashbox-history:%'
+      )
+      SELECT COUNT(*)::text AS n,
+             COALESCE(SUM(CASE WHEN ch.operation_type = 'income'
+                               THEN ch.amount ELSE -ch.amount END), 0)::text AS total
+      FROM ${SCHEMA}.cashbox_history ch
+      JOIN ${SCHEMA}.cashboxes cb ON cb.id = ch.cashbox_id
+      CROSS JOIN cutoff
+      WHERE cutoff.since IS NOT NULL
+        AND ch."createdAt" >= cutoff.since
+        AND ch.is_deleted = false
+        AND ch.source_type::text IN ('manual_income', 'manual_expense')
+        AND cb.cashbox_type::text IN ('main', 'branch')
+        AND ch.dedup_epoch NOT LIKE 'investor-profit:%'
+        AND ch.dedup_epoch NOT LIKE 'provider-remittance:%'
+        AND NOT EXISTS (
+          SELECT 1 FROM ${SCHEMA}.financial_balance_history f
+          WHERE f.dedup_key = 'cashbox-history:' || ch.id::text
+        )
+    `);
+    if (Number(manualGap?.n ?? 0) > 0) {
+      console.log(
+        `\nℹ️  [IgR4FVsR] P&L daftariga tushmagan qo'lda kassa harakatlari: ${manualGap.n} ta, jami ${manualGap.total}`,
+      );
+    }
+  } catch (err) {
+    console.log(
+      `\nℹ️  manual ↔ P&L check skipped: ${(err as Error)?.message ?? err}`,
+    );
+  }
+
+  // -----------------------------------------------------------------
   // Cross-system settlement reconciliation (Audit I3) — INFORMATIONAL.
   // The per-order FIFO order_settlement ledger (order_schema) and the cashbox
   // balances (finance_schema) are two views of the same money. If the
@@ -273,6 +353,11 @@ async function main(): Promise<void> {
     const problems: string[] = [];
     if (drifted.length) {
       problems.push(`${drifted.length} cashbox(es) with I1/I2 drift`);
+    }
+    if (mainMethodNegative.length) {
+      problems.push(
+        `${mainMethodNegative.length} MAIN cashbox(es) with a negative cash/card bucket (I3)`,
+      );
     }
     if (reconDiverging.length) {
       problems.push(

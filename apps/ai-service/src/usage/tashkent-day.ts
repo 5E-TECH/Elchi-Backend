@@ -22,6 +22,12 @@ export const TASHKENT_OFFSET_ISO = '+05:00';
  */
 export const TASHKENT_DAY_SQL = `("createdAt" AT TIME ZONE 'Asia/Tashkent')::date`;
 
+/**
+ * (Celz3rKJ) Xuddi shu qoida `created_at` ustunli jadvallar uchun
+ * (`ai_order_draft_item` — AI orqali yaratilgan buyurtmalar).
+ */
+export const TASHKENT_DAY_SQL_CREATED_AT = `(created_at AT TIME ZONE 'Asia/Tashkent')::date`;
+
 const YMD_RE = /^\d{4}-\d{2}-\d{2}$/;
 const DAY_MS = 24 * 60 * 60 * 1000;
 

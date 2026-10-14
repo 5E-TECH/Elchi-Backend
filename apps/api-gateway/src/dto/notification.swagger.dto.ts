@@ -396,6 +396,24 @@ export class DispatchNotificationRequestDto {
   @ValidateNested()
   @Type(() => DispatchTelegramTargetDto)
   telegram?: DispatchTelegramTargetDto;
+
+  /**
+   * (7Vozou5x) Har "Yuborish" bosilishi uchun bitta UUID (qayta urinishda
+   * O'SHA qiymat). U `dispatch_id` bo'ladi: 504 dan keyin
+   * `GET /notifications/sent/:dispatch_id` bilan natijani tekshirish mumkin,
+   * ayni id bilan qayta yuborish esa IKKINCHI marta yubormaydi.
+   */
+  @ApiPropertyOptional({
+    example: '0b7f6f5e-3c1a-4c6e-9b1d-2f0a6c1e9d42',
+    description:
+      'Client UUID per "Send" click (reuse on retry) — becomes dispatch_id; duplicate → stored result, no resend',
+  })
+  @IsOptional()
+  @IsString()
+  @Matches(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i, {
+    message: 'client_request_id must be a UUID',
+  })
+  client_request_id?: string;
 }
 
 export class InboxQueryDto {

@@ -85,6 +85,11 @@ function makeService() {
     getManyAndCount: () => Promise.resolve([[marketRow()], 1]),
     getCount: () => Promise.resolve(1),
     getMany: () => Promise.resolve([customerRow()]),
+    // nFmup26a: findAllAdmins meta — rol kesimi GROUP BY (getRawMany).
+    select: () => qb,
+    addSelect: () => qb,
+    groupBy: () => qb,
+    getRawMany: () => Promise.resolve([{ role: 'market', count: '1' }]),
   });
 
   const repo = {

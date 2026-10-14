@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Delete,
+  ForbiddenException,
   GatewayTimeoutException,
   Get,
   GoneException,
@@ -332,12 +333,46 @@ export class LogisticsGatewayController {
     enum: ['new', 'sent', 'received', 'canceled', 'canceled_received'],
   })
   @ApiQuery({ name: 'branch_id', required: false, type: String })
+  @ApiQuery({ name: 'page', required: false, type: Number })
+  @ApiQuery({
+    name: 'limit',
+    required: false,
+    type: Number,
+    description:
+      "Sahifadagi qator soni (standart 8, maksimum 100). 100 dan katta so'ralsa javobda limit_capped: true (kA70Rban)",
+  })
+  @ApiQuery({ name: 'region_id', required: false, type: String })
+  @ApiQuery({ name: 'courier_id', required: false, type: String })
+  @ApiQuery({
+    name: 'startDate',
+    required: false,
+    type: String,
+    description: 'YYYY-MM-DD — Toshkent kuni 00:00 dan (createdAt)',
+  })
+  @ApiQuery({
+    name: 'endDate',
+    required: false,
+    type: String,
+    description: 'YYYY-MM-DD — Toshkent kuni 23:59:59.999 gacha (createdAt)',
+  })
+  @ApiQuery({
+    name: 'has_orders',
+    required: false,
+    type: Boolean,
+    description: 'true — faqat order_quantity > 0 pochtalar',
+  })
   getAllPosts(
     @Query('page') page?: string,
     @Query('limit') limit?: string,
     @Query('status') status?: string,
     @Query('branch_id') branchId?: string,
     @Req() req?: { user?: JwtUser },
+    // YfrqN70i — avval jimgina tashlanardi; endi logistics where'iga yetadi.
+    @Query('region_id') regionId?: string,
+    @Query('courier_id') courierId?: string,
+    @Query('startDate') startDate?: string,
+    @Query('endDate') endDate?: string,
+    @Query('has_orders') hasOrders?: string,
   ) {
     return this.logisticsClient
       .send(
@@ -348,6 +383,11 @@ export class LogisticsGatewayController {
             limit: limit ? Number(limit) : 8,
             status: status ? String(status).trim().toLowerCase() : undefined,
             branch_id: branchId ? String(branchId).trim() : undefined,
+            region_id: regionId ? String(regionId).trim() : undefined,
+            courier_id: courierId ? String(courierId).trim() : undefined,
+            startDate: startDate ? String(startDate).trim() : undefined,
+            endDate: endDate ? String(endDate).trim() : undefined,
+            has_orders: hasOrders ? String(hasOrders).trim() : undefined,
           },
           requester: { id: req?.user?.sub, roles: req?.user?.roles ?? [] },
         },
@@ -434,10 +474,27 @@ export class LogisticsGatewayController {
   @Roles(RoleEnum.COURIER)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Courier old posts' })
+  @ApiQuery({ name: 'page', required: false, type: Number })
+  @ApiQuery({ name: 'limit', required: false, type: Number })
+  @ApiQuery({ name: 'region_id', required: false, type: String })
+  @ApiQuery({
+    name: 'status',
+    required: false,
+    enum: ['received', 'canceled', 'canceled_received'],
+  })
+  @ApiQuery({ name: 'startDate', required: false, type: String })
+  @ApiQuery({ name: 'endDate', required: false, type: String })
+  @ApiQuery({ name: 'has_orders', required: false, type: Boolean })
   getOldPostsForCourier(
     @Query('page') page = '1',
     @Query('limit') limit = '8',
     @Req() req: { user: JwtUser },
+    // YfrqN70i — kuryer ekrani ham filtr yuboradi (avval tashlanardi).
+    @Query('region_id') regionId?: string,
+    @Query('status') status?: string,
+    @Query('startDate') startDate?: string,
+    @Query('endDate') endDate?: string,
+    @Query('has_orders') hasOrders?: string,
   ) {
     return this.logisticsClient
       .send(
@@ -445,6 +502,11 @@ export class LogisticsGatewayController {
         {
           page: Number(page),
           limit: Number(limit),
+          region_id: regionId ? String(regionId).trim() : undefined,
+          status: status ? String(status).trim().toLowerCase() : undefined,
+          startDate: startDate ? String(startDate).trim() : undefined,
+          endDate: endDate ? String(endDate).trim() : undefined,
+          has_orders: hasOrders ? String(hasOrders).trim() : undefined,
           requester: { id: req.user.sub, roles: req.user.roles ?? [] },
         },
       )
@@ -923,10 +985,15 @@ export class LogisticsGatewayController {
   }
 
   // RBAC-14 — MARKET YO'Q: tashqi marketga kompaniya daromadi (hudud
-  // bo'yicha) ko'rinmasin; market panelida hududlar sahifasi yo'q. COURIER
-  // qoladi: kuryerning /regions sahifasi shu agregatlarni o'qiydi (bu javobda
-  // kuryer ism/telefoni yo'q). (dzyVftBx) LOGIST — viloyatlar ustidan nazorat
-  // qiluvchi xodim, hudud statistikasini ko'radi (BeePost bilan bir xil).
+  // bo'yicha) ko'rinmasin. (uherIk8r) COURIER — 403: kuryer butun kompaniya
+  // tushumini ko'rmaydi, o'z viloyati uchun GET /region/my/district-stats.
+  // Kuryer @Roles'da faqat O'TISH DAVRI uchun qoldirilgan: 403 handler'da
+  // (`assertCourierRegionStatsCompat`), env REGION_STATS_COURIER_COMPAT=true
+  // bo'lsa frontend yangi endpointga o'tguncha kuryer FAQAT o'z viloyatini
+  // oladi (doira logistics'da). Frontend o'tgach flag va COURIER olib
+  // tashlansin. Qolgan rollar uchun doira SERVERDA (`resolveRegionStatsScope`):
+  // admin/superadmin/logist va HQ xodimi — hammasi, boshqa filial xodimi —
+  // faqat o'z viloyati. (dzyVftBx) LOGIST — BeePost bilan bir xil.
   @Get('region/stats/all')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(
@@ -934,8 +1001,8 @@ export class LogisticsGatewayController {
     RoleEnum.SUPERADMIN,
     RoleEnum.MANAGER,
     RoleEnum.REGISTRATOR,
-    RoleEnum.COURIER,
     RoleEnum.LOGIST,
+    RoleEnum.COURIER,
   )
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Get all region stats' })
@@ -952,11 +1019,93 @@ export class LogisticsGatewayController {
     description: 'YYYY-MM-DD or ISO date-time',
   })
   getAllRegionStats(
+    @Req() req: { user: JwtUser },
+    @Query('startDate') startDate?: string,
+    @Query('endDate') endDate?: string,
+  ) {
+    this.assertCourierRegionStatsCompat(req.user);
+    return this.logisticsClient
+      .send(
+        { cmd: 'logistics.region.stats_all' },
+        { startDate, endDate, requester: this.regionStatsRequester(req) },
+      )
+      .pipe(timeout(8000));
+  }
+
+  /**
+   * uherIk8r — kuryer (boshqa xodim roli bo'lmasa) GET /region/stats/all da
+   * 403 oladi. O'tish davri: REGION_STATS_COURIER_COMPAT=true — eski frontend
+   * kuryer /regions sahifasi ishlashi uchun so'rov o'tadi, logistics esa
+   * kuryerga FAQAT o'z viloyatini qaytaradi (butun kompaniya tushumi sizmaydi).
+   */
+  private assertCourierRegionStatsCompat(user: JwtUser) {
+    const roles = (user?.roles ?? []).map((role) =>
+      String(role ?? '').toLowerCase(),
+    );
+    const staffRoles: string[] = [
+      RoleEnum.ADMIN,
+      RoleEnum.SUPERADMIN,
+      RoleEnum.MANAGER,
+      RoleEnum.REGISTRATOR,
+      RoleEnum.LOGIST,
+    ];
+    const courierOnly =
+      roles.includes(RoleEnum.COURIER) &&
+      !roles.some((role) => staffRoles.includes(role));
+    if (
+      courierOnly &&
+      String(process.env.REGION_STATS_COURIER_COMPAT ?? '')
+        .trim()
+        .toLowerCase() !== 'true'
+    ) {
+      throw new ForbiddenException(
+        'Kuryer uchun hudud statistikasi: GET /region/my/district-stats',
+      );
+    }
+  }
+
+  // uherIk8r — so'rovchi logistics'ga uzatiladi (viloyat doirasi serverda).
+  private regionStatsRequester(req: { user: JwtUser }) {
+    return {
+      id: req.user.sub,
+      roles: req.user.roles ?? [],
+      branch_id: req.user.branch_id ?? null,
+    };
+  }
+
+  // uherIk8r — kuryer/menejer o'z viloyati statistikasi (tumanlar kesimida;
+  // BeePost `region/my/district-stats` analogi). Viloyat tokendagi
+  // foydalanuvchidan serverda aniqlanadi; query'dagi region_id/courier_id
+  // QABUL QILINMAYDI. Boshqa viloyat nomi javobda bo'lmaydi.
+  @Get('region/my/district-stats')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.COURIER, RoleEnum.MANAGER)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: "O'z viloyatim statistikasi (kuryer / menejer, tumanlar kesimida)",
+  })
+  @ApiQuery({
+    name: 'startDate',
+    required: false,
+    type: String,
+    description: 'YYYY-MM-DD or ISO date-time',
+  })
+  @ApiQuery({
+    name: 'endDate',
+    required: false,
+    type: String,
+    description: 'YYYY-MM-DD or ISO date-time',
+  })
+  getMyRegionDistrictStats(
+    @Req() req: { user: JwtUser },
     @Query('startDate') startDate?: string,
     @Query('endDate') endDate?: string,
   ) {
     return this.logisticsClient
-      .send({ cmd: 'logistics.region.stats_all' }, { startDate, endDate })
+      .send(
+        { cmd: 'logistics.region.my_district_stats' },
+        { startDate, endDate, requester: this.regionStatsRequester(req) },
+      )
       .pipe(timeout(8000));
   }
 
@@ -965,7 +1114,8 @@ export class LogisticsGatewayController {
   // (dashboard hudud kartasi va /regions sahifasining batafsil so'rovi kuryer
   // uchun o'chiq), market paneli esa umuman chaqirmaydi. (dzyVftBx) LOGIST —
   // ichki xodim, viloyat bo'yicha kuryerlar ishini nazorat qiladi (BeePost:
-  // stats/:id ADMIN, SUPERADMIN, LOGIST).
+  // stats/:id ADMIN, SUPERADMIN, LOGIST). (uherIk8r) HQ'dan tashqari filial
+  // menejeri/registratori boshqa viloyat id'si bilan → 403 (servisda).
   @Get('region/stats/:id')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(
@@ -991,12 +1141,21 @@ export class LogisticsGatewayController {
     description: 'YYYY-MM-DD or ISO date-time',
   })
   getRegionStatsById(
+    @Req() req: { user: JwtUser },
     @Param('id') id: string,
     @Query('startDate') startDate?: string,
     @Query('endDate') endDate?: string,
   ) {
     return this.logisticsClient
-      .send({ cmd: 'logistics.region.stats_by_id' }, { id, startDate, endDate })
+      .send(
+        { cmd: 'logistics.region.stats_by_id' },
+        {
+          id,
+          startDate,
+          endDate,
+          requester: this.regionStatsRequester(req),
+        },
+      )
       .pipe(timeout(8000));
   }
 

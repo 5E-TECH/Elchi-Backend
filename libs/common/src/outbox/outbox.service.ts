@@ -8,6 +8,7 @@ import {
 } from 'typeorm';
 import { randomUUID } from 'crypto';
 import { OutboxEvent } from './outbox-event.entity';
+import { attachOutboxContext } from './outbox-context';
 import { DEFAULT_OUTBOX_MAX_ATTEMPTS } from './tokens';
 
 /** `requeueFailed` filtri — berilmagan maydon cheklamaydi. */
@@ -44,7 +45,11 @@ export class OutboxService {
     payload: unknown,
     options: EnqueueOptions = {},
   ): Promise<OutboxEvent> {
-    const enrichedPayload = this.attachRequestId(payload, options.requestId);
+    // LQWRBwXA — HTTP/RMQ konteksti (trace, IP/qurilma, aktyor) relay'ga
+    // yetib borsin; handler ko'rmaydi (`outbox-context.ts`).
+    const enrichedPayload = attachOutboxContext(
+      this.attachRequestId(payload, options.requestId),
+    );
     const repo = options.manager
       ? options.manager.getRepository(OutboxEvent)
       : this.repo;

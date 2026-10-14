@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Controller,
   Get,
   Inject,
@@ -14,11 +15,25 @@ import {
   ApiTags,
 } from '@nestjs/swagger';
 import { firstValueFrom, timeout } from 'rxjs';
-import { ActivityAction, Roles as RoleEnum } from '@app/common';
+import {
+  ACTIVITY_ACTION_CATEGORIES,
+  Roles as RoleEnum,
+  listActivityActions,
+} from '@app/common';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
 import { Roles } from './auth/roles.decorator';
 import { RolesGuard } from './auth/roles.guard';
 import { AuditEnrichmentService } from './audit/audit-enrichment.service';
+import {
+  ACTIVITY_FEED_OFFSET_CAP,
+  FeedKey,
+  compareFeedKeys,
+  decodeFeedCursor,
+  encodeFeedCursor,
+  feedKeyOf,
+  isAfterCursor,
+  legBefore,
+} from './audit/audit-feed-merge';
 import { ActivityLogQueryDto } from './dto/activity-log.swagger.dto';
 
 type Row = Record<string, any>;
@@ -26,6 +41,23 @@ type Row = Record<string, any>;
 interface ServiceLeg {
   name: string;
   client: ClientProxy;
+}
+
+/** Servis + uning global tartib raqami (k-way merge tie-break'i). */
+interface RankedLeg extends ServiceLeg {
+  rank: number;
+}
+
+/** Bitta sahifa natijasi (8eYmt4NV). */
+interface FeedPage {
+  items: Row[];
+  /** Filtrlarning to'liq jami (servislar yig'indisi). */
+  total: number;
+  hasMore: boolean;
+  /** Javob bermagan servislar — UI ogohlantirishi uchun. */
+  failed: string[];
+  /** Chuqurlik chegarasi yo'q (bitta servis yoki kursor rejimi). */
+  exactDepth: boolean;
 }
 
 /**
@@ -43,7 +75,6 @@ interface ServiceLeg {
 @ApiBearerAuth()
 export class AuditGatewayController {
   private readonly TIMEOUT = 12000;
-  private readonly WINDOW_CAP = 500;
   private readonly services: ServiceLeg[];
 
   constructor(
@@ -71,12 +102,38 @@ export class AuditGatewayController {
     ];
   }
 
+  /**
+   * (y8CxCtcK) Fe'llar REYESTRDAN (statik 16 ta enum emas): `data` — fe'l
+   * satrlari (orqaga mos: frontend `data.map(String)`), `registry` — har
+   * fe'lning o'zbekcha yorlig'i, kategoriyasi, ikona/toni, `categories` —
+   * dropdown guruhlari tartibi (antd optGroup).
+   */
   @Get('actions')
-  @ApiOperation({ summary: 'Known audit action verbs (for filter dropdowns)' })
+  @ApiOperation({
+    summary:
+      'Audit action verbs registry (label/category/icon/tone) for filter dropdowns',
+  })
   actions() {
-    return { data: Object.values(ActivityAction) };
+    const registry = listActivityActions();
+    return {
+      data: registry.map((a) => a.action),
+      registry,
+      categories: ACTIVITY_ACTION_CATEGORIES,
+    };
   }
 
+  /**
+   * (8eYmt4NV) ANIQ sahifalash — har qanday `page <= totalPages` qatorli,
+   * global `created_at DESC` tartibda, dublikatsiz:
+   *   • `?service=X` — servisning o'z ofseti (chegarasiz, aniq);
+   *   • bir nechta servis, `?page=N` — 1-faza: har servisdan faqat KALITLAR
+   *     (`keys_only`, `(N-1)*limit` ta) → global chegara qator; 2-faza: har
+   *     servisdan chegaradan keyingi `limit+1` qator (keyset) → k-way merge.
+   *     `ACTIVITY_FEED_OFFSET_CAP` dan chuqur — `meta.truncated`;
+   *   • `?cursor=<meta.next_cursor>` — istalgan chuqurlik, har sahifa O(limit).
+   * `meta.total` = haqiqatan o'qiladigan qatorlar (cheklangan bo'lsa
+   * `meta.total_all` — to'liq jami).
+   */
   @Get()
   @ApiOperation({
     summary: 'Audit-log feed (merged across services, enriched)',
@@ -98,45 +155,223 @@ export class AuditGatewayController {
       search: q.search,
     };
 
-    // Over-fetch a bounded window from each leg, then merge+sort+slice. Exact
-    // for the first pages; deep history should narrow with from/to or service.
-    const window = Math.min(this.WINDOW_CAP, page * limit);
-    const legs = q.service
-      ? this.services.filter((s) => s.name === q.service)
-      : this.services;
+    const legs: RankedLeg[] = this.services
+      .map((s, rank) => ({ ...s, rank }))
+      .filter((s) => !q.service || s.name === q.service);
+    const names = this.services.map((s) => s.name);
 
-    const responses = await Promise.all(
-      legs.map((leg) =>
-        this.send(leg.client, `${leg.name}.activity_log.find_all`, {
-          query: { ...filters, page: 1, limit: window },
-        })
-          .then((r) => ({
-            name: leg.name,
-            items: this.itemsOf(r),
-            total: Number(r?.meta?.total ?? r?.data?.meta?.total ?? 0),
-          }))
-          .catch(() => ({ name: leg.name, items: [] as Row[], total: 0 })),
-      ),
-    );
+    let result: FeedPage;
+    if (q.cursor !== undefined) {
+      const cursor = decodeFeedCursor(q.cursor, names);
+      if (!cursor) {
+        throw new BadRequestException(
+          "cursor yaroqsiz — meta.next_cursor qiymatini o'zgartirmasdan yuboring",
+        );
+      }
+      result = await this.fetchAfter(legs, filters, cursor, limit, true);
+    } else if (legs.length === 1) {
+      result = await this.fetchSingleLegPage(legs[0], filters, page, limit);
+    } else {
+      result = await this.fetchMergedPage(legs, filters, page, limit);
+    }
 
-    const merged = responses
-      .flatMap((r) => r.items.map((it) => ({ ...it, _service: r.name })))
-      .sort(this.byNewest);
-    const total = responses.reduce((acc, r) => acc + r.total, 0);
-    const slice = merged.slice((page - 1) * limit, (page - 1) * limit + limit);
-    const items = await this.enrichment.enrich(slice);
+    const total = result.total;
+    const truncated = total > ACTIVITY_FEED_OFFSET_CAP && !result.exactDepth;
+    const readable = truncated ? ACTIVITY_FEED_OFFSET_CAP : total;
+    const items = await this.enrichment.enrich(result.items);
+    const last = result.items[result.items.length - 1];
 
     return {
       data: {
         items,
         meta: {
-          page,
+          page: q.cursor !== undefined ? null : page,
           limit,
-          total,
-          totalPages: Math.max(1, Math.ceil(total / limit)),
+          total: readable,
+          totalPages: Math.max(1, Math.ceil(readable / limit)),
+          next_cursor:
+            result.hasMore && last
+              ? encodeFeedCursor(
+                  feedKeyOf(last, names.indexOf(String(last._service))),
+                  String(last._service),
+                )
+              : null,
+          ...(truncated
+            ? {
+                truncated: true,
+                total_all: total,
+                hint: "Chuqurroq ko'rish uchun sana oralig'ini toraytiring, xizmatni tanlang yoki next_cursor bilan davom eting",
+              }
+            : {}),
+          ...(result.failed.length ? { failed_services: result.failed } : {}),
         },
       },
     };
+  }
+
+  /** Bitta servis — uning o'z ofseti aniq (chegarasiz). */
+  private async fetchSingleLegPage(
+    leg: RankedLeg,
+    filters: Record<string, unknown>,
+    page: number,
+    limit: number,
+  ): Promise<FeedPage> {
+    try {
+      const r = await this.send(
+        leg.client,
+        `${leg.name}.activity_log.find_all`,
+        { query: { ...filters, page, limit, with_total: true } },
+      );
+      const items = this.itemsOf(r).map((it) => ({
+        ...it,
+        _service: leg.name,
+      }));
+      const total = this.totalOf(r);
+      return {
+        items,
+        total,
+        hasMore: (page - 1) * limit + items.length < total,
+        failed: [],
+        exactDepth: true,
+      };
+    } catch {
+      return {
+        items: [],
+        total: 0,
+        hasMore: false,
+        failed: [leg.name],
+        exactDepth: true,
+      };
+    }
+  }
+
+  /** Bir nechta servis, `?page=N`: kalitlar bilan global chegara → keyset. */
+  private async fetchMergedPage(
+    legs: RankedLeg[],
+    filters: Record<string, unknown>,
+    page: number,
+    limit: number,
+  ): Promise<FeedPage> {
+    const offset = (page - 1) * limit;
+    if (offset === 0) {
+      return this.fetchAfter(legs, filters, null, limit, true);
+    }
+
+    // 1-faza: faqat kalitlar (id + cursor_ts), har servisdan `offset` tagacha.
+    // Chegaradan chuqur sahifa — kalit yuklanmaydi, faqat jami (limit 1).
+    const tooDeep = offset > ACTIVITY_FEED_OFFSET_CAP;
+    const window = tooDeep ? 1 : offset;
+    const keyed = await Promise.all(
+      legs.map((leg) =>
+        this.send(leg.client, `${leg.name}.activity_log.find_all`, {
+          query: {
+            ...filters,
+            page: 1,
+            limit: window,
+            keys_only: true,
+            with_total: true,
+          },
+        })
+          .then((r) => ({
+            leg,
+            ok: true,
+            keys: this.itemsOf(r)
+              .map((it) => feedKeyOf(it, leg.rank))
+              .sort(compareFeedKeys)
+              .slice(0, window),
+            total: this.totalOf(r),
+          }))
+          .catch(() => ({
+            leg,
+            ok: false,
+            keys: [] as FeedKey[],
+            total: 0,
+          })),
+      ),
+    );
+    const total = keyed.reduce((acc, k) => acc + k.total, 0);
+    const failed = keyed.filter((k) => !k.ok).map((k) => k.leg.name);
+    const okLegs = keyed.filter((k) => k.ok).map((k) => k.leg);
+
+    const allKeys = keyed.flatMap((k) => k.keys).sort(compareFeedKeys);
+    if (tooDeep || allKeys.length < offset) {
+      // Chuqurlik chegarasidan tashqari yoki ma'lumot tugagan.
+      return { items: [], total, hasMore: false, failed, exactDepth: false };
+    }
+    const boundary = allKeys[offset - 1];
+
+    // 2-faza: chegaradan keyingi qatorlar (sanashsiz).
+    const after = await this.fetchAfter(
+      okLegs,
+      filters,
+      boundary,
+      limit,
+      false,
+    );
+    return {
+      items: after.items,
+      total,
+      hasMore: after.hasMore,
+      failed: [...failed, ...after.failed],
+      exactDepth: false,
+    };
+  }
+
+  /**
+   * Kursordan (yoki boshidan) keyingi `limit` qator: har servisga o'z keyset
+   * sharti, `limit+1` (keyingi sahifa bormi), k-way merge. Servis eski
+   * versiyada bo'lib shartni e'tiborsiz qoldirsa ham — gateway qatorlarni
+   * o'zi ham kursor bo'yicha kesadi (dublikat chiqmaydi).
+   */
+  private async fetchAfter(
+    legs: RankedLeg[],
+    filters: Record<string, unknown>,
+    cursor: FeedKey | null,
+    limit: number,
+    withTotal: boolean,
+  ): Promise<FeedPage> {
+    const responses = await Promise.all(
+      legs.map((leg) =>
+        this.send(leg.client, `${leg.name}.activity_log.find_all`, {
+          query: {
+            ...filters,
+            page: 1,
+            limit: limit + 1,
+            with_total: withTotal,
+            ...(cursor ? legBefore(cursor, leg.rank) : {}),
+          },
+        })
+          .then((r) => ({
+            leg,
+            ok: true,
+            items: this.itemsOf(r),
+            total: this.totalOf(r),
+          }))
+          .catch(() => ({ leg, ok: false, items: [] as Row[], total: 0 })),
+      ),
+    );
+
+    const merged = responses
+      .flatMap((r) =>
+        r.items.map((it) => ({
+          row: { ...it, _service: r.leg.name },
+          key: feedKeyOf(it, r.leg.rank),
+        })),
+      )
+      .filter((x) => !cursor || isAfterCursor(x.key, cursor))
+      .sort((a, b) => compareFeedKeys(a.key, b.key));
+
+    return {
+      items: merged.slice(0, limit).map((x) => x.row),
+      total: responses.reduce((acc, r) => acc + r.total, 0),
+      hasMore: merged.length > limit,
+      failed: responses.filter((r) => !r.ok).map((r) => r.leg.name),
+      exactDepth: cursor !== null,
+    };
+  }
+
+  private totalOf(r: any): number {
+    return Number(r?.meta?.total ?? r?.data?.meta?.total ?? 0) || 0;
   }
 
   @Get('entity/:entity_type/:entity_id')

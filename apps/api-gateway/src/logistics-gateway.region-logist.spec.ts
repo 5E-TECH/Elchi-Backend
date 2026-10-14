@@ -107,9 +107,15 @@ describe('(dzyVftBx) LogisticsGatewayController — logist', () => {
         .set('x-test-role', 'logist');
 
       expect(res.status).toBe(200);
+      // uherIk8r: so'rovchi ham uzatiladi (viloyat doirasi serverda).
       expect(lastCall()).toEqual([
         { cmd: 'logistics.region.stats_by_id' },
-        { id: '5', startDate: undefined, endDate: undefined },
+        {
+          id: '5',
+          startDate: undefined,
+          endDate: undefined,
+          requester: { id: '1', roles: ['logist'], branch_id: null },
+        },
       ]);
     });
 
@@ -124,14 +130,10 @@ describe('(dzyVftBx) LogisticsGatewayController — logist', () => {
       },
     );
 
-    it('stats/all: kuryer, menejer, registrator, admin hamon 200 (regressiya yo‘q)', async () => {
-      for (const role of [
-        'courier',
-        'manager',
-        'registrator',
-        'admin',
-        'superadmin',
-      ]) {
+    // uherIk8r: kuryer stats/all da 403 (o'tish davri flagisiz; o'z viloyati —
+    // GET /region/my/district-stats) — logistics-gateway.region-stats-scope.spec.ts.
+    it('stats/all: menejer, registrator, admin hamon 200 (regressiya yo‘q)', async () => {
+      for (const role of ['manager', 'registrator', 'admin', 'superadmin']) {
         const res = await request(http())
           .get('/region/stats/all')
           .set('x-test-role', role);

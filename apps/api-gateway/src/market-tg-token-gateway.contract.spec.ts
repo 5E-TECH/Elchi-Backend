@@ -146,6 +146,20 @@ function makeQueryBuilder(rows: Row[], alias: string) {
     getManyAndCount: () =>
       Promise.resolve([visible().map((row) => ({ ...row })), visible().length]),
     getCount: () => Promise.resolve(visible().length),
+    // nFmup26a: findAllAdmins meta — rol kesimi GROUP BY (getRawMany).
+    select: () => qb,
+    addSelect: () => qb,
+    groupBy: () => qb,
+    getRawMany: () => {
+      const counts = new Map<string, number>();
+      for (const row of visible()) {
+        const role = String(row.role);
+        counts.set(role, (counts.get(role) ?? 0) + 1);
+      }
+      return Promise.resolve(
+        Array.from(counts, ([role, count]) => ({ role, count: String(count) })),
+      );
+    },
   });
   return qb;
 }

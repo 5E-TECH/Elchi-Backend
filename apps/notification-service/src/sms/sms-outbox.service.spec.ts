@@ -2,6 +2,7 @@ import { getMetadataArgsStorage } from 'typeorm';
 import { SyncQueue } from '../../../integration-service/src/entities/sync-queue.entity';
 import { SmsOutbox } from '../entities/sms-outbox.entity';
 import {
+  SMS_OTP_QUOTA_LOCK_NAME,
   SMS_QUOTA_LOCK_NAME,
   SmsOutboxService,
   smsReportRange,
@@ -162,6 +163,66 @@ describe('SmsOutboxService', () => {
       // Scheduler qulfi bilan ham, integration bilan ham urushmaydi.
       expect(SMS_QUOTA_LOCK_NAME).not.toBe('notification.sms-outbox.tick');
       expect(SMS_QUOTA_LOCK_NAME).not.toMatch(/integration/);
+    });
+
+    it('rkz0yBxr: OTP (security) — ALOHIDA qulf va OTP oqimi kvotasi bilan sanaladi', async () => {
+      await make().enqueue([
+        {
+          to: '+998901234567',
+          text: 'Elchi tasdiqlash kodi: 123456',
+          messageClass: 'security',
+          senderProfile: 'otp',
+        },
+      ]);
+      expect(manager.query).toHaveBeenCalledWith(
+        'SELECT pg_advisory_xact_lock(hashtext($1))',
+        [SMS_OTP_QUOTA_LOCK_NAME],
+      );
+      expect(manager.query).not.toHaveBeenCalledWith(
+        'SELECT pg_advisory_xact_lock(hashtext($1))',
+        [SMS_QUOTA_LOCK_NAME],
+      );
+      expect(SMS_OTP_QUOTA_LOCK_NAME).not.toBe(SMS_QUOTA_LOCK_NAME);
+      const where = count.mock.calls[0][0].where;
+      expect(where.message_class.type).toBe('in');
+      expect(where.message_class.value).toEqual(['security']);
+    });
+
+    it('rkz0yBxr: umumiy kvota to‘la — OTP baribir navbatga, tranzaksion rad', async () => {
+      count.mockImplementation(({ where }) => {
+        calls.push('count');
+        return Promise.resolve(where.message_class.type === 'not' ? 500 : 0);
+      });
+      await expect(make().enqueue([one])).rejects.toMatchObject({
+        reason: 'daily_cap_exceeded',
+      });
+      await expect(
+        make().enqueue([
+          {
+            to: '+998901234567',
+            text: 'Elchi tasdiqlash kodi: 123456',
+            messageClass: 'security',
+            senderProfile: 'otp',
+          },
+        ]),
+      ).resolves.toMatchObject({ queued: [expect.any(Object)] });
+    });
+
+    it('rkz0yBxr: claimDue SQL — OTP (security) navbat boshida', async () => {
+      const query = jest.fn().mockResolvedValue([]);
+      const service = new SmsOutboxService(
+        repo as never,
+        notifications() as never,
+        { transaction, query } as never,
+        env(),
+        {} as never,
+        consent as never,
+      );
+      await service.claimDue(10);
+      const claimSql = String(query.mock.calls[1][0]);
+      expect(claimSql).toMatch(
+        /ORDER BY \("message_class" = 'security'\) DESC, "scheduled_at" ASC/,
+      );
     });
 
     it('chaqiruvchi tranzaksiyasi berilsa — YANGI tranzaksiya ochilmaydi, qulf o‘sha manager’da', async () => {

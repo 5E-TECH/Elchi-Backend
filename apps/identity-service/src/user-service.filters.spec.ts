@@ -32,6 +32,11 @@ function makeService() {
     clone: () => qb,
     getManyAndCount: () => Promise.resolve([[], 0]),
     getCount: () => Promise.resolve(0),
+    // nFmup26a: findAllAdmins meta — rol kesimi GROUP BY (getRawMany).
+    select: () => qb,
+    addSelect: () => qb,
+    groupBy: () => qb,
+    getRawMany: () => Promise.resolve([]),
   });
 
   const repo = { createQueryBuilder: jest.fn(() => qb) };

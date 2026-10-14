@@ -32,6 +32,8 @@ export interface CreateManagerPayload {
 
 export interface FindCouriersByIdsPayload {
   ids: string[];
+  /** hEjjuJaT: buyurtma viloyati — super-kuryerning viloyat tarifi uchun. */
+  region_id?: string | null;
 }
 
 export interface UpdateUserPayload {

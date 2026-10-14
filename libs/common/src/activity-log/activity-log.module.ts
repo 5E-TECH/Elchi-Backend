@@ -2,6 +2,8 @@ import { DynamicModule, Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ActivityLog } from './activity-log.entity';
 import { ActivityLogService } from './activity-log.service';
+import { ActivityLogMaintenanceService } from './activity-log-maintenance.service';
+import { ActivityLogRetentionScheduler } from './activity-log-retention.scheduler';
 import { ACTIVITY_LOG_SERVICE_NAME } from './types';
 
 @Module({})
@@ -21,8 +23,16 @@ export class ActivityLogModule {
           useValue: serviceName ?? null,
         },
         ActivityLogService,
+        // i6Nyedea — saqlash muddati (dry-run sukut) va login birlashtirish;
+        // har servisda o'z vaqtidagi kunlik cron.
+        ActivityLogMaintenanceService,
+        ActivityLogRetentionScheduler,
       ],
-      exports: [ActivityLogService, TypeOrmModule],
+      exports: [
+        ActivityLogService,
+        ActivityLogMaintenanceService,
+        TypeOrmModule,
+      ],
     };
   }
 }

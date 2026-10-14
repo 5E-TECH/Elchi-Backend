@@ -49,6 +49,21 @@ import { NotificationPreference } from './entities/notification-preference.entit
 import { NotificationPreferencesService } from './preferences/notification-preferences.service';
 import { ChannelPlannerService } from './channels/channel-planner.service';
 import { NotificationEscalationService } from './escalation/notification-escalation.service';
+// (7Vozou5x) yuborilgan xabarlar tarixi.
+import { NotificationDispatch } from './history/notification-dispatch.entity';
+import { DispatchHistoryService } from './history/dispatch-history.service';
+import { DispatchHistoryController } from './history/dispatch-history.controller';
+// (rCFZAmOz) shaxsiy Telegram xabari (users.telegram_id).
+import { TelegramDmService } from './telegram/telegram-dm.service';
+import { TelegramDmController } from './telegram/telegram-dm.controller';
+// (C4R3YyvH) bildirishnoma shablonlari (uch til).
+import { NotificationTemplate } from './templates/notification-template.entity';
+import { NotificationTemplateService } from './templates/notification-template.service';
+import { NotificationTemplateController } from './templates/notification-template.controller';
+// (ebSV5oyP) saqlangan auditoriya segmentlari.
+import { NotificationAudienceSegment } from './audience/audience-segment.entity';
+import { AudienceSegmentService } from './audience/audience-segment.service';
+import { AudienceSegmentController } from './audience/audience-segment.controller';
 
 @Module({
   imports: [
@@ -83,6 +98,11 @@ import { NotificationEscalationService } from './escalation/notification-escalat
       NotificationCampaign,
       // (mP1WGG1W) foydalanuvchi sozlamalari (migratsiya 1716000000075).
       NotificationPreference,
+      // (7Vozou5x) migratsiya 1716000000084.
+      NotificationDispatch,
+      // (C4R3YyvH) migratsiya 1716000000086.
+      NotificationTemplate,
+      NotificationAudienceSegment,
     ]),
     // Push yetkazish bir partiyada 100 tagacha bildirishnomani parallel
     // yuboradi — 5 s lik standart javob muddati qisqa: muddat o'tsa outbox
@@ -96,6 +116,10 @@ import { NotificationEscalationService } from './escalation/notification-escalat
     NotificationServiceController,
     SmsController,
     CampaignController,
+    DispatchHistoryController,
+    TelegramDmController,
+    NotificationTemplateController,
+    AudienceSegmentController,
   ],
   providers: [
     NotificationServiceService,
@@ -124,6 +148,10 @@ import { NotificationEscalationService } from './escalation/notification-escalat
     NotificationPreferencesService,
     ChannelPlannerService,
     NotificationEscalationService,
+    DispatchHistoryService,
+    TelegramDmService,
+    NotificationTemplateService,
+    AudienceSegmentService,
   ],
 })
 export class NotificationServiceModule {}

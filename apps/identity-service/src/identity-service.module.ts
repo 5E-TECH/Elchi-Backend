@@ -13,6 +13,7 @@ import { IdentityController } from './identity.controller';
 import { UserServiceService } from './user-service.service';
 import { AuthService } from './auth/auth.service';
 import { User } from './entities/user.entity';
+import { CourierRegion } from './entities/courier-region.entity';
 import { BcryptEncryption } from '../../../libs/common/helpers/bcrypt';
 import type { StringValue } from 'ms';
 
@@ -39,7 +40,7 @@ import { OtpService } from './otp/otp.service';
     ScheduleModule.forRoot(),
     DatabaseModule,
     ActivityLogModule.forService('identity-service'),
-    TypeOrmModule.forFeature([User, OtpCode]),
+    TypeOrmModule.forFeature([User, OtpCode, CourierRegion]),
     JwtModule.registerAsync({
       inject: [ConfigService],
       useFactory: (configService: ConfigService) => ({

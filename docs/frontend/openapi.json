@@ -13,7 +13,8 @@
         "summary": "Gateway health check via identity service",
         "tags": [
           "Identity"
-        ]
+        ],
+        "x-roles": null
       }
     },
     "/admins": {
@@ -46,6 +47,9 @@
         "summary": "Create admin",
         "tags": [
           "Identity"
+        ],
+        "x-roles": [
+          "superadmin"
         ]
       },
       "get": {
@@ -100,6 +104,10 @@
         "summary": "List admins with filtering and pagination",
         "tags": [
           "Identity"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       }
     },
@@ -133,6 +141,11 @@
         "summary": "Create registrator",
         "tags": [
           "Identity"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "manager"
         ]
       },
       "get": {
@@ -187,6 +200,10 @@
         "summary": "List registrators with filtering and pagination",
         "tags": [
           "Identity"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       }
     },
@@ -220,6 +237,10 @@
         "summary": "Create logist",
         "tags": [
           "Identity"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       },
       "get": {
@@ -274,6 +295,10 @@
         "summary": "List logists with filtering and pagination",
         "tags": [
           "Identity"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       }
     },
@@ -307,6 +332,11 @@
         "summary": "Create courier",
         "tags": [
           "Identity"
+        ],
+        "x-roles": [
+          "manager",
+          "superadmin",
+          "admin"
         ]
       },
       "get": {
@@ -386,6 +416,13 @@
         "summary": "List couriers with filtering and pagination",
         "tags": [
           "Identity"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "branch",
+          "manager",
+          "registrator"
         ]
       }
     },
@@ -419,6 +456,10 @@
         "summary": "Create manager",
         "tags": [
           "Identity"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       },
       "get": {
@@ -473,6 +514,86 @@
         "summary": "List managers with filtering and pagination",
         "tags": [
           "Identity"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
+        ]
+      }
+    },
+    "/couriers/{id}/regions": {
+      "get": {
+        "operationId": "ApiGatewayController_getCourierRegions",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Courier ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Super-kuryer viloyatlari va viloyat tariflari (hEjjuJaT)",
+        "tags": [
+          "Identity"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
+        ]
+      },
+      "put": {
+        "operationId": "ApiGatewayController_setCourierRegions",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Courier ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetCourierRegionsRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Super-kuryer bayroqlari va viloyatlar ro'yxatini to'liq almashtirish (hEjjuJaT)",
+        "tags": [
+          "Identity"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       }
     },
@@ -503,6 +624,10 @@
         "summary": "List couriers by region id",
         "tags": [
           "Identity"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       }
     },
@@ -584,6 +709,11 @@
         "summary": "List all users with filtering and pagination",
         "tags": [
           "Identity"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "manager"
         ]
       }
     },
@@ -617,6 +747,11 @@
         "summary": "Get user by id (admin/superadmin)",
         "tags": [
           "Identity"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "manager"
         ]
       },
       "patch": {
@@ -661,6 +796,11 @@
         "summary": "Update user (all roles)",
         "tags": [
           "Identity"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "manager"
         ]
       },
       "delete": {
@@ -692,6 +832,10 @@
         "summary": "Delete user (all roles)",
         "tags": [
           "Identity"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       }
     },
@@ -735,6 +879,10 @@
         "summary": "Set user status (active/inactive)",
         "tags": [
           "Identity"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       }
     },
@@ -768,6 +916,11 @@
         "summary": "Create market",
         "tags": [
           "Identity"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "manager"
         ]
       },
       "get": {
@@ -822,6 +975,14 @@
         "summary": "List markets with filtering and pagination",
         "tags": [
           "Identity"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "branch",
+          "manager",
+          "registrator",
+          "courier"
         ]
       }
     },
@@ -866,6 +1027,9 @@
         "summary": "Rotate the Telegram token of EVERY active market in one transaction (SUPERADMIN only)",
         "tags": [
           "Identity"
+        ],
+        "x-roles": [
+          "superadmin"
         ]
       }
     },
@@ -910,6 +1074,9 @@
         "summary": "Get a market's Telegram token (SUPERADMIN only)",
         "tags": [
           "Identity"
+        ],
+        "x-roles": [
+          "superadmin"
         ]
       }
     },
@@ -954,6 +1121,9 @@
         "summary": "Rotate a market's Telegram token (SUPERADMIN only)",
         "tags": [
           "Identity"
+        ],
+        "x-roles": [
+          "superadmin"
         ]
       }
     },
@@ -997,6 +1167,10 @@
         "summary": "Update market add_order (true/false)",
         "tags": [
           "Identity"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       }
     },
@@ -1040,6 +1214,11 @@
         "summary": "Update whether market cancelled-order handover requires market QR scan",
         "tags": [
           "Identity"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "market"
         ]
       }
     },
@@ -1083,6 +1262,10 @@
         "summary": "Set the situations in which this market requires file proof for sell/cancel",
         "tags": [
           "Identity"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       }
     },
@@ -1118,7 +1301,8 @@
         "summary": "Login with phone number and password",
         "tags": [
           "Auth"
-        ]
+        ],
+        "x-roles": null
       }
     },
     "/auth/otp/request": {
@@ -1143,7 +1327,8 @@
         "summary": "Request a one-time SMS code (same answer whether the number exists or not)",
         "tags": [
           "Auth"
-        ]
+        ],
+        "x-roles": null
       }
     },
     "/auth/otp/verify": {
@@ -1168,7 +1353,8 @@
         "summary": "Verify the SMS code; for purpose=login returns tokens like /auth/login (customers only)",
         "tags": [
           "Auth"
-        ]
+        ],
+        "x-roles": null
       }
     },
     "/auth/refresh": {
@@ -1203,7 +1389,8 @@
         "summary": "Refresh access token",
         "tags": [
           "Auth"
-        ]
+        ],
+        "x-roles": null
       }
     },
     "/auth/logout": {
@@ -1226,7 +1413,8 @@
         "summary": "Logout current user",
         "tags": [
           "Auth"
-        ]
+        ],
+        "x-roles": null
       }
     },
     "/auth/validate": {
@@ -1249,7 +1437,8 @@
         "summary": "Validate current JWT token",
         "tags": [
           "Auth"
-        ]
+        ],
+        "x-roles": null
       }
     },
     "/auth/my-profile": {
@@ -1272,7 +1461,8 @@
         "summary": "Get current user profile",
         "tags": [
           "Auth"
-        ]
+        ],
+        "x-roles": null
       },
       "patch": {
         "operationId": "AuthGatewayController_updateMyProfile",
@@ -1303,7 +1493,8 @@
         "summary": "Update current user profile",
         "tags": [
           "Auth"
-        ]
+        ],
+        "x-roles": null
       }
     },
     "/auth/my-settings": {
@@ -1326,7 +1517,8 @@
         "summary": "Update current user UI settings/preferences",
         "tags": [
           "Auth"
-        ]
+        ],
+        "x-roles": null
       }
     },
     "/product/health": {
@@ -1341,7 +1533,8 @@
         "summary": "Catalog service health check",
         "tags": [
           "Products"
-        ]
+        ],
+        "x-roles": null
       }
     },
     "/product": {
@@ -1371,6 +1564,14 @@
         "summary": "Create a new product",
         "tags": [
           "Products"
+        ],
+        "x-roles": [
+          "market",
+          "market_operator",
+          "admin",
+          "superadmin",
+          "registrator",
+          "manager"
         ]
       },
       "get": {
@@ -1432,6 +1633,14 @@
         "summary": "List products with filtering and pagination",
         "tags": [
           "Products"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "registrator",
+          "manager",
+          "branch",
+          "market"
         ]
       }
     },
@@ -1446,6 +1655,32 @@
             "description": "Market ID (id)",
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "name": "search",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "page",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "example": 1,
+              "type": "number"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "example": 10,
+              "type": "number"
             }
           }
         ],
@@ -1462,13 +1697,48 @@
         "summary": "Get products by market id",
         "tags": [
           "Products"
+        ],
+        "x-roles": [
+          "admin",
+          "superadmin",
+          "registrator",
+          "manager",
+          "branch"
         ]
       }
     },
     "/product/my-products": {
       "get": {
+        "description": "Market — o'z mahsulotlari; market operatori — biriktirilgan marketining mahsulotlari (biriktirilmagan bo'lsa 400). search/page/limit qo'llab-quvvatlanadi.",
         "operationId": "CatalogGatewayController_getMyProducts",
-        "parameters": [],
+        "parameters": [
+          {
+            "name": "search",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "page",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "example": 1,
+              "type": "number"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "example": 10,
+              "type": "number"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": ""
@@ -1479,9 +1749,13 @@
             "bearer": []
           }
         ],
-        "summary": "Get my products (market role)",
+        "summary": "Get my products (market / market_operator)",
         "tags": [
           "Products"
+        ],
+        "x-roles": [
+          "market",
+          "market_operator"
         ]
       }
     },
@@ -1512,6 +1786,15 @@
         "summary": "Get product by ID",
         "tags": [
           "Products"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "registrator",
+          "manager",
+          "branch",
+          "market",
+          "market_operator"
         ]
       },
       "patch": {
@@ -1550,6 +1833,12 @@
         "summary": "Update product (admin/registrator)",
         "tags": [
           "Products"
+        ],
+        "x-roles": [
+          "admin",
+          "superadmin",
+          "registrator",
+          "manager"
         ]
       },
       "delete": {
@@ -1578,11 +1867,19 @@
         "summary": "Delete product (soft delete)",
         "tags": [
           "Products"
+        ],
+        "x-roles": [
+          "market",
+          "admin",
+          "superadmin",
+          "registrator",
+          "manager"
         ]
       }
     },
     "/product/my/{id}": {
       "patch": {
+        "description": "Market — o'z mahsuloti; market operatori — biriktirilgan marketining mahsuloti. Begona mahsulot — 403.",
         "operationId": "CatalogGatewayController_updateMyProduct",
         "parameters": [
           {
@@ -1615,9 +1912,13 @@
             "bearer": []
           }
         ],
-        "summary": "Update own product (market)",
+        "summary": "Update own product (market / market_operator)",
         "tags": [
           "Products"
+        ],
+        "x-roles": [
+          "market",
+          "market_operator"
         ]
       }
     },
@@ -1648,6 +1949,14 @@
         "summary": "Create order",
         "tags": [
           "Orders"
+        ],
+        "x-roles": [
+          "admin",
+          "superadmin",
+          "registrator",
+          "market",
+          "manager",
+          "branch"
         ]
       },
       "get": {
@@ -1870,7 +2179,8 @@
         "summary": "List orders with filters",
         "tags": [
           "Orders"
-        ]
+        ],
+        "x-roles": null
       }
     },
     "/orders/telegram/bot/create": {
@@ -1900,6 +2210,9 @@
         "summary": "Create order by telegram bot",
         "tags": [
           "Orders"
+        ],
+        "x-roles": [
+          "market_operator"
         ]
       }
     },
@@ -1951,6 +2264,14 @@
         "summary": "AI: matn/rasmdan buyurtma preview (hech narsa yaratmaydi)",
         "tags": [
           "Orders"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "registrator",
+          "manager",
+          "market",
+          "market_operator"
         ]
       }
     },
@@ -1971,6 +2292,14 @@
         "summary": "AI buyurtma mavjudligi: {enabled, state}",
         "tags": [
           "Orders"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "registrator",
+          "manager",
+          "market",
+          "market_operator"
         ]
       }
     },
@@ -2001,6 +2330,10 @@
         "summary": "AI buyurtma audit izi: maskalangan matn, model, AI taklifi, edited_fields, xarajat",
         "tags": [
           "Orders"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       }
     },
@@ -2031,6 +2364,14 @@
         "summary": "AI: tasdiqlangan buyurtmalarni yaratish (har buyurtmaga alohida natija)",
         "tags": [
           "Orders"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "registrator",
+          "manager",
+          "market",
+          "market_operator"
         ]
       }
     },
@@ -2070,6 +2411,12 @@
         "summary": "Receive new orders (branch-scoped for staff)",
         "tags": [
           "Orders"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "registrator",
+          "manager"
         ]
       }
     },
@@ -2100,6 +2447,12 @@
         "summary": "Receive external parcels by scanned label tokens",
         "tags": [
           "Orders"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "registrator",
+          "manager"
         ]
       }
     },
@@ -2130,6 +2483,11 @@
         "summary": "Receive orders from external integration payload",
         "tags": [
           "Orders"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "registrator"
         ]
       }
     },
@@ -2150,6 +2508,12 @@
         "summary": "Incoming parcel sources (grouped external NEW orders)",
         "tags": [
           "Orders"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "registrator",
+          "manager"
         ]
       }
     },
@@ -2263,6 +2627,13 @@
         "summary": "List external orders with filters",
         "tags": [
           "Orders"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "registrator",
+          "manager",
+          "market"
         ]
       },
       "post": {
@@ -2291,6 +2662,12 @@
         "summary": "Create external order",
         "tags": [
           "Orders"
+        ],
+        "x-roles": [
+          "admin",
+          "superadmin",
+          "registrator",
+          "market"
         ]
       }
     },
@@ -2385,6 +2762,49 @@
         "summary": "List orders by market ID with pagination",
         "tags": [
           "Orders"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "market"
+        ]
+      }
+    },
+    "/orders/courier/orders/counts": {
+      "get": {
+        "operationId": "OrderGatewayController_courierOrderCounts",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "example": {
+                    "statusCode": 200,
+                    "message": "Courier order counts",
+                    "data": {
+                      "waiting": 12,
+                      "all": 340,
+                      "cancelled": 3
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Courier tab counts (waiting / all / cancelled)",
+        "tags": [
+          "Orders"
+        ],
+        "x-roles": [
+          "courier"
         ]
       }
     },
@@ -2482,7 +2902,8 @@
         "summary": "Legacy courier orders list endpoint",
         "tags": [
           "Orders"
-        ]
+        ],
+        "x-roles": null
       }
     },
     "/orders/markets/new": {
@@ -2502,6 +2923,14 @@
         "summary": "Markets with NEW orders",
         "tags": [
           "Orders"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "registrator",
+          "manager",
+          "branch",
+          "market"
         ]
       }
     },
@@ -2569,6 +2998,12 @@
         "summary": "Bekor qilish sabablari kesimida statistika",
         "tags": [
           "Orders"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "manager",
+          "market"
         ]
       }
     },
@@ -2589,6 +3024,14 @@
         "summary": "Markets with CANCELLED orders",
         "tags": [
           "Orders"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "branch",
+          "manager",
+          "registrator",
+          "market"
         ]
       }
     },
@@ -2645,6 +3088,11 @@
         "summary": "Branch tomonidan qabul qilingan va hali HQga yuborilmagan canceled orderlar",
         "tags": [
           "Orders"
+        ],
+        "x-roles": [
+          "branch",
+          "manager",
+          "registrator"
         ]
       }
     },
@@ -2675,6 +3123,14 @@
         "summary": "NEW orders by market id",
         "tags": [
           "Orders"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "registrator",
+          "manager",
+          "branch",
+          "market"
         ]
       }
     },
@@ -2705,6 +3161,14 @@
         "summary": "CANCELLED orders by market id",
         "tags": [
           "Orders"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "branch",
+          "manager",
+          "registrator",
+          "market"
         ]
       }
     },
@@ -2735,6 +3199,9 @@
         "summary": "Market canceled order handover uchun 2 daqiqalik QR olish",
         "tags": [
           "Orders"
+        ],
+        "x-roles": [
+          "market"
         ]
       }
     },
@@ -2775,6 +3242,12 @@
         "summary": "Selected CANCELLED orderlarni QR ruxsati bilan marketga topshirish",
         "tags": [
           "Orders"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "manager",
+          "registrator"
         ]
       }
     },
@@ -2809,6 +3282,11 @@
         "summary": "List extra cost approval requests",
         "tags": [
           "Orders"
+        ],
+        "x-roles": [
+          "market",
+          "superadmin",
+          "admin"
         ]
       }
     },
@@ -2839,7 +3317,8 @@
         "summary": "Get order by ID",
         "tags": [
           "Orders"
-        ]
+        ],
+        "x-roles": null
       },
       "patch": {
         "operationId": "OrderGatewayController_update",
@@ -2877,6 +3356,12 @@
         "summary": "Update order (full fields, including items)",
         "tags": [
           "Orders"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "registrator",
+          "manager"
         ]
       },
       "delete": {
@@ -2908,6 +3393,13 @@
         "summary": "Delete order (status-based role rules)",
         "tags": [
           "Orders"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "registrator",
+          "market",
+          "manager"
         ]
       }
     },
@@ -2950,6 +3442,15 @@
         "summary": "Get order by QR code (Post Control style)",
         "tags": [
           "Orders"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "branch",
+          "manager",
+          "courier",
+          "market",
+          "registrator"
         ]
       }
     },
@@ -2980,6 +3481,9 @@
         "summary": "Scan QR and assign order to current courier",
         "tags": [
           "Orders"
+        ],
+        "x-roles": [
+          "courier"
         ]
       }
     },
@@ -3010,6 +3514,11 @@
         "summary": "Manager bulk-assign orders to one courier",
         "tags": [
           "Orders"
+        ],
+        "x-roles": [
+          "branch",
+          "manager",
+          "registrator"
         ]
       }
     },
@@ -3050,6 +3559,11 @@
         "summary": "Approve extra cost request",
         "tags": [
           "Orders"
+        ],
+        "x-roles": [
+          "market",
+          "superadmin",
+          "admin"
         ]
       }
     },
@@ -3090,6 +3604,11 @@
         "summary": "Reject extra cost request",
         "tags": [
           "Orders"
+        ],
+        "x-roles": [
+          "market",
+          "superadmin",
+          "admin"
         ]
       }
     },
@@ -3138,6 +3657,14 @@
         "summary": "Get order tracking history by ID",
         "tags": [
           "Orders"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "branch",
+          "manager",
+          "registrator",
+          "courier"
         ]
       }
     },
@@ -3183,6 +3710,10 @@
         "summary": "Sell order (courier)",
         "tags": [
           "Orders"
+        ],
+        "x-roles": [
+          "courier",
+          "manager"
         ]
       }
     },
@@ -3228,6 +3759,10 @@
         "summary": "Cancel order (courier)",
         "tags": [
           "Orders"
+        ],
+        "x-roles": [
+          "courier",
+          "manager"
         ]
       }
     },
@@ -3249,6 +3784,12 @@
         "summary": "DEPRECATED (410 Gone): lump-sum settlement olib tashlandi — endi har-buyurtma FIFO ledger ishlaydi. Bu yo’l 410 qaytaradi (uEPILERk).",
         "tags": [
           "Orders"
+        ],
+        "x-roles": [
+          "manager",
+          "registrator",
+          "superadmin",
+          "admin"
         ]
       }
     },
@@ -3270,6 +3811,11 @@
         "summary": "DEPRECATED (410 Gone): lump-sum remittance olib tashlandi — FIFO ledger ishlaydi. 410 qaytaradi (uEPILERk).",
         "tags": [
           "Orders"
+        ],
+        "x-roles": [
+          "manager",
+          "superadmin",
+          "admin"
         ]
       }
     },
@@ -3291,6 +3837,10 @@
         "summary": "DEPRECATED (410 Gone): HQ lump-sum payment olib tashlandi — FIFO ledger ishlaydi. 410 qaytaradi (uEPILERk).",
         "tags": [
           "Orders"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       }
     },
@@ -3321,6 +3871,12 @@
         "summary": "Get the per-order settlement state",
         "tags": [
           "Orders"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "registrator",
+          "manager"
         ]
       }
     },
@@ -3361,6 +3917,10 @@
         "summary": "Mark order as couldn't deliver (courier)",
         "tags": [
           "Orders"
+        ],
+        "x-roles": [
+          "courier",
+          "manager"
         ]
       }
     },
@@ -3406,6 +3966,10 @@
         "summary": "Partly sell order (courier)",
         "tags": [
           "Orders"
+        ],
+        "x-roles": [
+          "courier",
+          "manager"
         ]
       }
     },
@@ -3446,6 +4010,11 @@
         "summary": "Rollback sold/cancelled order to waiting/cancelled/cancelled_sent",
         "tags": [
           "Orders"
+        ],
+        "x-roles": [
+          "courier",
+          "manager",
+          "superadmin"
         ]
       }
     },
@@ -3486,6 +4055,11 @@
         "summary": "Initiate order return (HQ)",
         "tags": [
           "Orders"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "registrator"
         ]
       }
     },
@@ -3535,6 +4109,12 @@
         "summary": "Mark order as returned to market — MARKET QR MAJBURIY (authorization_token)",
         "tags": [
           "Orders"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "manager",
+          "registrator"
         ]
       }
     },
@@ -3575,6 +4155,12 @@
         "summary": "Update order by id (full fields)",
         "tags": [
           "Orders"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "registrator",
+          "manager"
         ]
       }
     },
@@ -3590,7 +4176,8 @@
         "summary": "Liveness check — fast, gateway-only",
         "tags": [
           "Health"
-        ]
+        ],
+        "x-roles": null
       }
     },
     "/post": {
@@ -3599,18 +4186,19 @@
         "parameters": [
           {
             "name": "page",
-            "required": true,
+            "required": false,
             "in": "query",
             "schema": {
-              "type": "string"
+              "type": "number"
             }
           },
           {
             "name": "limit",
-            "required": true,
+            "required": false,
             "in": "query",
+            "description": "Sahifadagi qator soni (standart 8, maksimum 100). 100 dan katta so'ralsa javobda limit_capped: true (kA70Rban)",
             "schema": {
-              "type": "string"
+              "type": "number"
             }
           },
           {
@@ -3635,6 +4223,49 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "region_id",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "courier_id",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "startDate",
+            "required": false,
+            "in": "query",
+            "description": "YYYY-MM-DD — Toshkent kuni 00:00 dan (createdAt)",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "endDate",
+            "required": false,
+            "in": "query",
+            "description": "YYYY-MM-DD — Toshkent kuni 23:59:59.999 gacha (createdAt)",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "has_orders",
+            "required": false,
+            "in": "query",
+            "description": "true — faqat order_quantity > 0 pochtalar",
+            "schema": {
+              "type": "boolean"
+            }
           }
         ],
         "responses": {
@@ -3650,6 +4281,14 @@
         "summary": "List all posts (with pagination)",
         "tags": [
           "Logistics"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "branch",
+          "manager",
+          "registrator",
+          "courier"
         ]
       }
     },
@@ -3680,6 +4319,13 @@
         "summary": "List new posts",
         "tags": [
           "Logistics"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "branch",
+          "manager",
+          "registrator"
         ]
       }
     },
@@ -3700,6 +4346,13 @@
         "summary": "List rejected posts",
         "tags": [
           "Logistics"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "branch",
+          "manager",
+          "registrator"
         ]
       }
     },
@@ -3720,13 +4373,78 @@
         "summary": "Courier on-the-road posts",
         "tags": [
           "Logistics"
+        ],
+        "x-roles": [
+          "courier"
         ]
       }
     },
     "/post/courier/old-posts": {
       "get": {
         "operationId": "LogisticsGatewayController_getOldPostsForCourier",
-        "parameters": [],
+        "parameters": [
+          {
+            "name": "region_id",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "enum": [
+                "received",
+                "canceled",
+                "canceled_received"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "name": "startDate",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "endDate",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "has_orders",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "number"
+            }
+          },
+          {
+            "name": "page",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "number"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": ""
@@ -3740,6 +4458,9 @@
         "summary": "Courier old posts",
         "tags": [
           "Logistics"
+        ],
+        "x-roles": [
+          "courier"
         ]
       }
     },
@@ -3760,6 +4481,9 @@
         "summary": "Courier rejected posts",
         "tags": [
           "Logistics"
+        ],
+        "x-roles": [
+          "courier"
         ]
       }
     },
@@ -3790,6 +4514,14 @@
         "summary": "Get post by id",
         "tags": [
           "Logistics"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "branch",
+          "manager",
+          "registrator",
+          "courier"
         ]
       },
       "delete": {
@@ -3818,6 +4550,9 @@
         "summary": "Delete post by id (superadmin only)",
         "tags": [
           "Logistics"
+        ],
+        "x-roles": [
+          "superadmin"
         ]
       },
       "patch": {
@@ -3854,6 +4589,10 @@
         "summary": "Send post (assign orders to post) — disabled for launch (410)",
         "tags": [
           "Logistics"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       }
     },
@@ -3892,6 +4631,10 @@
         "summary": "Reassign sent post to another courier — disabled for launch (410)",
         "tags": [
           "Logistics"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       }
     },
@@ -3922,6 +4665,14 @@
         "summary": "Get post by scanner",
         "tags": [
           "Logistics"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "branch",
+          "manager",
+          "registrator",
+          "courier"
         ]
       }
     },
@@ -3952,6 +4703,11 @@
         "summary": "Get couriers by post id",
         "tags": [
           "Logistics"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "registrator"
         ]
       }
     },
@@ -3982,6 +4738,14 @@
         "summary": "Get all orders by post id",
         "tags": [
           "Logistics"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "branch",
+          "manager",
+          "registrator",
+          "courier"
         ]
       }
     },
@@ -4012,6 +4776,14 @@
         "summary": "Get rejected orders by post id",
         "tags": [
           "Logistics"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "branch",
+          "manager",
+          "registrator",
+          "courier"
         ]
       }
     },
@@ -4052,6 +4824,11 @@
         "summary": "Check post order exists by qr token",
         "tags": [
           "Logistics"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "registrator"
         ]
       }
     },
@@ -4092,6 +4869,11 @@
         "summary": "Check canceled post order exists by qr token",
         "tags": [
           "Logistics"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "registrator"
         ]
       }
     },
@@ -4132,6 +4914,14 @@
         "summary": "Receive post (branch/courier)",
         "tags": [
           "Logistics"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "branch",
+          "manager",
+          "registrator",
+          "courier"
         ]
       }
     },
@@ -4162,6 +4952,9 @@
         "summary": "Receive post with scanner (courier)",
         "tags": [
           "Logistics"
+        ],
+        "x-roles": [
+          "courier"
         ]
       }
     },
@@ -4192,6 +4985,9 @@
         "summary": "Receive order (courier)",
         "tags": [
           "Logistics"
+        ],
+        "x-roles": [
+          "courier"
         ]
       }
     },
@@ -4222,6 +5018,10 @@
         "summary": "Create canceled post (courier → branch, manager → HQ)",
         "tags": [
           "Logistics"
+        ],
+        "x-roles": [
+          "courier",
+          "manager"
         ]
       }
     },
@@ -4262,6 +5062,12 @@
         "summary": "Receive canceled post (branch manager or HQ)",
         "tags": [
           "Logistics"
+        ],
+        "x-roles": [
+          "manager",
+          "registrator",
+          "admin",
+          "superadmin"
         ]
       }
     },
@@ -4282,6 +5088,12 @@
         "summary": "List courier return requests grouped by courier (SA/admin/HQ registrator: HQ couriers; manager/registrator: own-branch couriers)",
         "tags": [
           "Logistics"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "registrator",
+          "manager"
         ]
       }
     },
@@ -4312,6 +5124,12 @@
         "summary": "Approve courier return requests: orders go back to the custody stock (own branch for manager/registrator, HQ for SA/admin/HQ registrator)",
         "tags": [
           "Logistics"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "registrator",
+          "manager"
         ]
       }
     },
@@ -4342,6 +5160,12 @@
         "summary": "Reject courier return requests: orders stay with the courier (same scope as approve)",
         "tags": [
           "Logistics"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "registrator",
+          "manager"
         ]
       }
     },
@@ -4362,6 +5186,14 @@
         "summary": "Get all regions",
         "tags": [
           "Logistics"
+        ],
+        "x-roles": [
+          "admin",
+          "superadmin",
+          "manager",
+          "registrator",
+          "market",
+          "courier"
         ]
       },
       "post": {
@@ -4390,6 +5222,10 @@
         "summary": "Create region",
         "tags": [
           "Logistics"
+        ],
+        "x-roles": [
+          "admin",
+          "superadmin"
         ]
       }
     },
@@ -4429,6 +5265,57 @@
         "summary": "Get all region stats",
         "tags": [
           "Logistics"
+        ],
+        "x-roles": [
+          "admin",
+          "superadmin",
+          "manager",
+          "registrator",
+          "logist",
+          "courier"
+        ]
+      }
+    },
+    "/region/my/district-stats": {
+      "get": {
+        "operationId": "LogisticsGatewayController_getMyRegionDistrictStats",
+        "parameters": [
+          {
+            "name": "startDate",
+            "required": false,
+            "in": "query",
+            "description": "YYYY-MM-DD or ISO date-time",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "endDate",
+            "required": false,
+            "in": "query",
+            "description": "YYYY-MM-DD or ISO date-time",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "O'z viloyatim statistikasi (kuryer / menejer, tumanlar kesimida)",
+        "tags": [
+          "Logistics"
+        ],
+        "x-roles": [
+          "courier",
+          "manager"
         ]
       }
     },
@@ -4477,6 +5364,13 @@
         "summary": "Get region detailed stats by id",
         "tags": [
           "Logistics"
+        ],
+        "x-roles": [
+          "admin",
+          "superadmin",
+          "manager",
+          "registrator",
+          "logist"
         ]
       }
     },
@@ -4507,6 +5401,10 @@
         "summary": "Bulk-assign a logist to regions (others of this logist are unassigned)",
         "tags": [
           "Logistics"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       }
     },
@@ -4537,6 +5435,14 @@
         "summary": "Get region by id",
         "tags": [
           "Logistics"
+        ],
+        "x-roles": [
+          "admin",
+          "superadmin",
+          "manager",
+          "registrator",
+          "market",
+          "courier"
         ]
       },
       "patch": {
@@ -4575,6 +5481,10 @@
         "summary": "Update region",
         "tags": [
           "Logistics"
+        ],
+        "x-roles": [
+          "admin",
+          "superadmin"
         ]
       },
       "delete": {
@@ -4603,6 +5513,10 @@
         "summary": "Delete region",
         "tags": [
           "Logistics"
+        ],
+        "x-roles": [
+          "admin",
+          "superadmin"
         ]
       }
     },
@@ -4643,6 +5557,10 @@
         "summary": "Assign (or remove with null) a region logist",
         "tags": [
           "Logistics"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       }
     },
@@ -4672,6 +5590,14 @@
         "summary": "Get all districts",
         "tags": [
           "Logistics"
+        ],
+        "x-roles": [
+          "admin",
+          "superadmin",
+          "manager",
+          "registrator",
+          "market",
+          "courier"
         ]
       },
       "post": {
@@ -4700,6 +5626,10 @@
         "summary": "Create district",
         "tags": [
           "Logistics"
+        ],
+        "x-roles": [
+          "admin",
+          "superadmin"
         ]
       }
     },
@@ -4730,6 +5660,14 @@
         "summary": "Get district by sato_code",
         "tags": [
           "Logistics"
+        ],
+        "x-roles": [
+          "admin",
+          "superadmin",
+          "manager",
+          "courier",
+          "market",
+          "registrator"
         ]
       }
     },
@@ -4760,6 +5698,14 @@
         "summary": "Get district by id",
         "tags": [
           "Logistics"
+        ],
+        "x-roles": [
+          "admin",
+          "superadmin",
+          "manager",
+          "courier",
+          "market",
+          "registrator"
         ]
       },
       "patch": {
@@ -4798,6 +5744,10 @@
         "summary": "Assign district to another region",
         "tags": [
           "Logistics"
+        ],
+        "x-roles": [
+          "admin",
+          "superadmin"
         ]
       },
       "delete": {
@@ -4826,6 +5776,10 @@
         "summary": "Delete district — buyurtma/foydalanuvchi/filial bog'langan bo'lsa 400 (oNAE3LW9)",
         "tags": [
           "Logistics"
+        ],
+        "x-roles": [
+          "admin",
+          "superadmin"
         ]
       }
     },
@@ -4866,6 +5820,10 @@
         "summary": "Update district name",
         "tags": [
           "Logistics"
+        ],
+        "x-roles": [
+          "admin",
+          "superadmin"
         ]
       }
     },
@@ -4906,6 +5864,10 @@
         "summary": "Update district sato_code",
         "tags": [
           "Logistics"
+        ],
+        "x-roles": [
+          "admin",
+          "superadmin"
         ]
       }
     },
@@ -4926,6 +5888,9 @@
         "summary": "Preview district sato_code matching",
         "tags": [
           "Logistics"
+        ],
+        "x-roles": [
+          "superadmin"
         ]
       }
     },
@@ -4946,6 +5911,9 @@
         "summary": "Apply matched district sato_codes",
         "tags": [
           "Logistics"
+        ],
+        "x-roles": [
+          "superadmin"
         ]
       }
     },
@@ -4987,6 +5955,10 @@
         "summary": "Tumanni boshqasiga birlashtirish: buyurtma, foydalanuvchi va filiallar ko'chadi, tuman o'chadi (oNAE3LW9)",
         "tags": [
           "Logistics"
+        ],
+        "x-roles": [
+          "admin",
+          "superadmin"
         ]
       }
     },
@@ -5002,7 +5974,8 @@
         "summary": "Search service health check",
         "tags": [
           "Search"
-        ]
+        ],
+        "x-roles": null
       }
     },
     "/search": {
@@ -5065,7 +6038,8 @@
         "summary": "Global search",
         "tags": [
           "Search"
-        ]
+        ],
+        "x-roles": null
       }
     },
     "/finance/health": {
@@ -5080,7 +6054,8 @@
         "summary": "Finance service health check",
         "tags": [
           "Finance"
-        ]
+        ],
+        "x-roles": null
       }
     },
     "/finance/cashbox": {
@@ -5110,6 +6085,10 @@
         "summary": "Create cashbox",
         "tags": [
           "Finance"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       }
     },
@@ -5137,6 +6116,10 @@
         "summary": "HQ kuryerlari va kassasidagi naqd (superadmin/admin qabul qiladi)",
         "tags": [
           "Finance"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       }
     },
@@ -5250,6 +6233,13 @@
         "summary": "Find cashbox(es) by user",
         "tags": [
           "Finance"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "market",
+          "courier",
+          "manager"
         ]
       }
     },
@@ -5280,6 +6270,10 @@
         "summary": "Update cashbox balance and create history",
         "tags": [
           "Finance"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       }
     },
@@ -5339,6 +6333,11 @@
         "summary": "Get main cashbox summary",
         "tags": [
           "Finance"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "manager"
         ]
       }
     },
@@ -5407,6 +6406,11 @@
         "summary": "Get cashbox by user ID with date filters",
         "tags": [
           "Finance"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "manager"
         ]
       }
     },
@@ -5466,6 +6470,11 @@
         "summary": "Get my cashbox (courier/market)",
         "tags": [
           "Finance"
+        ],
+        "x-roles": [
+          "courier",
+          "market",
+          "manager"
         ]
       }
     },
@@ -5505,6 +6514,11 @@
         "summary": "Accept payment from courier",
         "tags": [
           "Finance"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "manager"
         ]
       }
     },
@@ -5544,6 +6558,10 @@
         "summary": "Payment to market",
         "tags": [
           "Finance"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       }
     },
@@ -5583,6 +6601,11 @@
         "summary": "Transfer money from branch manager cashbox to HQ main cashbox",
         "tags": [
           "Finance"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "manager"
         ]
       }
     },
@@ -5696,6 +6719,11 @@
         "summary": "Get all cashboxes total info",
         "tags": [
           "Finance"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "manager"
         ]
       }
     },
@@ -5755,6 +6783,9 @@
         "summary": "Manager cashbox settlement (HQ bilan hisob-kitob)",
         "tags": [
           "Finance"
+        ],
+        "x-roles": [
+          "manager"
         ]
       }
     },
@@ -5814,6 +6845,9 @@
         "summary": "Managerdan HQga berilishi kerak summa",
         "tags": [
           "Finance"
+        ],
+        "x-roles": [
+          "manager"
         ]
       }
     },
@@ -5834,6 +6868,10 @@
         "summary": "Get financial balance",
         "tags": [
           "Finance"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       }
     },
@@ -5884,6 +6922,10 @@
         "summary": "Record a manual financial ledger entry (income/expense/bills/salary/correction)",
         "tags": [
           "Finance"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       }
     },
@@ -5979,6 +7021,10 @@
         "summary": "List financial balance ledger entries + current balance",
         "tags": [
           "Finance"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       }
     },
@@ -6032,6 +7078,10 @@
         "summary": "Get financial balance analytics and impact analysis",
         "tags": [
           "Finance"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       }
     },
@@ -6101,6 +7151,10 @@
         "summary": "Paginated top-impact financial balance transactions",
         "tags": [
           "Finance"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       }
     },
@@ -6140,6 +7194,11 @@
         "summary": "Spend money from main cashbox",
         "tags": [
           "Finance"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "manager"
         ]
       }
     },
@@ -6179,6 +7238,11 @@
         "summary": "Fill main cashbox",
         "tags": [
           "Finance"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "manager"
         ]
       }
     },
@@ -6366,6 +7430,14 @@
         "summary": "Find cashbox history list",
         "tags": [
           "Finance"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "registrator",
+          "manager",
+          "courier",
+          "market"
         ]
       }
     },
@@ -6396,6 +7468,14 @@
         "summary": "Find cashbox history detail by id",
         "tags": [
           "Finance"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "registrator",
+          "courier",
+          "market",
+          "manager"
         ]
       }
     },
@@ -6426,6 +7506,11 @@
         "summary": "Open shift",
         "tags": [
           "Finance"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "registrator"
         ]
       }
     },
@@ -6456,6 +7541,37 @@
         "summary": "Close shift",
         "tags": [
           "Finance"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "registrator"
+        ]
+      }
+    },
+    "/finance/shift/current": {
+      "get": {
+        "description": "(kfdfYDik) `data.shift` — ochiq smena yoki null; `data.required` — smenasiz pul operatsiyalari bloklanadimi (FINANCE_REQUIRE_OPEN_SHIFT).",
+        "operationId": "FinanceGatewayController_currentShift",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Asosiy (MAIN) kassaning joriy ochiq smenasi",
+        "tags": [
+          "Finance"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "registrator"
         ]
       }
     },
@@ -6535,6 +7651,11 @@
         "summary": "Find shifts with filters",
         "tags": [
           "Finance"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "registrator"
         ]
       }
     },
@@ -6565,6 +7686,10 @@
         "summary": "Create salary row for user",
         "tags": [
           "Finance"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       },
       "patch": {
@@ -6593,6 +7718,10 @@
         "summary": "Update salary row for user",
         "tags": [
           "Finance"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       }
     },
@@ -6623,6 +7752,10 @@
         "summary": "Find salary by user id",
         "tags": [
           "Finance"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       }
     },
@@ -6663,6 +7796,10 @@
         "summary": "Record a payout to an operator",
         "tags": [
           "Finance"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       }
     },
@@ -6693,6 +7830,11 @@
         "summary": "Operator earned/paid/balance summary",
         "tags": [
           "Finance"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "manager"
         ]
       }
     },
@@ -6739,6 +7881,11 @@
         "summary": "List an operator earnings",
         "tags": [
           "Finance"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "manager"
         ]
       }
     },
@@ -6785,6 +7932,11 @@
         "summary": "List an operator payouts",
         "tags": [
           "Finance"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "manager"
         ]
       }
     },
@@ -6815,6 +7967,100 @@
         "summary": "Yuborishdan OLDIN: aniq qabul qiluvchilar soni, rollar kesimi, kanal bo‘yicha yaroqlilar (hech narsa yuborilmaydi)",
         "tags": [
           "Notification campaigns"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
+        ]
+      }
+    },
+    "/notifications/audience/segments": {
+      "get": {
+        "operationId": "NotificationCampaignGatewayController_listSegments",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Saqlangan auditoriya segmentlari",
+        "tags": [
+          "Notification campaigns"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
+        ]
+      },
+      "post": {
+        "operationId": "NotificationCampaignGatewayController_createSegment",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateAudienceSegmentRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Segmentni nom bilan saqlash (faqat shart; son jonli — preview audience_segment_id bilan)",
+        "tags": [
+          "Notification campaigns"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
+        ]
+      }
+    },
+    "/notifications/audience/segments/{id}": {
+      "delete": {
+        "operationId": "NotificationCampaignGatewayController_deleteSegment",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "example": "3",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Saqlangan segmentni o‘chirish",
+        "tags": [
+          "Notification campaigns"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       }
     },
@@ -6854,6 +8100,10 @@
         "summary": "Ommaviy yuborish — darhol 202 { campaign_id }, fonda partiyalab (Idempotency-Key majburiy; takror — mavjud kampaniya)",
         "tags": [
           "Notification campaigns"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       },
       "get": {
@@ -6907,6 +8157,10 @@
         "summary": "Kampaniyalar tarixi (yangilari birinchi)",
         "tags": [
           "Notification campaigns"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       }
     },
@@ -6937,6 +8191,10 @@
         "summary": "Kampaniya progressi: status, total/sent/failed/skipped, progress_pct",
         "tags": [
           "Notification campaigns"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       }
     },
@@ -6967,6 +8225,253 @@
         "summary": "Bekor qilish — keyingi partiyalar boshlanmaydi",
         "tags": [
           "Notification campaigns"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
+        ]
+      }
+    },
+    "/notifications/telegram/broadcast": {
+      "post": {
+        "operationId": "NotificationCampaignGatewayController_telegramBroadcast",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TelegramBroadcastRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Telegram broadcast to linked personal chats (roles/broadcast/recipient_ids); counts in response, final sent/failed in /notifications/sent/:id",
+        "tags": [
+          "Notification campaigns"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
+        ]
+      }
+    },
+    "/notifications/templates": {
+      "get": {
+        "operationId": "NotificationCampaignGatewayController_listTemplates",
+        "parameters": [
+          {
+            "name": "code",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "example": "order.sold",
+              "type": "string"
+            }
+          },
+          {
+            "name": "lang",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "uz",
+                "ru",
+                "en"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Bildirishnoma shablonlari (uz/ru/en): DB + o‘rnatilgan uz sukutlar, SMS encoding/parts bilan",
+        "tags": [
+          "Notification campaigns"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
+        ]
+      },
+      "put": {
+        "operationId": "NotificationCampaignGatewayController_upsertTemplate",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpsertNotificationTemplateRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Shablonni yaratish/yangilash (code+lang+channel). Fail-closed o‘zgaruvchilar, SMS’ga ketadiganida PII taqiqlangan",
+        "tags": [
+          "Notification campaigns"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
+        ]
+      }
+    },
+    "/notifications/sent": {
+      "get": {
+        "operationId": "NotificationCampaignGatewayController_listSent",
+        "parameters": [
+          {
+            "name": "page",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "example": 1,
+              "type": "number"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "example": 20,
+              "type": "number"
+            }
+          },
+          {
+            "name": "status",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "running",
+                "sent",
+                "partial",
+                "inbox_only",
+                "skipped",
+                "failed"
+              ]
+            }
+          },
+          {
+            "name": "type",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "example": "system.manual",
+              "type": "string"
+            }
+          },
+          {
+            "name": "created_by",
+            "required": false,
+            "in": "query",
+            "description": "Yuborgan admin id",
+            "schema": {
+              "example": "1",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Yuborilgan xabarlar tarixi: sana, sarlavha, kim yubordi, qabul qiluvchilar, kanal natijasi",
+        "tags": [
+          "Notification campaigns"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
+        ]
+      }
+    },
+    "/notifications/sent/{dispatch_id}": {
+      "get": {
+        "operationId": "NotificationCampaignGatewayController_getSent",
+        "parameters": [
+          {
+            "name": "dispatch_id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "example": "0b7f6f5e-3c1a-4c6e-9b1d-2f0a6c1e9d42",
+              "type": "string"
+            }
+          },
+          {
+            "name": "page",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "example": 1,
+              "type": "number"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "example": 50,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Bitta dispatch: to‘liq matn, kanal × holat (jonli), yetkazilmaganlar (ism + rol + sabab)",
+        "tags": [
+          "Notification campaigns"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       }
     },
@@ -6982,7 +8487,8 @@
         "summary": "Notification service health check",
         "tags": [
           "Notification"
-        ]
+        ],
+        "x-roles": null
       }
     },
     "/notifications/inbox": {
@@ -7081,7 +8587,8 @@
         "summary": "Current user's notification inbox",
         "tags": [
           "Notification"
-        ]
+        ],
+        "x-roles": null
       }
     },
     "/notifications/inbox/counts": {
@@ -7101,7 +8608,8 @@
         "summary": "Kategoriya bo‘yicha jami/o‘qilmagan va muhim o‘qilmaganlar soni",
         "tags": [
           "Notification"
-        ]
+        ],
+        "x-roles": null
       }
     },
     "/notifications/inbox/unread-count": {
@@ -7121,7 +8629,8 @@
         "summary": "Current user unread notification count",
         "tags": [
           "Notification"
-        ]
+        ],
+        "x-roles": null
       }
     },
     "/notifications/inbox/{id}": {
@@ -7151,7 +8660,8 @@
         "summary": "Get one of my notifications",
         "tags": [
           "Notification"
-        ]
+        ],
+        "x-roles": null
       },
       "delete": {
         "operationId": "NotificationGatewayController_deleteInbox",
@@ -7179,7 +8689,8 @@
         "summary": "Delete one of my notifications",
         "tags": [
           "Notification"
-        ]
+        ],
+        "x-roles": null
       }
     },
     "/notifications/inbox/read-all": {
@@ -7199,7 +8710,8 @@
         "summary": "Mark all my notifications read",
         "tags": [
           "Notification"
-        ]
+        ],
+        "x-roles": null
       }
     },
     "/notifications/inbox/{id}/read": {
@@ -7229,7 +8741,8 @@
         "summary": "Mark one of my notifications read (or unread)",
         "tags": [
           "Notification"
-        ]
+        ],
+        "x-roles": null
       }
     },
     "/notifications/preferences": {
@@ -7249,7 +8762,8 @@
         "summary": "Current user's notification preferences",
         "tags": [
           "Notification"
-        ]
+        ],
+        "x-roles": null
       },
       "patch": {
         "operationId": "NotificationGatewayController_updatePreferences",
@@ -7277,7 +8791,8 @@
         "summary": "Update current user preferences (critical types cannot be disabled → 400)",
         "tags": [
           "Notification"
-        ]
+        ],
+        "x-roles": null
       }
     },
     "/notifications/push/public-key": {
@@ -7297,7 +8812,8 @@
         "summary": "VAPID public key for PushManager.subscribe (never the private key)",
         "tags": [
           "Notification"
-        ]
+        ],
+        "x-roles": null
       }
     },
     "/notifications/push/subscribe": {
@@ -7327,7 +8843,8 @@
         "summary": "Save this browser/device push subscription for the current user (idempotent by endpoint)",
         "tags": [
           "Notification"
-        ]
+        ],
+        "x-roles": null
       },
       "delete": {
         "operationId": "NotificationGatewayController_pushUnsubscribe",
@@ -7355,7 +8872,29 @@
         "summary": "Remove one of the current user's push subscriptions (call BEFORE logout revokes the token)",
         "tags": [
           "Notification"
-        ]
+        ],
+        "x-roles": null
+      }
+    },
+    "/notifications/telegram/link": {
+      "post": {
+        "operationId": "NotificationGatewayController_telegramLink",
+        "parameters": [],
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Personal Telegram link for the current user: { deep_link, command, expires_at } (15 min)",
+        "tags": [
+          "Notification"
+        ],
+        "x-roles": null
       }
     },
     "/notifications/types": {
@@ -7375,7 +8914,8 @@
         "summary": "Notification types catalog (key, category, priority, default_channels, label_uz, user_can_mute)",
         "tags": [
           "Notification"
-        ]
+        ],
+        "x-roles": null
       }
     },
     "/notifications/dispatch": {
@@ -7405,6 +8945,10 @@
         "summary": "Manually dispatch a notification (admin/testing)",
         "tags": [
           "Notification"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       }
     },
@@ -7475,6 +9019,10 @@
         "summary": "Get notification configs",
         "tags": [
           "Notification"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       },
       "post": {
@@ -7503,6 +9051,10 @@
         "summary": "Create notification config",
         "tags": [
           "Notification"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       }
     },
@@ -7533,6 +9085,10 @@
         "summary": "Get one notification config by id",
         "tags": [
           "Notification"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       },
       "patch": {
@@ -7571,6 +9127,10 @@
         "summary": "Update notification config",
         "tags": [
           "Notification"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       },
       "delete": {
@@ -7599,6 +9159,10 @@
         "summary": "Delete notification config",
         "tags": [
           "Notification"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       }
     },
@@ -7629,6 +9193,11 @@
         "summary": "Connect telegram group by group token",
         "tags": [
           "Notification"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "registrator"
         ]
       }
     },
@@ -7659,6 +9228,11 @@
         "summary": "Send notification to telegram group(s). REGISTRATOR — faqat Elchi'da ulangan market guruhlariga (begona group_id → 403). `token` qabul qilinmaydi (400).",
         "tags": [
           "Notification"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "registrator"
         ]
       }
     },
@@ -7679,6 +9253,10 @@
         "summary": "SMS holati: yoqilganmi, akkauntlar, bugungi sarf, kvota, tariflar",
         "tags": [
           "SMS"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       }
     },
@@ -7699,6 +9277,10 @@
         "summary": "Bir bo'lak narxi (so'm). Sozlanmagan bo'lsa null",
         "tags": [
           "SMS"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       }
     },
@@ -7738,6 +9320,10 @@
         "summary": "Xarajat hisoboti: Toshkent kuni × sinf (soni, yetkazilgan, so'm)",
         "tags": [
           "SMS"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       }
     },
@@ -7758,6 +9344,9 @@
         "summary": "Provayder akkauntlari (login maskalangan, parol qaytmaydi)",
         "tags": [
           "SMS"
+        ],
+        "x-roles": [
+          "superadmin"
         ]
       },
       "put": {
@@ -7786,6 +9375,9 @@
         "summary": "Provayder akkaunti — kredensial DB da shifrlanadi",
         "tags": [
           "SMS"
+        ],
+        "x-roles": [
+          "superadmin"
         ]
       }
     },
@@ -7806,6 +9398,10 @@
         "summary": "Shablonlar (kodlash, bo'laklar, tasdiq holati bilan)",
         "tags": [
           "SMS"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       },
       "post": {
@@ -7834,6 +9430,10 @@
         "summary": "Shablon yaratish/yangilash (matn o'zgarsa provayder tasdig'i bekor)",
         "tags": [
           "SMS"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       }
     },
@@ -7873,6 +9473,10 @@
         "summary": "Provayder tasdiqlagan shablon id sini yozish",
         "tags": [
           "SMS"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       }
     },
@@ -7902,6 +9506,10 @@
         "summary": "Shablonni o'chirish",
         "tags": [
           "SMS"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       }
     },
@@ -7932,6 +9540,10 @@
         "summary": "Tasdiq oynasi: aniq qabul qiluvchilar, roziligi yo'qlar, prognoz narx (hech narsa yuborilmaydi)",
         "tags": [
           "SMS"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       }
     },
@@ -7971,6 +9583,10 @@
         "summary": "Kampaniyani yuborish (Idempotency-Key majburiy — takror 409)",
         "tags": [
           "SMS"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       },
       "get": {
@@ -7998,6 +9614,10 @@
         "summary": "Kampaniyalar tarixi: sent/failed/blocked",
         "tags": [
           "SMS"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       }
     },
@@ -8028,6 +9648,10 @@
         "summary": "Reklama roziligini qayd etish (operator)",
         "tags": [
           "SMS"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       }
     },
@@ -8058,6 +9682,10 @@
         "summary": "Raqam bo'yicha reklama roziligini bekor qilish",
         "tags": [
           "SMS"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       }
     },
@@ -8082,7 +9710,8 @@
         "summary": "SMS yetkazilganlik hisoboti (DLR) — har xabar HMAC token bilan",
         "tags": [
           "SMS"
-        ]
+        ],
+        "x-roles": null
       }
     },
     "/sms/stop/{token}": {
@@ -8106,7 +9735,8 @@
         "summary": "Reklama SMS dan chiqish (opt-out) havolasi",
         "tags": [
           "SMS"
-        ]
+        ],
+        "x-roles": null
       }
     },
     "/integrations": {
@@ -8222,6 +9852,10 @@
         "summary": "List integrations",
         "tags": [
           "Integrations"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       },
       "post": {
@@ -8250,6 +9884,10 @@
         "summary": "Create integration",
         "tags": [
           "Integrations"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       }
     },
@@ -8280,6 +9918,10 @@
         "summary": "Integratsiya paneli metrikasi — hodisa, yetmagan, navbat, javob vaqti",
         "tags": [
           "Integrations"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       }
     },
@@ -8334,6 +9976,10 @@
         "summary": "Onlayn to'lov tranzaksiyalari — summa, holat, buyurtmaga qo'llanish natijasi",
         "tags": [
           "Integrations"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       }
     },
@@ -8354,6 +10000,10 @@
         "summary": "Kanonik posilka va to‘lov statuslari + o‘zbekcha izoh (status xaritasi uchun)",
         "tags": [
           "Integrations"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       }
     },
@@ -8417,6 +10067,10 @@
         "summary": "Kiruvchi webhook jurnali — imzo, natija, xato sababi (tana qaytarilmaydi)",
         "tags": [
           "Integrations"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       }
     },
@@ -8455,6 +10109,10 @@
         "summary": "Bitta webhook yozuvi: maskalangan payload, qayta ishlash mumkinligi va sababi",
         "tags": [
           "Integrations"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       }
     },
@@ -8484,6 +10142,10 @@
         "summary": "Webhook hodisasini qayta ishlash (imzo noto'g'ri yoki allaqachon ishlangan -> 409)",
         "tags": [
           "Integrations"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       }
     },
@@ -8565,6 +10227,10 @@
         "summary": "Sync history list (pagination/filter/success rate)",
         "tags": [
           "Integrations"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       }
     },
@@ -8623,6 +10289,10 @@
         "summary": "List provider COD receivables",
         "tags": [
           "Integrations"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       }
     },
@@ -8652,6 +10322,11 @@
         "summary": "Get the provider shipment for an order",
         "tags": [
           "Integrations"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "registrator"
         ]
       }
     },
@@ -8681,6 +10356,10 @@
         "summary": "Get integration by id",
         "tags": [
           "Integrations"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       },
       "patch": {
@@ -8718,6 +10397,10 @@
         "summary": "Update integration",
         "tags": [
           "Integrations"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       },
       "delete": {
@@ -8745,6 +10428,10 @@
         "summary": "Delete integration",
         "tags": [
           "Integrations"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       }
     },
@@ -8784,6 +10471,10 @@
         "summary": "Integration connection test (ping/healthcheck)",
         "tags": [
           "Integrations"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       }
     },
@@ -8823,6 +10514,10 @@
         "summary": "Integration connection test alias endpoint",
         "tags": [
           "Integrations"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       }
     },
@@ -8852,6 +10547,10 @@
         "summary": "Hoziroq tenglashtirish: { checked, applied, unchanged, unmapped, failed, last_reconcile_at }",
         "tags": [
           "Integrations"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       }
     },
@@ -8941,6 +10640,10 @@
         "summary": "Sync history by integration id",
         "tags": [
           "Integrations"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       }
     },
@@ -8980,6 +10683,10 @@
         "summary": "Start sync processing for integration",
         "tags": [
           "Integrations"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       }
     },
@@ -9019,6 +10726,10 @@
         "summary": "Create sync queue item",
         "tags": [
           "Integrations"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       }
     },
@@ -9058,6 +10769,10 @@
         "summary": "Retry failed sync jobs for integration",
         "tags": [
           "Integrations"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       }
     },
@@ -9097,6 +10812,12 @@
         "summary": "Scan a parcel QR and import the order from the site",
         "tags": [
           "Integrations"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "registrator",
+          "manager"
         ]
       }
     },
@@ -9136,6 +10857,11 @@
         "summary": "Universal QR search via integration config",
         "tags": [
           "Integrations"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "registrator"
         ]
       }
     },
@@ -9175,6 +10901,11 @@
         "summary": "Universal external request (any endpoint/method)",
         "tags": [
           "Integrations"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "registrator"
         ]
       }
     },
@@ -9214,6 +10945,11 @@
         "summary": "Dispatch an order to this provider (create a shipment)",
         "tags": [
           "Integrations"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "registrator"
         ]
       }
     },
@@ -9285,6 +11021,10 @@
         "summary": "List provider shipments for an integration",
         "tags": [
           "Integrations"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       }
     },
@@ -9315,6 +11055,10 @@
         "summary": "Provider's outstanding COD balance",
         "tags": [
           "Integrations"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       }
     },
@@ -9355,6 +11099,157 @@
         "summary": "Record a provider remittance and settle receivables",
         "tags": [
           "Integrations"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
+        ]
+      },
+      "get": {
+        "operationId": "IntegrationGatewayController_listRemittances",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Integration id",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "enum": [
+                "active",
+                "cancelled"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "name": "from_date",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "example": "2026-10-01",
+              "type": "string"
+            }
+          },
+          {
+            "name": "to_date",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "example": "2026-10-14",
+              "type": "string"
+            }
+          },
+          {
+            "name": "fromDate",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "toDate",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "page",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "number"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Kargo to'lovlari (remittance) ro'yxati — sana filtri, sahifalash",
+        "tags": [
+          "Integrations"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
+        ]
+      }
+    },
+    "/integrations/{id}/remittances/{remittance_id}/cancel": {
+      "post": {
+        "operationId": "IntegrationGatewayController_cancelRemittance",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Integration id",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "remittance_id",
+            "required": true,
+            "in": "path",
+            "description": "Remittance id",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CancelRemittanceRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Kargo to'lovini bekor qilish: qarz qatorlari PENDING, MAIN kassadan teskari chiqim",
+        "tags": [
+          "Integrations"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       }
     },
@@ -9380,7 +11275,8 @@
         "summary": "Inbound provider webhook (HMAC-verified downstream, no JWT)",
         "tags": [
           "Webhooks"
-        ]
+        ],
+        "x-roles": null
       }
     },
     "/investors/me": {
@@ -9400,6 +11296,9 @@
         "summary": "Investor: o'z profili va yig'indisi (investitsiya, foiz, to'langan/kutilayotgan foyda)",
         "tags": [
           "Investor"
+        ],
+        "x-roles": [
+          "investor"
         ]
       }
     },
@@ -9430,6 +11329,9 @@
         "summary": "Investor: dashboard kartalari + oylik foyda grafigi (o'ziniki)",
         "tags": [
           "Investor"
+        ],
+        "x-roles": [
+          "investor"
         ]
       }
     },
@@ -9483,6 +11385,9 @@
         "summary": "Investor: o'z investitsiyalari",
         "tags": [
           "Investor"
+        ],
+        "x-roles": [
+          "investor"
         ]
       }
     },
@@ -9529,6 +11434,9 @@
         "summary": "Investor: o'z foyda tarixi",
         "tags": [
           "Investor"
+        ],
+        "x-roles": [
+          "investor"
         ]
       }
     },
@@ -9559,6 +11467,10 @@
         "summary": "Create investor",
         "tags": [
           "Investor"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       },
       "get": {
@@ -9614,6 +11526,10 @@
         "summary": "List investors (pagination + search + status)",
         "tags": [
           "Investor"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       }
     },
@@ -9652,6 +11568,10 @@
         "summary": "Investor dashboard (nazorat): kartalar + oylik foyda grafigi",
         "tags": [
           "Investor"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       }
     },
@@ -9681,6 +11601,10 @@
         "summary": "Find investor by id (with investments/profits)",
         "tags": [
           "Investor"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       },
       "patch": {
@@ -9718,6 +11642,10 @@
         "summary": "Update investor",
         "tags": [
           "Investor"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       },
       "delete": {
@@ -9745,6 +11673,10 @@
         "summary": "Delete investor (soft delete)",
         "tags": [
           "Investor"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       }
     },
@@ -9784,6 +11716,10 @@
         "summary": "Create investment",
         "tags": [
           "Investor"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       },
       "get": {
@@ -9843,6 +11779,10 @@
         "summary": "List investments",
         "tags": [
           "Investor"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       }
     },
@@ -9888,6 +11828,10 @@
         "summary": "List investments by investor",
         "tags": [
           "Investor"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       }
     },
@@ -9917,6 +11861,10 @@
         "summary": "Find investment by id",
         "tags": [
           "Investor"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       },
       "patch": {
@@ -9962,6 +11910,10 @@
         "summary": "Update investment",
         "tags": [
           "Investor"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       },
       "delete": {
@@ -9995,6 +11947,10 @@
         "summary": "Delete investment (soft delete)",
         "tags": [
           "Investor"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       }
     },
@@ -10034,6 +11990,10 @@
         "summary": "Create profit share manually",
         "tags": [
           "Investor"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       },
       "get": {
@@ -10086,6 +12046,10 @@
         "summary": "List profit shares",
         "tags": [
           "Investor"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       }
     },
@@ -10125,6 +12089,10 @@
         "summary": "Calculate profit share by period and percentage",
         "tags": [
           "Investor"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       }
     },
@@ -10179,6 +12147,10 @@
         "summary": "List profit shares by investor",
         "tags": [
           "Investor"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       }
     },
@@ -10208,6 +12180,10 @@
         "summary": "Mark profit share as paid",
         "tags": [
           "Investor"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       }
     },
@@ -10238,6 +12214,10 @@
         "summary": "Create branch",
         "tags": [
           "Branch"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       },
       "get": {
@@ -10293,6 +12273,10 @@
         "summary": "List branches (pagination + search + status)",
         "tags": [
           "Branch"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       }
     },
@@ -10313,6 +12297,10 @@
         "summary": "Get full branch tree (nested)",
         "tags": [
           "Branch"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       }
     },
@@ -10358,6 +12346,13 @@
         "summary": "List branches that have SENT transfer batches",
         "tags": [
           "Branch"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "branch",
+          "manager",
+          "registrator"
         ]
       }
     },
@@ -10387,6 +12382,11 @@
         "summary": "Pochta jo'natish uchun manzil filiallar (faol REGIONAL/HYBRID, pul maydonlarisiz)",
         "tags": [
           "Branch"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "registrator"
         ]
       }
     },
@@ -10407,6 +12407,13 @@
         "summary": "Branches that currently have NEW orders",
         "tags": [
           "Branch"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "branch",
+          "manager",
+          "registrator"
         ]
       }
     },
@@ -10437,6 +12444,10 @@
         "summary": "Find branch by id",
         "tags": [
           "Branch"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       },
       "patch": {
@@ -10475,6 +12486,10 @@
         "summary": "Update branch",
         "tags": [
           "Branch"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       },
       "delete": {
@@ -10503,6 +12518,10 @@
         "summary": "Delete branch (soft delete)",
         "tags": [
           "Branch"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       }
     },
@@ -10533,6 +12552,10 @@
         "summary": "Get all descendants of a branch (flat list)",
         "tags": [
           "Branch"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       }
     },
@@ -10563,6 +12586,13 @@
         "summary": "Branch market analytics (orders, delivered, total price)",
         "tags": [
           "Branch"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "branch",
+          "manager",
+          "registrator"
         ]
       }
     },
@@ -10593,6 +12623,13 @@
         "summary": "Create transfer batches from requester's branch by order_ids",
         "tags": [
           "Branch"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "branch",
+          "manager",
+          "registrator"
         ]
       }
     },
@@ -10633,6 +12670,13 @@
         "summary": "Create return batches grouped by original branch (direction=RETURN, QR=BTR-*)",
         "tags": [
           "Branch"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "branch",
+          "manager",
+          "registrator"
         ]
       }
     },
@@ -10673,6 +12717,13 @@
         "summary": "Mark transfer batch as sent with vehicle info",
         "tags": [
           "Branch"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "branch",
+          "manager",
+          "registrator"
         ]
       }
     },
@@ -10774,6 +12825,13 @@
         "summary": "List transfer batches",
         "tags": [
           "Branch"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "branch",
+          "manager",
+          "registrator"
         ]
       }
     },
@@ -10804,6 +12862,13 @@
         "summary": "Get transfer batch by id",
         "tags": [
           "Branch"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "branch",
+          "manager",
+          "registrator"
         ]
       }
     },
@@ -10834,6 +12899,13 @@
         "summary": "Get remaining (not sent) items of transfer batch by id",
         "tags": [
           "Branch"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "branch",
+          "manager",
+          "registrator"
         ]
       }
     },
@@ -10864,6 +12936,13 @@
         "summary": "Receive transfer batch by destination branch staff",
         "tags": [
           "Branch"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "branch",
+          "manager",
+          "registrator"
         ]
       }
     },
@@ -10904,6 +12983,13 @@
         "summary": "Receive selected orders from transfer batch by destination branch staff",
         "tags": [
           "Branch"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "branch",
+          "manager",
+          "registrator"
         ]
       }
     },
@@ -10944,6 +13030,13 @@
         "summary": "Cancel transfer batch and unassign its orders",
         "tags": [
           "Branch"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "branch",
+          "manager",
+          "registrator"
         ]
       }
     },
@@ -11006,6 +13099,13 @@
         "summary": "Dispatch HQ post to destination branch",
         "tags": [
           "Branch"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "branch",
+          "manager",
+          "registrator"
         ]
       }
     },
@@ -11046,6 +13146,10 @@
         "summary": "Assign user to branch",
         "tags": [
           "Branch"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       },
       "get": {
@@ -11074,6 +13178,10 @@
         "summary": "Get users assigned to branch",
         "tags": [
           "Branch"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       }
     },
@@ -11113,6 +13221,10 @@
         "summary": "Remove user from branch",
         "tags": [
           "Branch"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       }
     },
@@ -11143,6 +13255,10 @@
         "summary": "Courier branch-transfer check: cashbox, orders in hand, unreceived cancelled posts (read-only)",
         "tags": [
           "Branch"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       }
     },
@@ -11183,6 +13299,10 @@
         "summary": "Move courier to another branch (only when the courier holds no money and no orders)",
         "tags": [
           "Branch"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       }
     },
@@ -11213,6 +13333,10 @@
         "summary": "Get branch config list",
         "tags": [
           "Branch"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       },
       "post": {
@@ -11251,6 +13375,10 @@
         "summary": "Set branch config",
         "tags": [
           "Branch"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       }
     },
@@ -11290,6 +13418,10 @@
         "summary": "Get single branch config by key",
         "tags": [
           "Branch"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       },
       "patch": {
@@ -11337,6 +13469,10 @@
         "summary": "Update branch config by key",
         "tags": [
           "Branch"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       },
       "delete": {
@@ -11374,6 +13510,10 @@
         "summary": "Delete branch config by key (soft delete)",
         "tags": [
           "Branch"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       }
     },
@@ -11417,7 +13557,8 @@
         "summary": "Upload file to MinIO (multipart/form-data)",
         "tags": [
           "File"
-        ]
+        ],
+        "x-roles": null
       }
     },
     "/files/{key}": {
@@ -11456,7 +13597,8 @@
         "summary": "Get signed URL for file key",
         "tags": [
           "File"
-        ]
+        ],
+        "x-roles": null
       },
       "delete": {
         "operationId": "FileGatewayController_deleteFile",
@@ -11484,6 +13626,10 @@
         "summary": "Delete file by key (admin only)",
         "tags": [
           "File"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       }
     },
@@ -11514,7 +13660,8 @@
         "summary": "Public view for whitelisted (catalog/batch) images",
         "tags": [
           "File"
-        ]
+        ],
+        "x-roles": null
       }
     },
     "/files/qr": {
@@ -11544,7 +13691,8 @@
         "summary": "Generate QR and upload to MinIO",
         "tags": [
           "File"
-        ]
+        ],
+        "x-roles": null
       }
     },
     "/files/pdf": {
@@ -11574,7 +13722,8 @@
         "summary": "Generate PDF and upload to MinIO",
         "tags": [
           "File"
-        ]
+        ],
+        "x-roles": null
       }
     },
     "/scan/{token}": {
@@ -11632,7 +13781,8 @@
         "summary": "Resolve scanned QR token to order/batch/post",
         "tags": [
           "Scan"
-        ]
+        ],
+        "x-roles": null
       }
     },
     "/scan/market-cancelled": {
@@ -11662,7 +13812,8 @@
         "summary": "Market canceled handover QRni scan qilib 5 daqiqalik ruxsat olish",
         "tags": [
           "Scan"
-        ]
+        ],
+        "x-roles": null
       }
     },
     "/analytics/dashboard": {
@@ -11736,6 +13887,17 @@
         "summary": "Dashboard statistics by requester role",
         "tags": [
           "Analytics"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "manager",
+          "branch",
+          "registrator",
+          "operator",
+          "courier",
+          "market",
+          "market_operator"
         ]
       }
     },
@@ -11803,6 +13965,10 @@
         "summary": "Revenue stats by period",
         "tags": [
           "Analytics"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       }
     },
@@ -11856,6 +14022,10 @@
         "summary": "KPI stats report",
         "tags": [
           "Analytics"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       }
     },
@@ -11893,6 +14063,10 @@
         "summary": "Order report",
         "tags": [
           "Analytics"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       }
     },
@@ -11946,6 +14120,10 @@
         "summary": "Finance report",
         "tags": [
           "Analytics"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       }
     },
@@ -11983,6 +14161,13 @@
         "summary": "Courier report (operational staff only)",
         "tags": [
           "Analytics"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "manager",
+          "branch",
+          "registrator"
         ]
       }
     },
@@ -12013,6 +14198,10 @@
         "summary": "Termal etiketka PDF (100×60mm, Gainscha GS-2408D)",
         "tags": [
           "Printer"
+        ],
+        "x-roles": [
+          "admin",
+          "superadmin"
         ]
       }
     },
@@ -12043,6 +14232,10 @@
         "summary": "A4 chek (12 ta/varaq), brauzerda avto-print",
         "tags": [
           "Printer"
+        ],
+        "x-roles": [
+          "admin",
+          "superadmin"
         ]
       }
     },
@@ -12120,6 +14313,13 @@
         "summary": "Buyurtmalarni Excel (.xlsx) ga eksport qilish",
         "tags": [
           "Excel Export"
+        ],
+        "x-roles": [
+          "admin",
+          "superadmin",
+          "registrator",
+          "manager",
+          "branch"
         ]
       }
     },
@@ -12213,6 +14413,10 @@
         "summary": "Kassa tarixini Excel (.xlsx) ga eksport qilish",
         "tags": [
           "Excel Export"
+        ],
+        "x-roles": [
+          "admin",
+          "superadmin"
         ]
       }
     },
@@ -12266,6 +14470,10 @@
         "summary": "Smenalarni Excel (.xlsx) ga eksport qilish",
         "tags": [
           "Excel Export"
+        ],
+        "x-roles": [
+          "admin",
+          "superadmin"
         ]
       }
     },
@@ -12327,6 +14535,10 @@
         "summary": "Moliyaviy balans tarixini Excel (.xlsx) ga eksport qilish",
         "tags": [
           "Excel Export"
+        ],
+        "x-roles": [
+          "admin",
+          "superadmin"
         ]
       }
     },
@@ -12344,9 +14556,13 @@
             "bearer": []
           }
         ],
-        "summary": "Known audit action verbs (for filter dropdowns)",
+        "summary": "Audit action verbs registry (label/category/icon/tone) for filter dropdowns",
         "tags": [
           "Activity Log"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       }
     },
@@ -12474,6 +14690,15 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "cursor",
+            "required": false,
+            "in": "query",
+            "description": "(8eYmt4NV) Keyset kursor — oldingi javobdagi `meta.next_cursor`. Berilsa `page` e'tiborsiz; istalgan chuqurlikda aniq.",
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -12489,6 +14714,10 @@
         "summary": "Audit-log feed (merged across services, enriched)",
         "tags": [
           "Activity Log"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       }
     },
@@ -12536,6 +14765,10 @@
         "summary": "Full history of one entity (merged across services)",
         "tags": [
           "Activity Log"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       }
     },
@@ -12663,6 +14896,15 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "cursor",
+            "required": false,
+            "in": "query",
+            "description": "(8eYmt4NV) Keyset kursor — oldingi javobdagi `meta.next_cursor`. Berilsa `page` e'tiborsiz; istalgan chuqurlikda aniq.",
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -12678,6 +14920,10 @@
         "summary": "Everything a user did (merged across services)",
         "tags": [
           "Activity Log"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       }
     },
@@ -12709,7 +14955,8 @@
         "summary": "Partner API kalitini tekshirish (ping)",
         "tags": [
           "Partner"
-        ]
+        ],
+        "x-roles": null
       }
     },
     "/partner/regions": {
@@ -12734,7 +14981,8 @@
         "summary": "Elchi viloyatlari ro‘yxati",
         "tags": [
           "Partner"
-        ]
+        ],
+        "x-roles": null
       }
     },
     "/partner/districts": {
@@ -12767,7 +15015,8 @@
         "summary": "Elchi tumanlari (region_id bo‘yicha)",
         "tags": [
           "Partner"
-        ]
+        ],
+        "x-roles": null
       }
     },
     "/partner/tariff": {
@@ -12815,7 +15064,8 @@
         "summary": "Yetkazish tarifi (market bo‘yicha, narx preview)",
         "tags": [
           "Partner"
-        ]
+        ],
+        "x-roles": null
       }
     },
     "/partner/markets": {
@@ -12850,7 +15100,8 @@
         "summary": "Sotuvchi uchun Elchi market ochish (idempotent)",
         "tags": [
           "Partner"
-        ]
+        ],
+        "x-roles": null
       }
     },
     "/partner/shipments": {
@@ -12885,7 +15136,8 @@
         "summary": "Shipment yaratish (order.create), idempotent",
         "tags": [
           "Partner"
-        ]
+        ],
+        "x-roles": null
       }
     },
     "/partner/shipments/status": {
@@ -12920,7 +15172,8 @@
         "summary": "Ko'p posilka holati (100 tagacha) — { items, not_found, failed }",
         "tags": [
           "Partner"
-        ]
+        ],
+        "x-roles": null
       }
     },
     "/partner/shipments/{id}": {
@@ -12956,7 +15209,8 @@
         "summary": "Shipment holati (status/tracking/cod)",
         "tags": [
           "Partner"
-        ]
+        ],
+        "x-roles": null
       },
       "patch": {
         "operationId": "PartnerGatewayController_updateShipment",
@@ -13003,7 +15257,8 @@
         "summary": "Shipment yangilash (narx/manzil/mahsulot/izoh). Qabul qilingan posilka narxi -> 409, yakuniy holat -> 409.",
         "tags": [
           "Partner"
-        ]
+        ],
+        "x-roles": null
       }
     },
     "/partner/shipments/{id}/cancel": {
@@ -13039,7 +15294,8 @@
         "summary": "Shipment bekor qilish. Sotilganni bekor qilish -> 409. Allaqachon bekor qilinganni qayta bekor qilish -> 200 (idempotent).",
         "tags": [
           "Partner"
-        ]
+        ],
+        "x-roles": null
       }
     },
     "/admin/partners": {
@@ -13069,6 +15325,10 @@
         "summary": "Hamkor yaratish (API kalit BIR MARTA qaytadi)",
         "tags": [
           "Partners (admin)"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       },
       "get": {
@@ -13087,6 +15347,10 @@
         "summary": "Hamkorlar ro‘yxati (sirlarsiz)",
         "tags": [
           "Partners (admin)"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       }
     },
@@ -13140,6 +15404,10 @@
         "summary": "Hamkor webhook outbox jurnali (yetkazilgan/kutilayotgan/xato)",
         "tags": [
           "Partners (admin)"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       }
     },
@@ -13169,6 +15437,10 @@
         "summary": "Muvaffaqiyatsiz webhookni qayta navbatga qo'yish va darhol urinib ko'rish",
         "tags": [
           "Partners (admin)"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       }
     },
@@ -13214,6 +15486,10 @@
         "summary": "Hamkordan kelgan posilkalar (buyurtma bog'lanishi)",
         "tags": [
           "Partners (admin)"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       }
     },
@@ -13243,6 +15519,10 @@
         "summary": "Sinov webhookini yuborish — haqiqiy buyurtmaga tegmaydi. `url` berilsa saqlangan manzildan ustun turadi (saqlashdan OLDIN sinash). `target: 'main'|'sandbox'` — qaysi manzil/sekret; berilmasa sandbox yoqiq va manzili bo'lsa sandbox, aks holda asosiy (jeU3eztP).",
         "tags": [
           "Partners (admin)"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       }
     },
@@ -13282,6 +15562,10 @@
         "summary": "Hamkor sozlamalari: webhook manzili/sekreti, SANDBOX manzili, IP ro'yxati, nom. API kalit BU YERDA o‘zgarmaydi — buning uchun rotate-key bor. `webhook_url` qo‘yilganda sozlama yo‘qligi tufayli kutib turgan hodisalar avtomatik navbatga qaytariladi (`requeued_webhooks`).",
         "tags": [
           "Partners (admin)"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       }
     },
@@ -13311,6 +15595,10 @@
         "summary": "API kalitni yangilash (eski darhol ishlamaydi)",
         "tags": [
           "Partners (admin)"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       }
     },
@@ -13350,6 +15638,10 @@
         "summary": "Hamkorni faollashtirish/o‘chirish",
         "tags": [
           "Partners (admin)"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       }
     },
@@ -13370,6 +15662,10 @@
         "summary": "AI holati: kalit holati (qiymatsiz), modellar, bugungi global shift",
         "tags": [
           "AI"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       }
     },
@@ -13400,6 +15696,9 @@
         "summary": "AI kunlik shiftini bugun uchun bir martalik ko‘tarish (audit)",
         "tags": [
           "AI"
+        ],
+        "x-roles": [
+          "superadmin"
         ]
       }
     },
@@ -13441,6 +15740,111 @@
         "summary": "AI xarajat yig‘indisi (from/to — YYYY-MM-DD, Toshkent)",
         "tags": [
           "AI"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
+        ]
+      }
+    },
+    "/ai-usage/dashboard": {
+      "get": {
+        "operationId": "AiUsageGatewayController_dashboard",
+        "parameters": [
+          {
+            "name": "fromDate",
+            "required": false,
+            "in": "query",
+            "description": "Boshlanish sanasi (YYYY-MM-DD, Toshkent).",
+            "schema": {
+              "example": "2026-09-15",
+              "type": "string"
+            }
+          },
+          {
+            "name": "toDate",
+            "required": false,
+            "in": "query",
+            "description": "Tugash sanasi (YYYY-MM-DD, Toshkent), shu kun ham kiradi.",
+            "schema": {
+              "example": "2026-10-14",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "AI xarajat paneli: USD/so'm, feature/model kesimi, kunlik trend (Toshkent), buyurtma manbasi",
+        "tags": [
+          "AI"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
+        ]
+      }
+    },
+    "/ai-usage/ai-orders": {
+      "get": {
+        "operationId": "AiUsageGatewayController_aiOrders",
+        "parameters": [
+          {
+            "name": "fromDate",
+            "required": false,
+            "in": "query",
+            "description": "Boshlanish sanasi (YYYY-MM-DD, Toshkent).",
+            "schema": {
+              "example": "2026-09-15",
+              "type": "string"
+            }
+          },
+          {
+            "name": "toDate",
+            "required": false,
+            "in": "query",
+            "description": "Tugash sanasi (YYYY-MM-DD, Toshkent), shu kun ham kiradi.",
+            "schema": {
+              "example": "2026-10-14",
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "example": 100,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "AI orqali yaratilgan buyurtmalar ro'yxati (eng yangisi birinchi)",
+        "tags": [
+          "AI"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       }
     },
@@ -13509,6 +15913,9 @@
         "summary": "Market operatorlari ro'yxati (faqat market — o'ziniki)",
         "tags": [
           "Market operators"
+        ],
+        "x-roles": [
+          "market"
         ]
       },
       "post": {
@@ -13543,6 +15950,9 @@
         "summary": "Market o`z operatorini yaratadi (rol: market_operator)",
         "tags": [
           "Market operators"
+        ],
+        "x-roles": [
+          "market"
         ]
       }
     },
@@ -13589,6 +15999,9 @@
         "summary": "Operator komissiyasi (percent | fixed | null) — faqat o`z operatori",
         "tags": [
           "Market operators"
+        ],
+        "x-roles": [
+          "market"
         ]
       }
     },
@@ -13622,6 +16035,55 @@
         "summary": "Operatorni o`chirish (soft) — faqat o`z operatori",
         "tags": [
           "Market operators"
+        ],
+        "x-roles": [
+          "market"
+        ]
+      }
+    },
+    "/customers/suggest": {
+      "get": {
+        "description": "Telefon har qanday formatda (+998 90 123 45 67, 901234567, 0901234567; kamida 7 raqam). Market/market operatori/filial xodimi faqat shu marketda buyurtmasi bo'lgan mijozlarni ko'radi; admin — hammasini. Har taklifda shu marketdagi `orders_count`, `new_orders_count`, `has_new_orders` (takroriy buyurtma ogohlantirishi). Ko'pi bilan 10 ta.",
+        "operationId": "CustomerGatewayController_suggest",
+        "parameters": [
+          {
+            "name": "market_id",
+            "required": false,
+            "in": "query",
+            "description": "Registrator/menejer/filial uchun majburiy; admin uchun ixtiyoriy (xulosa uchun); market/operator uchun e`tiborsiz.",
+            "schema": {}
+          },
+          {
+            "name": "phone",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "example": "901234567"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Mijozni telefon bo`yicha taklif qilish (buyurtma yaratish formasi)",
+        "tags": [
+          "Customers"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "registrator",
+          "manager",
+          "branch",
+          "market",
+          "market_operator"
         ]
       }
     },
@@ -13637,7 +16099,8 @@
         "summary": "Readiness check — pings every downstream service",
         "tags": [
           "Health"
-        ]
+        ],
+        "x-roles": null
       }
     }
   },
@@ -13846,9 +16309,63 @@
           "branch_id"
         ]
       },
+      "CourierRegionItemDto": {
+        "type": "object",
+        "properties": {
+          "region_id": {
+            "type": "string",
+            "example": "5",
+            "description": "Viloyat ID (bigint string)"
+          },
+          "tariff_home": {
+            "type": "object",
+            "example": 15000,
+            "nullable": true,
+            "description": "Uyga yetkazish tarifi; null — kuryerning umumiy tarifiga fallback"
+          },
+          "tariff_center": {
+            "type": "object",
+            "example": 12000,
+            "nullable": true,
+            "description": "Markazga yetkazish tarifi; null — umumiy tarifga fallback"
+          }
+        },
+        "required": [
+          "region_id"
+        ]
+      },
+      "SetCourierRegionsRequestDto": {
+        "type": "object",
+        "properties": {
+          "is_super_courier": {
+            "type": "boolean",
+            "example": true
+          },
+          "serves_all_regions": {
+            "type": "boolean",
+            "example": false,
+            "description": "TRUE — courier_regions'dan qat'i nazar HAR BIR viloyat pochtasida chiqadi (faqat super-kuryer)"
+          },
+          "regions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CourierRegionItemDto"
+            }
+          }
+        }
+      },
       "UpdateAdminRequestDto": {
         "type": "object",
         "properties": {
+          "language": {
+            "type": "string",
+            "example": "ru",
+            "enum": [
+              "uz",
+              "ru",
+              "en"
+            ]
+          },
           "name": {
             "type": "string",
             "example": "Admin User Updated"
@@ -15797,6 +18314,11 @@
           "comment": {
             "type": "string",
             "example": "Marketga pul o‘tkazma"
+          },
+          "source_user_id": {
+            "type": "string",
+            "example": "7",
+            "description": "O'tkazma manbasi (click): o'tkazmani qilgan xodim ID si. Faqat audit — tarixda `transfer_source_user_id` bo'lib saqlanadi; pul baribir asosiy kassaning balance_card idan yechiladi. Naqd (cash) to'lovda e'tiborga olinmaydi."
           }
         },
         "required": [
@@ -15833,6 +18355,11 @@
           "comment": {
             "type": "string",
             "example": "Branch managerdan HQ main kassaga o'tkazma"
+          },
+          "source_user_id": {
+            "type": "string",
+            "example": "7",
+            "description": "O'tkazma manbasi (click): o'tkazmani qilgan xodim ID si. Faqat audit — tarixda `transfer_source_user_id` bo'lib saqlanadi; pul filial kassasining va asosiy kassaning balance_card idan harakatlanadi. Naqd (cash) to'lovda e'tiborga olinmaydi."
           }
         },
         "required": [
@@ -15913,7 +18440,9 @@
         "properties": {
           "opened_by": {
             "type": "string",
-            "example": "15"
+            "example": "15",
+            "description": "E'tiborga olinmaydi — JWT foydalanuvchisi yoziladi",
+            "deprecated": true
           },
           "opening_balance_cash": {
             "type": "number",
@@ -15927,10 +18456,7 @@
             "type": "string",
             "example": "Kunlik smena ochildi"
           }
-        },
-        "required": [
-          "opened_by"
-        ]
+        }
       },
       "CloseShiftRequestDto": {
         "type": "object",
@@ -15945,24 +18471,25 @@
           },
           "closed_by": {
             "type": "string",
-            "example": "15"
+            "example": "15",
+            "description": "E'tiborga olinmaydi — JWT foydalanuvchisi yoziladi",
+            "deprecated": true
           },
           "closing_balance_cash": {
             "type": "number",
-            "example": 120000
+            "example": 120000,
+            "description": "Sanab topshirilgan naqd. Yuborilsa discrepancy_cash = shu − expected_balance_cash"
           },
           "closing_balance_card": {
             "type": "number",
-            "example": 50000
+            "example": 50000,
+            "description": "Sanab topshirilgan karta qoldig'i. Yuborilsa discrepancy_card hisoblanadi"
           },
           "comment": {
             "type": "string",
             "example": "Smena yopildi"
           }
-        },
-        "required": [
-          "closed_by"
-        ]
+        }
       },
       "CreateSalaryRequestDto": {
         "type": "object",
@@ -16077,6 +18604,11 @@
             "type": "number",
             "example": 2,
             "description": "Kamida shuncha buyurtma"
+          },
+          "max_orders": {
+            "type": "number",
+            "example": 10,
+            "description": "Ko'pi bilan shuncha buyurtma"
           }
         }
       },
@@ -16125,8 +18657,62 @@
             "items": {
               "type": "string"
             }
+          },
+          "with_sample": {
+            "type": "boolean",
+            "example": true,
+            "description": "`sample`: ≤20 qator { id, role, phone: \"***7434\" }"
+          },
+          "audience_segment_id": {
+            "type": "string",
+            "example": "3"
           }
         }
+      },
+      "CreateAudienceSegmentRequestDto": {
+        "type": "object",
+        "properties": {
+          "roles": {
+            "example": [
+              "courier",
+              "superadmin"
+            ],
+            "description": "Rollar. `superadmin` ham bo'ladi; `customer` — faqat include_customers bilan",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "broadcast": {
+            "type": "boolean",
+            "example": false,
+            "description": "Barcha xodimlar (superadmin ham), mijozsiz"
+          },
+          "include_customers": {
+            "type": "boolean",
+            "example": true,
+            "description": "Mijozlarni ham nishonlash — segment YOKI confirm_all_customers bilan (aks holda 400)"
+          },
+          "confirm_all_customers": {
+            "type": "boolean",
+            "example": false,
+            "description": "Segmentsiz BARCHA mijozlarga — aniq tasdiq"
+          },
+          "segment": {
+            "$ref": "#/components/schemas/AudienceSegmentDto"
+          },
+          "name": {
+            "type": "string",
+            "example": "Toshkent — faol mijozlar (3–10 buyurtma)"
+          },
+          "description": {
+            "type": "string",
+            "example": "Oxirgi oyda buyurtma berganlar"
+          }
+        },
+        "required": [
+          "name"
+        ]
       },
       "CreateNotificationCampaignRequestDto": {
         "type": "object",
@@ -16244,6 +18830,107 @@
         },
         "required": [
           "type",
+          "title"
+        ]
+      },
+      "TelegramBroadcastRequestDto": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "example": "Ertaga ish kuni"
+          },
+          "body": {
+            "type": "string",
+            "example": "Soat 9:00 da filialda yig‘ilish"
+          },
+          "roles": {
+            "example": [
+              "courier",
+              "market"
+            ],
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "broadcast": {
+            "type": "boolean",
+            "description": "Barcha xodimlar"
+          },
+          "recipient_ids": {
+            "example": [
+              "42",
+              "43"
+            ],
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "client_request_id": {
+            "type": "string",
+            "example": "0b7f6f5e-3c1a-4c6e-9b1d-2f0a6c1e9d42",
+            "description": "Har \"Yuborish\" uchun bitta UUID (qayta urinishda o‘sha)"
+          }
+        },
+        "required": [
+          "title"
+        ]
+      },
+      "UpsertNotificationTemplateRequestDto": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "example": "order.sold"
+          },
+          "lang": {
+            "type": "string",
+            "enum": [
+              "uz",
+              "ru",
+              "en"
+            ],
+            "example": "ru"
+          },
+          "channel": {
+            "type": "string",
+            "enum": [
+              "realtime",
+              "telegram",
+              "sms",
+              "email",
+              "push"
+            ],
+            "nullable": true,
+            "description": "null — umumiy (inbox qatori, u SMS/Telegram/push ga ham ketadi)"
+          },
+          "title": {
+            "type": "string",
+            "example": "Заказ продан"
+          },
+          "body": {
+            "type": "object",
+            "example": "Заказ #{{order_number}} продан."
+          },
+          "required_vars": {
+            "example": [
+              "order_number"
+            ],
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "is_active": {
+            "type": "boolean",
+            "example": true
+          }
+        },
+        "required": [
+          "code",
+          "lang",
           "title"
         ]
       },
@@ -16510,6 +19197,11 @@
                 "$ref": "#/components/schemas/DispatchTelegramTargetDto"
               }
             ]
+          },
+          "client_request_id": {
+            "type": "string",
+            "example": "0b7f6f5e-3c1a-4c6e-9b1d-2f0a6c1e9d42",
+            "description": "Client UUID per \"Send\" click (reuse on retry) — becomes dispatch_id; duplicate → stored result, no resend"
           }
         },
         "required": [
@@ -17538,6 +20230,21 @@
           "amount"
         ]
       },
+      "CancelRemittanceRequestDto": {
+        "type": "object",
+        "properties": {
+          "reason": {
+            "type": "string",
+            "example": "Summa xato kiritilgan (5 000 000 o'rniga 500 000)",
+            "description": "Bekor qilish sababi (audit uchun)"
+          },
+          "reverse_cashbox": {
+            "type": "boolean",
+            "example": true,
+            "description": "Faqat ESKI (migratsiyadan oldingi) yozuvlar uchun: to'lov MAIN kassaga yozilgan-yozilmagani noma'lum bo'lsa (409), kassadan teskari chiqim qilinsinmi. Yangi yozuvlarda e'tiborsiz qoldiriladi — `cashbox_posted` bayrog'i ishlatiladi."
+          }
+        }
+      },
       "CreateInvestorDto": {
         "type": "object",
         "properties": {
@@ -17738,7 +20445,7 @@
           "parent_id": {
             "type": "string",
             "example": "1",
-            "description": "Parent branch ID (bigint string)"
+            "description": "Parent branch ID (bigint string). HQ'dan boshqa barcha turlar (PICKUP/REGIONAL/HYBRID) uchun majburiy; HQ uchun yuborilmaydi."
           },
           "type": {
             "type": "string",

@@ -78,6 +78,16 @@ export class User extends BaseEntity {
   @Column({ type: 'int', nullable: true })
   tariff_center: number | null;
 
+  // hEjjuJaT: super-kuryer — bir nechta viloyatga xizmat qiladi
+  // (identity_schema.courier_regions, har viloyatga ixtiyoriy tarif).
+  @Column({ type: 'boolean', default: false })
+  is_super_courier: boolean;
+
+  // hEjjuJaT: TRUE — courier_regions qatorlaridan qat'i nazar HAR BIR viloyat
+  // pochtasida chiqadi (faqat is_super_courier bilan birga ma'noli).
+  @Column({ type: 'boolean', default: false })
+  serves_all_regions: boolean;
+
   /**
    * How this courier is compensated per order (see CourierCompensationMode).
    * Drives courierShare at sale time: SALARY_ONLY keeps nothing per order,

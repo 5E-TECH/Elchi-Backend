@@ -27,6 +27,10 @@ export * from './activity-log/activity-log.module';
 export * from './activity-log/types';
 export * from './activity-log/diff';
 export * from './activity-log/describe-uz';
+export * from './activity-log/action-registry';
+export * from './activity-log/retention-policy';
+export * from './activity-log/activity-log-maintenance.service';
+export * from './activity-log/activity-log-retention.scheduler';
 
 export * from './webhook/hmac';
 export * from './webhook/webhook-signature.guard';

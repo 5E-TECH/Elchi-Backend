@@ -93,6 +93,11 @@ function fakeQb(rows: Row[]) {
     getMany: async () => filtered(),
     getManyAndCount: async () => [filtered(), filtered().length],
     getCount: async () => filtered().length,
+    // nFmup26a: findAllAdmins meta — rol kesimi GROUP BY (getRawMany).
+    select: chain,
+    addSelect: chain,
+    groupBy: chain,
+    getRawMany: async () => [],
   });
   return { qb, searchClauses };
 }

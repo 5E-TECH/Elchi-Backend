@@ -66,6 +66,9 @@ export class InvestorGatewayController {
    * investor/investitsiya/foyda yaratish, o'zgartirish, o'chirish va foydani
    * to'lash audit izida aktorsiz (user_id = null) yozilardi, `mark-paid` esa
    * kassa chiqimini `user_id: '0'` nomidan qilardi.
+   * GADgsW5G: endi O'QISH marshrutlari ham (jami 21 handler) requester
+   * uzatadi — har bir `investor.*` cmd payload'ida `requester.id` bor
+   * (kontrakt: investor-gateway.requester.contract.spec.ts).
    */
   private toRequester(req?: AuthedRequest) {
     return {
@@ -201,11 +204,13 @@ export class InvestorGatewayController {
     @Query('status') status?: string,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
+    @Req() req?: AuthedRequest,
   ) {
     return this.investorClient
       .send(
         { cmd: 'investor.find_all' },
         {
+          requester: this.toRequester(req),
           query: {
             search,
             status,
@@ -236,11 +241,16 @@ export class InvestorGatewayController {
   getInvestorDashboard(
     @Param('investor_id') investor_id: string,
     @Query('months') months?: string,
+    @Req() req?: AuthedRequest,
   ) {
     return this.investorClient
       .send(
         { cmd: 'investor.dashboard' },
-        { investor_id, query: { months: toOptionalNumber(months) } },
+        {
+          investor_id,
+          query: { months: toOptionalNumber(months) },
+          requester: this.toRequester(req),
+        },
       )
       .pipe(timeout(8000));
   }
@@ -249,9 +259,12 @@ export class InvestorGatewayController {
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiOperation({ summary: 'Find investor by id (with investments/profits)' })
   @ApiParam({ name: 'id' })
-  findInvestorById(@Param('id') id: string) {
+  findInvestorById(@Param('id') id: string, @Req() req?: AuthedRequest) {
     return this.investorClient
-      .send({ cmd: 'investor.find_by_id' }, { id })
+      .send(
+        { cmd: 'investor.find_by_id' },
+        { id, requester: this.toRequester(req) },
+      )
       .pipe(timeout(8000));
   }
 
@@ -322,11 +335,13 @@ export class InvestorGatewayController {
     @Query('to_date') to_date?: string,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
+    @Req() req?: AuthedRequest,
   ) {
     return this.investorClient
       .send(
         { cmd: 'investor.investment.find_all' },
         {
+          requester: this.toRequester(req),
           query: {
             investor_id,
             from_date,
@@ -349,12 +364,14 @@ export class InvestorGatewayController {
     @Param('investor_id') investor_id: string,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
+    @Req() req?: AuthedRequest,
   ) {
     return this.investorClient
       .send(
         { cmd: 'investor.investment.find_by_investor' },
         {
           investor_id,
+          requester: this.toRequester(req),
           query: {
             page: page ? Number(page) : undefined,
             limit: limit ? Number(limit) : undefined,
@@ -368,9 +385,12 @@ export class InvestorGatewayController {
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiOperation({ summary: 'Find investment by id' })
   @ApiParam({ name: 'id' })
-  findInvestmentById(@Param('id') id: string) {
+  findInvestmentById(@Param('id') id: string, @Req() req?: AuthedRequest) {
     return this.investorClient
-      .send({ cmd: 'investor.investment.find_by_id' }, { id })
+      .send(
+        { cmd: 'investor.investment.find_by_id' },
+        { id, requester: this.toRequester(req) },
+      )
       .pipe(timeout(8000));
   }
 
@@ -470,11 +490,13 @@ export class InvestorGatewayController {
     @Query('is_paid') is_paid?: string,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
+    @Req() req?: AuthedRequest,
   ) {
     return this.investorClient
       .send(
         { cmd: 'investor.profit.find_all' },
         {
+          requester: this.toRequester(req),
           query: {
             investor_id,
             is_paid:
@@ -506,12 +528,14 @@ export class InvestorGatewayController {
     @Query('is_paid') is_paid?: string,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
+    @Req() req?: AuthedRequest,
   ) {
     return this.investorClient
       .send(
         { cmd: 'investor.profit.find_by_investor' },
         {
           investor_id,
+          requester: this.toRequester(req),
           query: {
             is_paid:
               typeof is_paid === 'string'

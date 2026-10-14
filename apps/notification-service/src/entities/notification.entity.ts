@@ -77,6 +77,15 @@ export class Notification extends BaseEntity {
   @Column({ type: 'varchar', nullable: true })
   group_key!: string | null;
 
+  /**
+   * (7Vozou5x) Qaysi dispatch partiyasi yozdi/yangiladi (migratsiya
+   * 1716000000084). group_key bilan birlashtirilgan qator — OXIRGI dispatch.
+   * Eski qatorlarda NULL.
+   */
+  @Index('IDX_NOTIF_DISPATCH', { where: '"dispatch_id" IS NOT NULL' })
+  @Column({ type: 'varchar', length: 100, nullable: true })
+  dispatch_id!: string | null;
+
   @Column({ type: 'boolean', default: false })
   is_read!: boolean;
 

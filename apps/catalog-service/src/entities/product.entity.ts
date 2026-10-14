@@ -2,7 +2,12 @@ import { Column, Entity, Index } from 'typeorm';
 import { BaseEntity } from '@app/common';
 
 @Entity({ name: 'products' })
-@Index(['name', 'user_id'], { unique: true })
+// As75bkGo: unique faqat FAOL qatorlar uchun — o'chirilgan mahsulot nomi
+// qayta ishlatiladi (migratsiya 1716000000087).
+@Index('IDX_products_name_user_id', ['name', 'user_id'], {
+  unique: true,
+  where: '"is_deleted" = false',
+})
 @Index('IDX_PRODUCT_USER_ID', ['user_id'])
 @Index('IDX_PRODUCT_DELETED', ['isDeleted'])
 export class Product extends BaseEntity {

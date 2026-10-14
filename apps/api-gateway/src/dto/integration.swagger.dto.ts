@@ -852,3 +852,28 @@ export class CreateRemittanceRequestDto {
   @IsString({ each: true })
   order_ids?: string[];
 }
+
+/**
+ * DxdZFdIk — kargo to'lovini bekor qilish. O'chirilmaydi: status=cancelled,
+ * yopilgan qarz qatorlari PENDING ga qaytadi va MAIN kassadan teskari chiqim
+ * yoziladi.
+ */
+export class CancelRemittanceRequestDto {
+  @ApiPropertyOptional({
+    example: "Summa xato kiritilgan (5 000 000 o'rniga 500 000)",
+    description: 'Bekor qilish sababi (audit uchun)',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  reason?: string;
+
+  @ApiPropertyOptional({
+    example: true,
+    description:
+      "Faqat ESKI (migratsiyadan oldingi) yozuvlar uchun: to'lov MAIN kassaga yozilgan-yozilmagani noma'lum bo'lsa (409), kassadan teskari chiqim qilinsinmi. Yangi yozuvlarda e'tiborsiz qoldiriladi — `cashbox_posted` bayrog'i ishlatiladi.",
+  })
+  @IsOptional()
+  @IsBoolean()
+  reverse_cashbox?: boolean;
+}

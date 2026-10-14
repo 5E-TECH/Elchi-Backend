@@ -55,6 +55,16 @@ import {
   requestedChannels,
 } from './channels/resolve-channels';
 import { NotificationEscalationService } from './escalation/notification-escalation.service';
+import {
+  DispatchHistoryService,
+  historyStatusFor,
+} from './history/dispatch-history.service';
+import type { NotificationDispatch } from './history/notification-dispatch.entity';
+import { TelegramDmService } from './telegram/telegram-dm.service';
+import {
+  DispatchTexts,
+  NotificationTemplateService,
+} from './templates/notification-template.service';
 
 /** Upper bound on role/broadcast fan-out, so one dispatch can't insert millions
  * of rows. (QFoRULeu) Oshsa dispatch 400 bilan rad etiladi — jimgina kesilmaydi. */
@@ -92,6 +102,11 @@ interface TelegramOutcome extends DeliveryPatch {
 /** Qabul qiluvchi bo'yicha boshlang'ich `delivery` (kanal rejasi, 7Ec56EIw). */
 type DeliveryFor = (recipientId: string) => Record<string, string>;
 
+/** (C4R3YyvH) Qabul qiluvchi tilidagi shablon matni; null — DTO'dagi xom matn. */
+type TextFor = (
+  recipientId: string,
+) => { title: string; body: string | null } | null;
+
 interface ChannelPlanView {
   deliveryFor: DeliveryFor;
   /** Sozlama bilan ro'yxatdan tushganlar (mP1WGG1W `skipped_by_preference`). */
@@ -120,6 +135,10 @@ const IMPORTANT_PRIORITIES = [
   NotificationPriority.CRITICAL,
   NotificationPriority.HIGH,
 ] as const;
+
+/** (7Vozou5x) Frontend `client_request_id` — UUID (kichik harf). */
+const CLIENT_REQUEST_ID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 /** Postgres BIGINT yuqori chegarasi. */
 const BIGINT_MAX = BigInt('9223372036854775807');
@@ -157,6 +176,12 @@ export class NotificationInboxService {
     @Optional() private readonly planner?: ChannelPlannerService,
     /** (7Ec56EIw #5) CRITICAL → N daqiqadan keyin SMS eskalatsiyasi. */
     @Optional() private readonly escalation?: NotificationEscalationService,
+    /** (7Vozou5x) Yuborilgan xabarlar tarixi — faqat qo'lda (aktorli) dispatch. */
+    @Optional() private readonly history?: DispatchHistoryService,
+    /** (rCFZAmOz #2) Guruh nishoni yo'q TELEGRAM — shaxsiy DM (telegram_id). */
+    @Optional() private readonly telegramDm?: TelegramDmService,
+    /** (C4R3YyvH) Shablonlar reyestri — DB'dagi shablon xom matnni almashtiradi. */
+    @Optional() private readonly templates?: NotificationTemplateService,
   ) {}
 
   private toRpcError(error: unknown): never {
@@ -216,12 +241,44 @@ export class NotificationInboxService {
 
   // ==================== DISPATCH (the generic entry point) ====================
 
-  /** Dispatch partiyasi ID si (f2Ud5tju #6): `request_id` yoki yangi UUID. */
+  /**
+   * Dispatch partiyasi ID si (f2Ud5tju #6): (7Vozou5x) frontend
+   * `client_request_id` (UUID) → chaqiruvchi `request_id` → yangi UUID.
+   */
   private dispatchBatchId(dto: DispatchNotificationDto): string {
+    const client =
+      typeof dto.client_request_id === 'string'
+        ? dto.client_request_id.trim().toLowerCase()
+        : '';
+    if (CLIENT_REQUEST_ID_RE.test(client)) return client;
     const raw = (dto as { request_id?: unknown }).request_id;
     const requestId = typeof raw === 'string' ? raw.trim() : '';
     // activity_logs.entity_id — VARCHAR(100).
     return requestId && requestId.length <= 100 ? requestId : randomUUID();
+  }
+
+  /**
+   * (7Vozou5x) Ayni `dispatch_id` bilan takror (504 dan keyin qayta bosish) —
+   * QAYTA yuborilmaydi, tarixdagi natija qaytadi (`duplicate: true`).
+   */
+  private duplicateResponse(row: NotificationDispatch) {
+    return successRes(
+      {
+        dispatch_id: row.dispatch_id,
+        duplicate: true,
+        status: row.status,
+        dispatched: row.dispatched,
+        channels: row.channels ?? [],
+        by_channel: row.by_channel ?? {},
+        channel_status: row.channel_status ?? null,
+        no_provider: row.no_provider ?? [],
+        skipped_by_preference: row.skipped_by_preference,
+      },
+      200,
+      row.status === 'running'
+        ? 'Dispatch already in progress — check /notifications/sent'
+        : 'Already dispatched (duplicate client_request_id) — not sent again',
+    );
   }
 
   /**
@@ -232,6 +289,8 @@ export class NotificationInboxService {
     dto: DispatchNotificationDto,
     internal?: InternalDispatchOptions,
   ) {
+    // (7Vozou5x) Tarix qatori ochilgan bo'lsa — xato ham tarixga (`failed`).
+    let historyId: string | null = null;
     try {
       if (!dto.type?.trim()) throw new BadRequestException('type is required');
       if (!dto.title?.trim())
@@ -262,6 +321,43 @@ export class NotificationInboxService {
       const channels = requestedChannels(dto.type, defaults.channels);
 
       this.assertRecipientIds(dto);
+
+      const actor = (dto as { requester?: { id?: string; roles?: string[] } })
+        .requester;
+      /**
+       * entity_id — HAQIQIY dispatch partiyasi ID si (f2Ud5tju #6), qattiq
+       * `'dispatch'` satri emas (jurnalda hammasi "Notification #dispatch"
+       * bo'lib, bir-biridan ajratib bo'lmasdi). Manba: (7Vozou5x) frontend
+       * `client_request_id`, so'ng chaqiruvchining `request_id` si (`rmqSend`
+       * har chaqiruvga beradi, timeout qayta urinishida o'zgarmaydi — bir
+       * partiya bitta ID), bo'lmasa yangi UUID. Shu ID javobda `dispatch_id`
+       * bo'lib qaytadi, har inbox qatorida `dispatch_id` ustunida turadi.
+       */
+      const dispatchId = this.dispatchBatchId(dto);
+
+      // (7Vozou5x) Qo'lda (aktorli, kampaniya partiyasi emas) dispatch —
+      // tarix qatori `running` bilan OLDINDAN ochiladi: 504 bo'lsa ham
+      // `GET /notifications/sent/:dispatch_id` holatni ko'rsatadi.
+      if (this.history && !internal && actor?.id) {
+        const { duplicate } = await this.history.begin({
+          dispatch_id: dispatchId,
+          created_by: String(actor.id),
+          created_by_role: actor.roles?.length
+            ? actor.roles.join(',').slice(0, 100)
+            : null,
+          type: dto.type.trim(),
+          category: dto.category ?? null,
+          priority: dto.priority ?? null,
+          title: dto.title.trim(),
+          body: dto.body ?? null,
+          link: dto.link ?? null,
+          channels,
+          audience: this.audienceSummary(dto),
+        });
+        if (duplicate) return this.duplicateResponse(duplicate);
+        historyId = dispatchId;
+      }
+
       const recipients: ResolvedRecipient[] = internal?.recipients
         ? internal.recipients.map((recipient) => ({
             id: String(recipient.id),
@@ -300,13 +396,41 @@ export class NotificationInboxService {
       // (7Ec56EIw #5) CRITICAL: N daqiqadan keyin o'qilmagan bo'lsa SMS.
       const escalationDueAt =
         this.escalation?.dueAt(dto.priority, channels) ?? null;
-      const deliveryFor: DeliveryFor = escalationDueAt
+      const planned: DeliveryFor = escalationDueAt
         ? (id) => ({
             ...plan.deliveryFor(id),
             escalation: 'scheduled',
             escalation_due_at: escalationDueAt.toISOString(),
           })
         : plan.deliveryFor;
+
+      // (rCFZAmOz #2) TELEGRAM so'ralgan, guruh nishoni (market_id/group_id)
+      // YO'Q — qabul qiluvchining shaxsiy chatiga (users.telegram_id). Chat
+      // ulanmagan — `telegram: skipped` + `telegram_reason: no_telegram_id`,
+      // dispatch YIQILMAYDI. Yuborish outbox orqali (tranzaksiya ichida navbat).
+      const dmPlan =
+        this.telegramDm &&
+        TelegramDmService.wantsDm(channels, dto.telegram ?? null)
+          ? await this.telegramDm.plan(
+              targets
+                .filter(
+                  (r) =>
+                    planned(r.id)[NotificationChannel.TELEGRAM] ===
+                    NotificationDeliveryStatus.PENDING,
+                )
+                .map((r) => r.id),
+            )
+          : null;
+      const deliveryFor: DeliveryFor = dmPlan
+        ? (id) => ({ ...planned(id), ...(dmPlan.get(id) ?? {}) })
+        : planned;
+
+      // (C4R3YyvH #5) Matn DISPATCH PAYTIDA qabul qiluvchi tilida
+      // renderlanadi va qatorga yoziladi (SMS/Telegram/push shu matnni
+      // oladi — yuborilgan matn o'zgarmas dalil). DB'da shablon yo'q — xom
+      // DTO matni (o'rnatilgan 'uz' sukutlari dispatch'da QO'LLANMAYDI);
+      // o'zgaruvchi yetishmasa — o'sha qabul qiluvchiga xom matn.
+      const texts = await this.dispatchTexts(dto, targets);
 
       // 1) Persist one inbox row per recipient (the in_app channel & system of record).
       //    Push is only QUEUED here (outbox) — in the same transaction as the rows,
@@ -317,6 +441,7 @@ export class NotificationInboxService {
       //    qolmasa ham ishlaydi — aks holda partiya da'vo qilinmay, kampaniya
       //    navbati to'xtab qolardi.
       let pushQueued = 0;
+      let telegramQueued = 0;
       const rows =
         !targets.length && !internal
           ? []
@@ -329,6 +454,8 @@ export class NotificationInboxService {
                     targets,
                     channels,
                     deliveryFor,
+                    dispatchId,
+                    texts?.textFor,
                   )
                 : [];
               const pushIds = persisted
@@ -342,6 +469,18 @@ export class NotificationInboxService {
                 await this.pushDelivery.enqueue(manager, pushIds);
               }
               pushQueued = pushIds.length;
+              // (rCFZAmOz) Shaxsiy Telegram — faqat `delivery.telegram = queued`.
+              if (dmPlan && this.telegramDm) {
+                const dmIds = persisted
+                  .filter(
+                    (row) =>
+                      row.delivery?.[NotificationChannel.TELEGRAM] ===
+                      NotificationDeliveryStatus.QUEUED,
+                  )
+                  .map((row) => row.id);
+                if (dmIds.length) await this.telegramDm.enqueue(manager, dmIds);
+                telegramQueued = dmIds.length;
+              }
               // SMS: navbatga ham shu tranzaksiyada; holat har qatorning delivery.sms ida.
               if (wantsSms && persisted.length) {
                 smsResult = await this.queueSms(persisted, manager);
@@ -374,7 +513,7 @@ export class NotificationInboxService {
       // 3) Telegram relay (optional, best-effort) — natija `delivery.telegram`.
       let telegram: unknown = null;
       let telegramOutcome: TelegramOutcome | null = null;
-      if (channels.includes(NotificationChannel.TELEGRAM)) {
+      if (channels.includes(NotificationChannel.TELEGRAM) && !dmPlan) {
         const relayed = await this.relayTelegram(dto);
         telegram = relayed.result;
         telegramOutcome = relayed.outcome;
@@ -386,18 +525,6 @@ export class NotificationInboxService {
       await this.recordDelivery(rows, realtime, telegramOutcome);
 
       // Audit: ONE row per dispatch operation (never one per recipient).
-      const actor = (dto as { requester?: { id?: string; roles?: string[] } })
-        .requester;
-      /**
-       * entity_id — HAQIQIY dispatch partiyasi ID si (f2Ud5tju #6), qattiq
-       * `'dispatch'` satri emas (jurnalda hammasi "Notification #dispatch"
-       * bo'lib, bir-biridan ajratib bo'lmasdi). Manba: chaqiruvchining
-       * `request_id` si (`rmqSend` har chaqiruvga beradi, timeout qayta
-       * urinishida o'zgarmaydi — bir partiya bitta ID), bo'lmasa yangi UUID.
-       * Shu ID javobda `dispatch_id` bo'lib qaytadi, yaratilgan qatorlar esa
-       * `notification_ids` (birinchi 20 ta) orqali bog'lanadi.
-       */
-      const dispatchId = this.dispatchBatchId(dto);
       await this.activityLog.log({
         entity_type: 'Notification',
         entity_id: dispatchId,
@@ -430,11 +557,40 @@ export class NotificationInboxService {
             row.delivery?.[NotificationChannel.PUSH] ===
             NotificationDeliveryStatus.NO_PROVIDER,
         ),
+        dmPlan
+          ? {
+              queued: telegramQueued,
+              noProvider: rows.some(
+                (row) =>
+                  row.delivery?.[NotificationChannel.TELEGRAM] ===
+                  NotificationDeliveryStatus.NO_PROVIDER,
+              ),
+            }
+          : null,
       );
       const message =
         !rows.length && plan.skipped.size
           ? 'Skipped by recipient preferences — nothing dispatched'
           : summary.message;
+
+      // (7Vozou5x) Tarix yakuni + kanal × holat (inbox qatorlaridan, SMS
+      // navbat natijasi ham) — javobga ham: `{ sms: { queued, not_eligible } }`.
+      const channelStatus =
+        historyId && this.history
+          ? await this.history.finish(historyId, {
+              status: historyStatusFor(
+                summary.message,
+                rows.length,
+                plan.skipped.size,
+              ),
+              recipients: recipients.length,
+              dispatched: rows.length,
+              skipped_by_preference: plan.skipped.size,
+              by_channel: summary.by_channel,
+              no_provider: summary.no_provider,
+              message,
+            })
+          : null;
 
       return successRes(
         {
@@ -456,13 +612,65 @@ export class NotificationInboxService {
           no_provider: summary.no_provider,
           // (mP1WGG1W) Sozlama bilan tushib qolganlar — 400 emas, hisob.
           skipped_by_preference: plan.skipped.size,
+          ...(channelStatus ? { channel_status: channelStatus } : {}),
+          // (C4R3YyvH) Shablon qo'llangan bo'lsa: nechta qabul qiluvchiga,
+          // qaysi tilda, nechtasiga xom matn (o'zgaruvchi yetishmadi).
+          ...(texts ? { template: texts.stats } : {}),
         },
         201,
         message,
       );
     } catch (error) {
+      if (historyId) await this.history?.fail(historyId, error);
       this.toRpcError(error);
     }
+  }
+
+  /**
+   * (C4R3YyvH) Shablon matnlari. Render konteksti — `dto.data` + xom
+   * `title`/`body`. Til — identity `contacts_by_ids` (faqat 'uz' dan boshqa
+   * tilda shablon bo'lsa, bitta bulk RPC). Shablon servisi yo'q/xato —
+   * null (xom matn, dispatch yiqilmaydi).
+   */
+  private async dispatchTexts(
+    dto: DispatchNotificationDto,
+    targets: ResolvedRecipient[],
+  ): Promise<DispatchTexts | null> {
+    if (!this.templates || !targets.length) return null;
+    try {
+      return await this.templates.forDispatch(
+        dto.type.trim(),
+        { ...(dto.data ?? {}), title: dto.title, body: dto.body ?? null },
+        targets.map((r) => r.id),
+        async (ids) => {
+          const contacts = await this.smsDispatch.contacts(ids);
+          return new Map(
+            [...contacts.entries()].map(([id, c]) => [id, c.language ?? null]),
+          );
+        },
+      );
+    } catch (error) {
+      this.logger.warn(`shablon qo'llanmadi (xom matn): ${shortReason(error)}`);
+      return null;
+    }
+  }
+
+  /** (7Vozou5x) Tarix uchun nishon sharti — ism/telefon EMAS, faqat shart. */
+  private audienceSummary(
+    dto: DispatchNotificationDto,
+  ): Record<string, unknown> | null {
+    const ids = [
+      ...(dto.recipient_id ? [dto.recipient_id] : []),
+      ...(dto.recipient_ids ?? []),
+    ];
+    const out: Record<string, unknown> = {
+      ...(ids.length ? { recipient_ids: ids.length } : {}),
+      ...(dto.roles?.length ? { roles: dto.roles } : {}),
+      ...(dto.broadcast ? { broadcast: true } : {}),
+      ...(dto.include_customers ? { include_customers: true } : {}),
+      ...(dto.segment ? { segment: dto.segment } : {}),
+    };
+    return Object.keys(out).length ? out : null;
   }
 
   /**
@@ -640,9 +848,13 @@ export class NotificationInboxService {
     recipients: ResolvedRecipient[],
     channels: NotificationChannel[],
     deliveryFor: DeliveryFor = () => this.initialDelivery(channels),
+    dispatchId: string | null = null,
+    textFor: TextFor = () => null,
   ): Promise<Notification[]> {
     const repo = manager.getRepository(Notification);
     const base = {
+      // (7Vozou5x) Qator o'z partiyasiga bog'lanadi (tarix tafsiloti).
+      dispatch_id: dispatchId,
       type: dto.type.trim(),
       category: dto.category ?? NotificationCategory.SYSTEM,
       priority: dto.priority ?? NotificationPriority.NORMAL,
@@ -680,6 +892,7 @@ export class NotificationInboxService {
         {
           role: string | null;
           delivery: Record<string, string>;
+          text: { title: string; body: string | null } | null;
           ids: string[];
         }
       >();
@@ -687,19 +900,22 @@ export class NotificationInboxService {
         const rowId = rowIdByRecipient.get(recipient.id);
         if (!rowId) continue;
         const delivery = deliveryFor(recipient.id);
-        const key = JSON.stringify([recipient.role, delivery]);
+        const text = textFor(recipient.id);
+        const key = JSON.stringify([recipient.role, delivery, text]);
         const group = groups.get(key) ?? {
           role: recipient.role,
           delivery,
+          text,
           ids: [],
         };
         group.ids.push(rowId);
         groups.set(key, group);
       }
-      for (const { role, delivery, ids } of groups.values()) {
+      for (const { role, delivery, text, ids } of groups.values()) {
         // jsonb ustunlari (`data`, `delivery`) TypeORM deep-partial turiga sig'maydi.
         await repo.update({ id: In(ids) }, {
           ...base,
+          ...(text ?? {}),
           delivery,
           recipient_role: role,
           is_read: false,
@@ -727,6 +943,7 @@ export class NotificationInboxService {
         batch.map((recipient) =>
           repo.create({
             ...base,
+            ...(textFor(recipient.id) ?? {}),
             delivery: deliveryFor(recipient.id),
             recipient_id: recipient.id,
             recipient_role: recipient.role,
@@ -1026,6 +1243,8 @@ export class NotificationInboxService {
     sms: SmsChannelResult | null,
     pushQueued = rows,
     pushNoProvider = false,
+    /** (rCFZAmOz) Shaxsiy DM yo'li: navbatga qo'yilganlar (guruh relay emas). */
+    telegramDm: { queued: number; noProvider: boolean } | null = null,
   ) {
     const byChannel: Record<string, number> = { in_app: rows };
     const noProvider: string[] = [];
@@ -1033,7 +1252,10 @@ export class NotificationInboxService {
       if (channel === NotificationChannel.REALTIME) {
         byChannel.realtime = realtime?.emitted ?? 0;
       } else if (channel === NotificationChannel.TELEGRAM) {
-        byChannel.telegram = Number(telegram?.telegram_sent ?? 0);
+        byChannel.telegram = telegramDm
+          ? telegramDm.queued
+          : Number(telegram?.telegram_sent ?? 0);
+        if (telegramDm?.noProvider) noProvider.push(channel);
       } else if (channel === NotificationChannel.SMS) {
         byChannel.sms = Number(sms?.sms ?? 0);
         if (sms?.sms_status === 'no_provider') noProvider.push(channel);

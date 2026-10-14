@@ -10,6 +10,8 @@ import { ModuleRef } from '@nestjs/core';
 import { ClientProxy } from '@nestjs/microservices';
 import { firstValueFrom, timeout } from 'rxjs';
 import { OutboxService } from './outbox.service';
+import { splitOutboxContext } from './outbox-context';
+import { requestContext } from '../context/request-context';
 import {
   DEFAULT_OUTBOX_MAX_ATTEMPTS,
   DEFAULT_PERSISTENT_OUTBOX_PATTERNS,
@@ -181,25 +183,32 @@ export class OutboxPublisher implements OnModuleInit, OnModuleDestroy {
       }
 
       try {
-        if (
-          this.fireAndForgetPatterns.length &&
-          isPersistentOutboxPattern(event.pattern, this.fireAndForgetPatterns)
-        ) {
-          // (OA16fdSq) Javob kutilmaydi — broker qabul qilgani yetarli.
-          // (`isPersistentOutboxPattern` — umumiy moslashtiruvchi: aniq yoki `prefix*`.)
-          await firstValueFrom(
-            client
-              .emit({ cmd: event.pattern }, event.payload)
-              .pipe(timeout(this.publishTimeoutMs)),
-            { defaultValue: null },
-          );
-        } else {
-          await firstValueFrom(
-            client
-              .send({ cmd: event.pattern }, event.payload)
-              .pipe(timeout(this.publishTimeoutMs)),
-          );
-        }
+        // LQWRBwXA — enqueue paytidagi kontekst (trace/IP/aktyor): ichki
+        // kalit handler'ga YUBORILMAYDI, yuborish o'sha kontekstda bajariladi
+        // (serializer sarlavhalarni qo'yadi).
+        const { payload, store } = splitOutboxContext(event.payload);
+        const publish = async (): Promise<void> => {
+          if (
+            this.fireAndForgetPatterns.length &&
+            isPersistentOutboxPattern(event.pattern, this.fireAndForgetPatterns)
+          ) {
+            // (OA16fdSq) Javob kutilmaydi — broker qabul qilgani yetarli.
+            // (`isPersistentOutboxPattern` — umumiy moslashtiruvchi: aniq yoki `prefix*`.)
+            await firstValueFrom(
+              client
+                .emit({ cmd: event.pattern }, payload)
+                .pipe(timeout(this.publishTimeoutMs)),
+              { defaultValue: null },
+            );
+          } else {
+            await firstValueFrom(
+              client
+                .send({ cmd: event.pattern }, payload)
+                .pipe(timeout(this.publishTimeoutMs)),
+            );
+          }
+        };
+        await (store ? requestContext.run(store, publish) : publish());
         await this.outbox.markPublished(event.id);
       } catch (error) {
         const errorMsg = (error as Error)?.message ?? String(error);

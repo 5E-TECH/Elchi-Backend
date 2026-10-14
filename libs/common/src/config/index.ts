@@ -267,6 +267,14 @@ export const notificationValidationSchema = Joi.object({
   // notifications are still persisted; only the live push is skipped.
   RABBITMQ_GATEWAY_QUEUE: Joi.string().optional(),
   TELEGRAM_BOT_TOKEN: Joi.string().optional(),
+  // (rCFZAmOz) Shaxsiy Telegram ulash: deep link uchun bot username (@siz)
+  // va ulash tokeni imzo kaliti (berilmasa bot tokenidan hosil qilinadi).
+  TELEGRAM_BOT_USERNAME: Joi.string().allow('').optional(),
+  TELEGRAM_LINK_SECRET: Joi.string()
+    .min(32)
+    .custom(rejectWeakSecret, 'weak-secret check')
+    .allow('')
+    .optional(),
   // Order-create bot (PCS order_create-bot parity). Both optional — the bot
   // stays disabled when ORDER_BOT_TOKEN is unset.
   ORDER_BOT_TOKEN: Joi.string().optional(),
@@ -287,6 +295,9 @@ export const notificationValidationSchema = Joi.object({
     .default(false),
   SMS_PROVIDER: Joi.string().valid('eskiz', 'playmobile').default('eskiz'),
   SMS_DAILY_CAP: Joi.number().integer().min(0).default(500),
+  // (rkz0yBxr) OTP (security) — ALOHIDA kunlik kvota: reklama/tranzaksion SMS
+  // OTP kvotasini yemaydi va aksincha (login oqimi reklama bilan birga o'lmasin).
+  SMS_OTP_DAILY_CAP: Joi.number().integer().min(0).default(500),
   SMS_MAX_FANOUT: Joi.number().integer().min(1).default(200),
   SMS_CRON_ENABLED: Joi.boolean()
     .truthy('true', '1')

@@ -5,7 +5,11 @@ import {
   Payload,
   RmqContext,
 } from '@nestjs/microservices';
-import { RmqService, executeAndAck } from '@app/common';
+import {
+  RmqService,
+  USER_SUMMARY_BY_IDS_PATTERN,
+  executeAndAck,
+} from '@app/common';
 import type { ActivityLogQuery } from '@app/common';
 import {
   UserServiceService,
@@ -27,6 +31,7 @@ import type {
   FindCouriersByIdsPayload,
   FindUserByIdPayload,
   CreateManagerPayload,
+  RequesterContext,
   SetCourierRegionPayload,
   UpdateUserStatusPayload,
   UpdateUserPayload,
@@ -253,6 +258,28 @@ export class IdentityController {
   ) {
     return this.executeAndAck(context, () =>
       this.userService.contactsByIds(payload?.ids),
+    );
+  }
+
+  /** (rCFZAmOz) Bot `/start <token>` — shaxsiy chatni ulash (ichki RMQ). */
+  @MessagePattern({ cmd: 'identity.user.telegram_bind' })
+  telegramBind(
+    @Payload() payload: { user_id?: unknown; telegram_id?: unknown },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.userService.telegramBind(payload),
+    );
+  }
+
+  /** (rCFZAmOz) Bot `/stop` — shaxsiy chatni uzish (ichki RMQ). */
+  @MessagePattern({ cmd: 'identity.user.telegram_unbind' })
+  telegramUnbind(
+    @Payload() payload: { telegram_id?: unknown },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.userService.telegramUnbind(payload),
     );
   }
 
@@ -546,6 +573,23 @@ export class IdentityController {
   }
 
   /**
+   * (y8CxCtcK / fQi6NNUL) Ichki: faoliyat jurnali "Kim" ustuni — FAQAT
+   * gateway'ning audit enrichment oqimi chaqiradi, HTTP marshrut sifatida
+   * OCHILMAYDI (`audit-actor-summary.spec.ts` gateway kodini tekshiradi).
+   * Rol filtri YO'Q (superadmin va mijoz ham), faqat `{ id, name, role }` —
+   * telefon/username/status QAYTMAYDI.
+   */
+  @MessagePattern({ cmd: USER_SUMMARY_BY_IDS_PATTERN })
+  getUserSummariesByIds(
+    @Payload() payload: { ids?: unknown },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.userService.findUserSummariesByIds(payload?.ids),
+    );
+  }
+
+  /**
    * (W8aerwL6) Bildirishnoma auditoriyasi — FAQAT ichki RMQ (notification-
    * service). Ism va TELEFON qaytaradi, rol tekshiruvi yo'q: gateway'da HTTP
    * marshrut sifatida OCHILMAYDI (gateway-no-audience spec'i tekshiradi).
@@ -566,7 +610,40 @@ export class IdentityController {
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
-      this.userService.findCouriersByIds(payload.ids ?? []),
+      this.userService.findCouriersByIds(
+        payload.ids ?? [],
+        payload.region_id ?? null,
+      ),
+    );
+  }
+
+  // hEjjuJaT — super-kuryer viloyatlari va viloyat tarifi.
+  @MessagePattern({ cmd: 'identity.courier.regions.get' })
+  getCourierRegions(
+    @Payload() payload: { id: string },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.userService.getCourierRegions(payload?.id),
+    );
+  }
+
+  @MessagePattern({ cmd: 'identity.courier.regions.set' })
+  setCourierRegions(
+    @Payload()
+    payload: {
+      id: string;
+      dto?: Parameters<UserServiceService['setCourierRegions']>[1];
+      requester?: RequesterContext;
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.userService.setCourierRegions(
+        payload?.id,
+        payload?.dto ?? {},
+        payload?.requester,
+      ),
     );
   }
 

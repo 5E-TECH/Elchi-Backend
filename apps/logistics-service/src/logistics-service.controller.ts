@@ -96,6 +96,12 @@ export class LogisticsServiceController {
         limit?: number;
         branch_id?: string;
         status?: string;
+        // YfrqN70i — eski pochtalar filtrlari (server tomonda).
+        region_id?: string;
+        courier_id?: string;
+        startDate?: string;
+        endDate?: string;
+        has_orders?: boolean | string;
       };
       requester?: { id?: string; roles?: string[] };
     },
@@ -114,6 +120,11 @@ export class LogisticsServiceController {
         {
           branch_id: data?.query?.branch_id,
           status: data?.query?.status,
+          region_id: data?.query?.region_id,
+          courier_id: data?.query?.courier_id,
+          startDate: data?.query?.startDate,
+          endDate: data?.query?.endDate,
+          has_orders: data?.query?.has_orders,
         },
         requester,
       ),
@@ -172,6 +183,12 @@ export class LogisticsServiceController {
     data: {
       page?: number;
       limit?: number;
+      // YfrqN70i — kuryer eski pochtalari filtrlari (courier_id — JWT).
+      region_id?: string;
+      status?: string;
+      startDate?: string;
+      endDate?: string;
+      has_orders?: boolean | string;
       requester: { id: string; roles?: string[] };
     },
     @Ctx() context: RmqContext,
@@ -181,6 +198,13 @@ export class LogisticsServiceController {
         data.page ?? 1,
         data.limit ?? 8,
         data.requester,
+        {
+          region_id: data.region_id,
+          status: data.status,
+          startDate: data.startDate,
+          endDate: data.endDate,
+          has_orders: data.has_orders,
+        },
       ),
     );
   }
@@ -507,22 +531,36 @@ export class LogisticsServiceController {
     );
   }
 
+  // uherIk8r: `requester` — so'rovchi (gateway JWT'dan); servis shu bo'yicha
+  // viloyat doirasini serverda cheklaydi.
   @MessagePattern({ cmd: 'logistics.region.stats_all' })
   findAllRegionStats(
-    @Payload() payload: { startDate?: string; endDate?: string },
+    @Payload()
+    payload: {
+      startDate?: string;
+      endDate?: string;
+      requester?: { id: string; roles?: string[]; branch_id?: string | null };
+    },
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
       this.logisticsService.getAllRegionsStats(
         payload?.startDate,
         payload?.endDate,
+        payload?.requester,
       ),
     );
   }
 
   @MessagePattern({ cmd: 'logistics.region.stats_by_id' })
   findRegionStatsById(
-    @Payload() payload: { id: string; startDate?: string; endDate?: string },
+    @Payload()
+    payload: {
+      id: string;
+      startDate?: string;
+      endDate?: string;
+      requester?: { id: string; roles?: string[]; branch_id?: string | null };
+    },
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
@@ -530,6 +568,27 @@ export class LogisticsServiceController {
         payload?.id,
         payload?.startDate,
         payload?.endDate,
+        payload?.requester,
+      ),
+    );
+  }
+
+  // uherIk8r: kuryer/menejerning O'Z viloyati (tumanlar kesimida).
+  @MessagePattern({ cmd: 'logistics.region.my_district_stats' })
+  findMyRegionDistrictStats(
+    @Payload()
+    payload: {
+      startDate?: string;
+      endDate?: string;
+      requester?: { id: string; roles?: string[]; branch_id?: string | null };
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.logisticsService.getMyRegionDistrictStats(
+        payload?.startDate,
+        payload?.endDate,
+        payload?.requester,
       ),
     );
   }

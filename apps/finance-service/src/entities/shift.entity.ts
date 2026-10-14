@@ -78,6 +78,28 @@ export class Shift extends BaseEntity {
   @Column(moneyColumn)
   total_expense_card!: number;
 
+  /**
+   * (QTCUUgjA) Smena yopilganda tizim KUTGAN qoldiq:
+   * `opening_balance + total_income - total_expense` (naqd va karta alohida).
+   * Ochiq smenada va migratsiyadan oldingi smenalarda — NULL.
+   */
+  @Column({ ...moneyColumn, nullable: true, default: null })
+  expected_balance_cash!: number | null;
+
+  @Column({ ...moneyColumn, nullable: true, default: null })
+  expected_balance_card!: number | null;
+
+  /**
+   * (QTCUUgjA) Kamomad (−) / ortiqcha (+):
+   * `closing_balance (sanab topshirilgan) - expected_balance`.
+   * Sanalgan summa yuborilmagan bo'lsa — NULL (soxta "kamomad" ko'rsatilmaydi).
+   */
+  @Column({ ...moneyColumn, nullable: true, default: null })
+  discrepancy_cash!: number | null;
+
+  @Column({ ...moneyColumn, nullable: true, default: null })
+  discrepancy_card!: number | null;
+
   @Column({ type: 'text', nullable: true })
   comment!: string | null;
 }

@@ -34,6 +34,7 @@ import { JwtAuthGuard } from './auth/jwt-auth.guard';
 import { Roles } from './auth/roles.decorator';
 import { RolesGuard } from './auth/roles.guard';
 import {
+  CancelRemittanceRequestDto,
   CreateSyncQueueRequestDto,
   CreateIntegrationRequestDto,
   CreateRemittanceRequestDto,
@@ -850,6 +851,85 @@ export class IntegrationGatewayController {
           note: dto.note ?? null,
           order_ids: dto.order_ids ?? undefined,
           created_by: req.user?.sub ?? null,
+        },
+      )
+      .pipe(timeout(PROVIDER_RPC_TIMEOUT_MS));
+  }
+
+  /**
+   * DxdZFdIk — kargo to'lovlari ro'yxati. Ilgari yozuv WRITE-ONLY edi:
+   * `reference` (o'tkazma raqami / chek) va `note` faqat bazada yotardi —
+   * nizoda dalilni ekranga chiqarib bo'lmasdi.
+   */
+  @Get(':id/remittances')
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiOperation({
+    summary: "Kargo to'lovlari (remittance) ro'yxati — sana filtri, sahifalash",
+  })
+  @ApiParam({ name: 'id', description: 'Integration id' })
+  @ApiQuery({ name: 'status', required: false, enum: ['active', 'cancelled'] })
+  @ApiQuery({ name: 'from_date', required: false, example: '2026-10-01' })
+  @ApiQuery({ name: 'to_date', required: false, example: '2026-10-14' })
+  @ApiQuery({ name: 'page', required: false, type: Number })
+  @ApiQuery({ name: 'limit', required: false, type: Number })
+  listRemittances(
+    @Param('id', ParseIntegrationIdPipe) id: string,
+    @Query('status') status?: string,
+    @Query('from_date') from_date?: string,
+    @Query('to_date') to_date?: string,
+    @Query('fromDate') fromDate?: string,
+    @Query('toDate') toDate?: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.integrationClient
+      .send(
+        { cmd: 'integration.remittance.find_all' },
+        {
+          integration_id: id,
+          status,
+          from_date: from_date ?? fromDate,
+          to_date: to_date ?? toDate,
+          page: page ? Number(page) : undefined,
+          limit: limit ? Number(limit) : undefined,
+        },
+      )
+      .pipe(timeout(8000));
+  }
+
+  /**
+   * DxdZFdIk — kargo to'lovini bekor qilish (DELETE emas): status=cancelled,
+   * shu to'lov yopgan qarz qatorlari PENDING ga qaytadi ("kargo bizga qarz"
+   * shuncha ORTADI) va MAIN kassadan teskari chiqim BIR MARTA yoziladi.
+   */
+  @Post(':id/remittances/:remittance_id/cancel')
+  @HttpCode(200)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiOperation({
+    summary:
+      "Kargo to'lovini bekor qilish: qarz qatorlari PENDING, MAIN kassadan teskari chiqim",
+  })
+  @ApiParam({ name: 'id', description: 'Integration id' })
+  @ApiParam({ name: 'remittance_id', description: 'Remittance id' })
+  @ApiBody({ type: CancelRemittanceRequestDto })
+  cancelRemittance(
+    @Param('id', ParseIntegrationIdPipe) id: string,
+    @Param('remittance_id', ParseIntegrationIdPipe) remittanceId: string,
+    @Body() dto: CancelRemittanceRequestDto,
+    @Req() req: { user?: { sub?: string } },
+  ) {
+    return this.integrationClient
+      .send(
+        { cmd: 'integration.remittance.cancel' },
+        {
+          integration_id: id,
+          remittance_id: remittanceId,
+          reason: dto?.reason ?? null,
+          reverse_cashbox:
+            typeof dto?.reverse_cashbox === 'boolean'
+              ? dto.reverse_cashbox
+              : null,
+          cancelled_by: req.user?.sub ?? null,
         },
       )
       .pipe(timeout(PROVIDER_RPC_TIMEOUT_MS));

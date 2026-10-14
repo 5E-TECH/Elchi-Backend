@@ -5,6 +5,7 @@ import {
   IsInt,
   IsOptional,
   IsString,
+  MaxLength,
   Min,
 } from 'class-validator';
 
@@ -97,4 +98,13 @@ export class ActivityLogQueryDto {
   @IsOptional()
   @IsString()
   search?: string;
+
+  @ApiPropertyOptional({
+    description:
+      "(8eYmt4NV) Keyset kursor — oldingi javobdagi `meta.next_cursor`. Berilsa `page` e'tiborsiz; istalgan chuqurlikda aniq.",
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  cursor?: string;
 }

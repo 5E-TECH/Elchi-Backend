@@ -1402,6 +1402,33 @@ export class FinanceGatewayController {
     };
   }
 
+  /**
+   * j8qCkJhV — filial kassasi ekranidagi hisob-kitob maydonlari BITTA joydan.
+   *
+   * Ilgari bu blok uch joyda qo'lda takrorlangan va ikkitasida
+   * `olinishi_kerak` ga `berilishi_kerak` qiymati yozilgan edi (copy-paste):
+   * "kuryerlardan olinishi kerak" ekranda "HQ'ga berilishi kerak" summasini
+   * ko'rsatardi. Ikkalasi `buildManagerSettlement` da ALOHIDA hisoblanadi
+   * (courier_receivable va branch_payable).
+   */
+  private toBranchSettlementFields(
+    kassadagiSumma: unknown,
+    settlement: {
+      berilishi_kerak?: unknown;
+      olinishi_kerak?: unknown;
+      hq_ga_tollangan?: unknown;
+      counterparty?: string;
+    } | null,
+  ) {
+    return {
+      kassadagi_summa: Number(kassadagiSumma ?? 0),
+      berilishi_kerak: Number(settlement?.berilishi_kerak ?? 0),
+      olinishi_kerak: Number(settlement?.olinishi_kerak ?? 0),
+      hq_ga_tollangan: Number(settlement?.hq_ga_tollangan ?? 0),
+      counterparty: settlement?.counterparty ?? 'HQ',
+    };
+  }
+
   @Public()
   @Get('health')
   @ApiOperation({ summary: 'Finance service health check' })
@@ -1598,14 +1625,10 @@ export class FinanceGatewayController {
       if (isPrivilegedBranchView && response?.data) {
         response.data = {
           cashbox: response.data,
-          kassadagi_summa: Number(response.data?.balance ?? 0),
-          berilishi_kerak: Number(
-            privilegedBranchSettlement?.berilishi_kerak ?? 0,
+          ...this.toBranchSettlementFields(
+            response.data?.balance,
+            privilegedBranchSettlement,
           ),
-          olinishi_kerak: Number(
-            privilegedBranchSettlement?.berilishi_kerak ?? 0,
-          ),
-          counterparty: 'HQ',
         };
       }
       return response;
@@ -1654,16 +1677,13 @@ export class FinanceGatewayController {
 
     if (response?.data?.cashbox && Array.isArray(response?.data?.history)) {
       if (isPrivilegedBranchView) {
-        response.data.kassadagi_summa = Number(
-          response.data.cashbox?.balance ?? 0,
+        Object.assign(
+          response.data,
+          this.toBranchSettlementFields(
+            response.data.cashbox?.balance,
+            privilegedBranchSettlement,
+          ),
         );
-        response.data.berilishi_kerak = Number(
-          privilegedBranchSettlement?.berilishi_kerak ?? 0,
-        );
-        response.data.olinishi_kerak = Number(
-          privilegedBranchSettlement?.berilishi_kerak ?? 0,
-        );
-        response.data.counterparty = 'HQ';
       }
       // C3: kuryer kassasi sahifasi router state'siz ham ism va summani
       // ko'rsatishi uchun.
@@ -1756,7 +1776,14 @@ export class FinanceGatewayController {
   @ApiOperation({ summary: 'Update cashbox balance and create history' })
   @ApiBody({ type: UpdateCashboxBalanceRequestDto })
   updateCashboxBalance(@Body() dto: UpdateCashboxBalanceRequestDto) {
-    return this.send({ cmd: 'finance.cashbox.update_balance' }, dto);
+    // (i75GDixP) Qo'lda tuzatish — filial kassasi manfiyga tushmaydi, hatto
+    // `source_type: correction/sell` yuborilsa ham. Manfiy ruxsatni faqat
+    // order-service outbox'i (`allow_negative: true`) beradi; bu maydon
+    // gateway DTO'sida yo'q (forbidNonWhitelisted), shu yerda doim `false`.
+    return this.send(
+      { cmd: 'finance.cashbox.update_balance' },
+      { ...dto, allow_negative: false },
+    );
   }
 
   @Get('cashbox/main')
@@ -2037,9 +2064,19 @@ export class FinanceGatewayController {
     @Headers('idempotency-key') idempotencyKey?: string,
   ) {
     const token = this.resolveTransferToken(idempotencyKey);
+    // (3PE0B03q) "O'tkazma manbasi" finance'ga `transfer_source_user_id`
+    // bo'lib boradi — `source_user_id` (kontragent = market) bilan aralashmasin.
+    const { source_user_id: transferSourceUserId, ...payment } = dto;
     const result = await this.send(
       { cmd: 'finance.cashbox.payment_market' },
-      { ...dto, created_by: req.user.sub, dedup_epoch: token },
+      {
+        ...payment,
+        created_by: req.user.sub,
+        dedup_epoch: token,
+        ...(transferSourceUserId
+          ? { transfer_source_user_id: transferSourceUserId }
+          : {}),
+      },
     );
     // HQ → market settlement advance is enqueued by finance-service via the
     // transactional outbox in the same tx as the cashbox move (Faza 2a).
@@ -2099,6 +2136,10 @@ export class FinanceGatewayController {
         comment: dto.comment,
         created_by: req.user.sub,
         dedup_epoch: token,
+        // (3PE0B03q) "O'tkazma manbasi" — faqat audit.
+        ...(dto.source_user_id
+          ? { transfer_source_user_id: dto.source_user_id }
+          : {}),
       },
     );
     // branch → HQ settlement advance is enqueued by finance-service via the
@@ -2141,10 +2182,7 @@ export class FinanceGatewayController {
         statusCode: 200,
         message: "Manager cashbox info (faqat o'ziga tegishli)",
         data: {
-          kassadagi_summa: settlement.kassa,
-          berilishi_kerak: settlement.berilishi_kerak,
-          olinishi_kerak: settlement.olinishi_kerak,
-          counterparty: settlement.counterparty,
+          ...this.toBranchSettlementFields(settlement.kassa, settlement),
           mainCashboxTotal: 0,
           courierCashboxTotal: settlement.kassa,
           marketCashboxTotal: 0,
@@ -2255,6 +2293,8 @@ export class FinanceGatewayController {
         kassa: { cash, card, total: settlement.kassa },
         berilishi_kerak: settlement.berilishi_kerak,
         olinishi_kerak: settlement.olinishi_kerak,
+        // j8qCkJhV — hisoblangan, lekin ilgari javobdan tashlab yuborilardi.
+        hq_ga_tollangan: settlement.hq_ga_tollangan,
         cashbox: settlement.cashbox,
       },
     };
@@ -2501,6 +2541,9 @@ export class FinanceGatewayController {
         created_by: req.user.sub,
         dedup_epoch: token,
         ...(isManager ? { cashbox_type: Cashbox_type.BRANCH } : {}),
+        // IgR4FVsR — qo'lda operatsiya P&L daftariga AYNI tranzaksiyada
+        // yoziladi (alohida POST /financial-balance/entries KERAK EMAS).
+        financial_ledger: true,
       },
     );
   }
@@ -2534,6 +2577,9 @@ export class FinanceGatewayController {
         created_by: req.user.sub,
         dedup_epoch: token,
         ...(isManager ? { cashbox_type: Cashbox_type.BRANCH } : {}),
+        // IgR4FVsR — qo'lda operatsiya P&L daftariga AYNI tranzaksiyada
+        // yoziladi (alohida POST /financial-balance/entries KERAK EMAS).
+        financial_ledger: true,
       },
     );
   }
@@ -2808,8 +2854,14 @@ export class FinanceGatewayController {
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Open shift' })
   @ApiBody({ type: OpenShiftRequestDto })
-  openShift(@Body() dto: OpenShiftRequestDto) {
-    return this.send({ cmd: 'finance.shift.open' }, dto);
+  openShift(@Req() req: { user: JwtUser }, @Body() dto: OpenShiftRequestDto) {
+    // (kfdfYDik) Smenani ochgan odam — JWT'dan (body'dagi `opened_by`
+    // e'tiborga olinmaydi: boshqa odam nomidan smena ochib bo'lmaydi).
+    // Bo'sh body bilan ham ochiladi (BeePost naqshi: `@CurrentUser()`).
+    return this.send(
+      { cmd: 'finance.shift.open' },
+      { ...dto, opened_by: String(req.user.sub) },
+    );
   }
 
   @Post('shift/close')
@@ -2818,8 +2870,28 @@ export class FinanceGatewayController {
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Close shift' })
   @ApiBody({ type: CloseShiftRequestDto })
-  closeShift(@Body() dto: CloseShiftRequestDto) {
-    return this.send({ cmd: 'finance.shift.close' }, dto);
+  closeShift(@Req() req: { user: JwtUser }, @Body() dto: CloseShiftRequestDto) {
+    // (kfdfYDik) `closed_by` — JWT'dan (ilgari body'da MAJBURIY edi va
+    // frontend yuboradigan `{ comment }` har doim 400 olardi). shift_id /
+    // opened_by berilmasa finance o'zining, bo'lmasa MAIN kassaning ochiq
+    // smenasini yopadi.
+    return this.send(
+      { cmd: 'finance.shift.close' },
+      { ...dto, closed_by: String(req.user.sub) },
+    );
+  }
+
+  @Get('shift/current')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.REGISTRATOR)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Asosiy (MAIN) kassaning joriy ochiq smenasi',
+    description:
+      '(kfdfYDik) `data.shift` — ochiq smena yoki null; `data.required` — smenasiz pul operatsiyalari bloklanadimi (FINANCE_REQUIRE_OPEN_SHIFT).',
+  })
+  currentShift() {
+    return this.send({ cmd: 'finance.shift.current' }, {});
   }
 
   @Get('shift')

@@ -170,4 +170,14 @@ export class DispatchNotificationDto {
     group_type?: Group_type;
     text?: string;
   };
+
+  /**
+   * (7Vozou5x) Mijoz (frontend) UUID'si — `dispatch_id` bo'ladi. Ayni id
+   * bilan takror dispatch (504 dan keyin qayta bosish) qayta yubormaydi,
+   * tarixdagi natijani qaytaradi.
+   */
+  @IsOptional()
+  @IsString()
+  @Matches(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i)
+  client_request_id?: string;
 }

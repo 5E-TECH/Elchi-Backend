@@ -2,33 +2,48 @@
  * Activity-log retention prune (Elchi).
  *
  * The `activity_logs` table (one per service schema) grows with every mutating
- * operation across the platform and had no retention policy — an unbounded,
- * ever-growing table (audit: devops/observability). This script deletes rows
- * older than the retention window from EVERY schema that has an activity_logs
- * table (discovered from information_schema, so new services are covered
- * automatically), in bounded batches so it never holds a long lock.
+ * operation across the platform. This script applies the retention POLICY
+ * (libs/common/src/activity-log/retention-policy.ts, i6Nyedea) to EVERY schema
+ * that has an activity_logs table (discovered from information_schema, so new
+ * services are covered automatically), in bounded batches so it never holds a
+ * long lock.
+ *
+ * ⚠️ i6Nyedea — ROW DELETION IS OFF BY DEFAULT. Unless
+ * `ACTIVITY_LOG_PRUNE_ENABLED=true`, the delete step only COUNTS what would be
+ * deleted (dry-run). Previously this sidecar deleted every row older than
+ * ACTIVITY_LOG_RETENTION_DAYS (default 365) in every schema, financial rows
+ * included.
+ *
+ * Policy (by action verb):
+ *   • auth (login/logout/auth_failure + OTP) — ACTIVITY_LOG_RETENTION_AUTH_DAYS
+ *     (default 90, min 7);
+ *   • everything else (finance, orders, investor, settlement ...) —
+ *     ACTIVITY_LOG_RETENTION_DEFAULT_DAYS (default 1095, min 365).
  *
  * (f2Ud5tju) Then, in the same schemas, a SHORTER window for personal data:
  * rows older than ACTIVITY_LOG_DEVICE_RETENTION_DAYS keep the row but lose the
  * `ip`, `user_agent`, `device_id`, `device_name` metadata keys (batched UPDATE,
- * other metadata keys untouched) — see libs/common/src/activity-log/retention.ts.
+ * other metadata keys untouched). This is NOT row deletion and keeps running
+ * regardless of ACTIVITY_LOG_PRUNE_ENABLED (only `--dry-run` stops it).
  *
  * Config (env):
- *   POSTGRES_URI                 required — the DB connection string.
- *   ACTIVITY_LOG_RETENTION_DAYS  retention window in days (default 365).
- *   ACTIVITY_LOG_PRUNE_BATCH     rows per DELETE / UPDATE batch (default 10000).
- *   ACTIVITY_LOG_DEVICE_RETENTION_DAYS  ip/device metadata window in days
- *                                (default 30; capped at the retention window).
+ *   POSTGRES_URI                         required — the DB connection string.
+ *   ACTIVITY_LOG_PRUNE_ENABLED           `true` to actually delete (default off).
+ *   ACTIVITY_LOG_RETENTION_AUTH_DAYS     auth verbs window (default 90).
+ *   ACTIVITY_LOG_RETENTION_DEFAULT_DAYS  all other verbs window (default 1095).
+ *   ACTIVITY_LOG_PRUNE_BATCH             rows per DELETE / UPDATE batch (default 10000).
+ *   ACTIVITY_LOG_PRUNE_PAUSE_MS          pause between delete batches (default 200).
+ *   ACTIVITY_LOG_DEVICE_RETENTION_DAYS   ip/device metadata window in days
+ *                                        (default 30; capped at the shortest policy window).
+ *   ACTIVITY_LOG_RETENTION_DAYS          DEPRECATED — ignored (warning printed).
  *
  * Flags:
- *   --dry-run   report how many rows WOULD be deleted / lose ip-device metadata
- *               per schema, change nothing.
+ *   --dry-run   report counts only, change nothing (also skips the ip/device strip).
  *
- * Scheduling (DB is server-local, so run ON the server): daily via crontab or
- * the `activity-log-prune` docker-compose sidecar, e.g.
- *   30 3 * * * cd /app && POSTGRES_URI=... npm run db:prune-activity-logs
+ * Scheduling (DB is server-local, so run ON the server): daily via the
+ * `activity-log-prune` docker-compose sidecar (scripts/prune-activity-logs-cron.sh).
  *
- * Exit codes: 0 ok, 2 misconfigured (no POSTGRES_URI / bad retention).
+ * Exit codes: 0 ok, 2 misconfigured (no POSTGRES_URI / bad numeric env).
  */
 import { DataSource } from 'typeorm';
 import {
@@ -36,13 +51,18 @@ import {
   ACTIVITY_LOG_DEVICE_RETENTION_ENV,
   ACTIVITY_LOG_PRUNE_BATCH_DEFAULT,
   ActivityLogSqlRunner,
-  buildActivityLogPruneCountSql,
   buildDeviceMetadataCountSql,
-  pruneActivityLogsBatched,
   quoteActivityLogTable,
   resolveDeviceRetentionDays,
   stripDeviceMetadataBatched,
 } from '../libs/common/src/activity-log/retention';
+import {
+  countByRule,
+  isActivityLogPruneEnabled,
+  pruneByRuleBatched,
+  resolveActivityLogRetentionPolicy,
+  resolvePrunePauseMs,
+} from '../libs/common/src/activity-log/retention-policy';
 
 function intFromEnv(name: string, fallback: number): number {
   const raw = process.env[name];
@@ -56,21 +76,30 @@ function intFromEnv(name: string, fallback: number): number {
 }
 
 async function main(): Promise<void> {
-  const dryRun = process.argv.includes('--dry-run');
+  const explicitDryRun = process.argv.includes('--dry-run');
+  const deleteEnabled = isActivityLogPruneEnabled() && !explicitDryRun;
   const postgresUri = process.env.POSTGRES_URI;
   if (!postgresUri) {
     console.error('POSTGRES_URI is required.');
     process.exit(2);
   }
-  const retentionDays = intFromEnv('ACTIVITY_LOG_RETENTION_DAYS', 365);
+  if (process.env.ACTIVITY_LOG_RETENTION_DAYS) {
+    console.warn(
+      'ACTIVITY_LOG_RETENTION_DAYS is deprecated and IGNORED (i6Nyedea): use ' +
+        'ACTIVITY_LOG_RETENTION_AUTH_DAYS / ACTIVITY_LOG_RETENTION_DEFAULT_DAYS.',
+    );
+  }
+  const policy = resolveActivityLogRetentionPolicy();
+  for (const warning of policy.warnings) console.warn(warning);
   const batchSize = intFromEnv(
     'ACTIVITY_LOG_PRUNE_BATCH',
     ACTIVITY_LOG_PRUNE_BATCH_DEFAULT,
   );
+  const pauseMs = resolvePrunePauseMs();
   // (f2Ud5tju) Noto'g'ri qiymat — exit 2 (jim sukutga tushib, IP'ni kutilgandan
-  // erta o'chirmasin); umumiy muddatdan katta bo'lsa umumiy ustun.
+  // erta o'chirmasin); eng qisqa siyosat muddatidan katta bo'lsa o'sha ustun.
   const deviceDays = resolveDeviceRetentionDays(
-    retentionDays,
+    Math.min(...policy.rules.map((r) => r.days)),
     intFromEnv(
       ACTIVITY_LOG_DEVICE_RETENTION_ENV,
       ACTIVITY_LOG_DEVICE_RETENTION_DEFAULT_DAYS,
@@ -97,10 +126,14 @@ async function main(): Promise<void> {
       return;
     }
 
+    const rulesText = policy.rules
+      .map((r) => `${r.name}>${r.days}d`)
+      .join(', ');
     console.log(
-      `${dryRun ? '[dry-run] ' : ''}Pruning activity_logs older than ` +
-        `${retentionDays} days across ${schemas.length} schema(s), ` +
-        `batch=${batchSize}; ip/device metadata older than ${deviceDays} days.\n`,
+      `${deleteEnabled ? '' : '[dry-run: ACTIVITY_LOG_PRUNE_ENABLED is off] '}` +
+        `activity_logs retention policy (${rulesText}) across ${schemas.length} schema(s), ` +
+        `batch=${batchSize}; ip/device metadata older than ${deviceDays} days` +
+        `${explicitDryRun ? ' (count only)' : ''}.\n`,
     );
 
     let grandTotal = 0;
@@ -108,61 +141,50 @@ async function main(): Promise<void> {
     for (const { table_schema } of schemas) {
       const table = quoteActivityLogTable(table_schema);
 
-      if (dryRun) {
-        // (f2Ud5tju, prune-delete-count) DELETE bilan AYNI shart (`$1` — kun).
-        const [{ count }]: Array<{ count: string }> = await ds.query(
-          buildActivityLogPruneCountSql(table),
-          [retentionDays],
-        );
-        const n = Number(count);
+      const perRule: string[] = [];
+      for (const rule of policy.rules) {
+        // i6Nyedea: o'chirish faqat bayroq yoqilganda; aks holda AYNI shart
+        // bilan sanash.
+        const n = deleteEnabled
+          ? (
+              await pruneByRuleBatched(run, table, rule, {
+                batchSize,
+                pauseMs,
+              })
+            ).deleted
+          : await countByRule(run, table, rule);
         grandTotal += n;
+        perRule.push(`${rule.name}=${n}`);
+      }
+
+      let stripped: number;
+      if (explicitDryRun) {
         const [device]: Array<{ count: number }> = await ds.query(
           buildDeviceMetadataCountSql(table),
           [deviceCutoff],
         );
-        deviceTotal += Number(device?.count ?? 0);
-        console.log(
-          `  ${table_schema}: ${n} row(s) would be deleted, ` +
-            `<= ${Number(device?.count ?? 0)} row(s) would lose ip/device metadata`,
+        stripped = Number(device?.count ?? 0);
+      } else {
+        // (f2Ud5tju) DELETE dan keyin — o'chiriladigan qatorlar bekorga
+        // UPDATE qilinmaydi. Partiyalab: har partiya alohida qisqa so'rov.
+        stripped = await stripDeviceMetadataBatched(
+          run,
+          table,
+          deviceCutoff,
+          batchSize,
         );
-        continue;
       }
-
-      // Batched delete: cap each statement so a big backlog can't hold a long
-      // lock / bloat WAL. Loop until a batch deletes fewer than batchSize rows.
-      // (f2Ud5tju topilmasi, prune-delete-count) Avval top-level
-      // `DELETE ... RETURNING 1` natijasining uzunligi son deb olinardi —
-      // TypeORM DELETE uchun `[rows, rowCount]` qaytaradi, son har doim 2 edi:
-      // tsikl birinchi partiyadan keyin to'xtardi (har sxemadan ko'pi bilan
-      // `batchSize` qator, log'da "deleted 2"). Endi sinalgan helper: DELETE
-      // CTE ichida, natija — `SELECT COUNT(*)` qatori (retention.ts).
-      const schemaTotal = await pruneActivityLogsBatched(
-        run,
-        table,
-        retentionDays,
-        batchSize,
-      );
-      grandTotal += schemaTotal;
-
-      // (f2Ud5tju) DELETE dan keyin — o'chiriladigan qatorlar bekorga UPDATE
-      // qilinmaydi. Partiyalab: har partiya alohida qisqa so'rov.
-      const stripped = await stripDeviceMetadataBatched(
-        run,
-        table,
-        deviceCutoff,
-        batchSize,
-      );
       deviceTotal += stripped;
       console.log(
-        `  ${table_schema}: deleted ${schemaTotal} row(s), ` +
-          `stripped ip/device metadata from ${stripped} row(s)`,
+        `  ${table_schema}: ${deleteEnabled ? 'deleted' : 'would delete'} ` +
+          `${perRule.join(', ')}; ` +
+          `${explicitDryRun ? 'would strip' : 'stripped'} ip/device metadata from ${stripped} row(s)`,
       );
     }
 
     console.log(
-      `\n${dryRun ? '[dry-run] ' : ''}Total: ${grandTotal} row(s)` +
-        `${dryRun ? ' would be' : ''} pruned, ${deviceTotal} row(s)` +
-        `${dryRun ? ' would lose' : ' lost'} ip/device metadata.`,
+      `\nTotal: ${grandTotal} row(s) ${deleteEnabled ? 'pruned' : 'would be pruned (dry-run)'}, ` +
+        `${deviceTotal} row(s) ${explicitDryRun ? 'would lose' : 'lost'} ip/device metadata.`,
     );
   } finally {
     await ds.destroy();

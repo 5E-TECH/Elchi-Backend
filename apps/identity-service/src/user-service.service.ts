@@ -15,8 +15,9 @@ import { lastValueFrom, timeout } from 'rxjs';
 import { randomBytes } from 'crypto';
 import { BcryptEncryption } from '../../../libs/common/helpers/bcrypt';
 import { User } from './entities/user.entity';
+import { CourierRegion } from './entities/courier-region.entity';
 import { CreateAdminDto } from './dto/create-admin.dto';
-import { UpdateUserDto } from './dto/update-user.dto';
+import { USER_LANGUAGES, UpdateUserDto } from './dto/update-user.dto';
 import { CreateMarketDto } from './dto/create-market.dto';
 import { UpdateMarketDto } from './dto/update-market.dto';
 import { CreateCourierDto } from './dto/create-courier.dto';
@@ -398,6 +399,14 @@ function geoReassignResult(
     previous_regions: [...groups.values()],
     missing_ids: (req.ids ?? []).filter((id) => !movedSet.has(id)),
   };
+}
+
+/** (C4R3YyvH) Mijoz tili: faqat uz/ru/en, aks holda null (o'zgartirilmaydi). */
+function customerLanguage(value: unknown): 'uz' | 'ru' | 'en' | null {
+  const text = typeof value === 'string' ? value.trim().toLowerCase() : '';
+  return (USER_LANGUAGES as readonly string[]).includes(text)
+    ? (text as 'uz' | 'ru' | 'en')
+    : null;
 }
 
 @Injectable()
@@ -1411,6 +1420,7 @@ export class UserServiceService implements OnModuleInit {
       add_order: admin.add_order,
       can_add_extra_cost: admin.can_add_extra_cost,
       can_sell_cancel: admin.can_sell_cancel,
+      language: admin.language,
       password_changed: false,
     };
 
@@ -1438,6 +1448,17 @@ export class UserServiceService implements OnModuleInit {
 
     if (typeof dto.name !== 'undefined') {
       admin.name = dto.name;
+    }
+
+    // (C4R3YyvH) Til — o'zi ham (profil), admin ham o'zgartira oladi. RMQ'da
+    // ValidationPipe yo'q — ruxsat etilgan qiymat shu yerda ham tekshiriladi.
+    if (typeof dto.language !== 'undefined') {
+      if (
+        !(USER_LANGUAGES as readonly string[]).includes(String(dto.language))
+      ) {
+        this.badRequest(`language: ${USER_LANGUAGES.join(', ')}`);
+      }
+      admin.language = dto.language;
     }
 
     if (dto.status && !requesterIsSelf) {
@@ -1545,6 +1566,7 @@ export class UserServiceService implements OnModuleInit {
         add_order: saved.add_order,
         can_add_extra_cost: saved.can_add_extra_cost,
         can_sell_cancel: saved.can_sell_cancel,
+        language: saved.language,
         // Surface that the password was rotated without ever logging its value.
         password_changed: Boolean(dto.password),
       },
@@ -2058,19 +2080,32 @@ export class UserServiceService implements OnModuleInit {
       .take(limit)
       .getManyAndCount();
 
-    const [totalMarket, totalEmployees, totalUsers] = await Promise.all([
-      baseQb
-        .clone()
-        .andWhere('admin.role = :marketRole', { marketRole: Roles.MARKET })
-        .getCount(),
-      baseQb
-        .clone()
-        .andWhere('admin.role IN (:...employeeRoles)', {
-          employeeRoles: [Roles.ADMIN, Roles.REGISTRATOR, Roles.COURIER],
-        })
-        .getCount(),
-      baseQb.clone().getCount(),
-    ]);
+    // nFmup26a: "Xodimlar" avval faqat ADMIN + REGISTRATOR + COURIER ni
+    // sanardi — MANAGER, OPERATOR, MARKET_OPERATOR, BRANCH, INVESTOR, LOGIST
+    // hech bir kartaga tushmasdi va Marketlar + Xodimlar ≠ Barcha. Endi bitta
+    // GROUP BY so'rovidan: xodim = market bo'lmagan har qanday rol (BeePost:
+    // role != market). Invariant: totalMarket + totalEmployees === totalUsers.
+    // `countsByRole` — Roles enum'ining HAR BIR qiymati (yo'q rol — 0; bu
+    // ro'yxat superadmin/customer'ni sanamaydi, ular doim 0), shuning uchun
+    // yangi rol qo'shilganda hisob jimgina buzilmaydi.
+    const roleRows = await baseQb
+      .clone()
+      .select('admin.role', 'role')
+      .addSelect('COUNT(*)', 'count')
+      .groupBy('admin.role')
+      .getRawMany<{ role: string | null; count: string | number }>();
+    const countsByRole = Object.fromEntries(
+      Object.values(Roles).map((value) => [value, 0]),
+    ) as Record<string, number>;
+    let totalUsers = 0;
+    for (const row of roleRows) {
+      const count = Number(row?.count ?? 0) || 0;
+      const roleKey = String(row?.role ?? '');
+      countsByRole[roleKey] = (countsByRole[roleKey] ?? 0) + count;
+      totalUsers += count;
+    }
+    const totalMarket = countsByRole[Roles.MARKET] ?? 0;
+    const totalEmployees = totalUsers - totalMarket;
 
     return successRes({
       items: rows.map((row) => this.sanitize(row)),
@@ -2082,6 +2117,7 @@ export class UserServiceService implements OnModuleInit {
         totalMarket,
         totalEmployees,
         totalUsers,
+        countsByRole,
       },
     });
   }
@@ -2121,7 +2157,19 @@ export class UserServiceService implements OnModuleInit {
     }
 
     if (region_id) {
-      qb.andWhere('courier.region_id = :region_id', { region_id });
+      // hEjjuJaT: super-kuryer o'z viloyatidan tashqari courier_regions'dagi
+      // har bir viloyatda (serves_all_regions — HAMMA viloyatda) chiqadi.
+      qb.andWhere(
+        new Brackets((nested) => {
+          nested.where('courier.region_id = :region_id', { region_id }).orWhere(
+            `(courier.is_super_courier = true AND (courier.serves_all_regions = true OR EXISTS (
+                SELECT 1 FROM identity_schema.courier_regions cr
+                WHERE cr.courier_id = courier.id AND cr.region_id = :region_id
+              )))`,
+            { region_id },
+          );
+        }),
+      );
     }
 
     // Gateway filial kuryerlarini (branch_users) oldindan beradi — filtr
@@ -2473,6 +2521,11 @@ export class UserServiceService implements OnModuleInit {
       ) {
         patch.extra_number = dto.extra_number;
       }
+      // (C4R3YyvH) Til faqat aniq va ruxsat etilgan qiymat bo'lsa.
+      const language = customerLanguage(dto?.language);
+      if (language && language !== existing.language) {
+        patch.language = language;
+      }
 
       if (Object.keys(patch).length > 0) {
         Object.assign(existing, patch);
@@ -2509,6 +2562,8 @@ export class UserServiceService implements OnModuleInit {
       add_order: false,
       can_add_extra_cost: false,
       default_tariff: null,
+      // (C4R3YyvH) Buyurtma manbasidan kelgan til yoki sukut 'uz'.
+      language: customerLanguage(dto?.language) ?? 'uz',
       isDeleted: false,
     });
 
@@ -3211,7 +3266,47 @@ export class UserServiceService implements OnModuleInit {
     };
   }
 
-  async findCouriersByIds(ids: string[]) {
+  /**
+   * (y8CxCtcK / fQi6NNUL) `identity.user.summary_by_ids` — faoliyat jurnali
+   * "Kim" ustuni uchun ENG TOR ichki batch: faqat `{ id, name, role }`.
+   *
+   * - Rol filtri YO'Q: superadmin ham, mijoz ham hal qilinadi
+   *   (`findAllAdmins` dagi filtrga TEGILMAGAN — GET /users o'zgarmaydi);
+   * - O'chirilgan (`isDeleted`) foydalanuvchi ham qaytadi: ishdan ketgan
+   *   kuryerning eski amallari jurnalda baribir ismli ko'rinishi kerak;
+   * - Telefon, username, status, parol/token QAYTMAYDI (SELECT darajasida).
+   */
+  async findUserSummariesByIds(ids: unknown) {
+    const clean = cleanBigintIds(ids);
+    if (!clean.length) {
+      return { success: true, data: [] };
+    }
+
+    const users = await this.users.find({
+      where: { id: In(clean) },
+      select: { id: true, name: true, role: true },
+    });
+
+    return {
+      success: true,
+      data: users.map((u) => ({
+        id: u.id,
+        name: u.name ?? null,
+        role: u.role ?? null,
+      })),
+    };
+  }
+
+  /**
+   * hEjjuJaT: `regionId` berilsa (order-service sotuv/qisman sotuv/bekor/
+   * rollback — buyurtma viloyati) super-kuryerning shu viloyat uchun tarifi
+   * qaytadi: courier_regions.tariff_* ?? kuryerning umumiy tarifi (yassi).
+   * `tariff_source` — 'region' | 'flat'. Oddiy kuryer va `regionId`siz
+   * chaqiruvlar o'zgarmaydi. Natija order-service'da `orders.courier_tariff`
+   * ga SNAPSHOT bo'ladi — keyingi tarif o'zgarishi eski buyurtmaga ta'sir
+   * qilmaydi.
+   */
+  async findCouriersByIds(ids: string[], regionId?: string | null) {
     if (!ids.length) {
       return { success: true, data: [] };
     }
@@ -3224,10 +3319,265 @@ export class UserServiceService implements OnModuleInit {
       },
     });
 
+    const normalizedRegionId = String(regionId ?? '').trim();
+    const superIds = normalizedRegionId
+      ? couriers.filter((c) => c.is_super_courier).map((c) => String(c.id))
+      : [];
+    const regionRows = superIds.length
+      ? await this.users.manager.getRepository(CourierRegion).find({
+          where: { courier_id: In(superIds), region_id: normalizedRegionId },
+        })
+      : [];
+    const rowByCourier = new Map(
+      regionRows.map((row) => [String(row.courier_id), row]),
+    );
+
     return {
       success: true,
-      data: couriers.map((c) => this.sanitize(c)),
+      data: couriers.map((c) => {
+        const safe = this.sanitize(c);
+        const row = rowByCourier.get(String(c.id));
+        if (!row) {
+          return safe;
+        }
+        const tariff_home = row.tariff_home ?? c.tariff_home ?? null;
+        const tariff_center = row.tariff_center ?? c.tariff_center ?? null;
+        return {
+          ...safe,
+          tariff_home,
+          tariff_center,
+          tariff_source:
+            row.tariff_home !== null || row.tariff_center !== null
+              ? 'region'
+              : 'flat',
+        };
+      }),
     };
+  }
+
+  /** hEjjuJaT — GET /couriers/:id/regions. */
+  async getCourierRegions(courierId: string) {
+    const courier = await this.findCourierOrThrow(courierId);
+    const rows = await this.users.manager.getRepository(CourierRegion).find({
+      where: { courier_id: String(courier.id) },
+      order: { region_id: 'ASC' },
+    });
+    return successRes(
+      this.courierRegionsView(courier, rows),
+      200,
+      'Courier regions',
+    );
+  }
+
+  /**
+   * hEjjuJaT — PUT /couriers/:id/regions: super-kuryer bayroqlari va
+   * viloyatlar ro'yxati (tarif bilan) BITTA tranzaksiyada to'liq almashtiriladi.
+   * - is_super_courier=false → courier_regions tozalanadi, serves_all_regions
+   *   ham false (oddiy kuryer: bitta region_id, yassi tarif);
+   * - serves_all_regions=true faqat super-kuryerga;
+   * - viloyatlar logistics'da mavjud bo'lishi shart (tekshirib bo'lmasa — 503,
+   *   fail-closed); takror viloyat — 400; tarif — butun son ≥ 0 yoki null.
+   */
+  async setCourierRegions(
+    courierId: string,
+    dto: {
+      is_super_courier?: boolean;
+      serves_all_regions?: boolean;
+      regions?: Array<{
+        region_id?: string | number | null;
+        tariff_home?: number | null;
+        tariff_center?: number | null;
+      }>;
+    },
+    requester?: RequesterContext,
+  ) {
+    const courier = await this.findCourierOrThrow(courierId);
+    const isSuper =
+      typeof dto?.is_super_courier === 'boolean'
+        ? dto.is_super_courier
+        : Boolean(courier.is_super_courier);
+    const servesAll = isSuper
+      ? typeof dto?.serves_all_regions === 'boolean'
+        ? dto.serves_all_regions
+        : Boolean(courier.serves_all_regions)
+      : false;
+    if (!isSuper && dto?.serves_all_regions === true) {
+      this.badRequest(
+        'serves_all_regions faqat super-kuryer (is_super_courier=true) uchun',
+      );
+    }
+
+    const rawRegions = Array.isArray(dto?.regions) ? dto.regions : [];
+    if (!isSuper && rawRegions.length) {
+      this.badRequest(
+        "Viloyatlar ro'yxati faqat super-kuryer (is_super_courier=true) uchun",
+      );
+    }
+    const normalizeTariff = (value: unknown, field: string): number | null => {
+      if (value === null || typeof value === 'undefined' || value === '') {
+        return null;
+      }
+      const num = Number(value);
+      if (!Number.isInteger(num) || num < 0) {
+        this.badRequest(`${field} butun son va 0 dan kichik bo'lmasligi kerak`);
+      }
+      return num;
+    };
+    const seen = new Set<string>();
+    const regions = rawRegions.map((item) => {
+      const regionId = String(item?.region_id ?? '').trim();
+      if (!/^\d+$/.test(regionId)) {
+        this.badRequest("region_id noto'g'ri");
+      }
+      if (seen.has(regionId)) {
+        this.badRequest(`Viloyat takrorlangan: ${regionId}`);
+      }
+      seen.add(regionId);
+      return {
+        region_id: regionId,
+        tariff_home: normalizeTariff(item?.tariff_home, 'tariff_home'),
+        tariff_center: normalizeTariff(item?.tariff_center, 'tariff_center'),
+      };
+    });
+    await this.assertRegionsExist(regions.map((r) => r.region_id));
+
+    const before = await this.users.manager.getRepository(CourierRegion).find({
+      where: { courier_id: String(courier.id) },
+    });
+
+    const saved = await this.users.manager.transaction(async (manager) => {
+      await manager
+        .getRepository(User)
+        .update(
+          { id: String(courier.id) },
+          { is_super_courier: isSuper, serves_all_regions: servesAll },
+        );
+      const repo = manager.getRepository(CourierRegion);
+      await repo.delete({ courier_id: String(courier.id) });
+      if (regions.length) {
+        await repo.insert(
+          regions.map((r) => ({ ...r, courier_id: String(courier.id) })),
+        );
+      }
+      return repo.find({
+        where: { courier_id: String(courier.id) },
+        order: { region_id: 'ASC' },
+      });
+    });
+
+    await this.activityLog.logChange({
+      entity_type: 'User',
+      entity_id: String(courier.id),
+      action: ActivityAction.UPDATED,
+      old_value: {
+        is_super_courier: Boolean(courier.is_super_courier),
+        serves_all_regions: Boolean(courier.serves_all_regions),
+        courier_regions: before.map((r) => ({
+          region_id: String(r.region_id),
+          tariff_home: r.tariff_home,
+          tariff_center: r.tariff_center,
+        })),
+      },
+      new_value: {
+        is_super_courier: isSuper,
+        serves_all_regions: servesAll,
+        courier_regions: saved.map((r) => ({
+          region_id: String(r.region_id),
+          tariff_home: r.tariff_home,
+          tariff_center: r.tariff_center,
+        })),
+      },
+      metadata: { kind: 'courier_regions' },
+      ...this.auditActor(requester),
+    });
+
+    return successRes(
+      this.courierRegionsView(
+        {
+          ...courier,
+          is_super_courier: isSuper,
+          serves_all_regions: servesAll,
+        },
+        saved,
+      ),
+      200,
+      'Courier regions saved',
+    );
+  }
+
+  private async findCourierOrThrow(courierId: string): Promise<User> {
+    const id = String(courierId ?? '').trim();
+    if (!/^\d+$/.test(id)) {
+      this.badRequest("Kuryer id noto'g'ri");
+    }
+    const courier = await this.users.findOne({
+      where: { id, role: Roles.COURIER, isDeleted: false },
+    });
+    if (!courier) {
+      this.notFound('Kuryer topilmadi');
+    }
+    return courier;
+  }
+
+  private courierRegionsView(
+    courier: Pick<
+      User,
+      | 'id'
+      | 'region_id'
+      | 'tariff_home'
+      | 'tariff_center'
+      | 'is_super_courier'
+      | 'serves_all_regions'
+    >,
+    rows: CourierRegion[],
+  ) {
+    return {
+      courier_id: String(courier.id),
+      home_region_id: courier.region_id ?? null,
+      is_super_courier: Boolean(courier.is_super_courier),
+      serves_all_regions: Boolean(courier.serves_all_regions),
+      flat_tariff_home: courier.tariff_home ?? null,
+      flat_tariff_center: courier.tariff_center ?? null,
+      regions: rows.map((row) => ({
+        region_id: String(row.region_id),
+        tariff_home: row.tariff_home,
+        tariff_center: row.tariff_center,
+      })),
+    };
+  }
+
+  /** hEjjuJaT: viloyatlar logistics'da bormi — 404 → 400, aloqa yo'q → 503. */
+  private async assertRegionsExist(regionIds: string[]): Promise<void> {
+    for (const id of regionIds) {
+      try {
+        const res = await lastValueFrom(
+          this.logisticsClient
+            .send({ cmd: 'logistics.region.find_by_id' }, { id })
+            .pipe(timeout(5000)),
+        );
+        const found = (res as { data?: { id?: unknown } } | null)?.data;
+        if (!found || typeof found !== 'object') {
+          this.badRequest(`Viloyat topilmadi: ${id}`);
+        }
+      } catch (error) {
+        if (error instanceof RpcException) {
+          throw error;
+        }
+        const status = Number(
+          (error as { statusCode?: unknown; status?: unknown })?.statusCode ??
+            (error as { status?: unknown })?.status,
+        );
+        if (status === 404) {
+          this.badRequest(`Viloyat topilmadi: ${id}`);
+        }
+        throw new RpcException(
+          errorRes(
+            "Viloyatlarni tekshirib bo'lmadi, keyinroq urinib ko'ring",
+            503,
+          ),
+        );
+      }
+    }
   }
 
   async searchCustomers(search: string, limit = 1000) {
@@ -3296,7 +3646,15 @@ export class UserServiceService implements OnModuleInit {
     if (!clean.length) return successRes([]);
     const rows = await this.users.find({
       where: { id: In(clean), isDeleted: false },
-      select: ['id', 'phone_number', 'role', 'language', 'settings'],
+      select: [
+        'id',
+        'phone_number',
+        'role',
+        'language',
+        'settings',
+        // (rCFZAmOz) shaxsiy Telegram DM uchun (bot orqali ulangan chat).
+        'telegram_id',
+      ],
     });
     return successRes(
       rows.map((row) => {
@@ -3317,8 +3675,57 @@ export class UserServiceService implements OnModuleInit {
               : (staffLanguage ?? row.language),
           // (mP1WGG1W) tinch soatlar — notification-service push'ni suradi.
           quiet_hours: settings?.notifications?.quiet_hours ?? null,
+          telegram_id: row.telegram_id ?? null,
         };
       }),
+    );
+  }
+
+  /**
+   * (rCFZAmOz #1) Shaxsiy Telegram chatini akkauntga ulash — FAQAT ichki RMQ
+   * (notification-service bot `/start <token>`; token imzosi u yerda
+   * tekshirilgan, `user_id` tokendan). Gateway'da HTTP marshruti YO'Q.
+   * Faqat faol, o'chirilmagan foydalanuvchi.
+   */
+  async telegramBind(payload: { user_id?: unknown; telegram_id?: unknown }) {
+    const userId = primitiveText(payload?.user_id).trim();
+    const telegramId = primitiveText(payload?.telegram_id).trim();
+    if (!/^\d{1,19}$/.test(userId) || !/^-?\d{1,20}$/.test(telegramId)) {
+      throw new RpcException({
+        statusCode: 400,
+        message: "user_id / telegram_id noto'g'ri",
+      });
+    }
+    const result = await this.users.update(
+      { id: userId, isDeleted: false, status: Status.ACTIVE },
+      { telegram_id: telegramId },
+    );
+    if (!result.affected) {
+      throw new RpcException({
+        statusCode: 404,
+        message: 'Foydalanuvchi topilmadi',
+      });
+    }
+    return successRes({ bound: true }, 200, 'Telegram linked');
+  }
+
+  /** (rCFZAmOz) Bot `/stop` — shu chat ulangan barcha akkauntlardan uziladi. */
+  async telegramUnbind(payload: { telegram_id?: unknown }) {
+    const telegramId = primitiveText(payload?.telegram_id).trim();
+    if (!/^-?\d{1,20}$/.test(telegramId)) {
+      throw new RpcException({
+        statusCode: 400,
+        message: "telegram_id noto'g'ri",
+      });
+    }
+    const result = await this.users.update(
+      { telegram_id: telegramId },
+      { telegram_id: null },
+    );
+    return successRes(
+      { unbound: result.affected ?? 0 },
+      200,
+      'Telegram unlinked',
     );
   }
 

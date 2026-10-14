@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { EntityManager, MoreThanOrEqual, Repository } from 'typeorm';
+import { EntityManager, In, MoreThanOrEqual, Not, Repository } from 'typeorm';
 import { startOfTashkentDay, TASHKENT_OFFSET_MINUTES } from '@app/common';
 import { SmsOutbox } from '../entities/sms-outbox.entity';
 import { SmsConfigService } from './sms-config.service';
@@ -29,6 +29,20 @@ export class SmsBlockedError extends Error {
 const MINUTE_MS = 60_000;
 
 /**
+ * (rkz0yBxr) Kvota oqimi: OTP (`security`) — o'z kunlik kvotasi va o'z qulfi
+ * bilan ALOHIDA oqim; tranzaksion + reklama — umumiy oqim. Avval bitta
+ * `SMS_DAILY_CAP` hamma sinfni sanardi: reklama kampaniyasi kvotani tugatsa
+ * login kodi ham ketmasdi (mijoz kabinetiga kirishning yagona yo'li).
+ */
+export type SmsQuotaStream = 'general' | 'otp';
+
+const OTP_CLASSES: SmsMessageClass[] = ['security'];
+
+export const smsQuotaStream = (
+  messageClass: SmsMessageClass,
+): SmsQuotaStream => (OTP_CLASSES.includes(messageClass) ? 'otp' : 'general');
+
+/**
  * Toshkent devor soati (daqiqa, 00:00 dan). O'zbekiston doimiy UTC+5 (yozgi
  * vaqt yo'q) — umumiy `@app/common` tashkent-time qoidasi. Tungi taqiq va
  * kunlik kvota FAQAT shu qoida orqali hisoblanadi (qo'shaloq konversiya yo'q).
@@ -55,16 +69,24 @@ export class SmsGateService {
     count: number,
     now = new Date(),
     manager?: EntityManager,
+    stream: SmsQuotaStream = 'general',
   ): Promise<void> {
     this.assertEnabledAndFanout(count);
-    const usedToday = await this.usedToday(now, manager);
-    if (usedToday + count > this.config.dailyCap) {
+    const usedToday = await this.usedToday(now, manager, stream);
+    const cap = this.dailyCapFor(stream);
+    if (usedToday + count > cap) {
+      const env = stream === 'otp' ? 'SMS_OTP_DAILY_CAP' : 'SMS_DAILY_CAP';
       throw new SmsBlockedError(
         'daily_cap_exceeded',
-        `Kunlik SMS kvotasi tugadi: bugun ${usedToday} ta, so'ralgan ${count}, chegara ${this.config.dailyCap} (SMS_DAILY_CAP, Toshkent kuni)`,
-        { used: usedToday, requested: count, cap: this.config.dailyCap },
+        `Kunlik ${stream === 'otp' ? 'OTP ' : ''}SMS kvotasi tugadi: bugun ${usedToday} ta, so'ralgan ${count}, chegara ${cap} (${env}, Toshkent kuni)`,
+        { used: usedToday, requested: count, cap, stream },
       );
     }
+  }
+
+  /** (rkz0yBxr) Oqim kvotasi: OTP — `SMS_OTP_DAILY_CAP`, qolgani — `SMS_DAILY_CAP`. */
+  dailyCapFor(stream: SmsQuotaStream): number {
+    return stream === 'otp' ? this.config.otpDailyCap : this.config.dailyCap;
   }
 
   /** Kill-switch va fan-out chegarasi (DB'siz). */
@@ -85,13 +107,23 @@ export class SmsGateService {
   }
 
   /**
-   * Bugun (Toshkent kuni) navbatga qo'yilgan SMS soni. `manager` — kvota
-   * qulfi olingan tranzaksiya (3fRbyadQ #5: sanash va INSERT bitta qulf ostida).
+   * Bugun (Toshkent kuni) shu OQIMda navbatga qo'yilgan SMS soni. `manager` —
+   * kvota qulfi olingan tranzaksiya (3fRbyadQ #5: sanash va INSERT bitta qulf
+   * ostida). (rkz0yBxr) `general` OTP qatorlarini, `otp` esa boshqalarini
+   * SANAMAYDI — ikki kvota bir-birini yemaydi.
    */
-  usedToday(now = new Date(), manager?: EntityManager): Promise<number> {
+  usedToday(
+    now = new Date(),
+    manager?: EntityManager,
+    stream: SmsQuotaStream = 'general',
+  ): Promise<number> {
     const repo = manager ? manager.getRepository(SmsOutbox) : this.outbox;
     return repo.count({
-      where: { created_at: MoreThanOrEqual(startOfTashkentDay(now)) },
+      where: {
+        created_at: MoreThanOrEqual(startOfTashkentDay(now)),
+        message_class:
+          stream === 'otp' ? In(OTP_CLASSES) : Not(In(OTP_CLASSES)),
+      },
     });
   }
 

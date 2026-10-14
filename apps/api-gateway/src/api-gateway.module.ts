@@ -48,7 +48,9 @@ import { RealtimeController } from './realtime/realtime.controller';
 import { AuditGatewayController } from './audit-gateway.controller';
 import { AuditEnrichmentService } from './audit/audit-enrichment.service';
 import { AiGatewayController } from './ai-gateway.controller';
+import { AiUsageGatewayController } from './ai-usage-gateway.controller';
 import { MarketOperatorGatewayController } from './market-operator-gateway.controller';
+import { CustomerGatewayController } from './customer-gateway.controller';
 import { AiStatusPoller } from './ai/ai-status.poller';
 import type { StringValue } from 'ms';
 
@@ -134,8 +136,12 @@ import type { StringValue } from 'ms';
     PartnerGatewayController,
     PartnerAdminGatewayController,
     AiGatewayController,
+    // Celz3rKJ: "Moliyaviy balans → AI xarajat" paneli (/ai-usage/*).
+    AiUsageGatewayController,
     // i76gGjyq: market o'z operatorlarini boshqaradi (/market-operators).
     MarketOperatorGatewayController,
+    // hiqRNhkI: GET /customers/suggest — telefon bo'yicha mijoz taklifi.
+    CustomerGatewayController,
     HealthController,
     // TODO: Qolgan gateway controllerlarni qo'shish
     // FinanceGatewayController,

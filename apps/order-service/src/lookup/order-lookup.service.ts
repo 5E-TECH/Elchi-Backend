@@ -116,8 +116,14 @@ export class OrderLookupService implements OnModuleInit {
     return response?.data ?? [];
   }
 
-  async getCouriersByIds(ids: string[]) {
+  /**
+   * hEjjuJaT: `opts.region_id` (buyurtma viloyati) berilsa identity
+   * super-kuryerning shu viloyat tarifini (courier_regions ?? yassi) qaytaradi;
+   * oddiy kuryer va `opts`siz chaqiruvlar o'zgarmaydi.
+   */
+  async getCouriersByIds(ids: string[], opts?: { region_id?: string | null }) {
     if (!ids.length) return [];
+    const regionId = String(opts?.region_id ?? '').trim();
     const response = await rmqSend<{
       data?: Array<{
         id: string;
@@ -134,7 +140,7 @@ export class OrderLookupService implements OnModuleInit {
     }>(
       this.identityClient,
       { cmd: 'identity.courier.find_by_ids' },
-      { ids },
+      regionId ? { ids, region_id: regionId } : { ids },
     ).catch(() => ({ data: [] }));
     return response?.data ?? [];
   }

@@ -9,7 +9,16 @@ import {
   Matches,
   MinLength,
 } from 'class-validator';
+import { Transform } from 'class-transformer';
 import { BranchUserRole } from '@app/common';
+
+// EiZj47Gc: forma (PICKUP va h.k.) bo'sh ota filialni `parent_id: ''` qilib
+// yuboradi. @IsOptional faqat null/undefined ni o'tkazadi, shuning uchun ''
+// tushunarsiz "parent_id must be a number string" 400 berardi. Bo'sh satr /
+// null → undefined: so'rov branch-service qoidasiga yetib boradi va HQ'dan
+// boshqa tur uchun aniq "ota filial (parent_id) majburiy" xabari qaytadi.
+const emptyToUndefined = ({ value }: { value: unknown }) =>
+  value === '' || value === null ? undefined : value;
 
 export class CreateBranchRequestDto {
   @ApiProperty({ example: 'Namangan filial' })
@@ -45,8 +54,11 @@ export class CreateBranchRequestDto {
 
   @ApiPropertyOptional({
     example: '1',
-    description: 'Parent branch ID (bigint string)',
+    description:
+      "Parent branch ID (bigint string). HQ'dan boshqa barcha turlar " +
+      '(PICKUP/REGIONAL/HYBRID) uchun majburiy; HQ uchun yuborilmaydi.',
   })
+  @Transform(emptyToUndefined)
   @IsOptional()
   @IsNumberString()
   parent_id?: string;

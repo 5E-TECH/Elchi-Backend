@@ -8,6 +8,8 @@ import { Region } from './region.entity';
 @Index('IDX_POST_COURIER', ['courier_id'])
 @Index('IDX_POST_REGION', ['region_id'])
 @Index('IDX_POST_BRANCH', ['branch_id'])
+// YfrqN70i/kA70Rban — server tomonda sahifalash/sana filtri (migratsiya 1716000000092).
+@Index('IDX_POST_CREATED_AT', ['createdAt'])
 export class Post extends BaseEntity {
   @Column({ type: 'bigint' })
   courier_id!: string;

@@ -5,6 +5,16 @@ export interface RequestContextStore {
   traceId: string;
   /** Optional user id when known (gateway extracts from JWT). */
   userId?: string;
+  /**
+   * (fQi6NNUL / y8CxCtcK) Aktyorning ismi va roli — AMAL PAYTIDAGI holat.
+   * Gateway JWT tekshiruvidan keyin qo'yadi (`requestContext.setActor`),
+   * RMQ orqali `x-audit-actor` sarlavhasida servislarga boradi va
+   * `ActivityLogService.log()` ularni `user_name` / `user_role` ustunlariga
+   * yozadi (enrichment'siz ham "Kim" ustuni ismli; keyin rol o'zgarsa ham
+   * eski qator o'zgarmaydi). Metadata'ga TUSHMAYDI (`AuditContext` emas).
+   */
+  userName?: string;
+  userRole?: string;
   // AUDIT MAYDONLARI (f2Ud5tju) — nizo tekshiruvida "qaysi qurilmadan, qaysi
   // IP'dan" degan dalil. Nomlari ATAYLAB snake_case: ular aynan shu
   // ko'rinishda `activity_logs.metadata` ga tushadi (BeePost
@@ -70,6 +80,56 @@ export function sanitizeAuditContext(raw: unknown): AuditContext {
   return out;
 }
 
+/** (fQi6NNUL) Kontekstdagi aktyor — `activity_logs.user_*` ustunlari bilan mos chegaralar. */
+export interface AuditActor {
+  userId?: string;
+  userName?: string;
+  userRole?: string;
+}
+
+export const AUDIT_ACTOR_LIMITS = Object.freeze({
+  userId: 100,
+  userName: 200,
+  userRole: 32,
+});
+
+const ACTOR_ID_RE = /^[A-Za-z0-9:._-]+$/;
+// eslint-disable-next-line no-control-regex
+const CONTROL_CHARS_RE = /[\u0000-\u001f\u007f]/g;
+
+function cleanActorText(value: unknown, max: number): string | undefined {
+  if (typeof value !== 'string' && typeof value !== 'number') return undefined;
+  const clean = String(value).replace(CONTROL_CHARS_RE, ' ').trim();
+  return clean ? clean.slice(0, max) : undefined;
+}
+
+/**
+ * Ishonchsiz manbadan (JWT payload, RMQ sarlavha) kelgan aktyorni tozalaydi:
+ * id — faqat `[A-Za-z0-9:._-]` (100 gacha), ism — boshqaruv belgilarisiz
+ * (200 gacha), rol — kichik harf (32 gacha). Noto'g'ri qiymat tashlanadi.
+ */
+export function sanitizeAuditActor(raw: unknown): AuditActor {
+  const out: AuditActor = {};
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return out;
+  const source = raw as Record<string, unknown>;
+  const id = cleanActorText(source.userId, AUDIT_ACTOR_LIMITS.userId + 1);
+  if (id && id.length <= AUDIT_ACTOR_LIMITS.userId && ACTOR_ID_RE.test(id)) {
+    out.userId = id;
+  }
+  const name = cleanActorText(source.userName, AUDIT_ACTOR_LIMITS.userName);
+  if (name) out.userName = name;
+  const role = cleanActorText(source.userRole, AUDIT_ACTOR_LIMITS.userRole);
+  if (role) out.userRole = role.toLowerCase();
+  return out;
+}
+
+/** Store'dan faqat aktyor maydonlarini (aniqlanganlarini) ajratadi. */
+export function pickAuditActor(
+  store: RequestContextStore | undefined,
+): AuditActor {
+  return store ? sanitizeAuditActor(store) : {};
+}
+
 /** Store'dan faqat audit maydonlarini (aniqlanganlarini) ajratadi. */
 export function pickAuditContext(
   store: RequestContextStore | undefined,
@@ -108,6 +168,21 @@ class RequestContext {
    */
   getAuditContext(): AuditContext {
     return pickAuditContext(this.als.getStore());
+  }
+
+  /**
+   * (fQi6NNUL) Joriy so'rov aktyorini qo'yadi — gateway JWT tekshiruvidan
+   * keyin (`JwtStrategy.validate`). Middleware JWT'dan OLDIN ishlaydi,
+   * shuning uchun do'kon shu yerda to'ldiriladi (AYNI obyekt — so'rovning
+   * keyingi barcha async qadamlari ko'radi). Kontekst yo'q bo'lsa — no-op.
+   */
+  setActor(actor: AuditActor): void {
+    const store = this.als.getStore();
+    if (!store) return;
+    const clean = sanitizeAuditActor(actor);
+    store.userId = clean.userId;
+    store.userName = clean.userName;
+    store.userRole = clean.userRole;
   }
 
   /** Generate a new trace id; useful for callers that may need to root one. */

@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
 import { ConfigService } from '@nestjs/config';
+import { requestContext } from '@app/common';
 
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
@@ -34,12 +35,23 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
   validate(payload: {
     sub: string;
     username: string;
+    name?: string | null;
     roles?: string[];
     branch_id?: string | null;
   }) {
+    const roles = this.normalizeRoles(payload.roles);
+    // fQi6NNUL / y8CxCtcK — so'rov aktyori kontekstga: RMQ `x-audit-actor`
+    // sarlavhasi orqali har servisning `ActivityLogService.log()` i
+    // `user_name`/`user_role` ni o'zi to'ldiradi. `name` claim'i eski
+    // tokenlarda yo'q (15 daqiqada yangilanadi) — u holda faqat id/rol.
+    requestContext.setActor({
+      userId: payload.sub == null ? undefined : String(payload.sub),
+      userName: typeof payload.name === 'string' ? payload.name : undefined,
+      userRole: roles[0],
+    });
     return {
       ...payload,
-      roles: this.normalizeRoles(payload.roles),
+      roles,
       branch_id: payload.branch_id ?? null,
     };
   }

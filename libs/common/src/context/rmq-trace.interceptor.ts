@@ -8,6 +8,7 @@ import { Observable, from } from 'rxjs';
 import { switchMap } from 'rxjs/operators';
 import { RequestContextStore, requestContext } from './request-context';
 import {
+  auditActorFromRmqHeaders,
   auditContextFromRmqHeaders,
   readRmqHeaders,
   traceIdFromRmqHeaders,
@@ -55,6 +56,8 @@ export class RmqTraceInterceptor implements NestInterceptor {
     const store: RequestContextStore = {
       traceId,
       ...auditContextFromRmqHeaders(headers),
+      // fQi6NNUL — aktyor (id/ism/rol) → `ActivityLogService.log()` user_* ustunlari.
+      ...auditActorFromRmqHeaders(headers),
     };
 
     // Wrap the handler stream in AsyncLocalStorage. `from()` keeps the

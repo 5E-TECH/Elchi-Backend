@@ -1,6 +1,7 @@
 import {
   IsBoolean,
   IsEnum,
+  IsIn,
   IsNumber,
   IsOptional,
   IsPhoneNumber,
@@ -10,7 +11,16 @@ import {
 } from 'class-validator';
 import { Commission_type, Status, Where_deliver } from '@app/common';
 
+/** (C4R3YyvH) Foydalanuvchi tili — migratsiya 1716000000085 CHECK bilan bir xil. */
+export const USER_LANGUAGES = ['uz', 'ru', 'en'] as const;
+export type UserLanguage = (typeof USER_LANGUAGES)[number];
+
 export class UpdateUserDto {
+  /** (C4R3YyvH) Bildirishnoma/SMS tili — profil tahrirlashda ham. */
+  @IsOptional()
+  @IsIn(USER_LANGUAGES)
+  language?: UserLanguage;
+
   @IsOptional()
   @IsString()
   name?: string;

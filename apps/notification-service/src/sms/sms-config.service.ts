@@ -62,9 +62,21 @@ export class SmsConfigService {
       .toLowerCase();
   }
 
-  /** Toshkent kuni bo'yicha kunlik SMS soni chegarasi. */
+  /**
+   * Toshkent kuni bo'yicha kunlik SMS soni chegarasi — UMUMIY oqim
+   * (tranzaksion + reklama). OTP (`security`) bu kvotaga KIRMAYDI (rkz0yBxr).
+   */
   get dailyCap(): number {
     return optionalNumber(this.config.get('SMS_DAILY_CAP')) ?? 500;
+  }
+
+  /**
+   * (rkz0yBxr) OTP (`security`) oqimining ALOHIDA kunlik kvotasi. Reklama
+   * kampaniyasi umumiy kvotani tugatsa ham login kodi ketaveradi; OTP
+   * hujumi esa reklama/tranzaksion SMS'ni to'xtatmaydi.
+   */
+  get otpDailyCap(): number {
+    return optionalNumber(this.config.get('SMS_OTP_DAILY_CAP')) ?? 500;
   }
 
   /** Bitta dispatch/kampaniyadagi SMS qabul qiluvchilar chegarasi (MAX_FANOUT=5000 EMAS). */

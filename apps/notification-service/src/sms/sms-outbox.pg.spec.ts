@@ -181,6 +181,66 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
       expect(await rows()).toHaveLength(4);
     });
 
+    // ==================== rkz0yBxr — OTP alohida oqim ====================
+
+    const otp = (id: string) => ({
+      to: '+998901234567',
+      text: 'Elchi tasdiqlash kodi: 123456',
+      messageClass: 'security' as const,
+      senderProfile: 'otp' as const,
+      clientMessageId: id,
+    });
+
+    it('rkz0yBxr: umumiy kvota (reklama/tranzaksion) TUGAGAN bo‘lsa ham OTP ketadi — kvotalar alohida', async () => {
+      env.SMS_DAILY_CAP = '2';
+      env.SMS_OTP_DAILY_CAP = '2';
+      await service.enqueue([
+        { ...tx, clientMessageId: 'g-1' },
+        { ...tx, clientMessageId: 'g-2' },
+      ]);
+      await expect(
+        service.enqueue([{ ...tx, clientMessageId: 'g-3' }]),
+      ).rejects.toMatchObject({ reason: 'daily_cap_exceeded' });
+      // Umumiy kvota to'la — OTP baribir navbatga tushadi.
+      await service.enqueue([otp('otp-1')]);
+      await service.enqueue([otp('otp-2')]);
+      // OTP kvotasi ham o'ziniki: 3-kod rad, umumiy oqimga ta'sir yo'q.
+      await expect(service.enqueue([otp('otp-3')])).rejects.toMatchObject({
+        reason: 'daily_cap_exceeded',
+        details: { stream: 'otp', cap: 2 },
+      });
+      const stored = await rows();
+      expect(stored.map((row) => row.client_message_id).sort()).toEqual(
+        ['g-1', 'g-2', 'otp-1', 'otp-2'].sort(),
+      );
+    });
+
+    it('rkz0yBxr: OTP hujumi (OTP kvotasi to‘la) tranzaksion SMS’ni to‘xtatmaydi', async () => {
+      env.SMS_DAILY_CAP = '5';
+      env.SMS_OTP_DAILY_CAP = '1';
+      await service.enqueue([otp('otp-a')]);
+      await expect(service.enqueue([otp('otp-b')])).rejects.toMatchObject({
+        reason: 'daily_cap_exceeded',
+      });
+      await expect(
+        service.enqueue([{ ...tx, clientMessageId: 'after-otp' }]),
+      ).resolves.toMatchObject({ queued: [expect.any(Object)] });
+    });
+
+    it('rkz0yBxr: OTP navbat boshida — oldinroq turgan reklama/tranzaksion qatorlardan OLDIN egallanadi', async () => {
+      await service.enqueue(
+        Array.from({ length: 5 }, (_, i) => ({
+          ...tx,
+          clientMessageId: `bulk-${i}`,
+        })),
+      );
+      await sleep(5);
+      await service.enqueue([otp('otp-late')]);
+      const [first] = await service.claimDue(1);
+      expect(first.client_message_id).toBe('otp-late');
+      expect(first.message_class).toBe('security');
+    });
+
     it('TC9: ikki parallel claimDue bitta qatorni ikki marta OLMAYDI (FOR UPDATE SKIP LOCKED)', async () => {
       await service.enqueue(
         Array.from({ length: 20 }, (_, i) => ({

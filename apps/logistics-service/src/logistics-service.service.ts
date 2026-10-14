@@ -7,7 +7,17 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { ClientProxy, RpcException } from '@nestjs/microservices';
-import { FindOptionsWhere, In, IsNull, Not, Repository } from 'typeorm';
+import {
+  Between,
+  FindOptionsWhere,
+  In,
+  IsNull,
+  LessThanOrEqual,
+  MoreThan,
+  MoreThanOrEqual,
+  Not,
+  Repository,
+} from 'typeorm';
 import { lastValueFrom, timeout } from 'rxjs';
 import { Post } from './entities/post.entity';
 import { Region } from './entities/region.entity';
@@ -37,6 +47,7 @@ import {
   Roles,
   Status,
   Where_deliver,
+  tashkentDayRange,
 } from '@app/common';
 
 interface RequesterContext {
@@ -209,6 +220,76 @@ const GEO_STRANDED_PREVIEW = 50;
 
 /** oNAE3LW9 — birlashtirish tekshiruvi mos kelmadi (logistics tranzaksiyasi rollback). */
 class GeoMergeCheckError extends Error {}
+
+/**
+ * kA70Rban — pochta ro'yxatlarining (GET /post, /post/courier/old-posts,
+ * kuryerning barcha pochtalari) bitta sahifadagi qator shifti. So'ralgan
+ * limit undan katta bo'lsa — JIMGINA kesilmaydi: javobda
+ * `limit_capped: true` va `max_limit` qaytadi.
+ */
+export const POST_LIST_MAX_LIMIT = 100;
+
+/**
+ * YfrqN70i — "Eski pochtalar" filtrlari (server tomonda). Hammasi ixtiyoriy;
+ * bo'sh qiymat = filtr yo'q.
+ * - `region_id` / `courier_id` — bigint id. Raqam emas (masalan UUID) —
+ *   hech narsaga mos kelmaydi → bo'sh sahifa (avval jimgina tashlanib, 59 ta
+ *   qaytardi);
+ * - `startDate` / `endDate` — Toshkent kuni bo'yicha (tashkentDayRange,
+ *   SqVMuhKo bilan bitta qoida): 'YYYY-MM-DD' → 00:00:00.000 / 23:59:59.999;
+ * - `has_orders` — faqat `order_quantity > 0` (frontenddagi hasOrders
+ *   filtrini serverga ko'chirish uchun; sahifalash va `total` to'g'ri qoladi).
+ */
+export interface PostListFilters {
+  branch_id?: string;
+  status?: string;
+  region_id?: string;
+  courier_id?: string;
+  startDate?: string;
+  endDate?: string;
+  has_orders?: boolean | string;
+}
+
+/** kA70Rban — sahifa/limit normallashuvi (NaN → standart, shiftdan oshsa belgi). */
+function resolvePostListPage(page?: number, limit?: number) {
+  const requestedLimit = Math.trunc(Number(limit));
+  const normalizedLimit = Number.isFinite(requestedLimit) ? requestedLimit : 8;
+  const take = Math.min(POST_LIST_MAX_LIMIT, Math.max(1, normalizedLimit));
+  const requestedPage = Math.trunc(Number(page));
+  const currentPage = Number.isFinite(requestedPage)
+    ? Math.max(1, requestedPage)
+    : 1;
+  return {
+    take,
+    skip: (currentPage - 1) * take,
+    page: currentPage,
+    limit_capped: normalizedLimit > POST_LIST_MAX_LIMIT,
+  };
+}
+
+/** kA70Rban — sahifalangan pochta ro'yxati javobi (`limit_capped` bilan). */
+function postListPage(
+  data: unknown[],
+  total: number,
+  paging: ReturnType<typeof resolvePostListPage>,
+) {
+  return {
+    data,
+    total,
+    page: paging.page,
+    totalPages: Math.max(1, Math.ceil(total / paging.take)),
+    limit: paging.take,
+    limit_capped: paging.limit_capped,
+    max_limit: POST_LIST_MAX_LIMIT,
+  };
+}
+
+function isTruthyFlag(value: unknown): boolean {
+  if (value === true) return true;
+  if (typeof value !== 'string') return false;
+  const normalized = value.trim().toLowerCase();
+  return normalized === 'true' || normalized === '1';
+}
 
 @Injectable()
 export class LogisticsServiceService implements OnModuleInit {
@@ -1393,16 +1474,77 @@ export class LogisticsServiceService implements OnModuleInit {
     return successRes(savedPost, 201, 'Post created');
   }
 
+  /**
+   * YfrqN70i — viloyat/kuryer/sana/has_orders filtrlari TypeORM where
+   * bo'lagiga aylanadi. `impossible` — filtr hech narsaga mos kelmaydi
+   * (raqam bo'lmagan id): so'rov bazaga yuborilmaydi (bigint ga UUID 22P02
+   * → 500 bo'lardi), bo'sh sahifa qaytadi. Yaroqsiz sana — 400.
+   */
+  private buildPostListFilterWhere(filters?: PostListFilters): {
+    where: Record<string, unknown>;
+    impossible: boolean;
+  } {
+    const where: Record<string, unknown> = {};
+    let impossible = false;
+
+    for (const key of ['region_id', 'courier_id'] as const) {
+      const raw = String(filters?.[key] ?? '').trim();
+      if (!raw) continue;
+      const id = canonicalBigintId(raw);
+      if (id) {
+        where[key] = id;
+      } else {
+        impossible = true;
+      }
+    }
+
+    const startRaw = String(filters?.startDate ?? '').trim();
+    const endRaw = String(filters?.endDate ?? '').trim();
+    const { start, end } = tashkentDayRange(startRaw, endRaw);
+    if (start && Number.isNaN(start.getTime())) {
+      this.badRequest("startDate noto'g'ri (YYYY-MM-DD kutiladi)");
+    }
+    if (end && Number.isNaN(end.getTime())) {
+      this.badRequest("endDate noto'g'ri (YYYY-MM-DD kutiladi)");
+    }
+    if (start && end && start.getTime() > end.getTime()) {
+      this.badRequest("startDate endDate dan keyin bo'lmasligi kerak");
+    }
+    if (start && end) {
+      where.createdAt = Between(start, end);
+    } else if (start) {
+      where.createdAt = MoreThanOrEqual(start);
+    } else if (end) {
+      where.createdAt = LessThanOrEqual(end);
+    }
+
+    if (isTruthyFlag(filters?.has_orders)) {
+      where.order_quantity = MoreThan(0);
+    }
+
+    return { where, impossible };
+  }
+
   async findAllPosts(
     page = 1,
     limit = 8,
-    filters?: { branch_id?: string; status?: string },
+    filters?: PostListFilters,
     requester?: RequesterContext,
   ) {
-    const take = limit > 100 ? 100 : Math.max(1, limit);
-    const skip = (Math.max(1, page) - 1) * take;
+    // kA70Rban — shift 100 qoldi, lekin kesilgani javobda ko'rinadi.
+    const paging = resolvePostListPage(page, limit);
+    const { take, skip } = paging;
+    // YfrqN70i — filtrlar avval tekshiriladi (yaroqsiz sana — 400).
+    const filterWhere = this.buildPostListFilterWhere(filters);
 
     const scopedBranchId = await this.resolveScopedBranchId(requester);
+    if (filterWhere.impossible) {
+      return successRes(
+        postListPage([], 0, paging),
+        200,
+        'All posts (paginated)',
+      );
+    }
     const branchId =
       scopedBranchId ??
       (filters?.branch_id ? String(filters.branch_id).trim() : '');
@@ -1439,6 +1581,11 @@ export class LogisticsServiceService implements OnModuleInit {
         { status: Post_status.CANCELED, branch_id: hqBranchId },
       ];
     }
+    // YfrqN70i — filtrlar har bir OR tarmog'iga qo'shiladi (AND).
+    const filterClause = filterWhere.where;
+    queryWhere = Array.isArray(queryWhere)
+      ? queryWhere.map((clause) => ({ ...clause, ...filterClause }))
+      : { ...queryWhere, ...filterClause };
 
     const [data, total] = await this.postRepo.findAndCount({
       where: queryWhere,
@@ -1449,13 +1596,7 @@ export class LogisticsServiceService implements OnModuleInit {
     });
 
     return successRes(
-      {
-        data,
-        total,
-        page: Math.max(1, page),
-        totalPages: Math.max(1, Math.ceil(total / take)),
-        limit: take,
-      },
+      postListPage(data, total, paging),
       200,
       'All posts (paginated)',
     );
@@ -1799,14 +1940,38 @@ export class LogisticsServiceService implements OnModuleInit {
     page: number,
     limit: number,
     requester: RequesterContext,
+    filters?: Omit<PostListFilters, 'branch_id' | 'courier_id'>,
   ) {
-    const take = limit > 100 ? 100 : Math.max(1, limit);
-    const skip = (Math.max(1, page) - 1) * take;
+    // kA70Rban — xuddi shu 100 shifti, kesilgani javobda ko'rinadi.
+    const paging = resolvePostListPage(page, limit);
+    const { take, skip } = paging;
+    // YfrqN70i — kuryer ekrani ham region_id/status/sana yuboradi (avval
+    // jimgina tashlanardi). courier_id — doim JWT egasi, filtrdan olinmaydi.
+    const filterWhere = this.buildPostListFilterWhere({
+      region_id: filters?.region_id,
+      startDate: filters?.startDate,
+      endDate: filters?.endDate,
+      has_orders: filters?.has_orders,
+    });
+    const oldStatuses = new Set<string>([
+      Post_status.RECEIVED,
+      Post_status.CANCELED,
+      Post_status.CANCELED_RECEIVED,
+    ]);
+    const status = String(filters?.status ?? '')
+      .trim()
+      .toLowerCase();
+    if ((status && !oldStatuses.has(status)) || filterWhere.impossible) {
+      return successRes(postListPage([], 0, paging), 200, 'All old posts');
+    }
 
     const [data, total] = await this.postRepo.findAndCount({
       where: {
+        ...filterWhere.where,
         courier_id: requester.id,
-        status: Not(In([Post_status.SENT, Post_status.NEW])),
+        status: status
+          ? (status as Post_status)
+          : Not(In([Post_status.SENT, Post_status.NEW])),
       },
       relations: ['region'],
       order: { createdAt: 'DESC' },
@@ -1814,17 +1979,7 @@ export class LogisticsServiceService implements OnModuleInit {
       take,
     });
 
-    return successRes(
-      {
-        data,
-        total,
-        page: Math.max(1, page),
-        totalPages: Math.max(1, Math.ceil(total / take)),
-        limit: take,
-      },
-      200,
-      'All old posts',
-    );
+    return successRes(postListPage(data, total, paging), 200, 'All old posts');
   }
 
   async rejectedPostsForCourier(requester: RequesterContext) {
@@ -1929,8 +2084,9 @@ export class LogisticsServiceService implements OnModuleInit {
     limit: number,
     requester: RequesterContext,
   ) {
-    const take = limit > 100 ? 100 : Math.max(1, limit);
-    const skip = (Math.max(1, page) - 1) * take;
+    // kA70Rban — xuddi shu 100 shifti, kesilgani javobda ko'rinadi.
+    const paging = resolvePostListPage(page, limit);
+    const { take, skip } = paging;
 
     const [data, total] = await this.postRepo.findAndCount({
       where: { courier_id: requester.id },
@@ -1940,17 +2096,7 @@ export class LogisticsServiceService implements OnModuleInit {
       take,
     });
 
-    return successRes(
-      {
-        data,
-        total,
-        page: Math.max(1, page),
-        totalPages: Math.max(1, Math.ceil(total / take)),
-        limit: take,
-      },
-      200,
-      'All my posts',
-    );
+    return successRes(postListPage(data, total, paging), 200, 'All my posts');
   }
 
   async findPostById(id: string, requester?: RequesterContext) {
@@ -5209,21 +5355,108 @@ export class LogisticsServiceService implements OnModuleInit {
     return successRes(rows);
   }
 
-  async getAllRegionsStats(startDate?: string, endDate?: string) {
-    const regions = await this.regionRepo.find({
+  /**
+   * uherIk8r — so'rovchining O'Z viloyati (hudud statistikasi doirasi uchun).
+   * - COURIER → identity'dagi `users.region_id`;
+   * - filial xodimi (MANAGER / REGISTRATOR va h.k.) → biriktirilgan filialning
+   *   `branches.region_id` (branch_users → branches; JWT'dagi eski branch_id
+   *   emas, joriy biriktiruv). `isHqStaff` — filial turi HQ.
+   * Aniqlab bo'lmasa `regionId: null` (chaqiruvchi fail-closed qiladi).
+   */
+  private async resolveOwnStatsRegion(
+    requester: RequesterContext,
+  ): Promise<{ regionId: string | null; isHqStaff: boolean }> {
+    const requesterId = String(requester?.id ?? '').trim();
+    if (!requesterId) {
+      this.forbidden('Foydalanuvchi aniqlanmadi');
+    }
+    const roles = (requester.roles ?? []).map((role) =>
+      String(role ?? '').toLowerCase(),
+    );
+
+    if (roles.includes(Roles.COURIER)) {
+      const courier = await this.findCourierById(requesterId);
+      const regionId = String(courier?.region_id ?? '').trim();
+      return { regionId: regionId || null, isHqStaff: false };
+    }
+
+    const assignment = (await this.findBranchAssignmentByUserId(requesterId, {
+      id: requesterId,
+      roles: requester.roles ?? [],
+    })) as
+      | (BranchAssignmentRow & {
+          branch?: { type?: string | null; region_id?: string | null } | null;
+        })
+      | null;
+    const branch = assignment?.branch ?? null;
+    const regionId = String(branch?.region_id ?? '').trim();
+    return {
+      regionId: regionId || null,
+      isHqStaff:
+        String(branch?.type ?? '')
+          .trim()
+          .toUpperCase() === String(BranchType.HQ),
+    };
+  }
+
+  /**
+   * uherIk8r — hudud statistikasi SERVERDA cheklanadi (avval 14 viloyatning
+   * hammasi qaytib, cheklov faqat brauzerda edi).
+   * - requester yo'q (ichki RMQ chaqiruv / eski gateway) → hammasi;
+   * - ADMIN / SUPERADMIN / LOGIST (dzyVftBx, BeePost bilan bir xil) → hammasi;
+   * - HQ filial xodimi (menejer/registrator) → hammasi: HQ butun kompaniya
+   *   bo'yicha ishlaydi, bosh sahifa xaritasi hozir ham hamma viloyatni
+   *   ko'rsatadi (QAROR KERAK: HQ xodimi ham faqat o'z viloyatini ko'rsinmi);
+   * - boshqa ichki rollar → faqat o'z viloyati; aniqlab bo'lmasa — hech biri.
+   */
+  private async resolveRegionStatsScope(
+    requester?: RequesterContext,
+  ): Promise<{ all: true } | { all: false; regionId: string | null }> {
+    if (!requester) {
+      return { all: true };
+    }
+    const roles = (requester.roles ?? []).map((role) =>
+      String(role ?? '').toLowerCase(),
+    );
+    if (this.isSystemPrivileged(requester) || roles.includes(Roles.LOGIST)) {
+      return { all: true };
+    }
+    const own = await this.resolveOwnStatsRegion(requester);
+    if (own.isHqStaff && !roles.includes(Roles.COURIER)) {
+      return { all: true };
+    }
+    return { all: false, regionId: own.regionId };
+  }
+
+  async getAllRegionsStats(
+    startDate?: string,
+    endDate?: string,
+    requester?: RequesterContext,
+  ) {
+    const scope = await this.resolveRegionStatsScope(requester);
+    const allRegions = await this.regionRepo.find({
       relations: ['districts'],
       order: { name: 'ASC' },
     });
+    // uherIk8r: HQ'dan tashqari menejer/registrator faqat o'z viloyatini oladi.
+    const regions = scope.all
+      ? allRegions
+      : allRegions.filter(
+          (region) =>
+            Boolean(scope.regionId) && String(region.id) === scope.regionId,
+        );
 
     const regionIds = regions.map((region) => String(region.id));
     const regionIdSet = new Set(regionIds);
 
-    const orders = await this.findOrders({
-      fetch_all: true,
-      start_day: startDate,
-      end_day: endDate,
-      limit: 100,
-    });
+    const orders = regionIds.length
+      ? await this.findOrders({
+          fetch_all: true,
+          start_day: startDate,
+          end_day: endDate,
+          limit: 100,
+        })
+      : [];
 
     const deliveredStatuses = new Set<Order_status>([
       Order_status.SOLD,
@@ -5334,10 +5567,18 @@ export class LogisticsServiceService implements OnModuleInit {
     id: string,
     startDate?: string,
     endDate?: string,
+    requester?: RequesterContext,
   ) {
     const regionId = String(id ?? '').trim();
     if (!regionId) {
       this.badRequest('Region id is required');
+    }
+
+    // uherIk8r: bu javobda har bir kuryerning ismi/telefoni/daromadi bor —
+    // HQ'dan tashqari filial xodimi faqat o'z viloyatini ko'radi.
+    const scope = await this.resolveRegionStatsScope(requester);
+    if (!scope.all && scope.regionId !== regionId) {
+      this.forbidden("Bu viloyat statistikasini ko'rishga ruxsat yo'q");
     }
 
     const region = await this.regionRepo.findOne({
@@ -5512,6 +5753,83 @@ export class LogisticsServiceService implements OnModuleInit {
       },
       200,
       'Region detailed stats',
+    );
+  }
+
+  /**
+   * uherIk8r — GET /region/my/district-stats (kuryer / menejer): FAQAT
+   * so'rovchining o'z viloyati, tumanlar kesimida (BeePost
+   * `region/my/district-stats` analogi). Viloyat tokendan emas, serverda
+   * aniqlanadi (kuryer — users.region_id, menejer — filial viloyati). Kuryer
+   * ism/telefoni (PII) qaytmaydi. Viloyat biriktirilmagan bo'lsa — 200 va
+   * bo'sh holat ("Sizga viloyat biriktirilmagan").
+   */
+  async getMyRegionDistrictStats(
+    startDate?: string,
+    endDate?: string,
+    requester?: RequesterContext,
+  ) {
+    if (!requester) {
+      this.forbidden('Foydalanuvchi aniqlanmadi');
+    }
+    const empty = (message: string) =>
+      successRes({ region: null, summary: null, districts: [] }, 200, message);
+
+    const { regionId } = await this.resolveOwnStatsRegion(requester);
+    if (!regionId) {
+      return empty('Sizga viloyat biriktirilmagan');
+    }
+    const exists = await this.regionRepo.findOne({ where: { id: regionId } });
+    if (!exists) {
+      return empty('Viloyat topilmadi');
+    }
+
+    // Ichki chaqiruv (requester'siz) — doira yuqorida aniqlangan.
+    const detail = (await this.getRegionDetailedStats(
+      regionId,
+      startDate,
+      endDate,
+    )) as {
+      data: {
+        region: { id: string; name: string; satoCode?: string | null };
+        summary: Record<string, number>;
+        districts: Array<
+          {
+            couriers?: unknown[];
+            totalOrders: number;
+            deliveredOrders: number;
+            cancelledOrders: number;
+          } & Record<string, unknown>
+        >;
+      };
+    };
+    const { region, summary, districts } = detail.data;
+
+    return successRes(
+      {
+        region: { id: region.id, name: region.name, satoCode: region.satoCode },
+        summary: {
+          totalOrders: summary.totalOrders,
+          deliveredOrders: summary.deliveredOrders,
+          cancelledOrders: summary.cancelledOrders,
+          pendingOrders: summary.pendingOrders,
+          totalRevenue: summary.totalRevenue,
+          successRate: summary.successRate,
+          districtsCount: districts.length,
+        },
+        districts: districts.map(({ couriers, ...district }) => ({
+          ...district,
+          pendingOrders: Math.max(
+            0,
+            district.totalOrders -
+              district.deliveredOrders -
+              district.cancelledOrders,
+          ),
+          couriersCount: Array.isArray(couriers) ? couriers.length : 0,
+        })),
+      },
+      200,
+      'Viloyat tumanlari statistikasi',
     );
   }
 

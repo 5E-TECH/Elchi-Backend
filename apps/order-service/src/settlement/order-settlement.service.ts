@@ -6,6 +6,7 @@ import {
   Brackets,
   DataSource,
   EntityManager,
+  In,
   QueryFailedError,
   Repository,
 } from 'typeorm';
@@ -15,11 +16,14 @@ import { OrderSettlement } from '../entities/order-settlement.entity';
 import { OrderSettlementCarry } from '../entities/order-settlement-carry.entity';
 import { OrderLookupService } from '../lookup/order-lookup.service';
 import {
+  ActivityAction,
+  ActivityLogService,
   Cashbox_type,
   IdempotencyKey,
   Order_status,
   OutboxService,
   SettlementStatus,
+  moneyUz,
   rmqSend,
 } from '@app/common';
 import { successRes } from '../../../../libs/common/helpers/response';
@@ -39,6 +43,16 @@ import { successRes } from '../../../../libs/common/helpers/response';
  * retired settle* stubs. badRequest/handleDbError are duplicated leaf helpers.
  */
 type SettlementLevel = 'courier_to_branch' | 'branch_to_hq' | 'hq_to_market';
+
+/** jtB0i4y3 — jurnal tavsifidagi bo'g'in nomi. */
+const SETTLEMENT_LEVEL_UZ: Readonly<Record<SettlementLevel, string>> = {
+  courier_to_branch: 'kuryer → filial',
+  branch_to_hq: 'filial → HQ',
+  hq_to_market: 'HQ → market',
+};
+
+/** jtB0i4y3 — metadata'dagi buyurtma id ro'yxati chegarasi (qator shishmasin). */
+const SETTLEMENT_AUDIT_ORDER_IDS_MAX = 200;
 
 /**
  * HQ id sini kutishning yuqori chegarasi. Kesh odatda issiq (OrderLookupService
@@ -151,6 +165,12 @@ export class OrderSettlementService {
      * `OutboxModule.forService` orqali har doim beradi).
      */
     @Optional() private readonly outbox?: OutboxService,
+    /**
+     * jtB0i4y3 — naqd hisob-kitob (kuryer→filial→HQ→market) audit izi.
+     * Ixtiyoriy: eski spec'lar servisni 5 argument bilan quradi — u holda
+     * jurnal yozilmaydi (prod'da `ActivityLogModule.forService` beradi).
+     */
+    @Optional() private readonly activityLog?: ActivityLogService,
   ) {}
 
   // ===== leaf helpers duplicated from OrderServiceService =====
@@ -961,6 +981,73 @@ export class OrderSettlementService {
     );
   }
 
+  /**
+   * DxdZFdIk — kargo to'lovi (remittance) BEKOR qilinganda
+   * `markProviderSettledToHq` ning teskarisi: o'sha buyurtmalar yana "HQ'ga
+   * yetmagan" (PENDING) bo'ladi — aks holda kassa teskari yozilgan, qarz
+   * qayta ochilgan, settlement esa naqd HQ'da deb turaverardi va marketga
+   * to'lov FIFO'si kelmagan pulni yopib yuborardi.
+   *
+   * Faqat AYNAN o'sha yo'l o'zgartirgan qatorlar: kuryersiz, filialsiz,
+   * BRANCH_SETTLED. Marketga to'lab bo'lingan (MARKET_SETTLED) qatorlar
+   * o'zgarmaydi — ular javobda `market_settled_order_ids` da qaytadi.
+   * Idempotent: takroriy chaqiruv PENDING qatorni topmaydi.
+   */
+  async revertProviderSettledToHq(data: {
+    order_ids?: string[];
+    requester_id?: string;
+  }) {
+    const orderIds = (data?.order_ids ?? [])
+      .map((id) => String(id ?? '').trim())
+      .filter((id) => /^\d+$/.test(id));
+    if (!orderIds.length) {
+      return successRes(
+        { reverted_order_ids: [], affected: 0, market_settled_order_ids: [] },
+        200,
+        'Nothing to revert',
+      );
+    }
+
+    const result = await this.orderSettlementRepo
+      .createQueryBuilder()
+      .update(OrderSettlement)
+      .set({
+        status: SettlementStatus.PENDING,
+        courier_to_branch_at: null,
+        branch_to_hq_at: null,
+        branch_to_hq_by: null,
+      })
+      .where('order_id IN (:...orderIds)', { orderIds })
+      .andWhere('status = :status', {
+        status: SettlementStatus.BRANCH_SETTLED,
+      })
+      .andWhere('courier_id IS NULL')
+      .andWhere('branch_id IS NULL')
+      .andWhere('is_deleted = :isDeleted', { isDeleted: false })
+      .execute();
+
+    const marketSettled = await this.orderSettlementRepo.find({
+      where: {
+        order_id: In(orderIds),
+        status: SettlementStatus.MARKET_SETTLED,
+        isDeleted: false,
+      },
+      select: { order_id: true },
+    });
+
+    return successRes(
+      {
+        reverted_order_ids: orderIds,
+        affected: result.affected ?? 0,
+        market_settled_order_ids: marketSettled.map((row) =>
+          String(row.order_id),
+        ),
+      },
+      200,
+      'Provider settlement reverted',
+    );
+  }
+
   private static readonly MAIN_CASHBOX_USER_ID = '0';
 
   /** Ensure the singleton MAIN (HQ) cashbox exists before posting to it. */
@@ -1755,6 +1842,17 @@ export class OrderSettlementService {
       hqBranchParty: isHqBranchParty,
     });
 
+    // jtB0i4y3 — FIFO tranzaksiyasi COMMIT bo'lgandan keyin (M8 takrori va
+    // xato yo'llari yuqorida qaytadi — ular jurnalga tushmaydi).
+    await this.auditSettlement({
+      level: data.level,
+      matchValue,
+      amount,
+      requesterId,
+      requestId: token || null,
+      result,
+    });
+
     // `touched` / `carryPersisted` — ichki ma'lumot, javobga chiqmaydi
     // (javob shakli M8 belgisida saqlanadigan bilan bir xil qoladi).
     const publicResult: Partial<typeof result> = { ...result };
@@ -1808,6 +1906,64 @@ export class OrderSettlementService {
     } else {
       this.logger.error(
         `${base} — SAQLANMADI: order_settlement_carry jadvali yo'q (migratsiya 1716000000048?) — daftar kassadan orqada qoladi`,
+      );
+    }
+  }
+
+  /**
+   * jtB0i4y3 — naqd pul hisob-kitobi audit iziga (`/activity-logs`,
+   * `entity_type=Settlement`). "Men pulni topshirdim" nizosida izlanadigan
+   * yagona iz: KIM (requester), QACHON, QAYSI bo'g'in, QANCHA, qaysi
+   * buyurtmalar yopildi.
+   *
+   * - Faqat muvaffaqiyatli COMMIT'dan keyin chaqiriladi (xato / M8 takrori
+   *   yozilmaydi — takror "ikki marta topshirdi" degan yolg'on iz qoldirardi);
+   * - FAIL-OPEN: jurnal yiqilsa ham hisob-kitob natijasi qaytadi;
+   * - `entity_id` — tomon id si (kuryer / filial / market), `user_id` — amalni
+   *   boshlagan xodim (raqam bo'lmasa — `system`, outbox relay — NULL).
+   */
+  private async auditSettlement(input: {
+    level: SettlementLevel;
+    matchValue: string;
+    amount: number;
+    requesterId: string | null;
+    requestId: string | null;
+    result: {
+      settled_order_ids: string[];
+      allocated: number;
+      leftover: number;
+    };
+    kind?: 'advance' | 'close_zero';
+  }): Promise<void> {
+    if (!this.activityLog) return;
+    const ids = input.result.settled_order_ids ?? [];
+    const requester =
+      input.requesterId && /^\d+$/.test(input.requesterId)
+        ? input.requesterId
+        : null;
+    const truncated = ids.length > SETTLEMENT_AUDIT_ORDER_IDS_MAX;
+    try {
+      await this.activityLog.log({
+        entity_type: 'Settlement',
+        entity_id: input.matchValue,
+        action: ActivityAction.CREATED,
+        user_id: requester,
+        metadata: {
+          leg: input.level,
+          kind: input.kind ?? 'advance',
+          amount: input.amount,
+          allocated: input.result.allocated,
+          leftover: input.result.leftover,
+          settled_count: ids.length,
+          settled_order_ids: ids.slice(0, SETTLEMENT_AUDIT_ORDER_IDS_MAX),
+          ...(truncated ? { settled_order_ids_truncated: true } : {}),
+          request_id: input.requestId,
+        },
+        description: `Hisob-kitob (${SETTLEMENT_LEVEL_UZ[input.level]}) #${input.matchValue}: ${moneyUz(input.amount)}, ${ids.length} ta buyurtma yopildi`,
+      });
+    } catch (err) {
+      this.logger.warn(
+        `settlement audit log failed (level=${input.level} match=${input.matchValue}): ${(err as Error)?.message ?? String(err)}`,
       );
     }
   }
@@ -1935,6 +2091,16 @@ export class OrderSettlementService {
         this.logger.log(
           `Net-zero courier rows closed: courier=${courierId} count=${result.settled_order_ids.length}${result.allocated ? ` carry_used=${result.allocated}` : ''} by=${requesterId ?? 'unknown'}`,
         );
+        // jtB0i4y3 — sof-nol yopish ham daftar o'zgarishi: jurnalga.
+        await this.auditSettlement({
+          level: 'courier_to_branch',
+          matchValue: courierId,
+          amount: 0,
+          requesterId,
+          requestId: null,
+          result,
+          kind: 'close_zero',
+        });
       }
 
       const closedCount = result.rejected ? 0 : result.settled_order_ids.length;

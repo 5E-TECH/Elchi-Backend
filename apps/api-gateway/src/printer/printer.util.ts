@@ -17,6 +17,7 @@
 import * as fs from 'node:fs';
 import PDFDocument from 'pdfkit';
 import * as QRCode from 'qrcode';
+import { ELCHI_LOGO_PATHS, ELCHI_LOGO_VIEWBOX } from './elchi-logo';
 
 export interface PrintRow {
   id: string;
@@ -130,24 +131,12 @@ function escapeHtml(value: string): string {
     .replace(/"/g, '&quot;');
 }
 
-const BEEPOST_LOGO_PATHS = [
-  {
-    d: 'M1.38591 0.141343L6.38352 3.22731C6.65167 3.39289 6.81493 3.68563 6.81493 4.00089V18.0987C6.81493 18.4185 6.64707 18.7147 6.37285 18.8788L1.37524 21.8707C0.94461 22.1285 0.386623 21.9882 0.128938 21.5574C0.0445607 21.4164 0 21.255 0 21.0906V0.914925C0 0.412862 0.40682 0.00585938 0.908658 0.00585938C1.07722 0.00585938 1.24246 0.0527689 1.38591 0.141343Z',
-    fill: '#000',
-  },
-  {
-    d: 'M26.7836 0.137942L21.786 3.21357C21.5172 3.379 21.3534 3.67212 21.3534 3.98786V18.0989C21.3534 18.4186 21.5213 18.7148 21.7955 18.879L26.7931 21.8709C27.2237 22.1287 27.7817 21.9884 28.0394 21.5576C28.1238 21.4165 28.1683 21.2552 28.1683 21.0908V0.91224C28.1683 0.410177 27.7615 0.00317383 27.2597 0.00317383C27.0916 0.00317383 26.9268 0.0498263 26.7836 0.137942Z',
-    fill: '#000',
-  },
-  {
-    d: 'M1.38349 0.133995L14.0842 7.9218V15.4216L0 7.35155V0.909066C0 0.407003 0.40682 0 0.908657 0C1.07626 0 1.24059 0.0463746 1.38349 0.133995Z',
-    fill: '#444',
-  },
-  {
-    d: 'M26.7848 0.133995L14.0841 7.9218V15.4216L28.1683 7.35155V0.909066C28.1683 0.407003 27.7615 0 27.2597 0C27.0921 0 26.9277 0.0463746 26.7848 0.133995Z',
-    fill: '#666',
-  },
-];
+/**
+ * IgJ8bzxB — yorliq/chekdagi brend: ELCHI. Ilgari PCS'dan ko'chirilganda
+ * eski (PCS) brend matni va logotipi qolib ketgan edi — mijozga ko'rinardi.
+ * Logotip: `./elchi-logo.ts`.
+ */
+export const BRAND_TEXT = 'ELCHI';
 
 /**
  * Gainscha GS-2408D (203 DPI) — 100mm(width) × 60mm(height) landscape label.
@@ -264,11 +253,12 @@ export async function renderThermalPdf(rows: PrintRow[]): Promise<Buffer> {
     doc.rect(M, TABLE_TOP, LEFT_W, ZONE_A_H).stroke();
 
     let leftY = TABLE_TOP + 5;
-    const logoScale = 0.5;
-    const logoW = 29 * logoScale;
-    const logoH = 22 * logoScale;
+    // Logo balandligi avvalgidek 11pt (eski PCS belgisi 22 × 0.5 edi).
+    const logoH = 11;
+    const logoScale = logoH / ELCHI_LOGO_VIEWBOX.height;
+    const logoW = ELCHI_LOGO_VIEWBOX.width * logoScale;
     doc.font(FONT.bold).fontSize(11);
-    const brandText = 'BEEPOST';
+    const brandText = BRAND_TEXT;
     const brandW = doc.widthOfString(brandText);
     const totalBrandW = logoW + 3 + brandW;
     const brandStartX = M + (LEFT_W - totalBrandW) / 2;
@@ -276,7 +266,7 @@ export async function renderThermalPdf(rows: PrintRow[]): Promise<Buffer> {
     doc.save();
     doc.translate(brandStartX, leftY);
     doc.scale(logoScale);
-    for (const p of BEEPOST_LOGO_PATHS) {
+    for (const p of ELCHI_LOGO_PATHS) {
       doc.path(p.d).fill(p.fill);
     }
     doc.restore();
@@ -468,7 +458,7 @@ export async function renderThermalPdf(rows: PrintRow[]): Promise<Buffer> {
  * auto-triggers the browser print dialog on load.
  */
 export async function renderReceiptHtml(rows: PrintRow[]): Promise<string> {
-  const beepostSvg = `<svg class="logo-svg" viewBox="0 0 28.17 22" xmlns="http://www.w3.org/2000/svg">${BEEPOST_LOGO_PATHS.map(
+  const logoSvg = `<svg class="logo-svg" viewBox="0 0 ${ELCHI_LOGO_VIEWBOX.width} ${ELCHI_LOGO_VIEWBOX.height}" xmlns="http://www.w3.org/2000/svg">${ELCHI_LOGO_PATHS.map(
     (p) => `<path d="${p.d}" fill="${p.fill}"/>`,
   ).join('')}</svg>`;
 
@@ -518,8 +508,8 @@ export async function renderReceiptHtml(rows: PrintRow[]): Promise<string> {
           <div class="zone-a">
             <div class="left-panel">
               <div class="brand-row">
-                ${beepostSvg}
-                <span class="brand-text">BEEPOST</span>
+                ${logoSvg}
+                <span class="brand-text">${BRAND_TEXT}</span>
               </div>
               <div class="qr-row">
                 ${orderNumber ? `<span class="order-no-v">${orderNumber}</span>` : ''}
@@ -567,7 +557,7 @@ export async function renderReceiptHtml(rows: PrintRow[]): Promise<string> {
 <html>
 <head>
 <meta charset="utf-8">
-<title>Beepost - Chek (${rows.length} ta)</title>
+<title>Elchi - Chek (${rows.length} ta)</title>
 <style>
   *{margin:0;padding:0;box-sizing:border-box}
   @page{size:A4;margin:3mm}
@@ -584,7 +574,7 @@ export async function renderReceiptHtml(rows: PrintRow[]): Promise<string> {
   .zone-a{display:flex;border-bottom:0.5px solid #333}
   .left-panel{width:24mm;flex-shrink:0;border-right:0.5px solid #333;text-align:center;padding:2px 2px;display:flex;flex-direction:column;align-items:center;gap:2px}
   .brand-row{display:flex;align-items:center;justify-content:center;gap:2px}
-  .logo-svg{width:12px;height:9px;flex-shrink:0}
+  .logo-svg{width:11px;height:10px;flex-shrink:0}
   .brand-text{font-size:9px;font-weight:bold;letter-spacing:0.3px}
   .qr{width:17mm;height:17mm;display:block}
   .qr-row{display:flex;align-items:center;justify-content:center;gap:1px}

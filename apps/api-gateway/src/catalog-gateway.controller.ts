@@ -68,6 +68,64 @@ const PRODUCT_READ_ROLES: string[] = [
   RoleEnum.MARKET,
 ];
 
+/**
+ * tsEevElW: bitta mahsulot (GET /product/:id) — market operatori ham o'qiydi
+ * (frontend tahrirlash oynasi shu marshrutdan o'qiydi), lekin FAQAT o'zi
+ * biriktirilgan marketning mahsulotini (`findById` dagi egalik tekshiruvi).
+ * Umumiy ro'yxat (GET /product) operatorga OCHILMAYDI — u `my-products` dan.
+ */
+const PRODUCT_DETAIL_ROLES: string[] = [
+  ...PRODUCT_READ_ROLES,
+  RoleEnum.MARKET_OPERATOR,
+];
+
+/**
+ * 3qDsJpfW: HTTP ro'yxatlarida `limit` ning yuqori chegarasi — order-service
+ * AI katalog yuklashi (`CATALOG_LOAD_LIMIT = 500`) bilan bir xil. Berilmasa
+ * catalog-service sukuti (`page = 1`, `limit = 10`) qoladi.
+ */
+export const PRODUCT_LIST_MAX_LIMIT = 500;
+
+/** Musbat butun son yoki `undefined` (bo'sh / noto'g'ri qiymat — sukut). */
+const toPositiveInt = (value?: string): number | undefined => {
+  if (value === undefined || value === null) return undefined;
+  const text = String(value).trim();
+  if (!text) return undefined;
+  const parsed = Number(text);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
+};
+
+/**
+ * 3qDsJpfW: `catalog.product.find_all` so'rovi — GET /product, GET
+ * /product/my-products va GET /product/market/:marketId UCHALASI shu
+ * yerdan quriladi. Ilgari my-products va market/:marketId search/page/limit
+ * ni umuman uzatmasdi: server sukuti `limit = 10` bilan 11-mahsulot hech
+ * qachon ko'rinmasdi va qidiruv ishlamasdi.
+ */
+export function buildProductListQuery(
+  userId: string | undefined,
+  search?: string,
+  page?: string,
+  limit?: string,
+): {
+  user_id: string | undefined;
+  search: string | undefined;
+  page: number | undefined;
+  limit: number | undefined;
+} {
+  const parsedLimit = toPositiveInt(limit);
+  const trimmedSearch = typeof search === 'string' ? search.trim() : '';
+  return {
+    user_id: userId,
+    search: trimmedSearch || undefined,
+    page: toPositiveInt(page),
+    limit:
+      parsedLimit === undefined
+        ? undefined
+        : Math.min(parsedLimit, PRODUCT_LIST_MAX_LIMIT),
+  };
+}
+
 @ApiTags('Products')
 @Controller('product')
 export class CatalogGatewayController {
@@ -82,7 +140,76 @@ export class CatalogGatewayController {
   constructor(
     @Inject('CATALOG') private readonly catalogClient: ClientProxy,
     @Inject('FILE') private readonly fileClient: ClientProxy,
+    // tsEevElW: market operatorining biriktirilgan marketi (`user.market_id`).
+    @Inject('IDENTITY') private readonly identityClient?: ClientProxy,
   ) {}
+
+  private hasRole(user: JwtUser | undefined, role: string): boolean {
+    return (user?.roles ?? []).some(
+      (item) =>
+        String(item ?? '')
+          .trim()
+          .toLowerCase() === role,
+    );
+  }
+
+  /**
+   * tsEevElW: so'rovchi MARKET_OPERATOR (market/admin/superadmin emas) —
+   * katalogda o'zi biriktirilgan market nomidan ishlaydi.
+   */
+  private isMarketOperatorRequester(user?: JwtUser): boolean {
+    return (
+      this.hasRole(user, RoleEnum.MARKET_OPERATOR) &&
+      !this.hasRole(user, RoleEnum.MARKET) &&
+      !this.hasRole(user, RoleEnum.SUPERADMIN) &&
+      !this.hasRole(user, RoleEnum.ADMIN)
+    );
+  }
+
+  /**
+   * tsEevElW: market operatori biriktirilgan market id'si — identity
+   * `user.market_id` (order-gateway `resolveMarketOperatorMarketId` bilan bir
+   * xil manba; BeePost product.service.ts:66-74). Topilmasa yoki identity
+   * javob bermasa — '' (chaqiruvchi rad etadi, fail-closed).
+   */
+  private async resolveOperatorMarketId(user: JwtUser): Promise<string> {
+    if (!this.identityClient) {
+      return '';
+    }
+    const profile: unknown = await firstValueFrom(
+      this.identityClient
+        .send({ cmd: 'identity.user.find_by_id' }, { id: user?.sub })
+        .pipe(timeout(8000)),
+    ).catch(() => null);
+    const raw = (profile as { data?: { market_id?: unknown } } | null)?.data
+      ?.market_id;
+    return typeof raw === 'string' || typeof raw === 'number'
+      ? String(raw).trim()
+      : '';
+  }
+
+  /** tsEevElW: biriktirilmagan operator — tushunarli 400 (TC4). */
+  private async requireOperatorMarketId(user: JwtUser): Promise<string> {
+    const marketId = await this.resolveOperatorMarketId(user);
+    if (!marketId) {
+      throw new BadRequestException(
+        "Operator hech qaysi marketga biriktirilmagan — mahsulot katalogi bilan ishlab bo'lmaydi",
+      );
+    }
+    return marketId;
+  }
+
+  /**
+   * tsEevElW: "o'z marketi" — MARKET uchun token `sub`, MARKET_OPERATOR uchun
+   * biriktirilgan market (yo'q bo'lsa 400). my-products va PATCH my/:id shu
+   * id bilan cheklanadi.
+   */
+  private async resolveOwnMarketId(user: JwtUser): Promise<string> {
+    if (this.isMarketOperatorRequester(user)) {
+      return this.requireOperatorMarketId(user);
+    }
+    return String(user?.sub ?? '').trim();
+  }
 
   private buildPublicFileUrl(req: HttpRequestLike, key: string): string {
     const forwardedProto = req?.headers?.['x-forwarded-proto'];
@@ -155,6 +282,8 @@ export class CatalogGatewayController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(
     RoleEnum.MARKET,
+    // tsEevElW: market operatori o'z marketiga mahsulot qo'shadi.
+    RoleEnum.MARKET_OPERATOR,
     RoleEnum.ADMIN,
     RoleEnum.SUPERADMIN,
     RoleEnum.REGISTRATOR,
@@ -192,6 +321,10 @@ export class CatalogGatewayController {
 
     if (roles.includes(RoleEnum.MARKET)) {
       marketId = req.user.sub;
+    } else if (this.isMarketOperatorRequester(req.user)) {
+      // tsEevElW: tanadagi market_id E'TIBORSIZ — mahsulot doim operator
+      // biriktirilgan marketga yoziladi; biriktirilmagan bo'lsa 400.
+      marketId = await this.requireOperatorMarketId(req.user);
     } else if (
       roles.includes(RoleEnum.ADMIN) ||
       roles.includes(RoleEnum.SUPERADMIN) ||
@@ -277,14 +410,7 @@ export class CatalogGatewayController {
     return this.catalogClient
       .send(
         { cmd: 'catalog.product.find_all' },
-        {
-          query: {
-            user_id: resolvedUserId,
-            search,
-            page: page ? Number(page) : undefined,
-            limit: limit ? Number(limit) : undefined,
-          },
-        },
+        { query: buildProductListQuery(resolvedUserId, search, page, limit) },
       )
       .pipe(timeout(8000));
   }
@@ -301,32 +427,60 @@ export class CatalogGatewayController {
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Get products by market id' })
   @ApiParam({ name: 'marketId', description: 'Market ID (id)' })
-  getByMarketId(@Param('marketId') marketId: string) {
+  @ApiQuery({ name: 'search', required: false, type: String })
+  @ApiQuery({ name: 'page', required: false, type: Number, example: 1 })
+  @ApiQuery({ name: 'limit', required: false, type: Number, example: 10 })
+  getByMarketId(
+    @Param('marketId') marketId: string,
+    @Query('search') search?: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
     return this.catalogClient
       .send(
         { cmd: 'catalog.product.find_all' },
-        { query: { user_id: marketId } },
+        { query: buildProductListQuery(marketId, search, page, limit) },
       )
       .pipe(timeout(8000));
   }
 
   @Get('my-products')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.MARKET)
+  @Roles(RoleEnum.MARKET, RoleEnum.MARKET_OPERATOR)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Get my products (market role)' })
-  getMyProducts(@Req() req: { user: JwtUser }) {
-    return this.catalogClient
-      .send(
-        { cmd: 'catalog.product.find_all' },
-        { query: { user_id: req.user.sub } },
-      )
-      .pipe(timeout(8000));
+  @ApiOperation({
+    summary: 'Get my products (market / market_operator)',
+    description:
+      "Market — o'z mahsulotlari; market operatori — biriktirilgan marketining mahsulotlari (biriktirilmagan bo'lsa 400). search/page/limit qo'llab-quvvatlanadi.",
+  })
+  @ApiQuery({ name: 'search', required: false, type: String })
+  @ApiQuery({ name: 'page', required: false, type: Number, example: 1 })
+  @ApiQuery({ name: 'limit', required: false, type: Number, example: 10 })
+  async getMyProducts(
+    @Req() req: { user: JwtUser },
+    @Query('search') search?: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
+    const ownMarketId = await this.resolveOwnMarketId(req.user);
+    return firstValueFrom(
+      this.catalogClient
+        .send(
+          { cmd: 'catalog.product.find_all' },
+          { query: buildProductListQuery(ownMarketId, search, page, limit) },
+        )
+        .pipe(timeout(8000)),
+    ).catch((error: unknown) => {
+      if (error instanceof TimeoutError) {
+        throw new GatewayTimeoutException('Catalog service response timeout');
+      }
+      throw error;
+    });
   }
 
   @Get(':id')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(...PRODUCT_READ_ROLES)
+  @Roles(...PRODUCT_DETAIL_ROLES)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Get product by ID' })
   @ApiParam({ name: 'id', description: 'Product ID (id)' })
@@ -353,17 +507,19 @@ export class CatalogGatewayController {
         : null;
     const product =
       body && body.data && typeof body.data === 'object' ? body.data : body;
-    if (
-      this.isMarketOnlyRequester(req?.user) &&
-      product &&
-      typeof product === 'object'
-    ) {
+    const isMarket = this.isMarketOnlyRequester(req?.user);
+    const isOperator = !isMarket && this.isMarketOperatorRequester(req?.user);
+    if ((isMarket || isOperator) && product && typeof product === 'object') {
       const rawOwner = (product as { user_id?: unknown }).user_id;
       const ownerId =
         typeof rawOwner === 'string' || typeof rawOwner === 'number'
           ? String(rawOwner).trim()
           : '';
-      if (!ownerId || ownerId !== String(req?.user?.sub ?? '').trim()) {
+      // tsEevElW: operator — biriktirilgan marketi; aniqlanmasa '' → rad.
+      const ownMarketId = isOperator
+        ? await this.resolveOperatorMarketId(req?.user as JwtUser)
+        : String(req?.user?.sub ?? '').trim();
+      if (!ownerId || !ownMarketId || ownerId !== ownMarketId) {
         throw new ForbiddenException(
           "Market faqat o'z mahsulotini ko'ra oladi",
         );
@@ -447,9 +603,13 @@ export class CatalogGatewayController {
 
   @Patch('my/:id')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.MARKET)
+  @Roles(RoleEnum.MARKET, RoleEnum.MARKET_OPERATOR)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Update own product (market)' })
+  @ApiOperation({
+    summary: 'Update own product (market / market_operator)',
+    description:
+      "Market — o'z mahsuloti; market operatori — biriktirilgan marketining mahsuloti. Begona mahsulot — 403.",
+  })
   @ApiConsumes('multipart/form-data')
   @ApiParam({ name: 'id', description: 'Product ID (id)' })
   @ApiBody({ type: UpdateProductRequestDto })
@@ -472,6 +632,11 @@ export class CatalogGatewayController {
     @Body() dto: UpdateProductRequestDto,
     @Req() req: { user: JwtUser },
   ) {
+    // tsEevElW: egalik — o'z marketi (operator uchun biriktirilgan market;
+    // biriktirilmagan bo'lsa 400). Rasm yuklashdan OLDIN aniqlanadi.
+    const ownMarketId = await this.resolveOwnMarketId(req.user);
+    const isOperator = this.isMarketOperatorRequester(req.user);
+
     let imageUrl = dto.image_url;
     if (file) {
       imageUrl = await this.uploadImageAndResolveUrl(
@@ -487,7 +652,20 @@ export class CatalogGatewayController {
     return this.catalogClient
       .send(
         { cmd: 'catalog.product.update_own' },
-        { id, user_id: req.user.sub, dto: { ...safeDto, image_url: imageUrl } },
+        {
+          id,
+          user_id: ownMarketId,
+          dto: { ...safeDto, image_url: imageUrl },
+          // Activity log aktyori — operator o'zi (market emas).
+          ...(isOperator
+            ? {
+                actor: {
+                  id: String(req.user.sub),
+                  role: RoleEnum.MARKET_OPERATOR,
+                },
+              }
+            : {}),
+        },
       )
       .pipe(timeout(8000));
   }

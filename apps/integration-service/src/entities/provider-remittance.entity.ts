@@ -1,6 +1,12 @@
 import { Column, Entity, Index } from 'typeorm';
 import { BaseEntity } from '@app/common';
 
+/** DxdZFdIk — remittance holati (o'chirish yo'q, faqat bekor qilish). */
+export enum RemittanceStatus {
+  ACTIVE = 'active',
+  CANCELLED = 'cancelled',
+}
+
 /**
  * A remittance: a payment the provider sent to Elchi to settle outstanding COD
  * receivables. Creating one settles a set of PENDING receivables (explicit
@@ -30,6 +36,36 @@ export class ProviderRemittance extends BaseEntity {
   @Column({ type: 'int', default: 0 })
   settled_count!: number;
 
+  /**
+   * utIffRFx (migratsiya 080) — yopilgan qarz yig'indisi va sig'magan qoldiq
+   * (`amount − settled_amount`). NULL — migratsiyadan oldingi yozuv.
+   */
+  @Column({ type: 'numeric', precision: 14, scale: 2, nullable: true })
+  settled_amount!: string | null;
+
+  @Column({ type: 'numeric', precision: 14, scale: 2, nullable: true })
+  unapplied_amount!: string | null;
+
   @Column({ type: 'bigint', nullable: true })
   created_by!: string | null;
+
+  /** DxdZFdIk (migratsiya 081) — 'active' | 'cancelled'. */
+  @Column({ type: 'varchar', length: 16, default: RemittanceStatus.ACTIVE })
+  status!: RemittanceStatus;
+
+  @Column({ type: 'timestamptz', nullable: true })
+  cancelled_at!: Date | null;
+
+  @Column({ type: 'bigint', nullable: true })
+  cancelled_by!: string | null;
+
+  @Column({ type: 'text', nullable: true })
+  cancel_reason!: string | null;
+
+  /**
+   * DxdZFdIk — summa MAIN kassaga kirim bo'lib yozilganmi. NULL —
+   * migratsiyadan oldingi yozuv (noma'lum).
+   */
+  @Column({ type: 'boolean', nullable: true })
+  cashbox_posted!: boolean | null;
 }

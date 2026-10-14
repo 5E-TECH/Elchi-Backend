@@ -77,6 +77,17 @@ export class AudienceSegmentDto {
   @IsInt()
   @Min(1)
   min_orders?: number;
+
+  /** (ebSV5oyP) Buyurtmalar soni oralig'i "dan–gacha" — yuqori chegara. */
+  @ApiPropertyOptional({
+    example: 10,
+    description: "Ko'pi bilan shuncha buyurtma",
+  })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  max_orders?: number;
 }
 
 /** (W8aerwL6) Nishon maydonlari — dispatch, preview va kampaniya uchun umumiy. */
@@ -142,6 +153,41 @@ export class AudiencePreviewRequestDto extends AudienceTargetFieldsDto {
   @ArrayMaxSize(5000)
   @Matches(/^\d+$/, { each: true })
   recipient_ids?: string[];
+
+  /** (ebSV5oyP #6) 20 tagacha namuna, telefon MASKALANGAN (`***7434`). */
+  @ApiPropertyOptional({
+    example: true,
+    description: '`sample`: ≤20 qator { id, role, phone: "***7434" }',
+  })
+  @IsOptional()
+  @Transform(toBool)
+  @IsBoolean()
+  with_sample?: boolean;
+
+  /** (ebSV5oyP #7) Saqlangan segment sharti bilan sanash. */
+  @ApiPropertyOptional({ example: '3' })
+  @IsOptional()
+  @IsString()
+  @Matches(/^\d+$/)
+  audience_segment_id?: string;
+}
+
+/**
+ * `POST /notifications/audience/segments` (ebSV5oyP #7) — nishon SHARTI
+ * nom bilan saqlanadi (aniq id'lar/telefonlar emas).
+ */
+export class CreateAudienceSegmentRequestDto extends AudienceTargetFieldsDto {
+  @ApiProperty({ example: 'Toshkent — faol mijozlar (3–10 buyurtma)' })
+  @IsString()
+  @MaxLength(120)
+  @Matches(/\S/)
+  name!: string;
+
+  @ApiPropertyOptional({ example: 'Oxirgi oyda buyurtma berganlar' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  description?: string;
 }
 
 const CAMPAIGN_CHANNELS = [

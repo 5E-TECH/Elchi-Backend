@@ -187,7 +187,12 @@ describe('vpKijXce — investor gateway: /investors/me va requester', () => {
     expect(res.status).toBe(200);
     expect(lastCall()).toEqual([
       { cmd: 'investor.dashboard' },
-      { investor_id: '26', query: { months: 6 } },
+      {
+        investor_id: '26',
+        query: { months: 6 },
+        // GADgsW5G: o'qish marshrutlari ham requester uzatadi.
+        requester: { id: '2', roles: ['superadmin'] },
+      },
     ]);
   });
 

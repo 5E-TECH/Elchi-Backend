@@ -3,8 +3,10 @@ import {
   Logger,
   OnModuleDestroy,
   OnModuleInit,
+  Optional,
 } from '@nestjs/common';
 import { NotificationServiceService } from './notification-service.service';
+import { TelegramDmService } from './telegram/telegram-dm.service';
 
 interface TelegramApiResponse<T> {
   ok: boolean;
@@ -26,6 +28,13 @@ interface TelegramUpdate {
  */
 const GROUP_ID_COMMAND_RE = /^\/id(?:@\w+)?$/i;
 
+/**
+ * (rCFZAmOz #1) `t.me/<bot>?start=<token>` → bot `/start <token>` oladi.
+ * Token — profildagi «Telegram'ni ulash» havolasi (telegram-link.ts).
+ */
+const START_LINK_RE = /^\/start(?:@\w+)?\s+([A-Za-z0-9_-]{1,64})$/;
+const STOP_COMMAND_RE = /^\/stop(?:@\w+)?$/i;
+
 @Injectable()
 export class NotificationBotUpdateService
   implements OnModuleInit, OnModuleDestroy
@@ -38,6 +47,8 @@ export class NotificationBotUpdateService
 
   constructor(
     private readonly notificationService: NotificationServiceService,
+    /** (rCFZAmOz) shaxsiy chatni akkauntga ulash. */
+    @Optional() private readonly telegramDm?: TelegramDmService,
   ) {
     this.token = process.env.TELEGRAM_BOT_TOKEN ?? '';
   }
@@ -121,6 +132,28 @@ export class NotificationBotUpdateService
       await this.notificationService.sendDirectToGroup({
         group_id: groupId,
         message: `Group ID: ${groupId}`,
+      });
+      return;
+    }
+
+    // (rCFZAmOz #1) Shaxsiy ulash — FAQAT private chatda (guruhga ulanmaydi).
+    const startLink = START_LINK_RE.exec(text);
+    const isPrivate = update?.message?.chat?.type === 'private';
+    if (this.telegramDm && (startLink || STOP_COMMAND_RE.test(text))) {
+      if (!isPrivate) {
+        await this.notificationService.sendDirectToGroup({
+          group_id: groupId,
+          message:
+            'Shaxsiy bildirishnomalarni ulash faqat bot bilan SHAXSIY chatda ishlaydi.',
+        });
+        return;
+      }
+      const result = startLink
+        ? await this.telegramDm.bindFromStart(startLink[1], groupId)
+        : await this.telegramDm.unbind(groupId);
+      await this.notificationService.sendDirectToGroup({
+        group_id: groupId,
+        message: result.message,
       });
       return;
     }

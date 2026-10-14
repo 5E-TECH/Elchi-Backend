@@ -26,6 +26,14 @@ export type ActivityActionType = string;
 
 export const ACTIVITY_LOG_SERVICE_NAME = 'ACTIVITY_LOG_SERVICE_NAME';
 
+/**
+ * (y8CxCtcK / fQi6NNUL) Faoliyat jurnali "Kim" ustuni uchun ICHKI identity
+ * batch: rol filtrisiz (superadmin, mijoz ham), faqat `{ id, name, role }` —
+ * telefon QAYTMAYDI. Faqat gateway audit enrichment chaqiradi; HTTP orqali
+ * ochilmaydi. `identity.user.find_all` (GET /users) rol filtri o'zgarmagan.
+ */
+export const USER_SUMMARY_BY_IDS_PATTERN = 'identity.user.summary_by_ids';
+
 export interface ActivityLogInput {
   entity_type: string;
   entity_id: string | number;
@@ -80,6 +88,19 @@ export interface ActivityLogQuery {
   search?: string;
   page?: number;
   limit?: number;
+  /**
+   * 8eYmt4NV — KEYSET kursor (gateway k-way merge). `before_ts` —
+   * mikrosekundli UTC satr (qatorning `cursor_ts` i). `before_id` berilsa
+   * `(created_at, id) < (before_ts, before_id)`; berilmasa
+   * `before_inclusive` ga qarab `<=` yoki `<`.
+   */
+  before_ts?: string;
+  before_id?: string;
+  before_inclusive?: boolean;
+  /** Faqat `{ id, cursor_ts }` (chuqur ofsetni topish uchun, `limit` ≤ 10 100). */
+  keys_only?: boolean;
+  /** `false` — COUNT so'rovi bajarilmaydi (`meta.total` taxminiy). */
+  with_total?: boolean;
 }
 
 export interface ActivityLogPage<T = unknown> {

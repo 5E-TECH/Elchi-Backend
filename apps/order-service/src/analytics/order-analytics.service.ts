@@ -2113,6 +2113,183 @@ export class OrderAnalyticsService {
     };
   }
 
+  // -------------------------------------------------------------------
+  // (W20LoskP) "Buyurtmalar hisoboti" agregatlari — SQL GROUP BY.
+  //
+  // ⚠️ ILGARI analytics-service davrdagi barcha buyurtmalarni `order.find_all`
+  // orqali sahifalab tortardi (100 sahifa × 100 = eng ko'pi 10 000 qator,
+  // 100 ta ketma-ket RMQ) va viloyat/mahsulotni JS'da sanardi — 10 000 dan
+  // keyin natija JIM kesilardi. Status taqsimoti esa qo'lda yozilgan 9 ta
+  // status bo'yicha 9 ta alohida `count` edi: CREATED / WAITING /
+  // WAITING_CUSTOMER / RETURNED_TO_MARKET umuman yo'q edi (18 ta 'waiting'
+  // diagrammadan yo'qolardi, yig'indi `acceptedCount` dan kam chiqardi).
+  //
+  // Tanlov `countDashboardAcceptedOrders` (overview.acceptedCount) bilan AYNI:
+  // o'chirilmagan, `createdAt` oynada (Toshkent kuni, `analyticsDateRange`,
+  // 366 kunlik chegara), ixtiyoriy filial doirasi — shuning uchun status
+  // taqsimotining yig'indisi `acceptedCount` ga teng.
+  // -------------------------------------------------------------------
+
+  private orderReportBaseQuery(
+    range: { start: Date; end: Date },
+    branchId?: string,
+  ) {
+    return this.applyAnalyticsBranchScope(
+      this.orderRepo
+        .createQueryBuilder('o')
+        .where('o.isDeleted = :isDeleted', { isDeleted: false })
+        .andWhere('o.createdAt BETWEEN :start AND :end', {
+          start: range.start,
+          end: range.end,
+        }),
+      branchId,
+    );
+  }
+
+  /** (W20LoskP) Har bir `Order_status` kaliti (0 bo'lsa ham) — bitta GROUP BY. */
+  async getOrderStatusDistribution(
+    startDate?: string,
+    endDate?: string,
+    branchId?: string,
+  ) {
+    const range = this.analyticsDateRange(startDate, endDate);
+    const rows = await this.orderReportBaseQuery(range, branchId)
+      .select('o.status', 'status')
+      .addSelect('COUNT(*)', 'count')
+      .groupBy('o.status')
+      .getRawMany<{ status: string; count: string | number | null }>();
+
+    const distribution: Record<string, number> = {};
+    for (const status of Object.values(Order_status)) {
+      distribution[status] = 0;
+    }
+    let total = 0;
+    for (const row of rows) {
+      const count = Number(row?.count ?? 0);
+      if (!Number.isFinite(count)) continue;
+      const key = String(row?.status ?? 'unknown');
+      distribution[key] = (distribution[key] ?? 0) + count;
+      total += count;
+    }
+    return { distribution, total, applied_range: range.applied_range };
+  }
+
+  /** (W20LoskP) Viloyat kesimi — `GROUP BY region_id`, cheklovsiz to'liq. */
+  async getOrdersByRegion(
+    startDate?: string,
+    endDate?: string,
+    branchId?: string,
+  ) {
+    const range = this.analyticsDateRange(startDate, endDate);
+    const rows = await this.orderReportBaseQuery(range, branchId)
+      .select('o.region_id', 'region_id')
+      .addSelect('COUNT(*)', 'total_orders')
+      .groupBy('o.region_id')
+      .getRawMany<{
+        region_id: string | number | null;
+        total_orders: string | number | null;
+      }>();
+
+    // Eski JS hisobi bilan bir xil shakl: region yo'q → 'unknown'.
+    const items = rows
+      .map((row) => ({
+        region_id:
+          row?.region_id === null || row?.region_id === undefined
+            ? 'unknown'
+            : String(row.region_id),
+        total_orders: Number(row?.total_orders ?? 0) || 0,
+      }))
+      .sort(
+        (a, b) =>
+          b.total_orders - a.total_orders ||
+          a.region_id.localeCompare(b.region_id, 'en', { numeric: true }),
+      );
+    const total = items.reduce((sum, row) => sum + row.total_orders, 0);
+    return { items, total, applied_range: range.applied_range };
+  }
+
+  /**
+   * (W20LoskP) Eng ko'p buyurtma qilingan mahsulotlar — `order_items` ⋈
+   * `orders`, `SUM(quantity) GROUP BY product_id`. Eski JS hisobi bilan bir
+   * xil: davrda yaratilgan barcha (o'chirilmagan) buyurtmalar, katalogsiz
+   * qator (`product_id` NULL) → 'unknown'.
+   */
+  async getTopOrderedProducts(
+    startDate?: string,
+    endDate?: string,
+    branchId?: string,
+    limit = 10,
+  ) {
+    const range = this.analyticsDateRange(startDate, endDate);
+    const parsedLimit = Math.floor(Number(limit));
+    const safeLimit =
+      Number.isFinite(parsedLimit) && parsedLimit > 0
+        ? Math.min(parsedLimit, 50)
+        : 10;
+    const rows = await this.orderReportBaseQuery(range, branchId)
+      .innerJoin('o.items', 'oi')
+      .select('oi.product_id', 'product_id')
+      .addSelect('COALESCE(SUM(oi.quantity), 0)', 'total_quantity')
+      .groupBy('oi.product_id')
+      .orderBy('total_quantity', 'DESC')
+      .addOrderBy('oi.product_id', 'ASC', 'NULLS LAST')
+      .limit(safeLimit)
+      .getRawMany<{
+        product_id: string | number | null;
+        total_quantity: string | number | null;
+      }>();
+
+    return {
+      items: rows.map((row) => ({
+        product_id:
+          row?.product_id === null || row?.product_id === undefined
+            ? 'unknown'
+            : String(row.product_id),
+        total_quantity: Number(row?.total_quantity ?? 0) || 0,
+      })),
+      limit: safeLimit,
+      applied_range: range.applied_range,
+    };
+  }
+
+  /**
+   * (Celz3rKJ) "AI xarajat" panelidagi buyurtma manbasi uchun: davrda
+   * yaratilgan buyurtmalar `source` bo'yicha (tanlov `acceptedCount` bilan
+   * AYNI). `external` — `findAll` dagi kabi `source = external` YOKI
+   * `external_id` bor; `branch` — filial yaratgan; qolgani `internal`
+   * (market/operator, shu jumladan AI orqali yaratilganlar).
+   */
+  async getOrderSourceDistribution(
+    startDate?: string,
+    endDate?: string,
+    branchId?: string,
+  ) {
+    const range = this.analyticsDateRange(startDate, endDate);
+    const bucket = `CASE
+        WHEN o.source = 'branch' THEN 'branch'
+        WHEN o.source = 'external' OR o.external_id IS NOT NULL THEN 'external'
+        ELSE 'internal'
+      END`;
+    const rows = await this.orderReportBaseQuery(range, branchId)
+      .select(bucket, 'bucket')
+      .addSelect('COUNT(*)', 'count')
+      .groupBy('bucket')
+      .getRawMany<{ bucket: string; count: string | number | null }>();
+
+    const counts = { internal: 0, external: 0, branch: 0 };
+    for (const row of rows) {
+      const key = String(row?.bucket) as keyof typeof counts;
+      if (key in counts) {
+        counts[key] += Number(row?.count ?? 0) || 0;
+      }
+    }
+    return {
+      ...counts,
+      total: counts.internal + counts.external + counts.branch,
+      applied_range: range.applied_range,
+    };
+  }
+
   /**
    * ⚠️ "ID RO'YXATI" NAQSHI OLIB TASHLANDI (Scale 1-bosqich).
    *

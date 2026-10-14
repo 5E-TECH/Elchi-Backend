@@ -328,12 +328,14 @@ describe('fix3 A2 — /product o‘qish (C11, CODE-08)', () => {
         RolesGuard,
       );
       const roles = Reflect.getMetadata(ROLES_KEY, handler) as string[];
+      // tsEevElW: market_operator faqat /product/:id da (o'z marketi bilan
+      // cheklangan — catalog-gateway.products-e.spec.ts); umumiy ro'yxat yopiq.
       for (const denied of [
         'courier',
         'customer',
         'investor',
         'operator',
-        'market_operator',
+        ...(name === 'findAll' ? ['market_operator'] : []),
       ]) {
         expect(roles).not.toContain(denied);
       }

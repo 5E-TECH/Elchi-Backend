@@ -972,6 +972,17 @@ export class InvestorServiceService {
       this.notFound('profit share not found');
     }
 
+    // GADgsW5G: pul aktorsiz chiqmasin. Ilgari requester yo'q bo'lsa kassa
+    // chiqimi `user_id: '0'` (mavjud bo'lmagan foydalanuvchi) nomidan
+    // qilinardi va audit izida user_id = null qolardi. Endi aktor (musbat
+    // butun users.id) bo'lmasa — 403, kassaga ham, qatorga ham tegilmaydi.
+    const actorId = this.normalizeLinkedUserId(requester?.id);
+    if (!actorId) {
+      this.forbidden(
+        "Foyda to'lovi uchun foydalanuvchi (requester) aniqlanmadi — pul aktorsiz chiqmaydi",
+      );
+    }
+
     /**
      * ⚠️ PUL KASSADAN YECHILADI (audit M6).
      *
@@ -992,11 +1003,11 @@ export class InvestorServiceService {
         this.financeClient,
         { cmd: 'finance.cashbox.spend' },
         {
-          user_id: String(requester?.id ?? '0'),
+          user_id: actorId,
           cashbox_type: Cashbox_type.MAIN,
           amount: Number(row.amount),
           comment: `Investor #${String(row.investor_id)} foyda to'lovi`,
-          created_by: requester?.id ? String(requester.id) : null,
+          created_by: actorId,
           dedup_epoch: dedupToken,
         },
       );
@@ -1008,7 +1019,7 @@ export class InvestorServiceService {
           source_type: FinancialSource_type.MANUAL_EXPENSE,
           related_user_id: String(row.investor_id),
           comment: `Investor #${String(row.investor_id)} foyda to'lovi`,
-          created_by: requester?.id ? String(requester.id) : null,
+          created_by: actorId,
           dedup_key: dedupToken,
         },
       ).catch(() => undefined);

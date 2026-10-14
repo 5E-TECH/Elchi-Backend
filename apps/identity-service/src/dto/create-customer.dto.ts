@@ -1,4 +1,5 @@
 import {
+  IsIn,
   IsNotEmpty,
   IsNumberString,
   IsOptional,
@@ -43,4 +44,13 @@ export class CreateCustomerDto {
   @IsOptional()
   @IsString({ message: "Manzil matn formatida bo'lishi kerak" })
   address?: string;
+
+  /**
+   * (C4R3YyvH) Mijoz tili — SMS/bildirishnoma shu tilda. Berilmasa 'uz'
+   * (yangi mijoz) yoki o'zgarishsiz (mavjud mijoz).
+   */
+  @ApiPropertyOptional({ example: 'uz', enum: ['uz', 'ru', 'en'] })
+  @IsOptional()
+  @IsIn(['uz', 'ru', 'en'])
+  language?: 'uz' | 'ru' | 'en';
 }

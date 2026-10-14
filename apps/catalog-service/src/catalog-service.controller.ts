@@ -84,11 +84,17 @@ export class CatalogServiceController {
       id: string;
       user_id: string;
       dto: { name?: string; image_url?: string };
+      actor?: { id?: string; role?: string } | null;
     },
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
-      this.catalogService.updateOwn(data.id, data.user_id, data.dto),
+      this.catalogService.updateOwn(
+        data.id,
+        data.user_id,
+        data.dto,
+        data.actor,
+      ),
     );
   }
 

@@ -85,6 +85,9 @@ export class SmsController {
       credential_secret_configured: this.accounts.cipherConfigured,
       used_today: await this.gate.usedToday(),
       daily_cap: this.config.dailyCap,
+      // (rkz0yBxr) OTP — alohida oqim, alohida kvota.
+      otp_used_today: await this.gate.usedToday(undefined, undefined, 'otp'),
+      otp_daily_cap: this.config.otpDailyCap,
       max_fanout: this.config.maxFanout,
       quiet_hours: this.config.quietHours,
       tariffs: {

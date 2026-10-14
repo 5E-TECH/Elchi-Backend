@@ -710,6 +710,46 @@ export class IntegrationServiceController {
     );
   }
 
+  /** DxdZFdIk — kargo to'lovlari ro'yxati (sana filtri, paginatsiya). */
+  @MessagePattern({ cmd: 'integration.remittance.find_all' })
+  listRemittances(
+    @Payload()
+    data: {
+      integration_id: string;
+      status?: string;
+      from_date?: string;
+      to_date?: string;
+      page?: number;
+      limit?: number;
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.integrationService.listRemittances(data),
+    );
+  }
+
+  /**
+   * DxdZFdIk — kargo to'lovini bekor qilish: status=cancelled, qarz
+   * qatorlari PENDING, MAIN kassadan teskari chiqim (bir marta).
+   */
+  @MessagePattern({ cmd: 'integration.remittance.cancel' })
+  cancelRemittance(
+    @Payload()
+    data: {
+      integration_id: string;
+      remittance_id: string;
+      reason?: string | null;
+      reverse_cashbox?: boolean | null;
+      cancelled_by?: string | null;
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.integrationService.cancelRemittance(data),
+    );
+  }
+
   // --- Activity log (audit) read fan-in ---
   @MessagePattern({ cmd: 'integration.activity_log.find_all' })
   activityLogFindAll(@Payload() data: any, @Ctx() context: RmqContext) {

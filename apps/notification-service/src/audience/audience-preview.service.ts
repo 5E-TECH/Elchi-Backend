@@ -3,6 +3,7 @@ import {
   Inject,
   Injectable,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { ClientProxy, RpcException } from '@nestjs/microservices';
@@ -13,6 +14,8 @@ import { successRes } from '../../../../libs/common/helpers/response';
 import { PushSubscription } from '../entities/push-subscription.entity';
 import { MAX_FANOUT } from '../notification-inbox.service';
 import { campaignMaxFanout } from '../campaign/campaign-limits';
+import { maskPhone } from '../sms/sms-phone.util';
+import { NotificationAudienceSegment } from './audience-segment.entity';
 import {
   AUDIENCE_RESOLVE_PATTERN,
   AudienceTargetInput,
@@ -25,12 +28,25 @@ import {
 
 /** Preview sahifasi — identity'ning AUDIENCE_MAX_LIMIT i. */
 const PREVIEW_PAGE_SIZE = 1000;
+/** (ebSV5oyP #6) "Namunani ko'rish" — ko'pi bilan shuncha qator. */
+export const AUDIENCE_SAMPLE_SIZE = 20;
 const PUSH_COUNT_CHUNK = 1000;
 const ID_RE = /^\d{1,19}$/;
 
 export interface AudiencePreviewInput extends AudienceTargetInput {
   recipient_id?: string | null;
   recipient_ids?: string[] | null;
+  /** (ebSV5oyP #6) 20 tagacha namuna — telefon MASKALANGAN (`***7434`). */
+  with_sample?: boolean | null;
+  /** (ebSV5oyP #7) Saqlangan segment — sharti shu yerdan olinadi. */
+  audience_segment_id?: string | null;
+}
+
+/** Namuna qatori: telefon faqat maska — to'liq raqam javobga CHIQMAYDI. */
+export interface AudienceSampleItem {
+  id: string;
+  role: string | null;
+  phone: string | null;
 }
 
 interface Collected {
@@ -60,7 +76,61 @@ export class AudiencePreviewService {
     @InjectRepository(PushSubscription)
     private readonly pushRepo: Repository<PushSubscription>,
     private readonly config: ConfigService,
+    /** (ebSV5oyP) saqlangan segmentlar — preview `audience_segment_id`. */
+    @Optional()
+    @InjectRepository(NotificationAudienceSegment)
+    private readonly segments?: Repository<NotificationAudienceSegment>,
   ) {}
+
+  /** (ebSV5oyP #7) `audience_segment_id` → saqlangan shart (aks holda kirish). */
+  private async withSavedSegment(
+    input: AudiencePreviewInput,
+  ): Promise<AudiencePreviewInput> {
+    const raw = input?.audience_segment_id;
+    if (raw === undefined || raw === null || raw === '') return input;
+    const id = String(raw).trim();
+    if (!ID_RE.test(id))
+      throw new BadRequestException("audience_segment_id noto'g'ri");
+    const saved = this.segments
+      ? await this.segments.findOne({ where: { id, isDeleted: false } })
+      : null;
+    if (!saved) throw new NotFoundException('Segment topilmadi');
+    return { ...saved.audience, with_sample: input.with_sample ?? null };
+  }
+
+  /**
+   * (ebSV5oyP #6) 20 tagacha namuna. identity'dan `contact` maydonlari
+   * olinadi, lekin javobga faqat rol va MASKALANGAN telefon chiqadi —
+   * to'liq raqam ham, ism ham tarmoq javobida yo'q.
+   */
+  private async sample(
+    target: IdentityAudienceTarget | null,
+    explicit: string[],
+  ): Promise<AudienceSampleItem[]> {
+    const page = target
+      ? await this.page({
+          ...target,
+          limit: AUDIENCE_SAMPLE_SIZE,
+          with_total: false,
+          fields: 'contact',
+        })
+      : explicit.length
+        ? await this.page({
+            user_ids: explicit.slice(0, AUDIENCE_SAMPLE_SIZE),
+            limit: AUDIENCE_SAMPLE_SIZE,
+            with_total: false,
+            fields: 'contact',
+          })
+        : { items: [] };
+    return page.items.slice(0, AUDIENCE_SAMPLE_SIZE).map((item) => {
+      const phone = (item as { phone?: unknown }).phone;
+      return {
+        id: String(item.id),
+        role: item.role ?? null,
+        phone: typeof phone === 'string' && phone ? maskPhone(phone) : null,
+      };
+    });
+  }
 
   private get campaignMax(): number {
     return campaignMaxFanout(
@@ -111,8 +181,9 @@ export class AudiencePreviewService {
     return ids;
   }
 
-  async preview(input: AudiencePreviewInput = {}) {
+  async preview(rawInput: AudiencePreviewInput = {}) {
     try {
+      const input = await this.withSavedSegment(rawInput ?? {});
       const target = buildAudienceTarget(input ?? {});
       const explicit = this.explicitIds(input ?? {});
       if (!target && !explicit.length) {
@@ -138,6 +209,9 @@ export class AudiencePreviewService {
         if (targetTotal + explicit.length > campaignMax) {
           // Juda katta — hammasini yig'maymiz; identity statistikasi aniq.
           return this.respond({
+            sample: input.with_sample
+              ? await this.sample(target, explicit)
+              : undefined,
             exact: false,
             total: targetTotal + explicit.length,
             byRole: targetStats?.by_role ?? {},
@@ -204,6 +278,9 @@ export class AudiencePreviewService {
       const push = await this.countPushEligible([...collected.keys()]);
 
       return this.respond({
+        sample: input.with_sample
+          ? await this.sample(target, explicit)
+          : undefined,
         exact: true,
         total: collected.size + notFound,
         byRole,
@@ -235,6 +312,7 @@ export class AudiencePreviewService {
   }
 
   private respond(args: {
+    sample?: AudienceSampleItem[];
     exact: boolean;
     total: number;
     byRole: Record<string, number>;
@@ -252,6 +330,8 @@ export class AudiencePreviewService {
     if (args.notFound) warnings.push('recipients_not_found');
     if (total > MAX_FANOUT) warnings.push('over_dispatch_cap_use_campaign');
     if (total > args.campaignMax) warnings.push('over_campaign_cap');
+    // (ebSV5oyP) 0 ta — xom BadRequest emas, tushunarli holat.
+    if (total === 0) warnings.push('empty_audience');
     return successRes(
       {
         exact: args.exact,
@@ -273,6 +353,12 @@ export class AudiencePreviewService {
         // POST /notifications/campaigns (asinxron) shu hajmga ruxsat beradimi.
         campaign_allowed: total > 0 && total <= args.campaignMax,
         warnings,
+        ...(total === 0
+          ? {
+              hint: "Tanlangan filtrlar bo'yicha qabul qiluvchi topilmadi — filtrlarni kengaytiring",
+            }
+          : {}),
+        ...(args.sample ? { sample: args.sample } : {}),
         notes: {
           sms: 'SMS bu oqimda yoqilmagan (alohida SMS epik) — son faqat kanonik telefonlilar',
           telegram: "Market guruhi relay'i — qabul qiluvchi bo'yicha emas",

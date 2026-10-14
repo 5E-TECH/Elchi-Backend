@@ -1,4 +1,4 @@
-import { Inject, Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import { ClientProxy, RpcException } from '@nestjs/microservices';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
@@ -13,10 +13,12 @@ import { RefreshDto } from './dto/refresh.dto';
 import {
   ActivityAction,
   ActivityDescribeUz,
+  ActivityLogMaintenanceService,
   ActivityLogService,
   Status,
   computeHmacSignature,
   normalizeUzPhone,
+  resolveLoginDedupWindowMs,
   rmqSend,
 } from '@app/common';
 import { errorRes, successRes } from '../../../../libs/common/helpers/response';
@@ -33,6 +35,13 @@ export class AuthService {
     private readonly bcryptEncryption: BcryptEncryption,
     @Inject('BRANCH') private readonly branchClient: ClientProxy,
     private readonly activityLog: ActivityLogService,
+    /**
+     * i6Nyedea — takroriy login birlashtiriladi (yangi qator o'rniga
+     * `metadata.count` oshadi). Ixtiyoriy: eski spec'lar servisni 6 argument
+     * bilan quradi — u holda avvalgidek har login yangi qator.
+     */
+    @Optional()
+    private readonly activityLogMaintenance?: ActivityLogMaintenanceService,
   ) {}
 
   /**
@@ -158,7 +167,7 @@ export class AuthService {
   async sessionForUser(user: User, method: 'password' | 'otp' = 'password') {
     const tokens = await this.issueTokens(user);
     await this.saveRefreshToken(user.id, tokens.refreshToken);
-    await this.activityLog.log({
+    const loginEntry = {
       entity_type: 'Auth',
       entity_id: user.id,
       action: ActivityAction.LOGIN,
@@ -172,7 +181,17 @@ export class AuthService {
         role: user.role,
         method,
       }),
-    });
+    };
+    // i6Nyedea — AYNI qurilma/IP'dan N daqiqa ichidagi takroriy login yangi
+    // qator yaratmaydi (`ACTIVITY_LOG_LOGIN_DEDUP_MINUTES`, sukut 10; 0 — o'chiq).
+    if (this.activityLogMaintenance) {
+      await this.activityLogMaintenance.logCoalesced(
+        loginEntry,
+        resolveLoginDedupWindowMs(),
+      );
+    } else {
+      await this.activityLog.log(loginEntry);
+    }
     return {
       statusCode: 200,
       message: 'success',
@@ -367,6 +386,10 @@ export class AuthService {
     return {
       sub: user.id,
       username: user.username,
+      // fQi6NNUL / y8CxCtcK — gateway faoliyat jurnali aktyorining ismi
+      // (`requestContext.setActor` → `activity_logs.user_name`). Faqat
+      // foydalanuvchining o'z ismi; telefon/boshqa PII tokenga QO'SHILMAYDI.
+      name: user.name ?? null,
       roles: [user.role],
       branch_id: branchId,
     };

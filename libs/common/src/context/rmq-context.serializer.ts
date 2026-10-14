@@ -1,9 +1,12 @@
 import { RmqRecord, Serializer } from '@nestjs/microservices';
 import {
+  AuditActor,
   AuditContext,
   RequestContextStore,
+  pickAuditActor,
   pickAuditContext,
   requestContext,
+  sanitizeAuditActor,
   sanitizeAuditContext,
 } from './request-context';
 
@@ -27,6 +30,13 @@ import {
  */
 export const RMQ_TRACE_HEADER = 'x-trace-id';
 export const RMQ_AUDIT_CTX_HEADER = 'x-audit-ctx';
+/**
+ * (fQi6NNUL / y8CxCtcK) Aktyor: `{"userId","userName","userRole"}` — qabul
+ * qiluvchi `ActivityLogService.log()` `user_name`/`user_role` ni shundan
+ * to'ldiradi. Faqat ichki RMQ; tashqi kirish yo'q (gateway HTTP so'rovi
+ * sarlavhasidan EMAS, JWT tekshiruvidan keyin qo'yiladi).
+ */
+export const RMQ_AUDIT_ACTOR_HEADER = 'x-audit-actor';
 
 /** RMQ orqali kelgan trace id chegarasi (gateway ham 64 gacha qabul qiladi). */
 const TRACE_HEADER_MAX = 64;
@@ -42,6 +52,10 @@ export function buildRmqContextHeaders(
   const audit = pickAuditContext(store);
   if (Object.keys(audit).length > 0) {
     headers[RMQ_AUDIT_CTX_HEADER] = JSON.stringify(audit);
+  }
+  const actor = pickAuditActor(store);
+  if (actor.userId) {
+    headers[RMQ_AUDIT_ACTOR_HEADER] = JSON.stringify(actor);
   }
   return headers;
 }
@@ -93,6 +107,23 @@ export function auditContextFromRmqHeaders(
   if (!raw) return {};
   try {
     return sanitizeAuditContext(JSON.parse(raw));
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * `x-audit-actor` sarlavhasi → tozalangan aktyor (fQi6NNUL). Id bo'lmasa —
+ * `{}` (ismni id'siz qabul qilmaymiz: qator kimga tegishli ekani noma'lum).
+ */
+export function auditActorFromRmqHeaders(
+  headers: Record<string, unknown>,
+): AuditActor {
+  const raw = headerString(headers[RMQ_AUDIT_ACTOR_HEADER]);
+  if (!raw) return {};
+  try {
+    const actor = sanitizeAuditActor(JSON.parse(raw));
+    return actor.userId ? actor : {};
   } catch {
     return {};
   }

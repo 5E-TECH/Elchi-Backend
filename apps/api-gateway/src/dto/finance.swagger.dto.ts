@@ -287,10 +287,19 @@ export class FindHistoryQueryDto {
 }
 
 export class OpenShiftRequestDto {
-  @ApiProperty({ example: '15' })
+  /**
+   * (kfdfYDik) E'tiborga olinmaydi — smenani ochgan odam JWT'dan
+   * (`req.user.sub`) olinadi. Eski frontend yuborgani uchun qabul qilinadi.
+   */
+  @ApiPropertyOptional({
+    example: '15',
+    description: "E'tiborga olinmaydi — JWT foydalanuvchisi yoziladi",
+    deprecated: true,
+  })
+  @IsOptional()
   @IsString()
   @Matches(/^\d+$/)
-  opened_by!: string;
+  opened_by?: string;
 
   @ApiPropertyOptional({ example: 100000 })
   @IsOptional()
@@ -323,21 +332,43 @@ export class CloseShiftRequestDto {
   @Matches(/^\d+$/)
   opened_by?: string;
 
-  @ApiProperty({ example: '15' })
+  /**
+   * (kfdfYDik) E'tiborga olinmaydi — smenani yopgan odam JWT'dan
+   * (`req.user.sub`) olinadi. Ilgari MAJBURIY edi va `{comment}` bilan
+   * yopish har doim 400 qaytarardi.
+   */
+  @ApiPropertyOptional({
+    example: '15',
+    description: "E'tiborga olinmaydi — JWT foydalanuvchisi yoziladi",
+    deprecated: true,
+  })
+  @IsOptional()
   @IsString()
   @Matches(/^\d+$/)
-  closed_by!: string;
+  closed_by?: string;
 
-  @ApiPropertyOptional({ example: 120000 })
+  // (QTCUUgjA) Sanab topshirilgan summa: yuborilsa `discrepancy_cash/card`
+  // (= sanalgan − kutilgan) hisoblanadi; yuborilmasa discrepancy NULL.
+  @ApiPropertyOptional({
+    example: 120000,
+    description:
+      'Sanab topshirilgan naqd. Yuborilsa discrepancy_cash = shu − expected_balance_cash',
+  })
   @IsOptional()
   @Type(() => Number)
   @IsNumber()
+  @Min(0)
   closing_balance_cash?: number;
 
-  @ApiPropertyOptional({ example: 50000 })
+  @ApiPropertyOptional({
+    example: 50000,
+    description:
+      "Sanab topshirilgan karta qoldig'i. Yuborilsa discrepancy_card hisoblanadi",
+  })
   @IsOptional()
   @Type(() => Number)
   @IsNumber()
+  @Min(0)
   closing_balance_card?: number;
 
   @ApiPropertyOptional({ example: 'Smena yopildi' })
@@ -502,6 +533,18 @@ export class PaymentToMarketRequestDto {
   @IsOptional()
   @IsString()
   comment?: string;
+
+  // (3PE0B03q) Ilgari DTO'da yo'q edi → "property source_user_id should
+  // not exist" (400) va to'lov o'tmasdi.
+  @ApiPropertyOptional({
+    example: '7',
+    description:
+      "O'tkazma manbasi (click): o'tkazmani qilgan xodim ID si. Faqat audit — tarixda `transfer_source_user_id` bo'lib saqlanadi; pul baribir asosiy kassaning balance_card idan yechiladi. Naqd (cash) to'lovda e'tiborga olinmaydi.",
+  })
+  @IsOptional()
+  @IsString()
+  @Matches(/^\d+$/)
+  source_user_id?: string;
 }
 
 export class PaymentBranchToMainRequestDto {
@@ -534,6 +577,18 @@ export class PaymentBranchToMainRequestDto {
   @IsOptional()
   @IsString()
   comment?: string;
+
+  // (3PE0B03q) Ilgari DTO'da yo'q edi → 400 "property source_user_id should
+  // not exist".
+  @ApiPropertyOptional({
+    example: '7',
+    description:
+      "O'tkazma manbasi (click): o'tkazmani qilgan xodim ID si. Faqat audit — tarixda `transfer_source_user_id` bo'lib saqlanadi; pul filial kassasining va asosiy kassaning balance_card idan harakatlanadi. Naqd (cash) to'lovda e'tiborga olinmaydi.",
+  })
+  @IsOptional()
+  @IsString()
+  @Matches(/^\d+$/)
+  source_user_id?: string;
 }
 
 export class MainCashboxFilterQueryDto {

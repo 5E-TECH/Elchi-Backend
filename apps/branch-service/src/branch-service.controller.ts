@@ -448,15 +448,32 @@ export class BranchServiceController {
   }
 
   // --- BranchConfig ---
+  // RlMb3F26: gateway set/update'ni `{ requester, dto: { branch_id, config_key,
+  // ...dto } }` qilib yuboradi, get/find_one/delete esa tekis
+  // `{ branch_id, config_key }`. Avval faqat yuqori daraja o'qilardi —
+  // `data.dto.branch_id` ko'rinmay, POST/PATCH har doim 400 'branch_id
+  // majburiy' qaytarardi. Ikkala shakl ham (va eski `id`/`key` aliaslari) qabul
+  // qilinadi; `dto` ichidagi qiymat ustun.
+  private configPayload(data: Record<string, any>): {
+    branch_id?: string;
+    config_key?: string;
+    config_value?: Record<string, unknown> | null;
+  } {
+    const dto: Record<string, any> =
+      data?.dto && typeof data.dto === 'object' ? data.dto : {};
+    return {
+      branch_id: dto.branch_id ?? data?.branch_id ?? data?.id,
+      config_key: dto.config_key ?? data?.config_key ?? data?.key,
+      config_value:
+        'config_value' in dto ? dto.config_value : data?.config_value,
+    };
+  }
+
   @MessagePattern({ cmd: 'branch.config.set' })
   setConfig(@Payload() data: Record<string, any>, @Ctx() context: RmqContext) {
     return this.executeAndAck(context, () =>
       this.branchService.setBranchConfig(
-        {
-          branch_id: data?.branch_id ?? data?.id,
-          config_key: data?.dto?.config_key ?? data?.config_key,
-          config_value: data?.dto?.config_value ?? data?.config_value,
-        },
+        this.configPayload(data),
         this.getRequester(data),
       ),
     );
@@ -470,11 +487,7 @@ export class BranchServiceController {
   ) {
     return this.executeAndAck(context, () =>
       this.branchService.setBranchConfig(
-        {
-          branch_id: data?.branch_id ?? data?.id,
-          config_key: data?.dto?.config_key ?? data?.config_key,
-          config_value: data?.dto?.config_value ?? data?.config_value,
-        },
+        this.configPayload(data),
         this.getRequester(data),
       ),
     );
@@ -484,7 +497,7 @@ export class BranchServiceController {
   getConfig(@Payload() data: Record<string, any>, @Ctx() context: RmqContext) {
     return this.executeAndAck(context, () =>
       this.branchService.getBranchConfig(
-        data?.branch_id ?? data?.id,
+        this.configPayload(data).branch_id as string,
         this.getRequester(data),
       ),
     );
@@ -498,7 +511,7 @@ export class BranchServiceController {
   ) {
     return this.executeAndAck(context, () =>
       this.branchService.getBranchConfig(
-        data?.branch_id ?? data?.id,
+        this.configPayload(data).branch_id as string,
         this.getRequester(data),
       ),
     );
@@ -509,12 +522,10 @@ export class BranchServiceController {
     @Payload() data: Record<string, any>,
     @Ctx() context: RmqContext,
   ) {
+    const { branch_id, config_key } = this.configPayload(data);
     return this.executeAndAck(context, () =>
       this.branchService.getBranchConfigByKey(
-        {
-          branch_id: data?.branch_id ?? data?.id,
-          config_key: data?.config_key ?? data?.key,
-        },
+        { branch_id, config_key },
         this.getRequester(data),
       ),
     );
@@ -527,11 +538,7 @@ export class BranchServiceController {
   ) {
     return this.executeAndAck(context, () =>
       this.branchService.updateBranchConfig(
-        {
-          branch_id: data?.branch_id ?? data?.id,
-          config_key: data?.config_key ?? data?.key,
-          config_value: data?.dto?.config_value ?? data?.config_value,
-        },
+        this.configPayload(data),
         this.getRequester(data),
       ),
     );
@@ -542,12 +549,10 @@ export class BranchServiceController {
     @Payload() data: Record<string, any>,
     @Ctx() context: RmqContext,
   ) {
+    const { branch_id, config_key } = this.configPayload(data);
     return this.executeAndAck(context, () =>
       this.branchService.deleteBranchConfig(
-        {
-          branch_id: data?.branch_id ?? data?.id,
-          config_key: data?.config_key ?? data?.key,
-        },
+        { branch_id, config_key },
         this.getRequester(data),
       ),
     );

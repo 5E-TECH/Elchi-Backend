@@ -319,9 +319,11 @@ export class CatalogServiceService {
     id: string,
     userId: string,
     dto: { name?: string; image_url?: string },
+    // tsEevElW: market operatori tahrirlasa — aktyor operatorning o'zi.
+    actor?: { id?: string; role?: string } | null,
   ) {
     const product = await this.findByIdEntity(id);
-    if (product.user_id !== userId) {
+    if (!userId || product.user_id !== String(userId)) {
       this.forbidden('You can update only your own product');
     }
 
@@ -342,9 +344,10 @@ export class CatalogServiceService {
       old_value: before,
       new_value: { name: saved.name, image_url: saved.image_url },
       action: ActivityAction.UPDATED,
-      // The market updating its OWN product IS the actor.
-      user_id: String(userId),
-      user_role: 'market',
+      // The market updating its OWN product IS the actor (tsEevElW: yoki
+      // shu marketning operatori).
+      user_id: actor?.id ? String(actor.id) : String(userId),
+      user_role: actor?.role ? String(actor.role) : 'market',
       metadata: { user_id: saved.user_id },
     });
 

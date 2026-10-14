@@ -110,7 +110,12 @@ describe('SmsOutboxScheduler', () => {
       row('1', { message_class: 'promo', customer_id: '7' }),
     ]);
     consent.partition.mockResolvedValue({ allowed: [], blocked: [{}] });
-    const scheduler = make();
+    // Tungi taqiq oynasi o'chiq (start = end): test soatga bog'liq bo'lmasin —
+    // 18:00–09:00 da reklama rozilik tekshiruvigacha yetmay suriladi.
+    const scheduler = make({
+      SMS_ENABLED: 'true',
+      NOTIF_PROMO_QUIET_HOURS: '00:00-00:00',
+    });
     await scheduler.tick();
     expect(adapter.send).not.toHaveBeenCalled();
     expect(outbox.markFailed).toHaveBeenCalledWith(

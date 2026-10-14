@@ -37,6 +37,7 @@ export const SEGMENT_KEYS = [
   'last_order_from',
   'last_order_to',
   'min_orders',
+  'max_orders',
 ] as const;
 
 export interface AudienceSegmentInput {
@@ -46,6 +47,8 @@ export interface AudienceSegmentInput {
   last_order_from?: string | null;
   last_order_to?: string | null;
   min_orders?: number | null;
+  /** (ebSV5oyP) Buyurtmalar soni "gacha". */
+  max_orders?: number | null;
 }
 
 /** Rol/broadcast/mijoz nishoni (aniq `recipient_ids` bundan tashqari). */

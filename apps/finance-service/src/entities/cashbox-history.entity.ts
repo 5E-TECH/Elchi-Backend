@@ -41,6 +41,16 @@ export class CashboxHistory extends BaseEntity {
   @Column({ type: 'bigint', nullable: true })
   source_user_id!: string | null;
 
+  /**
+   * (3PE0B03q) "O'tkazma manbasi" — o'tkazmani (click) qaysi xodim kartasi
+   * orqali qilgani. Faqat audit ma'lumoti: pul baribir kassaning yagona
+   * `balance_card` idan yechiladi (shaxs bo'yicha karta qoldig'i yo'q).
+   * `source_user_id` dan ALOHIDA: u kontragent (market / filial / kuryer) va
+   * tarix filtrlari (`?source_user_id=`) shunga tayanadi.
+   */
+  @Column({ type: 'bigint', nullable: true })
+  transfer_source_user_id!: string | null;
+
   // numeric(20,2) — exact fixed-point money (see Cashbox entity note).
   @Column({
     type: 'numeric',

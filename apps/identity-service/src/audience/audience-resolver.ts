@@ -77,6 +77,8 @@ export interface AudienceSegment {
   last_order_from?: string;
   last_order_to?: string;
   min_orders?: number;
+  /** (ebSV5oyP) Buyurtmalar soni oralig'i "dan–gacha" — yuqori chegara. */
+  max_orders?: number;
 }
 
 export type AudienceFields = 'minimal' | 'contact';
@@ -155,6 +157,7 @@ export function normalizeAudienceSegment(raw: unknown): AudienceSegment | null {
     'last_order_from',
     'last_order_to',
     'min_orders',
+    'max_orders',
   ]);
   for (const key of Object.keys(input)) {
     if (!allowed.has(key)) badRequest(`segment.${key} — noma'lum filtr`);
@@ -180,6 +183,33 @@ export function normalizeAudienceSegment(raw: unknown): AudienceSegment | null {
       badRequest("segment.min_orders — musbat butun son bo'lishi kerak");
     }
     segment.min_orders = minOrders;
+  }
+  if (!isBlank(input.max_orders)) {
+    const maxOrders = Number(input.max_orders);
+    if (!Number.isInteger(maxOrders) || maxOrders < 1) {
+      badRequest("segment.max_orders — musbat butun son bo'lishi kerak");
+    }
+    segment.max_orders = maxOrders;
+  }
+  // (ebSV5oyP) Teskari oraliq — validatsiya xatosi (jim 0 natija emas).
+  if (
+    segment.min_orders !== undefined &&
+    segment.max_orders !== undefined &&
+    segment.min_orders > segment.max_orders
+  ) {
+    badRequest(
+      "segment: min_orders max_orders dan katta bo'lmasligi kerak (teskari oraliq)",
+    );
+  }
+  if (
+    segment.last_order_from &&
+    segment.last_order_to &&
+    new Date(segment.last_order_from).getTime() >
+      new Date(segment.last_order_to).getTime()
+  ) {
+    badRequest(
+      "segment: last_order_from last_order_to dan keyin bo'lmasligi kerak (teskari sana oralig'i)",
+    );
   }
   return Object.keys(segment).length ? segment : null;
 }

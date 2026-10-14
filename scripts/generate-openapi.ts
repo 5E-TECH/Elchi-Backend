@@ -44,9 +44,13 @@ for (const [key, value] of Object.entries(ENV_DEFAULTS)) {
 
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { NestFactory } from '@nestjs/core';
+import { ModulesContainer, NestFactory } from '@nestjs/core';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { ApiGatewayModule } from '../apps/api-gateway/src/api-gateway.module';
+import {
+  attachRouteRoles,
+  collectRouteRoles,
+} from '../apps/api-gateway/src/auth/route-roles';
 
 async function main() {
   const app = await NestFactory.create(ApiGatewayModule, {
@@ -63,6 +67,24 @@ async function main() {
 
   const document = SwaggerModule.createDocument(app, config);
 
+  // lQP3ojwq / wLNccBkX: har operatsiyaga `x-roles` (gateway @Roles) —
+  // frontend ROUTE_ROLES va CI drift darvozasi shundan generatsiya qilinadi.
+  const controllers = Array.from(app.get(ModulesContainer).values()).flatMap(
+    (moduleRef) =>
+      Array.from(moduleRef.controllers.values())
+        .map((wrapper) => wrapper.metatype)
+        .filter(
+          (metatype): metatype is NonNullable<typeof metatype> =>
+            typeof metatype === 'function',
+        ),
+  );
+  const taggedOps = attachRouteRoles(
+    document as unknown as Parameters<typeof attachRouteRoles>[0],
+    collectRouteRoles(
+      controllers as Array<{ name: string; prototype: object }>,
+    ),
+  );
+
   const outPath = join(process.cwd(), 'docs', 'frontend', 'openapi.json');
   writeFileSync(outPath, JSON.stringify(document, null, 2), 'utf8');
 
@@ -73,7 +95,7 @@ async function main() {
   );
   // eslint-disable-next-line no-console
   console.log(
-    `OpenAPI written → ${outPath}\n  paths: ${pathCount}  operations: ${opCount}`,
+    `OpenAPI written → ${outPath}\n  paths: ${pathCount}  operations: ${opCount}  x-roles: ${taggedOps}`,
   );
 
   await app.close();

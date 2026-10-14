@@ -1019,6 +1019,36 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
     );
   }
 
+  /**
+   * (i75GDixP) BRANCH kassasi uchun manfiy balans ruxsati — ANIQ bayroq
+   * (`allow_negative`) bo'yicha, source_type ro'yxati bo'yicha emas.
+   *
+   * Ro'yxat (yuqoridagi `isBranchNegativeAllowedSource`) kelajakda yangi
+   * source_type qo'shilganda jimgina eskiradi va admin PATCH
+   * /finance/cashbox/balance da `source_type: correction` yuborib filial
+   * kassasini manfiyga tushira olardi. Endi:
+   *  - qo'lda oyoq (MANUAL_EXPENSE / MANUAL_INCOME) — HECH QACHON ruxsat yo'q;
+   *  - `allow_negative` boolean kelgan bo'lsa — aynan shu (order-service
+   *    outbox'i `true`, gateway va spend/fill `false` yuboradi);
+   *  - maydon umuman yo'q — faqat deploydan oldin navbatga tushgan eski
+   *    outbox qatorlari: ular poison-drop bo'lmasligi uchun eski ro'yxat.
+   */
+  private static resolveBranchNegativeOverride(dto: {
+    source_type?: Source_type;
+    allow_negative?: boolean;
+  }): boolean {
+    if (
+      dto.source_type === Source_type.MANUAL_EXPENSE ||
+      dto.source_type === Source_type.MANUAL_INCOME
+    ) {
+      return false;
+    }
+    if (typeof dto.allow_negative === 'boolean') {
+      return dto.allow_negative;
+    }
+    return FinanceServiceService.isBranchNegativeAllowedSource(dto.source_type);
+  }
+
   private updateBalancesByMethod(
     cashbox: Cashbox,
     amount: number,
@@ -1038,13 +1068,55 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
       cashbox.cashbox_type === Cashbox_type.FOR_COURIER ||
       allowNegativeOverride;
 
-    if (method === PaymentMethod.CASH) {
+    /**
+     * 1bz6tOle — to'lov usuli ANIQ tarmoqlanadi: CASH → naqd, CLICK va
+     * CLICK_TO_MARKET → karta. Ilgari "CASH bo'lmasa — karta" edi: noma'lum
+     * qiymat ham jimgina `balance_card` ga tushardi. Usul berilmagan bo'lsa —
+     * CASH (updateBalance sukuti bilan bir xil).
+     */
+    const resolvedMethod = method ?? PaymentMethod.CASH;
+    const isCardMethod =
+      resolvedMethod === PaymentMethod.CLICK ||
+      resolvedMethod === PaymentMethod.CLICK_TO_MARKET;
+    if (resolvedMethod !== PaymentMethod.CASH && !isCardMethod) {
+      throw new BadRequestException(
+        `Noma'lum to'lov usuli: ${String(resolvedMethod)}`,
+      );
+    }
+
+    /**
+     * 1bz6tOle — FOR_COURIER / FOR_MARKET kassalari fizik kassa EMAS, qarz
+     * hisobi: ularda naqd/karta ajratmasi YURITILMAYDI. Ilgari sotuv oyoqlari
+     * (usulsiz → CASH) `balance_cash` ga yozardi, CLICK bilan hisob-kitob esa
+     * `balance_card` dan yechardi — kuryer kassasi `cash = +X, card = −X`
+     * bo'lib qotib qolardi (jami 0, ilovada esa "naqd qarzingiz X").
+     *
+     * Endi qarz hisobida butun summa bitta "qarz" chelagida (`balance_cash`)
+     * turadi, `balance_card` doim 0: usuldan qat'i nazar `balance` o'zgaradi.
+     * Eski (usul bo'yicha bo'lingan) qoldiq keyingi harakatda jami saqlangan
+     * holda shu chelakka yig'iladi — `balance` o'zgarmaydi.
+     */
+    if (
+      cashbox.cashbox_type === Cashbox_type.FOR_MARKET ||
+      cashbox.cashbox_type === Cashbox_type.FOR_COURIER
+    ) {
+      cashbox.balance_cash =
+        Number(cashbox.balance_cash) +
+        Number(cashbox.balance_card) +
+        sign * amount;
+      cashbox.balance_card = 0;
+      this.normalizeBalance(cashbox);
+      return;
+    }
+
+    if (resolvedMethod === PaymentMethod.CASH) {
       const nextCash = Number(cashbox.balance_cash) + sign * amount;
       if (!allowNegativeBalance && nextCash < 0) {
         throw new BadRequestException('Insufficient cash balance');
       }
       cashbox.balance_cash = nextCash;
     } else {
+      // isCardMethod — CLICK / CLICK_TO_MARKET (boshqasi yuqorida 400).
       const nextCard = Number(cashbox.balance_card) + sign * amount;
       if (!allowNegativeBalance && nextCard < 0) {
         throw new BadRequestException('Insufficient card balance');
@@ -1248,12 +1320,27 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  async updateBalance(dto: UpdateCashboxBalanceDto) {
+  async updateBalance(
+    dto: UpdateCashboxBalanceDto,
+    /**
+     * IgR4FVsR — faqat servis ICHIDAN (spendMoney / fillTheCashbox) beriladi,
+     * RMQ payload'idan EMAS: qo'lda kirim/chiqim kassa harakati bilan AYNI
+     * tranzaksiyada P&L daftariga (`financial_balance_history`) yoziladi.
+     */
+    options?: {
+      financialLedger?: {
+        amount: number;
+        source_type: FinancialSource_type;
+        comment?: string | null;
+      };
+    },
+  ) {
     // Captured after a successful (non-idempotent) commit so we can write the
     // audit row only once the transaction is durable and the runner released.
     // Declared at method scope so the outer `finally` (a sibling of the inner
     // try) can read it.
     let auditedCashbox: Cashbox | null = null;
+    let auditedLedger: FinancialBalanceHistory | null = null;
     try {
       this.assertPositiveAmount(Number(dto.amount));
       const paymentMethod = dto.payment_method ?? PaymentMethod.CASH;
@@ -1312,20 +1399,44 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
           }
         }
 
+        // (QTCUUgjA) Qo'lda kirim/chiqim — kassada ochiq smena bo'lishi shart
+        // (darvoza yoqilgan bo'lsa). Idempotentlik tekshiruvidan KEYIN: haqiqiy
+        // takroriy so'rov smena yopilgan bo'lsa ham `idempotent` javob oladi.
+        if (dto.require_open_shift === true) {
+          await this.requireOpenShift(queryRunner.manager, cashbox);
+        }
+
+        // System sale/settlement leg: a BRANCH cashbox may go negative here
+        // (sub-share sale; HQ tops up) so the leg is never poison-dropped.
+        // Faqat TIZIM oyoqlari (audit M12, i75GDixP): ruxsat — order-service
+        // outbox'ining aniq `allow_negative` bayrog'i; menejer/adminning
+        // qo'lda chiqimi filial kassasini manfiyga tushira olmaydi.
+        const allowBranchNegative =
+          cashbox.cashbox_type === Cashbox_type.BRANCH &&
+          FinanceServiceService.resolveBranchNegativeOverride(dto);
         this.updateBalancesByMethod(
           cashbox,
           Number(dto.amount),
           dto.operation_type,
           paymentMethod,
-          // System sale/settlement leg: a BRANCH cashbox may go negative here
-          // (sub-share sale; HQ tops up) so the leg is never poison-dropped.
-          // Faqat TIZIM oyoqlari (audit M12): menejerning qo'lda chiqimi
-          // (MANUAL_EXPENSE) filial kassasini manfiyga tushira olmaydi.
-          cashbox.cashbox_type === Cashbox_type.BRANCH &&
-            FinanceServiceService.isBranchNegativeAllowedSource(
-              dto.source_type,
-            ),
+          allowBranchNegative,
         );
+        if (
+          allowBranchNegative &&
+          (Number(cashbox.balance_cash) < 0 || Number(cashbox.balance_card) < 0)
+        ) {
+          // (i75GDixP 3-band) Monitoring: tizim oyog'i filial kassasini
+          // manfiyga tushirdi — qonuniy (HQ to'ldiradi), lekin ko'rinsin.
+          this.logger.warn(
+            `BRANCH kassasi manfiy: cashbox=${String(cashbox.id)} user_id=${String(
+              cashbox.user_id,
+            )} source_type=${String(dto.source_type)} source_id=${String(
+              dto.source_id ?? '',
+            )} cash=${Number(cashbox.balance_cash)} card=${Number(
+              cashbox.balance_card,
+            )}`,
+          );
+        }
 
         const savedCashbox = await queryRunner.manager.save(cashbox);
 
@@ -1355,6 +1466,34 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
 
         const savedHistory = await queryRunner.manager.save(history);
 
+        /**
+         * IgR4FVsR — qo'lda kirim/chiqim P&L daftariga AYNI tranzaksiyada.
+         * Ilgari faqat kassa + cashbox_history o'zgarardi, `financial_balance
+         * _history` ga hech narsa tushmasdi: ijara/yoqilg'i chiqib ketsa ham
+         * "Moliyaviy balans" foydani ortiqcha ko'rsatardi. Daftar yozuvi
+         * yiqilsa kassa harakati ham rollback bo'ladi (bitta commit). Kalit —
+         * yaratilgan cashbox_history ID'si: takroriy so'rov yuqoridagi
+         * idempotentlik qisqa tutashuvida to'xtaydi, daftar ham ikki marta
+         * yozilmaydi.
+         */
+        let savedLedger: FinancialBalanceHistory | null = null;
+        if (
+          options?.financialLedger &&
+          (savedCashbox.cashbox_type === Cashbox_type.MAIN ||
+            savedCashbox.cashbox_type === Cashbox_type.BRANCH)
+        ) {
+          savedLedger = await this.appendFinancialBalanceInTx(
+            queryRunner.manager,
+            {
+              amount: Number(options.financialLedger.amount),
+              source_type: options.financialLedger.source_type,
+              dedup_key: `cashbox-history:${String(savedHistory.id)}`,
+              comment: options.financialLedger.comment ?? null,
+              created_by: dto.created_by ?? null,
+            },
+          );
+        }
+
         // (ePpLHPX2) Market/kuryer kassasiga qo'lda kirim (MANUAL_INCOME) —
         // `finance.balance_topup` (BeePost notifyBalanceTopup analogi). Faqat
         // outbox, AYNAN shu tranzaksiyada: rollback bo'lsa xabar ham yo'q.
@@ -1376,11 +1515,14 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
 
         await queryRunner.commitTransaction();
         auditedCashbox = savedCashbox;
+        auditedLedger = savedLedger;
 
         return this.successRes(
           {
             cashbox: savedCashbox,
             history: savedHistory,
+            // IgR4FVsR — qo'lda operatsiyada P&L yozuvi (aks holda kalit yo'q).
+            ...(savedLedger ? { financial_balance_entry: savedLedger } : {}),
           },
           200,
           'Cashbox balance updated',
@@ -1415,7 +1557,41 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
           },
         });
       }
+      if (auditedLedger) {
+        // IgR4FVsR — recordFinancialBalance bilan bir xil audit yozuvi.
+        await this.activityLog.log({
+          entity_type: 'FinancialBalanceHistory',
+          entity_id: auditedLedger.id,
+          action: ActivityAction.CREATED,
+          new_value: {
+            amount: Number(auditedLedger.amount),
+            balance_after: Number(auditedLedger.balance_after),
+            source_type: auditedLedger.source_type,
+          },
+          user_id: dto.created_by ? String(dto.created_by) : null,
+          metadata: { order_id: null },
+        });
+      }
     }
+  }
+
+  /**
+   * IgR4FVsR — `updateBalance` + (ixtiyoriy) shu tranzaksiyadagi P&L yozuvi.
+   * Faqat servis ichidagi qo'lda kirim/chiqim yo'llari uchun.
+   */
+  private updateBalanceWithLedger(
+    ledger:
+      | {
+          amount: number;
+          source_type: FinancialSource_type;
+          comment?: string | null;
+        }
+      | undefined,
+    dto: UpdateCashboxBalanceDto,
+  ) {
+    return ledger
+      ? this.updateBalance(dto, { financialLedger: ledger })
+      : this.updateBalance(dto);
   }
 
   async findAllHistory(dto: FindHistoryDto) {
@@ -1650,9 +1826,140 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  // ==================== SMENA (kfdfYDik / QTCUUgjA) ====================
+
+  static readonly SHIFT_REQUIRED_MESSAGE =
+    'Smena ochilmagan! Bu operatsiyani bajarish uchun avval asosiy kassada smenani oching.';
+
+  /**
+   * (QTCUUgjA) Smena darvozasi yoqilganmi — env `FINANCE_REQUIRE_OPEN_SHIFT`
+   * (`true` / `1` / `on` / `yes`).
+   *
+   * SUKUT — O'CHIQ: prod'da hozir birorta ham smena ochilmagan va barcha
+   * kassalar smenasiz ishlaydi; darvoza to'satdan yoqilsa kuryerdan qabul,
+   * marketga to'lov, qo'lda kirim/chiqim — hammasi birdan 400 bo'lardi.
+   * Frontend "Smenani ochish" oqimi chiqib, operatorlar o'rgangach yoqiladi.
+   * Har chaqiruvda o'qiladi — env'ni o'zgartirib servisni qayta ishga
+   * tushirish kifoya.
+   */
+  static isShiftRequired(): boolean {
+    const raw = String(process.env.FINANCE_REQUIRE_OPEN_SHIFT ?? '')
+      .trim()
+      .toLowerCase();
+    return raw === 'true' || raw === '1' || raw === 'on' || raw === 'yes';
+  }
+
+  /** Smena kassasi turi: '0' — markaziy MAIN, aks holda filial (BRANCH). */
+  private static shiftCashboxType(cashboxUserId: string): Cashbox_type {
+    return cashboxUserId === FinanceServiceService.MAIN_CASHBOX_USER_ID
+      ? Cashbox_type.MAIN
+      : Cashbox_type.BRANCH;
+  }
+
+  private static roundMoney(value: number): number {
+    return Math.round(value * 100) / 100;
+  }
+
+  private findOpenShiftForCashbox(
+    manager: EntityManager,
+    cashboxUserId: string,
+    lockMode?: 'pessimistic_read' | 'pessimistic_write',
+  ): Promise<Shift | null> {
+    return manager.findOne(Shift, {
+      where: {
+        cashbox_user_id: cashboxUserId,
+        status: ShiftStatus.OPEN,
+        isDeleted: false,
+      },
+      order: { opened_at: 'DESC' },
+      ...(lockMode ? { lock: { mode: lockMode } } : {}),
+    });
+  }
+
+  /**
+   * (QTCUUgjA) Pul operatsiyasi oldidan: shu kassada OCHIQ smena bormi.
+   *
+   * BeePost'dagi `requireOpenShift()` ARGUMENTSIZ — u yerda butun tizimda
+   * bitta global smena. Elchi'da esa smena KASSAGA biriktirilgan
+   * (`shifts.cashbox_user_id`, audit M7), shu bois tekshiruv aniq kassa
+   * bo'yicha: `requireOpenShift(manager, kassa)`.
+   *
+   * Hozircha faqat MAIN kassa darvozalanadi: gateway'da smenani faqat MAIN
+   * uchun ochish mumkin (superadmin/admin/registrator, menejer ocha olmaydi).
+   * BRANCH kassasini darvozaga qo'yish menejerlarni butunlay to'xtatardi —
+   * filial smenasi alohida mahsulot qarori.
+   *
+   * Qulf: smena qatori FOR SHARE bilan o'qiladi. `closeShift` (FOR UPDATE)
+   * jarayondagi operatsiyalar commit bo'lishini kutadi, yopilishdan keyin
+   * kelgan operatsiya esa yangilangan qatorni (status = closed) ko'rib rad
+   * etiladi — birorta pul harakati smena hisobotidan tashqarida qolmaydi.
+   *
+   * ⚠️ `updateBalance` ning RMQ yo'liga (order-service outbox — sotuv,
+   * bekor qilish) QO'YILMAYDI: aks holda sotuvlar smenaga bog'liq bo'lib
+   * qolardi va outbox oyoqlari poison-drop bo'lardi.
+   */
+  private async requireOpenShift(
+    manager: EntityManager,
+    target: { user_id: string; cashbox_type?: Cashbox_type | null },
+  ): Promise<void> {
+    if (!FinanceServiceService.isShiftRequired()) {
+      return;
+    }
+    if ((target.cashbox_type ?? Cashbox_type.MAIN) !== Cashbox_type.MAIN) {
+      return;
+    }
+    const shift = await this.findOpenShiftForCashbox(
+      manager,
+      String(target.user_id ?? FinanceServiceService.MAIN_CASHBOX_USER_ID),
+      'pessimistic_read',
+    );
+    if (!shift) {
+      throw new BadRequestException(
+        FinanceServiceService.SHIFT_REQUIRED_MESSAGE,
+      );
+    }
+  }
+
+  /**
+   * (kfdfYDik) GET /finance/shift/current — kassaning (sukut MAIN) joriy ochiq
+   * smenasi + darvoza yoqilganmi (`required`). Frontend "Smena ochiq" banneri
+   * va "Smenani oching" holati shundan quriladi.
+   */
+  async currentShift(dto?: { cashbox_user_id?: string }) {
+    try {
+      const cashboxUserId = String(
+        dto?.cashbox_user_id ?? FinanceServiceService.MAIN_CASHBOX_USER_ID,
+      );
+      this.assertBigIntId(cashboxUserId, 'cashbox_user_id');
+      const shift = await this.shiftRepo.findOne({
+        where: {
+          cashbox_user_id: cashboxUserId,
+          status: ShiftStatus.OPEN,
+          isDeleted: false,
+        },
+        order: { opened_at: 'DESC' },
+      });
+      return this.successRes(
+        {
+          shift: shift ?? null,
+          required: FinanceServiceService.isShiftRequired(),
+          cashbox_user_id: cashboxUserId,
+        },
+        200,
+        shift ? 'Current shift' : "Ochiq smena yo'q",
+      );
+    } catch (error) {
+      this.toRpcError(error);
+    }
+  }
+
   async openShift(dto: OpenShiftDto) {
     try {
       this.assertBigIntId(dto.opened_by, 'opened_by');
+      const cashboxUserId = String(
+        dto.cashbox_user_id ?? FinanceServiceService.MAIN_CASHBOX_USER_ID,
+      );
+      this.assertBigIntId(cashboxUserId, 'cashbox_user_id');
 
       // Optimistic pre-check produces a friendlier error message, but is racy.
       // The partial unique index `IDX_SHIFT_OPENED_BY_OPEN_UNIQUE` is the
@@ -1668,46 +1975,89 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         );
       }
 
-      const shift = this.shiftRepo.create({
-        opened_by: dto.opened_by,
-        opened_at: new Date(),
-        status: ShiftStatus.OPEN,
-        opening_balance_cash: Number(dto.opening_balance_cash ?? 0),
-        opening_balance_card: Number(dto.opening_balance_card ?? 0),
-        comment: dto.comment ?? null,
-        // Smena qaysi kassaga tegishli (audit M7). Berilmasa — markaziy MAIN
-        // kassa: smena ochish huquqi bor rollar (superadmin/admin/registrator)
-        // aynan shu kassani boshqaradi.
-        cashbox_user_id: String(
-          dto.cashbox_user_id ?? FinanceServiceService.MAIN_CASHBOX_USER_ID,
-        ),
-      });
-
+      const queryRunner = this.dataSource.createQueryRunner();
+      await queryRunner.connect();
+      await queryRunner.startTransaction();
+      let saved: Shift;
       try {
-        const saved = await this.shiftRepo.save(shift);
-        await this.activityLog.log({
-          entity_type: 'Shift',
-          entity_id: saved.id,
-          action: ActivityAction.CREATED,
-          new_value: {
-            opened_by: saved.opened_by,
-            opened_at: saved.opened_at,
+        /**
+         * (QTCUUgjA) Kassa qatori qulflanadi (FOR UPDATE):
+         *  1) bitta kassada bir vaqtda IKKI smena ochilmasin — aks holda ikki
+         *     smena oynasi bir xil operatsiyalarni hisoblab, kamomad nazorati
+         *     ma'nosiz bo'lardi (BeePost: global yagona ochiq smena);
+         *  2) ochilish qoldig'i aynan shu lahzadagi JONLI qoldiq bo'lsin
+         *     (BeePost naqshi) — operator qiymat yubormasa avval 0 yozilardi va
+         *     yopishdagi "kutilgan qoldiq" noto'g'ri chiqardi.
+         */
+        const cashbox = await queryRunner.manager.findOne(Cashbox, {
+          where: {
+            user_id: cashboxUserId,
+            cashbox_type: FinanceServiceService.shiftCashboxType(cashboxUserId),
+            isDeleted: false,
           },
-          user_id: dto.opened_by ? String(dto.opened_by) : null,
-          metadata: { opened_by: dto.opened_by },
+          lock: { mode: 'pessimistic_write' },
         });
-        return this.successRes(saved, 201, 'Shift opened');
-      } catch (insertError) {
+        const openForCashbox = await this.findOpenShiftForCashbox(
+          queryRunner.manager,
+          cashboxUserId,
+        );
+        if (openForCashbox) {
+          throw new BadRequestException(
+            `Bu kassada allaqachon ochiq smena bor (smena #${String(
+              openForCashbox.id,
+            )}) — avval uni yoping`,
+          );
+        }
+
+        const shift = queryRunner.manager.create(Shift, {
+          opened_by: dto.opened_by,
+          opened_at: new Date(),
+          status: ShiftStatus.OPEN,
+          opening_balance_cash:
+            dto.opening_balance_cash != null
+              ? Number(dto.opening_balance_cash)
+              : Number(cashbox?.balance_cash ?? 0),
+          opening_balance_card:
+            dto.opening_balance_card != null
+              ? Number(dto.opening_balance_card)
+              : Number(cashbox?.balance_card ?? 0),
+          comment: dto.comment ?? null,
+          // Smena qaysi kassaga tegishli (audit M7). Berilmasa — markaziy MAIN
+          // kassa: smena ochish huquqi bor rollar (superadmin/admin/registrator)
+          // aynan shu kassani boshqaradi.
+          cashbox_user_id: cashboxUserId,
+        });
+        saved = await queryRunner.manager.save(shift);
+        await queryRunner.commitTransaction();
+      } catch (txError) {
+        await queryRunner.rollbackTransaction();
         if (
-          insertError instanceof QueryFailedError &&
-          (insertError as QueryFailedError & { code?: string }).code === '23505'
+          txError instanceof QueryFailedError &&
+          (txError as QueryFailedError & { code?: string }).code === '23505'
         ) {
           throw new BadRequestException(
             'Sizda allaqachon ochiq smena bor — avval uni yoping',
           );
         }
-        throw insertError;
+        throw txError;
+      } finally {
+        await queryRunner.release();
       }
+
+      await this.activityLog.log({
+        entity_type: 'Shift',
+        entity_id: saved.id,
+        action: ActivityAction.CREATED,
+        new_value: {
+          opened_by: saved.opened_by,
+          opened_at: saved.opened_at,
+          opening_balance_cash: saved.opening_balance_cash,
+          opening_balance_card: saved.opening_balance_card,
+        },
+        user_id: dto.opened_by ? String(dto.opened_by) : null,
+        metadata: { opened_by: dto.opened_by, cashbox_user_id: cashboxUserId },
+      });
+      return this.successRes(saved, 201, 'Shift opened');
     } catch (error) {
       this.toRpcError(error);
     }
@@ -1717,6 +2067,25 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
     try {
       this.assertBigIntId(dto.closed_by, 'closed_by');
 
+      const countedCash =
+        dto.closing_balance_cash != null
+          ? Number(dto.closing_balance_cash)
+          : null;
+      const countedCard =
+        dto.closing_balance_card != null
+          ? Number(dto.closing_balance_card)
+          : null;
+      for (const [field, value] of [
+        ['closing_balance_cash', countedCash],
+        ['closing_balance_card', countedCard],
+      ] as const) {
+        if (value != null && (!Number.isFinite(value) || value < 0)) {
+          throw new BadRequestException(
+            `${field} manfiy bo'lmagan son bo'lishi kerak`,
+          );
+        }
+      }
+
       // Pre-locate the shift's id without lock so we can then re-fetch with a
       // row-level lock inside the transaction. Without the lock, two parallel
       // closeShift calls can both pass the status==='open' check and double-write.
@@ -1725,15 +2094,35 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
       if (dto.shift_id) {
         this.assertBigIntId(dto.shift_id, 'shift_id');
         shiftId = String(dto.shift_id);
-      } else if (dto.opened_by) {
-        this.assertBigIntId(dto.opened_by, 'opened_by');
-        const candidate = await this.shiftRepo.findOne({
+      } else {
+        /**
+         * (kfdfYDik) Frontend faqat `{ comment }` yuborsa ham yopiladi:
+         * `closed_by` gateway'da JWT'dan olinadi. Qidiruv tartibi —
+         * `opened_by` berilgan bo'lsa faqat o'sha; aks holda yopayotgan
+         * foydalanuvchining o'z ochiq smenasi, u ham bo'lmasa markaziy MAIN
+         * kassaning ochiq smenasi (smena kassaga tegishli — QTCUUgjA).
+         */
+        if (dto.opened_by) {
+          this.assertBigIntId(dto.opened_by, 'opened_by');
+        }
+        let candidate = await this.shiftRepo.findOne({
           where: {
-            opened_by: dto.opened_by,
+            opened_by: dto.opened_by ?? dto.closed_by,
             status: ShiftStatus.OPEN,
+            isDeleted: false,
           },
           order: { opened_at: 'DESC' },
         });
+        if (!candidate && !dto.opened_by) {
+          candidate = await this.shiftRepo.findOne({
+            where: {
+              cashbox_user_id: FinanceServiceService.MAIN_CASHBOX_USER_ID,
+              status: ShiftStatus.OPEN,
+              isDeleted: false,
+            },
+            order: { opened_at: 'DESC' },
+          });
+        }
         shiftId = candidate ? String(candidate.id) : null;
       }
 
@@ -1778,7 +2167,10 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
          * smena yuz minglab qatorni xotiraga yuklardi.
          *
          * Endi yig'indi SQL'da, faqat smenaga biriktirilgan kassa bo'yicha
-         * olinadi (sukut — markaziy MAIN kassa).
+         * olinadi (sukut — markaziy MAIN kassa). (QTCUUgjA) Kassa TURI ham
+         * filtrlanadi: filial id si bir xil raqamli kuryer/market user_id si
+         * bilan to'qnashib, begona kassa harakatlari filial smenasiga
+         * qo'shilmasin.
          */
         const shiftCashboxUserId = String(
           shift.cashbox_user_id ?? FinanceServiceService.MAIN_CASHBOX_USER_ID,
@@ -1792,6 +2184,9 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
           .where('h.isDeleted = :active', { active: false })
           .andWhere('cb.isDeleted = :active', { active: false })
           .andWhere('cb.user_id = :ownerId', { ownerId: shiftCashboxUserId })
+          .andWhere('cb.cashbox_type = :cbType', {
+            cbType: FinanceServiceService.shiftCashboxType(shiftCashboxUserId),
+          })
           .andWhere('h.createdAt BETWEEN :from AND :to', {
             from: shift.opened_at,
             to: closeTime,
@@ -1822,15 +2217,42 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
           }
         }
 
+        /**
+         * (QTCUUgjA) Kamomad hisobi:
+         *   expected    = opening_balance + total_income − total_expense
+         *   discrepancy = closing_balance (sanab topshirilgan) − expected
+         * Manfiy — kamomad, musbat — ortiqcha. Sanalgan summa yuborilmasa
+         * discrepancy NULL: "sanalmadi" holati soxta kamomad bo'lib
+         * ko'rinmasin (closing_balance avvalgidek 0 yoziladi).
+         */
+        const round = (value: number) =>
+          FinanceServiceService.roundMoney(value);
+        const expectedCash = round(
+          Number(shift.opening_balance_cash ?? 0) +
+            totalIncomeCash -
+            totalExpenseCash,
+        );
+        const expectedCard = round(
+          Number(shift.opening_balance_card ?? 0) +
+            totalIncomeCard -
+            totalExpenseCard,
+        );
+
         shift.closed_by = dto.closed_by;
         shift.closed_at = closeTime;
         shift.status = ShiftStatus.CLOSED;
-        shift.total_income_cash = totalIncomeCash;
-        shift.total_income_card = totalIncomeCard;
-        shift.total_expense_cash = totalExpenseCash;
-        shift.total_expense_card = totalExpenseCard;
-        shift.closing_balance_cash = Number(dto.closing_balance_cash ?? 0);
-        shift.closing_balance_card = Number(dto.closing_balance_card ?? 0);
+        shift.total_income_cash = round(totalIncomeCash);
+        shift.total_income_card = round(totalIncomeCard);
+        shift.total_expense_cash = round(totalExpenseCash);
+        shift.total_expense_card = round(totalExpenseCard);
+        shift.closing_balance_cash = countedCash ?? 0;
+        shift.closing_balance_card = countedCard ?? 0;
+        shift.expected_balance_cash = expectedCash;
+        shift.expected_balance_card = expectedCard;
+        shift.discrepancy_cash =
+          countedCash == null ? null : round(countedCash - expectedCash);
+        shift.discrepancy_card =
+          countedCard == null ? null : round(countedCard - expectedCard);
         shift.comment = dto.comment ?? shift.comment;
 
         const saved = await queryRunner.manager.save(shift);
@@ -1850,6 +2272,9 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
             new_value: {
               status: auditedShift.status,
               closed_at: auditedShift.closed_at,
+              expected_balance_cash: auditedShift.expected_balance_cash,
+              discrepancy_cash: auditedShift.discrepancy_cash,
+              discrepancy_card: auditedShift.discrepancy_card,
             },
             user_id: dto.closed_by ? String(dto.closed_by) : null,
             metadata: {
@@ -2212,6 +2637,13 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
     cashbox_type?: Cashbox_type;
     created_by?: string;
     dedup_epoch?: string;
+    /**
+     * IgR4FVsR — `true` bo'lsa chiqim P&L daftariga ham (−amount,
+     * MANUAL_EXPENSE) AYNI tranzaksiyada yoziladi. Faqat gateway'ning qo'lda
+     * chiqim marshruti yuboradi; investor to'lovi (o'zi FBH yozadi) va boshqa
+     * tizim chaqiruvchilari yubormaydi — ikki marta yozilmaydi.
+     */
+    financial_ledger?: boolean;
   }) {
     try {
       const targetCashboxType = data.cashbox_type ?? Cashbox_type.MAIN;
@@ -2219,7 +2651,16 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         targetCashboxType === Cashbox_type.MAIN
           ? FinanceServiceService.MAIN_CASHBOX_USER_ID
           : data.user_id;
-      const update = await this.updateBalance({
+      // IgR4FVsR — P&L yozuvi faqat gateway'ning qo'lda marshrutidan.
+      const ledger =
+        data.financial_ledger === true
+          ? {
+              amount: -Number(data.amount),
+              source_type: FinancialSource_type.MANUAL_EXPENSE,
+              comment: data.comment ?? null,
+            }
+          : undefined;
+      const update = await this.updateBalanceWithLedger(ledger, {
         user_id: targetUserId,
         amount: data.amount,
         operation_type: Operation_type.EXPENSE,
@@ -2228,12 +2669,16 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         comment: data.comment,
         created_by: data.created_by ?? data.user_id,
         cashbox_type: targetCashboxType,
+        // (i75GDixP) Qo'lda chiqim — manfiyga hech qachon ruxsat yo'q.
+        allow_negative: false,
         // Idempotency for a manual expense is keyed on the gateway's dedup_epoch
         // token ONLY. source_id stays NULL — it is a bigint column and the token
         // is a free-form hex/idempotency-key string, so writing it there throws.
         // updateBalance's pre-check dedupes on the token (serialised by the
         // cashbox row lock). Absent token → no dedup (prior behaviour).
         dedup_epoch: data.dedup_epoch,
+        // (QTCUUgjA) qo'lda operatsiya — kassada ochiq smena talab qilinadi.
+        require_open_shift: true,
       });
       if (update?.data?.idempotent) {
         // (TMgL1zvq) Takroriy so'rov pul ham, audit ham qayta yozmaydi.
@@ -2275,6 +2720,13 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
     cashbox_type?: Cashbox_type;
     created_by?: string;
     dedup_epoch?: string;
+    /**
+     * IgR4FVsR — `true` bo'lsa kirim P&L daftariga ham (+amount,
+     * MANUAL_INCOME) AYNI tranzaksiyada yoziladi. Faqat gateway'ning qo'lda
+     * kirim marshruti yuboradi; kargo remittance'i (debitor qarz yig'imi —
+     * foyda sotuvda allaqachon yozilgan) yubormaydi.
+     */
+    financial_ledger?: boolean;
   }) {
     try {
       const targetCashboxType = data.cashbox_type ?? Cashbox_type.MAIN;
@@ -2282,7 +2734,16 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         targetCashboxType === Cashbox_type.MAIN
           ? FinanceServiceService.MAIN_CASHBOX_USER_ID
           : data.user_id;
-      const update = await this.updateBalance({
+      // IgR4FVsR — P&L yozuvi faqat gateway'ning qo'lda marshrutidan.
+      const ledger =
+        data.financial_ledger === true
+          ? {
+              amount: Number(data.amount),
+              source_type: FinancialSource_type.MANUAL_INCOME,
+              comment: data.comment ?? null,
+            }
+          : undefined;
+      const update = await this.updateBalanceWithLedger(ledger, {
         user_id: targetUserId,
         amount: data.amount,
         operation_type: Operation_type.INCOME,
@@ -2291,9 +2752,13 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         comment: data.comment,
         created_by: data.created_by ?? data.user_id,
         cashbox_type: targetCashboxType,
+        // (i75GDixP) Qo'lda kirim — manfiy ruxsat yo'q.
+        allow_negative: false,
         // Idempotency keyed on the dedup_epoch token only (see spendMoney) —
         // source_id stays NULL (bigint column can't hold the free-form token).
         dedup_epoch: data.dedup_epoch,
+        // (QTCUUgjA) qo'lda operatsiya — kassada ochiq smena talab qilinadi.
+        require_open_shift: true,
       });
       if (update?.data?.idempotent) {
         // (TMgL1zvq) Takroriy so'rov pul ham, audit ham qayta yozmaydi.
@@ -2621,12 +3086,26 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         );
       }
 
+      // (QTCUUgjA) Qabul qiluvchi kassada ochiq smena (darvoza yoqilgan
+      // bo'lsa; hozircha faqat MAIN). Idempotentlikdan KEYIN — haqiqiy
+      // takroriy so'rov baribir `idempotent` javob oladi.
+      await this.requireOpenShift(queryRunner.manager, {
+        user_id: String(
+          data.receiver_user_id ?? FinanceServiceService.MAIN_CASHBOX_USER_ID,
+        ),
+        cashbox_type: data.receiver_cashbox_type ?? Cashbox_type.MAIN,
+      });
+
       // Over-remit guard (Faza 1c / Audit I1): a courier cannot remit more cash
       // than their cashbox holds. FOR_COURIER allows a negative balance (so
       // sale-time COD legs work), which means a duplicate-key-evading double
       // submit, or a wrong amount, would otherwise silently drive the courier
       // cashbox negative — cash that never physically existed. We check AFTER the
       // idempotency short-circuit so a genuine retry still returns idempotent.
+      // 1bz6tOle: kuryer kassasi qarz hisobi (naqd/karta ajratmasi yo'q) —
+      // shuning uchun qo'riqchi usuldan qat'i nazar JAMI `balance` bilan;
+      // qabul qiluvchi MAIN/BRANCH kassasi esa updateBalancesByMethod'da usul
+      // bo'yicha tekshiriladi.
       if (Number(data.amount) > Number(courierCashbox.balance)) {
         throw new BadRequestException(
           `To'lov miqdori courier qoldig'idan oshib ketdi (qoldiq: ${Number(
@@ -2674,6 +3153,8 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
           where: {
             user_id: data.market_id,
             cashbox_type: Cashbox_type.FOR_MARKET,
+            // gEdrZxMz — o'chirilgan (soft-delete) market kassasi tanlanmasin.
+            isDeleted: false,
           },
           lock: { mode: 'pessimistic_write' },
         });
@@ -2936,6 +3417,27 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  /**
+   * (3PE0B03q) "O'tkazma manbasi" (`transfer_source_user_id`) — faqat audit.
+   * Naqd to'lovda ma'nosi yo'q (o'tkazma emas) — yozilmaydi. Shaxs bo'yicha
+   * karta qoldig'i tushunchasi YO'Q: pul baribir kassaning yagona
+   * `balance_card` idan harakatlanadi.
+   */
+  private resolveTransferSourceUserId(data: {
+    payment_method?: PaymentMethod;
+    transfer_source_user_id?: string | null;
+  }): string | null {
+    const raw = data.transfer_source_user_id;
+    if (raw == null || String(raw).trim() === '') {
+      return null;
+    }
+    this.assertBigIntId(String(raw), 'source_user_id');
+    if ((data.payment_method ?? PaymentMethod.CASH) === PaymentMethod.CASH) {
+      return null;
+    }
+    return String(raw);
+  }
+
   async paymentFromBranchToMain(data: {
     branch_id: string;
     amount: number;
@@ -2945,6 +3447,8 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
     created_by?: string;
     // Per-request idempotency token from the gateway. (Audit P0-3.)
     dedup_epoch?: string;
+    // (3PE0B03q) "O'tkazma manbasi" — faqat audit.
+    transfer_source_user_id?: string;
   }) {
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
@@ -2955,6 +3459,7 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
     try {
       this.assertBigIntId(data.branch_id, 'branch_id');
       this.assertPositiveAmount(Number(data.amount));
+      const transferSourceUserId = this.resolveTransferSourceUserId(data);
 
       const branchCashbox = await queryRunner.manager.findOne(Cashbox, {
         where: { user_id: data.branch_id, cashbox_type: Cashbox_type.BRANCH },
@@ -2982,6 +3487,13 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
           "To'lov allaqachon qabul qilingan (takroriy so'rov)",
         );
       }
+
+      // (QTCUUgjA) Pul HQ (MAIN) kassasiga tushadi — u yerda ochiq smena
+      // bo'lishi shart (darvoza yoqilgan bo'lsa).
+      await this.requireOpenShift(queryRunner.manager, {
+        user_id: FinanceServiceService.MAIN_CASHBOX_USER_ID,
+        cashbox_type: Cashbox_type.MAIN,
+      });
 
       let mainCashbox = await queryRunner.manager.findOne(Cashbox, {
         where: {
@@ -3024,6 +3536,7 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         comment: data.comment ?? null,
         created_by: data.created_by ?? null,
         source_user_id: data.branch_id,
+        transfer_source_user_id: transferSourceUserId,
         payment_date: this.parseDate(data.payment_date ?? null) ?? null,
       });
       await queryRunner.manager.save(branchHistory);
@@ -3048,6 +3561,7 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         comment: data.comment ?? null,
         created_by: data.created_by ?? null,
         source_user_id: data.branch_id,
+        transfer_source_user_id: transferSourceUserId,
         payment_date: this.parseDate(data.payment_date ?? null) ?? null,
       });
       await queryRunner.manager.save(mainHistory);
@@ -3115,6 +3629,8 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
     created_by?: string;
     // Per-request idempotency token from the gateway. (Audit P0-3.)
     dedup_epoch?: string;
+    // (3PE0B03q) "O'tkazma manbasi" — faqat audit.
+    transfer_source_user_id?: string;
   }) {
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
@@ -3125,6 +3641,7 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
     try {
       this.assertBigIntId(data.market_id, 'market_id');
       this.assertPositiveAmount(Number(data.amount));
+      const transferSourceUserId = this.resolveTransferSourceUserId(data);
 
       // Lock order: main → market (same order as paymentsFromCourier to avoid
       // cross-method deadlocks).
@@ -3168,6 +3685,13 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         );
       }
 
+      // (QTCUUgjA) Pul MAIN kassadan chiqadi — ochiq smena shart (darvoza
+      // yoqilgan bo'lsa). Idempotentlikdan KEYIN.
+      await this.requireOpenShift(queryRunner.manager, {
+        user_id: FinanceServiceService.MAIN_CASHBOX_USER_ID,
+        cashbox_type: Cashbox_type.MAIN,
+      });
+
       /**
        * ORTIQCHA TO'LOV QO'RIQCHISI (audit M9).
        *
@@ -3210,6 +3734,7 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
           payment_date: this.parseDate(data.payment_date ?? null) ?? null,
           payment_method: data.payment_method,
           source_user_id: data.market_id,
+          transfer_source_user_id: transferSourceUserId,
         }),
       );
 
@@ -3242,6 +3767,7 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
           payment_date: this.parseDate(data.payment_date ?? null) ?? null,
           payment_method: data.payment_method,
           source_user_id: data.market_id,
+          transfer_source_user_id: transferSourceUserId,
         }),
       );
 
@@ -4295,6 +4821,50 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
   // Advisory lock key — serialises ledger appends so balance_before/after of
   // concurrent writers can't interleave and corrupt the running total.
   private static readonly FBH_ADVISORY_LOCK_KEY = 947_310_021;
+
+  /**
+   * IgR4FVsR — chaqiruvchining tranzaksiyasi ICHIDA P&L daftariga yozuv
+   * qo'shish (commit/rollback chaqiruvchida). `recordFinancialBalance` bilan
+   * bir xil qoida: advisory qulf ostida oxirgi qatordan `balance_after`
+   * olinadi. Qulf tartibi: avval kassa qatori (chaqiruvchi), keyin FBH qulfi
+   * — operator to'lovi bilan bir xil, teskari tartib yo'q.
+   */
+  private async appendFinancialBalanceInTx(
+    manager: EntityManager,
+    input: {
+      amount: number;
+      source_type: FinancialSource_type;
+      dedup_key: string;
+      related_user_id?: string | null;
+      comment?: string | null;
+      created_by?: string | null;
+    },
+  ): Promise<FinancialBalanceHistory> {
+    await manager.query('SELECT pg_advisory_xact_lock($1::bigint)', [
+      FinanceServiceService.FBH_ADVISORY_LOCK_KEY.toString(),
+    ]);
+    const previous = await manager.findOne(FinancialBalanceHistory, {
+      where: {},
+      order: { id: 'DESC' },
+    });
+    const balanceBefore = Number(previous?.balance_after ?? 0);
+    const amount = Number(input.amount);
+    return manager.save(
+      manager.create(FinancialBalanceHistory, {
+        amount,
+        balance_before: balanceBefore,
+        balance_after: balanceBefore + amount,
+        source_type: input.source_type,
+        dedup_key: input.dedup_key,
+        order_id: null,
+        related_user_id: input.related_user_id
+          ? String(input.related_user_id)
+          : null,
+        comment: input.comment ?? null,
+        created_by: input.created_by ? String(input.created_by) : null,
+      }),
+    );
+  }
 
   /**
    * Append an entry to the financial-balance ledger. The running balance is

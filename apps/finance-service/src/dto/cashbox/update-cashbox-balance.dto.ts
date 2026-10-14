@@ -6,6 +6,7 @@ import {
 } from '@app/common';
 import {
   IsArray,
+  IsBoolean,
   IsEnum,
   IsNumber,
   IsOptional,
@@ -77,4 +78,32 @@ export class UpdateCashboxBalanceDto {
   @IsArray()
   @IsString({ each: true })
   proof_files?: string[];
+
+  /**
+   * (i75GDixP) BRANCH kassasini manfiyga tushirishga ANIQ ruxsat.
+   *
+   * Faqat order-service outbox'i (sotuv / bekor qilish / qo'shimcha xarajat /
+   * tuzatish oyoqlari) `true` yuboradi: filial ulushli sotuv filial kassasini
+   * qonuniy manfiyga olib boradi (HQ to'ldiradi) va bu oyoq rad etilsa outbox
+   * 10 marta qayta urinib, jimgina tashlab yuborardi. Gateway (PATCH
+   * /finance/cashbox/balance) va qo'lda kirim/chiqim (spend/fill) DOIMO
+   * `false` yuboradi — gateway whitelist DTO'sida bu maydon YO'Q. Qo'lda
+   * oyoq (MANUAL_EXPENSE / MANUAL_INCOME) bayroq bilan ham ruxsat olmaydi.
+   * Maydon yo'q (eski, deploydan oldin navbatga tushgan outbox qatori) —
+   * eski source_type ro'yxati bo'yicha qaror qilinadi.
+   */
+  @IsOptional()
+  @IsBoolean()
+  allow_negative?: boolean;
+
+  /**
+   * (QTCUUgjA) Servis ICHIDAGI bayroq: qo'lda kirim/chiqim (`spendMoney` /
+   * `fillTheCashbox`) `true` qo'yadi — kassada ochiq smena bo'lishi shart
+   * (`FINANCE_REQUIRE_OPEN_SHIFT` yoqilgan bo'lsa). order-service outbox'i
+   * (sotuv yo'li) va gateway uni yubormaydi: sotuv smenaga bog'liq emas.
+   * Bayroq faqat cheklov QO'SHADI, hech narsani ochmaydi.
+   */
+  @IsOptional()
+  @IsBoolean()
+  require_open_shift?: boolean;
 }

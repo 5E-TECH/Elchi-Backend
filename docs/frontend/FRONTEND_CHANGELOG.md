@@ -23,6 +23,436 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-10-14 — Mahsulotlar katalogi va mijozni telefon bo'yicha qidirish (Guruh E, 4-tur)
+
+- [2026-10-14] ✏️ [catalog] — `GET /product/my-products` va
+  `GET /product/market/:marketId` endi `search`, `page`, `limit` query'larini
+  qabul qiladi (ilgari e'tiborsiz edi: server sukuti `limit = 10` bilan
+  11-mahsulot ko'rinmasdi, qidiruv ishlamasdi). Javob o'zgarmagan:
+  `{ data: Product[], total, page, limit }`. `limit` ≤ 500 (kattasi 500 ga
+  tushiriladi), noto'g'ri `page`/`limit` — sukut (1 / 10). `GET /product` ham
+  shu qoidada (3qDsJpfW).
+  Misol: `GET /product/my-products?search=olma&page=2&limit=20`.
+  → **Frontendda:** 🔧 `entities/product/index.tsx` —
+  `useGetMyProducts(params, enabled)` (params `queryKey` ga ham),
+  `pages/products/list/index.tsx:318` da market uchun ham `apiParams`
+  uzatilsin (qidiruv inputi va Pagination shundagina ishlaydi);
+  `useGetByMarketId(id, enabled, params)` — create sahifasidagi "mavjud
+  mahsulotlar" jadvali va `orders/create/ui/Step2Combined.tsx` mahsulot
+  tanlovi `limit` (masalan 100) yoki sahifalagich bilan.
+- [2026-10-14] ✏️ [catalog] — `market_operator` endi mahsulot katalogida
+  (tsEevElW): `POST /product` (mahsulot DOIM operator biriktirilgan
+  marketga yoziladi, tanadagi `market_id` e'tiborsiz),
+  `GET /product/my-products` (biriktirilgan marketning mahsulotlari),
+  `PATCH /product/my/:id` (faqat shu marketning mahsuloti, begonasi — 403),
+  `GET /product/:id` (faqat shu marketniki, begonasi — 403). Marketga
+  biriktirilmagan operator — 400 `"Operator hech qaysi marketga
+  biriktirilmagan — mahsulot katalogi bilan ishlab bo'lmaydi"`.
+  `DELETE /product/:id` va umumiy `GET /product` operatorga OCHILMAGAN
+  (BeePost'da ham yo'q).
+  → **Frontendda:** 🔧 `app/lib/routes.tsx` `canManageProducts` va
+  `app/lib/access.ts` `canCreateProducts` ga `market_operator`;
+  `pages/products/list/index.tsx:206` `isMarketRole` →
+  `role === "market" || role === "market_operator"` (ro'yxat
+  `my-products` dan, tahrirlash `PATCH /product/my/:id` bilan, market
+  tanlash oynasi operatorga ko'rsatilmaydi); o'chirish tugmasi operatorga
+  yashirilsin.
+- [2026-10-14] 🟢 [catalog] — o'chirilgan mahsulot nomini qayta ishlatish
+  mumkin (As75bkGo, migratsiya 1716000000087): `(name, user_id)` unique
+  indeksi endi faqat faol qatorlar uchun. Faol bir xil nomli ikkinchi
+  mahsulot — hamon 409 `"Bu marketda bu nomdagi product allaqachon mavjud"`.
+  Frontendda o'zgarish shart emas.
+- [2026-10-14] 🟢 [catalog] — registrator/menejer `POST /product` (market_id
+  bilan) b64f0aa (2026-10-05) dan beri ishlaydi; frontend `canCreateProducts`
+  mos (QjkMUMIR). Backend ruxsat matritsasi frontend ro'yxati bilan
+  `catalog-gateway.products-e.spec.ts` da solishtiriladi — frontend
+  `canManageProducts` o'zgarsa, spec'dagi `FRONTEND_CAN_MANAGE_PRODUCTS` ham
+  yangilansin.
+- [2026-10-14] 🆕 [customers] — `GET /customers/suggest?phone=...&market_id=...`
+  — buyurtma yaratish formasida mijozni telefon bo'yicha taklif qilish
+  (hiqRNhkI). Rollar: superadmin, admin, registrator, manager, branch,
+  market, market_operator. `phone` — har qanday formatda, kamida 7 raqam
+  (aks holda 400). Doira: market — faqat o'z marketida buyurtmasi bo'lgan
+  mijozlar (`market_id` e'tiborsiz); market_operator — biriktirilgan
+  marketi; registrator/manager/branch — `market_id` MAJBURIY (400), faqat
+  shu marketdagi mijozlar; admin/superadmin — hammasi (`market_id` ixtiyoriy,
+  faqat xulosa uchun). Ko'pi bilan 10 ta.
+  Javob: `{ statusCode: 200, message: "Customer suggestions", data: [{ id,
+  name, phone_number, extra_number, address, region_id, district_id,
+  orders_count, new_orders_count, has_new_orders, new_order_ids, last_order_at
+  }] }` — `orders_count`/`new_orders_count` shu marketda (`created`/`new`
+  holatlar "yangi"); market konteksti bo'lmasa `null`.
+  → **Frontendda:** 🔧 `entities/customer` hook (debounce 300 ms, ≥ 9 raqam),
+  `orders/create/ui/Step2Combined.tsx` telefon maydoni ostida taklif
+  ro'yxati (390px da ekrandan chiqmasin); tanlanganda ism, tuman
+  (`district_id`; viloyat — tuman ro'yxatidan yoki `region_id`), manzil,
+  qo'shimcha raqam to'ldirilsin, "Mavjud mijoz tanlangan" belgisi;
+  `has_new_orders` bo'lsa "Diqqat! Bu mijozda yangi holatdagi buyurtma
+  mavjud" (`new_order_ids` ga havola). ⚠️ `POST /orders` da `customer_id`
+  faqat superadmin/admin dan qabul qilinadi (fix3 RBAC-01) — boshqa rollar
+  `customer` obyektini (ayni telefon bilan) yuborishda davom etadi:
+  `identity.customer.create` mijozni telefon bo'yicha topadi va o'zgargan
+  ism/tuman/manzil/qo'shimcha raqamni YANGILAYDI (j70YS4zJ, allaqachon bor).
+
+### 2026-10-14 — Kassa / smena (Guruh A: kfdfYDik, QTCUUgjA, i75GDixP, 3PE0B03q)
+
+- [2026-10-14] ✏️ [finance] — smena ochish/yopish: odam JWT'dan olinadi (kfdfYDik).
+  - `POST /finance/shift/open` — body ixtiyoriy (bo'sh `{}` → 201). `opened_by`
+    endi IXTIYORIY va E'TIBORGA OLINMAYDI (JWT `sub` yoziladi). Ixtiyoriy:
+    `opening_balance_cash`, `opening_balance_card`, `comment`; qoldiq
+    yuborilmasa — MAIN kassaning JONLI qoldig'i yoziladi (ilgari 0).
+  - Bitta kassada (MAIN) bir vaqtda faqat BITTA ochiq smena: boshqa odamning
+    smenasi ochiq bo'lsa 400 `"Bu kassada allaqachon ochiq smena bor (smena #ID) — avval uni yoping"`.
+  - `POST /finance/shift/close` — `closed_by` endi IXTIYORIY va e'tiborsiz
+    (JWT). Faqat `{ comment }` bilan ham yopiladi (ilgari 400 `closed_by must match ...`):
+    `shift_id`/`opened_by` berilmasa — o'zingizning ochiq smenangiz, u bo'lmasa
+    MAIN kassaning ochiq smenasi yopiladi; topilmasa 404 `"Ochiq smena topilmadi"`.
+    HTTP status — 201 (POST sukuti).
+  - Yopishda sanalgan summalar: `closing_balance_cash`, `closing_balance_card`
+    (≥ 0, manfiy → 400). Javob (`data`) va `GET /finance/shift` qatorlarida
+    YANGI maydonlar (QTCUUgjA): `expected_balance_cash`, `expected_balance_card`
+    (= opening + kirim − chiqim), `discrepancy_cash`, `discrepancy_card`
+    (= sanalgan − kutilgan; manfiy — kamomad, musbat — ortiqcha). Sanalgan
+    summa yuborilmasa `discrepancy_*` = `null` (ochiq/eski smenalarda ham
+    `null`).
+  Misol: `POST /finance/shift/close { "comment": "kun yakuni", "closing_balance_cash": 489000, "closing_balance_card": 102500 }`
+  → `data: { status: "closed", closed_by: "<siz>", expected_balance_cash: 490000, discrepancy_cash: -1000, discrepancy_card: 0, ... }`.
+  → **Frontendda:** 🔧 `mainCashbox.tsx`: "Smenani ochish" tugmasi (body
+  `{}` yetarli, `opened_by` yubormasa ham bo'ladi) va "Smena ochiq" banneri;
+  `CloseShiftPopup.tsx`: sanalgan naqd/karta inputlari →
+  `closing_balance_cash/card`, yopilgandan keyin `discrepancy_*` ni
+  (kamomad/ortiqcha) ko'rsating; `null` — "sanalmadi".
+- [2026-10-14] 🆕 [finance] — `GET /finance/shift/current`
+  (superadmin/admin/registrator) → `data: { shift: Shift | null, required: boolean, cashbox_user_id: "0" }`
+  — MAIN kassaning joriy ochiq smenasi va smena darvozasi yoqilganmi.
+  → **Frontendda:** 🔧 banner/tugma holatini shundan o'qing (`?status=open&opened_by=`
+  o'rniga — smena endi KASSAGA tegishli, boshqa admin ochgan smena ham ko'rinadi).
+- [2026-10-14] ⚠️ [finance] — smena darvozasi `FINANCE_REQUIRE_OPEN_SHIFT`
+  (QTCUUgjA). SUKUT — O'CHIQ: hozirgi oqimlar o'zgarmaydi. Yoqilganda MAIN
+  kassada ochiq smena bo'lmasa quyidagilar 400
+  `"Smena ochilmagan! Bu operatsiyani bajarish uchun avval asosiy kassada smenani oching."`:
+  `POST /finance/cashbox/payment/courier` (HQ qabul), `POST /finance/cashbox/payment/market`,
+  `POST /finance/cashbox/payment/branch-to-main` (menejer topshirig'i ham — pul
+  MAIN'ga tushadi), `PATCH /finance/cashbox/spend` va `/fill` (MAIN). Filial
+  kassasidagi menejer operatsiyalari (kuryerdan qabul, spend/fill BRANCH) va
+  sotuv/bekor qilish darvozalanmaydi.
+  → **Frontendda:** 🔧 `GET /finance/shift/current` → `required && !shift`
+  bo'lsa Kirim/Chiqim/To'lov tugmalarini bloklang va "Smenani oching" deb
+  ko'rsating; 400 xabarini foydalanuvchiga chiqaring. Backend env faqat shu
+  UI chiqqandan keyin yoqiladi.
+- [2026-10-14] 🟢 [finance] — filial kassasi qo'lda chiqimda manfiyga
+  tushmaydi (i75GDixP): `PATCH /finance/cashbox/spend` (menejer, BRANCH)
+  balansdan katta bo'lsa 400 `"Insufficient cash balance"`, `type: "click"`
+  da — `"Insufficient card balance"`. `PATCH /finance/cashbox/balance`
+  (admin) ham filialni manfiyga tushira olmaydi (`source_type: correction`
+  bilan ham). `allow_negative` — ichki tizim bayrog'i, gateway DTO'sida YO'Q
+  (yuborilsa 400 `property allow_negative should not exist`).
+  → **Frontendda:** o'zgarish shart emas; 400 xabarini ko'rsating.
+- [2026-10-14] ✏️ [finance] — "O'tkazma manbasi" (3PE0B03q):
+  `POST /finance/cashbox/payment/market` va `POST /finance/cashbox/payment/branch-to-main`
+  endi ixtiyoriy `source_user_id` (raqamli satr, xodim ID si) qabul qiladi —
+  ilgari 400 `property source_user_id should not exist`. Faqat audit: click
+  to'lovda tarix qatorlarida `transfer_source_user_id` bo'lib saqlanadi (naqdda
+  `null`); `source_user_id` (kontragent = market/filial) o'zgarmaydi. Pul baribir
+  kassaning yagona `balance_card` idan yechiladi — shaxs bo'yicha karta qoldig'i
+  YO'Q.
+  Misol: `{ "market_id": "121", "amount": 1000, "payment_method": "click", "source_user_id": "7" }` → 201.
+  → **Frontendda:** 🟢 hozirgi C14 holati (manba yuborilmaydi) to'g'ri ishlaydi.
+  Manba tanlovini qaytarsangiz — `source_user_id` yuboring, lekin "Ism — N
+  so'm" kabi shaxsiy karta qoldiqlarini ko'rsatmang (backendda yo'q).
+
+### 2026-10-14 — Moliya B (4-tur): CLICK taqsimoti, P&L daftari, filial hisob-kitobi, kargo to'lovlari
+
+- [2026-10-14] ✏️ [finance] — **kuryer va market kassalari (FOR_COURIER /
+  FOR_MARKET) endi qarz hisobi**: naqd/karta ajratmasi yuritilmaydi, butun
+  qarz `balance_cash` da, `balance_card` doim 0 (1bz6tOle). Ilgari sotuv
+  naqdga yozilib, CLICK to'lov kartadan yechilardi va kuryer ilovasida
+  `balance_cash: 5 000 000, balance_card: -5 000 000` ("naqd qarzingiz 5 mln",
+  aslida qarz yo'q) ko'rinardi. Eski bo'lingan qoldiq kassaning keyingi
+  harakatida o'zi yig'iladi (`balance` o'zgarmaydi). MAIN/BRANCH avvalgidek
+  usul bo'yicha: `PATCH /finance/cashbox/payment/market` (CLICK) MAIN karta
+  qoldig'idan oshsa 400 `Insufficient card balance`. Noma'lum `payment_method`
+  → 400. → **Frontendda:** 🔧 kuryer/market kassasida qarz uchun `balance`
+  ni ko'rsating (naqd/karta bo'linmasi bu kassalarda ma'nosiz);
+  `Insufficient card balance` xabarini "Asosiy kassa kartasida mablag'
+  yetarli emas" deb ko'rsating.
+- [2026-10-14] ✏️ [finance/api-gateway] — `PATCH /finance/cashbox/spend` va
+  `/fill` (admin → MAIN, menejer → BRANCH) endi P&L daftariga
+  (`financial_balance_history`) **AYNI tranzaksiyada** yozadi: chiqim −summa
+  `manual_expense`, kirim +summa `manual_income`, `dedup_key =
+  cashbox-history:<id>` (IgR4FVsR). Javobda yangi kalit
+  `data.financial_balance_entry` (`{ id, amount, balance_before,
+  balance_after, source_type, ... }`); takroriy (`Idempotency-Key`) so'rov
+  daftarga ham qayta yozmaydi. Investor foyda to'lovi va kargo
+  remittance'i bu yo'ldan P&L ga yozmaydi (avvalgidek). → **Frontendda:** 🔧
+  qo'lda kassa chiqimi/kirimidan keyin `POST /finance/financial-balance/entries`
+  ni IKKINCHI marta BOSTIRMANG (endi foydani ikki marta kamaytiradi/oshiradi);
+  agar UI'da "daftarga ham yozing" maslahati yoki avtomatik ikkinchi chaqiruv
+  bo'lsa — olib tashlang. Kassa operatsiyasidan keyin "Moliyaviy balans"
+  so'rovlarini (`financial-balance/history`, `analytics`) invalidatsiya qiling.
+- [2026-10-14] ✏️ [api-gateway/finance] — `GET /finance/cashbox/user/:id`
+  (admin/superadmin filial kassasini ochganda, `with_history` true ham, false
+  ham): `olinishi_kerak` endi HAQIQIY "kuryerlardan olinishi kerak" summasi
+  (ilgari xato bilan `berilishi_kerak` qiymati yozilardi — ekranda ikkala
+  raqam bir xil edi); yangi `hq_ga_tollangan` (tanlangan davrda HQ'ga
+  topshirilgan). Ikkala yo'lda maydonlar to'plami bir xil: `kassadagi_summa,
+  berilishi_kerak, olinishi_kerak, hq_ga_tollangan, counterparty`. Menejer
+  `GET /finance/cashbox/manager/settlement` va `GET /finance/cashbox/all-info`
+  (menejer) javobiga ham `hq_ga_tollangan` qo'shildi (j8qCkJhV). Misol:
+  `{ "kassadagi_summa": 900000, "berilishi_kerak": 500000, "olinishi_kerak":
+  120000, "hq_ga_tollangan": 70000, "counterparty": "HQ" }`. →
+  **Frontendda:** 🟢 `cashDetail.tsx` dagi `amountToReceive` endi to'g'ri
+  qiymatni oladi; ixtiyoriy — `hq_ga_tollangan` ni ko'rsatish.
+- [2026-10-14] ✏️ [integration/api-gateway] — `POST
+  /integrations/:id/remittances` javobi (utIffRFx): `settled_amount`,
+  `settled_count`, `unapplied_amount` (= `remitted_amount − settled_amount`)
+  endi yozuvda ham saqlanadi; qarzga mos kelmasa yangi `warning` (satr):
+  qoldiq > 0 — "To'lovning N so'mi hech bir qarz qatoriga sig'madi ...";
+  qoldiq < 0 — aniq `order_ids` to'lovdan ko'p qarzni yopdi. Kassaga
+  avvalgidek TO'LIQ summa yoziladi (`cashbox_posted`). → **Frontendda:** 🔧
+  `ConnectionSettlement.tsx`: `const res = await createRemittance.mutateAsync(...)`
+  — natija oynasida `settled_count / settled_amount / unapplied_amount` va
+  `warning` ni ko'rsating; `<InputNumber max={outstanding} />` + "Qarzdan
+  ortiq summa" ogohlantirishi va "To'lash" tugmasini bloklash (backend
+  bloklamaydi — faqat ogohlantiradi).
+- [2026-10-14] 🆕 [integration/api-gateway] — `GET /integrations/:id/remittances`
+  (SUPERADMIN, ADMIN) — kargo to'lovlari ro'yxati (DxdZFdIk). Query:
+  `status` (`active|cancelled`), `from_date`/`to_date` (yoki `fromDate`/`toDate`,
+  `YYYY-MM-DD` — Toshkent kuni), `page`, `limit` (≤100, sukut 20), yangisi
+  birinchi. Javob: `data.items[]` = `{ id, integration_id, created_at, amount,
+  settled_count, settled_amount, unapplied_amount, reference, note,
+  created_by, status, cashbox_posted, cancelled_at, cancelled_by,
+  cancel_reason }` + `data.pagination { total, page, limit, totalPages }`.
+  Eski (migratsiyadan oldingi) yozuvlarda `settled_amount`,
+  `unapplied_amount`, `cashbox_posted` — `null` ("noma'lum", 0 emas). →
+  **Frontendda:** 🔧 ConnectionSettlement'ga "Olingan to'lovlar" jadvali
+  (sana, summa, yopilgan qatorlar soni, o'tkazma raqami/chek, izoh, kim
+  kiritdi, holat); qarz qatorlari jadvaliga `remittance_id` ustuni (qaysi
+  to'lov yopgan). To'lov qayd etilgach ro'yxatni invalidatsiya qiling.
+- [2026-10-14] 🆕 [integration/api-gateway] — `POST
+  /integrations/:id/remittances/:remittance_id/cancel` (SUPERADMIN, ADMIN),
+  body `{ reason?: string (≤500), reverse_cashbox?: boolean }`, javob 200
+  (DxdZFdIk). O'chirmaydi: `status=cancelled` + kim/qachon/sabab; shu to'lov
+  yopgan qarz qatorlari PENDING ga qaytadi ("kargo bizga qarz" shuncha
+  ORTADI); to'lov kassaga yozilgan bo'lsa MAIN kassadan teskari chiqim BIR
+  MARTA yoziladi. Javob: `{ remittance_id, status: "cancelled", amount,
+  cancelled_at, cancelled_by, cancel_reason, reopened_count,
+  reopened_order_ids, cashbox_reversed, settlement_reverted }`; takroriy
+  bosish — 200 `idempotent: true`. Xatolar: MAIN kassada mablag' yetmasa —
+  400 "Kassadan teskari chiqim yozilmadi — to'lov bekor qilinmadi: …" (hech
+  narsa o'zgarmaydi); ESKI yozuvda kassaga yozilgani noma'lum bo'lsa — 409
+  (operator `reverse_cashbox: true|false` ni aniq yuborishi kerak). →
+  **Frontendda:** 🔧 jadvaldagi har qatorga "Bekor qilish" tugmasi +
+  tasdiq oynasi: "Bu to'lov bekor qilinadi, kargo qarzi N so'mga ORTADI va
+  Asosiy kassadan N so'm chiqim yoziladi"; sabab maydoni; 409 da
+  "Kassaga yozilganmi?" tanlovi bilan qayta yuborish; muvaffaqiyatdan keyin
+  qarz qatorlari, `receivable-balance` va kassa so'rovlarini invalidatsiya
+  qiling.
+
+### 2026-10-14 — Guruh D: yuborish tarixi, shaxsiy Telegram, realtime, shablonlar, segmentlar, OTP kvotasi
+
+- [2026-10-14] 🆕 [notification] — **Yuborilgan xabarlar tarixi** (7Vozou5x),
+  SUPERADMIN/ADMIN:
+  - `GET /notifications/sent?page&limit&status&type&created_by` →
+    `{ items: [{ dispatch_id, status, type, category, priority, title,
+    body_preview, channels, recipients, dispatched, skipped_by_preference,
+    by_channel, channel_status, no_provider, message, created_by: { id, name,
+    role }, created_at, finished_at }], meta }`. `status`:
+    `running | sent | partial | inbox_only | skipped | failed`. Faqat qo'lda
+    (admin) yuborilganlar; tizim hodisalari (buyurtma holati) bu yerda yo'q.
+  - `GET /notifications/sent/:dispatch_id?page&limit` → yuqoridagi + `body`,
+    `link`, `audience`, `error`, JONLI `channel_status` (masalan
+    `{ in_app: { sent: 2 }, sms: { queued: 1, not_eligible: 1 }, telegram:
+    { sent: 3, failed: 1 }, email: { no_provider: 2 } }`) va `undelivered:
+    { items: [{ notification_id, recipient_id, name, role, failures: [{
+    channel, status, reason }] }], meta }` — telefon raqami YO'Q.
+  - `POST /notifications/dispatch` tanasida yangi ixtiyoriy
+    `client_request_id` (UUID, har "Yuborish" bosilishiga bitta, qayta
+    urinishda O'SHA qiymat) — u `dispatch_id` bo'ladi. Ayni id bilan takror
+    → **qayta yuborilmaydi**, javob 200 `{ duplicate: true, status, ... }`.
+    Javobda yangi `channel_status` (kanal × holat soni).
+  → **Frontendda:** 🔧 (1) natija paneli: har kanal alohida qator — yashil
+  `sent`/`queued`/`emitted`, qizil `failed`, SARIQ `skipped`/`no_provider`/
+  `not_eligible` ("provayder ulanmagan" / "telefon yo'q") — `skipped` ni
+  "yuborildi" DEMANG; (2) 504 bo'lsa: "Noma'lum — tarixdan tekshiring" +
+  `/notifications/sent/<client_request_id>` havolasi (`status: running` →
+  "jarayonda"); (3) yangi sahifa `/notifications/sent` (jadval: sana,
+  sarlavha, kim yubordi, qabul qiluvchilar, kanal chiplari, natija), qator
+  ochilganda to'liq matn + kanal kesimi + "Yetkazilmaganlar" (ism + rol +
+  sabab); faqat superadmin/admin; 390px da gorizontal scrollsiz.
+- [2026-10-14] 🆕 [notification] — **Shaxsiy Telegram** (rCFZAmOz):
+  - `POST /notifications/telegram/link` (istalgan tizimga kirgan rol, tana
+    yo'q) → `{ token, expires_at, deep_link, command }` — 15 daqiqalik havola
+    `https://t.me/<bot>?start=<token>` (`TELEGRAM_BOT_USERNAME` sozlanmagan
+    bo'lsa `deep_link: null`, `command: "/start <token>"`). Bot shaxsiy
+    chatda `/start <token>` ni oladi va chatni akkauntga ulaydi; `/stop` —
+    uzadi. Bot tokeni yo'q → 503.
+  - `TELEGRAM` kanali guruh nishonisiz (`telegram.market_id/group_id`
+    yo'q) dispatch'da endi **shaxsiy chatga** ketadi (outbox orqali):
+    `delivery.telegram`: `queued` → `sent` | `failed` (+`telegram_error`,
+    `blocked_by_user: ...`); chat ulanmagan — `skipped` +
+    `telegram_reason: 'no_telegram_id'` (dispatch yiqilmaydi). Javobdagi
+    `by_channel.telegram` = navbatga qo'yilganlar soni.
+  - `POST /notifications/telegram/broadcast` (SUPERADMIN/ADMIN) — `{ title,
+    body?, roles? | broadcast? | recipient_ids?, client_request_id? }` →
+    dispatch javobi (`by_channel.telegram`, `channel_status.telegram`);
+    yakuniy sent/failed — `GET /notifications/sent/:dispatch_id`.
+  → **Frontendda:** 🔧 profil sahifasida "Telegram'ni ulash" tugmasi
+  (`deep_link` ni yangi oynada ochish, bo'lmasa `command` ni ko'rsatish);
+  admin "Xabar yuborish" kanallarida Telegram (shaxsiy) va natijada
+  `skipped` = "Telegram ulanmagan".
+- [2026-10-14] 🔧 [gateway/realtime] — **Realtime mijozi** (m9BOlEbE).
+  Backend yo'li tayyor va spec bilan qulflangan: socket.io namespace
+  `/realtime` (gateway hosti), ulanish `io(`${API}/realtime`, { auth: {
+  token: <access_token> } })` (yoki `Authorization: Bearer`). Ulanishda
+  `connected` `{ user_id, roles }`; token yo'q/soxta → `error` va uziladi.
+  Hodisa `notification:new`: aniq qabul qiluvchiga — to'liq inbox qatori
+  (`id`, `title`, `body`, `type`, `category`, `priority`, `is_read`,
+  `created_at`, `delivery`, ...); rol/broadcast dispatch'da — BITTA signal
+  `{ type, category, priority }` (`id` YO'Q).
+  → **Frontendda:** 🔧 `socket.io-client` qo'shib `shared/lib/realtime.ts`:
+  `notification:new` kelganda `queryKeys.notificationsInbox.all` va
+  unread-count ni invalidate (payload'da `id` bo'lsa `setQueryData` bilan
+  qo'shish mumkin); access token yangilanganda qayta ulanish; uzilganda
+  60 s polling (hozirgi `refetchInterval`) fallback bo'lib qolsin.
+- [2026-10-14] 🆕 [notification/identity] — **Shablonlar va uch til**
+  (C4R3YyvH):
+  - `users.language` (`uz | ru | en`, sukut `uz`, DB CHECK): `PATCH
+    /auth/my-profile` va `PATCH /users/:id` tanasida yangi ixtiyoriy
+    `language`. Mijoz yaratishda (`identity.customer.create`) ham `language`.
+    ⚠️ Xodim uchun bildirishnoma tili hozircha `settings.appearance.language`
+    (UI tili) ustun — profilda til tanlansa ikkalasini birga saqlang.
+  - `GET /notifications/templates?code&lang` (SUPERADMIN/ADMIN) → `{ items:
+    [{ id, code, lang, channel, title, body, required_vars, is_active,
+    updated_by, updated_at, source: 'db', encoding, parts, units }], defaults:
+    [{ code, lang: 'uz', channel: null, title, body: null, source: 'default',
+    encoding, parts }], languages, channels, forbidden_vars }`. `defaults` —
+    DB'da `uz` shabloni yo'q katalog turlari (faqat ko'rsatish uchun,
+    yuborishda QO'LLANMAYDI).
+  - `PUT /notifications/templates` (SUPERADMIN/ADMIN) `{ code (katalog turi),
+    lang, channel?: null | realtime|telegram|sms|email|push, title, body?,
+    required_vars?, is_active? }` → yaratadi (201) yoki yangilaydi (200).
+    `{{var}}` lar `required_vars` ga qo'shiladi; umumiy (`channel: null`) va
+    `sms` shablonlarida mijoz ismi/manzili/mahsulotlari (`forbidden_vars`) →
+    400 (PII). Javobda `encoding` (`GSM-7` 160 / `UCS-2` 70 belgi) va `parts`.
+  - Yuborishda: DB'da shu tur uchun shablon bo'lsa matn qabul qiluvchi
+    TILIDA renderlanadi (til → `uz` → xom matn) va inbox qatoriga yoziladi;
+    o'zgaruvchi yetishmasa — asl (chaqiruvchi) matni. Dispatch javobida
+    `template: { code, applied, fallback_raw, errors, by_lang }`.
+  → **Frontendda:** 🔧 profilda til tanlovi (`language`); admin "Shablonlar"
+  sahifasi: tur × til jadvali (`defaults` asos matn sifatida), tahrirlashda
+  SMS bo'lak hisobi (`parts`, kirill — qimmatroq ogohlantirishi) va 400
+  matnini ko'rsatish. Inbox `title`/`body` ni avvalgidek ko'rsating
+  (frontend `type`+`data` dan o'z tilida renderlashi — keyingi bosqich,
+  `locales/*/notifications.json` kalitlari kerak).
+- [2026-10-14] 🆕 [notification] — **Auditoriya konstruktori** (ebSV5oyP),
+  hammasi SUPERADMIN/ADMIN. Asosiy endpoint — mavjud `POST
+  /notifications/audience/preview` (alohida `/campaigns/audience/preview`
+  QURILMAGAN):
+  - yangi `with_sample: true` → javobda `sample: [{ id, role, phone:
+    '***7434' }]` (≤20; to'liq raqam va ism tarmoq javobida YO'Q);
+  - yangi `audience_segment_id` → saqlangan segment sharti bilan jonli son;
+  - `segment.max_orders` (buyurtmalar soni "dan–gacha" — `min_orders` bilan);
+    teskari oraliq (`min_orders > max_orders` yoki `last_order_from >
+    last_order_to`) → 400;
+  - 0 ta → 200, `warnings: ['empty_audience']`, `hint` matni (xom 400 emas);
+    filtrsiz so'rov → 400 "Auditoriya bo'sh: ...".
+  - `GET /notifications/audience/segments` → `{ items: [{ id, name,
+    description, audience, last_total, last_counted_at, created_by,
+    created_at }] }`; `POST /notifications/audience/segments` `{ name,
+    description?, roles? | broadcast? | include_customers? +
+    confirm_all_customers? + segment? }` → 201 (faqat SHART saqlanadi; takror
+    nom → 409, filtrsiz → 400); `DELETE /notifications/audience/segments/:id`.
+  → **Frontendda:** 🔧 `/campaigns/new` sahifasi: segment konstruktori
+  (hudud → tuman, market, oxirgi buyurtma oralig'i, buyurtmalar soni
+  min–max, auditoriya turi) — har o'zgarishda debounce bilan preview
+  ("Auditoriya: N ta"), filtrsiz holatda "filtr tanlang" (so'rov
+  yubormang); "Namunani ko'rish" — `with_sample: true`; `dispatch_allowed`/
+  `campaign_allowed: false` bo'lsa QIZIL xato va "Yuborish" bloklangan;
+  segmentni nom bilan saqlash/tanlash (`audience_segment_id` bilan preview,
+  yuborishda `segment.audience` maydonlarini dispatch/kampaniyaga bering);
+  390px da bir ustun, filtrlar Collapse ichida.
+- [2026-10-14] 🟢 [notification/sms] — OTP (tasdiq kodi) endi **alohida
+  kunlik kvota** (`SMS_OTP_DAILY_CAP`, sukut 500) va alohida navbat
+  ustuvorligi bilan (rkz0yBxr): reklama/tranzaksion SMS kvotani tugatsa ham
+  login kodi ketadi. `GET /notifications/sms/status` javobida yangi
+  `otp_used_today`, `otp_daily_cap` (`used_today`/`daily_cap` — endi OTP'siz
+  umumiy oqim). → **Frontendda:** 🟢 ixtiyoriy — SMS sozlamalarida OTP
+  kvotasini alohida ko'rsatish.
+
+### 2026-10-14 — Faoliyat jurnali: kim, nima, sahifalash, settlement (Guruh C)
+
+- [2026-10-14] ✏️ [gateway] — `GET /activity-logs/actions` (y8CxCtcK) endi
+  REYESTRDAN: `data` — avvalgidek fe'l satrlari (`string[]`, endi 16 emas,
+  50+ ta: `order.sell`, `finance.manual_expense`, `investor.profit_calculated`
+  ...), YANGI `registry` va `categories`:
+  ```json
+  { "data": ["order.sell", "..."],
+    "registry": [{ "action": "finance.manual_expense", "label": "Qo'lda chiqim",
+      "category": "finance", "category_label": "Moliya",
+      "icon": "minus", "tone": "rose", "known": true }],
+    "categories": [{ "key": "order", "label": "Buyurtma" }, { "key": "finance", "label": "Moliya" },
+      { "key": "auth", "label": "Kirish" }, { "key": "branch", "label": "Filial" },
+      { "key": "integration", "label": "Integratsiya" }, { "key": "logistics", "label": "Logistika" },
+      { "key": "notification", "label": "Bildirishnoma" }, { "key": "general", "label": "Umumiy" }] }
+  ```
+  → **Frontendda:** 🔧 `getActivityActions` `registry`/`categories` ni o'qisin;
+  "Amal" filtri — antd `Select` `options` = kategoriya bo'yicha optGroup
+  (`categories` tartibida, ichida `registry[].label`, qiymat — `action`).
+  Ikona nomlari umumiy so'z (`plus`, `minus`, `wallet`, `login`, `warning`,
+  `swap` ...) — o'z ikonka kutubxonangizga moslang; `tone` — BeePost tonlari.
+- [2026-10-14] ✏️ [gateway] — `GET /activity-logs` (va `/entity/...`,
+  `/user/:id`) har qatorga YANGI maydonlar:
+  - `action_meta` — `{ action, label, category, category_label, icon, tone, known }`
+    (reyestrda yo'q eski fe'l: humanize yorliq `"Order batch sent"`,
+    `icon: "dot"`, `tone: "slate"`, `known: false` — UI sinmaydi);
+  - `actor_status` — `snapshot` (qatordagi yozilgan paytdagi ism) /
+    `resolved` (identity'dan) / `unresolved` (id bor, ism topilmadi) /
+    `system` (aktyorsiz: cron/outbox/webhook);
+  - `actor.resolved: boolean`; `actor.name`/`actor.role` — avval QATORDAGI
+    (amal paytidagi) qiymat, keyin identity (rol keyin o'zgarsa ham eski qator
+    o'zgarmaydi). Superadmin va mijoz amallarida endi ism bor ("1" emas).
+  - ⚠️ `actor.phone_number` endi doim `null` (jurnal "Kim" lookup'i telefon
+    qaytarmaydi — y8CxCtcK).
+  - `cursor_ts` — mikrosekundli vaqt (texnik, ko'rsatish shart emas).
+  → **Frontendda:** 🔧 "Amal" ustunida `action_meta.label` + ikona/rang;
+  "Kim" ustunida `actor.name` (bo'sh bo'lsa `actor_status === 'unresolved'` →
+  "#<id> (topilmadi)", `system` → "Tizim"). Telefonni actor'dan ko'rsatmang.
+- [2026-10-14] ✏️ [gateway] — `GET /activity-logs` sahifalash ANIQ (8eYmt4NV):
+  har `page <= totalPages` qatorli (avval 90-sahifadan keyin bo'sh edi),
+  `meta.total` = haqiqatan o'qiladigan qatorlar. YANGI `meta` maydonlari:
+  - `next_cursor` (satr | null) — keyingi sahifa kursori;
+  - `truncated: true`, `total_all`, `hint` — bir nechta servis bo'ylab
+    10 000 qatordan chuqur (bunda `total`/`totalPages` 10 000 bilan
+    cheklangan; `?service=` yoki sana oralig'i bilan cheklov yo'q);
+  - `failed_services: string[]` — javob bermagan servislar (bo'lmasa kalit yo'q);
+  - YANGI query `?cursor=<meta.next_cursor>` — istalgan chuqurlikda keyingi
+    sahifa (`page` e'tiborsiz, javobda `meta.page: null`); buzilgan kursor → 400.
+  → **Frontendda:** 🔧 `meta.truncated` bo'lsa jadval ustida `meta.hint` ni
+  ogohlantirish sifatida ko'rsating; `failed_services` bo'lsa "ba'zi
+  servislar javob bermadi" belgisi. Ixtiyoriy: "Yana yuklash" uchun
+  `next_cursor`.
+- [2026-10-14] 🆕 [order] — naqd hisob-kitob jurnalga yoziladi (jtB0i4y3):
+  `entity_type=Settlement`, `entity_id` — kuryer/filial/market id,
+  `action=created`, `metadata: { leg: 'courier_to_branch'|'branch_to_hq'|'hq_to_market',
+  kind: 'advance'|'close_zero', amount, allocated, leftover, settled_count,
+  settled_order_ids, request_id }`, `description`:
+  "Hisob-kitob (kuryer → filial) #263: 150 000 so'm, 2 ta buyurtma yopildi".
+  Filtr: `GET /activity-logs?entity_type=Settlement`.
+  → **Frontendda:** 🔧 jurnal "Obyekt turi" filtriga `Settlement`
+  ("Hisob-kitob") qo'shing; tafsilotda `metadata.leg`/`amount` ni ko'rsating.
+- [2026-10-14] 🟢 [identity] — access token'da YANGI `name` claim (aktyor
+  ismi jurnalga avtomatik yozilishi uchun). Mavjud maydonlar o'zgarmagan.
+- [2026-10-14] 🟢 [identity] — takroriy login (AYNI qurilma/IP, 10 daqiqa
+  ichida) yangi jurnal qatori yaratmaydi: mavjud `login` qatorida
+  `metadata.count` oshadi, `metadata.last_at` yangilanadi (i6Nyedea).
+  → **Frontendda:** ixtiyoriy — `metadata.count > 1` bo'lsa "×N" belgisi.
+- [2026-10-14] 🟢 [all] — jurnal saqlash muddati (i6Nyedea): o'chirish
+  `ACTIVITY_LOG_PRUNE_ENABLED` bayrog'i ortida, SUKUT BO'YICHA O'CHIQ
+  (faqat dry-run sanash). Yoqilganda: login/logout/auth_failure + OTP — 90 kun,
+  qolgan hamma fe'l (moliya, buyurtma, investor, settlement) — 1095 kun.
+  API kontrakti o'zgarmaydi. → **Frontendda:** o'zgarish shart emas.
+
 ### 2026-10-14 — Investor dashboard API (vpKijXce)
 
 - [2026-10-14] 🆕 [investor] — investorning O'ZI uchun marshrutlar
@@ -383,6 +813,70 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
   `escalation: 'scheduled'|'skipped'|'blocked'|'sms'`, `escalation_due_at`, `escalated_at`.
   → **Frontendda:** 🟢 ixtiyoriy — admin diagnostikasida ko'rsatish mumkin.
 
+### 2026-10-14 — Guruh G (pochtalar ro'yxati/filtrlar, qabul skani, kuryer tablari)
+
+- [2026-10-14] ✏️ [logistics] — `GET /post` ("Eski pochtalar") filtrlari endi
+  SERVERDA ishlaydi (YfrqN70i). Avval gateway faqat `page/limit/status/branch_id`
+  ni o'qirdi — qolganlari jimgina tashlanardi (mavjud bo'lmagan viloyat ham
+  59 ta qaytardi). Yangi ixtiyoriy query'lar:
+  - `region_id`, `courier_id` — bigint id. Raqam bo'lmagan qiymat (UUID) →
+    bo'sh sahifa (`total: 0`), 500 emas;
+  - `startDate`, `endDate` — `YYYY-MM-DD`, **Toshkent kuni** bo'yicha
+    (`createdAt`; `endDate=2026-08-31` → 31-avgust 23:59:59 Toshkent kiradi).
+    Yaroqsiz sana yoki `startDate > endDate` → 400;
+  - `has_orders=true` — faqat `order_quantity > 0` (frontenddagi `hasOrders`
+    filtrining server varianti — sahifalash/`total` to'g'ri qolishi uchun).
+  `GET /post/courier/old-posts` ham `region_id`, `status`
+  (`received|canceled|canceled_received`), `startDate`, `endDate`,
+  `has_orders` ni qabul qiladi (`courier_id` — doim JWT).
+  Misol: `GET /post?page=1&limit=20&region_id=3&courier_id=119&startDate=2026-08-01&endDate=2026-08-31&has_orders=true`.
+  → **Frontendda:** 🔧 `oldMails.tsx` dagi mijoz tomonidagi filtrlashni
+  (`filteredMails` — region/courier/status/sana/`hasOrders`) olib tashlang;
+  parametrlarni so'rovga qo'yish allaqachon bor (`entities/mails/index.ts`),
+  `has_orders: true` ni qo'shing.
+
+- [2026-10-14] ✏️ [logistics] — pochta ro'yxatlarida limit shifti
+  (100) endi JIMGINA EMAS (kA70Rban): `GET /post`,
+  `GET /post/courier/old-posts` va kuryerning barcha pochtalari javobiga
+  `limit_capped: boolean` va `max_limit: 100` qo'shildi. Masalan
+  `GET /post?page=1&limit=10000` →
+  `{ data: [...100], total: 150, page: 1, totalPages: 2, limit: 100, limit_capped: true, max_limit: 100 }`.
+  Hozir prod'da 59 pochta — muammo LATENT (100 dan oshgan kuni arxiv
+  jimgina yo'qolardi).
+  → **Frontendda:** 🔧 `OLD_MAILS_COLLECTION_LIMIT = 10000` va
+  `filteredMails.slice(...)` (mijoz tomonida sahifalash) o'rniga haqiqiy
+  `page`/`limit` (8/20/50) ni yuboring va `data.total`/`data.totalPages` ni
+  Pagination'ga bering. Excel eksporti: `limit=100` bilan `totalPages`
+  gacha sahifama-sahifa yig'ing (150 pochta → 150 qator). `limit_capped:
+  true` kelsa ogohlantirish ko'rsating. "Barcha partiyalar" rejimi
+  (`useBatches`, `limit=10000`) — alohida endpoint, bu yozuvga kirmaydi.
+
+- [2026-10-14] 🟢 [order] — `GET /orders/external` (kiruvchi posilkalar
+  skani) har elementida `customer: {id, name, phone_number, ..., district,
+  region}`, `district: {id, name, ...}`, `region`, `order_number` bor
+  (e5L3RMRu). Backend 9b1b951 (DL6FCdrh) da yopilgan — mijoz/tuman bitta
+  `find_by_ids` partiya so'rovi bilan biriktiriladi (N+1 yo'q); endi spec
+  bilan qotirildi.
+  → **Frontendda:** 🔧 `entities/incoming-orders/index.ts` `IncomingOrder`
+  turiga `customer?: {name, phone_number, district?: {name}}`,
+  `district?: {name}`, `order_number?: string` qo'shing; ro'yxatda xom id
+  o'rniga `order_number` ko'rsating. O'qish kodi (`customer?.name`,
+  `customer?.district?.name ?? district?.name`) allaqachon to'g'ri.
+
+- [2026-10-14] 🆕 [order] — `GET /orders/courier/orders/counts` (faqat
+  COURIER, 0d11ewk7) — kuryer tablari badge'i bitta so'rovda:
+  `{ statusCode: 200, message: 'Courier order counts', data: { waiting: 12, all: 340, cancelled: 3 } }`.
+  Sonlar `GET /orders/courier/orders` tablari bilan AYNI so'rovlardan
+  (`waiting` = `status=waiting`, `all` = statussiz, `cancelled` =
+  `status=cancelled`) — badge va ro'yxat `total`i farq qilmaydi.
+  → **Frontendda:** 🔧 `entities/orders/index.ts` ga
+  `useGetCourierOrderCounts` (queryKey `[orders, "courier", "counts"]`,
+  `staleTime` bilan — tab almashganda qayta so'ralmasin); `tabs.tsx` Tab
+  turiga `count` qo'shib mobil (~131) va desktop (~172) render'da badge;
+  0 bo'lsa badge ko'rsatilmasin; 1000+ → `1.2k` (BeePost `formatBadgeCount`);
+  sotish/qisman sotish/bekor qilish/qaytarish mutatsiyalaridan keyin counts
+  query'sini invalidate qiling.
+
 ### 2026-10-14 — Guruh G (AI buyurtma)
 
 - [2026-10-14] 🟢 [order/ai] — `POST /orders/ai-parse` preview'ida yangi
@@ -430,6 +924,171 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
   → **Frontendda:** 🔧 AI admin dashboard'ida `model_policy.ok === false`
   bo'lsa QIZIL belgi ("Ekstraksiya modeli pasaytirilgan: <models.order>")
   ko'rsating. Qolgan maydonlar o'zgarmagan.
+
+### 2026-10-14 — Guruh H: hisobotlar, AI xarajat paneli, investor (W20LoskP, Celz3rKJ, GADgsW5G)
+
+- [2026-10-14] 🆕 [api-gateway/ai] — (Celz3rKJ) `GET /ai-usage/dashboard?fromDate&toDate`
+  (YYYY-MM-DD, Toshkent, ikkala chet ham kiradi; berilmasa oxirgi 30 kun;
+  `fromDate > toDate` / noto'g'ri format → 400). Faqat SUPERADMIN, ADMIN —
+  boshqa rol 403. Javob (BeePost `ai-usage/dashboard` bilan bir xil nomlar):
+  `{ from, to, usdUzsRate, summary: { totalCostUsd, totalCostUzs, totalCalls,
+  cacheSavedUsd, cacheSavedUzs, metaIncompleteCalls, linkedCalls, aiOrderCount,
+  orderCostUsd, orderCostUzs, avgCostPerAiOrderUsd, avgCostPerAiOrderUzs },
+  byArea: [{ area, calls, inputTokens, outputTokens, costUsd, costUzs }],
+  byFeature: [{ feature, area, calls, steps, inputTokens, outputTokens, costUsd,
+  costUzs }], byModel: [{ model, calls, costUsd, costUzs }], dailySeries:
+  [{ day: 'YYYY-MM-DD', costUsd, costUzs, calls, aiOrders }], orderSources:
+  { total, ai, manual, external, branch, applied_range } | null, degraded,
+  failed_parts }`. `dailySeries` kuni SQL'da `AT TIME ZONE 'Asia/Tashkent'`
+  bilan bucket'langan, davr ≤ 366 kun bo'lsa bo'sh kunlar 0 bilan keladi.
+  So'm qiymati — jurnal qatoridagi `cost_uzs` (yozish paytidagi kurs);
+  `usdUzsRate` — hozirgi kurs, faqat ma'lumot uchun. `orderSources.manual` =
+  market/operator buyurtmalari − AI buyurtmalar; `orderSources: null` +
+  `degraded: true` — order-service javob bermadi (AI xarajati baribir keladi).
+  Feature nomlari: `order_extract_multi`, `order_extract_image`,
+  `order_district`, `order_item_match`.
+  → **Frontendda:** 🔧 `src/pages/financial-balance/index.tsx` ga "AI xarajat"
+  tabi (alohida sahifa EMAS): KPI kartalari (`summary.totalCostUzs` +
+  `summary.totalCostUsd`, chaqiruvlar, AI buyurtmalar, o'rtacha narx), feature
+  jadvali, model PieChart, kunlik ComposedChart (`costUzs` + `calls` +
+  `aiOrders`), buyurtma manbasi ulushi (`orderSources`). ⚠️ Kunni frontendda
+  "epoch + 5 soat" bilan QAYTA hisoblamang — `dailySeries[].day` tayyor
+  Toshkent sanasi. 390px da gorizontal skrollsiz (jadval kartaga aylansin).
+  "Bot" manbasi Elchida alohida belgilanmaydi (bot buyurtmasi `manual` ichida).
+- [2026-10-14] 🆕 [api-gateway/ai] — (Celz3rKJ) `GET /ai-usage/ai-orders?fromDate&toDate&limit`
+  (limit 1..100, sukut 100; SUPERADMIN, ADMIN) → `{ from, to, total, limit,
+  items: [{ orderId, orderNumber, status, totalPrice, draftId, marketId,
+  confirmedBy, editedFields, createdAt, model, sourceKind, draftCostUsd,
+  draftCostUzs, draftOrders }], degraded }`. Xarajat DRAFT darajasida (bitta
+  AI so'rovdan bir nechta buyurtma chiqishi mumkin — `draftOrders`). Mijoz
+  ismi/telefoni javobda YO'Q.
+  → **Frontendda:** 🔧 "AI xarajat" tabida "AI buyurtmalar" ro'yxati
+  (buyurtma raqami → buyurtma sahifasiga havola).
+- [2026-10-14] ✏️ [analytics] — (W20LoskP) `GET /analytics/reports/orders`:
+  `statusDistribution` endi `Order_status` enumidagi BARCHA 13 kalitni
+  qaytaradi (`created`, `waiting`, `waiting_customer`, `returned_to_market` ham;
+  0 bo'lsa ham) va yig'indisi `overview.acceptedCount` ga teng. Yangi maydonlar:
+  `statusDistributionTotal`, `applied_range` (order-service 366 kunlik oynasi,
+  `clamped`), `degraded`, `failed_parts`. `byRegion` va `topProducts` endi
+  SQL'da to'liq hisoblanadi (ilgari 10 000 buyurtmadan keyin jim kesilardi).
+  Bo'lak olinmasa `statusDistribution: null` (nollar emas) va `degraded: true`.
+  → **Frontendda:** 🔧 status diagrammasi qo'lda yozilgan ro'yxat emas,
+  javobdagi kalitlar bo'yicha chizilsin; `degraded` da ogohlantirish.
+- [2026-10-14] ✏️ [investor] — (GADgsW5G) `PATCH /profits/:id/mark-paid`
+  aktor (JWT foydalanuvchisi) aniqlanmasa endi 403 qaytaradi — pul aktorsiz
+  (`user_id '0'`) chiqmaydi; kassa `created_by` = JWT `sub`. Investor
+  moduli O'QISH marshrutlari ham endi `requester` uzatadi (javob o'zgarmagan).
+  → **Frontendda:** 🟢 o'zgarish shart emas (oddiy login bilan 200).
+
+### 2026-10-14 — Guruh F (filiallar, hududlar, RBAC, foydalanuvchi statistikasi)
+
+- [2026-10-14] 🔧 [branch] (EiZj47Gc) — `POST /branches`: qaror — PICKUP ham
+  ota filialga ega bo'ladi (backend qoidasi o'zgarmadi: HQ'dan boshqa BARCHA
+  turlar uchun `parent_id` majburiy). Gateway endi `parent_id: ''` / `null` ni
+  "yo'q" deb qabul qiladi, shuning uchun tushunarsiz
+  `"parent_id must be a number string"` o'rniga branch-service'ning aniq xabari
+  qaytadi: `400 "HQ bo'lmagan filial uchun ota filial (parent_id) majburiy"`.
+  → Frontend: `BranchFormModal.tsx:125` dagi
+  `parent_id: normalizedType === "PICKUP" ? "" : values.parent_id` shartini olib
+  tashlang; `schema.ts` dagi `when("type")` ni `type !== "HQ"` bo'lganda
+  `parent_id` required qilib o'zgartiring (PICKUP ham). Misol:
+  `POST /branches {"name":"Chilonzor PVZ","type":"PICKUP","code":"TSH-CHL","parent_id":"7"}` → 201.
+
+- [2026-10-14] 🔧 [branch] (RlMb3F26) — filial sozlamalari endi YOZILADI:
+  `POST /branches/:id/config` (`{config_key, config_value}` → yangi 201 /
+  mavjud 200) va `PATCH /branches/:id/config/:key` (`{config_value}` → 200)
+  avval har doim `400 "branch_id majburiy"` qaytarardi (RMQ payloadida
+  `dto.branch_id` o'qilmasdi) — tuzatildi. `GET /branches/:id/config`,
+  `GET|DELETE /branches/:id/config/:key` o'zgarmadi. Javob qatori:
+  `{id, branch_id, config_key, config_value (jsonb obyekt | null), isDeleted, createdAt, updatedAt}`.
+  → Frontend: (1) `BranchSettingsSection.tsx` ni `BranchDetailWidget` ga
+  ikkinchi tab qilib ulang (`widgets/branch-detail/index.ts` eksporti +
+  `BranchDetailWidget.tsx:133-139` tab paneli) yoki ishlatilmayotgan
+  komponentni o'chiring; (2) `branchApi.normalizeSetting` (branchApi.ts:144-152)
+  `{key,value}` emas, `config_key` / `config_value` ni o'qisin. Misol:
+  `POST /branches/1/config {"config_key":"working_hours","config_value":{"start":"09:00","end":"18:00"}}` → 201.
+
+- [2026-10-14] ⚠️ [logistics] (uherIk8r) — hudud statistikasi serverda
+  cheklandi:
+  - `GET /region/stats/all` — COURIER endi **403** (MARKET avvaldan 403).
+    Rollar: admin, superadmin, manager, registrator, logist. Doira SERVERDA:
+    admin/superadmin/logist va HQ filial xodimi — 14 viloyat; boshqa filial
+    menejeri/registratori — `regions` da FAQAT filial viloyati (`summary` ham
+    shu bo'yicha); filialga biriktirilmagan bo'lsa `regions: []`.
+  - `GET /region/stats/:id` — HQ'dan tashqari filial menejeri/registratori
+    boshqa viloyat id'si bilan → 403 `"Bu viloyat statistikasini ko'rishga ruxsat yo'q"`.
+  - 🆕 `GET /region/my/district-stats?startDate=&endDate=` — `@Roles(courier, manager)`.
+    Viloyat tokendagi foydalanuvchidan serverda aniqlanadi (kuryer —
+    `users.region_id`, menejer — filial viloyati); query'dagi `region_id` /
+    `courier_id` e'tiborsiz. Kuryer ism/telefoni qaytmaydi. Javob:
+    `{ region: {id, name, satoCode}, summary: {totalOrders, deliveredOrders, cancelledOrders, pendingOrders, totalRevenue, successRate, districtsCount}, districts: [{id, name, satoCode, totalOrders, deliveredOrders, cancelledOrders, pendingOrders, totalRevenue, successRate, couriersCount}] }`.
+    Viloyat biriktirilmagan: `200 { region: null, summary: null, districts: [] }`,
+    message `"Sizga viloyat biriktirilmagan"`.
+  - O'tish davri: gateway env `REGION_STATS_COURIER_COMPAT=true` bo'lsa kuryer
+    `stats/all` da 403 emas, `regions` da FAQAT o'z viloyatini oladi (eski
+    /regions sahifasi `regions.length === 1` bilan ishlaydi). Default — 403.
+  → 🔧 Frontend: `pages/region/index.tsx:128` dagi `useRegionStats` ni kuryer
+  uchun yangi `useMyDistrictStats` hooki (`GET /region/my/district-stats`)
+  bilan almashtiring; brauzerdagi `scopedRegion` filtri kerak emas. Menejer
+  uchun ham shu endpoint (yoki hozirgidek `stats/:id` o'z viloyati bilan)
+  ishlatilsin. `canViewRegionStats` dagi kuryer → yangi endpoint. FE chiqqach
+  backend flag va `@Roles` dagi COURIER olib tashlanadi.
+
+- [2026-10-14] ✏️ [identity] (nFmup26a) — `GET /users` meta: `totalEmployees`
+  endi market BO'LMAGAN barcha rollar (avval faqat admin+registrator+courier;
+  menejer/operator/branch/investor/logist tushib qolardi). Invariant:
+  `totalMarket + totalEmployees === totalUsers`. 🆕 `meta.countsByRole` —
+  Roles enum'ining har bir qiymati uchun son (yo'q rol — 0; superadmin/customer
+  bu ro'yxatda doim 0). Misol:
+  `meta: {total, page, limit, totalPages, totalMarket: 11, totalEmployees: 24, totalUsers: 35, countsByRole: {market: 11, manager: 11, courier: 10, registrator: 2, admin: 1, logist: 0, ...}}`.
+  → Frontend: `UserStats.tsx` o'zgarishsiz to'g'ri raqam ko'rsatadi; xohlasa
+  kartalarni `countsByRole` dan qursin. ⚠️ Eslatma: menejer so'rovida gateway
+  `meta.totalUsers` ni sahifadagi filtrlangan qatorlar soniga qayta yozadi
+  (api-gateway.controller.ts `getUsers`) — bu alohida karta, bu yerda tegilmadi.
+
+- [2026-10-14] 🔧 [api-gateway] (lQP3ojwq, wLNccBkX) — ops RBAC: backend
+  ruxsatlari O'ZGARMADI (hech kim ruxsat yo'qotmaydi/olmaydi); UI backendga
+  moslashtirilsin. 🆕 `npm run openapi:generate` endi har operatsiyaga
+  `x-roles: string[] | null` qo'shadi (gateway `@Roles`; `null` — `@Roles`
+  yo'q, istalgan autentifikatsiyadan o'tgan foydalanuvchi). Joriy qiymatlar:
+  - `POST /orders/settlement/courier-to-branch` — x-roles
+    `[manager, registrator, superadmin, admin]`, lekin HAMMA uchun **410 Gone**
+    (lump-sum olib tashlangan, MlVMpsfr/uEPILERk); `branch-to-hq`
+    `[manager, superadmin, admin]` → 410; `hq-to-market` `[superadmin, admin]` → 410;
+    ro'yxatda yo'q rol → 403.
+  - `POST /transfer-batches/:id/cancel` — `[superadmin, admin, branch, manager, registrator]`;
+    servisda FAQAT manba filial menejeri/registratori (yaratish huquqi bilan
+    bir xil), boshqa filial → 403.
+  - `/activity-logs/*` — `[superadmin, admin]`.
+  → Frontend: (1) `ROUTE_ROLES` ni `openapi.json` dagi `x-roles` dan
+  generatsiya qiling, `canViewOpsPages` / menyu shundan o'qisin; CI'da farq
+  bo'lsa build yiqilsin (drift darvozasi). (2) `/settlement` sahifasi o'lik
+  endpointlarni chaqiradi (410) — olib tashlansin yoki moliya kassasi
+  oqimiga (`/finance/cashbox/payment/*`) yo'naltirilsin. (3) `pages/ops/index.tsx:106`
+  dagi "faqat superadmin" matni haqiqatga moslansin; partiyani bekor qilish
+  tugmasi menejer/registratorning o'z filiali partiyalari ekranida ko'rsatilishi
+  mumkin (backend ruxsat beradi). (4) `/activity-logs` va `/ops` bir xil
+  qoidaga keltirilsin (backend: activity-logs — superadmin+admin).
+
+- [2026-10-14] 🆕 [identity] (hEjjuJaT) — super-kuryer (ko'p viloyat) va
+  viloyat bo'yicha kuryer tarifi (migratsiya 1716000000089):
+  - `GET /couriers/:id/regions` (superadmin, admin) →
+    `{ courier_id, home_region_id, is_super_courier, serves_all_regions, flat_tariff_home, flat_tariff_center, regions: [{region_id, tariff_home, tariff_center}] }`.
+  - `PUT /couriers/:id/regions` (superadmin, admin) — ro'yxat TO'LIQ
+    almashtiriladi: `{ is_super_courier?: boolean, serves_all_regions?: boolean, regions?: [{ region_id: "5", tariff_home?: 15000|null, tariff_center?: 12000|null }] }`.
+    `tariff_* = null` — kuryerning umumiy (yassi) tarifiga fallback.
+    `is_super_courier=false` → viloyatlar tozalanadi; ro'yxat yoki
+    `serves_all_regions=true` oddiy kuryerga — 400; takror/noma'lum viloyat,
+    manfiy yoki kasr tarif — 400; logistics javob bermasa — 503.
+  - Kuryer ro'yxatlari (`GET /couriers?region_id=`, `/couriers/region/:id`,
+    pochta uchun kuryerlar) super-kuryerni biriktirilgan har viloyatda,
+    `serves_all_regions=true` bo'lsa HAMMA viloyatda qaytaradi.
+  - Sotuv/qisman sotuv/bekor qilish/rollback'da super-kuryer tarifi buyurtma
+    viloyati bo'yicha olinadi va `orders.courier_tariff` ga snapshot bo'ladi
+    (Elchi'da snapshot SOTUVDA; keyingi tarif o'zgarishi eski buyurtmaga
+    ta'sir qilmaydi).
+  → 🔧 Frontend: kuryer kartasida "Super-kuryer" bo'limi (bayroqlar +
+  viloyatlar/tarif jadvali) — GET/PUT `/couriers/:id/regions`.
 
 ### 2026-10-12 — 1-kun backend kartalari
 
