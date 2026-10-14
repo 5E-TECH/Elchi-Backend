@@ -169,6 +169,24 @@ describe('j8qCkJhV — filial kassasi: berilishi_kerak / olinishi_kerak ajralgan
     });
   });
 
+  it('prod frontend so`rovi cashbox_type=branch: maydonlar ham qo`shiladi', async () => {
+    const env = setup();
+    env.findByUser.mockReturnValue({ statusCode: 200, data: branchCashbox });
+
+    const res: any = await env.controller.findCashboxByUser(
+      BRANCH_ID,
+      { cashbox_type: 'branch', with_history: false } as any,
+      superadmin,
+    );
+
+    expect(res.data).toMatchObject({
+      berilishi_kerak: 500_000,
+      olinishi_kerak: 120_000,
+      hq_ga_tollangan: 70_000,
+      counterparty: 'HQ',
+    });
+  });
+
   it('ikkala yo`lda hisob-kitob maydonlari to`plami bir xil', async () => {
     const pick = (data: Record<string, unknown>) =>
       Object.keys(data)

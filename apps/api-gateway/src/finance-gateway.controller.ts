@@ -1547,7 +1547,13 @@ export class FinanceGatewayController {
         };
       }
     }
-    if (this.isPrivileged(req?.user) && !query.cashbox_type) {
+    // j8qCkJhV: prod frontend filial kassasini `cashbox_type=branch` bilan
+    // so'raydi — filial hisob-kitob maydonlari shu holda ham qo'shilsin.
+    const explicitBranchView = query.cashbox_type === Cashbox_type.BRANCH;
+    if (
+      this.isPrivileged(req?.user) &&
+      (!query.cashbox_type || explicitBranchView)
+    ) {
       try {
         await this.sendBranch(
           { cmd: 'branch.find_by_id' },
@@ -1585,27 +1591,32 @@ export class FinanceGatewayController {
       } catch {
         isPrivilegedBranchView = false;
         privilegedBranchSettlement = null;
-        try {
-          const userResponse = await this.sendIdentity<{
-            data?: Record<string, any>;
-          }>({ cmd: 'identity.user.find_by_id' }, { id: user_id });
-          const targetRoles = Array.isArray(userResponse?.data?.roles)
-            ? userResponse.data.roles
-            : userResponse?.data?.role
-              ? [userResponse.data.role]
-              : [];
-          isPrivilegedMarketView = targetRoles.some(
-            (role: unknown) =>
-              this.roleToString(role).toLowerCase() === RoleEnum.MARKET,
-          );
-          if (isPrivilegedMarketView) {
-            requestQuery = {
-              ...query,
-              cashbox_type: Cashbox_type.FOR_MARKET,
-            };
+        if (explicitBranchView) {
+          // Aniq `branch` so'ralgan — market ko'rinishiga o'tkazilmaydi.
+          requestQuery = query;
+        } else {
+          try {
+            const userResponse = await this.sendIdentity<{
+              data?: Record<string, any>;
+            }>({ cmd: 'identity.user.find_by_id' }, { id: user_id });
+            const targetRoles = Array.isArray(userResponse?.data?.roles)
+              ? userResponse.data.roles
+              : userResponse?.data?.role
+                ? [userResponse.data.role]
+                : [];
+            isPrivilegedMarketView = targetRoles.some(
+              (role: unknown) =>
+                this.roleToString(role).toLowerCase() === RoleEnum.MARKET,
+            );
+            if (isPrivilegedMarketView) {
+              requestQuery = {
+                ...query,
+                cashbox_type: Cashbox_type.FOR_MARKET,
+              };
+            }
+          } catch {
+            isPrivilegedMarketView = false;
           }
-        } catch {
-          isPrivilegedMarketView = false;
         }
       }
     }

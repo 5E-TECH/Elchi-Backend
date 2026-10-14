@@ -2,6 +2,7 @@ import { RpcException } from '@nestjs/microservices';
 import { of } from 'rxjs';
 import { DataSource } from 'typeorm';
 import { CreateNotifications1716000000008 } from '../../../migrations/1716000000008-CreateNotifications';
+import { CreateNotificationDispatches1716000000084 } from '../../../migrations/1716000000084-CreateNotificationDispatches';
 import { DispatchNotificationDto } from './dto/dispatch-notification.dto';
 import { Notification } from './entities/notification.entity';
 import { NotificationInboxService } from './notification-inbox.service';
@@ -47,6 +48,8 @@ const BAD = '777000000002';
       const runner = ds.createQueryRunner();
       try {
         await new CreateNotifications1716000000008().up(runner);
+        // 7Vozou5x: entity `dispatch_id` ustunini kutadi.
+        await new CreateNotificationDispatches1716000000084().up(runner);
       } finally {
         await runner.release();
       }
