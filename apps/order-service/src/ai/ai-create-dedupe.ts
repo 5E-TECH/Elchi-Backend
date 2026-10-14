@@ -148,7 +148,12 @@ export function sanitizeAiAuditMetadata(
   const r = raw as Record<string, unknown>;
   const draftId = str(r.ai_draft_id, 36);
   if (!draftId || !UUID_RE.test(draftId)) return null;
-  const idx = Number(r.ai_item_index);
+  // Number(null) === 0 — indeks yuborilmagan bo'lsa 0 emas, null yozilsin.
+  const rawIdx = r.ai_item_index;
+  const idx =
+    rawIdx === null || rawIdx === undefined || rawIdx === ''
+      ? Number.NaN
+      : Number(rawIdx);
   const edited = Array.isArray(r.edited_fields)
     ? r.edited_fields.filter(
         (f): f is string => typeof f === 'string' && EDITABLE.has(f),

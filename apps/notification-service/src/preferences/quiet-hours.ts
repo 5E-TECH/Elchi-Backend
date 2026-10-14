@@ -29,10 +29,16 @@ const toMinutes = (value: unknown): number | null => {
   return hours * 60 + minutes;
 };
 
-/** `{ from, to }` → oyna; noto'g'ri / bo'sh / from === to → `null` (tinch soat yo'q). */
+/**
+ * `{ from, to }` → oyna; noto'g'ri / bo'sh / from === to → `null` (tinch soat yo'q).
+ * Frontend sozlamalari `{ enabled, from, to }` yozadi: `enabled: false` —
+ * soatlar saqlangan bo'lsa ham tinch soat O'CHIQ. `enabled` yo'q — eski shakl,
+ * from/to bo'yicha.
+ */
 export function parseQuietWindow(value: unknown): QuietWindow | null {
   if (!value || typeof value !== 'object') return null;
-  const raw = value as { from?: unknown; to?: unknown };
+  const raw = value as { enabled?: unknown; from?: unknown; to?: unknown };
+  if (raw.enabled === false) return null;
   const start = toMinutes(raw.from);
   const end = toMinutes(raw.to);
   if (start === null || end === null || start === end) return null;

@@ -17,6 +17,24 @@ describe('quiet-hours (mP1WGG1W)', () => {
     expect(parseQuietWindow('22:00-08:00')).toBeNull();
   });
 
+  it('frontend sozlamasi { enabled, from, to }: enabled=false → tinch soat yo‘q; true / yo‘q → oyna', () => {
+    expect(
+      parseQuietWindow({ enabled: false, from: '22:00', to: '08:00' }),
+    ).toBeNull();
+    expect(
+      parseQuietWindow({ enabled: true, from: '22:00', to: '08:00' }),
+    ).toEqual(night);
+    expect(
+      quietWindowFromContact({
+        settings: {
+          notifications: {
+            quiet_hours: { enabled: false, from: '22:00', to: '08:00' },
+          },
+        },
+      }),
+    ).toBeNull();
+  });
+
   it('kontaktdan o‘qiladi: quiet_hours | notifications.quiet_hours | settings.notifications.quiet_hours', () => {
     const qh = { from: '22:00', to: '08:00' };
     expect(quietWindowFromContact({ quiet_hours: qh })).toEqual(night);

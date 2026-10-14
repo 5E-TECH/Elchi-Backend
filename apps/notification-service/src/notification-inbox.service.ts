@@ -424,6 +424,12 @@ export class NotificationInboxService {
         telegramOutcome,
         smsResult as SmsChannelResult | null,
         pushQueued,
+        // VAPID yo'q — planner qatorga `no_provider` yozadi (navbatga qo'ymaydi).
+        rows.some(
+          (row) =>
+            row.delivery?.[NotificationChannel.PUSH] ===
+            NotificationDeliveryStatus.NO_PROVIDER,
+        ),
       );
       const message =
         !rows.length && plan.skipped.size
@@ -1019,6 +1025,7 @@ export class NotificationInboxService {
     telegram: TelegramOutcome | null,
     sms: SmsChannelResult | null,
     pushQueued = rows,
+    pushNoProvider = false,
   ) {
     const byChannel: Record<string, number> = { in_app: rows };
     const noProvider: string[] = [];
@@ -1033,6 +1040,7 @@ export class NotificationInboxService {
       } else if (channel === NotificationChannel.PUSH) {
         // Navbatga qo'yilganlar (obunasi bor) — hammasi emas.
         byChannel.push = pushQueued;
+        if (pushNoProvider) noProvider.push(channel);
       } else if (channel === NotificationChannel.EMAIL) {
         byChannel.email = 0;
         noProvider.push(channel);

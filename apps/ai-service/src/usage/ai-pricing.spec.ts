@@ -34,10 +34,11 @@ describe('ai-pricing (lYVuADRE 5-band)', () => {
     warn.mockRestore();
   });
 
-  it('narx map aynan kartadagi: opus-5 5/25, sonnet-5 3/15, haiku-4-5 1/5, fable-5 10/50', () => {
+  it('narx map kartadagi (opus-5 5/25, sonnet-5 3/15, haiku-4-5 1/5, fable-5 10/50) + prod modeli sonnet-4-6 3/15', () => {
     expect(AI_MODEL_PRICES).toEqual({
       'opus-5': { in: 5, out: 25 },
       'sonnet-5': { in: 3, out: 15 },
+      'sonnet-4-6': { in: 3, out: 15 },
       'haiku-4-5': { in: 1, out: 5 },
       'fable-5': { in: 10, out: 50 },
     });

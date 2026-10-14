@@ -327,6 +327,20 @@ describe('sanitizeAiAuditMetadata', () => {
     expect(sanitizeAiAuditMetadata(null)).toBeNull();
   });
 
+  it('ai_item_index yuborilmagan / null / bo‘sh → null (0 EMAS); 0 va "2" saqlanadi', () => {
+    for (const value of [undefined, null, '']) {
+      expect(
+        sanitizeAiAuditMetadata({ ai_draft_id: DRAFT, ai_item_index: value }),
+      ).toMatchObject({ ai_item_index: null });
+    }
+    expect(
+      sanitizeAiAuditMetadata({ ai_draft_id: DRAFT, ai_item_index: 0 }),
+    ).toMatchObject({ ai_item_index: 0 });
+    expect(
+      sanitizeAiAuditMetadata({ ai_draft_id: DRAFT, ai_item_index: '2' }),
+    ).toMatchObject({ ai_item_index: 2 });
+  });
+
   it('noma’lum edited_fields tashlanadi, ai:true majburan', () => {
     expect(
       sanitizeAiAuditMetadata({

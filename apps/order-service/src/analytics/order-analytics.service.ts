@@ -1743,8 +1743,18 @@ export class OrderAnalyticsService {
       rows.map((row) => String(row.post_id)),
     );
     const postMap = new Map(posts.map((p) => [String(p.id), p]));
+    // Kuryersiz pochtada courier_id "0" satri — truthy, `filter(Boolean)` dan
+    // o'tib reytingda nomsiz soxta qator bo'lardi (min_orders=1 dan beri ko'rinadi).
+    const isCourierId = (id: unknown): id is string | number =>
+      (typeof id === 'string' || typeof id === 'number') &&
+      /^[1-9]\d*$/.test(String(id));
     const courierIds = [
-      ...new Set(posts.map((p) => p.courier_id).filter(Boolean) as string[]),
+      ...new Set(
+        posts
+          .map((p) => p.courier_id)
+          .filter(isCourierId)
+          .map(String),
+      ),
     ];
     const couriers = await this.lookup.getCouriersByIds(courierIds);
     const courierMap = new Map(couriers.map((c) => [String(c.id), c]));
@@ -1752,7 +1762,7 @@ export class OrderAnalyticsService {
     const stats = new Map<string, { total: number; successful: number }>();
     for (const row of rows) {
       const courierId = postMap.get(String(row.post_id))?.courier_id;
-      if (!courierId) continue;
+      if (!isCourierId(courierId)) continue;
       const current = stats.get(String(courierId)) ?? {
         total: 0,
         successful: 0,

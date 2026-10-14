@@ -118,6 +118,33 @@ describe('analytics rankings respect selected range (PQt3n1N0)', () => {
     });
   });
 
+  it('top_couriers: kuryersiz pochta (courier_id "0") soxta nomsiz qator bo`lmaydi', async () => {
+    qb.getRawMany.mockResolvedValue([
+      { post_id: '10', total: '5', successful: '0' },
+      { post_id: '11', total: '6', successful: '5' },
+    ]);
+    jest
+      .spyOn(
+        service as unknown as { getPostsByIds: () => unknown },
+        'getPostsByIds',
+      )
+      .mockResolvedValue([
+        { id: '10', courier_id: '0' },
+        { id: '11', courier_id: '77' },
+      ]);
+    const result = (await service.getTopCouriers(
+      10,
+      undefined,
+      '2026-10-01',
+      '2026-10-14',
+      1,
+      true,
+    )) as { items: Array<{ courier_id: string }>; filtered_out: number };
+    expect(result.items.map((row) => row.courier_id)).toEqual(['77']);
+    expect(result.filtered_out).toBe(0);
+    expect(lookup.getCouriersByIds).toHaveBeenCalledWith(['77']);
+  });
+
   it('⭐ TC5: topBranches HQ filialini ko`rsatmaydi va uni filtered_out ga ham qo`shmaydi', async () => {
     qb.getRawMany.mockResolvedValue([
       { branch_id: '1', total_orders: '40', successful_orders: '40' },

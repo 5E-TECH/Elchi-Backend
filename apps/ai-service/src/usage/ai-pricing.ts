@@ -22,6 +22,10 @@ export const AI_MODEL_PRICES: Readonly<Record<string, AiModelPrice>> =
   Object.freeze({
     'opus-5': { in: 5, out: 25 },
     'sonnet-5': { in: 3, out: 15 },
+    // Prod `.env.production` dagi AI_ORDER_MODEL (BeePost'dan qolgan) — jadval
+    // tanimasa xarajat eng qimmat tarifda yozilardi (LP3RKvXY TC12). Ekstraksiya
+    // uchun KUCHLI ro'yxatda EMAS: model_policy `weak` ko'rsatadi.
+    'sonnet-4-6': { in: 3, out: 15 },
     'haiku-4-5': { in: 1, out: 5 },
     'fable-5': { in: 10, out: 50 },
   });

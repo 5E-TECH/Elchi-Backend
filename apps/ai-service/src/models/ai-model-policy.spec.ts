@@ -51,6 +51,15 @@ describe('evaluateModelPolicy (LP3RKvXY TC3)', () => {
     expect(problems[0]).toContain('AI_ORDER_MODEL=claude-haiku-4-5');
   });
 
+  it("prod'dagi claude-sonnet-4-6 → narx jadvalida bor, lekin 'weak' (ok:false, ERROR)", () => {
+    const models = { ...ok, order: 'claude-sonnet-4-6' };
+    const policy = evaluateModelPolicy(models);
+    expect(policy).toMatchObject({ ok: false, order: 'weak' });
+    expect(modelPolicyProblems(models, policy)[0]).toContain(
+      'AI_ORDER_MODEL=claude-sonnet-4-6',
+    );
+  });
+
   it("AI_ORDER_VISION_MODEL=haiku ham ushlanadi (rasm yo'li)", () => {
     const models = { ...ok, vision: 'claude-haiku-4-5-20251001' };
     const policy = evaluateModelPolicy(models);

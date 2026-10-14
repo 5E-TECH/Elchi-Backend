@@ -26,6 +26,7 @@ describe('NotificationInboxService — sozlamalar va kanal rejasi', () => {
   let prefRows: Array<Record<string, unknown>>;
   let prefQb: any;
   let subsRows: Array<{ user_id: string }>;
+  let webPush: { enabled: boolean };
   let pushDelivery: any;
   let smsDispatch: any;
   let outbox: any;
@@ -43,6 +44,7 @@ describe('NotificationInboxService — sozlamalar va kanal rejasi', () => {
     store = new Map();
     prefRows = [];
     subsRows = [];
+    webPush = { enabled: true };
     let nextId = 100;
     txRepo = {
       create: jest.fn((v) => ({ ...v })),
@@ -113,7 +115,7 @@ describe('NotificationInboxService — sozlamalar va kanal rejasi', () => {
     const planner = new ChannelPlannerService(
       preferences,
       { createQueryBuilder: jest.fn(() => subsQb) } as any,
-      { enabled: true } as any,
+      webPush as any,
       smsConfig as any,
       smsDispatch,
     );
@@ -214,6 +216,25 @@ describe('NotificationInboxService — sozlamalar va kanal rejasi', () => {
     const [, ids] = pushDelivery.enqueue.mock.calls[0];
     expect(ids).toEqual(['100']);
     expect(res.data.by_channel.push).toBe(1);
+  });
+
+  it('VAPID yo‘q: push no_provider — navbatga yo‘q, javobning no_provider ro‘yxatida push bor', async () => {
+    webPush.enabled = false;
+    subsRows = [{ user_id: '42' }];
+    const res: any = await dispatch({
+      recipient_ids: ['42', '43'],
+      type: 'order.manual',
+      channels: ['in_app', 'push'],
+    } as any);
+    const inserted = txRepo.insert.mock.calls[0][0];
+    expect(inserted.map((r: any) => r.delivery.push)).toEqual([
+      'no_provider',
+      'no_provider',
+    ]);
+    expect(pushDelivery.enqueue).not.toHaveBeenCalled();
+    expect(res.data.by_channel.push).toBe(0);
+    expect(res.data.no_provider).toEqual(['push']);
+    expect(res.message).not.toMatch(/dispatched/i);
   });
 
   it('7Ec56EIw TC7: telefoni yo‘q — delivery.sms=not_eligible va SMS servisiga bormaydi', async () => {
