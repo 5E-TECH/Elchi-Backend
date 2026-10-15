@@ -46,6 +46,16 @@ export class ProviderRemittance extends BaseEntity {
   @Column({ type: 'numeric', precision: 14, scale: 2, nullable: true })
   unapplied_amount!: string | null;
 
+  /**
+   * utIffRFx 4-band (migratsiya 104) — qarz yopishda AVVALGI to'lovlardan
+   * qolgan hamkor avansidan ishlatilgan qism (≥ 0). Yangi yozuvlarda
+   * `unapplied_amount = amount + advance_applied − settled_amount` (musbat
+   * qismi — hamkorning yangi avansi). NULL — migratsiyadan oldingi yozuv:
+   * avans hisobiga KIRMAYDI.
+   */
+  @Column({ type: 'numeric', precision: 14, scale: 2, nullable: true })
+  advance_applied!: string | null;
+
   @Column({ type: 'bigint', nullable: true })
   created_by!: string | null;
 

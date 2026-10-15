@@ -20,6 +20,17 @@ export enum Order_source {
   BRANCH = 'branch',
 }
 
+/**
+ * (Celz3rKJ) Buyurtma QAYSI KANAL orqali yaratilgani — `source` (kim:
+ * ichki/tashqi/filial) dan alohida o'lchov. Hozircha yagona qiymat `bot`
+ * (Telegram bot WebApp, `POST /orders/telegram/bot/create`); NULL — qolgan
+ * barcha yo'llar (admin paneli, market, AI tasdiqlash, tashqi API) va ustun
+ * qo'shilishidan oldingi buyurtmalar.
+ */
+export enum OrderCreatedVia {
+  BOT = 'bot',
+}
+
 export enum OrderHolderType {
   HQ = 'HQ',
   BRANCH = 'BRANCH',
@@ -374,6 +385,16 @@ export class Order extends BaseEntity {
 
   @Column({ type: 'enum', enum: Order_source, default: Order_source.INTERNAL })
   source!: Order_source;
+
+  /**
+   * (Celz3rKJ) Yaratish kanali (`OrderCreatedVia`): faqat gateway bot yo'li
+   * `order.create` payloadining YUQORI darajasida `created_via: 'bot'`
+   * yuboradi (mijoz DTO'sida emas — soxtalashtirib bo'lmaydi). NULL —
+   * boshqa kanallar va eski buyurtmalar (backfill yo'q). "AI xarajat" paneli
+   * buyurtma manbasidagi `bot` ulushi shu ustundan.
+   */
+  @Column({ type: 'varchar', length: 16, nullable: true })
+  created_via!: string | null;
 
   /**
    * Soft delete marker. NULL when the order is active.

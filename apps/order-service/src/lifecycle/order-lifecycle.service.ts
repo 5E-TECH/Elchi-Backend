@@ -5,7 +5,11 @@ import { DataSource, In, IsNull, QueryFailedError, Repository } from 'typeorm';
 import { createHash, randomBytes } from 'node:crypto';
 import { Order } from '../entities/order.entity';
 import { OrderItem } from '../entities/order-item.entity';
-import { OrderHolderType, Order_source } from '../entities/order.entity';
+import {
+  OrderCreatedVia,
+  OrderHolderType,
+  Order_source,
+} from '../entities/order.entity';
 import { OrderTracking } from '../entities/order-tracking.entity';
 import { OrderCustodyEvent } from '../entities/order-custody-event.entity';
 import { OrderSettlement } from '../entities/order-settlement.entity';
@@ -4445,7 +4449,12 @@ export class OrderLifecycleService {
     requester?: { id: string; roles?: string[] },
     // vncdmXOy: ai-confirm'dan kelgan AI belgisi (order-service controller
     // oq ro'yxatdan o'tkazgan) — CREATED yozuvining metadata'siga qo'shiladi.
-    opts?: { auditMetadata?: Record<string, unknown> | null },
+    // Celz3rKJ: `createdVia` — yaratish kanali (controller oq ro'yxati,
+    // hozir faqat 'bot'); DTO'dagi `created_via` HECH QACHON o'qilmaydi.
+    opts?: {
+      auditMetadata?: Record<string, unknown> | null;
+      createdVia?: OrderCreatedVia | null;
+    },
   ) {
     // fix3 C6 (RBAC-05, LC-07, LC-14): SUPERADMIN/ADMIN dan boshqa
     // yaratuvchining hayot sikli/saqlash maydonlari olib tashlanadi —
@@ -4536,6 +4545,7 @@ export class OrderLifecycleService {
         external_batch_token: dto.external_batch_token ?? null,
         external_batch_size: dto.external_batch_size ?? null,
         source: dto.source ?? Order_source.INTERNAL,
+        created_via: opts?.createdVia ?? null,
         isDeleted: false,
       });
 

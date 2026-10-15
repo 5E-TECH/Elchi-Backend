@@ -3,9 +3,11 @@ import { Type } from 'class-transformer';
 import {
   IsBoolean,
   IsEnum,
+  IsInt,
   IsNumber,
   IsOptional,
   IsString,
+  Length,
   Matches,
   Max,
   Min,
@@ -545,6 +547,17 @@ export class PaymentToMarketRequestDto {
   @IsString()
   @Matches(/^\d+$/)
   source_user_id?: string;
+
+  // 3PE0B03q — nomli karta (BeePost cashbox_card porti).
+  @ApiPropertyOptional({
+    example: '3',
+    description:
+      "Asosiy kassaning NOMLI kartasi ID si (`GET /finance/cashbox/cards`). Faqat `click` to'lovida; berilmasa — Asosiy karta. Nomli kartada mablag' yetmasa 400.",
+  })
+  @IsOptional()
+  @IsString()
+  @Matches(/^\d+$/)
+  card_id?: string;
 }
 
 export class PaymentBranchToMainRequestDto {
@@ -589,6 +602,17 @@ export class PaymentBranchToMainRequestDto {
   @IsString()
   @Matches(/^\d+$/)
   source_user_id?: string;
+
+  // 3PE0B03q — nomli karta (BeePost cashbox_card porti).
+  @ApiPropertyOptional({
+    example: '3',
+    description:
+      "Asosiy kassaning NOMLI kartasi ID si (`GET /finance/cashbox/cards`). Faqat `click` to'lovida; berilmasa — Asosiy karta. Nomli kartada mablag' yetmasa 400.",
+  })
+  @IsOptional()
+  @IsString()
+  @Matches(/^\d+$/)
+  card_id?: string;
 }
 
 export class MainCashboxFilterQueryDto {
@@ -683,6 +707,107 @@ export class MainCashboxManualRequestDto {
   @IsOptional()
   @IsString()
   comment?: string;
+
+  // 3PE0B03q — nomli karta (BeePost cashbox_card porti).
+  @ApiPropertyOptional({
+    example: '3',
+    description:
+      "Asosiy kassaning NOMLI kartasi ID si (`GET /finance/cashbox/cards`). Faqat `click` to'lovida; berilmasa — Asosiy karta. Nomli kartada mablag' yetmasa 400.",
+  })
+  @IsOptional()
+  @IsString()
+  @Matches(/^\d+$/)
+  card_id?: string;
+}
+
+// ───────── 3PE0B03q — asosiy kassa NOMLI kartalari (BeePost cashbox_card) ─────────
+
+export class CreateCashboxCardRequestDto {
+  @ApiProperty({ example: 'Humo 8600' })
+  @IsString()
+  @Length(1, 100)
+  name!: string;
+
+  @ApiPropertyOptional({ example: 0 })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  sort_order?: number;
+}
+
+export class RenameCashboxCardRequestDto {
+  @ApiProperty({ example: 'Uzcard 5614' })
+  @IsString()
+  @Length(1, 100)
+  name!: string;
+}
+
+export class SetCashboxCardStatusRequestDto {
+  @ApiProperty({
+    example: false,
+    description: 'false — arxivlash (balans 0 bo`lishi shart)',
+  })
+  @IsBoolean()
+  is_active!: boolean;
+}
+
+export class TransferCashboxCardRequestDto {
+  @ApiProperty({ example: '1', description: 'Manba karta ID' })
+  @IsString()
+  @Matches(/^\d+$/)
+  from_card_id!: string;
+
+  @ApiProperty({ example: '3', description: 'Maqsad karta ID' })
+  @IsString()
+  @Matches(/^\d+$/)
+  to_card_id!: string;
+
+  @ApiProperty({ example: 500000 })
+  @Type(() => Number)
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0.01)
+  amount!: number;
+
+  @ApiProperty({
+    example: 'Humo kartaga o`tkazildi',
+    description: 'Sabab (majburiy)',
+  })
+  @IsString()
+  @Length(1, 1000)
+  comment!: string;
+}
+
+export enum CashboxCardConvertType {
+  CARD_TO_CASH = 'card_to_cash',
+  CASH_TO_CARD = 'cash_to_card',
+}
+
+export class ConvertCashboxCardRequestDto {
+  @ApiProperty({
+    enum: CashboxCardConvertType,
+    example: CashboxCardConvertType.CARD_TO_CASH,
+  })
+  @IsEnum(CashboxCardConvertType)
+  type!: CashboxCardConvertType;
+
+  @ApiProperty({ example: '3', description: 'Karta ID' })
+  @IsString()
+  @Matches(/^\d+$/)
+  card_id!: string;
+
+  @ApiProperty({ example: 500000 })
+  @Type(() => Number)
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0.01)
+  amount!: number;
+
+  @ApiProperty({
+    example: 'Bankomatdan yechildi',
+    description: 'Sabab (majburiy)',
+  })
+  @IsString()
+  @Length(1, 1000)
+  comment!: string;
 }
 
 export class RecordFinancialBalanceRequestDto {

@@ -130,16 +130,27 @@ describe('fix3 A2 — order create hardening', () => {
     );
   });
 
-  it('MARKET: faqat customer_id (customer obyektsiz) -> 400, buyurtma yaratilmaydi', async () => {
+  // hiqRNhkI: customer_id endi market uchun ham qabul qilinadi, lekin FAQAT
+  // shu marketda buyurtmasi bor mijoz (GET /customers/suggest doirasi).
+  // Begona id (bu marketda buyurtmasi yo'q) — avvalgidek rad, buyurtma yo'q.
+  it('MARKET: begona customer_id (customer obyektsiz) -> 403, buyurtma yaratilmaydi', async () => {
     const { controller, orderClient } = makeController();
+    const calls = (cmd: string) =>
+      (orderClient.send.mock.calls as unknown[][]).filter(
+        (args) => (args[0] as { cmd?: string } | undefined)?.cmd === cmd,
+      );
 
     await expect(
       controller.create(
         { customer_id: '1', total_price: 1 } as any,
         userReq('201', ['market']),
       ),
-    ).rejects.toThrow(/customer_id faqat admin uchun/);
-    expect(orderClient.send).not.toHaveBeenCalled();
+    ).rejects.toThrow(/customer_id faqat shu marketda buyurtmasi bor mijoz/);
+    expect(calls('order.create')).toHaveLength(0);
+    expect(calls('order.customer.market_summary')[0][1]).toEqual({
+      market_id: '201',
+      customer_ids: ['1'],
+    });
   });
 
   it('ADMIN: shartnoma bo‘yicha maydonlar saqlanadi (status, branch_id, customer_id)', async () => {
@@ -217,10 +228,57 @@ describe('fix3 A2 — order create hardening', () => {
       userReq('400', ['market_operator']),
     );
 
-    const { dto } = sentCreate(orderClient, 'order.create');
+    const payload = sentCreate(orderClient, 'order.create') as {
+      dto: Record<string, unknown>;
+      created_via?: unknown;
+    };
+    const { dto } = payload;
     expect(dto.status).toBeUndefined();
     expect(dto.market_id).toBe('201');
     expect(dto.operator_id).toBe('400');
+    // Celz3rKJ: bot kanali belgisi payloadning YUQORI darajasida.
+    expect(payload.created_via).toBe('bot');
+  });
+
+  it('Celz3rKJ: POST /orders (market/operator emas) — created_via YUBORILMAYDI, DTO dagisi ham yuqoriga chiqmaydi', async () => {
+    const { controller, orderClient } = makeController();
+
+    await controller.create(
+      { ...abuseDto, created_via: 'bot' } as any,
+      userReq('201', ['market']),
+    );
+
+    const payload = sentCreate(orderClient, 'order.create') as Record<
+      string,
+      unknown
+    >;
+    expect(payload).not.toHaveProperty('created_via');
+  });
+
+  it('Celz3rKJ: bot javobi POST /orders kabi rol bo`yicha proyeksiyalanadi', async () => {
+    const { controller, orderClient } = makeController({
+      operatorMarketId: '201',
+    });
+    orderClient.send.mockImplementation(() =>
+      of({
+        statusCode: 201,
+        data: { id: '500', courier_tariff: 25000, total_price: 50000 },
+      }),
+    );
+
+    const res = (await controller.botOrderCreate(
+      {
+        name: 'Ali',
+        phone_number: '+998901112233',
+        district_id: '5',
+        order_item_info: [{ product_id: '10', quantity: 1 }],
+        total_price: 50000,
+      } as any,
+      userReq('400', ['market_operator']),
+    )) as { data: Record<string, unknown> };
+
+    expect(res.data.id).toBe('500');
+    expect(res.data).not.toHaveProperty('courier_tariff');
   });
 
   it('POST /orders/external (MARKET): maydonlar olib tashlanadi, requester uzatiladi', async () => {

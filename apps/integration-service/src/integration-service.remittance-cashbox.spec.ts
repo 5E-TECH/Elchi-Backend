@@ -19,9 +19,17 @@ function makeSvc() {
   svc.integrationRepo = {
     findOne: jest.fn(() => Promise.resolve({ id: '2', slug: 'test-kargo' })),
   };
+  // utIffRFx 4-band — avans SUM so'rovi (hovuz bo'sh).
+  const advanceQb: any = {
+    select: jest.fn(() => advanceQb),
+    where: jest.fn(() => advanceQb),
+    andWhere: jest.fn(() => advanceQb),
+    getRawOne: jest.fn(() => Promise.resolve({ advance: '0' })),
+  };
   const remittanceRepo = {
     create: jest.fn((x: unknown) => x),
     save: jest.fn((x: any) => Promise.resolve({ id: '77', ...x })),
+    createQueryBuilder: jest.fn(() => advanceQb),
   };
   const receivableRepo = {
     find: jest.fn(() => Promise.resolve([])),
@@ -32,6 +40,7 @@ function makeSvc() {
     manager: {
       transaction: (cb: (m: any) => Promise<unknown>) =>
         cb({
+          query: jest.fn(() => Promise.resolve([])),
           getRepository: (entity: { name?: string }) =>
             entity?.name === 'ProviderRemittance'
               ? remittanceRepo

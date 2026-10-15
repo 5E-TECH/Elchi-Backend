@@ -8,8 +8,9 @@ import { LogisticsServiceService } from './logistics-service.service';
  *
  * Avval `logistics.region.stats_all` so'rovchidan qat'i nazar 14 viloyatning
  * hammasi uchun buyurtma/tushumni qaytarardi; cheklov faqat brauzerda edi.
- *   - admin/superadmin/logist, HQ xodimi → hamma viloyat (regressiya yo'q);
- *   - boshqa filial menejeri/registratori → faqat filial viloyati;
+ *   - admin/superadmin/logist → hamma viloyat (regressiya yo'q);
+ *   - filial menejeri/registratori, HQ filiali xodimi ham (karta 3-band) →
+ *     faqat filial viloyati;
  *   - aniqlab bo'lmasa → hech biri (fail-closed);
  *   - stats/:id — boshqa viloyat → 403;
  *   - my/district-stats — kuryer/menejerning o'z viloyati, PII yo'q.
@@ -121,12 +122,14 @@ function setup(opts: {
 const REGIONAL_MANAGER = { id: '20', roles: ['manager'], branch_id: '7' };
 const REGIONAL_REGISTRATOR = { id: '21', roles: ['registrator'] };
 const HQ_REGISTRATOR = { id: '22', roles: ['registrator'], branch_id: '1' };
+const HQ_MANAGER = { id: '23', roles: ['manager'], branch_id: '1' };
 const COURIER = { id: '77', roles: ['courier'] };
 
 const branchByUser: Record<string, BranchReply> = {
   '20': { branch_id: '7', branch: { type: 'REGIONAL', region_id: '5' } },
   '21': { branch_id: '7', branch: { type: 'REGIONAL', region_id: '5' } },
   '22': { branch_id: '1', branch: { type: 'HQ', region_id: '14' } },
+  '23': { branch_id: '1', branch: { type: 'HQ', region_id: '14' } },
 };
 
 async function rpcError(promise: Promise<unknown>) {
@@ -147,7 +150,6 @@ describe('uherIk8r — getAllRegionsStats doirasi', () => {
     ['admin', { id: '1', roles: ['admin'] }],
     ['superadmin', { id: '1', roles: ['superadmin'] }],
     ['logist', { id: '42', roles: ['logist'] }],
-    ['HQ registrator', HQ_REGISTRATOR],
     ["requester yo'q (ichki chaqiruv)", undefined],
   ])('%s → 14 viloyat (regressiya yo‘q)', async (_label, requester) => {
     const { service } = setup({ branchByUser });
@@ -159,6 +161,28 @@ describe('uherIk8r — getAllRegionsStats doirasi', () => {
     expect(res.data.regions).toHaveLength(14);
     expect(res.data.summary.totalRevenue).toBe(30_000 + 99_000);
   });
+
+  // uherIk8r (karta 3-band): ADMIN/SUPERADMIN (va BeePost bo'yicha LOGIST)
+  // dan boshqa HAMMA — HQ filial xodimi ham — faqat o'z viloyatini ko'radi.
+  it.each([
+    ['HQ registrator', HQ_REGISTRATOR],
+    ['HQ menejeri', HQ_MANAGER],
+  ])(
+    '⭐ %s → faqat HQ filiali viloyati (14), boshqa viloyat tushumi yo‘q',
+    async (_label, requester) => {
+      const { service } = setup({ branchByUser });
+      const res: any = await service.getAllRegionsStats(
+        undefined,
+        undefined,
+        requester,
+      );
+      expect(res.data.regions.map((r: any) => r.id)).toEqual(['14']);
+      expect(res.data.summary).toEqual(
+        expect.objectContaining({ totalRegions: 1 }),
+      );
+      expect(JSON.stringify(res.data)).not.toContain('Viloyat-5');
+    },
+  );
 
   it.each([
     ['filial menejeri', REGIONAL_MANAGER],
@@ -235,9 +259,12 @@ describe('uherIk8r — getRegionDetailedStats doirasi', () => {
     expect(res.data.region.id).toBe('5');
   });
 
-  it('admin va HQ registrator istalgan viloyat → 200', async () => {
+  it('admin va logist istalgan viloyat → 200', async () => {
     const { service } = setup({ branchByUser });
-    for (const requester of [{ id: '1', roles: ['admin'] }, HQ_REGISTRATOR]) {
+    for (const requester of [
+      { id: '1', roles: ['admin'] },
+      { id: '42', roles: ['logist'] },
+    ]) {
       const res: any = await service.getRegionDetailedStats(
         '9',
         undefined,
@@ -245,6 +272,23 @@ describe('uherIk8r — getRegionDetailedStats doirasi', () => {
         requester,
       );
       expect(res.data.region.id).toBe('9');
+    }
+  });
+
+  it('⭐ HQ registrator/menejer: boshqa viloyat → 403, o‘z (HQ) viloyati → 200', async () => {
+    const { service } = setup({ branchByUser });
+    for (const requester of [HQ_REGISTRATOR, HQ_MANAGER]) {
+      const err = await rpcError(
+        service.getRegionDetailedStats('9', undefined, undefined, requester),
+      );
+      expect(err.statusCode).toBe(403);
+      const res: any = await service.getRegionDetailedStats(
+        '14',
+        undefined,
+        undefined,
+        requester,
+      );
+      expect(res.data.region.id).toBe('14');
     }
   });
 });

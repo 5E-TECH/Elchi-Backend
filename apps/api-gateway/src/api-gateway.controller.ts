@@ -56,6 +56,7 @@ import {
   UpdateUserStatusRequestDto,
 } from './dto/identity.swagger.dto';
 import { SetCourierRegionsRequestDto } from './dto/courier-regions.swagger.dto';
+import { CreateInvestorUserRequestDto } from './dto/investor.swagger.dto';
 import { ParseBigintIdPipe } from './pipes/parse-bigint-id.pipe';
 
 interface JwtUser {
@@ -383,6 +384,73 @@ export class ApiGatewayController {
         {
           query: {
             role: RoleEnum.LOGIST,
+            search,
+            status,
+            page: page ? Number(page) : undefined,
+            limit: limit ? Number(limit) : undefined,
+          },
+        },
+      )
+      .pipe(timeout(8000));
+  }
+
+  /**
+   * vpKijXce — investor LOGINI (identity, rol = investor). BeePost
+   * `POST /users/investor` naqshi: faqat kirish uchun (ism, telefon, parol),
+   * maosh/filial/kassa yo'q. Keyingi qadam — `POST /investors` yoki
+   * `PATCH /investors/:id` da `user_id` = shu login id si; `/investors/me`
+   * investorni aynan shu bog'lanish orqali topadi. O'chirish — umumiy
+   * `DELETE /users/:id`.
+   */
+  @Post('investor-users')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Create investor login (role = investor)' })
+  @ApiBody({ type: CreateInvestorUserRequestDto })
+  @ApiCreatedResponse({ description: 'Investor login created' })
+  @ApiConflictResponse({ description: 'Phone number already exists' })
+  createInvestorUser(
+    @Body() dto: CreateInvestorUserRequestDto,
+    @Req() req: { user: JwtUser },
+  ) {
+    return this.identityClient
+      .send(
+        { cmd: 'identity.investor_user.create' },
+        { dto, requester: this.toRequester(req) },
+      )
+      .pipe(timeout(8000));
+  }
+
+  @Get('investor-users')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'List investor logins (investorga bog‘lash uchun tanlov)',
+  })
+  @ApiQuery({ name: 'search', required: false, type: String })
+  @ApiQuery({
+    name: 'status',
+    required: false,
+    type: String,
+    example: 'active',
+  })
+  @ApiQuery({ name: 'page', required: false, type: Number, example: 1 })
+  @ApiQuery({ name: 'limit', required: false, type: Number, example: 10 })
+  @ApiOkResponse({ description: 'Investor login list' })
+  getInvestorUsers(
+    @Query('search') search?: string,
+    @Query('status') status?: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.identityClient
+      .send(
+        { cmd: 'identity.user.find_all' },
+        {
+          query: {
+            role: RoleEnum.INVESTOR,
             search,
             status,
             page: page ? Number(page) : undefined,

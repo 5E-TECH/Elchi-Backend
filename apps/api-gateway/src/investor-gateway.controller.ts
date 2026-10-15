@@ -1,18 +1,22 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Delete,
+  GatewayTimeoutException,
   Get,
   Inject,
+  Optional,
   Param,
   Patch,
   Post,
   Query,
   Req,
+  ServiceUnavailableException,
   UseGuards,
 } from '@nestjs/common';
 import { ClientProxy } from '@nestjs/microservices';
-import { timeout } from 'rxjs';
+import { firstValueFrom, lastValueFrom, timeout, TimeoutError } from 'rxjs';
 import { Roles as RoleEnum } from '@app/common';
 import {
   ApiBearerAuth,
@@ -29,6 +33,8 @@ import {
   CalculateProfitDto,
   CreateInvestmentDto,
   CreateInvestorDto,
+  CreateInvestorInvestmentDto,
+  CreateInvestorProfitShareDto,
   CreateProfitShareDto,
   UpdateInvestmentDto,
   UpdateInvestorDto,
@@ -52,6 +58,28 @@ function toOptionalBool(value?: string): boolean | undefined {
     : undefined;
 }
 
+/**
+ * vpKijXce: ichki yo'lda investor — yo'ldan. Body'da ham `investor_id` bo'lsa
+ * u yo'l bilan bir xil bo'lishi shart: aks holda so'rov ma'nosi noaniq
+ * (qaysi investorga yozilishi kerak) — jimgina tanlash o'rniga 400.
+ */
+export function pathInvestorId(
+  pathId: string,
+  dto: { investor_id?: string | null },
+): string {
+  const fromPath = String(pathId ?? '').trim();
+  const fromBody =
+    dto?.investor_id === undefined || dto?.investor_id === null
+      ? ''
+      : String(dto.investor_id).trim();
+  if (fromBody && fromBody !== fromPath) {
+    throw new BadRequestException(
+      'investor_id: yo‘l va body’dagi qiymat farq qiladi',
+    );
+  }
+  return fromPath;
+}
+
 @ApiTags('Investor')
 @ApiBearerAuth()
 @Controller()
@@ -59,7 +87,53 @@ function toOptionalBool(value?: string): boolean | undefined {
 export class InvestorGatewayController {
   constructor(
     @Inject('INVESTOR') private readonly investorClient: ClientProxy,
+    // vpKijXce: `user_id` bog'lashda login roli tekshiruvi. Oxirida va
+    // @Optional — mavjud spec'lar kontrollerni faqat INVESTOR bilan quradi.
+    @Optional()
+    @Inject('IDENTITY')
+    private readonly identityClient?: ClientProxy,
   ) {}
+
+  /**
+   * vpKijXce: investor yozuviga faqat INVESTOR rolli login bog'lanadi.
+   * Ilgari istalgan users.id (kuryer, market, admin...) yozilardi — u login
+   * `/investors/me` ni baribir ocholmasdi (@Roles(INVESTOR)), haqiqiy investor
+   * esa bog'lanmay qolardi. Uzish (null/'') tekshirilmaydi. Identity javob
+   * bermasa — bog'lash RAD etiladi (fail-closed).
+   */
+  private async assertInvestorLogin(userId: unknown): Promise<void> {
+    if (userId === undefined || userId === null) {
+      return;
+    }
+    const id = String(userId as string | number).trim();
+    if (!id) {
+      return;
+    }
+    if (!this.identityClient) {
+      throw new ServiceUnavailableException(
+        'Identity service ulanmagan — user_id tekshirib bo‘lmadi',
+      );
+    }
+    const response: unknown = await firstValueFrom(
+      this.identityClient
+        .send({ cmd: 'identity.user.find_by_id' }, { id })
+        .pipe(timeout(8000)),
+    ).catch((error: unknown) => {
+      if (error instanceof TimeoutError) {
+        throw new GatewayTimeoutException('Identity service response timeout');
+      }
+      throw error;
+    });
+    const rawRole = (response as { data?: { role?: unknown } } | null)?.data
+      ?.role;
+    const role =
+      typeof rawRole === 'string' ? rawRole.trim().toLowerCase() : '';
+    if (role !== RoleEnum.INVESTOR) {
+      throw new BadRequestException(
+        'user_id investor rolli login bo‘lishi kerak (POST /investor-users)',
+      );
+    }
+  }
 
   /**
    * vpKijXce: ilgari bu kontroller servisga HECH QACHON `requester` uzatmasdi —
@@ -183,13 +257,19 @@ export class InvestorGatewayController {
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiOperation({ summary: 'Create investor' })
   @ApiBody({ type: CreateInvestorDto })
-  createInvestor(@Body() dto: CreateInvestorDto, @Req() req?: AuthedRequest) {
-    return this.investorClient
-      .send(
-        { cmd: 'investor.create' },
-        { dto, requester: this.toRequester(req) },
-      )
-      .pipe(timeout(8000));
+  async createInvestor(
+    @Body() dto: CreateInvestorDto,
+    @Req() req?: AuthedRequest,
+  ) {
+    await this.assertInvestorLogin(dto?.user_id);
+    return lastValueFrom(
+      this.investorClient
+        .send(
+          { cmd: 'investor.create' },
+          { dto, requester: this.toRequester(req) },
+        )
+        .pipe(timeout(8000)),
+    );
   }
 
   @Get('investors')
@@ -273,17 +353,20 @@ export class InvestorGatewayController {
   @ApiOperation({ summary: 'Update investor' })
   @ApiParam({ name: 'id' })
   @ApiBody({ type: UpdateInvestorDto })
-  updateInvestor(
+  async updateInvestor(
     @Param('id') id: string,
     @Body() dto: UpdateInvestorDto,
     @Req() req?: AuthedRequest,
   ) {
-    return this.investorClient
-      .send(
-        { cmd: 'investor.update' },
-        { id, dto, requester: this.toRequester(req) },
-      )
-      .pipe(timeout(8000));
+    await this.assertInvestorLogin(dto?.user_id);
+    return lastValueFrom(
+      this.investorClient
+        .send(
+          { cmd: 'investor.update' },
+          { id, dto, requester: this.toRequester(req) },
+        )
+        .pipe(timeout(8000)),
+    );
   }
 
   @Delete('investors/:id')
@@ -299,22 +382,43 @@ export class InvestorGatewayController {
       .pipe(timeout(8000));
   }
 
+  /**
+   * vpKijXce: ilgari `@Post('investments') @Post('investors/:investor_id/...')`
+   * ikki qavat edi — Nest dekoratorlari pastdan yuqoriga qo'llanadi va
+   * yuqoridagisi yo'lni QAYTA YOZADI: ichki (nested) yo'l umuman ro'yxatdan
+   * o'tmasdi (404). Endi har yo'l — alohida handler (bitta servis cmd).
+   */
   @Post('investments')
-  @Post('investors/:investor_id/investments')
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiOperation({ summary: 'Create investment' })
-  @ApiParam({ name: 'investor_id', required: false })
   @ApiBody({ type: CreateInvestmentDto })
   createInvestment(
     @Body() dto: CreateInvestmentDto,
-    @Param('investor_id') investor_id?: string,
+    @Req() req?: AuthedRequest,
+  ) {
+    return this.investorClient
+      .send(
+        { cmd: 'investor.investment.create' },
+        { dto, requester: this.toRequester(req) },
+      )
+      .pipe(timeout(8000));
+  }
+
+  @Post('investors/:investor_id/investments')
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiOperation({ summary: 'Create investment for investor' })
+  @ApiParam({ name: 'investor_id' })
+  @ApiBody({ type: CreateInvestorInvestmentDto })
+  createInvestorInvestment(
+    @Param('investor_id') investor_id: string,
+    @Body() dto: CreateInvestorInvestmentDto,
     @Req() req?: AuthedRequest,
   ) {
     return this.investorClient
       .send(
         { cmd: 'investor.investment.create' },
         {
-          dto: { ...dto, investor_id: investor_id ?? dto.investor_id },
+          dto: { ...dto, investor_id: pathInvestorId(investor_id, dto) },
           requester: this.toRequester(req),
         },
       )
@@ -395,16 +499,39 @@ export class InvestorGatewayController {
   }
 
   @Patch('investments/:id')
-  @Patch('investors/:investor_id/investments/:id')
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiOperation({ summary: 'Update investment' })
   @ApiParam({ name: 'id' })
-  @ApiParam({ name: 'investor_id', required: false })
   @ApiBody({ type: UpdateInvestmentDto })
   updateInvestment(
     @Param('id') id: string,
     @Body() dto: UpdateInvestmentDto,
-    @Param('investor_id') investor_id?: string,
+    @Req() req?: AuthedRequest,
+  ) {
+    return this.investorClient
+      .send(
+        { cmd: 'investor.investment.update' },
+        { id, dto, requester: this.toRequester(req) },
+      )
+      .pipe(timeout(8000));
+  }
+
+  /**
+   * vpKijXce: ichki yo'l — investitsiya SHU investorniki bo'lishi shart
+   * (`scope_investor_id`, servis tekshiradi; begona → 404). Ilgari yo'ldagi
+   * investor_id body'ga yozilib, begona investitsiyani jimgina shu investorga
+   * ko'chirib yuborishi mumkin edi.
+   */
+  @Patch('investors/:investor_id/investments/:id')
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiOperation({ summary: 'Update investment of investor' })
+  @ApiParam({ name: 'investor_id' })
+  @ApiParam({ name: 'id' })
+  @ApiBody({ type: UpdateInvestmentDto })
+  updateInvestorInvestment(
+    @Param('investor_id') investor_id: string,
+    @Param('id') id: string,
+    @Body() dto: UpdateInvestmentDto,
     @Req() req?: AuthedRequest,
   ) {
     return this.investorClient
@@ -412,7 +539,8 @@ export class InvestorGatewayController {
         { cmd: 'investor.investment.update' },
         {
           id,
-          dto: { ...dto, investor_id: investor_id ?? dto.investor_id },
+          dto,
+          scope_investor_id: investor_id,
           requester: this.toRequester(req),
         },
       )
@@ -420,11 +548,9 @@ export class InvestorGatewayController {
   }
 
   @Delete('investments/:id')
-  @Delete('investors/:investor_id/investments/:id')
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiOperation({ summary: 'Delete investment (soft delete)' })
   @ApiParam({ name: 'id' })
-  @ApiParam({ name: 'investor_id', required: false })
   deleteInvestment(@Param('id') id: string, @Req() req?: AuthedRequest) {
     return this.investorClient
       .send(
@@ -434,22 +560,56 @@ export class InvestorGatewayController {
       .pipe(timeout(8000));
   }
 
+  @Delete('investors/:investor_id/investments/:id')
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiOperation({ summary: 'Delete investment of investor (soft delete)' })
+  @ApiParam({ name: 'investor_id' })
+  @ApiParam({ name: 'id' })
+  deleteInvestorInvestment(
+    @Param('investor_id') investor_id: string,
+    @Param('id') id: string,
+    @Req() req?: AuthedRequest,
+  ) {
+    return this.investorClient
+      .send(
+        { cmd: 'investor.investment.delete' },
+        {
+          id,
+          scope_investor_id: investor_id,
+          requester: this.toRequester(req),
+        },
+      )
+      .pipe(timeout(8000));
+  }
+
   @Post('profits')
-  @Post('investors/:investor_id/profits')
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiOperation({ summary: 'Create profit share manually' })
-  @ApiParam({ name: 'investor_id', required: false })
   @ApiBody({ type: CreateProfitShareDto })
-  createProfit(
-    @Body() dto: CreateProfitShareDto,
-    @Param('investor_id') investor_id?: string,
+  createProfit(@Body() dto: CreateProfitShareDto, @Req() req?: AuthedRequest) {
+    return this.investorClient
+      .send(
+        { cmd: 'investor.profit.create' },
+        { dto, requester: this.toRequester(req) },
+      )
+      .pipe(timeout(8000));
+  }
+
+  @Post('investors/:investor_id/profits')
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiOperation({ summary: 'Create profit share for investor manually' })
+  @ApiParam({ name: 'investor_id' })
+  @ApiBody({ type: CreateInvestorProfitShareDto })
+  createInvestorProfit(
+    @Param('investor_id') investor_id: string,
+    @Body() dto: CreateInvestorProfitShareDto,
     @Req() req?: AuthedRequest,
   ) {
     return this.investorClient
       .send(
         { cmd: 'investor.profit.create' },
         {
-          dto: { ...dto, investor_id: investor_id ?? dto.investor_id },
+          dto: { ...dto, investor_id: pathInvestorId(investor_id, dto) },
           requester: this.toRequester(req),
         },
       )
@@ -457,21 +617,35 @@ export class InvestorGatewayController {
   }
 
   @Post('profits/calculate')
-  @Post('investors/:investor_id/profits/calculate')
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiOperation({ summary: 'Calculate profit share by period and percentage' })
-  @ApiParam({ name: 'investor_id', required: false })
   @ApiBody({ type: CalculateProfitDto })
-  calculateProfit(
+  calculateProfit(@Body() dto: CalculateProfitDto, @Req() req?: AuthedRequest) {
+    return this.investorClient
+      .send(
+        { cmd: 'investor.profit.calculate' },
+        { dto, requester: this.toRequester(req) },
+      )
+      .pipe(timeout(8000));
+  }
+
+  @Post('investors/:investor_id/profits/calculate')
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiOperation({
+    summary: 'Calculate profit share for one investor by period and percentage',
+  })
+  @ApiParam({ name: 'investor_id' })
+  @ApiBody({ type: CalculateProfitDto })
+  calculateInvestorProfit(
+    @Param('investor_id') investor_id: string,
     @Body() dto: CalculateProfitDto,
-    @Param('investor_id') investor_id?: string,
     @Req() req?: AuthedRequest,
   ) {
     return this.investorClient
       .send(
         { cmd: 'investor.profit.calculate' },
         {
-          dto: { ...dto, investor_id: investor_id ?? dto.investor_id },
+          dto: { ...dto, investor_id: pathInvestorId(investor_id, dto) },
           requester: this.toRequester(req),
         },
       )

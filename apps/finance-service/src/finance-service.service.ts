@@ -27,6 +27,17 @@ import {
 import { Cashbox } from './entities/cashbox.entity';
 import { CashboxHistory } from './entities/cashbox-history.entity';
 import { Shift, ShiftStatus } from './entities/shift.entity';
+import { applyMainCardSelection } from './cashbox-card/cashbox-card.service';
+import {
+  BRANCH_SHIFT_REQUIRED_MESSAGE,
+  SHIFT_REQUIRED_MESSAGE,
+  isShiftRequiredFor,
+  shiftGateScope,
+} from './shift-gate';
+import {
+  CardMovementType,
+  CashboxCardMovement,
+} from './entities/cashbox-card-movement.entity';
 import { UserSalary } from './entities/user-salary.entity';
 import { OperatorEarning } from './entities/operator-earning.entity';
 import { OperatorPayment } from './entities/operator-payment.entity';
@@ -1438,11 +1449,25 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
           );
         }
 
+        // 3PE0B03q — CLICK kirim/chiqim tanlangan NOMLI kartaga (MAIN
+        // qulfi ostida). `card_id` yo'q — Asosiy karta (avvalgidek).
+        const historyCardId = await applyMainCardSelection(
+          queryRunner.manager,
+          cashbox,
+          {
+            card_id: dto.card_id ?? null,
+            operation: dto.operation_type,
+            amount: Number(dto.amount),
+            payment_method: paymentMethod,
+          },
+        );
+
         const savedCashbox = await queryRunner.manager.save(cashbox);
 
         const history = queryRunner.manager.create(CashboxHistory, {
           operation_type: dto.operation_type,
           cashbox_id: savedCashbox.id,
+          card_id: historyCardId,
           source_type: dto.source_type,
           source_id: dto.source_id ?? null,
           dedup_epoch: String(dto.dedup_epoch ?? ''),
@@ -1828,25 +1853,35 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
 
   // ==================== SMENA (kfdfYDik / QTCUUgjA) ====================
 
-  static readonly SHIFT_REQUIRED_MESSAGE =
-    'Smena ochilmagan! Bu operatsiyani bajarish uchun avval asosiy kassada smenani oching.';
+  static readonly SHIFT_REQUIRED_MESSAGE = SHIFT_REQUIRED_MESSAGE;
+
+  static readonly BRANCH_SHIFT_REQUIRED_MESSAGE = BRANCH_SHIFT_REQUIRED_MESSAGE;
 
   /**
-   * (QTCUUgjA) Smena darvozasi yoqilganmi — env `FINANCE_REQUIRE_OPEN_SHIFT`
-   * (`true` / `1` / `on` / `yes`).
+   * (QTCUUgjA) Smena darvozasi qamrovi — env `FINANCE_REQUIRE_OPEN_SHIFT`
+   * (`shift-gate.ts`): `off` (SUKUT) | `main` (`true`/`1`/`on`/`yes`/`main` —
+   * faqat MAIN, 2026-10-14 xatti-harakati) | `all` (MAIN + filial, R6).
    *
    * SUKUT — O'CHIQ: prod'da hozir birorta ham smena ochilmagan va barcha
    * kassalar smenasiz ishlaydi; darvoza to'satdan yoqilsa kuryerdan qabul,
    * marketga to'lov, qo'lda kirim/chiqim — hammasi birdan 400 bo'lardi.
-   * Frontend "Smenani ochish" oqimi chiqib, operatorlar o'rgangach yoqiladi.
-   * Har chaqiruvda o'qiladi — env'ni o'zgartirib servisni qayta ishga
-   * tushirish kifoya.
+   * Frontend "Smenani ochish" oqimi chiqib, operatorlar o'rgangach yoqiladi
+   * (`all` — menejer sahifasida ham smena tugmasi chiqqandan keyin).
    */
+  static shiftGateScope(): 'off' | 'main' | 'all' {
+    return shiftGateScope();
+  }
+
+  /** Darvoza yoqilganmi (har qanday qamrov). */
   static isShiftRequired(): boolean {
-    const raw = String(process.env.FINANCE_REQUIRE_OPEN_SHIFT ?? '')
-      .trim()
-      .toLowerCase();
-    return raw === 'true' || raw === '1' || raw === 'on' || raw === 'yes';
+    return shiftGateScope() !== 'off';
+  }
+
+  /** Shu turdagi kassa darvozalanadimi (MAIN — main/all, BRANCH — all). */
+  static isShiftRequiredFor(
+    cashboxType: Cashbox_type | null | undefined,
+  ): boolean {
+    return isShiftRequiredFor(cashboxType);
   }
 
   /** Smena kassasi turi: '0' — markaziy MAIN, aks holda filial (BRANCH). */
@@ -1884,10 +1919,9 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
    * (`shifts.cashbox_user_id`, audit M7), shu bois tekshiruv aniq kassa
    * bo'yicha: `requireOpenShift(manager, kassa)`.
    *
-   * Hozircha faqat MAIN kassa darvozalanadi: gateway'da smenani faqat MAIN
-   * uchun ochish mumkin (superadmin/admin/registrator, menejer ocha olmaydi).
-   * BRANCH kassasini darvozaga qo'yish menejerlarni butunlay to'xtatardi —
-   * filial smenasi alohida mahsulot qarori.
+   * Qamrov (`shiftGateScope`): `main` — faqat MAIN kassa; `all` — filial
+   * (BRANCH) kassasi ham (R6: menejer o'z filiali smenasini gateway orqali
+   * ochadi/yopadi). Kuryer/market kassalari darvozalanmaydi.
    *
    * Qulf: smena qatori FOR SHARE bilan o'qiladi. `closeShift` (FOR UPDATE)
    * jarayondagi operatsiyalar commit bo'lishini kutadi, yopilishdan keyin
@@ -1902,12 +1936,12 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
     manager: EntityManager,
     target: { user_id: string; cashbox_type?: Cashbox_type | null },
   ): Promise<void> {
-    if (!FinanceServiceService.isShiftRequired()) {
+    const cashboxType = target.cashbox_type ?? Cashbox_type.MAIN;
+    if (!FinanceServiceService.isShiftRequiredFor(cashboxType)) {
       return;
     }
-    if ((target.cashbox_type ?? Cashbox_type.MAIN) !== Cashbox_type.MAIN) {
-      return;
-    }
+    const isMain = cashboxType === Cashbox_type.MAIN;
+    // Filial smenasi — filial kassasining `user_id` si (= filial ID) bo'yicha.
     const shift = await this.findOpenShiftForCashbox(
       manager,
       String(target.user_id ?? FinanceServiceService.MAIN_CASHBOX_USER_ID),
@@ -1915,7 +1949,9 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
     );
     if (!shift) {
       throw new BadRequestException(
-        FinanceServiceService.SHIFT_REQUIRED_MESSAGE,
+        isMain
+          ? FinanceServiceService.SHIFT_REQUIRED_MESSAGE
+          : FinanceServiceService.BRANCH_SHIFT_REQUIRED_MESSAGE,
       );
     }
   }
@@ -1942,7 +1978,10 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
       return this.successRes(
         {
           shift: shift ?? null,
-          required: FinanceServiceService.isShiftRequired(),
+          // R6: shu kassa TURI uchun (MAIN — main/all, filial — faqat all).
+          required: FinanceServiceService.isShiftRequiredFor(
+            FinanceServiceService.shiftCashboxType(cashboxUserId),
+          ),
           cashbox_user_id: cashboxUserId,
         },
         200,
@@ -2086,6 +2125,19 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         }
       }
 
+      /**
+       * R6 — kassa doirasi: menejer faqat O'Z filiali kassasining smenasini
+       * yopadi (gateway `cashbox_user_id` = filial ID ni majburlaydi).
+       * Berilmasa (admin) — avvalgi xatti-harakat.
+       */
+      const cashboxScope =
+        dto.cashbox_user_id != null && String(dto.cashbox_user_id) !== ''
+          ? String(dto.cashbox_user_id)
+          : null;
+      if (cashboxScope) {
+        this.assertBigIntId(cashboxScope, 'cashbox_user_id');
+      }
+
       // Pre-locate the shift's id without lock so we can then re-fetch with a
       // row-level lock inside the transaction. Without the lock, two parallel
       // closeShift calls can both pass the status==='open' check and double-write.
@@ -2110,13 +2162,17 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
             opened_by: dto.opened_by ?? dto.closed_by,
             status: ShiftStatus.OPEN,
             isDeleted: false,
+            ...(cashboxScope ? { cashbox_user_id: cashboxScope } : {}),
           },
           order: { opened_at: 'DESC' },
         });
         if (!candidate && !dto.opened_by) {
+          // R6: menejer (kassa doirasi berilgan) — o'z filiali kassasining
+          // ochiq smenasi; doira yo'q (admin) — avvalgidek MAIN.
           candidate = await this.shiftRepo.findOne({
             where: {
-              cashbox_user_id: FinanceServiceService.MAIN_CASHBOX_USER_ID,
+              cashbox_user_id:
+                cashboxScope ?? FinanceServiceService.MAIN_CASHBOX_USER_ID,
               status: ShiftStatus.OPEN,
               isDeleted: false,
             },
@@ -2145,6 +2201,17 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         });
 
         if (!shift) {
+          throw new NotFoundException('Ochiq smena topilmadi');
+        }
+
+        // R6: boshqa kassaning smenasi (masalan menejer `shift_id` bilan MAIN
+        // yoki boshqa filial smenasini yopmoqchi) — topilmadi.
+        if (
+          cashboxScope &&
+          String(
+            shift.cashbox_user_id ?? FinanceServiceService.MAIN_CASHBOX_USER_ID,
+          ) !== cashboxScope
+        ) {
           throw new NotFoundException('Ochiq smena topilmadi');
         }
 
@@ -2218,8 +2285,54 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         }
 
         /**
+         * 3PE0B03q — MAIN kassada karta↔naqd KONVERTATSIYA (kirim/chiqim
+         * emas, `cashbox_history` da yo'q) naqd/karta ajratmasini o'zgartiradi:
+         * kutilgan qoldiqqa qo'shilmasa har konvertatsiya soxta kamomad /
+         * ortiqcha bo'lib chiqardi (BeePost buni `netConversion` deb alohida
+         * ko'rsatadi). Kartalararo o'tkazma `balance_card` ni o'zgartirmaydi.
+         */
+        let cardToCash = 0;
+        let cashToCard = 0;
+        if (
+          FinanceServiceService.shiftCashboxType(shiftCashboxUserId) ===
+          Cashbox_type.MAIN
+        ) {
+          const conversionRows = await queryRunner.manager
+            .createQueryBuilder(CashboxCardMovement, 'm')
+            .innerJoin(Cashbox, 'cb', 'cb.id = m.cashbox_id')
+            .select('m.type', 'type')
+            .addSelect('COALESCE(SUM(m.amount), 0)', 'total')
+            .where('m.is_deleted = false')
+            .andWhere('cb.user_id = :ownerId', { ownerId: shiftCashboxUserId })
+            .andWhere('cb.cashbox_type = :mainType', {
+              mainType: Cashbox_type.MAIN,
+            })
+            .andWhere('m.type IN (:...conversionTypes)', {
+              conversionTypes: [
+                CardMovementType.CARD_TO_CASH,
+                CardMovementType.CASH_TO_CARD,
+              ],
+            })
+            .andWhere('m.createdAt BETWEEN :from AND :to', {
+              from: shift.opened_at,
+              to: closeTime,
+            })
+            .groupBy('m.type')
+            .getRawMany<{ type?: string; total?: string }>();
+          for (const row of conversionRows ?? []) {
+            const total = Number(row?.total) || 0;
+            if (row?.type === CardMovementType.CARD_TO_CASH) {
+              cardToCash += total;
+            } else if (row?.type === CardMovementType.CASH_TO_CARD) {
+              cashToCard += total;
+            }
+          }
+        }
+
+        /**
          * (QTCUUgjA) Kamomad hisobi:
          *   expected    = opening_balance + total_income − total_expense
+         *                 (+ naqd↔karta konvertatsiyasi, 3PE0B03q)
          *   discrepancy = closing_balance (sanab topshirilgan) − expected
          * Manfiy — kamomad, musbat — ortiqcha. Sanalgan summa yuborilmasa
          * discrepancy NULL: "sanalmadi" holati soxta kamomad bo'lib
@@ -2230,12 +2343,16 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         const expectedCash = round(
           Number(shift.opening_balance_cash ?? 0) +
             totalIncomeCash -
-            totalExpenseCash,
+            totalExpenseCash +
+            cardToCash -
+            cashToCard,
         );
         const expectedCard = round(
           Number(shift.opening_balance_card ?? 0) +
             totalIncomeCard -
-            totalExpenseCard,
+            totalExpenseCard -
+            cardToCash +
+            cashToCard,
         );
 
         shift.closed_by = dto.closed_by;
@@ -2637,6 +2754,8 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
     cashbox_type?: Cashbox_type;
     created_by?: string;
     dedup_epoch?: string;
+    /** 3PE0B03q — MAIN, `type=click`: qaysi nomli kartadan. */
+    card_id?: string;
     /**
      * IgR4FVsR — `true` bo'lsa chiqim P&L daftariga ham (−amount,
      * MANUAL_EXPENSE) AYNI tranzaksiyada yoziladi. Faqat gateway'ning qo'lda
@@ -2679,6 +2798,8 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         dedup_epoch: data.dedup_epoch,
         // (QTCUUgjA) qo'lda operatsiya — kassada ochiq smena talab qilinadi.
         require_open_shift: true,
+        // 3PE0B03q — nomli karta (faqat MAIN + click; aks holda 400).
+        ...(data.card_id ? { card_id: String(data.card_id) } : {}),
       });
       if (update?.data?.idempotent) {
         // (TMgL1zvq) Takroriy so'rov pul ham, audit ham qayta yozmaydi.
@@ -2720,6 +2841,8 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
     cashbox_type?: Cashbox_type;
     created_by?: string;
     dedup_epoch?: string;
+    /** 3PE0B03q — MAIN, `type=click`: qaysi nomli kartaga. */
+    card_id?: string;
     /**
      * IgR4FVsR — `true` bo'lsa kirim P&L daftariga ham (+amount,
      * MANUAL_INCOME) AYNI tranzaksiyada yoziladi. Faqat gateway'ning qo'lda
@@ -2759,6 +2882,8 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         dedup_epoch: data.dedup_epoch,
         // (QTCUUgjA) qo'lda operatsiya — kassada ochiq smena talab qilinadi.
         require_open_shift: true,
+        // 3PE0B03q — nomli karta (faqat MAIN + click; aks holda 400).
+        ...(data.card_id ? { card_id: String(data.card_id) } : {}),
       });
       if (update?.data?.idempotent) {
         // (TMgL1zvq) Takroriy so'rov pul ham, audit ham qayta yozmaydi.
@@ -3087,8 +3212,9 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
       }
 
       // (QTCUUgjA) Qabul qiluvchi kassada ochiq smena (darvoza yoqilgan
-      // bo'lsa; hozircha faqat MAIN). Idempotentlikdan KEYIN — haqiqiy
-      // takroriy so'rov baribir `idempotent` javob oladi.
+      // bo'lsa; MAIN — `main`/`all`, menejer yo'lida filial kassasi — faqat
+      // `all`, R6). Idempotentlikdan KEYIN — haqiqiy takroriy so'rov baribir
+      // `idempotent` javob oladi.
       await this.requireOpenShift(queryRunner.manager, {
         user_id: String(
           data.receiver_user_id ?? FinanceServiceService.MAIN_CASHBOX_USER_ID,
@@ -3449,6 +3575,8 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
     dedup_epoch?: string;
     // (3PE0B03q) "O'tkazma manbasi" — faqat audit.
     transfer_source_user_id?: string;
+    // 3PE0B03q — CLICK pul MAIN kassaning qaysi nomli kartasiga tushdi.
+    card_id?: string;
   }) {
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
@@ -3488,8 +3616,14 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         );
       }
 
-      // (QTCUUgjA) Pul HQ (MAIN) kassasiga tushadi — u yerda ochiq smena
+      // (QTCUUgjA) Pul filial kassasidan CHIQADI (R6: `all` qamrovida filial
+      // smenasi shart — chiqim filial smenasi hisobotidan tashqarida
+      // qolmasin) va HQ (MAIN) kassasiga tushadi — u yerda ham ochiq smena
       // bo'lishi shart (darvoza yoqilgan bo'lsa).
+      await this.requireOpenShift(queryRunner.manager, {
+        user_id: String(data.branch_id),
+        cashbox_type: Cashbox_type.BRANCH,
+      });
       await this.requireOpenShift(queryRunner.manager, {
         user_id: FinanceServiceService.MAIN_CASHBOX_USER_ID,
         cashbox_type: Cashbox_type.MAIN,
@@ -3547,11 +3681,22 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         Operation_type.INCOME,
         data.payment_method ?? PaymentMethod.CASH,
       );
+      const mainCardId = await applyMainCardSelection(
+        queryRunner.manager,
+        mainCashbox,
+        {
+          card_id: data.card_id ?? null,
+          operation: Operation_type.INCOME,
+          amount: Number(data.amount),
+          payment_method: data.payment_method ?? PaymentMethod.CASH,
+        },
+      );
       await queryRunner.manager.save(mainCashbox);
 
       const mainHistory = queryRunner.manager.create(CashboxHistory, {
         operation_type: Operation_type.INCOME,
         cashbox_id: mainCashbox.id,
+        card_id: mainCardId,
         source_type: Source_type.BRANCH_TO_MAIN,
         amount: Number(data.amount),
         balance_after: mainCashbox.balance,
@@ -3631,6 +3776,8 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
     dedup_epoch?: string;
     // (3PE0B03q) "O'tkazma manbasi" — faqat audit.
     transfer_source_user_id?: string;
+    // 3PE0B03q — CLICK to'lov MAIN kassaning qaysi nomli kartasidan.
+    card_id?: string;
   }) {
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
@@ -3717,11 +3864,22 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         Operation_type.EXPENSE,
         data.payment_method ?? PaymentMethod.CASH,
       );
+      const mainCardId = await applyMainCardSelection(
+        queryRunner.manager,
+        mainCashbox,
+        {
+          card_id: data.card_id ?? null,
+          operation: Operation_type.EXPENSE,
+          amount: Number(data.amount),
+          payment_method: data.payment_method ?? PaymentMethod.CASH,
+        },
+      );
       await queryRunner.manager.save(mainCashbox);
       await queryRunner.manager.save(
         queryRunner.manager.create(CashboxHistory, {
           operation_type: Operation_type.EXPENSE,
           cashbox_id: mainCashbox.id,
+          card_id: mainCardId,
           source_type: Source_type.MARKET_PAYMENT,
           source_id: paymentSourceId,
           dedup_epoch: dedupKey,

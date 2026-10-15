@@ -42,11 +42,17 @@ export const CLAUDE_RETRY_MIN_BUDGET_MS = 15_000;
 export const CLAUDE_MIN_ATTEMPT_BUDGET_MS = 10_000;
 
 /**
- * Sukut modellar (env: AI_ORDER_MODEL, AI_ORDER_VISION_MODEL, AI_CLASSIFY_MODEL).
+ * Sukut modellar (env: AI_ORDER_MODEL, AI_ORDER_VISION_MODEL, AI_CLASSIFY_MODEL,
+ * AI_DISTRICT_MODEL).
  * order === vision — matn va rasm chaqiruvlari BITTA prompt keshini bo'lishadi.
+ *
+ * district (5Z1ZvvzE #3, karta TAVSIYASI): tuman ro'yxati system-promptda
+ * (~2.4k token) — Haiku 4.5 ning minimal keshlanadigan prefiksi 4096 token,
+ * ya'ni u yerda kesh HECH QACHON ishlamaydi; claude-sonnet-5 da chegara 1024.
  */
 export const AI_MODEL_DEFAULTS = {
   order: 'claude-sonnet-5',
   vision: 'claude-sonnet-5',
   classify: 'claude-haiku-4-5',
+  district: 'claude-sonnet-5',
 } as const;

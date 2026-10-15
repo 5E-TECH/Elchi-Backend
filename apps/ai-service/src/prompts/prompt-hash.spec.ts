@@ -4,7 +4,10 @@ import {
   ORDER_EXTRACT_SYSTEM,
 } from './order-extract.prompt';
 import { ORDER_EXTRACT_SCHEMA } from './order-extract.schema';
-import { DISTRICT_PICK_SYSTEM } from './district-pick.prompt';
+import {
+  DISTRICT_PICK_CATALOG_SYSTEM,
+  DISTRICT_PICK_SYSTEM,
+} from './district-pick.prompt';
 import { DISTRICT_PICK_SCHEMA } from './district-pick.schema';
 import { PRODUCT_DISAMBIG_SYSTEM } from './product-disambiguate.prompt';
 import { PRODUCT_DISAMBIG_SCHEMA } from './product-disambiguate.schema';
@@ -40,6 +43,10 @@ const LOCKED = {
     'a92075508a9d691639f8cb301310301304dc260bea8d4047a0c6a997f2706628',
   DISTRICT_PICK_SCHEMA:
     '370b4539e409c0753b6b506185b5c59be7695f890f7cdc292d3baae708d5fb6b',
+  // 5Z1ZvvzE TC9 — KATALOG rejimi (tuman ro'yxati system'da, keshlanadi).
+  // Ro'yxat qatorlari bu matn OXIRIGA deterministik qo'shiladi.
+  DISTRICT_PICK_CATALOG_SYSTEM:
+    '58ec03dac4dd5d4e5d8fe7199bed2ac3691e81ca706024efcb2fb8c7c27aecc7',
 } as const;
 
 function sha256(text: string): string {
@@ -71,6 +78,12 @@ describe("prompt/sxema sha256 qulfi (cSUBv0tY #9 — kesh buzilishini erta ko'rs
 
   it('DISTRICT_PICK_SYSTEM (5Z1ZvvzE)', () => {
     expect(sha256(DISTRICT_PICK_SYSTEM)).toBe(LOCKED.DISTRICT_PICK_SYSTEM);
+  });
+
+  it('DISTRICT_PICK_CATALOG_SYSTEM (5Z1ZvvzE TC9 — kesh rejimi)', () => {
+    expect(sha256(DISTRICT_PICK_CATALOG_SYSTEM)).toBe(
+      LOCKED.DISTRICT_PICK_CATALOG_SYSTEM,
+    );
   });
 
   it('JSON.stringify(DISTRICT_PICK_SCHEMA) (5Z1ZvvzE)', () => {

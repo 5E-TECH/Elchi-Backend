@@ -139,6 +139,15 @@ async function bootstrap() {
       'X-Device-Id',
       'X-Device-Name',
     ],
+    // xWsCAA5N: GET /orders/export/excel — brauzer fayl nomi va eksport
+    // chegarasi (X-Export-Truncated/Total/Limit) sarlavhalarini o'qiy olsin;
+    // aks holda CORS ularni JS'dan yashiradi va ogohlantirish ko'rsatilmaydi.
+    exposedHeaders: [
+      'Content-Disposition',
+      'X-Export-Total',
+      'X-Export-Limit',
+      'X-Export-Truncated',
+    ],
   });
 
   app.useGlobalPipes(

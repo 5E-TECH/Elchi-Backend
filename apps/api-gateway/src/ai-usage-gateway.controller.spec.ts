@@ -42,7 +42,8 @@ describe('Celz3rKJ — AI xarajat paneli gateway (/ai-usage)', () => {
     internal: 20,
     external: 5,
     branch: 3,
-    total: 28,
+    bot: 4,
+    total: 32,
     applied_range: { clamped: false },
   };
 
@@ -185,24 +186,56 @@ describe('Celz3rKJ — AI xarajat paneli gateway (/ai-usage)', () => {
     },
   );
 
-  it('⭐ TC6: buyurtma manbasi — AI / qo`lda / tashqi / filial (qo`lda = internal − AI)', async () => {
+  it('⭐ TC6: buyurtma manbasi — AI / qo`lda / bot / tashqi / filial va ulushlar (qo`lda = internal − AI)', async () => {
     const res = await request(app.getHttpServer())
       .get('/ai-usage/dashboard?fromDate=2026-10-01&toDate=2026-10-14')
       .set(as(ADMIN));
     expect(res.body.data.orderSources).toEqual({
-      total: 28,
+      total: 32,
       ai: 7,
       manual: 13,
+      bot: 4,
       external: 5,
       branch: 3,
+      // Nisbat (%), 1 xona: 7/32 = 21.875 → 21.9 ...
+      shares: {
+        ai: 21.9,
+        manual: 40.6,
+        bot: 12.5,
+        external: 15.6,
+        branch: 9.4,
+      },
       applied_range: { clamped: false },
     });
+    const { ai, manual, bot, external, branch, total } =
+      res.body.data.orderSources;
+    expect(ai + manual + bot + external + branch).toBe(total);
     // AI xarajati bilan AYNI kunlar oynasi.
     expect(order.send).toHaveBeenCalledWith(
       { cmd: 'order.analytics.source_distribution' },
       { startDate: '2026-10-01', endDate: '2026-10-14' },
     );
     expect(res.body.data.degraded).toBe(false);
+  });
+
+  it('Celz3rKJ: eski order-service (bot kaliti yo`q) — bot 0; jami 0 bo`lsa ulushlar 0', async () => {
+    orderReply = () =>
+      of({
+        internal: 0,
+        external: 0,
+        branch: 0,
+        total: 0,
+        applied_range: null,
+      });
+    aiReply = () => of({ ...AI_DASHBOARD, summary: { aiOrderCount: 0 } });
+    const res = await request(app.getHttpServer())
+      .get('/ai-usage/dashboard?fromDate=2026-10-01&toDate=2026-10-14')
+      .set(as(ADMIN));
+    expect(res.body.data.orderSources).toMatchObject({
+      total: 0,
+      bot: 0,
+      shares: { ai: 0, manual: 0, bot: 0, external: 0, branch: 0 },
+    });
   });
 
   it('sana berilmasa — ikkala servisga ham AYNI oxirgi 30 kun (Toshkent)', async () => {

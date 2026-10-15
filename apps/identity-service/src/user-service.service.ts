@@ -773,6 +773,22 @@ export class UserServiceService implements OnModuleInit {
     this.forbidden('Bu amal uchun ruxsat yoq');
   }
 
+  /** vpKijXce: investor logini — SUPERADMIN | ADMIN (gateway POST /investor-users bilan bir xil). */
+  private assertRequesterCanCreateInvestorUser(requester?: RequesterContext) {
+    if (!requester) {
+      return;
+    }
+
+    if (
+      this.hasRole(requester, Roles.SUPERADMIN) ||
+      this.hasRole(requester, Roles.ADMIN)
+    ) {
+      return;
+    }
+
+    this.forbidden('Bu amal uchun ruxsat yoq');
+  }
+
   /** (dzyVftBx) Logist: SUPERADMIN | ADMIN (gateway POST /logists bilan bir xil). */
   private assertRequesterCanCreateLogist(requester?: RequesterContext) {
     if (!requester) {
@@ -1355,6 +1371,62 @@ export class UserServiceService implements OnModuleInit {
       ...this.auditActor(requester),
     });
     return successRes(this.sanitize(saved), 201, 'Logist yaratildi');
+  }
+
+  /**
+   * vpKijXce — INVESTOR LOGINI (BeePost `POST /users/investor` naqshi).
+   *
+   * Elchida investor roli, `/investors/me` marshrutlari va investor
+   * yozuvidagi `user_id` bor edi, lekin investor rolli foydalanuvchini
+   * yaratishning birorta yo'li yo'q edi — `/investors/me` ni hech kim
+   * ishlata olmasdi. Faqat kirish uchun: ism, telefon, parol. Maosh, to'lov
+   * kuni, filial, kassa YO'Q (roleToCashboxType → null). Kapital/ulush/foyda
+   * investor-service'da; login `PATCH /investors/:id {user_id}` bilan
+   * bog'lanadi.
+   */
+  async createInvestorUser(
+    dto: { name: string; phone_number: string; password: string },
+    requester?: RequesterContext,
+  ) {
+    this.assertRequesterCanCreateInvestorUser(requester);
+
+    const name = String(dto?.name ?? '').trim();
+    const phoneNumber = String(dto?.phone_number ?? '').trim();
+    const password = String(dto?.password ?? '');
+    if (!name || !phoneNumber || !password) {
+      this.badRequest('name, phone_number va password majburiy');
+    }
+
+    await this.ensurePhoneUnique(phoneNumber);
+
+    const hashedPassword = await this.bcryptEncryption.encrypt(password);
+
+    const investorUser = this.users.create({
+      name,
+      phone_number: phoneNumber,
+      username: null,
+      password: hashedPassword,
+      salary: 0,
+      role: Roles.INVESTOR,
+      status: Status.ACTIVE,
+      created_by: this.createdByOf(requester),
+      isDeleted: false,
+    });
+
+    const saved = await this.users.save(investorUser);
+    void this.syncUserToSearch(saved);
+    await this.activityLog.log({
+      entity_type: 'User',
+      entity_id: saved.id,
+      action: ActivityAction.CREATED,
+      new_value: {
+        name: saved.name,
+        phone_number: saved.phone_number,
+        role: saved.role,
+      },
+      ...this.auditActor(requester),
+    });
+    return successRes(this.sanitize(saved), 201, 'Investor login yaratildi');
   }
 
   /**

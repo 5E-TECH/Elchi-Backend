@@ -1,6 +1,7 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { Type } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import {
+  IsBoolean,
   IsDateString,
   IsInt,
   IsOptional,
@@ -8,6 +9,14 @@ import {
   MaxLength,
   Min,
 } from 'class-validator';
+
+/** `?archive=true` / `false` satrini boolean'ga (boshqa qiymat — 400). */
+const toBool = ({ value }: { value: unknown }) =>
+  value === true || value === 'true'
+    ? true
+    : value === false || value === 'false'
+      ? false
+      : value;
 
 /**
  * Query filters for the admin audit-log viewer (GET /activity-logs).
@@ -107,4 +116,14 @@ export class ActivityLogQueryDto {
   @IsString()
   @MaxLength(500)
   cursor?: string;
+
+  @ApiPropertyOptional({
+    description:
+      "(i6Nyedea) `true` — ARXIV: saqlash muddati o'tib `activity_logs_archive` ga ko'chirilgan qatorlar (filtrlar, sahifalash, kursor AYNAN o'sha; qatorda `archived_at`, `archive_rule`). Berilmasa — joriy jurnal.",
+    example: false,
+  })
+  @IsOptional()
+  @Transform(toBool)
+  @IsBoolean()
+  archive?: boolean;
 }

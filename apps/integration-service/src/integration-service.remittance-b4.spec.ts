@@ -19,11 +19,28 @@ import { RemittanceStatus } from './entities/provider-remittance.entity';
 
 type Row = Record<string, any>;
 
-function makeSvc(opts: { pending?: Row[]; remittance?: Row | null } = {}) {
+function makeSvc(
+  opts: {
+    pending?: Row[];
+    remittance?: Row | null;
+    /** utIffRFx 4-band — hamkor avansi hovuzi (so'm) — SQL SUM natijasi. */
+    advance?: number;
+    consumers?: Row[];
+  } = {},
+) {
   const svc: any = Object.create(IntegrationServiceService.prototype);
   svc.logger = { warn: jest.fn(), error: jest.fn(), log: jest.fn() };
   svc.integrationRepo = {
     findOne: jest.fn(() => Promise.resolve({ id: '2', slug: 'test-kargo' })),
+  };
+  // utIffRFx 4-band — avans SUM so'rovi (computeRemittanceAdvance).
+  const advanceQb: any = {
+    select: jest.fn(() => advanceQb),
+    where: jest.fn(() => advanceQb),
+    andWhere: jest.fn(() => advanceQb),
+    getRawOne: jest.fn(() =>
+      Promise.resolve({ advance: String(opts.advance ?? 0) }),
+    ),
   };
   const remittanceStore: Row = opts.remittance
     ? { ...opts.remittance }
@@ -37,6 +54,8 @@ function makeSvc(opts: { pending?: Row[]; remittance?: Row | null } = {}) {
     findOne: jest.fn(() =>
       Promise.resolve(opts.remittance === null ? null : { ...remittanceStore }),
     ),
+    find: jest.fn(() => Promise.resolve(opts.consumers ?? [])),
+    createQueryBuilder: jest.fn(() => advanceQb),
   };
   const receivables = (opts.pending ?? []).map((r) => ({ ...r }));
   const receivableRepo = {
@@ -51,8 +70,11 @@ function makeSvc(opts: { pending?: Row[]; remittance?: Row | null } = {}) {
     ),
     save: jest.fn((x: Row) => Promise.resolve(x)),
   };
+  // advisory qulf (lockRemittanceFlow) — manager.query.
+  const managerQuery = jest.fn(() => Promise.resolve([]));
   const transaction = jest.fn((cb: (m: any) => Promise<unknown>) =>
     cb({
+      query: managerQuery,
       getRepository: (entity: { name?: string }) =>
         entity?.name === 'ProviderRemittance' ? remittanceRepo : receivableRepo,
     }),
@@ -61,6 +83,8 @@ function makeSvc(opts: { pending?: Row[]; remittance?: Row | null } = {}) {
   svc.remittanceRepo = {
     update: jest.fn(() => Promise.resolve({ affected: 1 })),
     findOne: remittanceRepo.findOne,
+    find: remittanceRepo.find,
+    createQueryBuilder: remittanceRepo.createQueryBuilder,
     findAndCount: jest.fn(() => Promise.resolve([[], 0])),
   };
   svc.financeClient = { name: 'FINANCE' };
@@ -73,6 +97,8 @@ function makeSvc(opts: { pending?: Row[]; remittance?: Row | null } = {}) {
     receivables,
     remittanceStore,
     transaction,
+    managerQuery,
+    advanceQb,
   };
 }
 
@@ -332,9 +358,19 @@ describe('DxdZFdIk — remittance bekor qilish', () => {
       cashbox_reversed: true,
       settlement_reverted: true,
     });
-    // Kassa chiqimi tranzaksiyadan OLDIN (pul yechilmasa hech narsa o'zgarmaydi).
+    // R6: kassa chiqimi tranzaksiya va hamkor advisory qulfi ICHIDA, qarz
+    // qatorlari qayta ochilishidan OLDIN (pul yechilmasa — rollback, hech
+    // narsa o'zgarmaydi).
+    expect(env.transaction).toHaveBeenCalledTimes(1);
+    expect(env.managerQuery).toHaveBeenCalledWith(
+      expect.stringContaining('pg_advisory_xact_lock'),
+      ['provider-remittance:2'],
+    );
+    expect(env.managerQuery.mock.invocationCallOrder.at(-1)).toBeLessThan(
+      rmqSendMock.mock.invocationCallOrder[0],
+    );
     expect(rmqSendMock.mock.invocationCallOrder[0]).toBeLessThan(
-      env.transaction.mock.invocationCallOrder[0],
+      env.receivableRepo.save.mock.invocationCallOrder[0],
     );
   });
 
@@ -374,7 +410,11 @@ describe('DxdZFdIk — remittance bekor qilish', () => {
     expect(String((error as any).getError().message)).toContain(
       'Insufficient cash balance',
     );
-    expect(env.transaction).not.toHaveBeenCalled();
+    // R6: chiqim tranzaksiya ichida — u yiqilsa qarz qatorlari ham, yozuv
+    // ham tegilmaydi (haqiqiy PG'da ROLLBACK — remittance-b4.pg.spec).
+    expect(env.receivableRepo.save).not.toHaveBeenCalled();
+    expect(env.remittanceRepo.save).not.toHaveBeenCalled();
+    expect(env.remittanceStore.status).toBe(RemittanceStatus.ACTIVE);
     expect(env.receivables.map((r) => r.status)).toEqual([
       ReceivableStatus.SETTLED,
       ReceivableStatus.SETTLED,
@@ -436,8 +476,9 @@ describe('DxdZFdIk — remittance bekor qilish', () => {
       pending: settledRows(),
       remittance: activeRemittance(),
     });
-    const realTx = env.transaction.getMockImplementation()!;
-    env.transaction.mockImplementationOnce(() =>
+    // R6: chiqim tranzaksiya ICHIDA yozilgan, keyin yozuvni saqlash
+    // (COMMIT oldi) yiqiladi.
+    env.remittanceRepo.save.mockImplementationOnce(() =>
       Promise.reject(new Error('deadlock detected')),
     );
 
@@ -447,7 +488,6 @@ describe('DxdZFdIk — remittance bekor qilish', () => {
     expect(env.svc.logger.error).toHaveBeenCalled();
     expect(env.remittanceStore.status).toBe(RemittanceStatus.ACTIVE);
 
-    env.transaction.mockImplementation(realTx);
     const res: any = await env.svc.cancelRemittance({
       integration_id: '2',
       remittance_id: '77',
@@ -495,5 +535,254 @@ describe('DxdZFdIk — remittance bekor qilish', () => {
       statusCode: 404,
     });
     expect(rmqSendMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('utIffRFx 4-band — qoldiq hamkor avansi bo`lib keyingi to`lovda ishlatiladi', () => {
+  it('⭐ avans 1 800 000 + to`lov 1 500 000 → ikkala qator FIFO yopiladi, avansdan 1 700 000 ishlatiladi, qoldiq avans 100 000', async () => {
+    const env = makeSvc({ pending: pendingRows(), advance: 1_800_000 });
+
+    const res: any = await env.svc.createRemittance({
+      integration_id: '2',
+      amount: 1_500_000,
+      created_by: '1',
+    });
+
+    expect(res.data).toMatchObject({
+      remitted_amount: 1_500_000,
+      settled_amount: 3_200_000,
+      settled_count: 2,
+      unapplied_amount: 0,
+      advance_applied: 1_700_000,
+      advance_balance: 100_000,
+    });
+    expect(res.data).not.toHaveProperty('warning');
+    expect(env.remittanceStore).toMatchObject({
+      settled_amount: '3200000.00',
+      unapplied_amount: '0.00',
+      advance_applied: '1700000.00',
+    });
+    expect(env.receivables.map((r) => r.status)).toEqual([
+      ReceivableStatus.SETTLED,
+      ReceivableStatus.SETTLED,
+    ]);
+    // Kassaga faqat YANGI pul (avans allaqachon kassada).
+    expect(callsOf('finance.cashbox.fill')[0][2].amount).toBe(1_500_000);
+    expect(
+      callsOf('order.settlement.provider_settled')[0][2].order_ids,
+    ).toEqual(['1001', '1002']);
+  });
+
+  it('avans yetmasa FIFO to`liq qatorda to`xtaydi: avans 500 000 + 1 000 000 → faqat 1 200 000 qator, qoldiq avans 300 000', async () => {
+    const env = makeSvc({ pending: pendingRows(), advance: 500_000 });
+
+    const res: any = await env.svc.createRemittance({
+      integration_id: '2',
+      amount: 1_000_000,
+    });
+
+    expect(res.data).toMatchObject({
+      settled_amount: 1_200_000,
+      settled_count: 1,
+      advance_applied: 200_000,
+      unapplied_amount: 0,
+      advance_balance: 300_000,
+    });
+    expect(env.receivables.map((r) => r.status)).toEqual([
+      ReceivableStatus.SETTLED,
+      ReceivableStatus.PENDING,
+    ]);
+  });
+
+  it('to`lov o`zi yetsa avansga tegilmaydi; ortiqchasi avansga QO`SHILADI', async () => {
+    const env = makeSvc({ pending: pendingRows(), advance: 400_000 });
+
+    const res: any = await env.svc.createRemittance({
+      integration_id: '2',
+      amount: 4_000_000,
+    });
+
+    expect(res.data).toMatchObject({
+      settled_amount: 3_200_000,
+      advance_applied: 0,
+      unapplied_amount: 800_000,
+      advance_balance: 1_200_000,
+    });
+    expect(res.data.warning).toContain('AVANS');
+  });
+
+  it('aniq ro`yxat to`lovdan ko`p yopsa avval avans ishlatiladi; yetmagani manfiy qoldiq (avans manfiyga tushmaydi)', async () => {
+    const env = makeSvc({ pending: pendingRows(), advance: 1_000_000 });
+
+    const res: any = await env.svc.createRemittance({
+      integration_id: '2',
+      amount: 1_000_000,
+      order_ids: ['1001', '1002'],
+    });
+
+    expect(res.data).toMatchObject({
+      settled_amount: 3_200_000,
+      advance_applied: 1_000_000,
+      unapplied_amount: -1_200_000,
+      advance_balance: 0,
+    });
+    expect(res.data.warning).toContain('1200000');
+  });
+
+  it('advisory qulf avans o`qilishi va FIFO dan OLDIN (bitta hamkor — bitta navbat)', async () => {
+    const env = makeSvc({ pending: pendingRows(), advance: 0 });
+
+    await env.svc.createRemittance({ integration_id: '2', amount: 10 });
+
+    const lockCall = env.managerQuery.mock.calls.findIndex((c: any[]) =>
+      String(c[0]).includes('pg_advisory_xact_lock'),
+    );
+    expect(lockCall).toBeGreaterThanOrEqual(0);
+    expect(env.managerQuery.mock.calls[lockCall][1]).toEqual([
+      'provider-remittance:2',
+    ]);
+    expect(env.managerQuery.mock.invocationCallOrder[lockCall]).toBeLessThan(
+      env.advanceQb.getRawOne.mock.invocationCallOrder[0],
+    );
+    expect(env.advanceQb.getRawOne.mock.invocationCallOrder[0]).toBeLessThan(
+      env.receivableRepo.find.mock.invocationCallOrder[0],
+    );
+    // Avans faqat faol, kuzatiladigan (advance_applied NOT NULL) yozuvlardan.
+    const conds = env.advanceQb.andWhere.mock.calls.map((c: any[]) => c[0]);
+    expect(conds).toEqual(
+      expect.arrayContaining([
+        'r.status = :status',
+        'r.advance_applied IS NOT NULL',
+      ]),
+    );
+  });
+
+  it('getProviderBalance: advance_balance va payable_amount = max(0, outstanding − avans)', async () => {
+    const env = makeSvc({ advance: 800_000 });
+    const receivableQb: any = {
+      select: jest.fn(() => receivableQb),
+      addSelect: jest.fn(() => receivableQb),
+      where: jest.fn(() => receivableQb),
+      andWhere: jest.fn(() => receivableQb),
+      getRawOne: jest.fn(() =>
+        Promise.resolve({ sum: '2000000.00', count: '1' }),
+      ),
+    };
+    env.svc.receivableRepo.createQueryBuilder = jest.fn(() => receivableQb);
+
+    const res: any = await env.svc.getProviderBalance('2');
+
+    expect(res.data).toEqual({
+      integration_id: '2',
+      outstanding_amount: 2_000_000,
+      outstanding_count: 1,
+      advance_balance: 800_000,
+      payable_amount: 1_200_000,
+    });
+  });
+});
+
+describe('utIffRFx 4-band + DxdZFdIk — bekor qilish avansni to`g`ri qaytaradi', () => {
+  const remittanceWithAdvance = (extra: Row = {}) => ({
+    id: '77',
+    integration_id: '2',
+    amount: '5000000.00',
+    settled_amount: '3200000.00',
+    unapplied_amount: '1800000.00',
+    advance_applied: '0.00',
+    status: RemittanceStatus.ACTIVE,
+    cashbox_posted: true,
+    createdAt: new Date('2026-10-15T05:00:00Z'),
+    ...extra,
+  });
+
+  it('⭐ to`lov avansi keyingi to`lovda ishlatilgan — 409, kassaga tegilmaydi, tranzaksiya ochilmaydi', async () => {
+    const env = makeSvc({
+      remittance: remittanceWithAdvance(),
+      advance: 0, // 1 800 000 to'liq #78 da ishlatilgan
+      consumers: [
+        {
+          id: '78',
+          advance_applied: '1800000.00',
+          status: RemittanceStatus.ACTIVE,
+        },
+      ],
+    });
+
+    const error: unknown = await env.svc
+      .cancelRemittance({ integration_id: '2', remittance_id: '77' })
+      .catch((e: unknown) => e);
+
+    expect((error as RpcException).getError()).toMatchObject({
+      statusCode: 409,
+    });
+    expect(String((error as any).getError().message)).toContain('#78');
+    expect(rmqSendMock).not.toHaveBeenCalled();
+    expect(env.transaction).not.toHaveBeenCalled();
+  });
+
+  it('avans qisman ishlatilgan (hovuz 1 000 000 < hissa 1 800 000) — 409', async () => {
+    const env = makeSvc({
+      remittance: remittanceWithAdvance(),
+      advance: 1_000_000,
+    });
+
+    const error: unknown = await env.svc
+      .cancelRemittance({ integration_id: '2', remittance_id: '77' })
+      .catch((e: unknown) => e);
+
+    expect((error as RpcException).getError()).toMatchObject({
+      statusCode: 409,
+    });
+    expect(String((error as any).getError().message)).toContain('800000');
+  });
+
+  it('avans ishlatilmagan (hovuz = hissa) — bekor qilinadi', async () => {
+    const env = makeSvc({
+      remittance: remittanceWithAdvance(),
+      advance: 1_800_000,
+    });
+
+    const res: any = await env.svc.cancelRemittance({
+      integration_id: '2',
+      remittance_id: '77',
+    });
+
+    expect(res.data.status).toBe(RemittanceStatus.CANCELLED);
+    expect(callsOf('finance.cashbox.spend')[0][2].amount).toBe(5_000_000);
+  });
+
+  it('avansdan FOYDALANGAN to`lovni bekor qilish — hissa manfiy, tekshiruvsiz o`tadi (avans hovuzga qaytadi)', async () => {
+    const env = makeSvc({
+      remittance: remittanceWithAdvance({
+        amount: '1500000.00',
+        unapplied_amount: '0.00',
+        advance_applied: '1700000.00',
+      }),
+      advance: 0,
+    });
+
+    const res: any = await env.svc.cancelRemittance({
+      integration_id: '2',
+      remittance_id: '77',
+    });
+
+    expect(res.data.status).toBe(RemittanceStatus.CANCELLED);
+    expect(env.advanceQb.getRawOne).not.toHaveBeenCalled();
+  });
+
+  it('eski yozuv (advance_applied NULL) — avans tekshiruvi yo`q', async () => {
+    const env = makeSvc({
+      remittance: remittanceWithAdvance({ advance_applied: null }),
+      advance: 0,
+    });
+
+    const res: any = await env.svc.cancelRemittance({
+      integration_id: '2',
+      remittance_id: '77',
+    });
+
+    expect(res.data.status).toBe(RemittanceStatus.CANCELLED);
+    expect(env.advanceQb.getRawOne).not.toHaveBeenCalled();
   });
 });

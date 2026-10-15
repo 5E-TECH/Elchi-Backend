@@ -10,6 +10,8 @@
 # Env:
 #   ACTIVITY_LOG_PRUNE_INTERVAL_SECONDS  seconds between runs (default 86400 = 1d)
 #   ACTIVITY_LOG_PRUNE_ENABLED           `true` to delete (default off = dry-run)
+#   ACTIVITY_LOG_PRUNE_ARCHIVE           `false` to delete WITHOUT archiving (default:
+#                                        move rows to activity_logs_archive, i6Nyedea)
 #   ACTIVITY_LOG_RETENTION_AUTH_DAYS     login/logout/auth_failure window (default 90)
 #   ACTIVITY_LOG_RETENTION_DEFAULT_DAYS  all other verbs window (default 1095)
 #   ACTIVITY_LOG_DEVICE_RETENTION_DAYS   ip/device metadata window (default 30, f2Ud5tju)

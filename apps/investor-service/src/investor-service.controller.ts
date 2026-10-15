@@ -180,6 +180,8 @@ export class InvestorServiceController {
       id: string;
       dto: UpdateInvestmentDto;
       requester?: { id?: string; roles?: string[] };
+      /** vpKijXce: ichki yo'l — investitsiya egasi (begona → 404). */
+      scope_investor_id?: string;
     },
     @Ctx() context: RmqContext,
   ) {
@@ -188,6 +190,7 @@ export class InvestorServiceController {
         String(data?.id),
         data?.dto ?? {},
         data?.requester,
+        data?.scope_investor_id,
       ),
     );
   }
@@ -195,7 +198,11 @@ export class InvestorServiceController {
   @MessagePattern({ cmd: 'investor.investment.delete' })
   deleteInvestment(@Payload() data: any, @Ctx() context: RmqContext) {
     return this.executeAndAck(context, () =>
-      this.investorService.deleteInvestment(String(data?.id), data?.requester),
+      this.investorService.deleteInvestment(
+        String(data?.id),
+        data?.requester,
+        data?.scope_investor_id,
+      ),
     );
   }
 

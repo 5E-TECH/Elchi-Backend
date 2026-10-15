@@ -17,6 +17,7 @@ import {
   Post,
   Query,
   Req,
+  Res,
   ServiceUnavailableException,
   UploadedFile,
   UploadedFiles,
@@ -38,6 +39,7 @@ import {
   ApiTags,
 } from '@nestjs/swagger';
 import { randomUUID } from 'node:crypto';
+import type { Response } from 'express';
 import { firstValueFrom, TimeoutError, timeout } from 'rxjs';
 import { FileInterceptor, FilesInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
@@ -116,6 +118,12 @@ import {
 } from './auth/order-qr-visibility';
 import { projectOrderPayloadForRoles } from './auth/order-role-projection';
 import { isOrderQrLightView, sendOrderQrLight } from './order-qr-light-view';
+import {
+  ORDER_EXPORT_PAGE_SIZE,
+  ORDER_EXPORT_PAGE_TIMEOUT_MS,
+  streamOrdersXlsx,
+  type OrderExportPage,
+} from './order-export/orders-xlsx.export';
 
 interface JwtUser {
   sub: string;
@@ -128,6 +136,42 @@ type BranchAssignment = {
   branch_id?: string | null;
   role?: string | null;
 };
+
+/** GET /orders filtrlari (sahifalashsiz) — findAll va eksport uchun umumiy. */
+type OrderListFilters = {
+  market_id?: string;
+  customer_id?: string;
+  status?: string | string[];
+  search?: string;
+  start_day?: string;
+  end_day?: string;
+  courier?: string;
+  region_id?: string;
+  district_id?: string;
+  branch_id?: string;
+  courier_ids?: string | string[];
+  fetch_all?: string;
+  source?: string;
+  courier_id?: string;
+  where_deliver?: string;
+  sort_by?: string;
+  sort_dir?: string;
+  cancelled_inventory?: string;
+};
+
+type OrderListRequest =
+  | {
+      kind: 'courier_cancelled';
+      roles: string[];
+      pagination: { page: number; limit: number };
+      filters: Record<string, unknown>;
+    }
+  | {
+      kind: 'query';
+      roles: string[];
+      pagination: { page: number; limit: number };
+      query: Record<string, unknown>;
+    };
 
 type UploadedProofFile = {
   originalname: string;
@@ -1761,6 +1805,60 @@ export class OrderGatewayController {
     return projectOrderPayloadForRoles(req?.user?.roles, response);
   }
 
+  private hasCustomerIdValue(value: unknown): boolean {
+    return (
+      (typeof value === 'string' || typeof value === 'number') &&
+      String(value).trim() !== ''
+    );
+  }
+
+  /**
+   * hiqRNhkI TC3 — admin bo'lmagan rol yuborgan `customer_id` ning DOIRASI.
+   *
+   * Qoida `GET /customers/suggest` bilan AYNAN bir xil: mijoz shu marketda
+   * (o'chirilmagan) buyurtmasi bo'lsagina `order.customer.market_summary`
+   * natijasida chiqadi — taklif ro'yxati ham shu xulosa bilan qisqartiriladi.
+   * Ya'ni market/operator/filial xodimi faqat taklifda ko'ra oladigan
+   * mijozni bog'lay oladi; boshqa market mijozining id si (RBAC-01) o'tmaydi.
+   *
+   * Qaytaradi: doiradagi id yoki `null`. Xulosa olinmasa (timeout/xato) va
+   * `customer` obyekti bor bo'lsa — `null` (avvalgi telefon yo'li); obyekt
+   * yo'q bo'lsa xato yuqoriga otiladi (fail-closed).
+   */
+  private async resolveScopedCustomerId(
+    marketId: string | undefined,
+    rawCustomerId: unknown,
+    hasCustomerObject: boolean,
+  ): Promise<string | null> {
+    const customerId = this.asStr(rawCustomerId).trim();
+    const market = String(marketId ?? '').trim();
+    if (!/^\d+$/.test(customerId) || !/^\d+$/.test(market)) {
+      return null;
+    }
+    let summary: unknown;
+    try {
+      summary = await this.sendOrderWithTimeout(
+        { cmd: 'order.customer.market_summary' },
+        { market_id: market, customer_ids: [customerId] },
+      );
+    } catch (error) {
+      if (hasCustomerObject) {
+        return null;
+      }
+      throw error;
+    }
+    const items = (summary as { data?: { items?: unknown } } | null)?.data
+      ?.items;
+    const inScope =
+      Array.isArray(items) &&
+      items.some(
+        (item) =>
+          this.asStr((item as { customer_id?: unknown })?.customer_id) ===
+          customerId,
+      );
+    return inScope ? customerId : null;
+  }
+
   /**
    * `POST /orders` ning butun mantig'i — `create()` va `ai-confirm` ikkalasi
    * shu yerdan o'tadi (yangi yaratish mantig'i YOZILMAYDI, wgqxS0Cp #4).
@@ -1776,6 +1874,11 @@ export class OrderGatewayController {
    *    (`null` ham qiymat: "filial yo'q"); `undefined` bo'lsa odatiy yo'l;
    *  - `requestId` — `'ai-dedupe:<sha256>'`: order-service uni 10 daqiqalik
    *    idempotentlik kaliti sifatida ishlatadi (takror yuborish — dublikat emas).
+   *
+   * `opts.createdVia` (Celz3rKJ) — faqat bot yo'li (`botOrderCreate`):
+   * `order.create` payloadining YUQORI darajasida `created_via` bo'lib ketadi
+   * (mijoz DTO'sida emas — `POST /orders` uni bera olmaydi). Qolgan xulq
+   * `opts` siz yo'l bilan bir xil.
    */
   private async createOrderInternal(
     dto: CreateOrderRequestDto,
@@ -1788,16 +1891,21 @@ export class OrderGatewayController {
       aiAudit?: Record<string, unknown> | null;
       marketId?: string;
       branchAssignment?: BranchAssignment | null;
+      /** Celz3rKJ: yaratish kanali (hozir faqat bot). */
+      createdVia?: 'bot';
     },
   ): Promise<unknown> {
     const { customer, ...orderDto } = dto;
     const roles = this.normalizeRoles(req.user.roles);
     const isSystemPrivileged =
       roles.includes(RoleEnum.SUPERADMIN) || roles.includes(RoleEnum.ADMIN);
-    // fix3 RBAC-01: tayyor `customer_id` faqat SUPERADMIN/ADMIN dan qabul
-    // qilinadi. Market ketma-ket id yuborib boshqa marketlar mijozlarining
-    // ism/telefon/manzilini o'z buyurtmasi orqali o'qiy olardi. Qolganlar
-    // uchun mijoz DOIM `customer` obyektidan (telefon bo'yicha) aniqlanadi.
+    // fix3 RBAC-01: tayyor `customer_id` ni SUPERADMIN/ADMIN dan boshqasi
+    // ixtiyoriy qabul qila olmaydi — market ketma-ket id yuborib boshqa
+    // marketlar mijozlarining ism/telefon/manzilini o'z buyurtmasi orqali
+    // o'qiy olardi. hiqRNhkI TC3: boshqa rollar ham `GET /customers/suggest`
+    // tanlagan mijozni `customer_id` bilan yuboradi, lekin u FAQAT o'sha
+    // doirada qabul qilinadi (shu marketda buyurtmasi bor mijoz) — pastda,
+    // market aniqlangandan keyin (`resolveScopedCustomerId`).
     let customerId = isSystemPrivileged ? dto.customer_id : undefined;
     // fix3 C6: hayot sikli/saqlash maydonlari faqat SUPERADMIN/ADMIN dan.
     const safeOrderDto = isSystemPrivileged
@@ -1889,12 +1997,27 @@ export class OrderGatewayController {
       await this.assertOrderProductsOwned(resolvedMarketId, dto.items ?? []);
     }
 
+    if (!isSystemPrivileged && this.hasCustomerIdValue(dto.customer_id)) {
+      const scopedCustomerId = await this.resolveScopedCustomerId(
+        resolvedMarketId,
+        dto.customer_id,
+        Boolean(customer),
+      );
+      if (scopedCustomerId) {
+        customerId = scopedCustomerId;
+      } else if (!customer) {
+        // Doiradan tashqari id + mijoz obyekti yo'q — rad (RBAC-01 himoyasi).
+        // Obyekt bo'lsa — avvalgidek telefon bo'yicha aniqlanadi.
+        throw new ForbiddenException(
+          'customer_id faqat shu marketda buyurtmasi bor mijoz uchun (GET /customers/suggest taklifi). Yangi mijoz uchun customer obyekti (ism, telefon, tuman) yuboring',
+        );
+      }
+    }
+
     if (!customerId) {
       if (!customer) {
         throw new BadRequestException(
-          isSystemPrivileged || !dto.customer_id
-            ? 'customer_id yoki customer obyekt yuborilishi shart'
-            : "Mijoz ma'lumoti (customer: ism, telefon, tuman) yuborilishi shart — customer_id faqat admin uchun",
+          'customer_id yoki customer obyekt yuborilishi shart',
         );
       }
 
@@ -1951,6 +2074,7 @@ export class OrderGatewayController {
             ...(opts?.requestId ? { request_id: opts.requestId } : {}),
             ...(opts?.aiSignature ? { ai_signature: opts.aiSignature } : {}),
             ...(opts?.aiAudit ? { ai_audit: opts.aiAudit } : {}),
+            ...(opts?.createdVia ? { created_via: opts.createdVia } : {}),
           },
         )
         .pipe(timeout(8000)),
@@ -1990,7 +2114,13 @@ export class OrderGatewayController {
       items: dto.order_item_info,
     };
 
-    return this.create(mappedDto, req);
+    // Celz3rKJ: bot kanali belgisi (`created_via: 'bot'`) — "AI xarajat"
+    // panelidagi buyurtma manbasida `bot` ulushi. Javob `POST /orders` bilan
+    // AYNI rol proyeksiyasidan o'tadi.
+    const response: unknown = await this.createOrderInternal(mappedDto, req, {
+      createdVia: 'bot',
+    });
+    return projectOrderPayloadForRoles(req?.user?.roles, response);
   }
 
   /**
@@ -3038,7 +3168,274 @@ export class OrderGatewayController {
     @Query('sort_dir') sort_dir?: string,
     @Query('cancelled_inventory') cancelled_inventory?: string,
   ) {
-    const roles = req?.user?.roles ?? [];
+    const request = await this.resolveOrderListRequest(
+      {
+        market_id,
+        customer_id,
+        status,
+        search,
+        start_day,
+        end_day,
+        courier,
+        region_id,
+        district_id,
+        branch_id,
+        courier_ids,
+        fetch_all,
+        source,
+        courier_id,
+        where_deliver,
+        sort_by,
+        sort_dir,
+        cancelled_inventory,
+      },
+      req?.user,
+      page,
+      limit,
+    );
+    const { roles, pagination } = request;
+
+    if (request.kind === 'courier_cancelled') {
+      const { data, total } = await this.findCourierCancelledRows(
+        req?.user,
+        request.filters,
+        pagination.page,
+        pagination.limit,
+      );
+      const paginationMeta = this.buildPaginationMeta(
+        total,
+        pagination.page,
+        pagination.limit,
+      );
+
+      // kH2zZsz3: kuryer ro'yxati — market tarifi/filial ulushisiz.
+      return projectOrderPayloadForRoles(roles, {
+        data,
+        total,
+        page: pagination.page,
+        limit: pagination.limit,
+        ...paginationMeta,
+      });
+    }
+
+    const payload = {
+      query: {
+        ...request.query,
+        page: pagination.page,
+        limit: pagination.limit,
+      },
+    };
+
+    return this.sendOrderWithFallback(
+      { cmd: 'order.find_all_enriched' },
+      { cmd: 'order.find_all' },
+      payload,
+    ).then((response) => {
+      // kH2zZsz3: ro'yxat qatorlari ham detal bilan AYNI rol proyeksiyasida.
+      return projectOrderPayloadForRoles(
+        roles,
+        this.withPaginationMeta(response, pagination),
+      );
+    });
+  }
+
+  /**
+   * xWsCAA5N: buyurtmalar ro'yxatining HAQIQIY .xlsx eksporti — BITTA HTTP
+   * so'rov. Filtrlar va doira GET /orders bilan AYNAN bir xil
+   * (`resolveOrderListRequest`); `page`/`limit`/`fetch_all` yo'q — filtrga
+   * mos HAMMA qator (ORDER_EXPORT_MAX_ROWS gacha). Chegaradan oshsa
+   * `X-Export-Truncated: true` + faylda "DIQQAT" qatori — jimgina kesilmaydi.
+   * ⚠️ `@Get(':id')` dan OLDIN e'lon qilingan.
+   */
+  @Get('export/excel')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(
+    RoleEnum.SUPERADMIN,
+    RoleEnum.ADMIN,
+    RoleEnum.MANAGER,
+    RoleEnum.REGISTRATOR,
+    RoleEnum.BRANCH,
+    RoleEnum.MARKET,
+    RoleEnum.MARKET_OPERATOR,
+    RoleEnum.COURIER,
+  )
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary:
+      "Buyurtmalar ro'yxatini .xlsx ga eksport (GET /orders filtrlari bilan, bitta so'rov)",
+    description:
+      'Javob: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet. ' +
+      "Sarlavhalar: X-Export-Total (filtr bo'yicha jami), X-Export-Limit, " +
+      'X-Export-Truncated (true — fayl chegaraga yetib kesilgan, faylda DIQQAT qatori bor). ' +
+      "Oxirgi qatorlar: «Jami» (soni va narx yig'indisi).",
+  })
+  @ApiQuery({ name: 'market_id', required: false, type: String })
+  @ApiQuery({ name: 'customer_id', required: false, type: String })
+  @ApiQuery({
+    name: 'status',
+    required: false,
+    enum: Order_status,
+    isArray: true,
+  })
+  @ApiQuery({ name: 'search', required: false, type: String })
+  @ApiQuery({ name: 'start_day', required: false, type: String })
+  @ApiQuery({ name: 'end_day', required: false, type: String })
+  @ApiQuery({ name: 'courier', required: false, type: String })
+  @ApiQuery({ name: 'region_id', required: false, type: String })
+  @ApiQuery({ name: 'district_id', required: false, type: String })
+  @ApiQuery({ name: 'branch_id', required: false, type: String })
+  @ApiQuery({ name: 'courier_id', required: false, type: String })
+  @ApiQuery({ name: 'where_deliver', required: false, enum: Where_deliver })
+  @ApiQuery({
+    name: 'sort_by',
+    required: false,
+    enum: ['created_at', 'total_price', 'status'],
+  })
+  @ApiQuery({ name: 'sort_dir', required: false, enum: ['asc', 'desc'] })
+  @ApiQuery({
+    name: 'source',
+    required: false,
+    enum: ['internal', 'external', 'branch'],
+  })
+  @ApiQuery({ name: 'cancelled_inventory', required: false, type: Boolean })
+  async exportOrdersExcel(
+    @Res() res: Response,
+    @Req() req: { user: JwtUser },
+    @Query('market_id') market_id?: string,
+    @Query('customer_id') customer_id?: string,
+    @Query('status') status?: string | string[],
+    @Query('search') search?: string,
+    @Query('start_day') start_day?: string,
+    @Query('end_day') end_day?: string,
+    @Query('courier') courier?: string,
+    @Query('region_id') region_id?: string,
+    @Query('district_id') district_id?: string,
+    @Query('branch_id') branch_id?: string,
+    @Query('courier_ids') courier_ids?: string | string[],
+    @Query('source') source?: string,
+    @Query('courier_id') courier_id?: string,
+    @Query('where_deliver') where_deliver?: string,
+    @Query('sort_by') sort_by?: string,
+    @Query('sort_dir') sort_dir?: string,
+    @Query('cancelled_inventory') cancelled_inventory?: string,
+  ): Promise<void> {
+    const request = await this.resolveOrderListRequest(
+      {
+        market_id,
+        customer_id,
+        status,
+        search,
+        start_day,
+        end_day,
+        courier,
+        region_id,
+        district_id,
+        branch_id,
+        courier_ids,
+        source,
+        courier_id,
+        where_deliver,
+        sort_by,
+        sort_dir,
+        cancelled_inventory,
+      },
+      req?.user,
+    );
+    const { roles } = request;
+
+    const fetchPage = async (page: number): Promise<OrderExportPage> => {
+      if (request.kind === 'courier_cancelled') {
+        const { data, total } = await this.findCourierCancelledRows(
+          req?.user,
+          request.filters,
+          page,
+          100,
+        );
+        const projected = projectOrderPayloadForRoles(roles, { data });
+        return { rows: projected.data, total };
+      }
+      // Ro'yxatdagi fallback (find_all, boyitishsiz) bu yerda ATAYLAB yo'q:
+      // u market/mijoz/kuryer ustunlarini jimgina bo'sh qoldirardi.
+      const response: unknown = await firstValueFrom(
+        this.orderClient
+          .send(
+            { cmd: 'order.find_all_enriched' },
+            {
+              query: {
+                ...request.query,
+                fetch_all: undefined,
+                page,
+                limit: ORDER_EXPORT_PAGE_SIZE,
+                max_limit: ORDER_EXPORT_PAGE_SIZE,
+              },
+            },
+          )
+          .pipe(timeout(ORDER_EXPORT_PAGE_TIMEOUT_MS)),
+      ).catch((error: unknown) => {
+        if (error instanceof TimeoutError) {
+          throw new GatewayTimeoutException('Order service response timeout');
+        }
+        throw error;
+      });
+      const body =
+        response && typeof response === 'object'
+          ? (response as Record<string, unknown>)
+          : {};
+      const rows = this.extractRows(body).map((row) =>
+        this.normalizeOrderStatusForDisplay(row),
+      );
+      const projected = projectOrderPayloadForRoles(roles, { data: rows });
+      return {
+        rows: projected.data,
+        total: Number(body.total ?? rows.length) || 0,
+        searchTruncated: body.search_truncated === true,
+      };
+    };
+
+    const result = await streamOrdersXlsx(res, fetchPage);
+    if (result.status === 'aborted') {
+      this.logger.error(
+        `Buyurtmalar eksporti uzildi: ${result.written}/${result.total} qator yozilgan`,
+        result.error instanceof Error
+          ? result.error.stack
+          : String(result.error),
+      );
+    }
+  }
+
+  /**
+   * xWsCAA5N: GET /orders va GET /orders/export/excel uchun BITTA doira
+   * (rol, market/operator, filial, kuryer, bekor tab) — eksport ro'yxatda
+   * ko'rinmaydigan buyurtmani hech qachon bermasin. Mantiq findAll dan
+   * o'zgarishsiz ko'chirilgan (tartib ham: 403 → 400 → pagination).
+   */
+  private async resolveOrderListRequest(
+    filters: OrderListFilters,
+    user: JwtUser | undefined,
+    page?: string,
+    limit?: string,
+  ): Promise<OrderListRequest> {
+    const {
+      market_id,
+      customer_id,
+      status,
+      search,
+      start_day,
+      end_day,
+      courier,
+      region_id,
+      district_id,
+      branch_id,
+      courier_ids,
+      fetch_all,
+      source,
+      courier_id,
+      where_deliver,
+      sort_by,
+      sort_dir,
+      cancelled_inventory,
+    } = filters;
+    const roles = user?.roles ?? [];
     const normalizedRoles = this.normalizeRoles(roles);
     const isMarket = normalizedRoles.includes(RoleEnum.MARKET);
     const isCourier = normalizedRoles.includes(RoleEnum.COURIER);
@@ -3057,7 +3454,7 @@ export class OrderGatewayController {
       !isSystemPrivilegedRequester &&
       !isMarket &&
       normalizedRoles.includes(RoleEnum.MARKET_OPERATOR);
-    const requesterId = req?.user?.sub;
+    const requesterId = user?.sub;
 
     // fix3 C11 / CODE-04: OPERATOR, INVESTOR va noma'lum rollar uchun doira
     // yo'q edi — ular BARCHA buyurtmani mijoz ma'lumoti bilan o'qirdi.
@@ -3084,11 +3481,9 @@ export class OrderGatewayController {
     }
 
     let resolvedMarketId = isMarket && requesterId ? requesterId : market_id;
-    if (isMarketOperator && req?.user) {
+    if (isMarketOperator && user) {
       // Operator — faqat o'zi biriktirilgan market (server tomonda).
-      const operatorMarketId = await this.resolveMarketOperatorMarketId(
-        req.user,
-      );
+      const operatorMarketId = await this.resolveMarketOperatorMarketId(user);
       if (!operatorMarketId) {
         throw new ForbiddenException(
           'Operator hech qaysi marketga biriktirilmagan',
@@ -3109,8 +3504,8 @@ export class OrderGatewayController {
     let resolvedBranchId = branch_id;
     let branchAssignment: BranchAssignment | null = null;
 
-    if (isBranchScopedRequester && req?.user) {
-      branchAssignment = await this.resolveBranchAssignment(req.user);
+    if (isBranchScopedRequester && user) {
+      branchAssignment = await this.resolveBranchAssignment(user);
       if (
         !this.isBranchStaffAssignment(branchAssignment) ||
         !branchAssignment?.branch_id
@@ -3199,9 +3594,11 @@ export class OrderGatewayController {
           : undefined;
 
     if (isCourier && isCancelledTab) {
-      const { data, total } = await this.findCourierCancelledRows(
-        req?.user,
-        {
+      return {
+        kind: 'courier_cancelled',
+        roles,
+        pagination,
+        filters: {
           market_id: resolvedMarketId,
           customer_id,
           search,
@@ -3211,26 +3608,13 @@ export class OrderGatewayController {
           district_id,
           source,
         },
-        pagination.page,
-        pagination.limit,
-      );
-      const paginationMeta = this.buildPaginationMeta(
-        total,
-        pagination.page,
-        pagination.limit,
-      );
-
-      // kH2zZsz3: kuryer ro'yxati — market tarifi/filial ulushisiz.
-      return projectOrderPayloadForRoles(roles, {
-        data,
-        total,
-        page: pagination.page,
-        limit: pagination.limit,
-        ...paginationMeta,
-      });
+      };
     }
 
-    const payload = {
+    return {
+      kind: 'query',
+      roles,
+      pagination,
       query: {
         market_id: resolvedMarketId,
         customer_id: resolvedCustomerId,
@@ -3255,22 +3639,8 @@ export class OrderGatewayController {
         source,
         sort_by,
         sort_dir,
-        page: pagination.page,
-        limit: pagination.limit,
       },
     };
-
-    return this.sendOrderWithFallback(
-      { cmd: 'order.find_all_enriched' },
-      { cmd: 'order.find_all' },
-      payload,
-    ).then((response) => {
-      // kH2zZsz3: ro'yxat qatorlari ham detal bilan AYNI rol proyeksiyasida.
-      return projectOrderPayloadForRoles(
-        roles,
-        this.withPaginationMeta(response, pagination),
-      );
-    });
   }
 
   // fix3 RBAC-03: ilgari faqat JwtAuthGuard — kuryer (va operator/mijoz/

@@ -1,8 +1,9 @@
 import type { ConfigService } from '@nestjs/config';
-import type {
-  AiDistrictPickRequest,
-  ClaudeService,
-  ExtractJsonOptions,
+import {
+  AI_MODEL_DEFAULTS,
+  type AiDistrictPickRequest,
+  type ClaudeService,
+  type ExtractJsonOptions,
 } from '@app/common';
 import {
   DISTRICT_PICK_SYSTEM,
@@ -50,20 +51,22 @@ describe('DistrictPickService', () => {
       attempts: 1,
       usage: {},
     });
-    configValues = { AI_CLASSIFY_MODEL: 'claude-haiku-4-5' };
+    configValues = { AI_DISTRICT_MODEL: 'claude-haiku-4-5' };
     service = new DistrictPickService(
       { extractJson } as unknown as ClaudeService,
       { get: (k: string) => configValues[k] } as unknown as ConfigService,
     );
   });
 
-  it("arzon model, kichik max_tokens, feature='order_district' + market/user meta (TC10)", async () => {
+  it("AI_DISTRICT_MODEL, kichik max_tokens, feature='order_district' + market/user meta (TC10)", async () => {
     await expect(service.pick(req(), 123)).resolves.toEqual({
       ok: true,
       picks: [{ item_index: 0, choice: 2 }],
     });
     const opts = extractJson.mock.calls[0][0];
     expect(opts.model).toBe('claude-haiku-4-5');
+    // Haiku 4.5 effort'ni qabul qilmaydi (400) — kalit BERILMAYDI.
+    expect(opts).not.toHaveProperty('effort');
     expect(opts.maxTokens).toBe(DISTRICT_PICK_MAX_TOKENS);
     expect(DISTRICT_PICK_MAX_TOKENS).toBeGreaterThanOrEqual(64);
     expect(DISTRICT_PICK_MAX_TOKENS).toBeLessThanOrEqual(256);
@@ -78,6 +81,19 @@ describe('DistrictPickService', () => {
       traceId: 't-1',
       draftId: '0b9f7c3e-1d2a-4b5c-8d6e-7f8091a2b3c4',
     });
+  });
+
+  it('AI_DISTRICT_MODEL bo‘sh → sukut claude-sonnet-5 (kesh chegarasi 1024) + effort=low; AI_CLASSIFY_MODEL ta’sir qilmaydi', async () => {
+    configValues = {
+      AI_DISTRICT_MODEL: '  ',
+      AI_CLASSIFY_MODEL: 'claude-haiku-4-5',
+    };
+    await service.pick(req());
+    const opts = extractJson.mock.calls[0][0];
+    expect(AI_MODEL_DEFAULTS.district).toBe('claude-sonnet-5');
+    expect(opts.model).toBe('claude-sonnet-5');
+    expect(opts.effort).toBe('low');
+    expect(opts.maxTokens).toBe(DISTRICT_PICK_MAX_TOKENS);
   });
 
   it('modelga ID KO‘RSATILMAYDI — faqat indeks va nomlar (whitelist)', async () => {

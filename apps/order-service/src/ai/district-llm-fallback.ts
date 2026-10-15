@@ -1,6 +1,7 @@
 import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import { ClientProxy } from '@nestjs/microservices';
 import {
+  AI_DISTRICT_CATALOG_MAX,
   AI_DISTRICT_MAX_ITEMS,
   AI_DISTRICT_SHORTLIST_SIZE,
   AI_MIN_BUDGET_MS,
@@ -8,6 +9,7 @@ import {
   normGeo,
   rmqSend,
   simRatio,
+  type AiDistrictCatalogEntry,
   type AiDistrictPickRequest,
   type AiDistrictPickResponse,
   type AiDistrictPoolEntry,
@@ -41,6 +43,10 @@ import type {
  *  6. SOATO darvozasi QAT'IY: tanlangan tuman `sato_code` i viloyat
  *     `sato_code` i bilan boshlanmasa YOKI kod yo'q bo'lsa — RAD (TC6).
  *  7. AI o'chiq / limit / tarmoq / kesilgan — jimgina deterministik natija (TC11-12).
+ *  8. KESH (#3-4): so'rovga barcha tumanlar katalogi (`ORDER BY id`, faqat
+ *     nomlar) va pool qatorlariga `catalog_index` qo'shiladi — ai-service
+ *     ro'yxatni keshlangan system-promptga chiqaradi. Javob kontrakti
+ *     o'zgarmaydi: `choice` baribir pool indeksi (ai-service o'giradi).
  */
 
 export const DISTRICT_PICKER = Symbol('DISTRICT_PICKER');
@@ -201,15 +207,45 @@ export function buildDistrictPool(
   };
 }
 
-/** Modelga ko'rinadigan pool — 1-asosli indeks, faqat NOMLAR (ID yo'q). */
+/**
+ * Modelga ko'rinadigan pool — 1-asosli indeks, faqat NOMLAR (ID yo'q).
+ * `catalogIndexById` berilsa (kesh rejimi) har qatorga `catalog_index`
+ * (katalogdagi o'rin, ID EMAS) qo'shiladi.
+ */
 export function toPoolEntries(
   pool: readonly DistrictRow[],
+  catalogIndexById?: ReadonlyMap<string, number>,
 ): AiDistrictPoolEntry[] {
-  return pool.map((row, i) => ({
-    index: i + 1,
-    region_name: row.region_name,
-    district_name: row.name,
-  }));
+  return pool.map((row, i) => {
+    const entry: AiDistrictPoolEntry = {
+      index: i + 1,
+      region_name: row.region_name,
+      district_name: row.name,
+    };
+    const ci = catalogIndexById?.get(row.id);
+    if (ci !== undefined) entry.catalog_index = ci;
+    return entry;
+  });
+}
+
+/**
+ * 5Z1ZvvzE #3-4 (KESH): barcha tumanlar `ORDER BY id` (`districtRowsOf`
+ * tartibi), faqat NOMLAR — ai-service uni system-promptga chiqaradi. Bir xil
+ * baza = bayt darajasida bir xil ro'yxat. Juda katta bo'lsa `null` (eski
+ * rejim — pool user blokida).
+ */
+export function buildDistrictCatalog(rows: readonly DistrictRow[]): {
+  catalog: AiDistrictCatalogEntry[];
+  indexById: Map<string, number>;
+} | null {
+  if (rows.length === 0 || rows.length > AI_DISTRICT_CATALOG_MAX) return null;
+  const sorted = [...rows].sort((a, b) => compareId(a.id, b.id));
+  const indexById = new Map<string, number>();
+  const catalog = sorted.map((row, i) => {
+    indexById.set(row.id, i + 1);
+    return { region_name: row.region_name, district_name: row.name };
+  });
+  return { catalog, indexById };
 }
 
 /**
@@ -339,6 +375,8 @@ export class DistrictLlmFallbackService {
       }
       if (pools.size === 0) return out;
 
+      // Barqaror qism (kesh): katalog + har pool qatorining katalog o'rni.
+      const catalog = buildDistrictCatalog(rows);
       const result = await this.picker.pick({
         market_id: ctx.market_id,
         requester: ctx.requester,
@@ -349,8 +387,9 @@ export class DistrictLlmFallbackService {
           item_index: i,
           place_text: placeTextOf(queries[i]),
           region_name: txt(queries[i]?.region_name) || null,
-          pool: toPoolEntries(pool),
+          pool: toPoolEntries(pool, catalog?.indexById),
         })),
+        ...(catalog ? { catalog: catalog.catalog } : {}),
       });
       if (!result) return out;
 

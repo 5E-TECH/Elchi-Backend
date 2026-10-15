@@ -1,6 +1,8 @@
 import { Logger } from '@nestjs/common';
 import {
+  AI_MODEL_CACHE_MIN_TOKENS,
   AI_MODEL_PRICES,
+  cacheMinTokensFor,
   computeCacheSavedUsd,
   computeCostUsd,
   normalizeModelId,
@@ -42,6 +44,22 @@ describe('ai-pricing (lYVuADRE 5-band)', () => {
       'haiku-4-5': { in: 1, out: 5 },
       'fable-5': { in: 10, out: 50 },
     });
+  });
+
+  it('5Z1ZvvzE: minimal kesh prefiksi — har narxli model uchun bor (haiku-4-5 4096, sonnet 1024, opus/fable 512)', () => {
+    expect(Object.keys(AI_MODEL_CACHE_MIN_TOKENS).sort()).toEqual(
+      Object.keys(AI_MODEL_PRICES).sort(),
+    );
+    expect(AI_MODEL_CACHE_MIN_TOKENS).toEqual({
+      'opus-5': 512,
+      'sonnet-5': 1024,
+      'sonnet-4-6': 1024,
+      'haiku-4-5': 4096,
+      'fable-5': 512,
+    });
+    expect(cacheMinTokensFor('claude-haiku-4-5-20251001')).toBe(4096);
+    expect(cacheMinTokensFor('claude-sonnet-5')).toBe(1024);
+    expect(cacheMinTokensFor('claude-sonet-5')).toBeNull();
   });
 
   describe('normalizeModelId', () => {

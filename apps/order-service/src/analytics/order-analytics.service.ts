@@ -2396,8 +2396,11 @@ export class OrderAnalyticsService {
    * (Celz3rKJ) "AI xarajat" panelidagi buyurtma manbasi uchun: davrda
    * yaratilgan buyurtmalar `source` bo'yicha (tanlov `acceptedCount` bilan
    * AYNI). `external` — `findAll` dagi kabi `source = external` YOKI
-   * `external_id` bor; `branch` — filial yaratgan; qolgani `internal`
-   * (market/operator, shu jumladan AI orqali yaratilganlar).
+   * `external_id` bor; `branch` — filial yaratgan; `bot` — Telegram bot
+   * WebApp (`created_via = 'bot'`); qolgani `internal` (admin paneli,
+   * market/operator, shu jumladan AI orqali yaratilganlar). Har buyurtma
+   * AYNAN bitta bucket'da: `internal + external + branch + bot = total`.
+   * Ustun qo'shilishidan oldingi bot buyurtmalari `internal` da (backfill yo'q).
    */
   async getOrderSourceDistribution(
     startDate?: string,
@@ -2408,6 +2411,7 @@ export class OrderAnalyticsService {
     const bucket = `CASE
         WHEN o.source = 'branch' THEN 'branch'
         WHEN o.source = 'external' OR o.external_id IS NOT NULL THEN 'external'
+        WHEN o.created_via = 'bot' THEN 'bot'
         ELSE 'internal'
       END`;
     const rows = await this.orderReportBaseQuery(range, branchId)
@@ -2416,7 +2420,7 @@ export class OrderAnalyticsService {
       .groupBy('bucket')
       .getRawMany<{ bucket: string; count: string | number | null }>();
 
-    const counts = { internal: 0, external: 0, branch: 0 };
+    const counts = { internal: 0, external: 0, branch: 0, bot: 0 };
     for (const row of rows) {
       const key = String(row?.bucket) as keyof typeof counts;
       if (key in counts) {
@@ -2425,7 +2429,7 @@ export class OrderAnalyticsService {
     }
     return {
       ...counts,
-      total: counts.internal + counts.external + counts.branch,
+      total: counts.internal + counts.external + counts.branch + counts.bot,
       applied_range: range.applied_range,
     };
   }

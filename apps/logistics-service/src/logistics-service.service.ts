@@ -5407,10 +5407,11 @@ export class LogisticsServiceService implements OnModuleInit {
    * hammasi qaytib, cheklov faqat brauzerda edi).
    * - requester yo'q (ichki RMQ chaqiruv / eski gateway) → hammasi;
    * - ADMIN / SUPERADMIN / LOGIST (dzyVftBx, BeePost bilan bir xil) → hammasi;
-   * - HQ filial xodimi (menejer/registrator) → hammasi: HQ butun kompaniya
-   *   bo'yicha ishlaydi, bosh sahifa xaritasi hozir ham hamma viloyatni
-   *   ko'rsatadi (QAROR KERAK: HQ xodimi ham faqat o'z viloyatini ko'rsinmi);
-   * - boshqa ichki rollar → faqat o'z viloyati; aniqlab bo'lmasa — hech biri.
+   * - qolgan HAMMA ichki rol, jumladan HQ filial xodimi (menejer/registrator)
+   *   → faqat o'z viloyati (HQ uchun — HQ filialining viloyati); aniqlab
+   *   bo'lmasa — hech biri. Karta (uherIk8r, 3-band): "ADMIN/SUPERADMIN
+   *   bo'lmasa faqat o'z viloyatini qaytaring"; BeePost'da stats/all faqat
+   *   ADMIN/SUPERADMIN/LOGIST uchun. Ilgari HQ xodimi istisno edi (hammasi).
    */
   private async resolveRegionStatsScope(
     requester?: RequesterContext,
@@ -5425,9 +5426,6 @@ export class LogisticsServiceService implements OnModuleInit {
       return { all: true };
     }
     const own = await this.resolveOwnStatsRegion(requester);
-    if (own.isHqStaff && !roles.includes(Roles.COURIER)) {
-      return { all: true };
-    }
     return { all: false, regionId: own.regionId };
   }
 

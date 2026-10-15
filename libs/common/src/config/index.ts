@@ -578,6 +578,10 @@ export const aiValidationSchema = Joi.object({
   AI_ORDER_MODEL: Joi.string().empty('').default('claude-sonnet-5'),
   AI_ORDER_VISION_MODEL: Joi.string().empty('').default('claude-sonnet-5'),
   AI_CLASSIFY_MODEL: Joi.string().empty('').default('claude-haiku-4-5'),
+  // Tuman LLM fallback'i (5Z1ZvvzE): ro'yxat system-promptda keshlanadi —
+  // model minimal kesh chegarasi ro'yxatdan (~2.4k token) kichik bo'lishi
+  // kerak (haiku-4-5 = 4096 → kesh yo'q, eski rejim avtomatik).
+  AI_DISTRICT_MODEL: Joi.string().empty('').default('claude-sonnet-5'),
   // Pul: `ai_usage_log.cost_uzs = cost_usd × AI_USD_UZS_RATE`;
   // `applied_price_uzs` = AI_ORDER_PRICE_UZS (order_extract_* uchun).
   AI_USD_UZS_RATE: Joi.number().positive().empty('').default(12800),

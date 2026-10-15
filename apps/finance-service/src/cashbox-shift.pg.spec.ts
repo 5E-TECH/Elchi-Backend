@@ -11,6 +11,8 @@ import { FinanceServiceService } from './finance-service.service';
 import { Cashbox } from './entities/cashbox.entity';
 import { CashboxHistory } from './entities/cashbox-history.entity';
 import { Shift, ShiftStatus } from './entities/shift.entity';
+import { CashboxCard } from './entities/cashbox-card.entity';
+import { CashboxCardMovement } from './entities/cashbox-card-movement.entity';
 
 /**
  * 4-tur, A guruhi — HAQIQIY Postgres'da kassa / smena:
@@ -41,7 +43,14 @@ describePg('A4 — kassa/smena, haqiqiy Postgres', () => {
       type: 'postgres',
       url: pgUri,
       schema,
-      entities: [Cashbox, CashboxHistory, Shift],
+      // 3PE0B03q — closeShift MAIN kassada konvertatsiyalarni ham o'qiydi.
+      entities: [
+        Cashbox,
+        CashboxHistory,
+        Shift,
+        CashboxCard,
+        CashboxCardMovement,
+      ],
       synchronize: true,
       extra: { max: 10 },
     });
@@ -249,6 +258,74 @@ describePg('A4 — kassa/smena, haqiqiy Postgres', () => {
     });
     expect(closed.data.total_income_cash).toBe(5_000);
     expect(closed.data.expected_balance_cash).toBe(105_000);
+  });
+
+  it('R6 (`all`): filial kassasi smenasi — smenasiz 400 → menejer filial smenasini ochadi → o`tadi → faqat o`z smenasini yopadi (MAIN smenasi ochiq qoladi) → yana 400', async () => {
+    process.env.FINANCE_REQUIRE_OPEN_SHIFT = 'all';
+    const branchCashbox = () =>
+      cashboxRepo().findOneByOrFail({
+        user_id: '15',
+        cashbox_type: Cashbox_type.BRANCH,
+      });
+    const branchSpend = () =>
+      service.spendMoney({
+        user_id: '15',
+        amount: 10_000,
+        cashbox_type: Cashbox_type.BRANCH,
+        created_by: '25',
+      });
+
+    await expect(branchSpend()).rejects.toMatchObject({
+      error: {
+        statusCode: 400,
+        message: expect.stringMatching(/filial kassasida/),
+      },
+    });
+    expect((await branchCashbox()).balance_cash).toBe(100_000);
+
+    const mainShift: any = await service.openShift({ opened_by: '1' });
+    const branchShift: any = await service.openShift({
+      opened_by: '25',
+      cashbox_user_id: '15',
+    });
+    expect(branchShift.data).toMatchObject({
+      cashbox_user_id: '15',
+      opening_balance_cash: 100_000,
+    });
+
+    const ok: any = await branchSpend();
+    expect(ok.statusCode).toBe(200);
+    expect((await branchCashbox()).balance_cash).toBe(90_000);
+
+    // Menejer MAIN smenasini shift_id bilan yopa olmaydi.
+    await expect(
+      service.closeShift({
+        shift_id: String(mainShift.data.id),
+        closed_by: '25',
+        cashbox_user_id: '15',
+      }),
+    ).rejects.toMatchObject({ error: { statusCode: 404 } });
+
+    const closed: any = await service.closeShift({
+      closed_by: '25',
+      cashbox_user_id: '15',
+      closing_balance_cash: 90_000,
+    });
+    expect(closed.data).toMatchObject({
+      id: branchShift.data.id,
+      status: ShiftStatus.CLOSED,
+      total_expense_cash: 10_000,
+      expected_balance_cash: 90_000,
+      discrepancy_cash: 0,
+    });
+    const main = await db
+      .getRepository(Shift)
+      .findOneByOrFail({ id: String(mainShift.data.id) });
+    expect(main.status).toBe(ShiftStatus.OPEN);
+
+    await expect(branchSpend()).rejects.toMatchObject({
+      error: { statusCode: 400 },
+    });
   });
 
   it('REGRESSIYA QTCUUgjA: sotuv oyog`i (outbox → updateBalance) smenasiz ham o`tadi', async () => {

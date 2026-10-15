@@ -51,6 +51,13 @@ export class CashboxHistory extends BaseEntity {
   @Column({ type: 'bigint', nullable: true })
   transfer_source_user_id!: string | null;
 
+  /**
+   * 3PE0B03q (migratsiya 105) — CLICK kirim/chiqim qaysi NOMLI kartaga
+   * (`cashbox_cards`) tegishli. NULL — Asosiy karta (kartasiz harakat).
+   */
+  @Column({ type: 'bigint', nullable: true })
+  card_id!: string | null;
+
   // numeric(20,2) — exact fixed-point money (see Cashbox entity note).
   @Column({
     type: 'numeric',

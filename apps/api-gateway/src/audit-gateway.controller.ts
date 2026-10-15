@@ -66,6 +66,8 @@ interface FeedPage {
  * merges by created_at DESC, then enriches raw ids into full data.
  *
  * SUPERADMIN/ADMIN only (the audit trail exposes cross-tenant + financial info).
+ * `?archive=true` (i6Nyedea) reads the cold `activity_logs_archive` tables
+ * instead (rows moved there by retention) — same roles, same filters.
  * Each fan-out leg is fault-isolated: one slow/missing schema never 504s the view.
  */
 @ApiTags('Activity Log')
@@ -153,6 +155,9 @@ export class AuditGatewayController {
       from: q.from,
       to: q.to,
       search: q.search,
+      // i6Nyedea — arxiv (cold jadval) o'qish; faqat so'ralganda uzatiladi
+      // (eski servis versiyasi uni bilmasa — hot jadval, avvalgidek).
+      ...(q.archive === true ? { archive: true } : {}),
     };
 
     const legs: RankedLeg[] = this.services
@@ -204,6 +209,7 @@ export class AuditGatewayController {
               }
             : {}),
           ...(result.failed.length ? { failed_services: result.failed } : {}),
+          ...(q.archive === true ? { archive: true } : {}),
         },
       },
     };

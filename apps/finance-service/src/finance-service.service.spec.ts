@@ -77,6 +77,18 @@ jest.mock('./entities/operator-payment.entity', () => ({
 jest.mock('./entities/financial-balance-history.entity', () => ({
   FinancialBalanceHistory: class FinancialBalanceHistory {},
 }));
+// 3PE0B03q — nomli kartalar (servis importi; entity BaseEntity'ga bog'liq).
+jest.mock('./entities/cashbox-card.entity', () => ({
+  CashboxCard: class CashboxCard {},
+}));
+jest.mock('./entities/cashbox-card-movement.entity', () => ({
+  CashboxCardMovement: class CashboxCardMovement {},
+  CardMovementType: {
+    CARD_TO_CARD: 'card_to_card',
+    CARD_TO_CASH: 'card_to_cash',
+    CASH_TO_CARD: 'cash_to_card',
+  },
+}));
 
 interface MockManager {
   findOne: jest.Mock;

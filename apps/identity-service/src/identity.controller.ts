@@ -147,6 +147,21 @@ export class IdentityController {
     );
   }
 
+  // vpKijXce: POST /investor-users — investor rolli login (BeePost naqshi).
+  @MessagePattern({ cmd: 'identity.investor_user.create' })
+  createInvestorUser(
+    @Payload()
+    payload: {
+      dto: { name: string; phone_number: string; password: string };
+      requester?: CreateUserPayload['requester'];
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.userService.createInvestorUser(payload.dto, payload.requester),
+    );
+  }
+
   // (dzyVftBx) Ichki: logistics viloyatga logist biriktirishdan oldin.
   @MessagePattern({ cmd: 'identity.logist.find_by_ids' })
   getLogistsByIds(

@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { DataSource } from 'typeorm';
 import { requestContext } from '../context/request-context';
 import { ActivityLog } from './activity-log.entity';
+import { ActivityLogArchive } from './activity-log-archive.entity';
 import { ActivityLogMaintenanceService } from './activity-log-maintenance.service';
 import { ActivityLogService } from './activity-log.service';
 import { quoteActivityLogTable } from './retention';
@@ -44,7 +45,9 @@ describePg('activity_logs saqlash siyosati — real Postgres (i6Nyedea)', () => 
       type: 'postgres',
       url: PG_URI,
       schema,
-      entities: [ActivityLog],
+      // i6Nyedea arxiv (sukut yoqiq): o'chirish = arxivga ko'chirish, shuning
+      // uchun AYNI sxemada arxiv jadvali ham kerak (archive.pg.spec.ts).
+      entities: [ActivityLog, ActivityLogArchive],
       synchronize: false,
     });
     await ds.initialize();
@@ -66,6 +69,9 @@ describePg('activity_logs saqlash siyosati — real Postgres (i6Nyedea)', () => 
 
   beforeEach(async () => {
     await ds.query(`TRUNCATE ${table} RESTART IDENTITY`);
+    await ds.query(
+      `TRUNCATE ${quoteActivityLogTable(schema, 'activity_logs_archive')}`,
+    );
   });
 
   const mixed = async () => {

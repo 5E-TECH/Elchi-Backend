@@ -23,6 +23,311 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-10-15 — R1: dashboard reyting davri ("Bugun" → oxirgi 30 kun) va bot manbasi (9zbSDkUI, Celz3rKJ)
+
+- [2026-10-15] ✏️ [analytics] — `GET /analytics/dashboard` (admin/superadmin
+  va filial rollari): tanlangan davr **bitta Toshkent kuni** bo'lsa (standart
+  "Bugun", sanasiz so'rov yoki `startDate = endDate`) `topMarkets` va
+  `topBranches` endi shu kun bilan tugaydigan **oxirgi 30 kun** bo'yicha
+  keladi (kunlik ko'rinishda kartalar bo'sh turmaydi). 2+ kunlik davrda
+  (shu jumladan "Bu hafta"/"Bu oy"/`all=true`) — avvalgidek **aynan
+  tanlangan davr**. Qolgan bo'laklar (`orders`, `markets`, `couriers`,
+  `branchDashboard`) har doim tanlangan davrda. `topMarketsMeta` /
+  `topBranchesMeta` ga yangi maydonlar:
+  `{ min_orders, filtered_out, from, to, period_rule: 'last_30_days' | 'selected_range', period_days: 30 | null, selected_from, selected_to }`.
+  `from`/`to` — reytingning HAQIQIY oynasi, `selected_from`/`selected_to` —
+  foydalanuvchi tanlagan davr. Market/market operatori dashboardi
+  o'zgarmagan (u yerda `period_rule` yo'q).
+  → 🔧 Frontend: reyting kartasi sarlavhasida davr yozuvi —
+  `period_rule === 'last_30_days'` bo'lsa **"Oxirgi 30 kun"**, aks holda
+  `from`–`to` (Toshkent sanasi). Bo'sh holat matni "kamida 30 buyurtma
+  kerak" eskirgan — `meta.min_orders` dan oling (hozir 1). Bo'sh kartaga
+  `<TopPerformers … compact />` (≤120px) va 390px'da ustma-ust kartalar
+  bo'sh joy qoldirmasin (9zbSDkUI TC3/TC4/TC6).
+- [2026-10-15] ✏️ [ai-usage/order] — `GET /ai-usage/dashboard` →
+  `orderSources` endi **bot** manbasini alohida beradi va ulushlarni
+  hisoblaydi:
+  `{ total, ai, manual, bot, external, branch, shares: { ai, manual, bot, external, branch }, applied_range } | null`.
+  `shares` — foiz (0–100, 1 xona; `total = 0` bo'lsa hammasi 0).
+  `ai + manual + bot + external + branch = total`. Bot = Telegram bot
+  WebApp (`POST /orders/telegram/bot/create`) orqali yaratilgan buyurtmalar
+  (yangi `orders.created_via = 'bot'` ustuni); ustun deploy qilinishidan
+  OLDINGI bot buyurtmalari `manual` ichida qoladi (backfill yo'q).
+  → 🔧 Frontend ("Moliyaviy balans → AI xarajat" tabi): "Buyurtma manbasi"
+  blokida AI / Qo'lda / Bot (+ Tashqi / Filial) nisbatini `shares` dan
+  ko'rsating (Celz3rKJ TC6). 14-oktabr yozuvidagi "Bot manbasi alohida
+  belgilanmaydi" izohi endi eskirgan.
+- [2026-10-15] 🟢 [order] — to'liq buyurtma obyekti qaytadigan javoblarda
+  (masalan `GET /orders/:id`) yangi `created_via: 'bot' | null` maydoni
+  paydo bo'ladi (faqat ma'lumot;
+  `POST /orders` DTO'si uni QABUL QILMAYDI — yuborilsa 400).
+
+### 2026-10-15 — SMS kampaniyasi FAQAT reklama: "Xizmat xabari" olib tashlanadi (sVByLMnt, R3)
+
+- [2026-10-15] ⚠️ [notification/sms] — `POST /notifications/sms/campaigns/preview`
+  va `POST /notifications/sms/campaigns` endi **faqat reklama (`promo`)**
+  qabul qiladi. Sabab: `message_class: 'transactional'` ("Xabar turi: Xizmat
+  xabari") rozilik darvozasini ham, 18:00–09:00 taqiqini ham chetlab o'tardi —
+  admin reklama matnini tunda roziliksiz yuborishi mumkin edi. Xizmat
+  (`transactional`) va OTP (`security`) SMS endi faqat **tizim hodisalaridan**
+  ketadi (buyurtma holati dispatch'i, CRITICAL eskalatsiya, OTP) — ular tunda
+  ham ishlaydi, o'zgarmagan.
+  **Kontrakt:**
+  - `message_class` — ixtiyoriy; berilmasa `promo`. Faqat `'promo'` ruxsat.
+    `'transactional'` / `'security'` → **400** (gateway validatsiyasi:
+    `"message_class: kampaniya faqat 'promo' — ..."`).
+  - `template_code` bilan: shablonning `message_class` i `promo` bo'lmasa
+    (masalan `order.delivered` — transactional) → **400**,
+    `{ reason: 'campaign_promo_only', message_class: 'transactional' }`.
+  - Preview javobida `message_class` doim `'promo'`; `blocked_no_consent`,
+    `sample_text` (opt-out havolasi bilan), `scheduled_for` (taqiq oynasida —
+    ertangi 09:00) har doim reklama qoidasi bo'yicha.
+  - Kampaniyalar tarixi (`GET /notifications/sms/campaigns`) — eski
+    `transactional` kampaniyalar tarixda shu qiymat bilan qoladi.
+  **Frontendda (`src/pages/notifications/ui/CampaignPage.tsx`):**
+  - 🔧 "Xabar turi" tanlagichini (Reklama / Xizmat xabari) olib tashlash —
+    `message_class: 'promo'` yuborish yoki umuman yubormaslik
+    (`useState<"promo" | "transactional">` → doim `promo`).
+  - 🔧 Shablon ro'yxatida faqat `message_class === 'promo'` shablonlarni
+    ko'rsatish (hozir faqat `security` filtrlanadi, transactional shablonlar
+    ham chiqadi); `effectiveClass` doim `promo`.
+  - 🔧 400 `campaign_promo_only` xabarini foydalanuvchiga ko'rsatish.
+  - 🟢 Shablonlar tabida `transactional` shablonlar qoladi — ular tizim
+    dispatch'i uchun, kampaniya uchun emas.
+
+### 2026-10-15 — AI tuman fallback'i: tuman ro'yxati keshlangan system-promptda (R2, 5Z1ZvvzE)
+
+`[2026-10-15] [ichki] [ai-service, order-service]` — `ai.district.pick` endi barcha
+tumanlar ro'yxatini (`ORDER BY id`) Anthropic prompt keshi bilan system-promptda
+yuboradi, model sukuti `AI_DISTRICT_MODEL=claude-sonnet-5`. **Frontendda hech narsa
+qilinmaydi:** HTTP javoblari (`POST /orders/ai-parse` preview, `GET /ai/status`) va ularning
+maydonlari o'zgarmagan; tuman tanlovi oldingidek `district_id` / `candidates` bilan keladi.
+Faqat backend jurnali: `ai_usage_log` dagi `feature='order_district'` qatorlarida endi
+`cache_read_tokens > 0` bo'lishi mumkin (yangi ustun/endpoint yo'q).
+
+### 2026-10-15 — Faoliyat jurnali arxivi: `?archive=true` (i6Nyedea, Guruh R4)
+
+- [2026-10-15] ✏️ [gateway] — `GET /activity-logs` (va `/activity-logs/user/:user_id`)
+  YANGI ixtiyoriy query parametri `archive` (`true` / `false`; boshqa qiymat —
+  400). `archive=true` — saqlash muddati o'tib **arxivga ko'chirilgan**
+  qatorlar (har servisning `activity_logs_archive` jadvali). Filtrlar
+  (`service`, `entity_type`, `entity_id`, `action`, `user_id`, `user_role`,
+  `trace_id`, `from`, `to`, `search`), `page`/`limit` va `cursor`
+  (`meta.next_cursor`) AYNAN joriy jurnaldagidek; kursor bilan davom etganda
+  `archive=true` ni ham qayta yuboring. Rollar o'zgarmagan: `superadmin`,
+  `admin`.
+  **Javob farqi:** har qatorda qo'shimcha `archived_at` (ISO, arxivga
+  ko'chirilgan vaqt) va `archive_rule` (`"auth"` — kirish hodisalari, 90 kun;
+  `"default"` — qolgani, 3 yil); `meta.archive: true`. Arxiv qatorlarida
+  `metadata` dan `ip`, `user_agent`, `device_id`, `device_name` olib
+  tashlangan (shaxsiy ma'lumot muddati).
+  ```http
+  GET /activity-logs?archive=true&entity_type=Order&entity_id=100439
+  ```
+  ```json
+  { "data": { "items": [{ "id": "41", "action": "order.sell", "created_at": "2023-01-01T00:00:00.000Z",
+      "archived_at": "2026-10-15T03:15:00.000Z", "archive_rule": "default", "...": "..." }],
+    "meta": { "page": 1, "limit": 20, "total": 1, "totalPages": 1, "next_cursor": null, "archive": true } } }
+  ```
+  ⚠️ Hozircha arxiv BO'SH: o'chirish/ko'chirish bayrog'i
+  (`ACTIVITY_LOG_PRUNE_ENABLED`) prod'da o'chiq — muddatlar ega bilan
+  kelishilgach yoqiladi. `/activity-logs/entity/:type/:id` (bitta obyekt
+  tarixi) faqat joriy jurnaldan o'qiydi — arxiv uchun
+  `GET /activity-logs?archive=true&entity_type=…&entity_id=…` ishlating.
+  → **Frontendda:** 🔧 "Faoliyat jurnali" sahifasiga "Arxiv" almashtirgichi
+  (tab yoki switch): yoqilganda barcha so'rovlarga `archive=true` qo'shilsin,
+  jadvalda "Arxivlangan" ustuni (`archived_at`) ko'rsatilsin; qolgan
+  ko'rinish/filtrlar o'zgarishsiz.
+
+### 2026-10-15 — Guruh R5: buyurtma eksporti, tanlangan mijoz, investor logini, hudud doirasi (xWsCAA5N, hiqRNhkI, vpKijXce, uherIk8r)
+
+- [2026-10-15] 🆕 [api-gateway] — `GET /orders/export/excel` (xWsCAA5N) —
+  buyurtmalar ro'yxatining **haqiqiy .xlsx** eksporti, **bitta HTTP so'rov**.
+  Query — `GET /orders` dagi filtrlar bilan AYNAN bir xil (`status`,
+  `search`, `start_day`/`end_day`, `market_id`, `region_id`, `district_id`,
+  `branch_id`, `courier_id`/`courier_ids`, `where_deliver`, `source`,
+  `sort_by`/`sort_dir`, `cancelled_inventory`); `page`/`limit`/`fetch_all`
+  YO'Q — filtrga mos HAMMA qator (50 000 gacha). Rol doirasi ham `GET /orders`
+  bilan bir xil (market — o'ziniki, filial xodimi — o'z filiali, kuryer —
+  o'ziniki). **Rollar:** superadmin, admin, manager, registrator, branch,
+  market, market_operator, courier (customer/investor/logist/operator — 403).
+  **Javob:** `Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`,
+  `Content-Disposition: attachment; filename="barcha_buyurtmalar_YYYY-MM-DD.xlsx"`.
+  Sarlavhalar (CORS'da ochiq, JS o'qiy oladi): `X-Export-Total` (filtr bo'yicha
+  jami), `X-Export-Limit` (50000), `X-Export-Truncated` (`true` — fayl
+  chegarada kesilgan; faylning oxirida qizil «DIQQAT» qatori ham bor).
+  Ustunlar: N, Buyurtma ID, Viloyat, Tuman, Firma, Mahsulot, Mijoz, Telefon
+  raqam, Narxi, Kuryer (ism), Holati (uz), Sana (Toshkent); oxirida «Jami»
+  qatori (soni + Narxi yig'indisi). Xato (403/400/504) — oddiy JSON xato,
+  fayl emas.
+  → 🔧 **frontend** (`src/pages/orders/index.tsx` `handleExportOrders`):
+  sahifalash siklini (`EXPORT_PAGE_SIZE=100`, `exportPage >= 100`) va
+  `exportOrdersToExcel.ts` HTML yasashni olib tashlab, joriy filtrlar bilan
+  BITTA `GET orders/export/excel` (`responseType: 'blob'`,
+  `LONG_REQUEST_TIMEOUT_MS`) chaqiring va blob'ni `Content-Disposition`
+  dagi nom bilan saqlang (`xlsx` kutubxonasi shart emas). `X-Export-Truncated: true`
+  bo'lsa `message.warning` bilan «faylda X ta, jami Y ta — filtrni toraytiring»
+  ko'rsating (`X-Export-Total`). Xato javobi ham blob bo'lib keladi — JSON
+  sifatida o'qib `message` ni chiqaring. Bu karta TC3 (bitta so'rov), TC4
+  (Excel ogohlantirishsiz ochiladi), TC5 (jami qatori), TC2 (10 000+ to'liq /
+  aniq ogohlantirish) ni yopadi.
+- [2026-10-15] ✏️ [api-gateway] — eski `GET /export/orders.xlsx`: 100 dan
+  ortiq buyurtma JIMGINA tushib qolardi (order-service sahifasi 100 bilan
+  cheklangan edi) — tuzatildi (`max_limit`). Kontrakt o'zgarmadi. 🟢
+- [2026-10-15] ✏️ [api-gateway] — `POST /orders` `customer_id` (hiqRNhkI TC3):
+  endi market, market operatori va filial xodimi (registrator/manager/branch)
+  ham `GET /customers/suggest` dan tanlangan mijozni `customer_id` bilan
+  yubora oladi — **faqat** shu marketda (o'chirilmagan) buyurtmasi bor mijoz
+  (suggest bilan AYNI doira; filial xodimi uchun `market_id` dagi market).
+  Doiradan tashqari id: `customer` obyekti ham bo'lsa — avvalgidek telefon
+  bo'yicha mijoz; obyektsiz — **403**. Superadmin/admin — o'zgarishsiz.
+  `POST /orders/external` — o'zgarmagan (faqat admin).
+  → 🔧 **frontend** (Step2Combined / `buildCreateOrderPayload`): taklif
+  tanlanganda formaga `customer_id` yozing va `customer` o'rniga (yoki
+  yonida) `customer_id` yuboring; foydalanuvchi telefon/ismni o'zgartirsa
+  tanlovni bekor qilib, yana `customer` obyektiga qayting. 403 matni:
+  «customer_id faqat shu marketda buyurtmasi bor mijoz uchun...».
+- [2026-10-15] 🆕 [api-gateway/identity] — investor LOGINI (vpKijXce):
+  `POST /investor-users` `{ name, phone_number (+998...), password (≥6) }` →
+  rol = `investor` foydalanuvchi (maosh/filial/kassa yo'q; BeePost
+  `POST /users/investor` naqshi). `GET /investor-users?search&status&page&limit`
+  — investor loginlari ro'yxati (bog'lash uchun tanlov). **Rollar:**
+  superadmin, admin. O'chirish — umumiy `DELETE /users/:id`.
+  ✏️ `POST /investors` / `PATCH /investors/:id` `user_id` — endi faqat
+  **investor rolli** login id si qabul qilinadi (boshqa rol — 400; uzish
+  `user_id: null` — o'zgarishsiz).
+  → 🔧 **frontend** (`src/pages/investors-ops/`): investor formasiga
+  «Login» bloki — (1) yangi login: `POST /investor-users` → javobdagi `id` ni
+  (2) `POST/PATCH /investors {user_id}` ga yozing; yoki mavjud loginni
+  `GET /investor-users` dan tanlang. Shundan keyin investor o'z logini bilan
+  kirib `/investors/me*` ni ko'radi (karta TC1/TC5/TC7 frontend qismi).
+- [2026-10-15] 🆕 [api-gateway] — investor ichki marshrutlari ISHLAYDI
+  (vpKijXce): ilgari ikki qavat dekorator tufayli ro'yxatdan o'tmagan edi
+  (404): `POST /investors/:investor_id/investments`,
+  `PATCH|DELETE /investors/:investor_id/investments/:id`,
+  `POST /investors/:investor_id/profits`,
+  `POST /investors/:investor_id/profits/calculate`. Body'da `investor_id`
+  shart emas (berilsa yo'ldagi bilan bir xil bo'lishi kerak, aks holda 400);
+  PATCH/DELETE da investitsiya shu investorniki bo'lmasa — 404. Tekis
+  yo'llar (`/investments`, `/profits`, `/profits/calculate`) o'zgarmagan.
+  **Rollar:** superadmin, admin. 🟢 (frontend hozir tekis yo'llarni ishlatadi)
+- [2026-10-15] ⚠️ [logistics] — `GET /region/stats/all` va `GET /region/stats/:id`
+  (uherIk8r, karta 3-band): **HQ filiali** menejeri/registratori endi ham
+  faqat o'z (HQ filiali) viloyatini oladi; boshqa viloyat `stats/:id` — 403.
+  Hamma viloyat — faqat superadmin, admin, logist.
+  → 🔧 **frontend**: HQ registratori bosh sahifadagi hudud xaritasi
+  (`widgets/dashboard-region/RegionStatsCard.tsx`) endi bitta viloyat oladi —
+  manager/kuryer kabi `GET /region/my/district-stats` (tumanlar kesimi)
+  yoki bitta viloyat ko'rinishiga o'ting; `pages/region` da menejer uchun
+  `getProfileBranchId` `profile.branch.branch_id` ni olsin (oldingi yozuv).
+
+### 2026-10-15 — R6: kargo avansi, filial smenasi, asosiy kassa nomli kartalari (utIffRFx, QTCUUgjA, kfdfYDik, 3PE0B03q)
+
+- [2026-10-15] ✏️ [integration/api-gateway] — **Kargo to'lovining ortiqcha
+  qismi endi hamkor AVANSI** (utIffRFx 4-band). Qarz qatorlariga sig'magan
+  qoldiq (`unapplied_amount > 0`) yo'qolmaydi: KEYINGI `POST
+  /integrations/:id/remittances` da avval avans + yangi summa bilan qarzlar
+  FIFO (eng eskisidan, faqat to'liq qatorlar) yopiladi. Kassaga avvalgidek
+  faqat haqiqiy kelgan summa yoziladi (avans allaqachon kassada).
+  `POST /integrations/:id/remittances` javobida YANGI: `advance_applied`
+  (shu to'lovda avvalgi avansdan ishlatilgani), `advance_balance`
+  (to'lovdan keyingi hamkor avansi). `unapplied_amount = amount +
+  advance_applied − settled_amount`. `warning` matni (qoldiq > 0): "…
+  qoldiq hamkor AVANSIGA o'tdi va keyingi to'lovda avtomatik qarzlarga
+  qo'llanadi". `GET /integrations/:id/receivable-balance` javobida YANGI:
+  `advance_balance`, `payable_amount` (= max(0, `outstanding_amount` −
+  `advance_balance`) — shu summa kelsa barcha qarz yopiladi).
+  `GET /integrations/:id/remittances` qatorlarida YANGI `advance_applied`
+  (`null` — eski yozuv). Misol: avans 800 000, qarz 2 000 000 →
+  `payable_amount: 1200000`; 1 200 000 to'lansa `settled_amount: 2000000,
+  advance_applied: 800000, advance_balance: 0`.
+  → **Frontendda:** 🔧 `ConnectionSettlement.tsx`: overpay chegarasi
+  (`<InputNumber max>` va "Qarzdan ortiq summa" Alert) uchun
+  `outstanding_amount` o'rniga **`payable_amount`** ni ishlating; "Avans:
+  N so'm" ko'rsatkichi (`advance_balance`); natija oynasida
+  `advance_applied` / `advance_balance`. Eski "Kassaga yozilmaydi"
+  ogohlantirishini olib tashlang (to'lov MAIN kassaga yoziladi).
+- [2026-10-15] ⚠️ [integration/api-gateway] — **To'lovni bekor qilish
+  (`POST /integrations/:id/remittances/:remittance_id/cancel`)**: to'lovdan
+  qolgan avans KEYINGI to'lov(lar)da qarz yopishga ishlatilgan bo'lsa — **409**
+  "Bu to'lovdan qolgan avansning N so'mi keyingi to'lov(lar)da qarz yopishga
+  ishlatilgan (#78) — avval o'sha to'lovlarni (eng oxirgisidan boshlab) bekor
+  qiling, keyin buni." — hech narsa o'zgarmaydi (kassa ham). Avansdan
+  foydalangan to'lov bekor qilinsa avans hamkorga QAYTADI
+  (`advance_balance` ortadi). Teskari kassa chiqimi endi tranzaksiya va
+  hamkor qulfi ichida — kontrakt o'zgarmagan (javob, 400/409, idempotentlik).
+  → **Frontendda:** 🔧 409 xabarini tasdiq oynasida ko'rsating (qaysi
+  to'lovni avval bekor qilish kerakligi matnda).
+- [2026-10-15] 🆕 [finance/api-gateway] — **Filial (menejer) smenasi**
+  (QTCUUgjA "shu kassaga biriktirilgan ochiq smena"). `POST
+  /finance/shift/open`, `POST /finance/shift/close`, `GET
+  /finance/shift/current` endi **MANAGER** roli uchun ham: menejer faqat O'Z
+  filiali kassasining smenasini ochadi/yopadi/ko'radi (filial JWT'dan; body'da
+  `cashbox_user_id` yuborib bo'lmaydi — 400). Menejer boshqa kassa
+  smenasini (masalan `shift_id` bilan MAIN) yopmoqchi bo'lsa — 404 "Ochiq
+  smena topilmadi". Superadmin/admin/registrator — o'zgarishsiz (MAIN).
+  `GET /finance/shift/current` → `data: { shift, required, cashbox_user_id }`
+  (menejerda `cashbox_user_id` = filial ID; `required` — shu kassa uchun).
+  Smena darvozasi `FINANCE_REQUIRE_OPEN_SHIFT` (sukut O'CHIQ): `true`/`main` —
+  avvalgidek faqat MAIN; YANGI `all` — MAIN + filial: smenasiz menejer
+  operatsiyalari (kuryerdan qabul, `PATCH /finance/cashbox/spend|fill`,
+  `POST /finance/cashbox/payment/branch-to-main` — pul filialdan chiqadi)
+  400 "Smena ochilmagan! Bu operatsiyani bajarish uchun avval filial
+  kassasida smenani oching.". Sotuv/bekor qilish (outbox) darvozalanmaydi.
+  → **Frontendda:** 🔧 menejer filial kassasi sahifasiga "Smenani ochish /
+  Smenani yopish" tugmasi va banner (`GET /finance/shift/current` →
+  `required && !shift` bo'lsa to'lov tugmalarini bloklang); yopish oynasida
+  sanalgan naqd/karta (`closing_balance_cash/card`). Backend `all` faqat shu
+  UI chiqqandan keyin yoqiladi.
+- [2026-10-15] 🆕 [finance/api-gateway] — **Asosiy kassa NOMLI kartalari**
+  (3PE0B03q UZOQ MUDDAT — BeePost `CardsManager` porti; SUPERADMIN, ADMIN):
+  - `GET /finance/cashbox/cards?include_inactive=true` → `data: { cards[],
+    balance_card, named_total, default_balance, total_card, in_sync }`.
+    `cards[] = { id, name, balance, is_default, is_active, sort_order,
+    created_at }`; birinchisi — himoyalangan **"Asosiy karta"** (balansi =
+    `balance_card − Σ nomli kartalar`; kartasiz har qanday karta harakati shu
+    yerga tushadi). `total_card == balance_card`; `in_sync: false` — nomli
+    kartalar `balance_card` dan oshgan (Asosiy karta manfiy) — o'tkazma bilan
+    tuzating.
+  - `POST /finance/cashbox/cards` `{ name (1–100), sort_order? }` → 201;
+    nom takrori (harf farqsiz) — 409.
+  - `PATCH /finance/cashbox/cards/:id` `{ name }` — Asosiy karta — 400.
+  - `PATCH /finance/cashbox/cards/:id/status` `{ is_active }` — arxivlash
+    faqat balans 0 bo'lsa (aks holda 400); Asosiy kartani arxivlab bo'lmaydi.
+  - `POST /finance/cashbox/cards/transfer` `{ from_card_id, to_card_id,
+    amount, comment (majburiy) }` — `balance_card` o'zgarmaydi; manba kartada
+    mablag' yetmasa 400. `Idempotency-Key` sarlavhasi bilan takroriy so'rov
+    ikkinchi o'tkazma yozmaydi (`idempotent: true`).
+  - `POST /finance/cashbox/cards/convert` `{ type: "card_to_cash" |
+    "cash_to_card", card_id, amount, comment }` — kassa umumiy balansi
+    o'zgarmaydi, naqd/karta ajratmasi o'zgaradi; `Idempotency-Key`.
+  - `GET /finance/cashbox/cards/movements?card_id&page&limit` — ichki
+    harakatlar jurnali (`from_card_name`, `to_card_name`, `balance_after_*`).
+  - `GET /finance/cashbox/cards/:id/ledger?from_date&to_date&page&limit` —
+    karta ko'chirmasi: `items[] = { kind (income|expense|transfer_in|
+    transfer_out|card_to_cash|cash_to_card), amount, delta, balance_after,
+    comment, created_by, created_at, ... }`, `summary { opening_balance,
+    closing_balance, total_in, total_out, current_balance }`.
+  - Ixtiyoriy **`card_id`** (raqamli satr) — `click` to'lovida qaysi nomli
+    kartadan/kartaga: `PATCH /finance/cashbox/spend`, `PATCH
+    /finance/cashbox/fill` (MAIN), `POST /finance/cashbox/payment/market`,
+    `POST /finance/cashbox/payment/branch-to-main`. Naqdda yoki filial
+    kassasida `card_id` — 400; nomli kartada mablag' yetmasa 400 (kassa
+    ham o'zgarmaydi); arxivlangan karta — 400. Kassa tarixi qatorlarida
+    YANGI `card_id` (`null` — Asosiy karta). `PATCH /finance/cashbox/balance`
+    `card_id` qabul qilmaydi (400).
+  - Smena darvozasi yoqilgan bo'lsa (`FINANCE_REQUIRE_OPEN_SHIFT`) o'tkazma va
+    konvertatsiya ham MAIN smenasiz 400; smena yopishda karta↔naqd
+    konvertatsiyasi `expected_balance_cash/card` ga qo'shiladi (soxta
+    kamomad chiqmaydi).
+  → **Frontendda:** 🔧 `/payments` da "Kartalar" bo'limi (BeePost
+  `CardsManager.tsx`: ro'yxat, qo'shish, nomini o'zgartirish, arxivlash,
+  kartalararo o'tkazma, karta↔naqd, `in_sync` ogohlantirishi) va
+  `/payments/card-detail/:id` (ledger). "O'tkazma" (click) to'lov
+  oynalarida xodim ("o'tkazma manbasi") o'rniga **karta tanlovi** →
+  `card_id` (ro'yxatda "Ism — N so'm" soxta qoldiqlar o'rniga haqiqiy karta
+  balansi). Har o'tkazma/konvertatsiya so'roviga `Idempotency-Key`.
+
 ### 2026-10-15 — Pochta detalidan buyurtmani o'chirish (superadmin savati, yokjwjXG)
 
 - [2026-10-15] 🆕 [order/logistics] — `POST /post/delete` — superadmin

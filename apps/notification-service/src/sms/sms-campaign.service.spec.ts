@@ -30,6 +30,7 @@ describe('SmsCampaignService', () => {
   let consentRepo: { find: jest.Mock };
   let outbox: { enqueue: jest.Mock; countByCampaign: jest.Mock };
   let dispatch: { contacts: jest.Mock };
+  let templates: { resolve: jest.Mock };
   const make = (env = ENV) => {
     const get = (key: string) => env[key];
     const config = new SmsConfigService({ get } as never);
@@ -44,9 +45,21 @@ describe('SmsCampaignService', () => {
       dispatch as never,
       { scheduleFor: (_: string, now = new Date()) => now } as never,
       outbox as never,
-      { resolve: jest.fn() } as never,
+      templates as never,
     );
   };
+
+  /** Amaldagi reklama roziligi (sVByLMnt) — berilgan raqamlarga. */
+  const grant = (...list: string[]) =>
+    consentRepo.find.mockResolvedValue(
+      list.map((phone) => ({
+        phone,
+        customer_id: null,
+        granted: true,
+        revoked_at: null,
+        granted_at: new Date(),
+      })),
+    );
 
   beforeEach(() => {
     repo = {
@@ -71,6 +84,7 @@ describe('SmsCampaignService', () => {
       countByCampaign: jest.fn().mockResolvedValue(new Map()),
     };
     dispatch = { contacts: jest.fn().mockResolvedValue(new Map()) };
+    templates = { resolve: jest.fn().mockResolvedValue(null) };
     rmqSendMock.mockReset();
   });
 
@@ -135,28 +149,20 @@ describe('SmsCampaignService', () => {
 
   it('over SMS_MAX_FANOUT → ERROR (not a silent cut)', async () => {
     const list = ['901111111', '902222222', '903333333', '904444444'];
-    await expect(
-      make().send(
-        {
-          message_class: 'transactional',
-          text: 'Xizmat yangilandi',
-          segment: { phones: list },
-        },
-        'k3',
-        '1',
-      ),
-    ).rejects.toMatchObject({
-      error: expect.objectContaining({ statusCode: 400 }),
+    grant(...list.map((p) => `+998${p}`));
+    await expect(make().send(phones(list), 'k3', '1')).rejects.toMatchObject({
+      error: expect.objectContaining({
+        statusCode: 400,
+        message: expect.stringContaining('SMS_MAX_FANOUT'),
+      }),
     });
+    expect(outbox.enqueue).not.toHaveBeenCalled();
   });
 
-  it('transactional campaign queues with campaign id and a per-phone client id', async () => {
+  it('promo campaign queues with campaign id and a per-phone client id', async () => {
+    grant('+998901111111');
     const res = await make().send(
-      {
-        message_class: 'transactional',
-        text: "Ish vaqti o'zgardi",
-        segment: { phones: ['901111111', '901111111'] },
-      },
+      phones(['901111111', '901111111']),
       'k4',
       '1',
     );
@@ -164,16 +170,142 @@ describe('SmsCampaignService', () => {
       expect.objectContaining({
         campaignId: '5',
         clientMessageId: 'camp-5-998901111111',
-        messageClass: 'transactional',
+        messageClass: 'promo',
       }),
     ]);
     expect(res).toMatchObject({ campaign_id: '5', queued: 1 });
   });
 
+  describe("(sVByLMnt) kampaniya FAQAT reklama — 'Xizmat xabari' darvozalarni chetlab o'tmaydi", () => {
+    const night = {
+      message_class: 'transactional',
+      text: 'Kuzgi chegirma 20%! Faqat bugun',
+      segment: { phones: ['901111111', '902222222'] },
+    };
+
+    it("message_class='transactional' (yoki 'security') → 400 campaign_promo_only: preview ham, send ham; hech narsa saqlanmaydi/navbatga tushmaydi", async () => {
+      for (const messageClass of ['transactional', 'security']) {
+        const input = { ...night, message_class: messageClass };
+        await expect(make().preview(input)).rejects.toMatchObject({
+          error: expect.objectContaining({
+            statusCode: 400,
+            reason: 'campaign_promo_only',
+            message_class: messageClass,
+          }),
+        });
+        await expect(
+          make().send(input, `k-${messageClass}`, '1'),
+        ).rejects.toMatchObject({
+          error: expect.objectContaining({
+            statusCode: 400,
+            reason: 'campaign_promo_only',
+          }),
+        });
+      }
+      expect(repo.save).not.toHaveBeenCalled();
+      expect(outbox.enqueue).not.toHaveBeenCalled();
+      // Rozilik/segment so'ralmaydi — rad etish matnni ko'rishdan oldin.
+      expect(consentRepo.find).not.toHaveBeenCalled();
+    });
+
+    it('tranzaksion/OTP SHABLONI kampaniyada ham rad etiladi (shablon orqali aylanib o‘tish yo‘q)', async () => {
+      for (const messageClass of ['transactional', 'security']) {
+        templates.resolve.mockResolvedValue({
+          code: 'order.delivered',
+          message_class: messageClass,
+          text: 'Buyurtma #{{order_number}} yetkazildi',
+          required_vars: ['order_number'],
+        });
+        await expect(
+          make().send(
+            {
+              template_code: 'order.delivered',
+              vars: { order_number: '1' },
+              segment: { phones: ['901111111'] },
+            },
+            `kt-${messageClass}`,
+            '1',
+          ),
+        ).rejects.toMatchObject({
+          error: expect.objectContaining({
+            statusCode: 400,
+            reason: 'campaign_promo_only',
+            message_class: messageClass,
+          }),
+        });
+      }
+      expect(repo.save).not.toHaveBeenCalled();
+      expect(outbox.enqueue).not.toHaveBeenCalled();
+    });
+
+    it('promo shablon + aniq message_class=transactional → baribir rad (aralash so‘rov ham)', async () => {
+      templates.resolve.mockResolvedValue({
+        code: 'promo.autumn',
+        message_class: 'promo',
+        text: 'Chegirma {{discount}}',
+        required_vars: ['discount'],
+      });
+      await expect(
+        make().preview({
+          message_class: 'transactional',
+          template_code: 'promo.autumn',
+          vars: { discount: '20%' },
+          segment: { phones: ['901111111'] },
+        }),
+      ).rejects.toMatchObject({
+        error: expect.objectContaining({ reason: 'campaign_promo_only' }),
+      });
+    });
+
+    it('message_class berilmasa — reklama: rozilik darvozasi va opt-out havolasi qo‘llanadi', async () => {
+      grant('+998901111111');
+      const preview = await make().preview({
+        text: 'Kuzgi chegirma 20%',
+        segment: { phones: ['901111111', '902222222'] },
+      });
+      expect(preview).toMatchObject({
+        message_class: 'promo',
+        recipients: 1,
+        blocked_no_consent: 1,
+        tariff: 175,
+      });
+      expect(preview.sample_text).toContain('Rad etish:');
+    });
+
+    it('promo shablon ruxsat — reklama sifatida (rozilik bilan) navbatga', async () => {
+      grant('+998901111111');
+      templates.resolve.mockResolvedValue({
+        code: 'promo.autumn',
+        message_class: 'promo',
+        text: 'Chegirma {{discount}}',
+        required_vars: ['discount'],
+      });
+      await make().send(
+        {
+          template_code: 'promo.autumn',
+          vars: { discount: '20%' },
+          segment: { phones: ['901111111', '902222222'] },
+        },
+        'kp',
+        '1',
+      );
+      expect(outbox.enqueue.mock.calls[0][0]).toEqual([
+        expect.objectContaining({
+          to: '+998901111111',
+          messageClass: 'promo',
+          text: 'Chegirma 20%',
+        }),
+      ]);
+      expect(repo.save).toHaveBeenCalledWith(
+        expect.objectContaining({ message_class: 'promo', blocked: 1 }),
+      );
+    });
+  });
+
   it('a leftover {{placeholder}} blocks sending', async () => {
     await expect(
       make().preview({
-        message_class: 'transactional',
+        message_class: 'promo',
         text: 'Salom {{name}}',
         segment: { phones: ['901111111'] },
       }),
@@ -189,8 +321,9 @@ describe('SmsCampaignService', () => {
     dispatch.contacts.mockResolvedValue(
       new Map([['7', { id: '7', phone_number: '+998907777777' }]]),
     );
+    grant('+998907777777');
     const preview = await make().preview({
-      message_class: 'transactional',
+      message_class: 'promo',
       text: 'x',
       segment: { market_id: '3' },
     });
@@ -233,19 +366,23 @@ describe('SmsCampaignService', () => {
     });
   });
 
-  it('(sVByLMnt TC14) a campaign the gate rejected stays in history as failed with its blocked count', async () => {
+  it('(sVByLMnt TC14 / 3fRbyadQ TC6) a campaign the gate rejected (daily cap) stays in history as failed — 409 with the reason, not a silent success', async () => {
     const { SmsBlockedError } = jest.requireActual('./sms-gate.service');
+    grant('+998901111111');
     outbox.enqueue.mockRejectedValue(
       new SmsBlockedError('daily_cap_exceeded', 'Kunlik SMS kvotasi tugadi', {
+        used: 3,
+        requested: 1,
         cap: 3,
+        stream: 'general',
       }),
     );
     await expect(
       make().send(
         {
-          message_class: 'transactional',
-          text: 'Filial manzili o‘zgardi',
-          segment: { phones: ['+998901111111'] },
+          message_class: 'promo',
+          text: 'Kuzgi chegirma 20%',
+          segment: { phones: ['+998901111111', '+998902222222'] },
         },
         'key-cap',
         '1',
@@ -254,11 +391,23 @@ describe('SmsCampaignService', () => {
       error: expect.objectContaining({
         statusCode: 409,
         reason: 'daily_cap_exceeded',
+        cap: 3,
+        stream: 'general',
       }),
     });
     expect(repo.save).toHaveBeenCalledWith(
-      expect.objectContaining({ idempotency_key: 'key-cap', total: 1 }),
+      expect.objectContaining({
+        idempotency_key: 'key-cap',
+        message_class: 'promo',
+        total: 2,
+        blocked: 1,
+      }),
     );
     expect(repo.update).toHaveBeenCalledWith({ id: '5' }, { status: 'failed' });
+    // "queued" hech qachon yozilmaydi — tarix muvaffaqiyat ko'rsatmaydi.
+    expect(repo.update).not.toHaveBeenCalledWith(
+      { id: '5' },
+      expect.objectContaining({ queued: expect.anything() }),
+    );
   });
 });

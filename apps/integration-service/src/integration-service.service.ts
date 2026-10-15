@@ -9639,11 +9639,30 @@ export class IntegrationServiceService {
       .andWhere('r.status = :status', { status: ReceivableStatus.PENDING })
       .getRawOne<{ sum: string; count: string }>();
 
+    /**
+     * utIffRFx 4-band — hamkor avansi (avvalgi to'lovlarning qarzga
+     * sig'magan qoldig'i) va uni hisobga olgan holda TO'LANISHI KERAK summa:
+     * `payable_amount = max(0, outstanding − advance)`. Shu summa kelsa
+     * barcha PENDING qatorlar yopiladi; undan ortig'i yangi avans bo'ladi.
+     */
+    const outstandingTiyin = IntegrationServiceService.toTiyin(raw?.sum ?? 0);
+    const advanceTiyin = Math.max(
+      0,
+      await this.computeRemittanceAdvance(
+        this.remittanceRepo,
+        String(integration_id),
+      ),
+    );
+
     return successRes(
       {
         integration_id: String(integration_id),
         outstanding_amount: Number(raw?.sum ?? 0),
         outstanding_count: Number(raw?.count ?? 0),
+        advance_balance: IntegrationServiceService.fromTiyin(advanceTiyin),
+        payable_amount: IntegrationServiceService.fromTiyin(
+          Math.max(0, outstandingTiyin - advanceTiyin),
+        ),
       },
       200,
       'Provider outstanding balance',
@@ -9687,6 +9706,15 @@ export class IntegrationServiceService {
         const receivableRepo = manager.getRepository(ProviderReceivable);
         const remittanceRepo = manager.getRepository(ProviderRemittance);
 
+        // utIffRFx 4-band — shu hamkorning to'lov/bekor qilish oqimlari bitta
+        // navbatda: avans ikki parallel to'lovda IKKI MARTA ishlatilmasin va
+        // bitta qarz qatori ikki to'lov bilan yopilmasin.
+        await this.lockRemittanceFlow(manager, integrationId);
+        const advanceBefore = Math.max(
+          0,
+          await this.computeRemittanceAdvance(remittanceRepo, integrationId),
+        );
+
         const orderIds = (input.order_ids ?? [])
           .map((x) => String(x))
           .filter(Boolean);
@@ -9716,16 +9744,23 @@ export class IntegrationServiceService {
           }),
         );
 
-        let remaining = amount;
+        /**
+         * utIffRFx 4-band — qarz yopishga ishlatiladigan summa = shu to'lov +
+         * hamkorning AVVALGI to'lovlardan qolgan avansi. Hisob tiyinda (butun
+         * son): suzuvchi nuqta FIFO chegarasini siljitmasin.
+         */
+        const amountTiyin = IntegrationServiceService.toTiyin(amount);
+        let remaining = amountTiyin + advanceBefore;
         let settledCount = 0;
-        let settledAmount = 0;
+        let settledTiyin = 0;
         const now = new Date();
 
         for (const row of pending) {
-          const rowAmount = Number(row.amount);
+          const rowTiyin = IntegrationServiceService.toTiyin(row.amount);
           // When settling by explicit ids, settle each in full. Otherwise stop
-          // once the remitted amount is exhausted (FIFO, full rows only).
-          if (!orderIds.length && rowAmount > remaining) {
+          // once the remitted amount (+ avans) is exhausted (FIFO, full rows
+          // only).
+          if (!orderIds.length && rowTiyin > remaining) {
             break;
           }
           row.status = ReceivableStatus.SETTLED;
@@ -9733,19 +9768,37 @@ export class IntegrationServiceService {
           row.settled_at = now;
           await receivableRepo.save(row);
           settledOrderIds.push(String(row.order_id));
-          remaining -= rowAmount;
-          settledAmount += rowAmount;
+          remaining -= rowTiyin;
+          settledTiyin += rowTiyin;
           settledCount += 1;
         }
 
         /**
          * utIffRFx — qoldiq endi TARIXDA ham qoladi (migratsiya 080):
          * ilgari faqat javobda qaytardi va yo'qolardi.
+         *
+         * 4-band (migratsiya 104): avval shu to'lovning o'z puli ishlatiladi,
+         * yetmagan qismi avansdan (`advance_applied`, avansdan oshmaydi).
+         *   unapplied = amount + advance_applied − settled
+         * Musbat qoldiq — hamkorning YANGI avansi (keyingi to'lovda qo'llanadi);
+         * manfiy — aniq buyurtmalar ro'yxati to'lov + avansdan ko'p yopdi
+         * (ogohlantirish; avansni manfiyga tushirmaydi).
          */
-        const unappliedAmount = Number((amount - settledAmount).toFixed(2));
+        const advanceApplied = Math.min(
+          advanceBefore,
+          Math.max(0, settledTiyin - amountTiyin),
+        );
+        const unappliedTiyin = amountTiyin + advanceApplied - settledTiyin;
+        const advanceAfter =
+          advanceBefore - advanceApplied + Math.max(0, unappliedTiyin);
+        const fromTiyin = (tiyin: number) =>
+          IntegrationServiceService.fromTiyin(tiyin);
+        const settledAmount = fromTiyin(settledTiyin);
+        const unappliedAmount = fromTiyin(unappliedTiyin);
         remittance.settled_count = settledCount;
         remittance.settled_amount = settledAmount.toFixed(2);
         remittance.unapplied_amount = unappliedAmount.toFixed(2);
+        remittance.advance_applied = fromTiyin(advanceApplied).toFixed(2);
         await remittanceRepo.save(remittance);
 
         return {
@@ -9754,9 +9807,13 @@ export class IntegrationServiceService {
               remittance_id: remittance.id,
               integration_id: integrationId,
               remitted_amount: amount,
-              settled_amount: Number(settledAmount.toFixed(2)),
+              settled_amount: settledAmount,
               settled_count: settledCount,
               unapplied_amount: unappliedAmount,
+              // utIffRFx 4-band — avansdan ishlatilgani va to'lovdan keyingi
+              // hamkor avansi (keyingi to'lovda avtomatik qo'llanadi).
+              advance_applied: fromTiyin(advanceApplied),
+              advance_balance: fromTiyin(advanceAfter),
               ...this.remittanceWarning(unappliedAmount),
             },
             201,
@@ -9765,6 +9822,9 @@ export class IntegrationServiceService {
           remittance_id: remittance.id,
           settled_count: settledCount,
           settled_amount: settledAmount,
+          unapplied_amount: unappliedAmount,
+          advance_applied: fromTiyin(advanceApplied),
+          advance_balance: fromTiyin(advanceAfter),
         };
       },
     );
@@ -9852,6 +9912,9 @@ export class IntegrationServiceService {
         amount,
         settled_amount: result.settled_amount,
         settled_count: result.settled_count,
+        unapplied_amount: result.unapplied_amount,
+        advance_applied: result.advance_applied,
+        advance_balance: result.advance_balance,
       },
       metadata: {
         integration_id: integrationId,
@@ -9881,19 +9944,92 @@ export class IntegrationServiceService {
    *     sig'dira olmadi: kassaga to'liq summa kirdi, qarz daftari esa
    *     kamroq yopildi (qoldiq `unapplied_amount` da saqlanadi);
    *   • qoldiq < 0 — aniq buyurtmalar ro'yxati to'lovdan ko'p qarzni yopdi.
+   *
+   * 4-band: musbat qoldiq endi yo'qolmaydi — hamkor AVANSI bo'lib qoladi va
+   * keyingi to'lovda avtomatik qarzlarga (FIFO) qo'llanadi.
    */
   private remittanceWarning(unappliedAmount: number): { warning?: string } {
     if (unappliedAmount > 0) {
       return {
-        warning: `To'lovning ${unappliedAmount} so'mi hech bir qarz qatoriga sig'madi (qarzdan ortiq yoki butun qatorga yetmadi). Kassaga to'liq summa yozildi — qoldiqni tekshiring.`,
+        warning: `To'lovning ${unappliedAmount} so'mi hech bir qarz qatoriga sig'madi (qarzdan ortiq yoki butun qatorga yetmadi). Kassaga to'liq summa yozildi; qoldiq hamkor AVANSIGA o'tdi va keyingi to'lovda avtomatik qarzlarga qo'llanadi.`,
       };
     }
     if (unappliedAmount < 0) {
       return {
-        warning: `Yopilgan qarz qatorlari to'lovdan ${Math.abs(unappliedAmount)} so'mga ko'p (aniq buyurtmalar ro'yxati). Kassaga faqat to'lov summasi yozildi.`,
+        warning: `Yopilgan qarz qatorlari to'lov (va hamkor avansi) dan ${Math.abs(unappliedAmount)} so'mga ko'p (aniq buyurtmalar ro'yxati). Kassaga faqat to'lov summasi yozildi.`,
       };
     }
     return {};
+  }
+
+  /** utIffRFx 4-band — pul tiyinda (butun son), suzuvchi nuqta xatosiz. */
+  private static toTiyin(value: unknown): number {
+    const n = Number(value ?? 0);
+    return Number.isFinite(n) ? Math.round(n * 100) : 0;
+  }
+
+  private static fromTiyin(tiyin: number): number {
+    return Number((tiyin / 100).toFixed(2));
+  }
+
+  /**
+   * utIffRFx 4-band — hamkorning remittance oqimlari (yaratish / bekor
+   * qilish) uchun tranzaksiya oxirigacha advisory qulf. Avans hisobi va FIFO
+   * shu qulf ostida: ikki parallel to'lov bitta avansni yoki bitta qarz
+   * qatorini ikki marta ishlata olmaydi. `lock_timeout` — band bo'lsa abadiy
+   * kutmasdan aniq xato.
+   */
+  private async lockRemittanceFlow(
+    manager: { query: (sql: string, params?: unknown[]) => Promise<unknown> },
+    integrationId: string,
+  ): Promise<void> {
+    await manager.query(`SET LOCAL lock_timeout = '15s'`);
+    await manager.query(
+      'SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))',
+      [`provider-remittance:${integrationId}`],
+    );
+  }
+
+  /**
+   * utIffRFx 4-band — hamkorning hozirgi AVANSI (tiyinda):
+   *   Σ faol, kuzatiladigan to'lovlar (max(unapplied_amount, 0) − advance_applied)
+   * "Kuzatiladigan" — `advance_applied IS NOT NULL` (migratsiya 104 dan
+   * keyingi yozuv). Eski yozuvlar avansga kirmaydi (migratsiya 104 izohi).
+   * Bekor qilingan to'lov avansga ham, ishlatilgan avansga ham kirmaydi —
+   * shu bois bekor qilish avansni avtomatik qaytaradi.
+   */
+  private async computeRemittanceAdvance(
+    remittanceRepo: Repository<ProviderRemittance>,
+    integrationId: string,
+  ): Promise<number> {
+    const raw = await remittanceRepo
+      .createQueryBuilder('r')
+      .select(
+        'COALESCE(SUM(GREATEST(COALESCE(r.unapplied_amount, 0), 0) - r.advance_applied), 0)',
+        'advance',
+      )
+      .where('r.integration_id = :id', { id: String(integrationId) })
+      .andWhere('r.is_deleted = false')
+      .andWhere('r.status = :status', { status: RemittanceStatus.ACTIVE })
+      .andWhere('r.advance_applied IS NOT NULL')
+      .getRawOne<{ advance: string | number | null }>();
+    return IntegrationServiceService.toTiyin(raw?.advance ?? 0);
+  }
+
+  /**
+   * utIffRFx 4-band — to'lov hamkor avansiga qo'shgan sof hissa (tiyinda):
+   * max(unapplied, 0) − advance_applied. Eski yozuv (NULL) — 0.
+   */
+  private static remittanceAdvanceContribution(
+    row: ProviderRemittance,
+  ): number {
+    if (row.advance_applied === null || row.advance_applied === undefined) {
+      return 0;
+    }
+    return (
+      Math.max(0, IntegrationServiceService.toTiyin(row.unapplied_amount)) -
+      IntegrationServiceService.toTiyin(row.advance_applied)
+    );
   }
 
   /**
@@ -9964,6 +10100,8 @@ export class IntegrationServiceService {
       settled_count: Number(row.settled_count ?? 0),
       settled_amount: num(row.settled_amount),
       unapplied_amount: num(row.unapplied_amount),
+      // utIffRFx 4-band — avvalgi avansdan ishlatilgani (null — eski yozuv).
+      advance_applied: num(row.advance_applied),
       reference: row.reference ?? null,
       note: row.note ?? null,
       created_by: row.created_by ?? null,
@@ -9997,18 +10135,30 @@ export class IntegrationServiceService {
    * shuncha ORTADI) va MAIN kassadan TESKARI chiqim yoziladi (to'lov kassaga
    * kirim bo'lgan bo'lsa).
    *
-   * Tartib — pul avval, chunki u boshqa servisda:
-   *   1. yozuv tekshiriladi (bor, shu kargoniki, bekor qilinmagan);
-   *   2. kassa teskari chiqimi — idempotent token
+   * Tartib (R6, 2026-10-15 — teskari chiqim QULF ICHIDA):
+   *   1. qulfsiz oldindan tekshiruv (bor, shu kargoniki, bekor qilinmagan,
+   *      kassa bayrog'i ma'lum, avans yetadi) — tez 404/409, tranzaksiya
+   *      ochilmaydi;
+   *   2. tranzaksiya: hamkor advisory qulfi (`createRemittance` bilan bitta
+   *      navbat) + yozuv FOR UPDATE; hammasi QAYTA tekshiriladi;
+   *   3. o'sha tranzaksiya ichida kassa teskari chiqimi — idempotent token
    *      `provider-remittance-cancel:<id>` (finance kassa qatori qulfi
-   *      ostida dedup qiladi): MAIN kassada mablag' yetmasa xato va HECH
-   *      NARSA o'zgarmaydi; qayta urinish / parallel bosish pulni ikki
-   *      marta yechmaydi;
-   *   3. tranzaksiya: yozuv QULFLANADI, qayta tekshiriladi, qarz qatorlari
-   *      PENDING, yozuv CANCELLED. 3-qadam yiqilsa qayta bosish xavfsiz
-   *      (2-qadam takrorlanmaydi).
-   *   4. order-service: kargo buyurtmalarining "HQ'ga yetdi" holati qaytariladi
+   *      ostida dedup qiladi). Mablag' yetmasa yoki finance xato bersa —
+   *      ROLLBACK, HECH NARSA o'zgarmaydi;
+   *   4. qarz qatorlari PENDING, yozuv CANCELLED, COMMIT;
+   *   5. order-service: kargo buyurtmalarining "HQ'ga yetdi" holati qaytariladi
    *      (best-effort; marketga to'lab bo'lingan qatorlar o'zgarmaydi).
+   *
+   * Nega qulf ichida (ilgari pul tranzaksiyadan OLDIN, qulfsiz edi):
+   * utIffRFx avansi bilan bekor qilish shartga bog'liq — to'lov avansi
+   * keyingi to'lovda ishlatilgan bo'lsa bekor qilib bo'lmaydi. Pul qulfdan
+   * tashqarida yechilsa, tekshiruv bilan pul harakati orasida parallel
+   * `createRemittance` avansni ishlatib qo'yishi mumkin edi: kassa teskari
+   * yozilgan, to'lov esa bekor qilinmagan holat. Qulf ichida bu oyna yo'q;
+   * parallel ikkinchi bosish finance'ga umuman bormaydi. Narxi — tranzaksiya
+   * RMQ javobini (≤ RMQ timeout) kutadi, faqat SHU hamkor uchun.
+   * Qolgan yagona oyna: chiqim yozildi, COMMIT yiqildi — qayta bosish xavfsiz
+   * (token bir xil, finance takrorlamaydi), xato logga yoziladi.
    *
    * Migratsiyadan oldingi yozuvda (`cashbox_posted = NULL`) kassa yozilgan-
    * yozilmagani noma'lum — operator `reverse_cashbox` ni ANIQ beradi, aks
@@ -10048,55 +10198,17 @@ export class IntegrationServiceService {
         "To'lov allaqachon bekor qilingan",
       );
     }
-
-    let reverseCashbox: boolean;
-    if (existing.cashbox_posted === true || existing.cashbox_posted === false) {
-      reverseCashbox = existing.cashbox_posted;
-    } else if (typeof input.reverse_cashbox === 'boolean') {
-      reverseCashbox = input.reverse_cashbox;
-    } else {
-      this.conflict(
-        "Bu to'lov kassaga yozilgan-yozilmagani noma'lum (eski yozuv). MAIN kassa tarixini tekshirib, reverse_cashbox: true (kassadan teskari chiqim) yoki false ni aniq yuboring.",
-      );
-    }
-
-    const amount = Number(existing.amount);
-    const cashboxReversed = reverseCashbox && amount > 0;
-    if (cashboxReversed) {
-      try {
-        await rmqSend(
-          this.financeClient,
-          { cmd: 'finance.cashbox.spend' },
-          {
-            user_id: cancelledBy ?? '0',
-            cashbox_type: Cashbox_type.MAIN,
-            amount,
-            comment: `Kargo to'lovi #${remittanceId} bekor qilindi${
-              input.reason ? `: ${String(input.reason)}` : ''
-            }`,
-            created_by: cancelledBy,
-            dedup_epoch: `provider-remittance-cancel:${remittanceId}`,
-          },
-        );
-      } catch (err) {
-        // Hech narsa o'zgarmagan: qarz qatorlari ham, yozuv ham avvalgidek.
-        const remote = (err instanceof RpcException ? err.getError() : err) as {
-          statusCode?: number;
-          message?: string;
-        } | null;
-        const status = Number(remote?.statusCode);
-        throw new RpcException(
-          errorRes(
-            `Kassadan teskari chiqim yozilmadi — to'lov bekor qilinmadi: ${
-              remote?.message ?? (err as Error)?.message ?? 'finance xatosi'
-            }`,
-            status >= 400 && status < 500 ? status : 502,
-          ),
-        );
-      }
-    }
+    // Qulfsiz oldindan tekshiruv — tez javob; tranzaksiyada qayta tekshiriladi.
+    this.resolveCancelReverseCashbox(existing, input.reverse_cashbox);
+    await this.assertAdvanceNotConsumed(
+      this.remittanceRepo,
+      existing,
+      integrationId,
+    );
 
     const reopenedOrderIds: string[] = [];
+    let cashboxReversed = false;
+    let spendPosted = false;
     let outcome: {
       remittance: ProviderRemittance;
       alreadyCancelled: boolean;
@@ -10106,8 +10218,13 @@ export class IntegrationServiceService {
         async (manager) => {
           const remittanceRepo = manager.getRepository(ProviderRemittance);
           const receivableRepo = manager.getRepository(ProviderReceivable);
+          await this.lockRemittanceFlow(manager, integrationId);
           const locked = await remittanceRepo.findOne({
-            where: { id: remittanceId, isDeleted: false },
+            where: {
+              id: remittanceId,
+              integration_id: integrationId,
+              isDeleted: false,
+            },
             lock: { mode: 'pessimistic_write' },
           });
           if (!locked) {
@@ -10115,6 +10232,27 @@ export class IntegrationServiceService {
           }
           if (locked.status === RemittanceStatus.CANCELLED) {
             return { remittance: locked, alreadyCancelled: true };
+          }
+          const reverseCashbox = this.resolveCancelReverseCashbox(
+            locked,
+            input.reverse_cashbox,
+          );
+          await this.assertAdvanceNotConsumed(
+            remittanceRepo,
+            locked,
+            integrationId,
+          );
+
+          const amount = Number(locked.amount);
+          cashboxReversed = reverseCashbox && amount > 0;
+          if (cashboxReversed) {
+            await this.postRemittanceCancelSpend({
+              remittanceId,
+              amount,
+              cancelledBy,
+              reason: input.reason ?? null,
+            });
+            spendPosted = true;
           }
 
           const settled = await receivableRepo.find({
@@ -10141,7 +10279,7 @@ export class IntegrationServiceService {
         },
       );
     } catch (err) {
-      if (cashboxReversed) {
+      if (spendPosted) {
         this.logger.error(
           `remittance ${remittanceId}: kassadan teskari chiqim YOZILDI, lekin bekor qilish tranzaksiyasi yiqildi — qayta bosing (chiqim takrorlanmaydi): ${(err as Error)?.message ?? err}`,
         );
@@ -10160,6 +10298,7 @@ export class IntegrationServiceService {
       );
     }
 
+    const amount = Number(outcome.remittance.amount);
     let settlementReverted = reopenedOrderIds.length === 0;
     if (reopenedOrderIds.length) {
       try {
@@ -10192,6 +10331,11 @@ export class IntegrationServiceService {
         reopened_count: reopenedOrderIds.length,
         order_ids: reopenedOrderIds.slice(0, 10),
         cashbox_reversed: cashboxReversed,
+        advance_applied:
+          outcome.remittance.advance_applied === null ||
+          outcome.remittance.advance_applied === undefined
+            ? null
+            : Number(outcome.remittance.advance_applied),
         reason: input.reason ?? null,
       },
     });
@@ -10207,6 +10351,120 @@ export class IntegrationServiceService {
       200,
       "To'lov bekor qilindi",
     );
+  }
+
+  /**
+   * DxdZFdIk — bekor qilishda kassani teskari yozish kerakmi. Yozuvdagi
+   * `cashbox_posted` ustun; eski yozuvda (NULL) — operatorning aniq
+   * `reverse_cashbox` qarori, bo'lmasa 409.
+   */
+  private resolveCancelReverseCashbox(
+    row: ProviderRemittance,
+    requested: boolean | null | undefined,
+  ): boolean {
+    if (row.cashbox_posted === true || row.cashbox_posted === false) {
+      return row.cashbox_posted;
+    }
+    if (typeof requested === 'boolean') {
+      return requested;
+    }
+    this.conflict(
+      "Bu to'lov kassaga yozilgan-yozilmagani noma'lum (eski yozuv). MAIN kassa tarixini tekshirib, reverse_cashbox: true (kassadan teskari chiqim) yoki false ni aniq yuboring.",
+    );
+  }
+
+  /**
+   * utIffRFx 4-band + DxdZFdIk — to'lov bekor qilinsa uning avansga hissasi
+   * (max(unapplied,0) − advance_applied) hovuzdan chiqadi. Shu hissa
+   * KEYINGI to'lov(lar)da qarz yopishga ishlatib bo'lingan bo'lsa (hovuz
+   * manfiyga tushardi) — 409: avval o'sha to'lovlarni bekor qilish kerak
+   * (ular qayta ochilganda avans hovuzga qaytadi). Aks holda yopilgan qarz
+   * qatorlari ortida kelmagan pul qolardi.
+   */
+  private async assertAdvanceNotConsumed(
+    remittanceRepo: Repository<ProviderRemittance>,
+    row: ProviderRemittance,
+    integrationId: string,
+  ): Promise<void> {
+    const contribution =
+      IntegrationServiceService.remittanceAdvanceContribution(row);
+    if (contribution <= 0) {
+      return;
+    }
+    const pool = await this.computeRemittanceAdvance(
+      remittanceRepo,
+      integrationId,
+    );
+    if (pool - contribution >= 0) {
+      return;
+    }
+    const consumers = await remittanceRepo.find({
+      where: {
+        integration_id: integrationId,
+        status: RemittanceStatus.ACTIVE,
+        isDeleted: false,
+        advance_applied: Not(IsNull()),
+        createdAt: MoreThanOrEqual(row.createdAt),
+      },
+      order: { createdAt: 'DESC', id: 'DESC' },
+      take: 20,
+    });
+    const ids = consumers
+      .filter(
+        (r) =>
+          String(r.id) !== String(row.id) &&
+          IntegrationServiceService.toTiyin(r.advance_applied) > 0,
+      )
+      .map((r) => `#${String(r.id)}`);
+    const used = IntegrationServiceService.fromTiyin(contribution - pool);
+    this.conflict(
+      `Bu to'lovdan qolgan avansning ${used} so'mi keyingi to'lov(lar)da qarz yopishga ishlatilgan${
+        ids.length ? ` (${ids.join(', ')})` : ''
+      } — avval o'sha to'lovlarni (eng oxirgisidan boshlab) bekor qiling, keyin buni.`,
+    );
+  }
+
+  /**
+   * DxdZFdIk — MAIN kassadan teskari chiqim (idempotent token). Xato bo'lsa
+   * RpcException (chaqiruvchi tranzaksiyasi ROLLBACK — hech narsa
+   * o'zgarmaydi).
+   */
+  private async postRemittanceCancelSpend(input: {
+    remittanceId: string;
+    amount: number;
+    cancelledBy: string | null;
+    reason: string | null;
+  }): Promise<void> {
+    try {
+      await rmqSend(
+        this.financeClient,
+        { cmd: 'finance.cashbox.spend' },
+        {
+          user_id: input.cancelledBy ?? '0',
+          cashbox_type: Cashbox_type.MAIN,
+          amount: input.amount,
+          comment: `Kargo to'lovi #${input.remittanceId} bekor qilindi${
+            input.reason ? `: ${String(input.reason)}` : ''
+          }`,
+          created_by: input.cancelledBy,
+          dedup_epoch: `provider-remittance-cancel:${input.remittanceId}`,
+        },
+      );
+    } catch (err) {
+      const remote = (err instanceof RpcException ? err.getError() : err) as {
+        statusCode?: number;
+        message?: string;
+      } | null;
+      const status = Number(remote?.statusCode);
+      throw new RpcException(
+        errorRes(
+          `Kassadan teskari chiqim yozilmadi — to'lov bekor qilinmadi: ${
+            remote?.message ?? (err as Error)?.message ?? 'finance xatosi'
+          }`,
+          status >= 400 && status < 500 ? status : 502,
+        ),
+      );
+    }
   }
 
   private mapCancelledRemittance(row: ProviderRemittance) {

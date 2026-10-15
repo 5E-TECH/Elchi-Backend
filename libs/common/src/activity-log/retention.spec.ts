@@ -363,8 +363,9 @@ describe('pruneActivityLogsBatched — umumiy muddat DELETE (f2Ud5tju, prune-del
       .replace(/\/\/.*$/gm, '');
     // (i6Nyedea) DELETE — faqat siyosat helper'i (fe'l sinfi bo'yicha muddat,
     // partiya va pauza env'dan) va FAQAT ACTIVITY_LOG_PRUNE_ENABLED bilan.
+    // Arxiv (sukut yoqiq) — helper'ning `archiveTable` opsiyasi (archive.spec.ts).
     expect(src).toMatch(
-      /pruneByRuleBatched\(\s*run,\s*table,\s*rule,\s*\{\s*batchSize,\s*pauseMs,?\s*\}\s*,?\s*\)/,
+      /pruneByRuleBatched\(\s*run,\s*table,\s*rule,\s*\{\s*batchSize,\s*pauseMs,(?:\s*archiveTable,?)?\s*\}\s*,?\s*\)/,
     );
     expect(src).toMatch(/deleteEnabled\s*=\s*isActivityLogPruneEnabled\(\)/);
     expect(src).not.toMatch(/\bDELETE\b/);

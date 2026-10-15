@@ -10,6 +10,7 @@ import {
 } from '../context/request-context';
 import { maskPhonesForLog } from '../pii/mask-phones';
 import { ActivityLog } from './activity-log.entity';
+import { ActivityLogArchive } from './activity-log-archive.entity';
 import { computeDiff } from './diff';
 import {
   ACTIVITY_LOG_DEVICE_STRIP_BATCH_DEFAULT,
@@ -263,7 +264,10 @@ export class ActivityLogService {
     const rawLimit = Number(q.limit) > 0 ? Math.floor(Number(q.limit)) : 50;
     const limit = Math.min(rawLimit, ACTIVITY_LOG_PAGE_MAX);
 
-    const qb = this.applyQueryFilters(this.repo.createQueryBuilder('a'), q);
+    const qb = this.applyQueryFilters(
+      this.readRepo(q).createQueryBuilder('a'),
+      q,
+    );
 
     // 8eYmt4NV — kursor parametrlari berilsa ALOHIDA yo'l (`queryCursor`).
     // Berilmasa — eski zanjir AYNAN avvalgidek (orqaga moslik).
@@ -286,6 +290,20 @@ export class ActivityLogService {
         totalPages: Math.max(1, Math.ceil(total / limit)),
       },
     };
+  }
+
+  /**
+   * i6Nyedea — `archive: true` (yoki `'true'`) bo'lsa o'qish ARXIV jadvalidan
+   * (`activity_logs_archive`, AYNI sxema). Arxiv entity'si `ActivityLog` ning
+   * barcha ustunlariga ega (+ `archived_at`, `archive_rule`), shuning uchun
+   * filtrlar/kursor zanjiri o'zgarmaydi. Aks holda — hot jadval, avvalgidek.
+   */
+  private readRepo(q: ActivityLogQuery): Repository<ActivityLog> {
+    const archive = q.archive === true || `${q.archive}` === 'true';
+    if (!archive) return this.repo;
+    return this.repo.manager.getRepository(
+      ActivityLogArchive,
+    ) as unknown as Repository<ActivityLog>;
   }
 
   /** `query()` filtrlari (har ikki yo'l uchun bitta manba). */

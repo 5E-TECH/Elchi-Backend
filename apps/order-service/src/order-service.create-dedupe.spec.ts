@@ -188,3 +188,53 @@ describe('order.create — ai-dedupe opsiyalari', () => {
     expect(res).not.toHaveProperty('idempotent_replay');
   });
 });
+
+/**
+ * Celz3rKJ — `created_via` oq ro'yxati: gateway bot yo'li payloadning YUQORI
+ * darajasida `created_via: 'bot'` yuboradi. Faqat aynan `'bot'` lifecycle'ga
+ * `opts.createdVia` bo'lib o'tadi; boshqa qiymat — e'tiborsiz (opts umuman
+ * uzatilmaydi, oddiy yo'l baytma-bayt o'zgarmaydi).
+ */
+describe('order.create — created_via oq ro`yxati (Celz3rKJ)', () => {
+  it("created_via: 'bot' → lifecycle.create(dto, requester, { createdVia: 'bot' })", async () => {
+    const { controller, lifecycle } = setup();
+    await controller.create(
+      { dto: DTO, requester: REQUESTER, created_via: 'bot' },
+      ctx,
+    );
+    expect(lifecycle.create).toHaveBeenCalledWith(DTO, REQUESTER, {
+      createdVia: 'bot',
+    });
+  });
+
+  it.each([['ai'], ['BOT '], ['x'], [undefined]])(
+    'created_via=%p → opts uzatilmaydi',
+    async (value) => {
+      const { controller, lifecycle } = setup();
+      await controller.create(
+        { dto: DTO, requester: REQUESTER, created_via: value as string },
+        ctx,
+      );
+      expect(lifecycle.create).toHaveBeenCalledWith(DTO, REQUESTER);
+    },
+  );
+
+  it("created_via: 'bot' + AI kaliti — ikkala opts ham birga", async () => {
+    const { controller, lifecycle } = setup();
+    await controller.create(
+      {
+        dto: DTO,
+        requester: REQUESTER,
+        request_id: 'ai-dedupe:' + 'b'.repeat(64),
+        ai_audit: { ai_created: true },
+        created_via: 'bot',
+      },
+      ctx,
+    );
+    expect(lifecycle.create).toHaveBeenCalledWith(
+      DTO,
+      REQUESTER,
+      expect.objectContaining({ createdVia: 'bot' }),
+    );
+  });
+});

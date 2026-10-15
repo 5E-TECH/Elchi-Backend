@@ -22,6 +22,10 @@ import { FinanceNotificationService } from './notification/finance-notification.
 import { FinanceSettlementUnapplied } from './entities/finance-settlement-unapplied.entity';
 import { SettlementUnappliedService } from './settlement/settlement-unapplied.service';
 import { SettlementUnappliedController } from './settlement/settlement-unapplied.controller';
+import { CashboxCard } from './entities/cashbox-card.entity';
+import { CashboxCardMovement } from './entities/cashbox-card-movement.entity';
+import { CashboxCardService } from './cashbox-card/cashbox-card.service';
+import { CashboxCardController } from './cashbox-card/cashbox-card.controller';
 
 @Module({
   imports: [
@@ -64,13 +68,21 @@ import { SettlementUnappliedController } from './settlement/settlement-unapplied
       FinancialBalanceHistory,
       // znD3KaZL — FIFO qoldig'i jurnali (faqat ko'rsatkich/audit).
       FinanceSettlementUnapplied,
+      // 3PE0B03q — MAIN kassa nomli kartalari (BeePost cashbox_card porti).
+      CashboxCard,
+      CashboxCardMovement,
     ]),
   ],
-  controllers: [FinanceServiceController, SettlementUnappliedController],
+  controllers: [
+    FinanceServiceController,
+    SettlementUnappliedController,
+    CashboxCardController,
+  ],
   providers: [
     FinanceServiceService,
     FinanceNotificationService,
     SettlementUnappliedService,
+    CashboxCardService,
   ],
 })
 export class FinanceServiceModule {}

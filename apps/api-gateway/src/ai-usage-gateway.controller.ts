@@ -56,7 +56,7 @@ type AiOrdersReply = {
  * `ai-usage/dashboard`, `ai-usage/ai-orders` naqshi):
  *  - `GET /ai-usage/dashboard` — jami xarajat USD/so'm, area/feature/model
  *    kesimi, Toshkent kuni bo'yicha trend (xarajat + chaqiruv + AI buyurtma),
- *    buyurtma manbasi (AI / qo'lda / tashqi / filial);
+ *    buyurtma manbasi (AI / qo'lda / bot / tashqi / filial) va ulushlari (%);
  *  - `GET /ai-usage/ai-orders` — AI orqali yaratilgan buyurtmalar ro'yxati.
  *
  * Faqat SUPERADMIN, ADMIN (boshqa rol — 403). Hech biri Anthropic'ni
@@ -104,6 +104,7 @@ export class AiUsageGatewayController {
             internal?: number;
             external?: number;
             branch?: number;
+            bot?: number;
             total?: number;
             applied_range?: unknown;
           }>(
@@ -121,17 +122,7 @@ export class AiUsageGatewayController {
     ]);
 
     const aiOrders = Number(ai?.summary?.aiOrderCount ?? 0) || 0;
-    const orderSources = sources
-      ? {
-          total: Number(sources.total ?? 0) || 0,
-          ai: aiOrders,
-          // AI buyurtmalar ham `internal` (market/operator) — qo'lda = qolgani.
-          manual: Math.max(0, (Number(sources.internal ?? 0) || 0) - aiOrders),
-          external: Number(sources.external ?? 0) || 0,
-          branch: Number(sources.branch ?? 0) || 0,
-          applied_range: sources.applied_range ?? null,
-        }
-      : null;
+    const orderSources = sources ? this.orderSources(sources, aiOrders) : null;
 
     return successRes({
       ...ai,
@@ -139,6 +130,48 @@ export class AiUsageGatewayController {
       degraded: failedParts.length > 0,
       failed_parts: failedParts,
     });
+  }
+
+  /**
+   * (Celz3rKJ) Buyurtma manbasi: AI / qo'lda / bot / tashqi / filial soni va
+   * ulushi (%, 1 xona). AI buyurtmalar `internal` ichida (ai-confirm —
+   * oddiy `POST /orders` yo'li), shuning uchun qo'lda = internal − AI; bot
+   * (`created_via = 'bot'`) order-service'da alohida bucket. Eski
+   * order-service (`bot` kaliti yo'q) — bot 0. Jami 0 — ulushlar 0.
+   */
+  private orderSources(
+    sources: {
+      internal?: number;
+      external?: number;
+      branch?: number;
+      bot?: number;
+      total?: number;
+      applied_range?: unknown;
+    },
+    aiOrders: number,
+  ) {
+    const total = Number(sources.total ?? 0) || 0;
+    const counts = {
+      ai: aiOrders,
+      manual: Math.max(0, (Number(sources.internal ?? 0) || 0) - aiOrders),
+      bot: Number(sources.bot ?? 0) || 0,
+      external: Number(sources.external ?? 0) || 0,
+      branch: Number(sources.branch ?? 0) || 0,
+    };
+    const share = (count: number) =>
+      total > 0 ? Math.round((count * 1000) / total) / 10 : 0;
+    return {
+      total,
+      ...counts,
+      shares: {
+        ai: share(counts.ai),
+        manual: share(counts.manual),
+        bot: share(counts.bot),
+        external: share(counts.external),
+        branch: share(counts.branch),
+      },
+      applied_range: sources.applied_range ?? null,
+    };
   }
 
   @Get('ai-orders')

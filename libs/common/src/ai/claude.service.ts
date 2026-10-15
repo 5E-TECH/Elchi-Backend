@@ -330,6 +330,9 @@ export class ClaudeService implements OnApplicationBootstrap {
           messages: [{ role: 'user', content }],
           output_config: {
             format: { type: 'json_schema', schema: opts.schema },
+            // Opt-in (5Z1ZvvzE): sukut thinking'li modelda kichik max_tokens
+            // fikrlashga ketib javob kesilmasin. Berilmasa kalit YO'Q.
+            ...(opts.effort ? { effort: opts.effort } : {}),
           },
         };
 

@@ -93,6 +93,13 @@ export interface ExtractJsonOptions {
   images?: ClaudeImageInput[];
   /** Umumiy muddat (epoch ms) — RPC zanjiridan keladi. */
   deadlineAt?: number;
+  /**
+   * Ixtiyoriy `output_config.effort` (5Z1ZvvzE). Berilmasa tana o'zgarmaydi
+   * (cSUBv0tY #10 — AYNAN 5 kalit, `output_config` faqat `format`). ⚠️ Faqat
+   * effort'ni qo'llaydigan modelda bering (Haiku 4.5 da 400) — tanlov
+   * chaqiruvchida.
+   */
+  effort?: 'low' | 'medium' | 'high';
 }
 
 /** Javob olingan chaqiruvning natijasi (xarajat yozuvi uchun). */

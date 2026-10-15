@@ -179,10 +179,23 @@ export class SmsCampaignSegmentDto {
 }
 
 export class SmsCampaignDto {
-  @ApiPropertyOptional({ enum: ['promo', 'transactional'], example: 'promo' })
+  /**
+   * (sVByLMnt) Kampaniya FAQAT reklama — rozilik + 18:00–09:00 taqiqi.
+   * 'transactional' ("Xizmat xabari") darvozalarni chetlab o'tardi; xizmat va
+   * OTP SMS faqat tizim hodisalaridan ketadi. Shablon ham `promo` bo'lishi shart.
+   */
+  @ApiPropertyOptional({
+    enum: ['promo'],
+    example: 'promo',
+    description:
+      "Faqat 'promo' (berilmasa ham promo). 'transactional'/'security' — 400 campaign_promo_only",
+  })
   @IsOptional()
-  @IsIn(['promo', 'transactional'])
-  message_class?: 'promo' | 'transactional';
+  @IsIn(['promo'], {
+    message:
+      "message_class: kampaniya faqat 'promo' — xizmat/OTP SMS faqat tizim hodisalaridan ketadi",
+  })
+  message_class?: 'promo';
 
   @ApiPropertyOptional({ example: 'Yangi mavsum chegirmalari!' })
   @IsOptional()

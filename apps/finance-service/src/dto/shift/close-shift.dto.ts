@@ -26,4 +26,13 @@ export class CloseShiftDto {
   @IsOptional()
   @IsString()
   comment?: string;
+
+  /**
+   * R6 — kassa doirasi (filial ID). Gateway faqat menejer uchun qo'yadi:
+   * smena shu kassaniki bo'lishi shart, aks holda 404. Berilmasa — avvalgidek.
+   */
+  @IsOptional()
+  @IsString()
+  @Matches(/^\d+$/)
+  cashbox_user_id?: string;
 }

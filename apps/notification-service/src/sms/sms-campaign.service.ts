@@ -30,6 +30,7 @@ export interface CampaignSegment {
 }
 
 export interface CampaignInput {
+  /** Faqat 'promo' (berilmasa ham promo); boshqasi — 400 campaign_promo_only. */
   message_class?: string;
   text?: string | null;
   template_code?: string | null;
@@ -50,8 +51,26 @@ const rpcError = (
 ) => new RpcException({ statusCode, message, ...extra });
 
 /**
- * Reklama/xabar kampaniyasi (sVByLMnt #5-#7): segment → rozilik darvozasi
- * (reklama uchun fail-closed) → tasdiq oynasi uchun prognoz → navbat → tarix.
+ * (sVByLMnt) Kampaniya FAQAT reklama: admin yozgan ommaviy xabar mijoz
+ * segmentiga — bu reklama, rozilik va 18:00–09:00 taqiqi SHART. Ilgari
+ * `message_class='transactional'` ("Xizmat xabari") ikkala darvozani
+ * chetlab o'tardi — reklama matnini tunda roziliksiz yuborish mumkin edi.
+ * Transaksion istisnosi PQ-265 da alohida yozilmagan (yurist), shuning uchun
+ * xizmat (transactional) va OTP (security) SMS faqat TIZIM hodisalaridan
+ * ketadi: buyurtma holati dispatch'i, CRITICAL eskalatsiya, OTP.
+ */
+const CAMPAIGN_PROMO_ONLY =
+  "Kampaniya faqat reklama (message_class='promo') — rozilik va 18:00–09:00 taqiqi bilan. Xizmat (transactional) va OTP (security) SMS faqat tizim hodisalaridan (buyurtma holati, OTP) avtomatik ketadi.";
+
+const promoOnly = (requested: unknown) =>
+  rpcError(400, CAMPAIGN_PROMO_ONLY, {
+    reason: 'campaign_promo_only',
+    message_class: requested ?? null,
+  });
+
+/**
+ * Reklama kampaniyasi (sVByLMnt #5-#7): segment → rozilik darvozasi
+ * (fail-closed) → tasdiq oynasi uchun prognoz → navbat → tarix.
  */
 @Injectable()
 export class SmsCampaignService {
@@ -224,16 +243,14 @@ export class SmsCampaignService {
     );
     const total = recipients.length + invalid;
 
-    const { allowed, blocked } =
-      messageClass === 'promo'
-        ? await this.consent.partition(recipients)
-        : { allowed: recipients, blocked: [] as Recipient[] };
+    // Kampaniya faqat reklama — rozilik darvozasi chetlab o'tilmaydi.
+    const { allowed, blocked } = await this.consent.partition(recipients);
 
     // Prognoz: reklamada bekor qilish havolasi ham bo'lak hisobiga KIRADI.
-    const sampleText =
-      messageClass === 'promo'
-        ? this.consent.appendOptOut(text, allowed[0]?.phone ?? '+998900000000')
-        : text;
+    const sampleText = this.consent.appendOptOut(
+      text,
+      allowed[0]?.phone ?? '+998900000000',
+    );
     if (sampleText === null) {
       throw rpcError(
         409,
@@ -259,9 +276,14 @@ export class SmsCampaignService {
     };
   }
 
-  private async resolveText(
-    input: CampaignInput,
-  ): Promise<{ messageClass: SmsMessageClass; text: string }> {
+  private async resolveText(input: CampaignInput): Promise<{
+    messageClass: Extract<SmsMessageClass, 'promo'>;
+    text: string;
+  }> {
+    // Berilmasa — reklama (kampaniyaning yagona sinfi, eng qat'iy yo'l).
+    const requested = input.message_class ?? 'promo';
+    if (requested !== 'promo') throw promoOnly(requested);
+    const messageClass = 'promo' as const;
     if (input.template_code) {
       const template = await this.templates.resolve(
         input.template_code,
@@ -269,9 +291,12 @@ export class SmsCampaignService {
       );
       if (!template)
         throw rpcError(404, `Shablon topilmadi: ${input.template_code}`);
+      // Tranzaksion/OTP shabloni kampaniyada — darvozalarni chetlab o'tish yo'li.
+      if (template.message_class !== 'promo')
+        throw promoOnly(template.message_class);
       try {
         return {
-          messageClass: template.message_class,
+          messageClass,
           text: renderSmsTemplate(
             template.text,
             input.vars ?? {},
@@ -285,14 +310,6 @@ export class SmsCampaignService {
         throw error;
       }
     }
-    const messageClass =
-      input.message_class === 'promo'
-        ? 'promo'
-        : input.message_class === 'transactional'
-          ? 'transactional'
-          : null;
-    if (!messageClass)
-      throw rpcError(400, "message_class: 'promo' yoki 'transactional'");
     const text = String(input.text ?? '').trim();
     if (!text) throw rpcError(400, "Xabar matni bo'sh");
     try {

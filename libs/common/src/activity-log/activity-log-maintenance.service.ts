@@ -10,8 +10,11 @@ import { ActivityLog } from './activity-log.entity';
 import { ActivityLogService } from './activity-log.service';
 import { quoteActivityLogTable } from './retention';
 import {
+  ACTIVITY_LOG_ARCHIVE_TABLE,
   ActivityLogRetentionPolicy,
+  activityLogArchiveExists,
   countByRule,
+  isActivityLogArchiveEnabled,
   pruneByRuleBatched,
   resolveActivityLogRetentionPolicy,
   resolvePruneBatchSize,
@@ -22,8 +25,21 @@ import { ACTIVITY_LOG_SERVICE_NAME, ActivityLogInput } from './types';
 export interface ActivityLogPruneReport {
   service: string | null;
   dryRun: boolean;
-  rules: Array<{ name: string; days: number; count: number; batches: number }>;
+  rules: Array<{
+    name: string;
+    days: number;
+    count: number;
+    batches: number;
+    /** i6Nyedea — arxivga ko'chirilgan qatorlar (faqat ko'chirish rejimida). */
+    archived?: number;
+  }>;
   warnings: string[];
+  /**
+   * i6Nyedea arxiv holati: `enabled` — `ACTIVITY_LOG_PRUNE_ARCHIVE` (sukut
+   * yoqiq), `ready` — arxiv jadvali bor (dry-run'da ham tekshiriladi:
+   * bayroqni yoqishdan oldin ko'rinsin).
+   */
+  archive: { enabled: boolean; table: string; ready: boolean | null };
 }
 
 /** `ACTIVITY_LOG_LOGIN_DEDUP_MINUTES` — sukut 10 daqiqa; `0` — o'chiq. */
@@ -81,6 +97,11 @@ export class ActivityLogMaintenanceService {
    * qaytadi — u TIZIM log'iga yozadi, `activity_logs` ga EMAS (jadval
    * o'zini o'zi to'ldirmasin). Xato — yuqoriga (monitoringga chiqarish
    * chaqiruvchining ishi, jim yutilmaydi).
+   *
+   * i6Nyedea ARXIV (sukut yoqiq, `ACTIVITY_LOG_PRUNE_ARCHIVE`): o'chirish
+   * o'rniga KO'CHIRISH — AYNI sxemadagi `activity_logs_archive` ga, har
+   * partiya bitta SQL buyrug'ida (DELETE + INSERT birga). Arxiv jadvali
+   * yo'q bo'lsa — HECH NARSA o'chirilmaydi, xato yuqoriga (monitoring).
    */
   async pruneByPolicy(opts: {
     dryRun: boolean;
@@ -88,12 +109,32 @@ export class ActivityLogMaintenanceService {
     batchSize?: number;
     pauseMs?: number;
     sleep?: (ms: number) => Promise<void>;
+    /** Berilmasa — `isActivityLogArchiveEnabled()` (sukut `true`). */
+    archive?: boolean;
   }): Promise<ActivityLogPruneReport> {
     const policy = opts.policy ?? resolveActivityLogRetentionPolicy();
     const { schema, tableName } = this.repo.metadata;
     const table = quoteActivityLogTable(schema, tableName);
+    const archiveTable = quoteActivityLogTable(
+      schema,
+      ACTIVITY_LOG_ARCHIVE_TABLE,
+    );
     const run = (sql: string, params: unknown[]): Promise<unknown> =>
       this.repo.query(sql, params);
+    const archiveEnabled = opts.archive ?? isActivityLogArchiveEnabled();
+    const archive: ActivityLogPruneReport['archive'] = {
+      enabled: archiveEnabled,
+      table: archiveTable,
+      ready: archiveEnabled
+        ? await activityLogArchiveExists(run, archiveTable)
+        : null,
+    };
+    if (!opts.dryRun && archiveEnabled && !archive.ready) {
+      throw new Error(
+        `activity_logs arxiv jadvali yo'q (${archiveTable}) — migratsiya 1716000000101 ishlamagan; ` +
+          `hech qanday qator o'chirilmadi (arxivsiz o'chirish uchun ACTIVITY_LOG_PRUNE_ARCHIVE=false)`,
+      );
+    }
     const rules: ActivityLogPruneReport['rules'] = [];
     for (const rule of policy.rules) {
       if (opts.dryRun) {
@@ -109,12 +150,14 @@ export class ActivityLogMaintenanceService {
         batchSize: opts.batchSize ?? resolvePruneBatchSize(),
         pauseMs: opts.pauseMs ?? resolvePrunePauseMs(),
         sleep: opts.sleep,
+        ...(archiveEnabled ? { archiveTable } : {}),
       });
       rules.push({
         name: rule.name,
         days: rule.days,
         count: res.deleted,
         batches: res.batches,
+        ...(res.archived !== undefined ? { archived: res.archived } : {}),
       });
     }
     return {
@@ -122,6 +165,7 @@ export class ActivityLogMaintenanceService {
       dryRun: opts.dryRun,
       rules,
       warnings: policy.warnings,
+      archive,
     };
   }
 

@@ -263,6 +263,134 @@ describe('SmsOutboxService', () => {
         clientMessageIds: ['notif-1'],
       });
     });
+
+    const promoOne = {
+      to: '+998901234567',
+      text: 'Kuzgi chegirma 20%',
+      messageClass: 'promo' as const,
+    };
+    const otpOne = {
+      to: '+998901234567',
+      text: 'Elchi tasdiqlash kodi: 123456',
+      messageClass: 'security' as const,
+      senderProfile: 'otp' as const,
+    };
+    /** Umumiy oqim `general` (Not(In(['security']))) — `generalUsed`, OTP — `otpUsed`. */
+    const usage = (generalUsed: number, otpUsed = 0) =>
+      count.mockImplementation(({ where }) => {
+        calls.push('count');
+        return Promise.resolve(
+          where.message_class.type === 'not' ? generalUsed : otpUsed,
+        );
+      });
+
+    it('3fRbyadQ TC6: reklama ham UMUMIY kvotada — to‘la (500/500) bo‘lsa promo FAIL-CLOSED: qator yo‘q, aniq sabab; OTP o‘z kvotasi bilan ketadi', async () => {
+      usage(500);
+      const error = await make()
+        .enqueue([promoOne])
+        .catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(SmsBlockedError);
+      expect(error).toMatchObject({
+        reason: 'daily_cap_exceeded',
+        details: { used: 500, requested: 1, cap: 500, stream: 'general' },
+      });
+      expect((error as Error).message).toContain('SMS_DAILY_CAP');
+      expect(insert).not.toHaveBeenCalled();
+
+      await expect(make().enqueue([otpOne])).resolves.toMatchObject({
+        queued: [expect.any(Object)],
+      });
+      expect(insert).toHaveBeenCalledTimes(1);
+      expect(insert.mock.calls[0][0]).toEqual([
+        expect.objectContaining({ message_class: 'security' }),
+      ]);
+    });
+
+    it('3fRbyadQ TC6: chegara aniq — 499/500 da aralash partiya (promo + tranzaksion = 2) BUTUNLAY rad, qisman yozilmaydi; 1 tasi o‘tadi', async () => {
+      usage(499);
+      await expect(
+        make().enqueue([promoOne, { ...one, to: '+998907654321' }]),
+      ).rejects.toMatchObject({
+        reason: 'daily_cap_exceeded',
+        details: { used: 499, requested: 2, cap: 500 },
+      });
+      expect(insert).not.toHaveBeenCalled();
+      await expect(make().enqueue([one])).resolves.toMatchObject({
+        queued: [expect.any(Object)],
+      });
+    });
+
+    it('3fRbyadQ TC6: OTP kvotasi (SMS_OTP_DAILY_CAP) to‘la — OTP ham FAIL-CLOSED, umumiy oqim ishlayveradi', async () => {
+      usage(0, 50);
+      await expect(
+        make(env({ SMS_OTP_DAILY_CAP: '50' })).enqueue([otpOne]),
+      ).rejects.toMatchObject({
+        reason: 'daily_cap_exceeded',
+        details: { stream: 'otp', cap: 50, used: 50 },
+      });
+      expect(insert).not.toHaveBeenCalled();
+      await expect(
+        make(env({ SMS_OTP_DAILY_CAP: '50' })).enqueue([one]),
+      ).resolves.toMatchObject({ queued: [expect.any(Object)] });
+    });
+  });
+
+  // ============ sVByLMnt TC8 — tungi oyna faqat reklamaga ============
+
+  describe('sVByLMnt TC8: tunda navbatga qo‘yish — OTP va tranzaksion darhol, reklama 09:00 ga', () => {
+    const tashkent = (iso: string) => new Date(`${iso}+05:00`);
+    const batch = [
+      {
+        to: '+998901111111',
+        text: 'Elchi tasdiqlash kodi: 123456',
+        messageClass: 'security' as const,
+        senderProfile: 'otp' as const,
+        clientMessageId: 'otp-1',
+      },
+      {
+        to: '+998902222222',
+        text: 'Buyurtma #12 yetkazildi',
+        messageClass: 'transactional' as const,
+        clientMessageId: 'notif-12',
+      },
+      {
+        to: '+998903333333',
+        text: 'Kuzgi chegirma 20%',
+        messageClass: 'promo' as const,
+        clientMessageId: 'camp-1-998903333333',
+      },
+    ];
+    const scheduled = () =>
+      new Map(
+        (
+          insert.mock.calls[0][0] as Array<{
+            client_message_id: string;
+            scheduled_at: Date;
+          }>
+        ).map((row) => [row.client_message_id, row.scheduled_at]),
+      );
+
+    it.each([
+      ['02:00', '2026-10-14T02:00:00', '2026-10-14T09:00:00'],
+      ['18:00', '2026-10-14T18:00:00', '2026-10-15T09:00:00'],
+      ['23:30', '2026-10-14T23:30:00', '2026-10-15T09:00:00'],
+    ])(
+      'Toshkent %s: security/transactional scheduled_at = hozir, promo = keyingi 09:00',
+      async (_label, at, release) => {
+        const now = tashkent(at);
+        await make().enqueue(batch, { now });
+        const byId = scheduled();
+        expect(byId.get('otp-1')).toEqual(now);
+        expect(byId.get('notif-12')).toEqual(now);
+        expect(byId.get('camp-1-998903333333')).toEqual(tashkent(release));
+      },
+    );
+
+    it('kunduzi 10:00 — hammasi darhol (reklama ham)', async () => {
+      const now = tashkent('2026-10-14T10:00:00');
+      await make().enqueue(batch, { now });
+      expect([...scheduled().values()]).toEqual([now, now, now]);
+    });
   });
 
   // ==================== 8auPBa1O #5 — narx ====================

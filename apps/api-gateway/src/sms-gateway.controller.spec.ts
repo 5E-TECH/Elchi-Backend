@@ -111,6 +111,27 @@ describe('SMS gateway routes', () => {
     });
   });
 
+  it("(sVByLMnt) campaign is promo-only: 'transactional'/'security' → 400 before the service (preview and send)", async () => {
+    for (const messageClass of ['transactional', 'security']) {
+      const body = {
+        message_class: messageClass,
+        text: 'Kuzgi chegirma 20%',
+        segment: { phones: ['+998901111111'] },
+      };
+      const preview = await request(http())
+        .post('/notifications/sms/campaigns/preview')
+        .send(body)
+        .expect(400);
+      expect(JSON.stringify(preview.body)).toContain('promo');
+      await request(http())
+        .post('/notifications/sms/campaigns')
+        .set('Idempotency-Key', `k-${messageClass}`)
+        .send(body)
+        .expect(400);
+    }
+    expect(send).not.toHaveBeenCalled();
+  });
+
   it('validation: unknown provider / extra fields are rejected before reaching the service', async () => {
     await request(http())
       .put('/notifications/sms/accounts')

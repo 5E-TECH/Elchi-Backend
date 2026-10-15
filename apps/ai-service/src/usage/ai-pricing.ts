@@ -30,6 +30,31 @@ export const AI_MODEL_PRICES: Readonly<Record<string, AiModelPrice>> =
     'fable-5': { in: 10, out: 50 },
   });
 
+/**
+ * Anthropic prompt caching — model bo'yicha MINIMAL keshlanadigan prefiks
+ * (token). Undan qisqa prefiks `cache_control` bilan ham JIMGINA keshlanmaydi
+ * (xato yo'q, shunchaki `cache_creation_input_tokens: 0`). ⚠️ Chegara avlod
+ * bo'yicha monoton EMAS: haiku-4-5 = 4096, sonnet-5 / sonnet-4-6 = 1024,
+ * opus-5 / fable-5 = 512 (5Z1ZvvzE #3). `AI_MODEL_PRICES` dagi har model uchun
+ * shu yerda ham qiymat bo'lishi SHART (ai-pricing.spec).
+ */
+export const AI_MODEL_CACHE_MIN_TOKENS: Readonly<Record<string, number>> =
+  Object.freeze({
+    'opus-5': 512,
+    'sonnet-5': 1024,
+    'sonnet-4-6': 1024,
+    'haiku-4-5': 4096,
+    'fable-5': 512,
+  });
+
+/** Kesh chegarasi; noma'lum model → `null` (keshga tayanilmaydi). */
+export function cacheMinTokensFor(model: string): number | null {
+  const key = normalizeModelId(model);
+  return Object.prototype.hasOwnProperty.call(AI_MODEL_CACHE_MIN_TOKENS, key)
+    ? AI_MODEL_CACHE_MIN_TOKENS[key]
+    : null;
+}
+
 /** Kesh yozish = kirish × 1.25 (Anthropic prompt caching, 5 daqiqa TTL). */
 export const CACHE_WRITE_MULTIPLIER = 1.25;
 /** Kesh o'qish = kirish × 0.1 — ya'ni tejash kirish narxining 90%. */

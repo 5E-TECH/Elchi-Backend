@@ -95,7 +95,12 @@ function normaliseBatchSize(
   return Number.isInteger(batchSize) && batchSize > 0 ? batchSize : fallback;
 }
 
-const KEYS_SQL = `ARRAY[${ACTIVITY_LOG_DEVICE_METADATA_KEYS.map((k) => `'${k}'`).join(', ')}]::text[]`;
+/**
+ * IP/qurilma kalitlari SQL massivi (`metadata - <shu>`). i6Nyedea: arxivga
+ * ko'chirishda ham ishlatiladi — arxivga bu kalitlar tushmaydi.
+ */
+export const ACTIVITY_LOG_DEVICE_KEYS_SQL = `ARRAY[${ACTIVITY_LOG_DEVICE_METADATA_KEYS.map((k) => `'${k}'`).join(', ')}]::text[]`;
+const KEYS_SQL = ACTIVITY_LOG_DEVICE_KEYS_SQL;
 
 /**
  * Bitta partiya: `$1` — chegara (shundan ESKI qatorlar), `$2` — oldingi

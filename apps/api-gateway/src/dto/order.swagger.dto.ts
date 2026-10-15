@@ -184,7 +184,10 @@ export class CreateOrderRequestDto {
   @ApiPropertyOptional({
     example: '1',
     description:
-      'Customer ID (as string/bigint) — faqat superadmin/admin uchun. Boshqa rollarda mijoz `customer` obyektidan aniqlanadi (fix3 RBAC-01).',
+      'Customer ID (as string/bigint). Superadmin/admin — istalgan mijoz. ' +
+      'POST /orders da boshqa rollar (market, filial xodimi) — FAQAT shu marketda buyurtmasi bor mijoz ' +
+      "(GET /customers/suggest taklifi, hiqRNhkI); doiradan tashqari id: `customer` obyekti bo'lsa u ishlatiladi, bo'lmasa 403. " +
+      'POST /orders/external da faqat superadmin/admin (fix3 RBAC-01).',
   })
   @IsOptional()
   @IsString()

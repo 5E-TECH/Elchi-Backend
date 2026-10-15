@@ -217,7 +217,11 @@ export class ExcelGatewayController {
         data?: EnrichedOrderRow[];
         total?: number;
       }>(this.orderClient, 'order.find_all_enriched', {
-        query: { ...baseQuery, page, limit: PAGE_SIZE },
+        // xWsCAA5N: order-service sahifani sukut bo'yicha 100 bilan
+        // cheklaydi — `max_limit`siz 1-sahifa 100 qator qaytib, sikl
+        // (`batch.length < PAGE_SIZE`) shu yerda to'xtardi: eksportda 100 dan
+        // ortiq buyurtma JIMGINA tushib qolardi.
+        query: { ...baseQuery, page, limit: PAGE_SIZE, max_limit: PAGE_SIZE },
       });
       const batch = res2?.data ?? [];
       rows.push(...batch);

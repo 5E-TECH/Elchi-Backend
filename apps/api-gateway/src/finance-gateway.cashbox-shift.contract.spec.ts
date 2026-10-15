@@ -23,6 +23,9 @@ describe('A4 — kassa/smena gateway kontrakti', () => {
   const branch = {
     send: jest.fn(() => of({ statusCode: 200, data: { id: '13' } })),
   };
+  const SUPERADMIN = { sub: '9', roles: ['superadmin'] };
+  // R6 — har testda JWT foydalanuvchisini almashtirish mumkin.
+  let currentUser: Record<string, unknown> = SUPERADMIN;
 
   beforeAll(async () => {
     const module = await Test.createTestingModule({
@@ -39,10 +42,7 @@ describe('A4 — kassa/smena gateway kontrakti', () => {
         canActivate: (context: {
           switchToHttp: () => { getRequest: () => any };
         }) => {
-          context.switchToHttp().getRequest().user = {
-            sub: '9',
-            roles: ['superadmin'],
-          };
+          context.switchToHttp().getRequest().user = currentUser;
           return true;
         },
       })
@@ -63,6 +63,7 @@ describe('A4 — kassa/smena gateway kontrakti', () => {
   beforeEach(() => {
     finance.send.mockClear();
     branch.send.mockClear();
+    currentUser = SUPERADMIN;
   });
 
   const lastPayload = () =>
@@ -144,11 +145,91 @@ describe('A4 — kassa/smena gateway kontrakti', () => {
         FinanceGatewayController.prototype,
         'currentShift',
       );
+      // R6: ochish/yopish/joriy — menejer ham (o'z filiali kassasi).
       expect(Reflect.getMetadata(ROLES_KEY, descriptor?.value)).toEqual([
         'superadmin',
         'admin',
         'registrator',
+        'manager',
       ]);
+      for (const method of ['openShift', 'closeShift']) {
+        const d = Object.getOwnPropertyDescriptor(
+          FinanceGatewayController.prototype,
+          method,
+        );
+        expect(Reflect.getMetadata(ROLES_KEY, d?.value)).toEqual([
+          'superadmin',
+          'admin',
+          'registrator',
+          'manager',
+        ]);
+      }
+    });
+  });
+
+  describe('R6 (QTCUUgjA) — menejer o`z filiali kassasi smenasi', () => {
+    const MANAGER = { sub: '25', roles: ['manager'], branch_id: '13' };
+
+    it('POST /finance/shift/open — menejer: cashbox_user_id = JWT filiali (body e`tiborsiz)', async () => {
+      currentUser = MANAGER;
+
+      const result = await request(app.getHttpServer())
+        .post('/finance/shift/open')
+        .send({ comment: 'ertalab' });
+
+      expect(result.status).toBe(201);
+      expect(lastPayload()).toEqual({
+        comment: 'ertalab',
+        opened_by: '25',
+        cashbox_user_id: '13',
+      });
+    });
+
+    it('POST /finance/shift/close — menejer: doira o`z filiali (MAIN smenasini yopa olmaydi)', async () => {
+      currentUser = MANAGER;
+
+      const result = await request(app.getHttpServer())
+        .post('/finance/shift/close')
+        .send({ comment: 'kech', closing_balance_cash: 1000 });
+
+      expect(result.status).toBeLessThan(300);
+      expect(lastPayload()).toEqual({
+        comment: 'kech',
+        closing_balance_cash: 1000,
+        closed_by: '25',
+        cashbox_user_id: '13',
+      });
+    });
+
+    it('GET /finance/shift/current — menejer: o`z filiali kassasi', async () => {
+      currentUser = MANAGER;
+
+      const result = await request(app.getHttpServer()).get(
+        '/finance/shift/current',
+      );
+
+      expect(result.status).toBe(200);
+      expect(finance.send).toHaveBeenCalledWith(
+        { cmd: 'finance.shift.current' },
+        { cashbox_user_id: '13' },
+      );
+    });
+
+    it('cashbox_user_id ni klient yubora olmaydi (whitelist) → 400', async () => {
+      const result = await request(app.getHttpServer())
+        .post('/finance/shift/open')
+        .send({ cashbox_user_id: '13' });
+
+      expect(result.status).toBe(400);
+      expect(finance.send).not.toHaveBeenCalled();
+    });
+
+    it('admin — doira yuborilmaydi (avvalgidek MAIN)', async () => {
+      currentUser = { sub: '9', roles: ['admin', 'manager'], branch_id: '13' };
+
+      await request(app.getHttpServer()).post('/finance/shift/open').send({});
+
+      expect(lastPayload()).toEqual({ opened_by: '9' });
     });
   });
 

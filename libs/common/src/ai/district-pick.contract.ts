@@ -17,6 +17,21 @@ export interface AiDistrictPoolEntry {
   index: number;
   region_name: string;
   district_name: string;
+  /**
+   * 1-asosli o'rin `AiDistrictPickRequest.catalog` ichida (KESH REJIMI). Bu ID
+   * EMAS — `ORDER BY id` ro'yxatdagi tartib raqami. Berilmasa — eski rejim
+   * (pool user blokida).
+   */
+  catalog_index?: number;
+}
+
+/**
+ * Tuman katalogi qatori — system-promptdagi BARQAROR ro'yxat (5Z1ZvvzE #3-4).
+ * Faqat NOMLAR (ID yo'q); tartib = `ORDER BY id`, raqam = o'rin + 1.
+ */
+export interface AiDistrictCatalogEntry {
+  region_name: string;
+  district_name: string;
 }
 
 export interface AiDistrictPickItem {
@@ -37,6 +52,13 @@ export interface AiDistrictPickRequest {
   /** Umumiy muddat (epoch ms). */
   deadline_at: number;
   items: AiDistrictPickItem[];
+  /**
+   * Barcha faol tumanlar `ORDER BY id` (ixtiyoriy, KESH REJIMI): ai-service
+   * uni system-promptga chiqaradi (`cache_control`), har item pooli esa
+   * `catalog_index` raqamlari bilan user blokda qoladi. Berilmasa yoki pool
+   * bilan mos kelmasa — eski rejim (to'liq pool user blokida).
+   */
+  catalog?: AiDistrictCatalogEntry[];
 }
 
 export type AiDistrictPickResponse =
@@ -53,3 +75,8 @@ export const AI_DISTRICT_SHORTLIST_SIZE = 45;
 export const AI_DISTRICT_POOL_MAX = 50;
 /** Bitta preview partiyasidan LLM'ga ko'pi bilan shuncha buyurtma. */
 export const AI_DISTRICT_MAX_ITEMS = 10;
+/**
+ * Katalog chegarasi (jonli baza — 181 tuman). Undan katta bo'lsa katalog
+ * yuborilmaydi / e'tiborsiz qoldiriladi — eski rejim.
+ */
+export const AI_DISTRICT_CATALOG_MAX = 400;

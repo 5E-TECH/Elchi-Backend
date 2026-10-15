@@ -101,6 +101,12 @@ export interface ActivityLogQuery {
   keys_only?: boolean;
   /** `false` — COUNT so'rovi bajarilmaydi (`meta.total` taxminiy). */
   with_total?: boolean;
+  /**
+   * i6Nyedea — `true`: so'rov ARXIV jadvalidan (`activity_logs_archive`,
+   * saqlash muddati o'tib ko'chirilgan qatorlar). Filtrlar va sahifalash
+   * AYNAN o'sha; qatorda qo'shimcha `archived_at`, `archive_rule`.
+   */
+  archive?: boolean;
 }
 
 export interface ActivityLogPage<T = unknown> {

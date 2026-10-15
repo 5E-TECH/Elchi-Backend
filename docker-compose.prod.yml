@@ -155,6 +155,9 @@ services:
   # ACTIVITY_LOG_RETENTION_DEFAULT_DAYS) and happens ONLY when
   # ACTIVITY_LOG_PRUNE_ENABLED=true in .env.production — otherwise dry-run
   # (counts only). ip/device metadata strip (f2Ud5tju) keeps running.
+  # Archive (i6Nyedea, default ON via ACTIVITY_LOG_PRUNE_ARCHIVE): pruned rows
+  # are MOVED to each schema's activity_logs_archive (migration 1716000000101),
+  # never just deleted; a schema without that table is skipped (exit 1).
   activity-log-prune:
     <<: *svc-limits
     image: node:20-alpine

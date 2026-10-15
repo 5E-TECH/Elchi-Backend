@@ -15,6 +15,7 @@ import {
   DistrictLlmFallbackService,
   NoopDistrictPicker,
   applyDistrictChoice,
+  buildDistrictCatalog,
   buildDistrictPool,
   districtRowsOf,
   isRiskyResolution,
@@ -298,6 +299,47 @@ describe('DistrictLlmFallbackService.refine', () => {
     expect(req.market_id).toBe('121');
     expect(out[0]?.district_id).toBe(pool[1].id);
     expect(out[0]?.district_name).toBe("Xo'jaobod");
+  });
+
+  it('TC9 (kesh): so‘rovda barqaror katalog — 181 tuman ORDER BY id, faqat nomlar; pool qatorlarida mos catalog_index', async () => {
+    const fx = setup(() =>
+      Promise.resolve({ picks: [{ item_index: 0, choice: 2 }] }),
+    );
+    // Teskari tartibdagi baza ham bir xil katalog beradi (bayt darajasida).
+    await fx.svc.refine([Q()], [REGION_LOCKED], CTX);
+    const req = fx.sent();
+    expect(req.catalog).toHaveLength(181);
+    expect(req.catalog?.[0]).toEqual({
+      region_name: 'Andijon viloyati',
+      district_name: 'Asaka',
+    });
+    expect(JSON.stringify(req.catalog)).not.toMatch(/"id"|sato/);
+    const expected = buildDistrictCatalog([...ROWS].reverse());
+    expect(JSON.stringify(req.catalog)).toBe(JSON.stringify(expected?.catalog));
+    // Viloyat qulfi saqlanadi: pool baribir faqat o'sha viloyat.
+    for (const p of req.items[0].pool) {
+      expect(p.catalog_index).toBeGreaterThanOrEqual(1);
+      expect(req.catalog?.[(p.catalog_index ?? 0) - 1]).toEqual({
+        region_name: p.region_name,
+        district_name: p.district_name,
+      });
+      expect(p.region_name).toBe('Andijon viloyati');
+    }
+    expect(req.items[0].pool.map((p) => p.catalog_index)).toEqual(
+      Array.from({ length: 13 }, (_, i) => i + 1),
+    );
+  });
+
+  it('katalog chegarasidan katta baza → katalog YUBORILMAYDI (eski rejim), catalog_index ham yo‘q', () => {
+    const many: DistrictRow[] = Array.from({ length: 401 }, (_, i) => ({
+      ...ROWS[0],
+      id: String(1000 + i),
+    }));
+    expect(buildDistrictCatalog(many)).toBeNull();
+    expect(buildDistrictCatalog([])).toBeNull();
+    expect(toPoolEntries(ROWS.slice(0, 2))[0]).not.toHaveProperty(
+      'catalog_index',
+    );
   });
 
   it('TC3: choice=0 → tuman null, viloyat SAQLANADI, boshqa viloyatga o‘tilmaydi', async () => {

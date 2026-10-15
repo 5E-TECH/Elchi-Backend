@@ -241,6 +241,112 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
       expect(first.message_class).toBe('security');
     });
 
+    const promo = (id: string) => ({
+      to: '+998903333333',
+      text: 'Kuzgi chegirma 20%',
+      messageClass: 'promo' as const,
+      clientMessageId: id,
+    });
+
+    it('3fRbyadQ TC6: reklama + tranzaksion BIRGA umumiy kvotani to‘ldiradi → keyingi reklama ham, tranzaksion ham FAIL-CLOSED (DB’da qator yo‘q); OTP o‘z kvotasi bilan ketadi', async () => {
+      env.SMS_DAILY_CAP = '3';
+      env.SMS_OTP_DAILY_CAP = '1';
+      await service.enqueue([promo('p-1'), { ...tx, clientMessageId: 'g-1' }]);
+      await service.enqueue([promo('p-2')]);
+      for (const next of [promo('p-3'), { ...tx, clientMessageId: 'g-2' }]) {
+        const error = await service.enqueue([next]).catch((e: unknown) => e);
+        expect(error).toBeInstanceOf(SmsBlockedError);
+        expect(error).toMatchObject({
+          reason: 'daily_cap_exceeded',
+          details: { used: 3, requested: 1, cap: 3, stream: 'general' },
+        });
+      }
+      // Kvota to'la — OTP baribir navbatga (alohida oqim), keyin OTP ham o'z chegarasida.
+      await service.enqueue([otp('otp-1')]);
+      await expect(service.enqueue([otp('otp-2')])).rejects.toMatchObject({
+        reason: 'daily_cap_exceeded',
+        details: { stream: 'otp', cap: 1 },
+      });
+      const stored = await rows();
+      expect(stored.map((row) => row.client_message_id).sort()).toEqual(
+        ['g-1', 'otp-1', 'p-1', 'p-2'].sort(),
+      );
+    });
+
+    it('sVByLMnt TC8: tunda (Toshkent 02:00) OTP va tranzaksion SHU tikda yuboriladi, reklama 09:00 gacha navbatda (tashlanmaydi)', async () => {
+      const tashkent = (iso: string) => new Date(`${iso}+05:00`);
+      const night = tashkent('2026-10-14T02:00:00');
+      await service.enqueue(
+        [
+          promo('night-promo'),
+          { ...tx, clientMessageId: 'night-tx' },
+          otp('night-otp'),
+        ],
+        { now: night },
+      );
+      const sent: Array<{ id: string; profile: string }> = [];
+      const registry = {
+        resolve: (profile: string) =>
+          Promise.resolve({
+            send: (input: { clientMessageId: string }) => {
+              sent.push({ id: input.clientMessageId, profile });
+              return Promise.resolve({
+                providerMessageId: `p-${input.clientMessageId}`,
+              });
+            },
+          }),
+        callbackUrl: () => null,
+      };
+      const scheduler = new SmsOutboxScheduler(
+        config,
+        service,
+        registry as never,
+        { addCronJob: jest.fn() } as never,
+        db,
+        consent as never,
+        new SmsGateService(config, db.getRepository(SmsOutbox)),
+      );
+
+      expect(await scheduler.tick(night)).toEqual({
+        processed: 2,
+        sent: 2,
+        failed: 0,
+      });
+      // OTP navbat boshida va o'z ('otp') akkaunti bilan.
+      expect(sent).toEqual([
+        { id: 'night-otp', profile: 'otp' },
+        { id: 'night-tx', profile: 'default' },
+      ]);
+      const byId = new Map(
+        (await rows()).map((row) => [row.client_message_id, row]),
+      );
+      expect(byId.get('night-promo')).toMatchObject({
+        status: 'pending',
+        attempts: 0,
+      });
+      expect(new Date(byId.get('night-promo')!.scheduled_at as string)).toEqual(
+        tashkent('2026-10-14T09:00:00'),
+      );
+
+      // 08:59 — hali taqiq: reklama egallanmaydi ham.
+      expect(await scheduler.tick(tashkent('2026-10-14T08:59:00'))).toEqual({
+        processed: 0,
+        sent: 0,
+        failed: 0,
+      });
+      // 09:00 — reklama ketadi.
+      expect(await scheduler.tick(tashkent('2026-10-14T09:00:00'))).toEqual({
+        processed: 1,
+        sent: 1,
+        failed: 0,
+      });
+      expect(sent.map((item) => item.id)).toEqual([
+        'night-otp',
+        'night-tx',
+        'night-promo',
+      ]);
+    });
+
     it('TC9: ikki parallel claimDue bitta qatorni ikki marta OLMAYDI (FOR UPDATE SKIP LOCKED)', async () => {
       await service.enqueue(
         Array.from({ length: 20 }, (_, i) => ({

@@ -1,5 +1,6 @@
 import { ACTIVITY_LOG_AUTH_ACTIONS } from './action-registry';
 import {
+  ACTIVITY_LOG_DEVICE_KEYS_SQL,
   ACTIVITY_LOG_PRUNE_BATCH_DEFAULT,
   ActivityLogSqlRunner,
   parseRetentionDays,
@@ -24,6 +25,14 @@ import {
  *     `ACTIVITY_LOG_RETENTION_DEFAULT_DAYS`, sukut 1095 kun (3 yil).
  * Pastki chegara: noto'g'ri yoki juda kichik qiymat (auth < 7, default <
  * 365) RAD etiladi va xavfsiz (uzun) sukut ishlaydi + ogohlantirish.
+ *
+ * ARXIV (karta 5-band: "o'chirishdan oldin arxiv — moliyaviy/huquqiy dalil
+ * yo'qolmasin"; variant — COLD JADVAL). Bayroq yoqilganda qatorlar
+ * o'chirilmaydi, KO'CHIRILADI: har sxemadagi `activity_logs_archive` ga
+ * (migratsiya 1716000000101), bitta SQL buyrug'ida (DELETE ... RETURNING →
+ * INSERT) — ikkalasi birga bo'ladi yoki birortasi ham bo'lmaydi.
+ * `ACTIVITY_LOG_PRUNE_ARCHIVE` sukut YOQIQ; faqat aniq `false` arxivsiz
+ * o'chirishga o'tkazadi. Arxiv jadvali yo'q sxemada o'chirish RAD etiladi.
  */
 
 export const ACTIVITY_LOG_PRUNE_ENABLED_ENV = 'ACTIVITY_LOG_PRUNE_ENABLED';
@@ -33,6 +42,10 @@ export const ACTIVITY_LOG_RETENTION_DEFAULT_DAYS_ENV =
   'ACTIVITY_LOG_RETENTION_DEFAULT_DAYS';
 export const ACTIVITY_LOG_PRUNE_BATCH_ENV = 'ACTIVITY_LOG_PRUNE_BATCH';
 export const ACTIVITY_LOG_PRUNE_PAUSE_MS_ENV = 'ACTIVITY_LOG_PRUNE_PAUSE_MS';
+/** i6Nyedea arxiv: `false`/`0`/`no`/`off` — arxivsiz o'chirish; qolgani — arxiv. */
+export const ACTIVITY_LOG_PRUNE_ARCHIVE_ENV = 'ACTIVITY_LOG_PRUNE_ARCHIVE';
+/** Har sxemadagi arxiv (cold) jadvali nomi. */
+export const ACTIVITY_LOG_ARCHIVE_TABLE = 'activity_logs_archive';
 
 export const ACTIVITY_LOG_RETENTION_AUTH_DEFAULT_DAYS = 90;
 export const ACTIVITY_LOG_RETENTION_AUTH_MIN_DAYS = 7;
@@ -52,6 +65,40 @@ export function isActivityLogPruneEnabled(env: Env = process.env): boolean {
     .toLowerCase();
   return raw === 'true' || raw === '1' || raw === 'yes' || raw === 'on';
 }
+
+/**
+ * Arxivga ko'chirish SUKUT bo'yicha YOQIQ (xavfsiz tomon): faqat aniq
+ * `false`/`0`/`no`/`off` uni o'chiradi; bo'sh yoki noma'lum qiymat — arxiv.
+ */
+export function isActivityLogArchiveEnabled(env: Env = process.env): boolean {
+  const raw = String(env[ACTIVITY_LOG_PRUNE_ARCHIVE_ENV] ?? '')
+    .trim()
+    .toLowerCase();
+  return !(raw === 'false' || raw === '0' || raw === 'no' || raw === 'off');
+}
+
+/**
+ * Arxivga ko'chiriladigan ustunlar — `ActivityLog` entity'sining HAMMA
+ * ustunlari (spec solishtiradi: entity'ga ustun qo'shilsa shu ro'yxat va
+ * arxiv migratsiyasi ham yangilanishi SHART, aks holda spec yiqiladi).
+ */
+export const ACTIVITY_LOG_ARCHIVE_COLUMNS: ReadonlyArray<string> =
+  Object.freeze([
+    'id',
+    'entity_type',
+    'entity_id',
+    'action',
+    'old_value',
+    'new_value',
+    'user_id',
+    'user_name',
+    'user_role',
+    'service',
+    'trace_id',
+    'metadata',
+    'description',
+    'created_at',
+  ]);
 
 export interface ActivityLogRetentionRule {
   name: 'auth' | 'default';
@@ -168,6 +215,67 @@ export function buildPolicyPruneSql(
 SELECT COUNT(*)::int AS deleted FROM deleted`;
 }
 
+/**
+ * i6Nyedea ARXIV partiyasi: bitta SQL buyrug'i — PK tartibida `LIMIT` ta
+ * qator hot jadvaldan O'CHIRILADI va AYNI qatorlar (`RETURNING`) arxivga
+ * YOZILADI. Postgres buyruqni bitta tranzaksiyada bajaradi: INSERT yiqilsa
+ * (arxiv jadvali yo'q, ustun mos emas, dublikat id) DELETE ham bekor —
+ * qator yo'qolmaydi. `ON CONFLICT` ATAYLAB yo'q: dublikat jim yutilmasin.
+ *
+ * `metadata` dan IP/qurilma kalitlari olib tashlanadi (f2Ud5tju: ko'chiriladigan
+ * har qator qurilma muddatidan eski — u eng qisqa qoida muddatidan oshmaydi).
+ *
+ * `$1` — kun, `$2` — fe'llar, `$3` — qoida nomi (`archive_rule`).
+ * Natija — bitta qator `{ deleted, archived }`.
+ */
+export function buildPolicyArchiveSql(
+  table: string,
+  archiveTable: string,
+  rule: ActivityLogRetentionRule,
+  batchSize: number,
+): string {
+  const limit =
+    Number.isInteger(batchSize) && batchSize > 0
+      ? batchSize
+      : ACTIVITY_LOG_PRUNE_BATCH_DEFAULT;
+  const cols = ACTIVITY_LOG_ARCHIVE_COLUMNS.map((c) => `"${c}"`);
+  const selected = cols.map((c) =>
+    c === '"metadata"'
+      ? `CASE WHEN jsonb_typeof(m."metadata") = 'object' THEN m."metadata" - ${ACTIVITY_LOG_DEVICE_KEYS_SQL} ELSE m."metadata" END`
+      : `m.${c}`,
+  );
+  return `WITH batch AS (
+  SELECT s.id FROM ${table} AS s
+   WHERE ${ruleWhere(rule, 's')}
+   ORDER BY s.id
+   LIMIT ${limit}
+), moved AS (
+  DELETE FROM ${table} AS t
+   WHERE t.id IN (SELECT id FROM batch)
+  RETURNING ${cols.map((c) => `t.${c}`).join(', ')}
+), archived AS (
+  INSERT INTO ${archiveTable} (${cols.join(', ')}, "archive_rule")
+  SELECT ${selected.join(', ')}, $3::varchar FROM moved AS m
+  RETURNING 1
+)
+SELECT (SELECT COUNT(*)::int FROM moved) AS deleted,
+       (SELECT COUNT(*)::int FROM archived) AS archived`;
+}
+
+/**
+ * Arxiv jadvali bormi (`"schema"."activity_logs_archive"`). Yo'q bo'lsa —
+ * o'chirish boshlanmaydi (dalil arxivsiz yo'qolmasin).
+ */
+export async function activityLogArchiveExists(
+  run: ActivityLogSqlRunner,
+  archiveTable: string,
+): Promise<boolean> {
+  const rows = (await run('SELECT to_regclass($1) IS NOT NULL AS ok', [
+    archiveTable,
+  ])) as Array<{ ok?: boolean }> | undefined;
+  return (Array.isArray(rows) ? rows[0] : undefined)?.ok === true;
+}
+
 /** Dry-run: o'chiriladigan qatorlar soni (AYNI shart). */
 export function buildPolicyCountSql(
   table: string,
@@ -181,6 +289,11 @@ export interface PolicyPruneOptions {
   pauseMs?: number;
   maxBatches?: number;
   sleep?: (ms: number) => Promise<void>;
+  /**
+   * i6Nyedea — berilsa qatorlar shu arxiv jadvaliga KO'CHIRILADI
+   * (`buildPolicyArchiveSql`); berilmasa — eski DELETE yo'li.
+   */
+  archiveTable?: string;
 }
 
 const defaultSleep = (ms: number) =>
@@ -196,7 +309,7 @@ export async function pruneByRuleBatched(
   table: string,
   rule: ActivityLogRetentionRule,
   opts: PolicyPruneOptions = {},
-): Promise<{ deleted: number; batches: number }> {
+): Promise<{ deleted: number; batches: number; archived?: number }> {
   if (!Number.isInteger(rule.days) || rule.days <= 0) {
     throw new RangeError(
       `activity_logs prune (${rule.name}): days musbat butun son bo'lishi kerak (${rule.days}).`,
@@ -209,21 +322,40 @@ export async function pruneByRuleBatched(
   const pauseMs = opts.pauseMs ?? ACTIVITY_LOG_PRUNE_PAUSE_MS_DEFAULT;
   const maxBatches = opts.maxBatches ?? ACTIVITY_LOG_PRUNE_MAX_BATCHES;
   const sleep = opts.sleep ?? defaultSleep;
-  const sql = buildPolicyPruneSql(table, rule, batchSize);
+  const archiveTable = opts.archiveTable;
+  const sql = archiveTable
+    ? buildPolicyArchiveSql(table, archiveTable, rule, batchSize)
+    : buildPolicyPruneSql(table, rule, batchSize);
+  const params = archiveTable
+    ? [rule.days, rule.actions, rule.name]
+    : [rule.days, rule.actions];
   let deleted = 0;
+  let archived = 0;
   let batches = 0;
   while (batches < maxBatches) {
-    const rows = (await run(sql, [rule.days, rule.actions])) as
-      | Array<{ deleted?: number | string }>
+    const rows = (await run(sql, params)) as
+      | Array<{ deleted?: number | string; archived?: number | string }>
       | undefined;
     batches += 1;
-    const n = Number((Array.isArray(rows) ? rows[0] : undefined)?.deleted ?? 0);
+    const row = Array.isArray(rows) ? rows[0] : undefined;
+    const n = Number(row?.deleted ?? 0);
+    if (archiveTable) {
+      const a = Number(row?.archived ?? 0);
+      // Bitta buyruqda mumkin emas (INSERT yiqilsa DELETE ham bekor), lekin
+      // driver/so'rov o'zgarsa — jim davom etmaydi, monitoringga chiqadi.
+      if (a !== n) {
+        throw new Error(
+          `activity_logs arxiv (${rule.name}): o'chirilgan ${n} != arxivlangan ${a} — ko'chirish to'xtatildi`,
+        );
+      }
+      if (Number.isFinite(a) && a > 0) archived += a;
+    }
     if (!Number.isFinite(n) || n <= 0) break;
     deleted += n;
     if (n < batchSize) break;
     if (pauseMs > 0) await sleep(pauseMs);
   }
-  return { deleted, batches };
+  return archiveTable ? { deleted, batches, archived } : { deleted, batches };
 }
 
 export async function countByRule(

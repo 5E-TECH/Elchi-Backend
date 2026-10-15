@@ -33,6 +33,9 @@ export const ACTIVITY_LOG_PRUNE_CRON_DISABLED_ENV =
  * - ⚠️ `ACTIVITY_LOG_PRUNE_ENABLED=true` bo'lmaguncha DRY-RUN: hech narsa
  *   o'chirilmaydi, faqat sanaladi va TIZIM log'iga yoziladi.
  * - Natija `activity_logs` ga YOZILMAYDI (jadval o'zini to'ldirmasin).
+ * - i6Nyedea arxiv: yoqilganda qatorlar `activity_logs_archive` ga
+ *   KO'CHIRILADI; dry-run'da arxiv jadvali yo'q bo'lsa — ogohlantirish
+ *   (bayroq yoqilsa o'chirish shu sababli rad etiladi).
  * - Xato — `logger.error` + Sentry (`captureException`), jim yutilmaydi;
  *   servisni yiqitmaydi.
  * - `@nestjs/schedule` modulisiz (servis modullariga tegilmaydi) —
@@ -116,12 +119,26 @@ export class ActivityLogRetentionScheduler
     try {
       const report = await this.maintenance.pruneByPolicy({ dryRun });
       for (const warning of report.warnings) this.logger.warn(warning);
+      const archive = report.archive;
+      if (archive?.enabled && archive.ready === false) {
+        this.logger.warn(
+          `activity_logs retention [${this.serviceName ?? '-'}]: arxiv jadvali yo'q (${archive.table}) — ` +
+            `ACTIVITY_LOG_PRUNE_ENABLED yoqilsa o'chirish RAD etiladi (migratsiya 1716000000101)`,
+        );
+      }
       const summary = report.rules
         .map((r) => `${r.name}(${r.days} kun)=${r.count}`)
         .join(', ');
+      const verb = dryRun
+        ? archive?.enabled
+          ? "dry-run — arxivga ko'chiriladigan"
+          : "dry-run — o'chiriladigan"
+        : archive?.enabled
+          ? "arxivga ko'chirildi"
+          : "o'chirildi (ARXIVSIZ)";
       this.logger.log(
         `activity_logs retention [${this.serviceName ?? '-'}] ` +
-          `${dryRun ? "dry-run — o'chiriladigan" : "o'chirildi"}: ${summary}; ` +
+          `${verb}: ${summary}; ` +
           `${Date.now() - startedAt} ms`,
       );
       return report;

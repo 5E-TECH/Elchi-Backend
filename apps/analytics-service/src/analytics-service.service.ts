@@ -76,6 +76,25 @@ const COURIER_LEADERBOARD_SIZE = 10;
  * order-service'dan so'raladigan to'liq reyting chegarasi (kuryerlar soni).
  */
 const COURIER_LEADERBOARD_SCAN_LIMIT = 500;
+/**
+ * (9zbSDkUI, 1-variant) Admin/filial dashboardida bitta Toshkent kuni
+ * tanlanganda "Top marketlar"/"Top filiallar" shu kun bilan tugaydigan oxirgi
+ * N kun bo'yicha olinadi (BeePost "Last 30 Days" naqshi).
+ */
+const DASHBOARD_RANKING_FALLBACK_DAYS = 30;
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** Dashboard reyting oynasi qaysi qoida bilan tanlangani (FE yorlig'i uchun). */
+type DashboardRankingRule = 'last_30_days' | 'selected_range';
+
+interface DashboardRankingWindow {
+  startDate: string;
+  endDate: string;
+  period_rule: DashboardRankingRule;
+  period_days: number | null;
+  selected_from: string;
+  selected_to: string;
+}
 
 @Injectable()
 export class AnalyticsServiceService {
@@ -386,6 +405,67 @@ export class AnalyticsServiceService {
           }
         : null;
     return { items, meta };
+  }
+
+  /**
+   * (9zbSDkUI, 1-variant) Admin/filial dashboardidagi `top_markets` /
+   * `top_branches` oynasi. Tanlangan davr bitta Toshkent kalendar kuni bo'lsa
+   * (standart "Bugun", sanasiz so'rov yoki startDate=endDate) — reyting shu kun
+   * bilan tugaydigan oxirgi 30 kun bo'yicha (kunlik ko'rinishda kartalar bo'sh
+   * turmasin). 2+ kunlik davr (shu jumladan `all=true`) — AYNAN tanlangan davr
+   * (PQt3n1N0: 01.09–18.09 reytingi shu davrdan). `selected_*` — foydalanuvchi
+   * tanlagan davr, reytingning haqiqiy oynasi esa meta `from`/`to` da.
+   */
+  private dashboardRankingWindow(normalized: {
+    startDate: string;
+    endDate: string;
+  }): DashboardRankingWindow {
+    const start = new Date(normalized.startDate);
+    const end = new Date(normalized.endDate);
+    const selected = {
+      selected_from: normalized.startDate,
+      selected_to: normalized.endDate,
+    };
+    const isSingleTashkentDay =
+      start.getTime() <= end.getTime() &&
+      startOfTashkentDay(end).getTime() <= start.getTime();
+    if (!isSingleTashkentDay) {
+      return {
+        startDate: normalized.startDate,
+        endDate: normalized.endDate,
+        period_rule: 'selected_range',
+        period_days: null,
+        ...selected,
+      };
+    }
+    const from = new Date(
+      startOfTashkentDay(end).getTime() -
+        (DASHBOARD_RANKING_FALLBACK_DAYS - 1) * DAY_MS,
+    );
+    return {
+      startDate: from.toISOString(),
+      endDate: normalized.endDate,
+      period_rule: 'last_30_days',
+      period_days: DASHBOARD_RANKING_FALLBACK_DAYS,
+      ...selected,
+    };
+  }
+
+  /** `ranking()` meta'siga dashboard reyting qoidasini qo'shadi (9zbSDkUI). */
+  private dashboardRanking(response: unknown, window: DashboardRankingWindow) {
+    const { items, meta } = this.ranking(response);
+    return {
+      items,
+      meta: meta
+        ? {
+            ...meta,
+            period_rule: window.period_rule,
+            period_days: window.period_days,
+            selected_from: window.selected_from,
+            selected_to: window.selected_to,
+          }
+        : null,
+    };
   }
 
   /**
@@ -851,6 +931,15 @@ export class AnalyticsServiceService {
       period: filter.period,
       all: filter.all,
     };
+    // (9zbSDkUI) reytinglar oynasi: 1 kun → oxirgi 30 kun, aks holda tanlangan
+    // davr. Filial doirasi (`branch_id`) va `all` bayrog'i saqlanadi.
+    const rankingWindow = this.dashboardRankingWindow(normalized);
+    const rankingRange = {
+      ...scopedRange,
+      startDate: rankingWindow.startDate,
+      endDate: rankingWindow.endDate,
+      include_meta: true,
+    };
     const [
       orders,
       markets,
@@ -883,14 +972,14 @@ export class AnalyticsServiceService {
       this.readPart(
         this.orderClient,
         'order.analytics.top_markets',
-        { ...scopedRange, include_meta: true },
+        rankingRange,
         failedParts,
         'topMarkets',
       ),
       this.readPart(
         this.orderClient,
         'order.analytics.top_branches',
-        { ...scopedRange, include_meta: true },
+        rankingRange,
         failedParts,
         'topBranches',
       ),
@@ -909,16 +998,21 @@ export class AnalyticsServiceService {
       isRegistrator,
     );
     const allTime = isAllTime ? this.allTimeRangeMeta(ordersOverview) : null;
+    const topMarketsRanking = this.dashboardRanking(topMarkets, rankingWindow);
+    const topBranchesRanking = this.dashboardRanking(
+      topBranches,
+      rankingWindow,
+    );
 
     return successRes(
       {
         orders: safeOrdersOverview,
         markets: this.projectStatsRows(markets, 'market'),
         couriers: this.projectStatsRows(couriers, 'courier'),
-        topMarkets: this.ranking(topMarkets).items,
-        topMarketsMeta: this.ranking(topMarkets).meta,
-        topBranches: this.ranking(topBranches).items,
-        topBranchesMeta: this.ranking(topBranches).meta,
+        topMarkets: topMarketsRanking.items,
+        topMarketsMeta: topMarketsRanking.meta,
+        topBranches: topBranchesRanking.items,
+        topBranchesMeta: topBranchesRanking.meta,
         branchDashboard,
         degraded: failedParts.length > 0,
         failed_parts: failedParts.sort(),

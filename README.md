@@ -115,7 +115,8 @@ emas. Shuning uchun tartib QAT'IY:
 
 1. SSH → serverdagi `.env.production` ga AI kalitlari QO'LDA qo'shiladi:
    `ANTHROPIC_API_KEY=sk-ant-…` (faqat shu yerda), `AI_ORDER_MODEL`,
-   `AI_ORDER_VISION_MODEL`, `AI_CLASSIFY_MODEL`, `AI_DAILY_USD_CAP`, … (ro'yxat —
+   `AI_ORDER_VISION_MODEL`, `AI_CLASSIFY_MODEL`, `AI_DISTRICT_MODEL`,
+   `AI_DAILY_USD_CAP`, … (ro'yxat —
    `.env.example` "AI Order" bo'limi). `AI_ORDER_ENABLED=false` bilan boshlang.
 2. Repodagi `.env.example` ga faqat bo'sh qiymat yoki `__REPLACE_WITH_…__`
    placeholder yoziladi (gitleaks allowlist). Kalit HECH QACHON

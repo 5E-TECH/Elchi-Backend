@@ -22,7 +22,11 @@ import { BranchTransferBatchService } from './transfer-batch/branch-transfer-bat
 import { OrderSettlementService } from './settlement/order-settlement.service';
 import { OrderLifecycleService } from './lifecycle/order-lifecycle.service';
 import type { PartlySellRequestItem } from './lifecycle/partly-sell-items';
-import { OrderHolderType, Order_source } from './entities/order.entity';
+import {
+  OrderCreatedVia,
+  OrderHolderType,
+  Order_source,
+} from './entities/order.entity';
 import { AiPreviewService } from './ai/ai-preview.service';
 import type { AiResolvePreviewRequest } from './ai/ai-preview.types';
 import {
@@ -156,6 +160,11 @@ export class OrderServiceController {
       ai_signature?: string;
       /** vncdmXOy: activity_log CREATED metadata'siga AI belgisi. */
       ai_audit?: Record<string, unknown>;
+      /**
+       * (Celz3rKJ) Yaratish kanali — faqat gateway bot yo'li (`'bot'`)
+       * yuboradi, YUQORI darajada (mijoz DTO'sida emas).
+       */
+      created_via?: string;
     },
     @Ctx() context: RmqContext,
   ) {
@@ -170,11 +179,17 @@ export class OrderServiceController {
     const auditMetadata = isAiRequest
       ? sanitizeAiAuditMetadata(data.ai_audit)
       : null;
+    // (Celz3rKJ) oq ro'yxat: faqat aynan 'bot'; boshqa qiymat e'tiborsiz.
+    const createdVia =
+      data.created_via === OrderCreatedVia.BOT ? OrderCreatedVia.BOT : null;
+    const lifecycleOpts = {
+      ...(auditMetadata ? { auditMetadata } : {}),
+      ...(createdVia ? { createdVia } : {}),
+    };
+    // opts bo'sh bo'lsa umuman uzatilmaydi — oddiy yo'l o'zgarmaydi.
     const create = () =>
-      auditMetadata
-        ? this.lifecycleService.create(data.dto, data.requester, {
-            auditMetadata,
-          })
+      Object.keys(lifecycleOpts).length > 0
+        ? this.lifecycleService.create(data.dto, data.requester, lifecycleOpts)
         : this.lifecycleService.create(data.dto, data.requester);
     return executeIdempotent(
       this.rmqService,

@@ -22,6 +22,7 @@ export * from './outbox/outbox.module';
 export * from './outbox/tokens';
 
 export * from './activity-log/activity-log.entity';
+export * from './activity-log/activity-log-archive.entity';
 export * from './activity-log/activity-log.service';
 export * from './activity-log/activity-log.module';
 export * from './activity-log/types';

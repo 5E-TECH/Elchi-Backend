@@ -138,5 +138,7 @@ describe('model sukutlari va narx jadvali (LP3RKvXY TC4, TC12)', () => {
     expect(v.AI_ORDER_MODEL).toBe(AI_MODEL_DEFAULTS.order);
     expect(v.AI_ORDER_VISION_MODEL).toBe(AI_MODEL_DEFAULTS.vision);
     expect(v.AI_CLASSIFY_MODEL).toBe(AI_MODEL_DEFAULTS.classify);
+    // 5Z1ZvvzE: tuman fallback'i alohida (kesh chegarasi 1024 bo'lgan model).
+    expect(v.AI_DISTRICT_MODEL).toBe(AI_MODEL_DEFAULTS.district);
   });
 });

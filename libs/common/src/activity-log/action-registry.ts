@@ -137,6 +137,43 @@ export const ACTIVITY_ACTION_REGISTRY: Readonly<
   // ---- moliya ----
   'finance.manual_income': entry("Qo'lda kirim", 'finance', 'plus', 'green'),
   'finance.manual_expense': entry("Qo'lda chiqim", 'finance', 'minus', 'rose'),
+  // 3PE0B03q (R6): nomli kassa kartalari
+  'finance.card_created': entry(
+    'Kassa kartasi yaratildi',
+    'finance',
+    'plus',
+    'green',
+  ),
+  'finance.card_renamed': entry(
+    "Kassa kartasi nomi o'zgartirildi",
+    'finance',
+    'edit',
+    'blue',
+  ),
+  'finance.card_activated': entry(
+    'Kassa kartasi faollashtirildi',
+    'finance',
+    'check',
+    'green',
+  ),
+  'finance.card_archived': entry(
+    'Kassa kartasi arxivlandi',
+    'finance',
+    'stop',
+    'slate',
+  ),
+  'finance.card_transfer': entry(
+    "Kartadan kartaga o'tkazma",
+    'finance',
+    'swap',
+    'blue',
+  ),
+  'finance.card_convert': entry(
+    'Karta ↔ naqd konvertatsiya',
+    'finance',
+    'swap',
+    'cyan',
+  ),
   'finance.balance_update': entry(
     "Balans o'zgartirildi",
     'finance',

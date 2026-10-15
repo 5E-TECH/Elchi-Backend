@@ -30,7 +30,16 @@ describe('vpKijXce — investor gateway: /investors/me va requester', () => {
   beforeAll(async () => {
     const module = await Test.createTestingModule({
       controllers: [InvestorGatewayController],
-      providers: [{ provide: 'INVESTOR', useValue: investor }],
+      providers: [
+        { provide: 'INVESTOR', useValue: investor },
+        // vpKijXce: user_id bog'lashda login roli tekshiriladi (rol = investor).
+        {
+          provide: 'IDENTITY',
+          useValue: {
+            send: jest.fn(() => of({ data: { id: '25', role: 'investor' } })),
+          },
+        },
+      ],
     })
       .overrideGuard(JwtAuthGuard)
       .useValue({

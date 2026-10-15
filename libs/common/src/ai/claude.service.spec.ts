@@ -550,6 +550,25 @@ describe('ClaudeService', () => {
       expect(reqOpts).toEqual({ timeout: 55_000 });
     });
 
+    it('5Z1ZvvzE: effort opt-in — faqat output_config ichida, tana baribir AYNAN 5 kalit', async () => {
+      const { service, create } = setup();
+
+      await service.extractJson(baseOpts({ effort: 'low' }));
+
+      const [body] = create.mock.calls[0];
+      expect(Object.keys(body).sort()).toEqual([
+        'max_tokens',
+        'messages',
+        'model',
+        'output_config',
+        'system',
+      ]);
+      expect(body.output_config).toEqual({
+        format: { type: 'json_schema', schema: SCHEMA },
+        effort: 'low',
+      });
+    });
+
     it('model: opts.model > AI_ORDER_MODEL > sukut', async () => {
       const { service, create } = setup({
         config: {

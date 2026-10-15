@@ -261,28 +261,33 @@ const END_ISO = '2026-09-18T18:59:59.999Z';
       expect(regions.items).toEqual([{ region_id: '5', total_orders: 2 }]);
     }, 60_000);
 
-    it('⭐ Celz3rKJ TC6: source_distribution — internal/external/branch, yig`indi = acceptedCount', async () => {
+    it('⭐ Celz3rKJ TC6: source_distribution — internal/external/branch/bot, yig`indi = acceptedCount', async () => {
       await db.query(`
         INSERT INTO order_schema.orders
-          (market_id, customer_id, status, "createdAt", source, external_id, is_deleted)
+          (market_id, customer_id, status, "createdAt", source, external_id, created_via, is_deleted)
         VALUES
-          (1, 2, 'new',  '2026-03-01T10:00:00Z', 'internal', NULL,  false),
-          (1, 2, 'new',  '2026-03-01T10:00:00Z', 'internal', NULL,  false),
-          (1, 2, 'sold', '2026-03-01T10:00:00Z', 'internal', NULL,  false),
-          (1, 2, 'new',  '2026-03-01T10:00:00Z', 'external', 'P-1', false),
+          (1, 2, 'new',  '2026-03-01T10:00:00Z', 'internal', NULL,  NULL,  false),
+          (1, 2, 'new',  '2026-03-01T10:00:00Z', 'internal', NULL,  NULL,  false),
+          (1, 2, 'sold', '2026-03-01T10:00:00Z', 'internal', NULL,  NULL,  false),
+          (1, 2, 'new',  '2026-03-01T10:00:00Z', 'external', 'P-1', NULL,  false),
           -- eski qator: source internal, lekin external_id bor → tashqi
-          (1, 2, 'new',  '2026-03-01T10:00:00Z', 'internal', 'P-2', false),
-          (1, 2, 'new',  '2026-03-01T10:00:00Z', 'branch',   NULL,  false),
+          (1, 2, 'new',  '2026-03-01T10:00:00Z', 'internal', 'P-2', NULL,  false),
+          (1, 2, 'new',  '2026-03-01T10:00:00Z', 'branch',   NULL,  NULL,  false),
+          -- Telegram bot (created_via = 'bot') — alohida 'bot' bucket
+          (1, 2, 'new',  '2026-03-01T10:00:00Z', 'internal', NULL,  'bot', false),
+          (1, 2, 'sold', '2026-03-01T10:00:00Z', 'internal', NULL,  'bot', false),
           -- hisobga tushmaydi: o'chirilgan va davrdan tashqari
-          (1, 2, 'new',  '2026-03-01T10:00:00Z', 'internal', NULL,  true),
-          (1, 2, 'new',  '2026-09-18T19:00:00Z', 'internal', NULL,  false)
+          (1, 2, 'new',  '2026-03-01T10:00:00Z', 'internal', NULL,  'bot', true),
+          (1, 2, 'new',  '2026-03-01T10:00:00Z', 'internal', NULL,  NULL,  true),
+          (1, 2, 'new',  '2026-09-18T19:00:00Z', 'internal', NULL,  NULL,  false)
       `);
       const res = await analytics.getOrderSourceDistribution(START, END);
       expect(res).toMatchObject({
         internal: 3,
         external: 2,
         branch: 1,
-        total: 6,
+        bot: 2,
+        total: 8,
       });
       const overview = await analytics.getOverviewStats(START, END);
       expect(res.total).toBe(overview.acceptedCount);

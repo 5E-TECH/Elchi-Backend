@@ -106,4 +106,14 @@ export class UpdateCashboxBalanceDto {
   @IsOptional()
   @IsBoolean()
   require_open_shift?: boolean;
+
+  /**
+   * 3PE0B03q — servis ICHIDAGI maydon: qo'lda CLICK kirim/chiqim (spend /
+   * fill) MAIN kassaning qaysi NOMLI kartasiga. Gateway `PATCH
+   * /finance/cashbox/balance` DTO'sida YO'Q (whitelist — 400).
+   */
+  @IsOptional()
+  @IsString()
+  @Matches(/^\d+$/)
+  card_id?: string;
 }

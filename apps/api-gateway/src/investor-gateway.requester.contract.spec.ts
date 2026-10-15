@@ -52,6 +52,23 @@ describe('GADgsW5G — investor gateway: barcha investor.* cmd`larida requester.
       period_end: '2026-01-31',
       percentage: 1,
     },
+    // vpKijXce: ichki yo'llar — investor yo'ldan (body'da investor_id shart emas).
+    'POST investors/:investor_id/investments': {
+      amount: 100,
+      invested_at: '2026-03-01T00:00:00Z',
+    },
+    'PATCH investors/:investor_id/investments/:id': { amount: 200 },
+    'POST investors/:investor_id/profits': {
+      amount: 10,
+      percentage: 1,
+      period_start: '2026-01-01',
+      period_end: '2026-01-31',
+    },
+    'POST investors/:investor_id/profits/calculate': {
+      period_start: '2026-01-01',
+      period_end: '2026-01-31',
+      percentage: 1,
+    },
   };
 
   type Route = {
@@ -125,8 +142,10 @@ describe('GADgsW5G — investor gateway: barcha investor.* cmd`larida requester.
 
   beforeEach(() => investor.send.mockClear());
 
-  it('metadata`dan barcha 21 handler topildi, har birida @Roles bor', () => {
-    expect(routes).toHaveLength(21);
+  // vpKijXce: 21 + 5 ichki yo'l (ilgari ikki qavat dekorator ostida edi va
+  // ro'yxatdan o'tmasdi) = 26.
+  it('metadata`dan barcha 26 handler topildi, har birida @Roles bor', () => {
+    expect(routes).toHaveLength(26);
     for (const r of routes) {
       // RolesGuard @Roles bo'lmagan marshrutni HAMMAGA ochadi.
       expect({ handler: r.handler, roles: r.roles.length > 0 }).toEqual({

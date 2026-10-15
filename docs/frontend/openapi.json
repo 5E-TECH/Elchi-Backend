@@ -302,6 +302,101 @@
         ]
       }
     },
+    "/investor-users": {
+      "post": {
+        "operationId": "ApiGatewayController_createInvestorUser",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateInvestorUserRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Investor login created"
+          },
+          "409": {
+            "description": "Phone number already exists"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Create investor login (role = investor)",
+        "tags": [
+          "Identity"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
+        ]
+      },
+      "get": {
+        "operationId": "ApiGatewayController_getInvestorUsers",
+        "parameters": [
+          {
+            "name": "search",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "example": "active",
+              "type": "string"
+            }
+          },
+          {
+            "name": "page",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "example": 1,
+              "type": "number"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "example": 10,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Investor login list"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "List investor logins (investorga bog‘lash uchun tanlov)",
+        "tags": [
+          "Identity"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
+        ]
+      }
+    },
     "/couriers": {
       "post": {
         "operationId": "ApiGatewayController_createCourier",
@@ -2671,6 +2766,202 @@
         ]
       }
     },
+    "/orders/export/excel": {
+      "get": {
+        "description": "Javob: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet. Sarlavhalar: X-Export-Total (filtr bo'yicha jami), X-Export-Limit, X-Export-Truncated (true — fayl chegaraga yetib kesilgan, faylda DIQQAT qatori bor). Oxirgi qatorlar: «Jami» (soni va narx yig'indisi).",
+        "operationId": "OrderGatewayController_exportOrdersExcel",
+        "parameters": [
+          {
+            "name": "market_id",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "customer_id",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "search",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "start_day",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "end_day",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "courier",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "region_id",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "district_id",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "branch_id",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "source",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "enum": [
+                "internal",
+                "external",
+                "branch"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "name": "courier_id",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "where_deliver",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "enum": [
+                "center",
+                "address"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "name": "sort_by",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "enum": [
+                "created_at",
+                "total_price",
+                "status"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "name": "sort_dir",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "enum": [
+                "asc",
+                "desc"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "name": "cancelled_inventory",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "status",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "created",
+                  "new",
+                  "received",
+                  "on the road",
+                  "waiting",
+                  "waiting_customer",
+                  "sold",
+                  "cancelled",
+                  "returned_to_market",
+                  "paid",
+                  "partly_paid",
+                  "cancelled (sent)",
+                  "closed"
+                ]
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Buyurtmalar ro'yxatini .xlsx ga eksport (GET /orders filtrlari bilan, bitta so'rov)",
+        "tags": [
+          "Orders"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "manager",
+          "registrator",
+          "branch",
+          "market",
+          "market_operator",
+          "courier"
+        ]
+      }
+    },
     "/orders/market/{marketId}": {
       "get": {
         "operationId": "OrderGatewayController_findAllByMarket",
@@ -2936,13 +3227,14 @@
     },
     "/orders/cancel-reasons/stats": {
       "get": {
-        "description": "by_reason — sabab bo'yicha son; group_by berilsa rows — sabab × market/hudud/kuryer. Sana oynasi bekor qilingan vaqtga qo'llanadi.",
+        "description": "by_reason — yopiq ro'yxatning HAR sababi ({reason, label, count}, 0 bo'lsa ham; sababi qayd etilmagan eski bekorlar — UNKNOWN); group_by berilsa rows — sabab × market/hudud/kuryer. Sana oynasi asl bekor qilish vaqtiga, TOSHKENT kuni bo`yicha (YYYY-MM-DD → 00:00–23:59:59 +05:00) qo'llanadi; javobda applied_range. Rollback qilib sotilgan, qaytarish so'rovi bilan marketga qaytgan (bekor qilinmagan) buyurtmalar sanalmaydi; marketga topshirilgan bekorlar (RETURNED_TO_MARKET / CLOSED) sanaladi.",
         "operationId": "OrderGatewayController_cancelReasonStats",
         "parameters": [
           {
             "name": "startDate",
             "required": false,
             "in": "query",
+            "description": "YYYY-MM-DD (Toshkent kuni boshi), ISO vaqt yoki epoch ms",
             "schema": {
               "type": "string"
             }
@@ -2951,6 +3243,7 @@
             "name": "endDate",
             "required": false,
             "in": "query",
+            "description": "YYYY-MM-DD (Toshkent kuni oxiri — kun o`zi kiradi), ISO vaqt yoki epoch ms",
             "schema": {
               "type": "string"
             }
@@ -7515,6 +7808,7 @@
     },
     "/finance/shift/open": {
       "post": {
+        "description": "Superadmin/admin/registrator — MAIN kassa smenasi; menejer — o'z filiali kassasi smenasi (R6).",
         "operationId": "FinanceGatewayController_openShift",
         "parameters": [],
         "requestBody": {
@@ -7544,12 +7838,14 @@
         "x-roles": [
           "superadmin",
           "admin",
-          "registrator"
+          "registrator",
+          "manager"
         ]
       }
     },
     "/finance/shift/close": {
       "post": {
+        "description": "Menejer faqat o'z filiali kassasining smenasini yopadi (boshqa kassa smenasi — 404) (R6).",
         "operationId": "FinanceGatewayController_closeShift",
         "parameters": [],
         "requestBody": {
@@ -7579,13 +7875,14 @@
         "x-roles": [
           "superadmin",
           "admin",
-          "registrator"
+          "registrator",
+          "manager"
         ]
       }
     },
     "/finance/shift/current": {
       "get": {
-        "description": "(kfdfYDik) `data.shift` — ochiq smena yoki null; `data.required` — smenasiz pul operatsiyalari bloklanadimi (FINANCE_REQUIRE_OPEN_SHIFT).",
+        "description": "(kfdfYDik) `data.shift` — ochiq smena yoki null; `data.required` — shu kassada smenasiz pul operatsiyalari bloklanadimi (FINANCE_REQUIRE_OPEN_SHIFT: MAIN — main/all, filial — all). R6: menejer — o'z filiali kassasi.",
         "operationId": "FinanceGatewayController_currentShift",
         "parameters": [],
         "responses": {
@@ -7598,14 +7895,388 @@
             "bearer": []
           }
         ],
-        "summary": "Asosiy (MAIN) kassaning joriy ochiq smenasi",
+        "summary": "Kassaning joriy ochiq smenasi (MAIN; menejer — o'z filiali)",
         "tags": [
           "Finance"
         ],
         "x-roles": [
           "superadmin",
           "admin",
-          "registrator"
+          "registrator",
+          "manager"
+        ]
+      }
+    },
+    "/finance/cashbox/cards": {
+      "get": {
+        "description": "3PE0B03q — `data.cards` (Asosiy karta birinchi, balansi = balance_card − Σ nomli kartalar), `balance_card`, `total_card` (== balance_card), `in_sync` (false — nomli kartalar balance_card dan oshgan).",
+        "operationId": "FinanceGatewayController_listCashboxCards",
+        "parameters": [
+          {
+            "name": "include_inactive",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Asosiy kassa kartalari (balanslar, moslik nazorati)",
+        "tags": [
+          "Finance"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
+        ]
+      },
+      "post": {
+        "operationId": "FinanceGatewayController_createCashboxCard",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateCashboxCardRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Yangi nomli karta (balans 0)",
+        "tags": [
+          "Finance"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
+        ]
+      }
+    },
+    "/finance/cashbox/cards/movements": {
+      "get": {
+        "operationId": "FinanceGatewayController_listCashboxCardMovements",
+        "parameters": [
+          {
+            "name": "card_id",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "page",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "number"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Kartalararo o'tkazma / konvertatsiya jurnali",
+        "tags": [
+          "Finance"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
+        ]
+      }
+    },
+    "/finance/cashbox/cards/{id}/ledger": {
+      "get": {
+        "operationId": "FinanceGatewayController_getCashboxCardLedger",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Karta ID",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from_date",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "to_date",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "page",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "number"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Karta ko'chirmasi (kirim/chiqim + ichki harakatlar, har qatordan keyingi balans)",
+        "tags": [
+          "Finance"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
+        ]
+      }
+    },
+    "/finance/cashbox/cards/{id}": {
+      "patch": {
+        "operationId": "FinanceGatewayController_renameCashboxCard",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Karta ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RenameCashboxCardRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Karta nomini o'zgartirish (Asosiy karta — 400)",
+        "tags": [
+          "Finance"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
+        ]
+      }
+    },
+    "/finance/cashbox/cards/{id}/status": {
+      "patch": {
+        "operationId": "FinanceGatewayController_setCashboxCardStatus",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Karta ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetCashboxCardStatusRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Kartani faollashtirish / arxivlash (balans 0 bo`lishi shart)",
+        "tags": [
+          "Finance"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
+        ]
+      }
+    },
+    "/finance/cashbox/cards/transfer": {
+      "post": {
+        "description": "Idempotency-Key sarlavhasi bilan takroriy so'rov ikkinchi o'tkazma yozmaydi.",
+        "operationId": "FinanceGatewayController_transferCashboxCards",
+        "parameters": [
+          {
+            "name": "idempotency-key",
+            "required": true,
+            "in": "header",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TransferCashboxCardRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Kartadan kartaga o'tkazma (balance_card o'zgarmaydi)",
+        "tags": [
+          "Finance"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
+        ]
+      }
+    },
+    "/finance/cashbox/cards/convert": {
+      "post": {
+        "description": "Idempotency-Key sarlavhasi bilan takroriy so'rov ikkinchi konvertatsiya yozmaydi.",
+        "operationId": "FinanceGatewayController_convertCashboxCard",
+        "parameters": [
+          {
+            "name": "idempotency-key",
+            "required": true,
+            "in": "header",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConvertCashboxCardRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Karta↔naqd konvertatsiya (kassaning umumiy balansi o`zgarmaydi)",
+        "tags": [
+          "Finance"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
         ]
       }
     },
@@ -11717,16 +12388,7 @@
     "/investments": {
       "post": {
         "operationId": "InvestorGatewayController_createInvestment",
-        "parameters": [
-          {
-            "name": "investor_id",
-            "required": false,
-            "in": "path",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
+        "parameters": [],
         "requestBody": {
           "required": true,
           "content": {
@@ -11821,6 +12483,47 @@
       }
     },
     "/investors/{investor_id}/investments": {
+      "post": {
+        "operationId": "InvestorGatewayController_createInvestorInvestment",
+        "parameters": [
+          {
+            "name": "investor_id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateInvestorInvestmentDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Create investment for investor",
+        "tags": [
+          "Investor"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
+        ]
+      },
       "get": {
         "operationId": "InvestorGatewayController_findInvestmentsByInvestor",
         "parameters": [
@@ -11911,14 +12614,6 @@
             "schema": {
               "type": "string"
             }
-          },
-          {
-            "name": "investor_id",
-            "required": false,
-            "in": "path",
-            "schema": {
-              "type": "string"
-            }
           }
         ],
         "requestBody": {
@@ -11960,12 +12655,6 @@
             "schema": {
               "type": "string"
             }
-          },
-          {
-            "name": "investor_id",
-            "required": false,
-            "in": "path",
-            "schema": {}
           }
         ],
         "responses": {
@@ -11988,19 +12677,100 @@
         ]
       }
     },
-    "/profits": {
-      "post": {
-        "operationId": "InvestorGatewayController_createProfit",
+    "/investors/{investor_id}/investments/{id}": {
+      "patch": {
+        "operationId": "InvestorGatewayController_updateInvestorInvestment",
         "parameters": [
           {
             "name": "investor_id",
-            "required": false,
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "required": true,
             "in": "path",
             "schema": {
               "type": "string"
             }
           }
         ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateInvestmentDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Update investment of investor",
+        "tags": [
+          "Investor"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
+        ]
+      },
+      "delete": {
+        "operationId": "InvestorGatewayController_deleteInvestorInvestment",
+        "parameters": [
+          {
+            "name": "investor_id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Delete investment of investor (soft delete)",
+        "tags": [
+          "Investor"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
+        ]
+      }
+    },
+    "/profits": {
+      "post": {
+        "operationId": "InvestorGatewayController_createProfit",
+        "parameters": [],
         "requestBody": {
           "required": true,
           "content": {
@@ -12087,13 +12857,13 @@
         ]
       }
     },
-    "/profits/calculate": {
+    "/investors/{investor_id}/profits": {
       "post": {
-        "operationId": "InvestorGatewayController_calculateProfit",
+        "operationId": "InvestorGatewayController_createInvestorProfit",
         "parameters": [
           {
             "name": "investor_id",
-            "required": false,
+            "required": true,
             "in": "path",
             "schema": {
               "type": "string"
@@ -12105,7 +12875,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/CalculateProfitDto"
+                "$ref": "#/components/schemas/CreateInvestorProfitShareDto"
               }
             }
           }
@@ -12120,7 +12890,7 @@
             "bearer": []
           }
         ],
-        "summary": "Calculate profit share by period and percentage",
+        "summary": "Create profit share for investor manually",
         "tags": [
           "Investor"
         ],
@@ -12128,9 +12898,7 @@
           "superadmin",
           "admin"
         ]
-      }
-    },
-    "/investors/{investor_id}/profits": {
+      },
       "get": {
         "operationId": "InvestorGatewayController_findProfitByInvestor",
         "parameters": [
@@ -12179,6 +12947,83 @@
           }
         ],
         "summary": "List profit shares by investor",
+        "tags": [
+          "Investor"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
+        ]
+      }
+    },
+    "/profits/calculate": {
+      "post": {
+        "operationId": "InvestorGatewayController_calculateProfit",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CalculateProfitDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Calculate profit share by period and percentage",
+        "tags": [
+          "Investor"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
+        ]
+      }
+    },
+    "/investors/{investor_id}/profits/calculate": {
+      "post": {
+        "operationId": "InvestorGatewayController_calculateInvestorProfit",
+        "parameters": [
+          {
+            "name": "investor_id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CalculateProfitDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Calculate profit share for one investor by period and percentage",
         "tags": [
           "Investor"
         ],
@@ -14733,6 +15578,16 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "archive",
+            "required": false,
+            "in": "query",
+            "description": "(i6Nyedea) `true` — ARXIV: saqlash muddati o'tib `activity_logs_archive` ga ko'chirilgan qatorlar (filtrlar, sahifalash, kursor AYNAN o'sha; qatorda `archived_at`, `archive_rule`). Berilmasa — joriy jurnal.",
+            "schema": {
+              "example": false,
+              "type": "boolean"
+            }
           }
         ],
         "responses": {
@@ -14938,6 +15793,16 @@
             "description": "(8eYmt4NV) Keyset kursor — oldingi javobdagi `meta.next_cursor`. Berilsa `page` e'tiborsiz; istalgan chuqurlikda aniq.",
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "name": "archive",
+            "required": false,
+            "in": "query",
+            "description": "(i6Nyedea) `true` — ARXIV: saqlash muddati o'tib `activity_logs_archive` ga ko'chirilgan qatorlar (filtrlar, sahifalash, kursor AYNAN o'sha; qatorda `archived_at`, `archive_rule`). Berilmasa — joriy jurnal.",
+            "schema": {
+              "example": false,
+              "type": "boolean"
             }
           }
         ],
@@ -16253,6 +17118,29 @@
           "salary"
         ]
       },
+      "CreateInvestorUserRequestDto": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "example": "Investor Ismi"
+          },
+          "phone_number": {
+            "type": "string",
+            "example": "+998901234567"
+          },
+          "password": {
+            "type": "string",
+            "example": "strongPassword123",
+            "minLength": 6
+          }
+        },
+        "required": [
+          "name",
+          "phone_number",
+          "password"
+        ]
+      },
       "CreateCourierRequestDto": {
         "type": "object",
         "properties": {
@@ -16935,7 +17823,7 @@
           "customer_id": {
             "type": "string",
             "example": "1",
-            "description": "Customer ID (as string/bigint) — faqat superadmin/admin uchun. Boshqa rollarda mijoz `customer` obyektidan aniqlanadi (fix3 RBAC-01)."
+            "description": "Customer ID (as string/bigint). Superadmin/admin — istalgan mijoz. POST /orders da boshqa rollar (market, filial xodimi) — FAQAT shu marketda buyurtmasi bor mijoz (GET /customers/suggest taklifi, hiqRNhkI); doiradan tashqari id: `customer` obyekti bo'lsa u ishlatiladi, bo'lmasa 403. POST /orders/external da faqat superadmin/admin (fix3 RBAC-01)."
           },
           "customer": {
             "$ref": "#/components/schemas/CreateOrderCustomerDto"
@@ -17320,7 +18208,7 @@
           "customer_id": {
             "type": "string",
             "example": "1",
-            "description": "Customer ID (as string/bigint) — faqat superadmin/admin uchun. Boshqa rollarda mijoz `customer` obyektidan aniqlanadi (fix3 RBAC-01)."
+            "description": "Customer ID (as string/bigint). Superadmin/admin — istalgan mijoz. POST /orders da boshqa rollar (market, filial xodimi) — FAQAT shu marketda buyurtmasi bor mijoz (GET /customers/suggest taklifi, hiqRNhkI); doiradan tashqari id: `customer` obyekti bo'lsa u ishlatiladi, bo'lmasa 403. POST /orders/external da faqat superadmin/admin (fix3 RBAC-01)."
           },
           "customer": {
             "$ref": "#/components/schemas/CreateOrderCustomerDto"
@@ -17554,8 +18442,8 @@
           "paidAmount": {
             "type": "number",
             "example": 0,
-            "deprecated": true,
-            "description": "ESKIRGAN — sotuvda to'lov qabul qilinmaydi. Faqat 0 qabul qilinadi (eski klientlar uchun); boshqa qiymat 400 (ZsPLevZZ)."
+            "minimum": 0,
+            "description": "Sotuvchi (kuryer / menejer) yig'ilgan naqddan marketga TO'G'RIDAN-TO'G'RI bergan summa (so'm, butun son). 0 yoki berilmasa — oddiy sotuv (SOLD). >0 bo`lsa market va sotuvchi kassasidan shu summa yechiladi; buyurtma bo'yicha marketga to'lanadigan summa to'liq yopilsa PAID, aks holda PARTLY_PAID. Marketga to'lanadigan summadan (to_be_paid − extraCost) yoki market kassasidagi qarzdan oshsa 400; hamkor (tashqi) buyurtmasida va HQ menejeri sotuvida >0 — 400 (to'lov /finance/cashbox/payment/market orqali)."
           },
           "proofFileKeys": {
             "description": "Xarajat isboti uchun yuklangan fayl kalitlari (rasm/video). Market isbot talab qilsa va extraCost > 0 bo'lsa majburiy.",
@@ -18386,6 +19274,11 @@
             "type": "string",
             "example": "7",
             "description": "O'tkazma manbasi (click): o'tkazmani qilgan xodim ID si. Faqat audit — tarixda `transfer_source_user_id` bo'lib saqlanadi; pul baribir asosiy kassaning balance_card idan yechiladi. Naqd (cash) to'lovda e'tiborga olinmaydi."
+          },
+          "card_id": {
+            "type": "string",
+            "example": "3",
+            "description": "Asosiy kassaning NOMLI kartasi ID si (`GET /finance/cashbox/cards`). Faqat `click` to'lovida; berilmasa — Asosiy karta. Nomli kartada mablag' yetmasa 400."
           }
         },
         "required": [
@@ -18427,6 +19320,11 @@
             "type": "string",
             "example": "7",
             "description": "O'tkazma manbasi (click): o'tkazmani qilgan xodim ID si. Faqat audit — tarixda `transfer_source_user_id` bo'lib saqlanadi; pul filial kassasining va asosiy kassaning balance_card idan harakatlanadi. Naqd (cash) to'lovda e'tiborga olinmaydi."
+          },
+          "card_id": {
+            "type": "string",
+            "example": "3",
+            "description": "Asosiy kassaning NOMLI kartasi ID si (`GET /finance/cashbox/cards`). Faqat `click` to'lovida; berilmasa — Asosiy karta. Nomli kartada mablag' yetmasa 400."
           }
         },
         "required": [
@@ -18496,6 +19394,11 @@
           "comment": {
             "type": "string",
             "example": "Manual operatsiya"
+          },
+          "card_id": {
+            "type": "string",
+            "example": "3",
+            "description": "Asosiy kassaning NOMLI kartasi ID si (`GET /finance/cashbox/cards`). Faqat `click` to'lovida; berilmasa — Asosiy karta. Nomli kartada mablag' yetmasa 400."
           }
         },
         "required": [
@@ -18557,6 +19460,110 @@
             "example": "Smena yopildi"
           }
         }
+      },
+      "CreateCashboxCardRequestDto": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "example": "Humo 8600"
+          },
+          "sort_order": {
+            "type": "number",
+            "example": 0
+          }
+        },
+        "required": [
+          "name"
+        ]
+      },
+      "RenameCashboxCardRequestDto": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "example": "Uzcard 5614"
+          }
+        },
+        "required": [
+          "name"
+        ]
+      },
+      "SetCashboxCardStatusRequestDto": {
+        "type": "object",
+        "properties": {
+          "is_active": {
+            "type": "boolean",
+            "example": false,
+            "description": "false — arxivlash (balans 0 bo`lishi shart)"
+          }
+        },
+        "required": [
+          "is_active"
+        ]
+      },
+      "TransferCashboxCardRequestDto": {
+        "type": "object",
+        "properties": {
+          "from_card_id": {
+            "type": "string",
+            "example": "1",
+            "description": "Manba karta ID"
+          },
+          "to_card_id": {
+            "type": "string",
+            "example": "3",
+            "description": "Maqsad karta ID"
+          },
+          "amount": {
+            "type": "number",
+            "example": 500000
+          },
+          "comment": {
+            "type": "string",
+            "example": "Humo kartaga o`tkazildi",
+            "description": "Sabab (majburiy)"
+          }
+        },
+        "required": [
+          "from_card_id",
+          "to_card_id",
+          "amount",
+          "comment"
+        ]
+      },
+      "ConvertCashboxCardRequestDto": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "card_to_cash",
+              "cash_to_card"
+            ],
+            "example": "card_to_cash"
+          },
+          "card_id": {
+            "type": "string",
+            "example": "3",
+            "description": "Karta ID"
+          },
+          "amount": {
+            "type": "number",
+            "example": 500000
+          },
+          "comment": {
+            "type": "string",
+            "example": "Bankomatdan yechildi",
+            "description": "Sabab (majburiy)"
+          }
+        },
+        "required": [
+          "type",
+          "card_id",
+          "amount",
+          "comment"
+        ]
       },
       "CreateSalaryRequestDto": {
         "type": "object",
@@ -19557,10 +20564,10 @@
           "message_class": {
             "type": "string",
             "enum": [
-              "promo",
-              "transactional"
+              "promo"
             ],
-            "example": "promo"
+            "example": "promo",
+            "description": "Faqat 'promo' (berilmasa ham promo). 'transactional'/'security' — 400 campaign_promo_only"
           },
           "text": {
             "type": "string",
@@ -20398,6 +21405,33 @@
           "invested_at"
         ]
       },
+      "CreateInvestorInvestmentDto": {
+        "type": "object",
+        "properties": {
+          "branch_id": {
+            "type": "string"
+          },
+          "amount": {
+            "type": "number",
+            "minimum": 0.01
+          },
+          "invested_at": {
+            "type": "string",
+            "example": "2026-03-25T00:00:00.000Z"
+          },
+          "description": {
+            "type": "string"
+          },
+          "investor_id": {
+            "type": "string",
+            "description": "Berilsa yo‘ldagi investor_id bilan bir xil"
+          }
+        },
+        "required": [
+          "amount",
+          "invested_at"
+        ]
+      },
       "UpdateInvestmentDto": {
         "type": "object",
         "properties": {
@@ -20449,6 +21483,41 @@
         },
         "required": [
           "investor_id",
+          "amount",
+          "percentage",
+          "period_start",
+          "period_end"
+        ]
+      },
+      "CreateInvestorProfitShareDto": {
+        "type": "object",
+        "properties": {
+          "amount": {
+            "type": "number",
+            "minimum": 0
+          },
+          "percentage": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 100
+          },
+          "period_start": {
+            "type": "string",
+            "example": "2026-03-01T00:00:00.000Z"
+          },
+          "period_end": {
+            "type": "string",
+            "example": "2026-03-31T23:59:59.999Z"
+          },
+          "description": {
+            "type": "string"
+          },
+          "investor_id": {
+            "type": "string",
+            "description": "Berilsa yo‘ldagi investor_id bilan bir xil"
+          }
+        },
+        "required": [
           "amount",
           "percentage",
           "period_start",

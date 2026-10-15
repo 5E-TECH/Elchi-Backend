@@ -14,6 +14,13 @@
  * ACTIVITY_LOG_RETENTION_DAYS (default 365) in every schema, financial rows
  * included.
  *
+ * ARCHIVE (i6Nyedea, default ON): when deletion is enabled, rows are not just
+ * deleted — they are MOVED to the same schema's `activity_logs_archive` (cold
+ * table, migration 1716000000101) in one SQL statement per batch (DELETE ...
+ * RETURNING -> INSERT; both or neither). A schema without the archive table is
+ * SKIPPED (nothing deleted there) and the run exits 1. `ACTIVITY_LOG_PRUNE_ARCHIVE=false`
+ * restores plain deletion.
+ *
  * Policy (by action verb):
  *   • auth (login/logout/auth_failure + OTP) — ACTIVITY_LOG_RETENTION_AUTH_DAYS
  *     (default 90, min 7);
@@ -29,6 +36,7 @@
  * Config (env):
  *   POSTGRES_URI                         required — the DB connection string.
  *   ACTIVITY_LOG_PRUNE_ENABLED           `true` to actually delete (default off).
+ *   ACTIVITY_LOG_PRUNE_ARCHIVE           `false` to delete WITHOUT archiving (default: archive).
  *   ACTIVITY_LOG_RETENTION_AUTH_DAYS     auth verbs window (default 90).
  *   ACTIVITY_LOG_RETENTION_DEFAULT_DAYS  all other verbs window (default 1095).
  *   ACTIVITY_LOG_PRUNE_BATCH             rows per DELETE / UPDATE batch (default 10000).
@@ -43,7 +51,8 @@
  * Scheduling (DB is server-local, so run ON the server): daily via the
  * `activity-log-prune` docker-compose sidecar (scripts/prune-activity-logs-cron.sh).
  *
- * Exit codes: 0 ok, 2 misconfigured (no POSTGRES_URI / bad numeric env).
+ * Exit codes: 0 ok, 1 failed (incl. a schema skipped for a missing archive
+ * table), 2 misconfigured (no POSTGRES_URI / bad numeric env).
  */
 import { DataSource } from 'typeorm';
 import {
@@ -57,7 +66,10 @@ import {
   stripDeviceMetadataBatched,
 } from '../libs/common/src/activity-log/retention';
 import {
+  ACTIVITY_LOG_ARCHIVE_TABLE,
+  activityLogArchiveExists,
   countByRule,
+  isActivityLogArchiveEnabled,
   isActivityLogPruneEnabled,
   pruneByRuleBatched,
   resolveActivityLogRetentionPolicy,
@@ -78,6 +90,8 @@ function intFromEnv(name: string, fallback: number): number {
 async function main(): Promise<void> {
   const explicitDryRun = process.argv.includes('--dry-run');
   const deleteEnabled = isActivityLogPruneEnabled() && !explicitDryRun;
+  // i6Nyedea: o'chirishdan oldin arxivga ko'chirish (sukut yoqiq).
+  const archiveEnabled = isActivityLogArchiveEnabled();
   const postgresUri = process.env.POSTGRES_URI;
   if (!postgresUri) {
     console.error('POSTGRES_URI is required.');
@@ -132,28 +146,49 @@ async function main(): Promise<void> {
     console.log(
       `${deleteEnabled ? '' : '[dry-run: ACTIVITY_LOG_PRUNE_ENABLED is off] '}` +
         `activity_logs retention policy (${rulesText}) across ${schemas.length} schema(s), ` +
-        `batch=${batchSize}; ip/device metadata older than ${deviceDays} days` +
+        `batch=${batchSize}; archive=${archiveEnabled ? ACTIVITY_LOG_ARCHIVE_TABLE : 'OFF (plain delete)'}; ` +
+        `ip/device metadata older than ${deviceDays} days` +
         `${explicitDryRun ? ' (count only)' : ''}.\n`,
     );
 
     let grandTotal = 0;
+    let wouldTotal = 0;
     let deviceTotal = 0;
+    const skipped: string[] = [];
     for (const { table_schema } of schemas) {
       const table = quoteActivityLogTable(table_schema);
+      const archiveTable = archiveEnabled
+        ? quoteActivityLogTable(table_schema, ACTIVITY_LOG_ARCHIVE_TABLE)
+        : undefined;
+      // i6Nyedea: arxiv yoqiq, jadvali yo'q — bu sxemada O'CHIRISH YO'Q
+      // (dalil arxivsiz yo'qolmasin); dry-run'da faqat ogohlantirish.
+      const archiveReady = archiveTable
+        ? await activityLogArchiveExists(run, archiveTable)
+        : true;
+      if (!archiveReady) {
+        console.error(
+          `  ${table_schema}: ${ACTIVITY_LOG_ARCHIVE_TABLE} missing (migration 1716000000101) — ` +
+            `${deleteEnabled ? 'SKIPPING deletion in this schema' : 'deletion would be refused here'}`,
+        );
+        if (deleteEnabled) skipped.push(table_schema);
+      }
+      const moveRows = deleteEnabled && archiveReady;
 
       const perRule: string[] = [];
       for (const rule of policy.rules) {
-        // i6Nyedea: o'chirish faqat bayroq yoqilganda; aks holda AYNI shart
-        // bilan sanash.
-        const n = deleteEnabled
+        // i6Nyedea: o'chirish faqat bayroq yoqilganda (va arxiv tayyor
+        // bo'lsa); aks holda AYNI shart bilan sanash.
+        const n = moveRows
           ? (
               await pruneByRuleBatched(run, table, rule, {
                 batchSize,
                 pauseMs,
+                archiveTable,
               })
             ).deleted
           : await countByRule(run, table, rule);
-        grandTotal += n;
+        if (moveRows) grandTotal += n;
+        else wouldTotal += n;
         perRule.push(`${rule.name}=${n}`);
       }
 
@@ -176,16 +211,23 @@ async function main(): Promise<void> {
       }
       deviceTotal += stripped;
       console.log(
-        `  ${table_schema}: ${deleteEnabled ? 'deleted' : 'would delete'} ` +
+        `  ${table_schema}: ${moveRows ? (archiveTable ? 'archived+deleted' : 'deleted') : 'would delete'} ` +
           `${perRule.join(', ')}; ` +
           `${explicitDryRun ? 'would strip' : 'stripped'} ip/device metadata from ${stripped} row(s)`,
       );
     }
 
     console.log(
-      `\nTotal: ${grandTotal} row(s) ${deleteEnabled ? 'pruned' : 'would be pruned (dry-run)'}, ` +
+      `\nTotal: ${grandTotal} row(s) ${archiveEnabled ? 'moved to archive' : 'pruned'}, ` +
+        `${wouldTotal} row(s) would be pruned (dry-run / skipped), ` +
         `${deviceTotal} row(s) ${explicitDryRun ? 'would lose' : 'lost'} ip/device metadata.`,
     );
+    if (skipped.length) {
+      console.error(
+        `Deletion SKIPPED in ${skipped.length} schema(s) without ${ACTIVITY_LOG_ARCHIVE_TABLE}: ${skipped.join(', ')}`,
+      );
+      process.exitCode = 1;
+    }
   } finally {
     await ds.destroy();
   }

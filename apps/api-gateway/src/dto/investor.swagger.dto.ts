@@ -1,5 +1,5 @@
 import { Status } from '@app/common';
-import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional, OmitType } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
 import {
   IsDateString,
@@ -11,6 +11,7 @@ import {
   Matches,
   Max,
   Min,
+  MinLength,
 } from 'class-validator';
 
 /** vpKijXce: users.id — musbat butun son (raqam yoki satr qabul qilinadi). */
@@ -192,4 +193,54 @@ export class CalculateProfitDto {
   @IsOptional()
   @IsString()
   description?: string;
+}
+
+/**
+ * vpKijXce: ichki yo'llar (`POST /investors/:investor_id/investments|profits`)
+ * — investor yo'ldan olinadi, body'da `investor_id` SHART EMAS. Berilsa yo'l
+ * bilan bir xil bo'lishi kerak (aks holda 400, gateway `pathInvestorId`).
+ */
+export class CreateInvestorInvestmentDto extends OmitType(CreateInvestmentDto, [
+  'investor_id',
+] as const) {
+  @ApiPropertyOptional({
+    description: 'Berilsa yo‘ldagi investor_id bilan bir xil',
+  })
+  @IsOptional()
+  @IsString()
+  investor_id?: string;
+}
+
+export class CreateInvestorProfitShareDto extends OmitType(
+  CreateProfitShareDto,
+  ['investor_id'] as const,
+) {
+  @ApiPropertyOptional({
+    description: 'Berilsa yo‘ldagi investor_id bilan bir xil',
+  })
+  @IsOptional()
+  @IsString()
+  investor_id?: string;
+}
+
+/**
+ * vpKijXce: investor LOGINI (identity, rol = investor) — BeePost
+ * `POST /users/investor` naqshi: faqat kirish uchun (ism, telefon, parol),
+ * maosh/kassa yo'q. Keyin `POST/PATCH /investors {user_id}` bilan investor
+ * yozuviga bog'lanadi va `/investors/me` shu orqali topadi.
+ */
+export class CreateInvestorUserRequestDto {
+  @ApiProperty({ example: 'Investor Ismi' })
+  @IsString()
+  @MinLength(2)
+  name!: string;
+
+  @ApiProperty({ example: '+998901234567' })
+  @IsPhoneNumber('UZ')
+  phone_number!: string;
+
+  @ApiProperty({ example: 'strongPassword123', minLength: 6 })
+  @IsString()
+  @MinLength(6)
+  password!: string;
 }

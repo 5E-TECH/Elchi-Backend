@@ -1,6 +1,7 @@
 import { DynamicModule, Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ActivityLog } from './activity-log.entity';
+import { ActivityLogArchive } from './activity-log-archive.entity';
 import { ActivityLogService } from './activity-log.service';
 import { ActivityLogMaintenanceService } from './activity-log-maintenance.service';
 import { ActivityLogRetentionScheduler } from './activity-log-retention.scheduler';
@@ -16,7 +17,9 @@ export class ActivityLogModule {
   static forService(serviceName?: string): DynamicModule {
     return {
       module: ActivityLogModule,
-      imports: [TypeOrmModule.forFeature([ActivityLog])],
+      // i6Nyedea — `activity_logs_archive` (cold jadval, AYNI sxema): retention
+      // ko'chirishi va `GET /activity-logs?archive=true` o'qishi uchun.
+      imports: [TypeOrmModule.forFeature([ActivityLog, ActivityLogArchive])],
       providers: [
         {
           provide: ACTIVITY_LOG_SERVICE_NAME,

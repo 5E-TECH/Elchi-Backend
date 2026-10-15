@@ -635,12 +635,30 @@ export class InvestorServiceService {
     return successRes(investment);
   }
 
+  /**
+   * vpKijXce: ichki yo'l (`/investors/:investor_id/investments/:id`) —
+   * investitsiya SHU investorniki bo'lmasa 404 (begona yozuv o'zgarmaydi).
+   */
+  private assertInvestmentScope(
+    investment: Investment,
+    scopeInvestorId?: string | null,
+  ): void {
+    if (scopeInvestorId === undefined || scopeInvestorId === null) {
+      return;
+    }
+    if (String(investment.investor_id) !== String(scopeInvestorId).trim()) {
+      this.notFound('investment not found for this investor');
+    }
+  }
+
   async updateInvestment(
     id: string,
     dto: UpdateInvestmentDto,
     requester?: { id?: string; roles?: string[] } | null,
+    scopeInvestorId?: string | null,
   ) {
     const investment = await this.getInvestmentOrThrow(id);
+    this.assertInvestmentScope(investment, scopeInvestorId);
     const before = { ...investment };
 
     if (dto.investor_id !== undefined) {
@@ -697,8 +715,10 @@ export class InvestorServiceService {
   async deleteInvestment(
     id: string,
     requester?: { id?: string; roles?: string[] } | null,
+    scopeInvestorId?: string | null,
   ) {
     const investment = await this.getInvestmentOrThrow(id);
+    this.assertInvestmentScope(investment, scopeInvestorId);
     investment.isDeleted = true;
     await this.investmentRepo.save(investment);
 

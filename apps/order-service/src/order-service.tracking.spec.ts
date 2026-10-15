@@ -3,6 +3,7 @@ import { OrderServiceService } from './order-service.service';
 import { OrderCustodyService } from './custody/order-custody.service';
 import { OrderLifecycleService } from './lifecycle/order-lifecycle.service';
 import { Order_status } from '@app/common';
+import { OrderCreatedVia } from './entities/order.entity';
 
 function createService() {
   const orderRepo = {
@@ -570,6 +571,40 @@ describe('Order tracking lifecycle', () => {
         courier_id: '44',
         return_reason: 'old return',
       }),
+    );
+  });
+
+  it('Celz3rKJ: create opts.createdVia=bot → created_via "bot"; opts yo`q → NULL', async () => {
+    const { lifecycle, orderRepo } = createService();
+
+    orderRepo.create.mockImplementation((payload: any) => payload);
+    orderRepo.save.mockImplementation((payload: any) => ({
+      ...payload,
+      id: '405',
+    }));
+    orderRepo.update.mockResolvedValue(undefined);
+    jest
+      .spyOn(lifecycle, 'findById')
+      .mockResolvedValue({ id: '405', items: [] } as any);
+    const dto = { market_id: '1', customer_id: '2' };
+    const requester = { id: '400', roles: ['market_operator'] };
+
+    await lifecycle.create(dto, requester, {
+      createdVia: OrderCreatedVia.BOT,
+    });
+    expect(orderRepo.create).toHaveBeenLastCalledWith(
+      expect.objectContaining({ created_via: 'bot' }),
+    );
+
+    await lifecycle.create(dto, requester);
+    expect(orderRepo.create).toHaveBeenLastCalledWith(
+      expect.objectContaining({ created_via: null }),
+    );
+
+    // DTO ichidagi created_via (soxta) e'tiborsiz — faqat opts dan.
+    await lifecycle.create({ ...dto, created_via: 'bot' } as any, requester);
+    expect(orderRepo.create).toHaveBeenLastCalledWith(
+      expect.objectContaining({ created_via: null }),
     );
   });
 
