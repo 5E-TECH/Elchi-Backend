@@ -1,0 +1,50 @@
+# n9o0KYd5 — receive-by-scan "hech narsa qabul qilinmadi" (received=0) alerti.
+#
+# Metrika: api-gateway `GET /metrics` →
+#   receive_by_scan_total{outcome="ok|partial|none", service="api-gateway"}
+# (libs/common/src/metrics/metrics.ts, `recordReceiveByScanOutcome`).
+# receive-by-scan HTTP kodi har doim 200 (resurs yaratilmaydi) — HTTP
+# metrikasi "hech narsa qabul qilinmadi" holatini ko'rmaydi, shuning uchun
+# alert shu hisoblagichga quriladi. `outcome="none"` = javobda `ok:false`
+# (received=0), shu bilan birga order-service `received=0` WARN logi yoziladi.
+#
+# ⚠️ INFRA'GA ULANMAGAN: repoda Prometheus/Alertmanager hali yo'q. Ulash:
+#   prometheus.yml:
+#     rule_files: ['/etc/prometheus/rules/receive-by-scan.rules.yml']
+#     scrape_configs: [{ job_name: elchi-api-gateway,
+#                        static_configs: [{ targets: ['api-gateway:<port>'] }] }]
+#   (/metrics ichki tarmoqda — ommaga chiqarilmaydi.)
+#
+# Tekshiruv (spec: libs/common/src/metrics/receive-by-scan-alert.n9o0KYd5.spec.ts):
+#   promtool check rules receive-by-scan.rules.yml
+#   promtool test rules receive-by-scan.rules.test.yml
+groups:
+  - name: elchi-receive-by-scan
+    rules:
+      # Har bir received=0 javob (so'nggi 15 daqiqada kamida bittasi) —
+      # ogohlantirish. Seriyalar 0 bilan oldindan yaratiladi (metrics.ts),
+      # shuning uchun qayta ishga tushgandan keyingi BIRINCHI received=0 ham
+      # `increase()` da ko'rinadi.
+      - alert: ReceiveByScanNothingReceived
+        expr: sum by (service) (increase(receive_by_scan_total{outcome="none"}[15m])) > 0
+        labels:
+          severity: warning
+          card: n9o0KYd5
+        annotations:
+          summary: 'receive-by-scan: hech narsa qabul qilinmadi (received=0)'
+          description: "So'nggi 15 daqiqada receive-by-scan javobi received=0 (ok:false) bo'ldi: QR boshqa hamkordan, allaqachon qabul qilingan yoki tizimda yo'q. order-service logida 'received=0' WARN qatorini (token soni, so'rovchi, filial) tekshiring."
+      # Ko'p skan va ularning yarmidan ko'pi bo'sh — qabul jarayoni amalda
+      # ishlamayapti (masalan hamkor tokenlari mos kelmay qolgan).
+      - alert: ReceiveByScanMostlyFailing
+        expr: |
+          sum by (service) (increase(receive_by_scan_total{outcome="none"}[15m])) > 20
+          and
+          sum by (service) (increase(receive_by_scan_total{outcome="none"}[15m]))
+            / sum by (service) (increase(receive_by_scan_total[15m])) > 0.5
+        for: 5m
+        labels:
+          severity: critical
+          card: n9o0KYd5
+        annotations:
+          summary: "receive-by-scan: skanlarning yarmidan ko'pi bo'sh"
+          description: "So'nggi 15 daqiqada 20 tadan ko'p receive-by-scan javobi received=0 va ular jami skanlarning 50% dan ko'pi. Hamkor tokenlari / posilka importini tekshiring."

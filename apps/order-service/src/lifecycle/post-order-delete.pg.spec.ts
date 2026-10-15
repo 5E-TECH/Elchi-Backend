@@ -148,6 +148,40 @@ const localTestDatabase = (() => {
       expect(order.is_deleted).toBe(false);
     });
 
+    it("⭐ eskirgan o'qish: UPDATE 0 qatorga tegsa 409 (TypeORM [rows, rowCount] — ilgari .length doim 2 edi)", async () => {
+      await seed();
+      // findById tranzaksiyadan TASHQARIDA o'qiydi — o'rtada buyurtmaga
+      // qaytarish so'raldi. Eskirgan obyekt oldindan tekshiruvdan o'tadi,
+      // UPDATE esa shartga mos qatorni topmaydi.
+      const stale = await db
+        .getRepository(Order)
+        .findOneByOrFail({ id: '700', isDeleted: false });
+      await db.query(
+        'UPDATE order_schema.orders SET return_requested = true WHERE id = 700',
+      );
+      const instance = service as OrderLifecycleService & {
+        findById: (id: string) => Promise<Order>;
+      };
+      const findById = jest
+        .spyOn(instance, 'findById')
+        .mockResolvedValue(stale);
+      try {
+        const error = await service
+          .remove('700', requester)
+          .catch((err: unknown) => err);
+        expect(error).toBeInstanceOf(RpcException);
+        expect((error as RpcException).getError()).toMatchObject({
+          statusCode: 409,
+        });
+      } finally {
+        findById.mockRestore();
+      }
+      const [post]: Array<{ order_quantity: number }> = await db.query(
+        'SELECT order_quantity FROM logistics_schema.posts WHERE id = 88',
+      );
+      expect(post.order_quantity).toBe(2);
+    });
+
     it("pochta UPDATE yiqilsa order ham rollback bo'ladi", async () => {
       await seed();
       await db.query(`

@@ -658,6 +658,132 @@ describe('⭐ fix3b M6 — SA rollback → qayta sotuv → keyingi FIFO: daftar 
   });
 });
 
+// ──────────── T0UGh8bL — sotuvda marketga berilgan X (paidAmount) ────────────
+
+describe('⭐ T0UGh8bL — sotuvda marketga berilgan X: kuryer → filial → HQ → market zanjiri', () => {
+  /** finance oyog'ini taqlid qiladi (kassa harakati; daftarni advance siljitadi). */
+  const move = (
+    w: ReturnType<typeof makeWorld>,
+    type: Cashbox_type,
+    user: string,
+    delta: number,
+  ) => {
+    const key = `${type}:${user}`;
+    w.state.cash[key] = money((w.state.cash[key] ?? 0) + delta);
+  };
+
+  it('⭐ X = 35 000: har bo`g`in yopiladi, HQ to`lovi X ni QAYTA to`lamaydi, pul saqlanadi', async () => {
+    const w = makeWorld();
+    w.addOrder('7001', 165000);
+
+    // 165 000 − market tarifi 30 000 = 135 000; kuryer marketga 35 000 berdi.
+    const sold = (await w.svc.sellOrder(
+      COURIER,
+      '7001',
+      { paidAmount: 35000 },
+      'sell-x',
+    )) as { data: Row };
+    expect(sold.data).toMatchObject({
+      status: Order_status.PARTLY_PAID,
+      paid_amount: 35000,
+      to_be_paid: 135000,
+      sale_market_paid_amount: 35000,
+    });
+    expect(w.state.orders['7001']).toMatchObject({
+      status: Order_status.PARTLY_PAID,
+      paid_amount: 35000,
+      sale_market_paid_amount: 35000,
+    });
+    expect(w.rowOf('7001')).toMatchObject({
+      status: SettlementStatus.PENDING,
+      courier_amount: 105000,
+      branch_amount: 105000,
+      market_amount: 100000,
+    });
+    expect(w.cash(Cashbox_type.FOR_COURIER, COURIER_ID)).toBe(105000);
+    expect(w.cash(Cashbox_type.FOR_MARKET, MARKET_ID)).toBe(100000);
+    w.assertLedgerMatchesCash();
+
+    // 1) Kuryer qolgan naqdni filialga topshiradi.
+    await w.courierPays(105000);
+    expect(w.rowOf('7001')?.status).toBe(SettlementStatus.COURIER_SETTLED);
+    w.assertLedgerMatchesCash();
+
+    // 2) Filial → HQ (finance paymentFromBranchToMain + advance).
+    move(w, Cashbox_type.BRANCH, BRANCH, -105000);
+    move(w, Cashbox_type.MAIN, '0', 105000);
+    await w.settlement.advanceSettlement({
+      level: 'branch_to_hq',
+      match_value: BRANCH,
+      amount: 105000,
+      requester_id: '1',
+      request_id: 'b2h-x',
+    });
+    expect(w.rowOf('7001')?.status).toBe(SettlementStatus.BRANCH_SETTLED);
+
+    // 3) HQ → market: market kassasidagi qarz (finance ortiqcha to'lov
+    //    qo'riqchisi shundan oshirmaydi) — X dan tashqari qism, xolos.
+    const due = w.cash(Cashbox_type.FOR_MARKET, MARKET_ID);
+    expect(due).toBe(100000);
+    move(w, Cashbox_type.FOR_MARKET, MARKET_ID, -due);
+    move(w, Cashbox_type.MAIN, '0', -due);
+    const paid = (await w.settlement.advanceSettlement({
+      level: 'hq_to_market',
+      match_value: MARKET_ID,
+      amount: due,
+      requester_id: '1',
+      request_id: 'h2m-x',
+    })) as { data: Row };
+
+    // Qator to'liq yopildi, qoldiq yo'q — X ikkinchi marta to'lanmadi.
+    expect(paid.data).toMatchObject({ settled_order_ids: ['7001'] });
+    expect(Number(paid.data.leftover)).toBe(0);
+    expect(w.rowOf('7001')?.status).toBe(SettlementStatus.MARKET_SETTLED);
+    expect(w.carry('hq_to_market', MARKET_ID)).toBe(0);
+    w.assertLedgerMatchesCash();
+
+    // Pul saqlanishi: market jami 35 000 + 100 000 = 165 000 − 30 000;
+    // HQ'da 30 000 − 25 000 = 5 000 foyda; oraliq kassalar 0.
+    expect(35000 + due).toBe(165000 - 30000);
+    expect(w.cash(Cashbox_type.MAIN, '0')).toBe(5000);
+    expect(w.cash(Cashbox_type.FOR_COURIER, COURIER_ID)).toBe(0);
+    expect(w.cash(Cashbox_type.BRANCH, BRANCH)).toBe(0);
+    expect(w.cash(Cashbox_type.FOR_MARKET, MARKET_ID)).toBe(0);
+  });
+
+  it('⭐ kuryer topshirgach superadmin qaytaradi (M6 kredit) — X ham qaytadi, daftar ↔ kassa izchil', async () => {
+    const w = makeWorld();
+    w.addOrder('7001', 165000);
+    await w.svc.sellOrder(COURIER, '7001', { paidAmount: 35000 }, 'sell-x');
+    await w.courierPays(105000);
+    expect(w.rowOf('7001')?.status).toBe(SettlementStatus.COURIER_SETTLED);
+
+    await w.svc.rollbackOrderToWaiting(SUPERADMIN, '7001', undefined, 'rb-x');
+
+    expect(w.state.orders['7001']).toMatchObject({
+      status: Order_status.WAITING,
+      paid_amount: 0,
+      sold_at: null,
+      sale_market_paid_amount: null,
+    });
+    // Topshirilgan 105 000 — kuryer qoldig'iga kredit; market kassasi 0.
+    expect(w.carry('courier_to_branch', COURIER_ID)).toBe(105000);
+    expect(w.cash(Cashbox_type.FOR_COURIER, COURIER_ID)).toBe(-105000);
+    expect(w.cash(Cashbox_type.FOR_MARKET, MARKET_ID)).toBe(0);
+    w.assertLedgerMatchesCash();
+
+    // Qayta (X siz) sotuv va keyingi topshiriq — qoldiq iste'mol qilinadi.
+    await w.svc.sellOrder(COURIER, '7001', {}, 'sell-x-2');
+    w.assertLedgerMatchesCash();
+    const due = w.cash(Cashbox_type.FOR_COURIER, COURIER_ID);
+    expect(due).toBe(140000 - 105000);
+    await w.courierPays(due);
+    expect(w.rowOf('7001')?.status).toBe(SettlementStatus.COURIER_SETTLED);
+    expect(w.carry('courier_to_branch', COURIER_ID)).toBe(0);
+    w.assertLedgerMatchesCash();
+  });
+});
+
 // ─────────────────────────── rad etiladigan holatlar ───────────────────────────
 
 /** Sotilgan va kuryer puli topshirilgan A (COURIER_SETTLED) tayyor dunyo. */

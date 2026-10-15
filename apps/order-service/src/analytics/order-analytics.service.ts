@@ -2,11 +2,76 @@ import { Inject, Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { ClientProxy, RpcException } from '@nestjs/microservices';
 import { Repository } from 'typeorm';
-import { BranchType, Order_status, Roles, rmqSend } from '@app/common';
+import {
+  BranchType,
+  CancelReason,
+  Order_status,
+  Roles,
+  rmqSend,
+} from '@app/common';
 import { Order } from '../entities/order.entity';
 import { OrderTracking } from '../entities/order-tracking.entity';
 import { OrderCustodyEvent } from '../entities/order-custody-event.entity';
 import { OrderLookupService } from '../lookup/order-lookup.service';
+import {
+  CANCEL_REASON_UNKNOWN,
+  CANCEL_REASON_UNKNOWN_UZ,
+  CANCEL_REASON_UZ,
+} from '../domain/cancel-reason';
+
+/**
+ * PUvKXWVw — hisobot sanasi TOSHKENT kuni chegarasida (`analyticsDateRange`
+ * dagi `parseUzDate` bilan bir xil qoida, oyna qisqartirilmaydi):
+ *   • bo'sh — `null` (chegara yo'q);
+ *   • faqat raqam — epoch ms;
+ *   • `T` bor (vaqt/zonasi aniq) — o'zicha;
+ *   • `YYYY-MM-DD` — Toshkent kunining boshi (00:00:00.000) yoki oxiri
+ *     (23:59:59.999), ya'ni UTC'da −5 soat.
+ * Yaroqsiz qiymat — 400.
+ */
+const TASHKENT_OFFSET_MS = 5 * 60 * 60 * 1000;
+export function parseTashkentBoundary(
+  value: string | undefined | null,
+  endOfDay: boolean,
+): Date | null {
+  const raw = String(value ?? '').trim();
+  if (!raw) {
+    return null;
+  }
+  let date: Date;
+  const day = /^(\d{4})-(\d{2})-(\d{2})$/.exec(raw);
+  if (/^\d+$/.test(raw)) {
+    date = new Date(Number(raw));
+  } else if (raw.includes('T')) {
+    date = new Date(raw);
+  } else if (day) {
+    const [, year, month, dayOfMonth] = day.map(Number);
+    const utcMs = Date.UTC(
+      year,
+      month - 1,
+      dayOfMonth,
+      endOfDay ? 23 : 0,
+      endOfDay ? 59 : 0,
+      endOfDay ? 59 : 0,
+      endOfDay ? 999 : 0,
+    );
+    date = new Date(utcMs - TASHKENT_OFFSET_MS);
+    // 2026-02-30 kabi yo'q kun — Date.UTC uni keyingi oyga suradi.
+    const wall = new Date(date.getTime() + TASHKENT_OFFSET_MS);
+    if (wall.getUTCMonth() !== month - 1 || wall.getUTCDate() !== dayOfMonth) {
+      date = new Date(Number.NaN);
+    }
+  } else {
+    date = new Date(raw);
+  }
+  if (Number.isNaN(date.getTime())) {
+    throw new RpcException({
+      statusCode: 400,
+      message: `Sana noto'g'ri formatda: ${raw}`,
+    });
+  }
+  return date;
+}
 
 /**
  * Read-only order analytics / reporting service.
@@ -1248,11 +1313,29 @@ export class OrderAnalyticsService {
   /**
    * BEKOR QILISH SABABLARI KESIMIDA STATISTIKA (PUvKXWVw).
    *
-   * Sabab endi yopiq ro'yxatdan `return_reason` ga yoziladi — shu hisobot
-   * "qaysi market/tuman/kuryer qanday sabab bilan qaytaryapti" savoliga javob
-   * beradi. Sana oynasi buyurtma yaratilgan vaqtga emas, `cancelled` ga
-   * O'TGAN vaqtga (order_tracking) qo'llanadi. Qoida kiritilishidan oldingi
-   * bekor qilishlar `UNKNOWN` bo'lib chiqadi.
+   * Sabab yopiq ro'yxatdan `return_reason` ga yoziladi — hisobot "qaysi
+   * market/tuman/kuryer qanday sabab bilan qaytaryapti" savoliga javob beradi.
+   *
+   * Qaysi buyurtma "bekor qilingan" (2026-10-15 tuzatishlari):
+   *   • ISBOT — `order_tracking` dagi `to_status = cancelled` yozuvi (asl bekor;
+   *     `cancelled (sent) → cancelled` — bekor pochtasini qabul qilish —
+   *     qayta sanalmaydi) va undan KEYIN bekor oilasidan tashqari holatga
+   *     o'tish YO'Q (rollback qilib sotilgani sanalmaydi). Ilgari faqat joriy
+   *     holatga qaralardi: qaytarish so'rovi bilan marketga qaytgan (hech
+   *     qachon bekor qilinmagan) buyurtma erkin matnli `return_reason` i bilan
+   *     ro'yxatga tushardi;
+   *   • joriy holat bekor oilasida — `CLOSED` ham (F4 dan oldin marketga
+   *     topshirilgan bekorlar shu holatda; ilgari ular hisobotdan yo'qolardi);
+   *   • sana oynasi shu bekor yozuviga, TOSHKENT kuni bo'yicha
+   *     (`YYYY-MM-DD` → 00:00:00.000 … 23:59:59.999 +05:00). Ilgari
+   *     `new Date('2026-10-15')` UTC yarim tun edi: `endDate` kunining o'zi
+   *     butunlay tushib qolardi;
+   *   • ro'yxatda yo'q / bo'sh sabab — `UNKNOWN`. `by_reason` da yopiq
+   *     ro'yxatning HAR sababi (0 bo'lsa ham) yorlig'i bilan qaytadi.
+   *   • filial doirasi — boshqa analitikadagi `applyAnalyticsBranchScope`
+   *     (joriy filial / ushlovchi / saqlov tarixi) + yaratilgan filial.
+   *     Ilgari `COALESCE(home, branch, holder)` HQ'da yaratilgan buyurtmani
+   *     filial kuryeri bekor qilsa ham filialdan yashirardi.
    *
    * SQL GROUP BY — qatorlar xotiraga yuklanmaydi, shuning uchun oyna
    * `MAX_ANALYTICS_SPAN_MS` bilan qisqartirilmaydi.
@@ -1277,94 +1360,151 @@ export class OrderAnalyticsService {
           "group_by faqat 'market', 'region' yoki 'courier' bo'lishi mumkin",
       });
     }
-    const parseDate = (value?: string) => {
-      if (!value) return null;
-      const date = new Date(value);
-      if (Number.isNaN(date.getTime())) {
-        throw new RpcException({
-          statusCode: 400,
-          message: `Sana noto'g'ri formatda: ${value}`,
-        });
-      }
-      return date;
-    };
-    const from = parseDate(input?.startDate);
-    const to = parseDate(input?.endDate);
+    const from = parseTashkentBoundary(input?.startDate, false);
+    const to = parseTashkentBoundary(input?.endDate, true);
+    if (from && to && from.getTime() > to.getTime()) {
+      throw new RpcException({
+        statusCode: 400,
+        message: "startDate endDate dan keyin bo'lmasligi kerak",
+      });
+    }
 
-    const reasonExpression = "COALESCE(o.return_reason, 'UNKNOWN')";
+    const knownReasons = Object.values(CancelReason) as string[];
+    const cancelFamily = [
+      Order_status.CANCELLED,
+      Order_status.CANCELLED_SENT,
+      Order_status.CLOSED,
+      Order_status.RETURNED_TO_MARKET,
+    ];
+    // Xom `return_reason` bo'yicha guruhlanadi, ro'yxatda yo'q qiymat
+    // pastda (JS) `UNKNOWN` ga yig'iladi — SELECT/GROUP BY ifodasi
+    // parametrsiz qoladi.
+    const reasonExpression = 'o.return_reason';
+
+    // Bekor yozuvidan KEYIN bekor oilasidan tashqari holat (rollback) yo'q.
+    const undone = this.orderTrackingRepo
+      .createQueryBuilder('cr_undo')
+      .select('1')
+      .where('cr_undo.order_id = cr.order_id')
+      .andWhere('cr_undo.created_at > cr.created_at')
+      .andWhere('cr_undo.to_status NOT IN (:...undoFamily)');
+    const cancelled = this.orderTrackingRepo
+      .createQueryBuilder('cr')
+      .select('1')
+      .where('cr.order_id = o.id')
+      .andWhere('cr.to_status = :cancelledTrackingStatus')
+      .andWhere(
+        '(cr.from_status IS NULL OR cr.from_status NOT IN (:...fromFamily))',
+      );
+    if (from) cancelled.andWhere('cr.created_at >= :cancelFrom');
+    if (to) cancelled.andWhere('cr.created_at <= :cancelTo');
+    cancelled.andWhere(`NOT EXISTS (${undone.getQuery()})`);
+
     const qb = this.orderRepo
       .createQueryBuilder('o')
       .where('o.isDeleted = :isDeleted', { isDeleted: false })
-      .andWhere('o.status IN (:...statuses)', {
-        statuses: [
-          Order_status.CANCELLED,
-          Order_status.CANCELLED_SENT,
-          Order_status.RETURNED_TO_MARKET,
-        ],
+      .andWhere('o.status IN (:...statuses)', { statuses: cancelFamily })
+      .andWhere(`EXISTS (${cancelled.getQuery()})`, {
+        cancelledTrackingStatus: Order_status.CANCELLED,
+        // Massiv parametrlar har ishlatilishda alohida `$N` ga yoyiladi —
+        // turli enum ustunlarida (orders.status / tracking.*) xavfsiz.
+        fromFamily: cancelFamily,
+        undoFamily: cancelFamily,
+        ...(from ? { cancelFrom: from } : {}),
+        ...(to ? { cancelTo: to } : {}),
       })
       .select(reasonExpression, 'reason')
       .addSelect('COUNT(*)', 'count')
       .groupBy(reasonExpression);
 
-    if (from || to) {
-      const sub = qb
-        .subQuery()
-        .select('1')
-        .from(OrderTracking, 't')
-        .where('t.order_id = o.id')
-        .andWhere('t.to_status = :cancelledStatus');
-      if (from) sub.andWhere('t.created_at >= :from');
-      if (to) sub.andWhere('t.created_at <= :to');
-      qb.andWhere(`EXISTS ${sub.getQuery()}`, {
-        cancelledStatus: Order_status.CANCELLED,
-        ...(from ? { from } : {}),
-        ...(to ? { to } : {}),
-      });
-    }
     if (input?.market_id) {
       qb.andWhere('o.market_id = :marketId', {
         marketId: String(input.market_id),
       });
     }
     if (input?.branch_id) {
+      const branchId = String(input.branch_id);
+      const custodySubQuery = this.orderCustodyEventRepo
+        .createQueryBuilder('oce')
+        .select('1')
+        .where('oce.order_id = o.id')
+        .andWhere(
+          '(oce.from_branch_id = :cancelBranchId OR oce.to_branch_id = :cancelBranchId)',
+        )
+        .getQuery();
       qb.andWhere(
-        'COALESCE(o.home_branch_id, o.branch_id, o.holder_branch_id) = :branchId',
-        { branchId: String(input.branch_id) },
+        `(
+          o.branch_id = :cancelBranchId
+          OR o.holder_branch_id = :cancelBranchId
+          OR o.home_branch_id = :cancelBranchId
+          OR EXISTS (${custodySubQuery})
+        )`,
+        { cancelBranchId: branchId },
       );
     }
     if (groupBy) {
       qb.addSelect(groupBy, 'key').addGroupBy(groupBy);
     }
 
-    const rows = await qb.getRawMany<{
-      reason: string;
+    const rawRows = await qb.getRawMany<{
+      reason: string | null;
       count: string;
       key?: string | null;
     }>();
-    const byReason = new Map<string, number>();
-    for (const row of rows) {
-      byReason.set(
-        row.reason,
-        (byReason.get(row.reason) ?? 0) + (Number(row.count) || 0),
-      );
+    const normalizeReason = (reason: string | null) =>
+      reason && knownReasons.includes(reason) ? reason : CANCEL_REASON_UNKNOWN;
+    const order = (reason: string) => {
+      const index = knownReasons.indexOf(reason);
+      return index === -1 ? knownReasons.length : index;
+    };
+    const labelOf = (reason: string) =>
+      CANCEL_REASON_UZ[reason] ?? CANCEL_REASON_UNKNOWN_UZ;
+
+    // Yopiq ro'yxatning har sababi (0 bo'lsa ham) — UI to'liq ro'yxat chizadi.
+    const byReason = new Map<string, number>(
+      knownReasons.map((reason) => [reason, 0]),
+    );
+    const byReasonKey = new Map<
+      string,
+      { reason: string; key: string | null; count: number }
+    >();
+    for (const row of rawRows) {
+      const reason = normalizeReason(row.reason);
+      const count = Number(row.count) || 0;
+      byReason.set(reason, (byReason.get(reason) ?? 0) + count);
+      if (groupBy) {
+        const key =
+          row.key !== null && row.key !== undefined ? String(row.key) : null;
+        const mapKey = `${reason}\u0000${key ?? ''}`;
+        const current = byReasonKey.get(mapKey);
+        if (current) current.count += count;
+        else byReasonKey.set(mapKey, { reason, key, count });
+      }
     }
     const total = Array.from(byReason.values()).reduce((a, b) => a + b, 0);
     return {
       total,
       by_reason: Array.from(byReason.entries())
-        .map(([reason, count]) => ({ reason, count }))
-        .sort((a, b) => b.count - a.count),
+        // `UNKNOWN` faqat haqiqatan bo'lsa chiqadi.
+        .filter(
+          ([reason, count]) => reason !== CANCEL_REASON_UNKNOWN || count > 0,
+        )
+        .map(([reason, count]) => ({ reason, label: labelOf(reason), count }))
+        .sort((a, b) => b.count - a.count || order(a.reason) - order(b.reason)),
+      applied_range: {
+        from: from ? from.toISOString() : null,
+        to: to ? to.toISOString() : null,
+        timezone: 'Asia/Tashkent',
+      },
       ...(groupBy
         ? {
             group_by: input.group_by,
-            rows: rows.map((row) => ({
-              reason: row.reason,
-              key:
-                row.key !== null && row.key !== undefined
-                  ? String(row.key)
-                  : null,
-              count: Number(row.count) || 0,
-            })),
+            rows: Array.from(byReasonKey.values()).sort(
+              (a, b) =>
+                b.count - a.count ||
+                order(a.reason) - order(b.reason) ||
+                String(a.key ?? '').localeCompare(String(b.key ?? '')),
+            ),
           }
         : {}),
     };

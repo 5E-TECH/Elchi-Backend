@@ -11,10 +11,16 @@ import { BaseEntity } from '@app/common';
  *
  * `partner_id` va `order_id` — mantiqiy bog'lanish (bigint), fizik FK emas.
  * Batafsil: docs/PARTNER_API.md.
+ *
+ * yokjwjXG: unique faqat FAOL qatorlar uchun (`is_deleted = false`,
+ * migratsiya 1716000000098). Superadmin buyurtmani pochtadan o'chirganda
+ * bog'lanish yopiladi (soft-delete) va hamkor ayni `external_order_id` bilan
+ * qayta yarata oladi.
  */
 @Entity({ name: 'partner_shipment_refs' })
 @Index('IDX_PSR_PARTNER_EXTERNAL', ['partner_id', 'external_order_id'], {
   unique: true,
+  where: '"is_deleted" = false',
 })
 @Index('IDX_PSR_ORDER', ['order_id'])
 export class PartnerShipmentRef extends BaseEntity {

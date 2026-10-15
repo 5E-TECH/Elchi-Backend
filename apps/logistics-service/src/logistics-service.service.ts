@@ -2310,6 +2310,9 @@ export class LogisticsServiceService implements OnModuleInit {
         allOrdersByPostId: orders,
         homeOrders: { homeOrders, homeOrdersTotalPrice },
         centerOrders: { centerOrders, centerOrdersTotalPrice },
+        // yokjwjXG (additive): pochtaning o'zi — frontend savatni
+        // (`POST /post/delete`) faqat `status = 'new'` da ko'rsatadi.
+        post: { id: String(post.id), status: post.status },
       },
       200,
       'All orders by post id',

@@ -3718,10 +3718,24 @@ export class OrderGatewayController {
   @ApiOperation({
     summary: 'Bekor qilish sabablari kesimida statistika',
     description:
-      "by_reason — sabab bo'yicha son; group_by berilsa rows — sabab × market/hudud/kuryer. Sana oynasi bekor qilingan vaqtga qo'llanadi.",
+      "by_reason — yopiq ro'yxatning HAR sababi ({reason, label, count}, 0 bo'lsa ham; sababi qayd etilmagan eski bekorlar — UNKNOWN); " +
+      'group_by berilsa rows — sabab × market/hudud/kuryer. Sana oynasi asl bekor qilish vaqtiga, TOSHKENT kuni bo`yicha ' +
+      "(YYYY-MM-DD → 00:00–23:59:59 +05:00) qo'llanadi; javobda applied_range. Rollback qilib sotilgan, qaytarish so'rovi bilan " +
+      'marketga qaytgan (bekor qilinmagan) buyurtmalar sanalmaydi; marketga topshirilgan bekorlar (RETURNED_TO_MARKET / CLOSED) sanaladi.',
   })
-  @ApiQuery({ name: 'startDate', required: false, type: String })
-  @ApiQuery({ name: 'endDate', required: false, type: String })
+  @ApiQuery({
+    name: 'startDate',
+    required: false,
+    type: String,
+    description: 'YYYY-MM-DD (Toshkent kuni boshi), ISO vaqt yoki epoch ms',
+  })
+  @ApiQuery({
+    name: 'endDate',
+    required: false,
+    type: String,
+    description:
+      'YYYY-MM-DD (Toshkent kuni oxiri — kun o`zi kiradi), ISO vaqt yoki epoch ms',
+  })
   @ApiQuery({ name: 'market_id', required: false, type: String })
   @ApiQuery({ name: 'branch_id', required: false, type: String })
   @ApiQuery({

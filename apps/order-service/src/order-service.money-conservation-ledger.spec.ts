@@ -13,9 +13,11 @@
  *
  * ⚠️ ZsPLevZZ. Ilgari `sell {paidAmount}` buyurtmani "paid" qilardi, market
  * kassasiga esa baribir TO'LIQ daromad yozilar, settlement esa PENDING
- * qolardi — ikki daftar ajralardi. Endi paidAmount > 0 — 400 va HECH QANDAY
- * kassa/settlement yozuvi qolmaydi; paidAmount'siz (yoki 0) sotuvda esa
- * identiklik saqlanadi. Ikkala holat bitta ketma-ketlikda aralash sinaladi.
+ * qolardi — ikki daftar ajralardi. (b) yo'l bilan paidAmount > 0 — 400 edi.
+ * T0UGh8bL — (a) yo'l: X (sotuvchi marketga bergan naqd) market va sotuvchi
+ * kassasidan yechiladi, settlement'ning market/kuryer/filial oyoqlari X ga
+ * kamayadi — identiklik X bilan HAM, X siz HAM saqlanadi; chegaradan oshgan X
+ * — 400 va izsiz. Hammasi bitta ketma-ketlikda aralash sinaladi.
  *
  * Xotiradagi repo TRANZAKSIYALI: outbox (kassa oyog'i), settlement qatori va
  * buyurtma holati faqat `commitTransaction` da daftarga tushadi,
@@ -32,6 +34,7 @@ import {
 } from '@app/common';
 import { OrderLifecycleService } from './lifecycle/order-lifecycle.service';
 import { OrderSettlement } from './entities/order-settlement.entity';
+import { computeSaleMarketPaymentLimit } from './domain/order-money';
 
 type Row = Record<string, any>;
 
@@ -361,7 +364,61 @@ describe('ZsPLevZZ — kassa tarixi == settlement daftari (sotuv)', () => {
     expectLedgersConserve(ledgers);
   });
 
-  it('⭐ paidAmount bilan: 400, kassa VA settlement yozuvi YO`Q (ikkala yig`indi 0)', async () => {
+  it('⭐ T0UGh8bL: {paidAmount: 105 000 (to`liq)} — market income + TENG expense (balans 0), settlement market_amount 0, holat PAID', async () => {
+    const { s, ledgers } = makeWorld({
+      markets: [E2E_MARKET],
+      couriers: [E2E_COURIER],
+      orders: [e2eOrder('1251167')],
+    });
+
+    await s.sellOrder(COURIER, '1251167', { paidAmount: 105000 });
+
+    const marketLegs = ledgers.cashboxHistory.filter(
+      (h) => h.cashbox_type === Cashbox_type.FOR_MARKET,
+    );
+    expect(marketLegs.map((h) => [h.operation_type, h.amount])).toEqual([
+      ['income', 105000],
+      ['expense', 105000],
+    ]);
+    // ZsPLevZZ TC1: market kassa balansi O'ZGARMAYDI (income + teng expense).
+    expect(sum(marketLegs.map(signed))).toBe(0);
+    expect(ledgers.settlements).toHaveLength(1);
+    expect(ledgers.settlements[0]).toMatchObject({
+      market_amount: 0,
+      // 150 000 − kuryer ulushi 30 000 − marketga bergani 105 000.
+      courier_amount: 15000,
+      status: SettlementStatus.PENDING,
+    });
+    expect(ledgers.orders.get('1251167')).toMatchObject({
+      status: Order_status.PAID,
+      paid_amount: 105000,
+      to_be_paid: 105000,
+      sale_market_paid_amount: 105000,
+    });
+    expectLedgersConserve(ledgers);
+  });
+
+  it('T0UGh8bL: qisman {paidAmount: 40 000} — PARTLY_PAID, ikkala daftar 65 000', async () => {
+    const { s, ledgers } = makeWorld({
+      markets: [E2E_MARKET],
+      couriers: [E2E_COURIER],
+      orders: [e2eOrder('1251167')],
+    });
+
+    await s.sellOrder(COURIER, '1251167', { paidAmount: 40000 });
+
+    expect(ledgers.settlements[0]).toMatchObject({
+      market_amount: 65000,
+      courier_amount: 80000,
+    });
+    expect(ledgers.orders.get('1251167')).toMatchObject({
+      status: Order_status.PARTLY_PAID,
+      paid_amount: 40000,
+    });
+    expectLedgersConserve(ledgers);
+  });
+
+  it('paidAmount chegaradan oshsa: 400, kassa VA settlement yozuvi YO`Q (ikkala yig`indi 0)', async () => {
     const { s, ledgers } = makeWorld({
       markets: [E2E_MARKET],
       couriers: [E2E_COURIER],
@@ -369,7 +426,7 @@ describe('ZsPLevZZ — kassa tarixi == settlement daftari (sotuv)', () => {
     });
 
     const error = await rpcError(
-      s.sellOrder(COURIER, '1251167', { paidAmount: 105000 }),
+      s.sellOrder(COURIER, '1251167', { paidAmount: 105001 }),
     );
 
     expect(error.statusCode).toBe(400);
@@ -385,17 +442,19 @@ describe('ZsPLevZZ — kassa tarixi == settlement daftari (sotuv)', () => {
     expectLedgersConserve(ledgers);
   });
 
-  it('paidAmount rad etilgach odatiy sotuv — identiklik saqlanadi, ikki marta yozilmaydi', async () => {
+  it('paidAmount bilan sotilgach qayta sotish urinishi — daftar ikki marta yozilmaydi', async () => {
     const { s, ledgers } = makeWorld({
       markets: [E2E_MARKET],
       couriers: [E2E_COURIER],
       orders: [e2eOrder('1251167')],
     });
 
-    await rpcError(s.sellOrder(COURIER, '1251167', { paidAmount: 105000 }));
-    await s.sellOrder(COURIER, '1251167', {});
+    await rpcError(s.sellOrder(COURIER, '1251167', { paidAmount: 105001 }));
+    await s.sellOrder(COURIER, '1251167', { paidAmount: 105000 });
     // Qayta sotish urinishi (buyurtma endi WAITING emas) — daftar o'zgarmaydi.
-    const again = await rpcError(s.sellOrder(COURIER, '1251167', {}));
+    const again = await rpcError(
+      s.sellOrder(COURIER, '1251167', { paidAmount: 105000 }),
+    );
 
     expect(again.statusCode).toBe(400);
     expect(ledgers.settlements).toHaveLength(1);
@@ -403,7 +462,7 @@ describe('ZsPLevZZ — kassa tarixi == settlement daftari (sotuv)', () => {
       ledgers.cashboxHistory.filter(
         (h) => h.cashbox_type === Cashbox_type.FOR_MARKET,
       ),
-    ).toHaveLength(1);
+    ).toHaveLength(2);
     expectLedgersConserve(ledgers);
   });
 
@@ -514,23 +573,50 @@ describe('⭐ ZsPLevZZ — aralash ketma-ketlikda har qadamdan keyin identiklik'
       requester: isManager
         ? MANAGER
         : { id: courier.id, roles: ['courier'], branch_id: null },
-      // Har uchinchi buyurtmada avval paidAmount bilan urinish.
+      // Har uchinchi buyurtmada paidAmount (chegaradan oshsa — avval 400).
       paidAmount: next() < 0.35 ? 1 + som(total) : undefined,
       dto: extraCost > 0 ? { extraCost, extraCostApproved: true } : {},
     });
   }
 
-  it('paidAmount > 0 — har safar 400 va izsiz; busiz — SUM(kassa) == SUM(settlement)', async () => {
+  it('⭐ T0UGh8bL: chegaradagi paidAmount — X oyoqlari bilan; oshgani 400 va izsiz; har qadamda SUM(kassa) == SUM(settlement)', async () => {
     const { s, ledgers } = makeWorld({
       markets,
       couriers,
       orders: steps.map((step) => step.order),
     });
     let rejected = 0;
+    let accepted = 0;
     let sold = 0;
 
     for (const step of steps) {
-      if (step.paidAmount !== undefined) {
+      const marketBalance = sum(
+        ledgers.cashboxHistory
+          .filter(
+            (h) =>
+              h.cashbox_type === Cashbox_type.FOR_MARKET &&
+              h.user_id === String(step.order.market_id),
+          )
+          .map(signed),
+      );
+      const market = markets.find((m) => m.id === step.order.market_id)!;
+      const limit = computeSaleMarketPaymentLimit({
+        collectible: Math.max(
+          Number(step.order.total_price) -
+            Number(step.order.paid_online_amount),
+          0,
+        ),
+        marketTariff:
+          step.order.where_deliver === Where_deliver.CENTER
+            ? market.tariff_center
+            : market.tariff_home,
+        extraCost: Number(step.dto.extraCost ?? 0),
+        currentPaid: 0,
+        marketBalanceBefore: marketBalance,
+      });
+      let paidAtSale = 0;
+
+      if (step.paidAmount !== undefined && step.paidAmount > limit) {
         const historyBefore = ledgers.cashboxHistory.length;
         const settlementsBefore = ledgers.settlements.length;
 
@@ -549,38 +635,48 @@ describe('⭐ ZsPLevZZ — aralash ketma-ketlikda har qadamdan keyin identiklik'
         );
         rejected += 1;
         expectLedgersConserve(ledgers);
+      } else if (step.paidAmount !== undefined) {
+        paidAtSale = step.paidAmount;
       }
 
       /**
-       * `paid_amount` FAQAT market qarzidan avtomatik yopilgan qism (autoPay):
-       * sotuvdan oldingi market qoldig'i manfiy bo'lsa, shu qism. U yangi
-       * kassa oyog'i emas va dto'dan (rad etilgan paidAmount'dan) kelmaydi.
+       * `paid_amount` = sotuvchi marketga bergan X + market qarzidan
+       * avtomatik yopilgan qism (autoPay, QOLGANIGA): sotuvdan oldingi
+       * market qoldig'i manfiy bo'lsa, shu qism. autoPay yangi kassa oyog'i
+       * emas; X esa ikki oyoq (market −X, sotuvchi −X).
        */
-      const marketDebt = Math.max(
-        -sum(
-          ledgers.cashboxHistory
-            .filter(
-              (h) =>
-                h.cashbox_type === Cashbox_type.FOR_MARKET &&
-                h.user_id === String(step.order.market_id),
-            )
-            .map(signed),
-        ),
-        0,
-      );
+      const marketDebt = Math.max(-marketBalance, 0);
 
-      await s.sellOrder(step.requester, step.order.id, step.dto);
+      await s.sellOrder(
+        step.requester,
+        step.order.id,
+        paidAtSale > 0 ? { ...step.dto, paidAmount: paidAtSale } : step.dto,
+      );
       sold += 1;
+      if (paidAtSale > 0) accepted += 1;
 
       const order = ledgers.orders.get(step.order.id) as Row;
+      const toBePaid = Number(order.to_be_paid);
       expect(order.paid_amount).toBe(
-        Math.min(Number(order.to_be_paid), marketDebt),
+        Math.min(
+          toBePaid,
+          paidAtSale + Math.min(toBePaid - paidAtSale, marketDebt),
+        ),
       );
+      expect(order.sale_market_paid_amount).toBe(
+        paidAtSale > 0 ? paidAtSale : null,
+      );
+      if (paidAtSale > 0) {
+        expect([Order_status.PAID, Order_status.PARTLY_PAID]).toContain(
+          order.status,
+        );
+      }
       expectLedgersConserve(ledgers);
     }
 
-    // Ketma-ketlik haqiqatan ham ikkala yo'lni va qiyin holatlarni qamragan.
-    expect(rejected).toBeGreaterThan(50);
+    // Ketma-ketlik haqiqatan ham uchala yo'lni va qiyin holatlarni qamragan.
+    expect(rejected).toBeGreaterThan(10);
+    expect(accepted).toBeGreaterThan(30);
     expect(sold).toBe(steps.length);
     expect(ledgers.settlements).toHaveLength(steps.length);
     const marketLegs = ledgers.cashboxHistory.filter(

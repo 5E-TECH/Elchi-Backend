@@ -8,11 +8,13 @@ import {
   GoneException,
   HttpCode,
   Inject,
+  Optional,
   Param,
   Patch,
   Post,
   Query,
   Req,
+  ServiceUnavailableException,
   UseGuards,
 } from '@nestjs/common';
 import { ClientProxy } from '@nestjs/microservices';
@@ -38,6 +40,7 @@ import {
   BulkAssignRegionLogistRequestDto,
   CreateRegionRequestDto,
   CreateDistrictRequestDto,
+  DeletePostOrdersRequestDto,
   MergeDistrictRequestDto,
   ReassignPostRequestDto,
   PostIdRequestDto,
@@ -147,6 +150,16 @@ export class LogisticsGatewayController {
   constructor(
     @Inject('LOGISTICS') private readonly logisticsClient: ClientProxy,
     @Inject('IDENTITY') private readonly identityClient: ClientProxy,
+    /**
+     * yokjwjXG — `POST /post/delete` order-service'ga boradi (buyurtma va
+     * pochta bitta Postgres tranzaksiyasida order-service'da yangilanadi).
+     * Marshrut `post/*` oilasida qolishi uchun shu kontrollerda: OrderGateway
+     * `@Controller('orders')` — u yerda yo'l `/orders/post/delete` bo'lardi.
+     * `@Optional` — mavjud spec'lar 2 argument bilan quradi.
+     */
+    @Optional()
+    @Inject('ORDER')
+    private readonly orderClient?: ClientProxy,
   ) {}
 
   private sendLogisticsWithTimeout(pattern: { cmd: string }, payload: object) {
@@ -525,6 +538,63 @@ export class LogisticsGatewayController {
         { requester: { id: req.user.sub, roles: req.user.roles ?? [] } },
       )
       .pipe(timeout(8000));
+  }
+
+  /**
+   * yokjwjXG — superadmin pochta detali (/mails/:id) savati: buyurtmalarni
+   * SHU pochtadan O'CHIRADI (tizimdan soft-delete). Bekor qilish
+   * (`POST /post/cancel`, kuryer/menejer qaytarish oqimi) EMAS.
+   *
+   * Statik `post/delete` — `post/:id` parametrli marshrutlardan OLDIN.
+   */
+  @Post('post/delete')
+  @HttpCode(200)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: "Pochtadan buyurtmalarni o'chirish (faqat superadmin)",
+    description:
+      "Faqat `status = new` (jo'natilmagan) pochta. Hammasi-yoki-hech biri: " +
+      "bitta buyurtma o'chirib bo'lmasa (kuryer qo'lida, sotilgan, naqd " +
+      "yig'ilgan, qaytarish so'ralgan, partiyada yo'lda...) 409 va hech " +
+      "narsa o'zgarmaydi. Allaqachon o'chirilganlar `skipped` da. Oxirgi " +
+      "buyurtma o'chsa bo'sh pochta ham o'chadi (`post_deleted: true`). " +
+      'Hamkor (BeePost) buyurtmasiga `cancelled` webhooki yuboriladi.',
+  })
+  @ApiBody({ type: DeletePostOrdersRequestDto })
+  @ApiOkResponse({
+    description:
+      '{ post_id, deleted: string[], skipped: string[], post_deleted, order_quantity, post_total_price }',
+  })
+  async deletePostOrders(
+    @Body() dto: DeletePostOrdersRequestDto,
+    @Req() req: { user: JwtUser },
+  ) {
+    if (!this.orderClient) {
+      throw new ServiceUnavailableException('Order service ulanmagan');
+    }
+    // 15 s: 100 ta buyurtma + qulf kutish (order-service lock_timeout 5 s).
+    return firstValueFrom(
+      this.orderClient
+        .send(
+          { cmd: 'order.post.delete_orders' },
+          {
+            post_id: dto.post_id,
+            order_ids: dto.order_ids,
+            reason: dto.reason,
+            requester: { id: req.user.sub, roles: req.user.roles ?? [] },
+          },
+        )
+        .pipe(timeout(15000)),
+    ).catch((error: unknown) => {
+      if (error instanceof TimeoutError) {
+        throw new GatewayTimeoutException(
+          "Order service javob bermadi — sahifani yangilab tekshiring (takroriy so'rov xavfsiz)",
+        );
+      }
+      throw error;
+    });
   }
 
   @Get('post/:id')

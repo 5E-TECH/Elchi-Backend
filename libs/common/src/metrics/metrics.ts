@@ -9,11 +9,18 @@ import {
 
 export type ReceiveByScanOutcome = 'ok' | 'partial' | 'none';
 
+export const RECEIVE_BY_SCAN_OUTCOMES: readonly ReceiveByScanOutcome[] = [
+  'ok',
+  'partial',
+  'none',
+];
+
 /**
  * receive-by-scan natijalari (n9o0KYd5). HTTP kodi har doim 200 (resurs
  * yaratilmaydi), shuning uchun "hech narsa qabul qilinmadi" holatini HTTP
- * metrikasi ko'rmaydi — alert shu hisoblagichga quriladi, masalan:
- * `increase(receive_by_scan_total{outcome="none"}[15m]) > 20`.
+ * metrikasi ko'rmaydi — alert shu hisoblagichga quriladi:
+ * `alerts/receive-by-scan.rules.yml` (Prometheus qoida fayli + promtool
+ * testi; infra'ga ulanishi kerak).
  * Global registry'ga emas, `registerMetrics` dagi ilova registry'siga ulanadi.
  */
 export const receiveByScanTotal = new Counter({
@@ -78,6 +85,17 @@ export function registerMetrics(
     registers: [register],
   });
   register.registerMetric(receiveByScanTotal);
+  /**
+   * n9o0KYd5 — har natija seriyasi 0 bilan OLDINDAN yaratiladi. prom-client
+   * label kombinatsiyasini faqat birinchi `inc()` da chiqaradi: shunda
+   * qayta ishga tushgandan keyingi BIRINCHI `received=0` seriyani 1 bilan
+   * "paydo" qilardi va `increase()` (kamida ikki namuna) uni ko'rmasdi —
+   * alert (alerts/receive-by-scan.rules.yml) aynan birinchi hodisani
+   * o'tkazib yuborardi. `inc(…, 0)` qiymatni o'zgartirmaydi.
+   */
+  for (const outcome of RECEIVE_BY_SCAN_OUTCOMES) {
+    receiveByScanTotal.inc({ outcome }, 0);
+  }
 
   app
     .getHttpAdapter()

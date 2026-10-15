@@ -1,6 +1,7 @@
 import {
   Cashbox_type,
   CourierCompensationMode,
+  Order_status,
   SettlementStatus,
 } from '@app/common';
 
@@ -285,8 +286,16 @@ export function computeRollbackCourierCashboxDelta(params: {
   courierShare: number;
   /** Shu kuryer kassasiga qaytariladigan qo'shimcha xarajat. */
   extraCostRefund: number;
+  /**
+   * T0UGh8bL — sotuvda shu kuryer marketga to'g'ridan-to'g'ri bergan naqd
+   * (`sale_market_paid_amount`). Sotuv uni kuryer kassasidan yechgan va
+   * `courier_amount` ni ham shuncha kamaytirgan — rollback qaytaradi (INCOME).
+   */
+  marketPaidRefund?: number;
 }): number {
-  const refund = Math.max(Number(params.extraCostRefund) || 0, 0);
+  const refund =
+    Math.max(Number(params.extraCostRefund) || 0, 0) +
+    Math.max(Number(params.marketPaidRefund) || 0, 0);
   if (!params.reverseSale) {
     return round2(refund);
   }
@@ -326,4 +335,109 @@ export function isCourierRemittedSettlement(
     return false;
   }
   return (Number(settlement.courier_amount) || 0) !== 0;
+}
+
+/**
+ * T0UGh8bL — SOTUVDA MARKETGA TO'G'RIDAN-TO'G'RI BERISH MUMKIN BO'LGAN ENG
+ * KATTA SUMMA (`sell {paidAmount}` chegarasi).
+ *
+ * Ikki chegara, kichigi olinadi:
+ *   • buyurtma bo'yicha marketga to'lanadigan SOF summa —
+ *     `max(yig'ilgan − market tarifi, 0) − qo'shimcha xarajat − allaqachon
+ *     to'langan`. Finance FIFO (`marketOrderRemaining`) ham aynan shu
+ *     formulani ishlatadi, ya'ni ortiqchasi keyingi HQ to'lovida "manfiy
+ *     qoldiq" bo'lib qaytardi;
+ *   • market kassasidagi qarz SOTUVDAN KEYIN — `qoldiq + daromad − teskari
+ *     oyoq − xarajat`. Market bizga qarzdor bo'lsa (manfiy qoldiq) avval o'sha
+ *     qarz yopiladi (autoPay), naqd faqat qolganiga beriladi. `paymentsToMarket`
+ *     dagi "ORTIQCHA TO'LOV QO'RIQCHISI" (audit M9) bilan bir xil qoida.
+ *
+ * Manfiy natija 0 ga qisiladi: bunday buyurtmada naqd berib bo'lmaydi.
+ */
+export function computeSaleMarketPaymentLimit(params: {
+  /** Sotuvda yig'ilgan naqd (`total_price − paid_online_amount`). */
+  collectible: number;
+  marketTariff: number;
+  extraCost: number;
+  /** Buyurtmada sotuvdan oldin turgan `paid_amount` (to_be_paid bilan qisilgan). */
+  currentPaid: number;
+  /** Market kassasining sotuvdan oldingi qoldig'i (HQ'ning qarzi; manfiy — market qarzi). */
+  marketBalanceBefore: number;
+}): number {
+  const collectible = Number(params.collectible) || 0;
+  const tariff = Number(params.marketTariff) || 0;
+  const extraCost = Math.max(Number(params.extraCost) || 0, 0);
+  const currentPaid = Math.max(Number(params.currentPaid) || 0, 0);
+  const marketIncome = Math.max(collectible - tariff, 0);
+  const marketExpense = Math.max(tariff - collectible, 0);
+  const orderPayable = marketIncome - extraCost - currentPaid;
+  const cashboxPayable =
+    (Number(params.marketBalanceBefore) || 0) +
+    marketIncome -
+    marketExpense -
+    extraCost;
+  return round2(Math.max(Math.min(orderPayable, cashboxPayable), 0));
+}
+
+/**
+ * T0UGh8bL — SOTUVDAN KEYINGI `paid_amount` VA HOLAT.
+ *
+ * `marketPaidAtSale` (sotuvchi marketga bergan naqd) avval yopiladi, so'ng
+ * market qarzidan avtomatik yopiladigan qism (`autoPay`) QOLGANIGA
+ * qo'llanadi.
+ *
+ *   • `marketPaidAtSale = 0` — holat formulasi ilgarigidek BAYTMA-BAYT
+ *     (`to_be_paid` to'liq yopilsa PAID, qisman — PARTLY_PAID, aks holda
+ *     SOLD). Regressiya: ZsPLevZZ TC 2.
+ *   • `marketPaidAtSale > 0` — "to'liq yopildi" SOF summaga nisbatan
+ *     (`to_be_paid − qo'shimcha xarajat`), finance FIFO bilan bir xil: aks
+ *     holda xarajatli buyurtma marketga to'liq to'langan bo'lsa ham
+ *     PARTLY_PAID bo'lib qolardi.
+ */
+export function computeSalePaymentState(params: {
+  /** `max(yig'ilgan − market tarifi, 0)` — buyurtmaning `to_be_paid` i. */
+  netToBePaid: number;
+  /** Buyurtmada sotuvdan oldin turgan `paid_amount` (qisilgan). */
+  currentPaid: number;
+  /** Sotuvchi marketga to'g'ridan-to'g'ri bergan naqd (tekshirilgan). */
+  marketPaidAtSale: number;
+  /** Market kassasining sotuvdan oldingi manfiy qoldig'i (market qarzi), ≥ 0. */
+  debtBeforeSale: number;
+  extraCost: number;
+}): { paidAfter: number; autoPay: number; status: Order_status } {
+  const netToBePaid = Math.max(Number(params.netToBePaid) || 0, 0);
+  const marketPaidAtSale = Math.max(Number(params.marketPaidAtSale) || 0, 0);
+  const paidBeforeDebt = Math.min(
+    netToBePaid,
+    (Number(params.currentPaid) || 0) + marketPaidAtSale,
+  );
+  const remainingBeforeDebt = netToBePaid - paidBeforeDebt;
+  const autoPay = Math.min(
+    remainingBeforeDebt,
+    Math.max(Number(params.debtBeforeSale) || 0, 0),
+  );
+  const paidAfter = Math.min(netToBePaid, paidBeforeDebt + autoPay);
+
+  if (marketPaidAtSale > 0) {
+    const extraCost = Math.max(Number(params.extraCost) || 0, 0);
+    return {
+      paidAfter,
+      autoPay,
+      status:
+        round2(netToBePaid - extraCost - paidAfter) <= 0
+          ? Order_status.PAID
+          : Order_status.PARTLY_PAID,
+    };
+  }
+  const remaining = Math.max(netToBePaid - paidAfter, 0);
+  return {
+    paidAfter,
+    autoPay,
+    status:
+      remaining === 0 && paidAfter > 0
+        ? Order_status.PAID
+        : paidAfter > 0
+          ? Order_status.PARTLY_PAID
+          : Order_status.SOLD,
+  };
 }

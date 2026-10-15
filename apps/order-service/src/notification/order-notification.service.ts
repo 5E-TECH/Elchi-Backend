@@ -9,7 +9,6 @@ import { ClientProxy } from '@nestjs/microservices';
 import { InjectRepository } from '@nestjs/typeorm';
 import { EntityManager, Repository } from 'typeorm';
 import {
-  CancelReason,
   Group_type,
   NotificationChannel,
   Order_status,
@@ -20,6 +19,7 @@ import {
   rmqSend,
 } from '@app/common';
 import { Order } from '../entities/order.entity';
+import { CANCEL_REASON_UZ } from '../domain/cancel-reason';
 
 /**
  * HODISA → BILDIRISHNOMA (OA16fdSq / ePpLHPX2) — order-service pilot.
@@ -176,15 +176,8 @@ const ICON: Record<OrderNotificationType, string> = {
   'order.not_accepted': '⚠️',
 };
 
-/** `return_reason` (CancelReason) — o'zbekcha; noma'lum qiymat o'zicha (escape bilan). */
-const CANCEL_REASON_UZ: Record<string, string> = {
-  [CancelReason.CUSTOMER_NO_ANSWER]: 'Mijoz javob bermadi',
-  [CancelReason.CUSTOMER_REFUSED]: 'Mijoz rad etdi',
-  [CancelReason.WRONG_ADDRESS]: "Manzil noto'g'ri",
-  [CancelReason.DEFECTIVE_PRODUCT]: 'Mahsulot nuqsonli',
-  [CancelReason.PRICE_DISPUTE]: "Narx bo'yicha kelishmovchilik",
-  [CancelReason.OTHER]: 'Boshqa',
-};
+// `return_reason` (CancelReason) yorliqlari — `domain/cancel-reason.ts`
+// (sabablar statistikasi bilan AYNI manba); noma'lum qiymat o'zicha (escape bilan).
 
 const formatMoney = (value: unknown) => {
   const amount = Number(value ?? 0);

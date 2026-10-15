@@ -1,0 +1,57 @@
+# n9o0KYd5 — `promtool test rules receive-by-scan.rules.test.yml`
+# (spec: libs/common/src/metrics/receive-by-scan-alert.n9o0KYd5.spec.ts).
+rule_files:
+  - receive-by-scan.rules.yml
+
+evaluation_interval: 1m
+
+tests:
+  # Bitta received=0 javob (3-daqiqada 0 → 1) alert qo'zg'atadi; 15 daqiqalik
+  # oyna o'tgach (yangi bo'sh javob bo'lmasa) alert o'chadi.
+  - interval: 1m
+    input_series:
+      - series: 'receive_by_scan_total{outcome="none",service="api-gateway"}'
+        values: '0 0 0 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1'
+      - series: 'receive_by_scan_total{outcome="ok",service="api-gateway"}'
+        values: '0+1x30'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: ReceiveByScanNothingReceived
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: ReceiveByScanNothingReceived
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              card: n9o0KYd5
+              service: api-gateway
+            exp_annotations:
+              summary: 'receive-by-scan: hech narsa qabul qilinmadi (received=0)'
+              description: "So'nggi 15 daqiqada receive-by-scan javobi received=0 (ok:false) bo'ldi: QR boshqa hamkordan, allaqachon qabul qilingan yoki tizimda yo'q. order-service logida 'received=0' WARN qatorini (token soni, so'rovchi, filial) tekshiring."
+      - eval_time: 25m
+        alertname: ReceiveByScanNothingReceived
+        exp_alerts: []
+      # Kam bo'sh javob — kritik alert yo'q.
+      - eval_time: 10m
+        alertname: ReceiveByScanMostlyFailing
+        exp_alerts: []
+
+  # Daqiqasiga 3 ta bo'sh, 1 ta muvaffaqiyatli skan: 15 daqiqada ~45 bo'sh
+  # (> 20) va ulushi 75% (> 50%), 5 daqiqa davom etsa — kritik.
+  - interval: 1m
+    input_series:
+      - series: 'receive_by_scan_total{outcome="none",service="api-gateway"}'
+        values: '0+3x30'
+      - series: 'receive_by_scan_total{outcome="ok",service="api-gateway"}'
+        values: '0+1x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: ReceiveByScanMostlyFailing
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              card: n9o0KYd5
+              service: api-gateway
+            exp_annotations:
+              summary: "receive-by-scan: skanlarning yarmidan ko'pi bo'sh"
+              description: "So'nggi 15 daqiqada 20 tadan ko'p receive-by-scan javobi received=0 va ular jami skanlarning 50% dan ko'pi. Hamkor tokenlari / posilka importini tekshiring."

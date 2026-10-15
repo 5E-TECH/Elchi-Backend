@@ -4487,6 +4487,40 @@
         ]
       }
     },
+    "/post/delete": {
+      "post": {
+        "description": "Faqat `status = new` (jo'natilmagan) pochta. Hammasi-yoki-hech biri: bitta buyurtma o'chirib bo'lmasa (kuryer qo'lida, sotilgan, naqd yig'ilgan, qaytarish so'ralgan, partiyada yo'lda...) 409 va hech narsa o'zgarmaydi. Allaqachon o'chirilganlar `skipped` da. Oxirgi buyurtma o'chsa bo'sh pochta ham o'chadi (`post_deleted: true`). Hamkor (BeePost) buyurtmasiga `cancelled` webhooki yuboriladi.",
+        "operationId": "LogisticsGatewayController_deletePostOrders",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeletePostOrdersRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "{ post_id, deleted: string[], skipped: string[], post_deleted, order_quantity, post_total_price }"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Pochtadan buyurtmalarni o'chirish (faqat superadmin)",
+        "tags": [
+          "Logistics"
+        ],
+        "x-roles": [
+          "superadmin"
+        ]
+      }
+    },
     "/post/{id}": {
       "get": {
         "operationId": "LogisticsGatewayController_getPostById",
@@ -17785,6 +17819,39 @@
             "description": "Faqat superadmin o'zgartira oladi (aks holda 403)"
           }
         }
+      },
+      "DeletePostOrdersRequestDto": {
+        "type": "object",
+        "properties": {
+          "post_id": {
+            "type": "string",
+            "example": "88",
+            "description": "Pochta id'si (faqat `status = new` pochta)"
+          },
+          "order_ids": {
+            "example": [
+              "700",
+              "701"
+            ],
+            "description": "O'chiriladigan buyurtmalar (1–100, takrorsiz). Hammasi-yoki-hech biri",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "reason": {
+            "type": "string",
+            "example": "Market buyurtmani qaytarib oldi, posilka jo'natilmaydi",
+            "minLength": 3,
+            "maxLength": 500,
+            "description": "O'chirish sababi (jurnalga yoziladi)"
+          }
+        },
+        "required": [
+          "post_id",
+          "order_ids",
+          "reason"
+        ]
       },
       "SendPostRequestDto": {
         "type": "object",

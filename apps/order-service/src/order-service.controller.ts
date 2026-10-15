@@ -1125,6 +1125,27 @@ export class OrderServiceController {
     );
   }
 
+  /**
+   * yokjwjXG — `POST /post/delete` (faqat superadmin): buyurtmalarni SHU
+   * pochtadan o'chirish (soft-delete, bekor qilish EMAS). Hammasi-yoki-hech
+   * biri, bitta tranzaksiya; idempotent (o'chirilganlar `skipped`).
+   */
+  @MessagePattern({ cmd: 'order.post.delete_orders' })
+  deleteOrdersFromPost(
+    @Payload()
+    data: {
+      post_id?: string;
+      order_ids?: string[];
+      reason?: string;
+      requester?: { id?: string; roles?: string[] };
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.lifecycleService.deleteOrdersFromPost(data ?? {}),
+    );
+  }
+
   // ==================== Enriched Endpoints ====================
 
   @MessagePattern({ cmd: 'order.find_all_enriched' })

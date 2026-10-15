@@ -1741,7 +1741,10 @@ export class IntegrationServiceService {
         // idempotency helper keys on `order.create:${request_id}`). Without the
         // partner prefix, partner B's shipment with external_order_id "1001"
         // would be deduped against partner A's order "1001".
-        request_id: `partner:${partnerId}:${externalOrderId}`,
+        request_id: await this.partnerShipmentCreateRequestId(
+          partnerId,
+          externalOrderId,
+        ),
       },
       10000,
     );
@@ -1760,8 +1763,14 @@ export class IntegrationServiceService {
         }),
       );
     } catch {
+      // yokjwjXG: faqat FAOL bog'lanish — yopilgan (o'chirilgan buyurtmaga
+      // ishora qilgan) ref poyga g'olibi emas.
       const raced = await this.partnerShipmentRefRepo.findOne({
-        where: { partner_id: partnerId, external_order_id: externalOrderId },
+        where: {
+          partner_id: partnerId,
+          external_order_id: externalOrderId,
+          isDeleted: false,
+        },
       });
       if (raced) {
         return this.idempotentShipmentRes(String(raced.order_id), {
@@ -2549,6 +2558,125 @@ export class IntegrationServiceService {
       }
       throw new RpcException(errorRes('Webhook navbatga qo‘yib bo‘lmadi', 500));
     }
+  }
+
+  /**
+   * yokjwjXG — superadmin hamkor buyurtmasini pochtadan O'CHIRDI
+   * (order-service `order.post.delete_orders`, outbox orqali keladi).
+   *
+   * Ikki qadam, TARTIB MUHIM:
+   *   1. hamkorga `status: 'cancelled'` webhooki (mavjud `enqueuePartnerWebhook`
+   *      — u FAOL ref bo'yicha hamkorni topadi, shuning uchun ref yopilishidan
+   *      OLDIN). Hamkor lug'atida `cancelled` — terminal "Bekor qilindi"
+   *      (docs/public/MARKETPLACE_API.md §6.5; BeePost uni CANCELLED,
+   *      terminal_action 'cancel' ga moslaydi). Yuklangan webhook qatori
+   *      `external_order_id` ni o'zida saqlaydi — yetkazish ref'ga muhtoj emas;
+   *   2. `partner_shipment_refs` bog'lanishi yopiladi (soft-delete). Unique
+   *      indeks endi faqat faol qatorlar uchun (migratsiya 1716000000098),
+   *      ya'ni hamkor ayni `external_order_id` bilan qayta yaratsa YANGI
+   *      buyurtma ochiladi — eski o'chirilgan id "dublikat" sifatida qaytmaydi.
+   *
+   * Idempotent: ref allaqachon yopilgan bo'lsa (outbox qayta yuborsa) — no-op.
+   * Webhook navbatga qo'yilmasa (500) ref YOPILMAYDI va outbox qayta uradi.
+   */
+  async detachDeletedPartnerShipment(dto: {
+    order_id?: string;
+    external_order_id?: string;
+    old_status?: string;
+    reason?: string;
+    post_id?: string;
+    total_price?: number;
+    extra_cost?: number;
+  }) {
+    const orderId = String(dto?.order_id ?? '').trim();
+    if (!orderId) {
+      return successRes({ skipped: 'no order_id' }, 200, 'skipped');
+    }
+    const ref = await this.partnerShipmentRefRepo.findOne({
+      where: { order_id: orderId, isDeleted: false },
+    });
+    if (!ref) {
+      return successRes(
+        { skipped: 'not a partner order or already detached' },
+        200,
+        'skipped',
+      );
+    }
+
+    const webhook = await this.enqueuePartnerWebhook({
+      order_id: orderId,
+      external_order_id: ref.external_order_id,
+      action: 'canceled',
+      old_status: dto?.old_status,
+      new_status: Order_status.CANCELLED,
+      cod_collected: 0,
+      market_paid_amount: 0,
+      collected_from_customer: null,
+      elchi_fee: null,
+      market_amount: null,
+      total_price: dto?.total_price,
+      extra_cost: dto?.extra_cost,
+    });
+
+    await this.partnerShipmentRefRepo.update(
+      { id: ref.id, isDeleted: false },
+      { isDeleted: true },
+    );
+
+    await this.activityLog.log({
+      entity_type: 'PartnerShipmentRef',
+      entity_id: String(ref.id),
+      action: ActivityAction.DELETED,
+      old_value: {
+        partner_id: String(ref.partner_id),
+        external_order_id: ref.external_order_id,
+        order_id: orderId,
+      },
+      metadata: {
+        source: 'post.delete_orders',
+        reason: dto?.reason ?? null,
+        post_id: dto?.post_id ?? null,
+        webhook: (webhook as { data?: unknown })?.data ?? null,
+      },
+      description: `Hamkor #${ref.partner_id} posilkasi (${ref.external_order_id}) bog'lanishi yopildi — Elchi buyurtmasi #${orderId} pochtadan o'chirildi`,
+    });
+
+    return successRes(
+      {
+        ref_id: String(ref.id),
+        partner_id: String(ref.partner_id),
+        external_order_id: ref.external_order_id,
+        webhook: (webhook as { data?: unknown })?.data ?? null,
+      },
+      200,
+      'partner shipment detached',
+    );
+  }
+
+  /**
+   * `order.create` idempotency kaliti (order-service `idempotency_keys`,
+   * MUDDATSIZ). Asl kalit `partner:<pid>:<ext>` — o'zgarmaydi.
+   *
+   * ⚠️ yokjwjXG: bog'lanish yopilgan (buyurtma o'chirilgan) bo'lsa asl kalit
+   * ESKI, o'chirilgan buyurtma javobini keshdan qaytarardi — hamkor qayta
+   * yaratganda yana o'chirilgan id'ni olardi. Shuning uchun oxirgi yopilgan
+   * ref id'si kalitga qo'shiladi: deterministik (shu qayta yaratishning
+   * takrori ayni kalitni oladi), har yopilishdan keyin esa yangi.
+   */
+  private async partnerShipmentCreateRequestId(
+    partnerId: string,
+    externalOrderId: string,
+  ): Promise<string> {
+    const base = `partner:${partnerId}:${externalOrderId}`;
+    const lastDetached = await this.partnerShipmentRefRepo.findOne({
+      where: {
+        partner_id: partnerId,
+        external_order_id: externalOrderId,
+        isDeleted: true,
+      },
+      order: { id: 'DESC' },
+    });
+    return lastDetached ? `${base}:after-ref-${lastDetached.id}` : base;
   }
 
   /**

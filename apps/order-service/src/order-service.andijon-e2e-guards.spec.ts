@@ -3,7 +3,9 @@
  * sotish yo'llaridagi server darvozalari.
  *
  *   ZsPLevZZ — sotuvda `paidAmount` buyurtmani "to'landi" qilardi, kassaga esa
- *              hech narsa yozilmasdi (ikki daftar ajralardi) → endi 400.
+ *              hech narsa yozilmasdi (ikki daftar ajralardi) → 400 edi;
+ *              T0UGh8bL: endi (a) yo'l — X market va kuryer kassasidan
+ *              yechiladi, settlement ham X ga kamayadi.
  *   T0UGh8bL — bekor qilishda `paidAmount` jimgina yo'qolardi → >0 bo'lsa 400.
  *   PUvKXWVw — bekor qilish sababi ixtiyoriy erkin matn edi → yopiq ro'yxat,
  *              `return_reason` ga yoziladi, sababsiz 400.
@@ -133,12 +135,47 @@ function makeService(opts: { items?: Row[] } = {}) {
   return { s, requester, cashboxLegs, updateFull };
 }
 
-describe('ZsPLevZZ — sotuvda paidAmount qabul qilinmaydi', () => {
-  it('⭐ paidAmount > 0 — 400, hech qanday kassa oyog`i yozilmaydi', async () => {
+describe('T0UGh8bL / ZsPLevZZ (a) — sotuvda paidAmount kassa oyoqlari bilan', () => {
+  it('⭐ paidAmount > 0 — market VA kuryer kassasidan X yechiladi, holat PARTLY_PAID', async () => {
+    const { s, requester, cashboxLegs, updateFull } = makeService();
+
+    await s.sellOrder(requester, '7001', { paidAmount: 105000 });
+
+    // 250 000 − market tarifi 45 000 = 205 000; X = 105 000 → qisman.
+    expect(updateFull).toHaveBeenCalledWith(
+      '7001',
+      expect.objectContaining({
+        status: Order_status.PARTLY_PAID,
+        paid_amount: 105000,
+        to_be_paid: 205000,
+        sale_market_paid_amount: 105000,
+      }),
+      expect.anything(),
+      expect.anything(),
+    );
+    expect(
+      cashboxLegs
+        .filter((leg) => leg.cashbox_type === Cashbox_type.FOR_MARKET)
+        .map((leg) => [leg.operation_type, leg.source_type, leg.amount]),
+    ).toEqual([
+      ['income', 'sell', 205000],
+      ['expense', 'market_payment', 105000],
+    ]);
+    expect(
+      cashboxLegs
+        .filter((leg) => leg.cashbox_type === Cashbox_type.FOR_COURIER)
+        .map((leg) => [leg.operation_type, leg.source_type, leg.amount]),
+    ).toEqual([
+      ['income', 'sell', 220000],
+      ['expense', 'courier_payment', 105000],
+    ]);
+  });
+
+  it('paidAmount market qarzidan oshsa — 400, hech qanday kassa oyog`i yozilmaydi', async () => {
     const { s, requester, cashboxLegs, updateFull } = makeService();
 
     const error = await rpcError(
-      s.sellOrder(requester, '7001', { paidAmount: 105000 }),
+      s.sellOrder(requester, '7001', { paidAmount: 205001 }),
     );
 
     expect(error.statusCode).toBe(400);
@@ -268,6 +305,48 @@ describe('T0UGh8bL / PUvKXWVw / pLmAsEsj — bekor qilish', () => {
     });
     expect(second.updateFull).toHaveBeenCalled();
   });
+
+  /**
+   * smioRTUg (B yo'li, T0UGh8bL TC1 bilan izchil) — bekor qilishda to'lov
+   * yo'q: eski mijoz (frontend keshi) `paidAmount: 0` yuborsa 400 BERILMAYDI,
+   * > 0 bo'lsa 400 ANIQ xabar bilan va hech narsa yozilmaydi.
+   */
+  it.each([[0], ['0'], [null], [undefined]])(
+    'smioRTUg: paidAmount=%p — bekor qilish o`tadi, paid_amount o`zgarmaydi',
+    async (paidAmount) => {
+      const { s, requester, updateFull } = makeService();
+      await s.cancelOrder(requester, '7001', {
+        reason: CancelReason.CUSTOMER_REFUSED,
+        paidAmount: paidAmount as never,
+      });
+      expect(updateFull).toHaveBeenCalledWith(
+        '7001',
+        expect.not.objectContaining({ paid_amount: expect.anything() }),
+        expect.anything(),
+        expect.anything(),
+      );
+    },
+  );
+
+  it.each([[1], [50000], ['100'], ['abc']])(
+    'smioRTUg: paidAmount=%p — 400 aniq xabar, kassa/holat o`zgarmaydi',
+    async (paidAmount) => {
+      const { s, requester, cashboxLegs, updateFull } = makeService();
+      const error = await rpcError(
+        s.cancelOrder(requester, '7001', {
+          reason: CancelReason.CUSTOMER_REFUSED,
+          paidAmount: paidAmount as never,
+        }),
+      );
+      expect(error).toEqual({
+        statusCode: 400,
+        message:
+          "paidAmount bekor qilishda qabul qilinmaydi — bekor qilingan buyurtmada to'lov bo'lmaydi",
+      });
+      expect(cashboxLegs).toHaveLength(0);
+      expect(updateFull).not.toHaveBeenCalled();
+    },
+  );
 
   it('bu qoidadan oldin ochilgan market tasdig`i sababsiz ham yakunlanadi', async () => {
     const { s, requester, updateFull } = makeService();

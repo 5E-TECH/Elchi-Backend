@@ -309,6 +309,27 @@ export class IntegrationServiceController {
     );
   }
 
+  // yokjwjXG — superadmin hamkor buyurtmasini pochtadan o'chirdi (order-service
+  // outbox'i): hamkorga `cancelled` webhooki + partner_shipment_ref yopiladi.
+  @MessagePattern({ cmd: 'integration.partner.shipment.detach' })
+  detachDeletedPartnerShipment(
+    @Payload()
+    data: {
+      order_id?: string;
+      external_order_id?: string;
+      old_status?: string;
+      reason?: string;
+      post_id?: string;
+      total_price?: number;
+      extra_cost?: number;
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.integrationService.detachDeletedPartnerShipment(data ?? {}),
+    );
+  }
+
   // C2.3 — order-service status o'zgarganда chaqiradi (external_id bo'lgan order
   // uchun). Partner order emas bo'lsa integration-service ичida no-op.
   @MessagePattern({ cmd: 'integration.partner.webhook.enqueue' })

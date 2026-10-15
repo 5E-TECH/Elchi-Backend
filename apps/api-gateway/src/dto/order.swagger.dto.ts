@@ -653,27 +653,30 @@ export class SellOrderRequestDto {
   extraCost?: number;
 
   /**
-   * `paidAmount` sotuvda ISHLATILMAYDI (ZsPLevZZ): u buyurtmani "to'landi"
-   * qilib qo'yardi, lekin hech qanday kassa oyog'i yozilmasdi — ikki daftar
-   * ajralardi. Marketga to'lov: `/finance/cashbox/payment/market`.
-   * Maydon butunlay olib tashlansa `forbidNonWhitelisted` `paidAmount: 0`
-   * yuboradigan eski klientlarni ham 400 bilan yiqitardi — shuning uchun
-   * faqat 0 qabul qilinadi (CancelOrderRequestDto bilan bir xil).
+   * T0UGh8bL — SOTUVDA MARKETGA TO'G'RIDAN-TO'G'RI BERILGAN NAQD.
+   *
+   * Ilgari (ZsPLevZZ (b)) faqat 0 qabul qilinardi: maydon buyurtmani
+   * "to'landi" qilardi-yu, kassa/settlement oyog'i yozilmasdi. Endi (a) yo'l:
+   * order-service shu sotuv tranzaksiyasida market kassasidan va sotuvchi
+   * (kuryer / menejer sotuvida filial) kassasidan X ni yechadi, settlement
+   * oyoqlarini ham X ga kamaytiradi — daftarlar ajralmaydi. Chegaralar va
+   * holat (PAID / PARTLY_PAID) servisda tekshiriladi; bu yerda faqat shakl:
+   * butun, manfiy bo'lmagan son (`paid_amount` ustuni `int`).
    */
   @ApiPropertyOptional({
     example: 0,
-    deprecated: true,
+    minimum: 0,
     description:
-      "ESKIRGAN — sotuvda to'lov qabul qilinmaydi. Faqat 0 qabul qilinadi (eski klientlar uchun); boshqa qiymat 400 (ZsPLevZZ).",
+      "Sotuvchi (kuryer / menejer) yig'ilgan naqddan marketga TO'G'RIDAN-TO'G'RI bergan summa (so'm, butun son). " +
+      '0 yoki berilmasa — oddiy sotuv (SOLD). >0 bo`lsa market va sotuvchi kassasidan shu summa yechiladi; ' +
+      "buyurtma bo'yicha marketga to'lanadigan summa to'liq yopilsa PAID, aks holda PARTLY_PAID. " +
+      "Marketga to'lanadigan summadan (to_be_paid − extraCost) yoki market kassasidagi qarzdan oshsa 400; " +
+      "hamkor (tashqi) buyurtmasida va HQ menejeri sotuvida >0 — 400 (to'lov /finance/cashbox/payment/market orqali).",
   })
   @IsOptional()
   @Transform(({ value }) => parseFormattedNumber(value))
-  @IsNumber()
-  @Min(0)
-  @Max(0, {
-    message:
-      "paidAmount sotuvda qabul qilinmaydi — marketga to'lov /finance/cashbox/payment/market orqali",
-  })
+  @IsInt({ message: "paidAmount butun son (so'm) bo'lishi kerak" })
+  @Min(0, { message: "paidAmount manfiy bo'lishi mumkin emas" })
   paidAmount?: number;
 
   @ApiPropertyOptional({

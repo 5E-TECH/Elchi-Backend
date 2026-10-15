@@ -93,6 +93,8 @@ export const RESTRICTED_HIDDEN_ORDER_FIELDS: readonly string[] = Array.from(
     ...COURIER_HIDDEN_ORDER_FIELDS,
     'to_be_paid',
     'paid_amount',
+    // T0UGh8bL: sotuvda marketga berilgan naqd — `paid_amount` ning qismi.
+    'sale_market_paid_amount',
   ]),
 );
 

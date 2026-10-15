@@ -23,6 +23,199 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-10-15 — Pochta detalidan buyurtmani o'chirish (superadmin savati, yokjwjXG)
+
+- [2026-10-15] 🆕 [order/logistics] — `POST /post/delete` — superadmin
+  pochta detalida (`/mails/:id`) buyurtmani **SHU POCHTADAN O'CHIRADI**:
+  buyurtma tizimdan butunlay (soft-delete) o'chadi. Bu **bekor qilish
+  EMAS** — `POST /post/cancel` (kuryer/menejerning "bekor qilinganlarni
+  pochtaga yuborish" oqimi) o'zgarmagan va superadminga hamon 403.
+  "Buyurtmani qoldirib faqat pochtadan chiqarish" yo'q: pochtasiz HQ
+  buyurtmasi keyingi yuklashda avtomatik qayta pochtaga tushadi.
+  **Rollar:** faqat `superadmin` (admin, manager, registrator, courier,
+  market, branch — 403).
+  **Payload:**
+  ```json
+  {
+    "post_id": "88",
+    "order_ids": ["700", "701"],
+    "reason": "Market posilkani qaytarib oldi"
+  }
+  ```
+  `post_id` — musbat butun son (satr; JSON son ham qabul qilinadi);
+  `order_ids` — 1..100 ta, takrorsiz, har biri musbat butun son;
+  `reason` — majburiy, chekka bo'sh joylar kesiladi, 3..500 belgi
+  (jurnalga yoziladi). Boshqa maydon — 400.
+  **Javob (200):**
+  ```json
+  {
+    "statusCode": 200,
+    "message": "2 ta buyurtma pochtadan o'chirildi",
+    "data": {
+      "post_id": "88",
+      "deleted": ["700", "701"],
+      "skipped": [],
+      "post_deleted": false,
+      "order_quantity": 3,
+      "post_total_price": 450000
+    }
+  }
+  ```
+  `skipped` — allaqachon o'chirilgan id'lar (xato emas, takroriy so'rov
+  xavfsiz; hammasi skipped bo'lsa ham 200, `deleted: []`).
+  `post_deleted: true` — oxirgi buyurtma o'chdi va **bo'sh pochta ham
+  o'chirildi** (`order_quantity: 0`) → detal sahifasidan chiqing.
+  `order_quantity` / `post_total_price` — pochtaning jonli qatorlardan
+  qayta hisoblangan yangi qiymati.
+  **Hammasi-yoki-hech biri:** bitta buyurtma o'chirib bo'lmasa hech narsa
+  o'zgarmaydi.
+  **Xatolar:**
+  | Kod | Qachon | `message` |
+  |---|---|---|
+  | 400 | payload noto'g'ri (id, 0/100+ ta, takror, sabab < 3 yoki > 500) | validatsiya matni |
+  | 403 | superadmin emas | `Forbidden resource` |
+  | 404 | pochta topilmadi | `Pochta #88 topilmadi` |
+  | 409 | pochta jo'natilgan (`status ≠ new`) | `Pochta #88 jo'natilgan (holati: sent) — undan buyurtma o'chirib bo'lmaydi` |
+  | 409 | buyurtma(lar) to'sildi — ro'yxat matnda | `2 ta buyurtmani pochtadan o'chirib bo'lmaydi: #701 — kuryer qo'lida; #702 — sotilgan. Hech narsa o'zgarmadi` |
+  | 409 | pochta/buyurtma boshqa amal bilan band (5 s) | `Pochta yoki buyurtma hozir boshqa amal bilan band — birozdan keyin qayta urinib ko'ring` |
+  | 504 | order-service 15 s da javob bermadi | qayta yuklab tekshiring (takror so'rov xavfsiz) |
+  409 sabablari (matnda `#id — sabab`): `topilmadi`, `bu pochtaga tegishli
+  emas`, `holati o'chirishga mos emas (…)`, `kuryer qo'lida`, `sotilgan`,
+  `bekor qilingan pochtada`, `qaytarish so'ralgan`, `naqd pul yig'ilgan`,
+  `filiallararo partiyada yo'lda`.
+  **Yon ta'sirlar (backend o'zi bajaradi, frontend hech narsa qilmaydi):**
+  hamkor (BeePost) buyurtmasi bo'lsa hamkorga `cancelled` webhooki ketadi
+  va bog'lanish yopiladi (hamkor qayta yuborsa — yangi buyurtma); kutilayotgan
+  (PENDING) filiallararo partiyadan chiqariladi va partiya soni tuzatiladi;
+  onlayn oldindan to'langan summa jurnalga yoziladi (pul yo'qolmaydi,
+  qaytarish moliya tomonidan); qidiruv indeksi va pochta qidiruv yozuvi
+  yangilanadi; har buyurtmada kuzatuv (tracking) "pochtadan o'chirildi"
+  qatori.
+- [2026-10-15] ✏️ [logistics] — `GET /post/orders/:id` javobiga
+  **qo'shimcha** `data.post: { id, status }` (pochtaning o'zi). Mavjud
+  maydonlar (`allOrdersByPostId`, `homeOrders`, `centerOrders`)
+  o'zgarmagan. Savatni shu `status` bo'yicha ko'rsating.
+- [2026-10-15] 🟢 [order] — `DELETE /orders/:id` (bitta buyurtma, pochtadagi
+  `received`) endi `deleted_at` ni ham yozadi va parallel o'zgarishda
+  (UPDATE 0 qator) haqiqatan 409 qaytaradi (ilgari jimgina 200 bo'lardi).
+  Kontrakt o'zgarmagan.
+  → **Frontendda:** 🔧 `pages/mails/detail/index.tsx`:
+  1. Har buyurtma qatorida **chop etish tugmasi yonida savat** — faqat
+     `role === "superadmin"` **va** `data.post.status === "new"` bo'lsa
+     (`canDelete={false}` olib tashlanadi; boshqa holatlarda yashirin).
+     Ko'p tanlab o'chirish ham shu endpoint (`order_ids` massivi, ≤ 100).
+  2. Bosilganda **tasdiq oynasi**: "Buyurtma(lar) tizimdan **butunlay
+     o'chiriladi** — bu bekor qilish emas, qaytarib bo'lmaydi" + majburiy
+     **sabab** maydoni (3–500 belgi, bo'sh bo'lsa tugma o'chiq).
+  3. Eski `SendToPost` (`POST /post/cancel`) chaqiruvi bu sahifadan olib
+     tashlansin — o'rniga yangi mutation `POST /post/delete`
+     (`{ post_id, order_ids, reason }`).
+  4. Muvaffaqiyatda: `mails` query'lari (`queryKey: ["mails", ...]` — detal,
+     ro'yxatlar, bugungi/eski pochtalar), `orders` va pochta/sidebar
+     raqamlari (soni, summa) yangilansin; `post_deleted: true` bo'lsa
+     pochtalar ro'yxatiga (`getMailTabPath("today")`) qayting.
+  5. 409 xabarini **o'zgartirmasdan** toast'da ko'rsating — unda qaysi
+     `#id` nima sababdan o'chmagani yozilgan; hech narsa o'chmagan, tanlov
+     saqlansin.
+
+### 2026-10-15 — Sotuvda "To'langan summa", bekor qilishda to'lov yo'q, bekor sabablari statistikasi, ish rejimi UI (T0UGh8bL, smioRTUg, PUvKXWVw, DOZ6dtJn)
+
+- [2026-10-15] ✏️ [order] — **`POST /orders/sell/:id` — `paidAmount` endi QABUL
+  qilinadi** (T0UGh8bL TC3; ilgari ZsPLevZZ bo'yicha `> 0` → 400 edi).
+  Ma'nosi: **sotuvchi (kuryer yoki menejer) mijozdan yig'ilgan naqddan
+  marketga TO'G'RIDAN-TO'G'RI bergan summa** (so'm, butun son). Backend shu
+  sotuv tranzaksiyasida pul oqimini to'liq yozadi: market kassasi −X
+  (`market_payment`), sotuvchi kassasi −X (kuryer — `courier_payment`,
+  menejer — filial kassasi), settlement'ning market/kuryer/filial oyoqlari −X
+  — HQ keyin marketga to'laganda X ikkinchi marta to'lanmaydi.
+  Misol: narx 250 000, market tarifi 45 000, kuryer ulushi 30 000,
+  `paidAmount: 205 000` → market kassasi +205 000 −205 000 = 0, kuryer kassasi
+  +220 000 −205 000 = 15 000 (filialga shuni topshiradi), holat **PAID**.
+  `paidAmount: 100 000` → **PARTLY_PAID** (HQ qolgan 105 000 ni to'laydi).
+  - Holat: buyurtma bo'yicha marketga to'lanadigan SOF summa
+    (`to_be_paid − extraCost`) to'liq yopilsa `paid`, aks holda
+    `partly_paid`; `paidAmount` 0 / yo'q — avvalgidek `sold`.
+  - **400** (aniq xabar, hech narsa yozilmaydi): kasr / manfiy / son emas;
+    `paidAmount` > marketga shu buyurtma bo'yicha to'lanadigan summa (market
+    bizga qarzdor bo'lsa — avval qarz yopiladi, chegara kamayadi; xabarda
+    chegara: `paidAmount (X) marketga shu buyurtma bo'yicha to'lanadigan
+    summadan (Y) oshmasligi kerak`); hamkor (tashqi, `external_id` li)
+    buyurtma; HQ menejeri sotuvi (filial kassasi yo'q).
+  - Javob: `data: { id, status, to_be_paid, paid_amount, sale_market_paid_amount }`
+    (ilgari `data: {}`).
+  - `GET /orders/:id` — yangi maydon `sale_market_paid_amount` (sotuvda
+    marketga berilgan summa; `null` — berilmagan). `paid_amount` = shu summa +
+    market qarzidan avtomatik yopilgan qism + HQ keyingi to'lovlari.
+  - X bilan sotilgan buyurtma `paid`/`partly_paid` bo'lgani uchun uni faqat
+    **superadmin** rollback qila oladi (X ham kassalarga qaytariladi).
+  → **Frontendda:** 🔧 `SellModal.tsx` (`SellPayload`) ga **"Marketga
+  to'langan summa"** (`paidAmount`, sukut 0) maydoni; izoh: "mijozdan olingan
+  puldan marketga o'zingiz bergan qism"; maksimum ko'rsatma
+  `to_be_paid − extraCost` (yakuniy chegara — backend 400 xabari).
+  Hamkor buyurtmasida (`external_id`) maydonni ko'rsatmang. Javobdagi
+  `data.status` bo'yicha toast: `paid` — "Sotildi, marketga to'liq to'landi",
+  `partly_paid` — "Sotildi, marketga qisman to'landi", `sold` — avvalgidek.
+  `courier-bulk` (`paidAmount: 0`) — o'zgarish shart emas.
+- [2026-10-15] 🔧 [order] — **Bekor qilish oynasidan "To'langan summa" olib
+  tashlansin** (T0UGh8bL TC1, smioRTUg — B yo'li). Bekor qilingan buyurtmada
+  to'lov bo'lmaydi: `POST /orders/cancel/:id` `paidAmount` ni qabul QILMAYDI.
+  Eski kesh/klient `paidAmount: 0` (yoki `"0"`) yuborsa — 400 YO'Q;
+  `> 0` → **400** `"paidAmount bekor qilishda qabul qilinmaydi — faqat 0
+  bo'lishi mumkin"`. → **Frontendda:** 🔧 `CancelModal.tsx` — `paidAmount`
+  state, input (`t("paidAmount")`) va `onCancel(...)` dagi maydon olib
+  tashlansin; `entities/orders/index.ts` `CancelOrder` `data` tipidan ham.
+  Oynada qoladi: sabab (select), qo'shimcha xarajat, izoh, dalil.
+- [2026-10-15] 🔧✏️ [order] — **Bekor qilish sababi majburiy + statistika**
+  (PUvKXWVw).
+  - Bekor qilish: `reason` — yopiq ro'yxat `CUSTOMER_NO_ANSWER` (Mijoz javob
+    bermadi), `CUSTOMER_REFUSED` (Mijoz rad etdi), `WRONG_ADDRESS` (Manzil
+    noto'g'ri), `DEFECTIVE_PRODUCT` (Mahsulot nuqsonli), `PRICE_DISPUTE`
+    (Narx bo'yicha kelishmovchilik), `OTHER` (Boshqa — izoh MAJBURIY).
+    → **Frontendda:** 🔧 `CancelModal.tsx` ga sabab `select`i; **sabab
+    tanlanmaguncha "Bekor qilish" tugmasi `disabled`**, `OTHER` da izoh
+    bo'sh bo'lsa ham `disabled`; body'ga `reason` qo'shilsin (backend
+    sababsiz so'rovni 400 bilan rad etadi).
+  - ✏️ **`GET /orders/cancel-reasons/stats`** (superadmin, admin, menejer —
+    o'z filiali, market — o'z buyurtmalari; doira tokendan) kontrakti
+    to'g'rilandi:
+    `?startDate=YYYY-MM-DD&endDate=YYYY-MM-DD` — **Toshkent kuni**
+    (`endDate` kunining o'zi KIRADI; ilgari UTC yarim tun bilan tushib
+    qolardi); `market_id` / `branch_id` (faqat SA/admin); `group_by=market|region|courier`.
+    Javob: `{ total, by_reason: [{ reason, label, count }], applied_range: { from, to, timezone }, group_by?, rows?: [{ reason, key, count }] }`.
+    `by_reason` da yopiq ro'yxatning HAR sababi (0 bo'lsa ham) o'zbekcha
+    `label` bilan; sababi qayd etilmagan eski bekorlar — `UNKNOWN`
+    ("Sabab qayd etilmagan"). Sanaladi: haqiqatan bekor qilingan (rollback
+    qilib sotilgani yo'q), marketga topshirilgan bekorlar ham
+    (`returned_to_market` / `closed`); qaytarish so'rovi bilan marketga
+    qaytgan (bekor qilinmagan) buyurtma sanalmaydi. Noto'g'ri sana /
+    `startDate > endDate` / noma'lum `group_by` — 400.
+    → **Frontendda:** 🆕 hisobotlar bo'limida "Bekor qilish sabablari"
+    sahifasi: davr tanlagich (Toshkent kuni), sabablar jadvali/diagrammasi
+    (`label`, `count`, ulush = `count / total`), `group_by` bo'yicha
+    market/hudud/kuryer kesimi; menejer va market uchun filtrlar
+    yashiriladi (backend baribir o'z doirasini qo'llaydi).
+- [2026-10-15] 🔧 [integration] — **Ish rejimi paneli: backend tayyor**
+  (DOZ6dtJn — qolgan TC'lar faqat UI). `PATCH /integrations/:id`
+  `{ webhook_enabled?, reconcile_enabled? }` (ikkalasi sukut `true`);
+  `GET /integrations/:id` → `webhook_enabled`, `reconcile_enabled`,
+  `last_reconcile_at`; **`POST /integrations/:id/reconcile-now`** (SA/admin)
+  → `{ checked, applied, unchanged, unmapped, failed, skipped,
+  last_reconcile_at }`; master (`is_active`) o'chiq yoki boshqa solishtiruv
+  ishlayotgan bo'lsa **409**, tashuvchi holat so'rovi
+  (`status_sync_config.status_query`) sozlanmagan bo'lsa **400** (aniq
+  xabar). → **Frontendda:** 🔧 `ConnectionControl.tsx` — BeePost
+  `ElchiControlTab` dagidek QATOR-RO'YXAT: har jarayon (Master, Kiruvchi
+  webhook, Solishtiruvchi (CRON)) uchun icon + nom + holat tegi
+  (Faol/O'chiq) + oqibat izohi + o'ngda Switch; matn: "Master o'chiq bo'lsa
+  quyi kalitlar ta'sir qilmaydi — hech qanday jarayon ishlamaydi".
+  "Hoziroq tenglashtirish" tugmasi (natija toast'i:
+  `checked/applied/failed`) va "Oxirgi solishtiruv: {last_reconcile_at}"
+  (bosilgandan keyin yangilanadi). 1920px da qator-ro'yxat, 390px da har
+  qator to'liq sig'sin (Switch kesilmasin).
+- [2026-10-15] 🟢 [monitoring] — n9o0KYd5: `receive_by_scan_total{outcome="none"}`
+  uchun Prometheus alert qoidalari (`libs/common/src/metrics/alerts/`).
+  Frontendda o'zgarish yo'q.
+
 ### 2026-10-14 — Mahsulotlar katalogi va mijozni telefon bo'yicha qidirish (Guruh E, 4-tur)
 
 - [2026-10-14] ✏️ [catalog] — `GET /product/my-products` va

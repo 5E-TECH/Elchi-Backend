@@ -160,6 +160,31 @@ export class Order extends BaseEntity {
   sale_collectible_amount!: number | null;
 
   /**
+   * T0UGh8bL — SOTUVDA MARKETGA TO'G'RIDAN-TO'G'RI BERILGAN NAQD (snapshot).
+   *
+   * `sell {paidAmount: X}`: sotuvchi (kuryer yoki menejer sotuvida filial)
+   * yig'ilgan naqddan X ni marketga o'zi bergan. Sotuv tranzaksiyasida market
+   * kassasi va sotuvchi kassasidan X yechiladi, settlement oyoqlari ham X ga
+   * kamayadi.
+   *
+   * ⚠️ NEGA ALOHIDA USTUN. `paid_amount` dan X ni ajratib bo'lmaydi: unga
+   * market qarzidan avtomatik yopilgan qism (autoPay) ham, HQ'ning keyingi
+   * to'lovlari (finance FIFO) ham qo'shiladi. Rollback esa AYNAN sotuv yozgan
+   * X oyoqlarini teskari yozishi kerak.
+   *
+   * `NULL` — sotilmagan, X siz sotilgan yoki ustundan oldingi sotuv (0 bilan
+   * bir xil ma'no; backfill kerak emas).
+   */
+  @Column({
+    type: 'numeric',
+    precision: 14,
+    scale: 2,
+    nullable: true,
+    transformer: numericTransformer,
+  })
+  sale_market_paid_amount!: number | null;
+
+  /**
    * Sotuv/bekor qilishda kuryer yozgan qo'shimcha xarajat.
    *
    * Ilgari bu summa HECH QAYERDA buyurtmada saqlanmasdi — faqat kassa

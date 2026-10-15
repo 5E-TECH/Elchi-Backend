@@ -12,6 +12,7 @@ import { OrderSettlement } from '../entities/order-settlement.entity';
 import { OrderSettlementCarry } from '../entities/order-settlement-carry.entity';
 import { BranchTransferBatch } from '../entities/branch-transfer-batch.entity';
 import { BranchTransferBatchItem } from '../entities/branch-transfer-batch-item.entity';
+import { BranchTransferBatchHistory } from '../entities/branch-transfer-batch-history.entity';
 import { MarketCancelledHandoverSession } from '../entities/market-cancelled-handover-session.entity';
 import {
   ExtraCostApprovalAction,
@@ -22,6 +23,7 @@ import {
   ActivityDescribeUz,
   ActivityLogService,
   BranchType,
+  BranchTransferBatchAction,
   BranchTransferBatchStatus,
   BranchTransferDirection,
   CancelReason,
@@ -48,6 +50,8 @@ import {
 } from '../domain/order-status.machine';
 import {
   computeRollbackCourierCashboxDelta,
+  computeSaleMarketPaymentLimit,
+  computeSalePaymentState,
   computeSellProfit,
   computeTariffShortfall,
   isCourierRemittedSettlement,
@@ -62,6 +66,18 @@ import {
   matchPartlySellItems,
   type PartlySellRequestItem,
 } from './partly-sell-items';
+import {
+  classifyBatchBlockers,
+  classifyPostOrders,
+  describePostOrderDeleteBlocked,
+  parsePostOrderDeleteInput,
+  returnedRows,
+  type LockedBatchItemRow,
+  type LockedBatchRow,
+  type LockedPostOrderRow,
+  type LockedPostRow,
+  type PostOrderDeleteOutcome,
+} from './post-order-bulk-delete';
 
 const CANCELLED_HANDOVER_MANUAL_REASONS = new Set([
   'QR yirtilgan',
@@ -151,6 +167,8 @@ const API_UPDATE_FORBIDDEN_FIELDS = [
   'branch_share',
   'branch_cashbox_amount',
   'sale_collectible_amount',
+  // T0UGh8bL: sotuvda marketga berilgan naqd — faqat sotuv/rollback yozadi.
+  'sale_market_paid_amount',
   'extra_cost',
   'proof_files',
   'external_id',
@@ -1040,6 +1058,68 @@ export class OrderLifecycleService {
     return params.chargedCashboxType === Cashbox_type.FOR_COURIER
       ? { courier: amount, branch: amount }
       : { courier: 0, branch: amount };
+  }
+
+  /**
+   * T0UGh8bL — `sell {paidAmount}` SHAKLI: berilmagan / bo'sh — 0; aks holda
+   * butun, manfiy bo'lmagan son (so'm). `paid_amount` ustuni `int` — kasr
+   * qiymat INSERT xatosi bilan butun sotuvni yiqitardi. Gateway DTO ham shuni
+   * tekshiradi; bu yerda — ichki chaqiruvchilar (extra-cost tasdig'i, RMQ)
+   * uchun himoya chuqurligi.
+   */
+  private resolveSaleMarketPaidInput(value: unknown): number {
+    if (value === undefined || value === null || value === '') {
+      return 0;
+    }
+    const amount = Number(value);
+    if (!Number.isFinite(amount) || !Number.isInteger(amount) || amount < 0) {
+      this.badRequest(
+        "paidAmount butun, manfiy bo'lmagan son (so'm) bo'lishi kerak",
+      );
+    }
+    return amount;
+  }
+
+  /**
+   * T0UGh8bL — sotuvda marketga to'g'ridan-to'g'ri beriladigan X ning
+   * CHEGARALARI (tranzaksiyadan oldin, hech qanday oyoq yozilmasdan):
+   *   • naqd ushlovchi sotuvchi kassasi bo'lishi SHART (kuryer yoki menejer
+   *     sotuvida filial). HQ menejeri sotuvida naqd HQ'da — X ni yechadigan
+   *     kassa yo'q, MAIN'ga esa outbox orqali yozib bo'lmaydi (smena / I3
+   *     rad etsa sotuvni qaytarib bo'lmaydi);
+   *   • X ≤ `computeSaleMarketPaymentLimit` (buyurtma bo'yicha sof qarz va
+   *     market kassasidagi qarzning kichigi).
+   */
+  private assertSaleMarketPaidAmount(params: {
+    marketPaidAtSale: number;
+    hasActorCashbox: boolean;
+    collectible: number;
+    marketTariff: number;
+    extraCost: number;
+    orderPaidAmount: number;
+    marketBalanceBefore: number;
+  }): void {
+    if (!params.hasActorCashbox) {
+      this.badRequest(
+        "paidAmount: bu sotuvda naqd ushlovchi kuryer/filial kassasi yo'q (HQ sotuvi) — marketga to'lov /finance/cashbox/payment/market orqali",
+      );
+    }
+    const netToBePaid = Math.max(params.collectible - params.marketTariff, 0);
+    const limit = computeSaleMarketPaymentLimit({
+      collectible: params.collectible,
+      marketTariff: params.marketTariff,
+      extraCost: params.extraCost,
+      currentPaid: Math.min(
+        Math.max(Number(params.orderPaidAmount) || 0, 0),
+        netToBePaid,
+      ),
+      marketBalanceBefore: params.marketBalanceBefore,
+    });
+    if (toTiyin(params.marketPaidAtSale) > toTiyin(limit)) {
+      this.badRequest(
+        `paidAmount (${params.marketPaidAtSale}) marketga shu buyurtma bo'yicha to'lanadigan summadan (${limit}) oshmasligi kerak`,
+      );
+    }
   }
 
   /**
@@ -2635,6 +2715,55 @@ export class OrderLifecycleService {
     ].includes(originalStatus);
 
     /**
+     * T0UGh8bL — SOTUVDA MARKETGA TO'G'RIDAN-TO'G'RI BERILGAN X
+     * (`sale_market_paid_amount`). Sotuv oyoqlari teskari yozilganda X
+     * oyoqlari ham AYNAN qaytariladi (market +X, sotuvchi +X — CORRECTION),
+     * aks holda market kassasida −X, sotuvchida −X daftarsiz qolardi.
+     * Egasi — qo'shimcha xarajat bilan AYNI qoida (settlement qatori: kuryer
+     * yoki filial). X > 0 buyurtma PAID / PARTLY_PAID bo'ladi, ya'ni bu yo'lga
+     * amalda faqat superadmin yetadi.
+     */
+    const reverseSaleLegs =
+      [Order_status.SOLD, Order_status.PAID].includes(originalStatus) ||
+      (originalStatus === Order_status.PARTLY_PAID && isSuperAdmin);
+    const saleMarketPaidAmount = reverseSaleLegs
+      ? Math.max(Number(order.sale_market_paid_amount ?? 0) || 0, 0)
+      : 0;
+    const saleMarketPaidParty =
+      saleMarketPaidAmount > 0 ? reversalActor.extraCostParty : null;
+    if (saleMarketPaidAmount > 0 && !saleMarketPaidParty) {
+      this.badRequest(
+        "Sotuvda marketga berilgan to'lovni qaytaradigan kuryer/filial kassasi aniqlanmadi — rollback bajarilmadi. Buxgalteriya tuzatishi kerak",
+      );
+    }
+    if (saleMarketPaidParty?.cashbox_type === Cashbox_type.BRANCH) {
+      await this.lookup.ensureBranchCashbox(saleMarketPaidParty.user_id);
+    }
+    const saleMarketPaidPartyCashbox = !saleMarketPaidParty
+      ? null
+      : saleMarketPaidParty.cashbox_type === Cashbox_type.FOR_COURIER &&
+          saleMarketPaidParty.user_id === saleCourierId
+        ? courierCashbox
+        : extraCostParty &&
+            extraCostPartyCashbox &&
+            extraCostParty.user_id === saleMarketPaidParty.user_id &&
+            extraCostParty.cashbox_type === saleMarketPaidParty.cashbox_type
+          ? extraCostPartyCashbox
+          : await this.lookup
+              .getCashboxByUser(
+                saleMarketPaidParty.user_id,
+                saleMarketPaidParty.cashbox_type,
+              )
+              .catch(() => null);
+    if (saleMarketPaidParty && !saleMarketPaidPartyCashbox) {
+      this.notFound(
+        saleMarketPaidParty.cashbox_type === Cashbox_type.BRANCH
+          ? 'Filial kassasi topilmadi'
+          : 'Courier cashbox not found',
+      );
+    }
+
+    /**
      * fix3b (M6) — kredit yo'li uchun daftar ↔ kassa mosligi. Kuryer kassasi
      * pastdagi oyoqlar bilan AYNAN `courier_amount` ga kamayishi kerak, chunki
      * qoldiqqa aynan shu summa kredit yoziladi. Formulalar tranzaksiyadagi
@@ -2657,6 +2786,13 @@ export class OrderLifecycleService {
           extraCostParty?.cashbox_type === Cashbox_type.FOR_COURIER &&
           extraCostParty.user_id === remittedCourierCredit.courierId
             ? extraCostAmount
+            : 0,
+        // T0UGh8bL: sotuv X ni kuryer kassasidan ham, `courier_amount` dan
+        // ham yechgan — qaytim ikkalasida bir xil bo'lishi uchun.
+        marketPaidRefund:
+          saleMarketPaidParty?.cashbox_type === Cashbox_type.FOR_COURIER &&
+          saleMarketPaidParty.user_id === remittedCourierCredit.courierId
+            ? saleMarketPaidAmount
             : 0,
       });
       if (
@@ -2788,10 +2924,41 @@ export class OrderLifecycleService {
       //   courier: reverse (total − courierShare)
       //   branch : reverse the exact amount credited to its cashbox at sale time
       // Applies to SOLD/PAID always, and PARTLY_PAID for superadmin.
-      const doSaleReversal =
-        [Order_status.SOLD, Order_status.PAID].includes(originalStatus) ||
-        (originalStatus === Order_status.PARTLY_PAID && isSuperAdmin);
+      const doSaleReversal = reverseSaleLegs;
       if (doSaleReversal) {
+        /**
+         * T0UGh8bL — sotuvda marketga berilgan X qaytariladi (sotuv
+         * oyoqlarini teskari yozishdan OLDIN — kuryer kassasi kirimni
+         * chiqimdan oldin ko'radi, qo'shimcha xarajatdagi kabi).
+         */
+        if (
+          saleMarketPaidAmount > 0 &&
+          saleMarketPaidParty &&
+          saleMarketPaidPartyCashbox
+        ) {
+          const paidRollbackComment = `${rollbackComment} — sotuvda marketga berilgan ${saleMarketPaidAmount} so'm qaytarildi`;
+          await pay({
+            user_id: String(order.market_id),
+            cashbox_type: Cashbox_type.FOR_MARKET,
+            amount: saleMarketPaidAmount,
+            operation_type: Operation_type.INCOME,
+            source_type: Source_type.CORRECTION,
+            source_id: String(order.id),
+            created_by: String(requester.id),
+            comment: paidRollbackComment,
+          });
+          await pay({
+            user_id: saleMarketPaidParty.user_id,
+            cashbox_type: saleMarketPaidParty.cashbox_type,
+            amount: saleMarketPaidAmount,
+            operation_type: Operation_type.INCOME,
+            source_type: Source_type.CORRECTION,
+            source_id: String(order.id),
+            created_by: String(requester.id),
+            comment: paidRollbackComment,
+          });
+        }
+
         const courierShareRb =
           order.courier_share != null
             ? Number(order.courier_share)
@@ -2932,6 +3099,10 @@ export class OrderLifecycleService {
       // nolga tushadi. Qolsa, keyingi rollback (qayta sotuv/bekordan keyin)
       // o'sha eski summani yana qaytarardi (audit M5).
       const extraCostReset = extraCostAmount > 0 ? { extra_cost: 0 } : {};
+      // T0UGh8bL: X ham yuqorida qaytarildi — snapshot tozalanadi (aks holda
+      // keyingi rollback uni ikkinchi marta qaytarardi).
+      const saleMarketPaidReset =
+        saleMarketPaidAmount > 0 ? { sale_market_paid_amount: null } : {};
 
       // Single final status write inside the transaction, then commit.
       if (
@@ -2950,6 +3121,7 @@ export class OrderLifecycleService {
             // qarz yo'q (pLmAsEsj).
             to_be_paid: 0,
             ...extraCostReset,
+            ...saleMarketPaidReset,
           },
           {
             id: requester.id,
@@ -2971,6 +3143,7 @@ export class OrderLifecycleService {
             paid_amount: 0,
             sold_at: null,
             ...extraCostReset,
+            ...saleMarketPaidReset,
           },
           {
             id: requester.id,
@@ -2992,6 +3165,7 @@ export class OrderLifecycleService {
             // sotuvda ESKI naqd bilan rollback qilinardi.
             sale_collectible_amount: null,
             ...extraCostReset,
+            ...saleMarketPaidReset,
           },
           {
             id: requester.id,
@@ -6244,28 +6418,39 @@ export class OrderLifecycleService {
     requestId?: string,
   ) {
     /**
-     * ⚠️ SOTUVDA `paidAmount` QABUL QILINMAYDI (Andijon E2E, ZsPLevZZ).
+     * T0UGh8bL — `paidAmount` = SOTUVCHI MARKETGA TO'G'RIDAN-TO'G'RI BERGAN
+     * NAQD (ZsPLevZZ (a) yo'li).
      *
-     * Ilgari u faqat `paid_amount` ustuni va holatni (PAID/PARTLY_PAID)
-     * yozardi, market kassasiga esa baribir TO'LIQ daromad tushardi va
-     * `order_settlement` PENDING qolardi — buyurtma "marketga to'landi"
-     * derdi, kassa "hali qarzdormiz". Keyin HQ haqiqatan to'lasa kitobda ikki
-     * marta to'langan bo'lib chiqardi. UI bu maydonni hech qachon yubormagan;
-     * marketga to'lov faqat `/finance/cashbox/payment/market` va
-     * `/orders/settlement/hq-to-market` orqali o'tadi. Market qarzidan
-     * avtomatik yopiladigan qism (`autoPay`) o'zgarmadi — u kassada aks etadi.
+     * Ilgari (ZsPLevZZ (b)) >0 qiymat 400 edi, chunki u faqat `paid_amount`
+     * ustuni va holatni yozardi: market kassasiga TO'LIQ daromad tushardi,
+     * `order_settlement` esa X siz qolardi — HQ keyin to'lasa kitobda ikki
+     * marta to'langan bo'lib chiqardi.
+     *
+     * Endi X shu tranzaksiyada TO'LIQ yoziladi. Sotuv paytida naqd faqat
+     * sotuvchida (kuryer yoki menejer sotuvida filial) — HQ ishtirok etmaydi,
+     * shuning uchun bu "HQ to'lovi" EMAS, sotuvchining marketga bergani
+     * (finance CLICK_TO_MARKET naqshi):
+     *   • market kassasi   −X (MARKET_PAYMENT) — HQ marketga X kam qarz;
+     *   • sotuvchi kassasi −X — u zanjir bo'ylab X kam naqd topshiradi;
+     *   • settlement: market_amount, courier_amount, branch_amount −X —
+     *     HQ to'lovi (FIFO) X ni ikkinchi marta to'lamaydi.
+     * Kompaniya foydasi (market tarifi − ulushlar) o'zgarmaydi.
      */
-    if (Number(dto?.paidAmount ?? 0) !== 0) {
-      this.badRequest(
-        "paidAmount sotuvda qabul qilinmaydi — marketga to'lov /finance/cashbox/payment/market orqali amalga oshiriladi",
-      );
-    }
+    const marketPaidAtSale = this.resolveSaleMarketPaidInput(dto?.paidAmount);
     const order = await this.findById(id);
     if (order.status !== Order_status.WAITING) {
       this.badRequest('Order not found or not in waiting status');
     }
     if (!order.post_id) {
       this.badRequest('Order has no post');
+    }
+    if (marketPaidAtSale > 0 && String(order.external_id ?? '').trim()) {
+      // Hamkor (BeePost) o'z daftarini faqat `settlement.payment` webhooki
+      // bilan yuritadi — u faqat /finance/cashbox/payment/market da chiqadi.
+      // Sotuvdagi to'lov hamkorga yetib bormas va ikki daftar ajralardi.
+      this.badRequest(
+        "paidAmount: hamkor (tashqi) buyurtmasida sotuvda marketga to'lov qabul qilinmaydi — /finance/cashbox/payment/market orqali to'lang",
+      );
     }
 
     /**
@@ -6437,6 +6622,19 @@ export class OrderLifecycleService {
           !this.hasRole(requester, Roles.COURIER),
       });
     }
+    // T0UGh8bL: X chegarasi — tasdiq so'rovi (extra-cost approval) va
+    // tranzaksiyadan OLDIN, aks holda noto'g'ri X bilan tasdiq ochilardi.
+    if (marketPaidAtSale > 0) {
+      this.assertSaleMarketPaidAmount({
+        marketPaidAtSale,
+        hasActorCashbox: Boolean(actorExpenseCashbox),
+        collectible: this.resolveCollectibleAmount(order),
+        marketTariff,
+        extraCost,
+        orderPaidAmount: Number(order.paid_amount ?? 0),
+        marketBalanceBefore,
+      });
+    }
     // Reject up front (before the transaction) if this market's proof policy is
     // triggered by this sell and the courier didn't attach valid file proof.
     const proofFiles = await this.enforceOperationProof({
@@ -6510,24 +6708,29 @@ export class OrderLifecycleService {
 
     const toBePaid = marketIncome;
     const netToBePaid = Math.max(Number(toBePaid) || 0, 0);
-    // `paidAmount` endi tekshirilmaydi: u boshida rad etiladi (yuqoriga
-    // qarang). Qisman sotuv bilan bir xil — faqat buyurtmadagi qiymat.
+    // Buyurtmadagi qiymat (qisman sotuv bilan bir xil) + T0UGh8bL: sotuvchi
+    // marketga bergan X (chegarasi yuqorida tekshirilgan).
     const currentPaid = Math.min(
       Math.max(Number(order.paid_amount ?? 0), 0),
       netToBePaid,
     );
-    const remainingBeforeDebt = netToBePaid - currentPaid;
     const debtBeforeSale =
       marketBalanceBefore < 0 ? Math.abs(marketBalanceBefore) : 0;
-    const autoPay = Math.min(remainingBeforeDebt, debtBeforeSale);
-    const paidAfter = Math.min(netToBePaid, currentPaid + autoPay);
-    const remaining = Math.max(netToBePaid - paidAfter, 0);
-    const nextStatus =
-      remaining === 0 && paidAfter > 0
-        ? Order_status.PAID
-        : paidAfter > 0
-          ? Order_status.PARTLY_PAID
-          : Order_status.SOLD;
+    // X = 0 bo'lsa formula ilgarigidek baytma-bayt (ZsPLevZZ TC 2).
+    const { paidAfter, status: nextStatus } = computeSalePaymentState({
+      netToBePaid,
+      currentPaid,
+      marketPaidAtSale,
+      debtBeforeSale,
+      extraCost,
+    });
+    // X qaysi kassadan chiqqan bo'lsa, settlement'da o'sha bo'g'in va
+    // yuqoridagilar shuncha kam ko'taradi — qo'shimcha xarajat bilan AYNI
+    // qoida (`resolveExtraCostSettlementLegs`).
+    const marketPaidLegs = this.resolveExtraCostSettlementLegs({
+      extraCost: marketPaidAtSale,
+      chargedCashboxType: actorExpenseCashbox ? actorExpenseCashboxType : null,
+    });
 
     // Stable per-request dedup token: an RMQ redelivery / retry of THIS sell
     // reuses the same epoch so finance dedupes it; a re-sell after rollback
@@ -6683,6 +6886,49 @@ export class OrderLifecycleService {
         );
       }
 
+      /**
+       * T0UGh8bL — sotuvchi marketga bergan X. Odatiy oyoqlardan KEYIN
+       * (kirim avval — sotuvchi kassasi oraliqda manfiyga tushmaydi).
+       * Market kassasi MARKET_PAYMENT (market tarixida "to'lov" bo'lib
+       * ko'rinadi), kuryer kassasi COURIER_PAYMENT, filial kassasi
+       * MARKET_PAYMENT — finance CLICK_TO_MARKET oyoqlari bilan bir xil turlar.
+       * `source_id` = buyurtma, `dedup_epoch` = sotuv tokeni: qayta
+       * yetkazishda finance takrorlamaydi.
+       */
+      if (marketPaidAtSale > 0 && actorExpenseCashbox) {
+        const paymentComment = `Buyurtma #${order.id}: sotuvda marketga to'g'ridan-to'g'ri berildi (${marketPaidAtSale} so'm)`;
+        await pay({
+          user_id: String(order.market_id),
+          cashbox_type: Cashbox_type.FOR_MARKET,
+          amount: marketPaidAtSale,
+          operation_type: Operation_type.EXPENSE,
+          source_type: Source_type.MARKET_PAYMENT,
+          source_id: String(order.id),
+          source_user_id: String(order.market_id),
+          created_by: String(requester.id),
+          comment: paymentComment,
+        });
+        await pay({
+          // Menejer sotuvida — naqd kirim qilingan (va rollback qaytaradigan)
+          // AYNAN o'sha settlement filiali kassasi (`branchCashbox`).
+          user_id:
+            actorExpenseCashboxType === Cashbox_type.FOR_COURIER
+              ? actorCourierId
+              : String(settlementBranchId),
+          cashbox_type: actorExpenseCashboxType,
+          amount: marketPaidAtSale,
+          operation_type: Operation_type.EXPENSE,
+          source_type:
+            actorExpenseCashboxType === Cashbox_type.FOR_COURIER
+              ? Source_type.COURIER_PAYMENT
+              : Source_type.MARKET_PAYMENT,
+          source_id: String(order.id),
+          source_user_id: String(order.market_id),
+          created_by: String(requester.id),
+          comment: paymentComment,
+        });
+      }
+
       await this.updateFull(
         id,
         {
@@ -6717,6 +6963,10 @@ export class OrderLifecycleService {
           // o'zgaradi (qaytarish webhooki), ya'ni qayta hisob boshqa raqam
           // berardi va kassada farq qolardi.
           sale_collectible_amount: collectible,
+          // T0UGh8bL: rollback X oyoqlarini AYNAN shu summa bilan qaytaradi
+          // (X siz sotuvda `null` — eski sotuvlar bilan bir xil).
+          sale_market_paid_amount:
+            marketPaidAtSale > 0 ? marketPaidAtSale : null,
           comment: finalComment || null,
           ...(proofFiles.length ? { proof_files: proofFiles } : {}),
         },
@@ -6742,9 +6992,17 @@ export class OrderLifecycleService {
         // ⚠️ Qo'shimcha xarajat kuryer/filial kassasidan ham yechiladi, demak
         // o'sha bo'g'inlar zanjir bo'ylab shuncha kam naqd ko'taradi — aks
         // holda FIFO daftardan ko'p pul talab qilib qotib qolardi.
-        courier_amount: collectible - courierShare - extraCostLegs.courier,
-        branch_amount: branchNet - extraCostLegs.branch,
-        market_amount: collectible - marketTariff - extraCost,
+        // ⚠️ T0UGh8bL: sotuvchi marketga bergan X ham xuddi shunday —
+        // market HQ'dan X kam oladi (HQ to'lovi FIFO'da X ni qayta
+        // to'lamaydi), sotuvchi va yuqori bo'g'inlar X kam topshiradi.
+        courier_amount:
+          collectible -
+          courierShare -
+          extraCostLegs.courier -
+          marketPaidLegs.courier,
+        branch_amount: branchNet - extraCostLegs.branch - marketPaidLegs.branch,
+        market_amount:
+          collectible - marketTariff - extraCost - marketPaidAtSale,
         hasCourier: Boolean(courierCashbox),
       });
 
@@ -6791,6 +7049,10 @@ export class OrderLifecycleService {
         to_be_paid: netToBePaid,
         paid_amount: paidAfter,
         extra_cost: extraCost,
+        // T0UGh8bL — "kim marketga qancha berdi" nizosi uchun iz.
+        ...(marketPaidAtSale > 0
+          ? { sale_market_paid_amount: marketPaidAtSale }
+          : {}),
       },
       ...this.custody.auditActor(requester),
       metadata: {
@@ -6802,7 +7064,22 @@ export class OrderLifecycleService {
       description: ActivityDescribeUz.orderSold(order.id, totalPrice),
     });
 
-    return successRes({}, 200, 'Order sold');
+    /**
+     * T0UGh8bL — javobda yakuniy holat: UI (SellModal) "To'langan summa"
+     * kiritilganda PAID / PARTLY_PAID ni darhol ko'rsatadi, qayta so'ramaydi.
+     * Ilgari `data: {}` edi — qo'shimcha maydonlar eski klientni buzmaydi.
+     */
+    return successRes(
+      {
+        id: String(order.id),
+        status: nextStatus,
+        to_be_paid: netToBePaid,
+        paid_amount: paidAfter,
+        sale_market_paid_amount: marketPaidAtSale,
+      },
+      200,
+      'Order sold',
+    );
   }
 
   async cancelOrder(
@@ -8405,6 +8682,8 @@ export class OrderLifecycleService {
       branch_cashbox_amount?: number | null;
       /** Sotuvda mijozdan yig'ilgan naqd (snapshot) — rollback shunga tayanadi. */
       sale_collectible_amount?: number | null;
+      /** T0UGh8bL: sotuvda marketga to'g'ridan-to'g'ri berilgan naqd (snapshot). */
+      sale_market_paid_amount?: number | null;
       to_be_paid?: number;
       paid_amount?: number;
       status?: Order_status;
@@ -8525,6 +8804,8 @@ export class OrderLifecycleService {
       branch_cashbox_amount?: number | null;
       /** Sotuvda mijozdan yig'ilgan naqd (snapshot) — rollback shunga tayanadi. */
       sale_collectible_amount?: number | null;
+      /** T0UGh8bL: sotuvda marketga to'g'ridan-to'g'ri berilgan naqd (snapshot). */
+      sale_market_paid_amount?: number | null;
       to_be_paid?: number;
       paid_amount?: number;
       /** Kuryer yozgan qo'shimcha xarajat — buyurtmada saqlanadi. */
@@ -8631,6 +8912,11 @@ export class OrderLifecycleService {
         typeof dto.sale_collectible_amount !== 'undefined'
           ? dto.sale_collectible_amount
           : order.sale_collectible_amount,
+      // T0UGh8bL — `sale_collectible_amount` bilan bir xil sabab: `typeof`.
+      sale_market_paid_amount:
+        typeof dto.sale_market_paid_amount !== 'undefined'
+          ? dto.sale_market_paid_amount
+          : order.sale_market_paid_amount,
       extra_cost:
         typeof dto.extra_cost !== 'undefined'
           ? dto.extra_cost
@@ -9070,9 +9356,13 @@ export class OrderLifecycleService {
               "Faqat jo'natilmagan pochtadan buyurtmani o'chirish mumkin",
           });
         }
-        const deleted: Array<{ id: string }> = await tx.query(
-          `UPDATE "order_schema"."orders"
-           SET "is_deleted" = true, "updatedAt" = NOW()
+        // ⚠️ TypeORM UPDATE uchun `[rows, rowCount]` qaytaradi — `.length`
+        // to'g'ridan-to'g'ri olinsa doim 2 bo'lib, 0 qatorli holat (parallel
+        // o'zgarish) sezilmasdi. `returnedRows` ikkala shaklni ham ochadi.
+        const deleted = returnedRows<{ id: string }>(
+          await tx.query(
+            `UPDATE "order_schema"."orders"
+           SET "is_deleted" = true, "deleted_at" = NOW(), "updatedAt" = NOW()
            WHERE "id" = $1 AND "post_id" = $2
              AND "status" = 'received' AND "is_deleted" = false
              AND "deleted_at" IS NULL AND "canceled_post_id" IS NULL
@@ -9081,7 +9371,8 @@ export class OrderLifecycleService {
              AND COALESCE("paid_online_amount", 0) = 0
              AND "holder_type" <> 'COURIER'
            RETURNING "id"`,
-          [id, linkedPostId],
+            [id, linkedPostId],
+          ),
         );
         if (!deleted.length) {
           throw new RpcException({
@@ -9124,6 +9415,588 @@ export class OrderLifecycleService {
     });
 
     return successRes({}, 200, `Order #${id} o'chirildi`);
+  }
+
+  /**
+   * yokjwjXG — superadmin pochta detalidagi savat: buyurtmalarni SHU
+   * POCHTADAN o'chirish (`POST /post/delete` → `order.post.delete_orders`).
+   *
+   * ⚠️ BEKOR QILISH EMAS (`POST /post/cancel` ga tegilmaydi): buyurtma
+   * tizimdan soft-delete qilinadi (`is_deleted` + `deleted_at`). Faqat
+   * pochtadan chiqarish ishlamaydi — logistics `newPosts()` pochtasiz
+   * RECEIVED HQ buyurtmani keyingi yuklashda qayta pochtaga qo'shadi.
+   *
+   * HAMMASI-YOKI-HECH BIRI, bitta tranzaksiya (order va pochta turli sxemada,
+   * lekin bitta Postgres bazasida — `remove()` dagi naqsh):
+   *   1. pochta FOR UPDATE — faqat `new` (jo'natilmagan) bo'lsa;
+   *   2. buyurtmalar FOR UPDATE ORDER BY id (deadlock'siz tartib);
+   *   3. jismoniy/pul cheklovlari (`classifyPostOrders`) — bittasi buzilsa
+   *      409, hech narsa o'zgarmaydi;
+   *   4. partiya (current_batch_id): PENDING dan chiqariladi va sanog'i
+   *      qayta hisoblanadi; SENT — 409 (posilka yo'lda);
+   *   5. soft-delete, pochta sanog'i/summasi jonli qatorlardan qayta
+   *      hisoblanadi; oxirgi buyurtma o'chsa bo'sh pochta ham o'chadi;
+   *   6. tracking "o'chirildi" qatori, qidiruv va hamkor signali — outbox
+   *      orqali, AYNI tranzaksiyada (commit bo'lmasa hech biri ketmaydi).
+   *
+   * Idempotent: allaqachon o'chirilgan id'lar `skipped` da qaytadi.
+   */
+  async deleteOrdersFromPost(input: {
+    post_id?: unknown;
+    order_ids?: unknown;
+    reason?: unknown;
+    requester?: { id?: string; roles?: string[] };
+  }) {
+    const requester = input?.requester;
+    if (!this.hasRole(requester, Roles.SUPERADMIN)) {
+      this.forbidden("Pochtadan buyurtmani faqat superadmin o'chira oladi");
+    }
+    const parsed = parsePostOrderDeleteInput(input ?? {});
+    if ('error' in parsed) {
+      this.badRequest(parsed.error);
+    }
+    const { postId, orderIds, reason } = parsed;
+    const requesterId = String(requester?.id ?? '').trim() || 'system';
+    const trackingRole = this.custody.toTrackingRole(requester?.roles);
+
+    let outcome: PostOrderDeleteOutcome;
+    try {
+      outcome = await this.dataSource.transaction((tx) =>
+        this.deleteOrdersFromPostTx(tx, {
+          postId,
+          orderIds,
+          reason,
+          requesterId,
+          trackingRole,
+        }),
+      );
+    } catch (error) {
+      if (error instanceof RpcException) throw error;
+      const code = (error as { driverError?: { code?: string } })?.driverError
+        ?.code;
+      if (code === '55P03') {
+        // lock_timeout — pochta yoki buyurtma boshqa amal bilan band.
+        throw new RpcException({
+          statusCode: 409,
+          message:
+            "Pochta yoki buyurtma hozir boshqa amal bilan band — birozdan keyin qayta urinib ko'ring",
+        });
+      }
+      this.handleDbError(error);
+    }
+
+    // Jurnal — commit'dan KEYIN (activity_log yozuvi xato bersa ham asosiy
+    // amal buzilmaydi; `remove()` bilan bir xil).
+    const actor = this.custody.auditActor(requester);
+    for (const row of outcome.deletedRows) {
+      const paidOnline = Number(row.paid_online_amount ?? 0);
+      await this.activityLog.log({
+        entity_type: 'Order',
+        entity_id: String(row.id),
+        action: ActivityAction.DELETED,
+        old_value: {
+          status: row.status,
+          market_id: row.market_id,
+          post_id: postId,
+          current_batch_id: row.current_batch_id,
+          total_price: Number(row.total_price ?? 0),
+        },
+        ...actor,
+        metadata: {
+          reason,
+          source: 'post.delete_orders',
+          post_id: postId,
+          requester_id: requester?.id ?? null,
+          requester_roles: requester?.roles ?? [],
+          old_status: row.status,
+          partner_order: Boolean(row.external_id),
+          external_id: row.external_id,
+          // (c) Onlayn oldindan to'lov: buyurtma o'chirildi, lekin pul
+          // YO'QOLMAYDI — summa va holat shu yerda qayd etiladi, qaytarish
+          // (refund) moliya tomonidan alohida, shu yozuv asosida bajariladi.
+          ...(paidOnline > 0
+            ? {
+                paid_online_amount: paidOnline,
+                payment_status: row.payment_status,
+                paid_online_note:
+                  "Onlayn oldindan to'lov bor edi — pul yo'qolmaydi, qaytarish moliya tomonidan alohida bajariladi",
+              }
+            : {}),
+        },
+        description: `Buyurtma #${row.id} pochta #${postId} dan o'chirildi. Sabab: ${reason}`,
+      });
+    }
+    if (outcome.deletedRows.length) {
+      await this.activityLog.log({
+        entity_type: 'Post',
+        entity_id: String(postId),
+        action: outcome.postDeleted
+          ? ActivityAction.DELETED
+          : ActivityAction.UPDATED,
+        old_value: outcome.postBefore,
+        new_value: outcome.postDeleted
+          ? null
+          : {
+              order_quantity: outcome.orderQuantity,
+              post_total_price: outcome.postTotalPrice,
+            },
+        ...actor,
+        metadata: {
+          reason,
+          source: 'post.delete_orders',
+          deleted_order_ids: outcome.deletedRows.map((row) => String(row.id)),
+          post_deleted: outcome.postDeleted,
+          batch_ids: outcome.touchedBatchIds,
+        },
+        description: outcome.postDeleted
+          ? `Pochta #${postId} dagi oxirgi buyurtma o'chirildi — bo'sh pochta o'chirildi`
+          : `Pochta #${postId} dan ${outcome.deletedRows.length} ta buyurtma o'chirildi`,
+      });
+    }
+
+    const deleted = outcome.deletedRows.map((row) => String(row.id));
+    return successRes(
+      {
+        post_id: postId,
+        deleted,
+        skipped: outcome.skipped,
+        post_deleted: outcome.postDeleted,
+        order_quantity: outcome.orderQuantity,
+        post_total_price: outcome.postTotalPrice,
+      },
+      200,
+      deleted.length
+        ? `${deleted.length} ta buyurtma pochtadan o'chirildi`
+        : "O'chiriladigan buyurtma qolmadi (hammasi allaqachon o'chirilgan)",
+    );
+  }
+
+  private async deleteOrdersFromPostTx(
+    tx: EntityManager,
+    args: {
+      postId: string;
+      orderIds: string[];
+      reason: string;
+      requesterId: string;
+      trackingRole: string;
+    },
+  ): Promise<PostOrderDeleteOutcome> {
+    const { postId, orderIds, reason } = args;
+    // Gateway 8 s kutadi — qulf uzoq kutilmasin (55P03 → 409).
+    await tx.query(`SET LOCAL lock_timeout = '5s'`);
+
+    const posts = returnedRows<LockedPostRow>(
+      await tx.query(
+        `SELECT "id", "status", "qr_code_token", "region_id", "courier_id",
+                "branch_id", "order_quantity", "post_total_price"
+         FROM "logistics_schema"."posts"
+         WHERE "id" = $1 AND "is_deleted" = false
+         FOR UPDATE`,
+        [postId],
+      ),
+    );
+    const post = posts[0];
+    if (!post) {
+      return this.replayDeletedPost(tx, postId, orderIds);
+    }
+    if (post.status !== 'new') {
+      throw new RpcException({
+        statusCode: 409,
+        message: `Pochta #${postId} jo'natilgan (holati: ${post.status}) — undan buyurtma o'chirib bo'lmaydi`,
+      });
+    }
+
+    const rows = returnedRows<LockedPostOrderRow>(
+      await tx.query(
+        `SELECT "id", "post_id", "status", "is_deleted", "deleted_at",
+                "holder_type", "sold_at", "canceled_post_id",
+                "return_requested", "paid_amount", "paid_online_amount",
+                "payment_status", "current_batch_id", "total_price",
+                "extra_cost", "market_id", "source", "external_id", "operator"
+         FROM "order_schema"."orders"
+         WHERE "id" = ANY($1::bigint[])
+         ORDER BY "id"
+         FOR UPDATE`,
+        [orderIds],
+      ),
+    );
+    const plan = classifyPostOrders(postId, orderIds, rows);
+
+    // (b) Partiya: qulf orderlardan KEYIN, id tartibida.
+    const batchIds = [
+      ...new Set(
+        plan.toDelete
+          .map((row) => String(row.current_batch_id ?? '').trim())
+          .filter(Boolean),
+      ),
+    ].sort();
+    let pendingBatchIds: string[] = [];
+    if (batchIds.length) {
+      const batches = returnedRows<LockedBatchRow>(
+        await tx.query(
+          `SELECT "id", "status"
+           FROM "order_schema"."branch_transfer_batches"
+           WHERE "id" = ANY($1::bigint[]) AND "is_deleted" = false
+           ORDER BY "id"
+           FOR UPDATE`,
+          [batchIds],
+        ),
+      );
+      const items = returnedRows<LockedBatchItemRow>(
+        await tx.query(
+          `SELECT "batch_id", "order_id", "sent_at"
+           FROM "order_schema"."branch_transfer_batch_items"
+           WHERE "batch_id" = ANY($1::bigint[])
+             AND "order_id" = ANY($2::bigint[])
+             AND "is_deleted" = false`,
+          [batchIds, plan.toDelete.map((row) => String(row.id))],
+        ),
+      );
+      const batchCheck = classifyBatchBlockers(plan.toDelete, batches, items);
+      plan.blocked.push(...batchCheck.blocked);
+      pendingBatchIds = batchCheck.pendingBatchIds;
+    }
+
+    if (plan.blocked.length) {
+      throw new RpcException({
+        statusCode: 409,
+        message: describePostOrderDeleteBlocked(plan.blocked),
+        data: { post_id: postId, blocked: plan.blocked },
+      });
+    }
+
+    const postBefore = {
+      status: post.status,
+      order_quantity: Number(post.order_quantity ?? 0),
+      post_total_price: Number(post.post_total_price ?? 0),
+    };
+    if (!plan.toDelete.length) {
+      return {
+        deletedRows: [],
+        skipped: plan.skipped,
+        postDeleted: false,
+        orderQuantity: postBefore.order_quantity,
+        postTotalPrice: postBefore.post_total_price,
+        postBefore,
+        touchedBatchIds: [],
+      };
+    }
+
+    const deleteIds = plan.toDelete.map((row) => String(row.id));
+    const deleted = returnedRows<{ id: string }>(
+      await tx.query(
+        `UPDATE "order_schema"."orders"
+         SET "is_deleted" = true, "deleted_at" = NOW(),
+             "current_batch_id" = NULL, "updatedAt" = NOW()
+         WHERE "id" = ANY($1::bigint[]) AND "post_id" = $2
+           AND "is_deleted" = false AND "deleted_at" IS NULL
+         RETURNING "id"`,
+        [deleteIds, postId],
+      ),
+    );
+    if (deleted.length !== deleteIds.length) {
+      // Qulf ostida bo'lishi mumkin emas — lekin bo'lsa, butun tranzaksiya
+      // qaytadi (hammasi-yoki-hech biri).
+      throw new RpcException({
+        statusCode: 409,
+        message:
+          "Buyurtmalar holati o'zgargan — sahifani yangilab qayta urinib ko'ring",
+      });
+    }
+
+    // (b) PENDING partiyadan chiqarish + sanog'ini itemlardan qayta hisoblash.
+    for (const batchId of pendingBatchIds) {
+      await tx.query(
+        `UPDATE "order_schema"."branch_transfer_batch_items"
+         SET "is_deleted" = true, "updatedAt" = NOW()
+         WHERE "batch_id" = $1 AND "order_id" = ANY($2::bigint[])
+           AND "is_deleted" = false`,
+        [batchId, deleteIds],
+      );
+      const recount = returnedRows<{ order_count: number | string }>(
+        await tx.query(
+          `UPDATE "order_schema"."branch_transfer_batches" AS batch
+           SET "order_count" = totals.quantity,
+               "total_price" = totals.total,
+               "updatedAt" = NOW()
+           FROM (
+             SELECT COUNT(*)::int AS quantity,
+                    COALESCE(SUM("snapshot_price"), 0) AS total
+             FROM "order_schema"."branch_transfer_batch_items"
+             WHERE "batch_id" = $1 AND "is_deleted" = false
+           ) AS totals
+           WHERE batch."id" = $1
+           RETURNING batch."order_count"`,
+          [batchId],
+        ),
+      );
+      const remaining = Number(recount[0]?.order_count ?? 0);
+      if (remaining === 0) {
+        // Bo'sh qolgan PENDING partiya — bekor (ro'yxatda 0 ta posilkali
+        // "kutilmoqda" partiya osilib qolmasin). Tarix qatori — mavjud
+        // CANCELLED amali bilan (yangi enum qiymati = migratsiya, kerak emas;
+        // qisman chiqarish esa buyurtma jurnalida `current_batch_id` bilan).
+        await tx.query(
+          `UPDATE "order_schema"."branch_transfer_batches"
+           SET "status" = $2, "cancelled_at" = NOW(), "updatedAt" = NOW()
+           WHERE "id" = $1 AND "status" = $3`,
+          [
+            batchId,
+            BranchTransferBatchStatus.CANCELLED,
+            BranchTransferBatchStatus.PENDING,
+          ],
+        );
+        const historyRepo = tx.getRepository(BranchTransferBatchHistory);
+        await historyRepo.save(
+          historyRepo.create({
+            batch_id: batchId,
+            user_id: /^\d+$/.test(args.requesterId) ? args.requesterId : '0',
+            action: BranchTransferBatchAction.CANCELLED,
+            notes:
+              `Pochta #${postId} dan o'chirilgan buyurtma(lar) partiyadan ` +
+              `chiqarildi (${deleteIds.join(', ')}) — partiya bo'sh qoldi. ` +
+              `Sabab: ${reason}`,
+          }),
+        );
+      }
+    }
+
+    // Pochta sanog'i/summasi — jonli qatorlardan (remove() bilan bir xil SQL).
+    const totals = returnedRows<{
+      order_quantity: number | string;
+      post_total_price: number | string;
+    }>(
+      await tx.query(
+        `UPDATE "logistics_schema"."posts" AS post
+         SET "order_quantity" = totals.quantity,
+             "post_total_price" = totals.total,
+             "updatedAt" = NOW()
+         FROM (
+           SELECT COUNT(*)::int AS quantity,
+                  COALESCE(SUM("total_price"), 0) AS total
+           FROM "order_schema"."orders"
+           WHERE "post_id" = $1 AND "is_deleted" = false
+             AND "deleted_at" IS NULL
+         ) AS totals
+         WHERE post."id" = $1
+         RETURNING post."order_quantity", post."post_total_price"`,
+        [postId],
+      ),
+    );
+    const orderQuantity = Number(totals[0]?.order_quantity ?? 0);
+    const postTotalPrice = Number(totals[0]?.post_total_price ?? 0);
+
+    // Oxirgi buyurtma o'chdi — bo'sh pochta ham o'chadi. HARD delete,
+    // logistics `deletePost` (postRepo.remove) bilan bir xil: logistics
+    // pochtalarni `is_deleted` bo'yicha FILTRLAMAYDI (soft o'chirilgan pochta
+    // ro'yxatlarda qolardi), `newPosts` esa yo'q pochtaga ishora qilgan
+    // RECEIVED buyurtmani yetim deb qayta tiklaydi (LOG-01) — poyga xavfsiz.
+    let postDeleted = false;
+    if (orderQuantity === 0) {
+      const removed = returnedRows<{ id: string }>(
+        await tx.query(
+          `DELETE FROM "logistics_schema"."posts"
+           WHERE "id" = $1 AND "status" = 'new'
+           RETURNING "id"`,
+          [postId],
+        ),
+      );
+      postDeleted = removed.length > 0;
+    }
+
+    // Tracking "o'chirildi" — holat o'zgarmaydi (from = to), shuning uchun
+    // bildirishnoma ketmaydi (`resolveOrderNotificationType` from===to → null).
+    const trackingRepo = tx.getRepository(OrderTracking);
+    for (const row of plan.toDelete) {
+      const status = row.status as Order_status;
+      await this.custody.createTrackingEvent(
+        {
+          order_id: String(row.id),
+          from_status: status,
+          to_status: status,
+          action: 'deleted_from_post',
+          old_value: {
+            status,
+            post_id: postId,
+            current_batch_id: row.current_batch_id,
+          },
+          new_value: { is_deleted: true, post_id: postId },
+          changed_by: args.requesterId,
+          changed_by_role: args.trackingRole,
+          description: `Buyurtma pochta #${postId} dan o'chirildi (superadmin)`,
+          metadata: {
+            reason,
+            post_id: postId,
+            post_deleted: postDeleted,
+            ...(Number(row.paid_online_amount ?? 0) > 0
+              ? { paid_online_amount: Number(row.paid_online_amount) }
+              : {}),
+          },
+          note: reason,
+        },
+        trackingRepo,
+      );
+    }
+
+    // Qidiruv — har buyurtma indeksdan chiqadi, pochta yozuvi yangilanadi
+    // (yoki o'chadi). Outbox, AYNI tranzaksiyada.
+    for (const id of deleteIds) {
+      await this.removeOrderFromSearch(id, tx);
+    }
+    if (postDeleted) {
+      await this.outbox.enqueue(
+        'SEARCH',
+        'search.index.remove',
+        { source: 'logistics', type: 'post', sourceId: postId },
+        { manager: tx },
+      );
+    } else {
+      await this.outbox.enqueue(
+        'SEARCH',
+        'search.index.upsert',
+        {
+          source: 'logistics',
+          type: 'post',
+          sourceId: postId,
+          title: `Post #${postId}`,
+          content: [post.qr_code_token, post.region_id, post.courier_id, 'new']
+            .filter(Boolean)
+            .join(' '),
+          tags: ['logistics', 'post', 'new'],
+          metadata: {
+            region_id: post.region_id,
+            courier_id: post.courier_id,
+            order_quantity: orderQuantity,
+            post_total_price: postTotalPrice,
+            status: 'new',
+          },
+        },
+        { manager: tx },
+      );
+    }
+
+    // (a) Hamkor/tashqi buyurtma — "bekor qilindi" signali va bog'lanishni
+    // yopish. Outbox orqali: tranzaksiya qaytsa signal ham ketmaydi.
+    for (const row of plan.toDelete) {
+      await this.queueDeletedExternalOrderSync(row, postId, reason, tx);
+    }
+
+    return {
+      deletedRows: plan.toDelete,
+      skipped: plan.skipped,
+      postDeleted,
+      orderQuantity: postDeleted ? 0 : orderQuantity,
+      postTotalPrice: postDeleted ? 0 : postTotalPrice,
+      postBefore,
+      touchedBatchIds: pendingBatchIds,
+    };
+  }
+
+  /**
+   * Pochta topilmadi. Agar so'ralgan HAMMA buyurtma allaqachon o'chirilgan va
+   * aynan shu pochtaga tegishli bo'lsa — bu takroriy so'rov (pochta oldingi
+   * chaqiruvda oxirgi buyurtma bilan birga o'chgan): 200, hammasi `skipped`.
+   * Aks holda 404.
+   */
+  private async replayDeletedPost(
+    tx: EntityManager,
+    postId: string,
+    orderIds: string[],
+  ): Promise<PostOrderDeleteOutcome> {
+    const rows = returnedRows<{
+      id: string;
+      post_id: string | null;
+      is_deleted: boolean;
+      deleted_at: Date | string | null;
+    }>(
+      await tx.query(
+        `SELECT "id", "post_id", "is_deleted", "deleted_at"
+         FROM "order_schema"."orders"
+         WHERE "id" = ANY($1::bigint[])`,
+        [orderIds],
+      ),
+    );
+    const allDeletedHere =
+      rows.length === orderIds.length &&
+      rows.every(
+        (row) =>
+          (row.is_deleted === true || row.deleted_at != null) &&
+          String(row.post_id ?? '') === postId,
+      );
+    if (!allDeletedHere) {
+      this.notFound(`Pochta #${postId} topilmadi`);
+    }
+    return {
+      deletedRows: [],
+      skipped: [...orderIds],
+      postDeleted: true,
+      orderQuantity: 0,
+      postTotalPrice: 0,
+      postBefore: null,
+      touchedBatchIds: [],
+    };
+  }
+
+  /**
+   * (a) O'chirilgan hamkor/tashqi buyurtma uchun "bekor qilindi" signali.
+   *
+   * - Partner API (BeePost va b.): `integration.partner.shipment.detach` —
+   *   integration-service avval mavjud `enqueuePartnerWebhook` bilan
+   *   `status: 'cancelled'` webhookini navbatga qo'yadi (hamkor lug'atida
+   *   terminal "Bekor qilindi"; BeePost uni CANCELLED/terminal_action
+   *   'cancel' ga moslaydi), keyin `partner_shipment_refs` bog'lanishini
+   *   yopadi — hamkor ayni `external_order_id` bilan qayta yaratsa YANGI
+   *   buyurtma ochiladi, eski o'chirilgan id qaytmaydi.
+   * - Eski ExternalIntegration (`operator = external_*`): mavjud
+   *   `integration.sync.enqueue` (`queueExternalStatusSync` bilan bir xil).
+   *
+   * Pul maydonlari ATAYLAB `null`/0: buyurtma sotilmagan, hamkor uni qarz
+   * hisobiga qo'shmasin (`queueExternalStatusSync` izohiga qarang).
+   */
+  private async queueDeletedExternalOrderSync(
+    row: LockedPostOrderRow,
+    postId: string,
+    reason: string,
+    tx: EntityManager,
+  ): Promise<void> {
+    const externalId = String(row.external_id ?? '').trim();
+    if (!externalId) return;
+    await this.outbox.enqueue(
+      'INTEGRATION',
+      'integration.partner.shipment.detach',
+      {
+        order_id: String(row.id),
+        external_order_id: externalId,
+        action: 'canceled',
+        old_status: row.status,
+        new_status: Order_status.CANCELLED,
+        reason,
+        post_id: postId,
+        cod_collected: 0,
+        market_paid_amount: 0,
+        collected_from_customer: null,
+        elchi_fee: null,
+        market_amount: null,
+        total_price: Number(row.total_price ?? 0),
+        extra_cost: Number(row.extra_cost ?? 0),
+      },
+      { manager: tx },
+    );
+    if (String(row.operator ?? '').startsWith('external_')) {
+      await this.outbox.enqueue(
+        'INTEGRATION',
+        'integration.sync.enqueue',
+        {
+          order_id: String(row.id),
+          external_order_id: externalId,
+          operator: row.operator,
+          action: 'canceled',
+          old_status: row.status,
+          new_status: Order_status.CANCELLED,
+        },
+        { manager: tx },
+      );
+    }
   }
 
   // ==================== Enrichment Helpers ====================

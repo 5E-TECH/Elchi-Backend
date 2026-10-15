@@ -2,11 +2,14 @@ import { ApiProperty } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
 import {
   ArrayMaxSize,
+  ArrayMinSize,
+  ArrayUnique,
   IsArray,
   IsNotEmpty,
   IsNumberString,
   IsOptional,
   IsString,
+  Length,
   Matches,
   ValidateIf,
 } from 'class-validator';
@@ -205,4 +208,66 @@ export class PostIdRequestDto {
   @IsNotEmpty()
   @IsNumberString()
   postId!: string;
+}
+
+/** Musbat butun son (bigint) satri — "0", "-1", "1.5", "abc" rad etiladi. */
+const POSITIVE_ID_STRING = /^[1-9]\d{0,18}$/;
+
+/** JSON son kelsa satrga keltiriladi (`7` → `"7"`), qolgani o'zgarmaydi. */
+const toIdString = ({ value }: { value: unknown }): unknown =>
+  typeof value === 'number' && Number.isFinite(value) ? String(value) : value;
+
+/**
+ * yokjwjXG — `POST /post/delete` (faqat superadmin): buyurtmalarni SHU
+ * pochtadan o'chirish. Bekor qilish (`POST /post/cancel`) EMAS — buyurtma
+ * tizimdan butunlay (soft-delete) o'chiriladi.
+ */
+export class DeletePostOrdersRequestDto {
+  @ApiProperty({
+    example: '88',
+    description: "Pochta id'si (faqat `status = new` pochta)",
+  })
+  @Transform(toIdString)
+  @IsString()
+  @Matches(POSITIVE_ID_STRING, {
+    message: "post_id musbat butun son bo'lishi kerak",
+  })
+  post_id!: string;
+
+  @ApiProperty({
+    type: [String],
+    example: ['700', '701'],
+    description:
+      "O'chiriladigan buyurtmalar (1–100, takrorsiz). Hammasi-yoki-hech biri",
+  })
+  @Transform(({ value }: { value: unknown }) =>
+    Array.isArray(value)
+      ? value.map((item: unknown) => toIdString({ value: item }))
+      : value,
+  )
+  @IsArray()
+  @ArrayMinSize(1, { message: "order_ids bo'sh bo'lmasligi kerak" })
+  @ArrayMaxSize(100, {
+    message: "Bir so'rovda ko'pi bilan 100 ta buyurtma o'chiriladi",
+  })
+  @ArrayUnique({ message: 'order_ids takrorlanmasligi kerak' })
+  @IsString({ each: true })
+  @Matches(POSITIVE_ID_STRING, {
+    each: true,
+    message: "order_ids ichida faqat musbat butun son bo'ladi",
+  })
+  order_ids!: string[];
+
+  @ApiProperty({
+    example: "Market buyurtmani qaytarib oldi, posilka jo'natilmaydi",
+    minLength: 3,
+    maxLength: 500,
+    description: "O'chirish sababi (jurnalga yoziladi)",
+  })
+  @Transform(({ value }: { value: unknown }) =>
+    typeof value === 'string' ? value.trim() : value,
+  )
+  @IsString()
+  @Length(3, 500, { message: "Sabab 3–500 belgi bo'lishi kerak" })
+  reason!: string;
 }

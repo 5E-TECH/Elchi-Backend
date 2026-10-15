@@ -1046,11 +1046,15 @@ describe('sotuv → rollback: har kassa AYNAN sotuvdan oldingi holatga qaytadi',
     seller: typeof COURIER | typeof MANAGER;
     rollbackBy: typeof COURIER | typeof MANAGER | typeof SUPERADMIN;
     extraCost: number;
+    paidAmount?: number;
   }) {
     const sale = makeSellService();
     await sale.s.sellOrder(params.seller, '7001', {
       extraCost: params.extraCost,
       extraCostApproved: true,
+      ...(params.paidAmount !== undefined
+        ? { paidAmount: params.paidAmount }
+        : {}),
     });
     const soldOrder: Row = {
       ...WAITING_ORDER,
@@ -1089,6 +1093,89 @@ describe('sotuv → rollback: har kassa AYNAN sotuvdan oldingi holatga qaytadi',
       expect(combined.size).toBeGreaterThan(0);
     },
   );
+
+  /**
+   * T0UGh8bL — sotuvda marketga berilgan X (`paidAmount`) bilan sotuv:
+   * buyurtma PAID / PARTLY_PAID bo'ladi, ya'ni faqat superadmin qaytaradi.
+   * X oyoqlari (market −X, sotuvchi −X) ham AYNAN teskari yozilishi shart.
+   */
+  it.each([
+    ['kuryer, X = 205 000 (PAID)', COURIER, 0, 205000, Order_status.PAID],
+    [
+      'kuryer, X = 100 000 + xarajat 5 000 (PARTLY_PAID)',
+      COURIER,
+      5000,
+      100000,
+      Order_status.PARTLY_PAID,
+    ],
+    [
+      'menejer (filial kassasi), X = 200 000 + xarajat 5 000 (PAID)',
+      MANAGER,
+      5000,
+      200000,
+      Order_status.PAID,
+    ],
+  ])(
+    '⭐ T0UGh8bL: %s → superadmin qaytardi — barcha kassalar net 0, snapshot tozalanadi',
+    async (_label, seller, extraCost, paidAmount, saleStatus) => {
+      const { sale, rollback } = await sellThenRollback({
+        seller,
+        rollbackBy: SUPERADMIN,
+        extraCost,
+        paidAmount,
+      });
+
+      expect(sale.updates[0]).toMatchObject({
+        status: saleStatus,
+        sale_market_paid_amount: paidAmount,
+      });
+      const sellerCashbox =
+        seller === COURIER ? Cashbox_type.FOR_COURIER : Cashbox_type.BRANCH;
+      // Rollback X ni market va sotuvchi kassasiga CORRECTION kirim qiladi.
+      expect(
+        shape(rollback.legs).filter(
+          (leg) =>
+            leg.amount === paidAmount &&
+            leg.operation_type === Operation_type.INCOME &&
+            leg.source_type === Source_type.CORRECTION,
+        ),
+      ).toEqual([
+        expect.objectContaining({ cashbox_type: Cashbox_type.FOR_MARKET }),
+        expect.objectContaining({ cashbox_type: sellerCashbox }),
+      ]);
+      const combined = net([...sale.legs, ...rollback.legs]);
+      for (const [key, sum] of combined) {
+        expect([key, sum]).toEqual([key, 0]);
+      }
+      expect(rollback.updates.at(-1)).toMatchObject({
+        status: Order_status.WAITING,
+        paid_amount: 0,
+        sale_market_paid_amount: null,
+      });
+    },
+  );
+
+  it('T0UGh8bL: X bilan sotilgan (PARTLY_PAID) buyurtmani kuryer/menejer qaytara olmaydi', async () => {
+    const sale = makeSellService();
+    await sale.s.sellOrder(COURIER, '7001', { paidAmount: 100000 });
+    const soldOrder: Row = {
+      ...WAITING_ORDER,
+      ...sale.updates[0],
+      holder_courier_id: '289',
+      courier_id: '289',
+    };
+    for (const actor of [COURIER, MANAGER]) {
+      const rollback = makeRollbackService({
+        order: soldOrder,
+        settlement: { ...sale.settlements[0], isDeleted: false },
+      });
+      const error = await rpcError(
+        rollback.s.rollbackOrderToWaiting(actor, '7001'),
+      );
+      expect(error.statusCode).toBe(400);
+      expect(rollback.legs).toHaveLength(0);
+    }
+  });
 });
 
 describe('domen yordamchilari', () => {
