@@ -100,6 +100,13 @@ jobs:
           npx nest build integration-service
           npx nest build ai-service
 
+      # 2026-10-17: notification-service prodda Nest DI xatosi (aylanma import
+      # → "can't resolve dependencies") bilan ko'tarilmadi — unit testlar DI
+      # konteynerini qurmaydi. Har servis bundle'i DB/RMQ'siz qisqa ishga
+      # tushiriladi; DI yoki config xatosi bo'lsa CI qizil.
+      - name: DI boot smoke (all services)
+        run: bash scripts/di-boot-smoke.sh
+
   # Secret-scanning gate (Audit P0/P1: live secrets were committed to history).
   # Scans the working tree so a PR that adds a real credential to a tracked file
   # fails CI. History remediation (git filter-repo + rotation) is a separate,

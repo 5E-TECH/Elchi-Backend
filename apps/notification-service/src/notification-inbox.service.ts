@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Inject,
   Injectable,
+  forwardRef,
   Logger,
   NotFoundException,
   Optional,
@@ -194,6 +195,10 @@ export class NotificationInboxService {
     private readonly repo: Repository<Notification>,
     @Inject('IDENTITY') private readonly identityClient: ClientProxy,
     @Inject('GATEWAY') private readonly gatewayClient: ClientProxy,
+    // ⚠️ Aylanma import (notification-service.service → inbox → telegram-dm →
+    // notification-service.service): forwardRef bo'lmasa Nest bu parametrni
+    // aniqlay olmaydi va servis BOOT'da yiqiladi.
+    @Inject(forwardRef(() => NotificationServiceService))
     private readonly telegramService: NotificationServiceService,
     private readonly activityLog: ActivityLogService,
     private readonly pushDelivery: PushDeliveryService,

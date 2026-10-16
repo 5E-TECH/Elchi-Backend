@@ -1,4 +1,10 @@
-import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
+import {
+  Inject,
+  Injectable,
+  Logger,
+  Optional,
+  forwardRef,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { ClientProxy, RpcException } from '@nestjs/microservices';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -82,6 +88,9 @@ export class TelegramDmService {
     private readonly notifications: Repository<Notification>,
     private readonly outbox: OutboxService,
     private readonly contacts: SmsDispatchService,
+    // ⚠️ Aylanma import (notification-service.service ↔ inbox ↔ telegram-dm):
+    // forwardRef bo'lmasa servis BOOT'da yiqiladi.
+    @Inject(forwardRef(() => NotificationServiceService))
     private readonly telegram: NotificationServiceService,
     private readonly config: ConfigService,
     @Inject('IDENTITY') private readonly identityClient: ClientProxy,
