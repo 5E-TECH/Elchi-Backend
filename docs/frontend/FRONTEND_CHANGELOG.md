@@ -395,6 +395,50 @@ buyurtma SOTILGAN holatda qoladi, uning puli o'zgarmaydi (reversal yo'q).
   ichkarida har kuryer uchun alohida RPC o'rniga bitta so'rov (60 kuryerda
   sovuq hisob ~217 ms → ~6 ms, RMQ kechikishisiz). 30 s kesh saqlangan.
   Frontend o'zgarishi shart emas.
+### 2026-10-16 — O2: buyurtma yaratish — Idempotency-Key, operator ismi/raqami, market qo'shimcha xarajat sozlamasi (gpCIsGjH, VRyloH62, w2bDrE3i)
+
+- [2026-10-16] ✏️ [order] — gpCIsGjH: `POST /orders` endi `Idempotency-Key`
+  sarlavhasini qabul qiladi (≤255 belgi; uzun → 400). 🔧 Buyurtma yaratish
+  formasi ochilganda bitta kalit (masalan `crypto.randomUUID()`) yarating va
+  shu forma sessiyasidagi har yuborishda (qayta urinish, ikki marta bosish)
+  AYNAN shu kalitni yuboring; muvaffaqiyatdan keyin yangi kalit. Ayni kalit
+  bilan takroriy so'rov ikkinchi buyurtma yaratmaydi — avvalgi javob
+  `idempotent_replay: true` bilan qaytadi; birinchisi hali bajarilayotgan
+  bo'lsa **409** ("Takroriy so'rov: bu buyurtma hozir yaratilmoqda …").
+  Validatsiya xatosidan (400) keyin tuzatilgan so'rov AYNI kalit bilan qayta
+  bajariladi. Kalitsiz — avvalgidek. Yaratish tugmasini so'rov tugaguncha
+  o'chiq qiling.
+- [2026-10-16] ✏️ [order] — VRyloH62: registrator yoki market operatori
+  `operator` maydonini bo'sh qoldirsa, unga o'z ismi yoziladi (avtomatik).
+  `POST /orders` ga ixtiyoriy `operator_phone` (formadagi raqam). Market
+  sozlamasi: `require_operator_phone` va `default_operator_phone`.
+  Qoida: doimiy raqam bor — chekda 1-raqam doimiy, formadagi — 2-raqam;
+  majburiy va doimiy raqam yo'q — formadagi raqam MAJBURIY (yo'q bo'lsa
+  **400** "Operator telefon raqami majburiy …"). Buyurtma qatorida
+  `operator_phone`, `secondary_operator_phone`; chekdagi "Muammo bo'lsa"
+  qatori shu raqamlarni (yo'q bo'lsa avvalgidek market raqamini) chiqaradi.
+  🔧 Forma: "Operator raqami" maydoni (market sozlamasida majburiy bo'lsa
+  majburiy belgi bilan).
+- [2026-10-16] 🆕 [identity] — VRyloH62: `PATCH /markets/:id/operator-phone`
+  (superadmin, admin; market — faqat o'zi, boshqaga 403):
+  `{ require_operator_phone?: boolean, default_operator_phone?: string | null }`
+  (raqam `+998XXXXXXXXX` ga keltiriladi; `null`/'' — o'chirish). Market
+  javobida shu ikki maydon bor. 🔧 Market profili / sozlamalari.
+- [2026-10-16] 🆕 [identity] — w2bDrE3i: `PATCH /admin/markets/:id`
+  (faqat superadmin, admin):
+  `{ extra_cost_enabled?: boolean, extra_cost_requires_approval?: boolean }`
+  (kamida bittasi). Market javobida ikkala maydon. YANGI market sukuti —
+  `extra_cost_enabled: false`, `extra_cost_requires_approval: true`;
+  deploydan oldin mavjud bo'lgan marketlar ochiq qoldi (ortga-moslik).
+  `POST /markets` ham shu maydonlarni qabul qiladi (faqat admin/superadmin).
+- [2026-10-16] ⚠️ [order] — w2bDrE3i: market sozlamasida
+  `extra_cost_enabled: false` bo'lsa sotuv / bekor qilish / qisman sotuvda
+  `extraCost > 0` → **403** ("Bu market uchun qo'shimcha xarajat yopiq …").
+  `extra_cost_requires_approval: false` bo'lsa qo'shimcha xarajat market
+  tasdig'isiz darhol yoziladi (202 emas — oddiy javob). Isbot
+  (`expense_proof_conditions`) bundan mustaqil — avvalgidek talab qilinadi.
+  🔧 Kuryer modalida qo'shimcha xarajat maydonini market yopiq bo'lsa
+  yashiring; admin market tahririda ikki almashtirgich.
 
 ### 2026-10-15 — R1: dashboard reyting davri ("Bugun" → oxirgi 30 kun) va bot manbasi (9zbSDkUI, Celz3rKJ)
 

@@ -2482,6 +2482,12 @@ export class UserServiceService implements OnModuleInit {
         "Market rasm/video isbot sozlamasini faqat admin yoki superadmin o'zgartira oladi",
       );
     }
+    // w2bDrE3i: qo'shimcha xarajat sozlamasi — faqat admin/superadmin.
+    this.assertCanSetMarketExtraCost(dto, requester);
+    // VRyloH62: doimiy operator raqami kanonik `+998XXXXXXXXX` (yoki null).
+    const defaultOperatorPhone = this.resolveDefaultOperatorPhone(
+      dto.default_operator_phone,
+    );
 
     await this.ensurePhoneUnique(dto.phone_number);
     await this.ensureUsernameUnique(dto.username);
@@ -2510,6 +2516,12 @@ export class UserServiceService implements OnModuleInit {
       cancelled_handover_qr_required:
         dto.cancelled_handover_qr_required ?? true,
       expense_proof_conditions: dto.expense_proof_conditions ?? null,
+      // w2bDrE3i: YANGI market — sukut yopiq, tasdiq talab qilinadi.
+      extra_cost_enabled: dto.extra_cost_enabled ?? false,
+      extra_cost_requires_approval: dto.extra_cost_requires_approval ?? true,
+      // VRyloH62: operator raqami sozlamasi (sukut — majburiy emas).
+      require_operator_phone: dto.require_operator_phone ?? false,
+      default_operator_phone: defaultOperatorPhone ?? null,
       default_tariff: dto.default_tariff,
       isDeleted: false,
     });
@@ -2870,8 +2882,18 @@ export class UserServiceService implements OnModuleInit {
       add_order: market.add_order,
       cancelled_handover_qr_required: market.cancelled_handover_qr_required,
       expense_proof_conditions: market.expense_proof_conditions,
+      extra_cost_enabled: market.extra_cost_enabled,
+      extra_cost_requires_approval: market.extra_cost_requires_approval,
+      require_operator_phone: market.require_operator_phone,
+      default_operator_phone: market.default_operator_phone,
       password_changed: false,
     };
+
+    // w2bDrE3i: tekshiruvlar HECH NARSA o'zgartirilmasdan OLDIN.
+    this.assertCanSetMarketExtraCost(dto, requester);
+    const defaultOperatorPhone = this.resolveDefaultOperatorPhone(
+      dto.default_operator_phone,
+    );
 
     if (dto.phone_number && dto.phone_number !== market.phone_number) {
       await this.ensurePhoneUnique(dto.phone_number, id);
@@ -2934,6 +2956,22 @@ export class UserServiceService implements OnModuleInit {
       );
     }
 
+    if (typeof dto.extra_cost_enabled !== 'undefined') {
+      market.extra_cost_enabled = dto.extra_cost_enabled;
+    }
+
+    if (typeof dto.extra_cost_requires_approval !== 'undefined') {
+      market.extra_cost_requires_approval = dto.extra_cost_requires_approval;
+    }
+
+    if (typeof dto.require_operator_phone !== 'undefined') {
+      market.require_operator_phone = dto.require_operator_phone;
+    }
+
+    if (defaultOperatorPhone !== undefined) {
+      market.default_operator_phone = defaultOperatorPhone;
+    }
+
     const saved = await this.users.save(market);
     void this.syncUserToSearch(saved);
     await this.activityLog.logChange({
@@ -2952,10 +2990,74 @@ export class UserServiceService implements OnModuleInit {
         add_order: saved.add_order,
         cancelled_handover_qr_required: saved.cancelled_handover_qr_required,
         expense_proof_conditions: saved.expense_proof_conditions,
+        extra_cost_enabled: saved.extra_cost_enabled,
+        extra_cost_requires_approval: saved.extra_cost_requires_approval,
+        require_operator_phone: saved.require_operator_phone,
+        default_operator_phone: saved.default_operator_phone,
         password_changed: Boolean(dto.password),
       },
     });
     return successRes(this.sanitize(saved), 200, 'Market yangilandi');
+  }
+
+  /**
+   * w2bDrE3i — market bo'yicha qo'shimcha xarajat sozlamasini (ochish/yopish,
+   * tasdiq talabi) faqat SUPERADMIN/ADMIN o'zgartiradi. `can_add_extra_cost`
+   * (kuryer/menejer) bilan bir xil qoida; market o'zi yoki menejer — 403.
+   * Qiymat boolean bo'lmasa — 400 (RMQ'da ValidationPipe yo'q).
+   */
+  private assertCanSetMarketExtraCost(
+    dto: {
+      extra_cost_enabled?: unknown;
+      extra_cost_requires_approval?: unknown;
+    },
+    requester?: RequesterContext,
+  ): void {
+    const fields = [
+      'extra_cost_enabled',
+      'extra_cost_requires_approval',
+    ] as const;
+    const touched = fields.filter((field) => dto[field] !== undefined);
+    if (touched.length === 0) {
+      return;
+    }
+    if (
+      !this.hasRole(requester, Roles.SUPERADMIN) &&
+      !this.hasRole(requester, Roles.ADMIN)
+    ) {
+      this.forbidden(
+        "Market qo'shimcha xarajat sozlamasini faqat admin yoki superadmin o'zgartira oladi",
+      );
+    }
+    for (const field of touched) {
+      if (typeof dto[field] !== 'boolean') {
+        this.badRequest(`${field} boolean (true/false) bo'lishi kerak`);
+      }
+    }
+  }
+
+  /**
+   * VRyloH62 — `default_operator_phone`: `undefined` — o'zgarmaydi;
+   * `null`/bo'sh satr — o'chiriladi (`null`); aks holda kanonik
+   * `+998XXXXXXXXX` (mijoz telefoni bilan AYNI `normalizeUzPhone`),
+   * keltirib bo'lmasa — 400.
+   */
+  private resolveDefaultOperatorPhone(
+    value: unknown,
+  ): string | null | undefined {
+    if (value === undefined) {
+      return undefined;
+    }
+    if (value === null || (typeof value === 'string' && !value.trim())) {
+      return null;
+    }
+    const phone = normalizeUzPhone(value);
+    if (!phone) {
+      this.badRequest(
+        "default_operator_phone noto'g'ri — +998XXXXXXXXX formatidagi raqam kerak",
+      );
+    }
+    return phone;
   }
 
   async deleteMarket(id: string) {

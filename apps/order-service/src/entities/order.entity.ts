@@ -302,6 +302,19 @@ export class Order extends BaseEntity {
   @Column({ type: 'bigint', nullable: true })
   operator_id!: string | null;
 
+  /**
+   * VRyloH62 — yorliq/chekdagi "Muammo bo'lsa" 1-raqami (market
+   * `default_operator_phone` yoki majburiy holatda formadagi raqam). NULL —
+   * raqam yo'q (chekda market raqami chiqadi). Gateway `createOrderInternal`
+   * hal qiladi (`order-create/order-operator-phone.ts`).
+   */
+  @Column({ type: 'varchar', length: 20, nullable: true })
+  operator_phone!: string | null;
+
+  /** VRyloH62 — 2-raqam (formada kiritilgan, 1-raqamdan farqli). */
+  @Column({ type: 'varchar', length: 20, nullable: true })
+  secondary_operator_phone!: string | null;
+
   @Column({ type: 'bigint', nullable: true })
   post_id!: string | null;
 

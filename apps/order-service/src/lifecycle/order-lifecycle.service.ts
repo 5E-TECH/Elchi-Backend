@@ -1556,8 +1556,35 @@ export class OrderLifecycleService {
     return keys;
   }
 
-  private isExtraCostApprovalRequired(params: { extraCost: number }) {
-    return params.extraCost > 0;
+  /**
+   * w2bDrE3i: tasdiq talabi market sozlamasidan. `extra_cost_requires_approval
+   * === false` — tasdiqsiz darhol yoziladi; boshqa har qanday qiymat
+   * (`true`, eski identity javobida maydon yo'q) — avvalgidek tasdiq.
+   */
+  private isExtraCostApprovalRequired(params: {
+    extraCost: number;
+    market?: { extra_cost_requires_approval?: boolean | null } | null;
+  }) {
+    return (
+      params.extraCost > 0 &&
+      params.market?.extra_cost_requires_approval !== false
+    );
+  }
+
+  /**
+   * w2bDrE3i: market bo'yicha qo'shimcha xarajat DARVOZASI — kuryer/menejer
+   * `can_add_extra_cost` ruxsatidan OLDIN (AND: ikkalasi ham ochiq bo'lishi
+   * shart). Faqat aniq `false` yopadi: maydon yo'q (eski identity) —
+   * avvalgi xulq (ochiq). Mavjud marketlar migratsiya 114 da ochiq qoldi.
+   */
+  private assertMarketExtraCostEnabled(
+    market: { extra_cost_enabled?: boolean | null } | null | undefined,
+  ): void {
+    if (market?.extra_cost_enabled === false) {
+      this.forbidden(
+        "Bu market uchun qo'shimcha xarajat yopiq — admin market sozlamasida ochishi kerak",
+      );
+    }
   }
 
   private serializeExtraCostApproval(approval: OrderExtraCostApproval) {
@@ -1643,11 +1670,13 @@ export class OrderLifecycleService {
     extraCost: number;
     proofFiles: string[];
     dto: Record<string, unknown>;
+    /** w2bDrE3i: `extra_cost_requires_approval` sozlamasi. */
+    market?: { extra_cost_requires_approval?: boolean | null } | null;
   }) {
     const { order, requester, action, extraCost, proofFiles, dto } = params;
     if (
       Boolean(dto.extraCostApproved) ||
-      !this.isExtraCostApprovalRequired({ extraCost })
+      !this.isExtraCostApprovalRequired({ extraCost, market: params.market })
     ) {
       return null;
     }
@@ -4446,6 +4475,9 @@ export class OrderLifecycleService {
       comment?: string | null;
       operator?: string | null;
       operator_id?: string | null;
+      /** VRyloH62: gateway hal qilgan operator raqamlari (1- va 2-). */
+      operator_phone?: string | null;
+      secondary_operator_phone?: string | null;
       post_id?: string | null;
       canceled_post_id?: string | null;
       sold_at?: string | null;
@@ -4558,6 +4590,10 @@ export class OrderLifecycleService {
         comment: dto.comment ?? null,
         operator: dto.operator ?? null,
         operator_id: operatorId,
+        operator_phone: this.normalizeOperatorPhoneColumn(dto.operator_phone),
+        secondary_operator_phone: this.normalizeOperatorPhoneColumn(
+          dto.secondary_operator_phone,
+        ),
         post_id: dto.post_id ?? null,
         canceled_post_id: dto.canceled_post_id ?? null,
         sold_at: dto.sold_at ?? null,
@@ -4878,6 +4914,15 @@ export class OrderLifecycleService {
       this.badRequest('Filial xodimi hech qaysi filialga biriktirilmagan');
     }
     return assignedBranchId;
+  }
+
+  /**
+   * VRyloH62: `orders.operator_phone` varchar(20) — bo'sh satr NULL, uzun
+   * qiymat (ichki chaqiruvchi xatosi) yozuvni yiqitmasin deb NULL.
+   */
+  private normalizeOperatorPhoneColumn(value: unknown): string | null {
+    const phone = typeof value === 'string' ? value.trim() : '';
+    return phone && phone.length <= 20 ? phone : null;
   }
 
   private generateCustomToken(length = 24): string {
@@ -6715,6 +6760,8 @@ export class OrderLifecycleService {
     const totalPrice = Number(order.total_price ?? 0);
     const extraCost = Math.max(Number(dto?.extraCost ?? 0), 0);
     if (extraCost > 0) {
+      // w2bDrE3i: market darvozasi — shaxsiy ruxsatdan OLDIN.
+      this.assertMarketExtraCostEnabled(market);
       await this.assertCanAddExtraCost({
         actor: financialActor,
         requester,
@@ -6763,6 +6810,7 @@ export class OrderLifecycleService {
       extraCost,
       proofFiles,
       dto: dto ?? {},
+      market,
     });
     if (pendingApproval) {
       return pendingApproval;
@@ -7286,6 +7334,8 @@ export class OrderLifecycleService {
     }
     this.assertManagerCanSellCancel(isManagerRequester, financialActor);
     if (extraCost > 0) {
+      // w2bDrE3i: market darvozasi — shaxsiy ruxsatdan OLDIN.
+      this.assertMarketExtraCostEnabled(market);
       if (!financialActor) {
         this.notFound(
           isManagerRequester ? 'Manager not found' : 'Courier not found',
@@ -7327,6 +7377,7 @@ export class OrderLifecycleService {
       extraCost,
       proofFiles,
       dto: dto ?? {},
+      market,
     });
     if (pendingApproval) {
       return pendingApproval;
@@ -8257,6 +8308,8 @@ export class OrderLifecycleService {
 
     const extraCost = Math.max(Number(dto?.extraCost ?? 0), 0);
     if (extraCost > 0) {
+      // w2bDrE3i: market darvozasi — shaxsiy ruxsatdan OLDIN.
+      this.assertMarketExtraCostEnabled(market);
       await this.assertCanAddExtraCost({
         actor: financialActor,
         requester,
@@ -8292,6 +8345,7 @@ export class OrderLifecycleService {
       extraCost,
       proofFiles,
       dto: dto ?? {},
+      market,
     });
     if (pendingApproval) {
       return pendingApproval;

@@ -123,6 +123,43 @@ export class User extends BaseEntity {
   @Column({ type: 'jsonb', nullable: true })
   expense_proof_conditions: ExpenseProofCondition[] | null;
 
+  /**
+   * w2bDrE3i — market bo'yicha qo'shimcha xarajat (extra_cost) DARVOZASI.
+   * FALSE — bu market buyurtmalariga kuryer/menejer extra_cost yoza olmaydi
+   * (403). Kuryer/menejerning `can_add_extra_cost` ruxsati BILAN BIRGA (AND)
+   * ishlaydi — biri yopiq bo'lsa yozib bo'lmaydi.
+   *
+   * ⚠️ Sukut: YANGI market — FALSE (karta: "default o'chiq"). Migratsiya
+   * 1716000000114 MAVJUD qatorlarni TRUE bilan qo'shadi (ortga-moslik:
+   * ilgari darvoza yo'q edi, ya'ni hamma market uchun ochiq edi), so'ng
+   * ustun sukutini FALSE ga o'tkazadi — backfill UPDATE yo'q.
+   */
+  @Column({ type: 'boolean', default: false })
+  extra_cost_enabled: boolean;
+
+  /**
+   * w2bDrE3i — TRUE (sukut, avvalgi xulq): extra_cost market tasdig'idan
+   * o'tadi (202 + approval). FALSE — tasdiqsiz darhol yoziladi. Isbot
+   * (`expense_proof_conditions`) bundan MUSTAQIL — alohida tekshiriladi.
+   */
+  @Column({ type: 'boolean', default: true })
+  extra_cost_requires_approval: boolean;
+
+  /**
+   * VRyloH62 — TRUE: har buyurtmada operator raqami majburiy
+   * (`default_operator_phone` yo'q bo'lsa formadagi raqam shart, aks holda
+   * POST /orders 400). Sukut FALSE — avvalgi xulq.
+   */
+  @Column({ type: 'boolean', default: false })
+  require_operator_phone: boolean;
+
+  /**
+   * VRyloH62 — marketning doimiy operator raqami (`+998XXXXXXXXX`): chekda
+   * "Muammo bo'lsa" 1-raqami. NULL — yo'q.
+   */
+  @Column({ type: 'varchar', length: 20, nullable: true })
+  default_operator_phone: string | null;
+
   @Column({
     type: 'enum',
     enum: Where_deliver,

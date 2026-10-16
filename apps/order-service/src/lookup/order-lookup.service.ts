@@ -107,6 +107,9 @@ export class OrderLookupService implements OnModuleInit {
         tariff_center?: number;
         expense_proof_conditions?: ExpenseProofCondition[] | null;
         cancelled_handover_qr_required?: boolean | null;
+        /** w2bDrE3i: market bo'yicha qo'shimcha xarajat darvozasi. */
+        extra_cost_enabled?: boolean | null;
+        extra_cost_requires_approval?: boolean | null;
       }>;
     }>(
       this.identityClient,

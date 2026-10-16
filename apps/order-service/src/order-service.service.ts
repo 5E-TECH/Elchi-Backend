@@ -2716,6 +2716,9 @@ export class OrderServiceService {
           market_name: market?.name ?? 'N/A',
           market_phone: market?.phone_number ?? '',
           operator: order.operator ?? '',
+          // VRyloH62: chekdagi "Muammo bo'lsa" — 1- va 2-operator raqami.
+          operator_phone: order.operator_phone ?? '',
+          secondary_operator_phone: order.secondary_operator_phone ?? '',
           products: (order.items ?? []).map((i) => ({
             name: productMap.get(String(i.product_id))?.name ?? 'N/A',
             quantity: i.quantity ?? 1,

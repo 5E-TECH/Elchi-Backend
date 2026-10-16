@@ -231,6 +231,46 @@ export class CreateMarketRequestDto {
   @IsArray()
   @IsEnum(ExpenseProofCondition, { each: true })
   expense_proof_conditions?: ExpenseProofCondition[];
+
+  @ApiPropertyOptional({
+    example: false,
+    default: false,
+    description:
+      "w2bDrE3i: market bo'yicha qo'shimcha xarajat ochiq/yopiq (faqat admin/superadmin). Sukut — YOPIQ.",
+  })
+  @IsOptional()
+  @IsBoolean()
+  extra_cost_enabled?: boolean;
+
+  @ApiPropertyOptional({
+    example: true,
+    default: true,
+    description:
+      "w2bDrE3i: TRUE — qo'shimcha xarajat market tasdig'idan o'tadi; FALSE — tasdiqsiz yoziladi (faqat admin/superadmin).",
+  })
+  @IsOptional()
+  @IsBoolean()
+  extra_cost_requires_approval?: boolean;
+
+  @ApiPropertyOptional({
+    example: false,
+    default: false,
+    description:
+      "VRyloH62: TRUE — har buyurtmada operator raqami majburiy (doimiy raqam bo'lmasa formada).",
+  })
+  @IsOptional()
+  @IsBoolean()
+  require_operator_phone?: boolean;
+
+  @ApiPropertyOptional({
+    example: '+998901234567',
+    nullable: true,
+    description:
+      'VRyloH62: marketning doimiy operator raqami — chekda 1-raqam. null — yo`q.',
+  })
+  @IsOptional()
+  @IsPhoneNumber('UZ')
+  default_operator_phone?: string | null;
 }
 
 export class CreateCourierRequestDto {
@@ -430,6 +470,54 @@ export class ChangeUserRoleRequestDto {
   })
   @IsEnum(Roles)
   role!: Roles;
+}
+
+/**
+ * w2bDrE3i — `PATCH /admin/markets/:id`: market bo'yicha qo'shimcha xarajat
+ * (extra_cost) sozlamasi. Faqat admin/superadmin.
+ */
+export class UpdateMarketExtraCostRequestDto {
+  @ApiPropertyOptional({
+    example: true,
+    description:
+      "Qo'shimcha xarajat shu market buyurtmalariga yozilishi mumkinmi (FALSE — sotuv/bekor qilishda extraCost > 0 → 403).",
+  })
+  @IsOptional()
+  @IsBoolean()
+  extra_cost_enabled?: boolean;
+
+  @ApiPropertyOptional({
+    example: false,
+    description:
+      "TRUE — qo'shimcha xarajat market tasdig'idan o'tadi (202); FALSE — tasdiqsiz darhol yoziladi.",
+  })
+  @IsOptional()
+  @IsBoolean()
+  extra_cost_requires_approval?: boolean;
+}
+
+/**
+ * VRyloH62 — `PATCH /markets/:id/operator-phone`: chekdagi operator raqami
+ * sozlamasi. Market — faqat o'zi; admin/superadmin — istalgan market.
+ */
+export class UpdateMarketOperatorPhoneRequestDto {
+  @ApiPropertyOptional({
+    example: true,
+    description:
+      "TRUE — har buyurtmada operator raqami majburiy (doimiy raqam bo'lmasa POST /orders da operator_phone shart, aks holda 400).",
+  })
+  @IsOptional()
+  @IsBoolean()
+  require_operator_phone?: boolean;
+
+  @ApiPropertyOptional({
+    example: '+998901234567',
+    nullable: true,
+    description: "Doimiy operator raqami (chekda 1-raqam). null — o'chirish.",
+  })
+  @IsOptional()
+  @IsPhoneNumber('UZ')
+  default_operator_phone?: string | null;
 }
 
 export class UpdateUserStatusRequestDto {

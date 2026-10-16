@@ -79,6 +79,11 @@ const UZ_PHONE_MESSAGE =
   "Telefon raqam noto'g'ri — +998XXXXXXXXX formatidagi raqam kerak";
 const toCanonicalUzPhone = ({ value }: { value: unknown }): unknown =>
   normalizeUzPhone(value) ?? value;
+/** Ixtiyoriy telefon: bo'sh satr/bo'shliq — yuborilmagan (`undefined`). */
+const toOptionalCanonicalUzPhone = ({ value }: { value: unknown }): unknown =>
+  typeof value === 'string' && value.trim() === ''
+    ? undefined
+    : toCanonicalUzPhone({ value });
 
 const parseStringArray = (value: unknown): unknown => {
   if (Array.isArray(value)) return value;
@@ -280,10 +285,42 @@ export class CreateOrderRequestDto {
   @IsString()
   comment?: string | null;
 
-  @ApiPropertyOptional({ example: 'Operator' })
+  @ApiPropertyOptional({
+    example: 'Operator',
+    description:
+      "Bo'sh bo'lsa registrator / market operatori uchun server uning ismini yozadi (VRyloH62)",
+  })
   @IsOptional()
   @IsString()
   operator?: string | null;
+
+  /**
+   * VRyloH62 — formadagi operator raqami. Server uni market sozlamasi
+   * (`require_operator_phone`, `default_operator_phone`) bo'yicha 1- yoki
+   * 2-raqam qiladi; bo'sh satr — yuborilmagan.
+   */
+  @ApiPropertyOptional({
+    example: '+998901234567',
+    description:
+      "Formadagi operator raqami. Market `default_operator_phone` bo'lsa u 1-raqam, bu esa 2-raqam; " +
+      "`require_operator_phone=true` va default yo'q bo'lsa MAJBURIY (yo'q → 400) va 1-raqam bo'ladi.",
+  })
+  @Transform(toOptionalCanonicalUzPhone)
+  @IsOptional()
+  @IsString()
+  @Matches(UZ_PHONE_E164_RE, { message: UZ_PHONE_MESSAGE })
+  operator_phone?: string | null;
+
+  @ApiPropertyOptional({
+    example: '+998901234568',
+    description:
+      '`operator_phone` sinonimi (BeePost bilan moslik) — `operator_phone` bo‘lmasa shu olinadi.',
+  })
+  @Transform(toOptionalCanonicalUzPhone)
+  @IsOptional()
+  @IsString()
+  @Matches(UZ_PHONE_E164_RE, { message: UZ_PHONE_MESSAGE })
+  secondary_operator_phone?: string | null;
 
   @ApiPropertyOptional({
     type: String,

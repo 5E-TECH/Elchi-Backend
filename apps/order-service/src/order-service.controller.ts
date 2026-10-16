@@ -63,6 +63,30 @@ const AI_STABLE_CREATE_OPTIONS = {
   markReplay: true,
 } as const;
 
+/**
+ * gpCIsGjH — `POST /orders` ning `Idempotency-Key` kaliti. Gateway uni
+ * `idem:<user_id>:<sha256(kalit)>` ko'rinishida yuboradi (gateway
+ * `ORDER_CREATE_CLIENT_KEY_PREFIX`, `order-create/order-create-idempotency.ts`
+ * bilan AYNI prefiks). Faqat AYNAN shu shakl uchun:
+ *  - `markReplay` — takroriy so'rov javobida `idempotent_replay: true`
+ *    (frontend "allaqachon yaratilgan" ni ajratadi); birinchisi hali
+ *    bajarilayotgan bo'lsa 409 matni bilan (gateway uni aniq 409 ga o'giradi);
+ *  - `reclaimFailed` — yiqilgan urinish (validatsiya 400, timeout) kalitni
+ *    abadiy zaharlamaydi: forma sessiyasi kaliti bilan qayta yuborilgan
+ *    (tuzatilgan) so'rov qayta bajariladi. Yiqilgan create tranzaksiyasi
+ *    orqaga qaytgan — buyurtma yozilmagan (AI barqaror kaliti bilan bir xil
+ *    qaror, Cp2v3ZJ7).
+ * TTL YO'Q: kalit forma sessiyasiga xos, muvaffaqiyatli javob abadiy
+ * keshlanadi (tasodifiy UUID kabi).
+ * Kalitsiz POST /orders (tasodifiy UUID) — opsiyasiz, xulq o'zgarmagan.
+ */
+export const ORDER_CREATE_CLIENT_KEY_PREFIX = 'idem:';
+const CLIENT_KEY_REQUEST_ID_RE = /^idem:\d{1,19}:[0-9a-f]{64}$/;
+const CLIENT_KEY_CREATE_OPTIONS = {
+  reclaimFailed: true,
+  markReplay: true,
+} as const;
+
 @Controller()
 export class OrderServiceController {
   constructor(
@@ -135,6 +159,9 @@ export class OrderServiceController {
         comment?: string | null;
         operator?: string | null;
         operator_id?: string | null;
+        /** VRyloH62: gateway hal qilgan 1- va 2-operator raqami. */
+        operator_phone?: string | null;
+        secondary_operator_phone?: string | null;
         post_id?: string | null;
         branch_id?: string | null;
         current_batch_id?: string | null;
@@ -176,6 +203,9 @@ export class OrderServiceController {
       isStable ||
       (typeof requestId === 'string' &&
         requestId.startsWith(AI_DEDUPE_REQUEST_PREFIX));
+    // gpCIsGjH: mijozning `Idempotency-Key` i (gateway `idem:` kaliti).
+    const isClientKey =
+      typeof requestId === 'string' && CLIENT_KEY_REQUEST_ID_RE.test(requestId);
     // ⚠️ AI belgisi FAQAT ai-confirm kalitlari bilan qabul qilinadi — oddiy
     // POST /orders yo'li (tasodifiy UUID) uni bera olmaydi.
     const auditMetadata = isAiRequest
@@ -204,7 +234,9 @@ export class OrderServiceController {
           ? AI_STABLE_CREATE_OPTIONS
           : isAiRequest
             ? AI_DEDUPE_CREATE_OPTIONS
-            : {}),
+            : isClientKey
+              ? CLIENT_KEY_CREATE_OPTIONS
+              : {}),
       },
       isStable
         ? () =>

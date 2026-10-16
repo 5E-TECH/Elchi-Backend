@@ -86,6 +86,46 @@ export class CreateMarketDto {
   @IsEnum(ExpenseProofCondition, { each: true })
   expense_proof_conditions?: ExpenseProofCondition[];
 
+  @ApiPropertyOptional({
+    example: false,
+    default: false,
+    description:
+      "w2bDrE3i: market bo'yicha qo'shimcha xarajat ochiq/yopiq (faqat admin/superadmin). Sukut — yopiq.",
+  })
+  @IsOptional()
+  @IsBoolean()
+  extra_cost_enabled?: boolean;
+
+  @ApiPropertyOptional({
+    example: true,
+    default: true,
+    description:
+      "w2bDrE3i: TRUE — qo'shimcha xarajat market tasdig'idan o'tadi; FALSE — tasdiqsiz yoziladi (faqat admin/superadmin).",
+  })
+  @IsOptional()
+  @IsBoolean()
+  extra_cost_requires_approval?: boolean;
+
+  @ApiPropertyOptional({
+    example: false,
+    default: false,
+    description:
+      "VRyloH62: TRUE — har buyurtmada operator raqami majburiy (default raqam yo'q bo'lsa formada).",
+  })
+  @IsOptional()
+  @IsBoolean()
+  require_operator_phone?: boolean;
+
+  @ApiPropertyOptional({
+    example: '+998901234567',
+    nullable: true,
+    description:
+      "VRyloH62: marketning doimiy operator raqami — chekda 1-raqam. null/'' — o'chirish.",
+  })
+  @IsOptional()
+  @IsString()
+  default_operator_phone?: string | null;
+
   @ApiProperty({ example: 'secret123' })
   @IsNotEmpty()
   @IsString()

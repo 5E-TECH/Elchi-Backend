@@ -36,7 +36,35 @@ export interface PrintRow {
   market_name: string;
   market_phone: string;
   operator: string;
+  /** VRyloH62: 1-operator raqami (bo'sh — yo'q). */
+  operator_phone?: string;
+  /** VRyloH62: 2-operator raqami (bo'sh — yo'q). */
+  secondary_operator_phone?: string;
   products: Array<{ name: string; quantity: number }>;
+}
+
+/**
+ * VRyloH62 — "Muammo bo'lsa" qatorining raqamlari: buyurtmani qabul qilgan
+ * operatorning 1- va 2-raqami (BeePost `printer.service.ts` :97-112 kabi —
+ * qaysi biri bor bo'lsa shular, tartib bilan). Buyurtmada operator raqami
+ * umuman yo'q bo'lsa (eski buyurtmalar, raqamsiz market) — avvalgidek
+ * marketning umumiy raqami. Formatlangan; hech biri yo'q — `[]`.
+ */
+export function contactPhonesOf(
+  order: Pick<
+    PrintRow,
+    'operator_phone' | 'secondary_operator_phone' | 'market_phone'
+  >,
+): string[] {
+  const operatorPhones = [order.operator_phone, order.secondary_operator_phone]
+    .map((phone) => String(phone ?? '').trim())
+    .filter(Boolean)
+    .map(formatPhoneNumber);
+  if (operatorPhones.length > 0) {
+    return operatorPhones;
+  }
+  const marketPhone = String(order.market_phone ?? '').trim();
+  return marketPhone ? [formatPhoneNumber(marketPhone)] : [];
 }
 
 const DEJAVU_CANDIDATES: Array<{ regular: string; bold: string }> = [
@@ -181,11 +209,11 @@ export async function renderThermalPdf(rows: PrintRow[]): Promise<Buffer> {
     const whereDeliver = whereDeliverLabel(order.where_deliver);
     const qrCode = order.qr_code_token ?? '';
 
-    // Problem-contact line: PCS used the operator phone; Elchi's order keeps the
-    // operator as a name only, so the market phone is the reliable callback.
-    const contactDisplay = order.market_phone
-      ? formatPhoneNumber(order.market_phone)
-      : '-';
+    // "Muammo bo'lsa" qatori (VRyloH62): buyurtmadagi operator raqamlari
+    // (1-, 2-raqam); ular yo'q bo'lsa — avvalgidek market raqami.
+    const contactPhones = contactPhonesOf(order);
+    const contactDisplay =
+      contactPhones.length > 0 ? contactPhones.join('    ') : '-';
 
     const productStr = productString(order.products);
 
@@ -482,10 +510,14 @@ export async function renderReceiptHtml(rows: PrintRow[]): Promise<string> {
     const whereDeliver = whereDeliverLabel(order.where_deliver);
     const qrCode = order.qr_code_token ?? '';
 
-    const contactPhone = order.market_phone
-      ? formatPhoneNumber(order.market_phone)
-      : '';
-    const contactPhonesHtml = contactPhone ? `<b>${contactPhone}</b>` : '-';
+    // VRyloH62: operator raqamlari (1-, 2-) — yo'q bo'lsa market raqami.
+    const contactPhones = contactPhonesOf(order).map(escapeHtml);
+    const contactPhonesHtml =
+      contactPhones.length === 0
+        ? '-'
+        : contactPhones.length === 1
+          ? `<b>${contactPhones[0]}</b>`
+          : `<b>${contactPhones[0]}</b> <b class="logist-phone">${contactPhones[1]}</b>`;
 
     const productStr = escapeHtml(productString(order.products));
 
@@ -605,6 +637,7 @@ export async function renderReceiptHtml(rows: PrintRow[]): Promise<string> {
   .logist-tbl{width:100%;border-collapse:collapse;table-layout:fixed;background:#f8f8f8}
   .logist-td-lbl{width:22mm;font-size:7px;font-weight:bold;color:#333;padding:2px 4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;border-right:0.5px solid #ddd;vertical-align:middle}
   .logist-td-val{font-size:8px;padding:2px 4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;vertical-align:middle}
+  .logist-phone{margin-left:6px}
   @media print{html,body{background:#fff!important;margin:0!important;padding:0!important}.page{margin:0!important;box-shadow:none}.grid-row{border-color:#ccc!important}.cell{border-color:#ccc!important}}
   @media screen{.page{box-shadow:0 2px 8px rgba(0,0,0,0.15);margin:5mm auto}}
 </style>

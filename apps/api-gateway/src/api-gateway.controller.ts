@@ -54,6 +54,8 @@ import {
   UpdateMarketAddOrderRequestDto,
   UpdateMarketCancelledHandoverQrRequestDto,
   UpdateMarketExpenseProofRequestDto,
+  UpdateMarketExtraCostRequestDto,
+  UpdateMarketOperatorPhoneRequestDto,
   UpdateUserStatusRequestDto,
 } from './dto/identity.swagger.dto';
 import { SetCourierRegionsRequestDto } from './dto/courier-regions.swagger.dto';
@@ -1373,6 +1375,12 @@ export class ApiGatewayController {
             add_order: dto.add_order,
             cancelled_handover_qr_required: dto.cancelled_handover_qr_required,
             expense_proof_conditions: dto.expense_proof_conditions,
+            // w2bDrE3i (faqat admin/superadmin — identity tekshiradi).
+            extra_cost_enabled: dto.extra_cost_enabled,
+            extra_cost_requires_approval: dto.extra_cost_requires_approval,
+            // VRyloH62: chekdagi operator raqami sozlamasi.
+            require_operator_phone: dto.require_operator_phone,
+            default_operator_phone: dto.default_operator_phone,
           },
           requester: this.toRequester(req),
         },
@@ -1692,6 +1700,122 @@ export class ApiGatewayController {
           id,
           dto: {
             expense_proof_conditions: dto.expense_proof_conditions,
+          },
+          requester: this.toRequester(req),
+        },
+      )
+      .pipe(timeout(8000));
+  }
+
+  /**
+   * w2bDrE3i — market bo'yicha qo'shimcha xarajatni ochish/yopish va tasdiq
+   * talabini boshqarish. Faqat admin/superadmin (identity ham tekshiradi).
+   * Sukut: yangi market — yopiq; mavjud marketlar migratsiya 114 da ochiq
+   * qoldirilgan (ortga-moslik).
+   */
+  @Patch('admin/markets/:id')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary:
+      "Market qo'shimcha xarajat sozlamasi (extra_cost_enabled, extra_cost_requires_approval)",
+  })
+  @ApiParam({ name: 'id', description: 'Market user ID' })
+  @ApiBody({ type: UpdateMarketExtraCostRequestDto })
+  @ApiOkResponse({ description: 'Market extra-cost policy updated' })
+  @ApiNotFoundResponse({ description: 'Market not found' })
+  updateMarketExtraCost(
+    @Param('id') id: string,
+    @Body() dto: UpdateMarketExtraCostRequestDto,
+    @Req() req: { user: JwtUser },
+  ) {
+    this.assertMarketIdParam(id);
+    if (
+      dto.extra_cost_enabled === undefined &&
+      dto.extra_cost_requires_approval === undefined
+    ) {
+      throw new BadRequestException(
+        'extra_cost_enabled yoki extra_cost_requires_approval dan kamida bittasi kerak',
+      );
+    }
+    return this.identityClient
+      .send(
+        { cmd: 'identity.market.update' },
+        {
+          id,
+          dto: {
+            ...(dto.extra_cost_enabled !== undefined
+              ? { extra_cost_enabled: dto.extra_cost_enabled }
+              : {}),
+            ...(dto.extra_cost_requires_approval !== undefined
+              ? {
+                  extra_cost_requires_approval:
+                    dto.extra_cost_requires_approval,
+                }
+              : {}),
+          },
+          requester: this.toRequester(req),
+        },
+      )
+      .pipe(timeout(8000));
+  }
+
+  /**
+   * VRyloH62 — chekdagi operator raqami sozlamasi: majburiylik va doimiy
+   * raqam. Market — faqat o'zi; admin/superadmin — istalgan market.
+   */
+  @Patch('markets/:id/operator-phone')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.MARKET)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary:
+      'Market operator raqami sozlamasi (require_operator_phone, default_operator_phone)',
+  })
+  @ApiParam({ name: 'id', description: 'Market user ID' })
+  @ApiBody({ type: UpdateMarketOperatorPhoneRequestDto })
+  @ApiOkResponse({ description: 'Market operator phone policy updated' })
+  @ApiNotFoundResponse({ description: 'Market not found' })
+  updateMarketOperatorPhone(
+    @Param('id') id: string,
+    @Body() dto: UpdateMarketOperatorPhoneRequestDto,
+    @Req() req: { user: JwtUser },
+  ) {
+    this.assertMarketIdParam(id);
+    const roles = (req.user.roles ?? []).map((role) =>
+      String(role).toLowerCase(),
+    );
+    if (
+      roles.includes(RoleEnum.MARKET) &&
+      !roles.includes(RoleEnum.SUPERADMIN) &&
+      !roles.includes(RoleEnum.ADMIN) &&
+      String(req.user.sub) !== id
+    ) {
+      throw new ForbiddenException(
+        "Market faqat o'z operator raqami sozlamasini o'zgartira oladi",
+      );
+    }
+    if (
+      dto.require_operator_phone === undefined &&
+      dto.default_operator_phone === undefined
+    ) {
+      throw new BadRequestException(
+        'require_operator_phone yoki default_operator_phone dan kamida bittasi kerak',
+      );
+    }
+    return this.identityClient
+      .send(
+        { cmd: 'identity.market.update' },
+        {
+          id,
+          dto: {
+            ...(dto.require_operator_phone !== undefined
+              ? { require_operator_phone: dto.require_operator_phone }
+              : {}),
+            ...(dto.default_operator_phone !== undefined
+              ? { default_operator_phone: dto.default_operator_phone }
+              : {}),
           },
           requester: this.toRequester(req),
         },

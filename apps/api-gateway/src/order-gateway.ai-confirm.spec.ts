@@ -532,14 +532,24 @@ describe('OrderGatewayController — POST /orders/ai-confirm', () => {
     expect(second).toBe(first);
   });
 
-  it('POST /orders (create) — request_id QO‘SHILMAYDI (xulq o‘zgarmagan)', async () => {
+  // gpCIsGjH: POST /orders endi DOIM `request_id` yuboradi (kalitsiz —
+  // tasodifiy UUID, RMQ qayta yetkazishiga himoya); AI belgilari esa YO'Q.
+  it('POST /orders (create) — request_id UUID, AI imzosi/auditi qo‘shilmaydi', async () => {
     const fx = makeController();
     await fx.controller.create(
       { customer_id: '55', market_id: '77' },
       adminReq,
     );
     const payload = orderCreatePayload(fx.order);
-    expect(Object.keys(payload).sort()).toEqual(['dto', 'requester']);
+    expect(Object.keys(payload).sort()).toEqual([
+      'dto',
+      'request_id',
+      'requester',
+    ]);
+    expect(String(payload.request_id)).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+    );
+    expect(String(payload.request_id)).not.toMatch(/^ai/);
   });
 
   it('partiya ichidagi dublikat → duplicate_in_batch, faqat bittasi yaratiladi', async () => {

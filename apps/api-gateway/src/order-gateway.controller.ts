@@ -7,6 +7,7 @@ import {
   GatewayTimeoutException,
   GoneException,
   Get,
+  Headers,
   HttpCode,
   Inject,
   Logger,
@@ -32,6 +33,7 @@ import {
   ApiBody,
   ApiConsumes,
   ApiConflictResponse,
+  ApiHeader,
   ApiOkResponse,
   ApiOperation,
   ApiParam,
@@ -118,6 +120,14 @@ import {
   assertQrOrderVisible,
 } from './auth/order-qr-visibility';
 import { projectOrderPayloadForRoles } from './auth/order-role-projection';
+import {
+  mapOrderCreateInProgress,
+  resolveOrderCreateRequestId,
+} from './order-create/order-create-idempotency';
+import {
+  resolveOrderOperatorPhones,
+  type OrderMarketPhonePolicy,
+} from './order-create/order-operator-phone';
 import { isOrderQrLightView, sendOrderQrLight } from './order-qr-light-view';
 import {
   ORDER_EXPORT_PAGE_SIZE,
@@ -1361,10 +1371,10 @@ export class OrderGatewayController {
   private async assertOrderMarket(
     marketId: string | undefined,
     roles: string[],
-  ): Promise<void> {
+  ): Promise<OrderMarketPhonePolicy | null> {
     const id = String(marketId ?? '').trim();
     if (!id) {
-      return;
+      return null;
     }
     const response = await this.sendIdentityWithTimeout(
       { cmd: 'identity.market.find_by_id' },
@@ -1373,7 +1383,13 @@ export class OrderGatewayController {
     const market =
       (
         response as {
-          data?: { id?: string; status?: string; add_order?: boolean };
+          data?: {
+            id?: string;
+            status?: string;
+            add_order?: boolean;
+            require_operator_phone?: boolean | null;
+            default_operator_phone?: string | null;
+          };
         } | null
       )?.data ?? null;
     if (!market) {
@@ -1392,6 +1408,56 @@ export class OrderGatewayController {
         "Bu marketga o'zi buyurtma yaratish ruxsat etilmagan (add_order o'chiq)",
       );
     }
+    // VRyloH62: operator raqami sozlamasi — `createOrderInternal` qayta
+    // so'ramasligi uchun shu javobdan qaytariladi.
+    return {
+      require_operator_phone: market.require_operator_phone === true,
+      default_operator_phone: market.default_operator_phone ?? null,
+    };
+  }
+
+  /**
+   * VRyloH62 — registrator/market operatori `operator` maydonini bo'sh
+   * qoldirsa (forma, bot, AI), buyurtmaga uning ISMI yoziladi (BeePost
+   * `order.service.ts:362-365` kabi). Ilgari faqat `operator_id` yozilardi,
+   * ko'rinadigan `operator` matni bo'sh qolardi.
+   *
+   * Qaytaradi: to'ldiriladigan ism yoki `null` (to'ldirish kerak emas —
+   * matn yozilgan, rol boshqa yoki ism olinmadi). Ism olinmasa buyurtma
+   * TO'XTAMAYDI (fail-open): bu faqat ko'rinadigan yorliq matni.
+   */
+  private async resolveCreateOperatorName(
+    typed: unknown,
+    roles: string[],
+    user: JwtUser,
+    preloaded: string | null | undefined,
+  ): Promise<string | null> {
+    if (this.asStr(typed).trim()) {
+      return null;
+    }
+    if (
+      !roles.includes(RoleEnum.REGISTRATOR) &&
+      !roles.includes(RoleEnum.MARKET_OPERATOR)
+    ) {
+      return null;
+    }
+    if (preloaded !== undefined) {
+      return preloaded || null;
+    }
+    return this.loadRequesterName(user?.sub);
+  }
+
+  /** So'rovchi ismi (identity) — 3 s, xato/timeout'da `null`. */
+  private async loadRequesterName(userId: unknown): Promise<string | null> {
+    const id = this.asStr(userId).trim();
+    if (!id) return null;
+    const profile: unknown = await firstValueFrom(
+      this.identityClient
+        .send({ cmd: 'identity.user.find_by_id' }, { id })
+        .pipe(timeout(3000)),
+    ).catch(() => null);
+    const name = (profile as { data?: { name?: unknown } } | null)?.data?.name;
+    return this.asStr(name).trim() || null;
   }
 
   /** UER0MpMX: har `product_id` aynan shu marketniki bo'lishi shart (IDOR). */
@@ -1511,6 +1577,10 @@ export class OrderGatewayController {
     req: { user: JwtUser },
     ctx: {
       marketId: string;
+      /** VRyloH62: partiya boshida olingan market profili. */
+      marketProfile?: OrderMarketPhonePolicy | null;
+      /** VRyloH62: partiya boshida olingan so'rovchi ismi. */
+      operatorName?: string | null;
       includeMarketId: boolean;
       branchAssignment: BranchAssignment | null;
     },
@@ -1557,6 +1627,8 @@ export class OrderGatewayController {
       ...(item.stableRequestId ? { aiSignature: item.signature } : {}),
       aiAudit: item.aiAudit,
       marketId: ctx.marketId,
+      marketProfile: ctx.marketProfile ?? null,
+      operatorName: ctx.operatorName ?? null,
       branchAssignment: ctx.branchAssignment,
     });
     const body = (response ?? {}) as {
@@ -1803,16 +1875,39 @@ export class OrderGatewayController {
     RoleEnum.BRANCH,
   )
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Create order' })
+  @ApiOperation({
+    summary: 'Create order',
+    description:
+      "gpCIsGjH: `Idempotency-Key` sarlavhasi bilan takroriy so'rov (ikki marta bosish, retry) ikkinchi buyurtma yaratmaydi — " +
+      "keshlangan javob `idempotent_replay: true` bilan qaytadi; birinchisi hali bajarilayotgan bo'lsa 409. " +
+      'Kalitsiz — har so`rov alohida buyurtma (avvalgidek).',
+  })
+  @ApiHeader({
+    name: 'Idempotency-Key',
+    required: false,
+    description:
+      "Forma sessiyasi davomida barqaror kalit (≤255 belgi). Foydalanuvchi bo'yicha ajratiladi.",
+  })
   @ApiBody({ type: CreateOrderRequestDto })
   async create(
     @Body() dto: CreateOrderRequestDto,
     @Req() req: { user: JwtUser },
+    @Headers('idempotency-key') idempotencyKey?: string,
   ) {
+    // gpCIsGjH: request_id DOIM — kalit bo'lsa `idem:<user>:<sha256>`,
+    // bo'lmasa har so'rovga yangi UUID (RMQ qayta yetkazishiga himoya).
+    const requestId = resolveOrderCreateRequestId(
+      req?.user?.sub,
+      idempotencyKey,
+    );
     // kH2zZsz3 (tekshiruv #4): yaratilgan buyurtma qatori (order-service
     // `findById`) — market/market operatori kuryer tarifi/ulushi va filial
     // ulushi kalitlarini ko'rmaydi (GET /orders/:id bilan AYNI proyeksiya).
-    const response: unknown = await this.createOrderInternal(dto, req);
+    const response: unknown = await this.createOrderInternal(dto, req, {
+      requestId,
+    }).catch((error: unknown) => {
+      throw mapOrderCreateInProgress(error);
+    });
     return projectOrderPayloadForRoles(req?.user?.roles, response);
   }
 
@@ -1874,13 +1969,24 @@ export class OrderGatewayController {
    * `POST /orders` ning butun mantig'i — `create()` va `ai-confirm` ikkalasi
    * shu yerdan o'tadi (yangi yaratish mantig'i YOZILMAYDI, wgqxS0Cp #4).
    *
-   * ⚠️ `opts` berilmasa xulq `create()` ning avvalgi tanasi bilan AYNAN bir
-   * xil (baytma-bayt): filial va market odatdagidek aniqlanadi, `order.create`
-   * payloadiga `request_id` QO'SHILMAYDI.
+   * `opts` berilmasa filial va market odatdagidek aniqlanadi. gpCIsGjH:
+   * `order.create` payloadida `request_id` DOIM bor — `opts.requestId`
+   * (create(): `Idempotency-Key` dan, ai-confirm: AI kalitlari), bo'lmasa
+   * (bot yo'li) har chaqiruvga yangi `randomUUID()` — RMQ xabari qayta
+   * yetkazilsa ikkinchi buyurtma yaratilmaydi. Ilgari `request_id`
+   * yuborilmasdi va order-service'dagi idempotentlik o'lik kod edi.
+   *
+   * VRyloH62: `operator` bo'sh bo'lsa registrator/market operatori o'z ismi
+   * bilan to'ldiriladi; operator raqamlari (`operator_phone` 1-raqam,
+   * `secondary_operator_phone` 2-raqam) market sozlamasi bo'yicha SHU YERDA
+   * hal qilinadi (`resolveOrderOperatorPhones`) — mijoz DTO'sidagi qiymat
+   * to'g'ridan-to'g'ri yozilmaydi.
    *
    * `opts` faqat ai-confirm uchun:
    *  - `marketId` — partiya uchun BIR MARTA aniqlangan market; rolga qarab
    *    qayta qidirilmaydi;
+   *  - `marketProfile` — o'sha market profili (operator raqami sozlamasi);
+   *  - `operatorName` — partiya uchun BIR MARTA olingan so'rovchi ismi;
    *  - `branchAssignment` — partiya uchun BIR MARTA aniqlangan filial
    *    (`null` ham qiymat: "filial yo'q"); `undefined` bo'lsa odatiy yo'l;
    *  - `requestId` — `'ai-dedupe:<sha256>'`: order-service uni 10 daqiqalik
@@ -1901,6 +2007,10 @@ export class OrderGatewayController {
       /** vncdmXOy: activity_log CREATED metadata'siga AI belgisi. */
       aiAudit?: Record<string, unknown> | null;
       marketId?: string;
+      /** VRyloH62: ai-confirm — partiya boshida olingan market profili. */
+      marketProfile?: OrderMarketPhonePolicy | null;
+      /** VRyloH62: ai-confirm — partiya boshida olingan so'rovchi ismi. */
+      operatorName?: string | null;
       branchAssignment?: BranchAssignment | null;
       /** Celz3rKJ: yaratish kanali (hozir faqat bot). */
       createdVia?: 'bot';
@@ -1966,6 +2076,9 @@ export class OrderGatewayController {
       );
     }
 
+    // VRyloH62: so'rovchi ismi (registrator/market operatori `operator`
+    // maydonini bo'sh qoldirsa). `undefined` — hali olinmagan.
+    let requesterName: string | null | undefined = opts?.operatorName;
     let resolvedMarketId = orderDto.market_id;
     if (opts?.marketId) {
       // ai-confirm: market partiya boshida `resolveAiMarket` bilan aniqlangan.
@@ -1983,8 +2096,11 @@ export class OrderGatewayController {
         { id: req.user.sub },
       ).catch(() => null);
       const operatorData =
-        (operatorProfile as { data?: { market_id?: string | null } })?.data ??
-        null;
+        (
+          operatorProfile as {
+            data?: { market_id?: string | null; name?: string | null };
+          }
+        )?.data ?? null;
       resolvedMarketId =
         String(operatorData?.market_id ?? '').trim() || undefined;
       if (!resolvedMarketId) {
@@ -1992,6 +2108,7 @@ export class OrderGatewayController {
           "Operator hech qaysi marketga biriktirilmagan — buyurtma yaratib bo'lmaydi",
         );
       }
+      requesterName = this.asStr(operatorData?.name).trim() || null;
     } else if (
       (roles.includes(RoleEnum.ADMIN) ||
         roles.includes(RoleEnum.SUPERADMIN) ||
@@ -2003,10 +2120,27 @@ export class OrderGatewayController {
     // UER0MpMX: mijoz yaratilishidan OLDIN — rad etilsa yetim mijoz qolmaydi.
     // ai-confirm (opts.marketId) marketni partiya boshida, mahsulot egaligini
     // esa o'z lookup'ida allaqachon tekshirgan — takrorlanmaydi.
+    let marketProfile: OrderMarketPhonePolicy | null =
+      opts?.marketProfile ?? null;
     if (!opts?.marketId) {
-      await this.assertOrderMarket(resolvedMarketId, roles);
+      marketProfile = await this.assertOrderMarket(resolvedMarketId, roles);
       await this.assertOrderProductsOwned(resolvedMarketId, dto.items ?? []);
     }
+    // VRyloH62: operator raqamlari va ismi — mijoz yaratilishidan OLDIN
+    // (raqam majburiy bo'lsa 400 yetim mijoz qoldirmaydi). Bot formasida
+    // raqam maydoni yo'q — u yerda 400 berilmaydi (BeePost bot yo'li kabi).
+    const operatorPhones = resolveOrderOperatorPhones({
+      market: marketProfile,
+      operatorPhone: dto.operator_phone,
+      secondaryOperatorPhone: dto.secondary_operator_phone,
+      strict: opts?.createdVia !== 'bot',
+    });
+    const filledOperatorName = await this.resolveCreateOperatorName(
+      safeOrderDto.operator,
+      roles,
+      req.user,
+      requesterName,
+    );
 
     if (!isSystemPrivileged && this.hasCustomerIdValue(dto.customer_id)) {
       const scopedCustomerId = await this.resolveScopedCustomerId(
@@ -2059,7 +2193,22 @@ export class OrderGatewayController {
           { cmd: 'order.create' },
           {
             dto: {
-              ...safeOrderDto,
+              // VRyloH62: mijoz yuborgan raqamlar to'g'ridan-to'g'ri
+              // yozilmaydi — faqat yuqorida hal qilingan qiymatlar.
+              ...this.omitFields(safeOrderDto, [
+                'operator_phone',
+                'secondary_operator_phone',
+              ]),
+              ...(filledOperatorName ? { operator: filledOperatorName } : {}),
+              ...(operatorPhones.operator_phone
+                ? { operator_phone: operatorPhones.operator_phone }
+                : {}),
+              ...(operatorPhones.secondary_operator_phone
+                ? {
+                    secondary_operator_phone:
+                      operatorPhones.secondary_operator_phone,
+                  }
+                : {}),
               market_id: resolvedMarketId,
               customer_id: finalCustomerId,
               operator_id:
@@ -2082,7 +2231,9 @@ export class OrderGatewayController {
                   : undefined,
             },
             requester: { id: req.user.sub, roles },
-            ...(opts?.requestId ? { request_id: opts.requestId } : {}),
+            // gpCIsGjH: DOIM — order-service `executeIdempotent` endi
+            // chetlab o'tilmaydi (RMQ qayta yetkazishi dublikat yaratmaydi).
+            request_id: opts?.requestId || randomUUID(),
             ...(opts?.aiSignature ? { ai_signature: opts.aiSignature } : {}),
             ...(opts?.aiAudit ? { ai_audit: opts.aiAudit } : {}),
             ...(opts?.createdVia ? { created_via: opts.createdVia } : {}),
@@ -2473,7 +2624,8 @@ export class OrderGatewayController {
     const { marketId } = market;
     const roles = this.normalizeRoles(req.user.roles);
     // UER0MpMX: partiya uchun BIR MARTA — market mavjud, faol, add_order.
-    await this.assertOrderMarket(marketId, roles);
+    // VRyloH62: shu javobdagi operator raqami sozlamasi ham partiyaga bir marta.
+    const marketProfile = await this.assertOrderMarket(marketId, roles);
     const branchAssignment =
       roles.includes(RoleEnum.BRANCH) ||
       roles.includes(RoleEnum.MANAGER) ||
@@ -2567,8 +2719,17 @@ export class OrderGatewayController {
     await this.attachAiAudit(eligible, marketId);
 
     // 4) Yaratish — cheklangan parallellik, telefon bo'yicha yo'laklar.
+    // VRyloH62: registrator/market operatori ismi — partiyaga BIR MARTA
+    // (AI `operator` bermasa bandlarga yoziladi).
+    const operatorName =
+      roles.includes(RoleEnum.REGISTRATOR) ||
+      roles.includes(RoleEnum.MARKET_OPERATOR)
+        ? await this.loadRequesterName(req.user?.sub)
+        : null;
     const ctx = {
       marketId,
+      marketProfile,
+      operatorName,
       includeMarketId: !roles.includes(RoleEnum.MARKET),
       branchAssignment,
     };

@@ -58,4 +58,24 @@ export class UpdateMarketDto {
   @IsArray()
   @IsEnum(ExpenseProofCondition, { each: true })
   expense_proof_conditions?: ExpenseProofCondition[];
+
+  /** w2bDrE3i: faqat admin/superadmin. */
+  @IsOptional()
+  @IsBoolean()
+  extra_cost_enabled?: boolean;
+
+  /** w2bDrE3i: faqat admin/superadmin. */
+  @IsOptional()
+  @IsBoolean()
+  extra_cost_requires_approval?: boolean;
+
+  /** VRyloH62: market o'zi (gateway — faqat o'z id'si) yoki admin. */
+  @IsOptional()
+  @IsBoolean()
+  require_operator_phone?: boolean;
+
+  /** VRyloH62: `+998XXXXXXXXX` ga keltiriladi; null/'' — o'chirish. */
+  @IsOptional()
+  @IsString()
+  default_operator_phone?: string | null;
 }

@@ -190,6 +190,75 @@ describe('order.create — ai-dedupe opsiyalari', () => {
 });
 
 /**
+ * gpCIsGjH — `POST /orders` ning `Idempotency-Key` i: gateway
+ * `idem:<user_id>:<sha256>` yuboradi. Shu shakl uchun `reclaimFailed` +
+ * `markReplay` (TTL YO'Q — forma sessiyasi kaliti). Boshqa shakl (UUID,
+ * soxta `idem:` satri) — opsiyasiz.
+ */
+describe('order.create — Idempotency-Key opsiyalari (gpCIsGjH)', () => {
+  const clientKey = `idem:201:${'b'.repeat(64)}`;
+
+  it('⭐ `idem:<user>:<sha256>` — reclaimFailed + markReplay, TTL yo`q', async () => {
+    const { controller, idem } = setup();
+    await controller.create(
+      { dto: DTO, requester: REQUESTER, request_id: clientKey },
+      ctx,
+    );
+    expect(executeIdempotent.mock.calls[0][3]).toEqual({
+      requestId: clientKey,
+      pattern: 'order.create',
+      reclaimFailed: true,
+      markReplay: true,
+    });
+    expect(idem.tryAcquire).toHaveBeenCalledWith(
+      `order.create:${clientKey}`,
+      'order.create',
+      undefined,
+      { reclaimFailed: true },
+    );
+  });
+
+  it('⭐ TC1: ayni kalit bilan takroriy so`rov — ikkinchi buyurtma YARATILMAYDI, keshlangan javob idempotent_replay bilan', async () => {
+    const cached = {
+      statusCode: 201,
+      message: 'success',
+      data: { id: '9001' },
+    };
+    const { controller, lifecycle } = setup({
+      status: 'cached',
+      response: cached,
+    });
+    const res = await controller.create(
+      { dto: DTO, requester: REQUESTER, request_id: clientKey },
+      ctx,
+    );
+    expect(res).toEqual({ ...cached, idempotent_replay: true });
+    expect(lifecycle.create).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['idem:abc'],
+    [`idem:201:${'B'.repeat(64)}`],
+    [`x-idem:201:${'b'.repeat(64)}`],
+  ])(
+    'shakli mos kelmaydigan %p — opsiyasiz (soxtalashtirib bo`lmaydi)',
+    async (requestId) => {
+      const { controller } = setup();
+      await controller.create(
+        { dto: DTO, requester: REQUESTER, request_id: requestId },
+        ctx,
+      );
+      const opts = executeIdempotent.mock.calls[0][3] as unknown as Record<
+        string,
+        unknown
+      >;
+      expect(opts).not.toHaveProperty('markReplay');
+      expect(opts).not.toHaveProperty('reclaimFailed');
+    },
+  );
+});
+
+/**
  * Celz3rKJ — `created_via` oq ro'yxati: gateway bot yo'li payloadning YUQORI
  * darajasida `created_via: 'bot'` yuboradi. Faqat aynan `'bot'` lifecycle'ga
  * `opts.createdVia` bo'lib o'tadi; boshqa qiymat — e'tiborsiz (opts umuman
