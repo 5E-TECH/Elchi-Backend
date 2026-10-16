@@ -4,19 +4,28 @@ import {
   NotificationServiceService,
   toPublicTelegramMarket,
 } from './notification-service.service';
+import {
+  ENV_BOT_TOKEN,
+  makeFetch,
+  makeOutbox,
+  usedTokens,
+  type FetchMock,
+} from './bot/testing/bot-kit-spec';
 
 /**
- * n0kLbx3d — ochiq Telegram relay yopildi:
+ * n0kLbx3d + bOMYoOtV — ochiq Telegram relay yopildi:
  *  - REGISTRATOR faqat Elchi'da ulangan (telegram_markets) guruhlarga — begona
- *    `group_id` → 403;
- *  - payload `token` HECH QACHON ishlatilmaydi (faqat DB yoki env);
- *  - GET/POST/PATCH /notifications javoblarida bot tokeni yo'q (`has_token`),
- *    `isDeleted` ham yo'q.
+ *    `group_id` → 403 (gateway'da esa REGISTRATOR umuman 403, bOMYoOtV #3);
+ *  - bot tokeni FAQAT env'dan: payload tokeni ham, DB'dagi eski `token` ham
+ *    HECH QACHON ishlatilmaydi (bOMYoOtV #1);
+ *  - GET/POST/PATCH /notifications javoblarida token yo'q (`has_token` ham
+ *    olib tashlandi — `bot_slug`), `isDeleted` ham yo'q.
+ * Transport HAQIQIY (BotTransportService + outbox), faqat fetch soxta.
  */
-describe('NotificationServiceService — Telegram relay xavfsizligi (n0kLbx3d)', () => {
+describe('NotificationServiceService — Telegram relay xavfsizligi (n0kLbx3d / bOMYoOtV)', () => {
   let service: NotificationServiceService;
   let repo: any;
-  let fetchMock: jest.Mock;
+  let fetchMock: FetchMock;
 
   const row = (overrides: Record<string, unknown> = {}) => ({
     id: '10',
@@ -26,23 +35,12 @@ describe('NotificationServiceService — Telegram relay xavfsizligi (n0kLbx3d)',
     market_id: '5',
     group_id: '-100555',
     group_type: 'create',
+    // Eski qatorda qolgan DB tokeni — endi HECH QACHON o'qilmaydi.
     token: '123456:SECRET_BOT_TOKEN',
+    bot_slug: null,
     is_active: true,
     ...overrides,
   });
-
-  const telegramOk = () =>
-    fetchMock.mockResolvedValue({
-      ok: true,
-      json: () => Promise.resolve({ ok: true, result: { message_id: 1 } }),
-    });
-
-  const usedTokens = () =>
-    fetchMock.mock.calls.map((call: [string]) =>
-      String(call[0])
-        .replace(/^https:\/\/api\.telegram\.org\/bot/, '')
-        .replace(/\/sendMessage$/, ''),
-    );
 
   const errorOf = (promise: Promise<unknown>) =>
     promise.then(
@@ -60,26 +58,16 @@ describe('NotificationServiceService — Telegram relay xavfsizligi (n0kLbx3d)',
       save: jest.fn((entity: any) => Promise.resolve({ id: '11', ...entity })),
       create: jest.fn((value: any) => ({ ...value })),
     };
+    fetchMock = makeFetch();
     service = new NotificationServiceService(
       repo,
-      {
-        // #3: bot tokeni DB'ga shifrlab yoziladi — kalit kerak.
-        get: jest.fn(
-          (key: string) =>
-            ({
-              TELEGRAM_BOT_TOKEN: 'ENV_TOKEN',
-              TELEGRAM_TOKEN_ENC_KEY: 'cd'.repeat(32),
-            })[key],
-        ),
-      } as any,
       {} as any,
       {
         log: jest.fn().mockResolvedValue(undefined),
         logChange: jest.fn().mockResolvedValue(undefined),
       } as any,
+      makeOutbox(fetchMock).outbox,
     );
-    fetchMock = jest.fn();
-    (global as any).fetch = fetchMock;
   });
 
   afterEach(() => jest.restoreAllMocks());
@@ -114,12 +102,11 @@ describe('NotificationServiceService — Telegram relay xavfsizligi (n0kLbx3d)',
       );
     });
 
-    it('registrator + ulangan market guruhi → yuboriladi (DB tokeni bilan), bir guruh bir marta', async () => {
+    it('registrator + ulangan market guruhi → yuboriladi (env bot bilan), bir guruh bir marta', async () => {
       repo.find.mockResolvedValue([
         row(),
         row({ id: '12', group_type: 'cancel' }),
       ]);
-      telegramOk();
       const res = await service.sendNotification({
         group_id: '-100555',
         message: 'ok',
@@ -127,12 +114,11 @@ describe('NotificationServiceService — Telegram relay xavfsizligi (n0kLbx3d)',
       } as any);
       expect(res?.data.success).toBe(1);
       expect(fetchMock).toHaveBeenCalledTimes(1);
-      expect(usedTokens()).toEqual(['123456:SECRET_BOT_TOKEN']);
+      expect(usedTokens(fetchMock)).toEqual([ENV_BOT_TOKEN]);
     });
 
     it('registrator + market_id → faqat o‘sha marketning ulangan guruhlari', async () => {
       repo.find.mockResolvedValue([row()]);
-      telegramOk();
       await service.sendNotification({
         market_id: '5',
         message: 'ok',
@@ -151,7 +137,6 @@ describe('NotificationServiceService — Telegram relay xavfsizligi (n0kLbx3d)',
     ])(
       '%s — ixtiyoriy group_id cheklanmaydi (env bot)',
       async (_label, requester) => {
-        telegramOk();
         const res = await service.sendNotification({
           group_id: '-100999',
           message: 'hi',
@@ -159,7 +144,7 @@ describe('NotificationServiceService — Telegram relay xavfsizligi (n0kLbx3d)',
         } as any);
         expect(res?.data.success).toBe(1);
         expect(repo.find).not.toHaveBeenCalled();
-        expect(usedTokens()).toEqual(['ENV_TOKEN']);
+        expect(usedTokens(fetchMock)).toEqual([ENV_BOT_TOKEN]);
       },
     );
 
@@ -175,75 +160,87 @@ describe('NotificationServiceService — Telegram relay xavfsizligi (n0kLbx3d)',
     });
   });
 
-  describe('payload `token` e’tiborsiz (n0kLbx3d #2)', () => {
-    it('group_id + token → env bot ishlatiladi, payload tokeni HECH QACHON', async () => {
-      telegramOk();
+  describe('bot tokeni FAQAT env (bOMYoOtV #1)', () => {
+    it('group_id + payload token → env bot, payload tokeni HECH QACHON', async () => {
       await service.sendNotification({
         group_id: '-100999',
         message: 'hi',
         token: 'EVIL:TOKEN',
       } as any);
-      expect(usedTokens()).toEqual(['ENV_TOKEN']);
+      expect(usedTokens(fetchMock)).toEqual([ENV_BOT_TOKEN]);
     });
 
-    it('market_id + token → DB tokeni, payload tokeni emas', async () => {
-      repo.find.mockResolvedValue([row()]);
-      telegramOk();
-      await service.sendNotification({
+    it('market_id → DB qatoridagi eski `token` ham emas, env bot (404 chiqmaydi)', async () => {
+      repo.find.mockResolvedValue([
+        row(),
+        row({
+          id: '13',
+          group_id: '-100777',
+          token: 'group_token-abcdef0123456789',
+        }),
+      ]);
+      const res = await service.sendNotification({
         market_id: '5',
         message: 'hi',
         token: 'EVIL:TOKEN',
       } as any);
-      expect(usedTokens()).toEqual(['123456:SECRET_BOT_TOKEN']);
+      expect(res?.statusCode).toBe(200);
+      expect(usedTokens(fetchMock)).toEqual([ENV_BOT_TOKEN, ENV_BOT_TOKEN]);
+      // O'qishda `token` ustuni umuman tanlanmaydi.
+      expect(repo.find.mock.calls[0][0].select).not.toHaveProperty('token');
+    });
+
+    it('env tokeni yo‘q — tashqi so‘rov YO‘Q, 502', async () => {
+      const noToken = makeFetch();
+      const bare = new NotificationServiceService(
+        repo,
+        {} as any,
+        { log: jest.fn(), logChange: jest.fn() } as any,
+        makeOutbox(noToken, { env: {} }).outbox,
+      );
+      const res = await bare.sendNotification({
+        group_id: '-100999',
+        message: 'hi',
+      } as any);
+      expect(noToken).not.toHaveBeenCalled();
+      expect(res?.statusCode).toBe(502);
     });
   });
 
-  describe('TC3: javoblarda bot tokeni yo‘q (`has_token`), isDeleted yo‘q', () => {
-    const assertPublic = (item: Record<string, unknown>, hasToken: boolean) => {
+  describe('TC3: javoblarda bot tokeni yo‘q, isDeleted yo‘q', () => {
+    const assertPublic = (item: Record<string, unknown>) => {
       expect(item).not.toHaveProperty('token');
+      expect(item).not.toHaveProperty('has_token');
+      expect(item).not.toHaveProperty('connect_token_hash');
       expect(item).not.toHaveProperty('isDeleted');
-      expect(item.has_token).toBe(hasToken);
       expect(JSON.stringify(item)).not.toContain('SECRET_BOT_TOKEN');
     };
 
-    it('GET /notifications (find_all) — har elementda token o‘rniga has_token; token faqat ataylab tanlanadi', async () => {
-      repo.findAndCount.mockResolvedValue([
-        [
-          row(),
-          row({ id: '11', token: null }),
-          row({ id: '12', token: 'group_token-abcdef0123456789' }),
-        ],
-        3,
-      ]);
+    it('GET /notifications (find_all) — token ustuni tanlanmaydi, javobda yo‘q', async () => {
+      repo.findAndCount.mockResolvedValue([[row(), row({ id: '11' })], 2]);
       const res = await service.findAllTelegramMarkets({});
       const items = res?.data.items as Array<Record<string, unknown>>;
-      assertPublic(items[0], true);
-      assertPublic(items[1], false);
-      // group_token-… — market tokeni, bot tokeni emas → has_token=false
-      assertPublic(items[2], false);
+      items.forEach(assertPublic);
       expect(Object.keys(items[0]).sort()).toEqual(
         [
+          'bot_slug',
           'createdAt',
           'group_id',
           'group_type',
-          'has_token',
           'id',
           'is_active',
           'market_id',
           'updatedAt',
         ].sort(),
       );
-      expect(repo.findAndCount.mock.calls[0][0].select).toEqual(
-        expect.objectContaining({ token: true }),
-      );
+      const select = repo.findAndCount.mock.calls[0][0].select;
+      expect(select).not.toHaveProperty('token');
+      expect(select).not.toHaveProperty('connect_token_hash');
     });
 
-    it('GET /notifications/:id, POST va PATCH javoblari ham tokensiz', async () => {
+    it('GET /notifications/:id, POST va PATCH javoblari ham tokensiz; POST token SAQLAMAYDI', async () => {
       repo.findOne.mockResolvedValueOnce(row());
-      assertPublic(
-        (await service.findTelegramMarketById('10'))?.data as any,
-        true,
-      );
+      assertPublic((await service.findTelegramMarketById('10'))?.data as any);
 
       repo.findOne.mockResolvedValueOnce(null);
       const created = await service.createTelegramMarket({
@@ -252,7 +249,8 @@ describe('NotificationServiceService — Telegram relay xavfsizligi (n0kLbx3d)',
         group_type: 'create',
         token: '123456:SECRET_BOT_TOKEN',
       } as any);
-      assertPublic(created?.data as any, true);
+      assertPublic(created?.data as any);
+      expect(repo.create.mock.calls[0][0]).not.toHaveProperty('token');
 
       repo.findOne
         .mockResolvedValueOnce(row()) // resolveTelegramMarketTarget
@@ -260,8 +258,9 @@ describe('NotificationServiceService — Telegram relay xavfsizligi (n0kLbx3d)',
       const updated = await service.updateTelegramMarket({
         id: '10',
         is_active: false,
+        token: 'NEW:TOKEN',
       } as any);
-      assertPublic(updated?.data as any, true);
+      assertPublic(updated?.data as any);
     });
 
     it('toPublicTelegramMarket — sof funksiya', () => {
@@ -272,7 +271,7 @@ describe('NotificationServiceService — Telegram relay xavfsizligi (n0kLbx3d)',
         market_id: '5',
         group_id: '-100555',
         group_type: 'create',
-        has_token: true,
+        bot_slug: null,
         is_active: true,
       });
     });

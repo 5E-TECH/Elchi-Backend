@@ -65,10 +65,11 @@ const findViolations = (src: string): string[] => {
 describe('notification-service AI ishlatmaydi (Gy8Lt6KT #12)', () => {
   const files = listSources(SRC_DIR);
 
-  it("skaner bo'sh emas — order bot fayli ham ichida", () => {
+  it("skaner bo'sh emas — bot yadrosi (bot/) ham ichida", () => {
     const rel = files.map((f) => relative(SRC_DIR, f));
-    expect(rel).toContain('order-bot.update.ts');
-    expect(rel).toContain('notification-bot.update.ts');
+    // (ZlpXb4Wh) eski order-bot / notification-bot o'rniga yagona bot/ yadrosi.
+    expect(rel).toContain(join('bot', 'bot-router.service.ts'));
+    expect(rel).toContain(join('bot', 'bot-transport.service.ts'));
     expect(rel.some((f) => f.endsWith('.spec.ts'))).toBe(false);
   });
 

@@ -294,6 +294,37 @@ export const ACTIVITY_ACTION_REGISTRY: Readonly<
     'link',
     'cyan',
   ),
+  // (9HIaV80X #7) bot amallari: ulash, uzish, kanal holati, callback.
+  'notification.tg_linked': entry(
+    'Telegram akkaunt ulandi',
+    'notification',
+    'link',
+    'cyan',
+  ),
+  'notification.tg_unlinked': entry(
+    'Telegram akkaunt uzildi',
+    'notification',
+    'unlink',
+    'slate',
+  ),
+  'notification.tg_channel_inactive': entry(
+    'Telegram kanali nofaol (bot chiqarildi/bloklandi)',
+    'notification',
+    'stop',
+    'red',
+  ),
+  'notification.tg_channel_active': entry(
+    'Telegram kanali qayta faol',
+    'notification',
+    'link',
+    'green',
+  ),
+  'notification.tg_callback': entry(
+    'Telegram tugmasi bosildi',
+    'notification',
+    'pointer',
+    'blue',
+  ),
 
   // ---- integratsiya ----
   'webhook.reprocess': entry(

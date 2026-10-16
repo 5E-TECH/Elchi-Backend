@@ -1,6 +1,14 @@
 import { NotificationServiceService } from './notification-service.service';
-import { NotificationBotUpdateService } from './notification-bot.update';
-import { OrderBotUpdateService } from './order-bot.update';
+import { GroupHandler } from './bot/handlers/group.handler';
+import { MarketHandler } from './bot/handlers/market.handler';
+import {
+  ENV_BOT_TOKEN,
+  makeCtx,
+  makeFetch,
+  makeOutbox,
+  marketActor,
+  usedTokens,
+} from './bot/testing/bot-kit-spec';
 
 /**
  * FIX3 (A7):
@@ -10,8 +18,9 @@ import { OrderBotUpdateService } from './order-bot.update';
  *    reklama qilmaydi; maxfiy token bazada saqlanmaydi va bot tokeni sifatida
  *    ishlatilmaydi; fix3b: token ulangandan keyin ALMASHTIRILMAYDI va mavjud
  *    (market, tur) ulanishi bot orqali almashtirilmaydi;
- *  - CODE-18: order-bot /status faqat ulangan chatga va faqat o'sha marketning
- *    buyurtmasi uchun javob beradi.
+ *  - CODE-18: /status faqat ulangan (users.telegram_id) market/operatorga va
+ *    faqat o'sha marketning buyurtmasi uchun javob beradi.
+ * (ZlpXb4Wh) eski bot klasslari o'rniga yangi bot/ yadrosi handlerlari.
  */
 
 const rmqSendMock = jest.fn();
@@ -38,6 +47,7 @@ describe('CODE-02: guruhni ulash faqat maxfiy token bilan', () => {
     create: jest.Mock;
   };
   let activityLog: { log: jest.Mock; logChange: jest.Mock };
+  let fetchMock: ReturnType<typeof makeFetch>;
 
   /** identity: faqat SECRET → 5-market; find_by_id → market; rotate → ok. */
   const routeIdentity = () =>
@@ -82,15 +92,12 @@ describe('CODE-02: guruhni ulash faqat maxfiy token bilan', () => {
       log: jest.fn().mockResolvedValue(undefined),
       logChange: jest.fn().mockResolvedValue(undefined),
     };
+    fetchMock = makeFetch();
     service = new NotificationServiceService(
       repo as never,
-      {
-        get: jest.fn((key: string) =>
-          key === 'TELEGRAM_BOT_TOKEN' ? 'ENV_TOKEN' : undefined,
-        ),
-      } as never,
       {} as never,
       activityLog as never,
+      makeOutbox(fetchMock).outbox,
     );
     routeIdentity();
   });
@@ -155,11 +162,11 @@ describe('CODE-02: guruhni ulash faqat maxfiy token bilan', () => {
         message: 'Beshinchi uchun Telegram guruhi ulandi',
       }),
     );
+    // bOMYoOtV: token ustuni umuman yozilmaydi (bot tokeni faqat env).
     expect(repo.create).toHaveBeenCalledWith({
       market_id: '5',
       group_id: '-100777',
       group_type: 'create',
-      token: null,
       is_active: true,
     });
     // fix3b: token marketning order-bot kaliti bo'lib qoladi.
@@ -178,8 +185,9 @@ describe('CODE-02: guruhni ulash faqat maxfiy token bilan', () => {
       market_tg_token: SECRET,
     });
     expect(repo.create).toHaveBeenCalledWith(
-      expect.objectContaining({ group_type: 'cancel', token: null }),
+      expect.objectContaining({ group_type: 'cancel' }),
     );
+    expect(repo.create.mock.calls[0][0]).not.toHaveProperty('token');
   });
 
   it('mavjud (market, tur) ulanishi joriy token bilan ham ALMASHTIRILMAYDI (fix3b)', async () => {
@@ -223,16 +231,8 @@ describe('CODE-02: guruhni ulash faqat maxfiy token bilan', () => {
     expect(repo.save).not.toHaveBeenCalled();
   });
 
-  describe('yuborish: market tokeni bot tokeni sifatida ishlatilmaydi', () => {
-    const okFetch = () =>
-      jest.fn().mockResolvedValue({
-        ok: true,
-        json: () => Promise.resolve({ ok: true, result: { message_id: 1 } }),
-      });
-
+  describe('yuborish: bot tokeni FAQAT env (bOMYoOtV)', () => {
     it('eski qatordagi group_token-… e’tiborsiz — env bot yuboradi', async () => {
-      const fetchMock = okFetch();
-      (global as any).fetch = fetchMock;
       repo.find.mockResolvedValue([
         {
           id: '41',
@@ -249,14 +249,10 @@ describe('CODE-02: guruhni ulash faqat maxfiy token bilan', () => {
       } as never);
 
       expect((res?.data as { success?: number } | undefined)?.success).toBe(1);
-      expect(fetchMock.mock.calls[0][0]).toBe(
-        'https://api.telegram.org/botENV_TOKEN/sendMessage',
-      );
+      expect(usedTokens(fetchMock)).toEqual([ENV_BOT_TOKEN]);
     });
 
-    it('qatorda haqiqiy bot tokeni bo‘lsa — o‘sha ishlatiladi (o‘zgarmagan)', async () => {
-      const fetchMock = okFetch();
-      (global as any).fetch = fetchMock;
+    it('qatorda haqiqiy bot tokeni bo‘lsa ham — ISHLATILMAYDI, env bot (bOMYoOtV #1)', async () => {
       repo.find.mockResolvedValue([
         {
           id: '42',
@@ -272,59 +268,35 @@ describe('CODE-02: guruhni ulash faqat maxfiy token bilan', () => {
         market_id: '5',
       } as never);
 
-      expect(fetchMock.mock.calls[0][0]).toBe(
-        'https://api.telegram.org/bot123456:REAL_BOT/sendMessage',
-      );
+      expect(usedTokens(fetchMock)).toEqual([ENV_BOT_TOKEN]);
+      expect(JSON.stringify(fetchMock.mock.calls)).not.toContain('REAL_BOT');
     });
   });
 });
 
 describe('CODE-02: /start va /help market id formatini ko‘rsatmaydi', () => {
-  it.each(['/start', '/help'])('%s', async (command) => {
-    const sendDirectToGroup = jest.fn().mockResolvedValue({ success: true });
-    const bot = new NotificationBotUpdateService({
-      sendDirectToGroup,
-      connectGroupByTokenText: jest.fn(),
-    } as never);
-
-    await (
-      bot as unknown as { processUpdate: (u: unknown) => Promise<void> }
-    ).processUpdate({
-      update_id: 1,
-      message: { chat: { id: -100777 }, text: command },
+  it.each(['/start', '/help'])('%s (guruh)', async (command) => {
+    const handler = new GroupHandler(
+      { connectGroupByTokenText: jest.fn() } as never,
+      { linkAttempt: jest.fn() } as never,
+    );
+    const { ctx, replies } = makeCtx({
+      chatId: '-100777',
+      chatType: 'supergroup',
+      text: command,
     });
 
-    const message = String(sendDirectToGroup.mock.calls[0][0].message);
+    expect(await handler.handle(ctx as never)).toBe(true);
+
+    const message = replies[0].text;
     expect(message).toContain('maxfiy market token');
     expect(message).not.toMatch(/group_token-\d/);
     expect(message).not.toContain('marketId');
   });
 });
 
-describe('CODE-18: order-bot /status faqat o‘z marketi uchun', () => {
-  interface BotInternals {
-    links: Map<string, { id: string; name: string; token: string }>;
-    orderClient: unknown;
-    identityClient: unknown;
-    sendMessage: jest.Mock;
-    answerCallback: jest.Mock;
-    processUpdate: (update: unknown) => Promise<void>;
-  }
-
-  const make = (): BotInternals => {
-    const svc = Object.create(OrderBotUpdateService.prototype) as BotInternals;
-    svc.links = new Map();
-    svc.orderClient = {};
-    svc.identityClient = {};
-    svc.sendMessage = jest.fn().mockResolvedValue(undefined);
-    svc.answerCallback = jest.fn().mockResolvedValue(undefined);
-    return svc;
-  };
-
-  const text = (chat: number, value: string) => ({
-    update_id: 1,
-    message: { chat: { id: chat }, text: value },
-  });
+describe('CODE-18: /status faqat o‘z marketi uchun (aktor = users.telegram_id)', () => {
+  const handler = () => new MarketHandler({} as never);
 
   beforeEach(() => {
     rmqSendMock.mockReset();
@@ -341,74 +313,61 @@ describe('CODE-18: order-bot /status faqat o‘z marketi uchun', () => {
     );
   });
 
-  it("ulanmagan chat — token so'raladi, buyurtma umuman o'qilmaydi", async () => {
-    const svc = make();
+  it("ulanmagan chat — 'avval ulang', buyurtma umuman o'qilmaydi", async () => {
+    const { ctx, replies } = makeCtx({ text: '/status 101', actor: null });
 
-    await svc.processUpdate(text(111, '/status 101'));
+    await handler().handle(ctx as never);
 
     expect(rmqSendMock).not.toHaveBeenCalled();
-    expect(svc.sendMessage).toHaveBeenCalledWith(
-      '111',
-      expect.stringContaining('avval market tokeningizni yuboring'),
-    );
+    expect(replies[0].text).toContain('avval Telegram');
   });
 
-  it("ulangan chat — o'z buyurtmasining holati", async () => {
-    const svc = make();
-    svc.links.set('111', { id: '5', name: 'Beshinchi', token: SECRET });
+  it("ulangan market — o'z buyurtmasining holati", async () => {
+    const { ctx, replies } = makeCtx({
+      text: '/status 101',
+      actor: marketActor('5'),
+    });
 
-    await svc.processUpdate(text(111, '/status 101'));
+    await handler().handle(ctx as never);
 
-    expect(svc.sendMessage).toHaveBeenCalledWith(
-      '111',
-      expect.stringMatching(/#101[\s\S]*new/),
-    );
+    expect(replies[0].text).toMatch(/#101[\s\S]*new/);
   });
 
   it("boshqa marketning buyurtmasi — 'topilmadi' (holat oshkor bo'lmaydi)", async () => {
-    const svc = make();
-    svc.links.set('111', { id: '5', name: 'Beshinchi', token: SECRET });
-
-    await svc.processUpdate(text(111, 'status 202'));
-
-    expect(svc.sendMessage).toHaveBeenCalledWith(
-      '111',
-      '❌ #202 buyurtma topilmadi.',
-    );
-    expect(String(svc.sendMessage.mock.calls[0][1])).not.toContain('sold');
-  });
-
-  it("callback 'status:<id>' ham ulangan chatni talab qiladi", async () => {
-    const svc = make();
-
-    await svc.processUpdate({
-      update_id: 2,
-      callback_query: {
-        id: 'cb1',
-        data: 'status:101',
-        message: { chat: { id: 333 } },
-      },
+    const { ctx, replies } = makeCtx({
+      text: 'status 202',
+      actor: marketActor('5'),
     });
 
+    await handler().handle(ctx as never);
+
+    expect(replies[0].text).toBe('❌ #202 buyurtma topilmadi.');
+    expect(replies[0].text).not.toContain('sold');
+  });
+
+  it('kuryer/boshqa rol — /status rad etiladi, buyurtma o‘qilmaydi', async () => {
+    const { ctx, replies } = makeCtx({
+      text: '/status 101',
+      actor: { ...marketActor('5'), role: 'courier', market_id: null },
+    });
+
+    await handler().handle(ctx as never);
+
     expect(rmqSendMock).not.toHaveBeenCalled();
-    expect(svc.sendMessage).toHaveBeenCalledWith(
-      '333',
-      expect.stringContaining('avval market tokeningizni yuboring'),
-    );
+    expect(replies[0].text).toContain('faqat market');
   });
 
   it("eski { data } ko'rinishidagi javob ham o'qiladi", async () => {
-    const svc = make();
-    svc.links.set('111', { id: '5', name: 'Beshinchi', token: SECRET });
     rmqSendMock.mockResolvedValueOnce({
       data: { id: '101', status: 'received', market_id: 5 },
     });
+    const { ctx, replies } = makeCtx({
+      text: '/status 101',
+      actor: marketActor('5'),
+    });
 
-    await svc.processUpdate(text(111, '/status 101'));
+    await handler().handle(ctx as never);
 
-    expect(svc.sendMessage).toHaveBeenCalledWith(
-      '111',
-      expect.stringMatching(/#101[\s\S]*received/),
-    );
+    expect(replies[0].text).toMatch(/#101[\s\S]*received/);
   });
 });

@@ -37,6 +37,8 @@ import {
 } from './sms-gateway.controller';
 import { IntegrationGatewayController } from './integration-gateway.controller';
 import { WebhookGatewayController } from './webhook-gateway.controller';
+// (uCrzrElu) Telegram bot webhook'i — secret_token bilan, RMQ'ga o'tkazgich.
+import { TelegramWebhookController } from './telegram-webhook.controller';
 import { InvestorGatewayController } from './investor-gateway.controller';
 import { BranchGatewayController } from './branch-gateway.controller';
 import { FileGatewayController } from './file-gateway.controller';
@@ -124,6 +126,7 @@ import type { StringValue } from 'ms';
     SmsPublicGatewayController,
     IntegrationGatewayController,
     WebhookGatewayController,
+    TelegramWebhookController,
     InvestorGatewayController,
     BranchGatewayController,
     FileGatewayController,

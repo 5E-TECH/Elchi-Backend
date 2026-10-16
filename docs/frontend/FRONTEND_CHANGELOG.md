@@ -23,6 +23,34 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-10-16 — Telegram bot yadrosi (ZlpXb4Wh, Mvx0h1Fv, uCrzrElu, UQlmQiGT, GL2GgtEc, 9HIaV80X, bOMYoOtV)
+
+- [2026-10-16] ⚠️ [notification] — bOMYoOtV: `POST /notifications/send` endi
+  faqat `superadmin`/`admin` (REGISTRATOR → 403). 🔧 Registrator menyusidan
+  "Telegram'ga yuborish" tugmasini yashiring.
+- [2026-10-16] ✏️ [notification] — 9HIaV80X: `POST /notifications/send`
+  natijasi: 200 — hammasi ketdi; **202 — navbatda** (Telegram 429/5xx, server
+  o'zi qayta yuboradi — xabar yo'qolmaydi); 207 — aralash; 502 — hech biri
+  (bot bloklangan/chiqarilgan, chat topilmadi). `data` ga `queued` (son) va
+  har `results[]` elementiga `queued: true` qo'shildi. 🔧 202 ni xato emas,
+  "navbatga qo'yildi" deb ko'rsating.
+- [2026-10-16] ⚠️ [notification] — bOMYoOtV: `POST /notifications` va
+  `PATCH /notifications/:id` da `token` maydoni olib tashlandi (yuborilsa
+  400). Javoblarda `has_token` YO'Q — o'rniga `bot_slug` (`string | null`,
+  sir emas). Bot tokeni faqat server env'ida. 🔧 Formada bot tokeni maydoni
+  bo'lsa — olib tashlang; `has_token` ga tayangan joylarni o'chiring.
+- [2026-10-16] 🟢 [notification] — 9HIaV80X: bot guruhdan chiqarilsa/bloklansa
+  ulanish avtomatik `is_active: false` bo'ladi va adminlarga
+  `telegram.channel_inactive` (SYSTEM, HIGH) bildirishnomasi keladi. Qayta
+  faollashtirish — `PATCH /notifications/:id { is_active: true }`.
+- [2026-10-16] 🟢 [notification] — Shaxsiy chatdagi buyruqlar: `/start`,
+  `/help`, `/status <raqam>` (market), `/uzish` (`/stop` ham ishlaydi).
+  Market tokenini shaxsiy chatga yuborib "kirish" olib tashlandi — bog'lanish
+  profildagi «Telegram'ni ulash» havolasi (`POST /notifications/telegram/link`)
+  orqali. WebApp tugmasi URL'iga token QO'SHILMAYDI.
+- [2026-10-16] 🟢 [gateway] — `POST /telegram/webhook/:botSlug` (Telegram uchun,
+  frontend ishlatmaydi; Swagger'da yashirin).
+
 ### 2026-10-16 — P: mahsulot narxi, nom dublikati, rasm turi, ro'yxat (zRqDRLAZ, Aws1oApe, ugoDD9TT, qNwXfqLL)
 
 - [2026-10-16] ✏️ [catalog] — zRqDRLAZ: mahsulotda yangi ixtiyoriy

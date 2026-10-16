@@ -10518,14 +10518,13 @@
             "bearer": []
           }
         ],
-        "summary": "Send notification to telegram group(s). REGISTRATOR — faqat Elchi'da ulangan market guruhlariga (begona group_id → 403). `token` qabul qilinmaydi (400).",
+        "summary": "Send notification to telegram group(s) — faqat superadmin/admin. Bot tokeni faqat server env; `token` qabul qilinmaydi (400). 200 — yuborildi, 202 — navbatda (qayta urinadi), 207 — aralash, 502 — hech biri.",
         "tags": [
           "Notification"
         ],
         "x-roles": [
           "superadmin",
-          "admin",
-          "registrator"
+          "admin"
         ]
       }
     },
@@ -21242,10 +21241,6 @@
             ],
             "example": "create"
           },
-          "token": {
-            "type": "string",
-            "example": "123456:ABCDEF..."
-          },
           "is_active": {
             "type": "boolean",
             "example": true
@@ -21279,10 +21274,6 @@
               "create"
             ],
             "example": "cancel"
-          },
-          "token": {
-            "type": "string",
-            "example": "123456:ABCDEF..."
           },
           "is_active": {
             "type": "boolean",

@@ -83,6 +83,16 @@ export const gatewayValidationSchema = Joi.object({
   RABBITMQ_LOGISTICS_QUEUE: Joi.string().required(),
   RABBITMQ_FINANCE_QUEUE: Joi.string().required(),
   RABBITMQ_NOTIFICATION_QUEUE: Joi.string().required(),
+  // (uCrzrElu) Telegram webhook sekreti — `POST /telegram/webhook/:botSlug`
+  // `X-Telegram-Bot-Api-Secret-Token` bilan timingSafeEqual solishtiradi.
+  // Bo'sh bo'lsa webhook yo'li YOPIQ (hamma so'rov 401) — bot o'chiq.
+  TELEGRAM_WEBHOOK_SECRET: Joi.string()
+    .pattern(/^[A-Za-z0-9_-]{16,256}$/)
+    .allow('')
+    .optional(),
+  TELEGRAM_BOT_SLUG: Joi.string()
+    .pattern(/^[a-z0-9_-]{1,32}$/)
+    .default('elchi'),
   RABBITMQ_INTEGRATION_QUEUE: Joi.string().required(),
   RABBITMQ_ANALYTICS_QUEUE: Joi.string().required(),
   RABBITMQ_BRANCH_QUEUE: Joi.string().required(),
@@ -275,10 +285,28 @@ export const notificationValidationSchema = Joi.object({
     .custom(rejectWeakSecret, 'weak-secret check')
     .allow('')
     .optional(),
-  // Order-create bot (PCS order_create-bot parity). Both optional — the bot
-  // stays disabled when ORDER_BOT_TOKEN is unset.
-  ORDER_BOT_TOKEN: Joi.string().optional(),
-  ORDER_BOT_WEBAPP_URL: Joi.string().uri().optional(),
+  // (ZlpXb4Wh, ega qarori 2026-09-20) BITTA bot, BITTA token: eski
+  // order-create boti shu yadroga birlashtirildi. ORDER_BOT_TOKEN endi
+  // ISHLATILMAYDI (berilsa startda bir marta WARN). WebApp havolasi qoladi.
+  ORDER_BOT_TOKEN: Joi.string().allow('').optional(),
+  ORDER_BOT_WEBAPP_URL: Joi.string().uri().allow('').optional(),
+  // (Mvx0h1Fv / uCrzrElu) bot transporti. Sukut — `auto`: token va webhook
+  // sekreti bo'lsa `webhook`; token yo'q/placeholder bo'lsa `off`. `polling`
+  // faqat zaxira va faqat BOT_POLLING_LEADER=true bo'lgan bitta konteynerda.
+  TELEGRAM_BOT_MODE: Joi.string()
+    .valid('auto', 'webhook', 'polling', 'off')
+    .default('auto'),
+  BOT_POLLING_LEADER: Joi.boolean().truthy('1').falsy('0').default(false),
+  // Webhook URL'idagi `:botSlug` (bitta bot — bitta slug).
+  TELEGRAM_BOT_SLUG: Joi.string()
+    .pattern(/^[a-z0-9_-]{1,32}$/)
+    .default('elchi'),
+  // `X-Telegram-Bot-Api-Secret-Token` (setWebhook secret_token): 1–256
+  // belgi, [A-Za-z0-9_-]. Gateway shu bilan solishtiradi.
+  TELEGRAM_WEBHOOK_SECRET: Joi.string()
+    .pattern(/^[A-Za-z0-9_-]{16,256}$/)
+    .allow('')
+    .optional(),
   // Web Push (VAPID). Hammasi ixtiyoriy: kalitsiz servis baribir ko'tariladi,
   // faqat push o'chiq bo'ladi (startda WARN). Juftlik BIR MARTA yaratiladi —
   // qayta yaratilsa barcha mavjud obunalar o'ladi.

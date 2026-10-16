@@ -34,6 +34,7 @@ import {
   NotificationEscalationService,
 } from './escalation/notification-escalation.service';
 import type { EscalateInput } from './escalation/notification-escalation.service';
+import { BotRuntimeService } from './bot/bot-runtime.service';
 
 @Controller()
 export class NotificationServiceController {
@@ -45,6 +46,7 @@ export class NotificationServiceController {
     private readonly pushDelivery: PushDeliveryService,
     private readonly preferences: NotificationPreferencesService,
     private readonly escalation: NotificationEscalationService,
+    private readonly botRuntime: BotRuntimeService,
   ) {}
 
   private executeAndAck<T>(
@@ -54,11 +56,19 @@ export class NotificationServiceController {
     return executeAndAck(this.rmqService, context, handler);
   }
 
+  /**
+   * Readiness (gateway `/health/readiness`). (Mvx0h1Fv #5 / 9HIaV80X #6) Bot
+   * tokeni sozlangan-u `getMe` dan o'tmagan bo'lsa — `degraded` (readiness
+   * qizil): "healthcheck yashil, bot o'lik" holati takrorlanmasin. Token
+   * umuman berilmagan (bot o'chiq) — ta'sir yo'q. Docker liveness'iga
+   * (`GET /health`) bu tegmaydi.
+   */
   @MessagePattern({ cmd: 'notification.health' })
   health(@Ctx() context: RmqContext) {
     return this.executeAndAck(context, () => ({
       service: 'notification-service',
-      status: 'ok',
+      status: this.botRuntime.isDegraded() ? 'degraded' : 'ok',
+      bot: this.botRuntime.health(),
       timestamp: new Date().toISOString(),
     }));
   }

@@ -4206,6 +4206,65 @@ export class UserServiceService implements OnModuleInit {
     );
   }
 
+  /**
+   * (3ZfiXuaW #1 / ZlpXb4Wh) Bot RBAC darvozasi: `telegram_id` → aktor.
+   * FAIL-CLOSED: bog'lanmagan, faol bo'lmagan, o'chirilgan yoki bir nechta
+   * akkauntga bog'langan (eski noaniqlik) id → `null` (throw emas).
+   * Mijoz va investor botda aktor bo'la olmaydi.
+   */
+  async telegramResolve(payload: { telegram_id?: unknown }) {
+    const telegramId = primitiveText(payload?.telegram_id).trim();
+    if (!/^-?\d{1,20}$/.test(telegramId)) return successRes(null);
+    const rows = await this.users.find({
+      where: { telegram_id: telegramId, isDeleted: false },
+      select: ['id', 'role', 'status', 'market_id', 'region_id'],
+      take: 2,
+    });
+    if (rows.length !== 1) {
+      if (rows.length > 1) {
+        this.logger.warn(
+          'identity.telegram.resolve: bitta telegram_id bir nechta akkauntda — rad etildi (fail-closed)',
+        );
+      }
+      return successRes(null);
+    }
+    const [user] = rows;
+    if (
+      user.status !== Status.ACTIVE ||
+      [Roles.CUSTOMER, Roles.INVESTOR].includes(user.role)
+    ) {
+      return successRes(null);
+    }
+    return successRes({
+      user_id: String(user.id),
+      role: user.role,
+      status: user.status,
+      // Market — o'zi; market operatori — biriktirilgan market.
+      market_id:
+        user.role === Roles.MARKET
+          ? String(user.id)
+          : user.market_id
+            ? String(user.market_id)
+            : null,
+      region_id: user.region_id ? String(user.region_id) : null,
+    });
+  }
+
+  /** (9HIaV80X #6) `bot_linked_users{role}` metrikasi uchun. */
+  async telegramLinkedCounts() {
+    const rows: Array<{ role: string; count: string }> = await this.users
+      .createQueryBuilder('u')
+      .select('u.role', 'role')
+      .addSelect('COUNT(*)', 'count')
+      .where('u.telegram_id IS NOT NULL')
+      .andWhere('u.is_deleted = false')
+      .groupBy('u.role')
+      .getRawMany();
+    return successRes(
+      rows.map((row) => ({ role: row.role, count: Number(row.count) })),
+    );
+  }
+
   async findByIdForAuth(id: string) {
     return this.users.findOne({
       where: { id, isDeleted: false, status: Status.ACTIVE },

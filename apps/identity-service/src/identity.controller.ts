@@ -289,6 +289,25 @@ export class IdentityController {
     );
   }
 
+  /** (3ZfiXuaW) Bot RBAC darvozasi: telegram_id → aktor yoki null (ichki RMQ). */
+  @MessagePattern({ cmd: 'identity.telegram.resolve' })
+  telegramResolve(
+    @Payload() payload: { telegram_id?: unknown },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.userService.telegramResolve(payload),
+    );
+  }
+
+  /** (9HIaV80X) `bot_linked_users{role}` metrikasi (ichki RMQ). */
+  @MessagePattern({ cmd: 'identity.telegram.linked_counts' })
+  telegramLinkedCounts(@Ctx() context: RmqContext) {
+    return this.executeAndAck(context, () =>
+      this.userService.telegramLinkedCounts(),
+    );
+  }
+
   /** (rCFZAmOz) Bot `/stop` — shaxsiy chatni uzish (ichki RMQ). */
   @MessagePattern({ cmd: 'identity.user.telegram_unbind' })
   telegramUnbind(

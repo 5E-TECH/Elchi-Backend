@@ -403,15 +403,16 @@ export class NotificationGatewayController {
   }
 
   @Post('send')
-  // (3SeRYFqx #2) Hammasi ketdi — 200, qisman — 207, hech biri — 502
-  // (tana statusCode i HTTP holatiga ko'chiriladi; data.results o'zgarmagan).
+  // (3SeRYFqx #2 / 9HIaV80X) Hammasi ketdi — 200, navbatda (429/5xx, outbox
+  // qayta yuboradi) — 202, aralash — 207, hech biri (403/400) — 502.
   @UseInterceptors(BodyStatusCodeInterceptor)
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.REGISTRATOR)
+  // (bOMYoOtV #3) REGISTRATOR olib tashlandi — ochiq relay yopildi.
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiBearerAuth()
   @ApiOperation({
     summary:
-      "Send notification to telegram group(s). REGISTRATOR — faqat Elchi'da ulangan market guruhlariga (begona group_id → 403). `token` qabul qilinmaydi (400).",
+      'Send notification to telegram group(s) — faqat superadmin/admin. Bot tokeni faqat server env; `token` qabul qilinmaydi (400). 200 — yuborildi, 202 — navbatda (qayta urinadi), 207 — aralash, 502 — hech biri.',
   })
   @ApiBody({ type: SendNotificationRequestDto })
   sendNotification(

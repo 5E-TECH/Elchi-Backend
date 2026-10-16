@@ -7,7 +7,9 @@ import {
   initSentry,
   flushSentry,
   registerLiveness,
+  registerMetrics,
 } from '@app/common';
+import { BOT_METRICS } from './bot/bot-metrics';
 
 async function bootstrap() {
   initSentry({ serviceName: 'notification-service' });
@@ -45,6 +47,9 @@ async function bootstrap() {
 
   await app.startAllMicroservices();
   registerLiveness(app, 'notification-service');
+  // (9HIaV80X #6) bot metrikalari (bot_token_healthy, bot_linked_users, …) —
+  // ichki portdagi GET /metrics (tashqariga chiqarilmaydi).
+  registerMetrics(app, 'notification-service', BOT_METRICS);
   await app.listen(3016);
 }
 bootstrap();

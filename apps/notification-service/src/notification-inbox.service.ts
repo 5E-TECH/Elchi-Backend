@@ -1299,8 +1299,8 @@ export class NotificationInboxService {
    * `sent` (Telegram API `ok`) | `failed` + `telegram_error` (≤200 belgi) |
    * `not_eligible` (nishon yo'q / marketda guruh ulanmagan).
    *
-   * ⚠️ Bot tokeni payload'dan OLINMAYDI — faqat DB (telegram_markets) yoki
-   * env (TELEGRAM_BOT_TOKEN). Matn `parse_mode: HTML`: chaqiruvchi tayyor
+   * ⚠️ Bot tokeni payload'dan ham, DB'dan ham OLINMAYDI — faqat env
+   * (TELEGRAM_BOT_TOKEN, bOMYoOtV). Matn `parse_mode: HTML`: chaqiruvchi tayyor
    * `telegram.text` bermasa sarlavha/tana HTML-escape qilinadi (`<`/`&`
    * bo'lsa Telegram butun xabarni rad etardi).
    */
@@ -1334,29 +1334,38 @@ export class NotificationInboxService {
         data?: {
           success?: number;
           failed?: number;
-          results?: Array<{ ok?: boolean; error?: string }>;
+          queued?: number;
+          results?: Array<{ ok?: boolean; queued?: boolean; error?: string }>;
         };
       } | null;
       const data = res?.data ?? {};
       const success = Number(data.success ?? 0);
       const failed = Number(data.failed ?? 0);
+      // (9HIaV80X) 429/5xx — telegram_outbox qayta yuboradi: xato emas.
+      const queued = Number(data.queued ?? 0);
       const firstError =
-        data.results?.find((item) => !item.ok)?.error ?? 'telegram_failed';
+        data.results?.find((item) => !item.ok && !item.queued)?.error ??
+        'telegram_failed';
       const outcome: TelegramOutcome =
-        success > 0 && failed === 0
+        failed === 0 && success > 0 && queued === 0
           ? {
               telegram: NotificationDeliveryStatus.SENT,
               telegram_sent: success,
             }
-          : {
-              telegram: NotificationDeliveryStatus.FAILED,
-              telegram_sent: success,
-              telegram_error: shortReason(
-                success > 0
-                  ? `partial ${failed}/${success + failed}: ${firstError}`
-                  : firstError,
-              ),
-            };
+          : failed === 0 && queued > 0
+            ? {
+                telegram: NotificationDeliveryStatus.QUEUED,
+                telegram_sent: success,
+              }
+            : {
+                telegram: NotificationDeliveryStatus.FAILED,
+                telegram_sent: success,
+                telegram_error: shortReason(
+                  success > 0
+                    ? `partial ${failed}/${success + failed}: ${firstError}`
+                    : firstError,
+                ),
+              };
       return { result: res, outcome };
     } catch (err) {
       const rpc =

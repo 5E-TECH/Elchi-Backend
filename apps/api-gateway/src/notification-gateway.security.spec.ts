@@ -81,8 +81,16 @@ describe('NotificationGatewayController — n0kLbx3d / Eh8y21Ha', () => {
       expect(send).not.toHaveBeenCalled();
     });
 
-    it('TC1: registrator ruxsat etilgan rol, lekin `requester` (roles) uzatiladi — doira notification-service’da (begona guruh → 403)', async () => {
+    it('(bOMYoOtV #3) registrator — 403: ochiq relay yopildi, RPC chaqirilmaydi', async () => {
       user = { sub: '77', roles: ['registrator'] };
+      await request(http())
+        .post('/notifications/send')
+        .send({ group_id: '-1001', message: 'hi' })
+        .expect(403);
+      expect(send).not.toHaveBeenCalled();
+    });
+
+    it('superadmin — o‘tadi, `requester` (roles) notification-service’ga uzatiladi', async () => {
       // (3SeRYFqx) send hammasi ketganda tana statusCode 200 → HTTP 200.
       send.mockReturnValue(
         of({ statusCode: 200, data: { success: 1, failed: 0 } }),
@@ -96,8 +104,18 @@ describe('NotificationGatewayController — n0kLbx3d / Eh8y21Ha', () => {
       expect(payload).toEqual({
         group_id: '-1001',
         message: 'hi',
-        requester: { id: '77', roles: ['registrator'] },
+        requester: { id: '1', roles: ['superadmin'] },
       });
+    });
+
+    it('(9HIaV80X) navbatda (429) — tana statusCode 202 → HTTP 202', async () => {
+      send.mockReturnValue(
+        of({ statusCode: 202, data: { success: 0, failed: 0, queued: 1 } }),
+      );
+      await request(http())
+        .post('/notifications/send')
+        .send({ group_id: '-1001', message: 'hi' })
+        .expect(202);
     });
 
     it('courier — 403 (RolesGuard)', async () => {
@@ -107,6 +125,38 @@ describe('NotificationGatewayController — n0kLbx3d / Eh8y21Ha', () => {
         .send({ group_id: '-1001', message: 'hi' })
         .expect(403);
       expect(send).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('(bOMYoOtV) bot tokeni so‘rov tanasidan qabul qilinmaydi', () => {
+    it('POST /notifications (config yaratish) `token` bilan → 400', async () => {
+      const res = await request(http())
+        .post('/notifications')
+        .send({
+          market_id: '5',
+          group_id: '-100555',
+          group_type: 'create',
+          token: '123456:SECRET',
+        })
+        .expect(400);
+      expect(JSON.stringify(res.body)).toContain('token');
+      expect(send).not.toHaveBeenCalled();
+    });
+
+    it('PATCH /notifications/:id `token` bilan → 400', async () => {
+      await request(http())
+        .patch('/notifications/10')
+        .send({ is_active: false, token: '123456:SECRET' })
+        .expect(400);
+      expect(send).not.toHaveBeenCalled();
+    });
+
+    it('tokensiz yaratish — o‘tadi', async () => {
+      await request(http())
+        .post('/notifications')
+        .send({ market_id: '5', group_id: '-100555', group_type: 'create' })
+        .expect(201);
+      expect(lastCall()![1]).not.toHaveProperty('token');
     });
   });
 

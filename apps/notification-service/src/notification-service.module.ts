@@ -16,8 +16,27 @@ import { TelegramMarket } from './entities/telegram-market.entity';
 import { Notification } from './entities/notification.entity';
 import { PushSubscription } from './entities/push-subscription.entity';
 import { NotificationInboxService } from './notification-inbox.service';
-import { NotificationBotUpdateService } from './notification-bot.update';
-import { OrderBotUpdateService } from './order-bot.update';
+// (ZlpXb4Wh, ega qarori) eski notification-bot.update.ts va order-bot.update.ts
+// O'CHIRILDI — o'rniga yagona `bot/` yadrosi (bitta bot, bitta token).
+import { BotTransportService } from './bot/bot-transport.service';
+import { BotSessionService } from './bot/bot-session.service';
+import { BotActionsService } from './bot/bot-actions.service';
+import { BotRateLimiterService } from './bot/bot-rate-limiter.service';
+import { BotChannelService } from './bot/bot-channel.service';
+import { BotOutboxService } from './bot/bot-outbox.service';
+import { BotActorService } from './bot/bot-actor.service';
+import { BotRouterService } from './bot/bot-router.service';
+import { BotRuntimeService } from './bot/bot-runtime.service';
+import { BotMaintenanceService } from './bot/bot-maintenance.service';
+import { BotController } from './bot/bot.controller';
+import { StartHandler } from './bot/handlers/start.handler';
+import { GroupHandler } from './bot/handlers/group.handler';
+import { MarketHandler } from './bot/handlers/market.handler';
+import { MembershipHandler } from './bot/handlers/membership.handler';
+import { TelegramSession } from './entities/telegram-session.entity';
+import { TelegramBotAction } from './entities/telegram-bot-action.entity';
+import { TelegramRateLimit } from './entities/telegram-rate-limit.entity';
+import { TelegramOutbox } from './entities/telegram-outbox.entity';
 import { WebPushService } from './push/web-push.service';
 import { PushSubscriptionService } from './push/push-subscription.service';
 import { PushDeliveryService } from './push/push-delivery.service';
@@ -114,6 +133,11 @@ import { RecipientDirectoryService } from './recipients/recipient-directory.serv
       NotificationTemplate,
       NotificationAudienceSegment,
       CampaignReportExport,
+      // Telegram bot yadrosi (migratsiya 1716000000120).
+      TelegramSession,
+      TelegramBotAction,
+      TelegramRateLimit,
+      TelegramOutbox,
     ]),
     // Push yetkazish bir partiyada 100 tagacha bildirishnomani parallel
     // yuboradi — 5 s lik standart javob muddati qisqa: muddat o'tsa outbox
@@ -132,12 +156,26 @@ import { RecipientDirectoryService } from './recipients/recipient-directory.serv
     TelegramDmController,
     NotificationTemplateController,
     AudienceSegmentController,
+    BotController,
   ],
   providers: [
     NotificationServiceService,
     NotificationInboxService,
-    NotificationBotUpdateService,
-    OrderBotUpdateService,
+    // Telegram bot yadrosi (ZlpXb4Wh): transport → router → handlerlar.
+    BotTransportService,
+    BotSessionService,
+    BotActionsService,
+    BotRateLimiterService,
+    BotChannelService,
+    BotOutboxService,
+    BotActorService,
+    StartHandler,
+    GroupHandler,
+    MarketHandler,
+    MembershipHandler,
+    BotRouterService,
+    BotRuntimeService,
+    BotMaintenanceService,
     WebPushService,
     PushSubscriptionService,
     PushDeliveryService,

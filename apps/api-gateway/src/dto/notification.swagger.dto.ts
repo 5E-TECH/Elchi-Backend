@@ -41,10 +41,8 @@ export class CreateTelegramMarketRequestDto {
   @IsEnum(Group_type)
   group_type!: Group_type;
 
-  @ApiPropertyOptional({ example: '123456:ABCDEF...' })
-  @IsOptional()
-  @IsString()
-  token?: string;
+  // (bOMYoOtV) `token` YO'Q: bot tokeni so'rov tanasidan ham, bazadan ham
+  // olinmaydi (faqat env). Yuborilsa 400 (forbidNonWhitelisted).
 
   @ApiPropertyOptional({ example: true })
   @IsOptional()
@@ -115,10 +113,8 @@ export class UpdateTelegramMarketRequestDto {
   @IsEnum(Group_type)
   group_type?: Group_type;
 
-  @ApiPropertyOptional({ example: '123456:ABCDEF...' })
-  @IsOptional()
-  @IsString()
-  token?: string;
+  // (bOMYoOtV) `token` YO'Q: bot tokeni so'rov tanasidan ham, bazadan ham
+  // olinmaydi (faqat env). Yuborilsa 400 (forbidNonWhitelisted).
 
   @ApiPropertyOptional({ example: false })
   @IsOptional()
@@ -163,9 +159,9 @@ export class SendNotificationRequestDto {
   @IsEnum(Group_type)
   group_type?: Group_type;
 
-  // (n0kLbx3d) `token` ATAYLAB YO'Q: yuborilsa 400 (forbidNonWhitelisted).
-  // Bot tokeni faqat DB (telegram_markets) yoki env'dan olinadi — server
-  // ixtiyoriy bot tokeni bilan tashqi so'rov yuboruvchi vositaga aylanmasin.
+  // (n0kLbx3d / bOMYoOtV) `token` ATAYLAB YO'Q: yuborilsa 400
+  // (forbidNonWhitelisted). Bot tokeni FAQAT env'dan — server ixtiyoriy bot
+  // tokeni bilan tashqi so'rov yuboruvchi vositaga aylanmasin.
 
   @ApiProperty({ example: 'Buyurtma yaratildi: #123' })
   @IsString()

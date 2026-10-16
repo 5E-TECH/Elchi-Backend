@@ -5,6 +5,13 @@ import { join } from 'node:path';
 import { of } from 'rxjs';
 import { NotificationInboxService } from './notification-inbox.service';
 import { NotificationServiceService } from './notification-service.service';
+import {
+  makeFetch,
+  makeOutbox,
+  okResponse,
+  telegramResponse,
+  type FetchMock,
+} from './bot/testing/bot-kit-spec';
 import { RecipientDirectoryService } from './recipients/recipient-directory.service';
 
 const rmqSendMock = jest.fn();
@@ -47,6 +54,7 @@ afterEach(() => jest.restoreAllMocks());
 
 const makeTelegramService = (
   market: Record<string, unknown> | null = { id: '5', name: 'Beshinchi' },
+  fetchMock: FetchMock = makeFetch(),
 ) => {
   const rows: Array<Record<string, unknown>> = [];
   const repo = {
@@ -81,16 +89,17 @@ const makeTelegramService = (
       return Promise.resolve(null);
     },
   );
+  const { outbox, channels } = makeOutbox(fetchMock);
   const service = new NotificationServiceService(
     repo as never,
-    { get: jest.fn(() => 'ENV_TOKEN') } as never,
     {} as never,
     {
       log: jest.fn().mockResolvedValue(undefined),
       logChange: jest.fn().mockResolvedValue(undefined),
     } as never,
+    outbox,
   );
-  return { service, repo, rows };
+  return { service, repo, rows, channels };
 };
 
 describe('3SeRYFqx #1 — POST /notifications/connect-by-token (HTTP yo‘li)', () => {
@@ -188,38 +197,45 @@ describe('3SeRYFqx #2 — POST /notifications/send: hammasi yiqilsa 2xx EMAS', (
       market_id: '13',
       group_type: 'create',
       group_id: '-1001',
-      token: null,
     },
     {
       id: '2',
       market_id: '13',
       group_type: 'cancel',
       group_id: '-1002',
-      token: null,
     },
   ];
-  const telegram = (okFor: string[]) =>
-    jest.fn((url: string, init: { body: string }) => {
-      const chat = String(JSON.parse(init.body).chat_id);
-      return Promise.resolve(
-        okFor.includes(chat)
-          ? { ok: true, json: () => Promise.resolve({ ok: true, result: {} }) }
-          : {
-              ok: false,
-              status: 400,
-              json: () =>
-                Promise.resolve({ ok: false, description: 'chat not found' }),
-            },
+  /** okFor — yetkaziladi; queuedFor — 429 (retry_after 3); qolgani 400 chat not found. */
+  const telegram = (okFor: string[], queuedFor: string[] = []): FetchMock =>
+    jest.fn((_url: string, init: RequestInit) => {
+      const chat = String(
+        (JSON.parse(init.body as string) as { chat_id: string }).chat_id,
       );
-    });
-  const run = async (okFor: string[]) => {
-    const { service, repo } = makeTelegramService();
-    repo.find.mockResolvedValue(groups);
-    (global as any).fetch = telegram(okFor);
-    return (await service.sendNotification({
+      if (okFor.includes(chat)) return Promise.resolve(okResponse({}));
+      if (queuedFor.includes(chat)) {
+        return Promise.resolve(
+          telegramResponse(429, {
+            ok: false,
+            description: 'Too Many Requests: retry after 3',
+            parameters: { retry_after: 3 },
+          }),
+        );
+      }
+      return Promise.resolve(
+        telegramResponse(400, {
+          ok: false,
+          description: 'Bad Request: chat not found',
+        }),
+      );
+    }) as FetchMock;
+  const run = async (okFor: string[], queuedFor: string[] = []) => {
+    const ctx = makeTelegramService(undefined, telegram(okFor, queuedFor));
+    ctx.repo.find.mockResolvedValue(groups);
+    const res = (await ctx.service.sendNotification({
       message: 'salom',
       market_id: '13',
     } as any)) as any;
+    return Object.assign(res, { channels: ctx.channels });
   };
 
   it('hech biri ketmadi → statusCode 502, natijalar tanada saqlangan', async () => {
@@ -227,9 +243,11 @@ describe('3SeRYFqx #2 — POST /notifications/send: hammasi yiqilsa 2xx EMAS', (
     expect(res.statusCode).toBe(502);
     expect(res.statusCode).toBeGreaterThanOrEqual(300);
     expect(res.data).toEqual(
-      expect.objectContaining({ total: 2, success: 0, failed: 2 }),
+      expect.objectContaining({ total: 2, success: 0, failed: 2, queued: 0 }),
     );
-    expect(res.data.results[0].error).toBe('chat not found');
+    expect(res.data.results[0].error).toContain('chat not found');
+    // (9HIaV80X) qaytmas xato — kanal nofaol qilinadi, qayta urinilmaydi.
+    expect(res.channels.markInactive).toHaveBeenCalledTimes(2);
   });
 
   it('qisman → 207 (Multi-Status); hammasi ketdi → 200', async () => {
@@ -241,6 +259,15 @@ describe('3SeRYFqx #2 — POST /notifications/send: hammasi yiqilsa 2xx EMAS', (
     const all = await run(['-1001', '-1002']);
     expect(all.statusCode).toBe(200);
     expect(all.message).toBe('Notification send result');
+  });
+
+  it('(9HIaV80X) 429 → xabar yo`qolmaydi: queued, 202 (2xx — outbox qayta yuboradi)', async () => {
+    const res = await run([], ['-1001', '-1002']);
+    expect(res.statusCode).toBe(202);
+    expect(res.data).toEqual(
+      expect.objectContaining({ success: 0, failed: 0, queued: 2 }),
+    );
+    expect(res.data.results.every((item: any) => item.queued)).toBe(true);
   });
 });
 

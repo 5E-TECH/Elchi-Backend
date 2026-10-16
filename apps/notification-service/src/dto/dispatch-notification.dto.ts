@@ -160,7 +160,7 @@ export class DispatchNotificationDto {
   /**
    * Optional telegram relay target (reuses telegram_markets config).
    *
-   * (n0kLbx3d) `token` YO'Q — bot tokeni faqat DB yoki env'dan; payload'da
+   * (n0kLbx3d / bOMYoOtV) `token` YO'Q — bot tokeni faqat env'dan; payload'da
    * kelsa e'tiborsiz qoldiriladi. `text` — ichki chaqiruvchi (order-service)
    * tayyorlagan, allaqachon HTML-escape qilingan Telegram matni (market
    * guruhi uchun; in_app `body` dan farqli, PII bo'lishi mumkin). Gateway

@@ -24,9 +24,8 @@ export class SendNotificationDto {
   @IsEnum(Group_type)
   group_type?: Group_type;
 
-  @IsOptional()
-  @IsString()
-  token?: string;
+  // (bOMYoOtV) `token` YO'Q: bot tokeni FAQAT env'dan (TELEGRAM_BOT_TOKEN).
+  // Gateway DTO'sida ham yo'q — yuborilsa 400 (forbidNonWhitelisted).
 
   // Telegram's sendMessage caps text at 4096 chars; reject anything longer
   // at the gateway rather than getting a confusing 400 from upstream.

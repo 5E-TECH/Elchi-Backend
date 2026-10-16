@@ -4,7 +4,8 @@ import { RpcException } from '@nestjs/microservices';
 import { of } from 'rxjs';
 import { NotificationChannel } from '@app/common';
 import { DispatchNotificationDto } from '../dto/dispatch-notification.dto';
-import { NotificationBotUpdateService } from '../notification-bot.update';
+import { StartHandler } from '../bot/handlers/start.handler';
+import { makeCtx } from '../bot/testing/bot-kit-spec';
 import { NotificationInboxService } from '../notification-inbox.service';
 import {
   TELEGRAM_DM_DELIVER_PATTERN,
@@ -245,54 +246,70 @@ describe('rCFZAmOz — TelegramDmService', () => {
   });
 });
 
-describe('rCFZAmOz — bot /start <token> va /stop', () => {
-  const update = (text: string, type = 'private') => ({
-    update_id: 1,
-    message: { chat: { id: 5550007, type }, text },
-  });
-  let notificationService: { sendDirectToGroup: jest.Mock };
+describe('rCFZAmOz — bot /start <token> va /stop (bot/ yadrosi StartHandler)', () => {
   let dm: { bindFromStart: jest.Mock; unbind: jest.Mock };
-  let bot: { processUpdate: (u: unknown) => Promise<void> };
+  let activityLog: { log: jest.Mock };
+  let handler: StartHandler;
+  const run = async (text: string, chatType = 'private') => {
+    const made = makeCtx({ text, chatId: '5550007', chatType });
+    await handler.handle(made.ctx as never);
+    return made;
+  };
 
   beforeEach(() => {
-    notificationService = { sendDirectToGroup: jest.fn() };
     dm = {
       bindFromStart: jest
         .fn()
         .mockResolvedValue({ ok: true, message: 'Telegram ulandi' }),
       unbind: jest.fn().mockResolvedValue({ ok: true, message: 'uzildi' }),
     };
-    bot = new NotificationBotUpdateService(
-      notificationService as never,
+    activityLog = { log: jest.fn().mockResolvedValue(undefined) };
+    handler = new StartHandler(
+      {
+        linkAttempt: jest.fn(() =>
+          Promise.resolve({ allowed: true, blocked: false, hits: 1 }),
+        ),
+      } as never,
+      activityLog as never,
+      { get: jest.fn() } as never,
       dm as never,
-    ) as unknown as typeof bot;
+    );
   });
 
-  it('shaxsiy chatda /start <token> → bindFromStart(token, chat_id) va javob', async () => {
-    await bot.processUpdate(update('/start labc_def_0123456789abcdefghijkl'));
+  it('shaxsiy chatda /start <token> → bindFromStart(token, chat_id), javob va audit', async () => {
+    const { replies } = await run('/start labc_def_0123456789abcdefghijkl');
     expect(dm.bindFromStart).toHaveBeenCalledWith(
       'labc_def_0123456789abcdefghijkl',
       '5550007',
     );
-    expect(notificationService.sendDirectToGroup).toHaveBeenCalledWith({
-      group_id: '5550007',
-      message: 'Telegram ulandi',
-    });
+    expect(replies[0].text).toBe('Telegram ulandi');
+    // (9HIaV80X #7) ulash activity_log'ga yoziladi.
+    expect(activityLog.log).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'notification.tg_linked',
+        entity_id: '5550007',
+      }),
+    );
   });
 
   it('guruhda /start <token> — ULANMAYDI (faqat shaxsiy chat)', async () => {
-    await bot.processUpdate(update('/start labc_def_x', 'group'));
+    const { replies } = await run('/start labc_def_x', 'group');
     expect(dm.bindFromStart).not.toHaveBeenCalled();
+    expect(replies[0].text).toContain('SHAXSIY chatda');
   });
 
-  it('/stop — unbind; oddiy /start avvalgidek (guruh ko‘rsatmasi)', async () => {
-    await bot.processUpdate(update('/stop'));
+  it('/stop va /uzish — unbind + audit; oddiy /start (ulanmagan) — ulash ko‘rsatmasi', async () => {
+    await run('/stop');
+    await run('/uzish');
+    expect(dm.unbind).toHaveBeenCalledTimes(2);
     expect(dm.unbind).toHaveBeenCalledWith('5550007');
-    await bot.processUpdate(update('/start'));
+    expect(activityLog.log).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'notification.tg_unlinked' }),
+    );
+    const { replies } = await run('/start');
     expect(dm.bindFromStart).not.toHaveBeenCalled();
-    expect(
-      notificationService.sendDirectToGroup.mock.calls.at(-1)?.[0].message,
-    ).toMatch(/group_token/);
+    expect(replies[0].text).toContain("Telegram'ni ulash");
+    expect(replies[0].text).not.toMatch(/group_token/);
   });
 });
 

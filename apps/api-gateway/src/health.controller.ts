@@ -149,9 +149,24 @@ export class HealthController {
 
     const startedAt = Date.now();
     try {
-      await firstValueFrom(
+      const reply: unknown = await firstValueFrom(
         client.send({ cmd }, {}).pipe(timeout(PROBE_TIMEOUT_MS)),
       );
+      // Servis javob berdi, lekin o'zini `degraded`/`down` deb bildirdi
+      // (masalan notification-service: bot tokeni getMe'dan o'tmadi —
+      // Mvx0h1Fv #5). Boshqa matnlar (`Hammasi chotki ishlayapti!`) — ok.
+      const reported =
+        reply && typeof reply === 'object'
+          ? (reply as { status?: unknown }).status
+          : undefined;
+      if (reported === 'degraded' || reported === 'down') {
+        return {
+          service: token,
+          status: 'down',
+          latency_ms: Date.now() - startedAt,
+          error: `reported ${reported}`,
+        };
+      }
       return {
         service: token,
         status: 'ok',

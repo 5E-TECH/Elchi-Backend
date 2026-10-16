@@ -26,8 +26,8 @@ jest.mock('@app/common', () => {
 describe('NotificationServiceService', () => {
   let service: NotificationServiceService;
   let repo: any;
-  let config: any;
   let activityLog: any;
+  let botOutbox: { send: jest.Mock };
 
   beforeEach(() => {
     rmqSendMock.mockReset();
@@ -38,13 +38,9 @@ describe('NotificationServiceService', () => {
       save: jest.fn(),
       create: jest.fn((v) => v),
     };
-    // (n0kLbx3d #3) bot tokeni DB'ga shifrlab yoziladi — kalit kerak.
-    const env: Record<string, string> = {
-      TELEGRAM_BOT_TOKEN: 'ENV_TOKEN',
-      TELEGRAM_TOKEN_ENC_KEY: 'ab'.repeat(32),
-    };
-    config = {
-      get: jest.fn((k: string) => env[k]),
+    // (bOMYoOtV) bot tokeni faqat env'dan — yuborish outbox orqali.
+    botOutbox = {
+      send: jest.fn().mockResolvedValue({ id: '1', status: 'sent' }),
     };
     activityLog = {
       log: jest.fn().mockResolvedValue(undefined),
@@ -58,11 +54,10 @@ describe('NotificationServiceService', () => {
     };
     service = new NotificationServiceService(
       repo,
-      config,
       {} as any,
       activityLog,
+      botOutbox as any,
     );
-    (global as any).fetch = jest.fn();
   });
 
   it('creates telegram market (success)', async () => {
@@ -73,7 +68,6 @@ describe('NotificationServiceService', () => {
       market_id: '13',
       group_id: '-1001',
       group_type: 'create' as any,
-      token: 'x',
       is_active: true,
     } as any);
 
@@ -114,12 +108,7 @@ describe('NotificationServiceService', () => {
     ).rejects.toBeInstanceOf(RpcException);
   });
 
-  it('sendNotification sends direct to group with env token', async () => {
-    (global as any).fetch.mockResolvedValue({
-      ok: true,
-      json: () => Promise.resolve({ ok: true, result: { message_id: 1 } }),
-    });
-
+  it('sendNotification sends direct to group via outbox (env bot)', async () => {
     const res = await service.sendNotification({
       message: 'hello',
       group_id: '-1001',
@@ -127,7 +116,9 @@ describe('NotificationServiceService', () => {
 
     expect(res.statusCode).toBe(200);
     expect(res.data.success).toBe(1);
-    expect((global as any).fetch).toHaveBeenCalled();
+    expect(botOutbox.send).toHaveBeenCalledWith(
+      expect.objectContaining({ chatId: '-1001', text: 'hello' }),
+    );
   });
 
   it('sendNotification by market_id throws not found when no active group', async () => {

@@ -6,6 +6,7 @@ import {
   Gauge,
   collectDefaultMetrics,
 } from 'prom-client';
+import type { Metric } from 'prom-client';
 
 export type ReceiveByScanOutcome = 'ok' | 'partial' | 'none';
 
@@ -67,6 +68,8 @@ interface MetricsResponse {
 export function registerMetrics(
   app: INestApplication,
   serviceName: string,
+  /** Servisga xos metrikalar (masalan notification-service bot metrikalari). */
+  extraMetrics: ReadonlyArray<Metric> = [],
 ): void {
   const register = new Registry();
   register.setDefaultLabels({ service: serviceName });
@@ -85,6 +88,7 @@ export function registerMetrics(
     registers: [register],
   });
   register.registerMetric(receiveByScanTotal);
+  for (const metric of extraMetrics) register.registerMetric(metric);
   /**
    * n9o0KYd5 — har natija seriyasi 0 bilan OLDINDAN yaratiladi. prom-client
    * label kombinatsiyasini faqat birinchi `inc()` da chiqaradi: shunda

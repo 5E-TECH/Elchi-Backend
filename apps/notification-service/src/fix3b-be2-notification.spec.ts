@@ -1,8 +1,16 @@
 import { RpcException } from '@nestjs/microservices';
 import { TimeoutError } from 'rxjs';
 import { NotificationServiceService } from './notification-service.service';
-import { NotificationBotUpdateService } from './notification-bot.update';
-import { OrderBotUpdateService } from './order-bot.update';
+import { GroupHandler } from './bot/handlers/group.handler';
+import { MarketHandler } from './bot/handlers/market.handler';
+import { StartHandler } from './bot/handlers/start.handler';
+import type { BotMessageHandler } from './bot/handlers/bot-context';
+import {
+  makeCtx,
+  makeFetch,
+  makeOutbox,
+  marketActor,
+} from './bot/testing/bot-kit-spec';
 
 /**
  * fix3b BE-2 — Telegram botlari (hujjatlar bilan moslash):
@@ -13,8 +21,10 @@ import { OrderBotUpdateService } from './order-bot.update';
  *    almashtirilmaydi — faqat admin PATCH/DELETE /notifications/:id;
  *    ulash yo'lidagi qolgan inglizcha matnlar o'zbekcha;
  *    hujjatdagi `/id` (va `/id@<bot>`) komandasi → "Group ID: <chat.id>".
- *  - CODE-18: order-bot /status — mavjud bo'lmagan buyurtma (order-service
- *    404 OTADI) va boshqa marketning buyurtmasi AYNI javobni oladi.
+ *  - CODE-18: /status — mavjud bo'lmagan buyurtma (order-service 404 OTADI)
+ *    va boshqa marketning buyurtmasi AYNI javobni oladi.
+ * (ZlpXb4Wh) eski bot klasslari o'rniga bot/ yadrosi handlerlari; market
+ * tokeni bilan shaxsiy chatda "kirish" OLIB TASHLANDI (aktor = telegram_id).
  */
 
 const rmqSendMock = jest.fn();
@@ -105,9 +115,9 @@ describe('fix3b CODE-02 — ulash: token almashtirilmaydi, mavjud ulanish almash
     };
     service = new NotificationServiceService(
       repo as never,
-      { get: jest.fn(() => 'ENV_TOKEN') } as never,
       {} as never,
       activityLog as never,
+      makeOutbox(makeFetch()).outbox,
     );
     routeIdentity({ id: '5', name: 'Beshinchi' });
   });
@@ -131,9 +141,10 @@ describe('fix3b CODE-02 — ulash: token almashtirilmaydi, mavjud ulanish almash
           market_id: '5',
           group_id: '-100777',
           group_type: groupType,
-          token: null,
         }),
       );
+      // bOMYoOtV: token ustuni umuman yozilmaydi.
+      expect(repo.create.mock.calls[0][0]).not.toHaveProperty('token');
       expect(cmdCalls('identity.market.rotate_tg_token')).toHaveLength(0);
     },
   );
@@ -283,59 +294,67 @@ describe('fix3b CODE-02 — ulash: token almashtirilmaydi, mavjud ulanish almash
   });
 });
 
-describe('fix3b CODE-02 — notification bot: /id va /help', () => {
-  const makeBot = () => {
-    const sendDirectToGroup = jest.fn().mockResolvedValue({ success: true });
-    const connectGroupByTokenText = jest.fn();
-    const bot = new NotificationBotUpdateService({
-      sendDirectToGroup,
-      connectGroupByTokenText,
-    } as never);
-    const processUpdate = (text: string, chatId: number | string = -1001234) =>
-      (
-        bot as unknown as { processUpdate: (u: unknown) => Promise<void> }
-      ).processUpdate({
-        update_id: 1,
-        message: { chat: { id: chatId }, text },
-      });
-    return { sendDirectToGroup, connectGroupByTokenText, processUpdate };
+/** Router zanjiri (start → group → market): birinchi `true` qaytargan to'xtatadi. */
+const makeChain = () => {
+  const connectGroupByTokenText = jest.fn();
+  const limiter = {
+    linkAttempt: jest.fn(() =>
+      Promise.resolve({ allowed: true, blocked: false, hits: 1 }),
+    ),
   };
+  const handlers: BotMessageHandler[] = [
+    new StartHandler(
+      limiter as never,
+      { log: jest.fn() } as never,
+      { get: jest.fn() } as never,
+    ),
+    new GroupHandler({ connectGroupByTokenText } as never, limiter as never),
+    new MarketHandler({} as never),
+  ];
+  const run = async (
+    text: string,
+    options: { chatId?: string; chatType?: string; actor?: any } = {},
+  ) => {
+    const made = makeCtx({
+      text,
+      chatId: options.chatId ?? '-1001234',
+      chatType: options.chatType ?? 'supergroup',
+      actor: options.actor ?? null,
+    });
+    for (const handler of handlers) {
+      if (await handler.handle(made.ctx as never)) break;
+    }
+    return made;
+  };
+  return { run, connectGroupByTokenText };
+};
 
+describe('fix3b CODE-02 — bot: /id va /help', () => {
   it.each(['/id', '/id@elchi_notify_bot', '  /id  '])(
     '%s → "Group ID: <chat.id>"',
     async (text) => {
-      const bot = makeBot();
+      const chain = makeChain();
 
-      await bot.processUpdate(text, -1001234567890);
+      const { replies } = await chain.run(text, { chatId: '-1001234567890' });
 
-      expect(bot.sendDirectToGroup).toHaveBeenCalledTimes(1);
-      expect(bot.sendDirectToGroup).toHaveBeenCalledWith({
-        group_id: '-1001234567890',
-        message: 'Group ID: -1001234567890',
-      });
-      expect(bot.connectGroupByTokenText).not.toHaveBeenCalled();
+      expect(replies).toEqual([{ text: 'Group ID: -1001234567890' }]);
+      expect(chain.connectGroupByTokenText).not.toHaveBeenCalled();
     },
   );
 
   it.each(['/id 123', '/identity', '/idx', 'id'])(
-    '%s — /id komandasi emas, javob yo‘q',
+    '%s — /id komandasi emas, guruhda javob yo‘q',
     async (text) => {
-      const bot = makeBot();
+      const { replies } = await makeChain().run(text);
 
-      await bot.processUpdate(text);
-
-      expect(bot.sendDirectToGroup).not.toHaveBeenCalled();
+      expect(replies).toHaveLength(0);
     },
   );
 
   it("/help — /id ni ko'rsatadi, token almashishi haqida eski gap yo'q", async () => {
-    const bot = makeBot();
+    const { replies } = await makeChain().run('/help');
 
-    await bot.processUpdate('/help');
-
-    const message = String(
-      (bot.sendDirectToGroup.mock.calls[0][0] as { message: string }).message,
-    );
+    const message = replies[0].text;
     expect(message).toContain('/id');
     expect(message).toContain('maxfiy market token');
     expect(message).not.toContain('yangilanadi');
@@ -343,159 +362,84 @@ describe('fix3b CODE-02 — notification bot: /id va /help', () => {
   });
 });
 
-describe('fix3b CODE-18 — order-bot /status: yo‘q va begona buyurtma bir xil javob', () => {
-  interface BotInternals {
-    links: Map<string, { id: string; name: string; token: string }>;
-    orderClient: unknown;
-    identityClient: unknown;
-    logger: { warn: jest.Mock; error: jest.Mock; log: jest.Mock };
-    sendMessage: jest.Mock;
-    answerCallback: jest.Mock;
-    processUpdate: (update: unknown) => Promise<void>;
-  }
-
-  const make = (): BotInternals => {
-    const svc = Object.create(OrderBotUpdateService.prototype) as BotInternals;
-    svc.links = new Map([
-      ['111', { id: '5', name: 'Beshinchi', token: SECRET }],
-    ]);
-    svc.orderClient = {};
-    svc.identityClient = {};
-    svc.logger = { warn: jest.fn(), error: jest.fn(), log: jest.fn() };
-    svc.sendMessage = jest.fn().mockResolvedValue(undefined);
-    svc.answerCallback = jest.fn().mockResolvedValue(undefined);
-    return svc;
-  };
-
-  const text = (value: string, chat = 111) => ({
-    update_id: 1,
-    message: { chat: { id: chat }, text: value },
-  });
-
-  const replyOf = (svc: BotInternals) =>
-    String(svc.sendMessage.mock.calls[0]?.[1]);
+describe('fix3b CODE-18 — /status: yo‘q va begona buyurtma bir xil javob', () => {
+  const run = (text: string) =>
+    makeChain().run(text, {
+      chatId: '111',
+      chatType: 'private',
+      actor: marketActor('5'),
+    });
+  const replyOf = (made: { replies: Array<{ text: string }> }) =>
+    made.replies[0]?.text;
 
   beforeEach(() => rmqSendMock.mockReset());
 
   it("boshqa marketning buyurtmasi va yo'q buyurtma (RMQ 404 obyekti) — AYNI javob", async () => {
-    const foreign = make();
     rmqSendMock.mockResolvedValueOnce({
       id: '202',
       status: 'sold',
       market_id: '7',
     });
-    await foreign.processUpdate(text('/status 202'));
+    const foreign = await run('/status 202');
 
-    const missing = make();
     rmqSendMock.mockRejectedValueOnce({
       statusCode: 404,
       message: 'Order #202 topilmadi',
     });
-    await missing.processUpdate(text('/status 202'));
+    const missing = await run('/status 202');
 
     expect(replyOf(foreign)).toBe('❌ #202 buyurtma topilmadi.');
     expect(replyOf(missing)).toBe(replyOf(foreign));
   });
 
   it("lokal RpcException 404 ham — 'topilmadi'", async () => {
-    const svc = make();
     rmqSendMock.mockRejectedValueOnce(
       new RpcException({ statusCode: 404, message: 'Order #9 topilmadi' }),
     );
 
-    await svc.processUpdate(text('status 9'));
-
-    expect(replyOf(svc)).toBe('❌ #9 buyurtma topilmadi.');
-  });
-
-  it("callback 'status:<id>' yo'li ham 404 da 'topilmadi'", async () => {
-    const svc = make();
-    rmqSendMock.mockRejectedValueOnce({ statusCode: 404, message: 'x' });
-
-    await svc.processUpdate({
-      update_id: 2,
-      callback_query: {
-        id: 'cb1',
-        data: 'status:303',
-        message: { chat: { id: 111 } },
-      },
-    });
-
-    expect(svc.sendMessage).toHaveBeenCalledWith(
-      '111',
-      '❌ #303 buyurtma topilmadi.',
-    );
+    expect(replyOf(await run('status 9'))).toBe('❌ #9 buyurtma topilmadi.');
   });
 
   it("timeout — o'zbekcha umumiy xabar, inglizcha xato matni chatga ketmaydi", async () => {
-    const svc = make();
     rmqSendMock.mockRejectedValueOnce(new TimeoutError());
 
-    await svc.processUpdate(text('/status 101'));
+    const made = await run('/status 101');
 
-    expect(replyOf(svc)).toBe(
+    expect(replyOf(made)).toBe(
       "❌ Buyurtmani olishda xatolik. Birozdan so'ng qayta urinib ko'ring.",
     );
-    expect(replyOf(svc)).not.toMatch(/Timeout/i);
-    expect(svc.logger.warn).toHaveBeenCalled();
+    expect(replyOf(made)).not.toMatch(/Timeout/i);
   });
 
   it("500 xato 'topilmadi' deb ko'rsatilmaydi (holat yashirilmaydi, lekin oshkor ham qilinmaydi)", async () => {
-    const svc = make();
     rmqSendMock.mockRejectedValueOnce({
       statusCode: 500,
       message: 'relation "orders" does not exist',
     });
 
-    await svc.processUpdate(text('/status 101'));
-
-    expect(replyOf(svc)).toBe(
+    expect(replyOf(await run('/status 101'))).toBe(
       "❌ Buyurtmani olishda xatolik. Birozdan so'ng qayta urinib ko'ring.",
     );
   });
 
   it("o'z buyurtmasi — holat ko'rsatiladi (o'zgarmagan)", async () => {
-    const svc = make();
     rmqSendMock.mockResolvedValueOnce({
       id: '101',
       status: 'waiting',
       market_id: '5',
     });
 
-    await svc.processUpdate(text('/status 101'));
-
-    expect(replyOf(svc)).toMatch(/#101[\s\S]*waiting/);
+    expect(replyOf(await run('/status 101'))).toMatch(/#101[\s\S]*waiting/);
   });
 
-  describe('token yuborish (handleToken)', () => {
-    it("identity 404 (noma'lum token) → \"Token noto'g'ri yoki market topilmadi\"", async () => {
-      const svc = make();
-      svc.links.clear();
-      rmqSendMock.mockRejectedValueOnce({
-        statusCode: 404,
-        message: 'Market topilmadi yoki token noto‘g‘ri',
-      });
-
-      await svc.processUpdate(text(SECRET, 222));
-
-      expect(svc.sendMessage).toHaveBeenCalledWith(
-        '222',
-        "❌ Token noto'g'ri yoki market topilmadi.",
-      );
-      expect(svc.links.has('222')).toBe(false);
+  it('(ZlpXb4Wh #3) market tokeni shaxsiy chatda endi "kirish" EMAS — identity so‘ralmaydi', async () => {
+    const made = await makeChain().run(SECRET, {
+      chatId: '222',
+      chatType: 'private',
     });
 
-    it("timeout → o'zbekcha umumiy xabar, inglizcha matnsiz", async () => {
-      const svc = make();
-      rmqSendMock.mockRejectedValueOnce(new TimeoutError());
-
-      await svc.processUpdate(text(SECRET, 222));
-
-      expect(svc.sendMessage).toHaveBeenCalledWith(
-        '222',
-        "❌ Token tekshirishda xatolik. Birozdan so'ng qayta urinib ko'ring.",
-      );
-      expect(svc.links.has('222')).toBe(false);
-    });
+    expect(rmqSendMock).not.toHaveBeenCalled();
+    // Hech bir handler olmaydi — router umumiy "tushunarsiz" javobini beradi.
+    expect(made.replies).toHaveLength(0);
   });
 });

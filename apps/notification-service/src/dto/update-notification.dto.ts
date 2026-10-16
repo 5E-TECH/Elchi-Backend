@@ -26,9 +26,7 @@ export class UpdateNotificationDto {
   @IsEnum(Group_type)
   group_type?: Group_type;
 
-  @IsOptional()
-  @IsString()
-  token?: string;
+  // (bOMYoOtV) `token` YO'Q: bot tokeni bazada saqlanmaydi (faqat env).
 
   @IsOptional()
   @IsBoolean()

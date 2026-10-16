@@ -1,0 +1,55 @@
+# 9HIaV80X #6 — Telegram bot "readiness ok, bot o'lik" holati takrorlanmasin.
+#
+# Metrika: notification-service `GET /metrics` (ichki port 3016) →
+#   bot_token_healthy{bot="elchi", service="notification-service"}  0|1
+#   bot_linked_users{role="courier|market|…", service="notification-service"}
+#   bot_send_total{result="sent|retry|blocked|failed"}
+# (apps/notification-service/src/bot/bot-metrics.ts).
+#
+# ⚠️ INFRA'GA ULANMAGAN: repoda Prometheus/Alertmanager hali yo'q. Ulash:
+#   prometheus.yml:
+#     rule_files: ['/etc/prometheus/rules/telegram-bot.rules.yml']
+#     scrape_configs: [{ job_name: elchi-notification-service,
+#                        static_configs: [{ targets: ['notification-service:3016'] }] }]
+#
+# Tekshiruv: apps/notification-service/src/bot/bot-observability.9HIaV80X.spec.ts
+#   promtool check rules telegram-bot.rules.yml
+groups:
+  - name: elchi-telegram-bot
+    rules:
+      # Token getMe'dan o'tmadi (401/404 — token buzuq yoki almashtirilgan;
+      # tarmoq xatosi bo'lsa 5 daqiqada qayta tekshiriladi).
+      - alert: TelegramBotTokenUnhealthy
+        expr: min by (service, bot) (bot_token_healthy) == 0
+        for: 10m
+        labels:
+          severity: critical
+          card: 9HIaV80X
+        annotations:
+          summary: "Telegram bot tokeni ishlamayapti ({{ $labels.bot }})"
+          description: "bot_token_healthy=0: getMe muvaffaqiyatsiz. Bot hech qanday xabar yubora olmaydi va update qabul qilmaydi. TELEGRAM_BOT_TOKEN ni tekshiring (docs/ops/telegram-bot.md — token aylantirish)."
+      # Bog'langan foydalanuvchi umuman yo'q — bog'lash oqimi buzilgan
+      # (BeePostda aynan shu sabab hech bir market xabar olmagan).
+      - alert: TelegramBotNoLinkedUsers
+        expr: sum by (service) (bot_linked_users) == 0
+        for: 1d
+        labels:
+          severity: warning
+          card: 9HIaV80X
+        annotations:
+          summary: "Telegram botga hech kim ulanmagan"
+          description: "bot_linked_users jami 0 — bir kundan beri birorta foydalanuvchi Telegram'ga ulanmagan. Panel → «Telegram'ni ulash» oqimini tekshiring."
+      # Yuborishlarning yarmidan ko'pi bloklangan/xato.
+      - alert: TelegramBotSendFailing
+        expr: |
+          sum by (service) (increase(bot_send_total{result=~"blocked|failed"}[15m])) > 10
+          and
+          sum by (service) (increase(bot_send_total{result=~"blocked|failed"}[15m]))
+            / sum by (service) (increase(bot_send_total[15m])) > 0.5
+        for: 5m
+        labels:
+          severity: warning
+          card: 9HIaV80X
+        annotations:
+          summary: "Telegram xabarlarining yarmidan ko'pi yetmayapti"
+          description: "So'nggi 15 daqiqada bot_send_total{result=blocked|failed} ulushi 50% dan oshdi. telegram_outbox dagi dead qatorlar va last_error ni tekshiring."

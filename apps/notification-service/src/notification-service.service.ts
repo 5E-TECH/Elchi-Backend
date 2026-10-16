@@ -5,18 +5,10 @@ import {
   Injectable,
   Logger,
   NotFoundException,
-  OnModuleInit,
 } from '@nestjs/common';
 import { ClientProxy, RpcException } from '@nestjs/microservices';
 import { InjectRepository } from '@nestjs/typeorm';
-import {
-  FindOptionsSelect,
-  FindOptionsWhere,
-  IsNull,
-  Not,
-  Repository,
-} from 'typeorm';
-import { ConfigService } from '@nestjs/config';
+import { FindOptionsSelect, FindOptionsWhere, Repository } from 'typeorm';
 import {
   ActivityAction,
   ActivityLogQuery,
@@ -29,12 +21,8 @@ import { TelegramMarket } from './entities/telegram-market.entity';
 import { CreateNotificationDto } from './dto/create-notification.dto';
 import { UpdateNotificationDto } from './dto/update-notification.dto';
 import { SendNotificationDto } from './dto/send-notification.dto';
-import {
-  TELEGRAM_TOKEN_NO_KEY_MESSAGE,
-  TelegramTokenCipher,
-  TelegramTokenCipherError,
-  isEncryptedTelegramToken,
-} from './telegram-token.cipher';
+import { BotOutboxService } from './bot/bot-outbox.service';
+import type { TelegramParseMode } from './bot/telegram.types';
 
 /**
  * CODE-02: guruhni ulash FAQAT marketning maxfiy market_tg_token'i bilan
@@ -81,14 +69,10 @@ const NOMALUM_ERROR_MESSAGE = 'Noma’lum xatolik yuz berdi';
 const GROUP_BIND_UNEXPECTED_ERROR_MESSAGE =
   "Guruhni ulashda xatolik yuz berdi — birozdan so'ng qayta urinib ko'ring";
 
-/** Market tokeni (group_token-…) — Telegram BOT tokeni emas. */
-function isGroupBindToken(value?: string | null): boolean {
-  return /^group_token-/i.test(String(value ?? '').trim());
-}
-
 /**
- * (n0kLbx3d) `token` ustuni `select: false` — token kerak bo'lgan o'qishlar
- * uni ATAYLAB tanlaydi (yuborish uchun yoki `has_token` ni hisoblash uchun).
+ * (bOMYoOtV) Telegram ulanishining o'qiladigan ustunlari. Bot TOKENI bazada
+ * UMUMAN yo'q (faqat env); `connect_token_hash` — `select: false`, bu yerda
+ * tanlanmaydi.
  */
 const TG_MARKET_SELECT: FindOptionsSelect<TelegramMarket> = {
   id: true,
@@ -97,23 +81,17 @@ const TG_MARKET_SELECT: FindOptionsSelect<TelegramMarket> = {
   market_id: true,
   group_id: true,
   group_type: true,
-  token: true,
+  bot_slug: true,
   is_active: true,
 };
 
 /**
- * (n0kLbx3d) Telegram ulanish konfiguratsiyasining OMMAVIY ko'rinishi: bot
- * tokeni HECH QACHON qaytarilmaydi (faqat `has_token`), `isDeleted` ham yo'q.
- * GET/POST/PATCH /notifications va connect-by-token javoblari shu orqali.
- *
- * `hasToken` — servis shifrni ochib hisoblagan qiymat (shifrlangan qatorda
- * market tokeni `group_token-…` ekanini faqat ochib bilish mumkin). Berilmasa
- * saqlangan qiymat bo'yicha taxmin qilinadi.
+ * Telegram ulanish konfiguratsiyasining OMMAVIY ko'rinishi (`isDeleted`
+ * yo'q). GET/POST/PATCH /notifications va connect-by-token javoblari shu
+ * orqali. (bOMYoOtV) `has_token` olib tashlandi — har bir guruh env'dagi
+ * yagona bot bilan yuboriladi; `bot_slug` — qaysi bot (sir emas).
  */
-export function toPublicTelegramMarket(
-  row: TelegramMarket,
-  hasToken?: boolean,
-) {
+export function toPublicTelegramMarket(row: TelegramMarket) {
   return {
     id: row.id,
     createdAt: row.createdAt,
@@ -121,7 +99,7 @@ export function toPublicTelegramMarket(
     market_id: row.market_id,
     group_id: row.group_id,
     group_type: row.group_type,
-    has_token: hasToken ?? (Boolean(row.token) && !isGroupBindToken(row.token)),
+    bot_slug: row.bot_slug ?? null,
     is_active: row.is_active,
   };
 }
@@ -136,159 +114,19 @@ const SEND_UNRESTRICTED_ROLES: readonly string[] = [
 ];
 
 @Injectable()
-export class NotificationServiceService implements OnModuleInit {
+export class NotificationServiceService {
   private readonly logger = new Logger(NotificationServiceService.name);
-  private tokenCipherInstance?: TelegramTokenCipher;
 
   constructor(
     @InjectRepository(TelegramMarket)
     private readonly tgMarketRepo: Repository<TelegramMarket>,
-    private readonly configService: ConfigService,
     @Inject('IDENTITY') private readonly identityClient: ClientProxy,
     private readonly activityLog: ActivityLogService,
+    private readonly botOutbox: BotOutboxService,
   ) {}
 
-  /**
-   * (n0kLbx3d #3) `telegram_markets.token` DB'da shifrlangan (`enc:v1:`,
-   * AES-256-GCM, tasodifiy IV). Shifrlash TypeORM transformer'ida EMAS, shu
-   * servisda, chunki:
-   *  - token bo'yicha WHERE qidiruv yo'q (tasodifiy IV bilan ishlamasdi ham);
-   *  - transformer `from` da ochish xatosi butun ro'yxatni (GET /notifications)
-   *    yiqitardi yoki jimgina `null` bo'lib platforma botiga o'tib ketardi —
-   *    bu yerda esa xato faqat o'sha nishonning yuborish natijasida, aniq;
-   *  - kalit ConfigService'dan, start'da tekshiriladi (dekorator import paytida
-   *    env'ni o'qiy olmaydi), backfill esa xom (shifr/ochiq) qiymatni ko'radi.
-   * Yozish yo'llari: createTelegramMarket, updateTelegramMarket (`sealToken`);
-   * o'qish: sendNotification (`openStoredToken`), `has_token` (`hasBotToken`).
-   */
-  private get tokenCipher(): TelegramTokenCipher {
-    if (!this.tokenCipherInstance) {
-      this.tokenCipherInstance = TelegramTokenCipher.fromEnv((key) =>
-        this.configService.get<string>(key),
-      );
-    }
-    return this.tokenCipherInstance;
-  }
-
-  async onModuleInit(): Promise<void> {
-    // Noto'g'ri formatdagi TELEGRAM_TOKEN_ENC_KEY — start xatosi (fail-fast).
-    const cipher = this.tokenCipher;
-    if (cipher.keySource === 'none') {
-      this.logger.warn(
-        "(n0kLbx3d) TELEGRAM_TOKEN_ENC_KEY berilmagan va hosil qilish uchun maxfiy env (SMS_CREDENTIAL_SECRET / TELEGRAM_BOT_TOKEN, ≥32 belgi) yo'q — market bot tokenlari shifrlanmaydi: yangi token saqlanmaydi (400), eski ochiq qatorlar o'qiladi. `openssl rand -hex 32` bilan TELEGRAM_TOKEN_ENC_KEY qo'ying.",
-      );
-    } else if (cipher.keySource !== 'TELEGRAM_TOKEN_ENC_KEY') {
-      this.logger.warn(
-        `(n0kLbx3d) TELEGRAM_TOKEN_ENC_KEY berilmagan — market bot tokenlari kaliti ${cipher.keySource.replace('hkdf:', '')} dan HKDF-SHA256 bilan hosil qilindi. O'sha sir almashtirilsa saqlangan tokenlar ochilmay qoladi: prodda alohida TELEGRAM_TOKEN_ENC_KEY qo'ying (openssl rand -hex 32; eski shifrlar keyingi start'da avtomatik qayta shifrlanadi).`,
-      );
-    }
-    try {
-      await this.encryptStoredTelegramTokens();
-    } catch (error) {
-      // Backfill xatosi servisni yiqitmaydi: eski ochiq qatorlar baribir
-      // o'qiladi, keyingi start'da qayta urinadi.
-      this.logger.error(
-        `(n0kLbx3d) telegram_markets.token backfill bajarilmadi: ${
-          error instanceof Error ? error.message : 'unknown error'
-        }`,
-      );
-    }
-  }
-
-  /**
-   * (n0kLbx3d #3) Idempotent backfill: ochiq matnli (eski) tokenlarni va
-   * faqat eski/qo'shimcha kalit bilan ochiladigan shifrlarni joriy kalit bilan
-   * shifrlaydi. Allaqachon joriy kalitdagi qatorlarga tegmaydi — qayta
-   * ishga tushirish xavfsiz. Yangilash shartli (`WHERE id AND token = eski`) —
-   * bir vaqtda ko'tarilgan ikkinchi nusxa yoki parallel PATCH ustidan yozmaydi.
-   * `updatedAt` o'zgartirilmaydi (texnik o'zgarish). Soft-delete qatorlar ham
-   * shifrlanadi — DB'da ochiq token qolmasin.
-   */
-  async encryptStoredTelegramTokens(): Promise<{
-    skipped: boolean;
-    encrypted: number;
-    reencrypted: number;
-    unreadable: number;
-  }> {
-    const cipher = this.tokenCipher;
-    const result = {
-      skipped: !cipher.configured,
-      encrypted: 0,
-      reencrypted: 0,
-      unreadable: 0,
-    };
-    if (!cipher.configured) return result;
-
-    const rows = await this.tgMarketRepo.find({
-      select: { id: true, token: true },
-      where: { token: Not(IsNull()) },
-    });
-
-    for (const row of rows) {
-      if (!row.token) continue;
-      let next: string | null;
-      try {
-        next = cipher.resealIfNeeded(row.token);
-      } catch {
-        result.unreadable += 1;
-        continue;
-      }
-      if (!next) continue;
-      const updated = await this.tgMarketRepo.update(
-        { id: row.id, token: row.token },
-        { token: next, updatedAt: () => '"updatedAt"' },
-      );
-      if (!updated.affected) continue;
-      if (isEncryptedTelegramToken(row.token)) result.reencrypted += 1;
-      else result.encrypted += 1;
-    }
-
-    if (result.encrypted || result.reencrypted) {
-      this.logger.log(
-        `(n0kLbx3d) telegram_markets.token: ${result.encrypted} ta ochiq qator shifrlandi, ${result.reencrypted} tasi joriy kalitga qayta shifrlandi`,
-      );
-    }
-    if (result.unreadable) {
-      this.logger.warn(
-        `(n0kLbx3d) telegram_markets.token: ${result.unreadable} ta qatorni ochib bo'lmadi (kalit mos emas) — tokenni PATCH /notifications/:id orqali qayta kiriting`,
-      );
-    }
-    return result;
-  }
-
-  /** Yozishdan oldin: bot tokeni → `enc:v1:…` (bo'sh → null). Kalit yo'q → 400. */
-  private sealToken(plain?: string | null): string | null {
-    if (!plain) return null;
-    if (!this.tokenCipher.configured) {
-      throw new BadRequestException(TELEGRAM_TOKEN_NO_KEY_MESSAGE);
-    }
-    return this.tokenCipher.encrypt(plain);
-  }
-
-  /**
-   * Saqlangan qiymat → ochiq bot tokeni. Prefikssiz — eski ochiq matn
-   * (orqaga moslik). Ochilmasa `TelegramTokenCipherError` (token matnisiz).
-   */
-  private openStoredToken(stored?: string | null): string | null {
-    if (!stored) return null;
-    if (!isEncryptedTelegramToken(stored)) return stored;
-    return this.tokenCipher.decrypt(stored);
-  }
-
-  /** `has_token`: haqiqiy bot tokeni saqlanganmi (market `group_token-…` emas). */
-  private hasBotToken(stored?: string | null): boolean {
-    if (!stored) return false;
-    try {
-      const plain = this.openStoredToken(stored);
-      return Boolean(plain) && !isGroupBindToken(plain);
-    } catch {
-      // Saqlangan, lekin ochilmaydi — yuborishda aniq xato beradi.
-      return true;
-    }
-  }
-
   private toPublic(row: TelegramMarket) {
-    return toPublicTelegramMarket(row, this.hasBotToken(row.token));
+    return toPublicTelegramMarket(row);
   }
 
   /**
@@ -397,27 +235,6 @@ export class NotificationServiceService implements OnModuleInit {
     }
 
     return byMarketType;
-  }
-
-  private resolveBotToken(
-    tokenFromPayload?: string | null,
-    tokenFromDb?: string | null,
-  ) {
-    const envToken = this.configService.get<string>('TELEGRAM_BOT_TOKEN');
-    // CODE-02: bot orqali ulangan eski qatorlarda `token` ustunida guruhni
-    // ulagan MARKET tokeni (group_token-…) yotibdi — u bot tokeni emas, uni
-    // Telegram API'ga yuborish har doim xato berardi. Bunday qiymat
-    // e'tiborsiz qoldiriladi: guruhga ulashda ishlatilgan bot (env) yuboradi.
-    const dbToken = isGroupBindToken(tokenFromDb) ? null : tokenFromDb;
-    const token = tokenFromPayload || dbToken || envToken;
-
-    if (!token) {
-      throw new BadRequestException(
-        'Telegram bot token is required (payload token, db token, or TELEGRAM_BOT_TOKEN env)',
-      );
-    }
-
-    return token;
   }
 
   /**
@@ -561,13 +378,13 @@ export class NotificationServiceService implements OnModuleInit {
       throw new BadRequestException(MARKET_GROUP_ALREADY_CONNECTED_MESSAGE);
     }
 
-    // CODE-02: maxfiy token matni bazada SAQLANMAYDI (u bot tokeni emas) —
-    // yuborishda env bot ishlatiladi. fix3b: token ALMASHTIRILMAYDI.
+    // CODE-02 / bOMYoOtV: maxfiy token matni bazada SAQLANMAYDI (u bot
+    // tokeni emas) — yuborishda env bot ishlatiladi. fix3b: token
+    // ALMASHTIRILMAYDI.
     const created = this.tgMarketRepo.create({
       market_id: parsed.market_id,
       group_id: groupId,
       group_type: parsed.group_type,
-      token: null,
       is_active: true,
     });
 
@@ -610,8 +427,6 @@ export class NotificationServiceService implements OnModuleInit {
         market_id: dto.market_id,
         group_id: dto.group_id,
         group_type: dto.group_type,
-        // (n0kLbx3d #3) DB'ga faqat shifrlangan qiymat tushadi.
-        token: this.sealToken(dto.token),
         is_active: dto.is_active ?? true,
       });
 
@@ -720,7 +535,7 @@ export class NotificationServiceService implements OnModuleInit {
         group_type: dto.group_type,
       });
 
-      // Snapshot BEFORE mutating — token is excluded from the diff (secret).
+      // Snapshot BEFORE mutating.
       const beforeSnapshot = {
         market_id: target.market_id,
         group_id: target.group_id,
@@ -739,11 +554,6 @@ export class NotificationServiceService implements OnModuleInit {
 
       if (dto.group_type !== undefined) {
         target.group_type = dto.group_type;
-      }
-
-      if (dto.token !== undefined) {
-        // (n0kLbx3d #3) DB'ga faqat shifrlangan qiymat tushadi.
-        target.token = this.sealToken(dto.token);
       }
 
       if (dto.is_active !== undefined) {
@@ -766,8 +576,7 @@ export class NotificationServiceService implements OnModuleInit {
 
       const saved = await this.tgMarketRepo.save(target);
 
-      // Audit: only changed fields are persisted. token is never snapshotted;
-      // we only note whether it was rotated as part of this update.
+      // Audit: only changed fields are persisted.
       await this.activityLog.logChange({
         entity_type: 'TelegramMarket',
         entity_id: saved.id,
@@ -782,10 +591,7 @@ export class NotificationServiceService implements OnModuleInit {
         ...this.auditActor(
           (dto as { requester?: { id?: string; roles?: string[] } }).requester,
         ),
-        metadata: {
-          market_id: saved.market_id,
-          token_changed: dto.token !== undefined,
-        },
+        metadata: { market_id: saved.market_id },
       });
 
       return this.successRes(
@@ -826,88 +632,29 @@ export class NotificationServiceService implements OnModuleInit {
     }
   }
 
-  private async sendTelegramMessage(data: {
-    token: string;
-    group_id: string;
-    message: string;
-    parse_mode?: string;
-    disable_web_page_preview?: boolean;
-  }) {
-    let response: Response;
-    try {
-      response = await fetch(
-        `https://api.telegram.org/bot${data.token}/sendMessage`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            chat_id: data.group_id,
-            text: data.message,
-            parse_mode: data.parse_mode,
-            disable_web_page_preview: data.disable_web_page_preview,
-          }),
-          // Bound the outbound call: this runs inside an RMQ handler, and Node's
-          // fetch has no default timeout — a stalled Telegram API would leave the
-          // message unacked and, with prefetch, wedge the consumer.
-          signal: AbortSignal.timeout(10_000),
-        },
-      );
-    } catch (error) {
-      this.logger.error(
-        `Telegram HTTP request failed for chat_id=${data.group_id}: ${
-          error instanceof Error ? error.message : 'unknown error'
-        }`,
-      );
-      throw new BadRequestException('Telegram request failed');
-    }
-
-    const body = await response.json().catch(() => null);
-
-    if (!response.ok || (body && body.ok === false)) {
-      const description =
-        body?.description || `Telegram API error (${response.status})`;
-      this.logger.error(
-        `Telegram API sendMessage error for chat_id=${data.group_id}: ${description}`,
-      );
-      throw new BadRequestException(description);
-    }
-
-    return body?.result ?? null;
-  }
-
+  /**
+   * Bitta chatga xabar (shaxsiy DM outbox'i va boshqa ichki chaqiruvchilar).
+   * (bOMYoOtV / 9HIaV80X) Token FAQAT env'dan — chaqiruvchi bermaydi; xabar
+   * avval `telegram_outbox` ga yoziladi. `sent`/`queued` — muvaffaqiyat
+   * (queued: 429/5xx, outbox o'zi qayta yuboradi), `dead` (403/400) — xato.
+   */
   async sendDirectToGroup(data: {
     group_id: string;
     message: string;
-    token?: string | null;
     parse_mode?: string;
     disable_web_page_preview?: boolean;
   }) {
-    const resolvedToken = this.resolveBotToken(data.token);
-    await this.sendTelegramMessage({
-      token: resolvedToken,
-      group_id: data.group_id,
-      message: data.message,
-      parse_mode: data.parse_mode,
+    const result = await this.botOutbox.send({
+      chatId: data.group_id,
+      text: data.message,
+      parse_mode: parseModeOf(data.parse_mode),
       disable_web_page_preview: data.disable_web_page_preview,
+      source: 'notification.direct',
     });
-    return { success: true };
-  }
-
-  private openTargetToken(target: {
-    id?: string;
-    token?: string | null;
-  }): string | null {
-    try {
-      return this.openStoredToken(target.token);
-    } catch (error) {
-      if (error instanceof TelegramTokenCipherError) {
-        this.logger.error(
-          `(n0kLbx3d) telegram_markets #${target.id ?? '?'}: ${error.message}`,
-        );
-        throw new BadRequestException(error.message);
-      }
-      throw error;
+    if (result.status === 'dead') {
+      throw new BadRequestException(result.error ?? 'Telegram send failed');
     }
+    return { success: true, status: result.status };
   }
 
   async sendNotification(dto: SendNotificationDto) {
@@ -931,7 +678,6 @@ export class NotificationServiceService implements OnModuleInit {
         market_id?: string;
         group_type?: Group_type;
         group_id: string;
-        token?: string | null;
       };
 
       let targets: Target[] = [];
@@ -954,10 +700,9 @@ export class NotificationServiceService implements OnModuleInit {
           market_id: row.market_id,
           group_type: row.group_type,
           group_id: row.group_id,
-          token: row.token,
         }));
       } else if (dto.group_id) {
-        targets = [{ group_id: dto.group_id, token: null }];
+        targets = [{ group_id: dto.group_id }];
       } else if (dto.market_id) {
         this.assertBigIntId(dto.market_id, 'market_id');
 
@@ -987,7 +732,6 @@ export class NotificationServiceService implements OnModuleInit {
           market_id: row.market_id,
           group_type: row.group_type,
           group_id: row.group_id,
-          token: row.token,
         }));
       } else {
         throw new BadRequestException('group_id or market_id is required');
@@ -999,73 +743,83 @@ export class NotificationServiceService implements OnModuleInit {
         group_type?: Group_type;
         group_id: string;
         ok: boolean;
+        queued?: boolean;
         error?: string;
       }> = [];
 
       for (const target of targets) {
-        try {
-          // (n0kLbx3d) Payload tokeni E'TIBORSIZ — server ixtiyoriy bot
-          // tokeni bilan tashqi so'rov yuboruvchi vositaga aylanmasin.
-          // #3: DB qiymati shifrdan ochiladi; ochilmasa — shu nishon uchun
-          // aniq xato (token matnisiz), platforma botiga jimgina o'tilmaydi.
-          const resolvedToken = this.resolveBotToken(
-            null,
-            this.openTargetToken(target),
-          );
-
-          await this.sendTelegramMessage({
-            token: resolvedToken,
-            group_id: target.group_id,
-            message: dto.message,
-            parse_mode: dto.parse_mode,
-            disable_web_page_preview: dto.disable_web_page_preview,
-          });
-
-          results.push({
-            id: target.id,
-            market_id: target.market_id,
-            group_type: target.group_type,
-            group_id: target.group_id,
-            ok: true,
-          });
-        } catch (err) {
-          results.push({
-            id: target.id,
-            market_id: target.market_id,
-            group_type: target.group_type,
-            group_id: target.group_id,
-            ok: false,
-            error: err instanceof Error ? err.message : 'Failed to send',
-          });
-        }
+        // (bOMYoOtV) Bot tokeni FAQAT env'dan; DB/payload tokeni yo'q.
+        // (9HIaV80X) Avval outbox'ga, keyin yuborish: 429/5xx — navbatda
+        // (queued, worker qayta uradi), 403/400 — dead (qayta urinilmaydi).
+        const sent = await this.botOutbox.send({
+          chatId: target.group_id,
+          text: dto.message,
+          parse_mode: parseModeOf(dto.parse_mode),
+          disable_web_page_preview: dto.disable_web_page_preview,
+          source: 'notification.send',
+        });
+        results.push({
+          id: target.id,
+          market_id: target.market_id,
+          group_type: target.group_type,
+          group_id: target.group_id,
+          ok: sent.status === 'sent',
+          ...(sent.status === 'queued' ? { queued: true } : {}),
+          ...(sent.error ? { error: sent.error } : {}),
+        });
       }
 
       const success = results.filter((item) => item.ok).length;
-      const failed = results.length - success;
+      const queued = results.filter((item) => item.queued).length;
+      const failed = results.length - success - queued;
 
-      // (3SeRYFqx #2) Natija tana statusCode ida: hammasi ketdi — 200,
-      // qisman — 207 (Multi-Status), HECH biri ketmadi — 502 (Telegram rad
-      // etdi). Gateway BodyStatusCodeInterceptor uni HTTP holatiga ko'chiradi
-      // — avval hammasi yiqilsa ham HTTP 201 + statusCode 200 qaytardi.
-      // Tana (results) o'zgarmagan: inbox relay va ichki chaqiruvchilar
-      // data.success/failed ni o'qiydi.
-      const statusCode = !failed ? 200 : success ? 207 : 502;
+      // (3SeRYFqx #2 / 9HIaV80X #4) Natija tana statusCode ida (gateway
+      // BodyStatusCodeInterceptor uni HTTP holatiga ko'chiradi): hammasi
+      // ketdi — 200; hech biri ketmadi va qayta urinilmaydi — 502; qolgani
+      // navbatda (429/5xx, outbox qayta yuboradi) — 202; aralash — 207.
+      // `failed` — faqat qaytmas xatolar (dead); `queued` — qayta urinishda.
+      const statusCode =
+        failed === results.length
+          ? 502
+          : success === results.length
+            ? 200
+            : failed === 0 && success === 0
+              ? 202
+              : 207;
       return this.successRes(
         {
           total: results.length,
           success,
           failed,
+          queued,
           results,
         },
         statusCode,
-        !failed
+        statusCode === 200
           ? 'Notification send result'
-          : success
-            ? 'Partially sent: ' + failed + '/' + results.length + ' failed'
-            : 'Notification not sent: all ' + failed + ' target(s) failed',
+          : statusCode === 502
+            ? 'Notification not sent: all ' + failed + ' target(s) failed'
+            : statusCode === 202
+              ? 'Queued for retry: ' + queued + '/' + results.length
+              : 'Partially sent: ' +
+                success +
+                '/' +
+                results.length +
+                ' sent, ' +
+                queued +
+                ' queued, ' +
+                failed +
+                ' failed',
       );
     } catch (error) {
       this.toRpcError(error);
     }
   }
+}
+
+/** DTO'dagi parse_mode → Bot API qiymati (noma'lum — oddiy matn). */
+function parseModeOf(value?: string): TelegramParseMode | undefined {
+  return value === 'HTML' || value === 'MarkdownV2' || value === 'Markdown'
+    ? value
+    : undefined;
 }
