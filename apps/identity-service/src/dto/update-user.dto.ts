@@ -6,10 +6,14 @@ import {
   IsOptional,
   IsPhoneNumber,
   IsString,
+  Max,
   Min,
   MinLength,
 } from 'class-validator';
 import { Commission_type, Status, Where_deliver } from '@app/common';
+
+/** NFiXfmq6 — market AI buyurtma narxining yuqori chegarasi (so'm). */
+export const AI_PRICE_PER_ORDER_MAX_UZS = 1_000_000;
 
 /** (C4R3YyvH) Foydalanuvchi tili — migratsiya 1716000000085 CHECK bilan bir xil. */
 export const USER_LANGUAGES = ['uz', 'ru', 'en'] as const;
@@ -87,4 +91,14 @@ export class UpdateUserDto {
   @IsNumber()
   @Min(0)
   commission_value?: number;
+
+  /**
+   * NFiXfmq6 — market AI buyurtma narxi (so'm). `null` — global narxga
+   * qaytarish, 0 — bepul. Faqat SUPERADMIN/ADMIN va faqat MARKET uchun.
+   */
+  @IsOptional()
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
+  @Max(AI_PRICE_PER_ORDER_MAX_UZS)
+  ai_price_per_order?: number | null;
 }

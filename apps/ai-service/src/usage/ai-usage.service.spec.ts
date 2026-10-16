@@ -137,6 +137,18 @@ describe('AiUsageService (lYVuADRE)', () => {
       expect(savedRow(1).applied_price_uzs).toBe(300);
     });
 
+    it('NFiXfmq6: global narx AI_PRICE_PER_ORDER dan (eski AI_ORDER_PRICE_UZS dan ustun); orderPriceFor — market qiymati yoki global', async () => {
+      const { service, savedRow } = setup({ AI_PRICE_PER_ORDER: 450 });
+      service.record(makeRecord());
+      await flush();
+      expect(savedRow().applied_price_uzs).toBe(450);
+      expect(service.defaultOrderPriceUzs()).toBe(450);
+      expect(service.orderPriceFor(null)).toBe(450);
+      expect(service.orderPriceFor(undefined)).toBe(450);
+      expect(service.orderPriceFor(120)).toBe(120);
+      expect(service.orderPriceFor(0)).toBe(0);
+    });
+
     it('#7/#19: cache_read to`ldirilgan qator keshsiz variantdan sezilarli arzon', async () => {
       const { service, savedRow } = setup();
       const base = {

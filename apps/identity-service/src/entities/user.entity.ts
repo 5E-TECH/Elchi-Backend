@@ -189,6 +189,23 @@ export class User extends BaseEntity {
   })
   commission_value: number | null;
 
+  /**
+   * NFiXfmq6 — faqat MARKET uchun: 1 ta AI buyurtma narxi (so'm). NULL —
+   * global `AI_PRICE_PER_ORDER` (sukut 300); 0 — AI bepul. Faqat
+   * SUPERADMIN/ADMIN o'zgartiradi (`PATCH /users/:id`), audit izi bilan.
+   * Har yaratilgan AI buyurtmada amal qilgan narx ai-service
+   * `ai_order_draft_item.applied_price_uzs` ga muzlatiladi (migratsiya
+   * 1716000000118/119).
+   */
+  @Column({
+    type: 'numeric',
+    precision: 14,
+    scale: 2,
+    nullable: true,
+    transformer: numericTransformer,
+  })
+  ai_price_per_order: number | null;
+
   // Per-user UI/dashboard preferences (theme, language, sidebar, dashboard
   // widget visibility, ...). Shape is owned by the frontend; backend stores it
   // opaquely. NULL = user has never customized (frontend applies defaults).

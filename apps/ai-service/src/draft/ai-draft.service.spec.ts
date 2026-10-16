@@ -213,14 +213,17 @@ describe('AiDraftService (vncdmXOy)', () => {
         { item_index: 1, order_id: 'x' },
       ],
       '7',
+      450,
     );
-    expect(res).toEqual({ linked: 1 });
+    // NFiXfmq6: amal qilgan narx YANGI qatorga muzlatiladi.
+    expect(res).toEqual({ linked: 1, charged_uzs: 450 });
     expect(itemsRepo.query).toHaveBeenCalledTimes(1);
     const [sql, params] = itemsRepo.query.mock.calls[0] as [string, unknown[]];
     expect(sql).toBe(AI_DRAFT_LINK_ITEM_SQL);
     // Market sharti va dublikatsiz yozish SQL'da.
     expect(sql).toContain('d.market_id = $4::bigint');
     expect(sql).toContain('ON CONFLICT (order_id) DO NOTHING');
+    expect(sql).toContain('applied_price_uzs');
     expect(params).toEqual([
       DRAFT,
       0,
@@ -228,7 +231,29 @@ describe('AiDraftService (vncdmXOy)', () => {
       '121',
       '7',
       JSON.stringify(['district_id', 'total_price']),
+      450,
     ]);
+  });
+
+  it('NFiXfmq6: narx berilmasa (eski chaqiruvchi) applied_price_uzs NULL, charged 0; takroriy (ON CONFLICT) — 0', async () => {
+    itemsRepo.query.mockResolvedValueOnce([{ id: '1' }]);
+    await expect(
+      service.linkItems(DRAFT, '121', [{ item_index: 0, order_id: '10' }]),
+    ).resolves.toEqual({ linked: 1, charged_uzs: 0 });
+    expect((itemsRepo.query.mock.calls[0] as [string, unknown[]])[1][6]).toBe(
+      null,
+    );
+    // ON CONFLICT DO NOTHING → RETURNING bo'sh: pul qayta qayd qilinmaydi.
+    itemsRepo.query.mockResolvedValueOnce([]);
+    await expect(
+      service.linkItems(
+        DRAFT,
+        '121',
+        [{ item_index: 0, order_id: '10' }],
+        '7',
+        300,
+      ),
+    ).resolves.toEqual({ linked: 0, charged_uzs: 0 });
   });
 
   describe('traceByOrder (TC8, TC10)', () => {

@@ -166,6 +166,26 @@ export class UpdateAdminRequestDto {
   @IsNumber()
   @Min(0)
   commission_value?: number;
+
+  /**
+   * NFiXfmq6 — market tahrirlash formasidagi "AI buyurtma narxi" (so'm).
+   * `null` — global `AI_PRICE_PER_ORDER` (sukut 300) ga qaytarish; 0 — AI
+   * bepul. Faqat SUPERADMIN/ADMIN va faqat market yozuvida (aks holda
+   * 403/400). Eski AI buyurtmalar qayta hisoblanmaydi.
+   */
+  @ApiPropertyOptional({
+    example: 300,
+    nullable: true,
+    minimum: 0,
+    maximum: 1_000_000,
+    description:
+      "Market AI buyurtma narxi (so'm, 1 ta buyurtma). null — global narx (AI_PRICE_PER_ORDER, sukut 300); 0 — bepul. Faqat SUPERADMIN/ADMIN.",
+  })
+  @IsOptional()
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
+  @Max(1_000_000)
+  ai_price_per_order?: number | null;
 }
 
 export class CreateMarketRequestDto {

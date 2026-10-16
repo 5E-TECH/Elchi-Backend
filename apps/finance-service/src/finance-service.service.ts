@@ -4728,11 +4728,9 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         await queryRunner.query('SELECT pg_advisory_xact_lock($1::bigint)', [
           FinanceServiceService.FBH_ADVISORY_LOCK_KEY.toString(),
         ]);
-        const previous = await queryRunner.manager.findOne(
-          FinancialBalanceHistory,
-          { where: {}, order: { id: 'DESC' } },
+        const balanceBefore = await this.lastLiveFinancialBalance(
+          queryRunner.manager,
         );
-        const balanceBefore = Number(previous?.balance_after ?? 0);
         const savedLedger = await queryRunner.manager.save(
           queryRunner.manager.create(FinancialBalanceHistory, {
             amount: -amount,
@@ -4981,6 +4979,24 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
   private static readonly FBH_ADVISORY_LOCK_KEY = 947_310_021;
 
   /**
+   * zTYaGWui — daftar zanjirining davomi: oxirgi TIRIK (`is_deleted = false`)
+   * qatorning `balance_after`i. O'quvchilar (`findFinancialBalanceHistory`,
+   * `getCurrentFinancialBalance`) aynan shu filtr bilan "oxirgi" qatorni
+   * oladi — yozuvchi ham shunday qilmasa, oxirgi qator soft-delete qilinganda
+   * yangi yozuv o'chirilgan qatordan davom etib, zanjir ikkiga bo'linardi.
+   * ⚠️ FAQAT FBH advisory qulfi ostida chaqiriladi (ketma-ketlik).
+   */
+  private async lastLiveFinancialBalance(
+    manager: EntityManager,
+  ): Promise<number> {
+    const last = await manager.findOne(FinancialBalanceHistory, {
+      where: { isDeleted: false },
+      order: { id: 'DESC' },
+    });
+    return Number(last?.balance_after ?? 0);
+  }
+
+  /**
    * IgR4FVsR — chaqiruvchining tranzaksiyasi ICHIDA P&L daftariga yozuv
    * qo'shish (commit/rollback chaqiruvchida). `recordFinancialBalance` bilan
    * bir xil qoida: advisory qulf ostida oxirgi qatordan `balance_after`
@@ -5001,11 +5017,7 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
     await manager.query('SELECT pg_advisory_xact_lock($1::bigint)', [
       FinanceServiceService.FBH_ADVISORY_LOCK_KEY.toString(),
     ]);
-    const previous = await manager.findOne(FinancialBalanceHistory, {
-      where: {},
-      order: { id: 'DESC' },
-    });
-    const balanceBefore = Number(previous?.balance_after ?? 0);
+    const balanceBefore = await this.lastLiveFinancialBalance(manager);
     const amount = Number(input.amount);
     return manager.save(
       manager.create(FinancialBalanceHistory, {
@@ -5117,11 +5129,9 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         }
       }
 
-      const last = await queryRunner.manager.findOne(FinancialBalanceHistory, {
-        where: {},
-        order: { id: 'DESC' },
-      });
-      const balanceBefore = Number(last?.balance_after ?? 0);
+      const balanceBefore = await this.lastLiveFinancialBalance(
+        queryRunner.manager,
+      );
       const balanceAfter = balanceBefore + amount;
 
       const entity = queryRunner.manager.create(FinancialBalanceHistory, {

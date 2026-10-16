@@ -1,3 +1,4 @@
+import { numericTransformer } from '@app/common';
 import {
   Column,
   CreateDateColumn,
@@ -106,6 +107,7 @@ export class AiOrderDraft {
 @Entity({ name: 'ai_order_draft_item', schema: 'ai_schema' })
 @Index('UQ_AIDRAFT_ITEM_ORDER', ['order_id'], { unique: true })
 @Index('IDX_AIDRAFT_ITEM_DRAFT', ['draft_id', 'item_index'])
+@Index('IDX_AIDRAFT_ITEM_CREATED', ['created_at'])
 export class AiOrderDraftItem {
   @PrimaryGeneratedColumn({ type: 'bigint' })
   id!: string;
@@ -133,6 +135,22 @@ export class AiOrderDraftItem {
    */
   @Column({ type: 'jsonb', nullable: true })
   edited_fields!: string[] | null;
+
+  /**
+   * NFiXfmq6 — shu buyurtma uchun AMAL QILGAN narx (so'm): market
+   * `ai_price_per_order` yoki global `AI_PRICE_PER_ORDER`, ai-confirm paytida
+   * MUZLATILGAN (narx keyin o'zgarsa qayta hisoblanmaydi). 0 — bepul; NULL —
+   * ustundan oldingi buyurtma (narx noma'lum). `order_id` UNIQUE — bitta
+   * buyurtma ikki marta qayd qilinmaydi (Cp2v3ZJ7).
+   */
+  @Column({
+    type: 'numeric',
+    precision: 14,
+    scale: 2,
+    nullable: true,
+    transformer: numericTransformer,
+  })
+  applied_price_uzs!: number | null;
 
   @CreateDateColumn({ type: 'timestamptz' })
   created_at!: Date;

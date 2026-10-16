@@ -14,6 +14,7 @@ import type { AiDraftService } from './draft/ai-draft.service';
 import type { DistrictPickService } from './district-pick/district-pick.service';
 import { OrderExtractService } from './order-extract/order-extract.service';
 import type { ProductDisambiguateService } from './product-disambiguate/product-disambiguate.service';
+import type { AiMarginService } from './usage/ai-margin.service';
 import type { AiUsageService } from './usage/ai-usage.service';
 
 const CAP: AiStatusResponse['cap'] = {
@@ -74,7 +75,9 @@ describe('AiServiceController', () => {
     summary: jest.Mock;
     linkOrders: jest.Mock;
     persistFailures: jest.Mock;
+    orderPriceFor: jest.Mock;
   };
+  let margin: { margin: jest.Mock };
   let budget: { status: jest.Mock; raise: jest.Mock };
   let drafts: {
     attachPreview: jest.Mock;
@@ -95,6 +98,7 @@ describe('AiServiceController', () => {
       budget as unknown as AiBudgetService,
       drafts as unknown as AiDraftService,
       { pick: districtPick } as unknown as DistrictPickService,
+      margin as unknown as AiMarginService,
     );
   }
 
@@ -123,7 +127,12 @@ describe('AiServiceController', () => {
       summary: jest.fn(),
       linkOrders: jest.fn(),
       persistFailures: jest.fn().mockReturnValue(0),
+      // NFiXfmq6: market narxi bo'sh bo'lsa global 300.
+      orderPriceFor: jest.fn((v: unknown) =>
+        typeof v === 'number' && v >= 0 ? v : 300,
+      ),
     };
+    margin = { margin: jest.fn() };
     budget = { status: jest.fn().mockResolvedValue(CAP), raise: jest.fn() };
     drafts = {
       attachPreview: jest.fn().mockResolvedValue({ updated: 1 }),
@@ -439,7 +448,71 @@ describe('AiServiceController', () => {
           ctx,
         ),
       ).resolves.toEqual({ updated: 2, linked: 2 });
-      expect(drafts.linkItems).toHaveBeenCalledWith('d-1', '121', items, '7');
+      // NFiXfmq6: market narxi berilmagan → global narx (300) muzlatiladi.
+      expect(drafts.linkItems).toHaveBeenCalledWith(
+        'd-1',
+        '121',
+        items,
+        '7',
+        300,
+      );
+    });
+
+    it('NFiXfmq6: link_orders market narxi (ai_price_per_order) → linkItems amal qilgan narx bilan; 0 — bepul', async () => {
+      usage.linkOrders.mockResolvedValue({ updated: 1 });
+      const items = [{ item_index: 0, order_id: '10', edited_fields: [] }];
+      await build().linkOrders(
+        {
+          draft_id: 'd-1',
+          order_ids: ['10'],
+          market_id: '121',
+          items: items as never,
+          ai_price_per_order: 450,
+        },
+        ctx,
+      );
+      expect(usage.orderPriceFor).toHaveBeenCalledWith(450);
+      expect(drafts.linkItems).toHaveBeenLastCalledWith(
+        'd-1',
+        '121',
+        items,
+        undefined,
+        450,
+      );
+      await build().linkOrders(
+        {
+          draft_id: 'd-1',
+          order_ids: ['10'],
+          market_id: '121',
+          items: items as never,
+          ai_price_per_order: 0,
+        },
+        ctx,
+      );
+      expect(drafts.linkItems).toHaveBeenLastCalledWith(
+        'd-1',
+        '121',
+        items,
+        undefined,
+        0,
+      );
+    });
+
+    it('NFiXfmq6: ai.usage.margin → margin.margin(from, to, market_id)', async () => {
+      const report = { totals: { chargedUzs: 600 } };
+      margin.margin.mockResolvedValue(report);
+      await expect(
+        build().usageMargin(
+          { from: '2026-10-01', to: '2026-10-15', market_id: '121' },
+          ctx,
+        ),
+      ).resolves.toEqual(report);
+      expect(margin.margin).toHaveBeenCalledWith(
+        '2026-10-01',
+        '2026-10-15',
+        '121',
+      );
+      expect(ack).toHaveBeenCalledWith(ctx);
     });
 
     it('vncdmXOy: ai.draft.* handlerlari servisga uzatiladi', async () => {

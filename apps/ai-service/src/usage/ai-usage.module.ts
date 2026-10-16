@@ -5,6 +5,7 @@ import { AiBudgetNotifier } from '../budget/ai-budget.notifier';
 import { AiBudgetService } from '../budget/ai-budget.service';
 import { AiSpendCounter } from '../entities/ai-spend-counter.entity';
 import { AiUsageLog } from '../entities/ai-usage-log.entity';
+import { AiMarginService } from './ai-margin.service';
 import { AiSpendCounterService } from './ai-spend-counter.service';
 import { AiUsageService } from './ai-usage.service';
 
@@ -31,7 +32,14 @@ import { AiUsageService } from './ai-usage.service';
     AiSpendCounterService,
     AiBudgetService,
     AiBudgetNotifier,
+    // NFiXfmq6: "AI xarajat va marja" hisoboti (ai.usage.margin).
+    AiMarginService,
   ],
-  exports: [AiUsageService, AiSpendCounterService, AiBudgetService],
+  exports: [
+    AiUsageService,
+    AiSpendCounterService,
+    AiBudgetService,
+    AiMarginService,
+  ],
 })
 export class AiUsageModule {}

@@ -40,6 +40,7 @@ import {
 import { OrderExtractService } from './order-extract/order-extract.service';
 import { ProductDisambiguateService } from './product-disambiguate/product-disambiguate.service';
 import { runAiHandler } from './rpc/run-ai-handler';
+import { AiMarginService } from './usage/ai-margin.service';
 import { AiUsageService } from './usage/ai-usage.service';
 import { nextTashkentMidnight, tashkentDay } from './usage/tashkent-day';
 
@@ -71,6 +72,8 @@ export class AiServiceController implements OnApplicationBootstrap {
     private readonly budget: AiBudgetService,
     private readonly drafts: AiDraftService,
     private readonly districtPick: DistrictPickService,
+    // NFiXfmq6: "AI xarajat va marja" hisoboti.
+    private readonly margin?: AiMarginService,
   ) {}
 
   /**
@@ -203,10 +206,35 @@ export class AiServiceController implements OnApplicationBootstrap {
   }
 
   /**
+   * NFiXfmq6 — "AI xarajat va marja" paneli (gateway: SUPERADMIN/ADMIN,
+   * MARKET — faqat o'z `market_id` si bilan).
+   */
+  @MessagePattern({ cmd: 'ai.usage.margin' })
+  usageMargin(
+    @Payload()
+    data: { from?: string; to?: string; market_id?: string | null } | null,
+    @Ctx() ctx: RmqContext,
+  ) {
+    return executeAndAck(this.rmqService, ctx, () =>
+      this.adminCall('ai.usage.margin', () => {
+        if (!this.margin) {
+          throw new Error('AiMarginService ulanmagan');
+        }
+        return this.margin.margin(data?.from, data?.to, data?.market_id);
+      }),
+    );
+  }
+
+  /**
    * ai-confirm natijasi: xarajat jurnaliga order_ids va (vncdmXOy) audit
    * iziga `ai_order_draft_item` (order_id, item_index, edited_fields).
    * `items` berilmasa (eski gateway) — faqat jurnal, xulq avvalgidek.
    * Draft bog'lanishi BIRINCHI — nizo tekshiruvining asosiy manbai.
+   *
+   * NFiXfmq6 / Cp2v3ZJ7: har YANGI bog'langan buyurtmaga amal qilgan narx
+   * muzlatiladi — gateway market yozuvidagi `ai_price_per_order` ni beradi
+   * (null/yo'q — global `AI_PRICE_PER_ORDER`). `order_id` UNIQUE: takroriy
+   * chaqiruv narxni ikkinchi marta qayd qilmaydi.
    */
   @MessagePattern({ cmd: 'ai.usage.link_orders' })
   linkOrders(
@@ -217,6 +245,7 @@ export class AiServiceController implements OnApplicationBootstrap {
       market_id: string;
       items?: AiDraftLinkItem[];
       confirmed_by?: string;
+      ai_price_per_order?: number | null;
     },
     @Ctx() ctx: RmqContext,
   ) {
@@ -228,6 +257,7 @@ export class AiServiceController implements OnApplicationBootstrap {
               data.market_id,
               data.items,
               data.confirmed_by,
+              this.usage.orderPriceFor(data.ai_price_per_order),
             )
           : null;
         const usage = await this.usage.linkOrders(

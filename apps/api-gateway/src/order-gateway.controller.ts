@@ -1367,11 +1367,16 @@ export class OrderGatewayController {
    *  - market / market_operator roli va `add_order=false` → 400 (admin,
    *    registrator va filial xodimi market nomidan yaratishda davom etadi);
    *  - har `product_id` shu marketniki bo'lishi shart → 404.
+   *
+   * NFiXfmq6: tekshirilgan market yozuvi qaytariladi — ai-confirm undagi
+   * `ai_price_per_order` ni (qo'shimcha RPC'siz) narx qaydi uchun oladi.
    */
   private async assertOrderMarket(
     marketId: string | undefined,
     roles: string[],
-  ): Promise<OrderMarketPhonePolicy | null> {
+  ): Promise<
+    (OrderMarketPhonePolicy & { ai_price_per_order?: unknown }) | null
+  > {
     const id = String(marketId ?? '').trim();
     if (!id) {
       return null;
@@ -1389,6 +1394,7 @@ export class OrderGatewayController {
             add_order?: boolean;
             require_operator_phone?: boolean | null;
             default_operator_phone?: string | null;
+            ai_price_per_order?: unknown;
           };
         } | null
       )?.data ?? null;
@@ -1410,9 +1416,11 @@ export class OrderGatewayController {
     }
     // VRyloH62: operator raqami sozlamasi — `createOrderInternal` qayta
     // so'ramasligi uchun shu javobdan qaytariladi.
+    // NFiXfmq6: AI buyurtma narxi ham shu yozuvdan (ai-confirm narx qaydi).
     return {
       require_operator_phone: market.require_operator_phone === true,
       default_operator_phone: market.default_operator_phone ?? null,
+      ai_price_per_order: market.ai_price_per_order,
     };
   }
 
@@ -1458,6 +1466,19 @@ export class OrderGatewayController {
     ).catch(() => null);
     const name = (profile as { data?: { name?: unknown } } | null)?.data?.name;
     return this.asStr(name).trim() || null;
+  }
+
+  /**
+   * NFiXfmq6: market yozuvidagi AI buyurtma narxi (so'm) — nomanfiy son yoki
+   * null (bo'sh / eski identity → ai-service global `AI_PRICE_PER_ORDER`).
+   */
+  private aiPricePerOrderOf(
+    market: { ai_price_per_order?: unknown } | null,
+  ): number | null {
+    const raw = market?.ai_price_per_order;
+    if (raw === null || raw === undefined || raw === '') return null;
+    const n = Number(raw);
+    return Number.isFinite(n) && n >= 0 ? n : null;
   }
 
   /** UER0MpMX: har `product_id` aynan shu marketniki bo'lishi shart (IDOR). */
@@ -1680,6 +1701,9 @@ export class OrderGatewayController {
    * TA'SIR QILMAYDI. ⚠️ Qayta urinish YO'Q (ai.* RPC).
    * Cp2v3ZJ7: `idempotent_replay` (avval yaratilgan) natijalar QAYTA
    * bog'lanmaydi — ular birinchi chaqiruvda bog'langan.
+   * NFiXfmq6: `ai_price_per_order` — market yozuvidagi narx (null — global);
+   * ai-service uni har YANGI bog'langan buyurtmaga muzlatadi (`order_id`
+   * UNIQUE — ikki marta chaqiruvda narx faqat bir marta qayd qilinadi).
    */
   private linkAiUsageOrders(
     orders: AiConfirmOrderDto[],
@@ -1687,6 +1711,7 @@ export class OrderGatewayController {
     marketId: string,
     eligible: EligibleAiOrder[] = [],
     confirmedBy?: string,
+    aiPricePerOrder: number | null = null,
   ): void {
     if (!this.aiClient) return;
     const editedByIndex = new Map(
@@ -1723,6 +1748,7 @@ export class OrderGatewayController {
               market_id: marketId,
               items: entry.items,
               ...(confirmer ? { confirmed_by: confirmer } : {}),
+              ai_price_per_order: aiPricePerOrder,
             },
           )
           .pipe(timeout(RMQ_FIRE_AND_FORGET_TIMEOUT)),
@@ -2625,7 +2651,9 @@ export class OrderGatewayController {
     const roles = this.normalizeRoles(req.user.roles);
     // UER0MpMX: partiya uchun BIR MARTA — market mavjud, faol, add_order.
     // VRyloH62: shu javobdagi operator raqami sozlamasi ham partiyaga bir marta.
+    // NFiXfmq6: ayni yozuvdan AI buyurtma narxi (qo'shimcha RPC yo'q).
     const marketProfile = await this.assertOrderMarket(marketId, roles);
+    const aiPricePerOrder = this.aiPricePerOrderOf(marketProfile);
     const branchAssignment =
       roles.includes(RoleEnum.BRANCH) ||
       roles.includes(RoleEnum.MANAGER) ||
@@ -2760,7 +2788,14 @@ export class OrderGatewayController {
       }
     });
 
-    this.linkAiUsageOrders(orders, results, marketId, eligible, req.user?.sub);
+    this.linkAiUsageOrders(
+      orders,
+      results,
+      marketId,
+      eligible,
+      req.user?.sub,
+      aiPricePerOrder,
+    );
 
     return successRes({
       results: orders.map(

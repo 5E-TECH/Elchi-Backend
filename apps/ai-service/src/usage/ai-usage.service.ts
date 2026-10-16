@@ -5,6 +5,10 @@ import { Repository } from 'typeorm';
 import type { ClaudeUsageRecord, ClaudeUsageSink } from '@app/common';
 import { AiUsageLog } from '../entities/ai-usage-log.entity';
 import {
+  effectiveAiOrderPriceUzs,
+  globalAiOrderPriceUzs,
+} from './ai-order-price';
+import {
   computeCacheSavedUsd,
   computeCostUsd,
   roundMoney2,
@@ -47,7 +51,6 @@ export interface AiUsageSummary {
 export const AI_USAGE_SUMMARY_DEFAULT_DAYS = 30;
 
 const DEFAULT_USD_UZS_RATE = 12800;
-const DEFAULT_ORDER_PRICE_UZS = 300;
 const DIGITS_RE = /^\d{1,19}$/;
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -68,6 +71,30 @@ export const AI_USAGE_LINK_ORDERS_SQL = `
       "updatedAt" = now()
   WHERE draft_id = $1 AND market_id = $3
 `;
+
+/**
+ * Davr — Toshkent sanalari, ikkala chet ham kiradi; berilmasa oxirgi 30
+ * kun. `params` = [fromDay 00:00 +05, (toDay+1) 00:00 +05) — sargable.
+ * (NFiXfmq6) Marja hisoboti ham AYNAN shu qoidadan foydalanadi — xarajat va
+ * charj bitta vaqt oynasida.
+ */
+export function resolveTashkentRange(
+  from?: string,
+  to?: string,
+): { fromDay: string; toDay: string; params: [string, string] } {
+  const toDay = isYmd(to) ? to : tashkentDay(new Date());
+  const fromDay = isYmd(from)
+    ? from
+    : addDaysYmd(toDay, -(AI_USAGE_SUMMARY_DEFAULT_DAYS - 1));
+  return {
+    fromDay,
+    toDay,
+    params: [
+      tashkentDayStartIso(fromDay),
+      tashkentDayStartIso(addDaysYmd(toDay, 1)),
+    ],
+  };
+}
 
 /** Davr filtri — `"createdAt"` indeksini ishlatadigan (sargable) chegaralar. */
 const RANGE_WHERE = `is_deleted = false AND "createdAt" >= $1::timestamptz AND "createdAt" < $2::timestamptz`;
@@ -344,12 +371,21 @@ export class AiUsageService implements ClaudeUsageSink {
       'AI_USD_UZS_RATE',
       DEFAULT_USD_UZS_RATE,
     );
-    this.orderPriceUzs = readPositive(
-      config,
-      'AI_ORDER_PRICE_UZS',
-      DEFAULT_ORDER_PRICE_UZS,
-      true,
-    );
+    // NFiXfmq6: AI_PRICE_PER_ORDER → AI_ORDER_PRICE_UZS → 300.
+    this.orderPriceUzs = globalAiOrderPriceUzs(config);
+  }
+
+  /** NFiXfmq6: global narx (market qiymati bo'sh bo'lsa shu). */
+  defaultOrderPriceUzs(): number {
+    return roundMoney2(this.orderPriceUzs);
+  }
+
+  /**
+   * NFiXfmq6: market uchun amal qiladigan narx — market `ai_price_per_order`
+   * (0 — bepul) yoki bo'sh bo'lsa global narx.
+   */
+  orderPriceFor(marketOverride: unknown): number {
+    return effectiveAiOrderPriceUzs(marketOverride, this.orderPriceUzs);
   }
 
   /**
@@ -541,18 +577,7 @@ export class AiUsageService implements ClaudeUsageSink {
     from?: string,
     to?: string,
   ): { fromDay: string; toDay: string; params: [string, string] } {
-    const toDay = isYmd(to) ? to : tashkentDay(new Date());
-    const fromDay = isYmd(from)
-      ? from
-      : addDaysYmd(toDay, -(AI_USAGE_SUMMARY_DEFAULT_DAYS - 1));
-    return {
-      fromDay,
-      toDay,
-      params: [
-        tashkentDayStartIso(fromDay),
-        tashkentDayStartIso(addDaysYmd(toDay, 1)),
-      ],
-    };
+    return resolveTashkentRange(from, to);
   }
 
   /**

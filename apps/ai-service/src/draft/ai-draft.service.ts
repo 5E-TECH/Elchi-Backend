@@ -19,6 +19,7 @@ import {
   AiOrderDraft,
   AiOrderDraftItem,
 } from '../entities/ai-order-draft.entity';
+import { priceOrNull } from '../usage/ai-order-price';
 
 /**
  * vncdmXOy #6 (HD5zOyBp #6): `source_text`, `raw_extraction`,
@@ -67,11 +68,19 @@ export const AI_DRAFT_COST_SQL = `
   GROUP BY draft_id
 `;
 
-/** draft ↔ buyurtma; RMQ qayta yetkazishida ikkinchi qator yozilmaydi. */
+/**
+ * draft ↔ buyurtma; RMQ qayta yetkazishida ikkinchi qator yozilmaydi.
+ * NFiXfmq6 / Cp2v3ZJ7: `applied_price_uzs` (amal qilgan narx) shu INSERT
+ * bilan BIR MARTA qayd qilinadi — `order_id` UNIQUE + ON CONFLICT DO NOTHING:
+ * ikki marta (yoki parallel) chaqiruvda narx faqat bir marta yoziladi va
+ * mavjud qatorning narxi HECH QACHON qayta yozilmaydi.
+ */
 export const AI_DRAFT_LINK_ITEM_SQL = `
   INSERT INTO ai_schema.ai_order_draft_item
-    (draft_id, item_index, order_id, market_id, confirmed_by, edited_fields)
-  SELECT $1::uuid, $2::int, $3::bigint, $4::bigint, $5::bigint, $6::jsonb
+    (draft_id, item_index, order_id, market_id, confirmed_by, edited_fields,
+     applied_price_uzs)
+  SELECT $1::uuid, $2::int, $3::bigint, $4::bigint, $5::bigint, $6::jsonb,
+         $7::numeric
   WHERE EXISTS (
     SELECT 1 FROM ai_schema.ai_order_draft d
     WHERE d.id = $1::uuid AND d.market_id = $4::bigint
@@ -341,18 +350,24 @@ export class AiDraftService implements OnModuleInit, OnModuleDestroy {
   /**
    * Yaratilgan buyurtmalarni draft'ga bog'laydi (`ai.usage.link_orders`
    * `items`). Draft boshqa marketniki yoki yo'q bo'lsa — yozilmaydi.
+   *
+   * NFiXfmq6: `appliedPriceUzs` — shu market uchun AMAL QILGAN narx (so'm,
+   * chaqiruvchi hisoblaydi); har YANGI qatorga muzlatiladi. `charged_uzs` —
+   * shu chaqiruvda YANGI qayd qilingan summa (takroriy chaqiruvda 0).
    */
   async linkItems(
     draftId: unknown,
     marketId: unknown,
     items: unknown,
     confirmedBy?: unknown,
-  ): Promise<{ linked: number }> {
+    appliedPriceUzs?: unknown,
+  ): Promise<{ linked: number; charged_uzs: number }> {
     const id = typeof draftId === 'string' ? draftId.trim() : '';
     const market = idOrNull(marketId);
     if (!UUID_RE.test(id) || !market || !Array.isArray(items)) {
-      return { linked: 0 };
+      return { linked: 0, charged_uzs: 0 };
     }
+    const price = priceOrNull(appliedPriceUzs);
     let linked = 0;
     for (const raw of items.slice(0, MAX_LINK_ITEMS)) {
       const item = (raw ?? {}) as Partial<AiDraftLinkItem>;
@@ -367,11 +382,12 @@ export class AiDraftService implements OnModuleInit, OnModuleDestroy {
         market,
         idOrNull(confirmedBy),
         edited === null ? null : JSON.stringify(edited),
+        price,
       ]);
       // INSERT … RETURNING — TypeORM faqat qatorlarni qaytaradi.
       linked += Array.isArray(result) ? result.length : 0;
     }
-    return { linked };
+    return { linked, charged_uzs: round2(linked * (price ?? 0)) };
   }
 
   /** `ai.draft.trace_by_order` — buyurtma AI'dan yaratilmagan bo'lsa null. */

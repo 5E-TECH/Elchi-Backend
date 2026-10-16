@@ -22,7 +22,11 @@ import {
   roleCatalogEntry,
 } from './roles/role-catalog';
 import { CreateAdminDto } from './dto/create-admin.dto';
-import { USER_LANGUAGES, UpdateUserDto } from './dto/update-user.dto';
+import {
+  AI_PRICE_PER_ORDER_MAX_UZS,
+  USER_LANGUAGES,
+  UpdateUserDto,
+} from './dto/update-user.dto';
 import { CreateMarketDto } from './dto/create-market.dto';
 import { UpdateMarketDto } from './dto/update-market.dto';
 import { CreateCourierDto } from './dto/create-courier.dto';
@@ -1498,6 +1502,7 @@ export class UserServiceService implements OnModuleInit {
       can_add_extra_cost: admin.can_add_extra_cost,
       can_sell_cancel: admin.can_sell_cancel,
       language: admin.language,
+      ai_price_per_order: admin.ai_price_per_order ?? null,
       password_changed: false,
     };
 
@@ -1622,6 +1627,24 @@ export class UserServiceService implements OnModuleInit {
       admin.commission_value = dto.commission_value;
     }
 
+    // NFiXfmq6 — market AI buyurtma narxi: faqat SUPERADMIN/ADMIN (market
+    // o'z narxini o'zgartira olmaydi), faqat MARKET yozuvida. RMQ'da
+    // ValidationPipe yo'q — qiymat shu yerda ham tekshiriladi. Eski AI
+    // buyurtmalar qayta hisoblanmaydi (narx har buyurtmada muzlatilgan).
+    if (typeof dto.ai_price_per_order !== 'undefined') {
+      if (!requesterIsPrivileged || requesterIsSelf) {
+        this.forbidden(
+          "AI buyurtma narxini faqat admin yoki superadmin o'zgartira oladi",
+        );
+      }
+      if (admin.role !== Roles.MARKET) {
+        this.badRequest('AI buyurtma narxi faqat market uchun');
+      }
+      admin.ai_price_per_order = this.normalizeAiPricePerOrder(
+        dto.ai_price_per_order,
+      );
+    }
+
     const saved = await this.users.save(admin);
     void this.syncUserToSearch(saved);
     await this.activityLog.logChange({
@@ -1644,12 +1667,28 @@ export class UserServiceService implements OnModuleInit {
         can_add_extra_cost: saved.can_add_extra_cost,
         can_sell_cancel: saved.can_sell_cancel,
         language: saved.language,
+        ai_price_per_order: saved.ai_price_per_order ?? null,
         // Surface that the password was rotated without ever logging its value.
         password_changed: Boolean(dto.password),
       },
       ...this.auditActor(requester),
     });
     return successRes(this.sanitize(saved), 200, 'User yangilandi');
+  }
+
+  /**
+   * NFiXfmq6: `null` — global narx; aks holda 0..AI_PRICE_PER_ORDER_MAX_UZS
+   * oralig'idagi son (2 xonagacha yaxlitlanadi). Boshqa qiymat — 400.
+   */
+  private normalizeAiPricePerOrder(value: unknown): number | null {
+    if (value === null) return null;
+    const n = typeof value === 'number' ? value : Number.NaN;
+    if (!Number.isFinite(n) || n < 0 || n > AI_PRICE_PER_ORDER_MAX_UZS) {
+      this.badRequest(
+        `ai_price_per_order: 0..${AI_PRICE_PER_ORDER_MAX_UZS} so'm yoki null`,
+      );
+    }
+    return Math.round(n * 100) / 100;
   }
 
   /**

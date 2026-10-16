@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { DataSource } from 'typeorm';
 import { CreateAiSchema1716000000047 } from '../../../../migrations/1716000000047-CreateAiSchema';
 import { CreateAiOrderDraft1716000000077 } from '../../../../migrations/1716000000077-CreateAiOrderDraft';
+import { AiOrderAppliedPrice1716000000119 } from '../../../../migrations/1716000000119-AiOrderAppliedPrice';
 import {
   AiOrderDraft,
   AiOrderDraftItem,
@@ -29,6 +30,7 @@ describePg('ai_order_draft — real Postgres (vncdmXOy)', () => {
   let service: AiDraftService;
   const draftA = randomUUID();
   const draftB = randomUUID();
+  const draftC = randomUUID();
   const market = '987654321';
 
   beforeAll(async () => {
@@ -49,6 +51,9 @@ describePg('ai_order_draft — real Postgres (vncdmXOy)', () => {
       // up() ikki marta — IF NOT EXISTS (idempotent).
       await new CreateAiOrderDraft1716000000077().up(qr);
       await new CreateAiOrderDraft1716000000077().up(qr);
+      // NFiXfmq6: applied_price_uzs — up() ikki marta (IF NOT EXISTS).
+      await new AiOrderAppliedPrice1716000000119().up(qr);
+      await new AiOrderAppliedPrice1716000000119().up(qr);
     } finally {
       await qr.release();
     }
@@ -62,7 +67,7 @@ describePg('ai_order_draft — real Postgres (vncdmXOy)', () => {
     if (!ds?.isInitialized) return;
     await ds.query(
       `DELETE FROM ai_schema.ai_order_draft WHERE id = ANY($1::uuid[])`,
-      [[draftA, draftB]],
+      [[draftA, draftB, draftC]],
     );
     await ds.query(
       `DELETE FROM ai_schema.ai_usage_log WHERE draft_id = ANY($1::uuid[])`,
@@ -121,15 +126,15 @@ describePg('ai_order_draft — real Postgres (vncdmXOy)', () => {
     }));
     await expect(
       service.linkItems(draftA, market, items, '7'),
-    ).resolves.toEqual({ linked: 10 });
+    ).resolves.toEqual({ linked: 10, charged_uzs: 0 });
     // Qayta yetkazish — dublikat yo'q.
     await expect(
       service.linkItems(draftA, market, items, '7'),
-    ).resolves.toEqual({ linked: 0 });
+    ).resolves.toEqual({ linked: 0, charged_uzs: 0 });
     // Boshqa market draft'iga bog'lab bo'lmaydi.
     await expect(
       service.linkItems(draftB, '1', [{ item_index: 0, order_id: '1' }]),
-    ).resolves.toEqual({ linked: 0 });
+    ).resolves.toEqual({ linked: 0, charged_uzs: 0 });
 
     const ctx = await service.confirmContext(market, [draftA]);
     expect(ctx.drafts[0].cost_uzs).toBeCloseTo(153.6, 2);
@@ -183,15 +188,104 @@ describePg('ai_order_draft — real Postgres (vncdmXOy)', () => {
     expect(trace).toMatchObject({ source_text: null, source_purged: true });
   });
 
+  it('⭐ Cp2v3ZJ7 / NFiXfmq6: narx BIR MARTA qayd qilinadi — takroriy va 10 ta parallel chaqiruvda ham; narx keyin o‘zgarsa eski yozuv qayta hisoblanmaydi', async () => {
+    await record(draftC, 'Vali 901234569 Asaka krem');
+    const priced = async () =>
+      ds.query<Array<{ order_id: string; applied_price_uzs: string | null }>>(
+        `SELECT order_id::text, applied_price_uzs::text
+         FROM ai_schema.ai_order_draft_item
+         WHERE draft_id = $1 ORDER BY order_id`,
+        [draftC],
+      );
+
+    // 1-chaqiruv: market narxi 450 muzlatiladi.
+    await expect(
+      service.linkItems(
+        draftC,
+        market,
+        [{ item_index: 0, order_id: '990000001' }],
+        '7',
+        450,
+      ),
+    ).resolves.toEqual({ linked: 1, charged_uzs: 450 });
+    // Ikki marta chaqiruv (RMQ qayta yetkazishi / qayta yuborish) — 0.
+    await expect(
+      service.linkItems(
+        draftC,
+        market,
+        [{ item_index: 0, order_id: '990000001' }],
+        '7',
+        450,
+      ),
+    ).resolves.toEqual({ linked: 0, charged_uzs: 0 });
+
+    // 10 ta PARALLEL bir xil chaqiruv — faqat bittasi qayd qiladi.
+    const parallel = await Promise.all(
+      Array.from({ length: 10 }, () =>
+        service.linkItems(
+          draftC,
+          market,
+          [{ item_index: 1, order_id: '990000002' }],
+          '7',
+          450,
+        ),
+      ),
+    );
+    expect(parallel.reduce((s, r) => s + r.linked, 0)).toBe(1);
+    expect(parallel.reduce((s, r) => s + r.charged_uzs, 0)).toBe(450);
+
+    // Narx keyin 999 ga o'zgardi — ESKI buyurtma qayta hisoblanmaydi.
+    await expect(
+      service.linkItems(
+        draftC,
+        market,
+        [{ item_index: 0, order_id: '990000001' }],
+        '7',
+        999,
+      ),
+    ).resolves.toEqual({ linked: 0, charged_uzs: 0 });
+    // Yangi buyurtma yangi narxda; 0 — bepul (NULL emas).
+    await service.linkItems(
+      draftC,
+      market,
+      [{ item_index: 2, order_id: '990000003' }],
+      '7',
+      0,
+    );
+
+    expect(await priced()).toEqual([
+      { order_id: '990000001', applied_price_uzs: '450.00' },
+      { order_id: '990000002', applied_price_uzs: '450.00' },
+      { order_id: '990000003', applied_price_uzs: '0.00' },
+    ]);
+    const [{ total }] = await ds.query<Array<{ total: string }>>(
+      `SELECT SUM(applied_price_uzs)::text AS total
+       FROM ai_schema.ai_order_draft_item WHERE draft_id = $1`,
+      [draftC],
+    );
+    expect(Number(total)).toBe(900);
+  });
+
   it('migratsiya down() → up() qayta ishlaydi', async () => {
     const qr = ds.createQueryRunner();
     try {
+      // NFiXfmq6: 119 down → ustun yo'q → up → qaytadi.
+      await new AiOrderAppliedPrice1716000000119().down(qr);
+      const noCol = await ds.query<Array<{ n: number }>>(
+        `SELECT COUNT(*)::int AS n FROM information_schema.columns
+         WHERE table_schema = 'ai_schema' AND table_name = 'ai_order_draft_item'
+           AND column_name = 'applied_price_uzs'`,
+      );
+      expect(noCol[0].n).toBe(0);
+      await new AiOrderAppliedPrice1716000000119().up(qr);
+
       await new CreateAiOrderDraft1716000000077().down(qr);
       const gone = await ds.query<Array<{ t: string | null }>>(
         `SELECT to_regclass('ai_schema.ai_order_draft') AS t`,
       );
       expect(gone[0].t).toBeNull();
       await new CreateAiOrderDraft1716000000077().up(qr);
+      await new AiOrderAppliedPrice1716000000119().up(qr);
     } finally {
       await qr.release();
     }

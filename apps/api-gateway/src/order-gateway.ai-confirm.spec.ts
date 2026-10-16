@@ -670,6 +670,8 @@ describe('OrderGatewayController — POST /orders/ai-confirm', () => {
             { item_index: null, order_id: ids[1], edited_fields: null },
           ],
           confirmed_by: MARKET_ID,
+          // NFiXfmq6: market narxi yo'q — ai-service global narxni muzlatadi.
+          ai_price_per_order: null,
         },
         {
           draft_id: draftB,
@@ -677,6 +679,7 @@ describe('OrderGatewayController — POST /orders/ai-confirm', () => {
           market_id: MARKET_ID,
           items: [{ item_index: null, order_id: ids[2], edited_fields: null }],
           confirmed_by: MARKET_ID,
+          ai_price_per_order: null,
         },
       ]),
     );

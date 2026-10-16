@@ -311,6 +311,8 @@ describe('ai-confirm — AI audit metadata (vncdmXOy)', () => {
         },
       ],
       confirmed_by: MARKET_ID,
+      // NFiXfmq6: market yozuvida narx yo'q — null (global narx).
+      ai_price_per_order: null,
     });
   });
 });

@@ -1,11 +1,13 @@
 import {
   BadRequestException,
   Controller,
+  ForbiddenException,
   GatewayTimeoutException,
   Get,
   Inject,
   Logger,
   Query,
+  Req,
   UseGuards,
 } from '@nestjs/common';
 import { ClientProxy } from '@nestjs/microservices';
@@ -22,6 +24,7 @@ import { RolesGuard } from './auth/roles.guard';
 import {
   AiUsageAiOrdersQueryDto,
   AiUsageDashboardQueryDto,
+  AiUsageMarginQueryDto,
 } from './dto/ai.swagger.dto';
 import { successRes } from '../../../libs/common/helpers/response';
 
@@ -49,6 +52,29 @@ type AiUsageDashboardReply = {
 
 type AiOrdersReply = {
   items?: Array<{ orderId?: string } & Record<string, unknown>>;
+} & Record<string, unknown>;
+
+/**
+ * NFiXfmq6: `ai.usage.margin` javobi (ai-service `AiMarginReport`). Gateway
+ * admin uchun uni o'zgarishsiz uzatadi, market uchun esa faqat shu
+ * maydonlarni o'qiydi (`marketMarginView`).
+ */
+type MarginReply = {
+  from?: string | null;
+  to?: string | null;
+  totals?: {
+    chargedUzs?: unknown;
+    aiOrders?: unknown;
+    freeAiOrders?: unknown;
+    avgChargedPerAiOrderUzs?: unknown;
+  } & Record<string, unknown>;
+  dailySeries?: Array<
+    {
+      day?: string | null;
+      chargedUzs?: unknown;
+      aiOrders?: unknown;
+    } & Record<string, unknown>
+  >;
 } & Record<string, unknown>;
 
 /**
@@ -171,6 +197,84 @@ export class AiUsageGatewayController {
         branch: share(counts.branch),
       },
       applied_range: sources.applied_range ?? null,
+    };
+  }
+
+  /**
+   * NFiXfmq6 — "AI xarajat va marja" (Moliyaviy bo'lim tabi): davr bo'yicha
+   * market kesimida charged (olingan narx) vs cost (real Anthropic xarajati),
+   * marja, kesh tejovi, feature kesimi, ichki AI, kunlik seriya, alertlar.
+   *  - SUPERADMIN / ADMIN — to'liq hisobot (ixtiyoriy `marketId` filtri);
+   *  - MARKET — FAQAT o'z kesimi (`marketId` = token `sub`, so'rovdagi
+   *    `marketId` e'tiborsiz) va faqat o'ziga tegishli maydonlar: olingan
+   *    summa, AI buyurtmalar soni, kunlik seriya. Bizning real xarajatimiz,
+   *    marja, kesh va alertlar marketga KO'RSATILMAYDI;
+   *  - boshqa rollar — 403.
+   */
+  @Get('margin')
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.MARKET)
+  @ApiOperation({
+    summary:
+      'AI xarajat va marja: market kesimida olingan narx vs real xarajat (MARKET — faqat o‘z kesimi)',
+  })
+  async margin(
+    @Query() query: AiUsageMarginQueryDto,
+    @Req() req: { user?: { sub?: unknown; roles?: unknown[] } },
+  ) {
+    const { from, to } = this.resolveRange(query);
+    const roles = (req?.user?.roles ?? []).map((role) =>
+      (typeof role === 'string' ? role : '').trim().toLowerCase(),
+    );
+    const privileged =
+      roles.includes(RoleEnum.SUPERADMIN) || roles.includes(RoleEnum.ADMIN);
+    let marketId: string | null = query?.marketId ?? null;
+    if (!privileged) {
+      const sub = req?.user?.sub;
+      marketId =
+        typeof sub === 'string' || typeof sub === 'number'
+          ? String(sub).trim()
+          : '';
+      if (!roles.includes(RoleEnum.MARKET) || !/^\d{1,19}$/.test(marketId)) {
+        throw new ForbiddenException('Faqat o‘z kesimingizni ko‘ra olasiz');
+      }
+    }
+
+    const report = await this.call(
+      this.aiClient
+        .send<MarginReply>(
+          { cmd: 'ai.usage.margin' },
+          { from, to, market_id: marketId },
+        )
+        .pipe(timeout(RMQ_GATEWAY_TIMEOUT)),
+    );
+    return successRes(
+      privileged
+        ? { ...report, view: 'admin' }
+        : this.marketMarginView(report, marketId as string),
+    );
+  }
+
+  /** NFiXfmq6: MARKET uchun proyeksiya — faqat o'z to'lovi va buyurtmalari. */
+  private marketMarginView(report: MarginReply, marketId: string) {
+    const totals = report?.totals ?? {};
+    const series = Array.isArray(report?.dailySeries) ? report.dailySeries : [];
+    return {
+      view: 'market' as const,
+      from: report?.from ?? null,
+      to: report?.to ?? null,
+      marketId,
+      totals: {
+        chargedUzs: Number(totals.chargedUzs ?? 0) || 0,
+        aiOrders: Number(totals.aiOrders ?? 0) || 0,
+        freeAiOrders: Number(totals.freeAiOrders ?? 0) || 0,
+        avgChargedPerAiOrderUzs:
+          Number(totals.avgChargedPerAiOrderUzs ?? 0) || 0,
+      },
+      dailySeries: series.map((d) => ({
+        day: d?.day ?? null,
+        chargedUzs: Number(d?.chargedUzs ?? 0) || 0,
+        aiOrders: Number(d?.aiOrders ?? 0) || 0,
+      })),
     };
   }
 

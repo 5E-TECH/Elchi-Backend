@@ -31,8 +31,13 @@ export type AiFeature =
   | 'order_district'
   | 'order_item_match';
 
-/** Dashboard filtri uchun qo'pol guruh (ai_usage_log.request_area). */
-export type AiRequestArea = 'order' | 'bot' | 'other';
+/**
+ * Dashboard filtri uchun qo'pol guruh (ai_usage_log.request_area).
+ * NFiXfmq6: `internal` — ichki AI (masalan moliyaviy hisobot/chat): mijozga
+ * CHARJ QILINMAYDI, lekin marja hisobotida budjetdagi xarajat markazi sifatida
+ * alohida ko'rsatiladi.
+ */
+export type AiRequestArea = 'order' | 'bot' | 'other' | 'internal';
 
 /**
  * Har Claude chaqiruvining MAJBURIY meta'si (lYVuADRE #4/#5/#16).

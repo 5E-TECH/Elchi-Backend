@@ -439,6 +439,30 @@ buyurtma SOTILGAN holatda qoladi, uning puli o'zgarmaydi (reversal yo'q).
   (`expense_proof_conditions`) bundan mustaqil — avvalgidek talab qilinadi.
   🔧 Kuryer modalida qo'shimcha xarajat maydonini market yopiq bo'lsa
   yashiring; admin market tahririda ikki almashtirgich.
+### 2026-10-16 — F: AI buyurtma narxi va marja hisoboti (NFiXfmq6), P&L daftari zanjiri (zTYaGWui)
+
+- [2026-10-16] 🆕 [ai] — NFiXfmq6: `GET /ai-usage/margin` (superadmin, admin,
+  market). Query: `fromDate`, `toDate`, `marketId` (faqat admin; market rolida
+  token'dan, so'rovdagisi e'tiborsiz). Admin javobi (`view: 'admin'`):
+  `totals` (`chargedUzs` — olingan narx, `costUzs`/`costUsd` — real
+  xarajat, `marginUzs`, `marginNegative`, `aiOrders`, `freeAiOrders`,
+  `unpricedAiOrders`, o'rtachalar), `cache` (tejalgan summa, hit-rate),
+  `internal` (charj qilinmaydigan ichki AI), `byMarket` (market kesimida
+  olingan vs real), `byFeature` (`order_extract_image` alohida qator),
+  `dailySeries` (Toshkent kuni), `alerts` (kesh buzildi, market sakrashi,
+  manfiy marja). Market javobi (`view: 'market'`): faqat `totals.chargedUzs`,
+  `aiOrders`, `freeAiOrders`, `avgChargedPerAiOrderUzs` va kunlik seriya.
+  🔧 "Moliyaviy balans" → "AI xarajat va marja" tabi: manfiy marja qizil,
+  narx yonida "taxminiy", bo'sh davrda 0, alertlar ro'yxati.
+- [2026-10-16] ✏️ [identity] — NFiXfmq6: `PATCH /users/:id` (faqat superadmin,
+  admin; faqat market yozuvida) → `ai_price_per_order` (so'm, `null` — global
+  narx, sukut 300; `0` — AI bepul; 0..1 000 000). Market javobida shu maydon.
+  Narx o'zgarishi faoliyat jurnalida (eski → yangi). Eski AI buyurtmalar
+  qayta hisoblanmaydi — har buyurtmada amal qilgan narx saqlanadi.
+  🔧 Admin market tahrirlash formasida "AI buyurtma narxi" maydoni.
+- [2026-10-16] 🟢 [finance] — zTYaGWui: P&L (moliyaviy balans tarixi)
+  zanjiri endi oxirgi TIRIK qatordan davom etadi (o'chirilgan qator
+  e'tiborsiz). Kontrakt o'zgarmagan.
 
 ### 2026-10-15 — R1: dashboard reyting davri ("Bugun" → oxirgi 30 kun) va bot manbasi (9zbSDkUI, Celz3rKJ)
 

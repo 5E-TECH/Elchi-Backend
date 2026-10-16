@@ -379,4 +379,88 @@ describe('Celz3rKJ — AI xarajat paneli gateway (/ai-usage)', () => {
       expect(ai.send).not.toHaveBeenCalled();
     },
   );
+
+  // --- NFiXfmq6: GET /ai-usage/margin ------------------------------------
+
+  describe('NFiXfmq6 — /ai-usage/margin', () => {
+    const MARGIN = {
+      from: '2026-10-01',
+      to: '2026-10-14',
+      marketId: null,
+      totals: {
+        chargedUzs: 3000,
+        costUzs: 1200,
+        marginUzs: 1800,
+        aiOrders: 10,
+        freeAiOrders: 1,
+        avgChargedPerAiOrderUzs: 300,
+      },
+      cache: { cacheSavedUzs: 40 },
+      alerts: [{ type: 'cache_broken' }],
+      byMarket: [{ marketId: '37', chargedUzs: 3000, costUzs: 1200 }],
+      dailySeries: [
+        { day: '2026-10-02', chargedUzs: 900, aiOrders: 3, costUzs: 400 },
+      ],
+    };
+
+    beforeEach(() => {
+      aiReply = (p) => of(p.cmd === 'ai.usage.margin' ? MARGIN : AI_DASHBOARD);
+    });
+
+    it('⭐ admin — to`liq hisobot (marja, kesh, alertlar), marketId filtri uzatiladi', async () => {
+      const res = await request(app.getHttpServer())
+        .get(
+          '/ai-usage/margin?fromDate=2026-10-01&toDate=2026-10-14&marketId=37',
+        )
+        .set(as(ADMIN));
+      expect(res.status).toBe(200);
+      expect(res.body.data).toMatchObject({
+        view: 'admin',
+        totals: { marginUzs: 1800, costUzs: 1200 },
+        alerts: [{ type: 'cache_broken' }],
+      });
+      expect(ai.send).toHaveBeenCalledWith(
+        { cmd: 'ai.usage.margin' },
+        expect.objectContaining({ market_id: '37' }),
+      );
+    });
+
+    it('⭐ market — faqat o`z kesimi (token sub), real xarajat/marja/alertlar ko`rinmaydi', async () => {
+      const res = await request(app.getHttpServer())
+        .get('/ai-usage/margin?marketId=99')
+        .set(as({ sub: '37', roles: ['market'] }));
+      expect(res.status).toBe(200);
+      expect(ai.send).toHaveBeenCalledWith(
+        { cmd: 'ai.usage.margin' },
+        expect.objectContaining({ market_id: '37' }),
+      );
+      const data = res.body.data;
+      expect(data.view).toBe('market');
+      expect(data.totals).toEqual({
+        chargedUzs: 3000,
+        aiOrders: 10,
+        freeAiOrders: 1,
+        avgChargedPerAiOrderUzs: 300,
+      });
+      expect(data).not.toHaveProperty('alerts');
+      expect(data).not.toHaveProperty('byMarket');
+      expect(data).not.toHaveProperty('cache');
+      expect(data.dailySeries[0]).toEqual({
+        day: '2026-10-02',
+        chargedUzs: 900,
+        aiOrders: 3,
+      });
+    });
+
+    it.each([['courier'], ['manager'], ['market_operator']])(
+      '%s → 403, servisga so`rov yo`q',
+      async (role) => {
+        const res = await request(app.getHttpServer())
+          .get('/ai-usage/margin')
+          .set(as({ sub: '9', roles: [role] }));
+        expect(res.status).toBe(403);
+        expect(ai.send).not.toHaveBeenCalled();
+      },
+    );
+  });
 });

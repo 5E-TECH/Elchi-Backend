@@ -246,6 +246,36 @@ async function main(): Promise<void> {
   }
 
   // -----------------------------------------------------------------
+  // zTYaGWui — P&L daftari zanjiri (INFORMATIONAL): tirik qatorlar
+  // yig'indisi oxirgi TIRIK qatorning balance_after'iga teng bo'lishi shart.
+  // Farq — kimdir FBH qatorini soft-delete qilgan yoki yozuvchi o'chirilgan
+  // qatordan davom etgan (zanjir uzilgan). Exit kodiga ta'sir qilmaydi.
+  // -----------------------------------------------------------------
+  try {
+    const [fbh]: Array<{ live_sum: string; last_after: string | null }> =
+      await ds.query(`
+        SELECT COALESCE(SUM(f.amount) FILTER (WHERE f.is_deleted = false), 0)::text AS live_sum,
+               (SELECT l.balance_after::text
+                  FROM ${SCHEMA}.financial_balance_history l
+                 WHERE l.is_deleted = false
+                 ORDER BY l.id DESC
+                 LIMIT 1) AS last_after
+        FROM ${SCHEMA}.financial_balance_history f
+      `);
+    const liveSum = Number(fbh?.live_sum ?? 0);
+    const lastAfter = Number(fbh?.last_after ?? 0);
+    if (Math.abs(liveSum - lastAfter) > EPSILON) {
+      console.log(
+        `\n⚠️  [zTYaGWui] P&L daftari zanjiri uzilgan: SUM(amount, tirik)=${liveSum}, oxirgi tirik balance_after=${lastAfter}, farq=${(liveSum - lastAfter).toFixed(2)}`,
+      );
+    }
+  } catch (err) {
+    console.log(
+      `\nℹ️  P&L chain check skipped: ${(err as Error)?.message ?? err}`,
+    );
+  }
+
+  // -----------------------------------------------------------------
   // Cross-system settlement reconciliation (Audit I3) — INFORMATIONAL.
   // The per-order FIFO order_settlement ledger (order_schema) and the cashbox
   // balances (finance_schema) are two views of the same money. If the

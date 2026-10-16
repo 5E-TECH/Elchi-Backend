@@ -616,6 +616,26 @@ export const aiValidationSchema = Joi.object({
   AI_USD_UZS_RATE: Joi.number().positive().empty('').default(12800),
   AI_ORDER_PRICE_UZS: Joi.number().min(0).empty('').default(300),
   /**
+   * NFiXfmq6 — GLOBAL narx: 1 ta AI buyurtma (so'm). Market yozuvidagi
+   * `ai_price_per_order` bo'sh bo'lsa shu ishlaydi; 0 — hammaga bepul.
+   * Berilmasa eski `AI_ORDER_PRICE_UZS` (sukut 300) ishlatiladi — mavjud
+   * deploy'lar o'zgarishsiz qoladi. Har yaratilgan AI buyurtmada amal qilgan
+   * narx `ai_order_draft_item.applied_price_uzs` ga muzlatiladi.
+   */
+  AI_PRICE_PER_ORDER: Joi.number().min(0).empty('').optional(),
+  // NFiXfmq6 marja paneli alertlari (hardcode emas): kesh hit-rate shu
+  // ulushdan pastga tushsa; bitta market kunlik xarajati o'zining boshqa
+  // kunlardagi o'rtachasidan shu karradan oshsa; market marjasi shu
+  // summadan (so'm) past bo'lsa. Kunlik shift ogohlantirishi —
+  // AI_CAP_WARN_RATIO.
+  AI_ALERT_CACHE_HIT_MIN_RATIO: Joi.number()
+    .min(0)
+    .max(1)
+    .empty('')
+    .default(0.5),
+  AI_ALERT_MARKET_SPIKE_FACTOR: Joi.number().greater(1).empty('').default(5),
+  AI_ALERT_MARGIN_MIN_UZS: Joi.number().empty('').default(0),
+  /**
    * Kunlik GLOBAL avariya shifti (USD, Toshkent sanasi bo'yicha). Oshsa
    * ai-parse `cap_exceeded` qaytaradi va Anthropic'ga so'rov KETMAYDI; qo'lda
    * buyurtma yaratish ishlayveradi. Market/foydalanuvchi kvotasi va oylik

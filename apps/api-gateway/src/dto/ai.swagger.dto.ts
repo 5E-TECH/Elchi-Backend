@@ -113,6 +113,24 @@ export class AiUsageDashboardQueryDto {
   toDate?: string;
 }
 
+/**
+ * NFiXfmq6 — `GET /ai-usage/margin?fromDate&toDate&marketId` ("AI xarajat va
+ * marja"). `marketId` — faqat SUPERADMIN/ADMIN uchun filtr; MARKET roli
+ * uchun e'tiborsiz (har doim o'z kesimi).
+ */
+export class AiUsageMarginQueryDto extends AiUsageDashboardQueryDto {
+  @ApiPropertyOptional({
+    example: '12',
+    description:
+      'Faqat shu market (admin/superadmin). MARKET uchun e’tiborsiz.',
+  })
+  @Transform(trimOptional)
+  @IsOptional()
+  @IsString({ message: "marketId matn bo'lishi kerak" })
+  @Matches(/^\d{1,19}$/, { message: "marketId raqam bo'lishi kerak" })
+  marketId?: string;
+}
+
 /** (Celz3rKJ) `GET /ai-usage/ai-orders?fromDate&toDate&limit` (limit 1..100). */
 export class AiUsageAiOrdersQueryDto extends AiUsageDashboardQueryDto {
   @ApiPropertyOptional({ example: 100, minimum: 1, maximum: 100 })
