@@ -31,6 +31,24 @@ export enum OrderCreatedVia {
   BOT = 'bot',
 }
 
+/**
+ * (lQjt6sKP) ALMASHTIRISH (kafolat-swap) — jismoniy qaytarish holati.
+ *
+ * YANGI (almashtirish) buyurtmada ham, ESKI (almashtirilayotgan) buyurtmada
+ * ham turadi va kuryerning "eskisini oldim" darvozasini boshqaradi:
+ *   AWAITING_OLD_PICKUP → kuryer eskini hali olmagan (yangisini SOTISH to'siladi);
+ *   OLD_COLLECTED       → kuryer eskini mijozdan oldi (sotuvga ruxsat);
+ *   OLD_RETURNED        → eski mahsulot marketga topshirildi (keyingi bosqich).
+ *
+ * ⚠️ PUL BILAN BOG'LIQ EMAS: eski buyurtmaning statusi (SOTILGAN) va pul
+ * yozuvlari o'zgarmaydi — kafolat-swap, reversal yo'q (BeePost modeli).
+ */
+export enum OrderReplacementState {
+  AWAITING_OLD_PICKUP = 'awaiting_old_pickup',
+  OLD_COLLECTED = 'old_collected',
+  OLD_RETURNED = 'old_returned',
+}
+
 export enum OrderHolderType {
   HQ = 'HQ',
   BRANCH = 'BRANCH',
@@ -56,6 +74,20 @@ export enum OrderHolderType {
  */
 @Index('IDX_ORDER_EXTERNAL_LOOKUP', ['external_id', 'operator'], {
   where: '"external_id" IS NOT NULL',
+})
+/**
+ * (lQjt6sKP) Bitta eski buyurtma faqat BITTA faol almashtirish buyurtmasiga
+ * bog'lanadi — DB darajasidagi to'siq (kod darajasidagi `FOR UPDATE`
+ * tekshiruvining ortida). O'chirilgan (`is_deleted`) almashtirish hisobga
+ * olinmaydi: market xato yaratganini o'chirsa, eski buyurtma qayta tanlanadi.
+ * Migratsiya 1716000000111.
+ */
+@Index('UQ_ORDER_REPLACEMENT_OF', ['replacement_of_order_id'], {
+  unique: true,
+  where: '"replacement_of_order_id" IS NOT NULL AND "is_deleted" = false',
+})
+@Index('IDX_ORDER_REPLACEMENT_RETURN', ['replacement_state'], {
+  where: '"is_replacement_return" = true',
 })
 export class Order extends BaseEntity {
   @Column({ type: 'bigint' })
@@ -353,6 +385,35 @@ export class Order extends BaseEntity {
 
   @Column({ type: 'bigint', nullable: true })
   parent_order_id!: string | null;
+
+  /**
+   * (lQjt6sKP) YANGI buyurtma qaysi ESKI (yetkazilgan) buyurtma O'RNIGA
+   * almashtirish sifatida ketayotgani. `parent_order_id` dan ALOHIDA (u
+   * qisman sotuv bola-buyurtmasiniki). Faqat yaratishda yoziladi
+   * (`POST /orders` → `replaced_order_id`), PATCH orqali o'zgarmaydi.
+   */
+  @Column({ type: 'bigint', nullable: true })
+  replacement_of_order_id!: string | null;
+
+  /** (lQjt6sKP) Jismoniy qaytarish holati — `OrderReplacementState`. */
+  @Column({
+    type: 'enum',
+    enum: OrderReplacementState,
+    enumName: 'orders_replacement_state_enum',
+    nullable: true,
+  })
+  replacement_state!: OrderReplacementState | null;
+
+  /**
+   * (lQjt6sKP) ESKI buyurtmada `true` — u almashtirishga tanlangan va
+   * mahsuloti qaytarilishi kerak. Statusi (SOTILGAN) va puli O'ZGARMAYDI.
+   */
+  @Column({ type: 'boolean', default: false })
+  is_replacement_return!: boolean;
+
+  /** (lQjt6sKP) Kuryer "eskisini oldim" deb tasdiqlagan vaqt (sotuvda). */
+  @Column({ type: 'timestamptz', nullable: true })
+  old_item_collected_at!: Date | null;
 
   @Column({ type: 'varchar', nullable: true })
   external_id!: string | null;

@@ -146,6 +146,8 @@ export class OrderServiceController {
         address?: string | null;
         qr_code_token?: string | null;
         parent_order_id?: string | null;
+        /** (lQjt6sKP) almashtirish: qaysi yetkazilgan buyurtma o'rniga. */
+        replaced_order_id?: string | null;
         external_id?: string | null;
         source?: Order_source;
         items?: Array<{
@@ -466,6 +468,42 @@ export class OrderServiceController {
     );
   }
 
+  /** (lQjt6sKP) Almashtirishga tanlanadigan (yetkazilgan) buyurtmalar. */
+  @MessagePattern({ cmd: 'order.replaceable' })
+  replaceable(
+    @Payload()
+    data: {
+      market_id?: string | null;
+      customer_id?: string | null;
+      customer_ids?: string[] | null;
+      q?: string | null;
+      page?: number;
+      limit?: number;
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.lifecycleService.listReplaceableOrders(data ?? {}),
+    );
+  }
+
+  /** (lQjt6sKP) Almashtirishga tanlangan eski buyurtmalar (qaytarish). */
+  @MessagePattern({ cmd: 'order.replacement.returns' })
+  replacementReturns(
+    @Payload()
+    data: {
+      market_id?: string | null;
+      state?: string | null;
+      page?: number;
+      limit?: number;
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.lifecycleService.listReplacementReturns(data ?? {}),
+    );
+  }
+
   @MessagePattern({ cmd: 'order.sell' })
   sell(
     @Payload()
@@ -478,6 +516,8 @@ export class OrderServiceController {
         proofFileKeys?: string[];
         proofFileKeysVerified?: boolean;
         extraCostApproved?: boolean;
+        /** (lQjt6sKP) kuryer "eskisini oldim" tasdig'i. */
+        oldItemCollected?: boolean | string;
       };
       requester: { id: string; roles?: string[]; branch_id?: string | null };
       request_id?: string;
@@ -576,6 +616,8 @@ export class OrderServiceController {
         proofFileKeys?: string[];
         proofFileKeysVerified?: boolean;
         extraCostApproved?: boolean;
+        /** (lQjt6sKP) kuryer "eskisini oldim" tasdig'i. */
+        oldItemCollected?: boolean | string;
       };
       requester: { id: string; roles?: string[]; branch_id?: string | null };
       request_id?: string;

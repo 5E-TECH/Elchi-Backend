@@ -3,7 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { ClientProxy, RpcException } from '@nestjs/microservices';
 import { DataSource, In, IsNull, QueryFailedError, Repository } from 'typeorm';
 import { createHash, randomBytes } from 'node:crypto';
-import { Order } from '../entities/order.entity';
+import { Order, OrderReplacementState } from '../entities/order.entity';
 import { OrderItem } from '../entities/order-item.entity';
 import {
   OrderCreatedVia,
@@ -82,6 +82,17 @@ import {
   type LockedPostRow,
   type PostOrderDeleteOutcome,
 } from './post-order-bulk-delete';
+import {
+  assertReplacementSaleAllowed,
+  findReplaceableOrders,
+  findReplacementReturns,
+  lockAndAssertReplaceableOrder,
+  markOrderForReplacementReturn,
+  markReplacementOldItemCollected,
+  normalizeReplacedOrderId,
+  type ReplaceableOrdersQuery,
+  type ReplacementReturnsQuery,
+} from './order-replacement';
 
 const CANCELLED_HANDOVER_MANUAL_REASONS = new Set([
   'QR yirtilgan',
@@ -350,6 +361,21 @@ export class OrderLifecycleService {
         throw new RpcException({
           statusCode: 400,
           message: "Bog'langan ma'lumot topilmadi",
+        });
+      }
+      // (lQjt6sKP) DB to'sig'i: bitta eski buyurtmaga ikkinchi faol
+      // almashtirish (kod darajasidagi FOR UPDATE tekshiruvining ortida).
+      if (
+        pgError?.code === '23505' &&
+        (rawMessage.includes('UQ_ORDER_REPLACEMENT_OF') ||
+          (pgError as { constraint?: string }).constraint ===
+            'UQ_ORDER_REPLACEMENT_OF')
+      ) {
+        throw new RpcException({
+          statusCode: 400,
+          message:
+            'Bu buyurtma allaqachon almashtirishga belgilangan — ' +
+            'bitta buyurtma faqat bir marta almashtiriladi',
         });
       }
     }
@@ -4434,6 +4460,12 @@ export class OrderLifecycleService {
       address?: string | null;
       qr_code_token?: string | null;
       parent_order_id?: string | null;
+      /**
+       * (lQjt6sKP) ALMASHTIRISH: shu yangi buyurtma qaysi YETKAZILGAN eski
+       * buyurtma o'rniga ketadi (`order-replacement.ts`). Eski buyurtma puli
+       * o'zgarmaydi; yangisini sotish kuryer tasdig'isiz to'siladi.
+       */
+      replaced_order_id?: string | null;
       external_id?: string | null;
       /** Kiruvchi qop (batch) — hamkor yuborgan guruh ma'lumoti. */
       external_batch_ref?: string | null;
@@ -4461,6 +4493,8 @@ export class OrderLifecycleService {
     // buyurtma DOIM NEW, kuryersiz va pochtasiz.
     const dto = this.sanitizeCreateDtoForRequester(rawDto, requester);
     this.assertCreateAmounts(dto);
+    // (lQjt6sKP) shakl tranzaksiyadan OLDIN; egalik/holat/takror — ichida, qulf bilan.
+    const replacedOrderId = normalizeReplacedOrderId(dto.replaced_order_id);
     // fix3b: hamkor prepaid summasi endi SAQLANADI (tozalashdan keyin —
     // market/filial xodimidan kelgani allaqachon olib tashlangan).
     const paidOnlineAmount = this.resolveCreatePaidOnlineAmount(
@@ -4494,6 +4528,16 @@ export class OrderLifecycleService {
       const orderItemRepo = queryRunner.manager.getRepository(OrderItem);
       const trackingRepo = queryRunner.manager.getRepository(OrderTracking);
       const custodyRepo = queryRunner.manager.getRepository(OrderCustodyEvent);
+
+      // (lQjt6sKP) Eski buyurtma FOR UPDATE: shu market, yetkazilgan, hali
+      // almashtirilmagan. Parallel ikkinchi yaratish shu qulfda kutadi va
+      // birinchisi commit bo'lgach 400 oladi.
+      if (replacedOrderId) {
+        await lockAndAssertReplaceableOrder(queryRunner.manager, {
+          replacedOrderId,
+          marketId: dto.market_id,
+        });
+      }
 
       const order = orderRepo.create({
         market_id: dto.market_id,
@@ -4536,6 +4580,11 @@ export class OrderLifecycleService {
         address: dto.address ?? null,
         qr_code_token: dto.qr_code_token ?? this.generateCustomToken(),
         parent_order_id: dto.parent_order_id ?? null,
+        // (lQjt6sKP) almashtirish: eskiga havola + kuryer "eskisini oldim" darvozasi.
+        replacement_of_order_id: replacedOrderId,
+        replacement_state: replacedOrderId
+          ? OrderReplacementState.AWAITING_OLD_PICKUP
+          : null,
         external_id: dto.external_id ?? null,
         /**
          * KIRUVCHI QOP — hamkor bir qopda yuborgan posilkalar guruhi.
@@ -4551,6 +4600,15 @@ export class OrderLifecycleService {
 
       const saved = await orderRepo.save(order);
       savedId = saved.id;
+
+      // (lQjt6sKP) Eski buyurtma — faqat qaytarish bayrog'i va holati. Statusi
+      // (SOTILGAN) va pul yozuvlari O'ZGARMAYDI (kafolat-swap, reversal yo'q).
+      if (replacedOrderId) {
+        await markOrderForReplacementReturn(
+          queryRunner.manager,
+          replacedOrderId,
+        );
+      }
 
       const normalizedItems = (dto.items ?? []).map((item) => {
         const productId = item.product_id
@@ -4647,6 +4705,10 @@ export class OrderLifecycleService {
           total_price: dto.total_price ?? 0,
           branch_id: resolvedBranchId,
           source: dto.source ?? Order_source.INTERNAL,
+          // (lQjt6sKP) almashtirish izi — faqat almashtirishda (shakl o'zgarmaydi).
+          ...(replacedOrderId
+            ? { replacement_of_order_id: replacedOrderId }
+            : {}),
         },
         ...this.custody.auditActor(requester),
         // operator_id OXIRIDA — AI metadata uni hech qachon almashtirmaydi.
@@ -4676,6 +4738,20 @@ export class OrderLifecycleService {
    * bilan AYNI qoida; `source` EXTERNAL bo'lib qoladi. Market va boshqalar —
    * avvalgidek HQ.
    */
+  /** (lQjt6sKP) `order.replaceable` — almashtirishga tanlanadigan buyurtmalar. */
+  listReplaceableOrders(query: ReplaceableOrdersQuery) {
+    return findReplaceableOrders(this.dataSource.manager, query ?? {}).then(
+      (data) => successRes(data, 200, 'Replaceable orders'),
+    );
+  }
+
+  /** (lQjt6sKP) `order.replacement.returns` — qaytariladigan eski buyurtmalar. */
+  listReplacementReturns(query: ReplacementReturnsQuery) {
+    return findReplacementReturns(this.dataSource.manager, query ?? {}).then(
+      (data) => successRes(data, 200, 'Replacement returns'),
+    );
+  }
+
   async createExternalOrder(
     dto: {
       market_id: string;
@@ -4705,6 +4781,22 @@ export class OrderLifecycleService {
       branch_id?: string | null;
     } | null,
   ) {
+    // (lQjt6sKP) Almashtirish faqat oddiy yaratishda (`POST /orders`) —
+    // tashqi/hamkor buyurtmasida kuryer "eskisini oldim" oqimi yo'q.
+    const rawReplaced = (dto as { replaced_order_id?: unknown })
+      .replaced_order_id;
+    const hasReplaced =
+      rawReplaced !== undefined &&
+      rawReplaced !== null &&
+      !(typeof rawReplaced === 'string' && rawReplaced.trim() === '');
+    if (hasReplaced) {
+      throw new RpcException({
+        statusCode: 400,
+        message:
+          "replaced_order_id tashqi buyurtmada qo'llanmaydi — almashtirish " +
+          'faqat oddiy buyurtma yaratishda (POST /orders)',
+      });
+    }
     const isPrivileged = this.isSystemPrivilegedRequester(requester);
     const safeDto = isPrivileged
       ? dto
@@ -6424,6 +6516,8 @@ export class OrderLifecycleService {
       proofFileKeys?: string[];
       proofFileKeysVerified?: boolean;
       extraCostApproved?: boolean;
+      /** (lQjt6sKP) Almashtirish: kuryer eski mahsulotni mijozdan oldi. */
+      oldItemCollected?: boolean | string;
     },
     requestId?: string,
   ) {
@@ -6462,6 +6556,13 @@ export class OrderLifecycleService {
         "paidAmount: hamkor (tashqi) buyurtmasida sotuvda marketga to'lov qabul qilinmaydi — /finance/cashbox/payment/market orqali to'lang",
       );
     }
+    // (lQjt6sKP) Almashtirish buyurtmasi: kuryer eski mahsulotni olganini
+    // tasdiqlamaguncha sotuv to'siladi — tasdiq so'rovi va pul yozuvlaridan
+    // OLDIN (hech bir kassa oyog'i yozilmaydi).
+    const isReplacementSale = assertReplacementSaleAllowed(
+      order,
+      dto?.oldItemCollected,
+    );
 
     /**
      * ONLAYN TO'LANGAN BUYURTMA — NAQD YIG'ILMAYDI, LEKIN SOTUV O'TADI.
@@ -6983,6 +7084,12 @@ export class OrderLifecycleService {
         { id: requester.id, roles: requester.roles, note: 'Order sold' },
         tx,
       );
+      // (lQjt6sKP) `updateFull` dan KEYIN (u butun entity'ni saqlaydi):
+      // yangi va eski buyurtmada awaiting_old_pickup → old_collected.
+      // Faqat holat ustunlari — pulga tegilmaydi.
+      if (isReplacementSale) {
+        await markReplacementOldItemCollected(tx, order);
+      }
 
       // Open the per-order settlement row (PENDING) inside the same tx.
       await this.recordSaleSettlement(tx, {
@@ -7988,6 +8095,8 @@ export class OrderLifecycleService {
       proofFileKeys?: string[];
       proofFileKeysVerified?: boolean;
       extraCostApproved?: boolean;
+      /** (lQjt6sKP) Almashtirish: kuryer eski mahsulotni mijozdan oldi. */
+      oldItemCollected?: boolean | string;
     },
     requestId?: string,
   ) {
@@ -8009,6 +8118,12 @@ export class OrderLifecycleService {
     if (!order.post_id) {
       this.badRequest('Order has no post');
     }
+    // (lQjt6sKP) Qisman sotuv ham AYNI darvozadan o'tadi — aks holda
+    // "eskisini oldim" tasdig'ini chetlab o'tishning tayyor yo'li qolardi.
+    const isReplacementSale = assertReplacementSaleAllowed(
+      order,
+      dto?.oldItemCollected,
+    );
 
     const postRes = await rmqSend<{
       data?: { id: string; courier_id?: string | null };
@@ -8521,6 +8636,10 @@ export class OrderLifecycleService {
         { id: requester.id, roles: requester.roles, note: 'Order partly sold' },
         tx,
       );
+      // (lQjt6sKP) awaiting_old_pickup → old_collected (pulga tegilmaydi).
+      if (isReplacementSale) {
+        await markReplacementOldItemCollected(tx, order);
+      }
 
       // product_quantity reflects only the sold portion. updateFull's save wrote
       // the stale (pre-sale) value, so overwrite it within the same tx.

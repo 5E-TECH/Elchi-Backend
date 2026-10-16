@@ -99,6 +99,7 @@ import {
   Roles as RoleEnum,
   Where_deliver,
   matchesDeclaredType,
+  parseUzPhoneSearch,
   recordReceiveByScanOutcome,
   requestContext,
   type AiAuditedField,
@@ -371,6 +372,16 @@ const DEFAULT_ALLOWED_LIMITS = [10, 25, 50, 100] as const;
  * skan ekrani 100% o'lik edi.
  */
 export const EXTERNAL_ALLOWED_LIMITS = [10, 25, 50, 100, 200] as const;
+
+/**
+ * (lQjt6sKP) RMQ javobidagi ID → satr. Faqat satr/son qabul qilinadi; boshqa
+ * qiymat (obyekt va h.k.) bo'sh satr — `[object Object]` ID bo'lib ketmasin.
+ */
+function replacementIdText(value: unknown): string {
+  return typeof value === 'string' || typeof value === 'number'
+    ? String(value).trim()
+    : '';
+}
 
 @ApiTags('Orders')
 @Controller('orders')
@@ -4463,6 +4474,178 @@ export class OrderGatewayController {
         },
       },
     );
+  }
+
+  /**
+   * (lQjt6sKP) ALMASHTIRISH (kafolat-swap) — buyurtma yaratish formasida
+   * eski (YETKAZILGAN) buyurtmani tanlash. Market — faqat o'z buyurtmalari;
+   * boshqa yaratuvchi rollar `market_id` beradi (POST /orders bilan AYNI
+   * doira). `q`: 1–6 raqam — buyurtma ID; telefon — shu marketdagi mijoz;
+   * boshqa matn — izoh yoki mahsulot nomi.
+   * ⚠️ `@Get(':id')` dan OLDIN e'lon qilingan.
+   */
+  @Get('replaceable')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(
+    RoleEnum.ADMIN,
+    RoleEnum.SUPERADMIN,
+    RoleEnum.REGISTRATOR,
+    RoleEnum.MARKET,
+    RoleEnum.MANAGER,
+    RoleEnum.BRANCH,
+  )
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Almashtirishga tanlanadigan (yetkazilgan) buyurtmalar',
+    description:
+      "Yangi buyurtmani shu ro'yxatdagi eski buyurtma o'rniga yaratish uchun (`POST /orders` → `replaced_order_id`). " +
+      'Faqat sold/paid/partly_paid va hali almashtirilmagan buyurtmalar. Har qatorda mijoz, mahsulotlar, narx, izoh.',
+  })
+  @ApiQuery({ name: 'market_id', required: false, example: '3' })
+  @ApiQuery({ name: 'customer_id', required: false, example: '120' })
+  @ApiQuery({ name: 'q', required: false, example: '901234567' })
+  @ApiQuery({ name: 'page', required: false, type: Number, example: 1 })
+  @ApiQuery({ name: 'limit', required: false, type: Number, example: 20 })
+  async listReplaceableOrders(
+    @Query('market_id') marketIdRaw: string | undefined,
+    @Query('customer_id') customerIdRaw: string | undefined,
+    @Query('q') qRaw: string | undefined,
+    @Query('page') page: string | undefined,
+    @Query('limit') limit: string | undefined,
+    @Req() req: { user: JwtUser },
+  ) {
+    const roles = this.normalizeRoles(req.user.roles);
+    const marketId = roles.includes(RoleEnum.MARKET)
+      ? String(req.user.sub)
+      : String(marketIdRaw ?? '').trim();
+    if (!/^\d{1,18}$/.test(marketId)) {
+      throw new BadRequestException(
+        'market_id majburiy — almashtirish faqat shu market buyurtmalari ichidan',
+      );
+    }
+    const customerId = String(customerIdRaw ?? '').trim();
+    if (customerId && !/^\d{1,18}$/.test(customerId)) {
+      throw new BadRequestException("customer_id noto'g'ri");
+    }
+    const q = typeof qRaw === 'string' ? qRaw.trim().slice(0, 100) : '';
+    let customerIds: string[] | undefined;
+    let textQuery: string | undefined = q || undefined;
+    if (q && !/^\d{1,6}$/.test(q) && parseUzPhoneSearch(q)) {
+      // Telefon — mijozni identity'dan topib, shu market buyurtmalarida
+      // (order-service `market_id` filtri) qidiramiz.
+      const found = (await this.sendIdentityWithTimeout(
+        { cmd: 'identity.customer.search' },
+        { search: q, limit: 50 },
+      )) as { data?: Array<{ id?: unknown }> } | null;
+      customerIds = (Array.isArray(found?.data) ? found.data : [])
+        .map((row) => replacementIdText(row?.id))
+        .filter((id) => /^\d{1,18}$/.test(id));
+      textQuery = undefined;
+    }
+    const response = (await this.sendOrderWithTimeout(
+      { cmd: 'order.replaceable' },
+      {
+        market_id: marketId,
+        ...(customerId ? { customer_id: customerId } : {}),
+        ...(customerIds ? { customer_ids: customerIds } : {}),
+        ...(textQuery ? { q: textQuery } : {}),
+        page: Number(page) || 1,
+        limit: Number(limit) || 20,
+      },
+    )) as {
+      data?: { items?: Array<Record<string, unknown>> };
+    } | null;
+    return this.attachReplacementCustomers(response);
+  }
+
+  /**
+   * (lQjt6sKP) Almashtirishga tanlangan ESKI buyurtmalar — mahsuloti
+   * mijozdan qaytarib olinadi. `state`: awaiting_old_pickup | old_collected |
+   * old_returned. Market — faqat o'zinikilar.
+   * ⚠️ `@Get(':id')` dan OLDIN e'lon qilingan.
+   */
+  @Get('replacement/returns')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.MARKET)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary:
+      'Almashtirish qaytarmalari (eski mahsulot qaytariladigan buyurtmalar)',
+  })
+  @ApiQuery({ name: 'market_id', required: false, example: '3' })
+  @ApiQuery({
+    name: 'state',
+    required: false,
+    enum: ['awaiting_old_pickup', 'old_collected', 'old_returned'],
+  })
+  @ApiQuery({ name: 'page', required: false, type: Number, example: 1 })
+  @ApiQuery({ name: 'limit', required: false, type: Number, example: 20 })
+  async listReplacementReturns(
+    @Query('market_id') marketIdRaw: string | undefined,
+    @Query('state') state: string | undefined,
+    @Query('page') page: string | undefined,
+    @Query('limit') limit: string | undefined,
+    @Req() req: { user: JwtUser },
+  ) {
+    const roles = this.normalizeRoles(req.user.roles);
+    const marketId = roles.includes(RoleEnum.MARKET)
+      ? String(req.user.sub)
+      : String(marketIdRaw ?? '').trim();
+    if (marketId && !/^\d{1,18}$/.test(marketId)) {
+      throw new BadRequestException("market_id noto'g'ri");
+    }
+    const response = (await this.sendOrderWithTimeout(
+      { cmd: 'order.replacement.returns' },
+      {
+        ...(marketId ? { market_id: marketId } : {}),
+        ...(state ? { state } : {}),
+        page: Number(page) || 1,
+        limit: Number(limit) || 20,
+      },
+    )) as {
+      data?: { items?: Array<Record<string, unknown>> };
+    } | null;
+    return this.attachReplacementCustomers(response);
+  }
+
+  /** (lQjt6sKP) Qatorlarga mijoz ismi/telefoni (identity, bitta so'rov). */
+  private async attachReplacementCustomers<
+    T extends { data?: { items?: Array<Record<string, unknown>> } } | null,
+  >(response: T): Promise<T> {
+    const items = response?.data?.items;
+    if (!Array.isArray(items) || !items.length) return response;
+    const ids = [
+      ...new Set(
+        items
+          .map((row) => replacementIdText(row.customer_id))
+          .filter((id) => /^\d{1,18}$/.test(id)),
+      ),
+    ];
+    if (!ids.length) return response;
+    const customers = (await this.sendIdentityWithTimeout(
+      { cmd: 'identity.customer.find_by_ids' },
+      { ids },
+    ).catch(() => null)) as {
+      data?: Array<{
+        id?: unknown;
+        name?: string | null;
+        phone_number?: string | null;
+      }>;
+    } | null;
+    const byId = new Map(
+      (Array.isArray(customers?.data) ? customers.data : []).map((c) => [
+        replacementIdText(c?.id),
+        { name: c?.name ?? null, phone_number: c?.phone_number ?? null },
+      ]),
+    );
+    for (const row of items) {
+      const customerId = replacementIdText(row.customer_id);
+      const c = byId.get(customerId);
+      row.customer = c
+        ? { id: customerId, ...c }
+        : { id: customerId, name: null, phone_number: null };
+    }
+    return response;
   }
 
   /**

@@ -3,6 +3,7 @@ import {
   ArrayMinSize,
   ArrayNotEmpty,
   IsArray,
+  IsBoolean,
   IsInt,
   IsEnum,
   IsISO8601,
@@ -25,6 +26,22 @@ import {
   Order_status,
   Where_deliver,
 } from '@app/common';
+
+/**
+ * (lQjt6sKP) Sotuv `multipart/form-data` bilan ham keladi — "true"/"1"
+ * satrlari ham `true`. Boshqa qiymat o'zgarishsiz qoladi va `IsBoolean`
+ * uni 400 bilan rad etadi.
+ */
+const parseBooleanFlag = ({ value }: { value: unknown }): unknown => {
+  if (typeof value === 'string') {
+    const v = value.trim().toLowerCase();
+    if (v === 'true' || v === '1') return true;
+    if (v === 'false' || v === '0' || v === '') return false;
+  }
+  if (value === 1) return true;
+  if (value === 0) return false;
+  return value;
+};
 
 enum OrderSourceDto {
   INTERNAL = 'internal',
@@ -180,6 +197,26 @@ export class CreateOrderRequestDto {
   @IsOptional()
   @IsString()
   market_id?: string;
+
+  /**
+   * (lQjt6sKP) ALMASHTIRISH (kafolat-swap): yangi buyurtma shu marketning
+   * YETKAZILGAN (sold / paid / partly_paid) eski buyurtmasi o'rniga ketadi.
+   * Eski buyurtma puli o'zgarmaydi; yangisini kuryer "eskisini oldim"
+   * (`oldItemCollected: true`) tasdig'isiz sota olmaydi.
+   */
+  @ApiPropertyOptional({
+    example: '1024',
+    description:
+      'Almashtiriladigan eski buyurtma ID si (GET /orders/replaceable). Faqat shu marketning yetkazilgan buyurtmasi; ' +
+      'yangi (new), boshqa marketniki yoki allaqachon almashtirilgani — 400.',
+  })
+  @IsOptional()
+  @Transform(({ value }) => (typeof value === 'number' ? String(value) : value))
+  @IsString()
+  @Matches(/^\d{1,18}$/, {
+    message: "replaced_order_id buyurtma raqami (ID) bo'lishi kerak",
+  })
+  replaced_order_id?: string;
 
   @ApiPropertyOptional({
     example: '1',
@@ -693,6 +730,21 @@ export class SellOrderRequestDto {
   @IsArray()
   @IsString({ each: true })
   proofFileKeys?: string[];
+
+  /**
+   * (lQjt6sKP) Almashtirish buyurtmasida kuryer eski mahsulotni mijozdan
+   * olganini tasdiqlaydi. Almashtirish buyurtmasini usiz sotib bo'lmaydi (400).
+   */
+  @ApiPropertyOptional({
+    example: true,
+    description:
+      'Almashtirish buyurtmasi uchun: kuryer eski mahsulotni mijozdan oldi ("Eskisini oldim"). ' +
+      "Almashtirish buyurtmasida true bo'lmasa sotuv 400. Oddiy buyurtmada e'tiborsiz.",
+  })
+  @IsOptional()
+  @Transform(parseBooleanFlag)
+  @IsBoolean({ message: "oldItemCollected true/false bo'lishi kerak" })
+  oldItemCollected?: boolean;
 }
 
 export class CancelOrderRequestDto {
@@ -831,6 +883,21 @@ export class PartlySellOrderRequestDto {
   @IsArray()
   @IsString({ each: true })
   proofFileKeys?: string[];
+
+  /**
+   * (lQjt6sKP) Almashtirish buyurtmasida kuryer eski mahsulotni mijozdan
+   * olganini tasdiqlaydi. Almashtirish buyurtmasini usiz sotib bo'lmaydi (400).
+   */
+  @ApiPropertyOptional({
+    example: true,
+    description:
+      'Almashtirish buyurtmasi uchun: kuryer eski mahsulotni mijozdan oldi ("Eskisini oldim"). ' +
+      "Almashtirish buyurtmasida true bo'lmasa sotuv 400. Oddiy buyurtmada e'tiborsiz.",
+  })
+  @IsOptional()
+  @Transform(parseBooleanFlag)
+  @IsBoolean({ message: "oldItemCollected true/false bo'lishi kerak" })
+  oldItemCollected?: boolean;
 }
 
 export class CreateExternalOrderRequestDto extends CreateOrderRequestDto {

@@ -264,6 +264,54 @@ kampaniyasi uchun BIR xil javob shakli):
   → 🔧 Frontend (3SeRYFqx TC4): `Notification` tipiga
   (`src/entities/notification/model/types.ts`) `is_active: boolean` qo'shing,
   jadvalda `is_active` ustuni va toggle (PATCH) render qiling.
+### 2026-10-16 — O1: almashtirish (kafolat-swap) oqimi (lQjt6sKP)
+
+Yangi buyurtmani market avval YETKAZILGAN eski buyurtma o'rniga yaratadi:
+kuryer yangisini topshirib, eski mahsulotni mijozdan qaytarib oladi. Eski
+buyurtma SOTILGAN holatda qoladi, uning puli o'zgarmaydi (reversal yo'q).
+
+- [2026-10-16] 🆕 [order] — `GET /orders/replaceable` (admin, superadmin,
+  registrator, market, menejer, filial). Buyurtma yaratish formasidagi
+  "Almashtirish" tanlagichi (BeePost `ReplacementPicker` analogi) uchun.
+  Query: `market_id` (market rolida e'tiborsiz — token'dan; boshqa rollar
+  uchun majburiy, yo'q bo'lsa 400), `customer_id`, `q`, `page`, `limit`
+  (≤100). `q`: 1–6 raqam — buyurtma ID; telefon (`+998 90 …`, `901234567`) —
+  shu marketdagi mijoz buyurtmalari; boshqa matn — izoh yoki mahsulot nomi.
+  Faqat `sold` / `paid` / `partly_paid` va hali almashtirilmagan buyurtmalar.
+  Javob: `data: { items, total, page, limit }`, har qator:
+  `{ id, status, market_id, customer_id, customer: { id, name, phone_number },
+  total_price, where_deliver, comment, sold_at, createdAt,
+  items: [{ product_id, product_name, quantity }] }` — bir xil mahsulot bir
+  necha marta buyurtma qilinganini ajratish uchun sana, narx va izohni
+  ko'rsating.
+- [2026-10-16] ✏️ [order] — `POST /orders` → ixtiyoriy
+  `replaced_order_id` (raqamli ID). 400 holatlari (xabar o'zbekcha, ekranda
+  ko'rsating): boshqa marketniki yoki topilmadi ("shu marketda topilmadi"),
+  yetkazilmagan ("Faqat yetkazib berilgan (sotilgan) buyurtmani almashtirish
+  mumkin"), allaqachon almashtirilgan ("allaqachon almashtirishga
+  belgilangan"). Yangi buyurtma qatorida `replacement_of_order_id` va
+  `replacement_state: 'awaiting_old_pickup'`; eski buyurtmada
+  `is_replacement_return: true`. `POST /orders/external` da maydon → 400.
+- [2026-10-16] ⚠️ [order] — KURYER SOTUVI: `POST /orders/sell/:id` va
+  `POST /orders/partly-sell/:id` ga `oldItemCollected` (boolean; multipart'da
+  `"true"`/`"1"`). Buyurtmada `replacement_of_order_id` bo'lsa va
+  `replacement_state` hali `awaiting_old_pickup` bo'lsa,
+  `oldItemCollected: true` siz sotuv **400** ("Avval eski mahsulotni mijozdan
+  olganingizni tasdiqlang"). 🔧 Kuryer sotuv modalida almashtirish
+  buyurtmasi uchun "Eskisini oldim (#<replacement_of_order_id>)" belgisi;
+  belgilanmaguncha "Sotildi" tugmasi o'chiq. Oddiy buyurtmada maydon
+  e'tiborsiz. Sotilgach ikkala buyurtmada `replacement_state:
+  'old_collected'` va `old_item_collected_at`.
+- [2026-10-16] 🆕 [order] — `GET /orders/replacement/returns` (superadmin,
+  admin, market — market faqat o'zinikini). Qaytariladigan eski buyurtmalar:
+  query `market_id`, `state` (`awaiting_old_pickup` | `old_collected` |
+  `old_returned`), `page`, `limit`. Qator: yuqoridagi maydonlar +
+  `replacement_state`, `old_item_collected_at`, `replacement_order_id`,
+  `replacement_order_status`. 🔧 "Almashtirish qaytarmalari" sahifasi.
+- [2026-10-16] 🟢 [order] — buyurtma qatorlarida yangi maydonlar:
+  `replacement_of_order_id`, `replacement_state`, `is_replacement_return`,
+  `old_item_collected_at` (kuryer ro'yxatida almashtirish belgisini ko'rsatish
+  uchun).
 
 ### 2026-10-15 — R1: dashboard reyting davri ("Bugun" → oxirgi 30 kun) va bot manbasi (9zbSDkUI, Celz3rKJ)
 
