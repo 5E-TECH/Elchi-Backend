@@ -14,6 +14,8 @@ import { CourierActions, CourierHandler } from '../courier/courier.handler';
 import { CourierService } from '../courier/courier.service';
 import { ExtraCostActions } from '../extra-cost/extra-cost.actions';
 import { PaymentAckActions } from '../finance/payment-ack.actions';
+import { AiOrderService } from '../ai-order/ai-order.service';
+import { AiOrderActions, AiOrderHandler } from '../ai-order/ai-order.handler';
 import { GroupHandler } from '../handlers/group.handler';
 import { MarketHandler } from '../handlers/market.handler';
 import { StartHandler } from '../handlers/start.handler';
@@ -325,6 +327,8 @@ export function makeRouter(
     gateway?: jest.Mock;
     downloadFile?: jest.Mock;
     inbox?: { dispatch: jest.Mock };
+    /** (e7KhaeOO) AI buyurtma handleri — xotiradagi `telegram_ai_drafts` bilan. */
+    aiOrder?: boolean;
   } = {},
 ) {
   const counts = new Map<string, number>();
@@ -452,6 +456,18 @@ export function makeRouter(
     gateway as never,
     transport as never,
   );
+  const aiDrafts = makeAiDraftsStore();
+  const aiService = options.aiOrder
+    ? new AiOrderService(
+        aiDrafts as never,
+        gateway as never,
+        actions as never,
+        transport as never,
+        config as never,
+      )
+    : null;
+  const aiHandler = aiService ? new AiOrderHandler(aiService) : undefined;
+  const aiActions = aiService ? new AiOrderActions(aiService) : null;
   const start = new StartHandler(
     limiter as never,
     activityLog as never,
@@ -481,8 +497,10 @@ export function makeRouter(
       ...courierActions.handlers,
       ...extraCost.handlers,
       ...paymentAck.handlers,
+      ...(aiActions?.handlers ?? []),
       ...(options.actionHandlers ?? []),
     ],
+    aiHandler,
   );
   return {
     router,
@@ -498,6 +516,53 @@ export function makeRouter(
     gateway: gateway.request,
     cards,
     inbox,
+    aiDrafts,
+  };
+}
+
+/**
+ * Xotiradagi `telegram_ai_drafts` (e7KhaeOO): insert / update / findOne va
+ * `preview → creating` da'vosi (`UPDATE … WHERE status = ANY($2)`).
+ */
+export function makeAiDraftsStore(now: () => number = Date.now) {
+  const rows = new Map<string, Record<string, any>>();
+  return {
+    rows,
+    insert: jest.fn((row: Record<string, any>) => {
+      rows.set(row.id, {
+        input: {},
+        orders: null,
+        results: null,
+        message_id: null,
+        ai_draft_id: null,
+        error: null,
+        expires_at: new Date(now() + 24 * 3_600_000),
+        ...row,
+      });
+      return Promise.resolve();
+    }),
+    update: jest.fn((where: { id: string }, patch: Record<string, any>) => {
+      const row = rows.get(where.id);
+      if (row) Object.assign(row, patch);
+      return Promise.resolve();
+    }),
+    findOne: jest.fn(({ where }: { where: { id: string } }) =>
+      Promise.resolve(rows.get(where.id) ? { ...rows.get(where.id) } : null),
+    ),
+    query: jest.fn((sql: string, params: unknown[]) => {
+      const [id, from, to] = params as [string, string[], string];
+      const row = rows.get(id);
+      if (
+        !/telegram_ai_drafts/.test(sql) ||
+        !row ||
+        !from.includes(row.status) ||
+        new Date(row.expires_at).getTime() <= now()
+      ) {
+        return Promise.resolve([[], 0]);
+      }
+      row.status = to;
+      return Promise.resolve([[{ ...row }], 1]);
+    }),
   };
 }
 

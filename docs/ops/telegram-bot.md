@@ -246,3 +246,29 @@ bazasiga o'zi yozmaydi, doira/holat mashinasi/isbot/extra-cost — serverda.
 - ⚠️ TASHKILIY QADAM: xodim ishdan bo'shaganda uni market Telegram
   guruhidan CHIQARISH — guruh a'zoligi Elchi nazoratidan tashqarida
   (keyin qo'shilgan odam eski xabarlarni ham o'qiy oladi).
+
+## 12. AI orqali buyurtma (e7KhaeOO) — bot faqat CHAQIRUVCHI
+
+- Market / market operatori shaxsiy chatda buyruq emas MATN (telefon raqami
+  bor — kamida 7 ta raqam) yoki RASM tashlaydi → `POST /orders/ai-parse`
+  (operatorning o'z JWT'si; ekstraksiya ai-service'da, botda YO'Q) →
+  preview kartasi: ✅ Yaratish / ✏️ Tuzatish / ❌ Bekor.
+- ✅ → `POST /orders/ai-confirm` — faqat tayyor buyurtmalar (kamchiligi
+  narxni tasdiqlash yoki katalogda yo'q mahsulot bo'lsa — nomi bilan;
+  tuman/telefon/ism yo'q bo'lsa — kabinetda). `market_id` YUBORILMAYDI:
+  server operatorning `user.market_id` sidan oladi. Dublikat himoyasi:
+  qoralama `preview → creating` shartli UPDATE (ikki bosish — bitta
+  chaqiruv) + server `ai:<market>:<draft>:<index>` kaliti.
+- Qoralama DB'da (`telegram_ai_drafts`, migratsiya 128; 24 soat, keyin
+  soatlik tozalashda o'chadi — matnda mijoz PII si bor). Deploy/restartdan
+  keyin eski tugma ishlaydi; muddati o'tgan — "⏳ Bu ro'yxat eskirgan".
+- AI javob bermasa — server matni + "🔁 Qayta urinish" (saqlangan matn /
+  file_id bilan, qoralama yo'qolmaydi); `disabled` / `cap_exceeded` /
+  `refused` — "🌐 Kabinetda yaratish".
+- Media: rasm 2MB gacha (ai-parse chegarasi) — limit ostidagi eng katta
+  o'lcham; hujjat faqat JPG/PNG ≤2MB; HEIC / webp / katta → yo'naltiruvchi
+  matn, AI CHAQIRILMAYDI.
+- Navbat: chat bo'yicha ChatSequencer (DB advisory lock, ko'p replikada
+  tartib), ≤12 — to'lsa "⏳ Juda ko'p xabar navbatda". Har rasm/matn — o'z
+  qoralamasi (ustma-ust yozilmaydi). Foydalanuvchi bo'yicha AI limiti —
+  gateway `ai-user` throttler (429 → "🔁 Qayta urinish").

@@ -45,6 +45,12 @@ import { PaymentAckActions } from './bot/finance/payment-ack.actions';
 import { DispatchDedupService } from './dedup/dispatch-dedup.service';
 import { TelegramOrderCard } from './entities/telegram-order-card.entity';
 import { TelegramChat } from './entities/telegram-chat.entity';
+import { TelegramAiDraft } from './entities/telegram-ai-draft.entity';
+import { AiOrderService } from './bot/ai-order/ai-order.service';
+import {
+  AiOrderActions,
+  AiOrderHandler,
+} from './bot/ai-order/ai-order.handler';
 import { OrderCardSyncService } from './bot/cards/order-card-sync.service';
 import { OrderCardSyncController } from './bot/cards/order-card-sync.controller';
 import { TelegramLinkToken } from './entities/telegram-link-token.entity';
@@ -161,6 +167,8 @@ import { RecipientDirectoryService } from './recipients/recipient-directory.serv
       TelegramOrderCard,
       // (ysBqD9Nx #5) umumlashtirilgan chat sxemasi (migratsiya 126).
       TelegramChat,
+      // (e7KhaeOO) AI buyurtma qoralamalari (migratsiya 128).
+      TelegramAiDraft,
     ]),
     // Push yetkazish bir partiyada 100 tagacha bildirishnomani parallel
     // yuboradi — 5 s lik standart javob muddati qisqa: muddat o'tsa outbox
@@ -209,14 +217,28 @@ import { RecipientDirectoryService } from './recipients/recipient-directory.serv
     ExtraCostActions,
     PaymentAckActions,
     OrderCardSyncService,
+    AiOrderService,
+    AiOrderHandler,
+    AiOrderActions,
     {
       provide: BOT_ACTION_HANDLERS,
       useFactory: (
         courier: CourierActions,
         extraCost: ExtraCostActions,
         paymentAck: PaymentAckActions,
-      ) => [...courier.handlers, ...extraCost.handlers, ...paymentAck.handlers],
-      inject: [CourierActions, ExtraCostActions, PaymentAckActions],
+        aiOrder: AiOrderActions,
+      ) => [
+        ...courier.handlers,
+        ...extraCost.handlers,
+        ...paymentAck.handlers,
+        ...aiOrder.handlers,
+      ],
+      inject: [
+        CourierActions,
+        ExtraCostActions,
+        PaymentAckActions,
+        AiOrderActions,
+      ],
     },
     BotRouterService,
     BotRuntimeService,

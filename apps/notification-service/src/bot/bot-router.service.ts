@@ -25,6 +25,7 @@ import {
   type BotMessageHandler,
 } from './handlers/bot-context';
 import { CommandGateHandler } from './handlers/command-gate.handler';
+import { AiOrderHandler } from './ai-order/ai-order.handler';
 import { CourierHandler } from './courier/courier.handler';
 import { GroupHandler } from './handlers/group.handler';
 import { MarketHandler, UNKNOWN_COMMAND_TEXT } from './handlers/market.handler';
@@ -38,6 +39,12 @@ export const ACTION_EXPIRED_TEXT =
   "⌛ Bu ro'yxat eskirgan — menyuni qayta oching: /start";
 export const ACTION_CONSUMED_TEXT = '✔️ Bu amal allaqachon bajarilgan.';
 export const ACTION_FOREIGN_TEXT = '🔒 Bu tugma siz uchun emas.';
+export const CHAT_QUEUE_FULL_TEXT =
+  '⏳ Juda ko‘p xabar navbatda — oldingilari tugashini kuting.';
+
+const chatIdIsPrivate = (update: TelegramUpdate) =>
+  (update.message?.chat?.type ?? update.callback_query?.message?.chat?.type) ===
+  'private';
 
 /** Shutdown'da navbatdagi ishlar shuncha kutiladi (docker stop 10 s dan kam). */
 const DRAIN_TIMEOUT_MS = 8_000;
@@ -80,12 +87,22 @@ export class BotRouterService implements OnModuleDestroy {
     @Optional()
     @Inject(BOT_ACTION_HANDLERS)
     actionHandlers?: BotActionHandler[],
+    // (e7KhaeOO) market/operator matni yoki rasmi → AI preview. Ixtiyoriy:
+    // eski spec'lar routerni usiz quradi.
+    @Optional() private readonly aiOrder?: AiOrderHandler,
   ) {
     this.slug = resolveBotConfig((key) => config.get(key)).slug;
     this.sequencer = new ChatSequencer(dataSource ?? null);
     // Tartib muhim: umumiy (start/link/id) → guruh → rol darvozasi
     // (3ZfiXuaW) → rol buyruqlari.
-    this.messageHandlers = [start, group, gate, market, courier];
+    this.messageHandlers = [
+      start,
+      group,
+      gate,
+      market,
+      courier,
+      ...(aiOrder ? [aiOrder] : []),
+    ];
     for (const handler of actionHandlers ?? []) {
       this.actionHandlers.set(handler.action, handler);
     }
@@ -144,6 +161,17 @@ export class BotRouterService implements OnModuleDestroy {
     );
     if (result === 'dropped') {
       botUpdatesTotal.inc({ bot: this.slug, type: 'dropped_queue' });
+      // (e7KhaeOO / BeePost MAX_QUEUE) shaxsiy chatga bitta tushuntirish —
+      // navbatdan tashqari, to'g'ridan-to'g'ri outbox orqali.
+      if (chatIdIsPrivate(update)) {
+        await this.outbox
+          .send({
+            chatId,
+            text: CHAT_QUEUE_FULL_TEXT,
+            source: 'bot.queue_full',
+          })
+          .catch(() => undefined);
+      }
     }
     return result;
   }
@@ -182,6 +210,8 @@ export class BotRouterService implements OnModuleDestroy {
     // (z2FRwu2c) isbot rejimida — kuryer isboti sifatida qabul qilinadi.
     if (message.photo || message.document || message.video) {
       if (await this.courier.handleMedia(ctx)) return;
+      // (e7KhaeOO) market/operator rasmi → AI (2MB, JPG/PNG; boshqasi — yo'naltiruv).
+      if (this.aiOrder && (await this.aiOrder.handleMedia(ctx))) return;
       const media = checkIncomingMedia(message);
       if (!media.ok && media.reply) await ctx.reply(media.reply);
       return;
