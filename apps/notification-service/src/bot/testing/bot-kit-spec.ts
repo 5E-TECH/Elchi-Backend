@@ -384,6 +384,7 @@ export function makeRouter(
     connectGroupByCodeText: jest.fn(() =>
       Promise.resolve({ message: 'ulandi' }),
     ),
+    warnGroupNewMembers: jest.fn(() => Promise.resolve({ markets: 1 })),
   };
   const env: Record<string, unknown> = {
     TELEGRAM_BOT_SLUG: options.slug ?? 'elchi',

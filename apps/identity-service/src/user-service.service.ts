@@ -2940,6 +2940,7 @@ export class UserServiceService implements OnModuleInit {
       extra_cost_requires_approval: market.extra_cost_requires_approval,
       require_operator_phone: market.require_operator_phone,
       default_operator_phone: market.default_operator_phone,
+      tg_group_show_customer_pii: market.tg_group_show_customer_pii,
       password_changed: false,
     };
 
@@ -3022,6 +3023,16 @@ export class UserServiceService implements OnModuleInit {
       market.require_operator_phone = dto.require_operator_phone;
     }
 
+    // (ysBqD9Nx) RMQ'da ValidationPipe yo'q — faqat boolean.
+    if (typeof dto.tg_group_show_customer_pii !== 'undefined') {
+      if (typeof dto.tg_group_show_customer_pii !== 'boolean') {
+        this.badRequest(
+          "tg_group_show_customer_pii boolean (true/false) bo'lishi kerak",
+        );
+      }
+      market.tg_group_show_customer_pii = dto.tg_group_show_customer_pii;
+    }
+
     if (defaultOperatorPhone !== undefined) {
       market.default_operator_phone = defaultOperatorPhone;
     }
@@ -3048,6 +3059,7 @@ export class UserServiceService implements OnModuleInit {
         extra_cost_requires_approval: saved.extra_cost_requires_approval,
         require_operator_phone: saved.require_operator_phone,
         default_operator_phone: saved.default_operator_phone,
+        tg_group_show_customer_pii: saved.tg_group_show_customer_pii,
         password_changed: Boolean(dto.password),
       },
     });

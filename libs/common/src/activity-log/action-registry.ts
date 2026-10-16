@@ -332,6 +332,20 @@ export const ACTIVITY_ACTION_REGISTRY: Readonly<
     'link',
     'green',
   ),
+  // (ysBqD9Nx, ega qarori #3) market guruhiga yuborilgan/tahrirlangan buyurtma
+  // kartasi — "kim ko'rdi" savoliga iz (qaysi guruh, qaysi buyurtma, qachon).
+  'notification.tg_group_card': entry(
+    'Telegram guruhiga buyurtma kartasi',
+    'notification',
+    'send',
+    'cyan',
+  ),
+  'notification.tg_group_member_joined': entry(
+    "Telegram guruhiga yangi a'zo qo'shildi",
+    'notification',
+    'user',
+    'amber',
+  ),
   'notification.tg_callback': entry(
     'Telegram tugmasi bosildi',
     'notification',

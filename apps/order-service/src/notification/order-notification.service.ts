@@ -63,6 +63,41 @@ import { CANCEL_REASON_UZ } from '../domain/cancel-reason';
 export const NOTIFICATION_OUTBOX_TARGET = 'NOTIFICATION';
 export const NOTIFICATION_DISPATCH_PATTERN = 'notification.dispatch';
 
+/**
+ * (h9newLsd #5 / ysBqD9Nx #4) Holat o'zgarishi → notification-service
+ * Telegram kartalarini tahrirlaydi (outbox, fire-and-forget).
+ */
+export const TELEGRAM_ORDER_STATUS_PATTERN =
+  'notification.telegram.order_status';
+
+/** (ysBqD9Nx #3) Guruh kartasi ma'lumoti (order-service karta RPC javobi — controller). */
+export interface OrderTelegramCard {
+  id: string;
+  order_number: string;
+  market_id: string | null;
+  status: Order_status;
+  total_price: number;
+  district_name: string | null;
+  operator: string | null;
+  show_customer_pii: boolean;
+  customer_name: string | null;
+  customer_phone: string | null;
+}
+
+/**
+ * (ysBqD9Nx #3) Guruh uchun niqoblangan telefon: `+998 90 *** ** 12`.
+ * O'zbek formatidan tashqari raqam — faqat oxirgi 2 raqam.
+ */
+export function maskPhoneForGroup(phone: string): string {
+  const digits = phone.replace(/\D/g, '');
+  if (digits.length < 4) return '***';
+  const tail = digits.slice(-2);
+  if (digits.length === 12 && digits.startsWith('998')) {
+    return `+998 ${digits.slice(3, 5)} *** ** ${tail}`;
+  }
+  return `*** ** ${tail}`;
+}
+
 /** (TC11) Boyitish RPC'si (logist, mijoz, kuryer, mahsulot) uchun muddat. */
 export const NOTIFY_LOOKUP_TIMEOUT_MS = 800;
 /** (TC11) Xato/timeout'dan keyin o'sha servis shuncha vaqt so'ralmaydi. */
@@ -649,6 +684,70 @@ export class OrderNotificationService implements OnApplicationBootstrap {
         }`,
       );
     }
+  }
+
+  /**
+   * (ysBqD9Nx #3) Market guruhi KARTASI uchun ma'lumot — notification-service
+   * hodisani qayta ishlaganda (biznes tranzaksiyasidan TASHQARIDA) so'raydi.
+   * Mijoz ismi/telefoni — market `tg_group_show_customer_pii` bayrog'iga
+   * qarab (EGA QARORI: sukut yoqiq); o'chiq (yoki o'qib bo'lmasa) — ism
+   * yo'q, telefon niqoblangan — xom PII order-service'dan chiqmaydi. To'liq manzil YO'Q
+   * (faqat tuman). Lookup xatosi — o'sha maydon bo'sh (fail-open).
+   */
+  async telegramCardData(orderId: string): Promise<OrderTelegramCard | null> {
+    const id = idOrNull(orderId);
+    if (!id) return null;
+    const order = await this.orderRepo.findOne({
+      where: { id, isDeleted: false },
+    });
+    if (!order) return null;
+    const customerId = idOrNull(order.customer_id);
+    const marketId = idOrNull(order.market_id);
+    const [directory, customerRes, marketRes] = await Promise.all([
+      this.getRegionDirectory(),
+      customerId
+        ? this.lookup<unknown>(
+            'identity',
+            this.identityClient,
+            'identity.customer.find_by_ids',
+            { ids: [customerId] },
+          )
+        : null,
+      marketId
+        ? this.lookup<{ data?: { tg_group_show_customer_pii?: unknown } }>(
+            'identity',
+            this.identityClient,
+            'identity.user.find_by_id',
+            { id: marketId },
+          )
+        : null,
+    ]);
+    // Bayroq o'qilmasa (identity xatosi) — FAIL-CLOSED: niqoblanadi (o'chirgan
+    // marketning mijoz telefoni guruhga chiqib ketmasin).
+    const showPii = marketRes?.data
+      ? marketRes.data.tg_group_show_customer_pii !== false
+      : false;
+    const customer = firstOf(customerRes);
+    const districtId = idOrNull(order.district_id);
+    const phone = clip(customer?.phone_number, 40);
+    return {
+      id,
+      order_number: orderNumberOf(id),
+      market_id: marketId,
+      status: order.status,
+      total_price: Number(order.total_price ?? 0),
+      district_name: districtId
+        ? (directory?.districtName.get(districtId) ?? null)
+        : null,
+      operator: clip(order.operator, 120) || null,
+      show_customer_pii: showPii,
+      customer_name: showPii ? clip(customer?.name, 120) || null : null,
+      customer_phone: phone
+        ? showPii
+          ? phone
+          : maskPhoneForGroup(phone)
+        : null,
+    };
   }
 
   /**

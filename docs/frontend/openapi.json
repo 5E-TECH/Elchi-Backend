@@ -1391,6 +1391,54 @@
         ]
       }
     },
+    "/markets/{id}/telegram-group-pii": {
+      "patch": {
+        "operationId": "ApiGatewayController_updateMarketTelegramGroupPii",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Market user ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateMarketTelegramGroupPiiRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Market Telegram group PII policy updated"
+          },
+          "404": {
+            "description": "Market not found"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Telegram guruh kartasida mijoz ismi/telefoni (tg_group_show_customer_pii; sukut true, false — niqoblangan)",
+        "tags": [
+          "Identity"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "market"
+        ]
+      }
+    },
     "/markets/{id}/expense-proof": {
       "patch": {
         "operationId": "ApiGatewayController_updateMarketExpenseProof",
@@ -18593,6 +18641,18 @@
         },
         "required": [
           "cancelled_handover_qr_required"
+        ]
+      },
+      "UpdateMarketTelegramGroupPiiRequestDto": {
+        "type": "object",
+        "properties": {
+          "tg_group_show_customer_pii": {
+            "type": "boolean",
+            "example": false
+          }
+        },
+        "required": [
+          "tg_group_show_customer_pii"
         ]
       },
       "UpdateMarketExpenseProofRequestDto": {

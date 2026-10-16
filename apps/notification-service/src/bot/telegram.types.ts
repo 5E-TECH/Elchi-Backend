@@ -40,6 +40,8 @@ export interface TelegramMessage {
   photo?: TelegramPhotoSize[];
   document?: TelegramFile;
   video?: TelegramFile;
+  /** (ysBqD9Nx) guruhga qo'shilgan a'zolar (servis xabari, matnsiz). */
+  new_chat_members?: TelegramUser[];
 }
 
 export interface TelegramCallbackQuery {

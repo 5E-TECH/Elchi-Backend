@@ -5,6 +5,7 @@ import { OrderHolderType } from '../entities/order.entity';
 import { OrderTracking } from '../entities/order-tracking.entity';
 import { OrderCustodyEvent } from '../entities/order-custody-event.entity';
 import { Order_status, Roles } from '@app/common';
+import { OrderTelegramCardPublisher } from '../notification/order-telegram-card.publisher';
 import { OrderNotificationService } from '../notification/order-notification.service';
 
 /**
@@ -26,6 +27,10 @@ export class OrderCustodyService {
     // spec'lar custody'ni ikki repo bilan quradi — u holda bildirishnoma yo'q.
     @Optional()
     private readonly orderNotifications?: OrderNotificationService,
+    // (h9newLsd #5 / ysBqD9Nx #4) Telegram kartalari sinxroni (outbox).
+    // Ixtiyoriy: eski spec'lar custody'ni 3 argument bilan quradi.
+    @Optional()
+    private readonly telegramCards?: OrderTelegramCardPublisher,
   ) {}
 
   inferTrackingAction(
@@ -229,6 +234,14 @@ export class OrderCustodyService {
     // (OA16fdSq) Bildirishnoma — kuzatuv qatori bilan BITTA tranzaksiyada
     // (`repo.manager` — chaqiruvchining queryRunner menejeri), faqat outbox.
     await this.orderNotifications?.onStatusChange(
+      {
+        order_id: data.order_id,
+        from_status: data.from_status,
+        to_status: data.to_status,
+      },
+      repository?.manager,
+    );
+    await this.telegramCards?.onStatusChange(
       {
         order_id: data.order_id,
         from_status: data.from_status,

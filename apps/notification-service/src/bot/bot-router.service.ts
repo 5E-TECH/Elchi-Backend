@@ -72,7 +72,7 @@ export class BotRouterService implements OnModuleDestroy {
     private readonly activityLog: ActivityLogService,
     private readonly membership: MembershipHandler,
     start: StartHandler,
-    group: GroupHandler,
+    private readonly group: GroupHandler,
     market: MarketHandler,
     gate: CommandGateHandler,
     private readonly courier: CourierHandler,
@@ -184,6 +184,11 @@ export class BotRouterService implements OnModuleDestroy {
       if (await this.courier.handleMedia(ctx)) return;
       const media = checkIncomingMedia(message);
       if (!media.ok && media.reply) await ctx.reply(media.reply);
+      return;
+    }
+    // (ysBqD9Nx) guruhga yangi a'zo — market ogohlantiriladi (servis xabari).
+    if (!ctx.isPrivate && message.new_chat_members?.length) {
+      await this.group.onNewMembers(ctx, message.new_chat_members);
       return;
     }
     if (!ctx.text) return;

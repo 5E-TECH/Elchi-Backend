@@ -54,6 +54,7 @@ import {
   UpdateMarketAddOrderRequestDto,
   UpdateMarketCancelledHandoverQrRequestDto,
   UpdateMarketExpenseProofRequestDto,
+  UpdateMarketTelegramGroupPiiRequestDto,
   UpdateMarketExtraCostRequestDto,
   UpdateMarketOperatorPhoneRequestDto,
   UpdateUserStatusRequestDto,
@@ -1671,6 +1672,52 @@ export class ApiGatewayController {
           dto: {
             cancelled_handover_qr_required: dto.cancelled_handover_qr_required,
           },
+        },
+      )
+      .pipe(timeout(8000));
+  }
+
+  /**
+   * (ysBqD9Nx, EGA QARORI 2026-09-20) Market Telegram guruhi kartasida mijoz
+   * ismi/telefoni ko'rinadimi — kod o'zgartirmasdan market darajasida.
+   * Market faqat o'zinikini, admin/superadmin — istalganini.
+   */
+  @Patch('markets/:id/telegram-group-pii')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.MARKET)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary:
+      'Telegram guruh kartasida mijoz ismi/telefoni (tg_group_show_customer_pii; sukut true, false — niqoblangan)',
+  })
+  @ApiParam({ name: 'id', description: 'Market user ID' })
+  @ApiBody({ type: UpdateMarketTelegramGroupPiiRequestDto })
+  @ApiOkResponse({ description: 'Market Telegram group PII policy updated' })
+  @ApiNotFoundResponse({ description: 'Market not found' })
+  updateMarketTelegramGroupPii(
+    @Param('id') id: string,
+    @Body() dto: UpdateMarketTelegramGroupPiiRequestDto,
+    @Req() req: { user: JwtUser },
+  ) {
+    this.assertMarketIdParam(id);
+    const requesterRoles = (req.user.roles ?? []).map((role) =>
+      String(role).toLowerCase(),
+    );
+    if (
+      requesterRoles.includes(RoleEnum.MARKET) &&
+      String(req.user.sub) !== id
+    ) {
+      throw new ForbiddenException(
+        "Market faqat o'z Telegram guruhi sozlamasini o'zgartira oladi",
+      );
+    }
+    return this.identityClient
+      .send(
+        { cmd: 'identity.market.update' },
+        {
+          id,
+          dto: { tg_group_show_customer_pii: dto.tg_group_show_customer_pii },
+          requester: this.toRequester(req),
         },
       )
       .pipe(timeout(8000));

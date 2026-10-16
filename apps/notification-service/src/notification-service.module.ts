@@ -44,6 +44,9 @@ import { ExtraCostActions } from './bot/extra-cost/extra-cost.actions';
 import { PaymentAckActions } from './bot/finance/payment-ack.actions';
 import { DispatchDedupService } from './dedup/dispatch-dedup.service';
 import { TelegramOrderCard } from './entities/telegram-order-card.entity';
+import { TelegramChat } from './entities/telegram-chat.entity';
+import { OrderCardSyncService } from './bot/cards/order-card-sync.service';
+import { OrderCardSyncController } from './bot/cards/order-card-sync.controller';
 import { TelegramLinkToken } from './entities/telegram-link-token.entity';
 import { TelegramSession } from './entities/telegram-session.entity';
 import { TelegramBotAction } from './entities/telegram-bot-action.entity';
@@ -156,6 +159,8 @@ import { RecipientDirectoryService } from './recipients/recipient-directory.serv
       TelegramLinkToken,
       // (h9newLsd) chatdagi buyurtma kartalari (migratsiya 122).
       TelegramOrderCard,
+      // (ysBqD9Nx #5) umumlashtirilgan chat sxemasi (migratsiya 126).
+      TelegramChat,
     ]),
     // Push yetkazish bir partiyada 100 tagacha bildirishnomani parallel
     // yuboradi — 5 s lik standart javob muddati qisqa: muddat o'tsa outbox
@@ -175,6 +180,7 @@ import { RecipientDirectoryService } from './recipients/recipient-directory.serv
     NotificationTemplateController,
     AudienceSegmentController,
     BotController,
+    OrderCardSyncController,
   ],
   providers: [
     NotificationServiceService,
@@ -202,6 +208,7 @@ import { RecipientDirectoryService } from './recipients/recipient-directory.serv
     CourierReportScheduler,
     ExtraCostActions,
     PaymentAckActions,
+    OrderCardSyncService,
     {
       provide: BOT_ACTION_HANDLERS,
       useFactory: (

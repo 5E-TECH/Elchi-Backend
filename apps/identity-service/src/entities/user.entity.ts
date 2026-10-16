@@ -158,6 +158,15 @@ export class User extends BaseEntity {
   extra_cost_requires_approval: boolean;
 
   /**
+   * (ysBqD9Nx, EGA QARORI 2026-09-20) Market Telegram guruhi kartasida mijoz
+   * ismi va telefoni ko'rinadimi. Sukut TRUE (ega tanlovi: operator kabinetni
+   * ochmay qo'ng'iroq qilsin); FALSE — ism yo'q, telefon niqoblangan.
+   * Market o'zi yoki admin kodsiz o'chiradi (`PATCH /markets/:id/telegram-group-pii`).
+   */
+  @Column({ type: 'boolean', default: true })
+  tg_group_show_customer_pii: boolean;
+
+  /**
    * VRyloH62 — TRUE: har buyurtmada operator raqami majburiy
    * (`default_operator_phone` yo'q bo'lsa formadagi raqam shart, aks holda
    * POST /orders 400). Sukut FALSE — avvalgi xulq.

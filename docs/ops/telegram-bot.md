@@ -211,3 +211,38 @@ bazasiga o'zi yozmaydi, doira/holat mashinasi/isbot/extra-cost — serverda.
   `bot:dm_delivery_ratio:1d{type="finance.payment_received"}` (yetgan /
   navbatga qo'yilgan) va `bot:dm_reach_ratio:1d` (ulanmaganlar ham hisobda);
   alert `TelegramReceiptDeliveryLow` (< 80%) — `telegram-bot.rules.yml`.
+
+## 11. Market guruhi kartalari va kartalarni yangilash (ysBqD9Nx, h9newLsd #5)
+
+- Guruh — KO'RINISH joyi, qaror joyi emas: holatni o'zgartiruvchi har
+  callback ODAM bo'yicha (telegram_id → user → rol/market); chat bo'yicha
+  hech qachon. Guruh kartasida ✅/❌ tasdiq tugmasi YO'Q (Elchida bunday
+  bosqich yo'q) — faqat "🌐 Kabinetda ochish".
+- Buyurtma yaratilganda market `create` guruhlariga karta: raqam, holat,
+  TUMAN (to'liq manzil emas), summa, operator; mijoz ismi/telefoni — EGA
+  QARORI bo'yicha sukut ko'rinadi, market darajasida o'chiriladi
+  (`admins.tg_group_show_customer_pii`, `PATCH /markets/:id/telegram-group-pii`;
+  o'chiq yoki bayroq o'qilmasa — ism yo'q, telefon `+998 90 *** ** 12`).
+  Ma'lumot order-service `order.telegram_card` RPC'sidan (niqoblash o'sha
+  yerda — xom PII chiqmaydi).
+- Holat o'zgarishi: order-service kuzatuv qatori bilan BITTA tranzaksiyada
+  `notification.telegram.order_status` (outbox, fire-and-forget; HAR o'tish,
+  ichki holatlar ham) → notification-service kartalarni TAHRIRLAYDI (yangi
+  xabar emas): guruh kartasi — yangi ma'lumot bilan; kuryer kartasi —
+  kuryerning o'z JWT'si bilan (buyurtma endi unga ko'rinmasa — tugmalar
+  olinadi). Kechikish = outbox publisher sikli (soniyalar; TC: ≤ 1 daqiqa).
+  Buyurtma bo'yicha advisory lock — created→new ketma-ket hodisalari ikki
+  karta bermaydi. Guruhga yuborib bo'lmasa — faqat WARN (buyurtma oqimi
+  allaqachon commit bo'lgan).
+- Har guruh kartasi (yuborish/tahrirlash) audit izida:
+  `notification.tg_group_card` (buyurtma, guruh chat_id, market, vaqt).
+- `telegram_chats` (migratsiya 126) — umumlashtirilgan chat ↔ egasi jadvali
+  (chat_type, owner_type, scope, is_active, linked_at, linked_by);
+  `telegram_markets` yozuvlari ko'chirilgan va trigger orqali sinxron
+  (bot guruhdan chiqarilsa — `is_active=false`).
+- Guruhga yangi a'zo (odam) qo'shilsa — market egasiga
+  `telegram.group_member_joined` (in-app + Telegram DM) + audit
+  `notification.tg_group_member_joined`.
+- ⚠️ TASHKILIY QADAM: xodim ishdan bo'shaganda uni market Telegram
+  guruhidan CHIQARISH — guruh a'zoligi Elchi nazoratidan tashqarida
+  (keyin qo'shilgan odam eski xabarlarni ham o'qiy oladi).

@@ -1,4 +1,4 @@
-import { Controller } from '@nestjs/common';
+import { Controller, Optional } from '@nestjs/common';
 import {
   Ctx,
   MessagePattern,
@@ -22,6 +22,7 @@ import { OrderAnalyticsService } from './analytics/order-analytics.service';
 import { BranchTransferBatchService } from './transfer-batch/branch-transfer-batch.service';
 import { OrderSettlementService } from './settlement/order-settlement.service';
 import { OrderLifecycleService } from './lifecycle/order-lifecycle.service';
+import { OrderNotificationService } from './notification/order-notification.service';
 import type { PartlySellRequestItem } from './lifecycle/partly-sell-items';
 import {
   OrderCreatedVia,
@@ -99,6 +100,10 @@ export class OrderServiceController {
     private readonly lifecycleService: OrderLifecycleService,
     private readonly idempotencyService: IdempotencyService,
     private readonly aiPreview: AiPreviewService,
+    // (ysBqD9Nx) guruh kartasi ma'lumoti. Ixtiyoriy: eski spec'lar
+    // controllerni 8 argument bilan quradi.
+    @Optional()
+    private readonly orderNotifications?: OrderNotificationService,
   ) {}
 
   private executeAndAck<T>(
@@ -315,6 +320,26 @@ export class OrderServiceController {
     return this.executeAndAck(context, () =>
       this.orderService.findById(data.id, data.requester ?? null),
     );
+  }
+
+  /**
+   * (ysBqD9Nx #3) Market Telegram guruhi kartasi ma'lumoti — ICHKI (faqat
+   * notification-service karta sinxroni). Mijoz PII market bayrog'iga qarab
+   * (o'chiq — ism yo'q, telefon niqoblangan); to'liq manzil yo'q.
+   */
+  @MessagePattern({ cmd: 'order.telegram_card' })
+  telegramCard(
+    @Payload() data: { order_id?: string },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, async () => ({
+      statusCode: 200,
+      message: 'success',
+      data:
+        (await this.orderNotifications?.telegramCardData(
+          String(data?.order_id ?? ''),
+        )) ?? null,
+    }));
   }
 
   /** Buyurtma xulosalari id ro'yxati bo'yicha (integratsiya posilkalari, tokhPLMP). */

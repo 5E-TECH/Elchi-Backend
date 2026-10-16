@@ -23,6 +23,19 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-10-17 — Market Telegram guruhi kartalari (ysBqD9Nx, h9newLsd)
+
+- [2026-10-17] 🆕 [identity] — `PATCH /markets/:id/telegram-group-pii`
+  `{ tg_group_show_customer_pii: boolean }` (SUPERADMIN, ADMIN, MARKET —
+  market faqat o'zinikini, boshqasi 403). Market obyektida yangi maydon
+  `tg_group_show_customer_pii` (sukut `true` — ega qarori). 🔧 Market
+  sozlamalari sahifasida "Telegram guruhida mijoz ismi va telefoni
+  ko'rinsin" kaliti (o'chirilsa — ism yo'q, telefon niqoblangan).
+- [2026-10-17] 🟢 [notification] — yangi tur `telegram.group_member_joined`
+  (marketga: guruhga yangi a'zo qo'shildi; o'chirib bo'lmaydi). Activity
+  log'da yangi amallar: `notification.tg_group_card`,
+  `notification.tg_group_member_joined` (registry'da yorliq bor).
+
 ### 2026-10-17 — Bot bildirishnoma yadrosi va moliya xabarlari (rzGKtE9N, TgYRqaTk, VICfJuoi, 2crjWf7v)
 
 - [2026-10-17] 🆕 [finance] — `POST /finance/cashbox/payment/courier/:id/ack`

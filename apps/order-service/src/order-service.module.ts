@@ -10,6 +10,7 @@ import { OrderLookupService } from './lookup/order-lookup.service';
 import { OrderLifecycleService } from './lifecycle/order-lifecycle.service';
 import { ExtraCostAutoApproveScheduler } from './lifecycle/extra-cost-auto-approve.scheduler';
 import { OrderCustodyService } from './custody/order-custody.service';
+import { OrderTelegramCardPublisher } from './notification/order-telegram-card.publisher';
 import { OrderNotificationService } from './notification/order-notification.service';
 import { ProductResolverService } from './ai/product-resolver.service';
 import { AiPreviewService } from './ai/ai-preview.service';
@@ -88,7 +89,13 @@ import { CustomerSegmentController } from './segment/customer-segment.controller
       // kutadi (10 s gacha), notification-service yiqilsa esa har hodisa
       // timeout'gacha osilardi — ketma-ket publisher'da ortidagi PUL
       // hodisalari kechikardi. Pul/holat hodisalari bu ro'yxatda YO'Q.
-      options: { fireAndForgetPatterns: ['notification.dispatch'] },
+      // (h9newLsd / ysBqD9Nx) Telegram karta sinxroni ham — javob kutilmaydi.
+      options: {
+        fireAndForgetPatterns: [
+          'notification.dispatch',
+          'notification.telegram.order_status',
+        ],
+      },
     }),
     ActivityLogModule.forService('order-service'),
     TypeOrmModule.forFeature([
@@ -120,6 +127,7 @@ import { CustomerSegmentController } from './segment/customer-segment.controller
     ExtraCostAutoApproveScheduler,
     OrderCustodyService,
     OrderNotificationService,
+    OrderTelegramCardPublisher,
     ProductResolverService,
     AiPreviewService,
     { provide: PRODUCT_DISAMBIGUATOR, useClass: RmqProductDisambiguator },

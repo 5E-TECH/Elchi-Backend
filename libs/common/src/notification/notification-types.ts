@@ -486,6 +486,22 @@ export const NOTIFICATION_TYPES: readonly NotificationTypeDefinition[] =
       default_audience: [Roles.MARKET],
       user_can_mute: true,
     }),
+    // (ysBqD9Nx) Market guruhiga yangi a'zo — guruhda buyurtma kartalari
+    // (mijoz PII bilan) ko'rinadi: egasi bilishi shart (o'chirib bo'lmaydi).
+    def({
+      key: 'telegram.group_member_joined',
+      category: NotificationCategory.SYSTEM,
+      priority: NotificationPriority.HIGH,
+      group_key_pattern: null,
+      label_uz: "Telegram guruhiga yangi a'zo qo'shildi",
+      default_audience: [Roles.MARKET],
+      user_can_mute: false,
+      default_channels: [
+        NotificationChannel.IN_APP,
+        NotificationChannel.REALTIME,
+        NotificationChannel.TELEGRAM,
+      ],
+    }),
     // (9HIaV80X #1) Bot guruhdan chiqarildi / bloklandi — kanal nofaol
     // (`telegram_markets.is_active = false`), admin qayta ulashi kerak.
     def({

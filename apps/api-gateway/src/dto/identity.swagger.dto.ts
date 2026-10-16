@@ -459,6 +459,16 @@ export class UpdateMarketCancelledHandoverQrRequestDto {
   cancelled_handover_qr_required!: boolean;
 }
 
+/**
+ * (ysBqD9Nx, ega qarori) Market Telegram guruhi kartasida mijoz ismi/telefoni.
+ * Sukut TRUE; FALSE — ism yo'q, telefon niqoblangan (+998 90 *** ** 12).
+ */
+export class UpdateMarketTelegramGroupPiiRequestDto {
+  @ApiProperty({ example: false })
+  @IsBoolean()
+  tg_group_show_customer_pii!: boolean;
+}
+
 export class UpdateMarketExpenseProofRequestDto {
   @ApiProperty({
     isArray: true,

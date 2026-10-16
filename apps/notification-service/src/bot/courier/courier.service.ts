@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
+import { escapeTelegramHtml } from '@app/common';
 import { TelegramOrderCard } from '../../entities/telegram-order-card.entity';
 import { BotActionsService } from '../bot-actions.service';
 import { BotGatewayClient } from '../bot-gateway.client';
@@ -21,6 +22,10 @@ import {
 } from './courier-cards';
 
 export const COURIER_PAGE_SIZE = 10;
+
+/** (h9newLsd #5) buyurtma boshqa kuryerga o'tdi / ko'rinmaydi. */
+export const ORDER_NOT_YOURS_NOTE =
+  'ℹ️ Bu buyurtma endi sizda emas — tugmalar olib tashlandi.';
 /** Kuryerning "bugungi ishi" — yo'lda, kutilmoqda, mijoz kutilmoqda. */
 export const COURIER_ACTIVE_STATUSES = [
   'waiting',
@@ -90,7 +95,8 @@ export class CourierService {
     page: number,
   ): Promise<{ orders: CourierOrderView[]; total: number; hasNext: boolean }> {
     const query = new URLSearchParams();
-    for (const status of COURIER_ACTIVE_STATUSES) query.append('status', status);
+    for (const status of COURIER_ACTIVE_STATUSES)
+      query.append('status', status);
     query.set('page', String(Math.max(1, page)));
     query.set('limit', String(COURIER_PAGE_SIZE));
     const res = await this.gateway.request<Record<string, unknown>>(
@@ -136,7 +142,7 @@ export class CourierService {
 
   /** Karta tugmalari: shu holatdan mumkin bo'lgan amallar + kabinet havolasi. */
   async cardKeyboard(
-    ctx: BotContext,
+    ctx: Pick<BotContext, 'chatId'>,
     order: CourierOrderView,
     actorUserId: string,
   ): Promise<InlineKeyboardButton[][]> {
@@ -211,7 +217,9 @@ export class CourierService {
     if (!card) return;
     const order = await this.getOrder(telegramId, orderId).catch(() => null);
     if (!order) return;
-    const keyboard = note ? [] : await this.cardKeyboard(ctx, order, actorUserId);
+    const keyboard = note
+      ? []
+      : await this.cardKeyboard(ctx, order, actorUserId);
     await this.transport.editMessage(ctx.chatId, card.message_id, {
       text: courierCardText(order, note),
       parse_mode: 'HTML',
@@ -224,6 +232,63 @@ export class CourierService {
   }
 
   /**
+   * (h9newLsd #5) Holat PANELDA / menejer tomonidan o'zgardi — kuryer
+   * kartasi (shaxsiy chat: chat_id = kuryerning telegram id si) kuryerning
+   * O'Z JWT'si bilan qayta o'qiladi va TAHRIRLANADI (yangi xabar emas).
+   * Buyurtma endi unga ko'rinmasa (boshqa kuryerga o'tgan — 403/404) —
+   * tugmalar olinadi va izoh qo'yiladi. Tarmoq xatosi — tegilmaydi.
+   */
+  async refreshCardForChat(
+    chatId: string,
+    orderId: string,
+    actorUserId: string | null,
+  ): Promise<'edited' | 'revoked' | 'skipped'> {
+    const card = await this.cards.findOne({
+      where: { order_id: orderId, chat_id: chatId },
+    });
+    if (!card || !actorUserId) return 'skipped';
+    let res: { status: number; body: unknown };
+    try {
+      res = await this.gateway.request<unknown>(
+        chatId,
+        'GET',
+        `/orders/${encodeURIComponent(orderId)}`,
+      );
+    } catch {
+      return 'skipped';
+    }
+    if (res.status === 403 || res.status === 404) {
+      await this.transport.editMessage(chatId, card.message_id, {
+        text: `📦 <b>#${escapeTelegramHtml(orderId)}</b>\n${ORDER_NOT_YOURS_NOTE}`,
+        parse_mode: 'HTML',
+        reply_markup: { inline_keyboard: [] },
+      });
+      await this.cards.update(
+        { order_id: orderId, chat_id: chatId },
+        { status: null, updated_at: new Date() },
+      );
+      return 'revoked';
+    }
+    if (res.status >= 400) return 'skipped';
+    const body = res.body as { data?: unknown } | null;
+    const order = toCourierOrderView(
+      body && 'status' in body ? body : body?.data,
+    );
+    if (!order) return 'skipped';
+    const keyboard = await this.cardKeyboard({ chatId }, order, actorUserId);
+    await this.transport.editMessage(chatId, card.message_id, {
+      text: courierCardText(order),
+      parse_mode: 'HTML',
+      reply_markup: { inline_keyboard: keyboard },
+    });
+    await this.cards.update(
+      { order_id: orderId, chat_id: chatId },
+      { status: order.status, updated_at: new Date() },
+    );
+    return 'edited';
+  }
+
+  /**
    * Amal — mavjud endpoint. Javob odamga tushunarli matnga aylanadi:
    * 202 → "Market tasdig'i kutilmoqda", isbot talabi → isbot rejimi, holat
    * rad etilsa → "Bu holatda bu amal mumkin emas".
@@ -232,12 +297,17 @@ export class CourierService {
     telegramId: string,
     op: CourierOp,
     orderId: string,
-    options: { reason?: string; proofFileKeys?: string[]; idempotencyKey?: string },
+    options: {
+      reason?: string;
+      proofFileKeys?: string[];
+      idempotencyKey?: string;
+    },
   ): Promise<CourierOpOutcome> {
     const body: Record<string, unknown> = {};
     if (op === 'cancel' && options.reason) body.reason = options.reason;
     if (op === 'cnd') body.reason = options.reason;
-    if (options.proofFileKeys?.length) body.proofFileKeys = options.proofFileKeys;
+    if (options.proofFileKeys?.length)
+      body.proofFileKeys = options.proofFileKeys;
     let res: { status: number; body: unknown };
     try {
       res = await this.gateway.request(
@@ -246,7 +316,8 @@ export class CourierService {
         OP_PATH[op](encodeURIComponent(orderId)),
         body,
         {
-          timeoutMs: op === 'sell' || op === 'cancel' ? PROOF_TIMEOUT_MS : 10_000,
+          timeoutMs:
+            op === 'sell' || op === 'cancel' ? PROOF_TIMEOUT_MS : 10_000,
           idempotencyKey: options.idempotencyKey,
         },
       );
@@ -256,7 +327,8 @@ export class CourierService {
       );
       return {
         kind: 'error',
-        message: "❌ Amal bajarilmadi (aloqa xatosi) — birozdan so'ng qayta urinib ko'ring.",
+        message:
+          "❌ Amal bajarilmadi (aloqa xatosi) — birozdan so'ng qayta urinib ko'ring.",
       };
     }
     const text = messageOf(res.body);
@@ -278,7 +350,8 @@ export class CourierService {
     if (/isbot fayl topilmadi/i.test(text)) {
       return {
         kind: 'proof',
-        message: '📷 Isbot fayli tasdiqlanmadi — rasm yoki videoni qayta yuboring.',
+        message:
+          '📷 Isbot fayli tasdiqlanmadi — rasm yoki videoni qayta yuboring.',
       };
     }
     if (res.status === 401) {
@@ -288,7 +361,10 @@ export class CourierService {
       };
     }
     if (res.status === 403 || /not assigned/i.test(text)) {
-      return { kind: 'denied', message: '🔒 Bu buyurtma sizga biriktirilmagan.' };
+      return {
+        kind: 'denied',
+        message: '🔒 Bu buyurtma sizga biriktirilmagan.',
+      };
     }
     if (
       res.status === 400 &&

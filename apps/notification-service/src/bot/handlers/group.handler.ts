@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { NotificationServiceService } from '../../notification-service.service';
 import { BotRateLimiterService } from '../bot-rate-limiter.service';
 import type { BotContext, BotMessageHandler } from './bot-context';
+import type { TelegramUser } from '../telegram.types';
 import {
   HELP_COMMAND_RE,
   LINK_BLOCKED_TEXT,
@@ -63,5 +64,21 @@ export class GroupHandler implements BotMessageHandler {
       return true;
     }
     return false;
+  }
+
+  /**
+   * (ysBqD9Nx DIQQAT) Guruh a'zoligi Elchi nazoratidan tashqarida: yangi
+   * a'zo (odam) qo'shilsa — guruh egasi marketga ogohlantirish. Botning o'zi
+   * (my_chat_member oqimi) va boshqa botlar hisobga olinmaydi. Javob
+   * guruhga YOZILMAYDI.
+   */
+  async onNewMembers(ctx: BotContext, members: TelegramUser[]): Promise<void> {
+    const humans = members.filter((member) => member && !member.is_bot);
+    if (!humans.length) return;
+    await this.notifications.warnGroupNewMembers(
+      ctx.chatId,
+      ctx.update.message?.chat?.title ?? null,
+      humans,
+    );
   }
 }

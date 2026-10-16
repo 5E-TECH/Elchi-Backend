@@ -418,6 +418,80 @@ export class NotificationServiceService {
     );
   }
 
+  /**
+   * (ysBqD9Nx DIQQAT) Market guruhiga yangi a'zo qo'shildi — guruh egasi
+   * market(lar)ga in-app + Telegram DM ogohlantirish: guruhda buyurtma
+   * kartalari (ega qarori bo'yicha mijoz ma'lumoti bilan) ko'rinadi. Audit
+   * izi ham. Guruh hech bir marketga ulanmagan bo'lsa — jim.
+   */
+  async warnGroupNewMembers(
+    groupId: string,
+    title: string | null,
+    members: Array<{
+      id?: number | string;
+      first_name?: string;
+      username?: string;
+    }>,
+  ): Promise<{ markets: number }> {
+    const rows = await this.tgMarketRepo.find({
+      where: { group_id: String(groupId), is_active: true, isDeleted: false },
+    });
+    const markets = [...new Set(rows.map((row) => String(row.market_id)))];
+    if (!markets.length || !members.length) return { markets: 0 };
+    const names = members
+      .slice(0, 5)
+      .map((member) =>
+        String(
+          member.first_name ||
+            (member.username ? `@${member.username}` : 'Foydalanuvchi'),
+        )
+          .replace(/\s+/g, ' ')
+          .trim()
+          .slice(0, 64),
+      )
+      .join(', ');
+    const group =
+      (title ?? '').replace(/\s+/g, ' ').trim().slice(0, 80) || 'Telegram';
+    await this.activityLog
+      .log({
+        entity_type: 'TelegramChat',
+        entity_id: String(groupId),
+        action: 'notification.tg_group_member_joined',
+        metadata: {
+          market_ids: markets,
+          members: members
+            .slice(0, 20)
+            .map((member) => String(member.id ?? '')),
+        },
+      })
+      .catch(() => undefined);
+    if (!this.moduleRef) return { markets: markets.length };
+    try {
+      const inbox = this.moduleRef.get(NotificationInboxService, {
+        strict: false,
+      });
+      await inbox.dispatch({
+        type: 'telegram.group_member_joined',
+        category: NotificationCategory.SYSTEM,
+        priority: NotificationPriority.HIGH,
+        title: "👥 Telegram guruhingizga yangi a'zo qo'shildi",
+        body: `«${group}» guruhiga qo'shildi: ${names}${members.length > 5 ? ` va yana ${members.length - 5} kishi` : ''}. Guruhda buyurtma kartalari (mijoz ma'lumotlari bilan) ko'rinadi — tanimasangiz, guruhdan chiqaring. Ishdan ketgan xodimni ham guruhdan chiqarishni unutmang.`,
+        recipient_ids: markets,
+        channels: [
+          NotificationChannel.IN_APP,
+          NotificationChannel.REALTIME,
+          NotificationChannel.TELEGRAM,
+        ],
+        data: { chat_id: String(groupId), members: members.length },
+      } as never);
+    } catch (error) {
+      this.logger.warn(
+        `telegram.group_member_joined xabari yuborilmadi: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    return { markets: markets.length };
+  }
+
   private async notifyMarketGroupConnected(
     marketId: string,
     groupType: Group_type,

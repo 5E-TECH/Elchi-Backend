@@ -69,6 +69,11 @@ export class UpdateMarketDto {
   @IsBoolean()
   extra_cost_requires_approval?: boolean;
 
+  /** (ysBqD9Nx) guruh kartasida mijoz PII: market o'zi (gateway — o'z id'si) yoki admin. */
+  @IsOptional()
+  @IsBoolean()
+  tg_group_show_customer_pii?: boolean;
+
   /** VRyloH62: market o'zi (gateway — faqat o'z id'si) yoki admin. */
   @IsOptional()
   @IsBoolean()
