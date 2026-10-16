@@ -41,6 +41,16 @@ const LIMITS = {
 export const isGsm7 = (text: string): boolean =>
   Array.from(text).every((ch) => BASIC.has(ch) || EXTENSION.has(ch));
 
+/**
+ * Matnni UCS-2 ga o'tkazayotgan belgilar (takrorsiz, uchragan tartibda) —
+ * muharrir "qaysi belgi narxni oshirdi" ni ko'rsatishi uchun (ё, ‘, emoji).
+ */
+export const nonGsm7Chars = (text: string): string[] => [
+  ...new Set(
+    Array.from(text).filter((ch) => !BASIC.has(ch) && !EXTENSION.has(ch)),
+  ),
+];
+
 /** Har belgining "og'irligi" — bo'linmas birliklar. */
 const widths = (text: string, encoding: SmsEncoding): number[] =>
   Array.from(text).map((ch) =>

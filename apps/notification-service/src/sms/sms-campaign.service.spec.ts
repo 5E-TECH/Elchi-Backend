@@ -302,6 +302,48 @@ describe('SmsCampaignService', () => {
     });
   });
 
+  it('(nkhURiKX #8) PII minimumi: xom matnda ham, eski DB shablonida ham mijoz ismi/manzili 400 — navbatga hech narsa', async () => {
+    grant('+998901111111');
+    const raw = await make()
+      .send(
+        {
+          text: 'Hurmatli {{customer_name}}, chegirma 20%',
+          vars: { customer_name: 'Ali' },
+          segment: { phones: ['901111111'] },
+        },
+        'pii-raw',
+        '1',
+      )
+      .catch((e: { error?: unknown }) => e.error);
+    expect(raw).toMatchObject({
+      statusCode: 400,
+      reason: 'pii_forbidden',
+      pii_vars: ['customer_name'],
+    });
+
+    // Validatsiyadan oldin (yoki to'g'ridan-to'g'ri DB ga) yozilgan reklama shabloni.
+    templates.resolve.mockResolvedValue({
+      code: 'promo.old',
+      message_class: 'promo',
+      text: '{{client_name}}, sizga chegirma',
+      required_vars: ['client_name'],
+    });
+    const stored = await make()
+      .preview({
+        template_code: 'promo.old',
+        vars: { client_name: 'Ali' },
+        segment: { phones: ['901111111'] },
+      })
+      .catch((e: { error?: unknown }) => e.error);
+    expect(stored).toMatchObject({
+      statusCode: 400,
+      reason: 'pii_forbidden',
+      pii_vars: ['client_name'],
+    });
+    expect(repo.save).not.toHaveBeenCalled();
+    expect(outbox.enqueue).not.toHaveBeenCalled();
+  });
+
   it('a leftover {{placeholder}} blocks sending', async () => {
     await expect(
       make().preview({

@@ -121,6 +121,37 @@ export class UpsertSmsTemplateDto {
   is_active?: boolean;
 }
 
+/** Muharrir hisoblagichi (nkhURiKX #6) — hech narsa yozilmaydi. */
+export class PreviewSmsTemplateDto {
+  @ApiProperty({
+    example: 'Заказ #{{order_number}} доставлен',
+    description: `Muharrirdagi matn (bo'sh satr ham mumkin — 0 bo'lak)`,
+  })
+  @IsString()
+  @MaxLength(1000)
+  text!: string;
+
+  @ApiPropertyOptional({ enum: MESSAGE_CLASSES, example: 'transactional' })
+  @IsOptional()
+  @IsIn(MESSAGE_CLASSES)
+  message_class?: (typeof MESSAGE_CLASSES)[number];
+
+  @ApiPropertyOptional({ example: ['order_number'] })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(20)
+  @IsString({ each: true })
+  required_vars?: string[];
+
+  @ApiPropertyOptional({
+    example: { order_number: 'EL-1042' },
+    description: `Namuna qiymatlar — berilsa to'ldirilgan matn sanaladi (aniq narx)`,
+  })
+  @IsOptional()
+  @IsObject()
+  vars?: Record<string, string>;
+}
+
 export class ApproveSmsTemplateDto {
   @ApiProperty({
     example: '12345',

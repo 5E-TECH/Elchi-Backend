@@ -34,6 +34,7 @@ import { RolesGuard } from './auth/roles.guard';
 import {
   ApproveSmsTemplateDto,
   GrantSmsConsentDto,
+  PreviewSmsTemplateDto,
   RevokeSmsConsentDto,
   SmsCampaignDto,
   SmsReportQueryDto,
@@ -143,6 +144,17 @@ export class SmsGatewayController {
   @ApiBody({ type: UpsertSmsTemplateDto })
   upsertTemplate(@Body() dto: UpsertSmsTemplateDto) {
     return this.send('notification.sms.templates.upsert', { ...dto });
+  }
+
+  @Post('templates/preview')
+  @HttpCode(200)
+  @ApiOperation({
+    summary:
+      "Muharrir hisoblagichi: kodlash (GSM-7/UCS-2), bo'laklar, UCS-2 ga o'tkazgan belgilar, taxminiy narx, PII (hech narsa yozilmaydi)",
+  })
+  @ApiBody({ type: PreviewSmsTemplateDto })
+  previewTemplate(@Body() dto: PreviewSmsTemplateDto) {
+    return this.send('notification.sms.templates.preview', { ...dto });
   }
 
   @Patch('templates/:id/approve')

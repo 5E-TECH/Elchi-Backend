@@ -57,6 +57,54 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
   🔧 Buyurtma formasidagi mahsulot tanlagichi `?search=` ni debounce (300ms)
   bilan serverga yuborsin va yetarli `limit` bersin (klient filtri o'rniga);
   0 mahsulotda "Topilmadi".
+### 2026-10-16 — N3: SMS shablon muharriri hisoblagichi va PII minimumi (nkhURiKX)
+
+- [2026-10-16] 🆕 [notification] — `POST /notifications/sms/templates/preview`
+  (admin/superadmin) — muharrir hisoblagichi; HECH NARSA saqlanmaydi va
+  yuborilmaydi. Body:
+  `{ text: string (≤1000, bo'sh satr ham mumkin), message_class?: 'transactional' | 'promo' | 'security' (sukut transactional), required_vars?: string[], vars?: Record<string, string> }`.
+  `vars` — namuna qiymatlar: berilsa to'ldirilgan matn sanaladi (aniq narx).
+  Javob (200):
+  `{ message_class, encoding: 'GSM-7' | 'UCS-2', units, parts, per_part, non_gsm_chars: string[], opt_out_included: boolean, vars: string[], pii_vars: string[], missing_vars: string[], rendered: string | null, currency: 'UZS', tariff: number | null, estimated_cost: number | null }`.
+  Bo'lak qoidasi — hisob-kitobdagi AYNI `countSmsSegments` (GSM-7 160/153,
+  UCS-2 70/67, kengaytma jadvali belgilari, masalan `{ } [ ] €` — 2 septet).
+  `non_gsm_chars` — matnni UCS-2 ga o'tkazgan belgilar (masalan `ё`, `‘`,
+  emoji). `promo` da bekor qilish havolasi ham sanaladi
+  (`opt_out_included: true`, kampaniya prognozi bilan bir xil).
+  `estimated_cost` = `parts × tariff` (BITTA xabar uchun, so'm); tarif
+  sozlanmagan bo'lsa `null` (0 emas). 400 — noma'lum `message_class` yoki
+  1000 dan uzun matn.
+  → 🔧 Frontend (`SmsTemplatesTab` muharriri, kartaning 6-bandi): har bosishda
+  mahalliy `smsSegments.ts` / `SmsMeter` (D5sxjGBY) qoladi; yozish to'xtaganda
+  (debounce ~300 ms) va "Saqlash" oldidan shu endpointni chaqirib
+  "UCS-2 · 2 bo'lak · ~190 so'm" (`encoding · parts · estimated_cost`),
+  `non_gsm_chars` ro'yxati ("Bu belgilar narxni oshirdi: ё ‘"), `pii_vars`
+  ogohlantirishi (saqlash 400 bo'ladi) va `missing_vars` ko'rsatilsin.
+  Kirillga o'tganda raqam darhol o'zgarsin (TC11). Vitest vektorlari backend
+  bilan bir xil: 160 lotin → 1, 161 → 2, 70 kirill → 1 (UCS-2), lotin + `ё` → UCS-2.
+- [2026-10-16] ✏️ [notification] — PII minimumi kengaydi (TC13):
+  `POST /notifications/sms/templates` va `PUT /notifications/templates`
+  (`channel` = null yoki `sms`) endi naqsh bo'yicha ham rad etadi:
+  `customer_`/`client_`/`receiver_`/`recipient_`/`buyer_`/`mijoz_` +
+  `name`/`fio`/`ism`/`familiya`/`address`/`manzil`; `fio`, `ism`,
+  `familiya`, `manzil`; mahsulot ro'yxati — `products`, `product_list`,
+  `product_names`, `items`, `order_items`, `goods`, `mahsulotlar`,
+  `tovarlar` (+ `_list`/`_names`/`_text`/`_nomlari`/`_royxati`).
+  `market_name`, `branch_name`, `order_number`, `amount`, `status` —
+  ruxsat. 400 xabarida taqiqlangan o'zgaruvchilar ro'yxati bor.
+  → 🔧 Frontend: preview `pii_vars` ni saqlashdan OLDIN ko'rsating; 400
+  matnini toast'da chiqaring.
+- [2026-10-16] ✏️ [notification] — `POST /notifications/sms/campaigns` va
+  `/campaigns/preview`: xom matnda yoki (eski) shablonda PII o'zgaruvchi
+  bo'lsa → 400 `{ reason: 'pii_forbidden', pii_vars: [...] }` (navbatga hech
+  narsa tushmaydi).
+  → 🔧 Frontend (`CampaignPage`): `reason === 'pii_forbidden'` bo'lsa
+  `pii_vars` ni ko'rsating.
+- [2026-10-16] 🟢 [notification] — `GET /notifications/sms/templates`
+  (o'zgarmagan): shablon matni o'zgartirilsa `provider_template_id` `null`
+  bo'ladi va `needs_provider_approval: true` keladi.
+  → 🔧 Frontend: ro'yxatda "Operator tasdig'i kerak" belgisi (TC12); tasdiq
+  id si `PATCH /notifications/sms/templates/:id/approve` bilan yoziladi.
 
 ### 2026-10-15 — R1: dashboard reyting davri ("Bugun" → oxirgi 30 kun) va bot manbasi (9zbSDkUI, Celz3rKJ)
 

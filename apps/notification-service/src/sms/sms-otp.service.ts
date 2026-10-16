@@ -44,9 +44,12 @@ export class SmsOtpService {
       });
     }
     const template = await this.templates.resolve('otp.login', input.lang);
-    const text = renderSmsTemplate(template?.text ?? DEFAULT_OTP_TEXT, {
-      code: input.code,
-    });
+    // Fail-closed: shablonning required_vars i ham tekshiriladi (nkhURiKX #3).
+    const text = renderSmsTemplate(
+      template?.text ?? DEFAULT_OTP_TEXT,
+      { code: input.code },
+      template?.required_vars ?? [],
+    );
     try {
       const result = await this.outbox.enqueue([
         {

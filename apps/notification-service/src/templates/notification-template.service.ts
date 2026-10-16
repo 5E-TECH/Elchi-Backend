@@ -7,6 +7,7 @@ import { successRes } from '../../../../libs/common/helpers/response';
 import {
   SMS_FORBIDDEN_VARS,
   SmsTemplateError,
+  piiVars,
   renderSmsTemplate,
   templateVars,
 } from '../sms/sms-template.service';
@@ -274,9 +275,8 @@ export class NotificationTemplateService {
     // (inbox qatori matni = SMS matni) — shuning uchun umumiy va 'sms'
     // shablonlarida mijoz ismi/manzili/mahsulotlari TAQIQLANGAN.
     if (channel === null || channel === 'sms') {
-      const forbidden = required.filter((key) =>
-        (SMS_FORBIDDEN_VARS as readonly string[]).includes(key.toLowerCase()),
-      );
+      // (nkhURiKX #8) SMS shablonlari bilan AYNI qoida (naqshlar ham).
+      const forbidden = piiVars(required);
       if (forbidden.length)
         throw bad(
           `SMS'ga ketadigan shablonda shaxsiy ma'lumot taqiqlangan (PII): ${forbidden.join(', ')}`,

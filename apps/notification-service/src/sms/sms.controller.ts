@@ -21,8 +21,14 @@ import { SmsOutboxService, smsReportRange } from './sms-outbox.service';
 import { SmsProviderAccountsService } from './sms-provider-accounts.service';
 import type { UpsertAccountInput } from './sms-provider-accounts.service';
 import { SmsProviderRegistry } from './sms-provider.registry';
-import { SmsTemplateService } from './sms-template.service';
-import type { UpsertTemplateInput } from './sms-template.service';
+import { SmsTemplateService, previewSmsText } from './sms-template.service';
+import type {
+  SmsTextPreviewInput,
+  UpsertTemplateInput,
+} from './sms-template.service';
+
+/** Reklama prognozida bekor qilish havolasi uchun namuna raqam (kampaniya bilan bir xil). */
+const PREVIEW_PHONE = '+998900000000';
 
 /** Oddiy validatsiya xatosi (Error) → 400; RpcException o'zgarishsiz. */
 const asRpc = async <T>(work: () => Promise<T> | T): Promise<T> => {
@@ -152,6 +158,24 @@ export class SmsController {
     @Ctx() context: RmqContext,
   ) {
     return this.run(context, () => this.templates.upsert(data));
+  }
+
+  /**
+   * Muharrir hisoblagichi (nkhURiKX #6): kodlash, bo'laklar, UCS-2 ga
+   * o'tkazgan belgilar, taxminiy narx, PII/yetishmagan o'zgaruvchilar.
+   * Hech narsa yozilmaydi va yuborilmaydi.
+   */
+  @MessagePattern({ cmd: 'notification.sms.templates.preview' })
+  previewTemplate(
+    @Payload() data: SmsTextPreviewInput,
+    @Ctx() context: RmqContext,
+  ) {
+    return this.run(context, () =>
+      previewSmsText(data ?? {}, {
+        tariff: (messageClass) => this.config.tariff(messageClass),
+        appendOptOut: (text) => this.consent.appendOptOut(text, PREVIEW_PHONE),
+      }),
+    );
   }
 
   @MessagePattern({ cmd: 'notification.sms.templates.approve' })

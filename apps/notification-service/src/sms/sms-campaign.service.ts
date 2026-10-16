@@ -13,8 +13,10 @@ import { normalizeSmsPhone } from './sms-phone.util';
 import { countSmsSegments } from './sms-segments.util';
 import {
   SmsTemplateService,
+  piiVars,
   renderSmsTemplate,
   SmsTemplateError,
+  templateVars,
 } from './sms-template.service';
 import type { SmsMessageClass } from './sms.port';
 
@@ -61,6 +63,21 @@ const rpcError = (
  */
 const CAMPAIGN_PROMO_ONLY =
   "Kampaniya faqat reklama (message_class='promo') — rozilik va 18:00–09:00 taqiqi bilan. Xizmat (transactional) va OTP (security) SMS faqat tizim hodisalaridan (buyurtma holati, OTP) avtomatik ketadi.";
+
+/**
+ * (nkhURiKX #8) PII minimumi: mijoz ismi/manzili/mahsulot ro'yxati SMS
+ * o'zgaruvchisi bo'la olmaydi — xom matnda ham, shablonda ham (eski qator).
+ */
+const assertNoPii = (keys: readonly string[]) => {
+  const pii = piiVars(keys);
+  if (pii.length) {
+    throw rpcError(
+      400,
+      `SMS'da shaxsiy ma'lumot taqiqlangan (PII minimumi): ${pii.join(', ')}`,
+      { reason: 'pii_forbidden', pii_vars: pii },
+    );
+  }
+};
 
 const promoOnly = (requested: unknown) =>
   rpcError(400, CAMPAIGN_PROMO_ONLY, {
@@ -294,6 +311,10 @@ export class SmsCampaignService {
       // Tranzaksion/OTP shabloni kampaniyada — darvozalarni chetlab o'tish yo'li.
       if (template.message_class !== 'promo')
         throw promoOnly(template.message_class);
+      assertNoPii([
+        ...(template.required_vars ?? []),
+        ...templateVars(template.text),
+      ]);
       try {
         return {
           messageClass,
@@ -312,14 +333,17 @@ export class SmsCampaignService {
     }
     const text = String(input.text ?? '').trim();
     if (!text) throw rpcError(400, "Xabar matni bo'sh");
+    let rendered: string;
     try {
       // Matnda {{var}} qolsa — to'ldirilmagan, yuborilmaydi.
-      return { messageClass, text: renderSmsTemplate(text, input.vars ?? {}) };
+      rendered = renderSmsTemplate(text, input.vars ?? {});
     } catch (error) {
       if (error instanceof SmsTemplateError)
         throw rpcError(400, error.message, { missing: error.missing });
       throw error;
     }
+    assertNoPii(templateVars(text));
+    return { messageClass, text: rendered };
   }
 
   private async resolveRecipients(segment: CampaignSegment) {

@@ -193,6 +193,22 @@ describe('C4R3YyvH — NotificationTemplateService', () => {
     ).resolves.toMatchObject({ statusCode: 201 });
   });
 
+  it('(nkhURiKX #8) PII naqshlari SMS shablonlari bilan bir xil: client_name / recipient_address / product_names ham taqiqlangan', async () => {
+    for (const key of ['client_name', 'recipient_address', 'product_names']) {
+      const error = await make()
+        .upsert({
+          code: 'order.sold',
+          lang: 'uz',
+          channel: 'sms',
+          title: `Buyurtma #{{order_number}} {{${key}}}`,
+        })
+        .catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(RpcException);
+      expect(JSON.stringify((error as RpcException).getError())).toContain(key);
+    }
+    expect(repo.save).not.toHaveBeenCalled();
+  });
+
   it('upsert: required_vars matndagi o‘zgaruvchilar bilan to‘ldiriladi, javobda encoding/parts', async () => {
     const res = (await make().upsert({
       code: 'order.sold',
