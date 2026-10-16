@@ -14,7 +14,7 @@ import {
   Min,
   MinLength,
 } from 'class-validator';
-import { ExpenseProofCondition } from '@app/common';
+import { ExpenseProofCondition, Roles } from '@app/common';
 
 export class CreateAdminRequestDto {
   @ApiProperty({ example: 'Admin User' })
@@ -414,6 +414,22 @@ export class UpdateMarketExpenseProofRequestDto {
   @IsArray()
   @IsEnum(ExpenseProofCondition, { each: true })
   expense_proof_conditions!: ExpenseProofCondition[];
+}
+
+/**
+ * K3scaE0W — PATCH /users/:id/role. Qiymat Roles enum'idan; qaysi rollar
+ * almashtirilishi mumkinligini identity hal qiladi (GET /roles →
+ * `changeable_roles`: admin, registrator, manager, logist), boshqasi — 400.
+ */
+export class ChangeUserRoleRequestDto {
+  @ApiProperty({
+    example: 'manager',
+    enum: Roles,
+    description:
+      "Yangi rol. Faqat GET /roles javobidagi changeable_roles (hozir: admin, registrator, manager, logist) — manba rol ham shu ro'yxatda bo'lishi shart.",
+  })
+  @IsEnum(Roles)
+  role!: Roles;
 }
 
 export class UpdateUserStatusRequestDto {

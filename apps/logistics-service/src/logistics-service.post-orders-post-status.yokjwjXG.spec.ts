@@ -50,7 +50,9 @@ describe('yokjwjXG — getPostOrders: post.status (additive)', () => {
         roles: ['superadmin'],
       } as never);
 
-      expect(res.data.post).toEqual({ id: '88', status });
+      // 4YZcTTDQ: `post` ga pochta meta'si (kuryer, QR, ...) QO'SHILDI —
+      // yokjwjXG kontrakti (id, status) o'zgarmagan.
+      expect(res.data.post).toMatchObject({ id: '88', status });
       expect(Object.keys(res.data).sort()).toEqual(
         ['allOrdersByPostId', 'centerOrders', 'homeOrders', 'post'].sort(),
       );

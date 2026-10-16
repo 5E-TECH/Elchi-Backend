@@ -101,11 +101,11 @@ export class AnalyticsServiceService {
   private static readonly COURIER_REPORT_TTL_MS = 30_000;
 
   private readonly logger = new Logger(AnalyticsServiceService.name);
-  // Short-lived cache for getCourierReport. Dashboards refresh on a timer and
-  // each render fans out N RMQ calls to order-service (one per courier). 30s
-  // is short enough that the data still looks live, long enough to absorb
-  // multiple operators hitting refresh in quick succession.
-  // Proper fix: order.analytics.courier_stats_batch({ ids }) — separate sprint.
+  // Short-lived cache for getCourierReport. 30s is short enough that the data
+  // still looks live, long enough to absorb multiple operators hitting
+  // refresh in quick succession. juZFa64U: the per-courier N+1 is gone
+  // (`courier_stats {include_detail: true}` — one batched RPC), so the cache
+  // is now only an extra speed-up, not the main protection.
   private readonly courierReportCache = new Map<
     string,
     { data: any; expiresAt: number }
@@ -1485,7 +1485,7 @@ export class AnalyticsServiceService {
       );
     }
 
-    // Cache key intentionally ignores requester — the heavy N+1 work is
+    // Cache key intentionally ignores requester — the aggregation is
     // role-independent (we return the same items[]/ranking[]; only the
     // final filter step at the end differs per requester).
     const cacheKey = `${normalized.startDate ?? ''}|${normalized.endDate ?? ''}`;
@@ -1500,11 +1500,20 @@ export class AnalyticsServiceService {
       topCouriersData = cached.data.ranking;
       topCouriersMeta = cached.data.rankingMeta ?? null;
     } else {
+      /**
+       * juZFa64U — N+1 YO'Q: ilgari har kuryer uchun alohida
+       * `order.analytics.courier_stat` (bekor qilinganlar, daromad)
+       * yuborilardi. Endi `include_detail: true` bilan order-service ularni
+       * shu javobning har qatoriga bitta to'plamli SQL'da qo'shadi — RMQ
+       * so'rovlari soni kuryerlar soniga bog'liq emas (items — 1, reyting —
+       * 1). Qatorda maydon bo'lmasa (eski order-service, deploy oralig'i) —
+       * avvalgi zaxira: bekor = jami − sotilgan, daromad 0.
+       */
       const [courierStats, topCouriers] = await Promise.all([
         rmqSend(
           this.orderClient,
           { cmd: 'order.analytics.courier_stats' },
-          normalized,
+          { ...normalized, include_detail: true },
         ),
         rmqSend(
           this.orderClient,
@@ -1521,39 +1530,24 @@ export class AnalyticsServiceService {
       topCouriersData = this.ranking(topCouriers).items;
       topCouriersMeta = this.ranking(topCouriers).meta;
 
-      items = await Promise.all(
-        courierStatsData.map(async (row) => {
-          const courierId = String(row?.courier?.id ?? '');
-          let detail: any = null;
-          if (courierId) {
-            detail = await rmqSend(
-              this.orderClient,
-              { cmd: 'order.analytics.courier_stat' },
-              { requester: { id: courierId }, ...normalized },
-            ).catch(() => null);
-          }
-
-          const detailData = this.unwrap<any>(detail);
-          return {
-            // CODE-08: identity'ning to'liq kuryer qatori (telefon, maosh,
-            // tariflar) emas — faqat {id, name}.
-            courier: this.toPartyRef(row?.courier),
-            deliveredOrders: this.parseNumber(row?.soldOrders),
-            cancelledOrders: this.parseNumber(
-              detailData?.canceledOrders,
-              Math.max(
-                0,
-                this.parseNumber(row?.totalOrders) -
-                  this.parseNumber(row?.soldOrders),
-              ),
-            ),
-            averageDeliveryHours: null,
-            totalAmount: this.parseNumber(detailData?.profit),
-            salaryEstimate: this.parseNumber(detailData?.profit),
-            successRate: this.parseNumber(row?.successRate),
-          };
-        }),
-      );
+      items = courierStatsData.map((row) => ({
+        // CODE-08: identity'ning to'liq kuryer qatori (telefon, maosh,
+        // tariflar) emas — faqat {id, name}.
+        courier: this.toPartyRef(row?.courier),
+        deliveredOrders: this.parseNumber(row?.soldOrders),
+        cancelledOrders: this.parseNumber(
+          row?.canceledOrders,
+          Math.max(
+            0,
+            this.parseNumber(row?.totalOrders) -
+              this.parseNumber(row?.soldOrders),
+          ),
+        ),
+        averageDeliveryHours: null,
+        totalAmount: this.parseNumber(row?.profit),
+        salaryEstimate: this.parseNumber(row?.profit),
+        successRate: this.parseNumber(row?.successRate),
+      }));
 
       // Opportunistic eviction to keep the map bounded.
       for (const [key, entry] of this.courierReportCache.entries()) {

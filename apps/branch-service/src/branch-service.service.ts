@@ -9,6 +9,7 @@ import {
   ActivityDescribeUz,
   ActivityLogService,
   ActivityLogQuery,
+  BranchOwnership,
   BranchTransferDirection,
   BranchType,
   BranchUserRole,
@@ -672,6 +673,106 @@ export class BranchServiceService implements OnModuleInit {
       );
     }
     return normalized as BranchType;
+  }
+
+  /**
+   * 8jtzNlFt — HAMKOR FILIAL MODELI (ownership / per_order_share).
+   *
+   * Ilgari bu ikki maydonni o'rnatadigan yo'l yo'q edi: har filial abadiy
+   * OWNED/0 bo'lib, order-service `resolveBranchShare` doim 0 qaytarardi.
+   * Endi create/update ularni qabul qiladi, lekin pulga ta'sir qilgani uchun
+   * QAT'IY invariant bilan:
+   *   - OWNED   => per_order_share = 0 (OWNED'ga o'tilsa ulush 0 ga tushadi;
+   *               OWNED bilan musbat ulush yuborilsa — 400, jimgina e'tiborsiz
+   *               qoldirilmaydi);
+   *   - PARTNER => per_order_share > 0 (0 ulushli "hamkor" — kartadagi "nega
+   *               hamkor filial 0 oldi?" jim bagi; 400);
+   *   - HQ      => faqat OWNED (HQ sotuvida filial ulushi umuman yo'q —
+   *               resolveSettlementBranchId HQ uchun null).
+   * Faqat admin/superadmin o'zgartira oladi (gateway marshruti ham shu
+   * rollarda). Sotuvda ulush buyurtmaga SNAPSHOT qilinadi (`branch_share`),
+   * shuning uchun keyingi o'zgarish eski sotuvlarga ta'sir qilmaydi.
+   */
+  private resolveBranchOwnershipConfig(params: {
+    type: BranchType;
+    current: { ownership?: BranchOwnership | null; per_order_share?: unknown };
+    dto?: { ownership?: unknown; per_order_share?: unknown };
+    requester?: RequesterContext;
+  }): { ownership: BranchOwnership; per_order_share: number } {
+    const isProvided = (value: unknown) =>
+      typeof value !== 'undefined' && value !== null && value !== '';
+    const ownershipProvided = isProvided(params.dto?.ownership);
+    const shareProvided = isProvided(params.dto?.per_order_share);
+
+    if (
+      (ownershipProvided || shareProvided) &&
+      !this.isSystemPrivileged(params.requester)
+    ) {
+      this.forbidden(
+        "Filial turini (o'zimizniki/hamkor) va ulushini faqat admin yoki superadmin o'zgartira oladi",
+      );
+    }
+
+    let nextOwnership =
+      params.current.ownership === BranchOwnership.PARTNER
+        ? BranchOwnership.PARTNER
+        : BranchOwnership.OWNED;
+    if (ownershipProvided) {
+      const normalized = String(params.dto?.ownership).trim().toLowerCase();
+      if (
+        !Object.values(BranchOwnership).includes(normalized as BranchOwnership)
+      ) {
+        this.badRequest(
+          `Filial turi (ownership) quyidagilardan biri bo'lishi kerak: ${Object.values(BranchOwnership).join(', ')}`,
+        );
+      }
+      nextOwnership = normalized as BranchOwnership;
+    }
+
+    let requestedShare: number | null = null;
+    if (shareProvided) {
+      const value = params.dto?.per_order_share;
+      const raw =
+        typeof value === 'number' ? String(value) : String(value).trim();
+      if (!/^\d{1,12}(\.\d{1,2})?$/.test(raw)) {
+        this.badRequest(
+          "per_order_share — 0 yoki musbat summa (so'm, ko'pi bilan 2 kasr xona)",
+        );
+      }
+      requestedShare = Number(raw);
+    }
+
+    if (
+      params.type === BranchType.HQ &&
+      nextOwnership !== BranchOwnership.OWNED
+    ) {
+      this.badRequest(
+        "HQ filial hamkor (partner) bo'lishi mumkin emas — HQ sotuvida filial ulushi yo'q",
+      );
+    }
+
+    if (nextOwnership === BranchOwnership.OWNED) {
+      if (requestedShare !== null && requestedShare > 0) {
+        this.badRequest(
+          "Har buyurtma ulushi (per_order_share) faqat hamkor (partner) filial uchun — o'zimizniki (owned) filial hamma pulni HQ'ga topshiradi",
+        );
+      }
+      return { ownership: BranchOwnership.OWNED, per_order_share: 0 };
+    }
+
+    const currentShare = Number(params.current.per_order_share ?? 0);
+    const nextShare =
+      requestedShare ??
+      (params.current.ownership === BranchOwnership.PARTNER &&
+      Number.isFinite(currentShare)
+        ? currentShare
+        : 0);
+    if (!(nextShare > 0)) {
+      this.badRequest(
+        "Hamkor (partner) filial uchun har buyurtma ulushi (per_order_share) 0 dan katta bo'lishi kerak",
+      );
+    }
+    return { ownership: BranchOwnership.PARTNER, per_order_share: nextShare };
   }
 
   private normalizeBranchCode(code?: string | null): string {
@@ -4087,6 +4188,8 @@ export class BranchServiceService implements OnModuleInit {
       type?: BranchType | string;
       code?: string;
       manager_id?: string | null;
+      ownership?: BranchOwnership | string;
+      per_order_share?: string | number;
     },
     requester?: RequesterContext,
   ) {
@@ -4098,6 +4201,13 @@ export class BranchServiceService implements OnModuleInit {
     await this.ensureBranchNameUnique(name);
 
     const type = this.parseBranchType(dto?.type);
+    // 8jtzNlFt: pul sozlamasi — hech narsa yozilmasidan oldin tekshiriladi.
+    const ownershipConfig = this.resolveBranchOwnershipConfig({
+      type,
+      current: { ownership: BranchOwnership.OWNED, per_order_share: 0 },
+      dto,
+      requester,
+    });
     const code = this.normalizeBranchCode(dto?.code);
     await this.ensureBranchCodeUnique(code);
 
@@ -4137,6 +4247,8 @@ export class BranchServiceService implements OnModuleInit {
         code,
         manager_id: this.normalizeNullableBigint(dto?.manager_id),
         status: Status.ACTIVE,
+        ownership: ownershipConfig.ownership,
+        per_order_share: ownershipConfig.per_order_share,
       }),
     );
 
@@ -4151,6 +4263,8 @@ export class BranchServiceService implements OnModuleInit {
         district_id: saved.district_id ?? null,
         manager_id: saved.manager_id ?? null,
         type: saved.type,
+        ownership: ownershipConfig.ownership,
+        per_order_share: ownershipConfig.per_order_share,
       },
       ...this.auditActor(requester),
     });
@@ -4395,8 +4509,16 @@ export class BranchServiceService implements OnModuleInit {
       // Yig'indi olinmasa nol qoladi — avvalgi xatti-harakat bilan bir xil.
     }
 
+    // cI5gqN90: XODIMLAR soni — detal sahifasidagi jadval (GET
+    // /branches/:id/users) bilan AYNAN bir xil qoida, bitta so'rovda.
+    const employeesCountByBranchId = await this.countBranchEmployees(branchIds);
+
     const enrichedItems = items.map((item) => ({
       ...item,
+      // cI5gqN90: frontend `created_at` (snake_case) ni o'qiydi va topmasa
+      // bugungi sanani qo'yardi — haqiqiy yaratilgan vaqt alias sifatida.
+      created_at: item.createdAt ?? null,
+      employees_count: employeesCountByBranchId.get(String(item.id)) ?? 0,
       region: item.region_id ? (regionMap.get(item.region_id) ?? null) : null,
       district: item.district_id
         ? (districtMap.get(item.district_id) ?? null)
@@ -4605,10 +4727,16 @@ export class BranchServiceService implements OnModuleInit {
     const parentMap = await this.getParentsByIds(
       branch.parent_id ? [branch.parent_id] : [],
     );
+    const employeesCountByBranchId = await this.countBranchEmployees([
+      String(branch.id),
+    ]);
 
     return successRes(
       {
         ...branch,
+        // cI5gqN90 — ro'yxat bilan bir xil: haqiqiy sana va xodimlar soni.
+        created_at: branch.createdAt ?? null,
+        employees_count: employeesCountByBranchId.get(String(branch.id)) ?? 0,
         region: branch.region_id
           ? (regionMap.get(branch.region_id) ?? null)
           : null,
@@ -4622,6 +4750,37 @@ export class BranchServiceService implements OnModuleInit {
       200,
       'Branch found',
     );
+  }
+
+  /**
+   * cI5gqN90 — filialga biriktirilgan XODIMLAR soni (barcha rollar:
+   * MANAGER/REGISTRATOR/COURIER). Qoida `findUsersByBranch` (detal
+   * sahifasidagi jadval) bilan AYNAN bir xil — `branch_users` dagi
+   * o'chirilmagan qatorlar — shuning uchun kartadagi son jadval qatorlari
+   * soniga teng. Ilgari maydon umuman yo'q edi va frontend `?? 0` bilan
+   * har filialda "0 xodim" ko'rsatardi. Bitta so'rov, sahifadagi filiallar
+   * bo'yicha; filialsiz chaqiruvda so'rov yuborilmaydi.
+   */
+  private async countBranchEmployees(
+    branchIds: string[],
+  ): Promise<Map<string, number>> {
+    const ids = Array.from(
+      new Set(branchIds.map((id) => String(id ?? '').trim()).filter(Boolean)),
+    );
+    const counts = new Map<string, number>();
+    if (!ids.length) {
+      return counts;
+    }
+    const rows = await this.branchUserRepo.find({
+      where: { isDeleted: false, branch_id: In(ids) },
+      select: ['branch_id'],
+    });
+    for (const row of rows ?? []) {
+      const branchId = String(row?.branch_id ?? '').trim();
+      if (!branchId) continue;
+      counts.set(branchId, (counts.get(branchId) ?? 0) + 1);
+    }
+    return counts;
   }
 
   async findBranchTree() {
@@ -4920,6 +5079,8 @@ export class BranchServiceService implements OnModuleInit {
       code?: string;
       status?: string;
       manager_id?: string | null;
+      ownership?: BranchOwnership | string;
+      per_order_share?: string | number;
     },
     requester?: RequesterContext,
   ) {
@@ -4934,6 +5095,9 @@ export class BranchServiceService implements OnModuleInit {
       manager_id: branch.manager_id,
       status: branch.status,
       type: branch.type,
+      // 8jtzNlFt: pul sozlamasi o'zgarishi ham jurnalda (eski -> yangi).
+      ownership: branch.ownership ?? BranchOwnership.OWNED,
+      per_order_share: Number(branch.per_order_share ?? 0),
     };
 
     if (typeof dto?.name !== 'undefined') {
@@ -5030,6 +5194,20 @@ export class BranchServiceService implements OnModuleInit {
       branch.manager_id = this.normalizeNullableBigint(dto.manager_id);
     }
 
+    // 8jtzNlFt: hamkor filial modeli — YAKUNIY tur bilan tekshiriladi (HQ'ga
+    // aylanayotgan PARTNER filial ham 400).
+    const ownershipConfig = this.resolveBranchOwnershipConfig({
+      type: nextType,
+      current: {
+        ownership: beforeSnapshot.ownership,
+        per_order_share: beforeSnapshot.per_order_share,
+      },
+      dto,
+      requester,
+    });
+    branch.ownership = ownershipConfig.ownership;
+    branch.per_order_share = ownershipConfig.per_order_share;
+
     if (typeof dto?.status !== 'undefined') {
       branch.status = this.parseStatus(dto.status) ?? branch.status;
     }
@@ -5058,6 +5236,8 @@ export class BranchServiceService implements OnModuleInit {
         manager_id: saved.manager_id,
         status: saved.status,
         type: saved.type,
+        ownership: ownershipConfig.ownership,
+        per_order_share: ownershipConfig.per_order_share,
       },
       ...this.auditActor(requester),
     });

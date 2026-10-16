@@ -16,6 +16,11 @@ import { randomBytes } from 'crypto';
 import { BcryptEncryption } from '../../../libs/common/helpers/bcrypt';
 import { User } from './entities/user.entity';
 import { CourierRegion } from './entities/courier-region.entity';
+import {
+  CHANGEABLE_ROLES,
+  ROLE_CATALOG,
+  roleCatalogEntry,
+} from './roles/role-catalog';
 import { CreateAdminDto } from './dto/create-admin.dto';
 import { USER_LANGUAGES, UpdateUserDto } from './dto/update-user.dto';
 import { CreateMarketDto } from './dto/create-market.dto';
@@ -1855,6 +1860,7 @@ export class UserServiceService implements OnModuleInit {
   private async releaseLogistRegionsOrFail(
     logistId: string,
     requester?: RequesterContext,
+    failureMessage: string = LOGIST_DELETE_RELEASE_FAILED,
   ): Promise<void> {
     try {
       await rmqSend(
@@ -1871,7 +1877,193 @@ export class UserServiceService implements OnModuleInit {
       this.logger.warn(
         `deleteUser: logistics.region.clear_logist failed for logist ${logistId} (${describeSagaError(error)}) — logist NOT deleted`,
       );
-      throw new RpcException(errorRes(LOGIST_DELETE_RELEASE_FAILED, 503));
+      throw new RpcException(errorRes(failureMessage, 503));
+    }
+  }
+
+  /**
+   * K3scaE0W — GET /roles: rol katalogi (Roles enum'ining to'liq ro'yxati,
+   * o'zbekcha nom, yaratish marshruti, almashtirish mumkinmi). Frontend
+   * RoleSelector / UserFilters shu javobdan quriladi.
+   */
+  getRoleCatalog() {
+    return successRes(
+      {
+        items: ROLE_CATALOG.map((item) => ({ ...item })),
+        changeable_roles: [...CHANGEABLE_ROLES],
+      },
+      200,
+      'Role catalog',
+    );
+  }
+
+  /**
+   * K3scaE0W — PATCH /users/:id/role: rolni o'zgartirish (faqat SUPERADMIN).
+   *
+   * Ilgari rolni o'zgartirishning umuman yo'li yo'q edi (UpdateUserDto'da
+   * `role` yo'q) — ro'yxatchini menejerga ko'tarish uchun akkauntni o'chirib
+   * qayta yaratish kerak bo'lardi va tarixi yangi id'ga bog'lanmasdi.
+   *
+   * Xavfsiz doira (yozishdan OLDIN hammasi tekshiriladi):
+   *   - faqat SUPERADMIN (gateway @Roles ham; bu yerda ham — ichki
+   *     chaqiruvlar uchun) → aks holda 403;
+   *   - manba ham, nishon ham `CHANGEABLE_ROLES` (admin, ro'yxatchi, menejer,
+   *     logist) — pul/hisob bog'langan rollar (kuryer, market, operator ...)
+   *     va superadmin almashtirilmaydi → 400;
+   *   - FILIAL BIRIKTIRUVI: filialga biriktirilgan foydalanuvchi (branch_users
+   *     roli eski rolga mos — MANAGER/REGISTRATOR) → 409: avval filialdan
+   *     chiqariladi, rol o'zgargach yangi rol bilan qayta biriktiriladi
+   *     (assignUserToBranch o'zining HQ/menejer qoidalari bilan). Biriktiruvni
+   *     tekshirib bo'lmasa → 503 (fail-closed);
+   *   - LOGIST'dan chiqishda viloyatlari bo'shatiladi (o'chirishdagi kabi;
+   *     bo'lmasa 503, rol o'zgarmaydi).
+   * Rolga bog'liq maydonlar qayta hisoblanadi: `can_sell_cancel`,
+   * `can_add_extra_cost`, `tariff_home`/`tariff_center` faqat menejerda
+   * ma'noli — boshqa rolga o'tganda tozalanadi. Komissiya (operator) va
+   * maosh tegilmaydi. `refresh_token` o'chiriladi: JWT eski rolni olib
+   * yurgani uchun foydalanuvchi qayta kiradi (access token ≤15 daqiqa).
+   * Jurnal: old_value.role / new_value.role (+ tozalangan maydonlar).
+   */
+  async changeUserRole(
+    id: string,
+    role: unknown,
+    requester?: RequesterContext,
+  ) {
+    if (!this.hasRole(requester, Roles.SUPERADMIN)) {
+      this.forbidden("Rolni faqat superadmin o'zgartira oladi");
+    }
+    const userId = String(id ?? '').trim();
+    if (!/^\d+$/.test(userId)) {
+      this.notFound('User topilmadi');
+    }
+    const target = roleCatalogEntry(role);
+    const changeableList = CHANGEABLE_ROLES.join(', ');
+    if (!target || !target.changeable) {
+      this.badRequest(
+        `Yangi rol quyidagilardan biri bo'lishi kerak: ${changeableList}`,
+      );
+    }
+    const user = await this.users.findOne({
+      where: { id: userId, isDeleted: false },
+    });
+    if (!user) {
+      this.notFound('User topilmadi');
+    }
+    if (this.isSelfRequester(requester, userId)) {
+      this.badRequest("O'z rolingizni o'zgartira olmaysiz");
+    }
+    const source = roleCatalogEntry(user.role);
+    if (!source || !source.changeable) {
+      this.badRequest(
+        `${source?.label ?? user.role} rolini o'zgartirib bo'lmaydi — unga kassa, buyurtma yoki boshqa yozuvlar bog'langan. O'zgartirish mumkin bo'lgan rollar: ${changeableList}`,
+      );
+    }
+    if (user.role === target.role) {
+      this.badRequest('Foydalanuvchi allaqachon shu rolda');
+    }
+
+    await this.assertNoBranchAssignmentForRoleChange(userId);
+
+    if (user.role === Roles.LOGIST) {
+      await this.releaseLogistRegionsOrFail(
+        userId,
+        requester,
+        "Logistni viloyatlardan ajratib bo'lmadi — rol o'zgartirilmadi. Birozdan so'ng qayta urinib ko'ring.",
+      );
+    }
+
+    const before = {
+      role: user.role,
+      can_sell_cancel: user.can_sell_cancel,
+      can_add_extra_cost: user.can_add_extra_cost,
+      tariff_home: user.tariff_home,
+      tariff_center: user.tariff_center,
+    };
+    const previousRole = user.role;
+    user.role = target.role;
+    if (target.role !== Roles.MANAGER) {
+      user.can_sell_cancel = false;
+      user.can_add_extra_cost = false;
+      user.tariff_home = null;
+      user.tariff_center = null;
+    }
+    user.refresh_token = null;
+
+    const saved = await this.users.save(user);
+    // Qidiruv indeksi rol bo'yicha kalitlangan: eski rol yozuvi olib
+    // tashlanadi, yangisi yoziladi (ikkalasi ham best-effort).
+    void this.removeUserFromSearch({ ...saved, role: previousRole } as User);
+    void this.syncUserToSearch(saved);
+
+    await this.activityLog.log({
+      entity_type: 'User',
+      entity_id: saved.id,
+      action: ActivityAction.UPDATED,
+      old_value: before,
+      new_value: {
+        role: saved.role,
+        can_sell_cancel: saved.can_sell_cancel,
+        can_add_extra_cost: saved.can_add_extra_cost,
+        tariff_home: saved.tariff_home,
+        tariff_center: saved.tariff_center,
+      },
+      metadata: { change: 'role', sessions_revoked: true },
+      ...this.auditActor(requester),
+    });
+
+    return successRes(
+      this.sanitize(saved),
+      200,
+      "Foydalanuvchi roli o'zgartirildi",
+    );
+  }
+
+  /**
+   * K3scaE0W — rol almashtirishdan oldin: foydalanuvchi hech qaysi filialga
+   * biriktirilmagan bo'lishi shart (branch_users roli eski rolga bog'langan).
+   * Biriktirilgan — 409 (qaysi filial ekanini aytadi); tekshirib bo'lmasa —
+   * 503 (fail-closed: rol o'zgarmaydi).
+   */
+  private async assertNoBranchAssignmentForRoleChange(
+    userId: string,
+  ): Promise<void> {
+    let assignment: {
+      branch_id?: string | number | null;
+      branch?: { name?: string | null } | null;
+    } | null;
+    try {
+      const response = await rmqSend<{
+        data?: {
+          branch_id?: string | number | null;
+          branch?: { name?: string | null } | null;
+        } | null;
+      }>(
+        this.branchClient,
+        { cmd: 'branch.user.find_by_user' },
+        {
+          user_id: userId,
+          requester: { id: userId, roles: [Roles.SUPERADMIN] },
+        },
+        { attachRequestId: false, retries: 1, timeoutMs: 3000 },
+      );
+      assignment = response?.data ?? null;
+    } catch (error) {
+      this.logger.warn(
+        `changeUserRole: branch.user.find_by_user failed for user ${userId} (${describeSagaError(error)}) — role NOT changed`,
+      );
+      throw new RpcException(
+        errorRes(
+          "Foydalanuvchining filial biriktiruvini tekshirib bo'lmadi — rol o'zgartirilmadi. Birozdan so'ng qayta urinib ko'ring.",
+          503,
+        ),
+      );
+    }
+    const branchId = String(assignment?.branch_id ?? '').trim();
+    if (branchId) {
+      const name = String(assignment?.branch?.name ?? '').trim();
+      this.conflict(
+        `Foydalanuvchi ${name ? `'${name}' filialiga` : `#${branchId} filialga`} biriktirilgan — avval filialdan chiqaring (DELETE /branches/${branchId}/users/${userId}), rol o'zgargach yangi rol bilan qayta biriktiring`,
+      );
     }
   }
 
@@ -3378,6 +3570,78 @@ export class UserServiceService implements OnModuleInit {
    * ga SNAPSHOT bo'ladi — keyingi tarif o'zgarishi eski buyurtmaga ta'sir
    * qilmaydi.
    */
+  /**
+   * o2j9uDtT — har viloyat uchun kuryerlar soni: `total` (o'chirilmagan
+   * barcha kuryerlar) va `active` (faqat status = 'active').
+   *
+   * Viloyatga tegishlilik `findAllCouriers({ region_id })` (GET
+   * /region/stats/:id dagi `listCouriersByRegion`) bilan AYNAN bir xil:
+   * `region_id` mos kuryer YOKI super-kuryer (serves_all_regions yoki
+   * courier_regions qatori bilan). Ilgari stats/all javobida bu maydon
+   * umuman yo'q edi va xarita tooltipi har viloyatda "Kuryerlar: 0"
+   * ko'rsatardi. BITTA so'rov (viloyatlar soniga bog'liq emas); har
+   * kuryer har viloyatda ko'pi bilan bir marta sanaladi (LEFT JOIN shart
+   * bitta predikat). Javob har so'ralgan viloyat uchun qator (kuryeri yo'q
+   * viloyat — 0/0).
+   */
+  async countCouriersByRegion(regionIds: unknown) {
+    const ids = Array.from(
+      new Set(
+        (Array.isArray(regionIds) ? regionIds : [])
+          .map((id) => String(id ?? '').trim())
+          .filter((id) => /^\d+$/.test(id)),
+      ),
+    );
+    if (!ids.length) {
+      return successRes([], 200, 'Courier counts by region');
+    }
+    const quote = (tablePath: string) =>
+      tablePath
+        .split('.')
+        .map((part) => `"${part}"`)
+        .join('.');
+    const admins = quote(this.users.metadata.tablePath);
+    const courierRegions = quote(
+      this.users.manager.getRepository(CourierRegion).metadata.tablePath,
+    );
+    const rows = await this.users.manager.query<
+      Array<{ region_id: string; total: number; active: number }>
+    >(
+      `SELECT r.region_id::text AS region_id,
+              COUNT(c.id)::int AS total,
+              COUNT(c.id) FILTER (WHERE c.status = $2)::int AS active
+         FROM unnest($1::bigint[]) AS r(region_id)
+         LEFT JOIN ${admins} c
+           ON c.is_deleted = false
+          AND c.role = $3
+          AND (
+            c.region_id = r.region_id
+            OR (
+              c.is_super_courier = true
+              AND (
+                c.serves_all_regions = true
+                OR EXISTS (
+                  SELECT 1 FROM ${courierRegions} cr
+                   WHERE cr.courier_id = c.id AND cr.region_id = r.region_id
+                )
+              )
+            )
+          )
+        GROUP BY r.region_id
+        ORDER BY r.region_id`,
+      [ids, Status.ACTIVE, Roles.COURIER],
+    );
+    return successRes(
+      rows.map((row) => ({
+        region_id: String(row.region_id),
+        total: Number(row.total) || 0,
+        active: Number(row.active) || 0,
+      })),
+      200,
+      'Courier counts by region',
+    );
+  }
+
   async findCouriersByIds(ids: string[], regionId?: string | null) {
     if (!ids.length) {
       return { success: true, data: [] };

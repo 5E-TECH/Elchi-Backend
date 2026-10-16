@@ -6,7 +6,12 @@ import {
   Matches,
   MinLength,
 } from 'class-validator';
-import { BranchType } from '@app/common';
+import { Transform } from 'class-transformer';
+import { BranchOwnership, BranchType } from '@app/common';
+
+// 8jtzNlFt: per_order_share son yoki satr bo'lib kelishi mumkin.
+const moneyToString = ({ value }: { value: unknown }) =>
+  typeof value === 'number' && Number.isFinite(value) ? String(value) : value;
 
 export class UpdateBranchDto {
   @IsOptional()
@@ -53,4 +58,14 @@ export class UpdateBranchDto {
   @IsOptional()
   @IsNumberString()
   manager_id?: string;
+
+  // 8jtzNlFt: hamkor filial modeli (create DTO'dagi izohga qarang).
+  @IsOptional()
+  @IsEnum(BranchOwnership)
+  ownership?: BranchOwnership;
+
+  @IsOptional()
+  @Transform(moneyToString)
+  @Matches(/^\d{1,12}(\.\d{1,2})?$/)
+  per_order_share?: string;
 }

@@ -30,6 +30,14 @@ export interface CreateManagerPayload {
   requester?: RequesterContext;
 }
 
+/**
+ * o2j9uDtT — viloyatlar bo'yicha kuryerlar soni (GET /region/stats/all
+ * xarita tooltipi). `region_ids` — logistics viloyat ID'lari.
+ */
+export interface CourierRegionCountsPayload {
+  region_ids?: Array<string | number>;
+}
+
 export interface FindCouriersByIdsPayload {
   ids: string[];
   /** hEjjuJaT: buyurtma viloyati — super-kuryerning viloyat tarifi uchun. */
@@ -67,6 +75,13 @@ export interface UserFilterQuery {
 
 export interface FindAllUsersPayload {
   query?: UserFilterQuery;
+}
+
+/** K3scaE0W — identity.user.change_role (PATCH /users/:id/role). */
+export interface ChangeUserRolePayload {
+  id: string;
+  role: string;
+  requester?: RequesterContext;
 }
 
 export interface UpdateUserStatusPayload {

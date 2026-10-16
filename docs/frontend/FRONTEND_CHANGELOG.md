@@ -312,6 +312,89 @@ buyurtma SOTILGAN holatda qoladi, uning puli o'zgarmaydi (reversal yo'q).
   `replacement_of_order_id`, `replacement_state`, `is_replacement_return`,
   `old_item_collected_at` (kuryer ro'yxatida almashtirish belgisini ko'rsatish
   uchun).
+### 2026-10-16 — B: filiallar, hududlar, rollar, pochta, kuryer hisoboti (8jtzNlFt, cI5gqN90, o2j9uDtT, K3scaE0W, 4YZcTTDQ, juZFa64U)
+
+- [2026-10-16] ✏️ [branch] — **Hamkor filial modeli (8jtzNlFt).**
+  `POST /branches` va `PATCH /branches/:id` endi ikkita ixtiyoriy maydonni
+  qabul qiladi (avval 400 "property ownership should not exist"):
+  `ownership: 'owned' | 'partner'` va `per_order_share` (son yoki satr,
+  so'm, `^\d{1,12}(\.\d{1,2})?$`). Qoidalar (backend 400 o'zbekcha xabar
+  bilan): `partner` ⇒ `per_order_share > 0` majburiy; `owned` ⇒ ulush 0
+  (musbat ulush yuborilsa 400; `owned` ga o'tkazilsa ulush avtomatik 0);
+  HQ faqat `owned`; o'zgartirishni faqat admin/superadmin qila oladi (403).
+  `GET /branches`, `GET /branches/:id` javobida `ownership`,
+  `per_order_share` (son) allaqachon bor edi — endi haqiqiy qiymat. Sotuvda
+  hamkor filial ulushi buyurtmaga snapshot qilinadi (keyingi o'zgarish eski
+  sotuvlarga ta'sir qilmaydi).
+  → 🔧 Frontend: `BranchFormModal` / `BranchEditModal` ga "Filial turi:
+  O'zimizniki / Hamkor" tanlagichi va "Har buyurtmaga ulush (so'm)" maydoni
+  (faqat Hamkor tanlanganda ko'rinadi va majburiy). HQ uchun tanlagich
+  yashirin (doim O'zimizniki). Ro'yxat/detalda "Hamkor · 5 000 so'm" belgisi.
+- [2026-10-16] ✏️ [branch] — **XODIMLAR soni va SANA (cI5gqN90).**
+  `GET /branches` har qatorida va `GET /branches/:id` da yangi maydonlar:
+  `employees_count` (filialga biriktirilgan o'chirilmagan xodimlar —
+  menejer/ro'yxatchi/kuryer; `GET /branches/:id/users` qatorlari soniga
+  AYNAN teng) va `created_at` (= `createdAt`, ISO satr; snake_case alias).
+  → 🔧 Frontend (`branchApi.normalizeBranch`): `created_at: item.created_at
+  ?? item.createdAt ?? ""` — hech qachon `new Date()` bilan to'ldirmang;
+  `formatDate("")` → "—". `employees_count` endi keladi — `?? 0` zaxirasi
+  faqat eski javob uchun. Detal sahifasida XODIMLAR kartasi = jadval
+  qatorlari soni (cI5gqN90 TC1/TC2/TC4 — vitest/render).
+- [2026-10-16] ✏️ [logistics/identity] — **Xarita tooltipi "Kuryerlar"
+  (o2j9uDtT).** `GET /region/stats/all` → `data.regions[]` har elementida
+  yangi `activeCouriers` (faqat `status = 'active'` kuryerlar) va
+  `totalCouriers`. Viloyatga tegishlilik `GET /region/stats/:id` dagi
+  `summary.activeCouriers` bilan bir xil (super-kuryer ham sanaladi).
+  identity javob bermasa ikkalasi `null` (yolg'on 0 emas).
+  → 🔧 Frontend (`UzbekistanRegionMap.tsx:438`, `entities/region`):
+  `couriersCount = region.stats.activeCouriers`; qiymat `null`/`undefined`
+  bo'lsa tooltipda "Kuryerlar" qatorini UMUMAN chizmang (o2j9uDtT TC5);
+  `Number(p.couriersCount || 0)` zaxirasini olib tashlang.
+- [2026-10-16] 🆕 [identity/gateway] — **Rolni o'zgartirish va rol katalogi
+  (K3scaE0W).**
+  - `PATCH /users/:id/role` `{ role }` — FAQAT superadmin (admin/menejer →
+    403). Almashtiriladigan rollar (manba ham, nishon ham): `admin`,
+    `registrator`, `manager`, `logist`. Kuryer, market, market_operator,
+    mijoz, investor, operator, branch va superadmin almashtirilmaydi (400 —
+    ularga kassa/buyurtma/komissiya bog'langan). Filialga biriktirilgan
+    foydalanuvchi → 409 (xabarda filial va
+    `DELETE /branches/:id/users/:userId` yo'li): avval filialdan chiqaring,
+    rol o'zgargach yangi rol bilan qayta biriktiring. Logist'dan chiqishda
+    viloyatlari bo'shatiladi. Menejerdan boshqa rolga o'tganda
+    `can_sell_cancel`, `can_add_extra_cost`, `tariff_home/center` tozalanadi.
+    Muvaffaqiyatda foydalanuvchining sessiyasi yopiladi (qayta kiradi).
+    Jurnal: `activity_log` da `old_value.role` / `new_value.role`
+    (`metadata.change = 'role'`). Javob — yangilangan user (parolsiz).
+  - `GET /roles` (superadmin/admin/menejer) →
+    `{ items: [{ role, label, description, staff, creatable,
+    create_endpoint, changeable, filterable }], changeable_roles }` —
+    `Roles` enum'ining TO'LIQ ro'yxati (branch, investor, market_operator,
+    logist ham).
+  → 🔧 Frontend: `RoleSelector` va `UserFilters.defaultRoles` ni `GET /roles`
+  dan quring (qo'lda uchta ro'yxat o'rniga; filtrga branch / investor /
+  market_operator qo'shiladi — K3scaE0W TC1/TC4 snapshot/e2e). Foydalanuvchi
+  tahririda (faqat superadmin) "Rolni o'zgartirish" tanlagichi
+  (`changeable_roles`), 409 xabarini ko'rsating. `/roles-permissions`
+  ma'lumotnoma sahifasi — `access.ts` predikatlaridan jadval (TC5) +
+  `GET /roles` yorliqlari.
+- [2026-10-16] ✏️ [logistics] — **Pochtaning o'z ma'lumoti (4YZcTTDQ).**
+  `GET /post` har qatorida yangi `courier: { id, name, phone_number } |
+  null` (courier_id yo'q/'0' yoki kuryer o'chirilgan → `null`; maosh/tarif
+  YO'Q). `GET /post/orders/:id` → `data.post` kengaydi (avval faqat
+  `{ id, status }`): `{ id, status, courier_id, courier, qr_code_token,
+  order_quantity, branch_id, region_id, region: { id, name } | null,
+  createdAt }`.
+  → 🔧 Frontend: `oldMails.tsx:218` va Excel eksporti (`:430`) `mail.courier
+  ?.name` — endi to'ladi ("Kuryer: Buxaro Courier"). Detal sahifasi
+  (`pages/mails/detail`, `useMailDetail`): sarlavha (viloyat) va holat
+  rozetkasi birlamchi manbasi `data.post` (router state'dagi
+  `fallbackRegionName` faqat zaxira) — deep-link `/mails/70` state'siz ham
+  to'g'ri holat ko'rsatadi.
+- [2026-10-16] 🟢 [analytics] — **Kuryerlar hisoboti N+1 (juZFa64U).**
+  `GET /analytics/reports/couriers` javob shakli va raqamlari O'ZGARMAGAN;
+  ichkarida har kuryer uchun alohida RPC o'rniga bitta so'rov (60 kuryerda
+  sovuq hisob ~217 ms → ~6 ms, RMQ kechikishisiz). 30 s kesh saqlangan.
+  Frontend o'zgarishi shart emas.
 
 ### 2026-10-15 — R1: dashboard reyting davri ("Bugun" → oxirgi 30 kun) va bot manbasi (9zbSDkUI, Celz3rKJ)
 

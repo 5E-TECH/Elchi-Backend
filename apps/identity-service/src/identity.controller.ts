@@ -28,6 +28,8 @@ import type {
   CreateUserPayload,
   DeleteUserPayload,
   FindAllUsersPayload,
+  ChangeUserRolePayload,
+  CourierRegionCountsPayload,
   FindCouriersByIdsPayload,
   FindUserByIdPayload,
   CreateManagerPayload,
@@ -377,6 +379,27 @@ export class IdentityController {
     );
   }
 
+  // K3scaE0W — rolni o'zgartirish (faqat superadmin; servis ham tekshiradi).
+  @MessagePattern({ cmd: 'identity.user.change_role' })
+  changeUserRole(
+    @Payload() payload: ChangeUserRolePayload,
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.userService.changeUserRole(
+        payload?.id,
+        payload?.role,
+        payload?.requester,
+      ),
+    );
+  }
+
+  // K3scaE0W — rol katalogi (GET /roles).
+  @MessagePattern({ cmd: 'identity.role.catalog' })
+  getRoleCatalog(@Payload() _payload: unknown, @Ctx() context: RmqContext) {
+    return this.executeAndAck(context, () => this.userService.getRoleCatalog());
+  }
+
   @MessagePattern({ cmd: 'identity.user.status' })
   updateUserStatus(
     @Payload() payload: UpdateUserStatusPayload,
@@ -616,6 +639,17 @@ export class IdentityController {
   ) {
     return this.executeAndAck(context, () =>
       this.userService.resolveAudience(payload ?? {}),
+    );
+  }
+
+  // o2j9uDtT — viloyatlar bo'yicha kuryerlar soni (jami / faol), bitta SQL.
+  @MessagePattern({ cmd: 'identity.courier.region_counts' })
+  getCourierRegionCounts(
+    @Payload() payload: CourierRegionCountsPayload,
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.userService.countCouriersByRegion(payload?.region_ids ?? []),
     );
   }
 

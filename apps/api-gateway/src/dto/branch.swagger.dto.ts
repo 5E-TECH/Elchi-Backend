@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { BranchType } from '@app/common';
+import { BranchOwnership, BranchType } from '@app/common';
 import {
   IsArray,
   IsEnum,
@@ -19,6 +19,23 @@ import { BranchUserRole } from '@app/common';
 // boshqa tur uchun aniq "ota filial (parent_id) majburiy" xabari qaytadi.
 const emptyToUndefined = ({ value }: { value: unknown }) =>
   value === '' || value === null ? undefined : value;
+
+// 8jtzNlFt: hamkor filial ulushi son (5000) yoki satr ('5000.50') bo'lib
+// kelishi mumkin — ikkalasi satrga keltiriladi va bir xil tekshiriladi:
+// manfiy emas, ko'pi bilan 2 kasr, ustun numeric(14,2) ga sig'adi.
+const moneyToString = ({ value }: { value: unknown }) =>
+  typeof value === 'number' && Number.isFinite(value) ? String(value) : value;
+const PER_ORDER_SHARE_PATTERN = /^\d{1,12}(\.\d{1,2})?$/;
+const PER_ORDER_SHARE_MESSAGE =
+  "per_order_share — 0 yoki musbat summa (so'm, ko'pi bilan 2 kasr xona)";
+const OWNERSHIP_DESCRIPTION =
+  "Filial turi (8jtzNlFt): 'owned' — o'zimizniki (standart, filial hamma " +
+  "pulni HQ'ga topshiradi), 'partner' — hamkor (har sotilgan buyurtmadan " +
+  "per_order_share ni o'zida olib qoladi). HQ faqat 'owned'.";
+const PER_ORDER_SHARE_DESCRIPTION =
+  "Hamkor filial har sotilgan buyurtmadan olib qoladigan summa (so'm). " +
+  "Faqat ownership='partner' da va 0 dan katta bo'lishi shart; 'owned' " +
+  'filialda 0 saqlanadi.';
 
 export class CreateBranchRequestDto {
   @ApiProperty({ example: 'Namangan filial' })
@@ -77,6 +94,25 @@ export class CreateBranchRequestDto {
   @IsOptional()
   @IsNumberString()
   manager_id?: string;
+
+  @ApiPropertyOptional({
+    example: 'partner',
+    enum: BranchOwnership,
+    description: OWNERSHIP_DESCRIPTION,
+  })
+  @IsOptional()
+  @IsEnum(BranchOwnership)
+  ownership?: BranchOwnership;
+
+  @ApiPropertyOptional({
+    example: '5000',
+    oneOf: [{ type: 'string' }, { type: 'number' }],
+    description: PER_ORDER_SHARE_DESCRIPTION,
+  })
+  @IsOptional()
+  @Transform(moneyToString)
+  @Matches(PER_ORDER_SHARE_PATTERN, { message: PER_ORDER_SHARE_MESSAGE })
+  per_order_share?: string;
 }
 
 export class UpdateBranchRequestDto {
@@ -143,6 +179,25 @@ export class UpdateBranchRequestDto {
   @IsOptional()
   @IsNumberString()
   manager_id?: string;
+
+  @ApiPropertyOptional({
+    example: 'partner',
+    enum: BranchOwnership,
+    description: OWNERSHIP_DESCRIPTION,
+  })
+  @IsOptional()
+  @IsEnum(BranchOwnership)
+  ownership?: BranchOwnership;
+
+  @ApiPropertyOptional({
+    example: '5000',
+    oneOf: [{ type: 'string' }, { type: 'number' }],
+    description: PER_ORDER_SHARE_DESCRIPTION,
+  })
+  @IsOptional()
+  @Transform(moneyToString)
+  @Matches(PER_ORDER_SHARE_PATTERN, { message: PER_ORDER_SHARE_MESSAGE })
+  per_order_share?: string;
 }
 
 export class AssignBranchUserRequestDto {

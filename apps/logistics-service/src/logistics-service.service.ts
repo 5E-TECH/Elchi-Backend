@@ -1587,19 +1587,73 @@ export class LogisticsServiceService implements OnModuleInit {
       ? queryWhere.map((clause) => ({ ...clause, ...filterClause }))
       : { ...queryWhere, ...filterClause };
 
-    const [data, total] = await this.postRepo.findAndCount({
+    const [rows, total] = await this.postRepo.findAndCount({
       where: queryWhere,
       relations: ['region'],
       order: { createdAt: 'DESC' },
       skip,
       take,
     });
+    // 4YZcTTDQ: kuryer nomi (rejectedPosts naqshi) — sahifa uchun BITTA
+    // identity so'rovi.
+    const data = await this.attachPostCouriers(rows);
 
     return successRes(
       postListPage(data, total, paging),
       200,
       'All posts (paginated)',
     );
+  }
+
+  /**
+   * 4YZcTTDQ — pochta kuryeri faqat `{ id, name, phone_number }` (to'liq user
+   * obyekti, maosh/tarif EMAS). `courier_id` yo'q / '0' (filial o'tkazmasi)
+   * yoki kuryer o'chirilgan (identity `find_by_ids` o'chirilganlarni
+   * qaytarmaydi) — `null`. Identity javob bermasa ham `null` (ro'yxat
+   * yiqilmaydi).
+   */
+  private toPostCourierRef(
+    courierId: string | null | undefined,
+    courierMap: Map<string, Record<string, unknown>>,
+  ): { id: string; name: string | null; phone_number: string | null } | null {
+    const id = String(courierId ?? '').trim();
+    if (!id || id === '0') {
+      return null;
+    }
+    const courier = courierMap.get(id);
+    if (!courier) {
+      return null;
+    }
+    const name = courier.name;
+    const phone = courier.phone_number;
+    return {
+      id,
+      name: typeof name === 'string' ? name : null,
+      phone_number: typeof phone === 'string' ? phone : null,
+    };
+  }
+
+  private async attachPostCouriers<T extends { courier_id?: string | null }>(
+    posts: T[],
+  ): Promise<
+    Array<
+      T & {
+        courier: {
+          id: string;
+          name: string | null;
+          phone_number: string | null;
+        } | null;
+      }
+    >
+  > {
+    const courierIds = posts
+      .map((post) => String(post.courier_id ?? '').trim())
+      .filter((id) => Boolean(id) && id !== '0');
+    const courierMap = await this.findCouriersByIds(courierIds);
+    return posts.map((post) => ({
+      ...post,
+      courier: this.toPostCourierRef(post.courier_id, courierMap),
+    }));
   }
 
   private async repairSentPostBranchAssignments(
@@ -2220,7 +2274,11 @@ export class LogisticsServiceService implements OnModuleInit {
   }
 
   async getPostOrders(id: string, requester: RequesterContext) {
-    const post = await this.postRepo.findOne({ where: { id } });
+    const post = await this.postRepo.findOne({
+      where: { id },
+      // 4YZcTTDQ: javobdagi `post.region` (detal sarlavhasi) uchun.
+      relations: ['region'],
+    });
     if (!post) {
       this.notFound('Post not found');
     }
@@ -2305,6 +2363,12 @@ export class LogisticsServiceService implements OnModuleInit {
       }
     }
 
+    // 4YZcTTDQ: pochtaning o'z ma'lumoti (sarlavha, holat rozetkasi, QR,
+    // kuryer) — frontend uni router state'dan yoki buyurtmalardan taxmin
+    // qilmasin. Kuryer — faqat {id, name, phone_number}, o'chirilgan → null.
+    const [postWithCourier] = await this.attachPostCouriers([post]);
+    const region = post.region ?? null;
+
     return successRes(
       {
         allOrdersByPostId: orders,
@@ -2312,7 +2376,19 @@ export class LogisticsServiceService implements OnModuleInit {
         centerOrders: { centerOrders, centerOrdersTotalPrice },
         // yokjwjXG (additive): pochtaning o'zi — frontend savatni
         // (`POST /post/delete`) faqat `status = 'new'` da ko'rsatadi.
-        post: { id: String(post.id), status: post.status },
+        // 4YZcTTDQ (additive): holat bilan birga pochta meta'si.
+        post: {
+          id: String(post.id),
+          status: post.status,
+          courier_id: post.courier_id ? String(post.courier_id) : null,
+          courier: postWithCourier.courier,
+          qr_code_token: post.qr_code_token ?? null,
+          order_quantity: Number(post.order_quantity ?? 0),
+          branch_id: post.branch_id ? String(post.branch_id) : null,
+          region_id: post.region_id ? String(post.region_id) : null,
+          region: region ? { id: String(region.id), name: region.name } : null,
+          createdAt: post.createdAt ?? null,
+        },
       },
       200,
       'All orders by post id',
@@ -5429,6 +5505,54 @@ export class LogisticsServiceService implements OnModuleInit {
     return { all: false, regionId: own.regionId };
   }
 
+  /**
+   * o2j9uDtT — viloyatlar bo'yicha kuryerlar soni (`identity.courier.
+   * region_counts`, BITTA so'rov). Xato/timeout yoki buzuq javob — null
+   * (chaqiruvchi maydonni null qiladi; statistikaning qolgan qismi
+   * yiqilmaydi). Viloyat yo'q — bo'sh Map, RPC yuborilmaydi.
+   */
+  private async countCouriersByRegions(
+    regionIds: string[],
+  ): Promise<Map<string, { total: number; active: number }> | null> {
+    if (!regionIds.length) {
+      return new Map();
+    }
+    try {
+      const res = await lastValueFrom(
+        this.identityClient
+          .send<{
+            data?: Array<{
+              region_id?: string | number;
+              total?: number;
+              active?: number;
+            }>;
+          }>(
+            { cmd: 'identity.courier.region_counts' },
+            { region_ids: regionIds },
+          )
+          .pipe(timeout(5000)),
+      );
+      if (!Array.isArray(res?.data)) {
+        return null;
+      }
+      const counts = new Map<string, { total: number; active: number }>();
+      for (const row of res.data) {
+        const regionId = String(row?.region_id ?? '').trim();
+        if (!regionId) continue;
+        counts.set(regionId, {
+          total: Number(row?.total) || 0,
+          active: Number(row?.active) || 0,
+        });
+      }
+      return counts;
+    } catch (error) {
+      this.logger.warn(
+        `region stats: identity.courier.region_counts failed — activeCouriers null: ${(error as Error)?.message ?? error}`,
+      );
+      return null;
+    }
+  }
+
   async getAllRegionsStats(
     startDate?: string,
     endDate?: string,
@@ -5450,14 +5574,18 @@ export class LogisticsServiceService implements OnModuleInit {
     const regionIds = regions.map((region) => String(region.id));
     const regionIdSet = new Set(regionIds);
 
-    const orders = regionIds.length
-      ? await this.findOrders({
-          fetch_all: true,
-          start_day: startDate,
-          end_day: endDate,
-          limit: 100,
-        })
-      : [];
+    // o2j9uDtT: kuryerlar soni buyurtmalar bilan PARALLEL, bitta RPC.
+    const [orders, courierCounts] = await Promise.all([
+      regionIds.length
+        ? this.findOrders({
+            fetch_all: true,
+            start_day: startDate,
+            end_day: endDate,
+            limit: 100,
+          })
+        : Promise.resolve([] as OrderRow[]),
+      this.countCouriersByRegions(regionIds),
+    ]);
 
     const deliveredStatuses = new Set<Order_status>([
       Order_status.SOLD,
@@ -5533,6 +5661,16 @@ export class LogisticsServiceService implements OnModuleInit {
           ? region.districts.length
           : 0,
         ...stats,
+        // o2j9uDtT: xarita tooltipi "Kuryerlar: N" — stats/:id dagi
+        // `activeCouriers` bilan AYNI qoida (faqat status = 'active').
+        // identity javob bermasa — null (noma'lum), YOLG'ON 0 EMAS:
+        // frontend null'da qatorni chizmaydi.
+        activeCouriers: courierCounts
+          ? (courierCounts.get(String(region.id))?.active ?? 0)
+          : null,
+        totalCouriers: courierCounts
+          ? (courierCounts.get(String(region.id))?.total ?? 0)
+          : null,
       };
     });
 

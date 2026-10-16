@@ -1518,6 +1518,9 @@ export class OrderServiceController {
       endDate?: string;
       branch_id?: string;
       all?: boolean;
+      // juZFa64U: kuryerlar hisoboti — har qatorga canceledOrders/profit
+      // (alohida courier_stat so'rovlarisiz).
+      include_detail?: boolean;
     },
     @Ctx() context: RmqContext,
   ) {
@@ -1527,6 +1530,8 @@ export class OrderServiceController {
         data.endDate,
         data.branch_id,
         data.all,
+        // Eski chaqiruvlar (bayroqsiz) argumentlari o'zgarmaydi.
+        ...(data.include_detail === true ? ([true] as const) : []),
       ),
     );
   }

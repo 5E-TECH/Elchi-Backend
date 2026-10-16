@@ -40,6 +40,7 @@ import { Public } from './auth/public.decorator';
 import { Roles } from './auth/roles.decorator';
 import { RolesGuard } from './auth/roles.guard';
 import {
+  ChangeUserRoleRequestDto,
   CreateAdminRequestDto,
   CreateCourierRequestDto,
   CreateLogistRequestDto,
@@ -1245,6 +1246,56 @@ export class ApiGatewayController {
         { id, requester: this.toRequester(req) },
       )
       .pipe(timeout(15000));
+  }
+
+  /**
+   * K3scaE0W — rolni o'zgartirish. Faqat SUPERADMIN (admin → 403). Ichki
+   * qoidalar (qaysi rollar, filial biriktiruvi, logist viloyatlari, rolga
+   * bog'liq maydonlar, jurnal old/new role) — identity `changeUserRole`.
+   */
+  @Patch('users/:id/role')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary:
+      'Change user role (superadmin only; admin ⇄ registrator ⇄ manager ⇄ logist)',
+  })
+  @ApiParam({ name: 'id', description: 'User ID' })
+  @ApiBody({ type: ChangeUserRoleRequestDto })
+  @ApiOkResponse({ description: 'Role changed' })
+  @ApiConflictResponse({
+    description: 'User is assigned to a branch — unassign first',
+  })
+  @ApiNotFoundResponse({ description: 'Not found' })
+  changeUserRole(
+    @Param('id', ParseBigintIdPipe) id: string,
+    @Body() dto: ChangeUserRoleRequestDto,
+    @Req() req: { user: JwtUser },
+  ) {
+    return this.identityClient
+      .send(
+        { cmd: 'identity.user.change_role' },
+        { id, role: dto.role, requester: this.toRequester(req) },
+      )
+      .pipe(timeout(10000));
+  }
+
+  /**
+   * K3scaE0W — rol katalogi: Roles enum'ining to'liq ro'yxati (o'zbekcha
+   * nom, yaratish marshruti, almashtirish/filtr bayroqlari). Frontend
+   * RoleSelector / UserFilters / ruxsatlar ma'lumotnomasi shundan quriladi.
+   */
+  @Get('roles')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.MANAGER)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Role catalog (single source for role lists)' })
+  @ApiOkResponse({ description: 'Role catalog' })
+  getRoleCatalog() {
+    return this.identityClient
+      .send({ cmd: 'identity.role.catalog' }, {})
+      .pipe(timeout(8000));
   }
 
   @Patch('users/:id/status')

@@ -1637,6 +1637,7 @@ export class OrderAnalyticsService {
     endDate?: string,
     branchId?: string,
     all = false,
+    includeDetail = false,
   ) {
     const { start, end } = this.analyticsDateRange(startDate, endDate, all);
     const soldStatuses = this.soldStatuses();
@@ -1711,7 +1712,171 @@ export class OrderAnalyticsService {
     });
 
     result.sort((a, b) => b.successRate - a.successRate);
-    return result;
+    if (!includeDetail) {
+      return result;
+    }
+
+    // juZFa64U: kuryerlar hisoboti — har kuryer uchun alohida
+    // `order.analytics.courier_stat` o'rniga bekor qilinganlar va daromad
+    // (`getCourierStat` dagi AYNI qoida) shu javobning o'zida, bitta
+    // to'plamli so'rovda.
+    const details = await this.getCourierReportDetails(
+      result.map((row) => String(row.courier?.id ?? '')),
+      startDate,
+      endDate,
+      all,
+    );
+    return result.map((row) => {
+      const detail = details.get(String(row.courier?.id ?? '')) ?? {
+        canceledOrders: 0,
+        profit: 0,
+      };
+      return {
+        ...row,
+        canceledOrders: detail.canceledOrders,
+        profit: detail.profit,
+      };
+    });
+  }
+
+  /**
+   * juZFa64U — KURYERLAR HISOBOTINING N+1 SI OLIB TASHLANDI.
+   *
+   * Ilgari analytics-service har kuryer uchun alohida
+   * `order.analytics.courier_stat` yuborardi, u esa har safar BARCHA
+   * pochtalarni (`getAllPostsForAnalytics`, sahifama-sahifa RMQ) qayta
+   * yuklab, uchta so'rov bajarardi — N kuryer ≈ N × (pochta sahifalari + 3).
+   * Prod o'lchovi: 8 kuryerda sovuq kesh 1384 ms / issiq 121 ms.
+   *
+   * Endi: pochtalar BIR marta yuklanadi va bitta SQL barcha kuryerlar uchun
+   * `getCourierStat` bilan AYNAN bir xil sonlarni beradi:
+   *   - doira (applyAnalyticsCourierScope): o.courier_id = K, YOKI
+   *     o.holder_courier_id = K, YOKI o.post_id K ning pochtalaridan, YOKI
+   *     custody hodisasida from/to_courier_id = K — `pairs` CTE'sida
+   *     (buyurtma, kuryer) juftlari UNION (takrorsiz) bilan;
+   *   - profit: sotilgan (SOLD/PAID/PARTLY_PAID), sold_at oynada,
+   *     SUM(COALESCE(courier_share, courier_tariff, 0));
+   *   - canceledOrders (countHistoricallyCancelledOrders, filialsiz):
+   *     tracking'da CANCELLED/CANCELLED_SENT/CLOSED ga o'tish (action
+   *     'cancelled_post_received' emas), created_at oynada,
+   *     COUNT(DISTINCT order_id).
+   * Teng natija `courier-report-batch.juZFa64U.pg.spec.ts` da haqiqiy
+   * Postgres'da eski yo'l bilan solishtiriladi.
+   */
+  async getCourierReportDetails(
+    courierIds: string[],
+    startDate?: string,
+    endDate?: string,
+    all = false,
+  ): Promise<Map<string, { canceledOrders: number; profit: number }>> {
+    const ids = Array.from(
+      new Set(
+        courierIds
+          .map((id) => String(id ?? '').trim())
+          .filter((id) => /^\d+$/.test(id)),
+      ),
+    );
+    const details = new Map<
+      string,
+      { canceledOrders: number; profit: number }
+    >();
+    if (!ids.length) {
+      return details;
+    }
+    const range = this.resolveAnalyticsRange(startDate, endDate, all);
+    const idSet = new Set(ids);
+    const posts = (await this.getAllPostsForAnalytics()).filter((post) =>
+      idSet.has(String(post.courier_id ?? '').trim()),
+    );
+    const postIds = posts.map((post) => String(post.id));
+    const postCourierIds = posts.map((post) => String(post.courier_id));
+
+    const quote = (tablePath: string) =>
+      tablePath
+        .split('.')
+        .map((part) => `"${part}"`)
+        .join('.');
+    const orders = quote(this.orderRepo.metadata.tablePath);
+    const tracking = quote(this.orderTrackingRepo.metadata.tablePath);
+    const custody = quote(this.orderCustodyEventRepo.metadata.tablePath);
+
+    const rows = await this.orderRepo.query<
+      Array<{ courier_id: string; profit: string | null; canceled: number }>
+    >(
+      `WITH cs AS (
+         SELECT DISTINCT unnest($1::bigint[]) AS courier_id
+       ),
+       pc AS (
+         SELECT unnest($2::bigint[]) AS post_id,
+                unnest($3::bigint[]) AS courier_id
+       ),
+       pairs AS (
+         SELECT o.id AS order_id, o.courier_id AS courier_id
+           FROM ${orders} o JOIN cs ON cs.courier_id = o.courier_id
+         UNION
+         SELECT o.id, o.holder_courier_id
+           FROM ${orders} o JOIN cs ON cs.courier_id = o.holder_courier_id
+         UNION
+         SELECT o.id, pc.courier_id
+           FROM ${orders} o JOIN pc ON pc.post_id = o.post_id
+         UNION
+         SELECT e.order_id, e.from_courier_id
+           FROM ${custody} e JOIN cs ON cs.courier_id = e.from_courier_id
+         UNION
+         SELECT e.order_id, e.to_courier_id
+           FROM ${custody} e JOIN cs ON cs.courier_id = e.to_courier_id
+       ),
+       sold AS (
+         SELECT p.courier_id,
+                COALESCE(SUM(COALESCE(o.courier_share, o.courier_tariff, 0)), 0) AS profit
+           FROM pairs p JOIN ${orders} o ON o.id = p.order_id
+          WHERE o.is_deleted = false
+            AND o.status::text = ANY($4::text[])
+            AND o.sold_at BETWEEN $5::bigint AND $6::bigint
+          GROUP BY p.courier_id
+       ),
+       canceled AS (
+         SELECT p.courier_id, COUNT(DISTINCT t.order_id)::int AS canceled
+           FROM pairs p
+           JOIN ${orders} o ON o.id = p.order_id
+           JOIN ${tracking} t ON t.order_id = o.id
+          WHERE o.is_deleted = false
+            AND t.to_status::text = ANY($7::text[])
+            AND (t.action IS NULL OR t.action != $8)
+            AND t.created_at BETWEEN $9 AND $10
+          GROUP BY p.courier_id
+       )
+       SELECT cs.courier_id::text AS courier_id,
+              sold.profit AS profit,
+              COALESCE(canceled.canceled, 0)::int AS canceled
+         FROM cs
+         LEFT JOIN sold ON sold.courier_id = cs.courier_id
+         LEFT JOIN canceled ON canceled.courier_id = cs.courier_id`,
+      [
+        ids,
+        postIds,
+        postCourierIds,
+        this.soldStatuses(),
+        String(range.start.getTime()),
+        String(range.end.getTime()),
+        [
+          Order_status.CANCELLED,
+          Order_status.CANCELLED_SENT,
+          Order_status.CLOSED,
+        ],
+        'cancelled_post_received',
+        range.start,
+        range.end,
+      ],
+    );
+
+    for (const row of rows) {
+      details.set(String(row.courier_id), {
+        canceledOrders: Number(row.canceled ?? 0),
+        profit: Number(row.profit ?? 0),
+      });
+    }
+    return details;
   }
 
   async getTopMarkets(
