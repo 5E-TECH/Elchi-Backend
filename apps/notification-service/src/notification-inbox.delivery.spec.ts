@@ -212,6 +212,7 @@ describe('NotificationInboxService — delivery, fan-out, types', () => {
       const res = await service.dispatch({
         recipient_ids,
         type: 'order.sold',
+        data: { order_id: '81' },
         title: 'Sotildi',
       } as any);
 
@@ -233,6 +234,7 @@ describe('NotificationInboxService — delivery, fan-out, types', () => {
       const res = await service.dispatch({
         recipient_id: '42',
         type: 'order.sold',
+        data: { order_id: '81' },
         title: 'Sotildi',
       } as any);
 
@@ -262,6 +264,7 @@ describe('NotificationInboxService — delivery, fan-out, types', () => {
       const res = await service.dispatch({
         recipient_id: '42',
         type: 'order.cancelled',
+        data: { order_id: '81' },
         title: 'Bekor',
         channels: ['in_app', 'telegram'],
         telegram: { market_id: '5', group_type: 'cancel' },
@@ -286,6 +289,7 @@ describe('NotificationInboxService — delivery, fan-out, types', () => {
       await service.dispatch({
         recipient_id: '42',
         type: 'order.cancelled',
+        data: { order_id: '81' },
         title: 'Bekor',
         channels: ['in_app', 'telegram'],
         telegram: { market_id: '5' },
@@ -299,6 +303,7 @@ describe('NotificationInboxService — delivery, fan-out, types', () => {
       await service.dispatch({
         recipient_id: '43',
         type: 'order.cancelled',
+        data: { order_id: '81' },
         title: 'Bekor',
         channels: ['in_app', 'telegram'],
       } as any);
@@ -392,6 +397,7 @@ describe('NotificationInboxService — delivery, fan-out, types', () => {
       const res = await service.dispatch({
         recipient_id: '42',
         type: 'order.sold',
+        data: { order_id: '81' },
         title: 'Sotildi',
       } as any);
       expect(res.statusCode).toBe(201);
@@ -494,6 +500,7 @@ describe('NotificationInboxService — delivery, fan-out, types', () => {
       await service.dispatch({
         recipient_ids: ['42', '43'],
         type: 'order.sold',
+        data: { order_id: '81' },
         title: 'Sotildi',
       } as any);
       expect(gatewayClient.emit).toHaveBeenCalledTimes(2);
@@ -512,6 +519,7 @@ describe('NotificationInboxService — delivery, fan-out, types', () => {
         service.dispatch({
           recipient_ids: Array.from({ length: 5001 }, (_, i) => String(i + 1)),
           type: 'marketing.promo',
+          data: { campaign_id: '1' },
           title: 'Promo',
         } as any),
       );
@@ -538,6 +546,7 @@ describe('NotificationInboxService — delivery, fan-out, types', () => {
         service.dispatch({
           roles: ['courier'],
           type: 'marketing.promo',
+          data: { campaign_id: '1' },
           title: 'Promo',
         } as any),
       );
@@ -549,6 +558,7 @@ describe('NotificationInboxService — delivery, fan-out, types', () => {
       await service.dispatch({
         recipient_ids: Array.from({ length: 30 }, (_, i) => String(i + 1)),
         type: 'order.cancelled',
+        data: { order_id: '81' },
         title: 'Bekor',
         channels: ['in_app'],
       } as any);
@@ -627,20 +637,32 @@ describe('NotificationInboxService — delivery, fan-out, types', () => {
       expect(row.group_key).toBe('order:7:status');
     });
 
-    it('TC8: pattern o‘zgaruvchisi yetishmasa group_key UMUMAN yo‘q (null, bo‘sh satr emas)', async () => {
-      await service.dispatch({
-        recipient_id: '42',
-        type: 'order.cancelled',
-        title: 'Bekor',
-        channels: ['in_app'],
-      } as any);
-      expect(rows()[0].group_key).toBeNull();
+    // (A1HzKEby TC1) Avval (Eh8y21Ha TC8) qator group_key = NULL bilan
+    // yozilardi va bir buyurtmaning har hodisasi YANGI qator bo'lardi. Endi
+    // shablonli turda o'zgaruvchi yetishmasa — 400, qator yozilmaydi. "Bo'sh
+    // satr / order::status emas" kafolati katalog darajasida o'zgarmagan
+    // (libs/common notification-types.spec TC8).
+    it('TC8 -> A1HzKEby TC1: pattern o‘zgaruvchisi yetishmasa — 400, hech qanday qator (NULL yoki buzuq group_key) yozilmaydi', async () => {
+      const err = await errorOf(
+        service.dispatch({
+          recipient_id: '42',
+          type: 'order.cancelled',
+          title: 'Bekor',
+          channels: ['in_app'],
+        } as any),
+      );
+      expect(err.statusCode).toBe(400);
+      expect(err.message).toContain('group_key');
+      expect(err.message).toContain('order:{{order_id}}:status');
+      expect(err.message).toContain('data.order_id');
+      expect(rows()).toHaveLength(0);
     });
 
     it('channels berilmasa katalogning default_channels i (order.cancelled → telegram ham so‘raladi)', async () => {
       const res = await service.dispatch({
         recipient_id: '42',
         type: 'order.cancelled',
+        data: { order_id: '81' },
         title: 'Bekor',
       } as any);
       expect(res.data.channels).toEqual(['in_app', 'realtime', 'telegram']);

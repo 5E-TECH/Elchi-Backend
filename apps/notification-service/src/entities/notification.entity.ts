@@ -21,6 +21,11 @@ import { NotificationCategory, NotificationPriority } from '@app/common';
 @Index('IDX_NOTIF_RECIPIENT_CREATED', ['recipient_id', 'createdAt'])
 @Index('IDX_NOTIF_TYPE', ['type'])
 @Index('IDX_NOTIF_GROUP_KEY', ['group_key'])
+// (A1HzKEby) Retention cron'i: `is_read + createdAt <` partiyalab o'chirish;
+// `critical` hech qachon o'chirilmaydi — indeksga ham tushmaydi (mig. 108).
+@Index('IDX_NOTIF_RETENTION', ['is_read', 'createdAt'], {
+  where: `"priority" <> 'critical'`,
+})
 export class Notification extends BaseEntity {
   /** The user this notification belongs to (identity_schema.user id). */
   @Column({ type: 'bigint' })
@@ -73,7 +78,9 @@ export class Notification extends BaseEntity {
   /** Optional dedupe/collapse key — repeated dispatches with the same key for the
    * same recipient are merged instead of duplicated (e.g. one row per order).
    * Birlashtirilganda qator qayta o'qilmagan bo'ladi va `createdAt` yangilanadi
-   * (inbox-group-sort). */
+   * (inbox-group-sort), `data.count` — shu qatorga yig'ilgan hodisalar soni.
+   * (A1HzKEby) Yangi qatorlarda DOIM bor: katalog shablonidan yoki (shablonsiz
+   * tur) `{type}:{dispatch_id}`. Eski qatorlarda NULL bo'lishi mumkin. */
   @Column({ type: 'varchar', nullable: true })
   group_key!: string | null;
 

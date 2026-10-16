@@ -131,6 +131,7 @@ describe('NotificationInboxService', () => {
     const res = await service.dispatch({
       recipient_id: '42',
       type: 'order.sold',
+      data: { order_id: '81' },
       title: 'Sotildi',
     } as any);
 
@@ -149,7 +150,11 @@ describe('NotificationInboxService', () => {
 
   it('dispatch throws 400 when no recipient is resolvable', async () => {
     await expect(
-      service.dispatch({ type: 'order.sold', title: 'x' } as any),
+      service.dispatch({
+        type: 'order.sold',
+        title: 'x',
+        data: { order_id: '81' },
+      } as any),
     ).rejects.toBeInstanceOf(RpcException);
   });
 

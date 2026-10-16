@@ -364,7 +364,7 @@ describe('C4R3YyvH — dispatch: DB shablon matnni almashtiradi, yo‘q bo‘lsa
       type: 'order.sold',
       title: 'Buyurtma sotildi',
       body: 'Buyurtma #77 sotildi.',
-      data: { order_number: '77' },
+      data: { order_id: '77', order_number: '77' },
       recipient_ids: ['11', '12'],
       channels: [NotificationChannel.IN_APP],
       ...extra,

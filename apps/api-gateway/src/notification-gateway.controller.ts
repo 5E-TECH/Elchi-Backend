@@ -12,6 +12,7 @@ import {
   Req,
   UnauthorizedException,
   UseGuards,
+  UseInterceptors,
 } from '@nestjs/common';
 import { ClientProxy } from '@nestjs/microservices';
 import {
@@ -27,6 +28,7 @@ import { Roles } from './auth/roles.decorator';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
 import { Public } from './auth/public.decorator';
 import { RolesGuard } from './auth/roles.guard';
+import { BodyStatusCodeInterceptor } from './body-status-code.interceptor';
 import { Roles as RoleEnum } from '@app/common';
 import {
   ConnectTelegramByTokenRequestDto,
@@ -295,6 +297,8 @@ export class NotificationGatewayController {
   }
 
   @Post('dispatch')
+  // (3SeRYFqx) Tana statusCode i HTTP holatiga (takror — 200, yangi — 201).
+  @UseInterceptors(BodyStatusCodeInterceptor)
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiBearerAuth()
@@ -335,6 +339,7 @@ export class NotificationGatewayController {
   }
 
   @Post()
+  @UseInterceptors(BodyStatusCodeInterceptor)
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiBearerAuth()
@@ -382,16 +387,25 @@ export class NotificationGatewayController {
   }
 
   @Post('connect-by-token')
+  // (3SeRYFqx #1) Xato — 400/404 standart konvert (statusCode + message);
+  // muvaffaqiyat — 201.
+  @UseInterceptors(BodyStatusCodeInterceptor)
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.REGISTRATOR)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Connect telegram group by group token' })
+  @ApiOperation({
+    summary:
+      "Connect telegram group by group token. Noto'g'ri token — 400, market topilmadi — 404 (standart { statusCode, message }).",
+  })
   @ApiBody({ type: ConnectTelegramByTokenRequestDto })
   connectByToken(@Body() dto: ConnectTelegramByTokenRequestDto) {
     return this.send({ cmd: 'notification.telegram.connect_by_token' }, dto);
   }
 
   @Post('send')
+  // (3SeRYFqx #2) Hammasi ketdi — 200, qisman — 207, hech biri — 502
+  // (tana statusCode i HTTP holatiga ko'chiriladi; data.results o'zgarmagan).
+  @UseInterceptors(BodyStatusCodeInterceptor)
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.REGISTRATOR)
   @ApiBearerAuth()

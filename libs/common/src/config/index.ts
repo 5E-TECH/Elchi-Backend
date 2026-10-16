@@ -354,6 +354,35 @@ export const notificationValidationSchema = Joi.object({
     .truthy('true', '1')
     .falsy('false', '0')
     .default(false),
+  // (A1HzKEby #4) Bo'ron chegarasi: bir foydalanuvchiga bir TURDAGI xabar
+  // oxirgi 1 soatda shuncha qatordan oshsa — yangi qator o'rniga eng oxirgi
+  // qator yangilanadi (`data.count` oshadi). CRITICAL — chegarasiz. 0 — o'chiq.
+  NOTIF_HOURLY_CAP_PER_TYPE: Joi.number().integer().min(0).default(30),
+  // (A1HzKEby #3) Inbox retention — kunlik cron PARTIYALAB o'chiradi.
+  // ⚠️ Sukut O'CHIQ: yoqishdan oldin NOTIF_RETENTION_DRY_RUN=true bilan
+  // nechta qator ketishini logdan o'lchang. `priority=critical` HECH QACHON
+  // o'chirilmaydi; o'qilmaganlar muddati o'qilganlarnikidan uzun bo'lishi shart.
+  NOTIF_RETENTION_ENABLED: Joi.boolean()
+    .truthy('true', '1')
+    .falsy('false', '0')
+    .default(false),
+  NOTIF_RETENTION_DRY_RUN: Joi.boolean()
+    .truthy('true', '1')
+    .falsy('false', '0')
+    .default(false),
+  NOTIF_RETENTION_READ_DAYS: Joi.number().integer().min(7).default(60),
+  NOTIF_RETENTION_UNREAD_DAYS: Joi.number().integer().min(8).default(180),
+  NOTIF_RETENTION_BATCH_SIZE: Joi.number()
+    .integer()
+    .min(100)
+    .max(10000)
+    .default(5000),
+  NOTIF_RETENTION_MAX_BATCHES: Joi.number()
+    .integer()
+    .min(1)
+    .max(10000)
+    .default(200),
+  NOTIF_RETENTION_CRON_EXPR: Joi.string().default('0 30 3 * * *'),
   // Reklama taqiq oynasi (Toshkent vaqti), qonun soatlari o'zgarishi mumkin.
   NOTIF_PROMO_QUIET_HOURS: Joi.string()
     .pattern(/^\d{1,2}:\d{2}-\d{1,2}:\d{2}$/)

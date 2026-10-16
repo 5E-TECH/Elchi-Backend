@@ -379,8 +379,9 @@ export class DispatchNotificationRequestDto {
   channels?: NotificationChannel[];
 
   @ApiPropertyOptional({
-    example: 'order-123',
-    description: 'Dedupe/collapse key',
+    example: 'order:123:status',
+    description:
+      "Dedupe/collapse key (ixtiyoriy). Berilmasa katalogdagi group_key_pattern + data dan hosil qilinadi (masalan order.* -> order:{order_id}:status); shablonli turda data o'zgaruvchisi yetishmasa — 400. Shablonsiz tur (category.manual va h.k.) — har dispatch alohida qator.",
   })
   @IsOptional()
   @IsString()

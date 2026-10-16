@@ -21,8 +21,10 @@ import {
   NotificationDeliveryStatus,
   NotificationPriority,
   escapeTelegramHtml,
+  findNotificationType,
   isKnownNotificationType,
   maskPhonesForLog,
+  missingGroupKeyVariables,
   notificationTypeErrorMessage,
   resolveNotificationDefaults,
   rmqSend,
@@ -61,6 +63,8 @@ import {
 } from './history/dispatch-history.service';
 import type { NotificationDispatch } from './history/notification-dispatch.entity';
 import { TelegramDmService } from './telegram/telegram-dm.service';
+import { InboxPolicyService } from './retention/inbox-policy.service';
+import { RecipientDirectoryService } from './recipients/recipient-directory.service';
 import {
   DispatchTexts,
   NotificationTemplateService,
@@ -155,6 +159,31 @@ function isBigintId(value: unknown): boolean {
   const id = BigInt(text);
   return id > BigInt(0) && id <= BIGINT_MAX;
 }
+
+/** (3SeRYFqx) Solishtirish uchun kanonik id (' 042' -> '42'). */
+function canonicalId(value: unknown): string {
+  const text =
+    typeof value === 'string' || typeof value === 'number'
+      ? String(value).trim()
+      : '';
+  try {
+    return /^[0-9]+$/.test(text) ? BigInt(text).toString() : text;
+  } catch {
+    return text;
+  }
+}
+
+/**
+ * (A1HzKEby) Qatorga yig'ilgan hodisalar soni — `data.count`; yo'q (eski
+ * yoki birinchi hodisa) — 1.
+ */
+function eventCount(data: unknown): number {
+  const raw = (data as { count?: unknown } | null | undefined)?.count;
+  const count =
+    typeof raw === 'string' || typeof raw === 'number' ? Number(raw) : NaN;
+  return Number.isInteger(count) && count >= 1 ? count : 1;
+}
+
 @Injectable()
 export class NotificationInboxService {
   private readonly logger = new Logger(NotificationInboxService.name);
@@ -182,6 +211,17 @@ export class NotificationInboxService {
     @Optional() private readonly telegramDm?: TelegramDmService,
     /** (C4R3YyvH) Shablonlar reyestri — DB'dagi shablon xom matnni almashtiradi. */
     @Optional() private readonly templates?: NotificationTemplateService,
+    /**
+     * (A1HzKEby #4) Bo'ron chegarasi (NOTIF_HOURLY_CAP_PER_TYPE). Modulda
+     * DOIM bor; yo'q bo'lsa (eski unit spec'lar) — chegara o'chiq.
+     */
+    @Optional() private readonly policy?: InboxPolicyService,
+    /**
+     * (3SeRYFqx #3) Aniq recipient_id(s) identity'da bormi — yetim qator
+     * yozilmasin. Modulda DOIM bor; yo'q bo'lsa (eski unit spec'lar) —
+     * tekshiruvsiz (avvalgi xulq).
+     */
+    @Optional() private readonly directory?: RecipientDirectoryService,
   ) {}
 
   private toRpcError(error: unknown): never {
@@ -315,6 +355,27 @@ export class NotificationInboxService {
       dto.category = defaults.category;
       dto.priority = defaults.priority;
       dto.group_key = defaults.group_key ?? undefined;
+      // (A1HzKEby #1) group_key MAJBURIY: DTO -> katalog shabloni. Shablonli
+      // tur uchun data da o'zgaruvchi yetishmasa — 400: aks holda bir
+      // obyektning har hodisasi inboxda YANGI qator bo'lib to'planardi.
+      // Shablonsiz tur — pastda dispatch partiyasi ID sidan to'ldiriladi.
+      const catalogPattern =
+        findNotificationType(dto.type)?.group_key_pattern ?? null;
+      if (!dto.group_key && catalogPattern) {
+        const missing = missingGroupKeyVariables(catalogPattern, dto.data);
+        const reason = missing.length
+          ? 'data.' + missing.join(', data.') + ' berilmagan'
+          : 'shablon natijasi yaroqsiz (255 belgidan uzun)';
+        throw new BadRequestException(
+          'group_key aniqlanmadi: "' +
+            dto.type.trim() +
+            '" turi katalogda "' +
+            catalogPattern +
+            '" shabloni bilan guruhlanadi — ' +
+            reason +
+            ". group_key ni bering yoki data ni to'ldiring.",
+        );
+      }
 
       // (7Ec56EIw #2 a/b) Katalog sukuti yoki chaqiruvchi so'ragani ∩
       // katalogda ruxsat etilgan kanallar — ortiqcha kanal qo'shilmaydi.
@@ -334,6 +395,14 @@ export class NotificationInboxService {
        * bo'lib qaytadi, har inbox qatorida `dispatch_id` ustunida turadi.
        */
       const dispatchId = this.dispatchBatchId(dto);
+      // (A1HzKEby #1) Shablonsiz tur (category.manual, system.announcement,
+      // account.*, x.*): katalog "har dispatch — yangi qator" deydi.
+      // group_key baribir NULL qolmaydi — shu dispatch partiyasining o'zi:
+      // turli dispatch'lar birlashmaydi, ayni partiyaning qayta yetkazilishi
+      // (bir xil request_id) esa yangi qator qo'shmaydi.
+      if (!dto.group_key) {
+        dto.group_key = (dto.type.trim() + ':' + dispatchId).slice(0, 255);
+      }
 
       // (7Vozou5x) Qo'lda (aktorli, kampaniya partiyasi emas) dispatch —
       // tarix qatori `running` bilan OLDINDAN ochiladi: 504 bo'lsa ham
@@ -358,13 +427,49 @@ export class NotificationInboxService {
         historyId = dispatchId;
       }
 
-      const recipients: ResolvedRecipient[] = internal?.recipients
+      let recipients: ResolvedRecipient[] = internal?.recipients
         ? internal.recipients.map((recipient) => ({
             id: String(recipient.id),
             role: recipient.role ?? null,
             via: 'explicit' as const,
           }))
         : await this.resolveRecipients(dto);
+
+      // (3SeRYFqx #3) Aniq recipient_id(s) — identity'da (o'chirilmagan) bormi.
+      // Topilmaganga qator YOZILMAYDI (uni hech kim o'qiy/o'chira olmaydi):
+      // javobda unresolved, hammasi topilmasa — 400. Kampaniya partiyasi
+      // (internal.recipients) identity'dan kelgan — qayta tekshirilmaydi.
+      let unresolved: string[] | null = null;
+      if (!internal?.recipients && this.directory) {
+        const explicit = recipients.filter((r) => r.via === 'explicit');
+        unresolved = [];
+        if (explicit.length) {
+          const found = await this.directory.existing(
+            explicit.map((r) => canonicalId(r.id)),
+          );
+          const missing = new Set(
+            explicit
+              .map((r) => r.id)
+              .filter((id) => !found.has(canonicalId(id))),
+          );
+          unresolved = [...missing].map((id) => String(id));
+          if (missing.size) {
+            recipients = recipients.filter((r) => !missing.has(r.id));
+          }
+        }
+        if (!recipients.length && unresolved.length) {
+          const more =
+            unresolved.length > 20
+              ? ' (+' + (unresolved.length - 20) + ')'
+              : '';
+          throw new BadRequestException(
+            "Qabul qiluvchi topilmadi (mavjud emas yoki o'chirilgan): " +
+              unresolved.slice(0, 20).join(', ') +
+              more +
+              ' — hech narsa yozilmadi.',
+          );
+        }
+      }
       if (!recipients.length) {
         // (W8aerwL6) Nishon berilgan-u, hech kim topilmagan bo'lsa — buni aytamiz.
         throw new BadRequestException(
@@ -539,6 +644,9 @@ export class NotificationInboxService {
           skipped_by_preference: plan.skipped.size,
           channels,
           notification_ids: rows.slice(0, 20).map((row) => String(row.id)),
+          ...(unresolved?.length
+            ? { unresolved_count: unresolved.length }
+            : {}),
         },
       });
 
@@ -612,6 +720,8 @@ export class NotificationInboxService {
           no_provider: summary.no_provider,
           // (mP1WGG1W) Sozlama bilan tushib qolganlar — 400 emas, hisob.
           skipped_by_preference: plan.skipped.size,
+          // (3SeRYFqx) identity'da topilmagan aniq recipient_id(s) — yozilmadi.
+          ...(unresolved ? { unresolved } : {}),
           ...(channelStatus ? { channel_status: channelStatus } : {}),
           // (C4R3YyvH) Shablon qo'llangan bo'lsa: nechta qabul qiluvchiga,
           // qaysi tilda, nechtasiga xom matn (o'zgaruvchi yetishmadi).
@@ -870,6 +980,8 @@ export class NotificationInboxService {
     // Endi qabul qiluvchi bo'yicha: o'chirilgan / imkoniyati yo'q kanal.
 
     const rowIdByRecipient = new Map<string, string>();
+    /** (A1HzKEby) Birlashtiriladigan qatorning hozirgi data.count i. */
+    const countByRecipient = new Map<string, number>();
     let toInsert = recipients;
 
     // Dedupe by group_key: refresh the existing row instead of stacking dupes.
@@ -883,9 +995,25 @@ export class NotificationInboxService {
       });
       for (const row of existing) {
         const key = String(row.recipient_id);
-        if (!rowIdByRecipient.has(key)) rowIdByRecipient.set(key, row.id);
+        if (!rowIdByRecipient.has(key)) {
+          rowIdByRecipient.set(key, row.id);
+          countByRecipient.set(key, eventCount(row.data));
+        }
       }
+    }
 
+    // (A1HzKEby #4) Bo'ron chegarasi: group_key bo'yicha qatori yo'q, lekin
+    // shu turdan oxirgi 1 soatda chegaradan ko'p qatori bor qabul qiluvchi —
+    // yangi qator EMAS, eng oxirgi qatori yangilanadi (data.count oshadi).
+    await this.applyHourlyCap(
+      repo,
+      dto,
+      recipients.filter((r) => !rowIdByRecipient.has(r.id)),
+      rowIdByRecipient,
+      countByRecipient,
+    );
+
+    if (rowIdByRecipient.size) {
       // Bir xil rol + bir xil boshlang'ich `delivery` — BITTA UPDATE.
       const groups = new Map<
         string,
@@ -893,6 +1021,7 @@ export class NotificationInboxService {
           role: string | null;
           delivery: Record<string, string>;
           text: { title: string; body: string | null } | null;
+          count: number;
           ids: string[];
         }
       >();
@@ -901,21 +1030,27 @@ export class NotificationInboxService {
         if (!rowId) continue;
         const delivery = deliveryFor(recipient.id);
         const text = textFor(recipient.id);
-        const key = JSON.stringify([recipient.role, delivery, text]);
+        // (A1HzKEby) Shu qatorga yig'ilgan hodisalar: oldingi + shu dispatch.
+        const count = (countByRecipient.get(recipient.id) ?? 1) + 1;
+        const key = JSON.stringify([recipient.role, delivery, text, count]);
         const group = groups.get(key) ?? {
           role: recipient.role,
           delivery,
           text,
+          count,
           ids: [],
         };
         group.ids.push(rowId);
         groups.set(key, group);
       }
-      for (const { role, delivery, text, ids } of groups.values()) {
+      for (const { role, delivery, text, count, ids } of groups.values()) {
         // jsonb ustunlari (`data`, `delivery`) TypeORM deep-partial turiga sig'maydi.
         await repo.update({ id: In(ids) }, {
           ...base,
           ...(text ?? {}),
+          // (A1HzKEby) data — oxirgi hodisaniki, count — yig'ilgan hodisalar
+          // soni (frontend: "N ta yangilanish"). Yangi qatorda count yo'q = 1.
+          data: { ...(dto.data ?? {}), count },
           delivery,
           recipient_role: role,
           is_read: false,
@@ -972,6 +1107,64 @@ export class NotificationInboxService {
     return rows.sort(
       (a, b) => (order.get(String(a.id)) ?? 0) - (order.get(String(b.id)) ?? 0),
     );
+  }
+
+  /**
+   * (A1HzKEby #4) BO'RON CHEGARASI. Qabul qiluvchida shu TURDAN oxirgi 1
+   * soatda (DB soati) NOTIF_HOURLY_CAP_PER_TYPE ta yoki ko'p qator bo'lsa —
+   * yangi qator yozilmaydi: eng oxirgi qatori yangilanadi (mazmun — yangi
+   * hodisa, data.count oshadi, qayta o'qilmagan bo'ladi). BITTA so'rov
+   * (1000 tadan bo'lak), IDX_NOTIF_RECIPIENT_CREATED bo'yicha.
+   *
+   * CRITICAL — chegarasiz (xavfsizlik xabari yig'ilib yo'qolmasin, eskalatsiya
+   * har qatorga). Siyosat yo'q (eski unit spec'lar) yoki 0 — o'chiq.
+   */
+  private async applyHourlyCap(
+    repo: Repository<Notification>,
+    dto: DispatchNotificationDto,
+    candidates: ResolvedRecipient[],
+    rowIdByRecipient: Map<string, string>,
+    countByRecipient: Map<string, number>,
+  ): Promise<void> {
+    const cap = this.policy?.hourlyCapPerType ?? 0;
+    if (
+      !cap ||
+      !candidates.length ||
+      dto.priority === NotificationPriority.CRITICAL
+    ) {
+      return;
+    }
+    for (let start = 0; start < candidates.length; start += READ_CHUNK) {
+      const ids = candidates
+        .slice(start, start + READ_CHUNK)
+        .map((recipient) => recipient.id);
+      const rows = await repo
+        .createQueryBuilder('n')
+        .select('n.recipient_id', 'recipient_id')
+        .addSelect('n.id', 'id')
+        .addSelect("n.data ->> 'count'", 'count')
+        .addSelect('COUNT(*) OVER (PARTITION BY n.recipient_id)', 'recent')
+        .distinctOn(['n.recipient_id'])
+        .where('n.recipient_id IN (:...ids)', { ids })
+        .andWhere('n.type = :type', { type: dto.type.trim() })
+        .andWhere('n.isDeleted = false')
+        .andWhere("n.createdAt > now() - interval '1 hour'")
+        .orderBy('n.recipient_id')
+        .addOrderBy('n.createdAt', 'DESC')
+        .addOrderBy('n.id', 'DESC')
+        .getRawMany<{
+          recipient_id: string;
+          id: string;
+          count: string | null;
+          recent: string;
+        }>();
+      for (const row of rows) {
+        const key = String(row.recipient_id);
+        if (Number(row.recent) < cap || rowIdByRecipient.has(key)) continue;
+        rowIdByRecipient.set(key, String(row.id));
+        countByRecipient.set(key, eventCount({ count: row.count }));
+      }
+    }
   }
 
   /**

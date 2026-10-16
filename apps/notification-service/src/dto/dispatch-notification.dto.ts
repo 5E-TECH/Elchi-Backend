@@ -147,7 +147,11 @@ export class DispatchNotificationDto {
   @IsEnum(NotificationChannel, { each: true })
   channels?: NotificationChannel[];
 
-  /** Dedupe/collapse key — same key + same recipient updates the existing row. */
+  /**
+   * Dedupe/collapse key — same key + same recipient updates the existing row
+   * (data.count oshadi). (A1HzKEby) Berilmasa katalog shablonidan; shablonli
+   * turda data o'zgaruvchisi yetishmasa — 400; shablonsiz tur — type:dispatch_id.
+   */
   @IsOptional()
   @IsString()
   @MaxLength(255)

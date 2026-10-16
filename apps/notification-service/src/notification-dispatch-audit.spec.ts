@@ -57,6 +57,7 @@ describe('NotificationInboxService.dispatch — jurnal entity_id (f2Ud5tju)', ()
     const res = await service.dispatch({
       recipient_id: '42',
       type: 'order.sold',
+      data: { order_id: '81' },
       title: 'Sotildi',
       request_id: 'req-7f3a',
     } as never);
@@ -77,11 +78,13 @@ describe('NotificationInboxService.dispatch — jurnal entity_id (f2Ud5tju)', ()
     await service.dispatch({
       recipient_id: '42',
       type: 'order.sold',
+      data: { order_id: '81' },
       title: 'a',
     } as never);
     await service.dispatch({
       recipient_id: '43',
       type: 'order.sold',
+      data: { order_id: '81' },
       title: 'b',
     } as never);
     const [a, b] = activityLog.log.mock.calls.map((c) => c[0].entity_id);

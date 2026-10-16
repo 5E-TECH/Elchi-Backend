@@ -133,11 +133,10 @@ export class NotificationServiceController {
     @Payload() data: { text: string; group_id: string },
     @Ctx() context: RmqContext,
   ) {
+    // (3SeRYFqx #1) HTTP yo'li — xato RpcException (400/404), { message }
+    // emas. Bot o'zi connectGroupByTokenText ni chaqiradi (guruhga javob).
     return this.executeAndAck(context, () =>
-      this.notificationService.connectGroupByTokenText(
-        data.text,
-        data.group_id,
-      ),
+      this.notificationService.connectGroupByToken(data.text, data.group_id),
     );
   }
 

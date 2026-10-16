@@ -206,6 +206,64 @@ kampaniyasi uchun BIR xil javob shakli):
   qilib `download_url` dan yuklang (axios blob). 390px: statistikalar 2
   ustun, jadval o'z ichida scroll; dark tema — dizayn tokenlari; kampaniya
   yo'q bo'lsa tushunarli bo'sh holat (H7kpCman TC1–TC12).
+### 2026-10-16 — N2: bildirishnoma inbox (dedupe, data.count, retention) va API xato kodlari (A1HzKEby, 3SeRYFqx)
+
+- [2026-10-16] ✏️ [notification] — `POST /notifications/connect-by-token`:
+  xato endi **2xx emas**. Noto'g'ri format / topilmagan token yoki noto'g'ri
+  `group_id` — **HTTP 400**, market topilmadi — **404**, kutilmagan xato —
+  500 (umumiy matn). Tana — standart konvert `{ statusCode, message }`
+  (avval HTTP 201 + konvertsiz `{ message }` edi). Muvaffaqiyat — HTTP 201
+  `{ statusCode: 201, message, data: <telegram config> }`. Telegram bot
+  ichidagi ulash oqimi o'zgarmagan.
+  → 🔧 Frontend (3SeRYFqx #4): `NotificationFormModal` ga token orqali ulash
+  oqimini chiqaring — market tanlanganda uning tokeni
+  `GET /markets/:id/tg-token` (faqat SUPERADMIN) dan olinadi va
+  `group_token-<token>` (bekor qilinganlar guruhi uchun `…-cancel`) ko'rinishida
+  ko'rsatiladi; "Group ID ni backend yoki bot logidan oling" matni o'rniga
+  guruhda `/id` buyrug'i yoki shu oqim. Xato holati — HTTP kod + `message`.
+- [2026-10-16] ✏️ [notification] — `POST /notifications/send`: HTTP kod =
+  tana `statusCode`: hammasi ketdi — **200**, qisman — **207**
+  (Multi-Status), hech biri ketmadi — **502**. Tana o'zgarmagan:
+  `data: { total, success, failed, results: [{ group_id, ok, error? }] }`
+  (502 da ham `data.results` keladi — sababni shundan ko'rsating).
+  → 🔧 Frontend: 207 ni "qisman yuborildi" ogohlantirishi, 502 ni xato
+  sifatida ko'rsating (axios 502 da `catch` ga tushadi — `error.response.data`).
+- [2026-10-16] ✏️ [notification] — `POST /notifications/dispatch`: aniq
+  `recipient_id(s)` identity'da tekshiriladi (o'chirilgan / mavjud bo'lmagan
+  foydalanuvchiga qator **yozilmaydi**). Javobda yangi maydon
+  `data.unresolved: string[]` (topilmagan id'lar; hammasi topilsa `[]`).
+  Hammasi topilmasa — **HTTP 400** ("Qabul qiluvchi topilmadi … — hech narsa
+  yozilmadi"). Rol/broadcast nishoni o'zgarmagan. Takror `client_request_id`
+  — HTTP 200 (`duplicate: true`), yangi dispatch — 201.
+  → 🔧 Frontend: "Xabar yuborish" natijasida `unresolved` bo'sh bo'lmasa
+  "N ta qabul qiluvchi topilmadi: …" deb ko'rsating.
+- [2026-10-16] ✏️ [notification] — `group_key` endi majburiy (A1HzKEby):
+  berilmasa katalogdagi `group_key_pattern` + `data` dan hosil bo'ladi
+  (`GET /notifications/types`); shablonli turda `data` o'zgaruvchisi
+  yetishmasa — **400** ("group_key aniqlanmadi: … data.order_id berilmagan").
+  Shablonsiz turlar (`<category>.manual`, `system.announcement`, `account.*`,
+  `x.*`) — har dispatch alohida qator (o'zgarishsiz). Admin "Xabar yuborish"
+  formasi (`*.manual`) ta'sirlanmaydi.
+- [2026-10-16] ✏️ [notification] — inbox qatori (`GET /notifications/inbox`,
+  realtime `notification:new` payload'i): bitta obyekt bo'yicha qator
+  birlashtirilganda (masalan bitta buyurtmaning 5 ta holati — inboxda 1 qator)
+  `data.count` — shu qatorga yig'ilgan hodisalar soni (yo'q bo'lsa = 1).
+  Bo'ron chegarasi: bir foydalanuvchiga bir turdagi xabar 1 soatda 30 tadan
+  oshsa (`NOTIF_HOURLY_CAP_PER_TYPE`) yangi qator o'rniga oxirgisi yangilanadi
+  va `data.count` oshadi (CRITICAL — chegarasiz).
+  → 🔧 Frontend: `data.count > 1` bo'lsa qatorda "N ta yangilanish" belgisi.
+- [2026-10-16] 🟢 [notification] — Inbox retention (kunlik, partiyalab):
+  o'qilganlar `NOTIF_RETENTION_READ_DAYS` (60), o'qilmaganlar
+  `NOTIF_RETENTION_UNREAD_DAYS` (180) kundan keyin o'chiriladi, `critical`
+  hech qachon. **Sukut o'chiq** (`NOTIF_RETENTION_ENABLED=false`) — yoqilguncha
+  hech narsa o'chmaydi. API o'zgarmagan.
+- [2026-10-16] 🟢 [notification] — Telegram guruh konfiguratsiyasi
+  (`GET /notifications`, `GET /notifications/:id`) javobida `is_active` bor,
+  `PATCH /notifications/:id { is_active: boolean }` uni o'zgartiradi,
+  `GET /notifications?is_active=true|false` filtri ishlaydi (backend tayyor).
+  → 🔧 Frontend (3SeRYFqx TC4): `Notification` tipiga
+  (`src/entities/notification/model/types.ts`) `is_active: boolean` qo'shing,
+  jadvalda `is_active` ustuni va toggle (PATCH) render qiling.
 
 ### 2026-10-15 — R1: dashboard reyting davri ("Bugun" → oxirgi 30 kun) va bot manbasi (9zbSDkUI, Celz3rKJ)
 

@@ -466,6 +466,24 @@ export function renderNotificationGroupKey(
   return rendered;
 }
 
+/**
+ * (A1HzKEby) Shablondagi qaysi o'zgaruvchilar `data` da YO'Q (yoki bo'sh) —
+ * dispatch 400 xabarida aniq aytish uchun. Pattern yo'q — bo'sh ro'yxat.
+ */
+export function missingGroupKeyVariables(
+  pattern: string | null | undefined,
+  data: Record<string, unknown> | null | undefined,
+): string[] {
+  if (!pattern) return [];
+  const missing = new Set<string>();
+  for (const match of pattern.matchAll(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g)) {
+    if (!renderNotificationGroupKey(`{{${match[1]}}}`, data)) {
+      missing.add(match[1]);
+    }
+  }
+  return [...missing];
+}
+
 export interface ResolvedNotificationDefaults {
   category: NotificationCategory;
   priority: NotificationPriority;

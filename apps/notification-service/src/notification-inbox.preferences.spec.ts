@@ -154,6 +154,7 @@ describe('NotificationInboxService — sozlamalar va kanal rejasi', () => {
     const res: any = await dispatch({
       recipient_ids: ['42', '43'],
       type: 'marketing.promo',
+      data: { campaign_id: '1' },
     });
     expect(res.statusCode).toBe(201);
     expect(res.data.dispatched).toBe(0);
@@ -170,6 +171,7 @@ describe('NotificationInboxService — sozlamalar va kanal rejasi', () => {
     const res: any = await dispatch({
       recipient_ids: ['42', '43'],
       type: 'marketing.promo',
+      data: { campaign_id: '1' },
     });
     expect(res.data.recipient_ids).toEqual(['43']);
     expect(res.data.skipped_by_preference).toBe(1);

@@ -66,7 +66,9 @@ describe('NotificationGatewayController — n0kLbx3d / Eh8y21Ha', () => {
   beforeEach(() => {
     user = { sub: '1', roles: ['superadmin'] };
     send.mockReset();
-    send.mockReturnValue(of({ statusCode: 200, data: {} }));
+    // (3SeRYFqx) POST marshrutlarda HTTP kod = tana statusCode
+    // (BodyStatusCodeInterceptor) — dispatch haqiqatda 201 qaytaradi.
+    send.mockReturnValue(of({ statusCode: 201, data: {} }));
   });
 
   describe('POST /notifications/send', () => {
@@ -81,10 +83,14 @@ describe('NotificationGatewayController — n0kLbx3d / Eh8y21Ha', () => {
 
     it('TC1: registrator ruxsat etilgan rol, lekin `requester` (roles) uzatiladi — doira notification-service’da (begona guruh → 403)', async () => {
       user = { sub: '77', roles: ['registrator'] };
+      // (3SeRYFqx) send hammasi ketganda tana statusCode 200 → HTTP 200.
+      send.mockReturnValue(
+        of({ statusCode: 200, data: { success: 1, failed: 0 } }),
+      );
       await request(http())
         .post('/notifications/send')
         .send({ group_id: '-1001', message: 'hi' })
-        .expect(201);
+        .expect(200);
       const [pattern, payload] = lastCall()!;
       expect(pattern).toEqual({ cmd: 'notification.send' });
       expect(payload).toEqual({

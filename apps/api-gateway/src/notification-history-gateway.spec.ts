@@ -69,7 +69,8 @@ describe('Gateway — /notifications/sent (7Vozou5x)', () => {
   beforeEach(() => {
     user = { sub: '25', roles: ['admin'] };
     send.mockReset();
-    send.mockReturnValue(of({ statusCode: 200, data: {} }));
+    // (3SeRYFqx) dispatch: HTTP kod = tana statusCode (haqiqatda 201).
+    send.mockReturnValue(of({ statusCode: 201, data: {} }));
   });
 
   it('GET /notifications/sent → dispatch_history.list (`:id` telegram config’ga TUSHMAYDI)', async () => {

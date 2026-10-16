@@ -76,6 +76,8 @@ const MARKET_GROUP_ALREADY_CONNECTED_MESSAGE =
   "Bu market uchun bu turdagi guruh allaqachon ulangan — admin orqali o'zgartiring";
 
 /** Kutilmagan (masalan baza) xato — guruhga ichki xato matni yuborilmaydi. */
+const NOMALUM_ERROR_MESSAGE = 'Noma’lum xatolik yuz berdi';
+
 const GROUP_BIND_UNEXPECTED_ERROR_MESSAGE =
   "Guruhni ulashda xatolik yuz berdi — birozdan so'ng qayta urinib ko'ring";
 
@@ -455,75 +457,49 @@ export class NotificationServiceService implements OnModuleInit {
     };
   }
 
+  /**
+   * (3SeRYFqx #1) HTTP yo'li (POST /notifications/connect-by-token, RMQ
+   * notification.telegram.connect_by_token): xato — boshqa metodlar kabi
+   * RpcException (400/404, standart konvert statusCode + message). Avval
+   * har qanday xato HTTP 201 va konvertsiz { message } bo'lib qaytardi —
+   * mijoz muvaffaqiyatsizlikni farqlay olmasdi. Kutilmagan (DB) xato matni
+   * mijozga chiqmaydi — umumiy 500 xabari, to'liq sabab logda.
+   */
+  async connectGroupByToken(text: string, groupId: string) {
+    try {
+      const group = typeof groupId === 'string' ? groupId.trim() : '';
+      if (!/^-?[0-9]+$/.test(group) || group.length > 21) {
+        throw new BadRequestException(
+          "group_id noto'g'ri — Telegram guruh ID si (masalan -1001234567890) bo'lishi kerak",
+        );
+      }
+      return await this.bindGroupByToken(text, group);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : 'rpc';
+      if (
+        error instanceof BadRequestException ||
+        error instanceof NotFoundException ||
+        error instanceof ForbiddenException ||
+        error instanceof RpcException
+      ) {
+        this.logger.warn('connectGroupByToken rad etildi: ' + detail);
+        this.toRpcError(error);
+      }
+      this.logger.error('connectGroupByToken failed: ' + detail);
+      throw new RpcException({
+        statusCode: 500,
+        message: GROUP_BIND_UNEXPECTED_ERROR_MESSAGE,
+      });
+    }
+  }
+
+  /**
+   * Bot yo'li (guruh chatidagi token matni): natija ham, xato ham guruhga
+   * yuboriladigan { message } — bot uni javob matni sifatida ishlatadi.
+   */
   async connectGroupByTokenText(text: string, groupId: string) {
     try {
-      const parsed = await this.parseGroupTokenText(text);
-      this.assertBigIntId(parsed.market_id, 'market_id');
-
-      const marketResponse = await rmqSend<any>(
-        this.identityClient,
-        { cmd: 'identity.market.find_by_id' },
-        { id: parsed.market_id },
-      ).catch(() => null);
-
-      const market = marketResponse?.data ?? marketResponse ?? null;
-      if (!market || !market.id) {
-        throw new NotFoundException(GROUP_BIND_MARKET_NOT_FOUND_MESSAGE);
-      }
-
-      const existsByGroup = await this.tgMarketRepo.findOne({
-        where: {
-          group_id: groupId,
-          group_type: parsed.group_type,
-          isDeleted: false,
-        },
-      });
-
-      if (existsByGroup) {
-        throw new BadRequestException(GROUP_ALREADY_CONNECTED_MESSAGE);
-      }
-
-      const existsByMarketType = await this.tgMarketRepo.findOne({
-        where: {
-          market_id: parsed.market_id,
-          group_type: parsed.group_type,
-          isDeleted: false,
-        },
-      });
-
-      // fix3b: mavjud (market, guruh turi) ulanishi token bilan ham
-      // ALMASHTIRILMAYDI (faol yoki nofaol bo'lsin) — qayta ulash faqat admin
-      // PATCH/DELETE /notifications/:id orqali. Aks holda guruh chatida
-      // ko'ringan token bilan istalgan a'zo market guruhini o'ziga ko'chirardi.
-      if (existsByMarketType) {
-        throw new BadRequestException(MARKET_GROUP_ALREADY_CONNECTED_MESSAGE);
-      }
-
-      // CODE-02: maxfiy token matni bazada SAQLANMAYDI (u bot tokeni emas) —
-      // yuborishda env bot ishlatiladi. fix3b: token ALMASHTIRILMAYDI.
-      const created = this.tgMarketRepo.create({
-        market_id: parsed.market_id,
-        group_id: groupId,
-        group_type: parsed.group_type,
-        token: null,
-        is_active: true,
-      });
-
-      const saved = await this.tgMarketRepo.save(created);
-
-      // Audit: group connection (token text itself is never logged).
-      await this.activityLog.log({
-        entity_type: 'TelegramMarket',
-        entity_id: saved.id,
-        action: 'notification.tg_group_connected',
-        metadata: { group_id: groupId, market_id: parsed.market_id },
-      });
-
-      return this.successRes(
-        this.toPublic(saved),
-        201,
-        `${market.name ?? 'Market'} uchun Telegram guruhi ulandi`,
-      );
+      return await this.bindGroupByToken(text, groupId);
     } catch (error) {
       // O'zimizning 400/404 xabarlarimiz (o'zbekcha) guruhga boradi; kutilmagan
       // xato (masalan baza) matni esa faqat logga — guruhga umumiy xabar.
@@ -531,14 +507,85 @@ export class NotificationServiceService implements OnModuleInit {
         error instanceof BadRequestException ||
         error instanceof NotFoundException;
       const detail =
-        error instanceof Error ? error.message : 'Noma’lum xatolik yuz berdi';
+        error instanceof Error ? error.message : NOMALUM_ERROR_MESSAGE;
       if (isOwnMessage) {
-        this.logger.warn(`connectGroupByTokenText failed: ${detail}`);
+        this.logger.warn('connectGroupByTokenText failed: ' + detail);
         return { message: detail };
       }
-      this.logger.error(`connectGroupByTokenText failed: ${detail}`);
+      this.logger.error('connectGroupByTokenText failed: ' + detail);
       return { message: GROUP_BIND_UNEXPECTED_ERROR_MESSAGE };
     }
+  }
+
+  /** Token matni -> (market, guruh turi) ulash. Xato — throw (o'ralmagan). */
+  private async bindGroupByToken(text: string, groupId: string) {
+    const parsed = await this.parseGroupTokenText(text);
+    this.assertBigIntId(parsed.market_id, 'market_id');
+
+    const marketResponse = await rmqSend<any>(
+      this.identityClient,
+      { cmd: 'identity.market.find_by_id' },
+      { id: parsed.market_id },
+    ).catch(() => null);
+
+    const market = marketResponse?.data ?? marketResponse ?? null;
+    if (!market || !market.id) {
+      throw new NotFoundException(GROUP_BIND_MARKET_NOT_FOUND_MESSAGE);
+    }
+
+    const existsByGroup = await this.tgMarketRepo.findOne({
+      where: {
+        group_id: groupId,
+        group_type: parsed.group_type,
+        isDeleted: false,
+      },
+    });
+
+    if (existsByGroup) {
+      throw new BadRequestException(GROUP_ALREADY_CONNECTED_MESSAGE);
+    }
+
+    const existsByMarketType = await this.tgMarketRepo.findOne({
+      where: {
+        market_id: parsed.market_id,
+        group_type: parsed.group_type,
+        isDeleted: false,
+      },
+    });
+
+    // fix3b: mavjud (market, guruh turi) ulanishi token bilan ham
+    // ALMASHTIRILMAYDI (faol yoki nofaol bo'lsin) — qayta ulash faqat admin
+    // PATCH/DELETE /notifications/:id orqali. Aks holda guruh chatida
+    // ko'ringan token bilan istalgan a'zo market guruhini o'ziga ko'chirardi.
+    if (existsByMarketType) {
+      throw new BadRequestException(MARKET_GROUP_ALREADY_CONNECTED_MESSAGE);
+    }
+
+    // CODE-02: maxfiy token matni bazada SAQLANMAYDI (u bot tokeni emas) —
+    // yuborishda env bot ishlatiladi. fix3b: token ALMASHTIRILMAYDI.
+    const created = this.tgMarketRepo.create({
+      market_id: parsed.market_id,
+      group_id: groupId,
+      group_type: parsed.group_type,
+      token: null,
+      is_active: true,
+    });
+
+    const saved = await this.tgMarketRepo.save(created);
+
+    // Audit: group connection (token text itself is never logged).
+    await this.activityLog.log({
+      entity_type: 'TelegramMarket',
+      entity_id: saved.id,
+      action: 'notification.tg_group_connected',
+      metadata: { group_id: groupId, market_id: parsed.market_id },
+    });
+
+    return this.successRes(
+      this.toPublic(saved),
+      201,
+      `${market.name ?? 'Market'} uchun Telegram guruhi ulandi`,
+    );
   }
 
   async createTelegramMarket(dto: CreateNotificationDto) {
@@ -996,6 +1043,13 @@ export class NotificationServiceService implements OnModuleInit {
       const success = results.filter((item) => item.ok).length;
       const failed = results.length - success;
 
+      // (3SeRYFqx #2) Natija tana statusCode ida: hammasi ketdi — 200,
+      // qisman — 207 (Multi-Status), HECH biri ketmadi — 502 (Telegram rad
+      // etdi). Gateway BodyStatusCodeInterceptor uni HTTP holatiga ko'chiradi
+      // — avval hammasi yiqilsa ham HTTP 201 + statusCode 200 qaytardi.
+      // Tana (results) o'zgarmagan: inbox relay va ichki chaqiruvchilar
+      // data.success/failed ni o'qiydi.
+      const statusCode = !failed ? 200 : success ? 207 : 502;
       return this.successRes(
         {
           total: results.length,
@@ -1003,8 +1057,12 @@ export class NotificationServiceService implements OnModuleInit {
           failed,
           results,
         },
-        200,
-        'Notification send result',
+        statusCode,
+        !failed
+          ? 'Notification send result'
+          : success
+            ? 'Partially sent: ' + failed + '/' + results.length + ' failed'
+            : 'Notification not sent: all ' + failed + ' target(s) failed',
       );
     } catch (error) {
       this.toRpcError(error);

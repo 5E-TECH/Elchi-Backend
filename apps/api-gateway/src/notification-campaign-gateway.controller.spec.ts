@@ -68,7 +68,8 @@ describe('NotificationCampaignGatewayController — W8aerwL6 / xHPdpj0W', () => 
   beforeEach(() => {
     user = { sub: '25', roles: ['admin'] };
     send.mockReset();
-    send.mockReturnValue(of({ statusCode: 200, data: {} }));
+    // (3SeRYFqx) dispatch: HTTP kod = tana statusCode (haqiqatda 201).
+    send.mockReturnValue(of({ statusCode: 201, data: {} }));
   });
 
   describe('POST /notifications/audience/preview (W8aerwL6 TC8/TC9)', () => {

@@ -68,6 +68,11 @@ import { NotificationTemplateController } from './templates/notification-templat
 import { NotificationAudienceSegment } from './audience/audience-segment.entity';
 import { AudienceSegmentService } from './audience/audience-segment.service';
 import { AudienceSegmentController } from './audience/audience-segment.controller';
+// (A1HzKEby) inbox siyosati: bo'ron chegarasi va retention cron'i.
+import { InboxPolicyService } from './retention/inbox-policy.service';
+import { NotificationRetentionService } from './retention/notification-retention.service';
+// (3SeRYFqx) aniq qabul qiluvchi identity'da bormi (yetim qator yo'q).
+import { RecipientDirectoryService } from './recipients/recipient-directory.service';
 
 @Module({
   imports: [
@@ -87,7 +92,8 @@ import { AudienceSegmentController } from './audience/audience-segment.controlle
     // yuboradi (dispatch javobni kutmaydi, qayta urinish/backoff outbox'da).
     RmqModule.register({ name: 'NOTIFICATION' }),
     DatabaseModule,
-    // SMS navbati va balans monitori cron'lari (3fRbyadQ #4, 8auPBa1O #7).
+    // SMS navbati va balans monitori cron'lari (3fRbyadQ #4, 8auPBa1O #7),
+    // inbox retention (A1HzKEby #3, sukut o'chiq).
     ScheduleModule.forRoot(),
     ActivityLogModule.forService('notification-service'),
     TypeOrmModule.forFeature([
@@ -159,6 +165,9 @@ import { AudienceSegmentController } from './audience/audience-segment.controlle
     TelegramDmService,
     NotificationTemplateService,
     AudienceSegmentService,
+    InboxPolicyService,
+    NotificationRetentionService,
+    RecipientDirectoryService,
   ],
 })
 export class NotificationServiceModule {}

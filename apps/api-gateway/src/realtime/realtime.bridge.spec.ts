@@ -92,6 +92,8 @@ describe('m9BOlEbE — realtime ko‘prigi (dispatch → gateway → socket)', (
       recipient_id: '42',
       type: 'order.sold',
       title: 'Sotildi',
+      // (A1HzKEby) shablonli tur — group_key uchun data.order_id majburiy.
+      data: { order_id: '81' },
       channels: ['in_app', 'realtime'],
     } as never)) as { data: { by_channel: Record<string, number> } };
     expect(client.emit).toHaveBeenCalledTimes(1);
