@@ -23,6 +23,20 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-10-17 — Prod e2e (superadmin UI) topilmalari
+
+- [2026-10-17] 🔧 [notification] — "Xabar yuborish" sahifasi Telegram kanali
+  belgilansa "Telegram uchun marketni tanlang" deb to'xtatadi. Backend endi
+  (TgYRqaTk) market/guruh tanlanmasa Telegram'ni qabul qiluvchining SHAXSIY
+  chatiga yuboradi (ulanmagan — `skipped`). 🔧 Bu validatsiyani olib
+  tashlang: market tanlansa — guruhga, tanlanmasa — shaxsiy DM.
+- [2026-10-17] 🔧 [identity] — Profil sahifasida "Telegram'ni ulash" yo'q:
+  `POST /users/me/telegram/link-code` (deep-link) va `DELETE /users/me/telegram`
+  ishlatilsin; market/operator/kuryer botdan foydalanishi shunga bog'liq.
+- [2026-10-17] 🟢 [notification] — "Bildirishnoma qo'shish" oynasi FE
+  `.env` dagi `VITE_TELEGRAM_NOTIFICATION_BOT_USERNAME` ni so'raydi — prod
+  frontend build'iga bot username qo'shilsin.
+
 ### 2026-10-17 — Market Telegram guruhi kartalari (ysBqD9Nx, h9newLsd)
 
 - [2026-10-17] 🆕 [identity] — `PATCH /markets/:id/telegram-group-pii`
