@@ -9,9 +9,18 @@ import { CatalogServiceService } from './catalog-service.service';
  */
 const make = (product: Record<string, unknown>) => {
   const activityLog = { log: jest.fn(), logChange: jest.fn() };
+  // Aws1oApe: nom o'zgarsa registrga befarq dublikat tekshiruvi
+  // (`createQueryBuilder ... getOne`) — bu yerda dublikat yo'q.
+  const nameCheck = {
+    select: jest.fn().mockReturnThis(),
+    where: jest.fn().mockReturnThis(),
+    andWhere: jest.fn().mockReturnThis(),
+    getOne: jest.fn(() => Promise.resolve(null)),
+  };
   const productRepo = {
     findOne: jest.fn(() => Promise.resolve({ ...product })),
     save: jest.fn((row: Record<string, unknown>) => Promise.resolve(row)),
+    createQueryBuilder: jest.fn(() => nameCheck),
   };
   const svc = new CatalogServiceService(
     productRepo as any,

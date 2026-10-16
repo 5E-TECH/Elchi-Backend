@@ -47,6 +47,8 @@ export class FileServiceService implements OnModuleInit {
     'image/png',
     'image/jpeg',
     'image/jpg',
+    // ugoDD9TT: mahsulot rasmlari uchun WebP.
+    'image/webp',
     'application/pdf',
     'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     // Video proof (expense proof on order sell/cancel)
@@ -171,7 +173,7 @@ export class FileServiceService implements OnModuleInit {
   private validateFile(mimeType: string, size: number) {
     if (!this.allowedMime.has(mimeType)) {
       throw new BadRequestException(
-        'Unsupported mime type. Allowed: image/png, image/jpeg, image/jpg, application/pdf, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet, video/mp4, video/quicktime, video/webm',
+        'Unsupported mime type. Allowed: image/png, image/jpeg, image/jpg, image/webp, application/pdf, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet, video/mp4, video/quicktime, video/webm',
       );
     }
 
@@ -217,6 +219,16 @@ export class FileServiceService implements OnModuleInit {
       // JPEG: FF D8 FF
       if (startsWith([0xff, 0xd8, 0xff]))
         return { token: 'image/jpeg', accepts: ['image/jpeg'] };
+      // WebP: "RIFF" .... "WEBP" (ugoDD9TT)
+      if (
+        buffer.length >= 12 &&
+        startsWith([0x52, 0x49, 0x46, 0x46]) &&
+        buffer[8] === 0x57 &&
+        buffer[9] === 0x45 &&
+        buffer[10] === 0x42 &&
+        buffer[11] === 0x50
+      )
+        return { token: 'image/webp', accepts: ['image/webp'] };
       // PDF: %PDF-
       if (startsWith([0x25, 0x50, 0x44, 0x46, 0x2d]))
         return { token: 'application/pdf', accepts: ['application/pdf'] };

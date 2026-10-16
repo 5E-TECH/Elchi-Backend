@@ -126,15 +126,47 @@ export function buildProductListQuery(
   };
 }
 
+/** ugoDD9TT: rasm turi → fayl kengaytmasi. */
+const IMAGE_EXTENSIONS: Record<string, string[]> = {
+  'image/png': ['png'],
+  'image/jpeg': ['jpg', 'jpeg'],
+  'image/jpg': ['jpg', 'jpeg'],
+  'image/webp': ['webp'],
+};
+
+/**
+ * ugoDD9TT: yuklangan rasm nomi kengaytmasi haqiqiy turga mos bo'lsin —
+ * `image_url` (kalit nomidan) masalan `.png` bilan tugaydi. Nom allaqachon
+ * mos kengaytmada bo'lsa o'zgarmaydi; aks holda mos kengaytma qo'shiladi.
+ */
+export function productImageFileName(
+  originalName: string | undefined,
+  mimeType: string,
+): string {
+  const allowed = IMAGE_EXTENSIONS[mimeType] ?? [];
+  const name = String(originalName ?? '').trim() || 'image';
+  const dot = name.lastIndexOf('.');
+  const ext = dot > 0 ? name.slice(dot + 1).toLowerCase() : '';
+  if (!allowed.length || allowed.includes(ext)) {
+    return name;
+  }
+  const base = dot > 0 ? name.slice(0, dot) : name;
+  return `${base}.${allowed[0]}`;
+}
+
 @ApiTags('Products')
 @Controller('product')
 export class CatalogGatewayController {
-  private readonly allowedMime = new Set<string>([
+  /**
+   * ugoDD9TT: mahsulot RASMI uchun tor ro'yxat. Ilgari hujjat endpointidan
+   * ko'chirilgan ro'yxat (PDF, XLSX) ishlatilardi — PDF "rasm" sifatida 201
+   * bilan saqlanib, ekranda jim buzilgan rasm bo'lib qolardi.
+   */
+  private readonly allowedImageMime = new Set<string>([
     'image/png',
     'image/jpeg',
     'image/jpg',
-    'application/pdf',
-    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    'image/webp',
   ]);
 
   constructor(
@@ -235,12 +267,15 @@ export class CatalogGatewayController {
     },
     req: HttpRequestLike,
   ): Promise<string> {
-    if (!this.allowedMime.has(file.mimetype)) {
-      throw new BadRequestException('Unsupported file type');
+    const mimeType = String(file.mimetype ?? '')
+      .trim()
+      .toLowerCase();
+    if (!this.allowedImageMime.has(mimeType)) {
+      throw new BadRequestException('Faqat PNG/JPEG/WebP rasm yuklash mumkin');
     }
     // E'lon qilingan tur faylning haqiqiy imzosiga mos kelishi shart —
     // `mimetype` ni mijoz yozadi, unga yolg'iz ishonib bo'lmaydi (audit S8).
-    if (!matchesDeclaredType(file.buffer, file.mimetype)) {
+    if (!matchesDeclaredType(file.buffer, mimeType)) {
       throw new BadRequestException(
         "Fayl mazmuni e'lon qilingan turga mos kelmadi",
       );
@@ -251,8 +286,9 @@ export class CatalogGatewayController {
         .send(
           { cmd: 'file.upload' },
           {
-            file_name: file.originalname,
-            mime_type: file.mimetype,
+            // ugoDD9TT: kalit (va URL) kengaytmasi haqiqiy turga mos.
+            file_name: productImageFileName(file.originalname, mimeType),
+            mime_type: mimeType,
             file_base64: file.buffer.toString('base64'),
             folder: 'products',
           },
@@ -309,7 +345,9 @@ export class CatalogGatewayController {
           buffer: Buffer;
         }
       | undefined,
-    @Body() dto: { name?: string; image_url?: string; market_id?: string },
+    // Aws1oApe: DTO KLASSI — global ValidationPipe (`whitelist`,
+    // `forbidNonWhitelisted`) endi ishlaydi: ortiqcha maydon → 400.
+    @Body() dto: CreateProductRequestDto,
     @Req() req: { user: JwtUser },
   ) {
     if (!dto?.name) {
@@ -352,7 +390,15 @@ export class CatalogGatewayController {
       this.catalogClient
         .send(
           { cmd: 'catalog.product.create' },
-          { dto: { name: dto.name, image_url: imageUrl, user_id: marketId } },
+          {
+            dto: {
+              name: dto.name,
+              image_url: imageUrl,
+              user_id: marketId,
+              // zRqDRLAZ: ixtiyoriy narx (berilmasa uzatilmaydi).
+              ...(dto.price !== undefined ? { price: dto.price } : {}),
+            },
+          },
         )
         .pipe(timeout(8000)),
     ).catch((error: unknown) => {

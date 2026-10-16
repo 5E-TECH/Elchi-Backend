@@ -39,6 +39,27 @@ function toMarketInfo(raw: unknown): MarketInfo | null {
   };
 }
 
+/**
+ * Aws1oApe: mahsulot nomi normalizatsiyasi (BeePost product.service.ts
+ * `normalizeName` dan farqli — registr SAQLANADI): chetdagi bo'shliqlar
+ * olinadi, ichkisi bitta probelga qisqaradi. Registrga befarq taqqoslash
+ * faqat tekshiruv/indeksda (`lower(...)`).
+ */
+export function normalizeProductName(raw: unknown): string {
+  return typeof raw === 'string' || typeof raw === 'number'
+    ? String(raw).trim().replace(/\s+/g, ' ')
+    : '';
+}
+
+/** zRqDRLAZ: `numeric(14,2)` ning yuqori chegarasi. */
+export const PRODUCT_PRICE_MAX = 999_999_999_999.99;
+
+export type ProductWriteDto = {
+  name?: string;
+  image_url?: string | null;
+  price?: number | string | null;
+};
+
 @Injectable()
 export class CatalogServiceService {
   constructor(
@@ -70,6 +91,120 @@ export class CatalogServiceService {
 
   private conflict(message: string): never {
     throw new RpcException({ statusCode: 409, message });
+  }
+
+  private badRequest(message: string): never {
+    throw new RpcException({ statusCode: 400, message });
+  }
+
+  /** Aws1oApe: bo'sh (faqat bo'shliqdan iborat) nom — 400. */
+  private requireProductName(raw: unknown): string {
+    const name = normalizeProductName(raw);
+    if (!name) {
+      this.badRequest("Mahsulot nomi bo'sh bo'lishi mumkin emas");
+    }
+    return name;
+  }
+
+  /**
+   * zRqDRLAZ: narx — `undefined` (o'zgarmaydi), `null`/'' (tozalanadi) yoki
+   * 0..PRODUCT_PRICE_MAX oralig'idagi, ko'pi bilan 2 kasrli son.
+   */
+  private normalizePrice(raw: unknown): number | null | undefined {
+    if (raw === undefined) return undefined;
+    if (raw === null) return null;
+    if (typeof raw === 'string' && !raw.trim()) return null;
+    const value =
+      typeof raw === 'number'
+        ? raw
+        : typeof raw === 'string'
+          ? Number(raw.trim())
+          : NaN;
+    if (
+      !Number.isFinite(value) ||
+      value < 0 ||
+      value > PRODUCT_PRICE_MAX ||
+      Math.round(value * 100) / 100 !== value
+    ) {
+      this.badRequest(
+        "Narx 0 dan katta yoki teng, ko'pi bilan 2 kasrli son bo'lishi kerak",
+      );
+    }
+    return value;
+  }
+
+  /**
+   * Aws1oApe: shu marketning FAOL mahsulotlari orasida registr va
+   * bo'shliqlarga befarq bir xil nomli mahsulot bormi. DB indeksi
+   * (`IDX_products_lower_name_user_id`, 117) poygani ham ushlaydi; bu
+   * tekshiruv indeks yaratilmay qolgan (prod'dagi eski dublikatlar) holatda
+   * ham yangi dublikatni to'xtatadi va tushunarli xabar beradi.
+   */
+  private async ensureNameAvailable(
+    userId: string,
+    name: string,
+    excludeId?: string,
+  ): Promise<void> {
+    let existing: Pick<Product, 'id' | 'name'> | null;
+    try {
+      const qb = this.productRepo
+        .createQueryBuilder('product')
+        .select(['product.id', 'product.name'])
+        .where('product.user_id = :user_id', { user_id: userId })
+        .andWhere('product.isDeleted = :isDeleted', { isDeleted: false })
+        .andWhere(
+          "lower(regexp_replace(btrim(product.name), '[[:space:]]+', ' ', 'g')) = lower(:name)",
+          { name },
+        );
+      if (excludeId) {
+        qb.andWhere('product.id <> :excludeId', { excludeId });
+      }
+      existing = await qb.getOne();
+    } catch (error) {
+      this.handleDbError(error);
+    }
+    if (existing) {
+      this.conflict(
+        `Bu marketda "${existing.name}" nomli mahsulot allaqachon mavjud (katta-kichik harf va bo'shliqlar farqi hisobga olinmaydi)`,
+      );
+    }
+  }
+
+  /**
+   * update/updateOwn uchun umumiy: faqat ruxsat etilgan maydonlar (name,
+   * image_url, price). Nom o'zgarsagina dublikat tekshiriladi — eski
+   * (indeksgacha) dublikatlarda rasm/narx tahriri bloklanmasin.
+   */
+  private async applyProductChanges(
+    product: Product,
+    dto: ProductWriteDto,
+  ): Promise<void> {
+    if (dto?.name !== undefined) {
+      const name = this.requireProductName(dto.name);
+      if (name !== product.name) {
+        await this.ensureNameAvailable(product.user_id, name, product.id);
+      }
+      product.name = name;
+    }
+    if (dto?.image_url !== undefined) {
+      product.image_url = dto.image_url;
+    }
+    const price = this.normalizePrice(dto?.price);
+    if (price !== undefined) {
+      product.price = price;
+    }
+  }
+
+  private auditSnapshot(product: Product): {
+    name: string;
+    image_url: string | null;
+    price: number | null;
+  } {
+    return {
+      name: product.name,
+      image_url: product.image_url ?? null,
+      price: product.price ?? null,
+    };
   }
 
   private async ensureMarketExists(marketId: string): Promise<void> {
@@ -226,10 +361,26 @@ export class CatalogServiceService {
     return product;
   }
 
-  async create(dto: { name: string; user_id: string; image_url?: string }) {
+  async create(dto: {
+    name: string;
+    user_id: string;
+    image_url?: string | null;
+    price?: number | string | null;
+  }) {
+    // Aws1oApe: nom normalizatsiyasi (registr saqlanadi) va registrga befarq
+    // dublikat tekshiruvi; bo'sh nom / noto'g'ri narx — market so'rovidan
+    // OLDIN 400.
+    const name = this.requireProductName(dto?.name);
+    const price = this.normalizePrice(dto?.price);
     await this.ensureMarketExists(dto.user_id);
+    await this.ensureNameAvailable(String(dto.user_id), name);
 
-    const product = this.productRepo.create(dto);
+    const product = this.productRepo.create({
+      name,
+      user_id: dto.user_id,
+      image_url: dto.image_url ?? null,
+      price: price ?? null,
+    });
     let saved: Product;
     try {
       saved = await this.productRepo.save(product);
@@ -243,7 +394,7 @@ export class CatalogServiceService {
       entity_type: 'Product',
       entity_id: saved.id,
       action: ActivityAction.CREATED,
-      new_value: { name: saved.name, image_url: saved.image_url },
+      new_value: this.auditSnapshot(saved),
       metadata: { user_id: saved.user_id },
     });
 
@@ -290,10 +441,10 @@ export class CatalogServiceService {
     return this.attachMarket(product);
   }
 
-  async update(id: string, dto: { name?: string; image_url?: string }) {
+  async update(id: string, dto: ProductWriteDto) {
     const product = await this.findByIdEntity(id);
-    const before = { name: product.name, image_url: product.image_url };
-    Object.assign(product, dto);
+    const before = this.auditSnapshot(product);
+    await this.applyProductChanges(product, dto);
     let saved: Product;
     try {
       saved = await this.productRepo.save(product);
@@ -307,7 +458,7 @@ export class CatalogServiceService {
       entity_type: 'Product',
       entity_id: saved.id,
       old_value: before,
-      new_value: { name: saved.name, image_url: saved.image_url },
+      new_value: this.auditSnapshot(saved),
       action: ActivityAction.UPDATED,
       metadata: { user_id: saved.user_id },
     });
@@ -318,7 +469,7 @@ export class CatalogServiceService {
   async updateOwn(
     id: string,
     userId: string,
-    dto: { name?: string; image_url?: string },
+    dto: ProductWriteDto,
     // tsEevElW: market operatori tahrirlasa — aktyor operatorning o'zi.
     actor?: { id?: string; role?: string } | null,
   ) {
@@ -327,8 +478,8 @@ export class CatalogServiceService {
       this.forbidden('You can update only your own product');
     }
 
-    const before = { name: product.name, image_url: product.image_url };
-    Object.assign(product, dto);
+    const before = this.auditSnapshot(product);
+    await this.applyProductChanges(product, dto);
     let saved: Product;
     try {
       saved = await this.productRepo.save(product);
@@ -342,7 +493,7 @@ export class CatalogServiceService {
       entity_type: 'Product',
       entity_id: saved.id,
       old_value: before,
-      new_value: { name: saved.name, image_url: saved.image_url },
+      new_value: this.auditSnapshot(saved),
       action: ActivityAction.UPDATED,
       // The market updating its OWN product IS the actor (tsEevElW: yoki
       // shu marketning operatori).

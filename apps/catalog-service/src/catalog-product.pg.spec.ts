@@ -4,10 +4,13 @@ import { DataSource } from 'typeorm';
 import { Product } from './entities/product.entity';
 import { CatalogServiceService } from './catalog-service.service';
 import { ProductNameUniqueActiveOnly1716000000087 } from '../../../migrations/1716000000087-ProductNameUniqueActiveOnly';
+import { ProductPrice1716000000116 } from '../../../migrations/1716000000116-ProductPrice';
+import { ProductNameCaseInsensitiveUnique1716000000117 } from '../../../migrations/1716000000117-ProductNameCaseInsensitiveUnique';
 
 /**
- * As75bkGo (partial unique indeks) va 3qDsJpfW (find_all sahifalash/qidiruv)
- * — haqiqiy Postgres'da. Faqat lokal baza (`/elchi_e_test`) bilan ishlaydi:
+ * As75bkGo (partial unique indeks), 3qDsJpfW / qNwXfqLL (find_all
+ * sahifalash/qidiruv), zRqDRLAZ (narx, migratsiya 116) va Aws1oApe (registrga
+ * befarq nom, migratsiya 117) — haqiqiy Postgres'da. Faqat lokal baza (`/elchi_e_test`) bilan ishlaydi:
  *   CATALOG_PG_TEST_URI=postgres://postgres@127.0.0.1:55465/elchi_e_test
  */
 const uri = process.env.CATALOG_PG_TEST_URI;
@@ -74,6 +77,30 @@ const nameIndexDefs = async (db: DataSource): Promise<string[]> => {
       } finally {
         await runner.release();
       }
+    };
+
+    const runMigration = async (
+      m: { up(r: unknown): Promise<void>; down(r: unknown): Promise<void> },
+      direction: 'up' | 'down' = 'up',
+    ) => {
+      const runner = db.createQueryRunner();
+      try {
+        await m[direction](runner);
+      } finally {
+        await runner.release();
+      }
+    };
+    const priceMigration = new ProductPrice1716000000116();
+    const lowerNameMigration =
+      new ProductNameCaseInsensitiveUnique1716000000117();
+
+    const lowerIndexDefs = async (): Promise<string[]> => {
+      const rows: Array<{ indexdef: string }> = await db.query(
+        `SELECT indexdef FROM pg_indexes
+          WHERE schemaname = 'catalog_schema'
+            AND indexname = 'IDX_products_lower_name_user_id'`,
+      );
+      return rows.map((row) => row.indexdef);
     };
 
     const makeService = () => {
@@ -168,6 +195,8 @@ const nameIndexDefs = async (db: DataSource): Promise<string[]> => {
       beforeEach(async () => {
         await createBaselineTable(db);
         await runUp();
+        await runMigration(priceMigration);
+        await runMigration(lowerNameMigration);
       });
 
       it('⭐ TC1: yaratish -> o`chirish -> AYNI nom bilan qayta yaratish muvaffaqiyatli', async () => {
@@ -256,6 +285,185 @@ const nameIndexDefs = async (db: DataSource): Promise<string[]> => {
         expect(all).toMatchObject({ total: 14, page: 1, limit: 50 });
         expect(all.data).toHaveLength(14);
         expect(all.data.every((p) => p.user_id === MARKET)).toBe(true);
+      });
+    });
+
+    describe('migratsiya 116 (zRqDRLAZ narx) va 117 (Aws1oApe registrga befarq nom)', () => {
+      beforeEach(async () => {
+        await createBaselineTable(db);
+        await runUp();
+      });
+
+      it("116: price ustuni NULL bilan qo'shiladi, mavjud qatorlar o'zgarmaydi, manfiy narx CHECK bilan rad; up ikki marta, down/up", async () => {
+        await db.query(
+          `INSERT INTO catalog_schema.products (name, user_id) VALUES ('Eski', $1)`,
+          [MARKET],
+        );
+        await runMigration(priceMigration);
+        await runMigration(priceMigration);
+        const rows: Array<{ name: string; price: string | null }> =
+          await db.query(`SELECT name, price FROM catalog_schema.products`);
+        expect(rows).toEqual([{ name: 'Eski', price: null }]);
+        await expect(
+          db.query(
+            `INSERT INTO catalog_schema.products (name, user_id, price) VALUES ('Manfiy', $1, -1)`,
+            [MARKET],
+          ),
+        ).rejects.toMatchObject({ driverError: { code: '23514' } });
+        await runMigration(priceMigration, 'down');
+        const cols: Array<{ column_name: string }> = await db.query(
+          `SELECT column_name FROM information_schema.columns
+            WHERE table_schema = 'catalog_schema' AND table_name = 'products'
+              AND column_name = 'price'`,
+        );
+        expect(cols).toEqual([]);
+        await runMigration(priceMigration);
+      });
+
+      it('117: indeks lower(btrim(name)) + user_id, faqat faol qatorlar; up ikki marta xatosiz', async () => {
+        await runMigration(lowerNameMigration);
+        await runMigration(lowerNameMigration);
+        const defs = await lowerIndexDefs();
+        expect(defs).toHaveLength(1);
+        expect(defs[0]).toContain('UNIQUE');
+        expect(defs[0]).toMatch(/lower\(btrim\(\(?name/);
+        expect(defs[0]).toContain('WHERE (is_deleted = false)');
+        // Registr va bo'shliq farqi bilan ikkinchi faol qator — 23505.
+        await db.query(
+          `INSERT INTO catalog_schema.products (name, user_id) VALUES ('Telefon', $1)`,
+          [MARKET],
+        );
+        await expect(
+          db.query(
+            `INSERT INTO catalog_schema.products (name, user_id) VALUES ('  TELEFON ', $1)`,
+            [MARKET],
+          ),
+        ).rejects.toMatchObject({ driverError: { code: '23505' } });
+      });
+
+      it("117: faol registrga befarq dublikatlar bor — YIQILMAYDI, indeks yaratilmaydi, ma'lumot o'zgarmaydi", async () => {
+        await db.query(
+          `INSERT INTO catalog_schema.products (name, user_id) VALUES ('test', $1), ('TEST', $1)`,
+          [MARKET],
+        );
+        await expect(runMigration(lowerNameMigration)).resolves.toBeUndefined();
+        expect(await lowerIndexDefs()).toEqual([]);
+        const rows: Array<{ name: string }> = await db.query(
+          `SELECT name FROM catalog_schema.products ORDER BY id`,
+        );
+        expect(rows.map((r) => r.name)).toEqual(['test', 'TEST']);
+      });
+    });
+
+    describe('Aws1oApe va zRqDRLAZ — servis', () => {
+      beforeEach(async () => {
+        await createBaselineTable(db);
+        await runUp();
+        await runMigration(priceMigration);
+        await runMigration(lowerNameMigration);
+      });
+
+      const conflictOf = async (promise: Promise<unknown>) => {
+        const error: unknown = await promise.then(
+          () => null,
+          (e: unknown) => e,
+        );
+        expect(error).toBeInstanceOf(RpcException);
+        return (error as RpcException).getError() as {
+          statusCode?: number;
+          message?: string;
+        };
+      };
+
+      it('⭐ Aws1oApe TC1: "Telefon" bor — "telefon" va "  Telefon  " → 409', async () => {
+        const svc = makeService();
+        await svc.create({ name: 'Telefon', user_id: MARKET });
+        for (const name of ['telefon', '  Telefon  ', 'TELEFON']) {
+          expect(
+            await conflictOf(svc.create({ name, user_id: MARKET })),
+          ).toMatchObject({ statusCode: 409 });
+        }
+        // Boshqa marketda shu nom — ruxsat.
+        await expect(
+          svc.create({ name: 'telefon', user_id: '999' }),
+        ).resolves.toMatchObject({ name: 'telefon' });
+      });
+
+      it("⭐ Aws1oApe TC2: nom ASL registrda saqlanadi, chetdagi va ichki ortiqcha bo'shliqlar qisqaradi", async () => {
+        const svc = makeService();
+        const created = await svc.create({
+          name: '  Samsung   Galaxy A15 ',
+          user_id: MARKET,
+        });
+        expect(created.name).toBe('Samsung Galaxy A15');
+        const [row]: Array<{ name: string }> = await db.query(
+          `SELECT name FROM catalog_schema.products WHERE id = $1`,
+          [created.id],
+        );
+        expect(row.name).toBe('Samsung Galaxy A15');
+      });
+
+      it("⭐ Aws1oApe TC4: PATCH bilan nomni boshqa mavjud mahsulot nomiga (registr farqi bilan) o'zgartirish → 409", async () => {
+        const svc = makeService();
+        await svc.create({ name: 'Olma', user_id: MARKET });
+        const pear = await svc.create({ name: 'Nok', user_id: MARKET });
+        expect(
+          await conflictOf(svc.update(pear.id, { name: 'OLMA' })),
+        ).toMatchObject({ statusCode: 409 });
+        expect(
+          await conflictOf(svc.updateOwn(pear.id, MARKET, { name: ' olma ' })),
+        ).toMatchObject({ statusCode: 409 });
+        // O'z nomining registrini o'zgartirish — ruxsat.
+        await expect(
+          svc.update(pear.id, { name: 'NOK' }),
+        ).resolves.toMatchObject({ name: 'NOK' });
+      });
+
+      it("bo'sh nom → 400", async () => {
+        const svc = makeService();
+        expect(
+          await conflictOf(svc.create({ name: '   ', user_id: MARKET })),
+        ).toMatchObject({ statusCode: 400 });
+      });
+
+      it("⭐ zRqDRLAZ: narx saqlanadi va javobda son bo'lib qaytadi; narxsiz — null; tozalash va noto'g'ri narx", async () => {
+        const svc = makeService();
+        const withPrice = await svc.create({
+          name: 'Futbolka',
+          user_id: MARKET,
+          price: '125000.50',
+        });
+        expect(withPrice.price).toBe(125000.5);
+        const fetched = await svc.findById(withPrice.id);
+        expect(fetched).toMatchObject({ price: 125000.5 });
+        expect(fetched).toHaveProperty('image_url');
+
+        const noPrice = await svc.create({ name: 'Viva', user_id: MARKET });
+        expect(noPrice.price).toBeNull();
+
+        await expect(
+          svc.update(withPrice.id, { price: null }),
+        ).resolves.toMatchObject({ price: null });
+        await expect(
+          svc.update(noPrice.id, { price: 99000 }),
+        ).resolves.toMatchObject({ price: 99000 });
+
+        for (const bad of [-1, '12.345', 'abc']) {
+          expect(
+            await conflictOf(
+              svc.create({
+                name: `X${String(bad)}`,
+                user_id: MARKET,
+                price: bad,
+              }),
+            ),
+          ).toMatchObject({ statusCode: 400 });
+        }
+
+        const list = await svc.findAll({ user_id: MARKET, limit: 50 });
+        expect(list.data.find((p) => p.id === noPrice.id)).toMatchObject({
+          price: 99000,
+        });
       });
     });
   },

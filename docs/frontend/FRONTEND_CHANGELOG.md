@@ -23,6 +23,41 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-10-16 — P: mahsulot narxi, nom dublikati, rasm turi, ro'yxat (zRqDRLAZ, Aws1oApe, ugoDD9TT, qNwXfqLL)
+
+- [2026-10-16] ✏️ [catalog] — zRqDRLAZ: mahsulotda yangi ixtiyoriy
+  `price` (so'm, `number | null`, ko'pi bilan 2 kasr). `POST /product`,
+  `PATCH /product/:id`, `PATCH /product/my/:id` qabul qiladi (multipart'da
+  satr: `"125000"`, `"125 000"`; bo'sh satr yoki `null` — narxni tozalaydi;
+  manfiy / 3 kasr / matn → 400). `GET /product*` javoblarida har mahsulotda
+  `price` (narxsiz — `null`). 🔧 Buyurtma yaratish formasi (Step2Combined):
+  rasm uchun `product.image` emas `product.image_url` (fallback ikonka bilan);
+  narx satrini faqat `product.price != null` bo'lsa chizing (bo'sh "so'm"
+  chiqmasin); tanlangan mahsulotlardan UMUMIY SUMMA ni
+  `Σ price × quantity` bo'yicha TAKLIF qiling — operator ustiga yoza olsin
+  (backend summani o'zi yozmaydi). Mahsulot formasiga "Narx" maydoni.
+- [2026-10-16] ⚠️ [catalog] — Aws1oApe: bir marketda mahsulot nomi endi
+  registr va bo'shliqlarga befarq noyob: "Telefon" bor bo'lsa "telefon",
+  "  TELEFON  " → **409** ("... nomli mahsulot allaqachon mavjud ...").
+  Nom chetdagi bo'shliqlarsiz, ichki ketma-ket bo'shliqlar bittaga
+  qisqartirilib, ASL registrda saqlanadi. PATCH bilan boshqa mahsulot nomiga
+  o'zgartirish ham 409. `POST /product` tanasi endi DTO orqali tekshiriladi:
+  noma'lum maydon (masalan `sku`) → **400** "property sku should not exist" —
+  forma faqat `name`, `image`, `image_url`, `market_id`, `price` yuborsin.
+  🔧 409 xabarini `getBackendErrorMessage` bilan ko'rsating.
+- [2026-10-16] ⚠️ [catalog] — ugoDD9TT: mahsulot rasmi faqat PNG / JPEG /
+  WebP. PDF, XLSX va boshqa turlar → **400** "Faqat PNG/JPEG/WebP rasm
+  yuklash mumkin" (ilgari 201 bilan saqlanib, jim buzilgan rasm bo'lardi).
+  Kengaytmasi rasm, mazmuni boshqa fayl → 400. `image_url` kengaytmasi
+  haqiqiy turga mos (`.png`, `.jpg`/`.jpeg`, `.webp`). 🔧 Fayl tanlagichida
+  `accept="image/png,image/jpeg,image/webp"`, 400 xabarini ko'rsating.
+- [2026-10-16] 🟢 [catalog] — qNwXfqLL: backend qismi 3qDsJpfW da qilingan
+  (2026-10-14 yozuvi): `GET /product/market/:marketId` va
+  `GET /product/my-products` `search`, `page`, `limit` (≤500) ni qabul qiladi.
+  🔧 Buyurtma formasidagi mahsulot tanlagichi `?search=` ni debounce (300ms)
+  bilan serverga yuborsin va yetarli `limit` bersin (klient filtri o'rniga);
+  0 mahsulotda "Topilmadi".
+
 ### 2026-10-15 — R1: dashboard reyting davri ("Bugun" → oxirgi 30 kun) va bot manbasi (9zbSDkUI, Celz3rKJ)
 
 - [2026-10-15] ✏️ [analytics] — `GET /analytics/dashboard` (admin/superadmin

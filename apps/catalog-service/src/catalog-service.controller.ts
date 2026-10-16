@@ -6,7 +6,10 @@ import {
   RmqContext,
 } from '@nestjs/microservices';
 import { RmqService, executeAndAck, ActivityLogQuery } from '@app/common';
-import { CatalogServiceService } from './catalog-service.service';
+import {
+  CatalogServiceService,
+  ProductWriteDto,
+} from './catalog-service.service';
 
 @Controller()
 export class CatalogServiceController {
@@ -34,7 +37,14 @@ export class CatalogServiceController {
   @MessagePattern({ cmd: 'catalog.product.create' })
   create(
     @Payload()
-    data: { dto: { name: string; user_id: string; image_url?: string } },
+    data: {
+      dto: {
+        name: string;
+        user_id: string;
+        image_url?: string | null;
+        price?: number | string | null;
+      };
+    },
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
@@ -69,7 +79,7 @@ export class CatalogServiceController {
 
   @MessagePattern({ cmd: 'catalog.product.update' })
   update(
-    @Payload() data: { id: string; dto: { name?: string; image_url?: string } },
+    @Payload() data: { id: string; dto: ProductWriteDto },
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
@@ -83,7 +93,7 @@ export class CatalogServiceController {
     data: {
       id: string;
       user_id: string;
-      dto: { name?: string; image_url?: string };
+      dto: ProductWriteDto;
       actor?: { id?: string; role?: string } | null;
     },
     @Ctx() context: RmqContext,

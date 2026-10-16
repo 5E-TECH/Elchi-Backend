@@ -77,6 +77,67 @@ describe('FileServiceService', () => {
     expect(res.data.key).toBe('k1');
   });
 
+  // ugoDD9TT: mahsulot rasmlari uchun WebP (RIFF....WEBP imzosi bilan).
+  describe('ugoDD9TT — WebP', () => {
+    const WEBP = Buffer.concat([
+      Buffer.from('RIFF'),
+      Buffer.from([0x24, 0x00, 0x00, 0x00]),
+      Buffer.from('WEBPVP8 '),
+    ]);
+
+    it('haqiqiy WebP → 201', async () => {
+      jest.spyOn(service as any, 'uploadBuffer').mockResolvedValue({
+        key: 'products-1-u-a.webp',
+        bucket: 'b',
+        file_name: 'a.webp',
+        mime_type: 'image/webp',
+        size: WEBP.length,
+        url: 'u',
+      });
+      const res = await service.upload({
+        file_name: 'a.webp',
+        mime_type: 'image/webp',
+        file_base64: WEBP.toString('base64'),
+      } as any);
+      expect(res.statusCode).toBe(201);
+    });
+
+    it.each([
+      ['PDF', Buffer.from('%PDF-1.4\n%xx')],
+      [
+        'RIFF/WAVE (WebP emas)',
+        Buffer.concat([
+          Buffer.from('RIFF'),
+          Buffer.from([0, 0, 0, 0]),
+          Buffer.from('WAVEfmt '),
+        ]),
+      ],
+    ])(
+      'image/webp deb e`lon qilingan %s → rad etiladi',
+      async (_label, buffer) => {
+        const uploadBuffer = jest.spyOn(service as any, 'uploadBuffer');
+        await expect(
+          service.upload({
+            file_name: 'a.webp',
+            mime_type: 'image/webp',
+            file_base64: buffer.toString('base64'),
+          } as any),
+        ).rejects.toBeInstanceOf(RpcException);
+        expect(uploadBuffer).not.toHaveBeenCalled();
+      },
+    );
+
+    it('WebP mazmuni image/png deb e`lon qilinsa → rad etiladi', async () => {
+      await expect(
+        service.upload({
+          file_name: 'a.png',
+          mime_type: 'image/png',
+          file_base64: WEBP.toString('base64'),
+        } as any),
+      ).rejects.toBeInstanceOf(RpcException);
+    });
+  });
+
   it('getUrl throws when key is missing', async () => {
     await expect(service.getUrl({ key: '' } as any)).rejects.toBeInstanceOf(
       RpcException,
