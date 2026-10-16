@@ -934,6 +934,80 @@
         ]
       }
     },
+    "/users/{id}/role": {
+      "patch": {
+        "operationId": "ApiGatewayController_changeUserRole",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "User ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChangeUserRoleRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Role changed"
+          },
+          "404": {
+            "description": "Not found"
+          },
+          "409": {
+            "description": "User is assigned to a branch — unassign first"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Change user role (superadmin only; admin ⇄ registrator ⇄ manager ⇄ logist)",
+        "tags": [
+          "Identity"
+        ],
+        "x-roles": [
+          "superadmin"
+        ]
+      }
+    },
+    "/roles": {
+      "get": {
+        "operationId": "ApiGatewayController_getRoleCatalog",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Role catalog"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Role catalog (single source for role lists)",
+        "tags": [
+          "Identity"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "manager"
+        ]
+      }
+    },
     "/users/{id}/status": {
       "patch": {
         "operationId": "ApiGatewayController_updateUserStatus",
@@ -1361,6 +1435,101 @@
         "x-roles": [
           "superadmin",
           "admin"
+        ]
+      }
+    },
+    "/admin/markets/{id}": {
+      "patch": {
+        "operationId": "ApiGatewayController_updateMarketExtraCost",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Market user ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateMarketExtraCostRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Market extra-cost policy updated"
+          },
+          "404": {
+            "description": "Market not found"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Market qo'shimcha xarajat sozlamasi (extra_cost_enabled, extra_cost_requires_approval)",
+        "tags": [
+          "Identity"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
+        ]
+      }
+    },
+    "/markets/{id}/operator-phone": {
+      "patch": {
+        "operationId": "ApiGatewayController_updateMarketOperatorPhone",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Market user ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateMarketOperatorPhoneRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Market operator phone policy updated"
+          },
+          "404": {
+            "description": "Market not found"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Market operator raqami sozlamasi (require_operator_phone, default_operator_phone)",
+        "tags": [
+          "Identity"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "market"
         ]
       }
     },
@@ -2019,8 +2188,27 @@
     },
     "/orders": {
       "post": {
+        "description": "gpCIsGjH: `Idempotency-Key` sarlavhasi bilan takroriy so'rov (ikki marta bosish, retry) ikkinchi buyurtma yaratmaydi — keshlangan javob `idempotent_replay: true` bilan qaytadi; birinchisi hali bajarilayotgan bo'lsa 409. Kalitsiz — har so`rov alohida buyurtma (avvalgidek).",
         "operationId": "OrderGatewayController_create",
-        "parameters": [],
+        "parameters": [
+          {
+            "name": "idempotency-key",
+            "required": true,
+            "in": "header",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "Forma sessiyasi davomida barqaror kalit (≤255 belgi). Foydalanuvchi bo'yicha ajratiladi.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "required": true,
           "content": {
@@ -3541,6 +3729,143 @@
           "admin",
           "manager",
           "registrator"
+        ]
+      }
+    },
+    "/orders/replaceable": {
+      "get": {
+        "description": "Yangi buyurtmani shu ro'yxatdagi eski buyurtma o'rniga yaratish uchun (`POST /orders` → `replaced_order_id`). Faqat sold/paid/partly_paid va hali almashtirilmagan buyurtmalar. Har qatorda mijoz, mahsulotlar, narx, izoh.",
+        "operationId": "OrderGatewayController_listReplaceableOrders",
+        "parameters": [
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "example": 20,
+              "type": "number"
+            }
+          },
+          {
+            "name": "page",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "example": 1,
+              "type": "number"
+            }
+          },
+          {
+            "name": "q",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "example": "901234567"
+            }
+          },
+          {
+            "name": "customer_id",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "example": "120"
+            }
+          },
+          {
+            "name": "market_id",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "example": "3"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Almashtirishga tanlanadigan (yetkazilgan) buyurtmalar",
+        "tags": [
+          "Orders"
+        ],
+        "x-roles": [
+          "admin",
+          "superadmin",
+          "registrator",
+          "market",
+          "manager",
+          "branch"
+        ]
+      }
+    },
+    "/orders/replacement/returns": {
+      "get": {
+        "operationId": "OrderGatewayController_listReplacementReturns",
+        "parameters": [
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "example": 20,
+              "type": "number"
+            }
+          },
+          {
+            "name": "page",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "example": 1,
+              "type": "number"
+            }
+          },
+          {
+            "name": "state",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "enum": [
+                "awaiting_old_pickup",
+                "old_collected",
+                "old_returned"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "name": "market_id",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "example": "3"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Almashtirish qaytarmalari (eski mahsulot qaytariladigan buyurtmalar)",
+        "tags": [
+          "Orders"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "market"
         ]
       }
     },
@@ -8847,6 +9172,22 @@
                 "cancelled"
               ]
             }
+          },
+          {
+            "name": "state",
+            "required": false,
+            "in": "query",
+            "description": "(WIsb9Ytq) Ro'yxat holati: rejalashtirilgan / yuborilmoqda / yuborilgan / xato / bekor qilingan. `status` bilan birga emas",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "scheduled",
+                "sending",
+                "sent",
+                "failed",
+                "cancelled"
+              ]
+            }
           }
         ],
         "responses": {
@@ -8860,6 +9201,68 @@
           }
         ],
         "summary": "Kampaniyalar tarixi (yangilari birinchi)",
+        "tags": [
+          "Notification campaigns"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
+        ]
+      }
+    },
+    "/notifications/campaigns/schedule-policy": {
+      "get": {
+        "operationId": "NotificationCampaignGatewayController_schedulePolicy",
+        "parameters": [
+          {
+            "name": "scheduled_at",
+            "required": false,
+            "in": "query",
+            "description": "Tekshiriladigan vaqt (ISO + zona)",
+            "schema": {
+              "example": "2026-10-20T19:30:00+05:00",
+              "type": "string"
+            }
+          },
+          {
+            "name": "type",
+            "required": false,
+            "in": "query",
+            "description": "Tur — kategoriyasi katalogdan (marketing = reklama)",
+            "schema": {
+              "example": "marketing.manual",
+              "type": "string"
+            }
+          },
+          {
+            "name": "category",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "order",
+                "finance",
+                "branch",
+                "logistics",
+                "account",
+                "system",
+                "marketing"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Rejalashtirish qoidasi: Asia/Tashkent, reklama taqiq oynasi, vaqt tekshiruvi (surilsa — effective_at)",
         "tags": [
           "Notification campaigns"
         ],
@@ -8900,6 +9303,191 @@
         "x-roles": [
           "superadmin",
           "admin"
+        ]
+      }
+    },
+    "/notifications/campaigns/{id}/report": {
+      "get": {
+        "operationId": "NotificationCampaignGatewayController_campaignReport",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "example": "7",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Kampaniya natijasi hisoboti: stats, kanal kesimi (sent/failed/skipped), DLR (yo'q bo'lsa null), taxminiy narx",
+        "tags": [
+          "Notification campaigns"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
+        ]
+      }
+    },
+    "/notifications/campaigns/{id}/undelivered": {
+      "get": {
+        "operationId": "NotificationCampaignGatewayController_campaignUndelivered",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "example": "7",
+              "type": "string"
+            }
+          },
+          {
+            "name": "page",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "example": 1,
+              "type": "number"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "example": 50,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Yetkazilmaganlar: ism / rol + kanal va sabab (sahifalab)",
+        "tags": [
+          "Notification campaigns"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
+        ]
+      }
+    },
+    "/notifications/campaigns/{id}/undelivered/export": {
+      "get": {
+        "operationId": "NotificationCampaignGatewayController_exportCampaignUndelivered",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "example": "7",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Yetkazilmaganlar CSV (superadmin): ≤10 000 — fayl, kattasi — 202 fon vazifasi",
+        "tags": [
+          "Notification campaigns"
+        ],
+        "x-roles": [
+          "superadmin"
+        ]
+      }
+    },
+    "/notifications/campaigns/exports/{export_id}": {
+      "get": {
+        "operationId": "NotificationCampaignGatewayController_campaignExportStatus",
+        "parameters": [
+          {
+            "name": "export_id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "example": "3",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Fon eksporti holati (superadmin)",
+        "tags": [
+          "Notification campaigns"
+        ],
+        "x-roles": [
+          "superadmin"
+        ]
+      }
+    },
+    "/notifications/campaigns/exports/{export_id}/download": {
+      "get": {
+        "operationId": "NotificationCampaignGatewayController_campaignExportDownload",
+        "parameters": [
+          {
+            "name": "export_id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "example": "3",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Tayyor CSV (superadmin) — har yuklash jurnalga `export`",
+        "tags": [
+          "Notification campaigns"
+        ],
+        "x-roles": [
+          "superadmin"
         ]
       }
     },
@@ -9895,7 +10483,7 @@
             "bearer": []
           }
         ],
-        "summary": "Connect telegram group by group token",
+        "summary": "Connect telegram group by group token. Noto'g'ri token — 400, market topilmadi — 404 (standart { statusCode, message }).",
         "tags": [
           "Notification"
         ],
@@ -10142,6 +10730,40 @@
         ]
       }
     },
+    "/notifications/sms/templates/preview": {
+      "post": {
+        "operationId": "SmsGatewayController_previewTemplate",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PreviewSmsTemplateDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Muharrir hisoblagichi: kodlash (GSM-7/UCS-2), bo'laklar, UCS-2 ga o'tkazgan belgilar, taxminiy narx, PII (hech narsa yozilmaydi)",
+        "tags": [
+          "SMS"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
+        ]
+      }
+    },
     "/notifications/sms/templates/{id}/approve": {
       "patch": {
         "operationId": "SmsGatewayController_approveTemplate",
@@ -10323,6 +10945,122 @@
         "x-roles": [
           "superadmin",
           "admin"
+        ]
+      }
+    },
+    "/notifications/sms/campaigns/{id}/report": {
+      "get": {
+        "operationId": "SmsGatewayController_campaignReport",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "SMS kampaniya hisoboti: stats, DLR (kelmagan — null), bo'laklar/kodlash, taxminiy narx",
+        "tags": [
+          "SMS"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
+        ]
+      }
+    },
+    "/notifications/sms/campaigns/{id}/undelivered": {
+      "get": {
+        "operationId": "SmsGatewayController_campaignUndelivered",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "page",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "example": 1,
+              "type": "number"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "example": 50,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Yetkazilmagan SMS: ism / rol, maskalangan raqam, sabab",
+        "tags": [
+          "SMS"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
+        ]
+      }
+    },
+    "/notifications/sms/campaigns/{id}/undelivered/export": {
+      "get": {
+        "operationId": "SmsGatewayController_exportCampaignUndelivered",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Yetkazilmagan SMS CSV (superadmin, telefon maskalangan)",
+        "tags": [
+          "SMS"
+        ],
+        "x-roles": [
+          "superadmin"
         ]
       }
     },
@@ -16691,6 +17429,62 @@
         ]
       }
     },
+    "/ai-usage/margin": {
+      "get": {
+        "operationId": "AiUsageGatewayController_margin",
+        "parameters": [
+          {
+            "name": "fromDate",
+            "required": false,
+            "in": "query",
+            "description": "Boshlanish sanasi (YYYY-MM-DD, Toshkent).",
+            "schema": {
+              "example": "2026-09-15",
+              "type": "string"
+            }
+          },
+          {
+            "name": "toDate",
+            "required": false,
+            "in": "query",
+            "description": "Tugash sanasi (YYYY-MM-DD, Toshkent), shu kun ham kiradi.",
+            "schema": {
+              "example": "2026-10-14",
+              "type": "string"
+            }
+          },
+          {
+            "name": "marketId",
+            "required": false,
+            "in": "query",
+            "description": "Faqat shu market (admin/superadmin). MARKET uchun e’tiborsiz.",
+            "schema": {
+              "example": "12",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "AI xarajat va marja: market kesimida olingan narx vs real xarajat (MARKET — faqat o‘z kesimi)",
+        "tags": [
+          "AI"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "market"
+        ]
+      }
+    },
     "/ai-usage/ai-orders": {
       "get": {
         "operationId": "AiUsageGatewayController_aiOrders",
@@ -17359,8 +18153,43 @@
             "type": "number",
             "example": 5,
             "description": "Commission value (percent number or fixed amount)."
+          },
+          "ai_price_per_order": {
+            "type": "object",
+            "example": 300,
+            "nullable": true,
+            "minimum": 0,
+            "maximum": 1000000,
+            "description": "Market AI buyurtma narxi (so'm, 1 ta buyurtma). null — global narx (AI_PRICE_PER_ORDER, sukut 300); 0 — bepul. Faqat SUPERADMIN/ADMIN."
           }
         }
+      },
+      "ChangeUserRoleRequestDto": {
+        "type": "object",
+        "properties": {
+          "role": {
+            "type": "string",
+            "example": "manager",
+            "enum": [
+              "superadmin",
+              "admin",
+              "courier",
+              "registrator",
+              "market",
+              "customer",
+              "operator",
+              "market_operator",
+              "manager",
+              "branch",
+              "investor",
+              "logist"
+            ],
+            "description": "Yangi rol. Faqat GET /roles javobidagi changeable_roles (hozir: admin, registrator, manager, logist) — manba rol ham shu ro'yxatda bo'lishi shart."
+          }
+        },
+        "required": [
+          "role"
+        ]
       },
       "UpdateUserStatusRequestDto": {
         "type": "object",
@@ -17443,6 +18272,30 @@
                 "cancel_zero_total"
               ]
             }
+          },
+          "extra_cost_enabled": {
+            "type": "boolean",
+            "example": false,
+            "default": false,
+            "description": "w2bDrE3i: market bo'yicha qo'shimcha xarajat ochiq/yopiq (faqat admin/superadmin). Sukut — YOPIQ."
+          },
+          "extra_cost_requires_approval": {
+            "type": "boolean",
+            "example": true,
+            "default": true,
+            "description": "w2bDrE3i: TRUE — qo'shimcha xarajat market tasdig'idan o'tadi; FALSE — tasdiqsiz yoziladi (faqat admin/superadmin)."
+          },
+          "require_operator_phone": {
+            "type": "boolean",
+            "example": false,
+            "default": false,
+            "description": "VRyloH62: TRUE — har buyurtmada operator raqami majburiy (doimiy raqam bo'lmasa formada)."
+          },
+          "default_operator_phone": {
+            "type": "object",
+            "example": "+998901234567",
+            "nullable": true,
+            "description": "VRyloH62: marketning doimiy operator raqami — chekda 1-raqam. null — yo`q."
           }
         },
         "required": [
@@ -17595,6 +18448,37 @@
           "expense_proof_conditions"
         ]
       },
+      "UpdateMarketExtraCostRequestDto": {
+        "type": "object",
+        "properties": {
+          "extra_cost_enabled": {
+            "type": "boolean",
+            "example": true,
+            "description": "Qo'shimcha xarajat shu market buyurtmalariga yozilishi mumkinmi (FALSE — sotuv/bekor qilishda extraCost > 0 → 403)."
+          },
+          "extra_cost_requires_approval": {
+            "type": "boolean",
+            "example": false,
+            "description": "TRUE — qo'shimcha xarajat market tasdig'idan o'tadi (202); FALSE — tasdiqsiz darhol yoziladi."
+          }
+        }
+      },
+      "UpdateMarketOperatorPhoneRequestDto": {
+        "type": "object",
+        "properties": {
+          "require_operator_phone": {
+            "type": "boolean",
+            "example": true,
+            "description": "TRUE — har buyurtmada operator raqami majburiy (doimiy raqam bo'lmasa POST /orders da operator_phone shart, aks holda 400)."
+          },
+          "default_operator_phone": {
+            "type": "object",
+            "example": "+998901234567",
+            "nullable": true,
+            "description": "Doimiy operator raqami (chekda 1-raqam). null — o'chirish."
+          }
+        }
+      },
       "LoginRequestDto": {
         "type": "object",
         "properties": {
@@ -17730,6 +18614,13 @@
             "type": "string",
             "example": "1",
             "description": "Admin/Superadmin yuboradi. MARKET role uchun token sub ishlatiladi."
+          },
+          "price": {
+            "type": "object",
+            "example": 125000,
+            "nullable": true,
+            "minimum": 0,
+            "description": "Mahsulotning ma'lumotnoma narxi (so'm, ko'pi bilan 2 kasr). Ixtiyoriy; bo'sh satr yoki null — narxni tozalaydi. Buyurtma summasiga avtomatik yozilmaydi — forma faqat taklif qiladi."
           }
         },
         "required": [
@@ -17752,6 +18643,13 @@
             "type": "string",
             "example": "https://cdn.example.com/product-new.png",
             "description": "Ixtiyoriy. Agar `image` yuborilsa bu maydonni yuborish shart emas."
+          },
+          "price": {
+            "type": "object",
+            "example": 125000,
+            "nullable": true,
+            "minimum": 0,
+            "description": "Mahsulotning ma'lumotnoma narxi (so'm, ko'pi bilan 2 kasr). Ixtiyoriy; bo'sh satr yoki null — narxni tozalaydi. Buyurtma summasiga avtomatik yozilmaydi — forma faqat taklif qiladi."
           }
         }
       },
@@ -17820,6 +18718,11 @@
             "example": "1",
             "description": "Market ID (admin/superadmin/reg uchun majburiy, market rolida token’dan olinadi)"
           },
+          "replaced_order_id": {
+            "type": "string",
+            "example": "1024",
+            "description": "Almashtiriladigan eski buyurtma ID si (GET /orders/replaceable). Faqat shu marketning yetkazilgan buyurtmasi; yangi (new), boshqa marketniki yoki allaqachon almashtirilgani — 400."
+          },
           "customer_id": {
             "type": "string",
             "example": "1",
@@ -17867,7 +18770,18 @@
           },
           "operator": {
             "type": "object",
-            "example": "Operator"
+            "example": "Operator",
+            "description": "Bo'sh bo'lsa registrator / market operatori uchun server uning ismini yozadi (VRyloH62)"
+          },
+          "operator_phone": {
+            "type": "object",
+            "example": "+998901234567",
+            "description": "Formadagi operator raqami. Market `default_operator_phone` bo'lsa u 1-raqam, bu esa 2-raqam; `require_operator_phone=true` va default yo'q bo'lsa MAJBURIY (yo'q → 400) va 1-raqam bo'ladi."
+          },
+          "secondary_operator_phone": {
+            "type": "object",
+            "example": "+998901234568",
+            "description": "`operator_phone` sinonimi (BeePost bilan moslik) — `operator_phone` bo‘lmasa shu olinadi."
           },
           "post_id": {
             "type": "string",
@@ -18205,6 +19119,11 @@
             "example": "1",
             "description": "Market ID (admin/superadmin/reg uchun majburiy, market rolida token’dan olinadi)"
           },
+          "replaced_order_id": {
+            "type": "string",
+            "example": "1024",
+            "description": "Almashtiriladigan eski buyurtma ID si (GET /orders/replaceable). Faqat shu marketning yetkazilgan buyurtmasi; yangi (new), boshqa marketniki yoki allaqachon almashtirilgani — 400."
+          },
           "customer_id": {
             "type": "string",
             "example": "1",
@@ -18252,7 +19171,18 @@
           },
           "operator": {
             "type": "object",
-            "example": "Operator"
+            "example": "Operator",
+            "description": "Bo'sh bo'lsa registrator / market operatori uchun server uning ismini yozadi (VRyloH62)"
+          },
+          "operator_phone": {
+            "type": "object",
+            "example": "+998901234567",
+            "description": "Formadagi operator raqami. Market `default_operator_phone` bo'lsa u 1-raqam, bu esa 2-raqam; `require_operator_phone=true` va default yo'q bo'lsa MAJBURIY (yo'q → 400) va 1-raqam bo'ladi."
+          },
+          "secondary_operator_phone": {
+            "type": "object",
+            "example": "+998901234568",
+            "description": "`operator_phone` sinonimi (BeePost bilan moslik) — `operator_phone` bo‘lmasa shu olinadi."
           },
           "post_id": {
             "type": "string",
@@ -18454,6 +19384,11 @@
             "items": {
               "type": "string"
             }
+          },
+          "oldItemCollected": {
+            "type": "boolean",
+            "example": true,
+            "description": "Almashtirish buyurtmasi uchun: kuryer eski mahsulotni mijozdan oldi (\"Eskisini oldim\"). Almashtirish buyurtmasida true bo'lmasa sotuv 400. Oddiy buyurtmada e'tiborsiz."
           }
         }
       },
@@ -18569,6 +19504,11 @@
             "items": {
               "type": "string"
             }
+          },
+          "oldItemCollected": {
+            "type": "boolean",
+            "example": true,
+            "description": "Almashtirish buyurtmasi uchun: kuryer eski mahsulotni mijozdan oldi (\"Eskisini oldim\"). Almashtirish buyurtmasida true bo'lmasa sotuv 400. Oddiy buyurtmada e'tiborsiz."
           }
         },
         "required": [
@@ -19894,7 +20834,7 @@
           "scheduled_at": {
             "type": "string",
             "example": "2026-10-20T09:00:00+05:00",
-            "description": "Rejalashtirish (≤90 kun). Berilmasa — darhol"
+            "description": "Rejalashtirish (≤90 kun), ISO + ANIQ zona (Toshkent: +05:00 yoki Z). Zonasiz — 400. Berilmasa — darhol. Reklama (marketing) 18:00–09:00 (NOTIF_PROMO_QUIET_HOURS) oralig'iga tushsa — oyna tugashiga suriladi"
           },
           "idempotency_key": {
             "type": "string",
@@ -20261,8 +21201,8 @@
           },
           "group_key": {
             "type": "string",
-            "example": "order-123",
-            "description": "Dedupe/collapse key"
+            "example": "order:123:status",
+            "description": "Dedupe/collapse key (ixtiyoriy). Berilmasa katalogdagi group_key_pattern + data dan hosil qilinadi (masalan order.* -> order:{order_id}:status); shablonli turda data o'zgaruvchisi yetishmasa — 400. Shablonsiz tur (category.manual va h.k.) — har dispatch alohida qator."
           },
           "telegram": {
             "description": "Optional telegram relay target (token qabul qilinmaydi)",
@@ -20503,6 +21443,44 @@
           "code",
           "message_class",
           "lang",
+          "text"
+        ]
+      },
+      "PreviewSmsTemplateDto": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string",
+            "example": "Заказ #{{order_number}} доставлен",
+            "description": "Muharrirdagi matn (bo'sh satr ham mumkin — 0 bo'lak)"
+          },
+          "message_class": {
+            "type": "string",
+            "enum": [
+              "transactional",
+              "promo",
+              "security"
+            ],
+            "example": "transactional"
+          },
+          "required_vars": {
+            "example": [
+              "order_number"
+            ],
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "vars": {
+            "type": "object",
+            "example": {
+              "order_number": "EL-1042"
+            },
+            "description": "Namuna qiymatlar — berilsa to'ldirilgan matn sanaladi (aniq narx)"
+          }
+        },
+        "required": [
           "text"
         ]
       },
@@ -21601,6 +22579,27 @@
             "type": "string",
             "example": "12",
             "description": "Manager user ID (bigint string)"
+          },
+          "ownership": {
+            "type": "string",
+            "example": "partner",
+            "enum": [
+              "owned",
+              "partner"
+            ],
+            "description": "Filial turi (8jtzNlFt): 'owned' — o'zimizniki (standart, filial hamma pulni HQ'ga topshiradi), 'partner' — hamkor (har sotilgan buyurtmadan per_order_share ni o'zida olib qoladi). HQ faqat 'owned'."
+          },
+          "per_order_share": {
+            "example": "5000",
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              }
+            ],
+            "description": "Hamkor filial har sotilgan buyurtmadan olib qoladigan summa (so'm). Faqat ownership='partner' da va 0 dan katta bo'lishi shart; 'owned' filialda 0 saqlanadi."
           }
         },
         "required": [
@@ -21804,6 +22803,27 @@
             "type": "string",
             "example": "12",
             "description": "Manager user ID (bigint string)"
+          },
+          "ownership": {
+            "type": "string",
+            "example": "partner",
+            "enum": [
+              "owned",
+              "partner"
+            ],
+            "description": "Filial turi (8jtzNlFt): 'owned' — o'zimizniki (standart, filial hamma pulni HQ'ga topshiradi), 'partner' — hamkor (har sotilgan buyurtmadan per_order_share ni o'zida olib qoladi). HQ faqat 'owned'."
+          },
+          "per_order_share": {
+            "example": "5000",
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              }
+            ],
+            "description": "Hamkor filial har sotilgan buyurtmadan olib qoladigan summa (so'm). Faqat ownership='partner' da va 0 dan katta bo'lishi shart; 'owned' filialda 0 saqlanadi."
           }
         }
       },
