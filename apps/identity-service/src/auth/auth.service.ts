@@ -15,11 +15,13 @@ import {
   ActivityDescribeUz,
   ActivityLogMaintenanceService,
   ActivityLogService,
+  Roles,
   Status,
   computeHmacSignature,
   normalizeUzPhone,
   resolveLoginDedupWindowMs,
   rmqSend,
+  verifyTelegramInitData,
 } from '@app/common';
 import { errorRes, successRes } from '../../../../libs/common/helpers/response';
 
@@ -200,6 +202,86 @@ export class AuthService {
       access_token_expires_at: tokens.accessTokenExpiresAt,
       refresh_token_expires_at: tokens.refreshTokenExpiresAt,
       refresh_token_warn_at: tokens.refreshTokenWarnAt,
+    };
+  }
+
+  /**
+   * (xC88d8kH #2) `POST /auth/telegram` — Mini App initData imzosi (bot
+   * tokeni bilan HMAC) va `auth_date` (≤5 daqiqa) tekshiriladi, keyin
+   * `users.telegram_id` bo'yicha xodim topiladi. Natija — odatdagi Elchi
+   * access JWT, lekin QISQA (TELEGRAM_ACCESS_TOKEN_TIME, sukut 30m) va
+   * refresh BERILMAYDI. Bot tokeni hech qachon javob yoki xatoda chiqmaydi.
+   */
+  async telegramLogin(data: { init_data?: unknown }) {
+    const initData = typeof data?.init_data === 'string' ? data.init_data : '';
+    const botToken = String(
+      this.configService.get<string>('TELEGRAM_BOT_TOKEN') ?? '',
+    ).trim();
+    const verified = verifyTelegramInitData(initData, botToken);
+    if (!verified.ok) {
+      throw new RpcException({
+        statusCode: verified.reason === 'no_bot_token' ? 503 : 401,
+        message:
+          verified.reason === 'expired'
+            ? "initData eskirgan — Mini App'ni qayta oching"
+            : verified.reason === 'no_bot_token'
+              ? 'Telegram bot sozlanmagan'
+              : "initData imzosi noto'g'ri",
+      });
+    }
+    return this.telegramAccessToken(verified.user.id, 'mini_app');
+  }
+
+  /**
+   * (xC88d8kH #3) Telegram aktori nomidan qisqa muddatli access token —
+   * Mini App (`telegramLogin`) va bot (ichki RMQ `identity.auth.telegram_actor`,
+   * notification-service webhook sekreti tekshirilgan update'dan) uchun.
+   * Bot shu token bilan MAVJUD gateway endpointlarini chaqiradi — parallel
+   * "qulay" endpoint yo'q, RBAC bitta joyda. Bog'lanmagan / nofaol / mijoz /
+   * investor / noaniq (bir nechta akkaunt) → 401.
+   */
+  async telegramAccessToken(telegramId: string, via: 'mini_app' | 'bot') {
+    const id = String(telegramId ?? '').trim();
+    const rows = /^\d{1,20}$/.test(id)
+      ? await this.users.find({
+          where: { telegram_id: id, isDeleted: false, status: Status.ACTIVE },
+          take: 2,
+        })
+      : [];
+    const user = rows.length === 1 ? rows[0] : null;
+    if (!user || [Roles.CUSTOMER, Roles.INVESTOR].includes(user.role)) {
+      throw new RpcException({
+        statusCode: 401,
+        message:
+          "Telegram akkaunt Elchi'ga bog'lanmagan — avval kabinetdan «Telegram'ni ulash» ni bosing",
+      });
+    }
+    const payload = await this.createTokenPayload(user);
+    const accessToken = await this.jwtService.signAsync(
+      { ...payload, auth: 'telegram' },
+      {
+        expiresIn: (this.configService.get<string>(
+          'TELEGRAM_ACCESS_TOKEN_TIME',
+        ) ?? '30m') as StringValue,
+      },
+    );
+    if (via === 'mini_app') {
+      await this.activityLog.log({
+        entity_type: 'Auth',
+        entity_id: user.id,
+        action: ActivityAction.LOGIN,
+        user_id: user.id,
+        user_name: user.name,
+        user_role: user.role,
+        metadata: { method: 'telegram' },
+      });
+    }
+    return {
+      statusCode: 200,
+      message: 'success',
+      user: this.sanitize(user),
+      accessToken,
+      access_token_expires_at: this.extractExpMs(accessToken),
     };
   }
 

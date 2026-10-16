@@ -39,6 +39,9 @@ import { IntegrationGatewayController } from './integration-gateway.controller';
 import { WebhookGatewayController } from './webhook-gateway.controller';
 // (uCrzrElu) Telegram bot webhook'i — secret_token bilan, RMQ'ga o'tkazgich.
 import { TelegramWebhookController } from './telegram-webhook.controller';
+// (6jXw0DDr / 9uNhwTZp) Telegram bog'lash kodlari va statistikasi.
+import { TelegramGatewayController } from './telegram-gateway.controller';
+import { TelegramIdThrottlerGuard } from './auth/telegram-id-throttler.guard';
 import { InvestorGatewayController } from './investor-gateway.controller';
 import { BranchGatewayController } from './branch-gateway.controller';
 import { FileGatewayController } from './file-gateway.controller';
@@ -127,6 +130,7 @@ import type { StringValue } from 'ms';
     IntegrationGatewayController,
     WebhookGatewayController,
     TelegramWebhookController,
+    TelegramGatewayController,
     InvestorGatewayController,
     BranchGatewayController,
     FileGatewayController,
@@ -167,6 +171,7 @@ import type { StringValue } from 'ms';
     // ai-parse: foydalanuvchi (JWT sub) bo'yicha alohida 'ai-user' limiti —
     // faqat @UseGuards orqali, global APP_GUARD EMAS.
     UserThrottlerGuard,
+    TelegramIdThrottlerGuard,
     // /health va ai-availability uchun AI holati keshi (30s so'rov, RMQ kutilmaydi).
     AiStatusPoller,
     RealtimeGateway,

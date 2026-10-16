@@ -14,10 +14,7 @@ import {
 import { Notification } from '../entities/notification.entity';
 import { NotificationServiceService } from '../notification-service.service';
 import { SmsDispatchService } from '../sms/sms-dispatch.service';
-import {
-  createTelegramLinkToken,
-  verifyTelegramLinkToken,
-} from './telegram-link';
+import { TelegramLinkService } from '../bot/telegram-link.service';
 
 /** Outbox hodisasi: shaxsiy Telegram xabarlari (rCFZAmOz #2). */
 export const TELEGRAM_DM_DELIVER_PATTERN = 'notification.telegram.deliver';
@@ -72,16 +69,11 @@ export class TelegramDmService {
     private readonly telegram: NotificationServiceService,
     private readonly config: ConfigService,
     @Inject('IDENTITY') private readonly identityClient: ClientProxy,
+    private readonly links: TelegramLinkService,
   ) {}
 
   private get botToken(): string {
     return (this.config.get<string>('TELEGRAM_BOT_TOKEN') ?? '').trim();
-  }
-
-  private get linkSecret(): string {
-    return (
-      this.config.get<string>('TELEGRAM_LINK_SECRET')?.trim() || this.botToken
-    );
   }
 
   /**
@@ -260,65 +252,217 @@ export class TelegramDmService {
       .execute();
   }
 
-  // ==================== ulash (rCFZAmOz #1) ====================
+  // ==================== ulash (9uNhwTZp / 6jXw0DDr / 4TfLyTrL) ====================
+
+  private get botUsername(): string {
+    return (this.config.get<string>('TELEGRAM_BOT_USERNAME') ?? '')
+      .trim()
+      .replace(/^@/, '');
+  }
 
   /**
-   * `POST /notifications/telegram/link` — tizimga kirgan foydalanuvchiga
-   * o'z akkaunti uchun 15 daqiqalik havola.
+   * `POST /notifications/telegram/link` (eski) — `purpose: user` bilan bir
+   * xil; endi HMAC emas, BIR MARTALIK DB kodi (10 daqiqa).
    */
-  linkToken(input: { user_id?: unknown }) {
-    const userId = str(input?.user_id).trim();
-    if (!/^\d{1,19}$/.test(userId))
+  linkToken(input: { user_id?: unknown; roles?: unknown; ip?: unknown }) {
+    return this.issueLinkCode({
+      purpose: 'user',
+      requester: { id: input?.user_id, roles: input?.roles },
+      ip: input?.ip,
+    });
+  }
+
+  /**
+   * (6jXw0DDr #5 / 4TfLyTrL #3-#4 / 9uNhwTZp #3) Panel → bir martalik kod.
+   *  - `user` — o'z akkauntiga (JWT'dagi id), `t.me/<bot>?start=<kod>`;
+   *  - `market_group` — market guruhi: market o'zi, market operatori o'z
+   *    marketi (identity'dan), admin/superadmin — `market_id` bilan;
+   *    `t.me/<bot>?startgroup=<kod>`.
+   * Mijoz va investor kod olmaydi.
+   */
+  async issueLinkCode(input: {
+    purpose?: unknown;
+    requester?: { id?: unknown; roles?: unknown };
+    market_id?: unknown;
+    group_type?: unknown;
+    ip?: unknown;
+  }) {
+    const userId = str(input?.requester?.id).trim();
+    if (!/^\d{1,19}$/.test(userId)) {
       throw new RpcException({ statusCode: 401, message: 'Unauthorized' });
-    if (!this.linkSecret)
+    }
+    if (!this.botToken) {
       throw new RpcException({
         statusCode: 503,
         message: 'Telegram bot sozlanmagan (TELEGRAM_BOT_TOKEN)',
       });
-    const { token, expires_at } = createTelegramLinkToken(
+    }
+    const roles = (
+      Array.isArray(input?.requester?.roles)
+        ? (input.requester.roles as unknown[])
+        : []
+    ).map((role) => str(role).toLowerCase());
+    if (
+      !roles.length ||
+      roles.some((r) => ['customer', 'investor'].includes(r))
+    ) {
+      throw new RpcException({
+        statusCode: 403,
+        message: 'Bu rol Telegram botiga ulanmaydi',
+      });
+    }
+    const purpose = str(input?.purpose || 'user');
+    const ip = str(input?.ip).slice(0, 64) || null;
+    if (purpose === 'user') {
+      const { token, expires_at } = await this.links.issue({
+        purpose: 'user',
+        owner_type: roles[0],
+        owner_id: userId,
+        created_by: userId,
+        created_ip: ip,
+      });
+      return this.linkResponse(token, expires_at, 'user');
+    }
+    if (purpose !== 'market_group') {
+      throw new RpcException({
+        statusCode: 400,
+        message: "purpose — 'user' yoki 'market_group'",
+      });
+    }
+    const groupType = str(input?.group_type || 'create');
+    if (!['create', 'cancel'].includes(groupType)) {
+      throw new RpcException({
+        statusCode: 400,
+        message: "group_type — 'create' yoki 'cancel'",
+      });
+    }
+    const marketId = await this.resolveGroupMarket(
       userId,
-      this.linkSecret,
+      roles,
+      str(input?.market_id).trim(),
     );
-    const username = (this.config.get<string>('TELEGRAM_BOT_USERNAME') ?? '')
-      .trim()
-      .replace(/^@/, '');
+    const { token, expires_at } = await this.links.issue({
+      purpose: 'market_group',
+      owner_type: 'market',
+      owner_id: marketId,
+      group_type: groupType,
+      created_by: userId,
+      created_ip: ip,
+    });
+    return this.linkResponse(token, expires_at, 'market_group', groupType);
+  }
+
+  /** Guruh kimning marketiga ulanadi — so'rovchi roli bo'yicha, server tomonda. */
+  private async resolveGroupMarket(
+    userId: string,
+    roles: string[],
+    requested: string,
+  ): Promise<string> {
+    if (requested && !/^\d{1,19}$/.test(requested)) {
+      throw new RpcException({
+        statusCode: 400,
+        message: "market_id noto'g'ri",
+      });
+    }
+    if (roles.includes('superadmin') || roles.includes('admin')) {
+      if (!requested) {
+        throw new RpcException({
+          statusCode: 400,
+          message: 'market_id majburiy',
+        });
+      }
+      return requested;
+    }
+    let own = '';
+    if (roles.includes('market')) {
+      own = userId;
+    } else if (roles.includes('market_operator')) {
+      const profile = await rmqSend<{ data?: { market_id?: unknown } }>(
+        this.identityClient,
+        { cmd: 'identity.user.find_by_id' },
+        { id: userId },
+      ).catch(() => null);
+      own = str(profile?.data?.market_id).trim();
+    }
+    if (!own) {
+      throw new RpcException({
+        statusCode: 403,
+        message: 'Guruhni faqat market, uning operatori yoki admin ulay oladi',
+      });
+    }
+    if (requested && requested !== own) {
+      throw new RpcException({
+        statusCode: 403,
+        message: "Faqat o'z marketingiz guruhini ulay olasiz",
+      });
+    }
+    return own;
+  }
+
+  private linkResponse(
+    token: string,
+    expiresAt: Date,
+    purpose: 'user' | 'market_group',
+    groupType?: string,
+  ) {
+    const username = this.botUsername;
+    const param = purpose === 'user' ? 'start' : 'startgroup';
     return {
       statusCode: 200,
       message: 'Telegram link',
       data: {
         token,
-        expires_at,
-        deep_link: username ? `https://t.me/${username}?start=${token}` : null,
-        // Havola bo'lmasa: botga shu buyruqni yuborish.
+        purpose,
+        ...(groupType ? { group_type: groupType } : {}),
+        expires_at: expiresAt,
+        deep_link: username
+          ? `https://t.me/${username}?${param}=${token}`
+          : null,
+        // Havola bo'lmasa: botga (guruhda — botni qo'shib) shu buyruq.
         command: `/start ${token}`,
       },
     };
   }
 
   /**
-   * Bot `/start <token>` (FAQAT shaxsiy chat): token to'g'ri bo'lsa chat id
-   * identity'ga `users.telegram_id` bo'lib yoziladi.
+   * Bot `/start <kod>` (FAQAT shaxsiy chat): kod ATOMIK band qilinadi, so'ng
+   * identity `telegram.link` (konflikt / faollik / rol tekshiruvlari).
    */
   async bindFromStart(
     payload: string,
     chatId: string,
+    telegramUsername?: string | null,
   ): Promise<{ ok: boolean; message: string }> {
-    const userId = verifyTelegramLinkToken(payload, this.linkSecret);
-    if (!userId) {
+    const claim = await this.links.claim(payload, 'private', chatId);
+    if (claim.status !== 'ok' || claim.token.purpose !== 'user') {
       return {
         ok: false,
         message:
-          "Havola noto'g'ri yoki muddati o'tgan. Elchi profilingizdan «Telegram'ni ulash» ni qayta bosing.",
+          claim.status === 'wrong_scope'
+            ? "Bu havola guruh uchun — botni guruhga qo'shing."
+            : "Havola eskirgan yoki allaqachon ishlatilgan. Elchi profilingizdan «Telegram'ni ulash» ni qayta bosing.",
       };
     }
     try {
       await rmqSend(
         this.identityClient,
-        { cmd: 'identity.user.telegram_bind' },
-        { user_id: userId, telegram_id: chatId },
+        { cmd: 'identity.telegram.link' },
+        {
+          user_id: String(claim.token.owner_id),
+          telegram_id: chatId,
+          telegram_username: telegramUsername ?? null,
+        },
       );
     } catch (error) {
-      this.logger.warn(`telegram bind: ${short(error)}`);
+      const status = Number(
+        (error as { statusCode?: unknown } | null)?.statusCode ??
+          (error as { error?: { statusCode?: unknown } } | null)?.error
+            ?.statusCode,
+      );
+      this.logger.warn(`telegram link: ${short(error)}`);
+      if (status === 409 || status === 403) {
+        return { ok: false, message: `❌ ${short(error)}` };
+      }
       return {
         ok: false,
         message: "Ulab bo'lmadi, keyinroq qayta urinib ko'ring.",
@@ -327,11 +471,11 @@ export class TelegramDmService {
     return {
       ok: true,
       message:
-        'Telegram ulandi ✅ Endi Elchi bildirishnomalari shu chatga ham keladi. Uzish: /stop',
+        'Telegram ulandi ✅ Endi Elchi bildirishnomalari shu chatga ham keladi. Uzish: /uzish',
     };
   }
 
-  /** Bot `/stop` — shu chat ulangan akkauntlardan uziladi. */
+  /** Bot `/stop` | `/uzish` — shu chat ulangan akkauntlardan uziladi. */
   async unbind(chatId: string): Promise<{ ok: boolean; message: string }> {
     try {
       await rmqSend(

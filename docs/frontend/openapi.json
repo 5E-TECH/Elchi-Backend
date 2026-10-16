@@ -1569,6 +1569,32 @@
         "x-roles": null
       }
     },
+    "/auth/telegram": {
+      "post": {
+        "operationId": "AuthGatewayController_telegramLogin",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TelegramAuthRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "401": {
+            "description": "initData imzosi noto'g'ri / eskirgan yoki akkaunt bog'lanmagan"
+          }
+        },
+        "summary": "Telegram Mini App login: initData → short-lived access token (30 min), no refresh token",
+        "tags": [
+          "Auth"
+        ],
+        "x-roles": null
+      }
+    },
     "/auth/otp/request": {
       "post": {
         "operationId": "AuthGatewayController_otpRequest",
@@ -10183,7 +10209,7 @@
             "bearer": []
           }
         ],
-        "summary": "Personal Telegram link for the current user: { deep_link, command, expires_at } (15 min)",
+        "summary": "Personal Telegram link for the current user: { token, deep_link, command, expires_at } (one-time, 10 min)",
         "tags": [
           "Notification"
         ],
@@ -10483,14 +10509,13 @@
             "bearer": []
           }
         ],
-        "summary": "Connect telegram group by group token. Noto'g'ri token — 400, market topilmadi — 404 (standart { statusCode, message }).",
+        "summary": "Connect telegram group by one-time group link code (POST /telegram/link-code { purpose: 'market_group' }). Noto'g'ri token — 400, market topilmadi — 404 (standart { statusCode, message }).",
         "tags": [
           "Notification"
         ],
         "x-roles": [
           "superadmin",
-          "admin",
-          "registrator"
+          "admin"
         ]
       }
     },
@@ -12719,6 +12744,103 @@
           "Webhooks"
         ],
         "x-roles": null
+      }
+    },
+    "/telegram/link-code": {
+      "post": {
+        "operationId": "TelegramGatewayController_linkCode",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TelegramLinkCodeRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Bir martalik Telegram bog'lash kodi: `user` — o'z akkaunti (t.me/<bot>?start=…), `market_group` — market guruhi (t.me/<bot>?startgroup=…). Javob: { token, purpose, expires_at, deep_link, command } (10 daqiqa). Mijoz/investor — 403.",
+        "tags": [
+          "Telegram"
+        ],
+        "x-roles": null
+      }
+    },
+    "/users/me/telegram/link-code": {
+      "post": {
+        "operationId": "TelegramGatewayController_myLinkCode",
+        "parameters": [],
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "O'z akkauntini Telegram'ga ulash havolasi (bir martalik, 10 daqiqa): { token, deep_link, command, expires_at }. QR — deep_link dan.",
+        "tags": [
+          "Telegram"
+        ],
+        "x-roles": null
+      }
+    },
+    "/users/me/telegram": {
+      "delete": {
+        "operationId": "TelegramGatewayController_unlinkMe",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "O'z akkauntini Telegram'dan uzish: telegram_id null, audit yoziladi. { unlinked: boolean }",
+        "tags": [
+          "Telegram"
+        ],
+        "x-roles": null
+      }
+    },
+    "/telegram/stats": {
+      "get": {
+        "operationId": "TelegramGatewayController_stats",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Rol bo'yicha Telegram'ga ulanganlar: [{ role, total, linked, ratio }] (faol xodimlar). 0 — bog'lash oqimi buzilgan.",
+        "tags": [
+          "Telegram"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
+        ]
       }
     },
     "/investors/me": {
@@ -18537,6 +18659,19 @@
           "accessToken"
         ]
       },
+      "TelegramAuthRequestDto": {
+        "type": "object",
+        "properties": {
+          "init_data": {
+            "type": "string",
+            "description": "Telegram Mini App `window.Telegram.WebApp.initData` (xom satr, o‘zgartirmasdan).",
+            "example": "query_id=AAH…&user=%7B%22id%22%3A123%7D&auth_date=1760000000&hash=…"
+          }
+        },
+        "required": [
+          "init_data"
+        ]
+      },
       "OtpRequestDto": {
         "type": "object",
         "properties": {
@@ -21286,8 +21421,8 @@
         "properties": {
           "text": {
             "type": "string",
-            "example": "group_token-0123456789abcdef0123456789abcdef",
-            "description": "The market's secret market_tg_token (`group_token-<32 hex>`), readable only by SUPERADMIN via GET /markets/:id/tg-token (GvL6ZFAd). Optional suffix `-create` (default) or `-cancel` selects the group type, e.g. `group_token-<32 hex>-cancel`. The old `group_token-<marketId>` form is rejected. A bind does NOT rotate the token (it stays the order-bot credential), and an existing (market, group type) binding is never overwritten: re-bind only via PATCH/DELETE /notifications/:id."
+            "example": "q3Jx0Yd2c1Kk9mZ4o7Hn5bP1wE8rT6uA0sD3fG5hJ2k",
+            "description": "(6jXw0DDr / 4TfLyTrL) BIR MARTALIK guruh ulash kodi — `POST /telegram/link-code { purpose: 'market_group', group_type }` javobidagi `token` (43 belgi, 10 daqiqa). Matnli `group_token-…` (market tokeni) va `group_token-<marketId>` endi rad etiladi (400). Mavjud (market, guruh turi) ulanishi va boshqa marketga ulangan guruh hech qachon ustidan yozilmaydi: almashtirish faqat PATCH/DELETE /notifications/:id."
           },
           "group_id": {
             "type": "string",
@@ -22285,6 +22420,33 @@
             "type": "boolean",
             "example": true,
             "description": "Faqat ESKI (migratsiyadan oldingi) yozuvlar uchun: to'lov MAIN kassaga yozilgan-yozilmagani noma'lum bo'lsa (409), kassadan teskari chiqim qilinsinmi. Yangi yozuvlarda e'tiborsiz qoldiriladi — `cashbox_posted` bayrog'i ishlatiladi."
+          }
+        }
+      },
+      "TelegramLinkCodeRequestDto": {
+        "type": "object",
+        "properties": {
+          "purpose": {
+            "type": "string",
+            "enum": [
+              "user",
+              "market_group"
+            ],
+            "example": "user",
+            "description": "`user` (sukut) — o'z akkauntiga shaxsiy chat (t.me/<bot>?start=<kod>); `market_group` — market guruhi (t.me/<bot>?startgroup=<kod>)."
+          },
+          "market_id": {
+            "type": "string",
+            "example": "37",
+            "description": "Faqat `market_group` + admin/superadmin uchun MAJBURIY. Market va operator — o‘z marketi (server yechadi; boshqasi → 403)."
+          },
+          "group_type": {
+            "type": "string",
+            "enum": [
+              "cancel",
+              "create"
+            ],
+            "example": "create"
           }
         }
       },

@@ -41,11 +41,11 @@ Tozalash: `BotMaintenanceService` (har soat, `:17`).
 
 ## 3. Rollout (prod)
 
-1. BotFather: DEV uchun **alohida** bot yarating. Privacy mode — hozircha
-   **o'chiq** (`/setprivacy` → Disable): guruhni ulash oddiy matn
-   (`group_token-…`) bilan, privacy yoqilsa bot bu matnni ko'rmaydi. Guruhni
-   ulash bir martalik deep-link'ga (`/start <nonce>`, 4TfLyTrL) o'tgach privacy
-   yoqiladi.
+1. BotFather: DEV uchun **alohida** bot yarating. Privacy mode — **yoqilgan**
+   (`/setprivacy` → Enable): guruhni ulash endi bir martalik deep-link
+   (`t.me/<bot>?startgroup=<kod>` → guruhda `/start@bot <kod>` — buyruq,
+   privacy'da ham keladi); matnli `group_token-…` olib tashlangan.
+   `TELEGRAM_BOT_USERNAME` (deep link uchun) .env ga yoziladi.
 2. `.env.production` (api-gateway VA notification-service bir faylni o'qiydi):
    ```
    TELEGRAM_BOT_TOKEN=<BotFather>
@@ -86,3 +86,24 @@ Tozalash: `BotMaintenanceService` (har soat, `:17`).
 | ikkala bot `sendMessage`/`answerCallbackQuery` (xom fetch, timeout) | chiquvchi | `BotTransportService` (timeout, 429 `retry_after`, 403 qayta urinmaslik, 4096 bo'lish, 64 bayt guard, token redaktsiya) + `telegram_outbox` |
 | `sendTelegramMessage` (DB/payload token) | relay | env token, outbox; 200/202/207/502 |
 | HTML escape (`escape`) | xavfsiz matn | `escapeTelegramHtml` (@app/common) |
+
+## 6. Bog'lash va kirish (6jXw0DDr, 4TfLyTrL, 9uNhwTZp, td89SKXQ, xC88d8kH)
+
+| Oqim | Endpoint / buyruq | Natija |
+|---|---|---|
+| Xodim o'z Telegram'ini ulaydi | `POST /users/me/telegram/link-code` (yoki `POST /telegram/link-code {purpose:'user'}`, eski `POST /notifications/telegram/link`) → `t.me/<bot>?start=<kod>` | bot `/start <kod>` → kod ATOMIK band → `identity.telegram.link` (band id 409, boshqa id bilan ulangan 409, nofaol/mijoz/investor 403) → `users.telegram_id`, `telegram_username`, `telegram_linked_at` |
+| Market guruhini ulash | `POST /telegram/link-code {purpose:'market_group', group_type}` (market — o'zi, operator — o'z marketi, admin — `market_id`) → `t.me/<bot>?startgroup=<kod>` | guruhda `/start@bot <kod>` → `telegram_markets` qatori; mavjud ulanish ustidan yozilmaydi; marketga `telegram.group_connected` |
+| Uzish | `DELETE /users/me/telegram` yoki botda `/uzish` | `telegram_id` NULL + audit |
+| Statistika | `GET /telegram/stats` (admin) | rol bo'yicha `{total, linked, ratio}` |
+| Mini App kirishi | `POST /auth/telegram {init_data}` | initData HMAC + `auth_date` ≤5 daqiqa → 30 daqiqalik JWT, refresh yo'q; IP + Telegram id 5/daqiqa |
+| Bot amallari | `BotGatewayClient` | `identity.auth.telegram_actor` → aktor JWT → MAVJUD gateway endpointlari (RBAC bitta joyda) |
+
+Kod: `randomBytes(32)` base64url (43 belgi), DB'da faqat SHA-256, TTL 10 daqiqa,
+bir martalik; bog'lash urinishlari odam bo'yicha 5/daqiqa → 15 daqiqa blok.
+`users.telegram_id` — partial unique (`UQ_ADMINS_TELEGRAM_ID`); umumiy
+javoblarda yo'q (`telegram_linked` boolean).
+
+Buyruqlar (rol reyestri, 3ZfiXuaW): umumiy `/start`, `/help`, `/uzish`;
+kuryer `/ishim`, `/kun`, `/kassa`; market/operator `/status`, `/balans`.
+Bog'lanmagan chat — faqat `/start` ga javob (fail-closed); rol buyrug'i
+guruhda yoki boshqa rolda — rad.

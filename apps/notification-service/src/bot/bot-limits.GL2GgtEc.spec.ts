@@ -80,8 +80,8 @@ describe('GL2GgtEc — kiruvchi cheklov', () => {
     expect(seventh.replies).toEqual([]);
   });
 
-  it('guruhda group_token urinishlari ham shu cheklov ostida (odam bo‘yicha)', async () => {
-    const notifications = { connectGroupByTokenText: jest.fn() };
+  it('guruhda ulash kodi urinishlari ham shu cheklov ostida (odam bo‘yicha)', async () => {
+    const notifications = { connectGroupByCodeText: jest.fn() };
     const handler = new GroupHandler(
       notifications as never,
       {
@@ -91,15 +91,16 @@ describe('GL2GgtEc — kiruvchi cheklov', () => {
       } as never,
     );
     const made = makeCtx({
-      text: 'group_token-0123456789abcdef',
+      text: `/start ${'Q'.repeat(43)}`,
       chatId: '-100555',
       chatType: 'group',
       fromId: '42',
     });
     await handler.handle(made.ctx as never);
-    expect(notifications.connectGroupByTokenText).not.toHaveBeenCalled();
+    expect(notifications.connectGroupByCodeText).not.toHaveBeenCalled();
     expect(made.replies[0].text).toBe(LINK_BLOCKED_TEXT);
   });
+;
 });
 
 describe('GL2GgtEc — chiquvchi: 429, token-bucket, 4096', () => {

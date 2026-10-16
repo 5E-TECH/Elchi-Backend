@@ -218,6 +218,7 @@ describe('9HIaV80X — sendMessage xato turlari va outbox', () => {
       {} as never,
       { log: jest.fn() } as never,
       makeOutbox(fetchMock).outbox,
+      {} as never,
     );
     const res = await service.sendNotification({
       group_id: '-100999',

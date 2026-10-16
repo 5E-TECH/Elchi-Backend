@@ -5,7 +5,9 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
+import { ModuleRef } from '@nestjs/core';
 import { ClientProxy, RpcException } from '@nestjs/microservices';
 import { InjectRepository } from '@nestjs/typeorm';
 import { FindOptionsSelect, FindOptionsWhere, Repository } from 'typeorm';
@@ -14,6 +16,9 @@ import {
   ActivityLogQuery,
   ActivityLogService,
   Group_type,
+  NotificationCategory,
+  NotificationChannel,
+  NotificationPriority,
   Roles,
   rmqSend,
 } from '@app/common';
@@ -22,36 +27,29 @@ import { CreateNotificationDto } from './dto/create-notification.dto';
 import { UpdateNotificationDto } from './dto/update-notification.dto';
 import { SendNotificationDto } from './dto/send-notification.dto';
 import { BotOutboxService } from './bot/bot-outbox.service';
+import { TelegramLinkService } from './bot/telegram-link.service';
+import { NotificationInboxService } from './notification-inbox.service';
 import type { TelegramParseMode } from './bot/telegram.types';
 
 /**
- * CODE-02: guruhni ulash FAQAT marketning maxfiy market_tg_token'i bilan
- * (identity uni `group_token-<32 hex>` ko'rinishida yaratadi). Ixtiyoriy
- * `-create` / `-cancel` qo'shimchasi guruh turini tanlaydi.
- *
- * Ilgari `group_token-<marketId>` (va `-create|cancel`) hech qanday sirsiz
- * qabul qilinardi: istalgan Telegram foydalanuvchisi botni o'z guruhiga
- * qo'shib `group_token-5` yuborsa, 5-marketning guruhi o'sha guruhga
- * ko'chirilar va marketning tokeni almashtirilardi (order-bot WebApp havolasi
- * ishlamay qolardi). Bundan tashqari telegram_markets'da saqlangan eski
- * (allaqachon almashtirilgan) token ham abadiy qabul qilinardi.
- *
- * fix3b (hujjatlar, B varianti):
- *  - ulangandan keyin token ALMASHTIRILMAYDI — u marketning order-bot
- *    kaliti bo'lib qoladi (operator restartdan keyin uni qayta yuboradi,
- *    WebApp ham shu token bilan kiradi);
- *  - mavjud (market, guruh turi) ulanishi bot/token orqali HECH QACHON
- *    almashtirilmaydi — token bilan ham. Qayta ulash faqat admin
- *    PATCH/DELETE /notifications/:id orqali. Shuning uchun guruhda qolgan
- *    token allaqachon ulangan guruhni "o'g'irlay" olmaydi.
+ * (6jXw0DDr / 4TfLyTrL) Guruhni ulash FAQAT paneldan olingan BIR MARTALIK
+ * kod bilan (`t.me/<bot>?startgroup=<kod>` → guruhda `/start <kod>`, yoki
+ * admin `POST /notifications/connect-by-token { text: <kod>, group_id }`).
+ * Matnli `group_token-<raqam>` (market id = "sir") va uzoq yashovchi,
+ * aylanmaydigan market tokeni bilan ulash BUTUNLAY olib tashlandi: guruhda
+ * ko'ringan token bilan istalgan a'zo marketning buyurtma oqimini o'ziga
+ * oqizardi. fix3b qoidalari saqlanadi: mavjud (market, tur) ulanishi va
+ * boshqa marketga ulangan guruh HECH QACHON jimgina ustidan yozilmaydi —
+ * almashtirish faqat admin PATCH/DELETE /notifications/:id.
  */
-const GROUP_BIND_TEXT_RE =
-  /^(group_token-[a-z0-9]{14,64})(?:-(create|cancel))?$/i;
-
 const GROUP_BIND_FORMAT_MESSAGE =
-  "Token formati noto'g'ri. Admin bergan maxfiy market tokenini (group_token-…) yuboring; bekor qilingan buyurtmalar guruhi uchun token oxiriga -cancel qo'shing.";
+  "Ulash kodi noto'g'ri. Kabinetdagi «Telegram guruhini ulash» havolasini oching (kod 10 daqiqa amal qiladi).";
 
-const GROUP_BIND_TOKEN_NOT_FOUND_MESSAGE = 'Token topilmadi yoki yaroqsiz';
+const GROUP_BIND_CODE_USED_MESSAGE =
+  'Ulash havolasi eskirgan yoki allaqachon ishlatilgan — kabinetdan yangisini oling';
+
+const GROUP_BIND_WRONG_SCOPE_MESSAGE =
+  'Bu havola shaxsiy chat uchun — guruh ulash havolasini oling';
 
 const GROUP_BIND_MARKET_NOT_FOUND_MESSAGE = 'Market topilmadi';
 
@@ -123,6 +121,8 @@ export class NotificationServiceService {
     @Inject('IDENTITY') private readonly identityClient: ClientProxy,
     private readonly activityLog: ActivityLogService,
     private readonly botOutbox: BotOutboxService,
+    private readonly links: TelegramLinkService,
+    @Optional() private readonly moduleRef?: ModuleRef,
   ) {}
 
   private toPublic(row: TelegramMarket) {
@@ -238,49 +238,11 @@ export class NotificationServiceService {
   }
 
   /**
-   * CODE-02: matn → (market, guruh turi). Market FAQAT identity'dagi joriy
-   * market_tg_token orqali aniqlanadi: id bo'yicha yorliq yo'q, saqlangan
-   * eski token bo'yicha zaxira yo'q. Token ulangandan keyin almashtirilmaydi
-   * (fix3b) — mavjud ulanishni esa u baribir almashtira olmaydi.
-   */
-  private async parseGroupTokenText(
-    text: string,
-  ): Promise<{ market_id: string; group_type: Group_type }> {
-    const value = String(text ?? '').trim();
-    const match = GROUP_BIND_TEXT_RE.exec(value);
-    if (!match) {
-      throw new BadRequestException(GROUP_BIND_FORMAT_MESSAGE);
-    }
-    const [, token, groupTypeRaw] = match;
-    const groupType =
-      String(groupTypeRaw ?? '').toLowerCase() === Group_type.CANCEL
-        ? Group_type.CANCEL
-        : Group_type.CREATE;
-
-    const marketByTokenResponse = await rmqSend<any>(
-      this.identityClient,
-      { cmd: 'identity.market.find_by_tg_token' },
-      { market_tg_token: token },
-    ).catch(() => null);
-
-    const marketByToken = marketByTokenResponse?.data ?? null;
-    if (!marketByToken?.id) {
-      throw new BadRequestException(GROUP_BIND_TOKEN_NOT_FOUND_MESSAGE);
-    }
-
-    return {
-      market_id: String(marketByToken.id),
-      group_type: groupType,
-    };
-  }
-
-  /**
    * (3SeRYFqx #1) HTTP yo'li (POST /notifications/connect-by-token, RMQ
-   * notification.telegram.connect_by_token): xato — boshqa metodlar kabi
-   * RpcException (400/404, standart konvert statusCode + message). Avval
-   * har qanday xato HTTP 201 va konvertsiz { message } bo'lib qaytardi —
-   * mijoz muvaffaqiyatsizlikni farqlay olmasdi. Kutilmagan (DB) xato matni
-   * mijozga chiqmaydi — umumiy 500 xabari, to'liq sabab logda.
+   * notification.telegram.connect_by_token): `text` — paneldan olingan BIR
+   * MARTALIK guruh ulash kodi (`market_group`). Xato — RpcException
+   * (400/404, standart konvert); kutilmagan (DB) xato matni mijozga
+   * chiqmaydi — umumiy 500 xabari, to'liq sabab logda.
    */
   async connectGroupByToken(text: string, groupId: string) {
     try {
@@ -290,7 +252,7 @@ export class NotificationServiceService {
           "group_id noto'g'ri — Telegram guruh ID si (masalan -1001234567890) bo'lishi kerak",
         );
       }
-      return await this.bindGroupByToken(text, group);
+      return await this.bindGroupByCode(text, group, 'connect_by_token');
     } catch (error) {
       const detail = error instanceof Error ? error.message : 'rpc';
       if (
@@ -311,12 +273,12 @@ export class NotificationServiceService {
   }
 
   /**
-   * Bot yo'li (guruh chatidagi token matni): natija ham, xato ham guruhga
+   * Bot yo'li (guruhda `/start <kod>`): natija ham, xato ham guruhga
    * yuboriladigan { message } — bot uni javob matni sifatida ishlatadi.
    */
-  async connectGroupByTokenText(text: string, groupId: string) {
+  async connectGroupByCodeText(code: string, groupId: string) {
     try {
-      return await this.bindGroupByToken(text, groupId);
+      return await this.bindGroupByCode(code, groupId, 'bot_start');
     } catch (error) {
       // O'zimizning 400/404 xabarlarimiz (o'zbekcha) guruhga boradi; kutilmagan
       // xato (masalan baza) matni esa faqat logga — guruhga umumiy xabar.
@@ -326,23 +288,60 @@ export class NotificationServiceService {
       const detail =
         error instanceof Error ? error.message : NOMALUM_ERROR_MESSAGE;
       if (isOwnMessage) {
-        this.logger.warn('connectGroupByTokenText failed: ' + detail);
+        this.logger.warn('connectGroupByCodeText failed: ' + detail);
         return { message: detail };
       }
-      this.logger.error('connectGroupByTokenText failed: ' + detail);
+      this.logger.error('connectGroupByCodeText failed: ' + detail);
       return { message: GROUP_BIND_UNEXPECTED_ERROR_MESSAGE };
     }
   }
 
-  /** Token matni -> (market, guruh turi) ulash. Xato — throw (o'ralmagan). */
-  private async bindGroupByToken(text: string, groupId: string) {
-    const parsed = await this.parseGroupTokenText(text);
-    this.assertBigIntId(parsed.market_id, 'market_id');
+  /** Kod → ATOMIK band qilish → (market, guruh turi) ulash. Xato — throw. */
+  private async bindGroupByCode(
+    code: string,
+    groupId: string,
+    via: 'connect_by_token' | 'bot_start',
+  ) {
+    const claim = await this.links.claim(code, 'group', groupId);
+    if (claim.status === 'invalid') {
+      throw new BadRequestException(GROUP_BIND_FORMAT_MESSAGE);
+    }
+    if (claim.status === 'wrong_scope') {
+      throw new BadRequestException(GROUP_BIND_WRONG_SCOPE_MESSAGE);
+    }
+    if (claim.status !== 'ok') {
+      throw new BadRequestException(GROUP_BIND_CODE_USED_MESSAGE);
+    }
+    const groupType =
+      String(claim.token.group_type ?? '').toLowerCase() === Group_type.CANCEL
+        ? Group_type.CANCEL
+        : Group_type.CREATE;
+    return this.bindGroupToMarket({
+      market_id: String(claim.token.owner_id),
+      group_type: groupType,
+      group_id: groupId,
+      created_by: claim.token.created_by
+        ? String(claim.token.created_by)
+        : null,
+      via,
+    });
+  }
+
+  /** (market, guruh turi) ← guruh. Mavjud ulanish HECH QACHON ustidan yozilmaydi. */
+  private async bindGroupToMarket(input: {
+    market_id: string;
+    group_type: Group_type;
+    group_id: string;
+    created_by: string | null;
+    via: string;
+  }) {
+    const groupId = input.group_id;
+    this.assertBigIntId(input.market_id, 'market_id');
 
     const marketResponse = await rmqSend<any>(
       this.identityClient,
       { cmd: 'identity.market.find_by_id' },
-      { id: parsed.market_id },
+      { id: input.market_id },
     ).catch(() => null);
 
     const market = marketResponse?.data ?? marketResponse ?? null;
@@ -353,7 +352,7 @@ export class NotificationServiceService {
     const existsByGroup = await this.tgMarketRepo.findOne({
       where: {
         group_id: groupId,
-        group_type: parsed.group_type,
+        group_type: input.group_type,
         isDeleted: false,
       },
     });
@@ -364,45 +363,89 @@ export class NotificationServiceService {
 
     const existsByMarketType = await this.tgMarketRepo.findOne({
       where: {
-        market_id: parsed.market_id,
-        group_type: parsed.group_type,
+        market_id: input.market_id,
+        group_type: input.group_type,
         isDeleted: false,
       },
     });
 
-    // fix3b: mavjud (market, guruh turi) ulanishi token bilan ham
-    // ALMASHTIRILMAYDI (faol yoki nofaol bo'lsin) — qayta ulash faqat admin
-    // PATCH/DELETE /notifications/:id orqali. Aks holda guruh chatida
-    // ko'ringan token bilan istalgan a'zo market guruhini o'ziga ko'chirardi.
+    // fix3b / 6jXw0DDr #6: mavjud (market, guruh turi) ulanishi kod bilan
+    // ham ALMASHTIRILMAYDI (faol yoki nofaol bo'lsin) — boshqa guruh marketni
+    // "tortib ololmaydi"; qayta ulash faqat admin PATCH/DELETE
+    // /notifications/:id orqali.
     if (existsByMarketType) {
       throw new BadRequestException(MARKET_GROUP_ALREADY_CONNECTED_MESSAGE);
     }
 
-    // CODE-02 / bOMYoOtV: maxfiy token matni bazada SAQLANMAYDI (u bot
-    // tokeni emas) — yuborishda env bot ishlatiladi. fix3b: token
-    // ALMASHTIRILMAYDI.
+    // bOMYoOtV: bot tokeni bazada yo'q (yuborishda env bot); ulash kodi
+    // faqat hash bo'lib telegram_link_tokens da va allaqachon band qilingan.
     const created = this.tgMarketRepo.create({
-      market_id: parsed.market_id,
+      market_id: input.market_id,
       group_id: groupId,
-      group_type: parsed.group_type,
+      group_type: input.group_type,
       is_active: true,
     });
 
     const saved = await this.tgMarketRepo.save(created);
 
-    // Audit: group connection (token text itself is never logged).
+    // Audit: group connection (kod matni hech qachon loglanmaydi).
     await this.activityLog.log({
       entity_type: 'TelegramMarket',
       entity_id: saved.id,
       action: 'notification.tg_group_connected',
-      metadata: { group_id: groupId, market_id: parsed.market_id },
+      metadata: {
+        group_id: groupId,
+        market_id: input.market_id,
+        via: input.via,
+        ...(input.created_by ? { linked_by: input.created_by } : {}),
+      },
     });
+
+    // (4TfLyTrL #8) market kabinetiga "guruhingiz ulandi".
+    await this.notifyMarketGroupConnected(
+      input.market_id,
+      input.group_type,
+      groupId,
+    );
 
     return this.successRes(
       this.toPublic(saved),
       201,
       `${market.name ?? 'Market'} uchun Telegram guruhi ulandi`,
     );
+  }
+
+  private async notifyMarketGroupConnected(
+    marketId: string,
+    groupType: Group_type,
+    groupId: string,
+  ): Promise<void> {
+    if (!this.moduleRef) return;
+    try {
+      // NotificationInboxService shu servisga bog'liq — DI halqasi bo'lmasligi
+      // uchun chaqiruv paytida olinadi.
+      const inbox = this.moduleRef.get(NotificationInboxService, {
+        strict: false,
+      });
+      await inbox.dispatch({
+        type: 'telegram.group_connected',
+        category: NotificationCategory.SYSTEM,
+        priority: NotificationPriority.NORMAL,
+        title: 'Telegram guruhingiz ulandi',
+        body:
+          groupType === Group_type.CANCEL
+            ? 'Bekor qilingan buyurtmalar xabarlari endi shu guruhga keladi.'
+            : 'Yangi buyurtmalar xabarlari endi shu guruhga keladi.',
+        recipient_id: marketId,
+        channels: [NotificationChannel.IN_APP, NotificationChannel.REALTIME],
+        group_key: `telegram:group_connected:${marketId}`,
+        data: { market_id: marketId, group_type: groupType, group_id: groupId },
+      } as never);
+    } catch (error) {
+      this.logger.warn(
+        `telegram.group_connected xabari yuborilmadi: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
   }
 
   async createTelegramMarket(dto: CreateNotificationDto) {

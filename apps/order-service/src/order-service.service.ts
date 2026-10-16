@@ -1305,7 +1305,7 @@ export class OrderServiceService {
     return { waiting, all, cancelled };
   }
 
-  async findById(id: string) {
+  async findById(id: string, requester?: OrderLookupRequester | null) {
     let order: Order | null;
     try {
       order = await this.orderRepo.findOne({
@@ -1315,7 +1315,9 @@ export class OrderServiceService {
     } catch (error) {
       this.handleDbError(error);
     }
-    if (!order) {
+    // (3ZfiXuaW #3 / 5i3UZjiF #4) `requester` berilsa doira SERVER tomonda:
+    // doiradan tashqari buyurtma "topilmadi" (mavjudligi ham oshkor emas).
+    if (!order || (requester && !orderVisibleTo(order, requester))) {
       this.notFound(`Order #${id} topilmadi`);
     }
     return order;
@@ -2728,4 +2730,52 @@ export class OrderServiceService {
 
     return successRes(rows, 200);
   }
+}
+
+/**
+ * `order.find_by_id` ning ixtiyoriy so'rovchisi (bot / ichki chaqiruvchi).
+ * Gateway HTTP yo'li o'z `assertCanViewOrder` iga ega; bu — RMQ orqali
+ * to'g'ridan-to'g'ri o'qiydiganlar uchun bir xil qoida.
+ */
+export interface OrderLookupRequester {
+  id?: string | number | null;
+  roles?: string[] | null;
+  market_id?: string | number | null;
+}
+
+/**
+ * Doira (gateway assertCanViewOrder bilan bir xil asosiy qoidalar):
+ * superadmin/admin — hammasi; market — o'z `market_id`; market operatori —
+ * biriktirilgan market; kuryer — `courier_id` yoki `holder_courier_id`;
+ * boshqa rollar — yo'q (fail-closed).
+ */
+export function orderVisibleTo(
+  order: {
+    market_id?: unknown;
+    courier_id?: unknown;
+    holder_courier_id?: unknown;
+  },
+  requester: OrderLookupRequester,
+): boolean {
+  const roles = (requester.roles ?? []).map((role) =>
+    String(role).toLowerCase(),
+  );
+  const text = (value: unknown) =>
+    typeof value === 'string' || typeof value === 'number'
+      ? String(value).trim()
+      : '';
+  const id = text(requester.id);
+  if (roles.includes('superadmin') || roles.includes('admin')) return true;
+  if (roles.includes('market')) return !!id && text(order.market_id) === id;
+  if (roles.includes('market_operator')) {
+    const marketId = text(requester.market_id);
+    return !!marketId && text(order.market_id) === marketId;
+  }
+  if (roles.includes('courier')) {
+    return (
+      !!id &&
+      (text(order.courier_id) === id || text(order.holder_courier_id) === id)
+    );
+  }
+  return false;
 }

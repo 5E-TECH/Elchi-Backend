@@ -440,7 +440,8 @@ export class UserServiceService implements OnModuleInit {
    * Umumiy RPC javoblariga HECH QACHON kirmaydigan maydonlar:
    * - password — bcrypt hash;
    * - refresh_token — faol refresh JWT'ning sha256 hashi;
-   * - market_tg_token — marketning Telegram bot/guruh kaliti (bearer).
+   * - market_tg_token — marketning Telegram bot/guruh kaliti (bearer);
+   * - telegram_id — shaxsiy chat manzili (td89SKXQ): o'rniga `telegram_linked`.
    *
    * market_tg_token ilgari order/analytics/finance/catalog/branch javoblaridagi
    * market obyektlari orqali menejer, registrator, kuryer va boshqa
@@ -455,12 +456,26 @@ export class UserServiceService implements OnModuleInit {
    */
   private sanitize(
     user: User,
-  ): Omit<User, 'password' | 'refresh_token' | 'market_tg_token'> {
-    const safeUser = { ...user };
-    delete (safeUser as { password?: unknown }).password;
-    delete (safeUser as { refresh_token?: unknown }).refresh_token;
-    delete (safeUser as { market_tg_token?: unknown }).market_tg_token;
-    return safeUser;
+  ): Omit<
+    User,
+    'password' | 'refresh_token' | 'market_tg_token' | 'telegram_id'
+  > & { telegram_linked?: boolean } {
+    const safeUser: Partial<User> & { telegram_linked?: boolean } = {
+      ...user,
+    };
+    delete safeUser.password;
+    delete safeUser.refresh_token;
+    delete safeUser.market_tg_token;
+    // (td89SKXQ #5 / 4TfLyTrL) telegram_id — chat manzili, javobga chiqmaydi;
+    // o'rniga faqat holat (profil "ulangan/ulanmagan", admin ro'yxati).
+    if ('telegram_id' in safeUser) {
+      safeUser.telegram_linked = Boolean(safeUser.telegram_id);
+      delete safeUser.telegram_id;
+    }
+    return safeUser as Omit<
+      User,
+      'password' | 'refresh_token' | 'market_tg_token' | 'telegram_id'
+    > & { telegram_linked?: boolean };
   }
 
   /** Normalise the RMQ requester into activity-log actor fields. */
@@ -4159,34 +4174,129 @@ export class UserServiceService implements OnModuleInit {
   }
 
   /**
-   * (rCFZAmOz #1) Shaxsiy Telegram chatini akkauntga ulash — FAQAT ichki RMQ
-   * (notification-service bot `/start <token>`; token imzosi u yerda
-   * tekshirilgan, `user_id` tokendan). Gateway'da HTTP marshruti YO'Q.
-   * Faqat faol, o'chirilmagan foydalanuvchi.
+   * (td89SKXQ #3-#4 / 9uNhwTZp) Telegram akkauntni xodimga bog'lash — FAQAT
+   * ichki RMQ (notification-service bot: bir martalik kod band qilingandan
+   * keyin; kod paneldan, JWT bilan olingan). BeePost tekshiruvlari aynan:
+   *  (a) bu telegram_id boshqa (o'chirilmagan) xodimda — 409;
+   *  (b) bu xodimda BOSHQA telegram_id bor — 409 (avval uzish kerak);
+   *  (c) status ACTIVE emas — 403;
+   *  (d) mijoz / investor — 403 (bot aktori bo'la olmaydi).
+   * Solishtirish doim `String()` (Elchi'da varchar, Telegram'da son).
+   * Poyga: partial unique indeks (UQ_ADMINS_TELEGRAM_ID) → 23505 → 409.
    */
-  async telegramBind(payload: { user_id?: unknown; telegram_id?: unknown }) {
+  async telegramLink(payload: {
+    user_id?: unknown;
+    telegram_id?: unknown;
+    telegram_username?: unknown;
+  }) {
     const userId = primitiveText(payload?.user_id).trim();
     const telegramId = primitiveText(payload?.telegram_id).trim();
-    if (!/^\d{1,19}$/.test(userId) || !/^-?\d{1,20}$/.test(telegramId)) {
+    if (!/^\d{1,19}$/.test(userId) || !/^\d{1,20}$/.test(telegramId)) {
       throw new RpcException({
         statusCode: 400,
         message: "user_id / telegram_id noto'g'ri",
       });
     }
-    const result = await this.users.update(
-      { id: userId, isDeleted: false, status: Status.ACTIVE },
-      { telegram_id: telegramId },
-    );
-    if (!result.affected) {
+    const user = await this.users.findOne({
+      where: { id: userId, isDeleted: false },
+      select: ['id', 'role', 'status', 'telegram_id'],
+    });
+    if (!user) {
       throw new RpcException({
         statusCode: 404,
         message: 'Foydalanuvchi topilmadi',
       });
     }
-    return successRes({ bound: true }, 200, 'Telegram linked');
+    if ([Roles.CUSTOMER, Roles.INVESTOR].includes(user.role)) {
+      throw new RpcException({
+        statusCode: 403,
+        message: 'Bu rol Telegram botiga ulanmaydi',
+      });
+    }
+    if (user.status !== Status.ACTIVE) {
+      throw new RpcException({
+        statusCode: 403,
+        message: 'Akkaunt faol emas — Telegram ulanmaydi',
+      });
+    }
+    const current = String(user.telegram_id ?? '').trim();
+    if (current && current !== telegramId) {
+      throw new RpcException({
+        statusCode: 409,
+        message:
+          "Akkauntingiz boshqa Telegram'ga ulangan — avval profildan uzing",
+      });
+    }
+    const owner = await this.users.findOne({
+      where: { telegram_id: telegramId },
+      select: ['id', 'isDeleted'],
+    });
+    if (owner && String(owner.id) !== userId) {
+      if (!owner.isDeleted) {
+        throw new RpcException({
+          statusCode: 409,
+          message: 'Bu Telegram akkaunt boshqa xodimga ulangan',
+        });
+      }
+      // O'chirilgan akkauntda qolgan bog'lanish — bo'shatiladi.
+      await this.users.update(
+        { id: owner.id },
+        {
+          telegram_id: null,
+          telegram_username: null,
+          telegram_linked_at: null,
+        },
+      );
+    }
+    const username = primitiveText(payload?.telegram_username)
+      .trim()
+      .replace(/^@/, '')
+      .slice(0, 64);
+    try {
+      await this.users.update(
+        { id: userId, isDeleted: false, status: Status.ACTIVE },
+        {
+          telegram_id: telegramId,
+          telegram_username: username || null,
+          telegram_linked_at: new Date(),
+        },
+      );
+    } catch (error) {
+      if ((error as { code?: string })?.code === '23505') {
+        throw new RpcException({
+          statusCode: 409,
+          message: 'Bu Telegram akkaunt boshqa xodimga ulangan',
+        });
+      }
+      throw error;
+    }
+    await this.activityLog
+      .log({
+        entity_type: 'User',
+        entity_id: userId,
+        action: 'notification.tg_linked',
+        user_id: userId,
+        user_role: String(user.role),
+        metadata: { via: 'bot_link_code' },
+      })
+      .catch(() => undefined);
+    return successRes(
+      { linked: true, user_id: userId, role: user.role },
+      200,
+      'Telegram linked',
+    );
   }
 
-  /** (rCFZAmOz) Bot `/stop` — shu chat ulangan barcha akkauntlardan uziladi. */
+  /**
+   * (rCFZAmOz) eski nom — endi `telegramLink` tekshiruvlari bilan (konflikt,
+   * faollik, rol). Ichki RMQ, gateway'da HTTP marshruti yo'q.
+   */
+  async telegramBind(payload: { user_id?: unknown; telegram_id?: unknown }) {
+    const result = await this.telegramLink(payload);
+    return successRes({ bound: true, ...result.data }, 200, 'Telegram linked');
+  }
+
+  /** (rCFZAmOz) Bot `/stop` | `/uzish` — shu chat ulangan akkauntdan uziladi. */
   async telegramUnbind(payload: { telegram_id?: unknown }) {
     const telegramId = primitiveText(payload?.telegram_id).trim();
     if (!/^-?\d{1,20}$/.test(telegramId)) {
@@ -4197,13 +4307,41 @@ export class UserServiceService implements OnModuleInit {
     }
     const result = await this.users.update(
       { telegram_id: telegramId },
-      { telegram_id: null },
+      { telegram_id: null, telegram_username: null, telegram_linked_at: null },
     );
     return successRes(
       { unbound: result.affected ?? 0 },
       200,
       'Telegram unlinked',
     );
+  }
+
+  /**
+   * (9uNhwTZp #3) `DELETE /users/me/telegram` — o'z akkauntidan uzish
+   * (user_id faqat JWT'dan). Audit izi yoziladi.
+   */
+  async telegramUnlinkUser(payload: { user_id?: unknown }) {
+    const userId = primitiveText(payload?.user_id).trim();
+    if (!/^\d{1,19}$/.test(userId)) {
+      throw new RpcException({ statusCode: 401, message: 'Unauthorized' });
+    }
+    const result = await this.users.update(
+      { id: userId },
+      { telegram_id: null, telegram_username: null, telegram_linked_at: null },
+    );
+    const unlinked = (result.affected ?? 0) > 0;
+    if (unlinked) {
+      await this.activityLog
+        .log({
+          entity_type: 'User',
+          entity_id: userId,
+          action: 'notification.tg_unlinked',
+          user_id: userId,
+          metadata: { via: 'profile' },
+        })
+        .catch(() => undefined);
+    }
+    return successRes({ unlinked }, 200, 'Telegram unlinked');
   }
 
   /**
@@ -4215,39 +4353,75 @@ export class UserServiceService implements OnModuleInit {
   async telegramResolve(payload: { telegram_id?: unknown }) {
     const telegramId = primitiveText(payload?.telegram_id).trim();
     if (!/^-?\d{1,20}$/.test(telegramId)) return successRes(null);
+    const map = await this.resolveTelegramActors([telegramId]);
+    return successRes(map.get(telegramId) ?? null);
+  }
+
+  /** (td89SKXQ #3) Ko'p telegram_id bir so'rovda → { [telegram_id]: aktor | null }. */
+  async telegramResolveMany(payload: { telegram_ids?: unknown }) {
+    const ids = [
+      ...new Set(
+        (Array.isArray(payload?.telegram_ids) ? payload.telegram_ids : [])
+          .map((id) => primitiveText(id).trim())
+          .filter((id) => /^-?\d{1,20}$/.test(id)),
+      ),
+    ].slice(0, 1000);
+    const map = await this.resolveTelegramActors(ids);
+    return successRes(
+      Object.fromEntries(ids.map((id) => [id, map.get(id) ?? null])),
+    );
+  }
+
+  private async resolveTelegramActors(telegramIds: string[]) {
+    const result = new Map<
+      string,
+      {
+        user_id: string;
+        role: Roles;
+        status: Status;
+        market_id: string | null;
+        region_id: string | null;
+      }
+    >();
+    if (!telegramIds.length) return result;
     const rows = await this.users.find({
-      where: { telegram_id: telegramId, isDeleted: false },
-      select: ['id', 'role', 'status', 'market_id', 'region_id'],
-      take: 2,
+      where: { telegram_id: In(telegramIds), isDeleted: false },
+      select: ['id', 'role', 'status', 'market_id', 'region_id', 'telegram_id'],
     });
-    if (rows.length !== 1) {
-      if (rows.length > 1) {
+    const byTelegram = new Map<string, User[]>();
+    for (const row of rows) {
+      const key = String(row.telegram_id);
+      byTelegram.set(key, [...(byTelegram.get(key) ?? []), row]);
+    }
+    for (const [telegramId, matches] of byTelegram) {
+      if (matches.length !== 1) {
         this.logger.warn(
           'identity.telegram.resolve: bitta telegram_id bir nechta akkauntda — rad etildi (fail-closed)',
         );
+        continue;
       }
-      return successRes(null);
+      const [user] = matches;
+      if (
+        user.status !== Status.ACTIVE ||
+        [Roles.CUSTOMER, Roles.INVESTOR].includes(user.role)
+      ) {
+        continue;
+      }
+      result.set(telegramId, {
+        user_id: String(user.id),
+        role: user.role,
+        status: user.status,
+        // Market — o'zi; market operatori — biriktirilgan market.
+        market_id:
+          user.role === Roles.MARKET
+            ? String(user.id)
+            : user.market_id
+              ? String(user.market_id)
+              : null,
+        region_id: user.region_id ? String(user.region_id) : null,
+      });
     }
-    const [user] = rows;
-    if (
-      user.status !== Status.ACTIVE ||
-      [Roles.CUSTOMER, Roles.INVESTOR].includes(user.role)
-    ) {
-      return successRes(null);
-    }
-    return successRes({
-      user_id: String(user.id),
-      role: user.role,
-      status: user.status,
-      // Market — o'zi; market operatori — biriktirilgan market.
-      market_id:
-        user.role === Roles.MARKET
-          ? String(user.id)
-          : user.market_id
-            ? String(user.market_id)
-            : null,
-      region_id: user.region_id ? String(user.region_id) : null,
-    });
+    return result;
   }
 
   /** (9HIaV80X #6) `bot_linked_users{role}` metrikasi uchun. */
@@ -4262,6 +4436,38 @@ export class UserServiceService implements OnModuleInit {
       .getRawMany();
     return successRes(
       rows.map((row) => ({ role: row.role, count: Number(row.count) })),
+    );
+  }
+
+  /**
+   * (9uNhwTZp #6 / td89SKXQ #7) Dashboard: rol bo'yicha `ulangan / jami`
+   * (faol, o'chirilmagan xodimlar). 0% — bog'lash oqimi buzilgan signali.
+   */
+  async telegramStats() {
+    const rows: Array<{ role: string; total: string; linked: string }> =
+      await this.users
+        .createQueryBuilder('u')
+        .select('u.role', 'role')
+        .addSelect('COUNT(*)', 'total')
+        .addSelect('COUNT(u.telegram_id)', 'linked')
+        .where('u.is_deleted = false')
+        .andWhere('u.status = :active', { active: Status.ACTIVE })
+        .andWhere('u.role NOT IN (:...excluded)', {
+          excluded: [Roles.CUSTOMER, Roles.INVESTOR],
+        })
+        .groupBy('u.role')
+        .getRawMany();
+    return successRes(
+      rows.map((row) => {
+        const total = Number(row.total) || 0;
+        const linked = Number(row.linked) || 0;
+        return {
+          role: row.role,
+          total,
+          linked,
+          ratio: total ? Math.round((linked / total) * 1000) / 1000 : 0,
+        };
+      }),
     );
   }
 

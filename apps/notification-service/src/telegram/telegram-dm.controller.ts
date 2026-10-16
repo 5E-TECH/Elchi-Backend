@@ -22,11 +22,35 @@ export class TelegramDmController {
     private readonly dm: TelegramDmService,
   ) {}
 
-  /** Gateway `POST /notifications/telegram/link` (user_id — JWT'dan). */
+  /** Gateway `POST /notifications/telegram/link` (user_id, roles — JWT'dan). */
   @MessagePattern({ cmd: 'notification.telegram.link_token' })
-  linkToken(@Payload() data: { user_id?: string }, @Ctx() context: RmqContext) {
+  linkToken(
+    @Payload() data: { user_id?: string; roles?: string[]; ip?: string },
+    @Ctx() context: RmqContext,
+  ) {
     return executeAndAck(this.rmqService, context, () =>
       this.dm.linkToken(data ?? {}),
+    );
+  }
+
+  /**
+   * (6jXw0DDr / 4TfLyTrL / 9uNhwTZp) Gateway `POST /telegram/link-code` va
+   * `POST /users/me/telegram/link-code` — bir martalik kod (requester JWT'dan).
+   */
+  @MessagePattern({ cmd: 'notification.telegram.link_code' })
+  linkCode(
+    @Payload()
+    data: {
+      purpose?: string;
+      requester?: { id?: string; roles?: string[] };
+      market_id?: string;
+      group_type?: string;
+      ip?: string;
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return executeAndAck(this.rmqService, context, () =>
+      this.dm.issueLinkCode(data ?? {}),
     );
   }
 

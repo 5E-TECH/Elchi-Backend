@@ -116,14 +116,16 @@ describe('Gateway — /notifications/sent (7Vozou5x)', () => {
       await request(http()).post('/notifications/telegram/link').expect(201);
       expect(lastCall()).toEqual([
         { cmd: 'notification.telegram.link_token' },
-        { user_id: '9' },
+        expect.objectContaining({ user_id: '9', roles: ['courier'] }),
       ]);
       // Body'dagi begona user_id qabul qilinmaydi (whitelist yo'q DTO — e'tiborsiz).
       await request(http())
         .post('/notifications/telegram/link')
         .send({ user_id: '1' })
         .expect(201);
-      expect(lastCall()?.[1]).toEqual({ user_id: '9' });
+      expect(lastCall()?.[1]).toEqual(
+        expect.objectContaining({ user_id: '9' }),
+      );
     });
 
     it('POST /notifications/telegram/broadcast — admin: dispatch (system.manual, in_app + telegram, requester)', async () => {

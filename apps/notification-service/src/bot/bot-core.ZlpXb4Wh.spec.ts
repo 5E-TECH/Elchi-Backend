@@ -130,20 +130,32 @@ describe('ZlpXb4Wh — yagona bot yadrosi', () => {
       expect(replyOf(ctx)).toBe('Group ID: -1001234');
     });
 
-    it('notification-bot: group_token-… (guruh) → connectGroupByTokenText', async () => {
+    it('notification-bot: guruh ulash → endi bir martalik kod (`/start <kod>`); matnli group_token o‘chirilgan', async () => {
       const ctx = makeRouter();
+      const code = 'Q'.repeat(43);
+      await ctx.router.dispatch(
+        'elchi',
+        textUpdate(`/start@elchi_bot ${code}`, {
+          chatId: -1001234,
+          chatType: 'group',
+          fromId: 5,
+        }),
+      );
+      expect(ctx.notifications.connectGroupByCodeText).toHaveBeenCalledWith(
+        code,
+        '-1001234',
+      );
       await ctx.router.dispatch(
         'elchi',
         textUpdate('group_token-0123456789abcdef', {
           chatId: -1001234,
           chatType: 'group',
           fromId: 5,
+          updateId: 2,
         }),
       );
-      expect(ctx.notifications.connectGroupByTokenText).toHaveBeenCalledWith(
-        'group_token-0123456789abcdef',
-        '-1001234',
-      );
+      expect(ctx.notifications.connectGroupByCodeText).toHaveBeenCalledTimes(1);
+      expect(replyOf(ctx)).toContain("o'chirildi");
     });
 
     it('notification-bot: /start <token> va /stop (shaxsiy) → DM ulash/uzish', async () => {
@@ -154,7 +166,7 @@ describe('ZlpXb4Wh — yagona bot yadrosi', () => {
       const ctx = makeRouter({ dm });
       await ctx.router.dispatch('elchi', textUpdate('/start labc_x_y'));
       await ctx.router.dispatch('elchi', textUpdate('/stop'));
-      expect(dm.bindFromStart).toHaveBeenCalledWith('labc_x_y', '111');
+      expect(dm.bindFromStart).toHaveBeenCalledWith('labc_x_y', '111', null);
       expect(dm.unbind).toHaveBeenCalledWith('111');
     });
 
@@ -188,8 +200,16 @@ describe('ZlpXb4Wh — yagona bot yadrosi', () => {
       expect(url).not.toContain('token=');
     });
 
-    it('order-bot: tushunarsiz buyruq (shaxsiy) → yordam matni', async () => {
-      const ctx = makeRouter();
+    it('order-bot: tushunarsiz buyruq (shaxsiy, ulangan) → yordam matni', async () => {
+      const ctx = makeRouter({
+        actor: {
+          user_id: '37',
+          role: 'market',
+          status: 'active',
+          market_id: '37',
+          region_id: null,
+        },
+      });
       await ctx.router.dispatch('elchi', textUpdate('nimadir'));
       expect(replyOf(ctx)).toContain('/status');
     });

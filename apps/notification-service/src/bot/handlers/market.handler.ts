@@ -52,7 +52,8 @@ export class MarketHandler implements BotMessageHandler {
 
   async handle(ctx: BotContext): Promise<boolean> {
     const match = STATUS_COMMAND_RE.exec(ctx.text);
-    if (!match) return false;
+    // Guruh — ko'rinish joyi: buyurtma ma'lumoti faqat shaxsiy chatda.
+    if (!match || !ctx.isPrivate) return false;
     const orderId = match[1];
     const actor = await ctx.actor();
     if (!actor) {
@@ -67,7 +68,16 @@ export class MarketHandler implements BotMessageHandler {
       const response = await rmqSend<unknown>(
         this.orders,
         { cmd: 'order.find_by_id' },
-        { id: orderId },
+        // (3ZfiXuaW #3 / 5i3UZjiF #4) doira SERVER tomonda: order-service
+        // requester bo'yicha begona buyurtmani 404 qiladi.
+        {
+          id: orderId,
+          requester: {
+            id: actor.user_id,
+            roles: [actor.role],
+            market_id: actor.market_id,
+          },
+        },
       );
       const order = unwrapOrder(response);
       if (!order?.id || String(order.market_id ?? '') !== actor.market_id) {

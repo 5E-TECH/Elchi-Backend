@@ -23,6 +23,42 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-10-17 — Telegram bog'lash, RBAC va Mini App kirishi (6jXw0DDr, 4TfLyTrL, 9uNhwTZp, td89SKXQ, 3ZfiXuaW, 5i3UZjiF, Pq2dFj8A, xC88d8kH, BreQwksC)
+
+- [2026-10-17] 🆕 [telegram] — `POST /users/me/telegram/link-code` (har qanday
+  xodim, JWT) → `{ token, purpose: 'user', expires_at, deep_link, command }`.
+  Havola BIR MARTALIK, 10 daqiqa. 🔧 Profil sahifasida «Telegram'ni ulash»:
+  `deep_link` ni tugma + QR qilib ko'rsating (QR — `deep_link` dan), muddat
+  tugasa qayta so'rang; holat — `GET /auth/my-profile` dagi `telegram_linked`.
+- [2026-10-17] 🆕 [telegram] — `DELETE /users/me/telegram` → `{ unlinked }`.
+  🔧 Profilda «Uzish» tugmasi.
+- [2026-10-17] 🆕 [telegram] — `POST /telegram/link-code { purpose:
+  'market_group', group_type: 'create'|'cancel', market_id? }` → `deep_link`
+  (`t.me/<bot>?startgroup=…`). Market — o'z marketi; market operatori — o'z
+  marketi (boshqa `market_id` → 403); admin/superadmin — `market_id`
+  MAJBURIY. 🔧 `NotificationFormModal` dagi qo'lda "Telegram group ID" (logdan
+  chat id olish) o'rniga «Telegram guruhini ulash» havolasi/QR; ulangach
+  marketga `telegram.group_connected` bildirishnomasi keladi.
+- [2026-10-17] 🆕 [telegram] — `GET /telegram/stats` (admin/superadmin) →
+  `[{ role, total, linked, ratio }]`. 🔧 Dashboardda "Telegram'ga ulangan
+  kuryerlar / jami" ko'rsatkichi.
+- [2026-10-17] 🆕 [auth] — `POST /auth/telegram { init_data }` (Mini App,
+  `window.Telegram.WebApp.initData` xom satri) → `{ accessToken,
+  access_token_expires_at, user }`, 30 daqiqa, refresh token va cookie YO'Q
+  (muddat tugasa qayta initData bilan). 401 — imzo noto'g'ri / eskirgan /
+  akkaunt bog'lanmagan ("avval kabinetdan ulang").
+- [2026-10-17] ⚠️ [identity] — td89SKXQ: GET /users, GET /users/:id,
+  GET /markets, profil va buyurtmadagi `market` obyektida `telegram_id` YO'Q;
+  o'rniga `telegram_linked: boolean`. 🔧 `telegram_id` ga tayangan joylar
+  `telegram_linked` ga o'tsin; admin ro'yxatida "Telegram ulangan" ustuni.
+- [2026-10-17] ⚠️ [notification] — 6jXw0DDr: `POST /notifications/connect-by-token`
+  — `text` endi BIR MARTALIK guruh kodi (`market_group` javobidagi `token`);
+  `group_token-…` matni 400. REGISTRATOR → 403. `POST /notifications/telegram/link`
+  ham bir martalik kod beradi (10 daqiqa, avval 15 daqiqa qayta ishlatiluvchi).
+- [2026-10-17] 🟢 [bot] — guruhda matnli `group_token-…` endi ulamaydi;
+  shaxsiy chatda buyruqlar rol bo'yicha: kuryer `/ishim`, `/kun`, `/kassa`;
+  market `/status`, `/balans`; bog'lanmagan chatga faqat `/start` javob beradi.
+
 ### 2026-10-16 — Telegram bot yadrosi (ZlpXb4Wh, Mvx0h1Fv, uCrzrElu, UQlmQiGT, GL2GgtEc, 9HIaV80X, bOMYoOtV)
 
 - [2026-10-16] ⚠️ [notification] — bOMYoOtV: `POST /notifications/send` endi

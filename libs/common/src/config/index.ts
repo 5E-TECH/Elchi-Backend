@@ -180,6 +180,10 @@ export const identityValidationSchema = Joi.object({
     'JWT access-token signing key. MUST match api-gateway. A weak key allows forging a JWT for any role (full account takeover).',
   ),
   ACCESS_TOKEN_TIME: Joi.string().default('15m'),
+  // (xC88d8kH) Telegram Mini App / bot aktori tokeni — qisqa, refresh yo'q.
+  TELEGRAM_ACCESS_TOKEN_TIME: Joi.string().default('30m'),
+  // initData imzosini tekshirish uchun (notification-service bilan bir xil token).
+  TELEGRAM_BOT_TOKEN: Joi.string().allow('').optional(),
   REFRESH_TOKEN_KEY: strongKey(
     'JWT refresh-token signing key. A weak key allows minting refresh tokens (persistent account takeover).',
   ),
@@ -277,8 +281,9 @@ export const notificationValidationSchema = Joi.object({
   // notifications are still persisted; only the live push is skipped.
   RABBITMQ_GATEWAY_QUEUE: Joi.string().optional(),
   TELEGRAM_BOT_TOKEN: Joi.string().optional(),
-  // (rCFZAmOz) Shaxsiy Telegram ulash: deep link uchun bot username (@siz)
-  // va ulash tokeni imzo kaliti (berilmasa bot tokenidan hosil qilinadi).
+  // (rCFZAmOz) Shaxsiy Telegram ulash: deep link uchun bot username (@siz).
+  // TELEGRAM_LINK_SECRET endi ISHLATILMAYDI (6jXw0DDr: bir martalik DB kodi)
+  // — mavjud .env lar buzilmasligi uchun sxemada qoldi.
   TELEGRAM_BOT_USERNAME: Joi.string().allow('').optional(),
   TELEGRAM_LINK_SECRET: Joi.string()
     .min(32)
@@ -293,6 +298,10 @@ export const notificationValidationSchema = Joi.object({
   // (Mvx0h1Fv / uCrzrElu) bot transporti. Sukut — `auto`: token va webhook
   // sekreti bo'lsa `webhook`; token yo'q/placeholder bo'lsa `off`. `polling`
   // faqat zaxira va faqat BOT_POLLING_LEADER=true bo'lgan bitta konteynerda.
+  // (xC88d8kH #3) bot aktori nomidan mavjud gateway endpointlari (ichki tarmoq).
+  ELCHI_GATEWAY_INTERNAL_URL: Joi.string()
+    .uri({ scheme: ['http', 'https'] })
+    .default('http://api-gateway:3004'),
   TELEGRAM_BOT_MODE: Joi.string()
     .valid('auto', 'webhook', 'polling', 'off')
     .default('auto'),

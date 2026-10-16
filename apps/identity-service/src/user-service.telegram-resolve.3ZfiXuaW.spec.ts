@@ -1,4 +1,5 @@
 import { PATTERN_METADATA } from '@nestjs/microservices/constants';
+import { In } from 'typeorm';
 import { Roles, Status } from '@app/common';
 import { UserServiceService } from './user-service.service';
 import { IdentityController } from './identity.controller';
@@ -27,6 +28,7 @@ describe('identity — identity.telegram.resolve (bot aktori)', () => {
     status: Status.ACTIVE,
     market_id: null,
     region_id: '3',
+    telegram_id: '5550007',
     ...overrides,
   });
 
@@ -35,8 +37,7 @@ describe('identity — identity.telegram.resolve (bot aktori)', () => {
     const res = await svc.telegramResolve({ telegram_id: 5550007 });
     expect(svc.usersMock.find).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: { telegram_id: '5550007', isDeleted: false },
-        take: 2,
+        where: { telegram_id: In(['5550007']), isDeleted: false },
       }),
     );
     expect(res.data).toEqual({
@@ -52,7 +53,7 @@ describe('identity — identity.telegram.resolve (bot aktori)', () => {
     expect(
       (
         await make([user({ id: '37', role: Roles.MARKET })]).telegramResolve({
-          telegram_id: '1',
+          telegram_id: '5550007',
         })
       ).data,
     ).toEqual(expect.objectContaining({ user_id: '37', market_id: '37' }));
@@ -61,7 +62,7 @@ describe('identity — identity.telegram.resolve (bot aktori)', () => {
         await make([
           user({ id: '40', role: Roles.MARKET_OPERATOR, market_id: '37' }),
         ]).telegramResolve({
-          telegram_id: '1',
+          telegram_id: '5550007',
         })
       ).data,
     ).toEqual(expect.objectContaining({ user_id: '40', market_id: '37' }));
@@ -84,6 +85,19 @@ describe('identity — identity.telegram.resolve (bot aktori)', () => {
       expect((await svc.telegramResolve({ telegram_id })).data).toBeNull();
     }
     expect(svc.usersMock.find).not.toHaveBeenCalled();
+  });
+
+  it('resolve_many — bir so‘rovda, har id uchun aktor yoki null', async () => {
+    const svc = make([user(), user({ id: '26', telegram_id: '5550008', status: Status.INACTIVE })]);
+    const res = await svc.telegramResolveMany({
+      telegram_ids: ['5550007', '5550008', '5550009', 'bad'],
+    });
+    expect(res.data).toEqual({
+      '5550007': expect.objectContaining({ user_id: '25' }),
+      '5550008': null,
+      '5550009': null,
+    });
+    expect(svc.usersMock.find).toHaveBeenCalledTimes(1);
   });
 
   it('linked_counts — rol bo‘yicha son', async () => {

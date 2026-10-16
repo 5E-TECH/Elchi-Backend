@@ -52,6 +52,8 @@ export class StartHandler implements BotMessageHandler {
     }
 
     const startLink = START_LINK_RE.exec(text);
+    // Guruhda `/start <kod>` — guruhni ulash (GroupHandler).
+    if (startLink && !ctx.isPrivate) return false;
     if (startLink || UNLINK_COMMAND_RE.test(text)) {
       if (!ctx.isPrivate) {
         await ctx.reply(PRIVATE_ONLY_TEXT);
@@ -70,6 +72,7 @@ export class StartHandler implements BotMessageHandler {
         const result = await this.telegramDm.bindFromStart(
           startLink[1],
           ctx.chatId,
+          ctx.update.message?.from?.username ?? null,
         );
         if (result.ok) {
           await this.activityLog.log({

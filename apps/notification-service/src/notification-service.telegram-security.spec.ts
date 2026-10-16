@@ -67,6 +67,7 @@ describe('NotificationServiceService — Telegram relay xavfsizligi (n0kLbx3d / 
         logChange: jest.fn().mockResolvedValue(undefined),
       } as any,
       makeOutbox(fetchMock).outbox,
+      {} as never,
     );
   });
 
@@ -112,7 +113,7 @@ describe('NotificationServiceService — Telegram relay xavfsizligi (n0kLbx3d / 
         message: 'ok',
         requester: registrator,
       } as any);
-      expect(res?.data.success).toBe(1);
+      expect((res?.data as { success?: number }).success).toBe(1);
       expect(fetchMock).toHaveBeenCalledTimes(1);
       expect(usedTokens(fetchMock)).toEqual([ENV_BOT_TOKEN]);
     });
@@ -142,7 +143,7 @@ describe('NotificationServiceService — Telegram relay xavfsizligi (n0kLbx3d / 
           message: 'hi',
           requester,
         } as any);
-        expect(res?.data.success).toBe(1);
+        expect((res?.data as { success?: number }).success).toBe(1);
         expect(repo.find).not.toHaveBeenCalled();
         expect(usedTokens(fetchMock)).toEqual([ENV_BOT_TOKEN]);
       },
@@ -197,6 +198,7 @@ describe('NotificationServiceService — Telegram relay xavfsizligi (n0kLbx3d / 
         {} as any,
         { log: jest.fn(), logChange: jest.fn() } as any,
         makeOutbox(noToken, { env: {} }).outbox,
+        {} as never,
       );
       const res = await bare.sendNotification({
         group_id: '-100999',
@@ -219,7 +221,7 @@ describe('NotificationServiceService — Telegram relay xavfsizligi (n0kLbx3d / 
     it('GET /notifications (find_all) — token ustuni tanlanmaydi, javobda yo‘q', async () => {
       repo.findAndCount.mockResolvedValue([[row(), row({ id: '11' })], 2]);
       const res = await service.findAllTelegramMarkets({});
-      const items = res?.data.items as Array<Record<string, unknown>>;
+      const items = (res?.data as { items: unknown }).items as Array<Record<string, unknown>>;
       items.forEach(assertPublic);
       expect(Object.keys(items[0]).sort()).toEqual(
         [

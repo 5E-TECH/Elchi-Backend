@@ -379,6 +379,16 @@ export const NOTIFICATION_TYPES: readonly NotificationTypeDefinition[] =
       default_audience: [Roles.SUPERADMIN, Roles.ADMIN],
       user_can_mute: false,
     }),
+    // (4TfLyTrL #8) Market guruhi bir martalik havola bilan ulandi.
+    def({
+      key: 'telegram.group_connected',
+      category: NotificationCategory.SYSTEM,
+      priority: NotificationPriority.NORMAL,
+      group_key_pattern: 'telegram:group_connected:{{market_id}}',
+      label_uz: 'Telegram guruhi ulandi',
+      default_audience: [Roles.MARKET],
+      user_can_mute: true,
+    }),
     // (9HIaV80X #1) Bot guruhdan chiqarildi / bloklandi — kanal nofaol
     // (`telegram_markets.is_active = false`), admin qayta ulashi kerak.
     def({

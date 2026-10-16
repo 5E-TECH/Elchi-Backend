@@ -11,10 +11,7 @@ import {
   TELEGRAM_DM_DELIVER_PATTERN,
   TelegramDmService,
 } from './telegram-dm.service';
-import {
-  createTelegramLinkToken,
-  verifyTelegramLinkToken,
-} from './telegram-link';
+import { makeLinks } from '../bot/testing/bot-kit-spec';
 
 const rmqSendMock = jest.fn();
 jest.mock('@app/common', () => {
@@ -29,42 +26,6 @@ jest.mock('@app/common', () => {
  * rCFZAmOz — shaxsiy Telegram xabari (users.telegram_id). Real Telegram
  * YO'Q: `sendDirectToGroup` mock.
  */
-const SECRET = 'test-link-secret-0123456789abcdefghijklmnop';
-
-describe('rCFZAmOz — ulash tokeni (telegram-link)', () => {
-  const now = new Date('2026-10-14T10:00:00Z');
-
-  it('token /start parametriga sig‘adi (≤64, [A-Za-z0-9_-]) va user_id ni qaytaradi', () => {
-    const { token, expires_at } = createTelegramLinkToken(
-      '9223372036854775807',
-      SECRET,
-      now,
-    );
-    expect(token.length).toBeLessThanOrEqual(64);
-    expect(token).toMatch(/^[A-Za-z0-9_-]+$/);
-    expect(expires_at.getTime() - now.getTime()).toBe(15 * 60 * 1000);
-    expect(verifyTelegramLinkToken(token, SECRET, now)).toBe(
-      '9223372036854775807',
-    );
-  });
-
-  it('muddati o‘tgan, soxtalashtirilgan (boshqa user_id), boshqa kalit — rad', () => {
-    const { token } = createTelegramLinkToken('42', SECRET, now);
-    expect(
-      verifyTelegramLinkToken(
-        token,
-        SECRET,
-        new Date(now.getTime() + 16 * 60_000),
-      ),
-    ).toBeNull();
-    const forged = token.replace(/^l[0-9a-z]+_/, `l${(43).toString(36)}_`);
-    expect(verifyTelegramLinkToken(forged, SECRET, now)).toBeNull();
-    expect(verifyTelegramLinkToken(token, `${SECRET}x`, now)).toBeNull();
-    expect(verifyTelegramLinkToken('group_token-abc', SECRET, now)).toBeNull();
-    expect(verifyTelegramLinkToken(token, '', now)).toBeNull();
-  });
-});
-
 describe('rCFZAmOz — TelegramDmService', () => {
   let contacts: { contacts: jest.Mock };
   let telegram: { sendDirectToGroup: jest.Mock };
@@ -72,6 +33,7 @@ describe('rCFZAmOz — TelegramDmService', () => {
   let notifications: { query: jest.Mock; createQueryBuilder: jest.Mock };
   let patches: Array<{ ids: string[]; patch: Record<string, string> }>;
   let env: Record<string, string>;
+  let links: ReturnType<typeof makeLinks>;
 
   const make = () =>
     new TelegramDmService(
@@ -81,12 +43,17 @@ describe('rCFZAmOz — TelegramDmService', () => {
       telegram as never,
       { get: (key: string) => env[key] } as never,
       {} as never,
+      links as never,
     );
 
   beforeEach(() => {
     jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
     rmqSendMock.mockReset().mockResolvedValue({ data: { bound: true } });
-    env = { TELEGRAM_BOT_TOKEN: 'bot-token', TELEGRAM_LINK_SECRET: SECRET };
+    env = { TELEGRAM_BOT_TOKEN: 'bot-token' };
+    links = makeLinks({
+      ['U'.repeat(43)]: { owner_id: '7', purpose: 'user' },
+      ['G'.repeat(43)]: { owner_id: '5', group_type: 'create' },
+    });
     patches = [];
     contacts = {
       contacts: jest.fn(
@@ -213,36 +180,143 @@ describe('rCFZAmOz — TelegramDmService', () => {
     expect(telegram.sendDirectToGroup).not.toHaveBeenCalled();
   });
 
-  it('linkToken: user_id yo‘q → 401; kalit yo‘q → 503; username bo‘lsa deep link', () => {
-    expect(() => make().linkToken({})).toThrow(RpcException);
+  const rpcStatus = (promise: Promise<unknown>) =>
+    promise.then(
+      () => null,
+      (error: unknown) =>
+        (error as RpcException).getError() as { statusCode: number },
+    );
+
+  it('⭐ linkToken: user_id yo‘q → 401; bot yo‘q → 503; BIR MARTALIK kod, username bo‘lsa deep link', async () => {
+    expect(await rpcStatus(make().linkToken({}))).toEqual(
+      expect.objectContaining({ statusCode: 401 }),
+    );
     env = {};
-    expect(() => make().linkToken({ user_id: '7' })).toThrow(RpcException);
-    env = {
-      TELEGRAM_BOT_TOKEN: 'bot-token',
-      TELEGRAM_LINK_SECRET: SECRET,
-      TELEGRAM_BOT_USERNAME: '@ElchiBot',
-    };
-    const res = make().linkToken({ user_id: '7' });
+    expect(
+      await rpcStatus(make().linkToken({ user_id: '7', roles: ['courier'] })),
+    ).toEqual(expect.objectContaining({ statusCode: 503 }));
+    env = { TELEGRAM_BOT_TOKEN: 'bot-token', TELEGRAM_BOT_USERNAME: '@ElchiBot' };
+    const res = await make().linkToken({ user_id: '7', roles: ['courier'] });
     expect(res.data.deep_link).toBe(
       `https://t.me/ElchiBot?start=${res.data.token}`,
     );
     expect(res.data.command).toBe(`/start ${res.data.token}`);
-    expect(verifyTelegramLinkToken(res.data.token, SECRET)).toBe('7');
+    expect(links.issued[0]).toEqual(
+      expect.objectContaining({
+        purpose: 'user',
+        owner_type: 'courier',
+        owner_id: '7',
+        created_by: '7',
+      }),
+    );
   });
 
-  it('TC1: bindFromStart — to‘g‘ri token → identity.user.telegram_bind (user_id TOKENDAN); noto‘g‘ri → identity chaqirilmaydi', async () => {
-    const { token } = createTelegramLinkToken('7', SECRET);
-    const ok = await make().bindFromStart(token, '5550007');
+  it.each([['customer'], ['investor']])(
+    '%s — kod olmaydi (403)',
+    async (role) => {
+      expect(
+        await rpcStatus(
+          make().issueLinkCode({ requester: { id: '9', roles: [role] } }),
+        ),
+      ).toEqual(expect.objectContaining({ statusCode: 403 }));
+      expect(links.issue).not.toHaveBeenCalled();
+    },
+  );
+
+  it('⭐ market_group: market — o‘zi; operator — identity’dagi marketi; admin — market_id majburiy; kuryer — 403', async () => {
+    env = { TELEGRAM_BOT_TOKEN: 'bot-token', TELEGRAM_BOT_USERNAME: 'ElchiBot' };
+    const market = await make().issueLinkCode({
+      purpose: 'market_group',
+      group_type: 'cancel',
+      requester: { id: '37', roles: ['market'] },
+    });
+    expect(market.data.deep_link).toMatch(/\?startgroup=/);
+    expect(links.issued.at(-1)).toEqual(
+      expect.objectContaining({
+        purpose: 'market_group',
+        owner_id: '37',
+        group_type: 'cancel',
+      }),
+    );
+
+    rmqSendMock.mockResolvedValueOnce({ data: { market_id: '37' } });
+    await make().issueLinkCode({
+      purpose: 'market_group',
+      requester: { id: '40', roles: ['market_operator'] },
+    });
+    expect(links.issued.at(-1)).toEqual(
+      expect.objectContaining({ owner_id: '37', created_by: '40' }),
+    );
+
+    rmqSendMock.mockResolvedValueOnce({ data: { market_id: '37' } });
+    expect(
+      await rpcStatus(
+        make().issueLinkCode({
+          purpose: 'market_group',
+          market_id: '38',
+          requester: { id: '40', roles: ['market_operator'] },
+        }),
+      ),
+    ).toEqual(expect.objectContaining({ statusCode: 403 }));
+
+    expect(
+      await rpcStatus(
+        make().issueLinkCode({
+          purpose: 'market_group',
+          requester: { id: '1', roles: ['admin'] },
+        }),
+      ),
+    ).toEqual(expect.objectContaining({ statusCode: 400 }));
+    await make().issueLinkCode({
+      purpose: 'market_group',
+      market_id: '37',
+      requester: { id: '1', roles: ['admin'] },
+    });
+    expect(links.issued.at(-1)).toEqual(
+      expect.objectContaining({ owner_id: '37', created_by: '1' }),
+    );
+
+    expect(
+      await rpcStatus(
+        make().issueLinkCode({
+          purpose: 'market_group',
+          requester: { id: '25', roles: ['courier'] },
+        }),
+      ),
+    ).toEqual(expect.objectContaining({ statusCode: 403 }));
+  });
+
+  it('⭐ bindFromStart — kod band qilinadi → identity.telegram.link (user_id KODDAN); ikkinchi marta — "eskirgan"', async () => {
+    const code = 'U'.repeat(43);
+    const ok = await make().bindFromStart(code, '5550007', 'ali');
     expect(ok.ok).toBe(true);
+    expect(links.claim).toHaveBeenCalledWith(code, 'private', '5550007');
     expect(rmqSendMock).toHaveBeenCalledWith(
       {},
-      { cmd: 'identity.user.telegram_bind' },
-      { user_id: '7', telegram_id: '5550007' },
+      { cmd: 'identity.telegram.link' },
+      { user_id: '7', telegram_id: '5550007', telegram_username: 'ali' },
     );
     rmqSendMock.mockClear();
-    const bad = await make().bindFromStart(`${token}x`, '5550007');
+    const again = await make().bindFromStart(code, '5550007');
+    expect(again.ok).toBe(false);
+    expect(again.message).toContain('eskirgan');
+    const bad = await make().bindFromStart('nope', '5550007');
     expect(bad.ok).toBe(false);
+    const groupCode = await make().bindFromStart('G'.repeat(43), '5550007');
+    expect(groupCode.message).toContain('guruh');
     expect(rmqSendMock).not.toHaveBeenCalled();
+  });
+
+  it('band telegram_id (409) — aniq xabar, ulanmaydi', async () => {
+    rmqSendMock.mockRejectedValueOnce({
+      statusCode: 409,
+      message: 'Bu Telegram akkaunt boshqa xodimga ulangan',
+    });
+    const res = await make().bindFromStart('U'.repeat(43), '5550007');
+    expect(res).toEqual({
+      ok: false,
+      message: '❌ Bu Telegram akkaunt boshqa xodimga ulangan',
+    });
   });
 });
 
@@ -281,6 +355,7 @@ describe('rCFZAmOz — bot /start <token> va /stop (bot/ yadrosi StartHandler)',
     expect(dm.bindFromStart).toHaveBeenCalledWith(
       'labc_def_0123456789abcdefghijkl',
       '5550007',
+      null,
     );
     expect(replies[0].text).toBe('Telegram ulandi');
     // (9HIaV80X #7) ulash activity_log'ga yoziladi.
@@ -292,11 +367,17 @@ describe('rCFZAmOz — bot /start <token> va /stop (bot/ yadrosi StartHandler)',
     );
   });
 
-  it('guruhda /start <token> — ULANMAYDI (faqat shaxsiy chat)', async () => {
-    const { replies } = await run('/start labc_def_x', 'group');
+  it('guruhda /start <kod> — shaxsiy ulash EMAS: StartHandler o‘tkazadi (guruhni GroupHandler ulaydi)', async () => {
+    const made = makeCtx({ text: '/start labc_def_x', chatId: '-100555', chatType: 'group' });
+    expect(await handler.handle(made.ctx as never)).toBe(false);
     expect(dm.bindFromStart).not.toHaveBeenCalled();
-    expect(replies[0].text).toContain('SHAXSIY chatda');
+    expect(made.replies).toEqual([]);
+    // /stop guruhda — faqat shaxsiy chatda ishlashi aytiladi.
+    const stop = makeCtx({ text: '/stop', chatId: '-100555', chatType: 'group' });
+    await handler.handle(stop.ctx as never);
+    expect(stop.replies[0].text).toContain('SHAXSIY chatda');
   });
+
 
   it('/stop va /uzish — unbind + audit; oddiy /start (ulanmagan) — ulash ko‘rsatmasi', async () => {
     await run('/stop');

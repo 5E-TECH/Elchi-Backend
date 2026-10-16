@@ -6,19 +6,24 @@ import {
   HELP_COMMAND_RE,
   LINK_BLOCKED_TEXT,
   START_COMMAND_RE,
+  START_LINK_RE,
 } from './start.handler';
 
 export const GROUP_START_TEXT =
-  "Salom. Guruhni ulash uchun admin bergan maxfiy market tokenini (group_token-…) yuboring. Bekor qilingan buyurtmalar guruhi uchun token oxiriga -cancel qo'shing.";
+  'Salom. Guruhni marketga ulash uchun Elchi kabinetidagi «Telegram guruhini ulash» havolasini oching va shu guruhni tanlang (havola bir martalik, 10 daqiqa amal qiladi). Bekor qilingan buyurtmalar guruhi uchun alohida havola oling.';
 export const GROUP_HELP_TEXT =
-  'Mavjud komandalar: /start, /help, /id (guruh ID si). Ulanish uchun: admin bergan maxfiy market tokeni (group_token-…); bekor qilinganlar guruhi uchun <token>-cancel. Ulangan guruhni almashtirish faqat admin orqali.';
+  'Mavjud komandalar: /start, /help, /id (guruh ID si). Ulash — faqat kabinetdagi bir martalik havola orqali. Ulangan guruhni almashtirish faqat admin orqali.';
+/** (6jXw0DDr #1-#3) matnli `group_token-…` bilan ulash olib tashlandi. */
+export const GROUP_TOKEN_REMOVED_TEXT =
+  "Matnli token bilan ulash o'chirildi. Elchi kabinetida «Telegram guruhini ulash» havolasini oching — u bir martalik va xavfsiz.";
 
 const GROUP_TOKEN_TEXT_RE = /^group_token-.+/i;
 
 /**
- * Guruh chati (eski notification-bot): `/start`, `/help`, maxfiy market
- * tokeni bilan ulash. Guruh — KO'RINISH joyi: bu yerda faqat ulash, huquq
- * talab qiladigan buyruq yo'q.
+ * Guruh chati: `/start`, `/help`, bir martalik kod bilan ulash
+ * (`t.me/<bot>?startgroup=<kod>` → `/start@bot <kod>`). Guruh — KO'RINISH
+ * joyi: bu yerda faqat ulash, huquq talab qiladigan buyruq yo'q. Matnli
+ * `group_token-…` endi ulamaydi (identity'ga so'rov ham ketmaydi).
  */
 @Injectable()
 export class GroupHandler implements BotMessageHandler {
@@ -30,6 +35,21 @@ export class GroupHandler implements BotMessageHandler {
   async handle(ctx: BotContext): Promise<boolean> {
     if (ctx.isPrivate || !ctx.text) return false;
 
+    const code = START_LINK_RE.exec(ctx.text);
+    if (code) {
+      // (GL2GgtEc #1) bog'lash kodi urinishlari — odam bo'yicha 5/daqiqa.
+      const decision = await this.limiter.linkAttempt(ctx.fromId ?? ctx.chatId);
+      if (!decision.allowed) {
+        if (decision.hits === 6) await ctx.reply(LINK_BLOCKED_TEXT);
+        return true;
+      }
+      const result = await this.notifications.connectGroupByCodeText(
+        code[1],
+        ctx.chatId,
+      );
+      await ctx.reply(result.message);
+      return true;
+    }
     if (START_COMMAND_RE.test(ctx.text)) {
       await ctx.reply(GROUP_START_TEXT);
       return true;
@@ -39,17 +59,7 @@ export class GroupHandler implements BotMessageHandler {
       return true;
     }
     if (GROUP_TOKEN_TEXT_RE.test(ctx.text)) {
-      // (GL2GgtEc #1) bog'lash kodi urinishlari — odam bo'yicha 5/daqiqa.
-      const decision = await this.limiter.linkAttempt(ctx.fromId ?? ctx.chatId);
-      if (!decision.allowed) {
-        if (decision.hits === 6) await ctx.reply(LINK_BLOCKED_TEXT);
-        return true;
-      }
-      const result = await this.notifications.connectGroupByTokenText(
-        ctx.text,
-        ctx.chatId,
-      );
-      await ctx.reply(result.message);
+      await ctx.reply(GROUP_TOKEN_REMOVED_TEXT);
       return true;
     }
     return false;

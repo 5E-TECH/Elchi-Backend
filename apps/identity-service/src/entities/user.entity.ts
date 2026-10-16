@@ -60,8 +60,20 @@ export class User extends BaseEntity {
   @Column({ type: 'bigint', nullable: true })
   market_id?: string | null;
 
+  /**
+   * Shaxsiy Telegram (bot `/start <bir martalik kod>`). PARTIAL UNIQUE
+   * (`UQ_ADMINS_TELEGRAM_ID`, migratsiya 1716000000121) — bitta Telegram
+   * akkaunt = bitta xodim. Umumiy javoblarda QAYTMAYDI (sanitize →
+   * `telegram_linked`).
+   */
   @Column({ type: 'varchar', length: 64, nullable: true })
   telegram_id?: string | null;
+
+  @Column({ type: 'varchar', length: 64, nullable: true })
+  telegram_username?: string | null;
+
+  @Column({ type: 'timestamptz', nullable: true })
+  telegram_linked_at?: Date | null;
 
   @Column({ type: 'bigint', nullable: true })
   avatar_id?: string | null;

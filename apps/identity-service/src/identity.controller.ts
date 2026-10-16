@@ -94,6 +94,37 @@ export class IdentityController {
     return this.executeAndAck(context, () => this.authService.login(data));
   }
 
+  /** (xC88d8kH) `POST /auth/telegram` — Mini App initData → 30 daqiqalik JWT, refresh yo'q. */
+  @MessagePattern({ cmd: 'identity.auth.telegram' })
+  telegramLogin(
+    @Payload() data: { init_data?: unknown },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.authService.telegramLogin(data),
+    );
+  }
+
+  /**
+   * (xC88d8kH #3) Ichki RMQ (faqat notification-service boti): tekshirilgan
+   * webhook update'idagi `from.id` → shu xodim nomidan qisqa JWT.
+   */
+  @MessagePattern({ cmd: 'identity.auth.telegram_actor' })
+  telegramActorToken(
+    @Payload() data: { telegram_id?: unknown },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.authService.telegramAccessToken(
+        typeof data?.telegram_id === 'string' ||
+          typeof data?.telegram_id === 'number'
+          ? String(data.telegram_id)
+          : '',
+        'bot',
+      ),
+    );
+  }
+
   @MessagePattern({ cmd: 'identity.refresh' })
   refresh(
     @Payload() data: { refreshToken: string },
@@ -306,6 +337,50 @@ export class IdentityController {
     return this.executeAndAck(context, () =>
       this.userService.telegramLinkedCounts(),
     );
+  }
+
+  /** (td89SKXQ) Bot `/start <kod>` — telegram_id ni xodimga bog'lash (konflikt → 409). */
+  @MessagePattern({ cmd: 'identity.telegram.link' })
+  telegramLink(
+    @Payload()
+    payload: {
+      user_id?: unknown;
+      telegram_id?: unknown;
+      telegram_username?: unknown;
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.userService.telegramLink(payload),
+    );
+  }
+
+  /** (td89SKXQ / 9uNhwTZp) `DELETE /users/me/telegram` — o'z akkauntidan uzish. */
+  @MessagePattern({ cmd: 'identity.telegram.unlink' })
+  telegramUnlink(
+    @Payload() payload: { user_id?: unknown },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.userService.telegramUnlinkUser(payload),
+    );
+  }
+
+  /** (td89SKXQ) Ko'p telegram_id → aktorlar (fail-closed: null). */
+  @MessagePattern({ cmd: 'identity.telegram.resolve_many' })
+  telegramResolveMany(
+    @Payload() payload: { telegram_ids?: unknown },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.userService.telegramResolveMany(payload),
+    );
+  }
+
+  /** (9uNhwTZp #6) Rol bo'yicha ulangan/jami — admin dashboard. */
+  @MessagePattern({ cmd: 'identity.telegram.stats' })
+  telegramStats(@Ctx() context: RmqContext) {
+    return this.executeAndAck(context, () => this.userService.telegramStats());
   }
 
   /** (rCFZAmOz) Bot `/stop` — shaxsiy chatni uzish (ichki RMQ). */

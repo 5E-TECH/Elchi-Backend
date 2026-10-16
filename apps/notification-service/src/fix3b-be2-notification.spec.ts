@@ -8,6 +8,7 @@ import type { BotMessageHandler } from './bot/handlers/bot-context';
 import {
   makeCtx,
   makeFetch,
+  makeLinks,
   makeOutbox,
   marketActor,
 } from './bot/testing/bot-kit-spec';
@@ -38,6 +39,9 @@ jest.mock('@app/common', () => {
 });
 
 const SECRET = 'group_token-0123456789abcdef0123456789abcdef';
+/** (6jXw0DDr) bir martalik guruh kodlari — matnli token o'rniga. */
+const CODE = 'Q'.repeat(43);
+const CANCEL_CODE = 'C'.repeat(43);
 const MARKET_TAKEN =
   "Bu market uchun bu turdagi guruh allaqachon ulangan — admin orqali o'zgartiring";
 
@@ -118,17 +122,21 @@ describe('fix3b CODE-02 — ulash: token almashtirilmaydi, mavjud ulanish almash
       {} as never,
       activityLog as never,
       makeOutbox(makeFetch()).outbox,
+      makeLinks({
+        [CODE]: { owner_id: '5', group_type: 'create' },
+        [CANCEL_CODE]: { owner_id: '5', group_type: 'cancel' },
+      }) as never,
     );
     routeIdentity({ id: '5', name: 'Beshinchi' });
   });
 
   it.each([
-    ['CREATE', SECRET, 'create'],
-    ['CANCEL', `${SECRET}-cancel`, 'cancel'],
+    ['CREATE', 'Q'.repeat(43), 'create'],
+    ['CANCEL', 'C'.repeat(43), 'cancel'],
   ])(
     '%s guruhi ulanadi — identity.market.rotate_tg_token CHAQIRILMAYDI',
     async (_label, text, groupType) => {
-      const res = await service.connectGroupByTokenText(text, '-100777');
+      const res = await service.connectGroupByCodeText(text, '-100777');
 
       expect(res).toEqual(
         expect.objectContaining({
@@ -153,7 +161,7 @@ describe('fix3b CODE-02 — ulash: token almashtirilmaydi, mavjud ulanish almash
     ['faol', true],
     ['nofaol', false],
   ])(
-    '%s mavjud (market, tur) ulanishi joriy token bilan ham almashtirilmaydi',
+    '%s mavjud (market, tur) ulanishi kod bilan ham almashtirilmaydi',
     async (_label, isActive) => {
       const existing = {
         id: '41',
@@ -166,7 +174,7 @@ describe('fix3b CODE-02 — ulash: token almashtirilmaydi, mavjud ulanish almash
       };
       rows = [existing];
 
-      const res = await service.connectGroupByTokenText(SECRET, '-100777');
+      const res = await service.connectGroupByCodeText(CODE, '-100777');
 
       expect(res).toEqual({ message: MARKET_TAKEN });
       expect(repo.save).not.toHaveBeenCalled();
@@ -190,8 +198,8 @@ describe('fix3b CODE-02 — ulash: token almashtirilmaydi, mavjud ulanish almash
       },
     ];
 
-    const res = await service.connectGroupByTokenText(
-      `${SECRET}-cancel`,
+    const res = await service.connectGroupByCodeText(
+      CANCEL_CODE,
       '-100999',
     );
 
@@ -210,8 +218,8 @@ describe('fix3b CODE-02 — ulash: token almashtirilmaydi, mavjud ulanish almash
       },
     ];
 
-    const res = await service.connectGroupByTokenText(
-      `${SECRET}-cancel`,
+    const res = await service.connectGroupByCodeText(
+      CANCEL_CODE,
       '-100222',
     );
 
@@ -232,7 +240,7 @@ describe('fix3b CODE-02 — ulash: token almashtirilmaydi, mavjud ulanish almash
       },
     ];
 
-    const res = await service.connectGroupByTokenText(SECRET, '-100777');
+    const res = await service.connectGroupByCodeText(CODE, '-100777');
 
     expect(res).toEqual(expect.objectContaining({ statusCode: 201 }));
   });
@@ -240,7 +248,7 @@ describe('fix3b CODE-02 — ulash: token almashtirilmaydi, mavjud ulanish almash
   it("market topilmasa — o'zbekcha 'Market topilmadi'", async () => {
     routeIdentity(null);
 
-    const res = await service.connectGroupByTokenText(SECRET, '-100777');
+    const res = await service.connectGroupByCodeText(CODE, '-100777');
 
     expect(res).toEqual({ message: 'Market topilmadi' });
     expect(repo.save).not.toHaveBeenCalled();
@@ -257,7 +265,7 @@ describe('fix3b CODE-02 — ulash: token almashtirilmaydi, mavjud ulanish almash
       },
     ];
 
-    const res = await service.connectGroupByTokenText(SECRET, '-100777');
+    const res = await service.connectGroupByCodeText(CODE, '-100777');
 
     expect(res).toEqual({
       message: 'Bu guruh shu xabar turi uchun allaqachon ulangan',
@@ -269,7 +277,7 @@ describe('fix3b CODE-02 — ulash: token almashtirilmaydi, mavjud ulanish almash
       new Error('duplicate key value violates unique constraint "uq_tg"'),
     );
 
-    const res = await service.connectGroupByTokenText(SECRET, '-100777');
+    const res = await service.connectGroupByCodeText(CODE, '-100777');
 
     expect(res).toEqual({
       message:
@@ -296,7 +304,7 @@ describe('fix3b CODE-02 — ulash: token almashtirilmaydi, mavjud ulanish almash
 
 /** Router zanjiri (start → group → market): birinchi `true` qaytargan to'xtatadi. */
 const makeChain = () => {
-  const connectGroupByTokenText = jest.fn();
+  const connectGroupByCodeText = jest.fn();
   const limiter = {
     linkAttempt: jest.fn(() =>
       Promise.resolve({ allowed: true, blocked: false, hits: 1 }),
@@ -308,7 +316,7 @@ const makeChain = () => {
       { log: jest.fn() } as never,
       { get: jest.fn() } as never,
     ),
-    new GroupHandler({ connectGroupByTokenText } as never, limiter as never),
+    new GroupHandler({ connectGroupByCodeText } as never, limiter as never),
     new MarketHandler({} as never),
   ];
   const run = async (
@@ -326,7 +334,7 @@ const makeChain = () => {
     }
     return made;
   };
-  return { run, connectGroupByTokenText };
+  return { run, connectGroupByCodeText };
 };
 
 describe('fix3b CODE-02 — bot: /id va /help', () => {
@@ -338,7 +346,7 @@ describe('fix3b CODE-02 — bot: /id va /help', () => {
       const { replies } = await chain.run(text, { chatId: '-1001234567890' });
 
       expect(replies).toEqual([{ text: 'Group ID: -1001234567890' }]);
-      expect(chain.connectGroupByTokenText).not.toHaveBeenCalled();
+      expect(chain.connectGroupByCodeText).not.toHaveBeenCalled();
     },
   );
 
@@ -356,7 +364,7 @@ describe('fix3b CODE-02 — bot: /id va /help', () => {
 
     const message = replies[0].text;
     expect(message).toContain('/id');
-    expect(message).toContain('maxfiy market token');
+    expect(message).toContain('havola');
     expect(message).not.toContain('yangilanadi');
     expect(message).not.toContain('eskisi qayta ishlamaydi');
   });

@@ -9,6 +9,7 @@ import { BotOutboxService } from '../bot-outbox.service';
 import { BotRouterService } from '../bot-router.service';
 import { BotTransportService } from '../bot-transport.service';
 import type { BotActionHandler } from '../handlers/bot-context';
+import { CommandGateHandler } from '../handlers/command-gate.handler';
 import { GroupHandler } from '../handlers/group.handler';
 import { MarketHandler } from '../handlers/market.handler';
 import { StartHandler } from '../handlers/start.handler';
@@ -268,7 +269,7 @@ export function makeRouter(
   const activityLog = { log: jest.fn(() => Promise.resolve()) };
   const membership = { handle: jest.fn(() => Promise.resolve()) };
   const notifications = {
-    connectGroupByTokenText: jest.fn(() =>
+    connectGroupByCodeText: jest.fn(() =>
       Promise.resolve({ message: 'ulandi' }),
     ),
   };
@@ -285,6 +286,7 @@ export function makeRouter(
   );
   const group = new GroupHandler(notifications as never, limiter as never);
   const market = new MarketHandler((options.orders ?? {}) as never);
+  const gate = new CommandGateHandler();
   const router = new BotRouterService(
     config as never,
     limiter as never,
@@ -298,6 +300,7 @@ export function makeRouter(
     start,
     group,
     market,
+    gate,
     undefined,
     options.actionHandlers,
   );
@@ -348,3 +351,58 @@ export const callbackUpdate = (
     },
   },
 });
+
+/**
+ * Soxta `TelegramLinkService`: `codes` — kod → egasi. Birinchi `claim` ok,
+ * keyingisi `used` (bir martalik). Ro'yxatda yo'q kod — `invalid`.
+ */
+export function makeLinks(
+  codes: Record<
+    string,
+    {
+      owner_id: string;
+      purpose?: 'user' | 'market_group';
+      group_type?: string | null;
+      created_by?: string | null;
+      status?: 'expired';
+    }
+  > = {},
+) {
+  const used = new Set<string>();
+  const issued: Array<Record<string, unknown>> = [];
+  return {
+    issued,
+    issue: jest.fn((input: Record<string, unknown>) => {
+      issued.push(input);
+      return Promise.resolve({
+        token: `T${String(issued.length).padStart(42, '0')}`,
+        expires_at: new Date(Date.now() + 600_000),
+      });
+    }),
+    claim: jest.fn((token: string, scope: 'private' | 'group') => {
+      const entry = codes[token];
+      if (!entry) return Promise.resolve({ status: 'invalid' as const });
+      if (entry.status === 'expired') {
+        return Promise.resolve({ status: 'expired' as const });
+      }
+      if (used.has(token)) return Promise.resolve({ status: 'used' as const });
+      const purpose = entry.purpose ?? 'market_group';
+      if ((purpose === 'market_group') !== (scope === 'group')) {
+        return Promise.resolve({ status: 'wrong_scope' as const });
+      }
+      used.add(token);
+      return Promise.resolve({
+        status: 'ok' as const,
+        token: {
+          token_hash: 'h',
+          purpose,
+          owner_type: purpose === 'user' ? 'courier' : 'market',
+          owner_id: entry.owner_id,
+          chat_scope: scope,
+          group_type: entry.group_type ?? null,
+          created_by: entry.created_by ?? null,
+        },
+      });
+    }),
+  };
+}

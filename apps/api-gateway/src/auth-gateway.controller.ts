@@ -27,6 +27,8 @@ import { Throttle } from '@nestjs/throttler';
 import type { Request, Response } from 'express';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
 import { Public } from './auth/public.decorator';
+import { TelegramIdThrottlerGuard } from './auth/telegram-id-throttler.guard';
+import { TelegramAuthRequestDto } from './dto/notification.swagger.dto';
 
 // Decorator metadata evaluates at class load — read env directly (the
 // ConfigModule/Joi defaults are applied later, so they do not reach here).
@@ -250,6 +252,34 @@ export class AuthGatewayController {
     }
 
     return this.sanitizeAuthPayload(response);
+  }
+
+  /**
+   * (xC88d8kH #2) Telegram Mini App kirishi: `init_data` (WebApp.initData)
+   * identity'da bot tokeni bilan HMAC tekshiriladi (auth_date ≤ 5 daqiqa),
+   * `users.telegram_id` bo'yicha xodim topiladi → 30 daqiqalik access JWT.
+   * Refresh BERILMAYDI (cookie ham qo'yilmaydi). Bog'lanmagan → 401
+   * "avval kabinetdan ulang". Limit: IP (AUTH_THROTTLE) + Telegram id 5/daqiqa.
+   */
+  @Throttle(AUTH_THROTTLE)
+  @UseGuards(TelegramIdThrottlerGuard)
+  @Public()
+  @Post('telegram')
+  @ApiOperation({
+    summary:
+      'Telegram Mini App login: initData → short-lived access token (30 min), no refresh token',
+  })
+  @ApiBody({ type: TelegramAuthRequestDto })
+  @ApiUnauthorizedResponse({
+    description:
+      "initData imzosi noto'g'ri / eskirgan yoki akkaunt bog'lanmagan",
+  })
+  telegramLogin(@Body() dto: TelegramAuthRequestDto) {
+    // identity refresh token BERMAYDI — javob shundayligicha.
+    return this.sendIdentity<Record<string, unknown>>(
+      { cmd: 'identity.auth.telegram' },
+      { init_data: dto.init_data },
+    );
   }
 
   /**

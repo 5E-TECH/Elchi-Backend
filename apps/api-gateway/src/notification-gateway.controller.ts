@@ -262,21 +262,26 @@ export class NotificationGatewayController {
   }
 
   /**
-   * (rCFZAmOz #1) Shaxsiy Telegram'ni ulash — istalgan tizimga kirgan
-   * foydalanuvchi O'Z akkaunti uchun 15 daqiqalik havola oladi
-   * (`user_id` faqat JWT'dan). Bot `/start <token>` → `users.telegram_id`.
+   * (rCFZAmOz #1 / 9uNhwTZp) Shaxsiy Telegram'ni ulash — tizimga kirgan
+   * foydalanuvchi O'Z akkaunti uchun BIR MARTALIK havola oladi (10 daqiqa;
+   * `user_id` va rol faqat JWT'dan). Bot `/start <kod>` → `users.telegram_id`.
+   * Yangi nom: `POST /users/me/telegram/link-code` (bir xil javob).
    */
   @Post('telegram/link')
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
   @ApiOperation({
     summary:
-      'Personal Telegram link for the current user: { deep_link, command, expires_at } (15 min)',
+      'Personal Telegram link for the current user: { token, deep_link, command, expires_at } (one-time, 10 min)',
   })
-  telegramLink(@Req() req: AuthedRequest) {
+  telegramLink(@Req() req: AuthedRequest & { ip?: string }) {
     return this.send(
       { cmd: 'notification.telegram.link_token' },
-      { user_id: this.requireUserId(req) },
+      {
+        user_id: this.requireUserId(req),
+        roles: req.user?.roles ?? [],
+        ip: req.ip ?? null,
+      },
     );
   }
 
@@ -391,11 +396,12 @@ export class NotificationGatewayController {
   // muvaffaqiyat — 201.
   @UseInterceptors(BodyStatusCodeInterceptor)
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.REGISTRATOR)
+  // (6jXw0DDr #7 / 4TfLyTrL #5) REGISTRATOR olib tashlandi.
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiBearerAuth()
   @ApiOperation({
     summary:
-      "Connect telegram group by group token. Noto'g'ri token — 400, market topilmadi — 404 (standart { statusCode, message }).",
+      "Connect telegram group by one-time group link code (POST /telegram/link-code { purpose: 'market_group' }). Noto'g'ri token — 400, market topilmadi — 404 (standart { statusCode, message }).",
   })
   @ApiBody({ type: ConnectTelegramByTokenRequestDto })
   connectByToken(@Body() dto: ConnectTelegramByTokenRequestDto) {

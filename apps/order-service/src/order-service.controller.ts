@@ -16,6 +16,7 @@ import { Order_status, Where_deliver } from '@app/common';
 import {
   OrderServiceService,
   type GeoReassignInput,
+  type OrderLookupRequester,
 } from './order-service.service';
 import { OrderAnalyticsService } from './analytics/order-analytics.service';
 import { BranchTransferBatchService } from './transfer-batch/branch-transfer-batch.service';
@@ -307,9 +308,12 @@ export class OrderServiceController {
   }
 
   @MessagePattern({ cmd: 'order.find_by_id' })
-  findById(@Payload() data: { id: string }, @Ctx() context: RmqContext) {
+  findById(
+    @Payload() data: { id: string; requester?: OrderLookupRequester | null },
+    @Ctx() context: RmqContext,
+  ) {
     return this.executeAndAck(context, () =>
-      this.orderService.findById(data.id),
+      this.orderService.findById(data.id, data.requester ?? null),
     );
   }
 

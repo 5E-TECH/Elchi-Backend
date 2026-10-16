@@ -184,12 +184,11 @@ export class SendNotificationRequestDto {
 
 export class ConnectTelegramByTokenRequestDto {
   @ApiProperty({
-    example: 'group_token-0123456789abcdef0123456789abcdef',
+    example: 'q3Jx0Yd2c1Kk9mZ4o7Hn5bP1wE8rT6uA0sD3fG5hJ2k',
     description:
-      "The market's secret market_tg_token (`group_token-<32 hex>`), readable only by SUPERADMIN via GET /markets/:id/tg-token (GvL6ZFAd). " +
-      'Optional suffix `-create` (default) or `-cancel` selects the group type, e.g. `group_token-<32 hex>-cancel`. ' +
-      'The old `group_token-<marketId>` form is rejected. A bind does NOT rotate the token (it stays the order-bot credential), ' +
-      'and an existing (market, group type) binding is never overwritten: re-bind only via PATCH/DELETE /notifications/:id.',
+      "(6jXw0DDr / 4TfLyTrL) BIR MARTALIK guruh ulash kodi — `POST /telegram/link-code { purpose: 'market_group', group_type }` javobidagi `token` (43 belgi, 10 daqiqa). " +
+      'Matnli `group_token-…` (market tokeni) va `group_token-<marketId>` endi rad etiladi (400). ' +
+      'Mavjud (market, guruh turi) ulanishi va boshqa marketga ulangan guruh hech qachon ustidan yozilmaydi: almashtirish faqat PATCH/DELETE /notifications/:id.',
   })
   @IsString()
   text!: string;
@@ -578,4 +577,45 @@ export class UnsubscribePushRequestDto {
   @IsNotEmpty()
   @MaxLength(2048)
   endpoint!: string;
+}
+
+// ==================== Telegram bog'lash (6jXw0DDr / 4TfLyTrL / 9uNhwTZp) ====================
+
+export class TelegramLinkCodeRequestDto {
+  @ApiPropertyOptional({
+    enum: ['user', 'market_group'],
+    example: 'user',
+    description:
+      "`user` (sukut) — o'z akkauntiga shaxsiy chat (t.me/<bot>?start=<kod>); `market_group` — market guruhi (t.me/<bot>?startgroup=<kod>).",
+  })
+  @IsOptional()
+  @IsIn(['user', 'market_group'])
+  purpose?: 'user' | 'market_group';
+
+  @ApiPropertyOptional({
+    example: '37',
+    description:
+      'Faqat `market_group` + admin/superadmin uchun MAJBURIY. Market va operator — o‘z marketi (server yechadi; boshqasi → 403).',
+  })
+  @IsOptional()
+  @IsString()
+  @Matches(/^\d+$/)
+  market_id?: string;
+
+  @ApiPropertyOptional({ enum: Group_type, example: Group_type.CREATE })
+  @IsOptional()
+  @IsEnum(Group_type)
+  group_type?: Group_type;
+}
+
+export class TelegramAuthRequestDto {
+  @ApiProperty({
+    description:
+      'Telegram Mini App `window.Telegram.WebApp.initData` (xom satr, o‘zgartirmasdan).',
+    example:
+      'query_id=AAH…&user=%7B%22id%22%3A123%7D&auth_date=1760000000&hash=…',
+  })
+  @IsString()
+  @MaxLength(4096)
+  init_data!: string;
 }

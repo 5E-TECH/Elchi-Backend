@@ -7,6 +7,7 @@ import { NotificationInboxService } from './notification-inbox.service';
 import { NotificationServiceService } from './notification-service.service';
 import {
   makeFetch,
+  makeLinks,
   makeOutbox,
   okResponse,
   telegramResponse,
@@ -31,6 +32,8 @@ jest.mock('@app/common', () => {
  * apps/api-gateway/src/notification-gateway.status-code.3SeRYFqx.spec.ts.
  */
 const SECRET = 'group_token-0123456789abcdef0123456789abcdef';
+/** (6jXw0DDr) connect-by-token endi bir martalik guruh kodini qabul qiladi. */
+const CODE = 'Q'.repeat(43);
 
 const rpcErrorOf = async (promise: Promise<unknown>) => {
   try {
@@ -98,6 +101,7 @@ const makeTelegramService = (
       logChange: jest.fn().mockResolvedValue(undefined),
     } as never,
     outbox,
+    makeLinks({ [CODE]: { owner_id: '5', group_type: 'create' } }) as never,
   );
   return { service, repo, rows, channels };
 };
@@ -109,26 +113,22 @@ describe('3SeRYFqx #1 — POST /notifications/connect-by-token (HTTP yo‘li)', 
       service.connectGroupByToken('totally-not-a-token', '-100999'),
     );
     expect(err.statusCode).toBe(400);
-    expect(err.message).toContain('Token formati');
+    expect(err.message).toContain('Ulash kodi noto');
     expect(repo.save).not.toHaveBeenCalled();
   });
 
-  it('mavjud bo‘lmagan token → 400; market topilmadi → 404', async () => {
+  it('matnli market tokeni / mavjud bo‘lmagan kod → 400; market topilmadi → 404', async () => {
     const unknown = makeTelegramService();
-    const err = await rpcErrorOf(
-      unknown.service.connectGroupByToken(
-        'group_token-' + 'f'.repeat(32),
-        '-100999',
-      ),
-    );
-    expect(err).toEqual({
-      statusCode: 400,
-      message: 'Token topilmadi yoki yaroqsiz',
-    });
+    for (const text of [SECRET, 'Z'.repeat(43)]) {
+      const err = await rpcErrorOf(
+        unknown.service.connectGroupByToken(text, '-100999'),
+      );
+      expect(err.statusCode).toBe(400);
+    }
 
     const noMarket = makeTelegramService(null);
     const missing = await rpcErrorOf(
-      noMarket.service.connectGroupByToken(SECRET, '-100999'),
+      noMarket.service.connectGroupByToken(CODE, '-100999'),
     );
     expect(missing).toEqual({ statusCode: 404, message: 'Market topilmadi' });
   });
@@ -137,7 +137,7 @@ describe('3SeRYFqx #1 — POST /notifications/connect-by-token (HTTP yo‘li)', 
     const { service, repo } = makeTelegramService();
     for (const groupId of ['', 'abc', undefined]) {
       const err = await rpcErrorOf(
-        service.connectGroupByToken(SECRET, groupId as unknown as string),
+        service.connectGroupByToken(CODE, groupId as unknown as string),
       );
       expect(err.statusCode).toBe(400);
     }
@@ -149,29 +149,27 @@ describe('3SeRYFqx #1 — POST /notifications/connect-by-token (HTTP yo‘li)', 
     repo.findOne.mockRejectedValue(
       new Error('relation "telegram_markets" does not exist'),
     );
-    const err = await rpcErrorOf(
-      service.connectGroupByToken(SECRET, '-100999'),
-    );
+    const err = await rpcErrorOf(service.connectGroupByToken(CODE, '-100999'));
     expect(err.statusCode).toBe(500);
     expect(err.message).not.toContain('relation');
   });
 
   it('muvaffaqiyat → standart konvert { statusCode: 201, data }', async () => {
     const { service } = makeTelegramService();
-    const res: any = await service.connectGroupByToken(SECRET, ' -100777 ');
+    const res: any = await service.connectGroupByToken(CODE, ' -100777 ');
     expect(res.statusCode).toBe(201);
     expect(res.data).toEqual(
       expect.objectContaining({ market_id: '5', group_id: '-100777' }),
     );
   });
 
-  it('bot yo‘li o‘zgarmagan: connectGroupByTokenText xatoda guruhga { message } qaytaradi', async () => {
+  it('bot yo‘li: connectGroupByCodeText xatoda guruhga { message } qaytaradi', async () => {
     const { service } = makeTelegramService();
-    const res = await service.connectGroupByTokenText(
+    const res = await service.connectGroupByCodeText(
       'totally-not-a-token',
       '-100999',
     );
-    expect(res).toEqual({ message: expect.stringContaining('Token formati') });
+    expect(res).toEqual({ message: expect.stringContaining('Ulash kodi noto') });
   });
 
   it('RMQ notification.telegram.connect_by_token → connectGroupByToken (bot metodi emas)', () => {
@@ -185,7 +183,7 @@ describe('3SeRYFqx #1 — POST /notifications/connect-by-token (HTTP yo‘li)', 
     );
     expect(handler).toContain('notificationService.connectGroupByToken(');
     expect(handler).not.toContain(
-      'notificationService.connectGroupByTokenText(',
+      'notificationService.connectGroupByCodeText(',
     );
   });
 });

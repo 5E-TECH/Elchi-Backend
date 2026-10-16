@@ -19,8 +19,8 @@ import { OrderGatewayController } from './order-gateway.controller';
  *     market egasi tekshiruvi prod'da jimgina o'tkazib yuborilardi).
  *  3. GET /orders/:id/settlement — MANAGER/REGISTRATOR faqat o'z filiali
  *     doirasidagi buyurtma; SA/ADMIN cheklovsiz.
- *  4. POST /notifications/connect-by-token Swagger misoli — maxfiy token
- *     formati (market id emas).
+ *  4. POST /notifications/connect-by-token Swagger misoli — bir martalik
+ *     kod (6jXw0DDr; market id ham, market tokeni ham emas).
  *  5. Auth throttle: gateway kodidagi sukutlar Joi sukutlari bilan AYNI.
  */
 type Handlers = Record<string, unknown>;
@@ -356,18 +356,18 @@ describe('fix3b BE-2 — GET /orders/:id/settlement filial doirasi', () => {
   });
 });
 
-describe('fix3b BE-2 — connect-by-token Swagger misoli maxfiy token formatida', () => {
-  it("`text` misoli group_token-<32 hex>, market id ko'rinishi emas", () => {
+describe('fix3b BE-2 / 6jXw0DDr — connect-by-token Swagger misoli: bir martalik kod', () => {
+  it("`text` misoli — 43 belgilik bir martalik kod; group_token (market id ham, market tokeni ham) EMAS", () => {
     const meta = Reflect.getMetadata(
       API_MODEL_PROPERTIES,
       ConnectTelegramByTokenRequestDto.prototype,
       'text',
     ) as { example?: string; description?: string };
 
-    expect(meta.example).toMatch(/^group_token-[0-9a-f]{32}$/);
-    expect(meta.example).not.toMatch(/^group_token-\d{1,13}(-|$)/);
-    expect(meta.description).toContain('market_tg_token');
-    expect(meta.description).toContain('-cancel');
+    expect(meta.example).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(meta.example).not.toMatch(/group_token/);
+    expect(meta.description).toContain('BIR MARTALIK');
+    expect(meta.description).toContain('rad etiladi');
   });
 });
 

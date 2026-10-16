@@ -17,14 +17,18 @@ import {
 } from '../apps/notification-service/src/bot/bot-config';
 import { callTelegramApi } from '../apps/notification-service/src/bot/bot-transport.service';
 
-/** 3ZfiXuaW #5 — minimal umumiy buyruqlar (qolgani inline tugma). */
+/** 3ZfiXuaW #5 / h9newLsd — rol reyestri bilan bir xil (qolgani inline tugma). */
 export const TELEGRAM_BOT_COMMANDS: ReadonlyArray<{
   command: string;
   description: string;
 }> = [
   { command: 'start', description: 'Menyu' },
   { command: 'help', description: 'Yordam' },
+  { command: 'ishim', description: 'Bugungi topshiriqlar (kuryer)' },
+  { command: 'kun', description: 'Kunlik hisobot (kuryer)' },
+  { command: 'kassa', description: 'Kassa qoldig‘i (kuryer)' },
   { command: 'status', description: 'Buyurtma holati (market)' },
+  { command: 'balans', description: 'Balans (market)' },
   { command: 'uzish', description: "Telegram'ni akkauntdan uzish" },
 ];
 

@@ -57,6 +57,7 @@ describe('NotificationServiceService', () => {
       {} as any,
       activityLog,
       botOutbox as any,
+      { claim: jest.fn().mockResolvedValue({ status: 'invalid' }) } as any,
     );
   });
 
@@ -93,13 +94,13 @@ describe('NotificationServiceService', () => {
     ).rejects.toBeInstanceOf(RpcException);
   });
 
-  it('connectGroupByTokenText returns message on invalid token format', async () => {
-    const res = await service.connectGroupByTokenText(
+  it('connectGroupByCodeText returns message on invalid link code', async () => {
+    const res = await service.connectGroupByCodeText(
       'group_token-abc',
       '-10099',
     );
     expect(res).toHaveProperty('message');
-    expect(String(res.message).toLowerCase()).toContain('token');
+    expect(String(res.message).toLowerCase()).toContain('kod');
   });
 
   it('sendNotification throws when message is empty', async () => {
