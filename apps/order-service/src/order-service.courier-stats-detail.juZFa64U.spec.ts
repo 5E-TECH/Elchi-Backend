@@ -39,12 +39,14 @@ describe('juZFa64U — courier_stats include_detail', () => {
       {},
     );
 
+    // Bayroq faqat aynan `true` bo'lsa uzatiladi; aks holda eski 4 argumentli
+    // chaqiruv o'zgarmaydi (servis sukuti `includeDetail = false`).
     expect(orderAnalyticsService.getCourierStats).toHaveBeenCalledWith(
       '2026-06-01',
       '2026-06-30',
       undefined,
       undefined,
-      expected,
+      ...(expected ? [true] : []),
     );
   });
 
