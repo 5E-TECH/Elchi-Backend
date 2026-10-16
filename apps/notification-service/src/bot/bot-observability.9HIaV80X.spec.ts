@@ -494,6 +494,7 @@ describe('9HIaV80X — activity_log: holat o‘zgartiruvchi callback', () => {
       },
       actionHandlers: [handler],
       lookup: jest.fn().mockResolvedValue({ status: 'ok', action }),
+      consume: jest.fn().mockResolvedValue(true),
     });
     await ctx.router.dispatch('elchi', callbackUpdate('a:0123456789abcdef'));
     expect(ctx.activityLog.log).toHaveBeenCalledWith(

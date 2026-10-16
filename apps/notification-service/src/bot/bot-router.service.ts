@@ -25,6 +25,7 @@ import {
   type BotMessageHandler,
 } from './handlers/bot-context';
 import { CommandGateHandler } from './handlers/command-gate.handler';
+import { CourierHandler } from './courier/courier.handler';
 import { GroupHandler } from './handlers/group.handler';
 import { MarketHandler, UNKNOWN_COMMAND_TEXT } from './handlers/market.handler';
 import { MembershipHandler } from './handlers/membership.handler';
@@ -74,6 +75,7 @@ export class BotRouterService implements OnModuleDestroy {
     group: GroupHandler,
     market: MarketHandler,
     gate: CommandGateHandler,
+    private readonly courier: CourierHandler,
     @Optional() dataSource?: DataSource,
     @Optional()
     @Inject(BOT_ACTION_HANDLERS)
@@ -83,7 +85,7 @@ export class BotRouterService implements OnModuleDestroy {
     this.sequencer = new ChatSequencer(dataSource ?? null);
     // Tartib muhim: umumiy (start/link/id) → guruh → rol darvozasi
     // (3ZfiXuaW) → rol buyruqlari.
-    this.messageHandlers = [start, group, gate, market];
+    this.messageHandlers = [start, group, gate, market, courier];
     for (const handler of actionHandlers ?? []) {
       this.actionHandlers.set(handler.action, handler);
     }
@@ -177,7 +179,9 @@ export class BotRouterService implements OnModuleDestroy {
     if (!message) return;
 
     // (GL2GgtEc #4) media: 20MB dan katta / HEIC — aniq yo'naltiruv matni.
+    // (z2FRwu2c) isbot rejimida — kuryer isboti sifatida qabul qilinadi.
     if (message.photo || message.document || message.video) {
+      if (await this.courier.handleMedia(ctx)) return;
       const media = checkIncomingMedia(message);
       if (!media.ok && media.reply) await ctx.reply(media.reply);
       return;

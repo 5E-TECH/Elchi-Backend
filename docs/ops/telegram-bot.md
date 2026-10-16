@@ -107,3 +107,30 @@ Buyruqlar (rol reyestri, 3ZfiXuaW): umumiy `/start`, `/help`, `/uzish`;
 kuryer `/ishim`, `/kun`, `/kassa`; market/operator `/status`, `/balans`.
 Bog'lanmagan chat — faqat `/start` ga javob (fail-closed); rol buyrug'i
 guruhda yoki boshqa rolda — rad.
+
+## 7. Kuryer oqimi (h9newLsd, MO2MLPGo, z2FRwu2c, 4BirMSVp) va market `/balans` (VICfJuoi)
+
+Bot HAMMA amalni aktorning O'Z JWT'si bilan MAVJUD gateway endpointlariga
+yuboradi (`BotGatewayClient` → `ELCHI_GATEWAY_INTERNAL_URL`); buyurtma
+bazasiga o'zi yozmaydi, doira/holat mashinasi/isbot/extra-cost — serverda.
+
+| Buyruq / tugma | Endpoint |
+|---|---|
+| `/ishim` | `GET /orders?status=waiting&status=on the road&status=waiting_customer&page&limit=10` (tuman bo'yicha, "⬇️ Yana") |
+| ✅ Sotildi → tasdiq → Ha | `POST /orders/sell/:id` (`proofFileKeys` isbot bilan) |
+| ❌ Bekor → sabab (CancelReason enum) → Ha | `POST /orders/cancel/:id { reason }` |
+| 🕗 Yetkazib bo'lmadi → sabab → Ha | `POST /orders/:id/could-not-deliver { reason }` |
+| ↩️ Ortga (SOLD/CANCELLED) → Ha | `POST /orders/rollback/:id` |
+| Isbot (rasm/video, ≤3, ≤20MB) | `getFile` → `POST /files/upload (folder=proof)` → kalit; `proofFileKeysVerified` bot tomonidan qo'yilmaydi |
+| `/kun` | `GET /analytics/dashboard?period=today` + `GET /finance/cashbox/my-cashbox` → `notification.dispatch` (`courier.daily_report`, in-app + Telegram) |
+| `/kassa` (kuryer), `/balans` (market) | `GET /finance/cashbox/my-cashbox` |
+
+- Tugma tugmalari FAQAT o'sha holatdan mumkin bo'lganlar: WAITING → Sotildi/Bekor
+  (+ 🌐 Kabinetda ochish — qisman sotuv brauzerda); ON_THE_ROAD → Yetkazib
+  bo'lmadi; SOLD/CANCELLED → Ortga.
+- Natija: 200 → karta tahrirlanadi (`telegram_order_cards`); 202 → "⏳ Market
+  tasdig'i kutilmoqda" (karta tugmasiz); isbot talabi → isbot rejimi; holat rad →
+  "Bu holatda bu amal mumkin emas".
+- Avtomatik kunlik hisobot: `COURIER_DAILY_REPORT_CRON` (Asia/Tashkent, bo'sh —
+  o'chiq); faqat ulangan kuryerlarga, kuniga bitta (deterministik
+  `client_request_id`); botni bloklagan chat o'tkaziladi.

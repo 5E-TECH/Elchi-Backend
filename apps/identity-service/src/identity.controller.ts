@@ -377,6 +377,17 @@ export class IdentityController {
     );
   }
 
+  /** (4BirMSVp) Ulangan xodimlar ro'yxati — avtomatik hisobot (ichki RMQ). */
+  @MessagePattern({ cmd: 'identity.telegram.linked_users' })
+  telegramLinkedUsers(
+    @Payload() payload: { role?: unknown },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.userService.telegramLinkedUsers(payload),
+    );
+  }
+
   /** (9uNhwTZp #6) Rol bo'yicha ulangan/jami — admin dashboard. */
   @MessagePattern({ cmd: 'identity.telegram.stats' })
   telegramStats(@Ctx() context: RmqContext) {

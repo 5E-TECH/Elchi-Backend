@@ -36,6 +36,11 @@ import { MembershipHandler } from './bot/handlers/membership.handler';
 import { CommandGateHandler } from './bot/handlers/command-gate.handler';
 import { TelegramLinkService } from './bot/telegram-link.service';
 import { BotGatewayClient } from './bot/bot-gateway.client';
+import { CourierService } from './bot/courier/courier.service';
+import { CourierReportScheduler } from './bot/courier/courier-report.scheduler';
+import { CourierActions, CourierHandler } from './bot/courier/courier.handler';
+import { BOT_ACTION_HANDLERS } from './bot/handlers/bot-context';
+import { TelegramOrderCard } from './entities/telegram-order-card.entity';
 import { TelegramLinkToken } from './entities/telegram-link-token.entity';
 import { TelegramSession } from './entities/telegram-session.entity';
 import { TelegramBotAction } from './entities/telegram-bot-action.entity';
@@ -144,6 +149,8 @@ import { RecipientDirectoryService } from './recipients/recipient-directory.serv
       TelegramOutbox,
       // (6jXw0DDr / 4TfLyTrL) bir martalik bog'lash kodlari (migratsiya 121).
       TelegramLinkToken,
+      // (h9newLsd) chatdagi buyurtma kartalari (migratsiya 122).
+      TelegramOrderCard,
     ]),
     // Push yetkazish bir partiyada 100 tagacha bildirishnomani parallel
     // yuboradi — 5 s lik standart javob muddati qisqa: muddat o'tsa outbox
@@ -182,6 +189,15 @@ import { RecipientDirectoryService } from './recipients/recipient-directory.serv
     CommandGateHandler,
     TelegramLinkService,
     BotGatewayClient,
+    CourierService,
+    CourierHandler,
+    CourierActions,
+    CourierReportScheduler,
+    {
+      provide: BOT_ACTION_HANDLERS,
+      useFactory: (courier: CourierActions) => [...courier.handlers],
+      inject: [CourierActions],
+    },
     BotRouterService,
     BotRuntimeService,
     BotMaintenanceService,

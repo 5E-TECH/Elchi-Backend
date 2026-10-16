@@ -29,7 +29,10 @@ import { SendNotificationDto } from './dto/send-notification.dto';
 import { BotOutboxService } from './bot/bot-outbox.service';
 import { TelegramLinkService } from './bot/telegram-link.service';
 import { NotificationInboxService } from './notification-inbox.service';
-import type { TelegramParseMode } from './bot/telegram.types';
+import type {
+  InlineKeyboardMarkup,
+  TelegramParseMode,
+} from './bot/telegram.types';
 
 /**
  * (6jXw0DDr / 4TfLyTrL) Guruhni ulash FAQAT paneldan olingan BIR MARTALIK
@@ -686,18 +689,25 @@ export class NotificationServiceService {
     message: string;
     parse_mode?: string;
     disable_web_page_preview?: boolean;
+    reply_markup?: InlineKeyboardMarkup;
+    source?: string;
   }) {
     const result = await this.botOutbox.send({
       chatId: data.group_id,
       text: data.message,
       parse_mode: parseModeOf(data.parse_mode),
       disable_web_page_preview: data.disable_web_page_preview,
-      source: 'notification.direct',
+      reply_markup: data.reply_markup,
+      source: data.source ?? 'notification.direct',
     });
     if (result.status === 'dead') {
       throw new BadRequestException(result.error ?? 'Telegram send failed');
     }
-    return { success: true, status: result.status };
+    return {
+      success: true,
+      status: result.status,
+      result: result.result ?? null,
+    };
   }
 
   async sendNotification(dto: SendNotificationDto) {

@@ -379,6 +379,21 @@ export const NOTIFICATION_TYPES: readonly NotificationTypeDefinition[] =
       default_audience: [Roles.SUPERADMIN, Roles.ADMIN],
       user_can_mute: false,
     }),
+    // (4BirMSVp) Kuryerning kunlik hisoboti — /kun yoki avtomatik; Telegram
+    // DM sukut kanallardan biri (bot o'zi xabar yasamaydi — yadro orqali).
+    def({
+      key: 'courier.daily_report',
+      category: NotificationCategory.SYSTEM,
+      priority: NotificationPriority.LOW,
+      group_key_pattern: null,
+      label_uz: 'Kunlik hisobot',
+      default_audience: [Roles.COURIER],
+      user_can_mute: true,
+      default_channels: [
+        NotificationChannel.IN_APP,
+        NotificationChannel.TELEGRAM,
+      ],
+    }),
     // (4TfLyTrL #8) Market guruhi bir martalik havola bilan ulandi.
     def({
       key: 'telegram.group_connected',

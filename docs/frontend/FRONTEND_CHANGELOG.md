@@ -23,6 +23,21 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-10-17 — Telegram bot: kuryer oqimi (h9newLsd, MO2MLPGo, z2FRwu2c, 4BirMSVp, VICfJuoi)
+
+- [2026-10-17] 🟢 [bot] — kuryer botda: `/ishim` (bugungi topshiriqlar
+  kartalari: Sotildi / Bekor / Yetkazib bo'lmadi / Ortga, tasdiq qadami,
+  yopiq sabablar ro'yxati, isbot rasm/video), `/kun` (kunlik hisobot),
+  `/kassa`; market: `/balans`. Bot yangi endpoint ishlatmaydi — panel
+  endpointlari kuryer/market JWT'si bilan. Frontend o'zgarishi shart emas.
+- [2026-10-17] 🆕 [notification] — yangi tur `courier.daily_report` (in-app +
+  Telegram). 🔧 Bildirishnomalar ro'yxatida shu tur uchun ikonka/yorliq
+  ("Kunlik hisobot"); `data.telegram_buttons` — faqat Telegram uchun, panelda
+  e'tiborsiz qoldiring.
+- [2026-10-17] 🟢 [bot] — "🌐 Kabinetda ochish" tugmasi
+  `${ELCHI_CABINET_URL}/orders?search=<id>` ga olib keladi. 🔧 Buyurtmalar
+  sahifasi `?search=` query parametrini qidiruv maydoniga qo'yib ochsin.
+
 ### 2026-10-17 — Telegram bog'lash, RBAC va Mini App kirishi (6jXw0DDr, 4TfLyTrL, 9uNhwTZp, td89SKXQ, 3ZfiXuaW, 5i3UZjiF, Pq2dFj8A, xC88d8kH, BreQwksC)
 
 - [2026-10-17] 🆕 [telegram] — `POST /users/me/telegram/link-code` (har qanday

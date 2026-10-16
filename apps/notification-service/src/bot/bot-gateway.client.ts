@@ -44,26 +44,41 @@ export class BotGatewayClient {
     this.baseUrl = (raw || DEFAULT_GATEWAY_INTERNAL_URL).replace(/\/+$/, '');
   }
 
-  /** Aktor nomidan so'rov. `path` — `/orders?...` ko'rinishida. */
+  /**
+   * Aktor nomidan so'rov. `path` — `/orders?...` ko'rinishida. `body` —
+   * JSON yoki `FormData` (multipart, masalan `POST /files/upload`).
+   */
   async request<T = unknown>(
     telegramId: string,
     method: 'GET' | 'POST' | 'PATCH' | 'DELETE',
     path: string,
     body?: unknown,
+    options: { timeoutMs?: number; idempotencyKey?: string } = {},
   ): Promise<GatewayResponse<T>> {
-    if (!path.startsWith('/')) throw new Error('path / bilan boshlanishi shart');
+    if (!path.startsWith('/'))
+      throw new Error('path / bilan boshlanishi shart');
     const token = await this.tokenFor(telegramId);
+    const multipart = body instanceof FormData;
+    const headers: Record<string, string> = {
+      Authorization: `Bearer ${token}`,
+      'X-Request-Source': 'telegram-bot',
+    };
+    if (!multipart) headers['Content-Type'] = 'application/json';
+    if (options.idempotencyKey) {
+      headers['Idempotency-Key'] = options.idempotencyKey;
+    }
     let response: Response;
     try {
       response = await this.fetchImpl(`${this.baseUrl}${path}`, {
         method,
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'Content-Type': 'application/json',
-          'X-Request-Source': 'telegram-bot',
-        },
-        body: body === undefined ? undefined : JSON.stringify(body),
-        signal: AbortSignal.timeout(10_000),
+        headers,
+        body:
+          body === undefined
+            ? undefined
+            : multipart
+              ? body
+              : JSON.stringify(body),
+        signal: AbortSignal.timeout(options.timeoutMs ?? 10_000),
       });
     } catch (error) {
       this.logger.warn(

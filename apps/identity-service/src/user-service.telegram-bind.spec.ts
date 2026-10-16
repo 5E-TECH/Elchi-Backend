@@ -38,9 +38,14 @@ describe('identity — Telegram ulash (rCFZAmOz / td89SKXQ)', () => {
       ),
     };
     const activityLog = { log: jest.fn().mockResolvedValue(undefined) };
-    const svc = Object.create(UserServiceService.prototype) as UserServiceService;
+    const svc = Object.create(
+      UserServiceService.prototype,
+    ) as UserServiceService;
     Object.assign(svc, { users, activityLog });
-    return Object.assign(svc, { usersMock: users, activityLogMock: activityLog });
+    return Object.assign(svc, {
+      usersMock: users,
+      activityLogMock: activityLog,
+    });
   }
 
   const errorOf = (promise: Promise<unknown>) =>
@@ -66,7 +71,10 @@ describe('identity — Telegram ulash (rCFZAmOz / td89SKXQ)', () => {
     );
     expect(res).toMatchObject({ data: { linked: true, user_id: '7' } });
     expect(svc.activityLogMock.log).toHaveBeenCalledWith(
-      expect.objectContaining({ action: 'notification.tg_linked', entity_id: '7' }),
+      expect.objectContaining({
+        action: 'notification.tg_linked',
+        entity_id: '7',
+      }),
     );
   });
 
@@ -80,7 +88,12 @@ describe('identity — Telegram ulash (rCFZAmOz / td89SKXQ)', () => {
 
   it('⭐ boshqa telegram_id ga ega xodimni qayta bog‘lash → 409', async () => {
     const svc = make(1, [], {
-      user: { id: '7', role: Roles.COURIER, status: Status.ACTIVE, telegram_id: '111' },
+      user: {
+        id: '7',
+        role: Roles.COURIER,
+        status: Status.ACTIVE,
+        telegram_id: '111',
+      },
     });
     expect(
       await errorOf(svc.telegramLink({ user_id: '7', telegram_id: '5550007' })),
@@ -113,7 +126,9 @@ describe('identity — Telegram ulash (rCFZAmOz / td89SKXQ)', () => {
 
   it('poyga: unique indeks (23505) → 409', async () => {
     const svc = make();
-    svc.usersMock.update.mockRejectedValueOnce(Object.assign(new Error('dup'), { code: '23505' }));
+    svc.usersMock.update.mockRejectedValueOnce(
+      Object.assign(new Error('dup'), { code: '23505' }),
+    );
     expect(
       await errorOf(svc.telegramLink({ user_id: '7', telegram_id: '5550007' })),
     ).toEqual(expect.objectContaining({ statusCode: 409 }));
@@ -134,7 +149,10 @@ describe('identity — Telegram ulash (rCFZAmOz / td89SKXQ)', () => {
     }
     expect(
       await errorOf(
-        make(1, [], { user: null }).telegramBind({ user_id: '7', telegram_id: '1' }),
+        make(1, [], { user: null }).telegramBind({
+          user_id: '7',
+          telegram_id: '1',
+        }),
       ),
     ).toEqual(expect.objectContaining({ statusCode: 404 }));
   });
@@ -158,11 +176,38 @@ describe('identity — Telegram ulash (rCFZAmOz / td89SKXQ)', () => {
     );
     expect(res).toMatchObject({ data: { unlinked: true } });
     expect(svc.activityLogMock.log).toHaveBeenCalledWith(
-      expect.objectContaining({ action: 'notification.tg_unlinked', entity_id: '7' }),
+      expect.objectContaining({
+        action: 'notification.tg_unlinked',
+        entity_id: '7',
+      }),
     );
     expect(
       await errorOf(make().telegramUnlinkUser({ user_id: 'abc' })),
     ).toEqual(expect.objectContaining({ statusCode: 401 }));
+  });
+
+  it('(4BirMSVp) linked_users — faqat ulangan, faol, o‘chirilmagan, berilgan rol; noto‘g‘ri rol 400', async () => {
+    const svc = make();
+    const qb = {
+      select: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      limit: jest.fn().mockReturnThis(),
+      getRawMany: jest
+        .fn()
+        .mockResolvedValue([{ user_id: 25, telegram_id: '5550007' }]),
+    };
+    Object.assign(svc.usersMock, { createQueryBuilder: jest.fn(() => qb) });
+    const res = await svc.telegramLinkedUsers({ role: 'courier' });
+    expect(qb.where).toHaveBeenCalledWith('u.telegram_id IS NOT NULL');
+    expect(qb.andWhere).toHaveBeenCalledWith('u.role = :role', {
+      role: 'courier',
+    });
+    expect(res.data).toEqual([{ user_id: '25', telegram_id: '5550007' }]);
+    expect(await errorOf(svc.telegramLinkedUsers({ role: 'hacker' }))).toEqual(
+      expect.objectContaining({ statusCode: 400 }),
+    );
   });
 
   it('contactsByIds — telegram_id qaytadi (DM uchun), null ham', async () => {
@@ -212,6 +257,7 @@ describe('identity — Telegram ulash (rCFZAmOz / td89SKXQ)', () => {
         'identity.telegram.stats',
         'identity.auth.telegram',
         'identity.auth.telegram_actor',
+        'identity.telegram.linked_users',
       ]),
     );
   });

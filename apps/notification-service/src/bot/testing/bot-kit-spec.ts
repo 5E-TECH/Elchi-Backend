@@ -10,6 +10,8 @@ import { BotRouterService } from '../bot-router.service';
 import { BotTransportService } from '../bot-transport.service';
 import type { BotActionHandler } from '../handlers/bot-context';
 import { CommandGateHandler } from '../handlers/command-gate.handler';
+import { CourierActions, CourierHandler } from '../courier/courier.handler';
+import { CourierService } from '../courier/courier.service';
 import { GroupHandler } from '../handlers/group.handler';
 import { MarketHandler } from '../handlers/market.handler';
 import { StartHandler } from '../handlers/start.handler';
@@ -209,6 +211,104 @@ export const marketActor = (marketId = '5') => ({
  * Router + haqiqiy handlerlar; tashqi qaramliklar soxta. `inboundLimit` —
  * xotiradagi hisoblagich (DB semantikasi pg spec'da tekshirilgan).
  */
+/** Xotiradagi `BotActionsService` (create → lookup → consume semantikasi). */
+export function makeActionsStore(now: () => number = Date.now) {
+  const rows = new Map<string, Record<string, any>>();
+  let seq = 0;
+  const store = {
+    rows,
+    create: jest.fn((input: Record<string, any>) => {
+      seq += 1;
+      const id = `act${String(seq).padStart(13, '0')}`;
+      rows.set(id, {
+        action_id: id,
+        chat_id: input.chatId,
+        action: input.action,
+        actor_user_id: input.actorUserId ?? null,
+        order_id: input.orderId ?? null,
+        payload: input.payload ?? {},
+        one_shot: input.oneShot ?? true,
+        expires_at: new Date(now() + (input.ttlMs ?? 86_400_000)),
+        consumed_at: null,
+        message_id: null,
+      });
+      return Promise.resolve(`a:${id}`);
+    }),
+    lookup: jest.fn((data: string) => {
+      const id = /^a:(.{16})$/.exec(String(data ?? ''))?.[1];
+      const action = id ? rows.get(id) : undefined;
+      if (!action) return Promise.resolve({ status: 'unknown' as const });
+      if (action.consumed_at)
+        return Promise.resolve({ status: 'consumed' as const, action });
+      if (action.expires_at.getTime() <= now()) {
+        return Promise.resolve({ status: 'expired' as const, action });
+      }
+      return Promise.resolve({ status: 'ok' as const, action });
+    }),
+    consume: jest.fn((id: string) => {
+      const action = rows.get(id);
+      if (
+        !action ||
+        action.consumed_at ||
+        action.expires_at.getTime() <= now()
+      ) {
+        return Promise.resolve(false);
+      }
+      action.consumed_at = new Date(now());
+      return Promise.resolve(true);
+    }),
+    attachMessage: jest.fn((data: string[], messageId: number) => {
+      for (const item of data) {
+        const action = rows.get(item.slice(2));
+        if (action) action.message_id = String(messageId);
+      }
+      return Promise.resolve();
+    }),
+    /** Oxirgi yaratilgan amallar (berilgan turi bo'yicha) → callback_data. */
+    dataOf: (action: string) =>
+      [...rows.values()]
+        .filter((row) => row.action === action)
+        .map((row) => `a:${row.action_id}`),
+  };
+  return store;
+}
+
+/** Xotiradagi `BotSessionService` (load / update). */
+export function makeSessionsStore() {
+  const states = new Map<string, Record<string, unknown>>();
+  return {
+    states,
+    load: jest.fn((chatId: string) =>
+      Promise.resolve({
+        chat_id: chatId,
+        bot_slug: 'elchi',
+        user_id: null,
+        state: { ...(states.get(chatId) ?? {}) },
+        version: 0,
+        persisted: states.has(chatId),
+      }),
+    ),
+    update: jest.fn(
+      (
+        chatId: string,
+        _slug: string,
+        mutate: (s: { state: Record<string, unknown> }) => {
+          state: Record<string, unknown>;
+        },
+      ) => {
+        const next = mutate({ state: { ...(states.get(chatId) ?? {}) } });
+        states.set(chatId, next.state);
+        return Promise.resolve({ chat_id: chatId, state: next.state });
+      },
+    ),
+  };
+}
+
+/**
+ * Router + haqiqiy handlerlar (start, group, darvoza, market, KURYER);
+ * tashqi qaramliklar soxta. `inboundLimit` — xotiradagi hisoblagich (DB
+ * semantikasi pg spec'da tekshirilgan). `gateway` — BotGatewayClient.request.
+ */
 export function makeRouter(
   options: {
     actor?: BotActor | null;
@@ -220,6 +320,9 @@ export function makeRouter(
     dm?: { bindFromStart: jest.Mock; unbind: jest.Mock };
     orders?: unknown;
     env?: Record<string, unknown>;
+    gateway?: jest.Mock;
+    downloadFile?: jest.Mock;
+    inbox?: { dispatch: jest.Mock };
   } = {},
 ) {
   const counts = new Map<string, number>();
@@ -238,33 +341,40 @@ export function makeRouter(
     ),
     firstSeen: jest.fn(() => Promise.resolve(true)),
   };
-  const sessions = {
-    load: jest.fn((chatId: string) =>
-      Promise.resolve({
-        chat_id: chatId,
-        bot_slug: 'elchi',
-        user_id: null,
-        state: {},
-        version: 0,
-        persisted: false,
-      }),
-    ),
-  };
+  const sessions = makeSessionsStore();
+  const store = makeActionsStore();
   const actions = {
-    lookup:
-      options.lookup ?? jest.fn(() => Promise.resolve({ status: 'unknown' })),
-    consume: options.consume ?? jest.fn(() => Promise.resolve(true)),
+    ...store,
+    lookup: options.lookup ?? store.lookup,
+    consume: options.consume ?? store.consume,
   };
   const actors = {
     resolve: jest.fn(() => Promise.resolve(options.actor ?? null)),
   };
+  let messageSeq = 100;
   const outbox = {
-    send: jest.fn(() => Promise.resolve({ id: '1', status: 'sent' })),
+    send: jest.fn(() => {
+      messageSeq += 1;
+      return Promise.resolve({
+        id: String(messageSeq),
+        status: 'sent',
+        result: { message_id: messageSeq },
+      });
+    }),
   };
   const transport = {
     answerCallbackQuery: jest.fn(() => Promise.resolve()),
     describe: (error: unknown) =>
       error instanceof Error ? error.message : String(error),
+    editMessage: jest.fn(() => Promise.resolve(true)),
+    downloadFile:
+      options.downloadFile ??
+      jest.fn(() =>
+        Promise.resolve({
+          buffer: Buffer.from('img'),
+          file_path: 'photos/1.jpg',
+        }),
+      ),
   };
   const activityLog = { log: jest.fn(() => Promise.resolve()) };
   const membership = { handle: jest.fn(() => Promise.resolve()) };
@@ -275,9 +385,61 @@ export function makeRouter(
   };
   const env: Record<string, unknown> = {
     TELEGRAM_BOT_SLUG: options.slug ?? 'elchi',
+    ELCHI_CABINET_URL: 'https://admin.elchi.test',
     ...options.env,
   };
   const config = { get: (key: string) => env[key] };
+  const gateway = {
+    request:
+      options.gateway ??
+      jest.fn(() => Promise.resolve({ status: 500, body: null })),
+  };
+  const cardRows = new Map<string, Record<string, any>>();
+  const cards = {
+    rows: cardRows,
+    upsert: jest.fn((row: Record<string, any>) => {
+      cardRows.set(`${row.order_id}:${row.chat_id}`, { ...row });
+      return Promise.resolve();
+    }),
+    findOne: jest.fn(({ where }: { where: Record<string, string> }) =>
+      Promise.resolve(
+        cardRows.get(`${where.order_id}:${where.chat_id}`) ?? null,
+      ),
+    ),
+    update: jest.fn(
+      (where: Record<string, string>, patch: Record<string, unknown>) => {
+        const row = cardRows.get(`${where.order_id}:${where.chat_id}`);
+        if (row) Object.assign(row, patch);
+        return Promise.resolve();
+      },
+    ),
+  };
+  const inbox = options.inbox ?? {
+    dispatch: jest.fn(() => Promise.resolve({})),
+  };
+  const moduleRef = { get: () => inbox };
+  const courierService = new CourierService(
+    gateway as never,
+    actions as never,
+    outbox as never,
+    transport as never,
+    cards as never,
+    config as never,
+  );
+  const courier = new CourierHandler(
+    courierService,
+    gateway as never,
+    sessions as never,
+    transport as never,
+    actions as never,
+    moduleRef as never,
+  );
+  const courierActions = new CourierActions(
+    courierService,
+    actions as never,
+    sessions as never,
+    courier,
+  );
   const start = new StartHandler(
     limiter as never,
     activityLog as never,
@@ -301,8 +463,9 @@ export function makeRouter(
     group,
     market,
     gate,
+    courier,
     undefined,
-    options.actionHandlers,
+    [...courierActions.handlers, ...(options.actionHandlers ?? [])],
   );
   return {
     router,
@@ -315,6 +478,9 @@ export function makeRouter(
     activityLog,
     membership,
     notifications,
+    gateway: gateway.request,
+    cards,
+    inbox,
   };
 }
 
@@ -405,4 +571,222 @@ export function makeLinks(
       });
     }),
   };
+}
+
+export const courierActor = (userId = '25') => ({
+  user_id: userId,
+  role: 'courier',
+  status: 'active',
+  market_id: null,
+  region_id: null,
+});
+
+export const gatewayOrder = (
+  id: string,
+  status: string,
+  overrides: Record<string, unknown> = {},
+) => ({
+  id,
+  status,
+  total_price: '250000.00',
+  market_id: '37',
+  courier_id: '25',
+  district: { name: 'Yunusobod' },
+  customer: { name: 'TEST Mijoz', phone_number: '+998901234567' },
+  market: { id: '37', expense_proof_conditions: [] },
+  ...overrides,
+});
+
+/**
+ * Soxta gateway (BotGatewayClient.request): buyurtmalar ro'yxati/karta,
+ * kuryer amallari, `POST /files/upload`, analytics va my-cashbox. Doira —
+ * faqat `courier_id` mos keladigan buyurtmalar (server qoidasi taqlidi).
+ */
+export function fakeOrdersGateway(
+  orders: Array<Record<string, any>>,
+  options: {
+    courierId?: string;
+    op?: (
+      op: string,
+      id: string,
+      body: Record<string, any>,
+    ) => { status: number; body: unknown } | undefined;
+    stats?: Record<string, unknown>;
+    cashbox?: Record<string, unknown>;
+  } = {},
+) {
+  const courierId = options.courierId ?? '25';
+  const byId = new Map(orders.map((order) => [String(order.id), order]));
+  let uploads = 0;
+  const calls: Array<{
+    method: string;
+    path: string;
+    body: unknown;
+    options: unknown;
+  }> = [];
+  const request = jest.fn(
+    (
+      _tg: string,
+      method: string,
+      path: string,
+      body?: unknown,
+      opts?: unknown,
+    ) => {
+      calls.push({ method, path, body, options: opts });
+      const [pathname, search = ''] = path.split('?');
+      const query = new URLSearchParams(search);
+      const own = (order: Record<string, any>) =>
+        String(order.courier_id) === courierId ||
+        String(order.holder_courier_id ?? '') === courierId;
+      if (method === 'GET' && pathname === '/orders') {
+        const statuses = query.getAll('status');
+        const rows = [...byId.values()].filter(
+          (order) =>
+            own(order) && (!statuses.length || statuses.includes(order.status)),
+        );
+        const page = Number(query.get('page') ?? 1);
+        const limit = Number(query.get('limit') ?? 10);
+        const slice = rows.slice((page - 1) * limit, page * limit);
+        return Promise.resolve({
+          status: 200,
+          body: {
+            data: slice,
+            total: rows.length,
+            has_next: page * limit < rows.length,
+          },
+        });
+      }
+      const single = /^\/orders\/(\d+)$/.exec(pathname);
+      if (method === 'GET' && single) {
+        const order = byId.get(single[1]);
+        return Promise.resolve(
+          order && own(order)
+            ? { status: 200, body: order }
+            : {
+                status: 403,
+                body: { message: "Bu buyurtmani ko'rishga ruxsat yo'q" },
+              },
+        );
+      }
+      const op =
+        /^\/orders\/(sell|cancel|rollback)\/(\d+)$/.exec(pathname) ??
+        /^\/orders\/(\d+)\/(could-not-deliver)$/.exec(pathname);
+      if (method === 'POST' && op) {
+        const [kind, id] =
+          op[2] === 'could-not-deliver' ? ['cnd', op[1]] : [op[1], op[2]];
+        const custom = options.op?.(
+          kind,
+          id,
+          (body ?? {}) as Record<string, any>,
+        );
+        if (custom) return Promise.resolve(custom);
+        const order = byId.get(id);
+        if (!order || !own(order)) {
+          return Promise.resolve({
+            status: 400,
+            body: { message: 'Order is not assigned to this courier' },
+          });
+        }
+        const allowed: Record<string, string[]> = {
+          sell: ['waiting'],
+          cancel: ['waiting'],
+          cnd: ['on the road'],
+          rollback: ['sold', 'cancelled'],
+        };
+        if (!allowed[kind].includes(order.status)) {
+          return Promise.resolve({
+            status: 400,
+            body: { message: 'Order not found or not in waiting status' },
+          });
+        }
+        const conditions: string[] =
+          order.market?.expense_proof_conditions ?? [];
+        const keys =
+          ((body ?? {}) as { proofFileKeys?: string[] }).proofFileKeys ?? [];
+        if (
+          ((kind === 'sell' && conditions.includes('sell_any')) ||
+            (kind === 'cancel' && conditions.includes('cancel_any'))) &&
+          !keys.length
+        ) {
+          return Promise.resolve({
+            status: 400,
+            body: {
+              message:
+                'Bu amal uchun rasm yoki video isbot majburiy. Iltimos, isbot fayl(lar)ini biriktiring.',
+            },
+          });
+        }
+        if (keys.some((key) => !key.startsWith('proof-'))) {
+          return Promise.resolve({
+            status: 400,
+            body: {
+              message:
+                'Isbot fayl topilmadi yoki yuklanmagan. Iltimos, isbotni qaytadan yuklang.',
+            },
+          });
+        }
+        order.status = {
+          sell: 'sold',
+          cancel: 'cancelled',
+          cnd: 'waiting_customer',
+          rollback: 'waiting',
+        }[kind];
+        return Promise.resolve({
+          status: 200,
+          body: { statusCode: 200, data: { id } },
+        });
+      }
+      if (method === 'POST' && pathname === '/files/upload') {
+        uploads += 1;
+        return Promise.resolve({
+          status: 201,
+          body: { data: { key: `proof-${uploads}` } },
+        });
+      }
+      if (method === 'GET' && pathname === '/analytics/dashboard') {
+        return Promise.resolve({
+          status: 200,
+          body: { data: { myStat: options.stats ?? {} } },
+        });
+      }
+      if (method === 'GET' && pathname === '/finance/cashbox/my-cashbox') {
+        return Promise.resolve({
+          status: 200,
+          body: { data: { cashbox: options.cashbox ?? { balance: '0' } } },
+        });
+      }
+      return Promise.resolve({ status: 404, body: null });
+    },
+  );
+  return { request, calls, orders: byId };
+}
+
+/** Router orqali yuborilgan matnlar (outbox.send). */
+export function sentTexts(ctx: { outbox: { send: jest.Mock } }): string[] {
+  return (
+    ctx.outbox.send.mock.calls as unknown as Array<[{ text: string }]>
+  ).map(([message]) => message.text);
+}
+
+/** Oxirgi yuborilgan xabar tugmalari (matn → callback_data | url). */
+export function lastButtons(ctx: {
+  outbox: { send: jest.Mock };
+}): Record<string, string> {
+  const calls = ctx.outbox.send.mock.calls as unknown as Array<
+    [
+      {
+        reply_markup?: {
+          inline_keyboard: Array<
+            Array<{ text: string; callback_data?: string; url?: string }>
+          >;
+        };
+      },
+    ]
+  >;
+  const markup = calls.at(-1)?.[0].reply_markup;
+  return Object.fromEntries(
+    (markup?.inline_keyboard ?? [])
+      .flat()
+      .map((b) => [b.text, b.callback_data ?? b.url ?? '']),
+  );
 }

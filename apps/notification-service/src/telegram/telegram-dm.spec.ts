@@ -125,6 +125,85 @@ describe('rCFZAmOz — TelegramDmService', () => {
     );
   });
 
+  it('(4BirMSVp / 9HIaV80X) botni bloklagan chat — skipped (bot_blocked), qayta urinilmaydi', async () => {
+    notifications.query.mockResolvedValueOnce([{ chat_id: '5550011' }]);
+    const plan = await make().plan(['11']);
+    expect(plan.get('11')).toEqual({
+      telegram: 'skipped',
+      telegram_reason: 'bot_blocked',
+    });
+    expect(String(notifications.query.mock.calls[0][0])).toContain(
+      '"state" ? \'blocked_at\'',
+    );
+  });
+
+  it('DM tugmalari: data.telegram_buttons → url (faqat https) va bot amali (egasi = qabul qiluvchi)', async () => {
+    const actions = {
+      create: jest.fn().mockResolvedValue('a:ack0000000000001'),
+    };
+    const svc = new TelegramDmService(
+      notifications as never,
+      outbox as never,
+      contacts as never,
+      telegram as never,
+      { get: (key: string) => env[key] } as never,
+      {} as never,
+      links as never,
+      actions as never,
+    );
+    notifications.query.mockResolvedValueOnce([
+      {
+        id: '1',
+        recipient_id: '11',
+        title: 'Kvitansiya',
+        body: null,
+        data: {
+          telegram_buttons: [
+            [
+              {
+                text: '👍 Tasdiqlayman',
+                action: 'pay.ack',
+                payload: { payment_id: '9', ack: 'confirmed' },
+              },
+              { text: 'evil', url: 'http://phish.example' },
+            ],
+            [
+              {
+                text: '🌐 Kabinetda ochish',
+                url: 'https://admin.elchi.test/cash-box',
+              },
+            ],
+          ],
+        },
+      },
+    ]);
+    await svc.deliver({ notification_ids: ['1'] });
+    expect(actions.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        chatId: '5550011',
+        action: 'pay.ack',
+        actorUserId: '11',
+        payload: { payment_id: '9', ack: 'confirmed' },
+        oneShot: true,
+      }),
+    );
+    expect(telegram.sendDirectToGroup).toHaveBeenCalledWith(
+      expect.objectContaining({
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: '👍 Tasdiqlayman', callback_data: 'a:ack0000000000001' }],
+            [
+              {
+                text: '🌐 Kabinetda ochish',
+                url: 'https://admin.elchi.test/cash-box',
+              },
+            ],
+          ],
+        },
+      }),
+    );
+  });
+
   it('TC2: deliver — shaxsiy sendMessage(chat_id = telegram_id), HTML-escape, natija delivery.telegram ga', async () => {
     notifications.query.mockResolvedValue([
       { id: '1', recipient_id: '11', title: 'A <b>', body: 'x & y' },
@@ -141,6 +220,7 @@ describe('rCFZAmOz — TelegramDmService', () => {
       group_id: '5550011',
       message: 'A &lt;b&gt;\n\nx &amp; y',
       parse_mode: 'HTML',
+      source: 'notification.dm',
     });
     expect(patches).toEqual(
       expect.arrayContaining([
@@ -195,7 +275,10 @@ describe('rCFZAmOz — TelegramDmService', () => {
     expect(
       await rpcStatus(make().linkToken({ user_id: '7', roles: ['courier'] })),
     ).toEqual(expect.objectContaining({ statusCode: 503 }));
-    env = { TELEGRAM_BOT_TOKEN: 'bot-token', TELEGRAM_BOT_USERNAME: '@ElchiBot' };
+    env = {
+      TELEGRAM_BOT_TOKEN: 'bot-token',
+      TELEGRAM_BOT_USERNAME: '@ElchiBot',
+    };
     const res = await make().linkToken({ user_id: '7', roles: ['courier'] });
     expect(res.data.deep_link).toBe(
       `https://t.me/ElchiBot?start=${res.data.token}`,
@@ -224,7 +307,10 @@ describe('rCFZAmOz — TelegramDmService', () => {
   );
 
   it('⭐ market_group: market — o‘zi; operator — identity’dagi marketi; admin — market_id majburiy; kuryer — 403', async () => {
-    env = { TELEGRAM_BOT_TOKEN: 'bot-token', TELEGRAM_BOT_USERNAME: 'ElchiBot' };
+    env = {
+      TELEGRAM_BOT_TOKEN: 'bot-token',
+      TELEGRAM_BOT_USERNAME: 'ElchiBot',
+    };
     const market = await make().issueLinkCode({
       purpose: 'market_group',
       group_type: 'cancel',
@@ -368,16 +454,23 @@ describe('rCFZAmOz — bot /start <token> va /stop (bot/ yadrosi StartHandler)',
   });
 
   it('guruhda /start <kod> — shaxsiy ulash EMAS: StartHandler o‘tkazadi (guruhni GroupHandler ulaydi)', async () => {
-    const made = makeCtx({ text: '/start labc_def_x', chatId: '-100555', chatType: 'group' });
+    const made = makeCtx({
+      text: '/start labc_def_x',
+      chatId: '-100555',
+      chatType: 'group',
+    });
     expect(await handler.handle(made.ctx as never)).toBe(false);
     expect(dm.bindFromStart).not.toHaveBeenCalled();
     expect(made.replies).toEqual([]);
     // /stop guruhda — faqat shaxsiy chatda ishlashi aytiladi.
-    const stop = makeCtx({ text: '/stop', chatId: '-100555', chatType: 'group' });
+    const stop = makeCtx({
+      text: '/stop',
+      chatId: '-100555',
+      chatType: 'group',
+    });
     await handler.handle(stop.ctx as never);
     expect(stop.replies[0].text).toContain('SHAXSIY chatda');
   });
-
 
   it('/stop va /uzish — unbind + audit; oddiy /start (ulanmagan) — ulash ko‘rsatmasi', async () => {
     await run('/stop');

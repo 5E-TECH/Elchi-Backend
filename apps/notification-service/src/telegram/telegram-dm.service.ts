@@ -1,4 +1,4 @@
-import { Inject, Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { ClientProxy, RpcException } from '@nestjs/microservices';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -15,6 +15,11 @@ import { Notification } from '../entities/notification.entity';
 import { NotificationServiceService } from '../notification-service.service';
 import { SmsDispatchService } from '../sms/sms-dispatch.service';
 import { TelegramLinkService } from '../bot/telegram-link.service';
+import { BotActionsService } from '../bot/bot-actions.service';
+import type {
+  InlineKeyboardButton,
+  InlineKeyboardMarkup,
+} from '../bot/telegram.types';
 
 /** Outbox hodisasi: shaxsiy Telegram xabarlari (rCFZAmOz #2). */
 export const TELEGRAM_DM_DELIVER_PATTERN = 'notification.telegram.deliver';
@@ -70,6 +75,7 @@ export class TelegramDmService {
     private readonly config: ConfigService,
     @Inject('IDENTITY') private readonly identityClient: ClientProxy,
     private readonly links: TelegramLinkService,
+    @Optional() private readonly actions?: BotActionsService,
   ) {}
 
   private get botToken(): string {
@@ -101,19 +107,48 @@ export class TelegramDmService {
         });
       return plan;
     }
+    const blocked = await this.blockedChats(
+      recipientIds
+        .map((id) => String(contacts.get(id)?.telegram_id ?? '').trim())
+        .filter(Boolean),
+    );
     for (const id of recipientIds) {
       const chat = String(contacts.get(id)?.telegram_id ?? '').trim();
       plan.set(
         id,
-        chat
-          ? { telegram: NotificationDeliveryStatus.QUEUED }
-          : {
+        !chat
+          ? {
               telegram: NotificationDeliveryStatus.SKIPPED,
               telegram_reason: 'no_telegram_id',
-            },
+            }
+          : blocked.has(chat)
+            ? {
+                // (9HIaV80X / 4BirMSVp) botni bloklagan chatga qayta urinilmaydi.
+                telegram: NotificationDeliveryStatus.SKIPPED,
+                telegram_reason: 'bot_blocked',
+              }
+            : { telegram: NotificationDeliveryStatus.QUEUED },
       );
     }
     return plan;
+  }
+
+  /** Botni bloklagan shaxsiy chatlar (`telegram_sessions.state.blocked_at`). */
+  private async blockedChats(chatIds: string[]): Promise<Set<string>> {
+    if (!chatIds.length) return new Set();
+    try {
+      const rows: Array<{ chat_id: string }> = await this.notifications.query(
+        `SELECT "chat_id" FROM "notification_schema"."telegram_sessions"
+          WHERE "chat_id" = ANY($1::varchar[]) AND "state" ? 'blocked_at'`,
+        [chatIds],
+      );
+      return new Set(
+        (Array.isArray(rows) ? rows : []).map((row) => String(row.chat_id)),
+      );
+    } catch (error) {
+      this.logger.warn(`telegram DM: blok holati o'qilmadi — ${short(error)}`);
+      return new Set();
+    }
   }
 
   /** Inbox qatorlari bilan BITTA tranzaksiyada navbatga (rollback → DM yo'q). */
@@ -143,12 +178,13 @@ export class TelegramDmService {
       recipient_id: string;
       title: string;
       body: string | null;
+      data?: Record<string, unknown> | null;
     }> = await this.notifications.query(
       `UPDATE "notification_schema"."notifications"
           SET "delivery" = COALESCE("delivery", '{}'::jsonb) || '{"telegram":"sending"}'::jsonb
         WHERE "id" = ANY($1::bigint[])
           AND "delivery"->>'telegram' = 'queued'
-      RETURNING "id", "recipient_id", "title", "body"`,
+      RETURNING "id", "recipient_id", "title", "body", "data"`,
       [ids],
     );
     const rows = Array.isArray(claimed[0])
@@ -194,10 +230,17 @@ export class TelegramDmService {
               };
             }
             try {
+              const reply_markup = await this.buttons(
+                chat,
+                String(row.recipient_id),
+                row.data,
+              );
               await this.telegram.sendDirectToGroup({
                 group_id: chat,
                 message: this.text(row),
                 parse_mode: 'HTML',
+                ...(reply_markup ? { reply_markup } : {}),
+                source: 'notification.dm',
               });
               return {
                 id: String(row.id),
@@ -229,6 +272,60 @@ export class TelegramDmService {
       }
     }
     return { processed: rows.length, sent, failed };
+  }
+
+  /**
+   * Bildirishnoma `data.telegram_buttons` → inline klaviatura (shaxsiy DM):
+   * `{text, url}` (faqat https) yoki `{text, action, payload}` — bot amali
+   * (`a:<id>`, egasi = qabul qiluvchi: boshqa odam bosa olmaydi). Holat
+   * DB'da (telegram_bot_actions), payload'da PII yo'q.
+   */
+  private async buttons(
+    chatId: string,
+    recipientId: string,
+    data: Record<string, unknown> | null | undefined,
+  ): Promise<InlineKeyboardMarkup | null> {
+    const spec = data?.telegram_buttons;
+    if (!Array.isArray(spec) || !this.actions) return null;
+    const rows: InlineKeyboardButton[][] = [];
+    for (const rawRow of spec.slice(0, 5)) {
+      const row: InlineKeyboardButton[] = [];
+      for (const raw of (Array.isArray(rawRow) ? rawRow : [rawRow]).slice(
+        0,
+        4,
+      )) {
+        const button = raw as {
+          text?: unknown;
+          url?: unknown;
+          action?: unknown;
+          payload?: unknown;
+          one_shot?: unknown;
+          order_id?: unknown;
+        };
+        const label = str(button.text).slice(0, 64);
+        if (!label) continue;
+        if (typeof button.url === 'string' && /^https:\/\//.test(button.url)) {
+          row.push({ text: label, url: button.url });
+        } else if (typeof button.action === 'string' && button.action) {
+          row.push({
+            text: label,
+            callback_data: await this.actions.create({
+              chatId,
+              action: button.action.slice(0, 32),
+              actorUserId: recipientId,
+              orderId: str(button.order_id) || null,
+              payload:
+                button.payload && typeof button.payload === 'object'
+                  ? (button.payload as Record<string, unknown>)
+                  : {},
+              oneShot: button.one_shot !== false,
+            }),
+          });
+        }
+      }
+      if (row.length) rows.push(row);
+    }
+    return rows.length ? { inline_keyboard: rows } : null;
   }
 
   /** `title\n\nbody` — HTML-escape (relayTelegram bilan bir xil qoida). */

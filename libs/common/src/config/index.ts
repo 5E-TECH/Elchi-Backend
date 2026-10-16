@@ -298,6 +298,13 @@ export const notificationValidationSchema = Joi.object({
   // (Mvx0h1Fv / uCrzrElu) bot transporti. Sukut — `auto`: token va webhook
   // sekreti bo'lsa `webhook`; token yo'q/placeholder bo'lsa `off`. `polling`
   // faqat zaxira va faqat BOT_POLLING_LEADER=true bo'lgan bitta konteynerda.
+  // (h9newLsd / z2FRwu2c) "🌐 Kabinetda ochish" tugmalari uchun panel manzili.
+  ELCHI_CABINET_URL: Joi.string()
+    .uri({ scheme: ['https', 'http'] })
+    .default('https://admin.elchipochta.uz'),
+  // (4BirMSVp) Kuryer kunlik hisobotining avtomatik vaqti (Asia/Tashkent,
+  // sekund maydoni bilan: `0 0 21 * * *`). Bo'sh — o'chiq (faqat /kun).
+  COURIER_DAILY_REPORT_CRON: Joi.string().allow('').optional(),
   // (xC88d8kH #3) bot aktori nomidan mavjud gateway endpointlari (ichki tarmoq).
   ELCHI_GATEWAY_INTERNAL_URL: Joi.string()
     .uri({ scheme: ['http', 'https'] })

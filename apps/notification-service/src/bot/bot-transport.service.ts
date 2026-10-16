@@ -403,6 +403,100 @@ export class BotTransportService {
     return this.call('getFile', { file_id: fileId }, { maxAttempts: 2 });
   }
 
+  /**
+   * (z2FRwu2c) `getFile` → fayl baytlari. Bot API ~20MB dan kattasini
+   * bermaydi — chaqiruvchi o'lchamni oldin tekshiradi (bot-media.ts); bu
+   * yerda ham qat'iy chegara. Token URL'da — xato matnida redaktsiya qilinadi.
+   */
+  async downloadFile(
+    fileId: string,
+    maxBytes: number = TELEGRAM_LIMITS.GET_FILE_MAX_BYTES,
+  ): Promise<{ buffer: Buffer; file_path: string }> {
+    const info = await this.getFile(fileId);
+    const filePath = String(info?.file_path ?? '');
+    if (!filePath) {
+      throw new TelegramApiError('getFile', 400, 'file_path yo`q', null);
+    }
+    if (Number(info?.file_size) > maxBytes) {
+      throw new TelegramApiError('getFile', 400, 'file is too big', null);
+    }
+    const token = this.defaultToken;
+    let response: Response;
+    try {
+      response = await this.fetchImpl(
+        `${TELEGRAM_API_BASE}/file/bot${token}/${filePath}`,
+        { method: 'GET', signal: AbortSignal.timeout(30_000) },
+      );
+    } catch (error) {
+      throw new TelegramApiError(
+        'downloadFile',
+        0,
+        redactToken(error instanceof Error ? error.message : 'network', token),
+        null,
+      );
+    }
+    if (!response.ok) {
+      throw new TelegramApiError(
+        'downloadFile',
+        response.status,
+        `HTTP ${response.status}`,
+        null,
+      );
+    }
+    const buffer = Buffer.from(await response.arrayBuffer());
+    if (buffer.length > maxBytes) {
+      throw new TelegramApiError('downloadFile', 400, 'file is too big', null);
+    }
+    return { buffer, file_path: filePath };
+  }
+
+  /** Xabar matni/tugmalarini tahrirlash — eng yaxshi urinish (xato loglanadi). */
+  async editMessage(
+    chatId: string,
+    messageId: number | string,
+    edit: {
+      text?: string;
+      reply_markup?: InlineKeyboardMarkup;
+      parse_mode?: TelegramParseMode;
+    },
+  ): Promise<boolean> {
+    assertCallbackDataFits(edit.reply_markup);
+    const payload: Record<string, unknown> = {
+      chat_id: chatId,
+      message_id: Number(messageId),
+      reply_markup: edit.reply_markup ?? { inline_keyboard: [] },
+    };
+    try {
+      if (edit.text !== undefined) {
+        await this.call(
+          'editMessageText',
+          {
+            ...payload,
+            text: edit.text.slice(0, TELEGRAM_LIMITS.MESSAGE_MAX_CHARS),
+            ...(edit.parse_mode ? { parse_mode: edit.parse_mode } : {}),
+          },
+          { chatId, maxAttempts: 2 },
+        );
+      } else {
+        await this.call('editMessageReplyMarkup', payload, {
+          chatId,
+          maxAttempts: 2,
+        });
+      }
+      return true;
+    } catch (error) {
+      // "message is not modified" — holat allaqachon shu.
+      if (
+        error instanceof TelegramApiError &&
+        /not modified/i.test(error.description)
+      ) {
+        return true;
+      }
+      this.logger.warn(`editMessage: ${this.describe(error)}`);
+      return false;
+    }
+  }
+
   describe(error: unknown): string {
     if (error instanceof TelegramApiError) return error.message;
     return redactToken(
