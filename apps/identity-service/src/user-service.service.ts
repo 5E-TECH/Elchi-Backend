@@ -4357,8 +4357,20 @@ export class UserServiceService implements OnModuleInit {
     return successRes(map.get(telegramId) ?? null);
   }
 
-  /** (td89SKXQ #3) Ko'p telegram_id bir so'rovda → { [telegram_id]: aktor | null }. */
-  async telegramResolveMany(payload: { telegram_ids?: unknown }) {
+  /**
+   * (td89SKXQ #3) Ko'p telegram_id bir so'rovda → { [telegram_id]: aktor | null }.
+   * (TgYRqaTk #1) `user_ids` berilsa — teskari yo'nalish: bildirishnoma
+   * qabul qiluvchisi → shaxsiy chat: { [user_id]: telegram_id | null }.
+   * FAIL-CLOSED: faol bo'lmagan / o'chirilgan / ulanmagan / bitta chat bir
+   * nechta akkauntda (eski noaniqlik) → `null` (DM yuborilmaydi).
+   */
+  async telegramResolveMany(payload: {
+    telegram_ids?: unknown;
+    user_ids?: unknown;
+  }) {
+    if (Array.isArray(payload?.user_ids)) {
+      return successRes(await this.telegramChatsByUserIds(payload.user_ids));
+    }
     const ids = [
       ...new Set(
         (Array.isArray(payload?.telegram_ids) ? payload.telegram_ids : [])
@@ -4370,6 +4382,50 @@ export class UserServiceService implements OnModuleInit {
     return successRes(
       Object.fromEntries(ids.map((id) => [id, map.get(id) ?? null])),
     );
+  }
+
+  private async telegramChatsByUserIds(
+    raw: unknown[],
+  ): Promise<Record<string, string | null>> {
+    const ids = [
+      ...new Set(
+        raw
+          .map((id) => primitiveText(id).trim())
+          .filter((id) => /^\d{1,20}$/.test(id)),
+      ),
+    ].slice(0, 5000);
+    const result: Record<string, string | null> = Object.fromEntries(
+      ids.map((id) => [id, null]),
+    );
+    if (!ids.length) return result;
+    const rows = await this.users.find({
+      where: { id: In(ids), isDeleted: false },
+      select: ['id', 'status', 'telegram_id'],
+    });
+    const linked = rows.filter(
+      (row) => row.status === Status.ACTIVE && primitiveText(row.telegram_id),
+    );
+    // Bitta chat bir nechta akkauntda (UQ indeksdan oldingi meros) — hech
+    // biriga yuborilmaydi: begona odamga xabar ketishidan xavfsizroq.
+    const chats = linked.map((row) => primitiveText(row.telegram_id));
+    const owners = new Map<string, number>();
+    if (chats.length) {
+      for (const row of await this.users.find({
+        where: { telegram_id: In(chats), isDeleted: false },
+        select: ['id', 'telegram_id'],
+      })) {
+        const chat = primitiveText(row.telegram_id);
+        owners.set(chat, (owners.get(chat) ?? 0) + 1);
+      }
+    }
+    const ambiguous = new Set(
+      [...owners].filter(([, count]) => count > 1).map(([chat]) => chat),
+    );
+    for (const row of linked) {
+      const chat = primitiveText(row.telegram_id);
+      if (!ambiguous.has(chat)) result[String(row.id)] = chat;
+    }
+    return result;
   }
 
   private async resolveTelegramActors(telegramIds: string[]) {

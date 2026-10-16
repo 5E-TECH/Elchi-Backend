@@ -7210,6 +7210,49 @@
         ]
       }
     },
+    "/finance/cashbox/payment/courier/{id}/ack": {
+      "post": {
+        "operationId": "FinanceGatewayController_courierPaymentAck",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Kuryer kassasidagi to'lov (cashbox_history) id si",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CourierPaymentAckRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Kuryer to'lov kvitansiyasiga javob (faqat audit, kassaga ta'sir yo'q)",
+        "tags": [
+          "Finance"
+        ],
+        "x-roles": [
+          "courier"
+        ]
+      }
+    },
     "/finance/cashbox/payment/market": {
       "post": {
         "operationId": "FinanceGatewayController_paymentToMarket",
@@ -10531,6 +10574,7 @@
     },
     "/notifications/send": {
       "post": {
+        "deprecated": true,
         "operationId": "NotificationGatewayController_sendNotification",
         "parameters": [],
         "requestBody": {
@@ -10553,7 +10597,7 @@
             "bearer": []
           }
         ],
-        "summary": "Send notification to telegram group(s) — faqat superadmin/admin. Bot tokeni faqat server env; `token` qabul qilinmaydi (400). 200 — yuborildi, 202 — navbatda (qayta urinadi), 207 — aralash, 502 — hech biri.",
+        "summary": "ESKIRGAN (TgYRqaTk): faqat qo'lda guruh relay'i — servislar `notification.dispatch` ishlatadi. Send notification to telegram group(s) — faqat superadmin/admin. Bot tokeni faqat server env; `token` qabul qilinmaydi (400). 200 — yuborildi, 202 — navbatda (qayta urinadi), 207 — aralash, 502 — hech biri.",
         "tags": [
           "Notification"
         ],
@@ -20335,6 +20379,27 @@
           "courier_id",
           "amount",
           "payment_method"
+        ]
+      },
+      "CourierPaymentAckRequestDto": {
+        "type": "object",
+        "properties": {
+          "ack": {
+            "type": "string",
+            "enum": [
+              "confirmed",
+              "disputed"
+            ],
+            "example": "confirmed"
+          },
+          "comment": {
+            "type": "string",
+            "example": "Summa kam yozilgan",
+            "maxLength": 500
+          }
+        },
+        "required": [
+          "ack"
         ]
       },
       "PaymentToMarketRequestDto": {

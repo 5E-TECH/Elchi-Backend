@@ -380,6 +380,8 @@ describe('9HIaV80X — readiness va metrikalar', () => {
     );
     expect(names.sort()).toEqual(
       [
+        // (2crjWf7v) shaxsiy bildirishnoma yetkazish metrikasi.
+        'bot_dm_delivery_total',
         'bot_linked_users',
         'bot_send_latency_ms',
         'bot_send_total',

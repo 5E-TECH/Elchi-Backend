@@ -41,6 +41,8 @@ import { CourierReportScheduler } from './bot/courier/courier-report.scheduler';
 import { CourierActions, CourierHandler } from './bot/courier/courier.handler';
 import { BOT_ACTION_HANDLERS } from './bot/handlers/bot-context';
 import { ExtraCostActions } from './bot/extra-cost/extra-cost.actions';
+import { PaymentAckActions } from './bot/finance/payment-ack.actions';
+import { DispatchDedupService } from './dedup/dispatch-dedup.service';
 import { TelegramOrderCard } from './entities/telegram-order-card.entity';
 import { TelegramLinkToken } from './entities/telegram-link-token.entity';
 import { TelegramSession } from './entities/telegram-session.entity';
@@ -177,6 +179,8 @@ import { RecipientDirectoryService } from './recipients/recipient-directory.serv
   providers: [
     NotificationServiceService,
     NotificationInboxService,
+    // (rzGKtE9N TC5) qayta yetkazilgan dispatch dedup'i.
+    DispatchDedupService,
     // Telegram bot yadrosi (ZlpXb4Wh): transport → router → handlerlar.
     BotTransportService,
     BotSessionService,
@@ -197,13 +201,15 @@ import { RecipientDirectoryService } from './recipients/recipient-directory.serv
     CourierActions,
     CourierReportScheduler,
     ExtraCostActions,
+    PaymentAckActions,
     {
       provide: BOT_ACTION_HANDLERS,
-      useFactory: (courier: CourierActions, extraCost: ExtraCostActions) => [
-        ...courier.handlers,
-        ...extraCost.handlers,
-      ],
-      inject: [CourierActions, ExtraCostActions],
+      useFactory: (
+        courier: CourierActions,
+        extraCost: ExtraCostActions,
+        paymentAck: PaymentAckActions,
+      ) => [...courier.handlers, ...extraCost.handlers, ...paymentAck.handlers],
+      inject: [CourierActions, ExtraCostActions, PaymentAckActions],
     },
     BotRouterService,
     BotRuntimeService,

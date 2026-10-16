@@ -366,10 +366,13 @@ export class IdentityController {
     );
   }
 
-  /** (td89SKXQ) Ko'p telegram_id → aktorlar (fail-closed: null). */
+  /**
+   * (td89SKXQ) Ko'p telegram_id → aktorlar; (TgYRqaTk) `user_ids` → shaxsiy
+   * chat id lar (bildirishnoma DM manzili). Fail-closed: null.
+   */
   @MessagePattern({ cmd: 'identity.telegram.resolve_many' })
   telegramResolveMany(
-    @Payload() payload: { telegram_ids?: unknown },
+    @Payload() payload: { telegram_ids?: unknown; user_ids?: unknown },
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>

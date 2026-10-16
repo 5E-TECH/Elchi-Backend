@@ -5,6 +5,7 @@ import {
   Operation_type,
   OutboxService,
   Source_type,
+  deterministicUuid,
   findNotificationType,
   renderNotificationGroupKey,
 } from '@app/common';
@@ -47,7 +48,15 @@ export const NOTIFICATION_DISPATCH_PATTERN = 'notification.dispatch';
 export const FINANCE_NOTIFICATION_TYPES = [
   'finance.payment_received',
   'finance.balance_topup',
+  'finance.payment_disputed',
+  'finance.cash_reminder',
 ] as const;
+
+/** (2crjWf7v) Kvitansiya tugmalari — notification-service bot handler nomlari. */
+export const COURIER_PAYMENT_ACK_ACTIONS = {
+  confirm: 'fp.ok',
+  dispute: 'fp.no',
+} as const;
 
 export type FinanceNotificationType =
   (typeof FINANCE_NOTIFICATION_TYPES)[number];
@@ -73,6 +82,8 @@ export interface FinanceNotificationPayload {
   recipient_ids: string[];
   group_key?: string;
   channels: string[];
+  /** Barqaror dispatch ID (UUID) — takror yuborilmaydi (kuniga bir eslatma). */
+  client_request_id?: string;
 }
 
 export interface PaymentReceivedInput {
@@ -83,6 +94,16 @@ export interface PaymentReceivedInput {
   payment_id: string | number | null | undefined;
   amount: number | string | null | undefined;
   payment_method?: string | null;
+  /**
+   * (VICfJuoi #3 / 2crjWf7v #3) Qabul qiluvchi kassasining to'lovdan KEYINGI
+   * qoldig'i (market: HQ qarzi; kuryer: qo'lidagi naqd). PG numeric satr
+   * bo'lib kelishi mumkin — Number() bilan.
+   */
+  balance_after?: number | string | null;
+  /** To'lov sanasi (kiritilgan `payment_date`, bo'lmasa amal vaqti). */
+  payment_date?: Date | string | null;
+  /** (2crjWf7v) "Qabul qildi: <xodim>" — bo'lmasa umumiy so'z. */
+  accepted_by_name?: string | null;
 }
 
 export interface BalanceTopupInput {
@@ -115,9 +136,38 @@ const positiveAmount = (value: unknown): number | null => {
   return Number.isFinite(amount) && amount > 0 ? amount : null;
 };
 
+const finiteOrNull = (value: unknown): number | null => {
+  if (value === null || value === undefined || value === '') return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+};
+
+/** `DD.MM.YYYY` (Asia/Tashkent) — yaroqsiz sana → amal vaqti. */
+const formatDay = (value: Date | string | null | undefined): string => {
+  const parsed = value ? new Date(value) : new Date();
+  const date = Number.isFinite(parsed.getTime()) ? parsed : new Date();
+  const local = new Date(date.getTime() + 5 * 3_600_000).toISOString();
+  return `${local.slice(8, 10)}.${local.slice(5, 7)}.${local.slice(0, 4)}`;
+};
+
+const cleanName = (value: unknown): string => {
+  const name =
+    typeof value === 'string' ? value.replace(/\s+/g, ' ').trim() : '';
+  return name.slice(0, 80);
+};
+
 /**
  * `finance.payment_received` payload'i. Qabul qiluvchi yoki summa yaroqsiz
  * bo'lsa — `null` (bildirishnoma yo'q, pul amaliga ta'sir yo'q).
+ *
+ * Matnni ISHLAB CHIQARUVCHI (finance) yasaydi — bot faqat transport
+ * (rzGKtE9N #5). Telegram DM = title + body:
+ *  - market (VICfJuoi #3): summa, sana, hisob qoldig'i oldin → keyin,
+ *    "🌐 Kabinetda ochish" (`telegram_cabinet_link`); tafsilot brauzerda;
+ *  - kuryer (2crjWf7v #3): "✅ N so'm qabul qilindi. Qabul qildi: <xodim>.
+ *    Qoldiq: M so'm" + "👍 Tasdiqlayman" / "❗️ Noto'g'ri" (faqat audit
+ *    yozuvi — kassaga ta'sir YO'Q). Guruh nishoni (`telegram.market_id`)
+ *    HECH QACHON berilmaydi — faqat shaxsiy chat.
  */
 export function buildPaymentReceivedPayload(
   input: PaymentReceivedInput,
@@ -128,31 +178,168 @@ export function buildPaymentReceivedPayload(
   if (!entry || !isId(input.recipient_id) || amount === null) return null;
 
   const paymentId = isId(input.payment_id) ? String(input.payment_id) : null;
+  const balanceAfter = finiteOrNull(input.balance_after);
+  const day = formatDay(input.payment_date);
   const data: Record<string, unknown> = {
     kind: input.kind,
     amount,
     ...(paymentId ? { payment_id: paymentId } : {}),
     ...(input.payment_method ? { payment_method: input.payment_method } : {}),
+    payment_day: day,
   };
   const groupKey = renderNotificationGroupKey(entry.group_key_pattern, data);
   const ref = paymentId ? ` (to'lov #${paymentId})` : '';
   const money = formatMoney(amount);
 
+  let title: string;
+  let body: string;
+  if (input.kind === 'market_payment') {
+    title = "💰 To'lov qabul qilindi";
+    const lines = [`Sizga ${money} to'landi${ref}.`, `Sana: ${day}`];
+    if (balanceAfter !== null) {
+      // FOR_MARKET qoldig'i — HQ ning marketga qarzi: to'lov uni kamaytiradi.
+      const balanceBefore = balanceAfter + amount;
+      data.balance_before = balanceBefore;
+      data.balance_after = balanceAfter;
+      lines.push(
+        `Hisob qoldig'i: ${formatMoney(balanceBefore)} → ${formatMoney(balanceAfter)}`,
+      );
+    }
+    body = lines.join('\n');
+    data.telegram_cabinet_link = true;
+  } else {
+    title = 'Pul qabul qilindi';
+    const accepted = cleanName(input.accepted_by_name) || 'kassa xodimi';
+    data.accepted_by_name = accepted;
+    if (balanceAfter !== null) data.balance_after = balanceAfter;
+    body = [
+      `✅ ${money} qabul qilindi${ref}.`,
+      `Qabul qildi: ${accepted}.`,
+      ...(balanceAfter !== null
+        ? [`Qoldiq: ${formatMoney(balanceAfter)}.`]
+        : []),
+      `Sana: ${day}`,
+    ].join('\n');
+    if (paymentId) {
+      data.telegram_buttons = [
+        [
+          {
+            text: '👍 Tasdiqlayman',
+            action: COURIER_PAYMENT_ACK_ACTIONS.confirm,
+            payload: { payment_id: paymentId },
+            one_shot: false,
+          },
+          {
+            text: "❗️ Noto'g'ri",
+            action: COURIER_PAYMENT_ACK_ACTIONS.dispute,
+            payload: { payment_id: paymentId },
+            one_shot: false,
+          },
+        ],
+      ];
+    }
+  }
+
   return {
     type,
     category: entry.category,
     priority: entry.priority,
-    title: "To'lov qabul qilindi",
-    // in_app: faqat raqam + summa (PII yo'q).
-    body:
-      input.kind === 'market_payment'
-        ? `Sizga ${money} to'landi${ref}.`
-        : `Siz topshirgan ${money} kassaga qabul qilindi${ref}.`,
+    title,
+    // in_app: raqam + summa + qoldiq (mijoz PII si YO'Q).
+    body,
     data,
     link: FINANCE_SELF_CASHBOX_LINK,
     recipient_ids: [String(input.recipient_id)],
     ...(groupKey ? { group_key: groupKey } : {}),
     channels: [...entry.default_channels],
+  };
+}
+
+export interface PaymentDisputedInput {
+  payment_id: string | number;
+  courier_id: string | number;
+  courier_name?: string | null;
+  amount: number | string | null | undefined;
+  /** Qabul qilgan xodim + filial boshlig'i (kuryerning o'zi chiqariladi). */
+  recipient_ids: Array<string | number | null | undefined>;
+}
+
+/** (2crjWf7v #4) "❗️ Noto'g'ri" — qabul qilgan xodim va filial boshlig'iga. */
+export function buildPaymentDisputedPayload(
+  input: PaymentDisputedInput,
+): FinanceNotificationPayload | null {
+  const type: FinanceNotificationType = 'finance.payment_disputed';
+  const entry = findNotificationType(type);
+  if (!entry || !isId(input.payment_id) || !isId(input.courier_id)) return null;
+  const courierId = String(input.courier_id);
+  const recipients = [
+    ...new Set(
+      input.recipient_ids
+        .filter(isId)
+        .map(String)
+        .filter((id) => id !== courierId),
+    ),
+  ];
+  if (!recipients.length) return null;
+  const paymentId = String(input.payment_id);
+  const amount = positiveAmount(input.amount);
+  const data: Record<string, unknown> = {
+    payment_id: paymentId,
+    courier_id: courierId,
+    ...(amount !== null ? { amount } : {}),
+  };
+  const groupKey = renderNotificationGroupKey(entry.group_key_pattern, data);
+  const courier = cleanName(input.courier_name) || `#${courierId}`;
+  return {
+    type,
+    category: entry.category,
+    priority: entry.priority,
+    title: "❗️ Kuryer kvitansiyaga e'tiroz bildirdi",
+    body: `Kuryer ${courier} ${amount !== null ? `${formatMoney(amount)} ` : ''}to'lov kvitansiyasini (#${paymentId}) noto'g'ri deb belgiladi. Kassa o'zgarmadi — tekshiring.`,
+    data,
+    link: FINANCE_SELF_CASHBOX_LINK,
+    recipient_ids: recipients,
+    ...(groupKey ? { group_key: groupKey } : {}),
+    channels: [...entry.default_channels],
+  };
+}
+
+export interface CashReminderInput {
+  courier_id: string | number;
+  balance: number | string | null | undefined;
+  /** Asia/Tashkent kuni (`YYYY-MM-DD`) — kuniga bitta eslatma kaliti. */
+  day: string;
+}
+
+/** (2crjWf7v #2) "💰 Kassangizda X so'm — filialga topshiring" (kuniga bir marta). */
+export function buildCashReminderPayload(
+  input: CashReminderInput,
+): FinanceNotificationPayload | null {
+  const type: FinanceNotificationType = 'finance.cash_reminder';
+  const entry = findNotificationType(type);
+  const balance = positiveAmount(input.balance);
+  if (!entry || !isId(input.courier_id) || balance === null) return null;
+  const courierId = String(input.courier_id);
+  const data: Record<string, unknown> = {
+    courier_id: courierId,
+    balance,
+    day: input.day,
+  };
+  const groupKey = renderNotificationGroupKey(entry.group_key_pattern, data);
+  return {
+    type,
+    category: entry.category,
+    priority: entry.priority,
+    title: 'Kassadagi pulni topshiring',
+    body: `💰 Kassangizda ${formatMoney(balance)} — filialga topshiring.`,
+    data,
+    link: FINANCE_SELF_CASHBOX_LINK,
+    recipient_ids: [courierId],
+    ...(groupKey ? { group_key: groupKey } : {}),
+    channels: [...entry.default_channels],
+    client_request_id: deterministicUuid(
+      `cash-reminder:${courierId}:${input.day}`,
+    ),
   };
 }
 
@@ -236,6 +423,31 @@ export class FinanceNotificationService {
       () => buildPaymentReceivedPayload(input),
       manager,
     );
+  }
+
+  /** (2crjWf7v #4) Kuryer e'tirozi — ack yozuvi bilan BITTA tranzaksiyada. */
+  async paymentDisputed(
+    input: PaymentDisputedInput,
+    manager?: EntityManager,
+  ): Promise<void> {
+    await this.enqueueSafely(
+      'finance.payment_disputed',
+      () => buildPaymentDisputedPayload(input),
+      manager,
+    );
+  }
+
+  /** (2crjWf7v #2) Kassa chegarasi eslatmasi (tranzaksiyasiz, kuniga bir marta). */
+  async cashReminder(input: CashReminderInput): Promise<boolean> {
+    let payload: FinanceNotificationPayload | null = null;
+    try {
+      payload = buildCashReminderPayload(input);
+    } catch {
+      payload = null;
+    }
+    if (!payload) return false;
+    await this.enqueueSafely('finance.cash_reminder', () => payload, undefined);
+    return true;
   }
 
   /** Balans qo'lda to'ldirildi (faqat market/kuryer kassasiga MANUAL_INCOME). */

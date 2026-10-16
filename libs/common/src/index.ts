@@ -66,4 +66,5 @@ export * from './integration/partner-money';
 export * from './notification/notification-types';
 export * from './notification/notification-type.validator';
 export * from './notification/telegram-html';
+export * from './notification/dispatch-request-id';
 export * from './telegram/verify-init-data';

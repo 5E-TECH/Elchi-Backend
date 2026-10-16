@@ -137,6 +137,13 @@ export const ACTIVITY_ACTION_REGISTRY: Readonly<
   // ---- moliya ----
   'finance.manual_income': entry("Qo'lda kirim", 'finance', 'plus', 'green'),
   'finance.manual_expense': entry("Qo'lda chiqim", 'finance', 'minus', 'rose'),
+  // (2crjWf7v #4) kuryer kvitansiyani tasdiqladi / e'tiroz bildirdi (faqat audit).
+  'finance.courier_payment_ack': entry(
+    'Kuryer kvitansiyaga javob berdi',
+    'finance',
+    'check',
+    'blue',
+  ),
   // 3PE0B03q (R6): nomli kassa kartalari
   'finance.card_created': entry(
     'Kassa kartasi yaratildi',

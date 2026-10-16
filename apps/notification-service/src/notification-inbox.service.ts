@@ -65,6 +65,7 @@ import type { NotificationDispatch } from './history/notification-dispatch.entit
 import { TelegramDmService } from './telegram/telegram-dm.service';
 import { InboxPolicyService } from './retention/inbox-policy.service';
 import { RecipientDirectoryService } from './recipients/recipient-directory.service';
+import { DispatchDedupService } from './dedup/dispatch-dedup.service';
 import {
   DispatchTexts,
   NotificationTemplateService,
@@ -222,6 +223,8 @@ export class NotificationInboxService {
      * tekshiruvsiz (avvalgi xulq).
      */
     @Optional() private readonly directory?: RecipientDirectoryService,
+    /** (rzGKtE9N TC5) qayta yetkazilgan dispatch — ikkinchi xabar yo'q. */
+    @Optional() private readonly dedup?: DispatchDedupService,
   ) {}
 
   private toRpcError(error: unknown): never {
@@ -286,6 +289,14 @@ export class NotificationInboxService {
    * `client_request_id` (UUID) → chaqiruvchi `request_id` → yangi UUID.
    */
   private dispatchBatchId(dto: DispatchNotificationDto): string {
+    return this.requestDispatchId(dto) ?? randomUUID();
+  }
+
+  /**
+   * Chaqiruvchi bergan barqaror ID (`client_request_id` yoki `request_id`):
+   * qayta yetkazishda o'zgarmaydi. Yo'q — `null` (tasodifiy partiya ID si).
+   */
+  private requestDispatchId(dto: DispatchNotificationDto): string | null {
     const client =
       typeof dto.client_request_id === 'string'
         ? dto.client_request_id.trim().toLowerCase()
@@ -294,7 +305,22 @@ export class NotificationInboxService {
     const raw = (dto as { request_id?: unknown }).request_id;
     const requestId = typeof raw === 'string' ? raw.trim() : '';
     // activity_logs.entity_id — VARCHAR(100).
-    return requestId && requestId.length <= 100 ? requestId : randomUUID();
+    return requestId && requestId.length <= 100 ? requestId : null;
+  }
+
+  /** (rzGKtE9N TC5) Qayta yetkazilgan dispatch — hech narsa yozilmadi/yuborilmadi. */
+  private redeliveryResponse(dispatchId: string, channels: string[]) {
+    return successRes(
+      {
+        dispatch_id: dispatchId,
+        dispatched: 0,
+        duplicate: true,
+        recipient_ids: [],
+        channels,
+      },
+      200,
+      'Already dispatched (duplicate request_id) — not sent again',
+    );
   }
 
   /**
@@ -494,6 +520,20 @@ export class NotificationInboxService {
       }
       let smsResult: SmsChannelResult | null = null;
 
+      // (rzGKtE9N TC5) Outbox/RMQ qayta yetkazishi: kalit tranzaksiya ICHIDA
+      // egallanadi — band bo'lsa qator ham, Telegram/push/SMS ham yo'q.
+      // Qo'lda (aktorli) dispatch'ni tarix (`history.begin`) himoyalaydi,
+      // kampaniya partiyasini (`internal`) — o'z kursori. Oldindan arzon
+      // tekshiruv — takror uchun reja/metrika ham hisoblanmasin.
+      const requestId = this.requestDispatchId(dto);
+      const dedupKey =
+        this.dedup && !internal && !historyId && requestId
+          ? DispatchDedupService.key(dto.type, requestId)
+          : null;
+      if (dedupKey && (await this.dedup?.seen(dedupKey))) {
+        return this.redeliveryResponse(dispatchId, channels);
+      }
+
       // (mP1WGG1W / 7Ec56EIw) Sozlamalar va kanal imkoniyati — BULK (sikl
       // ichida so'rov yo'q). Hamma filtrlansa — 400 emas, skipped_by_preference.
       const plan = await this.planChannels(dto, recipients);
@@ -524,6 +564,7 @@ export class NotificationInboxService {
                     NotificationDeliveryStatus.PENDING,
                 )
                 .map((r) => r.id),
+              dto.type.trim(),
             )
           : null;
       const deliveryFor: DeliveryFor = dmPlan
@@ -547,10 +588,19 @@ export class NotificationInboxService {
       //    navbati to'xtab qolardi.
       let pushQueued = 0;
       let telegramQueued = 0;
+      const redelivery = { duplicate: false };
       const rows =
-        !targets.length && !internal
+        !targets.length && !internal && !dedupKey
           ? []
           : await this.repo.manager.transaction(async (manager) => {
+              if (
+                dedupKey &&
+                this.dedup &&
+                !(await this.dedup.claim(manager, dedupKey))
+              ) {
+                redelivery.duplicate = true;
+                return [];
+              }
               await internal?.beforePersist?.(manager);
               const persisted = targets.length
                 ? await this.persistRows(
@@ -600,6 +650,10 @@ export class NotificationInboxService {
               await internal?.afterPersist?.(manager, persisted);
               return persisted;
             });
+
+      if (redelivery.duplicate) {
+        return this.redeliveryResponse(dispatchId, channels);
+      }
 
       // 2) Realtime (best-effort). Aniq qabul qiluvchilar — har biriga
       //    `user_id` emit; rol/broadcast — BITTA emit (QFoRULeu). Natija

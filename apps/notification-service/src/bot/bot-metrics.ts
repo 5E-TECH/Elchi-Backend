@@ -43,10 +43,25 @@ export const botTokenHealthy = new Gauge({
   registers: [],
 });
 
+/**
+ * (2crjWf7v — "yozildi ≠ yetadi") Shaxsiy Telegram bildirishnomalari tur va
+ * holat bo'yicha: `planned` (chat ulangan, navbatga), `skipped` (ulanmagan /
+ * bloklagan / shaxsiy chat emas), `sent` (Telegram qabul qildi), `failed`.
+ * Kvitansiya yetkazish nisbati: `sent / planned` (`type="finance.payment_received"`)
+ * — recording rule `bot:dm_delivery_ratio` (telegram-bot.rules.yml).
+ */
+export const botDmDeliveryTotal = new Counter({
+  name: 'bot_dm_delivery_total',
+  help: 'Shaxsiy Telegram bildirishnomalari (type, status: planned|skipped|no_provider|sent|failed)',
+  labelNames: ['type', 'status'],
+  registers: [],
+});
+
 export const BOT_METRICS = [
   botUpdatesTotal,
   botSendTotal,
   botSendLatencyMs,
   botLinkedUsers,
   botTokenHealthy,
+  botDmDeliveryTotal,
 ];

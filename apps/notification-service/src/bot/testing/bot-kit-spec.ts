@@ -13,6 +13,7 @@ import { CommandGateHandler } from '../handlers/command-gate.handler';
 import { CourierActions, CourierHandler } from '../courier/courier.handler';
 import { CourierService } from '../courier/courier.service';
 import { ExtraCostActions } from '../extra-cost/extra-cost.actions';
+import { PaymentAckActions } from '../finance/payment-ack.actions';
 import { GroupHandler } from '../handlers/group.handler';
 import { MarketHandler } from '../handlers/market.handler';
 import { StartHandler } from '../handlers/start.handler';
@@ -446,6 +447,10 @@ export function makeRouter(
     actions as never,
     transport as never,
   );
+  const paymentAck = new PaymentAckActions(
+    gateway as never,
+    transport as never,
+  );
   const start = new StartHandler(
     limiter as never,
     activityLog as never,
@@ -474,6 +479,7 @@ export function makeRouter(
     [
       ...courierActions.handlers,
       ...extraCost.handlers,
+      ...paymentAck.handlers,
       ...(options.actionHandlers ?? []),
     ],
   );

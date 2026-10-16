@@ -334,6 +334,16 @@ const CLIENT_ID = '7a1d2c3b-4e5f-4a6b-8c7d-9e0f1a2b3c4d';
          RETURNING id::text AS id`,
       );
       const sendDirectToGroup = jest.fn().mockResolvedValue({});
+      // (TgYRqaTk #1) chat — identity.telegram.resolve_many (user_ids).
+      rmqSendMock
+        .mockReset()
+        .mockImplementation((_client: unknown, pattern: { cmd?: string }) =>
+          Promise.resolve(
+            pattern?.cmd === 'identity.telegram.resolve_many'
+              ? { data: { '21': '777' } }
+              : { data: null },
+          ),
+        );
       const dm = new TelegramDmService(
         db.getRepository(Notification),
         {} as never,
@@ -344,6 +354,7 @@ const CLIENT_ID = '7a1d2c3b-4e5f-4a6b-8c7d-9e0f1a2b3c4d';
         } as never,
         { sendDirectToGroup } as never,
         { get: () => 'bot' } as never,
+        {} as never,
         {} as never,
       );
       const [first, second] = await Promise.all([

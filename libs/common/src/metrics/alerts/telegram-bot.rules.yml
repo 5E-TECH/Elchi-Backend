@@ -4,6 +4,7 @@
 #   bot_token_healthy{bot="elchi", service="notification-service"}  0|1
 #   bot_linked_users{role="courier|market|…", service="notification-service"}
 #   bot_send_total{result="sent|retry|blocked|failed"}
+#   bot_dm_delivery_total{type="finance.payment_received|…", status="planned|skipped|no_provider|sent|failed"}
 # (apps/notification-service/src/bot/bot-metrics.ts).
 #
 # ⚠️ INFRA'GA ULANMAGAN: repoda Prometheus/Alertmanager hali yo'q. Ulash:
@@ -53,3 +54,31 @@ groups:
         annotations:
           summary: "Telegram xabarlarining yarmidan ko'pi yetmayapti"
           description: "So'nggi 15 daqiqada bot_send_total{result=blocked|failed} ulushi 50% dan oshdi. telegram_outbox dagi dead qatorlar va last_error ni tekshiring."
+
+  # 2crjWf7v — "yozildi ≠ yetadi": shaxsiy bildirishnomalar (kvitansiya,
+  # to'lov, eslatma) tur bo'yicha yetkazish nisbati. Dashboard paneli:
+  #   bot:dm_delivery_ratio:1d{type="finance.payment_received"}  (yetgan / navbatga qo'yilgan)
+  #   bot:dm_reach_ratio:1d{type="finance.payment_received"}     (yetgan / jami qabul qiluvchi, ulanmaganlar ham)
+  - name: elchi-telegram-dm-delivery
+    rules:
+      - record: bot:dm_delivery_ratio:1d
+        expr: |
+          sum by (type) (increase(bot_dm_delivery_total{status="sent"}[1d]))
+            / clamp_min(sum by (type) (increase(bot_dm_delivery_total{status="planned"}[1d])), 1)
+      - record: bot:dm_reach_ratio:1d
+        expr: |
+          sum by (type) (increase(bot_dm_delivery_total{status="sent"}[1d]))
+            / clamp_min(sum by (type) (increase(bot_dm_delivery_total{status=~"planned|no_provider"}[1d]))
+              + sum by (type) (increase(bot_dm_delivery_total{status="skipped"}[1d])), 1)
+      - alert: TelegramReceiptDeliveryLow
+        expr: |
+          sum (increase(bot_dm_delivery_total{type="finance.payment_received", status="planned"}[1d])) > 20
+          and
+          bot:dm_delivery_ratio:1d{type="finance.payment_received"} < 0.8
+        for: 1h
+        labels:
+          severity: warning
+          card: 2crjWf7v
+        annotations:
+          summary: "Kuryer kvitansiyalarining 20% dan ko'pi Telegram'ga yetmayapti"
+          description: "bot:dm_delivery_ratio:1d{type=finance.payment_received} < 0.8 — navbatga qo'yilgan kvitansiyalar yetmayapti. notifications.delivery.telegram_error va bot_send_total ni tekshiring."

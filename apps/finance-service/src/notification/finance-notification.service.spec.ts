@@ -44,6 +44,9 @@ describe('katalog (Eh8y21Ha TC12 analogi)', () => {
     expect(FINANCE_NOTIFICATION_TYPES).toEqual([
       'finance.payment_received',
       'finance.balance_topup',
+      // (2crjWf7v) kvitansiya e'tirozi va kassa eslatmasi.
+      'finance.payment_disputed',
+      'finance.cash_reminder',
     ]);
     FINANCE_NOTIFICATION_TYPES.forEach((type) =>
       expect(isKnownNotificationType(type)).toBe(true),
@@ -52,7 +55,7 @@ describe('katalog (Eh8y21Ha TC12 analogi)', () => {
 });
 
 describe('buildPaymentReceivedPayload', () => {
-  it('market to‘lovi — market qabul qiluvchi, category/link/group_key katalogdan', () => {
+  it('market to‘lovi — market qabul qiluvchi, category/link/group_key katalogdan (VICfJuoi: sana, qoldiq, kabinet havolasi, Telegram)', () => {
     expect(
       buildPaymentReceivedPayload({
         kind: 'market_payment',
@@ -60,37 +63,64 @@ describe('buildPaymentReceivedPayload', () => {
         payment_id: '701',
         amount: 1_500_000,
         payment_method: PaymentMethod.CASH,
+        balance_after: '500000.00',
+        payment_date: '2026-10-16T10:00:00Z',
       }),
     ).toEqual({
       type: 'finance.payment_received',
       category: 'finance',
       priority: 'normal',
-      title: "To'lov qabul qilindi",
-      body: "Sizga 1 500 000 so'm to'landi (to'lov #701).",
+      title: "💰 To'lov qabul qilindi",
+      body: "Sizga 1 500 000 so'm to'landi (to'lov #701).\nSana: 16.10.2026\nHisob qoldig'i: 2 000 000 so'm → 500 000 so'm",
       data: {
         kind: 'market_payment',
         amount: 1_500_000,
         payment_id: '701',
         payment_method: PaymentMethod.CASH,
+        payment_day: '16.10.2026',
+        balance_before: 2_000_000,
+        balance_after: 500_000,
+        telegram_cabinet_link: true,
       },
       link: '/cash-box',
       recipient_ids: ['5'],
       group_key: 'finance:payment:701',
-      channels: ['in_app', 'realtime'],
+      channels: ['in_app', 'realtime', 'telegram'],
     });
   });
 
-  it('kuryer to‘lovi — kuryer qabul qiluvchi (topshirgani qabul qilindi)', () => {
+  it('kuryer to‘lovi — kuryer qabul qiluvchi (2crjWf7v kvitansiya: kim qabul qildi, qoldiq, 👍/❗️)', () => {
     const payload = buildPaymentReceivedPayload({
       kind: 'courier_payment',
       recipient_id: 44,
       payment_id: '9',
       amount: '250000',
+      balance_after: '120000.00',
+      accepted_by_name: '  Ali   Valiyev ',
+      payment_date: '2026-10-16T18:59:00Z',
     })!;
     expect(payload.recipient_ids).toEqual(['44']);
     expect(payload.body).toBe(
-      "Siz topshirgan 250 000 so'm kassaga qabul qilindi (to'lov #9).",
+      "✅ 250 000 so'm qabul qilindi (to'lov #9).\nQabul qildi: Ali Valiyev.\nQoldiq: 120 000 so'm.\nSana: 16.10.2026",
     );
+    expect(payload.data.telegram_buttons).toEqual([
+      [
+        {
+          text: '👍 Tasdiqlayman',
+          action: 'fp.ok',
+          payload: { payment_id: '9' },
+          one_shot: false,
+        },
+        {
+          text: "❗️ Noto'g'ri",
+          action: 'fp.no',
+          payload: { payment_id: '9' },
+          one_shot: false,
+        },
+      ],
+    ]);
+    // Kvitansiya — faqat shaxsiy chat: guruh nishoni hech qachon yo'q.
+    expect(payload).not.toHaveProperty('telegram');
   });
 
   it('to‘lov raqami yo‘q — group_key UMUMAN berilmaydi (bo‘sh satr emas)', () => {
@@ -99,9 +129,10 @@ describe('buildPaymentReceivedPayload', () => {
       recipient_id: '5',
       payment_id: null,
       amount: 100,
+      payment_date: '2026-10-16T10:00:00Z',
     })!;
     expect(payload).not.toHaveProperty('group_key');
-    expect(payload.body).toBe("Sizga 100 so'm to'landi.");
+    expect(payload.body).toBe("Sizga 100 so'm to'landi.\nSana: 16.10.2026");
   });
 
   it.each([
@@ -386,8 +417,9 @@ describe('paymentsToMarket → finance.payment_received (outbox, pul tranzaksiya
       expect(text).not.toContain('Chilonzor');
       expect(text).not.toContain('123 45 67');
     }
+    // (VICfJuoi #3) summa + sana + hisob qoldig'i — izoh/telefon yo'q.
     expect(payload.body).toMatch(
-      /^Sizga 1 500 000 so'm to'landi \(to'lov #7\d\d\)\.$/,
+      /^Sizga 1 500 000 so'm to'landi \(to'lov #7\d\d\)\.\nSana: \d\d\.\d\d\.\d{4}\nHisob qoldig'i: [\d ]+ so'm → [\d ]+ so'm$/,
     );
   });
 
@@ -732,5 +764,144 @@ describe('modul ulanishi va TC5 analogi', () => {
       }
     }
     expect(offenders).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// VICfJuoi — HQ → market to'lovi xabari (push) | 2crjWf7v — kuryer kvitansiyasi
+// ---------------------------------------------------------------------------
+
+describe('VICfJuoi — payment/market → marketga Telegram xabari', () => {
+  const pay = (env: ReturnType<typeof makeEnv>) =>
+    env.service.paymentsToMarket({
+      market_id: '5',
+      amount: 1_500_000,
+      payment_method: PaymentMethod.CASH,
+      payment_date: '2026-10-16T09:00:00Z',
+      created_by: '1',
+      dedup_epoch: 'idem-key-1',
+    });
+
+  it('⭐ TC1: bildirishnoma pul yozuvlari bilan AYNI tranzaksiyada (commit’dan oldin hech narsa ketmaydi)', async () => {
+    const env = makeEnv();
+    let seenBeforeCommit = -1;
+    const commit = env.queryRunner.commitTransaction as jest.Mock;
+    const original = commit.getMockImplementation()!;
+    commit.mockImplementation(() => {
+      seenBeforeCommit = env.notifications().length;
+      return original();
+    });
+    await pay(env);
+    await env.service.onModuleDestroy();
+    expect(seenBeforeCommit).toBe(0);
+    expect(env.notifications()).toHaveLength(1);
+    expect(env.outboxRepo.save).toHaveBeenCalledWith(
+      expect.objectContaining({ pattern: 'notification.dispatch' }),
+    );
+  });
+
+  it('⭐ xabar mazmuni: summa, sana, qoldiq (oldin → keyin), Telegram + «Kabinetda ochish»', async () => {
+    const env = makeEnv();
+    await pay(env);
+    await env.service.onModuleDestroy();
+    const { payload } = env.notifications()[0];
+    expect(payload.channels).toContain('telegram');
+    // Guruh nishoni YO'Q — faqat market egasining shaxsiy chati.
+    expect(payload).not.toHaveProperty('telegram');
+    expect(payload.body).toBe(
+      "Sizga 1 500 000 so'm to'landi (to'lov #702).\nSana: 16.10.2026\nHisob qoldig'i: 2 000 000 so'm → 500 000 so'm",
+    );
+    expect(payload.data).toEqual(
+      expect.objectContaining({
+        balance_before: 2_000_000,
+        balance_after: 500_000,
+        telegram_cabinet_link: true,
+      }),
+    );
+    expect(payload.link).toBe('/cash-box');
+  });
+
+  it('⭐ TC2: ayni Idempotency-Key bilan takroriy to‘lov — ikkinchi bildirishnoma YO‘Q', async () => {
+    const first = makeEnv();
+    await pay(first);
+    await first.service.onModuleDestroy();
+    expect(first.notifications()).toHaveLength(1);
+    // Ikkinchi urinish: dedup_epoch bo'yicha to'lov allaqachon bor.
+    const replay = makeEnv({ duplicate: true });
+    const res: Row = await pay(replay);
+    expect(res.data).toEqual({ idempotent: true });
+    expect(replay.outboxRepo.save).not.toHaveBeenCalled();
+  });
+
+  it('TC6: PG numeric satr qoldiq — Number() bilan to‘g‘ri hisoblanadi (‘1000’+‘500’ emas)', () => {
+    const payload = buildPaymentReceivedPayload({
+      kind: 'market_payment',
+      recipient_id: '5',
+      payment_id: '9',
+      amount: '500',
+      balance_after: '1000.00',
+      payment_date: '2026-10-16T09:00:00Z',
+    })!;
+    expect(payload.data.balance_before).toBe(1500);
+    expect(payload.body).toContain("Hisob qoldig'i: 1 500 so'm → 1 000 so'm");
+  });
+});
+
+describe('2crjWf7v — kuryer kvitansiyasi (faqat audit tugmalari)', () => {
+  const accept = (env: ReturnType<typeof makeEnv>) =>
+    env.service.paymentsFromCourier({
+      courier_id: '44',
+      amount: 400_000,
+      payment_method: PaymentMethod.CASH,
+      payment_date: '2026-10-16T09:00:00Z',
+      created_by: '1',
+      dedup_epoch: 'tok-r1',
+    });
+
+  it('⭐ menejer pul qabul qildi → kuryerga DM kvitansiya: summa, kim qabul qildi, qoldiq, 👍/❗️', async () => {
+    const env = makeEnv();
+    const identity = {
+      send: jest.fn((pattern: { cmd: string }) =>
+        of(
+          pattern.cmd === 'identity.user.find_by_id'
+            ? { data: { id: '1', name: 'Menejer Ali' } }
+            : { data: [] },
+        ),
+      ),
+    };
+    Object.assign(env.service as object, { identityClient: identity });
+    await accept(env);
+    await env.service.onModuleDestroy();
+    const [row] = env.notifications();
+    expect(row.payload).toEqual(
+      expect.objectContaining({
+        type: 'finance.payment_received',
+        recipient_ids: ['44'],
+        channels: expect.arrayContaining(['telegram']),
+      }),
+    );
+    expect(row.payload.body).toBe(
+      "✅ 400 000 so'm qabul qilindi (to'lov #701).\nQabul qildi: Menejer Ali.\nQoldiq: 500 000 so'm.\nSana: 16.10.2026",
+    );
+    expect(
+      row.payload.data.telegram_buttons[0].map((b: Row) => b.action),
+    ).toEqual(['fp.ok', 'fp.no']);
+    // ⚠️ Kvitansiya guruhga hech qachon: guruh nishoni yo'q (faqat DM).
+    expect(row.payload).not.toHaveProperty('telegram');
+  });
+
+  it('identity javob bermasa — kvitansiya baribir (umumiy so‘z), pul amali to‘xtamaydi', async () => {
+    const env = makeEnv();
+    Object.assign(env.service as object, {
+      identityClient: {
+        send: jest.fn(() => throwError(() => new Error('timeout'))),
+      },
+    });
+    const res: Row = await accept(env);
+    await env.service.onModuleDestroy();
+    expect(res.statusCode).toBeLessThan(300);
+    expect(env.notifications()[0].payload.body).toContain(
+      'Qabul qildi: kassa xodimi.',
+    );
   });
 });

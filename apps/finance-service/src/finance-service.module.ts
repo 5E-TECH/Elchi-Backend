@@ -18,6 +18,9 @@ import { UserSalary } from './entities/user-salary.entity';
 import { OperatorEarning } from './entities/operator-earning.entity';
 import { OperatorPayment } from './entities/operator-payment.entity';
 import { FinancialBalanceHistory } from './entities/financial-balance-history.entity';
+import { CourierPaymentAck } from './entities/courier-payment-ack.entity';
+import { CourierPaymentAckService } from './courier-payment/courier-payment-ack.service';
+import { CourierCashReminderScheduler } from './courier-payment/courier-cash-reminder.scheduler';
 import { FinanceNotificationService } from './notification/finance-notification.service';
 import { FinanceSettlementUnapplied } from './entities/finance-settlement-unapplied.entity';
 import { SettlementUnappliedService } from './settlement/settlement-unapplied.service';
@@ -71,6 +74,8 @@ import { CashboxCardController } from './cashbox-card/cashbox-card.controller';
       // 3PE0B03q — MAIN kassa nomli kartalari (BeePost cashbox_card porti).
       CashboxCard,
       CashboxCardMovement,
+      // (2crjWf7v) kuryer kvitansiya javobi — faqat audit.
+      CourierPaymentAck,
     ]),
   ],
   controllers: [
@@ -83,6 +88,8 @@ import { CashboxCardController } from './cashbox-card/cashbox-card.controller';
     FinanceNotificationService,
     SettlementUnappliedService,
     CashboxCardService,
+    CourierPaymentAckService,
+    CourierCashReminderScheduler,
   ],
 })
 export class FinanceServiceModule {}

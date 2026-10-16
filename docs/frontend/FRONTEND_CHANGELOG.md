@@ -23,6 +23,31 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-10-17 — Bot bildirishnoma yadrosi va moliya xabarlari (rzGKtE9N, TgYRqaTk, VICfJuoi, 2crjWf7v)
+
+- [2026-10-17] 🆕 [finance] — `POST /finance/cashbox/payment/courier/:id/ack`
+  `{ ack: 'confirmed' | 'disputed', comment?: string (≤500) }` — faqat
+  COURIER, `:id` — kuryer kassasidagi to'lov (cashbox_history) qatori. FAQAT
+  audit yozuvi: kassa qoldig'i o'zgarmaydi. Javob `{ payment_id, ack,
+  already }` (takror → 200 `already: true`; boshqa kuryerniki → 404). Bot
+  tugmalari shuni chaqiradi; 🟢 kuryer kabinetida ixtiyoriy "Tasdiqlayman /
+  Noto'g'ri" tugmalari ham shu endpoint bilan qilinishi mumkin.
+- [2026-10-17] ✏️ [finance] — kassa tarixi qatorlarida (kuryer kassasidagi
+  `courier_payment` chiqim qatorlari) yangi maydon `courier_ack: 'confirmed' |
+  'disputed' | null`. 🔧 Kuryer kassasi / to'lovlar hisobotida `disputed` —
+  qizil "❗️ E'tiroz" belgisi, `confirmed` — "👍".
+- [2026-10-17] 🟢 [notification] — yangi turlar: `finance.payment_disputed`
+  (menejer / filial boshlig'iga, HIGH), `finance.cash_reminder` (kuryerga,
+  kuniga bir marta). `finance.payment_received` endi Telegram kanalida ham;
+  matni boyidi (market: sana + hisob qoldig'i oldin → keyin; kuryer: "Qabul
+  qildi: <xodim>. Qoldiq: …"). `GET /notifications/types` avtomatik ko'rsatadi.
+- [2026-10-17] 🟢 [notification] — `notification.dispatch` ayni `request_id`
+  bilan takrorlansa javob `{ dispatched: 0, duplicate: true }` (ikkinchi
+  xabar yo'q). Frontend `client_request_id` naqshi o'zgarmaydi.
+- [2026-10-17] ⚠️ [notification] — `POST /notifications/send` (qo'lda guruh
+  relay'i) — ESKIRGAN (`deprecated`): yangi ekranlar `POST /notifications`
+  (dispatch) dan foydalansin.
+
 ### 2026-10-17 — Qo'shimcha xarajat: atomik qaror, avtomatik tasdiq, Telegram DM (DuST9k8j, 1tnpaIqd)
 
 - [2026-10-17] ✏️ [order] — `POST /orders/extra-cost-approvals/:id/reject` —

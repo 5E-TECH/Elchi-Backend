@@ -7,6 +7,8 @@ export interface BotPruneResult {
   actions: number;
   rateLimits: number;
   outbox: number;
+  /** (rzGKtE9N) `notification_dispatch_keys` — 7 kundan eski dedup kalitlari. */
+  dispatchKeys: number;
 }
 
 const rowCount = (result: unknown): number => {
@@ -21,7 +23,8 @@ const rowCount = (result: unknown): number => {
  *    NULL` (tizim qatori — polling offset) TEGILMAYDI;
  *  - `telegram_bot_actions`: muddati o'tganiga 1 kun bo'lgan tugmalar;
  *  - `telegram_rate_limits`: 1 kundan eski va blokda bo'lmagan hisoblagichlar;
- *  - `telegram_outbox`: `sent` — 3 kundan, `dead` — 30 kundan eski.
+ *  - `telegram_outbox`: `sent` — 3 kundan, `dead` — 30 kundan eski;
+ *  - `notification_dispatch_keys`: 7 kundan eski dispatch dedup kalitlari.
  * DELETE idempotent — ko'p replikada ham xavfsiz.
  */
 @Injectable()
@@ -37,6 +40,7 @@ export class BotMaintenanceService {
       actions: 0,
       rateLimits: 0,
       outbox: 0,
+      dispatchKeys: 0,
     };
     try {
       result.sessions = rowCount(
@@ -65,9 +69,20 @@ export class BotMaintenanceService {
                OR ("status" = 'dead' AND "created_at" < now() - interval '30 days')`,
         ),
       );
-      if (result.sessions || result.actions || result.outbox) {
+      result.dispatchKeys = rowCount(
+        await this.dataSource.query(
+          `DELETE FROM "notification_schema"."notification_dispatch_keys"
+            WHERE "created_at" < now() - interval '7 days'`,
+        ),
+      );
+      if (
+        result.sessions ||
+        result.actions ||
+        result.outbox ||
+        result.dispatchKeys
+      ) {
         this.logger.log(
-          `telegram bot prune: sessiya ${result.sessions}, tugma ${result.actions}, limit ${result.rateLimits}, outbox ${result.outbox}`,
+          `telegram bot prune: sessiya ${result.sessions}, tugma ${result.actions}, limit ${result.rateLimits}, outbox ${result.outbox}, dedup ${result.dispatchKeys}`,
         );
       }
     } catch (error) {

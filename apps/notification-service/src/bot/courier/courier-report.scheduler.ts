@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import {
   Inject,
   Injectable,
@@ -15,6 +14,7 @@ import {
   NotificationCategory,
   NotificationChannel,
   NotificationPriority,
+  deterministicUuid,
   endOfTashkentDay,
   rmqSend,
 } from '@app/common';
@@ -24,20 +24,8 @@ import { buildCourierDailyReport } from './courier.handler';
 
 const JOB_NAME = 'telegram-courier-daily-report';
 
-/**
- * Kalitdan barqaror UUID (dispatch `client_request_id` UUID talab qiladi):
- * bir kuryer + bir kun → doim bir xil id → takror jo'natilmaydi.
- */
-export function deterministicUuid(key: string): string {
-  const hex = createHash('sha256').update(key).digest('hex');
-  return [
-    hex.slice(0, 8),
-    hex.slice(8, 12),
-    `5${hex.slice(13, 16)}`,
-    `${((parseInt(hex[16], 16) & 0x3) | 0x8).toString(16)}${hex.slice(17, 20)}`,
-    hex.slice(20, 32),
-  ].join('-');
-}
+/** (rzGKtE9N) umumiy yordamchiga ko'chdi — eski import yo'li saqlanadi. */
+export { deterministicUuid };
 
 export interface DailyReportRun {
   couriers: number;
@@ -135,7 +123,10 @@ export class CourierReportScheduler implements OnModuleInit, OnModuleDestroy {
             title: '📊 Bugungi hisobot',
             body,
             recipient_id: courier.user_id,
-            channels: [NotificationChannel.IN_APP, NotificationChannel.TELEGRAM],
+            channels: [
+              NotificationChannel.IN_APP,
+              NotificationChannel.TELEGRAM,
+            ],
             client_request_id: deterministicUuid(
               `courier-daily:${courier.user_id}:${day}`,
             ),

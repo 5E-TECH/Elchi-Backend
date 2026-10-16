@@ -48,7 +48,31 @@ describe('rCFZAmOz — TelegramDmService', () => {
 
   beforeEach(() => {
     jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
-    rmqSendMock.mockReset().mockResolvedValue({ data: { bound: true } });
+    // (TgYRqaTk #1) DM manzili — `identity.telegram.resolve_many` (user_ids):
+    // spec'da `contacts.contacts` xaritasidan javob beriladi.
+    rmqSendMock
+      .mockReset()
+      .mockImplementation(
+        async (
+          _client: unknown,
+          pattern: { cmd?: string },
+          payload: { user_ids?: string[] },
+        ) => {
+          if (pattern?.cmd !== 'identity.telegram.resolve_many') {
+            return { data: { bound: true } };
+          }
+          const ids = payload.user_ids ?? [];
+          const map = (await contacts.contacts(ids)) as Map<
+            string,
+            { telegram_id?: string | null }
+          >;
+          return {
+            data: Object.fromEntries(
+              ids.map((id) => [id, map.get(id)?.telegram_id ?? null]),
+            ),
+          };
+        },
+      );
     env = { TELEGRAM_BOT_TOKEN: 'bot-token' };
     links = makeLinks({
       ['U'.repeat(43)]: { owner_id: '7', purpose: 'user' },
@@ -569,7 +593,7 @@ describe('rCFZAmOz — dispatch TELEGRAM kanali (guruh nishonisiz → shaxsiy DM
       data: Record<string, any>;
       message: string;
     };
-    expect(dm.plan).toHaveBeenCalledWith(['11', '12']);
+    expect(dm.plan).toHaveBeenCalledWith(['11', '12'], 'system.manual');
     const byRecipient = Object.fromEntries(
       [...store.values()].map((row) => [row.recipient_id, row.delivery]),
     );

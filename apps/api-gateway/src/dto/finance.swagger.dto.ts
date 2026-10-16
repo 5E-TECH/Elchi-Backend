@@ -3,6 +3,7 @@ import { Type } from 'class-transformer';
 import {
   IsBoolean,
   IsEnum,
+  IsIn,
   IsInt,
   IsNumber,
   IsOptional,
@@ -10,6 +11,7 @@ import {
   Length,
   Matches,
   Max,
+  MaxLength,
   Min,
 } from 'class-validator';
 import {
@@ -507,6 +509,22 @@ export class PaymentFromCourierRequestDto {
   @ApiPropertyOptional({ example: 'Courierdan tolov olindi' })
   @IsOptional()
   @IsString()
+  comment?: string;
+}
+
+/**
+ * (2crjWf7v #4) Kuryerning kvitansiyaga javobi (bot tugmalari). FAQAT audit
+ * yozuvi — kassaga ta'sir qilmaydi.
+ */
+export class CourierPaymentAckRequestDto {
+  @ApiProperty({ enum: ['confirmed', 'disputed'], example: 'confirmed' })
+  @IsIn(['confirmed', 'disputed'])
+  ack!: 'confirmed' | 'disputed';
+
+  @ApiPropertyOptional({ example: 'Summa kam yozilgan', maxLength: 500 })
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
   comment?: string;
 }
 

@@ -161,6 +161,13 @@ export class NotificationServiceController {
     );
   }
 
+  /**
+   * @deprecated (TgYRqaTk #2) ICHKI / ESKIRGAN — faqat superadminning qo'lda
+   * guruh relay'i (`POST /notifications/send`). Servislar bu pattern'ni
+   * CHAQIRMAYDI: hodisa → `notification.dispatch` (shablon, kanal tanlash,
+   * `delivery` holati yadroda; TELEGRAM — uning bir kanali). Bot tokeni
+   * payload'da qabul qilinmaydi (faqat env).
+   */
   @MessagePattern({ cmd: 'notification.send' })
   sendNotification(
     @Payload() data: SendNotificationDto,

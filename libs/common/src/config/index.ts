@@ -274,6 +274,11 @@ export const financeValidationSchema = Joi.object({
   // (OA16fdSq/ePpLHPX2) Hodisa → bildirishnoma outbox maqsadi (NOTIFICATION).
   RABBITMQ_NOTIFICATION_QUEUE: Joi.string().default('notification_queue'),
   RABBITMQ_IDENTITY_QUEUE: Joi.string().required(),
+  // (2crjWf7v #2) Kuryer kassasidagi naqd shu summadan (so'm) OSHSA kuniga
+  // bir marta "filialga topshiring" eslatmasi. Bo'sh / 0 — o'chiq.
+  COURIER_CASH_REMINDER_THRESHOLD: Joi.number().min(0).allow('').optional(),
+  // Eslatma soati (Asia/Tashkent, 0-23). Sukut 18:00.
+  COURIER_CASH_REMINDER_HOUR: Joi.number().integer().min(0).max(23).default(18),
 });
 
 export const notificationValidationSchema = Joi.object({
@@ -290,6 +295,17 @@ export const notificationValidationSchema = Joi.object({
   // (DuST9k8j) isbot fayllari (file.read) — Telegram DM'ga biriktirish.
   RABBITMQ_FILE_QUEUE: Joi.string().optional(),
   TELEGRAM_BOT_TOKEN: Joi.string().optional(),
+  // (rzGKtE9N #4 / TgYRqaTk #4) Admin Telegram guruhi (chat id, odatda
+  // manfiy). IXTIYORIY: bo'sh env bilan boot yiqilmaydi. TELEGRAM_ADMIN_GROUP_ID
+  // — eski nom (sinonim).
+  NOTIFICATION_ADMIN_GROUP_ID: Joi.string()
+    .pattern(/^-?\d{1,20}$/)
+    .allow('')
+    .optional(),
+  TELEGRAM_ADMIN_GROUP_ID: Joi.string()
+    .pattern(/^-?\d{1,20}$/)
+    .allow('')
+    .optional(),
   // (rCFZAmOz) Shaxsiy Telegram ulash: deep link uchun bot username (@siz).
   // TELEGRAM_LINK_SECRET endi ISHLATILMAYDI (6jXw0DDr: bir martalik DB kodi)
   // — mavjud .env lar buzilmasligi uchun sxemada qoldi.

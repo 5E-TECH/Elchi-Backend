@@ -156,3 +156,58 @@ bazasiga o'zi yozmaydi, doira/holat mashinasi/isbot/extra-cost — serverda.
   e'tiroz bo'lsa admin buyurtmani mavjud `POST /orders/rollback/:id` bilan
   qaytaradi. ⚠️ Xodim ishdan bo'shaganda uni Telegram guruhidan chiqarish —
   tashkiliy qadam.
+
+## 9. Bot — bildirishnoma yadrosining TRANSPORTI (rzGKtE9N, TgYRqaTk)
+
+- Hodisa → `outbox_events` (biznes tranzaksiyasining ICHIDA) →
+  `notification.dispatch` → inbox qatori + kanallar. Bot hech qachon o'zi
+  matn yasamaydi va o'z `sendMessage` yo'lini ochmaydi: TELEGRAM — yadroning
+  bir kanali (`api.telegram.org` faqat `bot-transport.service.ts` da).
+- Manzillash: `telegram.market_id|group_id` → market guruhi (relay);
+  aks holda (faqat `recipients`) → shaxsiy chat:
+  `identity.telegram.resolve_many { user_ids }` → `{ user_id: chat_id|null }`
+  (FAIL-CLOSED: nofaol / ulanmagan / bitta chat bir nechta akkauntda → null).
+  Ulanmagan → `delivery.telegram = skipped (no_telegram_id)`, dispatch
+  yiqilmaydi. DM faqat musbat (shaxsiy) chat id ga — manfiy → `not_private_chat`.
+- QAYTA YETKAZISH: `notification_schema.notification_dispatch_keys`
+  (migratsiya 124) — `<type>:<request_id>` kaliti dispatch tranzaksiyasi
+  ICHIDA egallanadi; takror (outbox / RMQ redelivery) → `duplicate: true`,
+  ikkinchi inbox yangilanishi va ikkinchi Telegram xabari YO'Q. 7 kundan
+  eski kalitlar soatlik tozalashda.
+- `notification.send` (`POST /notifications/send`) — ESKIRGAN, faqat
+  superadminning qo'lda guruh relay'i; servislar `notification.dispatch`.
+- `NOTIFICATION_ADMIN_GROUP_ID` / `TELEGRAM_ADMIN_GROUP_ID` — ixtiyoriy
+  (Joi, bo'sh env bilan boot yiqilmaydi).
+- ⚠️ integration-service `sendAdminNotification` (hamkor webhook xatolari)
+  hali `notification.send` + `token` bilan — hamkor/integratsiya sohasi, bu
+  kartalarda O'ZGARTIRILMADI (notification tomoni tokenni baribir qabul
+  qilmaydi — faqat env).
+
+## 10. Moliya xabarlari (VICfJuoi, 2crjWf7v)
+
+- HQ → market to'lovi (`POST /finance/cashbox/payment/market`): pul
+  yozuvlari bilan AYNI tranzaksiyada `finance.payment_received` → market
+  egasiga in-app + Telegram DM: summa, sana, hisob qoldig'i (oldin → keyin),
+  "🌐 Kabinetda ochish" (`ELCHI_CABINET_URL` + `/cash-box`). Takroriy
+  Idempotency-Key → to'lov ham, xabar ham ikkinchi marta YO'Q. `/balans` —
+  market o'z FOR_MARKET kassasi (§7).
+- Kuryerdan pul qabul qilish (`POST /finance/cashbox/payment/courier`,
+  faqat SUPERADMIN/ADMIN/MANAGER — kuryer 403): kuryerga KVITANSIYA DM
+  "✅ N so'm qabul qilindi. Qabul qildi: <xodim>. Qoldiq: M so'm" +
+  "👍 Tasdiqlayman" / "❗️ Noto'g'ri". Faqat shaxsiy chat, guruhga hech qachon.
+- Tugmalar KASSAGA TA'SIR QILMAYDI: bot kuryer JWT'si bilan
+  `POST /finance/cashbox/payment/courier/:id/ack { ack }` → faqat
+  `finance_schema.courier_payment_acks` (migratsiya 125; bir kvitansiyaga
+  bitta yozuv) + audit `finance.courier_payment_ack`. "❗️" → qabul qilgan
+  xodim + kuryer filiali boshlig'iga (`branches.manager_id`)
+  `finance.payment_disputed`; kassa tarixi ro'yxatida `courier_ack`
+  (confirmed | disputed | null) flagi.
+- Kassa eslatmasi: `COURIER_CASH_REMINDER_THRESHOLD` (so'm; bo'sh — o'chiq),
+  `COURIER_CASH_REMINDER_HOUR` (sukut 18, Toshkent) — chegaradan oshgan
+  kuryerga kuniga BIR marta `finance.cash_reminder` (deterministik
+  `client_request_id` + dispatch dedup — replika/qayta ishga tushishda takror yo'q).
+- Yetkazish metrikasi ("yozildi ≠ yetadi"): `bot_dm_delivery_total{type,status}`
+  (planned | skipped | no_provider | sent | failed). Dashboard paneli:
+  `bot:dm_delivery_ratio:1d{type="finance.payment_received"}` (yetgan /
+  navbatga qo'yilgan) va `bot:dm_reach_ratio:1d` (ulanmaganlar ham hisobda);
+  alert `TelegramReceiptDeliveryLow` (< 80%) — `telegram-bot.rules.yml`.

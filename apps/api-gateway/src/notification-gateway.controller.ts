@@ -417,8 +417,9 @@ export class NotificationGatewayController {
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiBearerAuth()
   @ApiOperation({
+    deprecated: true,
     summary:
-      'Send notification to telegram group(s) — faqat superadmin/admin. Bot tokeni faqat server env; `token` qabul qilinmaydi (400). 200 — yuborildi, 202 — navbatda (qayta urinadi), 207 — aralash, 502 — hech biri.',
+      "ESKIRGAN (TgYRqaTk): faqat qo'lda guruh relay'i — servislar `notification.dispatch` ishlatadi. Send notification to telegram group(s) — faqat superadmin/admin. Bot tokeni faqat server env; `token` qabul qilinmaydi (400). 200 — yuborildi, 202 — navbatda (qayta urinadi), 207 — aralash, 502 — hech biri.",
   })
   @ApiBody({ type: SendNotificationRequestDto })
   sendNotification(

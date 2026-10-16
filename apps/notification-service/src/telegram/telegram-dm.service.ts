@@ -17,6 +17,7 @@ import { SmsDispatchService } from '../sms/sms-dispatch.service';
 import { TelegramLinkService } from '../bot/telegram-link.service';
 import { BotActionsService } from '../bot/bot-actions.service';
 import { BotTransportService } from '../bot/bot-transport.service';
+import { botDmDeliveryTotal } from '../bot/bot-metrics';
 import type {
   InlineKeyboardButton,
   InlineKeyboardMarkup,
@@ -50,6 +51,15 @@ const short = (error: unknown) =>
       'unknown'
     ).replace(/\s+/g, ' '),
   ).slice(0, REASON_MAX);
+
+/** Shaxsiy chat id si musbat; guruh / kanal id lari manfiy. */
+const isPrivateChat = (chat: string) => /^\d{1,20}$/.test(chat);
+
+/** Metrika yorlig'i — faqat katalog ko'rinishidagi tur (kardinallik cheklangan). */
+const metricType = (type: unknown) => {
+  const value = str(type).trim();
+  return /^[a-z]+\.[a-z_]+$/.test(value) ? value : 'other';
+};
 
 /**
  * SHAXSIY Telegram xabari (rCFZAmOz). Guruh relay'idan (telegram_markets)
@@ -90,17 +100,20 @@ export class TelegramDmService {
    * ulanmagan — `skipped` + `telegram_reason: no_telegram_id` (dispatch
    * YIQILMAYDI), bot tokeni yo'q — `no_provider`.
    */
-  async plan(recipientIds: string[]): Promise<TelegramDmPlan> {
+  async plan(recipientIds: string[], type = ''): Promise<TelegramDmPlan> {
     const plan: TelegramDmPlan = new Map();
     if (!recipientIds.length) return plan;
+    const count = (status: string, n = 1) =>
+      botDmDeliveryTotal.inc({ type: metricType(type), status }, n);
     if (!this.botToken) {
       for (const id of recipientIds)
         plan.set(id, { telegram: NotificationDeliveryStatus.NO_PROVIDER });
+      count('no_provider', recipientIds.length);
       return plan;
     }
-    let contacts: Map<string, { telegram_id?: string | null }>;
+    let chats: Map<string, string>;
     try {
-      contacts = await this.contacts.contacts(recipientIds);
+      chats = await this.chatIds(recipientIds);
     } catch (error) {
       this.logger.warn(`telegram DM: identity javob bermadi — ${short(error)}`);
       for (const id of recipientIds)
@@ -108,21 +121,22 @@ export class TelegramDmService {
           telegram: NotificationDeliveryStatus.FAILED,
           telegram_error: 'contacts_unavailable',
         });
+      count('failed', recipientIds.length);
       return plan;
     }
-    const blocked = await this.blockedChats(
-      recipientIds
-        .map((id) => String(contacts.get(id)?.telegram_id ?? '').trim())
-        .filter(Boolean),
-    );
+    const blocked = await this.blockedChats([...chats.values()]);
     for (const id of recipientIds) {
-      const chat = String(contacts.get(id)?.telegram_id ?? '').trim();
-      plan.set(
-        id,
-        !chat
+      const chat = chats.get(id) ?? '';
+      const entry: Record<string, string> = !chat
+        ? {
+            telegram: NotificationDeliveryStatus.SKIPPED,
+            telegram_reason: 'no_telegram_id',
+          }
+        : !isPrivateChat(chat)
           ? {
+              // (2crjWf7v) DM — faqat shaxsiy chat; guruh id si hech qachon.
               telegram: NotificationDeliveryStatus.SKIPPED,
-              telegram_reason: 'no_telegram_id',
+              telegram_reason: 'not_private_chat',
             }
           : blocked.has(chat)
             ? {
@@ -130,10 +144,40 @@ export class TelegramDmService {
                 telegram: NotificationDeliveryStatus.SKIPPED,
                 telegram_reason: 'bot_blocked',
               }
-            : { telegram: NotificationDeliveryStatus.QUEUED },
+            : { telegram: NotificationDeliveryStatus.QUEUED };
+      plan.set(id, entry);
+      count(
+        entry.telegram === NotificationDeliveryStatus.QUEUED
+          ? 'planned'
+          : 'skipped',
       );
     }
     return plan;
+  }
+
+  /**
+   * (TgYRqaTk #1) Qabul qiluvchi → shaxsiy chat: `identity.telegram.resolve_many`
+   * (`user_ids`). Identity fail-closed: faol emas / ulanmagan / noaniq chat →
+   * yo'q (xabar yuborilmaydi). Xato — chaqiruvchiga (plan: `failed`,
+   * deliver: navbatga qaytariladi).
+   */
+  private async chatIds(userIds: string[]): Promise<Map<string, string>> {
+    const ids = [...new Set(userIds)];
+    const res = await rmqSend<{ data?: Record<string, unknown> }>(
+      this.identityClient,
+      { cmd: 'identity.telegram.resolve_many' },
+      { user_ids: ids },
+    );
+    const data = res?.data;
+    if (!data || typeof data !== 'object') {
+      throw new Error('identity.telegram.resolve_many: javob yaroqsiz');
+    }
+    const map = new Map<string, string>();
+    for (const id of ids) {
+      const chat = str(data[id]).trim();
+      if (/^-?\d{1,20}$/.test(chat)) map.set(id, chat);
+    }
+    return map;
   }
 
   /** Botni bloklagan shaxsiy chatlar (`telegram_sessions.state.blocked_at`). */
@@ -182,12 +226,14 @@ export class TelegramDmService {
       title: string;
       body: string | null;
       data?: Record<string, unknown> | null;
+      type?: string | null;
+      link?: string | null;
     }> = await this.notifications.query(
       `UPDATE "notification_schema"."notifications"
           SET "delivery" = COALESCE("delivery", '{}'::jsonb) || '{"telegram":"sending"}'::jsonb
         WHERE "id" = ANY($1::bigint[])
           AND "delivery"->>'telegram' = 'queued'
-      RETURNING "id", "recipient_id", "title", "body", "data"`,
+      RETURNING "id", "recipient_id", "title", "body", "data", "type", "link"`,
       [ids],
     );
     const rows = Array.isArray(claimed[0])
@@ -195,11 +241,9 @@ export class TelegramDmService {
       : claimed;
     if (!rows.length) return { processed: 0, sent: 0, failed: 0 };
 
-    let contacts: Map<string, { telegram_id?: string | null }>;
+    let chats: Map<string, string>;
     try {
-      contacts = await this.contacts.contacts([
-        ...new Set(rows.map((row) => String(row.recipient_id))),
-      ]);
+      chats = await this.chatIds(rows.map((row) => String(row.recipient_id)));
     } catch (error) {
       // Navbatga qaytariladi — outbox qayta uradi.
       await this.patch(
@@ -218,17 +262,17 @@ export class TelegramDmService {
             row,
           ): Promise<{
             id: string;
+            type?: string | null;
             patch: Record<string, string>;
           }> => {
-            const chat = String(
-              contacts.get(String(row.recipient_id))?.telegram_id ?? '',
-            ).trim();
-            if (!chat) {
+            const chat = chats.get(String(row.recipient_id)) ?? '';
+            if (!chat || !isPrivateChat(chat)) {
               return {
                 id: String(row.id),
+                type: row.type,
                 patch: {
                   telegram: NotificationDeliveryStatus.SKIPPED,
-                  telegram_reason: 'no_telegram_id',
+                  telegram_reason: chat ? 'not_private_chat' : 'no_telegram_id',
                 },
               };
             }
@@ -237,6 +281,7 @@ export class TelegramDmService {
                 chat,
                 String(row.recipient_id),
                 row.data,
+                row.link,
               );
               await this.sendWithMedia(
                 chat,
@@ -246,12 +291,14 @@ export class TelegramDmService {
               );
               return {
                 id: String(row.id),
+                type: row.type,
                 patch: { telegram: NotificationDeliveryStatus.SENT },
               };
             } catch (error) {
               const reason = short(error);
               return {
                 id: String(row.id),
+                type: row.type,
                 patch: {
                   telegram: NotificationDeliveryStatus.FAILED,
                   // 403 — foydalanuvchi botni bloklagan / chatni o'chirgan.
@@ -270,6 +317,10 @@ export class TelegramDmService {
           sent += 1;
         else if (result.patch.telegram === NotificationDeliveryStatus.FAILED)
           failed += 1;
+        botDmDeliveryTotal.inc({
+          type: metricType(result.type),
+          status: result.patch.telegram,
+        });
         await this.patch([result.id], result.patch);
       }
     }
@@ -286,9 +337,13 @@ export class TelegramDmService {
     chatId: string,
     recipientId: string,
     data: Record<string, unknown> | null | undefined,
+    link?: string | null,
   ): Promise<InlineKeyboardMarkup | null> {
+    const cabinet = this.cabinetButton(data, link);
     const spec = data?.telegram_buttons;
-    if (!Array.isArray(spec) || !this.actions) return null;
+    if (!Array.isArray(spec) || !this.actions) {
+      return cabinet ? { inline_keyboard: [[cabinet]] } : null;
+    }
     const rows: InlineKeyboardButton[][] = [];
     for (const rawRow of spec.slice(0, 5)) {
       const row: InlineKeyboardButton[] = [];
@@ -327,7 +382,28 @@ export class TelegramDmService {
       }
       if (row.length) rows.push(row);
     }
+    if (cabinet) rows.push([cabinet]);
     return rows.length ? { inline_keyboard: rows } : null;
+  }
+
+  /**
+   * (VICfJuoi #3) `data.telegram_cabinet_link: true` — bildirishnoma `link`
+   * (nisbiy yo'l, masalan `/cash-box`) panel manzili bilan "🌐 Kabinetda
+   * ochish" tugmasi bo'ladi. Tafsilot (tarix, filtr) brauzerda qoladi.
+   */
+  private cabinetButton(
+    data: Record<string, unknown> | null | undefined,
+    link: string | null | undefined,
+  ): InlineKeyboardButton | null {
+    if (data?.telegram_cabinet_link !== true) return null;
+    const path = typeof link === 'string' ? link.trim() : '';
+    if (!/^\/[\w\-./?=&%]*$/.test(path)) return null;
+    const base = (
+      this.config.get<string>('ELCHI_CABINET_URL') ??
+      'https://admin.elchipochta.uz'
+    ).replace(/\/+$/, '');
+    if (!/^https:\/\//.test(base)) return null;
+    return { text: '🌐 Kabinetda ochish', url: `${base}${path}` };
   }
 
   /**

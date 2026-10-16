@@ -72,6 +72,7 @@ import { UpdateSalaryDto } from './dto/salary/update-salary.dto';
 import { FindSalaryByUserDto } from './dto/salary/find-salary-by-user.dto';
 import { FinanceNotificationService } from './notification/finance-notification.service';
 import { SettlementUnappliedService } from './settlement/settlement-unapplied.service';
+import { CourierPaymentAckService } from './courier-payment/courier-payment-ack.service';
 
 /**
  * `order.find_all` qatoridan market to'lovi sinxroni o'qiydigan maydonlar
@@ -137,6 +138,9 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
     // servisni 13/14 argument bilan quradi — u holda faqat WARN log.
     @Optional()
     private readonly settlementUnapplied?: SettlementUnappliedService,
+    // (2crjWf7v #4) kuryer kvitansiya javobi — hisobot ro'yxatida flag.
+    @Optional()
+    private readonly courierAcks?: CourierPaymentAckService,
   ) {}
 
   async onModuleInit() {
@@ -840,6 +844,29 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
     return new Map<string, any>(pairs);
   }
 
+  /**
+   * (2crjWf7v #3) Xodim ismi kvitansiya uchun: 800 ms, qayta urinishsiz,
+   * xato — `null` (fail-open, pul amali to'xtamaydi).
+   */
+  private async userDisplayName(
+    userId: string | null | undefined,
+  ): Promise<string | null> {
+    const id = String(userId ?? '').trim();
+    if (!/^\d+$/.test(id) || !this.financeNotifications) return null;
+    try {
+      const response = await rmqSend<{ data?: { name?: unknown } }>(
+        this.identityClient,
+        { cmd: 'identity.user.find_by_id' },
+        { id },
+        { timeoutMs: 800, retries: 0 },
+      );
+      const name = response?.data?.name;
+      return typeof name === 'string' && name.trim() ? name.trim() : null;
+    } catch {
+      return null;
+    }
+  }
+
   private async enrichHistoryWithUsers(histories: CashboxHistory[]) {
     if (!Array.isArray(histories) || !histories.length) {
       return histories;
@@ -876,6 +903,25 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
     }
 
     const usersMap = await this.loadUsersByIds(ids);
+    // (2crjWf7v #4) Kuryer kassasidagi to'lov qatori — kuryer javobi
+    // (`courier_ack`: confirmed | disputed | null). Xato — flagsiz ro'yxat.
+    const courierPaymentIds = histories
+      .filter(
+        (history) =>
+          history?.source_type === Source_type.COURIER_PAYMENT &&
+          history.operation_type === Operation_type.EXPENSE,
+      )
+      .map((history) => String(history.id));
+    const acks =
+      this.courierAcks && courierPaymentIds.length
+        ? await this.courierAcks.flags(courierPaymentIds).catch(() => null)
+        : null;
+    const ackOf = (history: CashboxHistory) =>
+      acks &&
+      history.source_type === Source_type.COURIER_PAYMENT &&
+      history.operation_type === Operation_type.EXPENSE
+        ? { courier_ack: acks.get(String(history.id)) ?? null }
+        : {};
 
     return histories.map((history) => {
       const createdByUser =
@@ -891,6 +937,7 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
       if (!history.cashbox) {
         return {
           ...history,
+          ...ackOf(history),
           createdByUser,
           created_by_user: createdByUser,
           sourceUser,
@@ -904,6 +951,7 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
 
       return {
         ...history,
+        ...ackOf(history),
         createdByUser,
         created_by_user: createdByUser,
         sourceUser,
@@ -3140,6 +3188,9 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
     // double-submit so the cash is never moved twice. (Audit P0-3.)
     dedup_epoch?: string;
   }) {
+    // (2crjWf7v #3) Kvitansiyadagi "Qabul qildi: <xodim>" — tranzaksiyadan
+    // OLDIN, qisqa muddat bilan; xato/timeout — umumiy so'z (pul amali kutmaydi).
+    const acceptedByName = await this.userDisplayName(data.created_by);
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
     await queryRunner.startTransaction();
@@ -3441,6 +3492,10 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
           payment_id: savedCourierHistory?.id,
           amount: Number(data.amount),
           payment_method: data.payment_method,
+          // (2crjWf7v #3) kvitansiya: kim qabul qildi, kuryerda qolgan naqd.
+          balance_after: savedCourierHistory?.balance_after ?? null,
+          payment_date: data.payment_date ?? null,
+          accepted_by_name: acceptedByName,
         },
         queryRunner.manager,
       );
@@ -3452,6 +3507,8 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
             payment_id: clickMarketHistory?.id,
             amount: Number(data.amount),
             payment_method: data.payment_method,
+            balance_after: clickMarketHistory?.balance_after ?? null,
+            payment_date: data.payment_date ?? null,
           },
           queryRunner.manager,
         );
@@ -3951,6 +4008,9 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
           payment_id: marketHistory?.id,
           amount: Number(data.amount),
           payment_method: data.payment_method,
+          // (VICfJuoi #3) summa, sana, qoldiq (oldin → keyin) xabarda.
+          balance_after: marketHistory?.balance_after ?? null,
+          payment_date: data.payment_date ?? null,
         },
         queryRunner.manager,
       );

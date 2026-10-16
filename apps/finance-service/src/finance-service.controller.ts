@@ -1,9 +1,10 @@
-import { Controller } from '@nestjs/common';
+import { Controller, Optional } from '@nestjs/common';
 import {
   Ctx,
   MessagePattern,
   Payload,
   RmqContext,
+  RpcException,
 } from '@nestjs/microservices';
 import {
   ActivityLogQuery,
@@ -13,6 +14,7 @@ import {
   executeAndAck,
 } from '@app/common';
 import { FinanceServiceService } from './finance-service.service';
+import { CourierPaymentAckService } from './courier-payment/courier-payment-ack.service';
 import { CreateCashboxDto } from './dto/cashbox/create-cashbox.dto';
 import { FindCashboxByUserDto } from './dto/cashbox/find-cashbox-by-user.dto';
 import { UpdateCashboxBalanceDto } from './dto/cashbox/update-cashbox-balance.dto';
@@ -31,6 +33,7 @@ export class FinanceServiceController {
   constructor(
     private readonly rmqService: RmqService,
     private readonly financeService: FinanceServiceService,
+    @Optional() private readonly courierAcks?: CourierPaymentAckService,
   ) {}
 
   private executeAndAck<T>(
@@ -169,6 +172,34 @@ export class FinanceServiceController {
     return this.executeAndAck(context, () =>
       this.financeService.paymentsFromCourier(data),
     );
+  }
+
+  /**
+   * (2crjWf7v #4) Kuryerning kvitansiyaga javobi — FAQAT audit
+   * (`courier_payment_acks`), kassaga ta'sir YO'Q. Gateway `courier_id` ni
+   * JWT'dan qo'yadi (kuryer faqat o'z kvitansiyasiga javob beradi).
+   */
+  @MessagePattern({ cmd: 'finance.cashbox.courier_payment_ack' })
+  courierPaymentAck(
+    @Payload()
+    data: {
+      payment_id?: string;
+      courier_id?: string;
+      ack?: string;
+      comment?: string;
+      notify_user_ids?: string[];
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () => {
+      if (!this.courierAcks) {
+        throw new RpcException({
+          statusCode: 503,
+          message: 'Kvitansiya javobi xizmati ulanmagan',
+        });
+      }
+      return this.courierAcks.ack(data);
+    });
   }
 
   @MessagePattern({ cmd: 'finance.cashbox.payment_market' })

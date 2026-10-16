@@ -220,14 +220,52 @@ export const NOTIFICATION_TYPES: readonly NotificationTypeDefinition[] =
     }),
 
     // ---- Moliya ----
+    // (VICfJuoi / 2crjWf7v) HQ → market to'lovi (marketga) va kuryerdan pul
+    // qabul qilish kvitansiyasi (kuryerga) — Telegram DM ham (faqat shaxsiy
+    // chat; guruh nishoni hech qachon berilmaydi).
     def({
       key: 'finance.payment_received',
       category: NotificationCategory.FINANCE,
       priority: NotificationPriority.NORMAL,
       group_key_pattern: 'finance:payment:{{payment_id}}',
       label_uz: "To'lov qabul qilindi",
-      default_audience: [Roles.MARKET],
+      default_audience: [Roles.MARKET, Roles.COURIER],
       user_can_mute: true,
+      default_channels: [
+        NotificationChannel.IN_APP,
+        NotificationChannel.REALTIME,
+        NotificationChannel.TELEGRAM,
+      ],
+    }),
+    // (2crjWf7v #4) Kuryer kvitansiyada "❗️ Noto'g'ri" ni bosdi — qabul
+    // qilgan xodim va filial boshlig'iga. Kassaga ta'sir YO'Q (faqat audit).
+    def({
+      key: 'finance.payment_disputed',
+      category: NotificationCategory.FINANCE,
+      priority: NotificationPriority.HIGH,
+      group_key_pattern: 'finance:payment:{{payment_id}}:dispute',
+      label_uz: "Kuryer to'lov kvitansiyasiga e'tiroz bildirdi",
+      default_audience: [Roles.MANAGER, Roles.ADMIN, Roles.SUPERADMIN],
+      user_can_mute: false,
+      default_channels: [
+        NotificationChannel.IN_APP,
+        NotificationChannel.REALTIME,
+        NotificationChannel.TELEGRAM,
+      ],
+    }),
+    // (2crjWf7v #2) Kuryer kassasidagi naqd chegaradan oshdi — kuniga bir marta.
+    def({
+      key: 'finance.cash_reminder',
+      category: NotificationCategory.FINANCE,
+      priority: NotificationPriority.NORMAL,
+      group_key_pattern: 'finance:cash_reminder:{{courier_id}}',
+      label_uz: 'Kassadagi pulni topshirish eslatmasi',
+      default_audience: [Roles.COURIER],
+      user_can_mute: true,
+      default_channels: [
+        NotificationChannel.IN_APP,
+        NotificationChannel.TELEGRAM,
+      ],
     }),
     // (ePpLHPX2) Balans to'ldirildi (BeePost notifyBalanceTopup analogi).
     def({

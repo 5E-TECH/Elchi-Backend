@@ -68,6 +68,7 @@ import {
   TransferCashboxCardRequestDto,
   PaymentBranchToMainRequestDto,
   PaymentFromCourierRequestDto,
+  CourierPaymentAckRequestDto,
   PaymentToMarketRequestDto,
   UpdateCashboxBalanceRequestDto,
   UpdateSalaryRequestDto,
@@ -2066,6 +2067,76 @@ export class FinanceGatewayController {
     // courier → branch settlement advance is enqueued by finance-service via the
     // transactional outbox in the same tx as the cashbox move (Faza 2a).
     return result;
+  }
+
+  /**
+   * (2crjWf7v #4) Kuryer kvitansiyaga javob beradi ("👍 Tasdiqlayman" /
+   * "❗️ Noto'g'ri", bot tugmalari). FAQAT audit yozuvi
+   * (`finance_schema.courier_payment_acks`) — kassa qoldig'i O'ZGARMAYDI,
+   * pul yozuvi yaratilmaydi. Kuryer faqat O'Z kvitansiyasiga (boshqasi 404).
+   * Bir kvitansiyaga bitta javob: takror → 200 `already: true`.
+   * "disputed" — qabul qilgan xodim + kuryer filiali boshlig'iga bildirishnoma.
+   */
+  @Post('cashbox/payment/courier/:id/ack')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.COURIER)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary:
+      "Kuryer to'lov kvitansiyasiga javob (faqat audit, kassaga ta'sir yo'q)",
+  })
+  @ApiParam({
+    name: 'id',
+    description: "Kuryer kassasidagi to'lov (cashbox_history) id si",
+  })
+  @ApiBody({ type: CourierPaymentAckRequestDto })
+  async courierPaymentAck(
+    @Req() req: { user: JwtUser },
+    @Param('id') id: string,
+    @Body() dto: CourierPaymentAckRequestDto,
+  ) {
+    if (!/^\d{1,20}$/.test(String(id ?? ''))) {
+      throw new BadRequestException("To'lov id si noto'g'ri");
+    }
+    const courierId = String(req.user.sub);
+    const notify =
+      dto.ack === 'disputed'
+        ? await this.courierBranchManagerIds(req.user)
+        : [];
+    return this.send(
+      { cmd: 'finance.cashbox.courier_payment_ack' },
+      {
+        payment_id: String(id),
+        courier_id: courierId,
+        ack: dto.ack,
+        ...(dto.comment ? { comment: dto.comment } : {}),
+        notify_user_ids: notify,
+      },
+    );
+  }
+
+  /**
+   * (2crjWf7v) Kuryer filialining boshlig'i (`branches.manager_id`) — kuryerning
+   * o'z doirasida (o'z filiali o'qiladi); xato / filialsiz — [].
+   */
+  private async courierBranchManagerIds(courier: JwtUser): Promise<string[]> {
+    try {
+      const branchId = await this.resolveOwnBranchId(courier);
+      if (!branchId) return [];
+      const res = await this.sendBranch<{ data?: { manager_id?: unknown } }>(
+        { cmd: 'branch.find_by_id' },
+        { id: branchId, requester: this.toRequester(courier) },
+        3000,
+      );
+      const managerId = res?.data?.manager_id;
+      return typeof managerId === 'string' || typeof managerId === 'number'
+        ? /^\d+$/.test(String(managerId))
+          ? [String(managerId)]
+          : []
+        : [];
+    } catch {
+      return [];
+    }
   }
 
   @Post('cashbox/payment/market')
