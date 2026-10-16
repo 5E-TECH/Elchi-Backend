@@ -5,6 +5,7 @@ import { OutboxEvent, OutboxService } from '@app/common';
 import { Notification } from '../entities/notification.entity';
 import { NotificationInboxService } from '../notification-inbox.service';
 import { CreateNotificationCampaigns1716000000076 } from '../../../../migrations/1716000000076-CreateNotificationCampaigns';
+import { NotificationCampaignPausedUntil1716000000106 } from '../../../../migrations/1716000000106-NotificationCampaignPausedUntil';
 import { CampaignService } from './campaign.service';
 import { CAMPAIGN_BATCH_PATTERN } from './campaign-limits';
 import { NotificationCampaign } from './notification-campaign.entity';
@@ -74,6 +75,8 @@ const USER_BASE = 7_000_000;
       const runner = db.createQueryRunner();
       try {
         await new CreateNotificationCampaigns1716000000076().up(runner);
+        // (WIsb9Ytq) paused_until ustuni.
+        await new NotificationCampaignPausedUntil1716000000106().up(runner);
       } finally {
         await runner.release();
       }
@@ -219,6 +222,17 @@ const USER_BASE = 7_000_000;
           await runner.hasTable('notification_schema.notification_campaigns'),
         ).toBe(false);
         await migration.up(runner);
+        // (WIsb9Ytq) 106 idempotent: ikki marta up — xato yo'q; down → yo'q.
+        const paused = new NotificationCampaignPausedUntil1716000000106();
+        await paused.up(runner);
+        await paused.up(runner);
+        await paused.down(runner);
+        expect(
+          (
+            await runner.getTable('notification_schema.notification_campaigns')
+          )?.findColumnByName('paused_until'),
+        ).toBeUndefined();
+        await paused.up(runner);
       } finally {
         await runner.release();
       }

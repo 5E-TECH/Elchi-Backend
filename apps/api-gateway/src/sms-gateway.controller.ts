@@ -32,6 +32,11 @@ import { Public } from './auth/public.decorator';
 import { Roles } from './auth/roles.decorator';
 import { RolesGuard } from './auth/roles.guard';
 import {
+  CAMPAIGN_EXPORT_TIMEOUT_MS,
+  sendCampaignExport,
+} from './campaign-report-export.util';
+import { CampaignUndeliveredQueryDto } from './dto/notification-campaign.swagger.dto';
+import {
   ApproveSmsTemplateDto,
   GrantSmsConsentDto,
   PreviewSmsTemplateDto,
@@ -209,6 +214,63 @@ export class SmsGatewayController {
     return this.send('notification.sms.campaign.history', {
       limit: Number(limit) || 50,
     });
+  }
+
+  /**
+   * (H7kpCman) SMS kampaniya natijasi — bildirishnoma kampaniyasi bilan BIR
+   * xil kontrakt (`kind: sms`): Yuborildi (provayder qabul qildi), Yetkazildi
+   * (DLR; hali kelmagan — null), Xato, O'tkazib yuborildi (rozilik yo'q +
+   * noto'g'ri raqam), SMS bloki (bo'laklar, GSM-7/UCS-2), taxminiy narx.
+   */
+  @Get('campaigns/:id/report')
+  @ApiOperation({
+    summary:
+      "SMS kampaniya hisoboti: stats, DLR (kelmagan — null), bo'laklar/kodlash, taxminiy narx",
+  })
+  campaignReport(@Param('id') id: string, @Req() req: AuthedRequest) {
+    return this.send('notification.campaign.report', {
+      kind: 'sms',
+      id,
+      requester: { id: req.user?.sub ?? null, roles: req.user?.roles ?? [] },
+    });
+  }
+
+  @Get('campaigns/:id/undelivered')
+  @ApiOperation({
+    summary: 'Yetkazilmagan SMS: ism / rol, maskalangan raqam, sabab',
+  })
+  campaignUndelivered(
+    @Param('id') id: string,
+    @Query() query: CampaignUndeliveredQueryDto,
+  ) {
+    return this.send('notification.campaign.undelivered', {
+      ...query,
+      kind: 'sms',
+      id,
+    });
+  }
+
+  /** CSV — FAQAT superadmin, `export` jurnali; >10 000 — 202 fon vazifasi. */
+  @Get('campaigns/:id/undelivered/export')
+  @Roles(RoleEnum.SUPERADMIN)
+  @ApiOperation({
+    summary: 'Yetkazilmagan SMS CSV (superadmin, telefon maskalangan)',
+  })
+  async exportCampaignUndelivered(
+    @Param('id') id: string,
+    @Req() req: AuthedRequest,
+    @Res() res: Response,
+  ) {
+    const result = await this.send(
+      'notification.campaign.export',
+      {
+        kind: 'sms',
+        id,
+        requester: { id: req.user?.sub ?? null, roles: req.user?.roles ?? [] },
+      },
+      CAMPAIGN_EXPORT_TIMEOUT_MS,
+    );
+    sendCampaignExport(res, result);
   }
 
   @Post('consents')

@@ -105,6 +105,107 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
   bo'ladi va `needs_provider_approval: true` keladi.
   → 🔧 Frontend: ro'yxatda "Operator tasdig'i kerak" belgisi (TC12); tasdiq
   id si `PATCH /notifications/sms/templates/:id/approve` bilan yoziladi.
+### 2026-10-16 — N1: kampaniyani rejalashtirish + tungi taqiq (WIsb9Ytq) va kampaniya natijasi hisoboti (H7kpCman)
+
+**WIsb9Ytq — rejalashtirish va reklama tungi taqiq darvozasi** (hammasi
+SUPERADMIN/ADMIN, `/notifications/campaigns`):
+
+- [2026-10-16] ⚠️ [notification] — `POST /notifications/campaigns` →
+  `scheduled_at` endi **ISO + ANIQ zona** bilan bo'lishi shart
+  (`2026-10-20T09:00:00+05:00` yoki `...Z`). Zonasiz (`2026-10-20T09:00`) →
+  **400** (brauzer mahalliy vaqti serverda boshqa zona deb o'qilmasin).
+  "Darhol" tanlansa `scheduled_at` umuman YUBORILMASIN.
+- [2026-10-16] ✏️ [notification] — Reklama (kategoriya `marketing`:
+  `marketing.manual`, `marketing.promo`) 18:00–09:00 (Toshkent,
+  `NOTIF_PROMO_QUIET_HOURS`) oralig'iga tushsa **tashlanmaydi** — oyna
+  tugashiga (ertangi 09:00) suriladi; katta kampaniyaning 18:00 dan keyingi
+  partiyalari ham ertalab davom etadi. Tranzaksion turlar (masalan
+  `system.manual`, rol e'loni) **tunda ham bloklanmaydi**. 202 javobiga
+  yangi maydonlar: `display_status`, `requested_scheduled_at` (so'ralgan),
+  `scheduled_at` (haqiqiy), `scheduled_at_tashkent`
+  (`'YYYY-MM-DDTHH:mm:ss+05:00'`), `quiet_hours_shifted: boolean`,
+  `timezone: 'Asia/Tashkent'`.
+- [2026-10-16] 🆕 [notification] — `GET /notifications/campaigns/schedule-policy?scheduled_at=&type=&category=`
+  → `{ timezone: 'Asia/Tashkent', utc_offset: '+05:00', promo_quiet_hours:
+  { start: '18:00', end: '09:00', enabled, env }, promo_categories:
+  ['marketing'], is_promo, max_schedule_days: 90, check }`. `scheduled_at`
+  berilsa `check = { requested_at, requested_at_tashkent, immediate,
+  effective_at, effective_at_tashkent, shifted, reason:
+  'promo_quiet_hours' | null, message }` — `message` tayyor matn
+  ("... ga suriladi"). Hech narsa yaratilmaydi.
+- [2026-10-16] ✏️ [notification] — `GET /notifications/campaigns` va
+  `GET /notifications/campaigns/:id` har qatorida: `display_status`
+  (`scheduled` | `sending` | `sent` | `failed` | `cancelled`), `can_cancel`
+  (faqat yuborilmaguncha `true`), `is_promo`, `paused_until` (reklama tungi
+  taqiqda to'xtagan — shu vaqtda davom etadi), `timezone`,
+  `scheduled_at_tashkent`. Ro'yxatga yangi filtr `?state=scheduled|sending|sent|failed|cancelled`
+  (`status` bilan birga — 400). Yuborilgan kampaniyani bekor qilish — 409
+  (avvalgidek).
+  → **Frontendda (`/campaigns`, forma):** 🔧 "Yuborish vaqti": Darhol /
+  Belgilangan vaqtda (antd `DatePicker showTime`), maydon yonida **"Toshkent
+  vaqti"** yozuvi; qiymatni `dayjs.tz(..., 'Asia/Tashkent').format()` kabi
+  **+05:00 bilan** yuboring. 🔧 Tur reklama (`is_promo` / `schedule-policy`
+  dagi `promo_quiet_hours`) bo'lsa `disabledTime` bilan 18:00–09:00 soatlarini
+  bloklang (soatlarni qotirmang — `schedule-policy` dan oling); kiritilgan
+  vaqt taqiqda bo'lsa `check.message` ("ertangi 09:00 ga suriladi")
+  taklifini ko'rsating. 🔧 Ro'yxat: vaqt (`scheduled_at_tashkent`),
+  auditoriya soni (`total`), kanal (`channels`), holat (`display_status`:
+  rejalashtirilgan / yuborilmoqda / yuborilgan / xato / bekor qilingan);
+  "Bekor qilish" tugmasi FAQAT `can_cancel === true` da. Yuborish 202 —
+  progress `GET /notifications/campaigns/:id` (2–3 s poll). 390px da
+  gorizontal scroll yo'q (WIsb9Ytq TC1–TC9, TC12).
+
+**H7kpCman — kampaniya natijasi hisoboti** (bildirishnoma va SMS
+kampaniyasi uchun BIR xil javob shakli):
+
+- [2026-10-16] 🆕 [notification] — `GET /notifications/campaigns/:id/report`
+  (bildirishnoma kampaniyasi) va `GET /notifications/sms/campaigns/:id/report`
+  (SMS kampaniyasi) → `data`:
+  `{ kind: 'notification'|'sms', campaign: {...}, stats: { audience, sent,
+  delivered, failed, skipped, pending, undelivered, unlisted_failed,
+  skipped_breakdown? }, dlr: { supported, received, awaiting, note },
+  by_channel: [{ channel, sent, failed, skipped, pending, other, statuses }],
+  sms: null | { messages, parts_total, parts_per_message: { min, max },
+  encoding: 'GSM-7'|'UCS-2'|'mixed', encoding_breakdown, source, dlr: {
+  final, delivered, failed, awaiting }, tariff_per_part, cost_of_sent },
+  cost: { currency: 'UZS', estimated, cost_of_sent, is_estimate: true,
+  paid_channels, note }, permissions: { can_export }, export_sync_limit:
+  10000 }`.
+  - `stats.delivered` — **`null` = o'lchanmagan** (DLR hali kelmagan yoki
+    kanalda DLR yo'q: in_app/realtime/push) → **"—"** ko'rsating
+    (`fmtMetric(null)`), HECH QACHON 0. DLR kelgach — son (0 ham haqiqiy).
+  - SMS kampaniyasida `stats.sent` — provayder qabul qilgan; `skipped` =
+    noto'g'ri raqam + rozilik yo'q (`skipped_breakdown`).
+  - `sms` — faqat SMS kampaniyasida; bildirishnoma kampaniyasida `null` →
+    SMS bloki **umuman chiqmasin**.
+  - `cost.estimated` / `cost.cost_of_sent` — `null` = tarif sozlanmagan
+    ("—"); bildirishnoma kampaniyasida 0 (bepul kanallar). Narx yonida
+    **"taxminiy"** izohi (`cost.note`) bo'lsin.
+- [2026-10-16] 🆕 [notification] — "Yetkazilmaganlar":
+  `GET /notifications/campaigns/:id/undelivered?page&limit` va
+  `GET /notifications/sms/campaigns/:id/undelivered?page&limit` (limit ≤100)
+  → `{ items: [{ ref_id, recipient_id, name, role, phone, failures: [{
+  channel, status, reason }] }], meta, unlisted_failed }`. `phone` — faqat
+  maskalangan (`***7434`, SMS), bildirishnomada `null`.
+- [2026-10-16] 🆕 [notification] — CSV eksport (**FAQAT SUPERADMIN**,
+  admin → 403): `GET /notifications/campaigns/:id/undelivered/export` va
+  `GET /notifications/sms/campaigns/:id/undelivered/export`.
+  ≤ 10 000 qator → **200 `text/csv`** fayl (`Content-Disposition`,
+  `X-Export-Total`). Kattasi → **202 JSON** `{ mode: 'async', export_id,
+  status: 'queued', rows, duplicate }` (sinxron emas, fon vazifasi);
+  holat: `GET /notifications/campaigns/exports/:export_id` (`status:
+  queued|running|done|failed`, `download_url`), fayl:
+  `GET /notifications/campaigns/exports/:export_id/download` (7 kun; keyin
+  410, tayyor bo'lmasa 409). Har eksport/yuklash faoliyat jurnaliga
+  **`export`** amali bilan yoziladi.
+  → **Frontendda (`/campaigns/:id`):** 🔧 4–6 Statistic (Auditoriya,
+  Yuborildi, Yetkazildi, Xato, O'tkazib yuborildi, Taxminiy narx) — null →
+  "—"; kanal jadvali `by_channel`; SMS bloki faqat `sms !== null`;
+  "Yetkazilmaganlar" jadvali sabab bilan; "CSV" tugmasi faqat
+  `permissions.can_export` (superadmin) — javob 202 bo'lsa holatni poll
+  qilib `download_url` dan yuklang (axios blob). 390px: statistikalar 2
+  ustun, jadval o'z ichida scroll; dark tema — dizayn tokenlari; kampaniya
+  yo'q bo'lsa tushunarli bo'sh holat (H7kpCman TC1–TC12).
 
 ### 2026-10-15 — R1: dashboard reyting davri ("Bugun" → oxirgi 30 kun) va bot manbasi (9zbSDkUI, Celz3rKJ)
 

@@ -44,6 +44,10 @@ import { SmsOtpService } from './sms/sms-otp.service';
 import { NotificationCampaign } from './campaign/notification-campaign.entity';
 import { CampaignController } from './campaign/campaign.controller';
 import { CampaignService } from './campaign/campaign.service';
+// (H7kpCman) kampaniya natijasi hisoboti va CSV eksport (migratsiya 1716000000107).
+import { CampaignReportExport } from './campaign/campaign-report-export.entity';
+import { CampaignReportController } from './campaign/campaign-report.controller';
+import { CampaignReportService } from './campaign/campaign-report.service';
 import { AudiencePreviewService } from './audience/audience-preview.service';
 import { NotificationPreference } from './entities/notification-preference.entity';
 import { NotificationPreferencesService } from './preferences/notification-preferences.service';
@@ -103,6 +107,7 @@ import { AudienceSegmentController } from './audience/audience-segment.controlle
       // (C4R3YyvH) migratsiya 1716000000086.
       NotificationTemplate,
       NotificationAudienceSegment,
+      CampaignReportExport,
     ]),
     // Push yetkazish bir partiyada 100 tagacha bildirishnomani parallel
     // yuboradi — 5 s lik standart javob muddati qisqa: muddat o'tsa outbox
@@ -116,6 +121,7 @@ import { AudienceSegmentController } from './audience/audience-segment.controlle
     NotificationServiceController,
     SmsController,
     CampaignController,
+    CampaignReportController,
     DispatchHistoryController,
     TelegramDmController,
     NotificationTemplateController,
@@ -144,6 +150,7 @@ import { AudienceSegmentController } from './audience/audience-segment.controlle
     SmsOtpService,
     AudiencePreviewService,
     CampaignService,
+    CampaignReportService,
     // (mP1WGG1W / 7Ec56EIw) sozlamalar, kanal rejasi, CRITICAL eskalatsiya.
     NotificationPreferencesService,
     ChannelPlannerService,

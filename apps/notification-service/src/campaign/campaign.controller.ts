@@ -55,10 +55,23 @@ export class CampaignController {
 
   @MessagePattern({ cmd: 'notification.campaign.list' })
   listCampaigns(
-    @Payload() data: { page?: number; limit?: number; status?: string },
+    @Payload()
+    data: { page?: number; limit?: number; status?: string; state?: string },
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () => this.campaigns.list(data ?? {}));
+  }
+
+  /** (WIsb9Ytq) Toshkent zonasi, reklama taqiq oynasi, vaqt tekshiruvi. */
+  @MessagePattern({ cmd: 'notification.campaign.schedule_policy' })
+  schedulePolicy(
+    @Payload()
+    data: { scheduled_at?: string; type?: string; category?: string },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.campaigns.schedulePolicy(data ?? {}),
+    );
   }
 
   @MessagePattern({ cmd: 'notification.campaign.get' })

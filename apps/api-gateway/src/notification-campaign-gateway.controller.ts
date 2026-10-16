@@ -12,8 +12,10 @@ import {
   Put,
   Query,
   Req,
+  Res,
   UseGuards,
 } from '@nestjs/common';
+import type { Response } from 'express';
 import { ClientProxy } from '@nestjs/microservices';
 import {
   ApiBearerAuth,
@@ -29,7 +31,13 @@ import { JwtAuthGuard } from './auth/jwt-auth.guard';
 import { Roles } from './auth/roles.decorator';
 import { RolesGuard } from './auth/roles.guard';
 import {
+  CAMPAIGN_EXPORT_TIMEOUT_MS,
+  sendCampaignExport,
+} from './campaign-report-export.util';
+import {
   AudiencePreviewRequestDto,
+  CampaignSchedulePolicyQueryDto,
+  CampaignUndeliveredQueryDto,
   CreateAudienceSegmentRequestDto,
   CreateNotificationCampaignRequestDto,
   ListNotificationCampaignsQueryDto,
@@ -160,6 +168,20 @@ export class NotificationCampaignGatewayController {
     return this.send('notification.campaign.list', { ...query });
   }
 
+  /**
+   * (WIsb9Ytq) DatePicker qoidasi: Toshkent zonasi, reklama taqiq oynasi
+   * (NOTIF_PROMO_QUIET_HOURS), `scheduled_at` berilsa — haqiqiy yuborish
+   * lahzasi va "ertangi 09:00 ga suriladi" matni. ⚠️ `campaigns/:id` dan OLDIN.
+   */
+  @Get('campaigns/schedule-policy')
+  @ApiOperation({
+    summary:
+      'Rejalashtirish qoidasi: Asia/Tashkent, reklama taqiq oynasi, vaqt tekshiruvi (surilsa — effective_at)',
+  })
+  schedulePolicy(@Query() query: CampaignSchedulePolicyQueryDto) {
+    return this.send('notification.campaign.schedule_policy', { ...query });
+  }
+
   @Get('campaigns/:id')
   @ApiOperation({
     summary:
@@ -168,6 +190,100 @@ export class NotificationCampaignGatewayController {
   @ApiParam({ name: 'id', example: '7' })
   getCampaign(@Param('id') id: string) {
     return this.send('notification.campaign.get', { id });
+  }
+
+  /**
+   * (H7kpCman) Kampaniya natijasi: Auditoriya / Yuborildi / Yetkazildi (DLR;
+   * o'lchanmagan — null) / Xato / O'tkazib yuborildi / Taxminiy narx, kanal
+   * kesimi; SMS bloki faqat SMS kampaniyasida (bu yerda `sms: null`).
+   */
+  @Get('campaigns/:id/report')
+  @ApiOperation({
+    summary:
+      "Kampaniya natijasi hisoboti: stats, kanal kesimi (sent/failed/skipped), DLR (yo'q bo'lsa null), taxminiy narx",
+  })
+  @ApiParam({ name: 'id', example: '7' })
+  campaignReport(@Param('id') id: string, @Req() req: AuthedRequest) {
+    return this.send(
+      'notification.campaign.report',
+      { kind: 'notification', id, requester: this.actor(req) },
+      15_000,
+    );
+  }
+
+  @Get('campaigns/:id/undelivered')
+  @ApiOperation({
+    summary: 'Yetkazilmaganlar: ism / rol + kanal va sabab (sahifalab)',
+  })
+  @ApiParam({ name: 'id', example: '7' })
+  campaignUndelivered(
+    @Param('id') id: string,
+    @Query() query: CampaignUndeliveredQueryDto,
+  ) {
+    return this.send(
+      'notification.campaign.undelivered',
+      { ...query, kind: 'notification', id },
+      15_000,
+    );
+  }
+
+  /**
+   * CSV — FAQAT superadmin; eksportning o'zi faoliyat jurnaliga `export`
+   * amali bilan yoziladi. ≤10 000 qator — 200 text/csv; kattasi — 202
+   * `{ export_id }` (fon vazifasi, sinxron emas).
+   */
+  @Get('campaigns/:id/undelivered/export')
+  @Roles(RoleEnum.SUPERADMIN)
+  @ApiOperation({
+    summary:
+      'Yetkazilmaganlar CSV (superadmin): ≤10 000 — fayl, kattasi — 202 fon vazifasi',
+  })
+  @ApiParam({ name: 'id', example: '7' })
+  async exportCampaignUndelivered(
+    @Param('id') id: string,
+    @Req() req: AuthedRequest,
+    @Res() res: Response,
+  ) {
+    const result = await this.send(
+      'notification.campaign.export',
+      { kind: 'notification', id, requester: this.actor(req) },
+      CAMPAIGN_EXPORT_TIMEOUT_MS,
+    );
+    sendCampaignExport(res, result);
+  }
+
+  /** Fon eksporti holati (bildirishnoma va SMS kampaniyasi uchun umumiy). */
+  @Get('campaigns/exports/:export_id')
+  @Roles(RoleEnum.SUPERADMIN)
+  @ApiOperation({ summary: 'Fon eksporti holati (superadmin)' })
+  @ApiParam({ name: 'export_id', example: '3' })
+  campaignExportStatus(
+    @Param('export_id') exportId: string,
+    @Req() req: AuthedRequest,
+  ) {
+    return this.send('notification.campaign.export.get', {
+      export_id: exportId,
+      requester: this.actor(req),
+    });
+  }
+
+  @Get('campaigns/exports/:export_id/download')
+  @Roles(RoleEnum.SUPERADMIN)
+  @ApiOperation({
+    summary: 'Tayyor CSV (superadmin) — har yuklash jurnalga `export`',
+  })
+  @ApiParam({ name: 'export_id', example: '3' })
+  async campaignExportDownload(
+    @Param('export_id') exportId: string,
+    @Req() req: AuthedRequest,
+    @Res() res: Response,
+  ) {
+    const result = await this.send(
+      'notification.campaign.export.download',
+      { export_id: exportId, requester: this.actor(req) },
+      CAMPAIGN_EXPORT_TIMEOUT_MS,
+    );
+    sendCampaignExport(res, result);
   }
 
   @Post('campaigns/:id/cancel')

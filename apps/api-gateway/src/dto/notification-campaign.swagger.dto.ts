@@ -25,6 +25,15 @@ import {
   NotificationPriority,
 } from '@app/common';
 
+/**
+ * (WIsb9Ytq) `scheduled_at` — ISO + ANIQ zona: brauzer mahalliy vaqti
+ * zonasiz yuborilsa serverda boshqa zona deb o'qilardi (taqiq oynasi 5 soat
+ * siljiydi). notification-service ham shuni tekshiradi (RMQ yo'li).
+ */
+const SCHEDULED_AT_ZONE_RE = /(?:Z|[+-]\d{2}:\d{2})$/i;
+const SCHEDULED_AT_ZONE_MESSAGE =
+  "scheduled_at: vaqt zonasi bilan bo'lishi kerak (masalan 2026-10-20T09:00:00+05:00 yoki ...Z)";
+
 const toBool = ({ value }: { value: unknown }) =>
   value === true || value === 'true'
     ? true
@@ -267,10 +276,12 @@ export class CreateNotificationCampaignRequestDto extends AudienceTargetFieldsDt
 
   @ApiPropertyOptional({
     example: '2026-10-20T09:00:00+05:00',
-    description: 'Rejalashtirish (≤90 kun). Berilmasa — darhol',
+    description:
+      "Rejalashtirish (≤90 kun), ISO + ANIQ zona (Toshkent: +05:00 yoki Z). Zonasiz — 400. Berilmasa — darhol. Reklama (marketing) 18:00–09:00 (NOTIF_PROMO_QUIET_HOURS) oralig'iga tushsa — oyna tugashiga suriladi",
   })
   @IsOptional()
   @IsDateString()
+  @Matches(SCHEDULED_AT_ZONE_RE, { message: SCHEDULED_AT_ZONE_MESSAGE })
   scheduled_at?: string;
 
   @ApiPropertyOptional({
@@ -281,6 +292,54 @@ export class CreateNotificationCampaignRequestDto extends AudienceTargetFieldsDt
   @IsString()
   @MaxLength(128)
   idempotency_key?: string;
+}
+
+/**
+ * (WIsb9Ytq) `GET /notifications/campaigns/schedule-policy` — DatePicker
+ * uchun qoida va ixtiyoriy vaqt tekshiruvi (hech narsa yaratilmaydi).
+ */
+export class CampaignSchedulePolicyQueryDto {
+  @ApiPropertyOptional({
+    example: '2026-10-20T19:30:00+05:00',
+    description: 'Tekshiriladigan vaqt (ISO + zona)',
+  })
+  @IsOptional()
+  @IsDateString()
+  @Matches(SCHEDULED_AT_ZONE_RE, { message: SCHEDULED_AT_ZONE_MESSAGE })
+  scheduled_at?: string;
+
+  @ApiPropertyOptional({
+    example: 'marketing.manual',
+    description: 'Tur — kategoriyasi katalogdan (marketing = reklama)',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  @IsNotificationType()
+  type?: string;
+
+  @ApiPropertyOptional({ enum: NotificationCategory })
+  @IsOptional()
+  @IsEnum(NotificationCategory)
+  category?: NotificationCategory;
+}
+
+/** (H7kpCman) `GET .../campaigns/:id/undelivered` sahifasi. */
+export class CampaignUndeliveredQueryDto {
+  @ApiPropertyOptional({ example: 1 })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  page?: number;
+
+  @ApiPropertyOptional({ example: 50 })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(100)
+  limit?: number;
 }
 
 export class ListNotificationCampaignsQueryDto {
@@ -305,4 +364,13 @@ export class ListNotificationCampaignsQueryDto {
   @IsOptional()
   @IsIn(['draft', 'queued', 'running', 'done', 'failed', 'cancelled'])
   status?: string;
+
+  @ApiPropertyOptional({
+    enum: ['scheduled', 'sending', 'sent', 'failed', 'cancelled'],
+    description:
+      "(WIsb9Ytq) Ro'yxat holati: rejalashtirilgan / yuborilmoqda / yuborilgan / xato / bekor qilingan. `status` bilan birga emas",
+  })
+  @IsOptional()
+  @IsIn(['scheduled', 'sending', 'sent', 'failed', 'cancelled'])
+  state?: string;
 }

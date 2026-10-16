@@ -9,7 +9,15 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { ClientProxy, RpcException } from '@nestjs/microservices';
 import { InjectRepository } from '@nestjs/typeorm';
-import { EntityManager, Repository } from 'typeorm';
+import {
+  EntityManager,
+  FindOptionsWhere,
+  In,
+  IsNull,
+  LessThanOrEqual,
+  MoreThan,
+  Repository,
+} from 'typeorm';
 import { createHash } from 'node:crypto';
 import {
   ActivityLogService,
@@ -43,6 +51,19 @@ import {
   campaignMaxFanout,
 } from './campaign-limits';
 import { DispatchAbortedError } from './dispatch-hooks';
+import {
+  CAMPAIGN_CANCELLABLE_STATUSES,
+  CAMPAIGN_DISPLAY_STATUSES,
+  CAMPAIGN_TIMEZONE,
+  CampaignDisplayStatus,
+  campaignDisplayStatus,
+  campaignQuietHours,
+  formatMinuteOfDay,
+  isPromoCategory,
+  parseZonedInstant,
+  promoReleaseAt,
+  toTashkentIso,
+} from './campaign-schedule';
 import {
   CAMPAIGN_STATUSES,
   CAMPAIGN_TERMINAL_STATUSES,
@@ -140,6 +161,19 @@ export class CampaignService {
     );
   }
 
+  /** (WIsb9Ytq) SMS darvozasi bilan BIR xil sozlama (sukut 18:00-09:00). */
+  private get quietHours() {
+    return campaignQuietHours(this.config?.get?.('NOTIF_PROMO_QUIET_HOURS'));
+  }
+
+  /**
+   * (WIsb9Ytq) Reklama shu lahzada ketishi mumkin bo'lgan eng erta lahza —
+   * SQL'da bitta `AT TIME ZONE 'Asia/Tashkent'` (campaign-schedule.ts).
+   */
+  private promoRelease(at: Date): Promise<Date> {
+    return promoReleaseAt(this.repo.manager, at, this.quietHours);
+  }
+
   private toRpcError(error: unknown): never {
     if (error instanceof RpcException) throw error;
     for (const [type, statusCode] of [
@@ -180,6 +214,21 @@ export class CampaignService {
         );
       }
 
+      // (WIsb9Ytq) Reklama tungi taqiq oynasiga tushsa — TASHLANMAYDI, oyna
+      // tugashiga (Toshkent 09:00) suriladi. Tranzaksion (promo emas) —
+      // darvozaga tushmaydi, tunda ham darhol/belgilangan vaqtda ketadi.
+      const requestedAt = plan.scheduledAt;
+      let scheduledAt = requestedAt;
+      let quietShifted = false;
+      if (isPromoCategory(plan.category)) {
+        const base = requestedAt ?? new Date();
+        const release = await this.promoRelease(base);
+        if (release.getTime() > base.getTime()) {
+          scheduledAt = release;
+          quietShifted = true;
+        }
+      }
+
       let saved: NotificationCampaign;
       try {
         saved = await this.repo.manager.transaction(async (manager) => {
@@ -200,12 +249,12 @@ export class CampaignService {
               status: 'queued',
               total,
               batch_size: CAMPAIGN_BATCH_SIZE,
-              scheduled_at: plan.scheduledAt,
+              scheduled_at: scheduledAt,
               idempotency_key: plan.key,
               request_hash: plan.hash,
             }),
           );
-          await this.enqueueBatch(manager, row.id, 0, plan.scheduledAt);
+          await this.enqueueBatch(manager, row.id, 0, scheduledAt);
           return row;
         });
       } catch (error) {
@@ -232,7 +281,9 @@ export class CampaignService {
           channels: plan.channels,
           audience: plan.audience,
           total,
-          scheduled_at: plan.scheduledAt,
+          scheduled_at: scheduledAt,
+          requested_scheduled_at: requestedAt,
+          quiet_hours_shifted: quietShifted,
         },
       });
 
@@ -243,9 +294,16 @@ export class CampaignService {
           total,
           scheduled_at: saved.scheduled_at,
           duplicate: false,
+          display_status: (scheduledAt
+            ? 'scheduled'
+            : 'sending') as CampaignDisplayStatus,
+          requested_scheduled_at: requestedAt,
+          quiet_hours_shifted: quietShifted,
+          timezone: CAMPAIGN_TIMEZONE,
+          scheduled_at_tashkent: toTashkentIso(scheduledAt),
         },
         202,
-        plan.scheduledAt ? 'Campaign scheduled' : 'Campaign queued',
+        scheduledAt ? 'Campaign scheduled' : 'Campaign queued',
       );
     } catch (error) {
       this.toRpcError(error);
@@ -401,10 +459,9 @@ export class CampaignService {
   private scheduleOf(raw: unknown): Date | null {
     const value = primitiveText(raw).trim();
     if (!value) return null;
-    const date = new Date(value);
-    if (Number.isNaN(date.getTime())) {
-      throw new BadRequestException("scheduled_at — ISO sana bo'lishi kerak");
-    }
+    // (WIsb9Ytq) ISO + ANIQ zona majburiy — zonasiz satr serverda boshqa
+    // zona deb o'qilmasin (qo'shaloq konversiya → tunda yuborish).
+    const date = parseZonedInstant(value);
     const now = Date.now();
     if (date.getTime() <= now) return null; // o'tgan vaqt — darhol
     if (date.getTime() > now + CAMPAIGN_MAX_SCHEDULE_DAYS * 86_400_000) {
@@ -496,20 +553,35 @@ export class CampaignService {
       return this.skip(id, batchNo, 'stale_batch');
     }
 
-    if (campaign.status === 'queued' || campaign.status === 'draft') {
-      // (TC7) Erta yetib kelgan (masalan qo'lda requeue) — vaqtida qayta.
-      if (
-        campaign.scheduled_at &&
-        new Date(campaign.scheduled_at).getTime() > Date.now() + 1000
-      ) {
-        await this.enqueueBatch(
-          this.repo.manager,
-          id,
-          batchNo,
-          campaign.scheduled_at,
-        );
-        return this.skip(id, batchNo, 'not_due');
+    const pending = campaign.status === 'queued' || campaign.status === 'draft';
+    // (TC7) Erta yetib kelgan (masalan qo'lda requeue) — vaqtida qayta.
+    if (
+      pending &&
+      campaign.scheduled_at &&
+      new Date(campaign.scheduled_at).getTime() > Date.now() + 1000
+    ) {
+      await this.enqueueBatch(
+        this.repo.manager,
+        id,
+        batchNo,
+        campaign.scheduled_at,
+      );
+      return this.skip(id, batchNo, 'not_due');
+    }
+
+    // (WIsb9Ytq) Reklama — HAR partiya oldidan tungi taqiq darvozasi: 17:59
+    // da boshlangan katta kampaniyaning 18:00 dan keyingi partiyalari ham
+    // tunda ketmaydi, oyna tugashiga suriladi (tashlanmaydi). Tranzaksion
+    // kampaniya bu yerdan o'tmaydi — tunda ham ketadi.
+    if (isPromoCategory(campaign.category)) {
+      const now = new Date();
+      const release = await this.promoRelease(now);
+      if (release.getTime() > now.getTime() + 1000) {
+        return this.deferForQuietHours(campaign, batchNo, release);
       }
+    }
+
+    if (pending) {
       let started: NotificationCampaign | null;
       try {
         started = await this.start(campaign);
@@ -591,6 +663,35 @@ export class CampaignService {
     return { campaign_id: id || null, batch_no: batchNo, skipped: reason };
   }
 
+  /**
+   * (WIsb9Ytq) Partiya tungi taqiq tugashiga suriladi: o'sha partiya raqami
+   * bilan outbox `scheduledAt` (RabbitMQ navbat argumentlari EMAS).
+   * Bekor qilingan/tugagan kampaniya — qayta navbatga qo'yilmaydi.
+   */
+  private async deferForQuietHours(
+    campaign: NotificationCampaign,
+    batchNo: number,
+    release: Date,
+  ) {
+    const id = String(campaign.id);
+    const res = await this.repo
+      .createQueryBuilder()
+      .update(NotificationCampaign)
+      .set({ paused_until: release })
+      .where('id = :id', { id })
+      .andWhere('batch_no = :batchNo', { batchNo })
+      .andWhere('status IN (:...active)', {
+        active: [...CAMPAIGN_CANCELLABLE_STATUSES],
+      })
+      .execute();
+    if (!res.affected) return this.skip(id, batchNo, 'not_active');
+    await this.enqueueBatch(this.repo.manager, id, batchNo, release);
+    this.logger.log(
+      `campaign ${id} batch ${batchNo}: reklama tungi taqiqi — ${release.toISOString()} ga surildi`,
+    );
+    return { ...this.skip(id, batchNo, 'quiet_hours'), resume_at: release };
+  }
+
   /** queued → running; auditoriya hajmi ishga tushish paytida qayta sanaladi. */
   private async start(
     campaign: NotificationCampaign,
@@ -614,6 +715,7 @@ export class CampaignService {
         started_at: () => 'now()',
         total,
         batch_attempts: 0,
+        paused_until: null,
       })
       .where('id = :id', { id: campaign.id })
       .andWhere('status IN (:...from)', { from: ['queued', 'draft'] })
@@ -662,6 +764,7 @@ export class CampaignService {
         batch_attempts: 0,
         cursor_after_id: lastId,
         last_error: null,
+        paused_until: null,
         ...(isLast
           ? {
               status: 'done' as CampaignStatus,
@@ -827,7 +930,123 @@ export class CampaignService {
       cancelled_at: row.cancelled_at,
       cancelled_by: row.cancelled_by,
       last_error: row.last_error,
+      // (WIsb9Ytq) ro'yxat holati va boshqaruv.
+      display_status: campaignDisplayStatus(row),
+      can_cancel: CAMPAIGN_CANCELLABLE_STATUSES.includes(row.status),
+      is_promo: isPromoCategory(row.category),
+      paused_until: row.paused_until ?? null,
+      timezone: CAMPAIGN_TIMEZONE,
+      scheduled_at_tashkent: toTashkentIso(row.scheduled_at),
     };
+  }
+
+  /**
+   * (WIsb9Ytq) `state` filtri → TypeORM `where` (OR ro'yxati). Holat qoidasi
+   * `campaignDisplayStatus` bilan bir xil.
+   */
+  private stateWhere(
+    state: CampaignDisplayStatus,
+  ): FindOptionsWhere<NotificationCampaign>[] {
+    const base = { isDeleted: false };
+    const now = new Date();
+    const pending = In(['queued', 'draft'] as CampaignStatus[]);
+    switch (state) {
+      case 'sent':
+        return [{ ...base, status: 'done' }];
+      case 'failed':
+      case 'cancelled':
+        return [{ ...base, status: state }];
+      case 'scheduled':
+        return [
+          { ...base, status: pending, scheduled_at: MoreThan(now) },
+          { ...base, status: pending, paused_until: MoreThan(now) },
+        ];
+      default: {
+        const notFuture = [IsNull(), LessThanOrEqual(now)];
+        return [
+          { ...base, status: 'running' },
+          ...notFuture.flatMap((scheduled) =>
+            notFuture.map((paused) => ({
+              ...base,
+              status: pending,
+              scheduled_at: scheduled,
+              paused_until: paused,
+            })),
+          ),
+        ];
+      }
+    }
+  }
+
+  /**
+   * (WIsb9Ytq) Rejalashtirish qoidasi — frontend DatePicker uchun: Toshkent
+   * zonasi, reklama taqiq oynasi (sozlamadan), va ixtiyoriy tekshiruv:
+   * `scheduled_at` (+ `type`/`category`) berilsa — haqiqiy yuborish lahzasi
+   * (taqiqqa tushsa "ertangi 09:00 ga suriladi"). Hech narsa yaratilmaydi.
+   */
+  async schedulePolicy(
+    input: {
+      scheduled_at?: string | null;
+      type?: string | null;
+      category?: string | null;
+    } = {},
+  ) {
+    try {
+      const window = this.quietHours;
+      const type = primitiveText(input?.type).trim();
+      let category = primitiveText(input?.category).trim() || null;
+      if (type && !category) {
+        if (!isKnownNotificationType(type)) {
+          throw new BadRequestException(notificationTypeErrorMessage(type));
+        }
+        category = resolveNotificationDefaults({ type }).category;
+      }
+      const promo = category ? isPromoCategory(category) : null;
+      const start = formatMinuteOfDay(window.start);
+      const end = formatMinuteOfDay(window.end);
+
+      const raw = primitiveText(input?.scheduled_at).trim();
+      let check: Record<string, unknown> | null = null;
+      if (raw) {
+        const requested = parseZonedInstant(raw);
+        const immediate = requested.getTime() <= Date.now();
+        const base = immediate ? new Date() : requested;
+        const effective = promo ? await this.promoRelease(base) : base;
+        const shifted = effective.getTime() > base.getTime();
+        check = {
+          requested_at: requested,
+          requested_at_tashkent: toTashkentIso(requested),
+          immediate,
+          effective_at: effective,
+          effective_at_tashkent: toTashkentIso(effective),
+          shifted,
+          reason: shifted ? 'promo_quiet_hours' : null,
+          message: shifted
+            ? `Reklama ${start}–${end} (Toshkent) oralig'ida yuborilmaydi — ${toTashkentIso(effective)?.slice(0, 16).replace('T', ' ')} ga suriladi`
+            : null,
+        };
+      }
+      return successRes(
+        {
+          timezone: CAMPAIGN_TIMEZONE,
+          utc_offset: '+05:00',
+          promo_quiet_hours: {
+            start,
+            end,
+            enabled: window.start !== window.end,
+            env: 'NOTIF_PROMO_QUIET_HOURS',
+          },
+          promo_categories: ['marketing'],
+          is_promo: promo,
+          max_schedule_days: CAMPAIGN_MAX_SCHEDULE_DAYS,
+          check,
+        },
+        200,
+        'Campaign schedule policy',
+      );
+    } catch (error) {
+      this.toRpcError(error);
+    }
   }
 
   private assertId(value: unknown): string {
@@ -854,6 +1073,7 @@ export class CampaignService {
       page?: number | string;
       limit?: number | string;
       status?: string;
+      state?: string;
     } = {},
   ) {
     try {
@@ -868,11 +1088,27 @@ export class CampaignService {
           `status: ${CAMPAIGN_STATUSES.join(' | ')}`,
         );
       }
+      // (WIsb9Ytq) `state` — ro'yxat holati (scheduled / sending / sent /
+      // failed / cancelled); `status` — xom holat. Ikkalasi birga — 400.
+      const state = input?.state ? String(input.state).trim() : '';
+      if (
+        state &&
+        !CAMPAIGN_DISPLAY_STATUSES.includes(state as CampaignDisplayStatus)
+      ) {
+        throw new BadRequestException(
+          `state: ${CAMPAIGN_DISPLAY_STATUSES.join(' | ')}`,
+        );
+      }
+      if (state && status) {
+        throw new BadRequestException('status yoki state — faqat bittasi');
+      }
       const [rows, total] = await this.repo.findAndCount({
-        where: {
-          isDeleted: false,
-          ...(status ? { status: status as CampaignStatus } : {}),
-        },
+        where: state
+          ? this.stateWhere(state as CampaignDisplayStatus)
+          : {
+              isDeleted: false,
+              ...(status ? { status: status as CampaignStatus } : {}),
+            },
         order: { createdAt: 'DESC', id: 'DESC' },
         skip: (page - 1) * limit,
         take: limit,

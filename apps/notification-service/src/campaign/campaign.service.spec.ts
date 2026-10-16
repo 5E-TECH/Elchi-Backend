@@ -466,6 +466,8 @@ describe('xHPdpj0W — CampaignService', () => {
         'notification.campaign.create',
         'notification.campaign.get',
         'notification.campaign.list',
+        // (WIsb9Ytq) rejalashtirish qoidasi / vaqt tekshiruvi.
+        'notification.campaign.schedule_policy',
       ].sort(),
     );
   });

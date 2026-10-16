@@ -133,6 +133,15 @@ export class NotificationCampaign extends BaseEntity {
   @Column({ type: 'timestamptz', nullable: true })
   cancelled_at!: Date | null;
 
+  /**
+   * (WIsb9Ytq) Reklama kampaniyasi tungi taqiq oynasiga tushdi — keyingi
+   * partiya shu lahzaga (oyna tugashi, Toshkent 09:00) outbox `scheduledAt`
+   * bilan surilgan. Tashlanmaydi; partiya ketishi bilan NULL. Migratsiya
+   * 1716000000106.
+   */
+  @Column({ type: 'timestamptz', nullable: true })
+  paused_until!: Date | null;
+
   @Column({ type: 'bigint', nullable: true })
   cancelled_by!: string | null;
 
