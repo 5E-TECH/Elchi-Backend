@@ -3900,6 +3900,16 @@
         "operationId": "OrderGatewayController_listExtraCostApprovals",
         "parameters": [
           {
+            "name": "auto_approved",
+            "required": false,
+            "in": "query",
+            "description": "(1tnpaIqd) true — faqat muddat o'tib AVTOMATIK tasdiqlanganlar (e'tiroz/rollback uchun alohida filtr)",
+            "schema": {
+              "example": "true",
+              "type": "string"
+            }
+          },
+          {
             "name": "status",
             "required": false,
             "in": "query",
@@ -19488,6 +19498,17 @@
           "comment": {
             "type": "string",
             "example": "Tasdiqlandi"
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "TOO_EXPENSIVE",
+              "NOT_AGREED",
+              "NO_PROOF",
+              "DUPLICATE"
+            ],
+            "example": "TOO_EXPENSIVE",
+            "description": "(DuST9k8j) Faqat /reject uchun: rad etish sababi — YOPIQ ro'yxat (boshqa qiymat → 400)."
           }
         }
       },

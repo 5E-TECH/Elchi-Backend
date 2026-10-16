@@ -23,6 +23,26 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-10-17 — Qo'shimcha xarajat: atomik qaror, avtomatik tasdiq, Telegram DM (DuST9k8j, 1tnpaIqd)
+
+- [2026-10-17] ✏️ [order] — `POST /orders/extra-cost-approvals/:id/reject` —
+  yangi ixtiyoriy `reason`: `TOO_EXPENSIVE | NOT_AGREED | NO_PROOF | DUPLICATE`
+  (boshqa qiymat → 400). 🔧 Rad etish modalida erkin matn o'rniga shu ro'yxat
+  (izoh ixtiyoriy qoladi).
+- [2026-10-17] ✏️ [order] — approval obyektida yangi maydonlar:
+  `auto_approved: boolean`, `reject_reason: string | null`.
+  `GET /orders/extra-cost-approvals?auto_approved=true` — avtomatik
+  tasdiqlanganlar filtri. 🔧 Ro'yxat va buyurtma tarixida "⏱ avtomatik
+  tasdiqlangan" belgisi + alohida filtr.
+- [2026-10-17] ⚠️ [order] — qaror endi atomik: parallel/takroriy qaror —
+  400 "Bu so'rov allaqachon yakunlangan" (avval ikkinchi qaror ham yozilardi).
+  🔧 Bu xabarni xato emas, "allaqachon hal qilingan" deb ko'rsatib ro'yxatni
+  yangilang.
+- [2026-10-17] 🆕 [notification] — yangi turlar: `order.extra_cost_requested`,
+  `order.extra_cost_reminder`, `order.extra_cost_auto_approved` (marketga,
+  in-app + realtime + Telegram). 🔧 Ikonka/yorliq; bosilganda tasdiq
+  sahifasiga (`data.approval_id`).
+
 ### 2026-10-17 — Telegram bot: kuryer oqimi (h9newLsd, MO2MLPGo, z2FRwu2c, 4BirMSVp, VICfJuoi)
 
 - [2026-10-17] 🟢 [bot] — kuryer botda: `/ishim` (bugungi topshiriqlar

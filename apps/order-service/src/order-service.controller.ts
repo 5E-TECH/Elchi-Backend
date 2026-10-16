@@ -680,12 +680,14 @@ export class OrderServiceController {
     data: {
       requester: { id: string; roles?: string[] };
       status?: string;
+      auto_approved?: boolean;
     },
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
       this.lifecycleService.listExtraCostApprovals(data.requester, {
         status: data.status,
+        auto_approved: data.auto_approved,
       }),
     );
   }
@@ -714,7 +716,7 @@ export class OrderServiceController {
     @Payload()
     data: {
       id: string;
-      dto?: { comment?: string };
+      dto?: { comment?: string; reason?: string };
       requester: { id: string; roles?: string[] };
     },
     @Ctx() context: RmqContext,

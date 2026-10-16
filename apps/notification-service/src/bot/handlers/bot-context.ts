@@ -35,6 +35,8 @@ export interface BotActionHandler {
   readonly action: string;
   /** Muddati o'tgan tugma uchun maxsus matn (bo'lmasa umumiy). */
   readonly expiredText?: string;
+  /** Tugma boshqa odamga tegishli bo'lsa (bo'lmasa umumiy). */
+  readonly foreignText?: string;
   handle(ctx: BotContext, action: TelegramBotAction): Promise<void>;
 }
 

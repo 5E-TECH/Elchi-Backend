@@ -40,6 +40,7 @@ import { CourierService } from './bot/courier/courier.service';
 import { CourierReportScheduler } from './bot/courier/courier-report.scheduler';
 import { CourierActions, CourierHandler } from './bot/courier/courier.handler';
 import { BOT_ACTION_HANDLERS } from './bot/handlers/bot-context';
+import { ExtraCostActions } from './bot/extra-cost/extra-cost.actions';
 import { TelegramOrderCard } from './entities/telegram-order-card.entity';
 import { TelegramLinkToken } from './entities/telegram-link-token.entity';
 import { TelegramSession } from './entities/telegram-session.entity';
@@ -119,6 +120,8 @@ import { RecipientDirectoryService } from './recipients/recipient-directory.serv
     // Web push yetkazish: outbox o'z navbatimizga `notification.push.deliver`
     // yuboradi (dispatch javobni kutmaydi, qayta urinish/backoff outbox'da).
     RmqModule.register({ name: 'NOTIFICATION' }),
+    // (DuST9k8j) isbot fayllarini Telegram DM'ga biriktirish (file.read).
+    RmqModule.register({ name: 'FILE' }),
     DatabaseModule,
     // SMS navbati va balans monitori cron'lari (3fRbyadQ #4, 8auPBa1O #7),
     // inbox retention (A1HzKEby #3, sukut o'chiq).
@@ -193,10 +196,14 @@ import { RecipientDirectoryService } from './recipients/recipient-directory.serv
     CourierHandler,
     CourierActions,
     CourierReportScheduler,
+    ExtraCostActions,
     {
       provide: BOT_ACTION_HANDLERS,
-      useFactory: (courier: CourierActions) => [...courier.handlers],
-      inject: [CourierActions],
+      useFactory: (courier: CourierActions, extraCost: ExtraCostActions) => [
+        ...courier.handlers,
+        ...extraCost.handlers,
+      ],
+      inject: [CourierActions, ExtraCostActions],
     },
     BotRouterService,
     BotRuntimeService,

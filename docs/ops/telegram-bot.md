@@ -134,3 +134,25 @@ bazasiga o'zi yozmaydi, doira/holat mashinasi/isbot/extra-cost — serverda.
 - Avtomatik kunlik hisobot: `COURIER_DAILY_REPORT_CRON` (Asia/Tashkent, bo'sh —
   o'chiq); faqat ulangan kuryerlarga, kuniga bitta (deterministik
   `client_request_id`); botni bloklagan chat o'tkaziladi.
+
+## 8. Qo'shimcha xarajat tasdig'i (DuST9k8j, 1tnpaIqd)
+
+- So'rov yaratilganda order-service `order.extra_cost_requested` ni outbox
+  orqali ko'taradi (best-effort — kuryerning 202 javobi o'zgarmaydi):
+  market EGASIGA in-app + Telegram DM. Isbot: 1 fayl — rasm/video + izoh +
+  ✅/❌ bitta postda; ko'p — albom + alohida xabarda tugmalar.
+- ✅ / ❌ → `POST /orders/extra-cost-approvals/:id/approve|reject` market JWT'si
+  bilan; rad etish sababi — yopiq ro'yxat (`ExtraCostRejectReason`:
+  TOO_EXPENSIVE, NOT_AGREED, NO_PROOF, DUPLICATE; boshqasi 400).
+- Qaror ATOMIK (`UPDATE … WHERE status='pending'`): ikki bosish / panel bilan
+  bir vaqtda → bittasi o'tadi, ikkinchisi "allaqachon yakunlangan"; biznes amali
+  xato bersa so'rov `pending` ga qaytadi. Qarordan keyin DM tugmalari olinadi.
+- EGA QARORI — avtomatik tasdiq: `EXTRA_COST_AUTO_APPROVE_MINUTES` (bo'sh —
+  o'chiq), `EXTRA_COST_AUTO_APPROVE_REMINDER_MINUTES` (sukut 10) qolganda
+  eslatma (`order.extra_cost_reminder`, bir marta). Avtomatik tasdiq:
+  `auto_approved=true`, `decided_by_user_id=NULL`, sabab matni, audit
+  (`order.extra_cost_auto_approved`), marketga xabar. Ro'yxat filtri:
+  `GET /orders/extra-cost-approvals?status=approved&auto_approved=true`;
+  e'tiroz bo'lsa admin buyurtmani mavjud `POST /orders/rollback/:id` bilan
+  qaytaradi. ⚠️ Xodim ishdan bo'shaganda uni Telegram guruhidan chiqarish —
+  tashkiliy qadam.

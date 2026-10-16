@@ -25,6 +25,7 @@ import {
   normalizeUzPhone,
   Order_status,
   Where_deliver,
+  ExtraCostRejectReason,
 } from '@app/common';
 
 /**
@@ -840,7 +841,18 @@ export class ExtraCostApprovalDecisionDto {
   @ApiPropertyOptional({ example: 'Tasdiqlandi' })
   @IsOptional()
   @IsString()
+  @MaxLength(500)
   comment?: string;
+
+  @ApiPropertyOptional({
+    enum: ExtraCostRejectReason,
+    example: ExtraCostRejectReason.TOO_EXPENSIVE,
+    description:
+      "(DuST9k8j) Faqat /reject uchun: rad etish sababi — YOPIQ ro'yxat (boshqa qiymat → 400).",
+  })
+  @IsOptional()
+  @IsEnum(ExtraCostRejectReason)
+  reason?: ExtraCostRejectReason;
 }
 
 export class CouldNotDeliverOrderRequestDto {

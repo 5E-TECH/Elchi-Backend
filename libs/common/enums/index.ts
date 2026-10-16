@@ -155,6 +155,26 @@ export enum Order_status {
  * bo'lmasdi. Kod `orders.return_reason` ga yoziladi; `OTHER` da erkin matn
  * (`comment`) majburiy.
  */
+/**
+ * (DuST9k8j #3) Qo'shimcha xarajatni rad etish sabablari — YOPIQ ro'yxat
+ * (bot va panel bir xil; erkin matn sabab sifatida qabul qilinmaydi — 400).
+ */
+export enum ExtraCostRejectReason {
+  TOO_EXPENSIVE = 'TOO_EXPENSIVE',
+  NOT_AGREED = 'NOT_AGREED',
+  NO_PROOF = 'NO_PROOF',
+  DUPLICATE = 'DUPLICATE',
+}
+
+export const EXTRA_COST_REJECT_REASON_LABELS: Readonly<
+  Record<ExtraCostRejectReason, string>
+> = Object.freeze({
+  [ExtraCostRejectReason.TOO_EXPENSIVE]: 'Summa juda katta',
+  [ExtraCostRejectReason.NOT_AGREED]: 'Xarajat kelishilmagan',
+  [ExtraCostRejectReason.NO_PROOF]: 'Isbot yetarli emas',
+  [ExtraCostRejectReason.DUPLICATE]: "Takroriy so'rov",
+});
+
 export enum CancelReason {
   CUSTOMER_NO_ANSWER = 'CUSTOMER_NO_ANSWER',
   CUSTOMER_REFUSED = 'CUSTOMER_REFUSED',

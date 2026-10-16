@@ -219,6 +219,13 @@ export const identityValidationSchema = Joi.object({
 
 export const orderValidationSchema = Joi.object({
   ...observabilityKeys,
+  // (1tnpaIqd, ega qarori) market javob bermasa qo'shimcha xarajat shuncha
+  // daqiqadan keyin AVTOMATIK tasdiqlanadi; berilmasa — o'chiq.
+  EXTRA_COST_AUTO_APPROVE_MINUTES: Joi.number().integer().min(1).optional(),
+  EXTRA_COST_AUTO_APPROVE_REMINDER_MINUTES: Joi.number()
+    .integer()
+    .min(1)
+    .default(10),
   POSTGRES_URI: Joi.string().required(),
   DB_SCHEMA: Joi.string().default('order_schema'),
   RABBITMQ_URI: Joi.string().required(),
@@ -280,6 +287,8 @@ export const notificationValidationSchema = Joi.object({
   // Optional: gateway queue for realtime socket.io push. When unset, in-app
   // notifications are still persisted; only the live push is skipped.
   RABBITMQ_GATEWAY_QUEUE: Joi.string().optional(),
+  // (DuST9k8j) isbot fayllari (file.read) — Telegram DM'ga biriktirish.
+  RABBITMQ_FILE_QUEUE: Joi.string().optional(),
   TELEGRAM_BOT_TOKEN: Joi.string().optional(),
   // (rCFZAmOz) Shaxsiy Telegram ulash: deep link uchun bot username (@siz).
   // TELEGRAM_LINK_SECRET endi ISHLATILMAYDI (6jXw0DDr: bir martalik DB kodi)

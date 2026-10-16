@@ -56,4 +56,20 @@ export class OrderExtraCostApproval extends BaseEntity {
 
   @Column({ type: 'text', nullable: true })
   decision_comment!: string | null;
+
+  /**
+   * (1tnpaIqd, ega qarori) Muddat (EXTRA_COST_AUTO_APPROVE_MINUTES) o'tib
+   * AVTOMATIK tasdiqlangan — `decided_by_user_id` NULL; hisobot va buyurtma
+   * tarixida "avtomatik tasdiqlangan" deb ko'rinadi.
+   */
+  @Column({ type: 'boolean', default: false })
+  auto_approved!: boolean;
+
+  /** Avtomatik tasdiqdan oldingi oxirgi eslatma (bir marta). */
+  @Column({ type: 'timestamptz', nullable: true })
+  reminder_sent_at!: Date | null;
+
+  /** (DuST9k8j) Rad etish sababi — ExtraCostRejectReason (yopiq ro'yxat). */
+  @Column({ type: 'varchar', length: 40, nullable: true })
+  reject_reason!: string | null;
 }

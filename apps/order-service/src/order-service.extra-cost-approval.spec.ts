@@ -36,6 +36,25 @@ describe('OrderServiceService extra cost approval flow', () => {
         ...entity,
       })),
       find: jest.fn().mockResolvedValue([]),
+      // (1tnpaIqd) qaror atomik shartli UPDATE bilan — yozilgan patch'lar.
+      claims: [] as Array<Record<string, unknown>>,
+      createQueryBuilder: jest.fn(() => {
+        let patch: Record<string, unknown> = {};
+        const qb = {
+          update: () => qb,
+          set: (value: Record<string, unknown>) => {
+            patch = value;
+            return qb;
+          },
+          where: () => qb,
+          returning: () => qb,
+          execute: () => {
+            extraCostApprovalRepo.claims.push(patch);
+            return Promise.resolve({ affected: 1 });
+          },
+        };
+        return qb;
+      }),
     };
     const logisticsClient = {
       send: jest.fn(() => of({ data: { id: '9001', courier_id: '301' } })),
@@ -250,13 +269,15 @@ describe('OrderServiceService extra cost approval flow', () => {
       expect.objectContaining({ extraCost: 12000, extraCostApproved: true }),
       'extra-cost-approval:approval-7',
     );
-    expect(extraCostApprovalRepo.save).toHaveBeenCalledWith(
+    // (1tnpaIqd) qaror atomik UPDATE bilan yoziladi (save emas).
+    expect(extraCostApprovalRepo.claims).toEqual([
       expect.objectContaining({
         status: 'approved',
         decided_by_user_id: '501',
         decided_at: expect.any(Date),
+        auto_approved: false,
       }),
-    );
+    ]);
   });
 
   it('market reject qilsa amal bajarilmaydi va so‘rov rejected bo‘ladi', async () => {
@@ -285,11 +306,11 @@ describe('OrderServiceService extra cost approval flow', () => {
 
     expect(res.statusCode).toBe(200);
     expect(cancelSpy).not.toHaveBeenCalled();
-    expect(extraCostApprovalRepo.save).toHaveBeenCalledWith(
+    expect(extraCostApprovalRepo.claims).toEqual([
       expect.objectContaining({
         status: 'rejected',
         decision_comment: 'Tasdiqlanmadi',
       }),
-    );
+    ]);
   });
 });

@@ -379,6 +379,50 @@ export const NOTIFICATION_TYPES: readonly NotificationTypeDefinition[] =
       default_audience: [Roles.SUPERADMIN, Roles.ADMIN],
       user_can_mute: false,
     }),
+    // (DuST9k8j / 1tnpaIqd) Qo'shimcha xarajat — market EGASIGA (DM tugmalar
+    // bilan); eslatma va avtomatik tasdiq ham shu guruhda (bitta qator).
+    def({
+      key: 'order.extra_cost_requested',
+      category: NotificationCategory.ORDER,
+      priority: NotificationPriority.HIGH,
+      group_key_pattern: 'extra_cost:{{approval_id}}',
+      label_uz: "Qo'shimcha xarajat tasdig'i so'raldi",
+      default_audience: [Roles.MARKET],
+      user_can_mute: false,
+      default_channels: [
+        NotificationChannel.IN_APP,
+        NotificationChannel.REALTIME,
+        NotificationChannel.TELEGRAM,
+      ],
+    }),
+    def({
+      key: 'order.extra_cost_reminder',
+      category: NotificationCategory.ORDER,
+      priority: NotificationPriority.HIGH,
+      group_key_pattern: 'extra_cost:{{approval_id}}',
+      label_uz: "Qo'shimcha xarajat: avtomatik tasdiq yaqin",
+      default_audience: [Roles.MARKET],
+      user_can_mute: false,
+      default_channels: [
+        NotificationChannel.IN_APP,
+        NotificationChannel.REALTIME,
+        NotificationChannel.TELEGRAM,
+      ],
+    }),
+    def({
+      key: 'order.extra_cost_auto_approved',
+      category: NotificationCategory.ORDER,
+      priority: NotificationPriority.HIGH,
+      group_key_pattern: 'extra_cost:{{approval_id}}',
+      label_uz: "Qo'shimcha xarajat avtomatik tasdiqlandi",
+      default_audience: [Roles.MARKET],
+      user_can_mute: false,
+      default_channels: [
+        NotificationChannel.IN_APP,
+        NotificationChannel.REALTIME,
+        NotificationChannel.TELEGRAM,
+      ],
+    }),
     // (4BirMSVp) Kuryerning kunlik hisoboti — /kun yoki avtomatik; Telegram
     // DM sukut kanallardan biri (bot o'zi xabar yasamaydi — yadro orqali).
     def({

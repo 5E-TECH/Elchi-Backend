@@ -32,7 +32,9 @@ import {
   BranchTransferDirection,
   CancelReason,
   Cashbox_type,
+  EXTRA_COST_REJECT_REASON_LABELS,
   ExpenseProofCondition,
+  ExtraCostRejectReason,
   Operation_type,
   Order_status,
   OutboxService,
@@ -42,10 +44,12 @@ import {
   Source_type,
   Where_deliver,
   normalizeUzPhone,
+  requestContext,
   rmqSend,
   RMQ_SERVICE_TIMEOUT,
   resolvePartnerMoneyFields,
 } from '@app/common';
+
 import type { EntityManager } from 'typeorm';
 import { successRes } from '../../../../libs/common/helpers/response';
 import {
@@ -66,6 +70,10 @@ import {
 import { OrderLookupService } from '../lookup/order-lookup.service';
 import { OrderCustodyService } from '../custody/order-custody.service';
 import { OrderNotificationService } from '../notification/order-notification.service';
+import {
+  enqueueExtraCostNotification,
+  formatSom,
+} from '../notification/extra-cost-notifications';
 import {
   matchPartlySellItems,
   type PartlySellRequestItem,
@@ -1606,6 +1614,9 @@ export class OrderLifecycleService {
         : null,
       decided_at: approval.decided_at,
       decision_comment: approval.decision_comment,
+      // (1tnpaIqd) avtomatik tasdiq qo'lda tasdiqdan ajratiladi.
+      auto_approved: Boolean(approval.auto_approved),
+      reject_reason: approval.reject_reason ?? null,
       createdAt: approval.createdAt,
       updatedAt: approval.updatedAt,
     };
@@ -1751,6 +1762,9 @@ export class OrderLifecycleService {
       status: 'pending',
     });
     const saved = await this.extraCostApprovalRepo.save(approval);
+    // (DuST9k8j #2) market EGASIGA xabar (in-app + Telegram DM, tugmalar
+    // bilan). BEST-EFFORT: yuborib bo'lmasa ham kuryerning 202 javobi o'zgarmaydi.
+    await this.notifyExtraCostRequested(saved, order);
     return successRes(
       {
         approval_required: true,
@@ -1759,6 +1773,71 @@ export class OrderLifecycleService {
       202,
       "Market tasdig'i kutilmoqda",
     );
+  }
+
+  /**
+   * (DuST9k8j) `order.extra_cost_requested` → bildirishnoma yadrosi (outbox).
+   * Qabul qiluvchi — market EGASI (`market_id`; market_operator tasdiqlay
+   * olmaydi). Telegram: isbot fayllari (1 — rasm+izoh+tugma bitta postda,
+   * ko'p — albom + alohida xabarda tugmalar) va ✅/❌ tugmalari.
+   */
+  private async notifyExtraCostRequested(
+    approval: OrderExtraCostApproval,
+    order: Order,
+  ): Promise<void> {
+    try {
+      const actionLabel =
+        approval.action === 'cancel'
+          ? 'Bekor qilish'
+          : approval.action === 'partly_sell'
+            ? 'Qisman sotuv'
+            : 'Sotuv';
+      const courierName = requestContext.get()?.userName;
+      await enqueueExtraCostNotification(this.outbox, {
+        type: 'order.extra_cost_requested',
+        approvalId: String(approval.id),
+        orderId: String(approval.order_id),
+        marketId: String(approval.market_id),
+        title: `Qo'shimcha xarajat: buyurtma #${approval.order_id}`,
+        body: [
+          `Amal: ${actionLabel}`,
+          `Summa: ${formatSom(approval.amount)}`,
+          courierName ? `Kuryer: ${courierName}` : null,
+          `Buyurtma summasi: ${formatSom(order.total_price)}`,
+        ]
+          .filter(Boolean)
+          .join('\n'),
+        data: {
+          action: approval.action,
+          amount: Number(approval.amount ?? 0),
+          telegram_media: (approval.proof_file_keys ?? []).slice(0, 10),
+          telegram_buttons: [
+            [
+              {
+                // Bir martalik EMAS: takroriy bosish — serverda atomik
+                // "allaqachon yakunlangan" (1tnpaIqd).
+                text: '✅ Tasdiqlash',
+                action: 'ec.ok',
+                payload: { approval_id: String(approval.id) },
+                order_id: String(approval.order_id),
+                one_shot: false,
+              },
+              {
+                text: '❌ Rad etish',
+                action: 'ec.no',
+                payload: { approval_id: String(approval.id) },
+                order_id: String(approval.order_id),
+                one_shot: false,
+              },
+            ],
+          ],
+        },
+      });
+    } catch (error) {
+      this.logger.warn(
+        `order.extra_cost_requested bildirishnomasi navbatga qo'yilmadi (approval ${approval.id}): ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
   }
 
   private assertCanDecideExtraCostApproval(
@@ -1782,13 +1861,17 @@ export class OrderLifecycleService {
 
   async listExtraCostApprovals(
     requester: { id: string; roles?: string[] },
-    filters?: { status?: string },
+    filters?: { status?: string; auto_approved?: boolean },
   ) {
     const status = String(filters?.status ?? 'pending').toLowerCase();
     const where: Record<string, unknown> = {
       status,
       isDeleted: false,
     };
+    // (1tnpaIqd #4) avtomatik tasdiqlanganlar — alohida filtr.
+    if (typeof filters?.auto_approved === 'boolean') {
+      where.auto_approved = filters.auto_approved;
+    }
     if (
       !this.hasRole(requester, Roles.SUPERADMIN) &&
       !this.hasRole(requester, Roles.ADMIN)
@@ -1810,10 +1893,22 @@ export class OrderLifecycleService {
     );
   }
 
+  /**
+   * (1tnpaIqd) Qaror ATOMIK: avval shartli UPDATE (`status = 'pending'`
+   * bo'lsa) — ikki parallel bosishdan (yoki approve + reject) faqat BITTASI
+   * o'tadi; ikkinchisi "allaqachon yakunlangan" va biznes amali UMUMAN
+   * chaqirilmaydi. Biznes amali (sell/cancel/partly_sell) faqat UPDATE
+   * muvaffaqiyatli bo'lgandan KEYIN; u xato bersa — so'rov `pending` ga
+   * qaytariladi (qayta urinish mumkin).
+   *
+   * `auto` — muddat o'tib avtomatik tasdiq (ega qarori): `decided_by_user_id`
+   * NULL, `auto_approved = true`, sabab matni bilan.
+   */
   async approveExtraCostApproval(
-    requester: { id: string; roles?: string[] },
+    requester: { id: string; roles?: string[] } | null,
     approvalId: string,
     dto?: { comment?: string },
+    options: { auto?: boolean } = {},
   ) {
     const approval = await this.extraCostApprovalRepo.findOne({
       where: { id: String(approvalId), isDeleted: false },
@@ -1821,8 +1916,27 @@ export class OrderLifecycleService {
     if (!approval) {
       this.notFound('Extra cost approval not found');
     }
-    this.assertCanDecideExtraCostApproval(requester, approval);
+    if (!options.auto) {
+      this.assertCanDecideExtraCostApproval(requester!, approval);
+    }
+    // Tezkor rad (o'qilgan holat); haqiqiy himoya — pastdagi atomik UPDATE.
     if (approval.status !== 'pending') {
+      this.badRequest("Bu so'rov allaqachon yakunlangan");
+    }
+    const decidedAt = new Date();
+    const comment = options.auto
+      ? (dto?.comment ??
+        'Muddat ichida javob berilmadi — avtomatik tasdiqlandi')
+      : (dto?.comment ?? null);
+    const claimed = await this.claimExtraCostDecision(approval.id, {
+      status: 'approved',
+      decided_by_user_id: options.auto ? null : String(requester!.id),
+      decided_at: decidedAt,
+      decision_comment: comment,
+      auto_approved: Boolean(options.auto),
+      reject_reason: null,
+    });
+    if (!claimed) {
       this.badRequest("Bu so'rov allaqachon yakunlangan");
     }
 
@@ -1837,48 +1951,89 @@ export class OrderLifecycleService {
     } as any;
 
     let result: unknown;
-    if (approval.action === 'cancel') {
-      result = await this.cancelOrder(
-        actor,
-        String(approval.order_id),
-        payload,
-        `extra-cost-approval:${approval.id}`,
-      );
-    } else if (approval.action === 'partly_sell') {
-      result = await this.partlySellOrder(
-        actor,
-        String(approval.order_id),
-        payload,
-        `extra-cost-approval:${approval.id}`,
-      );
-    } else {
-      result = await this.sellOrder(
-        actor,
-        String(approval.order_id),
-        payload,
-        `extra-cost-approval:${approval.id}`,
-      );
+    try {
+      if (approval.action === 'cancel') {
+        result = await this.cancelOrder(
+          actor,
+          String(approval.order_id),
+          payload,
+          `extra-cost-approval:${approval.id}`,
+        );
+      } else if (approval.action === 'partly_sell') {
+        result = await this.partlySellOrder(
+          actor,
+          String(approval.order_id),
+          payload,
+          `extra-cost-approval:${approval.id}`,
+        );
+      } else {
+        result = await this.sellOrder(
+          actor,
+          String(approval.order_id),
+          payload,
+          `extra-cost-approval:${approval.id}`,
+        );
+      }
+    } catch (error) {
+      // Kompensatsiya: faqat O'ZIMIZ yozgan qarorni qaytaramiz.
+      await this.extraCostApprovalRepo
+        .createQueryBuilder()
+        .update(OrderExtraCostApproval)
+        .set({
+          status: 'pending',
+          decided_by_user_id: null,
+          decided_at: null,
+          decision_comment: null,
+          auto_approved: false,
+        })
+        .where('id = :id AND status = :status AND decided_at = :decidedAt', {
+          id: approval.id,
+          status: 'approved',
+          decidedAt,
+        })
+        .execute()
+        .catch(() => undefined);
+      throw error;
     }
 
-    approval.status = 'approved';
-    approval.decided_by_user_id = String(requester.id);
-    approval.decided_at = new Date();
-    approval.decision_comment = dto?.comment ?? null;
-    await this.extraCostApprovalRepo.save(approval);
+    Object.assign(approval, {
+      status: 'approved',
+      decided_by_user_id: options.auto ? null : String(requester!.id),
+      decided_at: decidedAt,
+      decision_comment: comment,
+      auto_approved: Boolean(options.auto),
+    });
+    if (options.auto) {
+      // (1tnpaIqd #5) avtomatik tasdiq HAR DOIM audit iziga.
+      await this.activityLog
+        .log({
+          entity_type: 'Order',
+          entity_id: String(approval.order_id),
+          action: 'order.extra_cost_auto_approved',
+          metadata: {
+            approval_id: String(approval.id),
+            amount: Number(approval.amount ?? 0),
+            market_id: String(approval.market_id),
+          },
+        })
+        .catch(() => undefined);
+    }
     return successRes(
       {
         approval: this.serializeExtraCostApproval(approval),
         operation: result,
       },
       200,
-      "Qo'shimcha xarajat tasdiqlandi",
+      options.auto
+        ? "Qo'shimcha xarajat avtomatik tasdiqlandi"
+        : "Qo'shimcha xarajat tasdiqlandi",
     );
   }
 
   async rejectExtraCostApproval(
     requester: { id: string; roles?: string[] },
     approvalId: string,
-    dto?: { comment?: string },
+    dto?: { comment?: string; reason?: string },
   ) {
     const approval = await this.extraCostApprovalRepo.findOne({
       where: { id: String(approvalId), isDeleted: false },
@@ -1890,16 +2045,159 @@ export class OrderLifecycleService {
     if (approval.status !== 'pending') {
       this.badRequest("Bu so'rov allaqachon yakunlangan");
     }
-    approval.status = 'rejected';
-    approval.decided_by_user_id = String(requester.id);
-    approval.decided_at = new Date();
-    approval.decision_comment = dto?.comment ?? null;
-    await this.extraCostApprovalRepo.save(approval);
+    const reason = dto?.reason ? String(dto.reason) : null;
+    if (
+      reason &&
+      !(Object.values(ExtraCostRejectReason) as string[]).includes(reason)
+    ) {
+      this.badRequest("Rad etish sababi noto'g'ri (yopiq ro'yxatdan tanlang)");
+    }
+    const label = reason
+      ? EXTRA_COST_REJECT_REASON_LABELS[reason as ExtraCostRejectReason]
+      : null;
+    const comment =
+      [label, dto?.comment?.trim()].filter(Boolean).join(' — ') || null;
+    const decidedAt = new Date();
+    const claimed = await this.claimExtraCostDecision(approval.id, {
+      status: 'rejected',
+      decided_by_user_id: String(requester.id),
+      decided_at: decidedAt,
+      decision_comment: comment,
+      auto_approved: false,
+      reject_reason: reason,
+    });
+    if (!claimed) {
+      this.badRequest("Bu so'rov allaqachon yakunlangan");
+    }
+    Object.assign(approval, {
+      status: 'rejected',
+      decided_by_user_id: String(requester.id),
+      decided_at: decidedAt,
+      decision_comment: comment,
+      reject_reason: reason,
+    });
     return successRes(
       { approval: this.serializeExtraCostApproval(approval) },
       200,
       "Qo'shimcha xarajat rad etildi",
     );
+  }
+
+  /**
+   * `UPDATE … WHERE id AND status = 'pending' AND is_deleted = false
+   * RETURNING id` — affected=0 → boshqa qaror allaqachon yozilgan.
+   */
+  private async claimExtraCostDecision(
+    approvalId: string,
+    patch: Partial<OrderExtraCostApproval>,
+  ): Promise<boolean> {
+    const result = await this.extraCostApprovalRepo
+      .createQueryBuilder()
+      .update(OrderExtraCostApproval)
+      .set(patch as never)
+      .where('id = :id AND status = :pending AND is_deleted = false', {
+        id: String(approvalId),
+        pending: 'pending',
+      })
+      .returning(['id'])
+      .execute();
+    return (result.affected ?? 0) > 0;
+  }
+
+  /**
+   * (1tnpaIqd, ega qarori) Avtomatik tasdiq skaneri — `ExtraCostAutoApproveScheduler`
+   * har daqiqada chaqiradi. `minutes` — EXTRA_COST_AUTO_APPROVE_MINUTES
+   * (kodga qotirilmagan); `reminderMinutes` qolganda marketga oxirgi eslatma
+   * (bir marta, `reminder_sent_at` shartli UPDATE bilan).
+   */
+  async runExtraCostAutoApproval(params: {
+    minutes: number;
+    reminderMinutes: number;
+    now?: Date;
+    limit?: number;
+  }): Promise<{ reminded: number; approved: number; failed: number }> {
+    const now = params.now ?? new Date();
+    const stats = { reminded: 0, approved: 0, failed: 0 };
+    if (!(params.minutes > 0)) return stats;
+    const deadline = new Date(now.getTime() - params.minutes * 60_000);
+    const reminderAt = new Date(
+      now.getTime() -
+        Math.max(0, params.minutes - params.reminderMinutes) * 60_000,
+    );
+    if (params.reminderMinutes > 0 && params.reminderMinutes < params.minutes) {
+      const due = await this.extraCostApprovalRepo
+        .createQueryBuilder('a')
+        .where('a.status = :pending AND a.is_deleted = false', {
+          pending: 'pending',
+        })
+        .andWhere('a.reminder_sent_at IS NULL')
+        .andWhere('a.createdAt <= :reminderAt AND a.createdAt > :deadline', {
+          reminderAt,
+          deadline,
+        })
+        .orderBy('a.createdAt', 'ASC')
+        .take(params.limit ?? 100)
+        .getMany();
+      for (const approval of due) {
+        const marked = await this.extraCostApprovalRepo
+          .createQueryBuilder()
+          .update(OrderExtraCostApproval)
+          .set({ reminder_sent_at: now })
+          .where(
+            'id = :id AND reminder_sent_at IS NULL AND status = :pending',
+            {
+              id: approval.id,
+              pending: 'pending',
+            },
+          )
+          .execute();
+        if (!marked.affected) continue;
+        stats.reminded += 1;
+        await enqueueExtraCostNotification(this.outbox, {
+          type: 'order.extra_cost_reminder',
+          approvalId: String(approval.id),
+          orderId: String(approval.order_id),
+          marketId: String(approval.market_id),
+          title: `⏰ Qo'shimcha xarajat: buyurtma #${approval.order_id}`,
+          body: `${params.reminderMinutes} daqiqada javob bermasangiz ${formatSom(approval.amount)} AVTOMATIK tasdiqlanadi.`,
+        }).catch((error: unknown) =>
+          this.logger.warn(
+            `order.extra_cost_reminder navbatga qo'yilmadi: ${error instanceof Error ? error.message : String(error)}`,
+          ),
+        );
+      }
+    }
+    const expired = await this.extraCostApprovalRepo
+      .createQueryBuilder('a')
+      .where('a.status = :pending AND a.is_deleted = false', {
+        pending: 'pending',
+      })
+      .andWhere('a.createdAt <= :deadline', { deadline })
+      .orderBy('a.createdAt', 'ASC')
+      .take(params.limit ?? 100)
+      .getMany();
+    for (const approval of expired) {
+      try {
+        await this.approveExtraCostApproval(null, approval.id, undefined, {
+          auto: true,
+        });
+        stats.approved += 1;
+        await enqueueExtraCostNotification(this.outbox, {
+          type: 'order.extra_cost_auto_approved',
+          approvalId: String(approval.id),
+          orderId: String(approval.order_id),
+          marketId: String(approval.market_id),
+          title: `Qo'shimcha xarajat avtomatik tasdiqlandi: #${approval.order_id}`,
+          body: `${formatSom(approval.amount)} — muddat ichida javob berilmadi. E'tiroz bo'lsa admin bilan bog'laning.`,
+        }).catch(() => undefined);
+      } catch (error) {
+        stats.failed += 1;
+        this.logger.warn(
+          `extra cost #${approval.id} avtomatik tasdiqlanmadi: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
+    return stats;
   }
 
   /**

@@ -295,6 +295,12 @@ export const ACTIVITY_ACTION_REGISTRY: Readonly<
     'cyan',
   ),
   // (9HIaV80X #7) bot amallari: ulash, uzish, kanal holati, callback.
+  'order.extra_cost_auto_approved': entry(
+    "Qo'shimcha xarajat avtomatik tasdiqlandi",
+    'order',
+    'clock',
+    'amber',
+  ),
   'notification.tg_linked': entry(
     'Telegram akkaunt ulandi',
     'notification',

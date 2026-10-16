@@ -4862,14 +4862,28 @@ export class OrderGatewayController {
     example: 'pending',
     enum: ['pending', 'approved', 'rejected'],
   })
+  @ApiQuery({
+    name: 'auto_approved',
+    required: false,
+    example: 'true',
+    description:
+      "(1tnpaIqd) true — faqat muddat o'tib AVTOMATIK tasdiqlanganlar (e'tiroz/rollback uchun alohida filtr)",
+  })
   listExtraCostApprovals(
     @Query('status') status: string | undefined,
     @Req() req: { user: JwtUser },
+    @Query('auto_approved') autoApproved?: string,
   ) {
     return this.sendOrderWithTimeout(
       { cmd: 'order.extra_cost_approval.list' },
       {
         status,
+        auto_approved:
+          autoApproved === 'true'
+            ? true
+            : autoApproved === 'false'
+              ? false
+              : undefined,
         requester: {
           id: req.user.sub,
           roles: this.normalizeRoles(req.user.roles),

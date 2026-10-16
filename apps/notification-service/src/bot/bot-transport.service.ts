@@ -42,10 +42,14 @@ const MAX_RETRY_AFTER_SEC = 60;
 const SEND_METHODS = new Set([
   'sendMessage',
   'sendPhoto',
+  'sendVideo',
   'sendDocument',
+  'sendMediaGroup',
   'editMessageText',
   'editMessageReplyMarkup',
 ]);
+/** Telegram media izohi (caption) chegarasi. */
+const CAPTION_MAX_CHARS = 1024;
 
 export type TelegramErrorKind =
   | 'blocked'
@@ -166,6 +170,43 @@ export async function callTelegramApi<T>(
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload ?? {}),
       signal: AbortSignal.timeout(options.timeoutMs ?? DEFAULT_TIMEOUT_MS),
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'network error';
+    throw new TelegramApiError(method, 0, redactToken(message, token), null);
+  }
+  const body = (await response.json().catch(() => null)) as {
+    ok?: boolean;
+    result?: T;
+    description?: string;
+    parameters?: { retry_after?: number };
+  } | null;
+  if (!response.ok || !body || body.ok !== true) {
+    const retryAfter = Number(body?.parameters?.retry_after);
+    throw new TelegramApiError(
+      method,
+      response.status,
+      redactToken(body?.description ?? `HTTP ${response.status}`, token),
+      Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter : null,
+    );
+  }
+  return body.result as T;
+}
+
+/** Multipart chaqiruv (fayl yuborish) — URL faqat shu faylda. */
+export async function callTelegramApiMultipart<T>(
+  token: string,
+  method: string,
+  form: FormData,
+  options: { timeoutMs?: number; fetchImpl?: FetchLike } = {},
+): Promise<T> {
+  const fetchImpl: FetchLike = options.fetchImpl ?? fetch;
+  let response: Response;
+  try {
+    response = await fetchImpl(`${TELEGRAM_API_BASE}/bot${token}/${method}`, {
+      method: 'POST',
+      body: form,
+      signal: AbortSignal.timeout(options.timeoutMs ?? 60_000),
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'network error';
@@ -448,6 +489,95 @@ export class BotTransportService {
       throw new TelegramApiError('downloadFile', 400, 'file is too big', null);
     }
     return { buffer, file_path: filePath };
+  }
+
+  /**
+   * (DuST9k8j / BeePost extra-cost-telegram naqshi) Isbot fayllari: BITTA fayl
+   * — rasm/video + izoh + tugmalar BITTA postda (`message_id` qaytadi);
+   * KO'P fayl — albom (≤10), tugmalar albomga qo'yilmaydi (Telegram ruxsat
+   * bermaydi) — chaqiruvchi ularni alohida xabarda yuboradi (`null`).
+   */
+  async sendMedia(
+    chatId: string,
+    files: Array<{ buffer: Buffer; mime: string; name: string }>,
+    options: {
+      caption?: string;
+      reply_markup?: InlineKeyboardMarkup;
+      parse_mode?: TelegramParseMode;
+    } = {},
+  ): Promise<number | null> {
+    assertCallbackDataFits(options.reply_markup);
+    const token = this.defaultToken;
+    if (!token) {
+      throw new TelegramApiError(
+        'sendMedia',
+        401,
+        'bot token is not configured',
+        null,
+      );
+    }
+    const kindOf = (mime: string) =>
+      mime.startsWith('image/')
+        ? 'photo'
+        : mime.startsWith('video/')
+          ? 'video'
+          : 'document';
+    const caption = options.caption?.slice(0, CAPTION_MAX_CHARS);
+    const list = files.slice(0, 10);
+    await this.throttle(chatId);
+    if (list.length === 1) {
+      const [file] = list;
+      const kind = kindOf(file.mime);
+      const method =
+        kind === 'photo'
+          ? 'sendPhoto'
+          : kind === 'video'
+            ? 'sendVideo'
+            : 'sendDocument';
+      const form = new FormData();
+      form.append('chat_id', chatId);
+      form.append(
+        kind,
+        new Blob([new Uint8Array(file.buffer)], { type: file.mime }),
+        file.name,
+      );
+      if (caption) form.append('caption', caption);
+      if (options.parse_mode) form.append('parse_mode', options.parse_mode);
+      if (options.reply_markup) {
+        form.append('reply_markup', JSON.stringify(options.reply_markup));
+      }
+      const result = await callTelegramApiMultipart<{ message_id?: number }>(
+        token,
+        method,
+        form,
+        { fetchImpl: this.fetchImpl },
+      );
+      return result?.message_id ?? null;
+    }
+    const form = new FormData();
+    form.append('chat_id', chatId);
+    const media = list.map((file, index) => {
+      const field = `file${index}`;
+      form.append(
+        field,
+        new Blob([new Uint8Array(file.buffer)], { type: file.mime }),
+        file.name,
+      );
+      const kind = kindOf(file.mime);
+      return {
+        type: kind === 'document' ? 'document' : kind,
+        media: `attach://${field}`,
+        ...(index === 0 && caption ? { caption } : {}),
+        ...(index === 0 && caption && options.parse_mode
+          ? { parse_mode: options.parse_mode }
+          : {}),
+      };
+    });
+    form.append('media', JSON.stringify(media));
+    await callTelegramApiMultipart(token, 'sendMediaGroup', form, {
+      fetchImpl: this.fetchImpl,
+    });
+    return null;
   }
 
   /** Xabar matni/tugmalarini tahrirlash — eng yaxshi urinish (xato loglanadi). */

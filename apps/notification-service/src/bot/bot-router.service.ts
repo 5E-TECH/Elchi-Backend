@@ -223,17 +223,17 @@ export class BotRouterService implements OnModuleDestroy {
       return;
     }
     const action = lookup.action;
+    const handler = this.actionHandlers.get(action.action);
     if (action.actor_user_id) {
       const actor = await ctx.actor();
       if (!actor || actor.user_id !== String(action.actor_user_id)) {
         await this.transport.answerCallbackQuery(
           callback.id,
-          ACTION_FOREIGN_TEXT,
+          handler?.foreignText ?? ACTION_FOREIGN_TEXT,
         );
         return;
       }
     }
-    const handler = this.actionHandlers.get(action.action);
     if (!handler) {
       await this.transport.answerCallbackQuery(
         callback.id,

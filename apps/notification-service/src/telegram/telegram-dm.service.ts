@@ -16,6 +16,7 @@ import { NotificationServiceService } from '../notification-service.service';
 import { SmsDispatchService } from '../sms/sms-dispatch.service';
 import { TelegramLinkService } from '../bot/telegram-link.service';
 import { BotActionsService } from '../bot/bot-actions.service';
+import { BotTransportService } from '../bot/bot-transport.service';
 import type {
   InlineKeyboardButton,
   InlineKeyboardMarkup,
@@ -76,6 +77,8 @@ export class TelegramDmService {
     @Inject('IDENTITY') private readonly identityClient: ClientProxy,
     private readonly links: TelegramLinkService,
     @Optional() private readonly actions?: BotActionsService,
+    @Optional() private readonly transport?: BotTransportService,
+    @Optional() @Inject('FILE') private readonly fileClient?: ClientProxy,
   ) {}
 
   private get botToken(): string {
@@ -235,13 +238,12 @@ export class TelegramDmService {
                 String(row.recipient_id),
                 row.data,
               );
-              await this.telegram.sendDirectToGroup({
-                group_id: chat,
-                message: this.text(row),
-                parse_mode: 'HTML',
-                ...(reply_markup ? { reply_markup } : {}),
-                source: 'notification.dm',
-              });
+              await this.sendWithMedia(
+                chat,
+                this.text(row),
+                row.data,
+                reply_markup,
+              );
               return {
                 id: String(row.id),
                 patch: { telegram: NotificationDeliveryStatus.SENT },
@@ -326,6 +328,107 @@ export class TelegramDmService {
       if (row.length) rows.push(row);
     }
     return rows.length ? { inline_keyboard: rows } : null;
+  }
+
+  /**
+   * (DuST9k8j) `data.telegram_media` — file-service kalitlari (isbot). BITTA
+   * fayl: rasm/video + matn + tugmalar BITTA postda; KO'P: albom (≤10) +
+   * tugmalar ALOHIDA xabarda (Telegram albomga tugma qo'ydirmaydi). Fayl
+   * o'qilmasa / yuborilmasa — oddiy matnli xabar (yetkazish yiqilmaydi).
+   * Tugmali xabar `message_id` si bot amallariga biriktiriladi (qarordan
+   * keyin tahrirlash uchun).
+   */
+  private async sendWithMedia(
+    chat: string,
+    text: string,
+    data: Record<string, unknown> | null | undefined,
+    reply_markup: InlineKeyboardMarkup | null,
+  ): Promise<void> {
+    const keys = Array.isArray(data?.telegram_media)
+      ? (data.telegram_media as unknown[])
+          .map((key) => str(key))
+          .filter(Boolean)
+      : [];
+    let messageId: number | null = null;
+    let textNeeded = true;
+    let albumSent = false;
+    if (keys.length && this.transport && this.fileClient) {
+      const files = await this.readFiles(keys.slice(0, 10));
+      if (files.length) {
+        try {
+          messageId = await this.transport.sendMedia(
+            chat,
+            files,
+            files.length === 1
+              ? {
+                  caption: text,
+                  parse_mode: 'HTML',
+                  ...(reply_markup ? { reply_markup } : {}),
+                }
+              : { caption: text, parse_mode: 'HTML' },
+          );
+          albumSent = files.length > 1;
+          textNeeded = albumSent;
+        } catch (error) {
+          this.logger.warn(
+            `telegram DM media: ${short(error)} — matn bilan yuboriladi`,
+          );
+        }
+      }
+    }
+    if (textNeeded) {
+      const sent = await this.telegram.sendDirectToGroup({
+        group_id: chat,
+        // Albomdan keyin — faqat tugmalar xabari (matn albom izohida).
+        message: albumSent ? '⬆️ Isbot fayllari yuqorida. Qaroringiz:' : text,
+        parse_mode: 'HTML',
+        ...(reply_markup ? { reply_markup } : {}),
+        source: 'notification.dm',
+      });
+      messageId =
+        (sent as { result?: { message_id?: number } | null })?.result
+          ?.message_id ?? messageId;
+    }
+    if (reply_markup && messageId && this.actions) {
+      const callbacks = reply_markup.inline_keyboard
+        .flat()
+        .map((button) => button.callback_data)
+        .filter((value): value is string => Boolean(value));
+      await this.actions
+        .attachMessage(callbacks, messageId)
+        .catch(() => undefined);
+    }
+  }
+
+  private async readFiles(
+    keys: string[],
+  ): Promise<Array<{ buffer: Buffer; mime: string; name: string }>> {
+    const files: Array<{ buffer: Buffer; mime: string; name: string }> = [];
+    for (const key of keys) {
+      try {
+        const res = await rmqSend<{
+          data?: { body_base64?: string; mime_type?: string };
+        }>(
+          this.fileClient!,
+          { cmd: 'file.read' },
+          { key },
+          { timeoutMs: 20_000 },
+        );
+        const base64 = res?.data?.body_base64;
+        if (!base64) continue;
+        const buffer = Buffer.from(base64, 'base64');
+        // Telegram bot API yuklash chegarasi (50MB) — kattasi o'tkaziladi.
+        if (buffer.length > 49 * 1024 * 1024) continue;
+        files.push({
+          buffer,
+          mime: str(res?.data?.mime_type) || 'application/octet-stream',
+          name: key.split('/').pop()?.slice(-60) || 'proof',
+        });
+      } catch (error) {
+        this.logger.warn(`isbot fayli o'qilmadi: ${short(error)}`);
+      }
+    }
+    return files;
   }
 
   /** `title\n\nbody` — HTML-escape (relayTelegram bilan bir xil qoida). */

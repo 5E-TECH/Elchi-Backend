@@ -12,6 +12,7 @@ import type { BotActionHandler } from '../handlers/bot-context';
 import { CommandGateHandler } from '../handlers/command-gate.handler';
 import { CourierActions, CourierHandler } from '../courier/courier.handler';
 import { CourierService } from '../courier/courier.service';
+import { ExtraCostActions } from '../extra-cost/extra-cost.actions';
 import { GroupHandler } from '../handlers/group.handler';
 import { MarketHandler } from '../handlers/market.handler';
 import { StartHandler } from '../handlers/start.handler';
@@ -440,6 +441,11 @@ export function makeRouter(
     sessions as never,
     courier,
   );
+  const extraCost = new ExtraCostActions(
+    gateway as never,
+    actions as never,
+    transport as never,
+  );
   const start = new StartHandler(
     limiter as never,
     activityLog as never,
@@ -465,7 +471,11 @@ export function makeRouter(
     gate,
     courier,
     undefined,
-    [...courierActions.handlers, ...(options.actionHandlers ?? [])],
+    [
+      ...courierActions.handlers,
+      ...extraCost.handlers,
+      ...(options.actionHandlers ?? []),
+    ],
   );
   return {
     router,

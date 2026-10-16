@@ -8,6 +8,7 @@ import { BranchTransferBatchService } from './transfer-batch/branch-transfer-bat
 import { OrderSettlementService } from './settlement/order-settlement.service';
 import { OrderLookupService } from './lookup/order-lookup.service';
 import { OrderLifecycleService } from './lifecycle/order-lifecycle.service';
+import { ExtraCostAutoApproveScheduler } from './lifecycle/extra-cost-auto-approve.scheduler';
 import { OrderCustodyService } from './custody/order-custody.service';
 import { OrderNotificationService } from './notification/order-notification.service';
 import { ProductResolverService } from './ai/product-resolver.service';
@@ -115,6 +116,8 @@ import { CustomerSegmentController } from './segment/customer-segment.controller
     OrderSettlementService,
     OrderLookupService,
     OrderLifecycleService,
+    // (1tnpaIqd) muddat o'tgan extra-cost so'rovlarini avtomatik tasdiqlash.
+    ExtraCostAutoApproveScheduler,
     OrderCustodyService,
     OrderNotificationService,
     ProductResolverService,
