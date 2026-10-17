@@ -619,3 +619,19 @@ export class TelegramAuthRequestDto {
   @MaxLength(4096)
   init_data!: string;
 }
+
+// ==================== Skan Mini App (MWYaqprw) ====================
+
+export class TelegramScanDoneRequestDto {
+  @ApiProperty({
+    type: [String],
+    example: ['53', '54'],
+    description:
+      "Mini App'da shu sessiyada skan qilingan buyurtma id'lari (1..200). Server faqat HOZIR shu kuryerda yo'lda turganlarini sanaydi — son mijozdan olinmaydi.",
+  })
+  @IsArray()
+  @ArrayNotEmpty()
+  @ArrayMaxSize(200)
+  @Matches(/^\d{1,20}$/, { each: true })
+  order_ids!: string[];
+}

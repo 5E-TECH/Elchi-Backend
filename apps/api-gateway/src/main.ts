@@ -138,6 +138,8 @@ async function bootstrap() {
       'Idempotency-Key',
       'X-Device-Id',
       'X-Device-Name',
+      // j9KFyqlS: ommaviy amallar jurnalda ajralsin (`courier-bulk`).
+      'X-Request-Source',
     ],
     // xWsCAA5N: GET /orders/export/excel — brauzer fayl nomi va eksport
     // chegarasi (X-Export-Truncated/Total/Limit) sarlavhalarini o'qiy olsin;

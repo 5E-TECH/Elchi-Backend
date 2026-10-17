@@ -171,3 +171,39 @@ describe('describeUserAgent', () => {
     expect(describeUserAgent(undefined)).toBeUndefined();
   });
 });
+
+describe('X-Request-Source (j9KFyqlS — ommaviy amallar jurnalda ajraladi)', () => {
+  it('⭐ slug qabul qilinadi (kichik harfga keltiriladi) va audit kontekstiga tushadi', () => {
+    expect(
+      buildRequestContextStore(
+        req({ headers: { 'x-request-source': 'Courier-Bulk' } }),
+      ).request_source,
+    ).toBe('courier-bulk');
+    expect(
+      buildRequestContextStore(
+        req({ headers: { 'x-request-source': 'telegram-bot' } }),
+      ).request_source,
+    ).toBe('telegram-bot');
+  });
+
+  it('slug bo‘lmagan qiymat jurnalga tushmaydi', () => {
+    for (const value of ['bulk; drop', 'x', 'a'.repeat(40), '1bulk', '']) {
+      expect(
+        buildRequestContextStore(
+          req({ headers: { 'x-request-source': value } }),
+        ).request_source,
+      ).toBeUndefined();
+    }
+  });
+
+  it('webhook yo‘lida audit konteksti bo‘sh qoladi', () => {
+    const store = buildRequestContextStore(
+      req({
+        path: '/webhooks/eskiz',
+        url: '/webhooks/eskiz',
+        headers: { 'x-request-source': 'courier-bulk' },
+      }),
+    );
+    expect(store.request_source).toBeUndefined();
+  });
+});

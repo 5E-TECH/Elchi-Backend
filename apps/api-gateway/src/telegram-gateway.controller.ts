@@ -17,7 +17,10 @@ import { Roles as RoleEnum } from '@app/common';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
 import { Roles } from './auth/roles.decorator';
 import { RolesGuard } from './auth/roles.guard';
-import { TelegramLinkCodeRequestDto } from './dto/notification.swagger.dto';
+import {
+  TelegramLinkCodeRequestDto,
+  TelegramScanDoneRequestDto,
+} from './dto/notification.swagger.dto';
 
 interface AuthedRequest {
   user?: { sub?: string; roles?: string[] };
@@ -107,6 +110,29 @@ export class TelegramGatewayController {
       this.identityClient,
       { cmd: 'identity.telegram.unlink' },
       { user_id: this.requester(req).id },
+    );
+  }
+
+  /**
+   * (MWYaqprw #6) Skan Mini App'ida "✅ Tayyor": kuryerning shaxsiy
+   * Telegram'iga (va in-app) "N ta buyurtma qabul qilindi" + "📋 Topshiriqlarim".
+   * Kuryer — faqat JWT'dan; son — server hisoblaydi (shu kuryerda yo'lda
+   * turgan id'lar).
+   */
+  @Post('telegram/scan/done')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.COURIER)
+  @ApiBearerAuth()
+  @ApiBody({ type: TelegramScanDoneRequestDto })
+  @ApiOperation({
+    summary:
+      "Skan Mini App «✅ Tayyor»: botga xulosa xabari (faqat kuryer). Javob: { accepted, ignored } — accepted = yuborilgan id'lardan HOZIR shu kuryerda yo'lda turganlari.",
+  })
+  scanDone(@Body() dto: TelegramScanDoneRequestDto, @Req() req: AuthedRequest) {
+    return this.send(
+      this.notificationClient,
+      { cmd: 'notification.telegram.scan_done' },
+      { courier_id: this.requester(req).id, order_ids: dto.order_ids },
     );
   }
 

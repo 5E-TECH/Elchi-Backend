@@ -24,14 +24,27 @@ export const ACTIVITY_LOG_DEVICE_RETENTION_DEFAULT_DAYS = 30;
 export const ACTIVITY_LOG_DEVICE_STRIP_BATCH_DEFAULT = 5_000;
 
 /**
+ * Audit kontekstining shaxsiy/qurilma kalitlari — qisqa muddatdan keyin
+ * olib tashlanmaydigan kalitlar.
+ * (j9KFyqlS) `request_source` — qurilma ham, shaxsiy ma'lumot ham EMAS
+ * (`courier-bulk`, `telegram-bot`): ommaviy/bot amali belgisi jurnal bilan
+ * birga umumiy muddatgacha qoladi.
+ */
+const NON_DEVICE_AUDIT_KEYS: ReadonlyArray<keyof AuditContext> = [
+  'request_source',
+];
+
+/**
  * Olib tashlanadigan kalitlar — `RequestContextStore` audit maydonlarining
  * YAGONA ro'yxatidan (`AUDIT_CONTEXT_LIMITS`) olinadi: kontekstga yangi
- * maydon qo'shilsa, u ham avtomatik qisqa muddatga tushadi.
+ * qurilma maydoni qo'shilsa, u ham avtomatik qisqa muddatga tushadi.
  */
 export const ACTIVITY_LOG_DEVICE_METADATA_KEYS: ReadonlyArray<
   keyof AuditContext
 > = Object.freeze(
-  Object.keys(AUDIT_CONTEXT_LIMITS) as Array<keyof AuditContext>,
+  (Object.keys(AUDIT_CONTEXT_LIMITS) as Array<keyof AuditContext>).filter(
+    (key) => !NON_DEVICE_AUDIT_KEYS.includes(key),
+  ),
 );
 
 const DAY_MS = 24 * 60 * 60 * 1000;

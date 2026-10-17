@@ -42,6 +42,17 @@ function decodedHeader(req: Request, name: string): string | undefined {
   }
 }
 
+/**
+ * (j9KFyqlS) `X-Request-Source` — faqat kichik harfli slug (`courier-bulk`,
+ * `telegram-bot`, …). Boshqa har qanday qiymat jurnalga TUSHMAYDI.
+ */
+const REQUEST_SOURCE_RE = /^[a-z][a-z0-9-]{1,31}$/;
+
+function resolveRequestSource(req: Request): string | undefined {
+  const value = firstHeader(req, 'x-request-source')?.trim().toLowerCase();
+  return value && REQUEST_SOURCE_RE.test(value) ? value : undefined;
+}
+
 function resolveTraceId(req: Request): string {
   const header = firstHeader(req, 'x-request-id')?.trim();
   return header && TRACE_ID_RE.test(header) ? header : randomUUID();
@@ -53,7 +64,8 @@ function resolveTraceId(req: Request): string {
  *   `CF-Connecting-IP`, bo'lmasa `req.ip`) + `normalizeIp` (`::ffff:` prefiks);
  * - `user_agent` — 256 belgigacha kesiladi (`sanitizeAuditContext`);
  * - `device_id` / `device_name` — `X-Device-Id` / `X-Device-Name`; nom
- *   yuborilmasa User-Agent'dan ("Telefon · Android · Chrome").
+ *   yuborilmasa User-Agent'dan ("Telefon · Android · Chrome");
+ * - `request_source` — `X-Request-Source` (slug), masalan ommaviy yopish.
  */
 export function buildRequestContextStore(req: Request): RequestContextStore {
   const traceId = resolveTraceId(req);
@@ -67,6 +79,7 @@ export function buildRequestContextStore(req: Request): RequestContextStore {
     device_id: decodedHeader(req, 'x-device-id'),
     device_name:
       decodedHeader(req, 'x-device-name') ?? describeUserAgent(userAgent),
+    request_source: resolveRequestSource(req),
   });
   return { traceId, ...audit };
 }

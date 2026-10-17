@@ -23,6 +23,38 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-10-17 — Skan Mini App (MWYaqprw) va ommaviy yopish isboti (j9KFyqlS)
+
+- [2026-10-17] 🆕 [telegram] — Skan Mini App'i uchun backend tayyor. 🔧 Yangi
+  ekran `/tg/scan` (v2, maket `courier-scan-active`):
+  1. Ochilganda `window.Telegram.WebApp.initData` → `POST /auth/telegram
+     { init_data }` → `{ accessToken }` (30 daqiqa, refresh yo'q). initData
+     bo'lmasa yoki 401 — kamera ekrani ochilmaydi.
+  2. Har skan → `POST /orders/scan-assign { qr_token }` (shu JWT bilan).
+     ✏️ Muvaffaqiyatli javobda endi `data.order`: `{ id, order_number, status,
+     total_price, address, district, region, market, customer: { name,
+     phone_number } }` — tuman va mijozni darhol ko'rsating (alohida `GET
+     /orders/:id` shart emas). Qidiruv yiqilsa `data.order` bo'lmaydi, skan
+     baribir o'tgan. Xato (boshqa filial / boshqa kuryerniki / noto'g'ri holat)
+     — `message` ni ko'rsating va oqimni to'xtatmang.
+  3. «✅ Tayyor» → `POST /telegram/scan/done { order_ids: [...] }` (1..200,
+     faqat kuryer) → `{ accepted, ignored }`; botga "N ta buyurtma qabul
+     qilindi" + «📋 Topshiriqlarim» xabari tushadi. So'ng
+     `Telegram.WebApp.close()`.
+  4. iOS: `getUserMedia` ishlamasa `Telegram.WebApp.showScanQrPopup` zaxira yo'li.
+  Ekran chiqqach prod `.env` ga `TELEGRAM_SCAN_WEBAPP_URL=https://admin.elchipochta.uz/tg/scan`
+  yoziladi — shunda bot `/ishim` da «📷 Skaner» tugmasini ko'rsatadi (hozir bo'sh).
+- [2026-10-17] 🟢 [order] — `/courier-bulk` isbot (j9KFyqlS): `POST
+  /orders/sell/:id` va `POST /orders/cancel/:id` allaqachon `multipart/form-data`
+  da `proof` faylini qabul qiladi (`withUploadedProof`). 🔧 `handleFinalize` da
+  isbot talab qiladigan market buyurtmalari uchun `proof` uzatilsin (market
+  `expense_proof_conditions`), isbotli buyurtmalarda parallellik 2.
+- [2026-10-17] 🆕 [audit] — `X-Request-Source` sarlavhasi (CORS ruxsat
+  berilgan): slug (`[a-z][a-z0-9-]{1,31}`) `activity_logs.metadata.request_source`
+  ga tushadi. 🔧 `/courier-bulk` ommaviy sotish/bekor so'rovlarida
+  `X-Request-Source: courier-bulk` yuborilsin — jurnalda ommaviy amal oddiy
+  bittalikdan ajraladi. Bot so'rovlari o'zi `telegram-bot` bilan belgilanadi.
+
 ### 2026-10-17 — Prod e2e (superadmin UI) topilmalari
 
 - [2026-10-17] 🔧 [notification] — "Xabar yuborish" sahifasi Telegram kanali

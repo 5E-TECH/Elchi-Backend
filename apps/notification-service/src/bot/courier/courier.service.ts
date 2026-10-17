@@ -74,6 +74,8 @@ const messageOf = (body: unknown): string => {
 export class CourierService {
   private readonly logger = new Logger(CourierService.name);
   readonly cabinetUrl: string;
+  /** (MWYaqprw) Skan Mini App manzili — faqat https; bo'sh bo'lsa tugma yo'q. */
+  readonly scannerUrl: string;
 
   constructor(
     private readonly gateway: BotGatewayClient,
@@ -87,6 +89,10 @@ export class CourierService {
     this.cabinetUrl = String(
       config.get<string>('ELCHI_CABINET_URL') ?? 'https://admin.elchipochta.uz',
     ).trim();
+    const scanner = String(
+      config.get<string>('TELEGRAM_SCAN_WEBAPP_URL') ?? '',
+    ).trim();
+    this.scannerUrl = /^https:\/\/[^\s?#]+$/.test(scanner) ? scanner : '';
   }
 
   /** `GET /orders` (kuryer doirasi serverda: courier_ids = [o'zi]). */

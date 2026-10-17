@@ -34,12 +34,20 @@ export interface RequestContextStore {
   device_id?: string;
   /** "Telefon · Android · Chrome" (`X-Device-Name` yoki User-Agent'dan). */
   device_name?: string;
+  /**
+   * (j9KFyqlS) Amal qayerdan: `X-Request-Source` (masalan `courier-bulk` —
+   * kuryerning ommaviy yopishi, `telegram-bot` — bot). Gateway faqat
+   * `[a-z][a-z0-9-]{1,31}` ni qabul qiladi; jurnalda ommaviy/bot amallari
+   * oddiy bittalik amaldan ajralib turadi. Shaxsiy ma'lumot EMAS (retention
+   * uni olib tashlamaydi).
+   */
+  request_source?: string;
 }
 
 /** Kontekstdagi audit maydonlari (traceId/userId'siz) — metadata'ga tushadi. */
 export type AuditContext = Pick<
   RequestContextStore,
-  'ip' | 'user_agent' | 'device_id' | 'device_name'
+  'ip' | 'user_agent' | 'device_id' | 'device_name' | 'request_source'
 >;
 
 /**
@@ -54,6 +62,7 @@ export const AUDIT_CONTEXT_LIMITS: Readonly<
   user_agent: 256,
   device_id: 128,
   device_name: 128,
+  request_source: 32,
 });
 
 const AUDIT_CONTEXT_KEYS = Object.keys(AUDIT_CONTEXT_LIMITS) as Array<

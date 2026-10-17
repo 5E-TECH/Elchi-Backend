@@ -4180,7 +4180,7 @@
             "bearer": []
           }
         ],
-        "summary": "Scan QR and assign order to current courier",
+        "summary": "Scan QR and assign order to current courier. MWYaqprw: muvaffaqiyatli javobda `data.order` — { id, order_number, status, total_price, address, district, region, market, customer: { name, phone_number } } (skaner ekrani uchun; olinmasa maydon bo'lmaydi, skan baribir o'tgan).",
         "tags": [
           "Orders"
         ],
@@ -12919,6 +12919,39 @@
           "Telegram"
         ],
         "x-roles": null
+      }
+    },
+    "/telegram/scan/done": {
+      "post": {
+        "operationId": "TelegramGatewayController_scanDone",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TelegramScanDoneRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Skan Mini App «✅ Tayyor»: botga xulosa xabari (faqat kuryer). Javob: { accepted, ignored } — accepted = yuborilgan id'lardan HOZIR shu kuryerda yo'lda turganlari.",
+        "tags": [
+          "Telegram"
+        ],
+        "x-roles": [
+          "courier"
+        ]
       }
     },
     "/telegram/stats": {
@@ -22595,6 +22628,25 @@
             "example": "create"
           }
         }
+      },
+      "TelegramScanDoneRequestDto": {
+        "type": "object",
+        "properties": {
+          "order_ids": {
+            "example": [
+              "53",
+              "54"
+            ],
+            "description": "Mini App'da shu sessiyada skan qilingan buyurtma id'lari (1..200). Server faqat HOZIR shu kuryerda yo'lda turganlarini sanaydi — son mijozdan olinmaydi.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "order_ids"
+        ]
       },
       "CreateInvestorDto": {
         "type": "object",

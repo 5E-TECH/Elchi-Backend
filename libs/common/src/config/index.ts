@@ -320,6 +320,14 @@ export const notificationValidationSchema = Joi.object({
   // ISHLATILMAYDI (berilsa startda bir marta WARN). WebApp havolasi qoladi.
   ORDER_BOT_TOKEN: Joi.string().allow('').optional(),
   ORDER_BOT_WEBAPP_URL: Joi.string().uri().allow('').optional(),
+  // (MWYaqprw) Kuryer skan Mini App'i (`/tg/scan`). Berilsa `/ishim` da
+  // "📷 Skaner" (web_app) tugmasi chiqadi; URL'ga token QO'YILMAYDI — Mini App
+  // initData bilan `POST /auth/telegram` dan JWT oladi. Frontend ekrani
+  // chiqmaguncha bo'sh qoldiriladi (tugma ko'rinmaydi).
+  TELEGRAM_SCAN_WEBAPP_URL: Joi.string()
+    .uri({ scheme: ['https'] })
+    .allow('')
+    .optional(),
   // (Mvx0h1Fv / uCrzrElu) bot transporti. Sukut — `auto`: token va webhook
   // sekreti bo'lsa `webhook`; token yo'q/placeholder bo'lsa `off`. `polling`
   // faqat zaxira va faqat BOT_POLLING_LEADER=true bo'lgan bitta konteynerda.

@@ -272,3 +272,19 @@ bazasiga o'zi yozmaydi, doira/holat mashinasi/isbot/extra-cost — serverda.
   tartib), ≤12 — to'lsa "⏳ Juda ko'p xabar navbatda". Har rasm/matn — o'z
   qoralamasi (ustma-ust yozilmaydi). Foydalanuvchi bo'yicha AI limiti —
   gateway `ai-user` throttler (429 → "🔁 Qayta urinish").
+
+## 13. Skan Mini App (MWYaqprw) — chatda skan YO'Q
+
+- `TELEGRAM_SCAN_WEBAPP_URL` (https, ixtiyoriy) — berilsa kuryer `/ishim` ning
+  sarlavha xabarida «📷 Skaner» `web_app` tugmasi chiqadi (faol topshiriq yo'q
+  bo'lsa ham). URL'ga token QO'YILMAYDI: Mini App initData bilan `POST
+  /auth/telegram` dan JWT oladi (imzo tekshiriladi). Frontend `/tg/scan`
+  chiqmaguncha bo'sh qoldiriladi.
+- `POST /orders/scan-assign` javobida `data.order` (tuman, mijoz, summa) —
+  `order.find_by_qr_light` dan; qidiruv yiqilsa skan javobi o'zgarmaydi.
+- «✅ Tayyor» → `POST /telegram/scan/done { order_ids }` (faqat kuryer) →
+  notification-service `notification.telegram.scan_done`: son SERVERDA —
+  yuborilgan id'lardan faqat HOZIR shu kuryerda `on the road` turganlari
+  (`order.find_all`); xabar `notification.dispatch` (in-app + shaxsiy
+  Telegram) bilan, «📋 Topshiriqlarim» = `/ishim` 1-sahifa.
+- Ega qarori (2026-09-20) kuchda: skan chat orqali qilinmaydi.

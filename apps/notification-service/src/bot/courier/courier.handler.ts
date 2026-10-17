@@ -116,6 +116,7 @@ export class CourierHandler implements BotMessageHandler {
         page === 1
           ? "✅ Hozircha faol topshiriq yo'q."
           : "Boshqa topshiriq yo'q.",
+        page === 1 ? this.scannerMarkup() : undefined,
       );
       return;
     }
@@ -134,6 +135,7 @@ export class CourierHandler implements BotMessageHandler {
           .sort(([a], [b]) => a.localeCompare(b))
           .map(([district, count]) => `📍 ${district} — ${count} ta`),
       ].join('\n'),
+      page === 1 ? this.scannerMarkup() : undefined,
     );
     for (const order of sorted) {
       await this.courier.sendCard(ctx, order, actor.user_id);
@@ -161,6 +163,23 @@ export class CourierHandler implements BotMessageHandler {
         },
       );
     }
+  }
+
+  /**
+   * (MWYaqprw #1) "📷 Skaner" — skan Mini App'i (web_app). Skan chatda
+   * EMAS: har skan yangi xabar bo'lardi. URL'da token yo'q — Mini App
+   * initData bilan `POST /auth/telegram` dan JWT oladi. Manzil sozlanmagan
+   * bo'lsa tugma chiqmaydi.
+   */
+  private scannerMarkup() {
+    const url = this.courier.scannerUrl;
+    return url
+      ? {
+          reply_markup: {
+            inline_keyboard: [[{ text: '📷 Skaner', web_app: { url } }]],
+          },
+        }
+      : undefined;
   }
 
   /**

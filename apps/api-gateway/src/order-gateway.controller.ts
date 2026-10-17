@@ -129,6 +129,7 @@ import {
   type OrderMarketPhonePolicy,
 } from './order-create/order-operator-phone';
 import { isOrderQrLightView, sendOrderQrLight } from './order-qr-light-view';
+import { scanOrderSummary } from './order-scan-summary';
 import {
   ORDER_EXPORT_PAGE_SIZE,
   ORDER_EXPORT_PAGE_TIMEOUT_MS,
@@ -4951,13 +4952,16 @@ export class OrderGatewayController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(RoleEnum.COURIER)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Scan QR and assign order to current courier' })
+  @ApiOperation({
+    summary:
+      "Scan QR and assign order to current courier. MWYaqprw: muvaffaqiyatli javobda `data.order` — { id, order_number, status, total_price, address, district, region, market, customer: { name, phone_number } } (skaner ekrani uchun; olinmasa maydon bo'lmaydi, skan baribir o'tgan).",
+  })
   @ApiBody({ type: ScanAssignOrderRequestDto })
-  scanAssignOrder(
+  async scanAssignOrder(
     @Body() dto: ScanAssignOrderRequestDto,
     @Req() req: { user: JwtUser },
   ) {
-    return this.sendLogisticsWithTimeout(
+    const response: unknown = await this.sendLogisticsWithTimeout(
       { cmd: 'logistics.order.scan_assign' },
       {
         dto,
@@ -4967,6 +4971,37 @@ export class OrderGatewayController {
         },
       },
     );
+    return this.withScanOrderSummary(response, dto.qr_token);
+  }
+
+  /**
+   * (MWYaqprw #5) Skan muvaffaqiyatli bo'lsa javobga tuman/mijoz qo'shiladi
+   * (`order.find_by_qr_light`). Bu FAQAT qo'shimcha: qidiruv yiqilsa yoki
+   * kechiksa skan javobi o'zgarishsiz qaytadi — biriktirish allaqachon bo'lgan.
+   */
+  private async withScanOrderSummary(
+    response: unknown,
+    qrToken: unknown,
+  ): Promise<unknown> {
+    const envelope = response as { data?: unknown } | null;
+    const data = envelope?.data;
+    const token = typeof qrToken === 'string' ? qrToken.trim() : '';
+    if (!token || !data || typeof data !== 'object' || Array.isArray(data)) {
+      return response;
+    }
+    try {
+      const light = await sendOrderQrLight(
+        (pattern) => this.sendOrderWithTimeout(pattern, { token }),
+        { cmd: 'order.find_by_qr_enriched' },
+      );
+      const order = scanOrderSummary(light);
+      return order ? { ...envelope, data: { ...data, order } } : response;
+    } catch (error) {
+      this.logger.warn(
+        `scan-assign: buyurtma xulosasi olinmadi — ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return response;
+    }
   }
 
   @Post('assign-to-courier')

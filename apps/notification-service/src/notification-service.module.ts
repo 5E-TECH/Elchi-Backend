@@ -39,6 +39,8 @@ import { BotGatewayClient } from './bot/bot-gateway.client';
 import { CourierService } from './bot/courier/courier.service';
 import { CourierReportScheduler } from './bot/courier/courier-report.scheduler';
 import { CourierActions, CourierHandler } from './bot/courier/courier.handler';
+import { CourierScanController } from './bot/courier/courier-scan.controller';
+import { CourierScanSummaryService } from './bot/courier/courier-scan-summary.service';
 import { BOT_ACTION_HANDLERS } from './bot/handlers/bot-context';
 import { ExtraCostActions } from './bot/extra-cost/extra-cost.actions';
 import { PaymentAckActions } from './bot/finance/payment-ack.actions';
@@ -185,6 +187,7 @@ import { RecipientDirectoryService } from './recipients/recipient-directory.serv
     CampaignReportController,
     DispatchHistoryController,
     TelegramDmController,
+    CourierScanController,
     NotificationTemplateController,
     AudienceSegmentController,
     BotController,
@@ -214,6 +217,7 @@ import { RecipientDirectoryService } from './recipients/recipient-directory.serv
     CourierHandler,
     CourierActions,
     CourierReportScheduler,
+    CourierScanSummaryService,
     ExtraCostActions,
     PaymentAckActions,
     OrderCardSyncService,
