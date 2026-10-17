@@ -23,6 +23,20 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-10-17 (kechki) — Menejer kassasida kvitansiya javobi, extra-cost muddati (2crjWf7v, 1tnpaIqd)
+
+- [2026-10-17] 🔧 [finance] — `payment_ack` endi menejerning kuryer kassasi
+  sahifasi chaqiradigan sahifalangan tarixda ham bor (`GET
+  /finance/cashbox/user/:id?with_history=true&page&limit&cashbox_type=couriers`
+  → `data.history[]`; `cashbox_type`siz chaqiruvda faqat kuryer kassasining
+  `courier_payment` qatorlarida). Ilgari bu yo'lda maydon kelmasdi —
+  `/payments/cash-detail/:id?type=courier` da belgi chiqmasdi.
+- [2026-10-17] ✏️ [order] — qo'shimcha xarajat so'rovida yangi
+  `auto_approve_at: string | null` — kutilayotgan (`pending`) so'rov shu
+  vaqtgacha javobsiz qolsa avtomatik tasdiqlanadi
+  (`EXTRA_COST_AUTO_APPROVE_MINUTES`). Avtomatik tasdiq o'chiq yoki so'rov
+  yopilgan — `null`. 🔧 Market kabinetida muddatni ko'rsatish.
+
 ### 2026-10-17 — Kuryer kvitansiyasi javobi kassa tarixida (2crjWf7v)
 
 - [2026-10-17] ✏️ [finance] — Kuryer kassasi tarixi (`GET

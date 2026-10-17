@@ -1616,10 +1616,32 @@ export class OrderLifecycleService {
       decision_comment: approval.decision_comment,
       // (1tnpaIqd) avtomatik tasdiq qo'lda tasdiqdan ajratiladi.
       auto_approved: Boolean(approval.auto_approved),
+      // (1tnpaIqd) muddat: kutilayotgan so'rov shu vaqtgacha javobsiz qolsa avtomatik
+      // tasdiqlanadi. Avtomatik tasdiq o'chiq (env yo'q) yoki so'rov yopilgan — null.
+      auto_approve_at: this.extraCostAutoApproveAt(approval),
       reject_reason: approval.reject_reason ?? null,
       createdAt: approval.createdAt,
       updatedAt: approval.updatedAt,
     };
+  }
+
+  /**
+   * `EXTRA_COST_AUTO_APPROVE_MINUTES` — ExtraCostAutoApproveScheduler bilan bir
+   * xil o'qiladi (musbat butun son, aks holda o'chiq). Konfiguratsiya
+   * process.env'ga ConfigModule orqali yuklanadi.
+   */
+  private extraCostAutoApproveAt(
+    approval: Pick<OrderExtraCostApproval, 'status' | 'createdAt'>,
+  ): string | null {
+    const raw = String(
+      process.env.EXTRA_COST_AUTO_APPROVE_MINUTES ?? '',
+    ).trim();
+    const minutes = raw ? Number(raw) : NaN;
+    if (!Number.isInteger(minutes) || minutes <= 0) return null;
+    if (approval.status !== 'pending' || !approval.createdAt) return null;
+    const created = new Date(approval.createdAt).getTime();
+    if (!Number.isFinite(created)) return null;
+    return new Date(created + minutes * 60_000).toISOString();
   }
 
   private requesterPrimaryRole(requester: { roles?: string[] }) {

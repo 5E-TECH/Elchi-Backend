@@ -1282,12 +1282,17 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         else if (start) historyWhere.createdAt = MoreThanOrEqual(start);
         else if (end) historyWhere.createdAt = LessThanOrEqual(end);
 
-        const [history, total] = await this.historyRepo.findAndCount({
+        const [rows, total] = await this.historyRepo.findAndCount({
           where: historyWhere,
           order: { createdAt: 'DESC' },
           skip: (page - 1) * limit,
           take: limit,
         });
+        // (2crjWf7v) menejer kuryer kassasi tafsilotida ham «Noto'g'ri» belgisini ko'rsin.
+        const history =
+          cashbox.cashbox_type === Cashbox_type.FOR_COURIER
+            ? await this.withPaymentAcks(rows)
+            : rows;
 
         return this.successRes(
           {
@@ -1358,7 +1363,11 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         });
       }
 
-      const [history, total] = await historyQuery.getManyAndCount();
+      const [rows, total] = await historyQuery.getManyAndCount();
+      const history = await this.withPaymentAcks(
+        rows,
+        (row) => row.cashbox?.cashbox_type === Cashbox_type.FOR_COURIER,
+      );
 
       return this.successRes(
         {
@@ -2743,10 +2752,11 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
    */
   private async withPaymentAcks(
     history: CashboxHistory[],
+    isCourierRow: (row: CashboxHistory) => boolean = () => true,
   ): Promise<Array<CashboxHistory & { payment_ack?: string | null }>> {
-    const ids = history
-      .filter((row) => row.source_type === Source_type.COURIER_PAYMENT)
-      .map((row) => String(row.id));
+    const isAckRow = (row: CashboxHistory) =>
+      row.source_type === Source_type.COURIER_PAYMENT && isCourierRow(row);
+    const ids = history.filter(isAckRow).map((row) => String(row.id));
     if (!ids.length) return history;
     try {
       const rows: Array<{ payment_id: string; ack: string }> =
@@ -2758,7 +2768,7 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         );
       const acks = new Map(rows.map((row) => [row.payment_id, row.ack]));
       return history.map((row) =>
-        row.source_type === Source_type.COURIER_PAYMENT
+        isAckRow(row)
           ? { ...row, payment_ack: acks.get(String(row.id)) ?? null }
           : row,
       );
