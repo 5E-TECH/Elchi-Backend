@@ -29,7 +29,10 @@ export const BOT_SLUG_RE = /^[a-z0-9_-]{1,32}$/;
 export const WEBHOOK_SECRET_RE = /^[A-Za-z0-9_-]{16,256}$/;
 
 /** RMQ hodisasi: gateway webhook → notification-service. */
-export const TELEGRAM_UPDATE_EVENT = 'notification.telegram.update';
+// ⚠️ `notification.telegram.update` EMAS — u nom allaqachon admin RPC'si
+// (telegram_markets guruhini yangilash) uchun band: hodisa o'sha handler'ga
+// tushib, xato bilan DLQ'ga ketardi (2026-10-17 prod: /start javobsiz qoldi).
+export const TELEGRAM_UPDATE_EVENT = 'notification.telegram.webhook_update';
 
 export interface BotRuntimeConfig {
   mode: BotMode;
