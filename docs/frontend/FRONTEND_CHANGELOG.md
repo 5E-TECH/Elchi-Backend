@@ -23,6 +23,17 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-10-17 — Kuryer kvitansiyasi javobi kassa tarixida (2crjWf7v)
+
+- [2026-10-17] ✏️ [finance] — Kuryer kassasi tarixi (`GET
+  /finance/cashbox/user/:id?cashbox_type=couriers`, `GET
+  /finance/cashbox/my-cashbox` kuryer uchun) — `source_type:
+  "courier_payment"` qatorlarida endi `payment_ack`: `"confirmed"` (kuryer
+  botda «👍 Tasdiqlayman» bosgan), `"disputed"` («❗️ Noto'g'ri»), `null`
+  (javob yo'q). Boshqa qatorlarda maydon yo'q. 🔧 To'lovlar tarixida
+  `disputed` → «Noto'g'ri» (danger), `confirmed` → «Tasdiqlangan» (success)
+  belgisi.
+
 ### 2026-10-17 — Skan Mini App (MWYaqprw) va ommaviy yopish isboti (j9KFyqlS)
 
 - [2026-10-17] 🆕 [telegram] — Skan Mini App'i uchun backend tayyor. 🔧 Yangi

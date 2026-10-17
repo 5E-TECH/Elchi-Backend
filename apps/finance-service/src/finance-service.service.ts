@@ -2715,11 +2715,15 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
       else if (start) historyWhere.createdAt = MoreThanOrEqual(start);
       else if (end) historyWhere.createdAt = LessThanOrEqual(end);
 
-      const cashboxHistory = await this.historyRepo.find({
+      const rawHistory = await this.historyRepo.find({
         where: historyWhere,
         order: { createdAt: 'DESC' },
       });
-      const { income, outcome } = this.calcIncomeOutcome(cashboxHistory);
+      const { income, outcome } = this.calcIncomeOutcome(rawHistory);
+      const cashboxHistory =
+        cashbox.cashbox_type === Cashbox_type.FOR_COURIER
+          ? await this.withPaymentAcks(rawHistory)
+          : rawHistory;
 
       return this.successRes(
         { cashbox, cashboxHistory, income, outcome },
@@ -2728,6 +2732,41 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
       );
     } catch (error) {
       this.toRpcError(error);
+    }
+  }
+
+  /**
+   * (2crjWf7v) Kuryer kassasi tarixida pul topshirish qatorlariga kuryerning
+   * bot kvitansiyasiga javobi: `payment_ack` = `confirmed` | `disputed` |
+   * `null` (javob yo'q). Kvitansiya `payment_id` = shu qatorning id'si.
+   * Faqat ko'rsatish uchun — xato bo'lsa tarix javobsiz qaytadi.
+   */
+  private async withPaymentAcks(
+    history: CashboxHistory[],
+  ): Promise<Array<CashboxHistory & { payment_ack?: string | null }>> {
+    const ids = history
+      .filter((row) => row.source_type === Source_type.COURIER_PAYMENT)
+      .map((row) => String(row.id));
+    if (!ids.length) return history;
+    try {
+      const rows: Array<{ payment_id: string; ack: string }> =
+        await this.historyRepo.query(
+          `SELECT "payment_id"::text AS payment_id, "ack"
+             FROM "finance_schema"."courier_payment_acks"
+            WHERE "payment_id" = ANY($1::bigint[])`,
+          [ids],
+        );
+      const acks = new Map(rows.map((row) => [row.payment_id, row.ack]));
+      return history.map((row) =>
+        row.source_type === Source_type.COURIER_PAYMENT
+          ? { ...row, payment_ack: acks.get(String(row.id)) ?? null }
+          : row,
+      );
+    } catch (error) {
+      this.logger.warn(
+        `kvitansiya javoblari olinmadi: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return history;
     }
   }
 
