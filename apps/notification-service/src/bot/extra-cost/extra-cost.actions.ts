@@ -1,5 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { EXTRA_COST_REJECT_REASON_LABELS, ExtraCostRejectReason } from '@app/common';
+import {
+  EXTRA_COST_REJECT_REASON_LABELS,
+  ExtraCostRejectReason,
+} from '@app/common';
 import type { TelegramBotAction } from '../../entities/telegram-bot-action.entity';
 import { BotActionsService } from '../bot-actions.service';
 import { BotGatewayClient } from '../bot-gateway.client';
@@ -64,7 +67,8 @@ export class ExtraCostActions {
       {
         action: EXTRA_COST_ACTIONS.back,
         foreignText: EC_ONLY_OWNER_TEXT,
-        handle: (ctx) => ctx.reply('⬅️ Qaror keyinga qoldirildi.').then(() => undefined),
+        handle: (ctx) =>
+          ctx.reply('⬅️ Qaror keyinga qoldirildi.').then(() => undefined),
       },
     ];
   }
@@ -143,7 +147,9 @@ export class ExtraCostActions {
       this.logger.warn(
         `extra-cost ${decision} #${approvalId}: ${error instanceof Error ? error.message : 'error'}`,
       );
-      await ctx.reply("❌ Qaror yuborilmadi (aloqa xatosi) — qayta urinib ko'ring.");
+      await ctx.reply(
+        "❌ Qaror yuborilmadi (aloqa xatosi) — qayta urinib ko'ring.",
+      );
       return;
     }
     const text = messageOf(res.body);
@@ -165,7 +171,9 @@ export class ExtraCostActions {
       await ctx.reply(EC_ONLY_OWNER_TEXT);
       return;
     }
-    await ctx.reply(`❌ Qaror qabul qilinmadi${text ? `: ${text.slice(0, 200)}` : '.'}`);
+    await ctx.reply(
+      `❌ Qaror qabul qilinmadi${text ? `: ${text.slice(0, 200)}` : '.'}`,
+    );
   }
 
   /** (1tnpaIqd #4) Qarordan keyin eskirgan tugma chatda qolmasin. */

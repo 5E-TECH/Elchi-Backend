@@ -53,7 +53,10 @@ describe('3ZfiXuaW — aktor darvozasi (fail-closed)', () => {
 
   it('bog‘lanmagan chat — tushunarsiz matn va rol buyruqlariga hech qanday ma’lumot yo‘q', async () => {
     const ctx = makeRouter({ actor: null });
-    await ctx.router.dispatch('elchi', textUpdate('salom dunyo', { updateId: 1 }));
+    await ctx.router.dispatch(
+      'elchi',
+      textUpdate('salom dunyo', { updateId: 1 }),
+    );
     await ctx.router.dispatch('elchi', textUpdate('/ishim', { updateId: 2 }));
     expect(replies(ctx)).toEqual([COMMAND_NOT_LINKED_TEXT]);
     // /start — yagona javob beradigan buyruq (ulash ko'rsatmasi).
@@ -73,7 +76,11 @@ describe('3ZfiXuaW — aktor darvozasi (fail-closed)', () => {
     const group = makeRouter({ actor: actor('courier') });
     await group.router.dispatch(
       'elchi',
-      textUpdate('/ishim@elchi_bot', { chatId: -100555, chatType: 'supergroup', fromId: 25 }),
+      textUpdate('/ishim@elchi_bot', {
+        chatId: -100555,
+        chatType: 'supergroup',
+        fromId: 25,
+      }),
     );
     expect(replies(group)).toEqual([COMMAND_GROUP_DENIED_TEXT]);
     // Huquq odam bo'yicha: aktor guruhda ham `from.id` dan yechiladi.
@@ -81,7 +88,10 @@ describe('3ZfiXuaW — aktor darvozasi (fail-closed)', () => {
   });
 
   it('⭐ market operatori boshqa marketning buyurtmasi — "topilmadi"; so‘rovga requester qo‘shiladi (doira serverda)', async () => {
-    rmqSendMock.mockRejectedValueOnce({ statusCode: 404, message: 'Order #202 topilmadi' });
+    rmqSendMock.mockRejectedValueOnce({
+      statusCode: 404,
+      message: 'Order #202 topilmadi',
+    });
     const ctx = makeRouter({ actor: actor('market_operator', '40', '37') });
     await ctx.router.dispatch('elchi', textUpdate('/status 202'));
     expect(rmqSendMock).toHaveBeenCalledWith(
@@ -120,10 +130,17 @@ describe('3ZfiXuaW — callback: odam bo‘yicha va atomik', () => {
     });
     await ctx.router.dispatch(
       'elchi',
-      callbackUpdate('a:0123456789abcdef', { chatId: -100555, fromId: 999, chatType: 'supergroup' }),
+      callbackUpdate('a:0123456789abcdef', {
+        chatId: -100555,
+        fromId: 999,
+        chatType: 'supergroup',
+      }),
     );
     expect(ctx.actors.resolve).toHaveBeenCalledWith('999');
-    expect(ctx.transport.answerCallbackQuery).toHaveBeenCalledWith('cb1', ACTION_FOREIGN_TEXT);
+    expect(ctx.transport.answerCallbackQuery).toHaveBeenCalledWith(
+      'cb1',
+      ACTION_FOREIGN_TEXT,
+    );
     expect(handle).not.toHaveBeenCalled();
     expect(ctx.actions.consume).not.toHaveBeenCalled();
   });
@@ -140,10 +157,19 @@ describe('3ZfiXuaW — callback: odam bo‘yicha va atomik', () => {
       lookup: jest.fn().mockResolvedValue({ status: 'ok', action: action() }),
       consume,
     });
-    await ctx.router.dispatch('elchi', callbackUpdate('a:0123456789abcdef', { fromId: 25 }));
-    await ctx.router.dispatch('elchi', callbackUpdate('a:0123456789abcdef', { fromId: 25 }));
+    await ctx.router.dispatch(
+      'elchi',
+      callbackUpdate('a:0123456789abcdef', { fromId: 25 }),
+    );
+    await ctx.router.dispatch(
+      'elchi',
+      callbackUpdate('a:0123456789abcdef', { fromId: 25 }),
+    );
     expect(handle).toHaveBeenCalledTimes(1);
-    expect(ctx.transport.answerCallbackQuery).toHaveBeenLastCalledWith('cb1', ACTION_CONSUMED_TEXT);
+    expect(ctx.transport.answerCallbackQuery).toHaveBeenLastCalledWith(
+      'cb1',
+      ACTION_CONSUMED_TEXT,
+    );
   });
 
   it('eski `status:<id>` callback — buyurtma o‘qilmaydi (holat DB’da, `a:<id>` yo‘q)', async () => {
@@ -162,9 +188,21 @@ describe('5i3UZjiF / 3ZfiXuaW — order.find_by_id doirasi SERVER tomonda', () =
     ['admin', { id: '2', roles: ['ADMIN'] }, true],
     ['o‘z marketi', { id: '37', roles: ['market'] }, true],
     ['begona market', { id: '38', roles: ['market'] }, false],
-    ['operator — o‘z marketi', { id: '40', roles: ['market_operator'], market_id: '37' }, true],
-    ['operator — begona market', { id: '40', roles: ['market_operator'], market_id: '38' }, false],
-    ['operator — marketsiz', { id: '40', roles: ['market_operator'], market_id: null }, false],
+    [
+      'operator — o‘z marketi',
+      { id: '40', roles: ['market_operator'], market_id: '37' },
+      true,
+    ],
+    [
+      'operator — begona market',
+      { id: '40', roles: ['market_operator'], market_id: '38' },
+      false,
+    ],
+    [
+      'operator — marketsiz',
+      { id: '40', roles: ['market_operator'], market_id: null },
+      false,
+    ],
     ['kuryer (courier_id)', { id: '25', roles: ['courier'] }, true],
     ['kuryer (holder_courier_id)', { id: '27', roles: ['courier'] }, true],
     ['begona kuryer', { id: '26', roles: ['courier'] }, false],

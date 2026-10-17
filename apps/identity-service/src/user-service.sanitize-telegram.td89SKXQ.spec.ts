@@ -29,17 +29,26 @@ describe('td89SKXQ — sanitize: market_tg_token va telegram_id javobda yo‘q',
 
   it('⭐ ulangan market — market_tg_token, telegram_id, password, refresh_token yo‘q; telegram_linked: true', () => {
     const safe = sanitize(market);
-    for (const key of ['market_tg_token', 'telegram_id', 'password', 'refresh_token']) {
+    for (const key of [
+      'market_tg_token',
+      'telegram_id',
+      'password',
+      'refresh_token',
+    ]) {
       expect(safe).not.toHaveProperty(key);
     }
     expect(safe.telegram_linked).toBe(true);
     expect(JSON.stringify(safe)).not.toContain('5550007');
     expect(JSON.stringify(safe)).not.toContain('group_token-');
-    expect(safe).toEqual(expect.objectContaining({ id: '37', name: 'TEST Claude Market' }));
+    expect(safe).toEqual(
+      expect.objectContaining({ id: '37', name: 'TEST Claude Market' }),
+    );
   });
 
   it('ulanmagan — telegram_linked: false', () => {
-    expect(sanitize({ ...market, telegram_id: null }).telegram_linked).toBe(false);
+    expect(sanitize({ ...market, telegram_id: null }).telegram_linked).toBe(
+      false,
+    );
   });
 
   it('telegram_id tanlanmagan proyeksiya — telegram_linked qo‘shilmaydi (noto‘g‘ri "false" yo‘q)', () => {

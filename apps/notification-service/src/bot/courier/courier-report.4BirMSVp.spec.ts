@@ -2,7 +2,10 @@ import { Logger } from '@nestjs/common';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { NOTIFICATION_TYPES } from '@app/common';
-import { COMMAND_NOT_LINKED_TEXT, COMMAND_ROLE_DENIED_TEXT } from '../handlers/command-gate.handler';
+import {
+  COMMAND_NOT_LINKED_TEXT,
+  COMMAND_ROLE_DENIED_TEXT,
+} from '../handlers/command-gate.handler';
 import {
   courierActor,
   fakeOrdersGateway,
@@ -11,7 +14,10 @@ import {
   sentTexts,
   textUpdate,
 } from '../testing/bot-kit-spec';
-import { CourierReportScheduler, deterministicUuid } from './courier-report.scheduler';
+import {
+  CourierReportScheduler,
+  deterministicUuid,
+} from './courier-report.scheduler';
 import { buildCourierDailyReport } from './courier.handler';
 
 const rmqSendMock = jest.fn();
@@ -43,8 +49,14 @@ const stats = {
 
 describe('4BirMSVp — /kun', () => {
   it('⭐ /kun — 5 ta son + kassa qoldig‘i bitta xabarda, notification.dispatch (in-app + Telegram) orqali', async () => {
-    const gateway = fakeOrdersGateway([], { stats, cashbox: { balance: '1250000.00' } });
-    const ctx = makeRouter({ actor: courierActor('25'), gateway: gateway.request });
+    const gateway = fakeOrdersGateway([], {
+      stats,
+      cashbox: { balance: '1250000.00' },
+    });
+    const ctx = makeRouter({
+      actor: courierActor('25'),
+      gateway: gateway.request,
+    });
     await ctx.router.dispatch('elchi', textUpdate('/kun', { chatId: 25 }));
     expect(gateway.calls.map((call) => call.path)).toEqual([
       '/analytics/dashboard?period=today',
@@ -92,13 +104,17 @@ describe('4BirMSVp — /kun', () => {
   });
 
   it('katalog: courier.daily_report — Telegram sukut kanallarda', () => {
-    const type = NOTIFICATION_TYPES.find((entry) => entry.key === 'courier.daily_report');
+    const type = NOTIFICATION_TYPES.find(
+      (entry) => entry.key === 'courier.daily_report',
+    );
     expect(type?.default_channels).toEqual(['in_app', 'telegram']);
   });
 });
 
 describe('4BirMSVp — avtomatik hisobot (scheduler)', () => {
-  const makeScheduler = (couriers: Array<{ user_id: string; telegram_id: string }>) => {
+  const makeScheduler = (
+    couriers: Array<{ user_id: string; telegram_id: string }>,
+  ) => {
     const dispatch = jest.fn().mockResolvedValue({});
     const gateway = fakeOrdersGateway([], { stats, cashbox: { balance: '0' } });
     rmqSendMock.mockResolvedValue({ data: couriers });
@@ -127,20 +143,31 @@ describe('4BirMSVp — avtomatik hisobot (scheduler)', () => {
       { role: 'courier' },
       expect.anything(),
     );
-    const first = dispatch.mock.calls[0][0] as { client_request_id: string; recipient_id: string };
+    const first = dispatch.mock.calls[0][0] as {
+      client_request_id: string;
+      recipient_id: string;
+    };
     expect(first.recipient_id).toBe('1000');
-    expect(first.client_request_id).toBe(deterministicUuid('courier-daily:1000:2026-10-16'));
+    expect(first.client_request_id).toBe(
+      deterministicUuid('courier-daily:1000:2026-10-16'),
+    );
     expect(first.client_request_id).toMatch(
       /^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
     );
     // Qayta ishga tushsa — ayni id (inbox takrorni rad etadi).
     await scheduler.run(now);
-    expect(dispatch.mock.calls[100][0].client_request_id).toBe(first.client_request_id);
+    expect(dispatch.mock.calls[100][0].client_request_id).toBe(
+      first.client_request_id,
+    );
   });
 
   it('⭐ bog‘lanmagan kuryerga urinilmaydi (faqat linked_users ro‘yxati)', async () => {
     const { scheduler, dispatch } = makeScheduler([]);
-    expect(await scheduler.run()).toEqual({ couriers: 0, dispatched: 0, failed: 0 });
+    expect(await scheduler.run()).toEqual({
+      couriers: 0,
+      dispatched: 0,
+      failed: 0,
+    });
     expect(dispatch).not.toHaveBeenCalled();
   });
 
@@ -150,11 +177,18 @@ describe('4BirMSVp — avtomatik hisobot (scheduler)', () => {
       { user_id: '2', telegram_id: '22' },
     ]);
     dispatch.mockRejectedValueOnce(new Error('boom'));
-    expect(await scheduler.run()).toEqual({ couriers: 2, dispatched: 1, failed: 1 });
+    expect(await scheduler.run()).toEqual({
+      couriers: 2,
+      dispatched: 1,
+      failed: 1,
+    });
   });
 
   it('⭐ 429 olinmaydi: Telegram yuborish outbox token-bucket orqali (bot o‘z sendMessage yo‘lini ochmaydi)', () => {
-    const src = readFileSync(join(__dirname, 'courier-report.scheduler.ts'), 'utf8');
+    const src = readFileSync(
+      join(__dirname, 'courier-report.scheduler.ts'),
+      'utf8',
+    );
     expect(src).not.toMatch(/sendMessage|sendDirectToGroup|BotOutboxService/);
     expect(src).toMatch(/inbox\.dispatch\(/);
   });
@@ -163,11 +197,20 @@ describe('4BirMSVp — avtomatik hisobot (scheduler)', () => {
 describe('VICfJuoi #2 / /kassa — o‘z kassasi, o‘z JWT bilan', () => {
   it('⭐ /balans bog‘langan market — o‘z FOR_MARKET kassasi qoldig‘i', async () => {
     const gateway = fakeOrdersGateway([], {
-      cashbox: { balance: '2500000.00', balance_cash: '1000000', balance_card: '1500000' },
+      cashbox: {
+        balance: '2500000.00',
+        balance_cash: '1000000',
+        balance_card: '1500000',
+      },
     });
-    const ctx = makeRouter({ actor: marketActor('37'), gateway: gateway.request });
+    const ctx = makeRouter({
+      actor: marketActor('37'),
+      gateway: gateway.request,
+    });
     await ctx.router.dispatch('elchi', textUpdate('/balans', { chatId: 37 }));
-    expect(gateway.calls.map((call) => call.path)).toEqual(['/finance/cashbox/my-cashbox']);
+    expect(gateway.calls.map((call) => call.path)).toEqual([
+      '/finance/cashbox/my-cashbox',
+    ]);
     expect(sentTexts(ctx).at(-1)).toBe(
       [
         '💰 Balans (market kassasi):',
@@ -188,10 +231,19 @@ describe('VICfJuoi #2 / /kassa — o‘z kassasi, o‘z JWT bilan', () => {
 
   it('⭐ Market A chatidan Market B kassasi so‘ralib bo‘lmaydi — so‘rovda parametr yo‘q, doira JWT’dan', async () => {
     const gateway = fakeOrdersGateway([], { cashbox: { balance: '1' } });
-    const ctx = makeRouter({ actor: marketActor('37'), gateway: gateway.request });
-    await ctx.router.dispatch('elchi', textUpdate('/balans 38', { chatId: 37 }));
+    const ctx = makeRouter({
+      actor: marketActor('37'),
+      gateway: gateway.request,
+    });
+    await ctx.router.dispatch(
+      'elchi',
+      textUpdate('/balans 38', { chatId: 37 }),
+    );
     expect(gateway.request).not.toHaveBeenCalled();
-    await ctx.router.dispatch('elchi', textUpdate('/balans', { chatId: 37, updateId: 2 }));
+    await ctx.router.dispatch(
+      'elchi',
+      textUpdate('/balans', { chatId: 37, updateId: 2 }),
+    );
     expect(gateway.calls[0].path).toBe('/finance/cashbox/my-cashbox');
     expect(gateway.request.mock.calls[0][0]).toBe('37');
   });
@@ -201,7 +253,10 @@ describe('VICfJuoi #2 / /kassa — o‘z kassasi, o‘z JWT bilan', () => {
     const ctx = makeRouter({ actor: courierActor(), gateway: gateway.request });
     await ctx.router.dispatch('elchi', textUpdate('/kassa', { chatId: 25 }));
     expect(sentTexts(ctx).at(-1)).toContain("Jami: 300 000 so'm");
-    await ctx.router.dispatch('elchi', textUpdate('/balans', { chatId: 25, updateId: 2 }));
+    await ctx.router.dispatch(
+      'elchi',
+      textUpdate('/balans', { chatId: 25, updateId: 2 }),
+    );
     expect(sentTexts(ctx).at(-1)).toBe(COMMAND_ROLE_DENIED_TEXT);
   });
 });

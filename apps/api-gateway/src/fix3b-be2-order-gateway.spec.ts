@@ -357,7 +357,7 @@ describe('fix3b BE-2 — GET /orders/:id/settlement filial doirasi', () => {
 });
 
 describe('fix3b BE-2 / 6jXw0DDr — connect-by-token Swagger misoli: bir martalik kod', () => {
-  it("`text` misoli — 43 belgilik bir martalik kod; group_token (market id ham, market tokeni ham) EMAS", () => {
+  it('`text` misoli — 43 belgilik bir martalik kod; group_token (market id ham, market tokeni ham) EMAS', () => {
     const meta = Reflect.getMetadata(
       API_MODEL_PROPERTIES,
       ConnectTelegramByTokenRequestDto.prototype,

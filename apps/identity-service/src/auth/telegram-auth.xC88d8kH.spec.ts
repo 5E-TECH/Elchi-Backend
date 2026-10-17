@@ -96,8 +96,7 @@ describe('xC88d8kH — AuthService.telegramLogin / telegramAccessToken', () => {
       jwtService,
       activityLog,
       configService: {
-        get: (key: string) =>
-          ({ TELEGRAM_BOT_TOKEN: BOT_TOKEN })[key] as string | undefined,
+        get: (key: string) => ({ TELEGRAM_BOT_TOKEN: BOT_TOKEN })[key],
       },
       resolveBranchId: () => Promise.resolve(null),
     });
@@ -115,7 +114,10 @@ describe('xC88d8kH — AuthService.telegramLogin / telegramAccessToken', () => {
     );
 
   beforeAll(() => {
-    jest.useFakeTimers({ now: NOW * 1000 + 5_000, doNotFake: ['nextTick', 'setImmediate'] });
+    jest.useFakeTimers({
+      now: NOW * 1000 + 5_000,
+      doNotFake: ['nextTick', 'setImmediate'],
+    });
   });
   afterAll(() => jest.useRealTimers());
 
@@ -124,7 +126,11 @@ describe('xC88d8kH — AuthService.telegramLogin / telegramAccessToken', () => {
     const res = await svc.telegramLogin({ init_data: initData() });
     expect(users.find).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: { telegram_id: '5550007', isDeleted: false, status: Status.ACTIVE },
+        where: {
+          telegram_id: '5550007',
+          isDeleted: false,
+          status: Status.ACTIVE,
+        },
       }),
     );
     expect(res.statusCode).toBe(200);
@@ -137,7 +143,11 @@ describe('xC88d8kH — AuthService.telegramLogin / telegramAccessToken', () => {
       iat: number;
     }>(res.accessToken);
     expect(payload).toEqual(
-      expect.objectContaining({ sub: '25', roles: ['courier'], auth: 'telegram' }),
+      expect.objectContaining({
+        sub: '25',
+        roles: ['courier'],
+        auth: 'telegram',
+      }),
     );
     expect(payload.exp - payload.iat).toBe(30 * 60);
     expect(res.user).not.toHaveProperty('password');
@@ -161,9 +171,14 @@ describe('xC88d8kH — AuthService.telegramLogin / telegramAccessToken', () => {
     expect(err.statusCode).toBe(401);
     expect(JSON.stringify(err)).not.toContain(BOT_TOKEN);
     const old = await errorOf(
-      svc.telegramLogin({ init_data: initData({ auth_date: String(NOW - 6 * 60) }) }),
+      svc.telegramLogin({
+        init_data: initData({ auth_date: String(NOW - 6 * 60) }),
+      }),
     );
-    expect(old).toEqual({ statusCode: 401, message: expect.stringContaining('eskirgan') });
+    expect(old).toEqual({
+      statusCode: 401,
+      message: expect.stringContaining('eskirgan'),
+    });
     expect(users.find).not.toHaveBeenCalled();
   });
 
@@ -172,12 +187,16 @@ describe('xC88d8kH — AuthService.telegramLogin / telegramAccessToken', () => {
     ['investor', { ...linkedUser, role: Roles.INVESTOR }],
   ])('%s — token berilmaydi (401)', async (_label, row) => {
     const { svc } = make([row]);
-    expect((await errorOf(svc.telegramAccessToken('5550007', 'bot'))).statusCode).toBe(401);
+    expect(
+      (await errorOf(svc.telegramAccessToken('5550007', 'bot'))).statusCode,
+    ).toBe(401);
   });
 
   it('bir nechta akkauntga bog‘langan id — 401 (fail-closed)', async () => {
     const { svc } = make([linkedUser, { ...linkedUser, id: '26' }]);
-    expect((await errorOf(svc.telegramAccessToken('5550007', 'bot'))).statusCode).toBe(401);
+    expect(
+      (await errorOf(svc.telegramAccessToken('5550007', 'bot'))).statusCode,
+    ).toBe(401);
   });
 
   it('bot aktori tokeni (ichki RMQ) — login jurnali yozilmaydi; mini app — yoziladi', async () => {

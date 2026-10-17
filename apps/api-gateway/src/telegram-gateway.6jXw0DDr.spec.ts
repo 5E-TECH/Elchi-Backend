@@ -10,7 +10,10 @@ import { ThrottlerModule } from '@nestjs/throttler';
 import { of } from 'rxjs';
 import request from 'supertest';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
-import { TelegramIdThrottlerGuard, telegramUserIdOf } from './auth/telegram-id-throttler.guard';
+import {
+  TelegramIdThrottlerGuard,
+  telegramUserIdOf,
+} from './auth/telegram-id-throttler.guard';
 import { NotificationGatewayController } from './notification-gateway.controller';
 import { TelegramGatewayController } from './telegram-gateway.controller';
 import { AuthGatewayController } from './auth-gateway.controller';
@@ -54,7 +57,9 @@ describe('Telegram bog‘lash va kirish — gateway', () => {
           const isPublic = Reflect.getMetadata('isPublic', handler) === true;
           if (isPublic) return true;
           if (!user) return false;
-          ctx.switchToHttp().getRequest<{ user?: unknown }>().user = { ...user };
+          ctx.switchToHttp().getRequest<{ user?: unknown }>().user = {
+            ...user,
+          };
           return true;
         },
       })
@@ -79,7 +84,9 @@ describe('Telegram bog‘lash va kirish — gateway', () => {
 
   beforeEach(() => {
     user = { sub: '25', roles: ['courier'] };
-    notificationSend.mockReset().mockReturnValue(of({ statusCode: 200, data: {} }));
+    notificationSend
+      .mockReset()
+      .mockReturnValue(of({ statusCode: 200, data: {} }));
     identitySend.mockReset().mockReturnValue(of({ statusCode: 200, data: {} }));
   });
 
@@ -136,7 +143,10 @@ describe('Telegram bog‘lash va kirish — gateway', () => {
     await request(http()).get('/telegram/stats').expect(403);
     user = { sub: '1', roles: ['admin'] };
     await request(http()).get('/telegram/stats').expect(200);
-    expect(identitySend).toHaveBeenCalledWith({ cmd: 'identity.telegram.stats' }, {});
+    expect(identitySend).toHaveBeenCalledWith(
+      { cmd: 'identity.telegram.stats' },
+      {},
+    );
   });
 
   it('⭐ POST /notifications/connect-by-token — registrator 403', async () => {
@@ -167,7 +177,9 @@ describe('Telegram bog‘lash va kirish — gateway', () => {
   });
 
   it('Telegram id bo‘yicha throttle kaliti initData’dagi user.id', () => {
-    expect(telegramUserIdOf('user=%7B%22id%22%3A5550007%7D&hash=x')).toBe('5550007');
+    expect(telegramUserIdOf('user=%7B%22id%22%3A5550007%7D&hash=x')).toBe(
+      '5550007',
+    );
     expect(telegramUserIdOf('user=notjson')).toBeNull();
     expect(telegramUserIdOf('')).toBeNull();
   });

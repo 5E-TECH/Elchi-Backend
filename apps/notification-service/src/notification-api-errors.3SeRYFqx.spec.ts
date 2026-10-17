@@ -169,7 +169,9 @@ describe('3SeRYFqx #1 — POST /notifications/connect-by-token (HTTP yo‘li)', 
       'totally-not-a-token',
       '-100999',
     );
-    expect(res).toEqual({ message: expect.stringContaining('Ulash kodi noto') });
+    expect(res).toEqual({
+      message: expect.stringContaining('Ulash kodi noto'),
+    });
   });
 
   it('RMQ notification.telegram.connect_by_token → connectGroupByToken (bot metodi emas)', () => {

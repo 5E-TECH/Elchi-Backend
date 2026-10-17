@@ -251,24 +251,27 @@ describe('6jXw0DDr / CODE-02: guruhni ulash faqat BIR MARTALIK kod bilan', () =>
 });
 
 describe('CODE-02: /start va /help market id formatini ko‘rsatmaydi', () => {
-  it.each(['/start', '/help'])('%s (guruh) — faqat kabinet havolasiga yo‘naltiradi', async (command) => {
-    const handler = new GroupHandler(
-      { connectGroupByTokenText: jest.fn() } as never,
-      { linkAttempt: jest.fn() } as never,
-    );
-    const { ctx, replies } = makeCtx({
-      chatId: '-100777',
-      chatType: 'supergroup',
-      text: command,
-    });
+  it.each(['/start', '/help'])(
+    '%s (guruh) — faqat kabinet havolasiga yo‘naltiradi',
+    async (command) => {
+      const handler = new GroupHandler(
+        { connectGroupByTokenText: jest.fn() } as never,
+        { linkAttempt: jest.fn() } as never,
+      );
+      const { ctx, replies } = makeCtx({
+        chatId: '-100777',
+        chatType: 'supergroup',
+        text: command,
+      });
 
-    expect(await handler.handle(ctx as never)).toBe(true);
+      expect(await handler.handle(ctx as never)).toBe(true);
 
-    const message = replies[0].text;
-    expect(message).toContain('havola');
-    expect(message).not.toMatch(/group_token/);
-    expect(message).not.toContain('marketId');
-  });
+      const message = replies[0].text;
+      expect(message).toContain('havola');
+      expect(message).not.toMatch(/group_token/);
+      expect(message).not.toContain('marketId');
+    },
+  );
 });
 
 describe('CODE-18: /status faqat o‘z marketi uchun (aktor = users.telegram_id)', () => {

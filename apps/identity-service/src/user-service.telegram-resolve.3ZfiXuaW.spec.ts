@@ -88,7 +88,10 @@ describe('identity — identity.telegram.resolve (bot aktori)', () => {
   });
 
   it('resolve_many — bir so‘rovda, har id uchun aktor yoki null', async () => {
-    const svc = make([user(), user({ id: '26', telegram_id: '5550008', status: Status.INACTIVE })]);
+    const svc = make([
+      user(),
+      user({ id: '26', telegram_id: '5550008', status: Status.INACTIVE }),
+    ]);
     const res = await svc.telegramResolveMany({
       telegram_ids: ['5550007', '5550008', '5550009', 'bad'],
     });

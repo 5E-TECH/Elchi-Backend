@@ -100,7 +100,6 @@ describe('GL2GgtEc — kiruvchi cheklov', () => {
     expect(notifications.connectGroupByCodeText).not.toHaveBeenCalled();
     expect(made.replies[0].text).toBe(LINK_BLOCKED_TEXT);
   });
-;
 });
 
 describe('GL2GgtEc — chiquvchi: 429, token-bucket, 4096', () => {

@@ -198,10 +198,7 @@ describe('fix3b CODE-02 — ulash: token almashtirilmaydi, mavjud ulanish almash
       },
     ];
 
-    const res = await service.connectGroupByCodeText(
-      CANCEL_CODE,
-      '-100999',
-    );
+    const res = await service.connectGroupByCodeText(CANCEL_CODE, '-100999');
 
     expect(res).toEqual({ message: MARKET_TAKEN });
     expect(repo.save).not.toHaveBeenCalled();
@@ -218,10 +215,7 @@ describe('fix3b CODE-02 — ulash: token almashtirilmaydi, mavjud ulanish almash
       },
     ];
 
-    const res = await service.connectGroupByCodeText(
-      CANCEL_CODE,
-      '-100222',
-    );
+    const res = await service.connectGroupByCodeText(CANCEL_CODE, '-100222');
 
     expect(res).toEqual(expect.objectContaining({ statusCode: 201 }));
     expect(repo.create).toHaveBeenCalledWith(

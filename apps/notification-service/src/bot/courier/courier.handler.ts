@@ -44,11 +44,11 @@ const PROOF_IMAGE_MIME = ['image/jpeg', 'image/png'];
 const PROOF_VIDEO_MIME = ['video/mp4', 'video/quicktime'];
 
 export const PROOF_PROMPT_TEXT =
-  "📷 Rasm yoki video yuboring (3 tagacha). Hammasini yuborgach «✅ Tugatdim» ni bosing.";
+  '📷 Rasm yoki video yuboring (3 tagacha). Hammasini yuborgach «✅ Tugatdim» ni bosing.';
 export const PROOF_TOO_LARGE_TEXT =
-  "❌ Video juda katta (Telegram bot 20MB gacha qabul qiladi) — qisqaroq oling yoki kabinetdan yuklang. Amal hali OCHIQ.";
+  '❌ Video juda katta (Telegram bot 20MB gacha qabul qiladi) — qisqaroq oling yoki kabinetdan yuklang. Amal hali OCHIQ.';
 export const PROOF_FORMAT_TEXT =
-  "❌ Format qabul qilinmaydi — JPG/PNG surat yoki MP4/MOV video yuboring.";
+  '❌ Format qabul qilinmaydi — JPG/PNG surat yoki MP4/MOV video yuboring.';
 
 interface ProofState {
   op: CourierOp;
@@ -139,24 +139,27 @@ export class CourierHandler implements BotMessageHandler {
       await this.courier.sendCard(ctx, order, actor.user_id);
     }
     if (hasNext) {
-      await ctx.reply(`Ko'rsatildi: ${(page - 1) * COURIER_PAGE_SIZE + orders.length} / ${total}`, {
-        reply_markup: {
-          inline_keyboard: [
-            [
-              {
-                text: '⬇️ Yana',
-                callback_data: await this.actions.create({
-                  chatId: ctx.chatId,
-                  action: COURIER_ACTIONS.page,
-                  actorUserId: actor.user_id,
-                  payload: { page: page + 1 },
-                  oneShot: false,
-                }),
-              },
+      await ctx.reply(
+        `Ko'rsatildi: ${(page - 1) * COURIER_PAGE_SIZE + orders.length} / ${total}`,
+        {
+          reply_markup: {
+            inline_keyboard: [
+              [
+                {
+                  text: '⬇️ Yana',
+                  callback_data: await this.actions.create({
+                    chatId: ctx.chatId,
+                    action: COURIER_ACTIONS.page,
+                    actorUserId: actor.user_id,
+                    payload: { page: page + 1 },
+                    oneShot: false,
+                  }),
+                },
+              ],
             ],
-          ],
+          },
         },
-      });
+      );
     }
   }
 
@@ -239,7 +242,12 @@ export class CourierHandler implements BotMessageHandler {
         await ctx.reply(MEDIA_SEND_AS_PHOTO_TEXT);
         return true;
       }
-      file = { id: size.file_id, mime: 'image/jpeg', name: 'proof.jpg', size: size.file_size ?? null };
+      file = {
+        id: size.file_id,
+        mime: 'image/jpeg',
+        name: 'proof.jpg',
+        size: size.file_size ?? null,
+      };
     } else {
       const media = message?.video ?? message?.document;
       if (!media?.file_id) return false;
@@ -250,7 +258,9 @@ export class CourierHandler implements BotMessageHandler {
       if (size !== null && size > BOT_MEDIA_LIMITS.FILE_MAX_BYTES) {
         await ctx.reply(PROOF_TOO_LARGE_TEXT, {
           reply_markup: {
-            inline_keyboard: [[cabinetButton(this.courier.cabinetUrl, proof.order_id)]],
+            inline_keyboard: [
+              [cabinetButton(this.courier.cabinetUrl, proof.order_id)],
+            ],
           },
         });
         return true;
@@ -302,7 +312,9 @@ export class CourierHandler implements BotMessageHandler {
         "❌ Faylni yuklab bo'lmadi — qayta yuboring yoki kabinetdan yuklang. Amal hali OCHIQ.",
         {
           reply_markup: {
-            inline_keyboard: [[cabinetButton(this.courier.cabinetUrl, proof.order_id)]],
+            inline_keyboard: [
+              [cabinetButton(this.courier.cabinetUrl, proof.order_id)],
+            ],
           },
         },
       );
@@ -361,15 +373,17 @@ export class CourierActions {
     private readonly sessions: BotSessionService,
     private readonly handler: CourierHandler,
   ) {
-    const privateOnly = (
-      fn: (ctx: BotContext, action: TelegramBotAction) => Promise<void>,
-    ) => async (ctx: BotContext, action: TelegramBotAction) => {
-      if (!ctx.isPrivate || !ctx.fromId) {
-        await ctx.reply('🔒 Buyurtma amallari faqat bot bilan SHAXSIY chatda.');
-        return;
-      }
-      await fn(ctx, action);
-    };
+    const privateOnly =
+      (fn: (ctx: BotContext, action: TelegramBotAction) => Promise<void>) =>
+      async (ctx: BotContext, action: TelegramBotAction) => {
+        if (!ctx.isPrivate || !ctx.fromId) {
+          await ctx.reply(
+            '🔒 Buyurtma amallari faqat bot bilan SHAXSIY chatda.',
+          );
+          return;
+        }
+        await fn(ctx, action);
+      };
     this.handlers = [
       {
         action: COURIER_ACTIONS.op,
@@ -388,7 +402,9 @@ export class CourierActions {
       },
       {
         action: COURIER_ACTIONS.back,
-        handle: privateOnly((ctx) => ctx.reply('⬅️ Amal bekor qilindi.').then(() => undefined)),
+        handle: privateOnly((ctx) =>
+          ctx.reply('⬅️ Amal bekor qilindi.').then(() => undefined),
+        ),
       },
       {
         action: COURIER_ACTIONS.page,
@@ -418,7 +434,14 @@ export class CourierActions {
     oneShot = false,
   ): Promise<InlineKeyboardButton> {
     return this.actions
-      .create({ chatId: ctx.chatId, action, actorUserId, orderId, payload, oneShot })
+      .create({
+        chatId: ctx.chatId,
+        action,
+        actorUserId,
+        orderId,
+        payload,
+        oneShot,
+      })
       .then((callback_data) => ({ text, callback_data }));
   }
 
@@ -433,14 +456,28 @@ export class CourierActions {
       const rows: InlineKeyboardButton[][] = [];
       for (const reason of reasons) {
         rows.push([
-          await this.button(ctx, actor.user_id, reason.label, COURIER_ACTIONS.reason, orderId, {
-            op,
-            reason: reason.code,
-          }),
+          await this.button(
+            ctx,
+            actor.user_id,
+            reason.label,
+            COURIER_ACTIONS.reason,
+            orderId,
+            {
+              op,
+              reason: reason.code,
+            },
+          ),
         ]);
       }
       rows.push([
-        await this.button(ctx, actor.user_id, '⬅️ Orqaga', COURIER_ACTIONS.back, orderId, {}),
+        await this.button(
+          ctx,
+          actor.user_id,
+          '⬅️ Orqaga',
+          COURIER_ACTIONS.back,
+          orderId,
+          {},
+        ),
       ]);
       await ctx.reply(`#${orderId} — ${OP_LABEL[op]}. Sababni tanlang:`, {
         reply_markup: { inline_keyboard: rows },
@@ -457,7 +494,9 @@ export class CourierActions {
     const actor = await ctx.actor();
     if (!isOp(op) || !orderId || !actor) return;
     const valid =
-      op === 'cancel' ? cancelReasonValid(reason) : Boolean(cndReasonText(reason));
+      op === 'cancel'
+        ? cancelReasonValid(reason)
+        : Boolean(cndReasonText(reason));
     if (!valid) return;
     await this.askConfirm(ctx, actor.user_id, op, orderId, reason);
   }
@@ -483,7 +522,14 @@ export class CourierActions {
               { op, reason },
               true,
             ),
-            await this.button(ctx, actorUserId, '⬅️ Orqaga', COURIER_ACTIONS.back, orderId, {}),
+            await this.button(
+              ctx,
+              actorUserId,
+              '⬅️ Orqaga',
+              COURIER_ACTIONS.back,
+              orderId,
+              {},
+            ),
           ],
         ],
       },
@@ -497,13 +543,19 @@ export class CourierActions {
     const reason = str(action.payload.reason) || null;
     if (!isOp(op) || !orderId || !ctx.fromId) return;
     if (op === 'sell' || op === 'cancel') {
-      const order = await this.courier.getOrder(ctx.fromId, orderId).catch(() => null);
+      const order = await this.courier
+        .getOrder(ctx.fromId, orderId)
+        .catch(() => null);
       if (order && proofRequired(order, op)) {
         await this.startProof(ctx, { op, order_id: orderId, reason, keys: [] });
         return;
       }
     }
-    await this.execute(ctx, { op, order_id: orderId, reason, keys: [] }, action.action_id);
+    await this.execute(
+      ctx,
+      { op, order_id: orderId, reason, keys: [] },
+      action.action_id,
+    );
   }
 
   private async startProof(
@@ -520,8 +572,23 @@ export class CourierActions {
       reply_markup: {
         inline_keyboard: [
           [
-            await this.button(ctx, actor.user_id, '✅ Tugatdim', COURIER_ACTIONS.proofDone, proof.order_id, {}, true),
-            await this.button(ctx, actor.user_id, '✖️ Bekor', COURIER_ACTIONS.proofStop, proof.order_id, {}),
+            await this.button(
+              ctx,
+              actor.user_id,
+              '✅ Tugatdim',
+              COURIER_ACTIONS.proofDone,
+              proof.order_id,
+              {},
+              true,
+            ),
+            await this.button(
+              ctx,
+              actor.user_id,
+              '✖️ Bekor',
+              COURIER_ACTIONS.proofStop,
+              proof.order_id,
+              {},
+            ),
           ],
         ],
       },
@@ -545,7 +612,11 @@ export class CourierActions {
       return;
     }
     await this.clearProof(ctx);
-    await this.execute(ctx, proof, `proof:${proof.order_id}:${proof.keys.length}`);
+    await this.execute(
+      ctx,
+      proof,
+      `proof:${proof.order_id}:${proof.keys.length}`,
+    );
   }
 
   private async onProofStop(ctx: BotContext) {
@@ -572,19 +643,32 @@ export class CourierActions {
       proof.op === 'cnd'
         ? cndReasonText(String(proof.reason ?? ''))
         : (proof.reason ?? undefined);
-    const outcome = await this.courier.perform(ctx.fromId, proof.op, proof.order_id, {
-      reason: reason ?? undefined,
-      proofFileKeys: proof.keys,
-      idempotencyKey,
-    });
-    if (outcome.kind === 'proof' && (proof.op === 'sell' || proof.op === 'cancel')) {
+    const outcome = await this.courier.perform(
+      ctx.fromId,
+      proof.op,
+      proof.order_id,
+      {
+        reason: reason ?? undefined,
+        proofFileKeys: proof.keys,
+        idempotencyKey,
+      },
+    );
+    if (
+      outcome.kind === 'proof' &&
+      (proof.op === 'sell' || proof.op === 'cancel')
+    ) {
       await ctx.reply(outcome.message);
       await this.startProof(ctx, { ...proof, keys: [] });
       return;
     }
     await ctx.reply(outcome.message);
     if (outcome.kind === 'ok') {
-      await this.courier.refreshCard(ctx, ctx.fromId, proof.order_id, actor.user_id);
+      await this.courier.refreshCard(
+        ctx,
+        ctx.fromId,
+        proof.order_id,
+        actor.user_id,
+      );
     } else if (outcome.kind === 'pending') {
       // (MO2MLPGo #7) kartada ⏳ holat — tugmalarsiz, qaror kutiladi.
       await this.courier.refreshCard(

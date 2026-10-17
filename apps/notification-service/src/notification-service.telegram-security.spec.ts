@@ -221,7 +221,9 @@ describe('NotificationServiceService — Telegram relay xavfsizligi (n0kLbx3d / 
     it('GET /notifications (find_all) — token ustuni tanlanmaydi, javobda yo‘q', async () => {
       repo.findAndCount.mockResolvedValue([[row(), row({ id: '11' })], 2]);
       const res = await service.findAllTelegramMarkets({});
-      const items = (res?.data as { items: unknown }).items as Array<Record<string, unknown>>;
+      const items = (res?.data as { items: unknown }).items as Array<
+        Record<string, unknown>
+      >;
       items.forEach(assertPublic);
       expect(Object.keys(items[0]).sort()).toEqual(
         [

@@ -10,9 +10,16 @@ import { OrderServiceService } from './order-service.service';
  * o'zgarmagan.
  */
 describe('3ZfiXuaW — order.find_by_id requester doirasi', () => {
-  const order = { id: '1251145', market_id: '37', courier_id: '25', holder_courier_id: null };
+  const order = {
+    id: '1251145',
+    market_id: '37',
+    courier_id: '25',
+    holder_courier_id: null,
+  };
   const make = (row: unknown) => {
-    const svc = Object.create(OrderServiceService.prototype) as OrderServiceService;
+    const svc = Object.create(
+      OrderServiceService.prototype,
+    ) as OrderServiceService;
     Object.assign(svc, {
       orderRepo: { findOne: jest.fn().mockResolvedValue(row) },
     });
@@ -22,18 +29,25 @@ describe('3ZfiXuaW — order.find_by_id requester doirasi', () => {
     promise.then(
       () => 200,
       (error: unknown) =>
-        ((error as RpcException).getError() as { statusCode: number }).statusCode,
+        ((error as RpcException).getError() as { statusCode: number })
+          .statusCode,
     );
 
   it('⭐ begona kuryer / begona market — 404 (yo‘q buyurtma bilan bir xil)', async () => {
     expect(
-      await statusOf(make(order).findById('1251145', { id: '26', roles: ['courier'] })),
+      await statusOf(
+        make(order).findById('1251145', { id: '26', roles: ['courier'] }),
+      ),
     ).toBe(404);
     expect(
-      await statusOf(make(order).findById('1251145', { id: '38', roles: ['market'] })),
+      await statusOf(
+        make(order).findById('1251145', { id: '38', roles: ['market'] }),
+      ),
     ).toBe(404);
     expect(
-      await statusOf(make(null).findById('1251145', { id: '37', roles: ['market'] })),
+      await statusOf(
+        make(null).findById('1251145', { id: '37', roles: ['market'] }),
+      ),
     ).toBe(404);
   });
 
@@ -46,7 +60,9 @@ describe('3ZfiXuaW — order.find_by_id requester doirasi', () => {
 
   it('controller requester’ni servisga uzatadi', async () => {
     const findById = jest.fn().mockResolvedValue(order);
-    const controller = Object.create(OrderServiceController.prototype) as OrderServiceController;
+    const controller = Object.create(
+      OrderServiceController.prototype,
+    ) as OrderServiceController;
     Object.assign(controller, {
       orderService: { findById },
       executeAndAck: (_ctx: unknown, fn: () => unknown) => fn(),
@@ -63,6 +79,9 @@ describe('3ZfiXuaW — order.find_by_id requester doirasi', () => {
       { id: '1', requester: { id: '25', roles: ['courier'] } },
       {},
     );
-    expect(findById).toHaveBeenCalledWith('1', { id: '25', roles: ['courier'] });
+    expect(findById).toHaveBeenCalledWith('1', {
+      id: '25',
+      roles: ['courier'],
+    });
   });
 });

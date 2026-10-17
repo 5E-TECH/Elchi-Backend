@@ -103,9 +103,13 @@ const linkUri = (() => {
           null,
         ]);
         // Yana NULL qo'shish mumkin, band id — yo'q (23505).
-        await db.query(`INSERT INTO identity_schema.admins (telegram_id) VALUES (NULL)`);
+        await db.query(
+          `INSERT INTO identity_schema.admins (telegram_id) VALUES (NULL)`,
+        );
         await expect(
-          db.query(`INSERT INTO identity_schema.admins (telegram_id) VALUES ('5550001')`),
+          db.query(
+            `INSERT INTO identity_schema.admins (telegram_id) VALUES ('5550001')`,
+          ),
         ).rejects.toMatchObject({ code: '23505' });
         const cols: Array<{ column_name: string }> = await db.query(
           `SELECT column_name FROM information_schema.columns

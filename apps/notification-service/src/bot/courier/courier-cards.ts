@@ -48,7 +48,7 @@ export const OP_LABEL: Record<CourierOp, string> = {
  * uchun botda yo'q). Yetkazib bo'lmadi: `reason` ≥10 belgi.
  */
 export const CANCEL_REASONS: ReadonlyArray<{ code: string; label: string }> = [
-  { code: 'CUSTOMER_NO_ANSWER', label: "📵 Mijoz javob bermadi" },
+  { code: 'CUSTOMER_NO_ANSWER', label: '📵 Mijoz javob bermadi' },
   { code: 'CUSTOMER_REFUSED', label: '🙅 Mijoz rad etdi' },
   { code: 'WRONG_ADDRESS', label: "📍 Manzil noto'g'ri" },
   { code: 'DEFECTIVE_PRODUCT', label: '🧩 Mahsulot nuqsonli' },
@@ -175,7 +175,10 @@ export function cabinetOrderUrl(base: string, orderId: string): string {
   return `${base.replace(/\/+$/, '')}/orders?search=${encodeURIComponent(orderId)}`;
 }
 
-export function cabinetButton(base: string, orderId: string): InlineKeyboardButton {
+export function cabinetButton(
+  base: string,
+  orderId: string,
+): InlineKeyboardButton {
   return { text: '🌐 Kabinetda ochish', url: cabinetOrderUrl(base, orderId) };
 }
 
@@ -186,7 +189,8 @@ export function proofRequired(order: CourierOrderView, op: CourierOp): boolean {
   const conditions = new Set(order.proof_conditions);
   if (op === 'sell') {
     return (
-      conditions.has('sell_any') || (zeroTotal && conditions.has('sell_zero_total'))
+      conditions.has('sell_any') ||
+      (zeroTotal && conditions.has('sell_zero_total'))
     );
   }
   return (

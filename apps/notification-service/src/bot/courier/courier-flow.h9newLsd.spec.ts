@@ -7,7 +7,10 @@ import {
   opsForStatus,
   toCourierOrderView,
 } from './courier-cards';
-import { COMMAND_GROUP_DENIED_TEXT, COMMAND_NOT_LINKED_TEXT } from '../handlers/command-gate.handler';
+import {
+  COMMAND_GROUP_DENIED_TEXT,
+  COMMAND_NOT_LINKED_TEXT,
+} from '../handlers/command-gate.handler';
 import {
   callbackUpdate,
   courierActor,
@@ -18,7 +21,10 @@ import {
   sentTexts,
   textUpdate,
 } from '../testing/bot-kit-spec';
-import { ACTION_CONSUMED_TEXT, ACTION_FOREIGN_TEXT } from '../bot-router.service';
+import {
+  ACTION_CONSUMED_TEXT,
+  ACTION_FOREIGN_TEXT,
+} from '../bot-router.service';
 
 /**
  * h9newLsd (kuryer menyusi, /ishim) + MO2MLPGo (4 holat tugmasi). Hamma
@@ -30,8 +36,12 @@ beforeEach(() => {
 });
 afterEach(() => jest.restoreAllMocks());
 
-const press = (ctx: ReturnType<typeof makeRouter>, data: string, fromId = 25, chatId = 25) =>
-  ctx.router.dispatch('elchi', callbackUpdate(data, { chatId, fromId }));
+const press = (
+  ctx: ReturnType<typeof makeRouter>,
+  data: string,
+  fromId = 25,
+  chatId = 25,
+) => ctx.router.dispatch('elchi', callbackUpdate(data, { chatId, fromId }));
 
 describe('h9newLsd — /ishim', () => {
   it('⭐ bog‘lanmagan chat /ishim — faqat "avval ulang", birorta buyurtma yo‘q', async () => {
@@ -48,11 +58,16 @@ describe('h9newLsd — /ishim', () => {
       gatewayOrder('102', 'on the road', { district: { name: 'Chilonzor' } }),
       gatewayOrder('201', 'waiting', { courier_id: '26' }),
     ]);
-    const ctx = makeRouter({ actor: courierActor('25'), gateway: gateway.request });
+    const ctx = makeRouter({
+      actor: courierActor('25'),
+      gateway: gateway.request,
+    });
     await ctx.router.dispatch('elchi', textUpdate('/ishim', { chatId: 25 }));
     const [listCall] = gateway.calls;
     expect(listCall.method).toBe('GET');
-    expect(listCall.path).toMatch(/^\/orders\?status=waiting&status=on\+the\+road&status=waiting_customer&page=1&limit=10$/);
+    expect(listCall.path).toMatch(
+      /^\/orders\?status=waiting&status=on\+the\+road&status=waiting_customer&page=1&limit=10$/,
+    );
     const texts = sentTexts(ctx);
     expect(texts[0]).toContain('jami 2 ta');
     expect(texts[0]).toContain('📍 Chilonzor — 1 ta');
@@ -76,27 +91,39 @@ describe('h9newLsd — /ishim', () => {
     const ctx = makeRouter({ actor: courierActor(), gateway: gateway.request });
     await ctx.router.dispatch('elchi', textUpdate('/ishim', { chatId: 25 }));
     const buttons = lastButtons(ctx);
-    expect(Object.keys(buttons)).toEqual(['✅ Sotildi', '❌ Bekor', '🌐 Kabinetda ochish']);
-    expect(buttons['🌐 Kabinetda ochish']).toBe('https://admin.elchi.test/orders?search=101');
+    expect(Object.keys(buttons)).toEqual([
+      '✅ Sotildi',
+      '❌ Bekor',
+      '🌐 Kabinetda ochish',
+    ]);
+    expect(buttons['🌐 Kabinetda ochish']).toBe(
+      'https://admin.elchi.test/orders?search=101',
+    );
     for (const data of [buttons['✅ Sotildi'], buttons['❌ Bekor']]) {
       expect(Buffer.byteLength(data, 'utf8')).toBeLessThanOrEqual(64);
     }
   });
 
   it('⭐ 10 tadan ortiq — sahifalash, "⬇️ Yana" ikkinchi sahifani beradi', async () => {
-    const orders = Array.from({ length: 13 }, (_, i) => gatewayOrder(String(300 + i), 'waiting'));
+    const orders = Array.from({ length: 13 }, (_, i) =>
+      gatewayOrder(String(300 + i), 'waiting'),
+    );
     const gateway = fakeOrdersGateway(orders);
     const ctx = makeRouter({ actor: courierActor(), gateway: gateway.request });
     await ctx.router.dispatch('elchi', textUpdate('/ishim', { chatId: 25 }));
     const more = lastButtons(ctx)['⬇️ Yana'];
     expect(more).toBeDefined();
-    expect(sentTexts(ctx).filter((text) => text.includes('#3'))).toHaveLength(10);
+    expect(sentTexts(ctx).filter((text) => text.includes('#3'))).toHaveLength(
+      10,
+    );
     await press(ctx, more);
     expect(gateway.calls.at(-1)?.path).toContain('page=2');
     expect(sentTexts(ctx).join('\n')).toContain('#312');
     // "Yana" bir martalik emas — qayta bosilsa ham ishlaydi.
     await press(ctx, more);
-    expect(gateway.calls.filter((call) => call.path.includes('page=2'))).toHaveLength(2);
+    expect(
+      gateway.calls.filter((call) => call.path.includes('page=2')),
+    ).toHaveLength(2);
   });
 
   it('muddati o‘tgan ro‘yxat tugmasi — "bu ro‘yxat eskirgan, /ishim ni qayta yuboring"', async () => {
@@ -107,7 +134,10 @@ describe('h9newLsd — /ishim', () => {
     const row = ctx.actions.rows.get(sell.slice(2))!;
     row.expires_at = new Date(Date.now() - 1);
     await press(ctx, sell);
-    expect(ctx.transport.answerCallbackQuery).toHaveBeenLastCalledWith('cb1', COURIER_LIST_EXPIRED_TEXT);
+    expect(ctx.transport.answerCallbackQuery).toHaveBeenLastCalledWith(
+      'cb1',
+      COURIER_LIST_EXPIRED_TEXT,
+    );
   });
 
   it('⭐ /ishim guruh chatida — rad, kartalar guruhga chiqmaydi', async () => {
@@ -115,7 +145,11 @@ describe('h9newLsd — /ishim', () => {
     const ctx = makeRouter({ actor: courierActor(), gateway: gateway.request });
     await ctx.router.dispatch(
       'elchi',
-      textUpdate('/ishim', { chatId: -100555, chatType: 'supergroup', fromId: 25 }),
+      textUpdate('/ishim', {
+        chatId: -100555,
+        chatType: 'supergroup',
+        fromId: 25,
+      }),
     );
     expect(sentTexts(ctx)).toEqual([COMMAND_GROUP_DENIED_TEXT]);
     expect(gateway.request).not.toHaveBeenCalled();
@@ -136,7 +170,10 @@ describe('h9newLsd — /ishim', () => {
 });
 
 describe('MO2MLPGo — 4 ta holat tugmasi', () => {
-  const setup = (orders = [gatewayOrder('101', 'waiting')], op?: NonNullable<Parameters<typeof fakeOrdersGateway>[1]>['op']) => {
+  const setup = (
+    orders = [gatewayOrder('101', 'waiting')],
+    op?: NonNullable<Parameters<typeof fakeOrdersGateway>[1]>['op'],
+  ) => {
     const gateway = fakeOrdersGateway(orders, { op });
     const ctx = makeRouter({ actor: courierActor(), gateway: gateway.request });
     return { ctx, gateway };
@@ -148,18 +185,31 @@ describe('MO2MLPGo — 4 ta holat tugmasi', () => {
     const { ctx, gateway } = setup();
     await openList(ctx);
     await press(ctx, lastButtons(ctx)['✅ Sotildi']);
-    expect(sentTexts(ctx).at(-1)).toBe('Buyurtma #101 — ✅ Sotildi. Tasdiqlaysizmi?');
+    expect(sentTexts(ctx).at(-1)).toBe(
+      'Buyurtma #101 — ✅ Sotildi. Tasdiqlaysizmi?',
+    );
     // Tasdiqsiz hech narsa yuborilmagan.
     expect(gateway.calls.some((call) => call.method === 'POST')).toBe(false);
     await press(ctx, lastButtons(ctx)['✅ Ha']);
     const post = gateway.calls.find((call) => call.method === 'POST')!;
     expect(post.path).toBe('/orders/sell/101');
-    expect(post.options).toEqual(expect.objectContaining({ idempotencyKey: expect.any(String) }));
+    expect(post.options).toEqual(
+      expect.objectContaining({ idempotencyKey: expect.any(String) }),
+    );
     expect(sentTexts(ctx).at(-1)).toBe('#101 — sotildi ✅');
     expect(gateway.orders.get('101')!.status).toBe('sold');
-    const edit = ctx.transport.editMessage.mock.calls.at(-1) as unknown as [string, string, { text: string; reply_markup: { inline_keyboard: Array<Array<{ text: string }>> } }];
+    const edit = ctx.transport.editMessage.mock.calls.at(-1) as unknown as [
+      string,
+      string,
+      {
+        text: string;
+        reply_markup: { inline_keyboard: Array<Array<{ text: string }>> };
+      },
+    ];
     expect(edit[2].text).toContain('Sotildi');
-    expect(edit[2].reply_markup.inline_keyboard.flat().map((b) => b.text)).toEqual(['↩️ Ortga qaytarish']);
+    expect(
+      edit[2].reply_markup.inline_keyboard.flat().map((b) => b.text),
+    ).toEqual(['↩️ Ortga qaytarish']);
   });
 
   it('⭐ ✅ Ha ikki marta tez bosilsa — faqat BITTA holat o‘zgarishi', async () => {
@@ -169,8 +219,13 @@ describe('MO2MLPGo — 4 ta holat tugmasi', () => {
     const yes = lastButtons(ctx)['✅ Ha'];
     await press(ctx, yes);
     await press(ctx, yes);
-    expect(gateway.calls.filter((call) => call.path === '/orders/sell/101')).toHaveLength(1);
-    expect(ctx.transport.answerCallbackQuery).toHaveBeenLastCalledWith('cb1', ACTION_CONSUMED_TEXT);
+    expect(
+      gateway.calls.filter((call) => call.path === '/orders/sell/101'),
+    ).toHaveLength(1);
+    expect(ctx.transport.answerCallbackQuery).toHaveBeenLastCalledWith(
+      'cb1',
+      ACTION_CONSUMED_TEXT,
+    );
   });
 
   it('⭐ boshqa kuryer tugmani bossa (callback_data qo‘lda almashtirilsa) — rad, holat o‘zgarmaydi', async () => {
@@ -179,7 +234,10 @@ describe('MO2MLPGo — 4 ta holat tugmasi', () => {
     const sell = lastButtons(ctx)['✅ Sotildi'];
     ctx.actors.resolve.mockResolvedValue(courierActor('26'));
     await press(ctx, sell, 26, 26);
-    expect(ctx.transport.answerCallbackQuery).toHaveBeenLastCalledWith('cb1', ACTION_FOREIGN_TEXT);
+    expect(ctx.transport.answerCallbackQuery).toHaveBeenLastCalledWith(
+      'cb1',
+      ACTION_FOREIGN_TEXT,
+    );
     expect(gateway.calls.some((call) => call.method === 'POST')).toBe(false);
   });
 
@@ -189,7 +247,11 @@ describe('MO2MLPGo — 4 ta holat tugmasi', () => {
     const sell = lastButtons(ctx)['✅ Sotildi'];
     await ctx.router.dispatch(
       'elchi',
-      callbackUpdate(sell, { chatId: -100555, fromId: 25, chatType: 'supergroup' }),
+      callbackUpdate(sell, {
+        chatId: -100555,
+        fromId: 25,
+        chatType: 'supergroup',
+      }),
     );
     expect(sentTexts(ctx).at(-1)).toContain('faqat bot bilan SHAXSIY chatda');
     expect(gateway.calls.some((call) => call.method === 'POST')).toBe(false);
@@ -198,7 +260,10 @@ describe('MO2MLPGo — 4 ta holat tugmasi', () => {
   it('⭐ SOLD buyurtmaga yana Sotildi — server rad etadi, odamga tushunarli xabar', async () => {
     const { ctx } = setup([gatewayOrder('101', 'waiting')], (op) =>
       op === 'sell'
-        ? { status: 400, body: { message: 'Order not found or not in waiting status' } }
+        ? {
+            status: 400,
+            body: { message: 'Order not found or not in waiting status' },
+          }
         : undefined,
     );
     await openList(ctx);
@@ -210,7 +275,10 @@ describe('MO2MLPGo — 4 ta holat tugmasi', () => {
   it('⭐ extraCost > 0 — 202: "Market tasdig‘i kutilmoqda", karta ⏳ holatda tugmasiz qoladi', async () => {
     const { ctx } = setup([gatewayOrder('101', 'waiting')], (op) =>
       op === 'cancel'
-        ? { status: 202, body: { statusCode: 202, message: "Market tasdig'i kutilmoqda" } }
+        ? {
+            status: 202,
+            body: { statusCode: 202, message: "Market tasdig'i kutilmoqda" },
+          }
         : undefined,
     );
     await openList(ctx);
@@ -218,7 +286,11 @@ describe('MO2MLPGo — 4 ta holat tugmasi', () => {
     await press(ctx, lastButtons(ctx)['🙅 Mijoz rad etdi']);
     await press(ctx, lastButtons(ctx)['✅ Ha']);
     expect(sentTexts(ctx).at(-1)).toContain("Market tasdig'i kutilmoqda");
-    const edit = ctx.transport.editMessage.mock.calls.at(-1) as unknown as [string, string, { text: string; reply_markup: { inline_keyboard: unknown[] } }];
+    const edit = ctx.transport.editMessage.mock.calls.at(-1) as unknown as [
+      string,
+      string,
+      { text: string; reply_markup: { inline_keyboard: unknown[] } },
+    ];
     expect(edit[2].text).toContain('⏳');
     expect(edit[2].reply_markup.inline_keyboard).toEqual([]);
   });
@@ -235,15 +307,20 @@ describe('MO2MLPGo — 4 ta holat tugmasi', () => {
       "💸 Narx bo'yicha kelishmovchilik",
       '⬅️ Orqaga',
     ]);
-    await press(ctx, lastButtons(ctx)['📍 Manzil noto\'g\'ri']);
+    await press(ctx, lastButtons(ctx)["📍 Manzil noto'g'ri"]);
     await press(ctx, lastButtons(ctx)['✅ Ha']);
     const post = gateway.calls.find((call) => call.method === 'POST')!;
     expect(post.path).toBe('/orders/cancel/101');
     expect(post.body).toEqual({ reason: 'WRONG_ADDRESS' });
     // Erkin matn sabab sifatida qabul qilinmaydi (tasdiq kutilmaydi).
     ctx.outbox.send.mockClear();
-    await ctx.router.dispatch('elchi', textUpdate('mijoz kelmadi', { chatId: 25, updateId: 99 }));
-    expect(gateway.calls.filter((call) => call.method === 'POST')).toHaveLength(1);
+    await ctx.router.dispatch(
+      'elchi',
+      textUpdate('mijoz kelmadi', { chatId: 25, updateId: 99 }),
+    );
+    expect(gateway.calls.filter((call) => call.method === 'POST')).toHaveLength(
+      1,
+    );
   });
 
   it('Yetkazib bo‘lmadi (ON_THE_ROAD) — sabab ≥10 belgi bilan could-not-deliver', async () => {
@@ -254,7 +331,9 @@ describe('MO2MLPGo — 4 ta holat tugmasi', () => {
     await press(ctx, lastButtons(ctx)['✅ Ha']);
     const post = gateway.calls.find((call) => call.method === 'POST')!;
     expect(post.path).toBe('/orders/102/could-not-deliver');
-    expect(String((post.body as { reason: string }).reason).length).toBeGreaterThanOrEqual(10);
+    expect(
+      String((post.body as { reason: string }).reason).length,
+    ).toBeGreaterThanOrEqual(10);
   });
 
   it('⬅️ Orqaga — amal bajarilmaydi', async () => {
@@ -278,7 +357,9 @@ describe('MO2MLPGo — 4 ta holat tugmasi', () => {
           order.push('post');
           await slow;
         }
-        return (gateway.request as unknown as (...a: unknown[]) => Promise<unknown>)(...args);
+        return (
+          gateway.request as unknown as (...a: unknown[]) => Promise<unknown>
+        )(...args);
       }),
     });
     ctx.transport.answerCallbackQuery.mockImplementation(() => {
