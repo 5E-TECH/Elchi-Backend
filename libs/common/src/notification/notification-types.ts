@@ -476,6 +476,21 @@ export const NOTIFICATION_TYPES: readonly NotificationTypeDefinition[] =
         NotificationChannel.TELEGRAM,
       ],
     }),
+    // (MWYaqprw #6) Skan Mini App'i «✅ Tayyor» — "N ta buyurtma qabul
+    // qilindi" kuryerning o'ziga (in-app + shaxsiy Telegram).
+    def({
+      key: 'courier.scan_summary',
+      category: NotificationCategory.SYSTEM,
+      priority: NotificationPriority.NORMAL,
+      group_key_pattern: null,
+      label_uz: 'Skan yakunlandi',
+      default_audience: [Roles.COURIER],
+      user_can_mute: true,
+      default_channels: [
+        NotificationChannel.IN_APP,
+        NotificationChannel.TELEGRAM,
+      ],
+    }),
     // (4TfLyTrL #8) Market guruhi bir martalik havola bilan ulandi.
     def({
       key: 'telegram.group_connected',

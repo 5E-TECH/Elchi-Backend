@@ -79,6 +79,15 @@ describe('MWYaqprw — "✅ Tayyor" xulosasi', () => {
     expect(notification.body).toContain('1 tasi');
   });
 
+  it('⭐ bildirishnoma turi katalogda (aks holda dispatch 400 qaytaradi)', async () => {
+    const { service, dispatch } = make();
+    await service.summarize({ courier_id: '26', order_ids: ['53'] });
+    const [notification] = dispatch.mock.calls[0] as [Record<string, any>];
+    const { isKnownNotificationType } =
+      jest.requireActual<typeof import('@app/common')>('@app/common');
+    expect(isKnownNotificationType(notification.type)).toBe(true);
+  });
+
   it('⭐ xabarda "📋 Topshiriqlarim" — /ishim 1-sahifa (qayta bosiladigan) tugmasi', async () => {
     const { service, dispatch } = make();
     await service.summarize({ courier_id: '26', order_ids: ['53'] });
