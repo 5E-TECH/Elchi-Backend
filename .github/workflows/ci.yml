@@ -100,10 +100,29 @@ jobs:
           npx nest build integration-service
           npx nest build ai-service
 
-      # 2026-10-17: notification-service prodda Nest DI xatosi (aylanma import
-      # → "can't resolve dependencies") bilan ko'tarilmadi — unit testlar DI
-      # konteynerini qurmaydi. Har servis bundle'i DB/RMQ'siz qisqa ishga
-      # tushiriladi; DI yoki config xatosi bo'lsa CI qizil.
+  # 2026-10-17: notification-service prodda Nest DI xatosi (aylanma import
+  # → "can't resolve dependencies") bilan ko'tarilmadi — unit testlar DI
+  # konteynerini qurmaydi. Har servis bundle'i DB/RMQ'siz qisqa ishga
+  # tushiriladi; DI yoki config xatosi bo'lsa CI qizil.
+  # ALOHIDA job: hamma servisni build qilish bir necha daqiqa oladi — yuqoridagi
+  # job ichida 15 daqiqalik timeout'dan oshib, run "cancelled" bo'lardi.
+  di-boot-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
       - name: DI boot smoke (all services)
         run: bash scripts/di-boot-smoke.sh
 
