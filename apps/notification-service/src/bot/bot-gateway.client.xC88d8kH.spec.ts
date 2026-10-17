@@ -1,29 +1,34 @@
 import { BotGatewayClient } from './bot-gateway.client';
 
-const rmqSendMock = jest.fn();
+const rmqSendMock = jest.fn<Promise<unknown>, unknown[]>();
 jest.mock('@app/common', () => {
-  const actual = jest.requireActual('@app/common');
-  return { ...actual, rmqSend: (...args: unknown[]) => rmqSendMock(...args) };
+  const actual = jest.requireActual<Record<string, unknown>>('@app/common');
+  return {
+    ...actual,
+    rmqSend: (...args: unknown[]) => rmqSendMock(...args),
+  };
 });
 
 /**
  * xC88d8kH #3 — bot aktor nomidan MAVJUD gateway endpointlarini chaqiradi:
  * token identity'dan (`identity.auth.telegram_actor`), faqat Authorization
- * sarlavhasida (URL'da emas), keshlanadi, 401 da tashlanadi.
+ * sarlavhasida (URL'da emas), KESHLANMAYDI (har so'rov joriy aktor uchun).
  */
 describe('xC88d8kH — BotGatewayClient', () => {
   const make = () => {
-    const client = new BotGatewayClient({} as never, {
-      get: () => 'http://api-gateway:3004/',
-    } as never);
-    const fetchMock = jest.fn((_url: string, _init: RequestInit) =>
+    const client = new BotGatewayClient(
+      {} as never,
+      {
+        get: () => 'http://api-gateway:3004/',
+      } as never,
+    );
+    const fetchMock = jest.fn<Promise<Response>, [string, RequestInit]>(() =>
       Promise.resolve({
         status: 200,
         json: () => Promise.resolve({ data: [] }),
       } as unknown as Response),
     );
     client.fetchImpl = fetchMock;
-    client.now = () => 1_000_000;
     return { client, fetchMock };
   };
 
@@ -52,23 +57,26 @@ describe('xC88d8kH — BotGatewayClient', () => {
     expect(res).toEqual({ status: 200, body: { data: [] } });
   });
 
-  it('token keshlanadi; 401 da tashlanadi va keyingi so‘rovda yangisi olinadi', async () => {
+  it('⭐ token keshlanmaydi: chat boshqa akkauntga qayta ulansa keyingi so‘rov YANGI aktor tokeni bilan', async () => {
     const { client, fetchMock } = make();
-    await client.request('5550007', 'GET', '/orders');
-    await client.request('5550007', 'GET', '/orders');
-    expect(rmqSendMock).toHaveBeenCalledTimes(1);
-    fetchMock.mockResolvedValueOnce({
-      status: 401,
-      json: () => Promise.resolve({ message: 'Unauthorized' }),
-    } as unknown as Response);
-    await client.request('5550007', 'GET', '/orders');
-    await client.request('5550007', 'GET', '/orders');
+    rmqSendMock
+      .mockResolvedValueOnce({ accessToken: 'courier.jwt' })
+      .mockResolvedValueOnce({ accessToken: 'market.jwt' });
+    await client.request('5550007', 'GET', '/finance/cashbox/my-cashbox');
+    await client.request('5550007', 'GET', '/finance/cashbox/my-cashbox');
     expect(rmqSendMock).toHaveBeenCalledTimes(2);
+    const auth = fetchMock.mock.calls.map(
+      ([, init]) => (init.headers as Record<string, string>).Authorization,
+    );
+    expect(auth).toEqual(['Bearer courier.jwt', 'Bearer market.jwt']);
   });
 
   it('bog‘lanmagan aktor (identity 401) — so‘rov yuborilmaydi', async () => {
     const { client, fetchMock } = make();
-    rmqSendMock.mockRejectedValueOnce({ statusCode: 401, message: 'bog‘lanmagan' });
+    rmqSendMock.mockRejectedValueOnce({
+      statusCode: 401,
+      message: 'bog‘lanmagan',
+    });
     await expect(client.request('1', 'GET', '/orders')).rejects.toBeDefined();
     expect(fetchMock).not.toHaveBeenCalled();
   });

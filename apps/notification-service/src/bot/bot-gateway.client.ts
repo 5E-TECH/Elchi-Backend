@@ -5,8 +5,6 @@ import { rmqSend } from '@app/common';
 
 /** docker tarmog'idagi gateway (Cloudflare'siz, ichki). */
 export const DEFAULT_GATEWAY_INTERNAL_URL = 'http://api-gateway:3004';
-/** Token muddatidan shuncha oldin yangilanadi. */
-const TOKEN_REFRESH_MARGIN_MS = 60_000;
 
 export interface GatewayResponse<T> {
   status: number;
@@ -23,16 +21,17 @@ type FetchLike = (url: string, init: RequestInit) => Promise<Response>;
  * Token: identity `identity.auth.telegram_actor` (tekshirilgan webhook
  * update'idagi `from.id`) → 30 daqiqalik access JWT, refresh yo'q. Token
  * faqat `Authorization` sarlavhasida — URL/log'ga HECH QACHON tushmaydi.
- * Kesh — telegram_id bo'yicha, muddati tugashidan 1 daqiqa oldin yangilanadi;
- * 401 da tashlanadi (rol/holat o'zgargan bo'lishi mumkin).
+ *
+ * ⚠️ Token KESHLANMAYDI — har so'rov JORIY aktor uchun yangi token oladi.
+ * 2026-10-17 prod: kesh telegram_id bo'yicha edi; chat kuryerdan uzilib
+ * marketga ulangach `/balans` 30 daqiqagacha KURYERNING kassasini ko'rsatdi
+ * (eski JWT). Token chiqarish — bitta qidiruv + imzo (DB'ga yozuv yo'q).
  */
 @Injectable()
 export class BotGatewayClient {
   private readonly logger = new Logger(BotGatewayClient.name);
   private readonly baseUrl: string;
-  private readonly tokens = new Map<string, { token: string; exp: number }>();
   fetchImpl: FetchLike = (url, init) => fetch(url, init);
-  now: () => number = Date.now;
 
   constructor(
     @Inject('IDENTITY') private readonly identity: ClientProxy,
@@ -86,20 +85,12 @@ export class BotGatewayClient {
       );
       throw error;
     }
-    if (response.status === 401) this.tokens.delete(telegramId);
     const parsed = (await response.json().catch(() => null)) as T | null;
     return { status: response.status, body: parsed };
   }
 
   private async tokenFor(telegramId: string): Promise<string> {
-    const cached = this.tokens.get(telegramId);
-    if (cached && cached.exp - TOKEN_REFRESH_MARGIN_MS > this.now()) {
-      return cached.token;
-    }
-    const res = await rmqSend<{
-      accessToken?: string;
-      access_token_expires_at?: number | null;
-    }>(
+    const res = await rmqSend<{ accessToken?: string }>(
       this.identity,
       { cmd: 'identity.auth.telegram_actor' },
       { telegram_id: telegramId },
@@ -107,10 +98,6 @@ export class BotGatewayClient {
     );
     const token = String(res?.accessToken ?? '');
     if (!token) throw new Error('telegram aktori tokeni olinmadi');
-    this.tokens.set(telegramId, {
-      token,
-      exp: Number(res?.access_token_expires_at) || this.now() + 5 * 60_000,
-    });
     return token;
   }
 }
