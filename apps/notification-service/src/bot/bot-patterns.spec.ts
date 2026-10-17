@@ -1,7 +1,6 @@
 import 'reflect-metadata';
 import { PATTERN_METADATA } from '@nestjs/microservices/constants';
 import { TELEGRAM_UPDATE_EVENT as GATEWAY_EVENT } from '../../../api-gateway/src/telegram-webhook.controller';
-import { NotificationServiceModule } from '../notification-service.module';
 import { TELEGRAM_UPDATE_EVENT } from './bot-config';
 
 /**
@@ -14,20 +13,41 @@ import { TELEGRAM_UPDATE_EVENT } from './bot-config';
  */
 type Ctor = new (...args: never[]) => object;
 
+/**
+ * Modul import paytida ConfigModule.forRoot env'ni Joi bilan tekshiradi — CI'da
+ * `.env` yo'q, shuning uchun majburiy kalitlar soxta qiymat bilan, modul esa
+ * shundan KEYIN yuklanadi (aks holda CI'da "Config validation error").
+ */
+function loadModule(): object {
+  const defaults: Record<string, string> = {
+    POSTGRES_URI: 'postgres://spec:spec@127.0.0.1:1/spec',
+    RABBITMQ_URI: 'amqp://spec:spec@127.0.0.1:1',
+    RABBITMQ_NOTIFICATION_QUEUE: 'notification_queue',
+    RABBITMQ_IDENTITY_QUEUE: 'identity_queue',
+    RABBITMQ_ORDER_QUEUE: 'order_queue',
+  };
+  for (const [key, value] of Object.entries(defaults)) {
+    process.env[key] ??= value;
+  }
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const loaded = require('../notification-service.module') as {
+    NotificationServiceModule: object;
+  };
+  return loaded.NotificationServiceModule;
+}
+
 function patternsOf(): Array<{ pattern: string; where: string }> {
-  const controllers = (Reflect.getMetadata(
-    'controllers',
-    NotificationServiceModule,
-  ) ?? []) as Ctor[];
+  const controllers = (Reflect.getMetadata('controllers', loadModule()) ??
+    []) as Ctor[];
   const out: Array<{ pattern: string; where: string }> = [];
   for (const ctrl of controllers) {
     const proto = ctrl.prototype as Record<string, unknown>;
     for (const name of Object.getOwnPropertyNames(proto)) {
-      if (name === 'constructor' || typeof proto[name] !== 'function') continue;
-      const patterns = Reflect.getMetadata(
-        PATTERN_METADATA,
-        proto[name] as object,
-      ) as unknown[] | undefined;
+      const method = proto[name];
+      if (name === 'constructor' || typeof method !== 'function') continue;
+      const patterns = Reflect.getMetadata(PATTERN_METADATA, method) as
+        | unknown[]
+        | undefined;
       for (const pattern of patterns ?? []) {
         out.push({
           pattern: JSON.stringify(pattern),
