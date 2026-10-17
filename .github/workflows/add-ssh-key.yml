@@ -1,0 +1,39 @@
+# BIR MARTALIK: operator (Dilshod) ish stantsiyasining OCHIQ SSH kalitini prod
+# serverga qo'shadi — root paroli yo'qolgan, deploy kaliti esa ishlaydi.
+# Faqat ochiq kalit (maxfiy emas). Ish tugagach bu fayl o'chiriladi.
+name: Add operator SSH key (one-off)
+
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/add-ssh-key.yml']
+  workflow_dispatch:
+
+jobs:
+  add-key:
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 5
+    steps:
+      - name: Append public key to authorized_keys
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SERVER_IP }}
+          port: ${{ secrets.SERVER_SSH_PORT || 22 }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            set -e
+            KEY='ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOIjgrea3sO1gTjEc5yDTpsXdO88zFe6863NKAbT7w3G github-key'
+            add_key() {
+              mkdir -p "$1/.ssh" && chmod 700 "$1/.ssh"
+              touch "$1/.ssh/authorized_keys" && chmod 600 "$1/.ssh/authorized_keys"
+              grep -qxF "$KEY" "$1/.ssh/authorized_keys" || echo "$KEY" >> "$1/.ssh/authorized_keys"
+            }
+            add_key "$HOME"
+            # Deploy foydalanuvchisi root bo'lmasa — root'ga ham (parolsiz sudo bo'lsa).
+            if [ "$(id -u)" != "0" ] && sudo -n true 2>/dev/null; then
+              sudo -n sh -c "mkdir -p /root/.ssh && chmod 700 /root/.ssh && touch /root/.ssh/authorized_keys && chmod 600 /root/.ssh/authorized_keys && (grep -qxF '$KEY' /root/.ssh/authorized_keys || echo '$KEY' >> /root/.ssh/authorized_keys)"
+              echo "root: key added via sudo"
+            fi
+            echo "uid=$(id -u) done"
