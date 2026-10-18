@@ -36,6 +36,9 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
   vaqtgacha javobsiz qolsa avtomatik tasdiqlanadi
   (`EXTRA_COST_AUTO_APPROVE_MINUTES`). Avtomatik tasdiq o'chiq yoki so'rov
   yopilgan — `null`. 🔧 Market kabinetida muddatni ko'rsatish.
+- [2026-10-18] 🔧 [finance] — `GET /finance/history/:id`: menejer endi o'z filiali
+  KURYERINING kassa yozuvini ham ochadi (ro'yxat bilan bir xil qoida). Ilgari
+  `/payments/cash-detail/:id?type=courier` da yozuv tafsiloti 403 edi.
 
 ### 2026-10-17 — Kuryer kvitansiyasi javobi kassa tarixida (2crjWf7v)
 

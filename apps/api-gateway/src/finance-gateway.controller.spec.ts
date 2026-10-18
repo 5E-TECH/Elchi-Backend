@@ -446,6 +446,38 @@ describe('FinanceGatewayController', () => {
     );
   });
 
+  it('2crjWf7v: a manager opens a courier cashbox entry of their branch (same rule as the history list)', async () => {
+    const { controller, financeClient } = setup();
+    const req = {
+      user: { sub: '25', roles: ['manager'], branch_id: '3' },
+    } as any;
+    const access = jest
+      .spyOn(controller as any, 'canManagerAccessUser')
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(false);
+    financeClient.send.mockReturnValue(
+      of({
+        data: {
+          id: '47',
+          // Bu faylda @app/common mock: Cashbox_type.FOR_COURIER = 'for_courier'.
+          cashbox: { user_id: '26', cashbox_type: 'for_courier' },
+        },
+      }),
+    );
+
+    await expect(controller.findHistoryById('47', req)).resolves.toEqual(
+      expect.objectContaining({
+        data: expect.objectContaining({ id: '47' }),
+      }),
+    );
+    expect(access).toHaveBeenLastCalledWith(req.user, '26');
+
+    // Boshqa filial kuryeri — yopiq.
+    await expect(controller.findHistoryById('47', req)).rejects.toThrow(
+      "Siz faqat o'z filialingiz kuryerlari tarixini ko'ra olasiz",
+    );
+  });
+
   it('forbids market users from opening non-market cashbox history details', async () => {
     const { controller, financeClient } = setup();
     const req = {

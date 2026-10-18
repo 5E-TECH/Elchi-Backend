@@ -2884,17 +2884,32 @@ export class FinanceGatewayController {
 
     const cashbox = response?.data?.cashbox;
     if (this.isManager(req?.user)) {
-      const branchId =
-        this.extractBranchId(req.user) ||
-        (await this.resolveBranchIdByUserId(String(req.user.sub), req.user));
-      if (
-        !branchId ||
-        String(cashbox?.user_id ?? '') !== String(branchId) ||
-        cashbox?.cashbox_type !== Cashbox_type.BRANCH
-      ) {
-        throw new ForbiddenException(
-          "Siz faqat o'z branch'ingiz tarixini ko'ra olasiz",
-        );
+      if (cashbox?.cashbox_type === Cashbox_type.FOR_COURIER) {
+        // (2crjWf7v) menejer o'z filiali kuryerining kassa yozuvini ochadi — ro'yxat
+        // (`GET cashbox/user/:id?cashbox_type=couriers`) bilan bir xil qoida
+        // (`canManagerAccessUser`). Ilgari ro'yxat ochilib, yozuv tafsiloti 403 edi.
+        const courierId = String(cashbox?.user_id ?? '');
+        if (
+          !courierId ||
+          !(await this.canManagerAccessUser(req.user, courierId))
+        ) {
+          throw new ForbiddenException(
+            "Siz faqat o'z filialingiz kuryerlari tarixini ko'ra olasiz",
+          );
+        }
+      } else {
+        const branchId =
+          this.extractBranchId(req.user) ||
+          (await this.resolveBranchIdByUserId(String(req.user.sub), req.user));
+        if (
+          !branchId ||
+          String(cashbox?.user_id ?? '') !== String(branchId) ||
+          cashbox?.cashbox_type !== Cashbox_type.BRANCH
+        ) {
+          throw new ForbiddenException(
+            "Siz faqat o'z branch'ingiz tarixini ko'ra olasiz",
+          );
+        }
       }
     } else if (
       this.hasRole(req?.user, RoleEnum.COURIER) ||
