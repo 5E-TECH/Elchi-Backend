@@ -322,6 +322,57 @@ export class FileGatewayController {
     return res.send(buffer);
   }
 
+  /**
+   * (YEVhU6XK) Fayl BAYTLARI — JWT bilan, gateway orqali.
+   *
+   * `GET files/:key` imzolangan URL qaytaradi, lekin u MinIO'ning ICHKI
+   * manzilini (`http://minio:9000/...`) imzolaydi — MinIO tashqariga
+   * chiqarilmagan, shuning uchun prod'da brauzer dalil rasm/videosini ocha
+   * olmaydi (`ERR_BLOCKED_BY_ORB`). Frontend (`entities/order/api/proofFiles.ts`)
+   * baytlarni shu yerdan oladi va `blob:` URL bilan ko'rsatadi.
+   *
+   * Ruxsat `GET files/:key` bilan AYNAN bir xil (`assertCanAccessPrivateKey`):
+   * maxfiy kalitlar (`proof-`, `expense-`, …) — xodim rollari yoki faqat O'Z
+   * buyurtmasining dalili (market/kuryer); boshqa kalitlar — kirgan foydalanuvchi.
+   * Fayl topilmasa file-service'ning 404 xatosi qaytadi.
+   */
+  @Get('files/:key/content')
+  @UseGuards(JwtAuthGuard)
+  @ApiOperation({ summary: 'Read file bytes through the gateway (JWT)' })
+  @ApiParam({ name: 'key', description: 'Object key in MinIO' })
+  async getFileContent(
+    @Param('key') key: string,
+    @Req() req: { user?: { sub?: string; roles?: string[] } },
+    @Res() res: Response,
+  ) {
+    await this.assertCanAccessPrivateKey(key, req);
+    const response = await firstValueFrom(
+      this.fileClient
+        .send<{
+          data?: { body_base64?: string; mime_type?: string };
+        }>({ cmd: 'file.read' }, { key })
+        .pipe(timeout(FILE_RPC_TIMEOUT_MS)),
+    );
+
+    const bodyBase64 = response?.data?.body_base64;
+    if (!bodyBase64 || typeof bodyBase64 !== 'string') {
+      throw new BadRequestException('File read failed');
+    }
+
+    const buffer = Buffer.from(bodyBase64, 'base64');
+    res.setHeader(
+      'Content-Type',
+      response?.data?.mime_type ?? 'application/octet-stream',
+    );
+    res.setHeader('Content-Length', String(buffer.length));
+    // Maxfiy dalil — umumiy (CDN/proksi) keshga tushmasin.
+    res.setHeader('Cache-Control', 'private, max-age=300');
+    // Yuklangan fayl hech qachon sahifa sifatida bajarilmasin.
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox");
+    return res.send(buffer);
+  }
+
   // Deleting a stored object is a destructive, irreversible operation over
   // shared storage (product images, COD-evidence, expense proof). It is an
   // administrative action, so it is restricted to SUPERADMIN/ADMIN rather than

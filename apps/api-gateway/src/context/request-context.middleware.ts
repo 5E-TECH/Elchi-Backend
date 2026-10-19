@@ -18,12 +18,16 @@ import { describeUserAgent } from './device-label';
 const TRACE_ID_RE = /^[A-Za-z0-9._:-]{1,64}$/;
 
 /**
- * Mashina→mashina yo'llari (provayder webhook'lari, SMS DLR). Ularning IP'si
- * mijoz qurilmasi emas — karta talabi: webhook oqimida audit konteksti BO'SH,
- * sun'iy qiymat qo'yilmaydi. (Hamkor API'si `/partner/*` — haqiqiy mijoz
- * serveri, u qamrovda qoladi.)
+ * Mashina→mashina yo'llari (provayder webhook'lari, SMS DLR, Telegram bot
+ * webhook'i). Ularning IP'si mijoz qurilmasi emas — karta talabi: webhook
+ * oqimida audit konteksti BO'SH, sun'iy qiymat qo'yilmaydi. Telegram
+ * `POST /telegram/webhook/:botSlug` ni Telegram serveri chaqiradi: aks holda
+ * bot qatorlariga (tg_callback, tg_linked) Telegram/ichki IP va
+ * "Python-urllib" qurilma bo'lib yozilardi — go'yo market shu qurilmadan
+ * amal qilgandek. (Hamkor API'si `/partner/*` — haqiqiy mijoz serveri, u
+ * qamrovda qoladi; Mini App `/tg/*` so'rovlari ham foydalanuvchi telefonidan.)
  */
-const MACHINE_PATH_RE = /^\/(?:v\d+\/)?webhooks(?:\/|$)/i;
+const MACHINE_PATH_RE = /^\/(?:v\d+\/)?(?:webhooks|telegram\/webhook)(?:\/|$)/i;
 
 function firstHeader(req: Request, name: string): string | undefined {
   const raw = req.headers[name];

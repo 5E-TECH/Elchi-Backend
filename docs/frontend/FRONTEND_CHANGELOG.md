@@ -23,6 +23,27 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-10-19 — Dalil fayllari baytlari, market buyurtma tarixi, bot jurnali (YEVhU6XK, Ho5qcDn4, f2Ud5tju)
+
+- [2026-10-19] 🆕 [file] — `GET /files/:key/content` (JWT): fayl BAYTLARI
+  gateway orqali, `Content-Type` fayl turidan. Ruxsat `GET /files/:key` bilan
+  AYNAN bir xil: maxfiy kalit (`proof-`, `expense-`, …) — xodim rollari yoki
+  faqat o'z buyurtmasining dalili (market/kuryer), aks holda 403; fayl
+  topilmasa 404. `entities/order/api/proofFiles.ts` shu yo'lni allaqachon
+  chaqiradi (`responseType: "blob"`) — prod'da imzolangan URL MinIO'ning ichki
+  manzilini berib, dalil rasm/videosi ochilmasdi. 🟢 frontendda o'zgarish shart
+  emas.
+- [2026-10-19] ✏️ [order] — `GET /orders/:id/tracking`: `market` roli endi faqat
+  O'Z buyurtmasining tarixini oladi (`market_id === sub`, boshqa market → 403).
+  Market javobida har hodisaning `actor` i `{ id, name, role }` ga
+  qisqartiriladi (`username`, `phone_number` yo'q); xodim rollari javobni
+  avvalgidek oladi. 🟢 `OrderTracking` (`canRoleViewTracking` da `market` bor)
+  o'zgarishsiz ishlaydi.
+- [2026-10-19] 🟢 [audit] — Telegram bot webhook'i (`POST
+  /telegram/webhook/:botSlug`) mashina yo'li: bot amallari qatorlarida
+  (`tg_callback`, `tg_linked`) endi `ip` / `user_agent` / `device_*` YO'Q —
+  ilgari Telegram/ichki IP va "Python-urllib" qurilma bo'lib yozilardi.
+
 ### 2026-10-17 (kechki) — Menejer kassasida kvitansiya javobi, extra-cost muddati (2crjWf7v, 1tnpaIqd)
 
 - [2026-10-17] 🔧 [finance] — `payment_ack` endi menejerning kuryer kassasi

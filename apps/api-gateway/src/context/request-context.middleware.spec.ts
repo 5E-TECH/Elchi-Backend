@@ -95,11 +95,29 @@ describe('buildRequestContextStore (f2Ud5tju)', () => {
       '/webhooks/sms/eskiz',
       '/v1/webhooks/bts',
       '/webhooks',
+      // Telegram bot webhook'i — Telegram serveri chaqiradi (f2Ud5tju
+      // 2026-10-19 prod: bot qatorlarida soxta IP/qurilma yozilardi).
+      '/telegram/webhook/elchi',
+      '/v1/telegram/webhook/elchi',
     ]) {
       const store = buildRequestContextStore(
         req({ path, headers: { 'cf-connecting-ip': '203.0.113.7' } }),
       );
       expect(Object.keys(store)).toEqual(['traceId']);
+    }
+  });
+
+  it('foydalanuvchi qurilmasidan keladigan Telegram yo`llari (ulash, Mini App) — IP saqlanadi', () => {
+    for (const path of [
+      '/notifications/telegram/link',
+      '/users/me/telegram/link-code',
+      '/tg/scan',
+      '/telegram/webhooks-info',
+    ]) {
+      const store = buildRequestContextStore(
+        req({ path, headers: { 'cf-connecting-ip': '203.0.113.7' } }),
+      );
+      expect(store.ip).toBe('203.0.113.7');
     }
   });
 

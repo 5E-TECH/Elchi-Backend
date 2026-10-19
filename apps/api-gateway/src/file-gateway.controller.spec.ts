@@ -167,6 +167,155 @@ describe('FileGatewayController object-level access control', () => {
     });
   });
 
+  // YEVhU6XK: prod'da imzolangan URL MinIO'ning ichki manziliga ishora qiladi —
+  // brauzer dalilni ocha olmaydi. Baytlar endi JWT bilan gateway orqali beriladi;
+  // ruxsat imzolangan URL bilan AYNAN bir xil (rol + egalik).
+  describe('getFileContent (YEVhU6XK — baytlar gateway orqali)', () => {
+    const PNG = Buffer.from('89504e470d0a1a0a', 'hex');
+
+    const makeContentController = (owner: unknown = null) => {
+      const fileClient = {
+        send: jest.fn(() =>
+          of({
+            data: {
+              body_base64: PNG.toString('base64'),
+              mime_type: 'image/png',
+            },
+          }),
+        ),
+      };
+      const orderClient = { send: jest.fn(() => of({ data: owner })) };
+      const controller = new FileGatewayController(
+        fileClient as any,
+        orderClient as any,
+      );
+      return { controller, fileClient };
+    };
+
+    const makeRes = () => {
+      const headers: Record<string, string> = {};
+      const res = {
+        setHeader: jest.fn((name: string, value: string) => {
+          headers[name.toLowerCase()] = value;
+        }),
+        send: jest.fn((body: unknown) => body),
+      };
+      return { res, headers };
+    };
+
+    it('⭐ o`z buyurtmasining dalili — baytlar, to`g`ri tur va maxfiy kesh sarlavhalari', async () => {
+      const { controller, fileClient } = makeContentController({
+        order_id: '78',
+        market_id: '37',
+        courier_id: '26',
+      });
+      const { res, headers } = makeRes();
+
+      await controller.getFileContent(
+        'proof-1-abc.png',
+        reqWithRoles(['market'], '37'),
+        res as any,
+      );
+
+      expect(fileClient.send).toHaveBeenCalledWith(
+        { cmd: 'file.read' },
+        { key: 'proof-1-abc.png' },
+      );
+      expect(res.send).toHaveBeenCalledWith(PNG);
+      expect(headers['content-type']).toBe('image/png');
+      expect(headers['content-length']).toBe(String(PNG.length));
+      expect(headers['cache-control']).toBe('private, max-age=300');
+      expect(headers['x-content-type-options']).toBe('nosniff');
+      expect(headers['content-security-policy']).toContain('sandbox');
+    });
+
+    it('kuryer o`zi yetkazgan buyurtma dalilini oladi', async () => {
+      const { controller, fileClient } = makeContentController({
+        order_id: '74',
+        market_id: '37',
+        courier_id: '26',
+      });
+      const { res } = makeRes();
+
+      await controller.getFileContent(
+        'proof-2-video.mp4',
+        reqWithRoles(['courier'], '26'),
+        res as any,
+      );
+
+      expect(fileClient.send).toHaveBeenCalled();
+      expect(res.send).toHaveBeenCalled();
+    });
+
+    it('boshqa marketning dalili → 403, fayl o`qilmaydi', async () => {
+      const { controller, fileClient } = makeContentController({
+        order_id: '32',
+        market_id: '16',
+        courier_id: '26',
+      });
+      const { res } = makeRes();
+
+      await expect(
+        controller.getFileContent(
+          'proof-3-x.png',
+          reqWithRoles(['market'], '37'),
+          res as any,
+        ),
+      ).rejects.toThrow(ForbiddenException);
+      expect(fileClient.send).not.toHaveBeenCalled();
+      expect(res.send).not.toHaveBeenCalled();
+    });
+
+    it('mijoz/investor maxfiy kalitni ololmaydi; egasiz dalil tor rolga berilmaydi', async () => {
+      for (const roles of [['customer'], ['investor'], []]) {
+        const { controller, fileClient } = makeContentController();
+        await expect(
+          controller.getFileContent(
+            'proof-4-x.png',
+            reqWithRoles(roles),
+            makeRes().res as any,
+          ),
+        ).rejects.toThrow(ForbiddenException);
+        expect(fileClient.send).not.toHaveBeenCalled();
+      }
+      const { controller } = makeContentController(null);
+      await expect(
+        controller.getFileContent(
+          'proof-orphan.png',
+          reqWithRoles(['market'], '37'),
+          makeRes().res as any,
+        ),
+      ).rejects.toThrow(ForbiddenException);
+    });
+
+    it('xodim (superadmin) istalgan dalilni oladi', async () => {
+      const { controller, fileClient } = makeContentController();
+      const { res } = makeRes();
+
+      await controller.getFileContent(
+        'proof-5-x.png',
+        reqWithRoles(['superadmin'], '1'),
+        res as any,
+      );
+
+      expect(fileClient.send).toHaveBeenCalledWith(
+        { cmd: 'file.read' },
+        { key: 'proof-5-x.png' },
+      );
+      expect(res.send).toHaveBeenCalledWith(PNG);
+    });
+
+    it('route `files/:key/content` (frontend kontrakti) va JWT talab qilinadi', () => {
+      const proto = FileGatewayController.prototype as unknown as Record<
+        string,
+        unknown
+      >;
+      const handler = proto.getFileContent;
+      expect(Reflect.getMetadata('path', handler)).toBe('files/:key/content');
+      expect(Reflect.getMetadata('isPublic', handler)).toBeUndefined();
+    });
+  });
+
   describe('deleteFile', () => {
     // Route-level authorization is enforced by @UseGuards(JwtAuthGuard,
     // RolesGuard) + @Roles(SUPERADMIN, ADMIN) (covered by roles.guard.spec.ts).

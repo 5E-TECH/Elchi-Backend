@@ -4366,7 +4366,8 @@
           "branch",
           "manager",
           "registrator",
-          "courier"
+          "courier",
+          "market"
         ]
       }
     },
@@ -15531,6 +15532,37 @@
           }
         ],
         "summary": "Public view for whitelisted (catalog/batch) images",
+        "tags": [
+          "File"
+        ],
+        "x-roles": null
+      }
+    },
+    "/files/{key}/content": {
+      "get": {
+        "operationId": "FileGatewayController_getFileContent",
+        "parameters": [
+          {
+            "name": "key",
+            "required": true,
+            "in": "path",
+            "description": "Object key in MinIO",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Read file bytes through the gateway (JWT)",
         "tags": [
           "File"
         ],

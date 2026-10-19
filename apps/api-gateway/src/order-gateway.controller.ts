@@ -120,6 +120,7 @@ import {
   assertQrOrderVisible,
 } from './auth/order-qr-visibility';
 import { projectOrderPayloadForRoles } from './auth/order-role-projection';
+import { projectOrderTrackingForRoles } from './auth/order-tracking-projection';
 import {
   mapOrderCreateInProgress,
   resolveOrderCreateRequestId,
@@ -944,6 +945,12 @@ export class OrderGatewayController {
         field('holder_courier_id') === sub
         ? undefined
         : denied();
+    }
+
+    // Ho5qcDn4 TC9: market faqat O'Z buyurtmasining tarixini ko'radi
+    // (GET /orders/:id bilan ayni qoida — `market_id === sub`).
+    if (roles.includes(RoleEnum.MARKET)) {
+      return sub && field('market_id') === sub ? undefined : denied();
     }
 
     if (
@@ -5085,6 +5092,9 @@ export class OrderGatewayController {
     RoleEnum.MANAGER,
     RoleEnum.REGISTRATOR,
     RoleEnum.COURIER,
+    // Ho5qcDn4 TC9: market — faqat o'z buyurtmasi (assertCanViewOrderTracking),
+    // xodim `actor` i qisqartirilgan (projectOrderTrackingForRoles).
+    RoleEnum.MARKET,
   )
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Get order tracking history by ID' })
@@ -5110,7 +5120,7 @@ export class OrderGatewayController {
       req?.user,
       this.unwrapOrderRow(order),
     );
-    return firstValueFrom(
+    const tracking: unknown = await firstValueFrom(
       this.orderClient
         .send({ cmd: 'order.tracking' }, { id, page, limit })
         .pipe(timeout(8000)),
@@ -5120,6 +5130,7 @@ export class OrderGatewayController {
       }
       throw error;
     });
+    return projectOrderTrackingForRoles(req?.user?.roles, tracking);
   }
 
   @Post('sell/:id')
