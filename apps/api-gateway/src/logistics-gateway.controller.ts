@@ -114,6 +114,17 @@ export const POST_ORDER_DISTRICT_FIELDS = [
   'assignedToRegion',
 ] as const;
 export const POST_ORDER_REGION_FIELDS = ['id', 'name', 'sato_code'] as const;
+/**
+ * Qaytarish so'rovlari (`GET /post/return-requests/list`) guruhidagi `courier`
+ * — identity `admins` qatori (username, salary, tarif, komissiya, settings,
+ * created_by…). Menejer brauzeriga faqat ekran ishlatadigan maydonlar chiqadi
+ * (`pages/mails/components/returnMails.tsx`: id, name, phone_number).
+ */
+export const RETURN_REQUEST_COURIER_FIELDS = [
+  'id',
+  'name',
+  'phone_number',
+] as const;
 
 function pickPostOrderDistrict(value: unknown) {
   const district = pickFields(value, POST_ORDER_DISTRICT_FIELDS);
@@ -290,24 +301,34 @@ export class LogisticsGatewayController {
    * guruhlarga qaytariladi.
    */
   private async enrichReturnRequestsResponse(response: ReturnRequestsResponse) {
-    const groups = Array.isArray(response?.data?.groups)
+    const rawGroups = Array.isArray(response?.data?.groups)
       ? response.data.groups
       : [];
+    // Kuryer obyekti oq ro'yxat bilan — guruhda buyurtma bo'lmasa ham.
+    const groups = rawGroups.map((group) =>
+      group && typeof group === 'object' && 'courier' in group
+        ? {
+            ...group,
+            courier: pickFields(group.courier, RETURN_REQUEST_COURIER_FIELDS),
+          }
+        : group,
+    );
     const ordersOf = (group: (typeof groups)[number]) =>
       Array.isArray(group?.orders) ? group.orders : [];
     const rows = groups.flatMap((group) => ordersOf(group));
-    if (!rows.length) {
-      return response;
-    }
 
-    const enrichedRows = await this.enrichOrderRows(rows);
+    const enrichedRows = rows.length ? await this.enrichOrderRows(rows) : [];
     let offset = 0;
     const enrichedGroups = groups.map((group) => {
       const count = ordersOf(group).length;
+      if (!count) return group;
       const orders = enrichedRows.slice(offset, offset + count);
       offset += count;
       return { ...group, orders };
     });
+    if (!rawGroups.length) {
+      return response;
+    }
 
     return {
       ...response,

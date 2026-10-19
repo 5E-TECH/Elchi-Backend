@@ -255,6 +255,56 @@ describe('VfgcnxDa - pochta buyurtmalarining xavfsiz boyitilishi', () => {
     });
   });
 
+  it("⭐ qaytarish so'rovlari guruhidagi kuryer — faqat id, name, phone_number (2026-10-19 prod: salary/tarif/komissiya menejerga chiqardi)", async () => {
+    const courier = fullAdminRow({
+      id: '26',
+      name: 'TEST Claude Kuryer',
+      phone_number: '+998887009102',
+      role: 'courier',
+    });
+    const withCourier = (orders: unknown[]) => {
+      const logistics = {
+        send: jest.fn((pattern: { cmd: string }) =>
+          pattern.cmd === 'logistics.post.return_requests'
+            ? of({
+                statusCode: 200,
+                data: {
+                  total: orders.length,
+                  scope: { type: 'BRANCH', branch_id: '3' },
+                  groups: [{ courier, courier_id: '26', orders }],
+                },
+              })
+            : of({ data: district }),
+        ),
+      };
+      const identity = {
+        send: jest.fn((pattern: { cmd: string }) =>
+          of({
+            data:
+              pattern.cmd === 'identity.market.find_by_id' ? market : customer,
+          }),
+        ),
+      };
+      return new LogisticsGatewayController(logistics as any, identity as any);
+    };
+
+    for (const orders of [[row], []]) {
+      const result = (await withCourier(orders).getReturnRequests({
+        user: { sub: '25', roles: ['manager'] },
+      })) as {
+        data: { groups: Array<{ courier: unknown; orders: unknown[] }> };
+      };
+      const group = result.data.groups[0];
+      expect(group.courier).toEqual({
+        id: '26',
+        name: 'TEST Claude Kuryer',
+        phone_number: '+998887009102',
+      });
+      expect(JSON.stringify(result)).not.toMatch(SECRET_KEYS);
+      expect(group.orders).toHaveLength(orders.length);
+    }
+  });
+
   it("qaytarish so'rovlari (bir xil enrichOrderRows) ham oq ro'yxatdan o'tadi", async () => {
     const result = (await build().getReturnRequests({
       user: { sub: '9', roles: ['manager'] },

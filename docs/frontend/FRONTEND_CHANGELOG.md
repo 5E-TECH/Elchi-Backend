@@ -25,6 +25,12 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 ### 2026-10-19 — Dalil fayllari baytlari, market buyurtma tarixi, bot jurnali (YEVhU6XK, Ho5qcDn4, f2Ud5tju)
 
+- [2026-10-19] ✏️ [logistics] — `GET /post/return-requests/list`: guruhdagi
+  `courier` endi faqat `{ id, name, phone_number }` (VfgcnxDa oq ro'yxati bilan
+  bir xil). Ilgari identity'ning to'liq qatori (`username`, `salary`,
+  `tariff_*`, `commission_*`, `settings`, `created_by`…) menejer brauzeriga
+  chiqardi. 🟢 `returnMails.tsx` faqat shu uch maydonni ishlatadi.
+
 - [2026-10-19] 🆕 [file] — `GET /files/:key/content` (JWT): fayl BAYTLARI
   gateway orqali, `Content-Type` fayl turidan. Ruxsat `GET /files/:key` bilan
   AYNAN bir xil: maxfiy kalit (`proof-`, `expense-`, …) — xodim rollari yoki
