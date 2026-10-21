@@ -292,6 +292,8 @@ export class FinanceServiceController {
       cashbox_type?: Cashbox_type;
       created_by?: string;
       dedup_epoch?: string;
+      // Elchi Pochta №1 — kassa xarajati kategoriyasi (ixtiyoriy).
+      expense_category_id?: string;
       // IgR4FVsR — gateway'ning qo'lda chiqimi: P&L daftariga ham yoziladi.
       financial_ledger?: boolean;
     },

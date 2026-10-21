@@ -29,6 +29,9 @@ import { CashboxCard } from './entities/cashbox-card.entity';
 import { CashboxCardMovement } from './entities/cashbox-card-movement.entity';
 import { CashboxCardService } from './cashbox-card/cashbox-card.service';
 import { CashboxCardController } from './cashbox-card/cashbox-card.controller';
+import { CashboxExpenseCategory } from './entities/cashbox-expense-category.entity';
+import { ExpenseCategoryService } from './expense-category/expense-category.service';
+import { ExpenseCategoryController } from './expense-category/expense-category.controller';
 
 @Module({
   imports: [
@@ -74,6 +77,8 @@ import { CashboxCardController } from './cashbox-card/cashbox-card.controller';
       // 3PE0B03q — MAIN kassa nomli kartalari (BeePost cashbox_card porti).
       CashboxCard,
       CashboxCardMovement,
+      // Elchi Pochta №1 — kassa xarajatlari kategoriyalari.
+      CashboxExpenseCategory,
       // (2crjWf7v) kuryer kvitansiya javobi — faqat audit.
       CourierPaymentAck,
     ]),
@@ -82,12 +87,14 @@ import { CashboxCardController } from './cashbox-card/cashbox-card.controller';
     FinanceServiceController,
     SettlementUnappliedController,
     CashboxCardController,
+    ExpenseCategoryController,
   ],
   providers: [
     FinanceServiceService,
     FinanceNotificationService,
     SettlementUnappliedService,
     CashboxCardService,
+    ExpenseCategoryService,
     CourierPaymentAckService,
     CourierCashReminderScheduler,
   ],

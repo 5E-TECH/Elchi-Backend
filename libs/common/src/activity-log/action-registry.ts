@@ -181,6 +181,25 @@ export const ACTIVITY_ACTION_REGISTRY: Readonly<
     'swap',
     'cyan',
   ),
+  // Elchi Pochta №1: kassa xarajatlari kategoriyalari (superadmin)
+  'finance.expense_category_created': entry(
+    "Xarajat kategoriyasi qo'shildi",
+    'finance',
+    'plus',
+    'green',
+  ),
+  'finance.expense_category_updated': entry(
+    'Xarajat kategoriyasi tahrirlandi',
+    'finance',
+    'edit',
+    'blue',
+  ),
+  'finance.expense_category_deleted': entry(
+    "Xarajat kategoriyasi o'chirildi",
+    'finance',
+    'delete',
+    'red',
+  ),
   'finance.balance_update': entry(
     "Balans o'zgartirildi",
     'finance',

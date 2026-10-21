@@ -28,6 +28,7 @@ import { Cashbox } from './entities/cashbox.entity';
 import { CashboxHistory } from './entities/cashbox-history.entity';
 import { Shift, ShiftStatus } from './entities/shift.entity';
 import { applyMainCardSelection } from './cashbox-card/cashbox-card.service';
+import { resolveSpendExpenseCategory } from './expense-category/expense-category.service';
 import {
   BRANCH_SHIFT_REQUIRED_MESSAGE,
   SHIFT_REQUIRED_MESSAGE,
@@ -1474,6 +1475,19 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
           await this.requireOpenShift(queryRunner.manager, cashbox);
         }
 
+        // Elchi Pochta №1 — qo'lda chiqim kategoriyasi (faqat MANUAL_EXPENSE;
+        // mavjud va o'chirilmagan bo'lishi shart, aks holda 400 → rollback).
+        // Idempotentlik tekshiruvidan KEYIN: takroriy so'rov kategoriya
+        // o'chirilgan bo'lsa ham avvalgi natijani oladi.
+        const expenseCategory = await resolveSpendExpenseCategory(
+          queryRunner.manager,
+          {
+            expense_category_id: dto.expense_category_id,
+            operation_type: dto.operation_type,
+            source_type: dto.source_type,
+          },
+        );
+
         // System sale/settlement leg: a BRANCH cashbox may go negative here
         // (sub-share sale; HQ tops up) so the leg is never poison-dropped.
         // Faqat TIZIM oyoqlari (audit M12, i75GDixP): ruxsat — order-service
@@ -1525,6 +1539,8 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
           operation_type: dto.operation_type,
           cashbox_id: savedCashbox.id,
           card_id: historyCardId,
+          expense_category_id: expenseCategory?.id ?? null,
+          expense_category_name: expenseCategory?.name ?? null,
           source_type: dto.source_type,
           source_id: dto.source_id ?? null,
           dedup_epoch: String(dto.dedup_epoch ?? ''),
@@ -2854,6 +2870,12 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
     /** 3PE0B03q — MAIN, `type=click`: qaysi nomli kartadan. */
     card_id?: string;
     /**
+     * Elchi Pochta №1 — kassa xarajati kategoriyasi (ixtiyoriy). Berilsa
+     * mavjud va o'chirilmagan bo'lishi shart (aks holda 400); tarix qatoriga
+     * id + nom snapshot'i yoziladi.
+     */
+    expense_category_id?: string;
+    /**
      * IgR4FVsR — `true` bo'lsa chiqim P&L daftariga ham (−amount,
      * MANUAL_EXPENSE) AYNI tranzaksiyada yoziladi. Faqat gateway'ning qo'lda
      * chiqim marshruti yuboradi; investor to'lovi (o'zi FBH yozadi) va boshqa
@@ -2897,6 +2919,10 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         require_open_shift: true,
         // 3PE0B03q — nomli karta (faqat MAIN + click; aks holda 400).
         ...(data.card_id ? { card_id: String(data.card_id) } : {}),
+        // Elchi Pochta №1 — xarajat kategoriyasi (updateBalance tekshiradi).
+        ...(data.expense_category_id
+          ? { expense_category_id: String(data.expense_category_id) }
+          : {}),
       });
       if (update?.data?.idempotent) {
         // (TMgL1zvq) Takroriy so'rov pul ham, audit ham qayta yozmaydi.
@@ -2906,22 +2932,40 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
           "Kassa chiqimi allaqachon bajarilgan (takroriy so'rov)",
         );
       }
+      const savedHistory = update?.data?.history as
+        | Pick<CashboxHistory, 'expense_category_id' | 'expense_category_name'>
+        | undefined;
+      const expenseCategory = savedHistory?.expense_category_id
+        ? {
+            id: String(savedHistory.expense_category_id),
+            name: savedHistory.expense_category_name ?? null,
+          }
+        : null;
       await this.activityLog.log({
         entity_type: 'Cashbox',
         entity_id: String(update?.data?.cashbox?.id ?? targetUserId),
         action: 'finance.manual_expense',
-        new_value: { amount: Number(data.amount), payment_method: data.type },
+        new_value: {
+          amount: Number(data.amount),
+          payment_method: data.type,
+          ...(expenseCategory ? { expense_category: expenseCategory } : {}),
+        },
         user_id: data.user_id ? String(data.user_id) : null,
         metadata: {
           user_id: data.user_id,
           amount: Number(data.amount),
           cashbox_type: targetCashboxType,
+          ...(expenseCategory
+            ? { expense_category_id: expenseCategory.id }
+            : {}),
         },
-        // 2WRzdWpZ: izoh (comment) gapga KIRMAYDI — erkin matn.
+        // 2WRzdWpZ: izoh (comment) gapga KIRMAYDI — erkin matn. Kategoriya
+        // nomi — superadmin boshqaradigan ro'yxatdan (PII emas).
         description: ActivityDescribeUz.cashboxExpense(
           data.amount,
           targetCashboxType,
           data.type ?? PaymentMethod.CASH,
+          expenseCategory?.name,
         ),
       });
       return this.successRes(update?.data ?? {}, 200, 'Manual expense created');

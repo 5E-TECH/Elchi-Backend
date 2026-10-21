@@ -89,6 +89,10 @@ jest.mock('./entities/cashbox-card-movement.entity', () => ({
     CASH_TO_CARD: 'cash_to_card',
   },
 }));
+// Elchi Pochta №1 — xarajat kategoriyalari (servis importi; entity BaseEntity'ga bog'liq).
+jest.mock('./entities/cashbox-expense-category.entity', () => ({
+  CashboxExpenseCategory: class CashboxExpenseCategory {},
+}));
 
 // jest.mock yuqoriga ko'tariladi — bu importlar mock klasslarni oladi.
 import { FinancialBalanceHistory } from './entities/financial-balance-history.entity';

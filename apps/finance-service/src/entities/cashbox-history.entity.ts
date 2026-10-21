@@ -58,6 +58,21 @@ export class CashboxHistory extends BaseEntity {
   @Column({ type: 'bigint', nullable: true })
   card_id!: string | null;
 
+  /**
+   * Elchi Pochta №1 (migratsiya 129) — qo'lda chiqim (MANUAL_EXPENSE) qaysi
+   * kassa xarajati kategoriyasiga (`cashbox_expense_categories`) yozilgani.
+   * NULL — kategoriyasiz (eski qatorlar / kategoriya tanlanmagan chiqim).
+   */
+  @Column({ type: 'bigint', nullable: true })
+  expense_category_id!: string | null;
+
+  /**
+   * Kategoriya nomining yozilgan paytdagi SNAPSHOT'i: kategoriya keyin
+   * o'chirilsa yoki qayta nomlansa ham tarix qatori shu nomni ko'rsatadi.
+   */
+  @Column({ type: 'varchar', length: 100, nullable: true })
+  expense_category_name!: string | null;
+
   // numeric(20,2) — exact fixed-point money (see Cashbox entity note).
   @Column({
     type: 'numeric',

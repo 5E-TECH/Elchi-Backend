@@ -116,4 +116,15 @@ export class UpdateCashboxBalanceDto {
   @IsString()
   @Matches(/^\d+$/)
   card_id?: string;
+
+  /**
+   * Elchi Pochta №1 — servis ICHIDAGI maydon: qo'lda chiqim (`spendMoney`)
+   * qaysi kassa xarajati kategoriyasiga. Faqat EXPENSE + MANUAL_EXPENSE
+   * oyog'ida qabul qilinadi (aks holda 400); gateway `PATCH
+   * /finance/cashbox/balance` DTO'sida YO'Q (whitelist — 400).
+   */
+  @IsOptional()
+  @IsString()
+  @Matches(/^\d+$/)
+  expense_category_id?: string;
 }

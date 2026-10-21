@@ -200,13 +200,20 @@ export const ActivityDescribeUz = {
     return `Kassaga kirim: ${moneyUz(amount)}${cashboxSuffix(cashboxType, method)}`;
   },
 
-  /** "Kassadan chiqim: 50 000 so'm (Filial kassasi, naqd)" */
+  /**
+   * "Kassadan chiqim: 50 000 so'm (Filial kassasi, naqd)"; xarajat
+   * kategoriyasi bilan (Elchi Pochta №1) — "... (Asosiy kassa, naqd) — Yoqilg'i".
+   */
   cashboxExpense(
     amount: unknown,
     cashboxType?: string | null,
     method?: string | null,
+    category?: string | null,
   ): string {
-    return `Kassadan chiqim: ${moneyUz(amount)}${cashboxSuffix(cashboxType, method)}`;
+    const categoryName = typeof category === 'string' ? category.trim() : '';
+    return `Kassadan chiqim: ${moneyUz(amount)}${cashboxSuffix(cashboxType, method)}${
+      categoryName ? ` — ${categoryName}` : ''
+    }`;
   },
 
   /** "Kuryer #301 dan to'lov qabul qilindi: 150 000 so'm (naqd)" */
