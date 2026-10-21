@@ -11,6 +11,7 @@ import {
   passwordFingerprint,
 } from './auth-session.service';
 import { invalidateAllSessions } from './session-security';
+import type { UserSession } from '../entities/user-session.entity';
 
 /**
  * (Elchi Pochta #3 — "Sessionlar bo'limi") AuthService + AuthSessionService
@@ -29,34 +30,49 @@ const REFRESH_KEY = 'r'.repeat(48);
 const sha256 = (value: string) =>
   createHash('sha256').update(value).digest('hex');
 
-type Row = Record<string, any>;
+type Where = Record<string, unknown>;
+
+interface UserRow {
+  id: string;
+  name: string;
+  username: string | null;
+  phone_number: string;
+  password: string;
+  role: string;
+  status: string;
+  isDeleted: boolean;
+  refresh_token: string | null;
+  session_epoch: number;
+  telegram_id?: string;
+}
 
 /** TypeORM `where` ning shu spec'ga kerakli qismi (IsNull, MoreThan, LessThan). */
-function matches(row: Row, where: Record<string, unknown>): boolean {
+function matches(row: object, where: Where): boolean {
+  const record = row as Record<string, unknown>;
   return Object.entries(where).every(([key, cond]) => {
+    const actual = record[key];
     if (cond instanceof FindOperator) {
-      const value = cond.value as unknown;
       switch (cond.type) {
         case 'isNull':
-          return row[key] === null || row[key] === undefined;
+          return actual === null || actual === undefined;
         case 'moreThan':
-          return row[key] > (value as number);
+          return Number(actual) > Number(cond.value);
         case 'lessThan':
-          return row[key] < (value as number);
+          return Number(actual) < Number(cond.value);
         default:
           throw new Error(`fake repo: ${cond.type} qo'llanmaydi`);
       }
     }
-    return row[key] === cond;
+    return actual === cond;
   });
 }
 
 function makeSessionRepo() {
-  const rows: Row[] = [];
+  const rows: UserSession[] = [];
   return {
     rows,
-    create: (value: Row) => ({ ...value }),
-    insert: jest.fn((value: Row) => {
+    create: (value: Partial<UserSession>) => ({ ...value }) as UserSession,
+    insert: jest.fn((value: UserSession) => {
       if (rows.some((r) => r.refresh_token_hash === value.refresh_token_hash)) {
         return Promise.reject(
           Object.assign(new Error('duplicate key'), { code: '23505' }),
@@ -65,24 +81,24 @@ function makeSessionRepo() {
       rows.push({ ...value });
       return Promise.resolve({});
     }),
-    findOne: jest.fn(({ where }: { where: Row }) =>
+    findOne: jest.fn(({ where }: { where: Where }) =>
       Promise.resolve(rows.find((r) => matches(r, where)) ?? null),
     ),
-    update: jest.fn((where: Row, patch: Row) => {
+    update: jest.fn((where: Where, patch: Partial<UserSession>) => {
       const hits = rows.filter((r) => matches(r, where));
       hits.forEach((r) => Object.assign(r, patch));
       return Promise.resolve({ affected: hits.length });
     }),
-    findAndCount: jest.fn(({ where, take }: { where: Row; take: number }) => {
+    findAndCount: jest.fn(({ where, take }: { where: Where; take: number }) => {
       const hits = rows
         .filter((r) => matches(r, where))
-        .sort((a, b) => b.last_seen_at - a.last_seen_at);
+        .sort((a, b) => Number(b.last_seen_at) - Number(a.last_seen_at));
       return Promise.resolve([
         hits.slice(0, take).map((r) => ({ ...r })),
         hits.length,
       ]);
     }),
-    find: jest.fn(({ where, take }: { where: Row; take: number }) =>
+    find: jest.fn(({ where, take }: { where: Where; take: number }) =>
       Promise.resolve(
         rows.filter((r) => matches(r, where)).slice(0, take ?? rows.length),
       ),
@@ -102,7 +118,7 @@ function makeSessionRepo() {
   };
 }
 
-const baseUser = (id: string, phone: string): Row => ({
+const baseUser = (id: string, phone: string): UserRow => ({
   id,
   name: `TEST ${id}`,
   username: null,
@@ -116,12 +132,12 @@ const baseUser = (id: string, phone: string): Row => ({
 });
 
 function makeWorld() {
-  const users = new Map<string, Row>([
+  const users = new Map<string, UserRow>([
     ['25', baseUser('25', '+998900000025')],
     ['26', baseUser('26', '+998900000026')],
   ]);
   const usersRepo = {
-    findOne: jest.fn(({ where }: { where: Row }) => {
+    findOne: jest.fn(({ where }: { where: Where }) => {
       for (const user of users.values()) {
         if (user.isDeleted !== where.isDeleted) continue;
         if (where.id !== undefined && user.id !== where.id) continue;
@@ -135,12 +151,12 @@ function makeWorld() {
       }
       return Promise.resolve(null);
     }),
-    find: jest.fn(({ where }: { where: Row }) =>
+    find: jest.fn(({ where }: { where: Where }) =>
       Promise.resolve(
         [...users.values()].filter((u) => u.telegram_id === where.telegram_id),
       ),
     ),
-    update: jest.fn((where: Row, patch: Row) => {
+    update: jest.fn((where: Where, patch: Partial<UserRow>) => {
       const user = users.get(String(where.id));
       if (!user || !matches(user, where)) {
         return Promise.resolve({ affected: 0 });
@@ -148,7 +164,7 @@ function makeWorld() {
       Object.assign(user, patch);
       return Promise.resolve({ affected: 1 });
     }),
-    save: jest.fn((user: Row) => Promise.resolve(user)),
+    save: jest.fn((user: UserRow) => Promise.resolve(user)),
   };
   const sessionRepo = makeSessionRepo();
   const sessions = new AuthSessionService(sessionRepo as never);
@@ -180,7 +196,7 @@ function makeWorld() {
   const login = (userId: string, ctx: Record<string, string> = {}) =>
     requestContext.run({ traceId: `t-${userId}`, ...ctx }, () =>
       service.login({
-        phone_number: users.get(userId)!.phone_number as string,
+        phone_number: users.get(userId)!.phone_number,
         password: '0990',
       }),
     );
@@ -214,11 +230,12 @@ const errorOf = async (promise: Promise<unknown>) => {
   };
 };
 
+type LogEntry = { action: string; metadata: { reason: string } };
 const failureReasons = (activityLog: { log: jest.Mock }) =>
-  activityLog.log.mock.calls
-    .map(([entry]) => entry as Row)
+  (activityLog.log.mock.calls as Array<[LogEntry]>)
+    .map(([entry]) => entry)
     .filter((entry) => entry.action === 'auth_failure')
-    .map((entry) => entry.metadata.reason as string);
+    .map((entry) => entry.metadata.reason);
 
 const PHONE_CTX = {
   ip: '203.0.113.7',
@@ -310,7 +327,7 @@ describe('Elchi Pochta #3 — refresh', () => {
     const w = makeWorld();
     const res = await w.login('25');
     const row = w.sessionRepo.rows[0];
-    const loginSeenAt = row.last_seen_at as Date;
+    const loginSeenAt = row.last_seen_at;
     await new Promise((resolve) => setTimeout(resolve, 5));
 
     const refreshed = await w.service.refresh({
@@ -514,15 +531,13 @@ describe('Elchi Pochta #3 — xavfsizlik: barcha sessiyalar yopiladi', () => {
       (await errorOf(w.service.refresh({ refreshToken: res.refreshToken })))
         .statusCode,
     ).toBe(401);
-    expect(w.activityLog.log).toHaveBeenCalledWith(
-      expect.objectContaining({
-        action: 'auth_failure',
-        metadata: expect.objectContaining({
-          reason: 'refresh_session_revoked',
-          cause: 'password_changed',
-        }),
-      }),
-    );
+    const failure = (w.activityLog.log.mock.calls as Array<[LogEntry]>)
+      .map(([entry]) => entry)
+      .find((entry) => entry.action === 'auth_failure');
+    expect(failure?.metadata).toMatchObject({
+      reason: 'refresh_session_revoked',
+      cause: 'password_changed',
+    });
     expect(w.sessionRepo.rows[0].revoke_reason).toBe('security_reset');
   });
 
@@ -662,17 +677,29 @@ describe('Elchi Pochta #3 — GET /auth/sessions (identity.auth.sessions)', () =
       'Kompyuter · Windows · Chrome',
     ]);
     expect(res.data.sessions.map((s) => s.current)).toEqual([false, true]);
-    expect(res.data.sessions[1]).toEqual({
+    const current = res.data.sessions[1];
+    expect(Object.keys(current).sort()).toEqual([
+      'current',
+      'device_id',
+      'device_name',
+      'expires_at',
+      'id',
+      'ip',
+      'last_seen_at',
+      'logged_in_at',
+      'user_agent',
+    ]);
+    expect(current).toMatchObject({
       id: w.sidOf(laptop.accessToken),
       device_name: 'Kompyuter · Windows · Chrome',
       device_id: 'dev-laptop-1',
       user_agent: LAPTOP_CTX.user_agent,
       ip: '198.51.100.20',
-      logged_in_at: expect.stringMatching(/^\d{4}-\d\d-\d\dT/),
-      last_seen_at: expect.stringMatching(/^\d{4}-\d\d-\d\dT/),
       expires_at: new Date(laptop.refresh_token_expires_at!).toISOString(),
       current: true,
     });
+    expect(current.logged_in_at).toMatch(/^\d{4}-\d\d-\d\dT/);
+    expect(current.last_seen_at).toMatch(/^\d{4}-\d\d-\d\dT/);
     const serialized = JSON.stringify(res);
     for (const secret of [
       phone.refreshToken,
@@ -711,10 +738,12 @@ describe('Elchi Pochta #3 — AuthSessionService.cleanup', () => {
     repo.query.mockResolvedValue([[], 3]);
     const now = new Date('2026-10-21T00:00:00Z');
     const day = 24 * 3600_000;
+    const at = (id: string, offsetMs: number) =>
+      repo.create({ id, expires_at: new Date(now.getTime() + offsetMs) });
     repo.rows.push(
-      { id: 'old', expires_at: new Date(now.getTime() - 31 * day) },
-      { id: 'recent', expires_at: new Date(now.getTime() - 2 * day) },
-      { id: 'live', expires_at: new Date(now.getTime() + day) },
+      at('old', -31 * day),
+      at('recent', -2 * day),
+      at('live', day),
     );
     const service = new AuthSessionService(repo as never);
     jest

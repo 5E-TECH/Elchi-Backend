@@ -193,7 +193,9 @@ describe('Elchi Pochta #3 — auth sessiyalari (gateway)', () => {
       .send({ phone_number: '+998900000025', password: '0990' })
       .expect(201);
 
-    expect(res.body.accessToken).toBe('access.jwt');
+    expect((res.body as { accessToken?: string }).accessToken).toBe(
+      'access.jwt',
+    );
     expect(JSON.stringify(res.body)).not.toContain('refresh.jwt');
     const cookie = setCookies(res).find((c) => c.startsWith('refreshToken='));
     expect(cookie).toMatch(/^refreshToken=refresh\.jwt;/);
@@ -222,7 +224,9 @@ describe('Elchi Pochta #3 — auth sessiyalari (gateway)', () => {
       { cmd: 'identity.refresh' },
       { refreshToken: 'refresh.jwt' },
     ]);
-    expect(res.body.accessToken).toBe('access.jwt.2');
+    expect((res.body as { accessToken?: string }).accessToken).toBe(
+      'access.jwt.2',
+    );
     expect(setCookies(res)).toEqual([]);
   });
 });

@@ -45,11 +45,11 @@ const sha256 = (value: string) =>
     };
 
     const loadUser = async (id: string) => {
-      const [user] = (await db.query(
+      const [user] = await db.query<Row[]>(
         `SELECT id::text, password, session_epoch, refresh_token
            FROM identity_schema.admins WHERE id = $1`,
         [id],
-      )) as Row[];
+      );
       return user as never;
     };
 
@@ -104,19 +104,21 @@ const sha256 = (value: string) =>
       );
 
     it('⭐ migratsiya: mavjud foydalanuvchilar session_epoch=0, eski hash saqlanadi; jadval va indekslar', async () => {
-      const users = (await db.query(
+      const users = await db.query<Row[]>(
         `SELECT id::text, session_epoch, refresh_token
            FROM identity_schema.admins ORDER BY id`,
-      )) as Row[];
+      );
       expect(users).toEqual([
         { id: '25', session_epoch: 0, refresh_token: sha256('legacy-25') },
         { id: '26', session_epoch: 0, refresh_token: null },
       ]);
-      const indexes = (await db.query(
+      const indexes = await db.query<
+        Array<{ indexname: string; indexdef: string }>
+      >(
         `SELECT indexname, indexdef FROM pg_indexes
           WHERE schemaname = 'identity_schema' AND tablename = 'user_sessions'
           ORDER BY indexname`,
-      )) as Array<{ indexname: string; indexdef: string }>;
+      );
       const byName = Object.fromEntries(
         indexes.map((i) => [i.indexname, i.indexdef]),
       );
@@ -131,16 +133,16 @@ const sha256 = (value: string) =>
       await open('25', 'tok-a');
       await run();
       expect(
-        (await db.query(
+        await db.query<Row[]>(
           'SELECT count(*)::int AS n FROM identity_schema.user_sessions',
-        )) as Row[],
+        ),
       ).toEqual([{ n: 1 }]);
       await run('down');
-      const cols = (await db.query(
+      const cols = await db.query<Row[]>(
         `SELECT column_name FROM information_schema.columns
           WHERE table_schema = 'identity_schema' AND table_name = 'admins'
             AND column_name = 'session_epoch'`,
-      )) as Row[];
+      );
       expect(cols).toEqual([]);
       await run();
     });
@@ -152,10 +154,10 @@ const sha256 = (value: string) =>
       });
       await open('25', 'tok-laptop', { ip: '198.51.100.20' });
 
-      const rows = (await db.query(
+      const rows = await db.query<Row[]>(
         `SELECT user_id::text, refresh_token_hash, ip, device_name, method, epoch
            FROM identity_schema.user_sessions ORDER BY created_at`,
-      )) as Row[];
+      );
       expect(rows).toEqual([
         {
           user_id: '25',
@@ -188,9 +190,9 @@ const sha256 = (value: string) =>
       expect(a?.id).toBeDefined();
       expect(b?.id).toBe(a?.id);
       expect(
-        (await db.query(
+        await db.query<Row[]>(
           `SELECT method, count(*)::int AS n FROM identity_schema.user_sessions GROUP BY method`,
-        )) as Row[],
+        ),
       ).toEqual([{ method: 'legacy', n: 1 }]);
     });
 
@@ -212,9 +214,9 @@ const sha256 = (value: string) =>
       await open('26', 'tok-26');
       await db.query('DELETE FROM identity_schema.admins WHERE id = 26');
       expect(
-        (await db.query(
+        await db.query<Row[]>(
           'SELECT count(*)::int AS n FROM identity_schema.user_sessions',
-        )) as Row[],
+        ),
       ).toEqual([{ n: 0 }]);
     });
 
@@ -272,11 +274,11 @@ const sha256 = (value: string) =>
         await service.revokeOwn('26', { sessionId: other.id }, 'logout'),
       ).toBe(1);
       expect(await service.touch(other.id)).toBe(false);
-      const [row] = (await db.query(
+      const [row] = await db.query<Row[]>(
         `SELECT revoke_reason, revoked_at IS NOT NULL AS revoked
            FROM identity_schema.user_sessions WHERE id = $1`,
         [other.id],
-      )) as Row[];
+      );
       expect(row).toEqual({ revoke_reason: 'logout', revoked: true });
     });
 
@@ -298,9 +300,9 @@ const sha256 = (value: string) =>
         reset: 1,
         deleted: 1,
       });
-      const rows = (await db.query(
+      const rows = await db.query<Row[]>(
         `SELECT id::text, revoke_reason FROM identity_schema.user_sessions ORDER BY created_at`,
-      )) as Row[];
+      );
       expect(rows).toEqual(
         expect.arrayContaining([
           { id: keep.id, revoke_reason: null },

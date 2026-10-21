@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { RpcException } from '@nestjs/microservices';
 import { AuthService } from './auth.service';
+import type { RefreshDto } from './dto/refresh.dto';
 
 // BaseEntity is the TypeORM superclass for User; we don't exercise persistence
 // in these unit tests, so an empty class stub is sufficient. Enum stubs match
@@ -67,6 +68,8 @@ jest.mock('../../../../libs/common/helpers/response', () => ({
     message,
   }),
 }));
+
+const refreshDto = (refreshToken: string): RefreshDto => ({ refreshToken });
 
 function sha256(token: string): string {
   return createHash('sha256').update(token).digest('hex');
@@ -185,7 +188,7 @@ describe('AuthService.refresh', () => {
           : refreshExpirySeconds - 1800,
     }));
 
-    const res = await service.refresh({ refreshToken: VALID_TOKEN } as any);
+    const res = await service.refresh(refreshDto(VALID_TOKEN));
 
     expect(res.statusCode).toBe(200);
     expect(res.accessToken).toBe('new-access-token');
@@ -216,7 +219,7 @@ describe('AuthService.refresh', () => {
     const { service, sessions } = buildService(user);
 
     await expect(
-      service.refresh({ refreshToken: VALID_TOKEN } as any),
+      service.refresh(refreshDto(VALID_TOKEN)),
     ).rejects.toBeInstanceOf(RpcException);
     expect(sessions.adoptLegacy).not.toHaveBeenCalled();
     expect(sessions.touch).not.toHaveBeenCalled();
@@ -234,14 +237,12 @@ describe('AuthService.refresh', () => {
     };
     const { service, usersRepo, activityLog, sessions } = buildService(user);
 
-    const error = await service
-      .refresh({ refreshToken: VALID_TOKEN } as any)
-      .then(
-        () => {
-          throw new Error('expected a 401');
-        },
-        (e: unknown) => e,
-      );
+    const error = await service.refresh(refreshDto(VALID_TOKEN)).then(
+      () => {
+        throw new Error('expected a 401');
+      },
+      (e: unknown) => e,
+    );
     expect(error).toBeInstanceOf(RpcException);
     expect((error as RpcException).getError()).toEqual(
       expect.objectContaining({ statusCode: 401 }),
@@ -270,7 +271,7 @@ describe('AuthService.refresh', () => {
     };
     const { service, sessions, usersRepo } = buildService(user);
 
-    const res = await service.refresh({ refreshToken: VALID_TOKEN } as any);
+    const res = await service.refresh(refreshDto(VALID_TOKEN));
 
     expect(res.statusCode).toBe(200);
     expect(sessions.adoptLegacy).toHaveBeenCalledWith(
@@ -295,8 +296,8 @@ describe('AuthService.refresh', () => {
     });
     const { service } = buildService(user, sessions);
 
-    const a = await service.refresh({ refreshToken: VALID_TOKEN } as any);
-    const b = await service.refresh({ refreshToken: DEVICE_B_TOKEN } as any);
+    const a = await service.refresh(refreshDto(VALID_TOKEN));
+    const b = await service.refresh(refreshDto(DEVICE_B_TOKEN));
     expect(a.statusCode).toBe(200);
     expect(b.statusCode).toBe(200);
   });
@@ -314,7 +315,7 @@ describe('AuthService.refresh', () => {
     const { service } = buildService(user, sessions);
 
     await expect(
-      service.refresh({ refreshToken: VALID_TOKEN } as any),
+      service.refresh(refreshDto(VALID_TOKEN)),
     ).rejects.toBeInstanceOf(RpcException);
     expect(sessions.revokeOwn).toHaveBeenCalledWith(
       'u1',
@@ -338,7 +339,7 @@ describe('AuthService.refresh', () => {
     const { service, jwtService } = buildService(user, sessions);
 
     await expect(
-      service.refresh({ refreshToken: VALID_TOKEN } as any),
+      service.refresh(refreshDto(VALID_TOKEN)),
     ).rejects.toBeInstanceOf(RpcException);
     expect(jwtService.signAsync).not.toHaveBeenCalled();
   });
@@ -354,7 +355,7 @@ describe('AuthService.refresh', () => {
     const { service } = buildService(user);
 
     await expect(
-      service.refresh({ refreshToken: VALID_TOKEN } as any),
+      service.refresh(refreshDto(VALID_TOKEN)),
     ).rejects.toBeInstanceOf(RpcException);
   });
 
@@ -372,7 +373,7 @@ describe('AuthService.refresh', () => {
       .mockResolvedValue({ sub: 'u1', username: 'evil-different' });
 
     await expect(
-      service.refresh({ refreshToken: VALID_TOKEN } as any),
+      service.refresh(refreshDto(VALID_TOKEN)),
     ).rejects.toBeInstanceOf(RpcException);
   });
 
@@ -390,7 +391,7 @@ describe('AuthService.refresh', () => {
       .mockRejectedValue(new Error('jwt malformed'));
 
     await expect(
-      service.refresh({ refreshToken: VALID_TOKEN } as any),
+      service.refresh(refreshDto(VALID_TOKEN)),
     ).rejects.toBeInstanceOf(RpcException);
     expect(sessions.findByHash).not.toHaveBeenCalled();
   });
@@ -400,7 +401,7 @@ describe('AuthService.refresh', () => {
     const { service } = buildService(null);
 
     await expect(
-      service.refresh({ refreshToken: VALID_TOKEN } as any),
+      service.refresh(refreshDto(VALID_TOKEN)),
     ).rejects.toBeInstanceOf(RpcException);
   });
 });

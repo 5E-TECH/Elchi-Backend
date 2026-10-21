@@ -9,6 +9,7 @@ import type { StringValue } from 'ms';
 import { User } from '../entities/user.entity';
 import {
   AuthSessionService,
+  type OwnSessionsList,
   type SessionRejectReason,
   hashRefreshToken,
   isSessionId,
@@ -520,18 +521,22 @@ export class AuthService {
    * sessiya belgisi. Boshqa foydalanuvchilar yoki tizim bo'yicha umumiy
    * son/ro'yxat qaytmaydi — `userId` faqat gateway'dagi JWT `sub` dan.
    */
-  async listSessions(data: { userId: string; sessionId?: string | null }) {
+  async listSessions(data: {
+    userId: string;
+    sessionId?: string | null;
+  }): Promise<{ statusCode: number; message: string; data: OwnSessionsList }> {
     const user = await this.users.findOne({
       where: { id: data.userId, isDeleted: false },
     });
     if (!user || user.status !== Status.ACTIVE) {
       throw new RpcException(errorRes('User not found', 401));
     }
-    return successRes(
-      await this.sessions.listOwn(user, data.sessionId ?? null),
-      200,
-      'success',
-    );
+    const list = await this.sessions.listOwn(user, data.sessionId ?? null);
+    return successRes(list, 200, 'success') as {
+      statusCode: number;
+      message: string;
+      data: OwnSessionsList;
+    };
   }
 
   /**
