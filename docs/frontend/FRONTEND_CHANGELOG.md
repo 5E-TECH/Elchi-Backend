@@ -23,6 +23,21 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-10-21 — Sotish oynasida «Marketga to'langan summa» chegarasi (uguUEhin)
+
+- [2026-10-21] 🔧 [order] — buyurtma javoblarida (`GET /orders`,
+  `GET /orders/:id`, `GET /orders/courier/orders`, enrich qilingan barcha
+  ro'yxatlar) yangi `sale_market_paid_max: number | null`. Faqat `waiting`
+  buyurtmada to'ladi: hozir TO'LIQ sotilsa sotuvchi `sell {paidAmount}` ga
+  kirita oladigan buyurtma bo'yicha chegara, QO'SHIMCHA XARAJATDAN OLDIN —
+  sotuvdagi formula bilan aynan bir xil: `max(total_price − paid_online_amount
+  − market_tarif, 0) − paid_amount`. Boshqa holatlarda va tarifni aniqlab
+  bo'lmasa — `null`. Sabab: sotuvgacha `to_be_paid` 0 turadi, shuning uchun
+  oyna doim «0 so'mdan oshmasin» deb to'g'ri summani ham xato ko'rsatardi.
+  🔧 `SellModal.tsx:215`: `getMarketPaidMax(order.sale_market_paid_max ??
+  order.to_be_paid, effectiveExtraCost)`. Market kassasi qarzi bo'yicha yakuniy
+  chegara avvalgidek sotuvning 400 xabarida.
+
 ### 2026-10-19 — Dalil fayllari baytlari, market buyurtma tarixi, bot jurnali (YEVhU6XK, Ho5qcDn4, f2Ud5tju)
 
 - [2026-10-19] ✏️ [logistics] — `GET /post/return-requests/list`: guruhdagi

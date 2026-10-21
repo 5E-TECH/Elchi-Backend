@@ -32,7 +32,10 @@ import {
   tashkentDayRange,
 } from '@app/common';
 import { errorRes, successRes } from '../../../libs/common/helpers/response';
-import { resolveCourierShare as resolveCourierShareShare } from './domain/order-money';
+import {
+  computeSaleMarketPaidMax,
+  resolveCourierShare as resolveCourierShareShare,
+} from './domain/order-money';
 import { OrderLookupService } from './lookup/order-lookup.service';
 import {
   ORDER_SCAN_LIGHT_SELECT,
@@ -2203,10 +2206,27 @@ export class OrderServiceService {
     const regionMap = toMap(regionsRes?.data ?? []);
     const productMap = toMap(productsRes?.data ?? []);
 
+    // (uguUEhin) Sotish oynasidagi «Marketga to'langan summa» chegarasi —
+    // faqat sotiladigan (WAITING) buyurtmada; sotuvgacha `to_be_paid` 0 turadi.
+    const saleMarketPaidMaxOf = (row: Order): number | null => {
+      if (row.status !== Order_status.WAITING) return null;
+      const market = row.market_id ? marketMap.get(row.market_id) : undefined;
+      return computeSaleMarketPaidMax({
+        totalPrice: row.total_price,
+        paidOnlineAmount: row.paid_online_amount,
+        paidAmount: row.paid_amount,
+        marketTariffSnapshot: row.market_tariff,
+        isCenter: row.where_deliver === Where_deliver.CENTER,
+        centerTariff: market?.tariff_center as number | null | undefined,
+        homeTariff: market?.tariff_home as number | null | undefined,
+      });
+    };
+
     return rows.map((row) => ({
       ...row,
       // Mijozga ko'rinadigan raqam (chek/ro'yxat/detal) — frontend shuni ko'rsatadi.
       order_number: this.formatOrderNumber(row.id),
+      sale_market_paid_max: saleMarketPaidMaxOf(row),
       market: row.market_id ? (marketMap.get(row.market_id) ?? null) : null,
       customer: row.customer_id
         ? {

@@ -152,6 +152,63 @@ export function resolveOrderTariff(params: {
 }
 
 /**
+ * (uguUEhin) SOTUVDAN OLDIN — kutilayotgan buyurtma hozir TO'LIQ sotilsa,
+ * sotuvchi «Marketga to'langan summa» (`sell {paidAmount}`) ga kirita oladigan
+ * buyurtma bo'yicha yuqori chegara, QO'SHIMCHA XARAJATDAN OLDIN (frontend
+ * kiritilgan xarajatni o'zi ayiradi).
+ *
+ * Sotuvdagi formulaning aynan o'zi (`sellOrder`): naqd = total_price −
+ * paid_online_amount; `to_be_paid` = max(naqd − market tarifi, 0); allaqachon
+ * to'langan qism (`paid_amount`, to_be_paid bilan qisilgan) ayiriladi. Market
+ * tarifi — buyurtmadagi snapshot, bo'lmasa market profilidan
+ * (`resolveOrderTariff`). Sotuvgacha `to_be_paid` ustuni 0 turadi, shuning
+ * uchun oyna shu qiymatni ishlatadi.
+ *
+ * Market KASSASI chegarasi (`computeSaleMarketPaymentLimit` dagi qarz) bu
+ * yerda yo'q — yakuniy chegarani sotuvning o'zi 400 bilan beradi. Tarifni
+ * aniqlab bo'lmasa (snapshot ham, market profili ham yo'q) — `null`.
+ */
+export function computeSaleMarketPaidMax(params: {
+  totalPrice: number | string | null | undefined;
+  paidOnlineAmount: number | string | null | undefined;
+  paidAmount: number | string | null | undefined;
+  marketTariffSnapshot: number | string | null | undefined;
+  isCenter: boolean;
+  centerTariff: number | string | null | undefined;
+  homeTariff: number | string | null | undefined;
+}): number | null {
+  const profileTariff = params.isCenter
+    ? params.centerTariff
+    : params.homeTariff;
+  if (params.marketTariffSnapshot == null && profileTariff == null) {
+    return null;
+  }
+  const marketTariff = resolveOrderTariff({
+    snapshot:
+      params.marketTariffSnapshot == null
+        ? null
+        : Number(params.marketTariffSnapshot),
+    isCenter: params.isCenter,
+    centerTariff:
+      params.centerTariff == null ? null : Number(params.centerTariff),
+    homeTariff: params.homeTariff == null ? null : Number(params.homeTariff),
+  });
+  if (!Number.isFinite(marketTariff)) {
+    return null;
+  }
+  const collectible = Math.max(
+    (Number(params.totalPrice) || 0) - (Number(params.paidOnlineAmount) || 0),
+    0,
+  );
+  const netToBePaid = Math.max(collectible - marketTariff, 0);
+  const currentPaid = Math.min(
+    Math.max(Number(params.paidAmount) || 0, 0),
+    netToBePaid,
+  );
+  return round2(Math.max(netToBePaid - currentPaid, 0));
+}
+
+/**
  * Id ni normallashtirish: bo'sh qiymat va `'0'` (tayinlanmagan pochta
  * sentineli) "yo'q" degani.
  */
