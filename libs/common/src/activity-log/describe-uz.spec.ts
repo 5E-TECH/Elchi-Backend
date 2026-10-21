@@ -92,6 +92,27 @@ describe('ActivityDescribeUz — gaplar (2WRzdWpZ)', () => {
     );
   });
 
+  it('Elchi Pochta №1: kassa chiqimi xarajat kategoriyasi bilan; bo`sh nom — qo`shimchasiz', () => {
+    expect(
+      ActivityDescribeUz.cashboxExpense(
+        150000,
+        Cashbox_type.BRANCH,
+        PaymentMethod.CASH,
+        "Yoqilg'i",
+      ),
+    ).toBe("Kassadan chiqim: 150 000 so'm (Filial kassasi, naqd) — Yoqilg'i");
+    for (const empty of [null, undefined, '  ']) {
+      expect(
+        ActivityDescribeUz.cashboxExpense(
+          150000,
+          Cashbox_type.MAIN,
+          PaymentMethod.CASH,
+          empty,
+        ),
+      ).toBe("Kassadan chiqim: 150 000 so'm (Asosiy kassa, naqd)");
+    }
+  });
+
   it('TC5 login: "<Ism> tizimga kirdi"', () => {
     expect(
       ActivityDescribeUz.login({ name: 'Ali Valiyev', role: Roles.ADMIN }),
