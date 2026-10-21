@@ -32,7 +32,9 @@
 #   BACKUP_HEALTH_MAX_AGE_SECONDS  `--check`: newest dump must be younger (default 93600 = 26h)
 #   BACKUP_DIR                 output dir (compose pins /backups/daily)
 #   POSTGRES_URI | POSTGRES_HOST/PORT/USER/PASSWORD/DB   connection (from .env.production)
-#   BACKUP_S3_TARGET           optional off-box target (see backup-db.sh)
+#   BACKUP_S3_TARGET           optional off-box target (see backup-db.sh; the
+#                              postgres:15 image has neither aws nor mc, so it
+#                              only warns until the image provides one)
 #   BACKUP_NOW                 tests only: epoch seconds used instead of the clock
 #   BACKUP_CRON_MAX_CYCLES     tests only: stop after N loop cycles
 #

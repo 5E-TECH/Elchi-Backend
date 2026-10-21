@@ -81,8 +81,9 @@ npm run test:cov         # with coverage
 CI (`.github/workflows/ci.yml`) runs lint, per-service typecheck, a
 secret-scan (gitleaks), and the **full test suite as a blocking gate**, plus a
 build smoke. Deploy (`.github/workflows/deploy.yml`) re-runs the suite, takes a
-**pre-migration DB backup**, runs migrations, deploys changed services, and
-**rolls back** on failure.
+**pre-deploy DB backup on every deploy** (gate; also the migration restore
+point), runs migrations, deploys changed services, starts the daily
+`db-backup` sidecar, and **rolls back** on failure.
 
 ## Database & migrations
 
@@ -94,8 +95,10 @@ npm run db:reconcile          # cashbox money-conservation invariant check
 ```
 
 Migrations live in `migrations/` and run against `order_schema`'s datasource
-(cross-schema DDL is fully qualified). Backups: `scripts/backup-db.sh` (+ the
-`db-backup` compose sidecar).
+(cross-schema DDL is fully qualified). Backups: daily at 05:00 Asia/Tashkent
+into `backups/daily/` (newest 7, `db-backup` sidecar) and before every deploy
+into `backups/pre-deploy/` (newest 5) — list/restore runbook:
+`docs/ops/db-backups.md`.
 
 ## Deployment
 
