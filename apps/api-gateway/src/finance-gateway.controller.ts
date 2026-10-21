@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Body,
   Controller,
+  Delete,
   ForbiddenException,
   GatewayTimeoutException,
   Get,
@@ -60,6 +61,9 @@ import {
   HqCourierReceivablesResponseDto,
   MainCashboxFilterQueryDto,
   MainCashboxManualRequestDto,
+  MainCashboxSpendRequestDto,
+  CreateCashboxExpenseCategoryRequestDto,
+  UpdateCashboxExpenseCategoryRequestDto,
   OpenShiftRequestDto,
   ConvertCashboxCardRequestDto,
   CreateCashboxCardRequestDto,
@@ -2605,11 +2609,15 @@ export class FinanceGatewayController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.MANAGER)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Spend money from main cashbox' })
-  @ApiBody({ type: MainCashboxManualRequestDto })
+  @ApiOperation({
+    summary: 'Spend money from main cashbox',
+    description:
+      "Elchi Pochta №1 — ixtiyoriy `expense_category_id` (`GET /finance/cashbox/expense-categories`): mavjud va o'chirilmagan bo'lishi shart (aks holda 400); `data.history` va kassa tarixi qatorlarida `expense_category_id` + `expense_category_name` (snapshot).",
+  })
+  @ApiBody({ type: MainCashboxSpendRequestDto })
   async spendMoney(
     @Req() req: { user: JwtUser },
-    @Body() dto: MainCashboxManualRequestDto,
+    @Body() dto: MainCashboxSpendRequestDto,
     @Headers('idempotency-key') idempotencyKey?: string,
   ) {
     const isManager = this.isManager(req?.user);
@@ -3250,6 +3258,97 @@ export class FinanceGatewayController {
         created_by: String(req.user.sub),
         ...(key ? { dedup_epoch: key } : {}),
       },
+    );
+  }
+
+  // ───────── Elchi Pochta №1 — kassa xarajatlari kategoriyalari ─────────
+
+  @Get('cashbox/expense-categories')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.MANAGER)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Kassa xarajatlari kategoriyalari (chiqim oynasidagi tanlov)',
+    description:
+      "`data.items` — `{ id, name, description, sort_order, is_deleted, created_by, updated_by, created_at, updated_at }`, `sort_order` bo'yicha. Kassadan chiqim qila oladigan hamma (superadmin, admin, menejer) ko'radi. `include_deleted=true` — o'chirilganlar ham (oxirida); faqat superadmin uchun, boshqalarda e'tiborsiz.",
+  })
+  @ApiQuery({ name: 'include_deleted', required: false, type: Boolean })
+  listCashboxExpenseCategories(
+    @Req() req: { user: JwtUser },
+    @Query('include_deleted') includeDeleted?: string,
+  ) {
+    const wantsDeleted = includeDeleted === 'true' || includeDeleted === '1';
+    return this.send(
+      { cmd: 'finance.cashbox.expense_categories.list' },
+      {
+        include_deleted:
+          wantsDeleted && this.hasRole(req?.user, RoleEnum.SUPERADMIN),
+      },
+    );
+  }
+
+  @Post('cashbox/expense-categories')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Yangi xarajat kategoriyasi (faqat superadmin; nom takrori — 409)',
+  })
+  @ApiBody({ type: CreateCashboxExpenseCategoryRequestDto })
+  createCashboxExpenseCategory(
+    @Req() req: { user: JwtUser },
+    @Body() dto: CreateCashboxExpenseCategoryRequestDto,
+  ) {
+    return this.send(
+      { cmd: 'finance.cashbox.expense_categories.create' },
+      { ...dto, created_by: String(req.user.sub) },
+    );
+  }
+
+  @Patch('cashbox/expense-categories/:id')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary:
+      'Xarajat kategoriyasini tahrirlash (faqat superadmin; topilmasa — 404, nom takrori — 409)',
+    description:
+      "Kamida bitta maydon: `name`, `description` (`null` — tozalash), `sort_order`. Eski tarix qatorlari yozilgan paytdagi nomni (snapshot) ko'rsatishda davom etadi.",
+  })
+  @ApiParam({ name: 'id', description: 'Kategoriya ID' })
+  @ApiBody({ type: UpdateCashboxExpenseCategoryRequestDto })
+  updateCashboxExpenseCategory(
+    @Req() req: { user: JwtUser },
+    @Param('id') id: string,
+    @Body() dto: UpdateCashboxExpenseCategoryRequestDto,
+  ) {
+    return this.send(
+      { cmd: 'finance.cashbox.expense_categories.update' },
+      {
+        ...dto,
+        id: this.assertCardId(id),
+        updated_by: String(req.user.sub),
+      },
+    );
+  }
+
+  @Delete('cashbox/expense-categories/:id')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: "Xarajat kategoriyasini o'chirish (soft; faqat superadmin)",
+    description:
+      "Tanlov ro'yxatidan yo'qoladi va yangi chiqimda berilsa 400; mavjud tarix qatorlari nomini (snapshot) saqlaydi. Topilmasa yoki allaqachon o'chirilgan — 404.",
+  })
+  @ApiParam({ name: 'id', description: 'Kategoriya ID' })
+  deleteCashboxExpenseCategory(
+    @Req() req: { user: JwtUser },
+    @Param('id') id: string,
+  ) {
+    return this.send(
+      { cmd: 'finance.cashbox.expense_categories.delete' },
+      { id: this.assertCardId(id), deleted_by: String(req.user.sub) },
     );
   }
 

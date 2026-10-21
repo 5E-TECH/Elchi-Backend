@@ -738,6 +738,78 @@ export class MainCashboxManualRequestDto {
   card_id?: string;
 }
 
+/**
+ * PATCH /finance/cashbox/spend — qo'lda chiqim. Kirim (`/cashbox/fill`)
+ * kategoriya QABUL QILMAYDI (whitelist — 400).
+ */
+export class MainCashboxSpendRequestDto extends MainCashboxManualRequestDto {
+  // Elchi Pochta №1 — kassa xarajati kategoriyasi.
+  @ApiPropertyOptional({
+    example: '2',
+    description:
+      "Kassa xarajati kategoriyasi ID si (`GET /finance/cashbox/expense-categories`). Ixtiyoriy; berilsa mavjud va o'chirilmagan bo'lishi shart (aks holda 400). Tarix qatorida `expense_category_id` + `expense_category_name` bo'lib qaytadi.",
+  })
+  @IsOptional()
+  @IsString()
+  @Matches(/^\d+$/)
+  expense_category_id?: string;
+}
+
+// ───────── Elchi Pochta №1 — kassa xarajatlari kategoriyalari (superadmin) ─────────
+
+export class CreateCashboxExpenseCategoryRequestDto {
+  @ApiProperty({ example: "Yoqilg'i" })
+  @IsString()
+  @Length(1, 100)
+  name!: string;
+
+  @ApiPropertyOptional({
+    example: 'Benzin, gaz, dizel',
+    description: 'Nimalar kiradi',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  description?: string;
+
+  @ApiPropertyOptional({
+    example: 18,
+    description: "Ro'yxatdagi o'rni (kichigi tepada). Berilmasa — oxiriga.",
+  })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  @Max(1_000_000)
+  sort_order?: number;
+}
+
+export class UpdateCashboxExpenseCategoryRequestDto {
+  @ApiPropertyOptional({ example: "Yoqilg'i va moy" })
+  @IsOptional()
+  @IsString()
+  @Length(1, 100)
+  name?: string;
+
+  @ApiPropertyOptional({
+    example: 'Benzin, gaz, dizel, moy',
+    nullable: true,
+    description: "Nimalar kiradi; `null` yoki '' — tavsifni tozalash",
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  description?: string | null;
+
+  @ApiPropertyOptional({ example: 2 })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  @Max(1_000_000)
+  sort_order?: number;
+}
+
 // ───────── 3PE0B03q — asosiy kassa NOMLI kartalari (BeePost cashbox_card) ─────────
 
 export class CreateCashboxCardRequestDto {
