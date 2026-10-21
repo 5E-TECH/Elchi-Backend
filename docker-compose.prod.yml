@@ -105,24 +105,35 @@ services:
         condition: service_healthy
     restart: 'no'
 
-  # Automated, rotated, off-box-capable PostgreSQL backups (Audit P0: single
-  # Postgres SPOF with no scheduled backup). Uses the same postgres:15 image so
+  # Daily PostgreSQL backups (Elchi Pochta "Avtomatik backup tizimi"; Audit P0:
+  # single Postgres SPOF with no scheduled backup). Har kuni 05:00 Asia/Tashkent
+  # a verified pg_dump lands in the host bind-mount ./backups/daily and the
+  # newest 7 are kept (scripts/backup-cron.sh). Same postgres:15 image so
   # pg_dump version-matches the server; connection comes from .env.production
-  # (POSTGRES_URI or POSTGRES_HOST/USER/PASSWORD/DB). Dumps land in the host
-  # bind-mount ./backups; set BACKUP_S3_TARGET in .env.production to also push
-  # each dump off the box (the part that actually survives disk/volume loss).
+  # (POSTGRES_URI). deploy.yml starts/updates this service on every deploy.
+  # Overrides (BACKUP_DAILY_AT, BACKUP_TZ, BACKUP_DAILY_KEEP) and the optional
+  # off-box BACKUP_S3_TARGET go in .env.production — NOT in `environment:`
+  # below, which would silently win over the env_file. Pre-deploy dumps are
+  # separate: ./backups/pre-deploy (scripts/pre-deploy-backup.sh).
+  # Runbook: docs/ops/db-backups.md.
   db-backup:
     image: postgres:15
     container_name: elchi-db-backup
     env_file: .env.production
     environment:
-      BACKUP_DIR: /backups
-      BACKUP_RETENTION: ${BACKUP_RETENTION:-28}
-      BACKUP_INTERVAL_SECONDS: ${BACKUP_INTERVAL_SECONDS:-21600}
+      BACKUP_DIR: /backups/daily
     volumes:
       - ./scripts:/scripts:ro
       - ./backups:/backups
     entrypoint: ['bash', '/scripts/backup-cron.sh']
+    # `docker ps` shows (unhealthy) once the newest daily dump is > 26h old —
+    # i.e. a day's backup was missed or keeps failing.
+    healthcheck:
+      test: ['CMD', 'bash', '/scripts/backup-cron.sh', '--check']
+      interval: 5m
+      timeout: 30s
+      retries: 1
+      start_period: 15m
     depends_on:
       postgres:
         condition: service_healthy
