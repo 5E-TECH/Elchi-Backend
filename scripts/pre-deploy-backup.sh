@@ -74,5 +74,7 @@ if [ -z "$OUT" ] || [ ! -s "$OUT" ]; then
   log "ERROR: backup-db.sh reported success but wrote no dump"
   exit 1
 fi
+# Absolute, so rollback/restore messages point at the file from any directory.
+OUT="$(cd "$(dirname "$OUT")" && pwd)/$(basename "$OUT")"
 log "pre-deploy backup ok: $OUT"
 echo "$OUT"

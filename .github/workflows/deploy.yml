@@ -101,6 +101,7 @@ jobs:
             DEPLOY_SERVICES=""
             DEPLOY_ALL=false
             RUN_MIGRATIONS=false
+            BACKUP_SIDECAR_RECREATE=false
 
             if [ -z "$OLD_SHA" ]; then
               DEPLOY_ALL=true
@@ -113,6 +114,11 @@ jobs:
               fi
               if grep -Eq '^(migrations/|scripts/init-schemas\.sql$)' /tmp/elchi-changed-files; then
                 RUN_MIGRATIONS=true
+              fi
+              # db-backup runs its bind-mounted scripts from a long-lived bash
+              # loop, so a script change only takes effect after a recreate.
+              if grep -Eq '^scripts/backup-(cron|db)\.sh$' /tmp/elchi-changed-files; then
+                BACKUP_SIDECAR_RECREATE=true
               fi
               for service in $APP_SERVICES; do
                 if grep -q "^apps/$service/" /tmp/elchi-changed-files; then
@@ -131,8 +137,10 @@ jobs:
             # crashing container), revert the code to the previously-deployed
             # commit and rebuild the running services from it, so production is
             # never left half-deployed on new code. A failed migration may have
-            # partially applied schema changes — the pre-migration dump written
-            # to ./backups/pre-migration/ below is the DB restore point.
+            # partially applied schema changes — the pre-deploy dump written to
+            # ./backups/pre-deploy/ below ($PRE_DEPLOY_BK) is the DB restore
+            # point. The rollback never restores the DB by itself (that would
+            # drop writes made since the dump) — docs/ops/db-backups.md.
             #
             # ⚠️ Only services that EXIST in the rolled-back compose file are
             # rebuilt. APP_SERVICES is the NEW list: on the first deploy of a new
@@ -159,9 +167,17 @@ jobs:
                 else
                   echo "!!! Could not list services from the old compose file — no service was rebuilt; fix manually."
                 fi
-                echo "!!! Rolled back to $OLD_SHA. If migrations ran, restore the DB from the newest ./backups/pre-migration/*.sql.gz"
+                if [ -n "${PRE_DEPLOY_BK:-}" ]; then
+                  echo "!!! Rolled back to $OLD_SHA. If migrations ran, restore the DB from this deploy's pre-deploy dump: $PRE_DEPLOY_BK (runbook: docs/ops/db-backups.md)"
+                else
+                  echo "!!! Rolled back to $OLD_SHA. If migrations ran, restore the DB from the newest ./backups/pre-deploy/pre-deploy-*.sql.gz (runbook: docs/ops/db-backups.md)"
+                fi
               fi
               docker compose -f docker-compose.prod.yml ps || true
+              # The `set +e` above outlives the trap: without this exit the
+              # script carried on with the remaining deploy steps on the
+              # rolled-back code and ended 0 — a failed deploy showed green.
+              exit 1
             }
             trap 'rollback' ERR
 
@@ -169,27 +185,37 @@ jobs:
             git reset --hard origin/main
             test -f .env.production || cp -f /tmp/elchi-env-backup .env.production
 
+            # --- Pre-deploy DB backup (gate) -----------------------------------
+            # Har bir deploydan oldin backup: EVERY deploy, after the new code is
+            # checked out (so the new scripts run) but BEFORE any image is pulled,
+            # any container is (re)built or any migration runs. Verified dump in
+            # ./backups/pre-deploy/ (newest 5 kept, scripts/pre-deploy-backup.sh);
+            # it is also this deploy's migration restore point — no second dump.
+            # If it fails, nothing has been touched yet: reset the code back to
+            # OLD_SHA (so the next run still sees the full diff), skip the
+            # rollback rebuild, and stop. Old ./backups/pre-migration/ dumps are
+            # left as they are (no longer written or rotated).
+            PRE_DEPLOY_BK=""
+            if ! PRE_DEPLOY_BK="$(bash scripts/pre-deploy-backup.sh "$OLD_SHA" "$NEW_SHA")"; then
+              trap - ERR
+              echo "!!! Pre-deploy DB backup FAILED — deploy aborted BEFORE touching any container (see the [pre-deploy]/[backup-db] lines above)." >&2
+              if [ -n "$OLD_SHA" ]; then git reset --hard "$OLD_SHA"; fi
+              echo "!!! Running containers are unchanged and the code is back on ${OLD_SHA:-the previous commit}. Fix the backup, then re-run the deploy." >&2
+              exit 1
+            fi
+            echo "Pre-deploy backup: ${PRE_DEPLOY_BK:-skipped (first install, no database yet)}"
+
             docker compose -f docker-compose.prod.yml pull rabbitmq postgres minio cloudflared || true
             docker compose -f docker-compose.prod.yml up -d --remove-orphans rabbitmq postgres minio
 
             if [ "$RUN_MIGRATIONS" != true ]; then
               echo "No migration changes detected."
             else
-              # Pre-migration safety dump — a buggy/destructive migration must
-              # always be recoverable to the exact pre-migration state. The
-              # migration is GATED on a successful, non-empty backup.
-              echo "Taking pre-migration DB backup (gates the migration)..."
-              mkdir -p ./backups/pre-migration
-              BK="./backups/pre-migration/pre-migration-$(date -u +%Y%m%d-%H%M%S).sql.gz"
-              docker compose -f docker-compose.prod.yml exec -T postgres \
-                sh -c 'pg_dump --no-owner --no-privileges --clean --if-exists -U "$POSTGRES_USER" "$POSTGRES_DB"' \
-                | gzip -9 > "$BK"
-              BK_SIZE="$(stat -c%s "$BK" 2>/dev/null || echo 0)"
-              if [ "$BK_SIZE" -lt 1024 ]; then
-                echo "Pre-migration backup is only ${BK_SIZE} bytes — treating as FAILED, aborting before migrating." >&2
-                exit 1
-              fi
-              echo "Pre-migration backup ok (${BK_SIZE} bytes): $BK"
+              # A buggy/destructive migration must always be recoverable: the
+              # migration only runs because the pre-deploy backup above passed
+              # (pg_dump ok, gzip intact, "dump complete" trailer). That dump is
+              # the restore point.
+              echo "Migration restore point: ${PRE_DEPLOY_BK:-none (first install, no database yet)}"
 
               docker compose -f docker-compose.prod.yml up --build --force-recreate --abort-on-container-exit migration-runner
               docker compose -f docker-compose.prod.yml rm -f migration-runner || true
@@ -198,6 +224,29 @@ jobs:
             test -z "$DEPLOY_SERVICES" && echo "No application service changes detected; keeping running containers as-is." || { echo "Deploying services:$DEPLOY_SERVICES"; docker compose -f docker-compose.prod.yml up -d --no-deps --build --remove-orphans $DEPLOY_SERVICES; }
 
             docker compose -f docker-compose.prod.yml up -d --no-deps cloudflared || true
+
+            # --- Daily backup sidecar (db-backup) -------------------------------
+            # Har kuni 05:00 (Asia/Tashkent) backup, ./backups/daily/, newest 7
+            # kept. Started/updated on EVERY deploy — it was never started before,
+            # so prod had no scheduled backup at all. `up -d` creates it when it
+            # does not exist yet and is a no-op when nothing changed; a change to
+            # its scripts forces a recreate. --no-deps: postgres is already up.
+            # Then make sure it stays up (not crash-looping). A sidecar problem
+            # must not roll back an app deploy that already succeeded, so it is
+            # reported at the very end and turns the job red instead.
+            DB_BACKUP_SIDECAR_OK=true
+            if [ "$BACKUP_SIDECAR_RECREATE" = true ]; then
+              docker compose -f docker-compose.prod.yml up -d --no-deps --force-recreate db-backup || DB_BACKUP_SIDECAR_OK=false
+            else
+              docker compose -f docker-compose.prod.yml up -d --no-deps db-backup || DB_BACKUP_SIDECAR_OK=false
+            fi
+            DB_BACKUP_CID="$(docker compose -f docker-compose.prod.yml ps -q db-backup 2>/dev/null || true)"
+            DB_BACKUP_R1="$(docker inspect -f '{{.RestartCount}}' "$DB_BACKUP_CID" 2>/dev/null || echo none)"
+            sleep 5
+            DB_BACKUP_STATE="$(docker inspect -f '{{.State.Status}} {{.RestartCount}}' "$DB_BACKUP_CID" 2>/dev/null || echo none)"
+            [ -n "$DB_BACKUP_CID" ] && [ "$DB_BACKUP_STATE" = "running $DB_BACKUP_R1" ] || DB_BACKUP_SIDECAR_OK=false
+            docker compose -f docker-compose.prod.yml logs --tail 20 db-backup || true
+
             docker compose -f docker-compose.prod.yml ps
 
             # Reclaim what this deploy just superseded: the previous service
@@ -207,3 +256,10 @@ jobs:
             # here. Never fatal: a cleanup problem must not fail, or roll back,
             # a deploy that already succeeded.
             bash scripts/docker-gc.sh || true
+
+            if [ "$DB_BACKUP_SIDECAR_OK" != true ]; then
+              trap - ERR
+              echo "!!! The deploy itself succeeded, but the db-backup sidecar is NOT running — daily backups are OFF." >&2
+              echo "!!! Check: docker compose -f docker-compose.prod.yml logs db-backup   (state: ${DB_BACKUP_STATE:-unknown})" >&2
+              exit 1
+            fi
