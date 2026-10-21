@@ -106,3 +106,85 @@ export class LogoutResponseDto {
   @ApiProperty({ type: () => EmptyDataDto })
   data!: EmptyDataDto;
 }
+
+/** (Elchi Pochta #3) `GET /auth/sessions` — egasining bitta faol sessiyasi. */
+export class AuthSessionDto {
+  @ApiProperty({ example: '3f2b8c1e-6a4d-4e7b-9c10-2d5f7a8b9c0d' })
+  id!: string;
+
+  @ApiProperty({
+    example: 'Telefon · Android · Chrome',
+    nullable: true,
+    type: String,
+    description: 'X-Device-Name yoki User-Agent dan (login paytida)',
+  })
+  device_name!: string | null;
+
+  @ApiProperty({
+    example: null,
+    nullable: true,
+    type: String,
+    description: 'X-Device-Id (frontend yuborsa)',
+  })
+  device_id!: string | null;
+
+  @ApiProperty({
+    example: 'Mozilla/5.0 (Linux; Android 14) Chrome/126.0 Mobile',
+    nullable: true,
+    type: String,
+  })
+  user_agent!: string | null;
+
+  @ApiProperty({ example: '203.0.113.7', nullable: true, type: String })
+  ip!: string | null;
+
+  @ApiProperty({
+    example: '2026-10-21T08:15:00.000Z',
+    description: 'Login vaqti',
+  })
+  logged_in_at!: string;
+
+  @ApiProperty({
+    example: '2026-10-21T10:02:11.000Z',
+    description: 'Oxirgi muvaffaqiyatli token yangilanishi (yoki login)',
+  })
+  last_seen_at!: string;
+
+  @ApiProperty({
+    example: '2026-10-22T08:15:00.000Z',
+    description: 'Refresh token muddati — shundan keyin qayta login kerak',
+  })
+  expires_at!: string;
+
+  @ApiProperty({
+    example: true,
+    description: "So'rov yuborgan sessiyaning o'zi",
+  })
+  current!: boolean;
+}
+
+export class AuthSessionsDataDto {
+  @ApiProperty({
+    example: 2,
+    description: 'Shu akkauntning faol sessiyalari soni',
+  })
+  active_count!: number;
+
+  @ApiProperty({
+    type: () => [AuthSessionDto],
+    description:
+      "Faol sessiyalar, oxirgi faollik bo'yicha kamayish tartibida (ko'pi bilan 50)",
+  })
+  sessions!: AuthSessionDto[];
+}
+
+export class AuthSessionsResponseDto {
+  @ApiProperty({ example: 200 })
+  statusCode!: number;
+
+  @ApiProperty({ example: 'success' })
+  message!: string;
+
+  @ApiProperty({ type: () => AuthSessionsDataDto })
+  data!: AuthSessionsDataDto;
+}

@@ -68,7 +68,9 @@ multiple roles, each with a distinct app surface.
   (path `/auth`, `SameSite=None; Secure` in production). The browser sends it
   automatically; JS cannot read it. **You must call refresh with
   `credentials: 'include'`.**
-- Access token lifetime ≈ `15m` (configurable). Refresh ≈ `7d`.
+- Access token lifetime ≈ `1h` (configurable, `ACCESS_TOKEN_TIME`). Refresh ≈
+  `1d` (`REFRESH_TOKEN_TIME`); the refresh token is not rotated, so a session
+  ends 1 day after its login.
 
 ### Refresh
 `POST /auth/refresh` (send `credentials: 'include'`; body optional fallback
@@ -86,18 +88,28 @@ the session is still valid — **do not log out**. Back off and retry (Elchi-Fro
 login on `401`/`403` or any other non-transient error. Limits: login 30/min per
 IP, refresh 60/min per IP, separate counters.
 
-**Sessions:** one refresh session per account — a newer login supersedes the
-older device, which gets `401` at its next refresh (the newer device stays
-logged in). Changing your password or login phone revokes the session (401 at
-the next refresh, within the 15 min access-token lifetime); Elchi-Frontend logs
-the user out right away after an own password change.
+**Sessions (Elchi Pochta #3, 2026-10-21):** every login opens its OWN session —
+an account can be signed in on several devices at once and a new login no
+longer logs the other devices out. `POST /auth/logout` closes only the current
+session. Changing the password or login phone, a role change, blocking or
+deleting the account closes ALL of its sessions (401 at the next refresh,
+within the 1 h access-token lifetime); Elchi-Frontend logs the user out right
+away after an own password change. Access tokens from login/refresh carry a
+`sid` claim (the session id); Telegram Mini App tokens do not.
 
 ### Other auth endpoints
 - `GET /auth/validate` → `{ statusCode, message, user: { id, username, name, phone_number, role, status } }`. Use to bootstrap the session on app load.
 - `GET /auth/my-profile` / `PATCH /auth/my-profile` → current user's profile
   (since 2026-10-01 admins can change their own name/phone/password here too;
   self-changes of status/salary/commission stay blocked).
-- `POST /auth/logout` → clears the refresh cookie.
+- `POST /auth/logout` → closes the current session (send `credentials:
+  'include'`) and clears the refresh cookie.
+- `GET /auth/sessions` (any role) → the caller's OWN active sessions:
+  `{ statusCode, message, data: { active_count, sessions: [ { id, device_name,
+  device_id, user_agent, ip, logged_in_at, last_seen_at, expires_at, current } ] } }`,
+  sorted by `last_seen_at` desc (at most 50; `active_count` counts all).
+  `last_seen_at` moves on every successful `/auth/refresh` (≈ hourly while the
+  app is open). No other user's sessions and no system-wide counts.
 
 ### The JWT payload (what you can trust client-side)
 The access token decodes to:

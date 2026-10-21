@@ -75,6 +75,7 @@ const AUTH_THROTTLES = authThrottleConfig();
 export const AUTH_THROTTLE = AUTH_THROTTLES.login;
 export const AUTH_REFRESH_THROTTLE = AUTH_THROTTLES.refresh;
 import {
+  AuthSessionsResponseDto,
   LoginRequestDto,
   MinimalAuthResponseDto,
   RefreshRequestDto,
@@ -86,6 +87,12 @@ interface JwtUser {
   sub: string;
   username: string;
   roles: string[];
+  /**
+   * (Elchi Pochta #3) Sessiya id si (`identity_schema.user_sessions.id`) —
+   * login/refresh access tokenlarida. Telegram tokenlarida va deploy'dan
+   * oldingi tokenlarda yo'q.
+   */
+  sid?: string | null;
 }
 
 @ApiTags('Auth')
@@ -96,7 +103,9 @@ export class AuthGatewayController {
   ) {}
 
   private static readonly REFRESH_COOKIE_NAME = 'refreshToken';
-  private static readonly FALLBACK_REFRESH_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+  // identity `REFRESH_TOKEN_TIME` sukuti (1d) bilan bir xil — faqat javobda
+  // muddat bo'lmasa ishlatiladi.
+  private static readonly FALLBACK_REFRESH_TTL_MS = 24 * 60 * 60 * 1000;
 
   /**
    * Send to identity-service with a hard timeout. Without it, login/refresh and
@@ -385,22 +394,63 @@ export class AuthGatewayController {
     return this.sanitizeAuthPayload(response);
   }
 
+  /**
+   * (Elchi Pochta #3) Faqat JORIY sessiya yopiladi — shu akkauntning boshqa
+   * qurilmalari ishlashda davom etadi. Sessiya access token `sid` i va shu
+   * brauzerning refresh cookie'si bo'yicha aniqlanadi (cookie `path=/auth`,
+   * shuning uchun bu so'rovga ham keladi).
+   */
   @Post('logout')
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Logout current user' })
+  @ApiOperation({
+    summary: 'Logout the current session only (other devices stay signed in)',
+  })
   @ApiOkResponse({ description: 'Logged out' })
   @ApiUnauthorizedResponse({ description: 'Unauthorized' })
   async logout(
-    @Req() req: { user: JwtUser },
+    @Req() req: Request & { user: JwtUser },
     @Res({ passthrough: true }) res: Response,
   ) {
     const response = await this.sendIdentity(
       { cmd: 'identity.logout' },
-      { userId: req.user.sub },
+      {
+        userId: req.user.sub,
+        sessionId: typeof req.user.sid === 'string' ? req.user.sid : null,
+        refreshToken: this.readCookie(
+          req,
+          AuthGatewayController.REFRESH_COOKIE_NAME,
+        ),
+      },
     );
     this.clearRefreshCookie(res);
     return response;
+  }
+
+  /**
+   * (Elchi Pochta #3) "Sessionlar" bo'limi — akkaunt egasi O'Z akkauntiga
+   * kirgan faol sessiyalarni ko'radi: soni, qurilma, IP, login va oxirgi
+   * faollik vaqti, joriy sessiya belgisi. Har qanday autentifikatsiyadan
+   * o'tgan rol (`@Roles` yo'q); kim — faqat JWT `sub` dan, so'rovda boshqa
+   * foydalanuvchi id si qabul qilinmaydi. Tizim bo'yicha umumiy ro'yxat yo'q.
+   */
+  @Get('sessions')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary:
+      'Own active sessions of the current account (count, device, IP, login and last-seen time, current flag)',
+  })
+  @ApiOkResponse({ type: AuthSessionsResponseDto })
+  @ApiUnauthorizedResponse({ description: 'Unauthorized' })
+  mySessions(@Req() req: { user: JwtUser }) {
+    return this.sendIdentity(
+      { cmd: 'identity.auth.sessions' },
+      {
+        userId: req.user.sub,
+        sessionId: typeof req.user.sid === 'string' ? req.user.sid : null,
+      },
+    );
   }
 
   @Get('validate')

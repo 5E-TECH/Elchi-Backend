@@ -74,7 +74,7 @@ import type { StringValue } from 'ms';
         secret: configService.getOrThrow<string>('ACCESS_TOKEN_KEY'),
         signOptions: {
           expiresIn: (configService.get<string>('ACCESS_TOKEN_TIME') ??
-            '15m') as StringValue,
+            '1h') as StringValue,
         },
       }),
     }),

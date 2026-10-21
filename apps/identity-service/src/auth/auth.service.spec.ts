@@ -108,10 +108,7 @@ function buildSessions(sessionsByHash: Record<string, { id: string }> = {}) {
   };
 }
 
-function buildService(
-  user: MockUser | null,
-  sessions = buildSessions(),
-) {
+function buildService(user: MockUser | null, sessions = buildSessions()) {
   const usersRepo: any = {
     findOne: jest.fn().mockResolvedValue(user),
     save: jest.fn().mockImplementation((u: any) => Promise.resolve(u)),

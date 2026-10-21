@@ -185,7 +185,7 @@ function makeWorld() {
       }),
     );
   const sidOf = (accessToken: string) =>
-    (jwt.decode(accessToken) as { sid?: string }).sid;
+    jwt.decode<{ sid?: string }>(accessToken).sid;
 
   return {
     service,
@@ -399,9 +399,8 @@ describe('Elchi Pochta #3 — refresh', () => {
     );
     w.users.get('25')!.refresh_token = sha256(legacy);
 
-    const first = await requestContext.run(
-      { traceId: 't', ...PHONE_CTX },
-      () => w.service.refresh({ refreshToken: legacy }),
+    const first = await requestContext.run({ traceId: 't', ...PHONE_CTX }, () =>
+      w.service.refresh({ refreshToken: legacy }),
     );
     expect(first.statusCode).toBe(200);
     expect(w.sessionRepo.rows).toHaveLength(1);
@@ -533,8 +532,7 @@ describe('Elchi Pochta #3 — xavfsizlik: barcha sessiyalar yopiladi', () => {
     await w.login('26');
     invalidateAllSessions(w.users.get('26') as never);
     expect(
-      (await w.service.refresh({ refreshToken: mine.refreshToken }))
-        .statusCode,
+      (await w.service.refresh({ refreshToken: mine.refreshToken })).statusCode,
     ).toBe(200);
   });
 });
@@ -567,9 +565,7 @@ describe('Elchi Pochta #3 — logout faqat joriy sessiyani yopadi', () => {
         .statusCode,
     ).toBe(200);
     // Eski ustunda noutbuk (oxirgi login) hashi qoladi — rollback uchun.
-    expect(w.users.get('25')!.refresh_token).toBe(
-      sha256(laptop.refreshToken),
-    );
+    expect(w.users.get('25')!.refresh_token).toBe(sha256(laptop.refreshToken));
   });
 
   it('cookie bo‘yicha (`sid` siz eski access token) — o‘sha sessiya yopiladi; eski ustun shu sessiyaniki bo‘lsa tozalanadi', async () => {

@@ -586,10 +586,7 @@ export class AuthService {
   }
 
   private async issueAccessToken(user: User, sessionId: string) {
-    return this.signAccessToken(
-      await this.createTokenPayload(user),
-      sessionId,
-    );
+    return this.signAccessToken(await this.createTokenPayload(user), sessionId);
   }
 
   /**

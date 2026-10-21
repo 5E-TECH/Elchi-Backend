@@ -72,7 +72,7 @@ export const gatewayValidationSchema = Joi.object({
   ACCESS_TOKEN_KEY: strongKey(
     'JWT access-token signing key. MUST match identity-service. A weak key allows forging a JWT for any role (full account takeover).',
   ),
-  ACCESS_TOKEN_TIME: Joi.string().default('15m'),
+  ACCESS_TOKEN_TIME: Joi.string().default('1h'),
   RABBITMQ_URI: Joi.string().required(),
   RABBITMQ_IDENTITY_QUEUE: Joi.string().required(),
   RABBITMQ_ORDER_QUEUE: Joi.string().required(),
@@ -179,7 +179,7 @@ export const identityValidationSchema = Joi.object({
   ACCESS_TOKEN_KEY: strongKey(
     'JWT access-token signing key. MUST match api-gateway. A weak key allows forging a JWT for any role (full account takeover).',
   ),
-  ACCESS_TOKEN_TIME: Joi.string().default('15m'),
+  ACCESS_TOKEN_TIME: Joi.string().default('1h'),
   // (xC88d8kH) Telegram Mini App / bot aktori tokeni — qisqa, refresh yo'q.
   TELEGRAM_ACCESS_TOKEN_TIME: Joi.string().default('30m'),
   // initData imzosini tekshirish uchun (notification-service bilan bir xil token).
@@ -187,7 +187,7 @@ export const identityValidationSchema = Joi.object({
   REFRESH_TOKEN_KEY: strongKey(
     'JWT refresh-token signing key. A weak key allows minting refresh tokens (persistent account takeover).',
   ),
-  REFRESH_TOKEN_TIME: Joi.string().default('7d'),
+  REFRESH_TOKEN_TIME: Joi.string().default('1d'),
   RABBITMQ_URI: Joi.string().required(),
   RABBITMQ_IDENTITY_QUEUE: Joi.string().required(),
   RABBITMQ_LOGISTICS_QUEUE: Joi.string().required(),
