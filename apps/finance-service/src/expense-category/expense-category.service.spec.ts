@@ -8,6 +8,7 @@ import {
 import { CashboxExpenseCategory } from '../entities/cashbox-expense-category.entity';
 import {
   ExpenseCategoryService,
+  ExpenseCategoryView,
   resolveSpendExpenseCategory,
 } from './expense-category.service';
 
@@ -22,10 +23,7 @@ import {
 const PO_TABLE: Array<[string, string]> = [
   ['Ovqatlanish', 'Xodimlarning ovqati, tushlik'],
   ["Yoqilg'i", 'Benzin, gaz, dizel'],
-  [
-    'Avtomobil xarajatlari',
-    "Ta'mirlash, moy almashtirish, ehtiyot qismlar",
-  ],
+  ['Avtomobil xarajatlari', "Ta'mirlash, moy almashtirish, ehtiyot qismlar"],
   ['Ijara (arenda)', 'Filial, ombor, ofis ijarasi'],
   ["Kommunal to'lovlar", 'Elektr, suv, gaz, chiqindi'],
   ['Internet va aloqa', 'Internet, telefon, SIM-karta'],
@@ -55,7 +53,13 @@ const rpcError = async (promise: Promise<unknown>) => {
   throw new Error('RpcException kutilgan edi');
 };
 
-type Row = Record<string, any>;
+type Res<T> = { statusCode: number; message: string; data: T };
+
+/** Servis javobi (`successRes`) — test ichida aniq tur bilan. */
+const result = async <T>(promise: Promise<unknown>) =>
+  (await promise) as Res<T>;
+
+type Row = Record<string, unknown>;
 
 function makeEnv(rows: Row[] = []) {
   let seq = 100;
@@ -124,7 +128,9 @@ describe('Elchi Pochta №1 — seed (migratsiya 129)', () => {
     ).toEqual(PO_TABLE);
     expect(CASHBOX_EXPENSE_CATEGORY_SEED).toHaveLength(17);
     // Nomlar katta-kichik harf farqsiz noyob (partial unique indeks bilan mos).
-    const lower = CASHBOX_EXPENSE_CATEGORY_SEED.map((c) => c.name.toLowerCase());
+    const lower = CASHBOX_EXPENSE_CATEGORY_SEED.map((c) =>
+      c.name.toLowerCase(),
+    );
     expect(new Set(lower).size).toBe(17);
     // Repo seed'lari (Farg'ona va h.k.) kabi oddiy ASCII apostrof.
     for (const { name, description } of CASHBOX_EXPENSE_CATEGORY_SEED) {
@@ -138,13 +144,14 @@ describe('Elchi Pochta №1 — seed (migratsiya 129)', () => {
     await new CreateCashboxExpenseCategories1716000000129().up(
       queryRunner as never,
     );
-    const insert = queryRunner.query.mock.calls.find(([sql]) =>
-      /INSERT INTO "finance_schema"\."cashbox_expense_categories"/.test(
-        String(sql),
-      ),
+    const calls = queryRunner.query.mock.calls as Array<
+      [string, Array<string | number>?]
+    >;
+    const insert = calls.find(([sql]) =>
+      /INSERT INTO "finance_schema"\."cashbox_expense_categories"/.test(sql),
     );
     expect(insert).toBeDefined();
-    const [sql, params] = insert as [string, Array<string | number>];
+    const [sql, params = []] = insert!;
     expect(sql).toMatch(
       /ON CONFLICT \(\(lower\("name"\)\)\) WHERE "is_deleted" = false\s+DO NOTHING/,
     );
@@ -165,7 +172,7 @@ describe('Elchi Pochta №1 — seed (migratsiya 129)', () => {
         index + 1,
       ]),
     );
-    const ddl = queryRunner.query.mock.calls.map(([q]) => String(q)).join('\n');
+    const ddl = calls.map(([q]) => q).join('\n');
     expect(ddl).toContain('"UQ_CASHBOX_EXPENSE_CATEGORY_NAME"');
     expect(ddl).toMatch(/\(lower\("name"\)\)\s+WHERE "is_deleted" = false/);
     expect(ddl).toContain('ADD COLUMN IF NOT EXISTS "expense_category_id"');
@@ -176,12 +183,15 @@ describe('Elchi Pochta №1 — seed (migratsiya 129)', () => {
 describe('Elchi Pochta №1 — ExpenseCategoryService', () => {
   it('ro`yxat: sukut — faqat o`chirilmaganlar, sort_order → id tartibida; include_deleted — hammasi', async () => {
     const env = makeEnv([category()]);
-    const res: any = await env.service.list();
+    const res = await result<{ items: ExpenseCategoryView[] }>(
+      env.service.list(),
+    );
     expect(env.manager.find).toHaveBeenCalledWith(CashboxExpenseCategory, {
       where: { isDeleted: false },
       order: { isDeleted: 'ASC', sort_order: 'ASC', id: 'ASC' },
     });
     expect(res).toMatchObject({ statusCode: 200 });
+    const createdAt = new Date('2026-10-21T00:00:00Z');
     expect(res.data.items).toEqual([
       {
         id: '2',
@@ -191,8 +201,8 @@ describe('Elchi Pochta №1 — ExpenseCategoryService', () => {
         is_deleted: false,
         created_by: null,
         updated_by: null,
-        created_at: expect.any(Date),
-        updated_at: expect.any(Date),
+        created_at: createdAt,
+        updated_at: createdAt,
       },
     ]);
 
@@ -205,11 +215,13 @@ describe('Elchi Pochta №1 — ExpenseCategoryService', () => {
 
   it('qo`shish: nom tozalanadi, sort_order berilmasa — oxiriga (MAX+1), audit jurnali', async () => {
     const env = makeEnv();
-    const res: any = await env.service.create({
-      name: '  Kuryer   jarimalari ',
-      description: '  Yo`l jarimalari ',
-      created_by: '1',
-    });
+    const res = await result<{ category: ExpenseCategoryView }>(
+      env.service.create({
+        name: '  Kuryer   jarimalari ',
+        description: '  Yo`l jarimalari ',
+        created_by: '1',
+      }),
+    );
     expect(res.statusCode).toBe(201);
     expect(res.data.category).toMatchObject({
       name: 'Kuryer jarimalari',
@@ -280,14 +292,19 @@ describe('Elchi Pochta №1 — ExpenseCategoryService', () => {
   it('tahrirlash: faqat o`zgargan maydonlar jurnalga; nom o`zgarsa "eski → yangi"; description: null — tozalash', async () => {
     const row = category();
     const env = makeEnv([row]);
-    const res: any = await env.service.update({
-      id: '2',
-      name: "Yoqilg'i va moy",
-      description: null,
-      sort_order: 2,
-      updated_by: '1',
+    const res = await result<{ category: ExpenseCategoryView }>(
+      env.service.update({
+        id: '2',
+        name: "Yoqilg'i va moy",
+        description: null,
+        sort_order: 2,
+        updated_by: '1',
+      }),
+    );
+    expect(res).toMatchObject({
+      statusCode: 200,
+      message: 'Kategoriya yangilandi',
     });
-    expect(res).toMatchObject({ statusCode: 200, message: 'Kategoriya yangilandi' });
     expect(res.data.category).toMatchObject({
       name: "Yoqilg'i va moy",
       description: null,
@@ -316,9 +333,10 @@ describe('Elchi Pochta №1 — ExpenseCategoryService', () => {
 
   it('tahrirlash: topilmasa / o`chirilgan — 404; takror nom — 409; bo`sh so`rov — 400', async () => {
     const env = makeEnv([category({ id: '3', isDeleted: true })]);
-    expect(
-      await rpcError(env.service.update({ id: '3', name: 'X' })),
-    ).toEqual({ statusCode: 404, message: 'Kategoriya topilmadi' });
+    expect(await rpcError(env.service.update({ id: '3', name: 'X' }))).toEqual({
+      statusCode: 404,
+      message: 'Kategoriya topilmadi',
+    });
 
     const env2 = makeEnv([category()]);
     env2.qb.getCount.mockResolvedValueOnce(1);
@@ -334,15 +352,22 @@ describe('Elchi Pochta №1 — ExpenseCategoryService', () => {
       statusCode: 400,
       message: "O'zgartirish uchun name, description yoki sort_order bering",
     });
-    expect((await rpcError(env2.service.update({ id: 'x', name: 'A' }))).statusCode).toBe(400);
+    expect(
+      (await rpcError(env2.service.update({ id: 'x', name: 'A' }))).statusCode,
+    ).toBe(400);
     expect(env2.activityLog.log).not.toHaveBeenCalled();
   });
 
   it('⭐ o`chirish — SOFT: is_deleted = true, updated_by; ikkinchi marta — 404; audit jurnali', async () => {
     const row = category();
     const env = makeEnv([row]);
-    const res: any = await env.service.remove({ id: '2', deleted_by: '1' });
-    expect(res).toMatchObject({ statusCode: 200, message: "Kategoriya o'chirildi" });
+    const res = await result<{ category: ExpenseCategoryView }>(
+      env.service.remove({ id: '2', deleted_by: '1' }),
+    );
+    expect(res).toMatchObject({
+      statusCode: 200,
+      message: "Kategoriya o'chirildi",
+    });
     expect(res.data.category).toMatchObject({
       id: '2',
       name: "Yoqilg'i",

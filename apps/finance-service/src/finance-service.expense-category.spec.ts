@@ -13,7 +13,23 @@ import { FinancialBalanceHistory } from './entities/financial-balance-history.en
  * kategoriya — 400 va hech narsa o'zgarmaydi, kategoriyasiz chiqim avvalgidek.
  */
 
-type Row = Record<string, any>;
+type Row = Record<string, unknown>;
+type Res<T> = { statusCode: number; message: string; data: T };
+type HistoryRow = {
+  id: string;
+  expense_category_id: string | null;
+  expense_category_name: string | null;
+};
+type AuditEntry = {
+  action: string;
+  description: string;
+  new_value: Row;
+  metadata: Row;
+};
+
+/** Servis javobi (`successRes`) — test ichida aniq tur bilan. */
+const result = async <T>(promise: Promise<unknown>) =>
+  (await promise) as Res<T>;
 
 function makeEnv(options: { category?: Row | null; replay?: Row } = {}) {
   let seq = 0;
@@ -38,10 +54,13 @@ function makeEnv(options: { category?: Row | null; replay?: Row } = {}) {
       }
       return Promise.resolve(null);
     }),
-    save: jest.fn((entity: any) =>
+    save: jest.fn((entity: Row) =>
       Promise.resolve(entity?.id ? entity : { ...entity, id: `h-${++seq}` }),
     ),
-    create: jest.fn((entity: unknown, dto: Row) => ({ __entity: entity, ...dto })),
+    create: jest.fn((entity: unknown, dto: Row) => ({
+      __entity: entity,
+      ...dto,
+    })),
     query: jest.fn().mockResolvedValue(undefined),
   };
   const queryRunner = {
@@ -75,11 +94,24 @@ function makeEnv(options: { category?: Row | null; replay?: Row } = {}) {
     manager.create.mock.calls
       .filter(([entity]) => entity === CashboxHistory)
       .map(([, dto]) => dto);
-  return { service, manager, queryRunner, activityLog, main, historyCreates };
+  /** `finance.manual_expense` audit yozuvi (bo'lmasa undefined). */
+  const manualExpenseAudit = () =>
+    (activityLog.log.mock.calls as Array<[AuditEntry]>)
+      .map(([entry]) => entry)
+      .find((entry) => entry.action === 'finance.manual_expense');
+  return {
+    service,
+    manager,
+    queryRunner,
+    activityLog,
+    main,
+    historyCreates,
+    manualExpenseAudit,
+  };
 }
 
 /** Gateway `PATCH /finance/cashbox/spend` yuboradigan payload. */
-const spendPayload = (extra: Row = {}) => ({
+const spendPayload = (extra: { expense_category_id?: string } = {}) => ({
   user_id: '9',
   amount: 150_000,
   comment: 'Benzin',
@@ -106,8 +138,8 @@ describe('Elchi Pochta №1 — qo`lda chiqimda xarajat kategoriyasi', () => {
     const env = makeEnv({
       category: { id: '2', name: "Yoqilg'i", isDeleted: false },
     });
-    const res: any = await env.service.spendMoney(
-      spendPayload({ expense_category_id: '2' }),
+    const res = await result<{ history: HistoryRow }>(
+      env.service.spendMoney(spendPayload({ expense_category_id: '2' })),
     );
 
     expect(env.manager.findOne).toHaveBeenCalledWith(CashboxExpenseCategory, {
@@ -131,16 +163,14 @@ describe('Elchi Pochta №1 — qo`lda chiqimda xarajat kategoriyasi', () => {
     expect(env.main.balance_cash).toBe(650_000);
     expect(env.queryRunner.commitTransaction).toHaveBeenCalledTimes(1);
 
-    const audit = env.activityLog.log.mock.calls
-      .map(([entry]) => entry)
-      .find((entry) => entry.action === 'finance.manual_expense');
-    expect(audit).toMatchObject({
+    expect(env.manualExpenseAudit()).toMatchObject({
       new_value: {
         amount: 150_000,
         expense_category: { id: '2', name: "Yoqilg'i" },
       },
       metadata: { expense_category_id: '2' },
-      description: "Kassadan chiqim: 150 000 so'm (Asosiy kassa, naqd) — Yoqilg'i",
+      description:
+        "Kassadan chiqim: 150 000 so'm (Asosiy kassa, naqd) — Yoqilg'i",
     });
   });
 
@@ -153,10 +183,12 @@ describe('Elchi Pochta №1 — qo`lda chiqimda xarajat kategoriyasi', () => {
       error = e;
     }
     expect(error).toBeInstanceOf(RpcException);
-    expect((error as RpcException).getError()).toMatchObject({
-      statusCode: 400,
-      message: expect.stringContaining('Xarajat kategoriyasi topilmadi'),
-    });
+    const payload = (error as RpcException).getError() as {
+      statusCode: number;
+      message: string;
+    };
+    expect(payload.statusCode).toBe(400);
+    expect(payload.message).toContain('Xarajat kategoriyasi topilmadi');
     expect(env.queryRunner.rollbackTransaction).toHaveBeenCalledTimes(1);
     expect(env.queryRunner.commitTransaction).not.toHaveBeenCalled();
     expect(env.manager.save).not.toHaveBeenCalled();
@@ -177,13 +209,11 @@ describe('Elchi Pochta №1 — qo`lda chiqimda xarajat kategoriyasi', () => {
       expense_category_id: null,
       expense_category_name: null,
     });
-    const audit = env.activityLog.log.mock.calls
-      .map(([entry]) => entry)
-      .find((entry) => entry.action === 'finance.manual_expense');
-    expect(audit.description).toBe(
+    const audit = env.manualExpenseAudit();
+    expect(audit?.description).toBe(
       "Kassadan chiqim: 150 000 so'm (Asosiy kassa, naqd)",
     );
-    expect(audit.new_value).not.toHaveProperty('expense_category');
+    expect(audit?.new_value).not.toHaveProperty('expense_category');
   });
 
   it('takroriy so`rov (Idempotency-Key) — kategoriya keyin o`chirilgan bo`lsa ham avvalgi natija, qayta tekshirilmaydi', async () => {
@@ -196,8 +226,8 @@ describe('Elchi Pochta №1 — qo`lda chiqimda xarajat kategoriyasi', () => {
         expense_category_name: "Yoqilg'i",
       },
     });
-    const res: any = await env.service.spendMoney(
-      spendPayload({ expense_category_id: '2' }),
+    const res = await result<{ idempotent: boolean; history: HistoryRow }>(
+      env.service.spendMoney(spendPayload({ expense_category_id: '2' })),
     );
     expect(res.data.idempotent).toBe(true);
     expect(res.data.history.expense_category_name).toBe("Yoqilg'i");
@@ -224,10 +254,12 @@ describe('Elchi Pochta №1 — qo`lda chiqimda xarajat kategoriyasi', () => {
     } catch (e) {
       error = e;
     }
-    expect((error as RpcException).getError()).toMatchObject({
-      statusCode: 400,
-      message: expect.stringContaining('expense_category_id'),
-    });
+    const payload = (error as RpcException).getError() as {
+      statusCode: number;
+      message: string;
+    };
+    expect(payload.statusCode).toBe(400);
+    expect(payload.message).toContain('expense_category_id');
     expect(env.queryRunner.commitTransaction).not.toHaveBeenCalled();
   });
 });

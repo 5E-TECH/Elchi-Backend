@@ -12,7 +12,37 @@ import { CashboxHistory } from '../entities/cashbox-history.entity';
 import { Shift } from '../entities/shift.entity';
 import { FinancialBalanceHistory } from '../entities/financial-balance-history.entity';
 import { CashboxExpenseCategory } from '../entities/cashbox-expense-category.entity';
-import { ExpenseCategoryService } from './expense-category.service';
+import {
+  ExpenseCategoryService,
+  ExpenseCategoryView,
+} from './expense-category.service';
+
+type Res<T> = { statusCode: number; message: string; data: T };
+type HistoryRow = {
+  id: string;
+  expense_category_id: string | null;
+  expense_category_name: string | null;
+};
+type CategoryRow = {
+  id: string;
+  name: string;
+  description: string | null;
+  sort_order: number;
+};
+
+/** Servis javobi (`successRes`) — test ichida aniq tur bilan. */
+const result = async <T>(promise: Promise<unknown>) =>
+  (await promise) as Res<T>;
+
+/** RpcException yuki (`{ statusCode, message }`). */
+const rpcError = (promise: Promise<unknown>) =>
+  promise.then(
+    () => {
+      throw new Error('RpcException kutilgan edi');
+    },
+    (error: { getError: () => unknown }) =>
+      error.getError() as { statusCode: number; message: string },
+  );
 
 /**
  * Elchi Pochta №1 — kassa xarajatlari kategoriyalari, HAQIQIY Postgres.
@@ -123,20 +153,18 @@ describePg('Elchi Pochta №1 — xarajat kategoriyalari, haqiqiy Postgres', () 
       cashbox_type: Cashbox_type.MAIN,
     });
   const seededNames = () => CASHBOX_EXPENSE_CATEGORY_SEED.map((c) => c.name);
-  const activeRows = async () =>
-    (await db.query(
+  const activeRows = () =>
+    db.query<CategoryRow[]>(
       `SELECT "id"::text AS id, "name", "description", "sort_order"
          FROM "finance_schema"."cashbox_expense_categories"
         WHERE "is_deleted" = false
         ORDER BY "sort_order", "id"`,
-    )) as Array<{
-      id: string;
-      name: string;
-      description: string | null;
-      sort_order: number;
-    }>;
-  const idOf = async (name: string) =>
-    (await activeRows()).find((row) => row.name === name)!.id;
+    );
+  const idOf = async (name: string): Promise<string> => {
+    const row = (await activeRows()).find((r) => r.name === name);
+    if (!row) throw new Error(`"${name}" kategoriyasi topilmadi`);
+    return row.id;
+  };
 
   /** Har test — toza kassa + seed holatidagi kategoriyalar. */
   const resetCategories = async () => {
@@ -181,20 +209,20 @@ describePg('Elchi Pochta №1 — xarajat kategoriyalari, haqiqiy Postgres', () 
 
     const cols = async (table: string) =>
       (
-        await db.query(
+        await db.query<Array<{ column_name: string }>>(
           `SELECT column_name FROM information_schema.columns
             WHERE table_schema = 'finance_schema' AND table_name = $1`,
           [table],
         )
-      ).map((r: { column_name: string }) => r.column_name);
+      ).map((r) => r.column_name);
     expect(await cols('cashbox_history')).toEqual(
       expect.arrayContaining(['expense_category_id', 'expense_category_name']),
     );
     const indexes = (
-      await db.query(
+      await db.query<Array<{ indexname: string }>>(
         `SELECT indexname FROM pg_indexes WHERE schemaname = 'finance_schema'`,
       )
-    ).map((r: { indexname: string }) => r.indexname);
+    ).map((r) => r.indexname);
     expect(indexes).toEqual(
       expect.arrayContaining([
         'UQ_CASHBOX_EXPENSE_CATEGORY_NAME',
@@ -221,9 +249,9 @@ describePg('Elchi Pochta №1 — xarajat kategoriyalari, haqiqiy Postgres', () 
   });
 
   it('noyob nom (katta-kichik harf farqsiz, o`chirilmaganlar orasida): servis 409, baza 23505; o`chirilgan nom qayta beriladi', async () => {
-    const dup: any = await categories
-      .create({ name: "YOQILG'I", created_by: '1' })
-      .catch((e: { getError: () => unknown }) => e.getError());
+    const dup = await rpcError(
+      categories.create({ name: "YOQILG'I", created_by: '1' }),
+    );
     expect(dup).toMatchObject({ statusCode: 409 });
     await expect(
       db.query(
@@ -234,10 +262,9 @@ describePg('Elchi Pochta №1 — xarajat kategoriyalari, haqiqiy Postgres', () 
 
     const fuelId = await idOf("Yoqilg'i");
     await categories.remove({ id: fuelId, deleted_by: '1' });
-    const again: any = await categories.create({
-      name: "Yoqilg'i",
-      created_by: '1',
-    });
+    const again = await result<{ category: ExpenseCategoryView }>(
+      categories.create({ name: "Yoqilg'i", created_by: '1' }),
+    );
     expect(again.statusCode).toBe(201);
     expect(again.data.category).toMatchObject({
       name: "Yoqilg'i",
@@ -247,10 +274,14 @@ describePg('Elchi Pochta №1 — xarajat kategoriyalari, haqiqiy Postgres', () 
     expect(again.data.category.id).not.toBe(fuelId);
 
     // Ro'yxat: o'chirilgan sukut bo'yicha yo'q, include_deleted — oxirida.
-    const list: any = await categories.list();
+    const list = await result<{ items: ExpenseCategoryView[] }>(
+      categories.list(),
+    );
     expect(list.data.items).toHaveLength(17);
-    expect(list.data.items.at(-1).name).toBe("Yoqilg'i");
-    const withDeleted: any = await categories.list({ include_deleted: true });
+    expect(list.data.items.at(-1)?.name).toBe("Yoqilg'i");
+    const withDeleted = await result<{ items: ExpenseCategoryView[] }>(
+      categories.list({ include_deleted: true }),
+    );
     expect(withDeleted.data.items).toHaveLength(18);
     expect(withDeleted.data.items.at(-1)).toMatchObject({
       id: fuelId,
@@ -261,15 +292,17 @@ describePg('Elchi Pochta №1 — xarajat kategoriyalari, haqiqiy Postgres', () 
 
   it('⭐ chiqim kategoriya bilan → tarixda id + nom; kategoriya qayta nomlansa / o`chirilsa ham tarix nomni saqlaydi; o`chirilganga chiqim — 400, kassa o`zgarmaydi', async () => {
     const fuelId = await idOf("Yoqilg'i");
-    const spent: any = await finance.spendMoney({
-      user_id: '1',
-      amount: 50_000,
-      comment: 'Benzin',
-      created_by: '1',
-      dedup_epoch: 'pg-spend-1',
-      expense_category_id: fuelId,
-      financial_ledger: true,
-    });
+    const spent = await result<{ history: HistoryRow }>(
+      finance.spendMoney({
+        user_id: '1',
+        amount: 50_000,
+        comment: 'Benzin',
+        created_by: '1',
+        dedup_epoch: 'pg-spend-1',
+        expense_category_id: fuelId,
+        financial_ledger: true,
+      }),
+    );
     expect(spent.data.history).toMatchObject({
       expense_category_id: fuelId,
       expense_category_name: "Yoqilg'i",
@@ -280,50 +313,54 @@ describePg('Elchi Pochta №1 — xarajat kategoriyalari, haqiqiy Postgres', () 
     await categories.remove({ id: fuelId, deleted_by: '1' });
 
     // Tarix ro'yxati va tafsiloti — snapshot nom.
-    const history: any = await finance.findAllHistory({
-      cashbox_type: Cashbox_type.MAIN,
-    } as never);
+    const history = await result<{ items: HistoryRow[] }>(
+      finance.findAllHistory({ cashbox_type: Cashbox_type.MAIN } as never),
+    );
     expect(history.data.items).toHaveLength(1);
     expect(history.data.items[0]).toMatchObject({
       expense_category_id: fuelId,
       expense_category_name: "Yoqilg'i",
     });
-    const detail: any = await finance.findHistoryById(
-      String(spent.data.history.id),
+    const detail = await result<HistoryRow>(
+      finance.findHistoryById(String(spent.data.history.id)),
     );
     expect(detail.data).toMatchObject({
       expense_category_id: fuelId,
       expense_category_name: "Yoqilg'i",
     });
-    const mainPage: any = await finance.getMainCashbox();
+    const mainPage = await result<{ cashboxHistory: HistoryRow[] }>(
+      finance.getMainCashbox(),
+    );
     expect(mainPage.data.cashboxHistory[0]).toMatchObject({
       expense_category_name: "Yoqilg'i",
     });
 
     // O'chirilgan kategoriyaga yangi chiqim — 400, hech narsa yozilmaydi.
-    const rejected: any = await finance
-      .spendMoney({
+    const rejected = await rpcError(
+      finance.spendMoney({
         user_id: '1',
         amount: 10_000,
         dedup_epoch: 'pg-spend-2',
         expense_category_id: fuelId,
         financial_ledger: true,
-      })
-      .catch((e: { getError: () => unknown }) => e.getError());
+      }),
+    );
     expect(rejected).toMatchObject({ statusCode: 400 });
     expect((await main()).balance_cash).toBe(450_000);
-    const [{ count }] = await db.query(
+    const [{ count }] = await db.query<Array<{ count: number }>>(
       `SELECT count(*)::int AS count FROM "finance_schema"."cashbox_history"`,
     );
     expect(count).toBe(1);
 
     // Kategoriyasiz chiqim — avvalgidek, NULL.
-    const plain: any = await finance.spendMoney({
-      user_id: '1',
-      amount: 10_000,
-      dedup_epoch: 'pg-spend-3',
-      financial_ledger: true,
-    });
+    const plain = await result<{ history: HistoryRow }>(
+      finance.spendMoney({
+        user_id: '1',
+        amount: 10_000,
+        dedup_epoch: 'pg-spend-3',
+        financial_ledger: true,
+      }),
+    );
     expect(plain.data.history).toMatchObject({
       expense_category_id: null,
       expense_category_name: null,

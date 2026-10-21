@@ -74,9 +74,11 @@ describe('Elchi Pochta №1 — /finance/cashbox/expense-categories gateway kont
   });
 
   const lastCall = () =>
-    (finance.send.mock.calls as unknown as Array<[{ cmd: string }, any]>).at(
-      -1,
-    );
+    (
+      finance.send.mock.calls as unknown as Array<
+        [{ cmd: string }, Record<string, unknown>]
+      >
+    ).at(-1);
 
   it('GET — superadmin/admin/menejer ko`radi; include_deleted faqat superadminga o`tadi', async () => {
     for (const [role, expected] of [
@@ -112,7 +114,11 @@ describe('Elchi Pochta №1 — /finance/cashbox/expense-categories gateway kont
   it('POST — created_by JWT dan; nom bo`sh / 100+ belgi, sort_order manfiy, begona maydon → 400', async () => {
     const ok = await request(http())
       .post('/finance/cashbox/expense-categories')
-      .send({ name: 'Kuryer jarimalari', description: 'Jarima', sort_order: 18 });
+      .send({
+        name: 'Kuryer jarimalari',
+        description: 'Jarima',
+        sort_order: 18,
+      });
     expect(ok.status).toBe(201);
     expect(lastCall()).toEqual([
       { cmd: 'finance.cashbox.expense_categories.create' },
@@ -212,13 +218,13 @@ describe('Elchi Pochta №1 — /finance/cashbox/expense-categories gateway kont
   });
 
   it('rollar metadata: ro`yxat — superadmin/admin/menejer, CUD — faqat superadmin', () => {
-    const rolesOf = (method: string) =>
+    const rolesOf = (method: string): unknown =>
       Reflect.getMetadata(
         ROLES_KEY,
         Object.getOwnPropertyDescriptor(
           FinanceGatewayController.prototype,
           method,
-        )?.value,
+        )?.value as object,
       );
     expect(rolesOf('listCashboxExpenseCategories')).toEqual([
       'superadmin',
@@ -285,7 +291,9 @@ describe('Elchi Pochta №1 — /finance/cashbox/expense-categories gateway kont
       .patch('/finance/cashbox/fill')
       .send({ amount: 1_000, expense_category_id: '2' });
     expect(fill.status).toBe(400);
-    expect(String(fill.body.message)).toContain('expense_category_id');
+    expect(String((fill.body as { message?: unknown }).message)).toContain(
+      'expense_category_id',
+    );
     expect(finance.send).not.toHaveBeenCalled();
   });
 });

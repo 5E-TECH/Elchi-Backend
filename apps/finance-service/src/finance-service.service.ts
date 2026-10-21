@@ -2932,9 +2932,16 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
           "Kassa chiqimi allaqachon bajarilgan (takroriy so'rov)",
         );
       }
-      const savedHistory = update?.data?.history as
-        | Pick<CashboxHistory, 'expense_category_id' | 'expense_category_name'>
-        | undefined;
+      const savedHistory = (
+        update?.data as
+          | {
+              history?: Pick<
+                CashboxHistory,
+                'expense_category_id' | 'expense_category_name'
+              >;
+            }
+          | undefined
+      )?.history;
       const expenseCategory = savedHistory?.expense_category_id
         ? {
             id: String(savedHistory.expense_category_id),
