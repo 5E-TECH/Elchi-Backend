@@ -12,8 +12,10 @@ import {
 import { IdentityController } from './identity.controller';
 import { UserServiceService } from './user-service.service';
 import { AuthService } from './auth/auth.service';
+import { AuthSessionService } from './auth/auth-session.service';
 import { User } from './entities/user.entity';
 import { CourierRegion } from './entities/courier-region.entity';
+import { UserSession } from './entities/user-session.entity';
 import { BcryptEncryption } from '../../../libs/common/helpers/bcrypt';
 import type { StringValue } from 'ms';
 
@@ -40,19 +42,25 @@ import { OtpService } from './otp/otp.service';
     ScheduleModule.forRoot(),
     DatabaseModule,
     ActivityLogModule.forService('identity-service'),
-    TypeOrmModule.forFeature([User, OtpCode, CourierRegion]),
+    TypeOrmModule.forFeature([User, OtpCode, CourierRegion, UserSession]),
     JwtModule.registerAsync({
       inject: [ConfigService],
       useFactory: (configService: ConfigService) => ({
         secret: configService.getOrThrow<string>('ACCESS_TOKEN_KEY'),
         signOptions: {
           expiresIn: (configService.get<string>('ACCESS_TOKEN_TIME') ??
-            '15m') as StringValue,
+            '1h') as StringValue,
         },
       }),
     }),
   ],
   controllers: [IdentityController],
-  providers: [UserServiceService, AuthService, BcryptEncryption, OtpService],
+  providers: [
+    UserServiceService,
+    AuthService,
+    AuthSessionService,
+    BcryptEncryption,
+    OtpService,
+  ],
 })
 export class IdentityServiceModule {}

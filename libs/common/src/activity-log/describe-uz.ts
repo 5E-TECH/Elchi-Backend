@@ -69,7 +69,12 @@ const AUTH_FAILURE_REASON_UZ: Readonly<Record<string, string>> = {
   user_not_found: 'foydalanuvchi topilmadi',
   inactive: 'foydalanuvchi faol emas',
   bad_password: "noto'g'ri parol",
+  // Eski (bitta sessiya) modelning sababi — mavjud jurnal qatorlari uchun.
   refresh_token_superseded: 'eskirgan sessiya tokeni',
+  // (Elchi Pochta #3) Har login — alohida sessiya.
+  refresh_session_not_found: 'sessiya topilmadi',
+  refresh_session_revoked: 'sessiya yopilgan',
+  refresh_session_expired: 'sessiya muddati tugagan',
 };
 
 function label(

@@ -47,6 +47,8 @@ function makeService(opts: { user?: Row | null; key?: string | null } = {}) {
     bcrypt as never,
     branchClient as never,
     activityLog,
+    // (Elchi Pochta #3) sessiya qatori — bu spec'da faqat id kerak.
+    { open: jest.fn().mockResolvedValue({ id: 'session-1' }) } as never,
   );
   return { service, saved, bcrypt };
 }

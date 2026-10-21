@@ -133,10 +133,39 @@ export class IdentityController {
     return this.executeAndAck(context, () => this.authService.refresh(data));
   }
 
+  /**
+   * (Elchi Pochta #3) Faqat JORIY sessiya yopiladi: `sessionId` — access
+   * token `sid` claim'i, `refreshToken` — shu brauzerning cookie'si (gateway).
+   */
   @MessagePattern({ cmd: 'identity.logout' })
-  logout(@Payload() data: { userId: string }, @Ctx() context: RmqContext) {
+  logout(
+    @Payload()
+    data: {
+      userId: string;
+      sessionId?: string | null;
+      refreshToken?: string | null;
+    },
+    @Ctx() context: RmqContext,
+  ) {
     return this.executeAndAck(context, () =>
-      this.authService.logout(data.userId),
+      this.authService.logout(data.userId, {
+        sessionId: data.sessionId ?? null,
+        refreshToken: data.refreshToken ?? null,
+      }),
+    );
+  }
+
+  /** (Elchi Pochta #3) `GET /auth/sessions` — egasining o'z faol sessiyalari. */
+  @MessagePattern({ cmd: 'identity.auth.sessions' })
+  listSessions(
+    @Payload() data: { userId: string; sessionId?: string | null },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.authService.listSessions({
+        userId: data.userId,
+        sessionId: data.sessionId ?? null,
+      }),
     );
   }
 

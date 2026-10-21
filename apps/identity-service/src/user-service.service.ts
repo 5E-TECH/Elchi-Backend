@@ -16,6 +16,7 @@ import { randomBytes } from 'crypto';
 import { BcryptEncryption } from '../../../libs/common/helpers/bcrypt';
 import { User } from './entities/user.entity';
 import { CourierRegion } from './entities/courier-region.entity';
+import { invalidateAllSessions } from './auth/session-security';
 import {
   CHANGEABLE_ROLES,
   ROLE_CATALOG,
@@ -439,7 +440,8 @@ export class UserServiceService implements OnModuleInit {
   /**
    * Umumiy RPC javoblariga HECH QACHON kirmaydigan maydonlar:
    * - password — bcrypt hash;
-   * - refresh_token — faol refresh JWT'ning sha256 hashi;
+   * - refresh_token — eski (bitta sessiya) refresh JWT'ning sha256 hashi;
+   * - session_epoch — sessiyalar davri (ichki xavfsizlik hisoblagichi);
    * - market_tg_token — marketning Telegram bot/guruh kaliti (bearer);
    * - telegram_id — shaxsiy chat manzili (td89SKXQ): o'rniga `telegram_linked`.
    *
@@ -458,13 +460,18 @@ export class UserServiceService implements OnModuleInit {
     user: User,
   ): Omit<
     User,
-    'password' | 'refresh_token' | 'market_tg_token' | 'telegram_id'
+    | 'password'
+    | 'refresh_token'
+    | 'session_epoch'
+    | 'market_tg_token'
+    | 'telegram_id'
   > & { telegram_linked?: boolean } {
     const safeUser: Partial<User> & { telegram_linked?: boolean } = {
       ...user,
     };
     delete safeUser.password;
     delete safeUser.refresh_token;
+    delete safeUser.session_epoch;
     delete safeUser.market_tg_token;
     // (td89SKXQ #5 / 4TfLyTrL) telegram_id — chat manzili, javobga chiqmaydi;
     // o'rniga faqat holat (profil "ulangan/ulanmagan", admin ro'yxati).
@@ -474,7 +481,11 @@ export class UserServiceService implements OnModuleInit {
     }
     return safeUser as Omit<
       User,
-      'password' | 'refresh_token' | 'market_tg_token' | 'telegram_id'
+      | 'password'
+      | 'refresh_token'
+      | 'session_epoch'
+      | 'market_tg_token'
+      | 'telegram_id'
     > & { telegram_linked?: boolean };
   }
 
@@ -1529,18 +1540,20 @@ export class UserServiceService implements OnModuleInit {
     if (dto.phone_number && dto.phone_number !== admin.phone_number) {
       await this.ensurePhoneUnique(dto.phone_number, id);
       admin.phone_number = dto.phone_number;
-      // RBAC-09: login (telefon) o'zgardi — eski sessiyalar yopiladi.
-      admin.refresh_token = null;
+      // RBAC-09: login (telefon) o'zgardi — eski sessiyalar yopiladi
+      // (Elchi Pochta #3: HAMMA qurilmalardagi sessiyalar).
+      invalidateAllSessions(admin);
     }
 
     if (dto.password) {
       admin.password = await this.bcryptEncryption.encrypt(dto.password);
       // RBAC-09: parol almashtirilsa (o'g'irlangan telefon, ishdan
-      // bo'shatilgan kuryer) allaqachon kirgan qurilma 7 kungacha refresh
-      // qila olardi. Saqlangan refresh hashi o'chiriladi — keyingi refresh
-      // 401, qurilma qayta login (yangi parol bilan) qiladi. Access token
-      // ko'pi bilan 15 daqiqa yashaydi.
-      admin.refresh_token = null;
+      // bo'shatilgan kuryer) allaqachon kirgan qurilma refresh muddatigacha
+      // refresh qila olardi. Endi BARCHA sessiyalar yopiladi (o'zi
+      // almashtirsa — joriy qurilma ham) — keyingi refresh 401, qurilma
+      // qayta login (yangi parol bilan) qiladi. Access token ko'pi bilan
+      // ACCESS_TOKEN_TIME (1 soat) yashaydi.
+      invalidateAllSessions(admin);
     }
 
     if (typeof dto.name !== 'undefined') {
@@ -1560,6 +1573,11 @@ export class UserServiceService implements OnModuleInit {
 
     if (dto.status && !requesterIsSelf) {
       admin.status = dto.status;
+      // (Elchi Pochta #3) Bloklash — barcha sessiyalar yopiladi: blokdan
+      // chiqarilganda eski qurilmalar o'z-o'zidan qaytib kirmaydi.
+      if (dto.status !== Status.ACTIVE) {
+        invalidateAllSessions(admin);
+      }
     }
 
     if (typeof dto.salary !== 'undefined' && !requesterIsSelf) {
@@ -1974,8 +1992,9 @@ export class UserServiceService implements OnModuleInit {
    * Rolga bog'liq maydonlar qayta hisoblanadi: `can_sell_cancel`,
    * `can_add_extra_cost`, `tariff_home`/`tariff_center` faqat menejerda
    * ma'noli — boshqa rolga o'tganda tozalanadi. Komissiya (operator) va
-   * maosh tegilmaydi. `refresh_token` o'chiriladi: JWT eski rolni olib
-   * yurgani uchun foydalanuvchi qayta kiradi (access token ≤15 daqiqa).
+   * maosh tegilmaydi. Barcha sessiyalar yopiladi (`invalidateAllSessions`):
+   * JWT eski rolni olib yurgani uchun foydalanuvchi qayta kiradi (access
+   * token ≤ ACCESS_TOKEN_TIME).
    * Jurnal: old_value.role / new_value.role (+ tozalangan maydonlar).
    */
   async changeUserRole(
@@ -2041,7 +2060,7 @@ export class UserServiceService implements OnModuleInit {
       user.tariff_home = null;
       user.tariff_center = null;
     }
-    user.refresh_token = null;
+    invalidateAllSessions(user);
 
     const saved = await this.users.save(user);
     // Qidiruv indeksi rol bo'yicha kalitlangan: eski rol yozuvi olib
@@ -2178,6 +2197,8 @@ export class UserServiceService implements OnModuleInit {
     admin.status = Status.INACTIVE;
     admin.username = deletedUsername;
     admin.phone_number = deletedPhone;
+    // (Elchi Pochta #3) O'chirilgan akkauntning sessiyalari ham yopiladi.
+    invalidateAllSessions(admin);
 
     const saved = await this.users.save(admin);
     void this.removeUserFromSearch(saved);
@@ -2954,13 +2975,13 @@ export class UserServiceService implements OnModuleInit {
       await this.ensurePhoneUnique(dto.phone_number, id);
       market.phone_number = dto.phone_number;
       // RBAC-09: login (telefon) o'zgardi — eski sessiyalar yopiladi.
-      market.refresh_token = null;
+      invalidateAllSessions(market);
     }
 
     if (dto.password) {
       market.password = await this.bcryptEncryption.encrypt(dto.password);
       // RBAC-09: yangi parol — eski qurilmalar endi refresh qila olmaydi.
-      market.refresh_token = null;
+      invalidateAllSessions(market);
     }
 
     if (typeof dto.name !== 'undefined') {
@@ -2973,6 +2994,10 @@ export class UserServiceService implements OnModuleInit {
 
     if (typeof dto.status !== 'undefined') {
       market.status = dto.status;
+      // (Elchi Pochta #3) Bloklangan market — barcha sessiyalar yopiladi.
+      if (dto.status !== Status.ACTIVE) {
+        invalidateAllSessions(market);
+      }
     }
 
     if (typeof dto.tariff_home !== 'undefined') {
@@ -3156,6 +3181,8 @@ export class UserServiceService implements OnModuleInit {
     market.status = Status.INACTIVE;
     market.username = deletedUsername;
     market.phone_number = deletedPhone;
+    // (Elchi Pochta #3) O'chirilgan marketning sessiyalari ham yopiladi.
+    invalidateAllSessions(market);
 
     const saved = await this.users.save(market);
     void this.removeUserFromSearch(saved);
@@ -3615,6 +3642,10 @@ export class UserServiceService implements OnModuleInit {
 
     const previousStatus = user.status;
     user.status = status;
+    // (Elchi Pochta #3) Bloklash — barcha sessiyalar yopiladi (AYNI save).
+    if (status !== Status.ACTIVE) {
+      invalidateAllSessions(user);
+    }
     const saved = await this.users.save(user);
     void this.syncUserToSearch(saved);
 
@@ -4859,9 +4890,9 @@ export class UserServiceService implements OnModuleInit {
 
   /**
    * identity.market_operator.delete (i76gGjyq) — soft-delete (deleteUser
-   * shakli: telefon/username bo'shatiladi, status inactive). refresh_token
-   * tozalanadi: qurilma keyingi refresh'da chiqariladi (access token ko'pi
-   * bilan ACCESS_TOKEN_TIME yashaydi). Buyurtmalar va daromad tarixi tegilmaydi.
+   * shakli: telefon/username bo'shatiladi, status inactive). Barcha
+   * sessiyalar yopiladi: qurilma keyingi refresh'da chiqariladi (access
+   * token ko'pi bilan ACCESS_TOKEN_TIME yashaydi). Buyurtmalar va daromad tarixi tegilmaydi.
    */
   async deleteMarketOperator(
     id: string,
@@ -4881,7 +4912,7 @@ export class UserServiceService implements OnModuleInit {
     operator.username = operator.username?.length
       ? `${operator.username}#del#${ts % 100000}`.slice(0, 60)
       : null;
-    operator.refresh_token = null;
+    invalidateAllSessions(operator);
 
     const saved = await this.users.save(operator);
     void this.removeUserFromSearch(saved);

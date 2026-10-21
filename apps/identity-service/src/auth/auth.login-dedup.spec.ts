@@ -32,6 +32,8 @@ function makeService(maintenance?: { logCoalesced: jest.Mock }) {
     {} as never,
     branchClient as never,
     activityLog as unknown as ActivityLogService,
+    // (Elchi Pochta #3) sessiya qatori — bu spec'da faqat id kerak.
+    { open: jest.fn().mockResolvedValue({ id: 'session-1' }) } as never,
     maintenance as never,
   );
   return { service, activityLog };

@@ -4,9 +4,15 @@ import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { createHash } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import type { StringValue } from 'ms';
 import { User } from '../entities/user.entity';
+import {
+  AuthSessionService,
+  type SessionRejectReason,
+  hashRefreshToken,
+  isSessionId,
+} from './auth-session.service';
 import { BcryptEncryption } from '../../../../libs/common/helpers/bcrypt';
 import { LoginDto } from './dto/login.dto';
 import { RefreshDto } from './dto/refresh.dto';
@@ -25,6 +31,10 @@ import {
 } from '@app/common';
 import { errorRes, successRes } from '../../../../libs/common/helpers/response';
 
+/** `REFRESH_TOKEN_TIME` sukuti (prod: 1d) va JWT `exp` o'qilmasa zaxira muddat. */
+const DEFAULT_REFRESH_TOKEN_TIME = '1d';
+const DEFAULT_REFRESH_TTL_MS = 24 * 60 * 60 * 1000;
+
 @Injectable()
 export class AuthService {
   private readonly logger = new Logger(AuthService.name);
@@ -37,10 +47,12 @@ export class AuthService {
     private readonly bcryptEncryption: BcryptEncryption,
     @Inject('BRANCH') private readonly branchClient: ClientProxy,
     private readonly activityLog: ActivityLogService,
+    /** (Elchi Pochta #3) Har login — alohida sessiya (`user_sessions`). */
+    private readonly sessions: AuthSessionService,
     /**
      * i6Nyedea — takroriy login birlashtiriladi (yangi qator o'rniga
-     * `metadata.count` oshadi). Ixtiyoriy: eski spec'lar servisni 6 argument
-     * bilan quradi — u holda avvalgidek har login yangi qator.
+     * `metadata.count` oshadi). Ixtiyoriy: spec'lar servisni usiz quradi —
+     * u holda avvalgidek har login yangi qator.
      */
     @Optional()
     private readonly activityLogMaintenance?: ActivityLogMaintenanceService,
@@ -165,10 +177,12 @@ export class AuthService {
   /**
    * Tasdiqlangan foydalanuvchiga sessiya (token juftligi). Parol login'i va
    * OTP login'i (OtpService) shu bitta yo'ldan o'tadi.
+   *
+   * (Elchi Pochta #3) Har login `user_sessions` da YANGI qator ochadi —
+   * foydalanuvchining boshqa qurilmalaridagi sessiyalar endi YOPILMAYDI.
    */
   async sessionForUser(user: User, method: 'password' | 'otp' = 'password') {
-    const tokens = await this.issueTokens(user);
-    await this.saveRefreshToken(user.id, tokens.refreshToken);
+    const tokens = await this.issueTokens(user, method);
     const loginEntry = {
       entity_type: 'Auth',
       entity_id: user.id,
@@ -309,11 +323,12 @@ export class AuthService {
       throw new RpcException(errorRes('Refresh secret not configured', 401));
     }
 
-    let payload: { sub: string; username: string };
+    let payload: { sub: string; username: string; iat?: number };
     try {
       payload = await this.jwtService.verifyAsync<{
         sub: string;
         username: string;
+        iat?: number;
       }>(dto.refreshToken, { secret: refreshSecret });
     } catch {
       throw new RpcException(errorRes('Invalid refresh token', 401));
@@ -330,47 +345,74 @@ export class AuthService {
       throw new RpcException(errorRes('Invalid refresh token', 401));
     }
 
-    const presentedHash = this.hashRefreshToken(dto.refreshToken);
+    const now = new Date();
+    const presentedHash = hashRefreshToken(dto.refreshToken);
+    const refreshTokenExpiresAt = this.extractExpMs(dto.refreshToken);
 
-    if (!user.refresh_token) {
-      // Already logged out (or never logged in on this token). 401.
+    // (Elchi Pochta #3) Sessiya — token hashi bo'yicha. Topilmasa va hash
+    // ESKI `admins.refresh_token` ga mos bo'lsa — deploy'dan oldin kirgan
+    // foydalanuvchi: sessiya qatori hozir yaratiladi, u chiqarib
+    // yuborilmaydi. Yopilgan qator bor bo'lsa legacy yo'liga HECH QACHON
+    // o'tilmaydi (logout qilingan token qayta tirilmaydi).
+    let session = await this.sessions.findByHash(presentedHash);
+    if (!session && user.refresh_token === presentedHash) {
+      session = await this.sessions.adoptLegacy({
+        user,
+        refreshToken: dto.refreshToken,
+        expiresAt: new Date(
+          refreshTokenExpiresAt ?? now.getTime() + DEFAULT_REFRESH_TTL_MS,
+        ),
+        createdAt:
+          typeof payload.iat === 'number'
+            ? new Date(payload.iat * 1000)
+            : undefined,
+        now,
+      });
+    }
+
+    if (!session) {
+      // Imzo to'g'ri, lekin bunday sessiya yo'q: deploy'dan oldin boshqa
+      // login bilan almashtirilgan token yoki muddati o'tib tozalangan qator.
+      // RBAC-10 dagidek boshqa sessiyalarga TEGILMAYDI — faqat shu token 401.
+      await this.logRefreshRejected(user, 'refresh_session_not_found');
       throw new RpcException(errorRes('Invalid refresh token', 401));
     }
 
-    if (user.refresh_token !== presentedHash) {
-      // The signature is valid but this is not the active token stored for
-      // the user, so it is rejected (401) — a stale token is never accepted.
-      //
-      // RBAC-10: the stored session is NOT wiped any more. Refresh tokens are
-      // not rotated and every login overwrites the single stored hash, so a
-      // mismatching token is a SUPERSEDED login (another device/browser logged
-      // in later), not a replay of a rotated token. Wiping the hash here
-      // logged out the newer, legitimate session as well — both devices were
-      // kicked within ~15 minutes of every login. Explicit revocations
-      // (logout, password/phone change, deactivation) still null the hash or
-      // fail the status check above. Per-device sessions are a separate
-      // redesign (C15 decision).
-      this.logger.warn(
-        `Superseded refresh token presented for user ${user.id} — rejected, current session kept`,
+    const rejected = this.sessions.rejectReason(session, user, now);
+    if (rejected) {
+      if (rejected === 'reset' || rejected === 'password_changed') {
+        // Xavfsizlik hodisasi allaqachon amal qilgan — qatorga ham yoziladi.
+        await this.sessions.revokeOwn(
+          user.id,
+          { sessionId: session.id },
+          'security_reset',
+          now,
+        );
+      }
+      await this.logRefreshRejected(
+        user,
+        rejected === 'expired'
+          ? 'refresh_session_expired'
+          : 'refresh_session_revoked',
+        { session_id: session.id, cause: rejected },
       );
-      await this.activityLog.log({
-        entity_type: 'Auth',
-        entity_id: user.id,
-        action: ActivityAction.AUTH_FAILURE,
-        user_id: user.id,
-        user_name: user.name,
-        user_role: user.role,
-        metadata: {
-          reason: 'refresh_token_superseded',
-          session_invalidated: false,
-        },
-        description: ActivityDescribeUz.authFailure('refresh_token_superseded'),
+      throw new RpcException(errorRes('Invalid refresh token', 401));
+    }
+
+    // `revoked_at IS NULL` sharti bilan: shu orada logout bo'lgan bo'lsa 401.
+    if (!(await this.sessions.touch(session.id, now))) {
+      await this.logRefreshRejected(user, 'refresh_session_revoked', {
+        session_id: session.id,
+        cause: 'revoked',
       });
       throw new RpcException(errorRes('Invalid refresh token', 401));
     }
 
-    const accessToken = await this.issueAccessToken(user);
-    const refreshTokenExpiresAt = this.extractExpMs(dto.refreshToken);
+    // Refresh token ROTATSIYA QILINMAYDI (avvalgidek): sessiya muddati —
+    // login + REFRESH_TOKEN_TIME. Bitta brauzerdagi barcha tablar bitta
+    // httpOnly cookie'ni bo'lishadi — rotatsiya ular orasida poyga
+    // (bir tab yangi tokenni olib, boshqasi eskisi bilan 401) keltirardi.
+    const accessToken = await this.issueAccessToken(user, session.id);
     const refreshTokenWarnAt =
       refreshTokenExpiresAt !== null
         ? refreshTokenExpiresAt - 15 * 60 * 1000
@@ -389,7 +431,40 @@ export class AuthService {
     };
   }
 
-  async logout(userId: string) {
+  /** Refresh rad etildi — xavfsizlik izi (telefon yo'q, faqat id va sabab). */
+  private async logRefreshRejected(
+    user: User,
+    reason:
+      | 'refresh_session_not_found'
+      | 'refresh_session_revoked'
+      | 'refresh_session_expired',
+    extra: { session_id?: string; cause?: SessionRejectReason } = {},
+  ): Promise<void> {
+    this.logger.warn(
+      `Refresh rejected for user ${user.id}: ${reason}${extra.cause ? ` (${extra.cause})` : ''}`,
+    );
+    await this.activityLog.log({
+      entity_type: 'Auth',
+      entity_id: user.id,
+      action: ActivityAction.AUTH_FAILURE,
+      user_id: user.id,
+      user_name: user.name,
+      user_role: user.role,
+      metadata: { reason, ...extra },
+      description: ActivityDescribeUz.authFailure(reason),
+    });
+  }
+
+  /**
+   * (Elchi Pochta #3) FAQAT joriy sessiya yopiladi — boshqa qurilmalar
+   * ishlashda davom etadi. Joriy sessiya: access token `sid` claim'i
+   * (imzolangan) va/yoki shu brauzerning refresh cookie'si. Ikkalasi ham
+   * faqat SHU foydalanuvchining qatorlariga qo'llanadi.
+   */
+  async logout(
+    userId: string,
+    target: { sessionId?: string | null; refreshToken?: string | null } = {},
+  ) {
     const user = await this.users.findOne({
       where: { id: userId, isDeleted: false },
     });
@@ -398,8 +473,33 @@ export class AuthService {
       throw new RpcException(errorRes('User not found', 401));
     }
 
-    user.refresh_token = null;
-    await this.users.save(user);
+    const refreshTokenHash =
+      typeof target.refreshToken === 'string' && target.refreshToken
+        ? hashRefreshToken(target.refreshToken)
+        : null;
+    const sessionId = isSessionId(target.sessionId) ? target.sessionId : null;
+    const revoked = await this.sessions.revokeOwn(
+      user.id,
+      { sessionId, refreshTokenHash },
+      'logout',
+    );
+
+    // Eski ustunda shu sessiyaning hashi tursa u ham tozalanadi (legacy
+    // token yoki rollback'da yopilgan sessiya tirilmasin). Shartli UPDATE —
+    // shu orada yozilgan yangi login hashi o'chmaydi.
+    if (user.refresh_token) {
+      const legacyIsThisSession =
+        user.refresh_token === refreshTokenHash ||
+        (sessionId !== null &&
+          (await this.sessions.findByHash(user.refresh_token))?.id ===
+            sessionId);
+      if (legacyIsThisSession) {
+        await this.users.update(
+          { id: user.id, refresh_token: user.refresh_token },
+          { refresh_token: null },
+        );
+      }
+    }
 
     await this.activityLog.log({
       entity_type: 'Auth',
@@ -408,37 +508,70 @@ export class AuthService {
       user_id: user.id,
       user_name: user.name,
       user_role: user.role,
+      metadata: { sessions_revoked: revoked },
     });
 
     return successRes({}, 200, 'Logged out successfully');
   }
 
   /**
-   * Refresh tokens are stored as SHA-256 hex so a DB leak does not expose
-   * usable session tokens. The plaintext value only lives in transit/memory.
+   * (Elchi Pochta #3) `GET /auth/sessions` — akkaunt egasining O'Z faol
+   * sessiyalari: soni, qurilma/IP, login va oxirgi faollik vaqti, joriy
+   * sessiya belgisi. Boshqa foydalanuvchilar yoki tizim bo'yicha umumiy
+   * son/ro'yxat qaytmaydi — `userId` faqat gateway'dagi JWT `sub` dan.
    */
-  private hashRefreshToken(token: string): string {
-    return createHash('sha256').update(token).digest('hex');
-  }
-
-  private async saveRefreshToken(userId: string, refreshToken: string) {
-    await this.users.update(
-      { id: userId },
-      { refresh_token: this.hashRefreshToken(refreshToken) },
+  async listSessions(data: { userId: string; sessionId?: string | null }) {
+    const user = await this.users.findOne({
+      where: { id: data.userId, isDeleted: false },
+    });
+    if (!user || user.status !== Status.ACTIVE) {
+      throw new RpcException(errorRes('User not found', 401));
+    }
+    return successRes(
+      await this.sessions.listOwn(user, data.sessionId ?? null),
+      200,
+      'success',
     );
   }
 
-  private async issueTokens(user: User) {
-    const accessTokenResult = await this.issueAccessToken(user);
+  /**
+   * Eski (bitta sessiya) ustun — eng oxirgi login hashi. Endi tekshiruv
+   * `user_sessions` da; ustun faqat rollback uchun yozilib turadi (eski kod
+   * qaytarilsa oxirgi login ishlashda davom etadi).
+   */
+  private async saveRefreshToken(userId: string, refreshToken: string) {
+    await this.users.update(
+      { id: userId },
+      { refresh_token: hashRefreshToken(refreshToken) },
+    );
+  }
+
+  private async issueTokens(user: User, method: 'password' | 'otp') {
     const payload = await this.createTokenPayload(user);
 
-    const refreshToken = await this.jwtService.signAsync(payload, {
-      secret: this.configService.get<string>('REFRESH_TOKEN_KEY'),
-      expiresIn: (this.configService.get<string>('REFRESH_TOKEN_TIME') ??
-        '7d') as StringValue,
-    });
+    const refreshToken = await this.jwtService.signAsync(
+      // `jti` — har refresh token noyob: bir soniyadagi ikki login (ikki
+      // marta bosish) AYNI JWT'ni berardi va UNIQUE hash to'qnashardi.
+      { ...payload, jti: randomUUID() },
+      {
+        secret: this.configService.get<string>('REFRESH_TOKEN_KEY'),
+        expiresIn: (this.configService.get<string>('REFRESH_TOKEN_TIME') ??
+          DEFAULT_REFRESH_TOKEN_TIME) as StringValue,
+      },
+    );
 
     const refreshTokenExpiresAt = this.extractExpMs(refreshToken);
+    const session = await this.sessions.open({
+      user,
+      refreshToken,
+      method,
+      expiresAt: new Date(
+        refreshTokenExpiresAt ?? Date.now() + DEFAULT_REFRESH_TTL_MS,
+      ),
+    });
+    await this.saveRefreshToken(user.id, refreshToken);
+
+    const accessTokenResult = await this.signAccessToken(payload, session.id);
     const refreshTokenWarnAt =
       refreshTokenExpiresAt !== null
         ? refreshTokenExpiresAt - 15 * 60 * 1000
@@ -452,9 +585,27 @@ export class AuthService {
     };
   }
 
-  private async issueAccessToken(user: User) {
-    const payload = await this.createTokenPayload(user);
-    const accessToken = await this.jwtService.signAsync(payload);
+  private async issueAccessToken(user: User, sessionId: string) {
+    return this.signAccessToken(
+      await this.createTokenPayload(user),
+      sessionId,
+    );
+  }
+
+  /**
+   * `sid` — sessiya id si (`user_sessions.id`): logout aynan shu sessiyani
+   * yopadi, ro'yxat "joriy" sessiyani belgilaydi. Gateway `JwtStrategy`
+   * payload'ni o'zgartirmay uzatadi; boshqa iste'molchilar claim'ga
+   * qaramaydi. Telegram tokenlarida `sid` yo'q (sessiya emas).
+   */
+  private async signAccessToken(
+    payload: Awaited<ReturnType<AuthService['createTokenPayload']>>,
+    sessionId: string,
+  ) {
+    const accessToken = await this.jwtService.signAsync({
+      ...payload,
+      sid: sessionId,
+    });
 
     return {
       accessToken,

@@ -30,8 +30,24 @@ export class User extends BaseEntity {
   @Column({ type: 'varchar', length: 255 })
   password: string;
 
+  /**
+   * ESKI (bitta sessiya) modelning hashi — eng oxirgi login'niki. Endi
+   * sessiyalar `identity_schema.user_sessions` da; bu ustun faqat deploy
+   * paytida allaqachon kirgan foydalanuvchilar (refresh'da sessiya qatori
+   * yaratiladi) va rollback uchun yozilib turadi. Umumiy javoblarga
+   * HECH QACHON chiqmaydi.
+   */
   @Column({ type: 'varchar', length: 512, nullable: true })
   refresh_token: string | null;
+
+  /**
+   * (Elchi Pochta #3) Sessiyalar "davri": oshirilsa shu foydalanuvchining
+   * BARCHA sessiyalari yaroqsiz (`user_sessions.epoch` mos kelmaydi). Faqat
+   * `invalidateAllSessions()` orqali o'zgartiriladi — parol/telefon/rol
+   * almashishi, bloklash, o'chirish. Umumiy javoblarga chiqmaydi.
+   */
+  @Column({ type: 'integer', default: 0 })
+  session_epoch: number;
 
   @Column({
     type: 'decimal',

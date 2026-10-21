@@ -80,7 +80,38 @@ interface MockUser {
   isDeleted: boolean;
 }
 
-function buildService(user: MockUser | null) {
+/**
+ * (Elchi Pochta #3) Sessiya do'koni stub'i: `sessionsByHash` dagi hash'lar
+ * ochiq sessiya. Haqiqiy AuthSessionService bilan to'liq oqim —
+ * `auth.sessions.spec.ts`.
+ */
+function buildSessions(sessionsByHash: Record<string, { id: string }> = {}) {
+  return {
+    findByHash: jest.fn((hash: string) =>
+      Promise.resolve(
+        sessionsByHash[hash]
+          ? { ...sessionsByHash[hash], user_id: 'u1', revoked_at: null }
+          : null,
+      ),
+    ),
+    adoptLegacy: jest.fn((input: { refreshToken: string }) =>
+      Promise.resolve({
+        id: `legacy-${sha256(input.refreshToken).slice(0, 6)}`,
+        user_id: 'u1',
+        revoked_at: null,
+      }),
+    ),
+    rejectReason: jest.fn().mockReturnValue(null),
+    touch: jest.fn().mockResolvedValue(true),
+    revokeOwn: jest.fn().mockResolvedValue(1),
+    open: jest.fn().mockResolvedValue({ id: 'new-session' }),
+  };
+}
+
+function buildService(
+  user: MockUser | null,
+  sessions = buildSessions(),
+) {
   const usersRepo: any = {
     findOne: jest.fn().mockResolvedValue(user),
     save: jest.fn().mockImplementation((u: any) => Promise.resolve(u)),
@@ -101,7 +132,7 @@ function buildService(user: MockUser | null) {
   const configService: any = {
     get: jest.fn().mockImplementation((key: string) => {
       if (key === 'REFRESH_TOKEN_KEY') return 'test-secret';
-      if (key === 'REFRESH_TOKEN_TIME') return '7d';
+      if (key === 'REFRESH_TOKEN_TIME') return '1d';
       return undefined;
     }),
   };
@@ -120,24 +151,33 @@ function buildService(user: MockUser | null) {
     bcryptEncryption,
     branchClient,
     activityLog,
+    sessions as never,
   );
 
-  return { service, usersRepo, jwtService, configService, activityLog };
+  return {
+    service,
+    usersRepo,
+    jwtService,
+    configService,
+    activityLog,
+    sessions,
+  };
 }
 
 describe('AuthService.refresh', () => {
   const VALID_TOKEN = 'plaintext-refresh-token-value';
   const VALID_HASH = sha256(VALID_TOKEN);
 
-  it('renews only the access token and preserves refresh expiry on success', async () => {
+  it('renews only the access token (with the session id) and preserves refresh expiry on success', async () => {
     const user: MockUser = {
       id: 'u1',
       username: 'alice',
       status: 'active',
-      refresh_token: VALID_HASH,
+      refresh_token: null,
       isDeleted: false,
     };
-    const { service, usersRepo, jwtService } = buildService(user);
+    const sessions = buildSessions({ [VALID_HASH]: { id: 'sess-1' } });
+    const { service, usersRepo, jwtService } = buildService(user, sessions);
 
     jwtService.signAsync = jest.fn().mockResolvedValue('new-access-token');
     const refreshExpirySeconds = Math.floor(Date.now() / 1000) + 3600;
@@ -158,10 +198,17 @@ describe('AuthService.refresh', () => {
       refreshExpirySeconds * 1000 - 15 * 60 * 1000,
     );
     expect(usersRepo.update).not.toHaveBeenCalled();
+    expect(usersRepo.save).not.toHaveBeenCalled();
     expect(jwtService.signAsync).toHaveBeenCalledTimes(1);
+    expect(jwtService.signAsync.mock.calls[0][0]).toEqual(
+      expect.objectContaining({ sub: 'u1', sid: 'sess-1' }),
+    );
+    expect(sessions.findByHash).toHaveBeenCalledWith(VALID_HASH);
+    expect(sessions.touch).toHaveBeenCalledWith('sess-1', expect.any(Date));
+    expect(sessions.adoptLegacy).not.toHaveBeenCalled();
   });
 
-  it('rejects when no refresh token is stored (already logged out)', async () => {
+  it('rejects when there is no session and no stored legacy hash (already logged out)', async () => {
     const user: MockUser = {
       id: 'u1',
       username: 'alice',
@@ -169,16 +216,18 @@ describe('AuthService.refresh', () => {
       refresh_token: null,
       isDeleted: false,
     };
-    const { service } = buildService(user);
+    const { service, sessions } = buildService(user);
 
     await expect(
       service.refresh({ refreshToken: VALID_TOKEN } as any),
     ).rejects.toBeInstanceOf(RpcException);
+    expect(sessions.adoptLegacy).not.toHaveBeenCalled();
+    expect(sessions.touch).not.toHaveBeenCalled();
   });
 
-  it('superseded token: stored hash differs → rejects (401) but keeps the newer session (RBAC-10)', async () => {
-    // A validly signed but stale token (an earlier login, superseded by a
-    // newer login on another device) does not match the active DB hash.
+  it('unknown token: no session and the stored hash differs → 401, nothing is wiped', async () => {
+    // A validly signed but unknown token (e.g. a login superseded BEFORE the
+    // per-session deploy) — rejected, and no other session is touched.
     const user: MockUser = {
       id: 'u1',
       username: 'alice',
@@ -186,7 +235,7 @@ describe('AuthService.refresh', () => {
       refresh_token: sha256('different-token'),
       isDeleted: false,
     };
-    const { service, usersRepo, activityLog } = buildService(user);
+    const { service, usersRepo, activityLog, sessions } = buildService(user);
 
     const error = await service
       .refresh({ refreshToken: VALID_TOKEN } as any)
@@ -201,24 +250,40 @@ describe('AuthService.refresh', () => {
       expect.objectContaining({ statusCode: 401 }),
     );
 
-    // The stale token is never accepted, but the NEWER session is not wiped:
-    // wiping it logged out the legitimate second device too.
     expect(usersRepo.save).not.toHaveBeenCalled();
     expect(usersRepo.update).not.toHaveBeenCalled();
+    expect(sessions.revokeOwn).not.toHaveBeenCalled();
     expect(user.refresh_token).toBe(sha256('different-token'));
     // The security trail is kept.
     expect(activityLog.log).toHaveBeenCalledWith(
       expect.objectContaining({
         action: 'auth_failure',
-        metadata: {
-          reason: 'refresh_token_superseded',
-          session_invalidated: false,
-        },
+        metadata: { reason: 'refresh_session_not_found' },
       }),
     );
   });
 
-  it('two devices: after device A presents its superseded token, device B still refreshes (RBAC-10)', async () => {
+  it('legacy (pre-deploy) token whose hash is the stored users.refresh_token → session adopted, 200', async () => {
+    const user: MockUser = {
+      id: 'u1',
+      username: 'alice',
+      status: 'active',
+      refresh_token: VALID_HASH,
+      isDeleted: false,
+    };
+    const { service, sessions, usersRepo } = buildService(user);
+
+    const res = await service.refresh({ refreshToken: VALID_TOKEN } as any);
+
+    expect(res.statusCode).toBe(200);
+    expect(sessions.adoptLegacy).toHaveBeenCalledWith(
+      expect.objectContaining({ refreshToken: VALID_TOKEN }),
+    );
+    expect(sessions.touch).toHaveBeenCalledTimes(1);
+    expect(usersRepo.update).not.toHaveBeenCalled();
+  });
+
+  it('two devices: each refreshes with its own session (no more superseding)', async () => {
     const DEVICE_B_TOKEN = 'device-b-refresh-token';
     const user: MockUser = {
       id: 'u1',
@@ -227,16 +292,58 @@ describe('AuthService.refresh', () => {
       refresh_token: sha256(DEVICE_B_TOKEN),
       isDeleted: false,
     };
-    const { service } = buildService(user);
+    const sessions = buildSessions({
+      [VALID_HASH]: { id: 'sess-a' },
+      [sha256(DEVICE_B_TOKEN)]: { id: 'sess-b' },
+    });
+    const { service } = buildService(user, sessions);
 
-    // Device A (older login) is logged out...
+    const a = await service.refresh({ refreshToken: VALID_TOKEN } as any);
+    const b = await service.refresh({ refreshToken: DEVICE_B_TOKEN } as any);
+    expect(a.statusCode).toBe(200);
+    expect(b.statusCode).toBe(200);
+  });
+
+  it('revoked / reset session → 401; a security reset is stamped on the row', async () => {
+    const user: MockUser = {
+      id: 'u1',
+      username: 'alice',
+      status: 'active',
+      refresh_token: null,
+      isDeleted: false,
+    };
+    const sessions = buildSessions({ [VALID_HASH]: { id: 'sess-1' } });
+    sessions.rejectReason.mockReturnValueOnce('reset');
+    const { service } = buildService(user, sessions);
+
     await expect(
       service.refresh({ refreshToken: VALID_TOKEN } as any),
     ).rejects.toBeInstanceOf(RpcException);
+    expect(sessions.revokeOwn).toHaveBeenCalledWith(
+      'u1',
+      { sessionId: 'sess-1' },
+      'security_reset',
+      expect.any(Date),
+    );
+    expect(sessions.touch).not.toHaveBeenCalled();
+  });
 
-    // ...device B (the latest login) keeps working.
-    const res = await service.refresh({ refreshToken: DEVICE_B_TOKEN } as any);
-    expect(res.statusCode).toBe(200);
+  it('session revoked concurrently (touch matches no open row) → 401', async () => {
+    const user: MockUser = {
+      id: 'u1',
+      username: 'alice',
+      status: 'active',
+      refresh_token: null,
+      isDeleted: false,
+    };
+    const sessions = buildSessions({ [VALID_HASH]: { id: 'sess-1' } });
+    sessions.touch.mockResolvedValueOnce(false);
+    const { service, jwtService } = buildService(user, sessions);
+
+    await expect(
+      service.refresh({ refreshToken: VALID_TOKEN } as any),
+    ).rejects.toBeInstanceOf(RpcException);
+    expect(jwtService.signAsync).not.toHaveBeenCalled();
   });
 
   it('rejects when user is inactive', async () => {
@@ -280,7 +387,7 @@ describe('AuthService.refresh', () => {
       refresh_token: VALID_HASH,
       isDeleted: false,
     };
-    const { service, jwtService } = buildService(user);
+    const { service, jwtService, sessions } = buildService(user);
     jwtService.verifyAsync = jest
       .fn()
       .mockRejectedValue(new Error('jwt malformed'));
@@ -288,6 +395,7 @@ describe('AuthService.refresh', () => {
     await expect(
       service.refresh({ refreshToken: VALID_TOKEN } as any),
     ).rejects.toBeInstanceOf(RpcException);
+    expect(sessions.findByHash).not.toHaveBeenCalled();
   });
 
   it('rejects when user is soft-deleted', async () => {
@@ -301,7 +409,7 @@ describe('AuthService.refresh', () => {
 });
 
 describe('AuthService.logout', () => {
-  it('nulls the refresh_token in DB', async () => {
+  it('revokes only the current session (sid + cookie hash) and never saves the whole user row', async () => {
     const user: MockUser = {
       id: 'u1',
       username: 'alice',
@@ -309,12 +417,36 @@ describe('AuthService.logout', () => {
       refresh_token: sha256('some'),
       isDeleted: false,
     };
+    const { service, usersRepo, sessions } = buildService(user);
+    const sid = '3f2b8c1e-6a4d-4e7b-9c10-2d5f7a8b9c0d';
+
+    await service.logout('u1', { sessionId: sid, refreshToken: 'some' });
+
+    expect(sessions.revokeOwn).toHaveBeenCalledWith(
+      'u1',
+      { sessionId: sid, refreshTokenHash: sha256('some') },
+      'logout',
+    );
+    expect(usersRepo.save).not.toHaveBeenCalled();
+    // The legacy column held THIS session's hash → conditionally cleared.
+    expect(usersRepo.update).toHaveBeenCalledWith(
+      { id: 'u1', refresh_token: sha256('some') },
+      { refresh_token: null },
+    );
+  });
+
+  it('does not touch the legacy column when it belongs to another session', async () => {
+    const user: MockUser = {
+      id: 'u1',
+      username: 'alice',
+      status: 'active',
+      refresh_token: sha256('newer-login'),
+      isDeleted: false,
+    };
     const { service, usersRepo } = buildService(user);
 
-    await service.logout('u1');
+    await service.logout('u1', { refreshToken: 'older-login' });
 
-    expect(usersRepo.save).toHaveBeenCalledTimes(1);
-    const saved = usersRepo.save.mock.calls[0][0];
-    expect(saved.refresh_token).toBeNull();
+    expect(usersRepo.update).not.toHaveBeenCalled();
   });
 });
