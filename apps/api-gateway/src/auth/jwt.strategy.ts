@@ -43,7 +43,9 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     // fQi6NNUL / y8CxCtcK — so'rov aktyori kontekstga: RMQ `x-audit-actor`
     // sarlavhasi orqali har servisning `ActivityLogService.log()` i
     // `user_name`/`user_role` ni o'zi to'ldiradi. `name` claim'i eski
-    // tokenlarda yo'q (15 daqiqada yangilanadi) — u holda faqat id/rol.
+    // tokenlarda yo'q (ACCESS_TOKEN_TIME ichida yangilanadi) — u holda
+    // faqat id/rol. (Elchi Pochta #3) `sid` (sessiya id) ham shu yo'l bilan
+    // `req.user` ga o'zgarmay o'tadi; Telegram va eski tokenlarda yo'q.
     requestContext.setActor({
       userId: payload.sub == null ? undefined : String(payload.sub),
       userName: typeof payload.name === 'string' ? payload.name : undefined,

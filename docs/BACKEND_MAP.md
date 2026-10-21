@@ -82,6 +82,18 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
 - **Auth:** `identity.login` / `identity.refresh` / `identity.logout` /
   `identity.validate` / `identity.user.profile`. Issues access+refresh JWT
   (gateway sets refresh as httpOnly cookie).
+- **Sessions (Elchi Pochta #3, 2026-10-21):** one `user_sessions` row per
+  login (sha256 of the refresh JWT, device/IP from the gateway audit context,
+  `created_at` / `last_seen_at` / `expires_at` / `revoked_at`). A new login
+  does not log other devices out; `identity.logout` revokes only the session
+  from the access token `sid` / refresh cookie; `identity.auth.sessions`
+  (`GET /auth/sessions`) lists the caller's own active sessions. Password /
+  phone / role change, blocking and deletion revoke ALL sessions atomically
+  via `admins.session_epoch` (+ a password-hash fingerprint per session).
+  Pre-deploy tokens (`admins.refresh_token`) get their row on first refresh;
+  that column is still written on login for rollback only. Hourly cleanup:
+  epoch-reset rows → `security_reset`, rows 30 days past expiry deleted.
+  Tokens: access 1h, refresh 1d, refresh not rotated.
 - **Per-role create/list:** `identity.{courier,manager,registrator,market,customer}.*`,
   generic `identity.user.{create,find_all,find_by_id,update,delete,status}`.
 - **Market specifics:** telegram token (`market.find_by_tg_token`, `rotate_tg_token`),
@@ -93,9 +105,9 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
   gateway sets it for SUPERADMIN/ADMIN only) and only on market rows — the
   admin hands it to the market for the Telegram group bind. `rotate_tg_token`
   now has **no caller** (a group bind no longer rotates). Refresh: a validly
-  signed but superseded token (newer login on another device) → 401 **without**
-  nulling the stored hash, so the latest login keeps its session (one session
-  per account); a password or login-phone change revokes the refresh token.
+  signed but unknown token → 401 without touching other sessions (since
+  Elchi Pochta #3 every login has its own session, see above); a password or
+  login-phone change revokes all of the account's sessions.
   Admins may edit their own name/phone/password (`PATCH /auth/my-profile`).
   Deleting a manager/registrator also removes the active `branch_users` row
   (`branch.user.remove`, best-effort, warn log). User-create saga: a failed
@@ -695,9 +707,9 @@ secret (secret never reaches the gateway).
   partner orders with `region_id` NULL; couriers without a cashbox (CODE-26,
   grep logs for "Saga compensation").
 - **fix3 residuals / open decisions:** decision #7 is enforced only by the FE
-  (gateway `branch-to-main` still lists MANAGER); one refresh session per
-  account (RBAC-10 — a new login logs the older device out at its next
-  refresh); courier assignment is last-write-wins (CODE-25, needs a
+  (gateway `branch-to-main` still lists MANAGER); ~~one refresh session per
+  account (RBAC-10)~~ — resolved by Elchi Pochta #3 (per-login sessions,
+  2026-10-21); courier assignment is last-write-wins (CODE-25, needs a
   compare-and-set on `courier_id`); the per-order PAID sync after a market
   payout is an approximation and in-process (M9/M2 — should come from
   `hq_to_market` settled ids); a manager may still **cancel** a courier-held
