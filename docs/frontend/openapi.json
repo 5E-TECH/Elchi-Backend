@@ -1748,7 +1748,38 @@
             "bearer": []
           }
         ],
-        "summary": "Logout current user",
+        "summary": "Logout the current session only (other devices stay signed in)",
+        "tags": [
+          "Auth"
+        ],
+        "x-roles": null
+      }
+    },
+    "/auth/sessions": {
+      "get": {
+        "operationId": "AuthGatewayController_mySessions",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthSessionsResponseDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Own active sessions of the current account (count, device, IP, login and last-seen time, current flag)",
         "tags": [
           "Auth"
         ],
@@ -7940,6 +7971,7 @@
     },
     "/finance/cashbox/spend": {
       "patch": {
+        "description": "Elchi Pochta №1 — ixtiyoriy `expense_category_id` (`GET /finance/cashbox/expense-categories`): mavjud va o'chirilmagan bo'lishi shart (aks holda 400); `data.history` va kassa tarixi qatorlarida `expense_category_id` + `expense_category_name` (snapshot).",
         "operationId": "FinanceGatewayController_spendMoney",
         "parameters": [
           {
@@ -7956,7 +7988,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/MainCashboxManualRequestDto"
+                "$ref": "#/components/schemas/MainCashboxSpendRequestDto"
               }
             }
           }
@@ -8730,6 +8762,148 @@
         "x-roles": [
           "superadmin",
           "admin"
+        ]
+      }
+    },
+    "/finance/cashbox/expense-categories": {
+      "get": {
+        "description": "`data.items` — `{ id, name, description, sort_order, is_deleted, created_by, updated_by, created_at, updated_at }`, `sort_order` bo'yicha. Kassadan chiqim qila oladigan hamma (superadmin, admin, menejer) ko'radi. `include_deleted=true` — o'chirilganlar ham (oxirida); faqat superadmin uchun, boshqalarda e'tiborsiz.",
+        "operationId": "FinanceGatewayController_listCashboxExpenseCategories",
+        "parameters": [
+          {
+            "name": "include_deleted",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Kassa xarajatlari kategoriyalari (chiqim oynasidagi tanlov)",
+        "tags": [
+          "Finance"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "manager"
+        ]
+      },
+      "post": {
+        "operationId": "FinanceGatewayController_createCashboxExpenseCategory",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateCashboxExpenseCategoryRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Yangi xarajat kategoriyasi (faqat superadmin; nom takrori — 409)",
+        "tags": [
+          "Finance"
+        ],
+        "x-roles": [
+          "superadmin"
+        ]
+      }
+    },
+    "/finance/cashbox/expense-categories/{id}": {
+      "patch": {
+        "description": "Kamida bitta maydon: `name`, `description` (`null` — tozalash), `sort_order`. Eski tarix qatorlari yozilgan paytdagi nomni (snapshot) ko'rsatishda davom etadi.",
+        "operationId": "FinanceGatewayController_updateCashboxExpenseCategory",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Kategoriya ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateCashboxExpenseCategoryRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Xarajat kategoriyasini tahrirlash (faqat superadmin; topilmasa — 404, nom takrori — 409)",
+        "tags": [
+          "Finance"
+        ],
+        "x-roles": [
+          "superadmin"
+        ]
+      },
+      "delete": {
+        "description": "Tanlov ro'yxatidan yo'qoladi va yangi chiqimda berilsa 400; mavjud tarix qatorlari nomini (snapshot) saqlaydi. Topilmasa yoki allaqachon o'chirilgan — 404.",
+        "operationId": "FinanceGatewayController_deleteCashboxExpenseCategory",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Kategoriya ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Xarajat kategoriyasini o'chirish (soft; faqat superadmin)",
+        "tags": [
+          "Finance"
+        ],
+        "x-roles": [
+          "superadmin"
         ]
       }
     },
@@ -18906,6 +19080,110 @@
           }
         }
       },
+      "AuthSessionDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "3f2b8c1e-6a4d-4e7b-9c10-2d5f7a8b9c0d"
+          },
+          "device_name": {
+            "type": "string",
+            "example": "Telefon · Android · Chrome",
+            "nullable": true,
+            "description": "X-Device-Name yoki User-Agent dan (login paytida)"
+          },
+          "device_id": {
+            "type": "string",
+            "example": null,
+            "nullable": true,
+            "description": "X-Device-Id (frontend yuborsa)"
+          },
+          "user_agent": {
+            "type": "string",
+            "example": "Mozilla/5.0 (Linux; Android 14) Chrome/126.0 Mobile",
+            "nullable": true
+          },
+          "ip": {
+            "type": "string",
+            "example": "203.0.113.7",
+            "nullable": true
+          },
+          "logged_in_at": {
+            "type": "string",
+            "example": "2026-10-21T08:15:00.000Z",
+            "description": "Login vaqti"
+          },
+          "last_seen_at": {
+            "type": "string",
+            "example": "2026-10-21T10:02:11.000Z",
+            "description": "Oxirgi muvaffaqiyatli token yangilanishi (yoki login)"
+          },
+          "expires_at": {
+            "type": "string",
+            "example": "2026-10-22T08:15:00.000Z",
+            "description": "Refresh token muddati — shundan keyin qayta login kerak"
+          },
+          "current": {
+            "type": "boolean",
+            "example": true,
+            "description": "So'rov yuborgan sessiyaning o'zi"
+          }
+        },
+        "required": [
+          "id",
+          "device_name",
+          "device_id",
+          "user_agent",
+          "ip",
+          "logged_in_at",
+          "last_seen_at",
+          "expires_at",
+          "current"
+        ]
+      },
+      "AuthSessionsDataDto": {
+        "type": "object",
+        "properties": {
+          "active_count": {
+            "type": "number",
+            "example": 2,
+            "description": "Shu akkauntning faol sessiyalari soni"
+          },
+          "sessions": {
+            "description": "Faol sessiyalar, oxirgi faollik bo'yicha kamayish tartibida (ko'pi bilan 50)",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AuthSessionDto"
+            }
+          }
+        },
+        "required": [
+          "active_count",
+          "sessions"
+        ]
+      },
+      "AuthSessionsResponseDto": {
+        "type": "object",
+        "properties": {
+          "statusCode": {
+            "type": "number",
+            "example": 200
+          },
+          "message": {
+            "type": "string",
+            "example": "success"
+          },
+          "data": {
+            "$ref": "#/components/schemas/AuthSessionsDataDto"
+          }
+        },
+        "required": [
+          "statusCode",
+          "message",
+          "data"
+        ]
+      },
       "CreateProductRequestDto": {
         "type": "object",
         "properties": {
@@ -20660,6 +20938,41 @@
           "source_type"
         ]
       },
+      "MainCashboxSpendRequestDto": {
+        "type": "object",
+        "properties": {
+          "amount": {
+            "type": "number",
+            "example": 150000
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "cash",
+              "click",
+              "click_to_market"
+            ],
+            "example": "cash"
+          },
+          "comment": {
+            "type": "string",
+            "example": "Manual operatsiya"
+          },
+          "card_id": {
+            "type": "string",
+            "example": "3",
+            "description": "Asosiy kassaning NOMLI kartasi ID si (`GET /finance/cashbox/cards`). Faqat `click` to'lovida; berilmasa — Asosiy karta. Nomli kartada mablag' yetmasa 400."
+          },
+          "expense_category_id": {
+            "type": "string",
+            "example": "2",
+            "description": "Kassa xarajati kategoriyasi ID si (`GET /finance/cashbox/expense-categories`). Ixtiyoriy; berilsa mavjud va o'chirilmagan bo'lishi shart (aks holda 400). Tarix qatorida `expense_category_id` + `expense_category_name` bo'lib qaytadi."
+          }
+        },
+        "required": [
+          "amount"
+        ]
+      },
       "MainCashboxManualRequestDto": {
         "type": "object",
         "properties": {
@@ -20849,6 +21162,47 @@
           "amount",
           "comment"
         ]
+      },
+      "CreateCashboxExpenseCategoryRequestDto": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "example": "Yoqilg'i"
+          },
+          "description": {
+            "type": "string",
+            "example": "Benzin, gaz, dizel",
+            "description": "Nimalar kiradi"
+          },
+          "sort_order": {
+            "type": "number",
+            "example": 18,
+            "description": "Ro'yxatdagi o'rni (kichigi tepada). Berilmasa — oxiriga."
+          }
+        },
+        "required": [
+          "name"
+        ]
+      },
+      "UpdateCashboxExpenseCategoryRequestDto": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "example": "Yoqilg'i va moy"
+          },
+          "description": {
+            "type": "object",
+            "example": "Benzin, gaz, dizel, moy",
+            "nullable": true,
+            "description": "Nimalar kiradi; `null` yoki '' — tavsifni tozalash"
+          },
+          "sort_order": {
+            "type": "number",
+            "example": 2
+          }
+        }
       },
       "CreateSalaryRequestDto": {
         "type": "object",

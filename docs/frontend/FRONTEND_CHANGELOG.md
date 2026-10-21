@@ -23,6 +23,48 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-10-21 (kechki) — Kassa xarajati kategoriyalari, akkaunt sessiyalari (Notion «Elchi Pochta» #1, #3)
+
+- [2026-10-21] 🆕 [finance] — kassa xarajati kategoriyalari
+  (`/finance/cashbox/expense-categories`):
+  - `GET` — SUPERADMIN, ADMIN, MANAGER; `data.items[]` = `{ id, name,
+    description, sort_order, is_deleted, created_by, updated_by, created_at,
+    updated_at }`, `sort_order` bo'yicha. `?include_deleted=true` faqat
+    superadmin uchun (o'chirilganlar oxirida). Boshlang'ich 17 ta kategoriya
+    bazaga yozilgan (Ovqatlanish … Qaytarilgan pullar).
+  - `POST` / `PATCH :id` / `DELETE :id` — faqat SUPERADMIN. `POST { name
+    (1–100), description? (≤500), sort_order? }`, `PATCH` — shu maydonlardan
+    istalgani (`description: null|''` tozalaydi). `DELETE` — yumshoq o'chirish
+    (`is_deleted: true`), tarixdagi nom saqlanadi. Takror nom → 409, topilmadi
+    → 404.
+- [2026-10-21] ✏️ [finance] — `PATCH /finance/cashbox/spend` da ixtiyoriy
+  `expense_category_id` (raqamli satr). Faol bo'lmagan / yo'q kategoriya → 400
+  «Xarajat kategoriyasi topilmadi yoki o'chirilgan — ro'yxatdan faol kategoriya
+  tanlang». Berilmasa xarajat avvalgidek yoziladi. `PATCH /cashbox/fill`
+  bu maydonni rad etadi (400). Kassa tarixi qatorlarida (`GET
+  /finance/history`, `/finance/history/:id`, `/finance/cashbox/main` →
+  `cashboxHistory`, spend javobi) yangi `expense_category_id: string|null` va
+  `expense_category_name: string|null` (nom yozilgan paytdagi nusxa —
+  kategoriya keyin o'zgarsa ham tarix o'zgarmaydi). 🔧 Kassa → xarajat
+  oynasiga kategoriya tanlash (ro'yxat GET dan), superadmin uchun kategoriyalarni
+  boshqarish ekrani, tarixda kategoriya nomi.
+- [2026-10-21] 🆕 [auth] — `GET /auth/sessions` (Bearer, istalgan rol) —
+  FAQAT so'rovchining o'z faol sessiyalari: `data = { active_count,
+  sessions: [ { id, device_name, device_id, user_agent, ip, logged_in_at,
+  last_seen_at, expires_at, current } ] }`, `last_seen_at` bo'yicha
+  yangisi tepada, ko'pi bilan 50 ta. `last_seen_at` refresh'da yangilanadi
+  (ilova ochiq bo'lsa ~soatiga bir). 🔧 Profil/Sozlamalarda «Sessiyalar» bo'limi
+  (faol sessiyalar soni, qurilma, kirgan va oxirgi faollik vaqti, «Shu qurilma»
+  belgisi). Qurilma nomi hozir User-Agent'dan — aniqroq nom uchun so'rovlarda
+  `X-Device-Name` / `X-Device-Id` yuborish mumkin.
+- [2026-10-21] ⚠️ [auth] — har login endi ALOHIDA sessiya: bitta akkauntga bir
+  nechta qurilmadan bir vaqtda kirish mumkin, yangi login boshqa qurilmalarni
+  chiqarib yubormaydi. `POST /auth/logout` faqat JORIY sessiyani yopadi
+  (javob shakli o'zgarmagan). Parol/telefon/rol almashsa, akkaunt bloklansa
+  yoki o'chirilsa — barcha sessiyalar yopiladi. Access token'da yangi `sid`
+  claim'i. Token muddatlari: access 1 soat, refresh 1 kun (prod'da avvaldan
+  shunday). Deploy paytida kirib turgan foydalanuvchilar chiqib ketmaydi.
+
 ### 2026-10-21 — Sotish oynasida «Marketga to'langan summa» chegarasi (uguUEhin)
 
 - [2026-10-21] 🔧 [order] — buyurtma javoblarida (`GET /orders`,
