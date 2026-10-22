@@ -10,3 +10,8 @@ npm-debug.log
 !.env.example
 coverage
 tmp
+# DB dumps (scripts/backup-*.sh, pre-deploy-backup.sh) never belong in an
+# image build context; backups/daily is root-owned 0700 (db-backup sidecar),
+# so the deploy user can't even read it and `COPY . .` fails the build.
+backups
+.claude
