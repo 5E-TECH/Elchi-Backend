@@ -1786,6 +1786,111 @@
         "x-roles": null
       }
     },
+    "/auth/sessions/revoke-others": {
+      "post": {
+        "description": "Javob: `data = { revoked, session_ids }` (0 ham bo'lishi mumkin). `sid` siz token (Telegram / eski) → 400 «Joriy sessiya aniqlanmadi — qayta kiring».",
+        "operationId": "AuthGatewayController_revokeOtherSessions",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthSessionsRevokeResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Joriy sessiya aniqlanmadi — qayta kiring",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthSessionsErrorResponseDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized / Session revoked"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Log out all OTHER sessions of the current account (the current one stays)",
+        "tags": [
+          "Auth"
+        ],
+        "x-roles": null
+      }
+    },
+    "/auth/sessions/{id}": {
+      "delete": {
+        "description": "Javob: `data = { revoked: 1, session_ids: [id] }`. 400 — id UUID emas («Sessiya identifikatori noto'g'ri») yoki joriy sessiya («Joriy sessiyani bu yerdan yopib bo'lmaydi — «Chiqish» tugmasidan foydalaning»); 404 — «Sessiya topilmadi yoki allaqachon yopilgan».",
+        "operationId": "AuthGatewayController_revokeSession",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "`GET /auth/sessions` dagi sessiya `id` si (UUID)",
+            "schema": {
+              "example": "3f2b8c1e-6a4d-4e7b-9c10-2d5f7a8b9c0d",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthSessionsRevokeResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Noto'g'ri id yoki joriy sessiya",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthSessionsErrorResponseDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized / Session revoked"
+          },
+          "404": {
+            "description": "Sessiya topilmadi yoki allaqachon yopilgan",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthSessionsErrorResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Log out one of my other sessions (another device)",
+        "tags": [
+          "Auth"
+        ],
+        "x-roles": null
+      }
+    },
     "/auth/validate": {
       "get": {
         "operationId": "AuthGatewayController_validate",
@@ -7971,7 +8076,7 @@
     },
     "/finance/cashbox/spend": {
       "patch": {
-        "description": "Elchi Pochta №1 — ixtiyoriy `expense_category_id` (`GET /finance/cashbox/expense-categories`): mavjud va o'chirilmagan bo'lishi shart (aks holda 400); `data.history` va kassa tarixi qatorlarida `expense_category_id` + `expense_category_name` (snapshot).",
+        "description": "Elchi Pochta №1 — `expense_category_id` MAJBURIY (`GET /finance/cashbox/expense-categories`, raqamli satr): yo'q/bo'sh/raqam emas → 400 «Xarajat kategoriyasini tanlang»; mavjud va o'chirilmagan bo'lishi shart (aks holda 400). `comment` ixtiyoriy. `data.history` va kassa tarixi qatorlarida `expense_category_id` + `expense_category_name` (snapshot).",
         "operationId": "FinanceGatewayController_spendMoney",
         "parameters": [
           {
@@ -19184,6 +19289,72 @@
           "data"
         ]
       },
+      "AuthSessionsRevokeDataDto": {
+        "type": "object",
+        "properties": {
+          "revoked": {
+            "type": "number",
+            "example": 1,
+            "description": "Yopilgan sessiyalar soni"
+          },
+          "session_ids": {
+            "example": [
+              "3f2b8c1e-6a4d-4e7b-9c10-2d5f7a8b9c0d"
+            ],
+            "description": "Yopilgan sessiyalar id lari. Ularning access tokeni bir necha soniyada 401 bo'ladi, refresh ham 401 — o'sha qurilma login sahifasiga chiqadi",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "revoked",
+          "session_ids"
+        ]
+      },
+      "AuthSessionsRevokeResponseDto": {
+        "type": "object",
+        "properties": {
+          "statusCode": {
+            "type": "number",
+            "example": 200
+          },
+          "message": {
+            "type": "string",
+            "example": "Sessiya yopildi"
+          },
+          "data": {
+            "$ref": "#/components/schemas/AuthSessionsRevokeDataDto"
+          }
+        },
+        "required": [
+          "statusCode",
+          "message",
+          "data"
+        ]
+      },
+      "AuthSessionsErrorResponseDto": {
+        "type": "object",
+        "properties": {
+          "statusCode": {
+            "type": "number",
+            "example": 404
+          },
+          "message": {
+            "type": "string",
+            "example": "Sessiya topilmadi yoki allaqachon yopilgan"
+          },
+          "trace_id": {
+            "type": "string",
+            "example": "7d0c2a4e-1b2f-4c3d-9e8f-0a1b2c3d4e5f"
+          }
+        },
+        "required": [
+          "statusCode",
+          "message"
+        ]
+      },
       "CreateProductRequestDto": {
         "type": "object",
         "properties": {
@@ -20966,11 +21137,12 @@
           "expense_category_id": {
             "type": "string",
             "example": "2",
-            "description": "Kassa xarajati kategoriyasi ID si (`GET /finance/cashbox/expense-categories`). Ixtiyoriy; berilsa mavjud va o'chirilmagan bo'lishi shart (aks holda 400). Tarix qatorida `expense_category_id` + `expense_category_name` bo'lib qaytadi."
+            "description": "MAJBURIY. Kassa xarajati kategoriyasi ID si (`GET /finance/cashbox/expense-categories`), raqamli satr. Yo'q, bo'sh yoki raqam emas → 400 «Xarajat kategoriyasini tanlang»; mavjud bo'lmagan / o'chirilgan → 400 «Xarajat kategoriyasi topilmadi yoki o'chirilgan — ro'yxatdan faol kategoriya tanlang». Tarix qatorida `expense_category_id` + `expense_category_name` bo'lib qaytadi. `comment` ixtiyoriy."
           }
         },
         "required": [
-          "amount"
+          "amount",
+          "expense_category_id"
         ]
       },
       "MainCashboxManualRequestDto": {

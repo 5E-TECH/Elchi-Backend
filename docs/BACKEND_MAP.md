@@ -94,6 +94,27 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
   that column is still written on login for rollback only. Hourly cleanup:
   epoch-reset rows → `security_reset`, rows 30 days past expiry deleted.
   Tokens: access 1h, refresh 1d, refresh not rotated.
+  **Owner revoke (2026-10-22):** `identity.auth.sessions.revoke`
+  (`DELETE /auth/sessions/:id`) closes ONE of the caller's own open
+  sessions (not the current one → 400; foreign/unknown/closed → 404);
+  `identity.auth.sessions.revoke_others` (`POST /auth/sessions/revoke-others`)
+  closes every own open session except the current `sid` (one
+  `UPDATE … RETURNING`; no `sid` → 400). Reason `revoked_by_owner`; the
+  legacy `admins.refresh_token` is cleared when it would resurrect a closed
+  device. A closed session's token cannot revoke the owner's others (401).
+  Immediate cut-off: the gateway `JwtStrategy` asks
+  `identity.auth.session_state` (`{active}` = own row, `revoked_at IS NULL`,
+  one PK lookup) for every token WITH `sid` through
+  `SessionRevocationService` — in-memory cache (open 30 s, revoked
+  ACCESS_TOKEN_TIME, ≤10k entries), 1.5 s timeout, FAIL OPEN on identity
+  errors (warn once/min, 5 s). Revoke endpoints and logout mark the returned
+  `session_ids` locally at once (another gateway instance: ≤30 s). Tokens
+  without `sid` (Telegram Mini App, bot actor) are not checked; epoch /
+  password-fingerprint / expiry stay refresh-time checks (the hourly
+  cleanup stamps epoch-reset rows, after which they are cut off too).
+  The socket.io realtime gateway verifies the JWT itself and is NOT part of
+  this check (a revoked device's open socket lives until it reconnects / the
+  FE logs out).
 - **Per-role create/list:** `identity.{courier,manager,registrator,market,customer}.*`,
   generic `identity.user.{create,find_all,find_by_id,update,delete,status}`.
 - **Market specifics:** telegram token (`market.find_by_tg_token`, `rotate_tg_token`),
@@ -218,6 +239,13 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
   `marketPayableTotal` (sum of positive market balances). Financial-balance
   history/analytics/top-impacts and the cashbox history date filters use
   Tashkent days for `YYYY-MM-DD`.
+- **Expense categories (Elchi Pochta №1):** `cashbox_expense_categories`
+  (superadmin CRUD, soft delete); a manual `spend` stores the category id +
+  name snapshot on its history row. Since 2026-10-22 the HTTP
+  `PATCH /finance/cashbox/spend` DTO REQUIRES `expense_category_id` (400
+  «Xarajat kategoriyasini tanlang»), `comment` is optional; the
+  `finance.cashbox.spend` RMQ handler still accepts no category (internal
+  spends such as the investor profit payout).
 
 ### branch-service (`branch_schema`)
 - **Entities:** `branch` (`BranchType`, `BranchOwnership`), `branch_config`

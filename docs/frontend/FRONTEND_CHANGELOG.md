@@ -23,6 +23,49 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-10-22 — Boshqa sessiyalardan chiqish; kassa xarajatida kategoriya majburiy (Notion «Elchi Pochta» #3, #1)
+
+- [2026-10-22] 🆕 [auth] — `DELETE /auth/sessions/:id` (Bearer, istalgan rol) —
+  «Sessiyalar» ro'yxatidagi BOSHQA qurilma sessiyasini yopish (`:id` —
+  `GET /auth/sessions` dagi `id`). Tana yo'q; kim va joriy sessiya faqat
+  JWT'dan. 200: `{ statusCode: 200, message: 'Sessiya yopildi', data:
+  { revoked: 1, session_ids: ['<id>'] } }`. Xatolar (`{ statusCode, message,
+  trace_id? }`): 400 «Sessiya identifikatori noto'g'ri» (UUID emas); 400
+  «Joriy sessiyani bu yerdan yopib bo'lmaydi — «Chiqish» tugmasidan
+  foydalaning» (`current: true` qator — uning uchun `POST /auth/logout`); 404
+  «Sessiya topilmadi yoki allaqachon yopilgan» (begona / yo'q / avval
+  yopilgan); 401 «Session revoked» — so'rov yuborgan sessiyaning o'zi yopilgan.
+- [2026-10-22] 🆕 [auth] — `POST /auth/sessions/revoke-others` (Bearer,
+  istalgan rol, tana yo'q) — «Boshqa sessiyalardan chiqish»: joriy
+  sessiyadan boshqa HAMMASI yopiladi, joriy qurilma ishlashda davom etadi.
+  200 (201 emas): `{ statusCode: 200, message: 'Boshqa sessiyalardan
+  chiqildi', data: { revoked: <n>, session_ids: [...] } }`; boshqa sessiya
+  bo'lmasa ham 200 — `message: "Boshqa faol sessiya yo'q"`, `revoked: 0`.
+  400 «Joriy sessiya aniqlanmadi — qayta kiring» — token'da `sid` yo'q
+  (Telegram Mini App yoki deploy'dan oldingi token); 401 «Session revoked».
+- [2026-10-22] ✏️ [auth] — chiqarilgan qurilma DARHOL chiqib ketadi (access
+  token muddati tugashini kutmaydi): uning keyingi so'rovi 401 `{ statusCode:
+  401, message: 'Session revoked' }` (odatda darhol; bir nechta gateway
+  instansi bo'lsa ko'pi bilan ~30 soniya), keyin `POST /auth/refresh` ham 401 «Invalid refresh
+  token». `POST /auth/logout` dan keyin shu sessiyaning boshqa tablaridagi
+  token ham darhol 401; logout javobida qo'shimcha `data.session_ids`
+  (qo'shimcha maydon, eski shakl buzilmagan). 🔧 Mavjud 401 → refresh →
+  muvaffaqiyatsiz bo'lsa login sahifasi oqimi yetarli (refresh qayta-qayta
+  urinmasin). «Sessiyalar» bo'limida: har `current: false` qator yonida
+  «Chiqarish» (`DELETE /auth/sessions/:id`), umumiy «Boshqa sessiyalardan
+  chiqish» tugmasi (`POST /auth/sessions/revoke-others`, faqat `active_count
+  > 1` bo'lsa); muvaffaqiyatdan keyin `GET /auth/sessions` qayta yuklansin.
+  `current: true` qatorga «Chiqarish» ko'rsatilmasin (400).
+- [2026-10-22] ⚠️ [finance] — `PATCH /finance/cashbox/spend` da
+  `expense_category_id` endi MAJBURIY (raqamli satr, `GET
+  /finance/cashbox/expense-categories` dan). Yo'q / bo'sh / raqam emas → 400
+  `{ statusCode: 400, message: 'Xarajat kategoriyasini tanlang' }`;
+  o'chirilgan / mavjud bo'lmagan → 400 «Xarajat kategoriyasi topilmadi yoki
+  o'chirilgan — ro'yxatdan faol kategoriya tanlang» (avvalgidek). `comment`
+  IXTIYORIY (backendda avvaldan ham shunday edi). `PATCH /cashbox/fill`
+  o'zgarmagan (kategoriya qabul qilmaydi). 🔧 Kassa → xarajat oynasida
+  kategoriya tanlash majburiy, izoh maydoni ixtiyoriy.
+
 ### 2026-10-21 (kechki) — Kassa xarajati kategoriyalari, akkaunt sessiyalari (Notion «Elchi Pochta» #1, #3)
 
 - [2026-10-21] 🆕 [finance] — kassa xarajati kategoriyalari

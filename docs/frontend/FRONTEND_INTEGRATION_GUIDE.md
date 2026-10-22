@@ -110,6 +110,19 @@ away after an own password change. Access tokens from login/refresh carry a
   sorted by `last_seen_at` desc (at most 50; `active_count` counts all).
   `last_seen_at` moves on every successful `/auth/refresh` (≈ hourly while the
   app is open). No other user's sessions and no system-wide counts.
+- `DELETE /auth/sessions/:id` (any role, 2026-10-22) → closes ONE of the
+  caller's OTHER sessions: `{ statusCode: 200, message: 'Sessiya yopildi',
+  data: { revoked: 1, session_ids: [id] } }`. 400 — not a UUID or the current
+  session (use `POST /auth/logout` for that); 404 «Sessiya topilmadi yoki
+  allaqachon yopilgan» (another user's / unknown / already closed).
+- `POST /auth/sessions/revoke-others` (any role, no body, 200) → closes every
+  session except the current one: `data: { revoked, session_ids }` (0 is
+  fine). 400 «Joriy sessiya aniqlanmadi — qayta kiring» for a token without
+  `sid`.
+- A closed session (owner revoke or logout) is cut off at once: its access
+  token gets `401 { message: 'Session revoked' }` on the next request (at most
+  ~30 s with several gateway instances) and its `/auth/refresh` 401 → the usual
+  401 → refresh → login flow ends on the login page.
 
 ### The JWT payload (what you can trust client-side)
 The access token decodes to:
@@ -432,6 +445,10 @@ outstanding orders oldest-first and advances each order's `SettlementStatus`.
 - **Manager manual expense** (`PATCH /finance/cashbox/spend` on a BRANCH
   cashbox) can no longer take the balance below zero (400 "Insufficient cash
   balance").
+- **Expense category (2026-10-22):** `PATCH /finance/cashbox/spend` REQUIRES
+  `expense_category_id` (numeric string from `GET
+  /finance/cashbox/expense-categories`) — missing → `400 { message: 'Xarajat
+  kategoriyasini tanlang' }`; `comment` is optional.
 - **History:** a registrator sees only its own branch's BRANCH cashbox history
   (`GET /finance/history`, `/finance/history/{id}`); unknown roles get 403.
 
