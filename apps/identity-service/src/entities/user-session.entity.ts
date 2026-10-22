@@ -10,9 +10,16 @@ export type UserSessionMethod = 'password' | 'otp' | 'legacy';
  *    o'chirildi (`admins.session_epoch` oshdi yoki parol barmoq izi mos
  *    emas → HAMMA sessiyalar). Bu sabab qatorga soatlik tozalashda yoki
  *    token keyingi marta ko'rsatilganda yoziladi; tekshiruvning o'zi esa
- *    darhol amal qiladi (refresh va ro'yxat epoch/barmoq izini solishtiradi).
+ *    darhol amal qiladi (refresh va ro'yxat epoch/barmoq izini solishtiradi);
+ *  - `revoked_by_owner` — egasi boshqa qurilmadan «Sessiyalar» bo'limida shu
+ *    sessiyani (yoki «Boshqa sessiyalardan chiqish» bilan joriydan boshqa
+ *    hammasini) yopdi.
+ * Ustun `varchar(32)`, CHECK yo'q — yangi sabab migratsiyasiz qo'shiladi.
  */
-export type UserSessionRevokeReason = 'logout' | 'security_reset';
+export type UserSessionRevokeReason =
+  | 'logout'
+  | 'security_reset'
+  | 'revoked_by_owner';
 
 /**
  * "Sessionlar" bo'limi (Elchi Pochta #3) — har login uchun ALOHIDA sessiya.
@@ -20,7 +27,8 @@ export type UserSessionRevokeReason = 'logout' | 'security_reset';
  *
  * Ilgari `admins.refresh_token` da bitta hash turardi va har yangi login
  * boshqa qurilmalarni chiqarib yuborardi. Endi har login o'z qatorini oladi:
- * refresh shu qator bo'yicha tekshiriladi, logout faqat shu qatorni yopadi.
+ * refresh shu qator bo'yicha tekshiriladi, logout faqat shu qatorni yopadi,
+ * egasi esa «Sessiyalar» bo'limidan boshqa qurilmalarini chiqarib yubora oladi.
  *
  * - OCHIQ TOKEN SAQLANMAYDI — faqat refresh JWT'ning sha256 hashi (UNIQUE).
  * - `id` — UUID (ilovada yaratiladi): ketma-ket raqam tizimdagi umumiy login

@@ -107,6 +107,9 @@ function buildSessions(sessionsByHash: Record<string, { id: string }> = {}) {
     rejectReason: jest.fn().mockReturnValue(null),
     touch: jest.fn().mockResolvedValue(true),
     revokeOwn: jest.fn().mockResolvedValue(1),
+    ownSessionIds: jest.fn((_userId: string, target: { sessionId?: string }) =>
+      Promise.resolve(target.sessionId ? [target.sessionId] : []),
+    ),
     open: jest.fn().mockResolvedValue({ id: 'new-session' }),
   };
 }
@@ -418,8 +421,17 @@ describe('AuthService.logout', () => {
     const { service, usersRepo, sessions } = buildService(user);
     const sid = '3f2b8c1e-6a4d-4e7b-9c10-2d5f7a8b9c0d';
 
-    await service.logout('u1', { sessionId: sid, refreshToken: 'some' });
+    const res = await service.logout('u1', {
+      sessionId: sid,
+      refreshToken: 'some',
+    });
 
+    // Gateway shu id ni keshida darhol «yopilgan» deb belgilaydi.
+    expect(res.data).toEqual({ session_ids: [sid] });
+    expect(sessions.ownSessionIds).toHaveBeenCalledWith('u1', {
+      sessionId: sid,
+      refreshTokenHash: sha256('some'),
+    });
     expect(sessions.revokeOwn).toHaveBeenCalledWith(
       'u1',
       { sessionId: sid, refreshTokenHash: sha256('some') },

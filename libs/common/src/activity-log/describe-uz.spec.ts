@@ -142,6 +142,18 @@ describe('ActivityDescribeUz — gaplar (2WRzdWpZ)', () => {
     );
   });
 
+  it('(Elchi Pochta #3) egasi boshqa sessiyalarini yopdi — faqat son, qurilma/IP yo`q', () => {
+    expect(ActivityDescribeUz.sessionsRevokedByOwner('session', 1)).toBe(
+      'Boshqa qurilmadagi sessiya yopildi',
+    );
+    expect(ActivityDescribeUz.sessionsRevokedByOwner('others', 3)).toBe(
+      'Boshqa sessiyalardan chiqildi: 3 ta',
+    );
+    expect(ActivityDescribeUz.sessionsRevokedByOwner('others', 0)).toBe(
+      'Boshqa sessiyalardan chiqildi: 0 ta',
+    );
+  });
+
   it('filiallararo jo`natma', () => {
     expect(
       ActivityDescribeUz.branchTransferCreated({
@@ -199,6 +211,10 @@ describe('ActivityDescribeUz — gaplar (2WRzdWpZ)', () => {
       ),
       login: ActivityDescribeUz.login({ name: 'Ali', role: Roles.ADMIN }),
       authFailure: ActivityDescribeUz.authFailure('user_not_found'),
+      sessionsRevokedByOwner: ActivityDescribeUz.sessionsRevokedByOwner(
+        'others',
+        3,
+      ),
     };
     // Har bir quruvchi qamralgan — yangisi qo'shilsa test uni ham talab qiladi.
     expect(Object.keys(outputs).sort()).toEqual(

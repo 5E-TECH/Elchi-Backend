@@ -169,6 +169,57 @@ export class IdentityController {
     );
   }
 
+  /**
+   * (Elchi Pochta #3) `DELETE /auth/sessions/:id` — egasi boshqa qurilmadagi
+   * bitta sessiyasini yopadi (`currentSessionId` — JWT `sid`).
+   */
+  @MessagePattern({ cmd: 'identity.auth.sessions.revoke' })
+  revokeSession(
+    @Payload()
+    data: {
+      userId: string;
+      sessionId?: string | null;
+      currentSessionId?: string | null;
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.authService.revokeSession({
+        userId: data.userId,
+        sessionId: data.sessionId ?? null,
+        currentSessionId: data.currentSessionId ?? null,
+      }),
+    );
+  }
+
+  /** (Elchi Pochta #3) `POST /auth/sessions/revoke-others` — joriydan boshqa hammasi. */
+  @MessagePattern({ cmd: 'identity.auth.sessions.revoke_others' })
+  revokeOtherSessions(
+    @Payload() data: { userId: string; currentSessionId?: string | null },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.authService.revokeOtherSessions({
+        userId: data.userId,
+        currentSessionId: data.currentSessionId ?? null,
+      }),
+    );
+  }
+
+  /**
+   * (Elchi Pochta #3) Ichki: gateway `JwtStrategy` — `sid` li token sessiyasi
+   * aniq yopilmaganmi → `{ active }`. HTTP orqali ochilmaydi.
+   */
+  @MessagePattern({ cmd: 'identity.auth.session_state' })
+  sessionState(
+    @Payload() data: { userId?: unknown; sessionId?: unknown },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.authService.sessionState(data ?? {}),
+    );
+  }
+
   @MessagePattern({ cmd: 'identity.validate' })
   validate(@Payload() data: { userId: string }, @Ctx() context: RmqContext) {
     return this.executeAndAck(context, () =>

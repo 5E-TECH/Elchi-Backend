@@ -36,6 +36,17 @@ import { errorRes, successRes } from '../../../../libs/common/helpers/response';
 const DEFAULT_REFRESH_TOKEN_TIME = '1d';
 const DEFAULT_REFRESH_TTL_MS = 24 * 60 * 60 * 1000;
 
+/**
+ * (Elchi Pochta #3) Egasi sessiyalarini yopganda javob: nechta yopildi va
+ * qaysilari — gateway shu id larni o'z keshida darhol «yopilgan» deb
+ * belgilaydi (access token muddati tugashini kutmaydi).
+ */
+export interface RevokedSessionsResponse {
+  statusCode: number;
+  message: string;
+  data: { revoked: number; session_ids: string[] };
+}
+
 @Injectable()
 export class AuthService {
   private readonly logger = new Logger(AuthService.name);
@@ -512,7 +523,18 @@ export class AuthService {
       metadata: { sessions_revoked: revoked },
     });
 
-    return successRes({}, 200, 'Logged out successfully');
+    // Shu sessiya(lar) id si — gateway o'z keshida darhol «yopilgan» deb
+    // belgilaydi: shu brauzerning boshqa tablaridagi access token ham
+    // muddati tugashini kutmay 401 oladi. Faqat SHU foydalanuvchiniki.
+    const sessionIds = await this.sessions.ownSessionIds(user.id, {
+      sessionId,
+      refreshTokenHash,
+    });
+    return successRes(
+      { session_ids: sessionIds },
+      200,
+      'Logged out successfully',
+    );
   }
 
   /**
@@ -537,6 +559,190 @@ export class AuthService {
       message: string;
       data: OwnSessionsList;
     };
+  }
+
+  /**
+   * (Elchi Pochta #3) `DELETE /auth/sessions/:id` — egasi BOSHQA qurilmadagi
+   * bitta sessiyasini yopadi. Kim — faqat gateway'dagi JWT `sub`, joriy
+   * sessiya — JWT `sid`. Joriy sessiya bu yerdan yopilmaydi («Chiqish»
+   * refresh cookie'ni ham tozalaydi). Begona / yo'q / allaqachon yopilgan
+   * sessiya — bir xil 404 (boshqa odamning sessiyasi borligi oshkor
+   * qilinmaydi).
+   */
+  async revokeSession(data: {
+    userId: string;
+    sessionId?: string | null;
+    currentSessionId?: string | null;
+  }): Promise<RevokedSessionsResponse> {
+    if (!isSessionId(data.sessionId)) {
+      throw new RpcException(errorRes("Sessiya identifikatori noto'g'ri", 400));
+    }
+    const target = data.sessionId.toLowerCase();
+    const current = isSessionId(data.currentSessionId)
+      ? data.currentSessionId.toLowerCase()
+      : null;
+    if (target === current) {
+      throw new RpcException(
+        errorRes(
+          "Joriy sessiyani bu yerdan yopib bo'lmaydi — «Chiqish» tugmasidan foydalaning",
+          400,
+        ),
+      );
+    }
+    const user = await this.loadSessionOwner(data.userId, current);
+
+    const revokedIds = await this.sessions.revokeOwnById(
+      user.id,
+      target,
+      'revoked_by_owner',
+    );
+    if (!revokedIds.length) {
+      throw new RpcException(
+        errorRes('Sessiya topilmadi yoki allaqachon yopilgan', 404),
+      );
+    }
+
+    // Eski ustunda yopilgan sessiyaning hashi tursa — tozalanadi (rollback'da
+    // yoki legacy yo'lida tirilmasin).
+    await this.clearLegacyRefreshColumn(
+      user,
+      (owner) => owner !== null && revokedIds.includes(owner.id),
+    );
+    await this.logOwnerRevoke(user, 'session', revokedIds);
+    return successRes(
+      { revoked: revokedIds.length, session_ids: revokedIds },
+      200,
+      'Sessiya yopildi',
+    ) as RevokedSessionsResponse;
+  }
+
+  /**
+   * (Elchi Pochta #3) `POST /auth/sessions/revoke-others` — joriy sessiyadan
+   * boshqa BARCHA sessiyalar yopiladi (boshqa qurilmalar chiqib ketadi),
+   * joriy qurilma ishlashda davom etadi. `sid` siz token (deploy'dan oldingi
+   * yoki Telegram) — joriy sessiyani aniqlab bo'lmaydi → 400 (aks holda
+   * so'rovchining o'zi ham chiqib ketardi). Yopiladigan sessiya bo'lmasa ham
+   * 200 (`revoked: 0`).
+   */
+  async revokeOtherSessions(data: {
+    userId: string;
+    currentSessionId?: string | null;
+  }): Promise<RevokedSessionsResponse> {
+    if (!isSessionId(data.currentSessionId)) {
+      throw new RpcException(
+        errorRes('Joriy sessiya aniqlanmadi — qayta kiring', 400),
+      );
+    }
+    const current = data.currentSessionId.toLowerCase();
+    const user = await this.loadSessionOwner(data.userId, current);
+
+    const revokedIds = await this.sessions.revokeOwnExcept(
+      user.id,
+      current,
+      'revoked_by_owner',
+    );
+
+    // Eski ustunda joriy sessiyadan BOSHQA hash bo'lsa — tozalanadi:
+    // hali qatori yaratilmagan (deploy'dan oldin kirgan) qurilma ham
+    // `adoptLegacy` orqali qaytib kira olmasin.
+    await this.clearLegacyRefreshColumn(
+      user,
+      (owner) => owner === null || owner.id !== current,
+    );
+    await this.logOwnerRevoke(user, 'others', revokedIds);
+    return successRes(
+      { revoked: revokedIds.length, session_ids: revokedIds },
+      200,
+      revokedIds.length
+        ? 'Boshqa sessiyalardan chiqildi'
+        : "Boshqa faol sessiya yo'q",
+    ) as RevokedSessionsResponse;
+  }
+
+  /**
+   * (Elchi Pochta #3) Ichki RMQ (faqat gateway `JwtStrategy`): `sid` li access
+   * token sessiyasi aniq yopilmaganmi (`revoked_at IS NULL`). Epoch / parol
+   * izi / muddat avvalgidek faqat refresh'da tekshiriladi.
+   */
+  async sessionState(data: {
+    userId?: unknown;
+    sessionId?: unknown;
+  }): Promise<{ active: boolean }> {
+    const userId =
+      typeof data?.userId === 'string' || typeof data?.userId === 'number'
+        ? String(data.userId)
+        : '';
+    if (!userId || !isSessionId(data?.sessionId)) return { active: false };
+    return { active: await this.sessions.isOpen(userId, data.sessionId) };
+  }
+
+  /**
+   * Sessiyalarni boshqarish so'rovchisi: faol foydalanuvchi va (bo'lsa) joriy
+   * sessiyasi hali ochiq. Yopilgan sessiya tokeni (masalan, egasi chiqarib
+   * yuborgan qurilma, gateway keshi yangilanguncha) egasining boshqa
+   * sessiyalarini yopa olmaydi.
+   */
+  private async loadSessionOwner(
+    userId: string,
+    currentSessionId: string | null,
+  ): Promise<User> {
+    const user = await this.users.findOne({
+      where: { id: userId, isDeleted: false },
+    });
+    if (!user || user.status !== Status.ACTIVE) {
+      throw new RpcException(errorRes('User not found', 401));
+    }
+    if (
+      currentSessionId !== null &&
+      !(await this.sessions.isOpen(user.id, currentSessionId))
+    ) {
+      throw new RpcException(errorRes('Session revoked', 401));
+    }
+    return user;
+  }
+
+  /**
+   * `admins.refresh_token` (eski bitta-sessiya ustuni) — `shouldClear` hash
+   * egasi bo'lgan sessiya qatorini (yo'q bo'lsa `null`) oladi. logout'dagi
+   * kabi SHARTLI UPDATE: shu orada yozilgan yangi login hashi o'chmaydi.
+   */
+  private async clearLegacyRefreshColumn(
+    user: User,
+    shouldClear: (owner: { id: string } | null) => boolean,
+  ): Promise<void> {
+    if (!user.refresh_token) return;
+    const owner = await this.sessions.findByHash(user.refresh_token);
+    if (!shouldClear(owner ? { id: String(owner.id).toLowerCase() } : null)) {
+      return;
+    }
+    await this.users.update(
+      { id: user.id, refresh_token: user.refresh_token },
+      { refresh_token: null },
+    );
+  }
+
+  private async logOwnerRevoke(
+    user: User,
+    scope: 'session' | 'others',
+    sessionIds: string[],
+  ): Promise<void> {
+    await this.activityLog.log({
+      entity_type: 'Auth',
+      entity_id: user.id,
+      action: ActivityAction.LOGOUT,
+      user_id: user.id,
+      user_name: user.name,
+      user_role: user.role,
+      metadata: {
+        scope,
+        sessions_revoked: sessionIds.length,
+        session_ids: sessionIds,
+      },
+      description: ActivityDescribeUz.sessionsRevokedByOwner(
+        scope,
+        sessionIds.length,
+      ),
+    });
   }
 
   /**

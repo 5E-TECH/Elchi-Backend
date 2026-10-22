@@ -65,7 +65,8 @@ export interface OwnSessionsList {
 /**
  * (Elchi Pochta #3 — "Sessionlar bo'limi") Har login uchun alohida sessiya:
  * ochish, refresh'da tekshirish, logout'da faqat joriy sessiyani yopish,
- * egasiga o'z faol sessiyalari ro'yxati va soatlik tozalash.
+ * egasiga o'z faol sessiyalari ro'yxati, egasi boshqa sessiyalarini yopishi
+ * (bittasini yoki joriydan boshqa hammasini) va soatlik tozalash.
  *
  * Telegram Mini App (`POST /auth/telegram`) va bot aktori tokenlari bu yerga
  * TUSHMAYDI: ular refresh'siz, qisqa (30 daqiqa) access token — brauzer
@@ -225,6 +226,110 @@ export class AuthSessionService {
       revoked += result.affected ?? 0;
     }
     return revoked;
+  }
+
+  /**
+   * logout: id (access token `sid`) va/yoki refresh token hashi bo'yicha
+   * topilgan, SHU foydalanuvchiga tegishli sessiyalar id lari (ochiq yoki
+   * yopilganidan qat'i nazar). Begona qator hech qachon qaytmaydi.
+   */
+  async ownSessionIds(
+    userId: string,
+    target: { sessionId?: string | null; refreshTokenHash?: string | null },
+  ): Promise<string[]> {
+    const ids = new Set<string>();
+    const lookups: Array<Record<string, unknown>> = [];
+    if (isSessionId(target.sessionId)) {
+      lookups.push({ id: target.sessionId.toLowerCase() });
+    }
+    if (target.refreshTokenHash) {
+      lookups.push({ refresh_token_hash: target.refreshTokenHash });
+    }
+    for (const where of lookups) {
+      const row = await this.sessions.findOne({
+        select: ['id'],
+        where: { ...where, user_id: String(userId) },
+      });
+      if (row) ids.add(String(row.id).toLowerCase());
+    }
+    return [...ids];
+  }
+
+  /**
+   * «Sessiyalar» bo'limi: egasi BITTA sessiyasini (boshqa qurilma) id bo'yicha
+   * yopadi. `user_id` va `revoked_at IS NULL` sharti — begona, yo'q yoki
+   * allaqachon yopilgan sessiya → `[]` (chaqiruvchi 404 qaytaradi).
+   * Qaytadi — haqiqatan yopilgan sessiya id lari.
+   */
+  async revokeOwnById(
+    userId: string,
+    sessionId: string,
+    reason: UserSessionRevokeReason,
+    now = new Date(),
+  ): Promise<string[]> {
+    if (!isSessionId(sessionId)) return [];
+    const id = sessionId.toLowerCase();
+    const result = await this.sessions.update(
+      { id, user_id: String(userId), revoked_at: IsNull() },
+      { revoked_at: now, revoke_reason: reason },
+    );
+    return (result.affected ?? 0) > 0 ? [id] : [];
+  }
+
+  /**
+   * «Boshqa sessiyalardan chiqish»: joriy sessiyadan (`keepSessionId`)
+   * boshqa BARCHA ochiq sessiyalar — bitta atomar `UPDATE … RETURNING`.
+   * Faqat SHU foydalanuvchiniki va faqat `revoked_at IS NULL` (avval
+   * yopilganlarning vaqti/sababi o'zgarmaydi). Muddati o'tgan yoki epoch'i
+   * eskirgan, lekin hali belgilanmagan qatorlar ham yopiladi: ularning
+   * oxirgi access tokeni ACCESS_TOKEN_TIME gacha yashashi mumkin.
+   */
+  async revokeOwnExcept(
+    userId: string,
+    keepSessionId: string,
+    reason: UserSessionRevokeReason,
+    now = new Date(),
+  ): Promise<string[]> {
+    if (!isSessionId(keepSessionId)) return [];
+    const result: unknown = await this.sessions.query(
+      `UPDATE "identity_schema"."user_sessions"
+          SET "revoked_at" = $1, "revoke_reason" = $2
+        WHERE "user_id" = $3
+          AND "revoked_at" IS NULL
+          AND "id" <> $4
+      RETURNING "id"`,
+      [now, reason, String(userId), keepSessionId.toLowerCase()],
+    );
+    // Postgres drayveri UPDATE uchun `[rows, rowCount]` qaytaradi.
+    const rows =
+      Array.isArray(result) && Array.isArray(result[0])
+        ? (result[0] as Array<{ id?: unknown }>)
+        : [];
+    return rows
+      .map((row) => (typeof row.id === 'string' ? row.id.toLowerCase() : ''))
+      .filter(Boolean);
+  }
+
+  /**
+   * Sessiya aniq yopilmaganmi: qator bor, SHU foydalanuvchiniki va
+   * `revoked_at IS NULL` (logout, egasi yopgani yoki tozalash belgilagani
+   * hisoblanadi). Gateway `JwtStrategy` har ~30 soniyada so'raydi
+   * (`identity.auth.session_state`) — bitta PK qidiruvi. Epoch, parol izi va
+   * muddat bu yerda TEKSHIRILMAYDI: ular avvalgidek refresh paytida.
+   */
+  async isOpen(userId: string, sessionId: string): Promise<boolean> {
+    if (!/^\d+$/.test(String(userId)) || !isSessionId(sessionId)) {
+      return false;
+    }
+    const row = await this.sessions.findOne({
+      select: ['id'],
+      where: {
+        id: sessionId.toLowerCase(),
+        user_id: String(userId),
+        revoked_at: IsNull(),
+      },
+    });
+    return row !== null;
   }
 
   /**

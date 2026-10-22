@@ -314,4 +314,15 @@ export const ActivityDescribeUz = {
   authFailure(reason: string): string {
     return `Kirish urinishi muvaffaqiyatsiz: ${label(AUTH_FAILURE_REASON_UZ, reason)}`;
   },
+
+  /**
+   * (Elchi Pochta #3) Egasi «Sessiyalar» bo'limidan boshqa qurilmani chiqardi:
+   * "Boshqa qurilmadagi sessiya yopildi" / "Boshqa sessiyalardan chiqildi:
+   * 3 ta". Qurilma nomi/IP gapga KIRMAYDI — faqat son.
+   */
+  sessionsRevokedByOwner(scope: 'session' | 'others', count: number): string {
+    return scope === 'session'
+      ? 'Boshqa qurilmadagi sessiya yopildi'
+      : `Boshqa sessiyalardan chiqildi: ${Math.max(0, Math.trunc(Number(count) || 0))} ta`;
+  },
 } as const;

@@ -3,7 +3,9 @@ import { JwtService } from '@nestjs/jwt';
 import { RpcException } from '@nestjs/microservices';
 import { of } from 'rxjs';
 import { FindOperator } from 'typeorm';
+import { PATTERN_METADATA } from '@nestjs/microservices/constants';
 import { requestContext } from '@app/common';
+import { IdentityController } from '../identity.controller';
 import { AuthService } from './auth.service';
 import {
   AuthSessionService,
@@ -114,7 +116,27 @@ function makeSessionRepo() {
       }
       return Promise.resolve({ affected });
     }),
-    query: jest.fn().mockResolvedValue([[], 0]),
+    // `revokeOwnExcept` ning `UPDATE … RETURNING "id"` i (shart va
+    // parametrlar tartibi bilan); haqiqiy SQL — user-sessions.pg.spec.ts.
+    query: jest.fn((sql: string, params: unknown[] = []) => {
+      if (!sql.includes('RETURNING "id"')) return Promise.resolve([[], 0]);
+      const [now, reason, userId, keep] = params as [
+        Date,
+        UserSession['revoke_reason'],
+        string,
+        string,
+      ];
+      const hits = rows.filter(
+        (r) =>
+          r.user_id === userId &&
+          (r.revoked_at === null || r.revoked_at === undefined) &&
+          r.id !== keep,
+      );
+      hits.forEach((r) =>
+        Object.assign(r, { revoked_at: now, revoke_reason: reason }),
+      );
+      return Promise.resolve([hits.map((r) => ({ id: r.id })), hits.length]);
+    }),
   };
 }
 
@@ -636,6 +658,25 @@ describe('Elchi Pochta #3 — logout faqat joriy sessiyani yopadi', () => {
     expect(w.sessionRepo.rows[0].revoked_at).toBeNull();
   });
 
+  it('logout javobi: yopilgan sessiya id lari (gateway keshi uchun) — faqat o‘ziniki', async () => {
+    const w = makeWorld();
+    const mine = await w.login('25');
+    const other = await w.login('26');
+
+    const res = await w.service.logout('25', {
+      sessionId: w.sidOf(mine.accessToken),
+      refreshToken: mine.refreshToken,
+    });
+    expect(res.data).toEqual({ session_ids: [w.sidOf(mine.accessToken)] });
+
+    // Begona sid/cookie — id qaytmaydi (gateway boshqa odamni bloklamaydi).
+    const foreign = await w.service.logout('25', {
+      sessionId: w.sidOf(other.accessToken),
+      refreshToken: other.refreshToken,
+    });
+    expect(foreign.data).toEqual({ session_ids: [] });
+  });
+
   it('logout jurnali: nechta sessiya yopilgani', async () => {
     const w = makeWorld();
     const res = await w.login('25');
@@ -760,5 +801,607 @@ describe('Elchi Pochta #3 — AuthSessionService.cleanup', () => {
     expect(sql).toContain('"session_epoch"');
     expect(sql).toContain("'security_reset'");
     expect(params).toEqual([now]);
+  });
+});
+
+type RevokeLogEntry = {
+  action: string;
+  metadata: Record<string, unknown>;
+  description?: string;
+};
+const ownerRevokeLogs = (activityLog: { log: jest.Mock }) =>
+  (activityLog.log.mock.calls as Array<[RevokeLogEntry]>)
+    .map(([entry]) => entry)
+    .filter((entry) => entry.metadata && 'scope' in entry.metadata);
+
+describe('Elchi Pochta #3 — egasi boshqa sessiyasini yopadi (identity.auth.sessions.revoke)', () => {
+  it('⭐ noutbukdan telefon sessiyasi yopiladi: 200 {revoked:1, session_ids}, revoked_by_owner, telefon refresh 401, noutbuk ishlaydi', async () => {
+    const w = makeWorld();
+    const phone = await w.login('25', PHONE_CTX);
+    const laptop = await w.login('25', LAPTOP_CTX);
+    const phoneSid = w.sidOf(phone.accessToken)!;
+    const laptopSid = w.sidOf(laptop.accessToken)!;
+
+    const res = await w.service.revokeSession({
+      userId: '25',
+      sessionId: phoneSid,
+      currentSessionId: laptopSid,
+    });
+
+    expect(res).toEqual({
+      statusCode: 200,
+      message: 'Sessiya yopildi',
+      data: { revoked: 1, session_ids: [phoneSid] },
+    });
+    const phoneRow = w.sessionRepo.rows.find((r) => r.id === phoneSid)!;
+    expect(phoneRow.revoke_reason).toBe('revoked_by_owner');
+    expect(phoneRow.revoked_at).toBeInstanceOf(Date);
+    expect(
+      w.sessionRepo.rows.find((r) => r.id === laptopSid)!.revoked_at,
+    ).toBeNull();
+
+    // Telefon: refresh 401 → FE login sahifasiga; noutbuk: davom etadi.
+    const err = await errorOf(
+      w.service.refresh({ refreshToken: phone.refreshToken }),
+    );
+    expect(err).toEqual(
+      expect.objectContaining({
+        statusCode: 401,
+        message: 'Invalid refresh token',
+      }),
+    );
+    expect(failureReasons(w.activityLog)).toEqual(['refresh_session_revoked']);
+    expect(
+      (await w.service.refresh({ refreshToken: laptop.refreshToken }))
+        .statusCode,
+    ).toBe(200);
+
+    // Gateway tekshiruvi: telefon yopilgan, noutbuk ochiq.
+    expect(
+      await w.service.sessionState({ userId: '25', sessionId: phoneSid }),
+    ).toEqual({ active: false });
+    expect(
+      await w.service.sessionState({ userId: '25', sessionId: laptopSid }),
+    ).toEqual({ active: true });
+
+    // Ro'yxatda faqat noutbuk qoldi.
+    const list = await w.service.listSessions({
+      userId: '25',
+      sessionId: laptopSid,
+    });
+    expect(list.data.sessions.map((s) => s.id)).toEqual([laptopSid]);
+  });
+
+  it('joriy sessiya → 400 (katta harfli id bilan ham), hech narsa yopilmaydi', async () => {
+    const w = makeWorld();
+    const res = await w.login('25');
+    const sid = w.sidOf(res.accessToken)!;
+
+    for (const sessionId of [sid, sid.toUpperCase()]) {
+      const err = await errorOf(
+        w.service.revokeSession({
+          userId: '25',
+          sessionId,
+          currentSessionId: sid,
+        }),
+      );
+      expect(err).toEqual(
+        expect.objectContaining({
+          statusCode: 400,
+          message:
+            "Joriy sessiyani bu yerdan yopib bo'lmaydi — «Chiqish» tugmasidan foydalaning",
+        }),
+      );
+    }
+    expect(w.sessionRepo.rows[0].revoked_at).toBeNull();
+  });
+
+  it('id UUID emas → 400, bazaga so‘rov yo‘q', async () => {
+    const w = makeWorld();
+    const res = await w.login('25');
+    w.sessionRepo.update.mockClear();
+    for (const sessionId of ["1' OR 1=1", '', null, '42']) {
+      const err = await errorOf(
+        w.service.revokeSession({
+          userId: '25',
+          sessionId,
+          currentSessionId: w.sidOf(res.accessToken),
+        }),
+      );
+      expect(err).toEqual(
+        expect.objectContaining({
+          statusCode: 400,
+          message: "Sessiya identifikatori noto'g'ri",
+        }),
+      );
+    }
+    expect(w.sessionRepo.update).not.toHaveBeenCalled();
+  });
+
+  it('⭐ begona / yo‘q / allaqachon yopilgan sessiya → bir xil 404; begona sessiya OCHIQ qoladi', async () => {
+    const w = makeWorld();
+    const mine = await w.login('25');
+    const closed = await w.login('25');
+    const other = await w.login('26');
+    await w.service.logout('25', { sessionId: w.sidOf(closed.accessToken) });
+    const current = w.sidOf(mine.accessToken);
+
+    for (const sessionId of [
+      w.sidOf(other.accessToken),
+      w.sidOf(closed.accessToken),
+      '00000000-0000-4000-8000-000000000000',
+    ]) {
+      const err = await errorOf(
+        w.service.revokeSession({
+          userId: '25',
+          sessionId,
+          currentSessionId: current,
+        }),
+      );
+      expect(err).toEqual(
+        expect.objectContaining({
+          statusCode: 404,
+          message: 'Sessiya topilmadi yoki allaqachon yopilgan',
+        }),
+      );
+    }
+    const otherRow = w.sessionRepo.rows.find((r) => r.user_id === '26')!;
+    expect(otherRow.revoked_at).toBeNull();
+    const closedRow = w.sessionRepo.rows.find(
+      (r) => r.id === w.sidOf(closed.accessToken),
+    )!;
+    expect(closedRow.revoke_reason).toBe('logout');
+    expect(
+      (await w.service.refresh({ refreshToken: other.refreshToken }))
+        .statusCode,
+    ).toBe(200);
+    expect(ownerRevokeLogs(w.activityLog)).toEqual([]);
+  });
+
+  it('`sid` siz token (eski / Telegram) ham boshqa sessiyani yopa oladi', async () => {
+    const w = makeWorld();
+    const phone = await w.login('25');
+    const res = await w.service.revokeSession({
+      userId: '25',
+      sessionId: w.sidOf(phone.accessToken),
+      currentSessionId: null,
+    });
+    expect(res.data.revoked).toBe(1);
+  });
+
+  it('yopilgan sessiya tokeni (gateway keshi yangilanguncha) boshqa sessiyani yopa olmaydi → 401', async () => {
+    const w = makeWorld();
+    const owner = await w.login('25');
+    const thief = await w.login('25');
+    await w.service.revokeSession({
+      userId: '25',
+      sessionId: w.sidOf(thief.accessToken),
+      currentSessionId: w.sidOf(owner.accessToken),
+    });
+
+    const err = await errorOf(
+      w.service.revokeSession({
+        userId: '25',
+        sessionId: w.sidOf(owner.accessToken),
+        currentSessionId: w.sidOf(thief.accessToken),
+      }),
+    );
+    expect(err).toEqual(
+      expect.objectContaining({ statusCode: 401, message: 'Session revoked' }),
+    );
+    expect(
+      w.sessionRepo.rows.find((r) => r.id === w.sidOf(owner.accessToken))!
+        .revoked_at,
+    ).toBeNull();
+  });
+
+  it('bloklangan / topilmagan foydalanuvchi → 401', async () => {
+    const w = makeWorld();
+    const res = await w.login('25');
+    w.users.get('25')!.status = 'inactive';
+    expect(
+      (
+        await errorOf(
+          w.service.revokeSession({
+            userId: '25',
+            sessionId: w.sidOf(res.accessToken),
+          }),
+        )
+      ).statusCode,
+    ).toBe(401);
+    expect(
+      (
+        await errorOf(
+          w.service.revokeOtherSessions({
+            userId: '999',
+            currentSessionId: w.sidOf(res.accessToken),
+          }),
+        )
+      ).statusCode,
+    ).toBe(401);
+  });
+
+  it('eski ustun: yopilgan sessiyaning hashi tozalanadi; boshqa (ochiq) sessiyaniki qoladi', async () => {
+    const w = makeWorld();
+    const phone = await w.login('25');
+    const laptop = await w.login('25');
+    const tablet = await w.login('25');
+    const user = w.users.get('25')!;
+
+    // Ustunda telefon hashi — telefon yopilsa tozalanadi.
+    user.refresh_token = sha256(phone.refreshToken);
+    await w.service.revokeSession({
+      userId: '25',
+      sessionId: w.sidOf(phone.accessToken),
+      currentSessionId: w.sidOf(laptop.accessToken),
+    });
+    expect(user.refresh_token).toBeNull();
+
+    // Ustunda noutbuk hashi — planshet yopilsa ustun o'zgarmaydi.
+    user.refresh_token = sha256(laptop.refreshToken);
+    await w.service.revokeSession({
+      userId: '25',
+      sessionId: w.sidOf(tablet.accessToken),
+      currentSessionId: w.sidOf(laptop.accessToken),
+    });
+    expect(user.refresh_token).toBe(sha256(laptop.refreshToken));
+  });
+
+  it('jurnal: logout fe’li, scope=session, sessions_revoked, session_ids, o‘zbekcha gap', async () => {
+    const w = makeWorld();
+    const phone = await w.login('25');
+    const laptop = await w.login('25');
+    await w.service.revokeSession({
+      userId: '25',
+      sessionId: w.sidOf(phone.accessToken),
+      currentSessionId: w.sidOf(laptop.accessToken),
+    });
+    expect(w.activityLog.log).toHaveBeenCalledWith(
+      expect.objectContaining({
+        entity_type: 'Auth',
+        action: 'logout',
+        user_id: '25',
+        metadata: {
+          scope: 'session',
+          sessions_revoked: 1,
+          session_ids: [w.sidOf(phone.accessToken)],
+        },
+        description: 'Boshqa qurilmadagi sessiya yopildi',
+      }),
+    );
+  });
+});
+
+describe('Elchi Pochta #3 — boshqa sessiyalardan chiqish (identity.auth.sessions.revoke_others)', () => {
+  it('⭐ joriydan boshqa hammasi yopiladi; joriy, begona va avval yopilgan sessiya o‘zgarmaydi', async () => {
+    const w = makeWorld();
+    const phone = await w.login('25', PHONE_CTX);
+    const laptop = await w.login('25', LAPTOP_CTX);
+    const tablet = await w.login('25');
+    const closed = await w.login('25');
+    const other = await w.login('26');
+    await w.service.logout('25', { sessionId: w.sidOf(closed.accessToken) });
+    const closedAt = w.sessionRepo.rows.find(
+      (r) => r.id === w.sidOf(closed.accessToken),
+    )!.revoked_at;
+
+    const res = await w.service.revokeOtherSessions({
+      userId: '25',
+      currentSessionId: w.sidOf(laptop.accessToken),
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.message).toBe('Boshqa sessiyalardan chiqildi');
+    expect(res.data.revoked).toBe(2);
+    expect([...res.data.session_ids].sort()).toEqual(
+      [w.sidOf(phone.accessToken)!, w.sidOf(tablet.accessToken)!].sort(),
+    );
+    const reasonOf = (token: string) =>
+      w.sessionRepo.rows.find((r) => r.id === w.sidOf(token))!.revoke_reason;
+    expect(reasonOf(phone.accessToken)).toBe('revoked_by_owner');
+    expect(reasonOf(tablet.accessToken)).toBe('revoked_by_owner');
+    expect(reasonOf(laptop.accessToken)).toBeNull();
+    expect(reasonOf(closed.accessToken)).toBe('logout');
+    expect(
+      w.sessionRepo.rows.find((r) => r.id === w.sidOf(closed.accessToken))!
+        .revoked_at,
+    ).toBe(closedAt);
+    expect(reasonOf(other.accessToken)).toBeNull();
+
+    for (const token of [phone.refreshToken, tablet.refreshToken]) {
+      expect(
+        (await errorOf(w.service.refresh({ refreshToken: token }))).statusCode,
+      ).toBe(401);
+    }
+    expect(
+      (await w.service.refresh({ refreshToken: laptop.refreshToken }))
+        .statusCode,
+    ).toBe(200);
+    expect(
+      (await w.service.refresh({ refreshToken: other.refreshToken }))
+        .statusCode,
+    ).toBe(200);
+
+    const list = await w.service.listSessions({
+      userId: '25',
+      sessionId: w.sidOf(laptop.accessToken),
+    });
+    expect(list.data.active_count).toBe(1);
+    expect(list.data.sessions[0].current).toBe(true);
+
+    // SQL parametrlari: user_id va saqlanadigan (joriy) sessiya.
+    const [sql, params] = w.sessionRepo.query.mock.calls.at(-1) as [
+      string,
+      unknown[],
+    ];
+    expect(sql).toMatch(/"user_id" = \$3/);
+    expect(sql).toMatch(/"revoked_at" IS NULL/);
+    expect(sql).toMatch(/"id" <> \$4/);
+    expect(params.slice(1)).toEqual([
+      'revoked_by_owner',
+      '25',
+      w.sidOf(laptop.accessToken),
+    ]);
+  });
+
+  it('boshqa sessiya yo‘q → 200, revoked: 0', async () => {
+    const w = makeWorld();
+    const only = await w.login('25');
+    const res = await w.service.revokeOtherSessions({
+      userId: '25',
+      currentSessionId: w.sidOf(only.accessToken),
+    });
+    expect(res).toEqual({
+      statusCode: 200,
+      message: "Boshqa faol sessiya yo'q",
+      data: { revoked: 0, session_ids: [] },
+    });
+    expect(w.sessionRepo.rows[0].revoked_at).toBeNull();
+  });
+
+  it('⭐ `sid` siz / noto‘g‘ri sid → 400 «Joriy sessiya aniqlanmadi — qayta kiring», hech narsa yopilmaydi', async () => {
+    const w = makeWorld();
+    await w.login('25');
+    await w.login('25');
+    for (const currentSessionId of [null, undefined, '', 'not-a-uuid']) {
+      const err = await errorOf(
+        w.service.revokeOtherSessions({ userId: '25', currentSessionId }),
+      );
+      expect(err).toEqual(
+        expect.objectContaining({
+          statusCode: 400,
+          message: 'Joriy sessiya aniqlanmadi — qayta kiring',
+        }),
+      );
+    }
+    expect(w.sessionRepo.rows.every((r) => r.revoked_at === null)).toBe(true);
+  });
+
+  it('yopilgan sessiya tokeni egasining boshqa sessiyalarini yopa olmaydi → 401', async () => {
+    const w = makeWorld();
+    const owner = await w.login('25');
+    const thief = await w.login('25');
+    await w.service.revokeSession({
+      userId: '25',
+      sessionId: w.sidOf(thief.accessToken),
+      currentSessionId: w.sidOf(owner.accessToken),
+    });
+    const err = await errorOf(
+      w.service.revokeOtherSessions({
+        userId: '25',
+        currentSessionId: w.sidOf(thief.accessToken),
+      }),
+    );
+    expect(err.statusCode).toBe(401);
+    expect(
+      w.sessionRepo.rows.find((r) => r.id === w.sidOf(owner.accessToken))!
+        .revoked_at,
+    ).toBeNull();
+  });
+
+  it('⭐ legacy: eski ustundagi qatorsiz (hali qabul qilinmagan) hash tozalanadi — o‘sha qurilma adoptLegacy bilan qaytolmaydi', async () => {
+    const w = makeWorld();
+    const current = await w.login('25');
+    const legacy = await w.jwt.signAsync(
+      { sub: '25', username: null, jti: 'legacy-device' },
+      { secret: REFRESH_KEY, expiresIn: '1d' },
+    );
+    const user = w.users.get('25')!;
+    user.refresh_token = sha256(legacy);
+
+    const res = await w.service.revokeOtherSessions({
+      userId: '25',
+      currentSessionId: w.sidOf(current.accessToken),
+    });
+    expect(res.data.revoked).toBe(0);
+    expect(user.refresh_token).toBeNull();
+
+    const err = await errorOf(w.service.refresh({ refreshToken: legacy }));
+    expect(err.statusCode).toBe(401);
+    expect(failureReasons(w.activityLog)).toEqual([
+      'refresh_session_not_found',
+    ]);
+    expect(w.sessionRepo.rows).toHaveLength(1);
+  });
+
+  it('legacy: eski ustunda JORIY sessiya hashi bo‘lsa — saqlanadi (rollback uchun)', async () => {
+    const w = makeWorld();
+    await w.login('25');
+    const current = await w.login('25');
+    const user = w.users.get('25')!;
+    expect(user.refresh_token).toBe(sha256(current.refreshToken));
+
+    await w.service.revokeOtherSessions({
+      userId: '25',
+      currentSessionId: w.sidOf(current.accessToken),
+    });
+    expect(user.refresh_token).toBe(sha256(current.refreshToken));
+  });
+
+  it('legacy: eski ustunda yopilgan BOSHQA sessiya hashi — tozalanadi', async () => {
+    const w = makeWorld();
+    const current = await w.login('25');
+    const phone = await w.login('25');
+    const user = w.users.get('25')!;
+    expect(user.refresh_token).toBe(sha256(phone.refreshToken));
+
+    await w.service.revokeOtherSessions({
+      userId: '25',
+      currentSessionId: w.sidOf(current.accessToken),
+    });
+    expect(user.refresh_token).toBeNull();
+  });
+
+  it('jurnal: scope=others, soni va id lar, o‘zbekcha gap', async () => {
+    const w = makeWorld();
+    const current = await w.login('25');
+    const phone = await w.login('25');
+    await w.service.revokeOtherSessions({
+      userId: '25',
+      currentSessionId: w.sidOf(current.accessToken),
+    });
+    expect(ownerRevokeLogs(w.activityLog)).toEqual([
+      expect.objectContaining({
+        action: 'logout',
+        metadata: {
+          scope: 'others',
+          sessions_revoked: 1,
+          session_ids: [w.sidOf(phone.accessToken)],
+        },
+        description: 'Boshqa sessiyalardan chiqildi: 1 ta',
+      }),
+    ]);
+  });
+});
+
+describe('Elchi Pochta #3 — identity.auth.session_state (gateway JwtStrategy)', () => {
+  it('⭐ ochiq o‘z sessiyasi — active; logout / egasi yopgani / begona / yo‘q — active: false', async () => {
+    const w = makeWorld();
+    const open = await w.login('25');
+    const loggedOut = await w.login('25');
+    const other = await w.login('26');
+    await w.service.logout('25', {
+      sessionId: w.sidOf(loggedOut.accessToken),
+    });
+
+    const state = (userId: unknown, sessionId: unknown) =>
+      w.service.sessionState({ userId, sessionId });
+    expect(await state('25', w.sidOf(open.accessToken))).toEqual({
+      active: true,
+    });
+    // Katta harfli id ham (UUID registrga bog'liq emas).
+    expect(await state('25', w.sidOf(open.accessToken)!.toUpperCase())).toEqual(
+      { active: true },
+    );
+    expect(await state('25', w.sidOf(loggedOut.accessToken))).toEqual({
+      active: false,
+    });
+    expect(await state('25', w.sidOf(other.accessToken))).toEqual({
+      active: false,
+    });
+    expect(await state('25', '00000000-0000-4000-8000-000000000000')).toEqual({
+      active: false,
+    });
+  });
+
+  it('noto‘g‘ri kirish — bazaga so‘rovsiz active: false', async () => {
+    const w = makeWorld();
+    await w.login('25');
+    w.sessionRepo.findOne.mockClear();
+    for (const [userId, sessionId] of [
+      ['25', 'nope'],
+      [null, '00000000-0000-4000-8000-000000000000'],
+      ["25' OR 1=1", '00000000-0000-4000-8000-000000000000'],
+      [{}, {}],
+    ] as Array<[unknown, unknown]>) {
+      expect(await w.service.sessionState({ userId, sessionId })).toEqual({
+        active: false,
+      });
+    }
+    expect(w.sessionRepo.findOne).not.toHaveBeenCalled();
+  });
+
+  it('epoch (parol almashgan) — bu yerda hali active: xulq o‘zgarmagan, refresh’da 401', async () => {
+    const w = makeWorld();
+    const res = await w.login('25');
+    invalidateAllSessions(w.users.get('25') as never);
+    expect(
+      await w.service.sessionState({
+        userId: '25',
+        sessionId: w.sidOf(res.accessToken),
+      }),
+    ).toEqual({ active: true });
+    expect(
+      (await errorOf(w.service.refresh({ refreshToken: res.refreshToken })))
+        .statusCode,
+    ).toBe(401);
+    // Refresh qatorga security_reset yozdi — endi gateway ham 401 beradi.
+    expect(
+      await w.service.sessionState({
+        userId: '25',
+        sessionId: w.sidOf(res.accessToken),
+      }),
+    ).toEqual({ active: false });
+  });
+});
+
+describe('Elchi Pochta #3 — identity.controller: yangi RMQ handlerlari', () => {
+  const SID = '3f2b8c1e-6a4d-4e7b-9c10-2d5f7a8b9c0d';
+  const patternOf = (method: keyof IdentityController) =>
+    Reflect.getMetadata(
+      PATTERN_METADATA,
+      Object.getOwnPropertyDescriptor(IdentityController.prototype, method)
+        ?.value as object,
+    ) as unknown;
+
+  it('pattern nomlari: revoke / revoke_others / session_state', () => {
+    expect(patternOf('revokeSession')).toEqual([
+      { cmd: 'identity.auth.sessions.revoke' },
+    ]);
+    expect(patternOf('revokeOtherSessions')).toEqual([
+      { cmd: 'identity.auth.sessions.revoke_others' },
+    ]);
+    expect(patternOf('sessionState')).toEqual([
+      { cmd: 'identity.auth.session_state' },
+    ]);
+  });
+
+  it('AuthService ga aynan JWT dagi sub/sid uzatiladi va xabar ack qilinadi', async () => {
+    const auth = {
+      revokeSession: jest.fn().mockResolvedValue('one'),
+      revokeOtherSessions: jest.fn().mockResolvedValue('others'),
+      sessionState: jest.fn().mockResolvedValue({ active: true }),
+    };
+    const rmq = { ack: jest.fn(), nackForError: jest.fn() };
+    const controller = new IdentityController(
+      rmq as never,
+      {} as never,
+      auth as never,
+      {} as never,
+    );
+    const ctx = { getPattern: () => 'p' } as never;
+
+    await expect(
+      controller.revokeSession(
+        { userId: '25', sessionId: SID, currentSessionId: null },
+        ctx,
+      ),
+    ).resolves.toBe('one');
+    expect(auth.revokeSession).toHaveBeenCalledWith({
+      userId: '25',
+      sessionId: SID,
+      currentSessionId: null,
+    });
+    await expect(
+      controller.revokeOtherSessions({ userId: '25' }, ctx),
+    ).resolves.toBe('others');
+    expect(auth.revokeOtherSessions).toHaveBeenCalledWith({
+      userId: '25',
+      currentSessionId: null,
+    });
+    await expect(
+      controller.sessionState({ userId: '25', sessionId: SID }, ctx),
+    ).resolves.toEqual({ active: true });
+    expect(rmq.ack).toHaveBeenCalledTimes(3);
   });
 });

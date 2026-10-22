@@ -8,7 +8,8 @@ import { AuthSessionService } from './auth-session.service';
 /**
  * (Elchi Pochta #3) Migratsiya 1716000000130 va AuthSessionService HAQIQIY
  * Postgres'da: UNIQUE hash (legacy poygasi), FK, CHECK, epoch/parol izi
- * filtri, faqat o'z sessiyasini yopish, shartli touch, soatlik tozalash SQL'i.
+ * filtri, faqat o'z sessiyasini yopish, shartli touch, soatlik tozalash SQL'i,
+ * egasi boshqa sessiyalarini yopishi (`UPDATE … RETURNING`) va session_state.
  *
  * Faqat lokal baza (`/elchi_o2_test`):
  *   O2_PG_TEST_URI=postgres://postgres@127.0.0.1:55497/elchi_o2_test
@@ -280,6 +281,103 @@ const sha256 = (value: string) =>
         [other.id],
       );
       expect(row).toEqual({ revoke_reason: 'logout', revoked: true });
+    });
+
+    it('⭐ revokeOwnExcept (UPDATE … RETURNING): joriydan boshqa o‘z ochiq sessiyalari; begona va avval yopilgan qatorga tegilmaydi', async () => {
+      const current = await open('25', 'tok-current');
+      const phone = await open('25', 'tok-phone');
+      const tablet = await open('25', 'tok-tablet');
+      const closed = await open('25', 'tok-closed');
+      const other = await open('26', 'tok-other');
+      await service.revokeOwn('25', { sessionId: closed.id }, 'logout');
+      const [{ closed_at: closedAt }] = await db.query<Row[]>(
+        `SELECT revoked_at AS closed_at FROM identity_schema.user_sessions WHERE id = $1`,
+        [closed.id],
+      );
+
+      const ids = await service.revokeOwnExcept(
+        '25',
+        current.id.toUpperCase(),
+        'revoked_by_owner',
+      );
+      expect([...ids].sort()).toEqual([phone.id, tablet.id].sort());
+
+      const rows = await db.query<Row[]>(
+        `SELECT id::text, revoke_reason, revoked_at
+           FROM identity_schema.user_sessions`,
+      );
+      const byId = new Map(rows.map((r) => [String(r.id), r]));
+      expect(byId.get(current.id)).toMatchObject({
+        revoke_reason: null,
+        revoked_at: null,
+      });
+      expect(byId.get(phone.id)?.revoke_reason).toBe('revoked_by_owner');
+      expect(byId.get(tablet.id)?.revoke_reason).toBe('revoked_by_owner');
+      expect(byId.get(closed.id)).toMatchObject({
+        revoke_reason: 'logout',
+        revoked_at: closedAt,
+      });
+      expect(byId.get(other.id)).toMatchObject({
+        revoke_reason: null,
+        revoked_at: null,
+      });
+      // Ikkinchi marta — yopiladigan narsa yo'q.
+      expect(
+        await service.revokeOwnExcept('25', current.id, 'revoked_by_owner'),
+      ).toEqual([]);
+    });
+
+    it('revokeOwnById: faqat o‘z ochiq sessiyasi; begona / yopilgan → []', async () => {
+      const mine = await open('25', 'tok-mine');
+      const other = await open('26', 'tok-other');
+      expect(
+        await service.revokeOwnById('25', other.id, 'revoked_by_owner'),
+      ).toEqual([]);
+      expect(
+        await service.revokeOwnById(
+          '25',
+          mine.id.toUpperCase(),
+          'revoked_by_owner',
+        ),
+      ).toEqual([mine.id]);
+      expect(
+        await service.revokeOwnById('25', mine.id, 'revoked_by_owner'),
+      ).toEqual([]);
+      const [row] = await db.query<Row[]>(
+        `SELECT revoke_reason FROM identity_schema.user_sessions WHERE id = $1`,
+        [other.id],
+      );
+      expect(row.revoke_reason).toBeNull();
+    });
+
+    it('isOpen (session_state): o‘z ochiq sessiyasi true; begona, yopilgan, yo‘q — false', async () => {
+      const mine = await open('25', 'tok-mine');
+      const closed = await open('25', 'tok-closed');
+      await service.revokeOwnById('25', closed.id, 'revoked_by_owner');
+
+      expect(await service.isOpen('25', mine.id)).toBe(true);
+      expect(await service.isOpen('26', mine.id)).toBe(false);
+      expect(await service.isOpen('25', closed.id)).toBe(false);
+      expect(
+        await service.isOpen('25', '00000000-0000-4000-8000-000000000000'),
+      ).toBe(false);
+    });
+
+    it('ownSessionIds (logout javobi): id yoki hash bo‘yicha, faqat o‘ziniki', async () => {
+      const mine = await open('25', 'tok-mine');
+      const other = await open('26', 'tok-other');
+      expect(
+        await service.ownSessionIds('25', {
+          sessionId: mine.id,
+          refreshTokenHash: sha256('tok-mine'),
+        }),
+      ).toEqual([mine.id]);
+      expect(
+        await service.ownSessionIds('25', {
+          sessionId: other.id,
+          refreshTokenHash: sha256('tok-other'),
+        }),
+      ).toEqual([]);
     });
 
     it('⭐ cleanup: epoch eskirgan ochiq qatorlar security_reset; 30 kundan eski qatorlar o‘chadi; boshqalar tegilmaydi', async () => {
