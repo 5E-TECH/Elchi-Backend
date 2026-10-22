@@ -7,6 +7,7 @@ import {
 import { Test } from '@nestjs/testing';
 import { of } from 'rxjs';
 import request from 'supertest';
+import { AllExceptionsFilter, RpcExceptionFilter } from '@app/common';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
 import { ROLES_KEY } from './auth/roles.decorator';
 import { FinanceGatewayController } from './finance-gateway.controller';
@@ -16,8 +17,8 @@ import { FinanceGatewayController } from './finance-gateway.controller';
  * marshrutlar → RMQ cmd, whitelist / validatsiya, JWT'dan `created_by` /
  * `updated_by` / `deleted_by`, rollar (HAQIQIY RolesGuard: ro'yxat —
  * superadmin/admin/menejer, CUD — faqat superadmin), `include_deleted`
- * faqat superadminga, `PATCH /cashbox/spend` da ixtiyoriy
- * `expense_category_id` (kirimda — 400).
+ * faqat superadminga, `PATCH /cashbox/spend` da MAJBURIY
+ * `expense_category_id` (2026-10-22; izoh ixtiyoriy; kirimda — 400).
  */
 describe('Elchi Pochta №1 — /finance/cashbox/expense-categories gateway kontrakti', () => {
   let app: INestApplication;
@@ -242,7 +243,7 @@ describe('Elchi Pochta №1 — /finance/cashbox/expense-categories gateway kont
     expect(rolesOf('spendMoney')).toEqual(['superadmin', 'admin', 'manager']);
   });
 
-  it('⭐ PATCH /cashbox/spend — expense_category_id finance ga uzatiladi (menejer ham); berilmasa payload avvalgidek', async () => {
+  it('⭐ PATCH /cashbox/spend — expense_category_id finance ga uzatiladi (menejer ham)', async () => {
     await request(http())
       .patch('/finance/cashbox/spend')
       .set('Idempotency-Key', 'k-spend-1')
@@ -269,15 +270,46 @@ describe('Elchi Pochta №1 — /finance/cashbox/expense-categories gateway kont
       cashbox_type: 'branch',
       expense_category_id: '5',
     });
+  });
 
-    // Berilmasa — qiymat yo'q (RMQ JSON'ida kalit umuman ketmaydi).
-    await request(http())
+  it('⭐ (2026-10-22) spend: kategoriya MAJBURIY — yo`q bo`lsa 400 «Xarajat kategoriyasini tanlang» (bitta xabar), finance ga hech narsa ketmaydi', async () => {
+    finance.send.mockClear();
+    for (const body of [
+      { amount: 1_000 },
+      { amount: 1_000, comment: 'Benzin' },
+      { amount: 1_000, expense_category_id: null },
+    ]) {
+      const bad = await request(http())
+        .patch('/finance/cashbox/spend')
+        .send(body);
+      expect(bad.status).toBe(400);
+      // ValidationPipe xabarlari massivi — takrorsiz, bitta o'zbekcha matn.
+      expect((bad.body as { message?: unknown }).message).toEqual([
+        'Xarajat kategoriyasini tanlang',
+      ]);
+    }
+    // Menejer ham.
+    const manager = await request(http())
       .patch('/finance/cashbox/spend')
+      .set('x-test-role', 'manager')
       .send({ amount: 1_000 });
-    expect(lastCall()?.[1]?.expense_category_id).toBeUndefined();
+    expect(manager.status).toBe(400);
+    expect(finance.send).not.toHaveBeenCalled();
+  });
+
+  it('⭐ (2026-10-22) spend: kategoriya bilan, izohsiz — OK; payload da comment kaliti yo`q', async () => {
+    finance.send.mockClear();
+    const ok = await request(http())
+      .patch('/finance/cashbox/spend')
+      .send({ amount: 1_000, expense_category_id: '3' });
+    expect(ok.status).toBe(200);
+    expect(lastCall()).toEqual([
+      { cmd: 'finance.cashbox.spend' },
+      expect.objectContaining({ amount: 1_000, expense_category_id: '3' }),
+    ]);
     expect(
       JSON.parse(JSON.stringify(lastCall()?.[1])) as Record<string, unknown>,
-    ).not.toHaveProperty('expense_category_id');
+    ).not.toHaveProperty('comment');
   });
 
   it('spend: raqam bo`lmagan expense_category_id → 400; kirim (fill) kategoriya qabul qilmaydi → 400', async () => {
@@ -286,6 +318,9 @@ describe('Elchi Pochta №1 — /finance/cashbox/expense-categories gateway kont
         .patch('/finance/cashbox/spend')
         .send({ amount: 1_000, expense_category_id: value });
       expect(bad.status).toBe(400);
+      expect((bad.body as { message?: unknown }).message).toEqual([
+        'Xarajat kategoriyasini tanlang',
+      ]);
     }
     const fill = await request(http())
       .patch('/finance/cashbox/fill')
@@ -294,6 +329,63 @@ describe('Elchi Pochta №1 — /finance/cashbox/expense-categories gateway kont
     expect(String((fill.body as { message?: unknown }).message)).toContain(
       'expense_category_id',
     );
+    expect(finance.send).not.toHaveBeenCalled();
+  });
+});
+
+describe('Elchi Pochta №1 (2026-10-22) — spend 400 javobi prod filtrlari bilan (FE ko`radigan shakl)', () => {
+  let app: INestApplication;
+  const finance = { send: jest.fn(() => of({ statusCode: 200, data: {} })) };
+
+  beforeAll(async () => {
+    const module = await Test.createTestingModule({
+      controllers: [FinanceGatewayController],
+      providers: [
+        { provide: 'FINANCE', useValue: finance },
+        { provide: 'IDENTITY', useValue: { send: jest.fn() } },
+        { provide: 'BRANCH', useValue: { send: jest.fn() } },
+        { provide: 'ORDER', useValue: { send: jest.fn() } },
+      ],
+    })
+      .overrideGuard(JwtAuthGuard)
+      .useValue({
+        canActivate: (context: ExecutionContext) => {
+          context.switchToHttp().getRequest<{ user?: unknown }>().user = {
+            sub: '9',
+            roles: ['superadmin'],
+          };
+          return true;
+        },
+      })
+      .compile();
+    app = module.createNestApplication();
+    // main.ts dagi bilan bir xil pipe va filtrlar.
+    app.useGlobalPipes(
+      new ValidationPipe({
+        whitelist: true,
+        forbidNonWhitelisted: true,
+        transform: true,
+      }),
+    );
+    app.useGlobalFilters(new AllExceptionsFilter(), new RpcExceptionFilter());
+    await app.init();
+  });
+
+  afterAll(async () => {
+    await app?.close();
+  });
+
+  it('kategoriyasiz → 400 { statusCode: 400, message: "Xarajat kategoriyasini tanlang" }', async () => {
+    const res = await request(
+      app.getHttpServer() as Parameters<typeof request>[0],
+    )
+      .patch('/finance/cashbox/spend')
+      .send({ amount: 1_000, comment: 'Benzin' });
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({
+      statusCode: 400,
+      message: 'Xarajat kategoriyasini tanlang',
+    });
     expect(finance.send).not.toHaveBeenCalled();
   });
 });

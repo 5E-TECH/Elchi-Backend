@@ -738,21 +738,29 @@ export class MainCashboxManualRequestDto {
   card_id?: string;
 }
 
+/** (Elchi Pochta №1) Kategoriyasiz / noto'g'ri kategoriya bilan chiqim — 400 matni. */
+export const SPEND_CATEGORY_REQUIRED_MESSAGE = 'Xarajat kategoriyasini tanlang';
+
 /**
  * PATCH /finance/cashbox/spend — qo'lda chiqim. Kirim (`/cashbox/fill`)
  * kategoriya QABUL QILMAYDI (whitelist — 400).
+ *
+ * (Elchi Pochta №1, 2026-10-22) HTTP orqali chiqimda kategoriya MAJBURIY,
+ * izoh (`comment`) ixtiyoriy. Majburiylik FAQAT shu DTO'da: finance-service
+ * `finance.cashbox.spend` handleri kategoriyasiz ichki chiqimni ham qabul
+ * qiladi (investor foyda to'lovi va boshqa servis→servis chaqiruvlari).
  */
 export class MainCashboxSpendRequestDto extends MainCashboxManualRequestDto {
   // Elchi Pochta №1 — kassa xarajati kategoriyasi.
-  @ApiPropertyOptional({
+  @ApiProperty({
     example: '2',
     description:
-      "Kassa xarajati kategoriyasi ID si (`GET /finance/cashbox/expense-categories`). Ixtiyoriy; berilsa mavjud va o'chirilmagan bo'lishi shart (aks holda 400). Tarix qatorida `expense_category_id` + `expense_category_name` bo'lib qaytadi.",
+      "MAJBURIY. Kassa xarajati kategoriyasi ID si (`GET /finance/cashbox/expense-categories`), raqamli satr. Yo'q, bo'sh yoki raqam emas → 400 «Xarajat kategoriyasini tanlang»; mavjud bo'lmagan / o'chirilgan → 400 «Xarajat kategoriyasi topilmadi yoki o'chirilgan — ro'yxatdan faol kategoriya tanlang». Tarix qatorida `expense_category_id` + `expense_category_name` bo'lib qaytadi. `comment` ixtiyoriy.",
   })
-  @IsOptional()
-  @IsString()
-  @Matches(/^\d+$/)
-  expense_category_id?: string;
+  // `Matches` satr bo'lmagan qiymatni ham rad etadi (IsString shu yerda) —
+  // bitta qoida → 400 javobida bitta toza xabar (takrorsiz).
+  @Matches(/^\d+$/, { message: SPEND_CATEGORY_REQUIRED_MESSAGE })
+  expense_category_id!: string;
 }
 
 // ───────── Elchi Pochta №1 — kassa xarajatlari kategoriyalari (superadmin) ─────────

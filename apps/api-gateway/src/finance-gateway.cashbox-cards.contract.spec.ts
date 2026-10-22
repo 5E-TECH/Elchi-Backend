@@ -223,7 +223,13 @@ describe('3PE0B03q — /finance/cashbox/cards gateway kontrakti', () => {
 
     await request(app.getHttpServer())
       .patch('/finance/cashbox/spend')
-      .send({ amount: 1000, type: 'click', card_id: '3' });
+      // (2026-10-22) HTTP chiqimda kategoriya majburiy.
+      .send({
+        amount: 1000,
+        type: 'click',
+        card_id: '3',
+        expense_category_id: '2',
+      });
     expect(lastCall()?.[1]).toMatchObject({ amount: 1000, card_id: '3' });
 
     finance.send.mockClear();

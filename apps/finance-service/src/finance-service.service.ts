@@ -2870,9 +2870,11 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
     /** 3PE0B03q — MAIN, `type=click`: qaysi nomli kartadan. */
     card_id?: string;
     /**
-     * Elchi Pochta №1 — kassa xarajati kategoriyasi (ixtiyoriy). Berilsa
-     * mavjud va o'chirilmagan bo'lishi shart (aks holda 400); tarix qatoriga
-     * id + nom snapshot'i yoziladi.
+     * Elchi Pochta №1 — kassa xarajati kategoriyasi (RMQ darajasida
+     * ixtiyoriy: investor foyda to'lovi kabi ichki chiqimlar kategoriyasiz;
+     * HTTP `PATCH /finance/cashbox/spend` DTO'sida 2026-10-22 dan MAJBURIY).
+     * Berilsa mavjud va o'chirilmagan bo'lishi shart (aks holda 400); tarix
+     * qatoriga id + nom snapshot'i yoziladi.
      */
     expense_category_id?: string;
     /**

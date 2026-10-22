@@ -2612,7 +2612,7 @@ export class FinanceGatewayController {
   @ApiOperation({
     summary: 'Spend money from main cashbox',
     description:
-      "Elchi Pochta №1 — ixtiyoriy `expense_category_id` (`GET /finance/cashbox/expense-categories`): mavjud va o'chirilmagan bo'lishi shart (aks holda 400); `data.history` va kassa tarixi qatorlarida `expense_category_id` + `expense_category_name` (snapshot).",
+      "Elchi Pochta №1 — `expense_category_id` MAJBURIY (`GET /finance/cashbox/expense-categories`, raqamli satr): yo'q/bo'sh/raqam emas → 400 «Xarajat kategoriyasini tanlang»; mavjud va o'chirilmagan bo'lishi shart (aks holda 400). `comment` ixtiyoriy. `data.history` va kassa tarixi qatorlarida `expense_category_id` + `expense_category_name` (snapshot).",
   })
   @ApiBody({ type: MainCashboxSpendRequestDto })
   async spendMoney(

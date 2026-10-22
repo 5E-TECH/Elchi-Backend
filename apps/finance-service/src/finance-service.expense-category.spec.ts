@@ -1,6 +1,6 @@
 import { RpcException } from '@nestjs/microservices';
 import { of } from 'rxjs';
-import { Operation_type, Source_type } from '@app/common';
+import { Cashbox_type, Operation_type, Source_type } from '@app/common';
 import { FinanceServiceService } from './finance-service.service';
 import { CashboxHistory } from './entities/cashbox-history.entity';
 import { CashboxExpenseCategory } from './entities/cashbox-expense-category.entity';
@@ -214,6 +214,25 @@ describe('Elchi Pochta №1 — qo`lda chiqimda xarajat kategoriyasi', () => {
       "Kassadan chiqim: 150 000 so'm (Asosiy kassa, naqd)",
     );
     expect(audit?.new_value).not.toHaveProperty('expense_category');
+  });
+
+  it('(2026-10-22) ichki RMQ chiqimi (investor foyda to`lovi shakli) kategoriyasiz ham o`tadi — majburiylik faqat gateway HTTP DTO`sida', async () => {
+    const env = makeEnv();
+    // investor-service `finance.cashbox.spend` payload'i (kategoriyasiz).
+    await expect(
+      env.service.spendMoney({
+        user_id: '9',
+        cashbox_type: Cashbox_type.MAIN,
+        amount: 150_000,
+        comment: "Investor #4 foyda to'lovi",
+        created_by: '9',
+        dedup_epoch: 'investor-profit:77',
+      }),
+    ).resolves.toBeDefined();
+    expect(env.historyCreates()[0]).toMatchObject({
+      expense_category_id: null,
+      expense_category_name: null,
+    });
   });
 
   it('takroriy so`rov (Idempotency-Key) — kategoriya keyin o`chirilgan bo`lsa ham avvalgi natija, qayta tekshirilmaydi', async () => {
