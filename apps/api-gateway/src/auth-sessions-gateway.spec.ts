@@ -10,6 +10,7 @@ import { ConfigService } from '@nestjs/config';
 import { AuthGatewayController } from './auth-gateway.controller';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
 import { JwtStrategy } from './auth/jwt.strategy';
+import { SessionRevocationService } from './auth/session-revocation.service';
 import { IS_PUBLIC_KEY } from './auth/public.decorator';
 import { collectRouteRoles } from './auth/route-roles';
 
@@ -37,6 +38,7 @@ describe('Elchi Pochta #3 — auth sessiyalari (gateway)', () => {
       providers: [
         { provide: 'IDENTITY', useValue: { send: identitySend } },
         Reflector,
+        SessionRevocationService,
       ],
     })
       .overrideGuard(JwtAuthGuard)
@@ -123,23 +125,23 @@ describe('Elchi Pochta #3 — auth sessiyalari (gateway)', () => {
     expect(roles.get('AuthGatewayController_myProfile')).toBeNull();
   });
 
-  it('JwtStrategy `sid` claim’ini req.user’ga o‘zgarmay uzatadi (eski tokenlar — sid’siz ham ishlaydi)', () => {
+  it('JwtStrategy `sid` claim’ini req.user’ga o‘zgarmay uzatadi (eski tokenlar — sid’siz ham ishlaydi)', async () => {
     const strategy = new JwtStrategy({
       get: () => 'k'.repeat(48),
     } as unknown as ConfigService);
-    expect(
+    await expect(
       strategy.validate({
         sub: '25',
         username: 'u',
         roles: ['COURIER'],
         sid: SID,
-      } as never),
-    ).toEqual(
+      }),
+    ).resolves.toEqual(
       expect.objectContaining({ sub: '25', roles: ['courier'], sid: SID }),
     );
-    expect(
+    await expect(
       strategy.validate({ sub: '25', username: 'u', roles: ['courier'] }),
-    ).not.toHaveProperty('sid');
+    ).resolves.not.toHaveProperty('sid');
   });
 
   it('⭐ POST /auth/logout — identity’ga sid + cookie’dagi refresh token; cookie tozalanadi', async () => {

@@ -1,12 +1,25 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Optional, UnauthorizedException } from '@nestjs/common';
 import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
 import { ConfigService } from '@nestjs/config';
 import { requestContext } from '@app/common';
+import { SessionRevocationService } from './session-revocation.service';
+
+const SESSION_ID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
-  constructor(configService: ConfigService) {
+  /**
+   * (Elchi Pochta #3) Yopilgan sessiya tokenini darhol rad etish. Ixtiyoriy:
+   * spec'lar strategiyani usiz quradi — u holda avvalgidek faqat imzo/muddat.
+   */
+  private readonly revocation?: SessionRevocationService;
+
+  constructor(
+    configService: ConfigService,
+    @Optional() revocation?: SessionRevocationService,
+  ) {
     const secret = configService.get<string>('ACCESS_TOKEN_KEY');
     if (!secret) {
       throw new Error('ACCESS_TOKEN_KEY is not defined');
@@ -16,6 +29,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
       secretOrKey: secret,
     });
+    this.revocation = revocation;
   }
 
   private normalizeRoles(roles?: string[]) {
@@ -32,13 +46,28 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     return Array.from(normalized);
   }
 
-  validate(payload: {
+  async validate(payload: {
     sub: string;
     username: string;
     name?: string | null;
     roles?: string[];
     branch_id?: string | null;
+    sid?: string | null;
   }) {
+    // (Elchi Pochta #3) `sid` li token (login/refresh) — sessiya egasi
+    // tomonidan yopilgan yoki logout qilingan bo'lsa access token muddati
+    // tugashini kutmay 401 (FE refresh qiladi → u ham 401 → login sahifasi).
+    // `sid` siz tokenlar (Telegram Mini App, bot aktori, eski) tekshirilmaydi.
+    // identity javob bermasa — ruxsat (fail open, SessionRevocationService).
+    if (
+      this.revocation &&
+      typeof payload.sid === 'string' &&
+      SESSION_ID_RE.test(payload.sid) &&
+      (await this.revocation.isRevoked(String(payload.sub), payload.sid))
+    ) {
+      throw new UnauthorizedException('Session revoked');
+    }
+
     const roles = this.normalizeRoles(payload.roles);
     // fQi6NNUL / y8CxCtcK — so'rov aktyori kontekstga: RMQ `x-audit-actor`
     // sarlavhasi orqali har servisning `ActivityLogService.log()` i

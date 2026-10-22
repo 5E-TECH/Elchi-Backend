@@ -1,9 +1,11 @@
 import {
   Body,
   Controller,
+  Delete,
   GatewayTimeoutException,
   Get,
   Inject,
+  Param,
   Patch,
   Post,
   Req,
@@ -15,11 +17,14 @@ import {
 import { ClientProxy } from '@nestjs/microservices';
 import { firstValueFrom, TimeoutError, timeout } from 'rxjs';
 import {
+  ApiBadRequestResponse,
   ApiBearerAuth,
   ApiBody,
   ApiCreatedResponse,
+  ApiNotFoundResponse,
   ApiOkResponse,
   ApiOperation,
+  ApiParam,
   ApiTags,
   ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
@@ -27,6 +32,7 @@ import { Throttle } from '@nestjs/throttler';
 import type { Request, Response } from 'express';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
 import { Public } from './auth/public.decorator';
+import { SessionRevocationService } from './auth/session-revocation.service';
 import { TelegramIdThrottlerGuard } from './auth/telegram-id-throttler.guard';
 import { TelegramAuthRequestDto } from './dto/notification.swagger.dto';
 
@@ -75,7 +81,9 @@ const AUTH_THROTTLES = authThrottleConfig();
 export const AUTH_THROTTLE = AUTH_THROTTLES.login;
 export const AUTH_REFRESH_THROTTLE = AUTH_THROTTLES.refresh;
 import {
+  AuthSessionsErrorResponseDto,
   AuthSessionsResponseDto,
+  AuthSessionsRevokeResponseDto,
   LoginRequestDto,
   MinimalAuthResponseDto,
   RefreshRequestDto,
@@ -95,12 +103,29 @@ interface JwtUser {
   sid?: string | null;
 }
 
+/** identity javobidagi yopilgan sessiya id lari (logout / revoke). */
+type RevokedSessionsReply = { data?: { session_ids?: unknown } } | null;
+
 @ApiTags('Auth')
 @Controller('auth')
 export class AuthGatewayController {
   constructor(
     @Inject('IDENTITY') private readonly identityClient: ClientProxy,
+    private readonly revocation: SessionRevocationService,
   ) {}
+
+  private static currentSid(user: JwtUser): string | null {
+    return typeof user.sid === 'string' ? user.sid : null;
+  }
+
+  /**
+   * (Elchi Pochta #3) identity tasdiqlagan yopilgan sessiyalar shu gateway
+   * keshida darhol «yopilgan» — ularning access tokeni keyingi so'rovdayoq 401.
+   */
+  private markRevoked(response: RevokedSessionsReply): void {
+    const ids = response?.data?.session_ids;
+    if (Array.isArray(ids)) this.revocation.markRevoked(ids);
+  }
 
   private static readonly REFRESH_COOKIE_NAME = 'refreshToken';
   // identity `REFRESH_TOKEN_TIME` sukuti (1d) bilan bir xil — faqat javobda
@@ -412,17 +437,18 @@ export class AuthGatewayController {
     @Req() req: Request & { user: JwtUser },
     @Res({ passthrough: true }) res: Response,
   ) {
-    const response = await this.sendIdentity(
+    const response = await this.sendIdentity<RevokedSessionsReply>(
       { cmd: 'identity.logout' },
       {
         userId: req.user.sub,
-        sessionId: typeof req.user.sid === 'string' ? req.user.sid : null,
+        sessionId: AuthGatewayController.currentSid(req.user),
         refreshToken: this.readCookie(
           req,
           AuthGatewayController.REFRESH_COOKIE_NAME,
         ),
       },
     );
+    this.markRevoked(response);
     this.clearRefreshCookie(res);
     return response;
   }
@@ -448,9 +474,89 @@ export class AuthGatewayController {
       { cmd: 'identity.auth.sessions' },
       {
         userId: req.user.sub,
-        sessionId: typeof req.user.sid === 'string' ? req.user.sid : null,
+        sessionId: AuthGatewayController.currentSid(req.user),
       },
     );
+  }
+
+  /**
+   * (Elchi Pochta #3) «Boshqa sessiyalardan chiqish» — joriy sessiyadan
+   * (JWT `sid`) boshqa BARCHA sessiyalar yopiladi; joriy qurilma ishlashda
+   * davom etadi. Har qanday autentifikatsiyadan o'tgan rol, kim — faqat JWT
+   * `sub`. Yopilgan qurilmalarning access tokeni darhol 401 (shu gateway
+   * keshi), refresh ham 401 — ular login sahifasiga chiqadi.
+   */
+  @Post('sessions/revoke-others')
+  @HttpCode(200)
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary:
+      'Log out all OTHER sessions of the current account (the current one stays)',
+    description:
+      "Javob: `data = { revoked, session_ids }` (0 ham bo'lishi mumkin). `sid` siz token (Telegram / eski) → 400 «Joriy sessiya aniqlanmadi — qayta kiring».",
+  })
+  @ApiOkResponse({ type: AuthSessionsRevokeResponseDto })
+  @ApiBadRequestResponse({
+    description: 'Joriy sessiya aniqlanmadi — qayta kiring',
+    type: AuthSessionsErrorResponseDto,
+  })
+  @ApiUnauthorizedResponse({ description: 'Unauthorized / Session revoked' })
+  async revokeOtherSessions(@Req() req: { user: JwtUser }) {
+    const response = await this.sendIdentity<RevokedSessionsReply>(
+      { cmd: 'identity.auth.sessions.revoke_others' },
+      {
+        userId: req.user.sub,
+        currentSessionId: AuthGatewayController.currentSid(req.user),
+      },
+    );
+    this.markRevoked(response);
+    return response;
+  }
+
+  /**
+   * (Elchi Pochta #3) «Sessiyalar» ro'yxatidagi BOSHQA qurilma sessiyasini
+   * yopish. Faqat o'z sessiyasi (identity `user_id` sharti bilan); begona,
+   * yo'q yoki allaqachon yopilgan → 404. Joriy sessiya → 400 (uning uchun
+   * `POST /auth/logout`, u cookie'ni ham tozalaydi).
+   */
+  @Delete('sessions/:id')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiParam({
+    name: 'id',
+    description: '`GET /auth/sessions` dagi sessiya `id` si (UUID)',
+    example: '3f2b8c1e-6a4d-4e7b-9c10-2d5f7a8b9c0d',
+  })
+  @ApiOperation({
+    summary: 'Log out one of my other sessions (another device)',
+    description:
+      "Javob: `data = { revoked: 1, session_ids: [id] }`. 400 — id UUID emas («Sessiya identifikatori noto'g'ri») yoki joriy sessiya («Joriy sessiyani bu yerdan yopib bo'lmaydi — «Chiqish» tugmasidan foydalaning»); 404 — «Sessiya topilmadi yoki allaqachon yopilgan».",
+  })
+  @ApiOkResponse({ type: AuthSessionsRevokeResponseDto })
+  @ApiBadRequestResponse({
+    description: "Noto'g'ri id yoki joriy sessiya",
+    type: AuthSessionsErrorResponseDto,
+  })
+  @ApiNotFoundResponse({
+    description: 'Sessiya topilmadi yoki allaqachon yopilgan',
+    type: AuthSessionsErrorResponseDto,
+  })
+  @ApiUnauthorizedResponse({ description: 'Unauthorized / Session revoked' })
+  async revokeSession(
+    @Req() req: { user: JwtUser },
+    @Param('id') sessionId: string,
+  ) {
+    const response = await this.sendIdentity<RevokedSessionsReply>(
+      { cmd: 'identity.auth.sessions.revoke' },
+      {
+        userId: req.user.sub,
+        sessionId,
+        currentSessionId: AuthGatewayController.currentSid(req.user),
+      },
+    );
+    this.markRevoked(response);
+    return response;
   }
 
   @Get('validate')

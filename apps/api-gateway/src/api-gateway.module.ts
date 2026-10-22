@@ -12,6 +12,7 @@ import { PassportModule } from '@nestjs/passport';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { APP_GUARD } from '@nestjs/core';
 import { JwtStrategy } from './auth/jwt.strategy';
+import { SessionRevocationService } from './auth/session-revocation.service';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
 import { RolesGuard } from './auth/roles.guard';
 import { SelfGuard } from './auth/self.guard';
@@ -162,6 +163,9 @@ import type { StringValue } from 'ms';
   ],
   providers: [
     ApiGatewayService,
+    // (Elchi Pochta #3) yopilgan sessiya tokenini darhol rad etish keshi —
+    // JwtStrategy va auth revoke/logout endpointlari ishlatadi.
+    SessionRevocationService,
     JwtStrategy,
     JwtAuthGuard,
     RolesGuard,

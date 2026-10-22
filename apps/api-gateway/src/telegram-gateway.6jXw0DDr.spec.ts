@@ -17,6 +17,7 @@ import {
 import { NotificationGatewayController } from './notification-gateway.controller';
 import { TelegramGatewayController } from './telegram-gateway.controller';
 import { AuthGatewayController } from './auth-gateway.controller';
+import { SessionRevocationService } from './auth/session-revocation.service';
 import { ConfigService } from '@nestjs/config';
 
 /**
@@ -48,6 +49,8 @@ describe('Telegram bog‘lash va kirish — gateway', () => {
         { provide: ConfigService, useValue: { get: () => undefined } },
         Reflector,
         TelegramIdThrottlerGuard,
+        // (Elchi Pochta #3) AuthGatewayController revoke/logout keshi.
+        SessionRevocationService,
       ],
     })
       .overrideGuard(JwtAuthGuard)

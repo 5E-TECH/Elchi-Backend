@@ -20,16 +20,16 @@ describe('JwtStrategy.validate — aktyor kontekstga (fQi6NNUL)', () => {
     get: () => 'secret',
   } as never);
 
-  it('⭐ id/ism/rol AYNI so`rov do`koniga yoziladi (keyingi RMQ chaqiruvlari ko`radi)', () => {
+  it('⭐ id/ism/rol AYNI so`rov do`koniga yoziladi (keyingi RMQ chaqiruvlari ko`radi)', async () => {
     const store = { traceId: 't-1' };
-    requestContext.run(store, () => {
+    await requestContext.run(store, () =>
       strategy.validate({
         sub: '1',
         username: 'dilshod',
         name: 'Dilshod',
         roles: ['SUPERADMIN'],
-      });
-    });
+      }),
+    );
     expect(store).toEqual({
       traceId: 't-1',
       userId: '1',
@@ -38,20 +38,20 @@ describe('JwtStrategy.validate — aktyor kontekstga (fQi6NNUL)', () => {
     });
   });
 
-  it('eski token (name claim`siz) — id/rol bor, ism yo`q (enrichment hal qiladi)', () => {
+  it('eski token (name claim`siz) — id/rol bor, ism yo`q (enrichment hal qiladi)', async () => {
     const store = { traceId: 't-2' } as Record<string, unknown>;
-    requestContext.run(store as never, () => {
-      strategy.validate({ sub: '37', username: 'm', roles: ['market'] });
-    });
+    await requestContext.run(store as never, () =>
+      strategy.validate({ sub: '37', username: 'm', roles: ['market'] }),
+    );
     expect(store.userId).toBe('37');
     expect(store.userName).toBeUndefined();
     expect(store.userRole).toBe('market');
   });
 
-  it('kontekstdan tashqarida (WS/test) — xato bermaydi', () => {
-    expect(() =>
+  it('kontekstdan tashqarida (WS/test) — xato bermaydi', async () => {
+    await expect(
       strategy.validate({ sub: '1', username: 'x', roles: [] }),
-    ).not.toThrow();
+    ).resolves.toEqual(expect.objectContaining({ sub: '1' }));
   });
 });
 

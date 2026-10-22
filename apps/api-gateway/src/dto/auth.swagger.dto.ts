@@ -188,3 +188,46 @@ export class AuthSessionsResponseDto {
   @ApiProperty({ type: () => AuthSessionsDataDto })
   data!: AuthSessionsDataDto;
 }
+
+/**
+ * (Elchi Pochta #3) `DELETE /auth/sessions/:id` va
+ * `POST /auth/sessions/revoke-others` — nechta sessiya yopildi.
+ */
+export class AuthSessionsRevokeDataDto {
+  @ApiProperty({ example: 1, description: 'Yopilgan sessiyalar soni' })
+  revoked!: number;
+
+  @ApiProperty({
+    type: [String],
+    example: ['3f2b8c1e-6a4d-4e7b-9c10-2d5f7a8b9c0d'],
+    description:
+      "Yopilgan sessiyalar id lari. Ularning access tokeni bir necha soniyada 401 bo'ladi, refresh ham 401 — o'sha qurilma login sahifasiga chiqadi",
+  })
+  session_ids!: string[];
+}
+
+export class AuthSessionsRevokeResponseDto {
+  @ApiProperty({ example: 200 })
+  statusCode!: number;
+
+  @ApiProperty({ example: 'Sessiya yopildi' })
+  message!: string;
+
+  @ApiProperty({ type: () => AuthSessionsRevokeDataDto })
+  data!: AuthSessionsRevokeDataDto;
+}
+
+/** (Elchi Pochta #3) Sessiya endpointlari xato javobi (global filtr shakli). */
+export class AuthSessionsErrorResponseDto {
+  @ApiProperty({ example: 404 })
+  statusCode!: number;
+
+  @ApiProperty({ example: 'Sessiya topilmadi yoki allaqachon yopilgan' })
+  message!: string;
+
+  @ApiPropertyOptional({
+    example: '7d0c2a4e-1b2f-4c3d-9e8f-0a1b2c3d4e5f',
+    type: String,
+  })
+  trace_id?: string;
+}
