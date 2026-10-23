@@ -102,6 +102,8 @@ import { DispatchHistoryController } from './history/dispatch-history.controller
 // (rCFZAmOz) shaxsiy Telegram xabari (users.telegram_id).
 import { TelegramDmService } from './telegram/telegram-dm.service';
 import { TelegramDmController } from './telegram/telegram-dm.controller';
+// (2crjWf7v) DM yetkazish hisoboti (GET /telegram/dm-delivery).
+import { TelegramDmDeliveryReportService } from './telegram/telegram-dm-delivery-report.service';
 // (C4R3YyvH) bildirishnoma shablonlari (uch til).
 import { NotificationTemplate } from './templates/notification-template.entity';
 import { NotificationTemplateService } from './templates/notification-template.service';
@@ -272,6 +274,7 @@ import { RecipientDirectoryService } from './recipients/recipient-directory.serv
     NotificationEscalationService,
     DispatchHistoryService,
     TelegramDmService,
+    TelegramDmDeliveryReportService,
     NotificationTemplateService,
     AudienceSegmentService,
     InboxPolicyService,

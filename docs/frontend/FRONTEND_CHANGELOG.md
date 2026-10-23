@@ -23,6 +23,46 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-10-23 — Kvitansiya yetkazish metrikasi: `GET /telegram/dm-delivery` (2crjWf7v)
+
+- [2026-10-23] 🆕 [notification] — `GET /telegram/dm-delivery` (Bearer,
+  FAQAT superadmin; boshqa rol — 403; faqat o'qish) — «Yetkazish metrikasi:
+  kvitansiya yuborilgan/yetgan nisbati». Ma'lumot saqlangan
+  `notifications.delivery.telegram` dan (restart'da yo'qolmaydi).
+  - Query (hammasi ixtiyoriy): `from`, `to` — ISO 8601; faqat sana bo'lsa
+    Toshkent kuni (`to` — shu kun oxirigacha). Sukut — oxirgi 30 kun.
+    `type` — `finance.payment_received` (sukut; to'lov kvitansiyasi: kuryer
+    — «Pul qabul qilindi» 👍/❗️, market — «To'lov qabul qilindi») |
+    `finance.payment_disputed` (kuryer e'tirozi, menejerga) |
+    `finance.cash_reminder` (kassa eslatmasi, kuryerga). Boshqa tur, buzuq
+    sana, `from >= to` yoki ortiqcha parametr → 400.
+  - 200: `{ statusCode: 200, message: 'success', data: { type, from, to,
+    totals, skipped_reasons, by_role, days } }`. `from`/`to` — ISO (UTC)
+    haqiqiy chegara (`to` kirmaydi). `totals`, `by_role[]` (`role`:
+    `courier` | `market` | `manager` | … | `unknown`, alifbo bo'yicha) va
+    `days[]` (`day`: `YYYY-MM-DD` Toshkent, o'sish tartibida, bo'sh kunlar
+    yo'q) — bir xil maydonlar: `total` (DM so'ralgan qabul qiluvchilar),
+    `sent` (Telegram qabul qildi — yetdi), `failed` (urinildi, xato:
+    bloklagan / chat yo'q), `pending` (navbatda), `skipped` (ataylab
+    yuborilmadi: Telegram ulanmagan, botni bloklagan, o'chirib qo'ygan),
+    `no_provider` (bot sozlanmagan), `other`, `delivery_ratio` =
+    `sent / (sent + failed + pending)` (yuborilganlardan yetgani) va
+    `reach_ratio` = `sent / total` (hamma qabul qiluvchidan yetgani —
+    «yozildi ≠ yetadi»). Nisbatlar 0..1 (3 xona), maxraj 0 bo'lsa `null`
+    (0% emas — «ma'lumot yo'q» deb ko'rsating). `skipped_reasons` —
+    `{ no_telegram_id: 20, bot_blocked: 3, … }` (kalitlar ochiq ro'yxat).
+  - Misol: `GET /telegram/dm-delivery?from=2026-10-01&to=2026-10-23` →
+    `data.totals = { total: 120, sent: 90, failed: 4, pending: 1, skipped:
+    25, no_provider: 0, other: 0, delivery_ratio: 0.947, reach_ratio: 0.75 }`.
+  - ⚠️ O'qilgan bildirishnomalar retention bilan (sukut 60 kun) o'chadi —
+    uzoqroq davrda eski qatorlar sanoqqa kirmaydi.
+  - 🔧 Frontend (alohida vazifa; maket bo'yicha ega qarori kutilmoqda —
+    eng yaqin naqsh `superadmin-notifications-sms-report` «Yetkazilish»
+    o'lchagichi): superadmin dashboardida kvitansiya `delivery_ratio` /
+    `reach_ratio` (kerak bo'lsa `by_role` dan `courier` qatori va `days`
+    trendi). OpenAPI: `TelegramGatewayController_dmDelivery`,
+    `TelegramDmDeliveryResponseDto`.
+
 ### 2026-10-23 — «Tizim holati» marshrut to'qnashuvi (7s1bqOT6)
 
 - [2026-10-23] 🟢 [gateway] — `GET /health` endi HAQIQATAN gateway liveness
