@@ -140,6 +140,40 @@ services:
     logging: *json-logging
     restart: unless-stopped
 
+  # Off-site copies of the DB dumps -> Cloudflare R2 (Contabo VPS outages: the
+  # dumps above live on the same box as the DB). Every hour it uploads the new
+  # ./backups/{daily,pre-deploy,pre-migration}/*.sql.gz (never overwrites an
+  # object), verifies them (size + MD5) and deletes R2 copies older than
+  # OFFSITE_RETENTION_DAYS (30) — scripts/backup-offsite.sh. The backups dir is
+  # mounted READ-ONLY. rclone is configured only from env: the script maps
+  # R2_ACCOUNT_ID / R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY / R2_BUCKET from
+  # .env.production to RCLONE_CONFIG_R2_* — no rclone.conf, and no keys in this
+  # file (nor OFFSITE_* defaults in `environment:`, which would mask the
+  # env_file). Without the R2 keys it only logs «R2 sozlanmagan» and stays up
+  # (healthy). deploy.yml starts it but never waits for or gates on it.
+  # Runbook: docs/ops/db-backups.md.
+  backup-offsite:
+    image: rclone/rclone:1.68.2
+    container_name: elchi-backup-offsite
+    env_file: .env.production
+    volumes:
+      - ./scripts:/scripts:ro
+      - ./backups:/backups:ro
+    entrypoint: ['sh', '/scripts/backup-offsite.sh']
+    # (unhealthy) once configured and the last successful sync is > 26h old,
+    # or the first sync failed. Disabled (no R2 keys) counts as healthy.
+    healthcheck:
+      test: ['CMD', 'sh', '/scripts/backup-offsite.sh', '--check']
+      interval: 5m
+      timeout: 30s
+      retries: 1
+      start_period: 15m
+    mem_limit: 256m
+    mem_reservation: 32m
+    pids_limit: 64
+    logging: *json-logging
+    restart: unless-stopped
+
   # Scheduled cashbox reconciliation (Audit money P1: the invariant check existed
   # but was never scheduled). Runs db:reconcile (--reconcile-strict) on a loop;
   # any cashbox I1/I2 drift or settlement mismatch is reported to Sentry. Reuses
