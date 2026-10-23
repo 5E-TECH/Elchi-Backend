@@ -525,7 +525,7 @@ describe('db backups — wiring (deploy.yml + docker-compose.prod.yml)', () => {
     const compose = read('docker-compose.prod.yml');
     const svc = compose.slice(
       compose.indexOf('\n  db-backup:'),
-      compose.indexOf('\n  db-reconcile:'),
+      compose.indexOf('\n  backup-offsite:'),
     );
     expect(svc).toContain("entrypoint: ['bash', '/scripts/backup-cron.sh']");
     expect(svc).toContain('BACKUP_DIR: /backups/daily');
