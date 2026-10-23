@@ -14,6 +14,20 @@ export function isSessionId(value: unknown): value is string {
 }
 
 /**
+ * Qurilma ID si (`X-Device-Id`) — sessiyani qurilmaga bog'lash uchun
+ * yaroqlimi (Elchi Pochta #3, "bitta qurilma — bitta sessiya"). Frontend
+ * `crypto.randomUUID()` (36) yoki 32 xonali hex yuboradi. Qisqa yoki
+ * g'alati qiymat ("undefined", "null", "test") QABUL QILINMAYDI: xato
+ * mijoz hamma qurilmaga bir xil satr yuborsa, foydalanuvchining barcha
+ * qurilmalari bitta sessiyaga qo'shilib, bir-birini chiqarib yuborardi.
+ */
+const REUSABLE_DEVICE_ID_RE = /^[A-Za-z0-9._:-]{16,128}$/;
+
+export function isReusableDeviceId(value: unknown): value is string {
+  return typeof value === 'string' && REUSABLE_DEVICE_ID_RE.test(value);
+}
+
+/**
  * Refresh tokenlar SHA-256 hex ko'rinishida saqlanadi — baza sizib chiqsa
  * ham ishlaydigan sessiya tokeni oshkor bo'lmaydi. Ochiq qiymat faqat
  * tranzitda/xotirada yashaydi.

@@ -2,14 +2,18 @@ import { createHash } from 'node:crypto';
 import { DataSource } from 'typeorm';
 import { requestContext } from '@app/common';
 import { CreateUserSessions1716000000130 } from '../../../../migrations/1716000000130-CreateUserSessions';
+import { UserSessionsDeviceReuse1716000000140 } from '../../../../migrations/1716000000140-UserSessionsDeviceReuse';
 import { UserSession } from '../entities/user-session.entity';
 import { AuthSessionService } from './auth-session.service';
 
 /**
- * (Elchi Pochta #3) Migratsiya 1716000000130 va AuthSessionService HAQIQIY
- * Postgres'da: UNIQUE hash (legacy poygasi), FK, CHECK, epoch/parol izi
- * filtri, faqat o'z sessiyasini yopish, shartli touch, soatlik tozalash SQL'i,
- * egasi boshqa sessiyalarini yopishi (`UPDATE … RETURNING`) va session_state.
+ * (Elchi Pochta #3) Migratsiyalar 1716000000130 + 1716000000140 va
+ * AuthSessionService HAQIQIY Postgres'da: UNIQUE hash (legacy poygasi), FK,
+ * CHECK, epoch/parol izi filtri, faqat o'z sessiyasini yopish, shartli
+ * touch, soatlik tozalash SQL'i, egasi boshqa sessiyalarini yopishi
+ * (`UPDATE … RETURNING`), session_state; 140: qurilma dedup'i, UNIQUE
+ * (user_id, device_id) WHERE ochiq, qayta ishlatish, poyga, eski kod
+ * trigger'i.
  *
  * Faqat lokal baza (`/elchi_o2_test`):
  *   O2_PG_TEST_URI=postgres://postgres@127.0.0.1:55497/elchi_o2_test
@@ -35,13 +39,30 @@ const sha256 = (value: string) =>
     let db: DataSource;
     let service: AuthSessionService;
     const migration = new CreateUserSessions1716000000130();
+    const deviceMigration = new UserSessionsDeviceReuse1716000000140();
 
-    const run = async (direction: 'up' | 'down' = 'up') => {
+    const runOne = async (
+      target: {
+        up(r: unknown): Promise<void>;
+        down(r: unknown): Promise<void>;
+      },
+      direction: 'up' | 'down',
+    ) => {
       const runner = db.createQueryRunner();
       try {
-        await migration[direction](runner);
+        await target[direction](runner);
       } finally {
         await runner.release();
+      }
+    };
+    /** 130 + 140 (down — teskari tartibda). */
+    const run = async (direction: 'up' | 'down' = 'up') => {
+      if (direction === 'up') {
+        await runOne(migration, 'up');
+        await runOne(deviceMigration, 'up');
+      } else {
+        await runOne(deviceMigration, 'down');
+        await runOne(migration, 'down');
       }
     };
 
@@ -128,6 +149,18 @@ const sha256 = (value: string) =>
         'WHERE (revoked_at IS NULL)',
       );
       expect(byName.IDX_USER_SESSIONS_EXPIRES).toBeDefined();
+      expect(byName.UQ_USER_SESSIONS_USER_DEVICE_OPEN).toContain(
+        'UNIQUE INDEX',
+      );
+      expect(byName.UQ_USER_SESSIONS_USER_DEVICE_OPEN).toContain(
+        '(user_id, device_id) WHERE ((revoked_at IS NULL) AND (device_id IS NOT NULL))',
+      );
+      const [col] = await db.query<Row[]>(
+        `SELECT is_nullable, column_default FROM information_schema.columns
+          WHERE table_schema = 'identity_schema' AND table_name = 'user_sessions'
+            AND column_name = 'last_login_at'`,
+      );
+      expect(col).toEqual({ is_nullable: 'NO', column_default: null });
     });
 
     it('migratsiya qayta yurgizilsa xavfsiz; down/up ishlaydi', async () => {
@@ -221,7 +254,7 @@ const sha256 = (value: string) =>
       ).toEqual([{ n: 0 }]);
     });
 
-    it('⭐ listOwn: faqat o‘ziniki, faollar, last_seen bo‘yicha; epoch / parol izi / yopilgan / muddati o‘tgan chiqmaydi', async () => {
+    it('⭐ listOwn: faqat o‘ziniki; joriy → active → expired; epoch / yopilgan chiqmaydi, parol izi eskirgan — expired', async () => {
       const phone = await open('25', 'tok-phone');
       const laptop = await open('25', 'tok-laptop');
       const closed = await open('25', 'tok-closed');
@@ -236,28 +269,31 @@ const sha256 = (value: string) =>
 
       const list = await service.listOwn(await loadUser('25'), laptop.id);
       expect(list.active_count).toBe(2);
-      expect(list.sessions.map((s) => [s.id, s.current])).toEqual([
-        [phone.id, false],
-        [laptop.id, true],
+      expect(list.sessions.map((s) => [s.id, s.status, s.current])).toEqual([
+        [laptop.id, 'active', true],
+        [phone.id, 'active', false],
+        [expired.id, 'expired', false],
       ]);
 
       // Xavfsizlik hodisasi (epoch) — ro'yxat darhol bo'sh.
       await db.query(
         `UPDATE identity_schema.admins SET session_epoch = session_epoch + 1 WHERE id = 25`,
       );
-      expect(
-        (await service.listOwn(await loadUser('25'), null)).active_count,
-      ).toBe(0);
+      expect(await service.listOwn(await loadUser('25'), null)).toEqual({
+        active_count: 0,
+        sessions: [],
+      });
 
-      // Parol almashsa (epoch'siz ham) — yangi sessiya ko'rinadi, eskisi yo'q.
+      // Parol almashsa (epoch'siz ham) — sessiya «expired» (qayta kirish kerak).
       const fresh = await open('25', 'tok-fresh');
       await db.query(
         `UPDATE identity_schema.admins SET password = 'hash-25-new' WHERE id = 25`,
       );
-      expect(
-        (await service.listOwn(await loadUser('25'), null)).active_count,
-      ).toBe(0);
-      expect(fresh.password_fp).toBeDefined();
+      const afterPassword = await service.listOwn(await loadUser('25'), null);
+      expect(afterPassword.active_count).toBe(0);
+      expect(afterPassword.sessions.map((s) => [s.id, s.status])).toEqual([
+        [fresh.id, 'expired'],
+      ]);
     });
 
     it('revokeOwn: begona foydalanuvchining sessiyasi id yoki hash bilan ham yopilmaydi; touch yopilganini yangilamaydi', async () => {
@@ -380,22 +416,288 @@ const sha256 = (value: string) =>
       ).toEqual([]);
     });
 
-    it('⭐ cleanup: epoch eskirgan ochiq qatorlar security_reset; 30 kundan eski qatorlar o‘chadi; boshqalar tegilmaydi', async () => {
+    // ── 1716000000140: bitta qurilma — bitta sessiya ────────────────────
+    const DEV = 'f3a9c2d1-0b7e-4c55-9e21-7d4c3b2a1f00';
+    const DEV_E = '0c1d2e3f-4a5b-4c6d-8e7f-90a1b2c3d4e5';
+    const onDevice = (deviceId: string, extra: Row = {}) => ({
+      device_id: deviceId,
+      device_name: 'Samsung SM-A515F · Android 13 · Chrome 155',
+      ...extra,
+    });
+    const openOnDevice = async (userId: string, deviceId: string) =>
+      db.query<Row[]>(
+        `SELECT id::text, refresh_token_hash FROM identity_schema.user_sessions
+          WHERE user_id = $1 AND device_id = $2 AND revoked_at IS NULL`,
+        [userId, deviceId],
+      );
+
+    it('⭐ migratsiya 140: last_login_at = created_at; har qurilmaning ochiq dublikatlari merged (eng oxirgi faoli qoladi); indeks; down/up', async () => {
+      await runOne(deviceMigration, 'down');
+      const base = Date.now();
+      const ago = (hours: number) => new Date(base - hours * 3600_000);
+      const insert = (values: Row) =>
+        db.query<Row[]>(
+          `INSERT INTO identity_schema.user_sessions
+             (id, user_id, refresh_token_hash, password_fp, device_id,
+              created_at, last_seen_at, expires_at, revoked_at, revoke_reason)
+           VALUES (gen_random_uuid(), $1, $2, 'fp', $3, $4, $5,
+                   now() + interval '1 day', $6, $7)
+           RETURNING id::text`,
+          [
+            values.user,
+            values.hash,
+            values.device ?? null,
+            values.created ?? ago(24),
+            values.seen ?? ago(1),
+            values.revoked_at ?? null,
+            values.reason ?? null,
+          ],
+        );
+      // r2 va r3 — bir xil last_seen_at; r2 keyinroq yaratilgan → r2 qoladi.
+      const [r1] = await insert({
+        user: 25,
+        hash: 'h1',
+        device: DEV,
+        created: ago(120),
+        seen: ago(3),
+      });
+      const [r2] = await insert({
+        user: 25,
+        hash: 'h2',
+        device: DEV,
+        created: ago(48),
+        seen: ago(1),
+      });
+      const [r3] = await insert({
+        user: 25,
+        hash: 'h3',
+        device: DEV,
+        created: ago(72),
+        seen: ago(1),
+      });
+      const loggedOutAt = new Date('2026-10-20T10:00:00Z');
+      const [r4] = await insert({
+        user: 25,
+        hash: 'h4',
+        device: DEV,
+        revoked_at: loggedOutAt,
+        reason: 'logout',
+      });
+      const [n1] = await insert({ user: 25, hash: 'n1' });
+      const [n2] = await insert({ user: 25, hash: 'n2' });
+      const [o1] = await insert({ user: 26, hash: 'o1', device: DEV });
+      const [e1] = await insert({ user: 25, hash: 'e1', device: DEV_E });
+
+      await runOne(deviceMigration, 'up');
+
+      const rows = await db.query<Row[]>(
+        `SELECT id::text, revoke_reason, revoked_at,
+                last_login_at = created_at AS backfilled
+           FROM identity_schema.user_sessions`,
+      );
+      const byId = new Map(rows.map((r) => [String(r.id), r]));
+      expect(rows.every((r) => r.backfilled === true)).toBe(true);
+      expect(byId.get(r2.id as string)).toMatchObject({
+        revoke_reason: null,
+        revoked_at: null,
+      });
+      for (const merged of [r1, r3]) {
+        const row = byId.get(merged.id as string)!;
+        expect(row.revoke_reason).toBe('merged');
+        expect(row.revoked_at).toBeInstanceOf(Date);
+      }
+      expect(byId.get(r4.id as string)).toMatchObject({
+        revoke_reason: 'logout',
+        revoked_at: loggedOutAt,
+      });
+      for (const untouched of [n1, n2, o1, e1]) {
+        expect(byId.get(untouched.id as string)).toMatchObject({
+          revoke_reason: null,
+        });
+      }
+
+      // Indeks: qurilmada ikkinchi ochiq qator — 23505.
+      await expect(
+        db.query(
+          `INSERT INTO identity_schema.user_sessions
+             (id, user_id, refresh_token_hash, password_fp, device_id, expires_at, last_login_at)
+           VALUES (gen_random_uuid(), 25, 'dup', 'fp', $1, now(), now())`,
+          [DEV],
+        ),
+      ).rejects.toThrow(/UQ_USER_SESSIONS_USER_DEVICE_OPEN/);
+
+      // Qayta ishlatish: o'sha qurilma kirsa — r2 yangilanadi.
+      const reused = await open('25', 'tok-again', onDevice(DEV));
+      expect(reused.id).toBe(r2.id);
+      expect(await openOnDevice('25', DEV)).toEqual([
+        { id: r2.id, refresh_token_hash: sha256('tok-again') },
+      ]);
+
+      // down: indeks / trigger / ustun yo'q; merged qatorlar yopiqligicha.
+      await runOne(deviceMigration, 'down');
+      expect(
+        await db.query<Row[]>(
+          `SELECT indexname FROM pg_indexes WHERE indexname = 'UQ_USER_SESSIONS_USER_DEVICE_OPEN'`,
+        ),
+      ).toEqual([]);
+      expect(
+        await db.query<Row[]>(
+          `SELECT revoke_reason FROM identity_schema.user_sessions WHERE id = ANY($1) ORDER BY 1`,
+          [[r1.id, r3.id]],
+        ),
+      ).toEqual([{ revoke_reason: 'merged' }, { revoke_reason: 'merged' }]);
+      // Qayta up — xatosiz (dublikat yo'q).
+      await runOne(deviceMigration, 'up');
+      await runOne(deviceMigration, 'up');
+    });
+
+    it('⭐ eski kod (last_login_at siz INSERT, deploy/rollback oynasi) — 23505 YO‘Q: trigger qurilmaning avvalgi ochiq qatorini merged qiladi', async () => {
+      const live = await open('25', 'tok-live', onDevice(DEV));
+      const [legacyInsert] = await db.query<Row[]>(
+        `INSERT INTO identity_schema.user_sessions
+           (id, user_id, refresh_token_hash, password_fp, device_id, expires_at)
+         VALUES (gen_random_uuid(), 25, 'old-code', 'fp', $1, now() + interval '1 day')
+         RETURNING id::text, last_login_at = created_at AS filled`,
+        [DEV],
+      );
+      expect(legacyInsert.filled).toBe(true);
+      const [old] = await db.query<Row[]>(
+        `SELECT revoke_reason FROM identity_schema.user_sessions WHERE id = $1`,
+        [live.id],
+      );
+      expect(old.revoke_reason).toBe('merged');
+      expect(await openOnDevice('25', DEV)).toEqual([
+        { id: legacyInsert.id, refresh_token_hash: 'old-code' },
+      ]);
+      // Yangi kod last_login_at ni yozadi — trigger ishlamaydi (boshqa qurilma qatori tegilmaydi).
+      const other = await open('25', 'tok-e', onDevice(DEV_E));
+      await open('25', 'tok-e2', onDevice(DEV_E));
+      expect(await openOnDevice('25', DEV_E)).toEqual([
+        { id: other.id, refresh_token_hash: sha256('tok-e2') },
+      ]);
+    });
+
+    it('⭐ qayta ishlatish (pg): muddati o‘tgan qator — AYNI id, created_at saqlanadi; logout qilingani — yangi qator', async () => {
+      const first = await open(
+        '25',
+        'tok-1',
+        onDevice(DEV, { ip: '203.0.113.7' }),
+      );
+      await db.query(
+        `UPDATE identity_schema.user_sessions
+            SET expires_at = now() - interval '1 hour',
+                created_at = now() - interval '3 days',
+                last_login_at = now() - interval '3 days'
+          WHERE id = $1`,
+        [first.id],
+      );
+      const again = await open(
+        '25',
+        'tok-2',
+        onDevice(DEV, { ip: '198.51.100.9' }),
+      );
+      expect(again.id).toBe(first.id);
+      const [row] = await db.query<Row[]>(
+        `SELECT refresh_token_hash, ip, expires_at > now() AS live,
+                created_at < now() - interval '2 days' AS kept_first_login,
+                last_login_at > now() - interval '1 minute' AS fresh_login
+           FROM identity_schema.user_sessions WHERE id = $1`,
+        [first.id],
+      );
+      expect(row).toEqual({
+        refresh_token_hash: sha256('tok-2'),
+        ip: '198.51.100.9',
+        live: true,
+        kept_first_login: true,
+        fresh_login: true,
+      });
+      expect(await service.findByHash(sha256('tok-1'))).toBeNull();
+
+      await service.revokeOwn('25', { sessionId: first.id }, 'logout');
+      const third = await open('25', 'tok-3', onDevice(DEV));
+      expect(third.id).not.toBe(first.id);
+      expect(await openOnDevice('25', DEV)).toEqual([
+        { id: third.id, refresh_token_hash: sha256('tok-3') },
+      ]);
+    });
+
+    it('⭐ poyga (pg): bir qurilmadan 5 ta parallel login — bitta ochiq qator, hammasi bitta id', async () => {
+      const results = await Promise.all(
+        [1, 2, 3, 4, 5].map((n) => open('25', `tok-race-${n}`, onDevice(DEV))),
+      );
+      expect(new Set(results.map((r) => r.id)).size).toBe(1);
+      const open25 = await openOnDevice('25', DEV);
+      expect(open25).toHaveLength(1);
+      expect(open25[0].id).toBe(results[0].id);
+      expect([1, 2, 3, 4, 5].map((n) => sha256(`tok-race-${n}`))).toContain(
+        open25[0].refresh_token_hash,
+      );
+      // Boshqa foydalanuvchi AYNI device_id — alohida qator.
+      const theirs = await open('26', 'tok-26', onDevice(DEV));
+      expect(theirs.id).not.toBe(results[0].id);
+      expect(await openOnDevice('26', DEV)).toHaveLength(1);
+    });
+
+    it('epoch eskirgan ochiq qator (pg) — security_reset bilan yopiladi, yangi qator ochiladi (indeks to‘sqinlik qilmaydi)', async () => {
+      const before = await open('25', 'tok-before', onDevice(DEV));
+      await db.query(
+        `UPDATE identity_schema.admins SET session_epoch = session_epoch + 1 WHERE id = 25`,
+      );
+      const after = await open('25', 'tok-after', onDevice(DEV));
+      expect(after.id).not.toBe(before.id);
+      const [old] = await db.query<Row[]>(
+        `SELECT revoke_reason FROM identity_schema.user_sessions WHERE id = $1`,
+        [before.id],
+      );
+      expect(old.revoke_reason).toBe('security_reset');
+      expect(await openOnDevice('25', DEV)).toEqual([
+        { id: after.id, refresh_token_hash: sha256('tok-after') },
+      ]);
+    });
+
+    it('adoptLegacy (pg): qurilmada ochiq qator bor — 23505 yutiladi, o‘sha qator qaytadi', async () => {
+      const live = await open('25', 'tok-live', onDevice(DEV));
+      const adopted = await requestContext.run(
+        { traceId: 't', ...onDevice(DEV) },
+        async () =>
+          service.adoptLegacy({
+            user: await loadUser('25'),
+            refreshToken: 'legacy-25',
+            expiresAt: new Date(Date.now() + DAY),
+          }),
+      );
+      expect(adopted?.id).toBe(live.id);
+      expect(
+        await db.query<Row[]>(
+          'SELECT count(*)::int AS n FROM identity_schema.user_sessions',
+        ),
+      ).toEqual([{ n: 1 }]);
+    });
+
+    it('⭐ cleanup: epoch eskirgan ochiq qatorlar (muddati o‘tgani ham) security_reset; 90 kundan eski qatorlar o‘chadi; boshqalar tegilmaydi', async () => {
       const keep = await open('26', 'tok-keep');
       const reset = await open('25', 'tok-reset');
+      const resetExpired = await open('25', 'tok-reset-expired');
+      const month = await open('26', 'tok-month');
       const ancient = await open('26', 'tok-ancient');
       await db.query(
         `UPDATE identity_schema.user_sessions
-            SET expires_at = now() - interval '31 days', created_at = now() - interval '32 days'
+            SET expires_at = now() - interval '91 days', created_at = now() - interval '92 days'
           WHERE id = $1`,
         [ancient.id],
+      );
+      await db.query(
+        `UPDATE identity_schema.user_sessions
+            SET expires_at = now() - interval '31 days', created_at = now() - interval '32 days'
+          WHERE id = ANY($1)`,
+        [[month.id, resetExpired.id]],
       );
       await db.query(
         `UPDATE identity_schema.admins SET session_epoch = 1 WHERE id = 25`,
       );
 
       expect(await service.cleanup(new Date())).toEqual({
-        reset: 1,
+        reset: 2,
         deleted: 1,
       });
       const rows = await db.query<Row[]>(
@@ -404,10 +706,12 @@ const sha256 = (value: string) =>
       expect(rows).toEqual(
         expect.arrayContaining([
           { id: keep.id, revoke_reason: null },
+          { id: month.id, revoke_reason: null },
           { id: reset.id, revoke_reason: 'security_reset' },
+          { id: resetExpired.id, revoke_reason: 'security_reset' },
         ]),
       );
-      expect(rows).toHaveLength(2);
+      expect(rows).toHaveLength(4);
       // Ikkinchi marta — hech narsa (idempotent).
       expect(await service.cleanup(new Date())).toEqual({
         reset: 0,

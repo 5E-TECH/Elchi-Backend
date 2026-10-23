@@ -190,8 +190,11 @@ export class AuthService {
    * Tasdiqlangan foydalanuvchiga sessiya (token juftligi). Parol login'i va
    * OTP login'i (OtpService) shu bitta yo'ldan o'tadi.
    *
-   * (Elchi Pochta #3) Har login `user_sessions` da YANGI qator ochadi —
-   * foydalanuvchining boshqa qurilmalaridagi sessiyalar endi YOPILMAYDI.
+   * (Elchi Pochta #3) Login `user_sessions` da sessiya ochadi —
+   * foydalanuvchining boshqa qurilmalaridagi sessiyalar YOPILMAYDI. Shu
+   * qurilma (`X-Device-Id`) sessiyasi aniq yopilmagan bo'lsa (masalan,
+   * refresh muddati o'tgan) — yangi qator emas, o'sha sessiya yangilanadi
+   * (`AuthSessionService.open`).
    */
   async sessionForUser(user: User, method: 'password' | 'otp' = 'password') {
     const tokens = await this.issueTokens(user, method);
@@ -538,8 +541,9 @@ export class AuthService {
   }
 
   /**
-   * (Elchi Pochta #3) `GET /auth/sessions` — akkaunt egasining O'Z faol
-   * sessiyalari: soni, qurilma/IP, login va oxirgi faollik vaqti, joriy
+   * (Elchi Pochta #3) `GET /auth/sessions` — akkaunt egasining O'Z ochiq
+   * sessiyalari: faollar soni, qurilma/IP, birinchi va oxirgi login, oxirgi
+   * faollik, holat (`active` / `expired` — «Qayta kirish kerak»), joriy
    * sessiya belgisi. Boshqa foydalanuvchilar yoki tizim bo'yicha umumiy
    * son/ro'yxat qaytmaydi — `userId` faqat gateway'dagi JWT `sub` dan.
    */
