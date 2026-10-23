@@ -21,6 +21,7 @@ import {
   ApiBearerAuth,
   ApiBody,
   ApiCreatedResponse,
+  ApiForbiddenResponse,
   ApiNotFoundResponse,
   ApiOkResponse,
   ApiOperation,
@@ -84,6 +85,7 @@ const AUTH_THROTTLES = authThrottleConfig();
 export const AUTH_THROTTLE = AUTH_THROTTLES.login;
 export const AUTH_REFRESH_THROTTLE = AUTH_THROTTLES.refresh;
 import {
+  AuthSessionTooNewErrorResponseDto,
   AuthSessionsErrorResponseDto,
   AuthSessionsResponseDto,
   AuthSessionsRevokeResponseDto,
@@ -472,7 +474,7 @@ export class AuthGatewayController {
     summary:
       'Own sessions (one per device) of the current account: active count, device, IP, first/last login, last-seen, status, current flag',
     description:
-      "Ochiq sessiyalar: `status: 'active'` (ishlayapti) yoki `'expired'` (refresh muddati o'tgan / parol almashgan — «Qayta kirish kerak»; shu qurilmadan login AYNI sessiyani tiklaydi). Tartib: joriy → active → expired (oxirgi faollik bo'yicha). `active_count` — faqat active lar. Muddati 90 kundan ko'p oldin o'tgan sessiyalar o'chiriladi.",
+      "Ochiq sessiyalar: `status: 'active'` (ishlayapti) yoki `'expired'` (refresh muddati o'tgan / parol almashgan — «Qayta kirish kerak»; shu qurilmadan login AYNI sessiyani tiklaydi). Tartib: joriy → active → expired (oxirgi faollik bo'yicha). `active_count` — faqat active lar. Muddati 90 kundan ko'p oldin o'tgan sessiyalar o'chiriladi. (2026-10-23) `can_revoke_others` / `revoke_available_at` — joriy sessiya boshqalarni yopa oladimi va qachondan (48 soatlik qulf).",
   })
   @ApiOkResponse({ type: AuthSessionsResponseDto })
   @ApiUnauthorizedResponse({ description: 'Unauthorized' })
@@ -491,7 +493,8 @@ export class AuthGatewayController {
    * (JWT `sid`) boshqa BARCHA sessiyalar yopiladi; joriy qurilma ishlashda
    * davom etadi. Har qanday autentifikatsiyadan o'tgan rol, kim — faqat JWT
    * `sub`. Yopilgan qurilmalarning access tokeni darhol 401 (shu gateway
-   * keshi), refresh ham 401 — ular login sahifasiga chiqadi.
+   * keshi), refresh ham 401 — ular login sahifasiga chiqadi. (2026-10-23)
+   * 48 soatdan yosh sessiya → 403 SESSION_TOO_NEW (identity qaror qiladi).
    */
   @Post('sessions/revoke-others')
   @HttpCode(200)
@@ -501,12 +504,17 @@ export class AuthGatewayController {
     summary:
       'Log out all OTHER sessions of the current account (the current one stays)',
     description:
-      "Javob: `data = { revoked, session_ids }` (0 ham bo'lishi mumkin). `sid` siz token (Telegram / eski) → 400 «Joriy sessiya aniqlanmadi — qayta kiring».",
+      "Javob: `data = { revoked, session_ids }` (0 ham bo'lishi mumkin). `sid` siz token (Telegram / eski) → 400 «Joriy sessiya aniqlanmadi — qayta kiring». (2026-10-23) Joriy sessiya shu qurilmadan birinchi kirilganiga 48 soat to'lmagan → 403 `code: 'SESSION_TOO_NEW'` + `available_at` (hech narsa yopilmaydi).",
   })
   @ApiOkResponse({ type: AuthSessionsRevokeResponseDto })
   @ApiBadRequestResponse({
     description: 'Joriy sessiya aniqlanmadi — qayta kiring',
     type: AuthSessionsErrorResponseDto,
+  })
+  @ApiForbiddenResponse({
+    description:
+      'SESSION_TOO_NEW — joriy sessiya 48 soatdan yosh, boshqa sessiyalarni yopa olmaydi',
+    type: AuthSessionTooNewErrorResponseDto,
   })
   @ApiUnauthorizedResponse({ description: 'Unauthorized / Session revoked' })
   async revokeOtherSessions(@Req() req: { user: JwtUser }) {
@@ -538,12 +546,17 @@ export class AuthGatewayController {
   @ApiOperation({
     summary: 'Log out one of my other sessions (another device)',
     description:
-      "Javob: `data = { revoked: 1, session_ids: [id] }`. 400 — id UUID emas («Sessiya identifikatori noto'g'ri») yoki joriy sessiya («Joriy sessiyani bu yerdan yopib bo'lmaydi — «Chiqish» tugmasidan foydalaning»); 404 — «Sessiya topilmadi yoki allaqachon yopilgan».",
+      "Javob: `data = { revoked: 1, session_ids: [id] }`. 400 — id UUID emas («Sessiya identifikatori noto'g'ri»), joriy sessiya («Joriy sessiyani bu yerdan yopib bo'lmaydi — «Chiqish» tugmasidan foydalaning») yoki `sid` siz token («Joriy sessiya aniqlanmadi — qayta kiring»); 403 `SESSION_TOO_NEW` — joriy sessiya 48 soatdan yosh (nishon eski yoki yangi bo'lishidan qat'i nazar; `available_at` — qachondan mumkin); 404 — «Sessiya topilmadi yoki allaqachon yopilgan».",
   })
   @ApiOkResponse({ type: AuthSessionsRevokeResponseDto })
   @ApiBadRequestResponse({
-    description: "Noto'g'ri id yoki joriy sessiya",
+    description: "Noto'g'ri id, joriy sessiya yoki `sid` siz token",
     type: AuthSessionsErrorResponseDto,
+  })
+  @ApiForbiddenResponse({
+    description:
+      'SESSION_TOO_NEW — joriy sessiya 48 soatdan yosh, boshqa sessiyalarni yopa olmaydi',
+    type: AuthSessionTooNewErrorResponseDto,
   })
   @ApiNotFoundResponse({
     description: 'Sessiya topilmadi yoki allaqachon yopilgan',
