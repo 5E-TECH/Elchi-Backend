@@ -97,7 +97,8 @@ npm run db:reconcile          # cashbox money-conservation invariant check
 Migrations live in `migrations/` and run against `order_schema`'s datasource
 (cross-schema DDL is fully qualified). Backups: daily at 05:00 Asia/Tashkent
 into `backups/daily/` (newest 7, `db-backup` sidecar) and before every deploy
-into `backups/pre-deploy/` (newest 5) — list/restore runbook:
+into `backups/pre-deploy/` (newest 5); hourly off-site copies to Cloudflare R2
+(`backup-offsite` sidecar, 30 days) — list/restore runbook:
 `docs/ops/db-backups.md`.
 
 ## Deployment
