@@ -45,6 +45,7 @@ export * from './security/ssrf';
 
 export * from './filters/rpc-exception.filter';
 export * from './filters/all-exceptions.filter';
+export * from './filters/public-error-fields';
 
 export * from './logger/app-logger.module';
 

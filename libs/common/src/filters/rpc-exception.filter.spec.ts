@@ -1,5 +1,7 @@
+import type { ArgumentsHost } from '@nestjs/common';
 import { RpcException } from '@nestjs/microservices';
 import { RpcExceptionFilter } from './rpc-exception.filter';
+import { SESSION_TOO_NEW } from './public-error-fields';
 
 function makeHost() {
   const json = jest.fn();
@@ -40,5 +42,28 @@ describe('RpcExceptionFilter', () => {
     expect(json).toHaveBeenCalledWith(
       expect.objectContaining({ statusCode: 500, message: 'boom' }),
     );
+  });
+
+  it('(Elchi Pochta #3) ro‘yxatdagi mashina kodi va maydoni o‘tadi, boshqasi yo‘q', () => {
+    const h = makeHost();
+
+    new RpcExceptionFilter().catch(
+      new RpcException({
+        statusCode: 403,
+        message: 'Yangi qurilma',
+        data: null,
+        code: SESSION_TOO_NEW,
+        available_at: '2026-10-25T07:00:00.000Z',
+        internal: 'yashirin',
+      }),
+      h.host as ArgumentsHost,
+    );
+
+    expect(h.json).toHaveBeenCalledWith({
+      statusCode: 403,
+      message: 'Yangi qurilma',
+      code: SESSION_TOO_NEW,
+      available_at: '2026-10-25T07:00:00.000Z',
+    });
   });
 });

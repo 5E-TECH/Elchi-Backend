@@ -9,6 +9,7 @@ import {
 import { Response } from 'express';
 import { captureException } from '../sentry/sentry.helper';
 import { requestContext } from '../context/request-context';
+import { publicErrorFields } from './public-error-fields';
 
 @Catch()
 export class AllExceptionsFilter implements ExceptionFilter {
@@ -93,6 +94,13 @@ export class AllExceptionsFilter implements ExceptionFilter {
       message = 'Yuqori oqim xizmati vaqtida javob bermadi (timeout)';
     }
 
+    // (Elchi Pochta #3) Ro'yxatdagi mashina kodi (`SESSION_TOO_NEW` …) va
+    // uning maydonlari — `public-error-fields.ts`; boshqa xatoda bo'sh.
+    const extras =
+      exception instanceof HttpException
+        ? publicErrorFields(exception.getResponse())
+        : publicErrorFields(exception);
+
     const traceId = requestContext.get()?.traceId;
 
     // Structured 5xx log (Audit observability P1: the filter only sent to Sentry
@@ -109,6 +117,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
     response.status(status).json({
       statusCode: status,
       message,
+      ...extras,
       ...(traceId ? { trace_id: traceId } : {}),
     });
   }
