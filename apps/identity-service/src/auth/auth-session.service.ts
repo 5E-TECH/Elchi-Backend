@@ -93,6 +93,29 @@ export interface OwnSessionsList {
 const isUniqueViolation = (error: unknown): boolean =>
   (error as { code?: string })?.code === '23505';
 
+/** `UPDATE … RETURNING "id"` natijasidagi id lar (kichik harf). */
+function returnedIds(result: unknown): string[] {
+  // Postgres drayveri UPDATE uchun `[rows, rowCount]` qaytaradi.
+  const rows =
+    Array.isArray(result) && Array.isArray(result[0])
+      ? (result[0] as Array<{ id?: unknown }>)
+      : [];
+  return rows
+    .map((row) => (typeof row.id === 'string' ? row.id.toLowerCase() : ''))
+    .filter(Boolean);
+}
+
+/**
+ * Parol almashgandan keyingi natija (`afterPasswordChange`): yopilgan
+ * sessiyalar va joriy sessiya saqlandimi.
+ */
+export interface PasswordChangeSessions {
+  /** `password_changed` bilan HOZIR yopilgan sessiyalar (gateway keshi uchun). */
+  session_ids: string[];
+  /** Saqlangan (parol izi yangilangan) joriy sessiya; yo'q bo'lsa `null`. */
+  kept_session_id: string | null;
+}
+
 /**
  * (Elchi Pochta #3 — "Sessionlar bo'limi") Har QURILMA uchun bitta sessiya
  * (qurilma ID siz — har login uchun alohida): ochish yoki shu qurilmaning
@@ -443,14 +466,88 @@ export class AuthSessionService {
       RETURNING "id"`,
       [now, reason, String(userId), keepSessionId.toLowerCase()],
     );
-    // Postgres drayveri UPDATE uchun `[rows, rowCount]` qaytaradi.
-    const rows =
-      Array.isArray(result) && Array.isArray(result[0])
-        ? (result[0] as Array<{ id?: unknown }>)
-        : [];
-    return rows
-      .map((row) => (typeof row.id === 'string' ? row.id.toLowerCase() : ''))
-      .filter(Boolean);
+    return returnedIds(result);
+  }
+
+  /**
+   * Foydalanuvchining BARCHA ochiq sessiyalari (muddati o'tgan / epoch'i
+   * eskirganlari ham) — bitta atomar `UPDATE … RETURNING`. Admin parolni
+   * tiklaganda: qatorlar darhol yopiladi, gateway `session_state` ham
+   * `active: false` qaytaradi (faqat epoch oshirish access tokenni 1 soatgacha
+   * tirik qoldirardi).
+   */
+  async revokeAllOpen(
+    userId: string,
+    reason: UserSessionRevokeReason,
+    now = new Date(),
+  ): Promise<string[]> {
+    if (!/^\d+$/.test(String(userId))) return [];
+    const result: unknown = await this.sessions.query(
+      `UPDATE "identity_schema"."user_sessions"
+          SET "revoked_at" = $1, "revoke_reason" = $2
+        WHERE "user_id" = $3
+          AND "revoked_at" IS NULL
+      RETURNING "id"`,
+      [now, reason, String(userId)],
+    );
+    return returnedIds(result);
+  }
+
+  /**
+   * (2026-10-23) Parol almashdi — sessiyalar DARHOL yopiladi (48 soatlik
+   * qulfga bog'liq emas, bu yangi qurilma egasining «qochish yo'li»):
+   *
+   *  - `keepSessionId` (o'zi, `sid` li sessiyadan almashtirdi): avval joriy
+   *    sessiyaning parol izi YANGI parolga yoziladi (aks holda keyingi
+   *    refresh `password_changed` bilan rad etilib, joriy qurilma ham
+   *    chiqib ketardi), keyin joriydan BOSHQA hammasi `password_changed`
+   *    bilan yopiladi. Shart: qator SHU foydalanuvchiniki, ochiq va epoch'i
+   *    joriy — aks holda (yopilgan / eskirgan) saqlanadigan sessiya yo'q →
+   *    hammasi yopiladi;
+   *  - `keepSessionId` yo'q (admin/menejer boshqa foydalanuvchi parolini
+   *    tikladi, yoki `sid` siz token) — HAMMASI yopiladi.
+   *
+   * `user` — SAQLANGAN (yangi parol hashi bilan) foydalanuvchi. Yopilmay
+   * qolgan qator bo'lsa ham (masalan, shu orada ochilgan) uning parol izi
+   * eski — refresh baribir rad etadi.
+   */
+  async afterPasswordChange(input: {
+    user: Pick<User, 'id' | 'password' | 'session_epoch'>;
+    keepSessionId?: string | null;
+    now?: Date;
+  }): Promise<PasswordChangeSessions> {
+    const now = input.now ?? new Date();
+    const userId = String(input.user.id);
+    const keep = isSessionId(input.keepSessionId)
+      ? input.keepSessionId.toLowerCase()
+      : null;
+
+    if (keep) {
+      const rebound = await this.sessions.update(
+        {
+          id: keep,
+          user_id: userId,
+          revoked_at: IsNull(),
+          epoch: Number(input.user.session_epoch) || 0,
+        },
+        { password_fp: passwordFingerprint(input.user.password) },
+      );
+      if ((rebound.affected ?? 0) > 0) {
+        return {
+          session_ids: await this.revokeOwnExcept(
+            userId,
+            keep,
+            'password_changed',
+            now,
+          ),
+          kept_session_id: keep,
+        };
+      }
+    }
+    return {
+      session_ids: await this.revokeAllOpen(userId, 'password_changed', now),
+      kept_session_id: null,
+    };
   }
 
   /**
@@ -461,18 +558,30 @@ export class AuthSessionService {
    * muddat bu yerda TEKSHIRILMAYDI: ular avvalgidek refresh paytida.
    */
   async isOpen(userId: string, sessionId: string): Promise<boolean> {
+    return (await this.findOpen(userId, sessionId)) !== null;
+  }
+
+  /**
+   * `isOpen` bilan bir xil shart (bitta PK qidiruvi), lekin qatorning
+   * `created_at` i ham qaytadi — sessiyalarni boshqarishda 48 soatlik qulf
+   * shu bo'yicha (`sessionRevokeLock`).
+   */
+  async findOpen(
+    userId: string,
+    sessionId: string,
+  ): Promise<Pick<UserSession, 'id' | 'created_at'> | null> {
     if (!/^\d+$/.test(String(userId)) || !isSessionId(sessionId)) {
-      return false;
+      return null;
     }
     const row = await this.sessions.findOne({
-      select: ['id'],
+      select: ['id', 'created_at'],
       where: {
         id: sessionId.toLowerCase(),
         user_id: String(userId),
         revoked_at: IsNull(),
       },
     });
-    return row !== null;
+    return row ? { id: row.id, created_at: row.created_at } : null;
   }
 
   /**

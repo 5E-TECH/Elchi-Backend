@@ -188,6 +188,9 @@ export const identityValidationSchema = Joi.object({
     'JWT refresh-token signing key. A weak key allows minting refresh tokens (persistent account takeover).',
   ),
   REFRESH_TOKEN_TIME: Joi.string().default('1d'),
+  // (Elchi Pochta #3, 2026-10-23) Yaratilganiga shuncha soat to'lmagan
+  // sessiya boshqa sessiyalarni yopa olmaydi (403 SESSION_TOO_NEW); 0 — o'chiq.
+  SESSION_REVOKE_LOCK_HOURS: Joi.number().min(0).max(8760).default(48),
   RABBITMQ_URI: Joi.string().required(),
   RABBITMQ_IDENTITY_QUEUE: Joi.string().required(),
   RABBITMQ_LOGISTICS_QUEUE: Joi.string().required(),
