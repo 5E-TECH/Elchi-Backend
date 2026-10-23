@@ -102,6 +102,7 @@ jobs:
             DEPLOY_ALL=false
             RUN_MIGRATIONS=false
             BACKUP_SIDECAR_RECREATE=false
+            BACKUP_OFFSITE_RECREATE=false
 
             if [ -z "$OLD_SHA" ]; then
               DEPLOY_ALL=true
@@ -119,6 +120,10 @@ jobs:
               # loop, so a script change only takes effect after a recreate.
               if grep -Eq '^scripts/backup-(cron|db)\.sh$' /tmp/elchi-changed-files; then
                 BACKUP_SIDECAR_RECREATE=true
+              fi
+              # Same for the off-site (R2) copier's loop script.
+              if grep -Eq '^scripts/backup-offsite\.sh$' /tmp/elchi-changed-files; then
+                BACKUP_OFFSITE_RECREATE=true
               fi
               for service in $APP_SERVICES; do
                 if grep -q "^apps/$service/" /tmp/elchi-changed-files; then
@@ -246,6 +251,20 @@ jobs:
             DB_BACKUP_STATE="$(docker inspect -f '{{.State.Status}} {{.RestartCount}}' "$DB_BACKUP_CID" 2>/dev/null || echo none)"
             [ -n "$DB_BACKUP_CID" ] && [ "$DB_BACKUP_STATE" = "running $DB_BACKUP_R1" ] || DB_BACKUP_SIDECAR_OK=false
             docker compose -f docker-compose.prod.yml logs --tail 20 db-backup || true
+
+            # --- Off-site copies -> Cloudflare R2 (backup-offsite) --------------
+            # Started on EVERY deploy like db-backup: `up -d` creates it on the
+            # first deploy and recreates it by itself when its compose definition
+            # (or .env.production) changed; a change to its script forces a
+            # recreate. It is NOT a gate: nothing waits for its health, and a
+            # problem here only prints a warning — never a rollback, never a red
+            # job (without R2 keys it just logs «R2 sozlanmagan» and stays up).
+            if [ "$BACKUP_OFFSITE_RECREATE" = true ]; then
+              docker compose -f docker-compose.prod.yml up -d --no-deps --force-recreate backup-offsite || echo "WARNING: backup-offsite (R2 off-site copies) did not start — deploy continues; see docs/ops/db-backups.md" >&2
+            else
+              docker compose -f docker-compose.prod.yml up -d --no-deps backup-offsite || echo "WARNING: backup-offsite (R2 off-site copies) did not start — deploy continues; see docs/ops/db-backups.md" >&2
+            fi
+            docker compose -f docker-compose.prod.yml logs --tail 5 backup-offsite || true
 
             docker compose -f docker-compose.prod.yml ps
 
