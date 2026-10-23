@@ -48,6 +48,12 @@ export interface UpdateUserPayload {
   id: string;
   dto: UpdateUserDto;
   requester?: RequesterContext;
+  /**
+   * (Elchi Pochta #3, 2026-10-23) So'rov yuborgan sessiya — gateway JWT
+   * `sid` i (`PATCH /auth/my-profile`, `PATCH /users/:id`). Parolni o'zi
+   * almashtirsa shu sessiya qoladi, qolganlari darhol yopiladi.
+   */
+  current_session_id?: string | null;
 }
 
 export interface DeleteUserPayload {

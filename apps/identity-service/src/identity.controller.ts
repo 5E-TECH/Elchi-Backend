@@ -332,7 +332,9 @@ export class IdentityController {
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
-      this.userService.updateUser(payload.id, payload.dto, payload.requester),
+      this.userService.updateUser(payload.id, payload.dto, payload.requester, {
+        currentSessionId: payload.current_session_id ?? null,
+      }),
     );
   }
 

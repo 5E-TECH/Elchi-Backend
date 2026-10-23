@@ -325,4 +325,19 @@ export const ActivityDescribeUz = {
       ? 'Boshqa qurilmadagi sessiya yopildi'
       : `Boshqa sessiyalardan chiqildi: ${Math.max(0, Math.trunc(Number(count) || 0))} ta`;
   },
+
+  /**
+   * (Elchi Pochta #3, 2026-10-23) Parol almashtirildi va sessiyalar darhol
+   * yopildi: o'zi almashtirsa — joriy qoladi ("boshqa sessiyalar"), admin
+   * tiklasa — "barcha sessiyalar". Faqat son.
+   */
+  sessionsRevokedByPasswordChange(
+    kept: 'current' | 'none',
+    count: number,
+  ): string {
+    const n = Math.max(0, Math.trunc(Number(count) || 0));
+    return kept === 'current'
+      ? `Parol almashtirildi — boshqa sessiyalar yopildi: ${n} ta`
+      : `Parol almashtirildi — barcha sessiyalar yopildi: ${n} ta`;
+  },
 } as const;
