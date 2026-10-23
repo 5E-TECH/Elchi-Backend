@@ -20300,7 +20300,7 @@
               "cancelled_sent"
             ],
             "example": "waiting",
-            "description": "Rollback target status. Default: 'waiting'"
+            "description": "Rollback target status. Default: 'waiting'. 'cancelled' — sold / paid / partly_paid / closed buyurtmani «Bekor qilingan» ga qaytaradi (sotuv kassa oyoqlari va foydasi 'waiting' dagidek teskari yoziladi). 'cancelled_sent' — faqat kuryer."
           }
         }
       },

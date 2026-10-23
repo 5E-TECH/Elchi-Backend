@@ -53,6 +53,7 @@ import {
 import type { EntityManager } from 'typeorm';
 import { successRes } from '../../../../libs/common/helpers/response';
 import {
+  isValidRollbackStatusTransition,
   isValidStatusTransition as isValidOrderStatusTransition,
   mapInitialStatusForTracking as mapInitialOrderStatusForTracking,
 } from '../domain/order-status.machine';
@@ -2365,7 +2366,7 @@ export class OrderLifecycleService {
    * On entering a sold state (SOLD/PAID/PARTLY_PAID):
    *   - operator commission earning (only if the order has an operator)
    *   - SELL_PROFIT ledger entry (market_tariff - courier_tariff), always
-   * On rollback to WAITING:
+   * On rollback to WAITING (or, y2RarzlT, rollback to CANCELLED):
    *   - operator earning removal
    *
    * finance-service dedupes on (source_type, order_id, dedup_key), so
@@ -2395,8 +2396,13 @@ export class OrderLifecycleService {
     ];
     const enteredSold =
       soldStates.includes(order.status) && !soldStates.includes(oldStatus);
+    // y2RarzlT: rollback «Bekor qilish» (sold-holat → CANCELLED) ham sotuvdan
+    // chiqish — foyda va operator ulushi WAITING dagidek qaytariladi. Bu
+    // o'tish faqat rollback yo'lida mavjud (`isValidRollbackStatusTransition`).
     const leftSold =
-      order.status === Order_status.WAITING && soldStates.includes(oldStatus);
+      (order.status === Order_status.WAITING ||
+        order.status === Order_status.CANCELLED) &&
+      soldStates.includes(oldStatus);
 
     if (enteredSold) {
       if (order.operator_id) {
@@ -3499,6 +3505,16 @@ export class OrderLifecycleService {
             // `cancelOrder` bilan bir xil: bekor qilingan buyurtmada marketga
             // qarz yo'q (pLmAsEsj).
             to_be_paid: 0,
+            // y2RarzlT: sotuv oyoqlari yuqorida teskari yozildi — WAITING ga
+            // qaytarishdagidek sotuv snapshoti (yig'ilgan naqd) va HQ marketga
+            // to'lagan summa tozalanadi; aks holda bekor buyurtmada eski
+            // sotuv summasi qolib, keyingi sotuv/rollback uni qayta ishlatardi.
+            ...(reverseSaleLegs ? { sale_collectible_amount: null } : {}),
+            ...([Order_status.PAID, Order_status.PARTLY_PAID].includes(
+              originalStatus,
+            )
+              ? { paid_amount: 0 }
+              : {}),
             ...extraCostReset,
             ...saleMarketPaidReset,
           },
@@ -3509,6 +3525,9 @@ export class OrderLifecycleService {
             audit: false,
           },
           tx,
+          // y2RarzlT: sold/paid/partly_paid/closed → CANCELLED faqat rollbackda
+          // ruxsat (umumiy mashinada yo'q) — aks holda 400 «sold -> cancelled».
+          { rollback: true },
         );
       } else if (
         isSuperAdmin &&
@@ -9353,6 +9372,13 @@ export class OrderLifecycleService {
       audit?: boolean;
     },
     externalManager?: EntityManager,
+    /**
+     * y2RarzlT — ichki chaqiruv parametrlari (RMQ payloaddan kelmaydi).
+     * `rollback: true` — status o'tishi rollback qoidasi bilan tekshiriladi
+     * (`isValidRollbackStatusTransition`: sotilgan → bekor). Faqat
+     * `rollbackOrderToWaiting` beradi.
+     */
+    options?: { rollback?: boolean },
   ) {
     const order = await this.findById(id);
     if (!externalManager) {
@@ -9509,12 +9535,13 @@ export class OrderLifecycleService {
       order.last_handover_by = this.numericActorId(requester?.id);
     }
 
-    if (
-      oldStatus !== order.status &&
-      !this.isValidStatusTransition(oldStatus, order.status)
-    ) {
+    const transitionAllowed = options?.rollback
+      ? isValidRollbackStatusTransition(oldStatus, order.status)
+      : this.isValidStatusTransition(oldStatus, order.status);
+    if (oldStatus !== order.status && !transitionAllowed) {
+      // y2RarzlT: xabar foydalanuvchiga (toast) chiqadi — xom inglizcha emas.
       this.badRequest(
-        `Invalid status transition: ${oldStatus} -> ${order.status}`,
+        `Buyurtma holatini o'zgartirib bo'lmaydi: ${oldStatus} -> ${order.status}`,
       );
     }
 

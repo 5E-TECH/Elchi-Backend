@@ -23,6 +23,30 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-10-23 — Rollback «Bekor qilish» sotilgan buyurtmadan (y2RarzlT)
+
+- [2026-10-23] ✏️ [order] — `POST /orders/rollback/:id` + `{ target_status:
+  'cancelled' }` (va kuryerning `'cancelled_sent'`) endi sotilgan / to'langan
+  / qisman to'langan / yopilgan (`sold` / `paid` / `partly_paid` / `closed`)
+  buyurtmada ham ishlaydi → 200 `message: 'Order CANCELLED holatiga
+  qaytarildi'` (`cancelled_sent`: avvalgidek pochta javobi). Ilgari 400
+  «Invalid status transition: sold -> cancelled» edi. Pul `'waiting'` ga
+  qaytarishdagi bilan AYNAN bir xil qaytariladi: sotuv kassa oyoqlari
+  (market / kuryer / filial), qo'shimcha xarajat, sotuvda marketga berilgan
+  summa va sotuv foydasi (P&L CORRECTION); settlement qatori tozalanadi.
+  Buyurtma: `status: 'cancelled'`, `sold_at: null`, `to_be_paid: 0`,
+  `sale_collectible_amount: null`; `paid` / `partly_paid` dan —
+  `paid_amount: 0`. Kim va qaysi holatdan qaytara olishi O'ZGARMAGAN
+  (kuryer/menejer — sold/cancelled; superadmin — yana closed/paid/partly_paid;
+  HQ'ga yetgan pul — hamma uchun 400). 🔧 FE: o'zgarish shart emas —
+  `RollbackOrderDialog` allaqachon `target_status` yuboradi va
+  muvaffaqiyatdan keyin pul keshlarini yangilaydi.
+- [2026-10-23] 🟢 [order] — noto'g'ri status o'tishi xabari endi o'zbekcha:
+  400 «Buyurtma holatini o'zgartirib bo'lmaydi: <eski> -> <yangi>» (ilgari
+  «Invalid status transition: <eski> -> <yangi>»). Xatoni matndan emas,
+  `statusCode` dan aniqlang; toast'da `message` ni o'zgarishsiz ko'rsatish
+  mumkin.
+
 ### 2026-10-22 — Boshqa sessiyalardan chiqish; kassa xarajatida kategoriya majburiy (Notion «Elchi Pochta» #3, #1)
 
 - [2026-10-22] 🆕 [auth] — `DELETE /auth/sessions/:id` (Bearer, istalgan rol) —

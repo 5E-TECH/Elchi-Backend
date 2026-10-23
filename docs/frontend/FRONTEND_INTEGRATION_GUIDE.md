@@ -366,7 +366,14 @@ orders in their branch scope, else 403).
   200 with `data.cancel_post_created === false` (only for the courier's
   `cancelled_sent` target), show `data.warning` (add the order to a return post
   by hand). Restore buttons: show only when the rule
-  allows (Elchi-Frontend: done for the courier list).
+  allows (Elchi-Frontend: done for the courier list). `target_status:
+  'cancelled'` (and the courier's `cancelled_sent`) works from every allowed
+  sold-side status — SOLD/PAID/PARTLY_PAID/CLOSED → CANCELLED (y2RarzlT,
+  2026-10-23; before it was 400 «Invalid status transition: sold ->
+  cancelled»). The money is unwound exactly like the `waiting` target (sale
+  cashbox legs, extra cost, sell profit), the order ends `cancelled` with
+  `to_be_paid 0` / `paid_amount 0`. This edge exists only for rollback — a
+  normal status write still cannot move a sold order to cancelled.
 
 ---
 

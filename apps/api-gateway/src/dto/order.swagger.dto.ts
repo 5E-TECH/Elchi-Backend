@@ -997,7 +997,12 @@ export class RollbackOrderRequestDto {
   @ApiPropertyOptional({
     enum: RollbackOrderTargetStatusDto,
     example: RollbackOrderTargetStatusDto.WAITING,
-    description: "Rollback target status. Default: 'waiting'",
+    // y2RarzlT: «Bekor qilish» sotilgan holatlardan ham ishlaydi.
+    description:
+      "Rollback target status. Default: 'waiting'. 'cancelled' — " +
+      'sold / paid / partly_paid / closed buyurtmani «Bekor qilingan» ga ' +
+      "qaytaradi (sotuv kassa oyoqlari va foydasi 'waiting' dagidek teskari " +
+      "yoziladi). 'cancelled_sent' — faqat kuryer.",
   })
   @IsOptional()
   @IsEnum(RollbackOrderTargetStatusDto)
