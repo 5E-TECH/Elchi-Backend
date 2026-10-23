@@ -10,6 +10,7 @@ import { ThrottlerModule } from '@nestjs/throttler';
 import { of, throwError } from 'rxjs';
 import request from 'supertest';
 import { AllExceptionsFilter, RpcExceptionFilter } from '@app/common';
+import { ApiGatewayController } from './api-gateway.controller';
 import { AuthGatewayController } from './auth-gateway.controller';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
 import { JwtStrategy } from './auth/jwt.strategy';
@@ -32,6 +33,17 @@ const SID_PHONE = '3f2b8c1e-6a4d-4e7b-9c10-2d5f7a8b9c0d';
 const SID_LAPTOP = '9a1b2c3d-4e5f-4a6b-8c7d-0e1f2a3b4c5d';
 const SID_TABLET = '11111111-2222-4333-8444-555555555555';
 const SID_OTHER_USER = '66666666-7777-4888-9999-000000000000';
+/** (2026-10-23) Planshet — 48 soatdan yosh sessiya (identity 403 beradi). */
+const TABLET_AVAILABLE_AT = '2026-10-25T07:00:00.000Z';
+const LOCK_MESSAGE =
+  "Xavfsizlik uchun yangi qurilmadan boshqa sessiyalarni chiqarib bo'lmaydi — 25.10.2026 12:00 (Toshkent) dan keyin mumkin";
+const tooNew = () => ({
+  statusCode: 403,
+  message: LOCK_MESSAGE,
+  data: null,
+  code: 'SESSION_TOO_NEW',
+  available_at: TABLET_AVAILABLE_AT,
+});
 
 describe('Elchi Pochta #3 — boshqa sessiyalarni yopish (gateway, haqiqiy JwtStrategy)', () => {
   let app: INestApplication;
@@ -63,10 +75,51 @@ describe('Elchi Pochta #3 — boshqa sessiyalarni yopish (gateway, haqiqiy JwtSt
           return of({
             statusCode: 200,
             message: 'success',
-            data: { active_count: 0, sessions: [] },
+            data: {
+              active_count: 0,
+              sessions: [],
+              can_revoke_others: sid(payload.sessionId) !== SID_TABLET,
+              revoke_available_at:
+                sid(payload.sessionId) === SID_TABLET
+                  ? TABLET_AVAILABLE_AT
+                  : null,
+            },
           });
+        case 'identity.user.update': {
+          // Parol almashtirish: o'zi bo'lsa joriy sessiya qoladi, aks holda
+          // nishon foydalanuvchining hammasi (auth.sessions.spec.ts da
+          // haqiqiy identity bilan isbotlangan).
+          const target = String(payload.id);
+          if (!(payload.dto as { password?: string }).password) {
+            return of({
+              statusCode: 200,
+              message: 'User yangilandi',
+              data: { id: target },
+            });
+          }
+          const requester = payload.requester as { id: string };
+          const keep =
+            requester.id === target ? sid(payload.current_session_id) : null;
+          const ids = [...owners.entries()]
+            .filter(
+              ([id, owner]) =>
+                owner === target && !revoked.has(id) && id !== keep,
+            )
+            .map(([id]) => id);
+          ids.forEach((id) => revoked.add(id));
+          return of({
+            statusCode: 200,
+            message: 'User yangilandi',
+            data: { id: target },
+            sessions_revoked: ids.length,
+            revoked_session_ids: ids,
+          });
+        }
         case 'identity.auth.sessions.revoke': {
           const id = sid(payload.sessionId);
+          if (sid(payload.currentSessionId) === SID_TABLET) {
+            return throwError(tooNew);
+          }
           if (id === sid(payload.currentSessionId)) {
             return throwError(() => ({
               statusCode: 400,
@@ -91,6 +144,7 @@ describe('Elchi Pochta #3 — boshqa sessiyalarni yopish (gateway, haqiqiy JwtSt
         }
         case 'identity.auth.sessions.revoke_others': {
           const current = sid(payload.currentSessionId);
+          if (current === SID_TABLET) return throwError(tooNew);
           if (!current) {
             return throwError(() => ({
               statusCode: 400,
@@ -146,9 +200,11 @@ describe('Elchi Pochta #3 — boshqa sessiyalarni yopish (gateway, haqiqiy JwtSt
         PassportModule,
         ThrottlerModule.forRoot([{ ttl: 60_000, limit: 1000 }]),
       ],
-      controllers: [AuthGatewayController],
+      controllers: [AuthGatewayController, ApiGatewayController],
       providers: [
         { provide: 'IDENTITY', useValue: { send: identitySend } },
+        { provide: 'FINANCE', useValue: { send: jest.fn() } },
+        { provide: 'BRANCH', useValue: { send: jest.fn() } },
         {
           provide: ConfigService,
           useValue: {
@@ -186,11 +242,11 @@ describe('Elchi Pochta #3 — boshqa sessiyalarni yopish (gateway, haqiqiy JwtSt
   });
 
   const http = () => app.getHttpServer() as Parameters<typeof request>[0];
-  const token = (sid: string | null, sub = '25') =>
+  const token = (sid: string | null, sub = '25', roles = ['COURIER']) =>
     `Bearer ${jwt.sign({
       sub,
       username: null,
-      roles: ['COURIER'],
+      roles,
       ...(sid ? { sid } : {}),
     })}`;
   type Call = [{ cmd: string }, Record<string, unknown>];
@@ -391,5 +447,179 @@ describe('Elchi Pochta #3 — boshqa sessiyalarni yopish (gateway, haqiqiy JwtSt
       );
       expect(roles.get(`AuthGatewayController_${name}`)).toBeNull();
     }
+  });
+
+  describe('(2026-10-23) 48 soatlik qulf — 403 SESSION_TOO_NEW konverti', () => {
+    it('⭐ revoke-others: 403 — `code` va `available_at` javobda (data yo‘q), hech kim chiqarilmaydi', async () => {
+      const res = await request(http())
+        .post('/auth/sessions/revoke-others')
+        .set('Authorization', token(SID_TABLET))
+        .expect(403);
+      expect(res.body).toEqual({
+        statusCode: 403,
+        message: LOCK_MESSAGE,
+        code: 'SESSION_TOO_NEW',
+        available_at: TABLET_AVAILABLE_AT,
+      });
+      for (const sid of [SID_PHONE, SID_LAPTOP, SID_TABLET]) {
+        await request(http())
+          .get('/auth/sessions')
+          .set('Authorization', token(sid))
+          .expect(200);
+      }
+    });
+
+    it('⭐ DELETE /auth/sessions/:id: 403 — xuddi shu konvert, nishon ishlashda davom etadi', async () => {
+      const res = await request(http())
+        .delete(`/auth/sessions/${SID_PHONE}`)
+        .set('Authorization', token(SID_TABLET))
+        .expect(403);
+      expect(res.body).toEqual({
+        statusCode: 403,
+        message: LOCK_MESSAGE,
+        code: 'SESSION_TOO_NEW',
+        available_at: TABLET_AVAILABLE_AT,
+      });
+      await request(http())
+        .get('/auth/sessions')
+        .set('Authorization', token(SID_PHONE))
+        .expect(200);
+    });
+
+    it('GET /auth/sessions: `can_revoke_others` / `revoke_available_at` o‘zgarmay o‘tadi', async () => {
+      const young = await request(http())
+        .get('/auth/sessions')
+        .set('Authorization', token(SID_TABLET))
+        .expect(200);
+      expect((young.body as { data: unknown }).data).toEqual(
+        expect.objectContaining({
+          can_revoke_others: false,
+          revoke_available_at: TABLET_AVAILABLE_AT,
+        }),
+      );
+      const old = await request(http())
+        .get('/auth/sessions')
+        .set('Authorization', token(SID_LAPTOP))
+        .expect(200);
+      expect((old.body as { data: unknown }).data).toEqual(
+        expect.objectContaining({
+          can_revoke_others: true,
+          revoke_available_at: null,
+        }),
+      );
+    });
+
+    it('POST /auth/logout — qulfsiz (yangi sessiya ham chiqadi)', async () => {
+      await request(http())
+        .post('/auth/logout')
+        .set('Authorization', token(SID_TABLET))
+        .expect(201);
+      await request(http())
+        .get('/auth/sessions')
+        .set('Authorization', token(SID_TABLET))
+        .expect(401);
+    });
+  });
+
+  describe('(2026-10-23) parol almashtirish — boshqa qurilmalar shu gateway keshida DARHOL 401', () => {
+    it('⭐ PATCH /auth/my-profile (o‘zi, noutbukdan): identity’ga `current_session_id` = JWT sid; telefon/planshet darhol 401 (session_state so‘ralmaydi), noutbuk ishlaydi; ichki id lar javobdan olib tashlanadi', async () => {
+      // Telefon va planshet «ochiq» deb keshlangan (30 s qayta so'ralmaydi).
+      for (const sid of [SID_PHONE, SID_TABLET]) {
+        await request(http())
+          .get('/auth/sessions')
+          .set('Authorization', token(sid))
+          .expect(200);
+      }
+      const stateCalls = calls('identity.auth.session_state').length;
+
+      const res = await request(http())
+        .patch('/auth/my-profile')
+        .set('Authorization', token(SID_LAPTOP))
+        .send({ password: 'yangi-parol' })
+        .expect(200);
+      expect(res.body).toEqual({
+        statusCode: 200,
+        message: 'User yangilandi',
+        data: { id: '25' },
+        sessions_revoked: 2,
+      });
+      expect(calls('identity.user.update')[0][1]).toEqual({
+        id: '25',
+        dto: { password: 'yangi-parol' },
+        requester: { id: '25', roles: ['courier'] },
+        current_session_id: SID_LAPTOP,
+      });
+
+      for (const sid of [SID_PHONE, SID_TABLET]) {
+        const denied = await request(http())
+          .get('/auth/sessions')
+          .set('Authorization', token(sid))
+          .expect(401);
+        expect((denied.body as { message: string }).message).toBe(
+          'Session revoked',
+        );
+      }
+      // Kesh belgisidan — identity'ga qayta so'rov yo'q.
+      expect(calls('identity.auth.session_state').length).toBe(
+        stateCalls + 1, // faqat noutbukning birinchi tekshiruvi
+      );
+      await request(http())
+        .get('/auth/sessions')
+        .set('Authorization', token(SID_LAPTOP))
+        .expect(200);
+    });
+
+    it('⭐ PATCH /users/:id (superadmin tiklaydi): foydalanuvchining BARCHA sessiyalari darhol 401; superadminniki va boshqalar ishlaydi', async () => {
+      for (const sid of [SID_PHONE, SID_LAPTOP, SID_TABLET]) {
+        await request(http())
+          .get('/auth/sessions')
+          .set('Authorization', token(sid))
+          .expect(200);
+      }
+      const res = await request(http())
+        .patch('/users/25')
+        .set('Authorization', token(SID_OTHER_USER, '26', ['SUPERADMIN']))
+        .send({ password: 'tiklangan' })
+        .expect(200);
+      expect(res.body).toEqual({
+        statusCode: 200,
+        message: 'User yangilandi',
+        data: { id: '25' },
+        sessions_revoked: 3,
+      });
+      expect(calls('identity.user.update')[0][1]).toEqual(
+        expect.objectContaining({
+          id: '25',
+          requester: { id: '26', roles: ['superadmin'] },
+          current_session_id: SID_OTHER_USER,
+        }),
+      );
+      for (const sid of [SID_PHONE, SID_LAPTOP, SID_TABLET]) {
+        await request(http())
+          .get('/auth/sessions')
+          .set('Authorization', token(sid))
+          .expect(401);
+      }
+      await request(http())
+        .get('/auth/sessions')
+        .set('Authorization', token(SID_OTHER_USER, '26', ['SUPERADMIN']))
+        .expect(200);
+    });
+
+    it('`sid` siz token bilan PATCH /auth/my-profile — `current_session_id: null`; parolsiz javob o‘zgarmagan', async () => {
+      const res = await request(http())
+        .patch('/auth/my-profile')
+        .set('Authorization', token(null))
+        .send({ name: 'Ism' })
+        .expect(200);
+      expect(res.body).toEqual({
+        statusCode: 200,
+        message: 'User yangilandi',
+        data: { id: '25' },
+      });
+      expect(calls('identity.user.update')[0][1]).toEqual(
+        expect.objectContaining({ current_session_id: null }),
+      );
+    });
   });
 });

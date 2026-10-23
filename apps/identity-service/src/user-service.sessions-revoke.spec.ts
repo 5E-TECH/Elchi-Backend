@@ -94,7 +94,11 @@ describe('Elchi Pochta #3 — xavfsizlik hodisasi BARCHA sessiyalarni yopadi', (
     expect(h.saves.at(-1)).toEqual(expect.objectContaining(revokedAll));
   });
 
-  it('o‘z parolini almashtirish ham (joriy qurilma ham qayta kiradi — avvalgidek)', async () => {
+  // (2026-10-23) Sessiyalar servisi (AuthSessionService) BO'LMASA — zaxira
+  // xulq: epoch oshadi, joriy qurilma ham qayta kiradi. Servis bilan o'z
+  // paroli joriy sessiyani saqlaydi, qolganlarini darhol yopadi —
+  // `auth/auth.sessions.spec.ts` («parol almashtirish …» bloki).
+  it('o‘z parolini almashtirish, sessiyalar servisisiz (zaxira) — hammasi, joriy ham', async () => {
     const h = makeHarness([row('10', Roles.ADMIN)]);
     await h.service.updateUser('10', { password: 'yangi' } as never, {
       id: '10',
