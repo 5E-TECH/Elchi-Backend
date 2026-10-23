@@ -107,24 +107,38 @@ export class LogoutResponseDto {
   data!: EmptyDataDto;
 }
 
-/** (Elchi Pochta #3) `GET /auth/sessions` — egasining bitta faol sessiyasi. */
+/**
+ * (Elchi Pochta #3) `GET /auth/sessions` — egasining bitta sessiyasi
+ * (qurilmasi). Bitta qurilma — bitta sessiya: shu qurilma qayta kirsa AYNI
+ * `id` qaytadi.
+ */
 export class AuthSessionDto {
   @ApiProperty({ example: '3f2b8c1e-6a4d-4e7b-9c10-2d5f7a8b9c0d' })
   id!: string;
 
   @ApiProperty({
-    example: 'Telefon · Android · Chrome',
+    enum: ['active', 'expired'],
+    example: 'active',
+    description:
+      "`active` — ishlayapti (refresh muddati o'tmagan, parol o'sha). `expired` — muddati o'tgan yoki parol almashgan, lekin qurilma chiqmagan: UI «Qayta kirish kerak». Shu qurilmadan login AYNI sessiyani tiklaydi; «Chiqarish» uni butunlay yopadi.",
+  })
+  status!: 'active' | 'expired';
+
+  @ApiProperty({
+    example: 'Samsung SM-A515F · Android 13 · Chrome 155',
     nullable: true,
     type: String,
-    description: 'X-Device-Name yoki User-Agent dan (login paytida)',
+    description:
+      "Oxirgi login paytidagi X-Device-Name (≤128, ko'rinmas belgilarsiz) yoki User-Agent dan («Telefon · Android · Chrome»)",
   })
   device_name!: string | null;
 
   @ApiProperty({
-    example: null,
+    example: '0b6f3c52-8d0e-4f4a-9a3b-6c1d2e3f4a5b',
     nullable: true,
     type: String,
-    description: 'X-Device-Id (frontend yuborsa)',
+    description:
+      "X-Device-Id (16–128 belgi `[A-Za-z0-9._:-]`, odatda UUID). Yaroqsiz yoki yuborilmagan bo'lsa `null` — u holda har login alohida sessiya",
   })
   device_id!: string | null;
 
@@ -139,8 +153,14 @@ export class AuthSessionDto {
   ip!: string | null;
 
   @ApiProperty({
+    example: '2026-10-01T06:40:00.000Z',
+    description: 'Shu qurilmadan BIRINCHI login (sessiya ochilgan vaqt)',
+  })
+  first_logged_in_at!: string;
+
+  @ApiProperty({
     example: '2026-10-21T08:15:00.000Z',
-    description: 'Login vaqti',
+    description: 'OXIRGI login vaqti (shu qurilma qayta kirganda yangilanadi)',
   })
   logged_in_at!: string;
 
@@ -152,7 +172,8 @@ export class AuthSessionDto {
 
   @ApiProperty({
     example: '2026-10-22T08:15:00.000Z',
-    description: 'Refresh token muddati — shundan keyin qayta login kerak',
+    description:
+      'Refresh token muddati (oxirgi login + 1 kun, uzaymaydi) — shundan keyin `status: expired`, qayta login kerak',
   })
   expires_at!: string;
 
@@ -166,14 +187,15 @@ export class AuthSessionDto {
 export class AuthSessionsDataDto {
   @ApiProperty({
     example: 2,
-    description: 'Shu akkauntning faol sessiyalari soni',
+    description:
+      "Shu akkauntning FAQAT `status: 'active'` sessiyalari soni (`expired` lar sanalmaydi)",
   })
   active_count!: number;
 
   @ApiProperty({
     type: () => [AuthSessionDto],
     description:
-      "Faol sessiyalar, oxirgi faollik bo'yicha kamayish tartibida (ko'pi bilan 50)",
+      "Ochiq sessiyalar (yopilmagan; muddati 90 kundan ko'p oldin o'tganlari yo'q): avval joriy (`current: true`), keyin `active`, keyin `expired` — har guruh oxirgi faollik bo'yicha kamayish tartibida (ko'pi bilan 50)",
   })
   sessions!: AuthSessionDto[];
 }

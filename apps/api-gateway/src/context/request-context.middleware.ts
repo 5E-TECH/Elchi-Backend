@@ -7,7 +7,7 @@ import {
 } from '@app/common';
 import { resolveTrustedClientIp } from '../auth/client-ip-throttler.guard';
 import { normalizeIp } from '../auth/ip-allowlist.util';
-import { describeUserAgent } from './device-label';
+import { describeUserAgent, normalizeDeviceName } from './device-label';
 
 /**
  * Mijoz yuborgan `x-request-id` faqat shu ko'rinishda qabul qilinadi
@@ -67,8 +67,10 @@ function resolveTraceId(req: Request): string {
  * - `ip` — `resolveTrustedClientIp` (rate-limit bilan AYNI manba:
  *   `CF-Connecting-IP`, bo'lmasa `req.ip`) + `normalizeIp` (`::ffff:` prefiks);
  * - `user_agent` — 256 belgigacha kesiladi (`sanitizeAuditContext`);
- * - `device_id` / `device_name` — `X-Device-Id` / `X-Device-Name`; nom
- *   yuborilmasa User-Agent'dan ("Telefon · Android · Chrome");
+ * - `device_id` / `device_name` — `X-Device-Id` / `X-Device-Name`
+ *   (URL-encoded; ko'rinmas belgilarsiz, ≤128 — `normalizeDeviceName`,
+ *   masalan "Samsung SM-A515F · Android 13 · Chrome 155"); nom yuborilmasa
+ *   yoki bo'sh bo'lsa User-Agent'dan ("Telefon · Android · Chrome");
  * - `request_source` — `X-Request-Source` (slug), masalan ommaviy yopish.
  */
 export function buildRequestContextStore(req: Request): RequestContextStore {
@@ -82,7 +84,8 @@ export function buildRequestContextStore(req: Request): RequestContextStore {
     user_agent: userAgent,
     device_id: decodedHeader(req, 'x-device-id'),
     device_name:
-      decodedHeader(req, 'x-device-name') ?? describeUserAgent(userAgent),
+      normalizeDeviceName(decodedHeader(req, 'x-device-name')) ??
+      describeUserAgent(userAgent),
     request_source: resolveRequestSource(req),
   });
   return { traceId, ...audit };
