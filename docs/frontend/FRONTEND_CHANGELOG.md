@@ -32,8 +32,17 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
   boshqa rollarda doim `null`. `region` avvalgidek. 🔧 FE: kuryer tafsilotida
   sarlavha «Kuryer · {branch.name}» va «Profil ma'lumotlari → Filial» shu
   maydondan (hozir menejer ko'rinishida ko'ruvchining O'Z filiali
-  ko'rsatiladi). ⚠️ `GET /users` ro'yxatida `branch` HALI YO'Q («Filial»
-  ustuni uchun alohida backend ishi kerak).
+  ko'rsatiladi).
+- [2026-10-23] ✏️ [identity] — `GET /users` ro'yxatining HAR qatorida ham
+  `branch: { id, name } | null` (`/users/:id` dagi bilan bir xil qoida:
+  kuryer / menejer / registrator / filial xodimining eng so'nggi faol
+  biriktiruvi; filial o'chirilgan yoki biriktirilmagan — `null`; boshqa
+  rollar — `null`). Filial sahifadagi qatorlar uchun BITTA so'rov bilan
+  olinadi. Filial xizmati javob bermasa (≈3 s) yoki xato bersa ro'yxat
+  baribir 200 — hamma qatorda `branch: null` (ro'yxat yiqilmaydi). `meta`,
+  filtrlar va sahifalash o'zgarmagan. 🔧 FE: superadmin ro'yxatidagi
+  «Filial» ustuni va telefonda «telefon · filial» — `row.branch?.name`
+  (`null` → «—»).
 - [2026-10-23] ✏️ [identity] — `PATCH /users/:id` endi `district_id` qabul
   qiladi (raqamli satr, masalan `"41"`, yoki `null` — tozalash); ilgari 400
   (forbidNonWhitelisted). Tuman mavjud va foydalanuvchining viloyatiga

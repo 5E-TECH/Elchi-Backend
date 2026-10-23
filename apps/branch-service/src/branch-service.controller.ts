@@ -434,6 +434,22 @@ export class BranchServiceController {
     );
   }
 
+  // YEThmZBn — GET /users «Filial» ustuni: bir nechta foydalanuvchi, bitta SQL.
+  @MessagePattern({ cmd: 'branch.user.find_by_user_ids' })
+  findBranchesByUserIds(
+    @Payload() data: Record<string, any>,
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.branchService.findBranchesByUserIds(
+        data?.user_ids as unknown,
+        this.getRequester(data) as Parameters<
+          BranchServiceService['findBranchesByUserIds']
+        >[1],
+      ),
+    );
+  }
+
   @MessagePattern({ cmd: 'branch.cashbox.resolve_for_manager' })
   resolveCashboxBranchForManager(
     @Payload() data: Record<string, any>,

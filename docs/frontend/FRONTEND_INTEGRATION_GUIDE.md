@@ -653,7 +653,9 @@ branch cash receive ("Qabul qilinishi kerak" → `POST /finance/cashbox/payment/
 shift open/close. Market Telegram token: visible to superadmin/admin only (in
 `GET /users/{id}`). `GET /users/{id}` also returns `branch: { id, name } | null`
 — the branch a courier / manager / registrator / branch user is assigned to
-(YEThmZBn, 2026-10-23; not yet in the `GET /users` list). `PATCH /users/{id}`
+(YEThmZBn, 2026-10-23); every `GET /users` row carries the same `branch`
+(one batched branch lookup per page; if the branch service fails the list is
+still 200 with `branch: null`). `PATCH /users/{id}`
 accepts `district_id` (numeric string, `null` clears): the district must exist
 and belong to the user's `region_id` (400 otherwise, 503 if logistics is
 down); the region itself is not changed there (a courier's region changes only

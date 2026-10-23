@@ -8,6 +8,7 @@ import {
   Header,
   HttpCode,
   Inject,
+  Logger,
   NotFoundException,
   Param,
   Patch,
@@ -70,6 +71,20 @@ interface JwtUser {
   branch_id?: string | null;
 }
 
+/**
+ * YEThmZBn — GET /users «Filial» ustuni so'raladigan rollar (identity
+ * `shouldAttachBranchRelation` bilan bir xil to'plam).
+ */
+const USER_BRANCH_ROLES = new Set([
+  'courier',
+  'manager',
+  'registrator',
+  'branch',
+  'branch_admin',
+]);
+/** YEThmZBn — filial xizmati sekin bo'lsa ro'yxat shu muddatdan ortiq kutmaydi. */
+const USER_BRANCH_LOOKUP_TIMEOUT_MS = 3000;
+
 interface BranchAssignment {
   branch_id?: string | null;
   role?: string | null;
@@ -82,6 +97,8 @@ interface BranchAssignment {
 @ApiTags('Identity')
 @Controller()
 export class ApiGatewayController {
+  private readonly logger = new Logger(ApiGatewayController.name);
+
   constructor(
     @Inject('IDENTITY') private readonly identityClient: ClientProxy,
     @Inject('FINANCE') private readonly financeClient: ClientProxy,
@@ -941,7 +958,12 @@ export class ApiGatewayController {
   })
   @ApiQuery({ name: 'page', required: false, type: Number, example: 1 })
   @ApiQuery({ name: 'limit', required: false, type: Number, example: 10 })
-  @ApiOkResponse({ description: 'User list' })
+  @ApiOkResponse({
+    description:
+      'User list. YEThmZBn: har qatorda `branch: { id, name } | null` — ' +
+      'kuryer / menejer / registrator / filial xodimining filiali (boshqa ' +
+      'rollar va filial xizmati javob bermasa — null).',
+  })
   async getUsers(
     @Query('search') search?: string,
     @Query('role') role?: string,
@@ -1112,7 +1134,89 @@ export class ApiGatewayController {
     // admin/superadmin kabi BARCHA userlarni ko'radi (view parity). Tahrirlash
     // huquqi identity-service'da created_by bo'yicha cheklanadi.
 
+    // YEThmZBn: «Filial» ustuni — har qatorga `branch: { id, name } | null`.
+    const pageItems = (response as { data?: { items?: unknown } } | undefined)
+      ?.data?.items;
+    if (Array.isArray(pageItems)) {
+      await this.attachUserBranches(
+        pageItems as Array<Record<string, unknown>>,
+        req,
+      );
+    }
+
     return response;
+  }
+
+  /**
+   * YEThmZBn — GET /users ro'yxatiga filial: sahifadagi filial-rolli
+   * foydalanuvchilar (kuryer, menejer, registrator, filial) uchun filial
+   * xizmatiga BITTA so'rov (`branch.user.find_by_user_ids`, N+1 yo'q).
+   * Boshqa rollar va biriktirilmaganlar — `branch: null`. Filial xizmati
+   * javob bermasa / xato bersa — hamma `branch: null`, ro'yxat baribir 200.
+   * Faqat shu HTTP javobi boyitiladi — `identity.user.find_all` ning ichki
+   * chaqiruvchilari uchun shakl o'zgarmaydi.
+   */
+  private async attachUserBranches(
+    items: Array<Record<string, unknown>>,
+    req?: { user: JwtUser },
+  ): Promise<void> {
+    // string / number qiymat matni; boshqasi (obyekt, null) — ''.
+    const textOf = (value: unknown) =>
+      typeof value === 'string' || typeof value === 'number'
+        ? String(value).trim()
+        : '';
+    const rowId = (row: Record<string, unknown>) => textOf(row?.id);
+    const lookupIds = Array.from(
+      new Set(
+        items
+          .filter((row) =>
+            USER_BRANCH_ROLES.has(textOf(row?.role).toLowerCase()),
+          )
+          .map(rowId)
+          .filter(Boolean),
+      ),
+    );
+
+    const branchByUser = new Map<string, { id: string; name: string | null }>();
+    if (lookupIds.length && req?.user) {
+      try {
+        const res = await firstValueFrom(
+          this.branchClient
+            .send<{
+              data?: Array<{
+                user_id?: unknown;
+                branch?: { id?: unknown; name?: unknown } | null;
+              }>;
+            }>(
+              { cmd: 'branch.user.find_by_user_ids' },
+              { user_ids: lookupIds, requester: this.toRequester(req) },
+            )
+            .pipe(timeout(USER_BRANCH_LOOKUP_TIMEOUT_MS)),
+        );
+        for (const row of Array.isArray(res?.data) ? res.data : []) {
+          const userId = textOf(row?.user_id);
+          const branchId = textOf(row?.branch?.id);
+          if (!userId || !branchId) continue;
+          const name = row?.branch?.name;
+          branchByUser.set(userId, {
+            id: branchId,
+            name: typeof name === 'string' && name.trim() ? name : null,
+          });
+        }
+      } catch (error) {
+        this.logger.warn(
+          `GET /users: branch.user.find_by_user_ids failed (${
+            error instanceof Error ? error.message : 'unknown error'
+          }) — branch: null`,
+        );
+      }
+    }
+
+    for (const row of items) {
+      if (row && typeof row === 'object') {
+        row.branch = branchByUser.get(rowId(row)) ?? null;
+      }
+    }
   }
 
   @Get('users/:id')

@@ -124,7 +124,14 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
   shape and no branch call. `identity.user.update` accepts `district_id`
   (null clears; else `logistics.district.find_by_id` must find it and its
   `region_id` must equal the user's, if the user has one; 404 → 400, other
-  errors → 503); region is not changed there.
+  errors → 503); region is not changed there. `GET /users` (gateway only)
+  adds the same `branch` to every row with ONE `branch.user.find_by_user_ids`
+  call per page (`{ user_ids, requester }` → `[{ user_id, branch: { id, name }
+  | null }]` for every requested id; one SQL: `DISTINCT ON (user_id)` latest
+  active `branch_users` row LEFT JOIN live `branches`, `user_id = ANY(...)`;
+  superadmin / admin / manager only, ≤500 ids). Branch-service down / 3 s
+  timeout → `branch: null`, list still 200; `identity.user.find_all` itself is
+  unchanged.
 - **Market specifics:** telegram token (`market.find_by_tg_token`, `rotate_tg_token`),
   `expense_proof_conditions`. Creating a user also creates its cashbox
   (`finance.cashbox.create`) and may assign to a branch (`branch.user.assign`),

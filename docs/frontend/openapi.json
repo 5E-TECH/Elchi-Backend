@@ -793,7 +793,7 @@
         ],
         "responses": {
           "200": {
-            "description": "User list"
+            "description": "User list. YEThmZBn: har qatorda `branch: { id, name } | null` — kuryer / menejer / registrator / filial xodimining filiali (boshqa rollar va filial xizmati javob bermasa — null)."
           }
         },
         "security": [
