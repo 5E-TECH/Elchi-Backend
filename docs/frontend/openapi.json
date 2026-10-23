@@ -1757,6 +1757,7 @@
     },
     "/auth/sessions": {
       "get": {
+        "description": "Ochiq sessiyalar: `status: 'active'` (ishlayapti) yoki `'expired'` (refresh muddati o'tgan / parol almashgan — «Qayta kirish kerak»; shu qurilmadan login AYNI sessiyani tiklaydi). Tartib: joriy → active → expired (oxirgi faollik bo'yicha). `active_count` — faqat active lar. Muddati 90 kundan ko'p oldin o'tgan sessiyalar o'chiriladi.",
         "operationId": "AuthGatewayController_mySessions",
         "parameters": [],
         "responses": {
@@ -1779,7 +1780,7 @@
             "bearer": []
           }
         ],
-        "summary": "Own active sessions of the current account (count, device, IP, login and last-seen time, current flag)",
+        "summary": "Own sessions (one per device) of the current account: active count, device, IP, first/last login, last-seen, status, current flag",
         "tags": [
           "Auth"
         ],
@@ -19192,17 +19193,26 @@
             "type": "string",
             "example": "3f2b8c1e-6a4d-4e7b-9c10-2d5f7a8b9c0d"
           },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "expired"
+            ],
+            "example": "active",
+            "description": "`active` — ishlayapti (refresh muddati o'tmagan, parol o'sha). `expired` — muddati o'tgan yoki parol almashgan, lekin qurilma chiqmagan: UI «Qayta kirish kerak». Shu qurilmadan login AYNI sessiyani tiklaydi; «Chiqarish» uni butunlay yopadi."
+          },
           "device_name": {
             "type": "string",
-            "example": "Telefon · Android · Chrome",
+            "example": "Samsung SM-A515F · Android 13 · Chrome 155",
             "nullable": true,
-            "description": "X-Device-Name yoki User-Agent dan (login paytida)"
+            "description": "Oxirgi login paytidagi X-Device-Name (≤128, ko'rinmas belgilarsiz) yoki User-Agent dan («Telefon · Android · Chrome»)"
           },
           "device_id": {
             "type": "string",
-            "example": null,
+            "example": "0b6f3c52-8d0e-4f4a-9a3b-6c1d2e3f4a5b",
             "nullable": true,
-            "description": "X-Device-Id (frontend yuborsa)"
+            "description": "X-Device-Id (16–128 belgi `[A-Za-z0-9._:-]`, odatda UUID). Yaroqsiz yoki yuborilmagan bo'lsa `null` — u holda har login alohida sessiya"
           },
           "user_agent": {
             "type": "string",
@@ -19214,10 +19224,15 @@
             "example": "203.0.113.7",
             "nullable": true
           },
+          "first_logged_in_at": {
+            "type": "string",
+            "example": "2026-10-01T06:40:00.000Z",
+            "description": "Shu qurilmadan BIRINCHI login (sessiya ochilgan vaqt)"
+          },
           "logged_in_at": {
             "type": "string",
             "example": "2026-10-21T08:15:00.000Z",
-            "description": "Login vaqti"
+            "description": "OXIRGI login vaqti (shu qurilma qayta kirganda yangilanadi)"
           },
           "last_seen_at": {
             "type": "string",
@@ -19227,7 +19242,7 @@
           "expires_at": {
             "type": "string",
             "example": "2026-10-22T08:15:00.000Z",
-            "description": "Refresh token muddati — shundan keyin qayta login kerak"
+            "description": "Refresh token muddati (oxirgi login + 1 kun, uzaymaydi) — shundan keyin `status: expired`, qayta login kerak"
           },
           "current": {
             "type": "boolean",
@@ -19237,10 +19252,12 @@
         },
         "required": [
           "id",
+          "status",
           "device_name",
           "device_id",
           "user_agent",
           "ip",
+          "first_logged_in_at",
           "logged_in_at",
           "last_seen_at",
           "expires_at",
@@ -19253,10 +19270,10 @@
           "active_count": {
             "type": "number",
             "example": 2,
-            "description": "Shu akkauntning faol sessiyalari soni"
+            "description": "Shu akkauntning FAQAT `status: 'active'` sessiyalari soni (`expired` lar sanalmaydi)"
           },
           "sessions": {
-            "description": "Faol sessiyalar, oxirgi faollik bo'yicha kamayish tartibida (ko'pi bilan 50)",
+            "description": "Ochiq sessiyalar (yopilmagan; muddati 90 kundan ko'p oldin o'tganlari yo'q): avval joriy (`current: true`), keyin `active`, keyin `expired` — har guruh oxirgi faollik bo'yicha kamayish tartibida (ko'pi bilan 50)",
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/AuthSessionDto"
