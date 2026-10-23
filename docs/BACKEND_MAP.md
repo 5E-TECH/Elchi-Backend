@@ -89,7 +89,9 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
   from the access token `sid` / refresh cookie; `identity.auth.sessions`
   (`GET /auth/sessions`) lists the caller's own active sessions. Password /
   phone / role change, blocking and deletion revoke ALL sessions atomically
-  via `admins.session_epoch` (+ a password-hash fingerprint per session).
+  via `admins.session_epoch` (+ a password-hash fingerprint per session);
+  since 2026-10-23 a SELF password change keeps the current session (see
+  «Password change» below).
   Pre-deploy tokens (`admins.refresh_token`) get their row on first refresh;
   that column is still written on login for rollback only. Hourly cleanup:
   epoch-reset open rows (expired ones too) → `security_reset`, rows 90 days
@@ -147,6 +149,38 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
   The socket.io realtime gateway verifies the JWT itself and is NOT part of
   this check (a revoked device's open socket lives until it reconnects / the
   FE logs out).
+  **48-hour lock (2026-10-23):** revoke one / revoke-others load the
+  caller's open session (`AuthSessionService.findOpen` → `created_at` = first
+  login on that device, kept when the device re-logs in) and refuse with 403
+  `{ statusCode, message, code: 'SESSION_TOO_NEW', available_at }` while
+  `now < created_at + SESSION_REVOKE_LOCK_HOURS` (identity env, default 48,
+  `0` = off; `sessionRevokeLock` in `session-security.ts`, boundary
+  inclusive at exactly 48:00). Applies to every role and to older AND newer
+  targets; an old session may close a new one; logout is not restricted. With
+  the lock on, a sid-less token gets 400 on DELETE too. `identity.auth.sessions`
+  adds `can_revoke_others` / `revoke_available_at` (from the current row's
+  `first_logged_in_at`; no current row → false / null). The gateway error
+  envelope passes `code` plus that code's fields only for codes listed in
+  `libs/common/src/filters/public-error-fields.ts` (`PUBLIC_ERROR_CODES`).
+  **Password change (2026-10-23):** `identity.user.update` with `password`
+  (`PATCH /auth/my-profile`, `PATCH /users/:id`; gateway passes the JWT `sid`
+  as `current_session_id`). Self change from a sid session with no other
+  security event in the request → epoch NOT bumped, legacy `refresh_token`
+  cleared, `AuthSessionService.afterPasswordChange` rebinds the current row's
+  `password_fp` to the new hash (refresh keeps working) and revokes every
+  other open row as `password_changed` (`revokeOwnExcept`). Otherwise (admin /
+  manager reset, sid-less token, phone change in the same request, current row
+  closed or epoch-stale) → `invalidateAllSessions` in the same save + every
+  open row revoked as `password_changed` (`revokeAllOpen`, `UPDATE …
+  RETURNING`). `identity.market.update` with a password → all. Not subject to
+  the 48 h lock. Reply adds `sessions_revoked` and internal
+  `revoked_session_ids`, which the gateway marks in `SessionRevocationService`
+  and strips (`applyRevokedSessionIds`). Activity log: `logout`, entity
+  `Auth`/user id, metadata `{ scope: 'password_change', by: 'self'|'admin',
+  kept_current, sessions_revoked, session_ids }`. If revoking fails after the
+  save the password stays changed (warn): stale rows are still refused at
+  refresh by the fingerprint. No OTP / forgot-password reset exists (OTP
+  purposes: `login`, `phone_verify`).
 - **Per-role create/list:** `identity.{courier,manager,registrator,market,customer}.*`,
   generic `identity.user.{create,find_all,find_by_id,update,delete,status}`.
   YEThmZBn (2026-10-23): `find_by_id` with `include_branch: true` (only the
@@ -175,7 +209,8 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
   now has **no caller** (a group bind no longer rotates). Refresh: a validly
   signed but unknown token → 401 without touching other sessions (since
   Elchi Pochta #3 every login has its own session, see above); a password or
-  login-phone change revokes all of the account's sessions.
+  login-phone change revokes all of the account's sessions (a self password
+  change from a sid session keeps that one — 2026-10-23, see above).
   Admins may edit their own name/phone/password (`PATCH /auth/my-profile`).
   Deleting a manager/registrator also removes the active `branch_users` row
   (`branch.user.remove`, best-effort, warn log). User-create saga: a failed

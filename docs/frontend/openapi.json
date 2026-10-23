@@ -850,6 +850,7 @@
         ]
       },
       "patch": {
+        "description": "`password` berilsa (parolni tiklash): shu foydalanuvchining BARCHA sessiyalari darhol yopiladi (`password_changed`; 48 soatlik qulfga bog'liq emas) — uning access tokenlari keyingi so'rovdayoq 401, refresh ham 401. O'zini tahrirlasa (`:id` = o'zi) — joriy sessiya qoladi, qolganlari yopiladi. Javobga `sessions_revoked: <n>` qo'shiladi.",
         "operationId": "ApiGatewayController_updateUser",
         "parameters": [
           {
@@ -1757,7 +1758,7 @@
     },
     "/auth/sessions": {
       "get": {
-        "description": "Ochiq sessiyalar: `status: 'active'` (ishlayapti) yoki `'expired'` (refresh muddati o'tgan / parol almashgan — «Qayta kirish kerak»; shu qurilmadan login AYNI sessiyani tiklaydi). Tartib: joriy → active → expired (oxirgi faollik bo'yicha). `active_count` — faqat active lar. Muddati 90 kundan ko'p oldin o'tgan sessiyalar o'chiriladi.",
+        "description": "Ochiq sessiyalar: `status: 'active'` (ishlayapti) yoki `'expired'` (refresh muddati o'tgan / parol almashgan — «Qayta kirish kerak»; shu qurilmadan login AYNI sessiyani tiklaydi). Tartib: joriy → active → expired (oxirgi faollik bo'yicha). `active_count` — faqat active lar. Muddati 90 kundan ko'p oldin o'tgan sessiyalar o'chiriladi. (2026-10-23) `can_revoke_others` / `revoke_available_at` — joriy sessiya boshqalarni yopa oladimi va qachondan (48 soatlik qulf).",
         "operationId": "AuthGatewayController_mySessions",
         "parameters": [],
         "responses": {
@@ -1789,7 +1790,7 @@
     },
     "/auth/sessions/revoke-others": {
       "post": {
-        "description": "Javob: `data = { revoked, session_ids }` (0 ham bo'lishi mumkin). `sid` siz token (Telegram / eski) → 400 «Joriy sessiya aniqlanmadi — qayta kiring».",
+        "description": "Javob: `data = { revoked, session_ids }` (0 ham bo'lishi mumkin). `sid` siz token (Telegram / eski) → 400 «Joriy sessiya aniqlanmadi — qayta kiring». (2026-10-23) Joriy sessiya shu qurilmadan birinchi kirilganiga 48 soat to'lmagan → 403 `code: 'SESSION_TOO_NEW'` + `available_at` (hech narsa yopilmaydi).",
         "operationId": "AuthGatewayController_revokeOtherSessions",
         "parameters": [],
         "responses": {
@@ -1815,6 +1816,16 @@
           },
           "401": {
             "description": "Unauthorized / Session revoked"
+          },
+          "403": {
+            "description": "SESSION_TOO_NEW — joriy sessiya 48 soatdan yosh, boshqa sessiyalarni yopa olmaydi",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthSessionTooNewErrorResponseDto"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -1831,7 +1842,7 @@
     },
     "/auth/sessions/{id}": {
       "delete": {
-        "description": "Javob: `data = { revoked: 1, session_ids: [id] }`. 400 — id UUID emas («Sessiya identifikatori noto'g'ri») yoki joriy sessiya («Joriy sessiyani bu yerdan yopib bo'lmaydi — «Chiqish» tugmasidan foydalaning»); 404 — «Sessiya topilmadi yoki allaqachon yopilgan».",
+        "description": "Javob: `data = { revoked: 1, session_ids: [id] }`. 400 — id UUID emas («Sessiya identifikatori noto'g'ri»), joriy sessiya («Joriy sessiyani bu yerdan yopib bo'lmaydi — «Chiqish» tugmasidan foydalaning») yoki `sid` siz token («Joriy sessiya aniqlanmadi — qayta kiring»); 403 `SESSION_TOO_NEW` — joriy sessiya 48 soatdan yosh (nishon eski yoki yangi bo'lishidan qat'i nazar; `available_at` — qachondan mumkin); 404 — «Sessiya topilmadi yoki allaqachon yopilgan».",
         "operationId": "AuthGatewayController_revokeSession",
         "parameters": [
           {
@@ -1857,7 +1868,7 @@
             }
           },
           "400": {
-            "description": "Noto'g'ri id yoki joriy sessiya",
+            "description": "Noto'g'ri id, joriy sessiya yoki `sid` siz token",
             "content": {
               "application/json": {
                 "schema": {
@@ -1868,6 +1879,16 @@
           },
           "401": {
             "description": "Unauthorized / Session revoked"
+          },
+          "403": {
+            "description": "SESSION_TOO_NEW — joriy sessiya 48 soatdan yosh, boshqa sessiyalarni yopa olmaydi",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthSessionTooNewErrorResponseDto"
+                }
+              }
+            }
           },
           "404": {
             "description": "Sessiya topilmadi yoki allaqachon yopilgan",
@@ -1940,6 +1961,7 @@
         "x-roles": null
       },
       "patch": {
+        "description": "`password` berilsa: joriy sessiyadan BOSHQA barcha sessiyalar darhol yopiladi (`password_changed`; 48 soatlik qulfga bog'liq emas), joriy sessiya va uning refresh'i ishlashda davom etadi. Javobga `sessions_revoked: <n>` qo'shiladi. `sid` siz token (Telegram) — barcha sessiyalar yopiladi.",
         "operationId": "AuthGatewayController_updateMyProfile",
         "parameters": [],
         "requestBody": {
@@ -19366,11 +19388,24 @@
             "items": {
               "$ref": "#/components/schemas/AuthSessionDto"
             }
+          },
+          "can_revoke_others": {
+            "type": "boolean",
+            "example": false,
+            "description": "(2026-10-23) Joriy sessiya hozir BOSHQA sessiyalarni yopa oladimi («Chiqarish» / «Boshqa sessiyalardan chiqish»). Joriy sessiya shu qurilmadan birinchi kirilganiga (`first_logged_in_at`) SESSION_REVOKE_LOCK_HOURS (48 soat) to'lmagan bo'lsa — `false`. `sid` siz token (joriy sessiya yo'q) — `false`"
+          },
+          "revoke_available_at": {
+            "type": "string",
+            "nullable": true,
+            "example": "2026-10-25T07:00:00.000Z",
+            "description": "(2026-10-23) Qachondan yopa oladi (ISO, UTC) — `first_logged_in_at` + 48 soat. Hozir mumkin bo'lsa yoki joriy sessiya aniqlanmasa — `null`"
           }
         },
         "required": [
           "active_count",
-          "sessions"
+          "sessions",
+          "can_revoke_others",
+          "revoke_available_at"
         ]
       },
       "AuthSessionsResponseDto": {
@@ -19458,6 +19493,41 @@
         "required": [
           "statusCode",
           "message"
+        ]
+      },
+      "AuthSessionTooNewErrorResponseDto": {
+        "type": "object",
+        "properties": {
+          "statusCode": {
+            "type": "number",
+            "example": 403
+          },
+          "message": {
+            "type": "string",
+            "example": "Xavfsizlik uchun yangi qurilmadan boshqa sessiyalarni chiqarib bo'lmaydi — 25.10.2026 12:00 (Toshkent) dan keyin mumkin"
+          },
+          "code": {
+            "type": "string",
+            "example": "SESSION_TOO_NEW",
+            "enum": [
+              "SESSION_TOO_NEW"
+            ]
+          },
+          "available_at": {
+            "type": "string",
+            "example": "2026-10-25T07:00:00.000Z",
+            "description": "Qachondan mumkin (ISO, UTC) — joriy sessiya `first_logged_in_at` + 48 soat"
+          },
+          "trace_id": {
+            "type": "string",
+            "example": "7d0c2a4e-1b2f-4c3d-9e8f-0a1b2c3d4e5f"
+          }
+        },
+        "required": [
+          "statusCode",
+          "message",
+          "code",
+          "available_at"
         ]
       },
       "CreateProductRequestDto": {

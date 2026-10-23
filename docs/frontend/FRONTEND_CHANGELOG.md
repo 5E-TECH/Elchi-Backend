@@ -23,6 +23,90 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-10-23 — «Sessiyalar»: yangi qurilma 48 soat boshqalarni chiqara olmaydi; parol almashtirish boshqa qurilmalarni darhol chiqaradi (Notion «Elchi Pochta» #3)
+
+- [2026-10-23] ⚠️ [auth] — "Telegram'dagidek" 48 soatlik qulf: joriy
+  sessiya shu qurilmadan BIRINCHI kirilganiga (`first_logged_in_at`; shu
+  qurilma qayta kirsa o'zgarmaydi) 48 soat to'lmagan bo'lsa u BOSHQA
+  sessiyalarni yopa olmaydi — eskisini ham, yangisini ham. Barcha rollar
+  uchun. `DELETE /auth/sessions/:id` va `POST /auth/sessions/revoke-others`
+  → **403**, hech narsa yopilmaydi:
+
+  ```json
+  {
+    "statusCode": 403,
+    "message": "Xavfsizlik uchun yangi qurilmadan boshqa sessiyalarni chiqarib bo'lmaydi — 25.10.2026 12:00 (Toshkent) dan keyin mumkin",
+    "code": "SESSION_TOO_NEW",
+    "available_at": "2026-10-25T07:00:00.000Z",
+    "trace_id": "7d0c2a4e-1b2f-4c3d-9e8f-0a1b2c3d4e5f"
+  }
+  ```
+
+  `code` — mashina o'qiydigan kod (matnni emas, shuni tekshiring);
+  `available_at` — qachondan mumkin (ISO, UTC; = `first_logged_in_at` + 48
+  soat; matndagi vaqt Toshkent bo'yicha, daqiqa yuqoriga yaxlitlangan).
+  Boshqa xatolarning konverti o'zgarmagan (`{ statusCode, message,
+  trace_id? }`). ESKI sessiya (≥ 48 soat) yangisini chiqara oladi — o'g'ri
+  yangi qurilmadan egani chiqara olmaydi, ega esa uni chiqaradi. «Chiqish»
+  (`POST /auth/logout`, o'z sessiyasi) qulfsiz. Yangi: qulf yoqilganda `sid`
+  siz token (Telegram Mini App) bilan `DELETE /auth/sessions/:id` → 400
+  «Joriy sessiya aniqlanmadi — qayta kiring» (revoke-others avvaldan shunday).
+  Muddat serverda sozlanadi (`SESSION_REVOKE_LOCK_HOURS`, sukut 48; `0` —
+  o'chiq) — FE raqamni qattiq yozmasin, `available_at` dan foydalansin.
+- [2026-10-23] ✏️ [auth] — `GET /auth/sessions` `data` ga ikki yangi
+  maydon (eskilari joyida):
+  - `can_revoke_others: boolean` — joriy sessiya hozir boshqalarni yopa
+    oladimi;
+  - `revoke_available_at: string | null` — qachondan (ISO); hozir mumkin
+    bo'lsa yoki joriy sessiya aniqlanmasa (`sid` siz token) — `null`.
+
+  ```json
+  {
+    "statusCode": 200,
+    "message": "success",
+    "data": {
+      "active_count": 2,
+      "can_revoke_others": false,
+      "revoke_available_at": "2026-10-25T07:00:00.000Z",
+      "sessions": [
+        { "id": "3f2b8c1e-…", "status": "active", "first_logged_in_at": "2026-10-23T07:00:00.000Z", "current": true, "…": "…" },
+        { "id": "9a1c2b3d-…", "status": "active", "first_logged_in_at": "2026-09-01T05:00:00.000Z", "current": false, "…": "…" }
+      ]
+    }
+  }
+  ```
+
+  🔧 «Sessiyalar» bo'limi: `can_revoke_others === false` bo'lsa
+  «Chiqarish» va «Boshqa sessiyalardan chiqish» tugmalarini o'chirib (disabled)
+  izoh ko'rsating: «Xavfsizlik uchun yangi qurilmadan boshqa sessiyalarni
+  {revoke_available_at → Toshkent vaqti} dan keyin chiqarish mumkin. Shoshilinch
+  bo'lsa — parolni almashtiring». Baribir 403 `SESSION_TOO_NEW` kelsa (masalan,
+  sahifa eskirgan) — `available_at` bilan xuddi shu izoh, ro'yxatni yangilang.
+- [2026-10-23] ⚠️ [auth/identity] — parol almashtirish boshqa qurilmalarni
+  DARHOL chiqaradi (yangi qurilma egasi uchun «qochish yo'li» — 48 soatlik
+  qulfga bog'liq emas):
+  - `PATCH /auth/my-profile` `{ password }` (o'zi): joriy sessiyadan BOSHQA
+    barcha sessiyalar shu zahoti yopiladi — ularning access tokeni keyingi
+    so'rovdayoq 401 «Session revoked», refresh ham 401. JORIY qurilma
+    ishlashda davom etadi, refresh ham ishlaydi (ilgari o'z parolini
+    almashtirgan qurilma ham ~1 soatdan keyin login sahifasiga chiqardi).
+    `sid` siz token (Telegram Mini App) bilan — hammasi yopiladi;
+  - `PATCH /users/:id` `{ password }` (superadmin / admin / menejer boshqa
+    foydalanuvchi parolini tiklaydi): o'sha foydalanuvchining BARCHA
+    sessiyalari darhol yopiladi (ilgari ular ~1 soatgacha ishlab turardi).
+    `:id` — o'zi bo'lsa, `my-profile` dagidek joriy sessiya qoladi;
+  - parol bilan birga login telefoni ham almashsa — avvalgidek hammasi,
+    joriy ham.
+
+  Javob shakli avvalgidek (`{ statusCode: 200, message: 'User yangilandi',
+  data: <user> }`), parol almashganda qo'shimcha `sessions_revoked: <n>` —
+  nechta sessiya yopildi. Parol almashtirish uchun eski parol so'ralmaydi
+  (avvalgidek). 🔧 FE: o'z parolini almashtirgandan keyin qayta login
+  talab qilmang (sessiya saqlanadi); muvaffaqiyat xabarida «Boshqa
+  qurilmalardan chiqildi: {sessions_revoked} ta» deyish mumkin, keyin
+  «Sessiyalar» ro'yxatini yangilang. OTP / «parolni unutdim» oqimi yo'q
+  (OTP faqat `login` va `phone_verify`).
+
 ### 2026-10-23 — Rollback «Bekor qilish» sotilgan buyurtmadan (y2RarzlT); kuryer filiali va tumani (YEThmZBn)
 
 - [2026-10-23] ✏️ [identity] — `GET /users/:id` javobida yangi maydon
