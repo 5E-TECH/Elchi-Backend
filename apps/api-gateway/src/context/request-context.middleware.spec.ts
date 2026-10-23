@@ -4,7 +4,7 @@ import {
   ClientIpThrottlerGuard,
   resolveTrustedClientIp,
 } from '../auth/client-ip-throttler.guard';
-import { describeUserAgent } from './device-label';
+import { describeUserAgent, normalizeDeviceName } from './device-label';
 import {
   buildRequestContextStore,
   requestContextMiddleware,
@@ -90,6 +90,30 @@ describe('buildRequestContextStore (f2Ud5tju)', () => {
     expect(derived.user_agent).toBe(CHROME_ANDROID);
   });
 
+  it('Elchi Pochta #3 (2026-10-23): boy X-Device-Name to`liq saqlanadi; ko`rinmas/boshqaruv belgilari tozalanadi; ≤128', () => {
+    const named = (value: string) =>
+      buildRequestContextStore(
+        req({ headers: { 'x-device-name': encodeURIComponent(value) } }),
+      ).device_name;
+    expect(named('Samsung SM-A515F · Android 13 · Chrome 155')).toBe(
+      'Samsung SM-A515F · Android 13 · Chrome 155',
+    );
+    expect(named('Windows 11 · Chrome 154')).toBe('Windows 11 · Chrome 154');
+    // Latin-1 "·" kodlanmasdan kelsa ham (Node sarlavhani latin1 o'qiydi).
+    expect(
+      buildRequestContextStore(
+        req({ headers: { 'x-device-name': 'iPhone 15 · iOS 18 · Safari' } }),
+      ).device_name,
+    ).toBe('iPhone 15 · iOS 18 · Safari');
+    // Bidi / nol kenglikdagi belgilar olib tashlanadi, boshqaruv → bo'shliq.
+    expect(named('Win\u202edows\u200b 11\n\t·  Chrome\u0007154')).toBe(
+      'Windows 11 · Chrome 154',
+    );
+    expect(named(`Pixel ${'x'.repeat(300)}`)).toHaveLength(128);
+    // Faqat bo'shliq / ko'rinmas belgi — User-Agent'dan nom.
+    expect(named(' \u200b\u202e ')).toBe('Telefon · Android · Chrome');
+  });
+
   it('TC2 webhook (mashina→mashina) — faqat traceId, IP/qurilma YO`Q', () => {
     for (const path of [
       '/webhooks/sms/eskiz',
@@ -156,6 +180,15 @@ describe('requestContextMiddleware', () => {
       'x-request-id',
       (seen as { traceId: string }).traceId,
     );
+  });
+});
+
+describe('normalizeDeviceName', () => {
+  it('satr bo`lmasa yoki bo`sh qolsa undefined; bo`shliqlar qisqaradi', () => {
+    expect(normalizeDeviceName(undefined)).toBeUndefined();
+    expect(normalizeDeviceName(null)).toBeUndefined();
+    expect(normalizeDeviceName('  \u00ad ')).toBeUndefined();
+    expect(normalizeDeviceName(' Galaxy   Tab ')).toBe('Galaxy Tab');
   });
 });
 

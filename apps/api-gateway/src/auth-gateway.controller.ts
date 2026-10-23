@@ -455,17 +455,21 @@ export class AuthGatewayController {
 
   /**
    * (Elchi Pochta #3) "Sessionlar" bo'limi — akkaunt egasi O'Z akkauntiga
-   * kirgan faol sessiyalarni ko'radi: soni, qurilma, IP, login va oxirgi
-   * faollik vaqti, joriy sessiya belgisi. Har qanday autentifikatsiyadan
-   * o'tgan rol (`@Roles` yo'q); kim — faqat JWT `sub` dan, so'rovda boshqa
-   * foydalanuvchi id si qabul qilinmaydi. Tizim bo'yicha umumiy ro'yxat yo'q.
+   * kirgan qurilmalarni ko'radi (bitta qurilma — bitta sessiya): faollar
+   * soni, qurilma, IP, birinchi / oxirgi login, oxirgi faollik, holat
+   * (`active` / `expired` — «Qayta kirish kerak»), joriy sessiya belgisi.
+   * Har qanday autentifikatsiyadan o'tgan rol (`@Roles` yo'q); kim — faqat
+   * JWT `sub` dan, so'rovda boshqa foydalanuvchi id si qabul qilinmaydi.
+   * Tizim bo'yicha umumiy ro'yxat yo'q.
    */
   @Get('sessions')
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
   @ApiOperation({
     summary:
-      'Own active sessions of the current account (count, device, IP, login and last-seen time, current flag)',
+      'Own sessions (one per device) of the current account: active count, device, IP, first/last login, last-seen, status, current flag',
+    description:
+      "Ochiq sessiyalar: `status: 'active'` (ishlayapti) yoki `'expired'` (refresh muddati o'tgan / parol almashgan — «Qayta kirish kerak»; shu qurilmadan login AYNI sessiyani tiklaydi). Tartib: joriy → active → expired (oxirgi faollik bo'yicha). `active_count` — faqat active lar. Muddati 90 kundan ko'p oldin o'tgan sessiyalar o'chiriladi.",
   })
   @ApiOkResponse({ type: AuthSessionsResponseDto })
   @ApiUnauthorizedResponse({ description: 'Unauthorized' })

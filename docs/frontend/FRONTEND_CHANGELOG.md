@@ -130,6 +130,104 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
   200 | 503). Frontend `/health` ni ishlatmaydi («Tizim holati» —
   readiness), o'zgarish shart emas.
 
+### 2026-10-23 — «Sessiyalar»: bitta qurilma — bitta sessiya (Notion «Elchi Pochta» #3)
+
+- [2026-10-23] ⚠️ [auth] — sessiya endi QURILMAGA bog'langan
+  ("Telegram'dagidek"): bitta qurilma (`X-Device-Id`) — bitta sessiya, u
+  ANIQ yopilmaguncha. Shu qurilmadan qayta login (masalan, 1 kunlik refresh
+  tugab login sahifasiga chiqqanda) YANGI sessiya ochmaydi: mavjud
+  sessiyaning `id` si (access token `sid`) va `first_logged_in_at` saqlanadi,
+  refresh token, `expires_at` (= shu login + 1 kun), `logged_in_at`,
+  `last_seen_at`, qurilma nomi, User-Agent va IP yangilanadi. Eski refresh
+  token shu zahoti 401. YANGI sessiya faqat: (a) shu qurilma sessiyasi
+  yopilgan bo'lsa — «Chiqish» (`POST /auth/logout`), boshqa qurilmadan
+  «Chiqarish» / «Boshqa sessiyalardan chiqish» yoki xavfsizlik hodisasi
+  (parol/telefon/rol almashishi, bloklash); (b) `X-Device-Id` yuborilmagan
+  yoki yaroqsiz bo'lsa — avvalgidek har login alohida sessiya. Yaroqli ID:
+  16–128 belgi `[A-Za-z0-9._:-]` (`crypto.randomUUID()` yoki 32 xonali hex —
+  hozirgi FE shakli mos); `"undefined"`, `"null"`, qisqa qiymat — yaroqsiz
+  (sessiyada `device_id: null`). Boshqa foydalanuvchi AYNI `X-Device-Id`
+  bilan kirsa — uning alohida sessiyasi. Login / refresh javobi shakli
+  o'zgarmagan; refresh avvalgidek rotatsiya qilinmaydi va uzaymaydi. 🔧
+  `X-Device-Id` ni parol va OTP login so'rovlarida yuborishda davom eting;
+  ID chiqishda o'chirilmasin (u foydalanuvchi emas, qurilma belgisi).
+- [2026-10-23] ✏️ [auth] — `GET /auth/sessions` kontrakti (qo'shimcha
+  maydonlar, eski maydonlar joyida):
+  - ro'yxatda endi barcha OCHIQ (yopilmagan) sessiyalar — muddati
+    o'tganlari ham; har qatorda yangi `status: 'active' | 'expired'` va
+    `first_logged_in_at`. `active` — ishlayapti (refresh muddati o'tmagan,
+    parol o'sha). `expired` — refresh muddati o'tgan yoki parol almashgan,
+    lekin qurilma chiqmagan → UI «Qayta kirish kerak» (shu qurilmadan login
+    AYNI sessiyani tiklaydi, boshqa qurilmadan «Chiqarish» uni butunlay
+    yopadi);
+  - `logged_in_at` endi OXIRGI login vaqti (avval — sessiya ochilgan vaqt),
+    `first_logged_in_at` — shu qurilmadan birinchi login;
+  - `active_count` — FAQAT `status: 'active'` lar soni (`expired` sanalmaydi);
+  - tartib: joriy (`current: true`) birinchi → `active` → `expired` (har
+    guruh `last_seen_at` bo'yicha yangisi tepada), ko'pi bilan 50 ta;
+  - muddati 90 kundan ko'p oldin o'tgan sessiyalar avtomatik o'chiriladi
+    (avval 30 kun) — ro'yxatdan ham yo'qoladi.
+
+  ```json
+  {
+    "statusCode": 200,
+    "message": "success",
+    "data": {
+      "active_count": 1,
+      "sessions": [
+        {
+          "id": "3f2b8c1e-6a4d-4e7b-9c10-2d5f7a8b9c0d",
+          "status": "active",
+          "device_name": "Windows 11 · Chrome 154",
+          "device_id": "0b6f3c52-8d0e-4f4a-9a3b-6c1d2e3f4a5b",
+          "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) … Chrome/154.0",
+          "ip": "203.0.113.7",
+          "first_logged_in_at": "2026-10-01T06:40:00.000Z",
+          "logged_in_at": "2026-10-23T05:10:00.000Z",
+          "last_seen_at": "2026-10-23T07:55:12.000Z",
+          "expires_at": "2026-10-24T05:10:00.000Z",
+          "current": true
+        },
+        {
+          "id": "9a1c2b3d-4e5f-4a6b-8c7d-0e1f2a3b4c5d",
+          "status": "expired",
+          "device_name": "Samsung SM-A515F · Android 13 · Chrome 155",
+          "device_id": "f3a9c2d1-0b7e-4c55-9e21-7d4c3b2a1f00",
+          "user_agent": "Mozilla/5.0 (Linux; Android 13; SM-A515F) … Mobile",
+          "ip": "198.51.100.20",
+          "first_logged_in_at": "2026-10-05T12:00:00.000Z",
+          "logged_in_at": "2026-10-20T09:30:00.000Z",
+          "last_seen_at": "2026-10-21T08:45:00.000Z",
+          "expires_at": "2026-10-21T09:30:00.000Z",
+          "current": false
+        }
+      ]
+    }
+  }
+  ```
+
+  🔧 «Sessiyalar» bo'limi: `status === 'expired'` qatorga «Qayta kirish
+  kerak» belgisi (vaqt sifatida `last_seen_at`; «Birinchi kirgan» —
+  `first_logged_in_at`, «Oxirgi kirgan» — `logged_in_at`); sarlavhadagi faol
+  sessiyalar soni — `active_count`. «Boshqa sessiyalardan chiqish» tugmasi
+  sharti endi `sessions.some((s) => !s.current)` (avval `active_count > 1`),
+  chunki u `expired` sessiyalarni ham yopadi.
+- [2026-10-23] ✏️ [auth] — `DELETE /auth/sessions/:id` va
+  `POST /auth/sessions/revoke-others` `expired` sessiyalarni ham yopadi (ular
+  ham foydalanuvchi qurilmalari); javob shakli o'zgarmagan, `revoked` /
+  `session_ids` ularni ham o'z ichiga oladi. Yopilgan qurilma keyingi
+  login'da YANGI sessiya oladi.
+- [2026-10-23] 🟢 [gateway] — `X-Device-Name`: boyroq nom yuborish mumkin,
+  masalan `Samsung SM-A515F · Android 13 · Chrome 155`, `Windows 11 · Chrome
+  154`, `iPhone 15 · iOS 18 · Safari` (tavsiya ≤80 belgi; `encodeURIComponent`
+  bilan — kirill / maxsus belgilar uchun). Server ko'rinmas va yo'nalish
+  (bidi) belgilarini olib tashlaydi, boshqaruv belgilarini bo'shliqqa
+  almashtiradi, bo'shliqlarni qisqartiradi va 128 belgigacha kesadi; bo'sh
+  qolsa yoki yuborilmasa — User-Agent'dan («Telefon · Android · Chrome»).
+  Sessiyada OXIRGI login paytidagi nom ko'rinadi. 🔧 Login (parol / OTP) va
+  refresh so'rovlarida `X-Device-Id` bilan birga yuborish.
+
+
 ### 2026-10-22 — Boshqa sessiyalardan chiqish; kassa xarajatida kategoriya majburiy (Notion «Elchi Pochta» #3, #1)
 
 - [2026-10-22] 🆕 [auth] — `DELETE /auth/sessions/:id` (Bearer, istalgan rol) —

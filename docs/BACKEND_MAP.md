@@ -83,7 +83,7 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
   `identity.validate` / `identity.user.profile`. Issues access+refresh JWT
   (gateway sets refresh as httpOnly cookie).
 - **Sessions (Elchi Pochta #3, 2026-10-21):** one `user_sessions` row per
-  login (sha256 of the refresh JWT, device/IP from the gateway audit context,
+  login — per DEVICE since 2026-10-23, see below (sha256 of the refresh JWT, device/IP from the gateway audit context,
   `created_at` / `last_seen_at` / `expires_at` / `revoked_at`). A new login
   does not log other devices out; `identity.logout` revokes only the session
   from the access token `sid` / refresh cookie; `identity.auth.sessions`
@@ -92,8 +92,40 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
   via `admins.session_epoch` (+ a password-hash fingerprint per session).
   Pre-deploy tokens (`admins.refresh_token`) get their row on first refresh;
   that column is still written on login for rollback only. Hourly cleanup:
-  epoch-reset rows → `security_reset`, rows 30 days past expiry deleted.
-  Tokens: access 1h, refresh 1d, refresh not rotated.
+  epoch-reset open rows (expired ones too) → `security_reset`, rows 90 days
+  past expiry deleted (`SESSION_RETENTION_DAYS`, was 30).
+  Tokens: access 1h, refresh 1d, refresh not rotated and not sliding.
+  **One session per device (2026-10-23, migration 1716000000140):** a login
+  carrying a valid `X-Device-Id` (16–128 `[A-Za-z0-9._:-]`, else stored as
+  `null`) reuses the user's NOT-closed row for that device (`revoked_at IS
+  NULL` and `epoch` current; expired and password-fingerprint-stale rows
+  ARE reused): same `id`/`sid` and `created_at` (first login), new hash /
+  `expires_at` / epoch / fingerprint / method / `last_login_at` /
+  `last_seen_at` / device name / UA / IP. Closed rows (logout,
+  `revoked_by_owner`, `security_reset`, `merged`) are never reused — so the
+  gateway revoked-sid cache stays valid; an epoch-stale open row is first
+  closed as `security_reset`, then a new row is inserted. No device id → a
+  new row per login (old behaviour). Partial UNIQUE
+  `UQ_USER_SESSIONS_USER_DEVICE_OPEN (user_id, device_id) WHERE revoked_at
+  IS NULL AND device_id IS NOT NULL`; a concurrent same-device login hits
+  23505 and retries into an UPDATE (≤3 attempts) → exactly one open row;
+  `adoptLegacy` on 23505 returns the same-hash row, else the device's open
+  row. The migration added `last_login_at` (NOT NULL, backfilled from
+  `created_at`, no default) and closed duplicate open rows per device as
+  `merged` (most recently seen kept) before building the index; a BEFORE
+  INSERT trigger `TRG_USER_SESSIONS_LEGACY_INSERT` fires only for INSERTs
+  without `last_login_at` (pre-140 code during the deploy build / rollback
+  window): fills it from `created_at` and closes the device's previous open
+  row as `merged` instead of failing with 23505 (droppable later).
+  `identity.auth.sessions` returns open rows (epoch current, `expires_at`
+  within 90 days) with `status` `active` (not expired AND fingerprint
+  matches) / `expired`, `first_logged_in_at` (= `created_at`) and
+  `logged_in_at` (= `last_login_at`); order current → active → expired (each
+  by `last_seen_at` desc), ≤50; `active_count` counts ACTIVE only. Revoke
+  one / revoke-others also close expired-but-open rows (unchanged SQL:
+  `revoked_at IS NULL`). Gateway `normalizeDeviceName` cleans
+  `X-Device-Name` (invisible/bidi removed, controls → space, ≤128) with the
+  UA-derived fallback.
   **Owner revoke (2026-10-22):** `identity.auth.sessions.revoke`
   (`DELETE /auth/sessions/:id`) closes ONE of the caller's own open
   sessions (not the current one → 400; foreign/unknown/closed → 404);

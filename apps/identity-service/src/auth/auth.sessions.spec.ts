@@ -23,8 +23,11 @@ import type { UserSession } from '../entities/user-session.entity';
  *  - refresh: yaroqli / yopilgan / muddati o'tgan / epoch / parol izi /
  *    deploy'dan oldingi (legacy `admins.refresh_token`) token;
  *  - logout faqat joriy sessiyani yopadi, begona sessiyaga tegolmaydi;
- *  - ro'yxat: faqat o'ziniki, active_count, joriy belgi, tartib.
- * Haqiqiy SQL (UNIQUE, FK, tozalash so'rovi) — `user-sessions.pg.spec.ts`.
+ *  - ro'yxat: faqat o'ziniki, active_count, joriy belgi, tartib, holat;
+ *  - bitta qurilma — bitta sessiya (2026-10-23): qayta kirish AYNI qatorni
+ *    yangilaydi, aniq yopilgani (logout / egasi / xavfsizlik) — yangi qator.
+ * Haqiqiy SQL (UNIQUE, FK, tozalash so'rovi, dedup migratsiyasi) —
+ * `user-sessions.pg.spec.ts`.
  */
 
 const ACCESS_KEY = 'a'.repeat(48);
@@ -48,8 +51,12 @@ interface UserRow {
   telegram_id?: string;
 }
 
-/** TypeORM `where` ning shu spec'ga kerakli qismi (IsNull, MoreThan, LessThan). */
-function matches(row: object, where: Where): boolean {
+/**
+ * TypeORM `where` ning shu spec'ga kerakli qismi (IsNull, MoreThan,
+ * LessThan, Between, Not; massiv — OR).
+ */
+function matches(row: object, where: Where | Where[]): boolean {
+  if (Array.isArray(where)) return where.some((w) => matches(row, w));
   const record = row as Record<string, unknown>;
   return Object.entries(where).every(([key, cond]) => {
     const actual = record[key];
@@ -61,6 +68,12 @@ function matches(row: object, where: Where): boolean {
           return Number(actual) > Number(cond.value);
         case 'lessThan':
           return Number(actual) < Number(cond.value);
+        case 'between': {
+          const [from, to] = cond.value as unknown as [Date, Date];
+          return Number(actual) >= Number(from) && Number(actual) <= Number(to);
+        }
+        case 'not':
+          return actual !== cond.value;
         default:
           throw new Error(`fake repo: ${cond.type} qo'llanmaydi`);
       }
@@ -69,13 +82,43 @@ function matches(row: object, where: Where): boolean {
   });
 }
 
+/** `order: { last_seen_at: 'DESC', created_at: 'DESC' }` — sanalar bo'yicha. */
+function sortBy(rows: UserSession[], order?: Record<string, 'ASC' | 'DESC'>) {
+  const keys = Object.entries(order ?? { last_seen_at: 'DESC' });
+  return [...rows].sort((a, b) => {
+    for (const [key, dir] of keys) {
+      const diff =
+        Number((a as unknown as Record<string, Date>)[key]) -
+        Number((b as unknown as Record<string, Date>)[key]);
+      if (diff) return dir === 'DESC' ? -diff : diff;
+    }
+    return 0;
+  });
+}
+
+const isOpenRow = (r: UserSession) =>
+  r.revoked_at === null || r.revoked_at === undefined;
+
 function makeSessionRepo() {
   const rows: UserSession[] = [];
   return {
     rows,
     create: (value: Partial<UserSession>) => ({ ...value }) as UserSession,
     insert: jest.fn((value: UserSession) => {
-      if (rows.some((r) => r.refresh_token_hash === value.refresh_token_hash)) {
+      // UQ_USER_SESSIONS_REFRESH_HASH va UQ_USER_SESSIONS_USER_DEVICE_OPEN.
+      const deviceTaken =
+        Boolean(value.device_id) &&
+        isOpenRow(value) &&
+        rows.some(
+          (r) =>
+            isOpenRow(r) &&
+            r.user_id === value.user_id &&
+            r.device_id === value.device_id,
+        );
+      if (
+        deviceTaken ||
+        rows.some((r) => r.refresh_token_hash === value.refresh_token_hash)
+      ) {
         return Promise.reject(
           Object.assign(new Error('duplicate key'), { code: '23505' }),
         );
@@ -83,27 +126,56 @@ function makeSessionRepo() {
       rows.push({ ...value });
       return Promise.resolve({});
     }),
-    findOne: jest.fn(({ where }: { where: Where }) =>
-      Promise.resolve(rows.find((r) => matches(r, where)) ?? null),
-    ),
+    findOne: jest.fn(({ where }: { where: Where | Where[] }) => {
+      const hit = rows.find((r) => matches(r, where));
+      return Promise.resolve(hit ? { ...hit } : null);
+    }),
     update: jest.fn((where: Where, patch: Partial<UserSession>) => {
       const hits = rows.filter((r) => matches(r, where));
       hits.forEach((r) => Object.assign(r, patch));
       return Promise.resolve({ affected: hits.length });
     }),
-    findAndCount: jest.fn(({ where, take }: { where: Where; take: number }) => {
-      const hits = rows
-        .filter((r) => matches(r, where))
-        .sort((a, b) => Number(b.last_seen_at) - Number(a.last_seen_at));
-      return Promise.resolve([
-        hits.slice(0, take).map((r) => ({ ...r })),
-        hits.length,
-      ]);
-    }),
-    find: jest.fn(({ where, take }: { where: Where; take: number }) =>
-      Promise.resolve(
-        rows.filter((r) => matches(r, where)).slice(0, take ?? rows.length),
-      ),
+    findAndCount: jest.fn(
+      ({
+        where,
+        take,
+        order,
+      }: {
+        where: Where;
+        take: number;
+        order?: Record<string, 'ASC' | 'DESC'>;
+      }) => {
+        const hits = sortBy(
+          rows.filter((r) => matches(r, where)),
+          order,
+        );
+        return Promise.resolve([
+          hits.slice(0, take).map((r) => ({ ...r })),
+          hits.length,
+        ]);
+      },
+    ),
+    find: jest.fn(
+      ({
+        where,
+        take,
+        order,
+      }: {
+        where: Where | Where[];
+        take: number;
+        order?: Record<string, 'ASC' | 'DESC'>;
+      }) =>
+        Promise.resolve(
+          (order
+            ? sortBy(
+                rows.filter((r) => matches(r, where)),
+                order,
+              )
+            : rows.filter((r) => matches(r, where))
+          )
+            .slice(0, take ?? rows.length)
+            .map((r) => ({ ...r })),
+        ),
     ),
     delete: jest.fn((ids: string[]) => {
       let affected = 0;
@@ -268,7 +340,7 @@ const LAPTOP_CTX = {
   ip: '198.51.100.20',
   user_agent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/126.0',
   device_name: 'Kompyuter · Windows · Chrome',
-  device_id: 'dev-laptop-1',
+  device_id: 'a1b2c3d4-laptop-device-0001',
 };
 
 describe('Elchi Pochta #3 — login: har login alohida sessiya', () => {
@@ -306,7 +378,7 @@ describe('Elchi Pochta #3 — login: har login alohida sessiya', () => {
       ip: '198.51.100.20',
       user_agent: LAPTOP_CTX.user_agent,
       device_name: 'Kompyuter · Windows · Chrome',
-      device_id: 'dev-laptop-1',
+      device_id: 'a1b2c3d4-laptop-device-0001',
     });
     expect(JSON.stringify(row)).not.toContain(res.refreshToken);
     expect(row.expires_at.getTime()).toBe(res.refresh_token_expires_at);
@@ -341,6 +413,451 @@ describe('Elchi Pochta #3 — login: har login alohida sessiya', () => {
     expect(w.sessionRepo.rows).toHaveLength(0);
     expect(w.sidOf(res.accessToken)).toBeUndefined();
     expect(res).not.toHaveProperty('refreshToken');
+  });
+});
+
+const DEVICE_A = 'f3a9c2d1-0b7e-4c55-9e21-7d4c3b2a1f00';
+const DEVICE_B = '0c1d2e3f-4a5b-4c6d-8e7f-90a1b2c3d4e5';
+const PHONE_A_CTX = {
+  ip: '203.0.113.7',
+  user_agent: PHONE_CTX.user_agent,
+  device_name: 'Samsung SM-A515F · Android 13 · Chrome 155',
+  device_id: DEVICE_A,
+};
+const LAPTOP_B_CTX = {
+  ip: '198.51.100.20',
+  user_agent: LAPTOP_CTX.user_agent,
+  device_name: 'Windows 11 · Chrome 154',
+  device_id: DEVICE_B,
+};
+const tick = (ms = 5) => new Promise((resolve) => setTimeout(resolve, ms));
+const openRowsOf = (rows: UserSession[], userId: string, deviceId: string) =>
+  rows.filter(
+    (r) => r.user_id === userId && r.device_id === deviceId && isOpenRow(r),
+  );
+
+describe('Elchi Pochta #3 (2026-10-23) — bitta qurilma, bitta sessiya', () => {
+  it('⭐ muddati o‘tgandan keyin qayta login — AYNI qator: id va created_at saqlanadi, last_login_at / muddat / hash yangilanadi; yangi refresh ishlaydi, eskisi 401', async () => {
+    const w = makeWorld();
+    const first = await w.login('25', PHONE_A_CTX);
+    const row = w.sessionRepo.rows[0];
+    const sid = w.sidOf(first.accessToken)!;
+    const createdAt = row.created_at;
+    expect(row.last_login_at).toEqual(createdAt);
+
+    // 1 kunlik refresh tugadi — FE login sahifasiga chiqardi.
+    row.expires_at = new Date(Date.now() - 1000);
+    expect(
+      (await errorOf(w.service.refresh({ refreshToken: first.refreshToken })))
+        .statusCode,
+    ).toBe(401);
+    await tick();
+
+    const second = await w.login('25', {
+      ...PHONE_A_CTX,
+      ip: '198.51.100.99',
+      device_name: 'Samsung SM-A515F · Android 14 · Chrome 156',
+    });
+
+    expect(w.sessionRepo.rows).toHaveLength(1);
+    expect(w.sidOf(second.accessToken)).toBe(sid);
+    expect(row).toMatchObject({
+      id: sid,
+      created_at: createdAt,
+      refresh_token_hash: sha256(second.refreshToken),
+      revoked_at: null,
+      ip: '198.51.100.99',
+      device_name: 'Samsung SM-A515F · Android 14 · Chrome 156',
+      device_id: DEVICE_A,
+    });
+    expect(row.last_login_at.getTime()).toBeGreaterThan(createdAt.getTime());
+    expect(row.last_seen_at).toEqual(row.last_login_at);
+    expect(row.expires_at.getTime()).toBe(second.refresh_token_expires_at);
+
+    const ok = await w.service.refresh({ refreshToken: second.refreshToken });
+    expect(ok.statusCode).toBe(200);
+    expect(w.sidOf(ok.accessToken)).toBe(sid);
+    w.activityLog.log.mockClear();
+    expect(
+      (await errorOf(w.service.refresh({ refreshToken: first.refreshToken })))
+        .statusCode,
+    ).toBe(401);
+    expect(failureReasons(w.activityLog)).toEqual([
+      'refresh_session_not_found',
+    ]);
+    // Gateway uchun sessiya ochiq — o'sha `sid`.
+    expect(
+      await w.service.sessionState({ userId: '25', sessionId: sid }),
+    ).toEqual({ active: true });
+  });
+
+  it('muddati o‘tmagan (faol) sessiyada qayta login ham AYNI qator (qurilmada bitta sessiya)', async () => {
+    const w = makeWorld();
+    const first = await w.login('25', PHONE_A_CTX);
+    const second = await w.login('25', PHONE_A_CTX);
+    expect(w.sessionRepo.rows).toHaveLength(1);
+    expect(w.sidOf(second.accessToken)).toBe(w.sidOf(first.accessToken));
+    expect(
+      (await w.service.refresh({ refreshToken: second.refreshToken }))
+        .statusCode,
+    ).toBe(200);
+  });
+
+  it('OTP login ham shu qurilma sessiyasini qayta ishlatadi (method yangilanadi)', async () => {
+    const w = makeWorld();
+    const first = await w.login('26', PHONE_A_CTX);
+    const otp = await requestContext.run({ traceId: 't', ...PHONE_A_CTX }, () =>
+      w.service.sessionForUser(w.users.get('26') as never, 'otp'),
+    );
+    expect(w.sessionRepo.rows).toHaveLength(1);
+    expect(w.sidOf(otp.accessToken)).toBe(w.sidOf(first.accessToken));
+    expect(w.sessionRepo.rows[0].method).toBe('otp');
+  });
+
+  it.each([
+    ['logout', 'logout'],
+    ['revoked_by_owner', 'revoked_by_owner'],
+  ] as const)(
+    '⭐ aniq yopilgan sessiya (%s) QAYTA ISHLATILMAYDI — yangi qator, eskisi yopiqligicha',
+    async (how, reason) => {
+      const w = makeWorld();
+      const first = await w.login('25', PHONE_A_CTX);
+      const laptop = await w.login('25', LAPTOP_B_CTX);
+      const sid = w.sidOf(first.accessToken)!;
+      if (how === 'logout') {
+        await w.service.logout('25', { sessionId: sid });
+      } else {
+        await w.service.revokeSession({
+          userId: '25',
+          sessionId: sid,
+          currentSessionId: w.sidOf(laptop.accessToken),
+        });
+      }
+      const closedAt = w.sessionRepo.rows.find((r) => r.id === sid)!.revoked_at;
+
+      const again = await w.login('25', PHONE_A_CTX);
+      const newSid = w.sidOf(again.accessToken)!;
+      expect(newSid).not.toBe(sid);
+      expect(w.sessionRepo.rows).toHaveLength(3);
+      expect(w.sessionRepo.rows.find((r) => r.id === sid)).toMatchObject({
+        revoke_reason: reason,
+        revoked_at: closedAt,
+      });
+      expect(openRowsOf(w.sessionRepo.rows, '25', DEVICE_A)).toHaveLength(1);
+      // Gateway keshidagi yopilgan sid tirilmaydi.
+      expect(
+        await w.service.sessionState({ userId: '25', sessionId: sid }),
+      ).toEqual({ active: false });
+      expect(
+        (await w.service.refresh({ refreshToken: again.refreshToken }))
+          .statusCode,
+      ).toBe(200);
+    },
+  );
+
+  it('⭐ xavfsizlik hodisasi (epoch) — eski qator security_reset bilan yopiladi, yangi qator ochiladi', async () => {
+    const w = makeWorld();
+    const first = await w.login('25', PHONE_A_CTX);
+    const sid = w.sidOf(first.accessToken)!;
+    invalidateAllSessions(w.users.get('25') as never); // qator hali revoked_at=null
+
+    const again = await w.login('25', PHONE_A_CTX);
+    expect(w.sidOf(again.accessToken)).not.toBe(sid);
+    expect(w.sessionRepo.rows.find((r) => r.id === sid)).toMatchObject({
+      revoke_reason: 'security_reset',
+    });
+    expect(openRowsOf(w.sessionRepo.rows, '25', DEVICE_A)).toEqual([
+      expect.objectContaining({ id: w.sidOf(again.accessToken), epoch: 1 }),
+    ]);
+    expect(
+      (await w.service.refresh({ refreshToken: again.refreshToken }))
+        .statusCode,
+    ).toBe(200);
+  });
+
+  it('⭐ parol almashgan (epoch o‘zgarmagan, faqat barmoq izi) — AYNI qator qayta ishlatiladi, parol izi yangilanadi', async () => {
+    const w = makeWorld();
+    const first = await w.login('25', PHONE_A_CTX);
+    w.users.get('25')!.password = 'bcrypt-hash-NEW';
+
+    const list = await w.service.listSessions({ userId: '25' });
+    expect(list.data.active_count).toBe(0);
+    expect(list.data.sessions.map((s) => s.status)).toEqual(['expired']);
+
+    const again = await w.login('25', PHONE_A_CTX);
+    expect(w.sidOf(again.accessToken)).toBe(w.sidOf(first.accessToken));
+    expect(w.sessionRepo.rows).toHaveLength(1);
+    expect(w.sessionRepo.rows[0].password_fp).toBe(
+      passwordFingerprint('bcrypt-hash-NEW'),
+    );
+    expect(
+      (await w.service.refresh({ refreshToken: again.refreshToken }))
+        .statusCode,
+    ).toBe(200);
+  });
+
+  it('⭐ device_id siz (yoki yaroqsiz device_id) — har login yangi qator (avvalgi xulq), device_id saqlanmaydi', async () => {
+    const w = makeWorld();
+    await w.login('25', PHONE_CTX);
+    await w.login('25', PHONE_CTX);
+    for (const device_id of [
+      'undefined',
+      'null',
+      'short-id',
+      'bad id with spaces!!',
+    ]) {
+      await w.login('25', { ...PHONE_CTX, device_id });
+      await w.login('25', { ...PHONE_CTX, device_id });
+    }
+    expect(w.sessionRepo.rows).toHaveLength(10);
+    expect(w.sessionRepo.rows.every((r) => r.device_id === null)).toBe(true);
+    expect(w.sessionRepo.rows.every((r) => r.revoked_at === null)).toBe(true);
+  });
+
+  it('⭐ boshqa foydalanuvchi AYNI device_id bilan — alohida qatorlar, bir-biriga tegmaydi', async () => {
+    const w = makeWorld();
+    const mine = await w.login('25', PHONE_A_CTX);
+    const theirs = await w.login('26', PHONE_A_CTX);
+    expect(w.sessionRepo.rows).toHaveLength(2);
+    expect(w.sidOf(mine.accessToken)).not.toBe(w.sidOf(theirs.accessToken));
+
+    const again = await w.login('25', PHONE_A_CTX);
+    expect(w.sessionRepo.rows).toHaveLength(2);
+    expect(w.sidOf(again.accessToken)).toBe(w.sidOf(mine.accessToken));
+    expect(
+      (await w.service.refresh({ refreshToken: theirs.refreshToken }))
+        .statusCode,
+    ).toBe(200);
+  });
+
+  it('⭐ bir qurilmadan ikki login bir vaqtda (ikki tab) — bitta ochiq qator, ikkala access token bitta sid', async () => {
+    const w = makeWorld();
+    const [a, b] = await Promise.all([
+      w.login('25', PHONE_A_CTX),
+      w.login('25', PHONE_A_CTX),
+    ]);
+    expect(w.sessionRepo.rows).toHaveLength(1);
+    expect(w.sidOf(a.accessToken)).toBe(w.sidOf(b.accessToken));
+    // Qatorda oxirgi yozganning hashi; o'sha token ishlaydi.
+    const hash = w.sessionRepo.rows[0].refresh_token_hash;
+    expect([sha256(a.refreshToken), sha256(b.refreshToken)]).toContain(hash);
+    const winner = hash === sha256(a.refreshToken) ? a : b;
+    expect(
+      (await w.service.refresh({ refreshToken: winner.refreshToken }))
+        .statusCode,
+    ).toBe(200);
+  });
+
+  it('poyga deterministik: tekshiruvdan keyin boshqa tab qator ochdi → INSERT 23505 → qayta urinish o‘sha qatorni yangilaydi', async () => {
+    const w = makeWorld();
+    const other = await w.login('25', PHONE_A_CTX); // "birinchi tab" qatori
+    // Ikkinchi tab qidirganda qator hali ko'rinmagan (parallel tranzaksiya).
+    w.sessionRepo.findOne.mockImplementationOnce(() => Promise.resolve(null));
+    w.sessionRepo.insert.mockClear();
+
+    const res = await w.login('25', PHONE_A_CTX);
+    expect(w.sessionRepo.insert).toHaveBeenCalledTimes(1);
+    await expect(
+      w.sessionRepo.insert.mock.results[0].value as Promise<unknown>,
+    ).rejects.toMatchObject({ code: '23505' });
+    expect(w.sessionRepo.rows).toHaveLength(1);
+    expect(w.sidOf(res.accessToken)).toBe(w.sidOf(other.accessToken));
+    expect(w.sessionRepo.rows[0].refresh_token_hash).toBe(
+      sha256(res.refreshToken),
+    );
+  });
+
+  it('boshqa (23505 bo‘lmagan) INSERT xatosi yutilmaydi', async () => {
+    const w = makeWorld();
+    w.sessionRepo.insert.mockImplementationOnce(() =>
+      Promise.reject(new Error('connection lost')),
+    );
+    await expect(w.login('25', PHONE_A_CTX)).rejects.toThrow('connection lost');
+  });
+
+  it('legacy token, qurilmada ochiq qator bor (UQ device 23505) — o‘sha qurilma qatori ishlatiladi, takroriy qator yo‘q', async () => {
+    const w = makeWorld();
+    const live = await w.login('25', PHONE_A_CTX);
+    const legacy = await w.jwt.signAsync(
+      { sub: '25', username: null, jti: 'legacy-same-device' },
+      { secret: REFRESH_KEY, expiresIn: '1d' },
+    );
+    w.users.get('25')!.refresh_token = sha256(legacy);
+
+    const res = await requestContext.run({ traceId: 't', ...PHONE_A_CTX }, () =>
+      w.service.refresh({ refreshToken: legacy }),
+    );
+    expect(res.statusCode).toBe(200);
+    expect(w.sidOf(res.accessToken)).toBe(w.sidOf(live.accessToken));
+    expect(w.sessionRepo.rows).toHaveLength(1);
+  });
+});
+
+describe('Elchi Pochta #3 (2026-10-23) — ro‘yxat: status, tartib, active_count', () => {
+  const DAY = 24 * 3600_000;
+
+  it('⭐ joriy → active → expired (har biri last_seen bo‘yicha); active_count faqat faollar; yopilgan / epoch / 90 kundan eski yo‘q', async () => {
+    const w = makeWorld();
+    const current = await w.login('25', LAPTOP_B_CTX);
+    const phone = await w.login('25', PHONE_A_CTX);
+    const tablet = await w.login('25', {
+      ...PHONE_CTX,
+      device_id: 'tablet-device-000000000001',
+    });
+    const oldPc = await w.login('25', {
+      ...LAPTOP_CTX,
+      device_id: 'oldpc-device-0000000000001',
+    });
+    const pwStale = await w.login('25', {
+      ...PHONE_CTX,
+      device_id: 'pwstale-device-00000000001',
+    });
+    const closed = await w.login('25', {
+      ...PHONE_CTX,
+      device_id: 'closed-device-000000000001',
+    });
+    const ancient = await w.login('25', {
+      ...PHONE_CTX,
+      device_id: 'ancient-device-00000000001',
+    });
+    const otherEpoch = await w.login('25', {
+      ...PHONE_CTX,
+      device_id: 'epoch-device-0000000000001',
+    });
+    await w.login('26', PHONE_A_CTX); // begona
+
+    const rowOf = (res: { accessToken: string }) =>
+      w.sessionRepo.rows.find((r) => r.id === w.sidOf(res.accessToken))!;
+    const now = Date.now();
+    rowOf(current).last_seen_at = new Date(now - 60 * 60_000);
+    rowOf(phone).last_seen_at = new Date(now - 5 * 60_000);
+    rowOf(tablet).last_seen_at = new Date(now - 30 * 60_000);
+    Object.assign(rowOf(oldPc), {
+      expires_at: new Date(now - 3 * DAY),
+      last_seen_at: new Date(now - 4 * DAY),
+    });
+    Object.assign(rowOf(pwStale), {
+      password_fp: passwordFingerprint('old-password'),
+      last_seen_at: new Date(now - 60_000),
+    });
+    await w.service.logout('25', { sessionId: w.sidOf(closed.accessToken) });
+    Object.assign(rowOf(ancient), {
+      expires_at: new Date(now - 91 * DAY),
+      last_seen_at: new Date(now - 92 * DAY),
+    });
+    rowOf(otherEpoch).epoch = 7;
+
+    const res = await w.service.listSessions({
+      userId: '25',
+      sessionId: w.sidOf(current.accessToken),
+    });
+
+    expect(res.data.active_count).toBe(3);
+    expect(res.data.sessions.map((s) => [s.id, s.status, s.current])).toEqual([
+      [w.sidOf(current.accessToken), 'active', true],
+      [w.sidOf(phone.accessToken), 'active', false],
+      [w.sidOf(tablet.accessToken), 'active', false],
+      [w.sidOf(pwStale.accessToken), 'expired', false],
+      [w.sidOf(oldPc.accessToken), 'expired', false],
+    ]);
+  });
+
+  it('joriy sessiyaning o‘zi muddati o‘tgan bo‘lsa ham birinchi (status: expired), active_count uni sanamaydi', async () => {
+    const w = makeWorld();
+    const current = await w.login('25', LAPTOP_B_CTX);
+    await w.login('25', PHONE_A_CTX);
+    const sid = w.sidOf(current.accessToken)!;
+    w.sessionRepo.rows.find((r) => r.id === sid)!.expires_at = new Date(
+      Date.now() - 60_000,
+    );
+
+    const res = await w.service.listSessions({ userId: '25', sessionId: sid });
+    expect(res.data.active_count).toBe(1);
+    expect(res.data.sessions.map((s) => [s.status, s.current])).toEqual([
+      ['expired', true],
+      ['active', false],
+    ]);
+  });
+
+  it('qayta kirgan qurilma: first_logged_in_at — birinchi login, logged_in_at — oxirgi login', async () => {
+    const w = makeWorld();
+    await w.login('25', PHONE_A_CTX);
+    const row = w.sessionRepo.rows[0];
+    const firstAt = new Date(Date.now() - 2 * DAY);
+    Object.assign(row, {
+      created_at: firstAt,
+      last_login_at: firstAt,
+      expires_at: new Date(Date.now() - DAY),
+    });
+    const again = await w.login('25', PHONE_A_CTX);
+
+    const res = await w.service.listSessions({
+      userId: '25',
+      sessionId: w.sidOf(again.accessToken),
+    });
+    expect(res.data.sessions).toHaveLength(1);
+    const [view] = res.data.sessions;
+    expect(view.first_logged_in_at).toBe(firstAt.toISOString());
+    expect(new Date(view.logged_in_at).getTime()).toBeGreaterThan(
+      firstAt.getTime() + DAY,
+    );
+    expect(view).toMatchObject({ status: 'active', current: true });
+  });
+});
+
+describe('Elchi Pochta #3 (2026-10-23) — muddati o‘tgan (ochiq) sessiyani yopish', () => {
+  it('⭐ DELETE /auth/sessions/:id muddati o‘tgan qatorni ham yopadi; keyin shu qurilma qayta kirsa — YANGI sessiya', async () => {
+    const w = makeWorld();
+    const phone = await w.login('25', PHONE_A_CTX);
+    const laptop = await w.login('25', LAPTOP_B_CTX);
+    const phoneSid = w.sidOf(phone.accessToken)!;
+    w.sessionRepo.rows.find((r) => r.id === phoneSid)!.expires_at = new Date(
+      Date.now() - 60_000,
+    );
+
+    const res = await w.service.revokeSession({
+      userId: '25',
+      sessionId: phoneSid,
+      currentSessionId: w.sidOf(laptop.accessToken),
+    });
+    expect(res.data).toEqual({ revoked: 1, session_ids: [phoneSid] });
+    const list = await w.service.listSessions({
+      userId: '25',
+      sessionId: w.sidOf(laptop.accessToken),
+    });
+    expect(list.data.sessions.map((s) => s.id)).toEqual([
+      w.sidOf(laptop.accessToken),
+    ]);
+
+    const again = await w.login('25', PHONE_A_CTX);
+    expect(w.sidOf(again.accessToken)).not.toBe(phoneSid);
+  });
+
+  it('⭐ revoke-others muddati o‘tgan va parol izi eskirgan ochiq qatorlarni ham yopadi', async () => {
+    const w = makeWorld();
+    const current = await w.login('25', LAPTOP_B_CTX);
+    const expired = await w.login('25', PHONE_A_CTX);
+    const pwStale = await w.login('25', PHONE_CTX);
+    const rowOf = (res: { accessToken: string }) =>
+      w.sessionRepo.rows.find((r) => r.id === w.sidOf(res.accessToken))!;
+    rowOf(expired).expires_at = new Date(Date.now() - 60_000);
+    rowOf(pwStale).password_fp = passwordFingerprint('old');
+
+    const res = await w.service.revokeOtherSessions({
+      userId: '25',
+      currentSessionId: w.sidOf(current.accessToken),
+    });
+    expect(res.data.revoked).toBe(2);
+    expect([...res.data.session_ids].sort()).toEqual(
+      [w.sidOf(expired.accessToken)!, w.sidOf(pwStale.accessToken)!].sort(),
+    );
+    expect(rowOf(expired).revoke_reason).toBe('revoked_by_owner');
+    expect(rowOf(pwStale).revoke_reason).toBe('revoked_by_owner');
+    const list = await w.service.listSessions({
+      userId: '25',
+      sessionId: w.sidOf(current.accessToken),
+    });
+    expect(list.data.sessions).toHaveLength(1);
   });
 });
 
@@ -713,33 +1230,41 @@ describe('Elchi Pochta #3 — GET /auth/sessions (identity.auth.sessions)', () =
 
     expect(res.statusCode).toBe(200);
     expect(res.data.active_count).toBe(2);
+    // Joriy sessiya — doim birinchi, keyin qolgan faollar (oxirgi faollik).
     expect(res.data.sessions.map((s) => s.device_name)).toEqual([
-      'Telefon · Android · Chrome',
       'Kompyuter · Windows · Chrome',
+      'Telefon · Android · Chrome',
     ]);
-    expect(res.data.sessions.map((s) => s.current)).toEqual([false, true]);
-    const current = res.data.sessions[1];
+    expect(res.data.sessions.map((s) => s.current)).toEqual([true, false]);
+    expect(res.data.sessions.map((s) => s.status)).toEqual([
+      'active',
+      'active',
+    ]);
+    const current = res.data.sessions[0];
     expect(Object.keys(current).sort()).toEqual([
       'current',
       'device_id',
       'device_name',
       'expires_at',
+      'first_logged_in_at',
       'id',
       'ip',
       'last_seen_at',
       'logged_in_at',
+      'status',
       'user_agent',
     ]);
     expect(current).toMatchObject({
       id: w.sidOf(laptop.accessToken),
       device_name: 'Kompyuter · Windows · Chrome',
-      device_id: 'dev-laptop-1',
+      device_id: 'a1b2c3d4-laptop-device-0001',
       user_agent: LAPTOP_CTX.user_agent,
       ip: '198.51.100.20',
       expires_at: new Date(laptop.refresh_token_expires_at!).toISOString(),
       current: true,
     });
     expect(current.logged_in_at).toMatch(/^\d{4}-\d\d-\d\dT/);
+    expect(current.first_logged_in_at).toBe(current.logged_in_at);
     expect(current.last_seen_at).toMatch(/^\d{4}-\d\d-\d\dT/);
     const serialized = JSON.stringify(res);
     for (const secret of [
@@ -774,7 +1299,7 @@ describe('Elchi Pochta #3 — GET /auth/sessions (identity.auth.sessions)', () =
 });
 
 describe('Elchi Pochta #3 — AuthSessionService.cleanup', () => {
-  it('epoch eskirganlarni belgilaydi (SQL) va retention’dan o‘tganlarni partiyalab o‘chiradi', async () => {
+  it('epoch eskirganlarni belgilaydi (SQL) va retention’dan (90 kun) o‘tganlarni partiyalab o‘chiradi', async () => {
     const repo = makeSessionRepo();
     repo.query.mockResolvedValue([[], 3]);
     const now = new Date('2026-10-21T00:00:00Z');
@@ -782,7 +1307,8 @@ describe('Elchi Pochta #3 — AuthSessionService.cleanup', () => {
     const at = (id: string, offsetMs: number) =>
       repo.create({ id, expires_at: new Date(now.getTime() + offsetMs) });
     repo.rows.push(
-      at('old', -31 * day),
+      at('old', -91 * day),
+      at('month', -31 * day),
       at('recent', -2 * day),
       at('live', day),
     );
@@ -794,12 +1320,15 @@ describe('Elchi Pochta #3 — AuthSessionService.cleanup', () => {
       )
       .mockImplementation(() => undefined);
 
-    expect(SESSION_RETENTION_DAYS).toBe(30);
+    expect(SESSION_RETENTION_DAYS).toBe(90);
     expect(await service.cleanup(now)).toEqual({ reset: 3, deleted: 1 });
-    expect(repo.rows.map((r) => r.id)).toEqual(['recent', 'live']);
+    // 31 kun oldin tugagan qator endi QOLADI (ro'yxatda «Qayta kirish kerak»).
+    expect(repo.rows.map((r) => r.id)).toEqual(['month', 'recent', 'live']);
     const [sql, params] = repo.query.mock.calls[0] as [string, unknown[]];
     expect(sql).toContain('"session_epoch"');
     expect(sql).toContain("'security_reset'");
+    // Muddati o'tgan ochiq qatorlar ham belgilanadi (qurilma kalitini band qilmasin).
+    expect(sql).not.toContain('"expires_at"');
     expect(params).toEqual([now]);
   });
 });

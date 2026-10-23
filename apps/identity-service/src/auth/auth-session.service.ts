@@ -1,7 +1,15 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Cron, CronExpression } from '@nestjs/schedule';
-import { IsNull, LessThan, MoreThan, Repository } from 'typeorm';
+import {
+  Between,
+  FindOptionsOrder,
+  IsNull,
+  LessThan,
+  MoreThan,
+  Not,
+  Repository,
+} from 'typeorm';
 import { randomUUID } from 'node:crypto';
 import { requestContext } from '@app/common';
 import { User } from '../entities/user.entity';
@@ -12,6 +20,7 @@ import {
 } from '../entities/user-session.entity';
 import {
   hashRefreshToken,
+  isReusableDeviceId,
   isSessionId,
   passwordFingerprint,
 } from './session-security';
@@ -19,6 +28,7 @@ import {
 export {
   hashRefreshToken,
   invalidateAllSessions,
+  isReusableDeviceId,
   isSessionId,
   passwordFingerprint,
 } from './session-security';
@@ -27,14 +37,19 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const CLEANUP_BATCH = 1000;
 
 /**
- * Muddati o'tgan / yopilgan sessiya qatori shuncha kun saqlanadi (tergov
- * uchun), keyin soatlik tozalash o'chiradi. Har qator `expires_at` dan
- * keyin (refresh ≤ REFRESH_TOKEN_TIME) baribir yaroqsiz.
+ * Muddati o'tgan / yopilgan sessiya qatori `expires_at` dan keyin shuncha
+ * kun saqlanadi, keyin soatlik tozalash o'chiradi. (Elchi Pochta #3,
+ * 2026-10-23) 90 kun: muddati o'tgan, lekin yopilmagan qator — foydalanuvchi
+ * qurilmasi; u «Sessiyalar» ro'yxatida «Qayta kirish kerak» bo'lib turadi va
+ * shu qurilma qayta kirsa AYNI qator yangilanadi.
  */
-export const SESSION_RETENTION_DAYS = 30;
+export const SESSION_RETENTION_DAYS = 90;
 
-/** Ro'yxatda ko'pi bilan shuncha faol sessiya qaytadi (`active_count` — hammasi). */
+/** Ro'yxatda ko'pi bilan shuncha sessiya qaytadi (`active_count` — barcha faollar soni). */
 export const SESSION_LIST_LIMIT = 50;
+
+/** Ikki tab bir vaqtda kirganda INSERT/UPDATE poygasi uchun urinishlar soni. */
+const OPEN_ATTEMPTS = 3;
 
 /** Sessiya nega yaroqsiz (`null` — yaroqli). */
 export type SessionRejectReason =
@@ -44,13 +59,25 @@ export type SessionRejectReason =
   | 'password_changed'
   | 'expired';
 
+/**
+ * Ro'yxatdagi sessiya holati: `active` — refresh muddati o'tmagan va parol
+ * o'sha (ishlayapti); `expired` — muddati o'tgan yoki parol almashgan, lekin
+ * qurilma chiqmagan — UI'da «Qayta kirish kerak» (shu qurilmadan login AYNI
+ * sessiyani tiklaydi).
+ */
+export type OwnSessionStatus = 'active' | 'expired';
+
 /** `GET /auth/sessions` qatori — faqat egasiga. Token/hash/epoch CHIQMAYDI. */
 export interface OwnSessionView {
   id: string;
+  status: OwnSessionStatus;
   device_name: string | null;
   device_id: string | null;
   user_agent: string | null;
   ip: string | null;
+  /** Shu qurilmadan birinchi login (`created_at`). */
+  first_logged_in_at: string;
+  /** Oxirgi login (`last_login_at`) — qayta kirishda yangilanadi. */
   logged_in_at: string;
   last_seen_at: string;
   expires_at: string;
@@ -58,15 +85,21 @@ export interface OwnSessionView {
 }
 
 export interface OwnSessionsList {
+  /** Faqat `status: 'active'` sessiyalar soni (ro'yxat chegarasidan qat'i nazar). */
   active_count: number;
   sessions: OwnSessionView[];
 }
 
+const isUniqueViolation = (error: unknown): boolean =>
+  (error as { code?: string })?.code === '23505';
+
 /**
- * (Elchi Pochta #3 — "Sessionlar bo'limi") Har login uchun alohida sessiya:
- * ochish, refresh'da tekshirish, logout'da faqat joriy sessiyani yopish,
- * egasiga o'z faol sessiyalari ro'yxati, egasi boshqa sessiyalarini yopishi
- * (bittasini yoki joriydan boshqa hammasini) va soatlik tozalash.
+ * (Elchi Pochta #3 — "Sessionlar bo'limi") Har QURILMA uchun bitta sessiya
+ * (qurilma ID siz — har login uchun alohida): ochish yoki shu qurilmaning
+ * yopilmagan sessiyasini qayta ishlatish, refresh'da tekshirish, logout'da
+ * faqat joriy sessiyani yopish, egasiga o'z sessiyalari ro'yxati (faol va
+ * «Qayta kirish kerak»), egasi boshqa sessiyalarini yopishi (bittasini yoki
+ * joriydan boshqa hammasini) va soatlik tozalash.
  *
  * Telegram Mini App (`POST /auth/telegram`) va bot aktori tokenlari bu yerga
  * TUSHMAYDI: ular refresh'siz, qisqa (30 daqiqa) access token — brauzer
@@ -93,6 +126,7 @@ export class AuthSessionService {
     // CF-Connecting-IP, User-Agent (≤256), X-Device-Id, X-Device-Name yoki
     // UA'dan "Telefon · Android · Chrome". HTTP bo'lmasa — bo'sh.
     const audit = requestContext.getAuditContext();
+    const loggedInAt = input.createdAt ?? input.now;
     return this.sessions.create({
       id: randomUUID(),
       user_id: String(input.user.id),
@@ -100,12 +134,14 @@ export class AuthSessionService {
       epoch: Number(input.user.session_epoch) || 0,
       password_fp: passwordFingerprint(input.user.password),
       method: input.method,
-      created_at: input.createdAt ?? input.now,
+      created_at: loggedInAt,
+      last_login_at: loggedInAt,
       last_seen_at: input.now,
       expires_at: input.expiresAt,
       revoked_at: null,
       revoke_reason: null,
-      device_id: audit.device_id ?? null,
+      // Faqat yaroqli shakl — qurilma kaliti (`UQ_USER_SESSIONS_USER_DEVICE_OPEN`).
+      device_id: isReusableDeviceId(audit.device_id) ? audit.device_id : null,
       device_name: audit.device_name ?? null,
       user_agent: audit.user_agent ?? null,
       ip: audit.ip ?? null,
@@ -113,8 +149,22 @@ export class AuthSessionService {
   }
 
   /**
-   * Yangi login → YANGI sessiya. Foydalanuvchining boshqa sessiyalariga
+   * Login → sessiya. Foydalanuvchining BOSHQA qurilmalaridagi sessiyalariga
    * TEGILMAYDI (bir nechta qurilmadan bir vaqtda kirish mumkin).
+   *
+   * "Telegram'dagidek" (Elchi Pochta #3, 2026-10-23): so'rovda yaroqli
+   * `device_id` bo'lsa va shu foydalanuvchining shu qurilmadagi sessiyasi
+   * aniq YOPILMAGAN bo'lsa (`revoked_at IS NULL` va `epoch` joriy) — yangi
+   * qator ochilmaydi, o'sha qator yangilanadi (`reuseDeviceSession`).
+   * Muddati o'tgan yoki parol barmoq izi eskirgan qator ham qayta
+   * ishlatiladi; logout / egasi yopgan / xavfsizlik hodisasi — yo'q.
+   * `device_id` siz login — har doim yangi qator (avvalgi xulq).
+   *
+   * Poyga (bir qurilmadan ikki tab bir vaqtda): ikkalasi ham qator topmay
+   * INSERT qilsa, ikkinchisi `UQ_USER_SESSIONS_USER_DEVICE_OPEN` ga uriladi
+   * (23505) va qaytadan urinib, birinchisi ochgan qatorni yangilaydi —
+   * qurilmada doim BITTA ochiq qator. Qatorda oxirgi yozgan tabning tokeni
+   * qoladi (cookie ham brauzerda bitta — odatda oxirgi javobniki).
    */
   async open(input: {
     user: User;
@@ -123,9 +173,86 @@ export class AuthSessionService {
     method: Exclude<UserSessionMethod, 'legacy'>;
     now?: Date;
   }): Promise<UserSession> {
-    const row = this.build({ ...input, now: input.now ?? new Date() });
-    await this.sessions.insert(row);
-    return row;
+    const now = input.now ?? new Date();
+    const row = this.build({ ...input, now });
+    if (!row.device_id) {
+      await this.sessions.insert(row);
+      return row;
+    }
+    for (let attempt = 1; ; attempt += 1) {
+      const reused = await this.reuseDeviceSession(row, now);
+      if (reused) return reused;
+      try {
+        await this.sessions.insert(row);
+        return row;
+      } catch (error) {
+        if (!isUniqueViolation(error) || attempt >= OPEN_ATTEMPTS) throw error;
+        // Shu qurilmaning qatorini parallel login bizdan oldin ochdi —
+        // keyingi aylanishda o'sha qator yangilanadi.
+      }
+    }
+  }
+
+  /**
+   * Shu qurilmaning (`user_id` + `device_id`) ochiq qatori bo'lsa — yangi
+   * login bilan yangilaydi va qaytaradi; bo'lmasa `null` (chaqiruvchi
+   * INSERT qiladi).
+   *
+   * - `epoch` i eskirgan ochiq qator (xavfsizlik hodisasidan keyin, soatlik
+   *   tozalash hali belgilamagan) — QAYTA ISHLATILMAYDI: avval
+   *   `security_reset` bilan yopiladi (UNIQUE indeksni band qilmasin), keyin
+   *   `null` → yangi qator.
+   * - Yangilanadi: refresh hashi, muddati, epoch, parol izi, usul,
+   *   `last_login_at` / `last_seen_at`, qurilma nomi, UA, IP. `id` (access
+   *   token `sid`) va `created_at` (birinchi login) O'ZGARMAYDI — eski
+   *   refresh token endi bu qatorga mos kelmaydi (401).
+   * - UPDATE sharti `revoked_at IS NULL` va `epoch` joriy: shu orada
+   *   yopilgan qator tirilmaydi (`null` → yangi qator).
+   */
+  private async reuseDeviceSession(
+    fresh: UserSession,
+    now: Date,
+  ): Promise<UserSession | null> {
+    const existing = await this.sessions.findOne({
+      where: {
+        user_id: fresh.user_id,
+        device_id: fresh.device_id as string,
+        revoked_at: IsNull(),
+      },
+    });
+    if (!existing) return null;
+
+    if ((Number(existing.epoch) || 0) !== fresh.epoch) {
+      await this.sessions.update(
+        { id: existing.id, revoked_at: IsNull() },
+        { revoked_at: now, revoke_reason: 'security_reset' },
+      );
+      return null;
+    }
+
+    const patch = {
+      refresh_token_hash: fresh.refresh_token_hash,
+      expires_at: fresh.expires_at,
+      epoch: fresh.epoch,
+      password_fp: fresh.password_fp,
+      method: fresh.method,
+      last_login_at: now,
+      last_seen_at: now,
+      device_name: fresh.device_name,
+      user_agent: fresh.user_agent,
+      ip: fresh.ip,
+    };
+    const result = await this.sessions.update(
+      {
+        id: existing.id,
+        user_id: fresh.user_id,
+        revoked_at: IsNull(),
+        epoch: fresh.epoch,
+      },
+      patch,
+    );
+    if (!result.affected) return null;
+    return this.sessions.create({ ...existing, ...patch });
   }
 
   /**
@@ -135,7 +262,10 @@ export class AuthSessionService {
    * keyin u oddiy sessiya. Hech kim chiqarib yuborilmaydi.
    *
    * Ikki tab bir vaqtda refresh qilsa ikkinchi INSERT UNIQUE'ga uriladi —
-   * u holda birinchisi yaratgan qator qaytadi.
+   * u holda birinchisi yaratgan qator qaytadi. Shu qurilmada (`device_id`)
+   * allaqachon ochiq qator bo'lsa INSERT `UQ_USER_SESSIONS_USER_DEVICE_OPEN`
+   * ga uriladi — u holda o'sha qurilma qatori qaytadi (bitta qurilma —
+   * bitta sessiya; uning yaroqliligini `rejectReason` baribir tekshiradi).
    */
   async adoptLegacy(input: {
     user: User;
@@ -153,8 +283,16 @@ export class AuthSessionService {
       await this.sessions.insert(row);
       return row;
     } catch (error) {
-      if ((error as { code?: string })?.code !== '23505') throw error;
-      return this.findByHash(row.refresh_token_hash);
+      if (!isUniqueViolation(error)) throw error;
+      const sameToken = await this.findByHash(row.refresh_token_hash);
+      if (sameToken || !row.device_id) return sameToken;
+      return this.sessions.findOne({
+        where: {
+          user_id: row.user_id,
+          device_id: row.device_id,
+          revoked_at: IsNull(),
+        },
+      });
     }
   }
 
@@ -259,6 +397,9 @@ export class AuthSessionService {
    * «Sessiyalar» bo'limi: egasi BITTA sessiyasini (boshqa qurilma) id bo'yicha
    * yopadi. `user_id` va `revoked_at IS NULL` sharti — begona, yo'q yoki
    * allaqachon yopilgan sessiya → `[]` (chaqiruvchi 404 qaytaradi).
+   * Muddati o'tgan («Qayta kirish kerak»), lekin yopilmagan qator ham
+   * yopiladi — u ham egasining qurilmasi; yopilgach shu qurilma qayta
+   * kirsa YANGI sessiya ochiladi.
    * Qaytadi — haqiqatan yopilgan sessiya id lari.
    */
   async revokeOwnById(
@@ -280,9 +421,11 @@ export class AuthSessionService {
    * «Boshqa sessiyalardan chiqish»: joriy sessiyadan (`keepSessionId`)
    * boshqa BARCHA ochiq sessiyalar — bitta atomar `UPDATE … RETURNING`.
    * Faqat SHU foydalanuvchiniki va faqat `revoked_at IS NULL` (avval
-   * yopilganlarning vaqti/sababi o'zgarmaydi). Muddati o'tgan yoki epoch'i
-   * eskirgan, lekin hali belgilanmagan qatorlar ham yopiladi: ularning
-   * oxirgi access tokeni ACCESS_TOKEN_TIME gacha yashashi mumkin.
+   * yopilganlarning vaqti/sababi o'zgarmaydi). Muddati o'tgan («Qayta
+   * kirish kerak») yoki epoch'i eskirgan, lekin hali belgilanmagan qatorlar
+   * ham yopiladi: ular ham egasining qurilmalari (aks holda o'sha qurilma
+   * qayta kirib AYNI sessiyani tiklardi), oxirgi access tokeni esa
+   * ACCESS_TOKEN_TIME gacha yashashi mumkin.
    */
   async revokeOwnExcept(
     userId: string,
@@ -333,39 +476,95 @@ export class AuthSessionService {
   }
 
   /**
-   * Faqat SHU foydalanuvchining faol sessiyalari (yopilmagan, muddati
-   * o'tmagan, epoch va parol barmoq izi joriy) — oxirgi faollik bo'yicha
-   * kamayish tartibida. Tizim bo'yicha umumiy son/ro'yxat YO'Q.
+   * «Sessiyalar» ro'yxati — faqat SHU foydalanuvchining OCHIQ sessiyalari
+   * (`revoked_at IS NULL`, `epoch` joriy), `expires_at` i retention oynasida
+   * (SESSION_RETENTION_DAYS dan eski emas). Har qatorda `status`:
+   * `active` — muddati o'tmagan va parol izi joriy; aks holda `expired`
+   * («Qayta kirish kerak» — shu qurilmadan login AYNI qatorni tiklaydi).
+   *
+   * Tartib: joriy sessiya → faollar → muddati o'tganlar (ikkalasi oxirgi
+   * faollik bo'yicha kamayish). `active_count` — FAQAT faollar soni.
+   * Tizim bo'yicha umumiy son/ro'yxat YO'Q. So'rovlar
+   * `IDX_USER_SESSIONS_USER_ACTIVE` (user_id, last_seen_at) WHERE
+   * revoked_at IS NULL bo'yicha, har biri ≤ SESSION_LIST_LIMIT qator.
    */
   async listOwn(
     user: User,
     currentSessionId: string | null | undefined,
     now = new Date(),
   ): Promise<OwnSessionsList> {
-    const [rows, activeCount] = await this.sessions.findAndCount({
-      where: {
-        user_id: String(user.id),
-        revoked_at: IsNull(),
-        epoch: Number(user.session_epoch) || 0,
-        password_fp: passwordFingerprint(user.password),
-        expires_at: MoreThan(now),
-      },
-      order: { last_seen_at: 'DESC', created_at: 'DESC' },
+    const fp = passwordFingerprint(user.password);
+    const open = {
+      user_id: String(user.id),
+      revoked_at: IsNull(),
+      epoch: Number(user.session_epoch) || 0,
+    };
+    const retentionCutoff = new Date(
+      now.getTime() - SESSION_RETENTION_DAYS * DAY_MS,
+    );
+    const order: FindOptionsOrder<UserSession> = {
+      last_seen_at: 'DESC',
+      created_at: 'DESC',
+    };
+
+    const [active, activeCount] = await this.sessions.findAndCount({
+      where: { ...open, password_fp: fp, expires_at: MoreThan(now) },
+      order,
       take: SESSION_LIST_LIMIT,
     });
-    const current = isSessionId(currentSessionId) ? currentSessionId : null;
+    const expired = await this.sessions.find({
+      where: [
+        { ...open, expires_at: Between(retentionCutoff, now) },
+        { ...open, password_fp: Not(fp), expires_at: MoreThan(now) },
+      ],
+      order,
+      take: SESSION_LIST_LIMIT,
+    });
+
+    const currentId = isSessionId(currentSessionId)
+      ? currentSessionId.toLowerCase()
+      : null;
+    let current: UserSession | null = null;
+    if (currentId) {
+      current =
+        [...active, ...expired].find((row) => row.id === currentId) ??
+        (await this.sessions.findOne({
+          where: {
+            ...open,
+            id: currentId,
+            expires_at: MoreThan(retentionCutoff),
+          },
+        }));
+    }
+
+    const others = (rows: UserSession[]) =>
+      rows.filter((row) => row.id !== current?.id);
+    const ordered = [
+      ...(current ? [current] : []),
+      ...others(active),
+      ...others(expired),
+    ].slice(0, SESSION_LIST_LIMIT);
+
     return {
       active_count: activeCount,
-      sessions: rows.map((row) => ({
+      sessions: ordered.map((row) => ({
         id: row.id,
+        status:
+          row.password_fp === fp &&
+          new Date(row.expires_at).getTime() > now.getTime()
+            ? 'active'
+            : 'expired',
         device_name: row.device_name ?? null,
         device_id: row.device_id ?? null,
         user_agent: row.user_agent ?? null,
         ip: row.ip ?? null,
-        logged_in_at: new Date(row.created_at).toISOString(),
+        first_logged_in_at: new Date(row.created_at).toISOString(),
+        logged_in_at: new Date(
+          row.last_login_at ?? row.created_at,
+        ).toISOString(),
         last_seen_at: new Date(row.last_seen_at).toISOString(),
         expires_at: new Date(row.expires_at).toISOString(),
-        current: current !== null && row.id === current,
+        current: row.id === current?.id,
       })),
     };
   }
@@ -374,10 +573,12 @@ export class AuthSessionService {
    * Soatlik tozalash (OTP tozalash bilan bir xil shakl):
    *  1. epoch'i eskirgan (xavfsizlik hodisasidan keyingi) ochiq qatorlarga
    *     `revoked_at` + `security_reset` yoziladi — epoch tekshiruvi baribir
-   *     darhol amal qilgan, bu faqat bazadagi holatni haqiqatga moslaydi;
-   *  2. `expires_at` dan SESSION_RETENTION_DAYS o'tgan qatorlar (yopilganlari
-   *     ham — ularning `expires_at` i ham login + REFRESH_TOKEN_TIME)
-   *     partiyalab o'chiriladi.
+   *     darhol amal qilgan, bu faqat bazadagi holatni haqiqatga moslaydi.
+   *     Muddati o'tganlari ham (2026-10-23 dan): ochiq qator endi qurilma
+   *     belgisi — u qurilma kalitini (`UQ_USER_SESSIONS_USER_DEVICE_OPEN`)
+   *     band qilib turmasin;
+   *  2. `expires_at` dan SESSION_RETENTION_DAYS (90) o'tgan qatorlar
+   *     (yopilganlari ham) partiyalab o'chiriladi.
    */
   @Cron(CronExpression.EVERY_HOUR)
   async cleanup(now = new Date()): Promise<{ reset: number; deleted: number }> {
@@ -387,7 +588,6 @@ export class AuthSessionService {
          FROM "identity_schema"."admins" a
         WHERE a."id" = s."user_id"
           AND s."revoked_at" IS NULL
-          AND s."expires_at" > $1
           AND s."epoch" <> a."session_epoch"`,
       [now],
     );
