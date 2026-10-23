@@ -5003,18 +5003,18 @@
         ]
       }
     },
-    "/health": {
+    "/logistics/health": {
       "get": {
-        "operationId": "HealthController_check",
+        "operationId": "LogisticsGatewayController_health",
         "parameters": [],
         "responses": {
           "200": {
             "description": ""
           }
         },
-        "summary": "Liveness check — fast, gateway-only",
+        "summary": "Logistics service health check",
         "tags": [
-          "Health"
+          "Logistics"
         ],
         "x-roles": null
       }
@@ -18345,6 +18345,22 @@
           "market",
           "market_operator"
         ]
+      }
+    },
+    "/health": {
+      "get": {
+        "operationId": "HealthController_check",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "summary": "Liveness check — fast, gateway-only",
+        "tags": [
+          "Health"
+        ],
+        "x-roles": null
       }
     },
     "/health/readiness": {

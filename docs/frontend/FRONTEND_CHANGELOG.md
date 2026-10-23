@@ -23,6 +23,19 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-10-23 — «Tizim holati» marshrut to'qnashuvi (7s1bqOT6)
+
+- [2026-10-23] 🟢 [gateway] — `GET /health` endi HAQIQATAN gateway liveness
+  (`HealthController`): `{ status: 'ok', timestamp, service: 'api-gateway',
+  ai: 'enabled'|'disabled'|'cap_exceeded'|'unknown' }` — tez, hech bir
+  servisni kutmaydi. Ilgari bu yo'lni prefikssiz `LogisticsGatewayController`
+  `@Get('health')` egallab olgan edi va javob `{ statusCode, message, data:
+  { service: 'logistics-service', … } }` bo'lardi. logistics-service holati
+  endi `GET /logistics/health` da (Public; javob shakli avvalgi `/health`
+  javobi bilan bir xil). `GET /health/readiness` o'zgarmagan (14 servis,
+  200 | 503). Frontend `/health` ni ishlatmaydi («Tizim holati» —
+  readiness), o'zgarish shart emas.
+
 ### 2026-10-22 — Boshqa sessiyalardan chiqish; kassa xarajatida kategoriya majburiy (Notion «Elchi Pochta» #3, #1)
 
 - [2026-10-22] 🆕 [auth] — `DELETE /auth/sessions/:id` (Bearer, istalgan rol) —
