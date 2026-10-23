@@ -83,6 +83,39 @@ export function isValidStatusTransition(
 }
 
 /**
+ * y2RarzlT — FAQAT ROLLBACK (`POST /orders/rollback/:id`, `target_status:
+ * cancelled | cancelled_sent`) uchun qo'shimcha o'tishlar.
+ *
+ * Rollback oynasi sotilgan / to'langan / qisman to'langan / yopilgan
+ * buyurtma uchun «Kutilmoqda» va «Bekor qilish» ni taklif qiladi, rollback esa
+ * CANCELLED ni `updateFull` orqali yozardi — umumiy mashinada bu qirralar yo'q,
+ * shuning uchun «Bekor qilish» doim 400 «Invalid status transition: sold ->
+ * cancelled» bilan qaytardi. Qirralar umumiy jadvalga QO'SHILMAYDI: oddiy
+ * PATCH / sotuv / finance yo'llari sotilgan buyurtmani bekor qila olmaydi
+ * (kassa oyoqlarini faqat rollback teskari yozadi).
+ */
+export const ORDER_ROLLBACK_EXTRA_TRANSITIONS: Partial<
+  Record<Order_status, Order_status[]>
+> = {
+  [Order_status.SOLD]: [Order_status.CANCELLED],
+  [Order_status.PAID]: [Order_status.CANCELLED],
+  [Order_status.PARTLY_PAID]: [Order_status.CANCELLED],
+  [Order_status.CLOSED]: [Order_status.CANCELLED],
+};
+
+/**
+ * Rollback yo'lining tekshiruvi: umumiy mashina + rollbackka xos qirralar
+ * (`ORDER_ROLLBACK_EXTRA_TRANSITIONS`). Faqat `rollbackOrderToWaiting` ishlatadi.
+ */
+export function isValidRollbackStatusTransition(
+  from: Order_status,
+  to: Order_status,
+): boolean {
+  if (isValidStatusTransition(from, to)) return true;
+  return ORDER_ROLLBACK_EXTRA_TRANSITIONS[from]?.includes(to) ?? false;
+}
+
+/**
  * The status a brand-new order is recorded under on the tracking timeline: NEW
  * is normalised to CREATED so the timeline starts from a stable initial state.
  */

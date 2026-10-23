@@ -1,6 +1,7 @@
 import { Order_status } from '@app/common';
 import {
   ORDER_STATUS_TRANSITIONS,
+  isValidRollbackStatusTransition,
   isValidStatusTransition,
   mapInitialStatusForTracking,
 } from './order-status.machine';
@@ -72,6 +73,53 @@ describe('order status machine', () => {
       expect(ORDER_STATUS_TRANSITIONS[Order_status.RETURNED_TO_MARKET]).toEqual(
         [],
       );
+    });
+  });
+
+  // y2RarzlT: rollback «Bekor qilish» — faqat rollback yo'lida.
+  describe('isValidRollbackStatusTransition', () => {
+    const soldLike = [
+      Order_status.SOLD,
+      Order_status.PAID,
+      Order_status.PARTLY_PAID,
+      Order_status.CLOSED,
+    ];
+
+    it('⭐ sold / paid / partly_paid / closed → cancelled rollbackda ruxsat', () => {
+      for (const from of soldLike) {
+        expect(
+          isValidRollbackStatusTransition(from, Order_status.CANCELLED),
+        ).toBe(true);
+      }
+    });
+
+    it('umumiy mashina bu qirralarni ochmaydi (PATCH / finance yo`li)', () => {
+      for (const from of soldLike) {
+        expect(isValidStatusTransition(from, Order_status.CANCELLED)).toBe(
+          false,
+        );
+      }
+    });
+
+    it('umumiy qirralar rollbackda ham amal qiladi, boshqalari yopiq', () => {
+      expect(
+        isValidRollbackStatusTransition(
+          Order_status.SOLD,
+          Order_status.WAITING,
+        ),
+      ).toBe(true);
+      expect(
+        isValidRollbackStatusTransition(
+          Order_status.RETURNED_TO_MARKET,
+          Order_status.CANCELLED,
+        ),
+      ).toBe(false);
+      expect(
+        isValidRollbackStatusTransition(
+          Order_status.SOLD,
+          Order_status.CANCELLED_SENT,
+        ),
+      ).toBe(false);
     });
   });
 

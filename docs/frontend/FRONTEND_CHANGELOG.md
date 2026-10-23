@@ -23,6 +23,61 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-10-23 — Rollback «Bekor qilish» sotilgan buyurtmadan (y2RarzlT); kuryer filiali va tumani (YEThmZBn)
+
+- [2026-10-23] ✏️ [identity] — `GET /users/:id` javobida yangi maydon
+  `branch: { id, name } | null` — kuryer / menejer / registrator / filial
+  xodimi biriktirilgan filial (`branch_users`). Biriktirilmagan, filial
+  o'chirilgan yoki filial xizmati javob bermasa — `null` (javob baribir 200);
+  boshqa rollarda doim `null`. `region` avvalgidek. 🔧 FE: kuryer tafsilotida
+  sarlavha «Kuryer · {branch.name}» va «Profil ma'lumotlari → Filial» shu
+  maydondan (hozir menejer ko'rinishida ko'ruvchining O'Z filiali
+  ko'rsatiladi).
+- [2026-10-23] ✏️ [identity] — `GET /users` ro'yxatining HAR qatorida ham
+  `branch: { id, name } | null` (`/users/:id` dagi bilan bir xil qoida:
+  kuryer / menejer / registrator / filial xodimining eng so'nggi faol
+  biriktiruvi; filial o'chirilgan yoki biriktirilmagan — `null`; boshqa
+  rollar — `null`). Filial sahifadagi qatorlar uchun BITTA so'rov bilan
+  olinadi. Filial xizmati javob bermasa (≈3 s) yoki xato bersa ro'yxat
+  baribir 200 — hamma qatorda `branch: null` (ro'yxat yiqilmaydi). `meta`,
+  filtrlar va sahifalash o'zgarmagan. 🔧 FE: superadmin ro'yxatidagi
+  «Filial» ustuni va telefonda «telefon · filial» — `row.branch?.name`
+  (`null` → «—»).
+- [2026-10-23] ✏️ [identity] — `PATCH /users/:id` endi `district_id` qabul
+  qiladi (raqamli satr, masalan `"41"`, yoki `null` — tozalash); ilgari 400
+  (forbidNonWhitelisted). Tuman mavjud va foydalanuvchining viloyatiga
+  (`region_id`) tegishli bo'lishi kerak: yo'q tuman — 400 «Tuman topilmadi»;
+  boshqa viloyat tumani — 400 «Tuman foydalanuvchining viloyatiga tegishli
+  emas»; raqamli satr emas — 400; logistika javob bermasa — 503 (saqlanmaydi).
+  Viloyati yo'q foydalanuvchida (mijoz) — faqat mavjudligi tekshiriladi.
+  Viloyat bu maydon bilan O'ZGARMAYDI (kuryer hududi — faqat «Boshqa filialga
+  o'tkazish»; o'tkazishda tuman tozalanadi). Javobda `data.district_id`.
+  `PATCH /auth/my-profile` (o'zini tahrirlash) da oddiy foydalanuvchi uchun
+  `district_id` e'tiborsiz (tarif kabi). 🔧 FE: tuman tanlovi —
+  `GET /district?region_id=<user.region_id>`; joriy qiymat `user.district_id`.
+
+- [2026-10-23] ✏️ [order] — `POST /orders/rollback/:id` + `{ target_status:
+  'cancelled' }` (va kuryerning `'cancelled_sent'`) endi sotilgan / to'langan
+  / qisman to'langan / yopilgan (`sold` / `paid` / `partly_paid` / `closed`)
+  buyurtmada ham ishlaydi → 200 `message: 'Order CANCELLED holatiga
+  qaytarildi'` (`cancelled_sent`: avvalgidek pochta javobi). Ilgari 400
+  «Invalid status transition: sold -> cancelled» edi. Pul `'waiting'` ga
+  qaytarishdagi bilan AYNAN bir xil qaytariladi: sotuv kassa oyoqlari
+  (market / kuryer / filial), qo'shimcha xarajat, sotuvda marketga berilgan
+  summa va sotuv foydasi (P&L CORRECTION); settlement qatori tozalanadi.
+  Buyurtma: `status: 'cancelled'`, `sold_at: null`, `to_be_paid: 0`,
+  `sale_collectible_amount: null`; `paid` / `partly_paid` dan —
+  `paid_amount: 0`. Kim va qaysi holatdan qaytara olishi O'ZGARMAGAN
+  (kuryer/menejer — sold/cancelled; superadmin — yana closed/paid/partly_paid;
+  HQ'ga yetgan pul — hamma uchun 400). 🔧 FE: o'zgarish shart emas —
+  `RollbackOrderDialog` allaqachon `target_status` yuboradi va
+  muvaffaqiyatdan keyin pul keshlarini yangilaydi.
+- [2026-10-23] 🟢 [order] — noto'g'ri status o'tishi xabari endi o'zbekcha:
+  400 «Buyurtma holatini o'zgartirib bo'lmaydi: <eski> -> <yangi>» (ilgari
+  «Invalid status transition: <eski> -> <yangi>»). Xatoni matndan emas,
+  `statusCode` dan aniqlang; toast'da `message` ni o'zgarishsiz ko'rsatish
+  mumkin.
+
 ### 2026-10-22 — Boshqa sessiyalardan chiqish; kassa xarajatida kategoriya majburiy (Notion «Elchi Pochta» #3, #1)
 
 - [2026-10-22] 🆕 [auth] — `DELETE /auth/sessions/:id` (Bearer, istalgan rol) —

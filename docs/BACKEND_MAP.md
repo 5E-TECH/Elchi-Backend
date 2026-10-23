@@ -117,6 +117,21 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
   FE logs out).
 - **Per-role create/list:** `identity.{courier,manager,registrator,market,customer}.*`,
   generic `identity.user.{create,find_all,find_by_id,update,delete,status}`.
+  YEThmZBn (2026-10-23): `find_by_id` with `include_branch: true` (only the
+  gateway's `GET /users/:id` sends it) attaches `branch: { id, name } | null`
+  via `branch.user.find_by_user` (self requester) for courier / manager /
+  registrator / branch; internal callers (finance, order, branch…) get the old
+  shape and no branch call. `identity.user.update` accepts `district_id`
+  (null clears; else `logistics.district.find_by_id` must find it and its
+  `region_id` must equal the user's, if the user has one; 404 → 400, other
+  errors → 503); region is not changed there. `GET /users` (gateway only)
+  adds the same `branch` to every row with ONE `branch.user.find_by_user_ids`
+  call per page (`{ user_ids, requester }` → `[{ user_id, branch: { id, name }
+  | null }]` for every requested id; one SQL: `DISTINCT ON (user_id)` latest
+  active `branch_users` row LEFT JOIN live `branches`, `user_id = ANY(...)`;
+  superadmin / admin / manager only, ≤500 ids). Branch-service down / 3 s
+  timeout → `branch: null`, list still 200; `identity.user.find_all` itself is
+  unchanged.
 - **Market specifics:** telegram token (`market.find_by_tg_token`, `rotate_tg_token`),
   `expense_proof_conditions`. Creating a user also creates its cashbox
   (`finance.cashbox.create`) and may assign to a branch (`branch.user.assign`),
@@ -521,6 +536,15 @@ and assigned to couriers (`logistics.order.assign_to_courier`,
   - which cashboxes are reversed comes from the settlement row, not from who
     clicks (§5.2). If the post-commit return-post creation fails the reply is
     200 with `data.cancel_post_created=false` + a warning.
+  - target `cancelled` / `cancelled_sent` from SOLD/PAID/PARTLY_PAID/CLOSED
+    (y2RarzlT, 2026-10-23): these edges live only in
+    `ORDER_ROLLBACK_EXTRA_TRANSITIONS` (`isValidRollbackStatusTransition`,
+    used when `rollbackOrderToWaiting` calls `updateFull(..., { rollback:
+    true })`); the general machine still forbids sold → cancelled for PATCH /
+    finance / sell paths. Money is unwound exactly like the `waiting` target;
+    `enqueueFinanceOnStatusChange` treats sold-state → CANCELLED as leaving the
+    sale (operator earning removed, sell profit reversed). An invalid
+    transition now answers 400 «Buyurtma holatini o'zgartirib bo'lmaydi: a -> b».
 
 ### 5.2 COD settlement & money model (config-driven, FIFO per order)
 Cash collected on delivery flows **courier → branch → HQ → market**, reconciled

@@ -447,9 +447,10 @@ describe('market_tg_token — umumiy javoblarda yo‘q, faqat SUPERADMIN marshru
 
       expect(res.status).toBe(200);
       expectNoSecretKeys([res.body.data]);
+      // YEThmZBn: `include_branch` (kuryer filiali) — token flagi emas.
       expect(transport.send).toHaveBeenCalledWith(
         { cmd: 'identity.user.find_by_id' },
-        { id: '3' },
+        { id: '3', include_branch: true },
       );
     });
 

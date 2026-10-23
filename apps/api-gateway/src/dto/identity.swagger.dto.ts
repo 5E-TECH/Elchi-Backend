@@ -148,6 +148,22 @@ export class UpdateAdminRequestDto {
   @IsString()
   region_id?: string;
 
+  // YEThmZBn — ilgari yo'q edi: forbidNonWhitelisted bilan 400.
+  @ApiPropertyOptional({
+    type: String,
+    example: '12',
+    nullable: true,
+    description:
+      'Tuman ID (raqamli satr). Tuman mavjud va foydalanuvchining viloyatiga ' +
+      "(region_id) tegishli bo'lishi kerak, aks holda 400; viloyati yo'q " +
+      'foydalanuvchida (mijoz) — faqat mavjudligi. null — tumanni tozalash. ' +
+      "Viloyat bu maydon bilan o'zgarmaydi.",
+  })
+  @IsOptional()
+  @IsString()
+  @Matches(/^\d{1,19}$/, { message: "district_id raqamli ID bo'lishi kerak" })
+  district_id?: string | null;
+
   @ApiPropertyOptional({
     example: 'percent',
     enum: ['percent', 'fixed'],

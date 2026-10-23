@@ -390,6 +390,9 @@ function geoReassignResult(
   };
 }
 
+/** YEThmZBn — `branch.user.find_by_user_ids` bir so'rovdagi id chegarasi. */
+export const USER_BRANCH_LOOKUP_MAX = 500;
+
 @Injectable()
 export class BranchServiceService implements OnModuleInit {
   private readonly logger = new Logger(BranchServiceService.name);
@@ -6357,6 +6360,80 @@ export class BranchServiceService implements OnModuleInit {
       },
       200,
       'User branch assignment',
+    );
+  }
+
+  /**
+   * YEThmZBn — GET /users ro'yxatidagi «Filial» ustuni: sahifadagi
+   * foydalanuvchilarning filiali BITTA SQL bilan (N+1 emas).
+   *
+   * `findUserBranch` bilan AYNI qoida: foydalanuvchining eng so'nggi faol
+   * `branch_users` qatori (DISTINCT ON user_id … createdAt DESC); u ko'rsatgan
+   * filial o'chirilgan bo'lsa — `branch: null` (eskiroq qatorga
+   * "tushib ketmaydi"). Javob — so'ralgan HAR id uchun bitta element
+   * (biriktirilmagan — `branch: null`), so'ralgan tartibda; faqat `{ id, name }`.
+   *
+   * Kim: GET /users bilan bir xil — superadmin, admin, menejer (menejer ham
+   * barcha foydalanuvchilarni ko'radi, fix #3). Raqamli bo'lmagan id'lar
+   * tashlanadi, ko'pi bilan USER_BRANCH_LOOKUP_MAX ta.
+   */
+  async findBranchesByUserIds(user_ids: unknown, requester?: RequesterContext) {
+    const roles = (requester?.roles ?? []).map((role) =>
+      String(role).toLowerCase(),
+    );
+    if (!this.isSystemPrivileged(requester) && !roles.includes('manager')) {
+      this.forbidden('Foydalanuvchilar filialini ko‘rishga ruxsat yo‘q');
+    }
+
+    const userIds = Array.from(
+      new Set(
+        (Array.isArray(user_ids) ? (user_ids as unknown[]) : [])
+          .map((id) =>
+            typeof id === 'string' || typeof id === 'number'
+              ? String(id).trim()
+              : '',
+          )
+          .filter((id) => GEO_ID_PATTERN.test(id)),
+      ),
+    ).slice(0, USER_BRANCH_LOOKUP_MAX);
+    if (!userIds.length) {
+      return successRes([], 200, 'User branches');
+    }
+
+    const rows = await this.branchUserRepo
+      .createQueryBuilder('bu')
+      .leftJoin('bu.branch', 'b', 'b.isDeleted = false')
+      .select('bu.user_id', 'user_id')
+      .addSelect('b.id', 'branch_id')
+      .addSelect('b.name', 'branch_name')
+      .distinctOn(['bu.user_id'])
+      .where('bu.user_id = ANY(:userIds)', { userIds })
+      .andWhere('bu.isDeleted = false')
+      .orderBy('bu.user_id')
+      .addOrderBy('bu.createdAt', 'DESC')
+      .addOrderBy('bu.id', 'DESC')
+      .getRawMany<{
+        user_id: string | number;
+        branch_id: string | number | null;
+        branch_name: string | null;
+      }>();
+
+    const byUser = new Map<string, { id: string; name: string | null }>();
+    for (const row of rows) {
+      if (row.branch_id === null || row.branch_id === undefined) continue;
+      byUser.set(String(row.user_id), {
+        id: String(row.branch_id),
+        name: row.branch_name ?? null,
+      });
+    }
+
+    return successRes(
+      userIds.map((userId) => ({
+        user_id: userId,
+        branch: byUser.get(userId) ?? null,
+      })),
+      200,
+      'User branches',
     );
   }
 

@@ -6,6 +6,7 @@ import {
   IsOptional,
   IsPhoneNumber,
   IsString,
+  Matches,
   Max,
   Min,
   MinLength,
@@ -80,6 +81,15 @@ export class UpdateUserDto {
   @IsOptional()
   @IsString()
   region_id?: string;
+
+  /**
+   * YEThmZBn — tuman: mavjud va foydalanuvchi viloyatiga tegishli bo'lishi
+   * kerak (servis tekshiradi); `null` — tozalash.
+   */
+  @IsOptional()
+  @IsString()
+  @Matches(/^\d{1,19}$/, { message: "district_id raqamli ID bo'lishi kerak" })
+  district_id?: string | null;
 
   // Operator commission config. Used by finance-service to compute per-order
   // earnings when an order created by this operator is sold.

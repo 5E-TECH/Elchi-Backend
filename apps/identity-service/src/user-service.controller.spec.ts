@@ -77,10 +77,11 @@ describe('IdentityController', () => {
         );
 
         expect(userService.findUserById).toHaveBeenCalledTimes(1);
-        // (i76gGjyq) yagona opsiya — includeDeleted (sukut false).
+        // (i76gGjyq) includeDeleted (sukut false); YEThmZBn includeBranch
+        // (sukut false) — token opsiyasi yo'q.
         expect(userService.findUserById.mock.calls[0]).toEqual([
           '3',
-          { includeDeleted: false },
+          { includeDeleted: false, includeBranch: false },
         ]);
       },
     );
@@ -98,7 +99,26 @@ describe('IdentityController', () => {
         );
         expect(userService.findUserById.mock.calls[0]).toEqual([
           '3',
-          { includeDeleted: expected },
+          { includeDeleted: expected, includeBranch: false },
+        ]);
+      },
+    );
+
+    it.each([
+      [true, true],
+      ['true', false],
+      [1, false],
+      [undefined, false],
+    ])(
+      '(YEThmZBn) include_branch %p → includeBranch %p (faqat qat`iy true)',
+      async (flag, expected) => {
+        await identityController.getAdminById(
+          { id: '3', include_branch: flag } as never,
+          ctx,
+        );
+        expect(userService.findUserById.mock.calls[0]).toEqual([
+          '3',
+          { includeDeleted: false, includeBranch: expected },
         ]);
       },
     );

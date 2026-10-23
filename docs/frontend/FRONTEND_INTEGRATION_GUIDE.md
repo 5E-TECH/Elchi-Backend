@@ -366,7 +366,14 @@ orders in their branch scope, else 403).
   200 with `data.cancel_post_created === false` (only for the courier's
   `cancelled_sent` target), show `data.warning` (add the order to a return post
   by hand). Restore buttons: show only when the rule
-  allows (Elchi-Frontend: done for the courier list).
+  allows (Elchi-Frontend: done for the courier list). `target_status:
+  'cancelled'` (and the courier's `cancelled_sent`) works from every allowed
+  sold-side status — SOLD/PAID/PARTLY_PAID/CLOSED → CANCELLED (y2RarzlT,
+  2026-10-23; before it was 400 «Invalid status transition: sold ->
+  cancelled»). The money is unwound exactly like the `waiting` target (sale
+  cashbox legs, extra cost, sell profit), the order ends `cancelled` with
+  `to_be_paid 0` / `paid_amount 0`. This edge exists only for rollback — a
+  normal status write still cannot move a sold order to cancelled.
 
 ---
 
@@ -644,7 +651,15 @@ requests approve/reject; post reassign — 410 since 2026-10-01), Orders
 `POST|PATCH /finance/salary`, market payout (`POST /finance/cashbox/payment/market`),
 branch cash receive ("Qabul qilinishi kerak" → `POST /finance/cashbox/payment/branch-to-main`),
 shift open/close. Market Telegram token: visible to superadmin/admin only (in
-`GET /users/{id}`). `superadmin` additionally: `POST /registrators`,
+`GET /users/{id}`). `GET /users/{id}` also returns `branch: { id, name } | null`
+— the branch a courier / manager / registrator / branch user is assigned to
+(YEThmZBn, 2026-10-23); every `GET /users` row carries the same `branch`
+(one batched branch lookup per page; if the branch service fails the list is
+still 200 with `branch: null`). `PATCH /users/{id}`
+accepts `district_id` (numeric string, `null` clears): the district must exist
+and belong to the user's `region_id` (400 otherwise, 503 if logistics is
+down); the region itself is not changed there (a courier's region changes only
+through the branch transfer, which clears the district). `superadmin` additionally: `POST /registrators`,
 `DELETE /district/{id}`, `POST /district/sato-match/apply`, the superadmin-only
 order PATCH fields (`post_id`, `customer_id`, `qr_code_token`, `source`), rollback
 of CLOSED/PAID/PARTLY_PAID and of a courier-remitted sale. (`PATCH /post/{id}`
