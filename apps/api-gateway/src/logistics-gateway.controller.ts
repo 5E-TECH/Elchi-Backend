@@ -339,8 +339,17 @@ export class LogisticsGatewayController {
     };
   }
 
+  /**
+   * (7s1bqOT6) `logistics/health` — ilgari `@Get('logistics/health')` edi: kontroller
+   * prefikssiz (`@Controller()`), shuning uchun yo'l `GET /health` bo'lib
+   * chiqardi va HealthController (`/health` liveness) bilan to'qnashardi —
+   * modulda bu kontroller OLDIN ro'yxatga olingani uchun `/health` ga
+   * logistics-service javob berardi. Boshqa servislar kabi o'z prefiksida
+   * (`product/health`, `finance/health`, …). Regressiya:
+   * `gateway-routes.unique.7s1bqOT6.spec.ts` va `test/health.e2e-spec.ts`.
+   */
   @Public()
-  @Get('health')
+  @Get('logistics/health')
   @ApiOperation({ summary: 'Logistics service health check' })
   health() {
     return this.logisticsClient

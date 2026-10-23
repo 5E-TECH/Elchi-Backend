@@ -6,14 +6,21 @@ import {
   Get,
   Inject,
   Post,
+  Query,
   Req,
   UnauthorizedException,
   UseGuards,
 } from '@nestjs/common';
 import { ClientProxy } from '@nestjs/microservices';
-import { ApiBearerAuth, ApiBody, ApiOperation, ApiTags } from '@nestjs/swagger';
+import {
+  ApiBearerAuth,
+  ApiBody,
+  ApiOkResponse,
+  ApiOperation,
+  ApiTags,
+} from '@nestjs/swagger';
 import { firstValueFrom, TimeoutError, timeout } from 'rxjs';
-import { Roles as RoleEnum } from '@app/common';
+import { Roles as RoleEnum, TELEGRAM_DM_DELIVERY_PATTERN } from '@app/common';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
 import { Roles } from './auth/roles.decorator';
 import { RolesGuard } from './auth/roles.guard';
@@ -21,6 +28,10 @@ import {
   TelegramLinkCodeRequestDto,
   TelegramScanDoneRequestDto,
 } from './dto/notification.swagger.dto';
+import {
+  TelegramDmDeliveryQueryDto,
+  TelegramDmDeliveryResponseDto,
+} from './dto/telegram-dm-delivery.swagger.dto';
 
 interface AuthedRequest {
   user?: { sub?: string; roles?: string[] };
@@ -149,6 +160,29 @@ export class TelegramGatewayController {
       this.identityClient,
       { cmd: 'identity.telegram.stats' },
       {},
+    );
+  }
+
+  /**
+   * (2crjWf7v) «Yetkazish metrikasi: kvitansiya yuborilgan/yetgan nisbati
+   * dashboardda» — backend qismi. Faqat superadmin, faqat o'qish. Ma'lumot
+   * saqlangan `notifications.delivery.telegram` dan (Prometheus
+   * `bot_dm_delivery_total` hisoblagichi xotirada, restart'da nolga tushadi).
+   */
+  @Get('telegram/dm-delivery')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN)
+  @ApiBearerAuth()
+  @ApiOkResponse({ type: TelegramDmDeliveryResponseDto })
+  @ApiOperation({
+    summary:
+      "Shaxsiy Telegram xabarlari (sukut: to'lov kvitansiyasi) yetkazish hisoboti davr bo'yicha: totals / by_role / days — total, sent, failed, pending, skipped, no_provider, other, delivery_ratio = sent/(sent+failed+pending), reach_ratio = sent/total (0..1, maxraj 0 → null); skipped_reasons. Faqat superadmin.",
+  })
+  dmDelivery(@Query() query: TelegramDmDeliveryQueryDto) {
+    return this.send(
+      this.notificationClient,
+      { cmd: TELEGRAM_DM_DELIVERY_PATTERN },
+      { from: query.from, to: query.to, type: query.type },
     );
   }
 }

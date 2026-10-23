@@ -88,6 +88,14 @@ jobs:
         env:
           NODE_ENV: test
 
+      # (7s1bqOT6) Gateway HTTP e2e — HAQIQIY ApiGatewayModule, faqat RMQ
+      # mijozlari mock (RabbitMQ/Postgres kerak emas): `GET /health` (liveness)
+      # va `GET /health/readiness` (14 servis) marshrutlari to'qnashmasin.
+      - name: Gateway e2e (must pass)
+        run: npm run test:e2e -- --ci --runInBand
+        env:
+          NODE_ENV: test
+
       # Build each service to catch import / decorator metadata regressions
       # that bare typecheck misses. Gateway + integration-service (Partner API
       # lives here) are smoke-built to keep CI fast; full build is in deploy.yml.
