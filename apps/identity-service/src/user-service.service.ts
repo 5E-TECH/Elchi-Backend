@@ -1529,6 +1529,7 @@ export class UserServiceService implements OnModuleInit {
       can_sell_cancel: admin.can_sell_cancel,
       language: admin.language,
       ai_price_per_order: admin.ai_price_per_order ?? null,
+      district_id: admin.district_id ?? null,
       password_changed: false,
     };
 
@@ -1678,6 +1679,25 @@ export class UserServiceService implements OnModuleInit {
       );
     }
 
+    /**
+     * YEThmZBn — tuman (`district_id`). Ilgari DTO'da yo'q edi: PATCH
+     * forbidNonWhitelisted tufayli 400 qaytarardi. Tuman mavjud va
+     * foydalanuvchining viloyatiga (`region_id`) tegishli bo'lishi shart;
+     * viloyati yo'q foydalanuvchida (mijoz) — faqat mavjudligi. `null` —
+     * tozalash. Viloyat bu yerda O'ZGARMAYDI (kuryer hududi faqat «Boshqa
+     * filialga o'tkazish» orqali). Tarif bilan bir xil qoida: o'zini
+     * tahrirlayotgan oddiy foydalanuvchi o'zgartira olmaydi.
+     */
+    if (
+      typeof dto.district_id !== 'undefined' &&
+      (requesterIsPrivileged || !requesterIsSelf)
+    ) {
+      admin.district_id = await this.resolveUserDistrictId(
+        dto.district_id,
+        admin.region_id,
+      );
+    }
+
     const saved = await this.users.save(admin);
     void this.syncUserToSearch(saved);
     await this.activityLog.logChange({
@@ -1701,6 +1721,7 @@ export class UserServiceService implements OnModuleInit {
         can_sell_cancel: saved.can_sell_cancel,
         language: saved.language,
         ai_price_per_order: saved.ai_price_per_order ?? null,
+        district_id: saved.district_id ?? null,
         // Surface that the password was rotated without ever logging its value.
         password_changed: Boolean(dto.password),
       },
@@ -1722,6 +1743,66 @@ export class UserServiceService implements OnModuleInit {
       );
     }
     return Math.round(n * 100) / 100;
+  }
+
+  /**
+   * YEThmZBn — PATCH /users/:id `district_id`: `null` → tozalash; aks holda
+   * raqamli id, logistics'da mavjud tuman (yo'q — 400) va foydalanuvchida
+   * viloyat bo'lsa — AYNAN shu viloyat tumani (boshqa viloyat — 400).
+   * RMQ'da ValidationPipe yo'q — format shu yerda ham tekshiriladi.
+   * Logistika javob bermasa — 503 (tekshirilmagan tuman yozilmaydi).
+   */
+  private async resolveUserDistrictId(
+    value: unknown,
+    userRegionId: string | null | undefined,
+  ): Promise<string | null> {
+    if (value === null) {
+      return null;
+    }
+    const districtId = primitiveText(value).trim();
+    if (!GEO_ID_PATTERN.test(districtId)) {
+      this.badRequest("district_id raqamli ID bo'lishi kerak");
+    }
+
+    type DistrictRow = { id?: unknown; region_id?: unknown };
+    let district: DistrictRow | null;
+    try {
+      const res = await lastValueFrom(
+        this.logisticsClient
+          .send<{
+            data?: DistrictRow | null;
+          }>({ cmd: 'logistics.district.find_by_id' }, { id: districtId })
+          .pipe(timeout(5000)),
+      );
+      district = res?.data ?? null;
+    } catch (error) {
+      const statusCode = Number(
+        (error as { statusCode?: unknown } | null)?.statusCode ??
+          (error as { error?: { statusCode?: unknown } } | null)?.error
+            ?.statusCode,
+      );
+      if (statusCode === 404) {
+        this.badRequest('Tuman topilmadi');
+      }
+      this.logger.warn(
+        `updateUser: logistics.district.find_by_id ${districtId} failed (${describeSagaError(error)})`,
+      );
+      throw new RpcException(
+        errorRes(
+          "Tumanni tekshirib bo'lmadi — birozdan keyin qayta urinib ko'ring",
+          503,
+        ),
+      );
+    }
+    if (!district) {
+      this.badRequest('Tuman topilmadi');
+    }
+
+    const regionId = primitiveText(userRegionId).trim();
+    if (regionId && !sameEntityId(district.region_id, regionId)) {
+      this.badRequest('Tuman foydalanuvchining viloyatiga tegishli emas');
+    }
+    return primitiveText(district.id).trim() || districtId;
   }
 
   /**
@@ -2274,7 +2355,10 @@ export class UserServiceService implements OnModuleInit {
     }
   }
 
-  async findUserById(id: string, options: { includeDeleted?: boolean } = {}) {
+  async findUserById(
+    id: string,
+    options: { includeDeleted?: boolean; includeBranch?: boolean } = {},
+  ) {
     // (i76gGjyq) `includeDeleted` — faqat ichki RPC (finance operator
     // komissiyasi): o'chirilgan operatorning ilgari olingan buyurtmasi keyin
     // sotilsa, 404 outbox'ni cheksiz qayta urardi. Gateway buni HECH QACHON
@@ -2289,11 +2373,60 @@ export class UserServiceService implements OnModuleInit {
     // (GvL6ZFAd) market_tg_token HECH QACHON qaytmaydi — hech bir rol yoki
     // flag uchun. Ko'rish: GET /markets/:id/tg-token (faqat SUPERADMIN).
     const safeUser = this.sanitize(user);
-    const profileRegion = await this.getRegionById(safeUser.region_id);
+    if (!options.includeBranch) {
+      const profileRegion = await this.getRegionById(safeUser.region_id);
+      return successRes({
+        ...safeUser,
+        region: profileRegion,
+      });
+    }
+
+    /**
+     * YEThmZBn — GET /users/:id (gateway `include_branch`) kuryer / menejer /
+     * registrator filialini ham qaytaradi: `branch: { id, name } | null`.
+     * Ilgari faqat `region` bor edi — kuryer tafsilotida «Kuryer · … filiali»
+     * va «Profil ma'lumotlari → Filial» chizib bo'lmasdi. Ichki
+     * `identity.user.find_by_id` chaqiruvlari (finance, order, branch…) bu
+     * flagni yubormaydi — ular uchun javob va filial so'rovi o'zgarmagan.
+     */
+    const branchLookup: Promise<unknown> = this.shouldAttachBranchRelation(
+      safeUser.role,
+    )
+      ? this.getUserBranchAssignment(String(safeUser.id), safeUser.role)
+      : Promise.resolve(null);
+    const [profileRegion, branchAssignment] = await Promise.all([
+      this.getRegionById(safeUser.region_id),
+      branchLookup,
+    ]);
     return successRes({
       ...safeUser,
       region: profileRegion,
+      branch: this.toBranchSummary(branchAssignment),
     });
+  }
+
+  /**
+   * YEThmZBn — `branch.user.find_by_user` javobidan (`{ ...branch_users,
+   * branch }`) faqat `{ id, name }`. Biriktirish yo'q yoki filial o'chirilgan
+   * (`branch: null`) — `null`.
+   */
+  private toBranchSummary(
+    assignment: unknown,
+  ): { id: string; name: string | null } | null {
+    if (!assignment || typeof assignment !== 'object') {
+      return null;
+    }
+    const branch = (assignment as { branch?: unknown }).branch;
+    if (!branch || typeof branch !== 'object') {
+      return null;
+    }
+    const { id, name } = branch as { id?: unknown; name?: unknown };
+    const branchId = primitiveText(id).trim();
+    if (!branchId) {
+      return null;
+    }
+    const branchName = primitiveText(name).trim();
+    return { id: branchId, name: branchName || null };
   }
 
   async findOwnProfile(id: string) {

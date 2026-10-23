@@ -651,7 +651,13 @@ requests approve/reject; post reassign — 410 since 2026-10-01), Orders
 `POST|PATCH /finance/salary`, market payout (`POST /finance/cashbox/payment/market`),
 branch cash receive ("Qabul qilinishi kerak" → `POST /finance/cashbox/payment/branch-to-main`),
 shift open/close. Market Telegram token: visible to superadmin/admin only (in
-`GET /users/{id}`). `superadmin` additionally: `POST /registrators`,
+`GET /users/{id}`). `GET /users/{id}` also returns `branch: { id, name } | null`
+— the branch a courier / manager / registrator / branch user is assigned to
+(YEThmZBn, 2026-10-23; not yet in the `GET /users` list). `PATCH /users/{id}`
+accepts `district_id` (numeric string, `null` clears): the district must exist
+and belong to the user's `region_id` (400 otherwise, 503 if logistics is
+down); the region itself is not changed there (a courier's region changes only
+through the branch transfer, which clears the district). `superadmin` additionally: `POST /registrators`,
 `DELETE /district/{id}`, `POST /district/sato-match/apply`, the superadmin-only
 order PATCH fields (`post_id`, `customer_id`, `qr_code_token`, `source`), rollback
 of CLOSED/PAID/PARTLY_PAID and of a courier-remitted sale. (`PATCH /post/{id}`

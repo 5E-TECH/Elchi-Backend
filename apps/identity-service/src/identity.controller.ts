@@ -522,6 +522,8 @@ export class IdentityController {
     return this.executeAndAck(context, () =>
       this.userService.findUserById(payload.id, {
         includeDeleted: payload?.include_deleted === true,
+        // YEThmZBn: filial faqat GET /users/:id da (gateway flagi).
+        includeBranch: payload?.include_branch === true,
       }),
     );
   }

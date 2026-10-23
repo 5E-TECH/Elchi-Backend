@@ -59,6 +59,11 @@ export interface FindUserByIdPayload {
   id: string;
   /** (i76gGjyq) Faqat ichki: o'chirilgan foydalanuvchini ham qaytarish. */
   include_deleted?: boolean;
+  /**
+   * YEThmZBn — GET /users/:id: kuryer/menejer/registrator filiali
+   * (`branch: { id, name } | null`) ham qaytsin. Faqat gateway yuboradi.
+   */
+  include_branch?: boolean;
   // (GvL6ZFAd) `include_tg_token` olib tashlandi: kelsa ham e'tiborsiz —
   // market_tg_token faqat identity.market.get_tg_token (SUPERADMIN) orqali.
 }

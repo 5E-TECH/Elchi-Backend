@@ -117,6 +117,14 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
   FE logs out).
 - **Per-role create/list:** `identity.{courier,manager,registrator,market,customer}.*`,
   generic `identity.user.{create,find_all,find_by_id,update,delete,status}`.
+  YEThmZBn (2026-10-23): `find_by_id` with `include_branch: true` (only the
+  gateway's `GET /users/:id` sends it) attaches `branch: { id, name } | null`
+  via `branch.user.find_by_user` (self requester) for courier / manager /
+  registrator / branch; internal callers (finance, order, branch…) get the old
+  shape and no branch call. `identity.user.update` accepts `district_id`
+  (null clears; else `logistics.district.find_by_id` must find it and its
+  `region_id` must equal the user's, if the user has one; 404 → 400, other
+  errors → 503); region is not changed there.
 - **Market specifics:** telegram token (`market.find_by_tg_token`, `rotate_tg_token`),
   `expense_proof_conditions`. Creating a user also creates its cashbox
   (`finance.cashbox.create`) and may assign to a branch (`branch.user.assign`),

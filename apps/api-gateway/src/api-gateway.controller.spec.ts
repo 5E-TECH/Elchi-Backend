@@ -523,9 +523,11 @@ describe('ApiGatewayController', () => {
    * so'ramaydi — avvalgi SUPERADMIN/ADMIN istisnosi (`include_tg_token: true`)
    * bekor qilindi. Token: GET /markets/:id/tg-token (faqat SUPERADMIN).
    */
-  describe("getUserById — identity'ga AYNAN { id }, include_tg_token hech qachon yo'q (GvL6ZFAd)", () => {
+  // YEThmZBn: payload endi `{ id, include_branch: true }` — kuryer filiali
+  // identity'da biriktiriladi; include_tg_token baribir hech qachon yo'q.
+  describe("getUserById — identity'ga AYNAN { id, include_branch }, include_tg_token hech qachon yo'q (GvL6ZFAd)", () => {
     it.each([['superadmin'], ['admin'], ['SUPERADMIN']])(
-      "%s: identity'ga AYNAN { id }; filial so'rovi yo'q",
+      "%s: identity'ga AYNAN { id, include_branch }; gateway filial so'rovi yo'q",
       async (role) => {
         await apiGatewayController.getUserById('3', {
           user: { sub: '1', username: 'sa', roles: [role] },
@@ -534,13 +536,13 @@ describe('ApiGatewayController', () => {
         expect(identityClient.send).toHaveBeenCalledTimes(1);
         const [pattern, payload] = identityClient.send.mock.calls[0];
         expect(pattern).toEqual({ cmd: 'identity.user.find_by_id' });
-        expect(payload).toStrictEqual({ id: '3' });
+        expect(payload).toStrictEqual({ id: '3', include_branch: true });
         expect(payload).not.toHaveProperty('include_tg_token');
         expect(branchClient.send).not.toHaveBeenCalled();
       },
     );
 
-    it("REGIONAL filial menejeri o'z kuryerini ko'radi: payload AYNAN { id } — flag yo'q", async () => {
+    it("REGIONAL filial menejeri o'z kuryerini ko'radi: payload AYNAN { id, include_branch } — tg flag yo'q", async () => {
       branchClient.send
         .mockReturnValueOnce(
           of({
@@ -558,7 +560,7 @@ describe('ApiGatewayController', () => {
       expect(identityClient.send).toHaveBeenCalledTimes(1);
       const [pattern, payload] = identityClient.send.mock.calls[0];
       expect(pattern).toEqual({ cmd: 'identity.user.find_by_id' });
-      expect(payload).toStrictEqual({ id: '42' });
+      expect(payload).toStrictEqual({ id: '42', include_branch: true });
       expect(payload).not.toHaveProperty('include_tg_token');
     });
   });

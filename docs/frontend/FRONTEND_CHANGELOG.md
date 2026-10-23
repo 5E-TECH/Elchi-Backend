@@ -23,7 +23,29 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
-### 2026-10-23 — Rollback «Bekor qilish» sotilgan buyurtmadan (y2RarzlT)
+### 2026-10-23 — Rollback «Bekor qilish» sotilgan buyurtmadan (y2RarzlT); kuryer filiali va tumani (YEThmZBn)
+
+- [2026-10-23] ✏️ [identity] — `GET /users/:id` javobida yangi maydon
+  `branch: { id, name } | null` — kuryer / menejer / registrator / filial
+  xodimi biriktirilgan filial (`branch_users`). Biriktirilmagan, filial
+  o'chirilgan yoki filial xizmati javob bermasa — `null` (javob baribir 200);
+  boshqa rollarda doim `null`. `region` avvalgidek. 🔧 FE: kuryer tafsilotida
+  sarlavha «Kuryer · {branch.name}» va «Profil ma'lumotlari → Filial» shu
+  maydondan (hozir menejer ko'rinishida ko'ruvchining O'Z filiali
+  ko'rsatiladi). ⚠️ `GET /users` ro'yxatida `branch` HALI YO'Q («Filial»
+  ustuni uchun alohida backend ishi kerak).
+- [2026-10-23] ✏️ [identity] — `PATCH /users/:id` endi `district_id` qabul
+  qiladi (raqamli satr, masalan `"41"`, yoki `null` — tozalash); ilgari 400
+  (forbidNonWhitelisted). Tuman mavjud va foydalanuvchining viloyatiga
+  (`region_id`) tegishli bo'lishi kerak: yo'q tuman — 400 «Tuman topilmadi»;
+  boshqa viloyat tumani — 400 «Tuman foydalanuvchining viloyatiga tegishli
+  emas»; raqamli satr emas — 400; logistika javob bermasa — 503 (saqlanmaydi).
+  Viloyati yo'q foydalanuvchida (mijoz) — faqat mavjudligi tekshiriladi.
+  Viloyat bu maydon bilan O'ZGARMAYDI (kuryer hududi — faqat «Boshqa filialga
+  o'tkazish»; o'tkazishda tuman tozalanadi). Javobda `data.district_id`.
+  `PATCH /auth/my-profile` (o'zini tahrirlash) da oddiy foydalanuvchi uchun
+  `district_id` e'tiborsiz (tarif kabi). 🔧 FE: tuman tanlovi —
+  `GET /district?region_id=<user.region_id>`; joriy qiymat `user.district_id`.
 
 - [2026-10-23] ✏️ [order] — `POST /orders/rollback/:id` + `{ target_status:
   'cancelled' }` (va kuryerning `'cancelled_sent'`) endi sotilgan / to'langan

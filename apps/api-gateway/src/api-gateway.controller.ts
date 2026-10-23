@@ -1192,9 +1192,11 @@ export class ApiGatewayController {
     // (GvL6ZFAd) market_tg_token bu javobda HECH bir rol uchun (SUPERADMIN
     // ham) yo'q — avvalgi SUPERADMIN/ADMIN istisnosi (`include_tg_token`)
     // bekor qilindi. Token: GET /markets/:id/tg-token (faqat SUPERADMIN).
+    // YEThmZBn: `include_branch` — kuryer/menejer/registrator filiali
+    // (`branch: { id, name } | null`) javobga qo'shiladi.
     return firstValueFrom(
       this.identityClient
-        .send({ cmd: 'identity.user.find_by_id' }, { id })
+        .send({ cmd: 'identity.user.find_by_id' }, { id, include_branch: true })
         .pipe(timeout(8000)),
     );
   }
