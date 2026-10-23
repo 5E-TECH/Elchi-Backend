@@ -32,7 +32,10 @@ import { Throttle } from '@nestjs/throttler';
 import type { Request, Response } from 'express';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
 import { Public } from './auth/public.decorator';
-import { SessionRevocationService } from './auth/session-revocation.service';
+import {
+  SessionRevocationService,
+  applyRevokedSessionIds,
+} from './auth/session-revocation.service';
 import { TelegramIdThrottlerGuard } from './auth/telegram-id-throttler.guard';
 import { TelegramAuthRequestDto } from './dto/notification.swagger.dto';
 
@@ -589,21 +592,37 @@ export class AuthGatewayController {
     );
   }
 
+  /**
+   * (Elchi Pochta #3, 2026-10-23) `password` bilan: boshqa barcha
+   * sessiyalar DARHOL yopiladi (48 soatlik qulfga bog'liq emas), JORIY
+   * sessiya (JWT `sid`) ishlashda davom etadi — refresh ham. Yopilganlar shu
+   * gateway keshida darhol «yopilgan»; javobda `sessions_revoked` (soni).
+   */
   @Patch('my-profile')
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Update current user profile' })
+  @ApiOperation({
+    summary: 'Update current user profile',
+    description:
+      "`password` berilsa: joriy sessiyadan BOSHQA barcha sessiyalar darhol yopiladi (`password_changed`; 48 soatlik qulfga bog'liq emas), joriy sessiya va uning refresh'i ishlashda davom etadi. Javobga `sessions_revoked: <n>` qo'shiladi. `sid` siz token (Telegram) — barcha sessiyalar yopiladi.",
+  })
   @ApiBody({ type: UpdateAdminRequestDto })
   @ApiOkResponse({ description: 'Current user profile updated' })
   @ApiUnauthorizedResponse({ description: 'Unauthorized' })
-  updateMyProfile(
+  async updateMyProfile(
     @Req() req: { user: JwtUser },
     @Body() dto: UpdateAdminRequestDto,
   ) {
-    return this.sendIdentity(
+    const response = await this.sendIdentity(
       { cmd: 'identity.user.update' },
-      { id: req.user.sub, dto, requester: this.toRequester(req) },
+      {
+        id: req.user.sub,
+        dto,
+        requester: this.toRequester(req),
+        current_session_id: AuthGatewayController.currentSid(req.user),
+      },
     );
+    return applyRevokedSessionIds(response, this.revocation);
   }
 
   @Patch('my-settings')
