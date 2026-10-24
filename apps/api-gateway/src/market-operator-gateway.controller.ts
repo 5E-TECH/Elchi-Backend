@@ -36,6 +36,7 @@ import { RolesGuard } from './auth/roles.guard';
 import {
   CreateMarketOperatorRequestDto,
   UpdateMarketOperatorCommissionRequestDto,
+  UpdateMarketOperatorWarehouseAccessRequestDto,
 } from './dto/market-operator.swagger.dto';
 import { ParseBigintIdPipe } from './pipes/parse-bigint-id.pipe';
 
@@ -151,7 +152,7 @@ export class MarketOperatorGatewayController {
   })
   @ApiOkResponse({
     description:
-      '{ items: MarketOperator[], meta: { page, limit, total, totalPages } }',
+      '{ items: MarketOperator[], meta: { page, limit, total, totalPages } }. Har qatorda `can_view_warehouse_stock: boolean` (sukut false, XtcEyQjb).',
   })
   @ApiForbiddenResponse({ description: 'Market emas' })
   list(
@@ -222,6 +223,35 @@ export class MarketOperatorGatewayController {
         commission_type: dto.commission_type,
         commission_value: dto.commission_value,
       },
+      requester: this.toRequester(req),
+    });
+  }
+
+  @Patch(':id/warehouse-access')
+  @Roles(RoleEnum.MARKET)
+  @ApiOperation({
+    summary:
+      '«Ombordagi qoldiq»ni ko`rish ruxsati (can_view_warehouse_stock) — faqat o`z operatori',
+    description:
+      "XtcEyQjb: market o'zi har operatoriga alohida yoqadi/o'chiradi (sukut o'chiq). Yoqilgan operator `GET /market/warehouse-stock` da biriktirilgan marketi qoldig'ini ko'radi, o'chiq — 403 `{ code: \"WAREHOUSE_STOCK_FORBIDDEN\" }`. Javob — operator qatori (`can_view_warehouse_stock` bilan). Jurnal: `identity.market_operator_warehouse_access_changed`.",
+  })
+  @ApiParam({ name: 'id', description: 'Operator ID' })
+  @ApiBody({ type: UpdateMarketOperatorWarehouseAccessRequestDto })
+  @ApiOkResponse({
+    description:
+      '{ statusCode, message, data: MarketOperator } — `data.can_view_warehouse_stock`',
+  })
+  @ApiBadRequestResponse({ description: 'Qiymat boolean emas' })
+  @ApiNotFoundResponse({ description: 'Operator topilmadi yoki begona' })
+  updateWarehouseAccess(
+    @Param('id', ParseBigintIdPipe) id: string,
+    @Body() dto: UpdateMarketOperatorWarehouseAccessRequestDto,
+    @Req() req: { user: JwtUser },
+  ) {
+    return this.send('identity.market_operator.update_warehouse_access', {
+      id,
+      market_id: this.ownMarketId(req),
+      dto: { can_view_warehouse_stock: dto.can_view_warehouse_stock },
       requester: this.toRequester(req),
     });
   }

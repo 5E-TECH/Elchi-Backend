@@ -29,7 +29,11 @@ import { WarehouseGatewayController } from './warehouse-gateway.controller';
 type Send = jest.Mock<Observable<unknown>, [{ cmd: string }, any]>;
 
 const setup = (
-  options: { branchReply?: unknown; operatorMarket?: string | null } = {},
+  options: {
+    branchReply?: unknown;
+    operatorMarket?: string | null;
+    operatorCanView?: unknown;
+  } = {},
 ) => {
   const catalogSend: Send = jest.fn(() => of({ data: [] }));
   const branchSend: Send = jest.fn(() =>
@@ -40,7 +44,12 @@ const setup = (
   const identitySend: Send = jest.fn((pattern: { cmd: string }) =>
     of(
       pattern.cmd === 'identity.user.find_by_id'
-        ? { data: { market_id: options.operatorMarket ?? null } }
+        ? {
+            data: {
+              market_id: options.operatorMarket ?? null,
+              can_view_warehouse_stock: options.operatorCanView ?? false,
+            },
+          }
         : { statusCode: 200, data: {} },
     ),
   );
@@ -110,7 +119,7 @@ describe('hY7uacJu — WarehouseGatewayController', () => {
       }
     });
 
-    it('⭐ o`qish — superadmin, admin, filial menejeri, filial; registrator/market/kuryer yo`q', () => {
+    it('⭐ XtcEyQjb o`qish — superadmin, admin, registrator va filial xodimlari; kuryer/market/market operatori/mijoz/investor yo`q', () => {
       for (const method of [
         'findAll',
         'findOne',
@@ -118,10 +127,32 @@ describe('hY7uacJu — WarehouseGatewayController', () => {
         'listMovements',
         'exportStock',
       ] as const) {
-        expect({ method, roles: rolesOf(method) }).toEqual({
+        const roles = rolesOf(method);
+        expect({ method, roles }).toEqual({
           method,
-          roles: ['admin', 'branch', 'manager', 'superadmin'],
+          roles: [
+            'admin',
+            'branch',
+            'logist',
+            'manager',
+            'operator',
+            'registrator',
+            'superadmin',
+          ],
         });
+        for (const denied of [
+          'courier',
+          'market',
+          'market_operator',
+          'customer',
+          'investor',
+        ]) {
+          expect({ method, denied, allowed: roles.includes(denied) }).toEqual({
+            method,
+            denied,
+            allowed: false,
+          });
+        }
       }
     });
 
@@ -176,6 +207,35 @@ describe('hY7uacJu — WarehouseGatewayController', () => {
       });
     });
 
+    it('⭐ XtcEyQjb: registrator — hamma omborlar (scope yo`q); operator/logist/filial — o`z filiali', async () => {
+      const registrator = setup();
+      await registrator.controller.findAll(REGISTRATOR as never);
+      await registrator.controller.findOne('3', REGISTRATOR as never);
+      await registrator.controller.listMovements('3', REGISTRATOR as never);
+      for (const call of registrator.catalogSend.mock.calls) {
+        expect(call[1]).not.toHaveProperty('scope');
+      }
+      expect(registrator.branchSend).not.toHaveBeenCalled();
+
+      for (const staff of [
+        user('61', ['operator']),
+        user('62', ['logist']),
+        user('63', ['branch']),
+      ]) {
+        const scoped = setup({ branchReply: { data: { branch_id: '12' } } });
+        await scoped.controller.listStock('3', staff as never);
+        expect(scoped.catalogSend.mock.calls[0][1]).toMatchObject({
+          id: '3',
+          scope: { branch_id: '12' },
+        });
+        const homeless = setup({ branchReply: { data: null } });
+        await expect(
+          homeless.controller.findAll(staff as never),
+        ).rejects.toBeInstanceOf(ForbiddenException);
+        expect(homeless.catalogSend).not.toHaveBeenCalled();
+      }
+    });
+
     it('branch-service javob bermasa — tokendagi branch_id; u ham yo`q — 403 (fail-closed)', async () => {
       const fallback = setup({ branchReply: new Error('down') });
       await expect(
@@ -216,8 +276,32 @@ describe('hY7uacJu — WarehouseGatewayController', () => {
       expect(catalogSend).toHaveBeenCalledTimes(1);
     });
 
+    it('⭐ XtcEyQjb: market operatori — kalit o`chiq bo`lsa 403 WAREHOUSE_STOCK_FORBIDDEN (catalog`ga bormaydi)', async () => {
+      for (const flag of [false, undefined, 'true', 1]) {
+        const off = setup({ operatorMarket: '121', operatorCanView: flag });
+        const error: unknown = await off.controller
+          .marketStock(OPERATOR as never)
+          .catch((e: unknown) => e);
+        expect(error).toBeInstanceOf(ForbiddenException);
+        expect((error as ForbiddenException).getResponse()).toMatchObject({
+          statusCode: 403,
+          code: 'WAREHOUSE_STOCK_FORBIDDEN',
+        });
+        expect(off.catalogSend).not.toHaveBeenCalled();
+      }
+      // Kalit faqat qoldiq sahifasiga tegishli — buyurtma formasi ishlayveradi.
+      const off = setup({ operatorMarket: '121', operatorCanView: false });
+      await off.controller.resolveSource(
+        { district_id: '45', items: [] } as never,
+        OPERATOR as never,
+      );
+      expect(off.catalogSend.mock.calls[0][1]).toMatchObject({
+        market_id: '121',
+      });
+    });
+
     it('market operatori — biriktirilgan marketi; biriktirilmagan — 400', async () => {
-      const bound = setup({ operatorMarket: '121' });
+      const bound = setup({ operatorMarket: '121', operatorCanView: true });
       await bound.controller.marketStock(OPERATOR as never);
       expect(bound.catalogSend.mock.calls[0][1]).toMatchObject({
         market_id: '121',

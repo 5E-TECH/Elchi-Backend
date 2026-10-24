@@ -410,10 +410,11 @@ export class WarehouseStockService {
   // ------------------------------------------------------------------
 
   /**
-   * Admin kirimi (qaror 3): darhol qoldiqqa, filial tasdig'isiz. To'xtatilgan
-   * omborga ham mumkin (qoldiq saqlanadi). `Idempotency-Key` bilan qayta
-   * yuborilgan AYNI so'rov — avvalgi natija (`replayed: true`), boshqa
-   * tarkibli — 409.
+   * Admin kirimi (qaror 3): darhol qoldiqqa, filial tasdig'isiz.
+   * To'xtatilgan omborga kirim YO'Q (XtcEyQjb) — 409 `WAREHOUSE_PAUSED`
+   * (inventarizatsiya va o'qish — ruxsat). `Idempotency-Key` bilan qayta
+   * yuborilgan AYNI so'rov — avvalgi natija (`replayed: true`, ombor keyin
+   * to'xtatilgan bo'lsa ham — u allaqachon yozilgan), boshqa tarkibli — 409.
    */
   async stockIn(input: StockInInput) {
     const warehouseId = toId(input?.warehouse_id, 'warehouse_id');
@@ -481,6 +482,16 @@ export class WarehouseStockService {
             };
           }),
         };
+      }
+
+      // Ombor qatori FOR NO KEY UPDATE ostida — parallel pauza bilan
+      // ketma-ket: pauzadan keyin kirim yozilmaydi.
+      if (warehouse.status !== 'ACTIVE') {
+        rpcError(
+          409,
+          "Ombor to'xtatilgan — kirim qilib bo'lmaydi. Avval omborni qayta yoqing",
+          { code: WAREHOUSE_ERROR_CODES.PAUSED, warehouse_id: warehouseId },
+        );
       }
 
       await this.ensureStockRows(

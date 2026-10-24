@@ -91,6 +91,11 @@ export const WAREHOUSE_ERROR_CODES = {
   ORDER_ALREADY_OUT: 'WAREHOUSE_ORDER_ALREADY_OUT',
   ORDER_RELEASED: 'WAREHOUSE_ORDER_RELEASED',
   IDEMPOTENCY_CONFLICT: 'WAREHOUSE_IDEMPOTENCY_CONFLICT',
+  /**
+   * XtcEyQjb: market operatoriga «Ombordagi qoldiq» yopiq (market kalitni
+   * yoqmagan) — gateway 403.
+   */
+  STOCK_FORBIDDEN: 'WAREHOUSE_STOCK_FORBIDDEN',
 } as const;
 
 /** RMQ naqshlari — catalog-service `WarehouseController` bilan AYNI. */

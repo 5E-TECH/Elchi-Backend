@@ -331,4 +331,45 @@ describe('hY7uacJu — WarehouseDirectoryService', () => {
     });
     await expect(service.getBranchManagerIds('11')).resolves.toEqual(['31']);
   });
+
+  it('⭐ XtcEyQjb: birinchi FAOL menejer — id bo`yicha (son sifatida); nofaol/topilmagan — o`tkaziladi; yo`q — null', async () => {
+    const { service } = make({
+      'branch.user.find_by_branch': () => ({
+        data: [
+          { user_id: '120', role: 'MANAGER', user: { status: 'active' } },
+          { user_id: '9', role: 'MANAGER', user: { status: 'inactive' } },
+          { user_id: '31', role: 'MANAGER', user: { status: 'active' } },
+          { user_id: '5', role: 'COURIER', user: { status: 'active' } },
+          { user_id: '7', role: 'MANAGER', user: null },
+        ],
+      }),
+    });
+    await expect(service.getFirstActiveBranchManagerId('11')).resolves.toBe(
+      '31',
+    );
+    // Tanlov tekshiruvi hamma menejerlarni (nofaolini ham) ko'radi.
+    await expect(service.getBranchManagerIds('11')).resolves.toEqual([
+      '120',
+      '9',
+      '31',
+      '7',
+    ]);
+
+    const none = make({
+      'branch.user.find_by_branch': () => ({
+        data: [{ user_id: '9', role: 'MANAGER', user: { status: 'inactive' } }],
+      }),
+    });
+    await expect(
+      none.service.getFirstActiveBranchManagerId('11'),
+    ).resolves.toBeNull();
+
+    const down = make({});
+    const error: unknown = await down.service
+      .getFirstActiveBranchManagerId('11')
+      .catch((e: unknown) => e);
+    expect((error as RpcException).getError()).toMatchObject({
+      statusCode: 503,
+    });
+  });
 });

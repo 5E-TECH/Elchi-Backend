@@ -32,7 +32,11 @@ import {
 } from '@nestjs/swagger';
 import type { Response } from 'express';
 import { firstValueFrom, timeout, TimeoutError } from 'rxjs';
-import { Roles as RoleEnum, WAREHOUSE_RPC } from '@app/common';
+import {
+  Roles as RoleEnum,
+  WAREHOUSE_ERROR_CODES,
+  WAREHOUSE_RPC,
+} from '@app/common';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
 import { Roles } from './auth/roles.decorator';
 import { RolesGuard } from './auth/roles.guard';
@@ -71,14 +75,29 @@ type Req = { user: JwtUser };
 export const WAREHOUSE_ADMIN_ROLES = [RoleEnum.SUPERADMIN, RoleEnum.ADMIN];
 
 /**
- * O'qish: SUPERADMIN/ADMIN — hamma ombor; filial menejeri (MANAGER) va filial
- * akkaunti (BRANCH) — FAQAT o'z filiali ombori (qaror 10; begonasi 404).
+ * O'qish (XtcEyQjb, ega qarori 2026-10-24): SUPERADMIN/ADMIN/REGISTRATOR —
+ * hamma ombor (`WAREHOUSE_GLOBAL_READ_ROLES`); filial xodimlari — filial
+ * menejeri (MANAGER), filial akkaunti (BRANCH) va filialga biriktirilgan
+ * boshqa xodim rollari (OPERATOR, LOGIST) — FAQAT o'z filiali ombori
+ * (begonasi 404, filialsiz — 403). COURIER, MARKET, MARKET_OPERATOR,
+ * CUSTOMER, INVESTOR — yo'q (market o'z qoldig'ini `/market/warehouse-stock`
+ * da ko'radi).
  */
 export const WAREHOUSE_READ_ROLES = [
   RoleEnum.SUPERADMIN,
   RoleEnum.ADMIN,
+  RoleEnum.REGISTRATOR,
   RoleEnum.MANAGER,
   RoleEnum.BRANCH,
+  RoleEnum.OPERATOR,
+  RoleEnum.LOGIST,
+];
+
+/** Filial doirasisiz o'qiydigan rollar — `scope` yuborilmaydi. */
+export const WAREHOUSE_GLOBAL_READ_ROLES = [
+  RoleEnum.SUPERADMIN,
+  RoleEnum.ADMIN,
+  RoleEnum.REGISTRATOR,
 ];
 
 /**
@@ -166,6 +185,11 @@ export class WarehouseGatewayController {
     );
   }
 
+  private isGlobalReader(user?: JwtUser): boolean {
+    const roles = this.roles(user);
+    return WAREHOUSE_GLOBAL_READ_ROLES.some((role) => roles.includes(role));
+  }
+
   private assertId(value: string, label = 'Ombor'): string {
     const id = String(value ?? '').trim();
     if (!ID_PATTERN.test(id)) {
@@ -175,15 +199,15 @@ export class WarehouseGatewayController {
   }
 
   /**
-   * Filial xodimi (MANAGER/BRANCH) — o'z filiali: branch-service
-   * `branch.user.find_by_user` (manba), bo'lmasa tokendagi `branch_id`.
-   * Aniqlanmasa — 403 (fail-closed). SUPERADMIN/ADMIN — `undefined`
-   * (cheklovsiz).
+   * Filial xodimi (MANAGER/BRANCH/OPERATOR/LOGIST) — o'z filiali:
+   * branch-service `branch.user.find_by_user` (manba), bo'lmasa tokendagi
+   * `branch_id`. Aniqlanmasa — 403 (fail-closed). SUPERADMIN/ADMIN/
+   * REGISTRATOR — `undefined` (cheklovsiz, XtcEyQjb).
    */
   async resolveScope(
     user: JwtUser,
   ): Promise<{ branch_id: string } | undefined> {
-    if (this.isPrivileged(user)) return undefined;
+    if (this.isGlobalReader(user)) return undefined;
     let branchId = '';
     try {
       const response = await firstValueFrom(
@@ -217,15 +241,24 @@ export class WarehouseGatewayController {
     return { branch_id: branchId };
   }
 
-  /** Market operatori biriktirilgan market (identity `user.market_id`). */
-  private async operatorMarketId(user: JwtUser): Promise<string> {
+  /**
+   * Market operatori biriktirilgan market (identity `user.market_id`) va
+   * «Ombordagi qoldiq» kaliti (`can_view_warehouse_stock`, XtcEyQjb).
+   */
+  private async operatorProfile(
+    user: JwtUser,
+  ): Promise<{ marketId: string; canViewStock: boolean }> {
     const profile: unknown = await firstValueFrom(
       this.identityClient
         .send({ cmd: 'identity.user.find_by_id' }, { id: user.sub })
         .pipe(timeout(8000)),
     ).catch(() => null);
-    const raw = (profile as { data?: { market_id?: unknown } } | null)?.data
-      ?.market_id;
+    const data = (
+      profile as {
+        data?: { market_id?: unknown; can_view_warehouse_stock?: unknown };
+      } | null
+    )?.data;
+    const raw = data?.market_id;
     const marketId =
       typeof raw === 'string' || typeof raw === 'number'
         ? String(raw).trim()
@@ -235,16 +268,23 @@ export class WarehouseGatewayController {
         'Operator hech qaysi marketga biriktirilmagan',
       );
     }
-    return marketId;
+    return {
+      marketId,
+      canViewStock: data?.can_view_warehouse_stock === true,
+    };
   }
 
   /**
    * Market tomoni: MARKET — token `sub` (boshqa `market_id` — 403),
    * MARKET_OPERATOR — biriktirilgan marketi. Xodim — `requested` (ixtiyoriy).
+   * `stockAccess` (`/market/warehouse-stock`): operator uchun market kaliti
+   * `can_view_warehouse_stock` yoqilgan bo'lishi shart — aks holda 403
+   * `WAREHOUSE_STOCK_FORBIDDEN` (XtcEyQjb).
    */
   async resolveMarketId(
     user: JwtUser,
     requested?: string,
+    options: { stockAccess?: boolean } = {},
   ): Promise<{ marketId: string | undefined; marketSide: boolean }> {
     const roles = this.roles(user);
     const wanted = String(requested ?? '').trim() || undefined;
@@ -260,11 +300,19 @@ export class WarehouseGatewayController {
       return { marketId: own, marketSide: true };
     }
     if (!staff && roles.includes(RoleEnum.MARKET_OPERATOR)) {
-      const own = await this.operatorMarketId(user);
+      const { marketId: own, canViewStock } = await this.operatorProfile(user);
       if (wanted && wanted !== own) {
         throw new ForbiddenException(
           'Operator faqat biriktirilgan market mahsulotlari bilan ishlay oladi',
         );
+      }
+      if (options.stockAccess && !canViewStock) {
+        throw new ForbiddenException({
+          statusCode: 403,
+          message:
+            "Ombordagi qoldiqni ko'rish ruxsati yo'q — market sizga bu ruxsatni berishi kerak",
+          code: WAREHOUSE_ERROR_CODES.STOCK_FORBIDDEN,
+        });
       }
       return { marketId: own, marketSide: true };
     }
@@ -349,7 +397,7 @@ export class WarehouseGatewayController {
     summary:
       '«Ombordagi qoldiq» — market mahsulotlari omborlar kesimida (faqat ko‘rish)',
     description:
-      "Market — FAQAT o'z mahsulotlari (token; boshqa `market_id` — 403); market operatori — biriktirilgan marketi; SUPERADMIN/ADMIN — `market_id` majburiy. Ustunlar — hamma omborlar (to'xtatilgani belgisi bilan); katakda MAVJUD dona (band ayirilgan); `total_available` — faqat faol omborlar.",
+      "Market — FAQAT o'z mahsulotlari (token; boshqa `market_id` — 403); market operatori — biriktirilgan marketi va FAQAT market unga «Ombordagi qoldiq» kalitini yoqqan bo'lsa (`can_view_warehouse_stock`; aks holda 403 `{ code: \"WAREHOUSE_STOCK_FORBIDDEN\" }`); SUPERADMIN/ADMIN — `market_id` majburiy. Ustunlar — hamma omborlar (to'xtatilgani belgisi bilan); katakda MAVJUD dona (band ayirilgan); `total_available` — faqat faol omborlar.",
   })
   @ApiQuery({ name: 'market_id', required: false, type: String })
   @ApiQuery({ name: 'search', required: false, type: String })
@@ -373,6 +421,7 @@ export class WarehouseGatewayController {
     const { marketId } = await this.resolveMarketId(
       req.user,
       requestedMarketId,
+      { stockAccess: true },
     );
     if (!marketId) {
       throw new BadRequestException('market_id majburiy');
@@ -430,7 +479,7 @@ export class WarehouseGatewayController {
   @ApiOperation({
     summary: "Omborlar ro'yxati",
     description:
-      "Har qatorda filial, viloyat, mas'ul xodim, jami/band/kam qolgan, oxirgi harakat, holat. `summary` — ko'rinadigan hamma omborlar (filtrsiz), `counts` — viloyat/qidiruvdan keyin holat bo'yicha. Filial menejeri — faqat o'z filiali ombori.",
+      "Har qatorda filial, viloyat, mas'ul xodim, jami/band/kam qolgan, oxirgi harakat, holat. `summary` — ko'rinadigan hamma omborlar (filtrsiz), `counts` — viloyat/qidiruvdan keyin holat bo'yicha. SUPERADMIN/ADMIN/REGISTRATOR — hamma omborlar; filial xodimlari (MANAGER, BRANCH, OPERATOR, LOGIST) — faqat o'z filiali ombori (filialsiz — 403).",
   })
   @ApiQuery({ name: 'status', required: false, enum: ['ACTIVE', 'PAUSED'] })
   @ApiQuery({ name: 'region_id', required: false, type: String })
@@ -458,7 +507,7 @@ export class WarehouseGatewayController {
   @ApiOperation({
     summary: 'Ombor ochish',
     description:
-      "Faqat FAOL viloyat filialida (REGIONAL/HYBRID); bitta filial — bitta ombor (409). Nom berilmasa — «<filial> ombori». Mas'ul xodim — shu filial menejeri (aks holda 400). Yangi ombor — FAOL.",
+      "Faqat FAOL viloyat filialida (REGIONAL/HYBRID); bitta filial — bitta ombor (409). Nom berilmasa — «<filial> ombori». Mas'ul xodim — shu filial menejeri (aks holda 400); berilmasa — filialning birinchi faol menejeri (yo'q bo'lsa `null`). Yangi ombor — FAOL.",
   })
   @ApiBody({ type: CreateWarehouseRequestDto })
   @ApiCreatedResponse({ type: WarehouseDetailDto })
@@ -474,7 +523,7 @@ export class WarehouseGatewayController {
   @ApiOperation({
     summary: 'Bitta ombor (sarlavha + KPI)',
     description:
-      "Pozitsiyalar/marketlar, jami/mavjud, band (+ faol buyurtmalar soni), kam qoldi/tugagan, `movements_count`. Filial menejeri — faqat o'z filiali (begonasi 404).",
+      "Pozitsiyalar/marketlar, jami/mavjud, band (+ faol buyurtmalar soni), kam qoldi/tugagan, `movements_count`. Filial xodimi — faqat o'z filiali (begonasi 404).",
   })
   @ApiParam({ name: 'id', description: 'Warehouse ID' })
   @ApiOkResponse({ type: WarehouseDetailDto })
@@ -490,7 +539,8 @@ export class WarehouseGatewayController {
   @Roles(...WAREHOUSE_ADMIN_ROLES)
   @ApiOperation({
     summary: "Ombor ma'lumotlarini tahrirlash",
-    description: "Filial o'zgarmaydi. `null` — maydonni tozalash.",
+    description:
+      "Filial o'zgarmaydi. `null` — maydonni tozalash; `manager_user_id: null` — filialning birinchi faol menejeri (yo'q bo'lsa `null`).",
   })
   @ApiParam({ name: 'id', description: 'Warehouse ID' })
   @ApiBody({ type: UpdateWarehouseRequestDto })
@@ -695,7 +745,7 @@ export class WarehouseGatewayController {
   @ApiOperation({
     summary: "Kirim — mahsulotni omborga qo'shish",
     description:
-      "Qaror 3: darhol qoldiqqa, filial tasdig'isiz (to'xtatilgan omborga ham). Qatorlar `product_id` yoki skaner `code` bilan; biror qator hal qilinmasa — 400, hech narsa yozilmaydi. `Idempotency-Key` MAJBURIY: AYNI kalit + AYNI tarkib — avvalgi natija (`replayed: true`), boshqa tarkib — 409.",
+      "Qaror 3: darhol qoldiqqa, filial tasdig'isiz. To'xtatilgan omborga kirim YO'Q — 409 `{ code: \"WAREHOUSE_PAUSED\" }`. Qatorlar `product_id` yoki skaner `code` bilan; biror qator hal qilinmasa — 400, hech narsa yozilmaydi. `Idempotency-Key` MAJBURIY: AYNI kalit + AYNI tarkib — avvalgi natija (`replayed: true`), boshqa tarkib — 409.",
   })
   @ApiParam({ name: 'id', description: 'Warehouse ID' })
   @ApiHeader({

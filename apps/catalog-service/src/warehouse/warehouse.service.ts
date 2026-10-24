@@ -432,13 +432,17 @@ export class WarehouseService {
         0,
         WAREHOUSE_NAME_MAX,
       );
+    // XtcEyQjb: tanlanmagan (yoki `null`) — filialning birinchi faol menejeri.
+    const managerUserId =
+      input.managerUserId ??
+      (await this.directory.getFirstActiveBranchManagerId(branchId));
     let saved: Warehouse;
     try {
       saved = await this.warehouseRepo.save(
         this.warehouseRepo.create({
           branch_id: branchId,
           name,
-          manager_user_id: input.managerUserId ?? null,
+          manager_user_id: managerUserId,
           address: input.address ?? null,
           low_stock_default:
             input.lowStockDefault ?? WAREHOUSE_LOW_STOCK_DEFAULT,
@@ -485,7 +489,13 @@ export class WarehouseService {
     }
     if (input.name) warehouse.name = input.name;
     if (input.managerUserId !== undefined) {
-      warehouse.manager_user_id = input.managerUserId;
+      // XtcEyQjb: `manager_user_id: null` — filialning birinchi faol menejeri
+      // (yo'q bo'lsa null).
+      warehouse.manager_user_id =
+        input.managerUserId ??
+        (await this.directory.getFirstActiveBranchManagerId(
+          warehouse.branch_id,
+        ));
     }
     if (input.address !== undefined) warehouse.address = input.address;
     if (input.note !== undefined) warehouse.note = input.note;

@@ -192,6 +192,16 @@ export class User extends BaseEntity {
   can_order_from_warehouse: boolean;
 
   /**
+   * XtcEyQjb — faqat MARKET_OPERATOR uchun: «Ombordagi qoldiq»ni ko'rish
+   * kaliti. Market o'zi har operatoriga alohida yoqadi/o'chiradi
+   * (`PATCH /market-operators/:id/warehouse-access`). Sukut FALSE —
+   * `GET /market/warehouse-stock` operatorga 403 `WAREHOUSE_STOCK_FORBIDDEN`
+   * (migratsiya 1716000000152).
+   */
+  @Column({ type: 'boolean', default: false })
+  can_view_warehouse_stock: boolean;
+
+  /**
    * VRyloH62 — TRUE: har buyurtmada operator raqami majburiy
    * (`default_operator_phone` yo'q bo'lsa formadagi raqam shart, aks holda
    * POST /orders 400). Sukut FALSE — avvalgi xulq.

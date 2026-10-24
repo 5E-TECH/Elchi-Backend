@@ -358,4 +358,17 @@ export const ActivityDescribeUz = {
     const n = Math.max(0, Math.trunc(Number(changedCount) || 0));
     return `Yetkazish narxi sozlamalari o'zgartirildi: ${n} ta maydon`;
   },
+
+  /**
+   * (XtcEyQjb) "Operator #50 ga ombor qoldig'ini ko'rish ruxsati berildi" /
+   * "... olindi". Faqat operator ID va holat.
+   */
+  marketOperatorWarehouseAccessChanged(
+    operatorId: Id,
+    enabled: boolean,
+  ): string {
+    return enabled
+      ? `Operator #${String(operatorId)} ga ombor qoldig'ini ko'rish ruxsati berildi`
+      : `Operator #${String(operatorId)} dan ombor qoldig'ini ko'rish ruxsati olindi`;
+  },
 } as const;

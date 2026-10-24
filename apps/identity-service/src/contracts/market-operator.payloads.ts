@@ -41,3 +41,11 @@ export interface UpdateMarketOperatorCommissionPayload {
   dto: UpdateMarketOperatorCommissionDto;
   requester?: RequesterContext;
 }
+
+/** identity.market_operator.update_warehouse_access (XtcEyQjb). */
+export interface UpdateMarketOperatorWarehouseAccessPayload {
+  id: string;
+  market_id: string;
+  dto: { can_view_warehouse_stock?: unknown };
+  requester?: RequesterContext;
+}

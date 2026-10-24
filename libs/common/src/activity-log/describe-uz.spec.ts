@@ -184,6 +184,15 @@ describe('ActivityDescribeUz — gaplar (2WRzdWpZ)', () => {
     );
   });
 
+  it('(XtcEyQjb) market operatori ombor ruxsati — faqat ID va holat', () => {
+    expect(
+      ActivityDescribeUz.marketOperatorWarehouseAccessChanged('50', true),
+    ).toBe("Operator #50 ga ombor qoldig'ini ko'rish ruxsati berildi");
+    expect(
+      ActivityDescribeUz.marketOperatorWarehouseAccessChanged('50', false),
+    ).toBe("Operator #50 dan ombor qoldig'ini ko'rish ruxsati olindi");
+  });
+
   it('filiallararo jo`natma', () => {
     expect(
       ActivityDescribeUz.branchTransferCreated({
@@ -251,6 +260,8 @@ describe('ActivityDescribeUz — gaplar (2WRzdWpZ)', () => {
         ActivityDescribeUz.deliveryTariffVersionCreated('address', 60000, 5000),
       deliveryPricingSettingsUpdated:
         ActivityDescribeUz.deliveryPricingSettingsUpdated(2),
+      marketOperatorWarehouseAccessChanged:
+        ActivityDescribeUz.marketOperatorWarehouseAccessChanged('50', true),
     };
     // Har bir quruvchi qamralgan — yangisi qo'shilsa test uni ham talab qiladi.
     expect(Object.keys(outputs).sort()).toEqual(
