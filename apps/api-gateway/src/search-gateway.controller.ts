@@ -54,10 +54,12 @@ export class SearchGatewayController {
         .send({ cmd: 'identity.user.find_by_id' }, { id: user?.sub })
         .pipe(timeout(8000)),
     ).catch(() => null);
-    const marketId = String(
-      (profile as { data?: { market_id?: unknown } } | null)?.data?.market_id ??
-        '',
-    ).trim();
+    const raw = (profile as { data?: { market_id?: unknown } } | null)?.data
+      ?.market_id;
+    const marketId =
+      typeof raw === 'string' || typeof raw === 'number'
+        ? String(raw).trim()
+        : '';
     return MARKET_ID_RE.test(marketId) ? marketId : '';
   }
 
@@ -94,7 +96,7 @@ export class SearchGatewayController {
     const operatorMarketId = await this.resolveOperatorMarketId(req?.user);
     return firstValueFrom(
       this.searchClient
-        .send(
+        .send<unknown>(
           { cmd: 'search.query' },
           {
             q,

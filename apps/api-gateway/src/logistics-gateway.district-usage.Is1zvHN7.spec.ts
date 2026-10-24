@@ -5,6 +5,7 @@ import {
   PATH_METADATA,
   ROUTE_ARGS_METADATA,
 } from '@nestjs/common/constants';
+import type { ClientProxy } from '@nestjs/microservices';
 import { of } from 'rxjs';
 import { ROLES_KEY } from './auth/roles.decorator';
 import { RolesGuard } from './auth/roles.guard';
@@ -16,7 +17,10 @@ import { ParseBigintIdPipe } from './pipes/parse-bigint-id.pipe';
  * (ADMIN, SUPERADMIN). Sanoq logistics'da (`logistics.district.usage`).
  */
 describe('GET district/:id/usage (Is1zvHN7)', () => {
-  const handler = LogisticsGatewayController.prototype.getDistrictUsage;
+  const handler = Object.getOwnPropertyDescriptor(
+    LogisticsGatewayController.prototype,
+    'getDistrictUsage',
+  )?.value as object;
 
   it('marshrut: GET district/:id/usage', () => {
     expect(Reflect.getMetadata(PATH_METADATA, handler)).toBe(
@@ -51,8 +55,8 @@ describe('GET district/:id/usage (Is1zvHN7)', () => {
     };
     const logisticsClient = { send: jest.fn(() => of(payload)) };
     const controller = new LogisticsGatewayController(
-      logisticsClient as any,
-      { send: jest.fn() } as any,
+      logisticsClient as unknown as ClientProxy,
+      { send: jest.fn() } as unknown as ClientProxy,
     );
 
     const res = await new Promise((resolve, reject) =>

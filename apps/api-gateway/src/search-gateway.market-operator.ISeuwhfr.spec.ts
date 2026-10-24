@@ -1,3 +1,4 @@
+import type { ClientProxy } from '@nestjs/microservices';
 import { of, throwError } from 'rxjs';
 import { SearchGatewayController } from './search-gateway.controller';
 
@@ -11,8 +12,8 @@ describe('GET /search — market operatori (ISeuwhfr)', () => {
       send: jest.fn(() => of({ success: true, data: { items: [] } })),
     };
     const controller = new SearchGatewayController(
-      searchClient as any,
-      identity as any,
+      searchClient as unknown as ClientProxy,
+      identity as unknown as ClientProxy,
     );
     return { controller, searchClient };
   };
@@ -20,7 +21,11 @@ describe('GET /search — market operatori (ISeuwhfr)', () => {
     user: { sub: '77', username: 'op', roles },
   });
   const requesterOf = (searchClient: { send: jest.Mock }) =>
-    searchClient.send.mock.calls[0][1].requester;
+    (
+      (searchClient.send.mock.calls[0] as unknown[])[1] as {
+        requester: Record<string, unknown>;
+      }
+    ).requester;
 
   it('⭐ operator: market_id identity `user.market_id` dan', async () => {
     const identity = {

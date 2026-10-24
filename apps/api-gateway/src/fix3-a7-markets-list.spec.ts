@@ -110,7 +110,7 @@ describe('FIX3 A7 — GET /markets maydonlari rolga qarab', () => {
           ...tariffs,
         },
       ]);
-      expect(JSON.stringify(res.data.items)).not.toMatch(
+      expect(JSON.stringify(res)).not.toMatch(
         /username|telegram_id|settings|cashbox|address/,
       );
       expect(res.data.meta).toEqual({
@@ -139,7 +139,9 @@ describe('FIX3 A7 — GET /markets maydonlari rolga qarab', () => {
       }),
     );
 
-    const res = await controller.getMarkets(user(['manager']));
+    const res = (await controller.getMarkets(user(['manager']))) as {
+      data: { items: unknown[] };
+    };
 
     expect(res.data.items).toEqual([
       {
@@ -166,7 +168,7 @@ describe('FIX3 A7 — GET /markets maydonlari rolga qarab', () => {
       { id: '7', name: 'Market 7', status: 'active' },
     ]);
     // yiFTzkzH: tariflar faqat filial xodimiga — kuryerga emas.
-    expect(JSON.stringify(res.data.items)).not.toMatch(/tariff/);
+    expect(JSON.stringify(res)).not.toMatch(/tariff/);
     expect(financeClient.send).not.toHaveBeenCalled();
   });
 

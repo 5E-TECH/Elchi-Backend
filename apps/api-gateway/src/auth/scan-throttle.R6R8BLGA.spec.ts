@@ -21,6 +21,10 @@ import {
  * skanida global 60/daqiqa/IP 429 berardi. Shu uch route'da 'default'
  * (per-IP) limiti yuqoriroq; @SkipThrottle YO'Q — anonim trafik ham cheklangan.
  */
+/** Route handler (metama'lumoti bilan) — `this` siz, faqat kalit uchun. */
+const handlerOf = (cls: { prototype: object }, name: string): object =>
+  Object.getOwnPropertyDescriptor(cls.prototype, name)?.value as object;
+
 describe('scanThrottleConfig (R6R8BLGA)', () => {
   it('sukut: 300 / 60 000 ms', () => {
     expect(scanThrottleConfig({})).toEqual({
@@ -58,11 +62,16 @@ describe('scanThrottleConfig (R6R8BLGA)', () => {
 });
 
 describe('gatewayValidationSchema — SCAN_THROTTLE_* (R6R8BLGA)', () => {
-  const validate = (env: Record<string, unknown>) =>
-    gatewayValidationSchema.validate(env, {
+  const validate = (env: Record<string, unknown>) => {
+    const result = gatewayValidationSchema.validate(env, {
       abortEarly: false,
       allowUnknown: true,
     });
+    return {
+      error: result.error,
+      value: result.value as Record<string, unknown>,
+    };
+  };
   const scanErrors = (env: Record<string, unknown>) =>
     (validate(env).error?.details ?? []).filter((d) =>
       String(d.path[0]).startsWith('SCAN_'),
@@ -88,11 +97,14 @@ describe('gatewayValidationSchema — SCAN_THROTTLE_* (R6R8BLGA)', () => {
 
 describe('skaner route’lari metama’lumoti (R6R8BLGA)', () => {
   const routes: Array<[string, object]> = [
-    ['GET /scan/:token', ScanGatewayController.prototype.scan],
-    ['POST /orders/receive', OrderGatewayController.prototype.receiveNewOrders],
+    ['GET /scan/:token', handlerOf(ScanGatewayController, 'scan')],
+    [
+      'POST /orders/receive',
+      handlerOf(OrderGatewayController, 'receiveNewOrders'),
+    ],
     [
       'POST /orders/scan-assign',
-      OrderGatewayController.prototype.scanAssignOrder,
+      handlerOf(OrderGatewayController, 'scanAssignOrder'),
     ],
   ];
 
@@ -151,7 +163,7 @@ describe('global ClientIpThrottlerGuard bilan (haqiqiy hisoblagich)', () => {
 
   it('⭐ bitta filial IP: 61-skan endi 429 emas; SCAN limitidan oshsa — 429', async () => {
     const guard = await makeGuard();
-    const scan = ScanGatewayController.prototype.scan;
+    const scan = handlerOf(ScanGatewayController, 'scan');
     for (let i = 0; i < SCAN_THROTTLE.default.limit; i++) {
       await expect(guard.canActivate(ctx(scan, '203.0.113.7'))).resolves.toBe(
         true,
@@ -168,7 +180,10 @@ describe('global ClientIpThrottlerGuard bilan (haqiqiy hisoblagich)', () => {
 
   it('skaner bo‘lmagan route — global 60/IP o‘zgarmagan', async () => {
     const guard = await makeGuard();
-    const other = ScanGatewayController.prototype.scanMarketCancelledHandover;
+    const other = handlerOf(
+      ScanGatewayController,
+      'scanMarketCancelledHandover',
+    );
     for (let i = 0; i < 60; i++) {
       await expect(guard.canActivate(ctx(other, '203.0.113.7'))).resolves.toBe(
         true,

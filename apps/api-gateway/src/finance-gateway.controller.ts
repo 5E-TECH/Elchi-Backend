@@ -2596,7 +2596,7 @@ export class FinanceGatewayController {
     @Query('page') page?: string,
     @Query('limit') limit?: string,
   ) {
-    const response = await this.send(
+    const response = await this.send<unknown>(
       { cmd: 'finance.financial_balance.top_impacts' },
       {
         from_date: from_date ?? fromDate,
@@ -2606,7 +2606,7 @@ export class FinanceGatewayController {
       },
     );
     // (guzrGySp) «Kiritgan» ustuni — history bilan bir xil minimal aktor.
-    return this.attachFinancialActors(response);
+    return (await this.attachFinancialActors(response)) as unknown;
   }
 
   @Patch('cashbox/spend')

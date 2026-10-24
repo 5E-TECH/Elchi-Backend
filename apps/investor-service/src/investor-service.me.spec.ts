@@ -381,6 +381,7 @@ describe('vpKijXce — /investors/me/investments va /me/profits', () => {
   });
 });
 
+/* eslint-disable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call -- `any` mock'lar (fayldagi naqsh) */
 describe('su4IYGCN — GET /investors/me/investments: summary.range_amount', () => {
   it('oraliq berilsa — range_amount shu oraliq yig‘indisi, total_amount butun davr', async () => {
     const { service, investmentRepo, investmentQbs } = makeService({
@@ -470,6 +471,7 @@ describe('su4IYGCN — GET /investors/me/investments: summary.range_amount', () 
   });
 });
 
+/* eslint-enable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call */
 describe('vpKijXce — oylik foyda grafigi (Toshkent oyi)', () => {
   // 2026-10-14 12:00 Toshkent.
   const NOW = new Date('2026-10-14T07:00:00.000Z');

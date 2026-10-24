@@ -134,6 +134,7 @@ describe('GET finance/financial-balance/history — created_by_user', () => {
   });
 });
 
+/* eslint-disable @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-member-access -- mock mijozlar va `any` javob (fayldagi naqsh) */
 describe('GET finance/financial-balance/top-impacts — created_by_user (guzrGySp)', () => {
   const build = (payload: unknown) => {
     const financeClient: Client = { send: jest.fn(() => of(payload)) };
@@ -211,6 +212,7 @@ describe('GET finance/financial-balance/top-impacts — created_by_user (guzrGyS
     expect(response).toEqual(payload);
   });
 });
+/* eslint-enable @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-member-access */
 
 describe('GET export/financial-balance.xlsx', () => {
   const setup = (total: number) => {
