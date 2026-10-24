@@ -335,6 +335,53 @@ export class OrderAnalyticsService {
     courierId?: string,
     postIds: string[] = [],
   ) {
+    const row = await this.historicallyCancelledTrackingQuery(
+      range,
+      branchId,
+      courierId,
+      postIds,
+    )
+      .select('COUNT(DISTINCT t.order_id)', 'count')
+      .getRawOne<{ count?: string | number }>();
+    return Number(row?.count ?? 0);
+  }
+
+  /**
+   * (l9NNdsCH) «Yo'qotilgan daromad» — `countHistoricallyCancelledOrders`
+   * sanaydigan AYNI bekor buyurtmalar to'plamining `total_price` yig'indisi.
+   * Bitta buyurtmada bir nechta bekor o'tishi bo'lishi mumkin (CANCELLED →
+   * CANCELLED_SENT → CLOSED), shuning uchun summa buyurtma bo'yicha
+   * DISTINCT: `jsonb_object_agg(o.id, …)` takror kalitlarni bittaga
+   * yig'adi, so'ng qiymatlar qo'shiladi (agregat argumentlari faqat tashqi
+   * so'rov ustunlari — Postgres uni tashqi darajada hisoblaydi). Qator yo'q
+   * bo'lsa — 0.
+   */
+  private static readonly LOST_REVENUE_SQL =
+    'COALESCE((SELECT SUM(lost.value::numeric) FROM jsonb_each_text(' +
+    'jsonb_object_agg(o.id, COALESCE(o.total_price, 0))) AS lost), 0)';
+
+  private async historicallyCancelledCountAndAmount(
+    range: { start: Date; end: Date } | null,
+    branchId?: string,
+  ): Promise<{ count: number; amount: number }> {
+    const row = await this.historicallyCancelledTrackingQuery(range, branchId)
+      .select('COUNT(DISTINCT t.order_id)', 'count')
+      .addSelect(OrderAnalyticsService.LOST_REVENUE_SQL, 'amount')
+      .getRawOne<{ count?: string | number; amount?: string | number }>();
+    const amount = Number(row?.amount ?? 0);
+    return {
+      count: Number(row?.count ?? 0),
+      amount: Number.isFinite(amount) ? amount : 0,
+    };
+  }
+
+  /** Tarixan bekor qilingan buyurtmalar kuzatuv so'rovi (SELECT'siz). */
+  private historicallyCancelledTrackingQuery(
+    range: { start: Date; end: Date } | null,
+    branchId?: string,
+    courierId?: string,
+    postIds: string[] = [],
+  ) {
     const statuses = [
       Order_status.CANCELLED,
       Order_status.CANCELLED_SENT,
@@ -366,8 +413,7 @@ export class OrderAnalyticsService {
       .andWhere('t.to_status IN (:...statuses)', { statuses })
       .andWhere('(t.action IS NULL OR t.action != :cancelledPostReceived)', {
         cancelledPostReceived: 'cancelled_post_received',
-      })
-      .select('COUNT(DISTINCT t.order_id)', 'count');
+      });
 
     if (branchId) {
       query.andWhere(
@@ -421,8 +467,7 @@ export class OrderAnalyticsService {
       });
     }
 
-    const row = await query.getRawOne<{ count?: string | number }>();
-    return Number(row?.count ?? 0);
+    return query;
   }
 
   /**
@@ -1537,9 +1582,10 @@ export class OrderAnalyticsService {
       });
     }
 
-    const [acceptedCount, cancelled, aggregate] = await Promise.all([
+    const [acceptedCount, cancelledStats, aggregate] = await Promise.all([
       this.countDashboardAcceptedOrders(range, branchId),
-      this.countHistoricallyCancelledOrders(range, branchId),
+      // (l9NNdsCH) soni + summasi bitta so'rovda (AYNI to'plam).
+      this.historicallyCancelledCountAndAmount(range, branchId),
       soldAggregateQuery.getRawOne<{
         sold_count: string;
         revenue: string;
@@ -1552,7 +1598,10 @@ export class OrderAnalyticsService {
       total: acceptedCount,
       totalOrders: acceptedCount,
       ordersCount: acceptedCount,
-      cancelled,
+      cancelled: cancelledStats.count,
+      // (l9NNdsCH) «Yo'qotilgan daromad» — davrda bekor qilingan
+      // buyurtmalarning `total_price` yig'indisi (`cancelled` bilan AYNI to'plam).
+      lostRevenue: cancelledStats.amount,
       soldAndPaid: Number(aggregate?.sold_count ?? 0),
       profit: Number(aggregate?.profit ?? 0),
       totalRevenue: Number(aggregate?.revenue ?? 0),
@@ -2728,11 +2777,14 @@ export class OrderAnalyticsService {
       .select(keySql, 'period_key')
       .addSelect('COUNT(*)', 'orders_count')
       .addSelect('COALESCE(SUM(o.total_price), 0)', 'revenue')
+      // (l9NNdsCH) «Sof foyda» trendi — overview `profit` bilan AYNI formula.
+      .addSelect(OrderAnalyticsService.PROFIT_SQL, 'profit')
       .groupBy(keySql)
       .getRawMany<{
         period_key: string;
         orders_count: string;
         revenue: string;
+        profit?: string;
       }>();
 
     const byKey = new Map(rows.map((row) => [String(row.period_key), row]));
@@ -2745,6 +2797,7 @@ export class OrderAnalyticsService {
       label: string;
       ordersCount: number;
       revenue: number;
+      profit: number;
     }> = [];
     let cursor = this.periodStart(start, normalizedPeriod);
     const endCursor = this.periodStart(end, normalizedPeriod);
@@ -2756,6 +2809,7 @@ export class OrderAnalyticsService {
         label: this.periodLabel(cursor, normalizedPeriod),
         ordersCount: Number(row?.orders_count ?? 0),
         revenue: Number(row?.revenue ?? 0),
+        profit: Number(row?.profit ?? 0),
       });
       cursor = this.nextPeriodStart(cursor, normalizedPeriod);
     }
@@ -2770,12 +2824,14 @@ export class OrderAnalyticsService {
         label: key,
         ordersCount: Number(row.orders_count ?? 0),
         revenue: Number(row.revenue ?? 0),
+        profit: Number(row.profit ?? 0),
       });
     }
     buckets.sort((a, b) => a.period.localeCompare(b.period));
 
     const totalRevenue = buckets.reduce((sum, row) => sum + row.revenue, 0);
     const totalOrders = buckets.reduce((sum, row) => sum + row.ordersCount, 0);
+    const totalProfit = buckets.reduce((sum, row) => sum + row.profit, 0);
     const avgRevenue = buckets.length
       ? Math.round(totalRevenue / buckets.length)
       : 0;
@@ -2786,6 +2842,7 @@ export class OrderAnalyticsService {
         totalRevenue,
         totalOrders,
         avgRevenue,
+        totalProfit,
       },
       applied_range,
     };

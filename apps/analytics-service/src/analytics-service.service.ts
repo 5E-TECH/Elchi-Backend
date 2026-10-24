@@ -86,6 +86,13 @@ const COURIER_LEADERBOARD_SCAN_LIMIT = 500;
 const DASHBOARD_RANKING_FALLBACK_DAYS = 30;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
+/**
+ * (l9NNdsCH) Dashboard maqsad qiymatlari (maket G1: «maqsad 80%»).
+ * Minimal variant: sozlama jadvali yo'q — qotirilgan qiymat, javobda
+ * `targets` sifatida (FE «Yaxshi chegarasi · 70%» o'rniga shuni chizadi).
+ */
+export const DASHBOARD_TARGETS = Object.freeze({ successRate: 80 });
+
 /** Dashboard reyting oynasi qaysi qoida bilan tanlangani (FE yorlig'i uchun). */
 type DashboardRankingRule = 'last_30_days' | 'selected_range';
 
@@ -592,6 +599,8 @@ export class AnalyticsServiceService {
     delete safeOverview.profit;
     delete safeOverview.totalRevenue;
     delete safeOverview.total_revenue;
+    // (l9NNdsCH) bekor summasi ham moliyaviy ko'rsatkich.
+    delete safeOverview.lostRevenue;
     return safeOverview;
   }
 
@@ -1090,6 +1099,8 @@ export class AnalyticsServiceService {
         topBranches: topBranchesRanking.items,
         topBranchesMeta: topBranchesRanking.meta,
         branchDashboard,
+        // (l9NNdsCH) maqsad qiymati (muvaffaqiyat ulushi, %).
+        targets: DASHBOARD_TARGETS,
         ...(isAdminBranchView
           ? this.adminBranchViewParts(
               branchId as string,
@@ -1193,6 +1204,10 @@ export class AnalyticsServiceService {
     );
     const labels = revenueData.data.map((row) => row.label ?? row.period);
     const values = revenueData.data.map((row) => this.parseNumber(row.revenue));
+    // (l9NNdsCH) «Sof foyda» trendi — har bandda `profit` (order-service).
+    const profitValues = revenueData.data.map((row) =>
+      this.parseNumber(row.profit),
+    );
     // `unwrap` bu yerda ishlatilmaydi: xom `{data: [], summary,
     // applied_range}` da u bandlar massivini qaytarib meta'ni yo'qotadi.
     const revenueRoot =
@@ -1205,7 +1220,7 @@ export class AnalyticsServiceService {
       {
         data: revenueData.data,
         summary: revenueData.summary,
-        chart: { labels, values },
+        chart: { labels, values, profitValues },
         finance: financeData,
         degraded: failedParts.length > 0,
         failed_parts: failedParts.sort(),

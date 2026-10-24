@@ -97,6 +97,8 @@ describe('9QzTsnZB — daromad grafigida ortiqcha kun yo`q', () => {
           label: '18.09',
           ordersCount: 2,
           revenue: 90000,
+          // (l9NNdsCH) «Sof foyda» bandi (mock'da profit ustuni yo'q → 0).
+          profit: 0,
         });
         expect(res.summary.avgRevenue).toBe(90000);
       }
@@ -138,6 +140,7 @@ describe('9QzTsnZB — daromad grafigida ortiqcha kun yo`q', () => {
         totalRevenue: 166840000,
         totalOrders: 41,
         avgRevenue: 166840000,
+        totalProfit: 0,
       });
     }
   });

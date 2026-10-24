@@ -214,6 +214,17 @@ function evaluateTrackingSelect(expr: string, rows: JoinedTracking[]) {
   if (normalizeSql(expr) === 'COUNT(DISTINCT t.order_id)') {
     return new Set(rows.map(({ t }) => t.order_id)).size;
   }
+  // (l9NNdsCH) «Yo'qotilgan daromad»: buyurtma bo'yicha DISTINCT summa.
+  if (normalizeSql(expr).startsWith('COALESCE((SELECT SUM(lost.value')) {
+    const byOrder = new Map<unknown, number>();
+    for (const { t, o } of rows) {
+      byOrder.set(
+        t.order_id,
+        Number((o as { total_price?: number }).total_price ?? 0),
+      );
+    }
+    return [...byOrder.values()].reduce((sum, v) => sum + v, 0);
+  }
   throw new Error(`SqVMuhKo fake: noma'lum kuzatuv SELECT "${expr}"`);
 }
 

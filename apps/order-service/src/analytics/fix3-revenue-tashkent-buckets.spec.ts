@@ -101,11 +101,14 @@ describe('CODE-22 — daromad bandlari Toshkent kuni bo`yicha', () => {
       label: '02.10',
       ordersCount: 3,
       revenue: 700000,
+      // (l9NNdsCH) «Sof foyda» bandi (mock'da profit ustuni yo'q → 0).
+      profit: 0,
     });
     expect(res.summary).toEqual({
       totalRevenue: 700000,
       totalOrders: 4,
       avgRevenue: 100000,
+      totalProfit: 0,
     });
   });
 

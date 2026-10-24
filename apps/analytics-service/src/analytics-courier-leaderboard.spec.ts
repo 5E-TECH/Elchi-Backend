@@ -172,6 +172,8 @@ describe('5tUEVG1B — kuryer dashboardida reyting', () => {
         'topBranches',
         'topBranchesMeta',
         'branchDashboard',
+        // (l9NNdsCH) qo'shimcha: maqsad qiymatlari.
+        'targets',
         'degraded',
         'failed_parts',
       ].sort(),
