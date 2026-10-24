@@ -7,6 +7,8 @@ import { UserServiceService } from './user-service.service';
  * Foydalanuvchilar paketi (batch A, 2026-10-24) — haqiqiy Postgres:
  *   - 2CBnPAeg: menejer ko'lami (`branch_scope`) so'rovda — total va
  *     countsByRole filial doirasida, sahifalashdan oldin.
+ *   - yA31z7Rr: `telegram_linked` filtri — sahifalash va total to'g'ri,
+ *     javobdagi `telegram_linked` bilan bir xil qoida.
  *
  * Ishga tushirish (lokal, `_test` bilan tugaydigan baza):
  *   IDENTITY_USERS_PG_TEST_URI=postgres://postgres@127.0.0.1:<port>/elchi_users_a_test
@@ -169,6 +171,68 @@ type Meta = {
         expect(res.meta.countsByRole[Roles.COURIER]).toBe(7);
         expect(res.meta.countsByRole[Roles.BRANCH]).toBe(2);
         expect(res.meta.total).toBe(13);
+      });
+    });
+
+    describe('yA31z7Rr — telegram_linked filtri', () => {
+      // Menejer filialidagi 3 kuryerdan 2 tasi botga ulangan; boshqa
+      // filialdagi 1 kuryer ham ulangan; bitta kuryerda bo'sh satr (ulanmagan).
+      beforeAll(async () => {
+        await repo.update(scoped[0], { telegram_id: '7001' });
+        await repo.update(scoped[1], { telegram_id: '7002' });
+        await repo.update(outOfScope[0], { telegram_id: '7003' });
+        await repo.update(outOfScope[1], { telegram_id: '' });
+      });
+
+      afterAll(async () => {
+        await repo.update(
+          [scoped[0], scoped[1], outOfScope[0], outOfScope[1]],
+          { telegram_id: null },
+        );
+      });
+
+      it('⭐ true + role=courier, limit 1: total — barcha ulanganlar (sahifa emas)', async () => {
+        const res = await list({
+          role: 'courier',
+          telegram_linked: true,
+          limit: 1,
+        });
+        expect(res.items).toHaveLength(1);
+        expect(res.meta.total).toBe(3);
+        expect(res.meta.totalPages).toBe(3);
+        expect(res.meta.countsByRole[Roles.COURIER]).toBe(3);
+      });
+
+      it('false: ulanmaganlar (bo`sh satr ham); javobdagi telegram_linked bilan mos', async () => {
+        const res = await list({
+          role: 'courier',
+          telegram_linked: false,
+          limit: 100,
+        });
+        expect(res.meta.total).toBe(4);
+        expect(res.items.map((u) => String(u.id))).toContain(outOfScope[1]);
+        expect(
+          res.items.every(
+            (u) =>
+              (u as { telegram_linked?: boolean }).telegram_linked === false,
+          ),
+        ).toBe(true);
+      });
+
+      it('menejer ko`lami bilan AND: filialdagi ulanganlar 2 ta', async () => {
+        const linked = await list({
+          role: 'courier',
+          telegram_linked: true,
+          branch_scope: { user_ids: scoped },
+        });
+        const notLinked = await list({
+          role: 'courier',
+          telegram_linked: false,
+          branch_scope: { user_ids: scoped },
+        });
+        expect(linked.meta.total).toBe(2);
+        expect(notLinked.meta.total).toBe(1);
+        expect(linked.meta.total + notLinked.meta.total).toBe(3);
       });
     });
   },

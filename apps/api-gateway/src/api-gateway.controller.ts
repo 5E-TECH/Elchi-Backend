@@ -971,6 +971,16 @@ export class ApiGatewayController {
   })
   @ApiQuery({ name: 'page', required: false, type: Number, example: 1 })
   @ApiQuery({ name: 'limit', required: false, type: Number, example: 10 })
+  @ApiQuery({
+    name: 'telegram_linked',
+    required: false,
+    enum: ['true', 'false'],
+    description:
+      'yA31z7Rr — «Ulangan / Ulanmagan» chiplari: true — Telegram boti ' +
+      'ulangan (qatordagi `telegram_linked: true`), false — ulanmagan. Boshqa ' +
+      'filtrlar bilan AND; `meta.total` / `countsByRole` filtrdan keyin. ' +
+      'Boshqa qiymat — 400.',
+  })
   @ApiOkResponse({
     description:
       'User list. YEThmZBn / kGIjOciz: har qatorda `branch_id: string | null` ' +
@@ -987,8 +997,10 @@ export class ApiGatewayController {
     @Query('page') page?: string,
     @Query('limit') limit?: string,
     @Req() req?: { user: JwtUser },
+    @Query('telegram_linked') telegramLinked?: string,
   ) {
     const resolvedRegionId = region_id ?? regionId;
+    const telegramLinkedFilter = this.parseTelegramLinkedFilter(telegramLinked);
     const requesterRoles = (req?.user?.roles ?? []).map((item) =>
       String(item ?? '').toLowerCase(),
     );
@@ -1070,6 +1082,8 @@ export class ApiGatewayController {
               role,
               status,
               region_id: resolvedRegionId,
+              // yA31z7Rr — server tomonda (sahifalash va total to'g'ri).
+              telegram_linked: telegramLinkedFilter,
               // 2CBnPAeg — menejer ko'lami identity SO'ROVIDA: kuryer va
               // filial rolidagi foydalanuvchi faqat menejer filialiga
               // biriktirilgan bo'lsa chiqadi (boshqa rollar cheklanmaydi).
@@ -1103,6 +1117,23 @@ export class ApiGatewayController {
     }
 
     return response;
+  }
+
+  /**
+   * yA31z7Rr — `?telegram_linked=true|false` (katta-kichik harf farqsiz).
+   * Bo'sh / berilmagan — filtr yo'q; boshqa qiymat — 400 (jimgina
+   * e'tiborsiz qoldirilsa chip «Ulanmagan» bo'lsa ham hamma chiqardi).
+   */
+  private parseTelegramLinkedFilter(value?: string): boolean | undefined {
+    const normalized = String(value ?? '')
+      .trim()
+      .toLowerCase();
+    if (!normalized) return undefined;
+    if (normalized === 'true') return true;
+    if (normalized === 'false') return false;
+    throw new BadRequestException(
+      "telegram_linked faqat true yoki false bo'lishi mumkin",
+    );
   }
 
   /**

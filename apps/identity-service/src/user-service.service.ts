@@ -1012,10 +1012,26 @@ export class UserServiceService implements OnModuleInit {
               .map((id) => primitiveText(id).trim())
               .filter((id) => /^\d{1,19}$/.test(id))
           : null,
+      telegram_linked: this.normalizeTelegramLinkedFilter(
+        query.telegram_linked,
+      ),
       page,
       limit,
       skip: (page - 1) * limit,
     };
+  }
+
+  /**
+   * yA31z7Rr — RMQ'da ValidationPipe yo'q: `true`/`false` (yoki shu matnlar);
+   * berilmagan / bo'sh — filtr yo'q; boshqa qiymat — 400 (SQL'ga yetmaydi).
+   */
+  private normalizeTelegramLinkedFilter(value: unknown): boolean | undefined {
+    if (value === undefined || value === null || value === '') {
+      return undefined;
+    }
+    if (value === true || value === 'true') return true;
+    if (value === false || value === 'false') return false;
+    this.badRequest("telegram_linked faqat true yoki false bo'lishi mumkin");
   }
 
   /**
@@ -2667,6 +2683,7 @@ export class UserServiceService implements OnModuleInit {
       region_id,
       user_ids,
       branch_scope_user_ids,
+      telegram_linked,
       page,
       limit,
       skip,
@@ -2707,6 +2724,17 @@ export class UserServiceService implements OnModuleInit {
 
     if (user_ids.length) {
       baseQb.andWhere('admin.id IN (:...user_ids)', { user_ids });
+    }
+
+    // yA31z7Rr — «Ulangan / Ulanmagan»: javobdagi `telegram_linked`
+    // (`Boolean(telegram_id)`) bilan aynan bir xil — bo'sh satr ham «ulanmagan».
+    // `baseQb` da: total ham, countsByRole ham filtrdan keyin.
+    if (telegram_linked !== undefined) {
+      baseQb.andWhere(
+        telegram_linked
+          ? "COALESCE(admin.telegram_id, '') <> ''"
+          : "COALESCE(admin.telegram_id, '') = ''",
+      );
     }
 
     /**
