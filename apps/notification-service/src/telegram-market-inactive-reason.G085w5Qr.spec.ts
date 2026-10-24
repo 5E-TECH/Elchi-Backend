@@ -111,7 +111,13 @@ describe('G085w5Qr — Telegram guruhi nofaol sababi', () => {
   it('GET /notifications va /:id — inactive_reason, inactive_at tanlanadi va qaytadi', async () => {
     const at = new Date('2026-10-21T08:00:00Z');
     repo.findAndCount.mockResolvedValue([
-      [row({ is_active: false, inactive_reason: 'chat_not_found', inactive_at: at })],
+      [
+        row({
+          is_active: false,
+          inactive_reason: 'chat_not_found',
+          inactive_at: at,
+        }),
+      ],
       1,
     ]);
     const list = await service.findAllTelegramMarkets({});

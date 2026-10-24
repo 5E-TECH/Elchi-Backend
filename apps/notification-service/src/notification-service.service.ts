@@ -639,6 +639,87 @@ export class NotificationServiceService {
     }
   }
 
+  /**
+   * (KJNHAlGW) Market (yoki uning operatori) O'Z Telegram guruhlari holati —
+   * har doim ikkala tur (create, cancel). market_id FAQAT tokendan: MARKET —
+   * `sub`, MARKET_OPERATOR — identity `user.market_id`; klient yuborgan
+   * market_id e'tiborga olinmaydi. group_id va bot_slug qaytarilmaydi.
+   * Ulash oynasi har 3-5 soniyada so'raydi — (market_id, group_type)
+   * indeksi (IDX_TG_MARKET_GROUP) bo'yicha bitta so'rov.
+   */
+  async findMyTelegramGroups(data: {
+    requester?: { id?: unknown; roles?: unknown };
+  }) {
+    try {
+      const marketId = await this.resolveOwnMarketId(data?.requester);
+      const rows = await this.tgMarketRepo.find({
+        select: {
+          id: true,
+          createdAt: true,
+          group_type: true,
+          is_active: true,
+          inactive_reason: true,
+        },
+        where: { market_id: marketId, isDeleted: false },
+        order: { createdAt: 'DESC' },
+      });
+      const items = [Group_type.CREATE, Group_type.CANCEL].map((groupType) => {
+        const row = rows.find((item) => item.group_type === groupType);
+        return {
+          group_type: groupType,
+          linked: Boolean(row),
+          is_active: row ? row.is_active : null,
+          linked_at: row ? row.createdAt : null,
+          // (G085w5Qr) nofaol sababi; faol yoki ulanmagan — null.
+          inactive_reason: row ? (row.inactive_reason ?? null) : null,
+        };
+      });
+      return this.successRes(items, 200, 'Telegram guruhlari holati');
+    } catch (error) {
+      this.toRpcError(error);
+    }
+  }
+
+  /** (KJNHAlGW) "O'z marketi" — tokendan; topilmasa 403 (fail-closed). */
+  private async resolveOwnMarketId(requester?: {
+    id?: unknown;
+    roles?: unknown;
+  }): Promise<string> {
+    const userId =
+      typeof requester?.id === 'string' || typeof requester?.id === 'number'
+        ? String(requester.id).trim()
+        : '';
+    const roles = (
+      Array.isArray(requester?.roles) ? (requester.roles as unknown[]) : []
+    ).map((role) => (typeof role === 'string' ? role.toLowerCase() : ''));
+    let own = '';
+    if (roles.includes(Roles.MARKET) && /^\d{1,19}$/.test(userId)) {
+      own = userId;
+    } else if (
+      roles.includes(Roles.MARKET_OPERATOR) &&
+      /^\d{1,19}$/.test(userId)
+    ) {
+      const profile = await rmqSend<{ data?: { market_id?: unknown } }>(
+        this.identityClient,
+        { cmd: 'identity.user.find_by_id' },
+        { id: userId },
+      ).catch(() => null);
+      const raw = profile?.data?.market_id;
+      own =
+        typeof raw === 'string' || typeof raw === 'number'
+          ? String(raw).trim()
+          : '';
+    }
+    if (!/^\d{1,19}$/.test(own)) {
+      throw new ForbiddenException(
+        roles.includes(Roles.MARKET_OPERATOR)
+          ? 'Operator hech qaysi marketga biriktirilmagan'
+          : "Telegram guruhlari holatini faqat market yoki uning operatori ko'radi",
+      );
+    }
+    return own;
+  }
+
   async findTelegramMarketById(id?: string) {
     try {
       this.assertBigIntId(id, 'id');

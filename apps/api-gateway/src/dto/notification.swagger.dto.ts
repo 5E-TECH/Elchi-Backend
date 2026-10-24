@@ -690,3 +690,38 @@ export class TelegramMarketPublicDto {
   })
   inactive_at!: string | null;
 }
+
+/**
+ * (KJNHAlGW) GET /notifications/me/telegram-groups — `data[]` elementi.
+ * Har doim ikkala tur (create, cancel). group_id / bot_slug YO'Q.
+ */
+export class MyTelegramGroupStatusDto {
+  @ApiProperty({ enum: Group_type, example: Group_type.CREATE })
+  group_type!: Group_type;
+
+  @ApiProperty({ example: true, description: 'Guruh ulanganmi' })
+  linked!: boolean;
+
+  @ApiProperty({
+    nullable: true,
+    example: true,
+    description: 'Ulangan guruh faolmi; ulanmagan bo‘lsa null',
+  })
+  is_active!: boolean | null;
+
+  @ApiProperty({
+    nullable: true,
+    example: '2026-10-20T10:00:00.000Z',
+    description: 'Qachon ulangan (qator createdAt); ulanmagan bo‘lsa null',
+  })
+  linked_at!: string | null;
+
+  @ApiProperty({
+    enum: TELEGRAM_MARKET_INACTIVE_REASONS,
+    nullable: true,
+    example: null,
+    description:
+      '(G085w5Qr) Nofaol sababi; faol, ulanmagan yoki sababi noma‘lum bo‘lsa null',
+  })
+  inactive_reason!: (typeof TELEGRAM_MARKET_INACTIVE_REASONS)[number] | null;
+}

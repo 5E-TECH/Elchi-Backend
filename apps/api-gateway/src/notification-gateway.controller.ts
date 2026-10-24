@@ -38,6 +38,7 @@ import {
   FindTelegramMarketsQueryDto,
   InboxQueryDto,
   SendNotificationRequestDto,
+  MyTelegramGroupStatusDto,
   SubscribePushRequestDto,
   TelegramMarketPublicDto,
   UnsubscribePushRequestDto,
@@ -301,6 +302,33 @@ export class NotificationGatewayController {
   })
   listTypes() {
     return this.send({ cmd: 'notification.types.list' }, {});
+  }
+
+  /**
+   * (KJNHAlGW) Market kabineti «Telegram guruhi» kartasi va ulash oynasi
+   * («Guruh ulanishi kutilmoqda…» — har 3-5 soniyada so'raydi). market_id
+   * FAQAT tokendan (MARKET — sub, MARKET_OPERATOR — user.market_id);
+   * query/body'dagi market_id qabul qilinmaydi.
+   * ⚠️ `:id` marshrutidan OLDIN e'lon qilingan.
+   */
+  @Get('me/telegram-groups')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.MARKET, RoleEnum.MARKET_OPERATOR)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary:
+      "Market o'z Telegram guruhlari holati: data[] — har doim ikkala tur (create, cancel): { group_type, linked, is_active, linked_at, inactive_reason }",
+  })
+  @ApiOkResponse({
+    description: 'data[] elementi',
+    type: MyTelegramGroupStatusDto,
+    isArray: true,
+  })
+  myTelegramGroups(@Req() req: AuthedRequest) {
+    return this.send(
+      { cmd: 'notification.telegram.my_groups' },
+      { requester: this.auditActor(req) },
+    );
   }
 
   @Post('dispatch')

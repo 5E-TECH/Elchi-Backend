@@ -128,6 +128,17 @@ export class NotificationServiceController {
     );
   }
 
+  /** (KJNHAlGW) GET /notifications/me/telegram-groups — market o'z guruhlari. */
+  @MessagePattern({ cmd: 'notification.telegram.my_groups' })
+  findMyTelegramGroups(
+    @Payload() data: { requester?: { id?: unknown; roles?: unknown } },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.notificationService.findMyTelegramGroups(data),
+    );
+  }
+
   @MessagePattern({ cmd: 'notification.telegram.update' })
   updateTelegramMarket(
     @Payload() data: UpdateNotificationDto,

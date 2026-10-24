@@ -9,9 +9,7 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  * variant, activity log'dan to'ldirish qilinmadi.
  * Qayta ishga tushirish xavfsiz (IF NOT EXISTS).
  */
-export class TelegramMarketInactiveReason1716000000150
-  implements MigrationInterface
-{
+export class TelegramMarketInactiveReason1716000000150 implements MigrationInterface {
   name = 'TelegramMarketInactiveReason1716000000150';
 
   public async up(queryRunner: QueryRunner): Promise<void> {
