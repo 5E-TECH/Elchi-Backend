@@ -19005,6 +19005,41 @@
         ]
       }
     },
+    "/delivery/pricing-settings/history": {
+      "get": {
+        "description": "`data.versions` — barcha versiyalar (faoli ham, `is_active`), yangisi tepada; har biri to'liq nusxa + `created_by_name` (kim o'zgartirgan). Nima o'zgargani qo'shni versiyalarni solishtirib topiladi.",
+        "operationId": "DeliveryPricingGatewayController_listSettingsHistory",
+        "parameters": [
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "description": "Versiyalar soni (sukut 100, ko`pi bilan 500)",
+            "schema": {
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Narx formulasi sozlamalari tarixi (admin)",
+        "tags": [
+          "Delivery pricing"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
+        ]
+      }
+    },
     "/health": {
       "get": {
         "operationId": "HealthController_check",
@@ -26499,6 +26534,11 @@
           "created_by": {
             "type": "string",
             "nullable": true
+          },
+          "created_by_name": {
+            "type": "string",
+            "nullable": true,
+            "description": "Kim yaratgan (ism; GET /delivery/tariffs da)"
           }
         },
         "required": [
@@ -26881,6 +26921,11 @@
             "type": "string",
             "nullable": true
           },
+          "created_by_name": {
+            "type": "string",
+            "nullable": true,
+            "description": "Kim yaratgan (ism; GET /delivery/tariffs da)"
+          },
           "is_current": {
             "type": "boolean",
             "description": "Hozir amaldagi versiya"
@@ -27042,6 +27087,11 @@
           "created_by": {
             "type": "string",
             "nullable": true
+          },
+          "created_by_name": {
+            "type": "string",
+            "nullable": true,
+            "description": "Kim o'zgartirgan (ism; faqat /pricing-settings/history da)"
           }
         },
         "required": [

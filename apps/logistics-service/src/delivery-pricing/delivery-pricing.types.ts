@@ -6,6 +6,7 @@
  *   logistics.delivery.tariffs.create    — yangi tarif versiyasi
  *   logistics.delivery.settings.get      — faol sozlama
  *   logistics.delivery.settings.update   — sozlama (yangi versiya)
+ *   logistics.delivery.settings.history  — sozlama versiyalari (yangisi tepada)
  */
 export const DELIVERY_PRICING_PATTERNS = {
   QUOTE: 'logistics.delivery.quote',
@@ -14,6 +15,7 @@ export const DELIVERY_PRICING_PATTERNS = {
   TARIFFS_CREATE: 'logistics.delivery.tariffs.create',
   SETTINGS_GET: 'logistics.delivery.settings.get',
   SETTINGS_UPDATE: 'logistics.delivery.settings.update',
+  SETTINGS_HISTORY: 'logistics.delivery.settings.history',
 } as const;
 
 /** Bitta hisobdagi elementlar chegarasi (gateway DTO bilan AYNI). */

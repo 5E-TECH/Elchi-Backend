@@ -27,6 +27,7 @@ import { Roles as RoleEnum } from '@app/common';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
 import { Roles } from './auth/roles.decorator';
 import { RolesGuard } from './auth/roles.guard';
+import { AuditEnrichmentService } from './audit/audit-enrichment.service';
 import {
   CreateDeliveryTariffRequestDto,
   DeliveryPricingSettingsResponseDto,
@@ -81,7 +82,28 @@ const LOGISTICS_TIMEOUT_MS = 8000;
 export class DeliveryPricingGatewayController {
   constructor(
     @Inject('LOGISTICS') private readonly logisticsClient: ClientProxy,
+    private readonly auditEnrichment: AuditEnrichmentService,
   ) {}
+
+  /**
+   * (47WFHzlx) Tarix qatorlariga `created_by_name` — kim o'zgartirgani.
+   * Identity javob bermasa ism `null`, javob baribir qaytadi.
+   */
+  private async withAuthorNames(rows: unknown[]) {
+    const list = rows.filter(
+      (row): row is Record<string, unknown> => !!row && typeof row === 'object',
+    );
+    const names = await this.auditEnrichment
+      .resolveUserNames(list.map((row) => row.created_by))
+      .catch(() => new Map<string, string | null>());
+    for (const row of list) {
+      const id = row.created_by;
+      row.created_by_name =
+        typeof id === 'string' || typeof id === 'number'
+          ? (names.get(String(id)) ?? null)
+          : null;
+    }
+  }
 
   private send(cmd: string, payload: object) {
     return firstValueFrom(
@@ -168,14 +190,21 @@ export class DeliveryPricingGatewayController {
     description: 'Tarix qatorlari (sukut 100, ko`pi bilan 500)',
   })
   @ApiOkResponse({ type: DeliveryTariffsListResponseDto })
-  listTariffs(
+  async listTariffs(
     @Query('tariff_id') tariffId?: string,
     @Query('limit') limit?: string,
   ) {
-    return this.send('logistics.delivery.tariffs.find_all', {
+    const res = (await this.send('logistics.delivery.tariffs.find_all', {
       ...(tariffId ? { tariff_id: tariffId } : {}),
       ...(limit !== undefined ? { limit: Number(limit) } : {}),
-    });
+    })) as {
+      data?: { current?: Record<string, unknown>; versions?: unknown[] };
+    };
+    await this.withAuthorNames([
+      ...(res?.data?.versions ?? []),
+      ...Object.values(res?.data?.current ?? {}),
+    ]);
+    return res;
   }
 
   @Post('tariffs')
@@ -208,6 +237,30 @@ export class DeliveryPricingGatewayController {
   @ApiOkResponse({ type: DeliveryPricingSettingsResponseDto })
   getSettings() {
     return this.send('logistics.delivery.settings.get', {});
+  }
+
+  @Get('pricing-settings/history')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(...DELIVERY_PRICING_ADMIN_ROLES)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Narx formulasi sozlamalari tarixi (admin)',
+    description:
+      "`data.versions` — barcha versiyalar (faoli ham, `is_active`), yangisi tepada; har biri to'liq nusxa + " +
+      "`created_by_name` (kim o'zgartirgan). Nima o'zgargani qo'shni versiyalarni solishtirib topiladi.",
+  })
+  @ApiQuery({
+    name: 'limit',
+    required: false,
+    type: Number,
+    description: 'Versiyalar soni (sukut 100, ko`pi bilan 500)',
+  })
+  async listSettingsHistory(@Query('limit') limit?: string) {
+    const res = (await this.send('logistics.delivery.settings.history', {
+      ...(limit !== undefined ? { limit: Number(limit) } : {}),
+    })) as { data?: { versions?: unknown[] } };
+    await this.withAuthorNames(res?.data?.versions ?? []);
+    return res;
   }
 
   @Patch('pricing-settings')

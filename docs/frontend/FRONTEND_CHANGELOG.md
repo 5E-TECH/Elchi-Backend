@@ -23,6 +23,12 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### [2026-10-24] 🆕 ✏️ [logistics / gateway] — Tariflar tarixida «kim o'zgartirdi» ismi + sozlamalar tarixi (47WFHzlx)
+
+- ✏️ `GET /delivery/tariffs` — `data.versions[]` va `data.current.*` qatorlariga `created_by_name` (ism yoki `null`) qo'shildi. Identity javob bermasa ism `null`, javob baribir qaytadi.
+- 🆕 `GET /delivery/pricing-settings/history?limit=` (superadmin, admin) — `data.versions[]`: formula sozlamalarining barcha versiyalari (faoli ham, `is_active`), yangisi tepada, har biri to'liq nusxa + `created_by_name`. Nima o'zgargani (masalan `first_kg_included` 1 → 2) qo'shni versiyalarni solishtirib topiladi.
+- 🔧 Frontend: «O'zgarishlar tarixi» kartasida muallif ismini ko'rsating va hisob qoidalari o'zgarishlarini ham shu ro'yxatga qo'shing.
+
 ### 2026-10-24 — Dashboard paketi (batch D)
 
 Hammasi qo'shimcha (additive) maydonlar — eski FE buzilmaydi.

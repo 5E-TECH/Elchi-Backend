@@ -9,6 +9,7 @@ import { Observable, of, throwError, TimeoutError } from 'rxjs';
 import request from 'supertest';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
 import { ROLES_KEY } from './auth/roles.decorator';
+import { AuditEnrichmentService } from './audit/audit-enrichment.service';
 import { DeliveryPricingGatewayController } from './delivery-pricing-gateway.controller';
 
 /**
@@ -21,6 +22,17 @@ describe('DAqXPeSy — /delivery/* gateway', () => {
   let reply: (pattern: { cmd: string }) => Observable<unknown>;
   const logistics = {
     send: jest.fn((...args: [{ cmd: string }, unknown]) => reply(args[0])),
+  };
+  const auditEnrichment = {
+    resolveUserNames: jest.fn((ids: Iterable<unknown>) =>
+      Promise.resolve(
+        new Map(
+          [...ids]
+            .filter((id) => id === '1')
+            .map((id) => [String(id), 'Shodiyor Ergashev'] as const),
+        ),
+      ),
+    ),
   };
   const http = () => app.getHttpServer() as Parameters<typeof request>[0];
   const as = (roles: string[], sub = '21') => ({
@@ -37,7 +49,10 @@ describe('DAqXPeSy — /delivery/* gateway', () => {
   beforeAll(async () => {
     const moduleRef = await Test.createTestingModule({
       controllers: [DeliveryPricingGatewayController],
-      providers: [{ provide: 'LOGISTICS', useValue: logistics }],
+      providers: [
+        { provide: 'LOGISTICS', useValue: logistics },
+        { provide: AuditEnrichmentService, useValue: auditEnrichment },
+      ],
     })
       .overrideGuard(JwtAuthGuard)
       .useValue({
@@ -234,6 +249,10 @@ describe('DAqXPeSy — /delivery/* gateway', () => {
               .patch('/delivery/pricing-settings')
               .set(as([role]))
               .send({ round_to: 1000 }),
+          () =>
+            request(http())
+              .get('/delivery/pricing-settings/history')
+              .set(as([role])),
         ];
         for (const call of calls) {
           expect((await call()).status).toBe(403);
@@ -251,6 +270,87 @@ describe('DAqXPeSy — /delivery/* gateway', () => {
         { cmd: 'logistics.delivery.tariffs.find_all' },
         { tariff_id: 'city', limit: 20 },
       );
+    });
+
+    it('GET /delivery/tariffs — tarix va joriy qatorlarga created_by_name (47WFHzlx)', async () => {
+      reply = () =>
+        of({
+          statusCode: 200,
+          message: 'ok',
+          data: {
+            current: { city: { id: '1', created_by: '1' }, center: null },
+            versions: [
+              { id: '3', created_by: '1' },
+              { id: '2', created_by: '77' },
+              { id: '1', created_by: null },
+            ],
+          },
+        });
+      const res = await request(http())
+        .get('/delivery/tariffs')
+        .set(as(['admin']));
+      expect(res.status).toBe(200);
+      expect(
+        res.body.data.versions.map(
+          (v: { created_by_name: unknown }) => v.created_by_name,
+        ),
+      ).toEqual(['Shodiyor Ergashev', null, null]);
+      expect(res.body.data.current.city.created_by_name).toBe(
+        'Shodiyor Ergashev',
+      );
+      expect(res.body.data.current.center).toBeNull();
+    });
+
+    it('GET /delivery/tariffs — identity xatosi javobni buzmaydi (ism null)', async () => {
+      auditEnrichment.resolveUserNames.mockRejectedValueOnce(new Error('down'));
+      reply = () =>
+        of({
+          statusCode: 200,
+          message: 'ok',
+          data: { current: {}, versions: [{ id: '3', created_by: '1' }] },
+        });
+      const res = await request(http())
+        .get('/delivery/tariffs')
+        .set(as(['superadmin']));
+      expect(res.status).toBe(200);
+      expect(res.body.data.versions[0].created_by_name).toBeNull();
+    });
+
+    it('GET /delivery/pricing-settings/history — limit uzatiladi, ism qo`shiladi', async () => {
+      reply = () =>
+        of({
+          statusCode: 200,
+          message: 'ok',
+          data: {
+            versions: [
+              {
+                id: '2',
+                first_kg_included: 2,
+                is_active: true,
+                created_by: '1',
+              },
+              {
+                id: '1',
+                first_kg_included: 1,
+                is_active: false,
+                created_by: null,
+              },
+            ],
+          },
+        });
+      const res = await request(http())
+        .get('/delivery/pricing-settings/history?limit=10')
+        .set(as(['admin']));
+      expect(res.status).toBe(200);
+      expect(logistics.send).toHaveBeenCalledWith(
+        { cmd: 'logistics.delivery.settings.history' },
+        { limit: 10 },
+      );
+      expect(
+        res.body.data.versions.map(
+          (v: { created_by_name: unknown }) => v.created_by_name,
+        ),
+      ).toEqual(['Shodiyor Ergashev', null]);
     });
 
     it('POST /delivery/tariffs — yangi versiya, so`rovchi bilan', async () => {

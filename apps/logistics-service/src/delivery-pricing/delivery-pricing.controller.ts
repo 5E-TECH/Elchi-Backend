@@ -77,6 +77,16 @@ export class DeliveryPricingController {
     return this.executeAndAck(context, () => this.pricing.getSettings());
   }
 
+  @MessagePattern({ cmd: DELIVERY_PRICING_PATTERNS.SETTINGS_HISTORY })
+  listSettingsHistory(
+    @Payload() payload: { limit?: unknown },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.pricing.listSettingsHistory(payload ?? {}),
+    );
+  }
+
   @MessagePattern({ cmd: DELIVERY_PRICING_PATTERNS.SETTINGS_UPDATE })
   updateSettings(
     @Payload()

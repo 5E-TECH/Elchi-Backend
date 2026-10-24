@@ -500,6 +500,12 @@ export class DeliveryTariffRowDto {
   @ApiPropertyOptional({ nullable: true, type: String }) created_by?:
     | string
     | null;
+  @ApiPropertyOptional({
+    nullable: true,
+    type: String,
+    description: 'Kim yaratgan (ism; GET /delivery/tariffs da)',
+  })
+  created_by_name?: string | null;
 }
 
 /** `POST /delivery/quote` → `data`. Pul — so'm, vazn — kg. */
@@ -579,6 +585,12 @@ export class DeliveryPricingSettingsRowDto {
   @ApiProperty({ example: 1.4 }) express_multiplier!: number;
   @ApiProperty() is_active!: boolean;
   @ApiProperty({ nullable: true, type: String }) created_by!: string | null;
+  @ApiPropertyOptional({
+    nullable: true,
+    type: String,
+    description: "Kim o'zgartirgan (ism; faqat /pricing-settings/history da)",
+  })
+  created_by_name?: string | null;
 }
 
 export class DeliveryPricingSettingsResponseDto {
