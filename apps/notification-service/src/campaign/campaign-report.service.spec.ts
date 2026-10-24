@@ -88,13 +88,14 @@ describe('H7kpCman — CampaignReportService', () => {
 
   beforeEach(() => {
     rmqSendMock.mockReset();
-    rmqSendMock.mockImplementation((_c: unknown, _p: unknown, data: any) =>
+    rmqSendMock.mockImplementation((_c: unknown, pattern: any, data: any) =>
       Promise.resolve({
-        data: (data.ids as string[]).map((id) => ({
-          id,
-          name: `User ${id}`,
-          role: 'customer',
-        })),
+        data: (data.ids as string[]).map((id) =>
+          // (lkQiuyQu) contacts_by_ids — telefon (servis maskalaydi).
+          pattern?.cmd === 'identity.user.contacts_by_ids'
+            ? { id, phone_number: `+99890123${id.padStart(4, '0')}` }
+            : { id, name: `User ${id}`, role: 'customer' },
+        ),
       }),
     );
     sql = [];
@@ -290,17 +291,30 @@ describe('H7kpCman — CampaignReportService', () => {
           recipient_id: '42',
           name: 'User 42',
           role: 'courier',
-          phone: null,
-          failures: [{ channel: 'push', status: 'failed', reason: '410 Gone' }],
+          // (lkQiuyQu) maskalangan telefon + push sabab kodi.
+          phone: '***0042',
+          failures: [
+            {
+              channel: 'push',
+              status: 'failed',
+              reason: '410 Gone',
+              reason_code: 'subscription_expired',
+            },
+          ],
         },
         {
           ref_id: '101',
           recipient_id: '43',
           name: 'User 43',
           role: 'customer',
-          phone: null,
+          phone: '***0043',
           failures: [
-            { channel: 'push', status: 'no_subscription', reason: null },
+            {
+              channel: 'push',
+              status: 'no_subscription',
+              reason: null,
+              reason_code: 'no_subscription',
+            },
           ],
         },
       ]);
@@ -460,6 +474,7 @@ describe('H7kpCman — CampaignReportService', () => {
               channel: 'sms',
               status: 'not_delivered',
               reason: 'DLR: UNDELIV',
+              reason_code: null,
             },
           ],
         },
@@ -528,10 +543,10 @@ describe('H7kpCman — CampaignReportService', () => {
       );
       // formula in'ektsiyasi zararsizlantirilgan ('=... → ''=...)
       expect(lines[1]).toBe(
-        "42,User 42,courier,,push,failed,'=HYPERLINK(1),100",
+        "42,User 42,courier,***0042,push,failed,'=HYPERLINK(1),100",
       );
       expect(lines[2]).toBe(
-        '43,User 43,market,,realtime | push,failed | no_subscription, | ,101',
+        '43,User 43,market,***0043,realtime | push,failed | no_subscription, | ,101',
       );
       expect(activityLog.log).toHaveBeenCalledWith(
         expect.objectContaining({

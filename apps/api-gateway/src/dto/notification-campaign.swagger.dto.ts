@@ -421,3 +421,56 @@ export class NotificationCampaignScheduleFieldsDto {
   @ApiProperty({ nullable: true, example: null })
   paused_until!: string | null;
 }
+
+/** (lkQiuyQu) Yetkazilmagan kanal: holat, xom sabab va sabab KODI. */
+export class CampaignUndeliveredFailureDto {
+  @ApiProperty({ example: 'push' })
+  channel!: string;
+
+  @ApiProperty({ example: 'failed' })
+  status!: string;
+
+  @ApiProperty({
+    nullable: true,
+    example: 'Received unexpected response code 410',
+    description: 'Xom sabab (texnik matn) — UI da ko‘rsatilmaydi',
+  })
+  reason!: string | null;
+
+  @ApiProperty({
+    nullable: true,
+    example: 'subscription_expired',
+    description:
+      "(lkQiuyQu) Sabab kodi — UI shu bo'yicha matn tanlaydi. Push: no_subscription, push_disabled, subscription_expired, payload_too_large, rate_limited, push_rejected, push_service_error, network_error, push_failed, online, quiet_hours, muted. Boshqa kanallar: `<kanal>_reason` kodi (bot_blocked, no_phone, ...) yoki null.",
+  })
+  reason_code!: string | null;
+}
+
+/** (lkQiuyQu) GET .../undelivered — `data.items[]` elementi. */
+export class CampaignUndeliveredItemDto {
+  @ApiProperty({
+    example: '100',
+    description: 'notifications.id / sms_outbox.id',
+  })
+  ref_id!: string;
+
+  @ApiProperty({ nullable: true, example: '42' })
+  recipient_id!: string | null;
+
+  @ApiProperty({ nullable: true, example: 'Aziz Karimov' })
+  name!: string | null;
+
+  @ApiProperty({ nullable: true, example: 'courier' })
+  role!: string | null;
+
+  @ApiProperty({
+    nullable: true,
+    example: '***7434',
+    description:
+      '(lkQiuyQu) FAQAT maskalangan telefon (oxirgi 4 raqam) — bildirishnoma va SMS kampaniyasida; topilmasa null',
+  })
+  phone!: string | null;
+
+  @ApiProperty({ type: [CampaignUndeliveredFailureDto] })
+  failures!: CampaignUndeliveredFailureDto[];
+}

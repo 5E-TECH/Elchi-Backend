@@ -38,6 +38,7 @@ import {
 import {
   AudiencePreviewRequestDto,
   CampaignSchedulePolicyQueryDto,
+  CampaignUndeliveredItemDto,
   CampaignUndeliveredQueryDto,
   CreateAudienceSegmentRequestDto,
   CreateNotificationCampaignRequestDto,
@@ -227,7 +228,12 @@ export class NotificationCampaignGatewayController {
 
   @Get('campaigns/:id/undelivered')
   @ApiOperation({
-    summary: 'Yetkazilmaganlar: ism / rol + kanal va sabab (sahifalab)',
+    summary:
+      'Yetkazilmaganlar: ism / rol, maskalangan telefon + kanal, sabab va sabab kodi (sahifalab; lkQiuyQu)',
+  })
+  @ApiOkResponse({
+    description: 'data.items[] elementi',
+    type: CampaignUndeliveredItemDto,
   })
   @ApiParam({ name: 'id', example: '7' })
   campaignUndelivered(

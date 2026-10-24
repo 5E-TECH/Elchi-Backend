@@ -55,6 +55,51 @@ const NAME_CHUNK = 500;
 const ERROR_MAX = 300;
 const ID_RE = /^\d{1,19}$/;
 const FIND_BY_IDS = { cmd: 'identity.user.find_by_ids' };
+/** (lkQiuyQu) Telefon (faqat maskalash uchun) — identity `contacts_by_ids`. */
+const CONTACTS_BY_IDS = { cmd: 'identity.user.contacts_by_ids' };
+/** Kod ko'rinishidagi sabab (`push_disabled`, `quiet_hours`) — xom matn emas. */
+const REASON_CODE_RE = /^[a-z][a-z0-9_]{1,63}$/;
+
+/**
+ * (lkQiuyQu) Push xatosi → sabab KODI. `delivery.push_error` — web-push xom
+ * matni ("Received unexpected response code 410" va h.k.); frontend faqat
+ * kod xaritasini ko'rsatadi (texnik matn emas).
+ */
+export function pushReasonCode(status: string, error: string): string | null {
+  if (status === 'no_subscription') return 'no_subscription';
+  const raw = error.trim();
+  if (REASON_CODE_RE.test(raw)) return raw;
+  if (/\b(404|410)\b/.test(raw)) return 'subscription_expired';
+  if (/\b413\b/.test(raw)) return 'payload_too_large';
+  if (/\b429\b/.test(raw)) return 'rate_limited';
+  if (/\b(400|401|403)\b/.test(raw)) return 'push_rejected';
+  if (/\b5\d\d\b/.test(raw)) return 'push_service_error';
+  if (
+    /timeout|timed out|ETIMEDOUT|ECONNRESET|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|socket/i.test(
+      raw,
+    )
+  )
+    return 'network_error';
+  if (raw || status === 'failed') return 'push_failed';
+  return null;
+}
+
+/**
+ * (lkQiuyQu) Kanal yetkazilmaganining sabab KODI: avval `<kanal>_reason`
+ * (kod), push — xatodan tasniflanadi, boshqalar — `_error` kod bo'lsa.
+ */
+export function failureReasonCode(
+  channel: string,
+  status: string,
+  delivery: Record<string, unknown>,
+): string | null {
+  const explicit = text(delivery[`${channel}_reason`]).trim();
+  if (explicit) return explicit;
+  const error = text(delivery[`${channel}_error`]).trim();
+  if (channel === (NotificationChannel.PUSH as string))
+    return pushReasonCode(status, error);
+  return REASON_CODE_RE.test(error) ? error : null;
+}
 
 const CHANNEL_KEYS: readonly string[] = Object.values(NotificationChannel);
 /** Tashqi kanallar — in_app (qatorning o'zi) "yetkazilmadi" hisobiga kirmaydi. */
@@ -101,7 +146,13 @@ export interface UndeliveredItem {
   role: string | null;
   /** Faqat maskalangan (`***7434`) — to'liq raqam hech qachon chiqmaydi. */
   phone: string | null;
-  failures: Array<{ channel: string; status: string; reason: string | null }>;
+  failures: Array<{
+    channel: string;
+    status: string;
+    reason: string | null;
+    /** (lkQiuyQu) Frontend xaritasi uchun sabab kodi (xom matn emas). */
+    reason_code: string | null;
+  }>;
 }
 
 interface NotificationUndeliveredRow {
@@ -659,15 +710,20 @@ export class CampaignReportService {
               channel: NotificationChannel.SMS as string,
               status: row.dlr_status ?? row.status,
               reason: row.last_error ? maskPhonesForLog(row.last_error) : null,
+              reason_code: REASON_CODE_RE.test(text(row.last_error).trim())
+                ? text(row.last_error).trim()
+                : null,
             },
           ],
         };
       });
     }
     const inboxRows = rows as NotificationUndeliveredRow[];
-    const names = await this.names(
-      inboxRows.map((row) => String(row.recipient_id)),
-    );
+    const ids = inboxRows.map((row) => String(row.recipient_id));
+    const [names, phones] = await Promise.all([
+      this.names(ids),
+      this.maskedPhones(ids),
+    ]);
     return inboxRows.map((row) => {
       const delivery = row.delivery ?? {};
       const person = names.get(String(row.recipient_id));
@@ -676,7 +732,8 @@ export class CampaignReportService {
         recipient_id: String(row.recipient_id),
         name: person?.name ?? null,
         role: row.recipient_role ?? person?.role ?? null,
-        phone: null,
+        // (lkQiuyQu) faqat maskalangan (`***7434`); topilmasa null.
+        phone: phones.get(String(row.recipient_id)) ?? null,
         failures: EXTERNAL_CHANNELS.filter((channel) =>
           UNDELIVERED_STATUSES.includes(text(delivery[channel])),
         ).map((channel) => ({
@@ -686,9 +743,42 @@ export class CampaignReportService {
             text(delivery[`${channel}_reason`]) ||
             text(delivery[`${channel}_error`]) ||
             null,
+          reason_code: failureReasonCode(
+            channel,
+            text(delivery[channel]),
+            delivery,
+          ),
         })),
       };
     });
+  }
+
+  /**
+   * (lkQiuyQu) Qabul qiluvchi telefoni — identity `contacts_by_ids`, 500
+   * tadan; DARHOL maskalanadi (`***7434`), to'liq raqam xotirada ham
+   * saqlanmaydi. Identity javob bermasa — telefonsiz (hisobot ochilaveradi).
+   */
+  private async maskedPhones(ids: string[]) {
+    const unique = [...new Set(ids.filter((id) => ID_RE.test(id)))];
+    const map = new Map<string, string>();
+    for (let start = 0; start < unique.length; start += NAME_CHUNK) {
+      try {
+        const res = await rmqSend<
+          | { data?: Array<{ id: unknown; phone_number?: unknown }> }
+          | Array<{ id: unknown; phone_number?: unknown }>
+        >(this.identityClient, CONTACTS_BY_IDS, {
+          ids: unique.slice(start, start + NAME_CHUNK),
+        });
+        const list = Array.isArray(res) ? res : (res?.data ?? []);
+        for (const user of list) {
+          const phone = text(user.phone_number);
+          if (phone) map.set(text(user.id), maskPhone(phone));
+        }
+      } catch (error) {
+        this.logger.warn(`hisobot: telefonlar olinmadi — ${shortError(error)}`);
+      }
+    }
+    return map;
   }
 
   /**
