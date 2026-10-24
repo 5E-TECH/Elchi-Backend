@@ -2,7 +2,10 @@ import { Logger } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { Observable, Subject, of, throwError } from 'rxjs';
 import { SessionRevocationService } from '../auth/session-revocation.service';
-import { RealtimeController, SESSIONS_KICK_PATTERN } from './realtime.controller';
+import {
+  RealtimeController,
+  SESSIONS_KICK_PATTERN,
+} from './realtime.controller';
 import {
   RealtimeGateway,
   SESSION_KICK_DISCONNECT_DELAY_MS,
@@ -56,10 +59,7 @@ describe('Elchi Pochta #3 (2026-10-24) — realtime: yopilgan sessiya socketdan 
       { get: () => '1h' } as never,
     );
     jest
-      .spyOn(
-        (revocation as unknown as { logger: Logger }).logger,
-        'warn',
-      )
+      .spyOn((revocation as unknown as { logger: Logger }).logger, 'warn')
       .mockImplementation(() => undefined);
     gateway = new RealtimeGateway(jwt, revocation);
     (gateway as unknown as { server: unknown }).server = {

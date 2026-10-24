@@ -49,9 +49,7 @@ class RawSocketIoClient {
     this.ws = new WebSocket(
       `ws://127.0.0.1:${port}/socket.io/?EIO=4&transport=websocket`,
     );
-    this.ws.on('message', (raw: WebSocket.RawData) =>
-      this.onFrame(String(raw)),
-    );
+    this.ws.on('message', (raw: Buffer) => this.onFrame(raw.toString('utf8')));
     this.ws.on('close', () => this.push({ kind: 'close', at: Date.now() }));
   }
 
@@ -138,7 +136,10 @@ describe('Elchi Pochta #3 (2026-10-24) — haqiqiy socket.io: chiqarilgan sessiy
   let port: number;
   let revocation: SessionRevocationService;
   let gateway: RealtimeGateway;
-  const jwt = new JwtService({ secret: SECRET, signOptions: { expiresIn: '1h' } });
+  const jwt = new JwtService({
+    secret: SECRET,
+    signOptions: { expiresIn: '1h' },
+  });
   const closedInIdentity = new Set<string>([SID_CLOSED]);
   const identitySend = jest.fn(
     (_pattern: { cmd: string }, payload: { sessionId: string }) =>

@@ -299,7 +299,9 @@ describe('(Elchi Pochta #3, 2026-10-24) kickSessions — yagona chiqarish nuqtas
       throw new Error('socket server down');
     });
     const unsubscribe = service.onKick(second);
-    expect(() => service.kickSessions([SID_A], 'password_changed')).not.toThrow();
+    expect(() =>
+      service.kickSessions([SID_A], 'password_changed'),
+    ).not.toThrow();
     expect(second).toHaveBeenCalledWith([SID_A], 'password_changed');
     expect(warn).toHaveBeenCalledWith(
       expect.stringContaining('socket server down'),

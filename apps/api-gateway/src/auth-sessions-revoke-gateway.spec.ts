@@ -17,6 +17,10 @@ import { JwtStrategy } from './auth/jwt.strategy';
 import { IS_PUBLIC_KEY } from './auth/public.decorator';
 import { collectRouteRoles } from './auth/route-roles';
 import { SessionRevocationService } from './auth/session-revocation.service';
+import {
+  RealtimeGateway,
+  SESSION_KICK_DISCONNECT_DELAY_MS,
+} from './realtime/realtime.gateway';
 
 /**
  * (Elchi Pochta #3 — «Sessiyalar»: boshqa sessiyalarni chiqarib yuborish)
@@ -49,6 +53,11 @@ describe('Elchi Pochta #3 — boshqa sessiyalarni yopish (gateway, haqiqiy JwtSt
   let app: INestApplication;
   let revocation: SessionRevocationService;
   const jwt = new JwtService({ secret: KEY, signOptions: { expiresIn: '1h' } });
+  /** (2026-10-24) Soxta socket.io serveriga ketgan emit / uzishlar. */
+  const socketLog: Array<
+    | { kind: 'emit'; room: string; event: string; data: unknown }
+    | { kind: 'disconnect'; rooms: string[]; close: boolean }
+  > = [];
 
   // Soxta identity: sessiya → egasi; yopilganlar to'plami.
   const owners = new Map<string, string>();
@@ -216,12 +225,27 @@ describe('Elchi Pochta #3 — boshqa sessiyalarni yopish (gateway, haqiqiy JwtSt
         SessionRevocationService,
         JwtStrategy,
         JwtAuthGuard,
+        // (2026-10-24) socket qismi — server soxta (`socketLog`).
+        { provide: JwtService, useValue: jwt },
+        RealtimeGateway,
       ],
     }).compile();
     app = moduleRef.createNestApplication();
     app.useGlobalFilters(new AllExceptionsFilter(), new RpcExceptionFilter());
     await app.init();
     revocation = app.get(SessionRevocationService);
+    const realtime: RealtimeGateway = app.get(RealtimeGateway);
+    (realtime as unknown as { server: unknown }).server = {
+      to: (room: string) => ({
+        emit: (event: string, data: unknown) =>
+          socketLog.push({ kind: 'emit', room, event, data }),
+      }),
+      in: (rooms: string[]) => ({
+        disconnectSockets: (close: boolean) =>
+          socketLog.push({ kind: 'disconnect', rooms, close }),
+      }),
+      emit: jest.fn(),
+    };
   });
 
   afterAll(async () => {
@@ -237,6 +261,7 @@ describe('Elchi Pochta #3 — boshqa sessiyalarni yopish (gateway, haqiqiy JwtSt
     owners.set(SID_TABLET, '25');
     owners.set(SID_OTHER_USER, '26');
     identitySend.mockClear();
+    socketLog.length = 0;
     // Har test toza kesh bilan (boshqa gateway instansi kabi).
     (revocation as unknown as { cache: Map<string, unknown> }).cache.clear();
   });
@@ -620,6 +645,110 @@ describe('Elchi Pochta #3 — boshqa sessiyalarni yopish (gateway, haqiqiy JwtSt
       expect(calls('identity.user.update')[0][1]).toEqual(
         expect.objectContaining({ current_session_id: null }),
       );
+    });
+  });
+
+  describe('(2026-10-24) ochiq socketlar SHU ZAHOTI chiqadi — `auth:session_revoked` + uzish', () => {
+    const kicks = () =>
+      socketLog.flatMap((entry) =>
+        entry.kind === 'emit'
+          ? [{ room: entry.room, event: entry.event, data: entry.data }]
+          : [],
+      );
+    const kick = (sid: string, reason: string) => ({
+      room: `session:${sid}`,
+      event: 'auth:session_revoked',
+      data: { session_id: sid, reason },
+    });
+
+    const settle = () =>
+      new Promise((resolve) =>
+        setTimeout(resolve, SESSION_KICK_DISCONNECT_DELAY_MS + 50),
+      );
+
+    it('⭐ DELETE /auth/sessions/:id — faqat telefon xonasiga `revoked_by_owner`, 250 ms dan keyin uziladi; noutbuk/planshet tegilmaydi', async () => {
+      // Oldingi testlarning kutilayotgan uzishlari tugasin.
+      await settle();
+      socketLog.length = 0;
+      await request(http())
+        .delete(`/auth/sessions/${SID_PHONE}`)
+        .set('Authorization', token(SID_LAPTOP))
+        .expect(200);
+      expect(kicks()).toEqual([kick(SID_PHONE, 'revoked_by_owner')]);
+      expect(socketLog.filter((e) => e.kind === 'disconnect')).toEqual([]);
+      await settle();
+      expect(socketLog.filter((e) => e.kind === 'disconnect')).toEqual([
+        { kind: 'disconnect', rooms: [`session:${SID_PHONE}`], close: true },
+      ]);
+    });
+
+    it('⭐ POST /auth/sessions/revoke-others — telefon va planshet `revoked_by_owner`; joriy (noutbuk) va boshqa foydalanuvchi tegilmaydi', async () => {
+      await request(http())
+        .post('/auth/sessions/revoke-others')
+        .set('Authorization', token(SID_LAPTOP))
+        .expect(200);
+      expect(kicks()).toEqual([
+        kick(SID_PHONE, 'revoked_by_owner'),
+        kick(SID_TABLET, 'revoked_by_owner'),
+      ]);
+    });
+
+    it('⭐ POST /auth/logout — joriy sessiyaning boshqa tablari `logout` bilan chiqadi', async () => {
+      await request(http())
+        .post('/auth/logout')
+        .set('Authorization', token(SID_PHONE))
+        .expect(201);
+      expect(kicks()).toEqual([kick(SID_PHONE, 'logout')]);
+    });
+
+    it('⭐ PATCH /auth/my-profile { password } (o‘zi, noutbukdan) — telefon va planshet `password_changed`, noutbuk qoladi', async () => {
+      await request(http())
+        .patch('/auth/my-profile')
+        .set('Authorization', token(SID_LAPTOP))
+        .send({ password: 'yangi-parol' })
+        .expect(200);
+      expect(kicks()).toEqual([
+        kick(SID_PHONE, 'password_changed'),
+        kick(SID_TABLET, 'password_changed'),
+      ]);
+    });
+
+    it('⭐ PATCH /users/:id { password } (superadmin tiklaydi) — o‘sha foydalanuvchining HAMMA sessiyasi `password_changed`; superadminniki tegilmaydi', async () => {
+      await request(http())
+        .patch('/users/25')
+        .set('Authorization', token(SID_OTHER_USER, '26', ['SUPERADMIN']))
+        .send({ password: 'tiklangan' })
+        .expect(200);
+      expect(kicks()).toEqual([
+        kick(SID_PHONE, 'password_changed'),
+        kick(SID_LAPTOP, 'password_changed'),
+        kick(SID_TABLET, 'password_changed'),
+      ]);
+    });
+
+    it('rad etilgan so‘rovlar (403 SESSION_TOO_NEW, 404, 400) va parolsiz profil — hech kim chiqarilmaydi', async () => {
+      await request(http())
+        .post('/auth/sessions/revoke-others')
+        .set('Authorization', token(SID_TABLET))
+        .expect(403);
+      await request(http())
+        .delete(`/auth/sessions/${SID_PHONE}`)
+        .set('Authorization', token(SID_TABLET))
+        .expect(403);
+      await request(http())
+        .delete(`/auth/sessions/${SID_OTHER_USER}`)
+        .set('Authorization', token(SID_LAPTOP))
+        .expect(404);
+      await request(http())
+        .delete(`/auth/sessions/${SID_LAPTOP}`)
+        .set('Authorization', token(SID_LAPTOP))
+        .expect(400);
+      await request(http())
+        .patch('/auth/my-profile')
+        .set('Authorization', token(SID_LAPTOP))
+        .send({ name: 'Ism' })
+        .expect(200);
+      expect(kicks()).toEqual([]);
     });
   });
 });

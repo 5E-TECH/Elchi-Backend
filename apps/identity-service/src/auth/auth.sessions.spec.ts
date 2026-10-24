@@ -268,7 +268,9 @@ function makeWorld(envOverrides: Record<string, string | undefined> = {}) {
     save: jest.fn((user: UserRow) => Promise.resolve(user)),
   };
   const sessionRepo = makeSessionRepo();
-  const sessions = new AuthSessionService(sessionRepo as never);
+  // (2026-10-24) gateway'ga `auth.sessions.kick` e'loni (security_reset).
+  const kicks = { publish: jest.fn() };
+  const sessions = new AuthSessionService(sessionRepo as never, kicks as never);
   const jwt = new JwtService({
     secret: ACCESS_KEY,
     signOptions: { expiresIn: '1h' },
@@ -315,6 +317,7 @@ function makeWorld(envOverrides: Record<string, string | undefined> = {}) {
   return {
     service,
     sessions,
+    kicks,
     users,
     usersRepo,
     sessionRepo,
@@ -2687,5 +2690,107 @@ describe('Elchi Pochta #3 (2026-10-23) — parol almashtirish boshqa qurilmalarn
       undefined,
       { currentSessionId: null },
     );
+  });
+});
+
+describe('Elchi Pochta #3 (2026-10-24) — identity yopgan sessiyalar gateway’ga e’lon qilinadi (auth.sessions.kick)', () => {
+  it('⭐ refresh’da xavfsizlik hodisasi (epoch) — ikkala qurilma security_reset bilan e’lon qilinadi (socketlari uziladi)', async () => {
+    const w = makeWorld();
+    const phone = await w.login('25');
+    const laptop = await w.login('25');
+    invalidateAllSessions(w.users.get('25') as never);
+    for (const res of [phone, laptop]) {
+      await errorOf(w.service.refresh({ refreshToken: res.refreshToken }));
+    }
+    expect(w.kicks.publish.mock.calls).toEqual([
+      [[w.sidOf(phone.accessToken)], 'security_reset'],
+      [[w.sidOf(laptop.accessToken)], 'security_reset'],
+    ]);
+  });
+
+  it('⭐ qurilma qayta kirdi, eski qatori epoch’i eskirgan — eski sid e’lon qilinadi (shu qurilmaning eski tablari chiqadi)', async () => {
+    const w = makeWorld();
+    const first = await w.login('25', PHONE_A_CTX);
+    invalidateAllSessions(w.users.get('25') as never);
+    await w.login('25', PHONE_A_CTX);
+    expect(w.kicks.publish).toHaveBeenCalledTimes(1);
+    expect(w.kicks.publish).toHaveBeenCalledWith(
+      [w.sidOf(first.accessToken)],
+      'security_reset',
+    );
+  });
+
+  it('gateway o‘zi chiqaradiganlar (logout, egasi yopdi, parol almashtirish) va oddiy refresh — e’lon YO‘Q (ikki marta emas)', async () => {
+    const w = makeWorld();
+    const phone = await w.login('25');
+    const laptop = await w.login('25');
+    const tablet = await w.login('25');
+    await w.service.refresh({ refreshToken: laptop.refreshToken });
+    await w.service.revokeSession({
+      userId: '25',
+      sessionId: w.sidOf(phone.accessToken),
+      currentSessionId: w.sidOf(laptop.accessToken),
+    });
+    await w.service.revokeOtherSessions({
+      userId: '25',
+      currentSessionId: w.sidOf(laptop.accessToken),
+    });
+    await w.service.logout('25', { sessionId: w.sidOf(laptop.accessToken) });
+    await w.sessions.afterPasswordChange({
+      user: w.users.get('25') as never,
+      keepSessionId: null,
+    });
+    void tablet;
+    expect(w.kicks.publish).not.toHaveBeenCalled();
+  });
+
+  it('⭐ soatlik tozalash: `RETURNING` id lari e’lon qilinadi; yopilgan yo‘q — e’lon yo‘q', async () => {
+    const repo = makeSessionRepo();
+    const kicks = { publish: jest.fn() };
+    const service = new AuthSessionService(repo as never, kicks as never);
+    jest
+      .spyOn(
+        (service as unknown as { logger: { log: () => void } }).logger,
+        'log',
+      )
+      .mockImplementation(() => undefined);
+    repo.query.mockResolvedValueOnce([
+      [
+        { id: 'AAAAAAAA-1111-4111-8111-111111111111' },
+        { id: 'bbbbbbbb-2222-4222-8222-222222222222' },
+      ],
+      2,
+    ]);
+    expect(await service.cleanup(new Date('2026-10-24T00:00:00Z'))).toEqual({
+      reset: 2,
+      deleted: 0,
+    });
+    const [sql] = repo.query.mock.calls[0] as [string];
+    expect(sql).toContain('RETURNING s."id"');
+    expect(kicks.publish).toHaveBeenCalledWith(
+      [
+        'aaaaaaaa-1111-4111-8111-111111111111',
+        'bbbbbbbb-2222-4222-8222-222222222222',
+      ],
+      'security_reset',
+    );
+
+    kicks.publish.mockClear();
+    repo.query.mockResolvedValueOnce([[], 0]);
+    await service.cleanup(new Date('2026-10-24T01:00:00Z'));
+    expect(kicks.publish).not.toHaveBeenCalled();
+  });
+
+  it('e’lonchi yo‘q (eski qurilish / spec) — avvalgidek ishlaydi', async () => {
+    const repo = makeSessionRepo();
+    repo.query.mockResolvedValueOnce([[{ id: 'x' }], 1]);
+    const service = new AuthSessionService(repo as never);
+    jest
+      .spyOn(
+        (service as unknown as { logger: { log: () => void } }).logger,
+        'log',
+      )
+      .mockImplementation(() => undefined);
+    await expect(service.cleanup()).resolves.toEqual({ reset: 1, deleted: 0 });
   });
 });
