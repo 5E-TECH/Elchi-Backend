@@ -236,6 +236,17 @@ const USER_BASE = 7_000_000;
           )?.findColumnByName('paused_until'),
         ).toBeUndefined();
         await paused.up(runner);
+        // (fb4qy6bd) 151 idempotent: ikki marta up; down → ustunlar yo'q.
+        const requested = new NotificationCampaignRequestedAt1716000000151();
+        await requested.up(runner);
+        await requested.up(runner);
+        await requested.down(runner);
+        const table = await runner.getTable(
+          'notification_schema.notification_campaigns',
+        );
+        expect(table?.findColumnByName('requested_at')).toBeUndefined();
+        expect(table?.findColumnByName('quiet_hours_shifted')).toBeUndefined();
+        await requested.up(runner);
       } finally {
         await runner.release();
       }

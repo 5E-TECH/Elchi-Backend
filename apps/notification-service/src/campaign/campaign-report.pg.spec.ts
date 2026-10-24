@@ -268,7 +268,13 @@ const superadmin = { id: '26', roles: ['superadmin'] };
         expect.objectContaining({
           name: expect.stringMatching(/^User /),
           failures: [
-            { channel: 'realtime', status: 'failed', reason: 'timeout' },
+            {
+              channel: 'realtime',
+              status: 'failed',
+              reason: 'timeout',
+              // (lkQiuyQu) kod ko'rinishidagi sabab.
+              reason_code: 'timeout',
+            },
           ],
         }),
       );
@@ -379,7 +385,13 @@ const superadmin = { id: '26', roles: ['superadmin'] };
           name: 'User 72',
           phone: '***7402',
           failures: [
-            { channel: 'sms', status: 'not_delivered', reason: 'DLR: UNDELIV' },
+            {
+              channel: 'sms',
+              status: 'not_delivered',
+              reason: 'DLR: UNDELIV',
+              // (lkQiuyQu) xom matn — kod emas.
+              reason_code: null,
+            },
           ],
         }),
       ]);

@@ -406,6 +406,23 @@ const migration = new TelegramBotCore1716000000120();
         );
         expect(reasonRow.inactive_reason).toBe('kicked');
         expect(reasonRow.inactive_at).not.toBeNull();
+        // CHECK: ro'yxatda yo'q sabab yozilmaydi.
+        await expect(
+          db.query(
+            `UPDATE notification_schema.telegram_markets SET inactive_reason = 'boshqa' WHERE group_id = '-100555'`,
+          ),
+        ).rejects.toThrow(/CHK_TG_MARKET_INACTIVE_REASON/);
+        // 150 qayta up — xavfsiz; down → up qayta tiklaydi (ma'lumot NULL).
+        const reasonRunner = db.createQueryRunner();
+        try {
+          const reasonMigration =
+            new TelegramMarketInactiveReason1716000000150();
+          await reasonMigration.up(reasonRunner);
+          await reasonMigration.down(reasonRunner);
+          await reasonMigration.up(reasonRunner);
+        } finally {
+          await reasonRunner.release();
+        }
         expect(dispatch).toHaveBeenCalledTimes(1);
         // Takror — o'zgarish yo'q, qayta xabar yo'q.
         expect(
