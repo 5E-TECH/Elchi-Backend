@@ -5121,6 +5121,7 @@
     },
     "/post": {
       "get": {
+        "description": "tveJKICY: javobda `orders_total`, `amount_total` — joriy filtr bo‘yicha (sahifadan qat’i nazar) yig‘indilar.",
         "operationId": "LogisticsGatewayController_getAllPosts",
         "parameters": [
           {
@@ -5209,7 +5210,14 @@
         ],
         "responses": {
           "200": {
-            "description": ""
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PostListPageResponseDto"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -5320,6 +5328,7 @@
     },
     "/post/courier/old-posts": {
       "get": {
+        "description": "tveJKICY: javobda `orders_total`, `amount_total` — joriy filtr bo‘yicha yig‘indilar.",
         "operationId": "LogisticsGatewayController_getOldPostsForCourier",
         "parameters": [
           {
@@ -5386,7 +5395,14 @@
         ],
         "responses": {
           "200": {
-            "description": ""
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PostListPageResponseDto"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -6943,7 +6959,7 @@
     },
     "/district/{id}/merge": {
       "post": {
-        "description": "Ko'chirishdan OLDIN B dagi sonlar olinadi; keyin A da 0 qolgani va B = eski B + ko'chirilgan ekani tasdiqlanadi. Biror bosqich yiqilsa yoki sonlar mos kelmasa — ko'chirilganlar AYNAN o'sha ID'lar bo'yicha A ga qaytariladi, A o'chirilmaydi: 409 (tekshiruv mos kelmadi / servis rad etdi) yoki 503 (servis javob bermadi). Kompensatsiyaning o'zi yiqilsa — xato matnida qaysi ID'lar qaysi tumanda qolgani yoziladi (to'liq ro'yxat — activity log, District #id, action `district.merge_compensation_failed`). 200 javobi: `moved` {orders, users, branches}, `target_before`, `target_after`.",
+        "description": "Ko'chirishdan OLDIN B dagi sonlar olinadi; keyin A da 0 qolgani va B = eski B + ko'chirilgan ekani tasdiqlanadi. Biror bosqich yiqilsa yoki sonlar mos kelmasa — ko'chirilganlar AYNAN o'sha ID'lar bo'yicha A ga qaytariladi, A o'chirilmaydi: 409 (tekshiruv mos kelmadi / servis rad etdi) yoki 503 (servis javob bermadi). Kompensatsiyaning o'zi yiqilsa — xato matnida qaysi ID'lar qaysi tumanda qolgani yoziladi (to'liq ro'yxat — activity log, District #id, action `district.merge_compensation_failed`). 200 javobi: `moved` {orders, users, branches} (jami), `moved_live` (faqat tiriklar — «Ko'chirildi», vsmpTweI), `target_before`, `target_after`.",
         "operationId": "LogisticsGatewayController_mergeDistrict",
         "parameters": [
           {
@@ -6967,8 +6983,25 @@
           }
         },
         "responses": {
-          "201": {
-            "description": ""
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DistrictMergeResponseDto"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "tf324cXN: 409 (va 503 — xuddi shu shakl) — `data.reason` / `data.details.reason`: `count_mismatch` (`details.mismatches`), `remote_refused`, `timeout` (`details.timeout_ms`), `invalid_response`, `delete_failed`; `details.kind` — qadam (orders/users/branches).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DistrictMergeErrorResponseDto"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -9752,7 +9785,14 @@
         ],
         "responses": {
           "200": {
-            "description": ""
+            "description": "data.items[] elementi (rejalashtirish maydonlari)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationCampaignScheduleFieldsDto"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -9760,7 +9800,7 @@
             "bearer": []
           }
         ],
-        "summary": "Kampaniyalar tarixi (yangilari birinchi)",
+        "summary": "Kampaniyalar tarixi (yangilari birinchi); har qatorda requested_at + quiet_hours_shifted (fb4qy6bd)",
         "tags": [
           "Notification campaigns"
         ],
@@ -9848,7 +9888,14 @@
         ],
         "responses": {
           "200": {
-            "description": ""
+            "description": "data (rejalashtirish maydonlari)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationCampaignScheduleFieldsDto"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -9856,7 +9903,7 @@
             "bearer": []
           }
         ],
-        "summary": "Kampaniya progressi: status, total/sent/failed/skipped, progress_pct",
+        "summary": "Kampaniya progressi: status, total/sent/failed/skipped, progress_pct, requested_at, quiet_hours_shifted",
         "tags": [
           "Notification campaigns"
         ],
@@ -9934,7 +9981,14 @@
         ],
         "responses": {
           "200": {
-            "description": ""
+            "description": "data.items[] elementi",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CampaignUndeliveredItemDto"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -9942,7 +9996,7 @@
             "bearer": []
           }
         ],
-        "summary": "Yetkazilmaganlar: ism / rol + kanal va sabab (sahifalab)",
+        "summary": "Yetkazilmaganlar: ism / rol, maskalangan telefon + kanal, sabab va sabab kodi (sahifalab; lkQiuyQu)",
         "tags": [
           "Notification campaigns"
         ],
@@ -10258,7 +10312,14 @@
         ],
         "responses": {
           "200": {
-            "description": ""
+            "description": "data.items[] elementi (audience — tafsilot bilan bir xil)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SentNotificationItemDto"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -10266,7 +10327,7 @@
             "bearer": []
           }
         ],
-        "summary": "Yuborilgan xabarlar tarixi: sana, sarlavha, kim yubordi, qabul qiluvchilar, kanal natijasi",
+        "summary": "Yuborilgan xabarlar tarixi: sana, sarlavha, kim yubordi, kimga (audience — NwlmrcMf), qabul qiluvchilar, kanal natijasi",
         "tags": [
           "Notification campaigns"
         ],
@@ -10771,6 +10832,40 @@
         "x-roles": null
       }
     },
+    "/notifications/me/telegram-groups": {
+      "get": {
+        "operationId": "NotificationGatewayController_myTelegramGroups",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "data[] elementi",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/MyTelegramGroupStatusDto"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Market o'z Telegram guruhlari holati: data[] — har doim ikkala tur (create, cancel): { group_type, linked, is_active, linked_at, inactive_reason }",
+        "tags": [
+          "Notification"
+        ],
+        "x-roles": [
+          "market",
+          "market_operator"
+        ]
+      }
+    },
     "/notifications/dispatch": {
       "post": {
         "operationId": "NotificationGatewayController_dispatch",
@@ -10861,7 +10956,14 @@
         ],
         "responses": {
           "200": {
-            "description": ""
+            "description": "data.items[] elementi",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TelegramMarketPublicDto"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -10869,7 +10971,7 @@
             "bearer": []
           }
         ],
-        "summary": "Get notification configs",
+        "summary": "Get notification configs (data.items[] — TelegramMarketPublicDto; inactive_reason/inactive_at bilan, G085w5Qr)",
         "tags": [
           "Notification"
         ],
@@ -10879,18 +10981,9 @@
         ]
       },
       "post": {
+        "deprecated": true,
         "operationId": "NotificationGatewayController_createNotification",
         "parameters": [],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/CreateTelegramMarketRequestDto"
-              }
-            }
-          }
-        },
         "responses": {
           "201": {
             "description": ""
@@ -10901,7 +10994,7 @@
             "bearer": []
           }
         ],
-        "summary": "Create notification config",
+        "summary": "YOPILGAN (410 Gone, qXlFQp8Q): guruh ID'sini qo'lda yozib ulash olib tashlandi. Guruh faqat bir martalik bot havolasi orqali ulanadi — POST /telegram/link-code { purpose: 'market_group' } → /start <kod> yoki POST /notifications/connect-by-token.",
         "tags": [
           "Notification"
         ],
@@ -10927,7 +11020,14 @@
         ],
         "responses": {
           "200": {
-            "description": ""
+            "description": "data",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TelegramMarketPublicDto"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -10935,7 +11035,7 @@
             "bearer": []
           }
         ],
-        "summary": "Get one notification config by id",
+        "summary": "Get one notification config by id (inactive_reason/inactive_at bilan, G085w5Qr)",
         "tags": [
           "Notification"
         ],
@@ -10969,7 +11069,14 @@
         },
         "responses": {
           "200": {
-            "description": ""
+            "description": "data",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TelegramMarketPublicDto"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -10977,7 +11084,7 @@
             "bearer": []
           }
         ],
-        "summary": "Update notification config",
+        "summary": "Telegram guruhini faollashtirish / o'chirish — FAQAT { is_active } (qXlFQp8Q). group_id / market_id / group_type yuborilsa 400; guruhni almashtirish — o'chirib, bot havolasi orqali qayta ulash. is_active=false → inactive_reason='manual'.",
         "tags": [
           "Notification"
         ],
@@ -15211,6 +15318,7 @@
     },
     "/transfer-batches/{id}": {
       "get": {
+        "description": "3HKvAyhm: javobda `source_branch` / `destination_branch` `{ id, name }` — menejer ham filial nomini ko'radi (`GET branches/:id` faqat SA/admin).",
         "operationId": "BranchGatewayController_findTransferBatchById",
         "parameters": [
           {
@@ -15225,7 +15333,14 @@
         ],
         "responses": {
           "200": {
-            "description": ""
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransferBatchDetailDto"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -15234,6 +15349,51 @@
           }
         ],
         "summary": "Get transfer batch by id",
+        "tags": [
+          "Branch"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "branch",
+          "manager",
+          "registrator"
+        ]
+      }
+    },
+    "/transfer-batches/{id}/history": {
+      "get": {
+        "description": "Paket tarixi xronologik (eng eskisi birinchi): yaratildi / jo'natildi / qabul qilindi / bekor qilindi. Kirish — `GET /transfer-batches/:id` bilan bir xil (jo'natuvchi yoki qabul qiluvchi filial).",
+        "operationId": "BranchGatewayController_findTransferBatchHistory",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Transfer batch ID (bigint string)",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransferBatchHistoryResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Transfer batch history (3HKvAyhm)",
         "tags": [
           "Branch"
         ],
@@ -16223,6 +16383,7 @@
     },
     "/analytics/dashboard": {
       "get": {
+        "description": "Admin/filial kesimi javobida qo'shimcha: orders.lostRevenue (l9NNdsCH, bekor summasi), targets {successRate} (l9NNdsCH), previous {from,to,acceptedCount,soldAndPaid,cancelled,totalRevenue,profit,lostRevenue} va series[14] {date,…} (DwrMygfo; registratorda moliyaviy maydonlarsiz; «Barchasi»da previous=null).",
         "operationId": "AnalyticsGatewayController_getDashboard",
         "parameters": [
           {
@@ -16276,6 +16437,15 @@
             "in": "query",
             "schema": {
               "type": "boolean"
+            }
+          },
+          {
+            "name": "branch_id",
+            "required": false,
+            "in": "query",
+            "description": "(6CYRjoZG) Faqat SUPERADMIN/ADMIN: tanlangan filial kesimi (/branches/:id «Filial ko'rsatkichlari»). Javobga qo'shimcha: branch_id, dailyRevenue {data[], summary}, statusDistribution {distribution, total}, topCouriers[] + topCouriersMeta, branchDashboard. Boshqa rollarda e'tiborsiz (o'z kesimi).",
+            "schema": {
+              "type": "string"
             }
           }
         ],
@@ -16343,6 +16513,15 @@
             }
           },
           {
+            "name": "all",
+            "required": false,
+            "in": "query",
+            "description": "(XdKajqLe) «Barchasi»: dashboard bilan AYNI oyna (eng so'nggi 366 kun). Javobda clamped, effective_from, effective_to, max_span_days.",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
             "name": "period",
             "required": false,
             "in": "query",
@@ -16379,6 +16558,7 @@
     },
     "/analytics/kpi": {
       "get": {
+        "description": "Javobda: deliveryCount (yrLt5oMi — 0 bo'lsa SLA «o'lchanmagan»), previous {from,to,averageOrderValue,averageFulfillmentHours,onTimeRate,deliveryCount,cancellationRate} va series[14] {date,…} (DwrMygfo).",
         "operationId": "AnalyticsGatewayController_getKpi",
         "parameters": [
           {
@@ -16411,6 +16591,15 @@
             "in": "query",
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "name": "all",
+            "required": false,
+            "in": "query",
+            "description": "(XdKajqLe) «Barchasi»: dashboard bilan AYNI oyna (eng so'nggi 366 kun). Javobda clamped, effective_from, effective_to, max_span_days.",
+            "schema": {
+              "type": "boolean"
             }
           }
         ],
@@ -21204,6 +21393,85 @@
           }
         }
       },
+      "PostListPageDto": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          },
+          "total": {
+            "type": "number",
+            "example": 59,
+            "description": "Filtr bo‘yicha jami pochtalar"
+          },
+          "page": {
+            "type": "number",
+            "example": 1
+          },
+          "totalPages": {
+            "type": "number",
+            "example": 8
+          },
+          "limit": {
+            "type": "number",
+            "example": 8
+          },
+          "limit_capped": {
+            "type": "boolean",
+            "example": false
+          },
+          "max_limit": {
+            "type": "number",
+            "example": 100
+          },
+          "orders_total": {
+            "type": "number",
+            "example": 412,
+            "description": "tveJKICY: joriy filtr bo‘yicha (barcha sahifalar) pochtalardagi buyurtmalar jami (`order_quantity` yig‘indisi)"
+          },
+          "amount_total": {
+            "type": "number",
+            "example": 61800000,
+            "description": "tveJKICY: joriy filtr bo‘yicha (barcha sahifalar) pochta summalari jami (`post_total_price`), so‘m"
+          }
+        },
+        "required": [
+          "data",
+          "total",
+          "page",
+          "totalPages",
+          "limit",
+          "limit_capped",
+          "max_limit",
+          "orders_total",
+          "amount_total"
+        ]
+      },
+      "PostListPageResponseDto": {
+        "type": "object",
+        "properties": {
+          "statusCode": {
+            "type": "number",
+            "example": 200
+          },
+          "message": {
+            "type": "string",
+            "example": "All posts (paginated)"
+          },
+          "data": {
+            "$ref": "#/components/schemas/PostListPageDto"
+          }
+        },
+        "required": [
+          "statusCode",
+          "message",
+          "data"
+        ]
+      },
       "DeletePostOrdersRequestDto": {
         "type": "object",
         "properties": {
@@ -21556,6 +21824,258 @@
         },
         "required": [
           "target_district_id"
+        ]
+      },
+      "DistrictMergeResultDto": {
+        "type": "object",
+        "properties": {
+          "from_district_id": {
+            "type": "string",
+            "example": "173"
+          },
+          "to_district_id": {
+            "type": "string",
+            "example": "28"
+          },
+          "moved": {
+            "example": {
+              "orders": 130,
+              "users": 2,
+              "branches": 1
+            },
+            "description": "Ko'chirilgan JAMI (o'chirilganlar bilan) — tekshiruv shunga tayanadi",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/DistrictUsageCountsDto"
+              }
+            ]
+          },
+          "moved_live": {
+            "example": {
+              "orders": 128,
+              "users": 2,
+              "branches": 1
+            },
+            "description": "vsmpTweI: ko'chirilganlardan faqat TIRIK (o'chirilmagan) lari — natija oynasidagi «Ko'chirildi» shu. Ko'chirish qadamining o'zi sanaydi (B oldin/keyin farqidan emas).",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/DistrictUsageCountsDto"
+              }
+            ]
+          },
+          "target_before": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "B tumanning ko'chirishdan oldingi sanog'i (tirik + `deleted`)"
+          },
+          "target_after": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "B tumanning keyingi sanog'i (tirik + `deleted`)"
+          }
+        },
+        "required": [
+          "from_district_id",
+          "to_district_id",
+          "moved",
+          "moved_live",
+          "target_before",
+          "target_after"
+        ]
+      },
+      "DistrictMergeResponseDto": {
+        "type": "object",
+        "properties": {
+          "statusCode": {
+            "type": "number",
+            "example": 200
+          },
+          "message": {
+            "type": "string",
+            "example": "District merged"
+          },
+          "data": {
+            "$ref": "#/components/schemas/DistrictMergeResultDto"
+          }
+        },
+        "required": [
+          "statusCode",
+          "message",
+          "data"
+        ]
+      },
+      "DistrictMergeMismatchDto": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "orders",
+              "users",
+              "branches"
+            ],
+            "example": "orders"
+          },
+          "district": {
+            "type": "string",
+            "enum": [
+              "source",
+              "target"
+            ],
+            "example": "target",
+            "description": "`source` — A (o'chiriladigan) tumanda qoldiq (kutilgan 0); `target` — B jami"
+          },
+          "expected": {
+            "type": "number",
+            "example": 1254
+          },
+          "actual": {
+            "type": "number",
+            "example": 1255
+          }
+        },
+        "required": [
+          "kind",
+          "district",
+          "expected",
+          "actual"
+        ]
+      },
+      "DistrictMergeStrandedDto": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "orders",
+              "users",
+              "branches"
+            ],
+            "example": "orders"
+          },
+          "district_id": {
+            "type": "string",
+            "example": "28",
+            "nullable": true
+          },
+          "count": {
+            "type": "number",
+            "example": 5,
+            "nullable": true,
+            "description": "`null` — ID'lar noma'lum (javobi kelmagan bosqich)"
+          }
+        },
+        "required": [
+          "kind",
+          "district_id",
+          "count"
+        ]
+      },
+      "DistrictMergeErrorDetailsDto": {
+        "type": "object",
+        "properties": {
+          "reason": {
+            "type": "string",
+            "enum": [
+              "count_mismatch",
+              "remote_refused",
+              "timeout",
+              "invalid_response",
+              "delete_failed"
+            ],
+            "example": "count_mismatch"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "orders",
+              "users",
+              "branches"
+            ],
+            "nullable": true,
+            "example": "orders",
+            "description": "Qaysi qadam; `count_mismatch` da — birinchi nomuvofiqlik turi; `delete_failed` da `null`"
+          },
+          "timeout_ms": {
+            "type": "number",
+            "example": 15000,
+            "description": "Faqat `timeout` da — servis javobini kutish chegarasi (ms)"
+          },
+          "mismatches": {
+            "description": "Faqat `count_mismatch` da",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DistrictMergeMismatchDto"
+            }
+          },
+          "from_district_id": {
+            "type": "string",
+            "example": "173"
+          },
+          "to_district_id": {
+            "type": "string",
+            "example": "28"
+          },
+          "manual_fix": {
+            "type": "boolean",
+            "example": false,
+            "description": "`true` — kompensatsiya to'liq bo'lmadi, qo'lda tuzatish kerak (activity log: `district.merge_compensation_failed`)"
+          },
+          "stranded": {
+            "description": "Faqat `manual_fix: true` da",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DistrictMergeStrandedDto"
+            }
+          }
+        },
+        "required": [
+          "reason",
+          "kind",
+          "from_district_id",
+          "to_district_id",
+          "manual_fix"
+        ]
+      },
+      "DistrictMergeErrorDataDto": {
+        "type": "object",
+        "properties": {
+          "reason": {
+            "type": "string",
+            "example": "count_mismatch"
+          },
+          "details": {
+            "$ref": "#/components/schemas/DistrictMergeErrorDetailsDto"
+          }
+        },
+        "required": [
+          "reason",
+          "details"
+        ]
+      },
+      "DistrictMergeErrorResponseDto": {
+        "type": "object",
+        "properties": {
+          "statusCode": {
+            "type": "number",
+            "example": 409
+          },
+          "message": {
+            "type": "string",
+            "example": "Birlashtirish bekor qilindi: tekshiruv mos kelmadi — B tumandagi buyurtmalar soni 1255, kutilgan 1126 + 128 = 1254. Ko'chirilganlar A tumanga (#173) qaytarildi, tuman o'chirilmadi — qayta urinib ko'ring."
+          },
+          "data": {
+            "$ref": "#/components/schemas/DistrictMergeErrorDataDto"
+          },
+          "trace_id": {
+            "type": "string",
+            "example": "7d0c2a4e-1b2f-4c3d-9e8f-0a1b2c3d4e5f"
+          }
+        },
+        "required": [
+          "statusCode",
+          "message",
+          "data"
         ]
       },
       "CreateCashboxRequestDto": {
@@ -22595,6 +23115,144 @@
           "title"
         ]
       },
+      "NotificationCampaignScheduleFieldsDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "7"
+          },
+          "display_status": {
+            "type": "string",
+            "enum": [
+              "scheduled",
+              "sending",
+              "sent",
+              "failed",
+              "cancelled"
+            ],
+            "example": "scheduled"
+          },
+          "scheduled_at": {
+            "type": "object",
+            "nullable": true,
+            "example": "2026-10-21T04:00:00.000Z",
+            "description": "Haqiqiy yuborish lahzasi (surilgan bo‘lsa — surilgani)"
+          },
+          "scheduled_at_tashkent": {
+            "type": "object",
+            "nullable": true,
+            "example": "2026-10-21T09:00:00+05:00"
+          },
+          "requested_at": {
+            "type": "object",
+            "nullable": true,
+            "example": "2026-10-20T14:00:00.000Z",
+            "description": "(fb4qy6bd) Admin so‘ragan lahza: belgilangan vaqt (surilishdan OLDIN) yoki darhol bo‘lsa yaratilgan lahza. Eski kampaniyalarda null."
+          },
+          "requested_at_tashkent": {
+            "type": "object",
+            "nullable": true,
+            "example": "2026-10-20T19:00:00+05:00"
+          },
+          "quiet_hours_shifted": {
+            "type": "boolean",
+            "example": true,
+            "description": "(fb4qy6bd) Reklama tungi taqiq oynasi sababli scheduled_at surilganmi (eski kampaniyalarda false)."
+          },
+          "paused_until": {
+            "type": "object",
+            "nullable": true,
+            "example": null
+          }
+        },
+        "required": [
+          "id",
+          "display_status",
+          "scheduled_at",
+          "scheduled_at_tashkent",
+          "requested_at",
+          "requested_at_tashkent",
+          "quiet_hours_shifted",
+          "paused_until"
+        ]
+      },
+      "CampaignUndeliveredFailureDto": {
+        "type": "object",
+        "properties": {
+          "channel": {
+            "type": "string",
+            "example": "push"
+          },
+          "status": {
+            "type": "string",
+            "example": "failed"
+          },
+          "reason": {
+            "type": "object",
+            "nullable": true,
+            "example": "Received unexpected response code 410",
+            "description": "Xom sabab (texnik matn) — UI da ko‘rsatilmaydi"
+          },
+          "reason_code": {
+            "type": "object",
+            "nullable": true,
+            "example": "subscription_expired",
+            "description": "(lkQiuyQu) Sabab kodi — UI shu bo'yicha matn tanlaydi. Push: no_subscription, push_disabled, subscription_expired, payload_too_large, rate_limited, push_rejected, push_service_error, network_error, push_failed, online, quiet_hours, muted. Boshqa kanallar: `<kanal>_reason` kodi (bot_blocked, no_phone, ...) yoki null."
+          }
+        },
+        "required": [
+          "channel",
+          "status",
+          "reason",
+          "reason_code"
+        ]
+      },
+      "CampaignUndeliveredItemDto": {
+        "type": "object",
+        "properties": {
+          "ref_id": {
+            "type": "string",
+            "example": "100",
+            "description": "notifications.id / sms_outbox.id"
+          },
+          "recipient_id": {
+            "type": "object",
+            "nullable": true,
+            "example": "42"
+          },
+          "name": {
+            "type": "object",
+            "nullable": true,
+            "example": "Aziz Karimov"
+          },
+          "role": {
+            "type": "object",
+            "nullable": true,
+            "example": "courier"
+          },
+          "phone": {
+            "type": "object",
+            "nullable": true,
+            "example": "***7434",
+            "description": "(lkQiuyQu) FAQAT maskalangan telefon (oxirgi 4 raqam) — bildirishnoma va SMS kampaniyasida; topilmasa null"
+          },
+          "failures": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CampaignUndeliveredFailureDto"
+            }
+          }
+        },
+        "required": [
+          "ref_id",
+          "recipient_id",
+          "name",
+          "role",
+          "phone",
+          "failures"
+        ]
+      },
       "TelegramBroadcastRequestDto": {
         "type": "object",
         "properties": {
@@ -22694,6 +23352,144 @@
           "code",
           "lang",
           "title"
+        ]
+      },
+      "SentNotificationAudienceRecipientDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "41"
+          },
+          "name": {
+            "type": "object",
+            "nullable": true,
+            "example": "Aziz Karimov"
+          },
+          "role": {
+            "type": "object",
+            "nullable": true,
+            "example": "courier"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "role"
+        ]
+      },
+      "SentNotificationAudienceDto": {
+        "type": "object",
+        "properties": {
+          "recipient_ids": {
+            "type": "number",
+            "example": 1,
+            "description": "Aniq tanlangan qabul qiluvchilar SONI (ro‘yxat emas)"
+          },
+          "roles": {
+            "example": [
+              "courier",
+              "market"
+            ],
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "broadcast": {
+            "type": "boolean",
+            "example": true,
+            "description": "«Hamma»"
+          },
+          "include_customers": {
+            "type": "boolean",
+            "example": true
+          },
+          "segment": {
+            "type": "object",
+            "description": "Segment sharti (saqlangan segment / filtr)"
+          },
+          "recipient": {
+            "description": "recipient_ids = 1 bo‘lsa — o‘sha odam (ism · rol). Eski yozuvlarda rol/segment bilan aralash bo‘lsa yo‘q.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SentNotificationAudienceRecipientDto"
+              }
+            ]
+          }
+        }
+      },
+      "SentNotificationItemDto": {
+        "type": "object",
+        "properties": {
+          "dispatch_id": {
+            "type": "string",
+            "example": "0b7f6f5e-3c1a-4c6e-9b1d-2f0a6c1e9d42"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "running",
+              "sent",
+              "partial",
+              "inbox_only",
+              "skipped",
+              "failed"
+            ],
+            "example": "sent"
+          },
+          "type": {
+            "type": "string",
+            "example": "system.manual"
+          },
+          "title": {
+            "type": "string",
+            "example": "E’lon"
+          },
+          "body_preview": {
+            "type": "object",
+            "nullable": true,
+            "example": "Ertaga ish kuni"
+          },
+          "recipients": {
+            "type": "number",
+            "example": 12,
+            "description": "Qabul qiluvchilar soni"
+          },
+          "audience": {
+            "nullable": true,
+            "description": "(NwlmrcMf) «Kimga» ustuni; ichki dispatch — null",
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SentNotificationAudienceDto"
+              }
+            ]
+          },
+          "created_by": {
+            "type": "object",
+            "nullable": true,
+            "example": {
+              "id": "25",
+              "name": "Admin",
+              "role": "admin"
+            }
+          },
+          "created_at": {
+            "type": "string",
+            "example": "2026-10-24T10:00:00.000Z"
+          }
+        },
+        "required": [
+          "dispatch_id",
+          "status",
+          "type",
+          "title",
+          "body_preview",
+          "recipients",
+          "audience",
+          "created_by",
+          "created_at"
         ]
       },
       "NotificationPreferenceItemDto": {
@@ -22806,6 +23602,56 @@
         },
         "required": [
           "endpoint"
+        ]
+      },
+      "MyTelegramGroupStatusDto": {
+        "type": "object",
+        "properties": {
+          "group_type": {
+            "type": "string",
+            "enum": [
+              "cancel",
+              "create"
+            ],
+            "example": "create"
+          },
+          "linked": {
+            "type": "boolean",
+            "example": true,
+            "description": "Guruh ulanganmi"
+          },
+          "is_active": {
+            "type": "object",
+            "nullable": true,
+            "example": true,
+            "description": "Ulangan guruh faolmi; ulanmagan bo‘lsa null"
+          },
+          "linked_at": {
+            "type": "object",
+            "nullable": true,
+            "example": "2026-10-20T10:00:00.000Z",
+            "description": "Qachon ulangan (qator createdAt); ulanmagan bo‘lsa null"
+          },
+          "inactive_reason": {
+            "type": "string",
+            "enum": [
+              "kicked",
+              "left",
+              "blocked_on_send",
+              "chat_not_found",
+              "manual"
+            ],
+            "nullable": true,
+            "example": null,
+            "description": "(G085w5Qr) Nofaol sababi; faol, ulanmagan yoki sababi noma‘lum bo‘lsa null"
+          }
+        },
+        "required": [
+          "group_type",
+          "linked",
+          "is_active",
+          "linked_at",
+          "inactive_reason"
         ]
       },
       "DispatchTelegramTargetDto": {
@@ -22971,12 +23817,24 @@
           "title"
         ]
       },
-      "CreateTelegramMarketRequestDto": {
+      "TelegramMarketPublicDto": {
         "type": "object",
         "properties": {
+          "id": {
+            "type": "string",
+            "example": "10"
+          },
+          "createdAt": {
+            "type": "string",
+            "example": "2026-10-20T10:00:00.000Z"
+          },
+          "updatedAt": {
+            "type": "string",
+            "example": "2026-10-21T08:00:00.000Z"
+          },
           "market_id": {
             "type": "string",
-            "example": "2"
+            "example": "37"
           },
           "group_id": {
             "type": "string",
@@ -22990,45 +23848,59 @@
             ],
             "example": "create"
           },
+          "bot_slug": {
+            "type": "object",
+            "nullable": true,
+            "example": null
+          },
           "is_active": {
             "type": "boolean",
-            "example": true
+            "example": false
+          },
+          "inactive_reason": {
+            "type": "string",
+            "enum": [
+              "kicked",
+              "left",
+              "blocked_on_send",
+              "chat_not_found",
+              "manual"
+            ],
+            "nullable": true,
+            "example": "kicked",
+            "description": "(G085w5Qr) Nofaol sababi: kicked/left — bot guruhdan chiqarilgan, blocked_on_send — yuborishda bloklangan, chat_not_found — guruh topilmadi, manual — admin qo'lda o'chirgan. Faol qatorda va sababi noma'lum eski qatorlarda null."
+          },
+          "inactive_at": {
+            "type": "object",
+            "nullable": true,
+            "example": "2026-10-21T08:00:00.000Z",
+            "description": "(G085w5Qr) Qachon nofaol bo‘ldi; faol qatorda null."
           }
         },
         "required": [
+          "id",
+          "createdAt",
+          "updatedAt",
           "market_id",
           "group_id",
-          "group_type"
+          "group_type",
+          "bot_slug",
+          "is_active",
+          "inactive_reason",
+          "inactive_at"
         ]
       },
       "UpdateTelegramMarketRequestDto": {
         "type": "object",
         "properties": {
-          "id": {
-            "type": "string",
-            "example": "10"
-          },
-          "market_id": {
-            "type": "string",
-            "example": "2"
-          },
-          "group_id": {
-            "type": "string",
-            "example": "-1001234567890"
-          },
-          "group_type": {
-            "type": "string",
-            "enum": [
-              "cancel",
-              "create"
-            ],
-            "example": "cancel"
-          },
           "is_active": {
             "type": "boolean",
             "example": false
           }
-        }
+        },
+        "required": [
+          "is_active"
+        ]
       },
       "ConnectTelegramByTokenRequestDto": {
         "type": "object",
@@ -24776,6 +25648,184 @@
             "example": "+998901234567"
           }
         }
+      },
+      "TransferBatchBranchRefDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "3"
+          },
+          "name": {
+            "type": "string",
+            "example": "Andijon filiali",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ]
+      },
+      "TransferBatchDetailDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "601"
+          },
+          "source_branch_id": {
+            "type": "string",
+            "example": "3"
+          },
+          "destination_branch_id": {
+            "type": "string",
+            "example": "1"
+          },
+          "source_branch": {
+            "nullable": true,
+            "description": "3HKvAyhm: jo'natuvchi filial nomi — barcha ruxsat etilgan rollarga (menejer ham)",
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/TransferBatchBranchRefDto"
+              }
+            ]
+          },
+          "destination_branch": {
+            "nullable": true,
+            "description": "3HKvAyhm: qabul qiluvchi filial nomi",
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/TransferBatchBranchRefDto"
+              }
+            ]
+          },
+          "region": {
+            "type": "object",
+            "additionalProperties": true,
+            "nullable": true
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          }
+        },
+        "required": [
+          "id",
+          "source_branch_id",
+          "destination_branch_id",
+          "source_branch",
+          "destination_branch",
+          "items"
+        ]
+      },
+      "TransferBatchHistoryUserDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "25"
+          },
+          "name": {
+            "type": "string",
+            "example": "Test Menejer",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ]
+      },
+      "TransferBatchHistoryItemDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "1201"
+          },
+          "batch_id": {
+            "type": "string",
+            "example": "601"
+          },
+          "user_id": {
+            "type": "string",
+            "example": "25"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "CREATED",
+              "SENT",
+              "RECEIVED",
+              "CANCELLED"
+            ],
+            "example": "SENT"
+          },
+          "action_label": {
+            "type": "string",
+            "example": "Jo'natildi",
+            "description": "O'zbekcha nom: Yaratildi / Jo'natildi / Qabul qilindi / Bekor qilindi"
+          },
+          "notes": {
+            "type": "string",
+            "example": null,
+            "nullable": true
+          },
+          "created_at": {
+            "type": "string",
+            "example": "2026-10-24T09:15:00.000Z"
+          },
+          "user": {
+            "nullable": true,
+            "description": "identity javob bermasa yoki tizim (user_id '0') — null",
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/TransferBatchHistoryUserDto"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "batch_id",
+          "user_id",
+          "action",
+          "action_label",
+          "notes",
+          "created_at",
+          "user"
+        ]
+      },
+      "TransferBatchHistoryResponseDto": {
+        "type": "object",
+        "properties": {
+          "statusCode": {
+            "type": "number",
+            "example": 200
+          },
+          "message": {
+            "type": "string",
+            "example": "Transfer batch history"
+          },
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TransferBatchHistoryItemDto"
+            }
+          }
+        },
+        "required": [
+          "statusCode",
+          "message",
+          "data"
+        ]
       },
       "ReceiveTransferBatchOrdersRequestDto": {
         "type": "object",
