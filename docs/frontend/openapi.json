@@ -18569,7 +18569,7 @@
         ],
         "responses": {
           "200": {
-            "description": "{ items: MarketOperator[], meta: { page, limit, total, totalPages } }"
+            "description": "{ items: MarketOperator[], meta: { page, limit, total, totalPages } }. Har qatorda `can_view_warehouse_stock: boolean` (sukut false, XtcEyQjb)."
           },
           "403": {
             "description": "Market emas"
@@ -18667,6 +18667,56 @@
           }
         ],
         "summary": "Operator komissiyasi (percent | fixed | null) — faqat o`z operatori",
+        "tags": [
+          "Market operators"
+        ],
+        "x-roles": [
+          "market"
+        ]
+      }
+    },
+    "/market-operators/{id}/warehouse-access": {
+      "patch": {
+        "description": "XtcEyQjb: market o'zi har operatoriga alohida yoqadi/o'chiradi (sukut o'chiq). Yoqilgan operator `GET /market/warehouse-stock` da biriktirilgan marketi qoldig'ini ko'radi, o'chiq — 403 `{ code: \"WAREHOUSE_STOCK_FORBIDDEN\" }`. Javob — operator qatori (`can_view_warehouse_stock` bilan). Jurnal: `identity.market_operator_warehouse_access_changed`.",
+        "operationId": "MarketOperatorGatewayController_updateWarehouseAccess",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Operator ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateMarketOperatorWarehouseAccessRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "{ statusCode, message, data: MarketOperator } — `data.can_view_warehouse_stock`"
+          },
+          "400": {
+            "description": "Qiymat boolean emas"
+          },
+          "404": {
+            "description": "Operator topilmadi yoki begona"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "«Ombordagi qoldiq»ni ko`rish ruxsati (can_view_warehouse_stock) — faqat o`z operatori",
         "tags": [
           "Market operators"
         ],
@@ -19156,7 +19206,7 @@
     },
     "/market/warehouse-stock": {
       "get": {
-        "description": "Market — FAQAT o'z mahsulotlari (token; boshqa `market_id` — 403); market operatori — biriktirilgan marketi; SUPERADMIN/ADMIN — `market_id` majburiy. Ustunlar — hamma omborlar (to'xtatilgani belgisi bilan); katakda MAVJUD dona (band ayirilgan); `total_available` — faqat faol omborlar.",
+        "description": "Market — FAQAT o'z mahsulotlari (token; boshqa `market_id` — 403); market operatori — biriktirilgan marketi va FAQAT market unga «Ombordagi qoldiq» kalitini yoqqan bo'lsa (`can_view_warehouse_stock`; aks holda 403 `{ code: \"WAREHOUSE_STOCK_FORBIDDEN\" }`); SUPERADMIN/ADMIN — `market_id` majburiy. Ustunlar — hamma omborlar (to'xtatilgani belgisi bilan); katakda MAVJUD dona (band ayirilgan); `total_available` — faqat faol omborlar.",
         "operationId": "WarehouseGatewayController_marketStock",
         "parameters": [
           {
@@ -19278,7 +19328,7 @@
     },
     "/warehouses": {
       "get": {
-        "description": "Har qatorda filial, viloyat, mas'ul xodim, jami/band/kam qolgan, oxirgi harakat, holat. `summary` — ko'rinadigan hamma omborlar (filtrsiz), `counts` — viloyat/qidiruvdan keyin holat bo'yicha. Filial menejeri — faqat o'z filiali ombori.",
+        "description": "Har qatorda filial, viloyat, mas'ul xodim, jami/band/kam qolgan, oxirgi harakat, holat. `summary` — ko'rinadigan hamma omborlar (filtrsiz), `counts` — viloyat/qidiruvdan keyin holat bo'yicha. SUPERADMIN/ADMIN/REGISTRATOR — hamma omborlar; filial xodimlari (MANAGER, BRANCH, OPERATOR, LOGIST) — faqat o'z filiali ombori (filialsiz — 403).",
         "operationId": "WarehouseGatewayController_findAll",
         "parameters": [
           {
@@ -19351,12 +19401,15 @@
         "x-roles": [
           "superadmin",
           "admin",
+          "registrator",
           "manager",
-          "branch"
+          "branch",
+          "operator",
+          "logist"
         ]
       },
       "post": {
-        "description": "Faqat FAOL viloyat filialida (REGIONAL/HYBRID); bitta filial — bitta ombor (409). Nom berilmasa — «<filial> ombori». Mas'ul xodim — shu filial menejeri (aks holda 400). Yangi ombor — FAOL.",
+        "description": "Faqat FAOL viloyat filialida (REGIONAL/HYBRID); bitta filial — bitta ombor (409). Nom berilmasa — «<filial> ombori». Mas'ul xodim — shu filial menejeri (aks holda 400); berilmasa — filialning birinchi faol menejeri (yo'q bo'lsa `null`). Yangi ombor — FAOL.",
         "operationId": "WarehouseGatewayController_create",
         "parameters": [],
         "requestBody": {
@@ -19398,7 +19451,7 @@
     },
     "/warehouses/{id}": {
       "get": {
-        "description": "Pozitsiyalar/marketlar, jami/mavjud, band (+ faol buyurtmalar soni), kam qoldi/tugagan, `movements_count`. Filial menejeri — faqat o'z filiali (begonasi 404).",
+        "description": "Pozitsiyalar/marketlar, jami/mavjud, band (+ faol buyurtmalar soni), kam qoldi/tugagan, `movements_count`. Filial xodimi — faqat o'z filiali (begonasi 404).",
         "operationId": "WarehouseGatewayController_findOne",
         "parameters": [
           {
@@ -19435,12 +19488,15 @@
         "x-roles": [
           "superadmin",
           "admin",
+          "registrator",
           "manager",
-          "branch"
+          "branch",
+          "operator",
+          "logist"
         ]
       },
       "patch": {
-        "description": "Filial o'zgarmaydi. `null` — maydonni tozalash.",
+        "description": "Filial o'zgarmaydi. `null` — maydonni tozalash; `manager_user_id: null` — filialning birinchi faol menejeri (yo'q bo'lsa `null`).",
         "operationId": "WarehouseGatewayController_update",
         "parameters": [
           {
@@ -19676,8 +19732,11 @@
         "x-roles": [
           "superadmin",
           "admin",
+          "registrator",
           "manager",
-          "branch"
+          "branch",
+          "operator",
+          "logist"
         ]
       }
     },
@@ -19804,8 +19863,11 @@
         "x-roles": [
           "superadmin",
           "admin",
+          "registrator",
           "manager",
-          "branch"
+          "branch",
+          "operator",
+          "logist"
         ]
       }
     },
@@ -19869,7 +19931,7 @@
     },
     "/warehouses/{id}/stock-in": {
       "post": {
-        "description": "Qaror 3: darhol qoldiqqa, filial tasdig'isiz (to'xtatilgan omborga ham). Qatorlar `product_id` yoki skaner `code` bilan; biror qator hal qilinmasa — 400, hech narsa yozilmaydi. `Idempotency-Key` MAJBURIY: AYNI kalit + AYNI tarkib — avvalgi natija (`replayed: true`), boshqa tarkib — 409.",
+        "description": "Qaror 3: darhol qoldiqqa, filial tasdig'isiz. To'xtatilgan omborga kirim YO'Q — 409 `{ code: \"WAREHOUSE_PAUSED\" }`. Qatorlar `product_id` yoki skaner `code` bilan; biror qator hal qilinmasa — 400, hech narsa yozilmaydi. `Idempotency-Key` MAJBURIY: AYNI kalit + AYNI tarkib — avvalgi natija (`replayed: true`), boshqa tarkib — 409.",
         "operationId": "WarehouseGatewayController_stockIn",
         "parameters": [
           {
@@ -20105,8 +20167,11 @@
         "x-roles": [
           "superadmin",
           "admin",
+          "registrator",
           "manager",
-          "branch"
+          "branch",
+          "operator",
+          "logist"
         ]
       }
     },
@@ -27568,6 +27633,19 @@
           }
         }
       },
+      "UpdateMarketOperatorWarehouseAccessRequestDto": {
+        "type": "object",
+        "properties": {
+          "can_view_warehouse_stock": {
+            "type": "boolean",
+            "example": true,
+            "description": "true — operator `GET /market/warehouse-stock` ni ko'radi; false — 403 `WAREHOUSE_STOCK_FORBIDDEN`"
+          }
+        },
+        "required": [
+          "can_view_warehouse_stock"
+        ]
+      },
       "DeliveryTariffRowDto": {
         "type": "object",
         "properties": {
@@ -29315,7 +29393,7 @@
             "type": "object",
             "example": "31",
             "nullable": true,
-            "description": "Mas'ul xodim — shu filialning menejeri (branch_users, rol MANAGER), aks holda 400. Faqat ko'rsatish uchun: o'qish ruxsati filialdan."
+            "description": "Mas'ul xodim — shu filialning menejeri (branch_users, rol MANAGER), aks holda 400. Berilmasa yoki `null` — filialning birinchi faol menejeri (foydalanuvchi id bo'yicha), menejer yo'q bo'lsa `null` (XtcEyQjb). Faqat ko'rsatish uchun: o'qish ruxsati filialdan."
           },
           "address": {
             "type": "object",
@@ -29475,7 +29553,7 @@
           "manager_user_id": {
             "type": "object",
             "nullable": true,
-            "description": "Shu filial menejeri; `null` — mas'ul xodimni olib tashlash."
+            "description": "Shu filial menejeri; `null` — filialning birinchi faol menejeri avtomatik (menejer yo'q bo'lsa `null`, XtcEyQjb)."
           },
           "address": {
             "type": "object",

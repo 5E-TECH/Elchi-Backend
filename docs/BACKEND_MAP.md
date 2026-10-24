@@ -536,8 +536,9 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
   - Admin/read RPCs (`@app/common` `WAREHOUSE_RPC`): `catalog.warehouse.
     {create, update, pause, resume, find_all, find_by_id, find_by_ids, stock,
     movements, lookup, stock_in, inventory, set_threshold, market_stock,
-    availability}`. `scope: {branch_id}` (gateway, MANAGER/BRANCH) limits to
-    the own branch (foreign → 404; empty/invalid scope → 403). Stock-in and
+    availability}`. `scope: {branch_id}` (gateway, branch staff — see
+    «Access» below) limits to the own branch (foreign → 404; empty/invalid
+    scope → 403). Stock-in and
     inventory need an `idempotency_key` (gateway `Idempotency-Key`): same key
     + same lines → previous result `replayed: true`; same key + other lines →
     409 `WAREHOUSE_IDEMPOTENCY_CONFLICT`. Lines by `product_id` or scanner
@@ -574,6 +575,28 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
     lookups (30 s in-memory branch cache).
   - Gateway `WarehouseGatewayController` — see FRONTEND_CHANGELOG
     2026-10-24 «Ombor moduli» for the HTTP list and roles.
+  - **Access (XtcEyQjb, 2026-10-24, migration `1716000000152`):** read
+    routes (`GET /warehouses`, `/:id`, `/:id/stock`, `/:id/movements`,
+    `/:id/export`) — SUPERADMIN/ADMIN/REGISTRATOR unscoped
+    (`WAREHOUSE_GLOBAL_READ_ROLES`); MANAGER/BRANCH/OPERATOR/LOGIST scoped to
+    their branch (`branch.user.find_by_user`, fallback JWT `branch_id`, none
+    → 403); COURIER/MARKET/MARKET_OPERATOR/CUSTOMER/INVESTOR → 403. Writes
+    unchanged (SA/ADMIN). `stock_in` on a PAUSED warehouse → 409
+    `WAREHOUSE_PAUSED` (checked under the warehouse row lock, after the
+    idempotent replay check; inventory still allowed). Manager not given on
+    create, or `manager_user_id: null` on update → first ACTIVE branch
+    MANAGER by user id (`WarehouseDirectoryService.
+    getFirstActiveBranchManagerId`: `branch_users` MANAGER rows whose
+    identity user `status = active`), none → null; branch-service down → 503.
+    identity: `admins.can_view_warehouse_stock` (default false) — the market
+    toggles it per operator via `identity.market_operator.
+    update_warehouse_access` (`PATCH /market-operators/:id/warehouse-access`,
+    MARKET only, own operator else 404; activity log
+    `identity.market_operator_warehouse_access_changed`); returned in the
+    operator view (`GET /market-operators`) and in `identity.user.profile`
+    for MARKET_OPERATOR. `GET /market/warehouse-stock` for MARKET_OPERATOR
+    requires it (read from `identity.user.find_by_id`), else 403
+    `WAREHOUSE_STOCK_FORBIDDEN`. Both codes are in `PUBLIC_ERROR_CODES`.
 
 ### analytics-service (no DB)
 - Pure aggregator. `analytics.{dashboard,kpi,revenue,report.orders,report.couriers,

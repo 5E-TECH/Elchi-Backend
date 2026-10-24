@@ -23,6 +23,39 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-10-24 — Ombor ruxsatlari (XtcEyQjb, kontrakt `warehouse_v2_contract.md` A)
+
+Deploy: `migration:run` (1716000000152 — `identity_schema.admins.can_view_warehouse_stock`, sukut `false`) →
+identity-service, catalog-service, api-gateway. Yozish ruxsatlari o'zgarmagan (kirim, inventarizatsiya, ombor
+ochish/tahrir, chegara, pauza — faqat SUPERADMIN/ADMIN).
+
+- [2026-10-24] ✏️ [gateway] — **O'qish rollari** (`GET /warehouses`, `/warehouses/:id`, `/:id/stock`, `/:id/movements`,
+  `/:id/export`): SUPERADMIN, ADMIN, **REGISTRATOR** — hamma omborlar (filial doirasisiz); filial xodimlari —
+  MANAGER, BRANCH va filialga biriktirilgan **OPERATOR**, **LOGIST** — faqat o'z filiali ombori (begona — 404,
+  filialga biriktirilmagan — 403). COURIER, MARKET, MARKET_OPERATOR, CUSTOMER, INVESTOR — 403 (market o'z qoldig'ini
+  `/market/warehouse-stock` da ko'radi). 🔧 FE: «Omborlar» menyusi — shu rollar.
+- [2026-10-24] 🆕 [gateway/identity] — **Market operatoriga «Ombordagi qoldiq»**:
+  - `PATCH /market-operators/:id/warehouse-access` `{ "can_view_warehouse_stock": boolean }` — faqat MARKET, faqat
+    o'z operatori (begona/yo'q — 404; boolean emas yoki ortiqcha maydon — 400; boshqa rol — 403) → 200
+    `{ statusCode, message, data: { id, name, phone_number, role, status, market_id, commission_type,
+    commission_value, can_view_warehouse_stock, createdAt, updatedAt } }`. Jurnal:
+    `identity.market_operator_warehouse_access_changed` (old/new qiymat; o'zgarmasa yozilmaydi).
+  - ✏️ `GET /market-operators` — har qatorda `can_view_warehouse_stock: boolean` (sukut `false`).
+  - ✏️ `GET /auth/my-profile` — MARKET_OPERATOR uchun `data.can_view_warehouse_stock: boolean` (menyu shu bilan).
+  - ⚠️ `GET /market/warehouse-stock` — MARKET_OPERATOR faqat kalit yoqilgan bo'lsa (faqat o'z marketi); aks holda
+    403 `{ statusCode: 403, message, code: "WAREHOUSE_STOCK_FORBIDDEN" }`. MARKET va SUPERADMIN/ADMIN — avvalgidek.
+    Buyurtma formasidagi `resolve-source` / `availability` — kalitga bog'liq EMAS.
+- [2026-10-24] ⚠️ [catalog] — **To'xtatilgan omborga kirim yo'q:** `POST /warehouses/:id/stock-in` PAUSED omborda →
+  409 `{ statusCode: 409, message, code: "WAREHOUSE_PAUSED" }`, hech narsa yozilmaydi. Shu `Idempotency-Key` bilan
+  pauzadan OLDIN yozilgan AYNI kirim — avvalgi natija (`replayed: true`). Inventarizatsiya va o'qish — ruxsat.
+  🔧 FE: to'xtatilgan omborda «Kirim» tugmasini o'chiring / xabarni `code` bo'yicha ko'rsating.
+- [2026-10-24] ✏️ [catalog] — **Mas'ul xodim avtomatik:** `POST /warehouses` da `manager_user_id` berilmasa (yoki
+  `null`) va `PATCH /warehouses/:id { "manager_user_id": null }` da — filialning birinchi FAOL menejeri
+  (foydalanuvchi id bo'yicha eng kichigi); menejer yo'q — `null`. Aniq id — avvalgidek (shu filial menejeri, aks holda
+  400). 🟢 `null` endi «olib tashlash» emas, «avtomatik tanlash».
+- [2026-10-24] 🟢 [gateway] — xato konvertida `code` endi `WAREHOUSE_PAUSED` va `WAREHOUSE_STOCK_FORBIDDEN` uchun ham
+  chiqadi (`libs/common/src/filters/public-error-fields.ts`).
+
 ### 2026-10-24 — Ombor moduli (hY7uacJu, frontend kartasi yXC91RRx)
 
 Hammasi YANGI (additive). Deploy: `migration:run` (1716000000143) → catalog-service, identity-service,
