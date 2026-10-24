@@ -34,6 +34,7 @@ import { JwtAuthGuard } from './auth/jwt-auth.guard';
 import { Public } from './auth/public.decorator';
 import { Roles } from './auth/roles.decorator';
 import { RolesGuard } from './auth/roles.guard';
+import { ParseBigintIdPipe } from './pipes/parse-bigint-id.pipe';
 import { projectOrderPayloadForRoles } from './auth/order-role-projection';
 import {
   AssignRegionLogistRequestDto,
@@ -1525,6 +1526,27 @@ export class LogisticsGatewayController {
     return this.logisticsClient
       .send({ cmd: 'logistics.district.sato_match_apply' }, {})
       .pipe(timeout(8000));
+  }
+
+  /**
+   * Is1zvHN7 — o'chirish/birlashtirish oynasi uchun: tumanga bog'langan
+   * tirik buyurtma/foydalanuvchi/filial soni (DELETE himoyasi bilan bir xil).
+   */
+  @Get('district/:id/usage')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.ADMIN, RoleEnum.SUPERADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: "Tumanga bog'langan buyurtma/foydalanuvchi/filial soni (Is1zvHN7)",
+    description:
+      "`data`: `{ orders, users, branches }` — faqat O'CHIRILMAGAN yozuvlar, `DELETE /district/:id` 400 javobidagi `data.usage` bilan bir xil sanoq. " +
+      "Hammasi 0 bo'lsa tumanni o'chirsa bo'ladi. 400 — id raqam emas; 404 — tuman yo'q; 503 — order/identity/branch servislaridan biri javob bermadi (sonlar taxmin qilinmaydi).",
+  })
+  @ApiParam({ name: 'id', description: 'District ID (id)' })
+  getDistrictUsage(@Param('id', ParseBigintIdPipe) id: string) {
+    return this.logisticsClient
+      .send({ cmd: 'logistics.district.usage' }, { id })
+      .pipe(timeout(15000));
   }
 
   @Delete('district/:id')

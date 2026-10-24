@@ -5392,6 +5392,29 @@ export class LogisticsServiceService implements OnModuleInit {
     return successRes({ id }, 200, 'District deleted');
   }
 
+  /**
+   * Is1zvHN7 — `GET /district/:id/usage`: tumanga bog'langan TIRIK
+   * (o'chirilmagan) buyurtma/foydalanuvchi/filial soni. Sonlar `deleteDistrict`
+   * himoyasi (400 `data.usage`) bilan AYNAN bir xil manbadan — frontend
+   * o'chirish/birlashtirish oynasini oldindan ko'rsatadi. Bir servis javob
+   * bermasa — 503 (0 deb ko'rsatilmaydi: "bo'sh" deb aldab qo'ymaslik uchun).
+   */
+  async getDistrictUsage(id: string) {
+    const district = await this.districtRepo.findOne({ where: { id } });
+    if (!district) {
+      this.notFound('District not found');
+    }
+    const usage = await this.collectGeoUsage(
+      { district_id: String(id) },
+      'sanash',
+    );
+    return successRes({
+      orders: usage.orders,
+      users: usage.users,
+      branches: usage.branches,
+    });
+  }
+
   async createRegion(dto: CreateRegionDto) {
     const name = dto.name.trim();
     const satoCode = dto.sato_code.trim();
