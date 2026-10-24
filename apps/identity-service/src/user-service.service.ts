@@ -4571,7 +4571,17 @@ export class UserServiceService implements OnModuleInit {
     }
   }
 
-  async searchCustomers(search: string, limit = 1000) {
+  async searchCustomers(
+    search: string,
+    limit = 1000,
+    /**
+     * 9444UAa8 — `matchExtraNumber`: qo'shimcha raqam (`extra_number`) ham
+     * asosiy telefon kabi (normallashtirilgan raqamlar) qidiriladi. Faqat
+     * mijoz taklifi (GET /customers/suggest) yoqadi — buyurtmalar ro'yxati
+     * qidiruvi (order-service) va almashtirish qidiruvi o'zgarmagan.
+     */
+    options: { matchExtraNumber?: boolean } = {},
+  ) {
     if (!search?.trim()) {
       return { success: true, data: [] };
     }
@@ -4584,6 +4594,7 @@ export class UserServiceService implements OnModuleInit {
     // Buyurtmalar ro'yxati qidiruvi (order-service `search`) ham shu RPC'dan
     // o'tadi.
     const phoneSearch = parseUzPhoneSearch(search);
+    const matchExtraNumber = options.matchExtraNumber === true;
     const qb = this.users
       .createQueryBuilder('u')
       .where('u.isDeleted = :isDeleted', { isDeleted: false })
@@ -4595,6 +4606,13 @@ export class UserServiceService implements OnModuleInit {
             { s: `%${search.trim()}%` },
           );
           this.orWherePhoneDigits(q, 'u', phoneSearch);
+          // 9444UAa8: qo'shimcha raqam — faqat telefon ko'rinishidagi
+          // qidiruvda (7+ raqam) va o'sha normallashtirilgan raqamlar bilan.
+          if (matchExtraNumber && phoneSearch) {
+            q.orWhere(uzPhoneDigitsLikeSql('u.extra_number', 'extraDigits'), {
+              extraDigits: `%${phoneSearch.digits}%`,
+            });
+          }
         }),
       )
       // Barqaror tartib: limitdan oshganda qaysi mijozlar qaytishi tasodifiy
@@ -4605,8 +4623,47 @@ export class UserServiceService implements OnModuleInit {
     const rows = await qb.getMany();
     return {
       success: true,
-      data: rows.map((r) => this.sanitize(r)),
+      data: rows.map((r) => ({
+        ...this.sanitize(r),
+        matched_by: this.customerMatchedBy(
+          r,
+          search,
+          phoneSearch,
+          matchExtraNumber,
+        ),
+      })),
     };
+  }
+
+  /**
+   * 9444UAa8 — qaysi maydon mos keldi (SQL shartlarining aynan o'zi, ustuvorlik:
+   * asosiy telefon → qo'shimcha raqam → ism). Frontend «Qo'shimcha raqam: …»
+   * belgisini taxmin bilan emas, shu maydondan chizadi.
+   */
+  private customerMatchedBy(
+    row: Pick<User, 'phone_number' | 'extra_number'>,
+    search: string,
+    phoneSearch: UzPhoneSearch | null,
+    matchExtraNumber: boolean,
+  ): 'phone' | 'extra_number' | 'name' {
+    const needle = search.trim().toLowerCase();
+    const digitsOf = (value: unknown) =>
+      primitiveText(value).replace(/[^0-9]/g, '');
+    const phone = primitiveText(row.phone_number);
+    if (
+      phone.toLowerCase().includes(needle) ||
+      (phoneSearch && digitsOf(phone).includes(phoneSearch.digits))
+    ) {
+      return 'phone';
+    }
+    if (
+      matchExtraNumber &&
+      phoneSearch &&
+      digitsOf(row.extra_number).includes(phoneSearch.digits)
+    ) {
+      return 'extra_number';
+    }
+    return 'name';
   }
 
   async findByUsernameForAuth(username: string) {

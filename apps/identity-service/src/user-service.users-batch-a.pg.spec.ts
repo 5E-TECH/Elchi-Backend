@@ -11,6 +11,8 @@ import { UserServiceService } from './user-service.service';
  *     javobdagi `telegram_linked` bilan bir xil qoida.
  *   - x6IO746K: market operatori qatorida `market: { id, name } | null`
  *     (bitta IN so'rovi, faqat ochiq maydonlar).
+ *   - 9444UAa8: `searchCustomers` qo'shimcha raqam bo'yicha (flag bilan),
+ *     `matched_by`; flagsiz natija o'zgarmagan.
  *
  * Ishga tushirish (lokal, `_test` bilan tugaydigan baza):
  *   IDENTITY_USERS_PG_TEST_URI=postgres://postgres@127.0.0.1:<port>/elchi_users_a_test
@@ -291,6 +293,61 @@ type Meta = {
           id: liveMarket,
           name: 'Baraka Shop',
           add_order: true,
+        });
+      });
+    });
+
+    describe('9444UAa8 — mijoz qidiruvi qo`shimcha raqam bo`yicha', () => {
+      const customers: Record<string, string> = {};
+
+      beforeAll(async () => {
+        customers.extra = await add(Roles.CUSTOMER, {
+          name: 'Qo`shimchasi mos',
+          phone_number: '+998991330152',
+          extra_number: '+998903456744',
+        });
+        customers.legacyExtra = await add(Roles.CUSTOMER, {
+          name: 'Eski qo`shimcha',
+          phone_number: '+998991330153',
+          extra_number: '90 345 67 44',
+        });
+        customers.primary = await add(Roles.CUSTOMER, {
+          name: 'Asosiysi mos',
+          phone_number: '+998903456744',
+        });
+        // Xodimning qo'shimcha raqami mos — mijoz emas, chiqmaydi.
+        await add(Roles.COURIER, {
+          phone_number: '+998991330154',
+          extra_number: '+998903456744',
+        });
+        await add(Roles.CUSTOMER, {
+          name: 'O`chirilgan',
+          phone_number: '+998991330155',
+          extra_number: '+998903456744',
+          isDeleted: true,
+        });
+      });
+
+      const search = async (q: string, matchExtraNumber?: boolean) =>
+        Object.fromEntries(
+          (
+            (await service.searchCustomers(q, 50, {
+              matchExtraNumber,
+            })) as unknown as { data: Row[] }
+          ).data.map((row) => [String(row.id), row.matched_by]),
+        );
+
+      it('⭐ flag bilan: qo`shimcha raqam (eski shakl ham), matched_by', async () => {
+        expect(await search('+998 90 345 67 44', true)).toEqual({
+          [customers.extra]: 'extra_number',
+          [customers.legacyExtra]: 'extra_number',
+          [customers.primary]: 'phone',
+        });
+      });
+
+      it('flagsiz (buyurtmalar ro`yxati) — faqat asosiy telefon', async () => {
+        expect(await search('0903456744')).toEqual({
+          [customers.primary]: 'phone',
         });
       });
     });

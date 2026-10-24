@@ -70,7 +70,20 @@ export interface CustomerSuggestion {
   /** Eng yangi `created`/`new` buyurtma id'lari (ko'pi bilan 5). */
   new_order_ids: string[];
   last_order_at: string | null;
+  /**
+   * 9444UAa8 — qaysi raqam mos keldi: `phone` (asosiy), `extra_number`
+   * («Qo'shimcha raqam: …» belgisi) yoki `name`.
+   */
+  matched_by: CustomerMatchedBy;
 }
+
+export type CustomerMatchedBy = 'phone' | 'extra_number' | 'name';
+
+const CUSTOMER_MATCHED_BY: readonly CustomerMatchedBy[] = [
+  'phone',
+  'extra_number',
+  'name',
+];
 
 interface MarketSummaryItem {
   customer_id: string;
@@ -202,7 +215,7 @@ export class CustomerGatewayController {
     summary:
       'Mijozni telefon bo`yicha taklif qilish (buyurtma yaratish formasi)',
     description:
-      "Telefon har qanday formatda (+998 90 123 45 67, 901234567, 0901234567; kamida 7 raqam). Market/market operatori/filial xodimi faqat shu marketda buyurtmasi bo'lgan mijozlarni ko'radi; admin — hammasini. Har taklifda shu marketdagi `orders_count`, `new_orders_count`, `has_new_orders` (takroriy buyurtma ogohlantirishi). Ko'pi bilan 10 ta.",
+      "Telefon har qanday formatda (+998 90 123 45 67, 901234567, 0901234567; kamida 7 raqam). Asosiy telefon VA qo'shimcha raqam (`extra_number`, 9444UAa8) bo'yicha qidiriladi; `matched_by`: `phone` | `extra_number` | `name` — qaysi raqam mos kelgani («Qo'shimcha raqam: …» belgisi shundan). Market/market operatori/filial xodimi faqat shu marketda buyurtmasi bo'lgan mijozlarni ko'radi (qo'shimcha raqam bo'yicha topilganlar ham); admin — hammasini. Har taklifda shu marketdagi `orders_count`, `new_orders_count`, `has_new_orders` (takroriy buyurtma ogohlantirishi). Ko'pi bilan 10 ta.",
   })
   @ApiQuery({ name: 'phone', required: true, example: '901234567' })
   @ApiQuery({
@@ -232,6 +245,9 @@ export class CustomerGatewayController {
         limit: scope.scoped
           ? CUSTOMER_SUGGEST_CANDIDATES
           : CUSTOMER_SUGGEST_LIMIT,
+        // 9444UAa8: qo'shimcha raqam bo'yicha ham. Topilganlar ham pastdagi
+        // market doirasi filtridan o'tadi (doiradan tashqari mijoz chiqmaydi).
+        match_extra_number: true,
       },
       'Identity',
     );
@@ -290,6 +306,11 @@ export class CustomerGatewayController {
             lastOrderAt instanceof Date
               ? lastOrderAt.toISOString()
               : (text(lastOrderAt) ?? null),
+          matched_by: CUSTOMER_MATCHED_BY.includes(
+            row.matched_by as CustomerMatchedBy,
+          )
+            ? (row.matched_by as CustomerMatchedBy)
+            : 'phone',
         };
       });
 
