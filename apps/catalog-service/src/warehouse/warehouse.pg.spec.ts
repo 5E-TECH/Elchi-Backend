@@ -950,6 +950,39 @@ const pgCode = async (promise: Promise<unknown>) => {
           });
         });
 
+        it('⭐ 6kHnNH9j `lenient` (order-service outbox): bo`shatilgan bandga out va chiqimdagi bandga release — 409 o`rniga no-op, qoldiq o`zgarmaydi', async () => {
+          const { w, a } = await setup(5);
+          await stock.reserve({
+            order_id: '210',
+            warehouse_id: w.id,
+            items: [{ product_id: a.id, quantity: 2 }],
+          });
+          await stock.release({ order_id: '210' });
+          await expect(
+            stock.out({ order_id: '210', lenient: true }),
+          ).resolves.toMatchObject({ changed: false, status: 'RELEASED' });
+
+          await stock.reserve({
+            order_id: '211',
+            warehouse_id: w.id,
+            items: [{ product_id: a.id, quantity: 1 }],
+          });
+          await stock.out({ order_id: '211' });
+          expect(
+            await errorOf(stock.release({ order_id: '211' })),
+          ).toMatchObject({
+            statusCode: 409,
+            code: 'WAREHOUSE_ORDER_ALREADY_OUT',
+          });
+          await expect(
+            stock.release({ order_id: '211', lenient: true }),
+          ).resolves.toMatchObject({ changed: false, status: 'OUT' });
+          expect(await stockRow(w.id, a.id)).toEqual({
+            on_hand: 4,
+            reserved: 0,
+          });
+        });
+
         it('kuryerga berilmagan buyurtma return — band bo`shaydi (o`sha omborda qoladi)', async () => {
           const { w, a } = await setup(5);
           await stock.reserve({

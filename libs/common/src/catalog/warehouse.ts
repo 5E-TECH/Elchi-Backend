@@ -67,6 +67,14 @@ export const FULFILLMENT_SOURCES = ['HQ', 'WAREHOUSE'] as const;
 export type FulfillmentSource = (typeof FULFILLMENT_SOURCES)[number];
 
 /**
+ * 6kHnNH9j: yaratishdagi manba tanlovi (`POST /orders` / ai-confirm
+ * `fulfillment`). `auto` — `resolve_source` (hamma mahsulot yetarli bo'lsa
+ * ombor, aks holda HQ); `hq` — har doim HQ (hozirgi oqim).
+ */
+export const ORDER_FULFILLMENT_MODES = ['auto', 'hq'] as const;
+export type OrderFulfillmentMode = (typeof ORDER_FULFILLMENT_MODES)[number];
+
+/**
  * `catalog.warehouse.resolve_source` sababi. `OK` — ombor tanlandi; qolgani —
  * butun buyurtma HQ'dan (qaror 4: bo'linmaydi).
  */
