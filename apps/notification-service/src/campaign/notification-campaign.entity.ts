@@ -142,6 +142,18 @@ export class NotificationCampaign extends BaseEntity {
   @Column({ type: 'timestamptz', nullable: true })
   paused_until!: Date | null;
 
+  /**
+   * (fb4qy6bd) Admin so'ragan yuborish lahzasi: belgilangan `scheduled_at`
+   * (surilishdan OLDIN) yoki darhol bo'lsa yaratilgan lahza. Migratsiya
+   * 1716000000151; eski qatorlarda NULL.
+   */
+  @Column({ type: 'timestamptz', nullable: true })
+  requested_at!: Date | null;
+
+  /** (fb4qy6bd) Tungi taqiq oynasi sababli `scheduled_at` surilganmi. */
+  @Column({ type: 'boolean', default: false })
+  quiet_hours_shifted!: boolean;
+
   @Column({ type: 'bigint', nullable: true })
   cancelled_by!: string | null;
 

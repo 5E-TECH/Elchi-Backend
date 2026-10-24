@@ -42,6 +42,7 @@ import {
   CreateAudienceSegmentRequestDto,
   CreateNotificationCampaignRequestDto,
   ListNotificationCampaignsQueryDto,
+  NotificationCampaignScheduleFieldsDto,
 } from './dto/notification-campaign.swagger.dto';
 import {
   ListNotificationTemplatesQueryDto,
@@ -165,7 +166,14 @@ export class NotificationCampaignGatewayController {
   }
 
   @Get('campaigns')
-  @ApiOperation({ summary: 'Kampaniyalar tarixi (yangilari birinchi)' })
+  @ApiOperation({
+    summary:
+      'Kampaniyalar tarixi (yangilari birinchi); har qatorda requested_at + quiet_hours_shifted (fb4qy6bd)',
+  })
+  @ApiOkResponse({
+    description: 'data.items[] elementi (rejalashtirish maydonlari)',
+    type: NotificationCampaignScheduleFieldsDto,
+  })
   listCampaigns(@Query() query: ListNotificationCampaignsQueryDto) {
     return this.send('notification.campaign.list', { ...query });
   }
@@ -187,7 +195,11 @@ export class NotificationCampaignGatewayController {
   @Get('campaigns/:id')
   @ApiOperation({
     summary:
-      'Kampaniya progressi: status, total/sent/failed/skipped, progress_pct',
+      'Kampaniya progressi: status, total/sent/failed/skipped, progress_pct, requested_at, quiet_hours_shifted',
+  })
+  @ApiOkResponse({
+    description: 'data (rejalashtirish maydonlari)',
+    type: NotificationCampaignScheduleFieldsDto,
   })
   @ApiParam({ name: 'id', example: '7' })
   getCampaign(@Param('id') id: string) {

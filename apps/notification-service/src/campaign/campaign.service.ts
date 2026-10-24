@@ -218,10 +218,12 @@ export class CampaignService {
       // tugashiga (Toshkent 09:00) suriladi. Tranzaksion (promo emas) —
       // darvozaga tushmaydi, tunda ham darhol/belgilangan vaqtda ketadi.
       const requestedAt = plan.scheduledAt;
+      // (fb4qy6bd) so'ralgan lahza — belgilangan vaqt yoki hozir (darhol).
+      const requestedMoment = requestedAt ?? new Date();
       let scheduledAt = requestedAt;
       let quietShifted = false;
       if (isPromoCategory(plan.category)) {
-        const base = requestedAt ?? new Date();
+        const base = requestedMoment;
         const release = await this.promoRelease(base);
         if (release.getTime() > base.getTime()) {
           scheduledAt = release;
@@ -250,6 +252,9 @@ export class CampaignService {
               total,
               batch_size: CAMPAIGN_BATCH_SIZE,
               scheduled_at: scheduledAt,
+              // (fb4qy6bd) GET campaigns da ham ko'rinadi.
+              requested_at: requestedMoment,
+              quiet_hours_shifted: quietShifted,
               idempotency_key: plan.key,
               request_hash: plan.hash,
             }),
@@ -298,6 +303,8 @@ export class CampaignService {
             ? 'scheduled'
             : 'sending') as CampaignDisplayStatus,
           requested_scheduled_at: requestedAt,
+          // (fb4qy6bd) GET campaigns bilan bir xil maydon.
+          requested_at: requestedMoment,
           quiet_hours_shifted: quietShifted,
           timezone: CAMPAIGN_TIMEZONE,
           scheduled_at_tashkent: toTashkentIso(scheduledAt),
@@ -935,6 +942,10 @@ export class CampaignService {
       can_cancel: CAMPAIGN_CANCELLABLE_STATUSES.includes(row.status),
       is_promo: isPromoCategory(row.category),
       paused_until: row.paused_until ?? null,
+      // (fb4qy6bd) so'ralgan lahza va tungi taqiq surilishi (KM-8).
+      requested_at: row.requested_at ?? null,
+      requested_at_tashkent: toTashkentIso(row.requested_at ?? null),
+      quiet_hours_shifted: row.quiet_hours_shifted ?? false,
       timezone: CAMPAIGN_TIMEZONE,
       scheduled_at_tashkent: toTashkentIso(row.scheduled_at),
     };

@@ -374,3 +374,50 @@ export class ListNotificationCampaignsQueryDto {
   @IsIn(['scheduled', 'sending', 'sent', 'failed', 'cancelled'])
   state?: string;
 }
+
+/**
+ * (fb4qy6bd) GET /notifications/campaigns (data.items[]) va
+ * /campaigns/:id — rejalashtirish maydonlari (asosiylari; to'liq javobda
+ * progress, holat va boshqa maydonlar ham bor).
+ */
+export class NotificationCampaignScheduleFieldsDto {
+  @ApiProperty({ example: '7' })
+  id!: string;
+
+  @ApiProperty({
+    enum: ['scheduled', 'sending', 'sent', 'failed', 'cancelled'],
+    example: 'scheduled',
+  })
+  display_status!: string;
+
+  @ApiProperty({
+    nullable: true,
+    example: '2026-10-21T04:00:00.000Z',
+    description: 'Haqiqiy yuborish lahzasi (surilgan bo‘lsa — surilgani)',
+  })
+  scheduled_at!: string | null;
+
+  @ApiProperty({ nullable: true, example: '2026-10-21T09:00:00+05:00' })
+  scheduled_at_tashkent!: string | null;
+
+  @ApiProperty({
+    nullable: true,
+    example: '2026-10-20T14:00:00.000Z',
+    description:
+      '(fb4qy6bd) Admin so‘ragan lahza: belgilangan vaqt (surilishdan OLDIN) yoki darhol bo‘lsa yaratilgan lahza. Eski kampaniyalarda null.',
+  })
+  requested_at!: string | null;
+
+  @ApiProperty({ nullable: true, example: '2026-10-20T19:00:00+05:00' })
+  requested_at_tashkent!: string | null;
+
+  @ApiProperty({
+    example: true,
+    description:
+      '(fb4qy6bd) Reklama tungi taqiq oynasi sababli scheduled_at surilganmi (eski kampaniyalarda false).',
+  })
+  quiet_hours_shifted!: boolean;
+
+  @ApiProperty({ nullable: true, example: null })
+  paused_until!: string | null;
+}
