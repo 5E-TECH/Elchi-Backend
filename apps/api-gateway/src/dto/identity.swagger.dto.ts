@@ -202,6 +202,20 @@ export class UpdateAdminRequestDto {
   @Min(0)
   @Max(1_000_000)
   ai_price_per_order?: number | null;
+
+  /**
+   * hY7uacJu — market tahrirlash formasidagi «Ombor → Ombordan buyurtma
+   * yaratish». Faqat SUPERADMIN/ADMIN va faqat market yozuvida (aks holda
+   * 403/400). Alohida yo'l ham bor: PATCH /markets/:id/warehouse-order.
+   */
+  @ApiPropertyOptional({
+    example: true,
+    description:
+      'Market «Ombordan buyurtma yaratish» kaliti (sukut false). Faqat SUPERADMIN/ADMIN, faqat market.',
+  })
+  @IsOptional()
+  @IsBoolean()
+  can_order_from_warehouse?: boolean;
 }
 
 export class CreateMarketRequestDto {
