@@ -23,6 +23,51 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-10-24 — Dashboard paketi (batch D)
+
+Hammasi qo'shimcha (additive) maydonlar — eski FE buzilmaydi.
+
+- [2026-10-24] 🆕 [gateway/analytics] — **`GET /analytics/dashboard?branch_id=`** (6CYRjoZG). Faqat
+  SUPERADMIN/ADMIN uchun; boshqa rollarda `branch_id` e'tiborsiz (filial xodimi — doim o'z filiali,
+  kuryer/market — o'z kesimi). Noto'g'ri id (raqam emas) — 400. Berilganda `orders`, `markets`, `couriers`,
+  `topMarkets`, `topBranches` tanlangan filial kesimida va javobga qo'shiladi:
+  `branch_id`, `dailyRevenue: { data: [{ period, label, ordersCount, revenue, profit }], summary } | null`,
+  `statusDistribution: { distribution: { <status>: n }, total } | null`,
+  `topCouriers: [{ courier_id, courier_name, total_orders, successful_orders, success_rate }] | null` +
+  `topCouriersMeta`, `branchDashboard` (filial paneli, `branch.dashboard`). Bo'lak olinmasa — `null` va
+  `failed_parts` (`dailyRevenue` / `statusDistribution` / `topCouriers` / `branchDashboard`).
+  🔧 FE: `/branches/:id` «Filial ko'rsatkichlari» (KPI 4, muvaffaqiyat, kunlik daromad, holat donut,
+  kuryerlar reytingi) shu bitta so'rovdan chiziladi.
+- [2026-10-24] ✏️ [gateway/analytics] — **`GET /analytics/kpi?all=true`** va **`GET /analytics/revenue?all=true`**
+  («Barchasi», XdKajqLe). Oyna dashboard `all=true` bilan AYNI: butun tarix so'raladi, lekin order-service
+  eng so'nggi 366 kunga qisqartiradi (audit C3) — javobda `clamped`, `effective_from`, `effective_to`,
+  `max_span_days` (KPI xabari `KPI stats (oxirgi 366 kun)`). KPI ning barcha bo'laklari (kuryerlar, top
+  marketlar, yetkazish) shu oynada. 🔧 FE: «Barchasi» da «Yetkazish sifati», «Moliyaviy tahlil», «Kassa»
+  yashirilmasin — `all=true` bilan so'ralsin, `clamped=true` da «oxirgi 366 kun» izohi.
+- [2026-10-24] ✏️ [analytics] — **KPI `deliveryCount`** (yrLt5oMi): davrda yetkazilgan buyurtmalar soni
+  (`onTimeRate`/`averageFulfillmentHours` maxraji). Minimal variant: `onTimeRate` raqamligicha qoladi (0).
+  🔧 FE: `deliveryCount === 0` bo'lsa SLA kartasida «0% · past» emas, «O'lchanmagan».
+- [2026-10-24] ✏️ [analytics/order] — **«Yo'qotilgan daromad», «Sof foyda» trendi, maqsad** (l9NNdsCH):
+  - dashboard `orders.lostRevenue` — davrda bekor qilingan buyurtmalar `total_price` yig'indisi (`cancelled`
+    bilan AYNI to'plam, buyurtma bo'yicha bir marta). Registratorda yashirin (profit/tushum kabi).
+  - `GET /analytics/revenue` — har bandda `profit`, `summary.totalProfit`, `chart.profitValues`
+    (overview `profit` bilan AYNI formula: market tarifi − kuryer ulushi − filial ulushi).
+  - dashboard `targets: { successRate: 80 }` — muvaffaqiyat ulushi maqsadi (%) (minimal variant: qotirilgan
+    qiymat, sozlama yo'q). 🔧 FE: «Yo'qotilgan daromad» kartasi, «Moliyaviy tahlil» trendida «Sof foyda»,
+    «Yaxshi chegarasi · 70%» o'rniga `targets.successRate`.
+- [2026-10-24] ✏️ [analytics/order] — **oldingi davr va 14 kunlik seriya** (DwrMygfo), bitta qo'shimcha
+  RPC (`order.analytics.trend`), ikkinchi og'ir so'rov kerak emas:
+  - dashboard (admin/filial kesimi): `previous: { from, to, acceptedCount, soldAndPaid, cancelled,
+    totalRevenue, profit, lostRevenue } | null` — joriy oynadan OLDINGI teng uzunlikdagi oyna («Bugun» →
+    kecha, 7 kun → oldingi 7 kun); `series: [{ date: 'YYYY-MM-DD', …shu maydonlar }]` — joriy oyna oxiri
+    bilan tugaydigan 14 Toshkent kuni (bo'sh kun 0). Registratorda moliyaviy maydonlarsiz. «Barchasi» da
+    `previous: null`. Market/kuryer dashboardida yo'q.
+  - `GET /analytics/kpi`: `previous: { from, to, averageOrderValue, averageFulfillmentHours, onTimeRate,
+    deliveryCount, cancellationRate } | null` va `series: [{ date, …shu KPI }]` (14 kun). `courierEfficiency`
+    uchun oldingi qiymat/seriya yo'q (minimal variant).
+  - Bo'lak olinmasa — `previous: null`, `series: null`, `failed_parts: ['trend']`.
+  🔧 FE: delta = joriy − `previous`, sparkline — `series`; ikkinchi `analytics/dashboard` so'rovi olib tashlansin.
+
 ### 2026-10-24 — Uchala tarif bo'yicha taxminiy narx (6FLyjO6j uchun)
 
 - [2026-10-24] 🟢 [logistics] — yangi `POST /delivery/quote/by-tariff` (rollar `POST /delivery/quote` bilan bir xil):
