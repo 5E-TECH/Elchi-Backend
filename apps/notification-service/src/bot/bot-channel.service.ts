@@ -60,13 +60,16 @@ export class BotChannelService {
       return { deactivated: 0 };
     }
 
+    // (G085w5Qr) Sabab va vaqt qatorning o'zida ham saqlanadi — jadval
+    // («Bot guruhdan chiqarilgan…») va market holati endpointi shuni o'qiydi.
     const rows: Array<{ id: string; market_id: string }> =
       await this.markets.query(
         `UPDATE "notification_schema"."telegram_markets"
-            SET "is_active" = false, "updatedAt" = now()
+            SET "is_active" = false, "inactive_reason" = $2,
+                "inactive_at" = now(), "updatedAt" = now()
           WHERE "group_id" = $1 AND "is_deleted" = false AND "is_active" = true
         RETURNING "id", "market_id"`,
-        [chatId],
+        [chatId, reason],
       );
     const changed = Array.isArray(rows[0]) ? (rows[0] as typeof rows) : rows;
     for (const row of changed) {

@@ -635,3 +635,58 @@ export class TelegramScanDoneRequestDto {
   @Matches(/^\d{1,20}$/, { each: true })
   order_ids!: string[];
 }
+
+/** (G085w5Qr) Telegram guruhi nofaol bo'lish sabablari. */
+export const TELEGRAM_MARKET_INACTIVE_REASONS = [
+  'kicked',
+  'left',
+  'blocked_on_send',
+  'chat_not_found',
+  'manual',
+] as const;
+
+/**
+ * (G085w5Qr) GET /notifications (items[]), GET/PATCH /notifications/:id —
+ * `data` shakli (Telegram guruhi ulanishi, admin uchun).
+ */
+export class TelegramMarketPublicDto {
+  @ApiProperty({ example: '10' })
+  id!: string;
+
+  @ApiProperty({ example: '2026-10-20T10:00:00.000Z' })
+  createdAt!: string;
+
+  @ApiProperty({ example: '2026-10-21T08:00:00.000Z' })
+  updatedAt!: string;
+
+  @ApiProperty({ example: '37' })
+  market_id!: string;
+
+  @ApiProperty({ example: '-1001234567890' })
+  group_id!: string;
+
+  @ApiProperty({ enum: Group_type, example: Group_type.CREATE })
+  group_type!: Group_type;
+
+  @ApiProperty({ nullable: true, example: null })
+  bot_slug!: string | null;
+
+  @ApiProperty({ example: false })
+  is_active!: boolean;
+
+  @ApiProperty({
+    enum: TELEGRAM_MARKET_INACTIVE_REASONS,
+    nullable: true,
+    example: 'kicked',
+    description:
+      "(G085w5Qr) Nofaol sababi: kicked/left — bot guruhdan chiqarilgan, blocked_on_send — yuborishda bloklangan, chat_not_found — guruh topilmadi, manual — admin qo'lda o'chirgan. Faol qatorda va sababi noma'lum eski qatorlarda null.",
+  })
+  inactive_reason!: (typeof TELEGRAM_MARKET_INACTIVE_REASONS)[number] | null;
+
+  @ApiProperty({
+    nullable: true,
+    example: '2026-10-21T08:00:00.000Z',
+    description: '(G085w5Qr) Qachon nofaol bo‘ldi; faol qatorda null.',
+  })
+  inactive_at!: string | null;
+}

@@ -84,6 +84,9 @@ const TG_MARKET_SELECT: FindOptionsSelect<TelegramMarket> = {
   group_type: true,
   bot_slug: true,
   is_active: true,
+  // (G085w5Qr) nofaol sababi jadvalda ko'rinadi.
+  inactive_reason: true,
+  inactive_at: true,
 };
 
 /**
@@ -102,6 +105,10 @@ export function toPublicTelegramMarket(row: TelegramMarket) {
     group_type: row.group_type,
     bot_slug: row.bot_slug ?? null,
     is_active: row.is_active,
+    // (G085w5Qr) 'kicked' | 'left' | 'blocked_on_send' | 'chat_not_found' |
+    // 'manual' | null (faol yoki sabab noma'lum — eski qator).
+    inactive_reason: row.inactive_reason ?? null,
+    inactive_at: row.inactive_at ?? null,
   };
 }
 
@@ -548,6 +555,10 @@ export class NotificationServiceService {
         group_id: dto.group_id,
         group_type: dto.group_type,
         is_active: dto.is_active ?? true,
+        // (G085w5Qr) nofaol yaratilsa — qo'lda.
+        ...(dto.is_active === false
+          ? { inactive_reason: 'manual' as const, inactive_at: new Date() }
+          : {}),
       });
 
       const saved = await this.tgMarketRepo.save(entity);
@@ -661,6 +672,7 @@ export class NotificationServiceService {
         group_id: target.group_id,
         group_type: target.group_type,
         is_active: target.is_active,
+        inactive_reason: target.inactive_reason ?? null,
       };
 
       if (dto.market_id !== undefined) {
@@ -677,6 +689,12 @@ export class NotificationServiceService {
       }
 
       if (dto.is_active !== undefined) {
+        // (G085w5Qr) Qo'lda o'chirish — 'manual'; faollashtirish — sabab
+        // tozalanadi. Holat o'zgarmasa sabab ham saqlanib qoladi.
+        if (dto.is_active !== target.is_active) {
+          target.inactive_reason = dto.is_active ? null : 'manual';
+          target.inactive_at = dto.is_active ? null : new Date();
+        }
         target.is_active = dto.is_active;
       }
 
@@ -707,6 +725,7 @@ export class NotificationServiceService {
           group_id: saved.group_id,
           group_type: saved.group_type,
           is_active: saved.is_active,
+          inactive_reason: saved.inactive_reason ?? null,
         },
         ...this.auditActor(
           (dto as { requester?: { id?: string; roles?: string[] } }).requester,

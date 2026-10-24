@@ -18,6 +18,7 @@ import { ClientProxy } from '@nestjs/microservices';
 import {
   ApiBearerAuth,
   ApiBody,
+  ApiOkResponse,
   ApiOperation,
   ApiParam,
   ApiQuery,
@@ -38,6 +39,7 @@ import {
   InboxQueryDto,
   SendNotificationRequestDto,
   SubscribePushRequestDto,
+  TelegramMarketPublicDto,
   UnsubscribePushRequestDto,
   UpdateNotificationPreferencesRequestDto,
   UpdateTelegramMarketRequestDto,
@@ -323,7 +325,14 @@ export class NotificationGatewayController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Get notification configs' })
+  @ApiOperation({
+    summary:
+      'Get notification configs (data.items[] — TelegramMarketPublicDto; inactive_reason/inactive_at bilan, G085w5Qr)',
+  })
+  @ApiOkResponse({
+    description: 'data.items[] elementi',
+    type: TelegramMarketPublicDto,
+  })
   @ApiQuery({ name: 'market_id', required: false })
   @ApiQuery({ name: 'group_type', required: false })
   @ApiQuery({ name: 'is_active', required: false, type: Boolean })
@@ -337,7 +346,11 @@ export class NotificationGatewayController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Get one notification config by id' })
+  @ApiOperation({
+    summary:
+      'Get one notification config by id (inactive_reason/inactive_at bilan, G085w5Qr)',
+  })
+  @ApiOkResponse({ description: 'data', type: TelegramMarketPublicDto })
   @ApiParam({ name: 'id', example: '10' })
   findOneNotification(@Param('id') id: string) {
     return this.send({ cmd: 'notification.telegram.find_one' }, { id });

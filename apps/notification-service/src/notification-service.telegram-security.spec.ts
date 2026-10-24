@@ -232,6 +232,8 @@ describe('NotificationServiceService — Telegram relay xavfsizligi (n0kLbx3d / 
           'group_id',
           'group_type',
           'id',
+          'inactive_at',
+          'inactive_reason',
           'is_active',
           'market_id',
           'updatedAt',
@@ -277,6 +279,8 @@ describe('NotificationServiceService — Telegram relay xavfsizligi (n0kLbx3d / 
         group_type: 'create',
         bot_slug: null,
         is_active: true,
+        inactive_reason: null,
+        inactive_at: null,
       });
     });
   });
