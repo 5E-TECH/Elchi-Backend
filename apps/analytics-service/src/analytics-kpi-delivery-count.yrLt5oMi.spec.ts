@@ -1,10 +1,13 @@
 import { AnalyticsServiceService } from './analytics-service.service';
 
 const rmqSendMock = jest.fn();
-jest.mock('@app/common', () => ({
-  ...jest.requireActual('@app/common'),
-  rmqSend: (...args: unknown[]) => rmqSendMock(...args),
-}));
+jest.mock(
+  '@app/common',
+  (): Record<string, unknown> => ({
+    ...jest.requireActual<Record<string, unknown>>('@app/common'),
+    rmqSend: (...args: unknown[]): unknown => rmqSendMock(...args),
+  }),
+);
 
 /**
  * (yrLt5oMi) KPI javobida `onTimeRate` bilan birga `deliveryCount`:

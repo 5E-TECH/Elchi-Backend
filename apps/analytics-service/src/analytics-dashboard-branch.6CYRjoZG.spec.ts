@@ -1,10 +1,13 @@
 import { AnalyticsServiceService } from './analytics-service.service';
 
 const rmqSendMock = jest.fn();
-jest.mock('@app/common', () => ({
-  ...jest.requireActual('@app/common'),
-  rmqSend: (...args: unknown[]) => rmqSendMock(...args),
-}));
+jest.mock(
+  '@app/common',
+  (): Record<string, unknown> => ({
+    ...jest.requireActual<Record<string, unknown>>('@app/common'),
+    rmqSend: (...args: unknown[]): unknown => rmqSendMock(...args),
+  }),
+);
 
 /**
  * (6CYRjoZG) GET /analytics/dashboard?branch_id= — SA/ADMIN uchun filial
@@ -103,7 +106,7 @@ describe('6CYRjoZG — dashboard branch_id (SA/ADMIN)', () => {
     const res = (await make().getDashboard(
       { id: '1', roles: ['superadmin'] },
       { startDate: '2026-10-18', endDate: '2026-10-24', branch_id: '5' },
-    )) as { data: Record<string, any> };
+    )) as { data: Record<string, unknown> };
 
     for (const cmd of [
       'order.analytics.overview',
@@ -149,7 +152,7 @@ describe('6CYRjoZG — dashboard branch_id (SA/ADMIN)', () => {
     const res = (await make().getDashboard(
       { id: '2', roles: ['admin'] },
       { branch_id: '9' },
-    )) as { data: Record<string, any> };
+    )) as { data: Record<string, unknown> };
     expect(payloadOf('order.analytics.overview')).toMatchObject({
       branch_id: '9',
     });
@@ -161,7 +164,7 @@ describe('6CYRjoZG — dashboard branch_id (SA/ADMIN)', () => {
     const res = (await make().getDashboard(
       { id: '1', roles: ['superadmin'] },
       {},
-    )) as { data: Record<string, any> };
+    )) as { data: Record<string, unknown> };
     expect(payloadOf('order.analytics.overview')).not.toHaveProperty(
       'branch_id',
     );
@@ -177,7 +180,7 @@ describe('6CYRjoZG — dashboard branch_id (SA/ADMIN)', () => {
     const res = (await make().getDashboard(
       { id: '3', roles: ['manager'] },
       { branch_id: '5' },
-    )) as { data: Record<string, any> };
+    )) as { data: Record<string, unknown> };
     expect(payloadOf('order.analytics.overview')).toMatchObject({
       branch_id: '16',
     });
@@ -190,7 +193,7 @@ describe('6CYRjoZG — dashboard branch_id (SA/ADMIN)', () => {
     const res = (await make().getDashboard(
       { id: '4', roles: ['market'] },
       { branch_id: '5' },
-    )) as { data: Record<string, any> };
+    )) as { data: Record<string, unknown> };
     expect(cmds()).not.toContain('order.analytics.overview');
     expect(res.data).not.toHaveProperty('branch_id');
   });
@@ -203,7 +206,7 @@ describe('6CYRjoZG — dashboard branch_id (SA/ADMIN)', () => {
     const res = (await make().getDashboard(
       { id: '1', roles: ['superadmin'] },
       { branch_id: '5' },
-    )) as { data: Record<string, any> };
+    )) as { data: Record<string, unknown> };
     expect(res.data).toMatchObject({
       statusDistribution: null,
       dailyRevenue: null,

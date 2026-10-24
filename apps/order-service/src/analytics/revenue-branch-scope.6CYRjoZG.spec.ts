@@ -36,7 +36,7 @@ function makeAnalytics(rows: Array<Record<string, string>>) {
 }
 
 const branchScopeCalls = (qb: Record<string, jest.Mock>) =>
-  qb.andWhere.mock.calls.filter(([sql]) =>
+  (qb.andWhere.mock.calls as Array<[string, unknown]>).filter(([sql]) =>
     String(sql).includes(':analyticsBranchId'),
   );
 

@@ -4,10 +4,13 @@ import {
 } from './analytics-service.service';
 
 const rmqSendMock = jest.fn();
-jest.mock('@app/common', () => ({
-  ...jest.requireActual('@app/common'),
-  rmqSend: (...args: unknown[]) => rmqSendMock(...args),
-}));
+jest.mock(
+  '@app/common',
+  (): Record<string, unknown> => ({
+    ...jest.requireActual<Record<string, unknown>>('@app/common'),
+    rmqSend: (...args: unknown[]): unknown => rmqSendMock(...args),
+  }),
+);
 
 /**
  * (l9NNdsCH) Dashboard: `orders.lostRevenue` («Yo'qotilgan daromad»),
@@ -52,7 +55,7 @@ describe('l9NNdsCH — dashboard lostRevenue va maqsad', () => {
     const res = (await make().getDashboard(
       { id: '1', roles: ['admin'] },
       {},
-    )) as { data: Record<string, any> };
+    )) as { data: Record<string, Record<string, unknown>> };
     expect(res.data.orders).toMatchObject({
       cancelled: 3,
       lostRevenue: 450000,
@@ -65,7 +68,7 @@ describe('l9NNdsCH — dashboard lostRevenue va maqsad', () => {
     const res = (await make().getDashboard(
       { id: '5', roles: ['registrator'], branch_id: '16' },
       {},
-    )) as { data: Record<string, any> };
+    )) as { data: Record<string, Record<string, unknown>> };
     expect(res.data.orders).not.toHaveProperty('lostRevenue');
     expect(res.data.orders).not.toHaveProperty('profit');
     expect(res.data.orders).toMatchObject({ cancelled: 3 });
@@ -75,7 +78,7 @@ describe('l9NNdsCH — dashboard lostRevenue va maqsad', () => {
     const res = (await make().getDashboard(
       { id: '6', roles: ['manager'], branch_id: '16' },
       {},
-    )) as { data: Record<string, any> };
+    )) as { data: { orders: Record<string, unknown> } };
     expect(res.data.orders.lostRevenue).toBe(450000);
   });
 });
@@ -85,10 +88,14 @@ describe('l9NNdsCH — /analytics/revenue profit', () => {
     const res = (await make().getRevenueStats(
       { id: '1', roles: ['superadmin'] },
       { startDate: '2026-10-23', endDate: '2026-10-24' },
-    )) as { data: Record<string, any> };
-    expect(res.data.data.map((b: { profit: number }) => b.profit)).toEqual([
-      30000, -5000,
-    ]);
+    )) as {
+      data: {
+        data: Array<{ profit: number }>;
+        summary: Record<string, unknown>;
+        chart: Record<string, unknown>;
+      };
+    };
+    expect(res.data.data.map((b) => b.profit)).toEqual([30000, -5000]);
     expect(res.data.summary.totalProfit).toBe(25000);
     expect(res.data.chart.profitValues).toEqual([30000, -5000]);
   });

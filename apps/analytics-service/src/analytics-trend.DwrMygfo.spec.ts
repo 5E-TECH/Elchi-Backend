@@ -1,10 +1,13 @@
 import { AnalyticsServiceService } from './analytics-service.service';
 
 const rmqSendMock = jest.fn();
-jest.mock('@app/common', () => ({
-  ...jest.requireActual('@app/common'),
-  rmqSend: (...args: unknown[]) => rmqSendMock(...args),
-}));
+jest.mock(
+  '@app/common',
+  (): Record<string, unknown> => ({
+    ...jest.requireActual<Record<string, unknown>>('@app/common'),
+    rmqSend: (...args: unknown[]): unknown => rmqSendMock(...args),
+  }),
+);
 
 /**
  * (DwrMygfo) dashboard va KPI javobida `previous` (oldingi teng davr) va
@@ -61,6 +64,12 @@ const TREND = {
   series_days: 14,
 };
 
+type TrendData = {
+  previous: unknown;
+  series: Array<Record<string, unknown>> | null;
+  [key: string]: unknown;
+};
+
 type Call = [unknown, { cmd: string }, Record<string, unknown>];
 const payloadOf = (cmd: string) =>
   (rmqSendMock.mock.calls as Call[]).find(([, p]) => p.cmd === cmd)?.[2];
@@ -97,7 +106,7 @@ describe('DwrMygfo — dashboard previous va series', () => {
     const res = (await make().getDashboard(
       { id: '1', roles: ['admin'] },
       { startDate: '2026-10-18', endDate: '2026-10-24' },
-    )) as { data: Record<string, any> };
+    )) as { data: TrendData };
     expect(payloadOf('order.analytics.trend')).toEqual({
       startDate: '2026-10-17T19:00:00.000Z',
       endDate: '2026-10-24T18:59:59.999Z',
@@ -113,7 +122,7 @@ describe('DwrMygfo — dashboard previous va series', () => {
       lostRevenue: 50000,
     });
     expect(res.data.series).toHaveLength(2);
-    expect(res.data.series[1]).toEqual({
+    expect(res.data.series?.[1]).toEqual({
       date: '2026-10-24',
       acceptedCount: 5,
       soldAndPaid: 2,
@@ -152,7 +161,7 @@ describe('DwrMygfo — dashboard previous va series', () => {
     const res = (await make().getDashboard(
       { id: '5', roles: ['registrator'], branch_id: '16' },
       {},
-    )) as { data: Record<string, any> };
+    )) as { data: TrendData };
     expect(res.data.previous).toEqual({
       from: TREND.previous.from,
       to: TREND.previous.to,
@@ -160,8 +169,8 @@ describe('DwrMygfo — dashboard previous va series', () => {
       soldAndPaid: 4,
       cancelled: 2,
     });
-    expect(res.data.series[1]).not.toHaveProperty('totalRevenue');
-    expect(res.data.series[1]).not.toHaveProperty('profit');
+    expect(res.data.series?.[1]).not.toHaveProperty('totalRevenue');
+    expect(res.data.series?.[1]).not.toHaveProperty('profit');
   });
 
   it('«Barchasi»: all bayrog`i trend ga uzatiladi, previous null bo`lsa null', async () => {
@@ -169,7 +178,7 @@ describe('DwrMygfo — dashboard previous va series', () => {
     const res = (await make().getDashboard(
       { id: '1', roles: ['admin'] },
       { all: true },
-    )) as { data: Record<string, any> };
+    )) as { data: TrendData };
     expect(payloadOf('order.analytics.trend')).toMatchObject({ all: true });
     expect(res.data.previous).toBeNull();
     expect(res.data.series).toHaveLength(2);
@@ -180,7 +189,7 @@ describe('DwrMygfo — dashboard previous va series', () => {
     const res = (await make().getDashboard(
       { id: '1', roles: ['admin'] },
       {},
-    )) as { data: Record<string, any> };
+    )) as { data: TrendData };
     expect(res.data).toMatchObject({
       previous: null,
       series: null,
@@ -196,7 +205,7 @@ describe('DwrMygfo — KPI previous va series', () => {
     const res = (await make().getKpiStats(
       { id: '1', roles: ['superadmin'] },
       { startDate: '2026-10-18', endDate: '2026-10-24' },
-    )) as { data: Record<string, any> };
+    )) as { data: TrendData };
     expect(res.data.previous).toEqual({
       from: TREND.previous.from,
       to: TREND.previous.to,
@@ -206,7 +215,7 @@ describe('DwrMygfo — KPI previous va series', () => {
       deliveryCount: 4,
       cancellationRate: 25,
     });
-    expect(res.data.series[0]).toEqual({
+    expect(res.data.series?.[0]).toEqual({
       date: '2026-10-23',
       averageOrderValue: 0,
       averageFulfillmentHours: 0,
@@ -214,7 +223,7 @@ describe('DwrMygfo — KPI previous va series', () => {
       deliveryCount: 0,
       cancellationRate: 0,
     });
-    expect(res.data.series[1]).toEqual({
+    expect(res.data.series?.[1]).toEqual({
       date: '2026-10-24',
       averageOrderValue: 100000,
       averageFulfillmentHours: 2,
@@ -231,7 +240,7 @@ describe('DwrMygfo — KPI previous va series', () => {
     const res = (await make().getKpiStats(
       { id: '1', roles: ['admin'] },
       {},
-    )) as { data: Record<string, any> };
+    )) as { data: TrendData };
     expect(res.data).toMatchObject({
       previous: null,
       series: null,

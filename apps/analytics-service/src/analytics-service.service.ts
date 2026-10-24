@@ -600,7 +600,7 @@ export class AnalyticsServiceService {
     delete safeOverview.totalRevenue;
     delete safeOverview.total_revenue;
     // (l9NNdsCH) bekor summasi ham moliyaviy ko'rsatkich.
-    delete safeOverview.lostRevenue;
+    delete (safeOverview as Record<string, unknown>).lostRevenue;
     return safeOverview;
   }
 
@@ -1136,31 +1136,57 @@ export class AnalyticsServiceService {
    * Bo'lak olinmasa yoki «Barchasi» — `previous: null`.
    */
   private dashboardTrendParts(trend: unknown, hideFinancials: boolean) {
-    const data = this.unwrap<any>(trend as any);
-    const pick = (row: any, keys: string[]) =>
-      Object.fromEntries(
-        keys.map((key) => [key, this.parseNumber(row?.[key])]),
-      );
+    const { previous, series } = this.trendData(trend);
     const countKeys = ['acceptedCount', 'soldAndPaid', 'cancelled'];
     const moneyKeys = hideFinancials
       ? []
       : ['totalRevenue', 'profit', 'lostRevenue'];
     const keys = [...countKeys, ...moneyKeys];
-    const previous =
-      data?.previous && typeof data.previous === 'object'
+    const pick = (row: Record<string, unknown>) =>
+      Object.fromEntries(keys.map((key) => [key, this.parseNumber(row[key])]));
+    return {
+      previous: previous
         ? {
-            from: data.previous.from ?? null,
-            to: data.previous.to ?? null,
-            ...pick(data.previous, keys),
+            from: this.stringOrNull(previous.from),
+            to: this.stringOrNull(previous.to),
+            ...pick(previous),
           }
+        : null,
+      series: series
+        ? series.map((row) => ({
+            date: this.stringOrNull(row.date) ?? '',
+            ...pick(row),
+          }))
+        : null,
+    };
+  }
+
+  private stringOrNull(value: unknown): string | null {
+    return typeof value === 'string' ? value : null;
+  }
+
+  /**
+   * (DwrMygfo) `order.analytics.trend` javobi (xom yoki successRes o'rami):
+   * `previous` obyekti va `series` qatorlari; yo'q bo'lsa — `null`.
+   */
+  private trendData(trend: unknown): {
+    previous: Record<string, unknown> | null;
+    series: Array<Record<string, unknown>> | null;
+  } {
+    const asRecord = (value: unknown): Record<string, unknown> | null =>
+      value && typeof value === 'object' && !Array.isArray(value)
+        ? (value as Record<string, unknown>)
         : null;
-    const series = Array.isArray(data?.series)
-      ? data.series.map((row: any) => ({
-          date: String(row?.date ?? ''),
-          ...pick(row, keys),
-        }))
+    let root = asRecord(trend);
+    if (root && !('series' in root) && !('previous' in root)) {
+      root = asRecord(root.data);
+    }
+    const series = Array.isArray(root?.series)
+      ? (root.series as unknown[])
+          .map((row) => asRecord(row))
+          .filter((row): row is Record<string, unknown> => row !== null)
       : null;
-    return { previous, series };
+    return { previous: asRecord(root?.previous), series };
   }
 
   /**
@@ -1180,13 +1206,22 @@ export class AnalyticsServiceService {
   ) {
     const revenue =
       dailyRevenue === null ? null : this.unwrapRevenue(dailyRevenue);
-    const status = this.unwrap<any>(statusDistribution as any);
+    const statusRoot =
+      statusDistribution && typeof statusDistribution === 'object'
+        ? (statusDistribution as Record<string, unknown>)
+        : null;
+    const status =
+      statusRoot && 'distribution' in statusRoot
+        ? statusRoot
+        : statusRoot?.data && typeof statusRoot.data === 'object'
+          ? (statusRoot.data as Record<string, unknown>)
+          : null;
     const couriersRanking = this.dashboardRanking(topCouriers, rankingWindow);
     return {
       branch_id: branchId,
       dailyRevenue: revenue,
       statusDistribution:
-        status && typeof status === 'object' && status.distribution
+        status?.distribution && typeof status.distribution === 'object'
           ? {
               distribution: status.distribution as Record<string, number>,
               total: this.parseNumber(status.total),
@@ -1433,14 +1468,14 @@ export class AnalyticsServiceService {
    * kunlik `series` uchun. `courierEfficiency` oldingi davr/seriyada yo'q
    * (kuryer kesimi alohida og'ir so'rov — minimal variant).
    */
-  private kpiFromTotals(row: any) {
-    const accepted = this.parseNumber(row?.acceptedCount);
-    const sold = this.parseNumber(row?.soldAndPaid);
-    const cancelled = this.parseNumber(row?.cancelled);
-    const revenue = this.parseNumber(row?.totalRevenue);
-    const delivered = this.parseNumber(row?.deliveredCount);
-    const deliveryMs = this.parseNumber(row?.deliveryMsTotal);
-    const onTime = this.parseNumber(row?.onTimeCount);
+  private kpiFromTotals(row: Record<string, unknown>) {
+    const accepted = this.parseNumber(row.acceptedCount);
+    const sold = this.parseNumber(row.soldAndPaid);
+    const cancelled = this.parseNumber(row.cancelled);
+    const revenue = this.parseNumber(row.totalRevenue);
+    const delivered = this.parseNumber(row.deliveredCount);
+    const deliveryMs = this.parseNumber(row.deliveryMsTotal);
+    const onTime = this.parseNumber(row.onTimeCount);
     return {
       averageOrderValue: sold > 0 ? Number((revenue / sold).toFixed(2)) : 0,
       averageFulfillmentHours:
@@ -1456,22 +1491,22 @@ export class AnalyticsServiceService {
   }
 
   private kpiTrendParts(trend: unknown) {
-    const data = this.unwrap<any>(trend as any);
-    const previous =
-      data?.previous && typeof data.previous === 'object'
+    const { previous, series } = this.trendData(trend);
+    return {
+      previous: previous
         ? {
-            from: data.previous.from ?? null,
-            to: data.previous.to ?? null,
-            ...this.kpiFromTotals(data.previous),
+            from: this.stringOrNull(previous.from),
+            to: this.stringOrNull(previous.to),
+            ...this.kpiFromTotals(previous),
           }
-        : null;
-    const series = Array.isArray(data?.series)
-      ? data.series.map((row: any) => ({
-          date: String(row?.date ?? ''),
-          ...this.kpiFromTotals(row),
-        }))
-      : null;
-    return { previous, series };
+        : null,
+      series: series
+        ? series.map((row) => ({
+            date: this.stringOrNull(row.date) ?? '',
+            ...this.kpiFromTotals(row),
+          }))
+        : null,
+    };
   }
 
   async getOrderReport(

@@ -118,13 +118,19 @@ describe('AnalyticsGatewayController', () => {
   });
 });
 
+type GatewayReq = Parameters<AnalyticsGatewayController['getDashboard']>[0];
+
 describe('6CYRjoZG — GET /analytics/dashboard?branch_id=', () => {
   function setup() {
     const analyticsClient = { send: jest.fn(() => of({ statusCode: 200 })) };
-    const controller = new AnalyticsGatewayController(analyticsClient as any);
-    const req = {
+    const controller = new AnalyticsGatewayController(
+      analyticsClient as unknown as ConstructorParameters<
+        typeof AnalyticsGatewayController
+      >[0],
+    );
+    const req: GatewayReq = {
       user: { sub: '1', username: 'sa', roles: ['superadmin'] },
-    } as any;
+    };
     return { analyticsClient, controller, req };
   }
 
@@ -140,12 +146,13 @@ describe('6CYRjoZG — GET /analytics/dashboard?branch_id=', () => {
       undefined,
       ' 5 ',
     );
-    expect(analyticsClient.send).toHaveBeenCalledWith(
-      { cmd: 'analytics.dashboard' },
-      expect.objectContaining({
-        filter: expect.objectContaining({ branch_id: '5' }),
-      }),
-    );
+    const [pattern, payload] = analyticsClient.send.mock
+      .calls[0] as unknown as [
+      { cmd: string },
+      { filter: Record<string, unknown> },
+    ];
+    expect(pattern).toEqual({ cmd: 'analytics.dashboard' });
+    expect(payload.filter.branch_id).toBe('5');
   });
 
   it('branch_id yo`q — filter da kalit ham yo`q', async () => {
@@ -178,10 +185,14 @@ describe('6CYRjoZG — GET /analytics/dashboard?branch_id=', () => {
 describe('XdKajqLe — kpi/revenue ?all=true', () => {
   function setup() {
     const analyticsClient = { send: jest.fn(() => of({ statusCode: 200 })) };
-    const controller = new AnalyticsGatewayController(analyticsClient as any);
-    const req = {
+    const controller = new AnalyticsGatewayController(
+      analyticsClient as unknown as ConstructorParameters<
+        typeof AnalyticsGatewayController
+      >[0],
+    );
+    const req: GatewayReq = {
       user: { sub: '1', username: 'sa', roles: ['superadmin'] },
-    } as any;
+    };
     return { analyticsClient, controller, req };
   }
   const filterOf = (send: jest.Mock) =>
