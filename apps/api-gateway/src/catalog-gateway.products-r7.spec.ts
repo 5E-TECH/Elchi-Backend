@@ -28,6 +28,19 @@ const pipe = new ValidationPipe({
   transform: true,
 });
 
+/**
+ * MH-3 (9fHyFp3y, MH-S1): yaratishda o'lchov MAJBURIY — Create DTO
+ * fixture'larida yaroqli o'lchov bo'lishi shart, aks holda har test o'lchov
+ * yo'qligi uchun 400 olib, aslida tekshirilayotgan maydonni (sku, price)
+ * sinamay qo'yardi.
+ */
+const MEASURES = {
+  weight_kg: '1.2',
+  length_cm: '30',
+  width_cm: '22',
+  height_cm: '15',
+};
+
 const validateBody = (
   metatype: typeof CreateProductRequestDto | typeof UpdateProductRequestDto,
   body: Record<string, unknown>,
@@ -78,13 +91,18 @@ const sentDto = (send: Send) =>
 describe('Aws1oApe — POST /product tanasi DTO klassi (forbidNonWhitelisted)', () => {
   it('⭐ TC3: ortiqcha maydon (sku) → 400', async () => {
     await expect(
-      validateBody(CreateProductRequestDto, { name: 'Olma', sku: 'ABC123' }),
+      validateBody(CreateProductRequestDto, {
+        name: 'Olma',
+        ...MEASURES,
+        sku: 'ABC123',
+      }),
     ).rejects.toBeInstanceOf(BadRequestException);
   });
 
   it('⭐ TC3 (eskirgan qismi): `price` endi DTO maydoni (zRqDRLAZ) — 400 emas, son bo`lib o`tadi', async () => {
     const dto = (await validateBody(CreateProductRequestDto, {
       name: 'Olma',
+      ...MEASURES,
       price: '1000',
     })) as CreateProductRequestDto;
     expect(dto.price).toBe(1000);
@@ -92,7 +110,7 @@ describe('Aws1oApe — POST /product tanasi DTO klassi (forbidNonWhitelisted)', 
 
   it('name majburiy (DTO) → 400', async () => {
     await expect(
-      validateBody(CreateProductRequestDto, { market_id: '1' }),
+      validateBody(CreateProductRequestDto, { market_id: '1', ...MEASURES }),
     ).rejects.toBeInstanceOf(BadRequestException);
   });
 
@@ -117,6 +135,7 @@ describe('zRqDRLAZ — narx (price)', () => {
   ])('price %p → %p', async (input, expected) => {
     const dto = (await validateBody(CreateProductRequestDto, {
       name: 'Olma',
+      ...MEASURES,
       price: input,
     })) as CreateProductRequestDto;
     expect(dto.price).toBe(expected);
@@ -126,7 +145,11 @@ describe('zRqDRLAZ — narx (price)', () => {
     'noto`g`ri price %p → 400',
     async (input) => {
       await expect(
-        validateBody(CreateProductRequestDto, { name: 'Olma', price: input }),
+        validateBody(CreateProductRequestDto, {
+          name: 'Olma',
+          ...MEASURES,
+          price: input,
+        }),
       ).rejects.toBeInstanceOf(BadRequestException);
     },
   );

@@ -63,6 +63,8 @@ export * from './pii/mask-payload';
 export * from './time/tashkent-time';
 export * from './integration/status-catalog';
 export * from './integration/partner-money';
+export * from './catalog/product-measure';
+export * from './catalog/product-code';
 export * from './notification/notification-types';
 export * from './notification/notification-type.validator';
 export * from './notification/telegram-html';

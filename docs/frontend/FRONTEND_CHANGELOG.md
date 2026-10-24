@@ -23,6 +23,60 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-10-24 — Mahsulot o'lchovi (MH-3, 9fHyFp3y) + shtrix kod / Elchi kodi (hY7uacJu)
+
+- [2026-10-24] ⚠️ [catalog] — `POST /product` (multipart) endi o'lchovni
+  MAJBURIY qiladi (MH-S1): `weight_kg` (kg, ko'pi bilan 3 kasr, `1,5` ham
+  qabul qilinadi), `length_cm`, `width_cm`, `height_cm` (sm, butun son).
+  Chegaralar: 0.001..1000 kg, 1..1000 sm (ega tasdiqlaguncha). Bittasi
+  yo'q, bo'sh, `null` yoki noto'g'ri (`ikki`, `-5`, `30.5`, `1e2`) — 400.
+  Ixtiyoriy: `volumetric_enabled` (`true`/`false`, `1/0`, `on/off`;
+  berilmasa — `true`), `barcode`. **Lockstep deploy:** hozirgi forma faqat
+  `name` + `image` yuboradi — backend 6FLyjO6j (forma) bilan BIRGA chiqmasa,
+  UI'dan mahsulot yaratish 400 bilan sinadi; teskarisi ham (eski backend
+  yangi maydonlarni `forbidNonWhitelisted` bilan 400 qiladi). 🔧 FE: 6FLyjO6j
+  formasi — to'rtta maydon majburiy, raqamlar satr bo'lib ketishi mumkin.
+- [2026-10-24] ✏️ [catalog] — `PATCH /product/:id` va `PATCH /product/my/:id`
+  shu maydonlarni ixtiyoriy qabul qiladi (market / operator ham o'z
+  mahsulotining o'lchovi va kodini tuzata oladi). O'lchov FAQAT yangi qiymat
+  bilan almashtiriladi: `weight_kg` / `length_cm` / ... uchun `null` yoki
+  `''` — 400. 🔧 FE: o'zgarmagan yoki bo'sh o'lchov maydonini PATCH'da
+  UMUMAN yubormang. Uzunlik/kenglik/balandlik — uchalasi yoki hech biri
+  (o'lchovsiz eski mahsulotga faqat bittasini yuborish — 400).
+- [2026-10-24] ✏️ [catalog] — mahsulot javoblarida (`GET /product`,
+  `/product/:id`, `/product/my-products`, `/product/market/:id`, create /
+  update) yangi maydonlar: `weight_kg` (son | null), `length_cm`,
+  `width_cm`, `height_cm` (butun | null), `volumetric_enabled` (bool),
+  `barcode` (satr | null), `sku_code` (`ELC-P-000123`, avtomatik,
+  o'zgarmas; body'da yuborilsa — 400). Eski va hamkor yaratgan mahsulotlarda
+  o'lchov `null` («o'lchov kutilmoqda»).
+- [2026-10-24] 🟢 [catalog] — `barcode`: EAN/UPC/GTIN nazorat raqami
+  tekshiriladi (noto'g'ri — 400), market ichida yagona (409, xabarda band
+  qilgan mahsulot nomi), `''` / `null` — kodsiz (PATCH'da tozalash). GTIN
+  **kanonik** shaklda saqlanadi va javobda shunday qaytadi: UPC-A (12 xona)
+  va GTIN-14 → 13 xonali EAN shakli (`036000291452` → `0036000291452`),
+  UPC-E (8 xona, 0/1 bilan) → kengaytirilgan UPC-A ning shu shakli
+  (`04963406` → `0049000006346`; skaner UPC-E ni 8 xona yoki UPC-A qilib
+  yuborsa ham bitta mahsulot topiladi), GTIN-8 → 8 xona; GS1 DataMatrix
+  («Asl belgisi») / GS1 QR'dan GTIN
+  ajratiladi; zavod QR matni aynan saqlanadi; `ELC-P-…` bu maydonga
+  yozilmaydi. Raqamni SATR sifatida yuboring (JSON raqami — 400).
+- [2026-10-24] 🆕 [catalog] — `GET /product/by-code/:code` (skaner): `ELC-P-…`
+  (registrga befarq, nolsiz ham) — `sku_code`; boshqasi — `barcode`
+  (8/12/13/14 xonali skan, jumladan UPC-E, va DataMatrix ham kanonik
+  qiymatni topadi). Javob
+  `{ data: Product[], total, matched_by: 'sku_code' | 'barcode' | null }`;
+  topilmasa 200 + `data: []` (404 emas). Rollar — `GET /product/:id` bilan
+  bir xil; market — faqat o'zi (boshqa `market_id` — 403), market operatori —
+  biriktirilgan marketi (biriktirilmagan — 400), xodim — ixtiyoriy
+  `?market_id=`. Kod 1..512 belgi; `encodeURIComponent` bilan yuboring (QR
+  matnida `/` bo'lishi mumkin). Kartada `/products/by-code` deb yozilgan —
+  haqiqiy yo'l `/product/by-code/:code`. 🔧 FE: openapi qayta generatsiya
+  (`CatalogGatewayController_findByCode`, x-roles).
+- [2026-10-24] 🟢 [catalog] — `GET /product?search=` endi aniq `ELC-P-…` va
+  shtrix kod (kanonik) bo'yicha ham topadi; global qidiruv (`/search`)
+  kodlarni teg sifatida OLMAYDI (faqat nom).
+
 ### 2026-10-23 — Rollback «Bekor qilish» sotilgan buyurtmadan (y2RarzlT); kuryer filiali va tumani (YEThmZBn)
 
 - [2026-10-23] ✏️ [identity] — `GET /users/:id` javobida yangi maydon
