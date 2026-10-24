@@ -616,9 +616,7 @@ export class InvestorServiceService {
             : undefined,
         },
       )
-      .setParameters(
-        range ? { range_from: range[0], range_to: range[1] } : {},
-      )
+      .setParameters(range ? { range_from: range[0], range_to: range[1] } : {})
       .getRawOne<{ total: string; range_total: string }>();
 
     return successRes({

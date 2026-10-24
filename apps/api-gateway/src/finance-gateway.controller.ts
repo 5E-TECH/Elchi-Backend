@@ -2580,7 +2580,7 @@ export class FinanceGatewayController {
   @ApiOperation({
     summary: 'Paginated top-impact financial balance transactions',
     description:
-      "guzrGySp — `data.items[]` qatorlarida `created_by_user` (`{ id, name, role }` yoki avtomatik yozuvda `null`) — `financial-balance/history` bilan bir xil.",
+      'guzrGySp — `data.items[]` qatorlarida `created_by_user` (`{ id, name, role }` yoki avtomatik yozuvda `null`) — `financial-balance/history` bilan bir xil.',
   })
   @ApiQuery({ name: 'fromDate', required: false })
   @ApiQuery({ name: 'toDate', required: false })
