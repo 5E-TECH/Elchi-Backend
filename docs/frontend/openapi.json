@@ -789,11 +789,24 @@
               "example": 10,
               "type": "number"
             }
+          },
+          {
+            "name": "telegram_linked",
+            "required": false,
+            "in": "query",
+            "description": "yA31z7Rr — «Ulangan / Ulanmagan» chiplari: true — Telegram boti ulangan (qatordagi `telegram_linked: true`), false — ulanmagan. Boshqa filtrlar bilan AND; `meta.total` / `countsByRole` filtrdan keyin. Boshqa qiymat — 400.",
+            "schema": {
+              "enum": [
+                "true",
+                "false"
+              ],
+              "type": "string"
+            }
           }
         ],
         "responses": {
           "200": {
-            "description": "User list. YEThmZBn: har qatorda `branch: { id, name } | null` — kuryer / menejer / registrator / filial xodimining filiali (boshqa rollar va filial xizmati javob bermasa — null)."
+            "description": "User list. YEThmZBn / kGIjOciz: har qatorda `branch_id: string | null` va `branch: { id, name } | null` — kuryer / menejer / registrator / filial xodimining filiali (boshqa rollar va filial xizmati javob bermasa — null). x6IO746K: `role = market_operator` qatorlarida `market: { id, name } | null` (market o`chirilgan / topilmagan — null; boshqa rollarda kalit yo`q)."
           }
         },
         "security": [
@@ -828,7 +841,7 @@
         ],
         "responses": {
           "200": {
-            "description": "User by id"
+            "description": "User by id. kGIjOciz: `branch_id: string | null` va `branch: { id, name } | null` (kuryer / menejer / registrator / filial xodimi; boshqa rollar — null). x6IO746K: market operatorida `market: { id, name } | null`."
           },
           "404": {
             "description": "Not found"
@@ -1134,7 +1147,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Market list. SUPERADMIN/ADMIN: to'liq qator + cashbox. MANAGER/REGISTRATOR/BRANCH: faqat {id, name, phone_number, status}. COURIER: faqat {id, name, status}."
+            "description": "Market list. SUPERADMIN/ADMIN: to'liq qator + cashbox. MANAGER/REGISTRATOR/BRANCH: faqat {id, name, phone_number, status, tariff_home, tariff_center, default_tariff} (yiFTzkzH; tarif maydoni yo'q bo'lsa null). COURIER: faqat {id, name, status}."
           }
         },
         "security": [
@@ -1943,7 +1956,7 @@
         "parameters": [],
         "responses": {
           "200": {
-            "description": "Current user profile"
+            "description": "Current user profile. x6IO746K (N13): market operatorida `market: { id, name, add_order } | null` (market o`chirilgan / topilmagan — null; boshqa rollarda kalit yo`q)."
           },
           "401": {
             "description": "Unauthorized"
@@ -2477,7 +2490,7 @@
     },
     "/orders": {
       "post": {
-        "description": "gpCIsGjH: `Idempotency-Key` sarlavhasi bilan takroriy so'rov (ikki marta bosish, retry) ikkinchi buyurtma yaratmaydi — keshlangan javob `idempotent_replay: true` bilan qaytadi; birinchisi hali bajarilayotgan bo'lsa 409. Kalitsiz — har so`rov alohida buyurtma (avvalgidek).",
+        "description": "gpCIsGjH: `Idempotency-Key` sarlavhasi bilan takroriy so'rov (ikki marta bosish, retry) ikkinchi buyurtma yaratmaydi — keshlangan javob `idempotent_replay: true` bilan qaytadi; birinchisi hali bajarilayotgan bo'lsa 409. Kalitsiz — har so`rov alohida buyurtma (avvalgidek). OfRSoRUX: MARKET_OPERATOR ham yaratadi — market server tomonda (operator biriktirilgan market; tanadagi `market_id` e'tiborsiz, marketga biriktirilmagan operator — 400), `operator` bo'sh bo'lsa operator ismi yoziladi, javob market proyeksiyasida (kuryer tarifi/ulushi va filial ulushisiz).",
         "operationId": "OrderGatewayController_create",
         "parameters": [
           {
@@ -2528,7 +2541,8 @@
           "registrator",
           "market",
           "manager",
-          "branch"
+          "branch",
+          "market_operator"
         ]
       },
       "get": {
@@ -3868,6 +3882,7 @@
     },
     "/orders/markets/{marketId}/new": {
       "get": {
+        "description": "(nCAFnqIe) MARKET_OPERATOR — faqat o'zi biriktirilgan market (`:marketId` = operator marketi); boshqa market yoki marketga biriktirilmagan operator — 403. Javob market roli bilan bir xil (kuryer tarifi/ulushi va filial ulushisiz, `source='branch'` buyurtmalarsiz).",
         "operationId": "OrderGatewayController_findNewOrdersByMarket",
         "parameters": [
           {
@@ -3900,7 +3915,8 @@
           "registrator",
           "manager",
           "branch",
-          "market"
+          "market",
+          "market_operator"
         ]
       }
     },
@@ -4160,6 +4176,7 @@
     },
     "/orders/extra-cost-approvals": {
       "get": {
+        "description": "(0Ngp09FG) Har bir so'rovda `order_number` (\"EL-…\", mijozga ko'rinadigan raqam) va `requested_by: { id, name }` (so'rovchi ismi; identity javob bermasa `name: null`). Eski maydonlar (`order_id`, `requested_by_user_id`, `requested_by_role`) o`zgarmagan. (6QLF7nst) MARKET_OPERATOR — faqat o'qish, faqat o'zi biriktirilgan market so'rovlari (marketga biriktirilmagan bo'lsa 403); approve/reject operatorga 403.",
         "operationId": "OrderGatewayController_listExtraCostApprovals",
         "parameters": [
           {
@@ -4203,7 +4220,8 @@
         "x-roles": [
           "market",
           "superadmin",
-          "admin"
+          "admin",
+          "market_operator"
         ]
       }
     },
@@ -4406,6 +4424,7 @@
     },
     "/orders/assign-to-courier": {
       "post": {
+        "description": "(1gxmqLj5) SUPERADMIN/ADMIN ham biriktiradi: barcha orderlar BITTA filialda bo'lishi, kuryer shu filialning COURIER a'zosi bo'lishi shart (aks holda 400). `branch_id` (ixtiyoriy) — UI'dagi filial tanlovi: berilsa orderlar filialiga mos bo'lishi kerak (400). Menejer/registrator uchun o'zgarishsiz (o'z filiali, `branch_id` e'tiborsiz).",
         "operationId": "OrderGatewayController_assignOrdersToCourier",
         "parameters": [],
         "requestBody": {
@@ -4435,7 +4454,9 @@
         "x-roles": [
           "branch",
           "manager",
-          "registrator"
+          "registrator",
+          "superadmin",
+          "admin"
         ]
       }
     },
@@ -6145,7 +6166,8 @@
           "manager",
           "registrator",
           "market",
-          "courier"
+          "courier",
+          "market_operator"
         ]
       },
       "post": {
@@ -6549,7 +6571,8 @@
           "manager",
           "registrator",
           "market",
-          "courier"
+          "courier",
+          "market_operator"
         ]
       },
       "post": {
@@ -6716,8 +6739,15 @@
           }
         ],
         "responses": {
-          "200": {
-            "description": ""
+          "400": {
+            "description": "AF0fvJbw: `data.reason = 'district_in_use'`, `data.usage` — bog'langan tirik yozuvlar soni",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DistrictInUseErrorResponseDto"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -6869,6 +6899,48 @@
         ]
       }
     },
+    "/district/{id}/usage": {
+      "get": {
+        "description": "`data`: `{ orders, users, branches }` — faqat O'CHIRILMAGAN yozuvlar, `DELETE /district/:id` 400 javobidagi `data.usage` bilan bir xil sanoq. Hammasi 0 bo'lsa tumanni o'chirsa bo'ladi. 400 — id raqam emas; 404 — tuman yo'q; 503 — order/identity/branch servislaridan biri javob bermadi (sonlar taxmin qilinmaydi).",
+        "operationId": "LogisticsGatewayController_getDistrictUsage",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "District ID (id)",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DistrictUsageResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Tumanga bog'langan buyurtma/foydalanuvchi/filial soni (Is1zvHN7)",
+        "tags": [
+          "Logistics"
+        ],
+        "x-roles": [
+          "admin",
+          "superadmin"
+        ]
+      }
+    },
     "/district/{id}/merge": {
       "post": {
         "description": "Ko'chirishdan OLDIN B dagi sonlar olinadi; keyin A da 0 qolgani va B = eski B + ko'chirilgan ekani tasdiqlanadi. Biror bosqich yiqilsa yoki sonlar mos kelmasa — ko'chirilganlar AYNAN o'sha ID'lar bo'yicha A ga qaytariladi, A o'chirilmaydi: 409 (tekshiruv mos kelmadi / servis rad etdi) yoki 503 (servis javob bermadi). Kompensatsiyaning o'zi yiqilsa — xato matnida qaysi ID'lar qaysi tumanda qolgani yoziladi (to'liq ro'yxat — activity log, District #id, action `district.merge_compensation_failed`). 200 javobi: `moved` {orders, users, branches}, `target_before`, `target_after`.",
@@ -6932,6 +7004,7 @@
     },
     "/search": {
       "get": {
+        "description": "Imtiyozsiz rollar: buyurtma hujjatlari faqat o'ziniki (market/kuryer/mijoz). ISeuwhfr: market operatori — biriktirilgan marketining buyurtmalari (market biriktirilmagan bo'lsa buyurtma chiqmaydi).",
         "operationId": "SearchGatewayController_query",
         "parameters": [
           {
@@ -8082,6 +8155,7 @@
     },
     "/finance/financial-balance/top-impacts": {
       "get": {
+        "description": "guzrGySp — `data.items[]` qatorlarida `created_by_user` (`{ id, name, role }` yoki avtomatik yozuvda `null`) — `financial-balance/history` bilan bir xil.",
         "operationId": "FinanceGatewayController_financialBalanceTopImpacts",
         "parameters": [
           {
@@ -13461,6 +13535,7 @@
     },
     "/investors/me/investments": {
       "get": {
+        "description": "su4IYGCN — `data.summary`: `total_amount` (butun davr yig'indisi) + `range_amount` (`from_date`/`to_date` oralig'idagi yig'indi, ro'yxat filtri bilan bir xil chegaralar, sahifadan qat'i nazar; oraliq berilmasa `total_amount` ga teng).",
         "operationId": "InvestorGatewayController_getMyInvestments",
         "parameters": [
           {
@@ -15027,6 +15102,7 @@
     },
     "/transfer-batches": {
       "get": {
+        "description": "(15N7AHkp) Statussiz yoki `status=PENDING` da bir yo'nalishdagi (manba, manzil, yo'nalish, hudud) PENDING partiyalardan faqat eng yangisi qaytadi — yig'ish SQL'da, shuning uchun `meta.total`/`totalPages` HAQIQIY jami (ilgari sahifadagi qatorlar soni edi). Tartib: createdAt DESC, id DESC.",
         "operationId": "BranchGatewayController_findTransferBatches",
         "parameters": [
           {
@@ -18448,7 +18524,7 @@
     },
     "/customers/suggest": {
       "get": {
-        "description": "Telefon har qanday formatda (+998 90 123 45 67, 901234567, 0901234567; kamida 7 raqam). Market/market operatori/filial xodimi faqat shu marketda buyurtmasi bo'lgan mijozlarni ko'radi; admin — hammasini. Har taklifda shu marketdagi `orders_count`, `new_orders_count`, `has_new_orders` (takroriy buyurtma ogohlantirishi). Ko'pi bilan 10 ta.",
+        "description": "Telefon har qanday formatda (+998 90 123 45 67, 901234567, 0901234567; kamida 7 raqam). Asosiy telefon VA qo'shimcha raqam (`extra_number`, 9444UAa8) bo'yicha qidiriladi; `matched_by`: `phone` | `extra_number` | `name` — qaysi raqam mos kelgani («Qo'shimcha raqam: …» belgisi shundan). Market/market operatori/filial xodimi faqat shu marketda buyurtmasi bo'lgan mijozlarni ko'radi (qo'shimcha raqam bo'yicha topilganlar ham); admin — hammasini. Har taklifda shu marketdagi `orders_count`, `new_orders_count`, `has_new_orders` (takroriy buyurtma ogohlantirishi). Ko'pi bilan 10 ta.",
         "operationId": "CustomerGatewayController_suggest",
         "parameters": [
           {
@@ -18699,6 +18775,12 @@
           "tariff_center": {
             "type": "number",
             "example": 8000
+          },
+          "district_id": {
+            "type": "string",
+            "example": "41",
+            "nullable": true,
+            "description": "DtKKY0V8 — kuryer tumani (raqamli satr). Tuman mavjud va kuryer viloyatiga (filial viloyati) tegishli bo'lishi kerak, aks holda 400 («Tuman topilmadi» / «Tuman foydalanuvchining viloyatiga tegishli emas»); viloyati yo'q (HQ) — faqat mavjudligi. Berilmasa / null — tumansiz. Logistika javob bermasa — 503, kuryer yaratilmaydi."
           }
         },
         "required": [
@@ -20551,6 +20633,11 @@
             "type": "string",
             "example": "44",
             "description": "Courier user ID"
+          },
+          "branch_id": {
+            "type": "string",
+            "example": "10",
+            "description": "(1gxmqLj5) Faqat SUPERADMIN/ADMIN: tanlangan filial. Berilsa orderlar shu filialda bo'lishi kerak (aks holda 400). Menejer/registrator uchun e'tiborsiz (doim o'z filiali)."
           }
         },
         "required": [
@@ -21114,6 +21201,100 @@
         },
         "required": [
           "sato_code"
+        ]
+      },
+      "DistrictUsageCountsDto": {
+        "type": "object",
+        "properties": {
+          "orders": {
+            "type": "number",
+            "example": 5
+          },
+          "users": {
+            "type": "number",
+            "example": 1,
+            "description": "Mijoz/kuryer/market"
+          },
+          "branches": {
+            "type": "number",
+            "example": 0
+          }
+        },
+        "required": [
+          "orders",
+          "users",
+          "branches"
+        ]
+      },
+      "DistrictUsageResponseDto": {
+        "type": "object",
+        "properties": {
+          "statusCode": {
+            "type": "number",
+            "example": 200
+          },
+          "message": {
+            "type": "string",
+            "example": "success"
+          },
+          "data": {
+            "$ref": "#/components/schemas/DistrictUsageCountsDto"
+          }
+        },
+        "required": [
+          "statusCode",
+          "message",
+          "data"
+        ]
+      },
+      "DistrictInUseErrorDataDto": {
+        "type": "object",
+        "properties": {
+          "reason": {
+            "type": "string",
+            "example": "district_in_use",
+            "description": "Mashina kodi (matnni emas, shuni tekshiring)"
+          },
+          "usage": {
+            "type": "object",
+            "example": {
+              "orders": 5,
+              "users": 1,
+              "branches": 0,
+              "transfer_batches": 0
+            },
+            "description": "Bog'langan tirik yozuvlar soni ({ kalit: son })",
+            "additionalProperties": {
+              "type": "number"
+            }
+          }
+        },
+        "required": [
+          "reason"
+        ]
+      },
+      "DistrictInUseErrorResponseDto": {
+        "type": "object",
+        "properties": {
+          "statusCode": {
+            "type": "number",
+            "example": 400
+          },
+          "message": {
+            "type": "string",
+            "example": "Bu tumanda 5 ta buyurtma, 1 ta foydalanuvchi (mijoz/kuryer/market) bor, shuning uchun uni o'chirib bo'lmaydi. Avval tumanlarni birlashtiring (bu tumanni boshqa tumanga qo'shing) yoki buyurtma va foydalanuvchilarni boshqa tumanga ko'chiring."
+          },
+          "data": {
+            "$ref": "#/components/schemas/DistrictInUseErrorDataDto"
+          },
+          "trace_id": {
+            "type": "string",
+            "example": "7d0c2a4e-1b2f-4c3d-9e8f-0a1b2c3d4e5f"
+          }
+        },
+        "required": [
+          "statusCode",
+          "message"
         ]
       },
       "MergeDistrictRequestDto": {
