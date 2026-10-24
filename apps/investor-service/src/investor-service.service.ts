@@ -575,12 +575,16 @@ export class InvestorServiceService {
     if (fromDate && toDate && fromDate > toDate) {
       this.badRequest('from_date must be less than or equal to to_date');
     }
+    let range: [Date, Date] | null = null;
     if (fromDate && toDate) {
-      where.invested_at = Between(fromDate, toDate);
+      range = [fromDate, toDate];
     } else if (fromDate) {
-      where.invested_at = Between(fromDate, new Date());
+      range = [fromDate, new Date()];
     } else if (toDate) {
-      where.invested_at = Between(new Date(0), toDate);
+      range = [new Date(0), toDate];
+    }
+    if (range) {
+      where.invested_at = Between(range[0], range[1]);
     }
 
     const [items, total] = await this.investmentRepo.findAndCount({
@@ -590,9 +594,19 @@ export class InvestorServiceService {
       take: limit,
     });
 
+    // (su4IYGCN) `range_amount` — ro'yxat filtri bilan AYNAN bir xil
+    // `invested_at` oralig'idagi yig'indi (sahifadan qat'i nazar); oraliq
+    // berilmasa — `total_amount` ga teng. `total_amount` avvalgidek butun
+    // davr uchun. Ikkalasi bitta so'rovda (shartli SUM).
     const totalAmountRaw = await this.investmentRepo
       .createQueryBuilder('investment')
       .select('COALESCE(SUM(investment.amount), 0)', 'total')
+      .addSelect(
+        range
+          ? 'COALESCE(SUM(CASE WHEN investment.invested_at BETWEEN :range_from AND :range_to THEN investment.amount ELSE 0 END), 0)'
+          : 'COALESCE(SUM(investment.amount), 0)',
+        'range_total',
+      )
       .where('investment.isDeleted = :isDeleted', { isDeleted: false })
       .andWhere(
         query?.investor_id ? 'investment.investor_id = :investor_id' : '1=1',
@@ -602,7 +616,10 @@ export class InvestorServiceService {
             : undefined,
         },
       )
-      .getRawOne<{ total: string }>();
+      .setParameters(
+        range ? { range_from: range[0], range_to: range[1] } : {},
+      )
+      .getRawOne<{ total: string; range_total: string }>();
 
     return successRes({
       items,
@@ -614,6 +631,7 @@ export class InvestorServiceService {
       },
       summary: {
         total_amount: Number(totalAmountRaw?.total ?? 0),
+        range_amount: Number(totalAmountRaw?.range_total ?? 0),
       },
     });
   }

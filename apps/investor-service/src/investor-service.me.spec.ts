@@ -33,6 +33,7 @@ function makeQb(raw: Record<string, unknown>) {
     where: jest.fn().mockReturnThis(),
     andWhere: jest.fn().mockReturnThis(),
     groupBy: jest.fn().mockReturnThis(),
+    setParameters: jest.fn().mockReturnThis(),
     getRawOne: jest.fn().mockResolvedValue(raw),
     getRawMany: jest.fn().mockResolvedValue([]),
   };
@@ -377,6 +378,95 @@ describe('vpKijXce — /investors/me/investments va /me/profits', () => {
     await expectStatus(service.getMyProfits(INVESTOR_REQ), 404);
     expect(investmentRepo.findAndCount).not.toHaveBeenCalled();
     expect(profitShareRepo.findAndCount).not.toHaveBeenCalled();
+  });
+});
+
+describe('su4IYGCN — GET /investors/me/investments: summary.range_amount', () => {
+  it('oraliq berilsa — range_amount shu oraliq yig‘indisi, total_amount butun davr', async () => {
+    const { service, investmentRepo, investmentQbs } = makeService({
+      investmentAgg: { total: '5000000', range_total: '1200000' },
+    });
+    const res: any = await service.getMyInvestments(INVESTOR_REQ, {
+      from_date: '2026-09-01',
+      to_date: '2026-09-30',
+    });
+
+    expect(res.data.summary).toEqual({
+      total_amount: 5000000,
+      range_amount: 1200000,
+    });
+    // Ro'yxat filtri va range_amount — bir xil chegaralar.
+    const where = investmentRepo.findAndCount.mock.calls[0][0].where;
+    const [from, to] = where.invested_at.value;
+    const qb = investmentQbs[0];
+    expect(qb.addSelect.mock.calls[0][0]).toMatch(
+      /CASE WHEN investment\.invested_at BETWEEN :range_from AND :range_to/,
+    );
+    expect(qb.addSelect.mock.calls[0][1]).toBe('range_total');
+    expect(qb.setParameters).toHaveBeenCalledWith({
+      range_from: from,
+      range_to: to,
+    });
+    expect(from).toEqual(new Date('2026-09-01'));
+    expect(to).toEqual(new Date('2026-09-30'));
+    // Doira — o'z investori.
+    expect(qb.andWhere).toHaveBeenCalledWith(
+      'investment.investor_id = :investor_id',
+      { investor_id: '7' },
+    );
+  });
+
+  it('faqat from_date — oraliq bugungacha; faqat to_date — boshidan', async () => {
+    const { service, investmentQbs } = makeService({
+      investmentAgg: { total: '10', range_total: '4' },
+    });
+    await service.getMyInvestments(INVESTOR_REQ, { from_date: '2026-09-01' });
+    let params = investmentQbs[0].setParameters.mock.calls[0][0];
+    expect(params.range_from).toEqual(new Date('2026-09-01'));
+    expect(params.range_to.getTime()).toBeLessThanOrEqual(Date.now());
+
+    await service.getMyInvestments(INVESTOR_REQ, { to_date: '2026-09-30' });
+    params = investmentQbs[1].setParameters.mock.calls[0][0];
+    expect(params.range_from).toEqual(new Date(0));
+    expect(params.range_to).toEqual(new Date('2026-09-30'));
+  });
+
+  it('oraliq berilmasa — range_amount = total_amount (shartsiz SUM)', async () => {
+    const { service, investmentQbs } = makeService({
+      investmentAgg: { total: '700', range_total: '700' },
+    });
+    const res: any = await service.getMyInvestments(INVESTOR_REQ);
+
+    expect(res.data.summary).toEqual({ total_amount: 700, range_amount: 700 });
+    const qb = investmentQbs[0];
+    expect(qb.addSelect).toHaveBeenCalledWith(
+      'COALESCE(SUM(investment.amount), 0)',
+      'range_total',
+    );
+    expect(qb.setParameters).toHaveBeenCalledWith({});
+  });
+
+  it('oraliqda investitsiya yo‘q — range_amount 0 (null emas)', async () => {
+    const { service } = makeService({
+      investmentAgg: { total: '700', range_total: null },
+    });
+    const res: any = await service.getMyInvestments(INVESTOR_REQ, {
+      from_date: '2020-01-01',
+      to_date: '2020-01-31',
+    });
+    expect(res.data.summary.range_amount).toBe(0);
+  });
+
+  it('noto‘g‘ri oraliq (from > to) — 400, yig‘indi so‘ralmaydi', async () => {
+    const { service, investmentRepo } = makeService();
+    await expectStatus(
+      service.getMyInvestments(INVESTOR_REQ, {
+        from_date: '2026-10-01',
+        to_date: '2026-09-01',
+      }),
+      400,
+    );
+    expect(investmentRepo.createQueryBuilder).not.toHaveBeenCalled();
   });
 });
 
