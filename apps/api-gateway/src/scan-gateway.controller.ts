@@ -24,8 +24,10 @@ import {
   ApiTags,
 } from '@nestjs/swagger';
 import { IsNotEmpty, IsString } from 'class-validator';
+import { Throttle } from '@nestjs/throttler';
 import { firstValueFrom, timeout, TimeoutError } from 'rxjs';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
+import { SCAN_THROTTLE } from './auth/scan-throttle';
 import {
   assertQrOrderVisible,
   canLookupOrderByQr,
@@ -117,6 +119,8 @@ export class ScanGatewayController {
   }
 
   @Get(':token')
+  // R6R8BLGA: filial bitta IP — ketma-ket kamera skani uchun yuqoriroq limit.
+  @Throttle(SCAN_THROTTLE)
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Resolve scanned QR token to order/batch/post' })

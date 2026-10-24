@@ -134,6 +134,86 @@ describe('GET finance/financial-balance/history — created_by_user', () => {
   });
 });
 
+/* eslint-disable @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-member-access -- mock mijozlar va `any` javob (fayldagi naqsh) */
+describe('GET finance/financial-balance/top-impacts — created_by_user (guzrGySp)', () => {
+  const build = (payload: unknown) => {
+    const financeClient: Client = { send: jest.fn(() => of(payload)) };
+    const identityClient: Client = {
+      send: jest.fn(() => of({ data: fullUser })),
+    };
+    const controller = new FinanceGatewayController(
+      financeClient as any,
+      identityClient as any,
+      { send: jest.fn() } as any,
+      { send: jest.fn() } as any,
+    );
+    return { controller, financeClient, identityClient };
+  };
+
+  it('items qatorlariga history bilan bir xil minimal created_by_user qo‘shiladi', async () => {
+    const { controller, financeClient, identityClient } = build({
+      statusCode: 200,
+      data: {
+        items: [
+          ledgerRow(1),
+          ledgerRow(2),
+          ledgerRow(3, { created_by: null, source_type: 'courier_payment' }),
+        ],
+        pagination: { total: 3, page: 1, limit: 20, totalPages: 1 },
+      },
+    });
+
+    const response: any = await controller.financialBalanceTopImpacts(
+      '2026-10-01',
+      '2026-10-31',
+      undefined,
+      undefined,
+      '1',
+      '20',
+    );
+
+    expect(financeClient.send).toHaveBeenCalledWith(
+      { cmd: 'finance.financial_balance.top_impacts' },
+      { from_date: '2026-10-01', to_date: '2026-10-31', page: 1, limit: 20 },
+    );
+    // Bir xil kiritgan — identity'ga bitta so'rov.
+    expect(identityClient.send).toHaveBeenCalledTimes(1);
+    expect(response.data.items[0].created_by_user).toEqual({
+      id: '1',
+      name: 'Dilshod',
+      role: 'superadmin',
+    });
+    expect(response.data.items[1].created_by_user).toEqual(
+      response.data.items[0].created_by_user,
+    );
+    expect(response.data.items[2].created_by_user).toBeNull();
+    expect(response.data.pagination).toEqual({
+      total: 3,
+      page: 1,
+      limit: 20,
+      totalPages: 1,
+    });
+    expect(JSON.stringify(response)).not.toMatch(/MAXFIY|phone_number/);
+  });
+
+  it('bo‘sh sahifa — identity chaqirilmaydi, javob o‘zgarmaydi', async () => {
+    const payload = {
+      statusCode: 200,
+      data: {
+        items: [],
+        pagination: { total: 0, page: 1, limit: 20, totalPages: 0 },
+      },
+    };
+    const { controller, identityClient } = build(payload);
+
+    const response: any = await controller.financialBalanceTopImpacts();
+
+    expect(identityClient.send).not.toHaveBeenCalled();
+    expect(response).toEqual(payload);
+  });
+});
+/* eslint-enable @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-member-access */
+
 describe('GET export/financial-balance.xlsx', () => {
   const setup = (total: number) => {
     const all = Array.from({ length: total }, (_, i) => ledgerRow(i + 1));

@@ -427,7 +427,8 @@ export class LogisticsServiceController {
   assignOrdersToCourier(
     @Payload()
     data: {
-      dto: { order_ids: string[]; courier_id: string };
+      // (1gxmqLj5) branch_id — ixtiyoriy, SUPERADMIN/ADMIN filial tanlovi.
+      dto: { order_ids: string[]; courier_id: string; branch_id?: string };
       requester: { id: string; roles?: string[] };
     },
     @Ctx() context: RmqContext,
@@ -777,6 +778,17 @@ export class LogisticsServiceController {
         payload.id,
         payload.target_district_id,
       ),
+    );
+  }
+
+  /** Is1zvHN7 — tumanga bog'langan buyurtma/foydalanuvchi/filial soni. */
+  @MessagePattern({ cmd: 'logistics.district.usage' })
+  districtUsage(
+    @Payload() payload: { id: string },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.logisticsService.getDistrictUsage(payload.id),
     );
   }
 

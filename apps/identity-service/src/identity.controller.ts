@@ -890,11 +890,16 @@ export class IdentityController {
 
   @MessagePattern({ cmd: 'identity.customer.search' })
   searchCustomers(
-    @Payload() payload: { search: string; limit?: number },
+    @Payload()
+    payload: { search: string; limit?: number; match_extra_number?: boolean },
     @Ctx() context: RmqContext,
   ) {
+    // 9444UAa8: `match_extra_number` faqat qat'iy `true` bilan (mijoz
+    // taklifi); buyurtmalar qidiruvi yubormaydi — natijasi o'zgarmagan.
     return this.executeAndAck(context, () =>
-      this.userService.searchCustomers(payload.search, payload.limit),
+      this.userService.searchCustomers(payload.search, payload.limit, {
+        matchExtraNumber: payload.match_extra_number === true,
+      }),
     );
   }
 

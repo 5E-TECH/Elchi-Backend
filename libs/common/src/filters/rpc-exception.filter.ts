@@ -9,7 +9,7 @@ import { RpcException } from '@nestjs/microservices';
 import { Response } from 'express';
 import { captureException } from '../sentry/sentry.helper';
 import { requestContext } from '../context/request-context';
-import { publicErrorFields } from './public-error-fields';
+import { publicErrorData, publicErrorFields } from './public-error-fields';
 
 @Catch(RpcException)
 export class RpcExceptionFilter implements ExceptionFilter {
@@ -45,6 +45,8 @@ export class RpcExceptionFilter implements ExceptionFilter {
 
     // (Elchi Pochta #3) AllExceptionsFilter bilan bir xil: ro'yxatdagi kod.
     const extras = publicErrorFields(error);
+    // (AF0fvJbw) Ixtiyoriy `data` — faqat `reason`/`usage`/`details`.
+    const data = publicErrorData(error);
     const traceId = requestContext.get()?.traceId;
 
     // Structured 5xx log (Audit observability P1). Most business logic runs in
@@ -57,6 +59,7 @@ export class RpcExceptionFilter implements ExceptionFilter {
       statusCode: status,
       message,
       ...extras,
+      ...(data ? { data } : {}),
       ...(traceId ? { trace_id: traceId } : {}),
     });
   }

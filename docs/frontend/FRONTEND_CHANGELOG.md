@@ -101,6 +101,229 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
   → Frontend: superadmin «Yetkazish tariflari» sahifasi (jadval + yangi
   versiya formasi + sozlamalar), buyurtma formasidagi «Yetkazish narxi
   (taxminiy)» bloki (6NYcXvGy) — `POST /delivery/quote`, debounce bilan.
+### 2026-10-24 — Foydalanuvchilar paketi (batch A)
+
+- [2026-10-24] ✏️ [gateway/identity] **kGIjOciz** — `GET /users` har
+  qatorida va `GET /users/:id` javobida filial obyektidan tashqari
+  `branch_id: string | null` ham (`branch: { id, name } | null` — 2026-10-23
+  dan, YEThmZBn). Qiymat `branch.id` bilan bir xil; filialsiz rol,
+  biriktirilmagan yoki filial xizmati javob bermasa — `null`.
+  🔧 FE: /all-users «Filial» ustuni va SA/admin detal sarlavhasi
+  `branch?.name` dan; filtr/solishtirish uchun `branch_id`.
+
+- [2026-10-24] ✏️ [gateway/identity] **2CBnPAeg** — menejerning
+  `GET /users` ro'yxati: filial ko'lami (kuryer va filial roli faqat menejer
+  filialiga biriktirilganlar; boshqa rollar to'liq) endi identity
+  so'rovida. `meta.total`, `meta.totalPages`, `meta.totalUsers` va
+  `meta.countsByRole` butun ko'lam bo'yicha, sahifalashdan OLDIN (ilgari
+  sahifadan keyin filtrlanib, `total` sahifada qolgan qatorlar soniga teng
+  edi va `countsByRole` ko'lamsiz edi). `?role=courier` tabi soni
+  `countsByRole.courier` bilan bir xil; `?role=branch` ham endi ko'lamda.
+  Superadmin/admin uchun o'zgarish yo'q.
+  🔧 FE: menejerda tab sonlarini yashirish shart emas — `countsByRole` dan
+  chizing.
+
+- [2026-10-24] 🆕 [gateway/identity] **yA31z7Rr** — `GET /users` yangi
+  query `telegram_linked=true|false` (katta-kichik harf farqsiz): `true` —
+  Telegram boti ulangan, `false` — ulanmagan (qatordagi `telegram_linked`
+  bilan aynan bir xil qoida). Boshqa filtrlar (`role`, `status`, `search`,
+  `region_id`, menejer ko'lami) bilan AND; `meta.total` / `countsByRole`
+  filtrdan keyin, sahifalash server tomonda. Bo'sh qiymat — filtr yo'q;
+  boshqa qiymat — **400** `"telegram_linked faqat true yoki false bo'lishi mumkin"`.
+  Ixtiyoriy `meta.telegram_linked_counts` qo'shilmadi (chip sonlari kerak
+  bo'lsa — alohida so'rov `?telegram_linked=…&limit=1` → `meta.total`).
+  🔧 FE: «Barchasi · Ulangan · Ulanmagan» chiplari shu parametrni yuborsin
+  (joriy sahifani frontendda filtrlamang).
+
+- [2026-10-24] ✏️ [identity] **x6IO746K** — market operatori marketi:
+  - `GET /users` qatorlari va `GET /users/:id`: `role = market_operator`
+    bo'lsa `market: { id, name } | null` (market o'chirilgan / topilmagan /
+    biriktirilmagan — `null`). Boshqa rollarda `market` kaliti YO'Q. Faqat
+    `id` va `name` — token, tariflar yo'q (GvL6ZFAd). Sahifa uchun bitta
+    so'rov (N+1 yo'q).
+  - `GET /auth/my-profile` (N13): operatorga `market: { id, name,
+    add_order } | null`.
+  🔧 FE: /all-users operator qatorida «Filial» o'rnida `market.name`
+  (telefon kartasida «· Baraka Shop»); operator kabinetida market nomi va
+  `add_order` — `my-profile.market` dan.
+
+- [2026-10-24] ✏️ [gateway/identity] **DtKKY0V8** — kuryer `district_id`:
+  - `POST /couriers` (`CreateCourierRequestDto`) — yangi ixtiyoriy
+    `district_id: string | null` (raqamli satr). Tuman mavjud va kuryer
+    viloyatiga (filial viloyati) tegishli bo'lishi kerak; viloyati yo'q (HQ)
+    kuryerda — faqat mavjudligi. Xatolar: **400** `"district_id raqamli ID
+    bo'lishi kerak"`, **400** `"Tuman topilmadi"`, **400** `"Tuman
+    foydalanuvchining viloyatiga tegishli emas"`, **503** logistika javob
+    bermasa — kuryer yaratilmaydi. Berilmasa / `null` — tumansiz.
+  - `PATCH /users/:id` (`UpdateAdminRequestDto` / identity `UpdateUserDto`)
+    — `district_id` 2026-10-23 dan bor (YEThmZBn), qoida bir xil;
+    o'zgarish yo'q.
+  🔧 FE (FY-5): kuryer yaratish formasida tuman tanlovi `district_id` bilan
+  yuborilsin.
+
+- [2026-10-24] ✏️ [gateway/identity] **9444UAa8** — `GET /customers/suggest`
+  endi qo'shimcha raqam (`extra_number`) bo'yicha ham topadi (asosiy
+  telefondagi kabi normallashtirilgan raqamlar; eski formatdagi yozuvlar ham).
+  Har taklifda yangi maydon `matched_by: "phone" | "extra_number" | "name"`
+  (ustuvorlik: asosiy telefon). Qo'shimcha raqam bo'yicha topilgan mijoz ham
+  market doirasidan o'tadi — shu marketda buyurtmasi bo'lmasa taklif
+  qilinmaydi (admin — doirasiz). Ichki `identity.customer.search` RPC'ga
+  ixtiyoriy `match_extra_number: true` qo'shildi; buyurtmalar ro'yxati
+  qidiruvi uni yubormaydi — natijasi o'zgarmagan.
+  🔧 FE (hiqRNhkI): `matched_by === "extra_number"` bo'lsa qatorda
+  «Qo'shimcha raqam: {extra_number}» belgisi (desktop ro'yxati va telefon
+  varaqasi); taxmin qilmang.
+
+### 2026-10-24 — «Buyurtmalar paketi (batch B)»: extra-cost so'rovchi/raqam, market operatori ruxsatlari, SA/admin biriktirish, transfer-batches jami
+
+- [2026-10-24] ✏️ [order] — `GET /orders/extra-cost-approvals` (va
+  `POST /orders/extra-cost-approvals/:id/approve|reject` javobidagi
+  `data.approval`) — har bir so'rovga YANGI maydonlar (0Ngp09FG):
+
+  ```json
+  {
+    "order_id": "76",
+    "order_number": "EL-100076",
+    "requested_by_user_id": "301",
+    "requested_by_role": "courier",
+    "requested_by": { "id": "301", "name": "Ali Kuryer" }
+  }
+  ```
+
+  `order_number` — mijozga ko'rinadigan raqam (ichki `order_id` emas).
+  `requested_by.name` — identity'dan; javob bermasa yoki foydalanuvchi
+  o'chirilgan bo'lsa `null` (ro'yxat baribir qaytadi). Kuryerning o'z 202
+  javobida (`approval_required`) `requested_by.name` doim `null`. Eski
+  maydonlar o'zgarmagan.
+  🔧 FE (`ExtraCostApprovals.tsx`): `№{order_id}` → `order_number`,
+  «rol · #user_id» → `requested_by.name ?? requested_by_role · #id`.
+
+- [2026-10-24] ✏️ [order] — `GET /orders/extra-cost-approvals`
+  MARKET_OPERATOR uchun ochildi, FAQAT o'qish (6QLF7nst): faqat o'zi
+  biriktirilgan market (identity `user.market_id`) so'rovlari; marketga
+  biriktirilmagan operator — 403 «Operator hech qaysi marketga
+  biriktirilmagan». `approve` / `reject` operatorga avvalgidek 403.
+  🔧 FE (MO-8): operator kabinetida ro'yxatni ko'rsating, «Tasdiqlash /
+  Rad etish» tugmalarini yashiring.
+
+- [2026-10-24] ✏️ [order] — `GET /orders/markets/:marketId/new`
+  MARKET_OPERATOR ga ochildi (nCAFnqIe, tanlov: backend yo'li —
+  `GET /orders?status=new` ga o'tish shart emas): `:marketId` operator
+  marketi bo'lishi shart; boshqa market — 403 «market_operator role cannot
+  query other market_id», biriktirilmagan — 403. Javob market roli bilan bir
+  xil (filial `source='branch'` buyurtmalarisiz, kuryer tarifi/ulushi va
+  filial ulushisiz).
+
+- [2026-10-24] ✏️ [order] — `POST /orders` MARKET_OPERATOR ga ochildi
+  (OfRSoRUX, ega qarori MO-S3 — qo'lda yaratish): market server tomonda
+  (operator marketi); tanadagi `market_id` E'TIBORSIZ (400 emas — jimgina
+  ustidan yoziladi, market roli bilan bir xil); marketga biriktirilmagan
+  operator — 400. `operator` bo'sh bo'lsa server operator ismini yozadi,
+  `operator_id` — operatorning o'zi (komissiya AI yo'li bilan bir xil).
+  `Idempotency-Key` ishlaydi. Javob — market proyeksiyasi. Market
+  `add_order: false` bo'lsa — 400. Qo'shimcha (N11): `GET /region`,
+  `GET /district` ham MARKET_OPERATOR ga ochildi (forma uchun).
+  🔧 FE (MO-7): operatorga «Qo'lda» tugmasini oching; `market_id`
+  yubormang (yuborilsa e'tiborsiz).
+
+- [2026-10-24] ✏️ [order/logistics] — `POST /orders/assign-to-courier`
+  SUPERADMIN/ADMIN ga ochildi (1gxmqLj5, (a) yo'l). Body'ga ixtiyoriy
+  `branch_id` (satr) qo'shildi:
+
+  ```json
+  { "order_ids": ["201", "202"], "courier_id": "55", "branch_id": "20" }
+  ```
+
+  SA/admin uchun qoidalar: barcha orderlar BITTA filialda (aks holda 400
+  «aralash filialdan»); kuryer AYNAN shu filialning COURIER a'zosi (aks
+  holda 400 «Courier ushbu filialga COURIER sifatida biriktirilmagan»);
+  `branch_id` berilsa — orderlar filialiga mos bo'lishi kerak (400
+  «Tanlangan filial …»). Holat/kuryer/tashqi posilka qoidalari menejerniki
+  bilan bir xil. Menejer/registrator xulqi o'zgarmagan (`branch_id` ularga
+  e'tiborsiz).
+  🔧 FE (`/dispatch`): SA/admin uchun «Biriktirish» ni qayta oching; filial
+  tanlansa `branch_id` ni yuboring, kuryerlar ro'yxatini shu filialdan oling.
+
+- [2026-10-24] 🔧 [branch/order] — `GET /transfer-batches` statussiz yoki
+  `status=PENDING`: `meta.total` / `meta.totalPages` endi HAQIQIY jami
+  (15N7AHkp). Bir yo'nalishdagi (manba, manzil, yo'nalish, hudud) PENDING
+  partiyalardan faqat eng yangisi qaytadi — yig'ish SQL'da, sahifalar
+  orasida takror yo'q. Tartib: `createdAt DESC, id DESC`. Javob shakli
+  o'zgarmagan.
+  🔧 FE: /returns «jami N ta paket» va sahifalash, /batches «Yangi» /
+  «Qaytarilgan» tab sonlari `total`/`totalPages` dan to'g'ri ishlaydi;
+  `fetchAllTransferBatches` dagi «bo'sh sahifagacha yurish» aylanmasini
+  `totalPages` ga qaytarsa bo'ladi.
+
+### 2026-10-24 — Moliya va boshqalar paketi (batch C) (guzrGySp, su4IYGCN, Is1zvHN7, yiFTzkzH, AF0fvJbw, ISeuwhfr, R6R8BLGA)
+
+- [2026-10-24] ✏️ [gateway] — **xato javobida ixtiyoriy `data`** (AF0fvJbw).
+  Servis xatoni sabab/son bilan tashlasa, konvertga `data` qo'shiladi — FAQAT
+  uch kalit, tozalangan holda:
+
+  ```json
+  {
+    "statusCode": 400,
+    "message": "Bu tumanda 5 ta buyurtma, 1 ta filial bor, shuning uchun uni o'chirib bo'lmaydi. …",
+    "data": {
+      "reason": "district_in_use",
+      "usage": { "orders": 5, "users": 0, "branches": 1, "transfer_batches": 0 }
+    },
+    "trace_id": "…"
+  }
+  ```
+
+  - `reason` — mashina kodi (`^[a-z][a-z0-9_]{0,63}$`; matnni emas, shuni
+    tekshiring). Hozir yuboriladiganlari: `district_in_use`
+    (`DELETE /district/:id`), `region_has_districts`, `region_in_use`
+    (`DELETE /region/:id`; `usage` da `posts` ham bor);
+  - `usage` — `{ kalit: son }` (bog'langan yozuvlar soni);
+  - `details` — tekis obyekt yoki tekis obyektlar ro'yxati (≤ 50), qiymatlar
+    faqat satr/son/boolean/null.
+
+  Boshqa kalitlar (masalan `hint`, `post_id`, `blocked`), stack va ichki
+  xabarlar CHIQMAYDI; hech biri qolmasa `data` umuman yo'q — konvert
+  avvalgidek `{ statusCode, message, code?, trace_id? }`. 🔧 FE: `data`
+  ixtiyoriy deb o'qing (`error.response.data.data?.reason`); o'chirish
+  oynasida sonlarni matndan emas, `data.usage` dan oling.
+- [2026-10-24] 🆕 [logistics] — `GET /district/:id/usage` (ADMIN, SUPERADMIN)
+  → `data: { orders, users, branches }` (Is1zvHN7) — tumanga bog'langan
+  O'CHIRILMAGAN buyurtma/foydalanuvchi (mijoz/kuryer/market)/filial soni;
+  `DELETE /district/:id` 400 javobidagi `data.usage` bilan AYNI sanoq.
+  Hammasi 0 → o'chirsa bo'ladi. 400 — `id` raqam emas; 404 — tuman yo'q;
+  503 — order/identity/branch servislaridan biri javob bermadi (sonlar
+  taxmin qilinmaydi, "0" ko'rsatmang). 🔧 FE: o'chirish/birlashtirish
+  oynasini ochishda shu bilan oldindan ko'rsating.
+- [2026-10-24] ✏️ [finance] — `GET /finance/financial-balance/top-impacts`
+  `data.items[]` qatorlarida `created_by_user: { id, name, role } | null`
+  (guzrGySp) — `financial-balance/history` bilan bir xil (avtomatik yozuvda
+  `null`). 🔧 FE: Balans → Tahlil «Kiritgan» ustunida `#id` o'rniga
+  `created_by_user.name`.
+- [2026-10-24] ✏️ [investor] — `GET /investors/me/investments`
+  `data.summary.range_amount: number` (su4IYGCN) — `from_date`/`to_date`
+  oralig'idagi investitsiyalar yig'indisi (ro'yxat filtri bilan bir xil
+  chegaralar, sahifadan qat'i nazar; oraliq berilmasa `total_amount` ga
+  teng; oraliqda yozuv yo'q — `0`). `total_amount` avvalgidek butun davr.
+  Xuddi shu maydon admin ro'yxatlarida ham bor (`GET /investments`,
+  `GET /investors/:investor_id/investments`) — o'sha umumiy hisob.
+- [2026-10-24] ✏️ [markets] — `GET /markets` MANAGER/REGISTRATOR/BRANCH
+  ko'rinishi: `{ id, name, status, phone_number, tariff_home, tariff_center,
+  default_tariff }` (yiFTzkzH; tarif yo'q bo'lsa `null`). Login, kassa,
+  sozlamalar avvalgidek yo'q; COURIER — `{ id, name, status }` (o'zgarmagan).
+  🔧 FE (CS-E): buyurtma yaratishda uyga/markazga narxni shu maydonlardan
+  ko'rsating.
+- [2026-10-24] ✏️ [search] — `GET /search` market operatori uchun (ISeuwhfr):
+  buyurtma hujjatlari endi BIRIKTIRILGAN MARKETI bo'yicha (ilgari operator
+  hech qaysi buyurtmani topmasdi). Market identity `user.market_id` dan
+  olinadi (so'rov parametri yo'q); biriktirilmagan bo'lsa buyurtma chiqmaydi,
+  boshqa natijalar (mahsulot, pochta, hudud) avvalgidek. Javob shakli
+  o'zgarmagan.
+- [2026-10-24] 🟢 [gateway] — skaner route'lari rate limiti (R6R8BLGA):
+  `GET /scan/:token`, `POST /orders/receive`, `POST /orders/scan-assign` —
+  per-IP limit 60 → **300/daqiqa** (`SCAN_THROTTLE_LIMIT`, global
+  `THROTTLE_LIMIT` dan past emas). Hisoblagich avvalgidek IP + route bo'yicha
+  (filial bitta IP ortida bir nechta telefon skanerlasa 429 olmasin). Boshqa
+  route'lar o'zgarmagan. FE o'zgarishi shart emas.
 
 ### 2026-10-24 — «Sessiyalar»: chiqarilgan qurilma SHU ZAHOTI login sahifasiga (socket `auth:session_revoked`) (Notion «Elchi Pochta» #3)
 

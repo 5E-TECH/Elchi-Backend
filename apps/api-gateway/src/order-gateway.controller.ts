@@ -47,6 +47,8 @@ import { FileInterceptor, FilesInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
 import { UserThrottlerGuard } from './auth/user-throttler.guard';
+import { SCAN_THROTTLE } from './auth/scan-throttle';
+import { Throttle } from '@nestjs/throttler';
 import { BodyStatusCodeInterceptor } from './body-status-code.interceptor';
 import { AiStatusPoller } from './ai/ai-status.poller';
 import { verifyAiOrders } from './ai-order/verify-ai-orders';
@@ -1907,6 +1909,11 @@ export class OrderGatewayController {
     RoleEnum.MARKET,
     RoleEnum.MANAGER,
     RoleEnum.BRANCH,
+    // (OfRSoRUX, ega qarori 2026-10-19 MO-S3) market operatori qo'lda ham
+    // yaratadi. Mantiq `createOrderInternal` da (AI yo'li bilan AYNI): market —
+    // identity `user.market_id` (tanadagi market_id E'TIBORSIZ), `operator_id`
+    // — operatorning o'zi, `operator` bo'sh bo'lsa — uning ismi.
+    RoleEnum.MARKET_OPERATOR,
   )
   @ApiBearerAuth()
   @ApiOperation({
@@ -1914,7 +1921,10 @@ export class OrderGatewayController {
     description:
       "gpCIsGjH: `Idempotency-Key` sarlavhasi bilan takroriy so'rov (ikki marta bosish, retry) ikkinchi buyurtma yaratmaydi — " +
       "keshlangan javob `idempotent_replay: true` bilan qaytadi; birinchisi hali bajarilayotgan bo'lsa 409. " +
-      'Kalitsiz — har so`rov alohida buyurtma (avvalgidek).',
+      'Kalitsiz — har so`rov alohida buyurtma (avvalgidek). ' +
+      'OfRSoRUX: MARKET_OPERATOR ham yaratadi — market server tomonda (operator biriktirilgan market; ' +
+      "tanadagi `market_id` e'tiborsiz, marketga biriktirilmagan operator — 400), `operator` bo'sh bo'lsa " +
+      'operator ismi yoziladi, javob market proyeksiyasida (kuryer tarifi/ulushi va filial ulushisiz).',
   })
   @ApiHeader({
     name: 'Idempotency-Key',
@@ -2830,6 +2840,8 @@ export class OrderGatewayController {
    * Filialsiz foydalanuvchi hech nima qabul qila olmaydi (fail-closed).
    */
   @Post('receive')
+  // R6R8BLGA: qabul skaneri — filial bitta IP, yuqoriroq per-IP limit.
+  @Throttle(SCAN_THROTTLE)
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(
     RoleEnum.SUPERADMIN,
@@ -4496,6 +4508,8 @@ export class OrderGatewayController {
 
   // fix3 RBAC-03 / CODE-04: kuryer, operator, mijoz va investor endi kira
   // olmaydi (ilgari har marketning NEW buyurtmalarini mijoz PII bilan olardi).
+  // (nCAFnqIe) MARKET_OPERATOR — faqat o'zi biriktirilgan market (identity
+  // `user.market_id`); boshqa market id si yoki biriktirilmagan — 403.
   @Get('markets/:marketId/new')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(
@@ -4505,9 +4519,16 @@ export class OrderGatewayController {
     RoleEnum.MANAGER,
     RoleEnum.BRANCH,
     RoleEnum.MARKET,
+    RoleEnum.MARKET_OPERATOR,
   )
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'NEW orders by market id' })
+  @ApiOperation({
+    summary: 'NEW orders by market id',
+    description:
+      "(nCAFnqIe) MARKET_OPERATOR — faqat o'zi biriktirilgan market (`:marketId` = operator marketi); " +
+      'boshqa market yoki marketga biriktirilmagan operator — 403. Javob market roli bilan bir xil ' +
+      "(kuryer tarifi/ulushi va filial ulushisiz, `source='branch'` buyurtmalarsiz).",
+  })
   @ApiParam({ name: 'marketId', description: 'Market ID (id)' })
   async findNewOrdersByMarket(
     @Param('marketId') marketId: string,
@@ -4520,6 +4541,27 @@ export class OrderGatewayController {
       String(req?.user?.sub ?? '') !== String(marketId)
     ) {
       throw new ForbiddenException('market role cannot query other market_id');
+    }
+    if (
+      normalizedRoles.includes(RoleEnum.MARKET_OPERATOR) &&
+      !normalizedRoles.includes(RoleEnum.MARKET) &&
+      !normalizedRoles.includes(RoleEnum.SUPERADMIN) &&
+      !normalizedRoles.includes(RoleEnum.ADMIN)
+    ) {
+      // (nCAFnqIe) operator marketi SERVER tomonda aniqlanadi.
+      const operatorMarketId = await this.resolveMarketOperatorMarketId(
+        req?.user as JwtUser,
+      );
+      if (!operatorMarketId) {
+        throw new ForbiddenException(
+          'Operator hech qaysi marketga biriktirilmagan',
+        );
+      }
+      if (operatorMarketId !== String(marketId ?? '').trim()) {
+        throw new ForbiddenException(
+          'market_operator role cannot query other market_id',
+        );
+      }
     }
     const isBranchScopedRequester =
       normalizedRoles.includes(RoleEnum.BRANCH) ||
@@ -4861,9 +4903,24 @@ export class OrderGatewayController {
    */
   @Get('extra-cost-approvals')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.MARKET, RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @Roles(
+    RoleEnum.MARKET,
+    RoleEnum.SUPERADMIN,
+    RoleEnum.ADMIN,
+    // (6QLF7nst) faqat O'QISH: o'zi biriktirilgan market so'rovlari.
+    // Tasdiqlash/rad etish (`:id/approve|reject`) operatorga YOPIQ.
+    RoleEnum.MARKET_OPERATOR,
+  )
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'List extra cost approval requests' })
+  @ApiOperation({
+    summary: 'List extra cost approval requests',
+    description:
+      '(0Ngp09FG) Har bir so\'rovda `order_number` ("EL-…", mijozga ko\'rinadigan raqam) va ' +
+      "`requested_by: { id, name }` (so'rovchi ismi; identity javob bermasa `name: null`). " +
+      'Eski maydonlar (`order_id`, `requested_by_user_id`, `requested_by_role`) o`zgarmagan. ' +
+      "(6QLF7nst) MARKET_OPERATOR — faqat o'qish, faqat o'zi biriktirilgan market so'rovlari " +
+      "(marketga biriktirilmagan bo'lsa 403); approve/reject operatorga 403.",
+  })
   @ApiQuery({
     name: 'status',
     required: false,
@@ -4877,12 +4934,29 @@ export class OrderGatewayController {
     description:
       "(1tnpaIqd) true — faqat muddat o'tib AVTOMATIK tasdiqlanganlar (e'tiroz/rollback uchun alohida filtr)",
   })
-  listExtraCostApprovals(
+  async listExtraCostApprovals(
     @Query('status') status: string | undefined,
     @Req() req: { user: JwtUser },
     @Query('auto_approved') autoApproved?: string,
   ) {
-    return this.sendOrderWithTimeout(
+    const roles = this.normalizeRoles(req.user.roles);
+    // (6QLF7nst) operator marketi SERVER tomonda (identity `user.market_id`),
+    // so'rovdan olinmaydi. Market/SA/admin uchun o'zgarishsiz.
+    let operatorMarketId: string | undefined;
+    if (
+      roles.includes(RoleEnum.MARKET_OPERATOR) &&
+      !roles.includes(RoleEnum.MARKET) &&
+      !roles.includes(RoleEnum.SUPERADMIN) &&
+      !roles.includes(RoleEnum.ADMIN)
+    ) {
+      operatorMarketId = await this.resolveMarketOperatorMarketId(req.user);
+      if (!operatorMarketId) {
+        throw new ForbiddenException(
+          'Operator hech qaysi marketga biriktirilmagan',
+        );
+      }
+    }
+    const response: unknown = await this.sendOrderWithTimeout(
       { cmd: 'order.extra_cost_approval.list' },
       {
         status,
@@ -4894,10 +4968,12 @@ export class OrderGatewayController {
               : undefined,
         requester: {
           id: req.user.sub,
-          roles: this.normalizeRoles(req.user.roles),
+          roles,
+          ...(operatorMarketId ? { market_id: operatorMarketId } : {}),
         },
       },
     );
+    return response;
   }
 
   @Get(':id')
@@ -4956,6 +5032,8 @@ export class OrderGatewayController {
   }
 
   @Post('scan-assign')
+  // R6R8BLGA: kuryer skaneri — filial bitta IP, yuqoriroq per-IP limit.
+  @Throttle(SCAN_THROTTLE)
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(RoleEnum.COURIER)
   @ApiBearerAuth()
@@ -5013,9 +5091,23 @@ export class OrderGatewayController {
 
   @Post('assign-to-courier')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.BRANCH, RoleEnum.MANAGER, RoleEnum.REGISTRATOR)
+  @Roles(
+    RoleEnum.BRANCH,
+    RoleEnum.MANAGER,
+    RoleEnum.REGISTRATOR,
+    // (1gxmqLj5, (a) yo'l) SA/admin — istalgan filial posilkalarini o'sha
+    // filial kuryeriga (doira logistics-service'da buyurtmalardan olinadi).
+    RoleEnum.SUPERADMIN,
+    RoleEnum.ADMIN,
+  )
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Manager bulk-assign orders to one courier' })
+  @ApiOperation({
+    summary: 'Manager bulk-assign orders to one courier',
+    description:
+      "(1gxmqLj5) SUPERADMIN/ADMIN ham biriktiradi: barcha orderlar BITTA filialda bo'lishi, kuryer shu filialning " +
+      "COURIER a'zosi bo'lishi shart (aks holda 400). `branch_id` (ixtiyoriy) — UI'dagi filial tanlovi: berilsa " +
+      "orderlar filialiga mos bo'lishi kerak (400). Menejer/registrator uchun o'zgarishsiz (o'z filiali, `branch_id` e'tiborsiz).",
+  })
   @ApiBody({ type: AssignOrdersToCourierRequestDto })
   assignOrdersToCourier(
     @Body() dto: AssignOrdersToCourierRequestDto,

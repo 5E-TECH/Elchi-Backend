@@ -21,6 +21,7 @@ import { ClientProxy } from '@nestjs/microservices';
 import { Roles as RoleEnum } from '@app/common';
 import { firstValueFrom, map, TimeoutError, timeout } from 'rxjs';
 import {
+  ApiBadRequestResponse,
   ApiCreatedResponse,
   ApiBearerAuth,
   ApiBody,
@@ -34,6 +35,7 @@ import { JwtAuthGuard } from './auth/jwt-auth.guard';
 import { Public } from './auth/public.decorator';
 import { Roles } from './auth/roles.decorator';
 import { RolesGuard } from './auth/roles.guard';
+import { ParseBigintIdPipe } from './pipes/parse-bigint-id.pipe';
 import { projectOrderPayloadForRoles } from './auth/order-role-projection';
 import {
   AssignRegionLogistRequestDto,
@@ -41,6 +43,8 @@ import {
   CreateRegionRequestDto,
   CreateDistrictRequestDto,
   DeletePostOrdersRequestDto,
+  DistrictInUseErrorResponseDto,
+  DistrictUsageResponseDto,
   MergeDistrictRequestDto,
   ReassignPostRequestDto,
   PostIdRequestDto,
@@ -1064,6 +1068,7 @@ export class LogisticsGatewayController {
   }
 
   // ---------- Region ----------
+  // (OfRSoRUX / N11) MARKET_OPERATOR — qo'lda buyurtma formasi uchun.
   @Get('region')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(
@@ -1073,6 +1078,7 @@ export class LogisticsGatewayController {
     RoleEnum.REGISTRATOR,
     RoleEnum.MARKET,
     RoleEnum.COURIER,
+    RoleEnum.MARKET_OPERATOR,
   )
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Get all regions' })
@@ -1372,6 +1378,7 @@ export class LogisticsGatewayController {
   }
 
   // ---------- District ----------
+  // (OfRSoRUX / N11) MARKET_OPERATOR — qo'lda buyurtma formasi uchun.
   @Get('district')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(
@@ -1381,6 +1388,7 @@ export class LogisticsGatewayController {
     RoleEnum.REGISTRATOR,
     RoleEnum.MARKET,
     RoleEnum.COURIER,
+    RoleEnum.MARKET_OPERATOR,
   )
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Get all districts' })
@@ -1527,6 +1535,28 @@ export class LogisticsGatewayController {
       .pipe(timeout(8000));
   }
 
+  /**
+   * Is1zvHN7 — o'chirish/birlashtirish oynasi uchun: tumanga bog'langan
+   * tirik buyurtma/foydalanuvchi/filial soni (DELETE himoyasi bilan bir xil).
+   */
+  @Get('district/:id/usage')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.ADMIN, RoleEnum.SUPERADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: "Tumanga bog'langan buyurtma/foydalanuvchi/filial soni (Is1zvHN7)",
+    description:
+      "`data`: `{ orders, users, branches }` — faqat O'CHIRILMAGAN yozuvlar, `DELETE /district/:id` 400 javobidagi `data.usage` bilan bir xil sanoq. " +
+      "Hammasi 0 bo'lsa tumanni o'chirsa bo'ladi. 400 — id raqam emas; 404 — tuman yo'q; 503 — order/identity/branch servislaridan biri javob bermadi (sonlar taxmin qilinmaydi).",
+  })
+  @ApiParam({ name: 'id', description: 'District ID (id)' })
+  @ApiOkResponse({ type: DistrictUsageResponseDto })
+  getDistrictUsage(@Param('id', ParseBigintIdPipe) id: string) {
+    return this.logisticsClient
+      .send({ cmd: 'logistics.district.usage' }, { id })
+      .pipe(timeout(15000));
+  }
+
   @Delete('district/:id')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(RoleEnum.ADMIN, RoleEnum.SUPERADMIN)
@@ -1536,6 +1566,11 @@ export class LogisticsGatewayController {
       "Delete district — buyurtma/foydalanuvchi/filial bog'langan bo'lsa 400 (oNAE3LW9)",
   })
   @ApiParam({ name: 'id', description: 'District ID (id)' })
+  @ApiBadRequestResponse({
+    type: DistrictInUseErrorResponseDto,
+    description:
+      "AF0fvJbw: `data.reason = 'district_in_use'`, `data.usage` — bog'langan tirik yozuvlar soni",
+  })
   deleteDistrict(@Param('id') id: string) {
     return this.logisticsClient
       .send({ cmd: 'logistics.district.delete' }, { id })

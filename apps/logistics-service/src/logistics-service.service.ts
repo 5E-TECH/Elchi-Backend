@@ -3949,7 +3949,7 @@ export class LogisticsServiceService implements OnModuleInit {
 
   async assignOrdersToCourier(
     requester: RequesterContext,
-    dto: { order_ids: string[]; courier_id: string },
+    dto: { order_ids: string[]; courier_id: string; branch_id?: string | null },
   ) {
     const orderIds = Array.from(
       new Set(
@@ -3970,31 +3970,66 @@ export class LogisticsServiceService implements OnModuleInit {
       this.forbidden('Requester aniqlanmadi');
     }
 
-    const requesterAssignment = await this.findBranchAssignmentByUserId(
-      requesterId,
-      requester,
-    );
-    const requesterBranchId = String(
-      requesterAssignment?.branch_id ?? '',
-    ).trim();
-    const requesterBranchRole = String(requesterAssignment?.role ?? '')
-      .trim()
-      .toUpperCase();
+    const resolveOrderBranchScope = (order: {
+      holder_branch_id?: string | null;
+      branch_id?: string | null;
+    }) => String(order?.holder_branch_id ?? order?.branch_id ?? '').trim();
 
-    if (!requesterBranchId) {
-      this.forbidden('Manager yoki registrator filialga biriktirilmagan');
-    }
-    if (
-      requesterBranchRole !== 'MANAGER' &&
-      requesterBranchRole !== 'REGISTRATOR'
-    ) {
-      this.forbidden(
-        'Faqat MANAGER yoki REGISTRATOR orderlarni courierga ommaviy biriktira oladi',
+    const requesterRoles = (requester?.roles ?? []).map((role) =>
+      String(role).trim().toLowerCase(),
+    );
+    // (1gxmqLj5, (a) yo'l) SUPERADMIN/ADMIN filialga biriktirilmagan — doira
+    // FILIAL BIRIKTIRUVIDAN emas, BUYURTMALARDAN olinadi: barcha buyurtmalar
+    // BITTA filialda bo'lishi va kuryer AYNAN o'sha filialning COURIER a'zosi
+    // bo'lishi shart (menejer bilan bir xil invariant — kuryer faqat o'z filiali
+    // posilkasini oladi). `branch_id` (ixtiyoriy, UI'dagi filial tanlovi)
+    // berilsa — buyurtmalar filialiga mos bo'lishi kerak.
+    const isSystemPrivileged =
+      requesterRoles.includes(Roles.SUPERADMIN) ||
+      requesterRoles.includes(Roles.ADMIN);
+
+    let orders: OrderRow[] | null = null;
+    let scopeBranchId: string;
+    if (isSystemPrivileged) {
+      orders = await Promise.all(orderIds.map((id) => this.findOrderById(id)));
+      scopeBranchId = resolveOrderBranchScope(orders[0]);
+      if (!scopeBranchId) {
+        this.badRequest('Order(lar) filialga biriktirilmagan');
+      }
+      const selectedBranchId = String(dto?.branch_id ?? '').trim();
+      if (selectedBranchId && selectedBranchId !== scopeBranchId) {
+        this.badRequest(
+          'Tanlangan filial orderlar filialiga mos emas: faqat shu filial orderlarini tanlang',
+        );
+      }
+    } else {
+      const requesterAssignment = await this.findBranchAssignmentByUserId(
+        requesterId,
+        requester,
       );
+      const requesterBranchId = String(
+        requesterAssignment?.branch_id ?? '',
+      ).trim();
+      const requesterBranchRole = String(requesterAssignment?.role ?? '')
+        .trim()
+        .toUpperCase();
+
+      if (!requesterBranchId) {
+        this.forbidden('Manager yoki registrator filialga biriktirilmagan');
+      }
+      if (
+        requesterBranchRole !== 'MANAGER' &&
+        requesterBranchRole !== 'REGISTRATOR'
+      ) {
+        this.forbidden(
+          'Faqat MANAGER yoki REGISTRATOR orderlarni courierga ommaviy biriktira oladi',
+        );
+      }
+      scopeBranchId = requesterBranchId;
     }
 
     const branchUsers = await this.findBranchUsersByBranchId(
-      requesterBranchId,
+      scopeBranchId,
       requester,
     );
     const courierInBranch = branchUsers.find(
@@ -4011,21 +4046,16 @@ export class LogisticsServiceService implements OnModuleInit {
       );
     }
 
-    const orders = await Promise.all(
-      orderIds.map((id) => this.findOrderById(id)),
-    );
-
-    const resolveOrderBranchScope = (order: {
-      holder_branch_id?: string | null;
-      branch_id?: string | null;
-    }) => String(order?.holder_branch_id ?? order?.branch_id ?? '').trim();
+    if (!orders) {
+      orders = await Promise.all(orderIds.map((id) => this.findOrderById(id)));
+    }
 
     const firstBranchId = resolveOrderBranchScope(orders[0]);
     if (!firstBranchId) {
       this.badRequest('Order(lar) filialga biriktirilmagan');
     }
 
-    if (firstBranchId !== requesterBranchId) {
+    if (firstBranchId !== scopeBranchId) {
       this.forbidden(
         "Manager/registrator faqat o'z filiali orderlarini biriktira oladi",
       );
@@ -4222,7 +4252,7 @@ export class LogisticsServiceService implements OnModuleInit {
         courier_id: courierId,
         order_count: orderIds.length,
         order_ids: orderIds.slice(0, 10),
-        branch_id: requesterBranchId,
+        branch_id: scopeBranchId,
         post_id: String(targetPost.id),
         post_created: createdNewPost,
       },
@@ -5390,6 +5420,29 @@ export class LogisticsServiceService implements OnModuleInit {
     });
 
     return successRes({ id }, 200, 'District deleted');
+  }
+
+  /**
+   * Is1zvHN7 — `GET /district/:id/usage`: tumanga bog'langan TIRIK
+   * (o'chirilmagan) buyurtma/foydalanuvchi/filial soni. Sonlar `deleteDistrict`
+   * himoyasi (400 `data.usage`) bilan AYNAN bir xil manbadan — frontend
+   * o'chirish/birlashtirish oynasini oldindan ko'rsatadi. Bir servis javob
+   * bermasa — 503 (0 deb ko'rsatilmaydi: "bo'sh" deb aldab qo'ymaslik uchun).
+   */
+  async getDistrictUsage(id: string) {
+    const district = await this.districtRepo.findOne({ where: { id } });
+    if (!district) {
+      this.notFound('District not found');
+    }
+    const usage = await this.collectGeoUsage(
+      { district_id: String(id) },
+      'sanash',
+    );
+    return successRes({
+      orders: usage.orders,
+      users: usage.users,
+      branches: usage.branches,
+    });
   }
 
   async createRegion(dto: CreateRegionDto) {

@@ -1,4 +1,4 @@
-import { ApiProperty } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
 import {
   ArrayMaxSize,
@@ -64,6 +64,70 @@ export class MergeDistrictRequestDto {
   @IsString()
   @Matches(/^\d+$/)
   target_district_id!: string;
+}
+
+/**
+ * Is1zvHN7 — tumanga bog'langan TIRIK (o'chirilmagan) yozuvlar soni:
+ * `GET /district/:id/usage` javobi va `DELETE /district/:id` 400 `data.usage`.
+ */
+export class DistrictUsageCountsDto {
+  @ApiProperty({ example: 5 })
+  orders!: number;
+
+  @ApiProperty({ example: 1, description: 'Mijoz/kuryer/market' })
+  users!: number;
+
+  @ApiProperty({ example: 0 })
+  branches!: number;
+}
+
+export class DistrictUsageResponseDto {
+  @ApiProperty({ example: 200 })
+  statusCode!: number;
+
+  @ApiProperty({ example: 'success' })
+  message!: string;
+
+  @ApiProperty({ type: DistrictUsageCountsDto })
+  data!: DistrictUsageCountsDto;
+}
+
+/** AF0fvJbw — xato javobidagi ixtiyoriy `data` (faqat reason/usage/details). */
+export class DistrictInUseErrorDataDto {
+  @ApiProperty({
+    example: 'district_in_use',
+    description: 'Mashina kodi (matnni emas, shuni tekshiring)',
+  })
+  reason!: string;
+
+  @ApiPropertyOptional({
+    example: { orders: 5, users: 1, branches: 0, transfer_batches: 0 },
+    description: "Bog'langan tirik yozuvlar soni ({ kalit: son })",
+    type: 'object',
+    additionalProperties: { type: 'number' },
+  })
+  usage?: Record<string, number>;
+}
+
+/** AF0fvJbw — `DELETE /district/:id` 400: tuman ishlatilmoqda. */
+export class DistrictInUseErrorResponseDto {
+  @ApiProperty({ example: 400 })
+  statusCode!: number;
+
+  @ApiProperty({
+    example:
+      "Bu tumanda 5 ta buyurtma, 1 ta foydalanuvchi (mijoz/kuryer/market) bor, shuning uchun uni o'chirib bo'lmaydi. Avval tumanlarni birlashtiring (bu tumanni boshqa tumanga qo'shing) yoki buyurtma va foydalanuvchilarni boshqa tumanga ko'chiring.",
+  })
+  message!: string;
+
+  @ApiPropertyOptional({ type: DistrictInUseErrorDataDto })
+  data?: DistrictInUseErrorDataDto;
+
+  @ApiPropertyOptional({
+    example: '7d0c2a4e-1b2f-4c3d-9e8f-0a1b2c3d4e5f',
+    type: String,
+  })
+  trace_id?: string;
 }
 
 export class CreateRegionRequestDto {
