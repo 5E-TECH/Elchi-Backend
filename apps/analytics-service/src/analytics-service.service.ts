@@ -1204,6 +1204,12 @@ export class AnalyticsServiceService {
         averageOrderValue: avgOrderValue,
         averageFulfillmentHours: fulfillmentHours,
         onTimeRate,
+        // (yrLt5oMi) SLA maxraji: davrda yetkazilgan (sotilgan) buyurtmalar
+        // soni. 0 bo'lsa `onTimeRate`/`averageFulfillmentHours` dagi 0 —
+        // "o'lchanmagan" (yetkazish yo'q), «0% · past» EMAS. Minimal variant:
+        // `onTimeRate` raqamligicha qoladi (eski FE buzilmaydi), FE
+        // `deliveryCount === 0` da «O'lchanmagan» chizadi.
+        deliveryCount,
         cancellationRate,
         courierEfficiency,
         marketRating: topMarketsData,
