@@ -986,7 +986,9 @@ export class ApiGatewayController {
       'User list. YEThmZBn / kGIjOciz: har qatorda `branch_id: string | null` ' +
       'va `branch: { id, name } | null` — kuryer / menejer / registrator / ' +
       'filial xodimining filiali (boshqa rollar va filial xizmati javob ' +
-      'bermasa — null).',
+      'bermasa — null). x6IO746K: `role = market_operator` qatorlarida ' +
+      '`market: { id, name } | null` (market o`chirilgan / topilmagan — null; ' +
+      'boshqa rollarda kalit yo`q).',
   })
   async getUsers(
     @Query('search') search?: string,
@@ -1222,7 +1224,8 @@ export class ApiGatewayController {
     description:
       'User by id. kGIjOciz: `branch_id: string | null` va `branch: { id, ' +
       'name } | null` (kuryer / menejer / registrator / filial xodimi; ' +
-      'boshqa rollar — null).',
+      'boshqa rollar — null). x6IO746K: market operatorida `market: { id, ' +
+      'name } | null`.',
   })
   @ApiNotFoundResponse({ description: 'Not found' })
   async getUserById(@Param('id') id: string, @Req() req?: { user?: JwtUser }) {

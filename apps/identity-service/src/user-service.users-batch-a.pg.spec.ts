@@ -9,6 +9,8 @@ import { UserServiceService } from './user-service.service';
  *     countsByRole filial doirasida, sahifalashdan oldin.
  *   - yA31z7Rr: `telegram_linked` filtri — sahifalash va total to'g'ri,
  *     javobdagi `telegram_linked` bilan bir xil qoida.
+ *   - x6IO746K: market operatori qatorida `market: { id, name } | null`
+ *     (bitta IN so'rovi, faqat ochiq maydonlar).
  *
  * Ishga tushirish (lokal, `_test` bilan tugaydigan baza):
  *   IDENTITY_USERS_PG_TEST_URI=postgres://postgres@127.0.0.1:<port>/elchi_users_a_test
@@ -22,6 +24,8 @@ const localTestDatabase = (() => {
     url.pathname.endsWith('_test')
   );
 })();
+
+type Row = Record<string, unknown>;
 
 type Meta = {
   total: number;
@@ -233,6 +237,61 @@ type Meta = {
         expect(linked.meta.total).toBe(2);
         expect(notLinked.meta.total).toBe(1);
         expect(linked.meta.total + notLinked.meta.total).toBe(3);
+      });
+    });
+
+    describe('x6IO746K — operator qatorida market', () => {
+      let liveMarket: string;
+      let deletedMarket: string;
+      const operators: string[] = [];
+
+      beforeAll(async () => {
+        liveMarket = await add(Roles.MARKET, {
+          name: 'Baraka Shop',
+          market_tg_token: 'SECRET-TOKEN',
+          add_order: true,
+        });
+        deletedMarket = await add(Roles.MARKET, {
+          name: 'Yopilgan market',
+          isDeleted: true,
+        });
+        operators.push(
+          await add(Roles.MARKET_OPERATOR, { market_id: liveMarket }),
+          await add(Roles.MARKET_OPERATOR, { market_id: deletedMarket }),
+        );
+      });
+
+      it('⭐ ro`yxat: tirik market { id, name }, o`chirilgan — null; maxfiy maydon yo`q', async () => {
+        const res = await list({ role: 'market_operator' });
+        const byId = new Map(
+          res.items.map((row) => [String(row.id), row as unknown as Row]),
+        );
+
+        expect(byId.get(operators[0])!.market).toStrictEqual({
+          id: liveMarket,
+          name: 'Baraka Shop',
+        });
+        expect(byId.get(operators[1])!.market).toBeNull();
+        expect(JSON.stringify(res.items)).not.toContain('SECRET-TOKEN');
+      });
+
+      it('GET /users/:id va /auth/my-profile', async () => {
+        const detail = (await service.findUserById(operators[0], {
+          includeBranch: true,
+        })) as unknown as { data: Row };
+        const profile = (await service.findOwnProfile(
+          operators[0],
+        )) as unknown as { data: Row };
+
+        expect(detail.data.market).toStrictEqual({
+          id: liveMarket,
+          name: 'Baraka Shop',
+        });
+        expect(profile.data.market).toStrictEqual({
+          id: liveMarket,
+          name: 'Baraka Shop',
+          add_order: true,
+        });
       });
     });
   },

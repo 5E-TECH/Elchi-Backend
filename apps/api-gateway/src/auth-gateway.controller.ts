@@ -603,7 +603,12 @@ export class AuthGatewayController {
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Get current user profile' })
-  @ApiOkResponse({ description: 'Current user profile' })
+  @ApiOkResponse({
+    description:
+      'Current user profile. x6IO746K (N13): market operatorida ' +
+      '`market: { id, name, add_order } | null` (market o`chirilgan / ' +
+      'topilmagan — null; boshqa rollarda kalit yo`q).',
+  })
   @ApiUnauthorizedResponse({ description: 'Unauthorized' })
   myProfile(@Req() req: { user: JwtUser }) {
     return this.sendIdentity(

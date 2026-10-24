@@ -2566,9 +2566,16 @@ export class UserServiceService implements OnModuleInit {
     )
       ? this.getUserBranchAssignment(String(safeUser.id), safeUser.role)
       : Promise.resolve(null);
-    const [profileRegion, branchAssignment] = await Promise.all([
+    // x6IO746K — market operatori: market `{ id, name }` (ro'yxat qatori bilan
+    // bir xil). Faqat gateway (`include_branch`) yo'li — ichki chaqiruvlar
+    // uchun so'rov ham, shakl ham o'zgarmagan.
+    const isMarketOperator = user.role === Roles.MARKET_OPERATOR;
+    const [profileRegion, branchAssignment, marketById] = await Promise.all([
       this.getRegionById(safeUser.region_id),
       branchLookup,
+      isMarketOperator
+        ? this.findMarketSummaries([user.market_id])
+        : Promise.resolve(null),
     ]);
     const branch = this.toBranchSummary(branchAssignment);
     return successRes({
@@ -2578,7 +2585,55 @@ export class UserServiceService implements OnModuleInit {
       // `branch.id` yoki null.
       branch_id: branch?.id ?? null,
       branch,
+      ...(marketById ? { market: this.marketSummaryOf(user, marketById) } : {}),
     });
+  }
+
+  /**
+   * x6IO746K — market operatorlarining marketlari: BITTA `IN` so'rovi, faqat
+   * tirik (o'chirilmagan) `market` rolidagi qatorlar va faqat ochiq maydonlar
+   * (`id`, `name`, `add_order`) — `market_tg_token`, tariflar va boshqa
+   * maxfiy maydonlar O'QILMAYDI ham (GvL6ZFAd).
+   */
+  private async findMarketSummaries(
+    marketIds: Array<string | null | undefined>,
+  ): Promise<Map<string, { id: string; name: string; add_order: boolean }>> {
+    const ids = Array.from(
+      new Set(
+        marketIds
+          .map((id) => primitiveText(id).trim())
+          .filter((id) => /^\d{1,19}$/.test(id)),
+      ),
+    );
+    if (!ids.length) {
+      return new Map();
+    }
+    const markets = await this.users.find({
+      where: { id: In(ids), role: Roles.MARKET, isDeleted: false },
+      select: { id: true, name: true, add_order: true },
+    });
+    return new Map(
+      markets.map((market) => [
+        String(market.id),
+        {
+          id: String(market.id),
+          name: market.name,
+          add_order: Boolean(market.add_order),
+        },
+      ]),
+    );
+  }
+
+  /**
+   * x6IO746K — operator qatori uchun `{ id, name }`; market o'chirilgan /
+   * topilmagan / biriktirilmagan — `null`.
+   */
+  private marketSummaryOf(
+    operator: Pick<User, 'market_id'>,
+    marketById: Map<string, { id: string; name: string }>,
+  ): { id: string; name: string } | null {
+    const market = marketById.get(primitiveText(operator.market_id).trim());
+    return market ? { id: market.id, name: market.name } : null;
   }
 
   /**
@@ -2619,10 +2674,22 @@ export class UserServiceService implements OnModuleInit {
       ? await this.getUserBranchAssignment(String(safeUser.id), safeUser.role)
       : null;
 
+    // x6IO746K (N13) — market operatori o'z kabinetida marketini ko'radi:
+    // `market: { id, name, add_order } | null` (o'chirilgan / topilmagan —
+    // null). Boshqa rollarda kalit yo'q (avvalgi shakl).
+    let operatorMarket = {};
+    if (user.role === Roles.MARKET_OPERATOR) {
+      const marketById = await this.findMarketSummaries([user.market_id]);
+      operatorMarket = {
+        market: marketById.get(primitiveText(user.market_id).trim()) ?? null,
+      };
+    }
+
     return successRes({
       ...safeUser,
       region: profileRegion,
       branch: profileBranch,
+      ...operatorMarket,
     });
   }
 
@@ -2798,8 +2865,21 @@ export class UserServiceService implements OnModuleInit {
     const totalMarket = countsByRole[Roles.MARKET] ?? 0;
     const totalEmployees = totalUsers - totalMarket;
 
+    // x6IO746K — market operatori qatorlariga market `{ id, name }` (sahifa
+    // bo'yicha BITTA IN so'rovi, N+1 yo'q).
+    const marketById = await this.findMarketSummaries(
+      rows
+        .filter((row) => row.role === Roles.MARKET_OPERATOR)
+        .map((row) => row.market_id),
+    );
+
     return successRes({
-      items: rows.map((row) => this.sanitize(row)),
+      items: rows.map((row) => {
+        const safe = this.sanitize(row);
+        return row.role === Roles.MARKET_OPERATOR
+          ? { ...safe, market: this.marketSummaryOf(row, marketById) }
+          : safe;
+      }),
       meta: {
         page,
         limit,
