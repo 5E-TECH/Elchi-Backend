@@ -301,6 +301,14 @@ export const ACTIVITY_ACTION_REGISTRY: Readonly<
     'setting',
     'amber',
   ),
+  // (hY7uacJu) ombor moduli — kirim va inventarizatsiya (catalog-service).
+  'warehouse.stock_in': entry('Omborga kirim', 'logistics', 'upload', 'green'),
+  'warehouse.inventory': entry(
+    'Ombor inventarizatsiyasi',
+    'logistics',
+    'calculator',
+    'amber',
+  ),
   /**
    * (ILq3WNL1) Muvaffaqiyatli birlashtirish — alohida amal (ilgari oddiy
    * `deleted` + `new_value.merged_into` edi: jurnalda topib/filtrlab
@@ -441,6 +449,7 @@ const PREFIX_CATEGORY: ReadonlyArray<[string, ActivityActionCategory]> = [
   ['branch.', 'branch'],
   ['courier_', 'branch'],
   ['logistics.', 'logistics'],
+  ['warehouse.', 'logistics'],
   ['district.', 'logistics'],
   ['notification.', 'notification'],
   ['webhook.', 'integration'],
