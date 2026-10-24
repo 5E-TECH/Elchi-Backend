@@ -522,9 +522,20 @@ const socket = io(`${BASE_URL}/realtime`, {
   withCredentials: true,
 });
 ```
-- On connect the server emits `connected` `{ user_id, roles }`. Unauthorized
-  sockets receive `error` and are disconnected.
-- The socket auto-joins rooms `user:<id>` and `role:<role>`.
+- On connect the server emits `connected` `{ user_id, roles, session_id }`.
+  Unauthorized sockets receive `error` `{ message: 'Unauthorized', code:
+  'UNAUTHORIZED' }` and are disconnected.
+- The socket auto-joins rooms `user:<id>` and `role:<role>` (and
+  `session:<sid>` when the access token carries a session id).
+- **Session closed (2026-10-24):** when the socket's session is closed
+  (owner revoked it, «log out other devices», password change, logout of the
+  same session in another tab, server security reset) the server emits
+  `auth:session_revoked` `{ session_id, reason: 'revoked_by_owner' |
+  'password_changed' | 'logout' | 'security_reset' }` and ~250 ms later
+  disconnects the socket (`io server disconnect` — no auto-reconnect). Clear
+  auth and go to login («Sessiyangiz boshqa qurilmadan yopildi»). Connecting
+  with a closed session's token → `error` `{ message: 'Session revoked',
+  code: 'SESSION_REVOKED' }` + disconnect. See FRONTEND_CHANGELOG 2026-10-24.
 
 **Events you receive (server → client push):** event names are dynamic — any
 backend service can push `{ event, payload }` to a user, a role, or broadcast.

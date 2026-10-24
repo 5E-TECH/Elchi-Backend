@@ -23,6 +23,75 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-10-24 — «Sessiyalar»: chiqarilgan qurilma SHU ZAHOTI login sahifasiga (socket `auth:session_revoked`) (Notion «Elchi Pochta» #3)
+
+- [2026-10-24] 🆕 [gateway/realtime] — sessiya yopilganda o'sha qurilmaning
+  ochiq socketlari darhol xabar oladi va server tomonidan uziladi. Ilgari
+  qurilma faqat keyingi HTTP so'rovida (401 → refresh 401 → login) bilardi;
+  socket ulangan bo'sh tab bir necha daqiqa ekranda qolardi.
+
+  **Hodisa** (namespace `/realtime`, faqat `sid` li token bilan ulangan
+  socketlarga — login/refresh tokenlari; Telegram Mini App / bot tokenida
+  `sid` yo'q):
+
+  ```json
+  // event: "auth:session_revoked"
+  { "session_id": "3f2b8c1e-6a4d-4e7b-9c10-2d5f7a8b9c0d", "reason": "revoked_by_owner" }
+  ```
+
+  `reason`:
+  - `revoked_by_owner` — egasi boshqa qurilmadan «Chiqarish» yoki «Boshqa
+    barcha qurilmalardan chiqish» (`DELETE /auth/sessions/:id`,
+    `POST /auth/sessions/revoke-others`);
+  - `password_changed` — parol almashtirildi: o'zi (`PATCH /auth/my-profile`
+    — joriy qurilmadan BOSHQA hammasi) yoki admin tikladi (`PATCH /users/:id`
+    — o'sha foydalanuvchining HAMMA qurilmasi);
+  - `logout` — shu sessiya «Chiqish» qildi (`POST /auth/logout`): AYNI
+    sessiyaning boshqa tablari ham chiqadi; «Chiqish» bosgan tabning o'ziga
+    ham keladi — u allaqachon chiqyapti, e'tiborsiz qoldirsa bo'ladi;
+  - `security_reset` — server yopdi (parol / telefon / rol almashgan,
+    bloklangan yoki o'chirilgan akkaunt — soatlik tozalashda yoki shu
+    qurilma refresh qilganda).
+
+  **Uzish:** hodisadan ~250 ms keyin server socketni uzadi —
+  socket.io-client `disconnect` hodisasi `reason = "io server disconnect"`
+  bilan keladi va mijoz O'ZI QAYTA ULANMAYDI (qo'lda `socket.connect()`
+  chaqirmang). Hodisa har doim uzishdan OLDIN keladi. Boshqa qurilmalar va
+  boshqa sessiyalar socketlariga tegilmaydi.
+
+  **Ulanishni rad etish:** yopilgan sessiya tokeni bilan ulanish (masalan,
+  kick paytida tarmoq uzilgan bo'lsa va keyin qayta ulansa) HTTP bilan bir
+  xil qoida bo'yicha tekshiriladi va rad etiladi — avval `error` hodisasi,
+  keyin server uzadi:
+
+  ```json
+  // event: "error"
+  { "message": "Session revoked", "code": "SESSION_REVOKED" }
+  ```
+
+  Soxta / muddati o'tgan token — avvalgidek `error`, endi `code` bilan:
+  `{ "message": "Unauthorized", "code": "UNAUTHORIZED" }` (`message`
+  o'zgarmagan). `connected` hodisasiga yangi maydon: `{ user_id, roles,
+  session_id }` (`sid` siz tokenda `session_id: null`).
+
+  🔧 FE (`shared/lib/realtime.ts`):
+  1. `socket.on('auth:session_revoked', ({ session_id, reason }) => …)` —
+     `session_id` joriy tokenning `sid` i bo'lsa (yoki tekshirmasdan — server
+     faqat shu sessiyaga yuboradi): access tokenni va auth holatini tozalang,
+     refresh QILMANG, login sahifasiga o'ting va
+     «Sessiyangiz boshqa qurilmadan yopildi» deb ko'rsating
+     (`reason: 'logout'` — xabarsiz chiqish; `password_changed` — «Parol
+     o'zgartirildi, qayta kiring» deyish mumkin);
+  2. `socket.on('error', e => e?.code === 'SESSION_REVOKED' && …)` — xuddi
+     shu chiqish oqimi; `UNAUTHORIZED` — avvalgidek (token yangilab qayta
+     ulanish);
+  3. `disconnect` `reason === 'io server disconnect'` dan keyin avtomatik
+     qayta ulanishni yoqmang (1-banddagi chiqish allaqachon ishlagan).
+
+  HTTP xulqi o'zgarmagan: yopilgan sessiya tokeni keyingi so'rovda 401
+  «Session revoked», refresh ham 401 — socket ulanmagan tab avvalgidek shu
+  yo'l bilan chiqadi.
+
 ### 2026-10-23 — «Sessiyalar»: yangi qurilma 48 soat boshqalarni chiqara olmaydi; parol almashtirish boshqa qurilmalarni darhol chiqaradi (Notion «Elchi Pochta» #3)
 
 - [2026-10-23] ⚠️ [auth] — "Telegram'dagidek" 48 soatlik qulf: joriy

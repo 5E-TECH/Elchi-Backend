@@ -146,9 +146,37 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
   without `sid` (Telegram Mini App, bot actor) are not checked; epoch /
   password-fingerprint / expiry stay refresh-time checks (the hourly
   cleanup stamps epoch-reset rows, after which they are cut off too).
-  The socket.io realtime gateway verifies the JWT itself and is NOT part of
-  this check (a revoked device's open socket lives until it reconnects / the
-  FE logs out).
+  **Socket kick (2026-10-24):** the realtime gateway applies the same check.
+  A socket whose token has a `sid` first joins `session:<sid>`, then asks
+  `SessionRevocationService.isRevoked` (cache / `session_state`, fail open);
+  closed → `error { message: 'Session revoked', code: 'SESSION_REVOKED' }` +
+  `disconnect(true)` before it joins `user:`/`role:` (a kick that lands during
+  the check reaches it through the session room; a stale `active` reply loses
+  to a concurrent mark). `connected` carries `session_id`. Every place the
+  gateway learns closed ids goes through ONE helper,
+  `SessionRevocationService.kickSessions(ids, reason)`: marks them revoked
+  (UUIDs only, lower-cased, deduped) and notifies listeners — `RealtimeGateway`
+  emits `auth:session_revoked { session_id, reason }` to each `session:<sid>`
+  room and `SESSION_KICK_DISCONNECT_DELAY_MS` (250 ms) later calls
+  `in(rooms).disconnectSockets(true)` (event first, then the socket.io
+  DISCONNECT packet → client reason `io server disconnect`, no auto-reconnect).
+  Callers / reasons: revoke one + revoke-others → `revoked_by_owner`; logout →
+  `logout` (the current session's other tabs); `PATCH /auth/my-profile` /
+  `PATCH /users/:id` with a password (`applyRevokedSessionIds`) →
+  `password_changed`; identity's `{cmd:'auth.sessions.kick'}` event on the
+  gateway queue (`RealtimeController.sessionsKick`, ≤1000 ids, unknown reason →
+  `security_reset`) → `security_reset`. Identity publishes that event
+  (`SessionKickPublisher`, `GATEWAY` client, needs `RABBITMQ_GATEWAY_QUEUE`,
+  fire-and-forget, 2 s timeout, chunks of 500) only for closures outside the
+  gateway request path: hourly `cleanup` (`UPDATE … RETURNING s."id"`),
+  refresh-time `revokeOwn(…, 'security_reset')` and the stale-epoch device row
+  closed on re-login. An epoch bump alone (role/phone change, block, delete)
+  still does not close rows — those sockets are kicked when the refresh or the
+  hourly cleanup stamps them (HTTP keeps the same ≤1 h window).
+  Multi-instance: the gateway queue is a competing-consumer queue and there is
+  no socket.io adapter, so a kick only reaches sockets on the instance that
+  handled it (today: one instance); other instances reject reconnects and cut
+  HTTP within 30 s.
   **48-hour lock (2026-10-23):** revoke one / revoke-others load the
   caller's open session (`AuthSessionService.findOpen` → `created_at` = first
   login on that device, kept when the device re-logs in) and refuse with 403
@@ -387,6 +415,8 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
   - **Realtime:** first emitter of `{cmd:'realtime.notify'}` to the `GATEWAY` queue
     (socket.io `notification:new` to room `user:<sub>`); best-effort — when
     `RABBITMQ_GATEWAY_QUEUE` is unset the row still persists, push is skipped.
+    (identity-service also emits `{cmd:'auth.sessions.kick'}` to the same queue
+    since 2026-10-24 — see Sessions › Socket kick.)
   - Default channels when omitted: `[in_app, realtime]`. The DB row is the system
     of record regardless of channel outcome. `role`/`broadcast` targeting can't
     reach superadmin/customer (excluded by `identity.user.find_all`) — use
