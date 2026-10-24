@@ -47,6 +47,8 @@ import { FileInterceptor, FilesInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
 import { UserThrottlerGuard } from './auth/user-throttler.guard';
+import { SCAN_THROTTLE } from './auth/scan-throttle';
+import { Throttle } from '@nestjs/throttler';
 import { BodyStatusCodeInterceptor } from './body-status-code.interceptor';
 import { AiStatusPoller } from './ai/ai-status.poller';
 import { verifyAiOrders } from './ai-order/verify-ai-orders';
@@ -2830,6 +2832,8 @@ export class OrderGatewayController {
    * Filialsiz foydalanuvchi hech nima qabul qila olmaydi (fail-closed).
    */
   @Post('receive')
+  // R6R8BLGA: qabul skaneri — filial bitta IP, yuqoriroq per-IP limit.
+  @Throttle(SCAN_THROTTLE)
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(
     RoleEnum.SUPERADMIN,
@@ -4956,6 +4960,8 @@ export class OrderGatewayController {
   }
 
   @Post('scan-assign')
+  // R6R8BLGA: kuryer skaneri — filial bitta IP, yuqoriroq per-IP limit.
+  @Throttle(SCAN_THROTTLE)
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(RoleEnum.COURIER)
   @ApiBearerAuth()
