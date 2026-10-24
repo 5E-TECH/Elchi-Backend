@@ -6805,10 +6805,14 @@ export class LogisticsServiceService implements OnModuleInit {
     }
 
     void this.removeDistrictFromSearch(searchRef);
+    // (ILq3WNL1) alohida amal `district.merge` («Tuman birlashtirildi») —
+    // jurnalda topiladi/filtrlanadi. Eski `deleted` + `merged_into`
+    // yozuvlari migratsiyasiz qoladi.
     await this.activityLog.log({
       entity_type: 'District',
       entity_id: fromId,
-      action: ActivityAction.DELETED,
+      action: 'district.merge',
+      description: `Tuman birlashtirildi: ${from.name} (#${fromId}) → ${to.name} (#${toId})`,
       old_value: snapshot,
       new_value: { merged_into: toId },
       metadata: {

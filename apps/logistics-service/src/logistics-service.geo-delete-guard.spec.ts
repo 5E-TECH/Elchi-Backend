@@ -1,5 +1,5 @@
 import { Observable, of, throwError } from 'rxjs';
-import { publicErrorData } from '@app/common';
+import { ACTIVITY_ACTION_REGISTRY, publicErrorData } from '@app/common';
 import { LogisticsServiceService } from './logistics-service.service';
 
 /**
@@ -441,10 +441,11 @@ describe('mergeDistricts — birlashtirish (oNAE3LW9 TC5)', () => {
       { cmd: 'search.index.remove' },
       expect.objectContaining({ type: 'district', sourceId: '173' }),
     );
+    // (ILq3WNL1) alohida amal — oddiy `deleted` emas.
     expect(svc.activityLog.log).toHaveBeenCalledWith(
       expect.objectContaining({
         entity_id: '173',
-        action: 'deleted',
+        action: 'district.merge',
         new_value: { merged_into: '28' },
       }),
     );
@@ -838,6 +839,73 @@ describe('mergeDistricts — moved_live (vsmpTweI)', () => {
     const h = make({ rows: withDeletedInA(), legacyMovedLive: true });
     const res = await mergeOk(h);
     expect(res.data.moved_live).toEqual({ orders: 2, users: 0, branches: 1 });
+  });
+});
+
+/**
+ * ILq3WNL1 — faoliyat jurnali: muvaffaqiyatli birlashtirish `district.merge`
+ * («Tuman birlashtirildi»), chala qolgani `district.merge_compensation_failed`
+ * («Tuman birlashtirish chala qoldi»).
+ */
+describe('mergeDistricts — jurnal amali (ILq3WNL1)', () => {
+  type LogEntry = {
+    entity_type: string;
+    entity_id: string;
+    action: string;
+    description: string;
+    old_value: Record<string, unknown>;
+    new_value: Record<string, unknown>;
+    metadata: Record<string, unknown>;
+  };
+
+  it('⭐ muvaffaqiyat — district.merge: tavsif, old_value snapshot, new_value.merged_into, metadata sonlari', async () => {
+    const h = make({ rows: withDeletedInA() });
+    await mergeOk(h);
+    const log = activityLogOf(h);
+    expect(log).toHaveBeenCalledTimes(1);
+    const [entry] = log.mock.calls[0] as [LogEntry];
+    expect(entry.entity_type).toBe('District');
+    expect(entry.entity_id).toBe('173');
+    expect(entry.action).toBe('district.merge');
+    expect(entry.description).toBe(
+      'Tuman birlashtirildi: Andijon shahri (#173) → Andijon (#28)',
+    );
+    expect(entry.old_value).toEqual({
+      name: 'Andijon shahri',
+      sato_code: '1',
+      region_id: '3',
+    });
+    expect(entry.new_value).toEqual({ merged_into: '28' });
+    expect(Object.keys(entry.metadata).sort()).toEqual([
+      'moved',
+      'moved_live',
+      'source_before',
+      'target_after',
+      'target_before',
+    ]);
+    expect(ACTIVITY_ACTION_REGISTRY['district.merge']).toEqual(
+      expect.objectContaining({
+        label: 'Tuman birlashtirildi',
+        category: 'logistics',
+      }),
+    );
+  });
+
+  it('chala qolgan — district.merge_compensation_failed «Tuman birlashtirish chala qoldi»', async () => {
+    const h = make({
+      rows: { orders: fiveInA(), users: [order('301', '173', '3')] },
+      forwardFault: { users: { statusCode: 409 } },
+      compensateFault: { orders: 'timeout' },
+    });
+    await mergeError(h);
+    const [entry] = activityLogOf(h).mock.calls[0] as [LogEntry];
+    expect(entry.action).toBe('district.merge_compensation_failed');
+    expect(entry.description).toBe(
+      'Tuman birlashtirish chala qoldi: #173 → #28',
+    );
+    expect(
+      ACTIVITY_ACTION_REGISTRY['district.merge_compensation_failed'].label,
+    ).toBe('Tuman birlashtirish chala qoldi');
   });
 });
 
