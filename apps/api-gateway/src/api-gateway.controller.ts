@@ -597,6 +597,8 @@ export class ApiGatewayController {
               tariff_home: dto.tariff_home,
               tariff_center: dto.tariff_center,
               region_id: branchRegionId || undefined,
+              // DtKKY0V8 — tuman identity'da tekshiriladi (mavjud + viloyat).
+              district_id: dto.district_id ?? undefined,
               branch_id: branchId,
             },
             requester: this.toRequester(req),

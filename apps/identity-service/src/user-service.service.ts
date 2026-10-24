@@ -1957,7 +1957,7 @@ export class UserServiceService implements OnModuleInit {
         this.badRequest('Tuman topilmadi');
       }
       this.logger.warn(
-        `updateUser: logistics.district.find_by_id ${districtId} failed (${describeSagaError(error)})`,
+        `user district: logistics.district.find_by_id ${districtId} failed (${describeSagaError(error)})`,
       );
       throw new RpcException(
         errorRes(
@@ -3059,6 +3059,16 @@ export class UserServiceService implements OnModuleInit {
     this.assertRequesterCanCreateCourier(requester);
 
     await this.validateRegionExists(dto.region_id);
+    // DtKKY0V8 — tuman (ixtiyoriy): PATCH /users/:id dagi qoida — mavjud va
+    // kuryer viloyatiga tegishli (viloyatsiz HQ kuryeri — faqat mavjudligi);
+    // aks holda 400, logistika javob bermasa 503. Hammasi user yozilishidan
+    // OLDIN — xatoda kompensatsiya kerak emas.
+    const districtId =
+      dto.district_id === undefined ||
+      dto.district_id === null ||
+      dto.district_id === ''
+        ? null
+        : await this.resolveUserDistrictId(dto.district_id, dto.region_id);
     await this.ensurePhoneUnique(dto.phone_number);
 
     const hashedPassword = await this.bcryptEncryption.encrypt(dto.password);
@@ -3071,6 +3081,7 @@ export class UserServiceService implements OnModuleInit {
       salary: dto.salary,
       payment_day: dto.payment_day ?? this.getBusinessPaymentDay(),
       region_id: dto.region_id,
+      district_id: districtId,
       role: Roles.COURIER,
       status: Status.ACTIVE,
       // fix #3: created_by — manager egaligi uchun.
