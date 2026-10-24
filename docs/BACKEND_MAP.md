@@ -56,7 +56,7 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
 | **api-gateway** | — (no DB) | — | HTTP→RMQ proxy, auth guards, RBAC, throttling, Swagger, socket.io, webhooks, excel/printer |
 | **identity-service** | `identity_schema` | `user` | Users of every role, auth (login/refresh/logout/validate), profiles, markets (+telegram token), couriers/managers/registrators/admins/customers |
 | **order-service** | `order_schema` | `order`, `order_item`, `order_tracking`, `order_settlement`, `order_custody_event`, `branch` (mirror), `branch_transfer_batch(+item,+history)`, `order_batch_inbox_message` | The core. Order lifecycle, sell/cancel/return/rollback, per-order FIFO settlement, transfer batches, order analytics source |
-| **catalog-service** | `catalog_schema` | `product` | Market product catalog |
+| **catalog-service** | `catalog_schema` | `product`, `warehouses`, `warehouse_stock`, `stock_movements`, `stock_reservations` | Market product catalog + **temporary warehouse module** (hY7uacJu: regional-branch stock, stock-in/inventory, order reserve/out/release/return RPCs) |
 | **logistics-service** | `logistics_schema` | `region`, `district`, `post`, `delivery_tariff`, `delivery_pricing_settings` | Geo (regions/districts, SATO codes) + **posts** (courier delivery batches): create/send/receive/reassign/cancel/return-requests + **delivery pricing engine** (DAqXPeSy: versioned tariffs, formula settings, `logistics.delivery.quote`) |
 | **finance-service** | `finance_schema` | `cashbox`, `cashbox_history`, `shift`, `user_salary`, `operator_earning`, `operator_payment`, `financial_balance_history` | Cashboxes (main/courier/market/branch), payments, shifts, salaries, operator earnings, company P&L ledger |
 | **branch-service** | `branch_schema` | `branch`, `branch_config`, `branch_user` | Branch tree (HQ→regional→pickup), per-branch config (ownership/compensation), branch staff, transfer-batch orchestration, branch analytics/dashboard |
@@ -507,6 +507,74 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
     unprivileged roles). `findAll` `search` also matches exact `sku_code` /
     canonical barcode.
 
+- **Warehouse module (hY7uacJu, 2026-10-24, migration `1716000000143`)** —
+  `apps/catalog-service/src/warehouse/` (registered inside
+  `CatalogServiceModule`, not a separate Nest module — a second
+  `ActivityLogModule.forService` would double the retention cron). Temporary
+  until the marketplace: stock in pieces only, no cost/price.
+  - Tables: `warehouses` (one per branch — partial UNIQUE `branch_id WHERE
+    NOT is_deleted`; only an ACTIVE REGIONAL/HYBRID branch; `ACTIVE|PAUSED`,
+    CHECK `paused_at` set iff PAUSED; `low_stock_default` 5),
+    `warehouse_stock` (UNIQUE `(warehouse_id, product_id)`, `market_id` =
+    products.user_id copy, CHECK `on_hand >= 0`, `0 <= reserved <= on_hand`,
+    optional `low_stock_threshold`), `stock_movements` (APPEND-ONLY — BEFORE
+    UPDATE/DELETE trigger raises 55000; `idempotency_key` UNIQUE; `qty` sign
+    CHECK per type: IN/RETURN/MOVE_IN/RESERVE > 0, OUT/MOVE_OUT/RELEASE < 0,
+    ADJUST ≠ 0; `on_hand_after`/`reserved_after` snapshot; `ref_type`
+    stock_in|inventory|order|move), `stock_reservations` (order bandi:
+    RESERVED → RELEASED | OUT → RETURNED, `returned_qty` for partial returns;
+    partial UNIQUE `(order_id, product_id) WHERE status IN (RESERVED, OUT)`).
+    identity: `admins.can_order_from_warehouse` (default false). The migration
+    takes schema names in its constructor (defaults) so the pg spec runs in
+    its own schema.
+  - Locking (every write is one transaction): order ops take
+    `pg_advisory_xact_lock(hashtextextended('catalog.warehouse.order:<id>'))`
+    → warehouse row `FOR NO KEY UPDATE` (serialises with pause and other
+    writes of that warehouse) → stock rows `FOR UPDATE` in `product_id`
+    order → stock delta + movement row. Available = `on_hand − reserved`;
+    level `out` (≤0) / `low` (≤ threshold ?? low_stock_default) / `ok`.
+  - Admin/read RPCs (`@app/common` `WAREHOUSE_RPC`): `catalog.warehouse.
+    {create, update, pause, resume, find_all, find_by_id, find_by_ids, stock,
+    movements, lookup, stock_in, inventory, set_threshold, market_stock,
+    availability}`. `scope: {branch_id}` (gateway, MANAGER/BRANCH) limits to
+    the own branch (foreign → 404; empty/invalid scope → 403). Stock-in and
+    inventory need an `idempotency_key` (gateway `Idempotency-Key`): same key
+    + same lines → previous result `replayed: true`; same key + other lines →
+    409 `WAREHOUSE_IDEMPOTENCY_CONFLICT`. Lines by `product_id` or scanner
+    `code` (`ELC-P-…` sku_code / canonical barcode, same helpers as
+    `catalog.product.find_by_code`); any unresolved/ambiguous/deleted/
+    foreign-market line → 400, nothing written. Inventory `counted` is
+    absolute, reason required, `counted < reserved` → 409. Binding a factory
+    barcode stays `PATCH /product/:id { barcode }`.
+  - Order RPCs (for order-service — NOT wired yet; next PR):
+    `catalog.warehouse.resolve_source {region_id|district_id, items,
+    market_id?, requester?}` → `{source: WAREHOUSE|HQ, reason, warehouse,
+    items, shortages}` (read-only; district → `assigned_region ?? region_id`;
+    first ACTIVE warehouse of an eligible branch in that region with ALL items
+    available; else HQ — reasons NO_ITEMS / NO_REGION / NO_WAREHOUSE /
+    WAREHOUSE_PAUSED / INSUFFICIENT_STOCK / MARKET_NOT_ALLOWED (market or
+    market operator creator and the market switch is off — fail-closed) /
+    PRODUCT_INVALID); `reserve {order_id, warehouse_id, items, market_id?,
+    actor?}` (all-or-nothing; 409 `WAREHOUSE_STOCK_INSUFFICIENT` +
+    `shortages`, `WAREHOUSE_PAUSED`, `WAREHOUSE_ORDER_ALREADY_RESERVED`;
+    same warehouse + same items again → `already: true`); `release
+    {order_id}` (RESERVED → RELEASED; no reservation → `status: NONE`; OUT →
+    409 `WAREHOUSE_ORDER_ALREADY_OUT`); `out {order_id}` (on_hand−, reserved−;
+    RELEASED → 409 `WAREHOUSE_ORDER_RELEASED`); `return {order_id, items?,
+    idempotency_key?}` (OUT → on_hand+ into the SAME warehouse; RESERVED rows
+    are released; partial via `items`; repeat → `skipped`; several partial
+    returns need distinct keys); `order_state {order_id}`. Repeats never
+    change stock twice (state machine + unique movement keys; pg spec
+    proves parallel reserves never oversell).
+  - Activity log: `Warehouse` created/updated/status_change,
+    `warehouse.stock_in`, `warehouse.inventory`, `WarehouseStock` updated
+    (threshold). Order-driven movements are only in `stock_movements`.
+  - New env (catalog): `RABBITMQ_BRANCH_QUEUE` (default `branch_queue`),
+    `RABBITMQ_LOGISTICS_QUEUE` (default `logistics_queue`) — branch/region
+    lookups (30 s in-memory branch cache).
+  - Gateway `WarehouseGatewayController` — see FRONTEND_CHANGELOG
+    2026-10-24 «Ombor moduli» for the HTTP list and roles.
+
 ### analytics-service (no DB)
 - Pure aggregator. `analytics.{dashboard,kpi,revenue,report.orders,report.couriers,
   report.finance}` — fans out to order/finance/branch/identity patterns and
@@ -880,6 +948,7 @@ secret (secret never reaches the gateway).
 | All enums / state machines | `libs/common/enums/index.ts` |
 | Env contracts (Joi) | `libs/common/src/config/index.ts` |
 | Delivery price formula (pure) / tariffs | `libs/common/src/pricing/delivery-pricing.ts` / `apps/logistics-service/src/delivery-pricing/` |
+| Warehouse (stock, reservations, RPCs) | `libs/common/src/catalog/warehouse.ts` / `apps/catalog-service/src/warehouse/` / `apps/api-gateway/src/warehouse-gateway.controller.ts` |
 | RMQ client / ack helper | `libs/common/src/rmq/` |
 | Order logic & settlement | `apps/order-service/src/` |
 | Money / cashboxes / ledger | `apps/finance-service/src/` |
