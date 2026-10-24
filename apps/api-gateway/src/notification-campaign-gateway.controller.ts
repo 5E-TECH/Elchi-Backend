@@ -21,6 +21,7 @@ import {
   ApiBearerAuth,
   ApiBody,
   ApiHeader,
+  ApiOkResponse,
   ApiOperation,
   ApiParam,
   ApiTags,
@@ -46,6 +47,7 @@ import {
   ListNotificationTemplatesQueryDto,
   ListSentNotificationsQueryDto,
   SentNotificationDetailQueryDto,
+  SentNotificationItemDto,
   TelegramBroadcastRequestDto,
   UpsertNotificationTemplateRequestDto,
 } from './dto/notification-history.swagger.dto';
@@ -365,7 +367,11 @@ export class NotificationCampaignGatewayController {
   @Get('sent')
   @ApiOperation({
     summary:
-      'Yuborilgan xabarlar tarixi: sana, sarlavha, kim yubordi, qabul qiluvchilar, kanal natijasi',
+      'Yuborilgan xabarlar tarixi: sana, sarlavha, kim yubordi, kimga (audience — NwlmrcMf), qabul qiluvchilar, kanal natijasi',
+  })
+  @ApiOkResponse({
+    description: 'data.items[] elementi (audience — tafsilot bilan bir xil)',
+    type: SentNotificationItemDto,
   })
   listSent(@Query() query: ListSentNotificationsQueryDto) {
     return this.send('notification.dispatch_history.list', { ...query });

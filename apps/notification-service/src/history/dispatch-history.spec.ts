@@ -119,6 +119,14 @@ describe('7Vozou5x — dispatch tarixi (unit)', () => {
     expect(activityLog.log.mock.calls[0][0].entity_id).not.toBe('dispatch');
   });
 
+  it('(NwlmrcMf) bitta qabul qiluvchi — audience.recipient_id saqlanadi (ism/telefon YO‘Q)', async () => {
+    await service.dispatch(dto({ recipient_ids: ['11'] }));
+    expect(history.begin.mock.calls[0][0].audience).toEqual({
+      recipient_ids: 1,
+      recipient_id: '11',
+    });
+  });
+
   it('finish: holat (provayder yo‘q → inbox_only, "sent" EMAS) va kanal × holat javobga ham qaytadi', async () => {
     const res = (await service.dispatch(dto())) as {
       data: Record<string, unknown>;

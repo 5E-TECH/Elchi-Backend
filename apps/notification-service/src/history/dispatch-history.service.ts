@@ -263,12 +263,16 @@ export class DispatchHistoryService {
       });
     }
     const [items, total] = await qb.getManyAndCount();
-    const names = await this.namesFor(
-      items.map((item) => item.created_by).filter(Boolean) as string[],
-    );
+    // (NwlmrcMf) bitta odamga yuborilganlar — «Kimga: ism · rol»; ismlar
+    // created_by bilan BITTA identity so'rovida.
+    const singles = await this.singleRecipients(items);
+    const names = await this.namesFor([
+      ...(items.map((item) => item.created_by).filter(Boolean) as string[]),
+      ...[...singles.values()].map((recipient) => recipient.id),
+    ]);
     return successRes(
       {
-        items: items.map((item) => this.toPublic(item, names)),
+        items: items.map((item) => this.toPublic(item, names, singles)),
         meta: {
           page,
           limit,
@@ -326,16 +330,18 @@ export class DispatchHistoryService {
     ]);
     const countRow = (countRows as Array<{ n: number }>)[0];
     const undelivered = undeliveredRows as UndeliveredRow[];
+    const singles = await this.singleRecipients([row]);
     const names = await this.namesFor([
       ...undelivered.map((item) => String(item.recipient_id)),
       ...(row.created_by ? [row.created_by] : []),
+      ...[...singles.values()].map((recipient) => recipient.id),
     ]);
     return successRes(
       {
-        ...this.toPublic(row, names),
+        // (NwlmrcMf) `audience` — toPublic ichida (ro'yxat bilan bir xil shakl).
+        ...this.toPublic(row, names, singles),
         body: row.body,
         link: row.link,
-        audience: row.audience,
         error: row.error,
         // Jonli (DLR keyin o'zgartirgan bo'lsa ham) — saqlangan nusxa emas.
         channel_status: channelStatus,
@@ -377,9 +383,88 @@ export class DispatchHistoryService {
     );
   }
 
+  /**
+   * (NwlmrcMf) `audience.recipient_ids` = 1 bo'lgan dispatchlar uchun o'sha
+   * bitta qabul qiluvchi. Yangi yozuvlarda id `audience.recipient_id` da
+   * (audienceSummary); eski yozuvlar (faqat aniq ro'yxat — rol/segment/
+   * broadcast yo'q) — inbox qatoridan BITTA batch so'rov bilan.
+   */
+  private async singleRecipients(
+    rows: NotificationDispatch[],
+  ): Promise<Map<string, { id: string; role: string | null }>> {
+    const out = new Map<string, { id: string; role: string | null }>();
+    const lookup: string[] = [];
+    for (const row of rows) {
+      const audience = row.audience;
+      if (!audience || Number(audience.recipient_ids) !== 1) continue;
+      const stored = str(audience.recipient_id);
+      if (/^\d+$/.test(stored)) {
+        out.set(row.dispatch_id, { id: stored, role: null });
+      } else if (
+        Object.keys(audience).every((key) => key === 'recipient_ids')
+      ) {
+        lookup.push(row.dispatch_id);
+      }
+    }
+    if (!lookup.length) return out;
+    try {
+      const found = (await this.notifications.query(
+        `SELECT DISTINCT ON (n."dispatch_id")
+                n."dispatch_id", n."recipient_id", n."recipient_role"
+           FROM "notification_schema"."notifications" n
+          WHERE n."dispatch_id" = ANY($1::text[])
+          ORDER BY n."dispatch_id", n."id" ASC`,
+        [lookup],
+      )) as Array<{
+        dispatch_id: string;
+        recipient_id: unknown;
+        recipient_role: string | null;
+      }>;
+      for (const item of found) {
+        const id = str(item.recipient_id);
+        if (id)
+          out.set(String(item.dispatch_id), {
+            id,
+            role: item.recipient_role ?? null,
+          });
+      }
+    } catch (error) {
+      this.logger.warn(
+        `tarix: qabul qiluvchi olinmadi — ${(error as Error)?.message ?? String(error)}`,
+      );
+    }
+    return out;
+  }
+
+  /**
+   * (NwlmrcMf) «Kimga» ustuni: saqlangan auditoriya (rollar/segment/broadcast/
+   * recipient_ids soni — telefon/ism YO'Q) + bitta odam bo'lsa
+   * `recipient: { id, name, role }`. Ichki `recipient_id` chiqarilmaydi.
+   */
+  private publicAudience(
+    row: NotificationDispatch,
+    names: Map<string, { name: string | null; role: string | null }>,
+    singles: Map<string, { id: string; role: string | null }>,
+  ): Record<string, unknown> | null {
+    if (!row.audience) return null;
+    const audience: Record<string, unknown> = { ...row.audience };
+    delete audience.recipient_id;
+    const single = singles.get(row.dispatch_id);
+    if (single) {
+      const person = names.get(single.id);
+      audience.recipient = {
+        id: single.id,
+        name: person?.name ?? null,
+        role: single.role ?? person?.role ?? null,
+      };
+    }
+    return audience;
+  }
+
   private toPublic(
     row: NotificationDispatch,
     names: Map<string, { name: string | null; role: string | null }>,
+    singles: Map<string, { id: string; role: string | null }> = new Map(),
   ) {
     return {
       dispatch_id: row.dispatch_id,
@@ -405,6 +490,8 @@ export class DispatchHistoryService {
             role: row.created_by_role,
           }
         : null,
+      // (NwlmrcMf) «Kimga» — ro'yxatda ham, tafsilotda ham.
+      audience: this.publicAudience(row, names, singles),
       created_at: row.createdAt,
       finished_at: row.finished_at,
     };
