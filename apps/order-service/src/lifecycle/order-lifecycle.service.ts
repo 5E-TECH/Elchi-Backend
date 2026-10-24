@@ -1944,7 +1944,7 @@ export class OrderLifecycleService {
   }
 
   async listExtraCostApprovals(
-    requester: { id: string; roles?: string[] },
+    requester: { id: string; roles?: string[]; market_id?: string | null },
     filters?: { status?: string; auto_approved?: boolean },
   ) {
     const status = String(filters?.status ?? 'pending').toLowerCase();
@@ -1960,10 +1960,19 @@ export class OrderLifecycleService {
       !this.hasRole(requester, Roles.SUPERADMIN) &&
       !this.hasRole(requester, Roles.ADMIN)
     ) {
-      if (!this.hasRole(requester, Roles.MARKET)) {
+      if (this.hasRole(requester, Roles.MARKET)) {
+        where.market_id = String(requester.id);
+      } else if (this.hasRole(requester, Roles.MARKET_OPERATOR)) {
+        // (6QLF7nst) operator — faqat o'qish, faqat o'zi biriktirilgan market
+        // (gateway identity'dan qo'yadi). Market yo'q — hech narsa ko'rinmaydi.
+        const operatorMarketId = String(requester.market_id ?? '').trim();
+        if (!operatorMarketId) {
+          this.forbidden('Operator hech qaysi marketga biriktirilmagan');
+        }
+        where.market_id = operatorMarketId;
+      } else {
         this.forbidden("Qo'shimcha xarajat tasdiqlarini ko'rish mumkin emas");
       }
-      where.market_id = String(requester.id);
     }
     const approvals = await this.extraCostApprovalRepo.find({
       where,

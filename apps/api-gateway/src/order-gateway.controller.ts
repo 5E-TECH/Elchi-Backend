@@ -4861,14 +4861,23 @@ export class OrderGatewayController {
    */
   @Get('extra-cost-approvals')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.MARKET, RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @Roles(
+    RoleEnum.MARKET,
+    RoleEnum.SUPERADMIN,
+    RoleEnum.ADMIN,
+    // (6QLF7nst) faqat O'QISH: o'zi biriktirilgan market so'rovlari.
+    // Tasdiqlash/rad etish (`:id/approve|reject`) operatorga YOPIQ.
+    RoleEnum.MARKET_OPERATOR,
+  )
   @ApiBearerAuth()
   @ApiOperation({
     summary: 'List extra cost approval requests',
     description:
       '(0Ngp09FG) Har bir so\'rovda `order_number` ("EL-…", mijozga ko\'rinadigan raqam) va ' +
       "`requested_by: { id, name }` (so'rovchi ismi; identity javob bermasa `name: null`). " +
-      'Eski maydonlar (`order_id`, `requested_by_user_id`, `requested_by_role`) o`zgarmagan.',
+      'Eski maydonlar (`order_id`, `requested_by_user_id`, `requested_by_role`) o`zgarmagan. ' +
+      "(6QLF7nst) MARKET_OPERATOR — faqat o'qish, faqat o'zi biriktirilgan market so'rovlari " +
+      "(marketga biriktirilmagan bo'lsa 403); approve/reject operatorga 403.",
   })
   @ApiQuery({
     name: 'status',
@@ -4883,11 +4892,28 @@ export class OrderGatewayController {
     description:
       "(1tnpaIqd) true — faqat muddat o'tib AVTOMATIK tasdiqlanganlar (e'tiroz/rollback uchun alohida filtr)",
   })
-  listExtraCostApprovals(
+  async listExtraCostApprovals(
     @Query('status') status: string | undefined,
     @Req() req: { user: JwtUser },
     @Query('auto_approved') autoApproved?: string,
   ) {
+    const roles = this.normalizeRoles(req.user.roles);
+    // (6QLF7nst) operator marketi SERVER tomonda (identity `user.market_id`),
+    // so'rovdan olinmaydi. Market/SA/admin uchun o'zgarishsiz.
+    let operatorMarketId: string | undefined;
+    if (
+      roles.includes(RoleEnum.MARKET_OPERATOR) &&
+      !roles.includes(RoleEnum.MARKET) &&
+      !roles.includes(RoleEnum.SUPERADMIN) &&
+      !roles.includes(RoleEnum.ADMIN)
+    ) {
+      operatorMarketId = await this.resolveMarketOperatorMarketId(req.user);
+      if (!operatorMarketId) {
+        throw new ForbiddenException(
+          'Operator hech qaysi marketga biriktirilmagan',
+        );
+      }
+    }
     return this.sendOrderWithTimeout(
       { cmd: 'order.extra_cost_approval.list' },
       {
@@ -4900,7 +4926,8 @@ export class OrderGatewayController {
               : undefined,
         requester: {
           id: req.user.sub,
-          roles: this.normalizeRoles(req.user.roles),
+          roles,
+          ...(operatorMarketId ? { market_id: operatorMarketId } : {}),
         },
       },
     );
