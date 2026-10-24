@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import {
@@ -24,6 +24,7 @@ import {
   isSessionId,
   passwordFingerprint,
 } from './session-security';
+import { SessionKickPublisher } from './session-kick.publisher';
 
 export {
   hashRefreshToken,
@@ -135,7 +136,18 @@ export class AuthSessionService {
   constructor(
     @InjectRepository(UserSession)
     private readonly sessions: Repository<UserSession>,
+    /**
+     * (Elchi Pochta #3, 2026-10-24) gateway so'rov yo'lidan tashqarida
+     * `security_reset` bilan yopilgan sessiyalarni gateway'ga e'lon qiladi
+     * (socketlari darhol uziladi). Ixtiyoriy — spec'lar servisni usiz quradi.
+     */
+    @Optional() private readonly kicks?: SessionKickPublisher,
   ) {}
+
+  /** `security_reset` bilan yopilganlar — gateway socketlarini uzadi. */
+  private announceSecurityReset(sessionIds: string[]): void {
+    if (sessionIds.length) this.kicks?.publish(sessionIds, 'security_reset');
+  }
 
   private build(input: {
     user: User;
@@ -246,10 +258,14 @@ export class AuthSessionService {
     if (!existing) return null;
 
     if ((Number(existing.epoch) || 0) !== fresh.epoch) {
-      await this.sessions.update(
+      const reset = await this.sessions.update(
         { id: existing.id, revoked_at: IsNull() },
         { revoked_at: now, revoke_reason: 'security_reset' },
       );
+      // Shu qurilmaning eski tokenli boshqa tablari socketdan ham chiqadi.
+      if ((reset?.affected ?? 0) > 0) {
+        this.announceSecurityReset([String(existing.id).toLowerCase()]);
+      }
       return null;
     }
 
@@ -384,7 +400,13 @@ export class AuthSessionService {
         { ...where, user_id: String(userId), revoked_at: IsNull() },
         { revoked_at: now, revoke_reason: reason },
       );
-      revoked += result.affected ?? 0;
+      const affected = result?.affected ?? 0;
+      revoked += affected;
+      // (2026-10-24) Refresh'da aniqlangan xavfsizlik hodisasi — gateway
+      // bilmaydi, e'lon qilinadi. `logout` ni gateway o'zi chiqaradi.
+      if (reason === 'security_reset' && affected > 0 && 'id' in where) {
+        this.announceSecurityReset([String(where.id).toLowerCase()]);
+      }
     }
     return revoked;
   }
@@ -683,6 +705,9 @@ export class AuthSessionService {
    *  1. epoch'i eskirgan (xavfsizlik hodisasidan keyingi) ochiq qatorlarga
    *     `revoked_at` + `security_reset` yoziladi — epoch tekshiruvi baribir
    *     darhol amal qilgan, bu faqat bazadagi holatni haqiqatga moslaydi.
+   *     (2026-10-24) Yopilgan id lar gateway'ga e'lon qilinadi
+   *     (`auth.sessions.kick`) — ochiq socketlar `auth:session_revoked`
+   *     olib uziladi.
    *     Muddati o'tganlari ham (2026-10-23 dan): ochiq qator endi qurilma
    *     belgisi — u qurilma kalitini (`UQ_USER_SESSIONS_USER_DEVICE_OPEN`)
    *     band qilib turmasin;
@@ -697,7 +722,8 @@ export class AuthSessionService {
          FROM "identity_schema"."admins" a
         WHERE a."id" = s."user_id"
           AND s."revoked_at" IS NULL
-          AND s."epoch" <> a."session_epoch"`,
+          AND s."epoch" <> a."session_epoch"
+      RETURNING s."id"`,
       [now],
     );
     // Postgres drayveri UPDATE uchun `[rows, rowCount]` qaytaradi.
@@ -705,6 +731,8 @@ export class AuthSessionService {
       Array.isArray(resetResult) && typeof resetResult[1] === 'number'
         ? resetResult[1]
         : 0;
+    // (2026-10-24) Epoch hodisasidan keyin hali ochiq socketlar — darhol uziladi.
+    this.announceSecurityReset(returnedIds(resetResult));
 
     const cutoff = new Date(now.getTime() - SESSION_RETENTION_DAYS * DAY_MS);
     let deleted = 0;

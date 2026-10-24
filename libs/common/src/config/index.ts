@@ -207,6 +207,10 @@ export const identityValidationSchema = Joi.object({
     }),
   // ── OTP (rkz0yBxr). SMS notification-service orqali ketadi.
   RABBITMQ_NOTIFICATION_QUEUE: Joi.string().default('notification_queue'),
+  // (Elchi Pochta #3, 2026-10-24) gateway navbati — identity yopgan
+  // sessiyalarni (`security_reset`) `auth.sessions.kick` bilan e'lon qiladi,
+  // gateway ularning socketlarini uzadi. Ixtiyoriy: bo'sh — e'lon yo'q.
+  RABBITMQ_GATEWAY_QUEUE: Joi.string().allow('').optional(),
   // Kod va raqam hash'i uchun kalit; berilmasa ACCESS_TOKEN_KEY ishlatiladi.
   OTP_HASH_SECRET: Joi.string()
     .min(32)

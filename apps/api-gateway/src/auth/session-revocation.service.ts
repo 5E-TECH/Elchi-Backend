@@ -22,6 +22,55 @@ const DEFAULT_ACCESS_TOKEN_TTL_MS = 60 * 60 * 1000;
 
 type SessionState = 'active' | 'revoked' | 'unknown';
 
+const SESSION_ID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * (Elchi Pochta #3) Access token `sid` claim'i sessiya id si (UUID) bo'lsa —
+ * kichik harfda; aks holda `null` (Telegram Mini App, bot aktori, eski
+ * token — sessiya emas, tekshirilmaydi). HTTP (`JwtStrategy`) va socket
+ * (`RealtimeGateway`) bir xil qoida bilan.
+ */
+export function sessionIdClaim(value: unknown): string | null {
+  return typeof value === 'string' && SESSION_ID_RE.test(value)
+    ? value.toLowerCase()
+    : null;
+}
+
+/**
+ * (Elchi Pochta #3, 2026-10-24) Sessiya nega yopildi — socket
+ * `auth:session_revoked` hodisasining `reason` i:
+ *  - `revoked_by_owner` — egasi «Sessiyalar» bo'limidan chiqardi (bittasini
+ *    yoki «Boshqa barcha qurilmalardan chiqish»);
+ *  - `password_changed` — parol almashtirildi (o'zi yoki admin tikladi);
+ *  - `logout` — shu sessiyaning o'zi «Chiqish» qildi (boshqa tablari ham
+ *    chiqadi);
+ *  - `security_reset` — identity yopdi (xavfsizlik hodisasi: epoch, soatlik
+ *    tozalash).
+ */
+export const SESSION_KICK_REASONS = [
+  'revoked_by_owner',
+  'password_changed',
+  'logout',
+  'security_reset',
+] as const;
+export type SessionKickReason = (typeof SESSION_KICK_REASONS)[number];
+
+export function isSessionKickReason(
+  value: unknown,
+): value is SessionKickReason {
+  return (
+    typeof value === 'string' &&
+    (SESSION_KICK_REASONS as readonly string[]).includes(value)
+  );
+}
+
+/** Yopilgan sessiyalar tinglovchisi (socket qismi — `RealtimeGateway`). */
+export type SessionKickListener = (
+  sessionIds: string[],
+  reason: SessionKickReason,
+) => void;
+
 interface CacheEntry {
   state: SessionState;
   until: number;
@@ -61,7 +110,7 @@ export function accessTokenTtlMs(raw: string | number | undefined): number {
  */
 export function applyRevokedSessionIds<T>(
   response: T,
-  revocation?: Pick<SessionRevocationService, 'markRevoked'> | null,
+  revocation?: Pick<SessionRevocationService, 'kickSessions'> | null,
 ): T {
   if (!response || typeof response !== 'object' || Array.isArray(response)) {
     return response;
@@ -71,7 +120,9 @@ export function applyRevokedSessionIds<T>(
     return response;
   }
   const { revoked_session_ids: ids, ...rest } = record;
-  if (Array.isArray(ids)) revocation?.markRevoked(ids);
+  // (2026-10-24) Belgilash + o'sha qurilmalarning socketlari darhol
+  // `auth:session_revoked` (`password_changed`) olib uziladi.
+  if (Array.isArray(ids)) revocation?.kickSessions(ids, 'password_changed');
   return rest as T;
 }
 
@@ -100,12 +151,20 @@ export function applyRevokedSessionIds<T>(
  *
  * `sid` siz tokenlar (Telegram Mini App, bot aktori, deploy'dan oldingi)
  * bu yerga kelmaydi — ular sessiya emas.
+ *
+ * (2026-10-24) `kickSessions` — gateway yopilgan sessiya id larini qayerdan
+ * bilmasin (revoke endpointlari, logout, parol almashtirish, identity'ning
+ * `auth.sessions.kick` xabari) YAGONA kirish nuqtasi: keshda «yopilgan» +
+ * tinglovchilar (`RealtimeGateway` — o'sha sessiya socketlariga
+ * `auth:session_revoked`, keyin uzish). Qurilma keyingi HTTP so'rovini
+ * kutmay shu zahoti login sahifasiga chiqadi.
  */
 @Injectable()
 export class SessionRevocationService {
   private readonly logger = new Logger(SessionRevocationService.name);
   private readonly cache = new Map<string, CacheEntry>();
   private readonly inflight = new Map<string, Promise<SessionState>>();
+  private readonly kickListeners = new Set<SessionKickListener>();
   private readonly revokedTtlMs: number;
   private lastWarnAt = 0;
   private suppressedWarnings = 0;
@@ -148,6 +207,49 @@ export class SessionRevocationService {
         this.write(id.toLowerCase(), 'revoked');
       }
     }
+  }
+
+  /**
+   * (Elchi Pochta #3, 2026-10-24) Yopilgan sessiyalarni SHU ZAHOTI
+   * chiqarish: har biri keshda «yopilgan» (keyingi HTTP so'rov 401, socket
+   * qayta ulanishi rad etiladi), keyin tinglovchilar (socketlarga
+   * `auth:session_revoked` + uzish). Faqat UUID ko'rinishidagi id lar
+   * (kichik harfda, takrorsiz); qaytadi — shu id lar. Tinglovchi xatosi
+   * chaqiruvchiga (HTTP javobi) TA'SIR QILMAYDI — faqat ogohlantirish.
+   */
+  kickSessions(
+    sessionIds: Iterable<unknown> | null | undefined,
+    reason: SessionKickReason,
+  ): string[] {
+    const ids = [
+      ...new Set(
+        [...(sessionIds ?? [])]
+          .map((id) => sessionIdClaim(id))
+          .filter((id): id is string => id !== null),
+      ),
+    ];
+    if (!ids.length) return [];
+    this.markRevoked(ids);
+    for (const listener of this.kickListeners) {
+      try {
+        listener(ids, reason);
+      } catch (error) {
+        this.logger.warn(
+          `Sessiya socketlarini uzib bo'lmadi (${reason}): ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
+    }
+    return ids;
+  }
+
+  /** `kickSessions` tinglovchisi; qaytadi — obunani bekor qilish. */
+  onKick(listener: SessionKickListener): () => void {
+    this.kickListeners.add(listener);
+    return () => {
+      this.kickListeners.delete(listener);
+    };
   }
 
   /** Kuzatuv/spec uchun: keshdagi yozuvlar soni. */

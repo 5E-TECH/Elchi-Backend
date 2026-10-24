@@ -112,7 +112,8 @@ export class ApiGatewayController {
     @Inject('BRANCH') private readonly branchClient: ClientProxy,
     /**
      * (Elchi Pochta #3) Parol tiklanganda yopilgan sessiyalarni shu gateway
-     * keshida darhol belgilash. Ixtiyoriy — spec'lar controller'ni usiz quradi.
+     * keshida darhol belgilash va socketlarini uzish (`kickSessions`).
+     * Ixtiyoriy — spec'lar controller'ni usiz quradi.
      */
     @Optional() private readonly revocation?: SessionRevocationService,
   ) {}
@@ -1343,7 +1344,9 @@ export class ApiGatewayController {
     // Delete/status esa ushbu route'larda admin/superadmin-only (@Roles).
     // (Elchi Pochta #3) `current_session_id` — o'z parolini almashtirsa
     // joriy sessiya qolsin; parol tiklansa yopilgan sessiyalar shu gateway
-    // keshida darhol «yopilgan» (`applyRevokedSessionIds`).
+    // keshida darhol «yopilgan» (`applyRevokedSessionIds`), (2026-10-24)
+    // ularning ochiq socketlari `auth:session_revoked` (`password_changed`)
+    // olib uziladi.
     const response = await firstValueFrom(
       this.identityClient
         .send<unknown>(

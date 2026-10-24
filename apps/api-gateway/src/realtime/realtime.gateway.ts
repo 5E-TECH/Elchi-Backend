@@ -1,4 +1,4 @@
-import { Logger } from '@nestjs/common';
+import { Logger, OnModuleDestroy, Optional } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import {
   OnGatewayConnection,
@@ -10,12 +10,39 @@ import {
   ConnectedSocket,
 } from '@nestjs/websockets';
 import { Server, Socket } from 'socket.io';
+import {
+  SessionKickReason,
+  SessionRevocationService,
+  sessionIdClaim,
+} from '../auth/session-revocation.service';
 
 interface SocketUser {
   sub: string;
   username?: string;
   roles: string[];
   branch_id?: string | null;
+  /** (Elchi Pochta #3) Access token `sid` i; Telegram / eski tokenlarda `null`. */
+  sid: string | null;
+}
+
+/** (Elchi Pochta #3, 2026-10-24) Sessiya yopilganda socketga hodisa. */
+export const SESSION_REVOKED_EVENT = 'auth:session_revoked';
+
+/**
+ * `auth:session_revoked` emit qilingandan keyin socketlar shuncha ms o'tib
+ * uziladi — hodisa mijozga albatta yetib borsin (emit va uzish bir tick'da
+ * bo'lmasin; polling transportida ham navbatdagi javobda keladi).
+ */
+export const SESSION_KICK_DISCONNECT_DELAY_MS = 250;
+
+/** Sessiya xonasi: shu sessiya (`sid`) bilan ulangan barcha tab/socketlar. */
+export const sessionRoom = (sessionId: string): string =>
+  `session:${sessionId.toLowerCase()}`;
+
+/** Ulanish rad etilganda `error` hodisasi (keyin server uzadi). */
+export interface RealtimeConnectError {
+  message: string;
+  code: 'UNAUTHORIZED' | 'SESSION_REVOKED';
 }
 
 /**
@@ -27,13 +54,23 @@ interface SocketUser {
  * Every connection is JWT-authenticated with the same ACCESS_TOKEN_KEY the HTTP
  * guards use. On connect the socket joins `user:<sub>` and `role:<role>` rooms,
  * which the push methods target.
+ *
+ * (Elchi Pochta #3, 2026-10-24) Sessiyalar: `sid` li token bilan ulanish
+ * HTTP bilan BIR XIL qoida bo'yicha tekshiriladi (`SessionRevocationService`
+ * — kesh / identity `session_state`, identity javob bermasa fail open):
+ * yopilgan sessiya → `error` `{ code: 'SESSION_REVOKED' }` va uziladi
+ * (chiqarilgan qurilma eski token bilan qayta ulana olmaydi). Ochiq sessiya
+ * socketi qo'shimcha `session:<sid>` xonasiga kiradi; sessiya yopilganda
+ * (`SessionRevocationService.kickSessions`) shu xonaga `auth:session_revoked`
+ * `{ session_id, reason }` ketadi va 250 ms dan keyin socketlar server
+ * tomonidan uziladi. `sid` siz tokenlar avvalgidek.
  */
 @WebSocketGateway({
   namespace: '/realtime',
   cors: { origin: true, credentials: true },
 })
 export class RealtimeGateway
-  implements OnGatewayConnection, OnGatewayDisconnect
+  implements OnGatewayConnection, OnGatewayDisconnect, OnModuleDestroy
 {
   private readonly logger = new Logger(RealtimeGateway.name);
 
@@ -43,18 +80,58 @@ export class RealtimeGateway
   // userId -> set of live socket ids (a user may have several tabs/devices).
   private readonly online = new Map<string, Set<string>>();
 
-  constructor(private readonly jwtService: JwtService) {}
+  /** Kutilayotgan (emit'dan keyingi) uzishlar — modul yopilganda tozalanadi. */
+  private readonly pendingKicks = new Set<ReturnType<typeof setTimeout>>();
+  private readonly unsubscribeKicks?: () => void;
+
+  constructor(
+    private readonly jwtService: JwtService,
+    /**
+     * (Elchi Pochta #3) Ixtiyoriy — spec'lar gateway'ni usiz quradi; u holda
+     * sessiya tekshiruvi va chiqarish yo'q (avvalgidek faqat imzo/muddat).
+     */
+    @Optional() private readonly revocation?: SessionRevocationService,
+  ) {
+    this.unsubscribeKicks = revocation?.onKick((ids, reason) =>
+      this.disconnectSessions(ids, reason),
+    );
+  }
+
+  onModuleDestroy(): void {
+    this.unsubscribeKicks?.();
+    for (const timer of this.pendingKicks) clearTimeout(timer);
+    this.pendingKicks.clear();
+  }
 
   private getUser(client: Socket): SocketUser | undefined {
     return (client.data as { user?: SocketUser }).user;
   }
 
-  handleConnection(client: Socket) {
+  async handleConnection(client: Socket): Promise<void> {
     const user = this.authenticate(client);
     if (!user) {
-      client.emit('error', { message: 'Unauthorized' });
-      client.disconnect(true);
+      this.reject(client, { message: 'Unauthorized', code: 'UNAUTHORIZED' });
       return;
+    }
+
+    if (user.sid) {
+      // (Elchi Pochta #3) Avval FAQAT sessiya xonasi: tekshiruv davomida
+      // kelgan chiqarish (`kickSessions`) ham bu socketga yetadi. `user:` /
+      // `role:` xonalari — tekshiruvdan keyin (yopilgan sessiya bildirishnoma
+      // olmasin).
+      await client.join(sessionRoom(user.sid));
+      if (await this.isSessionRevoked(user.sub, user.sid)) {
+        this.reject(client, {
+          message: 'Session revoked',
+          code: 'SESSION_REVOKED',
+        });
+        this.logger.log(
+          `socket rejected: user=${user.sub} session revoked (${user.sid})`,
+        );
+        return;
+      }
+      // Tekshiruv davomida chiqarilgan yoki mijoz o'zi uzilgan.
+      if (client.disconnected) return;
     }
 
     (client.data as { user?: SocketUser }).user = user;
@@ -67,8 +144,69 @@ export class RealtimeGateway
     set.add(client.id);
     this.online.set(user.sub, set);
 
-    client.emit('connected', { user_id: user.sub, roles: user.roles });
+    client.emit('connected', {
+      user_id: user.sub,
+      roles: user.roles,
+      session_id: user.sid,
+    });
     this.logger.log(`socket connected: user=${user.sub}`);
+  }
+
+  /** Rad etish: `error` hodisasi, keyin server uzadi (hodisa avval yetadi). */
+  private reject(client: Socket, error: RealtimeConnectError): void {
+    client.emit('error', error);
+    client.disconnect(true);
+  }
+
+  /** HTTP `JwtStrategy` bilan bir xil: identity javob bermasa — ruxsat. */
+  private async isSessionRevoked(
+    userId: string,
+    sessionId: string,
+  ): Promise<boolean> {
+    if (!this.revocation) return false;
+    try {
+      return await this.revocation.isRevoked(userId, sessionId);
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * (Elchi Pochta #3, 2026-10-24) `SessionRevocationService.kickSessions`
+   * tinglovchisi: har sessiya xonasiga `auth:session_revoked`
+   * `{ session_id, reason }`, keyin SESSION_KICK_DISCONNECT_DELAY_MS dan
+   * so'ng o'sha xonalardagi socketlar server tomonidan uziladi
+   * (`disconnectSockets(true)` — mijoz «io server disconnect» oladi va o'zi
+   * qayta ulanmaydi; ulansa ham rad etiladi). Boshqa sessiyalar socketlariga
+   * tegilmaydi. Socket server hali yo'q bo'lsa — hech narsa.
+   */
+  disconnectSessions(sessionIds: string[], reason: SessionKickReason): void {
+    const server = this.server;
+    if (!server || !sessionIds.length) return;
+    const rooms = sessionIds.map(sessionRoom);
+    for (const sessionId of sessionIds) {
+      server.to(sessionRoom(sessionId)).emit(SESSION_REVOKED_EVENT, {
+        session_id: sessionId.toLowerCase(),
+        reason,
+      });
+    }
+    const timer = setTimeout(() => {
+      this.pendingKicks.delete(timer);
+      try {
+        server.in(rooms).disconnectSockets(true);
+      } catch (error) {
+        this.logger.warn(
+          `session sockets disconnect failed: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
+    }, SESSION_KICK_DISCONNECT_DELAY_MS);
+    timer.unref?.();
+    this.pendingKicks.add(timer);
+    this.logger.log(
+      `sessions kicked (${reason}): ${sessionIds.length} — ${sessionIds.join(', ')}`,
+    );
   }
 
   handleDisconnect(client: Socket) {
@@ -94,12 +232,14 @@ export class RealtimeGateway
         username?: string;
         roles?: string[];
         branch_id?: string | null;
+        sid?: string | null;
       }>(raw);
       return {
         sub: String(payload.sub),
         username: payload.username,
         roles: (payload.roles ?? []).map((r) => String(r).toLowerCase()),
         branch_id: payload.branch_id ?? null,
+        sid: sessionIdClaim(payload.sid),
       };
     } catch {
       return null;
@@ -139,7 +279,12 @@ export class RealtimeGateway
   }
 
   @SubscribeMessage('presence:list')
-  handlePresence(): { online_user_ids: string[] } {
+  handlePresence(@ConnectedSocket() client: Socket): {
+    online_user_ids: string[];
+  } {
+    // (Elchi Pochta #3) Sessiya tekshiruvi tugamagan / rad etilgan socket
+    // ro'yxatni olmaydi.
+    if (!this.getUser(client)) return { online_user_ids: [] };
     return { online_user_ids: [...this.online.keys()] };
   }
 

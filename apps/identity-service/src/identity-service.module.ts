@@ -13,6 +13,7 @@ import { IdentityController } from './identity.controller';
 import { UserServiceService } from './user-service.service';
 import { AuthService } from './auth/auth.service';
 import { AuthSessionService } from './auth/auth-session.service';
+import { SessionKickPublisher } from './auth/session-kick.publisher';
 import { User } from './entities/user.entity';
 import { CourierRegion } from './entities/courier-region.entity';
 import { UserSession } from './entities/user-session.entity';
@@ -39,6 +40,9 @@ import { OtpService } from './otp/otp.service';
     RmqModule.register({ name: 'BRANCH' }),
     // OTP SMS (rkz0yBxr) notification-service orqali.
     RmqModule.register({ name: 'NOTIFICATION' }),
+    // (Elchi Pochta #3, 2026-10-24) `auth.sessions.kick` → gateway navbati
+    // (RABBITMQ_GATEWAY_QUEUE; sozlanmasa e'lon qilinmaydi).
+    RmqModule.register({ name: 'GATEWAY' }),
     ScheduleModule.forRoot(),
     DatabaseModule,
     ActivityLogModule.forService('identity-service'),
@@ -59,6 +63,7 @@ import { OtpService } from './otp/otp.service';
     UserServiceService,
     AuthService,
     AuthSessionService,
+    SessionKickPublisher,
     BcryptEncryption,
     OtpService,
   ],

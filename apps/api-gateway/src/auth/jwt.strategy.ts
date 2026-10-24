@@ -3,10 +3,10 @@ import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
 import { ConfigService } from '@nestjs/config';
 import { requestContext } from '@app/common';
-import { SessionRevocationService } from './session-revocation.service';
-
-const SESSION_ID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+import {
+  SessionRevocationService,
+  sessionIdClaim,
+} from './session-revocation.service';
 
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
@@ -59,11 +59,11 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     // tugashini kutmay 401 (FE refresh qiladi → u ham 401 → login sahifasi).
     // `sid` siz tokenlar (Telegram Mini App, bot aktori, eski) tekshirilmaydi.
     // identity javob bermasa — ruxsat (fail open, SessionRevocationService).
+    const sessionId = sessionIdClaim(payload.sid);
     if (
       this.revocation &&
-      typeof payload.sid === 'string' &&
-      SESSION_ID_RE.test(payload.sid) &&
-      (await this.revocation.isRevoked(String(payload.sub), payload.sid))
+      sessionId &&
+      (await this.revocation.isRevoked(String(payload.sub), sessionId))
     ) {
       throw new UnauthorizedException('Session revoked');
     }

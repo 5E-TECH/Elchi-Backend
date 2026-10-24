@@ -34,6 +34,7 @@ import type { Request, Response } from 'express';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
 import { Public } from './auth/public.decorator';
 import {
+  SessionKickReason,
   SessionRevocationService,
   applyRevokedSessionIds,
 } from './auth/session-revocation.service';
@@ -126,10 +127,15 @@ export class AuthGatewayController {
   /**
    * (Elchi Pochta #3) identity tasdiqlagan yopilgan sessiyalar shu gateway
    * keshida darhol «yopilgan» — ularning access tokeni keyingi so'rovdayoq 401.
+   * (2026-10-24) Ochiq socketlari ham shu zahoti `auth:session_revoked`
+   * (`reason`) oladi va uziladi — qurilma keyingi so'rovini kutmaydi.
    */
-  private markRevoked(response: RevokedSessionsReply): void {
+  private kickRevoked(
+    response: RevokedSessionsReply,
+    reason: SessionKickReason,
+  ): void {
     const ids = response?.data?.session_ids;
-    if (Array.isArray(ids)) this.revocation.markRevoked(ids);
+    if (Array.isArray(ids)) this.revocation.kickSessions(ids, reason);
   }
 
   private static readonly REFRESH_COOKIE_NAME = 'refreshToken';
@@ -453,7 +459,8 @@ export class AuthGatewayController {
         ),
       },
     );
-    this.markRevoked(response);
+    // Joriy sessiya — shu brauzerning boshqa tablari ham chiqadi.
+    this.kickRevoked(response, 'logout');
     this.clearRefreshCookie(res);
     return response;
   }
@@ -525,7 +532,7 @@ export class AuthGatewayController {
         currentSessionId: AuthGatewayController.currentSid(req.user),
       },
     );
-    this.markRevoked(response);
+    this.kickRevoked(response, 'revoked_by_owner');
     return response;
   }
 
@@ -575,7 +582,7 @@ export class AuthGatewayController {
         currentSessionId: AuthGatewayController.currentSid(req.user),
       },
     );
-    this.markRevoked(response);
+    this.kickRevoked(response, 'revoked_by_owner');
     return response;
   }
 
@@ -609,7 +616,9 @@ export class AuthGatewayController {
    * (Elchi Pochta #3, 2026-10-23) `password` bilan: boshqa barcha
    * sessiyalar DARHOL yopiladi (48 soatlik qulfga bog'liq emas), JORIY
    * sessiya (JWT `sid`) ishlashda davom etadi — refresh ham. Yopilganlar shu
-   * gateway keshida darhol «yopilgan»; javobda `sessions_revoked` (soni).
+   * gateway keshida darhol «yopilgan» va (2026-10-24) socketlari
+   * `auth:session_revoked` (`password_changed`) olib uziladi; javobda
+   * `sessions_revoked` (soni).
    */
   @Patch('my-profile')
   @UseGuards(JwtAuthGuard)

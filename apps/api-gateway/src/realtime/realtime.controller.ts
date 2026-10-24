@@ -1,4 +1,4 @@
-import { Controller, Logger } from '@nestjs/common';
+import { Controller, Logger, Optional } from '@nestjs/common';
 import {
   Ctx,
   EventPattern,
@@ -7,6 +7,21 @@ import {
   RmqContext,
 } from '@nestjs/microservices';
 import { RealtimeGateway } from './realtime.gateway';
+import {
+  SessionRevocationService,
+  isSessionKickReason,
+} from '../auth/session-revocation.service';
+
+/**
+ * (Elchi Pochta #3, 2026-10-24) identity gateway so'rov yo'lidan TASHQARIDA
+ * yopgan sessiyalar (soatlik tozalash `security_reset`, refresh'da aniqlangan
+ * xavfsizlik hodisasi, eskirgan qurilma qatori) — gateway navbatiga
+ * `client.emit({ cmd: 'auth.sessions.kick' }, { session_ids, reason })`.
+ */
+export const SESSIONS_KICK_PATTERN = { cmd: 'auth.sessions.kick' } as const;
+
+/** Bitta xabarda ko'pi bilan shuncha sessiya (identity bo'laklab yuboradi). */
+const SESSIONS_KICK_MAX_IDS = 1000;
 
 interface RealtimeNotifyPayload {
   event: string;
@@ -26,7 +41,43 @@ interface RealtimeNotifyPayload {
 export class RealtimeController {
   private readonly logger = new Logger(RealtimeController.name);
 
-  constructor(private readonly realtime: RealtimeGateway) {}
+  constructor(
+    private readonly realtime: RealtimeGateway,
+    @Optional() private readonly revocation?: SessionRevocationService,
+  ) {}
+
+  /**
+   * (Elchi Pochta #3, 2026-10-24) identity yopgan sessiyalar: keshda
+   * «yopilgan» + socketlariga `auth:session_revoked` va uzish
+   * (`kickSessions`). Noma'lum `reason` — `security_reset`. Event
+   * (fire-and-forget), har doim ack.
+   */
+  @EventPattern(SESSIONS_KICK_PATTERN)
+  sessionsKick(
+    @Payload() data: { session_ids?: unknown; reason?: unknown },
+    @Ctx() context: RmqContext,
+  ): void {
+    try {
+      const ids = Array.isArray(data?.session_ids)
+        ? data.session_ids.slice(0, SESSIONS_KICK_MAX_IDS)
+        : [];
+      if (ids.length && this.revocation) {
+        this.revocation.kickSessions(
+          ids,
+          isSessionKickReason(data?.reason) ? data.reason : 'security_reset',
+        );
+      }
+    } catch (err) {
+      this.logger.error(
+        `auth.sessions.kick failed: ${err instanceof Error ? err.message : err}`,
+      );
+    } finally {
+      const channel = context.getChannelRef() as {
+        ack: (msg: unknown) => void;
+      };
+      channel.ack(context.getMessage());
+    }
+  }
 
   /**
    * (7Ec56EIw #4) notification-service push yuborishdan oldin so'raydi:
