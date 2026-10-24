@@ -23,6 +23,76 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-10-24 — Moliya va boshqalar paketi (batch C) (guzrGySp, su4IYGCN, Is1zvHN7, yiFTzkzH, AF0fvJbw, ISeuwhfr, R6R8BLGA)
+
+- [2026-10-24] ✏️ [gateway] — **xato javobida ixtiyoriy `data`** (AF0fvJbw).
+  Servis xatoni sabab/son bilan tashlasa, konvertga `data` qo'shiladi — FAQAT
+  uch kalit, tozalangan holda:
+
+  ```json
+  {
+    "statusCode": 400,
+    "message": "Bu tumanda 5 ta buyurtma, 1 ta filial bor, shuning uchun uni o'chirib bo'lmaydi. …",
+    "data": {
+      "reason": "district_in_use",
+      "usage": { "orders": 5, "users": 0, "branches": 1, "transfer_batches": 0 }
+    },
+    "trace_id": "…"
+  }
+  ```
+
+  - `reason` — mashina kodi (`^[a-z][a-z0-9_]{0,63}$`; matnni emas, shuni
+    tekshiring). Hozir yuboriladiganlari: `district_in_use`
+    (`DELETE /district/:id`), `region_has_districts`, `region_in_use`
+    (`DELETE /region/:id`; `usage` da `posts` ham bor);
+  - `usage` — `{ kalit: son }` (bog'langan yozuvlar soni);
+  - `details` — tekis obyekt yoki tekis obyektlar ro'yxati (≤ 50), qiymatlar
+    faqat satr/son/boolean/null.
+
+  Boshqa kalitlar (masalan `hint`, `post_id`, `blocked`), stack va ichki
+  xabarlar CHIQMAYDI; hech biri qolmasa `data` umuman yo'q — konvert
+  avvalgidek `{ statusCode, message, code?, trace_id? }`. 🔧 FE: `data`
+  ixtiyoriy deb o'qing (`error.response.data.data?.reason`); o'chirish
+  oynasida sonlarni matndan emas, `data.usage` dan oling.
+- [2026-10-24] 🆕 [logistics] — `GET /district/:id/usage` (ADMIN, SUPERADMIN)
+  → `data: { orders, users, branches }` (Is1zvHN7) — tumanga bog'langan
+  O'CHIRILMAGAN buyurtma/foydalanuvchi (mijoz/kuryer/market)/filial soni;
+  `DELETE /district/:id` 400 javobidagi `data.usage` bilan AYNI sanoq.
+  Hammasi 0 → o'chirsa bo'ladi. 400 — `id` raqam emas; 404 — tuman yo'q;
+  503 — order/identity/branch servislaridan biri javob bermadi (sonlar
+  taxmin qilinmaydi, "0" ko'rsatmang). 🔧 FE: o'chirish/birlashtirish
+  oynasini ochishda shu bilan oldindan ko'rsating.
+- [2026-10-24] ✏️ [finance] — `GET /finance/financial-balance/top-impacts`
+  `data.items[]` qatorlarida `created_by_user: { id, name, role } | null`
+  (guzrGySp) — `financial-balance/history` bilan bir xil (avtomatik yozuvda
+  `null`). 🔧 FE: Balans → Tahlil «Kiritgan» ustunida `#id` o'rniga
+  `created_by_user.name`.
+- [2026-10-24] ✏️ [investor] — `GET /investors/me/investments`
+  `data.summary.range_amount: number` (su4IYGCN) — `from_date`/`to_date`
+  oralig'idagi investitsiyalar yig'indisi (ro'yxat filtri bilan bir xil
+  chegaralar, sahifadan qat'i nazar; oraliq berilmasa `total_amount` ga
+  teng; oraliqda yozuv yo'q — `0`). `total_amount` avvalgidek butun davr.
+  Xuddi shu maydon admin ro'yxatlarida ham bor (`GET /investments`,
+  `GET /investors/:investor_id/investments`) — o'sha umumiy hisob.
+- [2026-10-24] ✏️ [markets] — `GET /markets` MANAGER/REGISTRATOR/BRANCH
+  ko'rinishi: `{ id, name, status, phone_number, tariff_home, tariff_center,
+  default_tariff }` (yiFTzkzH; tarif yo'q bo'lsa `null`). Login, kassa,
+  sozlamalar avvalgidek yo'q; COURIER — `{ id, name, status }` (o'zgarmagan).
+  🔧 FE (CS-E): buyurtma yaratishda uyga/markazga narxni shu maydonlardan
+  ko'rsating.
+- [2026-10-24] ✏️ [search] — `GET /search` market operatori uchun (ISeuwhfr):
+  buyurtma hujjatlari endi BIRIKTIRILGAN MARKETI bo'yicha (ilgari operator
+  hech qaysi buyurtmani topmasdi). Market identity `user.market_id` dan
+  olinadi (so'rov parametri yo'q); biriktirilmagan bo'lsa buyurtma chiqmaydi,
+  boshqa natijalar (mahsulot, pochta, hudud) avvalgidek. Javob shakli
+  o'zgarmagan.
+- [2026-10-24] 🟢 [gateway] — skaner route'lari rate limiti (R6R8BLGA):
+  `GET /scan/:token`, `POST /orders/receive`, `POST /orders/scan-assign` —
+  per-IP limit 60 → **300/daqiqa** (`SCAN_THROTTLE_LIMIT`, global
+  `THROTTLE_LIMIT` dan past emas). Hisoblagich avvalgidek IP + route bo'yicha
+  (filial bitta IP ortida bir nechta telefon skanerlasa 429 olmasin). Boshqa
+  route'lar o'zgarmagan. FE o'zgarishi shart emas.
+
 ### 2026-10-24 — «Sessiyalar»: chiqarilgan qurilma SHU ZAHOTI login sahifasiga (socket `auth:session_revoked`) (Notion «Elchi Pochta» #3)
 
 - [2026-10-24] 🆕 [gateway/realtime] — sessiya yopilganda o'sha qurilmaning
