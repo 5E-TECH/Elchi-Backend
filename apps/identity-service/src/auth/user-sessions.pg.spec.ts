@@ -779,10 +779,23 @@ const sha256 = (value: string) =>
         `UPDATE identity_schema.admins SET session_epoch = 1 WHERE id = 25`,
       );
 
-      expect(await service.cleanup(new Date())).toEqual({
+      // (2026-10-24) `RETURNING s."id"` — yopilganlar gateway'ga e'lon qilinadi.
+      const kicks = { publish: jest.fn() };
+      const announcing = new AuthSessionService(
+        db.getRepository(UserSession),
+        kicks as never,
+      );
+      expect(await announcing.cleanup(new Date())).toEqual({
         reset: 2,
         deleted: 1,
       });
+      expect(kicks.publish).toHaveBeenCalledTimes(1);
+      const [announced, reason] = kicks.publish.mock.calls[0] as [
+        string[],
+        string,
+      ];
+      expect(reason).toBe('security_reset');
+      expect([...announced].sort()).toEqual([reset.id, resetExpired.id].sort());
       const rows = await db.query<Row[]>(
         `SELECT id::text, revoke_reason FROM identity_schema.user_sessions ORDER BY created_at`,
       );
@@ -795,11 +808,12 @@ const sha256 = (value: string) =>
         ]),
       );
       expect(rows).toHaveLength(4);
-      // Ikkinchi marta — hech narsa (idempotent).
-      expect(await service.cleanup(new Date())).toEqual({
+      // Ikkinchi marta — hech narsa (idempotent), e'lon ham yo'q.
+      expect(await announcing.cleanup(new Date())).toEqual({
         reset: 0,
         deleted: 0,
       });
+      expect(kicks.publish).toHaveBeenCalledTimes(1);
     });
   },
 );
