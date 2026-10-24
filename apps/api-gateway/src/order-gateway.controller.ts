@@ -4496,6 +4496,8 @@ export class OrderGatewayController {
 
   // fix3 RBAC-03 / CODE-04: kuryer, operator, mijoz va investor endi kira
   // olmaydi (ilgari har marketning NEW buyurtmalarini mijoz PII bilan olardi).
+  // (nCAFnqIe) MARKET_OPERATOR — faqat o'zi biriktirilgan market (identity
+  // `user.market_id`); boshqa market id si yoki biriktirilmagan — 403.
   @Get('markets/:marketId/new')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(
@@ -4505,9 +4507,16 @@ export class OrderGatewayController {
     RoleEnum.MANAGER,
     RoleEnum.BRANCH,
     RoleEnum.MARKET,
+    RoleEnum.MARKET_OPERATOR,
   )
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'NEW orders by market id' })
+  @ApiOperation({
+    summary: 'NEW orders by market id',
+    description:
+      "(nCAFnqIe) MARKET_OPERATOR — faqat o'zi biriktirilgan market (`:marketId` = operator marketi); " +
+      'boshqa market yoki marketga biriktirilmagan operator — 403. Javob market roli bilan bir xil ' +
+      "(kuryer tarifi/ulushi va filial ulushisiz, `source='branch'` buyurtmalarsiz).",
+  })
   @ApiParam({ name: 'marketId', description: 'Market ID (id)' })
   async findNewOrdersByMarket(
     @Param('marketId') marketId: string,
@@ -4520,6 +4529,27 @@ export class OrderGatewayController {
       String(req?.user?.sub ?? '') !== String(marketId)
     ) {
       throw new ForbiddenException('market role cannot query other market_id');
+    }
+    if (
+      normalizedRoles.includes(RoleEnum.MARKET_OPERATOR) &&
+      !normalizedRoles.includes(RoleEnum.MARKET) &&
+      !normalizedRoles.includes(RoleEnum.SUPERADMIN) &&
+      !normalizedRoles.includes(RoleEnum.ADMIN)
+    ) {
+      // (nCAFnqIe) operator marketi SERVER tomonda aniqlanadi.
+      const operatorMarketId = await this.resolveMarketOperatorMarketId(
+        req?.user as JwtUser,
+      );
+      if (!operatorMarketId) {
+        throw new ForbiddenException(
+          'Operator hech qaysi marketga biriktirilmagan',
+        );
+      }
+      if (operatorMarketId !== String(marketId ?? '').trim()) {
+        throw new ForbiddenException(
+          'market_operator role cannot query other market_id',
+        );
+      }
     }
     const isBranchScopedRequester =
       normalizedRoles.includes(RoleEnum.BRANCH) ||
