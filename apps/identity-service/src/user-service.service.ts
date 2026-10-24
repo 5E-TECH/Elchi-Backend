@@ -2544,10 +2544,14 @@ export class UserServiceService implements OnModuleInit {
       this.getRegionById(safeUser.region_id),
       branchLookup,
     ]);
+    const branch = this.toBranchSummary(branchAssignment);
     return successRes({
       ...safeUser,
       region: profileRegion,
-      branch: this.toBranchSummary(branchAssignment),
+      // kGIjOciz — `branch_id` ham (ro'yxat qatori bilan bir xil shakl):
+      // `branch.id` yoki null.
+      branch_id: branch?.id ?? null,
+      branch,
     });
   }
 

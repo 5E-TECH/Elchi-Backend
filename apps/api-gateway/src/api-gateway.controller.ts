@@ -973,9 +973,10 @@ export class ApiGatewayController {
   @ApiQuery({ name: 'limit', required: false, type: Number, example: 10 })
   @ApiOkResponse({
     description:
-      'User list. YEThmZBn: har qatorda `branch: { id, name } | null` — ' +
-      'kuryer / menejer / registrator / filial xodimining filiali (boshqa ' +
-      'rollar va filial xizmati javob bermasa — null).',
+      'User list. YEThmZBn / kGIjOciz: har qatorda `branch_id: string | null` ' +
+      'va `branch: { id, name } | null` — kuryer / menejer / registrator / ' +
+      'filial xodimining filiali (boshqa rollar va filial xizmati javob ' +
+      'bermasa — null).',
   })
   async getUsers(
     @Query('search') search?: string,
@@ -1227,7 +1228,11 @@ export class ApiGatewayController {
 
     for (const row of items) {
       if (row && typeof row === 'object') {
-        row.branch = branchByUser.get(rowId(row)) ?? null;
+        const branch = branchByUser.get(rowId(row)) ?? null;
+        // kGIjOciz — `branch_id` (= branch.id) ham: «Filial» filtri/ustuni
+        // uchun obyektni ochmasdan.
+        row.branch_id = branch?.id ?? null;
+        row.branch = branch;
       }
     }
   }
@@ -1238,7 +1243,12 @@ export class ApiGatewayController {
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Get user by id (admin/superadmin)' })
   @ApiParam({ name: 'id', description: 'User ID' })
-  @ApiOkResponse({ description: 'User by id' })
+  @ApiOkResponse({
+    description:
+      'User by id. kGIjOciz: `branch_id: string | null` va `branch: { id, ' +
+      'name } | null` (kuryer / menejer / registrator / filial xodimi; ' +
+      'boshqa rollar — null).',
+  })
   @ApiNotFoundResponse({ description: 'Not found' })
   async getUserById(@Param('id') id: string, @Req() req?: { user?: JwtUser }) {
     // `id` is a bigint PK downstream. A non-numeric segment (e.g. /users/me,

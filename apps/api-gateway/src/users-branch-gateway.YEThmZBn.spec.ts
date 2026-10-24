@@ -147,8 +147,8 @@ describe('YEThmZBn — GET /users filial bilan boyitiladi', () => {
 
     expect(branchClient.send).not.toHaveBeenCalled();
     expect(res.data.items).toEqual([
-      { id: '37', role: 'market', branch: null },
-      { id: '40', role: 'admin', branch: null },
+      { id: '37', role: 'market', branch_id: null, branch: null },
+      { id: '40', role: 'admin', branch_id: null, branch: null },
     ]);
   });
 
