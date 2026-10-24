@@ -340,4 +340,22 @@ export const ActivityDescribeUz = {
       ? `Parol almashtirildi — boshqa sessiyalar yopildi: ${n} ta`
       : `Parol almashtirildi — barcha sessiyalar yopildi: ${n} ta`;
   },
+
+  /**
+   * (DAqXPeSy) "Yetkazish tarifi «center» — yangi versiya: 40 000 so'm +
+   * 4 000 so'm/kg". Faqat tarif kodi va summalar.
+   */
+  deliveryTariffVersionCreated(
+    tariffId: string,
+    basePrice: unknown,
+    extraPerKg: unknown,
+  ): string {
+    return `Yetkazish tarifi «${String(tariffId)}» — yangi versiya: ${moneyUz(basePrice)} + ${moneyUz(extraPerKg)}/kg`;
+  },
+
+  /** (DAqXPeSy) "Yetkazish narxi sozlamalari o'zgartirildi: 2 ta maydon". */
+  deliveryPricingSettingsUpdated(changedCount: number): string {
+    const n = Math.max(0, Math.trunc(Number(changedCount) || 0));
+    return `Yetkazish narxi sozlamalari o'zgartirildi: ${n} ta maydon`;
+  },
 } as const;

@@ -23,6 +23,77 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-10-24 — Yetkazish narxi dvigateli: `POST /delivery/quote` + admin tariflar/sozlamalar (DAqXPeSy)
+
+- [2026-10-24] 🆕 [gateway/logistics] — yetkazish narxi endi FORMULA bilan
+  hisoblanadi (elchipochta.uz kalkulyatori bilan AYNI: hajmli vazn
+  U×K×B/5000, 0.1 kg qadam bilan yuqoriga, birinchi kg bazada, har qo'shimcha
+  kg, express × 1.4, jami 500 ga karrali). ⚠️ Hali SOTUV oqimiga ulanmagan —
+  buyurtmaning `market_tariff` i avvalgidek market profilidan (KmWO9gTA).
+
+  **`POST /delivery/quote`** — FAQAT hisoblaydi, hech narsa yozmaydi.
+  Rollar: superadmin, admin, manager, registrator, operator, logist, branch,
+  market (market — faqat O'Z mahsulotlari; begonasi 404). HTTP 200.
+
+  ```json
+  {
+    "items": [
+      { "product_id": "42", "quantity": 2 },
+      { "weight_kg": 1.2, "length_cm": 30, "width_cm": 22, "height_cm": 15 }
+    ],
+    "from_region_id": "1",
+    "to_district_id": "77",
+    "where_deliver": "center",
+    "express": false,
+    "pickup_count": 0
+  }
+  ```
+
+  - `items[]` — BITTA jo'natma (og'irlik va hajmlar qo'shiladi, baza bir
+    marta). Har element YO `product_id` (o'lchov catalog'dan; o'lchov
+    maydonlari bilan birga — 400), YO `weight_kg` (majburiy) + ixtiyoriy
+    L/W/H (uchalasi birga) + `volumetric_enabled`. `quantity` sukut 1. 1–200 element.
+  - `from_*` / `to_*` — `region_id` yoki `district_id` (kamida bittasi har
+    tomonda; ikkalasi berilsa mos bo'lishi shart). Ikkala uchi ham shahar
+    zonasida (Toshkent SHAHRI; Toshkent viloyati — yo'q) → `city` tarifi,
+    `where_deliver` e'tiborsiz; aks holda `center` / `address`.
+  - Javob `data`: `tariffId`, `base`, `perExtraKg`, `daysMin`, `daysMax`,
+    `actualKg`, `volumetricKg`, `billableKg`, `basis` (`weight`|`volume`|null),
+    `extraKg`, `extra`, `subtotal`, `expressFee`, `pickupFee`, **`total`**
+    (500 ga karrali — UI qayta YAXLITLAMAYDI; pickup KIRMAYDI),
+    `totalWithPickup` (kalkulyator jami), `unmeasuredItems`,
+    `missingDimensionItems`, `estimated`, `unmeasured_product_ids`,
+    `missing_dimension_product_ids`, `route`, `tariff` (versiya), `settings_id`.
+  - O'lchovsiz mahsulot narxni jimgina 0 qilmaydi: `estimated: true` va
+    ro'yxatlar — formada «N ta mahsulotda o'lchov yo'q, narx taxminiy»
+    ogohlantirishi shundan (6NYcXvGy). Narx buyurtma payload'iga
+    YUBORILMAYDI (order DTO uni qabul qilmaydi).
+  - Xatolar: 400 (validatsiya), 404 (viloyat/tuman/mahsulot), 409 (faol
+    tarif/sozlama yo'q), 503 (catalog javob bermadi), 504.
+
+  **Admin (faqat superadmin, admin; boshqa rol — 403):**
+  - `GET /delivery/tariffs?tariff_id=&limit=` → `data.current`
+    (`{ city, center, address }` — hozir amaldagi versiya) + `data.versions`
+    (yangisi tepada; `is_current`, `is_scheduled`).
+  - `POST /delivery/tariffs` `{ tariff_id, base_price, extra_per_kg,
+    days_min, days_max, valid_from? }` → 201. Narx o'zgarishi — YANGI
+    versiya (eski o'chirilmaydi); `valid_from` kelajakda — rejalashtirilgan,
+    o'tmishda — 400. Jurnal: `logistics.delivery_tariff_created`.
+  - `GET /delivery/pricing-settings` / `PATCH /delivery/pricing-settings`
+    (qisman: `volumetric_divisor`, `first_kg_included`, `min_billable_kg`,
+    `billable_step_kg`, `round_to`, `pickup_fee`, `pickup_free_from_count`
+    (null — hech qachon tekin emas), `express_multiplier`). PATCH yangi
+    versiya yozadi; hech narsa o'zgarmasa — versiya ham, jurnal ham yo'q.
+    Jurnal: `logistics.delivery_pricing_settings_updated` (eski/yangi qiymat).
+  - Boshlang'ich qiymatlar: city 35 000 + 4 000/kg (1 kun), center
+    40 000 + 4 000/kg (1–2 kun), address 60 000 + 5 000/kg (2–3 kun);
+    pickup 20 000, 10+ posilka tekin (saytdagi 8 000 — eski, GiR4WoBl).
+  - Viloyat qatorida yangi maydon `is_city_zone` (`GET /region`, `GET /region/:id`).
+
+  → Frontend: superadmin «Yetkazish tariflari» sahifasi (jadval + yangi
+  versiya formasi + sozlamalar), buyurtma formasidagi «Yetkazish narxi
+  (taxminiy)» bloki (6NYcXvGy) — `POST /delivery/quote`, debounce bilan.
+
 ### 2026-10-24 — «Sessiyalar»: chiqarilgan qurilma SHU ZAHOTI login sahifasiga (socket `auth:session_revoked`) (Notion «Elchi Pochta» #3)
 
 - [2026-10-24] 🆕 [gateway/realtime] — sessiya yopilganda o'sha qurilmaning

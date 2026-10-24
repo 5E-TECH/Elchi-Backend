@@ -288,6 +288,19 @@ export const ACTIVITY_ACTION_REGISTRY: Readonly<
     'sync',
     'violet',
   ),
+  // (DAqXPeSy) yetkazish narxi — tarif versiyasi va formula sozlamalari.
+  'logistics.delivery_tariff_created': entry(
+    'Yetkazish tarifining yangi versiyasi',
+    'logistics',
+    'tag',
+    'amber',
+  ),
+  'logistics.delivery_pricing_settings_updated': entry(
+    "Yetkazish narxi sozlamalari o'zgardi",
+    'logistics',
+    'setting',
+    'amber',
+  ),
   'district.merge_compensation_failed': entry(
     'Tumanlarni birlashtirish xatosi',
     'logistics',

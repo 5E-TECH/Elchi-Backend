@@ -29,6 +29,15 @@ export class Region extends BaseEntity {
   @Column({ type: 'bigint', nullable: true })
   logist_id!: string | null;
 
+  /**
+   * DAqXPeSy — shahar zonasi: yo'nalishning IKKALA uchi ham shahar zonasida
+   * bo'lsa yetkazish `city` tarifi bilan hisoblanadi (aks holda
+   * `where_deliver`). Faqat Toshkent SHAHRI (SOATO 1726) — migratsiya
+   * 1716000000142 belgilaydi; Toshkent VILOYATI — `false`.
+   */
+  @Column({ type: 'boolean', default: false })
+  is_city_zone!: boolean;
+
   @OneToMany(() => District, (district) => district.region)
   districts!: District[];
 }

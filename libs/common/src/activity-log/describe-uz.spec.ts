@@ -166,6 +166,24 @@ describe('ActivityDescribeUz — gaplar (2WRzdWpZ)', () => {
     ).toBe('Parol almashtirildi — barcha sessiyalar yopildi: 0 ta');
   });
 
+  it('(DAqXPeSy) yetkazish tarifi versiyasi va sozlamalari — kod va summa', () => {
+    expect(
+      ActivityDescribeUz.deliveryTariffVersionCreated(
+        'center',
+        40000,
+        '4000.00',
+      ),
+    ).toBe(
+      "Yetkazish tarifi «center» — yangi versiya: 40 000 so'm + 4 000 so'm/kg",
+    );
+    expect(ActivityDescribeUz.deliveryPricingSettingsUpdated(2)).toBe(
+      "Yetkazish narxi sozlamalari o'zgartirildi: 2 ta maydon",
+    );
+    expect(ActivityDescribeUz.deliveryPricingSettingsUpdated(-3)).toBe(
+      "Yetkazish narxi sozlamalari o'zgartirildi: 0 ta maydon",
+    );
+  });
+
   it('filiallararo jo`natma', () => {
     expect(
       ActivityDescribeUz.branchTransferCreated({
@@ -229,6 +247,10 @@ describe('ActivityDescribeUz — gaplar (2WRzdWpZ)', () => {
       ),
       sessionsRevokedByPasswordChange:
         ActivityDescribeUz.sessionsRevokedByPasswordChange('current', 3),
+      deliveryTariffVersionCreated:
+        ActivityDescribeUz.deliveryTariffVersionCreated('address', 60000, 5000),
+      deliveryPricingSettingsUpdated:
+        ActivityDescribeUz.deliveryPricingSettingsUpdated(2),
     };
     // Har bir quruvchi qamralgan — yangisi qo'shilsa test uni ham talab qiladi.
     expect(Object.keys(outputs).sort()).toEqual(

@@ -18492,6 +18492,213 @@
         ]
       }
     },
+    "/delivery/quote": {
+      "post": {
+        "description": "DAqXPeSy. Tarif: ikkala uchi ham `regions.is_city_zone` (Toshkent shahri) → `city`, aks holda `where_deliver` (`center`/`address`). Elementlar BITTA jo'natma: og'irliklar va hajmlar qo'shiladi (× quantity), baza bir marta. `product_id` — o'lchov catalog'dan (MARKET — faqat o'z mahsuloti, begonasi 404). O'lchovsiz element jimgina 0 bermaydi: `unmeasuredItems` / `missingDimensionItems` > 0 va `estimated: true`. `total` — 500 ga karrali YOZILADIGAN narx (pickup kirmaydi); `totalWithPickup` — kalkulyator jami. Xatolar: 400 (validatsiya, tuman–viloyat mos emas), 404 (viloyat/tuman/mahsulot), 409 (faol tarif yoki sozlama yo'q), 503 (catalog javob bermadi).",
+        "operationId": "DeliveryPricingGatewayController_quote",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeliveryQuoteRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeliveryQuoteResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Yetkazish narxini hisoblash (taxminiy; hech narsa yozilmaydi)",
+        "tags": [
+          "Delivery pricing"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "manager",
+          "registrator",
+          "operator",
+          "logist",
+          "branch",
+          "market"
+        ]
+      }
+    },
+    "/delivery/tariffs": {
+      "get": {
+        "description": "`data.current` — `{ city, center, address }` hozir amaldagi versiya (`valid_from <= now()`, eng so'nggisi). `data.versions` — barcha versiyalar, yangisi tepada (`is_current`, `is_scheduled` — kelajakda kuchga kiradigan).",
+        "operationId": "DeliveryPricingGatewayController_listTariffs",
+        "parameters": [
+          {
+            "name": "tariff_id",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "enum": [
+                "city",
+                "center",
+                "address"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "description": "Tarix qatorlari (sukut 100, ko`pi bilan 500)",
+            "schema": {
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeliveryTariffsListResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Yetkazish tariflari: hozirgi versiyalar + tarix (admin)",
+        "tags": [
+          "Delivery pricing"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
+        ]
+      },
+      "post": {
+        "description": "Narx o'zgarishi — YANGI qator, `valid_from` dan kuchga kiradi (berilmasa — hozir; kelajak — rejalashtirilgan; o'tmish — 400). Amal activity-log'ga yoziladi (`logistics.delivery_tariff_created`).",
+        "operationId": "DeliveryPricingGatewayController_createTariff",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateDeliveryTariffRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Yangi versiya yaratildi"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Yangi tarif versiyasi (admin; eski versiya o`chirilmaydi)",
+        "tags": [
+          "Delivery pricing"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
+        ]
+      }
+    },
+    "/delivery/pricing-settings": {
+      "get": {
+        "operationId": "DeliveryPricingGatewayController_getSettings",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeliveryPricingSettingsResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Narx formulasi sozlamalari (faol versiya, admin)",
+        "tags": [
+          "Delivery pricing"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
+        ]
+      },
+      "patch": {
+        "description": "Qisman: faqat yuborilgan maydonlar o'zgaradi. Yangi faol qator yoziladi, eskisi `is_active=false` (tarix qoladi); hech narsa o'zgarmasa versiya ham, jurnal ham yo'q. Amal activity-log'ga yoziladi (`logistics.delivery_pricing_settings_updated`, eski/yangi qiymat bilan).",
+        "operationId": "DeliveryPricingGatewayController_updateSettings",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateDeliveryPricingSettingsRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeliveryPricingSettingsResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Narx formulasi sozlamalarini o`zgartirish (admin; yangi versiya)",
+        "tags": [
+          "Delivery pricing"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
+        ]
+      }
+    },
     "/health": {
       "get": {
         "operationId": "HealthController_check",
@@ -24976,6 +25183,665 @@
             "minimum": 0,
             "maximum": 1000000,
             "description": "Foiz (0..100) yoki so'm (0..1 000 000), ko'pi bilan 2 kasr"
+          }
+        }
+      },
+      "DeliveryTariffRowDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "2"
+          },
+          "tariff_id": {
+            "type": "string",
+            "enum": [
+              "city",
+              "center",
+              "address"
+            ]
+          },
+          "base_price": {
+            "type": "number",
+            "example": 40000
+          },
+          "extra_per_kg": {
+            "type": "number",
+            "example": 4000
+          },
+          "days_min": {
+            "type": "number",
+            "example": 1
+          },
+          "days_max": {
+            "type": "number",
+            "example": 2
+          },
+          "valid_from": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "is_active": {
+            "type": "boolean"
+          },
+          "created_by": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "tariff_id",
+          "base_price",
+          "extra_per_kg",
+          "days_min",
+          "days_max",
+          "valid_from"
+        ]
+      },
+      "DeliveryQuoteItemRequestDto": {
+        "type": "object",
+        "properties": {
+          "product_id": {
+            "type": "string",
+            "example": "42",
+            "description": "Catalog mahsuloti — o'lchov (weight_kg, L/W/H, volumetric_enabled) catalog'dan olinadi. Berilsa o'lchov maydonlari yuborilmaydi (400). MARKET roli faqat o'z mahsulotini (begonasi — 404)."
+          },
+          "weight_kg": {
+            "type": "number",
+            "minimum": 0.001,
+            "maximum": 1000,
+            "example": 1.2,
+            "description": "Og'irlik, kg (ko'pi bilan 3 kasr). `product_id` YO'Q bo'lsa MAJBURIY; bor bo'lsa yuborilmaydi."
+          },
+          "length_cm": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000,
+            "example": 30,
+            "description": "Uzunlik, sm (butun son). Uzunlik, kenglik, balandlik — uchalasi birga yoki hech biri. `product_id` bilan yuborilmaydi."
+          },
+          "width_cm": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000,
+            "example": 22,
+            "description": "Kenglik, sm (butun son). Uzunlik, kenglik, balandlik — uchalasi birga yoki hech biri. `product_id` bilan yuborilmaydi."
+          },
+          "height_cm": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000,
+            "example": 15,
+            "description": "Balandlik, sm (butun son). Uzunlik, kenglik, balandlik — uchalasi birga yoki hech biri. `product_id` bilan yuborilmaydi."
+          },
+          "volumetric_enabled": {
+            "type": "boolean",
+            "default": true,
+            "description": "Hajmga qarab hisoblash (U×K×B / bo'luvchi). false — faqat og'irlik. `product_id` bilan yuborilmaydi."
+          },
+          "quantity": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10000,
+            "default": 1,
+            "example": 1,
+            "description": "Soni — og'irlik va hajm shunga ko'paytiriladi."
+          }
+        }
+      },
+      "DeliveryQuoteRequestDto": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "minItems": 1,
+            "maxItems": 200,
+            "description": "Jo'natma elementlari — BITTA posilka: og'irliklar va hajmlar qo'shiladi, baza narx bir marta olinadi.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DeliveryQuoteItemRequestDto"
+            }
+          },
+          "from_region_id": {
+            "type": "string",
+            "example": "1",
+            "description": "Jo'natuvchi viloyati. `from_region_id` yoki `from_district_id` — kamida bittasi."
+          },
+          "from_district_id": {
+            "type": "string",
+            "example": "1",
+            "description": "Jo'natuvchi tumani (viloyati tumandan olinadi; ikkalasi berilsa mos bo'lishi shart)."
+          },
+          "to_region_id": {
+            "type": "string",
+            "example": "1",
+            "description": "Qabul qiluvchi viloyati. `to_region_id` yoki `to_district_id` — kamida bittasi."
+          },
+          "to_district_id": {
+            "type": "string",
+            "example": "1",
+            "description": "Qabul qiluvchi tumani (buyurtmadagi `district_id`). Narx GEOGRAFIK viloyatdan (`districts.region_id`), `assigned_region` ta'sir qilmaydi."
+          },
+          "where_deliver": {
+            "type": "string",
+            "enum": [
+              "center",
+              "address"
+            ],
+            "example": "center",
+            "description": "Yetkazish turi. Ikkala uchi ham shahar zonasida (`regions.is_city_zone` — Toshkent shahri) bo'lsa e'tiborsiz: har doim `city` tarifi."
+          },
+          "express": {
+            "type": "boolean",
+            "default": false,
+            "description": "Tezkor yetkazish — subtotal × (express_multiplier − 1) ustama."
+          },
+          "pickup_count": {
+            "type": "integer",
+            "minimum": 0,
+            "example": 0,
+            "description": "Bitta pickup tashrifidagi posilkalar soni (kalkulyator uchun). `pickupFee` ALOHIDA qaytadi va buyurtma narxiga (`total`) QO'SHILMAYDI; `pickup_free_from_count` va undan ko'p — tekin."
+          }
+        },
+        "required": [
+          "items",
+          "where_deliver"
+        ]
+      },
+      "DeliveryQuoteRouteDto": {
+        "type": "object",
+        "properties": {
+          "from_region_id": {
+            "type": "string",
+            "example": "1"
+          },
+          "to_region_id": {
+            "type": "string",
+            "example": "6"
+          },
+          "city_route": {
+            "type": "boolean",
+            "description": "Ikkala uchi ham shahar zonasida — `city` tarifi."
+          },
+          "where_deliver": {
+            "type": "string",
+            "enum": [
+              "center",
+              "address"
+            ]
+          }
+        },
+        "required": [
+          "from_region_id",
+          "to_region_id",
+          "city_route",
+          "where_deliver"
+        ]
+      },
+      "DeliveryQuoteResultDto": {
+        "type": "object",
+        "properties": {
+          "tariffId": {
+            "type": "string",
+            "enum": [
+              "city",
+              "center",
+              "address"
+            ]
+          },
+          "base": {
+            "type": "number",
+            "example": 40000
+          },
+          "perExtraKg": {
+            "type": "number",
+            "example": 4000
+          },
+          "daysMin": {
+            "type": "object",
+            "nullable": true,
+            "example": 1
+          },
+          "daysMax": {
+            "type": "object",
+            "nullable": true,
+            "example": 2
+          },
+          "actualKg": {
+            "type": "number",
+            "example": 1.2,
+            "description": "Haqiqiy og'irliklar yig'indisi"
+          },
+          "volumetricKg": {
+            "type": "number",
+            "example": 1.98,
+            "description": "Hajmli vazn yig'indisi"
+          },
+          "billableKg": {
+            "type": "number",
+            "example": 2,
+            "description": "Hisob vazni (0.1 kg qadam)"
+          },
+          "extraKg": {
+            "type": "number",
+            "example": 1
+          },
+          "extra": {
+            "type": "number",
+            "example": 4000
+          },
+          "subtotal": {
+            "type": "number",
+            "example": 44000
+          },
+          "expressFee": {
+            "type": "number",
+            "example": 0
+          },
+          "pickupFee": {
+            "type": "number",
+            "example": 0,
+            "description": "Pickup tashrifi haqi — `total` ga KIRMAYDI."
+          },
+          "total": {
+            "type": "number",
+            "example": 44000,
+            "description": "Yetkazish narxi — 500 ga karrali (YOZILADIGAN qiymat, UI qayta yaxlitlamaydi). Pickup kirmaydi."
+          },
+          "totalWithPickup": {
+            "type": "number",
+            "example": 44000,
+            "description": "Kalkulyator jami: subtotal + express + pickup (bitta yaxlitlash)."
+          },
+          "basis": {
+            "type": "string",
+            "enum": [
+              "weight",
+              "volume"
+            ],
+            "nullable": true
+          },
+          "unmeasuredItems": {
+            "type": "number",
+            "example": 0,
+            "description": "Og'irligi yo'q elementlar soni"
+          },
+          "missingDimensionItems": {
+            "type": "number",
+            "example": 0,
+            "description": "Hajm hisobi yoqiq, lekin L/W/H yo'q elementlar soni"
+          },
+          "estimated": {
+            "type": "boolean",
+            "description": "Narx taxminiy (o'lchovsiz element bor)"
+          },
+          "route": {
+            "$ref": "#/components/schemas/DeliveryQuoteRouteDto"
+          },
+          "tariff": {
+            "$ref": "#/components/schemas/DeliveryTariffRowDto"
+          },
+          "settings_id": {
+            "type": "string",
+            "example": "1"
+          },
+          "unmeasured_product_ids": {
+            "description": "Og'irligi yo'q mahsulotlar",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "missing_dimension_product_ids": {
+            "description": "Hajm hisobi yoqiq, o'lchami yo'q mahsulotlar",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "tariffId",
+          "base",
+          "perExtraKg",
+          "daysMin",
+          "daysMax",
+          "actualKg",
+          "volumetricKg",
+          "billableKg",
+          "extraKg",
+          "extra",
+          "subtotal",
+          "expressFee",
+          "pickupFee",
+          "total",
+          "totalWithPickup",
+          "basis",
+          "unmeasuredItems",
+          "missingDimensionItems",
+          "estimated",
+          "route",
+          "tariff",
+          "settings_id",
+          "unmeasured_product_ids",
+          "missing_dimension_product_ids"
+        ]
+      },
+      "DeliveryQuoteResponseDto": {
+        "type": "object",
+        "properties": {
+          "statusCode": {
+            "type": "number",
+            "example": 200
+          },
+          "message": {
+            "type": "string",
+            "example": "success"
+          },
+          "data": {
+            "$ref": "#/components/schemas/DeliveryQuoteResultDto"
+          }
+        },
+        "required": [
+          "statusCode",
+          "message",
+          "data"
+        ]
+      },
+      "DeliveryTariffVersionDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "2"
+          },
+          "tariff_id": {
+            "type": "string",
+            "enum": [
+              "city",
+              "center",
+              "address"
+            ]
+          },
+          "base_price": {
+            "type": "number",
+            "example": 40000
+          },
+          "extra_per_kg": {
+            "type": "number",
+            "example": 4000
+          },
+          "days_min": {
+            "type": "number",
+            "example": 1
+          },
+          "days_max": {
+            "type": "number",
+            "example": 2
+          },
+          "valid_from": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "is_active": {
+            "type": "boolean"
+          },
+          "created_by": {
+            "type": "string",
+            "nullable": true
+          },
+          "is_current": {
+            "type": "boolean",
+            "description": "Hozir amaldagi versiya"
+          },
+          "is_scheduled": {
+            "type": "boolean",
+            "description": "Kelajakda kuchga kiradi"
+          }
+        },
+        "required": [
+          "id",
+          "tariff_id",
+          "base_price",
+          "extra_per_kg",
+          "days_min",
+          "days_max",
+          "valid_from",
+          "is_current",
+          "is_scheduled"
+        ]
+      },
+      "DeliveryTariffsListDataDto": {
+        "type": "object",
+        "properties": {
+          "current": {
+            "type": "object",
+            "description": "Har tarifning hozirgi versiyasi: `{ city, center, address }` (yo'q bo'lsa null).",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/DeliveryTariffRowDto"
+            }
+          },
+          "versions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DeliveryTariffVersionDto"
+            }
+          }
+        },
+        "required": [
+          "current",
+          "versions"
+        ]
+      },
+      "DeliveryTariffsListResponseDto": {
+        "type": "object",
+        "properties": {
+          "statusCode": {
+            "type": "number",
+            "example": 200
+          },
+          "message": {
+            "type": "string",
+            "example": "success"
+          },
+          "data": {
+            "$ref": "#/components/schemas/DeliveryTariffsListDataDto"
+          }
+        },
+        "required": [
+          "statusCode",
+          "message",
+          "data"
+        ]
+      },
+      "CreateDeliveryTariffRequestDto": {
+        "type": "object",
+        "properties": {
+          "tariff_id": {
+            "type": "string",
+            "enum": [
+              "city",
+              "center",
+              "address"
+            ],
+            "example": "center"
+          },
+          "base_price": {
+            "type": "number",
+            "minimum": 0,
+            "example": 40000,
+            "description": "Baza narx (birinchi kg kiradi), so'm"
+          },
+          "extra_per_kg": {
+            "type": "number",
+            "minimum": 0,
+            "example": 4000,
+            "description": "Har qo'shimcha kg narxi, so'm"
+          },
+          "days_min": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 365,
+            "example": 1
+          },
+          "days_max": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 365,
+            "example": 2
+          },
+          "valid_from": {
+            "type": "string",
+            "format": "date-time",
+            "example": "2026-11-01T00:00:00+05:00",
+            "description": "Qachondan amal qiladi. Berilmasa — hozir. Kelajak — rejalashtirilgan versiya; o'tmish (5 daqiqadan ko'p) — 400."
+          }
+        },
+        "required": [
+          "tariff_id",
+          "base_price",
+          "extra_per_kg",
+          "days_min",
+          "days_max"
+        ]
+      },
+      "DeliveryPricingSettingsRowDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "1"
+          },
+          "volumetric_divisor": {
+            "type": "number",
+            "example": 5000
+          },
+          "first_kg_included": {
+            "type": "number",
+            "example": 1
+          },
+          "min_billable_kg": {
+            "type": "number",
+            "example": 0.1
+          },
+          "billable_step_kg": {
+            "type": "number",
+            "example": 0.1
+          },
+          "round_to": {
+            "type": "number",
+            "example": 500
+          },
+          "pickup_fee": {
+            "type": "number",
+            "example": 20000
+          },
+          "pickup_free_from_count": {
+            "type": "object",
+            "example": 10,
+            "nullable": true
+          },
+          "express_multiplier": {
+            "type": "number",
+            "example": 1.4
+          },
+          "is_active": {
+            "type": "boolean"
+          },
+          "created_by": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "volumetric_divisor",
+          "first_kg_included",
+          "min_billable_kg",
+          "billable_step_kg",
+          "round_to",
+          "pickup_fee",
+          "pickup_free_from_count",
+          "express_multiplier",
+          "is_active",
+          "created_by"
+        ]
+      },
+      "DeliveryPricingSettingsResponseDto": {
+        "type": "object",
+        "properties": {
+          "statusCode": {
+            "type": "number",
+            "example": 200
+          },
+          "message": {
+            "type": "string",
+            "example": "success"
+          },
+          "data": {
+            "$ref": "#/components/schemas/DeliveryPricingSettingsRowDto"
+          }
+        },
+        "required": [
+          "statusCode",
+          "message",
+          "data"
+        ]
+      },
+      "UpdateDeliveryPricingSettingsRequestDto": {
+        "type": "object",
+        "properties": {
+          "volumetric_divisor": {
+            "type": "integer",
+            "minimum": 1,
+            "example": 5000,
+            "description": "Hajmli vazn bo'luvchisi (U×K×B sm / shu son). Ega qarori — 5000."
+          },
+          "first_kg_included": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1000,
+            "example": 1,
+            "description": "Baza narxga kiradigan vazn, kg (1.0)."
+          },
+          "min_billable_kg": {
+            "type": "number",
+            "minimum": 0.001,
+            "maximum": 1000,
+            "example": 0.1,
+            "description": "Eng kichik hisob vazni, kg (0.1)."
+          },
+          "billable_step_kg": {
+            "type": "number",
+            "minimum": 0.001,
+            "maximum": 1000,
+            "example": 0.1,
+            "description": "Hisob vazni shu qadam bilan YUQORIGA yaxlitlanadi, kg (0.1)."
+          },
+          "round_to": {
+            "type": "integer",
+            "minimum": 1,
+            "example": 500,
+            "description": "Yakuniy narx shu songa karrali, so'm (500)."
+          },
+          "pickup_fee": {
+            "type": "number",
+            "minimum": 0,
+            "example": 20000,
+            "description": "Pickup tashrifi haqi, so'm. Buyurtma narxiga QO'SHILMAYDI (market hisobiga alohida — B824gOu5)."
+          },
+          "pickup_free_from_count": {
+            "type": "integer",
+            "minimum": 1,
+            "nullable": true,
+            "example": 10,
+            "description": "Bir tashrifda shuncha va undan ko'p posilka — pickup tekin. null — hech qachon tekin emas."
+          },
+          "express_multiplier": {
+            "type": "number",
+            "minimum": 1,
+            "example": 1.4,
+            "description": "Tezkor yetkazish ko`paytiruvchisi (1.4 → subtotal × 0.4 ustama)."
           }
         }
       }

@@ -57,7 +57,7 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
 | **identity-service** | `identity_schema` | `user` | Users of every role, auth (login/refresh/logout/validate), profiles, markets (+telegram token), couriers/managers/registrators/admins/customers |
 | **order-service** | `order_schema` | `order`, `order_item`, `order_tracking`, `order_settlement`, `order_custody_event`, `branch` (mirror), `branch_transfer_batch(+item,+history)`, `order_batch_inbox_message` | The core. Order lifecycle, sell/cancel/return/rollback, per-order FIFO settlement, transfer batches, order analytics source |
 | **catalog-service** | `catalog_schema` | `product` | Market product catalog |
-| **logistics-service** | `logistics_schema` | `region`, `district`, `post` | Geo (regions/districts, SATO codes) + **posts** (courier delivery batches): create/send/receive/reassign/cancel/return-requests |
+| **logistics-service** | `logistics_schema` | `region`, `district`, `post`, `delivery_tariff`, `delivery_pricing_settings` | Geo (regions/districts, SATO codes) + **posts** (courier delivery batches): create/send/receive/reassign/cancel/return-requests + **delivery pricing engine** (DAqXPeSy: versioned tariffs, formula settings, `logistics.delivery.quote`) |
 | **finance-service** | `finance_schema` | `cashbox`, `cashbox_history`, `shift`, `user_salary`, `operator_earning`, `operator_payment`, `financial_balance_history` | Cashboxes (main/courier/market/branch), payments, shifts, salaries, operator earnings, company P&L ledger |
 | **branch-service** | `branch_schema` | `branch`, `branch_config`, `branch_user` | Branch tree (HQ→regional→pickup), per-branch config (ownership/compensation), branch staff, transfer-batch orchestration, branch analytics/dashboard |
 | **investor-service** | `investor_schema` | `investor`, `investment`, `profit_share` | Investor capital, investments, profit-share calculation/payout |
@@ -324,6 +324,25 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
     status (CODE-13); a **transit** reply (`reason:'transit'`) → clear 400
     ("boshqa hudud uchun (tranzit) … kuryerga berilmaydi") instead of
     "Boshqa filial orderi" — the order is not assigned (§5.3).
+- **Delivery pricing engine (DAqXPeSy, 2026-10-24, migration 142)** —
+  `src/delivery-pricing/` (own controller + service; NOT in the 7k-line
+  service). Math is the pure `computeDeliveryQuote` in
+  `libs/common/src/pricing/delivery-pricing.ts` (landing `lib/pricing.ts`
+  formula 1:1, 13 golden vectors; integer grams / cm³ / tiyin). Data:
+  `delivery_tariffs` (versioned by `valid_from`, current = `is_active` and
+  `valid_from <= now()`, newest; new price = new row, old rows kept),
+  `delivery_pricing_settings` (one active row, PATCH = new version under
+  `pg_advisory_xact_lock`), `regions.is_city_zone` (only Toshkent SHAHRI,
+  SOATO 1726). Tariff choice: both ends city zone → `city`, else
+  `where_deliver`; a district counts by its GEOGRAPHIC `region_id`, not
+  `assigned_region`. RPCs: `logistics.delivery.quote` (read-only;
+  `items[]` = `product_id` → dims via `catalog.product.find_by_ids`, MARKET
+  only own products, or raw dims), `logistics.delivery.tariffs.find_all` /
+  `.create`, `logistics.delivery.settings.get` / `.update` (audit verbs
+  `logistics.delivery_tariff_created`,
+  `logistics.delivery_pricing_settings_updated`). No cache. Pickup fee is
+  returned separately and never part of `total`. **Not wired into the sale
+  flow yet** (`market_tariff` unchanged — KmWO9gTA).
 
 ### finance-service (`finance_schema`)
 - **Entities:** `cashbox` (`Cashbox_type`: main/couriers/markets/branch),
@@ -860,6 +879,7 @@ secret (secret never reaches the gateway).
 | Inbound webhooks | `apps/api-gateway/src/webhook-gateway.controller.ts` + `integration-service` |
 | All enums / state machines | `libs/common/enums/index.ts` |
 | Env contracts (Joi) | `libs/common/src/config/index.ts` |
+| Delivery price formula (pure) / tariffs | `libs/common/src/pricing/delivery-pricing.ts` / `apps/logistics-service/src/delivery-pricing/` |
 | RMQ client / ack helper | `libs/common/src/rmq/` |
 | Order logic & settlement | `apps/order-service/src/` |
 | Money / cashboxes / ledger | `apps/finance-service/src/` |

@@ -270,6 +270,8 @@ export const logisticsValidationSchema = Joi.object({
   RABBITMQ_ORDER_QUEUE: Joi.string().required(),
   RABBITMQ_IDENTITY_QUEUE: Joi.string().required(),
   RABBITMQ_SEARCH_QUEUE: Joi.string().required(),
+  // (DAqXPeSy) Yetkazish narxi — mahsulot o'lchovini catalog'dan o'qish.
+  RABBITMQ_CATALOG_QUEUE: Joi.string().default('catalog_queue'),
 });
 
 export const financeValidationSchema = Joi.object({
