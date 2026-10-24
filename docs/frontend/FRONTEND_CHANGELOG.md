@@ -23,6 +23,68 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-10-25 — Ombor ↔ buyurtma oqimi (6kHnNH9j, kontrakt `warehouse_v2_contract.md` B)
+
+Deploy: `migration:run` (1716000000153 — `order_schema.orders.fulfillment_source` sukut `HQ`, `warehouse_id`) →
+catalog-service, order-service, api-gateway. Eski buyurtmalar — `HQ`. Tarif va pul hisobi o'zgarmagan.
+
+- [2026-10-25] ✏️ [gateway/order] — **Yaratishda manba:** `POST /orders` tanasida ixtiyoriy
+  `fulfillment: "auto" | "hq"` (sukut `auto`; boshqa qiymat — 400). `POST /orders/ai-confirm` — so'rov darajasida
+  `fulfillment` (partiyaga) va/yoki `orders[i].fulfillment` (ustun), sukut `auto`.
+  - `auto` — buyurtma tumani filialida FAOL ombor bo'lsa va HAMMA mahsulot yetarli bo'lsa → ombor (band bilan),
+    aks holda butun buyurtma HQ'dan (bo'linmaydi). `hq` — har doim HQ.
+  - Ombordan faqat SUPERADMIN, ADMIN, REGISTRATOR va «Ombordan buyurtma yaratish» kaliti yoqilgan MARKET (va uning
+    operatori). Boshqa yaratuvchi (menejer, filial), katalogda yo'q mahsulot (`product_name`), tumansiz buyurtma,
+    Telegram bot yo'li — doim HQ.
+  - Band bo'lmasa (orada qoldiq tugadi, ombor to'xtatildi, catalog javob bermadi) — xato EMAS: buyurtma HQ bilan
+    yaratiladi. 🔧 FE: natijani javobdagi `fulfillment_source` dan ko'rsating (preview — `POST /warehouses/resolve-source`).
+- [2026-10-25] ✏️ [order] — **Ombor buyurtmasi yo'li:** `fulfillment_source: "WAREHOUSE"` buyurtma darhol
+  `status: "received"`, `branch_id` = ombor filiali (holder BRANCH, pochtasiz, HQ qabulisiz) — filial uni odatdagidek
+  kuryerga beradi (`POST /orders/assign-to-courier` yoki kuryer skani; skaner majburiy emas). Kuryerga berish →
+  omborda chiqim; kuryer bekor qilib bekor pochta bilan filialga qaytarganda, filial qabul qilishi bilan mahsulot
+  o'sha omborga qaytadi va buyurtma `status: "returned_to_market"`, `holder_type: "MARKET"` bilan yopiladi (HQ'ga
+  qaytarish va marketga topshirish YO'Q; tracking `action: "warehouse_returned"`). 🔧 FE: WAREHOUSE buyurtmada
+  `returned_to_market` ni «Omborga qaytdi» deb ko'rsating. Kuryerga berilmagan ombor buyurtmasini o'chirish
+  (SUPERADMIN, `received`) — band bo'shaydi. Qisman sotuvda sotilmagan qism (bola buyurtma) ham qaytganda omborga.
+- [2026-10-25] ✏️ [order] — **Javob (ro'yxat va detal):** har buyurtmada `fulfillment_source: "HQ" | "WAREHOUSE"` va
+  `warehouse: { id, name, branch_id } | null` (`GET /orders`, `GET /orders/:id`; catalog javob bermasa nom/filial
+  `null`). `POST /orders` javobida `fulfillment_source` va `warehouse_id`.
+- [2026-10-25] 🆕 [gateway/order] — **Filtr:** `GET /orders?fulfillment_source=WAREHOUSE` (yoki `HQ`; katta-kichik harf
+  farqsiz; boshqa qiymat — 400). `GET /orders/export/excel` ham shu filtrni qabul qiladi.
+
+### 2026-10-24 — Ombor ruxsatlari (XtcEyQjb, kontrakt `warehouse_v2_contract.md` A)
+
+Deploy: `migration:run` (1716000000152 — `identity_schema.admins.can_view_warehouse_stock`, sukut `false`) →
+identity-service, catalog-service, api-gateway. Yozish ruxsatlari o'zgarmagan (kirim, inventarizatsiya, ombor
+ochish/tahrir, chegara, pauza — faqat SUPERADMIN/ADMIN).
+
+- [2026-10-24] ✏️ [gateway] — **O'qish rollari** (`GET /warehouses`, `/warehouses/:id`, `/:id/stock`, `/:id/movements`,
+  `/:id/export`): SUPERADMIN, ADMIN, **REGISTRATOR** — hamma omborlar (filial doirasisiz); filial xodimlari —
+  MANAGER, BRANCH va filialga biriktirilgan **OPERATOR**, **LOGIST** — faqat o'z filiali ombori (begona — 404,
+  filialga biriktirilmagan — 403). COURIER, MARKET, MARKET_OPERATOR, CUSTOMER, INVESTOR — 403 (market o'z qoldig'ini
+  `/market/warehouse-stock` da ko'radi). 🔧 FE: «Omborlar» menyusi — shu rollar.
+- [2026-10-24] 🆕 [gateway/identity] — **Market operatoriga «Ombordagi qoldiq»**:
+  - `PATCH /market-operators/:id/warehouse-access` `{ "can_view_warehouse_stock": boolean }` — faqat MARKET, faqat
+    o'z operatori (begona/yo'q — 404; boolean emas yoki ortiqcha maydon — 400; boshqa rol — 403) → 200
+    `{ statusCode, message, data: { id, name, phone_number, role, status, market_id, commission_type,
+    commission_value, can_view_warehouse_stock, createdAt, updatedAt } }`. Jurnal:
+    `identity.market_operator_warehouse_access_changed` (old/new qiymat; o'zgarmasa yozilmaydi).
+  - ✏️ `GET /market-operators` — har qatorda `can_view_warehouse_stock: boolean` (sukut `false`).
+  - ✏️ `GET /auth/my-profile` — MARKET_OPERATOR uchun `data.can_view_warehouse_stock: boolean` (menyu shu bilan).
+  - ⚠️ `GET /market/warehouse-stock` — MARKET_OPERATOR faqat kalit yoqilgan bo'lsa (faqat o'z marketi); aks holda
+    403 `{ statusCode: 403, message, code: "WAREHOUSE_STOCK_FORBIDDEN" }`. MARKET va SUPERADMIN/ADMIN — avvalgidek.
+    Buyurtma formasidagi `resolve-source` / `availability` — kalitga bog'liq EMAS.
+- [2026-10-24] ⚠️ [catalog] — **To'xtatilgan omborga kirim yo'q:** `POST /warehouses/:id/stock-in` PAUSED omborda →
+  409 `{ statusCode: 409, message, code: "WAREHOUSE_PAUSED" }`, hech narsa yozilmaydi. Shu `Idempotency-Key` bilan
+  pauzadan OLDIN yozilgan AYNI kirim — avvalgi natija (`replayed: true`). Inventarizatsiya va o'qish — ruxsat.
+  🔧 FE: to'xtatilgan omborda «Kirim» tugmasini o'chiring / xabarni `code` bo'yicha ko'rsating.
+- [2026-10-24] ✏️ [catalog] — **Mas'ul xodim avtomatik:** `POST /warehouses` da `manager_user_id` berilmasa (yoki
+  `null`) va `PATCH /warehouses/:id { "manager_user_id": null }` da — filialning birinchi FAOL menejeri
+  (foydalanuvchi id bo'yicha eng kichigi); menejer yo'q — `null`. Aniq id — avvalgidek (shu filial menejeri, aks holda
+  400). 🟢 `null` endi «olib tashlash» emas, «avtomatik tanlash».
+- [2026-10-24] 🟢 [gateway] — xato konvertida `code` endi `WAREHOUSE_PAUSED` va `WAREHOUSE_STOCK_FORBIDDEN` uchun ham
+  chiqadi (`libs/common/src/filters/public-error-fields.ts`).
+
 ### 2026-10-24 — Ombor moduli (hY7uacJu, frontend kartasi yXC91RRx)
 
 Hammasi YANGI (additive). Deploy: `migration:run` (1716000000143) → catalog-service, identity-service,

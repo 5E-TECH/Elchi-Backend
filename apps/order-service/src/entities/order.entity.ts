@@ -471,6 +471,19 @@ export class Order extends BaseEntity {
   created_via!: string | null;
 
   /**
+   * 6kHnNH9j — buyurtma qayerdan ketadi: `HQ` (hozirgi oqim) yoki
+   * `WAREHOUSE` (viloyat filiali omboridan, `warehouse_id` bilan; band/chiqim/
+   * qaytish — `warehouse/order-warehouse.service.ts`). Faqat order-service
+   * yozadi (yaratishda), API orqali o'zgarmaydi. Migratsiya 1716000000153.
+   */
+  @Column({ type: 'varchar', length: 16, default: 'HQ' })
+  fulfillment_source!: 'HQ' | 'WAREHOUSE';
+
+  /** 6kHnNH9j — catalog `warehouses.id` (faqat `WAREHOUSE` buyurtmada). */
+  @Column({ type: 'bigint', nullable: true })
+  warehouse_id!: string | null;
+
+  /**
    * Soft delete marker. NULL when the order is active.
    *
    * TypeORM auto-filters `deleted_at IS NULL` from every query unless the

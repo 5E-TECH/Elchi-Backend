@@ -2,6 +2,7 @@ import { RpcException } from '@nestjs/microservices';
 import { DataSource } from 'typeorm';
 import { Product } from '../entities/product.entity';
 import { WarehouseModule1716000000143 } from '../../../../migrations/1716000000143-WarehouseModule';
+import { MarketOperatorWarehouseAccess1716000000152 } from '../../../../migrations/1716000000152-MarketOperatorWarehouseAccess';
 import {
   Warehouse,
   WAREHOUSE_ENTITIES,
@@ -160,6 +161,10 @@ const pgCode = async (promise: Promise<unknown>) => {
         return map;
       }),
       getBranchManagerIds: jest.fn(() => Promise.resolve(['31'])),
+      // XtcEyQjb: mas'ul xodim tanlanmasa — birinchi faol menejer.
+      getFirstActiveBranchManagerId: jest.fn(
+        (): Promise<string | null> => Promise.resolve('31'),
+      ),
       regionForDistrict: jest.fn((id: string) =>
         Promise.resolve(id === '700' ? REGION_SAM : null),
       ),
@@ -342,6 +347,70 @@ const pgCode = async (promise: Promise<unknown>) => {
       });
     });
 
+    describe('migratsiya 152 (XtcEyQjb)', () => {
+      const access = new MarketOperatorWarehouseAccess1716000000152(IDENTITY);
+      const runAccess = async (direction: 'up' | 'down') => {
+        const runner = db.createQueryRunner();
+        try {
+          await access[direction](runner);
+        } finally {
+          await runner.release();
+        }
+      };
+      const column = async () => {
+        const rows: Array<{ column_default: string; is_nullable: string }> =
+          await db.query(
+            `SELECT column_default, is_nullable FROM information_schema.columns
+              WHERE table_schema = $1 AND table_name = 'admins'
+                AND column_name = 'can_view_warehouse_stock'`,
+            [IDENTITY],
+          );
+        return rows[0] ?? null;
+      };
+
+      beforeEach(async () => {
+        await createBaseTables(db);
+      });
+
+      it('⭐ up ikki marta xatosiz; mavjud qatorlar — false (sukut); down — ustun yo`q; admins yo`q muhit — o`tkaziladi', async () => {
+        await runAccess('up');
+        await expect(runAccess('up')).resolves.toBeUndefined();
+        expect(await column()).toEqual({
+          column_default: 'false',
+          is_nullable: 'NO',
+        });
+        const rows: Array<{ can_view_warehouse_stock: boolean }> =
+          await db.query(
+            `SELECT can_view_warehouse_stock FROM "${IDENTITY}".admins`,
+          );
+        expect(rows.map((row) => row.can_view_warehouse_stock)).toEqual([
+          false,
+        ]);
+        await db.query(
+          `INSERT INTO "${IDENTITY}".admins (name) VALUES ('Yangi operator')`,
+        );
+        const [fresh]: Array<{ can_view_warehouse_stock: boolean }> =
+          await db.query(
+            `SELECT can_view_warehouse_stock FROM "${IDENTITY}".admins ORDER BY id DESC LIMIT 1`,
+          );
+        expect(fresh.can_view_warehouse_stock).toBe(false);
+
+        await runAccess('down');
+        expect(await column()).toBeNull();
+        await expect(runAccess('down')).resolves.toBeUndefined();
+
+        await db.query(`DROP TABLE "${IDENTITY}".admins`);
+        await expect(runAccess('up')).resolves.toBeUndefined();
+        await expect(runAccess('down')).resolves.toBeUndefined();
+      });
+
+      it('noto`g`ri sxema nomi — konstruktorda xato', () => {
+        expect(
+          () => new MarketOperatorWarehouseAccess1716000000152('x"; DROP'),
+        ).toThrow();
+      });
+    });
+
     describe('servis', () => {
       beforeEach(async () => {
         await createBaseTables(db);
@@ -408,6 +477,53 @@ const pgCode = async (promise: Promise<unknown>) => {
               ),
             ),
           ).toBe('23514');
+        });
+
+        it('⭐ XtcEyQjb: mas`ul xodim tanlanmasa — filialning birinchi faol menejeri; `null` bilan tahrir — qayta tanlanadi; menejer yo`q — null', async () => {
+          directory.getFirstActiveBranchManagerId.mockResolvedValueOnce('31');
+          const created = await warehouses.create(
+            { branch_id: BRANCH_SAM },
+            ADMIN,
+          );
+          expect(created.manager_user_id).toBe('31');
+          expect(directory.getFirstActiveBranchManagerId).toHaveBeenCalledWith(
+            BRANCH_SAM,
+          );
+
+          directory.getFirstActiveBranchManagerId.mockResolvedValueOnce(null);
+          const far = await warehouses.create(
+            { branch_id: BRANCH_FAR, manager_user_id: null },
+            ADMIN,
+          );
+          expect(far.manager_user_id).toBeNull();
+
+          // Aniq tanlov — avtomatik tanlov chaqirilmaydi.
+          directory.getFirstActiveBranchManagerId.mockClear();
+          const renamed = await warehouses.update(
+            created.id,
+            { name: 'Yangi nom' },
+            ADMIN,
+          );
+          expect(renamed.manager_user_id).toBe('31');
+          expect(
+            directory.getFirstActiveBranchManagerId,
+          ).not.toHaveBeenCalled();
+
+          directory.getFirstActiveBranchManagerId.mockResolvedValueOnce('44');
+          const reset = await warehouses.update(
+            created.id,
+            { manager_user_id: null },
+            ADMIN,
+          );
+          expect(reset.manager_user_id).toBe('44');
+
+          directory.getFirstActiveBranchManagerId.mockResolvedValueOnce(null);
+          const cleared = await warehouses.update(
+            created.id,
+            { manager_user_id: null },
+            ADMIN,
+          );
+          expect(cleared.manager_user_id).toBeNull();
         });
 
         it('mas`ul xodim filial menejeri bo`lmasa — 400', async () => {
@@ -531,6 +647,54 @@ const pgCode = async (promise: Promise<unknown>) => {
           });
           expect(await stockRow(w.id, b.id)).toEqual({
             on_hand: 2,
+            reserved: 0,
+          });
+        });
+
+        it('⭐ XtcEyQjb: to`xtatilgan omborga kirim — 409 WAREHOUSE_PAUSED, hech narsa yozilmaydi; inventarizatsiya — ruxsat; takroriy kalit — avvalgi natija', async () => {
+          const w = await openWarehouse();
+          const a = await addProduct('Shapka');
+          const firstKey = nextKey();
+          await stockIn(w.id, [{ product_id: a.id, qty: 5 }], firstKey);
+          await warehouses.setStatus(w.id, 'PAUSED', ADMIN);
+          const before = await movementCount(w.id);
+
+          expect(
+            await errorOf(stockIn(w.id, [{ product_id: a.id, qty: 3 }])),
+          ).toMatchObject({ statusCode: 409, code: 'WAREHOUSE_PAUSED' });
+          expect(await stockRow(w.id, a.id)).toEqual({
+            on_hand: 5,
+            reserved: 0,
+          });
+          expect(await movementCount(w.id)).toBe(before);
+
+          // Pauzadan oldin yozilgan AYNI so'rov — qayta yozilmaydi, natija qaytadi.
+          const replay = await stockIn(
+            w.id,
+            [{ product_id: a.id, qty: 5 }],
+            firstKey,
+          );
+          expect(replay).toMatchObject({ replayed: true });
+          expect(await movementCount(w.id)).toBe(before);
+
+          // Inventarizatsiya to'xtatilgan omborda ham ishlaydi.
+          const counted = await stock.inventory({
+            warehouse_id: w.id,
+            lines: [{ product_id: a.id, counted: 4 }],
+            reason: 'Sanash',
+            idempotency_key: nextKey(),
+            actor: ADMIN,
+          });
+          expect(counted).toMatchObject({ changed: 1 });
+          expect(await stockRow(w.id, a.id)).toEqual({
+            on_hand: 4,
+            reserved: 0,
+          });
+
+          await warehouses.setStatus(w.id, 'ACTIVE', ADMIN);
+          await stockIn(w.id, [{ product_id: a.id, qty: 3 }]);
+          expect(await stockRow(w.id, a.id)).toEqual({
+            on_hand: 7,
             reserved: 0,
           });
         });
@@ -783,6 +947,39 @@ const pgCode = async (promise: Promise<unknown>) => {
           expect(await stockRow(w.id, a.id)).toEqual({
             on_hand: 5,
             reserved: 1,
+          });
+        });
+
+        it('⭐ 6kHnNH9j `lenient` (order-service outbox): bo`shatilgan bandga out va chiqimdagi bandga release — 409 o`rniga no-op, qoldiq o`zgarmaydi', async () => {
+          const { w, a } = await setup(5);
+          await stock.reserve({
+            order_id: '210',
+            warehouse_id: w.id,
+            items: [{ product_id: a.id, quantity: 2 }],
+          });
+          await stock.release({ order_id: '210' });
+          await expect(
+            stock.out({ order_id: '210', lenient: true }),
+          ).resolves.toMatchObject({ changed: false, status: 'RELEASED' });
+
+          await stock.reserve({
+            order_id: '211',
+            warehouse_id: w.id,
+            items: [{ product_id: a.id, quantity: 1 }],
+          });
+          await stock.out({ order_id: '211' });
+          expect(
+            await errorOf(stock.release({ order_id: '211' })),
+          ).toMatchObject({
+            statusCode: 409,
+            code: 'WAREHOUSE_ORDER_ALREADY_OUT',
+          });
+          await expect(
+            stock.release({ order_id: '211', lenient: true }),
+          ).resolves.toMatchObject({ changed: false, status: 'OUT' });
+          expect(await stockRow(w.id, a.id)).toEqual({
+            on_hand: 4,
+            reserved: 0,
           });
         });
 

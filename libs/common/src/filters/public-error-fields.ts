@@ -1,3 +1,5 @@
+import { WAREHOUSE_ERROR_CODES } from '../catalog/warehouse';
+
 /**
  * (Elchi Pochta #3) Xato javobidagi mashina o'qiydigan qo'shimcha maydonlar.
  *
@@ -28,6 +30,10 @@ export const PUBLIC_ERROR_CODES: Readonly<Record<string, readonly string[]>> = {
   // Sessiya yaratilganiga SESSION_REVOKE_LOCK_HOURS (sukut 48) to'lmagan:
   // `available_at` — qachondan boshqa sessiyalarni yopish mumkin (ISO).
   [SESSION_TOO_NEW]: ['available_at'],
+  // (XtcEyQjb) to'xtatilgan omborga kirim — 409.
+  [WAREHOUSE_ERROR_CODES.PAUSED]: [],
+  // (XtcEyQjb) market operatoriga «Ombordagi qoldiq» yopiq — 403.
+  [WAREHOUSE_ERROR_CODES.STOCK_FORBIDDEN]: [],
 };
 
 export type PublicErrorValue = string | number | boolean | null;

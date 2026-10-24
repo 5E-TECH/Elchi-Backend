@@ -123,6 +123,13 @@ export interface OrderOpInput {
   order_id: unknown;
   actor?: WarehouseActorInput | null;
   note?: unknown;
+  /**
+   * 6kHnNH9j: order-service outbox'i (`true`) — `out` bo'shatilgan bandda
+   * 409 o'rniga no-op. Outbox qayta urinishda hodisalar tartibi almashishi
+   * mumkin (`return` `out` dan oldin yetib, bandni bo'shatgan bo'ladi):
+   * natijaviy qoldiq bir xil, `out` esa abadiy 409 bilan qayta urinilmasin.
+   */
+  lenient?: unknown;
 }
 
 export interface ReturnInput extends OrderOpInput {
@@ -410,10 +417,11 @@ export class WarehouseStockService {
   // ------------------------------------------------------------------
 
   /**
-   * Admin kirimi (qaror 3): darhol qoldiqqa, filial tasdig'isiz. To'xtatilgan
-   * omborga ham mumkin (qoldiq saqlanadi). `Idempotency-Key` bilan qayta
-   * yuborilgan AYNI so'rov — avvalgi natija (`replayed: true`), boshqa
-   * tarkibli — 409.
+   * Admin kirimi (qaror 3): darhol qoldiqqa, filial tasdig'isiz.
+   * To'xtatilgan omborga kirim YO'Q (XtcEyQjb) — 409 `WAREHOUSE_PAUSED`
+   * (inventarizatsiya va o'qish — ruxsat). `Idempotency-Key` bilan qayta
+   * yuborilgan AYNI so'rov — avvalgi natija (`replayed: true`, ombor keyin
+   * to'xtatilgan bo'lsa ham — u allaqachon yozilgan), boshqa tarkibli — 409.
    */
   async stockIn(input: StockInInput) {
     const warehouseId = toId(input?.warehouse_id, 'warehouse_id');
@@ -481,6 +489,16 @@ export class WarehouseStockService {
             };
           }),
         };
+      }
+
+      // Ombor qatori FOR NO KEY UPDATE ostida — parallel pauza bilan
+      // ketma-ket: pauzadan keyin kirim yozilmaydi.
+      if (warehouse.status !== 'ACTIVE') {
+        rpcError(
+          409,
+          "Ombor to'xtatilgan — kirim qilib bo'lmaydi. Avval omborni qayta yoqing",
+          { code: WAREHOUSE_ERROR_CODES.PAUSED, warehouse_id: warehouseId },
+        );
       }
 
       await this.ensureStockRows(
@@ -1107,7 +1125,8 @@ export class WarehouseStockService {
    * Bekor (kuryerga berilmasdan): band bo'shaydi (qaror 7). Bandi yo'q
    * buyurtma (HQ manbali) — `status: 'NONE'`, xato emas; allaqachon
    * bo'shatilgan — `changed: false`. Kuryerga berilgan (OUT) — 409:
-   * `catalog.warehouse.return` ishlating.
+   * `catalog.warehouse.return` ishlating; `lenient` (outbox) bilan — no-op
+   * (qoldiq kuryerda deb qoladi, qayta urinish abadiy 409 bermasin).
    */
   async release(input: OrderOpInput) {
     const orderId = toId(input?.order_id, 'order_id');
@@ -1120,7 +1139,10 @@ export class WarehouseStockService {
       const rows = await this.orderReservations(manager, orderId);
       const reserved = rows.filter((row) => row.status === 'RESERVED');
       if (!reserved.length) {
-        if (rows.some((row) => row.status === 'OUT')) {
+        if (
+          input?.lenient !== true &&
+          rows.some((row) => row.status === 'OUT')
+        ) {
           rpcError(
             409,
             "Buyurtma kuryerga berilgan — bandni bo'shatib bo'lmaydi, qaytganda catalog.warehouse.return",
@@ -1157,7 +1179,7 @@ export class WarehouseStockService {
   /**
    * Kuryerga berildi (qaror 7): `on_hand −n`, `reserved −n`. Takroriy — no-op.
    * Bandi yo'q — `NONE`; faqat bo'shatilgan band — 409 (bekor qilingan
-   * buyurtma kuryerga berilmaydi).
+   * buyurtma kuryerga berilmaydi), `lenient` (outbox) bilan — no-op.
    */
   async out(input: OrderOpInput) {
     const orderId = toId(input?.order_id, 'order_id');
@@ -1171,7 +1193,7 @@ export class WarehouseStockService {
       const reserved = rows.filter((row) => row.status === 'RESERVED');
       if (!reserved.length) {
         const status = this.orderStatus(rows);
-        if (status === 'RELEASED') {
+        if (status === 'RELEASED' && input?.lenient !== true) {
           rpcError(
             409,
             "Buyurtma bandi bo'shatilgan (bekor qilingan) — chiqim qilib bo'lmaydi",

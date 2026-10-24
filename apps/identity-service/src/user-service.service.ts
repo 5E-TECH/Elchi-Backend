@@ -2716,6 +2716,8 @@ export class UserServiceService implements OnModuleInit {
       const marketById = await this.findMarketSummaries([user.market_id]);
       operatorMarket = {
         market: marketById.get(primitiveText(user.market_id).trim()) ?? null,
+        // XtcEyQjb — «Ombordagi qoldiq» menyusi shu kalit bilan ochiladi.
+        can_view_warehouse_stock: user.can_view_warehouse_stock === true,
       };
     }
 
@@ -5277,6 +5279,8 @@ export class UserServiceService implements OnModuleInit {
       market_id: user.market_id ?? null,
       commission_type: user.commission_type ?? null,
       commission_value: user.commission_value ?? null,
+      // XtcEyQjb — «Ombordagi qoldiq»ni ko'rish kaliti (sukut false).
+      can_view_warehouse_stock: user.can_view_warehouse_stock === true,
       createdAt: user.createdAt,
       updatedAt: user.updatedAt,
     };
@@ -5604,6 +5608,59 @@ export class UserServiceService implements OnModuleInit {
       this.toMarketOperatorView(saved),
       200,
       'Operator komissiyasi yangilandi',
+    );
+  }
+
+  /**
+   * identity.market_operator.update_warehouse_access (XtcEyQjb) — market o'z
+   * operatoriga «Ombordagi qoldiq»ni ko'rishni yoqadi/o'chiradi. Ko'lam
+   * komissiya bilan bir xil: faqat MARKET, faqat o'z operatori (begona/yo'q —
+   * 404). RMQ'da ValidationPipe yo'q — qiymat boolean bo'lmasa 400. Qiymat
+   * o'zgarmasa ham javob qaytadi, jurnal yozilmaydi.
+   */
+  async updateMarketOperatorWarehouseAccess(
+    id: string,
+    marketId: string,
+    dto: { can_view_warehouse_stock?: unknown },
+    requester?: RequesterContext,
+  ) {
+    const scopedMarketId = this.resolveMarketOperatorScope(marketId, requester);
+    const next = dto?.can_view_warehouse_stock;
+    if (typeof next !== 'boolean') {
+      this.badRequest(
+        "can_view_warehouse_stock boolean (true/false) bo'lishi kerak",
+      );
+    }
+    const operator = await this.findOwnMarketOperator(id, scopedMarketId);
+    const before = operator.can_view_warehouse_stock === true;
+    if (before === next) {
+      return successRes(
+        this.toMarketOperatorView(operator),
+        200,
+        "Operatorning ombor ruxsati o'zgarmadi",
+      );
+    }
+    operator.can_view_warehouse_stock = next;
+    const saved = await this.users.save(operator);
+    await this.activityLog.log({
+      entity_type: 'User',
+      entity_id: saved.id,
+      action: 'identity.market_operator_warehouse_access_changed',
+      old_value: { can_view_warehouse_stock: before },
+      new_value: { can_view_warehouse_stock: next },
+      ...this.auditActor(requester),
+      metadata: { market_id: scopedMarketId },
+      description: ActivityDescribeUz.marketOperatorWarehouseAccessChanged(
+        saved.id,
+        next,
+      ),
+    });
+    return successRes(
+      this.toMarketOperatorView(saved),
+      200,
+      next
+        ? "Operatorga ombor qoldig'ini ko'rish ruxsati berildi"
+        : "Operatorning ombor qoldig'ini ko'rish ruxsati o'chirildi",
     );
   }
 }

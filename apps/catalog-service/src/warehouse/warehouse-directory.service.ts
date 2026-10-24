@@ -174,10 +174,13 @@ export class WarehouseDirectoryService {
   }
 
   /**
-   * Filial menejerlari (branch_users, rol MANAGER). Mas'ul xodim tanlovini
-   * tekshirish uchun — servis javob bermasa 503.
+   * Filial menejerlari (branch_users, rol MANAGER) — `active`: identity'dagi
+   * foydalanuvchi FAOL (`status = active`; o'chirilgan/topilmagan — yo'q).
+   * Servis javob bermasa 503.
    */
-  async getBranchManagerIds(branchId: string): Promise<string[]> {
+  private async getBranchManagers(
+    branchId: string,
+  ): Promise<Array<{ user_id: string; active: boolean }>> {
     let response: unknown;
     try {
       response = await this.send(
@@ -196,8 +199,38 @@ export class WarehouseDirectoryService {
         (row): row is Record<string, unknown> =>
           !!row && str(row.role).toUpperCase() === BranchUserRole.MANAGER,
       )
-      .map((row) => str(row.user_id))
-      .filter(Boolean);
+      .map((row) => ({
+        user_id: str(row.user_id),
+        active: str(asRecord(row.user)?.status).toLowerCase() === Status.ACTIVE,
+      }))
+      .filter((row) => /^\d+$/.test(row.user_id));
+  }
+
+  /** Mas'ul xodim tanlovini tekshirish uchun — filialning hamma menejerlari. */
+  async getBranchManagerIds(branchId: string): Promise<string[]> {
+    return (await this.getBranchManagers(branchId)).map((row) => row.user_id);
+  }
+
+  /**
+   * XtcEyQjb: mas'ul xodim tanlanmasa — filialning birinchi FAOL menejeri
+   * (foydalanuvchi id'si bo'yicha eng kichigi); yo'q bo'lsa `null`.
+   */
+  async getFirstActiveBranchManagerId(
+    branchId: string,
+  ): Promise<string | null> {
+    const ids = (await this.getBranchManagers(branchId))
+      .filter((row) => row.active)
+      .map((row) => row.user_id)
+      .sort((a, b) =>
+        a.length !== b.length
+          ? a.length - b.length
+          : a < b
+            ? -1
+            : a > b
+              ? 1
+              : 0,
+      );
+    return ids[0] ?? null;
   }
 
   /**

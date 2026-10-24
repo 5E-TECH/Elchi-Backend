@@ -95,6 +95,11 @@ import {
   type PostOrderDeleteOutcome,
 } from './post-order-bulk-delete';
 import {
+  isWarehouseReserveFallback,
+  OrderWarehouseService,
+  type WarehouseCreatePlan,
+} from '../warehouse/order-warehouse.service';
+import {
   assertReplacementSaleAllowed,
   findReplaceableOrders,
   findReplacementReturns,
@@ -294,6 +299,10 @@ export class OrderLifecycleService {
     // Ixtiyoriy: eski spec'lar lifecycle'ni usiz quradi — u holda bildirishnoma yo'q.
     @Optional()
     private readonly orderNotifications?: OrderNotificationService,
+    // 6kHnNH9j: ombor ↔ buyurtma (band/chiqim/qaytish). Ixtiyoriy — usiz
+    // (eski spec'lar) hamma buyurtma HQ va ombor RPC'si chaqirilmaydi.
+    @Optional()
+    private readonly orderWarehouse?: OrderWarehouseService,
   ) {}
 
   // ===== leaf helpers duplicated from OrderServiceService =====
@@ -4872,10 +4881,36 @@ export class OrderLifecycleService {
     }
   }
 
+  /**
+   * 6kHnNH9j: manba (`fulfillment`, `warehouse/order-warehouse.service.ts`).
+   * Ombor tanlansa — buyurtma ombor filialida «qabul qilingan» bo'lib, band
+   * bilan BITTA tranzaksiyada yaratiladi; band bo'lmasa (yetmadi, to'xtatildi,
+   * catalog javob bermadi) — tranzaksiya qaytariladi va butun buyurtma HQ
+   * bilan yaratiladi (qaror 4: bo'linmaydi).
+   */
   async create(
+    rawDto: Parameters<OrderLifecycleService['createOnce']>[0],
+    requester?: { id: string; roles?: string[] },
+    opts?: Parameters<OrderLifecycleService['createOnce']>[2],
+  ) {
+    const warehousePlan =
+      (await this.orderWarehouse?.planCreate(rawDto, requester)) ?? null;
+    if (warehousePlan) {
+      try {
+        return await this.createOnce(rawDto, requester, opts, warehousePlan);
+      } catch (error) {
+        if (!isWarehouseReserveFallback(error)) throw error;
+      }
+    }
+    return this.createOnce(rawDto, requester, opts, null);
+  }
+
+  private async createOnce(
     rawDto: {
       market_id: string;
       customer_id: string;
+      /** 6kHnNH9j: `auto` | `hq` (gateway); berilmasa — HQ (ichki yo'llar). */
+      fulfillment?: string | null;
       where_deliver?: Where_deliver;
       total_price?: number;
       to_be_paid?: number;
@@ -4934,6 +4969,7 @@ export class OrderLifecycleService {
       auditMetadata?: Record<string, unknown> | null;
       createdVia?: OrderCreatedVia | null;
     },
+    warehousePlan: WarehouseCreatePlan | null = null,
   ) {
     // fix3 C6 (RBAC-05, LC-07, LC-14): SUPERADMIN/ADMIN dan boshqa
     // yaratuvchining hayot sikli/saqlash maydonlari olib tashlanadi —
@@ -4956,14 +4992,18 @@ export class OrderLifecycleService {
     const operatorId =
       dto.operator_id ?? (isOperatorRequester ? (requester?.id ?? null) : null);
 
-    const resolvedBranchId = await this.resolveBranchIdForOrder(
-      dto.branch_id,
-      requester,
-    );
+    // 6kHnNH9j: ombor buyurtmasi — darhol viloyat filialida (HQ qabuli va
+    // pochtasiz), kuryerga biriktirishga tayyor.
+    const resolvedBranchId = warehousePlan
+      ? warehousePlan.branch_id
+      : await this.resolveBranchIdForOrder(dto.branch_id, requester);
     const resolvedHolder = await this.resolveHolderFromState(
       resolvedBranchId,
       dto.courier_id ?? null,
     );
+    const initialStatus = warehousePlan
+      ? Order_status.RECEIVED
+      : (dto.status ?? Order_status.NEW);
 
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
@@ -5001,7 +5041,9 @@ export class OrderLifecycleService {
          * marketpleys allaqachon olgan pul uchun haqdor qilardi.
          */
         paid_online_amount: paidOnlineAmount,
-        status: dto.status ?? Order_status.NEW,
+        status: initialStatus,
+        fulfillment_source: warehousePlan ? 'WAREHOUSE' : 'HQ',
+        warehouse_id: warehousePlan?.warehouse_id ?? null,
         comment: dto.comment ?? null,
         operator: dto.operator ?? null,
         operator_id: operatorId,
@@ -5095,6 +5137,14 @@ export class OrderLifecycleService {
         );
       }
 
+      // 6kHnNH9j: band — shu tranzaksiyada (bo'lmasa HQ bilan qayta yaratiladi).
+      if (warehousePlan) {
+        await this.orderWarehouse!.reserveForNewOrder(
+          { order_id: saved.id, plan: warehousePlan, requester },
+          queryRunner.manager,
+        );
+      }
+
       await this.custody.createTrackingEvent(
         {
           order_id: saved.id,
@@ -5104,7 +5154,9 @@ export class OrderLifecycleService {
           changed_by_role: requester?.id
             ? this.custody.toTrackingRole(requester.roles)
             : 'system',
-          note: 'Order created',
+          note: warehousePlan
+            ? `Order created — ombordan (#${warehousePlan.warehouse_id}), viloyat filialida qabul qilingan`
+            : 'Order created',
         },
         trackingRepo,
       );
@@ -5150,12 +5202,16 @@ export class OrderLifecycleService {
         entity_id: savedId,
         action: ActivityAction.CREATED,
         new_value: {
-          status: dto.status ?? Order_status.NEW,
+          status: initialStatus,
           market_id: dto.market_id,
           customer_id: dto.customer_id,
           total_price: dto.total_price ?? 0,
           branch_id: resolvedBranchId,
           source: dto.source ?? Order_source.INTERNAL,
+          fulfillment_source: warehousePlan ? 'WAREHOUSE' : 'HQ',
+          ...(warehousePlan
+            ? { warehouse_id: warehousePlan.warehouse_id }
+            : {}),
           // (lQjt6sKP) almashtirish izi — faqat almashtirishda (shakl o'zgarmaydi).
           ...(replacedOrderId
             ? { replacement_of_order_id: replacedOrderId }
@@ -9168,6 +9224,8 @@ export class OrderLifecycleService {
           qr_code_token: `CANCEL-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`,
           parent_order_id: String(order.id),
           source: order.source,
+          // 6kHnNH9j: bola ota buyurtma bandida — omborga qaytishi uchun.
+          ...(this.orderWarehouse?.inheritedFields(order) ?? {}),
           product_quantity: cancelledItems.reduce(
             (sum, item) => sum + item.quantity,
             0,
@@ -9763,6 +9821,13 @@ export class OrderLifecycleService {
         );
       }
 
+      // 6kHnNH9j: ombor buyurtmasi — kuryerga berish → chiqim, bekor posilka
+      // filialga qaytdi → omborga qaytish (outbox, shu tranzaksiyada).
+      await this.orderWarehouse?.onOrderWritten(
+        { order, oldStatus, previousHolderType, requester },
+        manager,
+      );
+
       // (ePpLHPX2) Kuryerga biriktirildi (logistics scan-assign /
       // assign-to-courier `order.update` → shu yer) — bildirishnoma shu
       // tranzaksiyada outbox orqali; kuryer o'zgarmagan bo'lsa hech narsa.
@@ -10005,6 +10070,8 @@ export class OrderLifecycleService {
         order.isDeleted = true;
         await tx.getRepository(Order).save(order);
       }
+      // 6kHnNH9j: kuryerga berilmagan ombor buyurtmasi — band bo'shaydi.
+      await this.orderWarehouse?.onOrderRemoved(order, requester, tx);
       await this.removeOrderFromSearch(id, tx);
     });
 

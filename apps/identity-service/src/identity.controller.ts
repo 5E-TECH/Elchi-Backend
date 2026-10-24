@@ -55,6 +55,7 @@ import type {
   DeleteMarketOperatorPayload,
   FindMarketOperatorsPayload,
   UpdateMarketOperatorCommissionPayload,
+  UpdateMarketOperatorWarehouseAccessPayload,
 } from './contracts/market-operator.payloads';
 
 @Controller()
@@ -773,6 +774,21 @@ export class IdentityController {
         payload?.id,
         payload?.market_id,
         payload?.dto,
+        payload?.requester,
+      ),
+    );
+  }
+
+  @MessagePattern({ cmd: 'identity.market_operator.update_warehouse_access' })
+  updateMarketOperatorWarehouseAccess(
+    @Payload() payload: UpdateMarketOperatorWarehouseAccessPayload,
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.userService.updateMarketOperatorWarehouseAccess(
+        payload?.id,
+        payload?.market_id,
+        payload?.dto ?? {},
         payload?.requester,
       ),
     );

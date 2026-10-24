@@ -183,6 +183,8 @@ export class OrderServiceController {
         replaced_order_id?: string | null;
         external_id?: string | null;
         source?: Order_source;
+        /** 6kHnNH9j: `auto` | `hq` (gateway); berilmasa — HQ. */
+        fulfillment?: string | null;
         items?: Array<{
           product_id?: string | null;
           product_name?: string | null;
@@ -299,6 +301,8 @@ export class OrderServiceController {
         district_id?: string;
         branch_id?: string;
         source?: Order_source | 'internal' | 'external' | 'branch';
+        /** 6kHnNH9j: HQ | WAREHOUSE. */
+        fulfillment_source?: string;
         fetch_all?: boolean | string;
         fetchAll?: boolean | string;
         page?: number;

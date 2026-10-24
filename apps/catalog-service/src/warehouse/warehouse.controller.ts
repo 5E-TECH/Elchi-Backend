@@ -204,6 +204,7 @@ export class WarehouseController {
         order_id: data?.order_id,
         actor: data?.actor ?? data?.requester,
         note: data?.note,
+        lenient: data?.lenient === true,
       }),
     );
   }
@@ -215,6 +216,7 @@ export class WarehouseController {
         order_id: data?.order_id,
         actor: data?.actor ?? data?.requester,
         note: data?.note,
+        lenient: data?.lenient === true,
       }),
     );
   }

@@ -71,7 +71,7 @@ export class CreateWarehouseRequestDto {
     example: '31',
     nullable: true,
     description:
-      "Mas'ul xodim — shu filialning menejeri (branch_users, rol MANAGER), aks holda 400. Faqat ko'rsatish uchun: o'qish ruxsati filialdan.",
+      "Mas'ul xodim — shu filialning menejeri (branch_users, rol MANAGER), aks holda 400. Berilmasa yoki `null` — filialning birinchi faol menejeri (foydalanuvchi id bo'yicha), menejer yo'q bo'lsa `null` (XtcEyQjb). Faqat ko'rsatish uchun: o'qish ruxsati filialdan.",
   })
   @IsOptional()
   @ValidateIf((_, value) => value !== null)
@@ -122,7 +122,8 @@ export class UpdateWarehouseRequestDto {
 
   @ApiPropertyOptional({
     nullable: true,
-    description: "Shu filial menejeri; `null` — mas'ul xodimni olib tashlash.",
+    description:
+      "Shu filial menejeri; `null` — filialning birinchi faol menejeri avtomatik (menejer yo'q bo'lsa `null`, XtcEyQjb).",
   })
   @IsOptional()
   @ValidateIf((_, value) => value !== null)

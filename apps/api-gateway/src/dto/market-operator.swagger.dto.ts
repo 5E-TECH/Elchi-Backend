@@ -1,5 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
+  IsBoolean,
   IsEnum,
   IsNumber,
   IsOptional,
@@ -63,4 +64,18 @@ export class UpdateMarketOperatorCommissionRequestDto {
   @Min(0)
   @Max(1_000_000)
   commission_value?: number | null;
+}
+
+/**
+ * PATCH /market-operators/:id/warehouse-access (XtcEyQjb). Market o'z
+ * operatoriga «Ombordagi qoldiq»ni ochadi (`true`) yoki yopadi (`false`).
+ */
+export class UpdateMarketOperatorWarehouseAccessRequestDto {
+  @ApiProperty({
+    example: true,
+    description:
+      "true — operator `GET /market/warehouse-stock` ni ko'radi; false — 403 `WAREHOUSE_STOCK_FORBIDDEN`",
+  })
+  @IsBoolean()
+  can_view_warehouse_stock!: boolean;
 }

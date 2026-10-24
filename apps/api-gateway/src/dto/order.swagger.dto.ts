@@ -6,6 +6,7 @@ import {
   IsBoolean,
   IsInt,
   IsEnum,
+  IsIn,
   IsISO8601,
   MaxLength,
   MinLength,
@@ -23,6 +24,8 @@ import { Transform, Type } from 'class-transformer';
 import {
   CancelReason,
   normalizeUzPhone,
+  ORDER_FULFILLMENT_MODES,
+  type OrderFulfillmentMode,
   Order_status,
   Where_deliver,
   ExtraCostRejectReason,
@@ -223,6 +226,28 @@ export class CreateOrderRequestDto {
     message: "replaced_order_id buyurtma raqami (ID) bo'lishi kerak",
   })
   replaced_order_id?: string;
+
+  /**
+   * 6kHnNH9j — buyurtma manbasi tanlovi (ega qarori 4/5). `auto` (sukut) —
+   * tuman filialida FAOL ombor bo'lsa va HAMMA mahsulot yetarli bo'lsa
+   * ombordan (darhol viloyat filialida «qabul qilingan», band bilan), aks
+   * holda butun buyurtma HQ'dan; `hq` — har doim HQ. Market — faqat
+   * «Ombordan buyurtma yaratish» kaliti yoqilgan bo'lsa ombor.
+   */
+  @ApiPropertyOptional({
+    enum: ORDER_FULFILLMENT_MODES,
+    default: 'auto',
+    description:
+      "auto — ombor (hamma mahsulot yetarli bo'lsa) yoki HQ; hq — har doim HQ. Natija javobdagi `fulfillment_source` (HQ | WAREHOUSE).",
+  })
+  @IsOptional()
+  @Transform(({ value }) =>
+    typeof value === 'string' ? value.trim().toLowerCase() : value,
+  )
+  @IsIn(ORDER_FULFILLMENT_MODES as unknown as string[], {
+    message: "fulfillment faqat 'auto' yoki 'hq' bo'lishi mumkin",
+  })
+  fulfillment?: OrderFulfillmentMode;
 
   @ApiPropertyOptional({
     example: '1',

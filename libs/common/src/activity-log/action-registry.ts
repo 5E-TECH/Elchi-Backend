@@ -309,6 +309,13 @@ export const ACTIVITY_ACTION_REGISTRY: Readonly<
     'calculator',
     'amber',
   ),
+  // (XtcEyQjb) market o'z operatoriga «Ombordagi qoldiq»ni ochdi/yopdi (identity).
+  'identity.market_operator_warehouse_access_changed': entry(
+    "Operatorning ombor qoldig'i ruxsati o'zgardi",
+    'auth',
+    'key',
+    'amber',
+  ),
   /**
    * (ILq3WNL1) Muvaffaqiyatli birlashtirish — alohida amal (ilgari oddiy
    * `deleted` + `new_value.merged_into` edi: jurnalda topib/filtrlab
