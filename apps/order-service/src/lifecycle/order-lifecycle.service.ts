@@ -70,7 +70,10 @@ import {
 } from '../domain/order-money';
 import { OrderLookupService } from '../lookup/order-lookup.service';
 import { OrderCustodyService } from '../custody/order-custody.service';
-import { OrderNotificationService } from '../notification/order-notification.service';
+import {
+  OrderNotificationService,
+  orderNumberOf,
+} from '../notification/order-notification.service';
 import {
   enqueueExtraCostNotification,
   formatSom,
@@ -1596,13 +1599,28 @@ export class OrderLifecycleService {
     }
   }
 
-  private serializeExtraCostApproval(approval: OrderExtraCostApproval) {
+  /**
+   * (0Ngp09FG) `order_number` — mijozga ko'rinadigan raqam ("EL-…", ichki id
+   * emas); `requested_by.name` — so'rovchi (kuryer/menejer) ismi. Ism faqat
+   * market ko'radigan javoblarda (ro'yxat, tasdiq/rad) identity'dan
+   * to'ldiriladi (`withExtraCostRequesterNames`); kuryerning o'z 202
+   * javobida va ism olinmasa — `null`.
+   */
+  private serializeExtraCostApproval(
+    approval: OrderExtraCostApproval,
+    requesterName: string | null = null,
+  ) {
     return {
       id: String(approval.id),
       order_id: String(approval.order_id),
+      order_number: orderNumberOf(approval.order_id) || null,
       market_id: String(approval.market_id),
       requested_by_user_id: String(approval.requested_by_user_id),
       requested_by_role: approval.requested_by_role,
+      requested_by: {
+        id: String(approval.requested_by_user_id),
+        name: requesterName,
+      },
       requester_branch_id: approval.requester_branch_id
         ? String(approval.requester_branch_id)
         : null,
@@ -1624,6 +1642,49 @@ export class OrderLifecycleService {
       createdAt: approval.createdAt,
       updatedAt: approval.updatedAt,
     };
+  }
+
+  /**
+   * (0Ngp09FG) So'rovchilar ismi — BITTA `identity.user.find_by_ids`
+   * (ro'yxat ≤100 qator, N+1 emas). Ism faqat ko'rinadigan yorliq: identity
+   * javob bermasa/xato bersa ro'yxat to'xtamaydi — ism `null` (fail-open,
+   * 3 s, qayta urinishsiz).
+   */
+  private async withExtraCostRequesterNames(
+    approvals: OrderExtraCostApproval[],
+  ) {
+    const ids = [
+      ...new Set(
+        approvals
+          .map((approval) => String(approval.requested_by_user_id ?? '').trim())
+          .filter(Boolean),
+      ),
+    ];
+    const names = new Map<string, string | null>();
+    if (ids.length) {
+      const response = await rmqSend<{
+        data?: Array<{ id?: unknown; name?: unknown }>;
+      }>(
+        this.identityClient,
+        { cmd: 'identity.user.find_by_ids' },
+        { ids },
+        { timeoutMs: 3000, retries: 0 },
+      ).catch(() => ({ data: [] }));
+      for (const user of Array.isArray(response?.data) ? response.data : []) {
+        const id =
+          typeof user?.id === 'string' || typeof user?.id === 'number'
+            ? String(user.id)
+            : '';
+        const name = typeof user?.name === 'string' ? user.name.trim() : '';
+        if (id) names.set(id, name || null);
+      }
+    }
+    return approvals.map((approval) =>
+      this.serializeExtraCostApproval(
+        approval,
+        names.get(String(approval.requested_by_user_id)) ?? null,
+      ),
+    );
   }
 
   /**
@@ -1910,7 +1971,7 @@ export class OrderLifecycleService {
       take: 100,
     });
     return successRes(
-      approvals.map((approval) => this.serializeExtraCostApproval(approval)),
+      await this.withExtraCostRequesterNames(approvals),
       200,
       'Extra cost approvals',
     );
@@ -2041,9 +2102,12 @@ export class OrderLifecycleService {
         })
         .catch(() => undefined);
     }
+    const [serializedApproval] = await this.withExtraCostRequesterNames([
+      approval,
+    ]);
     return successRes(
       {
-        approval: this.serializeExtraCostApproval(approval),
+        approval: serializedApproval,
         operation: result,
       },
       200,
@@ -2099,8 +2163,11 @@ export class OrderLifecycleService {
       decision_comment: comment,
       reject_reason: reason,
     });
+    const [serializedApproval] = await this.withExtraCostRequesterNames([
+      approval,
+    ]);
     return successRes(
-      { approval: this.serializeExtraCostApproval(approval) },
+      { approval: serializedApproval },
       200,
       "Qo'shimcha xarajat rad etildi",
     );

@@ -4863,7 +4863,13 @@ export class OrderGatewayController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(RoleEnum.MARKET, RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'List extra cost approval requests' })
+  @ApiOperation({
+    summary: 'List extra cost approval requests',
+    description:
+      '(0Ngp09FG) Har bir so\'rovda `order_number` ("EL-…", mijozga ko\'rinadigan raqam) va ' +
+      "`requested_by: { id, name }` (so'rovchi ismi; identity javob bermasa `name: null`). " +
+      'Eski maydonlar (`order_id`, `requested_by_user_id`, `requested_by_role`) o`zgarmagan.',
+  })
   @ApiQuery({
     name: 'status',
     required: false,
