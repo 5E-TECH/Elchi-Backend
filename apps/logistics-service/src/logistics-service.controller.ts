@@ -427,7 +427,8 @@ export class LogisticsServiceController {
   assignOrdersToCourier(
     @Payload()
     data: {
-      dto: { order_ids: string[]; courier_id: string };
+      // (1gxmqLj5) branch_id — ixtiyoriy, SUPERADMIN/ADMIN filial tanlovi.
+      dto: { order_ids: string[]; courier_id: string; branch_id?: string };
       requester: { id: string; roles?: string[] };
     },
     @Ctx() context: RmqContext,

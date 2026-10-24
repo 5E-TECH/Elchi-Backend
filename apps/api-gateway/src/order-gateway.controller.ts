@@ -5084,9 +5084,23 @@ export class OrderGatewayController {
 
   @Post('assign-to-courier')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.BRANCH, RoleEnum.MANAGER, RoleEnum.REGISTRATOR)
+  @Roles(
+    RoleEnum.BRANCH,
+    RoleEnum.MANAGER,
+    RoleEnum.REGISTRATOR,
+    // (1gxmqLj5, (a) yo'l) SA/admin — istalgan filial posilkalarini o'sha
+    // filial kuryeriga (doira logistics-service'da buyurtmalardan olinadi).
+    RoleEnum.SUPERADMIN,
+    RoleEnum.ADMIN,
+  )
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Manager bulk-assign orders to one courier' })
+  @ApiOperation({
+    summary: 'Manager bulk-assign orders to one courier',
+    description:
+      "(1gxmqLj5) SUPERADMIN/ADMIN ham biriktiradi: barcha orderlar BITTA filialda bo'lishi, kuryer shu filialning " +
+      "COURIER a'zosi bo'lishi shart (aks holda 400). `branch_id` (ixtiyoriy) — UI'dagi filial tanlovi: berilsa " +
+      "orderlar filialiga mos bo'lishi kerak (400). Menejer/registrator uchun o'zgarishsiz (o'z filiali, `branch_id` e'tiborsiz).",
+  })
   @ApiBody({ type: AssignOrdersToCourierRequestDto })
   assignOrdersToCourier(
     @Body() dto: AssignOrdersToCourierRequestDto,
