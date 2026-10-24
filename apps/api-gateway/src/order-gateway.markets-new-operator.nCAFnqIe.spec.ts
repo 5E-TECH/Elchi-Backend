@@ -138,8 +138,8 @@ describe('nCAFnqIe — markets/:marketId/new MARKET_OPERATOR (faqat o‘z market
     await controller.findNewOrdersByMarket('777', req('1', ['superadmin']));
 
     expect(identity.send).not.toHaveBeenCalled();
-    expect(
-      sentTo(order, 'order.find_new_by_market_enriched')[0][1].market_id,
-    ).toBe('777');
+    expect(sentTo(order, 'order.find_new_by_market_enriched')[0][1]).toEqual(
+      expect.objectContaining({ market_id: '777' }),
+    );
   });
 });
