@@ -272,6 +272,32 @@ export class DeliveryQuoteRequestDto {
   pickup_count?: number;
 }
 
+/**
+ * `POST /delivery/quote/by-tariff` — hudud yo'q: bir xil elementlar uchun
+ * uchala tarif (city / center / address) bo'yicha taxminiy narx. Mahsulot
+ * formasidagi «Taxminiy yetkazish narxi» bloki uchun (6FLyjO6j).
+ */
+export class DeliveryQuoteByTariffRequestDto {
+  @ApiProperty({
+    type: [DeliveryQuoteItemRequestDto],
+    description:
+      "Bitta jo'natma elementlari: `product_id` (o'lchov catalog'dan) YOKI to'g'ridan o'lchov.",
+  })
+  @IsArray({ message: "items — massiv bo'lishi kerak" })
+  @ArrayMinSize(1, { message: 'items — kamida bitta element' })
+  @ArrayMaxSize(DELIVERY_QUOTE_MAX_ITEMS, {
+    message: `items — ko'pi bilan ${DELIVERY_QUOTE_MAX_ITEMS} ta element`,
+  })
+  @ValidateNested({ each: true })
+  @Type(() => DeliveryQuoteItemRequestDto)
+  items!: DeliveryQuoteItemRequestDto[];
+
+  @ApiPropertyOptional({ type: Boolean, default: false })
+  @IsOptional()
+  @IsBoolean({ message: 'express — true yoki false' })
+  express?: boolean;
+}
+
 const MoneyField = (field: string, example: number, description: string) =>
   applyDecorators(
     ApiProperty({ type: Number, minimum: 0, example, description }),

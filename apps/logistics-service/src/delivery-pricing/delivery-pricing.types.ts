@@ -9,6 +9,7 @@
  */
 export const DELIVERY_PRICING_PATTERNS = {
   QUOTE: 'logistics.delivery.quote',
+  QUOTE_BY_TARIFF: 'logistics.delivery.quote_by_tariff',
   TARIFFS_FIND_ALL: 'logistics.delivery.tariffs.find_all',
   TARIFFS_CREATE: 'logistics.delivery.tariffs.create',
   SETTINGS_GET: 'logistics.delivery.settings.get',
@@ -47,6 +48,17 @@ export interface DeliveryQuoteItemPayload {
   height_cm?: number | null;
   volumetric_enabled?: boolean | null;
   quantity?: number | null;
+}
+
+/**
+ * `logistics.delivery.quote_by_tariff` — yo'nalishsiz: bir xil elementlar uchun
+ * UCHALA tarif (city / center / address) bo'yicha narx. Mahsulot formasidagi
+ * «Taxminiy yetkazish narxi» bloki uchun (6FLyjO6j) — hudud hali ma'lum emas.
+ */
+export interface DeliveryQuoteByTariffPayload {
+  items: DeliveryQuoteItemPayload[];
+  express?: boolean;
+  requester?: DeliveryPricingRequester;
 }
 
 export interface DeliveryQuotePayload {

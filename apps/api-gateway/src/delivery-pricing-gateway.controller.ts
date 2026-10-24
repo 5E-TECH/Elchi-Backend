@@ -31,6 +31,7 @@ import {
   CreateDeliveryTariffRequestDto,
   DeliveryPricingSettingsResponseDto,
   DeliveryQuoteRequestDto,
+  DeliveryQuoteByTariffRequestDto,
   DeliveryQuoteResponseDto,
   DeliveryTariffRowDto,
   DeliveryTariffsListResponseDto,
@@ -117,6 +118,29 @@ export class DeliveryPricingGatewayController {
   @ApiOkResponse({ type: DeliveryQuoteResponseDto })
   quote(@Body() dto: DeliveryQuoteRequestDto, @Req() req: { user: JwtUser }) {
     return this.send('logistics.delivery.quote', {
+      ...dto,
+      requester: this.requester(req),
+    });
+  }
+
+  @Post('quote/by-tariff')
+  @HttpCode(200)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(...DELIVERY_QUOTE_ROLES)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary:
+      "Uchala tarif bo'yicha taxminiy yetkazish narxi (hududsiz; hech narsa yozilmaydi)",
+    description:
+      "6FLyjO6j (mahsulot formasi). Javob: `quotes.city` / `quotes.center` / `quotes.address` — har biri `POST /delivery/quote` natijasi shaklida (faol versiyasi yo'q tarif — `null`). " +
+      "Elementlar `POST /delivery/quote` dagi kabi; MARKET — faqat o'z mahsuloti (begonasi 404). Xatolar: 400, 404, 409 (sozlama yo'q), 503.",
+  })
+  @ApiBody({ type: DeliveryQuoteByTariffRequestDto })
+  quoteByTariff(
+    @Body() dto: DeliveryQuoteByTariffRequestDto,
+    @Req() req: { user: JwtUser },
+  ) {
+    return this.send('logistics.delivery.quote_by_tariff', {
       ...dto,
       requester: this.requester(req),
     });

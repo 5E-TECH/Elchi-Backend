@@ -23,6 +23,14 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-10-24 — Uchala tarif bo'yicha taxminiy narx (6FLyjO6j uchun)
+
+- [2026-10-24] 🟢 [logistics] — yangi `POST /delivery/quote/by-tariff` (rollar `POST /delivery/quote` bilan bir xil):
+  body `{ items: [{ product_id } | { weight_kg, length_cm, width_cm, height_cm, volumetric_enabled }], express? }`,
+  javob `{ quotes: { city, center, address }, unmeasured_product_ids }` — har biri `POST /delivery/quote` natijasi
+  shaklida (`total`, `billableKg`, `volumetricKg`, `extraKg`, `tariff`…), faol versiyasi yo'q tarif — `null`.
+  🔧 FE: mahsulot formasidagi «Taxminiy yetkazish narxi» bloki (hudud hali ma'lum emas) shu endpointdan oladi.
+
 ### 2026-10-24 — Yetkazish narxi dvigateli: `POST /delivery/quote` + admin tariflar/sozlamalar (DAqXPeSy)
 
 - [2026-10-24] 🆕 [gateway/logistics] — yetkazish narxi endi FORMULA bilan

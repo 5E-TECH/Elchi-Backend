@@ -492,3 +492,37 @@ describe('DAqXPeSy — admin: sozlamalar validatsiyasi (tranzaksiyadan OLDIN)', 
     expect(err.statusCode).toBe(400);
   });
 });
+
+describe('6FLyjO6j — quote_by_tariff (hududsiz, uchala tarif)', () => {
+  const byTariff = async (
+    service: DeliveryPricingService,
+    items: Record<string, unknown>[],
+  ) =>
+    (
+      (await service.quoteByTariff({ items } as never)) as {
+        data: { quotes: Record<string, any>; unmeasured_product_ids: string[] };
+      }
+    ).data;
+
+  it('30×22×15 / 1,2 kg → city 39 000, center 44 000, address 65 000 (landing)', async () => {
+    const { service } = build();
+    const { quotes } = await byTariff(service, [ITEM]);
+    expect(quotes.city.total).toBe(39000);
+    expect(quotes.center.total).toBe(44000);
+    expect(quotes.address.total).toBe(65000);
+    expect(quotes.center.billableKg).toBe(2);
+    expect(quotes.center.tariff.tariff_id).toBe('center');
+  });
+
+  it("faol tarif yo'q bo'lsa — shu tarif null, so'rov yiqilmaydi", async () => {
+    const { service } = build({ noTariff: true });
+    const { quotes } = await byTariff(service, [ITEM]);
+    expect(quotes).toEqual({ city: null, center: null, address: null });
+  });
+
+  it("bo'sh items → 400", async () => {
+    const { service } = build();
+    const err = await rpcError(service.quoteByTariff({ items: [] } as never));
+    expect(err.statusCode).toBe(400);
+  });
+});

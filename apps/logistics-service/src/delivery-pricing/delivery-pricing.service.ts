@@ -27,6 +27,7 @@ import {
   type DeliveryPricingRequester,
   type DeliveryQuoteItemPayload,
   type DeliveryQuotePayload,
+  type DeliveryQuoteByTariffPayload,
   type DeliveryPricingSettingsField,
   type ListDeliveryTariffsPayload,
   type UpdateDeliveryPricingSettingsPayload,
@@ -210,6 +211,76 @@ export class DeliveryPricingService {
    * o'lchov. MARKET faqat o'z mahsulotlarini hisoblay oladi (begonasi — 404,
    * mavjudligi oshkor qilinmaydi).
    */
+  /**
+   * `logistics.delivery.quote_by_tariff` — FAQAT hisoblaydi. Hudud yo'q:
+   * bir xil elementlar uchun har faol tarif (city / center / address) bo'yicha
+   * alohida natija. Elementlar `quote` dagi kabi (product_id yoki o'lchov;
+   * MARKET — faqat o'z mahsuloti). Faol versiyasi yo'q tarif natijada `null`.
+   */
+  async quoteByTariff(payload: DeliveryQuoteByTariffPayload) {
+    const rawItems = Array.isArray(payload?.items) ? payload.items : [];
+    if (!rawItems.length) {
+      this.fail("items — kamida bitta element bo'lishi kerak", 400);
+    }
+    if (rawItems.length > DELIVERY_QUOTE_MAX_ITEMS) {
+      this.fail(
+        `items — ko'pi bilan ${DELIVERY_QUOTE_MAX_ITEMS} ta element`,
+        400,
+      );
+    }
+    const [settings, items, ...tariffs] = await Promise.all([
+      this.requireActiveSettings(),
+      this.resolveQuoteItems(rawItems, payload.requester),
+      ...DELIVERY_TARIFF_IDS.map((id) => this.findCurrentTariff(id)),
+    ]);
+    const quotes: Record<string, unknown> = {};
+    DELIVERY_TARIFF_IDS.forEach((id, index) => {
+      const tariff = tariffs[index];
+      if (!tariff) {
+        quotes[id] = null;
+        return;
+      }
+      let result: DeliveryQuote;
+      try {
+        result = computeDeliveryQuote({
+          items,
+          tariff,
+          settings,
+          express: payload.express === true,
+          pickupCount: 0,
+        });
+      } catch (error) {
+        if (error instanceof DeliveryPricingInputError) {
+          this.fail(error.message, 400);
+        }
+        throw error;
+      }
+      quotes[id] = {
+        ...result,
+        tariff: {
+          id: String(tariff.id),
+          tariff_id: tariff.tariff_id,
+          base_price: tariff.base_price,
+          extra_per_kg: tariff.extra_per_kg,
+          days_min: tariff.days_min,
+          days_max: tariff.days_max,
+          valid_from: tariff.valid_from,
+        },
+      };
+    });
+    return successRes({
+      quotes,
+      settings_id: String(settings.id),
+      unmeasured_product_ids: items
+        .filter(
+          (item) =>
+            item.product_id &&
+            (item.weight_kg === null || item.weight_kg === undefined),
+        )
+        .map((item) => item.product_id as string),
+    });
+  }
+
   async quote(payload: DeliveryQuotePayload) {
     const whereDeliver = String(payload?.where_deliver ?? '');
     if (

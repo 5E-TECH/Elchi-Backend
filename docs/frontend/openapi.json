@@ -18540,6 +18540,47 @@
         ]
       }
     },
+    "/delivery/quote/by-tariff": {
+      "post": {
+        "description": "6FLyjO6j (mahsulot formasi). Javob: `quotes.city` / `quotes.center` / `quotes.address` — har biri `POST /delivery/quote` natijasi shaklida (faol versiyasi yo'q tarif — `null`). Elementlar `POST /delivery/quote` dagi kabi; MARKET — faqat o'z mahsuloti (begonasi 404). Xatolar: 400, 404, 409 (sozlama yo'q), 503.",
+        "operationId": "DeliveryPricingGatewayController_quoteByTariff",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeliveryQuoteByTariffRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Uchala tarif bo'yicha taxminiy yetkazish narxi (hududsiz; hech narsa yozilmaydi)",
+        "tags": [
+          "Delivery pricing"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "manager",
+          "registrator",
+          "operator",
+          "logist",
+          "branch",
+          "market"
+        ]
+      }
+    },
     "/delivery/tariffs": {
       "get": {
         "description": "`data.current` — `{ city, center, address }` hozir amaldagi versiya (`valid_from <= now()`, eng so'nggisi). `data.versions` — barcha versiyalar, yangisi tepada (`is_current`, `is_scheduled` — kelajakda kuchga kiradigan).",
@@ -25546,6 +25587,25 @@
           "statusCode",
           "message",
           "data"
+        ]
+      },
+      "DeliveryQuoteByTariffRequestDto": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "description": "Bitta jo'natma elementlari: `product_id` (o'lchov catalog'dan) YOKI to'g'ridan o'lchov.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DeliveryQuoteItemRequestDto"
+            }
+          },
+          "express": {
+            "type": "boolean",
+            "default": false
+          }
+        },
+        "required": [
+          "items"
         ]
       },
       "DeliveryTariffVersionDto": {
