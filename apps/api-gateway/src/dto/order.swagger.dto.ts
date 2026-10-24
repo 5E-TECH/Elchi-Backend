@@ -978,6 +978,16 @@ export class AssignOrdersToCourierRequestDto {
   @IsNotEmpty()
   @IsString()
   courier_id!: string;
+
+  @ApiPropertyOptional({
+    example: '10',
+    description:
+      "(1gxmqLj5) Faqat SUPERADMIN/ADMIN: tanlangan filial. Berilsa orderlar shu filialda bo'lishi kerak (aks holda 400). " +
+      "Menejer/registrator uchun e'tiborsiz (doim o'z filiali).",
+  })
+  @IsOptional()
+  @IsString()
+  branch_id?: string;
 }
 
 export class InitiateOrderReturnRequestDto {

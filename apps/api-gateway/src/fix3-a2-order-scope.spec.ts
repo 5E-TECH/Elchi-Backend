@@ -341,32 +341,38 @@ describe('fix3 A2 — route roles (RBAC-03, CODE-04)', () => {
     );
   });
 
-  it.each([['findNewMarkets'], ['findNewOrdersByMarket']] as Array<
-    [keyof OrderGatewayController]
-  >)('%s — kuryer/operator/mijoz/investor kirmaydi', (name) => {
-    const handler = handlerOf(name);
-    expect(guardsOf(handler)).toContain(RolesGuard);
-    const roles = rolesOf(handler);
-    for (const denied of [
-      'courier',
-      'operator',
-      'customer',
-      'investor',
-      'market_operator',
-    ]) {
-      expect(roles).not.toContain(denied);
-    }
-    for (const allowed of [
-      'superadmin',
-      'admin',
-      'registrator',
-      'manager',
-      'branch',
-      'market',
-    ]) {
-      expect(roles).toContain(allowed);
-    }
-  });
+  // (nCAFnqIe) markets/:id/new — MARKET_OPERATOR endi kiradi, lekin faqat
+  // o'z marketiga (handler ichida tekshiriladi, pastdagi alohida spec).
+  it.each([
+    ['findNewMarkets', ['market_operator']],
+    ['findNewOrdersByMarket', []],
+  ] as Array<[keyof OrderGatewayController, string[]]>)(
+    '%s — kuryer/operator/mijoz/investor kirmaydi',
+    (name, extraDenied) => {
+      const handler = handlerOf(name);
+      expect(guardsOf(handler)).toContain(RolesGuard);
+      const roles = rolesOf(handler);
+      for (const denied of [
+        'courier',
+        'operator',
+        'customer',
+        'investor',
+        ...extraDenied,
+      ]) {
+        expect(roles).not.toContain(denied);
+      }
+      for (const allowed of [
+        'superadmin',
+        'admin',
+        'registrator',
+        'manager',
+        'branch',
+        'market',
+      ]) {
+        expect(roles).toContain(allowed);
+      }
+    },
+  );
 
   it('markets/new (MARKET) -> faqat o‘z qatori, boshqa market profili sizmaydi', async () => {
     const { controller, identity } = setup({

@@ -1226,6 +1226,9 @@ export class BranchTransferBatchService {
     // Kun/davr chegaralari — Toshkent vaqti, libs/common'dagi yagona helper
     // (SqVMuhKo). Ilgari server TZ'idagi setHours va qo'lda +5/-5 soat edi:
     // natija faqat konteyner UTC'da bo'lganda to'g'ri chiqardi.
+    // (15N7AHkp) PENDING yig'ishdagi "yangiroq partiya" ham AYNI vaqt
+    // oynasidan bo'lishi kerak (sahifa ichidagi eski xulq bilan bir xil).
+    let collapseWindowSql: string | null = null;
     if (dateRaw) {
       const parsedDate = parseDate(dateRaw, 'date');
       const dayStart = startOfTashkentDay(parsedDate);
@@ -1234,6 +1237,7 @@ export class BranchTransferBatchService {
         dayStart,
         dayEnd,
       });
+      collapseWindowSql = 'newer.createdAt BETWEEN :dayStart AND :dayEnd';
     } else if (periodRaw) {
       const allowedPeriods = new Set(['today', 'week', 'month']);
       if (!allowedPeriods.has(periodRaw)) {
@@ -1257,10 +1261,45 @@ export class BranchTransferBatchService {
         periodStart,
         periodEnd,
       });
+      collapseWindowSql = 'newer.createdAt BETWEEN :periodStart AND :periodEnd';
+    }
+
+    /**
+     * (15N7AHkp) PENDING yig'ish SQL'da. Bir xil yo'nalishdagi (manba, manzil,
+     * yo'nalish, hudud) bir nechta PENDING partiyadan faqat ENG YANGISI
+     * (`createdAt`, teng bo'lsa `id`) qoladi. Ilgari bu sahifa ichida
+     * (xotirada) qilinardi va `meta.total` = sahifadagi qatorlar soni edi:
+     * /returns sahifalashi 1-sahifada to'xtardi, /batches tab sonlari ko'pi
+     * bilan 1 bo'lardi, keyingi sahifada esa "yig'ilgan" dublikat qayta
+     * chiqardi. Endi COUNT ham aynan shu shart bilan — total haqiqiy.
+     */
+    const shouldCollapsePending =
+      !statusRaw || statusRaw === BranchTransferBatchStatus.PENDING;
+    if (shouldCollapsePending) {
+      const newerPending = this.transferBatchRepo
+        .createQueryBuilder('newer')
+        .select('1')
+        .where('newer.isDeleted = false')
+        .andWhere('newer.status = :collapseStatus')
+        .andWhere('newer.source_branch_id = batch.source_branch_id')
+        .andWhere('newer.destination_branch_id = batch.destination_branch_id')
+        .andWhere('newer.direction = batch.direction')
+        .andWhere('newer.target_region_id = batch.target_region_id')
+        .andWhere(
+          '(newer.createdAt > batch."createdAt" OR (newer.createdAt = batch."createdAt" AND newer.id > batch.id))',
+        );
+      if (collapseWindowSql) {
+        newerPending.andWhere(collapseWindowSql);
+      }
+      qb.andWhere(
+        `NOT (batch.status = :collapseStatus AND EXISTS (${newerPending.getQuery()}))`,
+        { collapseStatus: BranchTransferBatchStatus.PENDING },
+      );
     }
 
     const [rows, total] = await qb
       .orderBy('batch.createdAt', 'DESC')
+      .addOrderBy('batch.id', 'DESC')
       .skip(skip)
       .take(limit)
       .getManyAndCount();
@@ -1316,51 +1355,15 @@ export class BranchTransferBatchService {
       };
     });
 
-    const shouldCollapsePending =
-      !statusRaw || statusRaw === BranchTransferBatchStatus.PENDING;
-
-    const resultRows = shouldCollapsePending
-      ? mappedRows.filter((candidate, index, all) => {
-          if (candidate.status !== BranchTransferBatchStatus.PENDING) {
-            return true;
-          }
-
-          const key = [
-            String(candidate.source_branch_id ?? ''),
-            String(candidate.destination_branch_id ?? ''),
-            String(candidate.direction ?? ''),
-            String(candidate.target_region_id ?? ''),
-          ].join('|');
-
-          const firstPending = all.find((row) => {
-            if (row.status !== BranchTransferBatchStatus.PENDING) {
-              return false;
-            }
-            const rowKey = [
-              String(row.source_branch_id ?? ''),
-              String(row.destination_branch_id ?? ''),
-              String(row.direction ?? ''),
-              String(row.target_region_id ?? ''),
-            ].join('|');
-            return rowKey === key;
-          });
-
-          return firstPending
-            ? String(firstPending.id) === String(candidate.id)
-            : index === 0;
-        })
-      : mappedRows;
-
     return successRes(
       {
-        items: resultRows,
+        items: mappedRows,
         meta: {
           page,
           limit,
-          total: shouldCollapsePending ? resultRows.length : total,
-          totalPages: shouldCollapsePending
-            ? Math.max(1, Math.ceil(resultRows.length / limit))
-            : Math.max(1, Math.ceil(total / limit)),
+          // (15N7AHkp) yig'ish SQL'da — COUNT haqiqiy jami.
+          total,
+          totalPages: Math.max(1, Math.ceil(total / limit)),
         },
       },
       200,

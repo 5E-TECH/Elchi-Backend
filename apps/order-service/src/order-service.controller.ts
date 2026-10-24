@@ -703,7 +703,8 @@ export class OrderServiceController {
   listExtraCostApprovals(
     @Payload()
     data: {
-      requester: { id: string; roles?: string[] };
+      // (6QLF7nst) market_id — faqat MARKET_OPERATOR uchun, gateway identity'dan qo'yadi.
+      requester: { id: string; roles?: string[]; market_id?: string | null };
       status?: string;
       auto_approved?: boolean;
     },
