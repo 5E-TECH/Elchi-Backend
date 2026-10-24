@@ -1903,6 +1903,19 @@ export class OrderServiceController {
     );
   }
 
+  // (3HKvAyhm) paket tarixini o'qish (ilgari faqat `history.add` bor edi).
+  @MessagePattern({ cmd: 'order.transfer_batch.history.find' })
+  findTransferBatchHistory(
+    @Payload() data: { id?: string; batch_id?: string },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.transferBatchService.findBranchTransferBatchHistory(
+        data?.id ?? data?.batch_id ?? '',
+      ),
+    );
+  }
+
   @MessagePattern({ cmd: 'order.transfer_batch.find_by_id' })
   findTransferBatchById(
     @Payload() data: { id?: string; batch_id?: string },

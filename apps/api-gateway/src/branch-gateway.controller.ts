@@ -18,6 +18,7 @@ import { firstValueFrom, timeout } from 'rxjs';
 import {
   ApiBearerAuth,
   ApiBody,
+  ApiOkResponse,
   ApiOperation,
   ApiParam,
   ApiQuery,
@@ -36,6 +37,8 @@ import {
   ReceiveTransferBatchOrdersRequestDto,
   SendTransferBatchRequestDto,
   SetBranchConfigRequestDto,
+  TransferBatchDetailDto,
+  TransferBatchHistoryResponseDto,
   TransferCourierBranchRequestDto,
   UpdateBranchConfigRequestDto,
   UpdateBranchRequestDto,
@@ -467,8 +470,13 @@ export class BranchGatewayController {
     RoleEnum.MANAGER,
     RoleEnum.REGISTRATOR,
   )
-  @ApiOperation({ summary: 'Get transfer batch by id' })
+  @ApiOperation({
+    summary: 'Get transfer batch by id',
+    description:
+      "3HKvAyhm: javobda `source_branch` / `destination_branch` `{ id, name }` — menejer ham filial nomini ko'radi (`GET branches/:id` faqat SA/admin).",
+  })
   @ApiParam({ name: 'id', description: 'Transfer batch ID (bigint string)' })
+  @ApiOkResponse({ type: TransferBatchDetailDto })
   findTransferBatchById(
     @Param('id', ParseBigintIdPipe) id: string,
     @Req() req: { user?: { sub?: string; roles?: string[] } },
@@ -476,6 +484,33 @@ export class BranchGatewayController {
     return this.branchClient
       .send(
         { cmd: 'branch.transfer_batches.find_by_id' },
+        { id, requester: this.toRequester(req) },
+      )
+      .pipe(timeout(BATCH_RPC_TIMEOUT_MS));
+  }
+
+  @Get('transfer-batches/:id/history')
+  @Roles(
+    RoleEnum.SUPERADMIN,
+    RoleEnum.ADMIN,
+    RoleEnum.BRANCH,
+    RoleEnum.MANAGER,
+    RoleEnum.REGISTRATOR,
+  )
+  @ApiOperation({
+    summary: 'Transfer batch history (3HKvAyhm)',
+    description:
+      "Paket tarixi xronologik (eng eskisi birinchi): yaratildi / jo'natildi / qabul qilindi / bekor qilindi. Kirish — `GET /transfer-batches/:id` bilan bir xil (jo'natuvchi yoki qabul qiluvchi filial).",
+  })
+  @ApiParam({ name: 'id', description: 'Transfer batch ID (bigint string)' })
+  @ApiOkResponse({ type: TransferBatchHistoryResponseDto })
+  findTransferBatchHistory(
+    @Param('id', ParseBigintIdPipe) id: string,
+    @Req() req: { user?: { sub?: string; roles?: string[] } },
+  ) {
+    return this.branchClient
+      .send(
+        { cmd: 'branch.transfer_batches.history' },
         { id, requester: this.toRequester(req) },
       )
       .pipe(timeout(BATCH_RPC_TIMEOUT_MS));

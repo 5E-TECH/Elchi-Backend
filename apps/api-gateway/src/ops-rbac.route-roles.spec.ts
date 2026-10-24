@@ -127,6 +127,31 @@ describe('lQP3ojwq / wLNccBkX — ops endpointlari: qat’iy status kodlari', ()
       expect(branchSend).not.toHaveBeenCalled();
     },
   );
+
+  it.each(['registrator', 'manager', 'branch', 'admin', 'superadmin'])(
+    '(3HKvAyhm) %s → GET /transfer-batches/:id/history → 200, doira branch-service’da',
+    async (role) => {
+      const res = await request(http())
+        .get('/transfer-batches/5/history')
+        .set('x-test-role', role);
+      expect(res.status).toBe(200);
+      expect(branchSend).toHaveBeenCalledWith(
+        { cmd: 'branch.transfer_batches.history' },
+        expect.objectContaining({ id: '5' }),
+      );
+    },
+  );
+
+  it.each(['market', 'courier'])(
+    '(3HKvAyhm) %s → GET /transfer-batches/:id/history → 403',
+    async (role) => {
+      const res = await request(http())
+        .get('/transfer-batches/5/history')
+        .set('x-test-role', role);
+      expect(res.status).toBe(403);
+      expect(branchSend).not.toHaveBeenCalled();
+    },
+  );
 });
 
 describe('lQP3ojwq / wLNccBkX — route-roles xaritasi (openapi x-roles)', () => {

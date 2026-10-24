@@ -401,6 +401,14 @@ function geoReassignResult(
   };
 }
 
+/** (3HKvAyhm) Paket tarixi amallarining o'zbekcha nomi (`action_label`). */
+const TRANSFER_BATCH_ACTION_LABELS: Readonly<Record<string, string>> = {
+  CREATED: 'Yaratildi',
+  SENT: "Jo'natildi",
+  RECEIVED: 'Qabul qilindi',
+  CANCELLED: 'Bekor qilindi',
+};
+
 /** YEThmZBn — `branch.user.find_by_user_ids` bir so'rovdagi id chegarasi. */
 export const USER_BRANCH_LOOKUP_MAX = 500;
 
@@ -3255,7 +3263,15 @@ export class BranchServiceService implements OnModuleInit {
     };
   }
 
-  async findTransferBatchById(id: string, requester?: RequesterContext) {
+  /**
+   * Paketni o'qish + kirish huquqi: jo'natuvchi YOKI qabul qiluvchi filialni
+   * o'qiy oladigan foydalanuvchi ko'radi. (3HKvAyhm) `findTransferBatchById`
+   * va `findTransferBatchHistory` uchun umumiy.
+   */
+  private async loadReadableTransferBatch(
+    id: string,
+    requester?: RequesterContext,
+  ) {
     const batchId = String(id ?? '').trim();
     if (!batchId) {
       this.badRequest('Partiya (batch) id majburiy');
@@ -3283,6 +3299,34 @@ export class BranchServiceService implements OnModuleInit {
     } else if (destinationBranchId) {
       await this.assertCanReadBranch(destinationBranchId, requester);
     }
+    return { batchId, response, sourceBranchId, destinationBranchId };
+  }
+
+  /**
+   * (3HKvAyhm) Filial nomlari — `{ id, name }` (o'chirilgan filial ham nomi
+   * bilan: tarixiy paket). Menejer `GET branches/:id` (faqat SA/admin) ni
+   * chaqira olmaydi, shuning uchun nom paket javobining o'zida.
+   */
+  private async transferBatchBranchRefs(
+    ids: string[],
+  ): Promise<Map<string, { id: string; name: string | null }>> {
+    const unique = Array.from(new Set(ids.filter(Boolean)));
+    if (!unique.length) return new Map();
+    const rows = await this.branchRepo.find({
+      where: { id: In(unique) },
+      select: ['id', 'name'],
+    });
+    return new Map(
+      rows.map((row) => [
+        String(row.id),
+        { id: String(row.id), name: row.name ?? null },
+      ]),
+    );
+  }
+
+  async findTransferBatchById(id: string, requester?: RequesterContext) {
+    const { response, sourceBranchId, destinationBranchId } =
+      await this.loadReadableTransferBatch(id, requester);
 
     const batchData = (response as { data?: Record<string, unknown> })?.data;
     if (!batchData || typeof batchData !== 'object') {
@@ -3325,11 +3369,61 @@ export class BranchServiceService implements OnModuleInit {
       }),
     );
 
+    const branchRefs = await this.transferBatchBranchRefs([
+      sourceBranchId,
+      destinationBranchId,
+    ]);
+
     return {
       ...batchRecord,
       items: enrichedItems,
       region: regionId ? (regionMap.get(regionId) ?? null) : null,
+      // (3HKvAyhm) barcha ruxsat etilgan rollar (menejer ham) nomni ko'radi.
+      source_branch: sourceBranchId
+        ? (branchRefs.get(sourceBranchId) ?? null)
+        : null,
+      destination_branch: destinationBranchId
+        ? (branchRefs.get(destinationBranchId) ?? null)
+        : null,
     };
+  }
+
+  /**
+   * (3HKvAyhm) `GET /transfer-batches/:id/history` — paket tarixi (yaratildi /
+   * jo'natildi / qabul qilindi / bekor qilindi), xronologik. Kirish —
+   * paketning o'zi kabi (jo'natuvchi yoki qabul qiluvchi filial). Har qatorda
+   * o'zbekcha `action_label` va bajargan foydalanuvchi `{ id, name }`
+   * (identity javob bermasa — `null`, ro'yxat yiqilmaydi).
+   */
+  async findTransferBatchHistory(id: string, requester?: RequesterContext) {
+    const { batchId } = await this.loadReadableTransferBatch(id, requester);
+    const res = await this.sendOrderCommand<{
+      data?: Array<Record<string, unknown>>;
+    }>('order.transfer_batch.history.find', { id: batchId });
+    const rows = Array.isArray(res?.data) ? res.data : [];
+    const userIds = rows
+      .map((row) => String((row?.user_id ?? '') as string).trim())
+      .filter((userId) => userId && userId !== '0');
+    const users = await this.getUsersByIdsBatch(userIds);
+    return successRes(
+      rows.map((row) => {
+        const action = String((row?.action ?? '') as string);
+        const userId = String((row?.user_id ?? '') as string).trim();
+        const user = users?.get(userId);
+        return {
+          ...row,
+          action_label: TRANSFER_BATCH_ACTION_LABELS[action] ?? action,
+          user: user
+            ? {
+                id: userId,
+                name: typeof user.name === 'string' ? user.name : null,
+              }
+            : null,
+        };
+      }),
+      200,
+      'Transfer batch history',
+    );
   }
 
   private async assertRequesterWorksInBranch(

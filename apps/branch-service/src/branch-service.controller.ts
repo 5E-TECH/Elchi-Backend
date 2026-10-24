@@ -241,6 +241,26 @@ export class BranchServiceController {
     );
   }
 
+  // (3HKvAyhm) paket tarixi — GET /transfer-batches/:id/history.
+  @MessagePattern({ cmd: 'branch.transfer_batches.history' })
+  findTransferBatchHistory(
+    @Payload()
+    data: {
+      id?: string;
+      requester?: { id?: string; roles?: string[] };
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.branchService.findTransferBatchHistory(
+        String(data?.id ?? ''),
+        data?.requester as Parameters<
+          BranchServiceService['findTransferBatchHistory']
+        >[1],
+      ),
+    );
+  }
+
   @MessagePattern({ cmd: 'branch.transfer_batches.find_remaining' })
   findRemainingTransferBatchById(
     @Payload() data: Record<string, any>,
