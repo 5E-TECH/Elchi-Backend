@@ -1,4 +1,12 @@
-import { Controller, Get, Inject, Query, Req, UseGuards } from '@nestjs/common';
+import {
+  BadRequestException,
+  Controller,
+  Get,
+  Inject,
+  Query,
+  Req,
+  UseGuards,
+} from '@nestjs/common';
 import { ClientProxy } from '@nestjs/microservices';
 import { Roles as RoleEnum } from '@app/common';
 import {
@@ -32,6 +40,9 @@ export const DASHBOARD_ROLES = [
   RoleEnum.MARKET_OPERATOR,
 ] as const;
 
+/** (6CYRjoZG) Filial id — bigint (raqamli satr). */
+const BRANCH_ID_RE = /^[0-9]{1,19}$/;
+
 @ApiTags('Analytics')
 @Controller('analytics')
 export class AnalyticsGatewayController {
@@ -54,7 +65,13 @@ export class AnalyticsGatewayController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(...DASHBOARD_ROLES)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Dashboard statistics by requester role' })
+  @ApiOperation({
+    summary: 'Dashboard statistics by requester role',
+    description:
+      "Admin/filial kesimi javobida qo'shimcha: orders.lostRevenue (l9NNdsCH, bekor summasi), " +
+      'targets {successRate} (l9NNdsCH), previous {from,to,acceptedCount,soldAndPaid,cancelled,totalRevenue,profit,lostRevenue} ' +
+      'va series[14] {date,…} (DwrMygfo; registratorda moliyaviy maydonlarsiz; «Barchasi»da previous=null).',
+  })
   @ApiQuery({ name: 'startDate', required: false, type: String })
   @ApiQuery({ name: 'endDate', required: false, type: String })
   @ApiQuery({ name: 'start_day', required: false, type: String })
@@ -65,6 +82,15 @@ export class AnalyticsGatewayController {
     required: false,
     enum: ['today', 'week', 'month'],
   })
+  @ApiQuery({
+    name: 'branch_id',
+    required: false,
+    type: String,
+    description:
+      "(6CYRjoZG) Faqat SUPERADMIN/ADMIN: tanlangan filial kesimi (/branches/:id «Filial ko'rsatkichlari»). " +
+      "Javobga qo'shimcha: branch_id, dailyRevenue {data[], summary}, statusDistribution {distribution, total}, " +
+      "topCouriers[] + topCouriersMeta, branchDashboard. Boshqa rollarda e'tiborsiz (o'z kesimi).",
+  })
   getDashboard(
     @Req() req: { user: JwtUser },
     @Query('startDate') startDate?: string,
@@ -73,9 +99,15 @@ export class AnalyticsGatewayController {
     @Query('start_day') startDay?: string,
     @Query('end_day') endDay?: string,
     @Query('all') all?: string,
+    @Query('branch_id') branchId?: string,
   ) {
     const resolvedStartDate = startDate ?? startDay;
     const resolvedEndDate = endDate ?? endDay;
+    // (6CYRjoZG) noto'g'ri id — 400 (servisga yetib bormaydi).
+    const trimmedBranchId = typeof branchId === 'string' ? branchId.trim() : '';
+    if (trimmedBranchId && !BRANCH_ID_RE.test(trimmedBranchId)) {
+      throw new BadRequestException("branch_id noto'g'ri");
+    }
     return firstValueFrom(
       this.analyticsClient
         .send(
@@ -87,6 +119,7 @@ export class AnalyticsGatewayController {
               endDate: resolvedEndDate,
               period,
               all: all === 'true',
+              ...(trimmedBranchId ? { branch_id: trimmedBranchId } : {}),
             },
           },
         )
@@ -110,6 +143,13 @@ export class AnalyticsGatewayController {
     required: false,
     enum: ['daily', 'weekly', 'monthly', 'yearly'],
   })
+  @ApiQuery({
+    name: 'all',
+    required: false,
+    type: Boolean,
+    description:
+      "(XdKajqLe) «Barchasi»: dashboard bilan AYNI oyna (eng so'nggi 366 kun). Javobda clamped, effective_from, effective_to, max_span_days.",
+  })
   getRevenue(
     @Req() req: { user: JwtUser },
     @Query('startDate') startDate?: string,
@@ -117,6 +157,7 @@ export class AnalyticsGatewayController {
     @Query('period') period = 'daily',
     @Query('start_day') startDay?: string,
     @Query('end_day') endDay?: string,
+    @Query('all') all?: string,
   ) {
     const resolvedStartDate = startDate ?? startDay;
     const resolvedEndDate = endDate ?? endDay;
@@ -130,6 +171,7 @@ export class AnalyticsGatewayController {
               startDate: resolvedStartDate,
               endDate: resolvedEndDate,
               period,
+              ...(all === 'true' ? { all: true } : {}),
             },
           },
         )
@@ -141,17 +183,30 @@ export class AnalyticsGatewayController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'KPI stats report' })
+  @ApiOperation({
+    summary: 'KPI stats report',
+    description:
+      "Javobda: deliveryCount (yrLt5oMi — 0 bo'lsa SLA «o'lchanmagan»), previous {from,to,averageOrderValue," +
+      'averageFulfillmentHours,onTimeRate,deliveryCount,cancellationRate} va series[14] {date,…} (DwrMygfo).',
+  })
   @ApiQuery({ name: 'startDate', required: false, type: String })
   @ApiQuery({ name: 'endDate', required: false, type: String })
   @ApiQuery({ name: 'start_day', required: false, type: String })
   @ApiQuery({ name: 'end_day', required: false, type: String })
+  @ApiQuery({
+    name: 'all',
+    required: false,
+    type: Boolean,
+    description:
+      "(XdKajqLe) «Barchasi»: dashboard bilan AYNI oyna (eng so'nggi 366 kun). Javobda clamped, effective_from, effective_to, max_span_days.",
+  })
   getKpi(
     @Req() req: { user: JwtUser },
     @Query('startDate') startDate?: string,
     @Query('endDate') endDate?: string,
     @Query('start_day') startDay?: string,
     @Query('end_day') endDay?: string,
+    @Query('all') all?: string,
   ) {
     const resolvedStartDate = startDate ?? startDay;
     const resolvedEndDate = endDate ?? endDay;
@@ -164,6 +219,7 @@ export class AnalyticsGatewayController {
             filter: {
               startDate: resolvedStartDate,
               endDate: resolvedEndDate,
+              ...(all === 'true' ? { all: true } : {}),
             },
           },
         )

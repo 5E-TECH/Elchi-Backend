@@ -38,6 +38,8 @@ describe('OrderServiceService filters', () => {
       where: jest.fn().mockReturnThis(),
       andWhere: jest.fn().mockReturnThis(),
       select: jest.fn().mockReturnThis(),
+      // (l9NNdsCH) overview bekor soni + summasi bitta so'rovda.
+      addSelect: jest.fn().mockReturnThis(),
       getRawOne: jest.fn().mockResolvedValue({ count: '0' }),
     };
     const orderTrackingRepo = {

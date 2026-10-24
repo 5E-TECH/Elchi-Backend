@@ -1740,7 +1740,12 @@ export class OrderServiceController {
   @MessagePattern({ cmd: 'order.analytics.fulfillment_stats' })
   analyticsFulfillmentStats(
     @Payload()
-    data: { startDate?: string; endDate?: string; branch_id?: string },
+    data: {
+      startDate?: string;
+      endDate?: string;
+      branch_id?: string;
+      all?: boolean;
+    },
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
@@ -1748,6 +1753,8 @@ export class OrderServiceController {
         data?.startDate,
         data?.endDate,
         data?.branch_id,
+        // (XdKajqLe) «Barchasi» KPI.
+        data?.all === true,
       ),
     );
   }
@@ -1822,9 +1829,33 @@ export class OrderServiceController {
     );
   }
 
+  /** (DwrMygfo) Dashboard/KPI: oldingi davr + 14 kunlik seriya, bitta RPC. */
+  @MessagePattern({ cmd: 'order.analytics.trend' })
+  analyticsTrend(
+    @Payload()
+    data: {
+      startDate?: string;
+      endDate?: string;
+      branch_id?: string;
+      all?: boolean;
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.orderAnalyticsService.getDashboardTrend(data ?? {}),
+    );
+  }
+
   @MessagePattern({ cmd: 'order.analytics.revenue' })
   analyticsRevenue(
-    @Payload() data: { startDate?: string; endDate?: string; period?: string },
+    @Payload()
+    data: {
+      startDate?: string;
+      endDate?: string;
+      period?: string;
+      branch_id?: string;
+      all?: boolean;
+    },
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
@@ -1832,6 +1863,10 @@ export class OrderServiceController {
         data.startDate,
         data.endDate,
         data.period,
+        // (6CYRjoZG) filial kesimi; yo'q bo'lsa — butun kompaniya (eski xulq).
+        data.branch_id,
+        // (XdKajqLe) «Barchasi» — 366 kunlik chegara bilan.
+        data.all === true,
       ),
     );
   }

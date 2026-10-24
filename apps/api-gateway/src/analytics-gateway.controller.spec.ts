@@ -117,3 +117,124 @@ describe('AnalyticsGatewayController', () => {
     });
   });
 });
+
+type GatewayReq = Parameters<AnalyticsGatewayController['getDashboard']>[0];
+
+describe('6CYRjoZG — GET /analytics/dashboard?branch_id=', () => {
+  function setup() {
+    const analyticsClient = { send: jest.fn(() => of({ statusCode: 200 })) };
+    const controller = new AnalyticsGatewayController(
+      analyticsClient as unknown as ConstructorParameters<
+        typeof AnalyticsGatewayController
+      >[0],
+    );
+    const req: GatewayReq = {
+      user: { sub: '1', username: 'sa', roles: ['superadmin'] },
+    };
+    return { analyticsClient, controller, req };
+  }
+
+  it('⭐ branch_id filter ichida servisga uzatiladi', async () => {
+    const { analyticsClient, controller, req } = setup();
+    await controller.getDashboard(
+      req,
+      '2026-10-18',
+      '2026-10-24',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      ' 5 ',
+    );
+    const [pattern, payload] = analyticsClient.send.mock
+      .calls[0] as unknown as [
+      { cmd: string },
+      { filter: Record<string, unknown> },
+    ];
+    expect(pattern).toEqual({ cmd: 'analytics.dashboard' });
+    expect(payload.filter.branch_id).toBe('5');
+  });
+
+  it('branch_id yo`q — filter da kalit ham yo`q', async () => {
+    const { analyticsClient, controller, req } = setup();
+    await controller.getDashboard(req);
+    const payload = (analyticsClient.send.mock.calls[0] as unknown[])[1] as {
+      filter: Record<string, unknown>;
+    };
+    expect(payload.filter).not.toHaveProperty('branch_id');
+  });
+
+  it('noto`g`ri branch_id — 400, servisga yuborilmaydi', () => {
+    const { analyticsClient, controller, req } = setup();
+    expect(() =>
+      controller.getDashboard(
+        req,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        'abc',
+      ),
+    ).toThrow("branch_id noto'g'ri");
+    expect(analyticsClient.send).not.toHaveBeenCalled();
+  });
+});
+
+describe('XdKajqLe — kpi/revenue ?all=true', () => {
+  function setup() {
+    const analyticsClient = { send: jest.fn(() => of({ statusCode: 200 })) };
+    const controller = new AnalyticsGatewayController(
+      analyticsClient as unknown as ConstructorParameters<
+        typeof AnalyticsGatewayController
+      >[0],
+    );
+    const req: GatewayReq = {
+      user: { sub: '1', username: 'sa', roles: ['superadmin'] },
+    };
+    return { analyticsClient, controller, req };
+  }
+  const filterOf = (send: jest.Mock) =>
+    (
+      (send.mock.calls[0] as unknown[])[1] as {
+        filter: Record<string, unknown>;
+      }
+    ).filter;
+
+  it('⭐ kpi all=true → filter.all: true', async () => {
+    const { analyticsClient, controller, req } = setup();
+    await controller.getKpi(
+      req,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      'true',
+    );
+    expect(filterOf(analyticsClient.send)).toMatchObject({ all: true });
+  });
+
+  it('⭐ revenue all=true → filter.all: true', async () => {
+    const { analyticsClient, controller, req } = setup();
+    await controller.getRevenue(
+      req,
+      undefined,
+      undefined,
+      'monthly',
+      undefined,
+      undefined,
+      'true',
+    );
+    expect(filterOf(analyticsClient.send)).toMatchObject({
+      all: true,
+      period: 'monthly',
+    });
+  });
+
+  it('all yo`q — kalit ham yo`q', async () => {
+    const { analyticsClient, controller, req } = setup();
+    await controller.getKpi(req);
+    expect(filterOf(analyticsClient.send)).not.toHaveProperty('all');
+  });
+});

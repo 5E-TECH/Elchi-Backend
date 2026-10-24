@@ -40,6 +40,8 @@ interface RevenueFilter {
   period?: string;
   page?: number;
   limit?: number;
+  // (XdKajqLe) «Barchasi» — /analytics/kpi va /analytics/revenue.
+  all?: boolean;
 }
 
 type RevenuePeriod = 'daily' | 'weekly' | 'monthly' | 'yearly';
@@ -83,6 +85,13 @@ const COURIER_LEADERBOARD_SCAN_LIMIT = 500;
  */
 const DASHBOARD_RANKING_FALLBACK_DAYS = 30;
 const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * (l9NNdsCH) Dashboard maqsad qiymatlari (maket G1: «maqsad 80%»).
+ * Minimal variant: sozlama jadvali yo'q — qotirilgan qiymat, javobda
+ * `targets` sifatida (FE «Yaxshi chegarasi · 70%» o'rniga shuni chizadi).
+ */
+export const DASHBOARD_TARGETS = Object.freeze({ successRate: 80 });
 
 /** Dashboard reyting oynasi qaysi qoida bilan tanlangani (FE yorlig'i uchun). */
 type DashboardRankingRule = 'last_30_days' | 'selected_range';
@@ -329,6 +338,29 @@ export class AnalyticsServiceService {
     });
   }
 
+  /**
+   * (XdKajqLe) KPI/revenue oynasi. `all=true` («Barchasi») — dashboard
+   * bilan AYNI: 1970-01-01 → hozir, order-service'ga `all: true` (u eng
+   * so'nggi 366 kunga qisqartiradi va `applied_range` qaytaradi — javobda
+   * `clamped`/`effective_*`). Aks holda — oldingidek tanlangan davr.
+   */
+  private kpiRange(filter: RevenueFilter = {}): {
+    startDate: string;
+    endDate: string;
+    all?: true;
+  } {
+    if (filter.all === true) {
+      return {
+        ...this.normalizeDateRange({
+          startDate: '1970-01-01',
+          endDate: new Date().toISOString(),
+        }),
+        all: true,
+      };
+    }
+    return this.normalizeDateRangeAny(filter);
+  }
+
   private normalizePagination(filter: { page?: number; limit?: number } = {}) {
     const page = Number(filter.page ?? 1);
     const limit = Number(filter.limit ?? 20);
@@ -567,6 +599,8 @@ export class AnalyticsServiceService {
     delete safeOverview.profit;
     delete safeOverview.totalRevenue;
     delete safeOverview.total_revenue;
+    // (l9NNdsCH) bekor summasi ham moliyaviy ko'rsatkich.
+    delete (safeOverview as Record<string, unknown>).lostRevenue;
     return safeOverview;
   }
 
@@ -773,6 +807,10 @@ export class AnalyticsServiceService {
       endDate?: string;
       period?: string;
       all?: boolean;
+      // (6CYRjoZG) faqat SUPERADMIN/ADMIN uchun: `/branches/:id` «Filial
+      // ko'rsatkichlari». Boshqa rollarda e'tiborsiz (filial xodimi doim
+      // o'z filiali, kuryer/market — o'z kesimi).
+      branch_id?: string;
     },
   ) {
     const isAllTime = filter.all === true;
@@ -793,11 +831,21 @@ export class AnalyticsServiceService {
       roles.has(Roles.BRANCH) ||
       roles.has(Roles.MANAGER) ||
       roles.has(Roles.REGISTRATOR);
+    // (6CYRjoZG) SA/ADMIN `?branch_id=` bilan — tanlangan filial kesimi
+    // (overview/market/kuryer jadvallari, reytinglar + quyidagi qo'shimcha
+    // bo'laklar). Filial roli bo'lsa — baribir O'Z filiali (yuqorida).
+    const isAdminRole = roles.has(Roles.SUPERADMIN) || roles.has(Roles.ADMIN);
+    const requestedBranchId =
+      typeof filter.branch_id === 'string' ? filter.branch_id.trim() : '';
+    const adminBranchId =
+      !isBranchRole && isAdminRole && requestedBranchId
+        ? requestedBranchId
+        : null;
     // (VkwhHqvW) filial aniqlanmasa (branch-service xatosi) — 503, kompaniya
     // bo'yicha raqamlar emas.
     const branchId = isBranchRole
       ? await this.resolveRequesterBranchId(requester, true)
-      : null;
+      : adminBranchId;
     const scopedRange = branchId
       ? {
           ...dashboardRange,
@@ -940,6 +988,9 @@ export class AnalyticsServiceService {
       endDate: rankingWindow.endDate,
       include_meta: true,
     };
+    // (6CYRjoZG) SA/ADMIN filial ko'rinishi: «Kunlik daromad», holat donut,
+    // «Kuryerlar reytingi» — xuddi shu parallel bosqichda (byudjet o'zgarmaydi).
+    const isAdminBranchView = adminBranchId !== null;
     const [
       orders,
       markets,
@@ -947,6 +998,10 @@ export class AnalyticsServiceService {
       topMarkets,
       topBranches,
       branchDashboard,
+      dailyRevenue,
+      statusDistribution,
+      topCouriers,
+      trend,
     ] = await Promise.all([
       this.readPart(
         this.orderClient,
@@ -983,12 +1038,51 @@ export class AnalyticsServiceService {
         failedParts,
         'topBranches',
       ),
-      isBranchRole && branchId
+      (isBranchRole || isAdminBranchView) && branchId
         ? this.fetchBranchDashboard(branchId, requester, branchDashboardFilter)
         : Promise.resolve(null),
+      isAdminBranchView
+        ? this.readPart(
+            this.orderClient,
+            'order.analytics.revenue',
+            { ...normalized, period: 'daily', branch_id: branchId },
+            failedParts,
+            'dailyRevenue',
+          )
+        : Promise.resolve(null),
+      isAdminBranchView
+        ? this.readPart(
+            this.orderClient,
+            'order.analytics.status_distribution',
+            { ...normalized, branch_id: branchId },
+            failedParts,
+            'statusDistribution',
+          )
+        : Promise.resolve(null),
+      isAdminBranchView
+        ? this.readPart(
+            this.orderClient,
+            'order.analytics.top_couriers',
+            { ...rankingRange, limit: COURIER_LEADERBOARD_SIZE },
+            failedParts,
+            'topCouriers',
+          )
+        : Promise.resolve(null),
+      // (DwrMygfo) oldingi davr + 14 kunlik seriya — AYNI parallel bosqichda.
+      this.readPart(
+        this.orderClient,
+        'order.analytics.trend',
+        scopedRange,
+        failedParts,
+        'trend',
+      ),
     ]);
     this.requirePart(orders, 'overview');
-    if (isBranchRole && branchId && branchDashboard === null) {
+    if (
+      (isBranchRole || isAdminBranchView) &&
+      branchId &&
+      branchDashboard === null
+    ) {
       failedParts.push('branchDashboard');
     }
 
@@ -1014,6 +1108,18 @@ export class AnalyticsServiceService {
         topBranches: topBranchesRanking.items,
         topBranchesMeta: topBranchesRanking.meta,
         branchDashboard,
+        // (l9NNdsCH) maqsad qiymati (muvaffaqiyat ulushi, %).
+        targets: DASHBOARD_TARGETS,
+        ...this.dashboardTrendParts(trend, isRegistrator),
+        ...(isAdminBranchView
+          ? this.adminBranchViewParts(
+              branchId as string,
+              dailyRevenue,
+              statusDistribution,
+              topCouriers,
+              rankingWindow,
+            )
+          : {}),
         degraded: failedParts.length > 0,
         failed_parts: failedParts.sort(),
         ...(allTime?.meta ?? {}),
@@ -1023,12 +1129,117 @@ export class AnalyticsServiceService {
     );
   }
 
+  /**
+   * (DwrMygfo) Dashboard `previous` (oldingi teng davr overview qiymatlari)
+   * va `series` (oxirgi 14 kun, har kun). Registrator — moliyaviy maydonlar
+   * (tushum, foyda, bekor summasi) olib tashlanadi (`orders` bilan bir xil).
+   * Bo'lak olinmasa yoki «Barchasi» — `previous: null`.
+   */
+  private dashboardTrendParts(trend: unknown, hideFinancials: boolean) {
+    const { previous, series } = this.trendData(trend);
+    const countKeys = ['acceptedCount', 'soldAndPaid', 'cancelled'];
+    const moneyKeys = hideFinancials
+      ? []
+      : ['totalRevenue', 'profit', 'lostRevenue'];
+    const keys = [...countKeys, ...moneyKeys];
+    const pick = (row: Record<string, unknown>) =>
+      Object.fromEntries(keys.map((key) => [key, this.parseNumber(row[key])]));
+    return {
+      previous: previous
+        ? {
+            from: this.stringOrNull(previous.from),
+            to: this.stringOrNull(previous.to),
+            ...pick(previous),
+          }
+        : null,
+      series: series
+        ? series.map((row) => ({
+            date: this.stringOrNull(row.date) ?? '',
+            ...pick(row),
+          }))
+        : null,
+    };
+  }
+
+  private stringOrNull(value: unknown): string | null {
+    return typeof value === 'string' ? value : null;
+  }
+
+  /**
+   * (DwrMygfo) `order.analytics.trend` javobi (xom yoki successRes o'rami):
+   * `previous` obyekti va `series` qatorlari; yo'q bo'lsa — `null`.
+   */
+  private trendData(trend: unknown): {
+    previous: Record<string, unknown> | null;
+    series: Array<Record<string, unknown>> | null;
+  } {
+    const asRecord = (value: unknown): Record<string, unknown> | null =>
+      value && typeof value === 'object' && !Array.isArray(value)
+        ? (value as Record<string, unknown>)
+        : null;
+    let root = asRecord(trend);
+    if (root && !('series' in root) && !('previous' in root)) {
+      root = asRecord(root.data);
+    }
+    const series = Array.isArray(root?.series)
+      ? (root.series as unknown[])
+          .map((row) => asRecord(row))
+          .filter((row): row is Record<string, unknown> => row !== null)
+      : null;
+    return { previous: asRecord(root?.previous), series };
+  }
+
+  /**
+   * (6CYRjoZG) SA/ADMIN `?branch_id=` javobining qo'shimcha bo'laklari
+   * (`/branches/:id` «Filial ko'rsatkichlari»): `branch_id` (qo'llangan
+   * filial), `dailyRevenue` (kunlik daromad bandlari, `/analytics/revenue`
+   * `data` bilan bir xil shakl), `statusDistribution` (holat → son, donut) va
+   * `topCouriers` (filial kuryerlari reytingi, ≥ min_orders). Bo'lak
+   * olinmasa — `null` + `failed_parts` (degraded).
+   */
+  private adminBranchViewParts(
+    branchId: string,
+    dailyRevenue: unknown,
+    statusDistribution: unknown,
+    topCouriers: unknown,
+    rankingWindow: DashboardRankingWindow,
+  ) {
+    const revenue =
+      dailyRevenue === null ? null : this.unwrapRevenue(dailyRevenue);
+    const statusRoot =
+      statusDistribution && typeof statusDistribution === 'object'
+        ? (statusDistribution as Record<string, unknown>)
+        : null;
+    const status =
+      statusRoot && 'distribution' in statusRoot
+        ? statusRoot
+        : statusRoot?.data && typeof statusRoot.data === 'object'
+          ? (statusRoot.data as Record<string, unknown>)
+          : null;
+    const couriersRanking = this.dashboardRanking(topCouriers, rankingWindow);
+    return {
+      branch_id: branchId,
+      dailyRevenue: revenue,
+      statusDistribution:
+        status?.distribution && typeof status.distribution === 'object'
+          ? {
+              distribution: status.distribution as Record<string, number>,
+              total: this.parseNumber(status.total),
+            }
+          : null,
+      topCouriers: topCouriers === null ? null : couriersRanking.items,
+      topCouriersMeta: couriersRanking.meta,
+    };
+  }
+
   async getRevenueStats(
     requester: RequesterContext | undefined,
     filter: RevenueFilter,
   ) {
     this.assertFinancialAccess(requester);
-    const normalized = this.normalizeDateRangeAny(filter);
+    // (XdKajqLe) `all=true` — «Barchasi» (366 kunlik chegara, meta bilan).
+    const normalized = this.kpiRange(filter);
+    const isAllTime = normalized.all === true;
     const period = this.normalizeRevenuePeriod(filter.period);
     const failedParts: string[] = [];
 
@@ -1072,15 +1283,27 @@ export class AnalyticsServiceService {
     );
     const labels = revenueData.data.map((row) => row.label ?? row.period);
     const values = revenueData.data.map((row) => this.parseNumber(row.revenue));
+    // (l9NNdsCH) «Sof foyda» trendi — har bandda `profit` (order-service).
+    const profitValues = revenueData.data.map((row) =>
+      this.parseNumber(row.profit),
+    );
+    // `unwrap` bu yerda ishlatilmaydi: xom `{data: [], summary,
+    // applied_range}` da u bandlar massivini qaytarib meta'ni yo'qotadi.
+    const revenueRoot =
+      revenue && typeof revenue === 'object' && 'applied_range' in revenue
+        ? revenue
+        : (revenue as { data?: unknown } | null)?.data;
+    const allTime = isAllTime ? this.allTimeRangeMeta(revenueRoot) : null;
 
     return successRes(
       {
         data: revenueData.data,
         summary: revenueData.summary,
-        chart: { labels, values },
+        chart: { labels, values, profitValues },
         finance: financeData,
         degraded: failedParts.length > 0,
         failed_parts: failedParts.sort(),
+        ...(allTime?.meta ?? {}),
       },
       200,
       `Revenue stats (${period})`,
@@ -1092,12 +1315,17 @@ export class AnalyticsServiceService {
     filter: RevenueFilter,
   ) {
     this.assertFinancialAccess(requester);
-    const normalized = this.normalizeDateRangeAny(filter);
+    // (XdKajqLe) `all=true` — «Barchasi»: barcha bo'laklar (overview,
+    // kuryerlar, top marketlar, yetkazish) order-service'ga `all: true`
+    // bilan — dashboard bilan AYNI 366 kunlik oyna.
+    const normalized = this.kpiRange(filter);
+    const isAllTime = normalized.all === true;
     const rangeMs =
       new Date(normalized.endDate).getTime() -
       new Date(normalized.startDate).getTime();
-    const revenuePeriod: RevenuePeriod =
-      rangeMs > 5 * 365 * 24 * 60 * 60 * 1000
+    const revenuePeriod: RevenuePeriod = isAllTime
+      ? 'monthly'
+      : rangeMs > 5 * 365 * 24 * 60 * 60 * 1000
         ? 'yearly'
         : rangeMs > 90 * 24 * 60 * 60 * 1000
           ? 'monthly'
@@ -1106,7 +1334,7 @@ export class AnalyticsServiceService {
     // (mKS1mjNr) Order-service'ga 5 ta chaqiruv, hammasi PARALLEL (bitta
     // 2,5 s bosqich). Ilgari yetkazish vaqti uchun sotilgan buyurtmalar
     // 4 status × 200 talik sahifalab (100 sahifagacha) tortilardi.
-    const [overview, revenue, courierStats, topMarkets, fulfillment] =
+    const [overview, revenue, courierStats, topMarkets, fulfillment, trend] =
       await Promise.all([
         this.readPart(
           this.orderClient,
@@ -1143,6 +1371,14 @@ export class AnalyticsServiceService {
           failedParts,
           'fulfillment',
         ),
+        // (DwrMygfo) oldingi davr + 14 kunlik seriya — bitta RPC, parallel.
+        this.readPart(
+          this.orderClient,
+          'order.analytics.trend',
+          normalized,
+          failedParts,
+          'trend',
+        ),
       ]);
     this.requirePart(overview, 'overview');
 
@@ -1154,6 +1390,7 @@ export class AnalyticsServiceService {
     const onTimeCount = this.parseNumber(fulfillmentData?.onTimeCount);
 
     const overviewData = this.unwrap<any>(overview as any);
+    const kpiAllTime = isAllTime ? this.allTimeRangeMeta(overviewData) : null;
     const revenueData = this.unwrapRevenue(revenue);
     const courierStatsData = Array.isArray(
       this.unwrap<any>(courierStats as any),
@@ -1204,16 +1441,72 @@ export class AnalyticsServiceService {
         averageOrderValue: avgOrderValue,
         averageFulfillmentHours: fulfillmentHours,
         onTimeRate,
+        // (yrLt5oMi) SLA maxraji: davrda yetkazilgan (sotilgan) buyurtmalar
+        // soni. 0 bo'lsa `onTimeRate`/`averageFulfillmentHours` dagi 0 —
+        // "o'lchanmagan" (yetkazish yo'q), «0% · past» EMAS. Minimal variant:
+        // `onTimeRate` raqamligicha qoladi (eski FE buzilmaydi), FE
+        // `deliveryCount === 0` da «O'lchanmagan» chizadi.
+        deliveryCount,
         cancellationRate,
         courierEfficiency,
         marketRating: topMarketsData,
         marketRatingMeta: this.ranking(topMarkets).meta,
+        ...this.kpiTrendParts(trend),
         degraded: failedParts.length > 0,
         failed_parts: failedParts.sort(),
+        ...(kpiAllTime?.meta ?? {}),
       },
       200,
-      'KPI stats',
+      kpiAllTime
+        ? kpiAllTime.message.replace('Dashboard infos', 'KPI stats')
+        : 'KPI stats',
     );
+  }
+
+  /**
+   * (DwrMygfo) KPI formulalari (getKpiStats bilan AYNI) — `previous` va
+   * kunlik `series` uchun. `courierEfficiency` oldingi davr/seriyada yo'q
+   * (kuryer kesimi alohida og'ir so'rov — minimal variant).
+   */
+  private kpiFromTotals(row: Record<string, unknown>) {
+    const accepted = this.parseNumber(row.acceptedCount);
+    const sold = this.parseNumber(row.soldAndPaid);
+    const cancelled = this.parseNumber(row.cancelled);
+    const revenue = this.parseNumber(row.totalRevenue);
+    const delivered = this.parseNumber(row.deliveredCount);
+    const deliveryMs = this.parseNumber(row.deliveryMsTotal);
+    const onTime = this.parseNumber(row.onTimeCount);
+    return {
+      averageOrderValue: sold > 0 ? Number((revenue / sold).toFixed(2)) : 0,
+      averageFulfillmentHours:
+        delivered > 0
+          ? Number((deliveryMs / delivered / (1000 * 60 * 60)).toFixed(2))
+          : 0,
+      onTimeRate:
+        delivered > 0 ? Number(((onTime * 100) / delivered).toFixed(2)) : 0,
+      deliveryCount: delivered,
+      cancellationRate:
+        accepted > 0 ? Number(((cancelled * 100) / accepted).toFixed(2)) : 0,
+    };
+  }
+
+  private kpiTrendParts(trend: unknown) {
+    const { previous, series } = this.trendData(trend);
+    return {
+      previous: previous
+        ? {
+            from: this.stringOrNull(previous.from),
+            to: this.stringOrNull(previous.to),
+            ...this.kpiFromTotals(previous),
+          }
+        : null,
+      series: series
+        ? series.map((row) => ({
+            date: this.stringOrNull(row.date) ?? '',
+            ...this.kpiFromTotals(row),
+          }))
+        : null,
+    };
   }
 
   async getOrderReport(
