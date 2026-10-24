@@ -6,6 +6,7 @@ import {
   IsArray,
   IsDefined,
   IsEnum,
+  IsIn,
   IsInt,
   IsNotEmpty,
   IsNumber,
@@ -29,6 +30,8 @@ import {
   AI_MAX_ORDERS_PER_PARSE,
   AI_MAX_QUANTITY,
   AI_TEXT_MAX_CHARS,
+  ORDER_FULFILLMENT_MODES,
+  type OrderFulfillmentMode,
   Where_deliver,
 } from '@app/common';
 
@@ -324,9 +327,38 @@ export class AiConfirmOrderDto {
   @IsString({ message: "Operator matn bo'lishi kerak" })
   @MaxLength(100, { message: 'Operator nomi 100 belgidan oshmasligi kerak' })
   operator?: string;
+
+  @ApiPropertyOptional({
+    enum: ORDER_FULFILLMENT_MODES,
+    description:
+      '6kHnNH9j: shu buyurtma manbasi (auto | hq). Berilmasa — so‘rov darajasidagi `fulfillment`, u ham bo‘lmasa `auto`.',
+  })
+  @IsOptional()
+  @Transform(({ value }) =>
+    typeof value === 'string' ? value.trim().toLowerCase() : value,
+  )
+  @IsIn(ORDER_FULFILLMENT_MODES as unknown as string[], {
+    message: "fulfillment faqat 'auto' yoki 'hq' bo'lishi mumkin",
+  })
+  fulfillment?: OrderFulfillmentMode;
 }
 
 export class AiConfirmRequestDto {
+  @ApiPropertyOptional({
+    enum: ORDER_FULFILLMENT_MODES,
+    default: 'auto',
+    description:
+      '6kHnNH9j: partiyadagi hamma buyurtma manbasi (auto | hq; sukut auto). `orders[i].fulfillment` ustun.',
+  })
+  @IsOptional()
+  @Transform(({ value }) =>
+    typeof value === 'string' ? value.trim().toLowerCase() : value,
+  )
+  @IsIn(ORDER_FULFILLMENT_MODES as unknown as string[], {
+    message: "fulfillment faqat 'auto' yoki 'hq' bo'lishi mumkin",
+  })
+  fulfillment?: OrderFulfillmentMode;
+
   @ApiPropertyOptional({
     example: '12',
     description:

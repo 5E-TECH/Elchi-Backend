@@ -98,6 +98,7 @@ import {
   AI_MAX_IMAGES,
   AI_RPC_TIMEOUT_MS,
   AI_TEXT_MAX_CHARS,
+  FULFILLMENT_SOURCES,
   Order_status,
   RMQ_FIRE_AND_FORGET_TIMEOUT,
   Roles as RoleEnum,
@@ -113,6 +114,7 @@ import {
   type AiHealthState,
   type AiOrderExtractRequest,
   type AiOrderExtractResponse,
+  type OrderFulfillmentMode,
 } from '@app/common';
 import { successRes } from '../../../libs/common/helpers/response';
 import { Roles } from './auth/roles.decorator';
@@ -172,6 +174,8 @@ type OrderListFilters = {
   sort_by?: string;
   sort_dir?: string;
   cancelled_inventory?: string;
+  /** 6kHnNH9j: «Ombordan» filtri — HQ | WAREHOUSE. */
+  fulfillment_source?: string;
 };
 
 type OrderListRequest =
@@ -1614,10 +1618,16 @@ export class OrderGatewayController {
       operatorName?: string | null;
       includeMarketId: boolean;
       branchAssignment: BranchAssignment | null;
+      /** 6kHnNH9j: so'rov darajasidagi manba tanlovi. */
+      fulfillment?: OrderFulfillmentMode;
     },
   ): Promise<AiConfirmResult> {
     const { order, index } = item;
     const mapped: CreateOrderRequestDto = {
+      // 6kHnNH9j: buyurtma → so'rov → sukut `auto` (createOrderInternal).
+      ...((order.fulfillment ?? ctx.fulfillment)
+        ? { fulfillment: order.fulfillment ?? ctx.fulfillment }
+        : {}),
       customer: {
         name: order.customer.name,
         phone_number: order.customer.phone_number,
@@ -2273,6 +2283,12 @@ export class OrderGatewayController {
                 : isSystemPrivileged
                   ? orderDto.source
                   : undefined,
+              // 6kHnNH9j: qo'lda va AI tasdiqlash — sukut `auto` (ombor yoki
+              // HQ); bot yo'li — doim HQ (kontraktda yo'q).
+              fulfillment:
+                opts?.createdVia === 'bot'
+                  ? 'hq'
+                  : (orderDto.fulfillment ?? 'auto'),
             },
             requester: { id: req.user.sub, roles },
             // gpCIsGjH: DOIM — order-service `executeIdempotent` endi
@@ -2778,6 +2794,7 @@ export class OrderGatewayController {
       operatorName,
       includeMarketId: !roles.includes(RoleEnum.MARKET),
       branchAssignment,
+      fulfillment: dto?.fulfillment,
     };
     const outcomes = await runInLanes(
       eligible,
@@ -3365,6 +3382,13 @@ export class OrderGatewayController {
     schema: { default: 10 } as any,
   })
   @ApiQuery({
+    name: 'fulfillment_source',
+    required: false,
+    enum: FULFILLMENT_SOURCES,
+    description:
+      '6kHnNH9j: «Ombordan» — WAREHOUSE (viloyat ombori), HQ — hozirgi oqim. Javob qatorida `fulfillment_source` va `warehouse: { id, name, branch_id } | null`.',
+  })
+  @ApiQuery({
     name: 'cancelled_inventory',
     required: false,
     type: Boolean,
@@ -3394,6 +3418,7 @@ export class OrderGatewayController {
     @Query('sort_by') sort_by?: string,
     @Query('sort_dir') sort_dir?: string,
     @Query('cancelled_inventory') cancelled_inventory?: string,
+    @Query('fulfillment_source') fulfillment_source?: string,
   ) {
     const request = await this.resolveOrderListRequest(
       {
@@ -3415,6 +3440,7 @@ export class OrderGatewayController {
         sort_by,
         sort_dir,
         cancelled_inventory,
+        fulfillment_source,
       },
       req?.user,
       page,
@@ -3525,6 +3551,11 @@ export class OrderGatewayController {
     enum: ['internal', 'external', 'branch'],
   })
   @ApiQuery({ name: 'cancelled_inventory', required: false, type: Boolean })
+  @ApiQuery({
+    name: 'fulfillment_source',
+    required: false,
+    enum: FULFILLMENT_SOURCES,
+  })
   async exportOrdersExcel(
     @Res() res: Response,
     @Req() req: { user: JwtUser },
@@ -3545,6 +3576,7 @@ export class OrderGatewayController {
     @Query('sort_by') sort_by?: string,
     @Query('sort_dir') sort_dir?: string,
     @Query('cancelled_inventory') cancelled_inventory?: string,
+    @Query('fulfillment_source') fulfillment_source?: string,
   ): Promise<void> {
     const request = await this.resolveOrderListRequest(
       {
@@ -3565,6 +3597,7 @@ export class OrderGatewayController {
         sort_by,
         sort_dir,
         cancelled_inventory,
+        fulfillment_source,
       },
       req?.user,
     );
@@ -3661,7 +3694,22 @@ export class OrderGatewayController {
       sort_by,
       sort_dir,
       cancelled_inventory,
+      fulfillment_source,
     } = filters;
+    // 6kHnNH9j: «Ombordan» filtri — noto'g'ri qiymat 400 (order-service'ga yetmaydi).
+    const normalizedFulfillmentSource = fulfillment_source
+      ? String(fulfillment_source).trim().toUpperCase()
+      : undefined;
+    if (
+      normalizedFulfillmentSource &&
+      !(FULFILLMENT_SOURCES as readonly string[]).includes(
+        normalizedFulfillmentSource,
+      )
+    ) {
+      throw new BadRequestException(
+        `Noto'g'ri fulfillment_source qiymati: ${fulfillment_source} (HQ yoki WAREHOUSE)`,
+      );
+    }
     const roles = user?.roles ?? [];
     const normalizedRoles = this.normalizeRoles(roles);
     const isMarket = normalizedRoles.includes(RoleEnum.MARKET);
@@ -3866,6 +3914,9 @@ export class OrderGatewayController {
         source,
         sort_by,
         sort_dir,
+        ...(normalizedFulfillmentSource
+          ? { fulfillment_source: normalizedFulfillmentSource }
+          : {}),
       },
     };
   }
