@@ -8,6 +8,7 @@ import {
 import { RmqService, executeAndAck, ActivityLogQuery } from '@app/common';
 import {
   CatalogServiceService,
+  ProductCreateDto,
   ProductWriteDto,
 } from './catalog-service.service';
 
@@ -38,12 +39,10 @@ export class CatalogServiceController {
   create(
     @Payload()
     data: {
-      dto: {
-        name: string;
-        user_id: string;
-        image_url?: string | null;
-        price?: number | string | null;
-      };
+      // MH-3: o'lchov (weight_kg, length_cm, width_cm, height_cm,
+      // volumetric_enabled) va barcode — ixtiyoriy (hamkor yo'li
+      // `{ name, user_id }` bilan yaratadi).
+      dto: ProductCreateDto;
     },
     @Ctx() context: RmqContext,
   ) {
@@ -74,6 +73,20 @@ export class CatalogServiceController {
   findById(@Payload() data: { id: string }, @Ctx() context: RmqContext) {
     return this.executeAndAck(context, () =>
       this.catalogService.findById(data.id),
+    );
+  }
+
+  /**
+   * hY7uacJu: skaner kodi (`ELC-P-…` yoki zavod shtrix kodi) → mahsulot(lar).
+   * `user_id` — market scoping (gateway rolga qarab qo'yadi).
+   */
+  @MessagePattern({ cmd: 'catalog.product.find_by_code' })
+  findByCode(
+    @Payload() data: { code: string; user_id?: string | null },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.catalogService.findByCode(data?.code, data?.user_id),
     );
   }
 

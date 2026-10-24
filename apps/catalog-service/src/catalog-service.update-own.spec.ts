@@ -69,6 +69,47 @@ describe('updateOwn (tsEevElW)', () => {
     expect(productRepo.save).not.toHaveBeenCalled();
   });
 
+  it('⭐ MH-3: egasi (operator) o`lchov yoki shtrix kodni tuzatadi — saqlanadi, aktyor operator', async () => {
+    for (const [dto, expected] of [
+      [{ weight_kg: 2 }, { weight_kg: 2 }],
+      [{ barcode: '4780000000007' }, { barcode: '4780000000007' }],
+    ] as const) {
+      const { svc, productRepo, activityLog } = make({
+        id: '5',
+        user_id: '121',
+        name: 'A',
+      });
+      await svc.updateOwn('5', '121', dto, {
+        id: '501',
+        role: 'market_operator',
+      });
+      expect(productRepo.save.mock.calls[0][0]).toMatchObject(expected);
+      expect(activityLog.logChange).toHaveBeenCalledWith(
+        expect.objectContaining({
+          user_id: '501',
+          user_role: 'market_operator',
+          new_value: expect.objectContaining(expected),
+        }),
+      );
+    }
+  });
+
+  it('MH-3: begona market o`lchov yuborsa ham — 403 (egalik avval), saqlanmaydi', async () => {
+    const { svc, productRepo, activityLog } = make({
+      id: '6',
+      user_id: '202',
+      name: 'A',
+    });
+    const error: unknown = await svc
+      .updateOwn('6', '121', { weight_kg: 2 }, { id: '501' })
+      .catch((e: unknown) => e);
+    expect((error as RpcException).getError()).toMatchObject({
+      statusCode: 403,
+    });
+    expect(productRepo.save).not.toHaveBeenCalled();
+    expect(activityLog.logChange).not.toHaveBeenCalled();
+  });
+
   it('market (aktyorsiz) — avvalgidek user_role=market', async () => {
     const { svc, activityLog } = make({ id: '5', user_id: '121', name: 'A' });
     await svc.updateOwn('5', '121', { name: 'B' });

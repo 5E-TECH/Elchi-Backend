@@ -450,6 +450,43 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
 - **fix3 (2026-10-01, gateway):** `GET /product` and `/product/:id` require
   SUPERADMIN/ADMIN/REGISTRATOR/MANAGER/BRANCH/MARKET; a MARKET sees only its
   own products (another `market_id` / product → 403).
+- **MH-3 (9fHyFp3y) + hY7uacJu (2026-10-24, migration `1716000000141`):**
+  `products` gained `weight_kg numeric(10,3)`, `length_cm/width_cm/height_cm
+  int`, `volumetric_enabled bool NOT NULL DEFAULT true`, `barcode
+  varchar(512)` and `sku_code varchar(32)` — a STORED generated column
+  `'ELC-P-' || lpad(id, GREATEST(6, len), '0')` (never written by the app;
+  `UQ_products_sku_code`). All measure columns are NULLABLE (old / partner
+  products); CHECKs: weight and each dimension `> 0`, L/W/H all-or-none,
+  barcode not blank. `UQ_products_barcode_user_id (barcode, user_id) WHERE
+  is_deleted = false AND barcode IS NOT NULL` — one code per market, reusable
+  after soft delete, the same EAN allowed in different markets. Barcode rules
+  live in `libs/common/src/catalog/product-code.ts`: EAN/UPC/GTIN check digit
+  is enforced and GTINs are stored **canonical** (`canonicalGtin`: UPC-A 12 /
+  GTIN-14 → 13-digit EAN form, GTIN-8 → 8, indicator GTIN-14 as is; GS1
+  DataMatrix/QR → extracted GTIN); an 8-digit scan is EAN-8 or UPC-E
+  (`0…` → UPC-E first, `1…` → GTIN-8 first; UPC-E is stored as its expanded
+  UPC-A, `04963406` → `0049000006346`), and the UPC-E/EAN-8 ambiguity is
+  covered by `productBarcodeEquivalents` in lookups and the duplicate
+  check; free QR text kept verbatim; `ELC-P-…` rejected. Measure limits: `libs/common/src/catalog/product-measure.ts`
+  (0.001..1000 kg, 1..1000 cm — owner not yet confirmed).
+  - HTTP `POST /product`: the 4 measures are **required** (MH-S1, DTO
+    `IsDefined`), multipart strings → numbers; `volumetric_enabled` /
+    `barcode` optional. `PATCH /product/:id` and `/product/my/:id`: all
+    optional, `null` / `''` measure → 400 (measures are only replaced).
+    Service level (`catalog.product.create`) keeps measures optional —
+    `integration-service` partner path still creates `{ name, user_id }`.
+  - `update` and `update_own` use the same field whitelist (name, image_url,
+    price, measures, barcode); `update_own` only adds the ownership check.
+  - New RMQ `catalog.product.find_by_code {code, user_id?}` → `{data, total,
+    matched_by: 'sku_code'|'barcode'|null}` (limit 50; not found → empty, not
+    404). Gateway `GET /product/by-code/:code` (declared before `:id`,
+    PRODUCT_DETAIL_ROLES): MARKET → own `sub` (other `market_id` → 403),
+    MARKET_OPERATOR → assigned market (unassigned → 400), staff/BRANCH →
+    optional `market_id`.
+  - Search index: `tags` stay `['product']`; codes and measures go to
+    `metadata` only (search-service does not scope catalog docs by market for
+    unprivileged roles). `findAll` `search` also matches exact `sku_code` /
+    canonical barcode.
 
 ### analytics-service (no DB)
 - Pure aggregator. `analytics.{dashboard,kpi,revenue,report.orders,report.couriers,

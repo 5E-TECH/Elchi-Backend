@@ -19,12 +19,13 @@ import {
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ClientProxy } from '@nestjs/microservices';
 import { firstValueFrom, TimeoutError, timeout } from 'rxjs';
-import { Roles as RoleEnum } from '@app/common';
+import { PRODUCT_BARCODE_MAX_LENGTH, Roles as RoleEnum } from '@app/common';
 import {
   ApiBody,
   ApiBearerAuth,
   ApiCreatedResponse,
   ApiConsumes,
+  ApiOkResponse,
   ApiOperation,
   ApiParam,
   ApiQuery,
@@ -37,6 +38,7 @@ import { Roles } from './auth/roles.decorator';
 import { RolesGuard } from './auth/roles.guard';
 import {
   CreateProductRequestDto,
+  ProductByCodeResponseDto,
   UpdateProductRequestDto,
 } from './dto/catalog.swagger.dto';
 import { matchesDeclaredType } from '@app/common';
@@ -397,6 +399,16 @@ export class CatalogGatewayController {
               user_id: marketId,
               // zRqDRLAZ: ixtiyoriy narx (berilmasa uzatilmaydi).
               ...(dto.price !== undefined ? { price: dto.price } : {}),
+              // MH-3 (MH-S1): o'lchov — DTO majburiy qilgan, son bo'lib ketadi.
+              weight_kg: dto.weight_kg,
+              length_cm: dto.length_cm,
+              width_cm: dto.width_cm,
+              height_cm: dto.height_cm,
+              // Berilmasa catalog sukuti (true) / kodsiz.
+              ...(dto.volumetric_enabled !== undefined
+                ? { volumetric_enabled: dto.volumetric_enabled }
+                : {}),
+              ...(dto.barcode !== undefined ? { barcode: dto.barcode } : {}),
             },
           },
         )
@@ -514,6 +526,77 @@ export class CatalogGatewayController {
         .send(
           { cmd: 'catalog.product.find_all' },
           { query: buildProductListQuery(ownMarketId, search, page, limit) },
+        )
+        .pipe(timeout(8000)),
+    ).catch((error: unknown) => {
+      if (error instanceof TimeoutError) {
+        throw new GatewayTimeoutException('Catalog service response timeout');
+      }
+      throw error;
+    });
+  }
+
+  /**
+   * hY7uacJu: skaner kodi → mahsulot (ombor kirimi, inventarizatsiya,
+   * «Mahsulotga bog'lash»). `:id` dan OLDIN e'lon qilinadi. O'qish qoidasi
+   * `GET /product/:id` bilan bir xil (PRODUCT_DETAIL_ROLES): market — faqat
+   * o'zi, operator — biriktirilgan marketi, xodim — ixtiyoriy `market_id`.
+   */
+  @Get('by-code/:code')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(...PRODUCT_DETAIL_ROLES)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Find product by scanned code (ELC-P-… or factory barcode)',
+    description:
+      "`ELC-P-000123` — Elchi kodi (sku_code, registrga befarq, nolsiz ham); boshqasi — zavod shtrix kodi (EAN-13/8, UPC-A 12, UPC-E 8, GTIN-14 — saqlashdagi bilan bir xil kanonik GTIN'ga keltiriladi, ya'ni 8/12/13/14 xonali skan (UPC-E ham, kengaytirilgan UPC-A ham) bitta mahsulotni topadi; GS1 DataMatrix/QR matnidan GTIN ajratiladi; zavod QR matni aynan). Topilmasa 200 + `data: []`, `matched_by: null` (404 emas). Market — faqat o'z mahsulotlari (boshqa `market_id` — 403); market operatori — biriktirilgan marketi (biriktirilmagan — 400); xodim — `market_id` ixtiyoriy filtr.",
+  })
+  @ApiParam({
+    name: 'code',
+    description:
+      "Skaner qiymati — `encodeURIComponent` bilan yuboring (QR matnida `/` bo'lishi mumkin).",
+    example: 'ELC-P-000123',
+  })
+  @ApiQuery({ name: 'market_id', required: false, type: String })
+  @ApiOkResponse({ type: ProductByCodeResponseDto })
+  async findByCode(
+    @Param('code') code: string,
+    @Query('market_id') marketId?: string,
+    @Req() req?: { user: JwtUser },
+  ) {
+    const text = typeof code === 'string' ? code.trim() : '';
+    if (!text) {
+      throw new BadRequestException("Kod bo'sh bo'lishi mumkin emas");
+    }
+    if (text.length > PRODUCT_BARCODE_MAX_LENGTH) {
+      throw new BadRequestException(
+        `Kod ${PRODUCT_BARCODE_MAX_LENGTH} belgidan oshmasligi kerak`,
+      );
+    }
+
+    const requested = typeof marketId === 'string' ? marketId.trim() : '';
+    let userId: string | undefined;
+    if (
+      this.isMarketOnlyRequester(req?.user) ||
+      this.isMarketOperatorRequester(req?.user)
+    ) {
+      // Market — token `sub`; operator — biriktirilgan market (yo'q — 400).
+      const ownId = await this.resolveOwnMarketId(req?.user as JwtUser);
+      if (!ownId || (requested && requested !== ownId)) {
+        throw new ForbiddenException(
+          "Market faqat o'z mahsulotlarini ko'ra oladi",
+        );
+      }
+      userId = ownId;
+    } else {
+      userId = requested || undefined;
+    }
+
+    return firstValueFrom(
+      this.catalogClient
+        .send(
+          { cmd: 'catalog.product.find_by_code' },
+          { code: text, user_id: userId },
         )
         .pipe(timeout(8000)),
     ).catch((error: unknown) => {

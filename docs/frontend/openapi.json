@@ -2256,6 +2256,62 @@
         ]
       }
     },
+    "/product/by-code/{code}": {
+      "get": {
+        "description": "`ELC-P-000123` — Elchi kodi (sku_code, registrga befarq, nolsiz ham); boshqasi — zavod shtrix kodi (EAN-13/8, UPC-A 12, UPC-E 8, GTIN-14 — saqlashdagi bilan bir xil kanonik GTIN'ga keltiriladi, ya'ni 8/12/13/14 xonali skan (UPC-E ham, kengaytirilgan UPC-A ham) bitta mahsulotni topadi; GS1 DataMatrix/QR matnidan GTIN ajratiladi; zavod QR matni aynan). Topilmasa 200 + `data: []`, `matched_by: null` (404 emas). Market — faqat o'z mahsulotlari (boshqa `market_id` — 403); market operatori — biriktirilgan marketi (biriktirilmagan — 400); xodim — `market_id` ixtiyoriy filtr.",
+        "operationId": "CatalogGatewayController_findByCode",
+        "parameters": [
+          {
+            "name": "code",
+            "required": true,
+            "in": "path",
+            "description": "Skaner qiymati — `encodeURIComponent` bilan yuboring (QR matnida `/` bo'lishi mumkin).",
+            "schema": {
+              "example": "ELC-P-000123",
+              "type": "string"
+            }
+          },
+          {
+            "name": "market_id",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProductByCodeResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Find product by scanned code (ELC-P-… or factory barcode)",
+        "tags": [
+          "Products"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "registrator",
+          "manager",
+          "branch",
+          "market",
+          "market_operator"
+        ]
+      }
+    },
     "/product/{id}": {
       "get": {
         "operationId": "CatalogGatewayController_findById",
@@ -19558,10 +19614,187 @@
             "nullable": true,
             "minimum": 0,
             "description": "Mahsulotning ma'lumotnoma narxi (so'm, ko'pi bilan 2 kasr). Ixtiyoriy; bo'sh satr yoki null — narxni tozalaydi. Buyurtma summasiga avtomatik yozilmaydi — forma faqat taklif qiladi."
+          },
+          "weight_kg": {
+            "type": "number",
+            "minimum": 0.001,
+            "maximum": 1000,
+            "example": 1.2,
+            "description": "Og'irlik, kg (ko'pi bilan 3 kasr; multipart'da satr, o'nlik vergul ham qabul qilinadi). Yangi mahsulotda MAJBURIY (MH-S1)."
+          },
+          "length_cm": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000,
+            "example": 30,
+            "description": "Uzunlik, sm (butun son). Uzunlik, kenglik va balandlik birga — uchalasi ham. Yangi mahsulotda MAJBURIY (MH-S1)."
+          },
+          "width_cm": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000,
+            "example": 22,
+            "description": "Kenglik, sm (butun son). Uzunlik, kenglik va balandlik birga — uchalasi ham. Yangi mahsulotda MAJBURIY (MH-S1)."
+          },
+          "height_cm": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000,
+            "example": 15,
+            "description": "Balandlik, sm (butun son). Uzunlik, kenglik va balandlik birga — uchalasi ham. Yangi mahsulotda MAJBURIY (MH-S1)."
+          },
+          "volumetric_enabled": {
+            "type": "boolean",
+            "default": true,
+            "description": "Hajmga qarab hisoblash (hajmli vazn = U×K×B / 5000). Yaratishda berilmasa — true. O'chirilsa narx faqat haqiqiy og'irlikdan hisoblanadi. Multipart: 'true'/'false' (1/0, on/off)."
+          },
+          "barcode": {
+            "type": "string",
+            "nullable": true,
+            "maxLength": 512,
+            "example": "4780000000007",
+            "description": "Zavod shtrix kodi (EAN-13/8, UPC-A, UPC-E, GTIN-14, GS1 DataMatrix/QR yoki zavod QR matni). Ixtiyoriy; bo'sh / null — kodsiz. EAN/UPC/GTIN nazorat raqami tekshiriladi; market ichida yagona (409). GTIN KANONIK shaklda saqlanadi va javobda shunday qaytadi: UPC-A (12) va GTIN-14 → 13 xonali EAN shakli (`036000291452` → `0036000291452`), UPC-E (8 xona, 0/1 bilan boshlanadi) → kengaytirilgan UPC-A ning shu shakli (`04963406` → `0049000006346`), GTIN-8 → 8 xona, indikatorli GTIN-14 o'zicha; DataMatrix/QR'dan GTIN ajratiladi. Satr sifatida yuboring (boshidagi nollar saqlansin). `ELC-P-…` (Elchi kodi) bu yerga yozilmaydi."
           }
         },
         "required": [
-          "name"
+          "name",
+          "weight_kg",
+          "length_cm",
+          "width_cm",
+          "height_cm"
+        ]
+      },
+      "ProductByCodeMarketDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "121"
+          },
+          "name": {
+            "type": "string",
+            "example": "Mobimax"
+          },
+          "phone_number": {
+            "type": "string",
+            "example": "+998901234567",
+            "nullable": true
+          },
+          "status": {
+            "type": "string",
+            "example": "active"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "status"
+        ]
+      },
+      "ProductByCodeItemDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "7"
+          },
+          "name": {
+            "type": "string",
+            "example": "Pepsi 0.5"
+          },
+          "user_id": {
+            "type": "string",
+            "example": "121",
+            "description": "Market id"
+          },
+          "image_url": {
+            "type": "string",
+            "nullable": true
+          },
+          "price": {
+            "type": "number",
+            "nullable": true,
+            "example": 125000
+          },
+          "weight_kg": {
+            "type": "number",
+            "nullable": true,
+            "example": 1.2
+          },
+          "length_cm": {
+            "type": "integer",
+            "nullable": true,
+            "example": 30
+          },
+          "width_cm": {
+            "type": "integer",
+            "nullable": true,
+            "example": 22
+          },
+          "height_cm": {
+            "type": "integer",
+            "nullable": true,
+            "example": 15
+          },
+          "volumetric_enabled": {
+            "type": "boolean",
+            "example": true
+          },
+          "barcode": {
+            "type": "string",
+            "nullable": true,
+            "example": "4780000000007",
+            "description": "Zavod shtrix kodi — GTIN kanonik shaklda (UPC-A va UPC-E → 13 xona)"
+          },
+          "sku_code": {
+            "type": "string",
+            "example": "ELC-P-000007",
+            "description": "Elchi kodi — avtomatik, o`zgarmas"
+          },
+          "market": {
+            "nullable": true,
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ProductByCodeMarketDto"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "user_id",
+          "volumetric_enabled",
+          "sku_code"
+        ]
+      },
+      "ProductByCodeResponseDto": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProductByCodeItemDto"
+            }
+          },
+          "total": {
+            "type": "number",
+            "example": 1
+          },
+          "matched_by": {
+            "type": "string",
+            "enum": [
+              "sku_code",
+              "barcode"
+            ],
+            "nullable": true,
+            "description": "Qaysi kod bo`yicha topildi; topilmasa null (data: [] — 404 emas)."
+          }
+        },
+        "required": [
+          "data",
+          "total"
         ]
       },
       "UpdateProductRequestDto": {
@@ -19587,6 +19820,46 @@
             "nullable": true,
             "minimum": 0,
             "description": "Mahsulotning ma'lumotnoma narxi (so'm, ko'pi bilan 2 kasr). Ixtiyoriy; bo'sh satr yoki null — narxni tozalaydi. Buyurtma summasiga avtomatik yozilmaydi — forma faqat taklif qiladi."
+          },
+          "weight_kg": {
+            "type": "number",
+            "minimum": 0.001,
+            "maximum": 1000,
+            "example": 1.2,
+            "description": "Og'irlik, kg (ko'pi bilan 3 kasr; multipart'da satr, o'nlik vergul ham qabul qilinadi). Berilmasa o'zgarmaydi; null / bo'sh — 400 (o'lchovni tozalab bo'lmaydi)."
+          },
+          "length_cm": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000,
+            "example": 30,
+            "description": "Uzunlik, sm (butun son). Uzunlik, kenglik va balandlik birga — uchalasi ham. Berilmasa o'zgarmaydi; null / bo'sh — 400."
+          },
+          "width_cm": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000,
+            "example": 22,
+            "description": "Kenglik, sm (butun son). Uzunlik, kenglik va balandlik birga — uchalasi ham. Berilmasa o'zgarmaydi; null / bo'sh — 400."
+          },
+          "height_cm": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000,
+            "example": 15,
+            "description": "Balandlik, sm (butun son). Uzunlik, kenglik va balandlik birga — uchalasi ham. Berilmasa o'zgarmaydi; null / bo'sh — 400."
+          },
+          "volumetric_enabled": {
+            "type": "boolean",
+            "default": true,
+            "description": "Hajmga qarab hisoblash (hajmli vazn = U×K×B / 5000). Yaratishda berilmasa — true. O'chirilsa narx faqat haqiqiy og'irlikdan hisoblanadi. Multipart: 'true'/'false' (1/0, on/off)."
+          },
+          "barcode": {
+            "type": "string",
+            "nullable": true,
+            "maxLength": 512,
+            "example": "4780000000007",
+            "description": "Zavod shtrix kodi (EAN-13/8, UPC-A, UPC-E, GTIN-14, GS1 DataMatrix/QR yoki zavod QR matni). Ixtiyoriy; bo'sh / null — kodsiz. EAN/UPC/GTIN nazorat raqami tekshiriladi; market ichida yagona (409). GTIN KANONIK shaklda saqlanadi va javobda shunday qaytadi: UPC-A (12) va GTIN-14 → 13 xonali EAN shakli (`036000291452` → `0036000291452`), UPC-E (8 xona, 0/1 bilan boshlanadi) → kengaytirilgan UPC-A ning shu shakli (`04963406` → `0049000006346`), GTIN-8 → 8 xona, indikatorli GTIN-14 o'zicha; DataMatrix/QR'dan GTIN ajratiladi. Satr sifatida yuboring (boshidagi nollar saqlansin). `ELC-P-…` (Elchi kodi) bu yerga yozilmaydi."
           }
         }
       },
