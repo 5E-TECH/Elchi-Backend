@@ -1,7 +1,7 @@
 import { UserServiceService } from './user-service.service';
 
 /** oNAE3LW9 — tumanga bog'langan foydalanuvchilar (mijoz/kuryer/market). */
-type Row = { id: string; region_id: string | null };
+type Row = { id: string; region_id: string | null; live?: unknown };
 
 /** `repo.manager.transaction` — SELECT ... FOR UPDATE va UPDATE'lar yoziladi. */
 function attachTx(repo: any, locked: Row[]) {
@@ -175,5 +175,24 @@ describe('UserServiceService geo usage / reassign (oNAE3LW9)', () => {
       ),
     ).toBe(409);
     expect(selectQb.getRawMany).not.toHaveBeenCalled();
+  });
+
+  it('(vsmpTweI) javobda moved_live — ko`chganlardan faqat tiriklari (is_deleted = false)', async () => {
+    const h = make([
+      { id: '301', region_id: '3', live: true },
+      { id: '302', region_id: '3', live: false },
+      { id: '303', region_id: '3', live: 't' },
+    ]);
+    const svc = h.svc as UserServiceService;
+    const res = await svc.reassignDistrict({
+      from_district_id: '173',
+      to_district_id: '28',
+    });
+    expect(
+      (h.selectQb as { addSelect: jest.Mock }).addSelect,
+    ).toHaveBeenCalledWith('(t.is_deleted = false)', 'live');
+    const data = res.data as { moved: number; moved_live: number };
+    expect(data.moved).toBe(3);
+    expect(data.moved_live).toBe(2);
   });
 });

@@ -395,9 +395,17 @@ function parseGeoReassignInput(input: GeoReassignInput) {
  * guruhlari (kompensatsiya aynan tiklashi uchun) va ID rejimida topilmagan
  * (A da yo'q) ID'lar.
  */
+/**
+ * (vsmpTweI) Raw `live` ustuni (`boolean`; drayverga qarab `'t'`/`'true'`) —
+ * qator o'chirilmaganmi.
+ */
+function geoRowLive(value: unknown): boolean {
+  return value === true || value === 't' || value === 'true';
+}
+
 function geoReassignResult(
   req: { from: string; to: string; ids: string[] | null },
-  rows: Array<{ id: string; region_id: string | null }>,
+  rows: Array<{ id: string; region_id: string | null; live?: unknown }>,
 ) {
   const ids = rows.map((row) => String(row.id));
   const groups = new Map<string, { region_id: string | null; ids: string[] }>();
@@ -413,6 +421,9 @@ function geoReassignResult(
     from_district_id: req.from,
     to_district_id: req.to,
     moved: ids.length,
+    // (vsmpTweI) ko'chganlardan TIRIK (o'chirilmagan) lari — logistics
+    // birlashtirish natijasidagi «Ko'chirildi» (`moved_live`) shundan.
+    moved_live: rows.filter((row) => geoRowLive(row.live)).length,
     ids,
     previous_regions: [...groups.values()],
     missing_ids: (req.ids ?? []).filter((id) => !movedSet.has(id)),
@@ -3729,7 +3740,7 @@ export class UserServiceService implements OnModuleInit {
   async reassignDistrict(input: GeoReassignInput) {
     const req = parseGeoReassignInput(input);
     assertGeoDeadline(req.deadlineAt);
-    let rows: Array<{ id: string; region_id: string | null }>;
+    let rows: Array<{ id: string; region_id: string | null; live?: unknown }>;
     try {
       rows = await this.users.manager.transaction(async (manager) => {
         if (req.ids && !req.ids.length) return [];
@@ -3738,13 +3749,17 @@ export class UserServiceService implements OnModuleInit {
           .createQueryBuilder('t')
           .select('t.id', 'id')
           .addSelect('t.region_id', 'region_id')
+          // (vsmpTweI) tirikmi — `moved_live` uchun.
+          .addSelect('(t.is_deleted = false)', 'live')
           .where('t.district_id = :from', { from: req.from });
         if (req.ids) {
           select.andWhere('t.id = ANY(:ids)', { ids: req.ids });
         }
-        const locked = await select
-          .setLock('pessimistic_write')
-          .getRawMany<{ id: string; region_id: string | null }>();
+        const locked = await select.setLock('pessimistic_write').getRawMany<{
+          id: string;
+          region_id: string | null;
+          live: unknown;
+        }>();
         const ids = locked.map((row) => String(row.id));
         if (!ids.length) return locked;
         await manager

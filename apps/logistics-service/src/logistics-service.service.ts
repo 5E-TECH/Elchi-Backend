@@ -6743,8 +6743,24 @@ export class LogisticsServiceService implements OnModuleInit {
       users: 0,
       branches: 0,
     };
+    /**
+     * (vsmpTweI) «Ko'chirildi» — faqat TIRIK yozuvlar: ko'chirish qadamining
+     * o'zi sanagan (`moved_live`, ko'chgan ID'lardan o'chirilmaganlari), B
+     * ning oldin/keyin farqidan EMAS (parallel o'zgarish buzmasin). `moved`
+     * — avvalgidek jami (o'chirilganlar bilan), tekshiruv shunga tayanadi.
+     * Eski servis `moved_live` qaytarmasa — ko'chgan va A dagi oldingi tirik
+     * sonning kichigi.
+     */
+    const movedLive: Record<GeoMoveKind, number> = {
+      orders: 0,
+      users: 0,
+      branches: 0,
+    };
+    const liveBeforeA = this.liveGeoCounts(beforeA);
     for (const { step, moved } of done) {
       movedCounts[step.kind] = moved.ids.length;
+      movedLive[step.kind] =
+        moved.live ?? Math.min(moved.ids.length, liveBeforeA[step.kind]);
     }
 
     // 3. A ni o'chirish + tasdiqlash (COMMIT'dan OLDIN) — mos kelmasa rollback.
@@ -6797,6 +6813,7 @@ export class LogisticsServiceService implements OnModuleInit {
       new_value: { merged_into: toId },
       metadata: {
         moved: movedCounts,
+        moved_live: movedLive,
         source_before: beforeA,
         target_before: beforeB,
         target_after: after.to,
@@ -6807,6 +6824,8 @@ export class LogisticsServiceService implements OnModuleInit {
         from_district_id: fromId,
         to_district_id: toId,
         moved: movedCounts,
+        // (vsmpTweI) natija oynasidagi «Ko'chirildi» — shu (o'chirilganlarsiz).
+        moved_live: movedLive,
         target_before: beforeB,
         target_after: after.to,
       },

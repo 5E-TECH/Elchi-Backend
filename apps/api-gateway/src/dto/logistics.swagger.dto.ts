@@ -130,6 +130,57 @@ export class DistrictInUseErrorResponseDto {
   trace_id?: string;
 }
 
+/** vsmpTweI — `POST /district/:id/merge` 200 javobi. */
+export class DistrictMergeResultDto {
+  @ApiProperty({ example: '173' })
+  from_district_id!: string;
+
+  @ApiProperty({ example: '28' })
+  to_district_id!: string;
+
+  @ApiProperty({
+    type: DistrictUsageCountsDto,
+    example: { orders: 130, users: 2, branches: 1 },
+    description:
+      "Ko'chirilgan JAMI (o'chirilganlar bilan) — tekshiruv shunga tayanadi",
+  })
+  moved!: DistrictUsageCountsDto;
+
+  @ApiProperty({
+    type: DistrictUsageCountsDto,
+    example: { orders: 128, users: 2, branches: 1 },
+    description:
+      "vsmpTweI: ko'chirilganlardan faqat TIRIK (o'chirilmagan) lari — natija oynasidagi «Ko'chirildi» shu. Ko'chirish qadamining o'zi sanaydi (B oldin/keyin farqidan emas).",
+  })
+  moved_live!: DistrictUsageCountsDto;
+
+  @ApiProperty({
+    type: 'object',
+    additionalProperties: true,
+    description:
+      "B tumanning ko'chirishdan oldingi sanog'i (tirik + `deleted`)",
+  })
+  target_before!: Record<string, unknown>;
+
+  @ApiProperty({
+    type: 'object',
+    additionalProperties: true,
+    description: "B tumanning keyingi sanog'i (tirik + `deleted`)",
+  })
+  target_after!: Record<string, unknown>;
+}
+
+export class DistrictMergeResponseDto {
+  @ApiProperty({ example: 200 })
+  statusCode!: number;
+
+  @ApiProperty({ example: 'District merged' })
+  message!: string;
+
+  @ApiProperty({ type: DistrictMergeResultDto })
+  data!: DistrictMergeResultDto;
+}
+
 /** tf324cXN — birlashtirish tekshiruvidagi bitta nomuvofiqlik (JAMI: tirik + o'chirilgan). */
 export class DistrictMergeMismatchDto {
   @ApiProperty({ enum: ['orders', 'users', 'branches'], example: 'orders' })

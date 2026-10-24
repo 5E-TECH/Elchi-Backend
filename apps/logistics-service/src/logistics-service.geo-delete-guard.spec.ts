@@ -60,6 +60,8 @@ function make(
     /** Oddiy ko'chirishdan keyin (parallel yozuv simulyatsiyasi). */
     afterForward?: (kind: Kind, rows: Record<Kind, GeoRow[]>) => void;
     removeFails?: boolean;
+    /** (vsmpTweI) Eski servis: `moved_live` qaytarmaydi. */
+    legacyMovedLive?: boolean;
   } = {},
 ) {
   const svc: any = Object.create(LogisticsServiceService.prototype);
@@ -190,6 +192,10 @@ function make(
       statusCode: 200,
       data: {
         moved: ids.length,
+        // (vsmpTweI) haqiqiy servislar kabi: ko'chganlardan tiriklari.
+        ...(opts.legacyMovedLive
+          ? {}
+          : { moved_live: moved.filter((r) => !r.deleted).length }),
         ids,
         previous_regions: [...groups.values()],
         missing_ids: compensation
@@ -780,6 +786,58 @@ describe('mergeDistricts — xato sababi (tf324cXN)', () => {
     ];
     expect(entry.action).toBe('district.merge_compensation_failed');
     expect(entry.metadata.reason_code).toBe('remote_refused');
+  });
+});
+
+type MergeOk = {
+  statusCode: number;
+  data: {
+    moved: Record<string, number>;
+    moved_live: Record<string, number>;
+  };
+};
+const mergeOk = async (h: Harness): Promise<MergeOk> =>
+  (await (h.svc as LogisticsServiceService).mergeDistricts(
+    '173',
+    '28',
+  )) as MergeOk;
+const withDeletedInA = () => ({
+  orders: [
+    order('11', '173', '3'),
+    order('12', '173', '3'),
+    order('13', '173', '3', true),
+    order('91', '28', '3'),
+  ],
+  users: [order('301', '173', '3', true)],
+  branches: [order('7', '173', '3')],
+});
+
+/**
+ * vsmpTweI — natija oynasidagi «Ko'chirildi» faqat TIRIK yozuvlar:
+ * `moved_live` ko'chirish qadamining o'zidan (servis `moved_live`), `moved`
+ * esa avvalgidek jami (o'chirilganlar bilan).
+ */
+describe('mergeDistricts — moved_live (vsmpTweI)', () => {
+  it('⭐ o‘chirilganlar `moved` da bor, `moved_live` da yo‘q; activity metadata da ham', async () => {
+    const h = make({ rows: withDeletedInA() });
+    const res = await mergeOk(h);
+    expect(res.statusCode).toBe(200);
+    expect(res.data.moved).toEqual({ orders: 3, users: 1, branches: 1 });
+    expect(res.data.moved_live).toEqual({ orders: 2, users: 0, branches: 1 });
+    const [entry] = activityLogOf(h).mock.calls[0] as [
+      { metadata: { moved_live: Record<string, number> } },
+    ];
+    expect(entry.metadata.moved_live).toEqual({
+      orders: 2,
+      users: 0,
+      branches: 1,
+    });
+  });
+
+  it('eski servis `moved_live` qaytarmasa — ko‘chgan va A dagi oldingi tirik sonning kichigi', async () => {
+    const h = make({ rows: withDeletedInA(), legacyMovedLive: true });
+    const res = await mergeOk(h);
+    expect(res.data.moved_live).toEqual({ orders: 2, users: 0, branches: 1 });
   });
 });
 

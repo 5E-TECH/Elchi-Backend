@@ -46,6 +46,7 @@ import {
   DeletePostOrdersRequestDto,
   DistrictInUseErrorResponseDto,
   DistrictMergeErrorResponseDto,
+  DistrictMergeResponseDto,
   DistrictUsageResponseDto,
   MergeDistrictRequestDto,
   ReassignPostRequestDto,
@@ -1592,8 +1593,9 @@ export class LogisticsGatewayController {
       '409 (tekshiruv mos kelmadi / servis rad etdi) yoki 503 (servis javob bermadi). ' +
       "Kompensatsiyaning o'zi yiqilsa — xato matnida qaysi ID'lar qaysi tumanda qolgani yoziladi (to'liq ro'yxat — activity log, " +
       'District #id, action `district.merge_compensation_failed`). ' +
-      '200 javobi: `moved` {orders, users, branches}, `target_before`, `target_after`.',
+      "200 javobi: `moved` {orders, users, branches} (jami), `moved_live` (faqat tiriklar — «Ko'chirildi», vsmpTweI), `target_before`, `target_after`.",
   })
+  @ApiOkResponse({ type: DistrictMergeResponseDto })
   @ApiParam({ name: 'id', description: "O'chiriladigan tuman ID" })
   @ApiBody({ type: MergeDistrictRequestDto })
   @ApiConflictResponse({
