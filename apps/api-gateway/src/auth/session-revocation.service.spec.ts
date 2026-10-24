@@ -6,6 +6,7 @@ import {
   SESSION_UNKNOWN_TTL_MS,
   SessionRevocationService,
   accessTokenTtlMs,
+  applyRevokedSessionIds,
 } from './session-revocation.service';
 
 /**
@@ -216,5 +217,42 @@ describe('SessionRevocationService (Elchi Pochta #3)', () => {
     advance(30 * 60_000 + 1);
     await service.isRevoked('25', SID);
     expect(send).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('(Elchi Pochta #3, 2026-10-23) applyRevokedSessionIds', () => {
+  const SID = '3f2b8c1e-6a4d-4e7b-9c10-2d5f7a8b9c0d';
+
+  it('`revoked_session_ids` belgilanadi va javobdan olib tashlanadi; qolgan maydonlar joyida', () => {
+    const revocation = { markRevoked: jest.fn() };
+    const out = applyRevokedSessionIds(
+      {
+        statusCode: 200,
+        message: 'User yangilandi',
+        data: { id: '25' },
+        sessions_revoked: 1,
+        revoked_session_ids: [SID],
+      },
+      revocation,
+    );
+    expect(revocation.markRevoked).toHaveBeenCalledWith([SID]);
+    expect(out).toEqual({
+      statusCode: 200,
+      message: 'User yangilandi',
+      data: { id: '25' },
+      sessions_revoked: 1,
+    });
+  });
+
+  it('maydon yo‘q / javob obyekt emas — o‘zgarmaydi; servis yo‘q bo‘lsa ham olib tashlanadi', () => {
+    const revocation = { markRevoked: jest.fn() };
+    const plain = { statusCode: 200, data: { id: '1' } };
+    expect(applyRevokedSessionIds(plain, revocation)).toBe(plain);
+    expect(applyRevokedSessionIds(null, revocation)).toBeNull();
+    expect(applyRevokedSessionIds([SID], revocation)).toEqual([SID]);
+    expect(revocation.markRevoked).not.toHaveBeenCalled();
+    expect(
+      applyRevokedSessionIds({ ok: true, revoked_session_ids: [SID] }, null),
+    ).toEqual({ ok: true });
   });
 });

@@ -53,6 +53,29 @@ export function accessTokenTtlMs(raw: string | number | undefined): number {
 }
 
 /**
+ * (Elchi Pochta #3, 2026-10-23) Parol almashgan `identity.user.update` /
+ * `identity.market.update` javobi: ichki `revoked_session_ids` shu gateway
+ * keshida darhol «yopilgan» deb belgilanadi va javobdan OLIB TASHLANADI
+ * (admin boshqa odamning sessiya id larini ko'rmaydi; FE uchun
+ * `sessions_revoked` soni qoladi). Maydon bo'lmasa — javob o'zgarmaydi.
+ */
+export function applyRevokedSessionIds<T>(
+  response: T,
+  revocation?: Pick<SessionRevocationService, 'markRevoked'> | null,
+): T {
+  if (!response || typeof response !== 'object' || Array.isArray(response)) {
+    return response;
+  }
+  const record = response as Record<string, unknown>;
+  if (!Object.prototype.hasOwnProperty.call(record, 'revoked_session_ids')) {
+    return response;
+  }
+  const { revoked_session_ids: ids, ...rest } = record;
+  if (Array.isArray(ids)) revocation?.markRevoked(ids);
+  return rest as T;
+}
+
+/**
  * (Elchi Pochta #3) Yopilgan sessiya access tokenini DARHOL to'xtatish.
  *
  * Access token stateless (1 soat). Egasi «Sessiyalar» bo'limidan boshqa
@@ -70,9 +93,10 @@ export function accessTokenTtlMs(raw: string | number | undefined): number {
  *  - identity javob bermasa / xato — FAIL OPEN: ruxsat beriladi (identity
  *    uzilishi hammani chiqarib yubormasin), ogohlantirish daqiqasiga bir
  *    marta, natija 5 soniya saqlanadi;
- *  - revoke endpointlari va logout identity tasdiqlagan id larni `markRevoked`
- *    bilan darhol belgilaydi (shu gateway instansida kutish yo'q; boshqa
- *    instansda ≤ 30 soniya).
+ *  - revoke endpointlari, logout va parol almashtirish (`PATCH
+ *    /auth/my-profile`, `PATCH /users/:id`) identity tasdiqlagan id larni
+ *    `markRevoked` bilan darhol belgilaydi (shu gateway instansida kutish
+ *    yo'q; boshqa instansda ≤ 30 soniya).
  *
  * `sid` siz tokenlar (Telegram Mini App, bot aktori, deploy'dan oldingi)
  * bu yerga kelmaydi — ular sessiya emas.

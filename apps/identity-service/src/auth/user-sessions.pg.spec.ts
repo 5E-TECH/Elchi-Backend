@@ -4,7 +4,10 @@ import { requestContext } from '@app/common';
 import { CreateUserSessions1716000000130 } from '../../../../migrations/1716000000130-CreateUserSessions';
 import { UserSessionsDeviceReuse1716000000140 } from '../../../../migrations/1716000000140-UserSessionsDeviceReuse';
 import { UserSession } from '../entities/user-session.entity';
-import { AuthSessionService } from './auth-session.service';
+import {
+  AuthSessionService,
+  passwordFingerprint,
+} from './auth-session.service';
 
 /**
  * (Elchi Pochta #3) Migratsiyalar 1716000000130 + 1716000000140 va
@@ -361,6 +364,86 @@ const sha256 = (value: string) =>
       expect(
         await service.revokeOwnExcept('25', current.id, 'revoked_by_owner'),
       ).toEqual([]);
+    });
+
+    it('⭐ (2026-10-23) afterPasswordChange (pg): o‘zi — joriy qatorning parol izi yangilanadi, qolgan ochiqlari password_changed; admin — hammasi; begona/yopilganga tegilmaydi', async () => {
+      const current = await open('25', 'tok-current');
+      const phone = await open('25', 'tok-phone');
+      const closed = await open('25', 'tok-closed');
+      const other = await open('26', 'tok-other');
+      await service.revokeOwn('25', { sessionId: closed.id }, 'logout');
+
+      await db.query(
+        `UPDATE identity_schema.admins SET password = 'hash-25-new' WHERE id = 25`,
+      );
+      const user = await loadUser('25');
+      const self = await service.afterPasswordChange({
+        user,
+        keepSessionId: current.id.toUpperCase(),
+      });
+      expect(self).toEqual({
+        session_ids: [phone.id],
+        kept_session_id: current.id,
+      });
+
+      const rows = await db.query<Row[]>(
+        `SELECT id::text, revoke_reason, password_fp
+           FROM identity_schema.user_sessions`,
+      );
+      const byId = new Map(rows.map((r) => [String(r.id), r]));
+      expect(byId.get(current.id)).toMatchObject({
+        revoke_reason: null,
+        password_fp: passwordFingerprint('hash-25-new'),
+      });
+      expect(byId.get(phone.id)?.revoke_reason).toBe('password_changed');
+      expect(byId.get(closed.id)?.revoke_reason).toBe('logout');
+      expect(byId.get(other.id)?.revoke_reason).toBeNull();
+      expect(service.rejectReason(current, user)).toBe('password_changed');
+      const [fresh] = await db.query<Row[]>(
+        `SELECT * FROM identity_schema.user_sessions WHERE id = $1`,
+        [current.id],
+      );
+      expect(service.rejectReason(fresh as never, user)).toBeNull();
+
+      // Admin tiklaydi (saqlanadigan sessiya yo'q) — qolgan ochiq qator ham.
+      const admin = await service.afterPasswordChange({ user });
+      expect(admin).toEqual({
+        session_ids: [current.id],
+        kept_session_id: null,
+      });
+      const [{ n }] = await db.query<Row[]>(
+        `SELECT count(*)::int AS n FROM identity_schema.user_sessions
+          WHERE user_id = 25 AND revoked_at IS NULL`,
+      );
+      expect(n).toBe(0);
+      expect(await service.isOpen('26', other.id)).toBe(true);
+    });
+
+    it('(2026-10-23) afterPasswordChange (pg): saqlanadigan sid yopilgan / epoch eskirgan — hammasi yopiladi', async () => {
+      const current = await open('25', 'tok-current');
+      const phone = await open('25', 'tok-phone');
+      await db.query(
+        `UPDATE identity_schema.admins SET session_epoch = 3 WHERE id = 25`,
+      );
+      const res = await service.afterPasswordChange({
+        user: await loadUser('25'),
+        keepSessionId: current.id,
+      });
+      expect(res.kept_session_id).toBeNull();
+      expect([...res.session_ids].sort()).toEqual(
+        [current.id, phone.id].sort(),
+      );
+    });
+
+    it('(2026-10-23) findOpen (pg): created_at bilan; begona / yopilgan → null', async () => {
+      const mine = await open('25', 'tok-mine');
+      const found = await service.findOpen('25', mine.id.toUpperCase());
+      expect(found?.id).toBe(mine.id);
+      expect(found?.created_at).toBeInstanceOf(Date);
+      expect(found?.created_at.getTime()).toBe(mine.created_at.getTime());
+      expect(await service.findOpen('26', mine.id)).toBeNull();
+      await service.revokeOwnById('25', mine.id, 'revoked_by_owner');
+      expect(await service.findOpen('25', mine.id)).toBeNull();
     });
 
     it('revokeOwnById: faqat o‘z ochiq sessiyasi; begona / yopilgan → []', async () => {

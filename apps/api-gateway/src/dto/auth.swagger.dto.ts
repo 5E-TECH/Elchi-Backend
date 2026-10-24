@@ -198,6 +198,22 @@ export class AuthSessionsDataDto {
       "Ochiq sessiyalar (yopilmagan; muddati 90 kundan ko'p oldin o'tganlari yo'q): avval joriy (`current: true`), keyin `active`, keyin `expired` — har guruh oxirgi faollik bo'yicha kamayish tartibida (ko'pi bilan 50)",
   })
   sessions!: AuthSessionDto[];
+
+  @ApiProperty({
+    example: false,
+    description:
+      "(2026-10-23) Joriy sessiya hozir BOSHQA sessiyalarni yopa oladimi («Chiqarish» / «Boshqa sessiyalardan chiqish»). Joriy sessiya shu qurilmadan birinchi kirilganiga (`first_logged_in_at`) SESSION_REVOKE_LOCK_HOURS (48 soat) to'lmagan bo'lsa — `false`. `sid` siz token (joriy sessiya yo'q) — `false`",
+  })
+  can_revoke_others!: boolean;
+
+  @ApiProperty({
+    type: String,
+    nullable: true,
+    example: '2026-10-25T07:00:00.000Z',
+    description:
+      "(2026-10-23) Qachondan yopa oladi (ISO, UTC) — `first_logged_in_at` + 48 soat. Hozir mumkin bo'lsa yoki joriy sessiya aniqlanmasa — `null`",
+  })
+  revoke_available_at!: string | null;
 }
 
 export class AuthSessionsResponseDto {
@@ -246,6 +262,38 @@ export class AuthSessionsErrorResponseDto {
 
   @ApiProperty({ example: 'Sessiya topilmadi yoki allaqachon yopilgan' })
   message!: string;
+
+  @ApiPropertyOptional({
+    example: '7d0c2a4e-1b2f-4c3d-9e8f-0a1b2c3d4e5f',
+    type: String,
+  })
+  trace_id?: string;
+}
+
+/**
+ * (Elchi Pochta #3, 2026-10-23) 403 — joriy sessiya 48 soatdan yosh, boshqa
+ * sessiyalarni yopa olmaydi. `code` / `available_at` — mashina o'qiydigan
+ * maydonlar (matnni emas, `code` ni tekshiring).
+ */
+export class AuthSessionTooNewErrorResponseDto {
+  @ApiProperty({ example: 403 })
+  statusCode!: number;
+
+  @ApiProperty({
+    example:
+      "Xavfsizlik uchun yangi qurilmadan boshqa sessiyalarni chiqarib bo'lmaydi — 25.10.2026 12:00 (Toshkent) dan keyin mumkin",
+  })
+  message!: string;
+
+  @ApiProperty({ example: 'SESSION_TOO_NEW', enum: ['SESSION_TOO_NEW'] })
+  code!: 'SESSION_TOO_NEW';
+
+  @ApiProperty({
+    example: '2026-10-25T07:00:00.000Z',
+    description:
+      'Qachondan mumkin (ISO, UTC) — joriy sessiya `first_logged_in_at` + 48 soat',
+  })
+  available_at!: string;
 
   @ApiPropertyOptional({
     example: '7d0c2a4e-1b2f-4c3d-9e8f-0a1b2c3d4e5f',

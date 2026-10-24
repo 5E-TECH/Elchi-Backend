@@ -1,4 +1,10 @@
-import { Inject, Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import {
+  Inject,
+  Injectable,
+  Logger,
+  OnModuleInit,
+  Optional,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { ConfigService } from '@nestjs/config';
 import {
@@ -16,7 +22,8 @@ import { randomBytes } from 'crypto';
 import { BcryptEncryption } from '../../../libs/common/helpers/bcrypt';
 import { User } from './entities/user.entity';
 import { CourierRegion } from './entities/courier-region.entity';
-import { invalidateAllSessions } from './auth/session-security';
+import { invalidateAllSessions, isSessionId } from './auth/session-security';
+import { AuthSessionService } from './auth/auth-session.service';
 import {
   CHANGEABLE_ROLES,
   ROLE_CATALOG,
@@ -42,6 +49,7 @@ import {
 import type { MarketOperatorFilterQuery } from './contracts/market-operator.payloads';
 import {
   ActivityAction,
+  ActivityDescribeUz,
   ActivityLogService,
   Cashbox_type,
   Commission_type,
@@ -435,6 +443,12 @@ export class UserServiceService implements OnModuleInit {
     private readonly bcryptEncryption: BcryptEncryption,
     private readonly configService: ConfigService,
     private readonly activityLog: ActivityLogService,
+    /**
+     * (Elchi Pochta #3, 2026-10-23) Parol almashganda sessiyalarni DARHOL
+     * yopish (`afterPasswordChange`). Ixtiyoriy: spec'lar servisni usiz
+     * quradi — u holda avvalgidek faqat epoch (hammasi, refresh paytida).
+     */
+    @Optional() private readonly authSessions?: AuthSessionService,
   ) {}
 
   /**
@@ -1497,6 +1511,11 @@ export class UserServiceService implements OnModuleInit {
     id: string,
     dto: UpdateUserDto,
     requester?: RequesterContext,
+    /**
+     * (Elchi Pochta #3) So'rov yuborgan sessiya (gateway: JWT `sid`) — parolni
+     * o'zi almashtirsa shu sessiya saqlanadi. Faqat gateway uzatadi.
+     */
+    options: { currentSessionId?: string | null } = {},
   ) {
     const admin = await this.users.findOne({
       where: { id, isDeleted: false },
@@ -1537,6 +1556,7 @@ export class UserServiceService implements OnModuleInit {
     const requesterIsPrivileged =
       this.hasRole(requester, Roles.SUPERADMIN) ||
       this.hasRole(requester, Roles.ADMIN);
+    const epochBefore = Number(admin.session_epoch) || 0;
 
     if (dto.phone_number && dto.phone_number !== admin.phone_number) {
       await this.ensurePhoneUnique(dto.phone_number, id);
@@ -1546,15 +1566,14 @@ export class UserServiceService implements OnModuleInit {
       invalidateAllSessions(admin);
     }
 
+    let passwordChanged = false;
     if (dto.password) {
       admin.password = await this.bcryptEncryption.encrypt(dto.password);
       // RBAC-09: parol almashtirilsa (o'g'irlangan telefon, ishdan
-      // bo'shatilgan kuryer) allaqachon kirgan qurilma refresh muddatigacha
-      // refresh qila olardi. Endi BARCHA sessiyalar yopiladi (o'zi
-      // almashtirsa — joriy qurilma ham) — keyingi refresh 401, qurilma
-      // qayta login (yangi parol bilan) qiladi. Access token ko'pi bilan
-      // ACCESS_TOKEN_TIME (1 soat) yashaydi.
-      invalidateAllSessions(admin);
+      // bo'shatilgan kuryer) boshqa qurilmalar DARHOL chiqariladi.
+      // (Elchi Pochta #3, 2026-10-23) Qaysi sessiya qolishi — saqlashdan
+      // oldin `preparePasswordChangeSessions`, yopish — saqlangandan keyin.
+      passwordChanged = true;
     }
 
     if (typeof dto.name !== 'undefined') {
@@ -1698,7 +1717,22 @@ export class UserServiceService implements OnModuleInit {
       );
     }
 
+    const keepSessionId = passwordChanged
+      ? this.preparePasswordChangeSessions(admin, {
+          epochBefore,
+          isSelf: requesterIsSelf,
+          currentSessionId: options.currentSessionId,
+        })
+      : null;
+
     const saved = await this.users.save(admin);
+    const revokedSessionIds = passwordChanged
+      ? await this.revokeSessionsAfterPasswordChange(saved, {
+          keepSessionId,
+          isSelf: requesterIsSelf,
+          requester,
+        })
+      : null;
     void this.syncUserToSearch(saved);
     await this.activityLog.logChange({
       entity_type: 'User',
@@ -1727,7 +1761,119 @@ export class UserServiceService implements OnModuleInit {
       },
       ...this.auditActor(requester),
     });
-    return successRes(this.sanitize(saved), 200, 'User yangilandi');
+    return {
+      ...successRes(this.sanitize(saved), 200, 'User yangilandi'),
+      ...this.passwordChangeReply(revokedSessionIds),
+    };
+  }
+
+  /**
+   * (Elchi Pochta #3, 2026-10-23) Parol almashtirilganda — SAQLASHDAN OLDIN
+   * (AYNI `users.save()` ga tushadi). Qaysi sessiya qoladi:
+   *  - foydalanuvchi parolni O'ZI almashtirdi, so'rov `sid` li sessiyadan va
+   *    shu so'rovda boshqa xavfsizlik hodisasi yo'q (telefon / bloklash —
+   *    epoch oshmagan) → JORIY sessiya qoladi: epoch OSHIRILMAYDI (joriy
+   *    sessiya epoch'i yaroqli qolsin; boshqalarini parol izi baribir rad
+   *    etadi va saqlangandan keyin ular aniq yopiladi). Eski
+   *    `refresh_token` ustuni tozalanadi — deploy'dan oldingi token yangi
+   *    parol izi bilan `adoptLegacy` orqali tirilmasin;
+   *  - aks holda (admin/menejer boshqa foydalanuvchi parolini tiklayapti,
+   *    `sid` siz token, telefon ham almashdi, sessiyalar servisi yo'q) →
+   *    `invalidateAllSessions` — HAMMASI, avvalgidek atomar.
+   * Qaytadi — saqlanadigan sessiya id si yoki `null`.
+   */
+  private preparePasswordChangeSessions(
+    user: User,
+    input: {
+      epochBefore: number;
+      isSelf: boolean;
+      currentSessionId?: string | null;
+    },
+  ): string | null {
+    const epochBumped = (Number(user.session_epoch) || 0) !== input.epochBefore;
+    if (
+      this.authSessions &&
+      input.isSelf &&
+      !epochBumped &&
+      isSessionId(input.currentSessionId)
+    ) {
+      user.refresh_token = null;
+      return input.currentSessionId.toLowerCase();
+    }
+    if (!epochBumped) invalidateAllSessions(user);
+    return null;
+  }
+
+  /**
+   * (Elchi Pochta #3, 2026-10-23) SAQLANGANDAN KEYIN: sessiyalar
+   * `password_changed` bilan DARHOL yopiladi (48 soatlik qulfga bog'liq
+   * emas) va jurnalga yoziladi — `logout` fe'li, `scope: 'password_change'`
+   * (egasi yopgan sessiyalar yozuvi bilan bir xil shakl). Qaytadi — yopilgan
+   * id lar (gateway keshi uchun); servis yo'q yoki xato — `null`.
+   *
+   * Xato parol almashtirishni bekor QILMAYDI (parol allaqachon saqlangan):
+   * eski sessiyalar refresh'da parol izi bo'yicha baribir rad etiladi, faqat
+   * ularning access tokeni ≤ ACCESS_TOKEN_TIME yashashi mumkin — ogohlantirish.
+   */
+  private async revokeSessionsAfterPasswordChange(
+    user: User,
+    input: {
+      keepSessionId: string | null;
+      isSelf: boolean;
+      requester?: RequesterContext;
+    },
+  ): Promise<string[] | null> {
+    if (!this.authSessions) return null;
+    let result: Awaited<ReturnType<AuthSessionService['afterPasswordChange']>>;
+    try {
+      result = await this.authSessions.afterPasswordChange({
+        user,
+        keepSessionId: input.keepSessionId,
+      });
+    } catch (error) {
+      this.logger.warn(
+        `Parol almashgach sessiyalar yopilmadi (user ${user.id}): ${describeSagaError(error)} — refresh baribir parol izi bo'yicha rad etadi`,
+      );
+      return null;
+    }
+    const kept = result.kept_session_id !== null;
+    await this.activityLog.log({
+      entity_type: 'Auth',
+      entity_id: user.id,
+      action: ActivityAction.LOGOUT,
+      ...(kept
+        ? { user_id: user.id, user_name: user.name, user_role: user.role }
+        : this.auditActor(input.requester)),
+      metadata: {
+        scope: 'password_change',
+        by: input.isSelf ? 'self' : 'admin',
+        kept_current: kept,
+        sessions_revoked: result.session_ids.length,
+        session_ids: result.session_ids,
+      },
+      description: ActivityDescribeUz.sessionsRevokedByPasswordChange(
+        kept ? 'current' : 'none',
+        result.session_ids.length,
+      ),
+    });
+    return result.session_ids;
+  }
+
+  /**
+   * Parol almashgan javobga: `sessions_revoked` (FE uchun soni) va ichki
+   * `revoked_session_ids` (gateway o'z keshida darhol «yopilgan» deb
+   * belgilaydi va javobdan OLIB TASHLAYDI).
+   */
+  private passwordChangeReply(revokedSessionIds: string[] | null): {
+    sessions_revoked?: number;
+    revoked_session_ids?: string[];
+  } {
+    return revokedSessionIds
+      ? {
+          sessions_revoked: revokedSessionIds.length,
+          revoked_session_ids: revokedSessionIds,
+        }
+      : {};
   }
 
   /**
@@ -3114,6 +3260,9 @@ export class UserServiceService implements OnModuleInit {
     if (dto.password) {
       market.password = await this.bcryptEncryption.encrypt(dto.password);
       // RBAC-09: yangi parol — eski qurilmalar endi refresh qila olmaydi.
+      // (Elchi Pochta #3, 2026-10-23) Bu RPC'da joriy sessiya (`sid`) yo'q —
+      // HAMMASI; saqlangandan keyin ular `password_changed` bilan aniq
+      // yopiladi (gateway `session_state` ham darhol `active: false`).
       invalidateAllSessions(market);
     }
 
@@ -3196,6 +3345,13 @@ export class UserServiceService implements OnModuleInit {
     }
 
     const saved = await this.users.save(market);
+    const revokedSessionIds = dto.password
+      ? await this.revokeSessionsAfterPasswordChange(saved, {
+          keepSessionId: null,
+          isSelf: this.isSelfRequester(requester, id),
+          requester,
+        })
+      : null;
     void this.syncUserToSearch(saved);
     await this.activityLog.logChange({
       entity_type: 'User',
@@ -3221,7 +3377,10 @@ export class UserServiceService implements OnModuleInit {
         password_changed: Boolean(dto.password),
       },
     });
-    return successRes(this.sanitize(saved), 200, 'Market yangilandi');
+    return {
+      ...successRes(this.sanitize(saved), 200, 'Market yangilandi'),
+      ...this.passwordChangeReply(revokedSessionIds),
+    };
   }
 
   /**

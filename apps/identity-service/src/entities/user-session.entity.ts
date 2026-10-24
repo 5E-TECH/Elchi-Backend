@@ -16,14 +16,19 @@ export type UserSessionMethod = 'password' | 'otp' | 'legacy';
  *    hammasini) yopdi;
  *  - `merged` — migratsiya 1716000000140: bitta qurilmaning (`user_id`,
  *    `device_id`) bir nechta ochiq qatoridan eng oxirgi faoli qoldi,
- *    qolganlari shu sabab bilan yopildi (endi qurilmaga bitta sessiya).
+ *    qolganlari shu sabab bilan yopildi (endi qurilmaga bitta sessiya);
+ *  - `password_changed` (2026-10-23) — parol almashtirildi va sessiya DARHOL
+ *    yopildi: o'zi almashtirsa — joriydan boshqa hammasi, admin/menejer
+ *    tiklasa — hammasi (`AuthSessionService.afterPasswordChange`). 48 soatlik
+ *    qulfga bog'liq emas.
  * Ustun `varchar(32)`, CHECK yo'q — yangi sabab migratsiyasiz qo'shiladi.
  */
 export type UserSessionRevokeReason =
   | 'logout'
   | 'security_reset'
   | 'revoked_by_owner'
-  | 'merged';
+  | 'merged'
+  | 'password_changed';
 
 /**
  * "Sessionlar" bo'limi (Elchi Pochta #3) — har login uchun ALOHIDA sessiya.

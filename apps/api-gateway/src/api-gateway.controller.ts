@@ -10,6 +10,7 @@ import {
   Inject,
   Logger,
   NotFoundException,
+  Optional,
   Param,
   Patch,
   Post,
@@ -41,6 +42,10 @@ import { Public } from './auth/public.decorator';
 import { Roles } from './auth/roles.decorator';
 import { RolesGuard } from './auth/roles.guard';
 import {
+  SessionRevocationService,
+  applyRevokedSessionIds,
+} from './auth/session-revocation.service';
+import {
   ChangeUserRoleRequestDto,
   CreateAdminRequestDto,
   CreateCourierRequestDto,
@@ -69,6 +74,8 @@ interface JwtUser {
   username: string;
   roles?: string[];
   branch_id?: string | null;
+  /** (Elchi Pochta #3) Sessiya id si — login/refresh tokenlarida. */
+  sid?: string | null;
 }
 
 /**
@@ -103,6 +110,11 @@ export class ApiGatewayController {
     @Inject('IDENTITY') private readonly identityClient: ClientProxy,
     @Inject('FINANCE') private readonly financeClient: ClientProxy,
     @Inject('BRANCH') private readonly branchClient: ClientProxy,
+    /**
+     * (Elchi Pochta #3) Parol tiklanganda yopilgan sessiyalarni shu gateway
+     * keshida darhol belgilash. Ixtiyoriy — spec'lar controller'ni usiz quradi.
+     */
+    @Optional() private readonly revocation?: SessionRevocationService,
   ) {}
 
   private toRequester(req: { user: JwtUser }) {
@@ -1309,13 +1321,17 @@ export class ApiGatewayController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.MANAGER)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Update user (all roles)' })
+  @ApiOperation({
+    summary: 'Update user (all roles)',
+    description:
+      "`password` berilsa (parolni tiklash): shu foydalanuvchining BARCHA sessiyalari darhol yopiladi (`password_changed`; 48 soatlik qulfga bog'liq emas) — uning access tokenlari keyingi so'rovdayoq 401, refresh ham 401. O'zini tahrirlasa (`:id` = o'zi) — joriy sessiya qoladi, qolganlari yopiladi. Javobga `sessions_revoked: <n>` qo'shiladi.",
+  })
   @ApiParam({ name: 'id', description: 'User ID' })
   @ApiBody({ type: UpdateAdminRequestDto })
   @ApiOkResponse({ description: 'User updated' })
   @ApiConflictResponse({ description: 'Conflict' })
   @ApiNotFoundResponse({ description: 'Not found' })
-  updateUser(
+  async updateUser(
     @Param('id') id: string,
     @Body() dto: UpdateAdminRequestDto,
     @Req() req: { user: JwtUser },
@@ -1325,16 +1341,24 @@ export class ApiGatewayController {
     // identity-service beradi — AUTHORITATIVE: manager faqat O'ZI YARATGAN
     // (created_by === requester.id) userni tahrirlay oladi, aks holda 403.
     // Delete/status esa ushbu route'larda admin/superadmin-only (@Roles).
-    return this.identityClient
-      .send(
-        { cmd: 'identity.user.update' },
-        {
-          id,
-          dto,
-          requester: this.toRequester(req),
-        },
-      )
-      .pipe(timeout(8000));
+    // (Elchi Pochta #3) `current_session_id` — o'z parolini almashtirsa
+    // joriy sessiya qolsin; parol tiklansa yopilgan sessiyalar shu gateway
+    // keshida darhol «yopilgan» (`applyRevokedSessionIds`).
+    const response = await firstValueFrom(
+      this.identityClient
+        .send<unknown>(
+          { cmd: 'identity.user.update' },
+          {
+            id,
+            dto,
+            requester: this.toRequester(req),
+            current_session_id:
+              typeof req.user.sid === 'string' ? req.user.sid : null,
+          },
+        )
+        .pipe(timeout(8000)),
+    );
+    return applyRevokedSessionIds(response, this.revocation);
   }
 
   @Delete('users/:id')

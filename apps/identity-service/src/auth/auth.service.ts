@@ -14,6 +14,12 @@ import {
   hashRefreshToken,
   isSessionId,
 } from './auth-session.service';
+import {
+  formatTashkentMinuteCeil,
+  resolveSessionRevokeLockMs,
+  sessionRevokeLock,
+} from './session-security';
+import type { UserSession } from '../entities/user-session.entity';
 import { BcryptEncryption } from '../../../../libs/common/helpers/bcrypt';
 import { LoginDto } from './dto/login.dto';
 import { RefreshDto } from './dto/refresh.dto';
@@ -23,6 +29,7 @@ import {
   ActivityLogMaintenanceService,
   ActivityLogService,
   Roles,
+  SESSION_TOO_NEW,
   Status,
   computeHmacSignature,
   normalizeUzPhone,
@@ -46,6 +53,23 @@ export interface RevokedSessionsResponse {
   message: string;
   data: { revoked: number; session_ids: string[] };
 }
+
+/**
+ * (Elchi Pochta #3, 2026-10-23) `GET /auth/sessions` — ro'yxat + joriy
+ * sessiya boshqalarni yopa oladimi (48 soatlik qulf).
+ */
+export interface OwnSessionsWithLock extends OwnSessionsList {
+  /** Joriy sessiya hozir boshqa sessiyalarni yopa oladimi. */
+  can_revoke_others: boolean;
+  /**
+   * Qachondan yopa oladi (ISO). Hozir mumkin bo'lsa yoki joriy sessiya
+   * aniqlanmasa (`sid` siz token) — `null`.
+   */
+  revoke_available_at: string | null;
+}
+
+/** Joriy sessiya aniqlanmadi — revoke-others va (qulf yoqilganda) DELETE. */
+const CURRENT_SESSION_UNKNOWN = 'Joriy sessiya aniqlanmadi — qayta kiring';
 
 @Injectable()
 export class AuthService {
@@ -550,19 +574,74 @@ export class AuthService {
   async listSessions(data: {
     userId: string;
     sessionId?: string | null;
-  }): Promise<{ statusCode: number; message: string; data: OwnSessionsList }> {
+  }): Promise<{
+    statusCode: number;
+    message: string;
+    data: OwnSessionsWithLock;
+  }> {
     const user = await this.users.findOne({
       where: { id: data.userId, isDeleted: false },
     });
     if (!user || user.status !== Status.ACTIVE) {
       throw new RpcException(errorRes('User not found', 401));
     }
-    const list = await this.sessions.listOwn(user, data.sessionId ?? null);
-    return successRes(list, 200, 'success') as {
+    const now = new Date();
+    const list = await this.sessions.listOwn(user, data.sessionId ?? null, now);
+    // (2026-10-23) 48 soatlik qulf — joriy sessiyaning `created_at` i
+    // (`first_logged_in_at`) bo'yicha, revoke endpointlari bilan AYNI qoida.
+    // Joriy sessiya ro'yxatda yo'q (`sid` siz token) — yopa olmaydi
+    // (revoke-others baribir 400), vaqt noma'lum → `null`.
+    const current = list.sessions.find((row) => row.current) ?? null;
+    const lock = current
+      ? sessionRevokeLock(current.first_logged_in_at, this.revokeLockMs(), now)
+      : null;
+    return successRes(
+      {
+        ...list,
+        can_revoke_others: lock?.allowed ?? false,
+        revoke_available_at: lock?.available_at?.toISOString() ?? null,
+      },
+      200,
+      'success',
+    ) as {
       statusCode: number;
       message: string;
-      data: OwnSessionsList;
+      data: OwnSessionsWithLock;
     };
+  }
+
+  /** `SESSION_REVOKE_LOCK_HOURS` (sukut 48; 0 — o'chiq) → ms. Har chaqiruvda. */
+  private revokeLockMs(): number {
+    return resolveSessionRevokeLockMs(
+      this.configService.get<unknown>('SESSION_REVOKE_LOCK_HOURS'),
+    );
+  }
+
+  /**
+   * (Elchi Pochta #3, 2026-10-23) "Telegram'dagidek": yaratilganiga
+   * SESSION_REVOKE_LOCK_HOURS (48) to'lmagan sessiya BOSHQA sessiyalarni
+   * yopa olmaydi — 403, mashina kodi `SESSION_TOO_NEW` va `available_at`
+   * (ISO; gateway konvertiga `PUBLIC_ERROR_CODES` orqali o'tadi). Eski
+   * sessiya yangisini yopa oladi; logout va parol almashtirish qulfsiz.
+   */
+  private assertMayRevokeOthers(
+    current: Pick<UserSession, 'created_at'>,
+    now = new Date(),
+  ): void {
+    const lock = sessionRevokeLock(
+      current.created_at,
+      this.revokeLockMs(),
+      now,
+    );
+    if (lock.allowed || !lock.available_at) return;
+    throw new RpcException({
+      ...errorRes(
+        `Xavfsizlik uchun yangi qurilmadan boshqa sessiyalarni chiqarib bo'lmaydi — ${formatTashkentMinuteCeil(lock.available_at)} (Toshkent) dan keyin mumkin`,
+        403,
+      ),
+      code: SESSION_TOO_NEW,
+      available_at: lock.available_at.toISOString(),
+    });
   }
 
   /**
@@ -572,6 +651,11 @@ export class AuthService {
    * refresh cookie'ni ham tozalaydi). Begona / yo'q / allaqachon yopilgan
    * sessiya — bir xil 404 (boshqa odamning sessiyasi borligi oshkor
    * qilinmaydi).
+   *
+   * (2026-10-23) 48 soatlik qulf: joriy sessiya yaratilganiga
+   * SESSION_REVOKE_LOCK_HOURS to'lmagan bo'lsa — 403 `SESSION_TOO_NEW`
+   * (nishon eski yoki yangi bo'lishidan qat'i nazar); qulf yoqilganda `sid`
+   * siz token — 400.
    */
   async revokeSession(data: {
     userId: string;
@@ -593,7 +677,14 @@ export class AuthService {
         ),
       );
     }
-    const user = await this.loadSessionOwner(data.userId, current);
+    // (2026-10-23) Qulf yoqilgan bo'lsa `sid` siz token (Telegram Mini App,
+    // eski) yopa olmaydi: uning yoshini bilib bo'lmaydi — aks holda qulfni
+    // aylanib o'tish yo'li bo'lardi. Qulf o'chiq (0) — avvalgidek ruxsat.
+    if (current === null && this.revokeLockMs() > 0) {
+      throw new RpcException(errorRes(CURRENT_SESSION_UNKNOWN, 400));
+    }
+    const { user, session } = await this.loadSessionOwner(data.userId, current);
+    if (session) this.assertMayRevokeOthers(session);
 
     const revokedIds = await this.sessions.revokeOwnById(
       user.id,
@@ -626,19 +717,19 @@ export class AuthService {
    * joriy qurilma ishlashda davom etadi. `sid` siz token (deploy'dan oldingi
    * yoki Telegram) — joriy sessiyani aniqlab bo'lmaydi → 400 (aks holda
    * so'rovchining o'zi ham chiqib ketardi). Yopiladigan sessiya bo'lmasa ham
-   * 200 (`revoked: 0`).
+   * 200 (`revoked: 0`). (2026-10-23) Joriy sessiya 48 soatdan yosh — 403
+   * `SESSION_TOO_NEW` (hech narsa yopilmaydi).
    */
   async revokeOtherSessions(data: {
     userId: string;
     currentSessionId?: string | null;
   }): Promise<RevokedSessionsResponse> {
     if (!isSessionId(data.currentSessionId)) {
-      throw new RpcException(
-        errorRes('Joriy sessiya aniqlanmadi — qayta kiring', 400),
-      );
+      throw new RpcException(errorRes(CURRENT_SESSION_UNKNOWN, 400));
     }
     const current = data.currentSessionId.toLowerCase();
-    const user = await this.loadSessionOwner(data.userId, current);
+    const { user, session } = await this.loadSessionOwner(data.userId, current);
+    if (session) this.assertMayRevokeOthers(session);
 
     const revokedIds = await this.sessions.revokeOwnExcept(
       user.id,
@@ -684,25 +775,28 @@ export class AuthService {
    * Sessiyalarni boshqarish so'rovchisi: faol foydalanuvchi va (bo'lsa) joriy
    * sessiyasi hali ochiq. Yopilgan sessiya tokeni (masalan, egasi chiqarib
    * yuborgan qurilma, gateway keshi yangilanguncha) egasining boshqa
-   * sessiyalarini yopa olmaydi.
+   * sessiyalarini yopa olmaydi. Joriy sessiya qatori (`created_at` bilan —
+   * 48 soatlik qulf uchun) ham qaytadi; `sid` siz — `null`.
    */
   private async loadSessionOwner(
     userId: string,
     currentSessionId: string | null,
-  ): Promise<User> {
+  ): Promise<{
+    user: User;
+    session: Pick<UserSession, 'id' | 'created_at'> | null;
+  }> {
     const user = await this.users.findOne({
       where: { id: userId, isDeleted: false },
     });
     if (!user || user.status !== Status.ACTIVE) {
       throw new RpcException(errorRes('User not found', 401));
     }
-    if (
-      currentSessionId !== null &&
-      !(await this.sessions.isOpen(user.id, currentSessionId))
-    ) {
+    if (currentSessionId === null) return { user, session: null };
+    const session = await this.sessions.findOpen(user.id, currentSessionId);
+    if (!session) {
       throw new RpcException(errorRes('Session revoked', 401));
     }
-    return user;
+    return { user, session };
   }
 
   /**

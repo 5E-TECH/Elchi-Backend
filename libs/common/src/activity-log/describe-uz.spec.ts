@@ -154,6 +154,18 @@ describe('ActivityDescribeUz — gaplar (2WRzdWpZ)', () => {
     );
   });
 
+  it('(Elchi Pochta #3) parol almashtirildi — sessiyalar yopildi (faqat son)', () => {
+    expect(
+      ActivityDescribeUz.sessionsRevokedByPasswordChange('current', 2),
+    ).toBe('Parol almashtirildi — boshqa sessiyalar yopildi: 2 ta');
+    expect(ActivityDescribeUz.sessionsRevokedByPasswordChange('none', 3)).toBe(
+      'Parol almashtirildi — barcha sessiyalar yopildi: 3 ta',
+    );
+    expect(
+      ActivityDescribeUz.sessionsRevokedByPasswordChange('none', -1.5),
+    ).toBe('Parol almashtirildi — barcha sessiyalar yopildi: 0 ta');
+  });
+
   it('filiallararo jo`natma', () => {
     expect(
       ActivityDescribeUz.branchTransferCreated({
@@ -215,6 +227,8 @@ describe('ActivityDescribeUz — gaplar (2WRzdWpZ)', () => {
         'others',
         3,
       ),
+      sessionsRevokedByPasswordChange:
+        ActivityDescribeUz.sessionsRevokedByPasswordChange('current', 3),
     };
     // Har bir quruvchi qamralgan — yangisi qo'shilsa test uni ham talab qiladi.
     expect(Object.keys(outputs).sort()).toEqual(

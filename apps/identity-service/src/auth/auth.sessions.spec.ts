@@ -12,8 +12,15 @@ import {
   SESSION_RETENTION_DAYS,
   passwordFingerprint,
 } from './auth-session.service';
-import { invalidateAllSessions } from './session-security';
+import {
+  SESSION_REVOKE_LOCK_HOURS_DEFAULT,
+  formatTashkentMinuteCeil,
+  invalidateAllSessions,
+  resolveSessionRevokeLockMs,
+  sessionRevokeLock,
+} from './session-security';
 import type { UserSession } from '../entities/user-session.entity';
+import { UserServiceService } from '../user-service.service';
 
 /**
  * (Elchi Pochta #3 — "Sessionlar bo'limi") AuthService + AuthSessionService
@@ -225,7 +232,7 @@ const baseUser = (id: string, phone: string): UserRow => ({
   session_epoch: 0,
 });
 
-function makeWorld() {
+function makeWorld(envOverrides: Record<string, string | undefined> = {}) {
   const users = new Map<string, UserRow>([
     ['25', baseUser('25', '+998900000025')],
     ['26', baseUser('26', '+998900000026')],
@@ -266,10 +273,18 @@ function makeWorld() {
     secret: ACCESS_KEY,
     signOptions: { expiresIn: '1h' },
   });
-  const activityLog = { log: jest.fn().mockResolvedValue(undefined) };
-  const env: Record<string, string> = {
+  const activityLog = {
+    log: jest.fn().mockResolvedValue(undefined),
+    logChange: jest.fn().mockResolvedValue(undefined),
+  };
+  const env: Record<string, string | undefined> = {
     REFRESH_TOKEN_KEY: REFRESH_KEY,
     REFRESH_TOKEN_TIME: '1d',
+    // Bu spec'dagi sessiyalar «hozir» ochiladi — 48 soatlik qulf
+    // (SESSION_REVOKE_LOCK_HOURS) yopish semantikasini tekshirishga xalaqit
+    // bermasin. Qulfning o'zi — pastdagi «48 soatlik qulf» bloklari.
+    SESSION_REVOKE_LOCK_HOURS: '0',
+    ...envOverrides,
   };
   const service = new AuthService(
     usersRepo as never,
@@ -305,6 +320,7 @@ function makeWorld() {
     sessionRepo,
     jwt,
     activityLog,
+    env,
     login,
     sidOf,
   };
@@ -1051,7 +1067,13 @@ describe('Elchi Pochta #3 — xavfsizlik: barcha sessiyalar yopiladi', () => {
     ]);
     // Ro'yxat ham darhol bo'sh (soatlik belgilashni kutmaydi).
     const list = await w.service.listSessions({ userId: '25' });
-    expect(list.data).toEqual({ active_count: 0, sessions: [] });
+    expect(list.data).toEqual({
+      active_count: 0,
+      sessions: [],
+      // Joriy sessiya yo'q — yopa olmaydi, vaqti noma'lum.
+      can_revoke_others: false,
+      revoke_available_at: null,
+    });
 
     // Yangi login (yangi parol bilan) — ishlaydi.
     const fresh = await w.login('25');
@@ -1932,5 +1954,738 @@ describe('Elchi Pochta #3 — identity.controller: yangi RMQ handlerlari', () =>
       controller.sessionState({ userId: '25', sessionId: SID }, ctx),
     ).resolves.toEqual({ active: true });
     expect(rmq.ack).toHaveBeenCalledTimes(3);
+  });
+});
+
+const HOUR = 3600_000;
+/** 2026-10-23 12:00 Toshkent. */
+const T0 = new Date('2026-10-23T07:00:00.000Z');
+const LOCK_MESSAGE_AT_T0 =
+  "Xavfsizlik uchun yangi qurilmadan boshqa sessiyalarni chiqarib bo'lmaydi — 25.10.2026 12:00 (Toshkent) dan keyin mumkin";
+const TABLET_CTX = {
+  ip: '192.0.2.44',
+  user_agent: 'Mozilla/5.0 (iPad; CPU OS 17_0 like Mac OS X) Safari/605.1',
+  device_name: 'Planshet · iPadOS · Safari',
+  device_id: 'c0ffee00-tablet-device-0003',
+};
+
+/**
+ * Faqat `Date` soxta (promise / RMQ `timeout` taymerlari haqiqiy) — sessiya
+ * `created_at` i va qulf tekshiruvi bir xil soatdan.
+ */
+const useClock = () => {
+  beforeEach(() => {
+    jest.useFakeTimers({
+      now: T0,
+      doNotFake: [
+        'hrtime',
+        'nextTick',
+        'performance',
+        'queueMicrotask',
+        'setImmediate',
+        'clearImmediate',
+        'setInterval',
+        'clearInterval',
+        'setTimeout',
+        'clearTimeout',
+      ],
+    });
+  });
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+};
+/** Soatni T0 + `hours` soat + `minutes` daqiqaga qo'yadi. */
+const at = (hours: number, minutes = 0) =>
+  jest.setSystemTime(new Date(T0.getTime() + hours * HOUR + minutes * 60_000));
+
+/** Sukut qulf (48 soat) — `SESSION_REVOKE_LOCK_HOURS` berilmagan. */
+const lockedWorld = () => makeWorld({ SESSION_REVOKE_LOCK_HOURS: undefined });
+
+describe('Elchi Pochta #3 (2026-10-23) — 48 soatlik qulf: sof yordamchilar', () => {
+  it('resolveSessionRevokeLockMs: sukut 48, 0 — o‘chiq, kasr soat, noto‘g‘ri → sukut', () => {
+    expect(SESSION_REVOKE_LOCK_HOURS_DEFAULT).toBe(48);
+    expect(resolveSessionRevokeLockMs(undefined)).toBe(48 * HOUR);
+    expect(resolveSessionRevokeLockMs('')).toBe(48 * HOUR);
+    expect(resolveSessionRevokeLockMs('  ')).toBe(48 * HOUR);
+    expect(resolveSessionRevokeLockMs(null)).toBe(48 * HOUR);
+    expect(resolveSessionRevokeLockMs('0')).toBe(0);
+    expect(resolveSessionRevokeLockMs(0)).toBe(0);
+    expect(resolveSessionRevokeLockMs('24')).toBe(24 * HOUR);
+    expect(resolveSessionRevokeLockMs(0.5)).toBe(HOUR / 2);
+    expect(resolveSessionRevokeLockMs('-1')).toBe(48 * HOUR);
+    expect(resolveSessionRevokeLockMs('abc')).toBe(48 * HOUR);
+  });
+
+  it('⭐ sessionRevokeLock chegarasi: 47:59:59.999 — yopiq, aniq 48:00 — ochiq', () => {
+    const lock = 48 * HOUR;
+    const available = new Date(T0.getTime() + lock);
+    expect(
+      sessionRevokeLock(T0, lock, new Date(T0.getTime() + lock - 60_000)),
+    ).toEqual({ allowed: false, available_at: available });
+    expect(
+      sessionRevokeLock(T0, lock, new Date(T0.getTime() + lock - 1)),
+    ).toEqual({ allowed: false, available_at: available });
+    expect(sessionRevokeLock(T0, lock, available)).toEqual({
+      allowed: true,
+      available_at: null,
+    });
+    // ISO satr ham (ro'yxatdagi first_logged_in_at).
+    expect(sessionRevokeLock(T0.toISOString(), lock, available).allowed).toBe(
+      true,
+    );
+    // Qulf o'chiq — har doim ochiq.
+    expect(sessionRevokeLock(T0, 0, T0)).toEqual({
+      allowed: true,
+      available_at: null,
+    });
+    // created_at o'qilmasa — xavfsiz tomonga (yopiq).
+    expect(sessionRevokeLock(null, lock, T0)).toEqual({
+      allowed: false,
+      available_at: available,
+    });
+  });
+
+  it('formatTashkentMinuteCeil: UTC+5, DD.MM.YYYY HH:MM, daqiqa yuqoriga', () => {
+    expect(formatTashkentMinuteCeil(new Date('2026-10-25T07:00:00.000Z'))).toBe(
+      '25.10.2026 12:00',
+    );
+    expect(formatTashkentMinuteCeil(new Date('2026-10-25T07:00:30.000Z'))).toBe(
+      '25.10.2026 12:01',
+    );
+    expect(formatTashkentMinuteCeil(new Date('2026-12-31T19:00:00.000Z'))).toBe(
+      '01.01.2027 00:00',
+    );
+  });
+});
+
+describe('Elchi Pochta #3 (2026-10-23) — 48 soatlik qulf: yangi sessiya boshqalarni yopa olmaydi', () => {
+  useClock();
+
+  it('⭐ chegara (revoke-others): 47:59 — 403 SESSION_TOO_NEW + available_at, hech narsa yopilmaydi; aniq 48:00 — 200', async () => {
+    const w = lockedWorld();
+    const laptop = await w.login('25', LAPTOP_CTX);
+    const phone = await w.login('25', PHONE_CTX);
+    const laptopSid = w.sidOf(laptop.accessToken)!;
+
+    at(47, 59);
+    const error = await errorOf(
+      w.service.revokeOtherSessions({
+        userId: '25',
+        currentSessionId: laptopSid,
+      }),
+    );
+    expect(error).toEqual({
+      statusCode: 403,
+      message: LOCK_MESSAGE_AT_T0,
+      data: null,
+      code: 'SESSION_TOO_NEW',
+      available_at: '2026-10-25T07:00:00.000Z',
+    });
+    expect(w.sessionRepo.rows.every(isOpenRow)).toBe(true);
+    expect(w.sessionRepo.query).not.toHaveBeenCalled();
+
+    at(48);
+    const ok = await w.service.revokeOtherSessions({
+      userId: '25',
+      currentSessionId: laptopSid,
+    });
+    expect(ok.data).toEqual({
+      revoked: 1,
+      session_ids: [w.sidOf(phone.accessToken)],
+    });
+  });
+
+  it('⭐ DELETE: yangi sessiya ESKISINI ham, YANGIROG‘INI ham yopa olmaydi (403, nishon ochiq); eski sessiya yangisini yopa oladi', async () => {
+    const w = lockedWorld();
+    const laptop = await w.login('25', LAPTOP_CTX); // T0 — eski
+    at(72);
+    const phone = await w.login('25', PHONE_CTX); // T0+72 — yangi
+    at(73);
+    const tablet = await w.login('25', TABLET_CTX); // T0+73 — yangiroq
+    at(74);
+    const [laptopSid, phoneSid, tabletSid] = [laptop, phone, tablet].map(
+      (r) => w.sidOf(r.accessToken)!,
+    );
+
+    for (const target of [laptopSid, tabletSid]) {
+      const error = await errorOf(
+        w.service.revokeSession({
+          userId: '25',
+          sessionId: target,
+          currentSessionId: phoneSid,
+        }),
+      );
+      expect(error).toMatchObject({
+        statusCode: 403,
+        code: 'SESSION_TOO_NEW',
+        // Telefon birinchi kirganidan 48 soat: T0+72+48.
+        available_at: new Date(T0.getTime() + 120 * HOUR).toISOString(),
+      });
+      expect(error.message).toContain('28.10.2026 12:00 (Toshkent)');
+    }
+    expect(w.sessionRepo.rows.every(isOpenRow)).toBe(true);
+
+    // Eski noutbuk (74 soatlik) yangi telefonni chiqara oladi.
+    const ok = await w.service.revokeSession({
+      userId: '25',
+      sessionId: phoneSid,
+      currentSessionId: laptopSid,
+    });
+    expect(ok.data).toEqual({ revoked: 1, session_ids: [phoneSid] });
+    expect(
+      w.sessionRepo.rows.find((r) => r.id === phoneSid)?.revoke_reason,
+    ).toBe('revoked_by_owner');
+  });
+
+  it('⭐ qulf created_at bo‘yicha, last_login_at emas: qayta kirgan qurilma eski created_at ni saqlaydi — yangi EMAS', async () => {
+    const w = lockedWorld();
+    const first = await w.login('25', LAPTOP_CTX);
+    await w.login('25', PHONE_CTX);
+    at(47);
+    // Shu noutbuk qayta kirdi — AYNI qator, last_login_at = T0+47.
+    const again = await w.login('25', LAPTOP_CTX);
+    const sid = w.sidOf(again.accessToken)!;
+    expect(sid).toBe(w.sidOf(first.accessToken));
+    const row = w.sessionRepo.rows.find((r) => r.id === sid)!;
+    expect(row.created_at.getTime()).toBe(T0.getTime());
+    expect(row.last_login_at.getTime()).toBe(T0.getTime() + 47 * HOUR);
+
+    // Qulf T0+48 da ochiladi (last_login_at + 48 = T0+95 EMAS).
+    at(47, 30);
+    const list = await w.service.listSessions({ userId: '25', sessionId: sid });
+    expect(list.data.revoke_available_at).toBe('2026-10-25T07:00:00.000Z');
+
+    at(48);
+    const ok = await w.service.revokeOtherSessions({
+      userId: '25',
+      currentSessionId: sid,
+    });
+    expect(ok.data.revoked).toBe(1);
+  });
+
+  it('⭐ logout — qulfsiz: 1 soatlik sessiya o‘zidan chiqa oladi', async () => {
+    const w = lockedWorld();
+    const phone = await w.login('25', PHONE_CTX);
+    at(1);
+    const res = await w.service.logout('25', {
+      sessionId: w.sidOf(phone.accessToken),
+    });
+    expect(res.statusCode).toBe(200);
+    expect(w.sessionRepo.rows[0]).toMatchObject({ revoke_reason: 'logout' });
+  });
+
+  it('⭐ GET /auth/sessions: can_revoke_others / revoke_available_at (joriy sessiya bo‘yicha)', async () => {
+    const w = lockedWorld();
+    const laptop = await w.login('25', LAPTOP_CTX);
+    const sid = w.sidOf(laptop.accessToken);
+
+    at(10);
+    const young = await w.service.listSessions({
+      userId: '25',
+      sessionId: sid,
+    });
+    expect(young.data).toMatchObject({
+      can_revoke_others: false,
+      revoke_available_at: '2026-10-25T07:00:00.000Z',
+    });
+
+    at(48);
+    const grown = await w.service.listSessions({
+      userId: '25',
+      sessionId: sid,
+    });
+    expect(grown.data).toMatchObject({
+      can_revoke_others: true,
+      revoke_available_at: null,
+    });
+
+    // `sid` siz token — joriy sessiya yo'q: yopa olmaydi, vaqti noma'lum.
+    const noSid = await w.service.listSessions({ userId: '25' });
+    expect(noSid.data).toMatchObject({
+      can_revoke_others: false,
+      revoke_available_at: null,
+    });
+  });
+
+  it('⭐ SESSION_REVOKE_LOCK_HOURS=0 — qulf o‘chiq: yangi sessiya darhol yopa oladi, GET true/null', async () => {
+    const w = makeWorld({ SESSION_REVOKE_LOCK_HOURS: '0' });
+    const laptop = await w.login('25', LAPTOP_CTX);
+    await w.login('25', PHONE_CTX);
+    const sid = w.sidOf(laptop.accessToken)!;
+    at(0, 1);
+    const list = await w.service.listSessions({ userId: '25', sessionId: sid });
+    expect(list.data).toMatchObject({
+      can_revoke_others: true,
+      revoke_available_at: null,
+    });
+    const ok = await w.service.revokeOtherSessions({
+      userId: '25',
+      currentSessionId: sid,
+    });
+    expect(ok.data.revoked).toBe(1);
+  });
+
+  it('SESSION_REVOKE_LOCK_HOURS=24 — boshqa qiymat ham amal qiladi', async () => {
+    const w = makeWorld({ SESSION_REVOKE_LOCK_HOURS: '24' });
+    const laptop = await w.login('25', LAPTOP_CTX);
+    await w.login('25', PHONE_CTX);
+    const sid = w.sidOf(laptop.accessToken)!;
+    at(23, 59);
+    expect(
+      (
+        await errorOf(
+          w.service.revokeOtherSessions({
+            userId: '25',
+            currentSessionId: sid,
+          }),
+        )
+      ).statusCode,
+    ).toBe(403);
+    at(24);
+    expect(
+      (
+        await w.service.revokeOtherSessions({
+          userId: '25',
+          currentSessionId: sid,
+        })
+      ).data.revoked,
+    ).toBe(1);
+  });
+
+  it('qulf yoqilganda `sid` siz token (Telegram / eski) DELETE → 400 «Joriy sessiya aniqlanmadi», nishon ochiq; revoke-others ham 400 (avvalgidek)', async () => {
+    const w = lockedWorld();
+    const phone = await w.login('25', PHONE_CTX);
+    at(100);
+    const del = await errorOf(
+      w.service.revokeSession({
+        userId: '25',
+        sessionId: w.sidOf(phone.accessToken),
+        currentSessionId: null,
+      }),
+    );
+    expect(del).toEqual({
+      statusCode: 400,
+      message: 'Joriy sessiya aniqlanmadi — qayta kiring',
+      data: null,
+    });
+    const others = await errorOf(
+      w.service.revokeOtherSessions({ userId: '25', currentSessionId: null }),
+    );
+    expect(others.statusCode).toBe(400);
+    expect(w.sessionRepo.rows.every(isOpenRow)).toBe(true);
+  });
+
+  it('yopilgan joriy sessiya — 401 «Session revoked» (403 dan oldin)', async () => {
+    const w = lockedWorld();
+    const phone = await w.login('25', PHONE_CTX);
+    await w.login('25', LAPTOP_CTX);
+    const sid = w.sidOf(phone.accessToken)!;
+    await w.service.logout('25', { sessionId: sid });
+    const error = await errorOf(
+      w.service.revokeOtherSessions({ userId: '25', currentSessionId: sid }),
+    );
+    expect(error).toEqual({
+      statusCode: 401,
+      message: 'Session revoked',
+      data: null,
+    });
+  });
+});
+
+/**
+ * (Elchi Pochta #3, 2026-10-23) Parol almashtirish — yangi qurilma egasining
+ * «qochish yo'li»: boshqa qurilmalar DARHOL chiqariladi (48 soatlik qulfga
+ * bog'liq emas). HAQIQIY UserServiceService (PATCH /auth/my-profile va
+ * PATCH /users/:id → identity.user.update) + AuthService + AuthSessionService.
+ */
+function makePasswordWorld(
+  envOverrides: Record<string, string | undefined> = {},
+) {
+  const w = makeWorld({
+    SESSION_REVOKE_LOCK_HOURS: undefined,
+    ...envOverrides,
+  });
+  const client = {
+    send: jest.fn(() => of({ statusCode: 200, data: null })),
+    emit: jest.fn(() => of(undefined)),
+  };
+  const userService = new UserServiceService(
+    w.usersRepo as never,
+    client as never, // search
+    client as never, // catalog
+    client as never, // order
+    client as never, // logistics
+    client as never, // finance
+    client as never, // branch
+    {
+      encrypt: jest.fn((value: string) =>
+        Promise.resolve(`bcrypt-hash-NEW-${value}`),
+      ),
+      compare: jest.fn(),
+    } as never,
+    { get: (key: string) => w.env[key] } as never,
+    w.activityLog as never,
+    w.sessions,
+  );
+  jest
+    .spyOn(
+      (userService as unknown as { logger: { warn: () => void } }).logger,
+      'warn',
+    )
+    .mockImplementation(() => undefined);
+  const refreshStatus = (refreshToken: string) =>
+    w.service.refresh({ refreshToken }).then(
+      (res) => res.statusCode,
+      (error: unknown) =>
+        (error as RpcException).getError() as { statusCode: number },
+    );
+  return { ...w, userService, refreshStatus };
+}
+
+type PasswordReply = {
+  statusCode: number;
+  sessions_revoked?: number;
+  revoked_session_ids?: string[];
+};
+
+const SELF = (id: string, role = 'courier') => ({ id, roles: [role] });
+
+describe('Elchi Pochta #3 (2026-10-23) — parol almashtirish boshqa qurilmalarni DARHOL chiqaradi', () => {
+  it('⭐ o‘zi (noutbukdan) almashtiradi — telefon va planshet `password_changed` bilan darhol yopiladi, noutbuk ishlaydi (refresh ham 200); 48 soatlik qulf to‘sqinlik qilmaydi', async () => {
+    const w = makePasswordWorld();
+    const laptop = await w.login('25', LAPTOP_CTX);
+    const phone = await w.login('25', PHONE_CTX);
+    const tablet = await w.login('25', TABLET_CTX);
+    const [laptopSid, phoneSid, tabletSid] = [laptop, phone, tablet].map(
+      (r) => w.sidOf(r.accessToken)!,
+    );
+    // Hamma sessiya yangi — «Boshqa sessiyalardan chiqish» 403...
+    expect(
+      (
+        await errorOf(
+          w.service.revokeOtherSessions({
+            userId: '25',
+            currentSessionId: laptopSid,
+          }),
+        )
+      ).statusCode,
+    ).toBe(403);
+
+    // ...lekin parolni almashtirish ishlaydi.
+    const res = (await w.userService.updateUser(
+      '25',
+      { password: 'yangi-parol' } as never,
+      SELF('25'),
+      { currentSessionId: laptopSid },
+    )) as PasswordReply;
+    expect(res.statusCode).toBe(200);
+    expect(res.sessions_revoked).toBe(2);
+    expect([...(res.revoked_session_ids ?? [])].sort()).toEqual(
+      [phoneSid, tabletSid].sort(),
+    );
+
+    const byId = (id: string) => w.sessionRepo.rows.find((r) => r.id === id)!;
+    expect(byId(phoneSid)).toMatchObject({ revoke_reason: 'password_changed' });
+    expect(byId(tabletSid)).toMatchObject({
+      revoke_reason: 'password_changed',
+    });
+    expect(byId(laptopSid)).toMatchObject({
+      revoked_at: null,
+      password_fp: passwordFingerprint('bcrypt-hash-NEW-yangi-parol'),
+    });
+
+    // Epoch OSHMAGAN (joriy sessiya yaroqli), eski ustun tozalangan.
+    const user = w.users.get('25')!;
+    expect(user.password).toBe('bcrypt-hash-NEW-yangi-parol');
+    expect(user.session_epoch).toBe(0);
+    expect(user.refresh_token).toBeNull();
+
+    // Joriy qurilma: refresh 200 (ilgari parol izi tufayli 401 edi).
+    expect(await w.refreshStatus(laptop.refreshToken)).toBe(200);
+    // Boshqalari: gateway session_state darhol `active: false`, refresh 401.
+    for (const r of [phone, tablet]) {
+      expect(await w.refreshStatus(r.refreshToken)).toMatchObject({
+        statusCode: 401,
+      });
+    }
+    expect(
+      await w.service.sessionState({ userId: '25', sessionId: phoneSid }),
+    ).toEqual({ active: false });
+    expect(
+      await w.service.sessionState({ userId: '25', sessionId: laptopSid }),
+    ).toEqual({ active: true });
+    const list = await w.service.listSessions({
+      userId: '25',
+      sessionId: laptopSid,
+    });
+    expect(list.data.active_count).toBe(1);
+    expect(list.data.sessions.map((row) => row.id)).toEqual([laptopSid]);
+  });
+
+  it('⭐ admin parolni tiklaydi (PATCH /users/:id) — foydalanuvchining BARCHA sessiyalari yopiladi, epoch oshadi; adminning sessiyasi tegilmaydi', async () => {
+    const w = makePasswordWorld();
+    const phone = await w.login('25', PHONE_CTX);
+    const laptop = await w.login('25', LAPTOP_CTX);
+    const admin = await w.login('26', PHONE_CTX);
+    const adminSid = w.sidOf(admin.accessToken)!;
+
+    const res = (await w.userService.updateUser(
+      '25',
+      { password: 'tiklangan' } as never,
+      { id: '26', roles: ['superadmin'] },
+      { currentSessionId: adminSid },
+    )) as PasswordReply;
+
+    const userSids = [phone, laptop].map((r) => w.sidOf(r.accessToken)!);
+    expect(res.sessions_revoked).toBe(2);
+    expect([...(res.revoked_session_ids ?? [])].sort()).toEqual(
+      [...userSids].sort(),
+    );
+    expect(w.users.get('25')!.session_epoch).toBe(1);
+    for (const sid of userSids) {
+      expect(w.sessionRepo.rows.find((r) => r.id === sid)).toMatchObject({
+        revoke_reason: 'password_changed',
+      });
+    }
+    for (const r of [phone, laptop]) {
+      expect(await w.refreshStatus(r.refreshToken)).toMatchObject({
+        statusCode: 401,
+      });
+    }
+    // Admin (boshqa foydalanuvchi) — ochiq, refresh ishlaydi.
+    expect(
+      w.sessionRepo.rows.find((r) => r.id === adminSid)?.revoked_at,
+    ).toBeNull();
+    expect(await w.refreshStatus(admin.refreshToken)).toBe(200);
+  });
+
+  it('o‘zi, lekin `sid` siz token (Telegram Mini App) — joriy sessiyani aniqlab bo‘lmaydi: HAMMASI yopiladi', async () => {
+    const w = makePasswordWorld();
+    await w.login('25', PHONE_CTX);
+    await w.login('25', LAPTOP_CTX);
+    const res = (await w.userService.updateUser(
+      '25',
+      { password: 'yangi' } as never,
+      SELF('25'),
+      { currentSessionId: null },
+    )) as PasswordReply;
+    expect(res.sessions_revoked).toBe(2);
+    expect(w.sessionRepo.rows.every((r) => !isOpenRow(r))).toBe(true);
+    expect(w.users.get('25')!.session_epoch).toBe(1);
+  });
+
+  it('o‘zi parol VA telefonni bir so‘rovda — telefon almashishi epoch’ni oshirgan: joriy sessiya ham yopiladi', async () => {
+    const w = makePasswordWorld();
+    const laptop = await w.login('25', LAPTOP_CTX);
+    await w.login('25', PHONE_CTX);
+    const res = (await w.userService.updateUser(
+      '25',
+      { password: 'yangi', phone_number: '+998901112233' } as never,
+      SELF('25'),
+      { currentSessionId: w.sidOf(laptop.accessToken) },
+    )) as PasswordReply;
+    expect(res.sessions_revoked).toBe(2);
+    expect(w.users.get('25')!.session_epoch).toBe(1);
+    expect(await w.refreshStatus(laptop.refreshToken)).toMatchObject({
+      statusCode: 401,
+    });
+  });
+
+  it('o‘zi, lekin joriy `sid` yopilgan / begona — saqlanadigan sessiya yo‘q: hammasi yopiladi', async () => {
+    const w = makePasswordWorld();
+    const laptop = await w.login('25', LAPTOP_CTX);
+    const phone = await w.login('25', PHONE_CTX);
+    const other = await w.login('26', TABLET_CTX);
+    // Begona sid (26 ning sessiyasi) — 25 ning hech biri saqlanmaydi.
+    const res = (await w.userService.updateUser(
+      '25',
+      { password: 'yangi' } as never,
+      SELF('25'),
+      { currentSessionId: w.sidOf(other.accessToken) },
+    )) as PasswordReply;
+    expect(res.sessions_revoked).toBe(2);
+    for (const r of [laptop, phone]) {
+      expect(await w.refreshStatus(r.refreshToken)).toMatchObject({
+        statusCode: 401,
+      });
+    }
+    // Begona sessiya o'zgarmagan.
+    expect(await w.refreshStatus(other.refreshToken)).toBe(200);
+  });
+
+  it('⭐ yopilgan qurilma qayta kirsa — YANGI sessiya (yangi created_at), u yana 48 soat boshqalarni yopa olmaydi', async () => {
+    const w = makePasswordWorld();
+    const laptop = await w.login('25', LAPTOP_CTX);
+    const tablet = await w.login('25', TABLET_CTX);
+    const laptopSid = w.sidOf(laptop.accessToken)!;
+    await w.userService.updateUser(
+      '25',
+      { password: 'yangi' } as never,
+      SELF('25'),
+      { currentSessionId: laptopSid },
+    );
+    const again = await w.login('25', TABLET_CTX);
+    const newSid = w.sidOf(again.accessToken)!;
+    expect(newSid).not.toBe(w.sidOf(tablet.accessToken));
+    expect(
+      (
+        await errorOf(
+          w.service.revokeSession({
+            userId: '25',
+            sessionId: laptopSid,
+            currentSessionId: newSid,
+          }),
+        )
+      ).statusCode,
+    ).toBe(403);
+  });
+
+  it('jurnal: logout fe’li, scope=password_change, by/kept_current, soni va id lar, o‘zbekcha gap; admin tiklasa — aktor admin', async () => {
+    const w = makePasswordWorld();
+    const laptop = await w.login('25', LAPTOP_CTX);
+    const phone = await w.login('25', PHONE_CTX);
+    const phoneSid = w.sidOf(phone.accessToken)!;
+    await w.userService.updateUser(
+      '25',
+      { password: 'yangi' } as never,
+      SELF('25'),
+      { currentSessionId: w.sidOf(laptop.accessToken) },
+    );
+    type Entry = {
+      action: string;
+      entity_id: string;
+      user_id: string | null;
+      metadata: Record<string, unknown>;
+      description: string;
+    };
+    const entries = () =>
+      (w.activityLog.log.mock.calls as Array<[Entry]>)
+        .map(([entry]) => entry)
+        .filter((entry) => entry.metadata?.scope === 'password_change');
+    expect(entries()).toEqual([
+      expect.objectContaining({
+        entity_type: 'Auth',
+        entity_id: '25',
+        action: 'logout',
+        user_id: '25',
+        metadata: {
+          scope: 'password_change',
+          by: 'self',
+          kept_current: true,
+          sessions_revoked: 1,
+          session_ids: [phoneSid],
+        },
+        description: 'Parol almashtirildi — boshqa sessiyalar yopildi: 1 ta',
+      }),
+    ]);
+    // Parol qiymati / hashi jurnalga tushmaydi.
+    expect(JSON.stringify(w.activityLog.log.mock.calls)).not.toContain(
+      'bcrypt-hash-NEW',
+    );
+
+    await w.userService.updateUser(
+      '25',
+      { password: 'tiklangan' } as never,
+      { id: '26', roles: ['superadmin'] },
+      {},
+    );
+    expect(entries()[1]).toMatchObject({
+      entity_id: '25',
+      user_id: '26',
+      metadata: { by: 'admin', kept_current: false, sessions_revoked: 1 },
+      description: 'Parol almashtirildi — barcha sessiyalar yopildi: 1 ta',
+    });
+  });
+
+  it('sessiyalarni yopish xato bersa — parol baribir saqlanadi (200, ogohlantirish), boshqalar refresh’da parol izi bo‘yicha 401', async () => {
+    const w = makePasswordWorld();
+    const laptop = await w.login('25', LAPTOP_CTX);
+    const phone = await w.login('25', PHONE_CTX);
+    jest
+      .spyOn(w.sessions, 'afterPasswordChange')
+      .mockRejectedValueOnce(new Error('db down'));
+    const res = (await w.userService.updateUser(
+      '25',
+      { password: 'yangi' } as never,
+      SELF('25'),
+      { currentSessionId: w.sidOf(laptop.accessToken) },
+    )) as PasswordReply;
+    expect(res.statusCode).toBe(200);
+    expect(res).not.toHaveProperty('revoked_session_ids');
+    expect(w.users.get('25')!.password).toBe('bcrypt-hash-NEW-yangi');
+    expect(await w.refreshStatus(phone.refreshToken)).toMatchObject({
+      statusCode: 401,
+    });
+  });
+
+  it('parolsiz tahrir (ism) — sessiyalarga tegilmaydi, javobda sessiya maydonlari yo‘q', async () => {
+    const w = makePasswordWorld();
+    const phone = await w.login('25', PHONE_CTX);
+    const res = (await w.userService.updateUser(
+      '25',
+      { name: 'Yangi ism' } as never,
+      SELF('25'),
+      { currentSessionId: w.sidOf(phone.accessToken) },
+    )) as PasswordReply;
+    expect(res).not.toHaveProperty('sessions_revoked');
+    expect(res).not.toHaveProperty('revoked_session_ids');
+    expect(w.sessionRepo.rows.every(isOpenRow)).toBe(true);
+    expect(await w.refreshStatus(phone.refreshToken)).toBe(200);
+  });
+
+  it('identity.market.update parol bilan (joriy sessiya yo‘q) — marketning hammasi yopiladi', async () => {
+    const w = makePasswordWorld();
+    w.users.get('25')!.role = 'market';
+    await w.login('25', PHONE_CTX);
+    await w.login('25', LAPTOP_CTX);
+    const res = (await w.userService.updateMarket(
+      '25',
+      { password: 'market-yangi' } as never,
+      { id: '26', roles: ['superadmin'] },
+    )) as PasswordReply;
+    expect(res.sessions_revoked).toBe(2);
+    expect(
+      w.sessionRepo.rows.every((r) => r.revoke_reason === 'password_changed'),
+    ).toBe(true);
+    expect(w.users.get('25')!.session_epoch).toBe(1);
+  });
+
+  it('identity.controller: `current_session_id` updateUser ga uzatiladi', async () => {
+    const userService = {
+      updateUser: jest.fn().mockResolvedValue('ok'),
+    };
+    const rmq = { ack: jest.fn(), nackForError: jest.fn() };
+    const controller = new IdentityController(
+      rmq as never,
+      userService as never,
+      {} as never,
+      {} as never,
+    );
+    const SID = '3f2b8c1e-6a4d-4e7b-9c10-2d5f7a8b9c0d';
+    await controller.updateAdmin(
+      {
+        id: '25',
+        dto: { password: 'x' } as never,
+        requester: SELF('25'),
+        current_session_id: SID,
+      },
+      { getPattern: () => 'p' } as never,
+    );
+    expect(userService.updateUser).toHaveBeenCalledWith(
+      '25',
+      { password: 'x' },
+      SELF('25'),
+      { currentSessionId: SID },
+    );
+    await controller.updateAdmin({ id: '25', dto: {} as never }, {
+      getPattern: () => 'p',
+    } as never);
+    expect(userService.updateUser).toHaveBeenLastCalledWith(
+      '25',
+      {},
+      undefined,
+      { currentSessionId: null },
+    );
   });
 });
