@@ -25,10 +25,14 @@ const customer = (id: string, over: Row = {}): Row => ({
 });
 
 const setup = (customers: Row[], summaryIds: string[]) => {
-  const identitySend: Send = jest.fn(() =>
-    of({ success: true, data: customers }),
-  );
-  const orderSend: Send = jest.fn(() =>
+  const identitySend: Send = jest.fn<
+    Observable<unknown>,
+    [{ cmd: string }, unknown]
+  >(() => of({ success: true, data: customers }));
+  const orderSend: Send = jest.fn<
+    Observable<unknown>,
+    [{ cmd: string }, unknown]
+  >(() =>
     of({
       statusCode: 200,
       data: {

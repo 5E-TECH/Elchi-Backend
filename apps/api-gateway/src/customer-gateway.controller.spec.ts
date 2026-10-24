@@ -37,7 +37,10 @@ const setup = (opts?: {
   summary?: Array<Record<string, unknown>>;
   operatorMarketId?: string | null;
 }) => {
-  const identitySend: Send = jest.fn((pattern) => {
+  const identitySend: Send = jest.fn<
+    Observable<unknown>,
+    [{ cmd: string }, any]
+  >((pattern) => {
     if (pattern.cmd === 'identity.customer.search') {
       return of({ success: true, data: opts?.customers ?? [] });
     }
@@ -49,8 +52,8 @@ const setup = (opts?: {
       },
     });
   });
-  const orderSend: Send = jest.fn(() =>
-    of({ statusCode: 200, data: { items: opts?.summary ?? [] } }),
+  const orderSend: Send = jest.fn<Observable<unknown>, [{ cmd: string }, any]>(
+    () => of({ statusCode: 200, data: { items: opts?.summary ?? [] } }),
   );
   const controller = new CustomerGatewayController(
     { send: identitySend } as any,
