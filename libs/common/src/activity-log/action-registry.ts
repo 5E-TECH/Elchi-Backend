@@ -301,8 +301,18 @@ export const ACTIVITY_ACTION_REGISTRY: Readonly<
     'setting',
     'amber',
   ),
+  /**
+   * (ILq3WNL1) Muvaffaqiyatli birlashtirish — alohida amal (ilgari oddiy
+   * `deleted` + `new_value.merged_into` edi: jurnalda topib/filtrlab
+   * bo'lmasdi). Eski `deleted` + `merged_into` yozuvlari migratsiyasiz
+   * qoladi (o'tmish o'zgartirilmaydi). ru/en — FE i18n: «Район объединён» /
+   * «District merged».
+   */
+  'district.merge': entry('Tuman birlashtirildi', 'logistics', 'link', 'green'),
+  // (ILq3WNL1) ru/en — FE i18n: «Объединение района не завершено» /
+  // «District merge incomplete».
   'district.merge_compensation_failed': entry(
-    'Tumanlarni birlashtirish xatosi',
+    'Tuman birlashtirish chala qoldi',
     'logistics',
     'warning',
     'red',

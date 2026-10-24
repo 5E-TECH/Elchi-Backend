@@ -1,4 +1,5 @@
 import { Observable, of, throwError } from 'rxjs';
+import { ACTIVITY_ACTION_REGISTRY, publicErrorData } from '@app/common';
 import { LogisticsServiceService } from './logistics-service.service';
 
 /**
@@ -59,6 +60,8 @@ function make(
     /** Oddiy ko'chirishdan keyin (parallel yozuv simulyatsiyasi). */
     afterForward?: (kind: Kind, rows: Record<Kind, GeoRow[]>) => void;
     removeFails?: boolean;
+    /** (vsmpTweI) Eski servis: `moved_live` qaytarmaydi. */
+    legacyMovedLive?: boolean;
   } = {},
 ) {
   const svc: any = Object.create(LogisticsServiceService.prototype);
@@ -189,6 +192,10 @@ function make(
       statusCode: 200,
       data: {
         moved: ids.length,
+        // (vsmpTweI) haqiqiy servislar kabi: ko'chganlardan tiriklari.
+        ...(opts.legacyMovedLive
+          ? {}
+          : { moved_live: moved.filter((r) => !r.deleted).length }),
         ids,
         previous_regions: [...groups.values()],
         missing_ids: compensation
@@ -434,10 +441,11 @@ describe('mergeDistricts — birlashtirish (oNAE3LW9 TC5)', () => {
       { cmd: 'search.index.remove' },
       expect.objectContaining({ type: 'district', sourceId: '173' }),
     );
+    // (ILq3WNL1) alohida amal — oddiy `deleted` emas.
     expect(svc.activityLog.log).toHaveBeenCalledWith(
       expect.objectContaining({
         entity_id: '173',
-        action: 'deleted',
+        action: 'district.merge',
         new_value: { merged_into: '28' },
       }),
     );
@@ -619,6 +627,285 @@ describe('mergeDistricts — birlashtirish (oNAE3LW9 TC5)', () => {
     const { svc } = make();
     expect(await statusOf(svc.mergeDistricts('173', '173'))).toBe(400);
     expect(await statusOf(svc.mergeDistricts('173', '999'))).toBe(404);
+  });
+});
+
+/**
+ * tf324cXN — birlashtirish xatosida mashina o'qiydigan sabab: `data.reason`
+ * va `data.details` (reason, kind, mismatches, timeout_ms). Mavjud kalitlar
+ * (`rolled_back`, `stranded`, xabar) o'zgarmaydi; gateway `publicErrorData`
+ * shuni FE'ga o'tkazadi.
+ */
+type MergeErrorData = {
+  reason: string;
+  details: Record<string, unknown>;
+  rolled_back?: Record<string, number>;
+  from_district_id?: string;
+  stranded?: Array<{ ids: string[] | null }>;
+};
+type MergeError = { statusCode: number; message: string; data: MergeErrorData };
+type Harness = ReturnType<typeof make>;
+type GeoSend = (
+  pattern: { cmd: string },
+  payload: { ids?: unknown },
+) => unknown;
+const mergeError = async (h: Harness, to = '28'): Promise<MergeError> =>
+  (await errorOf(
+    (h.svc as LogisticsServiceService).mergeDistricts('173', to),
+  )) as MergeError;
+const activityLogOf = (h: Harness) =>
+  (h.svc as { activityLog: { log: jest.Mock } }).activityLog.log;
+
+describe('mergeDistricts — xato sababi (tf324cXN)', () => {
+  it('⭐ servis rad etsa — remote_refused, kind = qadam; eski kalitlar joyida', async () => {
+    const h = make({
+      rows: { orders: fiveInA(), users: [order('301', '173', '3')] },
+      forwardFault: { users: { statusCode: 400 } },
+    });
+    const err = await mergeError(h);
+    expect(err.statusCode).toBe(409);
+    expect(err.data.reason).toBe('remote_refused');
+    expect(err.data.details).toEqual({
+      reason: 'remote_refused',
+      kind: 'users',
+      from_district_id: '173',
+      to_district_id: '28',
+      manual_fix: false,
+    });
+    expect(err.data.rolled_back).toEqual({ orders: 5 });
+    expect(err.data.from_district_id).toBe('173');
+    expect(err.message).toContain('qaytarildi');
+    // Gateway filtridan o'tgan holat.
+    expect(publicErrorData(err)).toEqual({
+      reason: 'remote_refused',
+      details: err.data.details,
+    });
+  });
+
+  it('⭐ javob kelmasa — timeout, details.timeout_ms = 15000', async () => {
+    const h = make({
+      rows: { orders: fiveInA(), users: [order('301', '173', '3')] },
+      forwardFault: { users: 'timeout' },
+    });
+    const err = await mergeError(h);
+    expect(err.statusCode).toBe(503);
+    expect(err.data.reason).toBe('timeout');
+    expect(err.data.details).toEqual(
+      expect.objectContaining({
+        reason: 'timeout',
+        kind: 'users',
+        timeout_ms: 15000,
+      }),
+    );
+  });
+
+  it('⭐ servis javobi noto‘g‘ri — invalid_response', async () => {
+    const h = make({ rows: { orders: fiveInA() } });
+    const client = (h.svc as { branchClient: { send: GeoSend } }).branchClient;
+    const send = client.send;
+    client.send = jest.fn((pattern, payload) =>
+      pattern.cmd === 'branch.reassign_district' && !Array.isArray(payload.ids)
+        ? of({ statusCode: 200, data: { moved: 0 } })
+        : send(pattern, payload),
+    );
+    const err = await mergeError(h);
+    expect(err.statusCode).toBe(503);
+    expect(err.data.reason).toBe('invalid_response');
+    expect(err.data.details).toEqual(
+      expect.objectContaining({ reason: 'invalid_response', kind: 'branches' }),
+    );
+  });
+
+  it('⭐ B jami mos kelmasa — count_mismatch, mismatches: target expected/actual; matn shundan', async () => {
+    const h = make({
+      rows: { orders: fiveInA() },
+      afterForward: (kind, rows) => {
+        if (kind === 'orders') rows.orders.push(order('99', '28', '3'));
+      },
+    });
+    const err = await mergeError(h);
+    const mismatches = [
+      { kind: 'orders', district: 'target', expected: 8, actual: 9 },
+    ];
+    expect(err.statusCode).toBe(409);
+    expect(err.data.reason).toBe('count_mismatch');
+    expect(err.data.details).toEqual(
+      expect.objectContaining({
+        reason: 'count_mismatch',
+        kind: 'orders',
+        mismatches,
+      }),
+    );
+    expect(err.message).toContain('soni 9, kutilgan 3 + 5 = 8');
+    expect(publicErrorData(err)?.details).toEqual(
+      expect.objectContaining({ mismatches }),
+    );
+  });
+
+  it('A da qoldiq — count_mismatch, mismatches: source expected 0', async () => {
+    const h = make({
+      rows: { orders: fiveInA() },
+      afterForward: (kind, rows) => {
+        if (kind === 'orders') rows.orders.push(order('16', '173', '3'));
+      },
+    });
+    const err = await mergeError(h);
+    expect(err.data.details.mismatches).toEqual([
+      { kind: 'orders', district: 'source', expected: 0, actual: 1 },
+    ]);
+  });
+
+  it('A ni o‘chirish yiqilsa — delete_failed, kind null', async () => {
+    const h = make({ rows: { orders: fiveInA() }, removeFails: true });
+    const err = await mergeError(h);
+    expect(err.statusCode).toBe(503);
+    expect(err.data.reason).toBe('delete_failed');
+    expect(err.data.details).toEqual(
+      expect.objectContaining({ reason: 'delete_failed', kind: null }),
+    );
+  });
+
+  it('kompensatsiya chala — sabab saqlanadi, manual_fix + stranded (ID’siz) details da; eski stranded o‘zgarmaydi', async () => {
+    const h = make({
+      rows: { orders: fiveInA(), users: [order('301', '173', '3')] },
+      forwardFault: { users: { statusCode: 409 } },
+      compensateFault: { orders: 'timeout' },
+    });
+    const err = await mergeError(h);
+    expect(err.data.reason).toBe('remote_refused');
+    expect(err.data.details).toEqual(
+      expect.objectContaining({
+        reason: 'remote_refused',
+        kind: 'users',
+        manual_fix: true,
+        stranded: [{ kind: 'orders', district_id: '28', count: 5 }],
+      }),
+    );
+    expect(err.data.stranded?.[0].ids).toEqual(['11', '12', '13', '14', '15']);
+    const [entry] = activityLogOf(h).mock.calls[0] as [
+      { action: string; metadata: { reason_code: string } },
+    ];
+    expect(entry.action).toBe('district.merge_compensation_failed');
+    expect(entry.metadata.reason_code).toBe('remote_refused');
+  });
+});
+
+type MergeOk = {
+  statusCode: number;
+  data: {
+    moved: Record<string, number>;
+    moved_live: Record<string, number>;
+  };
+};
+const mergeOk = async (h: Harness): Promise<MergeOk> =>
+  (await (h.svc as LogisticsServiceService).mergeDistricts(
+    '173',
+    '28',
+  )) as MergeOk;
+const withDeletedInA = () => ({
+  orders: [
+    order('11', '173', '3'),
+    order('12', '173', '3'),
+    order('13', '173', '3', true),
+    order('91', '28', '3'),
+  ],
+  users: [order('301', '173', '3', true)],
+  branches: [order('7', '173', '3')],
+});
+
+/**
+ * vsmpTweI — natija oynasidagi «Ko'chirildi» faqat TIRIK yozuvlar:
+ * `moved_live` ko'chirish qadamining o'zidan (servis `moved_live`), `moved`
+ * esa avvalgidek jami (o'chirilganlar bilan).
+ */
+describe('mergeDistricts — moved_live (vsmpTweI)', () => {
+  it('⭐ o‘chirilganlar `moved` da bor, `moved_live` da yo‘q; activity metadata da ham', async () => {
+    const h = make({ rows: withDeletedInA() });
+    const res = await mergeOk(h);
+    expect(res.statusCode).toBe(200);
+    expect(res.data.moved).toEqual({ orders: 3, users: 1, branches: 1 });
+    expect(res.data.moved_live).toEqual({ orders: 2, users: 0, branches: 1 });
+    const [entry] = activityLogOf(h).mock.calls[0] as [
+      { metadata: { moved_live: Record<string, number> } },
+    ];
+    expect(entry.metadata.moved_live).toEqual({
+      orders: 2,
+      users: 0,
+      branches: 1,
+    });
+  });
+
+  it('eski servis `moved_live` qaytarmasa — ko‘chgan va A dagi oldingi tirik sonning kichigi', async () => {
+    const h = make({ rows: withDeletedInA(), legacyMovedLive: true });
+    const res = await mergeOk(h);
+    expect(res.data.moved_live).toEqual({ orders: 2, users: 0, branches: 1 });
+  });
+});
+
+/**
+ * ILq3WNL1 — faoliyat jurnali: muvaffaqiyatli birlashtirish `district.merge`
+ * («Tuman birlashtirildi»), chala qolgani `district.merge_compensation_failed`
+ * («Tuman birlashtirish chala qoldi»).
+ */
+describe('mergeDistricts — jurnal amali (ILq3WNL1)', () => {
+  type LogEntry = {
+    entity_type: string;
+    entity_id: string;
+    action: string;
+    description: string;
+    old_value: Record<string, unknown>;
+    new_value: Record<string, unknown>;
+    metadata: Record<string, unknown>;
+  };
+
+  it('⭐ muvaffaqiyat — district.merge: tavsif, old_value snapshot, new_value.merged_into, metadata sonlari', async () => {
+    const h = make({ rows: withDeletedInA() });
+    await mergeOk(h);
+    const log = activityLogOf(h);
+    expect(log).toHaveBeenCalledTimes(1);
+    const [entry] = log.mock.calls[0] as [LogEntry];
+    expect(entry.entity_type).toBe('District');
+    expect(entry.entity_id).toBe('173');
+    expect(entry.action).toBe('district.merge');
+    expect(entry.description).toBe(
+      'Tuman birlashtirildi: Andijon shahri (#173) → Andijon (#28)',
+    );
+    expect(entry.old_value).toEqual({
+      name: 'Andijon shahri',
+      sato_code: '1',
+      region_id: '3',
+    });
+    expect(entry.new_value).toEqual({ merged_into: '28' });
+    expect(Object.keys(entry.metadata).sort()).toEqual([
+      'moved',
+      'moved_live',
+      'source_before',
+      'target_after',
+      'target_before',
+    ]);
+    expect(ACTIVITY_ACTION_REGISTRY['district.merge']).toEqual(
+      expect.objectContaining({
+        label: 'Tuman birlashtirildi',
+        category: 'logistics',
+      }),
+    );
+  });
+
+  it('chala qolgan — district.merge_compensation_failed «Tuman birlashtirish chala qoldi»', async () => {
+    const h = make({
+      rows: { orders: fiveInA(), users: [order('301', '173', '3')] },
+      forwardFault: { users: { statusCode: 409 } },
+      compensateFault: { orders: 'timeout' },
+    });
+    await mergeError(h);
+    const [entry] = activityLogOf(h).mock.calls[0] as [LogEntry];
+    expect(entry.action).toBe('district.merge_compensation_failed');
+    expect(entry.description).toBe(
+      'Tuman birlashtirish chala qoldi: #173 → #28',
+    );
+    expect(
+      ACTIVITY_ACTION_REGISTRY['district.merge_compensation_failed'].label,
+    ).toBe('Tuman birlashtirish chala qoldi');
   });
 });
 

@@ -366,9 +366,17 @@ function parseGeoReassignInput(input: GeoReassignInput) {
  * guruhlari (kompensatsiya aynan tiklashi uchun) va ID rejimida topilmagan
  * (A da yo'q) ID'lar.
  */
+/**
+ * (vsmpTweI) Raw `live` ustuni (`boolean`; drayverga qarab `'t'`/`'true'`) —
+ * qator o'chirilmaganmi.
+ */
+function geoRowLive(value: unknown): boolean {
+  return value === true || value === 't' || value === 'true';
+}
+
 function geoReassignResult(
   req: { from: string; to: string; ids: string[] | null },
-  rows: Array<{ id: string; region_id: string | null }>,
+  rows: Array<{ id: string; region_id: string | null; live?: unknown }>,
 ) {
   const ids = rows.map((row) => String(row.id));
   const groups = new Map<string, { region_id: string | null; ids: string[] }>();
@@ -384,11 +392,22 @@ function geoReassignResult(
     from_district_id: req.from,
     to_district_id: req.to,
     moved: ids.length,
+    // (vsmpTweI) ko'chganlardan TIRIK (o'chirilmagan) lari — logistics
+    // birlashtirish natijasidagi «Ko'chirildi» (`moved_live`) shundan.
+    moved_live: rows.filter((row) => geoRowLive(row.live)).length,
     ids,
     previous_regions: [...groups.values()],
     missing_ids: (req.ids ?? []).filter((id) => !movedSet.has(id)),
   };
 }
+
+/** (3HKvAyhm) Paket tarixi amallarining o'zbekcha nomi (`action_label`). */
+const TRANSFER_BATCH_ACTION_LABELS: Readonly<Record<string, string>> = {
+  CREATED: 'Yaratildi',
+  SENT: "Jo'natildi",
+  RECEIVED: 'Qabul qilindi',
+  CANCELLED: 'Bekor qilindi',
+};
 
 /** YEThmZBn — `branch.user.find_by_user_ids` bir so'rovdagi id chegarasi. */
 export const USER_BRANCH_LOOKUP_MAX = 500;
@@ -3244,7 +3263,15 @@ export class BranchServiceService implements OnModuleInit {
     };
   }
 
-  async findTransferBatchById(id: string, requester?: RequesterContext) {
+  /**
+   * Paketni o'qish + kirish huquqi: jo'natuvchi YOKI qabul qiluvchi filialni
+   * o'qiy oladigan foydalanuvchi ko'radi. (3HKvAyhm) `findTransferBatchById`
+   * va `findTransferBatchHistory` uchun umumiy.
+   */
+  private async loadReadableTransferBatch(
+    id: string,
+    requester?: RequesterContext,
+  ) {
     const batchId = String(id ?? '').trim();
     if (!batchId) {
       this.badRequest('Partiya (batch) id majburiy');
@@ -3272,6 +3299,34 @@ export class BranchServiceService implements OnModuleInit {
     } else if (destinationBranchId) {
       await this.assertCanReadBranch(destinationBranchId, requester);
     }
+    return { batchId, response, sourceBranchId, destinationBranchId };
+  }
+
+  /**
+   * (3HKvAyhm) Filial nomlari — `{ id, name }` (o'chirilgan filial ham nomi
+   * bilan: tarixiy paket). Menejer `GET branches/:id` (faqat SA/admin) ni
+   * chaqira olmaydi, shuning uchun nom paket javobining o'zida.
+   */
+  private async transferBatchBranchRefs(
+    ids: string[],
+  ): Promise<Map<string, { id: string; name: string | null }>> {
+    const unique = Array.from(new Set(ids.filter(Boolean)));
+    if (!unique.length) return new Map();
+    const rows = await this.branchRepo.find({
+      where: { id: In(unique) },
+      select: ['id', 'name'],
+    });
+    return new Map(
+      rows.map((row) => [
+        String(row.id),
+        { id: String(row.id), name: row.name ?? null },
+      ]),
+    );
+  }
+
+  async findTransferBatchById(id: string, requester?: RequesterContext) {
+    const { response, sourceBranchId, destinationBranchId } =
+      await this.loadReadableTransferBatch(id, requester);
 
     const batchData = (response as { data?: Record<string, unknown> })?.data;
     if (!batchData || typeof batchData !== 'object') {
@@ -3314,11 +3369,61 @@ export class BranchServiceService implements OnModuleInit {
       }),
     );
 
+    const branchRefs = await this.transferBatchBranchRefs([
+      sourceBranchId,
+      destinationBranchId,
+    ]);
+
     return {
       ...batchRecord,
       items: enrichedItems,
       region: regionId ? (regionMap.get(regionId) ?? null) : null,
+      // (3HKvAyhm) barcha ruxsat etilgan rollar (menejer ham) nomni ko'radi.
+      source_branch: sourceBranchId
+        ? (branchRefs.get(sourceBranchId) ?? null)
+        : null,
+      destination_branch: destinationBranchId
+        ? (branchRefs.get(destinationBranchId) ?? null)
+        : null,
     };
+  }
+
+  /**
+   * (3HKvAyhm) `GET /transfer-batches/:id/history` — paket tarixi (yaratildi /
+   * jo'natildi / qabul qilindi / bekor qilindi), xronologik. Kirish —
+   * paketning o'zi kabi (jo'natuvchi yoki qabul qiluvchi filial). Har qatorda
+   * o'zbekcha `action_label` va bajargan foydalanuvchi `{ id, name }`
+   * (identity javob bermasa — `null`, ro'yxat yiqilmaydi).
+   */
+  async findTransferBatchHistory(id: string, requester?: RequesterContext) {
+    const { batchId } = await this.loadReadableTransferBatch(id, requester);
+    const res = await this.sendOrderCommand<{
+      data?: Array<Record<string, unknown>>;
+    }>('order.transfer_batch.history.find', { id: batchId });
+    const rows = Array.isArray(res?.data) ? res.data : [];
+    const userIds = rows
+      .map((row) => String((row?.user_id ?? '') as string).trim())
+      .filter((userId) => userId && userId !== '0');
+    const users = await this.getUsersByIdsBatch(userIds);
+    return successRes(
+      rows.map((row) => {
+        const action = String((row?.action ?? '') as string);
+        const userId = String((row?.user_id ?? '') as string).trim();
+        const user = users?.get(userId);
+        return {
+          ...row,
+          action_label: TRANSFER_BATCH_ACTION_LABELS[action] ?? action,
+          user: user
+            ? {
+                id: userId,
+                name: typeof user.name === 'string' ? user.name : null,
+              }
+            : null,
+        };
+      }),
+      200,
+      'Transfer batch history',
+    );
   }
 
   private async assertRequesterWorksInBranch(
@@ -4658,7 +4763,7 @@ export class BranchServiceService implements OnModuleInit {
   async reassignDistrict(input: GeoReassignInput) {
     const req = parseGeoReassignInput(input);
     assertGeoDeadline(req.deadlineAt);
-    let rows: Array<{ id: string; region_id: string | null }>;
+    let rows: Array<{ id: string; region_id: string | null; live?: unknown }>;
     try {
       rows = await this.branchRepo.manager.transaction(async (manager) => {
         if (req.ids && !req.ids.length) return [];
@@ -4667,13 +4772,17 @@ export class BranchServiceService implements OnModuleInit {
           .createQueryBuilder('t')
           .select('t.id', 'id')
           .addSelect('t.region_id', 'region_id')
+          // (vsmpTweI) tirikmi — `moved_live` uchun.
+          .addSelect('(t.is_deleted = false)', 'live')
           .where('t.district_id = :from', { from: req.from });
         if (req.ids) {
           select.andWhere('t.id = ANY(:ids)', { ids: req.ids });
         }
-        const locked = await select
-          .setLock('pessimistic_write')
-          .getRawMany<{ id: string; region_id: string | null }>();
+        const locked = await select.setLock('pessimistic_write').getRawMany<{
+          id: string;
+          region_id: string | null;
+          live: unknown;
+        }>();
         const ids = locked.map((row) => String(row.id));
         if (!ids.length) return locked;
         await manager

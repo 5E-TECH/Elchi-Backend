@@ -5,7 +5,7 @@ import { OrderServiceService } from './order-service.service';
  * oNAE3LW9 — hudud o'chirish himoyasi uchun buyurtma sanog'i va tumanlarni
  * birlashtirishdagi ko'chirish (ID qaytaradi + kompensatsiya rejimi).
  */
-type Row = { id: string; region_id: string | null };
+type Row = { id: string; region_id: string | null; live?: unknown };
 
 type Counts = { live: string | null; deleted: string | null } | undefined;
 
@@ -208,10 +208,11 @@ describe('OrderServiceService.countGeoUsage (oNAE3LW9)', () => {
 });
 
 describe('OrderServiceService.reassignDistrict (oNAE3LW9 TC5)', () => {
+  // (vsmpTweI) `live` — SELECT dagi tiriklik ustuni (13 — o'chirilgan).
   const rows: Row[] = [
-    { id: '11', region_id: '3' },
-    { id: '12', region_id: '3' },
-    { id: '13', region_id: null },
+    { id: '11', region_id: '3', live: true },
+    { id: '12', region_id: '3', live: true },
+    { id: '13', region_id: null, live: false },
   ];
 
   it('⭐ A → B: bitta tranzaksiyada qulflab ko`chiradi va ko`chgan ID + eski viloyatlarni qaytaradi', async () => {
@@ -229,6 +230,12 @@ describe('OrderServiceService.reassignDistrict (oNAE3LW9 TC5)', () => {
     // A o'chgach mavjud bo'lmagan district_id ga ishora qilib qolmasin.
     expect(selectQb.withDeleted).toHaveBeenCalled();
     expect(selectQb.setLock).toHaveBeenCalledWith('pessimistic_write');
+    expect(
+      (selectQb as { addSelect: jest.Mock }).addSelect,
+    ).toHaveBeenCalledWith(
+      '(t.is_deleted = false AND t.deleted_at IS NULL)',
+      'live',
+    );
     expect(updates).toEqual([
       {
         set: { district_id: '28', region_id: '4' },
@@ -241,6 +248,7 @@ describe('OrderServiceService.reassignDistrict (oNAE3LW9 TC5)', () => {
       from_district_id: '173',
       to_district_id: '28',
       moved: 3,
+      moved_live: 2,
       ids: ['11', '12', '13'],
       previous_regions: [
         { region_id: '3', ids: ['11', '12'] },

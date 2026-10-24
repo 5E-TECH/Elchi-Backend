@@ -375,3 +375,110 @@ export class ReceiveTransferBatchOrdersRequestDto {
   @MinLength(1, { each: true })
   order_ids?: string[];
 }
+
+/** (3HKvAyhm) Paketdagi filial — `{ id, name }`. */
+export class TransferBatchBranchRefDto {
+  @ApiProperty({ example: '3' })
+  id!: string;
+
+  @ApiProperty({ example: 'Andijon filiali', nullable: true, type: String })
+  name!: string | null;
+}
+
+/** (3HKvAyhm) `GET /transfer-batches/:id` — yangi maydonlar (qolganlari avvalgidek). */
+export class TransferBatchDetailDto {
+  @ApiProperty({ example: '601' })
+  id!: string;
+
+  @ApiProperty({ example: '3' })
+  source_branch_id!: string;
+
+  @ApiProperty({ example: '1' })
+  destination_branch_id!: string;
+
+  @ApiProperty({
+    type: TransferBatchBranchRefDto,
+    nullable: true,
+    description:
+      "3HKvAyhm: jo'natuvchi filial nomi — barcha ruxsat etilgan rollarga (menejer ham)",
+  })
+  source_branch!: TransferBatchBranchRefDto | null;
+
+  @ApiProperty({
+    type: TransferBatchBranchRefDto,
+    nullable: true,
+    description: '3HKvAyhm: qabul qiluvchi filial nomi',
+  })
+  destination_branch!: TransferBatchBranchRefDto | null;
+
+  @ApiPropertyOptional({
+    type: 'object',
+    additionalProperties: true,
+    nullable: true,
+  })
+  region?: Record<string, unknown> | null;
+
+  @ApiProperty({
+    type: 'array',
+    items: { type: 'object', additionalProperties: true },
+  })
+  items!: Record<string, unknown>[];
+}
+
+/** (3HKvAyhm) Tarix qatorini bajargan foydalanuvchi. */
+export class TransferBatchHistoryUserDto {
+  @ApiProperty({ example: '25' })
+  id!: string;
+
+  @ApiProperty({ example: 'Test Menejer', nullable: true, type: String })
+  name!: string | null;
+}
+
+/** (3HKvAyhm) `GET /transfer-batches/:id/history` qatori. */
+export class TransferBatchHistoryItemDto {
+  @ApiProperty({ example: '1201' })
+  id!: string;
+
+  @ApiProperty({ example: '601' })
+  batch_id!: string;
+
+  @ApiProperty({ example: '25' })
+  user_id!: string;
+
+  @ApiProperty({
+    enum: ['CREATED', 'SENT', 'RECEIVED', 'CANCELLED'],
+    example: 'SENT',
+  })
+  action!: string;
+
+  @ApiProperty({
+    example: "Jo'natildi",
+    description:
+      "O'zbekcha nom: Yaratildi / Jo'natildi / Qabul qilindi / Bekor qilindi",
+  })
+  action_label!: string;
+
+  @ApiProperty({ example: null, nullable: true, type: String })
+  notes!: string | null;
+
+  @ApiProperty({ example: '2026-10-24T09:15:00.000Z' })
+  created_at!: string;
+
+  @ApiProperty({
+    type: TransferBatchHistoryUserDto,
+    nullable: true,
+    description: "identity javob bermasa yoki tizim (user_id '0') — null",
+  })
+  user!: TransferBatchHistoryUserDto | null;
+}
+
+export class TransferBatchHistoryResponseDto {
+  @ApiProperty({ example: 200 })
+  statusCode!: number;
+
+  @ApiProperty({ example: 'Transfer batch history' })
+  message!: string;
+
+  @ApiProperty({ type: [TransferBatchHistoryItemDto] })
+  data!: TransferBatchHistoryItemDto[];
+}

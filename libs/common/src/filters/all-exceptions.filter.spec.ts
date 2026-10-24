@@ -294,5 +294,43 @@ describe('AllExceptionsFilter', () => {
       const out = publicErrorData({ data: { details } });
       expect(out?.details).toHaveLength(50);
     });
+
+    it('(tf324cXN) details obyekti ichidagi tekis ro‘yxat o‘tadi (bir daraja), chuqurrog‘i tashlanadi', () => {
+      const out = publicErrorData({
+        data: {
+          reason: 'count_mismatch',
+          details: {
+            reason: 'count_mismatch',
+            kind: 'orders',
+            mismatches: [
+              {
+                kind: 'orders',
+                district: 'target',
+                expected: 1254,
+                actual: 1255,
+                deep: { x: 1 },
+              },
+            ],
+            rolled_back: { orders: 5 },
+            empty: [],
+          },
+        },
+      });
+      expect(out).toEqual({
+        reason: 'count_mismatch',
+        details: {
+          reason: 'count_mismatch',
+          kind: 'orders',
+          mismatches: [
+            {
+              kind: 'orders',
+              district: 'target',
+              expected: 1254,
+              actual: 1255,
+            },
+          ],
+        },
+      });
+    });
   });
 });

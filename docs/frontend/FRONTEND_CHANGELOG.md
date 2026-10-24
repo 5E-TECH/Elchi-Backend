@@ -68,6 +68,97 @@ Hammasi qo'shimcha (additive) maydonlar — eski FE buzilmaydi.
   - Bo'lak olinmasa — `previous: null`, `series: null`, `failed_parts: ['trend']`.
   🔧 FE: delta = joriy − `previous`, sparkline — `series`; ikkinchi `analytics/dashboard` so'rovi olib tashlansin.
 
+### 2026-10-24 — Hududlar va pochta paketi (batch E) (tf324cXN, vsmpTweI, ILq3WNL1, tveJKICY, 3HKvAyhm)
+
+- [2026-10-24] ✏️ [logistics] — **`POST /district/:id/merge` xatosida mashina
+  o'qiydigan sabab** (tf324cXN). 409/503 javobiga `data` qo'shildi (gateway
+  `publicErrorData` orqali; xabar matni o'zgarmadi):
+
+  ```json
+  {
+    "statusCode": 409,
+    "message": "Birlashtirish bekor qilindi: tekshiruv mos kelmadi — …",
+    "data": {
+      "reason": "count_mismatch",
+      "details": {
+        "reason": "count_mismatch",
+        "kind": "orders",
+        "mismatches": [
+          { "kind": "orders", "district": "target", "expected": 1254, "actual": 1255 }
+        ],
+        "from_district_id": "173",
+        "to_district_id": "28",
+        "manual_fix": false
+      }
+    }
+  }
+  ```
+
+  - `reason` (`data.reason` = `data.details.reason`): `count_mismatch` |
+    `remote_refused` (servis rad etdi / ulanib bo'lmadi) | `timeout` |
+    `invalid_response` | `delete_failed` (tumanni o'chirish/qayta sanash);
+  - `details.kind` — qadam: `orders` | `users` | `branches` (`delete_failed`
+    da `null`; `count_mismatch` da — birinchi nomuvofiqlik turi);
+  - `details.mismatches[]` — faqat `count_mismatch`: `district: 'source'` —
+    A tumanda qoldiq (`expected: 0`), `'target'` — B jami ≠ eski B +
+    ko'chirilgan; sonlar JAMI (tirik + o'chirilgan);
+  - `details.timeout_ms` — faqat `timeout` (15000);
+  - `details.manual_fix` — `true` bo'lsa kompensatsiya chala (qo'lda
+    tuzatish oynasi), `details.stranded: [{ kind, district_id, count }]`
+    (`count: null` — ID'lar noma'lum). To'liq ID ro'yxati faqat activity
+    log'da.
+
+  Gateway filtri (`AF0fvJbw`) kengaydi: `details` obyekti ichida bir daraja
+  tekis ro'yxat (`mismatches`, `stranded`) ham o'tadi; chuqurrog'i baribir
+  tashlanadi. 🔧 FE: «Sabab» qatorini matndan emas, `data.reason` +
+  `data.details` dan quring (masalan «Sonlar mos kelmadi — buyurtmalar
+  1 255 ta, kutilgan 1 254 ta», «Foydalanuvchilar ko'chirilmadi — servis 15
+  soniya ichida javob bermadi»). HTTP kodini ko'rsatmang.
+
+- [2026-10-24] ✏️ [logistics] — **birlashtirish natijasida `moved_live`**
+  (vsmpTweI). `200` javobi `data`: `moved` (jami, o'chirilganlar bilan —
+  avvalgidek) + yangi `moved_live: { orders, users, branches }` — faqat
+  TIRIK yozuvlar, ko'chirish qadamining o'zi sanaydi (B oldin/keyin farqidan
+  emas). 🔧 FE: natija oynasidagi «Ko'chirildi» ro'yxati `moved_live` dan
+  (izoh «O'chirilgan yozuvlar sanalmaydi»), `target_after − target_before`
+  hisobi kerak emas.
+
+- [2026-10-24] ✏️ [activity-log] — **jurnal: `district.merge`** (ILq3WNL1).
+  Muvaffaqiyatli birlashtirish endi `action: 'district.merge'` (label
+  «Tuman birlashtirildi», kategoriya `logistics`, ton `green`), tavsif
+  «Tuman birlashtirildi: <A> (#173) → <B> (#28)»; `old_value` — A snapshot,
+  `new_value: { merged_into }`, `metadata: { moved, moved_live,
+  source_before, target_before, target_after }`. `district.merge_compensation_failed`
+  label'i → «Tuman birlashtirish chala qoldi» (tavsif «Tuman birlashtirish
+  chala qoldi: #A → #B», `metadata.reason_code` — yuqoridagi kod). Ikkalasi
+  ham `GET /activity-logs/actions` reyestrida (jurnal filtri). Eski
+  `deleted` + `merged_into` yozuvlari migratsiyasiz qoladi. 🔧 FE i18n:
+  ru «Район объединён» / «Объединение района не завершено», en «District
+  merged» / «District merge incomplete».
+
+- [2026-10-24] ✏️ [logistics] — **`GET /post` va `GET
+  /post/courier/old-posts`: `orders_total`, `amount_total`** (tveJKICY).
+  Sahifa javobiga (`data`, `total`, `page`, … yonida) ikki son qo'shildi —
+  JORIY FILTR bo'yicha, barcha sahifalar: `orders_total` — pochtalardagi
+  buyurtmalar (`order_quantity`) jami, `amount_total` — pochta summalari
+  (`post_total_price`) jami, so'm. Imkonsiz filtr — `0`. Boshqa ro'yxatlar
+  (masalan kuryerning barcha pochtalari) o'zgarmadi. 🔧 FE: `/mails/old`
+  xulosa qatori (`oldMails.tsx`) — «N ta pochta · M ta buyurtma · S so'm».
+
+- [2026-10-24] ✏️ [branch] — **`GET /transfer-batches/:id`: filial nomlari**
+  (3HKvAyhm). Javobga `source_branch` va `destination_branch` — `{ id, name }`
+  (`null` — filial topilmadi) qo'shildi; barcha ruxsat etilgan rollar
+  (MANAGER/REGISTRATOR/BRANCH ham) ko'radi. 🔧 FE: nom uchun `GET
+  branches/:id` (faqat SA/admin) chaqirmang.
+- [2026-10-24] 🆕 [branch] — **`GET /transfer-batches/:id/history`**
+  (3HKvAyhm; rollar `GET /transfer-batches/:id` bilan bir xil, kirish ham:
+  jo'natuvchi yoki qabul qiluvchi filial). Javob `data: [{ id, batch_id,
+  user_id, action, action_label, notes, created_at, user: { id, name } |
+  null }]`, xronologik (eng eskisi birinchi). `action`: `CREATED` |
+  `SENT` | `RECEIVED` | `CANCELLED`, `action_label` — «Yaratildi» /
+  «Jo'natildi» / «Qabul qilindi» / «Bekor qilindi». 🔧 FE: «Tarix» kartasi
+  shu endpointdan.
+
 ### 2026-10-24 — Uchala tarif bo'yicha taxminiy narx (6FLyjO6j uchun)
 
 - [2026-10-24] 🟢 [logistics] — yangi `POST /delivery/quote/by-tariff` (rollar `POST /delivery/quote` bilan bir xil):

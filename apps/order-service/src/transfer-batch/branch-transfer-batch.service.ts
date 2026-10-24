@@ -1107,6 +1107,44 @@ export class BranchTransferBatchService {
     return successRes(entity, 201, 'Transfer batch history added');
   }
 
+  /**
+   * (3HKvAyhm) Paket tarixini O'QISH: ilgari tarix faqat yozilardi
+   * (`order.transfer_batch.history.add`), o'qish yo'li yo'q edi — FE «Tarix»
+   * kartasi doim bo'sh edi. Xronologik tartibda (eng eskisi birinchi).
+   * Kirish huquqi branch-service'da (`findTransferBatchHistory`) tekshiriladi.
+   */
+  async findBranchTransferBatchHistory(batchId: string) {
+    const id = String(batchId ?? '').trim();
+    if (!id) {
+      this.badRequest('batch_id is required');
+    }
+
+    const batch = await this.transferBatchRepo.findOne({
+      where: { id, isDeleted: false },
+      select: ['id'],
+    });
+    if (!batch) {
+      this.notFound('Transfer batch not found');
+    }
+
+    const rows = await this.transferBatchHistoryRepo.find({
+      where: { batch_id: id },
+      order: { created_at: 'ASC', id: 'ASC' },
+    });
+    return successRes(
+      rows.map((row) => ({
+        id: row.id,
+        batch_id: row.batch_id,
+        user_id: row.user_id,
+        action: row.action,
+        notes: row.notes ?? null,
+        created_at: row.created_at,
+      })),
+      200,
+      'Transfer batch history',
+    );
+  }
+
   async findBranchTransferBatchById(batchId: string) {
     const id = String(batchId ?? '').trim();
     if (!id) {

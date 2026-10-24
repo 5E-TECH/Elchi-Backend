@@ -130,6 +130,178 @@ export class DistrictInUseErrorResponseDto {
   trace_id?: string;
 }
 
+/** vsmpTweI — `POST /district/:id/merge` 200 javobi. */
+export class DistrictMergeResultDto {
+  @ApiProperty({ example: '173' })
+  from_district_id!: string;
+
+  @ApiProperty({ example: '28' })
+  to_district_id!: string;
+
+  @ApiProperty({
+    type: DistrictUsageCountsDto,
+    example: { orders: 130, users: 2, branches: 1 },
+    description:
+      "Ko'chirilgan JAMI (o'chirilganlar bilan) — tekshiruv shunga tayanadi",
+  })
+  moved!: DistrictUsageCountsDto;
+
+  @ApiProperty({
+    type: DistrictUsageCountsDto,
+    example: { orders: 128, users: 2, branches: 1 },
+    description:
+      "vsmpTweI: ko'chirilganlardan faqat TIRIK (o'chirilmagan) lari — natija oynasidagi «Ko'chirildi» shu. Ko'chirish qadamining o'zi sanaydi (B oldin/keyin farqidan emas).",
+  })
+  moved_live!: DistrictUsageCountsDto;
+
+  @ApiProperty({
+    type: 'object',
+    additionalProperties: true,
+    description:
+      "B tumanning ko'chirishdan oldingi sanog'i (tirik + `deleted`)",
+  })
+  target_before!: Record<string, unknown>;
+
+  @ApiProperty({
+    type: 'object',
+    additionalProperties: true,
+    description: "B tumanning keyingi sanog'i (tirik + `deleted`)",
+  })
+  target_after!: Record<string, unknown>;
+}
+
+export class DistrictMergeResponseDto {
+  @ApiProperty({ example: 200 })
+  statusCode!: number;
+
+  @ApiProperty({ example: 'District merged' })
+  message!: string;
+
+  @ApiProperty({ type: DistrictMergeResultDto })
+  data!: DistrictMergeResultDto;
+}
+
+/** tf324cXN — birlashtirish tekshiruvidagi bitta nomuvofiqlik (JAMI: tirik + o'chirilgan). */
+export class DistrictMergeMismatchDto {
+  @ApiProperty({ enum: ['orders', 'users', 'branches'], example: 'orders' })
+  kind!: 'orders' | 'users' | 'branches';
+
+  @ApiProperty({
+    enum: ['source', 'target'],
+    example: 'target',
+    description:
+      "`source` — A (o'chiriladigan) tumanda qoldiq (kutilgan 0); `target` — B jami",
+  })
+  district!: 'source' | 'target';
+
+  @ApiProperty({ example: 1254 })
+  expected!: number;
+
+  @ApiProperty({ example: 1255 })
+  actual!: number;
+}
+
+/** tf324cXN — kompensatsiyadan keyin joyiga qaytmagan qatorlar (ID'larsiz; to'liq ro'yxat — activity log). */
+export class DistrictMergeStrandedDto {
+  @ApiProperty({ enum: ['orders', 'users', 'branches'], example: 'orders' })
+  kind!: 'orders' | 'users' | 'branches';
+
+  @ApiProperty({ example: '28', nullable: true, type: String })
+  district_id!: string | null;
+
+  @ApiProperty({
+    example: 5,
+    nullable: true,
+    type: Number,
+    description: "`null` — ID'lar noma'lum (javobi kelmagan bosqich)",
+  })
+  count!: number | null;
+}
+
+/** tf324cXN — `POST /district/:id/merge` xatosidagi `data.details`. */
+export class DistrictMergeErrorDetailsDto {
+  @ApiProperty({
+    enum: [
+      'count_mismatch',
+      'remote_refused',
+      'timeout',
+      'invalid_response',
+      'delete_failed',
+    ],
+    example: 'count_mismatch',
+  })
+  reason!: string;
+
+  @ApiProperty({
+    enum: ['orders', 'users', 'branches'],
+    nullable: true,
+    example: 'orders',
+    description:
+      'Qaysi qadam; `count_mismatch` da — birinchi nomuvofiqlik turi; `delete_failed` da `null`',
+  })
+  kind!: 'orders' | 'users' | 'branches' | null;
+
+  @ApiPropertyOptional({
+    example: 15000,
+    description: 'Faqat `timeout` da — servis javobini kutish chegarasi (ms)',
+  })
+  timeout_ms?: number;
+
+  @ApiPropertyOptional({
+    type: [DistrictMergeMismatchDto],
+    description: 'Faqat `count_mismatch` da',
+  })
+  mismatches?: DistrictMergeMismatchDto[];
+
+  @ApiProperty({ example: '173' })
+  from_district_id!: string;
+
+  @ApiProperty({ example: '28' })
+  to_district_id!: string;
+
+  @ApiProperty({
+    example: false,
+    description:
+      "`true` — kompensatsiya to'liq bo'lmadi, qo'lda tuzatish kerak (activity log: `district.merge_compensation_failed`)",
+  })
+  manual_fix!: boolean;
+
+  @ApiPropertyOptional({
+    type: [DistrictMergeStrandedDto],
+    description: 'Faqat `manual_fix: true` da',
+  })
+  stranded?: DistrictMergeStrandedDto[];
+}
+
+export class DistrictMergeErrorDataDto {
+  @ApiProperty({ example: 'count_mismatch' })
+  reason!: string;
+
+  @ApiProperty({ type: DistrictMergeErrorDetailsDto })
+  details!: DistrictMergeErrorDetailsDto;
+}
+
+/** tf324cXN — `POST /district/:id/merge` 409/503: birlashtirish bekor qilindi. */
+export class DistrictMergeErrorResponseDto {
+  @ApiProperty({ example: 409 })
+  statusCode!: number;
+
+  @ApiProperty({
+    example:
+      "Birlashtirish bekor qilindi: tekshiruv mos kelmadi — B tumandagi buyurtmalar soni 1255, kutilgan 1126 + 128 = 1254. Ko'chirilganlar A tumanga (#173) qaytarildi, tuman o'chirilmadi — qayta urinib ko'ring.",
+  })
+  message!: string;
+
+  @ApiProperty({ type: DistrictMergeErrorDataDto })
+  data!: DistrictMergeErrorDataDto;
+
+  @ApiPropertyOptional({
+    example: '7d0c2a4e-1b2f-4c3d-9e8f-0a1b2c3d4e5f',
+    type: String,
+  })
+  trace_id?: string;
+}
+
 export class CreateRegionRequestDto {
   @ApiProperty({ example: 'Namangan' })
   @IsNotEmpty()
@@ -210,6 +382,58 @@ export class BulkAssignRegionLogistRequestDto {
     message: "region_ids faqat viloyat id'laridan iborat bo'lishi kerak",
   })
   region_ids!: string[];
+}
+
+/** kA70Rban + tveJKICY — `GET /post`, `/post/courier/old-posts` sahifasi. */
+export class PostListPageDto {
+  @ApiProperty({
+    type: 'array',
+    items: { type: 'object', additionalProperties: true },
+  })
+  data!: Record<string, unknown>[];
+
+  @ApiProperty({ example: 59, description: 'Filtr bo‘yicha jami pochtalar' })
+  total!: number;
+
+  @ApiProperty({ example: 1 })
+  page!: number;
+
+  @ApiProperty({ example: 8 })
+  totalPages!: number;
+
+  @ApiProperty({ example: 8 })
+  limit!: number;
+
+  @ApiProperty({ example: false })
+  limit_capped!: boolean;
+
+  @ApiProperty({ example: 100 })
+  max_limit!: number;
+
+  @ApiProperty({
+    example: 412,
+    description:
+      'tveJKICY: joriy filtr bo‘yicha (barcha sahifalar) pochtalardagi buyurtmalar jami (`order_quantity` yig‘indisi)',
+  })
+  orders_total!: number;
+
+  @ApiProperty({
+    example: 61800000,
+    description:
+      'tveJKICY: joriy filtr bo‘yicha (barcha sahifalar) pochta summalari jami (`post_total_price`), so‘m',
+  })
+  amount_total!: number;
+}
+
+export class PostListPageResponseDto {
+  @ApiProperty({ example: 200 })
+  statusCode!: number;
+
+  @ApiProperty({ example: 'All posts (paginated)' })
+  message!: string;
+
+  @ApiProperty({ type: PostListPageDto })
+  data!: PostListPageDto;
 }
 
 export class CreatePostRequestDto {
