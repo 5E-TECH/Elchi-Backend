@@ -1585,6 +1585,7 @@ export class UserServiceService implements OnModuleInit {
       can_sell_cancel: admin.can_sell_cancel,
       language: admin.language,
       ai_price_per_order: admin.ai_price_per_order ?? null,
+      can_order_from_warehouse: admin.can_order_from_warehouse ?? false,
       district_id: admin.district_id ?? null,
       password_changed: false,
     };
@@ -1735,6 +1736,27 @@ export class UserServiceService implements OnModuleInit {
       );
     }
 
+    // hY7uacJu — «Ombordan buyurtma yaratish»: faqat SUPERADMIN/ADMIN, faqat
+    // MARKET yozuvida; RMQ'da ValidationPipe yo'q — qiymat boolean bo'lsin.
+    if (typeof dto.can_order_from_warehouse !== 'undefined') {
+      if (!requesterIsPrivileged || requesterIsSelf) {
+        this.forbidden(
+          "«Ombordan buyurtma yaratish» ruxsatini faqat admin yoki superadmin o'zgartira oladi",
+        );
+      }
+      if (admin.role !== Roles.MARKET) {
+        this.badRequest(
+          '«Ombordan buyurtma yaratish» ruxsati faqat market uchun',
+        );
+      }
+      if (typeof dto.can_order_from_warehouse !== 'boolean') {
+        this.badRequest(
+          "can_order_from_warehouse boolean (true/false) bo'lishi kerak",
+        );
+      }
+      admin.can_order_from_warehouse = dto.can_order_from_warehouse;
+    }
+
     /**
      * YEThmZBn — tuman (`district_id`). Ilgari DTO'da yo'q edi: PATCH
      * forbidNonWhitelisted tufayli 400 qaytarardi. Tuman mavjud va
@@ -1792,6 +1814,7 @@ export class UserServiceService implements OnModuleInit {
         can_sell_cancel: saved.can_sell_cancel,
         language: saved.language,
         ai_price_per_order: saved.ai_price_per_order ?? null,
+        can_order_from_warehouse: saved.can_order_from_warehouse ?? false,
         district_id: saved.district_id ?? null,
         // Surface that the password was rotated without ever logging its value.
         password_changed: Boolean(dto.password),
@@ -3416,11 +3439,13 @@ export class UserServiceService implements OnModuleInit {
       require_operator_phone: market.require_operator_phone,
       default_operator_phone: market.default_operator_phone,
       tg_group_show_customer_pii: market.tg_group_show_customer_pii,
+      can_order_from_warehouse: market.can_order_from_warehouse ?? false,
       password_changed: false,
     };
 
     // w2bDrE3i: tekshiruvlar HECH NARSA o'zgartirilmasdan OLDIN.
     this.assertCanSetMarketExtraCost(dto, requester);
+    this.assertCanSetMarketWarehouseOrder(dto, requester);
     const defaultOperatorPhone = this.resolveDefaultOperatorPhone(
       dto.default_operator_phone,
     );
@@ -3519,6 +3544,10 @@ export class UserServiceService implements OnModuleInit {
       market.default_operator_phone = defaultOperatorPhone;
     }
 
+    if (typeof dto.can_order_from_warehouse !== 'undefined') {
+      market.can_order_from_warehouse = dto.can_order_from_warehouse;
+    }
+
     const saved = await this.users.save(market);
     const revokedSessionIds = dto.password
       ? await this.revokeSessionsAfterPasswordChange(saved, {
@@ -3549,6 +3578,7 @@ export class UserServiceService implements OnModuleInit {
         require_operator_phone: saved.require_operator_phone,
         default_operator_phone: saved.default_operator_phone,
         tg_group_show_customer_pii: saved.tg_group_show_customer_pii,
+        can_order_from_warehouse: saved.can_order_from_warehouse ?? false,
         password_changed: Boolean(dto.password),
       },
     });
@@ -3556,6 +3586,33 @@ export class UserServiceService implements OnModuleInit {
       ...successRes(this.sanitize(saved), 200, 'Market yangilandi'),
       ...this.passwordChangeReply(revokedSessionIds),
     };
+  }
+
+  /**
+   * hY7uacJu — «Ombordan buyurtma yaratish» (`can_order_from_warehouse`) ni
+   * faqat SUPERADMIN/ADMIN o'zgartiradi (market o'zi yoki menejer — 403);
+   * qiymat boolean bo'lmasa — 400 (RMQ'da ValidationPipe yo'q).
+   */
+  private assertCanSetMarketWarehouseOrder(
+    dto: { can_order_from_warehouse?: unknown },
+    requester?: RequesterContext,
+  ): void {
+    if (dto.can_order_from_warehouse === undefined) {
+      return;
+    }
+    if (
+      !this.hasRole(requester, Roles.SUPERADMIN) &&
+      !this.hasRole(requester, Roles.ADMIN)
+    ) {
+      this.forbidden(
+        "«Ombordan buyurtma yaratish» ruxsatini faqat admin yoki superadmin o'zgartira oladi",
+      );
+    }
+    if (typeof dto.can_order_from_warehouse !== 'boolean') {
+      this.badRequest(
+        "can_order_from_warehouse boolean (true/false) bo'lishi kerak",
+      );
+    }
   }
 
   /**

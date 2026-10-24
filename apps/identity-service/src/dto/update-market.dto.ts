@@ -79,6 +79,11 @@ export class UpdateMarketDto {
   @IsBoolean()
   require_operator_phone?: boolean;
 
+  /** hY7uacJu: «Ombordan buyurtma yaratish» — faqat admin/superadmin. */
+  @IsOptional()
+  @IsBoolean()
+  can_order_from_warehouse?: boolean;
+
   /** VRyloH62: `+998XXXXXXXXX` ga keltiriladi; null/'' — o'chirish. */
   @IsOptional()
   @IsString()

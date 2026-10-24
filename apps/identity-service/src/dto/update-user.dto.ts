@@ -111,4 +111,12 @@ export class UpdateUserDto {
   @Min(0)
   @Max(AI_PRICE_PER_ORDER_MAX_UZS)
   ai_price_per_order?: number | null;
+
+  /**
+   * hY7uacJu — market «Ombordan buyurtma yaratish» kaliti. Faqat
+   * SUPERADMIN/ADMIN va faqat MARKET uchun.
+   */
+  @IsOptional()
+  @IsBoolean()
+  can_order_from_warehouse?: boolean;
 }
