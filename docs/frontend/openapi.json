@@ -2726,6 +2726,19 @@
             }
           },
           {
+            "name": "fulfillment_source",
+            "required": false,
+            "in": "query",
+            "description": "6kHnNH9j: «Ombordan» — WAREHOUSE (viloyat ombori), HQ — hozirgi oqim. Javob qatorida `fulfillment_source` va `warehouse: { id, name, branch_id } | null`.",
+            "schema": {
+              "enum": [
+                "HQ",
+                "WAREHOUSE"
+              ],
+              "type": "string"
+            }
+          },
+          {
             "name": "status",
             "required": false,
             "in": "query",
@@ -3398,6 +3411,18 @@
             "in": "query",
             "schema": {
               "type": "boolean"
+            }
+          },
+          {
+            "name": "fulfillment_source",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "enum": [
+                "HQ",
+                "WAREHOUSE"
+              ],
+              "type": "string"
             }
           },
           {
@@ -21627,6 +21652,15 @@
             "example": "1024",
             "description": "Almashtiriladigan eski buyurtma ID si (GET /orders/replaceable). Faqat shu marketning yetkazilgan buyurtmasi; yangi (new), boshqa marketniki yoki allaqachon almashtirilgani — 400."
           },
+          "fulfillment": {
+            "type": "string",
+            "enum": [
+              "auto",
+              "hq"
+            ],
+            "default": "auto",
+            "description": "auto — ombor (hamma mahsulot yetarli bo'lsa) yoki HQ; hq — har doim HQ. Natija javobdagi `fulfillment_source` (HQ | WAREHOUSE)."
+          },
           "customer_id": {
             "type": "string",
             "example": "1",
@@ -21939,6 +21973,14 @@
             "example": "sevinch",
             "maxLength": 100,
             "description": "Operator nomi — FAQAT matn (varchar). operator_id ga HECH QACHON bog‘lanmaydi."
+          },
+          "fulfillment": {
+            "type": "string",
+            "enum": [
+              "auto",
+              "hq"
+            ],
+            "description": "6kHnNH9j: shu buyurtma manbasi (auto | hq). Berilmasa — so‘rov darajasidagi `fulfillment`, u ham bo‘lmasa `auto`."
           }
         },
         "required": [
@@ -21952,6 +21994,15 @@
       "AiConfirmRequestDto": {
         "type": "object",
         "properties": {
+          "fulfillment": {
+            "type": "string",
+            "enum": [
+              "auto",
+              "hq"
+            ],
+            "default": "auto",
+            "description": "6kHnNH9j: partiyadagi hamma buyurtma manbasi (auto | hq; sukut auto). `orders[i].fulfillment` ustun."
+          },
           "market_id": {
             "type": "string",
             "example": "12",
@@ -22027,6 +22078,15 @@
             "type": "string",
             "example": "1024",
             "description": "Almashtiriladigan eski buyurtma ID si (GET /orders/replaceable). Faqat shu marketning yetkazilgan buyurtmasi; yangi (new), boshqa marketniki yoki allaqachon almashtirilgani — 400."
+          },
+          "fulfillment": {
+            "type": "string",
+            "enum": [
+              "auto",
+              "hq"
+            ],
+            "default": "auto",
+            "description": "auto — ombor (hamma mahsulot yetarli bo'lsa) yoki HQ; hq — har doim HQ. Natija javobdagi `fulfillment_source` (HQ | WAREHOUSE)."
           },
           "customer_id": {
             "type": "string",

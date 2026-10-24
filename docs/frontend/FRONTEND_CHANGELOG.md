@@ -23,6 +23,35 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-10-25 — Ombor ↔ buyurtma oqimi (6kHnNH9j, kontrakt `warehouse_v2_contract.md` B)
+
+Deploy: `migration:run` (1716000000153 — `order_schema.orders.fulfillment_source` sukut `HQ`, `warehouse_id`) →
+catalog-service, order-service, api-gateway. Eski buyurtmalar — `HQ`. Tarif va pul hisobi o'zgarmagan.
+
+- [2026-10-25] ✏️ [gateway/order] — **Yaratishda manba:** `POST /orders` tanasida ixtiyoriy
+  `fulfillment: "auto" | "hq"` (sukut `auto`; boshqa qiymat — 400). `POST /orders/ai-confirm` — so'rov darajasida
+  `fulfillment` (partiyaga) va/yoki `orders[i].fulfillment` (ustun), sukut `auto`.
+  - `auto` — buyurtma tumani filialida FAOL ombor bo'lsa va HAMMA mahsulot yetarli bo'lsa → ombor (band bilan),
+    aks holda butun buyurtma HQ'dan (bo'linmaydi). `hq` — har doim HQ.
+  - Ombordan faqat SUPERADMIN, ADMIN, REGISTRATOR va «Ombordan buyurtma yaratish» kaliti yoqilgan MARKET (va uning
+    operatori). Boshqa yaratuvchi (menejer, filial), katalogda yo'q mahsulot (`product_name`), tumansiz buyurtma,
+    Telegram bot yo'li — doim HQ.
+  - Band bo'lmasa (orada qoldiq tugadi, ombor to'xtatildi, catalog javob bermadi) — xato EMAS: buyurtma HQ bilan
+    yaratiladi. 🔧 FE: natijani javobdagi `fulfillment_source` dan ko'rsating (preview — `POST /warehouses/resolve-source`).
+- [2026-10-25] ✏️ [order] — **Ombor buyurtmasi yo'li:** `fulfillment_source: "WAREHOUSE"` buyurtma darhol
+  `status: "received"`, `branch_id` = ombor filiali (holder BRANCH, pochtasiz, HQ qabulisiz) — filial uni odatdagidek
+  kuryerga beradi (`POST /orders/assign-to-courier` yoki kuryer skani; skaner majburiy emas). Kuryerga berish →
+  omborda chiqim; kuryer bekor qilib bekor pochta bilan filialga qaytarganda, filial qabul qilishi bilan mahsulot
+  o'sha omborga qaytadi va buyurtma `status: "returned_to_market"`, `holder_type: "MARKET"` bilan yopiladi (HQ'ga
+  qaytarish va marketga topshirish YO'Q; tracking `action: "warehouse_returned"`). 🔧 FE: WAREHOUSE buyurtmada
+  `returned_to_market` ni «Omborga qaytdi» deb ko'rsating. Kuryerga berilmagan ombor buyurtmasini o'chirish
+  (SUPERADMIN, `received`) — band bo'shaydi. Qisman sotuvda sotilmagan qism (bola buyurtma) ham qaytganda omborga.
+- [2026-10-25] ✏️ [order] — **Javob (ro'yxat va detal):** har buyurtmada `fulfillment_source: "HQ" | "WAREHOUSE"` va
+  `warehouse: { id, name, branch_id } | null` (`GET /orders`, `GET /orders/:id`; catalog javob bermasa nom/filial
+  `null`). `POST /orders` javobida `fulfillment_source` va `warehouse_id`.
+- [2026-10-25] 🆕 [gateway/order] — **Filtr:** `GET /orders?fulfillment_source=WAREHOUSE` (yoki `HQ`; katta-kichik harf
+  farqsiz; boshqa qiymat — 400). `GET /orders/export/excel` ham shu filtrni qabul qiladi.
+
 ### 2026-10-24 — Ombor ruxsatlari (XtcEyQjb, kontrakt `warehouse_v2_contract.md` A)
 
 Deploy: `migration:run` (1716000000152 — `identity_schema.admins.can_view_warehouse_stock`, sukut `false`) →

@@ -290,6 +290,49 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
   `order.bulk_assign_batch`, `order.bulk_remove_from_batch`.
 - **Analytics source:** `order.analytics.*` (overview, revenue, courier/market
   stats, top couriers/markets/operators) — consumed by analytics-service.
+- **Warehouse fulfillment (6kHnNH9j, 2026-10-25, migration `1716000000153`)** —
+  `src/warehouse/order-warehouse.service.ts` (`OrderWarehouseService`); the
+  lifecycle only has call sites. `orders.fulfillment_source` varchar(16)
+  `HQ | WAREHOUSE` (default `HQ`, CHECK) + `warehouse_id` bigint (CHECK
+  `WAREHOUSE ⇔ warehouse_id`, partial index); old orders HQ.
+  - Create: `order.create` `dto.fulfillment` (`auto | hq`; ABSENT → HQ, so
+    bot / partner / import / partly-sell children stay HQ; the gateway sends
+    `auto` by default for `POST /orders` and ai-confirm, `hq` for the bot).
+    `planCreate`: `auto` + creator SA/ADMIN/REGISTRATOR/MARKET/MARKET_OPERATOR
+    + every item a catalog `product_id` + district (else region) + no explicit
+    placement (courier/post/batch/non-NEW status/external/parent) →
+    `catalog.warehouse.resolve_source` (3 s; error → HQ). WAREHOUSE plan →
+    `create()` → `createOnce(plan)`: order inserted `RECEIVED`,
+    `branch_id = home_branch_id = holder_branch_id = warehouse branch`
+    (holder BRANCH, no post, no HQ intake), then — inside the same tx —
+    `reserveForNewOrder`: a separately committed GUARD outbox event
+    (`catalog.warehouse.release`, scheduled +10 min, note
+    `order_create_guard`) → `catalog.warehouse.reserve` (order id = key) →
+    guard deleted in the order tx. Reserve fails (4xx: guard marked
+    published; timeout/5xx: guard kept) → `WarehouseReserveFallback` → tx
+    rolled back → `createOnce(null)` = the WHOLE order at HQ (new id). The
+    guard frees an orphan reservation after a lost reply / commit failure /
+    crash (release without reservation is a no-op).
+  - Transitions (`updateFull` → `writeOrderChanges` → `onOrderWritten`, same
+    tx, transactional outbox, target CATALOG): custody → COURIER (first time
+    or again) → `catalog.warehouse.out` (`lenient`; parent orders only);
+    `cancelled (sent)` → `cancelled` with holder BRANCH = `home_branch_id`
+    (the courier's canceled post received at the warehouse branch) →
+    `catalog.warehouse.return` (partly-sell child: parent's order id, the
+    child's items, key `child-order-<id>`) and the order is CLOSED in the same
+    tx: `returned_to_market`, holder MARKET, tracking action
+    `warehouse_returned` + custody event (no HQ return flow, no market
+    handover). A cancelled parcel received by another branch / HQ → no return
+    (stock stays OUT). `remove()` (SA, RECEIVED) → `catalog.warehouse.release`
+    (`lenient`). Partly-sell children inherit `fulfillment_source` /
+    `warehouse_id`. Outbox option `persistentPatterns` += `catalog.warehouse.*`
+    (never poisoned); catalog `out`/`release` with `lenient: true` answer
+    no-op instead of 409 (out after release / release after out), so a
+    reordered retry (return delivered before out) converges to the same stock.
+  - Reads: `findAll` filter `fulfillment_source` (HQ | WAREHOUSE, else 400);
+    `enrichOrders` adds `warehouse: { id, name, branch_id } | null`
+    (`catalog.warehouse.find_by_ids`; catalog down → `{ id, name: null,
+    branch_id: null }`).
 - **Heavy cross-service caller:** branch, finance, identity, catalog, logistics,
   integration, file. This is where most money/state orchestration lives.
 
@@ -547,7 +590,9 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
     foreign-market line → 400, nothing written. Inventory `counted` is
     absolute, reason required, `counted < reserved` → 409. Binding a factory
     barcode stays `PATCH /product/:id { barcode }`.
-  - Order RPCs (for order-service — NOT wired yet; next PR):
+  - Order RPCs (wired by order-service `OrderWarehouseService` since
+    6kHnNH9j — see order-service «Warehouse fulfillment»; `out` / `release`
+    also take `lenient: true` = no-op instead of 409, used by the outbox):
     `catalog.warehouse.resolve_source {region_id|district_id, items,
     market_id?, requester?}` → `{source: WAREHOUSE|HQ, reason, warehouse,
     items, shortages}` (read-only; district → `assigned_region ?? region_id`;
@@ -702,6 +747,14 @@ and assigned to couriers (`logistics.order.assign_to_courier`,
 / `could_not_deliver`. Return: `initiate_return` → `mark_returned_to_market`.
 `rollback_waiting` reverses sold/cancelled (settlement-aware). Full history in
 `order_tracking`; custody in `order_custody_event`.
+
+**Warehouse orders (6kHnNH9j):** `fulfillment_source = WAREHOUSE` orders skip
+HQ intake and posts — created `received` at the regional warehouse branch
+(stock reserved in catalog), assigned to a courier there (→ stock OUT), and a
+cancelled parcel received back at that branch goes straight back into stock
+and ends `returned_to_market` (holder MARKET) instead of the HQ return flow.
+Money (settlement, cashboxes) and tariffs are unchanged. Details: order-service
+«Warehouse fulfillment» above.
 
 **fix3 rules (2026-10-01)** — gateway and order-service enforce the same rules:
 - **Create** (`POST /orders`, `/orders/external`, bot, ai-confirm): for every
