@@ -10,6 +10,10 @@ import { BranchTransferBatchService } from './transfer-batch/branch-transfer-bat
 describe('BranchTransferBatchService transfer batch day filter (SqVMuhKo)', () => {
   function setup() {
     const qb = {
+      // (15N7AHkp) PENDING yig'ish ichki so'rovi ham shu mock'dan quriladi.
+      select: jest.fn().mockReturnThis(),
+      getQuery: jest.fn().mockReturnValue('SELECT 1'),
+      addOrderBy: jest.fn().mockReturnThis(),
       where: jest.fn().mockReturnThis(),
       andWhere: jest.fn().mockReturnThis(),
       orderBy: jest.fn().mockReturnThis(),

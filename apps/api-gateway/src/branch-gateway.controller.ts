@@ -400,7 +400,13 @@ export class BranchGatewayController {
     RoleEnum.MANAGER,
     RoleEnum.REGISTRATOR,
   )
-  @ApiOperation({ summary: 'List transfer batches' })
+  @ApiOperation({
+    summary: 'List transfer batches',
+    description:
+      "(15N7AHkp) Statussiz yoki `status=PENDING` da bir yo'nalishdagi (manba, manzil, yo'nalish, hudud) PENDING " +
+      "partiyalardan faqat eng yangisi qaytadi — yig'ish SQL'da, shuning uchun `meta.total`/`totalPages` HAQIQIY jami " +
+      '(ilgari sahifadagi qatorlar soni edi). Tartib: createdAt DESC, id DESC.',
+  })
   @ApiQuery({ name: 'source_branch_id', required: false, type: String })
   @ApiQuery({ name: 'destination_branch_id', required: false, type: String })
   @ApiQuery({
