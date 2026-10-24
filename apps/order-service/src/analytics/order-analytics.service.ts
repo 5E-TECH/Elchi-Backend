@@ -2695,20 +2695,29 @@ export class OrderAnalyticsService {
     startDate?: string,
     endDate?: string,
     period = 'daily',
+    // (6CYRjoZG) SA/ADMIN filial sahifasi «Kunlik daromad» — filial kesimi
+    // (`overview` bilan AYNI `applyAnalyticsBranchScope` qoidasi).
+    branchId?: string,
   ) {
     const normalizedPeriod = this.normalizeRevenuePeriod(period);
-    const { start, end } = this.analyticsDateRange(startDate, endDate);
+    const { start, end, applied_range } = this.analyticsDateRange(
+      startDate,
+      endDate,
+    );
     const soldStatuses = this.soldStatuses();
     const keySql = this.tashkentPeriodKeySql(normalizedPeriod);
 
-    const rows = await this.orderRepo
-      .createQueryBuilder('o')
-      .where('o.isDeleted = :isDeleted', { isDeleted: false })
-      .andWhere('o.sold_at BETWEEN :startMs AND :endMs', {
-        startMs: String(start.getTime()),
-        endMs: String(end.getTime()),
-      })
-      .andWhere('o.status IN (:...statuses)', { statuses: soldStatuses })
+    const rows = await this.applyAnalyticsBranchScope(
+      this.orderRepo
+        .createQueryBuilder('o')
+        .where('o.isDeleted = :isDeleted', { isDeleted: false })
+        .andWhere('o.sold_at BETWEEN :startMs AND :endMs', {
+          startMs: String(start.getTime()),
+          endMs: String(end.getTime()),
+        })
+        .andWhere('o.status IN (:...statuses)', { statuses: soldStatuses }),
+      branchId,
+    )
       .select(keySql, 'period_key')
       .addSelect('COUNT(*)', 'orders_count')
       .addSelect('COALESCE(SUM(o.total_price), 0)', 'revenue')
@@ -2771,6 +2780,7 @@ export class OrderAnalyticsService {
         totalOrders,
         avgRevenue,
       },
+      applied_range,
     };
   }
 }

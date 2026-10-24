@@ -1824,7 +1824,13 @@ export class OrderServiceController {
 
   @MessagePattern({ cmd: 'order.analytics.revenue' })
   analyticsRevenue(
-    @Payload() data: { startDate?: string; endDate?: string; period?: string },
+    @Payload()
+    data: {
+      startDate?: string;
+      endDate?: string;
+      period?: string;
+      branch_id?: string;
+    },
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
@@ -1832,6 +1838,8 @@ export class OrderServiceController {
         data.startDate,
         data.endDate,
         data.period,
+        // (6CYRjoZG) filial kesimi; yo'q bo'lsa — butun kompaniya (eski xulq).
+        data.branch_id,
       ),
     );
   }

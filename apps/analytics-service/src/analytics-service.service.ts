@@ -773,6 +773,10 @@ export class AnalyticsServiceService {
       endDate?: string;
       period?: string;
       all?: boolean;
+      // (6CYRjoZG) faqat SUPERADMIN/ADMIN uchun: `/branches/:id` «Filial
+      // ko'rsatkichlari». Boshqa rollarda e'tiborsiz (filial xodimi doim
+      // o'z filiali, kuryer/market — o'z kesimi).
+      branch_id?: string;
     },
   ) {
     const isAllTime = filter.all === true;
@@ -793,11 +797,21 @@ export class AnalyticsServiceService {
       roles.has(Roles.BRANCH) ||
       roles.has(Roles.MANAGER) ||
       roles.has(Roles.REGISTRATOR);
+    // (6CYRjoZG) SA/ADMIN `?branch_id=` bilan — tanlangan filial kesimi
+    // (overview/market/kuryer jadvallari, reytinglar + quyidagi qo'shimcha
+    // bo'laklar). Filial roli bo'lsa — baribir O'Z filiali (yuqorida).
+    const isAdminRole = roles.has(Roles.SUPERADMIN) || roles.has(Roles.ADMIN);
+    const requestedBranchId =
+      typeof filter.branch_id === 'string' ? filter.branch_id.trim() : '';
+    const adminBranchId =
+      !isBranchRole && isAdminRole && requestedBranchId
+        ? requestedBranchId
+        : null;
     // (VkwhHqvW) filial aniqlanmasa (branch-service xatosi) — 503, kompaniya
     // bo'yicha raqamlar emas.
     const branchId = isBranchRole
       ? await this.resolveRequesterBranchId(requester, true)
-      : null;
+      : adminBranchId;
     const scopedRange = branchId
       ? {
           ...dashboardRange,
@@ -940,6 +954,9 @@ export class AnalyticsServiceService {
       endDate: rankingWindow.endDate,
       include_meta: true,
     };
+    // (6CYRjoZG) SA/ADMIN filial ko'rinishi: «Kunlik daromad», holat donut,
+    // «Kuryerlar reytingi» — xuddi shu parallel bosqichda (byudjet o'zgarmaydi).
+    const isAdminBranchView = adminBranchId !== null;
     const [
       orders,
       markets,
@@ -947,6 +964,9 @@ export class AnalyticsServiceService {
       topMarkets,
       topBranches,
       branchDashboard,
+      dailyRevenue,
+      statusDistribution,
+      topCouriers,
     ] = await Promise.all([
       this.readPart(
         this.orderClient,
@@ -983,12 +1003,43 @@ export class AnalyticsServiceService {
         failedParts,
         'topBranches',
       ),
-      isBranchRole && branchId
+      (isBranchRole || isAdminBranchView) && branchId
         ? this.fetchBranchDashboard(branchId, requester, branchDashboardFilter)
+        : Promise.resolve(null),
+      isAdminBranchView
+        ? this.readPart(
+            this.orderClient,
+            'order.analytics.revenue',
+            { ...normalized, period: 'daily', branch_id: branchId },
+            failedParts,
+            'dailyRevenue',
+          )
+        : Promise.resolve(null),
+      isAdminBranchView
+        ? this.readPart(
+            this.orderClient,
+            'order.analytics.status_distribution',
+            { ...normalized, branch_id: branchId },
+            failedParts,
+            'statusDistribution',
+          )
+        : Promise.resolve(null),
+      isAdminBranchView
+        ? this.readPart(
+            this.orderClient,
+            'order.analytics.top_couriers',
+            { ...rankingRange, limit: COURIER_LEADERBOARD_SIZE },
+            failedParts,
+            'topCouriers',
+          )
         : Promise.resolve(null),
     ]);
     this.requirePart(orders, 'overview');
-    if (isBranchRole && branchId && branchDashboard === null) {
+    if (
+      (isBranchRole || isAdminBranchView) &&
+      branchId &&
+      branchDashboard === null
+    ) {
       failedParts.push('branchDashboard');
     }
 
@@ -1014,6 +1065,15 @@ export class AnalyticsServiceService {
         topBranches: topBranchesRanking.items,
         topBranchesMeta: topBranchesRanking.meta,
         branchDashboard,
+        ...(isAdminBranchView
+          ? this.adminBranchViewParts(
+              branchId as string,
+              dailyRevenue,
+              statusDistribution,
+              topCouriers,
+              rankingWindow,
+            )
+          : {}),
         degraded: failedParts.length > 0,
         failed_parts: failedParts.sort(),
         ...(allTime?.meta ?? {}),
@@ -1021,6 +1081,40 @@ export class AnalyticsServiceService {
       200,
       allTime?.message ?? 'Dashboard infos',
     );
+  }
+
+  /**
+   * (6CYRjoZG) SA/ADMIN `?branch_id=` javobining qo'shimcha bo'laklari
+   * (`/branches/:id` «Filial ko'rsatkichlari»): `branch_id` (qo'llangan
+   * filial), `dailyRevenue` (kunlik daromad bandlari, `/analytics/revenue`
+   * `data` bilan bir xil shakl), `statusDistribution` (holat → son, donut) va
+   * `topCouriers` (filial kuryerlari reytingi, ≥ min_orders). Bo'lak
+   * olinmasa — `null` + `failed_parts` (degraded).
+   */
+  private adminBranchViewParts(
+    branchId: string,
+    dailyRevenue: unknown,
+    statusDistribution: unknown,
+    topCouriers: unknown,
+    rankingWindow: DashboardRankingWindow,
+  ) {
+    const revenue =
+      dailyRevenue === null ? null : this.unwrapRevenue(dailyRevenue);
+    const status = this.unwrap<any>(statusDistribution as any);
+    const couriersRanking = this.dashboardRanking(topCouriers, rankingWindow);
+    return {
+      branch_id: branchId,
+      dailyRevenue: revenue,
+      statusDistribution:
+        status && typeof status === 'object' && status.distribution
+          ? {
+              distribution: status.distribution as Record<string, number>,
+              total: this.parseNumber(status.total),
+            }
+          : null,
+      topCouriers: topCouriers === null ? null : couriersRanking.items,
+      topCouriersMeta: couriersRanking.meta,
+    };
   }
 
   async getRevenueStats(

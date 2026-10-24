@@ -23,6 +23,8 @@ interface AnalyticsFilter {
   page?: number;
   limit?: number;
   all?: boolean;
+  // (6CYRjoZG) SA/ADMIN dashboardi — filial kesimi.
+  branch_id?: string;
 }
 
 interface AnalyticsPayload {
