@@ -1,4 +1,4 @@
-import { Inject, Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { ClientProxy, RpcException } from '@nestjs/microservices';
 import {
@@ -23,6 +23,7 @@ import {
   ActivityLogService,
   ActivityLogQuery,
   BranchTransferBatchStatus,
+  FULFILLMENT_SOURCES,
   Order_status,
   OutboxService,
   Roles,
@@ -42,6 +43,11 @@ import {
   toOrderScanLightView,
 } from './lookup/order-scan-light.view';
 import { OrderCustodyService } from './custody/order-custody.service';
+import {
+  OrderWarehouseService,
+  warehouseRefOf,
+  type WarehouseRef,
+} from './warehouse/order-warehouse.service';
 
 /** Qidiruvda identity-service'dan olinadigan mijozlar chegarasi. */
 const CUSTOMER_SEARCH_LIMIT = 1000;
@@ -305,6 +311,8 @@ export class OrderServiceService {
     private readonly activityLog: ActivityLogService,
     private readonly lookup: OrderLookupService,
     private readonly custody: OrderCustodyService,
+    // 6kHnNH9j: `warehouse: { id, name, branch_id }` boyitishi (ixtiyoriy).
+    @Optional() private readonly orderWarehouse?: OrderWarehouseService,
   ) {}
 
   async auditLogQuery(q: ActivityLogQuery) {
@@ -711,6 +719,8 @@ export class OrderServiceService {
     branch_id?: string;
     source?: Order_source | 'internal' | 'external' | 'branch';
     exclude_sources?: Array<Order_source | 'internal' | 'external' | 'branch'>;
+    /** 6kHnNH9j: `HQ` | `WAREHOUSE` (gateway tekshiradi). */
+    fulfillment_source?: string;
     unbatched_only?: boolean;
     fetch_all?: boolean | string;
     fetchAll?: boolean | string;
@@ -752,6 +762,7 @@ export class OrderServiceService {
       branch_id,
       source,
       exclude_sources,
+      fulfillment_source,
       unbatched_only,
       fetch_all,
       fetchAll,
@@ -896,6 +907,20 @@ export class OrderServiceService {
     if (excludeSourceFilters.length) {
       qb.andWhere('order.source NOT IN (:...excludeSourceFilters)', {
         excludeSourceFilters,
+      });
+    }
+    // 6kHnNH9j: «Ombordan» filtri. Noto'g'ri qiymat — 400 (bazaga yetmaydi).
+    const fulfillmentFilter = String(fulfillment_source ?? '')
+      .trim()
+      .toUpperCase();
+    if (fulfillmentFilter) {
+      if (
+        !(FULFILLMENT_SOURCES as readonly string[]).includes(fulfillmentFilter)
+      ) {
+        this.badRequest('fulfillment_source — HQ yoki WAREHOUSE');
+      }
+      qb.andWhere('order.fulfillment_source = :fulfillment_source', {
+        fulfillment_source: fulfillmentFilter,
       });
     }
     if (courier) {
@@ -2171,6 +2196,7 @@ export class OrderServiceService {
       regionsRes,
       productsRes,
       couriers,
+      warehouseRefs,
     ] = await Promise.all([
       marketIds.length
         ? rmqSend<{ data: Array<{ id: string; [key: string]: any }> }>(
@@ -2208,6 +2234,12 @@ export class OrderServiceService {
           ).catch(() => ({ data: [] }))
         : { data: [] },
       this.loadCourierSummaries(courierIds),
+      // 6kHnNH9j: faqat ombor buyurtmalari bo'lsa catalog'ga boriladi.
+      this.orderWarehouse
+        ? this.orderWarehouse.loadWarehouseRefs(
+            rows.map((row) => row.warehouse_id),
+          )
+        : Promise.resolve(new Map<string, WarehouseRef>()),
     ]);
 
     const toMap = (arr: Array<{ id: string; [key: string]: any }>) =>
@@ -2271,6 +2303,8 @@ export class OrderServiceService {
           ? (productMap.get(item.product_id) ?? null)
           : null,
       })),
+      // 6kHnNH9j: `fulfillment_source` — ustun (HQ | WAREHOUSE); ombor — ref.
+      warehouse: warehouseRefOf(row, warehouseRefs),
     }));
   }
 
@@ -2304,6 +2338,8 @@ export class OrderServiceService {
     // (findAllExternal shu yo'lni ishlatadi, DL6FCdrh). findAll ularni
     // qo'llab-quvvatlaydi; bu yerda faqat tip ochiladi.
     source?: Order_source | 'internal' | 'external' | 'branch';
+    /** 6kHnNH9j: HQ | WAREHOUSE — `findAll` ga o'tadi. */
+    fulfillment_source?: string;
     fetch_all?: boolean | string;
     disable_pagination?: boolean;
     page?: number;

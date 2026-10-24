@@ -31,6 +31,7 @@ import {
   IdempotencyModule,
   OutboxModule,
   ActivityLogModule,
+  DEFAULT_PERSISTENT_OUTBOX_PATTERNS,
 } from '@app/common';
 import { Order } from './entities/order.entity';
 import { OrderItem } from './entities/order-item.entity';
@@ -47,6 +48,7 @@ import { MarketCancelledHandoverSession } from './entities/market-cancelled-hand
 import { OrderExtraCostApproval } from './entities/order-extra-cost-approval.entity';
 
 import { CustomerSegmentService } from './segment/customer-segment.service';
+import { OrderWarehouseService } from './warehouse/order-warehouse.service';
 import { CustomerSegmentController } from './segment/customer-segment.controller';
 @Module({
   imports: [
@@ -95,6 +97,12 @@ import { CustomerSegmentController } from './segment/customer-segment.controller
           'notification.dispatch',
           'notification.telegram.order_status',
         ],
+        // 6kHnNH9j: ombor bandi/chiqimi/qaytishi — holat hodisasi, poison
+        // bo'lmaydi (catalog idempotent; `out`/`release` — `lenient`).
+        persistentPatterns: [
+          ...DEFAULT_PERSISTENT_OUTBOX_PATTERNS,
+          'catalog.warehouse.*',
+        ],
       },
     }),
     ActivityLogModule.forService('order-service'),
@@ -134,6 +142,8 @@ import { CustomerSegmentController } from './segment/customer-segment.controller
     // 5Z1ZvvzE: tuman LLM fallback'i (ai-service `ai.district.pick`).
     { provide: DISTRICT_PICKER, useClass: RmqDistrictPicker },
     DistrictLlmFallbackService,
+    // 6kHnNH9j: ombor ↔ buyurtma (yaratishda band, kuryerga chiqim, qaytish).
+    OrderWarehouseService,
   ],
 })
 export class OrderServiceModule {}
