@@ -110,7 +110,10 @@ describe('NwlmrcMf — Yuborilganlar ro‘yxatida auditoriya', () => {
       recipient: { id: '41', name: 'Aziz Karimov', role: 'courier' },
     });
     expect(identitySend).toHaveBeenCalledTimes(1);
-    expect(identitySend.mock.calls[0][1].ids.sort()).toEqual(['25', '41']);
+    const sent = (identitySend.mock.calls as unknown[][])[0][1] as {
+      ids: string[];
+    };
+    expect([...sent.ids].sort()).toEqual(['25', '41']);
     expect(notificationsQuery).not.toHaveBeenCalled();
   });
 
@@ -133,8 +136,10 @@ describe('NwlmrcMf — Yuborilganlar ro‘yxatida auditoriya', () => {
     ]);
     const [old, many, mixed] = await items();
     expect(notificationsQuery).toHaveBeenCalledTimes(1);
-    expect(notificationsQuery.mock.calls[0][1]).toEqual([['d-old']]);
-    expect(old.audience.recipient).toEqual({
+    expect((notificationsQuery.mock.calls as unknown[][])[0][1]).toEqual([
+      ['d-old'],
+    ]);
+    expect((old.audience as { recipient: unknown }).recipient).toEqual({
       id: '37',
       name: 'TEST Market',
       role: 'market',

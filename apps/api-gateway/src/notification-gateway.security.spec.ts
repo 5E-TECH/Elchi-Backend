@@ -156,7 +156,9 @@ describe('NotificationGatewayController — n0kLbx3d / Eh8y21Ha', () => {
         .post('/notifications')
         .send({ market_id: '5', group_id: '-100555', group_type: 'create' })
         .expect(410);
-      expect(String(res.body.message)).toContain('link-code');
+      expect(String((res.body as { message?: unknown }).message)).toContain(
+        'link-code',
+      );
       expect(send).not.toHaveBeenCalled();
     });
 

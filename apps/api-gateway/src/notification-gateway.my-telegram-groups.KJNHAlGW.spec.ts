@@ -40,6 +40,8 @@ describe('KJNHAlGW — GET /notifications/me/telegram-groups (gateway)', () => {
     await app.init();
   });
 
+  const http = () => app.getHttpServer() as Parameters<typeof request>[0];
+
   afterAll(async () => {
     await app?.close();
   });
@@ -58,12 +60,14 @@ describe('KJNHAlGW — GET /notifications/me/telegram-groups (gateway)', () => {
     '%s → 200; requester faqat JWT dan, query market_id uzatilmaydi',
     async (role, sub) => {
       user = { sub, roles: [role] };
-      const res = await request(app.getHttpServer())
+      const res = await request(http())
         .get('/notifications/me/telegram-groups?market_id=999')
         .expect(200);
-      expect(res.body.data).toEqual([]);
+      expect((res.body as { data: unknown }).data).toEqual([]);
       expect(notificationSend).toHaveBeenCalledTimes(1);
-      const [pattern, payload] = notificationSend.mock.calls[0];
+      const [pattern, payload] = (
+        notificationSend.mock.calls as unknown[][]
+      )[0];
       expect(pattern).toEqual({ cmd: 'notification.telegram.my_groups' });
       expect(payload).toEqual({ requester: { id: sub, roles: [role] } });
       expect(JSON.stringify(payload)).not.toContain('999');
@@ -74,7 +78,7 @@ describe('KJNHAlGW — GET /notifications/me/telegram-groups (gateway)', () => {
     '%s → 403, servisga so‘rov yo‘q',
     async (role) => {
       user = { sub: '25', roles: [role] };
-      await request(app.getHttpServer())
+      await request(http())
         .get('/notifications/me/telegram-groups')
         .expect(403);
       expect(notificationSend).not.toHaveBeenCalled();

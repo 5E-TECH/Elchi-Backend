@@ -6,6 +6,16 @@ import { BotChannelService } from './bot/bot-channel.service';
  * sabab, admin qo'lda o'chirsa 'manual', faollashtirilsa NULL; GET
  * /notifications va /:id javobida qaytadi; activity log old/new da bor.
  */
+/** Mock chaqiruvi argumenti (`unknown` — tipli tekshiruv uchun). */
+const callArg = (fn: jest.Mock, call = 0, arg = 0): unknown =>
+  (fn.mock.calls as unknown[][])[call][arg];
+const dataOf = (res: unknown) =>
+  (res as { data: Record<string, unknown> }).data;
+type Change = {
+  old_value: Record<string, unknown>;
+  new_value: Record<string, unknown>;
+};
+
 describe('G085w5Qr — Telegram guruhi nofaol sababi', () => {
   const row = (overrides: Record<string, unknown> = {}) => ({
     id: '10',
@@ -29,8 +39,8 @@ describe('G085w5Qr — Telegram guruhi nofaol sababi', () => {
     repo = {
       findOne: jest.fn(),
       findAndCount: jest.fn(),
-      save: jest.fn((v) => Promise.resolve(v)),
-      create: jest.fn((v) => v),
+      save: jest.fn((v: unknown) => Promise.resolve(v)),
+      create: jest.fn((v: unknown) => v),
     };
     activityLog = {
       log: jest.fn().mockResolvedValue(undefined),
@@ -47,23 +57,20 @@ describe('G085w5Qr — Telegram guruhi nofaol sababi', () => {
 
   it("PATCH is_active=false → inactive_reason='manual', inactive_at hozir; audit'da sabab", async () => {
     repo.findOne.mockResolvedValueOnce(row()).mockResolvedValueOnce(null);
-    const res = await service.updateTelegramMarket({
+    const res: unknown = await service.updateTelegramMarket({
       id: '10',
       is_active: false,
     } as never);
-    const data = res?.data as Record<string, unknown>;
+    const data = dataOf(res);
     expect(data.is_active).toBe(false);
     expect(data.inactive_reason).toBe('manual');
     expect(data.inactive_at).toBeInstanceOf(Date);
-    expect(activityLog.logChange).toHaveBeenCalledWith(
-      expect.objectContaining({
-        old_value: expect.objectContaining({ inactive_reason: null }),
-        new_value: expect.objectContaining({
-          is_active: false,
-          inactive_reason: 'manual',
-        }),
-      }),
-    );
+    const change = callArg(activityLog.logChange) as Change;
+    expect(change.old_value.inactive_reason).toBeNull();
+    expect(change.new_value).toMatchObject({
+      is_active: false,
+      inactive_reason: 'manual',
+    });
   });
 
   it('PATCH is_active=true (faollashtirish) → sabab va vaqt NULL', async () => {
@@ -76,20 +83,17 @@ describe('G085w5Qr — Telegram guruhi nofaol sababi', () => {
         }),
       )
       .mockResolvedValueOnce(null);
-    const res = await service.updateTelegramMarket({
+    const res: unknown = await service.updateTelegramMarket({
       id: '10',
       is_active: true,
     } as never);
-    const data = res?.data as Record<string, unknown>;
+    const data = dataOf(res);
     expect(data.is_active).toBe(true);
     expect(data.inactive_reason).toBeNull();
     expect(data.inactive_at).toBeNull();
-    expect(activityLog.logChange).toHaveBeenCalledWith(
-      expect.objectContaining({
-        old_value: expect.objectContaining({ inactive_reason: 'kicked' }),
-        new_value: expect.objectContaining({ inactive_reason: null }),
-      }),
-    );
+    const change = callArg(activityLog.logChange) as Change;
+    expect(change.old_value.inactive_reason).toBe('kicked');
+    expect(change.new_value.inactive_reason).toBeNull();
   });
 
   it("holat o'zgarmasa (nofaol → nofaol) bot sababi saqlanib qoladi", async () => {
@@ -99,11 +103,11 @@ describe('G085w5Qr — Telegram guruhi nofaol sababi', () => {
         row({ is_active: false, inactive_reason: 'left', inactive_at: at }),
       )
       .mockResolvedValueOnce(null);
-    const res = await service.updateTelegramMarket({
+    const res: unknown = await service.updateTelegramMarket({
       id: '10',
       is_active: false,
     } as never);
-    const data = res?.data as Record<string, unknown>;
+    const data = dataOf(res);
     expect(data.inactive_reason).toBe('left');
     expect(data.inactive_at).toBe(at);
   });
@@ -120,21 +124,21 @@ describe('G085w5Qr — Telegram guruhi nofaol sababi', () => {
       ],
       1,
     ]);
-    const list = await service.findAllTelegramMarkets({});
-    const select = repo.findAndCount.mock.calls[0][0].select;
-    expect(select).toEqual(
-      expect.objectContaining({ inactive_reason: true, inactive_at: true }),
-    );
-    const item = (list?.data as { items: Array<Record<string, unknown>> })
-      .items[0];
+    const list: unknown = await service.findAllTelegramMarkets({});
+    const { select } = callArg(repo.findAndCount) as {
+      select: Record<string, unknown>;
+    };
+    expect(select).toMatchObject({ inactive_reason: true, inactive_at: true });
+    const item = (dataOf(list).items as Array<Record<string, unknown>>)[0];
     expect(item.inactive_reason).toBe('chat_not_found');
     expect(item.inactive_at).toBe(at);
 
     repo.findOne.mockResolvedValueOnce(row());
-    const one = await service.findTelegramMarketById('10');
-    expect(one?.data).toEqual(
-      expect.objectContaining({ inactive_reason: null, inactive_at: null }),
-    );
+    const one: unknown = await service.findTelegramMarketById('10');
+    expect(dataOf(one)).toMatchObject({
+      inactive_reason: null,
+      inactive_at: null,
+    });
   });
 
   it.each(['kicked', 'left', 'blocked_on_send', 'chat_not_found'] as const)(
@@ -148,9 +152,9 @@ describe('G085w5Qr — Telegram guruhi nofaol sababi', () => {
         { get: jest.fn() } as never,
       );
       await channels.markInactive('-100555', 'elchi', reason);
-      expect(query.mock.calls[0][0]).toMatch(/"inactive_reason" = \$2/);
-      expect(query.mock.calls[0][0]).toMatch(/"inactive_at" = now\(\)/);
-      expect(query.mock.calls[0][1]).toEqual(['-100555', reason]);
+      expect(callArg(query)).toMatch(/"inactive_reason" = \$2/);
+      expect(callArg(query)).toMatch(/"inactive_at" = now\(\)/);
+      expect(callArg(query, 0, 1)).toEqual(['-100555', reason]);
     },
   );
 });

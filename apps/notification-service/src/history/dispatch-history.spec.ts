@@ -121,7 +121,10 @@ describe('7Vozou5x — dispatch tarixi (unit)', () => {
 
   it('(NwlmrcMf) bitta qabul qiluvchi — audience.recipient_id saqlanadi (ism/telefon YO‘Q)', async () => {
     await service.dispatch(dto({ recipient_ids: ['11'] }));
-    expect(history.begin.mock.calls[0][0].audience).toEqual({
+    const begun = (history.begin.mock.calls as unknown[][])[0][0] as {
+      audience: unknown;
+    };
+    expect(begun.audience).toEqual({
       recipient_ids: 1,
       recipient_id: '11',
     });

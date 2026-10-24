@@ -408,18 +408,18 @@ export class DispatchHistoryService {
     }
     if (!lookup.length) return out;
     try {
-      const found = (await this.notifications.query(
+      const found: Array<{
+        dispatch_id: string;
+        recipient_id: unknown;
+        recipient_role: string | null;
+      }> = await this.notifications.query(
         `SELECT DISTINCT ON (n."dispatch_id")
                 n."dispatch_id", n."recipient_id", n."recipient_role"
            FROM "notification_schema"."notifications" n
           WHERE n."dispatch_id" = ANY($1::text[])
           ORDER BY n."dispatch_id", n."id" ASC`,
         [lookup],
-      )) as Array<{
-        dispatch_id: string;
-        recipient_id: unknown;
-        recipient_role: string | null;
-      }>;
+      );
       for (const item of found) {
         const id = str(item.recipient_id);
         if (id)

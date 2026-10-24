@@ -80,8 +80,11 @@ describe('9HIaV80X — my_chat_member (bot chiqarildi / bloklandi)', () => {
 
       expect(deps.query.mock.calls[0][0]).toMatch(/SET "is_active" = false/);
       // (G085w5Qr) sabab ham qatorga yoziladi.
-      expect(deps.query.mock.calls[0][1]).toEqual(['-100555', status]);
-      expect(deps.query.mock.calls[0][0]).toMatch(
+      const [updateSql, updateParams] = (
+        deps.query.mock.calls as unknown[][]
+      )[0];
+      expect(updateParams).toEqual(['-100555', status]);
+      expect(updateSql).toMatch(
         /"inactive_reason" = \$2,\s+"inactive_at" = now\(\)/,
       );
       expect(deps.dispatch).toHaveBeenCalledWith(

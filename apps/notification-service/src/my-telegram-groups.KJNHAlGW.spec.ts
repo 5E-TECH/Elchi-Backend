@@ -6,6 +6,13 @@ import { NotificationServiceService } from './notification-service.service';
  * (KJNHAlGW) Market o'z Telegram guruhlari holati: har doim ikkala tur,
  * group_id/bot_slug yo'q, market_id faqat tokendan.
  */
+type FindArgs = {
+  where: Record<string, unknown>;
+  select: Record<string, unknown>;
+};
+const findArgs = (fn: jest.Mock) =>
+  (fn.mock.calls as unknown[][])[0][0] as FindArgs;
+
 describe('KJNHAlGW — findMyTelegramGroups', () => {
   let repo: { find: jest.Mock };
   let identity: { send: jest.Mock };
@@ -27,7 +34,7 @@ describe('KJNHAlGW — findMyTelegramGroups', () => {
     const res = await service.findMyTelegramGroups({
       requester: { id: '37', roles: ['market'] },
     });
-    expect(repo.find.mock.calls[0][0].where).toEqual({
+    expect(findArgs(repo.find).where).toEqual({
       market_id: '37',
       isDeleted: false,
     });
@@ -76,8 +83,8 @@ describe('KJNHAlGW — findMyTelegramGroups', () => {
     const res = await service.findMyTelegramGroups({
       requester: { id: '37', roles: ['market'] },
     });
-    expect(repo.find.mock.calls[0][0].select).not.toHaveProperty('group_id');
-    expect(repo.find.mock.calls[0][0].select).not.toHaveProperty('bot_slug');
+    expect(findArgs(repo.find).select).not.toHaveProperty('group_id');
+    expect(findArgs(repo.find).select).not.toHaveProperty('bot_slug');
     expect(res?.data).toEqual([
       {
         group_type: 'create',
@@ -107,7 +114,7 @@ describe('KJNHAlGW — findMyTelegramGroups', () => {
       { cmd: 'identity.user.find_by_id' },
       expect.objectContaining({ id: '501' }),
     );
-    expect(repo.find.mock.calls[0][0].where.market_id).toBe('37');
+    expect(findArgs(repo.find).where.market_id).toBe('37');
   });
 
   it('biriktirilmagan operator → 403, bazaga so‘rov yo‘q', async () => {
@@ -124,9 +131,7 @@ describe('KJNHAlGW — findMyTelegramGroups', () => {
     for (const requester of [{ id: '25', roles: ['admin'] }, undefined]) {
       await expect(
         service.findMyTelegramGroups({ requester }),
-      ).rejects.toMatchObject({
-        error: expect.objectContaining({ statusCode: 403 }),
-      });
+      ).rejects.toMatchObject({ error: { statusCode: 403 } });
     }
     expect(repo.find).not.toHaveBeenCalled();
   });

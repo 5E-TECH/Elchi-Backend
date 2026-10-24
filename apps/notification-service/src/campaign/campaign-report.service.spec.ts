@@ -88,15 +88,16 @@ describe('H7kpCman — CampaignReportService', () => {
 
   beforeEach(() => {
     rmqSendMock.mockReset();
-    rmqSendMock.mockImplementation((_c: unknown, pattern: any, data: any) =>
-      Promise.resolve({
-        data: (data.ids as string[]).map((id) =>
-          // (lkQiuyQu) contacts_by_ids — telefon (servis maskalaydi).
-          pattern?.cmd === 'identity.user.contacts_by_ids'
-            ? { id, phone_number: `+99890123${id.padStart(4, '0')}` }
-            : { id, name: `User ${id}`, role: 'customer' },
-        ),
-      }),
+    rmqSendMock.mockImplementation(
+      (_c: unknown, pattern: { cmd?: string } | undefined, data: any) =>
+        Promise.resolve({
+          data: (data.ids as string[]).map((id) =>
+            // (lkQiuyQu) contacts_by_ids — telefon (servis maskalaydi).
+            pattern?.cmd === 'identity.user.contacts_by_ids'
+              ? { id, phone_number: `+99890123${id.padStart(4, '0')}` }
+              : { id, name: `User ${id}`, role: 'customer' },
+          ),
+        }),
     );
     sql = [];
     updateResult = { affected: 1 };
