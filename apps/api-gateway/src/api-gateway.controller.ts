@@ -597,6 +597,8 @@ export class ApiGatewayController {
               tariff_home: dto.tariff_home,
               tariff_center: dto.tariff_center,
               region_id: branchRegionId || undefined,
+              // DtKKY0V8 — tuman identity'da tekshiriladi (mavjud + viloyat).
+              district_id: dto.district_id ?? undefined,
               branch_id: branchId,
             },
             requester: this.toRequester(req),
@@ -971,11 +973,24 @@ export class ApiGatewayController {
   })
   @ApiQuery({ name: 'page', required: false, type: Number, example: 1 })
   @ApiQuery({ name: 'limit', required: false, type: Number, example: 10 })
+  @ApiQuery({
+    name: 'telegram_linked',
+    required: false,
+    enum: ['true', 'false'],
+    description:
+      'yA31z7Rr — «Ulangan / Ulanmagan» chiplari: true — Telegram boti ' +
+      'ulangan (qatordagi `telegram_linked: true`), false — ulanmagan. Boshqa ' +
+      'filtrlar bilan AND; `meta.total` / `countsByRole` filtrdan keyin. ' +
+      'Boshqa qiymat — 400.',
+  })
   @ApiOkResponse({
     description:
-      'User list. YEThmZBn: har qatorda `branch: { id, name } | null` — ' +
-      'kuryer / menejer / registrator / filial xodimining filiali (boshqa ' +
-      'rollar va filial xizmati javob bermasa — null).',
+      'User list. YEThmZBn / kGIjOciz: har qatorda `branch_id: string | null` ' +
+      'va `branch: { id, name } | null` — kuryer / menejer / registrator / ' +
+      'filial xodimining filiali (boshqa rollar va filial xizmati javob ' +
+      'bermasa — null). x6IO746K: `role = market_operator` qatorlarida ' +
+      '`market: { id, name } | null` (market o`chirilgan / topilmagan — null; ' +
+      'boshqa rollarda kalit yo`q).',
   })
   async getUsers(
     @Query('search') search?: string,
@@ -986,11 +1001,10 @@ export class ApiGatewayController {
     @Query('page') page?: string,
     @Query('limit') limit?: string,
     @Req() req?: { user: JwtUser },
+    @Query('telegram_linked') telegramLinked?: string,
   ) {
     const resolvedRegionId = region_id ?? regionId;
-    const normalizedRole = String(role ?? '')
-      .trim()
-      .toLowerCase();
+    const telegramLinkedFilter = this.parseTelegramLinkedFilter(telegramLinked);
     const requesterRoles = (req?.user?.roles ?? []).map((item) =>
       String(item ?? '').toLowerCase(),
     );
@@ -1012,8 +1026,6 @@ export class ApiGatewayController {
     const canViewAllUsers =
       isSystemPrivileged || requesterRoles.includes(RoleEnum.MANAGER);
 
-    let scopedUserIds: string[] | undefined;
-
     // o5jS4rUS: kuryer/filial ko'lami FAQAT menejerga. Superadmin/admin hech
     // qaysi filialga biriktirilmagan — ilgari ular ham HQ'ga fallback qilib,
     // HQ'ga biriktirilmagan BARCHA viloyat kuryerlarini ro'yxatdan yashirardi
@@ -1022,7 +1034,6 @@ export class ApiGatewayController {
     const requesterCanHaveCourierScope =
       requesterRoles.includes(RoleEnum.MANAGER) && !isSystemPrivileged;
 
-    let branchCourierIds: string[] | undefined;
     let branchBoundUserIds: string[] | undefined;
     if (requesterCanHaveCourierScope && req?.user?.sub) {
       const assignment = await this.resolveBranchAssignment(req.user);
@@ -1063,31 +1074,6 @@ export class ApiGatewayController {
             .filter(Boolean),
         ),
       );
-      branchCourierIds = Array.from(
-        new Set(
-          branchUsers
-            .filter(
-              (row: any) =>
-                String(row?.role ?? '')
-                  .trim()
-                  .toUpperCase() === 'COURIER',
-            )
-            .map((row: any) => String(row?.user_id ?? '').trim())
-            .filter(Boolean),
-        ),
-      );
-    }
-
-    if (
-      normalizedRole === RoleEnum.COURIER &&
-      Array.isArray(branchCourierIds)
-    ) {
-      if (Array.isArray(scopedUserIds)) {
-        const branchCourierSet = new Set(branchCourierIds);
-        scopedUserIds = scopedUserIds.filter((id) => branchCourierSet.has(id));
-      } else {
-        scopedUserIds = branchCourierIds;
-      }
     }
 
     const response = await firstValueFrom(
@@ -1100,7 +1086,18 @@ export class ApiGatewayController {
               role,
               status,
               region_id: resolvedRegionId,
-              user_ids: scopedUserIds,
+              // yA31z7Rr — server tomonda (sahifalash va total to'g'ri).
+              telegram_linked: telegramLinkedFilter,
+              // 2CBnPAeg — menejer ko'lami identity SO'ROVIDA: kuryer va
+              // filial rolidagi foydalanuvchi faqat menejer filialiga
+              // biriktirilgan bo'lsa chiqadi (boshqa rollar cheklanmaydi).
+              // Ilgari sahifa olingandan KEYIN gateway'da filtrlanardi —
+              // `meta.total` / `totalUsers` sahifadagi qatorlar soniga teng,
+              // `countsByRole` esa ko'lamsiz edi. Endi ro'yxat, `total` va
+              // `countsByRole` bitta shart bilan (filial doirasida).
+              branch_scope: Array.isArray(branchBoundUserIds)
+                ? { user_ids: branchBoundUserIds }
+                : undefined,
               page: page ? Number(page) : undefined,
               limit: limit ? Number(limit) : undefined,
             },
@@ -1108,40 +1105,6 @@ export class ApiGatewayController {
         )
         .pipe(timeout(8000)),
     );
-
-    const items = Array.isArray(response?.data?.items)
-      ? response.data.items
-      : [];
-    if (!normalizedRole && Array.isArray(branchBoundUserIds)) {
-      const allowedBranchBoundIds = new Set(branchBoundUserIds);
-      const filteredItems = items.filter((row: any) => {
-        const rowRole = String(row?.role ?? '')
-          .trim()
-          .toLowerCase();
-        const shouldScopeByBranch =
-          rowRole === RoleEnum.COURIER ||
-          rowRole === RoleEnum.BRANCH ||
-          rowRole === 'branch_admin';
-
-        if (!shouldScopeByBranch) {
-          return true;
-        }
-        return allowedBranchBoundIds.has(String(row?.id ?? '').trim());
-      });
-
-      if (response?.data) {
-        response.data.items = filteredItems;
-        if (response.data.meta) {
-          response.data.meta.total = filteredItems.length;
-          response.data.meta.totalUsers = filteredItems.length;
-          const limitValue = Number(response.data.meta.limit ?? limit ?? 10);
-          response.data.meta.totalPages =
-            limitValue > 0
-              ? Math.max(1, Math.ceil(filteredItems.length / limitValue))
-              : 1;
-        }
-      }
-    }
 
     // fix #3: manager-only branch post-filter OLIB TASHLANDI — manager endi
     // admin/superadmin kabi BARCHA userlarni ko'radi (view parity). Tahrirlash
@@ -1158,6 +1121,23 @@ export class ApiGatewayController {
     }
 
     return response;
+  }
+
+  /**
+   * yA31z7Rr — `?telegram_linked=true|false` (katta-kichik harf farqsiz).
+   * Bo'sh / berilmagan — filtr yo'q; boshqa qiymat — 400 (jimgina
+   * e'tiborsiz qoldirilsa chip «Ulanmagan» bo'lsa ham hamma chiqardi).
+   */
+  private parseTelegramLinkedFilter(value?: string): boolean | undefined {
+    const normalized = String(value ?? '')
+      .trim()
+      .toLowerCase();
+    if (!normalized) return undefined;
+    if (normalized === 'true') return true;
+    if (normalized === 'false') return false;
+    throw new BadRequestException(
+      "telegram_linked faqat true yoki false bo'lishi mumkin",
+    );
   }
 
   /**
@@ -1227,7 +1207,11 @@ export class ApiGatewayController {
 
     for (const row of items) {
       if (row && typeof row === 'object') {
-        row.branch = branchByUser.get(rowId(row)) ?? null;
+        const branch = branchByUser.get(rowId(row)) ?? null;
+        // kGIjOciz — `branch_id` (= branch.id) ham: «Filial» filtri/ustuni
+        // uchun obyektni ochmasdan.
+        row.branch_id = branch?.id ?? null;
+        row.branch = branch;
       }
     }
   }
@@ -1238,7 +1222,13 @@ export class ApiGatewayController {
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Get user by id (admin/superadmin)' })
   @ApiParam({ name: 'id', description: 'User ID' })
-  @ApiOkResponse({ description: 'User by id' })
+  @ApiOkResponse({
+    description:
+      'User by id. kGIjOciz: `branch_id: string | null` va `branch: { id, ' +
+      'name } | null` (kuryer / menejer / registrator / filial xodimi; ' +
+      'boshqa rollar — null). x6IO746K: market operatorida `market: { id, ' +
+      'name } | null`.',
+  })
   @ApiNotFoundResponse({ description: 'Not found' })
   async getUserById(@Param('id') id: string, @Req() req?: { user?: JwtUser }) {
     // `id` is a bigint PK downstream. A non-numeric segment (e.g. /users/me,

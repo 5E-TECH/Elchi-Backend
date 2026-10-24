@@ -358,6 +358,23 @@ export class CreateCourierRequestDto {
   @IsNumber()
   @Min(0)
   tariff_center!: number;
+
+  // DtKKY0V8 — kuryer tumani yaratishda ham (PATCH /users/:id dagi qoida).
+  @ApiPropertyOptional({
+    type: String,
+    example: '41',
+    nullable: true,
+    description:
+      'DtKKY0V8 — kuryer tumani (raqamli satr). Tuman mavjud va kuryer ' +
+      "viloyatiga (filial viloyati) tegishli bo'lishi kerak, aks holda 400 " +
+      '(«Tuman topilmadi» / «Tuman foydalanuvchining viloyatiga tegishli ' +
+      "emas»); viloyati yo'q (HQ) — faqat mavjudligi. Berilmasa / null — " +
+      'tumansiz. Logistika javob bermasa — 503, kuryer yaratilmaydi.',
+  })
+  @IsOptional()
+  @IsString()
+  @Matches(/^\d{1,19}$/, { message: "district_id raqamli ID bo'lishi kerak" })
+  district_id?: string | null;
 }
 
 export class CreateManagerRequestDto {

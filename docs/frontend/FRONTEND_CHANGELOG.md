@@ -23,6 +23,79 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-10-24 — Foydalanuvchilar paketi (batch A)
+
+- [2026-10-24] ✏️ [gateway/identity] **kGIjOciz** — `GET /users` har
+  qatorida va `GET /users/:id` javobida filial obyektidan tashqari
+  `branch_id: string | null` ham (`branch: { id, name } | null` — 2026-10-23
+  dan, YEThmZBn). Qiymat `branch.id` bilan bir xil; filialsiz rol,
+  biriktirilmagan yoki filial xizmati javob bermasa — `null`.
+  🔧 FE: /all-users «Filial» ustuni va SA/admin detal sarlavhasi
+  `branch?.name` dan; filtr/solishtirish uchun `branch_id`.
+
+- [2026-10-24] ✏️ [gateway/identity] **2CBnPAeg** — menejerning
+  `GET /users` ro'yxati: filial ko'lami (kuryer va filial roli faqat menejer
+  filialiga biriktirilganlar; boshqa rollar to'liq) endi identity
+  so'rovida. `meta.total`, `meta.totalPages`, `meta.totalUsers` va
+  `meta.countsByRole` butun ko'lam bo'yicha, sahifalashdan OLDIN (ilgari
+  sahifadan keyin filtrlanib, `total` sahifada qolgan qatorlar soniga teng
+  edi va `countsByRole` ko'lamsiz edi). `?role=courier` tabi soni
+  `countsByRole.courier` bilan bir xil; `?role=branch` ham endi ko'lamda.
+  Superadmin/admin uchun o'zgarish yo'q.
+  🔧 FE: menejerda tab sonlarini yashirish shart emas — `countsByRole` dan
+  chizing.
+
+- [2026-10-24] 🆕 [gateway/identity] **yA31z7Rr** — `GET /users` yangi
+  query `telegram_linked=true|false` (katta-kichik harf farqsiz): `true` —
+  Telegram boti ulangan, `false` — ulanmagan (qatordagi `telegram_linked`
+  bilan aynan bir xil qoida). Boshqa filtrlar (`role`, `status`, `search`,
+  `region_id`, menejer ko'lami) bilan AND; `meta.total` / `countsByRole`
+  filtrdan keyin, sahifalash server tomonda. Bo'sh qiymat — filtr yo'q;
+  boshqa qiymat — **400** `"telegram_linked faqat true yoki false bo'lishi mumkin"`.
+  Ixtiyoriy `meta.telegram_linked_counts` qo'shilmadi (chip sonlari kerak
+  bo'lsa — alohida so'rov `?telegram_linked=…&limit=1` → `meta.total`).
+  🔧 FE: «Barchasi · Ulangan · Ulanmagan» chiplari shu parametrni yuborsin
+  (joriy sahifani frontendda filtrlamang).
+
+- [2026-10-24] ✏️ [identity] **x6IO746K** — market operatori marketi:
+  - `GET /users` qatorlari va `GET /users/:id`: `role = market_operator`
+    bo'lsa `market: { id, name } | null` (market o'chirilgan / topilmagan /
+    biriktirilmagan — `null`). Boshqa rollarda `market` kaliti YO'Q. Faqat
+    `id` va `name` — token, tariflar yo'q (GvL6ZFAd). Sahifa uchun bitta
+    so'rov (N+1 yo'q).
+  - `GET /auth/my-profile` (N13): operatorga `market: { id, name,
+    add_order } | null`.
+  🔧 FE: /all-users operator qatorida «Filial» o'rnida `market.name`
+  (telefon kartasida «· Baraka Shop»); operator kabinetida market nomi va
+  `add_order` — `my-profile.market` dan.
+
+- [2026-10-24] ✏️ [gateway/identity] **DtKKY0V8** — kuryer `district_id`:
+  - `POST /couriers` (`CreateCourierRequestDto`) — yangi ixtiyoriy
+    `district_id: string | null` (raqamli satr). Tuman mavjud va kuryer
+    viloyatiga (filial viloyati) tegishli bo'lishi kerak; viloyati yo'q (HQ)
+    kuryerda — faqat mavjudligi. Xatolar: **400** `"district_id raqamli ID
+    bo'lishi kerak"`, **400** `"Tuman topilmadi"`, **400** `"Tuman
+    foydalanuvchining viloyatiga tegishli emas"`, **503** logistika javob
+    bermasa — kuryer yaratilmaydi. Berilmasa / `null` — tumansiz.
+  - `PATCH /users/:id` (`UpdateAdminRequestDto` / identity `UpdateUserDto`)
+    — `district_id` 2026-10-23 dan bor (YEThmZBn), qoida bir xil;
+    o'zgarish yo'q.
+  🔧 FE (FY-5): kuryer yaratish formasida tuman tanlovi `district_id` bilan
+  yuborilsin.
+
+- [2026-10-24] ✏️ [gateway/identity] **9444UAa8** — `GET /customers/suggest`
+  endi qo'shimcha raqam (`extra_number`) bo'yicha ham topadi (asosiy
+  telefondagi kabi normallashtirilgan raqamlar; eski formatdagi yozuvlar ham).
+  Har taklifda yangi maydon `matched_by: "phone" | "extra_number" | "name"`
+  (ustuvorlik: asosiy telefon). Qo'shimcha raqam bo'yicha topilgan mijoz ham
+  market doirasidan o'tadi — shu marketda buyurtmasi bo'lmasa taklif
+  qilinmaydi (admin — doirasiz). Ichki `identity.customer.search` RPC'ga
+  ixtiyoriy `match_extra_number: true` qo'shildi; buyurtmalar ro'yxati
+  qidiruvi uni yubormaydi — natijasi o'zgarmagan.
+  🔧 FE (hiqRNhkI): `matched_by === "extra_number"` bo'lsa qatorda
+  «Qo'shimcha raqam: {extra_number}» belgisi (desktop ro'yxati va telefon
+  varaqasi); taxmin qilmang.
+
 ### 2026-10-24 — «Sessiyalar»: chiqarilgan qurilma SHU ZAHOTI login sahifasiga (socket `auth:session_revoked`) (Notion «Elchi Pochta» #3)
 
 - [2026-10-24] 🆕 [gateway/realtime] — sessiya yopilganda o'sha qurilmaning

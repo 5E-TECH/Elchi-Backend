@@ -6,6 +6,7 @@ import {
   IsOptional,
   IsPhoneNumber,
   IsString,
+  Matches,
   Min,
 } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
@@ -86,4 +87,14 @@ export class CreateCourierDto {
   @IsOptional()
   @IsString()
   branch_id?: string;
+
+  /**
+   * DtKKY0V8 — kuryer tumani: mavjud va kuryer viloyatiga (`region_id`)
+   * tegishli bo'lishi kerak (servis tekshiradi); berilmasa / null — tumansiz.
+   */
+  @ApiPropertyOptional({ example: '41', nullable: true })
+  @IsOptional()
+  @IsString()
+  @Matches(/^\d{1,19}$/, { message: "district_id raqamli ID bo'lishi kerak" })
+  district_id?: string | null;
 }

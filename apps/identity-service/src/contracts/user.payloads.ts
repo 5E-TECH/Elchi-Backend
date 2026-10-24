@@ -80,6 +80,18 @@ export interface UserFilterQuery {
   status?: string;
   region_id?: string;
   user_ids?: string[];
+  /**
+   * 2CBnPAeg — menejer ko'lami (faqat `identity.user.find_all`, GET /users):
+   * kuryer va filial rolidagi foydalanuvchi faqat `user_ids` ichida bo'lsa
+   * chiqadi (menejer filialiga biriktirilganlar); boshqa rollar cheklanmaydi.
+   * Ro'yxat ham, `total` / `countsByRole` ham shu shart bilan sanaladi.
+   */
+  branch_scope?: { user_ids?: string[] } | null;
+  /**
+   * yA31z7Rr — GET /users «Ulangan / Ulanmagan»: true — `telegram_id` bor,
+   * false — yo'q (javobdagi `telegram_linked` bilan bir xil qoida).
+   */
+  telegram_linked?: boolean | string | null;
   page?: number;
   limit?: number;
 }

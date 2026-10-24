@@ -37,7 +37,10 @@ const setup = (opts?: {
   summary?: Array<Record<string, unknown>>;
   operatorMarketId?: string | null;
 }) => {
-  const identitySend: Send = jest.fn((pattern) => {
+  const identitySend: Send = jest.fn<
+    Observable<unknown>,
+    [{ cmd: string }, any]
+  >((pattern) => {
     if (pattern.cmd === 'identity.customer.search') {
       return of({ success: true, data: opts?.customers ?? [] });
     }
@@ -49,8 +52,8 @@ const setup = (opts?: {
       },
     });
   });
-  const orderSend: Send = jest.fn(() =>
-    of({ statusCode: 200, data: { items: opts?.summary ?? [] } }),
+  const orderSend: Send = jest.fn<Observable<unknown>, [{ cmd: string }, any]>(
+    () => of({ statusCode: 200, data: { items: opts?.summary ?? [] } }),
   );
   const controller = new CustomerGatewayController(
     { send: identitySend } as any,
@@ -116,6 +119,8 @@ describe('hiqRNhkI — GET /customers/suggest', () => {
     expect(searchCall(identitySend)).toEqual({
       search: '991330152',
       limit: CUSTOMER_SUGGEST_CANDIDATES,
+      // 9444UAa8: qo'shimcha raqam bo'yicha ham.
+      match_extra_number: true,
     });
     // query'dagi market_id E'TIBORSIZ — doim o'z marketi.
     expect(orderSend).toHaveBeenCalledWith(
@@ -136,6 +141,8 @@ describe('hiqRNhkI — GET /customers/suggest', () => {
         has_new_orders: false,
         new_order_ids: [],
         last_order_at: null,
+        // 9444UAa8: identity `matched_by` bermasa — sukut `phone`.
+        matched_by: 'phone',
       },
     ]);
   });
@@ -247,6 +254,8 @@ describe('hiqRNhkI — GET /customers/suggest', () => {
     expect(searchCall(identitySend)).toEqual({
       search: '991330152',
       limit: CUSTOMER_SUGGEST_LIMIT,
+      // 9444UAa8: qo'shimcha raqam bo'yicha ham.
+      match_extra_number: true,
     });
     expect(orderSend).not.toHaveBeenCalled();
     expect(res.data[0]).toMatchObject({

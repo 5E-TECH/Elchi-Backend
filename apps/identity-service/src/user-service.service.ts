@@ -1002,10 +1002,36 @@ export class UserServiceService implements OnModuleInit {
       user_ids: Array.isArray(query.user_ids)
         ? query.user_ids.map((id) => String(id ?? '').trim()).filter(Boolean)
         : [],
+      // 2CBnPAeg: `null` — ko'lam yo'q; massiv (bo'sh ham) — ko'lam bor.
+      branch_scope_user_ids:
+        query.branch_scope && typeof query.branch_scope === 'object'
+          ? (Array.isArray(query.branch_scope.user_ids)
+              ? query.branch_scope.user_ids
+              : []
+            )
+              .map((id) => primitiveText(id).trim())
+              .filter((id) => /^\d{1,19}$/.test(id))
+          : null,
+      telegram_linked: this.normalizeTelegramLinkedFilter(
+        query.telegram_linked,
+      ),
       page,
       limit,
       skip: (page - 1) * limit,
     };
+  }
+
+  /**
+   * yA31z7Rr — RMQ'da ValidationPipe yo'q: `true`/`false` (yoki shu matnlar);
+   * berilmagan / bo'sh — filtr yo'q; boshqa qiymat — 400 (SQL'ga yetmaydi).
+   */
+  private normalizeTelegramLinkedFilter(value: unknown): boolean | undefined {
+    if (value === undefined || value === null || value === '') {
+      return undefined;
+    }
+    if (value === true || value === 'true') return true;
+    if (value === false || value === 'false') return false;
+    this.badRequest("telegram_linked faqat true yoki false bo'lishi mumkin");
   }
 
   /**
@@ -1931,7 +1957,7 @@ export class UserServiceService implements OnModuleInit {
         this.badRequest('Tuman topilmadi');
       }
       this.logger.warn(
-        `updateUser: logistics.district.find_by_id ${districtId} failed (${describeSagaError(error)})`,
+        `user district: logistics.district.find_by_id ${districtId} failed (${describeSagaError(error)})`,
       );
       throw new RpcException(
         errorRes(
@@ -2540,15 +2566,74 @@ export class UserServiceService implements OnModuleInit {
     )
       ? this.getUserBranchAssignment(String(safeUser.id), safeUser.role)
       : Promise.resolve(null);
-    const [profileRegion, branchAssignment] = await Promise.all([
+    // x6IO746K — market operatori: market `{ id, name }` (ro'yxat qatori bilan
+    // bir xil). Faqat gateway (`include_branch`) yo'li — ichki chaqiruvlar
+    // uchun so'rov ham, shakl ham o'zgarmagan.
+    const isMarketOperator = user.role === Roles.MARKET_OPERATOR;
+    const [profileRegion, branchAssignment, marketById] = await Promise.all([
       this.getRegionById(safeUser.region_id),
       branchLookup,
+      isMarketOperator
+        ? this.findMarketSummaries([user.market_id])
+        : Promise.resolve(null),
     ]);
+    const branch = this.toBranchSummary(branchAssignment);
     return successRes({
       ...safeUser,
       region: profileRegion,
-      branch: this.toBranchSummary(branchAssignment),
+      // kGIjOciz — `branch_id` ham (ro'yxat qatori bilan bir xil shakl):
+      // `branch.id` yoki null.
+      branch_id: branch?.id ?? null,
+      branch,
+      ...(marketById ? { market: this.marketSummaryOf(user, marketById) } : {}),
     });
+  }
+
+  /**
+   * x6IO746K — market operatorlarining marketlari: BITTA `IN` so'rovi, faqat
+   * tirik (o'chirilmagan) `market` rolidagi qatorlar va faqat ochiq maydonlar
+   * (`id`, `name`, `add_order`) — `market_tg_token`, tariflar va boshqa
+   * maxfiy maydonlar O'QILMAYDI ham (GvL6ZFAd).
+   */
+  private async findMarketSummaries(
+    marketIds: Array<string | null | undefined>,
+  ): Promise<Map<string, { id: string; name: string; add_order: boolean }>> {
+    const ids = Array.from(
+      new Set(
+        marketIds
+          .map((id) => primitiveText(id).trim())
+          .filter((id) => /^\d{1,19}$/.test(id)),
+      ),
+    );
+    if (!ids.length) {
+      return new Map();
+    }
+    const markets = await this.users.find({
+      where: { id: In(ids), role: Roles.MARKET, isDeleted: false },
+      select: { id: true, name: true, add_order: true },
+    });
+    return new Map(
+      markets.map((market) => [
+        String(market.id),
+        {
+          id: String(market.id),
+          name: market.name,
+          add_order: Boolean(market.add_order),
+        },
+      ]),
+    );
+  }
+
+  /**
+   * x6IO746K — operator qatori uchun `{ id, name }`; market o'chirilgan /
+   * topilmagan / biriktirilmagan — `null`.
+   */
+  private marketSummaryOf(
+    operator: Pick<User, 'market_id'>,
+    marketById: Map<string, { id: string; name: string }>,
+  ): { id: string; name: string } | null {
+    const market = marketById.get(primitiveText(operator.market_id).trim());
+    return market ? { id: market.id, name: market.name } : null;
   }
 
   /**
@@ -2589,10 +2674,22 @@ export class UserServiceService implements OnModuleInit {
       ? await this.getUserBranchAssignment(String(safeUser.id), safeUser.role)
       : null;
 
+    // x6IO746K (N13) — market operatori o'z kabinetida marketini ko'radi:
+    // `market: { id, name, add_order } | null` (o'chirilgan / topilmagan —
+    // null). Boshqa rollarda kalit yo'q (avvalgi shakl).
+    let operatorMarket = {};
+    if (user.role === Roles.MARKET_OPERATOR) {
+      const marketById = await this.findMarketSummaries([user.market_id]);
+      operatorMarket = {
+        market: marketById.get(primitiveText(user.market_id).trim()) ?? null,
+      };
+    }
+
     return successRes({
       ...safeUser,
       region: profileRegion,
       branch: profileBranch,
+      ...operatorMarket,
     });
   }
 
@@ -2646,8 +2743,18 @@ export class UserServiceService implements OnModuleInit {
   }
 
   async findAllAdmins(query: UserFilterQuery = {}) {
-    const { search, role, status, region_id, user_ids, page, limit, skip } =
-      this.normalizeQuery(query);
+    const {
+      search,
+      role,
+      status,
+      region_id,
+      user_ids,
+      branch_scope_user_ids,
+      telegram_linked,
+      page,
+      limit,
+      skip,
+    } = this.normalizeQuery(query);
 
     const baseQb = this.users
       .createQueryBuilder('admin')
@@ -2684,6 +2791,39 @@ export class UserServiceService implements OnModuleInit {
 
     if (user_ids.length) {
       baseQb.andWhere('admin.id IN (:...user_ids)', { user_ids });
+    }
+
+    // yA31z7Rr — «Ulangan / Ulanmagan»: javobdagi `telegram_linked`
+    // (`Boolean(telegram_id)`) bilan aynan bir xil — bo'sh satr ham «ulanmagan».
+    // `baseQb` da: total ham, countsByRole ham filtrdan keyin.
+    if (telegram_linked !== undefined) {
+      baseQb.andWhere(
+        telegram_linked
+          ? "COALESCE(admin.telegram_id, '') <> ''"
+          : "COALESCE(admin.telegram_id, '') = ''",
+      );
+    }
+
+    /**
+     * 2CBnPAeg — menejer ko'lami SO'ROVDA (ilgari gateway sahifadan keyin
+     * filtrlardi: `meta.total` sahifadagi qatorlar soni, `countsByRole`
+     * ko'lamsiz). Kuryer / filial roli — faqat menejer filialiga
+     * biriktirilganlar; qolgan rollar cheklanmaydi. `baseQb` ga qo'shiladi —
+     * ro'yxat, `total` va `countsByRole` bir xil doirada.
+     */
+    if (branch_scope_user_ids) {
+      baseQb.andWhere(
+        new Brackets((scoped) => {
+          scoped.where('admin.role NOT IN (:...branchScopedRoles)', {
+            branchScopedRoles: [Roles.COURIER, Roles.BRANCH],
+          });
+          if (branch_scope_user_ids.length) {
+            scoped.orWhere('admin.id IN (:...branchScopeUserIds)', {
+              branchScopeUserIds: branch_scope_user_ids,
+            });
+          }
+        }),
+      );
     }
 
     const listQb = baseQb.clone();
@@ -2725,8 +2865,21 @@ export class UserServiceService implements OnModuleInit {
     const totalMarket = countsByRole[Roles.MARKET] ?? 0;
     const totalEmployees = totalUsers - totalMarket;
 
+    // x6IO746K — market operatori qatorlariga market `{ id, name }` (sahifa
+    // bo'yicha BITTA IN so'rovi, N+1 yo'q).
+    const marketById = await this.findMarketSummaries(
+      rows
+        .filter((row) => row.role === Roles.MARKET_OPERATOR)
+        .map((row) => row.market_id),
+    );
+
     return successRes({
-      items: rows.map((row) => this.sanitize(row)),
+      items: rows.map((row) => {
+        const safe = this.sanitize(row);
+        return row.role === Roles.MARKET_OPERATOR
+          ? { ...safe, market: this.marketSummaryOf(row, marketById) }
+          : safe;
+      }),
       meta: {
         page,
         limit,
@@ -2906,6 +3059,16 @@ export class UserServiceService implements OnModuleInit {
     this.assertRequesterCanCreateCourier(requester);
 
     await this.validateRegionExists(dto.region_id);
+    // DtKKY0V8 — tuman (ixtiyoriy): PATCH /users/:id dagi qoida — mavjud va
+    // kuryer viloyatiga tegishli (viloyatsiz HQ kuryeri — faqat mavjudligi);
+    // aks holda 400, logistika javob bermasa 503. Hammasi user yozilishidan
+    // OLDIN — xatoda kompensatsiya kerak emas.
+    const districtId =
+      dto.district_id === undefined ||
+      dto.district_id === null ||
+      dto.district_id === ''
+        ? null
+        : await this.resolveUserDistrictId(dto.district_id, dto.region_id);
     await this.ensurePhoneUnique(dto.phone_number);
 
     const hashedPassword = await this.bcryptEncryption.encrypt(dto.password);
@@ -2918,6 +3081,7 @@ export class UserServiceService implements OnModuleInit {
       salary: dto.salary,
       payment_day: dto.payment_day ?? this.getBusinessPaymentDay(),
       region_id: dto.region_id,
+      district_id: districtId,
       role: Roles.COURIER,
       status: Status.ACTIVE,
       // fix #3: created_by — manager egaligi uchun.
@@ -4407,7 +4571,17 @@ export class UserServiceService implements OnModuleInit {
     }
   }
 
-  async searchCustomers(search: string, limit = 1000) {
+  async searchCustomers(
+    search: string,
+    limit = 1000,
+    /**
+     * 9444UAa8 — `matchExtraNumber`: qo'shimcha raqam (`extra_number`) ham
+     * asosiy telefon kabi (normallashtirilgan raqamlar) qidiriladi. Faqat
+     * mijoz taklifi (GET /customers/suggest) yoqadi — buyurtmalar ro'yxati
+     * qidiruvi (order-service) va almashtirish qidiruvi o'zgarmagan.
+     */
+    options: { matchExtraNumber?: boolean } = {},
+  ) {
     if (!search?.trim()) {
       return { success: true, data: [] };
     }
@@ -4420,6 +4594,7 @@ export class UserServiceService implements OnModuleInit {
     // Buyurtmalar ro'yxati qidiruvi (order-service `search`) ham shu RPC'dan
     // o'tadi.
     const phoneSearch = parseUzPhoneSearch(search);
+    const matchExtraNumber = options.matchExtraNumber === true;
     const qb = this.users
       .createQueryBuilder('u')
       .where('u.isDeleted = :isDeleted', { isDeleted: false })
@@ -4431,6 +4606,13 @@ export class UserServiceService implements OnModuleInit {
             { s: `%${search.trim()}%` },
           );
           this.orWherePhoneDigits(q, 'u', phoneSearch);
+          // 9444UAa8: qo'shimcha raqam — faqat telefon ko'rinishidagi
+          // qidiruvda (7+ raqam) va o'sha normallashtirilgan raqamlar bilan.
+          if (matchExtraNumber && phoneSearch) {
+            q.orWhere(uzPhoneDigitsLikeSql('u.extra_number', 'extraDigits'), {
+              extraDigits: `%${phoneSearch.digits}%`,
+            });
+          }
         }),
       )
       // Barqaror tartib: limitdan oshganda qaysi mijozlar qaytishi tasodifiy
@@ -4441,8 +4623,47 @@ export class UserServiceService implements OnModuleInit {
     const rows = await qb.getMany();
     return {
       success: true,
-      data: rows.map((r) => this.sanitize(r)),
+      data: rows.map((r) => ({
+        ...this.sanitize(r),
+        matched_by: this.customerMatchedBy(
+          r,
+          search,
+          phoneSearch,
+          matchExtraNumber,
+        ),
+      })),
     };
+  }
+
+  /**
+   * 9444UAa8 — qaysi maydon mos keldi (SQL shartlarining aynan o'zi, ustuvorlik:
+   * asosiy telefon → qo'shimcha raqam → ism). Frontend «Qo'shimcha raqam: …»
+   * belgisini taxmin bilan emas, shu maydondan chizadi.
+   */
+  private customerMatchedBy(
+    row: Pick<User, 'phone_number' | 'extra_number'>,
+    search: string,
+    phoneSearch: UzPhoneSearch | null,
+    matchExtraNumber: boolean,
+  ): 'phone' | 'extra_number' | 'name' {
+    const needle = search.trim().toLowerCase();
+    const digitsOf = (value: unknown) =>
+      primitiveText(value).replace(/[^0-9]/g, '');
+    const phone = primitiveText(row.phone_number);
+    if (
+      phone.toLowerCase().includes(needle) ||
+      (phoneSearch && digitsOf(phone).includes(phoneSearch.digits))
+    ) {
+      return 'phone';
+    }
+    if (
+      matchExtraNumber &&
+      phoneSearch &&
+      digitsOf(row.extra_number).includes(phoneSearch.digits)
+    ) {
+      return 'extra_number';
+    }
+    return 'name';
   }
 
   async findByUsernameForAuth(username: string) {
