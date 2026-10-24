@@ -1064,6 +1064,7 @@ export class LogisticsGatewayController {
   }
 
   // ---------- Region ----------
+  // (OfRSoRUX / N11) MARKET_OPERATOR — qo'lda buyurtma formasi uchun.
   @Get('region')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(
@@ -1073,6 +1074,7 @@ export class LogisticsGatewayController {
     RoleEnum.REGISTRATOR,
     RoleEnum.MARKET,
     RoleEnum.COURIER,
+    RoleEnum.MARKET_OPERATOR,
   )
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Get all regions' })
@@ -1372,6 +1374,7 @@ export class LogisticsGatewayController {
   }
 
   // ---------- District ----------
+  // (OfRSoRUX / N11) MARKET_OPERATOR — qo'lda buyurtma formasi uchun.
   @Get('district')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(
@@ -1381,6 +1384,7 @@ export class LogisticsGatewayController {
     RoleEnum.REGISTRATOR,
     RoleEnum.MARKET,
     RoleEnum.COURIER,
+    RoleEnum.MARKET_OPERATOR,
   )
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Get all districts' })

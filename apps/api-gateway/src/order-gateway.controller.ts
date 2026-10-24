@@ -1907,6 +1907,11 @@ export class OrderGatewayController {
     RoleEnum.MARKET,
     RoleEnum.MANAGER,
     RoleEnum.BRANCH,
+    // (OfRSoRUX, ega qarori 2026-10-19 MO-S3) market operatori qo'lda ham
+    // yaratadi. Mantiq `createOrderInternal` da (AI yo'li bilan AYNI): market —
+    // identity `user.market_id` (tanadagi market_id E'TIBORSIZ), `operator_id`
+    // — operatorning o'zi, `operator` bo'sh bo'lsa — uning ismi.
+    RoleEnum.MARKET_OPERATOR,
   )
   @ApiBearerAuth()
   @ApiOperation({
@@ -1914,7 +1919,10 @@ export class OrderGatewayController {
     description:
       "gpCIsGjH: `Idempotency-Key` sarlavhasi bilan takroriy so'rov (ikki marta bosish, retry) ikkinchi buyurtma yaratmaydi — " +
       "keshlangan javob `idempotent_replay: true` bilan qaytadi; birinchisi hali bajarilayotgan bo'lsa 409. " +
-      'Kalitsiz — har so`rov alohida buyurtma (avvalgidek).',
+      'Kalitsiz — har so`rov alohida buyurtma (avvalgidek). ' +
+      'OfRSoRUX: MARKET_OPERATOR ham yaratadi — market server tomonda (operator biriktirilgan market; ' +
+      "tanadagi `market_id` e'tiborsiz, marketga biriktirilmagan operator — 400), `operator` bo'sh bo'lsa " +
+      'operator ismi yoziladi, javob market proyeksiyasida (kuryer tarifi/ulushi va filial ulushisiz).',
   })
   @ApiHeader({
     name: 'Idempotency-Key',
