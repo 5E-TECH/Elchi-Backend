@@ -130,7 +130,10 @@ function build(
     }),
     findOne: jest.fn(() => Promise.resolve(saved[saved.length - 1] ?? null)),
   };
-  const settingsRepo = { manager: { transaction: jest.fn() } };
+  const settingsRepo = {
+    manager: { transaction: jest.fn() },
+    find: jest.fn(() => Promise.resolve([SETTINGS])),
+  };
   const catalogClient = {
     send: jest.fn((_pattern: { cmd: string }, payload: { ids: string[] }) =>
       options.catalogFails
@@ -159,7 +162,7 @@ function build(
     .mockImplementation(() =>
       Promise.resolve(options.noSettings ? null : (SETTINGS as never)),
     );
-  return { service, catalogClient, activityLog, tariffRepo };
+  return { service, catalogClient, activityLog, tariffRepo, settingsRepo };
 }
 
 const rpcError = async (promise: Promise<unknown>) => {
@@ -524,5 +527,28 @@ describe('6FLyjO6j — quote_by_tariff (hududsiz, uchala tarif)', () => {
     const { service } = build();
     const err = await rpcError(service.quoteByTariff({ items: [] } as never));
     expect(err.statusCode).toBe(400);
+  });
+});
+
+describe('47WFHzlx — sozlamalar tarixi', () => {
+  it('barcha versiyalar, yangisi tepada; limit 500 bilan cheklanadi', async () => {
+    const { service, settingsRepo } = build();
+    const res = (await service.listSettingsHistory({ limit: 9999 })) as {
+      data: { versions: unknown[] };
+    };
+    expect(res.data.versions).toEqual([SETTINGS]);
+    expect(settingsRepo.find).toHaveBeenCalledWith({
+      where: { isDeleted: false },
+      order: { id: 'DESC' },
+      take: 500,
+    });
+  });
+
+  it('limit berilmasa yoki noto`g`ri bo`lsa — 100', async () => {
+    const { service, settingsRepo } = build();
+    await service.listSettingsHistory({ limit: 'abc' });
+    expect(settingsRepo.find).toHaveBeenCalledWith(
+      expect.objectContaining({ take: 100 }),
+    );
   });
 });

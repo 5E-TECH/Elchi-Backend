@@ -83,6 +83,25 @@ export class AuditEnrichmentService {
     'parent_order_id',
   ]);
 
+  /**
+   * (47WFHzlx) Boshqa gateway javoblari uchun "kim o'zgartirdi" ismlari —
+   * masalan yetkazish tariflari tarixi. Faqat `{ id → name }`; rol/telefon
+   * qaytmaydi. Identity javob bermasa bo'sh Map (javob ismsiz qaytadi).
+   */
+  async resolveUserNames(
+    ids: Iterable<unknown>,
+  ): Promise<Map<string, string | null>> {
+    const set = new Set<string>();
+    for (const id of ids)
+      if (typeof id === 'string' || typeof id === 'number')
+        if (String(id) !== '') set.add(String(id));
+    const names = new Map<string, string | null>();
+    if (!set.size) return names;
+    for (const [id, row] of await this.resolveUsers(set))
+      names.set(id, typeof row?.name === 'string' ? row.name : null);
+    return names;
+  }
+
   async enrich(rows: Row[]): Promise<Row[]> {
     if (!Array.isArray(rows) || !rows.length) return rows ?? [];
 

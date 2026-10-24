@@ -196,6 +196,25 @@ export class DeliveryPricingService {
     return successRes(await this.requireActiveSettings());
   }
 
+  /**
+   * `GET /delivery/pricing-settings/history`: sozlamalarning barcha
+   * versiyalari (faoli ham), yangisi tepada. Har qator — to'liq nusxa;
+   * nima o'zgargani qo'shni versiyalarni solishtirib topiladi.
+   */
+  async listSettingsHistory(payload: { limit?: unknown } = {}) {
+    const rawLimit = Number(payload.limit);
+    const limit =
+      Number.isInteger(rawLimit) && rawLimit > 0
+        ? Math.min(rawLimit, TARIFF_HISTORY_MAX_LIMIT)
+        : TARIFF_HISTORY_DEFAULT_LIMIT;
+    const versions = await this.settingsRepo.find({
+      where: { isDeleted: false },
+      order: { id: 'DESC' },
+      take: limit,
+    });
+    return successRes({ versions });
+  }
+
   // ------------------------------------------------------------ hisoblash
 
   /**
