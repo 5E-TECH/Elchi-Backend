@@ -23,6 +23,87 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-10-24 — «Buyurtmalar paketi (batch B)»: extra-cost so'rovchi/raqam, market operatori ruxsatlari, SA/admin biriktirish, transfer-batches jami
+
+- [2026-10-24] ✏️ [order] — `GET /orders/extra-cost-approvals` (va
+  `POST /orders/extra-cost-approvals/:id/approve|reject` javobidagi
+  `data.approval`) — har bir so'rovga YANGI maydonlar (0Ngp09FG):
+
+  ```json
+  {
+    "order_id": "76",
+    "order_number": "EL-100076",
+    "requested_by_user_id": "301",
+    "requested_by_role": "courier",
+    "requested_by": { "id": "301", "name": "Ali Kuryer" }
+  }
+  ```
+
+  `order_number` — mijozga ko'rinadigan raqam (ichki `order_id` emas).
+  `requested_by.name` — identity'dan; javob bermasa yoki foydalanuvchi
+  o'chirilgan bo'lsa `null` (ro'yxat baribir qaytadi). Kuryerning o'z 202
+  javobida (`approval_required`) `requested_by.name` doim `null`. Eski
+  maydonlar o'zgarmagan.
+  🔧 FE (`ExtraCostApprovals.tsx`): `№{order_id}` → `order_number`,
+  «rol · #user_id» → `requested_by.name ?? requested_by_role · #id`.
+
+- [2026-10-24] ✏️ [order] — `GET /orders/extra-cost-approvals`
+  MARKET_OPERATOR uchun ochildi, FAQAT o'qish (6QLF7nst): faqat o'zi
+  biriktirilgan market (identity `user.market_id`) so'rovlari; marketga
+  biriktirilmagan operator — 403 «Operator hech qaysi marketga
+  biriktirilmagan». `approve` / `reject` operatorga avvalgidek 403.
+  🔧 FE (MO-8): operator kabinetida ro'yxatni ko'rsating, «Tasdiqlash /
+  Rad etish» tugmalarini yashiring.
+
+- [2026-10-24] ✏️ [order] — `GET /orders/markets/:marketId/new`
+  MARKET_OPERATOR ga ochildi (nCAFnqIe, tanlov: backend yo'li —
+  `GET /orders?status=new` ga o'tish shart emas): `:marketId` operator
+  marketi bo'lishi shart; boshqa market — 403 «market_operator role cannot
+  query other market_id», biriktirilmagan — 403. Javob market roli bilan bir
+  xil (filial `source='branch'` buyurtmalarisiz, kuryer tarifi/ulushi va
+  filial ulushisiz).
+
+- [2026-10-24] ✏️ [order] — `POST /orders` MARKET_OPERATOR ga ochildi
+  (OfRSoRUX, ega qarori MO-S3 — qo'lda yaratish): market server tomonda
+  (operator marketi); tanadagi `market_id` E'TIBORSIZ (400 emas — jimgina
+  ustidan yoziladi, market roli bilan bir xil); marketga biriktirilmagan
+  operator — 400. `operator` bo'sh bo'lsa server operator ismini yozadi,
+  `operator_id` — operatorning o'zi (komissiya AI yo'li bilan bir xil).
+  `Idempotency-Key` ishlaydi. Javob — market proyeksiyasi. Market
+  `add_order: false` bo'lsa — 400. Qo'shimcha (N11): `GET /region`,
+  `GET /district` ham MARKET_OPERATOR ga ochildi (forma uchun).
+  🔧 FE (MO-7): operatorga «Qo'lda» tugmasini oching; `market_id`
+  yubormang (yuborilsa e'tiborsiz).
+
+- [2026-10-24] ✏️ [order/logistics] — `POST /orders/assign-to-courier`
+  SUPERADMIN/ADMIN ga ochildi (1gxmqLj5, (a) yo'l). Body'ga ixtiyoriy
+  `branch_id` (satr) qo'shildi:
+
+  ```json
+  { "order_ids": ["201", "202"], "courier_id": "55", "branch_id": "20" }
+  ```
+
+  SA/admin uchun qoidalar: barcha orderlar BITTA filialda (aks holda 400
+  «aralash filialdan»); kuryer AYNAN shu filialning COURIER a'zosi (aks
+  holda 400 «Courier ushbu filialga COURIER sifatida biriktirilmagan»);
+  `branch_id` berilsa — orderlar filialiga mos bo'lishi kerak (400
+  «Tanlangan filial …»). Holat/kuryer/tashqi posilka qoidalari menejerniki
+  bilan bir xil. Menejer/registrator xulqi o'zgarmagan (`branch_id` ularga
+  e'tiborsiz).
+  🔧 FE (`/dispatch`): SA/admin uchun «Biriktirish» ni qayta oching; filial
+  tanlansa `branch_id` ni yuboring, kuryerlar ro'yxatini shu filialdan oling.
+
+- [2026-10-24] 🔧 [branch/order] — `GET /transfer-batches` statussiz yoki
+  `status=PENDING`: `meta.total` / `meta.totalPages` endi HAQIQIY jami
+  (15N7AHkp). Bir yo'nalishdagi (manba, manzil, yo'nalish, hudud) PENDING
+  partiyalardan faqat eng yangisi qaytadi — yig'ish SQL'da, sahifalar
+  orasida takror yo'q. Tartib: `createdAt DESC, id DESC`. Javob shakli
+  o'zgarmagan.
+  🔧 FE: /returns «jami N ta paket» va sahifalash, /batches «Yangi» /
+  «Qaytarilgan» tab sonlari `total`/`totalPages` dan to'g'ri ishlaydi;
+  `fetchAllTransferBatches` dagi «bo'sh sahifagacha yurish» aylanmasini
+  `totalPages` ga qaytarsa bo'ladi.
+
 ### 2026-10-24 — «Sessiyalar»: chiqarilgan qurilma SHU ZAHOTI login sahifasiga (socket `auth:session_revoked`) (Notion «Elchi Pochta» #3)
 
 - [2026-10-24] 🆕 [gateway/realtime] — sessiya yopilganda o'sha qurilmaning
