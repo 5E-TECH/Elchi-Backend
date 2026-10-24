@@ -262,5 +262,62 @@ const superadmin = { id: '1', roles: [Roles.SUPERADMIN] };
       });
       expect(received.data.total).toBe(4);
     });
+
+    it('(tveJKICY) orders_total / amount_total — joriy filtr bo‘yicha, sahifadan qat’i nazar', async () => {
+      // Buxoro: 5 pochta, order_quantity 2+2+3+1+0 = 8, har biri 500 so'm.
+      const bukharaRes = await service.findAllPosts(
+        1,
+        2,
+        { region_id: String(bukhara.id) },
+        superadmin,
+      );
+      expect(rows(bukharaRes)).toHaveLength(2);
+      expect(bukharaRes.data).toMatchObject({
+        total: 5,
+        orders_total: 8,
+        amount_total: 2500,
+      });
+      // 2-sahifa — yig'indi o'zgarmaydi (150 × 1 ta, 150 × 1000 so'm).
+      const page2 = await service.findAllPosts(
+        2,
+        100,
+        { region_id: String(samarkand.id) },
+        superadmin,
+      );
+      expect(page2.data).toMatchObject({
+        orders_total: 150,
+        amount_total: 150000,
+      });
+      // Filtrsiz (SUPERADMIN — OR tarmoqli where): NEW (4 ta) kirmaydi.
+      const all = await service.findAllPosts(1, 10, {}, superadmin);
+      expect(all.data).toMatchObject({
+        total: 155,
+        orders_total: 158,
+        amount_total: 152500,
+      });
+      // Imkonsiz filtr — 0.
+      const none = await service.findAllPosts(
+        1,
+        5,
+        { region_id: '99999999-9999-9999-9999-999999999999' },
+        superadmin,
+      );
+      expect(none.data).toMatchObject({ orders_total: 0, amount_total: 0 });
+      // Kuryer eski pochtalari (avgust): 2 + 3 = 5 buyurtma, 1000 so'm.
+      const courier = { id: '119', roles: [Roles.COURIER] };
+      const august = await service.oldPostsForCourier(1, 1, courier, {
+        startDate: '2026-08-01',
+        endDate: '2026-08-31',
+      });
+      expect(august.data).toMatchObject({
+        total: 2,
+        orders_total: 5,
+        amount_total: 1000,
+      });
+      const sent = await service.oldPostsForCourier(1, 8, courier, {
+        status: 'sent',
+      });
+      expect(sent.data).toMatchObject({ orders_total: 0, amount_total: 0 });
+    });
   },
 );

@@ -384,6 +384,58 @@ export class BulkAssignRegionLogistRequestDto {
   region_ids!: string[];
 }
 
+/** kA70Rban + tveJKICY — `GET /post`, `/post/courier/old-posts` sahifasi. */
+export class PostListPageDto {
+  @ApiProperty({
+    type: 'array',
+    items: { type: 'object', additionalProperties: true },
+  })
+  data!: Record<string, unknown>[];
+
+  @ApiProperty({ example: 59, description: 'Filtr bo‘yicha jami pochtalar' })
+  total!: number;
+
+  @ApiProperty({ example: 1 })
+  page!: number;
+
+  @ApiProperty({ example: 8 })
+  totalPages!: number;
+
+  @ApiProperty({ example: 8 })
+  limit!: number;
+
+  @ApiProperty({ example: false })
+  limit_capped!: boolean;
+
+  @ApiProperty({ example: 100 })
+  max_limit!: number;
+
+  @ApiProperty({
+    example: 412,
+    description:
+      'tveJKICY: joriy filtr bo‘yicha (barcha sahifalar) pochtalardagi buyurtmalar jami (`order_quantity` yig‘indisi)',
+  })
+  orders_total!: number;
+
+  @ApiProperty({
+    example: 61800000,
+    description:
+      'tveJKICY: joriy filtr bo‘yicha (barcha sahifalar) pochta summalari jami (`post_total_price`), so‘m',
+  })
+  amount_total!: number;
+}
+
+export class PostListPageResponseDto {
+  @ApiProperty({ example: 200 })
+  statusCode!: number;
+
+  @ApiProperty({ example: 'All posts (paginated)' })
+  message!: string;
+
+  @ApiProperty({ type: PostListPageDto })
+  data!: PostListPageDto;
+}
+
 export class CreatePostRequestDto {
   @ApiProperty({ example: '1' })
   @IsNotEmpty()

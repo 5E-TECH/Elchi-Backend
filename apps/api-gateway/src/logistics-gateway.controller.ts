@@ -47,6 +47,7 @@ import {
   DistrictInUseErrorResponseDto,
   DistrictMergeErrorResponseDto,
   DistrictMergeResponseDto,
+  PostListPageResponseDto,
   DistrictUsageResponseDto,
   MergeDistrictRequestDto,
   ReassignPostRequestDto,
@@ -376,7 +377,12 @@ export class LogisticsGatewayController {
     RoleEnum.COURIER,
   )
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'List all posts (with pagination)' })
+  @ApiOperation({
+    summary: 'List all posts (with pagination)',
+    description:
+      'tveJKICY: javobda `orders_total`, `amount_total` — joriy filtr bo‘yicha (sahifadan qat’i nazar) yig‘indilar.',
+  })
+  @ApiOkResponse({ type: PostListPageResponseDto })
   @ApiQuery({
     name: 'status',
     required: false,
@@ -523,7 +529,12 @@ export class LogisticsGatewayController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(RoleEnum.COURIER)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Courier old posts' })
+  @ApiOperation({
+    summary: 'Courier old posts',
+    description:
+      'tveJKICY: javobda `orders_total`, `amount_total` — joriy filtr bo‘yicha yig‘indilar.',
+  })
+  @ApiOkResponse({ type: PostListPageResponseDto })
   @ApiQuery({ name: 'page', required: false, type: Number })
   @ApiQuery({ name: 'limit', required: false, type: Number })
   @ApiQuery({ name: 'region_id', required: false, type: String })

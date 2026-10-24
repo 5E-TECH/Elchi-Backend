@@ -317,11 +317,26 @@ function resolvePostListPage(page?: number, limit?: number) {
   };
 }
 
+/**
+ * (tveJKICY) Pochta ro'yxati yig'indilari — JORIY FILTR bo'yicha (barcha
+ * sahifalar, sahifalashsiz): `orders_total` — pochtalardagi buyurtmalar soni
+ * (`order_quantity`) jami, `amount_total` — pochta summalari
+ * (`post_total_price`) jami, so'm.
+ */
+export type PostListTotals = { orders_total: number; amount_total: number };
+
+const EMPTY_POST_LIST_TOTALS: PostListTotals = {
+  orders_total: 0,
+  amount_total: 0,
+};
+
 /** kA70Rban — sahifalangan pochta ro'yxati javobi (`limit_capped` bilan). */
 function postListPage(
   data: unknown[],
   total: number,
   paging: ReturnType<typeof resolvePostListPage>,
+  // (tveJKICY) faqat GET /post va /post/courier/old-posts beradi.
+  totals?: PostListTotals,
 ) {
   return {
     data,
@@ -331,6 +346,7 @@ function postListPage(
     limit: paging.take,
     limit_capped: paging.limit_capped,
     max_limit: POST_LIST_MAX_LIMIT,
+    ...(totals ?? {}),
   };
 }
 
@@ -1575,6 +1591,31 @@ export class LogisticsServiceService implements OnModuleInit {
     return { where, impossible };
   }
 
+  /**
+   * (tveJKICY) Ro'yxat `where` i bo'yicha (sahifalashsiz) yig'indilar —
+   * `PostListTotals`. TypeORM `sum()` naqshi (`setFindOptions` + SELECT),
+   * ikkala son BITTA so'rovda.
+   */
+  private async postListTotals(
+    where: Record<string, unknown> | Record<string, unknown>[],
+  ): Promise<PostListTotals> {
+    const raw = await this.postRepo
+      .createQueryBuilder('post')
+      .setFindOptions({
+        where: where as FindOptionsWhere<Post> | FindOptionsWhere<Post>[],
+      })
+      .select('COALESCE(SUM(post.order_quantity), 0)', 'orders_total')
+      .addSelect('COALESCE(SUM(post.post_total_price), 0)', 'amount_total')
+      .getRawOne<{
+        orders_total: string | number | null;
+        amount_total: string | number | null;
+      }>();
+    return {
+      orders_total: Number(raw?.orders_total ?? 0),
+      amount_total: Number(raw?.amount_total ?? 0),
+    };
+  }
+
   async findAllPosts(
     page = 1,
     limit = 8,
@@ -1590,7 +1631,7 @@ export class LogisticsServiceService implements OnModuleInit {
     const scopedBranchId = await this.resolveScopedBranchId(requester);
     if (filterWhere.impossible) {
       return successRes(
-        postListPage([], 0, paging),
+        postListPage([], 0, paging, EMPTY_POST_LIST_TOTALS),
         200,
         'All posts (paginated)',
       );
@@ -1637,19 +1678,23 @@ export class LogisticsServiceService implements OnModuleInit {
       ? queryWhere.map((clause) => ({ ...clause, ...filterClause }))
       : { ...queryWhere, ...filterClause };
 
-    const [rows, total] = await this.postRepo.findAndCount({
-      where: queryWhere,
-      relations: ['region'],
-      order: { createdAt: 'DESC' },
-      skip,
-      take,
-    });
+    const [[rows, total], totals] = await Promise.all([
+      this.postRepo.findAndCount({
+        where: queryWhere,
+        relations: ['region'],
+        order: { createdAt: 'DESC' },
+        skip,
+        take,
+      }),
+      // (tveJKICY) xuddi shu `where` — yig'indi ro'yxat bilan mos.
+      this.postListTotals(queryWhere),
+    ]);
     // 4YZcTTDQ: kuryer nomi (rejectedPosts naqshi) — sahifa uchun BITTA
     // identity so'rovi.
     const data = await this.attachPostCouriers(rows);
 
     return successRes(
-      postListPage(data, total, paging),
+      postListPage(data, total, paging, totals),
       200,
       'All posts (paginated)',
     );
@@ -2066,24 +2111,37 @@ export class LogisticsServiceService implements OnModuleInit {
       .trim()
       .toLowerCase();
     if ((status && !oldStatuses.has(status)) || filterWhere.impossible) {
-      return successRes(postListPage([], 0, paging), 200, 'All old posts');
+      return successRes(
+        postListPage([], 0, paging, EMPTY_POST_LIST_TOTALS),
+        200,
+        'All old posts',
+      );
     }
 
-    const [data, total] = await this.postRepo.findAndCount({
-      where: {
-        ...filterWhere.where,
-        courier_id: requester.id,
-        status: status
-          ? (status as Post_status)
-          : Not(In([Post_status.SENT, Post_status.NEW])),
-      },
-      relations: ['region'],
-      order: { createdAt: 'DESC' },
-      skip,
-      take,
-    });
+    const where = {
+      ...filterWhere.where,
+      courier_id: requester.id,
+      status: status
+        ? (status as Post_status)
+        : Not(In([Post_status.SENT, Post_status.NEW])),
+    };
+    const [[data, total], totals] = await Promise.all([
+      this.postRepo.findAndCount({
+        where,
+        relations: ['region'],
+        order: { createdAt: 'DESC' },
+        skip,
+        take,
+      }),
+      // (tveJKICY) xuddi shu filtr bo'yicha yig'indi.
+      this.postListTotals(where),
+    ]);
 
-    return successRes(postListPage(data, total, paging), 200, 'All old posts');
+    return successRes(
+      postListPage(data, total, paging, totals),
+      200,
+      'All old posts',
+    );
   }
 
   async rejectedPostsForCourier(requester: RequesterContext) {

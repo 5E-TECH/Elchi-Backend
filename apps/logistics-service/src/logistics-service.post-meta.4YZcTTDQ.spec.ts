@@ -41,6 +41,15 @@ function makeService(opts: {
     return of({ data: null });
   });
   const posts = opts.posts ?? [];
+  const totalsQb = {
+    setFindOptions: jest.fn(),
+    select: jest.fn(),
+    addSelect: jest.fn(),
+    getRawOne: jest.fn(() => Promise.resolve(undefined)),
+  };
+  for (const key of ['setFindOptions', 'select', 'addSelect'] as const) {
+    totalsQb[key].mockReturnValue(totalsQb);
+  }
   const postRepo = {
     findAndCount: jest.fn(() =>
       Promise.resolve([posts.map((p) => ({ ...p })), posts.length]),
@@ -51,6 +60,8 @@ function makeService(opts: {
       ),
     ),
     save: jest.fn((p: unknown) => Promise.resolve(p)),
+    // (tveJKICY) ro'yxat yig'indilari so'rovi.
+    createQueryBuilder: jest.fn(() => totalsQb),
   };
   const service = new LogisticsServiceService(
     postRepo as any,

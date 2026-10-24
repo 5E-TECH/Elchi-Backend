@@ -19,11 +19,24 @@ type FindAndCountArgs = {
 const superadmin = { id: '1', roles: [Roles.SUPERADMIN] };
 
 const build = () => {
+  // (tveJKICY) yig'indi so'rovi (`postListTotals`) — setFindOptions + SUM.
+  const totalsQb = {
+    setFindOptions: jest.fn(),
+    select: jest.fn(),
+    addSelect: jest.fn(),
+    getRawOne: jest.fn(() =>
+      Promise.resolve({ orders_total: '7', amount_total: '12500.50' }),
+    ),
+  };
+  for (const key of ['setFindOptions', 'select', 'addSelect'] as const) {
+    totalsQb[key].mockReturnValue(totalsQb);
+  }
   const postRepo = {
     findAndCount: jest.fn(
       (): Promise<[unknown[], number]> => Promise.resolve([[], 0]),
     ),
     find: jest.fn(() => Promise.resolve([])),
+    createQueryBuilder: jest.fn(() => totalsQb),
   };
   const branchClient = { send: jest.fn(() => of({ data: { id: '1' } })) };
   const service = new LogisticsServiceService(
@@ -40,7 +53,7 @@ const build = () => {
     (
       postRepo.findAndCount.mock.calls.at(-1) as unknown as [FindAndCountArgs]
     )[0];
-  return { service, postRepo, lastArgs };
+  return { service, postRepo, lastArgs, totalsQb };
 };
 
 const operatorValue = (value: unknown) =>
@@ -291,5 +304,60 @@ describe('YfrqN70i — RMQ controller filtrlarni servisga uzatadi', () => {
         has_orders: undefined,
       },
     );
+  });
+});
+
+describe('tveJKICY — pochta ro‘yxati yig‘indilari (orders_total, amount_total)', () => {
+  it('⭐ GET /post: yig‘indi xuddi shu where bo‘yicha (sahifalashsiz), son bo‘lib qaytadi', async () => {
+    const { service, lastArgs, totalsQb } = build();
+    const res = await service.findAllPosts(
+      3,
+      10,
+      { region_id: '5', has_orders: 'true' },
+      superadmin,
+    );
+    expect(res.data).toMatchObject({ orders_total: 7, amount_total: 12500.5 });
+    const [options] = totalsQb.setFindOptions.mock.calls[0] as unknown as [
+      { where: unknown; skip?: number; take?: number },
+    ];
+    expect(options).toEqual({ where: lastArgs().where });
+    expect(totalsQb.select).toHaveBeenCalledWith(
+      'COALESCE(SUM(post.order_quantity), 0)',
+      'orders_total',
+    );
+    expect(totalsQb.addSelect).toHaveBeenCalledWith(
+      'COALESCE(SUM(post.post_total_price), 0)',
+      'amount_total',
+    );
+  });
+
+  it('kuryer eski pochtalari ham; imkonsiz filtr — 0, so‘rov yo‘q', async () => {
+    const { service, lastArgs, totalsQb } = build();
+    const courier = { id: '119', roles: [Roles.COURIER] };
+    const res = await service.oldPostsForCourier(1, 8, courier, {
+      status: 'received',
+    });
+    expect(res.data).toMatchObject({ orders_total: 7, amount_total: 12500.5 });
+    const [options] = totalsQb.setFindOptions.mock.calls[0] as unknown as [
+      { where: unknown },
+    ];
+    expect(options.where).toEqual(lastArgs().where);
+
+    const fresh = build();
+    const none = await fresh.service.oldPostsForCourier(1, 8, courier, {
+      status: 'sent',
+    });
+    expect(none.data).toMatchObject({ orders_total: 0, amount_total: 0 });
+    expect(fresh.totalsQb.getRawOne).not.toHaveBeenCalled();
+  });
+
+  it('kuryerning BARCHA pochtalari (my-posts) — yig‘indi qo‘shilmaydi (karta faqat ikki ro‘yxat)', async () => {
+    const { service, totalsQb } = build();
+    const res = await service.myPostsForCourier(1, 8, {
+      id: '119',
+      roles: [Roles.COURIER],
+    });
+    expect(res.data).not.toHaveProperty('orders_total');
+    expect(totalsQb.getRawOne).not.toHaveBeenCalled();
   });
 });
