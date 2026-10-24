@@ -59,7 +59,7 @@ function makeController(opts?: {
     ),
   };
   const identityClient = {
-    send: jest.fn((pattern: { cmd: string }, payload: any) => {
+    send: jest.fn((pattern: { cmd: string }, payload?: { id?: string }) => {
       if (pattern.cmd === 'identity.customer.create') {
         return of({ data: { id: 'c-new' } });
       }
@@ -92,10 +92,10 @@ function makeController(opts?: {
     }),
   };
   const controller = new OrderGatewayController(
-    orderClient as any,
-    identityClient as any,
-    { send: jest.fn(() => of({})) } as any,
-    { send: jest.fn(() => of({ data: null })) } as any,
+    orderClient as never,
+    identityClient as never,
+    { send: jest.fn(() => of({})) } as never,
+    { send: jest.fn(() => of({ data: null })) } as never,
   );
   return { controller, orderClient, identityClient };
 }
@@ -103,7 +103,7 @@ function makeController(opts?: {
 const operatorReq = () =>
   ({
     user: { sub: OPERATOR_ID, username: 'op', roles: ['market_operator'] },
-  }) as any;
+  }) as never;
 
 const sentCreate = (orderClient: { send: jest.Mock }) => {
   const calls = (orderClient.send.mock.calls as unknown[][]).filter(
@@ -150,7 +150,7 @@ describe('OfRSoRUX — POST /orders MARKET_OPERATOR (qo‘lda yaratish)', () => 
   it('⭐ market — operator marketi; tanadagi market_id (999) E’TIBORSIZ', async () => {
     const { controller, orderClient, identityClient } = makeController();
 
-    await controller.create(dto as any, operatorReq());
+    await controller.create(dto as never, operatorReq());
 
     const [[, payload]] = sentCreate(orderClient);
     expect(payload.dto.market_id).toBe(OPERATOR_MARKET);
@@ -173,7 +173,7 @@ describe('OfRSoRUX — POST /orders MARKET_OPERATOR (qo‘lda yaratish)', () => 
         source: 'branch',
         status: 'sold',
         courier_id: '289',
-      } as any,
+      } as never,
       operatorReq(),
     );
 
@@ -194,7 +194,7 @@ describe('OfRSoRUX — POST /orders MARKET_OPERATOR (qo‘lda yaratish)', () => 
   it('⭐ `operator` bo‘sh — server operator ismini yozadi', async () => {
     const { controller, orderClient } = makeController();
 
-    await controller.create({ ...dto, operator: '  ' } as any, operatorReq());
+    await controller.create({ ...dto, operator: '  ' } as never, operatorReq());
 
     expect(sentCreate(orderClient)[0][1].dto.operator).toBe('Sevinch Operator');
   });
@@ -203,7 +203,7 @@ describe('OfRSoRUX — POST /orders MARKET_OPERATOR (qo‘lda yaratish)', () => 
     const { controller, orderClient } = makeController();
 
     await controller.create(
-      { ...dto, operator: 'Kecha smenasi' } as any,
+      { ...dto, operator: 'Kecha smenasi' } as never,
       operatorReq(),
     );
 
@@ -215,7 +215,9 @@ describe('OfRSoRUX — POST /orders MARKET_OPERATOR (qo‘lda yaratish)', () => 
       operatorMarketId: null,
     });
 
-    await expect(controller.create(dto as any, operatorReq())).rejects.toThrow(
+    await expect(
+      controller.create(dto as never, operatorReq()),
+    ).rejects.toThrow(
       new BadRequestException(
         "Operator hech qaysi marketga biriktirilmagan — buyurtma yaratib bo'lmaydi",
       ),
@@ -231,17 +233,17 @@ describe('OfRSoRUX — POST /orders MARKET_OPERATOR (qo‘lda yaratish)', () => 
       market: { add_order: false },
     });
 
-    await expect(controller.create(dto as any, operatorReq())).rejects.toThrow(
-      BadRequestException,
-    );
+    await expect(
+      controller.create(dto as never, operatorReq()),
+    ).rejects.toThrow(BadRequestException);
     expect(sentCreate(orderClient)).toHaveLength(0);
   });
 
   it('⭐ Idempotency-Key (gpCIsGjH) operator uchun ham: `idem:<operator>:…`, bir xil kalit — bir xil request_id', async () => {
     const { controller, orderClient } = makeController();
 
-    await controller.create(dto as any, operatorReq(), 'form-session-1');
-    await controller.create(dto as any, operatorReq(), 'form-session-1');
+    await controller.create(dto as never, operatorReq(), 'form-session-1');
+    await controller.create(dto as never, operatorReq(), 'form-session-1');
 
     const ids = sentCreate(orderClient).map(
       ([, payload]) => payload.request_id,
@@ -256,7 +258,9 @@ describe('OfRSoRUX — POST /orders MARKET_OPERATOR (qo‘lda yaratish)', () => 
   it('⭐ javob — market proyeksiyasi (kuryer tarifi/ulushi, filial ulushi yo‘q)', async () => {
     const { controller } = makeController();
 
-    const res: any = await controller.create(dto as any, operatorReq());
+    const res = (await controller.create(dto as never, operatorReq())) as {
+      data: Record<string, unknown>;
+    };
 
     expect(res.data.market_tariff).toBe(20000);
     for (const hidden of [

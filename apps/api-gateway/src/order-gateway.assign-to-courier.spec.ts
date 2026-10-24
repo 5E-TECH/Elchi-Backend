@@ -74,15 +74,15 @@ describe('1gxmqLj5 — assign-to-courier SUPERADMIN/ADMIN', () => {
       send: jest.fn(() => of({ statusCode: 200, data: { assigned_count: 1 } })),
     };
     const controller = new OrderGatewayController(
-      { send: jest.fn(() => of({})) } as any,
-      { send: jest.fn(() => of({})) } as any,
-      logisticsClient as any,
-      { send: jest.fn(() => of({})) } as any,
+      { send: jest.fn(() => of({})) } as never,
+      { send: jest.fn(() => of({})) } as never,
+      logisticsClient as never,
+      { send: jest.fn(() => of({})) } as never,
     );
 
     await controller.assignOrdersToCourier(
-      { order_ids: ['201'], courier_id: '55', branch_id: '20' } as any,
-      { user: { sub: '1', username: 'sa', roles: ['SUPERADMIN'] } } as any,
+      { order_ids: ['201'], courier_id: '55', branch_id: '20' },
+      { user: { sub: '1', username: 'sa', roles: ['SUPERADMIN'] } } as never,
     );
 
     expect(logisticsClient.send).toHaveBeenCalledWith(

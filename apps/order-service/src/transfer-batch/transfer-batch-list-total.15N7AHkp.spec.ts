@@ -1,5 +1,12 @@
 import { BranchTransferBatchService } from './branch-transfer-batch.service';
 
+type ListResult = {
+  data: {
+    items: Array<{ id: string }>;
+    meta: { page: number; limit: number; total: number; totalPages: number };
+  };
+};
+
 /**
  * 15N7AHkp (unit) — PENDING yig'ish SQL shartiga ko'chdi, `meta.total` —
  * COUNT (sahifadagi qatorlar soni emas). Haqiqiy SQL xulqi:
@@ -28,18 +35,18 @@ describe('15N7AHkp — transfer-batches meta.total haqiqiy', () => {
       ),
     };
     const service = new BranchTransferBatchService(
-      {} as any,
-      transferBatchRepo as any,
-      { find: jest.fn().mockResolvedValue([]) } as any,
-      {} as any,
-      {} as any,
-      {} as any,
-      {} as any,
-      {} as any,
-      {} as any,
+      {} as never,
+      transferBatchRepo as never,
+      { find: jest.fn().mockResolvedValue([]) } as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
     );
     const collapseCalls = () =>
-      qb.andWhere.mock.calls.filter(
+      (qb.andWhere.mock.calls as unknown[][]).filter(
         ([sql]) => typeof sql === 'string' && sql.includes('NOT (batch.status'),
       );
     return { service, qb, sub, collapseCalls };
@@ -63,11 +70,11 @@ describe('15N7AHkp — transfer-batches meta.total haqiqiy', () => {
         57,
       );
 
-      const res: any = await service.findBranchTransferBatches({
+      const res = (await service.findBranchTransferBatches({
         status,
         page: 1,
         limit: 20,
-      });
+      })) as ListResult;
 
       expect(collapseCalls()).toEqual([
         [
@@ -79,10 +86,7 @@ describe('15N7AHkp — transfer-batches meta.total haqiqiy', () => {
         'newer.target_region_id = batch.target_region_id',
       );
       // Xotirada qayta yig'ilmaydi — SQL nima bersa, shu.
-      expect(res.data.items.map((item: { id: string }) => item.id)).toEqual([
-        '9',
-        '8',
-      ]);
+      expect(res.data.items.map((item) => item.id)).toEqual(['9', '8']);
       expect(res.data.meta).toEqual({
         page: 1,
         limit: 20,
@@ -95,10 +99,10 @@ describe('15N7AHkp — transfer-batches meta.total haqiqiy', () => {
   it('status=SENT — yig‘ish sharti qo‘shilmaydi, total avvalgidek COUNT', async () => {
     const { service, collapseCalls, sub } = setup([], 41);
 
-    const res: any = await service.findBranchTransferBatches({
+    const res = (await service.findBranchTransferBatches({
       status: 'SENT',
       limit: 20,
-    });
+    })) as ListResult;
 
     expect(collapseCalls()).toHaveLength(0);
     expect(sub.select).not.toHaveBeenCalled();

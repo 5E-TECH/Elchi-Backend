@@ -14,7 +14,9 @@ import { OrderLifecycleService } from './order-lifecycle.service';
  *    ro'yxat baribir qaytadi.
  * Eski maydonlar (`order_id`, `requested_by_user_id/role`) o'zgarmaydi.
  */
-type Row = Record<string, any>;
+type Row = Record<string, unknown>;
+type ListRes = { statusCode: number; data: Row[] };
+type DecisionRes = { data: { approval: Row } };
 
 const approvalRow = (overrides: Row = {}): Row => ({
   id: '7',
@@ -100,15 +102,18 @@ describe('0Ngp09FG — extra-cost so‘rovida so‘rovchi ismi va order_number',
       approvalRow({ id: '9', order_id: '90', requested_by_user_id: '301' }),
     ]);
 
-    const res: any = await svc.listExtraCostApprovals(market, {});
+    const res = (await svc.listExtraCostApprovals(market, {})) as ListRes;
 
     expect(identitySend).toHaveBeenCalledTimes(1);
-    expect(identitySend.mock.calls[0][0]).toEqual({
+    const [[pattern, payload]] = identitySend.mock.calls as Array<
+      [unknown, { ids: string[] }]
+    >;
+    expect(pattern).toEqual({
       cmd: 'identity.user.find_by_ids',
     });
-    expect(identitySend.mock.calls[0][1].ids).toEqual(['301', '302']);
+    expect(payload.ids).toEqual(['301', '302']);
     expect(
-      res.data.map((a: Row) => ({
+      res.data.map((a) => ({
         order_id: a.order_id,
         order_number: a.order_number,
         requested_by: a.requested_by,
@@ -135,7 +140,7 @@ describe('0Ngp09FG — extra-cost so‘rovida so‘rovchi ismi va order_number',
   it('eski maydonlar o‘zgarmaydi (orqaga moslik)', async () => {
     const { svc } = makeService([approvalRow()]);
 
-    const res: any = await svc.listExtraCostApprovals(market, {});
+    const res = (await svc.listExtraCostApprovals(market, {})) as ListRes;
 
     expect(res.data[0]).toMatchObject({
       id: '7',
@@ -154,7 +159,7 @@ describe('0Ngp09FG — extra-cost so‘rovida so‘rovchi ismi va order_number',
       jest.fn(() => throwError(() => new Error('identity down'))),
     );
 
-    const res: any = await svc.listExtraCostApprovals(market, {});
+    const res = (await svc.listExtraCostApprovals(market, {})) as ListRes;
 
     expect(res.statusCode).toBe(200);
     expect(res.data[0].requested_by).toEqual({ id: '301', name: null });
@@ -170,9 +175,9 @@ describe('0Ngp09FG — extra-cost so‘rovida so‘rovchi ismi va order_number',
       jest.fn(() => of({ data: [{ id: '301', name: '   ' }] })),
     );
 
-    const res: any = await svc.listExtraCostApprovals(market, {});
+    const res = (await svc.listExtraCostApprovals(market, {})) as ListRes;
 
-    expect(res.data.map((a: Row) => a.requested_by)).toEqual([
+    expect(res.data.map((a) => a.requested_by)).toEqual([
       { id: '301', name: null },
       { id: '999', name: null },
     ]);
@@ -181,7 +186,7 @@ describe('0Ngp09FG — extra-cost so‘rovida so‘rovchi ismi va order_number',
   it('bo‘sh ro‘yxat — identity chaqirilmaydi', async () => {
     const { svc, identitySend } = makeService([]);
 
-    const res: any = await svc.listExtraCostApprovals(market, {});
+    const res = (await svc.listExtraCostApprovals(market, {})) as ListRes;
 
     expect(res.data).toEqual([]);
     expect(identitySend).not.toHaveBeenCalled();
@@ -190,7 +195,11 @@ describe('0Ngp09FG — extra-cost so‘rovida so‘rovchi ismi va order_number',
   it('rad etish javobida ham requested_by.name va order_number', async () => {
     const { svc } = makeService([approvalRow()]);
 
-    const res: any = await svc.rejectExtraCostApproval(market, '7', {});
+    const res = (await svc.rejectExtraCostApproval(
+      market,
+      '7',
+      {},
+    )) as DecisionRes;
 
     expect(res.data.approval).toMatchObject({
       order_number: 'EL-100076',
@@ -202,7 +211,10 @@ describe('0Ngp09FG — extra-cost so‘rovida so‘rovchi ismi va order_number',
   it('tasdiqlash javobida ham requested_by.name va order_number', async () => {
     const { svc } = makeService([approvalRow()]);
 
-    const res: any = await svc.approveExtraCostApproval(market, '7');
+    const res = (await svc.approveExtraCostApproval(
+      market,
+      '7',
+    )) as DecisionRes;
 
     expect(res.data.approval).toMatchObject({
       order_number: 'EL-100076',

@@ -23,6 +23,10 @@ const approvalRow = (overrides: Row = {}): Row => ({
   ...overrides,
 });
 
+/** `repo.find` ga uzatilgan `where`. */
+const findWhere = (repo: { find: jest.Mock }) =>
+  (repo.find.mock.calls as Array<[{ where: Row }]>)[0][0].where;
+
 function makeService() {
   const row = approvalRow();
   const repo = {
@@ -54,14 +58,14 @@ describe('6QLF7nst — extra-cost ro‘yxati MARKET_OPERATOR uchun (faqat o‘qi
   it('⭐ operator — faqat o‘z marketi (requester.market_id), requester.id emas', async () => {
     const { svc, repo } = makeService();
 
-    const res: any = await svc.listExtraCostApprovals(
+    const res = (await svc.listExtraCostApprovals(
       { id: '26', roles: ['market_operator'], market_id: '501' },
       { status: 'pending' },
-    );
+    )) as { statusCode: number; data: unknown[] };
 
     expect(res.statusCode).toBe(200);
     expect(res.data).toHaveLength(1);
-    expect(repo.find.mock.calls[0][0].where).toEqual({
+    expect(findWhere(repo)).toEqual({
       status: 'pending',
       isDeleted: false,
       market_id: '501',
@@ -91,7 +95,7 @@ describe('6QLF7nst — extra-cost ro‘yxati MARKET_OPERATOR uchun (faqat o‘qi
       market_id: '999',
     });
 
-    expect(repo.find.mock.calls[0][0].where.market_id).toBe('501');
+    expect(findWhere(repo).market_id).toBe('501');
   });
 
   it('superadmin — o‘zgarishsiz (market filtrsiz)', async () => {
@@ -99,7 +103,7 @@ describe('6QLF7nst — extra-cost ro‘yxati MARKET_OPERATOR uchun (faqat o‘qi
 
     await svc.listExtraCostApprovals({ id: '1', roles: ['superadmin'] });
 
-    expect(repo.find.mock.calls[0][0].where).not.toHaveProperty('market_id');
+    expect(findWhere(repo)).not.toHaveProperty('market_id');
   });
 
   it('boshqa rol (kuryer) — avvalgidek 403', async () => {

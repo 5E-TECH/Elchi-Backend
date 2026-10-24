@@ -14,7 +14,11 @@ import { LogisticsServiceService } from './logistics-service.service';
  *  - ixtiyoriy `branch_id` (UI filial tanlovi) buyurtmalar filialiga mos.
  * Menejer/registrator xulqi o'zgarmaydi (`branch_id` ularga e'tiborsiz).
  */
-type Row = Record<string, any>;
+type Row = Record<string, unknown>;
+type AssignResult = {
+  statusCode: number;
+  data: Record<string, unknown>;
+};
 
 const order = (overrides: Row): Row => ({
   status: Order_status.RECEIVED,
@@ -83,14 +87,14 @@ function setup(orders: Row[]) {
   };
   const activityLog = { log: jest.fn().mockResolvedValue(undefined) };
   const service = new LogisticsServiceService(
-    postRepo as any,
-    {} as any,
-    {} as any,
-    orderClient as any,
-    branchClient as any,
-    identityClient as any,
-    { send: jest.fn(() => of({})) } as any,
-    activityLog as any,
+    postRepo as never,
+    {} as never,
+    {} as never,
+    orderClient as never,
+    branchClient as never,
+    identityClient as never,
+    { send: jest.fn(() => of({})) } as never,
+    activityLog as never,
   );
   const calls = (client: { send: jest.Mock }, cmd: string) =>
     (client.send.mock.calls as Array<[{ cmd: string }, Row]>).filter(
@@ -137,10 +141,10 @@ describe('1gxmqLj5 — assign-to-courier SUPERADMIN/ADMIN', () => {
         order({ id: '202', branch_id: '20', status: Order_status.NEW }),
       ]);
 
-      const res: any = await ctx.service.assignOrdersToCourier(requester, {
+      const res = (await ctx.service.assignOrdersToCourier(requester, {
         order_ids: ['201', '202'],
         courier_id: '55',
-      });
+      })) as AssignResult;
 
       expect(res.statusCode).toBe(200);
       expect(res.data).toMatchObject({
@@ -162,9 +166,10 @@ describe('1gxmqLj5 — assign-to-courier SUPERADMIN/ADMIN', () => {
       expect(ctx.postRepo.create).toHaveBeenCalledWith(
         expect.objectContaining({ courier_id: '55', status: Post_status.SENT }),
       );
-      expect(ctx.activityLog.log.mock.calls[0][0].metadata.branch_id).toBe(
-        '20',
-      );
+      const [[logged]] = ctx.activityLog.log.mock.calls as Array<
+        [{ metadata: Row }]
+      >;
+      expect(logged.metadata.branch_id).toBe('20');
     },
   );
 
@@ -173,10 +178,10 @@ describe('1gxmqLj5 — assign-to-courier SUPERADMIN/ADMIN', () => {
       order({ id: '201', branch_id: '10', holder_branch_id: '20' }),
     ]);
 
-    const res: any = await ctx.service.assignOrdersToCourier(SA, {
+    const res = (await ctx.service.assignOrdersToCourier(SA, {
       order_ids: ['201'],
       courier_id: '55',
-    });
+    })) as AssignResult;
 
     expect(res.data.assigned_count).toBe(1);
   });
@@ -218,11 +223,11 @@ describe('1gxmqLj5 — assign-to-courier SUPERADMIN/ADMIN', () => {
   it('tanlangan branch_id mos — biriktiriladi', async () => {
     const ctx = setup([order({ id: '201', branch_id: '20' })]);
 
-    const res: any = await ctx.service.assignOrdersToCourier(SA, {
+    const res = (await ctx.service.assignOrdersToCourier(SA, {
       order_ids: ['201'],
       courier_id: '55',
       branch_id: '20',
-    });
+    })) as AssignResult;
 
     expect(res.data.assigned_count).toBe(1);
   });
@@ -300,10 +305,10 @@ describe('1gxmqLj5 — menejer xulqi o‘zgarmagan', () => {
   it('menejer o‘z filiali — avvalgidek biriktiradi', async () => {
     const ctx = setup([order({ id: '101', branch_id: '10' })]);
 
-    const res: any = await ctx.service.assignOrdersToCourier(MANAGER, {
+    const res = (await ctx.service.assignOrdersToCourier(MANAGER, {
       order_ids: ['101'],
       courier_id: '44',
-    });
+    })) as AssignResult;
 
     expect(res.data.assigned_count).toBe(1);
     expect(ctx.branchCalls('branch.user.find_by_user')).toHaveLength(1);

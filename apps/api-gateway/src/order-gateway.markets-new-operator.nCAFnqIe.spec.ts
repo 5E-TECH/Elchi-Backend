@@ -47,16 +47,16 @@ function setup(operatorMarketId: string | null = '501') {
   });
   const branch = makeClient();
   const controller = new OrderGatewayController(
-    order as any,
-    identity as any,
-    makeClient() as any,
-    branch as any,
+    order as never,
+    identity as never,
+    makeClient() as never,
+    branch as never,
   );
   return { controller, order, identity, branch };
 }
 
 const req = (sub: string, roles: string[]) =>
-  ({ user: { sub, username: 'u', roles } }) as any;
+  ({ user: { sub, username: 'u', roles } }) as never;
 
 const sentTo = (client: { send: jest.Mock }, cmd: string) =>
   (client.send.mock.calls as unknown[][]).filter(
@@ -77,10 +77,10 @@ describe('nCAFnqIe — markets/:marketId/new MARKET_OPERATOR (faqat o‘z market
   it('⭐ o‘z marketi — 200, market kabi payload, moliyaviy proyeksiya (MARKET_HIDDEN)', async () => {
     const { controller, order, identity, branch } = setup('501');
 
-    const res: any = await controller.findNewOrdersByMarket(
+    const res = (await controller.findNewOrdersByMarket(
       '501',
       req('26', ['market_operator']),
-    );
+    )) as { data: Array<Record<string, unknown>> };
 
     expect(identity.send).toHaveBeenCalledWith(
       { cmd: 'identity.user.find_by_id' },

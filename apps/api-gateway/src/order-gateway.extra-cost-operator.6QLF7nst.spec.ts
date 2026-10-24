@@ -29,16 +29,16 @@ function setup(identity: Handlers = {}) {
   const order = makeClient();
   const identityClient = makeClient(identity);
   const controller = new OrderGatewayController(
-    order as any,
-    identityClient as any,
-    makeClient() as any,
-    makeClient() as any,
+    order as never,
+    identityClient as never,
+    makeClient() as never,
+    makeClient() as never,
   );
   return { controller, order, identity: identityClient };
 }
 
 const req = (sub: string, roles: string[]) =>
-  ({ user: { sub, username: 'u', roles } }) as any;
+  ({ user: { sub, username: 'u', roles } }) as never;
 
 const listPayload = (order: { send: jest.Mock }) => {
   const call = (order.send.mock.calls as unknown[][]).find(

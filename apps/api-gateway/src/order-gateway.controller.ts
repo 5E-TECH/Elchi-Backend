@@ -4952,7 +4952,7 @@ export class OrderGatewayController {
         );
       }
     }
-    return this.sendOrderWithTimeout(
+    const response: unknown = await this.sendOrderWithTimeout(
       { cmd: 'order.extra_cost_approval.list' },
       {
         status,
@@ -4969,6 +4969,7 @@ export class OrderGatewayController {
         },
       },
     );
+    return response;
   }
 
   @Get(':id')
