@@ -139,7 +139,7 @@ describe('m9BOlEbE — realtime ko‘prigi (dispatch → gateway → socket)', (
     ]);
   });
 
-  it('socket ulanishi JWT bilan: to‘g‘ri token → `user:` va `role:` xonalari; yo‘q/soxta → uziladi', () => {
+  it('socket ulanishi JWT bilan: to‘g‘ri token → `user:` va `role:` xonalari; yo‘q/soxta → uziladi', async () => {
     const token = new JwtService({ secret: SECRET }).sign({
       sub: '42',
       roles: ['COURIER'],
@@ -153,11 +153,13 @@ describe('m9BOlEbE — realtime ko‘prigi (dispatch → gateway → socket)', (
       emit: jest.fn(),
       disconnect: jest.fn(),
     };
-    gateway.handleConnection(ok as never);
+    await gateway.handleConnection(ok as never);
     expect(joined).toEqual(['user:42', 'role:courier']);
+    // (Elchi Pochta #3, 2026-10-24) `session_id` — `sid` siz tokenda null.
     expect(ok.emit).toHaveBeenCalledWith('connected', {
       user_id: '42',
       roles: ['courier'],
+      session_id: null,
     });
     expect(gateway.isOnline('42')).toBe(true);
 
@@ -169,7 +171,11 @@ describe('m9BOlEbE — realtime ko‘prigi (dispatch → gateway → socket)', (
       emit: jest.fn(),
       disconnect: jest.fn(),
     };
-    gateway.handleConnection(bad as never);
+    await gateway.handleConnection(bad as never);
+    expect(bad.emit).toHaveBeenCalledWith('error', {
+      message: 'Unauthorized',
+      code: 'UNAUTHORIZED',
+    });
     expect(bad.disconnect).toHaveBeenCalledWith(true);
     expect(bad.join).not.toHaveBeenCalled();
   });

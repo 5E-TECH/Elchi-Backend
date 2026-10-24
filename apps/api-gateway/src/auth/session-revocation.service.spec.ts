@@ -7,6 +7,8 @@ import {
   SessionRevocationService,
   accessTokenTtlMs,
   applyRevokedSessionIds,
+  isSessionKickReason,
+  sessionIdClaim,
 } from './session-revocation.service';
 
 /**
@@ -223,8 +225,8 @@ describe('SessionRevocationService (Elchi Pochta #3)', () => {
 describe('(Elchi Pochta #3, 2026-10-23) applyRevokedSessionIds', () => {
   const SID = '3f2b8c1e-6a4d-4e7b-9c10-2d5f7a8b9c0d';
 
-  it('`revoked_session_ids` belgilanadi va javobdan olib tashlanadi; qolgan maydonlar joyida', () => {
-    const revocation = { markRevoked: jest.fn() };
+  it('`revoked_session_ids` chiqariladi (`kickSessions`, `password_changed`) va javobdan olib tashlanadi; qolgan maydonlar joyida', () => {
+    const revocation = { kickSessions: jest.fn() };
     const out = applyRevokedSessionIds(
       {
         statusCode: 200,
@@ -235,7 +237,10 @@ describe('(Elchi Pochta #3, 2026-10-23) applyRevokedSessionIds', () => {
       },
       revocation,
     );
-    expect(revocation.markRevoked).toHaveBeenCalledWith([SID]);
+    expect(revocation.kickSessions).toHaveBeenCalledWith(
+      [SID],
+      'password_changed',
+    );
     expect(out).toEqual({
       statusCode: 200,
       message: 'User yangilandi',
@@ -245,14 +250,81 @@ describe('(Elchi Pochta #3, 2026-10-23) applyRevokedSessionIds', () => {
   });
 
   it('maydon yo‘q / javob obyekt emas — o‘zgarmaydi; servis yo‘q bo‘lsa ham olib tashlanadi', () => {
-    const revocation = { markRevoked: jest.fn() };
+    const revocation = { kickSessions: jest.fn() };
     const plain = { statusCode: 200, data: { id: '1' } };
     expect(applyRevokedSessionIds(plain, revocation)).toBe(plain);
     expect(applyRevokedSessionIds(null, revocation)).toBeNull();
     expect(applyRevokedSessionIds([SID], revocation)).toEqual([SID]);
-    expect(revocation.markRevoked).not.toHaveBeenCalled();
+    expect(revocation.kickSessions).not.toHaveBeenCalled();
     expect(
       applyRevokedSessionIds({ ok: true, revoked_session_ids: [SID] }, null),
     ).toEqual({ ok: true });
+  });
+});
+
+describe('(Elchi Pochta #3, 2026-10-24) kickSessions — yagona chiqarish nuqtasi', () => {
+  const SID_A = '3f2b8c1e-6a4d-4e7b-9c10-2d5f7a8b9c0d';
+  const SID_B = '9a1b2c3d-4e5f-4a6b-8c7d-0e1f2a3b4c5d';
+
+  it('⭐ belgilaydi (identity’siz true) va tinglovchiga id lar + reason; kichik harf, takrorsiz, faqat UUID', async () => {
+    const { service, send } = build();
+    const listener = jest.fn();
+    service.onKick(listener);
+    const ids = service.kickSessions(
+      [SID_A.toUpperCase(), SID_A, SID_B, 'not-a-uuid', null, 42, ''],
+      'revoked_by_owner',
+    );
+    expect(ids).toEqual([SID_A, SID_B]);
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(listener).toHaveBeenCalledWith([SID_A, SID_B], 'revoked_by_owner');
+    expect(await service.isRevoked('25', SID_A)).toBe(true);
+    expect(await service.isRevoked('25', SID_B)).toBe(true);
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it('bo‘sh / yaroqsiz ro‘yxat — tinglovchi chaqirilmaydi, hech narsa belgilanmaydi', () => {
+    const { service } = build();
+    const listener = jest.fn();
+    service.onKick(listener);
+    expect(service.kickSessions(undefined, 'logout')).toEqual([]);
+    expect(service.kickSessions(['x', null], 'logout')).toEqual([]);
+    expect(listener).not.toHaveBeenCalled();
+    expect(service.size).toBe(0);
+  });
+
+  it('tinglovchi xatosi chaqiruvchiga chiqmaydi (HTTP javobi buzilmaydi), boshqa tinglovchilar ishlaydi; obunani bekor qilish', async () => {
+    const { service, warn } = build();
+    const second = jest.fn();
+    service.onKick(() => {
+      throw new Error('socket server down');
+    });
+    const unsubscribe = service.onKick(second);
+    expect(() => service.kickSessions([SID_A], 'password_changed')).not.toThrow();
+    expect(second).toHaveBeenCalledWith([SID_A], 'password_changed');
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('socket server down'),
+    );
+    expect(await service.isRevoked('25', SID_A)).toBe(true);
+
+    unsubscribe();
+    service.kickSessions([SID_B], 'logout');
+    expect(second).toHaveBeenCalledTimes(1);
+  });
+
+  it('sessionIdClaim / isSessionKickReason', () => {
+    expect(sessionIdClaim(SID_A.toUpperCase())).toBe(SID_A);
+    expect(sessionIdClaim('abc')).toBeNull();
+    expect(sessionIdClaim(undefined)).toBeNull();
+    expect(sessionIdClaim(123)).toBeNull();
+    for (const reason of [
+      'revoked_by_owner',
+      'password_changed',
+      'logout',
+      'security_reset',
+    ]) {
+      expect(isSessionKickReason(reason)).toBe(true);
+    }
+    expect(isSessionKickReason('revoked')).toBe(false);
+    expect(isSessionKickReason(undefined)).toBe(false);
   });
 });
