@@ -23,6 +23,86 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-10-24 — Ombor moduli (hY7uacJu, frontend kartasi yXC91RRx)
+
+Hammasi YANGI (additive). Deploy: `migration:run` (1716000000143) → catalog-service, identity-service,
+api-gateway. Qoldiq faqat dona; `available = on_hand − reserved`; `level`: `ok` Yetarli / `low` Kam qoldi /
+`out` Tugagan. Buyurtma bilan bog'lanish (band/chiqim/qaytish) — keyingi order-service PR'i; hozircha
+harakatlarda faqat Kirim/Tuzatish yoziladi.
+
+- [2026-10-24] 🆕 [gateway/catalog] — **Omborlar** (`superadmin--warehouse-list`, `-detail`, `manager--warehouse-detail`):
+  - `GET /warehouses?status=&region_id=&search=&page=&limit=` (SUPERADMIN, ADMIN; MANAGER/BRANCH — faqat o'z
+    filiali) → `{ data: Warehouse[], total, page, limit, counts: {all, active, paused}, summary: {warehouses,
+    active, paused, positions, on_hand, reserved, available, reserved_orders, low_count, out_count} }`.
+    `Warehouse`: `id, name, status (ACTIVE|PAUSED), branch_id, branch {id,name,type,status,address}, region {id,name},
+    manager {id,name,phone_number}, address, effective_address, low_stock_default, note, paused_at, created_at
+    («Ochilgan»), summary {positions, markets, on_hand, reserved, available, reserved_orders, low_count, out_count},
+    last_movement {type, qty, ref_type, ref_id, created_at}`. «Kam qolgan N ta · M tasi tugagan» = `low_count +
+    out_count` / `out_count`. To'xtatilgan omborda «Oxirgi harakat» o'rniga `paused_at`.
+  - `GET /warehouses/:id` → `Warehouse` + `movements_count` («Harakatlar» tab soni). Begona filial — 404.
+  - `POST /warehouses` (SUPERADMIN, ADMIN) `{ branch_id, name?, manager_user_id?, address?, low_stock_default?, note? }`
+    → 201 `Warehouse`. Faqat FAOL REGIONAL/HYBRID filial (aks holda 400); filialda ombor bor — 409; nom berilmasa
+    «<filial> ombori»; `manager_user_id` — shu filial MANAGER'i (aks holda 400). 🔧 FE: «Filial» ro'yxati =
+    `GET /branches/dispatch-destinations` (yoki filiallar) minus `GET /warehouses` dagi `branch_id`lar.
+  - `PATCH /warehouses/:id` (SUPERADMIN, ADMIN) — name/manager_user_id/address/low_stock_default/note (`null` —
+    tozalash); filial o'zgarmaydi.
+  - `POST /warehouses/:id/pause` / `POST /warehouses/:id/resume` (SUPERADMIN, ADMIN) `{ note? }` → `Warehouse` +
+    `changed`. To'xtatilganda qoldiq ko'rinadi, yangi buyurtma tushmaydi.
+- [2026-10-24] 🆕 [gateway/catalog] — **Qoldiq va harakatlar**:
+  - `GET /warehouses/:id/stock?market_id=&level=ok,low,out&search=&page=&limit=` (o'qish rollari) →
+    `{ warehouse, data: [{ stock_id, product, market {id,name}, on_hand, reserved, available, low_stock_threshold,
+    threshold, level, last_movement_at }], total, page, limit, facets: { levels {all,ok,low,out}, markets [{id,name,
+    positions}] } }`. `product`: `id, name, market_id, sku_code, barcode, image_url, is_deleted, code {value, kind:
+    barcode|sku, format: EAN-13|EAN-8|GTIN-14|TEXT|ELC}, weight_kg, length_cm, width_cm, height_cm,
+    volumetric_enabled, chargeable_weight_kg («Hisob vazni»), volumetric_weight_kg, chargeable_basis
+    (volumetric → «hajm bo'yicha»), measure_missing («O'lchov yo'q»)`. Saralash: qoldiq o'sishi bo'yicha.
+  - `GET /warehouses/:id/movements?type=IN,ADJUST,RESERVE,RELEASE,OUT,RETURN&product_id=&market_id=&ref_type=&ref_id=&from=&to=&page=&limit=`
+    → `{ warehouse, data: [{ id, type, qty (ishorali), on_hand_after, reserved_after, ref_type, ref_id, order_id
+    («Buyurtma №»), note (izoh/sabab), created_at, product {id,name,sku_code,barcode}, market {id,name}, actor {id,name,
+    role} }], total, page, limit }`. Yorliqlar: IN Kirim, RESERVE Band, OUT Chiqim, RELEASE/RETURN Qaytdi (bekor),
+    ADJUST Tuzatish («Inventarizatsiya: on_hand_after − qty → on_hand_after»).
+  - `GET /warehouses/:id/export?market_id=&level=&search=` (o'qish rollari) → `.xlsx` («Excelga yuklash»).
+  - `PATCH /warehouses/:id/stock/:productId` (SUPERADMIN, ADMIN) `{ low_stock_threshold: number | null }` («Chegara»;
+    `null` — ombor sukuti).
+- [2026-10-24] 🆕 [gateway/catalog] — **Kirim va inventarizatsiya** (`superadmin--warehouse-stock-in-dialog`), faqat
+  SUPERADMIN/ADMIN, sarlavha **`Idempotency-Key`** MAJBURIY (8–128 `[A-Za-z0-9._:-]`; dialog ochilganda bitta UUID,
+  qayta yuborishda o'sha kalit):
+  - `GET /warehouses/:id/lookup?code=&market_id=` → `{ warehouse, code, matched_by: sku_code|barcode|null, data:
+    [{ product, market, stock: {on_hand, reserved, available, threshold, level} | null }] }`. `data: []` — topilmadi
+    (zavod kodi bo'lsa «Mahsulotga bog'lash» = `PATCH /product/:id { barcode }`, keyin kirim); `stock: null` —
+    «0 · yangi». Bir kod bir nechta marketda — «Market» tanlansin (`market_id`).
+  - `POST /warehouses/:id/stock-in` `{ lines: [{ product_id | code, qty }], market_id?, note? }` → 201 `{ warehouse_id,
+    warehouse_name, replayed, positions, total_qty, lines: [{ product_id, product_name, market_id, sku_code, barcode,
+    qty, on_hand, reserved, available, movement_id }] }`. Bir mahsulot qatorlari qo'shiladi; biror qator hal
+    qilinmasa — 400 (xabarda kodlar), hech narsa yozilmaydi. Takror (shu kalit, shu tarkib) — `replayed: true`;
+    shu kalit boshqa tarkib — 409. 🔧 FE: «2 ta skan hal qilinmagan — qo'shilmaydi» qatorlarini yubormang.
+  - `POST /warehouses/:id/inventory` `{ lines: [{ product_id | code, counted }], reason, market_id? }` → 201 `{ replayed,
+    reason, changed, unchanged, lines: [{ product_id, product_name, counted, before, after, delta, reserved, available,
+    movement_id }] }`. `counted` — haqiqiy son; band qilingandan kam — 409.
+- [2026-10-24] 🆕 [gateway/catalog] — **Market «Ombordagi qoldiq»** (`market--products-warehouse-stock`):
+  `GET /market/warehouse-stock?search=&low_only=true&page=&limit=` (MARKET — faqat o'zi, boshqa `market_id` 403;
+  MARKET_OPERATOR — biriktirilgan marketi; SUPERADMIN/ADMIN — `market_id` majburiy) → `{ market_id, warehouses: [{id,
+  name, status, branch, region}] (jadval ustunlari), data: [{ product, cells: [{warehouse_id, warehouse_status,
+  on_hand, reserved, available, threshold, level}], total_available (faqat FAOL omborlar), total_on_hand, has_low }],
+  total, page, limit, summary: { products_total, products_in_warehouses, total_available, warehouses_total,
+  warehouses_active, warehouses_paused, active_warehouses_with_stock, low_positions, out_positions } }`. Katak yo'q — «—».
+- [2026-10-24] 🆕 [gateway/catalog] — **Buyurtma formasi** (`superadmin--neworders-create-manual-source`), rollar
+  SUPERADMIN, ADMIN, REGISTRATOR, MARKET, MARKET_OPERATOR (market — faqat o'z marketi):
+  - `GET /warehouses/availability?district_id=|region_id=&market_id=|product_ids=1,2` → `{ region_id, warehouse:
+    {id,name,status,branch_id,branch_name,region_id,region_name} | null, items: [{product_id, on_hand, reserved,
+    available}] }` — «Omborda: N» (qatori yo'q — «Omborda yo'q»; PAUSED — `items: []`).
+  - `POST /warehouses/resolve-source` `{ district_id | region_id, market_id?, items: [{product_id, quantity}] }` →
+    200 `{ source: WAREHOUSE|HQ, reason, region_id, warehouse, items: [{product_id, name, required, available,
+    enough}], shortages: [{product_id, name, required, available}] }`. `reason`: OK, NO_ITEMS, NO_REGION,
+    NO_WAREHOUSE, WAREHOUSE_PAUSED («Tuman ombori to'xtatilgan»), INSUFFICIENT_STOCK («Omborda yetmaydi — butun
+    buyurtma HQ'dan»: «kerak 2, bor 1»), MARKET_NOT_ALLOWED, PRODUCT_INVALID. Faqat hisoblaydi — band order-service
+    PR'idan keyin buyurtma yaratishda bo'ladi. 🟢 «HQ'ga o'zgartirish» tanlovi va `fulfillment_source` buyurtma
+    DTO'siga keyingi PR'da qo'shiladi.
+- [2026-10-24] 🆕 [gateway/identity] — **Market «Ombordan buyurtma yaratish»** (`superadmin--users-edit-market-warehouse`):
+  `can_order_from_warehouse` (sukut false) market javoblarida (`GET /markets/:id`, `/users/:id` …). O'zgartirish —
+  faqat SUPERADMIN/ADMIN: `PATCH /markets/:id/warehouse-order { can_order_from_warehouse }` yoki tahrirlash
+  formasidagi `PATCH /users/:id { can_order_from_warehouse }` (boshqa rol / market bo'lmagan — 403/400).
+
 ### [2026-10-24] 🆕 ✏️ [logistics / gateway] — Tariflar tarixida «kim o'zgartirdi» ismi + sozlamalar tarixi (47WFHzlx)
 
 - ✏️ `GET /delivery/tariffs` — `data.versions[]` va `data.current.*` qatorlariga `created_by_name` (ism yoki `null`) qo'shildi. Identity javob bermasa ism `null`, javob baribir qaytadi.

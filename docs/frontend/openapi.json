@@ -19040,6 +19040,1076 @@
         ]
       }
     },
+    "/warehouses/resolve-source": {
+      "post": {
+        "description": "Qaror 4: buyurtma tumani filialida FAOL ombor bo'lsa va HAMMA mahsulot yetarli bo'lsa — `source: WAREHOUSE`, aks holda butun buyurtma `HQ` (bo'linmaydi), `reason` va `shortages` bilan. Hech narsa band qilinmaydi — band order-service yaratishda (`catalog.warehouse.reserve`). MARKET/MARKET_OPERATOR — faqat o'z marketi; market kaliti «Ombordan buyurtma yaratish» o'chiq bo'lsa — `HQ` + `MARKET_NOT_ALLOWED`.",
+        "operationId": "WarehouseGatewayController_resolveSource",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WarehouseResolveSourceRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WarehouseResolveSourceResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Buyurtma manbasi: ombor yoki HQ (faqat hisoblaydi)",
+        "tags": [
+          "Warehouses"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "registrator",
+          "market",
+          "market_operator"
+        ]
+      }
+    },
+    "/warehouses/availability": {
+      "get": {
+        "description": "Tuman (yoki hudud) filialidagi birinchi FAOL ombor; `market_id` mahsulotlari yoki `product_ids` (vergul bilan, ≤500). Ombor to'xtatilgan bo'lsa — `warehouse.status = PAUSED`, `items: []`. MARKET/MARKET_OPERATOR — faqat o'z marketi.",
+        "operationId": "WarehouseGatewayController_availability",
+        "parameters": [
+          {
+            "name": "district_id",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "region_id",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "market_id",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "product_ids",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "example": "142,143",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WarehouseAvailabilityResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "«Omborda: N» — hudud omboridagi mavjud dona (yaratish formasi)",
+        "tags": [
+          "Warehouses"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "registrator",
+          "market",
+          "market_operator"
+        ]
+      }
+    },
+    "/market/warehouse-stock": {
+      "get": {
+        "description": "Market — FAQAT o'z mahsulotlari (token; boshqa `market_id` — 403); market operatori — biriktirilgan marketi; SUPERADMIN/ADMIN — `market_id` majburiy. Ustunlar — hamma omborlar (to'xtatilgani belgisi bilan); katakda MAVJUD dona (band ayirilgan); `total_available` — faqat faol omborlar.",
+        "operationId": "WarehouseGatewayController_marketStock",
+        "parameters": [
+          {
+            "name": "market_id",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "search",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "low_only",
+            "required": false,
+            "in": "query",
+            "description": "«Faqat kam qolganlar»",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "page",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "number"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "example": 50,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MarketWarehouseStockResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "«Ombordagi qoldiq» — market mahsulotlari omborlar kesimida (faqat ko‘rish)",
+        "tags": [
+          "Warehouses"
+        ],
+        "x-roles": [
+          "market",
+          "market_operator",
+          "superadmin",
+          "admin"
+        ]
+      }
+    },
+    "/markets/{id}/warehouse-order": {
+      "patch": {
+        "description": "Faqat SUPERADMIN/ADMIN (identity ham tekshiradi). Sukut — o'chiq. Xuddi shu maydon `PATCH /users/:id` (market tahrirlash formasi) orqali ham o'zgaradi.",
+        "operationId": "WarehouseGatewayController_updateMarketWarehouseOrder",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Market user ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateMarketWarehouseOrderRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Market yangilandi (`data.can_order_from_warehouse`)"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Market «Ombordan buyurtma yaratish» kaliti (can_order_from_warehouse)",
+        "tags": [
+          "Warehouses"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
+        ]
+      }
+    },
+    "/warehouses": {
+      "get": {
+        "description": "Har qatorda filial, viloyat, mas'ul xodim, jami/band/kam qolgan, oxirgi harakat, holat. `summary` — ko'rinadigan hamma omborlar (filtrsiz), `counts` — viloyat/qidiruvdan keyin holat bo'yicha. Filial menejeri — faqat o'z filiali ombori.",
+        "operationId": "WarehouseGatewayController_findAll",
+        "parameters": [
+          {
+            "name": "status",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "enum": [
+                "ACTIVE",
+                "PAUSED"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "name": "region_id",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "search",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "page",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "number"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "example": 50,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WarehouseListResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Omborlar ro'yxati",
+        "tags": [
+          "Warehouses"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "manager",
+          "branch"
+        ]
+      },
+      "post": {
+        "description": "Faqat FAOL viloyat filialida (REGIONAL/HYBRID); bitta filial — bitta ombor (409). Nom berilmasa — «<filial> ombori». Mas'ul xodim — shu filial menejeri (aks holda 400). Yangi ombor — FAOL.",
+        "operationId": "WarehouseGatewayController_create",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateWarehouseRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WarehouseDetailDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Ombor ochish",
+        "tags": [
+          "Warehouses"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
+        ]
+      }
+    },
+    "/warehouses/{id}": {
+      "get": {
+        "description": "Pozitsiyalar/marketlar, jami/mavjud, band (+ faol buyurtmalar soni), kam qoldi/tugagan, `movements_count`. Filial menejeri — faqat o'z filiali (begonasi 404).",
+        "operationId": "WarehouseGatewayController_findOne",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Warehouse ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WarehouseDetailDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Bitta ombor (sarlavha + KPI)",
+        "tags": [
+          "Warehouses"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "manager",
+          "branch"
+        ]
+      },
+      "patch": {
+        "description": "Filial o'zgarmaydi. `null` — maydonni tozalash.",
+        "operationId": "WarehouseGatewayController_update",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Warehouse ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateWarehouseRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WarehouseDetailDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Ombor ma'lumotlarini tahrirlash",
+        "tags": [
+          "Warehouses"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
+        ]
+      }
+    },
+    "/warehouses/{id}/pause": {
+      "post": {
+        "description": "Qoldiq joyida saqlanadi va ko'rinadi, yangi buyurtma tushmaydi (manba — HQ). Mavjud bandlar ishlayveradi. Takror — `changed: false`.",
+        "operationId": "WarehouseGatewayController_pause",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Warehouse ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WarehouseStatusRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WarehouseDetailDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Omborni to'xtatish",
+        "tags": [
+          "Warehouses"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
+        ]
+      }
+    },
+    "/warehouses/{id}/resume": {
+      "post": {
+        "operationId": "WarehouseGatewayController_resume",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Warehouse ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WarehouseStatusRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WarehouseDetailDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Omborni qayta yoqish",
+        "tags": [
+          "Warehouses"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
+        ]
+      }
+    },
+    "/warehouses/{id}/stock": {
+      "get": {
+        "description": "Mahsulot, kod (zavod shtrix kodi yoki ELC-P), market, qoldiq/band/mavjud, chegara, «Hisob vazni», holat (`level`: ok — Yetarli, low — Kam qoldi, out — Tugagan). Saralash: qoldiq o'sishi bo'yicha. `facets` — holat soni va «Market:» filtri.",
+        "operationId": "WarehouseGatewayController_listStock",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Warehouse ID",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "market_id",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "level",
+            "required": false,
+            "in": "query",
+            "description": "ok, low, out (vergul bilan)",
+            "schema": {
+              "example": "low,out",
+              "type": "string"
+            }
+          },
+          {
+            "name": "search",
+            "required": false,
+            "in": "query",
+            "description": "Nom, ELC-P kodi yoki shtrix kod",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "page",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "number"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "example": 20,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WarehouseStockListResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Qoldiq jadvali",
+        "tags": [
+          "Warehouses"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "manager",
+          "branch"
+        ]
+      }
+    },
+    "/warehouses/{id}/movements": {
+      "get": {
+        "description": "Kirim, band, chiqim, qaytish, tuzatish — eng yangisi tepada, sahifalash. `order_id` — «Buyurtma №…».",
+        "operationId": "WarehouseGatewayController_listMovements",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Warehouse ID",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "type",
+            "required": false,
+            "in": "query",
+            "description": "IN, ADJUST, RESERVE, RELEASE, OUT, RETURN (vergul bilan)",
+            "schema": {
+              "example": "IN,ADJUST",
+              "type": "string"
+            }
+          },
+          {
+            "name": "product_id",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "market_id",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "ref_type",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "enum": [
+                "stock_in",
+                "inventory",
+                "order",
+                "move"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "name": "ref_id",
+            "required": false,
+            "in": "query",
+            "description": "ref_type=order bilan — buyurtma id",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from",
+            "required": false,
+            "in": "query",
+            "description": "ISO sana (>=)",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "to",
+            "required": false,
+            "in": "query",
+            "description": "ISO sana (<)",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "page",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "number"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "example": 20,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WarehouseMovementListResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Harakatlar jurnali",
+        "tags": [
+          "Warehouses"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "manager",
+          "branch"
+        ]
+      }
+    },
+    "/warehouses/{id}/lookup": {
+      "get": {
+        "description": "`ELC-P-…` yoki zavod shtrix kodi. Topilmasa `data: []` (404 emas): zavod kodi bo'lsa «Mahsulotga bog'lash» — `PATCH /product/:id { barcode }`, so'ng kirim. `stock: null` — omborda hali yo'q.",
+        "operationId": "WarehouseGatewayController_lookup",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Warehouse ID",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "code",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "market_id",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WarehouseLookupResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Skaner: kod → mahsulot + shu ombordagi qoldiq",
+        "tags": [
+          "Warehouses"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
+        ]
+      }
+    },
+    "/warehouses/{id}/stock-in": {
+      "post": {
+        "description": "Qaror 3: darhol qoldiqqa, filial tasdig'isiz (to'xtatilgan omborga ham). Qatorlar `product_id` yoki skaner `code` bilan; biror qator hal qilinmasa — 400, hech narsa yozilmaydi. `Idempotency-Key` MAJBURIY: AYNI kalit + AYNI tarkib — avvalgi natija (`replayed: true`), boshqa tarkib — 409.",
+        "operationId": "WarehouseGatewayController_stockIn",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Warehouse ID",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "8–128 belgi [A-Za-z0-9._:-], har yangi kirimga yangi (UUID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WarehouseStockInRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WarehouseStockInResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Kirim — mahsulotni omborga qo'shish",
+        "tags": [
+          "Warehouses"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
+        ]
+      }
+    },
+    "/warehouses/{id}/inventory": {
+      "post": {
+        "description": "Har qatorda `counted` — sanalgan dona; farq ADJUST bo'lib yoziladi (sabab majburiy). Band qilingandan kam — 409. Farq 0 — yozilmaydi. `Idempotency-Key` majburiy (takror — `replayed: true`, qayta qo'llanmaydi).",
+        "operationId": "WarehouseGatewayController_inventory",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Warehouse ID",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WarehouseInventoryRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WarehouseInventoryResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Inventarizatsiya — haqiqiy sonni kiritib farqni tuzatish",
+        "tags": [
+          "Warehouses"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
+        ]
+      }
+    },
+    "/warehouses/{id}/stock/{productId}": {
+      "patch": {
+        "description": "`null` — ombor sukuti (`low_stock_default`).",
+        "operationId": "WarehouseGatewayController_setThreshold",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Warehouse ID",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "productId",
+            "required": true,
+            "in": "path",
+            "description": "Product ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WarehouseThresholdRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WarehouseThresholdResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "«Kam qoldiq» chegarasi (mahsulot bo‘yicha)",
+        "tags": [
+          "Warehouses"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
+        ]
+      }
+    },
+    "/warehouses/{id}/export": {
+      "get": {
+        "description": "«Excelga yuklash»: shu ombor qoldig'i (filtrlar `stock` bilan bir xil, sahifasiz, ≤10 000 qator).",
+        "operationId": "WarehouseGatewayController_exportStock",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Warehouse ID",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "market_id",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "level",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "search",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Qoldiqni Excel (.xlsx) ga yuklash",
+        "tags": [
+          "Warehouses"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "manager",
+          "branch"
+        ]
+      }
+    },
     "/health": {
       "get": {
         "operationId": "HealthController_check",
@@ -19449,6 +20519,11 @@
             "minimum": 0,
             "maximum": 1000000,
             "description": "Market AI buyurtma narxi (so'm, 1 ta buyurtma). null — global narx (AI_PRICE_PER_ORDER, sukut 300); 0 — bepul. Faqat SUPERADMIN/ADMIN."
+          },
+          "can_order_from_warehouse": {
+            "type": "boolean",
+            "example": true,
+            "description": "Market «Ombordan buyurtma yaratish» kaliti (sukut false). Faqat SUPERADMIN/ADMIN, faqat market."
           }
         }
       },
@@ -27185,6 +28260,2050 @@
             "description": "Tezkor yetkazish ko`paytiruvchisi (1.4 → subtotal × 0.4 ustama)."
           }
         }
+      },
+      "WarehouseOrderItemDto": {
+        "type": "object",
+        "properties": {
+          "product_id": {
+            "type": "string",
+            "example": "142"
+          },
+          "quantity": {
+            "type": "number",
+            "example": 1,
+            "minimum": 1,
+            "maximum": 100000
+          }
+        },
+        "required": [
+          "product_id",
+          "quantity"
+        ]
+      },
+      "WarehouseResolveSourceRequestDto": {
+        "type": "object",
+        "properties": {
+          "district_id": {
+            "type": "string",
+            "example": "45",
+            "description": "Buyurtma tumani — hudud `assigned_region ?? region_id` bo‘yicha (HQ qabuli bilan bir xil). `region_id` berilsa — u ustun."
+          },
+          "region_id": {
+            "type": "string",
+            "example": "7"
+          },
+          "market_id": {
+            "type": "string",
+            "example": "121",
+            "description": "Buyurtma marketi. MARKET — e'tiborsiz (tokendagi o'zi), MARKET_OPERATOR — biriktirilgan marketi; xodim — mahsulotlar shu marketniki bo'lishi tekshiriladi."
+          },
+          "items": {
+            "maxItems": 200,
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WarehouseOrderItemDto"
+            }
+          }
+        },
+        "required": [
+          "items"
+        ]
+      },
+      "WarehouseCandidateDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "3"
+          },
+          "name": {
+            "type": "string",
+            "example": "Samarqand filiali ombori"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "ACTIVE",
+              "PAUSED"
+            ]
+          },
+          "branch_id": {
+            "type": "string",
+            "example": "11"
+          },
+          "branch_name": {
+            "type": "string",
+            "example": "Samarqand filiali"
+          },
+          "region_id": {
+            "type": "string",
+            "nullable": true
+          },
+          "region_name": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "status",
+          "branch_id",
+          "branch_name"
+        ]
+      },
+      "WarehouseSourceItemDto": {
+        "type": "object",
+        "properties": {
+          "product_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "nullable": true
+          },
+          "required": {
+            "type": "number",
+            "example": 2,
+            "description": "kerak"
+          },
+          "available": {
+            "type": "number",
+            "example": 1,
+            "description": "bor (mavjud)"
+          },
+          "enough": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "product_id",
+          "required",
+          "available",
+          "enough"
+        ]
+      },
+      "WarehouseShortageDto": {
+        "type": "object",
+        "properties": {
+          "product_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "nullable": true,
+            "example": "Bluetooth quloqchin"
+          },
+          "required": {
+            "type": "number",
+            "example": 2
+          },
+          "available": {
+            "type": "number",
+            "example": 1
+          }
+        },
+        "required": [
+          "product_id",
+          "required",
+          "available"
+        ]
+      },
+      "WarehouseResolveSourceResponseDto": {
+        "type": "object",
+        "properties": {
+          "source": {
+            "type": "string",
+            "enum": [
+              "HQ",
+              "WAREHOUSE"
+            ],
+            "example": "WAREHOUSE"
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "OK",
+              "NO_ITEMS",
+              "NO_REGION",
+              "NO_WAREHOUSE",
+              "WAREHOUSE_PAUSED",
+              "INSUFFICIENT_STOCK",
+              "MARKET_NOT_ALLOWED",
+              "PRODUCT_INVALID"
+            ],
+            "description": "OK — ombor; qolgani — HQ: NO_ITEMS, NO_REGION (tuman hududi aniqlanmadi), NO_WAREHOUSE (hududda ombor yo'q), WAREHOUSE_PAUSED («Tuman ombori to'xtatilgan»), INSUFFICIENT_STOCK («Omborda yetmaydi — butun buyurtma HQ'dan»), MARKET_NOT_ALLOWED (market kaliti o'chiq), PRODUCT_INVALID"
+          },
+          "region_id": {
+            "type": "string",
+            "nullable": true
+          },
+          "warehouse": {
+            "nullable": true,
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/WarehouseCandidateDto"
+              }
+            ]
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WarehouseSourceItemDto"
+            }
+          },
+          "shortages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WarehouseShortageDto"
+            }
+          }
+        },
+        "required": [
+          "source",
+          "reason",
+          "items",
+          "shortages"
+        ]
+      },
+      "WarehouseAvailabilityItemDto": {
+        "type": "object",
+        "properties": {
+          "product_id": {
+            "type": "string"
+          },
+          "on_hand": {
+            "type": "number"
+          },
+          "reserved": {
+            "type": "number"
+          },
+          "available": {
+            "type": "number",
+            "description": "«Omborda: N»"
+          }
+        },
+        "required": [
+          "product_id",
+          "on_hand",
+          "reserved",
+          "available"
+        ]
+      },
+      "WarehouseAvailabilityResponseDto": {
+        "type": "object",
+        "properties": {
+          "region_id": {
+            "type": "string",
+            "nullable": true
+          },
+          "warehouse": {
+            "nullable": true,
+            "description": "PAUSED bo‘lsa items bo‘sh",
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/WarehouseCandidateDto"
+              }
+            ]
+          },
+          "items": {
+            "description": "Faqat omborda qatori bor mahsulotlar",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WarehouseAvailabilityItemDto"
+            }
+          }
+        },
+        "required": [
+          "items"
+        ]
+      },
+      "WarehouseRefDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "11"
+          },
+          "name": {
+            "type": "string",
+            "example": "Samarqand filiali"
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ]
+      },
+      "MarketStockWarehouseDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "ACTIVE",
+              "PAUSED"
+            ]
+          },
+          "branch": {
+            "nullable": true,
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/WarehouseRefDto"
+              }
+            ]
+          },
+          "region": {
+            "nullable": true,
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/WarehouseRefDto"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "status"
+        ]
+      },
+      "WarehouseCodeDto": {
+        "type": "object",
+        "properties": {
+          "value": {
+            "type": "string",
+            "nullable": true,
+            "example": "8806095501239"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "barcode",
+              "sku"
+            ],
+            "description": "barcode — zavod shtrix kodi; sku — Elchi QR kodi"
+          },
+          "format": {
+            "type": "string",
+            "enum": [
+              "ELC",
+              "EAN-13",
+              "EAN-8",
+              "GTIN-14",
+              "TEXT"
+            ]
+          }
+        },
+        "required": [
+          "kind",
+          "format"
+        ]
+      },
+      "WarehouseProductDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "142"
+          },
+          "name": {
+            "type": "string",
+            "example": "Simsiz quloqchin"
+          },
+          "market_id": {
+            "type": "string",
+            "example": "121"
+          },
+          "sku_code": {
+            "type": "string",
+            "nullable": true,
+            "example": "ELC-P-000142"
+          },
+          "barcode": {
+            "type": "string",
+            "nullable": true
+          },
+          "image_url": {
+            "type": "string",
+            "nullable": true
+          },
+          "is_deleted": {
+            "type": "boolean",
+            "description": "O'chirilgan mahsulot (jismoniy qoldiq baribir ko'rinadi)"
+          },
+          "code": {
+            "description": "Ekrandagi kod: zavod kodi bo‘lsa o‘sha, aks holda ELC-P",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/WarehouseCodeDto"
+              }
+            ]
+          },
+          "weight_kg": {
+            "type": "number",
+            "nullable": true,
+            "example": 0.2
+          },
+          "length_cm": {
+            "type": "integer",
+            "nullable": true
+          },
+          "width_cm": {
+            "type": "integer",
+            "nullable": true
+          },
+          "height_cm": {
+            "type": "integer",
+            "nullable": true
+          },
+          "volumetric_enabled": {
+            "type": "boolean"
+          },
+          "chargeable_weight_kg": {
+            "type": "number",
+            "nullable": true,
+            "example": 38.4,
+            "description": "«Hisob vazni» = max(og‘irlik, U×K×B/5000), kg (3 kasr)"
+          },
+          "volumetric_weight_kg": {
+            "type": "number",
+            "nullable": true
+          },
+          "chargeable_basis": {
+            "type": "string",
+            "enum": [
+              "actual",
+              "volumetric"
+            ],
+            "nullable": true,
+            "description": "volumetric — «hajm bo‘yicha»"
+          },
+          "measure_missing": {
+            "type": "boolean",
+            "description": "Og'irlik yo'q — «O'lchov yo'q — yetkazish narxi hisoblanmaydi»"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "market_id",
+          "is_deleted",
+          "code",
+          "volumetric_enabled",
+          "measure_missing"
+        ]
+      },
+      "MarketStockCellDto": {
+        "type": "object",
+        "properties": {
+          "warehouse_id": {
+            "type": "string"
+          },
+          "warehouse_status": {
+            "type": "string",
+            "enum": [
+              "ACTIVE",
+              "PAUSED"
+            ]
+          },
+          "on_hand": {
+            "type": "number"
+          },
+          "reserved": {
+            "type": "number"
+          },
+          "available": {
+            "type": "number",
+            "description": "Katakdagi raqam (sotish uchun mavjud)"
+          },
+          "threshold": {
+            "type": "number"
+          },
+          "level": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "low",
+              "out"
+            ]
+          }
+        },
+        "required": [
+          "warehouse_id",
+          "warehouse_status",
+          "on_hand",
+          "reserved",
+          "available",
+          "threshold",
+          "level"
+        ]
+      },
+      "MarketStockRowDto": {
+        "type": "object",
+        "properties": {
+          "product": {
+            "$ref": "#/components/schemas/WarehouseProductDto"
+          },
+          "cells": {
+            "description": "Faqat qatori bor omborlar; yo‘q — «—»",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MarketStockCellDto"
+            }
+          },
+          "total_available": {
+            "type": "number",
+            "example": 30,
+            "description": "«Jami» — faqat FAOL omborlar mavjud donasi"
+          },
+          "total_on_hand": {
+            "type": "number"
+          },
+          "has_low": {
+            "type": "boolean",
+            "description": "Faol omborlardan birida kam qoldi / tugagan"
+          }
+        },
+        "required": [
+          "product",
+          "cells",
+          "total_available",
+          "total_on_hand",
+          "has_low"
+        ]
+      },
+      "MarketStockSummaryDto": {
+        "type": "object",
+        "properties": {
+          "products_total": {
+            "type": "number",
+            "example": 12
+          },
+          "products_in_warehouses": {
+            "type": "number",
+            "example": 8
+          },
+          "total_available": {
+            "type": "number",
+            "example": 446,
+            "description": "Faol omborlardagi jami mavjud dona"
+          },
+          "warehouses_total": {
+            "type": "number",
+            "example": 4
+          },
+          "warehouses_active": {
+            "type": "number",
+            "example": 3
+          },
+          "warehouses_paused": {
+            "type": "number",
+            "example": 1
+          },
+          "active_warehouses_with_stock": {
+            "type": "number",
+            "example": 3,
+            "description": "Sotish uchun mavjud donasi bor faol omborlar"
+          },
+          "low_positions": {
+            "type": "number",
+            "example": 3
+          },
+          "out_positions": {
+            "type": "number",
+            "example": 1
+          }
+        },
+        "required": [
+          "products_total",
+          "products_in_warehouses",
+          "total_available",
+          "warehouses_total",
+          "warehouses_active",
+          "warehouses_paused",
+          "active_warehouses_with_stock",
+          "low_positions",
+          "out_positions"
+        ]
+      },
+      "MarketWarehouseStockResponseDto": {
+        "type": "object",
+        "properties": {
+          "market_id": {
+            "type": "string"
+          },
+          "warehouses": {
+            "description": "Jadval ustunlari (hamma omborlar)",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MarketStockWarehouseDto"
+            }
+          },
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MarketStockRowDto"
+            }
+          },
+          "total": {
+            "type": "number"
+          },
+          "page": {
+            "type": "number"
+          },
+          "limit": {
+            "type": "number"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/MarketStockSummaryDto"
+          }
+        },
+        "required": [
+          "market_id",
+          "warehouses",
+          "data",
+          "total",
+          "page",
+          "limit",
+          "summary"
+        ]
+      },
+      "UpdateMarketWarehouseOrderRequestDto": {
+        "type": "object",
+        "properties": {
+          "can_order_from_warehouse": {
+            "type": "boolean",
+            "example": true,
+            "description": "«Ombordan buyurtma yaratish»: TRUE — market yaratgan buyurtma tuman filialidagi faol ombordan ketishi mumkin (mahsulot yetarli bo'lsa). Sukut FALSE."
+          }
+        },
+        "required": [
+          "can_order_from_warehouse"
+        ]
+      },
+      "WarehouseBranchDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "11"
+          },
+          "name": {
+            "type": "string",
+            "example": "Samarqand filiali"
+          },
+          "type": {
+            "type": "string",
+            "nullable": true,
+            "example": "REGIONAL"
+          },
+          "status": {
+            "type": "string",
+            "nullable": true,
+            "example": "active"
+          },
+          "address": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ]
+      },
+      "WarehouseManagerDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "31"
+          },
+          "name": {
+            "type": "string",
+            "nullable": true,
+            "example": "Dilshod Usmonov"
+          },
+          "phone_number": {
+            "type": "string",
+            "nullable": true,
+            "example": "+998915071244"
+          }
+        },
+        "required": [
+          "id"
+        ]
+      },
+      "WarehouseSummaryDto": {
+        "type": "object",
+        "properties": {
+          "positions": {
+            "type": "number",
+            "example": 12,
+            "description": "Pozitsiyalar (mahsulot turlari) soni"
+          },
+          "markets": {
+            "type": "number",
+            "example": 5,
+            "description": "Mahsulotlari bor marketlar soni"
+          },
+          "on_hand": {
+            "type": "number",
+            "example": 486,
+            "description": "Jami dona (on_hand)"
+          },
+          "reserved": {
+            "type": "number",
+            "example": 38,
+            "description": "Band dona"
+          },
+          "available": {
+            "type": "number",
+            "example": 448,
+            "description": "Sotish uchun mavjud (on_hand − reserved)"
+          },
+          "reserved_orders": {
+            "type": "number",
+            "example": 14,
+            "description": "Band qilingan (kuryerga berilmagan) faol buyurtmalar soni"
+          },
+          "low_count": {
+            "type": "number",
+            "example": 2,
+            "description": "«Kam qoldi» pozitsiyalar (0 < mavjud ≤ chegara)"
+          },
+          "out_count": {
+            "type": "number",
+            "example": 1,
+            "description": "«Tugagan» pozitsiyalar (mavjud ≤ 0)"
+          }
+        },
+        "required": [
+          "positions",
+          "markets",
+          "on_hand",
+          "reserved",
+          "available",
+          "reserved_orders",
+          "low_count",
+          "out_count"
+        ]
+      },
+      "WarehouseLastMovementDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "901"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "IN",
+              "ADJUST",
+              "RESERVE",
+              "RELEASE",
+              "OUT",
+              "RETURN",
+              "MOVE_OUT",
+              "MOVE_IN"
+            ]
+          },
+          "qty": {
+            "type": "number",
+            "example": 40,
+            "description": "Ishorali son (tur bo‘yicha)"
+          },
+          "ref_type": {
+            "type": "string",
+            "enum": [
+              "stock_in",
+              "inventory",
+              "order",
+              "move"
+            ],
+            "nullable": true
+          },
+          "ref_id": {
+            "type": "string",
+            "nullable": true,
+            "example": "10236",
+            "description": "order → buyurtma id"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "type",
+          "qty",
+          "created_at"
+        ]
+      },
+      "WarehouseDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "3"
+          },
+          "name": {
+            "type": "string",
+            "example": "Samarqand filiali ombori"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "ACTIVE",
+              "PAUSED"
+            ],
+            "example": "ACTIVE"
+          },
+          "branch_id": {
+            "type": "string",
+            "example": "11"
+          },
+          "branch": {
+            "nullable": true,
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/WarehouseBranchDto"
+              }
+            ]
+          },
+          "region": {
+            "nullable": true,
+            "description": "Viloyat (logistika hududi)",
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/WarehouseRefDto"
+              }
+            ]
+          },
+          "manager_user_id": {
+            "type": "string",
+            "nullable": true
+          },
+          "manager": {
+            "nullable": true,
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/WarehouseManagerDto"
+              }
+            ]
+          },
+          "address": {
+            "type": "string",
+            "nullable": true
+          },
+          "effective_address": {
+            "type": "string",
+            "nullable": true,
+            "description": "address ?? filial manzili"
+          },
+          "low_stock_default": {
+            "type": "number",
+            "example": 5
+          },
+          "note": {
+            "type": "string",
+            "nullable": true
+          },
+          "paused_at": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "paused_by": {
+            "type": "string",
+            "nullable": true
+          },
+          "created_by": {
+            "type": "string",
+            "nullable": true
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "«Ochilgan»"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/WarehouseSummaryDto"
+          },
+          "last_movement": {
+            "nullable": true,
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/WarehouseLastMovementDto"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "status",
+          "branch_id",
+          "low_stock_default",
+          "created_at",
+          "updated_at",
+          "summary"
+        ]
+      },
+      "WarehouseCountsDto": {
+        "type": "object",
+        "properties": {
+          "all": {
+            "type": "number",
+            "example": 4
+          },
+          "active": {
+            "type": "number",
+            "example": 3
+          },
+          "paused": {
+            "type": "number",
+            "example": 1
+          }
+        },
+        "required": [
+          "all",
+          "active",
+          "paused"
+        ]
+      },
+      "WarehouseListSummaryDto": {
+        "type": "object",
+        "properties": {
+          "warehouses": {
+            "type": "number",
+            "example": 4
+          },
+          "active": {
+            "type": "number",
+            "example": 3
+          },
+          "paused": {
+            "type": "number",
+            "example": 1
+          },
+          "positions": {
+            "type": "number",
+            "example": 33
+          },
+          "on_hand": {
+            "type": "number",
+            "example": 1156
+          },
+          "reserved": {
+            "type": "number",
+            "example": 68
+          },
+          "available": {
+            "type": "number",
+            "example": 1088
+          },
+          "reserved_orders": {
+            "type": "number",
+            "example": 27
+          },
+          "low_count": {
+            "type": "number",
+            "example": 5
+          },
+          "out_count": {
+            "type": "number",
+            "example": 1
+          }
+        },
+        "required": [
+          "warehouses",
+          "active",
+          "paused",
+          "positions",
+          "on_hand",
+          "reserved",
+          "available",
+          "reserved_orders",
+          "low_count",
+          "out_count"
+        ]
+      },
+      "WarehouseListResponseDto": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WarehouseDto"
+            }
+          },
+          "total": {
+            "type": "number",
+            "example": 4
+          },
+          "page": {
+            "type": "number",
+            "example": 1
+          },
+          "limit": {
+            "type": "number",
+            "example": 50
+          },
+          "counts": {
+            "description": "Viloyat/qidiruv filtridan keyin holat bo‘yicha",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/WarehouseCountsDto"
+              }
+            ]
+          },
+          "summary": {
+            "description": "Ko‘rinadigan HAMMA omborlar (filtrsiz)",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/WarehouseListSummaryDto"
+              }
+            ]
+          }
+        },
+        "required": [
+          "data",
+          "total",
+          "page",
+          "limit",
+          "counts",
+          "summary"
+        ]
+      },
+      "CreateWarehouseRequestDto": {
+        "type": "object",
+        "properties": {
+          "branch_id": {
+            "type": "string",
+            "example": "11",
+            "description": "Viloyat filiali (REGIONAL yoki HYBRID, faol). Bitta filial — bitta ombor (takror — 409)."
+          },
+          "name": {
+            "type": "string",
+            "example": "Samarqand filiali ombori",
+            "maxLength": 160,
+            "description": "Berilmasa — «<filial nomi> ombori»."
+          },
+          "manager_user_id": {
+            "type": "object",
+            "example": "31",
+            "nullable": true,
+            "description": "Mas'ul xodim — shu filialning menejeri (branch_users, rol MANAGER), aks holda 400. Faqat ko'rsatish uchun: o'qish ruxsati filialdan."
+          },
+          "address": {
+            "type": "object",
+            "example": null,
+            "nullable": true,
+            "maxLength": 255,
+            "description": "Bo'sh — filial manzili ko'rsatiladi (`effective_address`)."
+          },
+          "low_stock_default": {
+            "type": "number",
+            "example": 5,
+            "minimum": 0,
+            "maximum": 100000,
+            "description": "«Kam qoldiq» chegarasi sukuti (dona). Sukut 5; mahsulotda alohida o'zgartiriladi."
+          },
+          "note": {
+            "type": "object",
+            "nullable": true,
+            "maxLength": 1000
+          }
+        },
+        "required": [
+          "branch_id"
+        ]
+      },
+      "WarehouseDetailDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "3"
+          },
+          "name": {
+            "type": "string",
+            "example": "Samarqand filiali ombori"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "ACTIVE",
+              "PAUSED"
+            ],
+            "example": "ACTIVE"
+          },
+          "branch_id": {
+            "type": "string",
+            "example": "11"
+          },
+          "branch": {
+            "nullable": true,
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/WarehouseBranchDto"
+              }
+            ]
+          },
+          "region": {
+            "nullable": true,
+            "description": "Viloyat (logistika hududi)",
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/WarehouseRefDto"
+              }
+            ]
+          },
+          "manager_user_id": {
+            "type": "string",
+            "nullable": true
+          },
+          "manager": {
+            "nullable": true,
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/WarehouseManagerDto"
+              }
+            ]
+          },
+          "address": {
+            "type": "string",
+            "nullable": true
+          },
+          "effective_address": {
+            "type": "string",
+            "nullable": true,
+            "description": "address ?? filial manzili"
+          },
+          "low_stock_default": {
+            "type": "number",
+            "example": 5
+          },
+          "note": {
+            "type": "string",
+            "nullable": true
+          },
+          "paused_at": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "paused_by": {
+            "type": "string",
+            "nullable": true
+          },
+          "created_by": {
+            "type": "string",
+            "nullable": true
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "«Ochilgan»"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/WarehouseSummaryDto"
+          },
+          "last_movement": {
+            "nullable": true,
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/WarehouseLastMovementDto"
+              }
+            ]
+          },
+          "movements_count": {
+            "type": "number",
+            "example": 86,
+            "description": "«Harakatlar» tab soni"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "status",
+          "branch_id",
+          "low_stock_default",
+          "created_at",
+          "updated_at",
+          "summary",
+          "movements_count"
+        ]
+      },
+      "UpdateWarehouseRequestDto": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 160
+          },
+          "manager_user_id": {
+            "type": "object",
+            "nullable": true,
+            "description": "Shu filial menejeri; `null` — mas'ul xodimni olib tashlash."
+          },
+          "address": {
+            "type": "object",
+            "nullable": true,
+            "maxLength": 255
+          },
+          "low_stock_default": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 100000
+          },
+          "note": {
+            "type": "object",
+            "nullable": true,
+            "maxLength": 1000
+          }
+        }
+      },
+      "WarehouseStatusRequestDto": {
+        "type": "object",
+        "properties": {
+          "note": {
+            "type": "string",
+            "example": "Mavsum tugadi",
+            "maxLength": 1000,
+            "description": "Ixtiyoriy izoh (faoliyat jurnaliga)."
+          }
+        }
+      },
+      "WarehouseShortRefDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "3"
+          },
+          "name": {
+            "type": "string",
+            "example": "Samarqand filiali ombori"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "ACTIVE",
+              "PAUSED"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "status"
+        ]
+      },
+      "WarehouseMarketRefDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "121"
+          },
+          "name": {
+            "type": "string",
+            "nullable": true,
+            "example": "Baraka Shop"
+          }
+        },
+        "required": [
+          "id"
+        ]
+      },
+      "WarehouseStockRowDto": {
+        "type": "object",
+        "properties": {
+          "stock_id": {
+            "type": "string",
+            "example": "55"
+          },
+          "product": {
+            "$ref": "#/components/schemas/WarehouseProductDto"
+          },
+          "market": {
+            "$ref": "#/components/schemas/WarehouseMarketRefDto"
+          },
+          "on_hand": {
+            "type": "number",
+            "example": 4,
+            "description": "Qoldiq"
+          },
+          "reserved": {
+            "type": "number",
+            "example": 1,
+            "description": "Band"
+          },
+          "available": {
+            "type": "number",
+            "example": 3,
+            "description": "Mavjud"
+          },
+          "low_stock_threshold": {
+            "type": "integer",
+            "nullable": true,
+            "description": "Mahsulotning o‘z chegarasi (null — ombor sukuti)"
+          },
+          "threshold": {
+            "type": "number",
+            "example": 2,
+            "description": "Amaldagi chegara"
+          },
+          "level": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "low",
+              "out"
+            ],
+            "description": "ok — Yetarli, low — Kam qoldi, out — Tugagan"
+          },
+          "last_movement_at": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          }
+        },
+        "required": [
+          "stock_id",
+          "product",
+          "market",
+          "on_hand",
+          "reserved",
+          "available",
+          "threshold",
+          "level"
+        ]
+      },
+      "WarehouseLevelFacetDto": {
+        "type": "object",
+        "properties": {
+          "all": {
+            "type": "number"
+          },
+          "ok": {
+            "type": "number"
+          },
+          "low": {
+            "type": "number"
+          },
+          "out": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "all",
+          "ok",
+          "low",
+          "out"
+        ]
+      },
+      "WarehouseMarketFacetDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "121"
+          },
+          "name": {
+            "type": "string",
+            "nullable": true,
+            "example": "Baraka Shop"
+          },
+          "positions": {
+            "type": "number",
+            "example": 4
+          }
+        },
+        "required": [
+          "id",
+          "positions"
+        ]
+      },
+      "WarehouseStockFacetsDto": {
+        "type": "object",
+        "properties": {
+          "levels": {
+            "description": "Market/qidiruv filtridan keyin holat bo‘yicha",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/WarehouseLevelFacetDto"
+              }
+            ]
+          },
+          "markets": {
+            "description": "«Market:» filtri",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WarehouseMarketFacetDto"
+            }
+          }
+        },
+        "required": [
+          "levels",
+          "markets"
+        ]
+      },
+      "WarehouseStockListResponseDto": {
+        "type": "object",
+        "properties": {
+          "warehouse": {
+            "$ref": "#/components/schemas/WarehouseShortRefDto"
+          },
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WarehouseStockRowDto"
+            }
+          },
+          "total": {
+            "type": "number",
+            "example": 12
+          },
+          "page": {
+            "type": "number",
+            "example": 1
+          },
+          "limit": {
+            "type": "number",
+            "example": 20
+          },
+          "facets": {
+            "$ref": "#/components/schemas/WarehouseStockFacetsDto"
+          }
+        },
+        "required": [
+          "warehouse",
+          "data",
+          "total",
+          "page",
+          "limit",
+          "facets"
+        ]
+      },
+      "WarehouseMovementProductDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "142"
+          },
+          "name": {
+            "type": "string",
+            "example": "Quvvatlagich 20 W"
+          },
+          "sku_code": {
+            "type": "string",
+            "nullable": true
+          },
+          "barcode": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ]
+      },
+      "WarehouseActorDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "nullable": true,
+            "example": "2"
+          },
+          "name": {
+            "type": "string",
+            "nullable": true,
+            "example": "Nilufar Rashidova"
+          },
+          "role": {
+            "type": "string",
+            "nullable": true,
+            "example": "admin"
+          }
+        }
+      },
+      "WarehouseMovementDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "901"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "IN",
+              "ADJUST",
+              "RESERVE",
+              "RELEASE",
+              "OUT",
+              "RETURN",
+              "MOVE_OUT",
+              "MOVE_IN"
+            ],
+            "description": "IN — Kirim, RESERVE — Band, OUT — Chiqim (kuryerga berildi), RELEASE — band bo‘shadi (bekor), RETURN — Qaytdi, ADJUST — Tuzatish (inventarizatsiya), MOVE_* — ko‘chirish (hozir yo‘q)"
+          },
+          "qty": {
+            "type": "number",
+            "example": 40,
+            "description": "Ishorali: IN/RETURN +, OUT −, ADJUST ±, RESERVE + (band), RELEASE − (band)"
+          },
+          "on_hand_after": {
+            "type": "number",
+            "example": 49
+          },
+          "reserved_after": {
+            "type": "number",
+            "example": 2
+          },
+          "ref_type": {
+            "type": "string",
+            "enum": [
+              "stock_in",
+              "inventory",
+              "order",
+              "move"
+            ],
+            "nullable": true
+          },
+          "ref_id": {
+            "type": "string",
+            "nullable": true,
+            "description": "order → buyurtma id; stock_in/inventory → Idempotency-Key"
+          },
+          "order_id": {
+            "type": "string",
+            "nullable": true,
+            "example": "10241",
+            "description": "«Buyurtma №…»"
+          },
+          "note": {
+            "type": "string",
+            "nullable": true,
+            "description": "Kirim izohi / inventarizatsiya sababi"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "product": {
+            "$ref": "#/components/schemas/WarehouseMovementProductDto"
+          },
+          "market": {
+            "$ref": "#/components/schemas/WarehouseMarketRefDto"
+          },
+          "actor": {
+            "nullable": true,
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/WarehouseActorDto"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "type",
+          "qty",
+          "on_hand_after",
+          "reserved_after",
+          "created_at",
+          "product",
+          "market"
+        ]
+      },
+      "WarehouseMovementListResponseDto": {
+        "type": "object",
+        "properties": {
+          "warehouse": {
+            "$ref": "#/components/schemas/WarehouseShortRefDto"
+          },
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WarehouseMovementDto"
+            }
+          },
+          "total": {
+            "type": "number",
+            "example": 86
+          },
+          "page": {
+            "type": "number",
+            "example": 1
+          },
+          "limit": {
+            "type": "number",
+            "example": 20
+          }
+        },
+        "required": [
+          "warehouse",
+          "data",
+          "total",
+          "page",
+          "limit"
+        ]
+      },
+      "WarehouseLookupStockDto": {
+        "type": "object",
+        "properties": {
+          "on_hand": {
+            "type": "number"
+          },
+          "reserved": {
+            "type": "number"
+          },
+          "available": {
+            "type": "number"
+          },
+          "threshold": {
+            "type": "number"
+          },
+          "level": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "low",
+              "out"
+            ]
+          }
+        },
+        "required": [
+          "on_hand",
+          "reserved",
+          "available",
+          "threshold",
+          "level"
+        ]
+      },
+      "WarehouseLookupItemDto": {
+        "type": "object",
+        "properties": {
+          "product": {
+            "$ref": "#/components/schemas/WarehouseProductDto"
+          },
+          "market": {
+            "$ref": "#/components/schemas/WarehouseMarketRefDto"
+          },
+          "stock": {
+            "nullable": true,
+            "description": "null — omborda hali yo‘q («0 · yangi»)",
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/WarehouseLookupStockDto"
+              }
+            ]
+          }
+        },
+        "required": [
+          "product",
+          "market"
+        ]
+      },
+      "WarehouseLookupResponseDto": {
+        "type": "object",
+        "properties": {
+          "warehouse": {
+            "$ref": "#/components/schemas/WarehouseShortRefDto"
+          },
+          "code": {
+            "type": "string",
+            "example": "4780123450017"
+          },
+          "matched_by": {
+            "type": "string",
+            "enum": [
+              "sku_code",
+              "barcode"
+            ],
+            "nullable": true
+          },
+          "data": {
+            "description": "Bo‘sh — topilmadi (zavod kodi bo‘lsa «Mahsulotga bog‘lash»: PATCH /product/:id { barcode }, keyin kirim).",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WarehouseLookupItemDto"
+            }
+          }
+        },
+        "required": [
+          "warehouse",
+          "code",
+          "data"
+        ]
+      },
+      "WarehouseStockInLineDto": {
+        "type": "object",
+        "properties": {
+          "product_id": {
+            "type": "string",
+            "example": "142",
+            "description": "Mahsulot id — yoki `code` (bittasi majburiy)."
+          },
+          "code": {
+            "type": "string",
+            "example": "ELC-P-000142",
+            "maxLength": 512,
+            "description": "Skaner qiymati: `ELC-P-…` (Elchi kodi) yoki zavod shtrix kodi (EAN-13/8, UPC, GTIN-14, QR). Bir nechta marketda bor kod — `market_id` bilan."
+          },
+          "qty": {
+            "type": "number",
+            "example": 40,
+            "minimum": 1,
+            "maximum": 100000
+          }
+        },
+        "required": [
+          "qty"
+        ]
+      },
+      "WarehouseStockInRequestDto": {
+        "type": "object",
+        "properties": {
+          "lines": {
+            "minItems": 1,
+            "maxItems": 200,
+            "description": "Qatorlar (bir mahsulot qatorlari qo'shiladi). Biror qator hal qilinmasa (topilmadi / bir nechta marketda / o'chirilgan / boshqa market) — 400, HECH NARSA yozilmaydi.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WarehouseStockInLineDto"
+            }
+          },
+          "market_id": {
+            "type": "string",
+            "example": "121",
+            "description": "Ixtiyoriy: kod qidiruvi shu market mahsulotlari bilan; boshqa market mahsuloti — 400."
+          },
+          "note": {
+            "type": "string",
+            "maxLength": 1000
+          }
+        },
+        "required": [
+          "lines"
+        ]
+      },
+      "WarehouseStockInLineResultDto": {
+        "type": "object",
+        "properties": {
+          "product_id": {
+            "type": "string"
+          },
+          "product_name": {
+            "type": "string"
+          },
+          "market_id": {
+            "type": "string"
+          },
+          "sku_code": {
+            "type": "string",
+            "nullable": true
+          },
+          "barcode": {
+            "type": "string",
+            "nullable": true
+          },
+          "qty": {
+            "type": "number",
+            "example": 40
+          },
+          "on_hand": {
+            "type": "number",
+            "example": 49,
+            "description": "Kirimdan keyingi qoldiq"
+          },
+          "reserved": {
+            "type": "number"
+          },
+          "available": {
+            "type": "number"
+          },
+          "movement_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "product_id",
+          "product_name",
+          "market_id",
+          "qty",
+          "on_hand",
+          "reserved",
+          "available",
+          "movement_id"
+        ]
+      },
+      "WarehouseStockInResponseDto": {
+        "type": "object",
+        "properties": {
+          "warehouse_id": {
+            "type": "string"
+          },
+          "warehouse_name": {
+            "type": "string"
+          },
+          "replayed": {
+            "type": "boolean",
+            "description": "true — shu Idempotency-Key bilan avval bajarilgan; qoldiq qayta o‘zgarmadi"
+          },
+          "positions": {
+            "type": "number",
+            "example": 3
+          },
+          "total_qty": {
+            "type": "number",
+            "example": 100
+          },
+          "lines": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WarehouseStockInLineResultDto"
+            }
+          }
+        },
+        "required": [
+          "warehouse_id",
+          "warehouse_name",
+          "replayed",
+          "positions",
+          "total_qty",
+          "lines"
+        ]
+      },
+      "WarehouseInventoryLineDto": {
+        "type": "object",
+        "properties": {
+          "product_id": {
+            "type": "string",
+            "example": "131"
+          },
+          "code": {
+            "type": "string",
+            "example": "ELC-P-000131",
+            "maxLength": 512
+          },
+          "counted": {
+            "type": "number",
+            "example": 6,
+            "minimum": 0,
+            "maximum": 100000,
+            "description": "Sanalgan HAQIQIY dona (mutlaq). Band qilingandan kam bo'lsa — 409."
+          }
+        },
+        "required": [
+          "counted"
+        ]
+      },
+      "WarehouseInventoryRequestDto": {
+        "type": "object",
+        "properties": {
+          "lines": {
+            "minItems": 1,
+            "maxItems": 200,
+            "description": "Bir mahsulot ikki marta kiritilsa — 400.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WarehouseInventoryLineDto"
+            }
+          },
+          "reason": {
+            "type": "string",
+            "example": "Oylik inventarizatsiya",
+            "minLength": 3,
+            "maxLength": 1000,
+            "description": "Tuzatish sababi — MAJBURIY (harakat izohiga yoziladi)."
+          },
+          "market_id": {
+            "type": "string",
+            "example": "121"
+          }
+        },
+        "required": [
+          "lines",
+          "reason"
+        ]
+      },
+      "WarehouseInventoryLineResultDto": {
+        "type": "object",
+        "properties": {
+          "product_id": {
+            "type": "string"
+          },
+          "product_name": {
+            "type": "string"
+          },
+          "market_id": {
+            "type": "string"
+          },
+          "counted": {
+            "type": "number",
+            "example": 6
+          },
+          "before": {
+            "type": "number",
+            "example": 8
+          },
+          "after": {
+            "type": "number",
+            "example": 6
+          },
+          "delta": {
+            "type": "number",
+            "example": -2
+          },
+          "reserved": {
+            "type": "number"
+          },
+          "available": {
+            "type": "number"
+          },
+          "movement_id": {
+            "type": "string",
+            "nullable": true,
+            "description": "null — farq 0, yozilmadi"
+          }
+        },
+        "required": [
+          "product_id",
+          "product_name",
+          "market_id",
+          "counted",
+          "before",
+          "after",
+          "delta",
+          "reserved",
+          "available"
+        ]
+      },
+      "WarehouseInventoryResponseDto": {
+        "type": "object",
+        "properties": {
+          "warehouse_id": {
+            "type": "string"
+          },
+          "replayed": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "changed": {
+            "type": "number",
+            "example": 1
+          },
+          "unchanged": {
+            "type": "number",
+            "example": 2
+          },
+          "lines": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WarehouseInventoryLineResultDto"
+            }
+          }
+        },
+        "required": [
+          "warehouse_id",
+          "replayed",
+          "reason",
+          "changed",
+          "unchanged",
+          "lines"
+        ]
+      },
+      "WarehouseThresholdRequestDto": {
+        "type": "object",
+        "properties": {
+          "low_stock_threshold": {
+            "type": "object",
+            "example": 10,
+            "nullable": true,
+            "minimum": 0,
+            "maximum": 100000,
+            "description": "Shu mahsulot chegarasi (dona); `null` — ombor sukuti."
+          }
+        },
+        "required": [
+          "low_stock_threshold"
+        ]
+      },
+      "WarehouseThresholdResponseDto": {
+        "type": "object",
+        "properties": {
+          "warehouse_id": {
+            "type": "string"
+          },
+          "product_id": {
+            "type": "string"
+          },
+          "low_stock_threshold": {
+            "type": "integer",
+            "nullable": true
+          },
+          "effective_threshold": {
+            "type": "number"
+          },
+          "on_hand": {
+            "type": "number"
+          },
+          "reserved": {
+            "type": "number"
+          },
+          "available": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "warehouse_id",
+          "product_id",
+          "effective_threshold",
+          "on_hand",
+          "reserved",
+          "available"
+        ]
       }
     }
   }

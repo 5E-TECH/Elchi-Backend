@@ -263,6 +263,9 @@ export const catalogValidationSchema = Joi.object({
   RABBITMQ_URI: Joi.string().required(),
   RABBITMQ_CATALOG_QUEUE: Joi.string().required(),
   RABBITMQ_IDENTITY_QUEUE: Joi.string().required(),
+  // hY7uacJu: ombor moduli — filial va tuman → hudud o'qish.
+  RABBITMQ_BRANCH_QUEUE: Joi.string().default('branch_queue'),
+  RABBITMQ_LOGISTICS_QUEUE: Joi.string().default('logistics_queue'),
 });
 
 export const logisticsValidationSchema = Joi.object({

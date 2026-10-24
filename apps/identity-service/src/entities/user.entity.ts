@@ -183,6 +183,15 @@ export class User extends BaseEntity {
   tg_group_show_customer_pii: boolean;
 
   /**
+   * hY7uacJu — faqat MARKET uchun: «Ombordan buyurtma yaratish» kaliti.
+   * TRUE — market o'zi yaratgan buyurtma tuman filialidagi FAOL ombordan
+   * ketishi mumkin (hamma mahsulot yetarli bo'lsa; aks holda HQ). Sukut
+   * FALSE; faqat SUPERADMIN/ADMIN o'zgartiradi (migratsiya 1716000000143).
+   */
+  @Column({ type: 'boolean', default: false })
+  can_order_from_warehouse: boolean;
+
+  /**
    * VRyloH62 — TRUE: har buyurtmada operator raqami majburiy
    * (`default_operator_phone` yo'q bo'lsa formadagi raqam shart, aks holda
    * POST /orders 400). Sukut FALSE — avvalgi xulq.

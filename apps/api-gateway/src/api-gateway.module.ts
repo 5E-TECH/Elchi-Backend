@@ -58,6 +58,7 @@ import { AiUsageGatewayController } from './ai-usage-gateway.controller';
 import { MarketOperatorGatewayController } from './market-operator-gateway.controller';
 import { CustomerGatewayController } from './customer-gateway.controller';
 import { DeliveryPricingGatewayController } from './delivery-pricing-gateway.controller';
+import { WarehouseGatewayController } from './warehouse-gateway.controller';
 import { AiStatusPoller } from './ai/ai-status.poller';
 import type { StringValue } from 'ms';
 
@@ -154,6 +155,9 @@ import type { StringValue } from 'ms';
     // DAqXPeSy: yetkazish narxi dvigateli (/delivery/quote, /delivery/tariffs,
     // /delivery/pricing-settings) — logistics-service.
     DeliveryPricingGatewayController,
+    // hY7uacJu: vaqtinchalik ombor moduli (/warehouses, /market/warehouse-stock,
+    // /markets/:id/warehouse-order) — catalog-service.
+    WarehouseGatewayController,
     HealthController,
     // TODO: Qolgan gateway controllerlarni qo'shish
     // FinanceGatewayController,
