@@ -79,7 +79,7 @@ describe('FIX3 A7 — GET /markets maydonlari rolga qarab', () => {
   );
 
   it.each([['manager'], ['registrator'], ['branch']])(
-    "%s: faqat {id, name, status, phone_number} — tariflar, login, kassa yo'q",
+    "%s: {id, name, status, phone_number} + tariflar (yiFTzkzH) — login, kassa yo'q",
     async (role) => {
       const res = await controller.getMarkets(
         user([role]),
@@ -89,20 +89,30 @@ describe('FIX3 A7 — GET /markets maydonlari rolga qarab', () => {
         '20',
       );
 
+      const tariffs = {
+        tariff_home: 30000,
+        tariff_center: 20000,
+        default_tariff: 'center',
+      };
       expect(res.data.items).toEqual([
         {
           id: '5',
           name: 'Market 5',
           status: 'active',
           phone_number: '+998900000005',
+          ...tariffs,
         },
         {
           id: '7',
           name: 'Market 7',
           status: 'active',
           phone_number: '+998900000007',
+          ...tariffs,
         },
       ]);
+      expect(JSON.stringify(res.data.items)).not.toMatch(
+        /username|telegram_id|settings|cashbox|address/,
+      );
       expect(res.data.meta).toEqual({
         total: 2,
         page: 1,
@@ -118,6 +128,32 @@ describe('FIX3 A7 — GET /markets maydonlari rolga qarab', () => {
     },
   );
 
+  it("yiFTzkzH: filial xodimi — tarif maydoni yo'q market'da null (undefined emas)", async () => {
+    identityClient.send.mockReturnValueOnce(
+      of({
+        statusCode: 200,
+        data: {
+          items: [{ id: '9', name: 'Yangi', status: 'active' }],
+          meta: { total: 1 },
+        },
+      }),
+    );
+
+    const res = await controller.getMarkets(user(['manager']));
+
+    expect(res.data.items).toEqual([
+      {
+        id: '9',
+        name: 'Yangi',
+        status: 'active',
+        phone_number: null,
+        tariff_home: null,
+        tariff_center: null,
+        default_tariff: null,
+      },
+    ]);
+  });
+
   it("courier: faqat {id, name, status} — telefon ham yo'q", async () => {
     const res = await controller.getMarkets(
       user(['courier']),
@@ -129,6 +165,8 @@ describe('FIX3 A7 — GET /markets maydonlari rolga qarab', () => {
       { id: '5', name: 'Market 5', status: 'active' },
       { id: '7', name: 'Market 7', status: 'active' },
     ]);
+    // yiFTzkzH: tariflar faqat filial xodimiga — kuryerga emas.
+    expect(JSON.stringify(res.data.items)).not.toMatch(/tariff/);
     expect(financeClient.send).not.toHaveBeenCalled();
   });
 

@@ -1545,7 +1545,7 @@ export class ApiGatewayController {
   @ApiQuery({ name: 'limit', required: false, type: Number, example: 10 })
   @ApiOkResponse({
     description:
-      "Market list. SUPERADMIN/ADMIN: to'liq qator + cashbox. MANAGER/REGISTRATOR/BRANCH: faqat {id, name, phone_number, status}. COURIER: faqat {id, name, status}.",
+      "Market list. SUPERADMIN/ADMIN: to'liq qator + cashbox. MANAGER/REGISTRATOR/BRANCH: faqat {id, name, phone_number, status, tariff_home, tariff_center, default_tariff} (yiFTzkzH; tarif maydoni yo'q bo'lsa null). COURIER: faqat {id, name, status}.",
   })
   async getMarkets(
     @Req() req: { user: JwtUser },
@@ -1607,7 +1607,9 @@ export class ApiGatewayController {
    * - full: SUPERADMIN/ADMIN — to'liq qator + cashbox (o'zgarmagan);
    * - branch_staff: MANAGER/REGISTRATOR/BRANCH — buyurtma yaratish, filtr va
    *   mahsulot ekranlari market tanlashda id, nom, telefon va statusni
-   *   ishlatadi (orders/create Step1Market, orders, products);
+   *   ishlatadi (orders/create Step1Market, orders, products); yiFTzkzH:
+   *   buyurtma yaratishda ikkala narxni (uyga/markazga) ko'rsatish uchun
+   *   `tariff_home`, `tariff_center`, `default_tariff` ham (login/kassa yo'q);
    * - minimal: COURIER (va boshqa har qanday rol) — faqat filtr: id, nom,
    *   status. Telefon, username, tariflar, kassa — yo'q.
    */
@@ -1640,7 +1642,14 @@ export class ApiGatewayController {
       status: market?.status ?? null,
     };
     return view === 'branch_staff'
-      ? { ...base, phone_number: market?.phone_number ?? null }
+      ? {
+          ...base,
+          phone_number: market?.phone_number ?? null,
+          // yiFTzkzH: tarif tanlash (CS-E) — uyga/markazga narx + sukut.
+          tariff_home: market?.tariff_home ?? null,
+          tariff_center: market?.tariff_center ?? null,
+          default_tariff: market?.default_tariff ?? null,
+        }
       : base;
   }
 
