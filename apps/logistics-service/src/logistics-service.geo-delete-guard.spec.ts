@@ -1,4 +1,5 @@
 import { Observable, of, throwError } from 'rxjs';
+import { publicErrorData } from '@app/common';
 import { LogisticsServiceService } from './logistics-service.service';
 
 /**
@@ -619,6 +620,166 @@ describe('mergeDistricts — birlashtirish (oNAE3LW9 TC5)', () => {
     const { svc } = make();
     expect(await statusOf(svc.mergeDistricts('173', '173'))).toBe(400);
     expect(await statusOf(svc.mergeDistricts('173', '999'))).toBe(404);
+  });
+});
+
+/**
+ * tf324cXN — birlashtirish xatosida mashina o'qiydigan sabab: `data.reason`
+ * va `data.details` (reason, kind, mismatches, timeout_ms). Mavjud kalitlar
+ * (`rolled_back`, `stranded`, xabar) o'zgarmaydi; gateway `publicErrorData`
+ * shuni FE'ga o'tkazadi.
+ */
+type MergeErrorData = {
+  reason: string;
+  details: Record<string, unknown>;
+  rolled_back?: Record<string, number>;
+  from_district_id?: string;
+  stranded?: Array<{ ids: string[] | null }>;
+};
+type MergeError = { statusCode: number; message: string; data: MergeErrorData };
+type Harness = ReturnType<typeof make>;
+type GeoSend = (
+  pattern: { cmd: string },
+  payload: { ids?: unknown },
+) => unknown;
+const mergeError = async (h: Harness, to = '28'): Promise<MergeError> =>
+  (await errorOf(
+    (h.svc as LogisticsServiceService).mergeDistricts('173', to),
+  )) as MergeError;
+const activityLogOf = (h: Harness) =>
+  (h.svc as { activityLog: { log: jest.Mock } }).activityLog.log;
+
+describe('mergeDistricts — xato sababi (tf324cXN)', () => {
+  it('⭐ servis rad etsa — remote_refused, kind = qadam; eski kalitlar joyida', async () => {
+    const h = make({
+      rows: { orders: fiveInA(), users: [order('301', '173', '3')] },
+      forwardFault: { users: { statusCode: 400 } },
+    });
+    const err = await mergeError(h);
+    expect(err.statusCode).toBe(409);
+    expect(err.data.reason).toBe('remote_refused');
+    expect(err.data.details).toEqual({
+      reason: 'remote_refused',
+      kind: 'users',
+      from_district_id: '173',
+      to_district_id: '28',
+      manual_fix: false,
+    });
+    expect(err.data.rolled_back).toEqual({ orders: 5 });
+    expect(err.data.from_district_id).toBe('173');
+    expect(err.message).toContain('qaytarildi');
+    // Gateway filtridan o'tgan holat.
+    expect(publicErrorData(err)).toEqual({
+      reason: 'remote_refused',
+      details: err.data.details,
+    });
+  });
+
+  it('⭐ javob kelmasa — timeout, details.timeout_ms = 15000', async () => {
+    const h = make({
+      rows: { orders: fiveInA(), users: [order('301', '173', '3')] },
+      forwardFault: { users: 'timeout' },
+    });
+    const err = await mergeError(h);
+    expect(err.statusCode).toBe(503);
+    expect(err.data.reason).toBe('timeout');
+    expect(err.data.details).toEqual(
+      expect.objectContaining({
+        reason: 'timeout',
+        kind: 'users',
+        timeout_ms: 15000,
+      }),
+    );
+  });
+
+  it('⭐ servis javobi noto‘g‘ri — invalid_response', async () => {
+    const h = make({ rows: { orders: fiveInA() } });
+    const client = (h.svc as { branchClient: { send: GeoSend } }).branchClient;
+    const send = client.send;
+    client.send = jest.fn((pattern, payload) =>
+      pattern.cmd === 'branch.reassign_district' && !Array.isArray(payload.ids)
+        ? of({ statusCode: 200, data: { moved: 0 } })
+        : send(pattern, payload),
+    );
+    const err = await mergeError(h);
+    expect(err.statusCode).toBe(503);
+    expect(err.data.reason).toBe('invalid_response');
+    expect(err.data.details).toEqual(
+      expect.objectContaining({ reason: 'invalid_response', kind: 'branches' }),
+    );
+  });
+
+  it('⭐ B jami mos kelmasa — count_mismatch, mismatches: target expected/actual; matn shundan', async () => {
+    const h = make({
+      rows: { orders: fiveInA() },
+      afterForward: (kind, rows) => {
+        if (kind === 'orders') rows.orders.push(order('99', '28', '3'));
+      },
+    });
+    const err = await mergeError(h);
+    const mismatches = [
+      { kind: 'orders', district: 'target', expected: 8, actual: 9 },
+    ];
+    expect(err.statusCode).toBe(409);
+    expect(err.data.reason).toBe('count_mismatch');
+    expect(err.data.details).toEqual(
+      expect.objectContaining({
+        reason: 'count_mismatch',
+        kind: 'orders',
+        mismatches,
+      }),
+    );
+    expect(err.message).toContain('soni 9, kutilgan 3 + 5 = 8');
+    expect(publicErrorData(err)?.details).toEqual(
+      expect.objectContaining({ mismatches }),
+    );
+  });
+
+  it('A da qoldiq — count_mismatch, mismatches: source expected 0', async () => {
+    const h = make({
+      rows: { orders: fiveInA() },
+      afterForward: (kind, rows) => {
+        if (kind === 'orders') rows.orders.push(order('16', '173', '3'));
+      },
+    });
+    const err = await mergeError(h);
+    expect(err.data.details.mismatches).toEqual([
+      { kind: 'orders', district: 'source', expected: 0, actual: 1 },
+    ]);
+  });
+
+  it('A ni o‘chirish yiqilsa — delete_failed, kind null', async () => {
+    const h = make({ rows: { orders: fiveInA() }, removeFails: true });
+    const err = await mergeError(h);
+    expect(err.statusCode).toBe(503);
+    expect(err.data.reason).toBe('delete_failed');
+    expect(err.data.details).toEqual(
+      expect.objectContaining({ reason: 'delete_failed', kind: null }),
+    );
+  });
+
+  it('kompensatsiya chala — sabab saqlanadi, manual_fix + stranded (ID’siz) details da; eski stranded o‘zgarmaydi', async () => {
+    const h = make({
+      rows: { orders: fiveInA(), users: [order('301', '173', '3')] },
+      forwardFault: { users: { statusCode: 409 } },
+      compensateFault: { orders: 'timeout' },
+    });
+    const err = await mergeError(h);
+    expect(err.data.reason).toBe('remote_refused');
+    expect(err.data.details).toEqual(
+      expect.objectContaining({
+        reason: 'remote_refused',
+        kind: 'users',
+        manual_fix: true,
+        stranded: [{ kind: 'orders', district_id: '28', count: 5 }],
+      }),
+    );
+    expect(err.data.stranded?.[0].ids).toEqual(['11', '12', '13', '14', '15']);
+    const [entry] = activityLogOf(h).mock.calls[0] as [
+      { action: string; metadata: { reason_code: string } },
+    ];
+    expect(entry.action).toBe('district.merge_compensation_failed');
+    expect(entry.metadata.reason_code).toBe('remote_refused');
   });
 });
 

@@ -22,6 +22,7 @@ import { Roles as RoleEnum } from '@app/common';
 import { firstValueFrom, map, TimeoutError, timeout } from 'rxjs';
 import {
   ApiBadRequestResponse,
+  ApiConflictResponse,
   ApiCreatedResponse,
   ApiBearerAuth,
   ApiBody,
@@ -44,6 +45,7 @@ import {
   CreateDistrictRequestDto,
   DeletePostOrdersRequestDto,
   DistrictInUseErrorResponseDto,
+  DistrictMergeErrorResponseDto,
   DistrictUsageResponseDto,
   MergeDistrictRequestDto,
   ReassignPostRequestDto,
@@ -1594,6 +1596,13 @@ export class LogisticsGatewayController {
   })
   @ApiParam({ name: 'id', description: "O'chiriladigan tuman ID" })
   @ApiBody({ type: MergeDistrictRequestDto })
+  @ApiConflictResponse({
+    type: DistrictMergeErrorResponseDto,
+    description:
+      'tf324cXN: 409 (va 503 — xuddi shu shakl) — `data.reason` / `data.details.reason`: ' +
+      '`count_mismatch` (`details.mismatches`), `remote_refused`, `timeout` (`details.timeout_ms`), ' +
+      '`invalid_response`, `delete_failed`; `details.kind` — qadam (orders/users/branches).',
+  })
   mergeDistrict(@Param('id') id: string, @Body() dto: MergeDistrictRequestDto) {
     // Uch servis bo'ylab ko'chirish + qayta sanash, yiqilsa kompensatsiya
     // (har bosqich 15 s gacha) — eng yomon holat ~110 s.

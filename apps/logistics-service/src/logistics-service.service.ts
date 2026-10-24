@@ -203,6 +203,12 @@ type GeoMoveStep = {
 type GeoMoved = {
   ids: string[];
   previous_regions: Array<{ region_id: string | null; ids: string[] }>;
+  /**
+   * (vsmpTweI) Ko'chgan ID'lardan TIRIK (o'chirilmagan) lari soni — servis
+   * ko'chirish qadamining o'zida sanaydi (`moved_live`). `null` — eski servis
+   * qaytarmadi.
+   */
+  live: number | null;
 };
 /** Kompensatsiyadan keyin ham A ga qaytmagan qatorlar (qo'lda tuzatish). */
 type GeoStranded = {
@@ -218,8 +224,52 @@ const GEO_MOVE_TIMEOUT_MS = 15000;
 /** Xato matnida har tur uchun ko'rsatiladigan ID'lar soni (to'liq ro'yxat — activity log). */
 const GEO_STRANDED_PREVIEW = 50;
 
+/**
+ * (tf324cXN) Birlashtirish bekor bo'lish sababi — mashina kodi. Xato
+ * `data.reason` va `data.details.reason` da (gateway `publicErrorData` orqali
+ * FE'ga o'tadi), FE «Sabab» qatorini matnni parse qilmasdan quradi.
+ *  - `count_mismatch`   — tekshiruv mos kelmadi (`details.mismatches`);
+ *  - `remote_refused`   — servis xato qaytardi / ulanib bo'lmadi;
+ *  - `timeout`          — servis `details.timeout_ms` ichida javob bermadi;
+ *  - `invalid_response` — servis javobi noto'g'ri (ID'lar yo'q);
+ *  - `delete_failed`    — A ni o'chirish/qayta sanash yiqildi.
+ */
+type GeoMergeFailureReason =
+  | 'count_mismatch'
+  | 'remote_refused'
+  | 'timeout'
+  | 'invalid_response'
+  | 'delete_failed';
+/**
+ * (tf324cXN) Tekshiruvdagi bitta nomuvofiqlik: `source` — A da qoldiq
+ * (kutilgan 0), `target` — B jami ≠ eski B + ko'chirilgan. Sonlar JAMI
+ * (tirik + o'chirilgan) — tekshiruv shu bo'yicha.
+ */
+type GeoMergeMismatch = {
+  kind: GeoMoveKind;
+  district: 'source' | 'target';
+  expected: number;
+  actual: number;
+};
+/** (tf324cXN) `abortDistrictMerge` ga sabab: kod, qadam va qo'shimcha sonlar. */
+type GeoMergeFailure = {
+  reason: GeoMergeFailureReason;
+  /** Qaysi qadam (`count_mismatch` — birinchi nomuvofiqlik turi); `null` — qadamsiz. */
+  kind: GeoMoveKind | null;
+  mismatches?: GeoMergeMismatch[];
+  timeout_ms?: number;
+};
+
 /** oNAE3LW9 — birlashtirish tekshiruvi mos kelmadi (logistics tranzaksiyasi rollback). */
-class GeoMergeCheckError extends Error {}
+class GeoMergeCheckError extends Error {
+  /** (tf324cXN) Matn shu strukturadan yasalgan. */
+  constructor(
+    message: string,
+    readonly mismatches: GeoMergeMismatch[],
+  ) {
+    super(message);
+  }
+}
 
 /**
  * kA70Rban — pochta ro'yxatlarining (GET /post, /post/courier/old-posts,
@@ -6267,7 +6317,13 @@ export class LogisticsServiceService implements OnModuleInit {
   /** oNAE3LW9 — `*.reassign_district` javobi: ko'chgan ID'lar + eski viloyatlar. */
   private parseGeoMoved(res: unknown, cmd: string): GeoMoved {
     const data = (
-      res as { data?: { ids?: unknown; previous_regions?: unknown } } | null
+      res as {
+        data?: {
+          ids?: unknown;
+          previous_regions?: unknown;
+          moved_live?: unknown;
+        };
+      } | null
     )?.data;
     if (!data || !Array.isArray(data.ids)) {
       throw new Error(`${cmd}: javobda ko'chgan ID'lar (ids) yo'q`);
@@ -6277,8 +6333,17 @@ export class LogisticsServiceService implements OnModuleInit {
     const groups: unknown[] = Array.isArray(data.previous_regions)
       ? (data.previous_regions as unknown[])
       : [];
+    const live = Number(data.moved_live);
     return {
       ids: toIds(data.ids),
+      // (vsmpTweI) servis sanagan tiriklar; eski servis — `null`.
+      live:
+        data.moved_live !== undefined &&
+        data.moved_live !== null &&
+        Number.isInteger(live) &&
+        live >= 0
+          ? live
+          : null,
       previous_regions: groups.map((group) => {
         const g = group as { region_id?: unknown; ids?: unknown } | null;
         return {
@@ -6400,9 +6465,10 @@ export class LogisticsServiceService implements OnModuleInit {
     beforeA: GeoUsage;
     status: 409 | 503;
     reason: string;
+    failure: GeoMergeFailure;
     uncertain?: GeoMoveStep;
   }): Promise<never> {
-    const { fromId, toId, done, status, reason } = ctx;
+    const { fromId, toId, done, status, reason, failure } = ctx;
     const stranded = await this.compensateDistrictMerge(fromId, toId, done);
     if (ctx.uncertain) {
       const check = await this.checkUncertainGeoStep(
@@ -6425,6 +6491,36 @@ export class LogisticsServiceService implements OnModuleInit {
       to_district_id: toId,
       rolled_back: rolledBack,
     };
+    /**
+     * (tf324cXN) Mashina o'qiydigan sabab. Mavjud kalitlar (`from_district_id`,
+     * `to_district_id`, `rolled_back`, `stranded`) o'zgarmaydi (orqaga
+     * moslik); qo'shimcha `reason` + `details` — gateway `publicErrorData`
+     * faqat shularni FE'ga o'tkazadi (tekis qiymatlar, `mismatches` /
+     * `stranded` — tekis obyektlar ro'yxati; `stranded[].ids` o'tmaydi).
+     */
+    const machine = (extra: { stranded?: GeoStranded[] } = {}) => ({
+      reason: failure.reason,
+      details: {
+        reason: failure.reason,
+        kind: failure.kind,
+        ...(failure.timeout_ms !== undefined
+          ? { timeout_ms: failure.timeout_ms }
+          : {}),
+        ...(failure.mismatches ? { mismatches: failure.mismatches } : {}),
+        from_district_id: fromId,
+        to_district_id: toId,
+        manual_fix: Boolean(extra.stranded?.length),
+        ...(extra.stranded?.length
+          ? {
+              stranded: extra.stranded.map((s) => ({
+                kind: s.kind,
+                district_id: s.district_id,
+                count: s.ids === null ? null : s.ids.length,
+              })),
+            }
+          : {}),
+      },
+    });
 
     if (!stranded.length) {
       this.logger.warn(
@@ -6434,7 +6530,7 @@ export class LogisticsServiceService implements OnModuleInit {
         errorRes(
           `Birlashtirish bekor qilindi: ${reason}. Ko'chirilganlar A tumanga (#${fromId}) qaytarildi, tuman o'chirilmadi — qayta urinib ko'ring.`,
           status,
-          details,
+          { ...details, ...machine() },
         ),
       );
     }
@@ -6457,14 +6553,22 @@ export class LogisticsServiceService implements OnModuleInit {
       entity_type: 'District',
       entity_id: fromId,
       action: 'district.merge_compensation_failed',
+      // (ILq3WNL1) jurnalda «Tuman birlashtirish chala qoldi».
+      description: `Tuman birlashtirish chala qoldi: #${fromId} → #${toId}`,
       new_value: { target_district_id: toId },
-      metadata: { reason, rolled_back: rolledBack, stranded },
+      metadata: {
+        reason,
+        // (tf324cXN) mashina kodi — jurnal metadata'sida ham.
+        reason_code: failure.reason,
+        rolled_back: rolledBack,
+        stranded,
+      },
     });
     throw new RpcException(
       errorRes(
         `Birlashtirish bekor qilindi: ${reason}. DIQQAT — kompensatsiya to'liq bo'lmadi, QO'LDA TUZATING: ${where}. A tuman (#${fromId}) o'chirilmadi; to'liq ro'yxat — activity log (District #${fromId}, district.merge_compensation_failed).`,
         status,
-        { ...details, stranded },
+        { ...details, stranded, ...machine({ stranded }) },
       ),
     );
   }
@@ -6482,15 +6586,24 @@ export class LogisticsServiceService implements OnModuleInit {
     afterA: GeoUsage,
     afterB: GeoUsage,
     moved: Record<GeoMoveKind, number>,
-  ): string[] {
+  ): { mismatches: GeoMergeMismatch[]; problems: string[] } {
+    // (tf324cXN) Struktura (`mismatches`) — FE uchun; matn shundan yasaladi.
+    const mismatches: GeoMergeMismatch[] = [];
     const problems: string[] = [];
     for (const step of this.geoMoveSteps()) {
       const kind = step.kind;
       const leftInA = this.geoAllOf(afterA, kind);
       if (leftInA > 0) {
+        const m: GeoMergeMismatch = {
+          kind,
+          district: 'source',
+          expected: 0,
+          actual: leftInA,
+        };
+        mismatches.push(m);
         const deletedLeft = afterA.deleted[kind];
         problems.push(
-          `A tumanda hali ${leftInA} ta ${step.label} qoldi` +
+          `A tumanda hali ${m.actual} ta ${step.label} qoldi` +
             (deletedLeft ? ` (shundan ${deletedLeft} tasi o'chirilgan)` : ''),
         );
       }
@@ -6498,12 +6611,19 @@ export class LogisticsServiceService implements OnModuleInit {
       const after = this.geoAllOf(afterB, kind);
       const expected = before + moved[kind];
       if (after !== expected) {
+        const m: GeoMergeMismatch = {
+          kind,
+          district: 'target',
+          expected,
+          actual: after,
+        };
+        mismatches.push(m);
         problems.push(
-          `B tumandagi ${step.plural} soni ${after}, kutilgan ${before} + ${moved[kind]} = ${expected}`,
+          `B tumandagi ${step.plural} soni ${m.actual}, kutilgan ${before} + ${moved[kind]} = ${m.expected}`,
         );
       }
     }
-    return problems;
+    return { mismatches, problems };
   }
 
   /**
@@ -6551,6 +6671,7 @@ export class LogisticsServiceService implements OnModuleInit {
     const abort = (
       status: 409 | 503,
       reason: string,
+      failure: GeoMergeFailure,
       uncertain?: GeoMoveStep,
     ): Promise<never> =>
       this.abortDistrictMerge({
@@ -6560,6 +6681,7 @@ export class LogisticsServiceService implements OnModuleInit {
         beforeA,
         status,
         reason,
+        failure,
         uncertain,
       });
 
@@ -6586,9 +6708,20 @@ export class LogisticsServiceService implements OnModuleInit {
         // Masofadagi xato (statusCode bor) — uning tranzaksiyasi rollback;
         // timeout/ulanish — natija noaniq (qayta sanab tekshiriladi).
         const remote = this.geoRemoteStatus(error);
+        // (tf324cXN) timeout — rxjs `TimeoutError`; qolgani (statusli xato
+        // yoki ulanish xatosi) — `remote_refused`.
+        const timedOut =
+          error instanceof Error && error.name === 'TimeoutError';
         return abort(
           remote !== undefined && remote < 500 ? 409 : 503,
           `${step.plural} ko'chirilmadi (${this.geoErrorText(error)})`,
+          timedOut
+            ? {
+                reason: 'timeout',
+                kind: step.kind,
+                timeout_ms: GEO_MOVE_TIMEOUT_MS,
+              }
+            : { reason: 'remote_refused', kind: step.kind },
           remote === undefined ? step : undefined,
         );
       }
@@ -6599,6 +6732,7 @@ export class LogisticsServiceService implements OnModuleInit {
         return abort(
           503,
           `${step.plural} ko'chirish javobi noto'g'ri (${this.geoErrorText(error)})`,
+          { reason: 'invalid_response', kind: step.kind },
           step,
         );
       }
@@ -6628,24 +6762,29 @@ export class LogisticsServiceService implements OnModuleInit {
           this.collectGeoUsage({ district_id: fromId }, 'birlashtirish'),
           this.collectGeoUsage({ district_id: toId }, 'birlashtirish'),
         ]);
-        const problems = this.districtMergeMismatches(
+        const { mismatches, problems } = this.districtMergeMismatches(
           beforeB,
           afterA,
           afterB,
           movedCounts,
         );
         if (problems.length) {
-          throw new GeoMergeCheckError(problems.join('; '));
+          throw new GeoMergeCheckError(problems.join('; '), mismatches);
         }
         return { from: afterA, to: afterB };
       });
     } catch (error) {
       if (error instanceof GeoMergeCheckError) {
-        return abort(409, `tekshiruv mos kelmadi — ${error.message}`);
+        return abort(409, `tekshiruv mos kelmadi — ${error.message}`, {
+          reason: 'count_mismatch',
+          kind: error.mismatches[0]?.kind ?? null,
+          mismatches: error.mismatches,
+        });
       }
       return abort(
         503,
         `tumanni o'chirib/qayta sanab bo'lmadi (${this.geoErrorText(error)})`,
+        { reason: 'delete_failed', kind: null },
       );
     }
 

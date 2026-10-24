@@ -94,7 +94,11 @@ export function publicErrorFields(
  *   - `usage`   — tekis `{ kalit: son }` (sanoqlar), kalit ham mashina kodi;
  *   - `details` — tekis obyekt yoki (≤50 ta) tekis obyekt/oddiy qiymatlar
  *     ro'yxati; qiymat faqat oddiy tur (satr ≤256 / chekli son / boolean /
- *     null), kalit — mashina kodi. Ichma-ich obyekt/massiv tashlab yuboriladi.
+ *     null), kalit — mashina kodi. Ichma-ich obyekt tashlab yuboriladi.
+ *     (tf324cXN) Istisno — `details` OBYEKT bo'lsa, uning qiymati (≤50 ta)
+ *     oddiy qiymat/tekis obyektlar RO'YXATI ham bo'lishi mumkin (masalan
+ *     tuman birlashtirishda `details.mismatches: [{ kind, district,
+ *     expected, actual }]`); undan chuqurroq qism baribir tashlanadi.
  *
  * Boshqa kalitlar (`hint`, `post_id`, `blocked`, integratsiya javobi …) va
  * stack/ichki xabar javobga CHIQMAYDI. Hech biri qolmasa — `data` umuman
@@ -112,7 +116,9 @@ export type PublicErrorDetailsItem =
 export type PublicErrorData = {
   reason?: string;
   usage?: Record<string, number>;
-  details?: Record<string, PublicErrorValue> | PublicErrorDetailsItem[];
+  details?:
+    | Record<string, PublicErrorValue | PublicErrorDetailsItem[]>
+    | PublicErrorDetailsItem[];
 };
 
 const MACHINE_KEY_RE = /^[a-z][a-z0-9_]{0,63}$/;
@@ -143,21 +149,27 @@ function flatRecord<T>(
 const finiteNumber = (value: unknown): number | undefined =>
   typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 
-function publicDetails(value: unknown): PublicErrorData['details'] {
-  if (Array.isArray(value)) {
-    const items: PublicErrorDetailsItem[] = [];
-    for (const item of value.slice(0, MAX_ENTRIES)) {
-      const primitive = publicValue(item);
-      if (primitive !== undefined) {
-        items.push(primitive);
-        continue;
-      }
-      const record = flatRecord(item, publicValue);
-      if (record) items.push(record);
+/** Oddiy qiymat / tekis obyektlar ro'yxati (≤50); bo'sh bo'lsa — `undefined`. */
+function publicList(value: unknown[]): PublicErrorDetailsItem[] | undefined {
+  const items: PublicErrorDetailsItem[] = [];
+  for (const item of value.slice(0, MAX_ENTRIES)) {
+    const primitive = publicValue(item);
+    if (primitive !== undefined) {
+      items.push(primitive);
+      continue;
     }
-    return items.length ? items : undefined;
+    const record = flatRecord(item, publicValue);
+    if (record) items.push(record);
   }
-  return flatRecord(value, publicValue);
+  return items.length ? items : undefined;
+}
+
+function publicDetails(value: unknown): PublicErrorData['details'] {
+  if (Array.isArray(value)) return publicList(value);
+  // (tf324cXN) obyekt qiymati — oddiy tur yoki tekis ro'yxat (bir daraja).
+  return flatRecord(value, (item) =>
+    Array.isArray(item) ? publicList(item) : publicValue(item),
+  );
 }
 
 /**
