@@ -70,6 +70,10 @@ const NOMALUM_ERROR_MESSAGE = 'Noma’lum xatolik yuz berdi';
 const GROUP_BIND_UNEXPECTED_ERROR_MESSAGE =
   "Guruhni ulashda xatolik yuz berdi — birozdan so'ng qayta urinib ko'ring";
 
+/** (qXlFQp8Q) PATCH faqat is_active — guruhni qo'lda almashtirish yopiq. */
+const MANUAL_GROUP_EDIT_FORBIDDEN_MESSAGE =
+  "Faqat is_active o'zgartiriladi. Guruhni almashtirish uchun ulanishni o'chirib, bir martalik bot havolasi orqali qayta ulang.";
+
 /**
  * (bOMYoOtV) Telegram ulanishining o'qiladigan ustunlari. Bot TOKENI bazada
  * UMUMAN yo'q (faqat env); `connect_token_hash` — `select: false`, bu yerda
@@ -741,11 +745,17 @@ export class NotificationServiceService {
 
   async updateTelegramMarket(dto: UpdateNotificationDto) {
     try {
-      const target = await this.resolveTelegramMarketTarget({
-        id: dto.id,
-        market_id: dto.market_id,
-        group_type: dto.group_type,
-      });
+      // (qXlFQp8Q) Faqat is_active o'zgaradi: guruh ID / market / tur qo'lda
+      // almashtirilmaydi (bot tekshiruvisiz begona guruhni bog'lash yo'li).
+      // Gateway DTO ham bularni 400 bilan rad etadi; bu — ichki RMQ himoyasi.
+      if (
+        dto.group_id !== undefined ||
+        dto.market_id !== undefined ||
+        dto.group_type !== undefined
+      ) {
+        throw new BadRequestException(MANUAL_GROUP_EDIT_FORBIDDEN_MESSAGE);
+      }
+      const target = await this.resolveTelegramMarketTarget({ id: dto.id });
 
       // Snapshot BEFORE mutating.
       const beforeSnapshot = {
@@ -755,19 +765,6 @@ export class NotificationServiceService {
         is_active: target.is_active,
         inactive_reason: target.inactive_reason ?? null,
       };
-
-      if (dto.market_id !== undefined) {
-        this.assertBigIntId(dto.market_id, 'market_id');
-        target.market_id = dto.market_id;
-      }
-
-      if (dto.group_id !== undefined) {
-        target.group_id = dto.group_id;
-      }
-
-      if (dto.group_type !== undefined) {
-        target.group_type = dto.group_type;
-      }
 
       if (dto.is_active !== undefined) {
         // (G085w5Qr) Qo'lda o'chirish — 'manual'; faollashtirish — sabab
@@ -779,20 +776,8 @@ export class NotificationServiceService {
         target.is_active = dto.is_active;
       }
 
-      const duplicate = await this.tgMarketRepo.findOne({
-        where: {
-          market_id: target.market_id,
-          group_type: target.group_type,
-          isDeleted: false,
-        },
-      });
-
-      if (duplicate && duplicate.id !== target.id) {
-        throw new BadRequestException(
-          'Telegram market for this market_id and group_type already exists',
-        );
-      }
-
+      // (qXlFQp8Q) market_id / group_type o'zgarmaydi — takror tekshiruvi
+      // endi kerak emas.
       const saved = await this.tgMarketRepo.save(target);
 
       // Audit: only changed fields are persisted.

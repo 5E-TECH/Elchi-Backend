@@ -73,6 +73,9 @@ export class NotificationServiceController {
     }));
   }
 
+  // (qXlFQp8Q) HTTP yo'li (POST /notifications) yopiq — 410 Gone; gateway bu
+  // patternni endi chaqirmaydi. Faqat ichki ops (RMQ) uchun qoldirildi —
+  // tashqaridan guruh ID'sini qo'lda yozib ulash imkoni yo'q.
   @MessagePattern({ cmd: 'notification.telegram.create' })
   createTelegramMarket(
     @Payload() data: CreateNotificationDto,

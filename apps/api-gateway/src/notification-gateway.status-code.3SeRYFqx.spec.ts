@@ -146,17 +146,13 @@ describe('NotificationGatewayController — HTTP kodi = tana statusCode (3SeRYFq
     expect(none.body.statusCode).toBe(400);
   });
 
-  it('kontrakt: interceptor POST send / connect-by-token / dispatch / create marshrutlarida', () => {
+  // (qXlFQp8Q) POST /notifications (create) yopildi — 410, interceptor kerak emas.
+  it('kontrakt: interceptor POST send / connect-by-token / dispatch marshrutlarida', () => {
     const proto = NotificationGatewayController.prototype as unknown as Record<
       string,
       object
     >;
-    for (const method of [
-      'sendNotification',
-      'connectByToken',
-      'dispatch',
-      'createNotification',
-    ]) {
+    for (const method of ['sendNotification', 'connectByToken', 'dispatch']) {
       const interceptors =
         (Reflect.getMetadata('__interceptors__', proto[method]) as
           | unknown[]

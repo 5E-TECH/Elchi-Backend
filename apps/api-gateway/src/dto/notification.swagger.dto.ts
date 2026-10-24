@@ -27,29 +27,8 @@ import {
 } from '@app/common';
 import { AudienceSegmentDto } from './notification-campaign.swagger.dto';
 
-export class CreateTelegramMarketRequestDto {
-  @ApiProperty({ example: '2' })
-  @IsString()
-  @Matches(/^\d+$/)
-  market_id!: string;
-
-  @ApiProperty({ example: '-1001234567890' })
-  @IsString()
-  group_id!: string;
-
-  @ApiProperty({ enum: Group_type, example: Group_type.CREATE })
-  @IsEnum(Group_type)
-  group_type!: Group_type;
-
-  // (bOMYoOtV) `token` YO'Q: bot tokeni so'rov tanasidan ham, bazadan ham
-  // olinmaydi (faqat env). Yuborilsa 400 (forbidNonWhitelisted).
-
-  @ApiPropertyOptional({ example: true })
-  @IsOptional()
-  @Type(() => Boolean)
-  @IsBoolean()
-  is_active?: boolean;
-}
+// (qXlFQp8Q) CreateTelegramMarketRequestDto olib tashlandi — POST
+// /notifications (qo'lda guruh ID) 410 Gone.
 
 export class FindTelegramMarketsQueryDto {
   @ApiPropertyOptional({ example: '2' })
@@ -90,37 +69,20 @@ export class FindTelegramMarketsQueryDto {
   limit?: number;
 }
 
+/**
+ * (qXlFQp8Q) PATCH /notifications/:id — FAQAT `is_active`. `id`, `market_id`,
+ * `group_id`, `group_type` olib tashlandi: yuborilsa 400
+ * (forbidNonWhitelisted). Guruhni qo'lda almashtirish yo'li yopiq — faqat bot
+ * havolasi orqali qayta ulash.
+ */
 export class UpdateTelegramMarketRequestDto {
-  @ApiPropertyOptional({ example: '10' })
-  @IsOptional()
-  @IsString()
-  @Matches(/^\d+$/)
-  id?: string;
-
-  @ApiPropertyOptional({ example: '2' })
-  @IsOptional()
-  @IsString()
-  @Matches(/^\d+$/)
-  market_id?: string;
-
-  @ApiPropertyOptional({ example: '-1001234567890' })
-  @IsOptional()
-  @IsString()
-  group_id?: string;
-
-  @ApiPropertyOptional({ enum: Group_type, example: Group_type.CANCEL })
-  @IsOptional()
-  @IsEnum(Group_type)
-  group_type?: Group_type;
-
   // (bOMYoOtV) `token` YO'Q: bot tokeni so'rov tanasidan ham, bazadan ham
   // olinmaydi (faqat env). Yuborilsa 400 (forbidNonWhitelisted).
 
-  @ApiPropertyOptional({ example: false })
-  @IsOptional()
+  @ApiProperty({ example: false })
   @Type(() => Boolean)
   @IsBoolean()
-  is_active?: boolean;
+  is_active!: boolean;
 }
 
 export class DeleteTelegramMarketRequestDto {
