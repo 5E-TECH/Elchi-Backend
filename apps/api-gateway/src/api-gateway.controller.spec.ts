@@ -393,8 +393,11 @@ describe('ApiGatewayController', () => {
         { user: { sub: '25', username: 'mgr', roles: ['manager'] } } as any,
       );
 
+      // 2CBnPAeg: ko'lam endi identity so'rovida (`branch_scope`) — ro'yxat,
+      // total va countsByRole bir xil doirada; `user_ids` yuborilmaydi.
       const [, payload] = identityClient.send.mock.calls[0];
-      expect(payload.query.user_ids).toEqual(['101']);
+      expect(payload.query.branch_scope).toEqual({ user_ids: ['101'] });
+      expect(payload.query.user_ids).toBeUndefined();
     });
   });
 

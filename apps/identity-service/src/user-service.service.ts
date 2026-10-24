@@ -1002,6 +1002,16 @@ export class UserServiceService implements OnModuleInit {
       user_ids: Array.isArray(query.user_ids)
         ? query.user_ids.map((id) => String(id ?? '').trim()).filter(Boolean)
         : [],
+      // 2CBnPAeg: `null` — ko'lam yo'q; massiv (bo'sh ham) — ko'lam bor.
+      branch_scope_user_ids:
+        query.branch_scope && typeof query.branch_scope === 'object'
+          ? (Array.isArray(query.branch_scope.user_ids)
+              ? query.branch_scope.user_ids
+              : []
+            )
+              .map((id) => primitiveText(id).trim())
+              .filter((id) => /^\d{1,19}$/.test(id))
+          : null,
       page,
       limit,
       skip: (page - 1) * limit,
@@ -2650,8 +2660,17 @@ export class UserServiceService implements OnModuleInit {
   }
 
   async findAllAdmins(query: UserFilterQuery = {}) {
-    const { search, role, status, region_id, user_ids, page, limit, skip } =
-      this.normalizeQuery(query);
+    const {
+      search,
+      role,
+      status,
+      region_id,
+      user_ids,
+      branch_scope_user_ids,
+      page,
+      limit,
+      skip,
+    } = this.normalizeQuery(query);
 
     const baseQb = this.users
       .createQueryBuilder('admin')
@@ -2688,6 +2707,28 @@ export class UserServiceService implements OnModuleInit {
 
     if (user_ids.length) {
       baseQb.andWhere('admin.id IN (:...user_ids)', { user_ids });
+    }
+
+    /**
+     * 2CBnPAeg — menejer ko'lami SO'ROVDA (ilgari gateway sahifadan keyin
+     * filtrlardi: `meta.total` sahifadagi qatorlar soni, `countsByRole`
+     * ko'lamsiz). Kuryer / filial roli — faqat menejer filialiga
+     * biriktirilganlar; qolgan rollar cheklanmaydi. `baseQb` ga qo'shiladi —
+     * ro'yxat, `total` va `countsByRole` bir xil doirada.
+     */
+    if (branch_scope_user_ids) {
+      baseQb.andWhere(
+        new Brackets((scoped) => {
+          scoped.where('admin.role NOT IN (:...branchScopedRoles)', {
+            branchScopedRoles: [Roles.COURIER, Roles.BRANCH],
+          });
+          if (branch_scope_user_ids.length) {
+            scoped.orWhere('admin.id IN (:...branchScopeUserIds)', {
+              branchScopeUserIds: branch_scope_user_ids,
+            });
+          }
+        }),
+      );
     }
 
     const listQb = baseQb.clone();
