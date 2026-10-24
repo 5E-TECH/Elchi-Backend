@@ -81,3 +81,99 @@ export function publicErrorFields(
   }
   return {};
 }
+
+/**
+ * (AF0fvJbw) Xato javobidagi `data` — servis xatoni sabab/son bilan
+ * tashlasa (masalan, tuman o'chirishda 400:
+ * `errorRes(msg, 400, { reason: 'district_in_use', usage: { orders: 5 } })`),
+ * FE matnni tahlil qilmasdan oyna ko'rsatishi uchun. Gateway konvertiga
+ * ixtiyoriy `data` qo'shiladi — FAQAT shu uch kalit:
+ *
+ *   - `reason`  — mashina kodi: `^[a-z][a-z0-9_]{0,63}$` (`district_in_use`);
+ *     boshqa satr (inson matni, ID'li xabar) o'tmaydi;
+ *   - `usage`   — tekis `{ kalit: son }` (sanoqlar), kalit ham mashina kodi;
+ *   - `details` — tekis obyekt yoki (≤50 ta) tekis obyekt/oddiy qiymatlar
+ *     ro'yxati; qiymat faqat oddiy tur (satr ≤256 / chekli son / boolean /
+ *     null), kalit — mashina kodi. Ichma-ich obyekt/massiv tashlab yuboriladi.
+ *
+ * Boshqa kalitlar (`hint`, `post_id`, `blocked`, integratsiya javobi …) va
+ * stack/ichki xabar javobga CHIQMAYDI. Hech biri qolmasa — `data` umuman
+ * yo'q (konvert avvalgidek). Manba — faqat ataylab qurilgan xato: RPC xato
+ * obyekti (`{ statusCode, message, data }`), `RpcException.getError()` yoki
+ * `HttpException.getResponse()`; kutubxona xatolarining (axios
+ * `response.data` va h.k.) ichiga qaralmaydi.
+ */
+export const PUBLIC_ERROR_DATA_KEYS = ['reason', 'usage', 'details'] as const;
+
+export type PublicErrorDetailsItem =
+  | PublicErrorValue
+  | Record<string, PublicErrorValue>;
+
+export type PublicErrorData = {
+  reason?: string;
+  usage?: Record<string, number>;
+  details?: Record<string, PublicErrorValue> | PublicErrorDetailsItem[];
+};
+
+const MACHINE_KEY_RE = /^[a-z][a-z0-9_]{0,63}$/;
+const MAX_ENTRIES = 50;
+
+const isMachineKey = (key: string) => MACHINE_KEY_RE.test(key);
+
+/** Tekis obyekt: faqat mashina kalitli, oddiy turdagi qiymatlar. */
+function flatRecord<T>(
+  value: unknown,
+  pick: (item: unknown) => T | undefined,
+): Record<string, T> | undefined {
+  const record = asRecord(value);
+  if (!record) return undefined;
+  const out: Record<string, T> = {};
+  let count = 0;
+  for (const key of Object.keys(record)) {
+    if (count >= MAX_ENTRIES) break;
+    if (!isMachineKey(key)) continue;
+    const picked = pick(record[key]);
+    if (picked === undefined) continue;
+    out[key] = picked;
+    count += 1;
+  }
+  return count ? out : undefined;
+}
+
+const finiteNumber = (value: unknown): number | undefined =>
+  typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+
+function publicDetails(value: unknown): PublicErrorData['details'] {
+  if (Array.isArray(value)) {
+    const items: PublicErrorDetailsItem[] = [];
+    for (const item of value.slice(0, MAX_ENTRIES)) {
+      const primitive = publicValue(item);
+      if (primitive !== undefined) {
+        items.push(primitive);
+        continue;
+      }
+      const record = flatRecord(item, publicValue);
+      if (record) items.push(record);
+    }
+    return items.length ? items : undefined;
+  }
+  return flatRecord(value, publicValue);
+}
+
+/**
+ * Xato manbasidagi `data` dan javobga chiqadigan qism (yuqoridagi izoh).
+ * `source` — RPC xato obyekti / `getError()` / `getResponse()`.
+ */
+export function publicErrorData(source: unknown): PublicErrorData | undefined {
+  const data = asRecord(asRecord(source)?.data);
+  if (!data) return undefined;
+  const out: PublicErrorData = {};
+  if (typeof data.reason === 'string' && isMachineKey(data.reason)) {
+    out.reason = data.reason;
+  }
+  const usage = flatRecord(data.usage, finiteNumber);
+  if (usage) out.usage = usage;
+  const details = publicDetails(data.details);
+  if (details) out.details = details;
+  return Object.keys(out).length ? out : undefined;
+}

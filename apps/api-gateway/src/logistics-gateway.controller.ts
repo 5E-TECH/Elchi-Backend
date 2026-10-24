@@ -21,6 +21,7 @@ import { ClientProxy } from '@nestjs/microservices';
 import { Roles as RoleEnum } from '@app/common';
 import { firstValueFrom, map, TimeoutError, timeout } from 'rxjs';
 import {
+  ApiBadRequestResponse,
   ApiCreatedResponse,
   ApiBearerAuth,
   ApiBody,
@@ -42,6 +43,8 @@ import {
   CreateRegionRequestDto,
   CreateDistrictRequestDto,
   DeletePostOrdersRequestDto,
+  DistrictInUseErrorResponseDto,
+  DistrictUsageResponseDto,
   MergeDistrictRequestDto,
   ReassignPostRequestDto,
   PostIdRequestDto,
@@ -1543,6 +1546,7 @@ export class LogisticsGatewayController {
       "Hammasi 0 bo'lsa tumanni o'chirsa bo'ladi. 400 — id raqam emas; 404 — tuman yo'q; 503 — order/identity/branch servislaridan biri javob bermadi (sonlar taxmin qilinmaydi).",
   })
   @ApiParam({ name: 'id', description: 'District ID (id)' })
+  @ApiOkResponse({ type: DistrictUsageResponseDto })
   getDistrictUsage(@Param('id', ParseBigintIdPipe) id: string) {
     return this.logisticsClient
       .send({ cmd: 'logistics.district.usage' }, { id })
@@ -1558,6 +1562,11 @@ export class LogisticsGatewayController {
       "Delete district — buyurtma/foydalanuvchi/filial bog'langan bo'lsa 400 (oNAE3LW9)",
   })
   @ApiParam({ name: 'id', description: 'District ID (id)' })
+  @ApiBadRequestResponse({
+    type: DistrictInUseErrorResponseDto,
+    description:
+      "AF0fvJbw: `data.reason = 'district_in_use'`, `data.usage` — bog'langan tirik yozuvlar soni",
+  })
   deleteDistrict(@Param('id') id: string) {
     return this.logisticsClient
       .send({ cmd: 'logistics.district.delete' }, { id })

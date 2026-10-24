@@ -9,7 +9,7 @@ import {
 import { Response } from 'express';
 import { captureException } from '../sentry/sentry.helper';
 import { requestContext } from '../context/request-context';
-import { publicErrorFields } from './public-error-fields';
+import { publicErrorData, publicErrorFields } from './public-error-fields';
 
 @Catch()
 export class AllExceptionsFilter implements ExceptionFilter {
@@ -100,6 +100,16 @@ export class AllExceptionsFilter implements ExceptionFilter {
       exception instanceof HttpException
         ? publicErrorFields(exception.getResponse())
         : publicErrorFields(exception);
+    // (AF0fvJbw) Ixtiyoriy `data` — faqat `reason`/`usage`/`details`
+    // (`public-error-fields.ts`). Manba: HttpException javobi yoki quyi
+    // servisning RPC xato obyekti (`{ statusCode, message, data }` — oddiy
+    // obyekt, `Error` emas: kutubxona xatolari ichiga qaralmaydi).
+    const data =
+      exception instanceof HttpException
+        ? publicErrorData(exception.getResponse())
+        : isRpcErrorPayload(exception)
+          ? publicErrorData(exception)
+          : undefined;
 
     const traceId = requestContext.get()?.traceId;
 
@@ -118,7 +128,18 @@ export class AllExceptionsFilter implements ExceptionFilter {
       statusCode: status,
       message,
       ...extras,
+      ...(data ? { data } : {}),
       ...(traceId ? { trace_id: traceId } : {}),
     });
   }
+}
+
+/** Quyi servis RPC xatosi: `{ statusCode: number, ... }` oddiy obyekt. */
+function isRpcErrorPayload(exception: unknown): boolean {
+  return (
+    typeof exception === 'object' &&
+    exception !== null &&
+    !(exception instanceof Error) &&
+    typeof (exception as { statusCode?: unknown }).statusCode === 'number'
+  );
 }
