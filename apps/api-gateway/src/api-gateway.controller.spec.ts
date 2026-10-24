@@ -395,7 +395,10 @@ describe('ApiGatewayController', () => {
 
       // 2CBnPAeg: ko'lam endi identity so'rovida (`branch_scope`) — ro'yxat,
       // total va countsByRole bir xil doirada; `user_ids` yuborilmaydi.
-      const [, payload] = identityClient.send.mock.calls[0];
+      const [, payload] = identityClient.send.mock.calls[0] as [
+        unknown,
+        { query: Record<string, unknown> },
+      ];
       expect(payload.query.branch_scope).toEqual({ user_ids: ['101'] });
       expect(payload.query.user_ids).toBeUndefined();
     });
