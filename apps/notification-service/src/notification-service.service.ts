@@ -70,6 +70,10 @@ const NOMALUM_ERROR_MESSAGE = 'Noma’lum xatolik yuz berdi';
 const GROUP_BIND_UNEXPECTED_ERROR_MESSAGE =
   "Guruhni ulashda xatolik yuz berdi — birozdan so'ng qayta urinib ko'ring";
 
+/** (qXlFQp8Q) PATCH faqat is_active — guruhni qo'lda almashtirish yopiq. */
+const MANUAL_GROUP_EDIT_FORBIDDEN_MESSAGE =
+  "Faqat is_active o'zgartiriladi. Guruhni almashtirish uchun ulanishni o'chirib, bir martalik bot havolasi orqali qayta ulang.";
+
 /**
  * (bOMYoOtV) Telegram ulanishining o'qiladigan ustunlari. Bot TOKENI bazada
  * UMUMAN yo'q (faqat env); `connect_token_hash` — `select: false`, bu yerda
@@ -84,6 +88,9 @@ const TG_MARKET_SELECT: FindOptionsSelect<TelegramMarket> = {
   group_type: true,
   bot_slug: true,
   is_active: true,
+  // (G085w5Qr) nofaol sababi jadvalda ko'rinadi.
+  inactive_reason: true,
+  inactive_at: true,
 };
 
 /**
@@ -102,6 +109,10 @@ export function toPublicTelegramMarket(row: TelegramMarket) {
     group_type: row.group_type,
     bot_slug: row.bot_slug ?? null,
     is_active: row.is_active,
+    // (G085w5Qr) 'kicked' | 'left' | 'blocked_on_send' | 'chat_not_found' |
+    // 'manual' | null (faol yoki sabab noma'lum — eski qator).
+    inactive_reason: row.inactive_reason ?? null,
+    inactive_at: row.inactive_at ?? null,
   };
 }
 
@@ -548,6 +559,10 @@ export class NotificationServiceService {
         group_id: dto.group_id,
         group_type: dto.group_type,
         is_active: dto.is_active ?? true,
+        // (G085w5Qr) nofaol yaratilsa — qo'lda.
+        ...(dto.is_active === false
+          ? { inactive_reason: 'manual' as const, inactive_at: new Date() }
+          : {}),
       });
 
       const saved = await this.tgMarketRepo.save(entity);
@@ -628,6 +643,87 @@ export class NotificationServiceService {
     }
   }
 
+  /**
+   * (KJNHAlGW) Market (yoki uning operatori) O'Z Telegram guruhlari holati —
+   * har doim ikkala tur (create, cancel). market_id FAQAT tokendan: MARKET —
+   * `sub`, MARKET_OPERATOR — identity `user.market_id`; klient yuborgan
+   * market_id e'tiborga olinmaydi. group_id va bot_slug qaytarilmaydi.
+   * Ulash oynasi har 3-5 soniyada so'raydi — (market_id, group_type)
+   * indeksi (IDX_TG_MARKET_GROUP) bo'yicha bitta so'rov.
+   */
+  async findMyTelegramGroups(data: {
+    requester?: { id?: unknown; roles?: unknown };
+  }) {
+    try {
+      const marketId = await this.resolveOwnMarketId(data?.requester);
+      const rows = await this.tgMarketRepo.find({
+        select: {
+          id: true,
+          createdAt: true,
+          group_type: true,
+          is_active: true,
+          inactive_reason: true,
+        },
+        where: { market_id: marketId, isDeleted: false },
+        order: { createdAt: 'DESC' },
+      });
+      const items = [Group_type.CREATE, Group_type.CANCEL].map((groupType) => {
+        const row = rows.find((item) => item.group_type === groupType);
+        return {
+          group_type: groupType,
+          linked: Boolean(row),
+          is_active: row ? row.is_active : null,
+          linked_at: row ? row.createdAt : null,
+          // (G085w5Qr) nofaol sababi; faol yoki ulanmagan — null.
+          inactive_reason: row ? (row.inactive_reason ?? null) : null,
+        };
+      });
+      return this.successRes(items, 200, 'Telegram guruhlari holati');
+    } catch (error) {
+      this.toRpcError(error);
+    }
+  }
+
+  /** (KJNHAlGW) "O'z marketi" — tokendan; topilmasa 403 (fail-closed). */
+  private async resolveOwnMarketId(requester?: {
+    id?: unknown;
+    roles?: unknown;
+  }): Promise<string> {
+    const userId =
+      typeof requester?.id === 'string' || typeof requester?.id === 'number'
+        ? String(requester.id).trim()
+        : '';
+    const roles = (
+      Array.isArray(requester?.roles) ? (requester.roles as unknown[]) : []
+    ).map((role) => (typeof role === 'string' ? role.toLowerCase() : ''));
+    let own = '';
+    if (roles.includes(Roles.MARKET) && /^\d{1,19}$/.test(userId)) {
+      own = userId;
+    } else if (
+      roles.includes(Roles.MARKET_OPERATOR) &&
+      /^\d{1,19}$/.test(userId)
+    ) {
+      const profile = await rmqSend<{ data?: { market_id?: unknown } }>(
+        this.identityClient,
+        { cmd: 'identity.user.find_by_id' },
+        { id: userId },
+      ).catch(() => null);
+      const raw = profile?.data?.market_id;
+      own =
+        typeof raw === 'string' || typeof raw === 'number'
+          ? String(raw).trim()
+          : '';
+    }
+    if (!/^\d{1,19}$/.test(own)) {
+      throw new ForbiddenException(
+        roles.includes(Roles.MARKET_OPERATOR)
+          ? 'Operator hech qaysi marketga biriktirilmagan'
+          : "Telegram guruhlari holatini faqat market yoki uning operatori ko'radi",
+      );
+    }
+    return own;
+  }
+
   async findTelegramMarketById(id?: string) {
     try {
       this.assertBigIntId(id, 'id');
@@ -649,11 +745,17 @@ export class NotificationServiceService {
 
   async updateTelegramMarket(dto: UpdateNotificationDto) {
     try {
-      const target = await this.resolveTelegramMarketTarget({
-        id: dto.id,
-        market_id: dto.market_id,
-        group_type: dto.group_type,
-      });
+      // (qXlFQp8Q) Faqat is_active o'zgaradi: guruh ID / market / tur qo'lda
+      // almashtirilmaydi (bot tekshiruvisiz begona guruhni bog'lash yo'li).
+      // Gateway DTO ham bularni 400 bilan rad etadi; bu — ichki RMQ himoyasi.
+      if (
+        dto.group_id !== undefined ||
+        dto.market_id !== undefined ||
+        dto.group_type !== undefined
+      ) {
+        throw new BadRequestException(MANUAL_GROUP_EDIT_FORBIDDEN_MESSAGE);
+      }
+      const target = await this.resolveTelegramMarketTarget({ id: dto.id });
 
       // Snapshot BEFORE mutating.
       const beforeSnapshot = {
@@ -661,39 +763,21 @@ export class NotificationServiceService {
         group_id: target.group_id,
         group_type: target.group_type,
         is_active: target.is_active,
+        inactive_reason: target.inactive_reason ?? null,
       };
 
-      if (dto.market_id !== undefined) {
-        this.assertBigIntId(dto.market_id, 'market_id');
-        target.market_id = dto.market_id;
-      }
-
-      if (dto.group_id !== undefined) {
-        target.group_id = dto.group_id;
-      }
-
-      if (dto.group_type !== undefined) {
-        target.group_type = dto.group_type;
-      }
-
       if (dto.is_active !== undefined) {
+        // (G085w5Qr) Qo'lda o'chirish — 'manual'; faollashtirish — sabab
+        // tozalanadi. Holat o'zgarmasa sabab ham saqlanib qoladi.
+        if (dto.is_active !== target.is_active) {
+          target.inactive_reason = dto.is_active ? null : 'manual';
+          target.inactive_at = dto.is_active ? null : new Date();
+        }
         target.is_active = dto.is_active;
       }
 
-      const duplicate = await this.tgMarketRepo.findOne({
-        where: {
-          market_id: target.market_id,
-          group_type: target.group_type,
-          isDeleted: false,
-        },
-      });
-
-      if (duplicate && duplicate.id !== target.id) {
-        throw new BadRequestException(
-          'Telegram market for this market_id and group_type already exists',
-        );
-      }
-
+      // (qXlFQp8Q) market_id / group_type o'zgarmaydi — takror tekshiruvi
+      // endi kerak emas.
       const saved = await this.tgMarketRepo.save(target);
 
       // Audit: only changed fields are persisted.
@@ -707,6 +791,7 @@ export class NotificationServiceService {
           group_id: saved.group_id,
           group_type: saved.group_type,
           is_active: saved.is_active,
+          inactive_reason: saved.inactive_reason ?? null,
         },
         ...this.auditActor(
           (dto as { requester?: { id?: string; roles?: string[] } }).requester,

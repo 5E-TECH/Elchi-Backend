@@ -129,7 +129,7 @@ describe('NotificationGatewayController — n0kLbx3d / Eh8y21Ha', () => {
   });
 
   describe('(bOMYoOtV) bot tokeni so‘rov tanasidan qabul qilinmaydi', () => {
-    it('POST /notifications (config yaratish) `token` bilan → 400', async () => {
+    it('(qXlFQp8Q) POST /notifications (qo‘lda guruh ID) — 410 Gone, `token` bilan ham', async () => {
       const res = await request(http())
         .post('/notifications')
         .send({
@@ -138,8 +138,8 @@ describe('NotificationGatewayController — n0kLbx3d / Eh8y21Ha', () => {
           group_type: 'create',
           token: '123456:SECRET',
         })
-        .expect(400);
-      expect(JSON.stringify(res.body)).toContain('token');
+        .expect(410);
+      expect(JSON.stringify(res.body)).not.toContain('SECRET');
       expect(send).not.toHaveBeenCalled();
     });
 
@@ -151,12 +151,46 @@ describe('NotificationGatewayController — n0kLbx3d / Eh8y21Ha', () => {
       expect(send).not.toHaveBeenCalled();
     });
 
-    it('tokensiz yaratish — o‘tadi', async () => {
-      await request(http())
+    it('(qXlFQp8Q) tokensiz qo‘lda yaratish ham — 410, servisga so‘rov yo‘q', async () => {
+      const res = await request(http())
         .post('/notifications')
         .send({ market_id: '5', group_id: '-100555', group_type: 'create' })
-        .expect(201);
-      expect(lastCall()![1]).not.toHaveProperty('token');
+        .expect(410);
+      expect(String((res.body as { message?: unknown }).message)).toContain(
+        'link-code',
+      );
+      expect(send).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      { group_id: '-100999' },
+      { market_id: '6' },
+      { group_type: 'cancel' },
+      { id: '11' },
+    ])(
+      '(qXlFQp8Q) PATCH /notifications/:id faqat is_active — %j bilan 400',
+      async (extra) => {
+        await request(http())
+          .patch('/notifications/10')
+          .send({ is_active: false, ...extra })
+          .expect(400);
+        expect(send).not.toHaveBeenCalled();
+      },
+    );
+
+    it('(qXlFQp8Q) PATCH { is_active } — o‘tadi; is_active yo‘q — 400', async () => {
+      send.mockReturnValue(of({ statusCode: 200, data: { id: '10' } }));
+      await request(http())
+        .patch('/notifications/10')
+        .send({ is_active: false })
+        .expect(200);
+      expect(lastCall()![0]).toEqual({ cmd: 'notification.telegram.update' });
+      expect(lastCall()![1]).toEqual(
+        expect.objectContaining({ id: '10', is_active: false }),
+      );
+      send.mockClear();
+      await request(http()).patch('/notifications/10').send({}).expect(400);
+      expect(send).not.toHaveBeenCalled();
     });
   });
 

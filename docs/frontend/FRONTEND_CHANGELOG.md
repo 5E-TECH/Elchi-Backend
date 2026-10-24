@@ -159,6 +159,52 @@ Hammasi qo'shimcha (additive) maydonlar — eski FE buzilmaydi.
   «Jo'natildi» / «Qabul qilindi» / «Bekor qilindi». 🔧 FE: «Tarix» kartasi
   shu endpointdan.
 
+### 2026-10-24 — Bildirishnoma paketi (batch F)
+
+- [2026-10-24] ✏️ [notification] **G085w5Qr** — Telegram guruhi nofaol sababi.
+  `GET /notifications` (`data.items[]`), `GET /notifications/:id` va `PATCH /notifications/:id`
+  javobida yangi maydonlar: `inactive_reason` (`'kicked' | 'left' | 'blocked_on_send' |
+  'chat_not_found' | 'manual' | null`) va `inactive_at` (ISO | null). Bot guruhdan chiqarilsa/
+  topilmasa sababni bot yozadi; admin `PATCH { is_active: false }` → `'manual'`;
+  `PATCH { is_active: true }` → ikkalasi `null`. Migratsiyadan oldingi nofaol qatorlarda `null`.
+  🔧 FE: jadval satri va «Shu tur ulangan, lekin nofaol» oynasida sabab matni
+  (`kicked`/`left` — «Bot guruhdan chiqarilgan — qayta qo'shing va faollashtiring»,
+  `chat_not_found` — «Guruh topilmadi — ulanishni o'chirib, qayta ulang», `manual` — «Qo'lda
+  nofaol qilingan», `null` + nofaol — «Sabab noma'lum»).
+- [2026-10-24] 🆕 [notification] **KJNHAlGW** — `GET /notifications/me/telegram-groups`
+  (rollar: `market`, `market_operator`; `market_id` faqat tokendan — query'dagisi e'tiborsiz,
+  boshqa rollar 403, biriktirilmagan operator 403). Javob `data` — har doim 2 element:
+  `[{ group_type: 'create'|'cancel', linked, is_active: boolean|null, linked_at: ISO|null,
+  inactive_reason: string|null }]`. `group_id`/`bot_slug` qaytmaydi.
+  🔧 FE: market kabineti «Telegram guruhi» kartasi («Ulangan · since» / «Ulanmagan») va ulash
+  oynasining «Guruh ulanishi kutilmoqda…» holati shu endpointni 3–5 soniyada so'raydi.
+- [2026-10-24] ⚠️ [notification] **qXlFQp8Q** — guruh ID'sini qo'lda kiritish yo'li yopildi.
+  `POST /notifications` → **410 Gone** (frontend iste'molchisi yo'q edi). `PATCH /notifications/:id`
+  endi FAQAT `{ is_active: boolean }` (majburiy) qabul qiladi; `group_id`, `market_id`,
+  `group_type`, `id` yuborilsa — 400. Guruh faqat bot havolasi orqali ulanadi
+  (`POST /telegram/link-code { purpose: 'market_group' }`). 🟢 FE: hozirgi `useToggleNotification`
+  (`{ is_active }`) o'zgarishsiz ishlaydi; «Tahrirlash» (guruh ID) formasi bo'lsa — olib tashlang.
+- [2026-10-24] ✏️ [notification] **NwlmrcMf** — `GET /notifications/sent` har qatorida `audience`
+  (tafsilot bilan bir xil shakl): `{ recipient_ids?: <son>, roles?: string[], broadcast?: true,
+  include_customers?: true, segment?: {...}, recipient?: { id, name, role } }` yoki `null`.
+  `recipient` — faqat bitta odamga yuborilganda. 🔧 FE: «Kimga» ustuni (`roles` → «Rol: Kuryer,
+  Market», `broadcast` → «Hamma», `recipient_ids` → «Tanlangan ro'yxat», `recipient` → «Ism · Rol»),
+  ostida `recipients` soni.
+- [2026-10-24] ✏️ [notification] **fb4qy6bd** — kampaniya: `GET /notifications/campaigns`
+  (`data.items[]`) va `GET /notifications/campaigns/:id` da `requested_at` (admin so'ragan lahza:
+  belgilangan vaqt yoki darhol bo'lsa yaratilgan lahza; eski kampaniyalarda `null`),
+  `requested_at_tashkent` va `quiet_hours_shifted` (boolean, eski kampaniyalarda `false`).
+  `POST /notifications/campaigns` javobiga ham `requested_at` qo'shildi.
+  🔧 FE (KM-8): `quiet_hours_shifted` bo'lsa «So'ralgan: `requested_at_tashkent` → tungi taqiq
+  sababli `scheduled_at_tashkent` ga surildi».
+- [2026-10-24] ✏️ [notification] **lkQiuyQu** — `GET /notifications/campaigns/:id/undelivered`
+  (va CSV eksport): bildirishnoma kampaniyasida ham `phone` endi MASKALANGAN (`***7434`; avval
+  `null`). Har `failures[]` elementida yangi `reason_code` (push: `no_subscription`,
+  `push_disabled`, `subscription_expired`, `payload_too_large`, `rate_limited`, `push_rejected`,
+  `push_service_error`, `network_error`, `push_failed`, `online`, `quiet_hours`, `muted`;
+  boshqa kanallar — `<kanal>_reason` kodi yoki `null`). `reason` (xom matn) o'zgarmadi.
+  🔧 FE (KM-7): sabab matnini `reason_code` dan tanlang (`failureReasonKey` ga yangi push kodlari).
+
 ### 2026-10-24 — Uchala tarif bo'yicha taxminiy narx (6FLyjO6j uchun)
 
 - [2026-10-24] 🟢 [logistics] — yangi `POST /delivery/quote/by-tariff` (rollar `POST /delivery/quote` bilan bir xil):

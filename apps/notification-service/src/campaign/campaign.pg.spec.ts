@@ -6,6 +6,7 @@ import { Notification } from '../entities/notification.entity';
 import { NotificationInboxService } from '../notification-inbox.service';
 import { CreateNotificationCampaigns1716000000076 } from '../../../../migrations/1716000000076-CreateNotificationCampaigns';
 import { NotificationCampaignPausedUntil1716000000106 } from '../../../../migrations/1716000000106-NotificationCampaignPausedUntil';
+import { NotificationCampaignRequestedAt1716000000151 } from '../../../../migrations/1716000000151-NotificationCampaignRequestedAt';
 import { CampaignService } from './campaign.service';
 import { CAMPAIGN_BATCH_PATTERN } from './campaign-limits';
 import { NotificationCampaign } from './notification-campaign.entity';
@@ -77,6 +78,8 @@ const USER_BASE = 7_000_000;
         await new CreateNotificationCampaigns1716000000076().up(runner);
         // (WIsb9Ytq) paused_until ustuni.
         await new NotificationCampaignPausedUntil1716000000106().up(runner);
+        // (fb4qy6bd) requested_at + quiet_hours_shifted.
+        await new NotificationCampaignRequestedAt1716000000151().up(runner);
       } finally {
         await runner.release();
       }
@@ -233,6 +236,17 @@ const USER_BASE = 7_000_000;
           )?.findColumnByName('paused_until'),
         ).toBeUndefined();
         await paused.up(runner);
+        // (fb4qy6bd) 151 idempotent: ikki marta up; down → ustunlar yo'q.
+        const requested = new NotificationCampaignRequestedAt1716000000151();
+        await requested.up(runner);
+        await requested.up(runner);
+        await requested.down(runner);
+        const table = await runner.getTable(
+          'notification_schema.notification_campaigns',
+        );
+        expect(table?.findColumnByName('requested_at')).toBeUndefined();
+        expect(table?.findColumnByName('quiet_hours_shifted')).toBeUndefined();
+        await requested.up(runner);
       } finally {
         await runner.release();
       }

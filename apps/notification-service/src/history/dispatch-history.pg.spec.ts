@@ -264,6 +264,29 @@ const CLIENT_ID = '7a1d2c3b-4e5f-4a6b-8c7d-9e0f1a2b3c4d';
         data: { items: unknown[] };
       };
       expect(failedOnly.data.items).toEqual([]);
+
+      // (NwlmrcMf) «Kimga»: bitta odam — recipient (ism · rol), ko'p — son.
+      expect(res.data.items[0].audience).toEqual({
+        recipient_ids: 1,
+        recipient: { id: '11', name: 'Kuryer 11', role: 'courier' },
+      });
+      expect(page2.data.items[0]).toMatchObject({
+        audience: { recipient_ids: 2 },
+      });
+      // Eski yozuv (recipient_id saqlanmagan) — inbox qatoridan (DISTINCT ON).
+      await db.query(
+        `UPDATE notification_schema.notification_dispatches
+            SET "audience" = '{"recipient_ids": 1}'::jsonb
+          WHERE "dispatch_id" = $1`,
+        ['8b2e3d4c-5f60-4b7c-9d8e-0f1a2b3c4d5e'],
+      );
+      const legacy = (await history.list({ page: 1, limit: 1 })) as {
+        data: { items: Array<Record<string, unknown>> };
+      };
+      expect(legacy.data.items[0].audience).toEqual({
+        recipient_ids: 1,
+        recipient: { id: '11', name: 'Kuryer 11', role: 'courier' },
+      });
     });
 
     it('tafsilot: to‘liq matn, jonli kanal × holat, "Yetkazilmaganlar" — ism + rol + sabab (DLR keyin o‘zgarsa ham)', async () => {

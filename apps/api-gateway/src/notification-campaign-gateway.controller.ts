@@ -21,6 +21,7 @@ import {
   ApiBearerAuth,
   ApiBody,
   ApiHeader,
+  ApiOkResponse,
   ApiOperation,
   ApiParam,
   ApiTags,
@@ -37,15 +38,18 @@ import {
 import {
   AudiencePreviewRequestDto,
   CampaignSchedulePolicyQueryDto,
+  CampaignUndeliveredItemDto,
   CampaignUndeliveredQueryDto,
   CreateAudienceSegmentRequestDto,
   CreateNotificationCampaignRequestDto,
   ListNotificationCampaignsQueryDto,
+  NotificationCampaignScheduleFieldsDto,
 } from './dto/notification-campaign.swagger.dto';
 import {
   ListNotificationTemplatesQueryDto,
   ListSentNotificationsQueryDto,
   SentNotificationDetailQueryDto,
+  SentNotificationItemDto,
   TelegramBroadcastRequestDto,
   UpsertNotificationTemplateRequestDto,
 } from './dto/notification-history.swagger.dto';
@@ -163,7 +167,14 @@ export class NotificationCampaignGatewayController {
   }
 
   @Get('campaigns')
-  @ApiOperation({ summary: 'Kampaniyalar tarixi (yangilari birinchi)' })
+  @ApiOperation({
+    summary:
+      'Kampaniyalar tarixi (yangilari birinchi); har qatorda requested_at + quiet_hours_shifted (fb4qy6bd)',
+  })
+  @ApiOkResponse({
+    description: 'data.items[] elementi (rejalashtirish maydonlari)',
+    type: NotificationCampaignScheduleFieldsDto,
+  })
   listCampaigns(@Query() query: ListNotificationCampaignsQueryDto) {
     return this.send('notification.campaign.list', { ...query });
   }
@@ -185,7 +196,11 @@ export class NotificationCampaignGatewayController {
   @Get('campaigns/:id')
   @ApiOperation({
     summary:
-      'Kampaniya progressi: status, total/sent/failed/skipped, progress_pct',
+      'Kampaniya progressi: status, total/sent/failed/skipped, progress_pct, requested_at, quiet_hours_shifted',
+  })
+  @ApiOkResponse({
+    description: 'data (rejalashtirish maydonlari)',
+    type: NotificationCampaignScheduleFieldsDto,
   })
   @ApiParam({ name: 'id', example: '7' })
   getCampaign(@Param('id') id: string) {
@@ -213,7 +228,12 @@ export class NotificationCampaignGatewayController {
 
   @Get('campaigns/:id/undelivered')
   @ApiOperation({
-    summary: 'Yetkazilmaganlar: ism / rol + kanal va sabab (sahifalab)',
+    summary:
+      'Yetkazilmaganlar: ism / rol, maskalangan telefon + kanal, sabab va sabab kodi (sahifalab; lkQiuyQu)',
+  })
+  @ApiOkResponse({
+    description: 'data.items[] elementi',
+    type: CampaignUndeliveredItemDto,
   })
   @ApiParam({ name: 'id', example: '7' })
   campaignUndelivered(
@@ -365,7 +385,11 @@ export class NotificationCampaignGatewayController {
   @Get('sent')
   @ApiOperation({
     summary:
-      'Yuborilgan xabarlar tarixi: sana, sarlavha, kim yubordi, qabul qiluvchilar, kanal natijasi',
+      'Yuborilgan xabarlar tarixi: sana, sarlavha, kim yubordi, kimga (audience — NwlmrcMf), qabul qiluvchilar, kanal natijasi',
+  })
+  @ApiOkResponse({
+    description: 'data.items[] elementi (audience — tafsilot bilan bir xil)',
+    type: SentNotificationItemDto,
   })
   listSent(@Query() query: ListSentNotificationsQueryDto) {
     return this.send('notification.dispatch_history.list', { ...query });

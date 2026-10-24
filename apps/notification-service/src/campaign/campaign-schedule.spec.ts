@@ -568,6 +568,97 @@ describe('WIsb9Ytq — rejalashtirish va tungi taqiq darvozasi', () => {
     });
   });
 
+  describe('(fb4qy6bd) requested_at + quiet_hours_shifted saqlanadi va GET da qaytadi', () => {
+    type Saved = {
+      requested_at: Date | null;
+      quiet_hours_shifted: boolean;
+      scheduled_at: Date | null;
+    };
+    const savedRow = () =>
+      (
+        (campaigns as { save: jest.Mock }).save.mock.calls as unknown[][]
+      )[0][0] as Saved;
+    const dataOf = (res: unknown) =>
+      (res as { data: Record<string, unknown> }).data;
+
+    it('reklama 19:00 da darhol — requested_at = hozir, surilgan; qatorga yoziladi', async () => {
+      useClock(NIGHT);
+      releaseAt = () => NEXT_MORNING;
+      rmqSendMock.mockResolvedValueOnce(identityTotal(50));
+      const res: unknown = await service.create(promoInput());
+      const saved = savedRow();
+      expect(saved.requested_at).toEqual(NIGHT);
+      expect(saved.quiet_hours_shifted).toBe(true);
+      expect(saved.scheduled_at).toEqual(NEXT_MORNING);
+      expect(dataOf(res).requested_at).toEqual(NIGHT);
+    });
+
+    it('belgilangan vaqt (ertaga 20:00) — requested_at = so‘ralgan, scheduled_at = surilgan', async () => {
+      useClock(DAY);
+      const requested = new Date('2026-10-21T15:00:00.000Z');
+      const release = new Date('2026-10-22T04:00:00.000Z');
+      releaseAt = () => release;
+      rmqSendMock.mockResolvedValueOnce(identityTotal(5));
+      await service.create(
+        promoInput({ scheduled_at: '2026-10-21T20:00:00+05:00' }),
+      );
+      const saved = savedRow();
+      expect(saved.requested_at).toEqual(requested);
+      expect(saved.quiet_hours_shifted).toBe(true);
+      expect(saved.scheduled_at).toEqual(release);
+    });
+
+    it('tranzaksion darhol — requested_at = hozir, surilmagan', async () => {
+      useClock(NIGHT);
+      rmqSendMock.mockResolvedValueOnce(identityTotal(5));
+      await service.create(baseInput());
+      const saved = savedRow();
+      expect(saved.requested_at).toEqual(NIGHT);
+      expect(saved.quiet_hours_shifted).toBe(false);
+    });
+
+    it('GET campaigns (get / list) — requested_at, requested_at_tashkent, quiet_hours_shifted; eski qator — null / false', async () => {
+      const row = {
+        id: '7',
+        status: 'queued',
+        category: 'marketing',
+        total: 10,
+        sent: 0,
+        failed: 0,
+        skipped: 0,
+        batch_no: 0,
+        scheduled_at: NEXT_MORNING,
+        paused_until: null,
+        requested_at: NIGHT,
+        quiet_hours_shifted: true,
+      };
+      (repo as { findOne: jest.Mock }).findOne.mockResolvedValueOnce(row);
+      const one: unknown = await service.get({ id: '7' });
+      expect(dataOf(one)).toMatchObject({
+        requested_at: NIGHT,
+        requested_at_tashkent: '2026-10-20T19:00:00+05:00',
+        quiet_hours_shifted: true,
+        scheduled_at_tashkent: '2026-10-21T09:00:00+05:00',
+      });
+
+      const legacy = { ...row, id: '6' } as Record<string, unknown>;
+      delete legacy.requested_at;
+      delete legacy.quiet_hours_shifted;
+      (repo as { findAndCount: jest.Mock }).findAndCount.mockResolvedValueOnce([
+        [row, legacy],
+        2,
+      ]);
+      const list: unknown = await service.list({});
+      const items = dataOf(list).items as Array<Record<string, unknown>>;
+      expect(items[0].quiet_hours_shifted).toBe(true);
+      expect(items[1]).toMatchObject({
+        requested_at: null,
+        requested_at_tashkent: null,
+        quiet_hours_shifted: false,
+      });
+    });
+  });
+
   describe('schedule_policy — DatePicker uchun qoida va “09:00 ga suriladi” taklifi', () => {
     it('zona, taqiq oynasi (sozlamadan), reklama vaqti taqiqda — surilgan lahza va matn', async () => {
       useClock(DAY);

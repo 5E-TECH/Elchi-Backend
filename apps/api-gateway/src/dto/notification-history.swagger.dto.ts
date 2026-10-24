@@ -202,3 +202,87 @@ export class UpsertNotificationTemplateRequestDto {
   @IsBoolean()
   is_active?: boolean;
 }
+
+/** (NwlmrcMf) «Kimga» — bitta qabul qiluvchi (recipient_ids = 1 bo'lsa). */
+export class SentNotificationAudienceRecipientDto {
+  @ApiProperty({ example: '41' })
+  id!: string;
+
+  @ApiProperty({ nullable: true, example: 'Aziz Karimov' })
+  name!: string | null;
+
+  @ApiProperty({ nullable: true, example: 'courier' })
+  role!: string | null;
+}
+
+/**
+ * (NwlmrcMf) Saqlangan auditoriya (telefon/ism YO'Q) — `GET
+ * /notifications/sent` ro'yxati va tafsilotida bir xil shakl. Faqat
+ * yuborishda berilgan kalitlar bor.
+ */
+export class SentNotificationAudienceDto {
+  @ApiPropertyOptional({
+    example: 1,
+    description: 'Aniq tanlangan qabul qiluvchilar SONI (ro‘yxat emas)',
+  })
+  recipient_ids?: number;
+
+  @ApiPropertyOptional({ example: ['courier', 'market'], type: [String] })
+  roles?: string[];
+
+  @ApiPropertyOptional({ example: true, description: '«Hamma»' })
+  broadcast?: boolean;
+
+  @ApiPropertyOptional({ example: true })
+  include_customers?: boolean;
+
+  @ApiPropertyOptional({
+    type: Object,
+    description: 'Segment sharti (saqlangan segment / filtr)',
+  })
+  segment?: Record<string, unknown>;
+
+  @ApiPropertyOptional({
+    type: SentNotificationAudienceRecipientDto,
+    description:
+      'recipient_ids = 1 bo‘lsa — o‘sha odam (ism · rol). Eski yozuvlarda rol/segment bilan aralash bo‘lsa yo‘q.',
+  })
+  recipient?: SentNotificationAudienceRecipientDto;
+}
+
+/** (NwlmrcMf) `GET /notifications/sent` — `data.items[]` elementi (asosiy maydonlar). */
+export class SentNotificationItemDto {
+  @ApiProperty({ example: '0b7f6f5e-3c1a-4c6e-9b1d-2f0a6c1e9d42' })
+  dispatch_id!: string;
+
+  @ApiProperty({ enum: DISPATCH_HISTORY_STATUS_VALUES, example: 'sent' })
+  status!: string;
+
+  @ApiProperty({ example: 'system.manual' })
+  type!: string;
+
+  @ApiProperty({ example: 'E’lon' })
+  title!: string;
+
+  @ApiProperty({ nullable: true, example: 'Ertaga ish kuni' })
+  body_preview!: string | null;
+
+  @ApiProperty({ example: 12, description: 'Qabul qiluvchilar soni' })
+  recipients!: number;
+
+  @ApiProperty({
+    type: SentNotificationAudienceDto,
+    nullable: true,
+    description: '(NwlmrcMf) «Kimga» ustuni; ichki dispatch — null',
+  })
+  audience!: SentNotificationAudienceDto | null;
+
+  @ApiProperty({
+    nullable: true,
+    example: { id: '25', name: 'Admin', role: 'admin' },
+  })
+  created_by!: { id: string; name: string | null; role: string | null } | null;
+
+  @ApiProperty({ example: '2026-10-24T10:00:00.000Z' })
+  created_at!: string;
+}

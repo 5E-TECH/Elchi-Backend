@@ -1,6 +1,7 @@
 import { Logger } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import { TelegramBotCore1716000000120 } from '../../../../migrations/1716000000120-TelegramBotCore';
+import { TelegramMarketInactiveReason1716000000150 } from '../../../../migrations/1716000000150-TelegramMarketInactiveReason';
 import { TelegramBotAction } from '../entities/telegram-bot-action.entity';
 import { TelegramMarket } from '../entities/telegram-market.entity';
 import { TelegramOutbox } from '../entities/telegram-outbox.entity';
@@ -102,6 +103,13 @@ const migration = new TelegramBotCore1716000000120();
                (5, '-100556', 'cancel', 'enc:v1:xxxx'),
                (7, '-100777', 'create', NULL)`);
       await runMigration('up');
+      // (G085w5Qr) inactive_reason / inactive_at ustunlari.
+      const reasonRunner = db.createQueryRunner();
+      try {
+        await new TelegramMarketInactiveReason1716000000150().up(reasonRunner);
+      } finally {
+        await reasonRunner.release();
+      }
     });
 
     afterAll(async () => {
@@ -389,6 +397,32 @@ const migration = new TelegramBotCore1716000000120();
           `SELECT is_active FROM notification_schema.telegram_markets WHERE group_id = '-100555'`,
         );
         expect(row.is_active).toBe(false);
+        // (G085w5Qr) sabab + vaqt qatorda.
+        const [reasonRow]: Array<{
+          inactive_reason: string;
+          inactive_at: Date | null;
+        }> = await db.query(
+          `SELECT inactive_reason, inactive_at FROM notification_schema.telegram_markets WHERE group_id = '-100555'`,
+        );
+        expect(reasonRow.inactive_reason).toBe('kicked');
+        expect(reasonRow.inactive_at).not.toBeNull();
+        // CHECK: ro'yxatda yo'q sabab yozilmaydi.
+        await expect(
+          db.query(
+            `UPDATE notification_schema.telegram_markets SET inactive_reason = 'boshqa' WHERE group_id = '-100555'`,
+          ),
+        ).rejects.toThrow(/CHK_TG_MARKET_INACTIVE_REASON/);
+        // 150 qayta up — xavfsiz; down → up qayta tiklaydi (ma'lumot NULL).
+        const reasonRunner = db.createQueryRunner();
+        try {
+          const reasonMigration =
+            new TelegramMarketInactiveReason1716000000150();
+          await reasonMigration.up(reasonRunner);
+          await reasonMigration.down(reasonRunner);
+          await reasonMigration.up(reasonRunner);
+        } finally {
+          await reasonRunner.release();
+        }
         expect(dispatch).toHaveBeenCalledTimes(1);
         // Takror — o'zgarish yo'q, qayta xabar yo'q.
         expect(

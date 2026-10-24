@@ -834,6 +834,9 @@ export class NotificationInboxService {
     ];
     const out: Record<string, unknown> = {
       ...(ids.length ? { recipient_ids: ids.length } : {}),
+      // (NwlmrcMf) bitta odam — uning id'si (ism/telefon EMAS): «Kimga»
+      // ustunida ism · rol chiziladi.
+      ...(ids.length === 1 ? { recipient_id: String(ids[0]) } : {}),
       ...(dto.roles?.length ? { roles: dto.roles } : {}),
       ...(dto.broadcast ? { broadcast: true } : {}),
       ...(dto.include_customers ? { include_customers: true } : {}),

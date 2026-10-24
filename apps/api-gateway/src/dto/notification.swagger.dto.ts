@@ -27,29 +27,8 @@ import {
 } from '@app/common';
 import { AudienceSegmentDto } from './notification-campaign.swagger.dto';
 
-export class CreateTelegramMarketRequestDto {
-  @ApiProperty({ example: '2' })
-  @IsString()
-  @Matches(/^\d+$/)
-  market_id!: string;
-
-  @ApiProperty({ example: '-1001234567890' })
-  @IsString()
-  group_id!: string;
-
-  @ApiProperty({ enum: Group_type, example: Group_type.CREATE })
-  @IsEnum(Group_type)
-  group_type!: Group_type;
-
-  // (bOMYoOtV) `token` YO'Q: bot tokeni so'rov tanasidan ham, bazadan ham
-  // olinmaydi (faqat env). Yuborilsa 400 (forbidNonWhitelisted).
-
-  @ApiPropertyOptional({ example: true })
-  @IsOptional()
-  @Type(() => Boolean)
-  @IsBoolean()
-  is_active?: boolean;
-}
+// (qXlFQp8Q) CreateTelegramMarketRequestDto olib tashlandi — POST
+// /notifications (qo'lda guruh ID) 410 Gone.
 
 export class FindTelegramMarketsQueryDto {
   @ApiPropertyOptional({ example: '2' })
@@ -90,37 +69,20 @@ export class FindTelegramMarketsQueryDto {
   limit?: number;
 }
 
+/**
+ * (qXlFQp8Q) PATCH /notifications/:id — FAQAT `is_active`. `id`, `market_id`,
+ * `group_id`, `group_type` olib tashlandi: yuborilsa 400
+ * (forbidNonWhitelisted). Guruhni qo'lda almashtirish yo'li yopiq — faqat bot
+ * havolasi orqali qayta ulash.
+ */
 export class UpdateTelegramMarketRequestDto {
-  @ApiPropertyOptional({ example: '10' })
-  @IsOptional()
-  @IsString()
-  @Matches(/^\d+$/)
-  id?: string;
-
-  @ApiPropertyOptional({ example: '2' })
-  @IsOptional()
-  @IsString()
-  @Matches(/^\d+$/)
-  market_id?: string;
-
-  @ApiPropertyOptional({ example: '-1001234567890' })
-  @IsOptional()
-  @IsString()
-  group_id?: string;
-
-  @ApiPropertyOptional({ enum: Group_type, example: Group_type.CANCEL })
-  @IsOptional()
-  @IsEnum(Group_type)
-  group_type?: Group_type;
-
   // (bOMYoOtV) `token` YO'Q: bot tokeni so'rov tanasidan ham, bazadan ham
   // olinmaydi (faqat env). Yuborilsa 400 (forbidNonWhitelisted).
 
-  @ApiPropertyOptional({ example: false })
-  @IsOptional()
+  @ApiProperty({ example: false })
   @Type(() => Boolean)
   @IsBoolean()
-  is_active?: boolean;
+  is_active!: boolean;
 }
 
 export class DeleteTelegramMarketRequestDto {
@@ -634,4 +596,94 @@ export class TelegramScanDoneRequestDto {
   @ArrayMaxSize(200)
   @Matches(/^\d{1,20}$/, { each: true })
   order_ids!: string[];
+}
+
+/** (G085w5Qr) Telegram guruhi nofaol bo'lish sabablari. */
+export const TELEGRAM_MARKET_INACTIVE_REASONS = [
+  'kicked',
+  'left',
+  'blocked_on_send',
+  'chat_not_found',
+  'manual',
+] as const;
+
+/**
+ * (G085w5Qr) GET /notifications (items[]), GET/PATCH /notifications/:id —
+ * `data` shakli (Telegram guruhi ulanishi, admin uchun).
+ */
+export class TelegramMarketPublicDto {
+  @ApiProperty({ example: '10' })
+  id!: string;
+
+  @ApiProperty({ example: '2026-10-20T10:00:00.000Z' })
+  createdAt!: string;
+
+  @ApiProperty({ example: '2026-10-21T08:00:00.000Z' })
+  updatedAt!: string;
+
+  @ApiProperty({ example: '37' })
+  market_id!: string;
+
+  @ApiProperty({ example: '-1001234567890' })
+  group_id!: string;
+
+  @ApiProperty({ enum: Group_type, example: Group_type.CREATE })
+  group_type!: Group_type;
+
+  @ApiProperty({ nullable: true, example: null })
+  bot_slug!: string | null;
+
+  @ApiProperty({ example: false })
+  is_active!: boolean;
+
+  @ApiProperty({
+    enum: TELEGRAM_MARKET_INACTIVE_REASONS,
+    nullable: true,
+    example: 'kicked',
+    description:
+      "(G085w5Qr) Nofaol sababi: kicked/left — bot guruhdan chiqarilgan, blocked_on_send — yuborishda bloklangan, chat_not_found — guruh topilmadi, manual — admin qo'lda o'chirgan. Faol qatorda va sababi noma'lum eski qatorlarda null.",
+  })
+  inactive_reason!: (typeof TELEGRAM_MARKET_INACTIVE_REASONS)[number] | null;
+
+  @ApiProperty({
+    nullable: true,
+    example: '2026-10-21T08:00:00.000Z',
+    description: '(G085w5Qr) Qachon nofaol bo‘ldi; faol qatorda null.',
+  })
+  inactive_at!: string | null;
+}
+
+/**
+ * (KJNHAlGW) GET /notifications/me/telegram-groups — `data[]` elementi.
+ * Har doim ikkala tur (create, cancel). group_id / bot_slug YO'Q.
+ */
+export class MyTelegramGroupStatusDto {
+  @ApiProperty({ enum: Group_type, example: Group_type.CREATE })
+  group_type!: Group_type;
+
+  @ApiProperty({ example: true, description: 'Guruh ulanganmi' })
+  linked!: boolean;
+
+  @ApiProperty({
+    nullable: true,
+    example: true,
+    description: 'Ulangan guruh faolmi; ulanmagan bo‘lsa null',
+  })
+  is_active!: boolean | null;
+
+  @ApiProperty({
+    nullable: true,
+    example: '2026-10-20T10:00:00.000Z',
+    description: 'Qachon ulangan (qator createdAt); ulanmagan bo‘lsa null',
+  })
+  linked_at!: string | null;
+
+  @ApiProperty({
+    enum: TELEGRAM_MARKET_INACTIVE_REASONS,
+    nullable: true,
+    example: null,
+    description:
+      '(G085w5Qr) Nofaol sababi; faol, ulanmagan yoki sababi noma‘lum bo‘lsa null',
+  })
+  inactive_reason!: (typeof TELEGRAM_MARKET_INACTIVE_REASONS)[number] | null;
 }

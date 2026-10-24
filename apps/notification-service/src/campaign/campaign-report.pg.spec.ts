@@ -5,6 +5,7 @@ import { SmsCampaign } from '../entities/sms-campaign.entity';
 import { SmsOutbox } from '../entities/sms-outbox.entity';
 import { CreateNotificationCampaigns1716000000076 } from '../../../../migrations/1716000000076-CreateNotificationCampaigns';
 import { NotificationCampaignPausedUntil1716000000106 } from '../../../../migrations/1716000000106-NotificationCampaignPausedUntil';
+import { NotificationCampaignRequestedAt1716000000151 } from '../../../../migrations/1716000000151-NotificationCampaignRequestedAt';
 import { CreateCampaignReportExports1716000000107 } from '../../../../migrations/1716000000107-CreateCampaignReportExports';
 import { CampaignReportExport } from './campaign-report-export.entity';
 import {
@@ -83,6 +84,8 @@ const superadmin = { id: '26', roles: ['superadmin'] };
       try {
         await new CreateNotificationCampaigns1716000000076().up(runner);
         await new NotificationCampaignPausedUntil1716000000106().up(runner);
+        // (fb4qy6bd) requested_at + quiet_hours_shifted.
+        await new NotificationCampaignRequestedAt1716000000151().up(runner);
         await new CreateCampaignReportExports1716000000107().up(runner);
       } finally {
         await runner.release();
@@ -265,7 +268,13 @@ const superadmin = { id: '26', roles: ['superadmin'] };
         expect.objectContaining({
           name: expect.stringMatching(/^User /),
           failures: [
-            { channel: 'realtime', status: 'failed', reason: 'timeout' },
+            {
+              channel: 'realtime',
+              status: 'failed',
+              reason: 'timeout',
+              // (lkQiuyQu) kod ko'rinishidagi sabab.
+              reason_code: 'timeout',
+            },
           ],
         }),
       );
@@ -376,7 +385,13 @@ const superadmin = { id: '26', roles: ['superadmin'] };
           name: 'User 72',
           phone: '***7402',
           failures: [
-            { channel: 'sms', status: 'not_delivered', reason: 'DLR: UNDELIV' },
+            {
+              channel: 'sms',
+              status: 'not_delivered',
+              reason: 'DLR: UNDELIV',
+              // (lkQiuyQu) xom matn — kod emas.
+              reason_code: null,
+            },
           ],
         }),
       ]);

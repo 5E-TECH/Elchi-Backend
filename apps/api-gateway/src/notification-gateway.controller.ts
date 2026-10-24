@@ -4,6 +4,7 @@ import {
   Delete,
   GatewayTimeoutException,
   Get,
+  GoneException,
   Inject,
   Param,
   Patch,
@@ -18,6 +19,7 @@ import { ClientProxy } from '@nestjs/microservices';
 import {
   ApiBearerAuth,
   ApiBody,
+  ApiOkResponse,
   ApiOperation,
   ApiParam,
   ApiQuery,
@@ -32,16 +34,21 @@ import { BodyStatusCodeInterceptor } from './body-status-code.interceptor';
 import { Roles as RoleEnum } from '@app/common';
 import {
   ConnectTelegramByTokenRequestDto,
-  CreateTelegramMarketRequestDto,
   DispatchNotificationRequestDto,
   FindTelegramMarketsQueryDto,
   InboxQueryDto,
   SendNotificationRequestDto,
+  MyTelegramGroupStatusDto,
   SubscribePushRequestDto,
+  TelegramMarketPublicDto,
   UnsubscribePushRequestDto,
   UpdateNotificationPreferencesRequestDto,
   UpdateTelegramMarketRequestDto,
 } from './dto/notification.swagger.dto';
+
+/** (qXlFQp8Q) POST /notifications (qo'lda guruh ID) yopilgan — 410 matni. */
+export const MANUAL_GROUP_CREATE_GONE_MESSAGE =
+  "Guruh ID'sini qo'lda kiritib ulash yopilgan. Guruh faqat bir martalik bot havolasi orqali ulanadi: POST /telegram/link-code { purpose: 'market_group' } → guruhda /start <kod> (yoki POST /notifications/connect-by-token).";
 
 interface AuthedRequest {
   user?: { sub?: string; roles?: string[] };
@@ -301,6 +308,33 @@ export class NotificationGatewayController {
     return this.send({ cmd: 'notification.types.list' }, {});
   }
 
+  /**
+   * (KJNHAlGW) Market kabineti «Telegram guruhi» kartasi va ulash oynasi
+   * («Guruh ulanishi kutilmoqda…» — har 3-5 soniyada so'raydi). market_id
+   * FAQAT tokendan (MARKET — sub, MARKET_OPERATOR — user.market_id);
+   * query/body'dagi market_id qabul qilinmaydi.
+   * ⚠️ `:id` marshrutidan OLDIN e'lon qilingan.
+   */
+  @Get('me/telegram-groups')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.MARKET, RoleEnum.MARKET_OPERATOR)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary:
+      "Market o'z Telegram guruhlari holati: data[] — har doim ikkala tur (create, cancel): { group_type, linked, is_active, linked_at, inactive_reason }",
+  })
+  @ApiOkResponse({
+    description: 'data[] elementi',
+    type: MyTelegramGroupStatusDto,
+    isArray: true,
+  })
+  myTelegramGroups(@Req() req: AuthedRequest) {
+    return this.send(
+      { cmd: 'notification.telegram.my_groups' },
+      { requester: this.auditActor(req) },
+    );
+  }
+
   @Post('dispatch')
   // (3SeRYFqx) Tana statusCode i HTTP holatiga (takror — 200, yangi — 201).
   @UseInterceptors(BodyStatusCodeInterceptor)
@@ -323,7 +357,14 @@ export class NotificationGatewayController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Get notification configs' })
+  @ApiOperation({
+    summary:
+      'Get notification configs (data.items[] — TelegramMarketPublicDto; inactive_reason/inactive_at bilan, G085w5Qr)',
+  })
+  @ApiOkResponse({
+    description: 'data.items[] elementi',
+    type: TelegramMarketPublicDto,
+  })
   @ApiQuery({ name: 'market_id', required: false })
   @ApiQuery({ name: 'group_type', required: false })
   @ApiQuery({ name: 'is_active', required: false, type: Boolean })
@@ -337,36 +378,49 @@ export class NotificationGatewayController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Get one notification config by id' })
+  @ApiOperation({
+    summary:
+      'Get one notification config by id (inactive_reason/inactive_at bilan, G085w5Qr)',
+  })
+  @ApiOkResponse({ description: 'data', type: TelegramMarketPublicDto })
   @ApiParam({ name: 'id', example: '10' })
   findOneNotification(@Param('id') id: string) {
     return this.send({ cmd: 'notification.telegram.find_one' }, { id });
   }
 
+  /**
+   * (qXlFQp8Q, ega qarori 2026-10-19 notif-groups S4) Guruh ID'sini QO'LDA
+   * yozib ulash yopildi — bot a'zo bo'lmagan / begona guruhni marketga
+   * bog'lash yo'li edi. Frontend iste'molchisi yo'q (Elchi-Frontend dev:
+   * faqat GET / PATCH { is_active } / DELETE). Guruh faqat bir martalik bot
+   * havolasi orqali ulanadi: POST /telegram/link-code { purpose:
+   * 'market_group' } → guruhda /start <kod> yoki POST
+   * /notifications/connect-by-token. Bu marshrut 410 Gone qaytaradi.
+   */
   @Post()
-  @UseInterceptors(BodyStatusCodeInterceptor)
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Create notification config' })
-  @ApiBody({ type: CreateTelegramMarketRequestDto })
-  createNotification(
-    @Body() dto: CreateTelegramMarketRequestDto,
-    @Req() req: AuthedRequest,
-  ) {
-    return this.send(
-      { cmd: 'notification.telegram.create' },
-      { ...dto, requester: this.auditActor(req) },
-    );
+  @ApiOperation({
+    deprecated: true,
+    summary:
+      "YOPILGAN (410 Gone, qXlFQp8Q): guruh ID'sini qo'lda yozib ulash olib tashlandi. Guruh faqat bir martalik bot havolasi orqali ulanadi — POST /telegram/link-code { purpose: 'market_group' } → /start <kod> yoki POST /notifications/connect-by-token.",
+  })
+  createNotification(): never {
+    throw new GoneException(MANUAL_GROUP_CREATE_GONE_MESSAGE);
   }
 
   @Patch(':id')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Update notification config' })
+  @ApiOperation({
+    summary:
+      "Telegram guruhini faollashtirish / o'chirish — FAQAT { is_active } (qXlFQp8Q). group_id / market_id / group_type yuborilsa 400; guruhni almashtirish — o'chirib, bot havolasi orqali qayta ulash. is_active=false → inactive_reason='manual'.",
+  })
   @ApiParam({ name: 'id', example: '10' })
   @ApiBody({ type: UpdateTelegramMarketRequestDto })
+  @ApiOkResponse({ description: 'data', type: TelegramMarketPublicDto })
   updateNotification(
     @Param('id') id: string,
     @Body() dto: UpdateTelegramMarketRequestDto,

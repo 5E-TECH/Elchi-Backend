@@ -2,6 +2,14 @@ import { Column, Entity, Index } from 'typeorm';
 import { BaseEntity } from '@app/common';
 import { Group_type } from '@app/common';
 
+/** (G085w5Qr) `telegram_markets.inactive_reason` qiymatlari. */
+export type TelegramMarketInactiveReason =
+  | 'kicked'
+  | 'left'
+  | 'blocked_on_send'
+  | 'chat_not_found'
+  | 'manual';
+
 @Entity({ name: 'telegram_markets' })
 @Index('IDX_TG_MARKET_ID', ['market_id'])
 @Index('IDX_TG_GROUP_TYPE', ['group_type'])
@@ -32,4 +40,16 @@ export class TelegramMarket extends BaseEntity {
 
   @Column({ type: 'boolean', default: true })
   is_active!: boolean;
+
+  /**
+   * (G085w5Qr) Nofaol bo'lish sababi (migratsiya 1716000000150): bot
+   * aniqlagan 'kicked' | 'left' | 'blocked_on_send' | 'chat_not_found' yoki
+   * admin qo'lda o'chirgan 'manual'. Faollashtirilganda NULL.
+   */
+  @Column({ type: 'varchar', length: 32, nullable: true })
+  inactive_reason!: TelegramMarketInactiveReason | null;
+
+  /** (G085w5Qr) Qachon nofaol bo'ldi; faol qatorda NULL. */
+  @Column({ type: 'timestamptz', nullable: true })
+  inactive_at!: Date | null;
 }

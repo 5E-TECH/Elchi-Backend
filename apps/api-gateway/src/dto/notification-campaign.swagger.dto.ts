@@ -374,3 +374,103 @@ export class ListNotificationCampaignsQueryDto {
   @IsIn(['scheduled', 'sending', 'sent', 'failed', 'cancelled'])
   state?: string;
 }
+
+/**
+ * (fb4qy6bd) GET /notifications/campaigns (data.items[]) va
+ * /campaigns/:id — rejalashtirish maydonlari (asosiylari; to'liq javobda
+ * progress, holat va boshqa maydonlar ham bor).
+ */
+export class NotificationCampaignScheduleFieldsDto {
+  @ApiProperty({ example: '7' })
+  id!: string;
+
+  @ApiProperty({
+    enum: ['scheduled', 'sending', 'sent', 'failed', 'cancelled'],
+    example: 'scheduled',
+  })
+  display_status!: string;
+
+  @ApiProperty({
+    nullable: true,
+    example: '2026-10-21T04:00:00.000Z',
+    description: 'Haqiqiy yuborish lahzasi (surilgan bo‘lsa — surilgani)',
+  })
+  scheduled_at!: string | null;
+
+  @ApiProperty({ nullable: true, example: '2026-10-21T09:00:00+05:00' })
+  scheduled_at_tashkent!: string | null;
+
+  @ApiProperty({
+    nullable: true,
+    example: '2026-10-20T14:00:00.000Z',
+    description:
+      '(fb4qy6bd) Admin so‘ragan lahza: belgilangan vaqt (surilishdan OLDIN) yoki darhol bo‘lsa yaratilgan lahza. Eski kampaniyalarda null.',
+  })
+  requested_at!: string | null;
+
+  @ApiProperty({ nullable: true, example: '2026-10-20T19:00:00+05:00' })
+  requested_at_tashkent!: string | null;
+
+  @ApiProperty({
+    example: true,
+    description:
+      '(fb4qy6bd) Reklama tungi taqiq oynasi sababli scheduled_at surilganmi (eski kampaniyalarda false).',
+  })
+  quiet_hours_shifted!: boolean;
+
+  @ApiProperty({ nullable: true, example: null })
+  paused_until!: string | null;
+}
+
+/** (lkQiuyQu) Yetkazilmagan kanal: holat, xom sabab va sabab KODI. */
+export class CampaignUndeliveredFailureDto {
+  @ApiProperty({ example: 'push' })
+  channel!: string;
+
+  @ApiProperty({ example: 'failed' })
+  status!: string;
+
+  @ApiProperty({
+    nullable: true,
+    example: 'Received unexpected response code 410',
+    description: 'Xom sabab (texnik matn) — UI da ko‘rsatilmaydi',
+  })
+  reason!: string | null;
+
+  @ApiProperty({
+    nullable: true,
+    example: 'subscription_expired',
+    description:
+      "(lkQiuyQu) Sabab kodi — UI shu bo'yicha matn tanlaydi. Push: no_subscription, push_disabled, subscription_expired, payload_too_large, rate_limited, push_rejected, push_service_error, network_error, push_failed, online, quiet_hours, muted. Boshqa kanallar: `<kanal>_reason` kodi (bot_blocked, no_phone, ...) yoki null.",
+  })
+  reason_code!: string | null;
+}
+
+/** (lkQiuyQu) GET .../undelivered — `data.items[]` elementi. */
+export class CampaignUndeliveredItemDto {
+  @ApiProperty({
+    example: '100',
+    description: 'notifications.id / sms_outbox.id',
+  })
+  ref_id!: string;
+
+  @ApiProperty({ nullable: true, example: '42' })
+  recipient_id!: string | null;
+
+  @ApiProperty({ nullable: true, example: 'Aziz Karimov' })
+  name!: string | null;
+
+  @ApiProperty({ nullable: true, example: 'courier' })
+  role!: string | null;
+
+  @ApiProperty({
+    nullable: true,
+    example: '***7434',
+    description:
+      '(lkQiuyQu) FAQAT maskalangan telefon (oxirgi 4 raqam) — bildirishnoma va SMS kampaniyasida; topilmasa null',
+  })
+  phone!: string | null;
+
+  @ApiProperty({ type: [CampaignUndeliveredFailureDto] })
+  failures!: CampaignUndeliveredFailureDto[];
+}
