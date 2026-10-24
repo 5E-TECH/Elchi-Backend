@@ -40,6 +40,8 @@ interface RevenueFilter {
   period?: string;
   page?: number;
   limit?: number;
+  // (XdKajqLe) «Barchasi» — /analytics/kpi va /analytics/revenue.
+  all?: boolean;
 }
 
 type RevenuePeriod = 'daily' | 'weekly' | 'monthly' | 'yearly';
@@ -327,6 +329,29 @@ export class AnalyticsServiceService {
       startDate: filter.startDate ?? filter.fromDate,
       endDate: filter.endDate ?? filter.toDate,
     });
+  }
+
+  /**
+   * (XdKajqLe) KPI/revenue oynasi. `all=true` («Barchasi») — dashboard
+   * bilan AYNI: 1970-01-01 → hozir, order-service'ga `all: true` (u eng
+   * so'nggi 366 kunga qisqartiradi va `applied_range` qaytaradi — javobda
+   * `clamped`/`effective_*`). Aks holda — oldingidek tanlangan davr.
+   */
+  private kpiRange(filter: RevenueFilter = {}): {
+    startDate: string;
+    endDate: string;
+    all?: true;
+  } {
+    if (filter.all === true) {
+      return {
+        ...this.normalizeDateRange({
+          startDate: '1970-01-01',
+          endDate: new Date().toISOString(),
+        }),
+        all: true,
+      };
+    }
+    return this.normalizeDateRangeAny(filter);
   }
 
   private normalizePagination(filter: { page?: number; limit?: number } = {}) {
@@ -1122,7 +1147,9 @@ export class AnalyticsServiceService {
     filter: RevenueFilter,
   ) {
     this.assertFinancialAccess(requester);
-    const normalized = this.normalizeDateRangeAny(filter);
+    // (XdKajqLe) `all=true` — «Barchasi» (366 kunlik chegara, meta bilan).
+    const normalized = this.kpiRange(filter);
+    const isAllTime = normalized.all === true;
     const period = this.normalizeRevenuePeriod(filter.period);
     const failedParts: string[] = [];
 
@@ -1166,6 +1193,13 @@ export class AnalyticsServiceService {
     );
     const labels = revenueData.data.map((row) => row.label ?? row.period);
     const values = revenueData.data.map((row) => this.parseNumber(row.revenue));
+    // `unwrap` bu yerda ishlatilmaydi: xom `{data: [], summary,
+    // applied_range}` da u bandlar massivini qaytarib meta'ni yo'qotadi.
+    const revenueRoot =
+      revenue && typeof revenue === 'object' && 'applied_range' in revenue
+        ? revenue
+        : (revenue as { data?: unknown } | null)?.data;
+    const allTime = isAllTime ? this.allTimeRangeMeta(revenueRoot) : null;
 
     return successRes(
       {
@@ -1175,6 +1209,7 @@ export class AnalyticsServiceService {
         finance: financeData,
         degraded: failedParts.length > 0,
         failed_parts: failedParts.sort(),
+        ...(allTime?.meta ?? {}),
       },
       200,
       `Revenue stats (${period})`,
@@ -1186,12 +1221,17 @@ export class AnalyticsServiceService {
     filter: RevenueFilter,
   ) {
     this.assertFinancialAccess(requester);
-    const normalized = this.normalizeDateRangeAny(filter);
+    // (XdKajqLe) `all=true` — «Barchasi»: barcha bo'laklar (overview,
+    // kuryerlar, top marketlar, yetkazish) order-service'ga `all: true`
+    // bilan — dashboard bilan AYNI 366 kunlik oyna.
+    const normalized = this.kpiRange(filter);
+    const isAllTime = normalized.all === true;
     const rangeMs =
       new Date(normalized.endDate).getTime() -
       new Date(normalized.startDate).getTime();
-    const revenuePeriod: RevenuePeriod =
-      rangeMs > 5 * 365 * 24 * 60 * 60 * 1000
+    const revenuePeriod: RevenuePeriod = isAllTime
+      ? 'monthly'
+      : rangeMs > 5 * 365 * 24 * 60 * 60 * 1000
         ? 'yearly'
         : rangeMs > 90 * 24 * 60 * 60 * 1000
           ? 'monthly'
@@ -1248,6 +1288,7 @@ export class AnalyticsServiceService {
     const onTimeCount = this.parseNumber(fulfillmentData?.onTimeCount);
 
     const overviewData = this.unwrap<any>(overview as any);
+    const kpiAllTime = isAllTime ? this.allTimeRangeMeta(overviewData) : null;
     const revenueData = this.unwrapRevenue(revenue);
     const courierStatsData = Array.isArray(
       this.unwrap<any>(courierStats as any),
@@ -1310,9 +1351,12 @@ export class AnalyticsServiceService {
         marketRatingMeta: this.ranking(topMarkets).meta,
         degraded: failedParts.length > 0,
         failed_parts: failedParts.sort(),
+        ...(kpiAllTime?.meta ?? {}),
       },
       200,
-      'KPI stats',
+      kpiAllTime
+        ? kpiAllTime.message.replace('Dashboard infos', 'KPI stats')
+        : 'KPI stats',
     );
   }
 

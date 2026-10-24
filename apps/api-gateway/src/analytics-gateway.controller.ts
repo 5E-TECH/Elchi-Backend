@@ -137,6 +137,13 @@ export class AnalyticsGatewayController {
     required: false,
     enum: ['daily', 'weekly', 'monthly', 'yearly'],
   })
+  @ApiQuery({
+    name: 'all',
+    required: false,
+    type: Boolean,
+    description:
+      "(XdKajqLe) «Barchasi»: dashboard bilan AYNI oyna (eng so'nggi 366 kun). Javobda clamped, effective_from, effective_to, max_span_days.",
+  })
   getRevenue(
     @Req() req: { user: JwtUser },
     @Query('startDate') startDate?: string,
@@ -144,6 +151,7 @@ export class AnalyticsGatewayController {
     @Query('period') period = 'daily',
     @Query('start_day') startDay?: string,
     @Query('end_day') endDay?: string,
+    @Query('all') all?: string,
   ) {
     const resolvedStartDate = startDate ?? startDay;
     const resolvedEndDate = endDate ?? endDay;
@@ -157,6 +165,7 @@ export class AnalyticsGatewayController {
               startDate: resolvedStartDate,
               endDate: resolvedEndDate,
               period,
+              ...(all === 'true' ? { all: true } : {}),
             },
           },
         )
@@ -173,12 +182,20 @@ export class AnalyticsGatewayController {
   @ApiQuery({ name: 'endDate', required: false, type: String })
   @ApiQuery({ name: 'start_day', required: false, type: String })
   @ApiQuery({ name: 'end_day', required: false, type: String })
+  @ApiQuery({
+    name: 'all',
+    required: false,
+    type: Boolean,
+    description:
+      "(XdKajqLe) «Barchasi»: dashboard bilan AYNI oyna (eng so'nggi 366 kun). Javobda clamped, effective_from, effective_to, max_span_days.",
+  })
   getKpi(
     @Req() req: { user: JwtUser },
     @Query('startDate') startDate?: string,
     @Query('endDate') endDate?: string,
     @Query('start_day') startDay?: string,
     @Query('end_day') endDay?: string,
+    @Query('all') all?: string,
   ) {
     const resolvedStartDate = startDate ?? startDay;
     const resolvedEndDate = endDate ?? endDay;
@@ -191,6 +208,7 @@ export class AnalyticsGatewayController {
             filter: {
               startDate: resolvedStartDate,
               endDate: resolvedEndDate,
+              ...(all === 'true' ? { all: true } : {}),
             },
           },
         )

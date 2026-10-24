@@ -2363,10 +2363,13 @@ export class OrderAnalyticsService {
     startDate?: string,
     endDate?: string,
     branchId?: string,
+    // (XdKajqLe) «Barchasi» — overview bilan AYNI oyna (366 kunlik chegara).
+    all = false,
   ) {
     const { start, end, applied_range } = this.analyticsDateRange(
       startDate,
       endDate,
+      all,
     );
     const statuses = [
       Order_status.SOLD,
@@ -2698,11 +2701,15 @@ export class OrderAnalyticsService {
     // (6CYRjoZG) SA/ADMIN filial sahifasi «Kunlik daromad» — filial kesimi
     // (`overview` bilan AYNI `applyAnalyticsBranchScope` qoidasi).
     branchId?: string,
+    // (XdKajqLe) «Barchasi»: overview bilan AYNI qoida — 1970 → endDate,
+    // eng so'nggi 366 kunga qisqartiriladi (audit C3), `applied_range` da.
+    all = false,
   ) {
     const normalizedPeriod = this.normalizeRevenuePeriod(period);
     const { start, end, applied_range } = this.analyticsDateRange(
       startDate,
       endDate,
+      all,
     );
     const soldStatuses = this.soldStatuses();
     const keySql = this.tashkentPeriodKeySql(normalizedPeriod);

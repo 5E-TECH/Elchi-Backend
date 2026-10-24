@@ -174,3 +174,56 @@ describe('6CYRjoZG — GET /analytics/dashboard?branch_id=', () => {
     expect(analyticsClient.send).not.toHaveBeenCalled();
   });
 });
+
+describe('XdKajqLe — kpi/revenue ?all=true', () => {
+  function setup() {
+    const analyticsClient = { send: jest.fn(() => of({ statusCode: 200 })) };
+    const controller = new AnalyticsGatewayController(analyticsClient as any);
+    const req = {
+      user: { sub: '1', username: 'sa', roles: ['superadmin'] },
+    } as any;
+    return { analyticsClient, controller, req };
+  }
+  const filterOf = (send: jest.Mock) =>
+    (
+      (send.mock.calls[0] as unknown[])[1] as {
+        filter: Record<string, unknown>;
+      }
+    ).filter;
+
+  it('⭐ kpi all=true → filter.all: true', async () => {
+    const { analyticsClient, controller, req } = setup();
+    await controller.getKpi(
+      req,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      'true',
+    );
+    expect(filterOf(analyticsClient.send)).toMatchObject({ all: true });
+  });
+
+  it('⭐ revenue all=true → filter.all: true', async () => {
+    const { analyticsClient, controller, req } = setup();
+    await controller.getRevenue(
+      req,
+      undefined,
+      undefined,
+      'monthly',
+      undefined,
+      undefined,
+      'true',
+    );
+    expect(filterOf(analyticsClient.send)).toMatchObject({
+      all: true,
+      period: 'monthly',
+    });
+  });
+
+  it('all yo`q — kalit ham yo`q', async () => {
+    const { analyticsClient, controller, req } = setup();
+    await controller.getKpi(req);
+    expect(filterOf(analyticsClient.send)).not.toHaveProperty('all');
+  });
+});

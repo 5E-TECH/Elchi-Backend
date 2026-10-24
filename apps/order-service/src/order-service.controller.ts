@@ -1740,7 +1740,12 @@ export class OrderServiceController {
   @MessagePattern({ cmd: 'order.analytics.fulfillment_stats' })
   analyticsFulfillmentStats(
     @Payload()
-    data: { startDate?: string; endDate?: string; branch_id?: string },
+    data: {
+      startDate?: string;
+      endDate?: string;
+      branch_id?: string;
+      all?: boolean;
+    },
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
@@ -1748,6 +1753,8 @@ export class OrderServiceController {
         data?.startDate,
         data?.endDate,
         data?.branch_id,
+        // (XdKajqLe) «Barchasi» KPI.
+        data?.all === true,
       ),
     );
   }
@@ -1830,6 +1837,7 @@ export class OrderServiceController {
       endDate?: string;
       period?: string;
       branch_id?: string;
+      all?: boolean;
     },
     @Ctx() context: RmqContext,
   ) {
@@ -1840,6 +1848,8 @@ export class OrderServiceController {
         data.period,
         // (6CYRjoZG) filial kesimi; yo'q bo'lsa — butun kompaniya (eski xulq).
         data.branch_id,
+        // (XdKajqLe) «Barchasi» — 366 kunlik chegara bilan.
+        data.all === true,
       ),
     );
   }
