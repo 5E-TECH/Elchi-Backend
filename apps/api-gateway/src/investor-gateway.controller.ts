@@ -198,7 +198,11 @@ export class InvestorGatewayController {
 
   @Get('investors/me/investments')
   @Roles(RoleEnum.INVESTOR)
-  @ApiOperation({ summary: "Investor: o'z investitsiyalari" })
+  @ApiOperation({
+    summary: "Investor: o'z investitsiyalari",
+    description:
+      "su4IYGCN — `data.summary`: `total_amount` (butun davr yig'indisi) + `range_amount` (`from_date`/`to_date` oralig'idagi yig'indi, ro'yxat filtri bilan bir xil chegaralar, sahifadan qat'i nazar; oraliq berilmasa `total_amount` ga teng).",
+  })
   @ApiQuery({ name: 'from_date', required: false, type: String })
   @ApiQuery({ name: 'to_date', required: false, type: String })
   @ApiQuery({ name: 'page', required: false, type: Number })

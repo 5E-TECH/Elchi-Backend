@@ -2579,6 +2579,8 @@ export class FinanceGatewayController {
   @ApiBearerAuth()
   @ApiOperation({
     summary: 'Paginated top-impact financial balance transactions',
+    description:
+      'guzrGySp — `data.items[]` qatorlarida `created_by_user` (`{ id, name, role }` yoki avtomatik yozuvda `null`) — `financial-balance/history` bilan bir xil.',
   })
   @ApiQuery({ name: 'fromDate', required: false })
   @ApiQuery({ name: 'toDate', required: false })
@@ -2586,7 +2588,7 @@ export class FinanceGatewayController {
   @ApiQuery({ name: 'to_date', required: false })
   @ApiQuery({ name: 'page', required: false })
   @ApiQuery({ name: 'limit', required: false })
-  financialBalanceTopImpacts(
+  async financialBalanceTopImpacts(
     @Query('fromDate') fromDate?: string,
     @Query('toDate') toDate?: string,
     @Query('from_date') from_date?: string,
@@ -2594,7 +2596,7 @@ export class FinanceGatewayController {
     @Query('page') page?: string,
     @Query('limit') limit?: string,
   ) {
-    return this.send(
+    const response = await this.send<unknown>(
       { cmd: 'finance.financial_balance.top_impacts' },
       {
         from_date: from_date ?? fromDate,
@@ -2603,6 +2605,8 @@ export class FinanceGatewayController {
         limit: limit ? Number(limit) : undefined,
       },
     );
+    // (guzrGySp) «Kiritgan» ustuni — history bilan bir xil minimal aktor.
+    return (await this.attachFinancialActors(response)) as unknown;
   }
 
   @Patch('cashbox/spend')

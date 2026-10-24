@@ -66,4 +66,34 @@ describe('RpcExceptionFilter', () => {
       available_at: '2026-10-25T07:00:00.000Z',
     });
   });
+  it('(AF0fvJbw) RpcException data: reason/usage o‘tadi, boshqa kalit yo‘q; bo‘sh bo‘lsa data yo‘q', () => {
+    const h = makeHost();
+    new RpcExceptionFilter().catch(
+      new RpcException({
+        statusCode: 400,
+        message: 'Bu viloyatda 3 ta tuman bor',
+        data: {
+          reason: 'region_has_districts',
+          districts: 3,
+          usage: { orders: 2, posts: 1 },
+        },
+      }),
+      h.host as ArgumentsHost,
+    );
+    expect(h.json).toHaveBeenCalledWith({
+      statusCode: 400,
+      message: 'Bu viloyatda 3 ta tuman bor',
+      data: { reason: 'region_has_districts', usage: { orders: 2, posts: 1 } },
+    });
+
+    const empty = makeHost();
+    new RpcExceptionFilter().catch(
+      new RpcException({ statusCode: 404, message: 'yo‘q', data: null }),
+      empty.host as ArgumentsHost,
+    );
+    expect(empty.json).toHaveBeenCalledWith({
+      statusCode: 404,
+      message: 'yo‘q',
+    });
+  });
 });

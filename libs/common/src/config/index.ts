@@ -122,6 +122,12 @@ export const gatewayValidationSchema = Joi.object({
     .min(1000)
     .empty('')
     .default(60_000),
+  // R6R8BLGA: skaner route'lari (GET /scan/:token, POST /orders/receive,
+  // POST /orders/scan-assign) — per-IP, yuqoriroq limit (filial bitta IP).
+  // Haqiqiy qiymat `auth/scan-throttle.ts` `scanThrottleConfig()` da
+  // (process.env, global THROTTLE_LIMIT dan past emas) — sukutlar AYNI.
+  SCAN_THROTTLE_LIMIT: Joi.number().integer().min(1).empty('').default(300),
+  SCAN_THROTTLE_TTL_MS: Joi.number().integer().min(1000).empty(''),
   // Comma-separated list of allowed browser origins for CORS.
   // localhost/127.0.0.1 are always allowed in code regardless of this value.
   CORS_ORIGINS: Joi.string().allow('').default(''),

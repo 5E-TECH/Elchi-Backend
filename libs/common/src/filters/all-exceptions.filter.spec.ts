@@ -6,7 +6,11 @@ import {
 } from '@nestjs/common';
 import { TimeoutError } from 'rxjs';
 import { AllExceptionsFilter } from './all-exceptions.filter';
-import { SESSION_TOO_NEW, publicErrorFields } from './public-error-fields';
+import {
+  SESSION_TOO_NEW,
+  publicErrorData,
+  publicErrorFields,
+} from './public-error-fields';
 
 jest.mock('../sentry/sentry.helper', () => ({
   captureException: jest.fn(),
@@ -132,6 +136,163 @@ describe('AllExceptionsFilter', () => {
       ).toEqual({ code: SESSION_TOO_NEW });
       expect(publicErrorFields(null)).toEqual({});
       expect(publicErrorFields('boom')).toEqual({});
+    });
+  });
+  describe('(AF0fvJbw) xato `data` — faqat reason / usage / details', () => {
+    const typedHost = () => {
+      const h = makeHost();
+      return {
+        host: h.host as ArgumentsHost,
+        status: h.status,
+        body: () => (h.json.mock.calls as unknown[][])[0][0],
+      };
+    };
+
+    it('⭐ tuman o‘chirish 400 (RPC obyekt): reason + usage o‘tadi, hint/boshqa kalit yo‘q', () => {
+      const { host, status, body } = typedHost();
+
+      filter.catch(
+        {
+          statusCode: 400,
+          message:
+            "Bu tumanda 5 ta buyurtma bor, shuning uchun uni o'chirib bo'lmaydi.",
+          data: {
+            reason: 'district_in_use',
+            usage: { orders: 5, users: 0, branches: 1, transfer_batches: 0 },
+            hint: {
+              action: 'merge',
+              method: 'POST',
+              path: '/district/1/merge',
+            },
+            post_id: '77',
+          },
+        },
+        host,
+      );
+
+      expect(status).toHaveBeenCalledWith(400);
+      expect(body()).toEqual({
+        statusCode: 400,
+        message:
+          "Bu tumanda 5 ta buyurtma bor, shuning uchun uni o'chirib bo'lmaydi.",
+        data: {
+          reason: 'district_in_use',
+          usage: { orders: 5, users: 0, branches: 1, transfer_batches: 0 },
+        },
+      });
+    });
+
+    it('details (409 tafsiloti): tekis obyektlar ro‘yxati o‘tadi, ichma-ich qism tashlanadi', () => {
+      const { host, body } = typedHost();
+
+      filter.catch(
+        {
+          statusCode: 409,
+          message: 'Bloklangan',
+          data: {
+            reason: 'post_has_blocked_orders',
+            details: [
+              { order_id: '11', status: 'sold', nested: { a: 1 } },
+              'oddiy',
+              42,
+              [1, 2],
+            ],
+          },
+        },
+        host,
+      );
+
+      expect(body()).toEqual({
+        statusCode: 409,
+        message: 'Bloklangan',
+        data: {
+          reason: 'post_has_blocked_orders',
+          details: [{ order_id: '11', status: 'sold' }, 'oddiy', 42],
+        },
+      });
+    });
+
+    it('HttpException javobidagi data ham (bir xil konvert); kod bilan birga', () => {
+      const { host, body } = typedHost();
+
+      filter.catch(
+        new ForbiddenException({
+          statusCode: 403,
+          message: 'Yangi qurilma',
+          code: SESSION_TOO_NEW,
+          available_at: '2026-10-25T07:00:00.000Z',
+          data: { reason: 'session_too_new' },
+        }),
+        host,
+      );
+
+      expect(body()).toEqual({
+        statusCode: 403,
+        message: 'Yangi qurilma',
+        code: SESSION_TOO_NEW,
+        available_at: '2026-10-25T07:00:00.000Z',
+        data: { reason: 'session_too_new' },
+      });
+    });
+
+    it('ruxsat etilgan kalit yo‘q / data null — `data` umuman yo‘q (konvert avvalgidek)', () => {
+      for (const data of [null, undefined, {}, { secret: 'x' }, 'matn', [1]]) {
+        const { host, body } = typedHost();
+        filter.catch({ statusCode: 400, message: 'xato', data }, host);
+        expect(body()).toEqual({ statusCode: 400, message: 'xato' });
+      }
+    });
+
+    it('xavfsizlik: inson matni/ichki xabar reason sifatida, stack, kutubxona xatosi o‘tmaydi', () => {
+      expect(
+        publicErrorData({
+          data: {
+            reason:
+              'QueryFailedError: duplicate key value violates "users_pkey"',
+            usage: { orders: '5', 'Bad Key': 1, ok: Infinity, n: 2 },
+            details: { stack: { at: 'x' }, msg: 'y'.repeat(300), code: 'E1' },
+          },
+        }),
+      ).toEqual({
+        // reason — mashina kodi emas; usage — faqat son + to'g'ri kalit;
+        // details — ichma-ich `stack` va 256 dan uzun satr tashlanadi.
+        usage: { n: 2 },
+        details: { code: 'E1' },
+      });
+
+      // Error instansiyasi (axios / TypeORM va h.k.) — ichiga qaralmaydi.
+      const lib = Object.assign(new Error('Request failed'), {
+        statusCode: 400,
+        data: { reason: 'leaked_reason' },
+        response: { data: { reason: 'external' } },
+      });
+      const { host, body } = typedHost();
+      filter.catch(lib, host);
+      expect(body()).not.toHaveProperty('data');
+      expect(JSON.stringify(body())).not.toMatch(/leaked_reason|external/);
+    });
+
+    it('5xx ham xom stack/ichki matnsiz: faqat ruxsat etilgan kalitlar', () => {
+      const { host, body } = typedHost();
+      filter.catch(
+        {
+          statusCode: 503,
+          message: 'Servis javob bermadi',
+          data: { reason: 'geo_usage_unavailable', stack: 'Error: at ...' },
+        },
+        host,
+      );
+      expect(body()).toEqual({
+        statusCode: 503,
+        message: 'Servis javob bermadi',
+        data: { reason: 'geo_usage_unavailable' },
+      });
+    });
+
+    it('details 50 tadan oshsa — kesiladi', () => {
+      const details = Array.from({ length: 80 }, (_, i) => ({ order_id: i }));
+      const out = publicErrorData({ data: { details } });
+      expect(out?.details).toHaveLength(50);
     });
   });
 });

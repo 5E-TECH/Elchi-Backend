@@ -781,6 +781,17 @@ export class LogisticsServiceController {
     );
   }
 
+  /** Is1zvHN7 — tumanga bog'langan buyurtma/foydalanuvchi/filial soni. */
+  @MessagePattern({ cmd: 'logistics.district.usage' })
+  districtUsage(
+    @Payload() payload: { id: string },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.logisticsService.getDistrictUsage(payload.id),
+    );
+  }
+
   @MessagePattern({ cmd: 'logistics.district.delete' })
   deleteDistrict(
     @Payload() payload: { id: string },

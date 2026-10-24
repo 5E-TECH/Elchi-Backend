@@ -286,6 +286,69 @@ describe('deleteDistrict — himoya (oNAE3LW9)', () => {
   });
 });
 
+/* eslint-disable @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call -- `any` mock'lar (fayldagi naqsh) */
+describe('getDistrictUsage — GET /district/:id/usage (Is1zvHN7)', () => {
+  it('⭐ tirik buyurtma/foydalanuvchi/filial soni; o‘chirilganlar va boshqa tuman sanalmaydi', async () => {
+    const { svc, calls, districts } = make({
+      rows: {
+        orders: [...fiveInA(), order('16', '173', '3', true)],
+        users: [order('301', '173', '3'), order('302', '28', '3')],
+        branches: [order('7', '173', '3', true)],
+      },
+    });
+    const res = await svc.getDistrictUsage('173');
+    expect(res.statusCode).toBe(200);
+    expect(res.data).toEqual({ orders: 5, users: 1, branches: 0 });
+    // Faqat sanaydi: hech narsa ko'chmaydi/o'chmaydi.
+    expect(calls.map((c) => c.cmd).sort()).toEqual(
+      ['branch.geo_usage', 'identity.user.geo_usage', 'order.geo.usage'].sort(),
+    );
+    expect(calls.every((c) => c.payload.district_id === '173')).toBe(true);
+    expect(svc.districtRepo.remove).not.toHaveBeenCalled();
+    expect(districts['173']).toBeDefined();
+  });
+
+  it('DELETE 400 javobidagi `data.usage` bilan bir xil sonlar', async () => {
+    const { svc } = make({
+      rows: {
+        orders: [order('40', '173', '3'), order('41', '173', '3', true)],
+        branches: [order('7', '173', '3')],
+      },
+    });
+    const res = await svc.getDistrictUsage('173');
+    const err = await errorOf(svc.deleteDistrict('173'));
+    expect(err.statusCode).toBe(400);
+    expect(res.data).toEqual({
+      orders: err.data.usage.orders,
+      users: err.data.usage.users,
+      branches: err.data.usage.branches,
+    });
+  });
+
+  it('bo‘sh tuman — hammasi 0', async () => {
+    const { svc } = make();
+    expect((await svc.getDistrictUsage('50')).data).toEqual({
+      orders: 0,
+      users: 0,
+      branches: 0,
+    });
+  });
+
+  it('noma‘lum tuman → 404, servislar so‘ralmaydi', async () => {
+    const { svc, calls } = make();
+    expect(await statusOf(svc.getDistrictUsage('999'))).toBe(404);
+    expect(calls).toEqual([]);
+  });
+
+  it('servis javob bermasa — 503 (0 deb ko‘rsatilmaydi)', async () => {
+    const { svc } = make({ usageDown: true });
+    const err = await errorOf(svc.getDistrictUsage('173'));
+    expect(err.statusCode).toBe(503);
+    expect(err.message).toContain('sanash to');
+  });
+});
+
+/* eslint-enable @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call */
 describe('deleteRegion — himoya (oNAE3LW9)', () => {
   it('⭐ TC3: tumani bor viloyat → 400, tumanlar CASCADE o`chmaydi', async () => {
     const { svc } = make({ regionDistricts: 4 });

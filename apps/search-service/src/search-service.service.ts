@@ -29,12 +29,16 @@ interface QueryPayload {
   limit?: number;
   // Set by the gateway from the JWT. Used to scope results so a low-privilege
   // account cannot harvest cross-tenant PII / order financials from the index.
-  requester?: { id?: string; roles?: string[] };
+  // ISeuwhfr: `market_id` — market operatorining biriktirilgan marketi
+  // (gateway identity'dan oladi; boshqa rollar uchun e'tiborsiz).
+  requester?: { id?: string; roles?: string[]; market_id?: string | null };
 }
 
 // Sources that contain user/staff PII (phones, usernames) — privileged-only.
 const PII_SOURCES = ['identity', 'identity_fallback'];
 const PRIVILEGED_SEARCH_ROLES = ['superadmin', 'admin'];
+const MARKET_OPERATOR_ROLE = 'market_operator';
+const BIGINT_ID_RE = /^[0-9]{1,19}$/;
 
 @Injectable()
 export class SearchServiceService {
@@ -137,6 +141,21 @@ export class SearchServiceService {
       });
       // Order documents are owner-scoped: a non-privileged caller sees an order
       // row only when its metadata market_id/courier_id/customer_id is theirs.
+      // ISeuwhfr: market operatori — qo'shimcha ravishda biriktirilgan
+      // marketining buyurtmalari (operatorning o'z id si hech qaysi
+      // buyurtmaning market_id si emas — ilgari u umuman buyurtma topmasdi).
+      // Market yo'q/noto'g'ri bo'lsa bu band qo'shilmaydi (fail-closed).
+      const rawOperatorMarketId = String(
+        payload.requester?.market_id ?? '',
+      ).trim();
+      const operatorMarketId =
+        roles.includes(MARKET_OPERATOR_ROLE) &&
+        BIGINT_ID_RE.test(rawOperatorMarketId)
+          ? rawOperatorMarketId
+          : '';
+      const operatorArm = operatorMarketId
+        ? ` OR doc.metadata->>'market_id' = :operatorMarketId`
+        : '';
       qb.andWhere(
         `(doc.source <> :orderSource OR (
             :rid <> '' AND (
@@ -144,8 +163,12 @@ export class SearchServiceService {
               doc.metadata->>'courier_id' = :rid OR
               doc.metadata->>'customer_id' = :rid
             )
-          ))`,
-        { orderSource: 'order', rid: requesterId },
+          )${operatorArm})`,
+        {
+          orderSource: 'order',
+          rid: requesterId,
+          ...(operatorMarketId ? { operatorMarketId } : {}),
+        },
       );
     }
 
