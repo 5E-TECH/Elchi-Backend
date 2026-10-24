@@ -1829,6 +1829,23 @@ export class OrderServiceController {
     );
   }
 
+  /** (DwrMygfo) Dashboard/KPI: oldingi davr + 14 kunlik seriya, bitta RPC. */
+  @MessagePattern({ cmd: 'order.analytics.trend' })
+  analyticsTrend(
+    @Payload()
+    data: {
+      startDate?: string;
+      endDate?: string;
+      branch_id?: string;
+      all?: boolean;
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.orderAnalyticsService.getDashboardTrend(data ?? {}),
+    );
+  }
+
   @MessagePattern({ cmd: 'order.analytics.revenue' })
   analyticsRevenue(
     @Payload()

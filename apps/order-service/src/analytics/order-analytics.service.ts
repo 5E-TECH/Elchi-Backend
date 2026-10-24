@@ -2408,6 +2408,36 @@ export class OrderAnalyticsService {
    * qo'shimcha `AT TIME ZONE` yo'q — instantlar solishtiriladi).
    * Postgres SUM/COUNT natijasi SATR keladi — `Number()` bilan.
    */
+  /** Yetkazish vaqti (ms): `sold_at` − `createdAt` (epoch ms). */
+  private static readonly FULFILLMENT_DELIVERY_MS_SQL =
+    '(o.sold_at::bigint - FLOOR(EXTRACT(EPOCH FROM o.createdAt) * 1000))';
+
+  /**
+   * (mKS1mjNr) KPI yetkazish tanlovi: o'chirilmagan, SOLD/PAID/CLOSED/
+   * PARTLY_PAID, `createdAt` oynada, `sold_at` bor va farq > 0. (DwrMygfo:
+   * kunlik seriya ham AYNI tanlovdan.)
+   */
+  private fulfillmentBaseQuery(start: Date, end: Date, branchId?: string) {
+    const statuses = [
+      Order_status.SOLD,
+      Order_status.PAID,
+      Order_status.CLOSED,
+      Order_status.PARTLY_PAID,
+    ];
+    return this.applyAnalyticsBranchScope(
+      this.orderRepo
+        .createQueryBuilder('o')
+        .where('o.isDeleted = :isDeleted', { isDeleted: false })
+        .andWhere('o.status IN (:...fulfillmentStatuses)', {
+          fulfillmentStatuses: statuses,
+        })
+        .andWhere('o.createdAt BETWEEN :start AND :end', { start, end })
+        .andWhere('o.sold_at IS NOT NULL')
+        .andWhere(`${OrderAnalyticsService.FULFILLMENT_DELIVERY_MS_SQL} > 0`),
+      branchId,
+    );
+  }
+
   async getFulfillmentStats(
     startDate?: string,
     endDate?: string,
@@ -2420,27 +2450,9 @@ export class OrderAnalyticsService {
       endDate,
       all,
     );
-    const statuses = [
-      Order_status.SOLD,
-      Order_status.PAID,
-      Order_status.CLOSED,
-      Order_status.PARTLY_PAID,
-    ];
-    const deliveryMs =
-      '(o.sold_at::bigint - FLOOR(EXTRACT(EPOCH FROM o.createdAt) * 1000))';
+    const deliveryMs = OrderAnalyticsService.FULFILLMENT_DELIVERY_MS_SQL;
 
-    const row = await this.applyAnalyticsBranchScope(
-      this.orderRepo
-        .createQueryBuilder('o')
-        .where('o.isDeleted = :isDeleted', { isDeleted: false })
-        .andWhere('o.status IN (:...fulfillmentStatuses)', {
-          fulfillmentStatuses: statuses,
-        })
-        .andWhere('o.createdAt BETWEEN :start AND :end', { start, end })
-        .andWhere('o.sold_at IS NOT NULL')
-        .andWhere(`${deliveryMs} > 0`),
-      branchId,
-    )
+    const row = await this.fulfillmentBaseQuery(start, end, branchId)
       .select('COUNT(*)', 'delivered_count')
       .addSelect(`COALESCE(SUM(${deliveryMs}), 0)::float8`, 'delivery_ms_total')
       .addSelect(
@@ -2845,6 +2857,195 @@ export class OrderAnalyticsService {
         totalProfit,
       },
       applied_range,
+    };
+  }
+  /** (DwrMygfo) Dashboard/KPI sparkline uzunligi (kun). */
+  private static readonly TREND_SERIES_DAYS = 14;
+
+  /**
+   * (DwrMygfo) Dashboard va KPI uchun «oldingi davr» va 14 kunlik kunlik
+   * seriya — BITTA RPC (FE ikkinchi og'ir `analytics/dashboard` so'rovini
+   * yubormasin).
+   *
+   * - `previous`: joriy oynadan OLDINGI teng uzunlikdagi oyna (masalan
+   *   «Bugun» → kecha, 7 kun → oldingi 7 kun) bo'yicha overview
+   *   (`getOverviewStats` — AYNI formulalar) va yetkazish agregati
+   *   (`getFulfillmentStats`). `all=true` («Barchasi») — `null` (oldingi
+   *   davr yo'q).
+   * - `series`: joriy oyna oxiri tushgan Toshkent kuni bilan tugaydigan
+   *   oxirgi 14 kun, har kun (bo'sh kun ham 0 bilan): qabul qilingan
+   *   (`createdAt`), sotilgan/tushum/foyda (`sold_at`), bekor soni/summasi
+   *   (kuzatuv `created_at`, buyurtma bo'yicha DISTINCT), yetkazish
+   *   (`createdAt` kuni). Har bir kesim — bitta GROUP BY.
+   */
+  async getDashboardTrend(input: {
+    startDate?: string;
+    endDate?: string;
+    branch_id?: string;
+    all?: boolean;
+  }) {
+    const all = input.all === true;
+    const branchId = input.branch_id || undefined;
+    const current = this.analyticsDateRange(
+      input.startDate,
+      input.endDate,
+      all,
+    );
+    const DAY = 24 * 60 * 60 * 1000;
+    const days = OrderAnalyticsService.TREND_SERIES_DAYS;
+    const seriesStart = new Date(
+      this.periodStart(current.end, 'daily').getTime() - (days - 1) * DAY,
+    );
+    const seriesRange = { start: seriesStart, end: current.end };
+
+    const previousRange = all
+      ? null
+      : (() => {
+          const length = current.end.getTime() - current.start.getTime() + 1;
+          const to = new Date(current.start.getTime() - 1);
+          const from = new Date(to.getTime() - length + 1);
+          return { from: from.toISOString(), to: to.toISOString() };
+        })();
+
+    const dayKey = (column: string) =>
+      `to_char(date_trunc('day', ${column} AT TIME ZONE 'Asia/Tashkent'), 'YYYY-MM-DD')`;
+    const soldKey = this.tashkentPeriodKeySql('daily');
+    const deliveryMs = OrderAnalyticsService.FULFILLMENT_DELIVERY_MS_SQL;
+
+    const [
+      previousOverview,
+      previousFulfillment,
+      acceptedRows,
+      soldRows,
+      cancelledRows,
+      fulfillmentRows,
+    ] = await Promise.all([
+      previousRange
+        ? this.getOverviewStats(previousRange.from, previousRange.to, branchId)
+        : Promise.resolve(null),
+      previousRange
+        ? this.getFulfillmentStats(
+            previousRange.from,
+            previousRange.to,
+            branchId,
+          )
+        : Promise.resolve(null),
+      this.applyAnalyticsBranchScope(
+        this.orderRepo
+          .createQueryBuilder('o')
+          .where('o.isDeleted = :isDeleted', { isDeleted: false })
+          .andWhere('o.createdAt BETWEEN :start AND :end', seriesRange),
+        branchId,
+      )
+        .select(dayKey('o.createdAt'), 'day')
+        .addSelect('COUNT(*)', 'accepted')
+        .groupBy(dayKey('o.createdAt'))
+        .getRawMany<{ day: string; accepted: string }>(),
+      this.applyAnalyticsBranchScope(
+        this.orderRepo
+          .createQueryBuilder('o')
+          .where('o.isDeleted = :isDeleted', { isDeleted: false })
+          .andWhere('o.status IN (:...statuses)', {
+            statuses: this.soldStatuses(),
+          })
+          .andWhere('o.sold_at BETWEEN :startMs AND :endMs', {
+            startMs: String(seriesRange.start.getTime()),
+            endMs: String(seriesRange.end.getTime()),
+          }),
+        branchId,
+      )
+        .select(soldKey, 'day')
+        .addSelect('COUNT(*)', 'sold')
+        .addSelect('COALESCE(SUM(o.total_price), 0)', 'revenue')
+        .addSelect(OrderAnalyticsService.PROFIT_SQL, 'profit')
+        .groupBy(soldKey)
+        .getRawMany<{
+          day: string;
+          sold: string;
+          revenue: string;
+          profit: string;
+        }>(),
+      this.historicallyCancelledTrackingQuery(seriesRange, branchId)
+        .select(dayKey('t.created_at'), 'day')
+        .addSelect('COUNT(DISTINCT t.order_id)', 'cancelled')
+        .addSelect(OrderAnalyticsService.LOST_REVENUE_SQL, 'lost')
+        .groupBy(dayKey('t.created_at'))
+        .getRawMany<{ day: string; cancelled: string; lost: string }>(),
+      this.fulfillmentBaseQuery(seriesRange.start, seriesRange.end, branchId)
+        .select(dayKey('o.createdAt'), 'day')
+        .addSelect('COUNT(*)', 'delivered')
+        .addSelect(
+          `COALESCE(SUM(${deliveryMs}), 0)::float8`,
+          'delivery_ms_total',
+        )
+        .addSelect(
+          `COUNT(*) FILTER (WHERE ${deliveryMs} <= :fulfillmentSlaMs)`,
+          'on_time',
+        )
+        .setParameter(
+          'fulfillmentSlaMs',
+          OrderAnalyticsService.FULFILLMENT_SLA_MS,
+        )
+        .groupBy(dayKey('o.createdAt'))
+        .getRawMany<{
+          day: string;
+          delivered: string;
+          delivery_ms_total: string;
+          on_time: string;
+        }>(),
+    ]);
+
+    const num = (value: unknown) => {
+      const parsed = Number(value ?? 0);
+      return Number.isFinite(parsed) ? parsed : 0;
+    };
+    const byDay = <T extends { day: string }>(rows: T[] | undefined) =>
+      new Map((rows ?? []).map((row) => [String(row.day), row]));
+    const accepted = byDay(acceptedRows);
+    const sold = byDay(soldRows);
+    const cancelled = byDay(cancelledRows);
+    const fulfillment = byDay(fulfillmentRows);
+
+    const series = Array.from({ length: days }, (_, index) => {
+      const date = this.dateKey(new Date(seriesStart.getTime() + index * DAY));
+      const s = sold.get(date);
+      const c = cancelled.get(date);
+      const f = fulfillment.get(date);
+      return {
+        date,
+        acceptedCount: num(accepted.get(date)?.accepted),
+        soldAndPaid: num(s?.sold),
+        totalRevenue: num(s?.revenue),
+        profit: num(s?.profit),
+        cancelled: num(c?.cancelled),
+        lostRevenue: num(c?.lost),
+        deliveredCount: num(f?.delivered),
+        deliveryMsTotal: num(f?.delivery_ms_total),
+        onTimeCount: num(f?.on_time),
+      };
+    });
+
+    return {
+      previous:
+        previousRange && previousOverview
+          ? {
+              from: previousRange.from,
+              to: previousRange.to,
+              acceptedCount: previousOverview.acceptedCount,
+              soldAndPaid: previousOverview.soldAndPaid,
+              cancelled: previousOverview.cancelled,
+              lostRevenue: previousOverview.lostRevenue,
+              totalRevenue: previousOverview.totalRevenue,
+              profit: previousOverview.profit,
+              deliveredCount: previousFulfillment?.deliveredCount ?? 0,
+              deliveryMsTotal: previousFulfillment?.deliveryMsTotal ?? 0,
+              onTimeCount: previousFulfillment?.onTimeCount ?? 0,
+            }
+          : null,
+      series,
+      series_days: days,
+      series_from: seriesStart.toISOString(),
+      series_to: current.end.toISOString(),
     };
   }
 }

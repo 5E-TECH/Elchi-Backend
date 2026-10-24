@@ -174,6 +174,9 @@ describe('5tUEVG1B — kuryer dashboardida reyting', () => {
         'branchDashboard',
         // (l9NNdsCH) qo'shimcha: maqsad qiymatlari.
         'targets',
+        // (DwrMygfo) qo'shimcha: oldingi davr va 14 kunlik seriya.
+        'previous',
+        'series',
         'degraded',
         'failed_parts',
       ].sort(),

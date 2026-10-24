@@ -63,7 +63,9 @@ describe('mKS1mjNr — KPI yetkazish vaqti SQL agregatidan', () => {
     const cmds = rmqSendMock.mock.calls.map(
       ([, pattern]: [unknown, { cmd: string }]) => pattern.cmd,
     );
-    expect(cmds.length).toBeLessThanOrEqual(5);
+    // (DwrMygfo) +1: `order.analytics.trend` (oldingi davr + seriya, bitta
+    // RPC). Asosiy shart o'zgarmagan — sahifalab tortish yo'q.
+    expect(cmds.length).toBeLessThanOrEqual(6);
     expect(cmds).not.toContain('order.find_all');
     expect(cmds).toContain('order.analytics.fulfillment_stats');
     const call = rmqSendMock.mock.calls.find(

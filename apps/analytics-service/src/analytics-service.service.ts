@@ -1001,6 +1001,7 @@ export class AnalyticsServiceService {
       dailyRevenue,
       statusDistribution,
       topCouriers,
+      trend,
     ] = await Promise.all([
       this.readPart(
         this.orderClient,
@@ -1067,6 +1068,14 @@ export class AnalyticsServiceService {
             'topCouriers',
           )
         : Promise.resolve(null),
+      // (DwrMygfo) oldingi davr + 14 kunlik seriya — AYNI parallel bosqichda.
+      this.readPart(
+        this.orderClient,
+        'order.analytics.trend',
+        scopedRange,
+        failedParts,
+        'trend',
+      ),
     ]);
     this.requirePart(orders, 'overview');
     if (
@@ -1101,6 +1110,7 @@ export class AnalyticsServiceService {
         branchDashboard,
         // (l9NNdsCH) maqsad qiymati (muvaffaqiyat ulushi, %).
         targets: DASHBOARD_TARGETS,
+        ...this.dashboardTrendParts(trend, isRegistrator),
         ...(isAdminBranchView
           ? this.adminBranchViewParts(
               branchId as string,
@@ -1117,6 +1127,40 @@ export class AnalyticsServiceService {
       200,
       allTime?.message ?? 'Dashboard infos',
     );
+  }
+
+  /**
+   * (DwrMygfo) Dashboard `previous` (oldingi teng davr overview qiymatlari)
+   * va `series` (oxirgi 14 kun, har kun). Registrator — moliyaviy maydonlar
+   * (tushum, foyda, bekor summasi) olib tashlanadi (`orders` bilan bir xil).
+   * Bo'lak olinmasa yoki «Barchasi» — `previous: null`.
+   */
+  private dashboardTrendParts(trend: unknown, hideFinancials: boolean) {
+    const data = this.unwrap<any>(trend as any);
+    const pick = (row: any, keys: string[]) =>
+      Object.fromEntries(
+        keys.map((key) => [key, this.parseNumber(row?.[key])]),
+      );
+    const countKeys = ['acceptedCount', 'soldAndPaid', 'cancelled'];
+    const moneyKeys = hideFinancials
+      ? []
+      : ['totalRevenue', 'profit', 'lostRevenue'];
+    const keys = [...countKeys, ...moneyKeys];
+    const previous =
+      data?.previous && typeof data.previous === 'object'
+        ? {
+            from: data.previous.from ?? null,
+            to: data.previous.to ?? null,
+            ...pick(data.previous, keys),
+          }
+        : null;
+    const series = Array.isArray(data?.series)
+      ? data.series.map((row: any) => ({
+          date: String(row?.date ?? ''),
+          ...pick(row, keys),
+        }))
+      : null;
+    return { previous, series };
   }
 
   /**
@@ -1255,7 +1299,7 @@ export class AnalyticsServiceService {
     // (mKS1mjNr) Order-service'ga 5 ta chaqiruv, hammasi PARALLEL (bitta
     // 2,5 s bosqich). Ilgari yetkazish vaqti uchun sotilgan buyurtmalar
     // 4 status × 200 talik sahifalab (100 sahifagacha) tortilardi.
-    const [overview, revenue, courierStats, topMarkets, fulfillment] =
+    const [overview, revenue, courierStats, topMarkets, fulfillment, trend] =
       await Promise.all([
         this.readPart(
           this.orderClient,
@@ -1291,6 +1335,14 @@ export class AnalyticsServiceService {
           normalized,
           failedParts,
           'fulfillment',
+        ),
+        // (DwrMygfo) oldingi davr + 14 kunlik seriya — bitta RPC, parallel.
+        this.readPart(
+          this.orderClient,
+          'order.analytics.trend',
+          normalized,
+          failedParts,
+          'trend',
         ),
       ]);
     this.requirePart(overview, 'overview');
@@ -1364,6 +1416,7 @@ export class AnalyticsServiceService {
         courierEfficiency,
         marketRating: topMarketsData,
         marketRatingMeta: this.ranking(topMarkets).meta,
+        ...this.kpiTrendParts(trend),
         degraded: failedParts.length > 0,
         failed_parts: failedParts.sort(),
         ...(kpiAllTime?.meta ?? {}),
@@ -1373,6 +1426,52 @@ export class AnalyticsServiceService {
         ? kpiAllTime.message.replace('Dashboard infos', 'KPI stats')
         : 'KPI stats',
     );
+  }
+
+  /**
+   * (DwrMygfo) KPI formulalari (getKpiStats bilan AYNI) — `previous` va
+   * kunlik `series` uchun. `courierEfficiency` oldingi davr/seriyada yo'q
+   * (kuryer kesimi alohida og'ir so'rov — minimal variant).
+   */
+  private kpiFromTotals(row: any) {
+    const accepted = this.parseNumber(row?.acceptedCount);
+    const sold = this.parseNumber(row?.soldAndPaid);
+    const cancelled = this.parseNumber(row?.cancelled);
+    const revenue = this.parseNumber(row?.totalRevenue);
+    const delivered = this.parseNumber(row?.deliveredCount);
+    const deliveryMs = this.parseNumber(row?.deliveryMsTotal);
+    const onTime = this.parseNumber(row?.onTimeCount);
+    return {
+      averageOrderValue: sold > 0 ? Number((revenue / sold).toFixed(2)) : 0,
+      averageFulfillmentHours:
+        delivered > 0
+          ? Number((deliveryMs / delivered / (1000 * 60 * 60)).toFixed(2))
+          : 0,
+      onTimeRate:
+        delivered > 0 ? Number(((onTime * 100) / delivered).toFixed(2)) : 0,
+      deliveryCount: delivered,
+      cancellationRate:
+        accepted > 0 ? Number(((cancelled * 100) / accepted).toFixed(2)) : 0,
+    };
+  }
+
+  private kpiTrendParts(trend: unknown) {
+    const data = this.unwrap<any>(trend as any);
+    const previous =
+      data?.previous && typeof data.previous === 'object'
+        ? {
+            from: data.previous.from ?? null,
+            to: data.previous.to ?? null,
+            ...this.kpiFromTotals(data.previous),
+          }
+        : null;
+    const series = Array.isArray(data?.series)
+      ? data.series.map((row: any) => ({
+          date: String(row?.date ?? ''),
+          ...this.kpiFromTotals(row),
+        }))
+      : null;
+    return { previous, series };
   }
 
   async getOrderReport(

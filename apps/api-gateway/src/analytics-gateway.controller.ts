@@ -65,7 +65,13 @@ export class AnalyticsGatewayController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(...DASHBOARD_ROLES)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Dashboard statistics by requester role' })
+  @ApiOperation({
+    summary: 'Dashboard statistics by requester role',
+    description:
+      "Admin/filial kesimi javobida qo'shimcha: orders.lostRevenue (l9NNdsCH, bekor summasi), " +
+      'targets {successRate} (l9NNdsCH), previous {from,to,acceptedCount,soldAndPaid,cancelled,totalRevenue,profit,lostRevenue} ' +
+      'va series[14] {date,…} (DwrMygfo; registratorda moliyaviy maydonlarsiz; «Barchasi»da previous=null).',
+  })
   @ApiQuery({ name: 'startDate', required: false, type: String })
   @ApiQuery({ name: 'endDate', required: false, type: String })
   @ApiQuery({ name: 'start_day', required: false, type: String })
@@ -177,7 +183,12 @@ export class AnalyticsGatewayController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'KPI stats report' })
+  @ApiOperation({
+    summary: 'KPI stats report',
+    description:
+      "Javobda: deliveryCount (yrLt5oMi — 0 bo'lsa SLA «o'lchanmagan»), previous {from,to,averageOrderValue," +
+      'averageFulfillmentHours,onTimeRate,deliveryCount,cancellationRate} va series[14] {date,…} (DwrMygfo).',
+  })
   @ApiQuery({ name: 'startDate', required: false, type: String })
   @ApiQuery({ name: 'endDate', required: false, type: String })
   @ApiQuery({ name: 'start_day', required: false, type: String })
