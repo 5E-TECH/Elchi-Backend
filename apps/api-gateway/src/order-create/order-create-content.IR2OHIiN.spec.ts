@@ -174,6 +174,108 @@ describe('IR2OHIiN — CreateOrderRequestDto (POST /orders)', () => {
   });
 });
 
+/**
+ * Prod tester (2026-10-26, BE 7bff045): inline mijoz tumansiz yuborilsa 400
+ * matni inglizcha validator matni bilan aralash edi — «customer.district_id
+ * must be a string. customer.district_id should not be empty. Buyurtma uchun
+ * tuman tanlanmagan». Endi bitta toza o'zbekcha xabar (javobda
+ * `AllExceptionsFilter` massivni '. ' bilan qo'shadi).
+ */
+describe('IR2OHIiN — inline mijoz tumansiz: bitta o‘zbekcha xabar', () => {
+  const base = {
+    market_id: '37',
+    total_price: 150000,
+    items: ITEMS,
+  };
+  const ENGLISH = /must be|should not|customer\.district_id/;
+
+  it.each([
+    ['district_id yo‘q', {}],
+    ['district_id: ""', { district_id: '' }],
+    ['district_id: "   "', { district_id: '   ' }],
+    ['district_id: null', { district_id: null }],
+  ])(
+    'customer.%s, buyurtmada ham yo‘q → faqat «tuman tanlanmagan»',
+    async (_l, patch) => {
+      const customer: Record<string, unknown> = { ...CUSTOMER, ...patch };
+      if (!('district_id' in patch)) delete customer.district_id;
+      const messages = await validationMessages(CreateOrderRequestDto, {
+        ...base,
+        customer,
+      });
+      expect(messages).toEqual([ORDER_CREATE_NO_DISTRICT_MESSAGE]);
+      expect(messages?.join('. ')).toBe('Buyurtma uchun tuman tanlanmagan');
+    },
+  );
+
+  it('buyurtmada district_id bor, inline mijozda yo‘q → baribir 400 (qoida o‘zgarmagan), xabar bitta va o‘zbekcha', async () => {
+    const customer: Record<string, unknown> = { ...CUSTOMER };
+    delete customer.district_id;
+    const messages = await validationMessages(CreateOrderRequestDto, {
+      ...base,
+      district_id: '12',
+      customer,
+    });
+    expect(messages).toEqual([ORDER_CREATE_NO_DISTRICT_MESSAGE]);
+  });
+
+  it('POST /orders/external DTO ham AYNI xabar', async () => {
+    const customer: Record<string, unknown> = { ...CUSTOMER };
+    delete customer.district_id;
+    const messages = await validationMessages(CreateExternalOrderRequestDto, {
+      ...base,
+      customer,
+    });
+    expect(messages).toEqual([ORDER_CREATE_NO_DISTRICT_MESSAGE]);
+  });
+
+  it('mahsulot miqdori 0 + tumansiz mijoz → ikkala o‘zbekcha xabar, inglizcha tuman matni yo‘q', async () => {
+    const customer: Record<string, unknown> = { ...CUSTOMER };
+    delete customer.district_id;
+    const messages = await validationMessages(CreateOrderRequestDto, {
+      ...base,
+      items: [{ product_id: '41', quantity: 0 }],
+      customer,
+    });
+    expect(messages).toEqual(
+      expect.arrayContaining([
+        ORDER_CREATE_NO_DISTRICT_MESSAGE,
+        'items.0.quantity kamida 1 bo‘lishi kerak',
+      ]),
+    );
+    expect(messages).toHaveLength(2);
+    expect(messages?.join('. ')).not.toMatch(ENGLISH);
+  });
+
+  it('boshqa xabarlar o‘zgarmagan: customer.district_id son → «must be a string», ism yo‘q → avvalgidek', async () => {
+    expect(
+      await validationMessages(CreateOrderRequestDto, {
+        ...base,
+        customer: { ...CUSTOMER, district_id: 12 },
+      }),
+    ).toEqual(['customer.district_id must be a string']);
+    const noName: Record<string, unknown> = { ...CUSTOMER };
+    delete noName.name;
+    const messages = await validationMessages(CreateOrderRequestDto, {
+      ...base,
+      customer: noName,
+    });
+    expect(messages).toEqual(
+      expect.arrayContaining(['customer.name should not be empty']),
+    );
+    expect(messages).not.toContain(ORDER_CREATE_NO_DISTRICT_MESSAGE);
+  });
+
+  it('tuman mijozda bor — o‘tadi (regressiya)', async () => {
+    expect(
+      await validationMessages(CreateOrderRequestDto, {
+        ...base,
+        customer: CUSTOMER,
+      }),
+    ).toBeNull();
+  });
+});
+
 describe('IR2OHIiN — assertOrderCreateContent / orderCreateDistrictId', () => {
   it.each([
     [{ items: undefined, district_id: '1' }, ORDER_CREATE_NO_ITEMS_MESSAGE],
