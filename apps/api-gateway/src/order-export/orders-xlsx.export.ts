@@ -25,6 +25,7 @@
  * bo'lsa oqim UZILADI (`res.destroy`) — brauzer yuklashni xato deb ko'rsatadi,
  * chala fayl "to'liq" bo'lib saqlanmaydi.
  */
+import { Order_status } from '@app/common';
 import { stream as excelStream } from 'exceljs';
 import type { Writable } from 'node:stream';
 
@@ -46,22 +47,94 @@ export const ORDER_EXPORT_HEADERS = {
 const XLSX_CONTENT_TYPE =
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 
-/** Frontend `orders.json` dagi uz yorliqlari bilan bir xil. */
-const STATUS_LABELS: Record<string, string> = {
-  created: 'Qabul qilingan',
-  new: 'Yangi',
-  received: 'Qabul qilindi',
-  'on the road': "Yo'lda",
-  waiting: 'Kutilmoqda',
-  waiting_customer: 'Kutilmoqda',
-  sold: 'Sotilgan',
-  cancelled: 'Bekor qilingan',
-  'cancelled (sent)': 'Bekor qilingan',
-  returned_to_market: 'Marketga qaytarildi',
-  paid: "To'langan",
-  partly_paid: "Qisman to'landi",
-  closed: 'Yopildi',
+/**
+ * 9Bp7VtVj — «Holati» ustuni EKRANDAGI holat yorliqlari bilan AYNAN bir xil.
+ *
+ * Manba (frontend, dizayn v2): `src/entities/order/model/statusRegistry.ts`
+ * `ORDER_STATUS_REGISTRY` (backend holati → `labelKey`) va
+ * `src/locales/uz/status.json` → `order.*`. Har qator izohida — FE kaliti.
+ * Eski `orders.json` (`statusCreated` = «Qabul qilingan» va h.k.) EMAS.
+ * FE yorlig'i o'zgarsa — shu jadval va uning spec'i
+ * (`order-gateway.export-excel.status-labels.9Bp7VtVj.spec.ts`) birga
+ * yangilanadi. Eksport faqat o'zbekcha (sarlavhalar ham), til parametri yo'q.
+ *
+ * `Record<Order_status, …>` — backend'ga yangi holat qo'shilsa, yorliq
+ * yozilmaguncha tsc yiqiladi (eksportda xom kod chiqib qolmasin).
+ */
+export const ORDER_EXPORT_STATUS_LABELS: Readonly<
+  Record<Order_status, string>
+> = {
+  [Order_status.NEW]: 'Yangi', // order.new
+  [Order_status.CREATED]: 'Yaratilgan', // order.created
+  [Order_status.RECEIVED]: 'Qabul qilindi', // order.received
+  [Order_status.ON_THE_ROAD]: "Yo'lda", // order.on_the_road
+  [Order_status.WAITING]: 'Kutilmoqda', // order.waiting
+  [Order_status.WAITING_CUSTOMER]: 'Mijoz kutilmoqda', // order.waiting_customer
+  [Order_status.PARTLY_PAID]: "Qisman to'langan", // order.partly_paid
+  [Order_status.SOLD]: 'Sotilgan', // order.sold
+  [Order_status.PAID]: "To'langan", // order.paid
+  [Order_status.CANCELLED]: 'Bekor qilingan', // order.cancelled
+  [Order_status.CANCELLED_SENT]: "Bekor — jo'natilgan", // order.cancelled_sent
+  [Order_status.RETURNED_TO_MARKET]: 'Marketga topshirildi', // order.returned_to_market
+  [Order_status.CLOSED]: 'Yopilgan', // order.closed
 };
+
+/** Bo'sh holat — FE `order.unknown`. */
+export const ORDER_EXPORT_UNKNOWN_STATUS_LABEL = "Noma'lum";
+
+/**
+ * FE `canonicalForm` bilan bir xil: kichik harf, `_`/`-`/qavs/bo'shliq →
+ * bitta bo'shliq, `canceled` → `cancelled`, camelCase → so'zlar.
+ */
+const canonicalStatus = (raw: unknown): string =>
+  typeof raw === 'string'
+    ? raw
+        .trim()
+        .replace(/([a-z])([A-Z])/g, '$1 $2')
+        .toLowerCase()
+        .replace(/[\s_()-]+/g, ' ')
+        .trim()
+        .replace(/\bcanceled\b/g, 'cancelled')
+    : '';
+
+const STATUS_BY_SPELLING: ReadonlyMap<string, Order_status> = new Map(
+  Object.values(Order_status).map((s) => [canonicalStatus(s), s] as const),
+);
+
+/** FE `normalizeOrderStatus`: `on_the_road`, `ON_THE_ROAD`, `cancelled_sent` … → holat. */
+const normalizeStatus = (raw: unknown): Order_status | null =>
+  STATUS_BY_SPELLING.get(canonicalStatus(raw)) ?? null;
+
+/** FE `humanizeOrderStatus`: noma'lum `lost_in_transit` → «Lost in transit». */
+const humanizeStatus = (raw: unknown): string | null => {
+  if (typeof raw !== 'string' && typeof raw !== 'number') return null;
+  const words = String(raw)
+    .trim()
+    .replace(/([a-z])([A-Z])/g, '$1 $2')
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .toLowerCase();
+  return words ? words.charAt(0).toUpperCase() + words.slice(1) : null;
+};
+
+/**
+ * Buyurtma qatori → «Holati» yorlig'i, ekrandagi `OrderStatusBadge` kabi.
+ * Ro'yxat qatorida jo'natilgan bekor `status: cancelled` +
+ * `transport_status: 'cancelled (sent)'` bo'lib keladi (gateway
+ * `normalizeOrderStatusForDisplay`) — FE `OrdersTable.getDisplayStatus` kabi
+ * «Bekor — jo'natilgan» yoziladi.
+ */
+export function orderExportStatusLabel(order: Record<string, unknown>): string {
+  const transport = normalizeStatus(
+    order.transport_status ?? order.transportStatus,
+  );
+  const status =
+    transport === Order_status.CANCELLED_SENT
+      ? transport
+      : normalizeStatus(order.status);
+  if (status) return ORDER_EXPORT_STATUS_LABELS[status];
+  return humanizeStatus(order.status) ?? ORDER_EXPORT_UNKNOWN_STATUS_LABEL;
+}
 
 export const ORDER_EXPORT_COLUMNS: Array<{
   header: string;
@@ -161,7 +234,6 @@ export function toOrderExportRow(order: Obj, index: number): Obj {
   const customer = obj(order.customer) ?? {};
   const customerDistrict = obj(customer.district) ?? {};
   const district = obj(order.district) ?? {};
-  const status = text(order.status);
   return {
     n: index,
     id: text(order.id),
@@ -182,7 +254,7 @@ export function toOrderExportRow(order: Obj, index: number): Obj {
       obj(order.courier)?.full_name,
       order.courier_name,
     ),
-    status: STATUS_LABELS[status] ?? status,
+    status: orderExportStatusLabel(order),
     created_at: formatTashkentDateTime(order.createdAt ?? order.created_at),
   };
 }
