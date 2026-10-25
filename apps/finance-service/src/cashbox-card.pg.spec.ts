@@ -550,6 +550,9 @@ describePg('3PE0B03q — asosiy kassa nomli kartalari, haqiqiy Postgres', () => 
     const humo = await createHumo();
     const def = await defaultId();
     process.env.FINANCE_REQUIRE_OPEN_SHIFT = 'true';
+    const warn = jest
+      .spyOn((cards as any).logger, 'warn')
+      .mockImplementation(() => undefined);
 
     await expect(
       cards.transfer({
@@ -561,6 +564,10 @@ describePg('3PE0B03q — asosiy kassa nomli kartalari, haqiqiy Postgres', () => 
     ).rejects.toMatchObject({
       error: { statusCode: 400, message: expect.stringMatching(/^Smena/) },
     });
+    // 32Sw3DfC — kuzatuv qatori (rad etilgan amallar soni).
+    expect(warn).toHaveBeenCalledWith(
+      'shift_gate_blocked code=SHIFT_REQUIRED cashbox_type=main cashbox_user_id=0 scope=main',
+    );
 
     const opened: any = await finance.openShift({ opened_by: '1' });
     expect(opened.data).toMatchObject({

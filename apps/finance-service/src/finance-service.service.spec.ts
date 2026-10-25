@@ -256,6 +256,16 @@ describe('FinanceServiceService.findCashboxByUser', () => {
 });
 
 describe('FinanceServiceService.myCashbox', () => {
+  // vf4513Zn — getCashboxByUserId tarixi enrichHistoryWithUsers dan o'tadi
+  // (identity bu yerda topmaydi — null).
+  const withUsers = (row: Record<string, unknown>) => ({
+    ...row,
+    createdByUser: null,
+    created_by_user: null,
+    sourceUser: null,
+    source_user: null,
+  });
+
   it('shows all market cashbox history by default', async () => {
     const manager = makeManager();
     const { service, cashboxRepo, historyRepo } = makeService(manager);
@@ -288,7 +298,8 @@ describe('FinanceServiceService.myCashbox', () => {
         },
       }),
     );
-    expect(response.data.cashboxHistory).toEqual([hqMarketPayment]);
+    // vf4513Zn — tarix qatorlariga xodim/kontragent maydonlari qo'shiladi.
+    expect(response.data.cashboxHistory).toEqual([withUsers(hqMarketPayment)]);
   });
 
   it('shows all branch cashbox history by default for manager users', async () => {
@@ -324,7 +335,8 @@ describe('FinanceServiceService.myCashbox', () => {
         },
       }),
     );
-    expect(response.data.cashboxHistory).toEqual([branchPayment]);
+    // vf4513Zn — tarix qatorlariga xodim/kontragent maydonlari qo'shiladi.
+    expect(response.data.cashboxHistory).toEqual([withUsers(branchPayment)]);
   });
 
   it('shows all courier cashbox history by default', async () => {
@@ -359,7 +371,8 @@ describe('FinanceServiceService.myCashbox', () => {
         },
       }),
     );
-    expect(response.data.cashboxHistory).toEqual([courierPayment]);
+    // vf4513Zn — tarix qatorlariga xodim/kontragent maydonlari qo'shiladi.
+    expect(response.data.cashboxHistory).toEqual([withUsers(courierPayment)]);
   });
 
   it('filters cashbox history by sourceTypes when requested', async () => {
@@ -399,7 +412,8 @@ describe('FinanceServiceService.myCashbox', () => {
       (historyRepo.find.mock.calls[0][0].where as Record<string, unknown>)
         .source_type,
     ).toBeDefined();
-    expect(response.data.cashboxHistory).toEqual([courierPayment]);
+    // vf4513Zn — tarix qatorlariga xodim/kontragent maydonlari qo'shiladi.
+    expect(response.data.cashboxHistory).toEqual([withUsers(courierPayment)]);
   });
 });
 

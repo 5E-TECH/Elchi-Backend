@@ -14,6 +14,7 @@ import {
   Between,
   DataSource,
   EntityManager,
+  FindOptionsOrder,
   FindOptionsWhere,
   In,
   IsNull,
@@ -33,6 +34,7 @@ import {
   BRANCH_SHIFT_REQUIRED_MESSAGE,
   SHIFT_REQUIRED_MESSAGE,
   isShiftRequiredFor,
+  shiftGateBlockedLogLine,
   shiftGateScope,
 } from './shift-gate';
 import {
@@ -89,6 +91,12 @@ interface MarketPayableOrder {
   extra_cost?: number | string | null;
   createdAt?: string | Date | null;
 }
+
+/** (8OYPuz7J) Smena qatori + ochgan / yopgan xodim ismi (identity'dan). */
+export type ShiftWithNames = Shift & {
+  opened_by_name: string | null;
+  closed_by_name: string | null;
+};
 
 @Injectable()
 export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
@@ -873,7 +881,12 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  private async enrichHistoryWithUsers(histories: CashboxHistory[]) {
+  private async enrichHistoryWithUsers<T extends CashboxHistory>(
+    histories: T[],
+    // (vf4513Zn) `getCashboxByUserId` kvitansiya javobini allaqachon
+    // `withPaymentAcks` (`payment_ack`) bilan beradi — qayta so'ralmasin.
+    options: { courierAck?: boolean } = {},
+  ) {
     if (!Array.isArray(histories) || !histories.length) {
       return histories;
     }
@@ -919,7 +932,9 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
       )
       .map((history) => String(history.id));
     const acks =
-      this.courierAcks && courierPaymentIds.length
+      options.courierAck !== false &&
+      this.courierAcks &&
+      courierPaymentIds.length
         ? await this.courierAcks.flags(courierPaymentIds).catch(() => null)
         : null;
     const ackOf = (history: CashboxHistory) =>
@@ -2026,6 +2041,13 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
       'pessimistic_read',
     );
     if (!shift) {
+      // (32Sw3DfC) Kuzatuv — `all` yoqilgandan keyin rad etilgan amallar soni.
+      this.logger.warn(
+        shiftGateBlockedLogLine(
+          isMain ? 'SHIFT_REQUIRED' : 'BRANCH_SHIFT_REQUIRED',
+          { cashbox_type: cashboxType, user_id: target.user_id },
+        ),
+      );
       throw new BadRequestException(
         isMain
           ? FinanceServiceService.SHIFT_REQUIRED_MESSAGE
@@ -2038,6 +2060,11 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
    * (kfdfYDik) GET /finance/shift/current — kassaning (sukut MAIN) joriy ochiq
    * smenasi + darvoza yoqilganmi (`required`). Frontend "Smena ochiq" banneri
    * va "Smenani oching" holati shundan quriladi.
+   *
+   * (8OYPuz7J, ega S2) `last_closed` — SHU kassaning eng oxirgi yopilgan
+   * smenasi (closed_at DESC) yoki null: «Smena yopildi · … · Natija» bloki
+   * sahifa qayta yuklangandan keyin ham chiziladi. Smena qatorlarida
+   * `opened_by_name` / `closed_by_name` (identity'ga bitta batch so'rov).
    */
   async currentShift(dto?: { cashbox_user_id?: string }) {
     try {
@@ -2045,22 +2072,40 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         dto?.cashbox_user_id ?? FinanceServiceService.MAIN_CASHBOX_USER_ID,
       );
       this.assertBigIntId(cashboxUserId, 'cashbox_user_id');
-      const shift = await this.shiftRepo.findOne({
-        where: {
-          cashbox_user_id: cashboxUserId,
-          status: ShiftStatus.OPEN,
-          isDeleted: false,
-        },
-        order: { opened_at: 'DESC' },
-      });
+      const [shift, lastClosed] = await Promise.all([
+        this.shiftRepo.findOne({
+          where: {
+            cashbox_user_id: cashboxUserId,
+            status: ShiftStatus.OPEN,
+            isDeleted: false,
+          },
+          order: { opened_at: 'DESC' },
+        }),
+        this.shiftRepo.findOne({
+          where: {
+            cashbox_user_id: cashboxUserId,
+            status: ShiftStatus.CLOSED,
+            isDeleted: false,
+          },
+          order: {
+            closed_at: { direction: 'DESC', nulls: 'LAST' },
+            id: 'DESC',
+          },
+        }),
+      ]);
+      const [namedShift, namedLastClosed] = await this.withShiftUserNames([
+        shift ?? null,
+        lastClosed ?? null,
+      ]);
       return this.successRes(
         {
-          shift: shift ?? null,
+          shift: namedShift ?? null,
           // R6: shu kassa TURI uchun (MAIN — main/all, filial — faqat all).
           required: FinanceServiceService.isShiftRequiredFor(
             FinanceServiceService.shiftCashboxType(cashboxUserId),
           ),
           cashbox_user_id: cashboxUserId,
+          last_closed: namedLastClosed ?? null,
         },
         200,
         shift ? 'Current shift' : "Ochiq smena yo'q",
@@ -2068,6 +2113,61 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
     } catch (error) {
       this.toRpcError(error);
     }
+  }
+
+  /**
+   * (8OYPuz7J) Smena qatorlariga `opened_by_name` / `closed_by_name` —
+   * identity'ga BITTA `identity.user.find_by_ids` so'rovi (har smena uchun
+   * GET users/:id shart emas). Fail-open: identity javob bermasa yoki
+   * foydalanuvchi topilmasa — `null` (ro'yxat baribir qaytadi).
+   */
+  private async withShiftUserNames(
+    shifts: Array<Shift | null>,
+  ): Promise<Array<ShiftWithNames | null>> {
+    const ids = Array.from(
+      new Set(
+        shifts
+          .flatMap((shift) => (shift ? [shift.opened_by, shift.closed_by] : []))
+          .map((id) => String(id ?? '').trim())
+          .filter((id) => /^\d+$/.test(id)),
+      ),
+    );
+    const names = new Map<string, string>();
+    if (ids.length) {
+      try {
+        const response = await rmqSend<unknown>(
+          this.identityClient,
+          { cmd: 'identity.user.find_by_ids' },
+          { ids },
+          { timeoutMs: 3000, retries: 1 },
+        );
+        const rows = this.extractResponseData<unknown>(response);
+        for (const row of Array.isArray(rows) ? rows : []) {
+          const user = row as { id?: unknown; name?: unknown } | null;
+          const id =
+            typeof user?.id === 'string' || typeof user?.id === 'number'
+              ? String(user.id)
+              : '';
+          const name = typeof user?.name === 'string' ? user.name.trim() : '';
+          if (id && name) names.set(id, name);
+        }
+      } catch (error) {
+        this.logger.warn(
+          `smena xodimlari ismlari olinmadi: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
+    const nameOf = (id: string | null | undefined) =>
+      id != null ? (names.get(String(id)) ?? null) : null;
+    return shifts.map((shift) =>
+      shift
+        ? {
+            ...shift,
+            opened_by_name: nameOf(shift.opened_by),
+            closed_by_name: nameOf(shift.closed_by),
+          }
+        : null,
+    );
   }
 
   async openShift(dto: OpenShiftDto) {
@@ -2505,6 +2605,12 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
       if (dto.status) {
         where.status = dto.status;
       }
+      // (8OYPuz7J, ega S3) Kassa bo'yicha: '0' — MAIN, aks holda filial ID si.
+      // Ilgari frontend MAIN smenasini 20 talik sahifadan klientda qidirardi.
+      if (dto.cashbox_user_id != null && String(dto.cashbox_user_id) !== '') {
+        this.assertBigIntId(String(dto.cashbox_user_id), 'cashbox_user_id');
+        where.cashbox_user_id = String(dto.cashbox_user_id);
+      }
 
       const from = this.parseDate(dto.from_date);
       const to = this.parseDate(dto.to_date);
@@ -2516,12 +2622,22 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         where.opened_at = LessThanOrEqual(to);
       }
 
-      const [items, total] = await this.shiftRepo.findAndCount({
+      // (8OYPuz7J) Saralash oq ro'yxati: opened_at (sukut) | closed_at.
+      // closed_at bo'yicha ochiq smenalar (NULL) har doim oxirida.
+      const sortBy = dto.sort_by === 'closed_at' ? 'closed_at' : 'opened_at';
+      const sortDir = dto.sort_dir === 'asc' ? 'ASC' : 'DESC';
+      const order: FindOptionsOrder<Shift> =
+        sortBy === 'closed_at'
+          ? { closed_at: { direction: sortDir, nulls: 'LAST' }, id: sortDir }
+          : { opened_at: sortDir, id: sortDir };
+
+      const [rows, total] = await this.shiftRepo.findAndCount({
         where,
-        order: { opened_at: 'DESC' },
+        order,
         skip: (page - 1) * limit,
         take: limit,
       });
+      const items = await this.withShiftUserNames(rows);
 
       return this.successRes(
         {
@@ -2757,13 +2873,35 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         order: { createdAt: 'DESC' },
       });
       const { income, outcome } = this.calcIncomeOutcome(rawHistory);
-      const cashboxHistory =
+      const ackedHistory =
         cashbox.cashbox_type === Cashbox_type.FOR_COURIER
           ? await this.withPaymentAcks(rawHistory)
           : rawHistory;
 
+      /**
+       * (vf4513Zn) my-cashbox / kassa sahifasi tarixida KONTRAGENT ismi:
+       * `source_user` (COURIER_PAYMENT / MARKET_PAYMENT — masalan menejer
+       * filial kassasidagi «Kuryerdan filialga o'tkazma» qatorida kuryer),
+       * `created_by_user` va kassa EGASI `cashbox.user` — faqat kuryer/market
+       * kassasida (CODE-08: BRANCH/MAIN `user_id` si odam emas — null).
+       * Identity javob bermasa — null (tarix baribir qaytadi).
+       */
+      const ownerIsUser =
+        cashbox.cashbox_type === Cashbox_type.FOR_COURIER ||
+        cashbox.cashbox_type === Cashbox_type.FOR_MARKET;
+      const [cashboxHistory, owners] = await Promise.all([
+        this.enrichHistoryWithUsers(ackedHistory, { courierAck: false }),
+        ownerIsUser
+          ? this.loadUsersByIds([String(cashbox.user_id)])
+          : Promise.resolve(new Map<string, any>()),
+      ]);
+      const cashboxWithOwner = {
+        ...cashbox,
+        user: owners.get(String(cashbox.user_id)) ?? null,
+      };
+
       return this.successRes(
-        { cashbox, cashboxHistory, income, outcome },
+        { cashbox: cashboxWithOwner, cashboxHistory, income, outcome },
         200,
         'Cashbox details',
       );

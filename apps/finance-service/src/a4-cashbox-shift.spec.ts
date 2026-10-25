@@ -4,6 +4,7 @@ import { FinanceServiceService } from './finance-service.service';
 import { Shift } from './entities/shift.entity';
 import { Cashbox } from './entities/cashbox.entity';
 import { FinanceRealtimeService } from './realtime/finance-realtime.service';
+import { rmqSend } from '@app/common';
 
 /**
  * 4-tur, A guruhi — kassa / smena (2026-10-14):
@@ -768,6 +769,51 @@ describe('R6 (QTCUUgjA) — filial (BRANCH) kassasi smenasi: FINANCE_REQUIRE_OPE
     expect(res.statusCode).toBeLessThan(300);
   });
 
+  it('32Sw3DfC kuzatuv: darvoza rad etsa `shift_gate_blocked` WARN qatori (kod, kassa, qamrov)', async () => {
+    process.env.FINANCE_REQUIRE_OPEN_SHIFT = 'all';
+    const branchEnv = makeEnv({
+      cashboxes: [courierCashbox(), branchCashbox(0)],
+      openShifts: {},
+    });
+    const branchWarn = jest
+      .spyOn((branchEnv.service as any).logger, 'warn')
+      .mockImplementation(() => undefined);
+    await rpcErrorOf(
+      branchEnv.service.paymentsFromCourier(managerCourierPayment()),
+    );
+    expect(branchWarn).toHaveBeenCalledWith(
+      'shift_gate_blocked code=BRANCH_SHIFT_REQUIRED cashbox_type=branch cashbox_user_id=15 scope=all',
+    );
+
+    const mainEnv = makeEnv({ cashboxes: [mainCashbox()], openShifts: {} });
+    const mainWarn = jest
+      .spyOn((mainEnv.service as any).logger, 'warn')
+      .mockImplementation(() => undefined);
+    await rpcErrorOf(mainEnv.service.spendMoney({ user_id: '1', amount: 1 }));
+    expect(mainWarn).toHaveBeenCalledWith(
+      'shift_gate_blocked code=SHIFT_REQUIRED cashbox_type=main cashbox_user_id=0 scope=all',
+    );
+  });
+
+  it('32Sw3DfC kuzatuv: smena ochiq — WARN yo`q', async () => {
+    process.env.FINANCE_REQUIRE_OPEN_SHIFT = 'all';
+    const env = makeEnv({
+      cashboxes: [courierCashbox(), branchCashbox(0)],
+      openShifts: { '15': branchShift() },
+    });
+    const warn = jest
+      .spyOn((env.service as any).logger, 'warn')
+      .mockImplementation(() => undefined);
+
+    await env.service.paymentsFromCourier(managerCourierPayment());
+
+    expect(
+      warn.mock.calls.some((call) =>
+        String(call[0]).startsWith('shift_gate_blocked'),
+      ),
+    ).toBe(false);
+  });
+
   it('`true`/`main` qamrovi — filial darvozalanmaydi (2026-10-14 xatti-harakati o`zgarmagan)', async () => {
     for (const value of ['true', 'main']) {
       process.env.FINANCE_REQUIRE_OPEN_SHIFT = value;
@@ -1024,7 +1070,11 @@ describe('kfdfYDik — smenani faqat `{comment}` bilan yopish va joriy smena', (
 
   it('currentShift: MAIN ochiq smenasi va darvoza holati (`required`)', async () => {
     process.env.FINANCE_REQUIRE_OPEN_SHIFT = 'true';
-    const shiftRepoFindOne = jest.fn().mockResolvedValue(openMainShift());
+    const shiftRepoFindOne = jest.fn((options: any) =>
+      Promise.resolve(
+        options?.where?.status === 'open' ? openMainShift() : null,
+      ),
+    );
     const env = makeEnv({ shiftRepoFindOne });
 
     const res: any = await env.service.currentShift({});
@@ -1041,6 +1091,8 @@ describe('kfdfYDik — smenani faqat `{comment}` bilan yopish va joriy smena', (
       shift: null,
       required: false,
       cashbox_user_id: '0',
+      // 8OYPuz7J — yopilgan smena ham yo'q.
+      last_closed: null,
     });
   });
 
@@ -1261,5 +1313,117 @@ describe('rWdLuoP3 — smena yopilganda realtime hodisa (outbox, shu tranzaksiya
       { role: 'manager', branch_id: '15' },
       { user_id: '25' },
     ]);
+  });
+});
+
+describe('8OYPuz7J — last_closed, smena ro`yxati filtri/saralashi, xodim ismlari', () => {
+  const closedMainShift = (): Row => ({
+    ...openMainShift(),
+    id: '30',
+    status: 'closed',
+    closed_by: '2',
+    closed_at: new Date('2026-10-13T13:00:00Z'),
+    closing_balance_cash: 120_000,
+    expected_balance_cash: 100_000,
+    discrepancy_cash: 20_000,
+  });
+
+  beforeEach(() => {
+    (rmqSend as jest.Mock).mockReset();
+    (rmqSend as jest.Mock).mockResolvedValue(undefined);
+  });
+
+  it('currentShift: last_closed — SHU kassaning yopilgan smenasi, closed_at DESC (NULL oxirida)', async () => {
+    const shiftRepoFindOne = jest.fn((options: any) =>
+      Promise.resolve(
+        options?.where?.status === 'open' ? openMainShift() : closedMainShift(),
+      ),
+    );
+    const env = makeEnv({ shiftRepoFindOne });
+
+    const res: any = await env.service.currentShift({ cashbox_user_id: '15' });
+
+    const closedCall = shiftRepoFindOne.mock.calls
+      .map((call: any[]) => call[0])
+      .find((options: any) => options.where.status === 'closed');
+    expect(closedCall).toEqual({
+      where: { cashbox_user_id: '15', status: 'closed', isDeleted: false },
+      order: { closed_at: { direction: 'DESC', nulls: 'LAST' }, id: 'DESC' },
+    });
+    expect(res.data.last_closed).toMatchObject({
+      id: '30',
+      status: 'closed',
+      closed_by: '2',
+      discrepancy_cash: 20_000,
+    });
+  });
+
+  it('ismlar — bitta `identity.user.find_by_ids` (takrorsiz id lar); topilmagani null', async () => {
+    (rmqSend as jest.Mock).mockResolvedValue({
+      statusCode: 200,
+      data: [{ id: '1', name: 'Ravshan Ortiqov' }],
+    });
+    const shiftRepoFindOne = jest.fn((options: any) =>
+      Promise.resolve(
+        options?.where?.status === 'open' ? openMainShift() : closedMainShift(),
+      ),
+    );
+    const env = makeEnv({ shiftRepoFindOne });
+
+    const res: any = await env.service.currentShift({});
+
+    expect(rmqSend).toHaveBeenCalledTimes(1);
+    const [, pattern, payload] = (rmqSend as jest.Mock).mock.calls[0];
+    expect(pattern).toEqual({ cmd: 'identity.user.find_by_ids' });
+    expect([...payload.ids].sort()).toEqual(['1', '2']);
+    expect(res.data.shift).toMatchObject({
+      opened_by_name: 'Ravshan Ortiqov',
+      closed_by_name: null,
+    });
+    expect(res.data.last_closed).toMatchObject({
+      opened_by_name: 'Ravshan Ortiqov',
+      closed_by_name: null,
+    });
+  });
+
+  it('findAllShifts: cashbox_user_id filtri va sort_by=closed_at&sort_dir=asc → where/order', async () => {
+    const env = makeEnv({});
+    env.shiftRepo.findAndCount = jest
+      .fn()
+      .mockResolvedValue([[closedMainShift()], 1]);
+
+    const res: any = await env.service.findAllShifts({
+      cashbox_user_id: '0',
+      sort_by: 'closed_at',
+      sort_dir: 'asc',
+      status: 'closed' as any,
+      limit: 5,
+    });
+
+    expect(env.shiftRepo.findAndCount).toHaveBeenCalledWith({
+      where: { status: 'closed', cashbox_user_id: '0' },
+      order: { closed_at: { direction: 'ASC', nulls: 'LAST' }, id: 'ASC' },
+      skip: 0,
+      take: 5,
+    });
+    expect(res.data.items[0]).toMatchObject({
+      id: '30',
+      opened_by_name: null,
+      closed_by_name: null,
+    });
+  });
+
+  it('findAllShifts: sukut tartibi o`zgarmagan — opened_at DESC', async () => {
+    const env = makeEnv({});
+    env.shiftRepo.findAndCount = jest.fn().mockResolvedValue([[], 0]);
+
+    await env.service.findAllShifts({});
+
+    expect(env.shiftRepo.findAndCount.mock.calls[0][0]).toMatchObject({
+      where: {},
+      order: { opened_at: 'DESC', id: 'DESC' },
+    });
+    // Bo'sh sahifa — identity'ga so'rov yo'q.
+    expect(rmqSend).not.toHaveBeenCalled();
   });
 });

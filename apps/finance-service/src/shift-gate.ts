@@ -53,3 +53,26 @@ export const SHIFT_REQUIRED_MESSAGE =
 
 export const BRANCH_SHIFT_REQUIRED_MESSAGE =
   'Smena ochilmagan! Bu operatsiyani bajarish uchun avval filial kassasida smenani oching.';
+
+/** Darvoza rad javobining kodi (frontend matni emas — kuzatuv uchun). */
+export type ShiftGateBlockCode = 'SHIFT_REQUIRED' | 'BRANCH_SHIFT_REQUIRED';
+
+/**
+ * (32Sw3DfC) Kuzatuv: darvoza pul amalini 400 bilan rad etganda bitta WARN
+ * qatori. `all` yoqilgandan keyingi kunlarda nechta amal smenasiz qolgani
+ * shu teg bo'yicha sanaladi:
+ *   docker logs <finance-service> --since 24h 2>&1 | grep -c shift_gate_blocked
+ * (kassa bo'yicha: `| grep -o 'cashbox_user_id=[0-9]*' | sort | uniq -c`).
+ */
+export function shiftGateBlockedLogLine(
+  code: ShiftGateBlockCode,
+  target: { cashbox_type?: Cashbox_type | null; user_id?: string | null },
+): string {
+  return [
+    'shift_gate_blocked',
+    `code=${code}`,
+    `cashbox_type=${String(target.cashbox_type ?? Cashbox_type.MAIN)}`,
+    `cashbox_user_id=${String(target.user_id ?? '0')}`,
+    `scope=${shiftGateScope()}`,
+  ].join(' ');
+}

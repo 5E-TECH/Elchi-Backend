@@ -1,12 +1,13 @@
 import 'reflect-metadata';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
-import { of } from 'rxjs';
+import { Observable, of } from 'rxjs';
 import request from 'supertest';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
 import { RolesGuard } from './auth/roles.guard';
 import { ROLES_KEY } from './auth/roles.decorator';
 import { FinanceGatewayController } from './finance-gateway.controller';
+import { CLOSING_BALANCE_CASH_REQUIRED_MESSAGE } from './dto/finance.swagger.dto';
 
 /**
  * 4-tur, A guruhi (2026-10-14) — gateway kontrakti:
@@ -21,7 +22,10 @@ describe('A4 — kassa/smena gateway kontrakti', () => {
     send: jest.fn(() => of({ statusCode: 200, data: { ok: true } })),
   };
   const branch = {
-    send: jest.fn(() => of({ statusCode: 200, data: { id: '13' } })),
+    send: jest.fn(
+      (): Observable<{ statusCode?: number; data: unknown }> =>
+        of({ statusCode: 200, data: { id: '13' } }),
+    ),
   };
   const SUPERADMIN = { sub: '9', roles: ['superadmin'] };
   // R6 — har testda JWT foydalanuvchisini almashtirish mumkin.
@@ -70,16 +74,47 @@ describe('A4 — kassa/smena gateway kontrakti', () => {
     (finance.send.mock.calls as unknown as Array<[unknown, any]>).at(-1)?.[1];
 
   describe('kfdfYDik — smena', () => {
-    it('POST /finance/shift/close faqat {comment} bilan 2xx, closed_by JWT dan (ilgari 400)', async () => {
+    it('POST /finance/shift/close {comment, closing_balance_cash} bilan 2xx, closed_by JWT dan', async () => {
       const result = await request(app.getHttpServer())
         .post('/finance/shift/close')
-        .send({ comment: 'audit-test' });
+        .send({ comment: 'audit-test', closing_balance_cash: 0 });
 
       expect(result.status).toBeLessThan(300);
       expect(finance.send).toHaveBeenCalledWith(
         { cmd: 'finance.shift.close' },
-        { comment: 'audit-test', closed_by: '9' },
+        { comment: 'audit-test', closing_balance_cash: 0, closed_by: '9' },
       );
+    });
+
+    it('8OYPuz7J S5: sanalgan naqd (closing_balance_cash) yuborilmasa → 400 o`zbekcha matn, finance chaqirilmaydi', async () => {
+      for (const body of [
+        { comment: 'audit-test' },
+        { closing_balance_card: 5000 },
+        { closing_balance_cash: null },
+      ]) {
+        finance.send.mockClear();
+        const result = await request(app.getHttpServer())
+          .post('/finance/shift/close')
+          .send(body);
+
+        expect(result.status).toBe(400);
+        expect(JSON.stringify(result.body)).toContain(
+          CLOSING_BALANCE_CASH_REQUIRED_MESSAGE,
+        );
+        expect(finance.send).not.toHaveBeenCalled();
+      }
+    });
+
+    it('8OYPuz7J S5: karta ixtiyoriy — faqat naqd bilan yopiladi', async () => {
+      const result = await request(app.getHttpServer())
+        .post('/finance/shift/close')
+        .send({ closing_balance_cash: 120000 });
+
+      expect(result.status).toBeLessThan(300);
+      expect(lastPayload()).toEqual({
+        closing_balance_cash: 120000,
+        closed_by: '9',
+      });
     });
 
     it('POST /finance/shift/close sanalgan summalar closing_balance_cash/card bo`lib uzatiladi; body closed_by e`tiborsiz', async () => {
@@ -230,6 +265,101 @@ describe('A4 — kassa/smena gateway kontrakti', () => {
       await request(app.getHttpServer()).post('/finance/shift/open').send({});
 
       expect(lastPayload()).toEqual({ opened_by: '9' });
+    });
+  });
+
+  describe('8OYPuz7J — GET /finance/shift: kassa filtri, saralash, menejer doirasi', () => {
+    const MANAGER = { sub: '25', roles: ['manager'], branch_id: '13' };
+
+    it('rollar: menejer qo`shildi', () => {
+      const descriptor = Object.getOwnPropertyDescriptor(
+        FinanceGatewayController.prototype,
+        'findShifts',
+      );
+      expect(Reflect.getMetadata(ROLES_KEY, descriptor?.value)).toEqual([
+        'superadmin',
+        'admin',
+        'registrator',
+        'manager',
+      ]);
+    });
+
+    it('superadmin: cashbox_user_id + sort_by/sort_dir finance ga uzatiladi', async () => {
+      const result = await request(app.getHttpServer()).get(
+        '/finance/shift?cashbox_user_id=0&sort_by=closed_at&sort_dir=desc&status=closed&limit=1',
+      );
+
+      expect(result.status).toBe(200);
+      expect(finance.send).toHaveBeenCalledWith(
+        { cmd: 'finance.shift.find_all' },
+        {
+          cashbox_user_id: '0',
+          sort_by: 'closed_at',
+          sort_dir: 'desc',
+          status: 'closed',
+          limit: 1,
+        },
+      );
+    });
+
+    it('noto`g`ri sort_by / sort_dir / cashbox_user_id → 400', async () => {
+      for (const qs of [
+        'sort_by=amount',
+        'sort_dir=up',
+        'cashbox_user_id=abc',
+      ]) {
+        const result = await request(app.getHttpServer()).get(
+          `/finance/shift?${qs}`,
+        );
+        expect(result.status).toBe(400);
+      }
+      expect(finance.send).not.toHaveBeenCalled();
+    });
+
+    it('menejer: parametrsiz — o`z filiali kassasi majburlanadi', async () => {
+      currentUser = MANAGER;
+
+      const result = await request(app.getHttpServer()).get(
+        '/finance/shift?sort_by=closed_at',
+      );
+
+      expect(result.status).toBe(200);
+      expect(lastPayload()).toEqual({
+        sort_by: 'closed_at',
+        cashbox_user_id: '13',
+      });
+    });
+
+    it('menejer: o`z filiali id si bilan — 200', async () => {
+      currentUser = MANAGER;
+
+      const result = await request(app.getHttpServer()).get(
+        '/finance/shift?cashbox_user_id=13',
+      );
+
+      expect(result.status).toBe(200);
+      expect(lastPayload()).toEqual({ cashbox_user_id: '13' });
+    });
+
+    it('menejer: MAIN (0) yoki boshqa filial → 403, finance chaqirilmaydi', async () => {
+      currentUser = MANAGER;
+      for (const id of ['0', '14']) {
+        const result = await request(app.getHttpServer()).get(
+          `/finance/shift?cashbox_user_id=${id}`,
+        );
+        expect(result.status).toBe(403);
+      }
+      expect(finance.send).not.toHaveBeenCalled();
+    });
+
+    it('filiali topilmagan menejer → 403', async () => {
+      currentUser = { sub: '26', roles: ['manager'] };
+      branch.send.mockImplementationOnce(() => of({ data: null }));
+
+      const result = await request(app.getHttpServer()).get('/finance/shift');
+
+      expect(result.status).toBe(403);
+      expect(finance.send).not.toHaveBeenCalled();
     });
   });
 

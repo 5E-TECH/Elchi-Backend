@@ -136,6 +136,92 @@ shart emas). Migratsiya yo'q.
   🟢 FE: 1PtA5L1y allaqachon bajarilgan (`canCreateProducts` = superadmin/admin/registrator/manager,
   `UPDATE_MY` endpointi ishlatilmaydi) — o'zgarish shart emas.
 
+### 2026-10-25 — Kassa: my-cashbox tarixida kontragent (`source_user`) va kassa egasi (`cashbox.user`) (vf4513Zn)
+
+Deploy: faqat finance-service. Migratsiya yo'q. Endpoint/kontrakt kalitlari olib tashlanmagan — faqat QO'SHIMCHA maydonlar.
+
+- [2026-10-25] ✏️ [finance/cashbox] — **`GET /finance/cashbox/my-cashbox`** (kuryer, market, menejer), menejer
+  **`GET /finance/cashbox/main`** va **`GET /finance/cashbox/user/:id/main`** javobida (`finance.cashbox.user_by_id`):
+  - `data.cashboxHistory[]` qatorlariga `source_user` / `sourceUser` (faqat `courier_payment` va `market_payment`
+    qatorlarida — kuryer yoki market; boshqa turlarda `null`) va `created_by_user` / `createdByUser`
+    (identity `find_by_id` yozuvi yoki `null`). Kuryer kassasida `payment_ack` avvalgidek;
+  - `data.cashbox.user` — kassa EGASI: kuryer/market kassasida foydalanuvchi yozuvi, filial (`branch`) va asosiy
+    (`main`) kassada har doim `null` (filial id si odam emas — CODE-08).
+  🔧 FE (my-cashbox, M4): menejer filial kassasidagi «Kuryerdan filialga o'tkazma» qatorida kuryer ismi —
+  `row.source_user?.name`; kassa egasi nomi profil o'rniga `data.cashbox.user?.name` (kuryer/market).
+
+### 2026-10-25 — Moliya: market operatori o'z daromadini ko'radi — `finance/operators/me/*` (E6iEOAVs)
+
+Deploy: faqat api-gateway (finance-service'dagi mavjud RMQ handler'lar qayta ishlatiladi). Migratsiya yo'q.
+
+- [2026-10-25] 🆕 [finance/operators] — **`GET /finance/operators/me/balance`**, **`/me/earnings`**,
+  **`/me/payments`** — faqat `market_operator` (boshqa rollar — 403). `operator_id` FAQAT JWT'dan; path/query'dagi id
+  e'tiborsiz. Javob shakli admin variantlari (`operators/:operator_id/*`) bilan AYNAN bir xil:
+  - `balance` → `data: { operator_id, earned, paid, balance }` (musbat balans — kompaniya operatorga qarzdor);
+  - `earnings` → `data: { rows: [{ id, operator_id, order_id, market_id, amount, commission_type, commission_value,
+    order_total_price, createdAt, … }], total, limit, offset }`;
+  - `payments` → `data: { rows: [{ id, operator_id, market_id, paid_by_id, amount, note, createdAt, … }], total,
+    limit, offset }`.
+  `?limit=` (1–200, sukut 50) va `?offset=` (sukut 0); raqam bo'lmasa — sukut. Komissiyasi belgilanmagan operator —
+  `0/0/0` va bo'sh `rows` (403 emas — maketdagi earnings-no-commission holati).
+  🔧 FE (PrzQdHvm / KUHGR1Iq / 2DCQKd37 / i76gGjyq): market_operator «Daromadim» sahifasi shu uchta endpointdan
+  (`endpoints.ts` da hozir faqat id'li URL'lar bor).
+- [2026-10-25] 🟢 [finance/operators] — `operators/:operator_id/*` (superadmin/admin/menejer) o'zgarmagan; market
+  operatori ularga 403 oladi.
+
+### 2026-10-25 — Kassa smenasi: superadmin filial smenasini ko'radi, qulf matni, `all` rejimiga tayyorlik (32Sw3DfC)
+
+Deploy: api-gateway, finance-service. Migratsiya yo'q. Prod ENV (`FINANCE_REQUIRE_OPEN_SHIFT=all`) — ALOHIDA ops
+qadami, frontend smena oqimi (kfdfYDik) prod'ga chiqqandan va operatorlarga xabar berilgandan KEYIN.
+
+- [2026-10-25] ✏️ [finance/shift] — **`GET /finance/shift/current?cashbox_user_id=`** (ixtiyoriy, faqat O'QISH):
+  - superadmin/admin: `'0'` yoki yo'q — asosiy (MAIN) kassa (avvalgidek); filial ID si — shu filial smenasi,
+    `required` (filial uchun faqat `all` rejimida `true`) va `last_closed`. Mavjud bo'lmagan filial — 404;
+  - menejer: yo'q yoki o'z filiali — o'z filiali (avvalgidek); `'0'` — HQ asosiy kassa smenasining faqat HOLATI
+    (`status_only: true`, `shift: { id, status, cashbox_user_id, opened_at, opened_by_name } | null`, pul
+    maydonlari va `last_closed` YO'Q); boshqa filial — 403;
+  - registrator: faqat `'0'` (boshqasi — 403). Raqam bo'lmagan qiymat — 400.
+- [2026-10-25] ✏️ [finance/shift] — `shift/current` javobiga QO'SHIMCHA `data.can_open` (so'rovchi shu kassada smenani
+  ocha oladimi) va `data.lock_message`. Superadmin/admin filial smenasini OCHMAYDI (`POST shift/open` doirasi har doim
+  MAIN — o'zgarmagan): filial kassasida `can_open: false`, smena yo'q bo'lsa `lock_message` =
+  «Filial menejeri smenani ochishi kerak»; boshqa hollarda `null`. 🔧 FE (kfdfYDik): `/payments/cash-detail/:id`
+  (filial) sahifasi superadmin/admin uchun `shift/current?cashbox_user_id=<filial id>` so'rasin va smena yo'q bo'lsa
+  «Smenani ochish» tugmasi o'rniga `lock_message` ni chizsin (hozir `useCashboxShift` faqat JWT doirasini o'qiydi).
+  Filial → HQ o'tkazmasi IKKALA smenani talab qiladi (filial va MAIN) — sahifa ikkalasini ham ko'rsata oladi.
+- [2026-10-25] 🟢 [finance/shift] — `FINANCE_REQUIRE_OPEN_SHIFT=all` yoqilganda (ega S4): MAIN va filial kassalarida
+  smena ochilmaguncha qo'lda kirim/chiqim, kuryerdan qabul (HQ va filial), marketga to'lov, filial → HQ, karta
+  o'tkazmasi/konvertatsiyasi 400 «Smena ochilmagan! … avval asosiy kassada / filial kassasida smenani oching».
+  Sotuv/bekor qilish (order-service outbox) va kuryer/market kassalari darvozalanmaydi. Rad etilgan har amal
+  finance-service logida `shift_gate_blocked code=SHIFT_REQUIRED|BRANCH_SHIFT_REQUIRED cashbox_type=…
+  cashbox_user_id=… scope=…` (kuzatuv).
+
+### 2026-10-25 — Kassa smenasi: `last_closed`, smena ro'yxati filtri/saralashi, xodim ismlari, sanalgan naqd majburiy (8OYPuz7J)
+
+Deploy: api-gateway, finance-service. Migratsiya yo'q.
+
+- [2026-10-25] ✏️ [finance/shift] — **`GET /finance/shift/current`** javobiga `data.last_closed` (QO'SHIMCHA kalit):
+  shu kassaning (superadmin/admin — MAIN, menejer — o'z filiali) eng oxirgi YOPILGAN smenasi (`closed_at` DESC) —
+  to'liq smena qatori (`id, opened_at, closed_at, opened_by, closed_by, opening_balance_*, total_income_*,
+  total_expense_*, expected_balance_*, closing_balance_*, discrepancy_*, comment` …) yoki `null` (hali yopilmagan).
+  🔧 FE (kfdfYDik): «Smena yopildi · Bugun, 18:00 · Yopgan xodim: … · Naqd ortiqchasi: … · Natija» bloki va
+  ochish oynasidagi «Oxirgi smena … bilan yopilgan» endi sahifa qayta yuklangandan keyin ham `last_closed` dan
+  chiziladi (`useCashboxShift.ts`, `ShiftResultDialog.tsx`, `OpenShiftDialog.tsx` izohlari).
+- [2026-10-25] ✏️ [finance/shift] — smena qatorlarida (`shift/current` → `shift` va `last_closed`, `GET /finance/shift`
+  → `items[]`) **`opened_by_name` / `closed_by_name`** (matn yoki `null` — identity'da topilmasa). Identity'ga bitta
+  batch so'rov. 🔧 FE: har smena uchun `GET users/:id` endi shart emas.
+- [2026-10-25] ✏️ [finance/shift] — **`GET /finance/shift`**: yangi query `cashbox_user_id` (`'0'` — asosiy MAIN kassa,
+  aks holda filial ID si), `sort_by=opened_at|closed_at` (sukut `opened_at`), `sort_dir=asc|desc` (sukut `desc`).
+  `closed_at` bo'yicha ochiq smenalar har doim oxirida. Noto'g'ri qiymat — 400. MAIN ning oxirgi yopilgan smenasi:
+  `?cashbox_user_id=0&status=closed&sort_by=closed_at&limit=1`. 🔧 FE: MAIN smenasini 20 talik sahifadan klientda
+  qidirish o'rniga shu filtrdan foydalaning.
+- [2026-10-25] ✏️ [finance/shift] — **`GET /finance/shift` — MENEJER ham** (avval faqat superadmin/admin/registrator):
+  doira JWT'dan majburlanadi (o'z filiali kassasi smenalari); boshqa `cashbox_user_id` (`0` yoki boshqa filial) —
+  403 «Siz faqat o'z filialingiz kassasi smenalarini ko'ra olasiz»; filiali topilmagan menejer — 403.
+- [2026-10-25] ⚠️ [finance/shift] — **`POST /finance/shift/close` — `closing_balance_cash` (sanalgan naqd) MAJBURIY**
+  (ega S5). Yuborilmasa yoki `null` — 400 «Sanalgan naqd summani kiriting (closing_balance_cash majburiy)».
+  `closing_balance_card` ixtiyoriy (yuborilmasa `discrepancy_card: null` — «Sanalmadi»). 🟢 FE yopish oynasi
+  `closing_balance_cash` ni allaqachon yuboradi (`CloseShiftRequest`) — o'zgarish shart emas.
+
 ### 2026-10-25 — AI idempotentlik qoldiqlari (Cp2v3ZJ7) va kampaniya yuklamasi (xHPdpj0W)
 
 Deploy: faqat notification-service (bot matni). Migratsiya yo'q. API kontrakti o'zgarmagan.
