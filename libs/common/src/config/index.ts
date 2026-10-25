@@ -292,6 +292,9 @@ export const financeValidationSchema = Joi.object({
   // (OA16fdSq/ePpLHPX2) Hodisa → bildirishnoma outbox maqsadi (NOTIFICATION).
   RABBITMQ_NOTIFICATION_QUEUE: Joi.string().default('notification_queue'),
   RABBITMQ_IDENTITY_QUEUE: Joi.string().required(),
+  // (rWdLuoP3) Gateway navbati — smena / kassa kartasi realtime hodisalari
+  // (outbox → `realtime.notify`). Ixtiyoriy: bo'sh — hodisa yozilmaydi.
+  RABBITMQ_GATEWAY_QUEUE: Joi.string().allow('').optional(),
   // (2crjWf7v #2) Kuryer kassasidagi naqd shu summadan (so'm) OSHSA kuniga
   // bir marta "filialga topshiring" eslatmasi. Bo'sh / 0 — o'chiq.
   COURIER_CASH_REMINDER_THRESHOLD: Joi.number().min(0).allow('').optional(),

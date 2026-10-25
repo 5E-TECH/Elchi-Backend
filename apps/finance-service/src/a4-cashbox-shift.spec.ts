@@ -3,6 +3,7 @@ import { of } from 'rxjs';
 import { FinanceServiceService } from './finance-service.service';
 import { Shift } from './entities/shift.entity';
 import { Cashbox } from './entities/cashbox.entity';
+import { FinanceRealtimeService } from './realtime/finance-realtime.service';
 
 /**
  * 4-tur, A guruhi — kassa / smena (2026-10-14):
@@ -111,6 +112,8 @@ function makeEnv(opts: {
   shiftById?: Row | null;
   totals?: Row[];
   shiftRepoFindOne?: jest.Mock;
+  /** rWdLuoP3 — `FinanceRealtimeService` (17-argument). */
+  realtime?: unknown;
 }) {
   const cashboxes = opts.cashboxes ?? [];
   const findOne = jest.fn((entity: unknown, options: any) => {
@@ -185,11 +188,15 @@ function makeEnv(opts: {
     { send: jest.fn() } as any,
     { send: jest.fn() } as any,
     outbox,
+    undefined,
+    undefined,
+    undefined,
+    opts.realtime as any,
   );
   jest
     .spyOn(service as any, 'scheduleMarketPaymentFollowUp')
     .mockResolvedValue(undefined);
-  return { service, manager, queryRunner, qb, shiftRepo, activityLog };
+  return { service, manager, queryRunner, qb, shiftRepo, activityLog, outbox };
 }
 
 const rpcErrorOf = async (promise: Promise<unknown>) => {
@@ -1146,5 +1153,113 @@ describe('3PE0B03q — "O`tkazma manbasi" transfer_source_user_id ga yoziladi', 
 
     expect(error.statusCode).toBe(400);
     expect(env.manager.save).not.toHaveBeenCalled();
+  });
+});
+
+describe('rWdLuoP3 — smena yopilganda realtime hodisa (outbox, shu tranzaksiyada)', () => {
+  it('qo`lda yopish → `shiftClosed(saqlangan smena, manual, manager)` COMMIT dan OLDIN (tranzaksiya ichida)', async () => {
+    const order: string[] = [];
+    const realtime = {
+      shiftClosed: jest.fn(() => {
+        order.push('realtime');
+        return Promise.resolve();
+      }),
+    };
+    const env = makeEnv({ shiftById: openMainShift(), realtime });
+    env.queryRunner.commitTransaction.mockImplementation(() => {
+      order.push('commit');
+      return Promise.resolve();
+    });
+
+    const res: any = await env.service.closeShift({
+      shift_id: '31',
+      closed_by: '1',
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(realtime.shiftClosed).toHaveBeenCalledTimes(1);
+    expect(realtime.shiftClosed).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: '31',
+        status: 'closed',
+        cashbox_user_id: '0',
+        closed_by: '1',
+        closed_at: expect.any(Date),
+      }),
+      'manual',
+      env.queryRunner.manager,
+    );
+    expect(order).toEqual(['realtime', 'commit']);
+  });
+
+  it('yopilmasa (allaqachon yopilgan / boshqa kassa) — hodisa yo`q', async () => {
+    const realtime = { shiftClosed: jest.fn().mockResolvedValue(undefined) };
+    const closed = makeEnv({
+      shiftById: { ...openMainShift(), status: 'closed' },
+      realtime,
+    });
+    await rpcErrorOf(
+      closed.service.closeShift({ shift_id: '31', closed_by: '1' }),
+    );
+    const foreign = makeEnv({ shiftById: openMainShift(), realtime });
+    await rpcErrorOf(
+      foreign.service.closeShift({
+        shift_id: '31',
+        closed_by: '1',
+        cashbox_user_id: '15',
+      }),
+    );
+    expect(realtime.shiftClosed).not.toHaveBeenCalled();
+  });
+
+  it('outbox yozuvi yiqilsa (tranzaksiya buzilgan) — rollback, smena yopilmaydi', async () => {
+    const realtime = {
+      shiftClosed: jest.fn().mockRejectedValue(new Error('aborted')),
+    };
+    const env = makeEnv({ shiftById: openMainShift(), realtime });
+    const error = await rpcErrorOf(
+      env.service.closeShift({ shift_id: '31', closed_by: '1' }),
+    );
+    expect(error.statusCode).toBe(500);
+    expect(env.queryRunner.commitTransaction).not.toHaveBeenCalled();
+    expect(env.queryRunner.rollbackTransaction).toHaveBeenCalled();
+  });
+
+  it('filial smenasi (menejer, doira 15) → haqiqiy servis: outbox`ga `finance.shift.closed`, nishon — faqat 15-filial menejerlari + kassir', async () => {
+    const outbox = { enqueue: jest.fn().mockResolvedValue(undefined) };
+    const realtime = new FinanceRealtimeService(
+      outbox as any,
+      { get: () => 'gateway_queue' } as any,
+    );
+    const env = makeEnv({
+      shiftById: { ...openMainShift(), opened_by: '25', cashbox_user_id: '15' },
+      realtime,
+    });
+
+    await env.service.closeShift({
+      shift_id: '31',
+      closed_by: '25',
+      cashbox_user_id: '15',
+    });
+
+    expect(outbox.enqueue).toHaveBeenCalledTimes(1);
+    const [target, pattern, message, options] = outbox.enqueue.mock.calls[0];
+    expect([target, pattern]).toEqual(['GATEWAY', 'realtime.notify']);
+    expect(options).toEqual({ manager: env.queryRunner.manager });
+    expect(message.event).toBe('finance.shift.closed');
+    expect(message.payload).toMatchObject({
+      shift_id: '31',
+      cashbox_type: 'branch',
+      branch_id: '15',
+      close_reason: 'manual',
+      closed_by: '25',
+    });
+    expect(new Date(message.payload.closed_at).toISOString()).toBe(
+      message.payload.closed_at,
+    );
+    expect(message.targets).toEqual([
+      { role: 'manager', branch_id: '15' },
+      { user_id: '25' },
+    ]);
   });
 });
