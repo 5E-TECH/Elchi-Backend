@@ -146,6 +146,11 @@ export class AiBudgetService implements ClaudeBudgetGuard {
     }
   }
 
+  /** Ifpimq2x: `warn` chegarasi (DB o'qilmasa ham `ai.status` qaytaradi). */
+  getWarnRatio(): number {
+    return this.warnRatio;
+  }
+
   /** `ai.status` uchun bugungi shift holati. O'qish xatosi yuqoriga chiqadi. */
   async status(now: Date = new Date()): Promise<AiCapStatus> {
     const periodKey = tashkentDay(now);
@@ -162,6 +167,7 @@ export class AiBudgetService implements ClaudeBudgetGuard {
       override_usd: override,
       effective_cap_usd: roundUsd(effectiveCap),
       ratio: Math.round(ratio * 10_000) / 10_000,
+      warn_ratio: this.warnRatio,
       state: ratio >= 1 ? 'exceeded' : ratio >= this.warnRatio ? 'warn' : 'ok',
       reset_at: nextTashkentMidnight(now),
     };

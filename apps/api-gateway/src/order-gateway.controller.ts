@@ -4672,6 +4672,28 @@ export class OrderGatewayController {
     );
   }
 
+  /**
+   * CU4zfcds — market yangi/bekor ro'yxatlari filtrlari: bo'sh qiymat
+   * yuborilmaydi (eski payload bilan AYNI qoladi).
+   */
+  private marketListFilters(
+    search?: string,
+    startDay?: string,
+    endDay?: string,
+  ): { search?: string; start_day?: string; end_day?: string } {
+    const out: { search?: string; start_day?: string; end_day?: string } = {};
+    if (typeof search === 'string' && search.trim()) {
+      out.search = search.trim().slice(0, 100);
+    }
+    if (typeof startDay === 'string' && startDay.trim()) {
+      out.start_day = startDay.trim();
+    }
+    if (typeof endDay === 'string' && endDay.trim()) {
+      out.end_day = endDay.trim();
+    }
+    return out;
+  }
+
   // fix3 RBAC-03 / CODE-04: ilgari faqat JwtAuthGuard — kuryer har marketning
   // NEW buyurtmalarini ko'rardi. Market esa BARCHA marketlar qatorini (market
   // profili bilan) olardi; endi faqat o'z qatorini.
@@ -4687,7 +4709,32 @@ export class OrderGatewayController {
   )
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Markets with NEW orders' })
-  async findNewMarkets(@Req() req?: { user: JwtUser }) {
+  @ApiQuery({
+    name: 'search',
+    required: false,
+    type: String,
+    description: 'CU4zfcds: market nomi yoki telefoni bo‘yicha (qism)',
+  })
+  @ApiQuery({
+    name: 'start_day',
+    required: false,
+    type: String,
+    description:
+      'CU4zfcds: yaratilgan sana boshi (YYYY-MM-DD, Toshkent kuni; GET /orders bilan bir xil)',
+  })
+  @ApiQuery({
+    name: 'end_day',
+    required: false,
+    type: String,
+    description:
+      'CU4zfcds: yaratilgan sana oxiri (YYYY-MM-DD, Toshkent kuni, kun oxirigacha)',
+  })
+  async findNewMarkets(
+    @Req() req?: { user: JwtUser },
+    @Query('search') search?: string,
+    @Query('start_day') startDay?: string,
+    @Query('end_day') endDay?: string,
+  ) {
     const roles = req?.user?.roles ?? [];
     const normalizedRoles = this.normalizeRoles(roles);
     const ownMarketId =
@@ -4720,6 +4767,7 @@ export class OrderGatewayController {
       {
         branch_id: resolvedBranchId,
         exclude_branch_source: excludeBranchSource,
+        ...this.marketListFilters(search, startDay, endDay),
       },
     );
     const result =
@@ -4841,7 +4889,32 @@ export class OrderGatewayController {
   )
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Markets with CANCELLED orders' })
-  async findCancelledMarkets(@Req() req?: { user: JwtUser }) {
+  @ApiQuery({
+    name: 'search',
+    required: false,
+    type: String,
+    description: 'CU4zfcds: market nomi yoki telefoni bo‘yicha (qism)',
+  })
+  @ApiQuery({
+    name: 'start_day',
+    required: false,
+    type: String,
+    description:
+      'CU4zfcds: yaratilgan sana boshi (YYYY-MM-DD, Toshkent kuni; GET /orders bilan bir xil)',
+  })
+  @ApiQuery({
+    name: 'end_day',
+    required: false,
+    type: String,
+    description:
+      'CU4zfcds: yaratilgan sana oxiri (YYYY-MM-DD, Toshkent kuni, kun oxirigacha)',
+  })
+  async findCancelledMarkets(
+    @Req() req?: { user: JwtUser },
+    @Query('search') search?: string,
+    @Query('start_day') startDay?: string,
+    @Query('end_day') endDay?: string,
+  ) {
     const roles = req?.user?.roles ?? [];
     const normalizedRoles = this.normalizeRoles(roles);
     const isMarket = normalizedRoles.includes(RoleEnum.MARKET);
@@ -4882,6 +4955,7 @@ export class OrderGatewayController {
         branch_id: branchId,
         holder_type: holderType,
         exclude_branch_source: excludeBranchSource,
+        ...this.marketListFilters(search, startDay, endDay),
       },
     );
   }
@@ -4983,9 +5057,33 @@ export class OrderGatewayController {
       "(kuryer tarifi/ulushi va filial ulushisiz, `source='branch'` buyurtmalarsiz).",
   })
   @ApiParam({ name: 'marketId', description: 'Market ID (id)' })
+  @ApiQuery({
+    name: 'search',
+    required: false,
+    type: String,
+    description:
+      'CU4zfcds: mijoz ismi/telefoni yoki «EL-…» buyurtma raqami (GET /orders bilan bir xil)',
+  })
+  @ApiQuery({
+    name: 'start_day',
+    required: false,
+    type: String,
+    description:
+      'CU4zfcds: yaratilgan sana boshi (YYYY-MM-DD, Toshkent kuni; GET /orders bilan bir xil)',
+  })
+  @ApiQuery({
+    name: 'end_day',
+    required: false,
+    type: String,
+    description:
+      'CU4zfcds: yaratilgan sana oxiri (YYYY-MM-DD, Toshkent kuni, kun oxirigacha)',
+  })
   async findNewOrdersByMarket(
     @Param('marketId') marketId: string,
     @Req() req?: { user: JwtUser },
+    @Query('search') search?: string,
+    @Query('start_day') startDay?: string,
+    @Query('end_day') endDay?: string,
   ) {
     const roles = req?.user?.roles ?? [];
     const normalizedRoles = this.normalizeRoles(roles);
@@ -5038,6 +5136,7 @@ export class OrderGatewayController {
       market_id: marketId,
       branch_id: resolvedBranchId,
       exclude_branch_source: excludeBranchSource,
+      ...this.marketListFilters(search, startDay, endDay),
     };
 
     const response: unknown = await this.sendOrderWithFallback(

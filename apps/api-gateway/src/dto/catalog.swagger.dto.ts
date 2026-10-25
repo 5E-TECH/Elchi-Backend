@@ -4,6 +4,7 @@ import { Transform } from 'class-transformer';
 import {
   IsBoolean,
   IsDefined,
+  IsIn,
   IsInt,
   IsNumber,
   IsOptional,
@@ -300,12 +301,23 @@ export class UpdateProductRequestDto {
   @ApiPropertyOptional({
     type: 'string',
     format: 'binary',
+    nullable: true,
     description:
-      "Product rasmi. Berilsa gateway uni avtomatik yuklab, `image_url`ni o'zi to'ldiradi.",
+      "Product rasmi. Berilsa gateway uni avtomatik yuklab, `image_url`ni o'zi to'ldiradi. " +
+      "j4kTqiSQ: `null` (JSON) — saqlangan rasm o'chiriladi.",
   })
   @IsOptional()
   @IsString()
-  image?: string;
+  image?: string | null;
+
+  @ApiPropertyOptional({
+    type: Boolean,
+    description:
+      "j4kTqiSQ: multipart'da rasmni o'chirish (`true`); yangi `image` fayl berilsa e'tiborsiz.",
+  })
+  @IsOptional()
+  @IsIn([true, false, 'true', 'false', '1', '0'])
+  remove_image?: boolean | string;
 
   @ApiPropertyOptional({ example: 'Pepsi Max' })
   @IsOptional()
@@ -314,12 +326,13 @@ export class UpdateProductRequestDto {
 
   @ApiPropertyOptional({
     example: 'https://cdn.example.com/product-new.png',
+    nullable: true,
     description:
-      'Ixtiyoriy. Agar `image` yuborilsa bu maydonni yuborish shart emas.',
+      "Ixtiyoriy. Agar `image` yuborilsa bu maydonni yuborish shart emas. j4kTqiSQ: `null` yoki `''` — rasm o'chiriladi.",
   })
   @IsOptional()
   @IsString()
-  image_url?: string;
+  image_url?: string | null;
 
   @PriceField()
   price?: number | null;

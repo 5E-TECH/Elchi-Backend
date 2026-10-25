@@ -34,6 +34,7 @@ describe('AiStatusPoller', () => {
         override_usd: 0,
         effective_cap_usd: 50,
         ratio: 0.02,
+        warn_ratio: 0.8,
         state: cap_state ?? 'ok',
         reset_at: '2026-09-27T19:00:00.000Z',
       },

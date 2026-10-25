@@ -464,6 +464,12 @@ export class LogisticsServiceService implements OnModuleInit {
     throw new RpcException(errorRes(message, 409));
   }
 
+  /** Postgres unique violation (23505) — poyga holatidagi takroriy qiymat. */
+  private isUniqueViolation(err: unknown): boolean {
+    const e = err as { code?: unknown; driverError?: { code?: unknown } };
+    return e?.code === '23505' || e?.driverError?.code === '23505';
+  }
+
   private getOrderBranchScope(order: {
     holder_branch_id?: string | null;
     branch_id?: string | null;
@@ -5347,11 +5353,20 @@ export class LogisticsServiceService implements OnModuleInit {
 
     const district = this.districtRepo.create({
       name: trimmedName,
-      sato_code: satoCode,
+      // SlMjauWC: bo'sh kod — NOMA'LUM (NULL), '' emas (unique indeks).
+      sato_code: satoCode || null,
       region_id: dto.region_id,
       assigned_region: dto.region_id,
     });
-    const saved = await this.districtRepo.save(district);
+    let saved: District;
+    try {
+      saved = await this.districtRepo.save(district);
+    } catch (err) {
+      if (this.isUniqueViolation(err)) {
+        this.conflict('District sato_code already exists');
+      }
+      throw err;
+    }
     void this.syncDistrictToSearch(saved);
 
     await this.activityLog.log({
@@ -5507,7 +5522,16 @@ export class LogisticsServiceService implements OnModuleInit {
     }
 
     district.sato_code = satoCode;
-    const savedDistrict = await this.districtRepo.save(district);
+    let savedDistrict: District;
+    try {
+      savedDistrict = await this.districtRepo.save(district);
+    } catch (err) {
+      // SlMjauWC: tekshiruv va yozish orasidagi poyga — unique indeks 23505.
+      if (this.isUniqueViolation(err)) {
+        this.conflict('District sato_code already exists');
+      }
+      throw err;
+    }
     void this.syncDistrictToSearch(savedDistrict);
 
     await this.activityLog.logChange({
@@ -5534,6 +5558,7 @@ export class LogisticsServiceService implements OnModuleInit {
 
   async matchDistrictSatoCodes() {
     const dbDistricts = await this.districtRepo.find({
+      where: { isDeleted: false },
       relations: ['region'],
     });
 
@@ -5544,27 +5569,78 @@ export class LogisticsServiceService implements OnModuleInit {
     );
   }
 
+  /**
+   * SlMjauWC (N5) — avtomatik moslangan kodlarni yozish. Matcher faqat
+   * tumanning o'z viloyatidan va hali hech kimda yo'q kodni taklif qiladi;
+   * bu yerda YOZISHDAN OLDIN yana tekshiriladi (kod boshqa o'chirilmagan
+   * tumanda yo'q, viloyat prefiksi mos), unique indeks poygasi (23505) —
+   * o'tkazib yuboriladi. O'tkazilganlar javobda `skipped` (sabab bilan).
+   */
   async applyDistrictSatoCodes() {
     const dbDistricts = await this.districtRepo.find({
+      where: { isDeleted: false },
       relations: ['region'],
     });
     const matchResult = matchDistricts(dbDistricts);
+    const byId = new Map(dbDistricts.map((d) => [String(d.id), d]));
 
     let appliedCount = 0;
     const applied: Array<{ id: string; name: string; sato_code: string }> = [];
+    const skipped: Array<{
+      id: string;
+      name: string;
+      sato_code: string;
+      reason: 'code_taken' | 'region_prefix_mismatch' | 'not_found';
+    }> = [];
 
     for (const match of matchResult.matched) {
-      if (match.satoName !== '(allaqachon mavjud)') {
-        await this.districtRepo.update(match.dbId, {
-          sato_code: match.satoCode,
-        });
-        applied.push({
+      if (match.satoName === '(allaqachon mavjud)') continue;
+      const skip = (reason: (typeof skipped)[number]['reason']) =>
+        skipped.push({
           id: match.dbId,
           name: match.dbName,
           sato_code: match.satoCode,
+          reason,
         });
-        appliedCount++;
+
+      const district = byId.get(String(match.dbId));
+      if (!district) {
+        skip('not_found');
+        continue;
       }
+      const regionCode = district.region?.sato_code?.trim();
+      if (regionCode && !match.satoCode.startsWith(regionCode)) {
+        skip('region_prefix_mismatch');
+        continue;
+      }
+      const holder = await this.districtRepo.findOne({
+        where: {
+          sato_code: match.satoCode,
+          isDeleted: false,
+          id: Not(match.dbId),
+        },
+      });
+      if (holder) {
+        skip('code_taken');
+        continue;
+      }
+      try {
+        await this.districtRepo.update(match.dbId, {
+          sato_code: match.satoCode,
+        });
+      } catch (err) {
+        if (this.isUniqueViolation(err)) {
+          skip('code_taken');
+          continue;
+        }
+        throw err;
+      }
+      applied.push({
+        id: match.dbId,
+        name: match.dbName,
+        sato_code: match.satoCode,
+      });
+      appliedCount++;
     }
 
     const updatedIds = applied.map((item) => item.id);
@@ -5593,6 +5669,7 @@ export class LogisticsServiceService implements OnModuleInit {
       {
         applied,
         appliedCount,
+        skipped,
         unmatched: matchResult.unmatched,
         duplicates: matchResult.duplicates,
         stats: matchResult.stats,

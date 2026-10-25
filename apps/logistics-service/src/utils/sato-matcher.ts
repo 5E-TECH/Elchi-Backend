@@ -1,4 +1,4 @@
-import { satoRegions } from '../data/sato-codes';
+import { satoRegions, type SatoRegion } from '../data/sato-codes';
 
 /**
  * Nomni normalizatsiya qilish (solishtirishda ishlatiladi)
@@ -169,6 +169,8 @@ export interface MatchResult {
     dbId: string;
     dbName: string;
     regionName?: string;
+    /** Faqat tumanlar uchun (SlMjauWC): nega kod berilmadi. */
+    reason?: DistrictUnmatchedReason;
   }[];
 
   // Dublikat yozuvlar (bir xil nom bir necha marta)
@@ -306,6 +308,52 @@ export function matchRegions(
 }
 
 /**
+ * SlMjauWC (N5) — tumanga kod nega berilmadi:
+ *   - `region_not_found` — tumanning viloyati SATO ro'yxatida topilmadi;
+ *   - `not_found_in_region` — viloyat ichida mos nom yo'q (boshqa viloyatdan
+ *     qidirilmaydi);
+ *   - `code_taken` — mos kod boshqa tumanda allaqachon bor;
+ *   - `ambiguous` — bir nechta mos kod yoki bitta kodga bir nechta tuman.
+ */
+export type DistrictUnmatchedReason =
+  | 'region_not_found'
+  | 'not_found_in_region'
+  | 'code_taken'
+  | 'ambiguous';
+
+/**
+ * Tumanning viloyatini SATO ro'yxatidan topish: avval DB viloyatining rasmiy
+ * kodi bo'yicha (aniq), bo'lmasa nomi bo'yicha.
+ */
+function findSatoRegionFor(
+  region?: { name?: string | null; sato_code?: string | null } | null,
+): SatoRegion | undefined {
+  if (!region) return undefined;
+  const code = region.sato_code?.trim();
+  if (code) {
+    const byCode = satoRegions.find((r) => r.sato_code === code);
+    if (byCode) return byCode;
+  }
+  if (!region.name) return undefined;
+  return satoRegions.find((r) => namesMatch(r.name, region.name!));
+}
+
+/**
+ * Tuman kodi viloyat prefiksi bilan boshlanishi shart (SOATO darvozasi):
+ * SATO viloyati kodi va — DB viloyatida rasmiy kod bo'lsa — uning kodi.
+ */
+export function districtCodeFitsRegion(
+  districtCode: string,
+  satoRegion: { sato_code: string },
+  dbRegion?: { sato_code?: string | null } | null,
+): boolean {
+  if (!districtCode.startsWith(satoRegion.sato_code)) return false;
+  const dbCode = dbRegion?.sato_code?.trim();
+  if (dbCode && !districtCode.startsWith(dbCode)) return false;
+  return true;
+}
+
+/**
  * Tumanlarni SATO kodlari bilan moslashtirish
  */
 export function matchDistricts(
@@ -313,7 +361,7 @@ export function matchDistricts(
     id: string;
     name: string;
     sato_code?: string | null;
-    region?: { id: string; name: string };
+    region?: { id: string; name: string; sato_code?: string | null };
   }[],
 ): MatchResult {
   const result: MatchResult = {
@@ -372,8 +420,45 @@ export function matchDistricts(
   // SATO bilan moslashtirish
   const usedSatoCodes = new Set<string>();
 
-  // Birinchi pass: barcha tumanlarni SATO bilan moslashtirish va usedSatoCodes ni to'ldirish
-  // Bu dublikatlarni ham o'z ichiga oladi
+  /**
+   * SlMjauWC (N5): bitta kod = bitta tuman.
+   *
+   * 1) Allaqachon kodi bor tumanlar kodni «egallaydi» (`takenBy`) — bu kod
+   *    boshqa tumanga BERILMAYDI (ro'yxatdagi tartibdan qat'i nazar).
+   * 2) Kod faqat tumanning O'Z viloyati ichidan qidiriladi; boshqa viloyatlar
+   *    bo'yicha fallback olib tashlandi (u boshqa viloyat tumanining kodini
+   *    berardi). Tuman kodi viloyat SATO prefiksi bilan boshlanishi shart.
+   * 3) Aniq nom mosligi substring mosligidan ustun; bitta kodga bir nechta
+   *    tuman da'vo qilsa — hech biriga berilmaydi (`unmatched`, sabab bilan).
+   */
+  const takenBy = new Map<string, string>();
+  for (const dbDistrict of dbDistricts) {
+    if (dbDistrict.sato_code && !takenBy.has(dbDistrict.sato_code)) {
+      takenBy.set(dbDistrict.sato_code, dbDistrict.id);
+    }
+  }
+
+  const candidates: {
+    dbDistrict: (typeof dbDistricts)[number];
+    isDuplicate: boolean;
+    satoCode: string;
+    satoName: string;
+    satoRegionName: string;
+  }[] = [];
+
+  const pushUnmatched = (
+    dbDistrict: (typeof dbDistricts)[number],
+    reason: DistrictUnmatchedReason,
+  ) => {
+    result.unmatched.push({
+      dbId: dbDistrict.id,
+      dbName: dbDistrict.name,
+      regionName: dbDistrict.region?.name,
+      reason,
+    });
+    result.stats.unmatchedCount++;
+  };
+
   for (const dbDistrict of dbDistricts) {
     const isDuplicate = duplicateIds.has(dbDistrict.id);
 
@@ -392,69 +477,69 @@ export function matchDistricts(
       continue;
     }
 
-    let found = false;
-
-    // Avval viloyat bo'yicha qidirish
-    if (dbDistrict.region?.name) {
-      const satoRegion = satoRegions.find((r) =>
-        namesMatch(r.name, dbDistrict.region!.name),
-      );
-
-      if (satoRegion) {
-        for (const satoDistrict of satoRegion.districts) {
-          const isMatch = namesMatch(dbDistrict.name, satoDistrict.name);
-          if (isMatch) {
-            // MUHIM: Har doim usedSatoCodes ga qo'shish (dublikat bo'lsa ham)
-            usedSatoCodes.add(satoDistrict.sato_code);
-            if (!isDuplicate) {
-              result.matched.push({
-                dbId: dbDistrict.id,
-                dbName: `${dbDistrict.name} (${dbDistrict.region.name})`,
-                satoCode: satoDistrict.sato_code,
-                satoName: `${satoDistrict.name} (${satoRegion.name})`,
-              });
-              result.stats.matchedCount++;
-            }
-            found = true;
-            break;
-          }
-        }
-      }
+    const satoRegion = findSatoRegionFor(dbDistrict.region);
+    if (!satoRegion) {
+      if (!isDuplicate) pushUnmatched(dbDistrict, 'region_not_found');
+      continue;
     }
 
-    // Topilmasa, barcha viloyatlarda qidirish
-    if (!found) {
-      for (const satoRegion of satoRegions) {
-        for (const satoDistrict of satoRegion.districts) {
-          if (namesMatch(dbDistrict.name, satoDistrict.name)) {
-            // MUHIM: Har doim usedSatoCodes ga qo'shish (dublikat bo'lsa ham)
-            usedSatoCodes.add(satoDistrict.sato_code);
-            if (!isDuplicate) {
-              result.matched.push({
-                dbId: dbDistrict.id,
-                dbName: `${dbDistrict.name} (${dbDistrict.region?.name || "Noma'lum"})`,
-                satoCode: satoDistrict.sato_code,
-                satoName: `${satoDistrict.name} (${satoRegion.name})`,
-              });
-              result.stats.matchedCount++;
-            }
-            found = true;
-            break;
-          }
-        }
-        if (found) break;
-      }
-    }
+    const inRegion = satoRegion.districts.filter((d) =>
+      districtCodeFitsRegion(d.sato_code, satoRegion, dbDistrict.region),
+    );
+    const exact = inRegion.filter(
+      (d) => normalizeName(d.name) === normalizeName(dbDistrict.name),
+    );
+    const pool = exact.length
+      ? exact
+      : inRegion.filter((d) => namesMatch(dbDistrict.name, d.name));
+    const free = pool.filter((d) => {
+      const owner = takenBy.get(d.sato_code);
+      return !owner || owner === dbDistrict.id;
+    });
 
-    // Dublikat bo'lmasa va topilmasa - unmatched ga qo'shish
-    if (!found && !isDuplicate) {
-      result.unmatched.push({
-        dbId: dbDistrict.id,
-        dbName: dbDistrict.name,
-        regionName: dbDistrict.region?.name,
-      });
-      result.stats.unmatchedCount++;
+    // MUHIM: topilgan kod (dublikat bo'lsa ham) «SATO da bor, DB da yo'q»
+    // ro'yxatidan chiqariladi — eski xulq.
+    pool.forEach((d) => usedSatoCodes.add(d.sato_code));
+
+    if (!pool.length) {
+      if (!isDuplicate) pushUnmatched(dbDistrict, 'not_found_in_region');
+      continue;
     }
+    if (!free.length) {
+      if (!isDuplicate) pushUnmatched(dbDistrict, 'code_taken');
+      continue;
+    }
+    if (free.length > 1) {
+      if (!isDuplicate) pushUnmatched(dbDistrict, 'ambiguous');
+      continue;
+    }
+    candidates.push({
+      dbDistrict,
+      isDuplicate,
+      satoCode: free[0].sato_code,
+      satoName: free[0].name,
+      satoRegionName: satoRegion.name,
+    });
+  }
+
+  // Bitta kodga bir nechta tuman da'vo qilsa — hech biriga berilmaydi.
+  const claims = new Map<string, number>();
+  for (const c of candidates) {
+    claims.set(c.satoCode, (claims.get(c.satoCode) ?? 0) + 1);
+  }
+  for (const c of candidates) {
+    if (c.isDuplicate) continue;
+    if ((claims.get(c.satoCode) ?? 0) > 1) {
+      pushUnmatched(c.dbDistrict, 'ambiguous');
+      continue;
+    }
+    result.matched.push({
+      dbId: c.dbDistrict.id,
+      dbName: `${c.dbDistrict.name} (${c.dbDistrict.region?.name || "Noma'lum"})`,
+      satoCode: c.satoCode,
+      satoName: `${c.satoName} (${c.satoRegionName})`,
+    });
+    result.stats.matchedCount++;
   }
 
   // SATO da bor, lekin DB da yo'q

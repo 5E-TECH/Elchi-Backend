@@ -51,6 +51,9 @@ export class AiGatewayController {
   @ApiOperation({
     summary:
       'AI holati: kalit holati (qiymatsiz), modellar, bugungi global shift',
+    description:
+      '`cap`: `{period_key, spent_usd, cap_usd, override_usd, effective_cap_usd, ratio, warn_ratio, state, reset_at}`. ' +
+      'Ifpimq2x: `warn_ratio` — `state = warn` chegarasi (AI_CAP_WARN_RATIO, sukut 0.8).',
   })
   async status() {
     const data = await this.call(

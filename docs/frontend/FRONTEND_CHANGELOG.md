@@ -148,6 +148,67 @@ Migratsiya yo'q.
   ishlaydi. `cancel_stage` siz xatti-harakat o'zgarmagan.
 - 🔧 FE: bekor bosqichi tablari/filtri uchun `cancel_stage` ni yuboring (eksportga ham xuddi shu parametr).
 
+### 2026-10-25 (tun) — Mahsulotlar: GET product* `sort_by`/`sort_dir`, rasmni o'chirish (`image: null`) (j4kTqiSQ)
+
+Deploy: api-gateway, catalog-service. Migratsiya yo'q. Parametrsiz — eski xulq.
+
+- [2026-10-25] ✏️ [gateway/catalog] — `GET /product`, `GET /product/market/:marketId`, `GET /product/my-products`:
+  ixtiyoriy **`sort_by`** = `name` | `created_at` | `price` va **`sort_dir`** = `asc` | `desc` (sukut — `created_at
+  desc`, ya'ni eski tartib). Boshqa qiymat — **400**. `price` bo'yicha narxsizlar oxirida; teng qiymatlarda `id` —
+  sahifalar barqaror.
+- [2026-10-25] ✏️ [gateway/catalog] — `PATCH /product/:id`: rasmni o'chirish — JSON **`image: null`** (yoki
+  `image_url: null` / `''`); multipart'da (null yuborib bo'lmaydi) **`remove_image=true`** (yoki `image=null`,
+  `image_url=''`). Natija: `image_url: null`. Yangi `image` fayl yuborilsa — fayl ustun. Fayl storage'dan
+  o'chirilmaydi (faqat bog'lanish uziladi).
+- 🟢 `PATCH /product/my/:id` mavjud emas (Pc4CAFdB — market mahsulotni tahrirlamaydi), shuning uchun faqat
+  `PATCH /product/:id`.
+- 🔧 FE: jadval saralashini serverga (`sort_by`/`sort_dir`), «×» — `image: null` / `remove_image=true` yuborish.
+
+### 2026-10-25 (tun) — Market yangi/bekor ro'yxatlari: `search`, `start_day`/`end_day` (CU4zfcds)
+
+Deploy: api-gateway, order-service. Migratsiya yo'q. Parametrlarsiz chaqiruv — eskisi bilan AYNI (rol doirasi
+o'zgarmagan).
+
+- [2026-10-25] ✏️ [gateway/order] — `GET /orders/markets/new` va `GET /orders/markets/cancelled`: ixtiyoriy
+  **`search`** — market nomi (qism, katta-kichik harf farqsiz) yoki telefoni (kamida 3 raqam); **`start_day`** /
+  **`end_day`** (`YYYY-MM-DD`) — buyurtma yaratilgan sanasi, Toshkent kuni (`GET /orders` bilan AYNI qoida;
+  `end_day` kun oxirigacha). Sanalar guruhlashdan OLDIN qo'llanadi — `orders_count`/`total_price_sum` shu oraliq
+  bo'yicha. Noto'g'ri sana — 400.
+- [2026-10-25] ✏️ [gateway/order] — `GET /orders/markets/:marketId/new`: **`search`** — `GET /orders` bilan AYNI
+  (mijoz ismi, asosiy/qo'shimcha telefoni, «EL-…» raqam; javobda `search_truncated`), **`start_day`/`end_day`** —
+  yaratilgan sana.
+- 🔧 FE: mijoz tomonidagi qidiruv / «bugun» filtrini olib tashlab, parametrlarni serverga yuborish.
+
+### 2026-10-25 (tun) — Readiness `services[].error_kind`, AI `cap.warn_ratio` (Ifpimq2x)
+
+Deploy: api-gateway, ai-service. Migratsiya yo'q. Faqat qo'shimcha maydonlar (breaking emas).
+
+- [2026-10-25] ✏️ [gateway] — `GET /health/readiness`: `services[]` da yangi **`error_kind`** (faqat `status` ok
+  bo'lmaganda): `timeout` (servis 1.5 s da javob bermadi) | `down` (RPC xatosi) | `reported` (servis o'zini
+  `degraded`/`down` dedi) | `not_registered` (gateway'da mijoz yo'q). `error` matni o'zgarmagan.
+- [2026-10-25] ✏️ [ai] — `GET /ai/status`: `cap.warn_ratio` (AI_CAP_WARN_RATIO, sukut 0.8) — `state = warn`
+  aynan shu chegaradan; DB o'qilmasa (`state: unknown`) ham qaytadi.
+- 🔧 FE (ixtiyoriy): OS sahifasida sababni `error_kind` bo'yicha, shift ogohlantirish chizig'ini `warn_ratio` dan.
+
+### 2026-10-25 (tun) — SATO apply: boshqa viloyat/tumanning kodi berilmaydi, `districts.sato_code` qisman unique (SlMjauWC)
+
+Deploy: logistics-service, api-gateway (faqat Swagger tavsifi). **Migratsiya bor: `1716000000160`** — qisman UNIQUE
+indeks `UQ_DISTRICT_SATO_CODE_LIVE` (`sato_code` NOT NULL, bo'sh emas, `is_deleted = false`). Takroriy kod bo'lsa
+migratsiya yiqilmaydi va ma'lumotga tegmaydi — indeks yaratilmaydi, WARNING loglanadi (2026-10-26 prod: 181 tuman,
+takroriy 0).
+
+- [2026-10-25] ✏️ [logistics] — `POST /logistics/district/sato-match/apply` (va `GET .../sato-match`): kod faqat
+  tumanning **o'z viloyatidan** (viloyat SATO prefiksi bilan) olinadi — boshqa viloyatlar bo'yicha fallback olib
+  tashlandi; boshqa (o'chirilmagan) tumanda bor kod berilmaydi; aniq nom substring'dan ustun, bitta kodga bir nechta
+  tuman da'vo qilsa — hech biriga berilmaydi. O'chirilgan tumanlar o'qilmaydi.
+- [2026-10-25] ✏️ [logistics] — apply javobida yangi **`skipped[]`**: `{id, name, sato_code, reason}`,
+  `reason` = `code_taken` | `region_prefix_mismatch` | `not_found` (yozishdan oldingi qayta tekshiruv / unique
+  poygasi). `unmatched[]` tumanlarda yangi **`reason`**: `region_not_found` | `not_found_in_region` | `code_taken`
+  | `ambiguous`. Eski maydonlar o'zgarmagan.
+- [2026-10-25] 🟢 [logistics] — tuman yaratish/kodini tahrirlashda takroriy kod poygasi (DB 23505) ham **409**
+  «District sato_code already exists»; kodsiz yaratilgan tuman `sato_code: null` (ilgari `''`).
+- 🔧 FE (ixtiyoriy): `SatoApplyDialog` natijasida `skipped` va `unmatched[].reason` ni ko'rsatish.
+
 ### 2026-10-25 — Buyurtma: mahsulotsiz va tumansiz buyurtma yaratilmaydi — barcha yo'llarda (IR2OHIiN)
 
 Deploy: api-gateway (DTO/Swagger + `createOrderInternal`), order-service (yagona yaratish nuqtasi

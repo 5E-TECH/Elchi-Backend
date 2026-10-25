@@ -13,13 +13,29 @@ import { AiStatusPoller } from './ai/ai-status.poller';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { SkipThrottle } from '@nestjs/throttler';
 import type { Response } from 'express';
-import { firstValueFrom, timeout } from 'rxjs';
+import { firstValueFrom, timeout, TimeoutError } from 'rxjs';
+
+/**
+ * Ifpimq2x (N21) — `error` erkin matn, UI esa sababni tur bo'yicha ko'rsatadi:
+ *   - `timeout` — servis PROBE_TIMEOUT_MS ichida javob bermadi;
+ *   - `down` — RPC xatosi (ulanish/marshrut yo'q va h.k.);
+ *   - `reported` — servis javob berdi, lekin o'zini `degraded`/`down` dedi;
+ *   - `not_registered` — gateway'da bu servis mijozi yo'q.
+ * Faqat yopiq ro'yxat — ichki tafsilot sizmaydi (@Public endpoint).
+ */
+export type ServiceHealthErrorKind =
+  | 'timeout'
+  | 'down'
+  | 'reported'
+  | 'not_registered';
 
 interface ServiceHealth {
   service: string;
   status: 'ok' | 'down' | 'unknown';
   latency_ms?: number;
   error?: string;
+  /** Faqat status `ok` bo'lmaganda. */
+  error_kind?: ServiceHealthErrorKind;
 }
 
 const SERVICE_HEALTH_PROBES: Array<{ token: string; cmd: string }> = [
@@ -119,7 +135,12 @@ export class HealthController {
    */
   @Public()
   @Get('readiness')
-  @ApiOperation({ summary: 'Readiness check — pings every downstream service' })
+  @ApiOperation({
+    summary: 'Readiness check — pings every downstream service',
+    description:
+      '`services[]`: `{service, status: ok|down|unknown, latency_ms?, error?, error_kind?}`. ' +
+      'Ifpimq2x: `error_kind` (faqat ok bo‘lmaganda) — `timeout` | `down` | `reported` | `not_registered`.',
+  })
   async readiness(@Res({ passthrough: true }) res: Response) {
     const probes = await Promise.all(
       SERVICE_HEALTH_PROBES.map((probe) =>
@@ -144,6 +165,7 @@ export class HealthController {
         service: token,
         status: 'unknown',
         error: 'client not registered',
+        error_kind: 'not_registered',
       };
     }
 
@@ -165,6 +187,7 @@ export class HealthController {
           status: 'down',
           latency_ms: Date.now() - startedAt,
           error: `reported ${reported}`,
+          error_kind: 'reported',
         };
       }
       return {
@@ -178,6 +201,7 @@ export class HealthController {
         status: 'down',
         latency_ms: Date.now() - startedAt,
         error: (error as Error)?.message ?? 'unknown error',
+        error_kind: error instanceof TimeoutError ? 'timeout' : 'down',
       };
     }
   }

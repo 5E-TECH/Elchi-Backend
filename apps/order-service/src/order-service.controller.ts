@@ -466,13 +466,21 @@ export class OrderServiceController {
   @MessagePattern({ cmd: 'order.find_new_markets' })
   findNewMarkets(
     @Payload()
-    data: { branch_id?: string; exclude_branch_source?: boolean } | undefined,
+    data:
+      | {
+          branch_id?: string;
+          exclude_branch_source?: boolean;
+          start_day?: string;
+          end_day?: string;
+        }
+      | undefined,
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
       this.orderService.findNewMarkets(
         data?.branch_id,
         Boolean(data?.exclude_branch_source),
+        { start_day: data?.start_day, end_day: data?.end_day },
       ),
     );
   }
@@ -484,6 +492,8 @@ export class OrderServiceController {
       market_id: string;
       branch_id?: string;
       exclude_branch_source?: boolean;
+      start_day?: string;
+      end_day?: string;
     },
     @Ctx() context: RmqContext,
   ) {
@@ -492,6 +502,7 @@ export class OrderServiceController {
         data.market_id,
         data.branch_id,
         Boolean(data?.exclude_branch_source),
+        { start_day: data?.start_day, end_day: data?.end_day },
       ),
     );
   }
@@ -1325,13 +1336,26 @@ export class OrderServiceController {
   @MessagePattern({ cmd: 'order.find_new_markets_enriched' })
   findNewMarketsEnriched(
     @Payload()
-    data: { branch_id?: string; exclude_branch_source?: boolean } | undefined,
+    data:
+      | {
+          branch_id?: string;
+          exclude_branch_source?: boolean;
+          search?: string;
+          start_day?: string;
+          end_day?: string;
+        }
+      | undefined,
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
       this.orderService.findNewMarketsEnriched(
         data?.branch_id,
         Boolean(data?.exclude_branch_source),
+        {
+          search: data?.search,
+          start_day: data?.start_day,
+          end_day: data?.end_day,
+        },
       ),
     );
   }
@@ -1343,6 +1367,9 @@ export class OrderServiceController {
       market_id: string;
       branch_id?: string;
       exclude_branch_source?: boolean;
+      search?: string;
+      start_day?: string;
+      end_day?: string;
     },
     @Ctx() context: RmqContext,
   ) {
@@ -1351,6 +1378,11 @@ export class OrderServiceController {
         data.market_id,
         data.branch_id,
         Boolean(data?.exclude_branch_source),
+        {
+          search: data?.search,
+          start_day: data?.start_day,
+          end_day: data?.end_day,
+        },
       ),
     );
   }
@@ -1363,6 +1395,9 @@ export class OrderServiceController {
       branch_id?: string;
       holder_type?: OrderHolderType;
       exclude_branch_source?: boolean;
+      search?: string;
+      start_day?: string;
+      end_day?: string;
     },
     @Ctx() context: RmqContext,
   ) {
@@ -1372,6 +1407,9 @@ export class OrderServiceController {
         branch_id: data?.branch_id,
         holder_type: data.holder_type,
         exclude_branch_source: Boolean(data?.exclude_branch_source),
+        search: data?.search,
+        start_day: data?.start_day,
+        end_day: data?.end_day,
       }),
     );
   }

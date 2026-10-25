@@ -457,6 +457,7 @@ describe('AiBudgetService — global kunlik avariya shifti (wFSMEIIy)', () => {
         override_usd: 0,
         effective_cap_usd: 10,
         ratio: 0,
+        warn_ratio: 0.8,
         state: 'ok',
         reset_at: '2026-09-28T00:00:00+05:00',
       });
@@ -469,6 +470,29 @@ describe('AiBudgetService — global kunlik avariya shifti (wFSMEIIy)', () => {
       await expect(t.budget.status(now)).resolves.toMatchObject({
         state: 'exceeded',
       });
+    });
+  });
+
+  describe('Ifpimq2x — cap.warn_ratio', () => {
+    it('AI_CAP_WARN_RATIO qaytadi va state shu chegaradan', async () => {
+      const t = setup({ AI_DAILY_USD_CAP: 10, AI_CAP_WARN_RATIO: 0.6 });
+      const now = new Date('2026-09-27T10:00:00Z');
+      t.ensure('2026-09-27').cost_usd = 6.5;
+      await expect(t.budget.status(now)).resolves.toMatchObject({
+        warn_ratio: 0.6,
+        state: 'warn',
+      });
+      expect(t.budget.getWarnRatio()).toBe(0.6);
+    });
+
+    it("env yo'q yoki >= 1 — sukut 0.8", async () => {
+      const now = new Date('2026-09-27T10:00:00Z');
+      await expect(setup({}).budget.status(now)).resolves.toMatchObject({
+        warn_ratio: 0.8,
+      });
+      await expect(
+        setup({ AI_CAP_WARN_RATIO: 1.5 }).budget.status(now),
+      ).resolves.toMatchObject({ warn_ratio: 0.8 });
     });
   });
 

@@ -44,6 +44,11 @@ export interface AiStatusResponse {
     override_usd: number;
     effective_cap_usd: number;
     ratio: number;
+    /**
+     * Ifpimq2x (N21): `state = warn` chegarasi (AI_CAP_WARN_RATIO, sukut 0.8)
+     * — UI ogohlantirish chizig'ini shu qiymatdan chizadi.
+     */
+    warn_ratio: number;
     state: AiCapState;
     reset_at: string;
   };

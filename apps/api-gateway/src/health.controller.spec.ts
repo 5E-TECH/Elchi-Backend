@@ -181,6 +181,58 @@ describe('HealthController', () => {
       });
     });
 
+    describe('Ifpimq2x — services[].error_kind', () => {
+      it('javob bermadi → timeout', async () => {
+        jest.useFakeTimers();
+        try {
+          const { controller } = makeController({ ai: client(() => NEVER) });
+          const pending = controller.readiness(fakeRes());
+          await jest.advanceTimersByTimeAsync(1_500);
+          const body = await pending;
+          expect(body.services.find((s) => s.service === 'AI')).toMatchObject({
+            status: 'down',
+            error_kind: 'timeout',
+          });
+        } finally {
+          jest.useRealTimers();
+        }
+      });
+
+      it('RPC xatosi → down', async () => {
+        const { controller } = makeController({
+          ai: client(() => throwError(() => new Error('no route'))),
+        });
+        const body = await controller.readiness(fakeRes());
+        expect(body.services.find((s) => s.service === 'AI')).toMatchObject({
+          status: 'down',
+          error_kind: 'down',
+        });
+      });
+
+      it("servis o'zini degraded dedi → reported", async () => {
+        const { controller } = makeController({
+          ai: client(() => of({ status: 'degraded' })),
+        });
+        const body = await controller.readiness(fakeRes());
+        expect(body.services.find((s) => s.service === 'AI')).toMatchObject({
+          status: 'down',
+          error_kind: 'reported',
+        });
+      });
+
+      it('mijoz yo‘q → not_registered; ok servislarda error_kind yo‘q', async () => {
+        const { controller } = makeController({ ai: null });
+        const body = await controller.readiness(fakeRes());
+        expect(body.services.find((s) => s.service === 'AI')).toMatchObject({
+          status: 'unknown',
+          error_kind: 'not_registered',
+        });
+        for (const s of body.services.filter((x) => x.status === 'ok')) {
+          expect(s).not.toHaveProperty('error_kind');
+        }
+      });
+    });
+
     it('AI mijozi ro‘yxatdan o‘tmagan bo‘lsa AI unknown', async () => {
       const { controller } = makeController({ ai: null });
       const body = await controller.readiness(fakeRes());

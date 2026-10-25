@@ -60,6 +60,8 @@ export class CatalogServiceController {
         search?: string;
         page?: number;
         limit?: number;
+        sort_by?: string;
+        sort_dir?: string;
       };
     },
     @Ctx() context: RmqContext,

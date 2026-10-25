@@ -24,6 +24,7 @@ const CAP: AiStatusResponse['cap'] = {
   override_usd: 0,
   effective_cap_usd: 50,
   ratio: 0.03,
+  warn_ratio: 0.8,
   state: 'ok',
   reset_at: '2026-09-28T00:00:00+05:00',
 };
@@ -353,6 +354,8 @@ describe('AiServiceController', () => {
       const res = await build().status(ctx);
       expect(res.cap.state).toBe('unknown');
       expect(res.cap.cap_usd).toBe(50);
+      // Ifpimq2x: DB o'qilmasa ham chegara qaytadi (mock'da getWarnRatio yo'q — sukut).
+      expect(res.cap.warn_ratio).toBe(0.8);
       expect(res.cap.period_key).toMatch(/^\d{4}-\d{2}-\d{2}$/);
       expect(typeof res.cap.reset_at).toBe('string');
       expect(ack).toHaveBeenCalledWith(ctx);

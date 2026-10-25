@@ -2131,6 +2131,32 @@
               "example": 10,
               "type": "number"
             }
+          },
+          {
+            "name": "sort_by",
+            "required": false,
+            "in": "query",
+            "description": "j4kTqiSQ: saralash maydoni (sukut — created_at, yangisi tepada); boshqa qiymat 400",
+            "schema": {
+              "enum": [
+                "name",
+                "created_at",
+                "price"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "name": "sort_dir",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "enum": [
+                "asc",
+                "desc"
+              ],
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -2195,6 +2221,32 @@
               "example": 10,
               "type": "number"
             }
+          },
+          {
+            "name": "sort_by",
+            "required": false,
+            "in": "query",
+            "description": "j4kTqiSQ: saralash maydoni (sukut — created_at, yangisi tepada); boshqa qiymat 400",
+            "schema": {
+              "enum": [
+                "name",
+                "created_at",
+                "price"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "name": "sort_dir",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "enum": [
+                "asc",
+                "desc"
+              ],
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -2249,6 +2301,32 @@
             "schema": {
               "example": 10,
               "type": "number"
+            }
+          },
+          {
+            "name": "sort_by",
+            "required": false,
+            "in": "query",
+            "description": "j4kTqiSQ: saralash maydoni (sukut — created_at, yangisi tepada); boshqa qiymat 400",
+            "schema": {
+              "enum": [
+                "name",
+                "created_at",
+                "price"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "name": "sort_dir",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "enum": [
+                "asc",
+                "desc"
+              ],
+              "type": "string"
             }
           }
         ],
@@ -2367,6 +2445,7 @@
         ]
       },
       "patch": {
+        "description": "j4kTqiSQ: rasmni o'chirish — JSON `image: null` (yoki `image_url: null`/`''`), multipart `remove_image=true` (yoki `image=null`, `image_url=''`). Yangi `image` fayl berilsa — fayl ustun.",
         "operationId": "CatalogGatewayController_update",
         "parameters": [
           {
@@ -3694,7 +3773,35 @@
     "/orders/markets/new": {
       "get": {
         "operationId": "OrderGatewayController_findNewMarkets",
-        "parameters": [],
+        "parameters": [
+          {
+            "name": "search",
+            "required": false,
+            "in": "query",
+            "description": "CU4zfcds: market nomi yoki telefoni bo‘yicha (qism)",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "start_day",
+            "required": false,
+            "in": "query",
+            "description": "CU4zfcds: yaratilgan sana boshi (YYYY-MM-DD, Toshkent kuni; GET /orders bilan bir xil)",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "end_day",
+            "required": false,
+            "in": "query",
+            "description": "CU4zfcds: yaratilgan sana oxiri (YYYY-MM-DD, Toshkent kuni, kun oxirigacha)",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": ""
@@ -3797,7 +3904,35 @@
     "/orders/markets/cancelled": {
       "get": {
         "operationId": "OrderGatewayController_findCancelledMarkets",
-        "parameters": [],
+        "parameters": [
+          {
+            "name": "search",
+            "required": false,
+            "in": "query",
+            "description": "CU4zfcds: market nomi yoki telefoni bo‘yicha (qism)",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "start_day",
+            "required": false,
+            "in": "query",
+            "description": "CU4zfcds: yaratilgan sana boshi (YYYY-MM-DD, Toshkent kuni; GET /orders bilan bir xil)",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "end_day",
+            "required": false,
+            "in": "query",
+            "description": "CU4zfcds: yaratilgan sana oxiri (YYYY-MM-DD, Toshkent kuni, kun oxirigacha)",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": ""
@@ -3893,6 +4028,33 @@
             "required": true,
             "in": "path",
             "description": "Market ID (id)",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "search",
+            "required": false,
+            "in": "query",
+            "description": "CU4zfcds: mijoz ismi/telefoni yoki «EL-…» buyurtma raqami (GET /orders bilan bir xil)",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "start_day",
+            "required": false,
+            "in": "query",
+            "description": "CU4zfcds: yaratilgan sana boshi (YYYY-MM-DD, Toshkent kuni; GET /orders bilan bir xil)",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "end_day",
+            "required": false,
+            "in": "query",
+            "description": "CU4zfcds: yaratilgan sana oxiri (YYYY-MM-DD, Toshkent kuni, kun oxirigacha)",
             "schema": {
               "type": "string"
             }
@@ -6939,6 +7101,7 @@
     },
     "/district/sato-match/apply": {
       "post": {
+        "description": "SlMjauWC (N5): kod faqat tumanning O'Z viloyatidan (viloyat SATO prefiksi bilan) va hali hech bir o'chirilmagan tumanda bo'lmagan bo'lsa yoziladi; boshqa viloyatlar bo'yicha fallback yo'q. Javob: `applied[]`, `appliedCount`, `skipped[]` ({id, name, sato_code, reason: code_taken | region_prefix_mismatch | not_found}), `unmatched[]` (tumanlarda `reason`: region_not_found | not_found_in_region | code_taken | ambiguous), `duplicates`, `stats`. `districts.sato_code` — qisman UNIQUE (o'chirilmagan, bo'sh emas); POST/PATCH dagi takroriy kod — 409.",
         "operationId": "LogisticsGatewayController_applyDistrictSatoMatch",
         "parameters": [],
         "responses": {
@@ -18547,6 +18710,7 @@
     },
     "/ai/status": {
       "get": {
+        "description": "`cap`: `{period_key, spent_usd, cap_usd, override_usd, effective_cap_usd, ratio, warn_ratio, state, reset_at}`. Ifpimq2x: `warn_ratio` — `state = warn` chegarasi (AI_CAP_WARN_RATIO, sukut 0.8).",
         "operationId": "AiGatewayController_status",
         "parameters": [],
         "responses": {
@@ -20643,6 +20807,7 @@
     },
     "/health/readiness": {
       "get": {
+        "description": "`services[]`: `{service, status: ok|down|unknown, latency_ms?, error?, error_kind?}`. Ifpimq2x: `error_kind` (faqat ok bo‘lmaganda) — `timeout` | `down` | `reported` | `not_registered`.",
         "operationId": "HealthController_readiness",
         "parameters": [],
         "responses": {
@@ -21979,16 +22144,22 @@
           "image": {
             "type": "string",
             "format": "binary",
-            "description": "Product rasmi. Berilsa gateway uni avtomatik yuklab, `image_url`ni o'zi to'ldiradi."
+            "nullable": true,
+            "description": "Product rasmi. Berilsa gateway uni avtomatik yuklab, `image_url`ni o'zi to'ldiradi. j4kTqiSQ: `null` (JSON) — saqlangan rasm o'chiriladi."
+          },
+          "remove_image": {
+            "type": "boolean",
+            "description": "j4kTqiSQ: multipart'da rasmni o'chirish (`true`); yangi `image` fayl berilsa e'tiborsiz."
           },
           "name": {
             "type": "string",
             "example": "Pepsi Max"
           },
           "image_url": {
-            "type": "string",
+            "type": "object",
             "example": "https://cdn.example.com/product-new.png",
-            "description": "Ixtiyoriy. Agar `image` yuborilsa bu maydonni yuborish shart emas."
+            "nullable": true,
+            "description": "Ixtiyoriy. Agar `image` yuborilsa bu maydonni yuborish shart emas. j4kTqiSQ: `null` yoki `''` — rasm o'chiriladi."
           },
           "price": {
             "type": "object",
