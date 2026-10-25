@@ -24,6 +24,8 @@ export const DELIVERY_QUOTE_MAX_ITEMS = 200;
 /** `delivery_pricing_settings` ning formula ustunlari (PATCH oq ro'yxati). */
 export const DELIVERY_PRICING_SETTINGS_FIELDS = [
   'volumetric_divisor',
+  /** AQ9lkgVB — hajm qaysi kg dan boshlab hisobga olinadi (0 — har doim). */
+  'volumetric_from_kg',
   'first_kg_included',
   'min_billable_kg',
   'billable_step_kg',

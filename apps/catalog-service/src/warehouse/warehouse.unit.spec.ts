@@ -81,6 +81,34 @@ describe('hY7uacJu — ombor yordamchilari', () => {
     ).toMatchObject({ chargeable_weight_kg: 25, measure_missing: true });
   });
 
+  it('AQ9lkgVB: «Hisob vazni» hajm chegarasiz — chegara faqat jo`natma yig`indisida (narx dvigateli)', () => {
+    // 20×20×20 sm, 0,5 kg: bitta dona hajmli 1,6 kg. Chegara 3 da 1 donali
+    // buyurtma og'irlik bo'yicha, 2 donali (3,2 kg) hajm bo'yicha — bitta
+    // dona ko'rinishi buni aks ettira olmaydi, shuning uchun chegarasiz.
+    expect(
+      warehouseChargeableWeight({
+        weight_kg: 0.5,
+        length_cm: 20,
+        width_cm: 20,
+        height_cm: 20,
+      }),
+    ).toEqual({
+      chargeable_weight_kg: 1.6,
+      volumetric_weight_kg: 1.6,
+      chargeable_basis: 'volumetric',
+      measure_missing: false,
+    });
+    // Og'irlik yo'q, hajm kichik — hajm qiymati ko'rsatiladi (null emas).
+    expect(
+      warehouseChargeableWeight({ length_cm: 20, width_cm: 20, height_cm: 20 }),
+    ).toEqual({
+      chargeable_weight_kg: 1.6,
+      volumetric_weight_kg: 1.6,
+      chargeable_basis: 'volumetric',
+      measure_missing: true,
+    });
+  });
+
   it('holat MAVJUD bo`yicha: ≤0 — out, ≤ chegara — low, aks holda ok', () => {
     expect(warehouseStockLevel(0, 10)).toBe('out');
     expect(warehouseStockLevel(5, 5)).toBe('low');

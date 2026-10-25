@@ -107,8 +107,11 @@ function build(
     catalogFails?: boolean;
     noTariff?: boolean;
     noSettings?: boolean;
+    /** Faol sozlamaga qo'shimcha (AQ9lkgVB: `volumetric_from_kg`). */
+    settings?: Record<string, unknown>;
   } = {},
 ) {
+  const activeSettings = { ...SETTINGS, ...options.settings };
   const regionRepo = {
     findOne: jest.fn(({ where: { id } }: { where: { id: string } }) =>
       Promise.resolve(REGIONS[id] ?? null),
@@ -160,7 +163,7 @@ function build(
   jest
     .spyOn(service, 'findActiveSettings')
     .mockImplementation(() =>
-      Promise.resolve(options.noSettings ? null : (SETTINGS as never)),
+      Promise.resolve(options.noSettings ? null : (activeSettings as never)),
     );
   return { service, catalogClient, activityLog, tariffRepo, settingsRepo };
 }
@@ -550,5 +553,158 @@ describe('47WFHzlx — sozlamalar tarixi', () => {
     expect(settingsRepo.find).toHaveBeenCalledWith(
       expect.objectContaining({ take: 100 }),
     );
+  });
+});
+
+describe('AQ9lkgVB — hajm chegarasi (volumetric_from_kg)', () => {
+  const SMALL = { weight_kg: 0.5, length_cm: 20, width_cm: 20, height_cm: 20 };
+  const BIG = { weight_kg: 0.8, length_cm: 50, width_cm: 35, height_cm: 20 };
+
+  it('chegara 3: 1,6 kg hajmli → og`irlik; 7,0 → hajm; javobda volumetricFromKg / volumetricApplied', async () => {
+    const { service } = build({ settings: { volumetric_from_kg: 3 } });
+    const route = { from_region_id: '1', to_region_id: '6' };
+    const small = await quoteOf(service, { ...route, items: [SMALL] });
+    expect(small).toMatchObject({
+      volumetricKg: 1.6,
+      volumetricFromKg: 3,
+      volumetricApplied: false,
+      billableKg: 0.5,
+      basis: 'weight',
+      total: 40000,
+    });
+    const big = await quoteOf(service, { ...route, items: [BIG] });
+    expect(big).toMatchObject({
+      volumetricKg: 7,
+      volumetricFromKg: 3,
+      volumetricApplied: true,
+      billableKg: 7,
+      basis: 'volume',
+      total: 64000,
+    });
+  });
+
+  it('catalog mahsuloti ham chegarani oladi; quote_by_tariff ham', async () => {
+    // 42: 1,2 kg, 30×22×15 → hajmli 1,98 < 3 → hisob 1,2 kg.
+    const { service } = build({ settings: { volumetric_from_kg: '3.000' } });
+    const q = await quoteOf(service, {
+      from_region_id: '1',
+      to_region_id: '6',
+      items: [{ product_id: '42' }],
+      requester: { id: '501', roles: ['market'] },
+    });
+    expect(q.volumetricApplied).toBe(false);
+    expect(q.billableKg).toBe(1.2);
+    expect(q.total).toBe(44000);
+    const byTariff = (
+      (await service.quoteByTariff({ items: [SMALL] } as never)) as {
+        data: { quotes: Record<string, any> };
+      }
+    ).data.quotes;
+    expect(byTariff.center).toMatchObject({
+      volumetricApplied: false,
+      volumetricFromKg: 3,
+      billableKg: 0.5,
+      total: 40000,
+    });
+    expect(byTariff.city.total).toBe(35000);
+  });
+
+  it('chegara 0 (sukut) — hozirgidek: hajm qo`llanadi', async () => {
+    const { service } = build({ settings: { volumetric_from_kg: 0 } });
+    const q = await quoteOf(service, {
+      from_region_id: '1',
+      to_region_id: '6',
+      items: [SMALL],
+    });
+    expect(q.volumetricFromKg).toBe(0);
+    expect(q.volumetricApplied).toBe(true);
+    expect(q.billableKg).toBe(1.6);
+    expect(q.basis).toBe('volume');
+  });
+
+  it.each<[string, unknown]>([
+    ['manfiy', -1],
+    ['1000 dan katta', 1001],
+    ['4 kasr', 2.5001],
+    ['satr', '3'],
+    ['null', null],
+  ])('PATCH 400 — volumetric_from_kg %s', async (_name, value) => {
+    const { service, settingsRepo } = build();
+    const err = await rpcError(
+      service.updateSettings({ volumetric_from_kg: value } as never, {
+        id: '1',
+      }),
+    );
+    expect(err.statusCode).toBe(400);
+    expect(err.message).toBe(
+      "volumetric_from_kg — 0..1000, ko'pi bilan 3 kasrli kg",
+    );
+    expect(settingsRepo.manager.transaction).not.toHaveBeenCalled();
+  });
+
+  it('PATCH 2,5 — yangi versiya (tarix) va jurnalda eski/yangi qiymat', async () => {
+    const { service, settingsRepo, activityLog } = build();
+    const active = { ...SETTINGS, volumetric_from_kg: 0 };
+    const rows: Record<string, unknown>[] = [];
+    const repo = {
+      findOne: jest.fn(() => Promise.resolve(active)),
+      create: jest.fn(() => ({})),
+      save: jest.fn((row: Record<string, unknown>) => {
+        const saved = row === active ? row : { id: '2', ...row };
+        rows.push({ ...saved });
+        return Promise.resolve(saved);
+      }),
+    };
+    const em = {
+      query: jest.fn(() => Promise.resolve([])),
+      getRepository: jest.fn(() => repo),
+    };
+    settingsRepo.manager.transaction.mockImplementation(
+      (fn: (manager: typeof em) => unknown) => fn(em),
+    );
+
+    const res = (await service.updateSettings(
+      { volumetric_from_kg: 2.5 },
+      { id: '1', roles: ['superadmin'] },
+    )) as { statusCode: number; data: Record<string, unknown> };
+
+    expect(res.statusCode).toBe(200);
+    expect(res.data).toMatchObject({
+      id: '2',
+      volumetric_from_kg: 2.5,
+      volumetric_divisor: 5000,
+      is_active: true,
+      created_by: '1',
+    });
+    // Eski qator nofaol, yangisi — to'liq nusxa (tarix: GET .../history).
+    expect(rows[0]).toMatchObject({ id: '1', is_active: false });
+    expect(activityLog.logChange).toHaveBeenCalledTimes(1);
+    expect(activityLog.logChange.mock.calls[0][0]).toMatchObject({
+      action: 'logistics.delivery_pricing_settings_updated',
+      old_value: { volumetric_from_kg: 0, volumetric_divisor: 5000 },
+      new_value: { volumetric_from_kg: 2.5, volumetric_divisor: 5000 },
+      description: "Yetkazish narxi sozlamalari o'zgartirildi: 1 ta maydon",
+    });
+  });
+
+  it('PATCH 0 → 0 — o`zgarish emas (versiya ham, jurnal ham yo`q)', async () => {
+    const { service, settingsRepo, activityLog } = build();
+    const active = { ...SETTINGS, volumetric_from_kg: 0 };
+    const repo = {
+      findOne: jest.fn(() => Promise.resolve(active)),
+      create: jest.fn(() => ({})),
+      save: jest.fn(),
+    };
+    settingsRepo.manager.transaction.mockImplementation(
+      (fn: (manager: unknown) => unknown) =>
+        fn({ query: jest.fn(), getRepository: () => repo }),
+    );
+    const res = (await service.updateSettings(
+      { volumetric_from_kg: 0 },
+      { id: '1' },
+    )) as { message: string };
+    expect(res.message).toBe("Sozlamalar o'zgarmadi");
+    expect(repo.save).not.toHaveBeenCalled();
+    expect(activityLog.logChange).not.toHaveBeenCalled();
   });
 });

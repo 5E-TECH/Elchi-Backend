@@ -18909,7 +18909,7 @@
     },
     "/delivery/quote": {
       "post": {
-        "description": "DAqXPeSy. Tarif: ikkala uchi ham `regions.is_city_zone` (Toshkent shahri) → `city`, aks holda `where_deliver` (`center`/`address`). Elementlar BITTA jo'natma: og'irliklar va hajmlar qo'shiladi (× quantity), baza bir marta. `product_id` — o'lchov catalog'dan (MARKET — faqat o'z mahsuloti, begonasi 404). O'lchovsiz element jimgina 0 bermaydi: `unmeasuredItems` / `missingDimensionItems` > 0 va `estimated: true`. `total` — 500 ga karrali YOZILADIGAN narx (pickup kirmaydi); `totalWithPickup` — kalkulyator jami. Xatolar: 400 (validatsiya, tuman–viloyat mos emas), 404 (viloyat/tuman/mahsulot), 409 (faol tarif yoki sozlama yo'q), 503 (catalog javob bermadi).",
+        "description": "DAqXPeSy. Tarif: ikkala uchi ham `regions.is_city_zone` (Toshkent shahri) → `city`, aks holda `where_deliver` (`center`/`address`). Elementlar BITTA jo'natma: og'irliklar va hajmlar qo'shiladi (× quantity), baza bir marta. `product_id` — o'lchov catalog'dan (MARKET — faqat o'z mahsuloti, begonasi 404). O'lchovsiz element jimgina 0 bermaydi: `unmeasuredItems` / `missingDimensionItems` > 0 va `estimated: true`. Hajm chegarasi (AQ9lkgVB): hajmli vazn `volumetric_from_kg` dan kichik bo'lsa hajm hisobga olinmaydi — `volumetricApplied: false`, hisob vazni faqat og'irlikdan. `total` — 500 ga karrali YOZILADIGAN narx (pickup kirmaydi); `totalWithPickup` — kalkulyator jami. Xatolar: 400 (validatsiya, tuman–viloyat mos emas), 404 (viloyat/tuman/mahsulot), 409 (faol tarif yoki sozlama yo'q), 503 (catalog javob bermadi).",
         "operationId": "DeliveryPricingGatewayController_quote",
         "parameters": [],
         "requestBody": {
@@ -19115,7 +19115,7 @@
         ]
       },
       "patch": {
-        "description": "Qisman: faqat yuborilgan maydonlar o'zgaradi. Yangi faol qator yoziladi, eskisi `is_active=false` (tarix qoladi); hech narsa o'zgarmasa versiya ham, jurnal ham yo'q. Amal activity-log'ga yoziladi (`logistics.delivery_pricing_settings_updated`, eski/yangi qiymat bilan).",
+        "description": "Qisman: faqat yuborilgan maydonlar o'zgaradi. Yangi faol qator yoziladi, eskisi `is_active=false` (tarix qoladi); hech narsa o'zgarmasa versiya ham, jurnal ham yo'q. `volumetric_from_kg` (AQ9lkgVB) — hajm qaysi kg dan boshlab hisobga olinadi (0..1000, 3 kasr; 0 — har doim). Amal activity-log'ga yoziladi (`logistics.delivery_pricing_settings_updated`, eski/yangi qiymat bilan).",
         "operationId": "DeliveryPricingGatewayController_updateSettings",
         "parameters": [],
         "requestBody": {
@@ -28289,7 +28289,17 @@
           "volumetricKg": {
             "type": "number",
             "example": 1.98,
-            "description": "Hajmli vazn yig'indisi"
+            "description": "Hajmli vazn yig'indisi — chegaradan qat'i nazar har doim hisoblangan qiymat"
+          },
+          "volumetricFromKg": {
+            "type": "number",
+            "example": 0,
+            "description": "(AQ9lkgVB) Qo'llangan hajm chegarasi, kg (`volumetric_from_kg`; 0 — chegara yo'q)"
+          },
+          "volumetricApplied": {
+            "type": "boolean",
+            "example": true,
+            "description": "(AQ9lkgVB) Hajm hisobga olindimi: o'lchamli hajmli element bor VA `volumetricKg` ≥ `volumetricFromKg`. false — hisob vazni faqat haqiqiy og'irlikdan"
           },
           "billableKg": {
             "type": "number",
@@ -28333,7 +28343,8 @@
               "weight",
               "volume"
             ],
-            "nullable": true
+            "nullable": true,
+            "description": "Hisob vazni qaysi biridan; hech narsa o'lchanmagan — null. `volumetricApplied: false` bo'lsa — `weight` (yoki null)"
           },
           "unmeasuredItems": {
             "type": "number",
@@ -28382,6 +28393,8 @@
           "daysMax",
           "actualKg",
           "volumetricKg",
+          "volumetricFromKg",
+          "volumetricApplied",
           "billableKg",
           "extraKg",
           "extra",
@@ -28614,6 +28627,11 @@
             "type": "number",
             "example": 5000
           },
+          "volumetric_from_kg": {
+            "type": "number",
+            "example": 0,
+            "description": "(AQ9lkgVB) Hajm shu kg dan (≥) boshlab hisobga olinadi; 0 — har doim"
+          },
           "first_kg_included": {
             "type": "number",
             "example": 1
@@ -28659,6 +28677,7 @@
         "required": [
           "id",
           "volumetric_divisor",
+          "volumetric_from_kg",
           "first_kg_included",
           "min_billable_kg",
           "billable_step_kg",
@@ -28699,6 +28718,13 @@
             "minimum": 1,
             "example": 5000,
             "description": "Hajmli vazn bo'luvchisi (U×K×B sm / shu son). Ega qarori — 5000."
+          },
+          "volumetric_from_kg": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1000,
+            "example": 3,
+            "description": "(AQ9lkgVB) Hajm qaysi kg dan boshlab hisobga olinadi. Hajmli vazn (Σ U×K×B / volumetric_divisor) shundan KICHIK bo'lsa — hajm hisobga olinmaydi (standart narx, faqat haqiqiy og'irlik); KATTA yoki TENG bo'lsa — hisob vazni = katta(haqiqiy, hajmli). 0 — hajm har doim qo'llanadi (sukut)."
           },
           "first_kg_included": {
             "type": "number",
