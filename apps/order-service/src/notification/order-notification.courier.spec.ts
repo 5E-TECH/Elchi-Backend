@@ -55,7 +55,7 @@ describe('buildCourierAssignedPayload', () => {
         previous_courier_id: null,
         status: Order_status.ON_THE_ROAD,
       },
-      link: '/orders/81',
+      link: '/orders/edit/81',
       recipient_ids: ['55', '5'],
       group_key: 'order:81:courier',
       channels: ['in_app', 'realtime'],
@@ -346,7 +346,7 @@ describe('updateFull — logistics scan-assign / assign-to-courier yo‘li (`ord
       expect.objectContaining({
         recipient_ids: ['55', '5'],
         group_key: 'order:81:courier',
-        link: '/orders/81',
+        link: '/orders/edit/81',
         category: 'order',
       }),
     );

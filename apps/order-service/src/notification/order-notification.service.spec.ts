@@ -12,14 +12,17 @@ import {
 } from '@app/common';
 import { OrderCustodyService } from '../custody/order-custody.service';
 import { OrderLifecycleService } from '../lifecycle/order-lifecycle.service';
+import { validateTelegramHtml } from '@app/common/notification/telegram-html-kit-spec';
 import {
   NOTIFICATION_DISPATCH_PATTERN,
   NOTIFICATION_OUTBOX_TARGET,
   ORDER_COURIER_ASSIGNED_TYPE,
   ORDER_PILOT_NOTIFICATION_TYPES,
   OrderNotificationService,
+  buildCourierAssignedPayload,
   buildOrderNotificationPayload,
   buildOrderTelegramText,
+  orderDetailLink,
   resolveOrderNotificationType,
 } from './order-notification.service';
 
@@ -92,7 +95,7 @@ describe('resolveOrderNotificationType — o‘tish → tur', () => {
 });
 
 describe('buildOrderNotificationPayload', () => {
-  it('ePpLHPX2 TC1 / OA16fdSq TC6: sotildi — market egasi (+ operator) qabul qiluvchi, link /orders/{id}, group_key order:{id}:status', () => {
+  it('ePpLHPX2 TC1 / OA16fdSq TC6: sotildi — market egasi (+ operator) qabul qiluvchi, link /orders/edit/{id}, group_key order:{id}:status', () => {
     const payload = buildOrderNotificationPayload(
       'order.sold',
       order(),
@@ -103,7 +106,7 @@ describe('buildOrderNotificationPayload', () => {
         type: 'order.sold',
         category: 'order',
         recipient_ids: ['5', '9'],
-        link: '/orders/81',
+        link: '/orders/edit/81',
         group_key: 'order:81:status',
         channels: ['in_app', 'realtime'],
         data: expect.objectContaining({
@@ -209,6 +212,173 @@ describe('buildOrderNotificationPayload', () => {
         null,
       ),
     ).toBeNull();
+  });
+});
+
+/**
+ * OA16fdSq TC6/TC15 — bildirishnoma havolasi frontend «Buyurtma tafsiloti»
+ * marshrutiga olib boradi. Elchi-Frontend `src/app/lib/routes.tsx`:
+ * `orders` → `edit/:orderId` (NewOrderUpdate); `/orders/:id` marshruti YO'Q
+ * (faqat eski havolalar uchun redirect) — 2026-10-09 prod testida 404 edi.
+ */
+const FE_ORDER_DETAIL_ROUTE = /^\/orders\/edit\/(\d+)$/;
+
+describe('OA16fdSq — link /orders/edit/{id} (frontend «Buyurtma tafsiloti», 404 emas)', () => {
+  const fromStatus: Record<string, Order_status | null> = {
+    'order.created': null,
+    'order.accepted': Order_status.NEW,
+    'order.on_way': Order_status.RECEIVED,
+    'order.sold': Order_status.WAITING,
+    'order.cancelled': Order_status.WAITING,
+    'order.returned': Order_status.CANCELLED,
+    'order.not_accepted': Order_status.ON_THE_ROAD,
+  };
+
+  it.each(ORDER_PILOT_NOTIFICATION_TYPES.map((type) => [type]))(
+    '%s — link /orders/edit/{id}, data.order_id bilan bir xil buyurtma',
+    (type) => {
+      const payload = buildOrderNotificationPayload(
+        type,
+        order({ id: '36', market_id: '37' }),
+        fromStatus[type],
+      )!;
+      expect(payload.link).toBe('/orders/edit/36');
+      expect(FE_ORDER_DETAIL_ROUTE.exec(payload.link)?.[1]).toBe(
+        payload.data.order_id,
+      );
+      expect(payload.link).not.toMatch(/^\/orders\/\d+$/);
+    },
+  );
+
+  it('order.assigned_to_courier — o‘sha marshrut', () => {
+    const payload = buildCourierAssignedPayload(
+      {
+        id: '42',
+        market_id: '37',
+        courier_id: '26',
+        status: Order_status.ON_THE_ROAD,
+      } as any,
+      null,
+    )!;
+    expect(payload.link).toBe('/orders/edit/42');
+    expect(payload.link).toMatch(FE_ORDER_DETAIL_ROUTE);
+  });
+
+  it('orderDetailLink — yagona manba; raqamdan boshqa narsa yo‘lni buzmaydi', () => {
+    expect(orderDetailLink('81')).toBe('/orders/edit/81');
+    expect(orderDetailLink(81)).toBe('/orders/edit/81');
+    expect(orderDetailLink('1/../x?y')).toBe('/orders/edit/1%2F..%2Fx%3Fy');
+  });
+});
+
+describe('OA16fdSq TC8/TC9 — Telegram matni Telegram HTML tekshiruvidan o‘tadi', () => {
+  const ADVERSARIAL = [
+    '<Ali> & *Vali*',
+    'Ali & Co <b>VIP</b>',
+    '</b><i>*_`[x](tg://y)`',
+    '&lt; allaqachon & escape',
+    '"Qo‘chqor" > Ali',
+    '*Vali',
+  ];
+
+  it.each(ADVERSARIAL.map((name) => [name]))(
+    'mijoz ismi %p — matn yaroqli, ism o‘zgarmay ko‘rinadi',
+    (name) => {
+      const payload = buildOrderNotificationPayload(
+        'order.cancelled',
+        order({
+          status: Order_status.CANCELLED,
+          address: `${name} ko‘chasi`,
+          comment: `Izoh: ${name}`,
+          operator: name,
+          return_reason: 'CUSTOMER_REFUSED',
+        }),
+        Order_status.WAITING,
+        {
+          telegram: {
+            customer: { name, phone_number: '+998901234567' },
+            courier: { name, phone_number: '+998907654321' },
+            region_name: name,
+            district_name: name,
+            items: [{ name, quantity: 1 }],
+          },
+        },
+      )!;
+      const check = validateTelegramHtml(payload.telegram!.text);
+      expect(check).toEqual(expect.objectContaining({ ok: true }));
+      const plain = check.ok ? check.plain : '';
+      expect(plain).toContain(`Mijoz: ${name}`);
+      expect(plain).toContain(`Izoh: Izoh: ${name}`);
+      expect(plain).toContain(`Operator: ${name}`);
+      expect(plain).toContain(`1. ${name} — 1 dona`);
+    },
+  );
+
+  it('uzun ism emoji yarmida kesilmaydi (yolg‘iz surrogate — yaroqsiz UTF-8)', () => {
+    // 118 ta "A" + 😀 (2 ta UTF-16 birligi): 120 chegarada 119-belgi surrogate
+    // juftligining birinchi yarmi bo'lardi.
+    const name = `${'A'.repeat(118)}😀 oxiri`;
+    const text = buildOrderTelegramText('order.cancelled', order(), {
+      customer: { name, phone_number: '+998901234567' },
+    });
+    const check = validateTelegramHtml(text);
+    expect(check).toEqual(expect.objectContaining({ ok: true }));
+    expect(text).toContain(`<b>Mijoz:</b> ${'A'.repeat(118)}…`);
+  });
+
+  it('tasodifiy maxsus belgilar (300 ta) — har doim yaroqli HTML, chegaradan oshmaydi', () => {
+    const alphabet = [
+      '<',
+      '>',
+      '&',
+      '*',
+      '_',
+      '`',
+      '"',
+      "'",
+      'a',
+      'Я',
+      'ў',
+      '😀',
+      '👨‍💼',
+      '\n',
+      ' ',
+      '&amp;',
+      '</b>',
+      '<b>',
+      '&#',
+      ';',
+      '<a href="x">',
+    ];
+    let seed = 20261025;
+    const random = () => {
+      seed = (seed * 1103515245 + 12345) % 2 ** 31;
+      return seed / 2 ** 31;
+    };
+    const word = (max: number) =>
+      Array.from(
+        { length: 1 + Math.floor(random() * max) },
+        () => alphabet[Math.floor(random() * alphabet.length)],
+      ).join('');
+    for (let run = 0; run < 300; run += 1) {
+      const text = buildOrderTelegramText(
+        'order.cancelled',
+        order({ address: word(400), comment: word(900), operator: word(150) }),
+        {
+          customer: { name: word(150), phone_number: word(50) },
+          courier: { name: word(150), phone_number: word(50) },
+          region_name: word(50),
+          district_name: word(50),
+          items: Array.from({ length: Math.floor(random() * 25) }, () => ({
+            name: word(150),
+            quantity: 1 + Math.floor(random() * 3),
+          })),
+        },
+      );
+      const check = validateTelegramHtml(text);
+      if (!check.ok) throw new Error(`${check.description}\n${text}`);
+      expect(text.length).toBeLessThanOrEqual(4000);
+    }
   });
 });
 
@@ -625,7 +795,7 @@ describe('ePpLHPX2 TC1 / OA16fdSq TC6: updateFull(SOLD) — sotilgan buyurtma uc
         payload: expect.objectContaining({
           type: 'order.sold',
           recipient_ids: ['5'],
-          link: '/orders/81',
+          link: '/orders/edit/81',
         }),
       }),
     );

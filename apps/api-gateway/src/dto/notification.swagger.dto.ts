@@ -319,7 +319,7 @@ export class DispatchNotificationRequestDto {
   @IsObject()
   data?: Record<string, unknown>;
 
-  @ApiPropertyOptional({ example: '/orders/123' })
+  @ApiPropertyOptional({ example: '/orders/edit/123' })
   @IsOptional()
   @IsString()
   @MaxLength(512)

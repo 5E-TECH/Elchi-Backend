@@ -195,7 +195,7 @@ describe('NotificationInboxService — group_key yangilanganda qator inbox tepas
       type,
       title,
       body: `Buyurtma #EL-1000${orderId} — ${title.toLowerCase()}.`,
-      link: `/orders/${orderId}`,
+      link: `/orders/edit/${orderId}`,
       group_key: `order:${orderId}:status`,
       data: { order_id: orderId },
       channels,
@@ -226,8 +226,8 @@ describe('NotificationInboxService — group_key yangilanganda qator inbox tepas
     // Guruh — hamon bitta qator (QFoRULeu: dedupe buzilmagan).
     expect(market.meta.total).toBe(2);
     expect(market.items.map((item: any) => item.link)).toEqual([
-      '/orders/36',
-      '/orders/50',
+      '/orders/edit/36',
+      '/orders/edit/50',
     ]);
     expect(market.items[0]).toEqual(
       expect.objectContaining({
@@ -243,8 +243,12 @@ describe('NotificationInboxService — group_key yangilanganda qator inbox tepas
     await statusEvent('36', 'order.created', 'Buyurtma yaratildi');
     at('2026-10-09T14:30:00.000Z');
     await statusEvent('50', 'order.created', 'Buyurtma yaratildi');
-    const row36 = [...store.values()].find((row) => row.link === '/orders/36');
-    const row50 = [...store.values()].find((row) => row.link === '/orders/50');
+    const row36 = [...store.values()].find(
+      (row) => row.link === '/orders/edit/36',
+    );
+    const row50 = [...store.values()].find(
+      (row) => row.link === '/orders/edit/50',
+    );
     await service.markRead(MARKET, row36.id);
     await service.markRead(MARKET, row50.id);
     expect((await service.unreadCount(MARKET)).data.unread).toBe(0);
@@ -279,13 +283,15 @@ describe('NotificationInboxService — group_key yangilanganda qator inbox tepas
     at('2026-10-09T14:30:00.000Z');
     await statusEvent('50', 'order.created', 'Buyurtma yaratildi');
     at('2026-10-09T14:40:00.000Z');
-    const row36 = [...store.values()].find((row) => row.link === '/orders/36');
+    const row36 = [...store.values()].find(
+      (row) => row.link === '/orders/edit/36',
+    );
     await service.markRead(MARKET, row36.id);
 
     const market = await inbox(MARKET);
     expect(market.items.map((item: any) => item.link)).toEqual([
-      '/orders/50',
-      '/orders/36',
+      '/orders/edit/50',
+      '/orders/edit/36',
     ]);
   });
 
@@ -302,11 +308,11 @@ describe('NotificationInboxService — group_key yangilanganda qator inbox tepas
       (item: any) => item.link,
     );
     expect(links).toEqual([
-      '/orders/65',
-      '/orders/64',
-      '/orders/63',
-      '/orders/62',
-      '/orders/61',
+      '/orders/edit/65',
+      '/orders/edit/64',
+      '/orders/edit/63',
+      '/orders/edit/62',
+      '/orders/edit/61',
     ]);
     expect(page1.meta).toEqual({ page: 1, limit: 2, total: 5, totalPages: 3 });
     expect(repo.findAndCount).toHaveBeenCalledWith(
@@ -318,8 +324,8 @@ describe('NotificationInboxService — group_key yangilanganda qator inbox tepas
     await statusEvent('61', 'order.accepted', 'Buyurtma qabul qilindi');
     const after = await inbox(MARKET, { page: 1, limit: 2 });
     expect(after.items.map((item: any) => item.link)).toEqual([
-      '/orders/61',
-      '/orders/65',
+      '/orders/edit/61',
+      '/orders/edit/65',
     ]);
     expect(after.meta.total).toBe(5);
   });

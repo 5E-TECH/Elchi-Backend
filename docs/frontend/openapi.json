@@ -25008,7 +25008,7 @@
           },
           "link": {
             "type": "string",
-            "example": "/orders/123"
+            "example": "/orders/edit/123"
           },
           "channels": {
             "type": "array",
