@@ -1323,6 +1323,8 @@ export class LogisticsGatewayController {
 
   @Get('region/:id')
   @UseGuards(JwtAuthGuard, RolesGuard)
+  // (OfRSoRUX / N11, MO-7) MARKET_OPERATOR — buyurtmani qo'lda yaratishda viloyat tumanlari (faqat o'qish; MARKET
+  // rolida allaqachon ochiq). PATCH/DELETE region/:id ga tegilmagan.
   @Roles(
     RoleEnum.ADMIN,
     RoleEnum.SUPERADMIN,
@@ -1330,6 +1332,7 @@ export class LogisticsGatewayController {
     RoleEnum.REGISTRATOR,
     RoleEnum.MARKET,
     RoleEnum.COURIER,
+    RoleEnum.MARKET_OPERATOR,
   )
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Get region by id' })
@@ -1448,6 +1451,7 @@ export class LogisticsGatewayController {
 
   @Get('district/:id')
   @UseGuards(JwtAuthGuard, RolesGuard)
+  // (OfRSoRUX / N11, MO-7) MARKET_OPERATOR — mijoz taklifidagi tuman nomi va viloyatni to'ldirish (faqat o'qish).
   @Roles(
     RoleEnum.ADMIN,
     RoleEnum.SUPERADMIN,
@@ -1455,6 +1459,7 @@ export class LogisticsGatewayController {
     RoleEnum.COURIER,
     RoleEnum.MARKET,
     RoleEnum.REGISTRATOR,
+    RoleEnum.MARKET_OPERATOR,
   )
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Get district by id' })

@@ -6457,7 +6457,8 @@
           "manager",
           "registrator",
           "market",
-          "courier"
+          "courier",
+          "market_operator"
         ]
       },
       "patch": {
@@ -6721,7 +6722,8 @@
           "manager",
           "courier",
           "market",
-          "registrator"
+          "registrator",
+          "market_operator"
         ]
       },
       "patch": {

@@ -274,8 +274,9 @@ describe('OfRSoRUX — POST /orders MARKET_OPERATOR (qo‘lda yaratish)', () => 
   });
 });
 
-describe('OfRSoRUX / N11 — GET /region, GET /district MARKET_OPERATOR ga', () => {
-  it.each([['getAllRegions'], ['getAll']])(
+describe('OfRSoRUX / N11 — GET /region(/:id), GET /district(/:id) MARKET_OPERATOR ga', () => {
+  // MO-7: qo'lda forma tumanlari (`GET /region/:id`) va mijoz taklifidagi tuman (`GET /district/:id`).
+  it.each([['getAllRegions'], ['getAll'], ['getRegionById'], ['getById']])(
     '%s — market_operator bor',
     (name) => {
       const roles = rolesOf(LogisticsGatewayController.prototype, name);
@@ -287,7 +288,15 @@ describe('OfRSoRUX / N11 — GET /region, GET /district MARKET_OPERATOR ga', () 
   );
 
   it('yozish yo‘llari (POST/PATCH/DELETE region/district) operatorga ochilmagan', () => {
-    for (const name of ['create', 'updateRegion', 'deleteRegion']) {
+    for (const name of [
+      'create',
+      'updateRegion',
+      'deleteRegion',
+      'update',
+      'updateName',
+      'updateDistrictSato',
+      'deleteDistrict',
+    ]) {
       const roles = rolesOf(LogisticsGatewayController.prototype, name);
       expect(roles).not.toContain('market_operator');
     }

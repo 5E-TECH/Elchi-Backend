@@ -23,6 +23,16 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-10-25 — Market operatori: viloyat tumanlari va tuman tafsiloti (MO-7, OfRSoRUX / N11)
+
+Deploy: faqat api-gateway. Migratsiya yo'q.
+
+- [2026-10-25] ✏️ [gateway/logistics] — `GET /region/:id` (viloyat + tumanlari) va `GET /district/:id` endi
+  **market_operator** ga ham ochiq (faqat o'qish; MARKET rolida avvaldan ochiq). Sabab: operator buyurtmani qo'lda
+  yaratganda tuman ro'yxati 403 qaytarardi, mijoz taklifidagi tuman nomi chiqmasdi. Yozish yo'llari
+  (POST/PATCH/DELETE region/district) operatorga yopiq qoladi. Frontend o'zgarishi shart emas
+  (FE `feat/operator-manual-create` shu yo'llarni ishlatadi).
+
 ### 2026-10-25 — Ombor ↔ buyurtma oqimi (6kHnNH9j, kontrakt `warehouse_v2_contract.md` B)
 
 Deploy: `migration:run` (1716000000153 — `order_schema.orders.fulfillment_source` sukut `HQ`, `warehouse_id`) →
