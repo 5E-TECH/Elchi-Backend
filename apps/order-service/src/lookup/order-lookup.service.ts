@@ -242,6 +242,8 @@ export class OrderLookupService implements OnModuleInit {
       this.logisticsClient,
       { cmd: 'logistics.district.find_by_id' },
       { id },
+      // Yaratish yo'lida: gateway 8 s timeout'iga yetmasin (review 2026-10-25).
+      { attachRequestId: false, retries: 0, timeoutMs: 2000 },
     ).catch(() => null);
     const district = response?.data;
     const candidates = [
@@ -280,7 +282,8 @@ export class OrderLookupService implements OnModuleInit {
         this.identityClient,
         { cmd: 'identity.customer.find_by_id' },
         { id },
-        { attachRequestId: false, retries: 1 },
+        // Yaratish yo'lida: 503 foydalanuvchiga gateway timeout'idan (8 s) oldin yetsin.
+        { attachRequestId: false, retries: 0, timeoutMs: 2500 },
       );
     } catch (error) {
       const status = rpcErrorStatusOf(error);

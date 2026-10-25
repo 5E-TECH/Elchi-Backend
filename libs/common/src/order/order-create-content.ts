@@ -56,6 +56,18 @@ export function orderCreateItemsProblem(items: unknown): string | null {
     if (!item || typeof item !== 'object' || Array.isArray(item)) {
       return ORDER_CREATE_NO_ITEMS_MESSAGE;
     }
+    // Qator mahsulotga ishora qilishi shart (product_id yoki product_name) —
+    // `items: [{}]` gateway'dan o'tib, inline mijoz yetim qolmasin.
+    const { product_id: productId, product_name: productName } = item as {
+      product_id?: unknown;
+      product_name?: unknown;
+    };
+    const hasRef = (value: unknown) =>
+      (typeof value === 'string' && value.trim() !== '') ||
+      (typeof value === 'number' && Number.isFinite(value));
+    if (!hasRef(productId) && !hasRef(productName)) {
+      return ORDER_CREATE_NO_ITEMS_MESSAGE;
+    }
     const quantity = (item as { quantity?: unknown }).quantity;
     if (quantity === undefined || quantity === null) continue;
     const parsed = typeof quantity === 'number' ? quantity : Number(quantity);
