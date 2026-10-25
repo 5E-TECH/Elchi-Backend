@@ -769,6 +769,51 @@ describe('R6 (QTCUUgjA) — filial (BRANCH) kassasi smenasi: FINANCE_REQUIRE_OPE
     expect(res.statusCode).toBeLessThan(300);
   });
 
+  it('32Sw3DfC kuzatuv: darvoza rad etsa `shift_gate_blocked` WARN qatori (kod, kassa, qamrov)', async () => {
+    process.env.FINANCE_REQUIRE_OPEN_SHIFT = 'all';
+    const branchEnv = makeEnv({
+      cashboxes: [courierCashbox(), branchCashbox(0)],
+      openShifts: {},
+    });
+    const branchWarn = jest
+      .spyOn((branchEnv.service as any).logger, 'warn')
+      .mockImplementation(() => undefined);
+    await rpcErrorOf(
+      branchEnv.service.paymentsFromCourier(managerCourierPayment()),
+    );
+    expect(branchWarn).toHaveBeenCalledWith(
+      'shift_gate_blocked code=BRANCH_SHIFT_REQUIRED cashbox_type=branch cashbox_user_id=15 scope=all',
+    );
+
+    const mainEnv = makeEnv({ cashboxes: [mainCashbox()], openShifts: {} });
+    const mainWarn = jest
+      .spyOn((mainEnv.service as any).logger, 'warn')
+      .mockImplementation(() => undefined);
+    await rpcErrorOf(mainEnv.service.spendMoney({ user_id: '1', amount: 1 }));
+    expect(mainWarn).toHaveBeenCalledWith(
+      'shift_gate_blocked code=SHIFT_REQUIRED cashbox_type=main cashbox_user_id=0 scope=all',
+    );
+  });
+
+  it('32Sw3DfC kuzatuv: smena ochiq — WARN yo`q', async () => {
+    process.env.FINANCE_REQUIRE_OPEN_SHIFT = 'all';
+    const env = makeEnv({
+      cashboxes: [courierCashbox(), branchCashbox(0)],
+      openShifts: { '15': branchShift() },
+    });
+    const warn = jest
+      .spyOn((env.service as any).logger, 'warn')
+      .mockImplementation(() => undefined);
+
+    await env.service.paymentsFromCourier(managerCourierPayment());
+
+    expect(
+      warn.mock.calls.some((call) =>
+        String(call[0]).startsWith('shift_gate_blocked'),
+      ),
+    ).toBe(false);
+  });
+
   it('`true`/`main` qamrovi — filial darvozalanmaydi (2026-10-14 xatti-harakati o`zgarmagan)', async () => {
     for (const value of ['true', 'main']) {
       process.env.FINANCE_REQUIRE_OPEN_SHIFT = value;

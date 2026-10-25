@@ -387,6 +387,23 @@ export class CloseShiftRequestDto {
   comment?: string;
 }
 
+/**
+ * (32Sw3DfC) GET /finance/shift/current — superadmin/admin filial kassasi
+ * sahifasida shu filial smenasini o'qiydi (FAQAT o'qish). Menejer — o'z
+ * filiali yoki '0' (HQ asosiy kassa smenasi holati, faqat status).
+ */
+export class CurrentShiftQueryDto {
+  @ApiPropertyOptional({
+    example: '13',
+    description:
+      "Kassa: '0' — asosiy (MAIN), aks holda filial ID si. Superadmin/admin — istalgan filial (mavjud bo'lmasa 404); menejer — o'z filiali yoki '0' (faqat holat); registrator — faqat '0'. Boshqasi — 403",
+  })
+  @IsOptional()
+  @IsString()
+  @Matches(/^\d+$/)
+  cashbox_user_id?: string;
+}
+
 export class FindShiftQueryDto {
   @ApiPropertyOptional({ example: '15' })
   @IsOptional()

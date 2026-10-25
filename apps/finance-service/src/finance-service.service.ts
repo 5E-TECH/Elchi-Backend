@@ -34,6 +34,7 @@ import {
   BRANCH_SHIFT_REQUIRED_MESSAGE,
   SHIFT_REQUIRED_MESSAGE,
   isShiftRequiredFor,
+  shiftGateBlockedLogLine,
   shiftGateScope,
 } from './shift-gate';
 import {
@@ -2033,6 +2034,13 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
       'pessimistic_read',
     );
     if (!shift) {
+      // (32Sw3DfC) Kuzatuv — `all` yoqilgandan keyin rad etilgan amallar soni.
+      this.logger.warn(
+        shiftGateBlockedLogLine(
+          isMain ? 'SHIFT_REQUIRED' : 'BRANCH_SHIFT_REQUIRED',
+          { cashbox_type: cashboxType, user_id: target.user_id },
+        ),
+      );
       throw new BadRequestException(
         isMain
           ? FinanceServiceService.SHIFT_REQUIRED_MESSAGE

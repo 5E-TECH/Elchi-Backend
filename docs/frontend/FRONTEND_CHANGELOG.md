@@ -23,6 +23,32 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-10-25 — Kassa smenasi: superadmin filial smenasini ko'radi, qulf matni, `all` rejimiga tayyorlik (32Sw3DfC)
+
+Deploy: api-gateway, finance-service. Migratsiya yo'q. Prod ENV (`FINANCE_REQUIRE_OPEN_SHIFT=all`) — ALOHIDA ops
+qadami, frontend smena oqimi (kfdfYDik) prod'ga chiqqandan va operatorlarga xabar berilgandan KEYIN.
+
+- [2026-10-25] ✏️ [finance/shift] — **`GET /finance/shift/current?cashbox_user_id=`** (ixtiyoriy, faqat O'QISH):
+  - superadmin/admin: `'0'` yoki yo'q — asosiy (MAIN) kassa (avvalgidek); filial ID si — shu filial smenasi,
+    `required` (filial uchun faqat `all` rejimida `true`) va `last_closed`. Mavjud bo'lmagan filial — 404;
+  - menejer: yo'q yoki o'z filiali — o'z filiali (avvalgidek); `'0'` — HQ asosiy kassa smenasining faqat HOLATI
+    (`status_only: true`, `shift: { id, status, cashbox_user_id, opened_at, opened_by_name } | null`, pul
+    maydonlari va `last_closed` YO'Q); boshqa filial — 403;
+  - registrator: faqat `'0'` (boshqasi — 403). Raqam bo'lmagan qiymat — 400.
+- [2026-10-25] ✏️ [finance/shift] — `shift/current` javobiga QO'SHIMCHA `data.can_open` (so'rovchi shu kassada smenani
+  ocha oladimi) va `data.lock_message`. Superadmin/admin filial smenasini OCHMAYDI (`POST shift/open` doirasi har doim
+  MAIN — o'zgarmagan): filial kassasida `can_open: false`, smena yo'q bo'lsa `lock_message` =
+  «Filial menejeri smenani ochishi kerak»; boshqa hollarda `null`. 🔧 FE (kfdfYDik): `/payments/cash-detail/:id`
+  (filial) sahifasi superadmin/admin uchun `shift/current?cashbox_user_id=<filial id>` so'rasin va smena yo'q bo'lsa
+  «Smenani ochish» tugmasi o'rniga `lock_message` ni chizsin (hozir `useCashboxShift` faqat JWT doirasini o'qiydi).
+  Filial → HQ o'tkazmasi IKKALA smenani talab qiladi (filial va MAIN) — sahifa ikkalasini ham ko'rsata oladi.
+- [2026-10-25] 🟢 [finance/shift] — `FINANCE_REQUIRE_OPEN_SHIFT=all` yoqilganda (ega S4): MAIN va filial kassalarida
+  smena ochilmaguncha qo'lda kirim/chiqim, kuryerdan qabul (HQ va filial), marketga to'lov, filial → HQ, karta
+  o'tkazmasi/konvertatsiyasi 400 «Smena ochilmagan! … avval asosiy kassada / filial kassasida smenani oching».
+  Sotuv/bekor qilish (order-service outbox) va kuryer/market kassalari darvozalanmaydi. Rad etilgan har amal
+  finance-service logida `shift_gate_blocked code=SHIFT_REQUIRED|BRANCH_SHIFT_REQUIRED cashbox_type=…
+  cashbox_user_id=… scope=…` (kuzatuv).
+
 ### 2026-10-25 — Kassa smenasi: `last_closed`, smena ro'yxati filtri/saralashi, xodim ismlari, sanalgan naqd majburiy (8OYPuz7J)
 
 Deploy: api-gateway, finance-service. Migratsiya yo'q.

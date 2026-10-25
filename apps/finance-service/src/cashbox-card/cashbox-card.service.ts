@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   Injectable,
+  Logger,
   NotFoundException,
   Optional,
 } from '@nestjs/common';
@@ -20,7 +21,11 @@ import {
   CashboxCardMovement,
 } from '../entities/cashbox-card-movement.entity';
 import { Shift, ShiftStatus } from '../entities/shift.entity';
-import { SHIFT_REQUIRED_MESSAGE, isShiftRequiredFor } from '../shift-gate';
+import {
+  SHIFT_REQUIRED_MESSAGE,
+  isShiftRequiredFor,
+  shiftGateBlockedLogLine,
+} from '../shift-gate';
 import { FinanceRealtimeService } from '../realtime/finance-realtime.service';
 
 /**
@@ -240,6 +245,8 @@ type LedgerRow = {
 
 @Injectable()
 export class CashboxCardService {
+  private readonly logger = new Logger(CashboxCardService.name);
+
   constructor(
     private readonly dataSource: DataSource,
     private readonly activityLog: ActivityLogService,
@@ -399,6 +406,13 @@ export class CashboxCardService {
       lock: { mode: 'pessimistic_read' },
     });
     if (!shift) {
+      // (32Sw3DfC) Kuzatuv — rad etilgan amallar soni (`shift_gate_blocked`).
+      this.logger.warn(
+        shiftGateBlockedLogLine('SHIFT_REQUIRED', {
+          cashbox_type: Cashbox_type.MAIN,
+          user_id: MAIN_CASHBOX_USER_ID,
+        }),
+      );
       throw new BadRequestException(SHIFT_REQUIRED_MESSAGE);
     }
   }

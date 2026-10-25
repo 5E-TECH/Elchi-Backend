@@ -8685,9 +8685,20 @@
     },
     "/finance/shift/current": {
       "get": {
-        "description": "(kfdfYDik) `data.shift` — ochiq smena yoki null; `data.required` — shu kassada smenasiz pul operatsiyalari bloklanadimi (FINANCE_REQUIRE_OPEN_SHIFT: MAIN — main/all, filial — all). R6: menejer — o'z filiali kassasi. (8OYPuz7J) `data.last_closed` — shu kassaning eng oxirgi yopilgan smenasi (closed_at DESC, to'liq qator) yoki null; smena qatorlarida `opened_by_name` / `closed_by_name`.",
+        "description": "(kfdfYDik) `data.shift` — ochiq smena yoki null; `data.required` — shu kassada smenasiz pul operatsiyalari bloklanadimi (FINANCE_REQUIRE_OPEN_SHIFT: MAIN — main/all, filial — all). R6: menejer — o'z filiali kassasi. (8OYPuz7J) `data.last_closed` — shu kassaning eng oxirgi yopilgan smenasi (closed_at DESC, to'liq qator) yoki null; smena qatorlarida `opened_by_name` / `closed_by_name`. (32Sw3DfC) `?cashbox_user_id=` — superadmin/admin filial kassasi sahifasida shu filial smenasi va `required` (FAQAT o'qish; mavjud bo'lmagan filial — 404). `data.can_open` — so'rovchi shu kassada smena ocha oladimi (superadmin/admin filialda — yo'q: filial smenasini menejer ochadi); smena yo'q va ocha olmasa `data.lock_message` = «Filial menejeri smenani ochishi kerak», aks holda null. Menejer `?cashbox_user_id=0` — HQ asosiy kassa smenasi HOLATI (`status_only: true`; pul maydonlarisiz, `last_closed` yo'q).",
         "operationId": "FinanceGatewayController_currentShift",
-        "parameters": [],
+        "parameters": [
+          {
+            "name": "cashbox_user_id",
+            "required": false,
+            "in": "query",
+            "description": "Kassa: '0' — asosiy (MAIN), aks holda filial ID si. Superadmin/admin — istalgan filial (mavjud bo'lmasa 404); menejer — o'z filiali yoki '0' (faqat holat); registrator — faqat '0'. Boshqasi — 403",
+            "schema": {
+              "example": "13",
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": ""

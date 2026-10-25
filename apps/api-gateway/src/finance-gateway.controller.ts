@@ -54,6 +54,7 @@ import {
   CreateCashboxRequestDto,
   CreateOperatorPaymentRequestDto,
   CreateSalaryRequestDto,
+  CurrentShiftQueryDto,
   RecordFinancialBalanceRequestDto,
   FindCashboxByUserQueryDto,
   FindHistoryQueryDto,
@@ -187,6 +188,16 @@ function toNotFoundException(
       : '';
   return new NotFoundException(message || fallbackMessage);
 }
+
+/**
+ * 32Sw3DfC — superadmin/admin filial kassasi sahifasida, filial smenasi
+ * ochilmagan bo'lsa (ular filial smenasini ochmaydi — faqat menejer).
+ */
+export const BRANCH_SHIFT_MANAGER_ONLY_MESSAGE =
+  'Filial menejeri smenani ochishi kerak';
+
+/** Smena kassasi: markaziy asosiy (MAIN) kassa `user_id` si. */
+const MAIN_SHIFT_CASHBOX_USER_ID = '0';
 
 /** IjqTYQks — filial puli HQ'ga faqat HQ (superadmin/admin) qabul qilganda o'tadi (ega qarori #7). */
 export const BRANCH_TO_MAIN_HQ_ONLY_MESSAGE =
@@ -3050,11 +3061,125 @@ export class FinanceGatewayController {
   @ApiOperation({
     summary: "Kassaning joriy ochiq smenasi (MAIN; menejer — o'z filiali)",
     description:
-      "(kfdfYDik) `data.shift` — ochiq smena yoki null; `data.required` — shu kassada smenasiz pul operatsiyalari bloklanadimi (FINANCE_REQUIRE_OPEN_SHIFT: MAIN — main/all, filial — all). R6: menejer — o'z filiali kassasi. (8OYPuz7J) `data.last_closed` — shu kassaning eng oxirgi yopilgan smenasi (closed_at DESC, to'liq qator) yoki null; smena qatorlarida `opened_by_name` / `closed_by_name`.",
+      "(kfdfYDik) `data.shift` — ochiq smena yoki null; `data.required` — shu kassada smenasiz pul operatsiyalari bloklanadimi (FINANCE_REQUIRE_OPEN_SHIFT: MAIN — main/all, filial — all). R6: menejer — o'z filiali kassasi. (8OYPuz7J) `data.last_closed` — shu kassaning eng oxirgi yopilgan smenasi (closed_at DESC, to'liq qator) yoki null; smena qatorlarida `opened_by_name` / `closed_by_name`. (32Sw3DfC) `?cashbox_user_id=` — superadmin/admin filial kassasi sahifasida shu filial smenasi va `required` (FAQAT o'qish; mavjud bo'lmagan filial — 404). `data.can_open` — so'rovchi shu kassada smena ocha oladimi (superadmin/admin filialda — yo'q: filial smenasini menejer ochadi); smena yo'q va ocha olmasa `data.lock_message` = «Filial menejeri smenani ochishi kerak», aks holda null. Menejer `?cashbox_user_id=0` — HQ asosiy kassa smenasi HOLATI (`status_only: true`; pul maydonlarisiz, `last_closed` yo'q).",
   })
-  async currentShift(@Req() req: { user: JwtUser }) {
-    const scope = await this.resolveShiftCashboxScope(req?.user);
-    return this.send({ cmd: 'finance.shift.current' }, scope);
+  async currentShift(
+    @Req() req: { user: JwtUser },
+    @Query() query?: CurrentShiftQueryDto,
+  ) {
+    const user = req?.user;
+    const requested =
+      query?.cashbox_user_id != null && String(query.cashbox_user_id) !== ''
+        ? String(query.cashbox_user_id)
+        : null;
+
+    // (32Sw3DfC) Superadmin/admin — istalgan filial smenasini O'QIYDI
+    // (filial kassasi sahifasi `/payments/cash-detail/:id`). Ochish/yopish
+    // doirasi o'zgarmagan: ular faqat MAIN smenasini ochadi.
+    if (this.isPrivileged(user)) {
+      if (requested && requested !== MAIN_SHIFT_CASHBOX_USER_ID) {
+        // Faqat mavjud filial: yo'q bo'lsa branch-service 404 qaytaradi.
+        await this.sendBranch(
+          { cmd: 'branch.find_by_id' },
+          { id: requested, requester: this.toRequester(user) },
+        );
+        return this.withShiftAccess(
+          await this.send(
+            { cmd: 'finance.shift.current' },
+            { cashbox_user_id: requested },
+          ),
+          false,
+        );
+      }
+      return this.withShiftAccess(
+        await this.send({ cmd: 'finance.shift.current' }, {}),
+        true,
+      );
+    }
+
+    const scope = await this.resolveShiftCashboxScope(user);
+    if (scope.cashbox_user_id) {
+      // Menejer. N20 — HQ asosiy kassa smenasi HOLATI (faqat status).
+      if (requested === MAIN_SHIFT_CASHBOX_USER_ID) {
+        return this.mainShiftStatusOnly(
+          await this.send({ cmd: 'finance.shift.current' }, {}),
+        );
+      }
+      if (requested && requested !== scope.cashbox_user_id) {
+        throw new ForbiddenException(
+          "Siz faqat o'z filialingiz kassasi smenasini ko'ra olasiz",
+        );
+      }
+      return this.withShiftAccess(
+        await this.send({ cmd: 'finance.shift.current' }, scope),
+        true,
+      );
+    }
+
+    // Registrator — avvalgidek faqat MAIN.
+    if (requested && requested !== MAIN_SHIFT_CASHBOX_USER_ID) {
+      throw new ForbiddenException(
+        "Siz faqat asosiy kassa smenasini ko'ra olasiz",
+      );
+    }
+    return this.withShiftAccess(
+      await this.send({ cmd: 'finance.shift.current' }, {}),
+      true,
+    );
+  }
+
+  /**
+   * (32Sw3DfC) `can_open` — so'rovchi shu kassada smenani ocha oladimi;
+   * ocha olmasa va ochiq smena yo'q bo'lsa — qulf matni (ega: menejer yo'q
+   * paytda ham superadmin filial smenasini OCHMAYDI).
+   */
+  private withShiftAccess<T>(response: T, canOpen: boolean): T {
+    const data = (response as { data?: unknown } | null)?.data;
+    if (!data || typeof data !== 'object') {
+      return response;
+    }
+    const record = data as Record<string, unknown>;
+    record.can_open = canOpen;
+    record.lock_message =
+      !canOpen && !record.shift ? BRANCH_SHIFT_MANAGER_ONLY_MESSAGE : null;
+    return response;
+  }
+
+  /**
+   * (32Sw3DfC, N20) Menejerga HQ asosiy kassa smenasining faqat HOLATI:
+   * ochiqmi, qachon va kim ochgan. Pul maydonlari (ochilish qoldig'i, yopilgan
+   * smena natijasi) chiqmaydi — bu HQ kassasi ma'lumoti.
+   */
+  private mainShiftStatusOnly<T>(response: T): T {
+    const holder = response as { data?: unknown } | null;
+    const data =
+      holder?.data && typeof holder.data === 'object'
+        ? (holder.data as Record<string, unknown>)
+        : null;
+    if (!holder || !data) {
+      return response;
+    }
+    const shift =
+      data.shift && typeof data.shift === 'object'
+        ? (data.shift as Record<string, unknown>)
+        : null;
+    holder.data = {
+      shift: shift
+        ? {
+            id: shift.id ?? null,
+            status: shift.status ?? null,
+            cashbox_user_id: MAIN_SHIFT_CASHBOX_USER_ID,
+            opened_at: shift.opened_at ?? null,
+            opened_by_name: shift.opened_by_name ?? null,
+          }
+        : null,
+      required: data.required === true,
+      cashbox_user_id: MAIN_SHIFT_CASHBOX_USER_ID,
+      status_only: true,
+      can_open: false,
+      lock_message: null,
+    };
+    return response;
   }
 
   // ───────── 3PE0B03q — asosiy kassa NOMLI kartalari (BeePost cashbox_card) ─────────
