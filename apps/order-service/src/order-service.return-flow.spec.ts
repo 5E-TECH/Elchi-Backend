@@ -329,6 +329,43 @@ describe('OrderServiceService return flow', () => {
     );
   });
 
+  it('zkRab9M2 (BG6): markReturnedToMarket — ruxsat kod bilan ochilgan bo`lsa usul pin (buyurtma va tracking)', async () => {
+    const { service, orderRepo, trackingRepo } = makeService({
+      orderStatus: Order_status.CANCELLED,
+      hasReceivedReturnBatch: true,
+      holderType: OrderHolderType.HQ,
+      holderBranchId: null,
+      handoverSession: {
+        id: '7',
+        market_id: 'm1',
+        scanned_by_user_id: '9',
+        authorization_expires_at: new Date(Date.now() + 60_000),
+        authorized_via: 'pin',
+        consumed_at: null,
+        isDeleted: false,
+      },
+    });
+
+    await service.markReturnedToMarket(
+      { id: '9', roles: ['superadmin'] },
+      '101',
+      'MHA-ok',
+    );
+
+    expect(orderRepo.save).toHaveBeenCalledWith(
+      expect.objectContaining({ market_handover_method: 'pin' }),
+    );
+    expect(trackingRepo.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'returned_to_market',
+        metadata: expect.objectContaining({
+          method: 'pin',
+          handover_session_id: '7',
+        }),
+      }),
+    );
+  });
+
   it('markReturnedToMarket cannot run twice', async () => {
     const { service } = makeService({
       orderStatus: Order_status.RETURNED_TO_MARKET,

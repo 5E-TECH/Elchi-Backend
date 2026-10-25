@@ -2,7 +2,12 @@ import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { ClientProxy, RpcException } from '@nestjs/microservices';
 import { DataSource, In, IsNull, QueryFailedError, Repository } from 'typeorm';
-import { createHash, randomBytes } from 'node:crypto';
+import {
+  createHash,
+  randomBytes,
+  randomInt,
+  timingSafeEqual,
+} from 'node:crypto';
 import { Order, OrderReplacementState } from '../entities/order.entity';
 import { OrderItem } from '../entities/order-item.entity';
 import {
@@ -17,7 +22,10 @@ import { OrderSettlementCarry } from '../entities/order-settlement-carry.entity'
 import { BranchTransferBatch } from '../entities/branch-transfer-batch.entity';
 import { BranchTransferBatchItem } from '../entities/branch-transfer-batch-item.entity';
 import { BranchTransferBatchHistory } from '../entities/branch-transfer-batch-history.entity';
-import { MarketCancelledHandoverSession } from '../entities/market-cancelled-handover-session.entity';
+import {
+  MarketCancelledHandoverSession,
+  type MarketHandoverAuthorizedVia,
+} from '../entities/market-cancelled-handover-session.entity';
 import {
   ExtraCostApprovalAction,
   OrderExtraCostApproval,
@@ -112,8 +120,28 @@ import {
 } from './order-replacement';
 import {
   CANCEL_HANDOVER_TRACKING_ACTION,
+  marketHandoverMethodOf,
   type CancelHandoverMethod,
 } from '../cancel-return/cancel-return';
+
+/** Market bekorlar QR'i (va uning yonidagi kod) amal qilish vaqti — 2 daqiqa. */
+const MARKET_CANCELLED_QR_TTL_SECONDS = 120;
+/** QR skani yoki kod bilan ochiladigan topshirish ruxsati (MHA) — 5 daqiqa. */
+const MARKET_HANDOVER_AUTH_TTL_SECONDS = 300;
+/** zkRab9M2 (BG6): noto'g'ri kod shu marta kiritilsa sessiya bloklanadi. */
+const MARKET_CANCELLED_PIN_MAX_ATTEMPTS = 5;
+const MARKET_CANCELLED_PIN_RE = /^\d{6}$/;
+
+/**
+ * zkRab9M2 (BG6) — kod xatolarining mashina sababi (`data.reason`, gateway
+ * `publicErrorData` orqali FE'ga chiqadi; `details` — qolgan urinishlar).
+ */
+export const MARKET_CANCELLED_PIN_ERROR = {
+  invalid: 'market_cancelled_pin_invalid',
+  blocked: 'market_cancelled_pin_blocked',
+  expired: 'market_cancelled_pin_expired',
+  notFound: 'market_cancelled_pin_not_found',
+} as const;
 
 const CANCELLED_HANDOVER_MANUAL_REASONS = new Set([
   'QR yirtilgan',
@@ -654,6 +682,94 @@ export class OrderLifecycleService {
 
   private generateHandoverToken(prefix: 'MCR' | 'MHA'): string {
     return `${prefix}-${randomBytes(32).toString('base64url')}`;
+  }
+
+  /** zkRab9M2 (BG6) — 6 xonali kod (identity OTP bilan bir xil generator). */
+  private generateHandoverPin(): string {
+    return String(randomInt(0, 1_000_000)).padStart(6, '0');
+  }
+
+  /**
+   * Kod xeshi: sessiyaning QR xeshi bilan tuzlangan (bir xil kod boshqa
+   * sessiyada boshqa xesh). Ochiq kod bazaga yozilmaydi.
+   */
+  private hashHandoverPin(qrTokenHash: string, pin: string): string {
+    return createHash('sha256')
+      .update(`MCP:${qrTokenHash}:${pin}`)
+      .digest('hex');
+  }
+
+  private handoverPinMatches(
+    session: Pick<MarketCancelledHandoverSession, 'qr_token_hash' | 'pin_hash'>,
+    pin: string,
+  ): boolean {
+    if (!session.pin_hash) return false;
+    const expected = Buffer.from(session.pin_hash, 'hex');
+    const actual = Buffer.from(
+      this.hashHandoverPin(session.qr_token_hash, pin),
+      'hex',
+    );
+    return (
+      expected.length === actual.length && timingSafeEqual(expected, actual)
+    );
+  }
+
+  private pinError(
+    message: string,
+    reason: (typeof MARKET_CANCELLED_PIN_ERROR)[keyof typeof MARKET_CANCELLED_PIN_ERROR],
+    remainingAttempts?: number,
+  ): RpcException {
+    return new RpcException({
+      statusCode: 400,
+      message,
+      data: {
+        reason,
+        ...(remainingAttempts === undefined
+          ? {}
+          : {
+              details: {
+                remaining_attempts: remainingAttempts,
+                max_attempts: MARKET_CANCELLED_PIN_MAX_ATTEMPTS,
+              },
+            }),
+      },
+    });
+  }
+
+  /**
+   * QR skani va kod uchun YAGONA ruxsat ochish (zkRab9M2 — ikki yo'l bir xil
+   * MHA ruxsatini beradi, faqat `authorized_via` farq qiladi). Sessiya
+   * qulflangan tranzaksiya ichida chaqiriladi; javob shakli ikkalasida bir xil.
+   */
+  private async authorizeMarketHandoverSession(
+    sessionRepo: Repository<MarketCancelledHandoverSession>,
+    session: MarketCancelledHandoverSession,
+    requesterId: string,
+    via: MarketHandoverAuthorizedVia,
+    now: Date,
+  ) {
+    const authorizationToken = this.generateHandoverToken('MHA');
+    const authorizationExpiresAt = new Date(
+      now.getTime() + MARKET_HANDOVER_AUTH_TTL_SECONDS * 1000,
+    );
+
+    session.scanned_at = now;
+    session.scanned_by_user_id = requesterId;
+    session.authorization_token_hash =
+      this.hashHandoverToken(authorizationToken);
+    session.authorization_expires_at = authorizationExpiresAt;
+    session.authorized_via = via;
+    await sessionRepo.save(session);
+
+    return {
+      market_id: String(session.market_id),
+      authorized: true,
+      authorization_token: authorizationToken,
+      authorized_at: now.toISOString(),
+      expires_at: authorizationExpiresAt.toISOString(),
+      remaining_seconds: MARKET_HANDOVER_AUTH_TTL_SECONDS,
+      method: via,
+    };
   }
 
   /**
@@ -4277,9 +4393,11 @@ export class OrderLifecycleService {
       const handoverBy = this.numericActorId(requester?.id);
       order.last_handover_at = handoverAt;
       order.last_handover_by = handoverBy;
+      // zkRab9M2 (BG6): ruxsat market kodi bilan ochilgan bo'lsa — `pin`.
+      const handoverMethod = marketHandoverMethodOf(session);
       order.market_handover_at = handoverAt;
       order.market_handover_by = handoverBy;
-      order.market_handover_method = 'qr';
+      order.market_handover_method = handoverMethod;
       order.market_handover_branch_id = handoverBranchId;
       await orderRepo.save(order);
 
@@ -4292,10 +4410,13 @@ export class OrderLifecycleService {
           changed_by_role: requester?.id
             ? this.custody.toTrackingRole(requester.roles)
             : 'system',
-          note: `Xodim ${String(requester?.id ?? 'unknown')} market egasiga topshirdi`,
-          action: CANCEL_HANDOVER_TRACKING_ACTION.qr,
+          note:
+            handoverMethod === 'pin'
+              ? `Xodim ${String(requester?.id ?? 'unknown')} market egasiga kod tasdiqi bilan topshirdi`
+              : `Xodim ${String(requester?.id ?? 'unknown')} market egasiga topshirdi`,
+          action: CANCEL_HANDOVER_TRACKING_ACTION[handoverMethod],
           metadata: {
-            method: 'qr',
+            method: handoverMethod,
             market_id: marketId,
             branch_id: handoverBranchId,
             branch_name: handoverBranchName,
@@ -4396,12 +4517,20 @@ export class OrderLifecycleService {
     }
 
     const now = new Date();
-    const expiresAt = new Date(now.getTime() + 2 * 60 * 1000);
+    const expiresAt = new Date(
+      now.getTime() + MARKET_CANCELLED_QR_TTL_SECONDS * 1000,
+    );
     const qrToken = this.generateHandoverToken('MCR');
+    const qrTokenHash = this.hashHandoverToken(qrToken);
+    // zkRab9M2 (BG6): QR yonidagi 6 xonali kod — xodim skanerlay olmasa, uni
+    // yozadi. Muddat QR bilan bir xil; bazada faqat xeshi.
+    const pin = this.generateHandoverPin();
     const sessionRepo = this.dataSource.getRepository(
       MarketCancelledHandoverSession,
     );
 
+    // Bitta market — bitta faol (skanerlanmagan) sessiya: eski QR va uning
+    // kodi yangisi chiqqanda yaroqsiz (kod bo'yicha qidiruv shunga tayanadi).
     await sessionRepo
       .createQueryBuilder()
       .update(MarketCancelledHandoverSession)
@@ -4413,13 +4542,17 @@ export class OrderLifecycleService {
 
     const session = sessionRepo.create({
       market_id: marketId,
-      qr_token_hash: this.hashHandoverToken(qrToken),
+      qr_token_hash: qrTokenHash,
       qr_expires_at: expiresAt,
       scanned_at: null,
       scanned_by_user_id: null,
       authorization_token_hash: null,
       authorization_expires_at: null,
       consumed_at: null,
+      pin_hash: this.hashHandoverPin(qrTokenHash, pin),
+      pin_failed_attempts: 0,
+      pin_blocked_at: null,
+      authorized_via: null,
     });
     await sessionRepo.save(session);
 
@@ -4428,7 +4561,10 @@ export class OrderLifecycleService {
         market_id: marketId,
         qr_token: qrToken,
         qr_expires_at: expiresAt.toISOString(),
-        qr_ttl_seconds: 120,
+        qr_ttl_seconds: MARKET_CANCELLED_QR_TTL_SECONDS,
+        pin,
+        pin_expires_at: expiresAt.toISOString(),
+        pin_max_attempts: MARKET_CANCELLED_PIN_MAX_ATTEMPTS,
       },
       201,
       'Market canceled handover QR yaratildi',
@@ -4476,27 +4612,26 @@ export class OrderLifecycleService {
       if (session.scanned_at || session.authorization_token_hash) {
         this.badRequest('QR allaqachon ishlatilgan');
       }
+      // zkRab9M2 (BG6): 5 marta xato kod — sessiya QR bilan ham ochilmaydi.
+      if (session.pin_blocked_at) {
+        throw this.pinError(
+          '5 marta xato kod kiritildi — market yangi QR chiqarsin',
+          MARKET_CANCELLED_PIN_ERROR.blocked,
+          0,
+        );
+      }
 
-      const authorizationToken = this.generateHandoverToken('MHA');
-      const authorizationExpiresAt = new Date(now.getTime() + 5 * 60 * 1000);
-
-      session.scanned_at = now;
-      session.scanned_by_user_id = requesterId;
-      session.authorization_token_hash =
-        this.hashHandoverToken(authorizationToken);
-      session.authorization_expires_at = authorizationExpiresAt;
-      await sessionRepo.save(session);
+      const authorization = await this.authorizeMarketHandoverSession(
+        sessionRepo,
+        session,
+        requesterId,
+        'qr',
+        now,
+      );
       await queryRunner.commitTransaction();
 
       return successRes(
-        {
-          market_id: String(session.market_id),
-          authorized: true,
-          authorization_token: authorizationToken,
-          authorized_at: now.toISOString(),
-          expires_at: authorizationExpiresAt.toISOString(),
-          remaining_seconds: 300,
-        },
+        authorization,
         200,
         'Marketga topshirish uchun 5 daqiqalik ruxsat ochildi',
       );
@@ -4506,6 +4641,142 @@ export class OrderLifecycleService {
     } finally {
       await queryRunner.release();
     }
+  }
+
+  /**
+   * zkRab9M2 (BG6) — QR o'rniga market ekranidagi 6 xonali KOD bilan topshirish
+   * ruxsatini ochish (`POST /scan/market-cancelled { market_id, pin }`).
+   *
+   * Kod marketning OXIRGI skanerlanmagan sessiyasiga tegishli (bitta faol
+   * sessiya qoidasi — `createMarketCancelledHandoverQr`). Sessiya qatori
+   * `FOR UPDATE` bilan qulflanadi — parallel urinishlar ketma-ket sanaladi.
+   *   - sessiya yo'q / kodsiz (eski)        → 400 `market_cancelled_pin_not_found`;
+   *   - muddat tugagan (QR bilan bir xil)   → 400 `market_cancelled_pin_expired`;
+   *   - bloklangan (5 xato)                 → 400 `market_cancelled_pin_blocked`;
+   *   - noto'g'ri kod                       → hisoblagich +1 (COMMIT qilinadi),
+   *     400 `market_cancelled_pin_invalid` + `details.remaining_attempts`;
+   *     5-xatoda `pin_blocked_at` yoziladi va javob — `…_blocked`;
+   *   - to'g'ri kod → QR skani bilan AYNAN bir xil 5 daqiqalik MHA ruxsati,
+   *     `authorized_via = 'pin'`, javobda `method: 'pin'`.
+   * Rol doirasi — QR skani bilan bir xil (`resolveMarketHandoverRequester`).
+   */
+  async verifyMarketCancelledHandoverPin(input: {
+    market_id: string;
+    pin: string;
+    requester: { id: string; roles?: string[] };
+  }) {
+    const marketId = String(input?.market_id ?? '').trim();
+    const pin = String(input?.pin ?? '').trim();
+    const requesterId = String(input?.requester?.id ?? '').trim();
+    if (!/^\d{1,18}$/.test(marketId) || !requesterId) {
+      this.badRequest('market_id yoki requester noto‘g‘ri');
+    }
+    if (!MARKET_CANCELLED_PIN_RE.test(pin)) {
+      this.badRequest('Kod 6 ta raqamdan iborat bo‘lishi kerak');
+    }
+
+    await this.resolveMarketHandoverRequester(input.requester);
+
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+
+    // Noto'g'ri kod hisoblagichi COMMIT qilingach tashlanadigan xato (aks holda
+    // `catch` dagi rollback urinishni o'chirib yuborardi — 5 ta chegara ishlamasdi).
+    let failure: RpcException | null = null;
+    try {
+      const sessionRepo = queryRunner.manager.getRepository(
+        MarketCancelledHandoverSession,
+      );
+      const session = await sessionRepo.findOne({
+        where: {
+          market_id: marketId,
+          scanned_at: IsNull(),
+          isDeleted: false,
+        },
+        order: { createdAt: 'DESC', id: 'DESC' },
+        lock: { mode: 'pessimistic_write' },
+      });
+
+      if (!session || !session.pin_hash) {
+        throw this.pinError(
+          'Faol QR topilmadi — market yangi QR chiqarsin',
+          MARKET_CANCELLED_PIN_ERROR.notFound,
+        );
+      }
+      const now = new Date();
+      if (session.authorization_token_hash) {
+        this.badRequest('QR allaqachon ishlatilgan');
+      }
+      if (
+        session.pin_blocked_at ||
+        session.pin_failed_attempts >= MARKET_CANCELLED_PIN_MAX_ATTEMPTS
+      ) {
+        throw this.pinError(
+          '5 marta xato kod kiritildi — market yangi QR chiqarsin',
+          MARKET_CANCELLED_PIN_ERROR.blocked,
+          0,
+        );
+      }
+      if (session.qr_expires_at.getTime() <= now.getTime()) {
+        throw this.pinError(
+          'Kod muddati tugagan — market yangi QR chiqarsin',
+          MARKET_CANCELLED_PIN_ERROR.expired,
+        );
+      }
+
+      if (!this.handoverPinMatches(session, pin)) {
+        const attempts = (session.pin_failed_attempts ?? 0) + 1;
+        const remaining = Math.max(
+          0,
+          MARKET_CANCELLED_PIN_MAX_ATTEMPTS - attempts,
+        );
+        session.pin_failed_attempts = attempts;
+        if (remaining === 0) {
+          session.pin_blocked_at = now;
+        }
+        await sessionRepo.save(session);
+        await queryRunner.commitTransaction();
+        failure =
+          remaining === 0
+            ? this.pinError(
+                '5 marta xato kod kiritildi — market yangi QR chiqarsin',
+                MARKET_CANCELLED_PIN_ERROR.blocked,
+                0,
+              )
+            : this.pinError(
+                `Kod noto‘g‘ri — yana ${remaining} ta urinish qoldi`,
+                MARKET_CANCELLED_PIN_ERROR.invalid,
+                remaining,
+              );
+      } else {
+        const authorization = await this.authorizeMarketHandoverSession(
+          sessionRepo,
+          session,
+          requesterId,
+          'pin',
+          now,
+        );
+        await queryRunner.commitTransaction();
+
+        return successRes(
+          authorization,
+          200,
+          'Marketga topshirish uchun 5 daqiqalik ruxsat kod bilan ochildi',
+        );
+      }
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      this.handleDbError(error);
+    } finally {
+      await queryRunner.release();
+    }
+
+    // Bu yerga faqat noto'g'ri kod (hisoblagich saqlangan) bilan keladi.
+    throw (
+      failure ??
+      this.pinError('Kod tekshirilmadi', MARKET_CANCELLED_PIN_ERROR.invalid)
+    );
   }
 
   async completeMarketCancelledHandover(input: {
@@ -4595,6 +4866,9 @@ export class OrderLifecycleService {
     await queryRunner.startTransaction();
 
     let handedOverOrders: Order[] = [];
+    // zkRab9M2 (BG6): ruxsat usuli (`qr` | `pin`) — jurnal uchun tranzaksiyadan keyin ham.
+    let authorizedVia: Extract<CancelHandoverMethod, 'qr' | 'pin'> | null =
+      null;
     try {
       const sessionRepo = queryRunner.manager.getRepository(
         MarketCancelledHandoverSession,
@@ -4631,6 +4905,8 @@ export class OrderLifecycleService {
           this.forbidden('5 daqiqalik topshirish ruxsati tugagan');
         }
       }
+
+      authorizedVia = session ? marketHandoverMethodOf(session) : null;
 
       // F3 — HQ xodimi HQda turgan orderlarni, filial xodimi esa FAQAT o'z
       // filialida turgan bekor orderlarni topshira oladi.
@@ -4677,10 +4953,11 @@ export class OrderLifecycleService {
         order.last_handover_at = now;
         order.last_handover_by = requesterId;
         // fL79tFbs (BG2) — usul va joy buyurtmada ham saqlanadi (ro'yxat uchun).
+        // zkRab9M2 (BG6) — market ruxsati kod bilan ochilgan bo'lsa `pin`.
         const handoverMethod: CancelHandoverMethod = manualOverrideReason
           ? 'manual'
           : isQrRequired
-            ? 'qr'
+            ? (authorizedVia ?? 'qr')
             : 'no_qr';
         order.market_handover_at = now;
         order.market_handover_by = this.numericActorId(requesterId);
@@ -4697,15 +4974,19 @@ export class OrderLifecycleService {
             changed_by_role: this.custody.toTrackingRole(input.requester.roles),
             note: manualOverrideReason
               ? `Bekor qilingan order market ${marketId}ga QR buzilgani sabab qo'lda tasdiqlanib topshirildi: ${manualOverrideReason}`
-              : isQrRequired
-                ? `Bekor qilingan order market ${marketId}ga QR tasdiqi bilan topshirildi`
-                : `Bekor qilingan order market ${marketId}ga QR talab qilinmasdan topshirildi`,
+              : handoverMethod === 'pin'
+                ? `Bekor qilingan order market ${marketId}ga kod tasdiqi bilan topshirildi`
+                : isQrRequired
+                  ? `Bekor qilingan order market ${marketId}ga QR tasdiqi bilan topshirildi`
+                  : `Bekor qilingan order market ${marketId}ga QR talab qilinmasdan topshirildi`,
             // fL79tFbs (BG2): QR yo'li ham aniq `action` + `metadata` bilan
             // (ilgari ikkalasi ham bo'sh — usul faqat izoh matnidan taxmin qilinardi).
             action:
               handoverMethod === 'manual'
                 ? CANCEL_HANDOVER_TRACKING_ACTION.manual
-                : CANCEL_HANDOVER_TRACKING_ACTION.qr,
+                : handoverMethod === 'pin'
+                  ? CANCEL_HANDOVER_TRACKING_ACTION.pin
+                  : CANCEL_HANDOVER_TRACKING_ACTION.qr,
             metadata: {
               method: handoverMethod,
               market_id: marketId,
@@ -4766,6 +5047,8 @@ export class OrderLifecycleService {
           ? 'market_cancelled_qr'
           : 'market_cancelled_without_qr',
         qr_required: isQrRequired,
+        // zkRab9M2 (BG6): market ruxsati qanday ochilgan — `qr` | `pin`.
+        authorized_via: authorizedVia,
         order_count: handedOverOrders.length,
         manual_override_count: manualOverrideByOrderId.size,
         manual_overrides: [...manualOverrideByOrderId.entries()].map(

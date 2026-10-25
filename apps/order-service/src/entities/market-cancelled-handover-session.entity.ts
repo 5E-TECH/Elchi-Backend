@@ -37,4 +37,28 @@ export class MarketCancelledHandoverSession extends BaseEntity {
 
   @Column({ type: 'timestamptz', nullable: true })
   consumed_at!: Date | null;
+
+  /**
+   * zkRab9M2 (BG6) — QR yonidagi 6 xonali kod: sha256('MCP:' + qr_token_hash +
+   * ':' + pin). Ochiq kod saqlanmaydi; eski sessiyalarda `null` (kod yo'q).
+   */
+  @Column({ type: 'varchar', length: 64, nullable: true })
+  pin_hash!: string | null;
+
+  /** Noto'g'ri kod soni (5 tasida sessiya bloklanadi). */
+  @Column({ type: 'smallint', default: 0 })
+  pin_failed_attempts!: number;
+
+  /** 5-xato payti — sessiya QR bilan ham, kod bilan ham ochilmaydi. */
+  @Column({ type: 'timestamptz', nullable: true })
+  pin_blocked_at!: Date | null;
+
+  /**
+   * Ruxsat qanday ochilgan: `qr` (skan) yoki `pin` (kod). Topshirish usuli
+   * (`orders.market_handover_method`, tracking `metadata.method`) shundan.
+   */
+  @Column({ type: 'varchar', length: 8, nullable: true })
+  authorized_via!: MarketHandoverAuthorizedVia | null;
 }
+
+export type MarketHandoverAuthorizedVia = 'qr' | 'pin';

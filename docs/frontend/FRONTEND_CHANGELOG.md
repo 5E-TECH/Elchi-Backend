@@ -23,6 +23,36 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-10-25 — Bekorlarni marketga topshirish: QR yonida 6 xonali kod (zkRab9M2, BG6; Trello vNcGDnNh 3-band)
+
+Deploy: order-service (migratsiya `1716000000156`), api-gateway (DTO/Swagger). Eski QR oqimi o'zgarmagan — kod
+qo'shimcha yo'l. Ega so'rovi: market ekranida QR yonida 6 xonali kod; xodim QR'ni skanerlaydi **yoki** kodni yozadi.
+
+- [2026-10-25] ✏️ [gateway/order] — `POST /orders/markets/:marketId/cancelled/qr` (market) javobiga yangi maydonlar:
+  **`pin`** (6 raqamli satr, masalan `"042917"` — boshidagi nol saqlanadi), **`pin_expires_at`** (= `qr_expires_at`,
+  2 daqiqa), **`pin_max_attempts: 5`**. Bazada faqat xeshi. Yangi QR eski QR'ni ham, kodini ham yaroqsiz qiladi
+  (bitta market — bitta faol sessiya). Qo'shimcha (additive) — eski FE buzilmaydi.
+- [2026-10-25] ✏️ [gateway/order] — `POST /scan/market-cancelled` endi ikki shaklni qabul qiladi:
+  `{ qr_token }` (avvalgidek) **yoki** `{ market_id, pin }` (`market_id` — raqam satri, `pin` — `^\d{6}$`). Ikkalasi
+  birga — 400. Rollar avvalgidek (superadmin/admin — HQ, menejer/registrator — o'z filiali). Javob ikkalasida bir xil:
+  `{ type: 'market_cancelled_handover', data: { market_id, authorized: true, authorization_token: 'MHA-…',
+  authorized_at, expires_at, remaining_seconds: 300, method: 'qr' | 'pin' } }` — `method` yangi (QR yo'lida `qr`).
+  Keyingi qadam o'zgarmagan: `authorization_token` bilan `POST /orders/markets/:id/cancelled/handover` yoki
+  `mark-returned-to-market`.
+- [2026-10-25] ✏️ [order] — kod xatolari: 400 + `data.reason` (gateway konverti `data`):
+  - `market_cancelled_pin_invalid` — kod noto'g'ri; `data.details: { remaining_attempts, max_attempts: 5 }`
+    (matn: «Kod noto‘g‘ri — yana N ta urinish qoldi»);
+  - `market_cancelled_pin_blocked` — 5 marta xato: sessiya **QR bilan ham** ochilmaydi, market yangi QR chiqarsin
+    (`remaining_attempts: 0`). Bloklangan sessiyaning QR skani ham shu sabab bilan 400;
+  - `market_cancelled_pin_expired` — kod (QR) muddati tugagan; urinish sanalmaydi;
+  - `market_cancelled_pin_not_found` — marketda faol (skanerlanmagan) QR yo'q yoki eski kodsiz QR.
+- [2026-10-25] 🟢 [order] — kod bilan ochilgan ruxsatda topshirish usuli **`pin`**: `orders.market_handover_method`
+  (`cancel_return.handover_method`) va tracking `metadata.method = 'pin'` (`action` — `returned_to_market`, QR bilan
+  bir xil). Kod sessiyasida qo'lda tasdiqlangan posilka — avvalgidek `manual`. FE `cancelReturnStage.ts` dagi «Parol
+  orqali» yorlig'i shu qiymatni o'qiydi.
+- 🔧 FE (Elchi-Frontend `feat/handover-pin-ui`): market QR oynasida kod; xodim sahifasida «Market QR kerak» holatida
+  «Kod bilan tasdiqlash» oynasi.
+
 ### 2026-10-25 — Yetkazish narxi: hajm qaysi kg dan boshlab hisobga olinadi (AQ9lkgVB)
 
 Deploy: logistics-service (migratsiya `1716000000154`), api-gateway (DTO/Swagger). Migratsiyadan keyin chegara
