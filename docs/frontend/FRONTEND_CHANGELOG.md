@@ -23,6 +23,22 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-10-25 — AI idempotentlik qoldiqlari (Cp2v3ZJ7) va kampaniya yuklamasi (xHPdpj0W)
+
+Deploy: faqat notification-service (bot matni). Migratsiya yo'q. API kontrakti o'zgarmagan.
+
+- [2026-10-25] 🟢 [notification/bot] — Telegram'da tozalangan (>48 soat) yoki tanilmagan tugma bosilganda toast endi
+  «⌛ Bu tugma eskirgan — endi ishlamaydi. Menyuni qayta oching: /start» (avval «Bu tugma endi ishlamaydi…»).
+  AI preview kartasining eski tugmasi: 24–48 soatda «⏳ Bu ro'yxat eskirgan — matnni qayta yuboring.», yaratilgan /
+  bekor qilingan karta — o'z holati matni; eski karta hech qachon boshqa kartaning mazmunini yaratmaydi (har tugma
+  o'z qoralamasiga bog'langan). Frontend o'zgarishi shart emas.
+- [2026-10-25] 🟢 [order/ai] — `POST /orders/ai-confirm` kontrakti o'zgarmagan. Ayni `draft_id` + `ai_item_index`
+  ikki marta yuborilsa ikkinchisi `idempotent_replay: true` va narx (pul) qaydi bir marta. 🔧 FE (Cp2v3ZJ7 qolgan
+  TC'lari, v2 AI paneli): har buyurtmaga `draft_id` + `ai_item_index` yuborish va `idempotent_replay: true` ni
+  «Yaratildi (N)» ro'yxatida ko'rsatish (xato emas) — frontend ishi.
+- [2026-10-25] 🟢 [notification/campaign] — kontrakt o'zgarmagan; kampaniya paytida bot polling va
+  `GET /notifications/inbox` (p95 < 500 ms) uchun yuklama spec'i qo'shildi.
+
 ### 2026-10-25 — Market operatori: viloyat tumanlari va tuman tafsiloti (MO-7, OfRSoRUX / N11)
 
 Deploy: faqat api-gateway. Migratsiya yo'q.
