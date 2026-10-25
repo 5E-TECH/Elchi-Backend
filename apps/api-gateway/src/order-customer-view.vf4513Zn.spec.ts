@@ -277,8 +277,10 @@ function expectCustomerViewOnly(payload: unknown, minCount = 1) {
       id: '49',
       name: 'TEST Claude Mijoz',
       phone_number: '+998900000049',
-      extra_number: '+998900000050',
-      address: 'Asaka, 1-uy',
+      // txmkXVBa (review 2026-10-26): buyurtmaning o'z manzili va qo'shimcha
+      // raqami kartadagidan ustun (fixture'da buyurtma ustunlari `<ustun>-qiymat`).
+      extra_number: 'extra_number-qiymat',
+      address: 'address-qiymat',
       district: { name: 'Asaka' },
       region: { name: 'Andijon' },
     });
