@@ -3319,7 +3319,10 @@ export class OrderGatewayController {
     required: false,
     type: String,
     description:
-      'Customer name/phone search, or order number (order id, e.g. 1251175). ' +
+      'FoCaUF10 (owner rule 2026-10-25). Visible order number "EL-N" (also "#EL-N", "№EL-N", "el N", ' +
+      'case-insensitive) → ONLY order id = N − 100000, no customer search. Any other text → customer name, ' +
+      'main phone AND extra phone (extra_number), plus order id when the text is a number (internal id; a ' +
+      '6–8 digit number also as visible number N − 100000). ' +
       'Response has search_truncated=true when more than 1000 customers match.',
   })
   @ApiQuery({

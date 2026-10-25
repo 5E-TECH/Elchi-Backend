@@ -43,6 +43,23 @@ Deploy: faqat api-gateway. Migratsiya yo'q.
   🔧 FE: menejerda «HQ'ga o'tkazish» tugmasi va formasi yo'q (FE `fix/manager-no-hq-transfer`); menejer HQ kassasi
   sahifasini faqat ko'radi (`GET cashbox/manager/settlement`, `payable-to-hq`, `all-info` — o'zgarmagan).
 
+### 2026-10-25 — Buyurtmalar qidiruvi: «EL-…» faqat ID, qo'shimcha telefon, mijoz doirasi (FoCaUF10, rwAy8Qyk)
+
+Deploy: faqat order-service (+ api-gateway — faqat Swagger tavsifi). Migratsiya yo'q.
+
+- [2026-10-25] ✏️ [order] — `GET /orders?search=` (ega qarori 2026-10-25):
+  - **«EL-N»** (ko'rinadigan raqam; `#EL-N`, `№EL-N`, `el N`, harf farqsiz) — FAQAT buyurtma `id = N − 100000`,
+    mijoz ismi/telefoni bo'yicha qidirilmaydi. Id chiqmaydigan «EL-» raqami (`EL-100000`, `EL-12`) — bo'sh ro'yxat.
+  - **Boshqa matn** — mijoz ismi, asosiy VA qo'shimcha telefoni (`extra_number`, 9444UAa8 dagi normallashtirish bilan)
+    va matn sof raqam bo'lsa buyurtma id'si: ichki id (N), 6–8 xonali raqam bo'lsa ko'rinadigan raqam ham (N − 100000)
+    — OR. 9+ xonali raqam (telefon) faqat ichki id sifatida.
+  - 🔧 FE: qidiruvga ko'rinadigan raqamni o'zgartirmay yuboring (`EL-100081`; oldidagi `#`/`№` va bo'shliqni olib
+    tashlash ixtiyoriy). Avval FE «EL-100081» ni «81» ga aylantirardi — endi kerak emas (aks holda «81» telefon bo'yicha
+    ham qidiriladi).
+- [2026-10-25] 🟢 [order] — **Xavfsizlik:** `customer_id` filtri (mijoz roli doirasi) qidiruv bilan ham AND. Ilgari
+  `search` berilsa tushib qolardi. Frontend o'zgarishi shart emas.
+
+
 ### 2026-10-25 — Ombor ↔ buyurtma oqimi (6kHnNH9j, kontrakt `warehouse_v2_contract.md` B)
 
 Deploy: `migration:run` (1716000000153 — `order_schema.orders.fulfillment_source` sukut `HQ`, `warehouse_id`) →
