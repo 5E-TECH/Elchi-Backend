@@ -567,8 +567,13 @@ describe('LogisticsServiceService createCanceledPost', () => {
       log: jest.fn().mockResolvedValue(undefined),
       query: jest.fn(),
     };
+    // o10nrbkB (BG5): jo'natuvchi (post.courier_id=7) — filial 10 kuryeri.
     const branchClient = {
-      send: jest.fn(() => of({ data: { id: '1', type: 'HQ' } })),
+      send: jest.fn((pattern: { cmd: string }) =>
+        pattern.cmd === 'branch.user.find_by_user'
+          ? of({ data: { branch_id: '10', role: 'COURIER' } })
+          : of({ data: { id: '1', type: 'HQ' } }),
+      ),
     };
     const service = new LogisticsServiceService(
       postRepo as any,
@@ -602,6 +607,11 @@ describe('LogisticsServiceService createCanceledPost', () => {
           id: '8',
           roles: ['manager'],
           note: 'Canceled order received by branch manager',
+          canceled_post_sender: {
+            user_id: '7',
+            role: 'COURIER',
+            branch_id: '10',
+          },
         },
       },
     );
@@ -987,8 +997,13 @@ describe('LogisticsServiceService createCanceledPost', () => {
         return of({ statusCode: 200 });
       }),
     };
+    // o10nrbkB (BG5): jo'natuvchi (post.courier_id=8) — filial 10 menejeri.
     const branchClient = {
-      send: jest.fn(() => of({ data: { id: '1', type: 'HQ' } })),
+      send: jest.fn((pattern: { cmd: string }) =>
+        pattern.cmd === 'branch.user.find_by_user'
+          ? of({ data: { branch_id: '10', role: 'MANAGER' } })
+          : of({ data: { id: '1', type: 'HQ' } }),
+      ),
     };
     const postRepo = {
       find: jest.fn().mockResolvedValue([]),
@@ -1032,6 +1047,11 @@ describe('LogisticsServiceService createCanceledPost', () => {
           id: '1',
           roles: ['admin'],
           note: 'Canceled order received by HQ and held for market handover',
+          canceled_post_sender: {
+            user_id: '8',
+            role: 'MANAGER',
+            branch_id: '10',
+          },
         },
       },
     );

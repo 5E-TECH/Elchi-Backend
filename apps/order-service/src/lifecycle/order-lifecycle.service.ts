@@ -116,6 +116,9 @@ import {
 } from './order-replacement';
 import {
   CANCEL_HANDOVER_TRACKING_ACTION,
+  canceledPostReceiveCustodyFrom,
+  isCourierSender,
+  normalizeCanceledPostSender,
   type CancelHandoverMethod,
 } from '../cancel-return/cancel-return';
 
@@ -452,6 +455,36 @@ export class OrderLifecycleService {
     }
 
     return `branch ID: ${id}`;
+  }
+
+  /**
+   * o10nrbkB (BG5) — foydalanuvchi (kuryer) ismi tracking jumlasi uchun.
+   * identity javob bermasa — `null` (tracking baribir yoziladi).
+   */
+  private async resolveUserTrackingName(
+    userId?: string | null,
+  ): Promise<string | null> {
+    const id = String(userId ?? '').trim();
+    if (!id) return null;
+    try {
+      const response = await rmqSend<{
+        data?: Array<{ id?: unknown; name?: unknown }>;
+      }>(
+        this.identityClient,
+        { cmd: 'identity.user.find_by_ids' },
+        { ids: [id] },
+        { timeoutMs: 3000, retries: 0 },
+      );
+      const user = (Array.isArray(response?.data) ? response.data : []).find(
+        (row) =>
+          (typeof row?.id === 'string' || typeof row?.id === 'number') &&
+          String(row.id) === id,
+      );
+      const name = typeof user?.name === 'string' ? user.name.trim() : '';
+      return name || null;
+    } catch {
+      return null;
+    }
   }
 
   /**
@@ -9606,6 +9639,18 @@ export class OrderLifecycleService {
       // (sell/cancel/rollback) set this to false to avoid a duplicate
       // generic UPDATED row. Public edits leave it unset → audited.
       audit?: boolean;
+      /**
+       * o10nrbkB (BG5) — bekor pochta qabulida (logistics
+       * `receiveCanceledPost`) pochtaning HAQIQIY jo'natuvchisi:
+       * `post.courier_id`, uning filialdagi roli va filiali. Faqat tracking
+       * manbasi va qabul custody hodisasi uchun — holder/pul hisobi
+       * o'zgarmaydi.
+       */
+      canceled_post_sender?: {
+        user_id?: string | null;
+        role?: string | null;
+        branch_id?: string | null;
+      } | null;
     },
     externalManager?: EntityManager,
     /**
@@ -9832,12 +9877,23 @@ export class OrderLifecycleService {
         previousCanceledPostId &&
         typeof dto.canceled_post_id !== 'undefined' &&
         dto.canceled_post_id === null;
-      const canceledPostSourceBranchLabel = canceledPostAccepted
+      // o10nrbkB (BG5): manba — pochtaning HAQIQIY jo'natuvchisi (logistics
+      // uzatadi). `previousHolderBranchId` EMAS: jo'natishda holder allaqachon
+      // maqsadga o'tgan («HQ … HQdan qabul qildi» xatosi).
+      const canceledPostSender = canceledPostAccepted
+        ? normalizeCanceledPostSender(requester?.canceled_post_sender)
+        : null;
+      const canceledPostSenderIsCourier = isCourierSender(canceledPostSender);
+      const canceledPostSourceBranchLabel = canceledPostSender?.branch_id
         ? await this.resolveBranchTrackingLabel(
-            previousHolderBranchId,
+            canceledPostSender.branch_id,
             requester,
           )
         : null;
+      const canceledPostSourceCourierName =
+        canceledPostSenderIsCourier && canceledPostSender?.user_id
+          ? await this.resolveUserTrackingName(canceledPostSender.user_id)
+          : null;
       const canceledPostDestinationBranchLabel = canceledPostAccepted
         ? await this.resolveBranchTrackingLabel(
             order.holder_branch_id,
@@ -9847,12 +9903,16 @@ export class OrderLifecycleService {
       const canceledPostAcceptedByHq =
         canceledPostAccepted &&
         (requester?.note ?? '').toLowerCase().includes('hq');
-      const canceledPostSource = canceledPostSourceBranchLabel ?? 'branch';
+      const canceledPostSource = canceledPostSenderIsCourier
+        ? `kuryer ${canceledPostSourceCourierName ?? `ID: ${canceledPostSender?.user_id}`}`
+        : canceledPostSourceBranchLabel;
       const canceledPostDestination = canceledPostAcceptedByHq
         ? 'HQ'
         : (canceledPostDestinationBranchLabel ?? 'branch');
       const canceledPostDescription = canceledPostAccepted
-        ? `${canceledPostDestination} bekor qilingan pochtani ${canceledPostSource}dan qabul qildi`
+        ? canceledPostSource
+          ? `${canceledPostDestination} bekor qilingan pochtani ${canceledPostSource}dan qabul qildi`
+          : `${canceledPostDestination} bekor qilingan pochtani qabul qildi`
         : undefined;
 
       if (oldStatus !== order.status || canceledPostAccepted) {
@@ -9890,11 +9950,25 @@ export class OrderLifecycleService {
             metadata: canceledPostAccepted
               ? {
                   canceled_post_id: previousCanceledPostId,
-                  source_branch_id: previousHolderBranchId,
+                  // o10nrbkB (BG5): jo'natuvchi (kuryer yoki filial menejeri)
+                  // va uning filiali; noma'lum — null (taxmin qilinmaydi).
+                  source_type: canceledPostSender
+                    ? canceledPostSenderIsCourier
+                      ? 'COURIER'
+                      : 'BRANCH'
+                    : null,
+                  source_user_id: canceledPostSender?.user_id ?? null,
+                  source_user_role: canceledPostSender?.role ?? null,
+                  source_courier_id: canceledPostSenderIsCourier
+                    ? (canceledPostSender?.user_id ?? null)
+                    : null,
+                  source_courier_name: canceledPostSourceCourierName,
+                  source_branch_id: canceledPostSender?.branch_id ?? null,
                   source_branch: canceledPostSourceBranchLabel,
                   destination_branch_id: order.holder_branch_id,
                   destination_branch: canceledPostDestinationBranchLabel,
                   received_by_hq: canceledPostAcceptedByHq,
+                  received_by: requester?.id ? String(requester.id) : null,
                 }
               : undefined,
             note: requester?.note ?? null,
@@ -9903,7 +9977,36 @@ export class OrderLifecycleService {
         );
       }
 
-      if (custodyChanged) {
+      if (canceledPostAccepted) {
+        // o10nrbkB (BG5): bekor pochta QABULI — custody hodisasi DOIM (qabul
+        // vaqti va qabul qilgan xodim). Jo'natishda holder allaqachon maqsadga
+        // o'tgani uchun qabulda odatda holder o'zgarmaydi va ilgari hech narsa
+        // yozilmasdi. «Kimdan» — haqiqiy jo'natuvchi (kuryer / filial);
+        // noma'lum bo'lsa — oldingi holder. Holder va `last_handover_*`
+        // (pul/eslatma hisobi) bu yerda O'ZGARTIRILMAYDI.
+        const from = canceledPostReceiveCustodyFrom(canceledPostSender, {
+          holder_type: previousHolderType ?? null,
+          branch_id: previousHolderBranchId ?? null,
+          courier_id: previousHolderCourierId ?? null,
+        });
+        await this.custody.createCustodyEvent(
+          {
+            order_id: order.id,
+            from_holder_type: from.holder_type as OrderHolderType | null,
+            to_holder_type: order.holder_type,
+            from_branch_id: from.branch_id,
+            to_branch_id: order.holder_branch_id ?? null,
+            from_courier_id: from.courier_id,
+            to_courier_id: order.holder_courier_id ?? null,
+            changed_by: String(requester?.id ?? 'system'),
+            changed_by_role: requester?.id
+              ? this.custody.toTrackingRole(requester.roles)
+              : 'system',
+            note: requester?.note ?? 'Canceled post received',
+          },
+          custodyRepo,
+        );
+      } else if (custodyChanged) {
         await this.custody.createCustodyEvent(
           {
             order_id: order.id,

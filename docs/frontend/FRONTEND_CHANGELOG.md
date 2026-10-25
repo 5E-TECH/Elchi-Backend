@@ -23,6 +23,27 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-10-26 — Bekor holatlari BG5: bekor pochta qabulining manbasi va custody hodisasi (o10nrbkB)
+
+Deploy: logistics-service (`receiveCanceledPost` jo'natuvchini uzatadi) va order-service (tracking + custody).
+Tartib muhim emas: eski logistics bilan manba `null` bo'ladi (taxmin qilinmaydi), eski order-service yangi
+maydonni e'tiborsiz qoldiradi. Migratsiya yo'q.
+
+- [2026-10-26] ✏️ [order] — `cancelled_post_received` tracking: manba endi pochtaning HAQIQIY jo'natuvchisi
+  (`post.courier_id` va uning filiali), jo'natishda maqsadga almashgan holder EMAS. `description`:
+  «Andijon filiali … bekor qilingan pochtani kuryer Ali Valiyevdan qabul qildi» / «HQ bekor qilingan pochtani
+  Andijon filiali …dan qabul qildi» (ilgari «HQ … HQdan», «Andijon … Andijondan»). `metadata` ga qo'shildi:
+  `source_type` (`COURIER` | `BRANCH` | null), `source_user_id`, `source_user_role`, `source_courier_id`,
+  `source_courier_name`, `received_by`; `source_branch_id` / `source_branch` — jo'natuvchining filiali
+  (noma'lum bo'lsa `null`).
+- [2026-10-26] ✏️ [order] — qabulda **custody hodisasi doim yoziladi** (vaqti = qabul vaqti, `changed_by` = qabul
+  qilgan xodim, `from_*` = jo'natuvchi kuryer/filial, `to_*` = joriy holder). Ilgari holder o'zgarmagani uchun
+  qabulda custody yozilmasdi. Holder, `last_handover_*` va pul hisobi o'zgarmagan.
+- [2026-10-26] 🟢 — «Yo'lda» bosqichi avvalgidek `cancelled (sent)` holatidan (BG1 `return_stage=in_transit`);
+  `CANCELLED_SENT` da holder maqsadda qolishi o'zgartirilmadi (filial kassasi/hisob-kitob shunga tayanadi).
+- 🔧 FE: tarix jumlasida manba kerak bo'lsa `metadata.source_courier_name` / `metadata.source_branch` ni o'qing;
+  custody tarixida qabul qatori («… kuryerdan … filialga o'tkazdi») endi bor.
+
 ### 2026-10-26 — Bekor holatlari BG4: `GET /orders?cancel_stage=` (LFNLeSpu)
 
 Deploy: api-gateway (yangi query parametri + Swagger), order-service (faqat tip — filtr BG3 dan beri bor).
