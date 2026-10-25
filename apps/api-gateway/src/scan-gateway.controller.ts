@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   ForbiddenException,
@@ -21,10 +22,12 @@ import {
   ApiOkResponse,
   ApiOperation,
   ApiParam,
+  ApiPropertyOptional,
   ApiQuery,
   ApiTags,
 } from '@nestjs/swagger';
-import { IsNotEmpty, IsString } from 'class-validator';
+import { Transform } from 'class-transformer';
+import { IsNotEmpty, IsString, Matches, ValidateIf } from 'class-validator';
 import { Throttle } from '@nestjs/throttler';
 import { firstValueFrom, timeout, TimeoutError } from 'rxjs';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
@@ -52,10 +55,50 @@ interface JwtUser {
   branch_id?: string | null;
 }
 
-class ScanMarketCancelledHandoverQrDto {
+/**
+ * `POST /scan/market-cancelled` tanasi — IKKI shakl (zkRab9M2, BG6):
+ *   - `{ qr_token }`        — market QR'i skanerlandi (avvalgidek);
+ *   - `{ market_id, pin }`  — market ekranidagi 6 xonali kod qo'lda yozildi.
+ * Ikkalasi birga — 400 (qaysi yo'l ekani noaniq bo'lmasin).
+ */
+export class ScanMarketCancelledHandoverQrDto {
+  @ApiPropertyOptional({
+    description: 'Market QR tokeni (`MCR-…`). `pin` yuborilmasa majburiy.',
+    example: 'MCR-3q2x…',
+  })
+  @ValidateIf((dto: ScanMarketCancelledHandoverQrDto) => dto.pin === undefined)
   @IsNotEmpty()
   @IsString()
-  qr_token!: string;
+  qr_token?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'zkRab9M2: kod bilan tasdiqlashda market ID (raqam). `pin` bilan birga majburiy.',
+    example: '16',
+  })
+  @ValidateIf(
+    (dto: ScanMarketCancelledHandoverQrDto) =>
+      dto.pin !== undefined || dto.market_id !== undefined,
+  )
+  @Transform(({ value }: { value: unknown }) =>
+    typeof value === 'number' ? String(value) : value,
+  )
+  @IsString()
+  @Matches(/^\d{1,18}$/, { message: "market_id raqam bo'lishi kerak" })
+  market_id?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'zkRab9M2: market ekranidagi 6 xonali kod (QR bilan bir xil 2 daqiqa amal qiladi). 5 marta xato — sessiya bloklanadi, market yangi QR chiqaradi.',
+    example: '042917',
+  })
+  @ValidateIf(
+    (dto: ScanMarketCancelledHandoverQrDto) =>
+      dto.pin !== undefined || dto.market_id !== undefined,
+  )
+  @IsString()
+  @Matches(/^\d{6}$/, { message: "pin 6 ta raqamdan iborat bo'lishi kerak" })
+  pin?: string;
 }
 
 @ApiTags('Scan')
@@ -300,22 +343,51 @@ export class ScanGatewayController {
   @ApiBearerAuth()
   @ApiOperation({
     summary:
-      'Market canceled handover QRni scan qilib 5 daqiqalik ruxsat olish',
+      'Market canceled handover QRni scan qilib (yoki 6 xonali kod bilan) 5 daqiqalik ruxsat olish',
+    description:
+      'Tana: `{ qr_token }` (QR skani) YOKI `{ market_id, pin }` (zkRab9M2 — market ekranidagi 6 xonali kod). ' +
+      "Javob ikkalasida bir xil: `{ type: 'market_cancelled_handover', data: { market_id, authorized: true, authorization_token: 'MHA-…', authorized_at, expires_at, remaining_seconds: 300, method: 'qr' | 'pin' } }`. " +
+      "Rollar — superadmin/admin (HQ), menejer/registrator (o'z filiali). Kod xatolari 400 + `data.reason`: " +
+      '`market_cancelled_pin_invalid` (`data.details.remaining_attempts`, `max_attempts: 5`), ' +
+      '`market_cancelled_pin_blocked` (5 xato — sessiya QR bilan ham ochilmaydi, market yangi QR chiqarsin), ' +
+      '`market_cancelled_pin_expired`, `market_cancelled_pin_not_found` (faol QR yo‘q). ' +
+      'Kod bilan ochilgan ruxsatda topshirish usuli `pin` (`orders.market_handover_method`, tracking `metadata.method`).',
   })
   @ApiBody({ type: ScanMarketCancelledHandoverQrDto })
   async scanMarketCancelledHandover(
     @Body() dto: ScanMarketCancelledHandoverQrDto,
     @Req() req: { user: JwtUser },
   ) {
+    const requester = {
+      id: req.user.sub,
+      roles: req.user.roles ?? [],
+    };
+
+    // zkRab9M2 (BG6): kod yo'li — QR tokeni bilan aralashtirilmaydi.
+    if (dto.pin !== undefined) {
+      if (dto.qr_token !== undefined) {
+        throw new BadRequestException(
+          'qr_token yoki pin — faqat bittasini yuboring',
+        );
+      }
+      const response = await this.sendWithTimeout(
+        'order',
+        { cmd: 'order.market_cancelled_handover.verify_pin' },
+        {
+          market_id: String(dto.market_id ?? '').trim(),
+          pin: String(dto.pin).trim(),
+          requester,
+        },
+      );
+      return this.shapeResponse('market_cancelled_handover', response);
+    }
+
     const response = await this.sendWithTimeout(
       'order',
       { cmd: 'order.market_cancelled_handover.scan_qr' },
       {
-        qr_token: this.normalizeToken(dto.qr_token),
-        requester: {
-          id: req.user.sub,
-          roles: req.user.roles ?? [],
-        },
+        qr_token: this.normalizeToken(dto.qr_token ?? ''),
+        requester,
       },
     );
     return this.shapeResponse('market_cancelled_handover', response);

@@ -22,7 +22,9 @@ import {
  *                sabab qo'lda tasdiq (`manual_overrides`);
  *   - `no_qr`  — QR talab qilinmasdan (eski market sozlamasi; hozir yo'l yopiq,
  *                faqat eski yozuvlar);
- *   - `pin`    — zaxira PIN (BG6, keyingi karta).
+ *   - `pin`    — zkRab9M2 (BG6): ruxsat market ekranidagi 6 xonali kod bilan
+ *                ochilgan (`market_cancelled_handover_sessions.authorized_via
+ *                = 'pin'`); QR skani o'rniga.
  * Migratsiya 1716000000155 CHECK cheklovi aynan shu ro'yxat.
  */
 export const CANCEL_HANDOVER_METHODS = [
@@ -33,13 +35,27 @@ export const CANCEL_HANDOVER_METHODS = [
 ] as const;
 export type CancelHandoverMethod = (typeof CANCEL_HANDOVER_METHODS)[number];
 
-/** Topshirish tracking hodisasi `action` lari (frontend `actionLabelMap` bilan bir xil). */
+/**
+ * Topshirish tracking hodisasi `action` lari (frontend `actionLabelMap` bilan
+ * bir xil). `pin` — QR bilan bir xil hodisa (`returned_to_market`); usul
+ * `metadata.method = 'pin'` da.
+ */
 export const CANCEL_HANDOVER_TRACKING_ACTION: Readonly<
-  Record<'qr' | 'manual', string>
+  Record<'qr' | 'manual' | 'pin', string>
 > = {
   qr: 'returned_to_market',
   manual: 'cancelled_market_handover_manual',
+  pin: 'returned_to_market',
 };
+
+/**
+ * zkRab9M2 (BG6) — market ruxsati (MHA) bilan topshirish usuli: sessiya kod
+ * bilan ochilgan bo'lsa `pin`, aks holda (QR skani, eski sessiya) `qr`.
+ */
+export const marketHandoverMethodOf = (session: {
+  authorized_via?: string | null;
+}): Extract<CancelHandoverMethod, 'qr' | 'pin'> =>
+  session.authorized_via === 'pin' ? 'pin' : 'qr';
 
 /**
  * 5Yy6r6UI (BG1) — bekor qilingan posilkaning JOY BOSQICHI (`return_stage`,

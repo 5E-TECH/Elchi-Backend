@@ -4919,6 +4919,10 @@ export class OrderGatewayController {
   @ApiBearerAuth()
   @ApiOperation({
     summary: 'Market canceled order handover uchun 2 daqiqalik QR olish',
+    description:
+      "Javob: `{ market_id, qr_token: 'MCR-…', qr_expires_at, qr_ttl_seconds: 120, pin: '042917', pin_expires_at, pin_max_attempts: 5 }`. " +
+      'zkRab9M2 (BG6): `pin` — QR yonida ko‘rsatiladigan 6 xonali kod; xodim QR o‘rniga uni `POST /scan/market-cancelled { market_id, pin }` bilan yozadi. ' +
+      'Bazada faqat xeshi; muddat QR bilan bir xil. Yangi QR eski QR va kodni yaroqsiz qiladi.',
   })
   @ApiParam({ name: 'marketId', description: 'Market ID (id)' })
   async createCancelledMarketHandoverQr(

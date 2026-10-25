@@ -1,6 +1,14 @@
-import { ForbiddenException, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ForbiddenException,
+  NotFoundException,
+  ValidationPipe,
+} from '@nestjs/common';
 import { of, throwError } from 'rxjs';
-import { ScanGatewayController } from './scan-gateway.controller';
+import {
+  ScanGatewayController,
+  ScanMarketCancelledHandoverQrDto,
+} from './scan-gateway.controller';
 
 describe('ScanGatewayController', () => {
   const req = { user: { sub: 'u1', roles: ['admin'] } } as any;
@@ -208,6 +216,114 @@ describe('ScanGatewayController', () => {
       },
     );
     expect(res.type).toBe('market_cancelled_handover');
+  });
+
+  describe('zkRab9M2 (BG6): POST /scan/market-cancelled — QR yoki 6 xonali kod', () => {
+    // main.ts dagi global pipe bilan AYNAN bir xil sozlama.
+    const pipe = new ValidationPipe({
+      whitelist: true,
+      forbidNonWhitelisted: true,
+      transform: true,
+    });
+    const validate = (body: unknown) =>
+      pipe.transform(body, {
+        type: 'body',
+        metatype: ScanMarketCancelledHandoverQrDto,
+      }) as Promise<ScanMarketCancelledHandoverQrDto>;
+
+    it('DTO: { qr_token } va { market_id, pin } o`tadi (raqamli market_id satrga aylanadi)', async () => {
+      await expect(validate({ qr_token: 'MCR-token' })).resolves.toEqual(
+        expect.objectContaining({ qr_token: 'MCR-token' }),
+      );
+      await expect(
+        validate({ market_id: '16', pin: '042917' }),
+      ).resolves.toEqual(
+        expect.objectContaining({ market_id: '16', pin: '042917' }),
+      );
+      await expect(validate({ market_id: 16, pin: '042917' })).resolves.toEqual(
+        expect.objectContaining({ market_id: '16' }),
+      );
+    });
+
+    it.each([
+      [{}],
+      [{ pin: '042917' }],
+      [{ market_id: '16' }],
+      [{ market_id: '16', pin: '12345' }],
+      [{ market_id: '16', pin: '1234567' }],
+      [{ market_id: '16', pin: '12a456' }],
+      [{ market_id: '16', pin: 42917 }],
+      [{ market_id: 'abc', pin: '042917' }],
+      [{ qr_token: '' }],
+      [{ qr_token: 'MCR-token', extra: 1 }],
+    ])('DTO rad etadi: %j', async (body) => {
+      await expect(validate(body)).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('kod — verify_pin pattern`iga market_id, pin va requester bilan boradi', async () => {
+      const { controller, orderClient } = setup();
+      orderClient.send.mockReturnValue(
+        of({
+          data: {
+            market_id: '16',
+            authorization_token: 'MHA-token',
+            remaining_seconds: 300,
+            method: 'pin',
+          },
+        }),
+      );
+
+      const res = await controller.scanMarketCancelledHandover(
+        { market_id: '16', pin: '042917' },
+        req,
+      );
+
+      expect(orderClient.send).toHaveBeenCalledTimes(1);
+      expect(orderClient.send).toHaveBeenCalledWith(
+        { cmd: 'order.market_cancelled_handover.verify_pin' },
+        {
+          market_id: '16',
+          pin: '042917',
+          requester: { id: 'u1', roles: ['admin'] },
+        },
+      );
+      expect(res).toEqual({
+        type: 'market_cancelled_handover',
+        data: expect.objectContaining({ method: 'pin' }),
+      });
+    });
+
+    it('qr_token va pin birga — 400, servisga so`rov ketmaydi', async () => {
+      const { controller, orderClient } = setup();
+
+      await expect(
+        controller.scanMarketCancelledHandover(
+          { qr_token: 'MCR-token', market_id: '16', pin: '042917' },
+          req,
+        ),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(orderClient.send).not.toHaveBeenCalled();
+    });
+
+    it('kod xatosi (400 + data.reason) gateway`dan o`zgarmay o`tadi', async () => {
+      const { controller, orderClient } = setup();
+      const rpcError = {
+        statusCode: 400,
+        message: 'Kod noto‘g‘ri — yana 4 ta urinish qoldi',
+        data: {
+          reason: 'market_cancelled_pin_invalid',
+          details: { remaining_attempts: 4, max_attempts: 5 },
+        },
+      };
+      orderClient.send.mockReturnValue(throwError(() => rpcError));
+
+      await expect(
+        controller.scanMarketCancelledHandover(
+          { market_id: '16', pin: '111111' },
+          req,
+        ),
+      ).rejects.toBe(rpcError);
+    });
   });
 
   it('routes legacy prefixless token to order-service', async () => {

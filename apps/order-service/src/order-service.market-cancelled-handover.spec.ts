@@ -1,5 +1,7 @@
+import { createHash } from 'node:crypto';
 import { RpcException } from '@nestjs/microservices';
 import { of } from 'rxjs';
+import { IsNull } from 'typeorm';
 import { Order_status } from '@app/common';
 import { OrderLifecycleService } from './lifecycle/order-lifecycle.service';
 import { OrderCustodyService } from './custody/order-custody.service';
@@ -9,23 +11,38 @@ import { OrderTracking } from './entities/order-tracking.entity';
 import { OrderCustodyEvent } from './entities/order-custody-event.entity';
 
 describe('OrderServiceService market cancelled handover', () => {
+  // zkRab9M2 (BG6): sessiya kodi — servisdagi xesh formulasi bilan bir xil.
+  const QR_HASH = 'a'.repeat(64);
+  const PIN = '042917';
+  const pinHash = (qrHash: string, pin: string) =>
+    createHash('sha256').update(`MCP:${qrHash}:${pin}`).digest('hex');
+
   function setup(options?: {
     qrExpired?: boolean;
     authorizationExpired?: boolean;
     marketQrRequired?: boolean;
     requesterBranch?: unknown;
+    pinFailedAttempts?: number;
+    pinBlocked?: boolean;
+    noPin?: boolean;
+    noSession?: boolean;
+    authorizedVia?: 'qr' | 'pin' | null;
   }) {
     const now = Date.now();
     const session = {
       id: '1',
       market_id: '16',
-      qr_token_hash: '',
+      qr_token_hash: QR_HASH,
       qr_expires_at: new Date(now + (options?.qrExpired ? -1_000 : 120_000)),
       scanned_at: null,
       scanned_by_user_id: null,
       authorization_token_hash: null,
       authorization_expires_at: null,
       consumed_at: null,
+      pin_hash: options?.noPin ? null : pinHash(QR_HASH, PIN),
+      pin_failed_attempts: options?.pinFailedAttempts ?? 0,
+      pin_blocked_at: options?.pinBlocked ? new Date(now - 1_000) : null,
+      authorized_via: null,
       isDeleted: false,
     } as any;
     const order = {
@@ -60,7 +77,15 @@ describe('OrderServiceService market cancelled handover', () => {
             authorization_expires_at: new Date(
               now + (options?.authorizationExpired ? -1_000 : 300_000),
             ),
+            authorized_via: options?.authorizedVia ?? 'qr',
           };
+        }
+        if (options?.noSession) return null;
+        // Kod yo'li — market bo'yicha (boshqa marketda sessiya yo'q).
+        if (where?.market_id !== undefined) {
+          return String(where.market_id) === String(session.market_id)
+            ? session
+            : null;
         }
         return session;
       }),
@@ -196,6 +221,7 @@ describe('OrderServiceService market cancelled handover', () => {
       queryRunner,
       identityClient,
       branchClient,
+      activityLog,
     };
   }
 
@@ -476,5 +502,312 @@ describe('OrderServiceService market cancelled handover', () => {
     );
 
     expect(queryRunner.rollbackTransaction).toHaveBeenCalled();
+  });
+
+  // ─── zkRab9M2 (BG6): QR yonidagi 6 xonali kod ────────────────────────────
+  describe('zkRab9M2 (BG6) — 6 xonali kod (PIN)', () => {
+    const admin = { id: '9', roles: ['admin'] };
+
+    async function expectPinError(
+      promise: Promise<unknown>,
+      reason: string,
+      remaining?: number,
+    ) {
+      try {
+        await promise;
+        throw new Error('expected RpcException');
+      } catch (error) {
+        expect(error).toBeInstanceOf(RpcException);
+        const payload = (error as RpcException).getError() as any;
+        expect(payload.statusCode).toBe(400);
+        expect(payload.data.reason).toBe(reason);
+        if (remaining !== undefined) {
+          expect(payload.data.details).toEqual({
+            remaining_attempts: remaining,
+            max_attempts: 5,
+          });
+        }
+      }
+    }
+
+    it('QR bilan birga kod chiqadi: 6 raqam, javobda ochiq, bazada faqat tuzlangan xesh', async () => {
+      const { service, sessionRepo } = setup();
+
+      const response: any = await service.createMarketCancelledHandoverQr({
+        market_id: '16',
+        requester: { id: '16', roles: ['market'] },
+      });
+
+      const { pin, qr_token, qr_expires_at } = response.data;
+      expect(pin).toMatch(/^\d{6}$/);
+      expect(response.data.pin_expires_at).toBe(qr_expires_at);
+      expect(response.data.pin_max_attempts).toBe(5);
+
+      const created = sessionRepo.create.mock.calls[0][0];
+      const qrHash = createHash('sha256').update(qr_token).digest('hex');
+      expect(created.qr_token_hash).toBe(qrHash);
+      expect(created.pin_hash).toBe(pinHash(qrHash, pin));
+      expect(created.pin_hash).not.toContain(pin);
+      expect(created).toEqual(
+        expect.objectContaining({
+          pin_failed_attempts: 0,
+          pin_blocked_at: null,
+          authorized_via: null,
+        }),
+      );
+      expect(JSON.stringify(created)).not.toContain(`"${pin}"`);
+    });
+
+    it('to`g`ri kod — QR skani bilan bir xil 5 daqiqalik ruxsat, authorized_via=pin, method=pin', async () => {
+      const { service, sessionRepo, queryRunner } = setup();
+
+      const response: any = await service.verifyMarketCancelledHandoverPin({
+        market_id: '16',
+        pin: PIN,
+        requester: admin,
+      });
+
+      expect(response.data).toEqual(
+        expect.objectContaining({
+          market_id: '16',
+          authorized: true,
+          authorization_token: expect.stringMatching(/^MHA-/),
+          remaining_seconds: 300,
+          method: 'pin',
+        }),
+      );
+      // Oxirgi skanerlanmagan sessiya — market bo'yicha, qulf bilan.
+      expect(sessionRepo.findOne).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { market_id: '16', scanned_at: IsNull(), isDeleted: false },
+          order: { createdAt: 'DESC', id: 'DESC' },
+          lock: { mode: 'pessimistic_write' },
+        }),
+      );
+      expect(sessionRepo.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          scanned_by_user_id: '9',
+          authorized_via: 'pin',
+          authorization_token_hash: expect.stringMatching(/^[a-f0-9]{64}$/),
+        }),
+      );
+      expect(queryRunner.commitTransaction).toHaveBeenCalled();
+    });
+
+    it('QR skani authorized_via=qr yozadi va javobda method=qr', async () => {
+      const { service, sessionRepo } = setup();
+
+      const response: any = await service.scanMarketCancelledHandoverQr({
+        qr_token: 'MCR-valid-token',
+        requester: admin,
+      });
+
+      expect(response.data.method).toBe('qr');
+      expect(sessionRepo.save).toHaveBeenCalledWith(
+        expect.objectContaining({ authorized_via: 'qr' }),
+      );
+    });
+
+    it('noto`g`ri kod — urinish sanaladi va COMMIT qilinadi (rollback emas), qolgan urinishlar qaytadi', async () => {
+      const { service, session, sessionRepo, queryRunner } = setup();
+
+      await expectPinError(
+        service.verifyMarketCancelledHandoverPin({
+          market_id: '16',
+          pin: '111111',
+          requester: admin,
+        }),
+        'market_cancelled_pin_invalid',
+        4,
+      );
+
+      expect(session.pin_failed_attempts).toBe(1);
+      expect(session.pin_blocked_at).toBeNull();
+      expect(session.authorization_token_hash).toBeNull();
+      expect(sessionRepo.save).toHaveBeenCalledTimes(1);
+      expect(queryRunner.commitTransaction).toHaveBeenCalled();
+      expect(queryRunner.rollbackTransaction).not.toHaveBeenCalled();
+      expect(queryRunner.release).toHaveBeenCalled();
+    });
+
+    it('5-xato kod sessiyani bloklaydi (pin_blocked_at), javob — blocked, 0 urinish', async () => {
+      const { service, session, queryRunner } = setup({ pinFailedAttempts: 4 });
+
+      await expectPinError(
+        service.verifyMarketCancelledHandoverPin({
+          market_id: '16',
+          pin: '999999',
+          requester: admin,
+        }),
+        'market_cancelled_pin_blocked',
+        0,
+      );
+
+      expect(session.pin_failed_attempts).toBe(5);
+      expect(session.pin_blocked_at).toBeInstanceOf(Date);
+      expect(queryRunner.commitTransaction).toHaveBeenCalled();
+    });
+
+    it('bloklangan sessiya to`g`ri kodni ham, QR skanini ham rad etadi', async () => {
+      const pinCase = setup({ pinBlocked: true, pinFailedAttempts: 5 });
+      await expectPinError(
+        pinCase.service.verifyMarketCancelledHandoverPin({
+          market_id: '16',
+          pin: PIN,
+          requester: admin,
+        }),
+        'market_cancelled_pin_blocked',
+        0,
+      );
+      expect(pinCase.sessionRepo.save).not.toHaveBeenCalled();
+      expect(pinCase.session.authorization_token_hash).toBeNull();
+
+      const qrCase = setup({ pinBlocked: true, pinFailedAttempts: 5 });
+      await expectPinError(
+        qrCase.service.scanMarketCancelledHandoverQr({
+          qr_token: 'MCR-valid-token',
+          requester: admin,
+        }),
+        'market_cancelled_pin_blocked',
+      );
+      expect(qrCase.sessionRepo.save).not.toHaveBeenCalled();
+      expect(qrCase.queryRunner.rollbackTransaction).toHaveBeenCalled();
+    });
+
+    it('muddati o`tgan kod — expired, urinish sanalmaydi', async () => {
+      const { service, session, sessionRepo } = setup({ qrExpired: true });
+
+      await expectPinError(
+        service.verifyMarketCancelledHandoverPin({
+          market_id: '16',
+          pin: PIN,
+          requester: admin,
+        }),
+        'market_cancelled_pin_expired',
+      );
+      expect(session.pin_failed_attempts).toBe(0);
+      expect(sessionRepo.save).not.toHaveBeenCalled();
+    });
+
+    it('boshqa market — faol sessiya topilmaydi (not_found), kod tekshirilmaydi', async () => {
+      const { service, session, sessionRepo } = setup();
+
+      await expectPinError(
+        service.verifyMarketCancelledHandoverPin({
+          market_id: '17',
+          pin: PIN,
+          requester: admin,
+        }),
+        'market_cancelled_pin_not_found',
+      );
+      expect(sessionRepo.findOne).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ market_id: '17' }),
+        }),
+      );
+      expect(session.pin_failed_attempts).toBe(0);
+    });
+
+    it('kodsiz eski sessiya yoki QR yo`q — not_found', async () => {
+      for (const options of [{ noPin: true }, { noSession: true }]) {
+        const { service } = setup(options);
+        await expectPinError(
+          service.verifyMarketCancelledHandoverPin({
+            market_id: '16',
+            pin: PIN,
+            requester: admin,
+          }),
+          'market_cancelled_pin_not_found',
+        );
+      }
+    });
+
+    it('kod formati: 6 raqamdan boshqasi — 400, sessiya qidirilmaydi', async () => {
+      for (const pin of ['12345', '1234567', '12a456', '']) {
+        const { service, sessionRepo } = setup();
+        await expectRpc(
+          service.verifyMarketCancelledHandoverPin({
+            market_id: '16',
+            pin,
+            requester: admin,
+          }),
+          400,
+        );
+        expect(sessionRepo.findOne).not.toHaveBeenCalled();
+      }
+    });
+
+    it('rol doirasi: market/kuryer kod yoza olmaydi (403); filial menejeri — mumkin', async () => {
+      for (const roles of [['market'], ['courier']]) {
+        const { service, sessionRepo } = setup();
+        await expectRpc(
+          service.verifyMarketCancelledHandoverPin({
+            market_id: '16',
+            pin: PIN,
+            requester: { id: '16', roles },
+          }),
+          403,
+        );
+        expect(sessionRepo.findOne).not.toHaveBeenCalled();
+      }
+
+      const manager = setup({
+        requesterBranch: { branch_id: '12', branch: { type: 'REGIONAL' } },
+      });
+      const response: any =
+        await manager.service.verifyMarketCancelledHandoverPin({
+          market_id: '16',
+          pin: PIN,
+          requester: { id: '9', roles: ['manager'] },
+        });
+      expect(response.data.method).toBe('pin');
+    });
+
+    it('kod bilan ochilgan ruxsat — topshirishda method=pin (buyurtma va tracking metadata)', async () => {
+      const { service, orderRepo, trackingRepo, activityLog } = setup({
+        authorizedVia: 'pin',
+      });
+
+      await service.completeMarketCancelledHandover({
+        market_id: '16',
+        order_ids: ['101'],
+        authorization_token: 'MHA-valid-token',
+        requester: admin,
+      });
+
+      expect(orderRepo.save).toHaveBeenCalledWith(
+        expect.objectContaining({ market_handover_method: 'pin' }),
+      );
+      expect(trackingRepo.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: 'returned_to_market',
+          metadata: expect.objectContaining({
+            method: 'pin',
+            handover_session_id: '1',
+          }),
+        }),
+      );
+      expect(activityLog.log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          metadata: expect.objectContaining({ authorized_via: 'pin' }),
+        }),
+      );
+    });
+
+    it('kod sessiyasida ham qo`lda tasdiqlangan posilka — method=manual', async () => {
+      const { service, orderRepo } = setup({ authorizedVia: 'pin' });
+
+      await service.completeMarketCancelledHandover({
+        market_id: '16',
+        order_ids: ['101'],
+        authorization_token: 'MHA-valid-token',
+        manual_overrides: [{ order_id: '101', reason: 'QR yirtilgan' }],
+        requester: admin,
+      });
+
+      expect(orderRepo.save).toHaveBeenCalledWith(
+        expect.objectContaining({ market_handover_method: 'manual' }),
+      );
+    });
   });
 });

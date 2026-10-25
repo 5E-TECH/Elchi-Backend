@@ -3971,6 +3971,7 @@
     },
     "/orders/markets/{marketId}/cancelled/qr": {
       "post": {
+        "description": "Javob: `{ market_id, qr_token: 'MCR-…', qr_expires_at, qr_ttl_seconds: 120, pin: '042917', pin_expires_at, pin_max_attempts: 5 }`. zkRab9M2 (BG6): `pin` — QR yonida ko‘rsatiladigan 6 xonali kod; xodim QR o‘rniga uni `POST /scan/market-cancelled { market_id, pin }` bilan yozadi. Bazada faqat xeshi; muddat QR bilan bir xil. Yangi QR eski QR va kodni yaroqsiz qiladi.",
         "operationId": "OrderGatewayController_createCancelledMarketHandoverQr",
         "parameters": [
           {
@@ -16616,6 +16617,7 @@
     },
     "/scan/market-cancelled": {
       "post": {
+        "description": "Tana: `{ qr_token }` (QR skani) YOKI `{ market_id, pin }` (zkRab9M2 — market ekranidagi 6 xonali kod). Javob ikkalasida bir xil: `{ type: 'market_cancelled_handover', data: { market_id, authorized: true, authorization_token: 'MHA-…', authorized_at, expires_at, remaining_seconds: 300, method: 'qr' | 'pin' } }`. Rollar — superadmin/admin (HQ), menejer/registrator (o'z filiali). Kod xatolari 400 + `data.reason`: `market_cancelled_pin_invalid` (`data.details.remaining_attempts`, `max_attempts: 5`), `market_cancelled_pin_blocked` (5 xato — sessiya QR bilan ham ochilmaydi, market yangi QR chiqarsin), `market_cancelled_pin_expired`, `market_cancelled_pin_not_found` (faol QR yo‘q). Kod bilan ochilgan ruxsatda topshirish usuli `pin` (`orders.market_handover_method`, tracking `metadata.method`).",
         "operationId": "ScanGatewayController_scanMarketCancelledHandover",
         "parameters": [],
         "requestBody": {
@@ -16638,7 +16640,7 @@
             "bearer": []
           }
         ],
-        "summary": "Market canceled handover QRni scan qilib 5 daqiqalik ruxsat olish",
+        "summary": "Market canceled handover QRni scan qilib (yoki 6 xonali kod bilan) 5 daqiqalik ruxsat olish",
         "tags": [
           "Scan"
         ],
@@ -27890,7 +27892,23 @@
       },
       "ScanMarketCancelledHandoverQrDto": {
         "type": "object",
-        "properties": {}
+        "properties": {
+          "qr_token": {
+            "type": "string",
+            "description": "Market QR tokeni (`MCR-…`). `pin` yuborilmasa majburiy.",
+            "example": "MCR-3q2x…"
+          },
+          "market_id": {
+            "type": "string",
+            "description": "zkRab9M2: kod bilan tasdiqlashda market ID (raqam). `pin` bilan birga majburiy.",
+            "example": "16"
+          },
+          "pin": {
+            "type": "string",
+            "description": "zkRab9M2: market ekranidagi 6 xonali kod (QR bilan bir xil 2 daqiqa amal qiladi). 5 marta xato — sessiya bloklanadi, market yangi QR chiqaradi.",
+            "example": "042917"
+          }
+        }
       },
       "PrintOrdersDto": {
         "type": "object",

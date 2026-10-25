@@ -1419,6 +1419,22 @@ export class OrderServiceController {
     );
   }
 
+  /** zkRab9M2 (BG6) — QR o'rniga market ekranidagi 6 xonali kod bilan ruxsat. */
+  @MessagePattern({ cmd: 'order.market_cancelled_handover.verify_pin' })
+  verifyMarketCancelledHandoverPin(
+    @Payload()
+    data: {
+      market_id: string;
+      pin: string;
+      requester: { id: string; roles?: string[] };
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.lifecycleService.verifyMarketCancelledHandoverPin(data),
+    );
+  }
+
   @MessagePattern({ cmd: 'order.market_cancelled_handover.complete' })
   completeMarketCancelledHandover(
     @Payload()
