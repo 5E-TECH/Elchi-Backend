@@ -72,6 +72,9 @@ describe('OrderLifecycleService order items (C2.5)', () => {
     market_id: '500',
     customer_id: '77',
     source: Order_source.EXTERNAL,
+    // IR2OHIiN: ichki (INTERNAL) yaratishda tuman majburiy.
+    district_id: '12',
+    region_id: '3',
   };
 
   it('TC1: external item name+qty bilan product_id=null saqlanadi', async () => {

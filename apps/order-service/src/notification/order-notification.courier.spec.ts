@@ -406,6 +406,13 @@ describe('updateFull — logistics scan-assign / assign-to-courier yo‘li (`ord
   });
 });
 
+/** IR2OHIiN: yaratishning majburiy mazmuni — mahsulot + tuman. */
+const CREATE_CONTENT = {
+  district_id: '12',
+  region_id: '3',
+  items: [{ product_id: '1', quantity: 1 }],
+};
+
 describe('create — SA/ADMIN kuryer bilan yaratgan buyurtma', () => {
   it('courier_id bilan — order.created + order.assigned_to_courier (shu tranzaksiyada)', async () => {
     const { lifecycle, queryRunner, notifications } = makeLifecycle({
@@ -414,7 +421,7 @@ describe('create — SA/ADMIN kuryer bilan yaratgan buyurtma', () => {
       courier_id: '55',
     });
     await lifecycle.create(
-      { market_id: '5', customer_id: '2', courier_id: '55' },
+      { market_id: '5', customer_id: '2', courier_id: '55', ...CREATE_CONTENT },
       { id: '900', roles: ['admin'], branch_id: '3' } as never,
     );
     expect(queryRunner.commitTransaction).toHaveBeenCalled();
@@ -429,11 +436,14 @@ describe('create — SA/ADMIN kuryer bilan yaratgan buyurtma', () => {
       ...receivedOrder(),
       status: Order_status.NEW,
     });
-    await lifecycle.create({ market_id: '5', customer_id: '2' }, {
-      id: '900',
-      roles: ['admin'],
-      branch_id: '3',
-    } as never);
+    await lifecycle.create(
+      { market_id: '5', customer_id: '2', ...CREATE_CONTENT },
+      {
+        id: '900',
+        roles: ['admin'],
+        branch_id: '3',
+      } as never,
+    );
     expect(notifications().map((row) => row.payload.type)).toEqual([
       'order.created',
     ]);

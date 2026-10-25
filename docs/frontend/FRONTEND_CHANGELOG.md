@@ -23,6 +23,29 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-10-25 — Buyurtma: mahsulotsiz va tumansiz buyurtma yaratilmaydi — barcha yo'llarda (IR2OHIiN)
+
+Deploy: api-gateway (DTO/Swagger + `createOrderInternal`), order-service (yagona yaratish nuqtasi
+`OrderLifecycleService.create` + `identity.customer.find_by_id` o'qishi). Migratsiya yo'q. Mavjud (eski)
+mahsulotsiz/tumansiz buyurtmalarga tegilmaydi.
+
+- [2026-10-25] ⚠️ [gateway] — `POST /orders` va `POST /orders/external`: **`items` majburiy** — kamida bitta qator,
+  miqdori butun son ≥ 1 (berilmasa 1). Yo'q / `[]` / `null` → 400 **«Buyurtmada kamida bitta mahsulot bo‘lishi
+  kerak»** (bitta xabar); miqdor 0 → 400 (`quantity kamida 1 bo‘lishi kerak`). `POST /orders/telegram/bot/create`
+  — `order_item_info` bo'sh bo'lsa AYNI xabar.
+- [2026-10-25] ⚠️ [gateway/order] — **tuman majburiy**: buyurtmaning `district_id` si, bo'lmasa inline mijozning
+  `customer.district_id` si yoki mavjud mijozniki (`customer_id`) — u **buyurtmaga yoziladi** (ilgari bot va
+  filial yo'lida buyurtmada `district_id` NULL qolardi), `region_id` berilmasa (yoki tuman mijozdan olinsa) —
+  tumandan. Hech qayerda yo'q → 400 **«Buyurtma uchun tuman tanlanmagan»**. Mavjud mijozni identity o'qiy olmasa —
+  503 «Mijoz tumanini aniqlab bo'lmadi — birozdan so'ng qayta urinib ko'ring».
+- [2026-10-25] 🟢 [order] — AI `ai-confirm` (DTO allaqachon talab qilardi), Telegram bot, filial/registrator
+  («Qabul va yaratish»), almashtirish (`replaced_order_id`), ombor manbasi — hammasi shu qoidadan o'tadi; 400
+  matni ai-confirm natijasida `reason` (`code: create_failed`) bo'lib keladi.
+- [2026-10-25] 🟢 [integration] — hamkor posilkasi (`POST /partner/shipments`, BeePost) va tashqi saytlar importi
+  (`POST /orders/external/receive`) **o'zgarmagan** (alohida karta, Shodiyor).
+- 🔧 FE (Elchi-Frontend `fe-1025-order-guard`): qo'lda yaratish formasi va AI kartalari mahsulotsiz/tumansiz
+  yuborishni bloklaydi, sababini yonida yozadi va backend 400 matnini ko'rsatadi.
+
 ### 2026-10-25 — Yetkazish narxi: hajm qaysi kg dan boshlab hisobga olinadi (AQ9lkgVB)
 
 Deploy: logistics-service (migratsiya `1716000000154`), api-gateway (DTO/Swagger). Migratsiyadan keyin chegara

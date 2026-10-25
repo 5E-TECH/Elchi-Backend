@@ -22163,11 +22163,13 @@
           },
           "district_id": {
             "type": "string",
-            "example": "1"
+            "example": "1",
+            "description": "Tuman ID. Berilmasa `customer.district_id` (yoki mavjud mijozning tumani) buyurtmaga yoziladi; hech qayerda bo'lmasa — 400 «Buyurtma uchun tuman tanlanmagan»."
           },
           "region_id": {
             "type": "string",
-            "example": "1"
+            "example": "1",
+            "description": "Viloyat ID. Berilmasa (yoki tuman mijozdan olinsa) tumandan aniqlanadi."
           },
           "branch_id": {
             "type": "string",
@@ -22209,6 +22211,8 @@
             "description": "Superadmin/admin; filial xodimida majburan `branch`, boshqalarda e’tiborsiz"
           },
           "items": {
+            "minItems": 1,
+            "description": "Kamida bitta mahsulot (miqdori ≥ 1, berilmasa 1). Yo'q yoki bo'sh — 400 «Buyurtmada kamida bitta mahsulot bo‘lishi kerak».",
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/OrderItemDto"
@@ -22216,7 +22220,8 @@
           }
         },
         "required": [
-          "total_price"
+          "total_price",
+          "items"
         ]
       },
       "CreateOrderByTelegramBotRequestDto": {
@@ -22244,6 +22249,7 @@
             "example": "Yunusobod, 12-kvartal"
           },
           "order_item_info": {
+            "minItems": 1,
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/OrderItemDto"
@@ -22590,11 +22596,13 @@
           },
           "district_id": {
             "type": "string",
-            "example": "1"
+            "example": "1",
+            "description": "Tuman ID. Berilmasa `customer.district_id` (yoki mavjud mijozning tumani) buyurtmaga yoziladi; hech qayerda bo'lmasa — 400 «Buyurtma uchun tuman tanlanmagan»."
           },
           "region_id": {
             "type": "string",
-            "example": "1"
+            "example": "1",
+            "description": "Viloyat ID. Berilmasa (yoki tuman mijozdan olinsa) tumandan aniqlanadi."
           },
           "branch_id": {
             "type": "string",
@@ -22636,6 +22644,8 @@
             "description": "Superadmin/admin; filial xodimida majburan `branch`, boshqalarda e’tiborsiz"
           },
           "items": {
+            "minItems": 1,
+            "description": "Kamida bitta mahsulot (miqdori ≥ 1, berilmasa 1). Yo'q yoki bo'sh — 400 «Buyurtmada kamida bitta mahsulot bo‘lishi kerak».",
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/OrderItemDto"
@@ -22647,7 +22657,8 @@
           }
         },
         "required": [
-          "total_price"
+          "total_price",
+          "items"
         ]
       },
       "CancelledManualOverrideDto": {

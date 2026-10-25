@@ -74,6 +74,8 @@ describe('OrderGatewayController create with branch auto binding', () => {
       {
         market_id: '77',
         customer_id: '55',
+        // IR2OHIiN: mahsulot majburiy (tuman — mavjud mijozdan).
+        items: [{ product_name: 'TEST mahsulot', quantity: 1 }],
       } as any,
       { user: { sub: 'admin1', username: 'admin', roles: ['admin'] } } as any,
     );
@@ -98,6 +100,7 @@ describe('OrderGatewayController create with branch auto binding', () => {
           market_id: '77',
           customer_id: '55',
           branch_id: '999',
+          items: [{ product_name: 'TEST mahsulot', quantity: 1 }],
         } as any,
         { user: { sub: 'u1', username: 'manager', roles: ['branch'] } } as any,
       ),

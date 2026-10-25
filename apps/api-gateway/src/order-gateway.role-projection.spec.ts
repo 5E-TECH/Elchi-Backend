@@ -643,7 +643,8 @@ describe("kH2zZsz3 (tekshiruv) — kassa tarixi, pochta qabuli va yaratish yo'll
           district_id: '1',
         },
         total_price: 100000,
-        items: [],
+        // IR2OHIiN: mahsulotsiz buyurtma endi 400 — katalogsiz qator.
+        items: [{ product_name: 'TEST mahsulot', quantity: 1 }],
       } as any,
       user('16', ['market']),
     );
@@ -673,6 +674,7 @@ describe("kH2zZsz3 (tekshiruv) — kassa tarixi, pochta qabuli va yaratish yo'll
         },
         external_id: 'EXT-25',
         total_price: 100000,
+        items: [{ product_name: 'TEST mahsulot', quantity: 1 }],
       } as any,
       user('16', ['market']),
     );

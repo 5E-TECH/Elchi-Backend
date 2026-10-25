@@ -67,7 +67,12 @@ function makeHarness(
               save: mocks.orderSave,
               update: jest.fn(),
             }
-          : {},
+          : // IR2OHIiN: mahsulot qatorlari endi DOIM yoziladi.
+            {
+              createQueryBuilder: () => ({
+                insert: () => ({ values: () => ({ execute: jest.fn() }) }),
+              }),
+            },
       ),
     },
   };
@@ -109,6 +114,10 @@ const ABUSIVE = {
   branch_id: '99',
   source: Order_source.BRANCH,
   external_id: 'ext-7',
+  // IR2OHIiN: mahsulot va tuman majburiy (POST /orders/external ham).
+  district_id: '12',
+  region_id: '3',
+  items: [{ product_id: '41', quantity: 1 }],
 } as unknown as ExternalDto;
 
 describe('fix3b — order.external.create handleri so`rovchini uzatadi', () => {

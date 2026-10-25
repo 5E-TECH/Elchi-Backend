@@ -370,7 +370,12 @@ describe('lifecycle.create — CREATED metadata (vncdmXOy TC1/TC2)', () => {
                 ),
                 update: jest.fn(),
               }
-            : {},
+            : // IR2OHIiN: mahsulot qatorlari endi DOIM yoziladi.
+              {
+                createQueryBuilder: () => ({
+                  insert: () => ({ values: () => ({ execute: jest.fn() }) }),
+                }),
+              },
         ),
       },
     };
@@ -397,7 +402,15 @@ describe('lifecycle.create — CREATED metadata (vncdmXOy TC1/TC2)', () => {
     });
     return { s, log };
   }
-  const dto = { market_id: '501', customer_id: '801', total_price: 200000 };
+  const dto = {
+    market_id: '501',
+    customer_id: '801',
+    total_price: 200000,
+    // IR2OHIiN: mahsulot va tuman majburiy.
+    district_id: '12',
+    region_id: '3',
+    items: [{ product_id: '41', quantity: 1 }],
+  };
 
   it('AI buyurtma: metadata.ai === true, ai_draft_id; operator_id ALMASHTIRILMAYDI', async () => {
     const { s, log } = harness();

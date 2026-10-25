@@ -139,6 +139,10 @@ import {
   resolveOrderCreateRequestId,
 } from './order-create/order-create-idempotency';
 import {
+  assertOrderCreateContent,
+  orderCreateDistrictId,
+} from './order-create/order-create-content';
+import {
   resolveOrderOperatorPhones,
   type OrderMarketPhonePolicy,
 } from './order-create/order-operator-phone';
@@ -2127,6 +2131,9 @@ export class OrderGatewayController {
       createdVia?: 'bot';
     },
   ): Promise<unknown> {
+    // IR2OHIiN: mahsulotsiz / tumansiz buyurtma — hech narsa (mijoz ham)
+    // yaratilmasidan OLDIN 400. Bot va AI yo'llari DTO'ni ichkarida yig'adi.
+    assertOrderCreateContent(dto);
     const { customer, ...orderDto } = dto;
     const roles = this.normalizeRoles(req.user.roles);
     const isSystemPrivileged =
@@ -2322,6 +2329,10 @@ export class OrderGatewayController {
                 : {}),
               market_id: resolvedMarketId,
               customer_id: finalCustomerId,
+              // IR2OHIiN: tuman buyurtmaga DOIM yoziladi — o'zida bo'lmasa
+              // inline mijozniki (bot, filial); mavjud mijozniki va viloyat —
+              // order-service'da.
+              district_id: orderCreateDistrictId(dto),
               operator_id:
                 roles.includes(RoleEnum.REGISTRATOR) ||
                 roles.includes(RoleEnum.MARKET_OPERATOR)
@@ -3264,6 +3275,8 @@ export class OrderGatewayController {
     @Body() dto: CreateExternalOrderRequestDto,
     @Req() req: { user: JwtUser },
   ) {
+    // IR2OHIiN: `POST /orders` bilan AYNI qoida — mijoz yaratilishidan OLDIN.
+    assertOrderCreateContent(dto);
     const { customer, external_id, ...rawOrderDto } = dto;
     const roles = this.normalizeRoles(req.user.roles);
     const isSystemPrivileged =
@@ -3338,6 +3351,8 @@ export class OrderGatewayController {
               external_id: external_id ?? null,
               market_id: resolvedMarketId,
               customer_id: customerId,
+              // IR2OHIiN: tuman buyurtmaga yoziladi (inline mijozdan ham).
+              district_id: orderCreateDistrictId(dto),
             },
             // fix3 C6: so'rovchi DOIM uzatiladi — order-service ham xuddi
             // shu qoidani o'zi qo'llaydi (himoya chuqurligi).

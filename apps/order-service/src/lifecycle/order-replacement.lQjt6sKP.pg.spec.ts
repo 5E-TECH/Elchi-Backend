@@ -134,6 +134,10 @@ const MONEY_COLUMNS = `status, total_price, to_be_paid, paid_amount,
         ensureBranchCashbox: jest.fn().mockResolvedValue(undefined),
         resolveSettlementBranchId: jest.fn().mockResolvedValue(null),
         resolveBranchShare: jest.fn().mockResolvedValue(0),
+        // IR2OHIiN: almashtirish so'rovida tuman yo'q — mijozdan olinadi va
+        // buyurtmaga yoziladi (viloyat tumandan).
+        getCustomerDistrictId: jest.fn().mockResolvedValue('12'),
+        resolveRegionIdForDistrict: jest.fn().mockResolvedValue('3'),
       };
 
       const instance = Object.create(
@@ -290,6 +294,17 @@ const MONEY_COLUMNS = `status, total_price, to_be_paid, paid_amount,
         replacement_of_order_id: null,
         replacement_state: OrderReplacementState.AWAITING_OLD_PICKUP,
         is_replacement_return: true,
+      });
+      // IR2OHIiN: mijozning tumani (va tumandan viloyat) yangi buyurtmaga yozildi.
+      const areaRows: Row[] = await orderDb.query(
+        `SELECT district_id::text, region_id::text, product_quantity
+           FROM "${orderSchema}".orders WHERE id = $1`,
+        [String(created.id)],
+      );
+      expect(areaRows[0]).toMatchObject({
+        district_id: '12',
+        region_id: '3',
+        product_quantity: 1,
       });
     });
 

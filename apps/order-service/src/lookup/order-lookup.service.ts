@@ -259,6 +259,51 @@ export class OrderLookupService implements OnModuleInit {
     return null;
   }
 
+  /**
+   * IR2OHIiN — mavjud mijozning tumani (buyurtmada `district_id` bo'lmasa
+   * u mijozdan olinib buyurtmaga yoziladi). `identity.customer.find_by_id`.
+   *
+   * `null` — mijoz topilmadi (404) yoki unda tuman yo'q: chaqiruvchi 400
+   * «tuman tanlanmagan» beradi. Identity javob bermasa (timeout / 5xx) —
+   * 503 (fail-closed): tumansiz buyurtma jimgina yaratilib qolmasin.
+   */
+  async getCustomerDistrictId(
+    customerId: string | null | undefined,
+  ): Promise<string | null> {
+    const id = String(customerId ?? '').trim();
+    if (!/^\d+$/.test(id)) {
+      return null;
+    }
+    let response: { data?: { district_id?: unknown } | null } | null;
+    try {
+      response = await rmqSend<{ data?: { district_id?: unknown } | null }>(
+        this.identityClient,
+        { cmd: 'identity.customer.find_by_id' },
+        { id },
+        { attachRequestId: false, retries: 1 },
+      );
+    } catch (error) {
+      const status = rpcErrorStatusOf(error);
+      if (status !== null && status >= 400 && status < 500) {
+        return null;
+      }
+      this.logger.warn(
+        `getCustomerDistrictId: mijoz o'qilmadi (customer=${id}): ${rpcErrorMessageOf(error)}`,
+      );
+      throw new RpcException({
+        statusCode: 503,
+        message:
+          "Mijoz tumanini aniqlab bo'lmadi — birozdan so'ng qayta urinib ko'ring",
+      });
+    }
+    const raw = response?.data?.district_id;
+    const districtId =
+      typeof raw === 'string' || typeof raw === 'number'
+        ? String(raw).trim()
+        : '';
+    return districtId || null;
+  }
+
   async getBranchUsers(branchId: string) {
     const response = await rmqSend<{
       data?: Array<{

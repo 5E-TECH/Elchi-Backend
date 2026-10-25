@@ -537,7 +537,13 @@ describe('OrderGatewayController — POST /orders/ai-confirm', () => {
   it('POST /orders (create) — request_id UUID, AI imzosi/auditi qo‘shilmaydi', async () => {
     const fx = makeController();
     await fx.controller.create(
-      { customer_id: '55', market_id: '77' },
+      {
+        customer_id: '55',
+        market_id: '77',
+        total_price: 1000,
+        // IR2OHIiN: mahsulot majburiy (tuman — mavjud mijozdan).
+        items: [{ product_name: 'TEST mahsulot', quantity: 1 }],
+      },
       adminReq,
     );
     const payload = orderCreatePayload(fx.order);

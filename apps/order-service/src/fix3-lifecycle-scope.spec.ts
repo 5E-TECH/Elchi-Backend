@@ -77,7 +77,12 @@ function makeCreateHarness() {
               save: mocks.orderSave,
               update: jest.fn(),
             }
-          : {},
+          : // IR2OHIiN: mahsulot qatorlari endi DOIM yoziladi (order_items).
+            {
+              createQueryBuilder: () => ({
+                insert: () => ({ values: () => ({ execute: jest.fn() }) }),
+              }),
+            },
       ),
     },
   };
@@ -104,7 +109,15 @@ function makeCreateHarness() {
   return { s, mocks, createdRow };
 }
 
-const BASE = { market_id: '501', customer_id: '801', total_price: 150000 };
+// IR2OHIiN: mahsulot va tuman — yaratishning majburiy mazmuni.
+const BASE = {
+  market_id: '501',
+  customer_id: '801',
+  total_price: 150000,
+  district_id: '12',
+  region_id: '3',
+  items: [{ product_id: '41', quantity: 1 }],
+};
 
 /** Audit stsenariysidagi "suiiste'mol" maydonlari (RBAC-05, LC-07). */
 const ABUSE_FIELDS = {

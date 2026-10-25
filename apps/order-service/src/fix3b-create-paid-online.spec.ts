@@ -74,7 +74,12 @@ function makeCreateHarness() {
               save: mocks.orderSave,
               update: jest.fn(),
             }
-          : {},
+          : // IR2OHIiN: mahsulot qatorlari endi DOIM yoziladi.
+            {
+              createQueryBuilder: () => ({
+                insert: () => ({ values: () => ({ execute: jest.fn() }) }),
+              }),
+            },
       ),
     },
   };
@@ -114,6 +119,11 @@ const PREPAID_DTO = {
   paid_online_amount: 200000,
   source: Order_source.EXTERNAL,
   external_id: 'ord-9',
+  // IR2OHIiN: hamkor tumanni doim yuboradi; imtiyozsiz so'rovchi yo'llari
+  // (market, filial xodimi, POST /orders/external) uchun mazmun majburiy.
+  district_id: '12',
+  region_id: '3',
+  items: [{ product_id: null, product_name: 'Kitob', quantity: 1 }],
 } as CreateDto;
 
 describe('fix3b — create() paid_online_amount ni saqlaydi', () => {

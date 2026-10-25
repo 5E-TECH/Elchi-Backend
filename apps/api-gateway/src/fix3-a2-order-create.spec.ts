@@ -142,7 +142,12 @@ describe('fix3 A2 — order create hardening', () => {
 
     await expect(
       controller.create(
-        { customer_id: '1', total_price: 1 } as any,
+        {
+          customer_id: '1',
+          total_price: 1,
+          // IR2OHIiN: mahsulot majburiy — tekshiruv doira qoidasigacha yetsin.
+          items: [{ product_name: 'TEST mahsulot', quantity: 1 }],
+        } as any,
         userReq('201', ['market']),
       ),
     ).rejects.toThrow(/customer_id faqat shu marketda buyurtmasi bor mijoz/);
@@ -310,7 +315,10 @@ describe('fix3 A2 — order create hardening', () => {
 
     await expect(
       controller.createExternal(
-        { customer_id: '1' } as any,
+        {
+          customer_id: '1',
+          items: [{ product_name: 'TEST mahsulot', quantity: 1 }],
+        } as any,
         userReq('201', ['market']),
       ),
     ).rejects.toThrow(/customer_id faqat admin uchun/);

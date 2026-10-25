@@ -180,6 +180,13 @@ function createService() {
   };
 }
 
+/** IR2OHIiN: yaratishning majburiy mazmuni — mahsulot + tuman (viloyat bilan). */
+const CREATE_CONTENT = {
+  district_id: '12',
+  region_id: '3',
+  items: [{ product_id: '1', quantity: 1 }],
+};
+
 describe('Order tracking lifecycle', () => {
   it('returns newest tracking events with pagination metadata', async () => {
     const { service, trackingRepo } = createService();
@@ -251,6 +258,8 @@ describe('Order tracking lifecycle', () => {
       {
         market_id: '1',
         customer_id: '2',
+        // IR2OHIiN: mahsulot va tuman majburiy.
+        ...CREATE_CONTENT,
       },
       // JWT branch_id — yangi kod order uchun branch_id'ni hal qilishni talab qiladi.
       { id: '900', roles: ['admin'], branch_id: '10' },
@@ -553,6 +562,7 @@ describe('Order tracking lifecycle', () => {
       {
         market_id: '1',
         customer_id: '2',
+        ...CREATE_CONTENT,
         source: 'branch' as any,
         branch_id: '22',
         current_batch_id: '33',
@@ -586,7 +596,7 @@ describe('Order tracking lifecycle', () => {
     jest
       .spyOn(lifecycle, 'findById')
       .mockResolvedValue({ id: '405', items: [] } as any);
-    const dto = { market_id: '1', customer_id: '2' };
+    const dto = { market_id: '1', customer_id: '2', ...CREATE_CONTENT };
     const requester = { id: '400', roles: ['market_operator'] };
 
     await lifecycle.create(dto, requester, {

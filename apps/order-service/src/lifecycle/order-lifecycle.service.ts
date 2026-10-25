@@ -69,6 +69,10 @@ import {
   resolveSaleActorShare as resolveSaleActorShareAmount,
 } from '../domain/order-money';
 import { OrderLookupService } from '../lookup/order-lookup.service';
+import {
+  isIntegrationOrderCreate,
+  resolveOrderCreateContent,
+} from './order-create-content';
 import { OrderCustodyService } from '../custody/order-custody.service';
 import {
   OrderNotificationService,
@@ -4978,16 +4982,24 @@ export class OrderLifecycleService {
     requester?: { id: string; roles?: string[] },
     opts?: Parameters<OrderLifecycleService['createOnce']>[2],
   ) {
+    // IR2OHIiN: mahsulotsiz / tumansiz buyurtma YARATILMAYDI — ombor rejasi
+    // va tranzaksiyadan OLDIN (hamkor/integratsiya yo'li bundan mustasno).
+    const dto = isIntegrationOrderCreate(rawDto, requester)
+      ? rawDto
+      : {
+          ...rawDto,
+          ...(await resolveOrderCreateContent(rawDto, this.lookup)),
+        };
     const warehousePlan =
-      (await this.orderWarehouse?.planCreate(rawDto, requester)) ?? null;
+      (await this.orderWarehouse?.planCreate(dto, requester)) ?? null;
     if (warehousePlan) {
       try {
-        return await this.createOnce(rawDto, requester, opts, warehousePlan);
+        return await this.createOnce(dto, requester, opts, warehousePlan);
       } catch (error) {
         if (!isWarehouseReserveFallback(error)) throw error;
       }
     }
-    return this.createOnce(rawDto, requester, opts, null);
+    return this.createOnce(dto, requester, opts, null);
   }
 
   private async createOnce(
@@ -5396,11 +5408,16 @@ export class OrderLifecycleService {
           ...CREATE_LIFECYCLE_FIELDS,
           ...CREATE_PLACEMENT_FIELDS,
         ]);
+    // IR2OHIiN: bu qo'lda (xodim/market) yaratish — hamkor emas. `create()`
+    // so'rovchisiz `source: external` ni integratsiya deb o'tkazib yuborardi,
+    // shu bois qoida shu yerda, filial va mijoz tekshiruvidan OLDIN.
+    const content = await resolveOrderCreateContent(safeDto, this.lookup);
     const staffBranchId = isPrivileged
       ? null
       : await this.resolveExternalCreateStaffBranchId(requester);
     return this.create({
       ...safeDto,
+      ...content,
       ...(staffBranchId ? { branch_id: staffBranchId } : {}),
       source: Order_source.EXTERNAL,
       operator: safeDto.operator ?? 'external_manual',

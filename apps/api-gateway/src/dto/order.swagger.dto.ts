@@ -1,6 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
-  ArrayMinSize,
   ArrayNotEmpty,
   IsArray,
   IsBoolean,
@@ -30,6 +29,10 @@ import {
   Where_deliver,
   ExtraCostRejectReason,
 } from '@app/common';
+import {
+  IsOrderCreateDistrict,
+  IsOrderCreateItems,
+} from '../order-create/order-create-content';
 
 /**
  * (lQjt6sKP) Sotuv `multipart/form-data` bilan ham keladi — "true"/"1"
@@ -357,12 +360,26 @@ export class CreateOrderRequestDto {
   @IsString()
   post_id?: string | null;
 
-  @ApiPropertyOptional({ type: String, example: '1' })
-  @IsOptional()
-  @IsString()
+  /**
+   * IR2OHIiN: tumansiz buyurtma yaratilmaydi. Berilmasa — inline mijozning
+   * `customer.district_id` si yoki mavjud mijozniki (`customer_id`) buyurtmaga
+   * YOZILADI; uchalasi ham yo'q bo'lsa 400 «Buyurtma uchun tuman tanlanmagan».
+   */
+  @ApiPropertyOptional({
+    type: String,
+    example: '1',
+    description:
+      "Tuman ID. Berilmasa `customer.district_id` (yoki mavjud mijozning tumani) buyurtmaga yoziladi; hech qayerda bo'lmasa — 400 «Buyurtma uchun tuman tanlanmagan».",
+  })
+  @IsOrderCreateDistrict()
   district_id?: string | null;
 
-  @ApiPropertyOptional({ type: String, example: '1' })
+  @ApiPropertyOptional({
+    type: String,
+    example: '1',
+    description:
+      'Viloyat ID. Berilmasa (yoki tuman mijozdan olinsa) tumandan aniqlanadi.',
+  })
   @IsOptional()
   @IsString()
   region_id?: string | null;
@@ -431,14 +448,23 @@ export class CreateOrderRequestDto {
   @IsEnum(OrderSourceDto)
   source?: OrderSourceDto;
 
-  // IDG1z5y9: bo'sh `items: []` — mahsulotsiz buyurtma; rad etiladi.
-  @ApiPropertyOptional({ type: [OrderItemDto] })
-  @IsOptional()
-  @IsArray()
-  @ArrayMinSize(1, { message: "items bo'sh bo'lmasligi kerak" })
+  /**
+   * IDG1z5y9 + IR2OHIiN: MAJBURIY — kamida bitta mahsulot qatori. Ilgari
+   * ixtiyoriy edi (faqat yuborilsa bo'sh bo'lmasligi tekshirilardi): `items`
+   * siz so'rov mahsulotsiz buyurtma yaratardi.
+   */
+  @ApiProperty({
+    type: [OrderItemDto],
+    minItems: 1,
+    description:
+      "Kamida bitta mahsulot (miqdori ≥ 1, berilmasa 1). Yo'q yoki bo'sh — 400 «Buyurtmada kamida bitta mahsulot bo‘lishi kerak».",
+  })
+  // Massiv bo'lmagan qiymat (null, satr) — «yo'q» deb: bitta aniq xabar.
+  @Transform(({ value }) => (Array.isArray(value) ? value : undefined))
+  @IsOrderCreateItems()
   @ValidateNested({ each: true })
   @Type(() => OrderItemDto)
-  items?: OrderItemDto[];
+  items!: OrderItemDto[];
 }
 
 export class UpdateOrderRequestDto {
@@ -1078,9 +1104,10 @@ export class CreateOrderByTelegramBotRequestDto {
   @IsString()
   address?: string;
 
-  @ApiProperty({ type: [OrderItemDto] })
-  @IsArray()
-  @ArrayNotEmpty()
+  // IR2OHIiN: matn `POST /orders` bilan AYNI (`createOrderInternal` ham tekshiradi).
+  @ApiProperty({ type: [OrderItemDto], minItems: 1 })
+  @Transform(({ value }) => (Array.isArray(value) ? value : undefined))
+  @IsOrderCreateItems()
   @ValidateNested({ each: true })
   @Type(() => OrderItemDto)
   order_item_info!: OrderItemDto[];
