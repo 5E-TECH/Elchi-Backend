@@ -59,6 +59,16 @@ Deploy: faqat order-service (+ api-gateway — faqat Swagger tavsifi). Migratsiy
 - [2026-10-25] 🟢 [order] — **Xavfsizlik:** `customer_id` filtri (mijoz roli doirasi) qidiruv bilan ham AND. Ilgari
   `search` berilsa tushib qolardi. Frontend o'zgarishi shart emas.
 
+### 2026-10-25 — Frontend xatolari jurnali (QKCeGZ3N, 4-band)
+
+Deploy: faqat api-gateway. Migratsiya yo'q.
+
+- [2026-10-25] 🆕 [gateway] — `POST /client-errors` (har qanday kirgan foydalanuvchi; IP bo'yicha 10 / daqiqa) →
+  `204`. Tana: `{ code: "ERR-XXXX", message (≤500), path (≤300), stack? (≤4000), component_stack? (≤4000),
+  release? (≤64), scope?: "page" | "section" | "app" }`; boshqa maydon — 400. Bazaga yozilmaydi: gateway jurnaliga
+  bitta `client_error` qatori (foydalanuvchi id va roli, user-agent bilan) — `docker logs api-gateway | grep client_error`.
+  🔧 FE: ilova xato chegarasi sahifa yiqilganda xato kodini jim yuboradi (bir kod — sessiyada bir marta, xato
+  bo'lsa e'tiborsiz).
 
 ### 2026-10-25 — Ombor ↔ buyurtma oqimi (6kHnNH9j, kontrakt `warehouse_v2_contract.md` B)
 
