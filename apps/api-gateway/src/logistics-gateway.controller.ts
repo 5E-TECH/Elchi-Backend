@@ -1618,7 +1618,14 @@ export class LogisticsGatewayController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(RoleEnum.SUPERADMIN)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Apply matched district sato_codes' })
+  @ApiOperation({
+    summary: 'Apply matched district sato_codes',
+    description:
+      "SlMjauWC (N5): kod faqat tumanning O'Z viloyatidan (viloyat SATO prefiksi bilan) va hali hech bir o'chirilmagan tumanda bo'lmagan bo'lsa yoziladi; boshqa viloyatlar bo'yicha fallback yo'q. " +
+      'Javob: `applied[]`, `appliedCount`, `skipped[]` ({id, name, sato_code, reason: code_taken | region_prefix_mismatch | not_found}), ' +
+      '`unmatched[]` (tumanlarda `reason`: region_not_found | not_found_in_region | code_taken | ambiguous), `duplicates`, `stats`. ' +
+      "`districts.sato_code` — qisman UNIQUE (o'chirilmagan, bo'sh emas); POST/PATCH dagi takroriy kod — 409.",
+  })
   applyDistrictSatoMatch() {
     return this.logisticsClient
       .send({ cmd: 'logistics.district.sato_match_apply' }, {})

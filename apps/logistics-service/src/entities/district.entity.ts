@@ -5,6 +5,15 @@ import { Region } from './region.entity';
 @Entity({ name: 'districts' })
 @Index('IDX_DISTRICT_REGION', ['region_id'])
 @Index('IDX_DISTRICT_SATO_CODE', ['sato_code'])
+/**
+ * SlMjauWC (N5): bitta rasmiy kod = bitta (o'chirilmagan) tuman. Qisman
+ * unique indeks, migratsiya 1716000000160 (prod'da takroriy kod bo'lsa
+ * migratsiya indeksni yaratmay ogohlantiradi).
+ */
+@Index('UQ_DISTRICT_SATO_CODE_LIVE', ['sato_code'], {
+  unique: true,
+  where: `"sato_code" IS NOT NULL AND "sato_code" <> '' AND "is_deleted" = false`,
+})
 export class District extends BaseEntity {
   @Column({ type: 'varchar' })
   name!: string;

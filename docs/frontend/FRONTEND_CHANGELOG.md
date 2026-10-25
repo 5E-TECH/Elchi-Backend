@@ -23,6 +23,25 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-10-25 (tun) — SATO apply: boshqa viloyat/tumanning kodi berilmaydi, `districts.sato_code` qisman unique (SlMjauWC)
+
+Deploy: logistics-service, api-gateway (faqat Swagger tavsifi). **Migratsiya bor: `1716000000160`** — qisman UNIQUE
+indeks `UQ_DISTRICT_SATO_CODE_LIVE` (`sato_code` NOT NULL, bo'sh emas, `is_deleted = false`). Takroriy kod bo'lsa
+migratsiya yiqilmaydi va ma'lumotga tegmaydi — indeks yaratilmaydi, WARNING loglanadi (2026-10-26 prod: 181 tuman,
+takroriy 0).
+
+- [2026-10-25] ✏️ [logistics] — `POST /logistics/district/sato-match/apply` (va `GET .../sato-match`): kod faqat
+  tumanning **o'z viloyatidan** (viloyat SATO prefiksi bilan) olinadi — boshqa viloyatlar bo'yicha fallback olib
+  tashlandi; boshqa (o'chirilmagan) tumanda bor kod berilmaydi; aniq nom substring'dan ustun, bitta kodga bir nechta
+  tuman da'vo qilsa — hech biriga berilmaydi. O'chirilgan tumanlar o'qilmaydi.
+- [2026-10-25] ✏️ [logistics] — apply javobida yangi **`skipped[]`**: `{id, name, sato_code, reason}`,
+  `reason` = `code_taken` | `region_prefix_mismatch` | `not_found` (yozishdan oldingi qayta tekshiruv / unique
+  poygasi). `unmatched[]` tumanlarda yangi **`reason`**: `region_not_found` | `not_found_in_region` | `code_taken`
+  | `ambiguous`. Eski maydonlar o'zgarmagan.
+- [2026-10-25] 🟢 [logistics] — tuman yaratish/kodini tahrirlashda takroriy kod poygasi (DB 23505) ham **409**
+  «District sato_code already exists»; kodsiz yaratilgan tuman `sato_code: null` (ilgari `''`).
+- 🔧 FE (ixtiyoriy): `SatoApplyDialog` natijasida `skipped` va `unmatched[].reason` ni ko'rsatish.
+
 ### 2026-10-25 — Buyurtma: mahsulotsiz va tumansiz buyurtma yaratilmaydi — barcha yo'llarda (IR2OHIiN)
 
 Deploy: api-gateway (DTO/Swagger + `createOrderInternal`), order-service (yagona yaratish nuqtasi
