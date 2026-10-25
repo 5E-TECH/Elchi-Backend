@@ -38,6 +38,7 @@ import { Roles } from './auth/roles.decorator';
 import { RolesGuard } from './auth/roles.guard';
 import { ParseBigintIdPipe } from './pipes/parse-bigint-id.pipe';
 import { projectOrderPayloadForRoles } from './auth/order-role-projection';
+import { projectLogistPayload } from './auth/logist-scope';
 import {
   AssignRegionLogistRequestDto,
   BulkAssignRegionLogistRequestDto,
@@ -1132,8 +1133,10 @@ export class LogisticsGatewayController {
   // bo'lsa frontend yangi endpointga o'tguncha kuryer FAQAT o'z viloyatini
   // oladi (doira logistics'da). Frontend o'tgach flag va COURIER olib
   // tashlansin. Qolgan rollar uchun doira SERVERDA (`resolveRegionStatsScope`):
-  // admin/superadmin/logist va HQ xodimi — hammasi, boshqa filial xodimi —
-  // faqat o'z viloyati. (dzyVftBx) LOGIST — BeePost bilan bir xil.
+  // admin/superadmin — hammasi, filial xodimi (HQ ham) — faqat o'z viloyati.
+  // (iOnGbEqi, ega LG-S3/LG-S1) LOGIST — FAQAT o'ziga biriktirilgan viloyatlar
+  // (regions.logist_id = me), `revenue`/`totalRevenue` (pul) YO'Q; viloyat
+  // biriktirilmagan logist — bo'sh `regions: []`.
   @Get('region/stats/all')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(
@@ -1145,7 +1148,11 @@ export class LogisticsGatewayController {
     RoleEnum.COURIER,
   )
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Get all region stats' })
+  @ApiOperation({
+    summary: 'Get all region stats',
+    description:
+      "iOnGbEqi — LOGIST: faqat o'ziga biriktirilgan viloyatlar (regions.logist_id = me) qatorlari, `revenue` va `summary.totalRevenue` kalitlarisiz; biriktirilmagan — `regions: []`. activeCouriers/totalOrders/deliveredOrders/cancelledOrders qoladi.",
+  })
   @ApiQuery({
     name: 'startDate',
     required: false,
@@ -1169,7 +1176,13 @@ export class LogisticsGatewayController {
         { cmd: 'logistics.region.stats_all' },
         { startDate, endDate, requester: this.regionStatsRequester(req) },
       )
-      .pipe(timeout(8000));
+      .pipe(
+        timeout(8000),
+        // iOnGbEqi: himoya qatlami — logistga pul kaliti chiqmaydi.
+        map((response: unknown) =>
+          projectLogistPayload(req.user?.roles, response),
+        ),
+      );
   }
 
   /**
@@ -1256,6 +1269,7 @@ export class LogisticsGatewayController {
   // ichki xodim, viloyat bo'yicha kuryerlar ishini nazorat qiladi (BeePost:
   // stats/:id ADMIN, SUPERADMIN, LOGIST). (uherIk8r) HQ'dan tashqari filial
   // menejeri/registratori boshqa viloyat id'si bilan → 403 (servisda).
+  // (iOnGbEqi) LOGIST — faqat o'z viloyati (boshqasi 403), totalRevenue yo'q.
   @Get('region/stats/:id')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(
@@ -1266,7 +1280,11 @@ export class LogisticsGatewayController {
     RoleEnum.LOGIST,
   )
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Get region detailed stats by id' })
+  @ApiOperation({
+    summary: 'Get region detailed stats by id',
+    description:
+      "iOnGbEqi — LOGIST: faqat o'ziga biriktirilgan viloyat (boshqasi — 403); `summary.totalRevenue`, `couriers[].totalRevenue`, `districts[].totalRevenue` kalitlari yo'q.",
+  })
   @ApiParam({ name: 'id', description: 'Region ID (id)' })
   @ApiQuery({
     name: 'startDate',
@@ -1296,7 +1314,13 @@ export class LogisticsGatewayController {
           requester: this.regionStatsRequester(req),
         },
       )
-      .pipe(timeout(8000));
+      .pipe(
+        timeout(8000),
+        // iOnGbEqi: himoya qatlami — logistga pul kaliti chiqmaydi.
+        map((response: unknown) =>
+          projectLogistPayload(req.user?.roles, response),
+        ),
+      );
   }
 
   @Post('region')

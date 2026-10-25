@@ -23,7 +23,7 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
-### 2026-10-25 — Logist kabineti: faqat o'z viloyatlari, faqat ko'rish, pulsiz (4BftLLnc)
+### 2026-10-25 — Logist kabineti: faqat o'z viloyatlari, faqat ko'rish, pulsiz (4BftLLnc, iOnGbEqi)
 
 Ega qarori 2026-10-19: LG-S1 — logist ko'radi, moliyaga aralashmaydi; LG-S3 — faqat o'ziga biriktirilgan viloyatlar
 (`regions.logist_id`). Doira SERVERDA: logist so'rovdagi filtr bilan doirani kengaytira olmaydi.
@@ -44,6 +44,14 @@ eski order-service `region_ids` ni bilmaydi, gateway bu holatda ham begona qator
   buyurtmalar»): «Summa» ustuni va «To'lov» kartasi logistda chizilmaydi; kalit yo'qligini «—» deb ko'rsating.
 - [2026-10-25] 🟢 [order] — logist uchun yozish yo'li ochilmagan: sotish, bekor qilish, tahrir, Excel eksport,
   yaratish — avvalgidek 403.
+- [2026-10-25] ⚠️ [logistics] — **`GET region/stats/all` va `GET region/stats/:id` — LOGIST** (iOnGbEqi; deploy:
+  logistics-service + api-gateway): avval 14 viloyatning hammasi tushumi bilan qaytardi. Endi faqat logistga
+  biriktirilgan viloyatlar (`logist_id = me`), `revenue` va `summary.totalRevenue` kalitlari YO'Q (stats/:id da
+  `summary.totalRevenue`, `couriers[].totalRevenue`, `districts[].totalRevenue` ham yo'q). `activeCouriers`,
+  `totalCouriers`, `totalOrders`, `deliveredOrders`, `cancelledOrders`, kuryer ismi/telefoni qoladi. Biriktirilmagan
+  logist — `regions: []`; stats/:id da boshqa viloyat — 403. Admin/superadmin va filial xodimlari javobi o'zgarmagan.
+  🟢 FE: `logistDashboard.ts` dagi `logist_id === me` klient filtri endi ortiqcha (zararsiz — qatorlarda
+  `logist_id` = o'zi), olib tashlash ixtiyoriy; «Faol kuryerlar» KPI = `activeCouriers` yig'indisi.
 
 ### 2026-10-25 — AI idempotentlik qoldiqlari (Cp2v3ZJ7) va kampaniya yuklamasi (xHPdpj0W)
 

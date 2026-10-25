@@ -5757,27 +5757,42 @@ export class LogisticsServiceService implements OnModuleInit {
    * uherIk8r — hudud statistikasi SERVERDA cheklanadi (avval 14 viloyatning
    * hammasi qaytib, cheklov faqat brauzerda edi).
    * - requester yo'q (ichki RMQ chaqiruv / eski gateway) → hammasi;
-   * - ADMIN / SUPERADMIN / LOGIST (dzyVftBx, BeePost bilan bir xil) → hammasi;
+   * - ADMIN / SUPERADMIN → hammasi;
+   * - LOGIST (iOnGbEqi, ega LG-S3/LG-S1) → FAQAT o'ziga biriktirilgan
+   *   viloyatlar (`regions.logist_id = me`, bir nechta bo'lishi mumkin) va
+   *   PULSIZ (`hideMoney`: revenue / totalRevenue yo'q). Biriktirilmagan —
+   *   hech biri. Ilgari logist 14 viloyatning hammasini tushumi bilan olardi;
    * - qolgan HAMMA ichki rol, jumladan HQ filial xodimi (menejer/registrator)
    *   → faqat o'z viloyati (HQ uchun — HQ filialining viloyati); aniqlab
    *   bo'lmasa — hech biri. Karta (uherIk8r, 3-band): "ADMIN/SUPERADMIN
-   *   bo'lmasa faqat o'z viloyatini qaytaring"; BeePost'da stats/all faqat
-   *   ADMIN/SUPERADMIN/LOGIST uchun. Ilgari HQ xodimi istisno edi (hammasi).
+   *   bo'lmasa faqat o'z viloyatini qaytaring". Ilgari HQ xodimi istisno edi.
    */
   private async resolveRegionStatsScope(
     requester?: RequesterContext,
-  ): Promise<{ all: true } | { all: false; regionId: string | null }> {
-    if (!requester) {
-      return { all: true };
+  ): Promise<
+    | { all: true; hideMoney: false }
+    | { all: false; regionIds: string[]; hideMoney: boolean }
+  > {
+    if (!requester || this.isSystemPrivileged(requester)) {
+      return { all: true, hideMoney: false };
     }
     const roles = (requester.roles ?? []).map((role) =>
       String(role ?? '').toLowerCase(),
     );
-    if (this.isSystemPrivileged(requester) || roles.includes(Roles.LOGIST)) {
-      return { all: true };
+    if (roles.includes(Roles.LOGIST)) {
+      const regions = await this.findLogistRegions(requester.id);
+      return {
+        all: false,
+        regionIds: regions.map((region) => region.id),
+        hideMoney: true,
+      };
     }
     const own = await this.resolveOwnStatsRegion(requester);
-    return { all: false, regionId: own.regionId };
+    return {
+      all: false,
+      regionIds: own.regionId ? [own.regionId] : [],
+      hideMoney: false,
+    };
   }
 
   /**
@@ -5839,12 +5854,11 @@ export class LogisticsServiceService implements OnModuleInit {
       order: { name: 'ASC' },
     });
     // uherIk8r: HQ'dan tashqari menejer/registrator faqat o'z viloyatini oladi.
-    const regions = scope.all
-      ? allRegions
-      : allRegions.filter(
-          (region) =>
-            Boolean(scope.regionId) && String(region.id) === scope.regionId,
-        );
+    // iOnGbEqi: logist — faqat o'ziga biriktirilgan viloyatlar.
+    const scopedRegionIds = scope.all ? null : new Set(scope.regionIds);
+    const regions = scopedRegionIds
+      ? allRegions.filter((region) => scopedRegionIds.has(String(region.id)))
+      : allRegions;
 
     const regionIds = regions.map((region) => String(region.id));
     const regionIdSet = new Set(regionIds);
@@ -5967,6 +5981,24 @@ export class LogisticsServiceService implements OnModuleInit {
       },
     );
 
+    // iOnGbEqi (ega LG-S1): logistga tushum (pul) qaytmaydi — `revenue` va
+    // `summary.totalRevenue` kalitlari umuman yo'q.
+    if (scope.hideMoney) {
+      const { totalRevenue: _hiddenTotal, ...moneylessSummary } = summary;
+      void _hiddenTotal;
+      return successRes(
+        {
+          regions: rows.map(({ revenue: _hidden, ...row }) => {
+            void _hidden;
+            return row;
+          }),
+          summary: moneylessSummary,
+        },
+        200,
+        'Region stats',
+      );
+    }
+
     return successRes(
       {
         regions: rows,
@@ -5990,8 +6022,12 @@ export class LogisticsServiceService implements OnModuleInit {
 
     // uherIk8r: bu javobda har bir kuryerning ismi/telefoni/daromadi bor —
     // HQ'dan tashqari filial xodimi faqat o'z viloyatini ko'radi.
+    // iOnGbEqi: logist — faqat o'ziga biriktirilgan viloyat (boshqasi 403).
     const scope = await this.resolveRegionStatsScope(requester);
-    if (!scope.all && scope.regionId !== regionId) {
+    if (
+      !scope.all &&
+      !scope.regionIds.includes(canonicalBigintId(regionId) ?? regionId)
+    ) {
       this.forbidden("Bu viloyat statistikasini ko'rishga ruxsat yo'q");
     }
 
@@ -6135,6 +6171,19 @@ export class LogisticsServiceService implements OnModuleInit {
       .slice()
       .sort((a, b) => b.deliveredOrders - a.deliveredOrders)[0];
 
+    // iOnGbEqi (ega LG-S1): logistga tushum yo'q — summary, kuryer va tuman
+    // qatorlaridagi `totalRevenue` kalitlari olib tashlanadi.
+    const withoutRevenue = <T extends { totalRevenue?: number }>(
+      row: T,
+    ): Omit<T, 'totalRevenue'> | T => {
+      if (!scope.hideMoney) {
+        return row;
+      }
+      const { totalRevenue: _hidden, ...rest } = row;
+      void _hidden;
+      return rest;
+    };
+
     return successRes(
       {
         region: {
@@ -6149,7 +6198,7 @@ export class LogisticsServiceService implements OnModuleInit {
               }
             : null,
         },
-        summary: {
+        summary: withoutRevenue({
           totalOrders: summary.totalOrders,
           deliveredOrders: summary.deliveredOrders,
           cancelledOrders: summary.cancelledOrders,
@@ -6159,11 +6208,13 @@ export class LogisticsServiceService implements OnModuleInit {
           totalCouriers: couriers.length,
           activeCouriers,
           totalDistricts: districts.length,
-        },
-        couriers: couriers.sort(
-          (a, b) => b.deliveredOrders - a.deliveredOrders,
-        ),
-        districts: districts.sort((a, b) => b.totalOrders - a.totalOrders),
+        }),
+        couriers: couriers
+          .sort((a, b) => b.deliveredOrders - a.deliveredOrders)
+          .map(withoutRevenue),
+        districts: districts
+          .sort((a, b) => b.totalOrders - a.totalOrders)
+          .map(withoutRevenue),
       },
       200,
       'Region detailed stats',
