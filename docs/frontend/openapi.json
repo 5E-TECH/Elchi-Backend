@@ -3948,6 +3948,7 @@
     },
     "/orders/markets/{marketId}/cancelled": {
       "get": {
+        "description": "Default (no `stage`): cancelled orders ready for handover — HQ-held (SA/admin, HQ registrator, market) or held by the requester's branch (branch staff). M0EPcJVf (BG3): MARKET role may pass `stage` to see ALL stages of its own cancellations (tabs «HQ'da», «Yo'lda», «Olganlarim»): any of `courier,in_transit,branch,hq,market` (comma list). With `stage`, HQ/branch pinning is dropped (still only this market). `start_day`/`end_day` (YYYY-MM-DD, Tashkent day) filter ONLY the `market` stage by handover time (`market_handover_at`, legacy: `last_handover_at`). Unknown stage — 400. For other roles `stage`/`start_day`/`end_day` are ignored (handover list unchanged). Rows carry `return_stage` and `cancel_return` (see GET /orders). Response `{ data, total, truncated? }` (max 5000 rows).",
         "operationId": "OrderGatewayController_findCancelledOrdersByMarket",
         "parameters": [
           {
@@ -3955,6 +3956,33 @@
             "required": true,
             "in": "path",
             "description": "Market ID (id)",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "start_day",
+            "required": false,
+            "in": "query",
+            "description": "MARKET + stage=market: handover date from (YYYY-MM-DD)",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "end_day",
+            "required": false,
+            "in": "query",
+            "description": "MARKET + stage=market: handover date to (YYYY-MM-DD)",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "stage",
+            "required": false,
+            "in": "query",
+            "description": "MARKET role only. Comma list of: courier, in_transit, branch, hq, market",
             "schema": {
               "type": "string"
             }

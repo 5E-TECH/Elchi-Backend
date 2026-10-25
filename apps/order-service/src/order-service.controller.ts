@@ -24,6 +24,7 @@ import { OrderSettlementService } from './settlement/order-settlement.service';
 import { OrderLifecycleService } from './lifecycle/order-lifecycle.service';
 import { OrderNotificationService } from './notification/order-notification.service';
 import type { PartlySellRequestItem } from './lifecycle/partly-sell-items';
+import type { CancelReturnStage } from './cancel-return/cancel-return';
 import {
   OrderCreatedVia,
   OrderHolderType,
@@ -1369,6 +1370,10 @@ export class OrderServiceController {
       branch_id?: string;
       holder_type?: OrderHolderType;
       exclude_branch_source?: boolean;
+      /** M0EPcJVf (BG3) — faqat market roli (gateway). */
+      stages?: CancelReturnStage[];
+      start_day?: string;
+      end_day?: string;
     },
     @Ctx() context: RmqContext,
   ) {
@@ -1377,6 +1382,9 @@ export class OrderServiceController {
         branch_id: data?.branch_id,
         holder_type: data.holder_type,
         exclude_branch_source: Boolean(data?.exclude_branch_source),
+        stages: data?.stages,
+        start_day: data?.start_day,
+        end_day: data?.end_day,
       }),
     );
   }

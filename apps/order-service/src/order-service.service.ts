@@ -52,8 +52,13 @@ import {
   buildCancelReturnView,
   cancelReturnBranchId,
   cancelReturnCourierId,
+  cancelReturnHandoverAtSql,
+  cancelReturnStageSql,
+  CANCEL_RETURN_STAGES,
+  parseCancelReturnStages,
   resolveCancelReturnStage,
   type CancelReturnContext,
+  type CancelReturnStage,
 } from './cancel-return/cancel-return';
 
 /** Qidiruvda identity-service'dan olinadigan mijozlar chegarasi. */
@@ -639,6 +644,50 @@ export class OrderServiceService {
     qb.addOrderBy('order.id', sort.dir);
   }
 
+  /**
+   * M0EPcJVf (BG3) — bekor bosqichlari bo'yicha filtr (`cancelReturnStageSql`,
+   * OR). Sana oralig'i faqat `market` bosqichiga (topshirish vaqti).
+   */
+  private applyCancelStageFilter(
+    qb: SelectQueryBuilder<Order>,
+    stages: CancelReturnStage[],
+    handoverDays: { start_day?: string; end_day?: string },
+  ) {
+    const range = tashkentDayRange(
+      handoverDays.start_day,
+      handoverDays.end_day,
+    );
+    for (const [key, value] of [
+      ['handover_start_day', range.start],
+      ['handover_end_day', range.end],
+    ] as const) {
+      if (value && Number.isNaN(value.getTime())) {
+        this.badRequest(`${key} noto'g'ri sana formatida`);
+      }
+    }
+    const handoverAt = cancelReturnHandoverAtSql('order');
+    qb.andWhere(
+      new Brackets((nested) => {
+        for (const stage of stages) {
+          if (!CANCEL_RETURN_STAGES.includes(stage)) {
+            this.badRequest(`stage noto'g'ri: ${String(stage)}`);
+          }
+          let condition = cancelReturnStageSql(stage, 'order');
+          const params: Record<string, Date> = {};
+          if (stage === 'market' && range.start) {
+            condition += ` AND ${handoverAt} >= :cancelHandoverStart`;
+            params.cancelHandoverStart = range.start;
+          }
+          if (stage === 'market' && range.end) {
+            condition += ` AND ${handoverAt} <= :cancelHandoverEnd`;
+            params.cancelHandoverEnd = range.end;
+          }
+          nested.orWhere(`(${condition})`, params);
+        }
+      }),
+    );
+  }
+
   private normalizePagination(
     page?: number,
     limit?: number,
@@ -748,6 +797,14 @@ export class OrderServiceService {
     holder_type?: OrderHolderType;
     qr_code_token?: string;
     status?: Order_status | Order_status[] | string | string[];
+    /**
+     * M0EPcJVf (BG3) — bekor bosqichlari (OR). `market` bosqichiga
+     * `handover_start_day`/`handover_end_day` (Toshkent kuni, topshirish vaqti
+     * bo'yicha) qo'llanadi; boshqa bosqichlar — hozirgi holat, sanasiz.
+     */
+    cancel_stages?: CancelReturnStage[];
+    handover_start_day?: string;
+    handover_end_day?: string;
     where_deliver?: Where_deliver;
     return_requested?: boolean;
     start_day?: string;
@@ -792,6 +849,9 @@ export class OrderServiceService {
       holder_type,
       qr_code_token,
       status,
+      cancel_stages,
+      handover_start_day,
+      handover_end_day,
       where_deliver,
       return_requested,
       start_day,
@@ -926,6 +986,12 @@ export class OrderServiceService {
     } else if (exclude_statuses?.length) {
       qb.andWhere('order.status NOT IN (:...exclude_statuses)', {
         exclude_statuses,
+      });
+    }
+    if (cancel_stages?.length) {
+      this.applyCancelStageFilter(qb, cancel_stages, {
+        start_day: handover_start_day,
+        end_day: handover_end_day,
       });
     }
     if (where_deliver) {
@@ -1309,8 +1375,30 @@ export class OrderServiceService {
       branch_id?: string;
       holder_type?: OrderHolderType;
       exclude_branch_source?: boolean;
+      /** M0EPcJVf (BG3) — market o'z bekorlarini bosqich bo'yicha (gateway faqat market roliga beradi). */
+      stages?: CancelReturnStage[];
+      start_day?: string;
+      end_day?: string;
     },
   ) {
+    // RMQ payload — tip kafolat emas: noma'lum bosqich 400 (SQL'ga yetmaydi).
+    const parsedStages = parseCancelReturnStages(options.stages);
+    if (parsedStages.invalid.length) {
+      this.badRequest(
+        `stage noto'g'ri: ${parsedStages.invalid.join(', ')} (ruxsat: ${CANCEL_RETURN_STAGES.join(', ')})`,
+      );
+    }
+    if (parsedStages.stages) {
+      // Bosqich so'ralsa — HQ/filial va «pochtaga biriktirilmagan» cheklovlarisiz,
+      // faqat shu marketning shu bosqichdagi buyurtmalari (yo'lda/topshirilgan ham).
+      return this.findAll({
+        market_id,
+        cancel_stages: parsedStages.stages,
+        handover_start_day: options.start_day,
+        handover_end_day: options.end_day,
+        disable_pagination: true,
+      });
+    }
     return this.findAll({
       market_id,
       branch_id: options.branch_id,
@@ -2821,6 +2909,9 @@ export class OrderServiceService {
       branch_id?: string;
       holder_type?: OrderHolderType;
       exclude_branch_source?: boolean;
+      stages?: CancelReturnStage[];
+      start_day?: string;
+      end_day?: string;
     },
   ) {
     const result = await this.findCancelledOrdersByMarket(market_id, options);
@@ -2828,6 +2919,9 @@ export class OrderServiceService {
     return {
       data: enriched,
       total: result.total,
+      ...(options.stages?.length && result.truncated
+        ? { truncated: true }
+        : {}),
     };
   }
 

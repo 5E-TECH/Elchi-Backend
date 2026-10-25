@@ -3,6 +3,7 @@ import { of } from 'rxjs';
 import { OrderServiceService } from '../order-service.service';
 import {
   buildCancelReturnView,
+  parseCancelReturnStages,
   resolveCancelReturnStage,
   type CancelReturnContext,
   type CancelReturnStage,
@@ -490,5 +491,31 @@ describe('5Yy6r6UI — enrichOrders: return_stage + cancel_return', () => {
         place_name: null,
       }),
     );
+  });
+});
+
+describe('M0EPcJVf — parseCancelReturnStages (`stage` so`rov parametri)', () => {
+  it('vergulli ro`yxat, massiv, harf farqsiz, takrorsiz', () => {
+    expect(parseCancelReturnStages(' HQ, market ,hq')).toEqual({
+      stages: ['hq', 'market'],
+      invalid: [],
+    });
+    expect(parseCancelReturnStages(['courier', 'in_transit,branch'])).toEqual({
+      stages: ['courier', 'in_transit', 'branch'],
+      invalid: [],
+    });
+  });
+
+  it('bo`sh — filtr yo`q; noma`lum qiymat alohida qaytadi', () => {
+    for (const raw of [undefined, null, '', ' , ', [], {}]) {
+      expect(parseCancelReturnStages(raw)).toEqual({
+        stages: null,
+        invalid: [],
+      });
+    }
+    expect(parseCancelReturnStages('hq,yolda')).toEqual({
+      stages: ['hq'],
+      invalid: ['yolda'],
+    });
   });
 });

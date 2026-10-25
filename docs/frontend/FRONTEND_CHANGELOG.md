@@ -23,9 +23,9 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
-### 2026-10-25 — Bekor holatlari: «qayerda turibdi» va marketga topshirish (BG1 5Yy6r6UI, BG2 fL79tFbs)
+### 2026-10-25 — Bekor holatlari: «qayerda turibdi», marketga topshirish, market tablari (BG1 5Yy6r6UI, BG2 fL79tFbs, BG3 M0EPcJVf)
 
-Deploy: order-service (+ api-gateway — Swagger tavsifi). **Migratsiya bor:** `1716000000154-CancelReturnMarketHandover`
+Deploy: order-service + api-gateway. **Migratsiya bor:** `1716000000154-CancelReturnMarketHandover`
 (faqat qo'shimcha NULL ustunlar + eski topshirishlar backfill'i; jadval qayta yozilmaydi).
 
 - [2026-10-25] ✏️ [order] — **BG1:** `GET /orders`, `GET /orders/:id` (va boshqa boyitilgan buyurtma ro'yxatlari —
@@ -40,6 +40,15 @@ Deploy: order-service (+ api-gateway — Swagger tavsifi). **Migratsiya bor:** `
   🔧 FE (vOczoOUE 2-bosqich): `cancel_return` bo'lsa shuni o'qing (`cancelReturnStage.ts` hisobi — zaxira); joy nomi
   hamma rolda `place_name`, kunlar `received_at` dan, «Marketga topshirildi» vaqti/usuli — `handed_over_at` /
   `handover_method` (ro'yxatda ham).
+- [2026-10-25] ✏️ [gateway/order] — **BG3:** `GET /orders/markets/:marketId/cancelled` — MARKET roli endi o'z
+  bekorlarining HAMMA bosqichini ko'radi: `?stage=courier,in_transit,branch,hq,market` (vergul bilan, harf farqsiz;
+  noma'lum qiymat — 400). `stage` bilan HQ qotirmasi olinadi (doira — faqat o'z marketi, begona market — 403 avvalgidek).
+  `start_day` / `end_day` (YYYY-MM-DD, Toshkent kuni) — FAQAT `market` bosqichiga, topshirish vaqti bo'yicha
+  (`market_handover_at`, eski yozuvda `last_handover_at`). Javob `{ data, total, truncated? }` (≤ 5000 qator), qatorlarda
+  `return_stage` / `cancel_return`. `stage` siz — o'zgarishsiz (HQ'da turganlar); boshqa rollarda `stage` e'tiborsiz
+  (topshirish ro'yxati o'zgarmaydi).
+  🔧 FE (vOczoOUE 2-bosqich, market 3 tabi), tavsiya: «HQ'da» — `stage=hq`, «Yo'lda» (hali HQ'ga yetmagan) —
+  `stage=courier,in_transit,branch`, «Olganlarim» — `stage=market&start_day=…&end_day=…`.
 
 - [2026-10-25] ✏️ [order] — buyurtmada yangi maydonlar (GET /orders, /orders/:id va boshqa buyurtma javoblarida
   o'z-o'zidan chiqadi): `market_handover_at` (ISO | null), `market_handover_by` (xodim id | null),

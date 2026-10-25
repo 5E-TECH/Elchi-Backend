@@ -8,6 +8,10 @@ import { OrderTracking } from '../entities/order-tracking.entity';
 import { OrderCustodyEvent } from '../entities/order-custody-event.entity';
 import { Branch } from '../entities/branch.entity';
 import { CancelReturnMarketHandover1716000000154 } from '../../../../migrations/1716000000154-CancelReturnMarketHandover';
+import {
+  CANCEL_RETURN_STAGES,
+  resolveCancelReturnStage,
+} from './cancel-return';
 
 /**
  * Bekor holatlari (BG1 5Yy6r6UI, BG2 fL79tFbs) — HAQIQIY Postgres'da:
@@ -15,7 +19,10 @@ import { CancelReturnMarketHandover1716000000154 } from '../../../../migrations/
  *     (vaqt/xodim/usul tracking'dan, joy custody'dan; ombor qaytishi va hali
  *     topshirilmaganlar tegilmaydi), qayta yurgizish, down;
  *   - GET /orders yo'li (`findAllEnriched`): `return_stage` / `cancel_return`
- *     — joy nomi `branch_schema.branches` dan, qabul vaqti tracking'dan.
+ *     — joy nomi `branch_schema.branches` dan, qabul vaqti tracking'dan;
+ *   - M0EPcJVf (BG3): bosqich SQL sharti JS qoidasi bilan bir xil qatorlarni
+ *     tanlaydi (har bosqich), `market` sana oralig'i, boshqa market chiqmaydi,
+ *     `stage` siz — eski HQ ro'yxati o'zgarmagan.
  *
  * Faqat lokal `/elchi_cancel_test`:
  *   CANCEL_RETURN_PG_TEST_URI=postgres://postgres@127.0.0.1:<port>/elchi_cancel_test
@@ -459,6 +466,175 @@ const HQ_ID = '1';
         expect(byId.get(ids.preDelivery)).toEqual(
           expect.objectContaining({ return_stage: null, cancel_return: null }),
         );
+      });
+    });
+
+    describe('market bekorlari bosqich bo`yicha (M0EPcJVf)', () => {
+      const MARKET = '888';
+      const ids: Record<string, string> = {};
+      const at = (iso: string) => new Date(iso);
+
+      beforeAll(async () => {
+        const rows: Record<string, Row> = {
+          courier: {
+            status: 'cancelled',
+            holder_type: 'COURIER',
+            holder_courier_id: '26',
+            post_id: '41',
+          },
+          transitHq: {
+            status: 'cancelled (sent)',
+            holder_type: 'HQ',
+            canceled_post_id: '5',
+            branch_id: HQ_ID,
+          },
+          transitBranch: {
+            status: 'cancelled (sent)',
+            holder_type: 'BRANCH',
+            holder_branch_id: '12',
+            canceled_post_id: '6',
+          },
+          branch: {
+            status: 'cancelled',
+            holder_type: 'BRANCH',
+            holder_branch_id: '12',
+            post_id: '41',
+          },
+          branchInPost: {
+            status: 'cancelled',
+            holder_type: 'BRANCH',
+            holder_branch_id: '12',
+            post_id: '41',
+            canceled_post_id: '6',
+          },
+          hq: { status: 'cancelled', holder_type: 'HQ', post_id: '41' },
+          hqByCancelledPost: {
+            status: 'cancelled',
+            holder_type: 'HQ',
+            canceled_post_id: '5',
+          },
+          preDelivery: { status: 'cancelled', holder_type: 'HQ' },
+          marketOct10: {
+            status: 'returned_to_market',
+            holder_type: 'MARKET',
+            market_handover_at: at('2026-10-10T12:00:00Z'),
+          },
+          marketOct20: {
+            status: 'returned_to_market',
+            holder_type: 'MARKET',
+            market_handover_at: at('2026-10-20T12:00:00Z'),
+          },
+          legacyClosed: {
+            status: 'closed',
+            holder_type: 'MARKET',
+            last_handover_at: at('2026-10-05T09:00:00Z'),
+          },
+          cancelledMarket: { status: 'cancelled', holder_type: 'MARKET' },
+          sold: { status: 'sold', holder_type: 'COURIER' },
+        };
+        for (const [key, values] of Object.entries(rows)) {
+          ids[key] = await insertOrder({ market_id: MARKET, ...values });
+        }
+        // Boshqa market — hech qaysi bosqichda chiqmasligi kerak.
+        ids.otherMarket = await insertOrder({
+          market_id: '999',
+          status: 'cancelled',
+          holder_type: 'HQ',
+          post_id: '41',
+        });
+      });
+
+      const fetchIds = async (options: Record<string, unknown>) => {
+        const result: Row = await service.findCancelledByMarketEnriched(
+          MARKET,
+          options,
+        );
+        return (result.data as Row[]).map((row) => String(row.id)).sort();
+      };
+
+      it.each(CANCEL_RETURN_STAGES.map((stage) => [stage]))(
+        '%s: SQL sharti JS qoidasi bilan bir xil qatorlar',
+        async (stage) => {
+          const all = await db
+            .getRepository(Order)
+            .find({ where: { market_id: MARKET } });
+          const expected = all
+            .filter((row) => resolveCancelReturnStage(row) === stage)
+            .map((row) => String(row.id))
+            .sort();
+          expect(expected.length).toBeGreaterThan(0);
+          const result: Row = await service.findCancelledByMarketEnriched(
+            MARKET,
+            { stages: [stage] },
+          );
+          expect(
+            (result.data as Row[]).map((row) => String(row.id)).sort(),
+          ).toEqual(expected);
+          for (const row of result.data as Row[]) {
+            expect(row.return_stage).toBe(stage);
+          }
+        },
+      );
+
+      it('kutilgan to`plamlar (aniq): yo`lda, HQ, topshirilgan', async () => {
+        expect(await fetchIds({ stages: ['in_transit'] })).toEqual(
+          [ids.transitHq, ids.transitBranch].sort(),
+        );
+        expect(await fetchIds({ stages: ['hq'] })).toEqual(
+          [ids.hq, ids.hqByCancelledPost].sort(),
+        );
+        expect(await fetchIds({ stages: ['market'] })).toEqual(
+          [
+            ids.marketOct10,
+            ids.marketOct20,
+            ids.legacyClosed,
+            ids.cancelledMarket,
+          ].sort(),
+        );
+      });
+
+      it('sana oralig`i faqat `market` bosqichiga (topshirish vaqti, eski — custody vaqti)', async () => {
+        expect(
+          await fetchIds({
+            stages: ['market'],
+            start_day: '2026-10-09',
+            end_day: '2026-10-15',
+          }),
+        ).toEqual([ids.marketOct10]);
+        expect(
+          await fetchIds({
+            stages: ['market'],
+            start_day: '2026-10-01',
+            end_day: '2026-10-06',
+          }),
+        ).toEqual([ids.legacyClosed]);
+        // HQ bosqichi sanaga bog'liq emas.
+        expect(
+          await fetchIds({
+            stages: ['hq', 'market'],
+            start_day: '2026-10-19',
+          }),
+        ).toEqual([ids.hq, ids.hqByCancelledPost, ids.marketOct20].sort());
+      });
+
+      it('`stage` siz — eski topshirish ro`yxati (HQ, pochtaga biriktirilmagan) o`zgarmagan', async () => {
+        expect(await fetchIds({ holder_type: 'HQ' })).toEqual(
+          [ids.hq, ids.preDelivery].sort(),
+        );
+      });
+
+      it('noma`lum bosqich va noto`g`ri sana — 400', async () => {
+        await expect(
+          service.findCancelledByMarketEnriched(MARKET, {
+            stages: ['yolda' as never],
+          }),
+        ).rejects.toMatchObject({ error: { statusCode: 400 } });
+        await expect(
+          service.findCancelledByMarketEnriched(MARKET, {
+            stages: ['market'],
+            start_day: '2026-13-45',
+          }),
+        ).rejects.toMatchObject({ error: { statusCode: 400 } });
       });
     });
   },

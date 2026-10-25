@@ -1,3 +1,9 @@
+import {
+  CANCEL_RETURN_STAGES,
+  parseCancelReturnStages,
+  type CancelReturnStage,
+} from '@app/common';
+
 /**
  * BEKOR HOLATLARI — bekor qilingan / qaytgan posilka QAYERDA va marketga QANDAY
  * topshirildi (ega qarori 2026-10-19; Trello BG1–BG3: 5Yy6r6UI, fL79tFbs,
@@ -56,14 +62,8 @@ export const CANCEL_HANDOVER_TRACKING_ACTION: Readonly<
  * Qabulgacha bekor qilingan (`created`/`new` → `cancelled`) buyurtmada `post_id`
  * bo'sh — posilka marketdan chiqmagan: bosqich `null` (taxmin qilinmaydi).
  */
-export const CANCEL_RETURN_STAGES = [
-  'courier',
-  'in_transit',
-  'branch',
-  'hq',
-  'market',
-] as const;
-export type CancelReturnStage = (typeof CANCEL_RETURN_STAGES)[number];
+export { CANCEL_RETURN_STAGES, parseCancelReturnStages };
+export type { CancelReturnStage };
 
 const STATUS_CANCELLED = 'cancelled';
 const STATUS_CANCELLED_SENT = 'cancelled (sent)';
@@ -279,3 +279,35 @@ export function buildCancelReturnView(
   }
   return view;
 }
+
+/**
+ * M0EPcJVf (BG3) — bosqichning SQL sharti (`resolveCancelReturnStage` bilan
+ * AYNAN bir xil; pg spec ikkalasini bir xil qatorlarda solishtiradi). `alias` —
+ * TypeORM so'rov aliasi (`order`). Qiymatlar o'zgarmas — parametr kerak emas.
+ */
+export function cancelReturnStageSql(
+  stage: CancelReturnStage,
+  alias = 'order',
+): string {
+  const a = alias;
+  switch (stage) {
+    case 'courier':
+      return `(${a}.status = 'cancelled' AND (${a}.holder_type = 'COURIER' OR (${a}.holder_type IS NULL AND ${a}.holder_courier_id IS NOT NULL AND ${a}.holder_courier_id <> 0)))`;
+    case 'in_transit':
+      return `(${a}.status = 'cancelled (sent)' AND ${a}.holder_type IS DISTINCT FROM 'MARKET')`;
+    case 'branch':
+      return `(${a}.status = 'cancelled' AND ${a}.holder_type = 'BRANCH' AND ${a}.post_id IS NOT NULL AND ${a}.canceled_post_id IS NULL)`;
+    case 'hq':
+      return `(${a}.status = 'cancelled' AND ${a}.holder_type = 'HQ' AND (${a}.post_id IS NOT NULL OR ${a}.canceled_post_id IS NOT NULL))`;
+    case 'market':
+      return `(${a}.status = 'returned_to_market' OR (${a}.status IN ('closed', 'cancelled', 'cancelled (sent)') AND ${a}.holder_type = 'MARKET'))`;
+  }
+}
+
+/**
+ * M0EPcJVf (BG3) — «Marketga topshirildi» vaqti SQL ifodasi (sana oralig'i
+ * filtri uchun): BG2 ustuni, eski yozuvda — custody vaqti
+ * (`buildCancelReturnView.handed_over_at` bilan bir xil).
+ */
+export const cancelReturnHandoverAtSql = (alias = 'order'): string =>
+  `COALESCE(${alias}.market_handover_at, ${alias}.last_handover_at)`;
