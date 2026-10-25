@@ -260,6 +260,25 @@ export class DistrictMergeErrorDetailsDto {
   to_district_id!: string;
 
   @ApiProperty({
+    example: 128,
+    description:
+      "Z1c1sNPT: A tumanga QAYTARILGAN buyurtmalar soni (jami, o'chirilganlar bilan); boshlanmagan qadam — 0",
+  })
+  rolled_back_orders!: number;
+
+  @ApiProperty({
+    example: 2,
+    description: 'Z1c1sNPT: A tumanga qaytarilgan foydalanuvchilar soni',
+  })
+  rolled_back_users!: number;
+
+  @ApiProperty({
+    example: 0,
+    description: 'Z1c1sNPT: A tumanga qaytarilgan filiallar soni',
+  })
+  rolled_back_branches!: number;
+
+  @ApiProperty({
     example: false,
     description:
       "`true` — kompensatsiya to'liq bo'lmadi, qo'lda tuzatish kerak (activity log: `district.merge_compensation_failed`)",
@@ -271,6 +290,14 @@ export class DistrictMergeErrorDetailsDto {
     description: 'Faqat `manual_fix: true` da',
   })
   stranded?: DistrictMergeStrandedDto[];
+
+  @ApiPropertyOptional({
+    type: [String],
+    example: ['7001', '7002'],
+    description:
+      "Z1c1sNPT: faqat `manual_fix: true` da — A ga QAYTMAGAN buyurtmalarning birinchi ≤10 ta ID'si (to'liq ro'yxat — activity log); ID'lar noma'lum bo'lsa yo'q",
+  })
+  stranded_order_ids?: string[];
 }
 
 export class DistrictMergeErrorDataDto {
