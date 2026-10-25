@@ -67,6 +67,7 @@ import {
 } from './dto/identity.swagger.dto';
 import { SetCourierRegionsRequestDto } from './dto/courier-regions.swagger.dto';
 import { CreateInvestorUserRequestDto } from './dto/investor.swagger.dto';
+import { isRpcNotFoundError } from './order-qr-light-view';
 import { ParseBigintIdPipe } from './pipes/parse-bigint-id.pipe';
 
 interface JwtUser {
@@ -499,7 +500,15 @@ export class ApiGatewayController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(RoleEnum.MANAGER, RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Create courier' })
+  @ApiOperation({
+    summary: 'Create courier',
+    description:
+      "Menejer — faqat o'z filialida (`branch_id` yuborilmaydi yoki o'z filiali; boshqasi — 400). " +
+      'perqZ3oM (ega qarori): superadmin/admin `branch_id` bilan istalgan FAOL HQ / REGIONAL / HYBRID filialda yaratadi ' +
+      "(viloyat filialdan olinadi); `branch_id` yuborilmasa — HQ (avvalgidek). Noma'lum, nofaol, PICKUP yoki " +
+      "viloyatsiz (HQ bo'lmagan) filial — 400, kuryer yaratilmaydi. Kuryer o'sha filialga biriktiriladi (branch_users) — " +
+      'pul zanjiri menejer yaratgan kuryer bilan bir xil (kuryer → filial → HQ).',
+  })
   @ApiBody({ type: CreateCourierRequestDto })
   @ApiCreatedResponse({ description: 'Courier created' })
   @ApiConflictResponse({ description: 'Conflict' })
@@ -515,12 +524,22 @@ export class ApiGatewayController {
     const isSystemPrivileged =
       requesterRoles.includes(RoleEnum.SUPERADMIN) ||
       requesterRoles.includes(RoleEnum.ADMIN);
+    const requestedBranchId = String(dto.branch_id ?? '').trim();
 
-    // Branch selection: SUPERADMIN/ADMIN — HQ filial, qolganlar — o'z BranchUser
-    // assignment'idan. region_id ham branch'dan keladi. (Hozircha gateway'da —
-    // kelajakda branch-service'ga ko'chiriladi.)
+    // Branch selection: SUPERADMIN/ADMIN — tanlangan filial (perqZ3oM) yoki
+    // sukut HQ; menejer — o'z BranchUser assignment'idan. region_id ham
+    // branch'dan keladi. (Hozircha gateway'da — kelajakda branch-service'ga
+    // ko'chiriladi.)
     let branchId = '';
-    if (isSystemPrivileged) {
+    if (isSystemPrivileged && requestedBranchId) {
+      // perqZ3oM (ega qarori): SA/admin HQ bo'lmagan filialga ham kuryer
+      // yaratadi. Faqat raqamli id ('+1', ' 1 ', '0x1' — Postgres bigint'ga
+      // jimgina aylantiradi); kanonik ko'rinish ('01' ≡ '1').
+      if (!/^\d{1,19}$/.test(requestedBranchId)) {
+        throw new BadRequestException("branch_id noto'g'ri");
+      }
+      branchId = BigInt(requestedBranchId).toString();
+    } else if (isSystemPrivileged) {
       const hqBranch = await firstValueFrom(
         this.branchClient
           .send({ cmd: 'branch.find_hq' }, {})
@@ -541,21 +560,19 @@ export class ApiGatewayController {
     }
 
     /**
-     * ⚠️ `branch_id` JIMGINA E'TIBORSIZ QOLDIRILMAYDI (Andijon E2E, wUHQrZko).
-     *
-     * Filial so'rovdan emas, so'rovchidan aniqlanadi (SA/admin — HQ, menejer —
-     * o'z filiali). Ilgari boshqa filial yuborilsa 201 qaytar, kuryer esa
-     * jimgina HQ'ga tushardi — keyin uni ko'chirish 409 berardi. Endi mos
-     * kelmasa ochiq 400; mos kelsa (menejer UI'si o'z filialini yuboradi)
-     * avvalgidek.
+     * ⚠️ Menejer uchun `branch_id` JIMGINA E'TIBORSIZ QOLDIRILMAYDI (Andijon
+     * E2E, wUHQrZko): filial so'rovchidan aniqlanadi (o'z filiali); boshqa
+     * filial yuborilsa ochiq 400, mos kelsa (menejer UI'si o'z filialini
+     * yuboradi) avvalgidek. SA/admin uchun yuborilgan filial — tanlov
+     * (perqZ3oM), quyida tekshiriladi.
      */
-    const requestedBranchId = String(dto.branch_id ?? '').trim();
-    if (requestedBranchId && requestedBranchId !== branchId) {
+    if (
+      !isSystemPrivileged &&
+      requestedBranchId &&
+      requestedBranchId !== branchId
+    ) {
       throw new BadRequestException(
-        isSystemPrivileged
-          ? "Admin/Superadmin uchun courier faqat HQ branch'da yaratiladi — " +
-              `branch_id=${requestedBranchId} qabul qilinmaydi`
-          : `Kuryer faqat o'z filialingizda yaratiladi — branch_id=${requestedBranchId} qabul qilinmaydi`,
+        `Kuryer faqat o'z filialingizda yaratiladi — branch_id=${requestedBranchId} qabul qilinmaydi`,
       );
     }
 
@@ -566,18 +583,52 @@ export class ApiGatewayController {
           { id: branchId, requester: this.toRequester(req) },
         )
         .pipe(timeout(8000)),
-    );
+    ).catch((error: unknown) => {
+      // perqZ3oM: SA/admin tanlagan filial yo'q (yoki o'chirilgan) — 400.
+      if (isSystemPrivileged && isRpcNotFoundError(error)) {
+        throw new BadRequestException(
+          `Filial topilmadi — branch_id=${branchId}`,
+        );
+      }
+      throw error;
+    });
     const branchType = String(branchResponse?.data?.type ?? '')
       .trim()
       .toUpperCase();
-    if (isSystemPrivileged && branchType !== 'HQ') {
-      throw new BadRequestException(
-        "Admin/Superadmin uchun courier faqat HQ branch'da yaratiladi",
-      );
-    }
-
     const branchRegionId = String(branchResponse?.data?.region_id ?? '').trim();
-    if (!branchRegionId && !isSystemPrivileged) {
+
+    if (isSystemPrivileged) {
+      if (!branchResponse?.data) {
+        throw new BadRequestException(
+          `Filial topilmadi — branch_id=${branchId}`,
+        );
+      }
+      if (!requestedBranchId && branchType !== 'HQ') {
+        throw new BadRequestException(
+          'Admin/Superadmin uchun sukut — HQ branch, u HQ turida emas',
+        );
+      }
+      const branchStatus = String(branchResponse.data.status ?? '')
+        .trim()
+        .toLowerCase();
+      if (branchStatus && branchStatus !== 'active') {
+        throw new BadRequestException(
+          "Filial faol emas — unda kuryer yaratib bo'lmaydi",
+        );
+      }
+      // branch-service `branch.user.assign` qoidasi bilan AYNI (u kuryer
+      // yozilganidan KEYIN rad etib, saga kompensatsiyasiga tushardi).
+      if (!['HQ', 'REGIONAL', 'HYBRID'].includes(branchType)) {
+        throw new BadRequestException(
+          'Kuryer faqat HQ, REGIONAL yoki HYBRID filialda yaratiladi',
+        );
+      }
+      // HQ bo'lmagan filial kuryeri — viloyati filialdan (menejer yo'li
+      // bilan bir xil); viloyatsiz filialda yaratilmaydi.
+      if (branchType !== 'HQ' && !branchRegionId) {
+        throw new BadRequestException('Filialda region_id topilmadi');
+      }
+    } else if (!branchRegionId) {
       throw new BadRequestException('Manager branchida region_id topilmadi');
     }
 

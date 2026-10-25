@@ -1,7 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
-import { NEVER, TimeoutError, of } from 'rxjs';
+import { NEVER, TimeoutError, of, throwError } from 'rxjs';
 import { ApiGatewayController } from './api-gateway.controller';
 import { CreateManagerRequestDto } from './dto/identity.swagger.dto';
 
@@ -614,8 +614,12 @@ describe('ApiGatewayController', () => {
 
   /**
    * wUHQrZko — POST /couriers dagi branch_id jimgina e'tiborsiz qolardi:
-   * superadmin '13' yuborsa 201, kuryer esa HQ'ga tushardi. Endi mos kelmasa
-   * 400; mos kelsa (menejer UI'si o'z filialini yuboradi) avvalgidek.
+   * superadmin '13' yuborsa 201, kuryer esa HQ'ga tushardi. Menejer uchun —
+   * mos kelmasa 400; mos kelsa (menejer UI'si o'z filialini yuboradi)
+   * avvalgidek.
+   * perqZ3oM (ega qarori): SA/admin `branch_id` bilan HQ bo'lmagan FAOL
+   * HQ/REGIONAL/HYBRID filialda yaratadi (viloyat filialdan); noma'lum,
+   * nofaol, PICKUP, viloyatsiz filial — 400; yubormasa — HQ.
    */
   describe('createCourier — branch_id jimgina tashlanmaydi', () => {
     const body = (branchId?: string) =>
@@ -628,6 +632,7 @@ describe('ApiGatewayController', () => {
         ...(branchId ? { branch_id: branchId } : {}),
       }) as never;
     const SA = { user: { sub: '1', username: 'sa', roles: ['superadmin'] } };
+    const ADMIN = { user: { sub: '2', username: 'ad', roles: ['admin'] } };
     const MANAGER = { user: { sub: '19', username: 'm', roles: ['manager'] } };
 
     const mockHq = () =>
@@ -637,10 +642,77 @@ describe('ApiGatewayController', () => {
           : of({ data: { id: '1', type: 'HQ', region_id: '' } }),
       );
 
-    it.each([['13'], ['2']])(
-      '⭐ superadmin branch_id=%p (HQ emas) — 400, kuryer yaratilmaydi',
-      async (branchId) => {
-        mockHq();
+    /** perqZ3oM: branch.find_by_id javobi (filial jadvali). */
+    const mockBranches = (branches: Record<string, Record<string, unknown>>) =>
+      branchClient.send.mockImplementation(
+        (pattern: { cmd: string }, payload: { id?: string }) => {
+          if (pattern.cmd === 'branch.find_hq') {
+            return of({ data: { id: '1' } });
+          }
+          if (pattern.cmd === 'branch.find_by_id') {
+            const row = branches[String(payload?.id)];
+            return row
+              ? of({ data: row })
+              : throwError(() => ({
+                  statusCode: 404,
+                  message: 'Filial topilmadi',
+                }));
+          }
+          return of({ data: null });
+        },
+      );
+    const BRANCHES = {
+      '1': { id: '1', type: 'HQ', status: 'active', region_id: null },
+      '6': { id: '6', type: 'REGIONAL', status: 'active', region_id: '3' },
+      '7': { id: '7', type: 'HYBRID', status: 'active', region_id: '5' },
+      '8': { id: '8', type: 'REGIONAL', status: 'inactive', region_id: '3' },
+      '9': { id: '9', type: 'PICKUP', status: 'active', region_id: '3' },
+      '10': { id: '10', type: 'REGIONAL', status: 'active', region_id: null },
+    };
+    const findHqCalls = () =>
+      branchClient.send.mock.calls.filter(
+        ([pattern]: [{ cmd: string }]) => pattern.cmd === 'branch.find_hq',
+      );
+
+    it.each([
+      ['superadmin', SA, '6', '3'],
+      ['admin', ADMIN, '7', '5'],
+      ['superadmin (kanonik 06)', SA, '06', '3'],
+    ])(
+      '⭐ perqZ3oM: %s branch_id=%p (HQ emas, faol) — shu filialda, viloyat filialdan',
+      async (_label, who, branchId, regionId) => {
+        mockBranches(BRANCHES);
+
+        await apiGatewayController.createCourier(body(branchId), who as never);
+
+        const canonical = String(BigInt(branchId));
+        expect(identityClient.send).toHaveBeenCalledTimes(1);
+        expect(identityClient.send).toHaveBeenCalledWith(
+          { cmd: 'identity.courier.create' },
+          {
+            dto: expect.objectContaining({
+              branch_id: canonical,
+              region_id: regionId,
+            }),
+            requester: { id: who.user.sub, roles: who.user.roles },
+          },
+        );
+        // Tanlangan filial — HQ qidirilmaydi.
+        expect(findHqCalls()).toHaveLength(0);
+      },
+    );
+
+    it.each([
+      ['noma`lum filial', '13'],
+      ['nofaol filial', '8'],
+      ['PICKUP filial', '9'],
+      ['viloyatsiz REGIONAL', '10'],
+      ['raqam emas', 'abc'],
+      ['ishorali', '+6'],
+    ])(
+      '⭐ perqZ3oM: superadmin %s (branch_id=%p) — 400, kuryer yaratilmaydi',
+      async (_label, branchId) => {
+        mockBranches(BRANCHES);
 
         await expect(
           apiGatewayController.createCourier(body(branchId), SA as never),
@@ -648,6 +720,16 @@ describe('ApiGatewayController', () => {
         expect(identityClient.send).not.toHaveBeenCalled();
       },
     );
+
+    it('perqZ3oM: branch-service boshqa xato (500) — 400 ga aylantirilmaydi', async () => {
+      branchClient.send.mockImplementation(() =>
+        throwError(() => ({ statusCode: 500, message: 'db down' })),
+      );
+      await expect(
+        apiGatewayController.createCourier(body('6'), SA as never),
+      ).rejects.toMatchObject({ statusCode: 500 });
+      expect(identityClient.send).not.toHaveBeenCalled();
+    });
 
     it('superadmin branch_id yubormasa yoki HQ ni yuborsa — HQ da yaratiladi', async () => {
       for (const branchId of [undefined, '1']) {

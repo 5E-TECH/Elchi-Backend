@@ -733,4 +733,469 @@ describe('UserServiceService — market operatorlari (i76gGjyq)', () => {
       ).toBeNull();
     });
   });
+
+  describe('setMarketOperatorStatus (mFkrqvMi)', () => {
+    async function withOperator() {
+      const ctx = makeService();
+      const created: any = await ctx.service.createMarketOperator(
+        MARKET_A,
+        dto as never,
+        marketReq(MARKET_A),
+      );
+      const operatorId = created.data.id as string;
+      const row = ctx.repo.rows.find((r) => r.id === operatorId)!;
+      // Faol sessiya + komissiya + avvalgi epoch (holat o'zgarishi
+      // ularga tegmasligi / sessiyani yopishi tekshiriladi).
+      row.refresh_token = 'hash';
+      row.session_epoch = 3;
+      row.commission_type = Commission_type.PERCENT;
+      row.commission_value = 5;
+      ctx.activityLog.log.mockClear();
+      ctx.repo.save.mockClear();
+      return { ...ctx, operatorId };
+    }
+
+    it('⭐ o`z operatori → inactive: sessiyalar yopiladi, komissiya saqlanadi, STATUS_CHANGE (muallif — market)', async () => {
+      const { service, repo, activityLog, operatorId } = await withOperator();
+
+      const res: any = await service.setMarketOperatorStatus(
+        operatorId,
+        MARKET_A,
+        { status: 'inactive' },
+        marketReq(MARKET_A),
+      );
+
+      expect(res.statusCode).toBe(200);
+      expect(res.data).toMatchObject({
+        id: operatorId,
+        status: Status.INACTIVE,
+        commission_type: 'percent',
+        commission_value: 5,
+      });
+      expect(res.data).not.toHaveProperty('refresh_token');
+      const stored = repo.rows.find((row) => row.id === operatorId)!;
+      expect(stored).toMatchObject({
+        status: Status.INACTIVE,
+        refresh_token: null,
+        session_epoch: 4,
+        isDeleted: false,
+        market_id: MARKET_A,
+        commission_type: 'percent',
+        commission_value: 5,
+      });
+      expect(activityLog.log).toHaveBeenCalledTimes(1);
+      expect(activityLog.log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          entity_type: 'User',
+          entity_id: operatorId,
+          action: 'status_change',
+          old_value: { status: 'active' },
+          new_value: { status: 'inactive' },
+          user_id: MARKET_A,
+          user_role: Roles.MARKET,
+          metadata: {
+            market_id: MARKET_A,
+            reason: 'market_operator_status',
+          },
+          description: `Operator #${operatorId} nofaol qilindi`,
+        }),
+      );
+
+      // GET ro'yxatida holat ko'rinadi va `status` filtri ishlaydi.
+      const list: any = await service.findMarketOperators(
+        MARKET_A,
+        { status: 'inactive' },
+        marketReq(MARKET_A),
+      );
+      expect(list.data.items).toEqual([
+        expect.objectContaining({ id: operatorId, status: 'inactive' }),
+      ]);
+      const active: any = await service.findMarketOperators(
+        MARKET_A,
+        { status: 'active' },
+        marketReq(MARKET_A),
+      );
+      expect(active.data.items).toEqual([]);
+    });
+
+    it('⭐ qayta faollashtirish → active; epoch o`zgarmaydi, log yoziladi', async () => {
+      const { service, repo, activityLog, operatorId } = await withOperator();
+      const req = marketReq(MARKET_A);
+      await service.setMarketOperatorStatus(
+        operatorId,
+        MARKET_A,
+        { status: 'inactive' },
+        req,
+      );
+      activityLog.log.mockClear();
+
+      const res: any = await service.setMarketOperatorStatus(
+        operatorId,
+        MARKET_A,
+        { status: 'active' },
+        req,
+      );
+      expect(res.data.status).toBe('active');
+      expect(repo.rows.find((row) => row.id === operatorId)).toMatchObject({
+        status: Status.ACTIVE,
+        session_epoch: 4,
+      });
+      expect(activityLog.log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: 'status_change',
+          old_value: { status: 'inactive' },
+          new_value: { status: 'active' },
+          description: `Operator #${operatorId} qayta faollashtirildi`,
+        }),
+      );
+    });
+
+    it('holat o`zgarmasa — 200, saqlanmaydi, jurnal yo`q, sessiya tegilmaydi', async () => {
+      const { service, repo, activityLog, operatorId } = await withOperator();
+      const res: any = await service.setMarketOperatorStatus(
+        operatorId,
+        MARKET_A,
+        { status: 'active' },
+        marketReq(MARKET_A),
+      );
+      expect(res.statusCode).toBe(200);
+      expect(repo.save).not.toHaveBeenCalled();
+      expect(activityLog.log).not.toHaveBeenCalled();
+      expect(repo.rows.find((row) => row.id === operatorId)).toMatchObject({
+        refresh_token: 'hash',
+        session_epoch: 3,
+      });
+    });
+
+    it('⭐ A B ning operatorini nofaol qila olmaydi → 404, qator o`zgarmaydi', async () => {
+      const { service, repo } = makeService();
+      expect(
+        await statusOf(
+          service.setMarketOperatorStatus(
+            '50',
+            MARKET_A,
+            { status: 'inactive' },
+            marketReq(MARKET_A),
+          ),
+        ),
+      ).toBe(404);
+      expect(repo.rows.find((row) => row.id === '50')).toMatchObject({
+        status: Status.ACTIVE,
+      });
+      expect(repo.save).not.toHaveBeenCalled();
+    });
+
+    it('A B nomidan (market_id = B) so`rasa → 403', async () => {
+      const { service, repo } = makeService();
+      expect(
+        await statusOf(
+          service.setMarketOperatorStatus(
+            '50',
+            MARKET_B,
+            { status: 'inactive' },
+            marketReq(MARKET_A),
+          ),
+        ),
+      ).toBe(403);
+      expect(repo.save).not.toHaveBeenCalled();
+    });
+
+    it('o`chirilgan operator, operator bo`lmagan qator, noto`g`ri id → 404', async () => {
+      const { service, repo } = makeService();
+      const req = marketReq(MARKET_A);
+      for (const id of ['60', MARKET_A, '40', 'abc']) {
+        expect(
+          await statusOf(
+            service.setMarketOperatorStatus(
+              id,
+              MARKET_A,
+              { status: 'inactive' },
+              req,
+            ),
+          ),
+        ).toBe(404);
+      }
+      expect(repo.save).not.toHaveBeenCalled();
+    });
+
+    it.each([['blocked'], [''], [undefined], [null], [1], [true]])(
+      'status = %p → 400',
+      async (status) => {
+        const { service, repo, operatorId } = await withOperator();
+        expect(
+          await statusOf(
+            service.setMarketOperatorStatus(
+              operatorId,
+              MARKET_A,
+              { status },
+              marketReq(MARKET_A),
+            ),
+          ),
+        ).toBe(400);
+        expect(repo.save).not.toHaveBeenCalled();
+      },
+    );
+
+    it.each([
+      [Roles.SUPERADMIN],
+      [Roles.ADMIN],
+      [Roles.MARKET_OPERATOR],
+      [Roles.COURIER],
+      [Roles.MANAGER],
+    ])('%s roli → 403 (faqat market)', async (role) => {
+      const { service, repo, operatorId } = await withOperator();
+      expect(
+        await statusOf(
+          service.setMarketOperatorStatus(
+            operatorId,
+            MARKET_A,
+            { status: 'inactive' },
+            { id: MARKET_A, roles: [role] },
+          ),
+        ),
+      ).toBe(403);
+      expect(repo.save).not.toHaveBeenCalled();
+    });
+
+    it('bloklangan market operatorini faollashtira olmaydi → 403 (nofaol qilish mumkin)', async () => {
+      const { service, repo } = makeService();
+      repo.rows.push(
+        {
+          id: '70',
+          role: Roles.MARKET_OPERATOR,
+          status: Status.INACTIVE,
+          name: 'C operatori',
+          phone_number: '+998905550070',
+          market_id: MARKET_BLOCKED,
+          isDeleted: false,
+          username: null,
+        },
+        {
+          id: '71',
+          role: Roles.MARKET_OPERATOR,
+          status: Status.ACTIVE,
+          name: 'C operatori 2',
+          phone_number: '+998905550071',
+          market_id: MARKET_BLOCKED,
+          isDeleted: false,
+          username: null,
+          refresh_token: 'hash',
+          session_epoch: 0,
+        },
+      );
+      const req = marketReq(MARKET_BLOCKED);
+      expect(
+        await statusOf(
+          service.setMarketOperatorStatus(
+            '70',
+            MARKET_BLOCKED,
+            { status: 'active' },
+            req,
+          ),
+        ),
+      ).toBe(403);
+      expect(repo.rows.find((row) => row.id === '70')?.status).toBe(
+        Status.INACTIVE,
+      );
+      const res: any = await service.setMarketOperatorStatus(
+        '71',
+        MARKET_BLOCKED,
+        { status: 'inactive' },
+        req,
+      );
+      expect(res.data.status).toBe('inactive');
+      expect(repo.rows.find((row) => row.id === '71')).toMatchObject({
+        refresh_token: null,
+        session_epoch: 1,
+      });
+    });
+  });
+
+  describe('createMarketOperator — ixtiyoriy komissiya (B3ZtzCCx)', () => {
+    // Seed'dagi o'chirilgan '60' hisobga kirmaydi — faqat tirik operatorlar.
+    const operatorsOf = (repo: ReturnType<typeof makeService>['repo']) =>
+      repo.rows.filter(
+        (row) =>
+          row.role === Roles.MARKET_OPERATOR &&
+          row.market_id === MARKET_A &&
+          !row.isDeleted,
+      );
+
+    it.each([
+      [Commission_type.PERCENT, 7.5],
+      [Commission_type.PERCENT, 100],
+      [Commission_type.PERCENT, 0],
+      [Commission_type.FIXED, 50000],
+      [Commission_type.FIXED, 1_000_000],
+    ])(
+      '⭐ %s %p — BITTA save bilan operator + komissiya, javob va jurnalda ko`rinadi',
+      async (type, value) => {
+        const { service, repo, activityLog } = makeService();
+        const res: any = await service.createMarketOperator(
+          MARKET_A,
+          { ...dto, commission_type: type, commission_value: value } as never,
+          marketReq(MARKET_A),
+        );
+        expect(res.statusCode).toBe(201);
+        expect(res.data).toMatchObject({
+          commission_type: type,
+          commission_value: value,
+        });
+        // Atomik: alohida PATCH yo'q — yagona INSERT komissiya bilan.
+        expect(repo.save).toHaveBeenCalledTimes(1);
+        expect(repo.save.mock.calls[0][0]).toMatchObject({
+          commission_type: type,
+          commission_value: value,
+        });
+        expect(repo.rows.find((row) => row.id === res.data.id)).toMatchObject({
+          commission_type: type,
+          commission_value: value,
+        });
+        expect(activityLog.log).toHaveBeenCalledWith(
+          expect.objectContaining({
+            action: 'created',
+            entity_id: res.data.id,
+            new_value: expect.objectContaining({
+              commission_type: type,
+              commission_value: value,
+            }),
+          }),
+        );
+        // Ro'yxatda (GET market-operators) ham ko'rinadi.
+        const list: any = await service.findMarketOperators(
+          MARKET_A,
+          {},
+          marketReq(MARKET_A),
+        );
+        expect(list.data.items[0]).toMatchObject({
+          id: res.data.id,
+          commission_type: type,
+          commission_value: value,
+        });
+      },
+    );
+
+    it.each([
+      ['berilmagan', {}],
+      ['ikkalasi null', { commission_type: null, commission_value: null }],
+    ])('komissiya %s — avvalgidek komissiyasiz (null)', async (_l, extra) => {
+      const { service, repo, activityLog } = makeService();
+      const res: any = await service.createMarketOperator(
+        MARKET_A,
+        { ...dto, ...extra } as never,
+        marketReq(MARKET_A),
+      );
+      expect(res.statusCode).toBe(201);
+      expect(repo.rows.find((row) => row.id === res.data.id)).toMatchObject({
+        commission_type: null,
+        commission_value: null,
+      });
+      expect(activityLog.log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          new_value: expect.objectContaining({
+            commission_type: null,
+            commission_value: null,
+          }),
+        }),
+      );
+    });
+
+    it.each([
+      ['faqat turi', { commission_type: Commission_type.PERCENT }],
+      ['faqat qiymati', { commission_value: 5 }],
+      [
+        'turi null, qiymati bor',
+        { commission_type: null, commission_value: 5 },
+      ],
+      [
+        'turi bor, qiymati null',
+        { commission_type: Commission_type.FIXED, commission_value: null },
+      ],
+      [
+        'percent > 100',
+        { commission_type: Commission_type.PERCENT, commission_value: 100.01 },
+      ],
+      [
+        'fixed > 1 000 000',
+        { commission_type: Commission_type.FIXED, commission_value: 1_000_001 },
+      ],
+      [
+        'manfiy',
+        { commission_type: Commission_type.FIXED, commission_value: -1 },
+      ],
+      [
+        '3 kasr',
+        { commission_type: Commission_type.PERCENT, commission_value: 1.005 },
+      ],
+      ['noma`lum tur', { commission_type: 'bonus', commission_value: 5 }],
+      [
+        'qiymat satr',
+        { commission_type: Commission_type.PERCENT, commission_value: '5' },
+      ],
+      [
+        'NaN',
+        { commission_type: Commission_type.PERCENT, commission_value: NaN },
+      ],
+    ])(
+      '⭐ %s → 400, operator YARATILMAYDI (hech narsa yozilmaydi)',
+      async (_label, extra) => {
+        const { service, repo, activityLog } = makeService();
+        expect(
+          await statusOf(
+            service.createMarketOperator(
+              MARKET_A,
+              { ...dto, ...extra } as never,
+              marketReq(MARKET_A),
+            ),
+          ),
+        ).toBe(400);
+        expect(repo.save).not.toHaveBeenCalled();
+        expect(activityLog.log).not.toHaveBeenCalled();
+        expect(operatorsOf(repo)).toHaveLength(0);
+      },
+    );
+
+    it('PATCH :id/commission bilan AYNI chegara xabarlari', async () => {
+      const { service } = makeService();
+      const req = marketReq(MARKET_A);
+      const messageOf = async (promise: Promise<unknown>) => {
+        try {
+          await promise;
+          return undefined;
+        } catch (error) {
+          return ((error as RpcException).getError() as { message?: string })
+            .message;
+        }
+      };
+      const created: any = await service.createMarketOperator(
+        MARKET_A,
+        { ...dto, phone_number: '998901230000' } as never,
+        req,
+      );
+      for (const body of [
+        { commission_type: Commission_type.PERCENT, commission_value: 150 },
+        { commission_type: Commission_type.FIXED, commission_value: 2_000_000 },
+        { commission_type: Commission_type.FIXED, commission_value: -5 },
+        { commission_type: Commission_type.PERCENT, commission_value: 1.005 },
+      ]) {
+        const onCreate = await messageOf(
+          service.createMarketOperator(
+            MARKET_A,
+            { ...dto, ...body } as never,
+            req,
+          ),
+        );
+        const onPatch = await messageOf(
+          service.updateMarketOperatorCommission(
+            created.data.id,
+            MARKET_A,
+            body as never,
+            req,
+          ),
+        );
+        expect(onCreate).toBeDefined();
+        expect(onCreate).toBe(onPatch);
+      }
+    });
+  });
 });

@@ -5311,11 +5311,70 @@ export class UserServiceService implements OnModuleInit {
   }
 
   /**
+   * Operator komissiyasi kirishi (i76gGjyq; B3ZtzCCx da yaratish bilan
+   * UMUMIY — ikki yo'lda qoida bir xil bo'lsin). RMQ'da ValidationPipe yo'q:
+   * turi — percent | fixed | null, qiymati — manfiy bo'lmagan chekli son,
+   * ko'pi bilan 2 kasr (numeric(14,2) — 3+ kasr jimgina yaxlitlanmasin) yoki
+   * null. Berilmagan maydon — null.
+   */
+  private parseMarketOperatorCommission(dto?: {
+    commission_type?: unknown;
+    commission_value?: unknown;
+  }): { type: Commission_type | null; value: number | null } {
+    const type = (dto?.commission_type ?? null) as Commission_type | null;
+    if (type !== null && !Object.values(Commission_type).includes(type)) {
+      this.badRequest("commission_type noto'g'ri (percent | fixed)");
+    }
+    const value = (dto?.commission_value ?? null) as number | null;
+    if (value !== null) {
+      if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
+        this.badRequest("commission_value manfiy bo'lmagan son bo'lishi kerak");
+      }
+      if (Math.abs(Math.round(value * 100) - value * 100) > 1e-6) {
+        this.badRequest("commission_value ko'pi bilan 2 kasr xonali bo'lsin");
+      }
+    }
+    return { type, value };
+  }
+
+  /**
+   * Turi bo'yicha chegara — BIRLASHGAN holat bo'yicha: PERCENT 0..100,
+   * FIXED 0..1 000 000 so'm.
+   */
+  private assertMarketOperatorCommissionBounds(
+    type: Commission_type | null,
+    value: number | string | null,
+  ): void {
+    if (
+      type === Commission_type.PERCENT &&
+      value !== null &&
+      Number(value) > MARKET_OPERATOR_PERCENT_MAX
+    ) {
+      this.badRequest("Komissiya foizi 0 dan 100 gacha bo'lishi kerak");
+    }
+    if (
+      type === Commission_type.FIXED &&
+      value !== null &&
+      Number(value) > MARKET_OPERATOR_FIXED_MAX
+    ) {
+      this.badRequest(
+        "Belgilangan komissiya 0 dan 1 000 000 so'mgacha bo'lishi kerak",
+      );
+    }
+  }
+
+  /**
    * identity.market_operator.create (i76gGjyq) — market o'z operatorini
    * yaratadi. Rol DOIM market_operator, market_id — ko'lamdagi market (mijoz
    * tanasidan EMAS). Kassa YARATILMAYDI: operator pul ushlamaydi — uning
    * daromadi finance `operator_earnings` da hisoblanadi va uni market to'laydi
    * (Cashbox_type'da operator turi yo'q; BeePost'da ham operator kassasiz).
+   *
+   * B3ZtzCCx (ega qarori 2026-10-19, MO-S5): ixtiyoriy komissiya AYNI
+   * so'rovda (bitta save — atomik; ilgari POST + alohida PATCH :id/commission,
+   * ikkinchisi yiqilsa operator komissiyasiz qolardi). Qoida PATCH bilan bir
+   * xil (percent 0..100, fixed 0..1 000 000, 2 kasr) va IKKALASI BIRGA:
+   * faqat turi yoki faqat qiymati — 400; ikkalasi yo'q / null — komissiyasiz.
    */
   async createMarketOperator(
     marketId: string,
@@ -5340,6 +5399,17 @@ export class UserServiceService implements OnModuleInit {
     if (!phone) {
       this.badRequest("Telefon raqam noto'g'ri");
     }
+    // B3ZtzCCx: komissiya — yozishdan OLDIN to'liq tekshiriladi.
+    const commission = this.parseMarketOperatorCommission(dto);
+    if ((commission.type === null) !== (commission.value === null)) {
+      this.badRequest(
+        'commission_type va commission_value birga yuborilishi kerak',
+      );
+    }
+    this.assertMarketOperatorCommissionBounds(
+      commission.type,
+      commission.value,
+    );
 
     // Market bazadan qayta o'qiladi: o'chirilgan yoki bloklangan market
     // operator qo'sha olmaydi (aks holda yangi ACTIVE operator orqali blok
@@ -5376,8 +5446,8 @@ export class UserServiceService implements OnModuleInit {
       add_order: false,
       can_add_extra_cost: false,
       default_tariff: null,
-      commission_type: null,
-      commission_value: null,
+      commission_type: commission.type,
+      commission_value: commission.value,
       isDeleted: false,
     });
 
@@ -5406,6 +5476,9 @@ export class UserServiceService implements OnModuleInit {
         name: saved.name,
         phone_number: saved.phone_number,
         role: saved.role,
+        // B3ZtzCCx: yaratishda berilgan komissiya jurnalda ham ko'rinadi.
+        commission_type: saved.commission_type ?? null,
+        commission_value: saved.commission_value ?? null,
       },
       ...this.auditActor(requester),
       metadata: { market_id: scopedMarketId },
@@ -5538,29 +5611,8 @@ export class UserServiceService implements OnModuleInit {
     if (!hasType && !hasValue) {
       this.badRequest('commission_type yoki commission_value majburiy');
     }
-    const nextTypeInput = hasType ? (dto.commission_type ?? null) : null;
-    if (
-      nextTypeInput !== null &&
-      !Object.values(Commission_type).includes(nextTypeInput)
-    ) {
-      this.badRequest("commission_type noto'g'ri (percent | fixed)");
-    }
-    const nextValueInput = hasValue ? (dto.commission_value ?? null) : null;
-    if (nextValueInput !== null) {
-      if (
-        typeof nextValueInput !== 'number' ||
-        !Number.isFinite(nextValueInput) ||
-        nextValueInput < 0
-      ) {
-        this.badRequest("commission_value manfiy bo'lmagan son bo'lishi kerak");
-      }
-      // numeric(14,2): 3+ kasr jimgina yaxlitlanib qolmasin.
-      if (
-        Math.abs(Math.round(nextValueInput * 100) - nextValueInput * 100) > 1e-6
-      ) {
-        this.badRequest("commission_value ko'pi bilan 2 kasr xonali bo'lsin");
-      }
-    }
+    const { type: nextTypeInput, value: nextValueInput } =
+      this.parseMarketOperatorCommission(dto);
 
     const operator = await this.findOwnMarketOperator(id, scopedMarketId);
     const before = {
@@ -5570,22 +5622,7 @@ export class UserServiceService implements OnModuleInit {
     const nextType = hasType ? nextTypeInput : before.commission_type;
     const nextValue = hasValue ? nextValueInput : before.commission_value;
 
-    if (
-      nextType === Commission_type.PERCENT &&
-      nextValue !== null &&
-      Number(nextValue) > MARKET_OPERATOR_PERCENT_MAX
-    ) {
-      this.badRequest("Komissiya foizi 0 dan 100 gacha bo'lishi kerak");
-    }
-    if (
-      nextType === Commission_type.FIXED &&
-      nextValue !== null &&
-      Number(nextValue) > MARKET_OPERATOR_FIXED_MAX
-    ) {
-      this.badRequest(
-        "Belgilangan komissiya 0 dan 1 000 000 so'mgacha bo'lishi kerak",
-      );
-    }
+    this.assertMarketOperatorCommissionBounds(nextType, nextValue);
 
     operator.commission_type = nextType;
     operator.commission_value = nextValue;
@@ -5662,6 +5699,93 @@ export class UserServiceService implements OnModuleInit {
       next
         ? "Operatorga ombor qoldig'ini ko'rish ruxsati berildi"
         : "Operatorning ombor qoldig'ini ko'rish ruxsati o'chirildi",
+    );
+  }
+
+  /**
+   * identity.market_operator.set_status (mFkrqvMi, ega qarori 2026-10-19
+   * MO-S4) — market o'z operatorini nofaol qiladi yoki qayta faollashtiradi.
+   * Ko'lam komissiya bilan bir xil: faqat MARKET, faqat o'z operatori
+   * (begona / yo'q / o'chirilgan — 404, id mavjudligi oshkor qilinmaydi).
+   *
+   * - `inactive`: barcha sessiyalar yopiladi (`invalidateAllSessions` —
+   *   refresh token tozalanadi, `session_epoch` oshadi; AYNI save). Login,
+   *   refresh va Telegram bot aktori nofaol userni allaqachon rad etadi.
+   * - `active`: market o'zi faol bo'lishi shart (bloklangan market operatorni
+   *   «tiriltirib» blokni chetlab o'ta olmasin — yaratishdagi qoida).
+   * - Buyurtmalar, komissiya va daromad tarixi TEGILMAYDI (faqat `status`).
+   * - Holat o'zgarmasa — 200, jurnal yozilmaydi.
+   * RMQ'da ValidationPipe yo'q — `status` faqat 'active' | 'inactive', aks
+   * holda 400.
+   */
+  async setMarketOperatorStatus(
+    id: string,
+    marketId: string,
+    dto: { status?: unknown },
+    requester?: RequesterContext,
+  ) {
+    const scopedMarketId = this.resolveMarketOperatorScope(marketId, requester);
+    const rawStatus = primitiveText(dto?.status).trim().toLowerCase();
+    if (rawStatus !== Status.ACTIVE && rawStatus !== Status.INACTIVE) {
+      this.badRequest("status noto'g'ri (active | inactive)");
+    }
+    const next = rawStatus as Status;
+
+    const operator = await this.findOwnMarketOperator(id, scopedMarketId);
+    const previous = operator.status;
+    if (previous === next) {
+      return successRes(
+        this.toMarketOperatorView(operator),
+        200,
+        next === Status.ACTIVE
+          ? 'Operator allaqachon faol'
+          : 'Operator allaqachon nofaol',
+      );
+    }
+
+    if (next === Status.ACTIVE) {
+      const market = await this.users.findOne({
+        where: { id: scopedMarketId, role: Roles.MARKET, isDeleted: false },
+      });
+      if (!market) {
+        this.notFound('Market topilmadi');
+      }
+      if (market.status !== Status.ACTIVE) {
+        this.forbidden(
+          "Market bloklangan — operatorni faollashtirib bo'lmaydi",
+        );
+      }
+    }
+
+    operator.status = next;
+    if (next !== Status.ACTIVE) {
+      // Qurilma keyingi refresh'da chiqariladi (setUserStatus bilan AYNI).
+      invalidateAllSessions(operator);
+    }
+    const saved = await this.users.save(operator);
+    void this.syncUserToSearch(saved);
+    await this.activityLog.log({
+      entity_type: 'User',
+      entity_id: saved.id,
+      action: ActivityAction.STATUS_CHANGE,
+      old_value: { status: previous },
+      new_value: { status: saved.status },
+      ...this.auditActor(requester),
+      metadata: {
+        market_id: scopedMarketId,
+        reason: 'market_operator_status',
+      },
+      description: ActivityDescribeUz.marketOperatorStatusChanged(
+        saved.id,
+        saved.status === Status.ACTIVE,
+      ),
+    });
+    return successRes(
+      this.toMarketOperatorView(saved),
+      200,
+      saved.status === Status.ACTIVE
+        ? 'Operator qayta faollashtirildi'
+        : 'Operator nofaol qilindi',
     );
   }
 }

@@ -399,6 +399,7 @@
     },
     "/couriers": {
       "post": {
+        "description": "Menejer — faqat o'z filialida (`branch_id` yuborilmaydi yoki o'z filiali; boshqasi — 400). perqZ3oM (ega qarori): superadmin/admin `branch_id` bilan istalgan FAOL HQ / REGIONAL / HYBRID filialda yaratadi (viloyat filialdan olinadi); `branch_id` yuborilmasa — HQ (avvalgidek). Noma'lum, nofaol, PICKUP yoki viloyatsiz (HQ bo'lmagan) filial — 400, kuryer yaratilmaydi. Kuryer o'sha filialga biriktiriladi (branch_users) — pul zanjiri menejer yaratgan kuryer bilan bir xil (kuryer → filial → HQ).",
         "operationId": "ApiGatewayController_createCourier",
         "parameters": [],
         "requestBody": {
@@ -2049,6 +2050,7 @@
     },
     "/product": {
       "post": {
+        "description": "Faqat xodim (superadmin, admin, registrator, menejer). `market_id` majburiy — yuborilmasa 400. Market va market operatori — 403.",
         "operationId": "CatalogGatewayController_create",
         "parameters": [],
         "requestBody": {
@@ -2071,15 +2073,13 @@
             "bearer": []
           }
         ],
-        "summary": "Create a new product",
+        "summary": "Create a new product (superadmin/admin/registrator/manager)",
         "tags": [
           "Products"
         ],
         "x-roles": [
-          "market",
-          "market_operator",
-          "admin",
           "superadmin",
+          "admin",
           "registrator",
           "manager"
         ]
@@ -2430,61 +2430,15 @@
             "bearer": []
           }
         ],
-        "summary": "Delete product (soft delete)",
+        "summary": "Delete product (soft delete; superadmin/admin/registrator/manager)",
         "tags": [
           "Products"
         ],
         "x-roles": [
-          "market",
-          "admin",
           "superadmin",
+          "admin",
           "registrator",
           "manager"
-        ]
-      }
-    },
-    "/product/my/{id}": {
-      "patch": {
-        "description": "Market — o'z mahsuloti; market operatori — biriktirilgan marketining mahsuloti. Begona mahsulot — 403.",
-        "operationId": "CatalogGatewayController_updateMyProduct",
-        "parameters": [
-          {
-            "name": "id",
-            "required": true,
-            "in": "path",
-            "description": "Product ID (id)",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "multipart/form-data": {
-              "schema": {
-                "$ref": "#/components/schemas/UpdateProductRequestDto"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": ""
-          }
-        },
-        "security": [
-          {
-            "bearer": []
-          }
-        ],
-        "summary": "Update own product (market / market_operator)",
-        "tags": [
-          "Products"
-        ],
-        "x-roles": [
-          "market",
-          "market_operator"
         ]
       }
     },
@@ -18719,6 +18673,7 @@
         ]
       },
       "post": {
+        "description": "B3ZtzCCx: ixtiyoriy komissiya (`commission_type` + `commission_value`, ikkalasi BIRGA) AYNI so'rovda — operator va komissiya bitta yozuvda (atomik). Cheklovlar `PATCH :id/commission` bilan bir xil: percent 0..100, fixed 0..1 000 000 so'm, 2 kasr. Noto'g'ri komissiya — 400 va operator YARATILMAYDI.",
         "operationId": "MarketOperatorGatewayController_create",
         "parameters": [],
         "requestBody": {
@@ -18847,6 +18802,59 @@
           }
         ],
         "summary": "«Ombordagi qoldiq»ni ko`rish ruxsati (can_view_warehouse_stock) — faqat o`z operatori",
+        "tags": [
+          "Market operators"
+        ],
+        "x-roles": [
+          "market"
+        ]
+      }
+    },
+    "/market-operators/{id}/status": {
+      "patch": {
+        "description": "Ega qarori 2026-10-19 (MO-S4). `inactive` — operator kira olmaydi: barcha sessiyalari yopiladi (refresh token tozalanadi, qurilma keyingi refresh'da chiqariladi), Telegram bot uni aktor deb tanimaydi. `active` — qayta faol (market o'zi bloklangan bo'lsa 403). Buyurtmalar, komissiya va daromad tarixi o'zgarmaydi. Holat o'zgarmasa ham 200. Javob — operator qatori (`status` bilan). Jurnal: `status_change` (muallif — market).",
+        "operationId": "MarketOperatorGatewayController_updateStatus",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Operator ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateMarketOperatorStatusRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "{ statusCode, message, data: MarketOperator } — `data.status`"
+          },
+          "400": {
+            "description": "status 'active' | 'inactive' emas"
+          },
+          "403": {
+            "description": "Market emas yoki market bloklangan (faollashtirish)"
+          },
+          "404": {
+            "description": "Operator topilmadi yoki begona"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Operatorni nofaol / qayta faol qilish — faqat o`z operatori (mFkrqvMi)",
         "tags": [
           "Market operators"
         ],
@@ -20623,7 +20631,7 @@
           "branch_id": {
             "type": "string",
             "example": "12",
-            "description": "Branch ID (manager flowda avtomatik aniqlanadi, yuborish shart emas)"
+            "description": "Filial ID. Menejer — avtomatik o'z filiali (yuborish shart emas; boshqa filial — 400). Superadmin/admin (perqZ3oM) — istalgan FAOL HQ / REGIONAL / HYBRID filial; yuborilmasa — HQ. Noma'lum / nofaol / PICKUP / viloyatsiz filial — 400."
           },
           "name": {
             "type": "string",
@@ -21571,7 +21579,7 @@
           "market_id": {
             "type": "string",
             "example": "1",
-            "description": "Admin/Superadmin yuboradi. MARKET role uchun token sub ishlatiladi."
+            "description": "Mahsulot qaysi marketniki — MAJBURIY (superadmin/admin/registrator/menejer yuboradi). Yuborilmasa 400."
           },
           "price": {
             "type": "object",
@@ -21623,6 +21631,7 @@
         },
         "required": [
           "name",
+          "market_id",
           "weight_kg",
           "length_cm",
           "width_cm",
@@ -28041,6 +28050,24 @@
             "type": "string",
             "example": "secret123",
             "minLength": 4
+          },
+          "commission_type": {
+            "type": "string",
+            "enum": [
+              "percent",
+              "fixed"
+            ],
+            "nullable": true,
+            "example": "percent",
+            "description": "Ixtiyoriy. percent — buyurtma total_price foizi; fixed — sotilgan buyurtma uchun so'm. `commission_value` bilan BIRGA yuboriladi (faqat bittasi — 400); ikkalasi yo'q yoki null — komissiyasiz"
+          },
+          "commission_value": {
+            "type": "object",
+            "example": 5,
+            "nullable": true,
+            "minimum": 0,
+            "maximum": 1000000,
+            "description": "Ixtiyoriy. Foiz (0..100) yoki so'm (0..1 000 000), ko'pi bilan 2 kasr. `commission_type` bilan BIRGA"
           }
         },
         "required": [
@@ -28083,6 +28110,23 @@
         },
         "required": [
           "can_view_warehouse_stock"
+        ]
+      },
+      "UpdateMarketOperatorStatusRequestDto": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "inactive"
+            ],
+            "example": "inactive",
+            "description": "inactive — operator tizimga kira olmaydi, sessiyalari yopiladi (qurilma keyingi refresh'da chiqariladi); active — qayta faol"
+          }
+        },
+        "required": [
+          "status"
         ]
       },
       "DeliveryTariffRowDto": {

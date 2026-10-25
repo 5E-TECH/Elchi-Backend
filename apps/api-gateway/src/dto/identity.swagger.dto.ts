@@ -327,7 +327,9 @@ export class CreateCourierRequestDto {
   @ApiPropertyOptional({
     example: '12',
     description:
-      'Branch ID (manager flowda avtomatik aniqlanadi, yuborish shart emas)',
+      "Filial ID. Menejer — avtomatik o'z filiali (yuborish shart emas; boshqa filial — 400). " +
+      'Superadmin/admin (perqZ3oM) — istalgan FAOL HQ / REGIONAL / HYBRID filial; yuborilmasa — HQ. ' +
+      "Noma'lum / nofaol / PICKUP / viloyatsiz filial — 400.",
   })
   @IsOptional()
   @IsString()

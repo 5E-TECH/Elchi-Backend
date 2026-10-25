@@ -651,6 +651,15 @@ export class CatalogServiceService {
     return product;
   }
 
+  /**
+   * Pc4CAFdB: HTTP'da mahsulot yaratish faqat xodimga (superadmin, admin,
+   * registrator, menejer) — cheklov FAQAT api-gateway dekoratorida
+   * (`PRODUCT_WRITE_ROLES`). Bu servis qatlami himoyalanmagan (requester
+   * parametri yo'q): hamkor posilkasidan avtomatik mahsulot yaratish yo'li
+   * (integration-service `createCatalogProduct`) shu RMQ'ni to'g'ridan-to'g'ri
+   * chaqiradi va rol qoidasini CHETLAB O'TADI. Bu epikning 8-kartasida hal
+   * qilinadi.
+   */
   async create(dto: ProductCreateDto) {
     // Aws1oApe: nom normalizatsiyasi (registr saqlanadi) va registrga befarq
     // dublikat tekshiruvi; bo'sh nom / noto'g'ri narx / o'lchov / shtrix

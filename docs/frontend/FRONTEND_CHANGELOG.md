@@ -93,6 +93,49 @@ warehouse»); «HQ ombori» iborasi ishlatilmaydi (u bekor posilka qaytishi uchu
   minus `GET /warehouses` dagi `branch_id`lar. `GET /branches/hq` 400/404 (eski backend / HQ yo'q) yoki xato bersa —
   faqat `dispatch-destinations`. Ombor turi belgisi — `kind` (yoki `branch.type === "HQ"`).
 
+### 2026-10-25 — Rollar: mahsulot faqat xodimda (Pc4CAFdB), market operatorini nofaol/faol qilish (mFkrqvMi), operator yaratishda komissiya (B3ZtzCCx), SA/admin kuryerni filialga (perqZ3oM)
+
+Deploy: api-gateway, identity-service (catalog-service — faqat izoh, branch-service — faqat spec; qayta deploy
+shart emas). Migratsiya yo'q.
+
+- [2026-10-25] ✏️ [gateway/identity] — **`POST /couriers` — SA/admin HQ bo'lmagan filialga** (perqZ3oM, FY-6):
+  superadmin/admin `branch_id` yuborsa — kuryer o'sha **FAOL HQ / REGIONAL / HYBRID** filialda yaratiladi (viloyat
+  — filialdan, `branch_users` ga COURIER bo'lib biriktiriladi; pul zanjiri menejer yaratgan kuryer bilan bir xil:
+  kuryer → filial → HQ). `branch_id` yuborilmasa — avvalgidek HQ. Noma'lum / o'chirilgan, nofaol, PICKUP, viloyatsiz
+  (HQ bo'lmagan) filial yoki raqam bo'lmagan id — **400**, kuryer yaratilmaydi (ilgari SA/admin uchun har qanday
+  HQ'dan boshqa filial 400 edi). Menejer o'zgarmagan — faqat o'z filiali (boshqasi 400). 🔧 FE (FY-6): SA/admin
+  kuryer yaratish formasida filial tanlovi (`GET /branches` dan faol HQ/REGIONAL/HYBRID) → `branch_id`.
+
+- [2026-10-25] 🆕 [gateway/identity] — **`PATCH /market-operators/:id/status`** (mFkrqvMi, ega qarori MO-S4):
+  tana `{ "status": "inactive" | "active" }` (boshqa qiymat / ortiqcha maydon — 400). Faqat MARKET, faqat o'z
+  operatori (begona / o'chirilgan — 404; boshqa rol — 403). `inactive` — operatorning barcha sessiyalari yopiladi
+  (qurilma keyingi refresh'da chiqariladi), login va Telegram bot uni rad etadi; `active` — qayta faol (market o'zi
+  bloklangan bo'lsa 403). Buyurtmalar, komissiya, daromad tarixi o'zgarmaydi. Holat o'zgarmasa ham 200. Javob —
+  `{ statusCode, message, data: MarketOperator }` (`data.status`). Jurnal: `status_change`, muallif — market.
+  `GET /market-operators` har qatorda `status` qaytaradi va `?status=active|inactive` filtrini qabul qiladi
+  (avvaldan). 🔧 FE (i76gGjyq): `operators-deactivate-dialog` / `operators-activate-dialog` shu endpointni
+  chaqiradi, ro'yxatdagi «Faol/Nofaol» belgisi `status` dan.
+- [2026-10-25] ✏️ [gateway/identity] — **`POST /market-operators` — ixtiyoriy komissiya** (B3ZtzCCx, MO-S5):
+  tanaga QO'SHIMCHA `commission_type` (`percent` | `fixed`) va `commission_value` (son) — ikkalasi BIRGA (faqat
+  bittasi — 400); ikkalasi yo'q yoki `null` — avvalgidek komissiyasiz. Cheklovlar `PATCH :id/commission` bilan AYNI:
+  percent 0..100, fixed 0..1 000 000 so'm, ko'pi bilan 2 kasr. Operator va komissiya BITTA yozuvda (atomik) —
+  noto'g'ri komissiyada operator YARATILMAYDI (400). Javob (`data`) va `GET /market-operators` da
+  `commission_type`/`commission_value`; jurnal (`created`) da ham komissiya. Eski tana (komissiyasiz) o'zgarishsiz
+  ishlaydi. 🔧 FE (KUHGR1Iq / i76gGjyq): «Operator qo'shish» oynasidagi «Komissiya» maydonini POST tanasiga qo'shib,
+  ikkinchi `PATCH :id/commission` so'rovini va «Operator qo'shildi, komissiya saqlanmadi» tarmog'ini olib tashlash
+  mumkin.
+
+- [2026-10-25] ⚠️ [gateway/catalog] — **Mahsulot yaratish/o'chirish faqat xodim** (Pc4CAFdB, ega qarori
+  2026-10-15): `POST /product` va `DELETE /product/:id` — superadmin, admin, registrator, menejer. **Market va
+  market operatori — 403** (ilgari POST market/operatorga, DELETE marketga ochiq edi). `POST /product` da
+  `market_id` endi HAR DOIM majburiy (OpenAPI `required`); yuborilmasa yoki bo'sh bo'lsa — 400. `PATCH /product/:id`
+  o'zgarmagan (xodim).
+- [2026-10-25] ⚠️ [gateway/catalog] — **`PATCH /product/my/:id` olib tashlandi** (404). Market va operator
+  mahsulotni tahrirlamaydi. Ro'yxat o'zgarmagan: market — `GET /product` (o'ziniki), `GET /product/my-products`,
+  `GET /product/:id`; operator — `my-products`, `GET /product/:id`. Buyurtma yaratish rollari tegilmagan.
+  🟢 FE: 1PtA5L1y allaqachon bajarilgan (`canCreateProducts` = superadmin/admin/registrator/manager,
+  `UPDATE_MY` endpointi ishlatilmaydi) — o'zgarish shart emas.
+
 ### 2026-10-25 — AI idempotentlik qoldiqlari (Cp2v3ZJ7) va kampaniya yuklamasi (xHPdpj0W)
 
 Deploy: faqat notification-service (bot matni). Migratsiya yo'q. API kontrakti o'zgarmagan.

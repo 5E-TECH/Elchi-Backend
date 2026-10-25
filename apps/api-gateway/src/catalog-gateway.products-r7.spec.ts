@@ -19,7 +19,9 @@ import {
 
 type Send = jest.Mock<Observable<unknown>, [{ cmd: string }, unknown]>;
 
-const MARKET = { sub: '121', roles: ['market'] };
+// Pc4CAFdB: mahsulotni faqat xodim yaratadi (market — 403), `market_id`
+// majburiy.
+const REGISTRATOR = { sub: '77', roles: ['registrator'] };
 
 /** `main.ts` dagi global pipe bilan AYNI sozlama. */
 const pipe = new ValidationPipe({
@@ -75,7 +77,7 @@ const setup = () => {
 };
 
 const req = {
-  user: MARKET,
+  user: REGISTRATOR,
   protocol: 'https',
   get: (name: string) => (name === 'host' ? 'api.test' : undefined),
   headers: {},
@@ -158,7 +160,7 @@ describe('zRqDRLAZ — narx (price)', () => {
     const { controller, catalogSend } = setup();
     await controller.create(
       undefined,
-      { name: 'Olma', price: 125000 },
+      { name: 'Olma', market_id: '121', price: 125000 },
       req as any,
     );
     expect(sentDto(catalogSend)).toEqual({
@@ -169,7 +171,11 @@ describe('zRqDRLAZ — narx (price)', () => {
     });
 
     catalogSend.mockClear();
-    await controller.create(undefined, { name: 'Nok' }, req as any);
+    await controller.create(
+      undefined,
+      { name: 'Nok', market_id: '121' },
+      req as any,
+    );
     expect(sentDto(catalogSend)).not.toHaveProperty('price');
   });
 });
@@ -193,7 +199,11 @@ describe('ugoDD9TT — mahsulot rasmi faqat PNG/JPEG/WebP', () => {
     async (name, mime, buffer) => {
       const { controller, catalogSend, fileSend } = setup();
       const error: unknown = await controller
-        .create(file(name, mime, buffer), { name: 'Olma' }, req as any)
+        .create(
+          file(name, mime, buffer),
+          { name: 'Olma', market_id: '121' },
+          req as any,
+        )
         .catch((e: unknown) => e);
       expect(error).toBeInstanceOf(BadRequestException);
       expect((error as BadRequestException).message).toBe(
@@ -208,7 +218,7 @@ describe('ugoDD9TT — mahsulot rasmi faqat PNG/JPEG/WebP', () => {
     const { controller, fileSend, catalogSend } = setup();
     await controller.create(
       file('rasm.webp', 'image/webp', WEBP),
-      { name: 'Olma' },
+      { name: 'Olma', market_id: '121' },
       req as any,
     );
     expect(fileSend).toHaveBeenCalledWith(
@@ -222,7 +232,7 @@ describe('ugoDD9TT — mahsulot rasmi faqat PNG/JPEG/WebP', () => {
     const { controller, catalogSend } = setup();
     await controller.create(
       file('rasm', 'image/png', PNG),
-      { name: 'Olma' },
+      { name: 'Olma', market_id: '121' },
       req as any,
     );
     expect(String(sentDto(catalogSend).image_url)).toMatch(
@@ -235,7 +245,7 @@ describe('ugoDD9TT — mahsulot rasmi faqat PNG/JPEG/WebP', () => {
     await expect(
       controller.create(
         file('rasm.png', 'image/png', PDF),
-        { name: 'Olma' },
+        { name: 'Olma', market_id: '121' },
         req as any,
       ),
     ).rejects.toBeInstanceOf(BadRequestException);

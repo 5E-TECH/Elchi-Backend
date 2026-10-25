@@ -49,3 +49,11 @@ export interface UpdateMarketOperatorWarehouseAccessPayload {
   dto: { can_view_warehouse_stock?: unknown };
   requester?: RequesterContext;
 }
+
+/** identity.market_operator.set_status (mFkrqvMi). */
+export interface SetMarketOperatorStatusPayload {
+  id: string;
+  market_id: string;
+  dto: { status?: unknown };
+  requester?: RequesterContext;
+}

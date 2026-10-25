@@ -2,6 +2,7 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
   IsBoolean,
   IsEnum,
+  IsIn,
   IsNumber,
   IsOptional,
   IsPhoneNumber,
@@ -11,7 +12,7 @@ import {
   Min,
   MinLength,
 } from 'class-validator';
-import { Commission_type } from '@app/common';
+import { Commission_type, Status } from '@app/common';
 
 /**
  * POST /market-operators (i76gGjyq). `market_id` va `role` ATAYLAB yo'q:
@@ -33,6 +34,34 @@ export class CreateMarketOperatorRequestDto {
   @IsString()
   @MinLength(4)
   password!: string;
+
+  // B3ZtzCCx (ega qarori 2026-10-19, MO-S5): ixtiyoriy komissiya — AYNI
+  // so'rovda, atomik. Cheklovlar PATCH :id/commission bilan bir xil;
+  // ikkalasi BIRGA (faqat bittasi — 400, identity tekshiradi).
+  @ApiPropertyOptional({
+    enum: Commission_type,
+    nullable: true,
+    example: Commission_type.PERCENT,
+    description:
+      "Ixtiyoriy. percent — buyurtma total_price foizi; fixed — sotilgan buyurtma uchun so'm. `commission_value` bilan BIRGA yuboriladi (faqat bittasi — 400); ikkalasi yo'q yoki null — komissiyasiz",
+  })
+  @IsOptional()
+  @IsEnum(Commission_type)
+  commission_type?: Commission_type | null;
+
+  @ApiPropertyOptional({
+    example: 5,
+    nullable: true,
+    minimum: 0,
+    maximum: 1_000_000,
+    description:
+      "Ixtiyoriy. Foiz (0..100) yoki so'm (0..1 000 000), ko'pi bilan 2 kasr. `commission_type` bilan BIRGA",
+  })
+  @IsOptional()
+  @IsNumber({ allowNaN: false, allowInfinity: false, maxDecimalPlaces: 2 })
+  @Min(0)
+  @Max(1_000_000)
+  commission_value?: number | null;
 }
 
 /**
@@ -78,4 +107,20 @@ export class UpdateMarketOperatorWarehouseAccessRequestDto {
   })
   @IsBoolean()
   can_view_warehouse_stock!: boolean;
+}
+
+/**
+ * PATCH /market-operators/:id/status (mFkrqvMi). Market o'z operatorini
+ * nofaol qiladi (`inactive` — barcha sessiyalari yopiladi) yoki qayta faol
+ * qiladi (`active`). Buyurtmalar, komissiya va daromad tarixi saqlanadi.
+ */
+export class UpdateMarketOperatorStatusRequestDto {
+  @ApiProperty({
+    enum: [Status.ACTIVE, Status.INACTIVE],
+    example: Status.INACTIVE,
+    description:
+      "inactive — operator tizimga kira olmaydi, sessiyalari yopiladi (qurilma keyingi refresh'da chiqariladi); active — qayta faol",
+  })
+  @IsIn([Status.ACTIVE, Status.INACTIVE])
+  status!: Status;
 }

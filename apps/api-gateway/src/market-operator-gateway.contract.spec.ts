@@ -308,6 +308,7 @@ describe('MarketOperatorGatewayController ↔ identity (i76gGjyq)', () => {
         'identity.market_operator.find_by_market',
         'identity.market_operator.delete',
         'identity.market_operator.update_commission',
+        'identity.market_operator.set_status',
       ]),
     );
   });
@@ -325,6 +326,7 @@ describe('MarketOperatorGatewayController ↔ identity (i76gGjyq)', () => {
     expect(rolesOf('create')).toEqual(['market']);
     expect(rolesOf('remove')).toEqual(['market']);
     expect(rolesOf('updateCommission')).toEqual(['market']);
+    expect(rolesOf('updateStatus')).toEqual(['market']);
   });
 
   it('TC1: market operator yaratadi → u ro`yxatda market_operator sifatida chiqadi', async () => {
@@ -555,5 +557,185 @@ describe('MarketOperatorGatewayController ↔ identity (i76gGjyq)', () => {
       .expect(403);
     await http().get('/market-operators').set('x-test-user', admin).expect(403);
     await createOperator(admin, operatorBody).expect(403);
+  });
+
+  describe('mFkrqvMi — PATCH /market-operators/:id/status', () => {
+    const setStatus = (user: string, id: string, body: unknown) =>
+      http()
+        .patch(`/market-operators/${id}/status`)
+        .set('x-test-user', user)
+        .send(body as object);
+
+    it('⭐ market o`z operatorini nofaol qiladi → 200, sessiya yopiladi, ro`yxatda «nofaol»; qayta faol → 200', async () => {
+      const created = await createOperator(marketA, operatorBody).expect(201);
+      const id = created.body.data.id as string;
+      const row = repo.rows.find((r) => r.id === id)!;
+      row.refresh_token = 'hash';
+      row.session_epoch = 0;
+
+      const off = await setStatus(marketA, id, { status: 'inactive' }).expect(
+        200,
+      );
+      expect(off.body.data).toMatchObject({ id, status: 'inactive' });
+      expect(off.body.data).not.toHaveProperty('refresh_token');
+      expect(repo.rows.find((r) => r.id === id)).toMatchObject({
+        status: 'inactive',
+        refresh_token: null,
+        session_epoch: 1,
+        isDeleted: false,
+      });
+
+      const list = await http()
+        .get('/market-operators?status=inactive')
+        .set('x-test-user', marketA)
+        .expect(200);
+      expect(list.body.data.items).toEqual([
+        expect.objectContaining({ id, status: 'inactive' }),
+      ]);
+
+      const on = await setStatus(marketA, id, { status: 'active' }).expect(200);
+      expect(on.body.data).toMatchObject({ id, status: 'active' });
+      expect(transport.send).toHaveBeenCalledWith(
+        { cmd: 'identity.market_operator.set_status' },
+        {
+          id,
+          market_id: MARKET_A,
+          dto: { status: 'active' },
+          requester: { id: MARKET_A, roles: ['market'] },
+        },
+      );
+    });
+
+    it('⭐ A B ning operatorini nofaol qila olmaydi → 404 (qator o`zgarmaydi)', async () => {
+      await setStatus(marketA, '50', { status: 'inactive' }).expect(404);
+      expect(repo.rows.find((r) => r.id === '50')).toMatchObject({
+        status: 'active',
+      });
+    });
+
+    it.each([
+      [{ status: 'blocked' }],
+      [{ status: 'ACTIVE' }],
+      [{}],
+      [{ status: null }],
+      [{ status: 'inactive', market_id: MARKET_B }],
+      [{ status: 'inactive', role: 'admin' }],
+    ])('noto`g`ri tana %j → 400, identity`ga yetmaydi', async (body) => {
+      await setStatus(marketA, '50', body).expect(400);
+      expect(transport.send).not.toHaveBeenCalled();
+    });
+
+    it('noto`g`ri :id → 400 (ParseBigintIdPipe)', async () => {
+      await setStatus(marketA, 'abc', { status: 'inactive' }).expect(400);
+      expect(transport.send).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['admin'],
+      ['superadmin'],
+      ['market_operator'],
+      ['courier'],
+      ['manager'],
+    ])('%s roli → 403 (RolesGuard), identity`ga yetmaydi', async (role) => {
+      await setStatus(asUser('50', role), '50', {
+        status: 'inactive',
+      }).expect(403);
+      expect(transport.send).not.toHaveBeenCalled();
+      expect(repo.rows.find((r) => r.id === '50')?.status).toBe('active');
+    });
+  });
+
+  describe('B3ZtzCCx — POST /market-operators ixtiyoriy komissiya bilan (atomik)', () => {
+    const liveOperatorsOfA = () =>
+      repo.rows.filter(
+        (row) =>
+          row.role === Roles.MARKET_OPERATOR &&
+          row.market_id === MARKET_A &&
+          !row.isDeleted,
+      );
+
+    it('⭐ bitta so`rov: operator + komissiya → 201, ro`yxatda ko`rinadi, PATCH chaqirilmaydi', async () => {
+      const created = await createOperator(marketA, {
+        ...operatorBody,
+        commission_type: 'percent',
+        commission_value: 7.5,
+      }).expect(201);
+      expect(created.body.data).toMatchObject({
+        role: 'market_operator',
+        market_id: MARKET_A,
+        commission_type: 'percent',
+        commission_value: 7.5,
+      });
+      // Yagona RMQ chaqiruvi — create, komissiya bilan.
+      expect(transport.send).toHaveBeenCalledTimes(1);
+      expect(transport.send).toHaveBeenCalledWith(
+        { cmd: 'identity.market_operator.create' },
+        expect.objectContaining({
+          market_id: MARKET_A,
+          dto: {
+            ...operatorBody,
+            commission_type: 'percent',
+            commission_value: 7.5,
+          },
+        }),
+      );
+
+      const list = await http()
+        .get('/market-operators')
+        .set('x-test-user', marketA)
+        .expect(200);
+      expect(list.body.data.items[0]).toMatchObject({
+        id: created.body.data.id,
+        commission_type: 'percent',
+        commission_value: 7.5,
+      });
+    });
+
+    it('fixed 12 000 → 201; komissiyasiz (avvalgidek) → 201, null, payload`da komissiya kaliti yo`q', async () => {
+      const fixed = await createOperator(marketA, {
+        ...operatorBody,
+        commission_type: 'fixed',
+        commission_value: 12000,
+      }).expect(201);
+      expect(fixed.body.data).toMatchObject({
+        commission_type: 'fixed',
+        commission_value: 12000,
+      });
+
+      transport.send.mockClear();
+      const plain = await createOperator(marketA, {
+        ...operatorBody,
+        phone_number: '+998901234568',
+      }).expect(201);
+      expect(plain.body.data).toMatchObject({
+        commission_type: null,
+        commission_value: null,
+      });
+      const payload = transport.send.mock.calls[0][1] as {
+        dto: Record<string, unknown>;
+      };
+      expect(payload.dto).not.toHaveProperty('commission_type');
+      expect(payload.dto).not.toHaveProperty('commission_value');
+    });
+
+    it.each([
+      ['DTO: noma`lum tur', { commission_type: 'bonus', commission_value: 1 }],
+      ['DTO: manfiy', { commission_type: 'fixed', commission_value: -5 }],
+      ['DTO: satr', { commission_type: 'percent', commission_value: '5' }],
+      ['DTO: 3 kasr', { commission_type: 'percent', commission_value: 1.005 }],
+      [
+        'DTO: 2 000 000',
+        { commission_type: 'fixed', commission_value: 2_000_000 },
+      ],
+      [
+        'identity: percent 150',
+        { commission_type: 'percent', commission_value: 150 },
+      ],
+      ['identity: faqat turi', { commission_type: 'percent' }],
+      ['identity: faqat qiymati', { commission_value: 5 }],
+    ])('⭐ %s → 400 va operator YARATILMAYDI', async (_label, extra) => {
+      await createOperator(marketA, { ...operatorBody, ...extra }).expect(400);
+      expect(liveOperatorsOfA()).toHaveLength(0);
+    });
   });
 });

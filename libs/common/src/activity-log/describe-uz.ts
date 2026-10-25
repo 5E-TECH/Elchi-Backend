@@ -371,4 +371,14 @@ export const ActivityDescribeUz = {
       ? `Operator #${String(operatorId)} ga ombor qoldig'ini ko'rish ruxsati berildi`
       : `Operator #${String(operatorId)} dan ombor qoldig'ini ko'rish ruxsati olindi`;
   },
+
+  /**
+   * (mFkrqvMi) "Operator #50 nofaol qilindi" / "Operator #50 qayta
+   * faollashtirildi" — market o'z operatorining holatini almashtirdi.
+   */
+  marketOperatorStatusChanged(operatorId: Id, active: boolean): string {
+    return active
+      ? `Operator #${String(operatorId)} qayta faollashtirildi`
+      : `Operator #${String(operatorId)} nofaol qilindi`;
+  },
 } as const;

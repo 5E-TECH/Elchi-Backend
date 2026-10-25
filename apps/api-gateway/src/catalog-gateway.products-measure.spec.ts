@@ -19,7 +19,8 @@ import {
  * MH-3 (9fHyFp3y) + hY7uacJu — gateway qatlami:
  *   • POST /product: o'lchov MAJBURIY (MH-S1), multipart satrlari songa
  *     aylanadi, `volumetric_enabled` sukuti catalog'da (true);
- *   • PATCH /product/:id va /product/my/:id: o'lchov ixtiyoriy, `null`/''
+ *   • PATCH /product/:id: o'lchov ixtiyoriy, `null`/'' (/product/my/:id
+ *     Pc4CAFdB da olib tashlangan)
  *     — 400; DTO'da yo'q maydon (sku_code, user_id, id, isDeleted) — 400;
  *   • GET /product/by-code/:code: market scoping `GET /product/:id` bilan
  *     bir xil, `:id` dan OLDIN e'lon qilingan.
@@ -31,6 +32,8 @@ type Send = jest.Mock<Observable<unknown>, [{ cmd: string }, unknown]>;
 const MARKET = { sub: '121', roles: ['market'] };
 const OPERATOR = { sub: '501', roles: ['market_operator'] };
 const ADMIN = { sub: '1', roles: ['admin'] };
+// Pc4CAFdB: mahsulotni faqat xodim yaratadi — `market_id` majburiy.
+const REGISTRATOR = { sub: '77', roles: ['registrator'] };
 const BRANCH = { sub: '77', roles: ['branch'] };
 
 const pipe = new ValidationPipe({
@@ -58,6 +61,10 @@ const validateUpdate = (body: Record<string, unknown>) =>
     type: 'body',
     metatype: UpdateProductRequestDto,
   }) as Promise<UpdateProductRequestDto>;
+
+/** Pc4CAFdB: xodim yaratadi — tanaga `market_id` qo'shiladi. */
+const withMarket = <T extends object>(dto: T): T =>
+  Object.assign(dto, { market_id: '121' });
 
 const rejects400 = async (promise: Promise<unknown>) => {
   await expect(promise).rejects.toBeInstanceOf(BadRequestException);
@@ -110,7 +117,11 @@ describe('MH-3 — POST /product: o`lchov (CL3–CL7)', () => {
     });
 
     const { controller, catalogSend } = setup();
-    await controller.create(undefined, dto, req(MARKET) as any);
+    await controller.create(
+      undefined,
+      withMarket(dto),
+      req(REGISTRATOR) as any,
+    );
     const sent = payloadOf(catalogSend, 'catalog.product.create')?.dto as
       | Record<string, unknown>
       | undefined;
@@ -218,7 +229,11 @@ describe('MH-3 — POST /product: o`lchov (CL3–CL7)', () => {
         ...extra,
       });
       const { controller, catalogSend } = setup();
-      await controller.create(undefined, dto, req(MARKET) as any);
+      await controller.create(
+        undefined,
+        withMarket(dto),
+        req(REGISTRATOR) as any,
+      );
       const sent = payloadOf(catalogSend, 'catalog.product.create')
         ?.dto as Record<string, unknown>;
       expect(sent).not.toHaveProperty('volumetric_enabled');
@@ -245,7 +260,11 @@ describe('MH-3 — POST /product: o`lchov (CL3–CL7)', () => {
     expect(dto.volumetric_enabled).toBe(expected);
 
     const { controller, catalogSend } = setup();
-    await controller.create(undefined, dto, req(MARKET) as any);
+    await controller.create(
+      undefined,
+      withMarket(dto),
+      req(REGISTRATOR) as any,
+    );
     expect(payloadOf(catalogSend, 'catalog.product.create')?.dto).toMatchObject(
       { volumetric_enabled: expected },
     );
@@ -294,7 +313,11 @@ describe('MH-3 — POST /product: o`lchov (CL3–CL7)', () => {
       barcode: '036000291452',
     });
     const { controller, catalogSend } = setup();
-    await controller.create(undefined, dto, req(MARKET) as any);
+    await controller.create(
+      undefined,
+      withMarket(dto),
+      req(REGISTRATOR) as any,
+    );
     expect(payloadOf(catalogSend, 'catalog.product.create')?.dto).toMatchObject(
       { volumetric_enabled: false, barcode: '036000291452' },
     );
@@ -350,17 +373,6 @@ describe('MH-3 — PATCH: o`lchov ixtiyoriy, tozalab bo`lmaydi (CL8)', () => {
         volumetric_enabled: false,
         barcode: '4780000000007',
       },
-    });
-  });
-
-  it('⭐ Q1/A: PATCH /product/my/:id ham o`lchov va kodni uzatadi (egasi tuzatadi)', async () => {
-    const dto = await validateUpdate({ weight_kg: '2', barcode: '' });
-    const { controller, catalogSend } = setup({ catalogReply: () => of({}) });
-    await controller.updateMyProduct('5', undefined, dto, req(MARKET) as any);
-    expect(payloadOf(catalogSend, 'catalog.product.update_own')).toMatchObject({
-      id: '5',
-      user_id: '121',
-      dto: { weight_kg: 2, barcode: null },
     });
   });
 });

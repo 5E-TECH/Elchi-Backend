@@ -244,6 +244,18 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
   (`branch.user.remove`, best-effort, warn log). User-create saga: a failed
   branch assign / cashbox create compensates (unassign + soft-delete) instead
   of leaving an orphan user.
+- **Market operators (`identity.market_operator.*`, MARKET only, own operator
+  else 404):** `create`, `find_by_market`, `delete`, `update_commission`,
+  `update_warehouse_access`, `set_status` (mFkrqvMi, `PATCH
+  /market-operators/:id/status {status: active|inactive}`): `inactive` →
+  `invalidateAllSessions` (same save), `active` → the market itself must be
+  ACTIVE (else 403); orders / commission / earnings untouched; activity log
+  `status_change` (actor = market, `metadata.reason =
+  market_operator_status`); unchanged status → 200 without a log. `create`
+  takes an optional `commission_type` + `commission_value` (B3ZtzCCx; both
+  or neither, same bounds as `update_commission` via shared
+  `parseMarketOperatorCommission` / `assertMarketOperatorCommissionBounds`),
+  saved in the same INSERT.
 
 ### order-service (`order_schema`) — the core
 - **Entities:** `order` (key cols incl. `status` (`Order_status`), `total_price`;
@@ -552,8 +564,10 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
   (0.001..1000 kg, 1..1000 cm — owner not yet confirmed).
   - HTTP `POST /product`: the 4 measures are **required** (MH-S1, DTO
     `IsDefined`), multipart strings → numbers; `volumetric_enabled` /
-    `barcode` optional. `PATCH /product/:id` and `/product/my/:id`: all
-    optional, `null` / `''` measure → 400 (measures are only replaced).
+    `barcode` optional. `PATCH /product/:id`: all optional, `null` / `''`
+    measure → 400 (measures are only replaced). `PATCH /product/my/:id` was
+    removed (Pc4CAFdB): product create/delete/update is staff-only
+    (superadmin/admin/registrator/manager), market/market_operator read only.
     Service level (`catalog.product.create`) keeps measures optional —
     `integration-service` partner path still creates `{ name, user_id }`.
   - `update` and `update_own` use the same field whitelist (name, image_url,

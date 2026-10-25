@@ -258,10 +258,13 @@ export class CreateProductRequestDto {
   @IsString()
   image_url?: string;
 
-  @ApiPropertyOptional({
+  // Pc4CAFdB: mahsulotni faqat xodim yaratadi — `market_id` HAR DOIM
+  // majburiy. Tekshiruv handler'da (aniq 400 xabari); pipe darajasida
+  // ixtiyoriy qoldirilgan, OpenAPI'da esa majburiy.
+  @ApiProperty({
     example: '1',
     description:
-      'Admin/Superadmin yuboradi. MARKET role uchun token sub ishlatiladi.',
+      'Mahsulot qaysi marketniki — MAJBURIY (superadmin/admin/registrator/menejer yuboradi). Yuborilmasa 400.',
   })
   @IsOptional()
   @IsString()

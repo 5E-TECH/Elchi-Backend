@@ -82,6 +82,24 @@ const PRODUCT_DETAIL_ROLES: string[] = [
 ];
 
 /**
+ * Pc4CAFdB (ega qarori 2026-10-15): mahsulot YARATISH va O'CHIRISH — faqat
+ * Elchi xodimi. Market va market operatori chiqarildi (ular ro'yxatni
+ * o'qiydi va buyurtma yaratadi — PRODUCT_READ_ROLES / buyurtma rollari
+ * tegilmaydi), BRANCH qo'shilmaydi.
+ *
+ * DIQQAT: cheklov FAQAT shu gateway dekoratorida. catalog-service
+ * `catalog.product.create` (servis qatlami) himoyalanmagan — hamkor
+ * posilkasidan avtomatik mahsulot yaratish yo'li undan to'g'ridan-to'g'ri
+ * foydalanadi; bu 8-kartada (epik «Mahsulot o'lchovi») hal qilinadi.
+ */
+export const PRODUCT_WRITE_ROLES: string[] = [
+  RoleEnum.SUPERADMIN,
+  RoleEnum.ADMIN,
+  RoleEnum.REGISTRATOR,
+  RoleEnum.MANAGER,
+];
+
+/**
  * 3qDsJpfW: HTTP ro'yxatlarida `limit` ning yuqori chegarasi — order-service
  * AI katalog yuklashi (`CATALOG_LOAD_LIMIT = 500`) bilan bir xil. Berilmasa
  * catalog-service sukuti (`page = 1`, `limit = 10`) qoladi.
@@ -235,8 +253,8 @@ export class CatalogGatewayController {
 
   /**
    * tsEevElW: "o'z marketi" — MARKET uchun token `sub`, MARKET_OPERATOR uchun
-   * biriktirilgan market (yo'q bo'lsa 400). my-products va PATCH my/:id shu
-   * id bilan cheklanadi.
+   * biriktirilgan market (yo'q bo'lsa 400). my-products va by-code shu id
+   * bilan cheklanadi (o'qish; Pc4CAFdB dan keyin market yozmaydi).
    */
   private async resolveOwnMarketId(user: JwtUser): Promise<string> {
     if (this.isMarketOperatorRequester(user)) {
@@ -316,19 +334,21 @@ export class CatalogGatewayController {
       .pipe(timeout(8000));
   }
 
+  /**
+   * Pc4CAFdB (ega qarori 2026-10-15): mahsulotni FAQAT Elchi xodimi yaratadi —
+   * o'lchov (og'irlik, o'lcham) yetkazish narxiga kiradi, uni sotuvchi emas,
+   * xodim kiritadi. MARKET va MARKET_OPERATOR chiqarildi, BRANCH qo'shilmaydi.
+   * `market_id` HAR DOIM majburiy (yo'q — 400).
+   */
   @Post()
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(
-    RoleEnum.MARKET,
-    // tsEevElW: market operatori o'z marketiga mahsulot qo'shadi.
-    RoleEnum.MARKET_OPERATOR,
-    RoleEnum.ADMIN,
-    RoleEnum.SUPERADMIN,
-    RoleEnum.REGISTRATOR,
-    RoleEnum.MANAGER,
-  )
+  @Roles(...PRODUCT_WRITE_ROLES)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Create a new product' })
+  @ApiOperation({
+    summary: 'Create a new product (superadmin/admin/registrator/manager)',
+    description:
+      'Faqat xodim (superadmin, admin, registrator, menejer). `market_id` majburiy — yuborilmasa 400. Market va market operatori — 403.',
+  })
   @ApiCreatedResponse({ description: 'Product created successfully' })
   @ApiConsumes('multipart/form-data')
   @ApiBody({ type: CreateProductRequestDto })
@@ -356,28 +376,16 @@ export class CatalogGatewayController {
       throw new BadRequestException('name is required');
     }
 
-    const roles = req.user.roles ?? [];
-    let marketId: string | undefined = dto.market_id;
-
-    if (roles.includes(RoleEnum.MARKET)) {
-      marketId = req.user.sub;
-    } else if (this.isMarketOperatorRequester(req.user)) {
-      // tsEevElW: tanadagi market_id E'TIBORSIZ — mahsulot doim operator
-      // biriktirilgan marketga yoziladi; biriktirilmagan bo'lsa 400.
-      marketId = await this.requireOperatorMarketId(req.user);
-    } else if (
-      roles.includes(RoleEnum.ADMIN) ||
-      roles.includes(RoleEnum.SUPERADMIN) ||
-      roles.includes(RoleEnum.REGISTRATOR) ||
-      roles.includes(RoleEnum.MANAGER)
-    ) {
-      if (!marketId) {
-        throw new BadRequestException(
-          'market_id is required for admin/superadmin/registrator/manager',
-        );
-      }
-    } else {
+    // Pc4CAFdB: market / market operatori tarmoqlari olib tashlandi — rol
+    // RolesGuard'da tekshiriladi, bu yerda ham (himoya qatlami) faqat xodim.
+    if (!PRODUCT_WRITE_ROLES.some((role) => this.hasRole(req.user, role))) {
       throw new ForbiddenException('You are not allowed to create product');
+    }
+    const marketId = String(dto.market_id ?? '').trim();
+    if (!marketId) {
+      throw new BadRequestException(
+        'market_id is required for admin/superadmin/registrator/manager',
+      );
     }
 
     let imageUrl = dto.image_url;
@@ -709,17 +717,15 @@ export class CatalogGatewayController {
       .pipe(timeout(8000));
   }
 
+  /** Pc4CAFdB: market mahsulotni o'chirmaydi — faqat xodim. */
   @Delete(':id')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(
-    RoleEnum.MARKET,
-    RoleEnum.ADMIN,
-    RoleEnum.SUPERADMIN,
-    RoleEnum.REGISTRATOR,
-    RoleEnum.MANAGER,
-  )
+  @Roles(...PRODUCT_WRITE_ROLES)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Delete product (soft delete)' })
+  @ApiOperation({
+    summary:
+      'Delete product (soft delete; superadmin/admin/registrator/manager)',
+  })
   @ApiParam({ name: 'id', description: 'Product ID (id)' })
   remove(@Param('id') id: string, @Req() req: { user: JwtUser }) {
     return this.catalogClient
@@ -730,72 +736,8 @@ export class CatalogGatewayController {
       .pipe(timeout(8000));
   }
 
-  @Patch('my/:id')
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.MARKET, RoleEnum.MARKET_OPERATOR)
-  @ApiBearerAuth()
-  @ApiOperation({
-    summary: 'Update own product (market / market_operator)',
-    description:
-      "Market — o'z mahsuloti; market operatori — biriktirilgan marketining mahsuloti. Begona mahsulot — 403.",
-  })
-  @ApiConsumes('multipart/form-data')
-  @ApiParam({ name: 'id', description: 'Product ID (id)' })
-  @ApiBody({ type: UpdateProductRequestDto })
-  @UseInterceptors(
-    FileInterceptor('image', {
-      storage: memoryStorage(),
-      limits: { fileSize: 10 * 1024 * 1024 },
-    }),
-  )
-  async updateMyProduct(
-    @Param('id') id: string,
-    @UploadedFile()
-    file:
-      | {
-          originalname: string;
-          mimetype: string;
-          buffer: Buffer;
-        }
-      | undefined,
-    @Body() dto: UpdateProductRequestDto,
-    @Req() req: { user: JwtUser },
-  ) {
-    // tsEevElW: egalik — o'z marketi (operator uchun biriktirilgan market;
-    // biriktirilmagan bo'lsa 400). Rasm yuklashdan OLDIN aniqlanadi.
-    const ownMarketId = await this.resolveOwnMarketId(req.user);
-    const isOperator = this.isMarketOperatorRequester(req.user);
-
-    let imageUrl = dto.image_url;
-    if (file) {
-      imageUrl = await this.uploadImageAndResolveUrl(
-        file,
-        req as unknown as HttpRequestLike,
-      );
-    }
-    // `image` faylni yuqorida `image_url`ga aylantirdik — xom binary maydonni
-    // servisga uzatmaymiz.
-    const safeDto = { ...dto };
-    delete safeDto.image;
-
-    return this.catalogClient
-      .send(
-        { cmd: 'catalog.product.update_own' },
-        {
-          id,
-          user_id: ownMarketId,
-          dto: { ...safeDto, image_url: imageUrl },
-          // Activity log aktyori — operator o'zi (market emas).
-          ...(isOperator
-            ? {
-                actor: {
-                  id: String(req.user.sub),
-                  role: RoleEnum.MARKET_OPERATOR,
-                },
-              }
-            : {}),
-        },
-      )
-      .pipe(timeout(8000));
-  }
+  // Pc4CAFdB: `PATCH /product/my/:id` (market / market operatori o'z
+  // mahsulotini tahrirlashi) BUTUNLAY olib tashlandi — market mahsulotni
+  // tahrirlamaydi. Handler'ni `@Roles` siz qoldirish TAQIQLANADI: RolesGuard
+  // metadata bo'lmasa fail-open (tizimga kirgan HAMMAGA ochiq).
 }
