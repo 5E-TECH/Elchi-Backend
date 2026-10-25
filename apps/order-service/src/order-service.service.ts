@@ -2663,6 +2663,8 @@ export class OrderServiceService {
     source?: Order_source | 'internal' | 'external' | 'branch';
     /** 6kHnNH9j: HQ | WAREHOUSE — `findAll` ga o'tadi. */
     fulfillment_source?: string;
+    /** LFNLeSpu (BG4): GET /orders `cancel_stage` — `findAll` ga o'tadi (OR). */
+    cancel_stages?: CancelReturnStage[];
     fetch_all?: boolean | string;
     disable_pagination?: boolean;
     page?: number;

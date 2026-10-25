@@ -110,6 +110,44 @@ o'z marketiniki.
   (yoki `orders_count: 0`) qatorida «0 ta buyurtma · Sizda hali buyurtmasi yo'q»; `address`/`extra_number` `null`
   bo'lsa forma maydoni bo'sh qoladi (operator o'zi to'ldiradi).
 
+### 2026-10-26 — Bekor holatlari BG5: bekor pochta qabulining manbasi va custody hodisasi (o10nrbkB)
+
+Deploy: logistics-service (`receiveCanceledPost` jo'natuvchini uzatadi) va order-service (tracking + custody).
+Tartib muhim emas: eski logistics bilan manba `null` bo'ladi (taxmin qilinmaydi), eski order-service yangi
+maydonni e'tiborsiz qoldiradi. Migratsiya yo'q.
+
+- [2026-10-26] ✏️ [order] — `cancelled_post_received` tracking: manba endi pochtaning HAQIQIY jo'natuvchisi
+  (`post.courier_id` va uning filiali), jo'natishda maqsadga almashgan holder EMAS. `description`:
+  «Andijon filiali … bekor qilingan pochtani kuryer Ali Valiyevdan qabul qildi» / «HQ bekor qilingan pochtani
+  Andijon filiali …dan qabul qildi» (ilgari «HQ … HQdan», «Andijon … Andijondan»). `metadata` ga qo'shildi:
+  `source_type` (`COURIER` | `BRANCH` | null), `source_user_id`, `source_user_role`, `source_courier_id`,
+  `source_courier_name`, `received_by`; `source_branch_id` / `source_branch` — jo'natuvchining filiali
+  (noma'lum bo'lsa `null`).
+- [2026-10-26] ✏️ [order] — qabulda **custody hodisasi doim yoziladi** (vaqti = qabul vaqti, `changed_by` = qabul
+  qilgan xodim, `from_*` = jo'natuvchi kuryer/filial, `to_*` = joriy holder). Ilgari holder o'zgarmagani uchun
+  qabulda custody yozilmasdi. Holder, `last_handover_*` va pul hisobi o'zgarmagan.
+- [2026-10-26] 🟢 — «Yo'lda» bosqichi avvalgidek `cancelled (sent)` holatidan (BG1 `return_stage=in_transit`);
+  `CANCELLED_SENT` da holder maqsadda qolishi o'zgartirilmadi (filial kassasi/hisob-kitob shunga tayanadi).
+- 🔧 FE: tarix jumlasida manba kerak bo'lsa `metadata.source_courier_name` / `metadata.source_branch` ni o'qing;
+  custody tarixida qabul qatori («… kuryerdan … filialga o'tkazdi») endi bor.
+
+### 2026-10-26 — Bekor holatlari BG4: `GET /orders?cancel_stage=` (LFNLeSpu)
+
+Deploy: api-gateway (yangi query parametri + Swagger), order-service (faqat tip — filtr BG3 dan beri bor).
+Migratsiya yo'q.
+
+- [2026-10-26] ✏️ [gateway] — `GET /orders` va `GET /orders/export/excel`: ixtiyoriy **`cancel_stage`** —
+  `courier,in_transit,branch,hq,market` dan bir yoki bir nechtasi (vergul bilan yoki parametr takrori, harf
+  farqsiz, OR). Ta'rif qatordagi `return_stage` bilan AYNAN bir xil (filtr == badge): `courier` — bekor, kuryer
+  qo'lida; `in_transit` — `cancelled (sent)`; `branch` — bekor, filial qo'lida (qabul qilingan); `hq` — bekor, HQ
+  qo'lida; `market` — marketga topshirilgan (`returned_to_market`, ombor qaytishi emas). Boshqa filtrlar va rol
+  doirasi bilan AND (market — o'z buyurtmalari, filial — o'z filiali, kuryer — o'zi, logist — o'z viloyatlari).
+  Noma'lum qiymat → 400 `cancel_stage noto'g'ri: … (ruxsat: courier, in_transit, branch, hq, market)`.
+- [2026-10-26] 🟢 [gateway] — `cancel_stage` berilsa `status=cancelled` dagi yashirin «bekor inventari» tab
+  rejimi (filial: holder BRANCH + pochtasiz; kuryer: alohida bekor tab) **yoqilmaydi** — bosqich filtrining o'zi
+  ishlaydi. `cancel_stage` siz xatti-harakat o'zgarmagan.
+- 🔧 FE: bekor bosqichi tablari/filtri uchun `cancel_stage` ni yuboring (eksportga ham xuddi shu parametr).
+
 ### 2026-10-25 — Buyurtma: mahsulotsiz va tumansiz buyurtma yaratilmaydi — barcha yo'llarda (IR2OHIiN)
 
 Deploy: api-gateway (DTO/Swagger + `createOrderInternal`), order-service (yagona yaratish nuqtasi

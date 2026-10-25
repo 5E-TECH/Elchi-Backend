@@ -337,3 +337,70 @@ export function cancelReturnStageSql(
  */
 export const cancelReturnHandoverAtSql = (alias = 'order'): string =>
   `COALESCE(${alias}.market_handover_at, ${alias}.last_handover_at)`;
+
+/**
+ * o10nrbkB (BG5) — bekor pochtaning HAQIQIY jo'natuvchisi (logistics
+ * `receiveCanceledPost`: `post.courier_id` va uning filiali). Ilgari qabul
+ * tracking'ining manbasi `previousHolderBranchId` dan olinardi — u esa
+ * jo'natishdayoq MAQSADGA almashgan bo'ladi («HQ … HQdan qabul qildi»,
+ * «Andijon … Andijondan qabul qildi»).
+ *
+ *   - `role` — jo'natuvchining filialdagi roli (`COURIER` — kuryer o'z
+ *     filialiga, `MANAGER` — filial HQ'ga); noma'lum bo'lsa `null`;
+ *   - `branch_id` — jo'natuvchi biriktirilgan filial.
+ */
+export interface CanceledPostSender {
+  user_id: string | null;
+  role: string | null;
+  branch_id: string | null;
+}
+
+export function normalizeCanceledPostSender(
+  raw: unknown,
+): CanceledPostSender | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const value = raw as Record<string, unknown>;
+  const sender: CanceledPostSender = {
+    user_id: realId(value.user_id),
+    role: text(value.role).toUpperCase() || null,
+    branch_id: realId(value.branch_id),
+  };
+  return sender.user_id || sender.branch_id ? sender : null;
+}
+
+export const isCourierSender = (sender: CanceledPostSender | null): boolean =>
+  sender?.role === 'COURIER';
+
+/** Custody hodisasining «kimdan» tomoni (holder turi + filial/kuryer). */
+export interface CustodySide {
+  holder_type: 'HQ' | 'BRANCH' | 'COURIER' | 'MARKET' | null;
+  branch_id: string | null;
+  courier_id: string | null;
+}
+
+/**
+ * o10nrbkB (BG5) — bekor pochta QABULIDAGI custody hodisasining «kimdan»
+ * tomoni: jo'natuvchi kuryer (o'z filiali bilan) yoki jo'natuvchi filial.
+ * Jo'natuvchi noma'lum (eski logistics) — oldingi holder (o'zgarishsiz).
+ */
+export function canceledPostReceiveCustodyFrom(
+  sender: CanceledPostSender | null,
+  previous: CustodySide,
+): CustodySide {
+  if (!sender) return previous;
+  if (isCourierSender(sender)) {
+    return {
+      holder_type: 'COURIER',
+      branch_id: sender.branch_id,
+      courier_id: sender.user_id,
+    };
+  }
+  if (sender.branch_id) {
+    return {
+      holder_type: 'BRANCH',
+      branch_id: sender.branch_id,
+      courier_id: null,
+    };
+  }
+  return previous;
+}

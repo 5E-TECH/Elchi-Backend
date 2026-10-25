@@ -1066,7 +1066,17 @@ export class OrderServiceController {
           quantity?: number;
         }>;
       };
-      requester?: { id?: string; roles?: string[]; note?: string | null };
+      requester?: {
+        id?: string;
+        roles?: string[];
+        note?: string | null;
+        /** o10nrbkB (BG5): bekor pochta jo'natuvchisi (logistics qabuli). */
+        canceled_post_sender?: {
+          user_id?: string | null;
+          role?: string | null;
+          branch_id?: string | null;
+        } | null;
+      };
     },
     @Ctx() context: RmqContext,
   ) {

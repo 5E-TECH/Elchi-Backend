@@ -1040,7 +1040,17 @@ export class LogisticsServiceService implements OnModuleInit {
   private async updateOrder(
     id: string,
     dto: Record<string, unknown>,
-    requester?: { id: string; roles?: string[]; note?: string | null },
+    requester?: {
+      id: string;
+      roles?: string[];
+      note?: string | null;
+      /** o10nrbkB (BG5): bekor pochta qabulida — pochtaning haqiqiy jo'natuvchisi. */
+      canceled_post_sender?: {
+        user_id: string | null;
+        role: string | null;
+        branch_id: string | null;
+      } | null;
+    },
   ): Promise<void> {
     try {
       await lastValueFrom(
@@ -5174,6 +5184,26 @@ export class LogisticsServiceService implements OnModuleInit {
       );
     }
 
+    // o10nrbkB (BG5) / LC-06 — pochta jo'natuvchisi (post.courier_id) kim:
+    // kuryermi yoki menejermi, qaysi filialdan. Qabul tracking'ining manbasi
+    // va custody hodisasi shundan (order-service); qabul qilinmaganlar ham shu
+    // jo'natuvchiga qaytadi. Qidiruv yiqilsa — null (qabul to'xtamaydi).
+    const senderUserId = String(post.courier_id ?? '').trim();
+    const senderAssignment = senderUserId
+      ? await this.findBranchAssignmentByUserId(senderUserId, {
+          id: senderUserId,
+          roles: [Roles.MANAGER],
+        })
+      : null;
+    const senderRole = String(senderAssignment?.role ?? '')
+      .trim()
+      .toUpperCase();
+    const canceledPostSender = {
+      user_id: senderUserId || null,
+      role: senderRole || null,
+      branch_id: String(senderAssignment?.branch_id ?? '').trim() || null,
+    };
+
     for (const orderId of canceledOrderIds) {
       await this.updateOrder(
         orderId,
@@ -5190,6 +5220,7 @@ export class LogisticsServiceService implements OnModuleInit {
           note: isHqReceipt
             ? 'Canceled order received by HQ and held for market handover'
             : 'Canceled order received by branch manager',
+          canceled_post_sender: canceledPostSender,
         },
       );
     }
@@ -5234,20 +5265,9 @@ export class LogisticsServiceService implements OnModuleInit {
 
     let requeuedPostIds: string[] = [];
     if (remainingOrders.length) {
-      // LC-06 — pochta egasi (post.courier_id) kim: kuryermi yoki menejermi.
-      // Qabul qilinmagan posilka shu jo'natuvchiga qaytadi. Qidiruv yiqilsa
-      // (null) — avvalgi xatti-harakat: filial qabulida kuryerga, HQ qabulida
-      // HQ da, kuryersiz.
-      const senderAssignment = await this.findBranchAssignmentByUserId(
-        String(post.courier_id),
-        {
-          id: String(post.courier_id),
-          roles: [Roles.MANAGER],
-        },
-      );
-      const senderRole = String(senderAssignment?.role ?? '')
-        .trim()
-        .toUpperCase();
+      // LC-06 — qabul qilinmagan posilka jo'natuvchiga (yuqorida aniqlangan)
+      // qaytadi. Qidiruv yiqilsa (null) — avvalgi xatti-harakat: filial
+      // qabulida kuryerga, HQ qabulida HQ da, kuryersiz.
       const fallbackReturnBranchId = isHqReceipt
         ? String(senderAssignment?.branch_id ?? '').trim()
         : targetBranchId;

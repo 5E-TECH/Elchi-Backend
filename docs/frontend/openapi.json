@@ -2697,6 +2697,16 @@
             }
           },
           {
+            "name": "cancel_stage",
+            "required": false,
+            "in": "query",
+            "description": "LFNLeSpu (BG4): cancel-return stage filter — comma list (or repeated param) of `courier`, `in_transit`, `branch`, `hq`, `market` (OR, case-insensitive). Same definition as the row `return_stage` (filter == badge): courier = cancelled + held by courier; in_transit = `cancelled (sent)`; branch = cancelled + held by branch (received, not in a return post); hq = cancelled + held by HQ; market = handed over to market (`returned_to_market`, warehouse returns excluded). Combined with all other filters and the role scope (AND); with `cancel_stage` the implicit cancelled-inventory tab mode is off. Unknown value — 400.",
+            "schema": {
+              "example": "branch,hq",
+              "type": "string"
+            }
+          },
+          {
             "name": "status",
             "required": false,
             "in": "query",
@@ -3380,6 +3390,16 @@
                 "HQ",
                 "WAREHOUSE"
               ],
+              "type": "string"
+            }
+          },
+          {
+            "name": "cancel_stage",
+            "required": false,
+            "in": "query",
+            "description": "LFNLeSpu (BG4): cancel-return stage filter — comma list (or repeated param) of `courier`, `in_transit`, `branch`, `hq`, `market` (OR, case-insensitive). Same definition as the row `return_stage` (filter == badge): courier = cancelled + held by courier; in_transit = `cancelled (sent)`; branch = cancelled + held by branch (received, not in a return post); hq = cancelled + held by HQ; market = handed over to market (`returned_to_market`, warehouse returns excluded). Combined with all other filters and the role scope (AND); with `cancel_stage` the implicit cancelled-inventory tab mode is off. Unknown value — 400.",
+            "schema": {
+              "example": "branch,hq",
               "type": "string"
             }
           },
