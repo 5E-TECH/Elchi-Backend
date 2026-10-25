@@ -26,7 +26,17 @@ export interface MockClient {
  * almashtiriladi. RabbitMQ/Postgres kerak emas; marshrut to'qnashuvi kabi
  * HTTP darajasidagi xatolar unit spec'dan farqli o'laroq shu yerda ko'rinadi.
  */
-export async function createGatewayE2eApp(reply: ClientReply): Promise<{
+export interface GatewayE2eOptions {
+  /** main.ts dagi kabi `rawBody: true` (sukut: yo'q). */
+  rawBody?: boolean;
+  /** `app.init()` DAN OLDIN — main.ts sozlamalari (pipe, filtr, versiya). */
+  configure?: (app: INestApplication) => void;
+}
+
+export async function createGatewayE2eApp(
+  reply: ClientReply,
+  options: GatewayE2eOptions = {},
+): Promise<{
   app: INestApplication;
   clients: Map<GatewayClientToken, MockClient>;
 }> {
@@ -45,7 +55,11 @@ export async function createGatewayE2eApp(reply: ClientReply): Promise<{
     builder = builder.overrideProvider(token).useValue(client);
   }
   const moduleRef = await builder.compile();
-  const app = moduleRef.createNestApplication({ logger: false });
+  const app = moduleRef.createNestApplication({
+    logger: false,
+    ...(options.rawBody ? { rawBody: true } : {}),
+  });
+  options.configure?.(app);
   await app.init();
   return { app, clients };
 }

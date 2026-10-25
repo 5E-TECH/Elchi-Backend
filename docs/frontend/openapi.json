@@ -20200,6 +20200,116 @@
         ]
       }
     },
+    "/csp-report": {
+      "post": {
+        "description": "Autentifikatsiyasiz. `Content-Type: application/csp-report` (`{ \"csp-report\": { … } }`) yoki `application/reports+json` (`[{ \"type\": \"csp-violation\", \"body\": { … } }]`, boshqa turlar e'tiborsiz). Tana ≤ 32 KB, per-IP 30/daqiqa. Javob doim bo'sh 204; buzilishlar faqat gateway logiga (`event: \"csp_violation\"`, URL'lar query'siz) yoziladi.",
+        "operationId": "CspReportController_receive",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/csp-report": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "csp-report": {
+                        "type": "object",
+                        "example": {
+                          "document-uri": "https://elchipochta.uz/orders",
+                          "blocked-uri": "https://api.qrserver.com/v1/create-qr-code/",
+                          "effective-directive": "img-src",
+                          "disposition": "report"
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "example": "csp-violation"
+                        },
+                        "url": {
+                          "type": "string"
+                        },
+                        "body": {
+                          "type": "object"
+                        }
+                      }
+                    }
+                  }
+                ]
+              }
+            },
+            "application/reports+json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "csp-report": {
+                        "type": "object",
+                        "example": {
+                          "document-uri": "https://elchipochta.uz/orders",
+                          "blocked-uri": "https://api.qrserver.com/v1/create-qr-code/",
+                          "effective-directive": "img-src",
+                          "disposition": "report"
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "example": "csp-violation"
+                        },
+                        "url": {
+                          "type": "string"
+                        },
+                        "body": {
+                          "type": "object"
+                        }
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Qabul qilindi (tana bo‘sh)"
+          },
+          "400": {
+            "description": "Buzuq JSON"
+          },
+          "413": {
+            "description": "Tana 32 KB dan katta"
+          },
+          "415": {
+            "description": "Content-Type csp-report / reports+json emas"
+          },
+          "429": {
+            "description": "Per-IP chegara (30/daqiqa)"
+          }
+        },
+        "summary": "CSP buzilish hisoboti (brauzer yuboradi; report-uri / report-to) — KwodkKWY",
+        "tags": [
+          "Security"
+        ],
+        "x-roles": null
+      }
+    },
     "/health": {
       "get": {
         "operationId": "HealthController_check",

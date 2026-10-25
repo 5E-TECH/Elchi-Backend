@@ -60,6 +60,8 @@ import { CustomerGatewayController } from './customer-gateway.controller';
 import { DeliveryPricingGatewayController } from './delivery-pricing-gateway.controller';
 import { WarehouseGatewayController } from './warehouse-gateway.controller';
 import { AiStatusPoller } from './ai/ai-status.poller';
+// (KwodkKWY) POST /csp-report — brauzer CSP buzilish hisobotlari (@Public).
+import { CspReportController } from './csp-report/csp-report.controller';
 import type { StringValue } from 'ms';
 
 @Module({
@@ -158,6 +160,8 @@ import type { StringValue } from 'ms';
     // hY7uacJu: vaqtinchalik ombor moduli (/warehouses, /market/warehouse-stock,
     // /markets/:id/warehouse-order) — catalog-service.
     WarehouseGatewayController,
+    // KwodkKWY: CSP Report-Only kuzatuvi — `POST /csp-report` (log, 204).
+    CspReportController,
     HealthController,
     // TODO: Qolgan gateway controllerlarni qo'shish
     // FinanceGatewayController,

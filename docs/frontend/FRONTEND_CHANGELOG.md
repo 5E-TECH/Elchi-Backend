@@ -23,6 +23,21 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-10-25 — CSP hisobot manzili `POST /csp-report` (KwodkKWY)
+
+Deploy: faqat api-gateway (env/migratsiya yo'q).
+
+- [2026-10-25] 🆕 [gateway] — `POST /csp-report` — brauzerning CSP buzilish hisobotlari (Report-Only kuzatuvi).
+  Autentifikatsiyasiz (`@Public`), per-IP 30/daqiqa (ortig'i 429). Qabul qilinadi:
+  `Content-Type: application/csp-report` (eski `report-uri`, `{ "csp-report": { … } }`) va
+  `application/reports+json` (Reporting API, `[{ "type": "csp-violation", "body": { … } }]`; boshqa turlar
+  e'tiborsiz). Tana ≤ 32 KB (413), boshqa Content-Type yoki gzip — 415, buzuq JSON — 400. Javob doim BO'SH 204 —
+  kiritilgan ma'lumot qaytmaydi. Buzilishlar faqat gateway logiga yoziladi (`event: "csp_violation"`, URL'lar
+  query'siz, `original-policy` yozilmaydi); RMQ/DB'ga hech narsa ketmaydi. 🔧 FE: `public/_headers` dagi
+  `Content-Security-Policy-Report-Only` oxiriga `; report-uri https://api.elchipochta.uz/csp-report` qo'shing
+  (ixtiyoriy: `Reporting-Endpoints: csp="https://api.elchipochta.uz/csp-report"` + `; report-to csp` — preflight
+  `OPTIONS` uchun sahifa origin'i gateway `CORS_ORIGINS` da bo'lishi kerak, prod'da bor).
+
 ### 2026-10-25 — Tuman birlashtirish xatosida qaytarilgan sonlar (Z1c1sNPT, DM-2)
 
 Deploy: logistics-service (gateway filtri o'zgarmagan — yangi maydonlar tekis, `publicErrorData` ularni o'tkazadi).
