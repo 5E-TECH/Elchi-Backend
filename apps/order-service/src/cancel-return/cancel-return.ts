@@ -23,7 +23,7 @@ import {
  *   - `no_qr`  — QR talab qilinmasdan (eski market sozlamasi; hozir yo'l yopiq,
  *                faqat eski yozuvlar);
  *   - `pin`    — zaxira PIN (BG6, keyingi karta).
- * Migratsiya 1716000000154 CHECK cheklovi aynan shu ro'yxat.
+ * Migratsiya 1716000000155 CHECK cheklovi aynan shu ro'yxat.
  */
 export const CANCEL_HANDOVER_METHODS = [
   'qr',

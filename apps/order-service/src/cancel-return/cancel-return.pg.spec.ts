@@ -7,7 +7,7 @@ import { OrderItem } from '../entities/order-item.entity';
 import { OrderTracking } from '../entities/order-tracking.entity';
 import { OrderCustodyEvent } from '../entities/order-custody-event.entity';
 import { Branch } from '../entities/branch.entity';
-import { CancelReturnMarketHandover1716000000154 } from '../../../../migrations/1716000000154-CancelReturnMarketHandover';
+import { CancelReturnMarketHandover1716000000155 } from '../../../../migrations/1716000000155-CancelReturnMarketHandover';
 import {
   CANCEL_RETURN_STAGES,
   resolveCancelReturnStage,
@@ -48,7 +48,7 @@ const HQ_ID = '1';
   () => {
     let db: DataSource;
     let service: OrderServiceService;
-    const migration = new CancelReturnMarketHandover1716000000154(
+    const migration = new CancelReturnMarketHandover1716000000155(
       ORDER,
       BRANCH,
     );

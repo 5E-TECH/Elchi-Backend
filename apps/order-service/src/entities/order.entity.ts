@@ -92,7 +92,7 @@ export enum OrderHolderType {
 })
 /**
  * fL79tFbs / M0EPcJVf — market «Olganlarim» (topshirilganlar) sana oralig'i
- * bilan: `market_id` + topshirish vaqti. Migratsiya 1716000000154.
+ * bilan: `market_id` + topshirish vaqti. Migratsiya 1716000000155.
  */
 @Index('IDX_orders_market_handover', ['market_id', 'market_handover_at'], {
   where: '"market_handover_at" IS NOT NULL',
@@ -400,7 +400,7 @@ export class Order extends BaseEntity {
    * ro'yxatda «qachon, qayerda, qanday topshirildi» ni ko'rsatib bo'lmasdi.
    * Endi ikkala topshirish yo'li (`completeMarketCancelledHandover`,
    * `markReturnedToMarket`) shu ustunlarni yozadi; eski yozuvlar migratsiya
-   * 1716000000154 da tracking/custody tarixidan to'ldirilgan (usul aniqlanmasa
+   * 1716000000155 da tracking/custody tarixidan to'ldirilgan (usul aniqlanmasa
    * — NULL). Ombor buyurtmasining omborga qaytishi (`warehouse_returned`)
    * marketga topshirish EMAS — bu ustunlar unda NULL qoladi.
    *

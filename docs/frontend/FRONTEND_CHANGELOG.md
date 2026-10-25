@@ -25,7 +25,7 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 ### 2026-10-25 — Bekor holatlari: «qayerda turibdi», marketga topshirish, market tablari (BG1 5Yy6r6UI, BG2 fL79tFbs, BG3 M0EPcJVf)
 
-Deploy: order-service + api-gateway. **Migratsiya bor:** `1716000000154-CancelReturnMarketHandover`
+Deploy: order-service + api-gateway. **Migratsiya bor:** `1716000000155-CancelReturnMarketHandover`
 (faqat qo'shimcha NULL ustunlar + eski topshirishlar backfill'i; jadval qayta yozilmaydi).
 
 - [2026-10-25] ✏️ [order] — **BG1:** `GET /orders`, `GET /orders/:id` (va boshqa boyitilgan buyurtma ro'yxatlari —

@@ -37,8 +37,8 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  */
 const SCHEMA_NAME = /^[a-z_][a-z0-9_]{0,62}$/;
 
-export class CancelReturnMarketHandover1716000000154 implements MigrationInterface {
-  name = 'CancelReturnMarketHandover1716000000154';
+export class CancelReturnMarketHandover1716000000155 implements MigrationInterface {
+  name = 'CancelReturnMarketHandover1716000000155';
 
   private readonly order: string;
   private readonly branch: string;
@@ -46,7 +46,7 @@ export class CancelReturnMarketHandover1716000000154 implements MigrationInterfa
   constructor(orderSchema = 'order_schema', branchSchema = 'branch_schema') {
     if (!SCHEMA_NAME.test(orderSchema) || !SCHEMA_NAME.test(branchSchema)) {
       throw new Error(
-        'CancelReturnMarketHandover1716000000154: noto‘g‘ri sxema nomi',
+        'CancelReturnMarketHandover1716000000155: noto‘g‘ri sxema nomi',
       );
     }
     this.order = orderSchema;
