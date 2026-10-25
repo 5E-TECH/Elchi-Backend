@@ -82,10 +82,42 @@ export function IsOrderCreateItems(): PropertyDecorator {
 }
 
 /**
+ * Tuman ID berilganmi: `undefined` / `null` / bo'sh (yoki faqat probel) satr —
+ * berilmagan. `CreateOrderCustomerDto.district_id` ning `@ValidateIf` i —
+ * berilmagan bo'lsa ichki tekshiruv o'tkazib yuboriladi (xabar buyurtma
+ * darajasida, `IsOrderCreateDistrict`).
+ */
+export function isProvidedDistrictId(value: unknown): boolean {
+  return (
+    value !== undefined &&
+    value !== null &&
+    !(typeof value === 'string' && value.trim() === '')
+  );
+}
+
+/**
+ * IR2OHIiN (prod tester, 2026-10-26): inline mijoz (`customer` obyekti)
+ * tumansiz — ilgari ichki DTO'ning inglizcha xatolari («customer.district_id
+ * must be a string. customer.district_id should not be empty») bilan rad
+ * etilardi; endi AYNI qoida buyurtma darajasida, bitta o'zbekcha xabar bilan.
+ */
+function inlineCustomerLacksDistrict(dto: OrderCreateDistrictSource): boolean {
+  const customer = dto?.customer;
+  return (
+    !!customer &&
+    typeof customer === 'object' &&
+    !Array.isArray(customer) &&
+    !isProvidedDistrictId(customer.district_id)
+  );
+}
+
+/**
  * DTO: buyurtmaning `district_id` si — berilsa bo'sh bo'lmagan satr; berilmasa
  * tuman inline mijozda (`customer.district_id`) yoki mavjud mijozda
- * (`customer_id`, order-service aniqlaydi) bo'lishi shart. ⚠️ `@IsOptional`
- * QO'YILMAYDI — u yo'q qiymatda butun tekshiruvni o'chirib yuborardi.
+ * (`customer_id`, order-service aniqlaydi) bo'lishi shart. Inline mijoz
+ * berilgan bo'lsa — uning tumani ham shart (ilgari ichki DTO talab qilardi).
+ * ⚠️ `@IsOptional` QO'YILMAYDI — u yo'q qiymatda butun tekshiruvni o'chirib
+ * yuborardi.
  */
 export function IsOrderCreateDistrict(): PropertyDecorator {
   return (target: object, propertyName: string | symbol) => {
@@ -95,6 +127,13 @@ export function IsOrderCreateDistrict(): PropertyDecorator {
       propertyName: String(propertyName),
       validator: {
         validate: (value: unknown, args: ValidationArguments) => {
+          if (
+            inlineCustomerLacksDistrict(
+              args.object as OrderCreateDistrictSource,
+            )
+          ) {
+            return false;
+          }
           if (value !== undefined && value !== null && value !== '') {
             return typeof value === 'string' && value.trim() !== '';
           }

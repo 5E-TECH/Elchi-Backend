@@ -23,6 +23,17 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-10-26 — Buyurtma yaratish: tumansiz inline mijoz — bitta o'zbekcha xabar (IR2OHIiN)
+
+Deploy: faqat api-gateway (DTO validatsiyasi). Migratsiya yo'q. `openapi.json` o'zgarmagan.
+
+- [2026-10-26] ✏️ [gateway] — `POST /orders` / `POST /orders/external`: inline `customer` obyektida
+  `district_id` yo'q / bo'sh / `null` bo'lsa 400 xabari endi faqat **«Buyurtma uchun tuman tanlanmagan»** (ilgari:
+  «customer.district_id must be a string. customer.district_id should not be empty. Buyurtma uchun tuman
+  tanlanmagan»). Qoida o'zgarmagan — inline mijozga tuman baribir majburiy (buyurtmada `district_id` bo'lsa ham).
+  Boshqa xabarlar (`customer.district_id must be a string` — son yuborilsa, `items.0.quantity kamida 1 bo‘lishi
+  kerak`, `customer.name ...`) o'zgarmagan.
+
 ### 2026-10-26 — Buyurtmadagi `customer` — faqat mijoz ko'rinishi (vf4513Zn, ma'lumot sizishi)
 
 Deploy: faqat api-gateway. Migratsiya yo'q.

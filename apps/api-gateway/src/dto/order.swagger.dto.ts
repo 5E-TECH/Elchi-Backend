@@ -32,6 +32,7 @@ import {
 import {
   IsOrderCreateDistrict,
   IsOrderCreateItems,
+  isProvidedDistrictId,
 } from '../order-create/order-create-content';
 
 /**
@@ -184,8 +185,18 @@ export class CreateOrderCustomerDto {
   @IsString()
   market_id?: string;
 
+  /**
+   * IR2OHIiN (prod tester, 2026-10-26): yo'q / bo'sh tuman bu yerda
+   * tekshirilMAYDI — ichki (nested) xato Nest'da `customer.` prefiksi bilan
+   * inglizcha matn berardi («customer.district_id must be a string.
+   * customer.district_id should not be empty. Buyurtma uchun tuman
+   * tanlanmagan»). Majburiylik o'zgarmagan: buyurtma darajasidagi
+   * `@IsOrderCreateDistrict` (`district_id`) inline mijoz tumansiz bo'lsa
+   * BITTA o'zbekcha xabar beradi. Berilgan, lekin satr bo'lmagan qiymat —
+   * avvalgidek `customer.district_id must be a string`.
+   */
   @ApiProperty({ example: '12' })
-  @IsNotEmpty()
+  @ValidateIf((_, value: unknown) => isProvidedDistrictId(value))
   @IsString()
   district_id!: string;
 
