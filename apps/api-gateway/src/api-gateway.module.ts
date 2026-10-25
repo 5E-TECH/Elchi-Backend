@@ -13,6 +13,7 @@ import { ThrottlerModule } from '@nestjs/throttler';
 import { APP_GUARD } from '@nestjs/core';
 import { JwtStrategy } from './auth/jwt.strategy';
 import { SessionRevocationService } from './auth/session-revocation.service';
+import { LogistRegionScopeService } from './auth/logist-scope';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
 import { RolesGuard } from './auth/roles.guard';
 import { SelfGuard } from './auth/self.guard';
@@ -195,6 +196,9 @@ import type { StringValue } from 'ms';
     AiStatusPoller,
     RealtimeGateway,
     AuditEnrichmentService,
+    // 4BftLLnc — logistning o'z viloyatlari (regions.logist_id = me), qisqa
+    // kesh: buyurtmalar, paketlar, kuryerlar va qidiruv doirasi.
+    LogistRegionScopeService,
     // Rate limit kaliti soxtalashtirib bo'lmaydigan mijoz IP'si bo'yicha
     // olinadi (audit S3) — standart guard `req.ip` ni ishlatadi, u esa
     // `trust proxy` yoqilganda mijozning o'z `X-Forwarded-For` qiymati bo'lib

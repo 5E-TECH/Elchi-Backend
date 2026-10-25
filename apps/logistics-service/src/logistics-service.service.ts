@@ -132,6 +132,25 @@ export const POST_SCAN_ROLES: readonly string[] = [
 export const POST_SCAN_FORBIDDEN_MESSAGE = "Bu pochtani ko'rishga ruxsat yo'q";
 
 /**
+ * Z3pUOxou — logist o'z doirasini mavjud rol qoidasi bilan almashtirmasin:
+ * shu rollardan biri bo'lsa o'sha rolning qoidasi ustun (JWT'da bitta rol).
+ */
+const ROLES_WITH_OWN_POST_SCOPE: readonly string[] = [
+  Roles.SUPERADMIN,
+  Roles.ADMIN,
+  Roles.BRANCH,
+  Roles.MANAGER,
+  Roles.REGISTRATOR,
+  Roles.COURIER,
+  Roles.MARKET,
+  Roles.MARKET_OPERATOR,
+  Roles.CUSTOMER,
+];
+export const LOGIST_REGION_FILTER_MESSAGE = 'Bu viloyat sizga biriktirilmagan';
+export const LOGIST_POST_FORBIDDEN_MESSAGE =
+  "Bu pochta sizga biriktirilgan viloyatda emas — ko'rishga ruxsat yo'q";
+
+/**
  * CODE-10 — Qaytarish tasdiqlash/rad etishda bir vaqtda yuboriladigan
  * order.update soni. Har bir chaqiruv alohida buyurtma (order-service da
  * alohida tranzaksiya), shuning uchun parallel xavfsiz; chegara order-service
@@ -457,6 +476,43 @@ export class LogisticsServiceService implements OnModuleInit {
       String(role ?? '').toLowerCase(),
     );
     return roles.includes(Roles.SUPERADMIN) || roles.includes(Roles.ADMIN);
+  }
+
+  /** Z3pUOxou — sof logist (boshqa doirali rolsiz) so'rovchi. */
+  private isLogistRequester(requester?: RequesterContext): boolean {
+    const roles = (requester?.roles ?? []).map((role) =>
+      String(role ?? '')
+        .trim()
+        .toLowerCase(),
+    );
+    return (
+      roles.includes(Roles.LOGIST) &&
+      !roles.some((role) => ROLES_WITH_OWN_POST_SCOPE.includes(role))
+    );
+  }
+
+  /**
+   * Z3pUOxou — logist pochtasi: `post.region_id` o'ziga biriktirilgan
+   * viloyatlardan biri bo'lmasa 403 (viloyatsiz pochta ham — 403).
+   */
+  private async assertLogistPostRegion(
+    post: { region_id?: string | null },
+    requester: RequesterContext,
+  ): Promise<void> {
+    const regionIds = (await this.findLogistRegions(requester.id)).map(
+      (region) => region.id,
+    );
+    const postRegionId = canonicalBigintId(post?.region_id ?? '');
+    if (!postRegionId || !regionIds.includes(postRegionId)) {
+      this.forbidden(LOGIST_POST_FORBIDDEN_MESSAGE);
+    }
+  }
+
+  /** Z3pUOxou — logistga pochta qatori pulsiz (`post_total_price` yo'q). */
+  private withoutPostMoney<T extends object>(post: T): T {
+    const copy = { ...post } as Record<string, unknown>;
+    delete copy.post_total_price;
+    return copy as T;
   }
 
   private async resolveScopedBranchId(
@@ -1647,6 +1703,16 @@ export class LogisticsServiceService implements OnModuleInit {
     // YfrqN70i — filtrlar avval tekshiriladi (yaroqsiz sana — 400).
     const filterWhere = this.buildPostListFilterWhere(filters);
 
+    // Z3pUOxou (ega LG-S1/LG-S3): logist — faqat o'z viloyatlari, faqat o'qish.
+    if (requester && this.isLogistRequester(requester)) {
+      return this.findAllPostsForLogist(
+        paging,
+        filterWhere,
+        filters,
+        requester,
+      );
+    }
+
     const scopedBranchId = await this.resolveScopedBranchId(requester);
     if (filterWhere.impossible) {
       return successRes(
@@ -1714,6 +1780,88 @@ export class LogisticsServiceService implements OnModuleInit {
 
     return successRes(
       postListPage(data, total, paging, totals),
+      200,
+      'All posts (paginated)',
+    );
+  }
+
+  /**
+   * Z3pUOxou — GET /post (LOGIST): `region_id IN (o'z viloyatlari)`.
+   * `region_id` filtri faqat shu to'plam ichida (boshqasi — 400); viloyat
+   * biriktirilmagan logist — bo'sh sahifa. Filial filtri qo'shimcha (AND)
+   * cheklov. Javob pulsiz: `post_total_price` va `amount_total` yo'q. GET —
+   * hech narsa yozmaydi (filial "ta'miri" yo'q).
+   */
+  private async findAllPostsForLogist(
+    paging: ReturnType<typeof resolvePostListPage>,
+    filterWhere: { where: Record<string, unknown>; impossible: boolean },
+    filters: PostListFilters | undefined,
+    requester: RequesterContext,
+  ) {
+    const regionIds = (await this.findLogistRegions(requester.id)).map(
+      (region) => region.id,
+    );
+    const requestedRaw = String(filters?.region_id ?? '').trim();
+    const requestedRegionId = requestedRaw
+      ? canonicalBigintId(requestedRaw)
+      : null;
+    if (
+      requestedRaw &&
+      (!requestedRegionId || !regionIds.includes(requestedRegionId))
+    ) {
+      this.badRequest(LOGIST_REGION_FILTER_MESSAGE);
+    }
+    const empty = () =>
+      successRes(
+        postListPage([], 0, paging, { orders_total: 0 } as PostListTotals),
+        200,
+        'All posts (paginated)',
+      );
+    if (!regionIds.length || filterWhere.impossible) {
+      return empty();
+    }
+
+    const status = filters?.status
+      ? String(filters.status).trim().toLowerCase()
+      : '';
+    const allowedStatuses = new Set<string>([
+      Post_status.NEW,
+      Post_status.SENT,
+      Post_status.RECEIVED,
+      Post_status.CANCELED,
+      Post_status.CANCELED_RECEIVED,
+    ]);
+    const branchFilter = canonicalBigintId(
+      String(filters?.branch_id ?? '').trim(),
+    );
+    if (String(filters?.branch_id ?? '').trim() && !branchFilter) {
+      return empty();
+    }
+    const where: Record<string, unknown> = {
+      status: allowedStatuses.has(status) ? status : Not(Post_status.NEW),
+      ...filterWhere.where,
+      ...(branchFilter ? { branch_id: branchFilter } : {}),
+      // Doira OXIRIDA — hech bir filtr uni almashtira olmaydi.
+      region_id: requestedRegionId ?? In(regionIds),
+    };
+
+    const [[rows, total], totals] = await Promise.all([
+      this.postRepo.findAndCount({
+        where,
+        relations: ['region'],
+        order: { createdAt: 'DESC' },
+        skip: paging.skip,
+        take: paging.take,
+      }),
+      this.postListTotals(where),
+    ]);
+    const data = await this.attachPostCouriers(
+      rows.map((row) => this.withoutPostMoney(row)),
+    );
+    return successRes(
+      postListPage(data, total, paging, {
+        orders_total: totals.orders_total,
+      } as PostListTotals),
       200,
       'All posts (paginated)',
     );
@@ -2285,6 +2433,12 @@ export class LogisticsServiceService implements OnModuleInit {
     if (!post) {
       this.notFound('Post not found');
     }
+    // Z3pUOxou: logist — faqat o'z viloyati pochtasi, pulsiz, hech narsa
+    // yozilmaydi.
+    if (requester && this.isLogistRequester(requester)) {
+      await this.assertLogistPostRegion(post, requester);
+      return successRes(this.withoutPostMoney(post), 200, 'Post found');
+    }
     const scopedBranchId = await this.resolveScopedBranchId(requester);
     let belongsToScopedBranch = false;
     if (scopedBranchId && String(post.branch_id ?? '') !== scopedBranchId) {
@@ -2509,7 +2663,15 @@ export class LogisticsServiceService implements OnModuleInit {
     const isOwnCourierPost =
       isCourier && String(post.courier_id ?? '') === String(requester.id ?? '');
 
-    const scopedBranchId = await this.resolveScopedBranchId(requester);
+    // Z3pUOxou: logist — faqat o'z viloyati pochtasi (aks holda 403), faqat
+    // o'qish (filial doirasi yo'q — branch_id ko'chirilmaydi).
+    const isLogist = this.isLogistRequester(requester);
+    if (isLogist) {
+      await this.assertLogistPostRegion(post, requester);
+    }
+    const scopedBranchId = isLogist
+      ? null
+      : await this.resolveScopedBranchId(requester);
     const [ordersByPostId, ordersByCanceledPostId] = await Promise.all([
       this.findOrders({
         post_id: id,
@@ -2594,8 +2756,14 @@ export class LogisticsServiceService implements OnModuleInit {
     return successRes(
       {
         allOrdersByPostId: orders,
-        homeOrders: { homeOrders, homeOrdersTotalPrice },
-        centerOrders: { centerOrders, centerOrdersTotalPrice },
+        // Z3pUOxou: logistga summalar yo'q (buyurtma qatorlari gateway'da
+        // LOGIST proyeksiyasidan o'tadi).
+        homeOrders: isLogist
+          ? { homeOrders }
+          : { homeOrders, homeOrdersTotalPrice },
+        centerOrders: isLogist
+          ? { centerOrders }
+          : { centerOrders, centerOrdersTotalPrice },
         // yokjwjXG (additive): pochtaning o'zi — frontend savatni
         // (`POST /post/delete`) faqat `status = 'new'` da ko'rsatadi.
         // 4YZcTTDQ (additive): holat bilan birga pochta meta'si.
@@ -5757,27 +5925,42 @@ export class LogisticsServiceService implements OnModuleInit {
    * uherIk8r — hudud statistikasi SERVERDA cheklanadi (avval 14 viloyatning
    * hammasi qaytib, cheklov faqat brauzerda edi).
    * - requester yo'q (ichki RMQ chaqiruv / eski gateway) → hammasi;
-   * - ADMIN / SUPERADMIN / LOGIST (dzyVftBx, BeePost bilan bir xil) → hammasi;
+   * - ADMIN / SUPERADMIN → hammasi;
+   * - LOGIST (iOnGbEqi, ega LG-S3/LG-S1) → FAQAT o'ziga biriktirilgan
+   *   viloyatlar (`regions.logist_id = me`, bir nechta bo'lishi mumkin) va
+   *   PULSIZ (`hideMoney`: revenue / totalRevenue yo'q). Biriktirilmagan —
+   *   hech biri. Ilgari logist 14 viloyatning hammasini tushumi bilan olardi;
    * - qolgan HAMMA ichki rol, jumladan HQ filial xodimi (menejer/registrator)
    *   → faqat o'z viloyati (HQ uchun — HQ filialining viloyati); aniqlab
    *   bo'lmasa — hech biri. Karta (uherIk8r, 3-band): "ADMIN/SUPERADMIN
-   *   bo'lmasa faqat o'z viloyatini qaytaring"; BeePost'da stats/all faqat
-   *   ADMIN/SUPERADMIN/LOGIST uchun. Ilgari HQ xodimi istisno edi (hammasi).
+   *   bo'lmasa faqat o'z viloyatini qaytaring". Ilgari HQ xodimi istisno edi.
    */
   private async resolveRegionStatsScope(
     requester?: RequesterContext,
-  ): Promise<{ all: true } | { all: false; regionId: string | null }> {
-    if (!requester) {
-      return { all: true };
+  ): Promise<
+    | { all: true; hideMoney: false }
+    | { all: false; regionIds: string[]; hideMoney: boolean }
+  > {
+    if (!requester || this.isSystemPrivileged(requester)) {
+      return { all: true, hideMoney: false };
     }
     const roles = (requester.roles ?? []).map((role) =>
       String(role ?? '').toLowerCase(),
     );
-    if (this.isSystemPrivileged(requester) || roles.includes(Roles.LOGIST)) {
-      return { all: true };
+    if (roles.includes(Roles.LOGIST)) {
+      const regions = await this.findLogistRegions(requester.id);
+      return {
+        all: false,
+        regionIds: regions.map((region) => region.id),
+        hideMoney: true,
+      };
     }
     const own = await this.resolveOwnStatsRegion(requester);
-    return { all: false, regionId: own.regionId };
+    return {
+      all: false,
+      regionIds: own.regionId ? [own.regionId] : [],
+      hideMoney: false,
+    };
   }
 
   /**
@@ -5839,12 +6022,11 @@ export class LogisticsServiceService implements OnModuleInit {
       order: { name: 'ASC' },
     });
     // uherIk8r: HQ'dan tashqari menejer/registrator faqat o'z viloyatini oladi.
-    const regions = scope.all
-      ? allRegions
-      : allRegions.filter(
-          (region) =>
-            Boolean(scope.regionId) && String(region.id) === scope.regionId,
-        );
+    // iOnGbEqi: logist — faqat o'ziga biriktirilgan viloyatlar.
+    const scopedRegionIds = scope.all ? null : new Set(scope.regionIds);
+    const regions = scopedRegionIds
+      ? allRegions.filter((region) => scopedRegionIds.has(String(region.id)))
+      : allRegions;
 
     const regionIds = regions.map((region) => String(region.id));
     const regionIdSet = new Set(regionIds);
@@ -5967,6 +6149,24 @@ export class LogisticsServiceService implements OnModuleInit {
       },
     );
 
+    // iOnGbEqi (ega LG-S1): logistga tushum (pul) qaytmaydi — `revenue` va
+    // `summary.totalRevenue` kalitlari umuman yo'q.
+    if (scope.hideMoney) {
+      const { totalRevenue: _hiddenTotal, ...moneylessSummary } = summary;
+      void _hiddenTotal;
+      return successRes(
+        {
+          regions: rows.map(({ revenue: _hidden, ...row }) => {
+            void _hidden;
+            return row;
+          }),
+          summary: moneylessSummary,
+        },
+        200,
+        'Region stats',
+      );
+    }
+
     return successRes(
       {
         regions: rows,
@@ -5990,8 +6190,12 @@ export class LogisticsServiceService implements OnModuleInit {
 
     // uherIk8r: bu javobda har bir kuryerning ismi/telefoni/daromadi bor —
     // HQ'dan tashqari filial xodimi faqat o'z viloyatini ko'radi.
+    // iOnGbEqi: logist — faqat o'ziga biriktirilgan viloyat (boshqasi 403).
     const scope = await this.resolveRegionStatsScope(requester);
-    if (!scope.all && scope.regionId !== regionId) {
+    if (
+      !scope.all &&
+      !scope.regionIds.includes(canonicalBigintId(regionId) ?? regionId)
+    ) {
       this.forbidden("Bu viloyat statistikasini ko'rishga ruxsat yo'q");
     }
 
@@ -6135,6 +6339,19 @@ export class LogisticsServiceService implements OnModuleInit {
       .slice()
       .sort((a, b) => b.deliveredOrders - a.deliveredOrders)[0];
 
+    // iOnGbEqi (ega LG-S1): logistga tushum yo'q — summary, kuryer va tuman
+    // qatorlaridagi `totalRevenue` kalitlari olib tashlanadi.
+    const withoutRevenue = <T extends { totalRevenue?: number }>(
+      row: T,
+    ): Omit<T, 'totalRevenue'> | T => {
+      if (!scope.hideMoney) {
+        return row;
+      }
+      const { totalRevenue: _hidden, ...rest } = row;
+      void _hidden;
+      return rest;
+    };
+
     return successRes(
       {
         region: {
@@ -6149,7 +6366,7 @@ export class LogisticsServiceService implements OnModuleInit {
               }
             : null,
         },
-        summary: {
+        summary: withoutRevenue({
           totalOrders: summary.totalOrders,
           deliveredOrders: summary.deliveredOrders,
           cancelledOrders: summary.cancelledOrders,
@@ -6159,11 +6376,13 @@ export class LogisticsServiceService implements OnModuleInit {
           totalCouriers: couriers.length,
           activeCouriers,
           totalDistricts: districts.length,
-        },
-        couriers: couriers.sort(
-          (a, b) => b.deliveredOrders - a.deliveredOrders,
-        ),
-        districts: districts.sort((a, b) => b.totalOrders - a.totalOrders),
+        }),
+        couriers: couriers
+          .sort((a, b) => b.deliveredOrders - a.deliveredOrders)
+          .map(withoutRevenue),
+        districts: districts
+          .sort((a, b) => b.totalOrders - a.totalOrders)
+          .map(withoutRevenue),
       },
       200,
       'Region detailed stats',
@@ -6381,6 +6600,47 @@ export class LogisticsServiceService implements OnModuleInit {
       where: { id: In(ids) },
     });
     return successRes(regions);
+  }
+
+  /**
+   * 4BftLLnc — LOGIST doirasining YAGONA manbasi: `regions.logist_id = me`
+   * (IDX_REGION_LOGIST). Yaroqsiz/yo'q id — bo'sh ro'yxat (hech narsa
+   * ko'rinmaydi). Gateway (`auth/logist-scope.ts` — buyurtmalar, paketlar,
+   * kuryerlar, qidiruv), hudud statistikasi va pochta ro'yxati shundan oladi.
+   */
+  async findLogistRegions(
+    logistIdInput: unknown,
+  ): Promise<Array<{ id: string; name: string }>> {
+    const logistId = canonicalBigintId(logistIdInput);
+    if (!logistId) {
+      return [];
+    }
+    const regions = await this.regionRepo.find({
+      where: { logist_id: logistId },
+      order: { name: 'ASC' },
+    });
+    return (
+      regions
+        // Himoya: repo filtri ishlamasa ham begona viloyat qaytmaydi.
+        .filter((region) => canonicalBigintId(region.logist_id) === logistId)
+        .map((region) => ({ id: String(region.id), name: region.name }))
+    );
+  }
+
+  /** 4BftLLnc — `logistics.region.find_by_logist` (gateway logist doirasi). */
+  async findRegionsByLogist(logistIdInput: unknown) {
+    const regions = await this.findLogistRegions(logistIdInput);
+    return successRes(
+      {
+        logist_id: canonicalBigintId(logistIdInput),
+        region_ids: regions.map((region) => region.id),
+        regions,
+      },
+      200,
+      regions.length
+        ? 'Logist viloyatlari'
+        : 'Sizga hali viloyat biriktirilmagan',
+    );
   }
 
   async updateRegion(id: string, dto: UpdateRegionDto) {

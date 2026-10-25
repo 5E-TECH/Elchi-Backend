@@ -1,6 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { of } from 'rxjs';
 import { ApiGatewayController } from './api-gateway.controller';
+import { ROLES_KEY } from './auth/roles.decorator';
 
 /**
  * FIX3 (A7) — CODE-08 / C11: GET /markets rolga qarab qisqaradi.
@@ -170,6 +171,33 @@ describe('FIX3 A7 — GET /markets maydonlari rolga qarab', () => {
     // yiFTzkzH: tariflar faqat filial xodimiga — kuryerga emas.
     expect(JSON.stringify(res)).not.toMatch(/tariff/);
     expect(financeClient.send).not.toHaveBeenCalled();
+  });
+
+  // iFAkvaht (N16): logist buyurtmalari «Market» filtri — kuryer bilan bir xil
+  // minimal ko'rinish; tarif, telefon, login va kassa yo'q (ega LG-S1).
+  it("logist: faqat {id, name, status} — tarif/telefon/kassa yo'q", async () => {
+    const res = await controller.getMarkets(user(['logist']), 'mar', 'active');
+
+    expect(res.data.items).toEqual([
+      { id: '5', name: 'Market 5', status: 'active' },
+      { id: '7', name: 'Market 7', status: 'active' },
+    ]);
+    expect(JSON.stringify(res)).not.toMatch(
+      /tariff|phone_number|username|telegram_id|settings|cashbox|address/,
+    );
+    expect(financeClient.send).not.toHaveBeenCalled();
+  });
+
+  it('iFAkvaht: @Roles — logist qo‘shilgan, market/mijoz/operator yo‘q', () => {
+    const handler = Object.getOwnPropertyDescriptor(
+      ApiGatewayController.prototype,
+      'getMarkets',
+    )?.value as object;
+    const roles = Reflect.getMetadata(ROLES_KEY, handler) as string[];
+    expect(roles).toContain('logist');
+    for (const role of ['market', 'customer', 'operator', 'market_operator']) {
+      expect(roles).not.toContain(role);
+    }
   });
 
   it("noma'lum/bo'sh rol — eng qisqa ko'rinish (fail-closed)", async () => {

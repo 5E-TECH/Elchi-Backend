@@ -399,7 +399,6 @@
     },
     "/couriers": {
       "post": {
-        "description": "Menejer — faqat o'z filialida (`branch_id` yuborilmaydi yoki o'z filiali; boshqasi — 400). perqZ3oM (ega qarori): superadmin/admin `branch_id` bilan istalgan FAOL HQ / REGIONAL / HYBRID filialda yaratadi (viloyat filialdan olinadi); `branch_id` yuborilmasa — HQ (avvalgidek). Noma'lum, nofaol, PICKUP yoki viloyatsiz (HQ bo'lmagan) filial — 400, kuryer yaratilmaydi. Kuryer o'sha filialga biriktiriladi (branch_users) — pul zanjiri menejer yaratgan kuryer bilan bir xil (kuryer → filial → HQ).",
         "operationId": "ApiGatewayController_createCourier",
         "parameters": [],
         "requestBody": {
@@ -436,6 +435,7 @@
         ]
       },
       "get": {
+        "description": "Z3pUOxou — LOGIST: faqat `region_id` si o'ziga biriktirilgan viloyatlardan biri bo'lgan kuryerlar (`region_id` filtri — faqat o'z viloyati, boshqasi 400; biriktirilmagan — bo'sh). Maosh va moliya maydonlari (salary, payment_day, compensation_mode, commission_*, tariff_*, balanslar) yo'q; `branch_id` filtri logist uchun e'tiborsiz.",
         "operationId": "ApiGatewayController_getCouriers",
         "parameters": [
           {
@@ -518,7 +518,8 @@
           "admin",
           "branch",
           "manager",
-          "registrator"
+          "registrator",
+          "logist"
         ]
       }
     },
@@ -1148,7 +1149,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Market list. SUPERADMIN/ADMIN: to'liq qator + cashbox. MANAGER/REGISTRATOR/BRANCH: faqat {id, name, phone_number, status, tariff_home, tariff_center, default_tariff} (yiFTzkzH; tarif maydoni yo'q bo'lsa null). COURIER: faqat {id, name, status}."
+            "description": "Market list. SUPERADMIN/ADMIN: to'liq qator + cashbox. MANAGER/REGISTRATOR/BRANCH: faqat {id, name, phone_number, status, tariff_home, tariff_center, default_tariff} (yiFTzkzH; tarif maydoni yo'q bo'lsa null). COURIER va LOGIST (iFAkvaht — buyurtmalar «Market» filtri): faqat {id, name, status}."
           }
         },
         "security": [
@@ -1166,7 +1167,8 @@
           "branch",
           "manager",
           "registrator",
-          "courier"
+          "courier",
+          "logist"
         ]
       }
     },
@@ -2050,7 +2052,6 @@
     },
     "/product": {
       "post": {
-        "description": "Faqat xodim (superadmin, admin, registrator, menejer). `market_id` majburiy — yuborilmasa 400. Market va market operatori — 403.",
         "operationId": "CatalogGatewayController_create",
         "parameters": [],
         "requestBody": {
@@ -2073,13 +2074,15 @@
             "bearer": []
           }
         ],
-        "summary": "Create a new product (superadmin/admin/registrator/manager)",
+        "summary": "Create a new product",
         "tags": [
           "Products"
         ],
         "x-roles": [
-          "superadmin",
+          "market",
+          "market_operator",
           "admin",
+          "superadmin",
           "registrator",
           "manager"
         ]
@@ -2430,15 +2433,61 @@
             "bearer": []
           }
         ],
-        "summary": "Delete product (soft delete; superadmin/admin/registrator/manager)",
+        "summary": "Delete product (soft delete)",
         "tags": [
           "Products"
         ],
         "x-roles": [
-          "superadmin",
+          "market",
           "admin",
+          "superadmin",
           "registrator",
           "manager"
+        ]
+      }
+    },
+    "/product/my/{id}": {
+      "patch": {
+        "description": "Market — o'z mahsuloti; market operatori — biriktirilgan marketining mahsuloti. Begona mahsulot — 403.",
+        "operationId": "CatalogGatewayController_updateMyProduct",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Product ID (id)",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateProductRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Update own product (market / market_operator)",
+        "tags": [
+          "Products"
+        ],
+        "x-roles": [
+          "market",
+          "market_operator"
         ]
       }
     },
@@ -2500,7 +2549,7 @@
         ]
       },
       "get": {
-        "description": "5Yy6r6UI (BG1): every order row has `return_stage` (`courier` | `in_transit` | `branch` | `hq` | `market` | null) and `cancel_return` (null unless the order is cancelled / returned to market): `{ stage, place_type: \"COURIER\" | \"BRANCH\" | \"HQ\" | null, place_id, place_name, received_at, sent_at, handed_over_at, handover_method: \"qr\" | \"manual\" | \"no_qr\" | \"pin\" | null }`. Place = where the parcel is now (courier name / branch or HQ name); `in_transit` — destination; `market` — where it was handed over. `received_at` (branch/hq) — since when it is at that place (last cancelled-post receipt, else custody time); `sent_at` (in_transit); `handed_over_at` + `handover_method` (market, fL79tFbs BG2; null method = legacy/unknown). Cancelled before intake (never left the market) — both null. No money fields; same for every role.",
+        "description": "4BftLLnc — LOGIST: faqat o'ziga biriktirilgan viloyatlar (regions.logist_id = me) buyurtmalari, pul maydonlarisiz (total_price, sale_collectible_amount, paid_online_amount, extra_cost, tariflar, ulushlar). `region_id` faqat o‘z viloyatlaridan biri bo'lishi mumkin (boshqasi — 400). Viloyat biriktirilmagan logist — 200 va bo'sh ro'yxat.",
         "operationId": "OrderGatewayController_findAll",
         "parameters": [
           {
@@ -3902,7 +3951,6 @@
     },
     "/orders/markets/{marketId}/cancelled": {
       "get": {
-        "description": "Default (no `stage`): cancelled orders ready for handover — HQ-held (SA/admin, HQ registrator, market) or held by the requester's branch (branch staff). M0EPcJVf (BG3): MARKET role may pass `stage` to see ALL stages of its own cancellations (tabs «HQ'da», «Yo'lda», «Olganlarim»): any of `courier,in_transit,branch,hq,market` (comma list). With `stage`, HQ/branch pinning is dropped (still only this market). `start_day`/`end_day` (YYYY-MM-DD, Tashkent day) filter ONLY the `market` stage by handover time (`market_handover_at`, legacy: `last_handover_at`). Unknown stage — 400. For other roles `stage`/`start_day`/`end_day` are ignored (handover list unchanged). Rows carry `return_stage` and `cancel_return` (see GET /orders). Response `{ data, total, truncated? }` (max 5000 rows).",
         "operationId": "OrderGatewayController_findCancelledOrdersByMarket",
         "parameters": [
           {
@@ -3910,33 +3958,6 @@
             "required": true,
             "in": "path",
             "description": "Market ID (id)",
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "start_day",
-            "required": false,
-            "in": "query",
-            "description": "MARKET + stage=market: handover date from (YYYY-MM-DD)",
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "end_day",
-            "required": false,
-            "in": "query",
-            "description": "MARKET + stage=market: handover date to (YYYY-MM-DD)",
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "stage",
-            "required": false,
-            "in": "query",
-            "description": "MARKET role only. Comma list of: courier, in_transit, branch, hq, market",
             "schema": {
               "type": "string"
             }
@@ -4235,7 +4256,7 @@
     },
     "/orders/{id}": {
       "get": {
-        "description": "5Yy6r6UI (BG1): every order row has `return_stage` (`courier` | `in_transit` | `branch` | `hq` | `market` | null) and `cancel_return` (null unless the order is cancelled / returned to market): `{ stage, place_type: \"COURIER\" | \"BRANCH\" | \"HQ\" | null, place_id, place_name, received_at, sent_at, handed_over_at, handover_method: \"qr\" | \"manual\" | \"no_qr\" | \"pin\" | null }`. Place = where the parcel is now (courier name / branch or HQ name); `in_transit` — destination; `market` — where it was handed over. `received_at` (branch/hq) — since when it is at that place (last cancelled-post receipt, else custody time); `sent_at` (in_transit); `handed_over_at` + `handover_method` (market, fL79tFbs BG2; null method = legacy/unknown). Cancelled before intake (never left the market) — both null. No money fields; same for every role.",
+        "description": "4BftLLnc — LOGIST: buyurtma o'z viloyatida bo'lsa (aks holda 403), pul maydonlarisiz.",
         "operationId": "OrderGatewayController_findById",
         "parameters": [
           {
@@ -4561,6 +4582,7 @@
     },
     "/orders/{id}/tracking": {
       "get": {
+        "description": "4BftLLnc — LOGIST: o'z viloyatidagi buyurtma tarixi (boshqasi — 403), hodisalarda pul maydonlari yo'q.",
         "operationId": "OrderGatewayController_getTracking",
         "parameters": [
           {
@@ -4612,7 +4634,8 @@
           "manager",
           "registrator",
           "courier",
-          "market"
+          "market",
+          "logist"
         ]
       }
     },
@@ -5130,7 +5153,7 @@
     },
     "/post": {
       "get": {
-        "description": "tveJKICY: javobda `orders_total`, `amount_total` — joriy filtr bo‘yicha (sahifadan qat’i nazar) yig‘indilar.",
+        "description": "tveJKICY: javobda `orders_total`, `amount_total` — joriy filtr bo‘yicha (sahifadan qat’i nazar) yig‘indilar. Z3pUOxou — LOGIST: faqat o'ziga biriktirilgan viloyatlar pochtalari (`region_id` — faqat o'z viloyati, boshqasi 400; biriktirilmagan — bo'sh), `post_total_price` va `amount_total` yo'q.",
         "operationId": "LogisticsGatewayController_getAllPosts",
         "parameters": [
           {
@@ -5244,7 +5267,8 @@
           "branch",
           "manager",
           "registrator",
-          "courier"
+          "courier",
+          "logist"
         ]
       }
     },
@@ -5487,6 +5511,7 @@
     },
     "/post/{id}": {
       "get": {
+        "description": "Z3pUOxou — LOGIST: pochta o'ziga biriktirilgan viloyatda bo'lsa (aks holda 403), `post_total_price` siz.",
         "operationId": "LogisticsGatewayController_getPostById",
         "parameters": [
           {
@@ -5519,7 +5544,8 @@
           "branch",
           "manager",
           "registrator",
-          "courier"
+          "courier",
+          "logist"
         ]
       },
       "delete": {
@@ -5712,6 +5738,7 @@
     },
     "/post/orders/{id}": {
       "get": {
+        "description": "Z3pUOxou — LOGIST: pochta o'ziga biriktirilgan viloyatda bo'lsa (aks holda 403); buyurtma qatorlari pulsiz (`total_price`, tariflar yo'q), `homeOrders`/`centerOrders` da faqat sonlar.",
         "operationId": "LogisticsGatewayController_getOrdersByPost",
         "parameters": [
           {
@@ -5744,7 +5771,8 @@
           "branch",
           "manager",
           "registrator",
-          "courier"
+          "courier",
+          "logist"
         ]
       }
     },
@@ -6231,6 +6259,7 @@
     },
     "/region/stats/all": {
       "get": {
+        "description": "iOnGbEqi — LOGIST: faqat o'ziga biriktirilgan viloyatlar (regions.logist_id = me) qatorlari, `revenue` va `summary.totalRevenue` kalitlarisiz; biriktirilmagan — `regions: []`. activeCouriers/totalOrders/deliveredOrders/cancelledOrders qoladi.",
         "operationId": "LogisticsGatewayController_getAllRegionStats",
         "parameters": [
           {
@@ -6321,6 +6350,7 @@
     },
     "/region/stats/{id}": {
       "get": {
+        "description": "iOnGbEqi — LOGIST: faqat o'ziga biriktirilgan viloyat (boshqasi — 403); `summary.totalRevenue`, `couriers[].totalRevenue`, `districts[].totalRevenue` kalitlari yo'q.",
         "operationId": "LogisticsGatewayController_getRegionStatsById",
         "parameters": [
           {
@@ -7049,7 +7079,7 @@
     },
     "/search": {
       "get": {
-        "description": "Imtiyozsiz rollar: buyurtma hujjatlari faqat o'ziniki (market/kuryer/mijoz). ISeuwhfr: market operatori — biriktirilgan marketining buyurtmalari (market biriktirilmagan bo'lsa buyurtma chiqmaydi).",
+        "description": "Imtiyozsiz rollar: buyurtma hujjatlari faqat o'ziniki (market/kuryer/mijoz). ISeuwhfr: market operatori — biriktirilgan marketining buyurtmalari (market biriktirilmagan bo'lsa buyurtma chiqmaydi). hGcR8kio — LOGIST: o'ziga biriktirilgan viloyatlardagi buyurtmalar, shu viloyatlarda buyurtmasi bor mijozlar (ism/telefon bo'yicha, telefon formati normallashtiriladi), o'z viloyatlari pochtalari va viloyat/tuman nomlari; xodimlar (kuryer, menejer, market) va boshqa manbalar yo'q. Natija — faqat {id, source, type, sourceId, title} (summa, telefon, metadata yo'q).",
         "operationId": "SearchGatewayController_query",
         "parameters": [
           {
@@ -8632,7 +8662,7 @@
     },
     "/finance/shift/close": {
       "post": {
-        "description": "Menejer faqat o'z filiali kassasining smenasini yopadi (boshqa kassa smenasi — 404) (R6). (8OYPuz7J, ega S5) `closing_balance_cash` (sanalgan naqd) MAJBURIY — yuborilmasa 400; `closing_balance_card` ixtiyoriy.",
+        "description": "Menejer faqat o'z filiali kassasining smenasini yopadi (boshqa kassa smenasi — 404) (R6).",
         "operationId": "FinanceGatewayController_closeShift",
         "parameters": [],
         "requestBody": {
@@ -8669,20 +8699,9 @@
     },
     "/finance/shift/current": {
       "get": {
-        "description": "(kfdfYDik) `data.shift` — ochiq smena yoki null; `data.required` — shu kassada smenasiz pul operatsiyalari bloklanadimi (FINANCE_REQUIRE_OPEN_SHIFT: MAIN — main/all, filial — all). R6: menejer — o'z filiali kassasi. (8OYPuz7J) `data.last_closed` — shu kassaning eng oxirgi yopilgan smenasi (closed_at DESC, to'liq qator) yoki null; smena qatorlarida `opened_by_name` / `closed_by_name`. (32Sw3DfC) `?cashbox_user_id=` — superadmin/admin filial kassasi sahifasida shu filial smenasi va `required` (FAQAT o'qish; mavjud bo'lmagan filial — 404). `data.can_open` — so'rovchi shu kassada smena ocha oladimi (superadmin/admin filialda — yo'q: filial smenasini menejer ochadi); smena yo'q va ocha olmasa `data.lock_message` = «Filial menejeri smenani ochishi kerak», aks holda null. Menejer `?cashbox_user_id=0` — HQ asosiy kassa smenasi HOLATI (`status_only: true`; pul maydonlarisiz, `last_closed` yo'q).",
+        "description": "(kfdfYDik) `data.shift` — ochiq smena yoki null; `data.required` — shu kassada smenasiz pul operatsiyalari bloklanadimi (FINANCE_REQUIRE_OPEN_SHIFT: MAIN — main/all, filial — all). R6: menejer — o'z filiali kassasi.",
         "operationId": "FinanceGatewayController_currentShift",
-        "parameters": [
-          {
-            "name": "cashbox_user_id",
-            "required": false,
-            "in": "query",
-            "description": "Kassa: '0' — asosiy (MAIN), aks holda filial ID si. Superadmin/admin — istalgan filial (mavjud bo'lmasa 404); menejer — o'z filiali yoki '0' (faqat holat); registrator — faqat '0'. Boshqasi — 403",
-            "schema": {
-              "example": "13",
-              "type": "string"
-            }
-          }
-        ],
+        "parameters": [],
         "responses": {
           "200": {
             "description": ""
@@ -9222,7 +9241,6 @@
     },
     "/finance/shift": {
       "get": {
-        "description": "(8OYPuz7J) `cashbox_user_id` ('0' — MAIN, aks holda filial ID si), `sort_by=opened_at|closed_at` + `sort_dir=asc|desc` (sukut opened_at desc). Qatorlarda `opened_by_name` / `closed_by_name`. Menejer — faqat o'z filiali kassasi smenalari (boshqa `cashbox_user_id` — 403).",
         "operationId": "FinanceGatewayController_findShifts",
         "parameters": [
           {
@@ -9282,44 +9300,6 @@
               "example": 20,
               "type": "number"
             }
-          },
-          {
-            "name": "cashbox_user_id",
-            "required": false,
-            "in": "query",
-            "description": "Kassa: '0' — asosiy (MAIN), aks holda filial ID si. Menejer uchun o'z filiali majburlanadi (boshqasi — 403)",
-            "schema": {
-              "example": "0",
-              "type": "string"
-            }
-          },
-          {
-            "name": "sort_by",
-            "required": false,
-            "in": "query",
-            "description": "Saralash maydoni (sukut opened_at). closed_at — ochiq smenalar oxirida",
-            "schema": {
-              "example": "closed_at",
-              "type": "string",
-              "enum": [
-                "opened_at",
-                "closed_at"
-              ]
-            }
-          },
-          {
-            "name": "sort_dir",
-            "required": false,
-            "in": "query",
-            "description": "Saralash yo'nalishi (sukut desc)",
-            "schema": {
-              "example": "desc",
-              "type": "string",
-              "enum": [
-                "asc",
-                "desc"
-              ]
-            }
           }
         ],
         "responses": {
@@ -9339,8 +9319,7 @@
         "x-roles": [
           "superadmin",
           "admin",
-          "registrator",
-          "manager"
+          "registrator"
         ]
       }
     },
@@ -9485,112 +9464,6 @@
         "x-roles": [
           "superadmin",
           "admin"
-        ]
-      }
-    },
-    "/finance/operators/me/balance": {
-      "get": {
-        "description": "`GET operators/:operator_id/balance` bilan AYNI shakl `{ operator_id, earned, paid, balance }`, operator_id — JWT. Komissiya belgilanmagan operator — 0/0/0 (403 emas).",
-        "operationId": "FinanceGatewayController_findMyOperatorBalance",
-        "parameters": [],
-        "responses": {
-          "200": {
-            "description": ""
-          }
-        },
-        "security": [
-          {
-            "bearer": []
-          }
-        ],
-        "summary": "Market operatori: o'z daromadi/to'lovi/balansi (E6iEOAVs)",
-        "tags": [
-          "Finance"
-        ],
-        "x-roles": [
-          "market_operator"
-        ]
-      }
-    },
-    "/finance/operators/me/earnings": {
-      "get": {
-        "description": "`GET operators/:operator_id/earnings` bilan AYNI shakl `{ rows, total, limit, offset }` (limit 1–200, sukut 50), faqat o'z yozuvlari. Komissiyasiz operator — bo'sh ro'yxat.",
-        "operationId": "FinanceGatewayController_listMyOperatorEarnings",
-        "parameters": [
-          {
-            "name": "limit",
-            "required": false,
-            "in": "query",
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "offset",
-            "required": false,
-            "in": "query",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": ""
-          }
-        },
-        "security": [
-          {
-            "bearer": []
-          }
-        ],
-        "summary": "Market operatori: o'z daromad yozuvlari (E6iEOAVs)",
-        "tags": [
-          "Finance"
-        ],
-        "x-roles": [
-          "market_operator"
-        ]
-      }
-    },
-    "/finance/operators/me/payments": {
-      "get": {
-        "description": "`GET operators/:operator_id/payments` bilan AYNI shakl `{ rows, total, limit, offset }`, faqat o'z to'lovlari.",
-        "operationId": "FinanceGatewayController_listMyOperatorPayments",
-        "parameters": [
-          {
-            "name": "limit",
-            "required": false,
-            "in": "query",
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "offset",
-            "required": false,
-            "in": "query",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": ""
-          }
-        },
-        "security": [
-          {
-            "bearer": []
-          }
-        ],
-        "summary": "Market operatori: unga qilingan to'lovlar (E6iEOAVs)",
-        "tags": [
-          "Finance"
-        ],
-        "x-roles": [
-          "market_operator"
         ]
       }
     },
@@ -15038,38 +14911,6 @@
         ]
       }
     },
-    "/branches/hq": {
-      "get": {
-        "description": "Javob `{ statusCode, message, data: { id, name, code, type, status, address, region_id, region: { id, name } | null } }`. «Ombor ochish» oynasida HQ shu yerdan olinadi (Markaziy ombor), viloyat filiallari — `GET /branches/dispatch-destinations`. HQ topilmasa — 404.",
-        "operationId": "BranchGatewayController_findHqBranch",
-        "parameters": [],
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HqBranchResponseDto"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "bearer": []
-          }
-        ],
-        "summary": "HQ filiali (Markaziy ombor ochish uchun, pul maydonlarisiz)",
-        "tags": [
-          "Branch"
-        ],
-        "x-roles": [
-          "superadmin",
-          "admin"
-        ]
-      }
-    },
     "/branches/new-orders": {
       "get": {
         "operationId": "BranchGatewayController_findBranchesWithNewOrders",
@@ -15409,9 +15250,18 @@
     },
     "/transfer-batches": {
       "get": {
-        "description": "(15N7AHkp) Statussiz yoki `status=PENDING` da bir yo'nalishdagi (manba, manzil, yo'nalish, hudud) PENDING partiyalardan faqat eng yangisi qaytadi — yig'ish SQL'da, shuning uchun `meta.total`/`totalPages` HAQIQIY jami (ilgari sahifadagi qatorlar soni edi). Tartib: createdAt DESC, id DESC.",
+        "description": "(15N7AHkp) Statussiz yoki `status=PENDING` da bir yo'nalishdagi (manba, manzil, yo'nalish, hudud) PENDING partiyalardan faqat eng yangisi qaytadi — yig'ish SQL'da, shuning uchun `meta.total`/`totalPages` HAQIQIY jami (ilgari sahifadagi qatorlar soni edi). Tartib: createdAt DESC, id DESC. Z3pUOxou — LOGIST: faqat o'z viloyatlariga boruvchi paketlar (`target_region_id IN` o'z viloyatlari; `target_region_id` filtri — faqat o'z viloyati, boshqasi 400; biriktirilmagan — bo'sh), `total_price` va `items[].snapshot_price` yo'q.",
         "operationId": "BranchGatewayController_findTransferBatches",
         "parameters": [
+          {
+            "name": "target_region_id",
+            "required": false,
+            "in": "query",
+            "description": "Z3pUOxou (N17): maqsad viloyat filtri (toraytiradi). Logist uchun — faqat o'z viloyatlaridan biri.",
+            "schema": {
+              "type": "string"
+            }
+          },
           {
             "name": "limit",
             "required": false,
@@ -15512,13 +15362,14 @@
           "admin",
           "branch",
           "manager",
-          "registrator"
+          "registrator",
+          "logist"
         ]
       }
     },
     "/transfer-batches/{id}": {
       "get": {
-        "description": "3HKvAyhm: javobda `source_branch` / `destination_branch` `{ id, name }` — menejer ham filial nomini ko'radi (`GET branches/:id` faqat SA/admin).",
+        "description": "3HKvAyhm: javobda `source_branch` / `destination_branch` `{ id, name }` — menejer ham filial nomini ko'radi (`GET branches/:id` faqat SA/admin). Z3pUOxou — LOGIST: paket o'z viloyatiga (`target_region_id`) boruvchi bo'lsa, aks holda 403; `total_price`, `items[].snapshot_price` va `items[].order` dagi pul maydonlari yo'q.",
         "operationId": "BranchGatewayController_findTransferBatchById",
         "parameters": [
           {
@@ -15557,7 +15408,8 @@
           "admin",
           "branch",
           "manager",
-          "registrator"
+          "registrator",
+          "logist"
         ]
       }
     },
@@ -18830,7 +18682,6 @@
         ]
       },
       "post": {
-        "description": "B3ZtzCCx: ixtiyoriy komissiya (`commission_type` + `commission_value`, ikkalasi BIRGA) AYNI so'rovda — operator va komissiya bitta yozuvda (atomik). Cheklovlar `PATCH :id/commission` bilan bir xil: percent 0..100, fixed 0..1 000 000 so'm, 2 kasr. Noto'g'ri komissiya — 400 va operator YARATILMAYDI.",
         "operationId": "MarketOperatorGatewayController_create",
         "parameters": [],
         "requestBody": {
@@ -18967,59 +18818,6 @@
         ]
       }
     },
-    "/market-operators/{id}/status": {
-      "patch": {
-        "description": "Ega qarori 2026-10-19 (MO-S4). `inactive` — operator kira olmaydi: barcha sessiyalari yopiladi (refresh token tozalanadi, qurilma keyingi refresh'da chiqariladi), Telegram bot uni aktor deb tanimaydi. `active` — qayta faol (market o'zi bloklangan bo'lsa 403). Buyurtmalar, komissiya va daromad tarixi o'zgarmaydi. Holat o'zgarmasa ham 200. Javob — operator qatori (`status` bilan). Jurnal: `status_change` (muallif — market).",
-        "operationId": "MarketOperatorGatewayController_updateStatus",
-        "parameters": [
-          {
-            "name": "id",
-            "required": true,
-            "in": "path",
-            "description": "Operator ID",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/UpdateMarketOperatorStatusRequestDto"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "{ statusCode, message, data: MarketOperator } — `data.status`"
-          },
-          "400": {
-            "description": "status 'active' | 'inactive' emas"
-          },
-          "403": {
-            "description": "Market emas yoki market bloklangan (faollashtirish)"
-          },
-          "404": {
-            "description": "Operator topilmadi yoki begona"
-          }
-        },
-        "security": [
-          {
-            "bearer": []
-          }
-        ],
-        "summary": "Operatorni nofaol / qayta faol qilish — faqat o`z operatori (mFkrqvMi)",
-        "tags": [
-          "Market operators"
-        ],
-        "x-roles": [
-          "market"
-        ]
-      }
-    },
     "/market-operators/{id}": {
       "delete": {
         "operationId": "MarketOperatorGatewayController_remove",
@@ -19104,7 +18902,7 @@
     },
     "/delivery/quote": {
       "post": {
-        "description": "DAqXPeSy. Tarif: ikkala uchi ham `regions.is_city_zone` (Toshkent shahri) → `city`, aks holda `where_deliver` (`center`/`address`). Elementlar BITTA jo'natma: og'irliklar va hajmlar qo'shiladi (× quantity), baza bir marta. `product_id` — o'lchov catalog'dan (MARKET — faqat o'z mahsuloti, begonasi 404). O'lchovsiz element jimgina 0 bermaydi: `unmeasuredItems` / `missingDimensionItems` > 0 va `estimated: true`. Hajm chegarasi (AQ9lkgVB): hajmli vazn `volumetric_from_kg` dan kichik bo'lsa hajm hisobga olinmaydi — `volumetricApplied: false`, hisob vazni faqat og'irlikdan. `total` — 500 ga karrali YOZILADIGAN narx (pickup kirmaydi); `totalWithPickup` — kalkulyator jami. Xatolar: 400 (validatsiya, tuman–viloyat mos emas), 404 (viloyat/tuman/mahsulot), 409 (faol tarif yoki sozlama yo'q), 503 (catalog javob bermadi).",
+        "description": "DAqXPeSy. Tarif: ikkala uchi ham `regions.is_city_zone` (Toshkent shahri) → `city`, aks holda `where_deliver` (`center`/`address`). Elementlar BITTA jo'natma: og'irliklar va hajmlar qo'shiladi (× quantity), baza bir marta. `product_id` — o'lchov catalog'dan (MARKET — faqat o'z mahsuloti, begonasi 404). O'lchovsiz element jimgina 0 bermaydi: `unmeasuredItems` / `missingDimensionItems` > 0 va `estimated: true`. `total` — 500 ga karrali YOZILADIGAN narx (pickup kirmaydi); `totalWithPickup` — kalkulyator jami. Xatolar: 400 (validatsiya, tuman–viloyat mos emas), 404 (viloyat/tuman/mahsulot), 409 (faol tarif yoki sozlama yo'q), 503 (catalog javob bermadi).",
         "operationId": "DeliveryPricingGatewayController_quote",
         "parameters": [],
         "requestBody": {
@@ -19310,7 +19108,7 @@
         ]
       },
       "patch": {
-        "description": "Qisman: faqat yuborilgan maydonlar o'zgaradi. Yangi faol qator yoziladi, eskisi `is_active=false` (tarix qoladi); hech narsa o'zgarmasa versiya ham, jurnal ham yo'q. `volumetric_from_kg` (AQ9lkgVB) — hajm qaysi kg dan boshlab hisobga olinadi (0..1000, 3 kasr; 0 — har doim). Amal activity-log'ga yoziladi (`logistics.delivery_pricing_settings_updated`, eski/yangi qiymat bilan).",
+        "description": "Qisman: faqat yuborilgan maydonlar o'zgaradi. Yangi faol qator yoziladi, eskisi `is_active=false` (tarix qoladi); hech narsa o'zgarmasa versiya ham, jurnal ham yo'q. Amal activity-log'ga yoziladi (`logistics.delivery_pricing_settings_updated`, eski/yangi qiymat bilan).",
         "operationId": "DeliveryPricingGatewayController_updateSettings",
         "parameters": [],
         "requestBody": {
@@ -19387,7 +19185,7 @@
     },
     "/warehouses/resolve-source": {
       "post": {
-        "description": "Qaror 4: buyurtma tumani viloyat filialida (REGIONAL/HYBRID) FAOL ombor bo'lsa va HAMMA mahsulot yetarli bo'lsa — `source: WAREHOUSE` (`warehouse.kind: REGIONAL`), aks holda butun buyurtma `HQ` (bo'linmaydi), `reason` va `shortages` bilan. Markaziy ombor (HQ filiali, `kind: HQ`) bu bosqichda manba nomzodi EMAS (Pa1KaXmj). Hech narsa band qilinmaydi — band order-service yaratishda (`catalog.warehouse.reserve`). MARKET/MARKET_OPERATOR — faqat o'z marketi; market kaliti «Ombordan buyurtma yaratish» o'chiq bo'lsa — `HQ` + `MARKET_NOT_ALLOWED`.",
+        "description": "Qaror 4: buyurtma tumani filialida FAOL ombor bo'lsa va HAMMA mahsulot yetarli bo'lsa — `source: WAREHOUSE`, aks holda butun buyurtma `HQ` (bo'linmaydi), `reason` va `shortages` bilan. Hech narsa band qilinmaydi — band order-service yaratishda (`catalog.warehouse.reserve`). MARKET/MARKET_OPERATOR — faqat o'z marketi; market kaliti «Ombordan buyurtma yaratish» o'chiq bo'lsa — `HQ` + `MARKET_NOT_ALLOWED`.",
         "operationId": "WarehouseGatewayController_resolveSource",
         "parameters": [],
         "requestBody": {
@@ -19432,7 +19230,7 @@
     },
     "/warehouses/availability": {
       "get": {
-        "description": "Tuman (yoki hudud) viloyat filialidagi (REGIONAL/HYBRID) birinchi FAOL ombor — Markaziy ombor (HQ) hisobga olinmaydi; `market_id` mahsulotlari yoki `product_ids` (vergul bilan, ≤500). Ombor to'xtatilgan bo'lsa — `warehouse.status = PAUSED`, `items: []`. MARKET/MARKET_OPERATOR — faqat o'z marketi.",
+        "description": "Tuman (yoki hudud) filialidagi birinchi FAOL ombor; `market_id` mahsulotlari yoki `product_ids` (vergul bilan, ≤500). Ombor to'xtatilgan bo'lsa — `warehouse.status = PAUSED`, `items: []`. MARKET/MARKET_OPERATOR — faqat o'z marketi.",
         "operationId": "WarehouseGatewayController_availability",
         "parameters": [
           {
@@ -19704,7 +19502,7 @@
         ]
       },
       "post": {
-        "description": "Faqat FAOL filialda — REGIONAL/HYBRID (viloyat ombori, `kind: REGIONAL`) yoki HQ («Markaziy ombor», `kind: HQ`); PICKUP va nofaol filial — 400 «Ombor faqat faol filialda (HQ, REGIONAL yoki HYBRID) ochiladi — topshirish punktida ombor yo'q». Bitta filial — bitta ombor (409; HQ bitta — Markaziy ombor ham bitta). Nom berilmasa — «<filial> ombori», HQ'da — «Markaziy ombor». Mas'ul xodim — shu filial menejeri (aks holda 400); berilmasa — filialning birinchi faol menejeri (yo'q bo'lsa `null`). HQ'da mas'ul biriktirilmaydi: `manager_user_id` berilsa — 400 «Markaziy omborga mas'ul menejer biriktirilmaydi», sukut `null`. Yangi ombor — FAOL. HQ filiali — `GET /branches/hq`.",
+        "description": "Faqat FAOL viloyat filialida (REGIONAL/HYBRID); bitta filial — bitta ombor (409). Nom berilmasa — «<filial> ombori». Mas'ul xodim — shu filial menejeri (aks holda 400); berilmasa — filialning birinchi faol menejeri (yo'q bo'lsa `null`). Yangi ombor — FAOL.",
         "operationId": "WarehouseGatewayController_create",
         "parameters": [],
         "requestBody": {
@@ -19791,7 +19589,7 @@
         ]
       },
       "patch": {
-        "description": "Filial o'zgarmaydi. `null` — maydonni tozalash; `manager_user_id: null` — filialning birinchi faol menejeri (yo'q bo'lsa `null`). Markaziy omborda (HQ) `manager_user_id` — 400, `null` — `null` qoladi.",
+        "description": "Filial o'zgarmaydi. `null` — maydonni tozalash; `manager_user_id: null` — filialning birinchi faol menejeri (yo'q bo'lsa `null`).",
         "operationId": "WarehouseGatewayController_update",
         "parameters": [
           {
@@ -20788,7 +20586,7 @@
           "branch_id": {
             "type": "string",
             "example": "12",
-            "description": "Filial ID. Menejer — avtomatik o'z filiali (yuborish shart emas; boshqa filial — 400). Superadmin/admin (perqZ3oM) — istalgan FAOL HQ / REGIONAL / HYBRID filial; yuborilmasa — HQ. Noma'lum / nofaol / PICKUP / viloyatsiz filial — 400."
+            "description": "Branch ID (manager flowda avtomatik aniqlanadi, yuborish shart emas)"
           },
           "name": {
             "type": "string",
@@ -21736,7 +21534,7 @@
           "market_id": {
             "type": "string",
             "example": "1",
-            "description": "Mahsulot qaysi marketniki — MAJBURIY (superadmin/admin/registrator/menejer yuboradi). Yuborilmasa 400."
+            "description": "Admin/Superadmin yuboradi. MARKET role uchun token sub ishlatiladi."
           },
           "price": {
             "type": "object",
@@ -21788,7 +21586,6 @@
         },
         "required": [
           "name",
-          "market_id",
           "weight_kg",
           "length_cm",
           "width_cm",
@@ -24291,7 +24088,7 @@
           "closing_balance_cash": {
             "type": "number",
             "example": 120000,
-            "description": "Sanab topshirilgan naqd (MAJBURIY, ega S5). discrepancy_cash = shu − expected_balance_cash"
+            "description": "Sanab topshirilgan naqd. Yuborilsa discrepancy_cash = shu − expected_balance_cash"
           },
           "closing_balance_card": {
             "type": "number",
@@ -24302,10 +24099,7 @@
             "type": "string",
             "example": "Smena yopildi"
           }
-        },
-        "required": [
-          "closing_balance_cash"
-        ]
+        }
       },
       "CreateCashboxCardRequestDto": {
         "type": "object",
@@ -27229,110 +27023,6 @@
           "code"
         ]
       },
-      "HqBranchRegionDto": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string",
-            "example": "1"
-          },
-          "name": {
-            "type": "string",
-            "example": "Toshkent shahri"
-          }
-        },
-        "required": [
-          "id",
-          "name"
-        ]
-      },
-      "HqBranchDto": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string",
-            "example": "1"
-          },
-          "name": {
-            "type": "string",
-            "example": "Bosh ofis (Toshkent)"
-          },
-          "code": {
-            "type": "string",
-            "example": "HQ-TSHKNT",
-            "nullable": true
-          },
-          "type": {
-            "type": "string",
-            "enum": [
-              "HQ",
-              "PICKUP",
-              "REGIONAL",
-              "HYBRID"
-            ],
-            "example": "HQ"
-          },
-          "status": {
-            "type": "string",
-            "example": "active",
-            "enum": [
-              "active",
-              "inactive"
-            ]
-          },
-          "address": {
-            "type": "string",
-            "example": null,
-            "nullable": true
-          },
-          "region_id": {
-            "type": "string",
-            "example": "1",
-            "nullable": true
-          },
-          "region": {
-            "nullable": true,
-            "description": "Logistika hududi nomi bilan; `region_id` yo'q yoki hudud olinmasa — null",
-            "type": "object",
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/HqBranchRegionDto"
-              }
-            ]
-          }
-        },
-        "required": [
-          "id",
-          "name",
-          "code",
-          "type",
-          "status",
-          "address",
-          "region_id",
-          "region"
-        ]
-      },
-      "HqBranchResponseDto": {
-        "type": "object",
-        "properties": {
-          "statusCode": {
-            "type": "number",
-            "example": 200
-          },
-          "message": {
-            "type": "string",
-            "example": "HQ branch"
-          },
-          "data": {
-            "$ref": "#/components/schemas/HqBranchDto"
-          }
-        },
-        "required": [
-          "statusCode",
-          "message",
-          "data"
-        ]
-      },
       "CreateBranchTransferBatchesRequestDto": {
         "type": "object",
         "properties": {
@@ -28210,24 +27900,6 @@
             "type": "string",
             "example": "secret123",
             "minLength": 4
-          },
-          "commission_type": {
-            "type": "string",
-            "enum": [
-              "percent",
-              "fixed"
-            ],
-            "nullable": true,
-            "example": "percent",
-            "description": "Ixtiyoriy. percent — buyurtma total_price foizi; fixed — sotilgan buyurtma uchun so'm. `commission_value` bilan BIRGA yuboriladi (faqat bittasi — 400); ikkalasi yo'q yoki null — komissiyasiz"
-          },
-          "commission_value": {
-            "type": "object",
-            "example": 5,
-            "nullable": true,
-            "minimum": 0,
-            "maximum": 1000000,
-            "description": "Ixtiyoriy. Foiz (0..100) yoki so'm (0..1 000 000), ko'pi bilan 2 kasr. `commission_type` bilan BIRGA"
           }
         },
         "required": [
@@ -28270,23 +27942,6 @@
         },
         "required": [
           "can_view_warehouse_stock"
-        ]
-      },
-      "UpdateMarketOperatorStatusRequestDto": {
-        "type": "object",
-        "properties": {
-          "status": {
-            "type": "string",
-            "enum": [
-              "active",
-              "inactive"
-            ],
-            "example": "inactive",
-            "description": "inactive — operator tizimga kira olmaydi, sessiyalari yopiladi (qurilma keyingi refresh'da chiqariladi); active — qayta faol"
-          }
-        },
-        "required": [
-          "status"
         ]
       },
       "DeliveryTariffRowDto": {
@@ -28523,17 +28178,7 @@
           "volumetricKg": {
             "type": "number",
             "example": 1.98,
-            "description": "Hajmli vazn yig'indisi — chegaradan qat'i nazar har doim hisoblangan qiymat"
-          },
-          "volumetricFromKg": {
-            "type": "number",
-            "example": 0,
-            "description": "(AQ9lkgVB) Qo'llangan hajm chegarasi, kg (`volumetric_from_kg`; 0 — chegara yo'q)"
-          },
-          "volumetricApplied": {
-            "type": "boolean",
-            "example": true,
-            "description": "(AQ9lkgVB) Hajm hisobga olindimi: o'lchamli hajmli element bor VA `volumetricKg` ≥ `volumetricFromKg`. false — hisob vazni faqat haqiqiy og'irlikdan"
+            "description": "Hajmli vazn yig'indisi"
           },
           "billableKg": {
             "type": "number",
@@ -28577,8 +28222,7 @@
               "weight",
               "volume"
             ],
-            "nullable": true,
-            "description": "Hisob vazni qaysi biridan; hech narsa o'lchanmagan — null. `volumetricApplied: false` bo'lsa — `weight` (yoki null)"
+            "nullable": true
           },
           "unmeasuredItems": {
             "type": "number",
@@ -28627,8 +28271,6 @@
           "daysMax",
           "actualKg",
           "volumetricKg",
-          "volumetricFromKg",
-          "volumetricApplied",
           "billableKg",
           "extraKg",
           "extra",
@@ -28861,11 +28503,6 @@
             "type": "number",
             "example": 5000
           },
-          "volumetric_from_kg": {
-            "type": "number",
-            "example": 0,
-            "description": "(AQ9lkgVB) Hajm shu kg dan (≥) boshlab hisobga olinadi; 0 — har doim"
-          },
           "first_kg_included": {
             "type": "number",
             "example": 1
@@ -28911,7 +28548,6 @@
         "required": [
           "id",
           "volumetric_divisor",
-          "volumetric_from_kg",
           "first_kg_included",
           "min_billable_kg",
           "billable_step_kg",
@@ -28952,13 +28588,6 @@
             "minimum": 1,
             "example": 5000,
             "description": "Hajmli vazn bo'luvchisi (U×K×B sm / shu son). Ega qarori — 5000."
-          },
-          "volumetric_from_kg": {
-            "type": "number",
-            "minimum": 0,
-            "maximum": 1000,
-            "example": 3,
-            "description": "(AQ9lkgVB) Hajm qaysi kg dan boshlab hisobga olinadi. Hajmli vazn (Σ U×K×B / volumetric_divisor) shundan KICHIK bo'lsa — hajm hisobga olinmaydi (standart narx, faqat haqiqiy og'irlik); KATTA yoki TENG bo'lsa — hisob vazni = katta(haqiqiy, hajmli). 0 — hajm har doim qo'llanadi (sukut)."
           },
           "first_kg_included": {
             "type": "number",
@@ -29074,15 +28703,6 @@
               "PAUSED"
             ]
           },
-          "kind": {
-            "type": "string",
-            "enum": [
-              "REGIONAL",
-              "HQ"
-            ],
-            "example": "REGIONAL",
-            "description": "Pa1KaXmj: manba nomzodi — hozircha faqat viloyat ombori (REGIONAL)"
-          },
           "branch_id": {
             "type": "string",
             "example": "11"
@@ -29104,7 +28724,6 @@
           "id",
           "name",
           "status",
-          "kind",
           "branch_id",
           "branch_name"
         ]
@@ -29310,15 +28929,6 @@
               "PAUSED"
             ]
           },
-          "kind": {
-            "type": "string",
-            "enum": [
-              "REGIONAL",
-              "HQ"
-            ],
-            "example": "HQ",
-            "description": "Pa1KaXmj: HQ — «Markaziy ombor» ustuni"
-          },
           "branch": {
             "nullable": true,
             "type": "object",
@@ -29341,8 +28951,7 @@
         "required": [
           "id",
           "name",
-          "status",
-          "kind"
+          "status"
         ]
       },
       "WarehouseCodeDto": {
@@ -29673,8 +29282,7 @@
           "type": {
             "type": "string",
             "nullable": true,
-            "example": "REGIONAL",
-            "description": "Filial turi: REGIONAL, HYBRID yoki HQ (Markaziy ombor)"
+            "example": "REGIONAL"
           },
           "status": {
             "type": "string",
@@ -29840,15 +29448,6 @@
             ],
             "example": "ACTIVE"
           },
-          "kind": {
-            "type": "string",
-            "enum": [
-              "REGIONAL",
-              "HQ"
-            ],
-            "example": "REGIONAL",
-            "description": "Pa1KaXmj: REGIONAL — viloyat filiali (REGIONAL/HYBRID) ombori; HQ — «Markaziy ombor» (HQ filialida, ko'pi bilan bitta). Filialdan hisoblanadi."
-          },
           "branch_id": {
             "type": "string",
             "example": "11"
@@ -29941,7 +29540,6 @@
           "id",
           "name",
           "status",
-          "kind",
           "branch_id",
           "low_stock_default",
           "created_at",
@@ -30081,19 +29679,19 @@
           "branch_id": {
             "type": "string",
             "example": "11",
-            "description": "Faol filial: REGIONAL/HYBRID yoki HQ («Markaziy ombor», Pa1KaXmj); PICKUP va nofaol — 400. Bitta filial — bitta ombor (takror — 409)."
+            "description": "Viloyat filiali (REGIONAL yoki HYBRID, faol). Bitta filial — bitta ombor (takror — 409)."
           },
           "name": {
             "type": "string",
             "example": "Samarqand filiali ombori",
             "maxLength": 160,
-            "description": "Berilmasa — «<filial nomi> ombori»; HQ filialida — «Markaziy ombor»."
+            "description": "Berilmasa — «<filial nomi> ombori»."
           },
           "manager_user_id": {
             "type": "object",
             "example": "31",
             "nullable": true,
-            "description": "Mas'ul xodim — shu filialning menejeri (branch_users, rol MANAGER), aks holda 400. Berilmasa yoki `null` — filialning birinchi faol menejeri (foydalanuvchi id bo'yicha), menejer yo'q bo'lsa `null` (XtcEyQjb). Faqat ko'rsatish uchun: o'qish ruxsati filialdan. HQ filialida (Markaziy ombor) berilmaydi — 400 «Markaziy omborga mas'ul menejer biriktirilmaydi»; sukut `null`."
+            "description": "Mas'ul xodim — shu filialning menejeri (branch_users, rol MANAGER), aks holda 400. Berilmasa yoki `null` — filialning birinchi faol menejeri (foydalanuvchi id bo'yicha), menejer yo'q bo'lsa `null` (XtcEyQjb). Faqat ko'rsatish uchun: o'qish ruxsati filialdan."
           },
           "address": {
             "type": "object",
@@ -30137,15 +29735,6 @@
               "PAUSED"
             ],
             "example": "ACTIVE"
-          },
-          "kind": {
-            "type": "string",
-            "enum": [
-              "REGIONAL",
-              "HQ"
-            ],
-            "example": "REGIONAL",
-            "description": "Pa1KaXmj: REGIONAL — viloyat filiali (REGIONAL/HYBRID) ombori; HQ — «Markaziy ombor» (HQ filialida, ko'pi bilan bitta). Filialdan hisoblanadi."
           },
           "branch_id": {
             "type": "string",
@@ -30244,7 +29833,6 @@
           "id",
           "name",
           "status",
-          "kind",
           "branch_id",
           "low_stock_default",
           "created_at",
@@ -30263,7 +29851,7 @@
           "manager_user_id": {
             "type": "object",
             "nullable": true,
-            "description": "Shu filial menejeri; `null` — filialning birinchi faol menejeri avtomatik (menejer yo'q bo'lsa `null`, XtcEyQjb). Markaziy omborda (HQ) — aniq id 400, `null` — `null`."
+            "description": "Shu filial menejeri; `null` — filialning birinchi faol menejeri avtomatik (menejer yo'q bo'lsa `null`, XtcEyQjb)."
           },
           "address": {
             "type": "object",

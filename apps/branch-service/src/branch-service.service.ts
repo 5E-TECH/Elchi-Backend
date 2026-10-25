@@ -33,7 +33,29 @@ type RequesterContext = {
   // that want to skip a BranchUser lookup; resolveAccessScope below still
   // queries the DB to derive role-based scope (manager descendant tree).
   branch_id?: string | null;
+  /**
+   * Z3pUOxou — faqat LOGIST uchun: gateway logistics'dan olgan o'z viloyatlari
+   * (regions.logist_id = me). Yo'q/bo'sh — logist hech narsa ko'rmaydi.
+   */
+  region_ids?: string[];
 };
+
+/** Z3pUOxou — shu rollardan biri bo'lsa o'sha rolning qoidasi ustun. */
+const ROLES_WITH_OWN_BATCH_SCOPE: readonly string[] = [
+  Roles.SUPERADMIN,
+  Roles.ADMIN,
+  Roles.BRANCH,
+  Roles.MANAGER,
+  Roles.REGISTRATOR,
+  Roles.COURIER,
+  Roles.MARKET,
+  Roles.MARKET_OPERATOR,
+  Roles.CUSTOMER,
+];
+const LOGIST_REGION_FILTER_MESSAGE = 'Bu viloyat sizga biriktirilmagan';
+const LOGIST_BATCH_FORBIDDEN_MESSAGE =
+  "Bu paket sizga biriktirilgan viloyatga emas — ko'rishga ruxsat yo'q";
+const BIGINT_ID_RE = /^[0-9]{1,19}$/;
 
 type BranchAccessScope = {
   readableBranchIds: Set<string>;
@@ -504,6 +526,42 @@ export class BranchServiceService implements OnModuleInit {
       String(role).toLowerCase(),
     );
     return roles.includes('superadmin') || roles.includes('admin');
+  }
+
+  /** Z3pUOxou — sof logist (boshqa doirali rolsiz) so'rovchi. */
+  private isLogistRequester(requester?: RequesterContext): boolean {
+    const roles = (requester?.roles ?? []).map((role) =>
+      String(role ?? '')
+        .trim()
+        .toLowerCase(),
+    );
+    return (
+      roles.includes(Roles.LOGIST) &&
+      !roles.some((role) => ROLES_WITH_OWN_BATCH_SCOPE.includes(role))
+    );
+  }
+
+  /** Z3pUOxou — id (satr/son) matni; boshqa tur — ''. */
+  private idText(value: unknown): string {
+    return typeof value === 'string' || typeof value === 'number'
+      ? String(value).trim()
+      : '';
+  }
+
+  /** Z3pUOxou — gateway uzatgan logist viloyatlari (kanonik); yo'q — []. */
+  private logistRegionIds(requester?: RequesterContext): string[] {
+    const raw = Array.isArray(requester?.region_ids)
+      ? requester.region_ids
+      : [];
+    return Array.from(
+      new Set(
+        raw
+          .map((id) => String(id ?? '').trim())
+          .filter((id) => BIGINT_ID_RE.test(id))
+          .map((id) => BigInt(id).toString())
+          .filter((id) => id !== '0'),
+      ),
+    );
   }
 
   private async collectDescendantBranchIds(
@@ -3057,13 +3115,22 @@ export class BranchServiceService implements OnModuleInit {
       date?: string;
       page?: number;
       limit?: number;
+      /** Z3pUOxou (N17): maqsad viloyat filtri (barcha rollar uchun toraytiruvchi). */
+      target_region_id?: string;
     },
     requester?: RequesterContext,
   ) {
+    // Z3pUOxou (ega LG-S1/LG-S3): logist — o'z viloyatlariga boruvchi paketlar.
+    if (this.isLogistRequester(requester)) {
+      return this.findTransferBatchesForLogist(query, requester);
+    }
+
     const sourceBranchId = String(query?.source_branch_id ?? '').trim();
     const destinationBranchId = String(
       query?.destination_branch_id ?? '',
     ).trim();
+    const targetRegionId =
+      String(query?.target_region_id ?? '').trim() || undefined;
 
     if (sourceBranchId) {
       await this.assertCanReadBranch(sourceBranchId, requester);
@@ -3115,6 +3182,7 @@ export class BranchServiceService implements OnModuleInit {
           date: query?.date,
           page: query?.page,
           limit: query?.limit,
+          target_region_id: targetRegionId,
         },
       );
       return this.attachRegionsToTransferBatches(response);
@@ -3131,9 +3199,82 @@ export class BranchServiceService implements OnModuleInit {
         date: query?.date,
         page: query?.page,
         limit: query?.limit,
+        target_region_id: targetRegionId,
       },
     );
     return this.attachRegionsToTransferBatches(response);
+  }
+
+  /**
+   * Z3pUOxou — GET /transfer-batches (LOGIST): `target_region_id IN (o'z
+   * viloyatlari)` — to'plamni gateway logistics'dan oladi
+   * (`requester.region_ids`). `target_region_id` filtri faqat shu to'plam
+   * ichida (boshqasi — 400); manba/manzil filial filtrlari qo'shimcha (AND)
+   * cheklov, filial ruxsati talab qilinmaydi (doira — viloyat). To'plam bo'sh —
+   * bo'sh sahifa. Javobdagi begona viloyat qatori ham olib tashlanadi.
+   */
+  private async findTransferBatchesForLogist(
+    query: {
+      source_branch_id?: string;
+      destination_branch_id?: string;
+      status?: string;
+      direction?: string;
+      period?: string;
+      date?: string;
+      page?: number;
+      limit?: number;
+      target_region_id?: string;
+    },
+    requester?: RequesterContext,
+  ) {
+    const regionIds = this.logistRegionIds(requester);
+    const requestedRaw = String(query?.target_region_id ?? '').trim();
+    const requested =
+      requestedRaw && BIGINT_ID_RE.test(requestedRaw)
+        ? BigInt(requestedRaw).toString()
+        : '';
+    if (requestedRaw && (!requested || !regionIds.includes(requested))) {
+      this.badRequest(LOGIST_REGION_FILTER_MESSAGE);
+    }
+    if (!regionIds.length) {
+      const page = Number(query?.page) > 0 ? Number(query?.page) : 1;
+      const limit =
+        Number(query?.limit) > 0 ? Math.min(Number(query?.limit), 100) : 20;
+      return successRes(
+        { items: [], meta: { page, limit, total: 0, totalPages: 1 } },
+        200,
+        'Transfer batches found',
+      );
+    }
+
+    const response = await this.sendOrderCommand<{
+      data?: { items?: Array<Record<string, unknown>> };
+    }>('order.transfer_batch.find_all', {
+      source_branch_id:
+        String(query?.source_branch_id ?? '').trim() || undefined,
+      destination_branch_id:
+        String(query?.destination_branch_id ?? '').trim() || undefined,
+      status: query?.status,
+      direction: query?.direction,
+      period: query?.period,
+      date: query?.date,
+      page: query?.page,
+      limit: query?.limit,
+      target_region_id: requested || undefined,
+      target_region_ids: regionIds,
+    });
+
+    const items = Array.isArray(response?.data?.items)
+      ? response.data.items
+      : [];
+    const scoped = items.filter((batch) =>
+      regionIds.includes(this.idText(batch?.target_region_id)),
+    );
+    const safeResponse =
+      scoped.length === items.length
+        ? response
+        : { ...response, data: { ...(response?.data ?? {}), items: scoped } };
+    return this.attachRegionsToTransferBatches(safeResponse);
   }
 
   async findBranchesWithSentBatches(
@@ -3288,6 +3429,22 @@ export class BranchServiceService implements OnModuleInit {
     const destinationBranchId = String(
       response?.data?.destination_branch_id ?? '',
     ).trim();
+
+    // Z3pUOxou: logist — paket o'z viloyatiga boruvchi bo'lsa (filial
+    // ruxsati emas, `target_region_id` bo'yicha); aks holda 403.
+    if (this.isLogistRequester(requester)) {
+      const targetRegionId = this.idText(
+        (response?.data as { target_region_id?: unknown } | undefined)
+          ?.target_region_id,
+      );
+      if (
+        !targetRegionId ||
+        !this.logistRegionIds(requester).includes(targetRegionId)
+      ) {
+        this.forbidden(LOGIST_BATCH_FORBIDDEN_MESSAGE);
+      }
+      return { batchId, response, sourceBranchId, destinationBranchId };
+    }
 
     await this.assertCanReadTransferBatch(
       sourceBranchId,

@@ -17,6 +17,7 @@ import {
   Put,
   Query,
   Req,
+  ServiceUnavailableException,
   UseGuards,
 } from '@nestjs/common';
 import { ClientProxy } from '@nestjs/microservices';
@@ -69,6 +70,14 @@ import { SetCourierRegionsRequestDto } from './dto/courier-regions.swagger.dto';
 import { CreateInvestorUserRequestDto } from './dto/investor.swagger.dto';
 import { isRpcNotFoundError } from './order-qr-light-view';
 import { ParseBigintIdPipe } from './pipes/parse-bigint-id.pipe';
+import {
+  LOGIST_REGIONS_UNAVAILABLE_MESSAGE,
+  LogistRegionScopeService,
+  isLogistRequester,
+  isRowInLogistRegions,
+  projectLogistPayload,
+  resolveLogistRegionFilter,
+} from './auth/logist-scope';
 
 interface JwtUser {
   sub: string;
@@ -117,6 +126,9 @@ export class ApiGatewayController {
      * Ixtiyoriy — spec'lar controller'ni usiz quradi.
      */
     @Optional() private readonly revocation?: SessionRevocationService,
+    // Z3pUOxou — logist viloyatlari (GET /couriers). Yo'q bo'lsa logist
+    // so'rovi 503 (fail-closed); boshqa rollar unga bog'liq emas.
+    @Optional() private readonly logistScope?: LogistRegionScopeService,
   ) {}
 
   private toRequester(req: { user: JwtUser }) {
@@ -691,9 +703,15 @@ export class ApiGatewayController {
     RoleEnum.BRANCH,
     RoleEnum.MANAGER,
     RoleEnum.REGISTRATOR,
+    // Z3pUOxou (ega LG-S1/LG-S3): logist — o'z viloyatlari kuryerlari, pulsiz.
+    RoleEnum.LOGIST,
   )
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'List couriers with filtering and pagination' })
+  @ApiOperation({
+    summary: 'List couriers with filtering and pagination',
+    description:
+      "Z3pUOxou — LOGIST: faqat `region_id` si o'ziga biriktirilgan viloyatlardan biri bo'lgan kuryerlar (`region_id` filtri — faqat o'z viloyati, boshqasi 400; biriktirilmagan — bo'sh). Maosh va moliya maydonlari (salary, payment_day, compensation_mode, commission_*, tariff_*, balanslar) yo'q; `branch_id` filtri logist uchun e'tiborsiz.",
+  })
   @ApiQuery({ name: 'search', required: false, type: String })
   @ApiQuery({
     name: 'status',
@@ -726,6 +744,12 @@ export class ApiGatewayController {
     const roles = (req?.user?.roles ?? []).map((role) =>
       String(role).toLowerCase(),
     );
+    if (isLogistRequester(roles) && req?.user) {
+      return this.getCouriersForLogist(
+        { search, status, region_id: resolvedRegionId, page, limit },
+        req,
+      );
+    }
     const isSystemPrivileged =
       roles.includes(RoleEnum.SUPERADMIN) || roles.includes(RoleEnum.ADMIN);
 
@@ -821,6 +845,72 @@ export class ApiGatewayController {
     );
 
     return response;
+  }
+
+  /**
+   * Z3pUOxou — GET /couriers (LOGIST): identity'ga `region_ids` (o'z
+   * viloyatlari, qat'iy `courier.region_id IN`; super-kuryer kengaytmasi
+   * yo'q). Javob qatori yana tekshiriladi (himoya), kassa so'ralmaydi, pul
+   * maydonlari olib tashlanadi.
+   */
+  private async getCouriersForLogist(
+    filters: {
+      search?: string;
+      status?: string;
+      region_id?: string;
+      page?: string;
+      limit?: string;
+    },
+    req: { user: JwtUser },
+  ) {
+    if (!this.logistScope) {
+      throw new ServiceUnavailableException(LOGIST_REGIONS_UNAVAILABLE_MESSAGE);
+    }
+    const regionIds = await this.logistScope.regionIds(req.user.sub);
+    const regionFilter = resolveLogistRegionFilter(
+      filters.region_id,
+      regionIds,
+    );
+    const page = Number(filters.page) > 0 ? Number(filters.page) : 1;
+    const limit =
+      Number(filters.limit) > 0 ? Math.min(Number(filters.limit), 100) : 10;
+    if (!regionIds.length) {
+      return successRes({
+        items: [],
+        meta: { page, limit, total: 0, totalPages: 1 },
+      });
+    }
+
+    const response = await firstValueFrom(
+      this.identityClient
+        .send(
+          { cmd: 'identity.courier.find_all' },
+          {
+            query: {
+              search: filters.search,
+              status: filters.status,
+              region_ids: regionFilter ? [regionFilter] : regionIds,
+              page: filters.page ? Number(filters.page) : undefined,
+              limit: filters.limit ? Number(filters.limit) : undefined,
+            },
+          },
+        )
+        .pipe(timeout(8000)),
+    );
+    const data = (response as { data?: { items?: unknown } } | null)?.data;
+    const scoped =
+      data && Array.isArray(data.items)
+        ? {
+            ...(response as object),
+            data: {
+              ...data,
+              items: (data.items as unknown[]).filter((courier) =>
+                isRowInLogistRegions(courier, regionIds),
+              ),
+            },
+          }
+        : response;
+    return projectLogistPayload(req.user.roles, scoped);
   }
 
   @Get('managers')
@@ -1572,6 +1662,9 @@ export class ApiGatewayController {
     RoleEnum.MANAGER,
     RoleEnum.REGISTRATOR,
     RoleEnum.COURIER,
+    // iFAkvaht (N16): logist buyurtmalari «Market» filtri — faqat minimal
+    // ko'rinish {id, name, status} (tarif, telefon, kassa YO'Q; ega LG-S1).
+    RoleEnum.LOGIST,
   )
   @ApiBearerAuth()
   @ApiOperation({ summary: 'List markets with filtering and pagination' })
@@ -1586,7 +1679,7 @@ export class ApiGatewayController {
   @ApiQuery({ name: 'limit', required: false, type: Number, example: 10 })
   @ApiOkResponse({
     description:
-      "Market list. SUPERADMIN/ADMIN: to'liq qator + cashbox. MANAGER/REGISTRATOR/BRANCH: faqat {id, name, phone_number, status, tariff_home, tariff_center, default_tariff} (yiFTzkzH; tarif maydoni yo'q bo'lsa null). COURIER: faqat {id, name, status}.",
+      "Market list. SUPERADMIN/ADMIN: to'liq qator + cashbox. MANAGER/REGISTRATOR/BRANCH: faqat {id, name, phone_number, status, tariff_home, tariff_center, default_tariff} (yiFTzkzH; tarif maydoni yo'q bo'lsa null). COURIER va LOGIST (iFAkvaht — buyurtmalar «Market» filtri): faqat {id, name, status}.",
   })
   async getMarkets(
     @Req() req: { user: JwtUser },
@@ -1651,8 +1744,9 @@ export class ApiGatewayController {
    *   ishlatadi (orders/create Step1Market, orders, products); yiFTzkzH:
    *   buyurtma yaratishda ikkala narxni (uyga/markazga) ko'rsatish uchun
    *   `tariff_home`, `tariff_center`, `default_tariff` ham (login/kassa yo'q);
-   * - minimal: COURIER (va boshqa har qanday rol) — faqat filtr: id, nom,
-   *   status. Telefon, username, tariflar, kassa — yo'q.
+   * - minimal: COURIER, LOGIST (iFAkvaht — logist buyurtmalari «Market»
+   *   filtri) va boshqa har qanday rol — faqat filtr: id, nom, status.
+   *   Telefon, username, tariflar, kassa — yo'q.
    */
   private marketListView(
     user: JwtUser | undefined,

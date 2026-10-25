@@ -8,18 +8,22 @@ import { LogisticsServiceService } from './logistics-service.service';
  *
  * Avval `logistics.region.stats_all` so'rovchidan qat'i nazar 14 viloyatning
  * hammasi uchun buyurtma/tushumni qaytarardi; cheklov faqat brauzerda edi.
- *   - admin/superadmin/logist → hamma viloyat (regressiya yo'q);
+ *   - admin/superadmin → hamma viloyat (regressiya yo'q);
+ *   - logist (iOnGbEqi) → faqat o'ziga biriktirilgan viloyatlar
+ *     (regions.logist_id = me), tushum (revenue/totalRevenue) YO'Q;
  *   - filial menejeri/registratori, HQ filiali xodimi ham (karta 3-band) →
  *     faqat filial viloyati;
  *   - aniqlab bo'lmasa → hech biri (fail-closed);
  *   - stats/:id — boshqa viloyat → 403;
  *   - my/district-stats — kuryer/menejerning o'z viloyati, PII yo'q.
  */
+// iOnGbEqi: 5- va 9-viloyat logist 42 ga biriktirilgan, 3- — boshqa logistga.
+const LOGIST_OF: Record<string, string> = { '5': '42', '9': '42', '3': '43' };
 const REGIONS = Array.from({ length: 14 }, (_, i) => ({
   id: String(i + 1),
   name: `Viloyat-${i + 1}`,
   sato_code: `17${String(i + 1).padStart(2, '0')}`,
-  logist_id: null,
+  logist_id: LOGIST_OF[String(i + 1)] ?? null,
   districts: [
     { id: `${i + 1}01`, name: `Tuman-${i + 1}-A`, sato_code: 'A' },
     { id: `${i + 1}02`, name: `Tuman-${i + 1}-B`, sato_code: 'B' },
@@ -65,7 +69,15 @@ function setup(opts: {
   courierRegion?: Record<string, string | null>;
 }) {
   const regionRepo = {
-    find: jest.fn(() => Promise.resolve(REGIONS.map((r) => ({ ...r })))),
+    find: jest.fn((options?: { where?: { logist_id?: string } }) =>
+      Promise.resolve(
+        REGIONS.filter(
+          (r) =>
+            options?.where?.logist_id === undefined ||
+            r.logist_id === options.where.logist_id,
+        ).map((r) => ({ ...r })),
+      ),
+    ),
     findOne: jest.fn(({ where }: { where: { id: string } }) =>
       Promise.resolve(REGIONS.find((r) => r.id === where.id) ?? null),
     ),
@@ -149,7 +161,6 @@ describe('uherIk8r — getAllRegionsStats doirasi', () => {
   it.each([
     ['admin', { id: '1', roles: ['admin'] }],
     ['superadmin', { id: '1', roles: ['superadmin'] }],
-    ['logist', { id: '42', roles: ['logist'] }],
     ["requester yo'q (ichki chaqiruv)", undefined],
   ])('%s → 14 viloyat (regressiya yo‘q)', async (_label, requester) => {
     const { service } = setup({ branchByUser });
@@ -222,6 +233,51 @@ describe('uherIk8r — getAllRegionsStats doirasi', () => {
     expect(res.data.summary.totalRevenue).toBe(30_000);
   });
 
+  // iOnGbEqi (ega LG-S3/LG-S1): logist — faqat o'z viloyatlari, tushumsiz.
+  it('⭐ logist 2 viloyatga biriktirilgan → 2 qator, revenue/totalRevenue YO‘Q', async () => {
+    const { service } = setup({ branchByUser });
+    const res: any = await service.getAllRegionsStats(undefined, undefined, {
+      id: '42',
+      roles: ['logist'],
+    });
+    expect(res.data.regions.map((r: any) => r.id).sort()).toEqual(['5', '9']);
+    for (const row of res.data.regions) {
+      expect(row).not.toHaveProperty('revenue');
+      expect(row.logist_id).toBe('42');
+    }
+    expect(res.data.regions.find((r: any) => r.id === '5')).toEqual(
+      expect.objectContaining({
+        totalOrders: 2,
+        deliveredOrders: 1,
+        cancelledOrders: 1,
+      }),
+    );
+    expect(res.data.summary).not.toHaveProperty('totalRevenue');
+    expect(res.data.summary).toEqual(
+      expect.objectContaining({
+        totalRegions: 2,
+        totalOrders: 3,
+        deliveredOrders: 2,
+        cancelledOrders: 1,
+      }),
+    );
+    const body = JSON.stringify(res.data);
+    expect(body).not.toMatch(/[Rr]evenue/);
+    expect(body).not.toContain('Viloyat-3');
+    expect(body).not.toContain('99000');
+  });
+
+  it('viloyat biriktirilmagan logist → bo‘sh ro‘yxat, buyurtmalar so‘ralmaydi', async () => {
+    const { service, findOrders } = setup({ branchByUser });
+    const res: any = await service.getAllRegionsStats(undefined, undefined, {
+      id: '77777',
+      roles: ['logist'],
+    });
+    expect(res.data.regions).toEqual([]);
+    expect(res.data.summary).not.toHaveProperty('totalRevenue');
+    expect(findOrders).not.toHaveBeenCalled();
+  });
+
   it('filialga biriktirilmagan menejer → hech bir viloyat (fail-closed)', async () => {
     const { service, findOrders } = setup({ branchByUser: {} });
     const res: any = await service.getAllRegionsStats(undefined, undefined, {
@@ -259,19 +315,52 @@ describe('uherIk8r — getRegionDetailedStats doirasi', () => {
     expect(res.data.region.id).toBe('5');
   });
 
-  it('admin va logist istalgan viloyat → 200', async () => {
+  it('admin istalgan viloyat → 200 (tushum bilan, o‘zgarmagan)', async () => {
     const { service } = setup({ branchByUser });
-    for (const requester of [
+    const res: any = await service.getRegionDetailedStats(
+      '9',
+      undefined,
+      undefined,
       { id: '1', roles: ['admin'] },
+    );
+    expect(res.data.region.id).toBe('9');
+    expect(res.data.summary.totalRevenue).toBe(99_000);
+  });
+
+  it('⭐ logist: o‘z viloyati → 200, totalRevenue hech qayerda yo‘q', async () => {
+    const { service } = setup({ branchByUser });
+    const res: any = await service.getRegionDetailedStats(
+      '5',
+      undefined,
+      undefined,
       { id: '42', roles: ['logist'] },
-    ]) {
-      const res: any = await service.getRegionDetailedStats(
-        '9',
-        undefined,
-        undefined,
-        requester,
+    );
+    expect(res.data.region.id).toBe('5');
+    expect(res.data.summary).not.toHaveProperty('totalRevenue');
+    expect(res.data.summary).toEqual(
+      expect.objectContaining({ totalOrders: 2, deliveredOrders: 1 }),
+    );
+    expect(res.data.couriers.length).toBeGreaterThan(0);
+    for (const row of [...res.data.couriers, ...res.data.districts]) {
+      expect(row).not.toHaveProperty('totalRevenue');
+    }
+    // Kuryer ismi/telefoni (logist nazorati uchun) qoladi.
+    expect(res.data.couriers[0]).toEqual(
+      expect.objectContaining({ name: 'Kuryer Ali' }),
+    );
+    expect(JSON.stringify(res.data)).not.toMatch(/[Rr]evenue/);
+  });
+
+  it('⛔ logist: boshqa logistning yoki biriktirilmagan viloyat → 403', async () => {
+    const { service } = setup({ branchByUser });
+    for (const regionId of ['3', '14']) {
+      const err = await rpcError(
+        service.getRegionDetailedStats(regionId, undefined, undefined, {
+          id: '42',
+          roles: ['logist'],
+        }),
       );
-      expect(res.data.region.id).toBe('9');
+      expect(err.statusCode).toBe(403);
     }
   });
 

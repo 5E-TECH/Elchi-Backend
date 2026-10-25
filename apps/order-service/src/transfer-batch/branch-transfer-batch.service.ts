@@ -1190,6 +1190,13 @@ export class BranchTransferBatchService {
     date?: string;
     page?: number;
     limit?: number;
+    /** Z3pUOxou (N17): maqsad viloyat filtri. */
+    target_region_id?: string;
+    /**
+     * Z3pUOxou — LOGIST doirasi: faqat shu maqsad viloyatlari. Bo'sh massiv —
+     * HECH NARSA (fail-closed), `undefined` — filtr yo'q.
+     */
+    target_region_ids?: string[];
   }) {
     const sourceBranchId = String(input?.source_branch_id ?? '').trim();
     const destinationBranchId = String(
@@ -1225,6 +1232,34 @@ export class BranchTransferBatchService {
       qb.andWhere('batch.destination_branch_id = :destinationBranchId', {
         destinationBranchId,
       });
+    }
+
+    // Z3pUOxou (N17): maqsad viloyat filtri; buzuq id — 400 (bazaga yetmaydi).
+    const targetRegionId = String(input?.target_region_id ?? '').trim();
+    if (targetRegionId) {
+      if (!/^[0-9]{1,19}$/.test(targetRegionId)) {
+        this.badRequest("target_region_id noto'g'ri");
+      }
+      qb.andWhere('batch.target_region_id = :targetRegionId', {
+        targetRegionId,
+      });
+    }
+    // Z3pUOxou: logist doirasi — maqsad viloyat to'plami.
+    if (Array.isArray(input?.target_region_ids)) {
+      const scopedRegionIds = Array.from(
+        new Set(
+          input.target_region_ids
+            .map((id) => String(id ?? '').trim())
+            .filter((id) => /^[0-9]{1,19}$/.test(id)),
+        ),
+      );
+      if (scopedRegionIds.length) {
+        qb.andWhere('batch.target_region_id IN (:...scopedTargetRegionIds)', {
+          scopedTargetRegionIds: scopedRegionIds,
+        });
+      } else {
+        qb.andWhere('1 = 0');
+      }
     }
 
     if (statusRaw) {

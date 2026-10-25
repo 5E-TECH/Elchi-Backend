@@ -1,4 +1,13 @@
-import { Controller, Get, Inject, Query, Req, UseGuards } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Inject,
+  Logger,
+  Optional,
+  Query,
+  Req,
+  UseGuards,
+} from '@nestjs/common';
 import { firstValueFrom, timeout } from 'rxjs';
 import { ClientProxy } from '@nestjs/microservices';
 import {
@@ -10,6 +19,10 @@ import {
 import { Roles as RoleEnum } from '@app/common';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
 import { Public } from './auth/public.decorator';
+import {
+  LogistRegionScopeService,
+  isLogistRequester,
+} from './auth/logist-scope';
 
 interface JwtUser {
   sub: string;
@@ -27,7 +40,37 @@ export class SearchGatewayController {
   constructor(
     @Inject('SEARCH') private readonly searchClient: ClientProxy,
     @Inject('IDENTITY') private readonly identityClient: ClientProxy,
+    // hGcR8kio — logist viloyatlari (yo'q bo'lsa logist faqat viloyat/tuman
+    // nomlarini topadi — fail-closed).
+    @Optional() private readonly logistScope?: LogistRegionScopeService,
   ) {}
+
+  private readonly logger = new Logger(SearchGatewayController.name);
+
+  /**
+   * hGcR8kio — LOGIST qidiruvi o'z viloyatlari doirasida: viloyatlar
+   * logistics'dan (gateway yordamchisi). Logist emas — `null` (maydon
+   * uzatilmaydi). Xato yoki xizmat yo'q — `[]` (FAIL-CLOSED: buyurtma/mijoz
+   * chiqmaydi, qidiruv yiqilmaydi).
+   */
+  private async resolveLogistRegionIds(
+    user: JwtUser | undefined,
+  ): Promise<string[] | null> {
+    if (!isLogistRequester(user?.roles)) {
+      return null;
+    }
+    if (!this.logistScope) {
+      return [];
+    }
+    try {
+      return await this.logistScope.regionIds(user?.sub);
+    } catch (error) {
+      this.logger.warn(
+        `search (logist ${user?.sub}): viloyatlar olinmadi — buyurtma/mijoz natijasi yo'q: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return [];
+    }
+  }
 
   /**
    * ISeuwhfr — MARKET_OPERATOR qidiruvi biriktirilgan marketi doirasida:
@@ -78,7 +121,8 @@ export class SearchGatewayController {
   @ApiOperation({
     summary: 'Global search',
     description:
-      "Imtiyozsiz rollar: buyurtma hujjatlari faqat o'ziniki (market/kuryer/mijoz). ISeuwhfr: market operatori — biriktirilgan marketining buyurtmalari (market biriktirilmagan bo'lsa buyurtma chiqmaydi).",
+      "Imtiyozsiz rollar: buyurtma hujjatlari faqat o'ziniki (market/kuryer/mijoz). ISeuwhfr: market operatori — biriktirilgan marketining buyurtmalari (market biriktirilmagan bo'lsa buyurtma chiqmaydi). " +
+      "hGcR8kio — LOGIST: o'ziga biriktirilgan viloyatlardagi buyurtmalar, shu viloyatlarda buyurtmasi bor mijozlar (ism/telefon bo'yicha, telefon formati normallashtiriladi), o'z viloyatlari pochtalari va viloyat/tuman nomlari; xodimlar (kuryer, menejer, market) va boshqa manbalar yo'q. Natija — faqat {id, source, type, sourceId, title} (summa, telefon, metadata yo'q).",
   })
   @ApiQuery({ name: 'q', required: false, type: String })
   @ApiQuery({ name: 'type', required: false, type: String })
@@ -94,6 +138,7 @@ export class SearchGatewayController {
     @Req() req?: { user: JwtUser },
   ) {
     const operatorMarketId = await this.resolveOperatorMarketId(req?.user);
+    const logistRegionIds = await this.resolveLogistRegionIds(req?.user);
     return firstValueFrom(
       this.searchClient
         .send<unknown>(
@@ -111,6 +156,10 @@ export class SearchGatewayController {
               // ISeuwhfr: faqat market operatori uchun (identity'dan).
               ...(operatorMarketId !== null
                 ? { market_id: operatorMarketId }
+                : {}),
+              // hGcR8kio: faqat logist uchun (logistics'dan).
+              ...(logistRegionIds !== null
+                ? { region_ids: logistRegionIds }
                 : {}),
             },
           },

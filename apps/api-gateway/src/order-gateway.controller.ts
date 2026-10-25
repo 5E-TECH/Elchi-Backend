@@ -128,6 +128,13 @@ import {
 import { projectOrderPayloadForRoles } from './auth/order-role-projection';
 import { projectOrderTrackingForRoles } from './auth/order-tracking-projection';
 import {
+  LogistRegionScopeService,
+  isLogistRequester,
+  isRowInLogistRegions,
+  projectLogistPayload,
+  resolveLogistRegionFilter,
+} from './auth/logist-scope';
+import {
   mapOrderCreateInProgress,
   resolveOrderCreateRequestId,
 } from './order-create/order-create-idempotency';
@@ -192,6 +199,14 @@ type OrderListRequest =
       roles: string[];
       pagination: { page: number; limit: number };
       query: Record<string, unknown>;
+      /** 4BftLLnc: logist doirasi — javob qatorlari shu to'plam bilan qayta tekshiriladi. */
+      logistRegionIds?: string[];
+    }
+  | {
+      // 4BftLLnc: viloyat biriktirilmagan logist — bo'sh ro'yxat (403 emas).
+      kind: 'empty';
+      roles: string[];
+      pagination: { page: number; limit: number };
     };
 
 type UploadedProofFile = {
@@ -436,9 +451,24 @@ export class OrderGatewayController {
     @Optional() @Inject('CATALOG') private readonly catalogClient?: ClientProxy,
     @Optional() private readonly config?: ConfigService,
     @Optional() private readonly aiStatus?: AiStatusPoller,
+    // 4BftLLnc — logist viloyatlari (umumiy kesh). Yo'q bo'lsa (eski
+    // spec'lar) — shu kontrollerning LOGISTICS mijozi bilan lokal nusxa.
+    @Optional() private readonly logistScope?: LogistRegionScopeService,
   ) {}
 
   private readonly logger = new Logger(OrderGatewayController.name);
+
+  private logistScopeFallback?: LogistRegionScopeService;
+
+  /** 4BftLLnc: logistning viloyat id'lari (xato — 503, fail-closed). */
+  private logistRegionIds(user: JwtUser | undefined): Promise<string[]> {
+    const scope =
+      this.logistScope ??
+      (this.logistScopeFallback ??= new LogistRegionScopeService(
+        this.logisticsClient,
+      ));
+    return scope.regionIds(user?.sub);
+  }
 
   private hqBranchIdCache: { id: string; at: number } | null = null;
 
@@ -780,6 +810,11 @@ export class OrderGatewayController {
         ? undefined
         : denied();
     }
+    // 4BftLLnc (LG-S3): logist — faqat o'z viloyatidagi buyurtma.
+    if (isLogistRequester(roles)) {
+      const regionIds = await this.logistRegionIds(reqUser);
+      return isRowInLogistRegions(order, regionIds) ? undefined : denied();
+    }
     // operator / investor / unknown roles: no per-order access.
     return denied();
   }
@@ -997,6 +1032,12 @@ export class OrderGatewayController {
       return (await this.isHqHeldOrderForBranch(branchId, holderType))
         ? undefined
         : denied();
+    }
+
+    // 4BftLLnc (LG-S1/LG-S3): logist — o'z viloyatidagi buyurtma tarixi.
+    if (isLogistRequester(roles)) {
+      const regionIds = await this.logistRegionIds(reqUser);
+      return isRowInLogistRegions(order, regionIds) ? undefined : denied();
     }
 
     return denied();
@@ -3323,7 +3364,12 @@ export class OrderGatewayController {
   @ApiBearerAuth()
   @ApiOperation({
     summary: 'List orders with filters',
-    description: CANCEL_RETURN_RESPONSE_DOC,
+    description:
+      CANCEL_RETURN_RESPONSE_DOC +
+      '\n\n' +
+      "4BftLLnc — LOGIST: faqat o'ziga biriktirilgan viloyatlar (regions.logist_id = me) buyurtmalari, pul maydonlarisiz " +
+      '(total_price, sale_collectible_amount, paid_online_amount, extra_cost, tariflar, ulushlar). `region_id` faqat o‘z ' +
+      "viloyatlaridan biri bo'lishi mumkin (boshqasi — 400). Viloyat biriktirilmagan logist — 200 va bo'sh ro'yxat.",
   })
   @ApiQuery({ name: 'market_id', required: false, type: String })
   @ApiQuery({ name: 'customer_id', required: false, type: String })
@@ -3470,6 +3516,17 @@ export class OrderGatewayController {
     );
     const { roles, pagination } = request;
 
+    if (request.kind === 'empty') {
+      // 4BftLLnc: viloyat biriktirilmagan logist — 200, bo'sh ro'yxat.
+      return {
+        data: [],
+        total: 0,
+        page: pagination.page,
+        limit: pagination.limit,
+        ...this.buildPaginationMeta(0, pagination.page, pagination.limit),
+      };
+    }
+
     if (request.kind === 'courier_cancelled') {
       const { data, total } = await this.findCourierCancelledRows(
         req?.user,
@@ -3509,9 +3566,44 @@ export class OrderGatewayController {
       // kH2zZsz3: ro'yxat qatorlari ham detal bilan AYNI rol proyeksiyasida.
       return projectOrderPayloadForRoles(
         roles,
-        this.withPaginationMeta(response, pagination),
+        this.withPaginationMeta(
+          request.logistRegionIds
+            ? this.keepLogistRegionRows(response, request.logistRegionIds)
+            : response,
+          pagination,
+        ),
       );
     });
+  }
+
+  /**
+   * 4BftLLnc — himoya qatlami: order-service `region_ids` filtrini bilmasa
+   * (deploy tartibi) ham logistga o'z viloyatidan tashqari qator chiqmaydi.
+   */
+  private keepLogistRegionRows(
+    response: unknown,
+    regionIds: readonly string[],
+  ): unknown {
+    if (!response || typeof response !== 'object') {
+      return response;
+    }
+    const body = response as Record<string, unknown>;
+    const rows = Array.isArray(response)
+      ? (response as unknown[])
+      : Array.isArray(body.data)
+        ? (body.data as unknown[])
+        : null;
+    if (!rows) {
+      return response;
+    }
+    const kept = rows.filter((row) => isRowInLogistRegions(row, regionIds));
+    if (kept.length === rows.length) {
+      return response;
+    }
+    this.logger.warn(
+      `GET /orders (logist): ${rows.length - kept.length} ta begona viloyat qatori olib tashlandi — order-service region_ids filtrini qo'llamadi`,
+    );
+    return Array.isArray(response) ? kept : { ...body, data: kept };
   }
 
   /**
@@ -3626,6 +3718,9 @@ export class OrderGatewayController {
     const { roles } = request;
 
     const fetchPage = async (page: number): Promise<OrderExportPage> => {
+      if (request.kind === 'empty') {
+        return { rows: [], total: 0 };
+      }
       if (request.kind === 'courier_cancelled') {
         const { data, total } = await this.findCourierCancelledRows(
           req?.user,
@@ -3751,6 +3846,9 @@ export class OrderGatewayController {
       !isSystemPrivilegedRequester &&
       !isMarket &&
       normalizedRoles.includes(RoleEnum.MARKET_OPERATOR);
+    // 4BftLLnc (LG-S1/LG-S3): logist — faqat o'z viloyatlari (regions.logist_id
+    // = me), faqat o'qish. Boshqa doirali rol bilan kelsa o'sha rol ustun.
+    const isLogist = isLogistRequester(normalizedRoles);
     const requesterId = user?.sub;
 
     // fix3 C11 / CODE-04: OPERATOR, INVESTOR va noma'lum rollar uchun doira
@@ -3761,10 +3859,23 @@ export class OrderGatewayController {
       !isCourier &&
       !isBranchScopedRequester &&
       !isCustomer &&
-      !isMarketOperator
+      !isMarketOperator &&
+      !isLogist
     ) {
       throw new ForbiddenException(
         "Buyurtmalar ro'yxatini ko'rishga ruxsat yo'q",
+      );
+    }
+
+    // 4BftLLnc: doira SERVERDA — `region_id` filtri faqat o'z to'plami ichida
+    // (boshqa viloyat — 400). Logistics javob bermasa — 503 (fail-closed).
+    let logistRegionIds: string[] | undefined;
+    let logistRegionFilter: string | null = null;
+    if (isLogist) {
+      logistRegionIds = await this.logistRegionIds(user);
+      logistRegionFilter = resolveLogistRegionFilter(
+        region_id,
+        logistRegionIds,
       );
     }
 
@@ -3813,6 +3924,10 @@ export class OrderGatewayController {
     }
 
     const pagination = this.parsePaginationQuery(page, limit);
+    if (logistRegionIds && !logistRegionIds.length) {
+      // «Sizga hali viloyat biriktirilmagan» — 200 va bo'sh ro'yxat.
+      return { kind: 'empty', roles, pagination };
+    }
     const normalizedCourierIds = (
       Array.isArray(courier_ids)
         ? courier_ids
@@ -3923,7 +4038,9 @@ export class OrderGatewayController {
         courier,
         courier_ids: resolvedCourierIds,
         fetch_all: useFetchAll || undefined,
-        region_id,
+        region_id: isLogist ? (logistRegionFilter ?? undefined) : region_id,
+        // 4BftLLnc: logist doirasi (order-service: region_id IN (...)).
+        ...(logistRegionIds ? { region_ids: logistRegionIds } : {}),
         district_id,
         branch_id: resolvedBranchId,
         holder_type: isHqCancelledTab
@@ -3940,6 +4057,7 @@ export class OrderGatewayController {
           ? { fulfillment_source: normalizedFulfillmentSource }
           : {}),
       },
+      ...(logistRegionIds ? { logistRegionIds } : {}),
     };
   }
 
@@ -5103,7 +5221,10 @@ export class OrderGatewayController {
   @ApiBearerAuth()
   @ApiOperation({
     summary: 'Get order by ID',
-    description: CANCEL_RETURN_RESPONSE_DOC,
+    description:
+      CANCEL_RETURN_RESPONSE_DOC +
+      '\n\n' +
+      "4BftLLnc — LOGIST: buyurtma o'z viloyatida bo'lsa (aks holda 403), pul maydonlarisiz.",
   })
   @ApiParam({ name: 'id', description: 'Order ID (uuid)' })
   async findById(@Param('id') id: string, @Req() req?: { user: JwtUser }) {
@@ -5312,9 +5433,15 @@ export class OrderGatewayController {
     // Ho5qcDn4 TC9: market — faqat o'z buyurtmasi (assertCanViewOrderTracking),
     // xodim `actor` i qisqartirilgan (projectOrderTrackingForRoles).
     RoleEnum.MARKET,
+    // 4BftLLnc (LG-S1): logist — faqat o'z viloyatidagi buyurtma, pulsiz.
+    RoleEnum.LOGIST,
   )
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Get order tracking history by ID' })
+  @ApiOperation({
+    summary: 'Get order tracking history by ID',
+    description:
+      "4BftLLnc — LOGIST: o'z viloyatidagi buyurtma tarixi (boshqasi — 403), hodisalarda pul maydonlari yo'q.",
+  })
   @ApiParam({ name: 'id', description: 'Order ID (uuid)' })
   @ApiQuery({ name: 'page', required: false, type: Number, example: 1 })
   @ApiQuery({ name: 'limit', required: false, type: Number, example: 20 })
@@ -5347,7 +5474,11 @@ export class OrderGatewayController {
       }
       throw error;
     });
-    return projectOrderTrackingForRoles(req?.user?.roles, tracking);
+    // 4BftLLnc: logistga tarix hodisalaridagi pul maydonlari ham chiqmaydi.
+    return projectLogistPayload(
+      req?.user?.roles,
+      projectOrderTrackingForRoles(req?.user?.roles, tracking),
+    );
   }
 
   @Post('sell/:id')

@@ -127,4 +127,49 @@ describe('15N7AHkp — transfer-batches meta.total haqiqiy', () => {
     expect(qb.orderBy).toHaveBeenCalledWith('batch.createdAt', 'DESC');
     expect(qb.addOrderBy).toHaveBeenCalledWith('batch.id', 'DESC');
   });
+  // Z3pUOxou — logist doirasi va N17 maqsad viloyat filtri.
+  it('target_region_ids: faqat shu maqsad viloyatlari (buzuq qiymat tashlanadi)', async () => {
+    const { service, qb } = setup([], 0);
+
+    await service.findBranchTransferBatches({
+      target_region_ids: ['5', '9', '9', "1'; --", ''],
+    });
+
+    expect(qb.andWhere).toHaveBeenCalledWith(
+      'batch.target_region_id IN (:...scopedTargetRegionIds)',
+      { scopedTargetRegionIds: ['5', '9'] },
+    );
+    expect(qb.andWhere).not.toHaveBeenCalledWith('1 = 0');
+  });
+
+  it('target_region_ids: bo‘sh to‘plam — hech qanday qator (fail-closed)', async () => {
+    const { service, qb } = setup([], 0);
+
+    await service.findBranchTransferBatches({ target_region_ids: [] });
+
+    expect(qb.andWhere).toHaveBeenCalledWith('1 = 0');
+  });
+
+  it('target_region_id filtri; buzuq id — 400; berilmasa — filtr yo‘q', async () => {
+    const { service, qb } = setup([], 0);
+    await service.findBranchTransferBatches({ target_region_id: ' 5 ' });
+    expect(qb.andWhere).toHaveBeenCalledWith(
+      'batch.target_region_id = :targetRegionId',
+      { targetRegionId: '5' },
+    );
+
+    await expect(
+      service.findBranchTransferBatches({ target_region_id: 'abc' }),
+    ).rejects.toBeDefined();
+
+    const plain = setup([], 0);
+    await plain.service.findBranchTransferBatches({});
+    const sqls = (plain.qb.andWhere.mock.calls as unknown[][]).map(
+      ([sql]) => sql,
+    );
+    expect(sqls).not.toContain('batch.target_region_id = :targetRegionId');
+    expect(sqls).not.toContain(
+      'batch.target_region_id IN (:...scopedTargetRegionIds)',
+    );
+  });
 });
