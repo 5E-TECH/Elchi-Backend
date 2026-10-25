@@ -1280,7 +1280,67 @@ export class OrderServiceService {
     };
   }
 
-  async findNewMarkets(branch_id?: string, exclude_branch_source = false) {
+  /**
+   * CU4zfcds — market ro'yxatlari (yangi/bekor) uchun yaratilgan sana oralig'i:
+   * GET /orders bilan AYNI Toshkent kuni qoidasi (`tashkentDayRange`).
+   */
+  private applyCreatedDayRange(
+    qb: { andWhere: (sql: string, params: Record<string, unknown>) => unknown },
+    start_day?: string,
+    end_day?: string,
+  ) {
+    const dayRange = tashkentDayRange(start_day, end_day);
+    if (dayRange.start) {
+      if (Number.isNaN(dayRange.start.getTime())) {
+        throw new RpcException({
+          statusCode: 400,
+          message: "start_day noto'g'ri sana formatida",
+        });
+      }
+      qb.andWhere('order.createdAt >= :startDate', {
+        startDate: dayRange.start,
+      });
+    }
+    if (dayRange.end) {
+      if (Number.isNaN(dayRange.end.getTime())) {
+        throw new RpcException({
+          statusCode: 400,
+          message: "end_day noto'g'ri sana formatida",
+        });
+      }
+      qb.andWhere('order.createdAt <= :endDate', { endDate: dayRange.end });
+    }
+  }
+
+  /**
+   * CU4zfcds — market qatorlarini market nomi / telefoni bo'yicha qidirish
+   * (guruhlangan ro'yxat, qatorlar kam — xotirada). Market profili topilmagan
+   * qator qidiruvda chiqmaydi.
+   */
+  private filterMarketRowsBySearch<
+    T extends { market: Record<string, any> | null },
+  >(rows: T[], search?: string): T[] {
+    const needle = search?.trim().toLowerCase() ?? '';
+    if (!needle) return rows;
+    const digits = needle.replace(/\D/g, '');
+    return rows.filter((row) => {
+      const m = row.market;
+      if (!m) return false;
+      const name = String(m.name ?? '').toLowerCase();
+      if (name.includes(needle)) return true;
+      if (digits.length >= 3) {
+        const phone = String(m.phone_number ?? '').replace(/\D/g, '');
+        if (phone.includes(digits)) return true;
+      }
+      return false;
+    });
+  }
+
+  async findNewMarkets(
+    branch_id?: string,
+    exclude_branch_source = false,
+    days: { start_day?: string; end_day?: string } = {},
+  ) {
     const qb = this.orderRepo
       .createQueryBuilder('order')
       .select('order.market_id', 'market_id')
@@ -1300,6 +1360,7 @@ export class OrderServiceService {
         branch_source: Order_source.BRANCH,
       });
     }
+    this.applyCreatedDayRange(qb, days.start_day, days.end_day);
 
     let rows: Array<{
       market_id: string;
@@ -1323,6 +1384,7 @@ export class OrderServiceService {
     market_id: string,
     branch_id?: string,
     exclude_branch_source = false,
+    days: { start_day?: string; end_day?: string } = {},
   ) {
     return this.findAll({
       market_id,
@@ -1332,6 +1394,8 @@ export class OrderServiceService {
       ...(exclude_branch_source
         ? { exclude_sources: [Order_source.BRANCH] }
         : {}),
+      ...(days.start_day ? { start_day: days.start_day } : {}),
+      ...(days.end_day ? { end_day: days.end_day } : {}),
       disable_pagination: true,
     });
   }
@@ -1341,6 +1405,8 @@ export class OrderServiceService {
     branch_id?: string;
     holder_type?: OrderHolderType;
     exclude_branch_source?: boolean;
+    start_day?: string;
+    end_day?: string;
   }) {
     const qb = this.orderRepo
       .createQueryBuilder('order')
@@ -1375,6 +1441,7 @@ export class OrderServiceService {
         branch_source: Order_source.BRANCH,
       });
     }
+    this.applyCreatedDayRange(qb, options.start_day, options.end_day);
 
     let rows: Array<{
       market_id: string;
@@ -2657,6 +2724,9 @@ export class OrderServiceService {
     district_id?: string;
     sort_by?: string;
     sort_dir?: string;
+    /** CU4zfcds: market NEW ro'yxati (`findNewByMarketEnriched`) — `findAll` ga o'tadi. */
+    unbatched_only?: boolean;
+    exclude_sources?: Order_source[];
     // `source`/`fetch_all` — tashqi (EXTERNAL) posilkalar ro'yxati uchun
     // (findAllExternal shu yo'lni ishlatadi, DL6FCdrh). findAll ularni
     // qo'llab-quvvatlaydi; bu yerda faqat tip ochiladi.
@@ -2749,8 +2819,12 @@ export class OrderServiceService {
   async findNewMarketsEnriched(
     branch_id?: string,
     exclude_branch_source = false,
+    filters: { search?: string; start_day?: string; end_day?: string } = {},
   ) {
-    const rows = await this.findNewMarkets(branch_id, exclude_branch_source);
+    const rows = await this.findNewMarkets(branch_id, exclude_branch_source, {
+      start_day: filters.start_day,
+      end_day: filters.end_day,
+    });
     const marketIds = rows.map((r) => r.market_id).filter(Boolean);
 
     if (!marketIds.length) return rows;
@@ -2770,10 +2844,13 @@ export class OrderServiceService {
       ]),
     );
 
-    return rows.map((row) => ({
-      ...row,
-      market: marketMap.get(row.market_id) ?? null,
-    }));
+    return this.filterMarketRowsBySearch(
+      rows.map((row) => ({
+        ...row,
+        market: marketMap.get(row.market_id) ?? null,
+      })),
+      filters.search,
+    );
   }
 
   /**
@@ -2884,11 +2961,36 @@ export class OrderServiceService {
     market_id: string,
     branch_id?: string,
     exclude_branch_source = false,
+    filters: { search?: string; start_day?: string; end_day?: string } = {},
   ) {
+    // CU4zfcds: qidiruv (mijoz ismi/telefoni, «EL-…» raqam) — GET /orders bilan
+    // AYNI yechim (`findAllEnriched`), sana — Toshkent kuni.
+    if (filters.search?.trim()) {
+      const found = await this.findAllEnriched({
+        market_id,
+        branch_id,
+        status: Order_status.NEW,
+        unbatched_only: true,
+        ...(exclude_branch_source
+          ? { exclude_sources: [Order_source.BRANCH] }
+          : {}),
+        search: filters.search,
+        start_day: filters.start_day,
+        end_day: filters.end_day,
+        disable_pagination: true,
+      });
+      return {
+        data: found.data,
+        total: found.total,
+        truncated: (found as { truncated?: boolean }).truncated,
+        search_truncated: found.search_truncated,
+      };
+    }
     const result = await this.findNewOrdersByMarket(
       market_id,
       branch_id,
       exclude_branch_source,
+      { start_day: filters.start_day, end_day: filters.end_day },
     );
     const enriched = await this.enrichOrders(result.data);
     return {
@@ -2903,6 +3005,9 @@ export class OrderServiceService {
     branch_id?: string;
     holder_type?: OrderHolderType;
     exclude_branch_source?: boolean;
+    search?: string;
+    start_day?: string;
+    end_day?: string;
   }) {
     const rows = await this.findCancelledMarkets(options);
     const marketIds = rows.map((row) => row.market_id).filter(Boolean);
@@ -2924,10 +3029,13 @@ export class OrderServiceService {
       ]),
     );
 
-    return rows.map((row) => ({
-      ...row,
-      market: marketMap.get(row.market_id) ?? null,
-    }));
+    return this.filterMarketRowsBySearch(
+      rows.map((row) => ({
+        ...row,
+        market: marketMap.get(row.market_id) ?? null,
+      })),
+      options.search,
+    );
   }
 
   async findCancelledByMarketEnriched(

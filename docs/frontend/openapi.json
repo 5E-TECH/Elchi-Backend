@@ -3674,7 +3674,35 @@
     "/orders/markets/new": {
       "get": {
         "operationId": "OrderGatewayController_findNewMarkets",
-        "parameters": [],
+        "parameters": [
+          {
+            "name": "search",
+            "required": false,
+            "in": "query",
+            "description": "CU4zfcds: market nomi yoki telefoni bo‘yicha (qism)",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "start_day",
+            "required": false,
+            "in": "query",
+            "description": "CU4zfcds: yaratilgan sana boshi (YYYY-MM-DD, Toshkent kuni; GET /orders bilan bir xil)",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "end_day",
+            "required": false,
+            "in": "query",
+            "description": "CU4zfcds: yaratilgan sana oxiri (YYYY-MM-DD, Toshkent kuni, kun oxirigacha)",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": ""
@@ -3777,7 +3805,35 @@
     "/orders/markets/cancelled": {
       "get": {
         "operationId": "OrderGatewayController_findCancelledMarkets",
-        "parameters": [],
+        "parameters": [
+          {
+            "name": "search",
+            "required": false,
+            "in": "query",
+            "description": "CU4zfcds: market nomi yoki telefoni bo‘yicha (qism)",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "start_day",
+            "required": false,
+            "in": "query",
+            "description": "CU4zfcds: yaratilgan sana boshi (YYYY-MM-DD, Toshkent kuni; GET /orders bilan bir xil)",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "end_day",
+            "required": false,
+            "in": "query",
+            "description": "CU4zfcds: yaratilgan sana oxiri (YYYY-MM-DD, Toshkent kuni, kun oxirigacha)",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": ""
@@ -3873,6 +3929,33 @@
             "required": true,
             "in": "path",
             "description": "Market ID (id)",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "search",
+            "required": false,
+            "in": "query",
+            "description": "CU4zfcds: mijoz ismi/telefoni yoki «EL-…» buyurtma raqami (GET /orders bilan bir xil)",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "start_day",
+            "required": false,
+            "in": "query",
+            "description": "CU4zfcds: yaratilgan sana boshi (YYYY-MM-DD, Toshkent kuni; GET /orders bilan bir xil)",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "end_day",
+            "required": false,
+            "in": "query",
+            "description": "CU4zfcds: yaratilgan sana oxiri (YYYY-MM-DD, Toshkent kuni, kun oxirigacha)",
             "schema": {
               "type": "string"
             }

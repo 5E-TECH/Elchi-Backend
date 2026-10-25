@@ -23,6 +23,21 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-10-25 (tun) — Market yangi/bekor ro'yxatlari: `search`, `start_day`/`end_day` (CU4zfcds)
+
+Deploy: api-gateway, order-service. Migratsiya yo'q. Parametrlarsiz chaqiruv — eskisi bilan AYNI (rol doirasi
+o'zgarmagan).
+
+- [2026-10-25] ✏️ [gateway/order] — `GET /orders/markets/new` va `GET /orders/markets/cancelled`: ixtiyoriy
+  **`search`** — market nomi (qism, katta-kichik harf farqsiz) yoki telefoni (kamida 3 raqam); **`start_day`** /
+  **`end_day`** (`YYYY-MM-DD`) — buyurtma yaratilgan sanasi, Toshkent kuni (`GET /orders` bilan AYNI qoida;
+  `end_day` kun oxirigacha). Sanalar guruhlashdan OLDIN qo'llanadi — `orders_count`/`total_price_sum` shu oraliq
+  bo'yicha. Noto'g'ri sana — 400.
+- [2026-10-25] ✏️ [gateway/order] — `GET /orders/markets/:marketId/new`: **`search`** — `GET /orders` bilan AYNI
+  (mijoz ismi, asosiy/qo'shimcha telefoni, «EL-…» raqam; javobda `search_truncated`), **`start_day`/`end_day`** —
+  yaratilgan sana.
+- 🔧 FE: mijoz tomonidagi qidiruv / «bugun» filtrini olib tashlab, parametrlarni serverga yuborish.
+
 ### 2026-10-25 (tun) — Readiness `services[].error_kind`, AI `cap.warn_ratio` (Ifpimq2x)
 
 Deploy: api-gateway, ai-service. Migratsiya yo'q. Faqat qo'shimcha maydonlar (breaking emas).
