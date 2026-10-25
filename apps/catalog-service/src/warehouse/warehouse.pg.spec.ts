@@ -40,6 +40,9 @@ const MARKET_B = '502';
 const BRANCH_SAM = '11';
 const BRANCH_FAR = '12';
 const BRANCH_HQ = '1';
+/** Pa1KaXmj: topshirish punkti va nofaol HQ — ombor ochilmaydi. */
+const BRANCH_PICKUP = '13';
+const BRANCH_HQ_OFF = '14';
 const REGION_SAM = '7';
 const REGION_FAR = '8';
 const ADMIN = { id: '2', roles: ['admin'] };
@@ -115,20 +118,34 @@ const pgCode = async (promise: Promise<unknown>) => {
 
     const branches: Record<
       string,
-      { region_id: string; name: string; eligible: boolean }
+      { region_id: string; name: string; type: string; status?: string }
     > = {
       [BRANCH_SAM]: {
         region_id: REGION_SAM,
         name: 'Samarqand filiali',
-        eligible: true,
+        type: 'REGIONAL',
       },
       [BRANCH_FAR]: {
         region_id: REGION_FAR,
         name: "Farg'ona filiali",
-        eligible: true,
+        type: 'REGIONAL',
       },
-      [BRANCH_HQ]: { region_id: '1', name: 'HQ', eligible: false },
+      // HQ'ning ham region_id si bor — u baribir viloyat nomzodi emas.
+      [BRANCH_HQ]: { region_id: '1', name: 'HQ', type: 'HQ' },
+      [BRANCH_PICKUP]: {
+        region_id: REGION_SAM,
+        name: 'Samarqand punkti',
+        type: 'PICKUP',
+      },
+      [BRANCH_HQ_OFF]: {
+        region_id: '1',
+        name: 'Eski HQ',
+        type: 'HQ',
+        status: 'inactive',
+      },
     };
+    const HOST_TYPES = ['REGIONAL', 'HYBRID', 'HQ'];
+    const REGIONAL_TYPES = ['REGIONAL', 'HYBRID'];
     const marketFlags: Record<string, boolean> = {
       [MARKET_A]: true,
       [MARKET_B]: false,
@@ -137,24 +154,29 @@ const pgCode = async (promise: Promise<unknown>) => {
     const directory = {
       getBranch: jest.fn((id: string) => {
         const branch = branches[id];
+        const status = branch?.status ?? 'active';
+        const active = status === 'active';
         return Promise.resolve(
           branch
             ? {
                 id,
                 name: branch.name,
-                type: branch.eligible ? 'REGIONAL' : 'HQ',
-                status: 'active',
+                type: branch.type,
+                status,
                 address: `${branch.name} manzili`,
                 region_id: branch.region_id,
                 region: {
                   id: branch.region_id,
                   name: `Viloyat ${branch.region_id}`,
                 },
-                eligible: branch.eligible,
+                is_hq: branch.type === 'HQ',
+                can_host_warehouse: active && HOST_TYPES.includes(branch.type),
+                regional: active && REGIONAL_TYPES.includes(branch.type),
               }
             : null,
         );
       }),
+      getHqBranchId: jest.fn(() => Promise.resolve(BRANCH_HQ)),
       getBranches: jest.fn(async (ids: string[]) => {
         const map = new Map();
         for (const id of ids) map.set(id, await directory.getBranch(id));
@@ -461,12 +483,12 @@ const pgCode = async (promise: Promise<unknown>) => {
           ).toBe('23514');
         });
 
-        it('bitta filial — bitta ombor (409); HQ filialida ombor ochilmaydi (400); pauza CHECK', async () => {
+        it('bitta filial — bitta ombor (409); topshirish punktida ombor ochilmaydi (400); pauza CHECK', async () => {
           await openWarehouse();
           expect(await errorOf(openWarehouse())).toMatchObject({
             statusCode: 409,
           });
-          expect(await errorOf(openWarehouse(BRANCH_HQ))).toMatchObject({
+          expect(await errorOf(openWarehouse(BRANCH_PICKUP))).toMatchObject({
             statusCode: 400,
           });
           expect(
@@ -524,6 +546,111 @@ const pgCode = async (promise: Promise<unknown>) => {
             ADMIN,
           );
           expect(cleared.manager_user_id).toBeNull();
+        });
+
+        it('⭐ Pa1KaXmj: HQ filialida «Markaziy ombor» ochiladi — mas`ul null, nom sukuti, kind HQ; ikkinchisi — 409; HQ + manager_user_id — 400; PICKUP va nofaol HQ — 400', async () => {
+          // Mas'ul berilsa — 400, hech narsa yaratilmaydi.
+          const withManager = await errorOf(
+            warehouses.create(
+              { branch_id: BRANCH_HQ, manager_user_id: '31' },
+              ADMIN,
+            ),
+          );
+          expect(withManager).toMatchObject({
+            statusCode: 400,
+            message: "Markaziy omborga mas'ul menejer biriktirilmaydi",
+          });
+          expect(directory.getBranchManagerIds).not.toHaveBeenCalled();
+
+          const hq = await warehouses.create({ branch_id: BRANCH_HQ }, ADMIN);
+          expect(hq).toMatchObject({
+            name: 'Markaziy ombor',
+            kind: 'HQ',
+            status: 'ACTIVE',
+            branch_id: BRANCH_HQ,
+            branch: { id: BRANCH_HQ, type: 'HQ' },
+            manager_user_id: null,
+            manager: null,
+          });
+          // Avtomatik «birinchi faol menejer» Markaziy omborda chaqirilmaydi.
+          expect(
+            directory.getFirstActiveBranchManagerId,
+          ).not.toHaveBeenCalled();
+          expect(activityLog.log).toHaveBeenCalledWith(
+            expect.objectContaining({
+              entity_type: 'Warehouse',
+              entity_id: hq.id,
+              description: `Markaziy ombor #${hq.id} ochildi (HQ filiali #${BRANCH_HQ})`,
+            }),
+          );
+
+          // HQ bitta — Markaziy ombor ham bitta (bitta filial — bitta ombor).
+          expect(
+            await errorOf(warehouses.create({ branch_id: BRANCH_HQ }, ADMIN)),
+          ).toMatchObject({ statusCode: 409, warehouse_id: hq.id });
+
+          for (const branchId of [BRANCH_PICKUP, BRANCH_HQ_OFF]) {
+            expect(
+              await errorOf(warehouses.create({ branch_id: branchId }, ADMIN)),
+            ).toMatchObject({
+              statusCode: 400,
+              message:
+                "Ombor faqat faol filialda (HQ, REGIONAL yoki HYBRID) ochiladi — topshirish punktida ombor yo'q",
+            });
+          }
+
+          // Nom berilsa — o'sha nom; `manager_user_id: null` — mas'ulsiz.
+          await db.query(
+            `UPDATE "${CATALOG}".warehouses SET is_deleted = true WHERE id = $1`,
+            [hq.id],
+          );
+          const named = await warehouses.create(
+            {
+              branch_id: BRANCH_HQ,
+              name: 'Toshkent markaziy ombori',
+              manager_user_id: null,
+            },
+            ADMIN,
+          );
+          expect(named).toMatchObject({
+            name: 'Toshkent markaziy ombori',
+            kind: 'HQ',
+            manager_user_id: null,
+          });
+
+          // Tahrirda ham: aniq mas'ul — 400, `null` — `null` qoladi.
+          expect(
+            await errorOf(
+              warehouses.update(named.id, { manager_user_id: '31' }, ADMIN),
+            ),
+          ).toMatchObject({
+            statusCode: 400,
+            message: "Markaziy omborga mas'ul menejer biriktirilmaydi",
+          });
+          const cleared = await warehouses.update(
+            named.id,
+            { manager_user_id: null, note: 'Asosiy zaxira' },
+            ADMIN,
+          );
+          expect(cleared).toMatchObject({
+            manager_user_id: null,
+            note: 'Asosiy zaxira',
+            kind: 'HQ',
+          });
+          expect(
+            directory.getFirstActiveBranchManagerId,
+          ).not.toHaveBeenCalled();
+
+          // Ro'yxat va ichki findByIds — `kind` bilan.
+          const sam = await openWarehouse();
+          const list = await warehouses.findAll({});
+          expect(
+            Object.fromEntries(list.data.map((row) => [row.id, row.kind])),
+          ).toEqual({ [named.id]: 'HQ', [sam.id]: 'REGIONAL' });
+          const byIds = await warehouses.findByIds([named.id, sam.id]);
+          expect(
+            Object.fromEntries(byIds.data.map((row) => [row.id, row.kind])),
+          ).toEqual({ [named.id]: 'HQ', [sam.id]: 'REGIONAL' });
         });
 
         it('mas`ul xodim filial menejeri bo`lmasa — 400', async () => {
@@ -1307,6 +1434,95 @@ const pgCode = async (promise: Promise<unknown>) => {
           ).toMatchObject({ source: 'WAREHOUSE' });
         });
 
+        it('⭐ Pa1KaXmj: Markaziy ombor (HQ`ning region_id si bo`lsa ham) resolve_source/availability nomzodi EMAS; viloyat natijasi o`zgarmaydi', async () => {
+          const hq = await warehouses.create({ branch_id: BRANCH_HQ }, ADMIN);
+          const a = await addProduct('Quloqchin');
+          await stockIn(hq.id, [{ product_id: a.id, qty: 50 }]);
+          const items = [{ product_id: a.id, quantity: 1 }];
+
+          // HQ hududi ('1') — boshqa ombor yo'q: Markaziy ombor tanlanmaydi.
+          expect(
+            await warehouses.resolveSource({ region_id: '1', items }),
+          ).toMatchObject({
+            source: 'HQ',
+            reason: 'NO_WAREHOUSE',
+            region_id: '1',
+            warehouse: null,
+          });
+          expect(
+            await warehouses.availability({
+              region_id: '1',
+              market_id: MARKET_A,
+            }),
+          ).toEqual({ region_id: '1', warehouse: null, items: [] });
+
+          // HQ'ning hududi viloyat bilan bir xil bo'lsa ham — faqat viloyat
+          // ombori nomzod; unda yetmasa — HQ (Markaziy ombor qoldig'i emas).
+          const original = branches[BRANCH_HQ].region_id;
+          branches[BRANCH_HQ].region_id = REGION_SAM;
+          try {
+            expect(
+              await warehouses.resolveSource({ region_id: REGION_SAM, items }),
+            ).toMatchObject({ source: 'HQ', reason: 'NO_WAREHOUSE' });
+
+            const sam = await openWarehouse();
+            await stockIn(sam.id, [{ product_id: a.id, qty: 1 }]);
+            const ok = await warehouses.resolveSource({
+              region_id: REGION_SAM,
+              items,
+            });
+            expect(ok).toMatchObject({
+              source: 'WAREHOUSE',
+              reason: 'OK',
+              warehouse: {
+                id: sam.id,
+                kind: 'REGIONAL',
+                branch_id: BRANCH_SAM,
+              },
+            });
+            const short = await warehouses.resolveSource({
+              region_id: REGION_SAM,
+              items: [{ product_id: a.id, quantity: 2 }],
+            });
+            expect(short).toMatchObject({
+              source: 'HQ',
+              reason: 'INSUFFICIENT_STOCK',
+              warehouse: { id: sam.id, kind: 'REGIONAL' },
+              shortages: [
+                expect.objectContaining({ required: 2, available: 1 }),
+              ],
+            });
+            const availability = await warehouses.availability({
+              region_id: REGION_SAM,
+              market_id: MARKET_A,
+            });
+            expect(availability.warehouse).toMatchObject({
+              id: sam.id,
+              kind: 'REGIONAL',
+            });
+            expect(availability.items).toEqual([
+              { product_id: a.id, on_hand: 1, reserved: 0, available: 1 },
+            ]);
+
+            // Viloyat ombori pauzada — HQ (Markaziy omborga o'tilmaydi).
+            await warehouses.setStatus(sam.id, 'PAUSED', ADMIN);
+            expect(
+              await warehouses.resolveSource({ region_id: REGION_SAM, items }),
+            ).toMatchObject({
+              source: 'HQ',
+              reason: 'WAREHOUSE_PAUSED',
+              warehouse: { id: sam.id },
+            });
+          } finally {
+            branches[BRANCH_HQ].region_id = original;
+          }
+          // Markaziy ombor qoldig'iga tegilmadi (band yo'q).
+          expect(await stockRow(hq.id, a.id)).toEqual({
+            on_hand: 50,
+            reserved: 0,
+          });
+        });
+
         it('availability: hudud omboridagi mavjud dona (band ayirilgan)', async () => {
           const w = await openWarehouse();
           const a = await addProduct('Termos');
@@ -1522,6 +1738,64 @@ const pgCode = async (promise: Promise<unknown>) => {
             'ACTIVE',
             'PAUSED',
           ]);
+        });
+
+        it('⭐ Pa1KaXmj: Markaziy omborga kirim va inventarizatsiya ishlaydi; market qoldig`ida HQ ustuni (kind HQ), jami unga ham qo`shiladi', async () => {
+          const hq = await warehouses.create({ branch_id: BRANCH_HQ }, ADMIN);
+          const sam = await openWarehouse();
+          const a = await addProduct('Shapka', MARKET_A);
+          const result = await stockIn(hq.id, [{ code: a.sku_code, qty: 12 }]);
+          expect(result).toMatchObject({
+            replayed: false,
+            positions: 1,
+            total_qty: 12,
+          });
+          await stockIn(sam.id, [{ product_id: a.id, qty: 3 }]);
+          const counted = await stock.inventory({
+            warehouse_id: hq.id,
+            lines: [{ product_id: a.id, counted: 10 }],
+            reason: 'Sanash',
+            idempotency_key: nextKey(),
+            actor: ADMIN,
+          });
+          expect(counted).toMatchObject({ changed: 1 });
+          expect(await stockRow(hq.id, a.id)).toEqual({
+            on_hand: 10,
+            reserved: 0,
+          });
+
+          const detail = await warehouses.findOne(hq.id, null);
+          expect(detail).toMatchObject({
+            kind: 'HQ',
+            summary: { on_hand: 10, available: 10, positions: 1 },
+            movements_count: 2,
+          });
+
+          const view = await warehouses.marketStock(MARKET_A, {});
+          expect(
+            view.warehouses.map((w) => ({ id: w.id, kind: w.kind })),
+          ).toEqual(
+            expect.arrayContaining([
+              { id: hq.id, kind: 'HQ' },
+              { id: sam.id, kind: 'REGIONAL' },
+            ]),
+          );
+          expect(view.warehouses).toHaveLength(2);
+          expect(view.data[0]).toMatchObject({
+            total_available: 13,
+            total_on_hand: 13,
+          });
+          expect(view.data[0].cells).toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({ warehouse_id: hq.id, available: 10 }),
+              expect.objectContaining({ warehouse_id: sam.id, available: 3 }),
+            ]),
+          );
+          expect(view.summary).toMatchObject({
+            warehouses_total: 2,
+            warehouses_active: 2,
+            active_warehouses_with_stock: 2,
+          });
         });
       });
     });

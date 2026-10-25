@@ -51,6 +51,48 @@ Deploy: logistics-service (migratsiya `1716000000154`), api-gateway (DTO/Swagger
   chegarasi» (kg, 0 — har doim) + tarixda; kalkulyator, mahsulot formasi va ro'yxatdagi «Hisob vazni» chegarani
   hisobga oladi (`volumetricApplied: false` — «Chegara … kg dan kichik — narx og'irlik bo'yicha»).
 
+### 2026-10-26 — Markaziy ombor: HQ'da ombor ochish (Pa1KaXmj, BE-1)
+
+Deploy: catalog-service, api-gateway. Migratsiya yo'q (`warehouses` jadvalida filial turi saqlanmaydi). Buyurtma
+oqimi o'zgarmaydi: `resolve-source` / `availability` / band / chiqim / qaytish — avvalgidek, Markaziy ombor buyurtma
+manbasi nomzodi EMAS (keyingi bosqich). UI atamasi — «Markaziy ombor» (ru «Центральный склад», en «Central
+warehouse»); «HQ ombori» iborasi ishlatilmaydi (u bekor posilka qaytishi uchun band).
+
+- [2026-10-26] ✏️ [catalog] — **`POST /warehouses` HQ filialini qabul qiladi.** Ombor ochish mumkin: faol REGIONAL,
+  HYBRID yoki HQ (tizimda HQ bitta — Markaziy ombor ham ko'pi bilan bitta, ikkinchisi — 409 «Bu filialda ombor
+  allaqachon ochilgan»). PICKUP va nofaol filial — 400 «Ombor faqat faol filialda (HQ, REGIONAL yoki HYBRID) ochiladi
+  — topshirish punktida ombor yo'q» (avvalgi matn «…viloyat filialida (REGIONAL yoki HYBRID)…» edi).
+  - HQ'da `manager_user_id` berilsa — 400 «Markaziy omborga mas'ul menejer biriktirilmaydi»; berilmasa (yoki `null`)
+    — `manager_user_id: null` (avtomatik «birinchi faol menejer» HQ'da ishlamaydi).
+  - Nom berilmasa — «Markaziy ombor» (boshqalarda — «<filial> ombori», o'zgarmagan).
+  - `PATCH /warehouses/:id` Markaziy omborda ham shu qoida: aniq `manager_user_id` — 400, `null` — `null` qoladi.
+  - 🔧 FE: HQ tanlansa «Mas'ul xodim» maydonini yashiring va `manager_user_id` yubormang.
+- [2026-10-26] 🆕 [gateway/branch] — **`GET /branches/hq`** (SUPERADMIN, ADMIN; boshqa rol — 403) → 200
+  `{ statusCode, message, data: { id, name, code, type, status, address, region_id, region: { id, name } | null } }`
+  — pul/maosh maydonlarisiz (`ownership`, `per_order_share`, menejer yo'q). HQ topilmasa — 404 «HQ filial
+  topilmadi». `region` best-effort (hudud olinmasa `null`, javob baribir 200). 🟢 FE o'ramli va o'ramsiz (`data`
+  siz) javobni ham o'qisin.
+  - ⚠️ **Eski backend** (BE-1 hali deploy qilinmagan muhit — FE oldin chiqsa): bu route yo'q, so'rov
+    `GET /branches/:id` ga tushadi va `ParseBigintIdPipe` **400** qaytaradi («id musbat butun son bo'lishi kerak,
+    keldi: hq»), 404 emas.
+  - 🔧 FE: `GET /branches/hq` ning **400 va 404** javobini «Markaziy ombor ochib bo'lmaydi» deb qabul qiling —
+    xato ko'rsatmang, oyna faqat `dispatch-destinations` bilan ishlashda davom etsin. Boshqa xato (5xx, tarmoq) ham
+    oynani to'smasin (HQ qatori shunchaki chiqmaydi).
+- [2026-10-26] ✏️ [catalog] — **Yangi maydon `kind: "REGIONAL" | "HQ"`** (`HQ` — Markaziy ombor, filialdan
+  hisoblanadi): `GET /warehouses` qatorlari, `GET /warehouses/:id`, `POST /warehouses`, `PATCH /warehouses/:id`,
+  pause/resume javoblari, `GET /market/warehouse-stock` → `warehouses[]` (jadval ustunlari), `resolve-source` va
+  `availability` javobidagi `warehouse` obyekti (u yerda hozircha doim `REGIONAL`), ichki
+  `catalog.warehouse.find_by_ids`. Faqat qo'shimcha maydon — eski FE buzilmaydi. `branch.type` endi `HQ` ham bo'lishi
+  mumkin. Markaziy omborda HQ'ning `region_id` si bo'lmasa `region: null` — ro'yxatning viloyat filtri uni chiqarib
+  qo'yadi (kutilgan xulq).
+- [2026-10-26] 🟢 [catalog] — Kirim (`stock-in`), inventarizatsiya, chegara, pauza/qayta yoqish, qoldiq va harakatlar —
+  Markaziy omborda o'zgarishsiz ishlaydi (SUPERADMIN/ADMIN). Market qoldig'ida Markaziy ombor alohida ustun va
+  `total_available` ga qo'shiladi (FAOL bo'lsa).
+- [2026-10-26] 🔧 FE — «Ombor ochish» oynasidagi **filial ro'yxati**: `GET /branches/hq` (birinchi o'rinda, «Markaziy
+  ombor») + `GET /branches/dispatch-destinations` (viloyat filiallari, o'zgarmagan — u pochta manzillari uchun, HQ'siz)
+  minus `GET /warehouses` dagi `branch_id`lar. `GET /branches/hq` 400/404 (eski backend / HQ yo'q) yoki xato bersa —
+  faqat `dispatch-destinations`. Ombor turi belgisi — `kind` (yoki `branch.type === "HQ"`).
+
 ### 2026-10-25 — AI idempotentlik qoldiqlari (Cp2v3ZJ7) va kampaniya yuklamasi (xHPdpj0W)
 
 Deploy: faqat notification-service (bot matni). Migratsiya yo'q. API kontrakti o'zgarmagan.
@@ -327,6 +369,8 @@ harakatlarda faqat Kirim/Tuzatish yoziladi.
     → 201 `Warehouse`. Faqat FAOL REGIONAL/HYBRID filial (aks holda 400); filialda ombor bor — 409; nom berilmasa
     «<filial> ombori»; `manager_user_id` — shu filial MANAGER'i (aks holda 400). 🔧 FE: «Filial» ro'yxati =
     `GET /branches/dispatch-destinations` (yoki filiallar) minus `GET /warehouses` dagi `branch_id`lar.
+    ⚠️ 2026-10-26 dan (Pa1KaXmj): HQ ham qabul qilinadi — ro'yxat = `GET /branches/hq` + `dispatch-destinations`
+    minus band filiallar (yuqoridagi «Markaziy ombor» yozuvi).
   - `PATCH /warehouses/:id` (SUPERADMIN, ADMIN) — name/manager_user_id/address/low_stock_default/note (`null` —
     tozalash); filial o'zgarmaydi.
   - `POST /warehouses/:id/pause` / `POST /warehouses/:id/resume` (SUPERADMIN, ADMIN) `{ note? }` → `Warehouse` +

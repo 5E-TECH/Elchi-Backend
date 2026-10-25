@@ -22,6 +22,7 @@ import {
   STOCK_MOVEMENT_REF_TYPES,
   STOCK_MOVEMENT_TYPES,
   WAREHOUSE_ADDRESS_MAX,
+  WAREHOUSE_KINDS,
   WAREHOUSE_LOW_STOCK_MAX,
   WAREHOUSE_MAX_LINES,
   WAREHOUSE_MAX_QTY,
@@ -51,7 +52,7 @@ export class CreateWarehouseRequestDto {
   @ApiProperty({
     example: '11',
     description:
-      'Viloyat filiali (REGIONAL yoki HYBRID, faol). Bitta filial — bitta ombor (takror — 409).',
+      'Faol filial: REGIONAL/HYBRID yoki HQ («Markaziy ombor», Pa1KaXmj); PICKUP va nofaol — 400. Bitta filial — bitta ombor (takror — 409).',
   })
   @IsString()
   @Matches(ID_PATTERN, { message: `branch_id ${ID_MESSAGE}` })
@@ -60,7 +61,8 @@ export class CreateWarehouseRequestDto {
   @ApiPropertyOptional({
     example: 'Samarqand filiali ombori',
     maxLength: WAREHOUSE_NAME_MAX,
-    description: 'Berilmasa — «<filial nomi> ombori».',
+    description:
+      'Berilmasa — «<filial nomi> ombori»; HQ filialida — «Markaziy ombor».',
   })
   @IsOptional()
   @IsString()
@@ -71,7 +73,7 @@ export class CreateWarehouseRequestDto {
     example: '31',
     nullable: true,
     description:
-      "Mas'ul xodim — shu filialning menejeri (branch_users, rol MANAGER), aks holda 400. Berilmasa yoki `null` — filialning birinchi faol menejeri (foydalanuvchi id bo'yicha), menejer yo'q bo'lsa `null` (XtcEyQjb). Faqat ko'rsatish uchun: o'qish ruxsati filialdan.",
+      "Mas'ul xodim — shu filialning menejeri (branch_users, rol MANAGER), aks holda 400. Berilmasa yoki `null` — filialning birinchi faol menejeri (foydalanuvchi id bo'yicha), menejer yo'q bo'lsa `null` (XtcEyQjb). Faqat ko'rsatish uchun: o'qish ruxsati filialdan. HQ filialida (Markaziy ombor) berilmaydi — 400 «Markaziy omborga mas'ul menejer biriktirilmaydi»; sukut `null`.",
   })
   @IsOptional()
   @ValidateIf((_, value) => value !== null)
@@ -123,7 +125,7 @@ export class UpdateWarehouseRequestDto {
   @ApiPropertyOptional({
     nullable: true,
     description:
-      "Shu filial menejeri; `null` — filialning birinchi faol menejeri avtomatik (menejer yo'q bo'lsa `null`, XtcEyQjb).",
+      "Shu filial menejeri; `null` — filialning birinchi faol menejeri avtomatik (menejer yo'q bo'lsa `null`, XtcEyQjb). Markaziy omborda (HQ) — aniq id 400, `null` — `null`.",
   })
   @IsOptional()
   @ValidateIf((_, value) => value !== null)
@@ -372,7 +374,12 @@ export class WarehouseRefDto {
 }
 
 export class WarehouseBranchDto extends WarehouseRefDto {
-  @ApiPropertyOptional({ type: String, nullable: true, example: 'REGIONAL' })
+  @ApiPropertyOptional({
+    type: String,
+    nullable: true,
+    example: 'REGIONAL',
+    description: 'Filial turi: REGIONAL, HYBRID yoki HQ (Markaziy ombor)',
+  })
   type!: string | null;
 
   @ApiPropertyOptional({ type: String, nullable: true, example: 'active' })
@@ -476,6 +483,14 @@ export class WarehouseDto {
 
   @ApiProperty({ enum: WAREHOUSE_STATUSES, example: 'ACTIVE' })
   status!: string;
+
+  @ApiProperty({
+    enum: WAREHOUSE_KINDS,
+    example: 'REGIONAL',
+    description:
+      "Pa1KaXmj: REGIONAL — viloyat filiali (REGIONAL/HYBRID) ombori; HQ — «Markaziy ombor» (HQ filialida, ko'pi bilan bitta). Filialdan hisoblanadi.",
+  })
+  kind!: string;
 
   @ApiProperty({ example: '11' })
   branch_id!: string;
@@ -1030,6 +1045,13 @@ export class WarehouseCandidateDto {
   @ApiProperty({ example: '3' }) id!: string;
   @ApiProperty({ example: 'Samarqand filiali ombori' }) name!: string;
   @ApiProperty({ enum: WAREHOUSE_STATUSES }) status!: string;
+  @ApiProperty({
+    enum: WAREHOUSE_KINDS,
+    example: 'REGIONAL',
+    description:
+      'Pa1KaXmj: manba nomzodi — hozircha faqat viloyat ombori (REGIONAL)',
+  })
+  kind!: string;
   @ApiProperty({ example: '11' }) branch_id!: string;
   @ApiProperty({ example: 'Samarqand filiali' }) branch_name!: string;
   @ApiPropertyOptional({ type: String, nullable: true }) region_id!:
@@ -1114,6 +1136,12 @@ export class MarketStockWarehouseDto {
   @ApiProperty() id!: string;
   @ApiProperty() name!: string;
   @ApiProperty({ enum: WAREHOUSE_STATUSES }) status!: string;
+  @ApiProperty({
+    enum: WAREHOUSE_KINDS,
+    example: 'HQ',
+    description: 'Pa1KaXmj: HQ — «Markaziy ombor» ustuni',
+  })
+  kind!: string;
   @ApiPropertyOptional({ type: WarehouseRefDto, nullable: true })
   branch!: WarehouseRefDto | null;
   @ApiPropertyOptional({ type: WarehouseRefDto, nullable: true })

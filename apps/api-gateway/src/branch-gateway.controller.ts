@@ -5,6 +5,7 @@ import {
   Delete,
   Get,
   Inject,
+  NotFoundException,
   Param,
   Patch,
   Post,
@@ -34,6 +35,7 @@ import {
   CreateBranchTransferBatchesRequestDto,
   CreateReturnBatchesRequestDto,
   CreateBranchRequestDto,
+  HqBranchResponseDto,
   ReceiveTransferBatchOrdersRequestDto,
   SendTransferBatchRequestDto,
   SetBranchConfigRequestDto,
@@ -67,6 +69,23 @@ const COURIER_TRANSFER_RPC_TIMEOUT_MS = 40_000;
 // logistics parallel tekshiriladi (5 s); sof-nol PENDING holatida (C8) yopish
 // (3 s) va qayta tekshiruv (5 s) — eng yomon holat ~13 s.
 const BRANCH_USER_REMOVE_RPC_TIMEOUT_MS = 20_000;
+
+/** Satr yoki son → kesilgan satr; boshqa tur — ''. */
+const text = (value: unknown): string =>
+  typeof value === 'string' || typeof value === 'number'
+    ? String(value).trim()
+    : '';
+
+const asRecord = (value: unknown): Record<string, unknown> | null =>
+  value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+
+/** `{ data: X }` yoki X — ikkalasidan X (branch-service o'rami). */
+const unwrapData = (value: unknown): Record<string, unknown> | null => {
+  const record = asRecord(value);
+  return record && 'data' in record ? asRecord(record.data) : record;
+};
 
 @ApiTags('Branch')
 @ApiBearerAuth()
@@ -243,6 +262,71 @@ export class BranchGatewayController {
         },
       )
       .pipe(timeout(8000));
+  }
+
+  /**
+   * Pa1KaXmj: HQ filiali — «Markaziy ombor» ochish oynasi uchun (SUPERADMIN,
+   * ADMIN). Mavjud `branch.find_hq` ustida; javob — OQ RO'YXAT (pul/maosh
+   * maydonlarisiz: `ownership`, `per_order_share`, `manager_id` chiqmaydi).
+   * Hudud nomi — `branch.find_by_id` dan, best-effort (olinmasa `region:
+   * null`, javob baribir 200). HQ topilmasa — 404.
+   *
+   * `dispatch-destinations` o'zgarmaydi: u pochta manzillari uchun (HQ'siz).
+   * ⚠️ `branches/:id` dan OLDIN — aks holda `ParseBigintIdPipe` 400 qaytaradi.
+   */
+  @Get('branches/hq')
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiOperation({
+    summary: 'HQ filiali (Markaziy ombor ochish uchun, pul maydonlarisiz)',
+    description:
+      'Javob `{ statusCode, message, data: { id, name, code, type, status, address, region_id, region: { id, name } | null } }`. «Ombor ochish» oynasida HQ shu yerdan olinadi (Markaziy ombor), viloyat filiallari — `GET /branches/dispatch-destinations`. HQ topilmasa — 404.',
+  })
+  @ApiOkResponse({ type: HqBranchResponseDto })
+  async findHqBranch(
+    @Req() req: { user?: { sub?: string; roles?: string[] } },
+  ) {
+    const response: unknown = await firstValueFrom(
+      this.branchClient.send({ cmd: 'branch.find_hq' }, {}).pipe(timeout(8000)),
+    );
+    const row = unwrapData(response);
+    const id = text(row?.id);
+    if (!row || !id) {
+      throw new NotFoundException('HQ filial topilmadi');
+    }
+    const regionId = text(row.region_id) || null;
+    let region: { id: string; name: string } | null = null;
+    if (regionId) {
+      try {
+        const detail: unknown = await firstValueFrom(
+          this.branchClient
+            .send(
+              { cmd: 'branch.find_by_id' },
+              { id, requester: this.toRequester(req) },
+            )
+            .pipe(timeout(8000)),
+        );
+        const raw = asRecord(unwrapData(detail)?.region);
+        if (raw && text(raw.id)) {
+          region = { id: text(raw.id), name: text(raw.name) };
+        }
+      } catch {
+        // Hudud nomi — bezak: olinmasa `null`, HQ baribir qaytadi.
+      }
+    }
+    return {
+      statusCode: 200,
+      message: 'HQ branch',
+      data: {
+        id,
+        name: text(row.name),
+        code: text(row.code) || null,
+        type: text(row.type),
+        status: text(row.status),
+        address: text(row.address) || null,
+        region_id: regionId,
+        region,
+      },
+    };
   }
 
   // ⚠️ `branches/:id` dan OLDIN turishi SHART — aks holda `:id` marshruti

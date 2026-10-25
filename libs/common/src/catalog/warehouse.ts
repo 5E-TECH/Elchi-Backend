@@ -4,9 +4,13 @@
  * catalog-service va (keyingi PR'da) order-service SHU fayldan oladi —
  * holat/tur nomlari va sabab kodlari ikki joyda yozilmaydi.
  *
- * Model (ega qarorlari 2026-10-23):
- *   - ombor viloyat filialiga bog'langan (`branch_id` yagona), FAOL yoki
+ * Model (ega qarorlari 2026-10-23, 2026-10-25):
+ *   - ombor filialga bog'langan (`branch_id` yagona), FAOL yoki
  *     TO'XTATILGAN; to'xtatilganda qoldiq saqlanadi, yangi buyurtma tushmaydi;
+ *   - turi (`kind`, saqlanmaydi — filialdan hisoblanadi): viloyat ombori
+ *     (REGIONAL/HYBRID filial) yoki Markaziy ombor (HQ filiali, Pa1KaXmj).
+ *     Markaziy ombor buyurtma manbasi nomzodi EMAS (1-bosqich: faqat ochish,
+ *     kirim, inventarizatsiya, qoldiq);
  *   - qoldiq faqat dona: `on_hand` (jismonan bor), `reserved` (faol
  *     buyurtmalarga band), `available = on_hand − reserved`;
  *   - har o'zgarish `stock_movements` ga yoziladi (faqat qo'shiladi).
@@ -14,6 +18,14 @@
 
 export const WAREHOUSE_STATUSES = ['ACTIVE', 'PAUSED'] as const;
 export type WarehouseStatus = (typeof WAREHOUSE_STATUSES)[number];
+
+/**
+ * Pa1KaXmj: ombor turi (javoblardagi `kind`). `REGIONAL` — viloyat filiali
+ * (REGIONAL/HYBRID) ombori; `HQ` — «Markaziy ombor» (HQ filialida, tizimda
+ * ko'pi bilan bitta). DB'da ustun yo'q — `branch_id` dan hisoblanadi.
+ */
+export const WAREHOUSE_KINDS = ['REGIONAL', 'HQ'] as const;
+export type WarehouseKind = (typeof WAREHOUSE_KINDS)[number];
 
 /**
  * Harakat turlari. `qty` ishorasi (DB CHECK bilan qulflangan):

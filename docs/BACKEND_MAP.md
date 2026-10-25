@@ -575,7 +575,10 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
   `ActivityLogModule.forService` would double the retention cron). Temporary
   until the marketplace: stock in pieces only, no cost/price.
   - Tables: `warehouses` (one per branch — partial UNIQUE `branch_id WHERE
-    NOT is_deleted`; only an ACTIVE REGIONAL/HYBRID branch; `ACTIVE|PAUSED`,
+    NOT is_deleted`; only an ACTIVE REGIONAL/HYBRID branch or the HQ —
+    «Markaziy ombor» since Pa1KaXmj: no manager (`manager_user_id` → 400,
+    default `null`), default name «Markaziy ombor»; views carry
+    `kind: REGIONAL|HQ` derived from the branch, no column; `ACTIVE|PAUSED`,
     CHECK `paused_at` set iff PAUSED; `low_stock_default` 5),
     `warehouse_stock` (UNIQUE `(warehouse_id, product_id)`, `market_id` =
     products.user_id copy, CHECK `on_hand >= 0`, `0 <= reserved <= on_hand`,
@@ -615,7 +618,9 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
     `catalog.warehouse.resolve_source {region_id|district_id, items,
     market_id?, requester?}` → `{source: WAREHOUSE|HQ, reason, warehouse,
     items, shortages}` (read-only; district → `assigned_region ?? region_id`;
-    first ACTIVE warehouse of an eligible branch in that region with ALL items
+    first ACTIVE warehouse of a regional branch (REGIONAL/HYBRID — the HQ
+    «Markaziy ombor» is never a candidate, even with a matching
+    `region_id`) in that region with ALL items
     available; else HQ — reasons NO_ITEMS / NO_REGION / NO_WAREHOUSE /
     WAREHOUSE_PAUSED / INSUFFICIENT_STOCK / MARKET_NOT_ALLOWED (market or
     market operator creator and the market switch is off — fail-closed) /
@@ -636,7 +641,10 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
     (threshold). Order-driven movements are only in `stock_movements`.
   - New env (catalog): `RABBITMQ_BRANCH_QUEUE` (default `branch_queue`),
     `RABBITMQ_LOGISTICS_QUEUE` (default `logistics_queue`) — branch/region
-    lookups (30 s in-memory branch cache).
+    lookups (30 s in-memory branch cache; HQ id via `branch.find_hq` — found
+    id cached for the process lifetime (HQ type is locked, single HQ),
+    404/error → 30 s backoff, one shared in-flight request, warmed on
+    module init; read paths incl. `find_by_ids` wait at most 500 ms).
   - Gateway `WarehouseGatewayController` — see FRONTEND_CHANGELOG
     2026-10-24 «Ombor moduli» for the HTTP list and roles.
   - **Access (XtcEyQjb, 2026-10-24, migration `1716000000152`):** read
@@ -958,7 +966,12 @@ create from a branch by `order_ids` → `send` (vehicle info) → `receive` /
   still become RECEIVED.
 - Gateway route order: `GET /branches/new-orders` is declared before
   `GET /branches/:id` (it was shadowed — the superadmin new-orders branch list
-  was always empty/erroring; CODE-21).
+  was always empty/erroring; CODE-21). `GET /branches/hq` (Pa1KaXmj,
+  SUPERADMIN/ADMIN) is also before `:id`: `branch.find_hq` projected to
+  `{id, name, code, type, status, address, region_id, region}` (no money
+  fields; region via `branch.find_by_id`, best-effort) — the «Markaziy ombor»
+  option of the warehouse-create dialog. An older gateway without this route
+  answers 400 (`:id` + `ParseBigintIdPipe`), so FE treats 400/404 as «no HQ».
 
 ### 5.4 Cashbox invariant
 The sum of cashbox balances must reconcile with recorded movements. Enforced in
