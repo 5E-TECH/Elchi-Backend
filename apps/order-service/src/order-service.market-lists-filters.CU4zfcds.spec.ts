@@ -21,9 +21,7 @@ describe('CU4zfcds — market ro‘yxatlari search va sana', () => {
       qb[m] = jest.fn(() => qb);
     }
     qb.getRawMany = jest.fn().mockResolvedValue(rows);
-    const service = Object.create(
-      OrderServiceService.prototype,
-    ) as OrderServiceService & Record<string, any>;
+    const service: any = Object.create(OrderServiceService.prototype);
     service.orderRepo = { createQueryBuilder: jest.fn(() => qb) };
     service.identityClient = {
       send: jest.fn(() =>
