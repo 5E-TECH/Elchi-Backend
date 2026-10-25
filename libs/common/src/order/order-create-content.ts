@@ -29,6 +29,8 @@ export const ORDER_CREATE_NO_ITEMS_MESSAGE =
 export const ORDER_CREATE_ITEM_QUANTITY_MESSAGE =
   'Mahsulot miqdori (quantity) kamida 1 va butun son bo‘lishi kerak';
 
+export const ORDER_CREATE_NO_REGION_MESSAGE =
+  "Tuman bo'yicha viloyat aniqlanmadi — tumanni tekshiring yoki birozdan keyin qayta urining";
 export const ORDER_CREATE_NO_DISTRICT_MESSAGE =
   'Buyurtma uchun tuman tanlanmagan';
 

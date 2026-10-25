@@ -246,7 +246,7 @@ describe('IR2OHIiN — order-service yagona yaratish nuqtasi (create)', () => {
       expect(h.mocks.resolveRegionIdForDistrict).not.toHaveBeenCalled();
     });
 
-    it('tuman bor, viloyat yo‘q (bot) — viloyat tumandan; aniqlanmasa NULL (qabulda to‘ldiriladi)', async () => {
+    it('tuman bor, viloyat yo‘q (bot) — viloyat tumandan; aniqlanmasa 400, buyurtma yaratilmaydi (ega qoidasi: viloyat ham majburiy)', async () => {
       const h = makeHarness({ regionForDistrict: '5' });
       await h.s.create(
         { ...BASE, region_id: undefined } as CreateDto,
@@ -258,14 +258,12 @@ describe('IR2OHIiN — order-service yagona yaratish nuqtasi (create)', () => {
       });
 
       const h2 = makeHarness({ regionForDistrict: null });
-      await h2.s.create(
-        { ...BASE, region_id: undefined } as CreateDto,
-        OPERATOR,
+      const error = await rpcError(
+        h2.s.create({ ...BASE, region_id: undefined } as CreateDto, OPERATOR),
       );
-      expect(h2.createdRow()).toMatchObject({
-        district_id: '12',
-        region_id: null,
-      });
+      expect(error.statusCode).toBe(400);
+      expect(error.message).toContain('viloyat aniqlanmadi');
+      h2.nothingCreated();
     });
 
     it('identity javob bermasa — 503, buyurtma yaratilmaydi (fail-closed)', async () => {

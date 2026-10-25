@@ -1,6 +1,7 @@
 import { RpcException } from '@nestjs/microservices';
 import {
   ORDER_CREATE_NO_DISTRICT_MESSAGE,
+  ORDER_CREATE_NO_REGION_MESSAGE,
   orderCreateIdOrNull,
   orderCreateItemsProblem,
 } from '@app/common';
@@ -91,7 +92,7 @@ export async function resolveOrderCreateContent(
     customer_id?: unknown;
   },
   lookup: OrderCreateContentLookup,
-): Promise<{ district_id: string; region_id: string | null }> {
+): Promise<{ district_id: string; region_id: string }> {
   const itemsProblem = orderCreateItemsProblem(dto?.items);
   if (itemsProblem) {
     badRequest(itemsProblem);
@@ -111,8 +112,12 @@ export async function resolveOrderCreateContent(
   }
   const regionFromDistrict =
     await lookup.resolveRegionIdForDistrict(districtId);
-  return {
-    district_id: districtId,
-    region_id: regionFromDistrict ?? givenRegionId,
-  };
+  const regionId = regionFromDistrict ?? givenRegionId;
+  // Ega qoidasi (2026-10-25): viloyatsiz buyurtma ham bo'lmasin — viloyat
+  // aniqlanmasa (tuman viloyatga biriktirilmagan, topilmadi yoki logistika
+  // javob bermadi) buyurtma yaratilmaydi.
+  if (!regionId) {
+    badRequest(ORDER_CREATE_NO_REGION_MESSAGE);
+  }
+  return { district_id: districtId, region_id: regionId };
 }
