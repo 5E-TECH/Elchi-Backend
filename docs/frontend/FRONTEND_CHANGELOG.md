@@ -70,6 +70,20 @@ Deploy: faqat api-gateway. Migratsiya yo'q.
   🔧 FE: ilova xato chegarasi sahifa yiqilganda xato kodini jim yuboradi (bir kod — sessiyada bir marta, xato
   bo'lsa e'tiborsiz).
 
+### 2026-10-25 — Buyurtma bildirishnomasi havolasi `/orders/edit/{id}` (OA16fdSq)
+
+Deploy: order-service (migratsiya yo'q).
+
+- [2026-10-25] ✏️ [notification/order] — `order.created`, `order.accepted`, `order.on_way`, `order.sold`,
+  `order.cancelled`, `order.returned`, `order.not_accepted` va `order.assigned_to_courier` bildirishnomalarining
+  `link` i endi `/orders/edit/{id}` («Buyurtma tafsiloti» marshruti; avval `/orders/{id}` — bunday marshrut yo'q,
+  bosilganda 404 edi). Qo'ng'iroqcha, «Bildirishnomalar qutisi» va push (`sw.js` `notificationclick`) shu
+  qiymatni ochadi. 🟢 FE: o'zgarish shart emas — eski qatorlardagi `/orders/{id}` uchun `routes.tsx` dagi
+  `/orders/:orderId` → `/orders/edit/:orderId` yo'naltirishi (uRkw6lk0) qoladi.
+- [2026-10-25] 🟢 [notification/telegram] — `order.cancelled` market «cancel» guruhi matni `parse_mode: HTML`; mijoz
+  ismi, manzil, izoh, mahsulot nomlari HTML-escape qilinadi (`<`, `&`, `*` xabarni buzmaydi), uzun qiymat emoji
+  yarmida kesilmaydi. FE ta'siri yo'q.
+
 ### 2026-10-25 — Ombor ↔ buyurtma oqimi (6kHnNH9j, kontrakt `warehouse_v2_contract.md` B)
 
 Deploy: `migration:run` (1716000000153 — `order_schema.orders.fulfillment_source` sukut `HQ`, `warehouse_id`) →

@@ -58,6 +58,10 @@ import { CANCEL_REASON_UZ } from '../domain/cancel-reason';
  * Mijoz ismi/telefoni, manzil va izoh faqat market Telegram guruhiga
  * ketadigan `telegram.text` da va HTML-escape qilingan (Elchi
  * `parse_mode: HTML`, BeePost Markdown edi).
+ *
+ * HAVOLA: `link` = `/orders/edit/{id}` (`orderDetailLink`) — frontendda
+ * «Buyurtma tafsiloti» aynan shu marshrutda. Qo'ng'iroqcha, «Bildirishnomalar
+ * qutisi» va push (sw.js `notificationclick`) ham shu `link` ni ochadi.
  */
 
 export const NOTIFICATION_OUTBOX_TARGET = 'NOTIFICATION';
@@ -170,6 +174,16 @@ export function resolveOrderNotificationType(
   }
 }
 
+/**
+ * (OA16fdSq) Bildirishnoma `link` i — frontend «Buyurtma tafsiloti» sahifasi
+ * (`routes.tsx`: `orders` → `edit/:orderId`). Avval `/orders/{id}` edi — bunday
+ * marshrut yo'q, bosilganda 404 «ROUTE TOPILMADI» chiqardi (2026-10-09 prod
+ * testi). Push ham shu qiymatni oladi (`PushDeliveryService.toPayload`).
+ */
+export function orderDetailLink(orderId: string | number): string {
+  return `/orders/edit/${encodeURIComponent(String(orderId))}`;
+}
+
 /** Mijozga ko'rinadigan raqam: "EL-" + (id + 100000) (formatOrderNumber bilan bir xil). */
 export function orderNumberOf(id: string | number | null | undefined) {
   const numeric = Number(id);
@@ -243,6 +257,8 @@ export function formatTashkentDateTime(value: unknown): string {
 /**
  * Xom qiymatni ESCAPE'DAN OLDIN qisqartiradi — escape'dan keyin kesilsa
  * `&amp;` yarmida uzilib Telegram "can't parse entities" bilan rad etardi.
+ * Emoji (UTF-16 surrogate juftligi) yarmida ham kesilmaydi: yolg'iz surrogate
+ * yaroqsiz UTF-8 bo'lib, Telegram xabarni rad etishi mumkin (OA16fdSq TC9).
  */
 const clip = (value: unknown, max: number): string => {
   const text =
@@ -252,7 +268,9 @@ const clip = (value: unknown, max: number): string => {
         ? String(value)
         : '';
   const clean = text.replace(/\s+/g, ' ').trim();
-  return clean.length > max ? `${clean.slice(0, max - 1)}…` : clean;
+  if (clean.length <= max) return clean;
+  const head = clean.slice(0, max - 1);
+  return `${/[\uD800-\uDBFF]$/.test(head) ? head.slice(0, -1) : head}…`;
 };
 
 /** HTML-escape qilingan qiymat yoki `-` (BeePost: `${... || '-'}`). */
@@ -444,7 +462,7 @@ export function buildOrderNotificationPayload(
     // in_app: faqat raqam + holat — telefon/manzil YO'Q (PII).
     body: `Buyurtma #${orderNumber || orderId} ${TEXT[type].status}.`,
     data,
-    link: `/orders/${orderId}`,
+    link: orderDetailLink(orderId),
     recipient_ids: recipientIds,
     ...(groupKey ? { group_key: groupKey } : {}),
     channels: wantsTelegram
@@ -499,7 +517,7 @@ export function buildCourierAssignedPayload(
     // PII yo'q: faqat buyurtma raqami.
     body: `Buyurtma #${orderNumber || orderId} kuryerga biriktirildi.`,
     data,
-    link: `/orders/${orderId}`,
+    link: orderDetailLink(orderId),
     recipient_ids: [
       ...new Set([courierId, order.market_id].filter(isId).map(String)),
     ],

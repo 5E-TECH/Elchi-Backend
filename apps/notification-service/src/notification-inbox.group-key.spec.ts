@@ -179,7 +179,7 @@ describe('NotificationInboxService — group_key: bir buyurtma = inboxda bitta q
           type: 'order.sold',
           title: 'Buyurtma sotildi',
           body: 'Buyurtma #EL-100081 sotildi.',
-          link: '/orders/81',
+          link: '/orders/edit/81',
         }),
       );
     }
@@ -254,7 +254,7 @@ describe('NotificationInboxService — group_key: bir buyurtma = inboxda bitta q
     expect(courier.items[0]).toEqual(
       expect.objectContaining({
         type: 'order.assigned_to_courier',
-        link: '/orders/81',
+        link: '/orders/edit/81',
       }),
     );
   });

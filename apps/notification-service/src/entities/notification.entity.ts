@@ -63,7 +63,7 @@ export class Notification extends BaseEntity {
   @Column({ type: 'jsonb', nullable: true })
   data!: Record<string, unknown> | null;
 
-  /** Deep-link the frontend navigates to on click (e.g. `/orders/123`). */
+  /** Deep-link the frontend navigates to on click (e.g. `/orders/edit/123`). */
   @Column({ type: 'varchar', nullable: true })
   link!: string | null;
 
