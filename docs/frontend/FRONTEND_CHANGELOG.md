@@ -33,6 +33,16 @@ Deploy: faqat api-gateway. Migratsiya yo'q.
   (POST/PATCH/DELETE region/district) operatorga yopiq qoladi. Frontend o'zgarishi shart emas
   (FE `feat/operator-manual-create` shu yo'llarni ishlatadi).
 
+### 2026-10-25 — Filial puli HQ'ga faqat HQ qabul qilganda (IjqTYQks, ega qarori #7)
+
+Deploy: faqat api-gateway. Migratsiya yo'q.
+
+- [2026-10-25] ⚠️ [gateway/finance] — `POST /finance/cashbox/payment/branch-to-main` endi faqat **superadmin va
+  admin** (HQ «Pul qabul qilish» → filialni tanlash). MANAGER — 403 (avval o'z filiali bilan ruxsat edi). Xabar:
+  «Filial pulini HQ (superadmin yoki admin) o'zi qabul qiladi — menejer HQ'ga pul o'tkazmaydi».
+  🔧 FE: menejerda «HQ'ga o'tkazish» tugmasi va formasi yo'q (FE `fix/manager-no-hq-transfer`); menejer HQ kassasi
+  sahifasini faqat ko'radi (`GET cashbox/manager/settlement`, `payable-to-hq`, `all-info` — o'zgarmagan).
+
 ### 2026-10-25 — Ombor ↔ buyurtma oqimi (6kHnNH9j, kontrakt `warehouse_v2_contract.md` B)
 
 Deploy: `migration:run` (1716000000153 — `order_schema.orders.fulfillment_source` sukut `HQ`, `warehouse_id`) →
