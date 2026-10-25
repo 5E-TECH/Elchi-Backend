@@ -74,6 +74,7 @@ import { FindSalaryByUserDto } from './dto/salary/find-salary-by-user.dto';
 import { FinanceNotificationService } from './notification/finance-notification.service';
 import { SettlementUnappliedService } from './settlement/settlement-unapplied.service';
 import { CourierPaymentAckService } from './courier-payment/courier-payment-ack.service';
+import { FinanceRealtimeService } from './realtime/finance-realtime.service';
 
 /**
  * `order.find_all` qatoridan market to'lovi sinxroni o'qiydigan maydonlar
@@ -142,6 +143,10 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
     // (2crjWf7v #4) kuryer kvitansiya javobi — hisobot ro'yxatida flag.
     @Optional()
     private readonly courierAcks?: CourierPaymentAckService,
+    // (rWdLuoP3) Smena yopildi → realtime (outbox → gateway → socket).
+    // Ixtiyoriy: eski spec'lar servisni usiz quradi — u holda hodisa yo'q.
+    @Optional()
+    private readonly financeRealtime?: FinanceRealtimeService,
   ) {}
 
   async onModuleInit() {
@@ -2446,6 +2451,13 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         shift.comment = dto.comment ?? shift.comment;
 
         const saved = await queryRunner.manager.save(shift);
+        // (rWdLuoP3) Ochiq kassa sahifalari darhol «Smena yopiq» — outbox
+        // qatori shu tranzaksiyada (rollback bo'lsa hodisa ham yo'q).
+        await this.financeRealtime?.shiftClosed(
+          saved,
+          'manual',
+          queryRunner.manager,
+        );
         await queryRunner.commitTransaction();
         auditedShift = saved;
         return this.successRes(saved, 200, 'Shift closed');

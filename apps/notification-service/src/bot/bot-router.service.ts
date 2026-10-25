@@ -33,8 +33,12 @@ import { MembershipHandler } from './handlers/membership.handler';
 import { StartHandler } from './handlers/start.handler';
 import type { TelegramUpdate } from './telegram.types';
 
+/**
+ * Tugma qatori yo'q: odatda muddati o'tib tozalangan (prune, >48 soat) eski
+ * karta — Cp2v3ZJ7 TC12: "eskirgan" deb ANIQ aytiladi.
+ */
 export const ACTION_UNKNOWN_TEXT =
-  '⌛ Bu tugma endi ishlamaydi. Menyuni qayta oching: /start';
+  '⌛ Bu tugma eskirgan — endi ishlamaydi. Menyuni qayta oching: /start';
 export const ACTION_EXPIRED_TEXT =
   "⌛ Bu ro'yxat eskirgan — menyuni qayta oching: /start";
 export const ACTION_CONSUMED_TEXT = '✔️ Bu amal allaqachon bajarilgan.';

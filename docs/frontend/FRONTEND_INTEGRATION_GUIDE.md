@@ -526,7 +526,13 @@ const socket = io(`${BASE_URL}/realtime`, {
   Unauthorized sockets receive `error` `{ message: 'Unauthorized', code:
   'UNAUTHORIZED' }` and are disconnected.
 - The socket auto-joins rooms `user:<id>` and `role:<role>` (and
-  `session:<sid>` when the access token carries a session id).
+  `session:<sid>` when the access token carries a session id, and
+  `branch:<branch_id>:role:<role>` when it carries a `branch_id` — 2026-10-25).
+- **Cashbox / shift (2026-10-25, rWdLuoP3):** `finance.shift.closed`,
+  `finance.shift.auto_closed` (`closed_at` ISO), `finance.shift.account_checked`,
+  `finance.cashbox.card_changed` — refetch shift (`GET finance/shift/current`)
+  and cashbox/card queries. MAIN shift → superadmin/admin/registrator; branch
+  shift → that branch's managers only. See FRONTEND_CHANGELOG 2026-10-25.
 - **Session closed (2026-10-24):** when the socket's session is closed
   (owner revoked it, «log out other devices», password change, logout of the
   same session in another tab, server security reset) the server emits

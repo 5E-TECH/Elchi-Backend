@@ -84,6 +84,8 @@ function setup(
     contexts?: unknown;
     contextError?: boolean;
     trace?: unknown;
+    /** NFiXfmq6: market yozuvidagi `ai_price_per_order` (yo'q — global). */
+    marketAiPrice?: number | null;
   } = {},
 ) {
   const orderC = fake();
@@ -103,7 +105,14 @@ function setup(
     }
     if (pattern.cmd === 'identity.market.find_by_id') {
       return of({
-        data: { id: payload.id, status: 'active', add_order: true },
+        data: {
+          id: payload.id,
+          status: 'active',
+          add_order: true,
+          ...(opts.marketAiPrice !== undefined
+            ? { ai_price_per_order: opts.marketAiPrice }
+            : {}),
+        },
       });
     }
     return of({ data: null });
@@ -347,6 +356,60 @@ describe('ai-confirm — barqaror idempotency kaliti (Cp2v3ZJ7)', () => {
     expect(
       fx.ai.send.mock.calls.filter(([p]) => p.cmd === 'ai.usage.link_orders'),
     ).toHaveLength(0);
+  });
+
+  it('TC3: bir xil draft+index bilan ikki marta chaqiruv → pul (narx qaydi) FAQAT BIR marta: link_orders bitta, market narxi bilan', async () => {
+    const fx = setup({ marketAiPrice: 450 });
+    // order-service `executeIdempotent` emulyatsiyasi: request_id → bitta buyurtma.
+    const byKey = new Map<string, string>();
+    let next = 7000;
+    fx.orderC.send.mockImplementation((_p, payload) => {
+      const key = String(payload.request_id);
+      const existing = byKey.get(key);
+      if (existing) {
+        return of({ data: { id: existing }, idempotent_replay: true });
+      }
+      const id = String(next++);
+      byKey.set(key, id);
+      return of({ data: { id } });
+    });
+
+    // Sahifa yangilanib (yoki tugma qayta bosilib) ayni draft+index qayta yuboriladi.
+    const first = await fx.controller.aiConfirm(
+      { orders: [order(3)] },
+      marketReq,
+    );
+    const second = await fx.controller.aiConfirm(
+      { orders: [order(3)] },
+      marketReq,
+    );
+    expect(first.data.results[0]).toMatchObject({
+      ok: true,
+      order_id: '7000',
+      idempotent_replay: false,
+    });
+    expect(second.data.results[0]).toMatchObject({
+      ok: true,
+      order_id: '7000',
+      idempotent_replay: true,
+    });
+    expect(byKey.size).toBe(1);
+
+    // Narx (pul) qaydi faqat YANGI buyurtma uchun — bitta link_orders.
+    // ai-service tomonda `order_id` UNIQUE + ON CONFLICT DO NOTHING
+    // (ai-draft.pg.spec "narx BIR MARTA qayd qilinadi") ikkinchi qatlam.
+    const links = fx.ai.send.mock.calls.filter(
+      ([p]) => p.cmd === 'ai.usage.link_orders',
+    );
+    expect(links).toHaveLength(1);
+    expect(links[0][1]).toEqual(
+      expect.objectContaining({
+        draft_id: DRAFT,
+        order_ids: ['7000'],
+        items: [expect.objectContaining({ item_index: 3, order_id: '7000' })],
+        ai_price_per_order: 450,
+      }),
+    );
   });
 
   it('yangi buyurtma → idempotent_replay:false', async () => {

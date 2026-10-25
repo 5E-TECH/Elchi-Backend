@@ -14,6 +14,7 @@ import {
   BranchType,
   BranchUserRole,
   Cashbox_type,
+  fetchScanOrderSummaries,
   Order_status,
   Post_status,
   Roles,
@@ -3288,6 +3289,26 @@ export class BranchServiceService implements OnModuleInit {
       response?.data?.destination_branch_id ?? '',
     ).trim();
 
+    await this.assertCanReadTransferBatch(
+      sourceBranchId,
+      destinationBranchId,
+      requester,
+    );
+    return { batchId, response, sourceBranchId, destinationBranchId };
+  }
+
+  /**
+   * Paketni o'qish huquqi: jo'natuvchi YOKI qabul qiluvchi filialni o'qiy
+   * oladigan foydalanuvchi. ID yo'li (`GET /transfer-batches/:id`) va QR token
+   * yo'li (`GET /scan/:token`, j8hdXE1o) uchun BITTA qoida — ilgari token
+   * yo'lida qabul qiluvchi filial zaxirasi yo'q edi va kelgan paketni
+   * skanerlagan qabul qiluvchi filial xodimi 403 olardi.
+   */
+  private async assertCanReadTransferBatch(
+    sourceBranchId: string,
+    destinationBranchId: string,
+    requester?: RequesterContext,
+  ): Promise<void> {
     if (sourceBranchId && destinationBranchId) {
       try {
         await this.assertCanReadBranch(sourceBranchId, requester);
@@ -3299,7 +3320,6 @@ export class BranchServiceService implements OnModuleInit {
     } else if (destinationBranchId) {
       await this.assertCanReadBranch(destinationBranchId, requester);
     }
-    return { batchId, response, sourceBranchId, destinationBranchId };
   }
 
   /**
@@ -4265,23 +4285,108 @@ export class BranchServiceService implements OnModuleInit {
       throw new RpcException(errorRes(ORDER_SERVICE_UNAVAILABLE_MESSAGE, 502));
     }
 
-    const payload = (response?.data ?? null) as {
-      source_branch_id?: string;
-      destination_branch_id?: string;
-    } | null;
+    const payload = response?.data ?? null;
 
-    const sourceBranchId = String(payload?.source_branch_id ?? '').trim();
+    const sourceBranchId = String(
+      (payload?.source_branch_id ?? '') as string,
+    ).trim();
     const destinationBranchId = String(
-      payload?.destination_branch_id ?? '',
+      (payload?.destination_branch_id ?? '') as string,
     ).trim();
 
-    if (sourceBranchId) {
-      await this.assertCanReadBranch(sourceBranchId, requester);
-    } else if (destinationBranchId) {
-      await this.assertCanReadBranch(destinationBranchId, requester);
+    // j8hdXE1o: ID yo'li bilan AYNI qoida — jo'natuvchi YOKI qabul qiluvchi
+    // filial (ilgari faqat jo'natuvchi tekshirilardi: qabul qiluvchi 403).
+    await this.assertCanReadTransferBatch(
+      sourceBranchId,
+      destinationBranchId,
+      requester,
+    );
+
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+      return response;
     }
 
-    return response;
+    return {
+      ...response,
+      data: await this.enrichScannedTransferBatch(
+        payload,
+        sourceBranchId,
+        destinationBranchId,
+      ),
+    };
+  }
+
+  /**
+   * dwJX3NjT (S1) — `GET /scan/:token` (BTB-/BTR-) paket javobining mazmuni.
+   * Paket qatorining eski maydonlari o'zgarmaydi, faqat QO'SHIMCHA kalitlar:
+   *   - `source_branch` / `destination_branch` — `{ id, name }` (ID yo'li —
+   *     `GET /transfer-batches/:id` bilan bir xil);
+   *   - `region` — maqsad viloyat `{ id, name }`;
+   *   - `items[].order` — buyurtma xulosasi (`ScanOrderSummaryRef`: mijoz,
+   *     holat, summa, tuman/viloyat nomi). Bitta `order.summary_by_ids`
+   *     (100 tadan), har buyurtmaga alohida so'rov emas — skaner tez javob
+   *     berishi kerak. Kuryer ham ko'radi: to'liq buyurtma (tariflar,
+   *     ulushlar) EMAS, faqat xulosa.
+   * Har bir boyitish fail-soft: xizmat javob bermasa nom / buyurtma `null`,
+   * skan yiqilmaydi (ruxsat tekshiruvi undan OLDIN bajarilgan).
+   */
+  private async enrichScannedTransferBatch(
+    batch: Record<string, unknown>,
+    sourceBranchId: string,
+    destinationBranchId: string,
+  ) {
+    const regionId = String((batch.target_region_id ?? '') as string).trim();
+    const rawItems = Array.isArray(batch.items)
+      ? (batch.items as Array<Record<string, unknown>>)
+      : [];
+    const orderIdOf = (item: Record<string, unknown> | null | undefined) =>
+      String((item?.order_id ?? '') as string).trim();
+
+    const [regionMap, branchRefs, summaries] = await Promise.all([
+      this.getRegionsByIds(regionId ? [regionId] : []),
+      this.transferBatchBranchRefs([sourceBranchId, destinationBranchId]).catch(
+        (error: unknown) => {
+          this.logger.warn(
+            `scan batch branch names failed: ${this.describeRpcFailure(error)}`,
+          );
+          return new Map<string, { id: string; name: string | null }>();
+        },
+      ),
+      fetchScanOrderSummaries(
+        this.orderClient,
+        rawItems.map((item) => orderIdOf(item)).filter(Boolean),
+        {
+          onError: (error, ids) =>
+            this.logger.warn(
+              `order.summary_by_ids failed (scan batch, ids=${ids.length}): ${this.describeRpcFailure(error)}`,
+            ),
+        },
+      ),
+    ]);
+
+    const region = regionId
+      ? (regionMap.get(regionId) as Record<string, unknown> | undefined)
+      : undefined;
+
+    return {
+      ...batch,
+      items: rawItems.map((item) => ({
+        ...item,
+        order: summaries.get(orderIdOf(item)) ?? null,
+      })),
+      region: region
+        ? {
+            id: String((region.id ?? regionId) as string),
+            name: typeof region.name === 'string' ? region.name : null,
+          }
+        : null,
+      source_branch: sourceBranchId
+        ? (branchRefs.get(sourceBranchId) ?? null)
+        : null,
+      destination_branch: destinationBranchId
+        ? (branchRefs.get(destinationBranchId) ?? null)
+        : null,
+    };
   }
 
   async createBranch(

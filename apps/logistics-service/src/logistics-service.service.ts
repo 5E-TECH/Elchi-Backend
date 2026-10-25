@@ -42,6 +42,7 @@ import {
   ActivityLogService,
   ActivityLogQuery,
   BranchType,
+  fetchScanOrderSummaries,
   Order_status,
   Post_status,
   Roles,
@@ -113,6 +114,22 @@ const RETURN_REQUEST_STATUSES: Order_status[] = [
 
 /** findOrders ning odatiy order.find_all kutish vaqti. */
 const FIND_ORDERS_TIMEOUT_MS = 5000;
+
+/**
+ * X4RzXk1H — pochta QR'ini skanerlay oladigan rollar (`logistics.post.find_by_scan`):
+ * gateway `GET /post/scan/:id` `@Roles` va `GET /scan/:token` (`POST-`) dagi
+ * ro'yxat bilan BIR XIL. Market, mijoz, operator, investor, logist — 403
+ * (ilgari market ham pochta qatorini to'liq olardi).
+ */
+export const POST_SCAN_ROLES: readonly string[] = [
+  Roles.SUPERADMIN,
+  Roles.ADMIN,
+  Roles.BRANCH,
+  Roles.MANAGER,
+  Roles.REGISTRATOR,
+  Roles.COURIER,
+];
+export const POST_SCAN_FORBIDDEN_MESSAGE = "Bu pochtani ko'rishga ruxsat yo'q";
 
 /**
  * CODE-10 — Qaytarish tasdiqlash/rad etishda bir vaqtda yuboriladigan
@@ -2350,14 +2367,99 @@ export class LogisticsServiceService implements OnModuleInit {
     return successRes(posts, 200, 'Posts found');
   }
 
-  async findPostWithQr(token: string) {
-    const post = await this.postRepo.findOne({
-      where: { qr_code_token: token },
-    });
+  /**
+   * X4RzXk1H + dwJX3NjT (S2) — pochta QR skani: `GET /scan/:token`
+   * (`POST-…`) va `GET /post/scan/:id`.
+   *
+   * Ruxsat (ilgari umuman yo'q edi — market ham pochta qatorini olardi):
+   *   1. rol — `POST_SCAN_ROLES`; qidiruvdan OLDIN, shuning uchun begona rol
+   *      token bor-yo'qligini ham bilmaydi (doim 403);
+   *   2. doira — `GET /post/orders/:id` bilan AYNI (`getPostOrders`):
+   *      SA/admin — hammasi; filial xodimi — o'z filiali pochtasi yoki
+   *      buyurtmalari to'liq o'z filialida turgan pochta; kuryer — o'z
+   *      pochtasi. Skan faqat O'QIYDI: getPostOrders ning filial o'tkazmasi
+   *      pochtasini qabul qiluvchi filialga ko'chirishi (`branch_id`) bu
+   *      yo'lda yozilmaydi.
+   *
+   * Javob — pochta qatorining o'zi (avvalgi maydonlar o'zgarmagan) +
+   * QO'SHIMCHA: `region {id, name}`, `courier {id, name, phone_number}` va
+   * `orders[]` — `GET /post/orders/:id` dagi AYNI ro'yxat (kuryerga SENT
+   * pochtada faqat yo'ldagilar) skaner xulosasi shaklida. Mijoz, raqam,
+   * tuman/viloyat — `order.summary_by_ids` dan; u javob bermasa shu maydonlar
+   * `null`, skan yiqilmaydi.
+   */
+  async findPostWithQr(token: string, requester?: RequesterContext) {
+    const roles = (requester?.roles ?? []).map((role) =>
+      String(role ?? '')
+        .trim()
+        .toLowerCase(),
+    );
+    if (
+      !requester ||
+      !String(requester.id ?? '').trim() ||
+      !roles.some((role) => POST_SCAN_ROLES.includes(role))
+    ) {
+      this.forbidden(POST_SCAN_FORBIDDEN_MESSAGE);
+    }
+
+    const normalizedToken = String(token ?? '').trim();
+    const post = normalizedToken
+      ? await this.postRepo.findOne({
+          where: { qr_code_token: normalizedToken },
+        })
+      : null;
     if (!post) {
       this.notFound('Post not found');
     }
-    return successRes(post, 200, 'Post found');
+
+    const view = (await this.getPostOrders(String(post.id), requester, {
+      readOnly: true,
+    })) as {
+      data: {
+        allOrdersByPostId: OrderRow[];
+        post: { region: unknown; courier: unknown };
+      };
+    };
+    const orders = view.data.allOrdersByPostId ?? [];
+    const summaries = await fetchScanOrderSummaries(
+      this.orderClient,
+      orders.map((order) => String(order.id)),
+      {
+        onError: (error, ids) =>
+          this.logger.warn(
+            `order.summary_by_ids failed (post scan ${post.id}, ids=${ids.length}): ${(error as Error)?.message ?? String(error)}`,
+          ),
+      },
+    );
+
+    return successRes(
+      {
+        ...post,
+        region: view.data.post.region ?? null,
+        courier: view.data.post.courier ?? null,
+        orders: orders.map((order) => {
+          const summary = summaries.get(String(order.id));
+          const price = Number(order.total_price);
+          return {
+            id: String(order.id),
+            order_number: summary?.order_number ?? null,
+            status: order.status ?? summary?.status ?? null,
+            total_price:
+              order.total_price !== undefined &&
+              order.total_price !== null &&
+              Number.isFinite(price)
+                ? price
+                : (summary?.total_price ?? null),
+            where_deliver: order.where_deliver ?? null,
+            customer: summary?.customer ?? null,
+            region: summary?.region ?? null,
+            district: summary?.district ?? null,
+          };
+        }),
+      },
+      200,
+      'Post found',
+    );
   }
 
   async findAllCouriersByPostId(id: string) {
@@ -2383,7 +2485,16 @@ export class LogisticsServiceService implements OnModuleInit {
     );
   }
 
-  async getPostOrders(id: string, requester: RequesterContext) {
+  /**
+   * `options.readOnly` — X4RzXk1H: pochta QR skani (`findPostWithQr`) shu
+   * ruxsat va ro'yxatni ishlatadi, lekin filial o'tkazmasi pochtasining
+   * `branch_id` sini qabul qiluvchi filialga ko'chirmaydi (skan — o'qish).
+   */
+  async getPostOrders(
+    id: string,
+    requester: RequesterContext,
+    options?: { readOnly?: boolean },
+  ) {
     const post = await this.postRepo.findOne({
       where: { id },
       // 4YZcTTDQ: javobdagi `post.region` (detal sarlavhasi) uchun.
@@ -2436,6 +2547,7 @@ export class LogisticsServiceService implements OnModuleInit {
       !String(post.courier_id ?? '').trim() ||
       String(post.courier_id ?? '').trim() === '0';
     if (
+      !options?.readOnly &&
       belongsToScopedBranch &&
       isBranchTransferPost &&
       String(post.branch_id ?? '').trim() !== scopedBranchId

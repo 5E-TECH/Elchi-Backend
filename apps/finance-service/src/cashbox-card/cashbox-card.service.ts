@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Injectable,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { RpcException } from '@nestjs/microservices';
 import { DataSource, EntityManager, In } from 'typeorm';
@@ -20,6 +21,7 @@ import {
 } from '../entities/cashbox-card-movement.entity';
 import { Shift, ShiftStatus } from '../entities/shift.entity';
 import { SHIFT_REQUIRED_MESSAGE, isShiftRequiredFor } from '../shift-gate';
+import { FinanceRealtimeService } from '../realtime/finance-realtime.service';
 
 /**
  * 3PE0B03q (UZOQ MUDDAT) — BeePost `cashbox_card` tizimining Elchi porti:
@@ -241,6 +243,9 @@ export class CashboxCardService {
   constructor(
     private readonly dataSource: DataSource,
     private readonly activityLog: ActivityLogService,
+    // (rWdLuoP3) Karta o'zgarishi → realtime `finance.cashbox.card_changed`
+    // (outbox, shu tranzaksiyada). Ixtiyoriy: eski spec'lar usiz quradi.
+    @Optional() private readonly realtime?: FinanceRealtimeService,
   ) {}
 
   // ───────────────────────── yordamchilar ─────────────────────────
@@ -742,7 +747,7 @@ export class CashboxCardService {
         if (await this.findDuplicateName(manager, String(cashbox.id), name)) {
           conflict(`"${name}" nomli karta allaqachon bor`);
         }
-        return manager.save(
+        const created = await manager.save(
           CashboxCard,
           manager.create(CashboxCard, {
             cashbox_id: String(cashbox.id),
@@ -754,6 +759,11 @@ export class CashboxCardService {
             created_by: input?.created_by ? String(input.created_by) : null,
           }),
         );
+        await this.realtime?.cashboxCardChanged(
+          { action: 'created', card_ids: [created.id] },
+          manager,
+        );
+        return created;
       });
       await this.activityLog.log({
         entity_type: 'CashboxCard',
@@ -796,7 +806,12 @@ export class CashboxCardService {
         }
         const oldName = card.name;
         card.name = name;
-        return { card: await manager.save(CashboxCard, card), oldName };
+        const renamed = await manager.save(CashboxCard, card);
+        await this.realtime?.cashboxCardChanged(
+          { action: 'renamed', card_ids: [cardId] },
+          manager,
+        );
+        return { card: renamed, oldName };
       });
       await this.activityLog.log({
         entity_type: 'CashboxCard',
@@ -840,7 +855,15 @@ export class CashboxCardService {
           );
         }
         locked.is_active = input.is_active;
-        return manager.save(CashboxCard, locked);
+        const updated = await manager.save(CashboxCard, locked);
+        await this.realtime?.cashboxCardChanged(
+          {
+            action: input.is_active ? 'activated' : 'archived',
+            card_ids: [cardId],
+          },
+          manager,
+        );
+        return updated;
       });
       await this.activityLog.log({
         entity_type: 'CashboxCard',
@@ -944,6 +967,14 @@ export class CashboxCardService {
             created_by: input?.created_by ? String(input.created_by) : null,
             dedup_epoch: token || null,
           }),
+        );
+        await this.realtime?.cashboxCardChanged(
+          {
+            action: 'transfer',
+            card_ids: [fromId, toId],
+            movement_id: movement.id,
+          },
+          manager,
         );
         return {
           movement,
@@ -1068,6 +1099,14 @@ export class CashboxCardService {
             created_by: input?.created_by ? String(input.created_by) : null,
             dedup_epoch: token || null,
           }),
+        );
+        await this.realtime?.cashboxCardChanged(
+          {
+            action: toCash ? 'card_to_cash' : 'cash_to_card',
+            card_ids: [cardId],
+            movement_id: movement.id,
+          },
+          manager,
         );
         return { movement, idempotent: false, cardName: card.name };
       });

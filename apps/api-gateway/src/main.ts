@@ -5,13 +5,14 @@ import {
   VERSION_NEUTRAL,
 } from '@nestjs/common';
 import { NestExpressApplication } from '@nestjs/platform-express';
-import { MicroserviceOptions, Transport } from '@nestjs/microservices';
+import { MicroserviceOptions } from '@nestjs/microservices';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import helmet from 'helmet';
 import basicAuth from 'express-basic-auth';
 import { Logger } from 'nestjs-pino';
 import type { NextFunction, Request, Response } from 'express';
 import { ApiGatewayModule } from './api-gateway.module';
+import { gatewayRealtimeConsumerOptions } from './realtime/realtime-consumer.options';
 import { requestContextMiddleware } from './context/request-context.middleware';
 import {
   RpcExceptionFilter,
@@ -236,21 +237,12 @@ async function bootstrap() {
   // Hybrid RMQ consumer: lets any service push to socket.io clients by emitting
   // { cmd: 'realtime.notify' } to the gateway queue (see realtime.controller).
   const gatewayQueue = process.env.RABBITMQ_GATEWAY_QUEUE;
+  // (rWdLuoP3) Handlerlar xabarni o'zi ack qiladi — `noAck: false`
+  // (realtime-consumer.options.ts).
   if (gatewayQueue) {
-    app.connectMicroservice<MicroserviceOptions>({
-      transport: Transport.RMQ,
-      options: {
-        urls: [process.env.RABBITMQ_URI!],
-        queue: gatewayQueue,
-        noAssert: true,
-        // TCP_NODELAY — Nagle + delayed ACK har borib-kelishga ~43 ms
-        // qo'shadi (o'lchangan: 45,4 → 2,6 ms). Batafsil: libs/common/rmq.
-        socketOptions: {
-          connectionOptions: { noDelay: true },
-        },
-        queueOptions: { durable: true },
-      },
-    });
+    app.connectMicroservice<MicroserviceOptions>(
+      gatewayRealtimeConsumerOptions(process.env.RABBITMQ_URI!, gatewayQueue),
+    );
     await app.startAllMicroservices();
   }
 

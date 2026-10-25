@@ -29,6 +29,7 @@ import { CashboxCard } from './entities/cashbox-card.entity';
 import { CashboxCardMovement } from './entities/cashbox-card-movement.entity';
 import { CashboxCardService } from './cashbox-card/cashbox-card.service';
 import { CashboxCardController } from './cashbox-card/cashbox-card.controller';
+import { FinanceRealtimeService } from './realtime/finance-realtime.service';
 import { CashboxExpenseCategory } from './entities/cashbox-expense-category.entity';
 import { ExpenseCategoryService } from './expense-category/expense-category.service';
 import { ExpenseCategoryController } from './expense-category/expense-category.controller';
@@ -50,18 +51,25 @@ import { ExpenseCategoryController } from './expense-category/expense-category.c
     // maqsadi sifatida (FinanceNotificationService) — to'g'ridan-to'g'ri
     // rmqSend TAQIQ (pul tranzaksiyasi rollback bo'lsa ham xabar ketardi).
     RmqModule.register({ name: 'NOTIFICATION' }),
+    // (rWdLuoP3) Smena / kassa kartasi realtime hodisalari: gateway navbatiga
+    // `realtime.notify` — FAQAT outbox maqsadi (FinanceRealtimeService).
+    RmqModule.register({ name: 'GATEWAY' }),
     DatabaseModule,
     // Transactional outbox: finance publishes `order.settlement.advance` to
     // order-service inside the cashbox-move transaction (Faza 2a). Reliable,
     // retried, DLQ-backed delivery replaces the old best-effort gateway bridge.
     OutboxModule.forService({
-      targets: ['ORDER', 'NOTIFICATION'],
+      targets: ['ORDER', 'NOTIFICATION', 'GATEWAY'],
       // (ePpLHPX2) Bildirishnoma javobi KUTILMAYDI: publisher ketma-ket
       // ishlaydi, notification-service yiqilsa har hodisa timeout'gacha
       // osilib, ortidagi PUL hodisalari (settlement advance) kechikardi.
       // Pul/holat hodisalari bu ro'yxatda YO'Q (ularga yetkazish tasdig'i
       // va qayta urinish kerak).
-      options: { fireAndForgetPatterns: ['notification.dispatch'] },
+      // (rWdLuoP3) `realtime.notify` ham — gateway `@EventPattern`, javob
+      // qaytarmaydi; yetkazilmasa faqat sahifa o'zi yangilanmaydi.
+      options: {
+        fireAndForgetPatterns: ['notification.dispatch', 'realtime.notify'],
+      },
     }),
     ActivityLogModule.forService('finance-service'),
     TypeOrmModule.forFeature([
@@ -92,6 +100,7 @@ import { ExpenseCategoryController } from './expense-category/expense-category.c
   providers: [
     FinanceServiceService,
     FinanceNotificationService,
+    FinanceRealtimeService,
     SettlementUnappliedService,
     CashboxCardService,
     ExpenseCategoryService,
