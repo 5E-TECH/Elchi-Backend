@@ -23,7 +23,7 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
-### 2026-10-25 — Logist kabineti: faqat o'z viloyatlari, faqat ko'rish, pulsiz (4BftLLnc, iOnGbEqi, Z3pUOxou)
+### 2026-10-25 — Logist kabineti: faqat o'z viloyatlari, faqat ko'rish, pulsiz (4BftLLnc, iOnGbEqi, Z3pUOxou, hGcR8kio)
 
 Ega qarori 2026-10-19: LG-S1 — logist ko'radi, moliyaga aralashmaydi; LG-S3 — faqat o'ziga biriktirilgan viloyatlar
 (`regions.logist_id`). Doira SERVERDA: logist so'rovdagi filtr bilan doirani kengaytira olmaydi.
@@ -70,6 +70,13 @@ eski order-service `region_ids` ni bilmaydi, gateway bu holatda ham begona qator
   qo'shimcha viloyatlari hisobga olinmaydi); `region_id` filtri — faqat o'z viloyati (boshqasi 400); `branch_id`
   filtri logistda e'tiborsiz. Maosh va moliya maydonlari yo'q: `salary`, `payment_day`, `compensation_mode`,
   `commission_*`, `tariff_*`, kassa/balans. Ism, telefon, holat, `region` qoladi.
+- [2026-10-25] ✏️ [search] — **`GET /search` — LOGIST** (hGcR8kio; deploy: api-gateway + search-service): avval
+  logist faqat o'zi market/kuryer/mijoz bo'lgan buyurtmani topardi (amalda bo'sh). Endi: o'z viloyatlaridagi buyurtmalar,
+  shu viloyatlarda buyurtmasi bor (yoki viloyati shu) mijozlar — ism va telefon bo'yicha (telefon formati
+  normallashtiriladi, zfPNDCCr), o'z viloyatlari pochtalari va viloyat/tuman nomlari. Xodimlar (kuryer, menejer, market)
+  va boshqa manbalar (katalog) chiqmaydi. Natija — `{id, source, type, sourceId, title}` (summa, telefon, metadata yo'q).
+  Viloyat biriktirilmagan (yoki logistics javob bermagan) logist — faqat viloyat/tuman nomlari. 🔧 FE: header global
+  qidiruvi natijasini logistda logist sahifalariga yo'naltirish (buyurtma → logist-orders-detail, LG-4).
 - [2026-10-25] 🟢 [logist] — yozish yo'llari (pochta jo'natish/qabul, skaner, paket yaratish/jo'natish/qabul/bekor,
   kuryer biriktirish/o'chirish) logistga ochilmagan — 403 (spec bilan qulflangan). 🔧 FE: logist-mails-list/detail,
   logist-batches-list, logist-couriers-list sahifalari (LG-5) — shu endpointlar.

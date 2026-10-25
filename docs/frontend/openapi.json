@@ -7078,7 +7078,7 @@
     },
     "/search": {
       "get": {
-        "description": "Imtiyozsiz rollar: buyurtma hujjatlari faqat o'ziniki (market/kuryer/mijoz). ISeuwhfr: market operatori — biriktirilgan marketining buyurtmalari (market biriktirilmagan bo'lsa buyurtma chiqmaydi).",
+        "description": "Imtiyozsiz rollar: buyurtma hujjatlari faqat o'ziniki (market/kuryer/mijoz). ISeuwhfr: market operatori — biriktirilgan marketining buyurtmalari (market biriktirilmagan bo'lsa buyurtma chiqmaydi). hGcR8kio — LOGIST: o'ziga biriktirilgan viloyatlardagi buyurtmalar, shu viloyatlarda buyurtmasi bor mijozlar (ism/telefon bo'yicha, telefon formati normallashtiriladi), o'z viloyatlari pochtalari va viloyat/tuman nomlari; xodimlar (kuryer, menejer, market) va boshqa manbalar yo'q. Natija — faqat {id, source, type, sourceId, title} (summa, telefon, metadata yo'q).",
         "operationId": "SearchGatewayController_query",
         "parameters": [
           {
