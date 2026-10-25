@@ -150,7 +150,7 @@ Canonical role values (always **lowercase** on the wire):
 | `branch` | branch account (branch-scoped read/operations) |
 | `registrator` | registration/back-office operator (order intake, posts) |
 | `courier` | delivery courier (mobile app) |
-| `market` | seller/merchant (creates products & orders, gets paid) |
+| `market` | seller/merchant (creates orders, reads its product catalog, gets paid) |
 | `market_operator` | Telegram order-bot operator of **one** market (`user.market_id`); creates orders via the bot route and sees only that market's orders |
 | `operator` | operator with commission earnings (no order list/detail access — 403) |
 | `investor` | capital investor (read-only portfolio; no order list/detail access — 403) |
@@ -721,7 +721,9 @@ of CLOSED/PAID/PARTLY_PAID and of a courier-remitted sale. (`PATCH /post/{id}`
   only.
 - Integrations: receivables, shipments, dispatch, request.
 - Notification send. Branch transfer batches (shared branch-staff set).
-- Products: update own (`PATCH /product/my/{id}`).
+- Products: create (`POST /product`, `market_id` required), update
+  (`PATCH /product/{id}`), delete (`DELETE /product/{id}`) — Pc4CAFdB: product
+  create/delete is staff-only (superadmin/admin/registrator/manager).
 
 ### courier (mobile)
 - Posts: `GET /post/{id}`, `/courier/old-posts`, `/courier/rejected`,
@@ -739,8 +741,9 @@ of CLOSED/PAID/PARTLY_PAID and of a courier-remitted sale. (`PATCH /post/{id}`
 - Regions: `GET /region/stats/all` only (no `/region/stats/{id}`).
 
 ### market (merchant)
-- Products: `GET /product` (own only), `/my-products`, `/product/{id}` (own only),
-  `PATCH /product/my/{id}`, `POST /product`.
+- Products: read-only — `GET /product` (own only), `/my-products`, `/product/{id}`
+  (own only). Pc4CAFdB (2026-10-25): `POST /product` and `DELETE /product/{id}`
+  → 403, `PATCH /product/my/{id}` removed (404).
 - Orders: create (`POST /orders`, `POST /orders/external` allowed for market too)
   — always `new` at HQ, lifecycle fields ignored, `customer` object required;
   list by market (own only), markets/new (own row), `GET /orders` and

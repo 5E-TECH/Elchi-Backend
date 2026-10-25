@@ -23,6 +23,21 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-10-25 — Rollar: mahsulot faqat xodimda (Pc4CAFdB)
+
+Deploy: api-gateway (catalog-service — faqat izoh, qayta deploy shart emas). Migratsiya yo'q.
+
+- [2026-10-25] ⚠️ [gateway/catalog] — **Mahsulot yaratish/o'chirish faqat xodim** (Pc4CAFdB, ega qarori
+  2026-10-15): `POST /product` va `DELETE /product/:id` — superadmin, admin, registrator, menejer. **Market va
+  market operatori — 403** (ilgari POST market/operatorga, DELETE marketga ochiq edi). `POST /product` da
+  `market_id` endi HAR DOIM majburiy (OpenAPI `required`); yuborilmasa yoki bo'sh bo'lsa — 400. `PATCH /product/:id`
+  o'zgarmagan (xodim).
+- [2026-10-25] ⚠️ [gateway/catalog] — **`PATCH /product/my/:id` olib tashlandi** (404). Market va operator
+  mahsulotni tahrirlamaydi. Ro'yxat o'zgarmagan: market — `GET /product` (o'ziniki), `GET /product/my-products`,
+  `GET /product/:id`; operator — `my-products`, `GET /product/:id`. Buyurtma yaratish rollari tegilmagan.
+  🟢 FE: 1PtA5L1y allaqachon bajarilgan (`canCreateProducts` = superadmin/admin/registrator/manager,
+  `UPDATE_MY` endpointi ishlatilmaydi) — o'zgarish shart emas.
+
 ### 2026-10-25 — AI idempotentlik qoldiqlari (Cp2v3ZJ7) va kampaniya yuklamasi (xHPdpj0W)
 
 Deploy: faqat notification-service (bot matni). Migratsiya yo'q. API kontrakti o'zgarmagan.

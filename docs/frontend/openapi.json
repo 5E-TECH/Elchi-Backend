@@ -2049,6 +2049,7 @@
     },
     "/product": {
       "post": {
+        "description": "Faqat xodim (superadmin, admin, registrator, menejer). `market_id` majburiy — yuborilmasa 400. Market va market operatori — 403.",
         "operationId": "CatalogGatewayController_create",
         "parameters": [],
         "requestBody": {
@@ -2071,15 +2072,13 @@
             "bearer": []
           }
         ],
-        "summary": "Create a new product",
+        "summary": "Create a new product (superadmin/admin/registrator/manager)",
         "tags": [
           "Products"
         ],
         "x-roles": [
-          "market",
-          "market_operator",
-          "admin",
           "superadmin",
+          "admin",
           "registrator",
           "manager"
         ]
@@ -2430,61 +2429,15 @@
             "bearer": []
           }
         ],
-        "summary": "Delete product (soft delete)",
+        "summary": "Delete product (soft delete; superadmin/admin/registrator/manager)",
         "tags": [
           "Products"
         ],
         "x-roles": [
-          "market",
-          "admin",
           "superadmin",
+          "admin",
           "registrator",
           "manager"
-        ]
-      }
-    },
-    "/product/my/{id}": {
-      "patch": {
-        "description": "Market — o'z mahsuloti; market operatori — biriktirilgan marketining mahsuloti. Begona mahsulot — 403.",
-        "operationId": "CatalogGatewayController_updateMyProduct",
-        "parameters": [
-          {
-            "name": "id",
-            "required": true,
-            "in": "path",
-            "description": "Product ID (id)",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "multipart/form-data": {
-              "schema": {
-                "$ref": "#/components/schemas/UpdateProductRequestDto"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": ""
-          }
-        },
-        "security": [
-          {
-            "bearer": []
-          }
-        ],
-        "summary": "Update own product (market / market_operator)",
-        "tags": [
-          "Products"
-        ],
-        "x-roles": [
-          "market",
-          "market_operator"
         ]
       }
     },
@@ -21509,7 +21462,7 @@
           "market_id": {
             "type": "string",
             "example": "1",
-            "description": "Admin/Superadmin yuboradi. MARKET role uchun token sub ishlatiladi."
+            "description": "Mahsulot qaysi marketniki — MAJBURIY (superadmin/admin/registrator/menejer yuboradi). Yuborilmasa 400."
           },
           "price": {
             "type": "object",
@@ -21561,6 +21514,7 @@
         },
         "required": [
           "name",
+          "market_id",
           "weight_kg",
           "length_cm",
           "width_cm",

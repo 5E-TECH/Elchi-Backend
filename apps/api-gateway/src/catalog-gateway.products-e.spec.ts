@@ -132,16 +132,11 @@ describe('3qDsJpfW — mahsulot ro`yxatlari search/page/limit uzatadi', () => {
 });
 
 describe('tsEevElW — market_operator mahsulot katalogida', () => {
-  it('rollar: POST, my-products, PATCH my/:id, GET :id da bor; GET /product, PATCH :id, DELETE da yo`q', () => {
-    for (const method of [
-      'create',
-      'getMyProducts',
-      'updateMyProduct',
-      'findById',
-    ] as const) {
+  it('rollar: my-products, GET :id da bor; POST, GET /product, PATCH :id, DELETE da yo`q (Pc4CAFdB)', () => {
+    for (const method of ['getMyProducts', 'findById'] as const) {
       expect(rolesOf(method)).toContain('market_operator');
     }
-    for (const method of ['findAll', 'update', 'remove'] as const) {
+    for (const method of ['create', 'findAll', 'update', 'remove'] as const) {
       expect(rolesOf(method)).not.toContain('market_operator');
     }
   });
@@ -158,24 +153,8 @@ describe('tsEevElW — market_operator mahsulot katalogida', () => {
     expect(sentQuery(catalogSend)).toMatchObject({ user_id: '121' });
   });
 
-  it('⭐ TC2: POST /product — user_id = bog`langan market, tanadagi market_id e`tiborsiz', async () => {
-    const { controller, catalogSend } = setup({ operatorMarketId: '121' });
-    await controller.create(
-      undefined,
-      { name: 'Olma', market_id: '999' },
-      { user: OPERATOR },
-    );
-    expect(catalogSend).toHaveBeenCalledWith(
-      { cmd: 'catalog.product.create' },
-      { dto: { name: 'Olma', image_url: undefined, user_id: '121' } },
-    );
-  });
-
-  it('⭐ TC4: biriktirilmagan operator — POST /product 400 (catalog chaqirilmaydi)', async () => {
+  it('⭐ TC4: biriktirilmagan operator — my-products 400 (catalog chaqirilmaydi)', async () => {
     const { controller, catalogSend } = setup({ operatorMarketId: null });
-    await expect(
-      controller.create(undefined, { name: 'Olma' }, { user: OPERATOR }),
-    ).rejects.toBeInstanceOf(BadRequestException);
     await expect(
       controller.getMyProducts({ user: OPERATOR }),
     ).rejects.toBeInstanceOf(BadRequestException);
@@ -191,47 +170,9 @@ describe('tsEevElW — market_operator mahsulot katalogida', () => {
         }),
     );
     await expect(
-      controller.create(undefined, { name: 'Olma' }, { user: OPERATOR }),
+      controller.getMyProducts({ user: OPERATOR }),
     ).rejects.toBeInstanceOf(BadRequestException);
     expect(catalogSend).not.toHaveBeenCalled();
-  });
-
-  it('⭐ TC3: PATCH /product/my/:id — update_own user_id = bog`langan market, aktyor operator', async () => {
-    const { controller, catalogSend } = setup({ operatorMarketId: '121' });
-    await lastValueFrom(
-      await controller.updateMyProduct(
-        '5',
-        undefined,
-        { name: 'Yangi' },
-        { user: OPERATOR },
-      ),
-    );
-    expect(catalogSend).toHaveBeenCalledWith(
-      { cmd: 'catalog.product.update_own' },
-      {
-        id: '5',
-        user_id: '121',
-        dto: { name: 'Yangi', image_url: undefined },
-        actor: { id: '501', role: 'market_operator' },
-      },
-    );
-  });
-
-  it('PATCH my/:id — market uchun avvalgidek (sub, aktyorsiz)', async () => {
-    const { controller, catalogSend, identitySend } = setup();
-    await lastValueFrom(
-      await controller.updateMyProduct(
-        '5',
-        undefined,
-        { name: 'Yangi' },
-        { user: MARKET },
-      ),
-    );
-    expect(identitySend).not.toHaveBeenCalled();
-    expect(catalogSend).toHaveBeenCalledWith(
-      { cmd: 'catalog.product.update_own' },
-      { id: '5', user_id: '121', dto: { name: 'Yangi', image_url: undefined } },
-    );
   });
 
   it('GET /product/:id — o`z marketi OK, begona 403, biriktirilmagan 403', async () => {
@@ -256,26 +197,25 @@ describe('tsEevElW — market_operator mahsulot katalogida', () => {
 });
 
 /**
- * QjkMUMIR: Elchi-Frontend `canManageProducts` (src/app/lib/routes.tsx) va
- * `canCreateProducts` (src/app/lib/access.ts) — ed6c7ee holati. Frontend
- * boshqa repoda, shuning uchun ro'yxat shu yerda qayd etiladi: frontend
- * mahsulot sahifasini ochadigan HAR BIR rol backendda ro'yxat, yaratish,
- * tahrirlash va o'chirish yo'liga ega bo'lishi shart (403 boshi berk ko'cha
- * qaytmasin). Frontend ro'yxati o'zgarsa — shu konstanta ham yangilanadi.
+ * QjkMUMIR → Pc4CAFdB: Elchi-Frontend `canCreateProducts` (src/app/lib/
+ * access.ts, 1PtA5L1y dan keyin) = superadmin, admin, registrator, manager.
+ * Market va market operatori mahsulot sahifasida FAQAT ro'yxatni ko'radi
+ * (`canViewProducts`, `GET product/my-products`). Frontend boshqa repoda,
+ * shuning uchun ro'yxat shu yerda qayd etiladi: yaratish/tahrirlash/o'chirish
+ * tugmasini ko'radigan HAR BIR rol backendda shu yo'llarga ega bo'lishi shart
+ * (403 boshi berk ko'cha qaytmasin), market esa ega bo'lmasligi shart.
  */
-const FRONTEND_CAN_MANAGE_PRODUCTS = [
+const FRONTEND_CAN_CREATE_PRODUCTS = [
   'admin',
   'superadmin',
-  'market',
   'registrator',
   'manager',
 ];
 
-describe('QjkMUMIR — mahsulot ruxsat matritsasi (frontend bilan izchil)', () => {
-  it('⭐ TC4: canManageProducts dagi har rol — ro`yxat, POST, tahrirlash va DELETE yo`liga ega', () => {
-    const listRoles = [...rolesOf('findAll'), ...rolesOf('getMyProducts')];
-    const editRoles = [...rolesOf('update'), ...rolesOf('updateMyProduct')];
-    for (const role of FRONTEND_CAN_MANAGE_PRODUCTS) {
+describe('QjkMUMIR / Pc4CAFdB — mahsulot ruxsat matritsasi (frontend bilan izchil)', () => {
+  it('⭐ TC4: canCreateProducts dagi har rol — ro`yxat, POST, tahrirlash va DELETE yo`liga ega', () => {
+    const listRoles = rolesOf('findAll');
+    for (const role of FRONTEND_CAN_CREATE_PRODUCTS) {
       expect({ role, list: listRoles.includes(role) }).toEqual({
         role,
         list: true,
@@ -284,7 +224,7 @@ describe('QjkMUMIR — mahsulot ruxsat matritsasi (frontend bilan izchil)', () =
         role,
         create: true,
       });
-      expect({ role, edit: editRoles.includes(role) }).toEqual({
+      expect({ role, edit: rolesOf('update').includes(role) }).toEqual({
         role,
         edit: true,
       });
@@ -293,6 +233,20 @@ describe('QjkMUMIR — mahsulot ruxsat matritsasi (frontend bilan izchil)', () =
         remove: true,
       });
     }
+  });
+
+  it('⭐ Pc4CAFdB: POST va DELETE rollari aynan superadmin/admin/registrator/manager (market, operator, branch YO`Q)', () => {
+    const staff = ['superadmin', 'admin', 'registrator', 'manager'].sort();
+    expect([...rolesOf('create')].sort()).toEqual(staff);
+    expect([...rolesOf('remove')].sort()).toEqual(staff);
+    // PATCH /product/:id tegilmagan — o'sha to'plam.
+    expect([...rolesOf('update')].sort()).toEqual(staff);
+  });
+
+  it('⭐ Pc4CAFdB: market — ro`yxat (GET /product, my-products) va GET :id hamon ochiq', () => {
+    expect(rolesOf('findAll')).toContain('market');
+    expect(rolesOf('getMyProducts')).toContain('market');
+    expect(rolesOf('findById')).toContain('market');
   });
 
   it('⭐ TC1: registrator POST /product — market_id bilan catalog.product.create ga ketadi (201 yo`li)', async () => {

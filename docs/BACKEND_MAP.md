@@ -545,8 +545,10 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
   (0.001..1000 kg, 1..1000 cm — owner not yet confirmed).
   - HTTP `POST /product`: the 4 measures are **required** (MH-S1, DTO
     `IsDefined`), multipart strings → numbers; `volumetric_enabled` /
-    `barcode` optional. `PATCH /product/:id` and `/product/my/:id`: all
-    optional, `null` / `''` measure → 400 (measures are only replaced).
+    `barcode` optional. `PATCH /product/:id`: all optional, `null` / `''`
+    measure → 400 (measures are only replaced). `PATCH /product/my/:id` was
+    removed (Pc4CAFdB): product create/delete/update is staff-only
+    (superadmin/admin/registrator/manager), market/market_operator read only.
     Service level (`catalog.product.create`) keeps measures optional —
     `integration-service` partner path still creates `{ name, user_id }`.
   - `update` and `update_own` use the same field whitelist (name, image_url,
