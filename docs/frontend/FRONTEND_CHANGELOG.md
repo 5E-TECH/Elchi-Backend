@@ -197,6 +197,45 @@ Deploy: faqat api-gateway. Migratsiya yo'q. Kontrakt (endpoint, query, sarlavhal
   faqat o'zbekcha (til parametri yo'q). 🟢 FE o'zgarishi shart emas; `status.json` (uz) `order.*` yorlig'i
   o'zgarsa — backend'da `orders-xlsx.export.ts` `ORDER_EXPORT_STATUS_LABELS` ham yangilansin (spec uni qulflaydi).
 
+### 2026-10-25 — Bekor holatlari: «qayerda turibdi», marketga topshirish, market tablari (BG1 5Yy6r6UI, BG2 fL79tFbs, BG3 M0EPcJVf)
+
+Deploy: order-service + api-gateway. **Migratsiya bor:** `1716000000155-CancelReturnMarketHandover`
+(faqat qo'shimcha NULL ustunlar + eski topshirishlar backfill'i; jadval qayta yozilmaydi).
+
+- [2026-10-25] ✏️ [order] — **BG1:** `GET /orders`, `GET /orders/:id` (va boshqa boyitilgan buyurtma ro'yxatlari —
+  `markets/:id/cancelled`, `branch/cancelled`, kuryer bekor tabi) har qatorda:
+  `return_stage` — `courier` | `in_transit` | `branch` | `hq` | `market` | `null` va
+  `cancel_return` — `null` yoki `{ stage, place_type: "COURIER"|"BRANCH"|"HQ"|null, place_id, place_name,
+  received_at, sent_at, handed_over_at, handover_method }`. Qoida FE `resolveCancelReturnStage` bilan AYNAN bir xil
+  (qabulgacha bekor — `null`). Joy: kuryerda — ushlab turgan kuryer ismi; filial/HQ — nomi; `in_transit` — MAQSAD
+  (qayerga ketyapti); `market` — qayerda topshirilgan. `received_at` (filial/HQ) — shu joyda qachondan beri (oxirgi
+  bekor pochta qabuli; bo'lmasa custody vaqti) — «N kun» shundan; `sent_at` — `in_transit`; `handed_over_at` +
+  `handover_method` — `market`. Pul maydoni yo'q — hamma rol (market ham) bir xil ko'radi.
+  🔧 FE (vOczoOUE 2-bosqich): `cancel_return` bo'lsa shuni o'qing (`cancelReturnStage.ts` hisobi — zaxira); joy nomi
+  hamma rolda `place_name`, kunlar `received_at` dan, «Marketga topshirildi» vaqti/usuli — `handed_over_at` /
+  `handover_method` (ro'yxatda ham).
+- [2026-10-25] ✏️ [gateway/order] — **BG3:** `GET /orders/markets/:marketId/cancelled` — MARKET roli endi o'z
+  bekorlarining HAMMA bosqichini ko'radi: `?stage=courier,in_transit,branch,hq,market` (vergul bilan, harf farqsiz;
+  noma'lum qiymat — 400). `stage` bilan HQ qotirmasi olinadi (doira — faqat o'z marketi, begona market — 403 avvalgidek).
+  `start_day` / `end_day` (YYYY-MM-DD, Toshkent kuni) — FAQAT `market` bosqichiga, topshirish vaqti bo'yicha
+  (`market_handover_at`, eski yozuvda `last_handover_at`). Javob `{ data, total, truncated? }` (≤ 5000 qator), qatorlarda
+  `return_stage` / `cancel_return`. `stage` siz — o'zgarishsiz (HQ'da turganlar); boshqa rollarda `stage` e'tiborsiz
+  (topshirish ro'yxati o'zgarmaydi).
+  🔧 FE (vOczoOUE 2-bosqich, market 3 tabi), tavsiya: «HQ'da» — `stage=hq`, «Yo'lda» (hali HQ'ga yetmagan) —
+  `stage=courier,in_transit,branch`, «Olganlarim» — `stage=market&start_day=…&end_day=…`.
+
+- [2026-10-25] ✏️ [order] — buyurtmada yangi maydonlar (GET /orders, /orders/:id va boshqa buyurtma javoblarida
+  o'z-o'zidan chiqadi): `market_handover_at` (ISO | null), `market_handover_by` (xodim id | null),
+  `market_handover_method` (`qr` | `manual` | `no_qr` | `pin` | null), `market_handover_branch_id` (topshirilgan joy —
+  HQ ham filial | null). Ikkala topshirish yo'li yozadi: `POST /orders/markets/:id/cancelled/handover` va
+  `POST /orders/:id/mark-returned-to-market` (endi `last_handover_at` ni ham yangilaydi). Eski topshirishlar
+  tracking/custody tarixidan to'ldirildi; usul aniq bo'lmasa `null` (FE eski hisobiga — «QR orqali» — qaytadi).
+  Ombor buyurtmasining omborga qaytishi (`warehouse_returned`) — marketga topshirish emas, maydonlar `null`.
+- [2026-10-25] ✏️ [order] — `GET /orders/:id/tracking`: topshirish hodisasi endi doim `action` va `metadata` bilan —
+  QR: `action: "returned_to_market"`, qo'lda: `"cancelled_market_handover_manual"`; `metadata = { method,
+  market_id, branch_id, branch_name, from_holder_type, handover_session_id, manual_override?, manual_reason? }`.
+  🔧 FE: `readCancelHandoverInfo` `metadata.method` ni o'qiydi (allaqachon tayyor); joy — `metadata.branch_name`.
+
 ### 2026-10-25 — Market operatori: viloyat tumanlari va tuman tafsiloti (MO-7, OfRSoRUX / N11)
 
 Deploy: faqat api-gateway. Migratsiya yo'q.

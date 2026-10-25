@@ -13,6 +13,7 @@ import { OrderItem } from './order-item.entity';
 import { OrderTracking } from './order-tracking.entity';
 import { Branch } from './branch.entity';
 import { OrderCustodyEvent } from './order-custody-event.entity';
+import type { CancelHandoverMethod } from '../cancel-return/cancel-return';
 
 export enum Order_source {
   INTERNAL = 'internal',
@@ -88,6 +89,13 @@ export enum OrderHolderType {
 })
 @Index('IDX_ORDER_REPLACEMENT_RETURN', ['replacement_state'], {
   where: '"is_replacement_return" = true',
+})
+/**
+ * fL79tFbs / M0EPcJVf — market «Olganlarim» (topshirilganlar) sana oralig'i
+ * bilan: `market_id` + topshirish vaqti. Migratsiya 1716000000155.
+ */
+@Index('IDX_orders_market_handover', ['market_id', 'market_handover_at'], {
+  where: '"market_handover_at" IS NOT NULL',
 })
 export class Order extends BaseEntity {
   @Column({ type: 'bigint' })
@@ -382,6 +390,35 @@ export class Order extends BaseEntity {
 
   @Column({ type: 'bigint', nullable: true })
   last_handover_by!: string | null;
+
+  /**
+   * fL79tFbs (BG2) — posilka MARKETGA TOPSHIRILGAN payt, xodim, usul va joy.
+   *
+   * Ilgari topshirish faqat holat (`returned_to_market`) va tracking izohi
+   * bilan qolardi: QR yo'lida tracking `metadata` siz yozilardi, yagona
+   * `mark-returned-to-market` esa `last_handover_at` ni ham yangilamasdi —
+   * ro'yxatda «qachon, qayerda, qanday topshirildi» ni ko'rsatib bo'lmasdi.
+   * Endi ikkala topshirish yo'li (`completeMarketCancelledHandover`,
+   * `markReturnedToMarket`) shu ustunlarni yozadi; eski yozuvlar migratsiya
+   * 1716000000155 da tracking/custody tarixidan to'ldirilgan (usul aniqlanmasa
+   * — NULL). Ombor buyurtmasining omborga qaytishi (`warehouse_returned`)
+   * marketga topshirish EMAS — bu ustunlar unda NULL qoladi.
+   *
+   *   - `market_handover_method` — `CancelHandoverMethod` (`qr` | `manual` |
+   *     `no_qr` | `pin`), DB CHECK bilan;
+   *   - `market_handover_branch_id` — topshirilgan joy (HQ ham filial).
+   */
+  @Column({ type: 'timestamptz', nullable: true })
+  market_handover_at!: Date | null;
+
+  @Column({ type: 'bigint', nullable: true })
+  market_handover_by!: string | null;
+
+  @Column({ type: 'varchar', length: 16, nullable: true })
+  market_handover_method!: CancelHandoverMethod | null;
+
+  @Column({ type: 'bigint', nullable: true })
+  market_handover_branch_id!: string | null;
 
   @Column({ type: 'text', nullable: true })
   return_reason!: string | null;

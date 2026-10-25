@@ -264,6 +264,71 @@ describe('OrderServiceService return flow', () => {
     expect(res.statusCode).toBe(200);
   });
 
+  it('fL79tFbs (BG2): markReturnedToMarket — usul qr, joy, vaqt (last_handover_at ham) va tracking metadata', async () => {
+    const { service, orderRepo, trackingRepo } = makeService({
+      orderStatus: Order_status.CANCELLED,
+      hasReceivedReturnBatch: true,
+      holderType: OrderHolderType.BRANCH,
+      holderBranchId: '10',
+      requesterBranch: {
+        branch_id: '10',
+        branch: { type: 'REGIONAL' },
+        name: 'Urgut filiali',
+      },
+    });
+
+    await service.markReturnedToMarket(
+      { id: '9', roles: ['manager'] },
+      '101',
+      'MHA-ok',
+    );
+
+    const saved = orderRepo.save.mock.calls[0][0];
+    expect(saved).toEqual(
+      expect.objectContaining({
+        status: Order_status.RETURNED_TO_MARKET,
+        holder_type: OrderHolderType.MARKET,
+        market_handover_method: 'qr',
+        market_handover_branch_id: '10',
+        market_handover_by: '9',
+        last_handover_by: '9',
+        market_handover_at: expect.any(Date),
+      }),
+    );
+    expect(saved.last_handover_at).toBe(saved.market_handover_at);
+    expect(trackingRepo.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'returned_to_market',
+        metadata: expect.objectContaining({
+          method: 'qr',
+          market_id: 'm1',
+          branch_id: '10',
+          branch_name: 'Urgut filiali',
+          from_holder_type: OrderHolderType.BRANCH,
+        }),
+      }),
+    );
+  });
+
+  it('fL79tFbs (BG2): markReturnedToMarket — HQ qo`lidan (SA) joy HQ filiali', async () => {
+    const { service, orderRepo } = makeService({
+      orderStatus: Order_status.CANCELLED,
+      hasReceivedReturnBatch: true,
+      holderType: OrderHolderType.HQ,
+      holderBranchId: null,
+    });
+
+    await service.markReturnedToMarket(
+      { id: '9', roles: ['superadmin'] },
+      '101',
+      'MHA-ok',
+    );
+
+    expect(orderRepo.save).toHaveBeenCalledWith(
+      expect.objectContaining({ market_handover_branch_id: '1' }),
+    );
+  });
+
   it('markReturnedToMarket cannot run twice', async () => {
     const { service } = makeService({
       orderStatus: Order_status.RETURNED_TO_MARKET,

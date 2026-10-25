@@ -70,6 +70,90 @@ describe('OrderGatewayController return flow', () => {
     );
   });
 
+  it('M0EPcJVf (BG3): market `stage` bilan — HQ qotirmasisiz, bosqichlar va sana oralig`i uzatiladi', async () => {
+    const { controller, orderClient } = setup();
+
+    await controller.findCancelledOrdersByMarket(
+      '16',
+      { user: { sub: '16', roles: ['market'] } } as any,
+      'courier, in_transit,BRANCH',
+      undefined,
+      undefined,
+    );
+    expect(orderClient.send).toHaveBeenLastCalledWith(
+      { cmd: 'order.find_cancelled_by_market_enriched' },
+      {
+        market_id: '16',
+        exclude_branch_source: false,
+        stages: ['courier', 'in_transit', 'branch'],
+      },
+    );
+    const lastPayload = (orderClient.send.mock.calls as unknown[][]).at(
+      -1,
+    )?.[1] as Record<string, unknown>;
+    expect(lastPayload.holder_type).toBeUndefined();
+
+    await controller.findCancelledOrdersByMarket(
+      '16',
+      { user: { sub: '16', roles: ['market'] } } as any,
+      ['market'],
+      '2026-10-01',
+      ' 2026-10-25 ',
+    );
+    expect(orderClient.send).toHaveBeenLastCalledWith(
+      { cmd: 'order.find_cancelled_by_market_enriched' },
+      expect.objectContaining({
+        market_id: '16',
+        stages: ['market'],
+        start_day: '2026-10-01',
+        end_day: '2026-10-25',
+      }),
+    );
+  });
+
+  it('M0EPcJVf (BG3): noma`lum bosqich — 400; begona market — avvalgidek 403', async () => {
+    const { controller, orderClient } = setup();
+
+    await expect(
+      controller.findCancelledOrdersByMarket(
+        '16',
+        { user: { sub: '16', roles: ['market'] } } as any,
+        'hq,yolda',
+      ),
+    ).rejects.toMatchObject({ status: 400 });
+    await expect(
+      controller.findCancelledOrdersByMarket(
+        '17',
+        { user: { sub: '16', roles: ['market'] } } as any,
+        'market',
+      ),
+    ).rejects.toMatchObject({ status: 403 });
+    expect(orderClient.send).not.toHaveBeenCalled();
+  });
+
+  it('M0EPcJVf (BG3): market bo`lmagan rol uchun `stage` e`tiborsiz — topshirish ro`yxati (HQ) o`zgarmaydi', async () => {
+    const { controller, orderClient } = setup();
+
+    await controller.findCancelledOrdersByMarket(
+      '16',
+      { user: { sub: '1', roles: ['superadmin'] } } as any,
+      'market',
+      '2026-10-01',
+    );
+
+    expect(orderClient.send).toHaveBeenCalledWith(
+      { cmd: 'order.find_cancelled_by_market_enriched' },
+      {
+        market_id: '16',
+        branch_id: undefined,
+        holder_type: 'HQ',
+        exclude_branch_source: false,
+      },
+    );
+    const payload = (orderClient.send.mock.calls as unknown[][])[0][1];
+    expect(payload).not.toHaveProperty('stages');
+  });
+
   it('creates a cancelled handover QR for the authenticated market', async () => {
     const { controller, orderClient } = setup();
 

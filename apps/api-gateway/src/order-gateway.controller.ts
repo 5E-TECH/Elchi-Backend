@@ -98,8 +98,10 @@ import {
   AI_MAX_IMAGES,
   AI_RPC_TIMEOUT_MS,
   AI_TEXT_MAX_CHARS,
+  CANCEL_RETURN_STAGES,
   FULFILLMENT_SOURCES,
   Order_status,
+  parseCancelReturnStages,
   RMQ_FIRE_AND_FORGET_TIMEOUT,
   Roles as RoleEnum,
   Where_deliver,
@@ -199,6 +201,20 @@ type UploadedProofFile = {
 };
 
 const PROOF_OPERATION_TIMEOUT_MS = 60000;
+
+/**
+ * 5Yy6r6UI (BG1) — buyurtma javobidagi bekor bosqichi (Swagger tavsifi).
+ * Hisob order-service `cancel-return/cancel-return.ts` da.
+ */
+const CANCEL_RETURN_RESPONSE_DOC =
+  '5Yy6r6UI (BG1): every order row has `return_stage` (`courier` | `in_transit` | `branch` | `hq` | `market` | null) ' +
+  'and `cancel_return` (null unless the order is cancelled / returned to market): ' +
+  '`{ stage, place_type: "COURIER" | "BRANCH" | "HQ" | null, place_id, place_name, received_at, sent_at, ' +
+  'handed_over_at, handover_method: "qr" | "manual" | "no_qr" | "pin" | null }`. ' +
+  'Place = where the parcel is now (courier name / branch or HQ name); `in_transit` — destination; `market` — where it ' +
+  'was handed over. `received_at` (branch/hq) — since when it is at that place (last cancelled-post receipt, else ' +
+  'custody time); `sent_at` (in_transit); `handed_over_at` + `handover_method` (market, fL79tFbs BG2; null method = ' +
+  'legacy/unknown). Cancelled before intake (never left the market) — both null. No money fields; same for every role.';
 
 /** ai-parse rasmi (multer memoryStorage) — faqat RAM'da, hech qayerga yozilmaydi. */
 type UploadedAiImage = {
@@ -3305,7 +3321,10 @@ export class OrderGatewayController {
   @Get()
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'List orders with filters' })
+  @ApiOperation({
+    summary: 'List orders with filters',
+    description: CANCEL_RETURN_RESPONSE_DOC,
+  })
   @ApiQuery({ name: 'market_id', required: false, type: String })
   @ApiQuery({ name: 'customer_id', required: false, type: String })
   @ApiQuery({
@@ -4661,15 +4680,53 @@ export class OrderGatewayController {
     RoleEnum.MARKET,
   )
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'CANCELLED orders by market id' })
+  @ApiOperation({
+    summary: 'CANCELLED orders by market id',
+    description:
+      'Default (no `stage`): cancelled orders ready for handover — HQ-held (SA/admin, HQ registrator, market) or held ' +
+      "by the requester's branch (branch staff). " +
+      "M0EPcJVf (BG3): MARKET role may pass `stage` to see ALL stages of its own cancellations (tabs «HQ'da», " +
+      "«Yo'lda», «Olganlarim»): any of `courier,in_transit,branch,hq,market` (comma list). With `stage`, HQ/branch " +
+      'pinning is dropped (still only this market). `start_day`/`end_day` (YYYY-MM-DD, Tashkent day) filter ONLY the ' +
+      '`market` stage by handover time (`market_handover_at`, legacy: `last_handover_at`). Unknown stage — 400. ' +
+      'For other roles `stage`/`start_day`/`end_day` are ignored (handover list unchanged). Rows carry `return_stage` ' +
+      'and `cancel_return` (see GET /orders). Response `{ data, total, truncated? }` (max 5000 rows).',
+  })
   @ApiParam({ name: 'marketId', description: 'Market ID (id)' })
+  @ApiQuery({
+    name: 'stage',
+    required: false,
+    type: String,
+    description: `MARKET role only. Comma list of: ${CANCEL_RETURN_STAGES.join(', ')}`,
+  })
+  @ApiQuery({
+    name: 'start_day',
+    required: false,
+    type: String,
+    description: 'MARKET + stage=market: handover date from (YYYY-MM-DD)',
+  })
+  @ApiQuery({
+    name: 'end_day',
+    required: false,
+    type: String,
+    description: 'MARKET + stage=market: handover date to (YYYY-MM-DD)',
+  })
   async findCancelledOrdersByMarket(
     @Param('marketId') marketId: string,
     @Req() req?: { user: JwtUser },
+    @Query('stage') stage?: string | string[],
+    @Query('start_day') start_day?: string,
+    @Query('end_day') end_day?: string,
   ) {
     const roles = req?.user?.roles ?? [];
     const normalizedRoles = this.normalizeRoles(roles);
     const isMarket = normalizedRoles.includes(RoleEnum.MARKET);
+    const parsedStages = parseCancelReturnStages(stage);
+    if (parsedStages.invalid.length) {
+      throw new BadRequestException(
+        `stage noto'g'ri: ${parsedStages.invalid.join(', ')} (ruxsat: ${CANCEL_RETURN_STAGES.join(', ')})`,
+      );
+    }
     const isBranchScopedRequester =
       normalizedRoles.includes(RoleEnum.BRANCH) ||
       normalizedRoles.includes(RoleEnum.MANAGER) ||
@@ -4699,13 +4756,24 @@ export class OrderGatewayController {
       excludeBranchSource = false;
     }
 
+    // M0EPcJVf (BG3): market o'z bekorlarining HAMMA bosqichini ko'radi —
+    // `stage` berilsa HQ qotirmasi olinadi (doira baribir faqat o'z marketi,
+    // yuqorida tekshirildi). Boshqa rollar uchun topshirish ro'yxati o'zgarmaydi.
+    const marketStages = isMarket ? parsedStages.stages : null;
     const response: unknown = await this.sendOrderWithTimeout(
       { cmd: 'order.find_cancelled_by_market_enriched' },
       {
         market_id: marketId,
-        branch_id: branchId,
-        holder_type: holderType,
+        branch_id: marketStages ? undefined : branchId,
+        holder_type: marketStages ? undefined : holderType,
         exclude_branch_source: excludeBranchSource,
+        ...(marketStages
+          ? {
+              stages: marketStages,
+              start_day: start_day?.trim() || undefined,
+              end_day: end_day?.trim() || undefined,
+            }
+          : {}),
       },
     );
     // kH2zZsz3: market — kuryer tarifi/ulushi va filial ulushisiz.
@@ -5033,7 +5101,10 @@ export class OrderGatewayController {
   @Get(':id')
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Get order by ID' })
+  @ApiOperation({
+    summary: 'Get order by ID',
+    description: CANCEL_RETURN_RESPONSE_DOC,
+  })
   @ApiParam({ name: 'id', description: 'Order ID (uuid)' })
   async findById(@Param('id') id: string, @Req() req?: { user: JwtUser }) {
     const response = await this.sendOrderWithFallback(

@@ -48,6 +48,18 @@ import {
   warehouseRefOf,
   type WarehouseRef,
 } from './warehouse/order-warehouse.service';
+import {
+  buildCancelReturnView,
+  cancelReturnBranchId,
+  cancelReturnCourierId,
+  cancelReturnHandoverAtSql,
+  cancelReturnStageSql,
+  CANCEL_RETURN_STAGES,
+  parseCancelReturnStages,
+  resolveCancelReturnStage,
+  type CancelReturnContext,
+  type CancelReturnStage,
+} from './cancel-return/cancel-return';
 
 /** Qidiruvda identity-service'dan olinadigan mijozlar chegarasi. */
 const CUSTOMER_SEARCH_LIMIT = 1000;
@@ -632,6 +644,50 @@ export class OrderServiceService {
     qb.addOrderBy('order.id', sort.dir);
   }
 
+  /**
+   * M0EPcJVf (BG3) — bekor bosqichlari bo'yicha filtr (`cancelReturnStageSql`,
+   * OR). Sana oralig'i faqat `market` bosqichiga (topshirish vaqti).
+   */
+  private applyCancelStageFilter(
+    qb: SelectQueryBuilder<Order>,
+    stages: CancelReturnStage[],
+    handoverDays: { start_day?: string; end_day?: string },
+  ) {
+    const range = tashkentDayRange(
+      handoverDays.start_day,
+      handoverDays.end_day,
+    );
+    for (const [key, value] of [
+      ['handover_start_day', range.start],
+      ['handover_end_day', range.end],
+    ] as const) {
+      if (value && Number.isNaN(value.getTime())) {
+        this.badRequest(`${key} noto'g'ri sana formatida`);
+      }
+    }
+    const handoverAt = cancelReturnHandoverAtSql('order');
+    qb.andWhere(
+      new Brackets((nested) => {
+        for (const stage of stages) {
+          if (!CANCEL_RETURN_STAGES.includes(stage)) {
+            this.badRequest(`stage noto'g'ri: ${String(stage)}`);
+          }
+          let condition = cancelReturnStageSql(stage, 'order');
+          const params: Record<string, Date> = {};
+          if (stage === 'market' && range.start) {
+            condition += ` AND ${handoverAt} >= :cancelHandoverStart`;
+            params.cancelHandoverStart = range.start;
+          }
+          if (stage === 'market' && range.end) {
+            condition += ` AND ${handoverAt} <= :cancelHandoverEnd`;
+            params.cancelHandoverEnd = range.end;
+          }
+          nested.orWhere(`(${condition})`, params);
+        }
+      }),
+    );
+  }
+
   private normalizePagination(
     page?: number,
     limit?: number,
@@ -741,6 +797,14 @@ export class OrderServiceService {
     holder_type?: OrderHolderType;
     qr_code_token?: string;
     status?: Order_status | Order_status[] | string | string[];
+    /**
+     * M0EPcJVf (BG3) — bekor bosqichlari (OR). `market` bosqichiga
+     * `handover_start_day`/`handover_end_day` (Toshkent kuni, topshirish vaqti
+     * bo'yicha) qo'llanadi; boshqa bosqichlar — hozirgi holat, sanasiz.
+     */
+    cancel_stages?: CancelReturnStage[];
+    handover_start_day?: string;
+    handover_end_day?: string;
     where_deliver?: Where_deliver;
     return_requested?: boolean;
     start_day?: string;
@@ -785,6 +849,9 @@ export class OrderServiceService {
       holder_type,
       qr_code_token,
       status,
+      cancel_stages,
+      handover_start_day,
+      handover_end_day,
       where_deliver,
       return_requested,
       start_day,
@@ -919,6 +986,12 @@ export class OrderServiceService {
     } else if (exclude_statuses?.length) {
       qb.andWhere('order.status NOT IN (:...exclude_statuses)', {
         exclude_statuses,
+      });
+    }
+    if (cancel_stages?.length) {
+      this.applyCancelStageFilter(qb, cancel_stages, {
+        start_day: handover_start_day,
+        end_day: handover_end_day,
       });
     }
     if (where_deliver) {
@@ -1302,8 +1375,30 @@ export class OrderServiceService {
       branch_id?: string;
       holder_type?: OrderHolderType;
       exclude_branch_source?: boolean;
+      /** M0EPcJVf (BG3) — market o'z bekorlarini bosqich bo'yicha (gateway faqat market roliga beradi). */
+      stages?: CancelReturnStage[];
+      start_day?: string;
+      end_day?: string;
     },
   ) {
+    // RMQ payload — tip kafolat emas: noma'lum bosqich 400 (SQL'ga yetmaydi).
+    const parsedStages = parseCancelReturnStages(options.stages);
+    if (parsedStages.invalid.length) {
+      this.badRequest(
+        `stage noto'g'ri: ${parsedStages.invalid.join(', ')} (ruxsat: ${CANCEL_RETURN_STAGES.join(', ')})`,
+      );
+    }
+    if (parsedStages.stages) {
+      // Bosqich so'ralsa — HQ/filial va «pochtaga biriktirilmagan» cheklovlarisiz,
+      // faqat shu marketning shu bosqichdagi buyurtmalari (yo'lda/topshirilgan ham).
+      return this.findAll({
+        market_id,
+        cancel_stages: parsedStages.stages,
+        handover_start_day: options.start_day,
+        handover_end_day: options.end_day,
+        disable_pagination: true,
+      });
+    }
     return this.findAll({
       market_id,
       branch_id: options.branch_id,
@@ -2240,9 +2335,15 @@ export class OrderServiceService {
       this.realCourierId(row.courier_id) ??
       postCourierByPostId.get(String(row.post_id ?? '').trim()) ??
       null;
+    // 5Yy6r6UI (BG1): bekor bosqichi «kuryerda» — joy nomi ushlab turgan kuryerdan.
+    const stageCourierIds = rows
+      .filter((row) => resolveCancelReturnStage(row) === 'courier')
+      .map((row) => cancelReturnCourierId(row));
     const courierIds = [
       ...new Set(
-        rows.map(courierIdOf).filter((id): id is string => Boolean(id)),
+        [...rows.map(courierIdOf), ...stageCourierIds].filter(
+          (id): id is string => Boolean(id),
+        ),
       ),
     ];
 
@@ -2254,6 +2355,7 @@ export class OrderServiceService {
       productsRes,
       couriers,
       warehouseRefs,
+      cancelReturnContext,
     ] = await Promise.all([
       marketIds.length
         ? rmqSend<{ data: Array<{ id: string; [key: string]: any }> }>(
@@ -2297,6 +2399,7 @@ export class OrderServiceService {
             rows.map((row) => row.warehouse_id),
           )
         : Promise.resolve(new Map<string, WarehouseRef>()),
+      this.loadCancelReturnContext(rows),
     ]);
 
     const toMap = (arr: Array<{ id: string; [key: string]: any }>) =>
@@ -2362,7 +2465,143 @@ export class OrderServiceService {
       })),
       // 6kHnNH9j: `fulfillment_source` — ustun (HQ | WAREHOUSE); ombor — ref.
       warehouse: warehouseRefOf(row, warehouseRefs),
+      ...this.cancelReturnFields(row, cancelReturnContext, couriers),
     }));
+  }
+
+  /**
+   * 5Yy6r6UI (BG1) — `return_stage` + `cancel_return` (bekor bo'lmagan
+   * buyurtmada ikkalasi `null`). Kuryer ismi `enrichOrders` yuklagan kuryer
+   * xulosalaridan.
+   */
+  private cancelReturnFields(
+    row: Order,
+    context: Omit<CancelReturnContext, 'courierNames'>,
+    couriers: Map<string, { name: string | null }>,
+  ) {
+    const view = buildCancelReturnView(row, {
+      ...context,
+      courierNames: new Map(
+        [...couriers].map(([id, courier]) => [id, courier.name]),
+      ),
+    });
+    return { return_stage: view?.stage ?? null, cancel_return: view };
+  }
+
+  /**
+   * 5Yy6r6UI (BG1) — bekor bosqichi joylari uchun HQ id'si, filial nomlari va
+   * oxirgi bekor pochta QABULI vaqti. Bekor qatori bo'lmasa hech narsa
+   * so'ralmaydi; har qism alohida xatoga chidamli (boyitish yiqilmaydi — joy
+   * nomi/vaqti `null` bo'lib qoladi).
+   */
+  private async loadCancelReturnContext(
+    rows: Order[],
+  ): Promise<Omit<CancelReturnContext, 'courierNames'>> {
+    const empty = {
+      hqBranchId: null,
+      branchNames: new Map<string, string>(),
+      receivedAt: new Map<string, Date>(),
+    };
+    const staged = rows
+      .map((row) => ({ row, stage: resolveCancelReturnStage(row) }))
+      .filter(
+        (
+          item,
+        ): item is {
+          row: Order;
+          stage: NonNullable<ReturnType<typeof resolveCancelReturnStage>>;
+        } => item.stage !== null && item.stage !== 'courier',
+      );
+    if (!staged.length) return empty;
+
+    const hqBranchId = await Promise.resolve(this.lookup?.getHqBranchId())
+      .then((id) => (id ? String(id) : null))
+      .catch(() => null);
+    const branchIds = [
+      ...new Set(
+        staged
+          .map(({ row, stage }) => cancelReturnBranchId(row, stage, hqBranchId))
+          .filter((id): id is string => Boolean(id)),
+      ),
+    ];
+    const receivedIds = staged
+      .filter(({ stage }) => stage === 'branch' || stage === 'hq')
+      .map(({ row }) => String(row.id));
+
+    const [branchNames, receivedAt] = await Promise.all([
+      this.loadBranchNames(branchIds),
+      this.loadCancelledPostReceivedAt(receivedIds),
+    ]);
+    return { hqBranchId, branchNames, receivedAt };
+  }
+
+  /** Filial (HQ ham) nomlari — `branch_schema.branches` PK so'rovi. */
+  private async loadBranchNames(ids: string[]): Promise<Map<string, string>> {
+    const result = new Map<string, string>();
+    if (!ids.length) return result;
+    try {
+      const rows: Array<{ id: unknown; name: unknown }> =
+        await this.dataSource.query(
+          `SELECT "id"::text AS "id", "name"
+             FROM "branch_schema"."branches"
+            WHERE "id" = ANY($1::bigint[])`,
+          [ids],
+        );
+      for (const row of rows ?? []) {
+        const name = typeof row?.name === 'string' ? row.name.trim() : '';
+        if (name) result.set(String(row.id), name);
+      }
+    } catch (error) {
+      this.logger.warn(
+        `enrichOrders: filial nomlarini o'qib bo'lmadi: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+    return result;
+  }
+
+  /**
+   * Oxirgi `cancelled_post_received` tracking hodisasi (bekor pochta joyda
+   * qabul qilingan vaqt). `IDX_order_tracking_order_id_created_at` bo'yicha.
+   */
+  private async loadCancelledPostReceivedAt(
+    orderIds: string[],
+  ): Promise<Map<string, Date>> {
+    const result = new Map<string, Date>();
+    if (!orderIds.length) return result;
+    try {
+      const rows: Array<{ order_id: unknown; received_at: unknown }> =
+        await this.orderTrackingRepo
+          .createQueryBuilder('tracking')
+          .select('tracking.order_id', 'order_id')
+          .addSelect('MAX(tracking.created_at)', 'received_at')
+          .where('tracking.order_id IN (:...orderIds)', { orderIds })
+          .andWhere('tracking.action = :action', {
+            action: 'cancelled_post_received',
+          })
+          .groupBy('tracking.order_id')
+          .getRawMany();
+      for (const row of rows ?? []) {
+        const raw = row?.received_at;
+        const at =
+          raw instanceof Date
+            ? raw
+            : typeof raw === 'string' || typeof raw === 'number'
+              ? new Date(raw)
+              : null;
+        if (at && Number.isFinite(at.getTime())) {
+          result.set(String(row.order_id), at);
+        }
+      }
+    } catch (error) {
+      this.logger.warn(
+        `enrichOrders: bekor pochta qabul vaqtini o'qib bo'lmadi: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+    return result;
   }
 
   // ==================== Enriched Endpoints ====================
@@ -2670,6 +2909,9 @@ export class OrderServiceService {
       branch_id?: string;
       holder_type?: OrderHolderType;
       exclude_branch_source?: boolean;
+      stages?: CancelReturnStage[];
+      start_day?: string;
+      end_day?: string;
     },
   ) {
     const result = await this.findCancelledOrdersByMarket(market_id, options);
@@ -2677,6 +2919,9 @@ export class OrderServiceService {
     return {
       data: enriched,
       total: result.total,
+      ...(options.stages?.length && result.truncated
+        ? { truncated: true }
+        : {}),
     };
   }
 
