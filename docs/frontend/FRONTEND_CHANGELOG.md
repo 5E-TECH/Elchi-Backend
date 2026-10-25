@@ -23,6 +23,28 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-10-25 — Logist kabineti: faqat o'z viloyatlari, faqat ko'rish, pulsiz (4BftLLnc)
+
+Ega qarori 2026-10-19: LG-S1 — logist ko'radi, moliyaga aralashmaydi; LG-S3 — faqat o'ziga biriktirilgan viloyatlar
+(`regions.logist_id`). Doira SERVERDA: logist so'rovdagi filtr bilan doirani kengaytira olmaydi.
+
+Deploy: api-gateway, logistics-service, order-service (bir vaqtda; order-service gateway'dan OLDIN yoki birga —
+eski order-service `region_ids` ni bilmaydi, gateway bu holatda ham begona qatorni olib tashlaydi). Migratsiya yo'q.
+
+- [2026-10-25] ✏️ [gateway/order] — **`GET /orders` — LOGIST** (4BftLLnc): avval 403, endi o'z viloyatlaridagi
+  buyurtmalar. `region_id` — faqat o'z viloyatlaridan biri (boshqasi — 400 «Bu viloyat sizga biriktirilmagan»);
+  `market_id`, `status`, sana va boshqa filtrlar odatdagidek. Viloyat biriktirilmagan logist — 200 va bo'sh ro'yxat
+  (`data: []`, maket: «Sizga hali viloyat biriktirilmagan»). Logistics javob bermasa — 503.
+- [2026-10-25] ✏️ [gateway/order] — **`GET /orders/:id` va `GET /orders/:id/tracking` — LOGIST**: buyurtma o'z
+  viloyatida bo'lsa 200, aks holda 403. Tracking `x-roles` ga `logist` qo'shildi.
+- [2026-10-25] ⚠️ [gateway/order] — **Logist javobida pul YO'Q** (ro'yxat, detal, tracking): `total_price`,
+  `sale_collectible_amount`, `paid_online_amount`, `extra_cost`, `to_be_paid`, `paid_amount`, barcha tarif/ulush
+  maydonlari, `market.tariff_*`, `items[].price` va nomi narx/summa/tarif/tushum/maosh/balansga oid HAR QANDAY kalit
+  olib tashlanadi (null emas — kalit yo'q). 🔧 FE (logist-orders-list / logist-orders-detail, bosh sahifa «So'nggi
+  buyurtmalar»): «Summa» ustuni va «To'lov» kartasi logistda chizilmaydi; kalit yo'qligini «—» deb ko'rsating.
+- [2026-10-25] 🟢 [order] — logist uchun yozish yo'li ochilmagan: sotish, bekor qilish, tahrir, Excel eksport,
+  yaratish — avvalgidek 403.
+
 ### 2026-10-25 — AI idempotentlik qoldiqlari (Cp2v3ZJ7) va kampaniya yuklamasi (xHPdpj0W)
 
 Deploy: faqat notification-service (bot matni). Migratsiya yo'q. API kontrakti o'zgarmagan.

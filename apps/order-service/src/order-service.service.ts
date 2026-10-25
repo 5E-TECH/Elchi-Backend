@@ -753,6 +753,12 @@ export class OrderServiceService {
     courier_cancelled_tab?: boolean;
     include_courier_history?: boolean | string;
     region_id?: string;
+    /**
+     * 4BftLLnc — LOGIST doirasi: faqat shu viloyatlar (gateway logistning
+     * `regions.logist_id = me` to'plamini beradi). Bo'sh massiv — HECH NARSA
+     * (fail-closed), `undefined` — filtr yo'q.
+     */
+    region_ids?: string[];
     district_id?: string;
     branch_id?: string;
     source?: Order_source | 'internal' | 'external' | 'branch';
@@ -797,6 +803,7 @@ export class OrderServiceService {
       courier_cancelled_tab,
       include_courier_history,
       region_id,
+      region_ids,
       district_id,
       branch_id,
       source,
@@ -931,6 +938,24 @@ export class OrderServiceService {
     }
     if (region_id) {
       qb.andWhere('order.region_id = :region_id', { region_id });
+    }
+    if (Array.isArray(region_ids)) {
+      // 4BftLLnc: logist doirasi. Faqat bigint id'lar (buzuq qiymat bazaga
+      // yetmaydi); to'plam bo'sh bo'lsa — hech qanday qator (fail-closed).
+      const scopedRegionIds = Array.from(
+        new Set(
+          region_ids
+            .map((id) => String(id ?? '').trim())
+            .filter((id) => /^[0-9]{1,19}$/.test(id)),
+        ),
+      );
+      if (scopedRegionIds.length) {
+        qb.andWhere('order.region_id IN (:...scoped_region_ids)', {
+          scoped_region_ids: scopedRegionIds,
+        });
+      } else {
+        qb.andWhere('1 = 0');
+      }
     }
     if (district_id) {
       qb.andWhere('order.district_id = :district_id', { district_id });
@@ -2388,6 +2413,8 @@ export class OrderServiceService {
     courier_cancelled_tab?: boolean;
     include_courier_history?: boolean | string;
     region_id?: string;
+    /** 4BftLLnc — logist doirasi (`findAll` ga o'tadi). */
+    region_ids?: string[];
     district_id?: string;
     sort_by?: string;
     sort_dir?: string;

@@ -2546,6 +2546,7 @@
         ]
       },
       "get": {
+        "description": "4BftLLnc — LOGIST: faqat o'ziga biriktirilgan viloyatlar (regions.logist_id = me) buyurtmalari, pul maydonlarisiz (total_price, sale_collectible_amount, paid_online_amount, extra_cost, tariflar, ulushlar). `region_id` faqat o‘z viloyatlaridan biri bo'lishi mumkin (boshqasi — 400). Viloyat biriktirilmagan logist — 200 va bo'sh ro'yxat.",
         "operationId": "OrderGatewayController_findAll",
         "parameters": [
           {
@@ -4252,6 +4253,7 @@
     },
     "/orders/{id}": {
       "get": {
+        "description": "4BftLLnc — LOGIST: buyurtma o'z viloyatida bo'lsa (aks holda 403), pul maydonlarisiz.",
         "operationId": "OrderGatewayController_findById",
         "parameters": [
           {
@@ -4577,6 +4579,7 @@
     },
     "/orders/{id}/tracking": {
       "get": {
+        "description": "4BftLLnc — LOGIST: o'z viloyatidagi buyurtma tarixi (boshqasi — 403), hodisalarda pul maydonlari yo'q.",
         "operationId": "OrderGatewayController_getTracking",
         "parameters": [
           {
@@ -4628,7 +4631,8 @@
           "manager",
           "registrator",
           "courier",
-          "market"
+          "market",
+          "logist"
         ]
       }
     },

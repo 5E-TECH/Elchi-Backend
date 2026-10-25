@@ -19,7 +19,14 @@ import { Roles as RoleEnum } from '@app/common';
  *     market tariflari/komissiyasi YO'Q. Kuryerga kerakli maydonlar
  *     (o'z tarifi/ulushi, `total_price`, `sale_collectible_amount`,
  *     `paid_online_amount`) qoladi;
- *   - QOLGAN HAR QANDAY ROL (CUSTOMER, OPERATOR, INVESTOR, LOGIST, noma'lum
+ *   - LOGIST (4BftLLnc, ega LG-S1 — "moliyaga aralashmaydi") — HECH QANDAY
+ *     pul maydoni yo'q: `LOGIST_HIDDEN_ORDER_FIELDS` (cheklangan ro'yxat +
+ *     `total_price`, `sale_collectible_amount`, `paid_online_amount`,
+ *     `extra_cost`, market tariflari) va nomi pulga xos HAR QANDAY kalit
+ *     (`LOGIST_MONEY_KEY_PATTERN`: narx, summa, tarif, tushum, maosh, balans,
+ *     kassa, komissiya) — javob daraxtining istalgan joyida (pochta, paket,
+ *     kuryer, statistika javoblari ham shu proyeksiyadan o'tadi);
+ *   - QOLGAN HAR QANDAY ROL (CUSTOMER, OPERATOR, INVESTOR, noma'lum
  *     yoki bo'sh rollar) — FAIL-CLOSED (kH2zZsz3 tekshiruvi #3): barcha ichki
  *     moliyaviy maydonlar (tariflar, ulushlar, `to_be_paid`/`paid_amount`)
  *     va market profili tariflari YO'Q. Ilgari ro'yxatda yo'q rol to'liq
@@ -81,7 +88,7 @@ export const COURIER_HIDDEN_MARKET_PROFILE_FIELDS: readonly string[] = [
 
 /**
  * kH2zZsz3 (tekshiruv #3) — ro'yxatda yo'q rollar (CUSTOMER, OPERATOR,
- * INVESTOR, LOGIST, noma'lum/bo'sh) ko'rmaydigan buyurtma maydonlari:
+ * INVESTOR, noma'lum/bo'sh; LOGIST — undan ham qattiqroq, pastda) ko'rmaydigan buyurtma maydonlari:
  * market VA kuryer ko'rmaydiganlarning birlashmasi + market moliyasi
  * (`to_be_paid`, `paid_amount` — ular orqali market tarifi hisoblanadi).
  * `total_price`, `sale_collectible_amount`, `paid_online_amount`,
@@ -98,6 +105,45 @@ export const RESTRICTED_HIDDEN_ORDER_FIELDS: readonly string[] = Array.from(
   ]),
 );
 
+/**
+ * 4BftLLnc — logist ko'rmaydigan buyurtma maydonlari (karta 4-band):
+ * cheklangan ro'yxat + mijoz to'lovi/summa maydonlari + market tariflari.
+ * Kartadagi aniq ro'yxat; nomi pulga xos qolgan kalitlarni
+ * `LOGIST_MONEY_KEY_PATTERN` qamraydi.
+ */
+export const LOGIST_HIDDEN_ORDER_FIELDS: readonly string[] = Array.from(
+  new Set([
+    ...RESTRICTED_HIDDEN_ORDER_FIELDS,
+    'total_price',
+    'sale_collectible_amount',
+    'paid_online_amount',
+    'extra_cost',
+    'market_tariff',
+    'tariff_home',
+    'tariff_center',
+    // Pochta / paket / kuryer / statistika javoblaridagi pul maydonlari.
+    'post_total_price',
+    'snapshot_price',
+    'salary',
+    'payment_day',
+    'compensation_mode',
+    'commission_type',
+    'commission_value',
+    'revenue',
+    'pickup_fee',
+  ]),
+);
+
+/**
+ * 4BftLLnc — logist uchun nomi pulga xos HAR QANDAY kalit (ro'yxatda
+ * unutilgan yangi maydon ham sizmasin): `*price*` (`homeOrdersTotalPrice`,
+ * `sent_total_price`), `*amount*` (`amount_total`, `paid_amount`), `*tariff*`,
+ * `*revenue*` (`totalRevenue`), `*salary*`, `*balance*`, `*cashbox*`,
+ * `*commission*`, `*_share` / `*Share` (kuryer/filial ulushi), `to_be_paid`.
+ */
+export const LOGIST_MONEY_KEY_PATTERN =
+  /(price|amount|tariff|revenue|salary|balance|cashbox|commission|profit|earning|_share$|[a-z]Share$|to_?be_?paid|extra_?cost$)/i;
+
 /** To'liq ko'rinishli rollar — proyeksiya qo'llanmaydi. */
 const FULL_VIEW_ROLES: readonly string[] = [
   RoleEnum.SUPERADMIN,
@@ -113,6 +159,8 @@ const MAX_DEPTH = 32;
 export type OrderProjection = {
   orderFields: ReadonlySet<string>;
   marketProfileFields: ReadonlySet<string>;
+  /** 4BftLLnc: LOGIST — nomi shu naqshga mos kalit ham olib tashlanadi. */
+  keyPattern?: RegExp;
 };
 
 const normalizeRoles = (roles?: string[]): string[] =>
@@ -148,6 +196,7 @@ export function resolveOrderProjection(
 
   const orderFields = new Set<string>();
   const marketProfileFields = new Set<string>();
+  let keyPattern: RegExp | undefined;
   const hide = (fields: readonly string[], target: Set<string>) =>
     withCamelVariants(fields).forEach((field) => target.add(field));
 
@@ -158,13 +207,20 @@ export function resolveOrderProjection(
     } else if (role === RoleEnum.COURIER) {
       hide(COURIER_HIDDEN_ORDER_FIELDS, orderFields);
       hide(COURIER_HIDDEN_MARKET_PROFILE_FIELDS, marketProfileFields);
+    } else if (role === RoleEnum.LOGIST) {
+      // 4BftLLnc (LG-S1): logist — hech qanday pul maydoni.
+      hide(LOGIST_HIDDEN_ORDER_FIELDS, orderFields);
+      hide(COURIER_HIDDEN_MARKET_PROFILE_FIELDS, marketProfileFields);
+      keyPattern = LOGIST_MONEY_KEY_PATTERN;
     } else {
       hide(RESTRICTED_HIDDEN_ORDER_FIELDS, orderFields);
       hide(COURIER_HIDDEN_MARKET_PROFILE_FIELDS, marketProfileFields);
     }
   }
 
-  return { orderFields, marketProfileFields };
+  return keyPattern
+    ? { orderFields, marketProfileFields, keyPattern }
+    : { orderFields, marketProfileFields };
 }
 
 const isPlainObject = (value: unknown): value is Record<string, unknown> => {
@@ -226,7 +282,10 @@ function projectValue(
   let changed = false;
   const next: Record<string, unknown> = {};
   for (const [key, nested] of Object.entries(value)) {
-    if (projection.orderFields.has(key)) {
+    if (
+      projection.orderFields.has(key) ||
+      (projection.keyPattern && projection.keyPattern.test(key))
+    ) {
       changed = true;
       continue;
     }

@@ -870,6 +870,19 @@ export class LogisticsServiceController {
     });
   }
 
+  // 4BftLLnc — ICHKI: logistning o'z viloyatlari (regions.logist_id = me).
+  // Gateway logist doirasi (buyurtmalar, paketlar, kuryerlar, qidiruv) shu
+  // yerdan oladi. Javob: { logist_id, region_ids, regions: [{id, name}] }.
+  @MessagePattern({ cmd: 'logistics.region.find_by_logist' })
+  findRegionsByLogist(
+    @Payload() payload: { logist_id?: unknown },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.logisticsService.findRegionsByLogist(payload?.logist_id),
+    );
+  }
+
   @MessagePattern({ cmd: 'logistics.region.find_by_ids' })
   findRegionsByIds(
     @Payload() payload: { ids: string[] },

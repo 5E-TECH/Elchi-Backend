@@ -298,6 +298,8 @@ export class OrderServiceController {
         courier?: string;
         courier_ids?: string[];
         region_id?: string;
+        /** 4BftLLnc — logist doirasi; bo'sh massiv — hech narsa. */
+        region_ids?: string[];
         district_id?: string;
         branch_id?: string;
         source?: Order_source | 'internal' | 'external' | 'branch';

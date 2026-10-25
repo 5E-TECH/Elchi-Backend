@@ -276,12 +276,13 @@ describe('kH2zZsz3 — projectOrderPayloadForRoles', () => {
     expect(projected.data.total).toBe(2);
   });
 
-  it("ro'yxatda yo'q rollar (mijoz, operator, investor, logist, noma'lum, bo'sh) — FAIL-CLOSED", () => {
+  // 4BftLLnc: logist endi alohida (yanada qattiq) proyeksiyada — pastdagi
+  // logist-scope.4BftLLnc.spec.ts (total_price ham yo'q).
+  it("ro'yxatda yo'q rollar (mijoz, operator, investor, noma'lum, bo'sh) — FAIL-CLOSED", () => {
     for (const roles of [
       ['customer'],
       ['operator'],
       ['investor'],
-      ['logist'],
       ['some_future_role'],
       [],
       undefined,

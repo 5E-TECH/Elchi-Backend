@@ -180,6 +180,44 @@ describe('OrderServiceService filters', () => {
     return { service, lifecycle, analytics, qb, trackingQb, custodyQb };
   }
 
+  // 4BftLLnc — logist doirasi: gateway logistning viloyatlarini beradi.
+  it('region_ids: faqat shu viloyatlar (bigint bo‘lmagan qiymat tashlanadi)', async () => {
+    const { service, qb } = setup();
+
+    await service.findAll({
+      region_ids: ['5', '9', '9', 'x; DROP', ''],
+      page: 1,
+      limit: 10,
+    } as any);
+
+    expect(qb.andWhere).toHaveBeenCalledWith(
+      'order.region_id IN (:...scoped_region_ids)',
+      { scoped_region_ids: ['5', '9'] },
+    );
+    expect(qb.andWhere).not.toHaveBeenCalledWith('1 = 0');
+  });
+
+  it('region_ids: bo‘sh to‘plam — hech qanday qator (fail-closed)', async () => {
+    const { service, qb } = setup();
+
+    await service.findAll({ region_ids: [], page: 1, limit: 10 } as any);
+
+    expect(qb.andWhere).toHaveBeenCalledWith('1 = 0');
+  });
+
+  it('region_ids berilmasa — filtr yo‘q (boshqa rollar o‘zgarmagan)', async () => {
+    const { service, qb } = setup();
+
+    await service.findAll({ region_id: '5', page: 1, limit: 10 } as any);
+
+    const whereCalls = qb.andWhere.mock.calls.map((call) => call[0]);
+    expect(whereCalls).toContain('order.region_id = :region_id');
+    expect(whereCalls).not.toContain(
+      'order.region_id IN (:...scoped_region_ids)',
+    );
+    expect(whereCalls).not.toContain('1 = 0');
+  });
+
   it('filters by source=BRANCH and branch/home branch scope', async () => {
     const { service, qb } = setup();
 

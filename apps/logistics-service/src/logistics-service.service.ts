@@ -6383,6 +6383,47 @@ export class LogisticsServiceService implements OnModuleInit {
     return successRes(regions);
   }
 
+  /**
+   * 4BftLLnc — LOGIST doirasining YAGONA manbasi: `regions.logist_id = me`
+   * (IDX_REGION_LOGIST). Yaroqsiz/yo'q id — bo'sh ro'yxat (hech narsa
+   * ko'rinmaydi). Gateway (`auth/logist-scope.ts` — buyurtmalar, paketlar,
+   * kuryerlar, qidiruv), hudud statistikasi va pochta ro'yxati shundan oladi.
+   */
+  async findLogistRegions(
+    logistIdInput: unknown,
+  ): Promise<Array<{ id: string; name: string }>> {
+    const logistId = canonicalBigintId(logistIdInput);
+    if (!logistId) {
+      return [];
+    }
+    const regions = await this.regionRepo.find({
+      where: { logist_id: logistId },
+      order: { name: 'ASC' },
+    });
+    return (
+      regions
+        // Himoya: repo filtri ishlamasa ham begona viloyat qaytmaydi.
+        .filter((region) => canonicalBigintId(region.logist_id) === logistId)
+        .map((region) => ({ id: String(region.id), name: region.name }))
+    );
+  }
+
+  /** 4BftLLnc — `logistics.region.find_by_logist` (gateway logist doirasi). */
+  async findRegionsByLogist(logistIdInput: unknown) {
+    const regions = await this.findLogistRegions(logistIdInput);
+    return successRes(
+      {
+        logist_id: canonicalBigintId(logistIdInput),
+        region_ids: regions.map((region) => region.id),
+        regions,
+      },
+      200,
+      regions.length
+        ? 'Logist viloyatlari'
+        : 'Sizga hali viloyat biriktirilmagan',
+    );
+  }
+
   async updateRegion(id: string, dto: UpdateRegionDto) {
     const region = await this.regionRepo.findOne({ where: { id } });
     if (!region) {
