@@ -19081,7 +19081,7 @@
     },
     "/customers/suggest": {
       "get": {
-        "description": "Telefon har qanday formatda (+998 90 123 45 67, 901234567, 0901234567; kamida 7 raqam). Asosiy telefon VA qo'shimcha raqam (`extra_number`, 9444UAa8) bo'yicha qidiriladi; `matched_by`: `phone` | `extra_number` | `name` — qaysi raqam mos kelgani («Qo'shimcha raqam: …» belgisi shundan). Market/market operatori/filial xodimi faqat shu marketda buyurtmasi bo'lgan mijozlarni ko'radi (qo'shimcha raqam bo'yicha topilganlar ham); admin — hammasini. Har taklifda shu marketdagi `orders_count`, `new_orders_count`, `has_new_orders` (takroriy buyurtma ogohlantirishi). Ko'pi bilan 10 ta.",
+        "description": "Telefon har qanday formatda (+998 90 123 45 67, 901234567, 0901234567; kamida 7 raqam). Asosiy telefon VA qo'shimcha raqam (`extra_number`, 9444UAa8) bo'yicha qidiriladi; `matched_by`: `phone` | `extra_number` | `name` — qaysi raqam mos kelgani («Qo'shimcha raqam: …» belgisi shundan). WCuZzUCv: market/market operatori/filial xodimi shu marketda buyurtmasi bor mijozlarni (qisman raqam bilan ham) VA boshqa market mijozini faqat TO'LIQ (9 raqamli) asosiy telefon aniq mos kelganda ko'radi (`in_market: false`, sonlar 0, `new_order_ids: []`, `last_order_at: null`; market/operator rolida `address` va `extra_number` null). Sonlar DOIM faqat shu market bo'yicha — boshqa marketlar soni/ID/sanasi qaytmaydi. Admin — hammasini. Har taklifda shu marketdagi `orders_count`, `new_orders_count`, `has_new_orders` (takroriy buyurtma ogohlantirishi). Ko'pi bilan 10 ta.",
         "operationId": "CustomerGatewayController_suggest",
         "parameters": [
           {
@@ -22099,7 +22099,7 @@
           "customer_id": {
             "type": "string",
             "example": "1",
-            "description": "Customer ID (as string/bigint). Superadmin/admin — istalgan mijoz. POST /orders da boshqa rollar (market, filial xodimi) — FAQAT shu marketda buyurtmasi bor mijoz (GET /customers/suggest taklifi, hiqRNhkI); doiradan tashqari id: `customer` obyekti bo'lsa u ishlatiladi, bo'lmasa 403. POST /orders/external da faqat superadmin/admin (fix3 RBAC-01)."
+            "description": "Customer ID (as string/bigint). Superadmin/admin — istalgan mijoz. POST /orders da boshqa rollar (market, operator, filial xodimi) — GET /customers/suggest qoidasi (hiqRNhkI, WCuZzUCv): shu marketda buyurtmasi bor mijoz, yoki boshqa market mijozi — faqat `customer.phone_number` kartadagi telefonga TO'LIQ mos kelsa. Tasdiqlanmagan id: `customer` obyekti bo'lsa u ishlatiladi (telefon bo'yicha), bo'lmasa 403. POST /orders/external da faqat superadmin/admin (fix3 RBAC-01)."
           },
           "customer": {
             "$ref": "#/components/schemas/CreateOrderCustomerDto"
@@ -22532,7 +22532,7 @@
           "customer_id": {
             "type": "string",
             "example": "1",
-            "description": "Customer ID (as string/bigint). Superadmin/admin — istalgan mijoz. POST /orders da boshqa rollar (market, filial xodimi) — FAQAT shu marketda buyurtmasi bor mijoz (GET /customers/suggest taklifi, hiqRNhkI); doiradan tashqari id: `customer` obyekti bo'lsa u ishlatiladi, bo'lmasa 403. POST /orders/external da faqat superadmin/admin (fix3 RBAC-01)."
+            "description": "Customer ID (as string/bigint). Superadmin/admin — istalgan mijoz. POST /orders da boshqa rollar (market, operator, filial xodimi) — GET /customers/suggest qoidasi (hiqRNhkI, WCuZzUCv): shu marketda buyurtmasi bor mijoz, yoki boshqa market mijozi — faqat `customer.phone_number` kartadagi telefonga TO'LIQ mos kelsa. Tasdiqlanmagan id: `customer` obyekti bo'lsa u ishlatiladi (telefon bo'yicha), bo'lmasa 403. POST /orders/external da faqat superadmin/admin (fix3 RBAC-01)."
           },
           "customer": {
             "$ref": "#/components/schemas/CreateOrderCustomerDto"

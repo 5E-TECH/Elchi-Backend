@@ -106,6 +106,7 @@ import {
   Roles as RoleEnum,
   Where_deliver,
   matchesDeclaredType,
+  normalizeUzPhone,
   parseUzPhoneSearch,
   recordReceiveByScanOutcome,
   requestContext,
@@ -2034,23 +2035,28 @@ export class OrderGatewayController {
   }
 
   /**
-   * hiqRNhkI TC3 — admin bo'lmagan rol yuborgan `customer_id` ning DOIRASI.
+   * hiqRNhkI TC3 + WCuZzUCv — admin bo'lmagan rol yuborgan `customer_id`.
    *
-   * Qoida `GET /customers/suggest` bilan AYNAN bir xil: mijoz shu marketda
-   * (o'chirilmagan) buyurtmasi bo'lsagina `order.customer.market_summary`
-   * natijasida chiqadi — taklif ro'yxati ham shu xulosa bilan qisqartiriladi.
-   * Ya'ni market/operator/filial xodimi faqat taklifda ko'ra oladigan
-   * mijozni bog'lay oladi; boshqa market mijozining id si (RBAC-01) o'tmaydi.
+   * Qoida `GET /customers/suggest` bilan AYNAN bir xil (ega qarori
+   * 2026-10-19 S3 — mijoz kartasi marketlar orasida umumiy):
+   *  - mijozning SHU marketda (o'chirilmagan) buyurtmasi bor
+   *    (`order.customer.market_summary`) → qabul, `inMarket: true`;
+   *  - aks holda (boshqa market mijozi) — identity'da CUSTOMER rolida va
+   *    o'chirilmagan karta bo'lsa VA so'rovdagi `customer.phone_number`
+   *    kartadagi asosiy telefonga TO'LIQ mos kelsa → qabul,
+   *    `inMarket: false`. Telefon talabi — RBAC-01: ketma-ket id yuborib
+   *    boshqa marketlar mijozlarini sanab chiqib bo'lmaydi (suggest ham
+   *    begona mijozni faqat to'liq telefon bilan ko'rsatadi).
    *
-   * Qaytaradi: doiradagi id yoki `null`. Xulosa olinmasa (timeout/xato) va
-   * `customer` obyekti bor bo'lsa — `null` (avvalgi telefon yo'li); obyekt
+   * Qaytaradi: qabul qilingan id yoki `null`. Xulosa olinmasa (timeout/xato)
+   * va `customer` obyekti bor bo'lsa — `null` (avvalgi telefon yo'li); obyekt
    * yo'q bo'lsa xato yuqoriga otiladi (fail-closed).
    */
   private async resolveScopedCustomerId(
     marketId: string | undefined,
     rawCustomerId: unknown,
-    hasCustomerObject: boolean,
-  ): Promise<string | null> {
+    customer: { phone_number?: unknown } | undefined,
+  ): Promise<{ id: string; inMarket: boolean } | null> {
     const customerId = this.asStr(rawCustomerId).trim();
     const market = String(marketId ?? '').trim();
     if (!/^\d+$/.test(customerId) || !/^\d+$/.test(market)) {
@@ -2063,7 +2069,7 @@ export class OrderGatewayController {
         { market_id: market, customer_ids: [customerId] },
       );
     } catch (error) {
-      if (hasCustomerObject) {
+      if (customer) {
         return null;
       }
       throw error;
@@ -2077,7 +2083,30 @@ export class OrderGatewayController {
           this.asStr((item as { customer_id?: unknown })?.customer_id) ===
           customerId,
       );
-    return inScope ? customerId : null;
+    if (inScope) {
+      return { id: customerId, inMarket: true };
+    }
+
+    // WCuZzUCv: boshqa market mijozi — faqat to'liq telefon mos kelsa.
+    const requestPhone = normalizeUzPhone(customer?.phone_number);
+    if (!requestPhone) {
+      return null;
+    }
+    const card: unknown = await this.sendIdentityWithTimeout(
+      { cmd: 'identity.customer.find_by_id' },
+      { id: customerId },
+    ).catch(() => null);
+    const cardPhone = normalizeUzPhone(
+      (card as { data?: { phone_number?: unknown } } | null)?.data
+        ?.phone_number,
+    );
+    if (!cardPhone || cardPhone !== requestPhone) {
+      return null;
+    }
+    this.logger.log(
+      `order.create out-of-market customer_id accepted: market=${market} customer_id=${customerId}`,
+    );
+    return { id: customerId, inMarket: false };
   }
 
   /**
@@ -2141,10 +2170,11 @@ export class OrderGatewayController {
     // fix3 RBAC-01: tayyor `customer_id` ni SUPERADMIN/ADMIN dan boshqasi
     // ixtiyoriy qabul qila olmaydi — market ketma-ket id yuborib boshqa
     // marketlar mijozlarining ism/telefon/manzilini o'z buyurtmasi orqali
-    // o'qiy olardi. hiqRNhkI TC3: boshqa rollar ham `GET /customers/suggest`
-    // tanlagan mijozni `customer_id` bilan yuboradi, lekin u FAQAT o'sha
-    // doirada qabul qilinadi (shu marketda buyurtmasi bor mijoz) — pastda,
-    // market aniqlangandan keyin (`resolveScopedCustomerId`).
+    // o'qiy olardi. hiqRNhkI TC3 + WCuZzUCv: boshqa rollar ham
+    // `GET /customers/suggest` tanlagan mijozni `customer_id` bilan yuboradi:
+    // shu marketda buyurtmasi bor mijoz, yoki boshqa market mijozi — faqat
+    // `customer.phone_number` kartaga to'liq mos kelsa. Pastda, market
+    // aniqlangandan keyin (`resolveScopedCustomerId`).
     let customerId = isSystemPrivileged ? dto.customer_id : undefined;
     // fix3 C6: hayot sikli/saqlash maydonlari faqat SUPERADMIN/ADMIN dan.
     const safeOrderDto = isSystemPrivileged
@@ -2261,18 +2291,18 @@ export class OrderGatewayController {
     );
 
     if (!isSystemPrivileged && this.hasCustomerIdValue(dto.customer_id)) {
-      const scopedCustomerId = await this.resolveScopedCustomerId(
+      const scoped = await this.resolveScopedCustomerId(
         resolvedMarketId,
         dto.customer_id,
-        Boolean(customer),
+        customer,
       );
-      if (scopedCustomerId) {
-        customerId = scopedCustomerId;
+      if (scoped) {
+        customerId = scoped.id;
       } else if (!customer) {
-        // Doiradan tashqari id + mijoz obyekti yo'q — rad (RBAC-01 himoyasi).
+        // Tasdiqlanmagan id + mijoz obyekti yo'q — rad (RBAC-01 himoyasi).
         // Obyekt bo'lsa — avvalgidek telefon bo'yicha aniqlanadi.
         throw new ForbiddenException(
-          'customer_id faqat shu marketda buyurtmasi bor mijoz uchun (GET /customers/suggest taklifi). Yangi mijoz uchun customer obyekti (ism, telefon, tuman) yuboring',
+          "customer_id qabul qilinmadi: boshqa market mijozi uchun customer.phone_number mijoz telefoniga to'liq mos kelishi kerak (GET /customers/suggest taklifi). Yangi mijoz uchun customer obyekti (ism, telefon, tuman) yuboring",
         );
       }
     }

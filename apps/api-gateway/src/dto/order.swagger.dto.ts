@@ -256,8 +256,9 @@ export class CreateOrderRequestDto {
     example: '1',
     description:
       'Customer ID (as string/bigint). Superadmin/admin — istalgan mijoz. ' +
-      'POST /orders da boshqa rollar (market, filial xodimi) — FAQAT shu marketda buyurtmasi bor mijoz ' +
-      "(GET /customers/suggest taklifi, hiqRNhkI); doiradan tashqari id: `customer` obyekti bo'lsa u ishlatiladi, bo'lmasa 403. " +
+      'POST /orders da boshqa rollar (market, operator, filial xodimi) — GET /customers/suggest qoidasi (hiqRNhkI, WCuZzUCv): ' +
+      "shu marketda buyurtmasi bor mijoz, yoki boshqa market mijozi — faqat `customer.phone_number` kartadagi telefonga TO'LIQ mos kelsa. " +
+      "Tasdiqlanmagan id: `customer` obyekti bo'lsa u ishlatiladi (telefon bo'yicha), bo'lmasa 403. " +
       'POST /orders/external da faqat superadmin/admin (fix3 RBAC-01).',
   })
   @IsOptional()

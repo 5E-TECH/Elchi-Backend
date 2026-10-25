@@ -23,6 +23,32 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-10-25 (tun) — Mijoz taklifi: boshqa market mijozi barcha yaratuvchi rollarga, sonlar faqat shu market bo'yicha (WCuZzUCv)
+
+Deploy: faqat api-gateway (`GET /customers/suggest`, `POST /orders` / `ai-confirm` `customer_id` doirasi). Migratsiya
+yo'q. Ega qarori 2026-10-19 (create-step2 S3): mijoz kartasi marketlar orasida umumiy, buyurtmalar tarixi esa faqat
+o'z marketiniki.
+
+- [2026-10-25] ✏️ [gateway] — `GET /customers/suggest` (market, market operatori, registrator, menejer, filial):
+  shu marketda buyurtmasi **bo'lmagan** mijoz ham qaytadi, lekin **faqat to'liq (9 raqamli) asosiy telefon aniq mos
+  kelganda** (`+998 90 111 22 33`, `901112233`, `0901112233` — farqi yo'q). Qisman raqam (7–8 raqam) yoki faqat
+  qo'shimcha raqam (`extra_number`) mos kelsa boshqa market mijozi **chiqmaydi** (RBAC-01: sanab chiqishga yo'l yo'q).
+- [2026-10-25] ✏️ [gateway] — yangi maydon **`in_market: boolean | null`** — mijozning shu marketda buyurtmasi bormi
+  (admin `market_id` siz — `null`). `in_market: false` qatorida: `orders_count: 0`, `new_orders_count: 0`,
+  `has_new_orders: false`, `new_order_ids: []`, `last_order_at: null` — boshqa marketlar soni/ID/sanasi **hech
+  qachon** qaytmaydi. Market va market operatori rolida bunday qatorda **`address` va `extra_number` = `null`**
+  (ism, telefon, viloyat/tuman — bor); registrator/menejer/filial ko'radi.
+- [2026-10-25] ✏️ [gateway] — `POST /orders` (va `ai-confirm`): admin bo'lmagan rol `customer_id` ni suggest bilan
+  bir xil qoidada yuboradi — shu marketda buyurtmasi bor mijoz (avvalgidek), yoki boshqa market mijozi: **faqat
+  `customer.phone_number` kartadagi telefonga to'liq mos kelsa** (FE allaqachon `customer` obyektini ham yuboradi).
+  Mos kelmasa — `customer` obyekti bo'yicha avvalgi telefon yo'li; obyekt yo'q bo'lsa 403 «customer_id qabul
+  qilinmadi: boshqa market mijozi uchun customer.phone_number mijoz telefoniga to'liq mos kelishi kerak …».
+- [2026-10-25] 🟢 [gateway] — boshqa market mijozi ko'rsatilganda / qabul qilinganda gateway jurnaliga yoziladi
+  (aktyor, market, mijoz id — telefonsiz). Global per-IP throttle (60/daqiqa) amal qiladi.
+- 🔧 FE (hiqRNhkI): taklif ro'yxati sarlavhasi «Barcha mijozlar · buyurtmalar soni faqat sizda»; `in_market: false`
+  (yoki `orders_count: 0`) qatorida «0 ta buyurtma · Sizda hali buyurtmasi yo'q»; `address`/`extra_number` `null`
+  bo'lsa forma maydoni bo'sh qoladi (operator o'zi to'ldiradi).
+
 ### 2026-10-25 — Buyurtma: mahsulotsiz va tumansiz buyurtma yaratilmaydi — barcha yo'llarda (IR2OHIiN)
 
 Deploy: api-gateway (DTO/Swagger + `createOrderInternal`), order-service (yagona yaratish nuqtasi
