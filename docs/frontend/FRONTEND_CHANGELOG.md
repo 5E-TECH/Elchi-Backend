@@ -77,6 +77,43 @@ servislarga ta'sir yo'q). Migratsiya yo'q. order-service o'zgarmagan (mavjud `or
   `POST-` tokenini vaqtincha `GET post/scan/:token` ga yo'naltirish shart emas — `GET scan/:token` ham ishlaydi
   (ikkalasining `data` si bir xil).
 
+### 2026-10-25 — Realtime: smena yopildi / avtomatik yopildi va kassa kartasi hodisalari (rWdLuoP3)
+
+Deploy: **finance-service + api-gateway** (ikkalasi). Migratsiya yo'q (`outbox_events` jadvali finance'da bor).
+Env: yangi kalit yo'q — `.env.production` dagi mavjud `RABBITMQ_GATEWAY_QUEUE` finance-service'ga ham kerak (bo'sh
+bo'lsa finance hodisa yozmaydi).
+
+- [2026-10-25] 🆕 [finance/realtime] — socket `/realtime` hodisalari (frontend `FINANCE_SHIFT_EVENTS` nomlari bilan
+  bir xil). Smena yopilish tranzaksiyasi bilan BIRGA outbox'ga yoziladi → ~1 s ichida socketga (lokal o'lchov:
+  0,9–1,0 s). Payload'da pul summasi yo'q — sahifa qiymatlarni REST'dan qayta o'qiydi.
+  - `finance.shift.closed` — `POST /finance/shift/close` (qo'lda);
+  - `finance.shift.auto_closed` — avtomatik yopish (y8Tqm9Ap rejalashtiruvchisi; nom va payload tayyor, jadval
+    kartasi qilingach keladi);
+
+  ```json
+  { "shift_id": "31", "cashbox_user_id": "0", "cashbox_type": "main", "branch_id": null, "status": "closed",
+    "close_reason": "manual", "closed_at": "2026-10-25T13:00:00.000Z", "closed_by": "2", "opened_by": "3" }
+  ```
+  (`close_reason`: `manual` | `auto`; avtomatikda `closed_by: null`; `closed_at` — ISO UTC, toast «HH:MM» shundan.)
+  - `finance.shift.account_checked` — karta qoldig'i AI tekshiruvi tugadi (kiZgTybn; nom/payload tayyor, AI
+    tekshiruvi qilingach keladi): `{ shift_id, cashbox_user_id, cashbox_type, branch_id, card_id, ai_status,
+    checked_at }`.
+  - `finance.cashbox.card_changed` — **YANGI nom**: asosiy kassa kartasi yaratildi / nomi / holati o'zgardi,
+    kartalararo o'tkazma, karta↔naqd konvertatsiya: `{ action: "created" | "renamed" | "activated" | "archived" |
+    "transfer" | "card_to_cash" | "cash_to_card", cashbox_type: "main", card_ids: ["3","4"], movement_id, at }`.
+
+  **Kim oladi** (kassa doirasi — `GET finance/shift/current` bilan bir xil, boshqa filial ma'lumoti chiqmaydi):
+  MAIN kassa smenasi — superadmin, admin, registrator; filial kassasi smenasi — FAQAT o'sha filial menejerlari
+  (superadmin/admin olmaydi — ularning «Smena» holati MAIN); ikkalasida smenani ochgan/yopgan xodimning o'zi ham;
+  `card_changed` — superadmin, admin. Bir nechta xonadagi socket hodisani BIR MARTA oladi.
+  🔧 FE (`realtimeFinance.ts`): `FINANCE_SHIFT_EVENTS` ga `finance.cashbox.card_changed` ni qo'shing (handler
+  o'zgarmaydi — smena va kassa/karta so'rovlari yangilanadi). Qolgan uchta nom — o'zgarishsiz.
+- [2026-10-25] 🟢 [gateway/realtime] — socket JWT'da `branch_id` bo'lsa qo'shimcha `branch:<branch_id>:role:<rol>`
+  xonasiga kiradi (filial doirasidagi hodisalar uchun). `realtime.notify` RMQ xabari `targets`
+  (`[{ user_id } | { role } | { role, branch_id }]`) qabul qiladi. Gateway realtime iste'molchisi endi `noAck: false`
+  — ilgari har realtime xabardan keyin RMQ kanali yopilib (~5 s), ketma-ket kelgan hodisa (masalan bildirishnomadan
+  keyingi smena hodisasi) ~5 s kechikardi; endi ~1 s. Frontend o'zgarishi shart emas.
+
 ### 2026-10-25 — Market operatori: viloyat tumanlari va tuman tafsiloti (MO-7, OfRSoRUX / N11)
 
 Deploy: faqat api-gateway. Migratsiya yo'q.

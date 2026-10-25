@@ -39,6 +39,23 @@ export const SESSION_KICK_DISCONNECT_DELAY_MS = 250;
 export const sessionRoom = (sessionId: string): string =>
   `session:${sessionId.toLowerCase()}`;
 
+/** Foydalanuvchining barcha tab/qurilmalari. */
+export const userRoom = (userId: string): string => `user:${userId}`;
+
+/** Rol xonasi — shu roldagi HAMMA foydalanuvchi (filialdan qat'i nazar). */
+export const roleRoom = (role: string): string =>
+  `role:${String(role).toLowerCase()}`;
+
+/**
+ * (rWdLuoP3, 2026-10-25) Filial + rol xonasi: faqat shu filialdagi shu roldagi
+ * foydalanuvchilar (masalan filial kassasi smenasi — o'sha filial
+ * menejerlari). Socket JWT'dagi `branch_id` bo'yicha kiradi; `branch_id`
+ * siz token (superadmin/admin, filial topilmagan) hech qaysi filial xonasiga
+ * kirmaydi — boshqa filial hodisasi unga yetmaydi.
+ */
+export const branchRoleRoom = (branchId: string, role: string): string =>
+  `branch:${branchId}:role:${String(role).toLowerCase()}`;
+
 /** Ulanish rad etilganda `error` hodisasi (keyin server uzadi). */
 export interface RealtimeConnectError {
   message: string;
@@ -53,7 +70,9 @@ export interface RealtimeConnectError {
  *
  * Every connection is JWT-authenticated with the same ACCESS_TOKEN_KEY the HTTP
  * guards use. On connect the socket joins `user:<sub>` and `role:<role>` rooms,
- * which the push methods target.
+ * which the push methods target. (rWdLuoP3) JWT'da `branch_id` bo'lsa —
+ * qo'shimcha `branch:<branch_id>:role:<role>` (filial doirasidagi hodisalar:
+ * filial kassasi smenasi faqat o'sha filial menejerlariga).
  *
  * (Elchi Pochta #3, 2026-10-24) Sessiyalar: `sid` li token bilan ulanish
  * HTTP bilan BIR XIL qoida bo'yicha tekshiriladi (`SessionRevocationService`
@@ -135,9 +154,15 @@ export class RealtimeGateway
     }
 
     (client.data as { user?: SocketUser }).user = user;
-    void client.join(`user:${user.sub}`);
+    void client.join(userRoom(user.sub));
     for (const role of user.roles) {
-      void client.join(`role:${role}`);
+      void client.join(roleRoom(role));
+    }
+    // (rWdLuoP3) Filial doirasidagi hodisalar (filial kassasi smenasi).
+    if (user.branch_id) {
+      for (const role of user.roles) {
+        void client.join(branchRoleRoom(user.branch_id, role));
+      }
     }
 
     const set = this.online.get(user.sub) ?? new Set<string>();
@@ -231,14 +256,16 @@ export class RealtimeGateway
         sub: string;
         username?: string;
         roles?: string[];
-        branch_id?: string | null;
+        branch_id?: string | number | null;
         sid?: string | null;
       }>(raw);
+      const branchId =
+        payload.branch_id == null ? '' : String(payload.branch_id).trim();
       return {
         sub: String(payload.sub),
         username: payload.username,
         roles: (payload.roles ?? []).map((r) => String(r).toLowerCase()),
-        branch_id: payload.branch_id ?? null,
+        branch_id: branchId || null,
         sid: sessionIdClaim(payload.sid),
       };
     } catch {
@@ -291,11 +318,20 @@ export class RealtimeGateway
   // ===== server → client push (called by realtime.controller) =====
 
   pushToUser(userId: string, event: string, data: unknown): void {
-    this.server.to(`user:${userId}`).emit(event, data);
+    this.server.to(userRoom(userId)).emit(event, data);
   }
 
   pushToRole(role: string, event: string, data: unknown): void {
-    this.server.to(`role:${String(role).toLowerCase()}`).emit(event, data);
+    this.server.to(roleRoom(role)).emit(event, data);
+  }
+
+  /**
+   * (rWdLuoP3) Bir nechta xonaga BITTA emit: bir nechta xonada turgan socket
+   * (masalan `user:<id>` va `role:admin`) hodisani bir marta oladi.
+   */
+  pushToRooms(rooms: readonly string[], event: string, data: unknown): void {
+    if (!this.server || !rooms.length) return;
+    this.server.to([...rooms]).emit(event, data);
   }
 
   broadcast(event: string, data: unknown): void {
