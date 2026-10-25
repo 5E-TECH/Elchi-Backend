@@ -20231,6 +20231,37 @@
         ],
         "x-roles": null
       }
+    },
+    "/client-errors": {
+      "post": {
+        "operationId": "ClientErrorGatewayController_report",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClientErrorReportDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Frontend runtime error report (QKCeGZ3N) — logged as a structured `client_error` line, not stored",
+        "tags": [
+          "Client errors"
+        ],
+        "x-roles": null
+      }
     }
   },
   "info": {
@@ -30441,6 +30472,46 @@
           "on_hand",
           "reserved",
           "available"
+        ]
+      },
+      "ClientErrorReportDto": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "example": "ERR-7F3A",
+            "description": "Qisqa xato kodi (foydalanuvchi ekranda ko‘radi)."
+          },
+          "message": {
+            "type": "string",
+            "example": "r.forEach is not a function"
+          },
+          "path": {
+            "type": "string",
+            "example": "/orders?status=waiting",
+            "description": "Yiqilgan sahifa yo‘li."
+          },
+          "stack": {
+            "type": "string",
+            "description": "Stek (minifikatsiyalangan bo‘lishi mumkin)."
+          },
+          "component_stack": {
+            "type": "string",
+            "description": "React komponentlar steki."
+          },
+          "release": {
+            "type": "string",
+            "description": "Ilova versiyasi (build)."
+          },
+          "scope": {
+            "type": "string",
+            "description": "Bo‘lim yoki sahifa darajasi."
+          }
+        },
+        "required": [
+          "code",
+          "message",
+          "path"
         ]
       }
     }

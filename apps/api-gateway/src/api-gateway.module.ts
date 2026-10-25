@@ -25,6 +25,7 @@ import { PartnerAdminGatewayController } from './partner-admin-gateway.controlle
 import { AuthGatewayController } from './auth-gateway.controller';
 import { CatalogGatewayController } from './catalog-gateway.controller';
 import { HealthController } from './health.controller';
+import { ClientErrorGatewayController } from './client-error-gateway.controller';
 import { SearchGatewayController } from './search-gateway.controller';
 import { LogisticsGatewayController } from './logistics-gateway.controller';
 import { OrderGatewayController } from './order-gateway.controller';
@@ -159,6 +160,8 @@ import type { StringValue } from 'ms';
     // /markets/:id/warehouse-order) — catalog-service.
     WarehouseGatewayController,
     HealthController,
+    // QKCeGZ3N — frontend xato chegarasi hisobotlari (jurnalga, bazaga emas).
+    ClientErrorGatewayController,
     // TODO: Qolgan gateway controllerlarni qo'shish
     // FinanceGatewayController,
     // NotificationGatewayController,
