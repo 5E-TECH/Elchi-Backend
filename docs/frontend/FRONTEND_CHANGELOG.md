@@ -23,6 +23,17 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-10-25 (tun) — Readiness `services[].error_kind`, AI `cap.warn_ratio` (Ifpimq2x)
+
+Deploy: api-gateway, ai-service. Migratsiya yo'q. Faqat qo'shimcha maydonlar (breaking emas).
+
+- [2026-10-25] ✏️ [gateway] — `GET /health/readiness`: `services[]` da yangi **`error_kind`** (faqat `status` ok
+  bo'lmaganda): `timeout` (servis 1.5 s da javob bermadi) | `down` (RPC xatosi) | `reported` (servis o'zini
+  `degraded`/`down` dedi) | `not_registered` (gateway'da mijoz yo'q). `error` matni o'zgarmagan.
+- [2026-10-25] ✏️ [ai] — `GET /ai/status`: `cap.warn_ratio` (AI_CAP_WARN_RATIO, sukut 0.8) — `state = warn`
+  aynan shu chegaradan; DB o'qilmasa (`state: unknown`) ham qaytadi.
+- 🔧 FE (ixtiyoriy): OS sahifasida sababni `error_kind` bo'yicha, shift ogohlantirish chizig'ini `warn_ratio` dan.
+
 ### 2026-10-25 (tun) — SATO apply: boshqa viloyat/tumanning kodi berilmaydi, `districts.sato_code` qisman unique (SlMjauWC)
 
 Deploy: logistics-service, api-gateway (faqat Swagger tavsifi). **Migratsiya bor: `1716000000160`** — qisman UNIQUE

@@ -18526,6 +18526,7 @@
     },
     "/ai/status": {
       "get": {
+        "description": "`cap`: `{period_key, spent_usd, cap_usd, override_usd, effective_cap_usd, ratio, warn_ratio, state, reset_at}`. Ifpimq2x: `warn_ratio` — `state = warn` chegarasi (AI_CAP_WARN_RATIO, sukut 0.8).",
         "operationId": "AiGatewayController_status",
         "parameters": [],
         "responses": {
@@ -20622,6 +20623,7 @@
     },
     "/health/readiness": {
       "get": {
+        "description": "`services[]`: `{service, status: ok|down|unknown, latency_ms?, error?, error_kind?}`. Ifpimq2x: `error_kind` (faqat ok bo‘lmaganda) — `timeout` | `down` | `reported` | `not_registered`.",
         "operationId": "HealthController_readiness",
         "parameters": [],
         "responses": {

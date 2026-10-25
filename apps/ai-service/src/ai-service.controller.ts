@@ -342,10 +342,21 @@ export class AiServiceController implements OnApplicationBootstrap {
         override_usd: 0,
         effective_cap_usd: capUsd,
         ratio: 0,
+        warn_ratio: this.readWarnRatio(),
         state: 'unknown',
         reset_at: nextTashkentMidnight(now),
       };
     }
+  }
+
+  private readWarnRatio(): number {
+    try {
+      const r = this.budget.getWarnRatio();
+      if (typeof r === 'number' && Number.isFinite(r)) return r;
+    } catch {
+      /* sukut */
+    }
+    return 0.8;
   }
 
   private readPersistFailures(): number {
