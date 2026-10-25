@@ -9504,6 +9504,112 @@
         ]
       }
     },
+    "/finance/operators/me/balance": {
+      "get": {
+        "description": "`GET operators/:operator_id/balance` bilan AYNI shakl `{ operator_id, earned, paid, balance }`, operator_id — JWT. Komissiya belgilanmagan operator — 0/0/0 (403 emas).",
+        "operationId": "FinanceGatewayController_findMyOperatorBalance",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Market operatori: o'z daromadi/to'lovi/balansi (E6iEOAVs)",
+        "tags": [
+          "Finance"
+        ],
+        "x-roles": [
+          "market_operator"
+        ]
+      }
+    },
+    "/finance/operators/me/earnings": {
+      "get": {
+        "description": "`GET operators/:operator_id/earnings` bilan AYNI shakl `{ rows, total, limit, offset }` (limit 1–200, sukut 50), faqat o'z yozuvlari. Komissiyasiz operator — bo'sh ro'yxat.",
+        "operationId": "FinanceGatewayController_listMyOperatorEarnings",
+        "parameters": [
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "offset",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Market operatori: o'z daromad yozuvlari (E6iEOAVs)",
+        "tags": [
+          "Finance"
+        ],
+        "x-roles": [
+          "market_operator"
+        ]
+      }
+    },
+    "/finance/operators/me/payments": {
+      "get": {
+        "description": "`GET operators/:operator_id/payments` bilan AYNI shakl `{ rows, total, limit, offset }`, faqat o'z to'lovlari.",
+        "operationId": "FinanceGatewayController_listMyOperatorPayments",
+        "parameters": [
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "offset",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Market operatori: unga qilingan to'lovlar (E6iEOAVs)",
+        "tags": [
+          "Finance"
+        ],
+        "x-roles": [
+          "market_operator"
+        ]
+      }
+    },
     "/finance/operators/{operator_id}/balance": {
       "get": {
         "operationId": "FinanceGatewayController_findOperatorBalance",

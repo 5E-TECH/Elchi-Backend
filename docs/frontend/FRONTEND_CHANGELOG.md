@@ -23,6 +23,25 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-10-25 — Moliya: market operatori o'z daromadini ko'radi — `finance/operators/me/*` (E6iEOAVs)
+
+Deploy: faqat api-gateway (finance-service'dagi mavjud RMQ handler'lar qayta ishlatiladi). Migratsiya yo'q.
+
+- [2026-10-25] 🆕 [finance/operators] — **`GET /finance/operators/me/balance`**, **`/me/earnings`**,
+  **`/me/payments`** — faqat `market_operator` (boshqa rollar — 403). `operator_id` FAQAT JWT'dan; path/query'dagi id
+  e'tiborsiz. Javob shakli admin variantlari (`operators/:operator_id/*`) bilan AYNAN bir xil:
+  - `balance` → `data: { operator_id, earned, paid, balance }` (musbat balans — kompaniya operatorga qarzdor);
+  - `earnings` → `data: { rows: [{ id, operator_id, order_id, market_id, amount, commission_type, commission_value,
+    order_total_price, createdAt, … }], total, limit, offset }`;
+  - `payments` → `data: { rows: [{ id, operator_id, market_id, paid_by_id, amount, note, createdAt, … }], total,
+    limit, offset }`.
+  `?limit=` (1–200, sukut 50) va `?offset=` (sukut 0); raqam bo'lmasa — sukut. Komissiyasi belgilanmagan operator —
+  `0/0/0` va bo'sh `rows` (403 emas — maketdagi earnings-no-commission holati).
+  🔧 FE (PrzQdHvm / KUHGR1Iq / 2DCQKd37 / i76gGjyq): market_operator «Daromadim» sahifasi shu uchta endpointdan
+  (`endpoints.ts` da hozir faqat id'li URL'lar bor).
+- [2026-10-25] 🟢 [finance/operators] — `operators/:operator_id/*` (superadmin/admin/menejer) o'zgarmagan; market
+  operatori ularga 403 oladi.
+
 ### 2026-10-25 — Kassa smenasi: superadmin filial smenasini ko'radi, qulf matni, `all` rejimiga tayyorlik (32Sw3DfC)
 
 Deploy: api-gateway, finance-service. Migratsiya yo'q. Prod ENV (`FINANCE_REQUIRE_OPEN_SHIFT=all`) — ALOHIDA ops

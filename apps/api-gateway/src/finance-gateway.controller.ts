@@ -3581,6 +3581,86 @@ export class FinanceGatewayController {
     );
   }
 
+  // ───────── E6iEOAVs — market operatori O'Z daromadi (MO-S2 «Daromadim») ─────────
+  // ⚠️ `operators/:operator_id/*` dan OLDIN e'lon qilinadi: aks holda 'me'
+  // operator_id sifatida o'sha marshrutga tushardi. operator_id FAQAT
+  // JWT'dan (`sub`) — path/query'dagi id qabul qilinmaydi.
+
+  /** limit/offset query → son yoki undefined (raqam bo'lmasa — sukut). */
+  private static toPageNumber(value?: string): number | undefined {
+    if (value == null || String(value).trim() === '') return undefined;
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+
+  @Get('operators/me/balance')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.MARKET_OPERATOR)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: "Market operatori: o'z daromadi/to'lovi/balansi (E6iEOAVs)",
+    description:
+      '`GET operators/:operator_id/balance` bilan AYNI shakl `{ operator_id, earned, paid, balance }`, operator_id — JWT. Komissiya belgilanmagan operator — 0/0/0 (403 emas).',
+  })
+  findMyOperatorBalance(@Req() req: { user: JwtUser }) {
+    return this.send(
+      { cmd: 'finance.operator.balance.find' },
+      { operator_id: String(req.user.sub) },
+    );
+  }
+
+  @Get('operators/me/earnings')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.MARKET_OPERATOR)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: "Market operatori: o'z daromad yozuvlari (E6iEOAVs)",
+    description:
+      "`GET operators/:operator_id/earnings` bilan AYNI shakl `{ rows, total, limit, offset }` (limit 1–200, sukut 50), faqat o'z yozuvlari. Komissiyasiz operator — bo'sh ro'yxat.",
+  })
+  @ApiQuery({ name: 'limit', required: false })
+  @ApiQuery({ name: 'offset', required: false })
+  listMyOperatorEarnings(
+    @Req() req: { user: JwtUser },
+    @Query('limit') limit?: string,
+    @Query('offset') offset?: string,
+  ) {
+    return this.send(
+      { cmd: 'finance.operator.earning.list' },
+      {
+        operator_id: String(req.user.sub),
+        limit: FinanceGatewayController.toPageNumber(limit),
+        offset: FinanceGatewayController.toPageNumber(offset),
+      },
+    );
+  }
+
+  @Get('operators/me/payments')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.MARKET_OPERATOR)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: "Market operatori: unga qilingan to'lovlar (E6iEOAVs)",
+    description:
+      "`GET operators/:operator_id/payments` bilan AYNI shakl `{ rows, total, limit, offset }`, faqat o'z to'lovlari.",
+  })
+  @ApiQuery({ name: 'limit', required: false })
+  @ApiQuery({ name: 'offset', required: false })
+  listMyOperatorPayments(
+    @Req() req: { user: JwtUser },
+    @Query('limit') limit?: string,
+    @Query('offset') offset?: string,
+  ) {
+    return this.send(
+      { cmd: 'finance.operator.payment.list' },
+      {
+        operator_id: String(req.user.sub),
+        limit: FinanceGatewayController.toPageNumber(limit),
+        offset: FinanceGatewayController.toPageNumber(offset),
+      },
+    );
+  }
+
   @Get('operators/:operator_id/balance')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.MANAGER)
