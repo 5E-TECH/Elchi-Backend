@@ -13,6 +13,7 @@ describe('OrderServiceService market cancelled handover', () => {
     qrExpired?: boolean;
     authorizationExpired?: boolean;
     marketQrRequired?: boolean;
+    requesterBranch?: unknown;
   }) {
     const now = Date.now();
     const session = {
@@ -122,6 +123,22 @@ describe('OrderServiceService market cancelled handover', () => {
       ),
     };
 
+    // fL79tFbs (BG2): topshirish joyi nomi — `branch.find_by_id`.
+    const branchClient = {
+      send: jest.fn((pattern: { cmd: string }, payload: { id?: string }) =>
+        of(
+          pattern.cmd === 'branch.find_by_id'
+            ? {
+                data:
+                  payload?.id === '1'
+                    ? { id: '1', name: 'Toshkent HQ', type: 'HQ' }
+                    : null,
+              }
+            : { data: options?.requesterBranch ?? null },
+        ),
+      ),
+    };
+
     const custody = new OrderCustodyService(
       trackingRepo as any,
       custodyRepo as any,
@@ -139,7 +156,7 @@ describe('OrderServiceService market cancelled handover', () => {
       {} as any,
       {} as any,
       {} as any,
-      {} as any,
+      branchClient as any, // branchClient (fL79tFbs: branch.find_by_id → joy nomi)
       {} as any,
       outbox as any,
       activityLog as any,
@@ -178,6 +195,7 @@ describe('OrderServiceService market cancelled handover', () => {
       custodyRepo,
       queryRunner,
       identityClient,
+      branchClient,
     };
   }
 
@@ -282,6 +300,106 @@ describe('OrderServiceService market cancelled handover', () => {
     );
     expect(queryRunner.commitTransaction).toHaveBeenCalled();
     expect(response.data.closed_count).toBe(1);
+  });
+
+  it('fL79tFbs (BG2): QR yo`li — usul/joy/vaqt buyurtmada, tracking action + metadata bilan', async () => {
+    const { service, orderRepo, trackingRepo } = setup();
+
+    await service.completeMarketCancelledHandover({
+      market_id: '16',
+      order_ids: ['101'],
+      authorization_token: 'MHA-valid-token',
+      requester: { id: '9', roles: ['admin'] },
+    });
+
+    const saved = orderRepo.save.mock.calls[0][0];
+    expect(saved).toEqual(
+      expect.objectContaining({
+        market_handover_method: 'qr',
+        market_handover_branch_id: '1',
+        market_handover_by: '9',
+        market_handover_at: expect.any(Date),
+      }),
+    );
+    expect(saved.last_handover_at).toBe(saved.market_handover_at);
+    expect(trackingRepo.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'returned_to_market',
+        metadata: {
+          method: 'qr',
+          market_id: '16',
+          branch_id: '1',
+          branch_name: 'Toshkent HQ',
+          from_holder_type: OrderHolderType.HQ,
+          handover_session_id: '1',
+        },
+      }),
+    );
+  });
+
+  it('fL79tFbs (BG2): qo`lda tasdiq — method=manual, sabab metadata va buyurtmada', async () => {
+    const { service, orderRepo, trackingRepo } = setup();
+
+    await service.completeMarketCancelledHandover({
+      market_id: '16',
+      order_ids: ['101'],
+      authorization_token: 'MHA-valid-token',
+      manual_overrides: [{ order_id: '101', reason: 'QR yirtilgan' }],
+      requester: { id: '9', roles: ['admin'] },
+    });
+
+    expect(orderRepo.save).toHaveBeenCalledWith(
+      expect.objectContaining({ market_handover_method: 'manual' }),
+    );
+    expect(trackingRepo.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'cancelled_market_handover_manual',
+        metadata: expect.objectContaining({
+          method: 'manual',
+          manual_override: true,
+          manual_reason: 'QR yirtilgan',
+          branch_id: '1',
+          branch_name: 'Toshkent HQ',
+        }),
+      }),
+    );
+  });
+
+  it('fL79tFbs (BG2): filial menejeri — joy o`z filiali; nom topilmasa null, topshirish to`xtamaydi', async () => {
+    const { service, order, orderRepo, trackingRepo } = setup({
+      requesterBranch: { branch_id: '12', branch: { type: 'REGIONAL' } },
+    });
+    order.holder_type = OrderHolderType.BRANCH;
+    order.holder_branch_id = '12';
+
+    const response: any = await service.completeMarketCancelledHandover({
+      market_id: '16',
+      order_ids: ['101'],
+      authorization_token: 'MHA-valid-token',
+      requester: { id: '9', roles: ['manager'] },
+    });
+
+    expect(response.data.closed_count).toBe(1);
+    expect(orderRepo.find).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          holder_type: OrderHolderType.BRANCH,
+          holder_branch_id: '12',
+        }),
+      }),
+    );
+    expect(orderRepo.save).toHaveBeenCalledWith(
+      expect.objectContaining({ market_handover_branch_id: '12' }),
+    );
+    expect(trackingRepo.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        metadata: expect.objectContaining({
+          branch_id: '12',
+          branch_name: null,
+          from_holder_type: OrderHolderType.BRANCH,
+        }),
+      }),
+    );
   });
 
   it('⭐ market QR MAJBURIY — konfig o`chirilgan bo`lsa ham QR`siz topshirib bo`lmaydi (F1)', async () => {

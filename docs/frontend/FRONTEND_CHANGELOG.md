@@ -23,6 +23,23 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-10-25 — Bekor holatlari: topshirish usuli/joyi saqlanadi (BG2 fL79tFbs)
+
+Deploy: order-service. **Migratsiya bor:** `1716000000154-CancelReturnMarketHandover` (faqat qo'shimcha NULL
+ustunlar + eski topshirishlar backfill'i; jadval qayta yozilmaydi).
+
+- [2026-10-25] ✏️ [order] — buyurtmada yangi maydonlar (GET /orders, /orders/:id va boshqa buyurtma javoblarida
+  o'z-o'zidan chiqadi): `market_handover_at` (ISO | null), `market_handover_by` (xodim id | null),
+  `market_handover_method` (`qr` | `manual` | `no_qr` | `pin` | null), `market_handover_branch_id` (topshirilgan joy —
+  HQ ham filial | null). Ikkala topshirish yo'li yozadi: `POST /orders/markets/:id/cancelled/handover` va
+  `POST /orders/:id/mark-returned-to-market` (endi `last_handover_at` ni ham yangilaydi). Eski topshirishlar
+  tracking/custody tarixidan to'ldirildi; usul aniq bo'lmasa `null` (FE eski hisobiga — «QR orqali» — qaytadi).
+  Ombor buyurtmasining omborga qaytishi (`warehouse_returned`) — marketga topshirish emas, maydonlar `null`.
+- [2026-10-25] ✏️ [order] — `GET /orders/:id/tracking`: topshirish hodisasi endi doim `action` va `metadata` bilan —
+  QR: `action: "returned_to_market"`, qo'lda: `"cancelled_market_handover_manual"`; `metadata = { method,
+  market_id, branch_id, branch_name, from_holder_type, handover_session_id, manual_override?, manual_reason? }`.
+  🔧 FE: `readCancelHandoverInfo` `metadata.method` ni o'qiydi (allaqachon tayyor); joy — `metadata.branch_name`.
+
 ### 2026-10-25 — Market operatori: viloyat tumanlari va tuman tafsiloti (MO-7, OfRSoRUX / N11)
 
 Deploy: faqat api-gateway. Migratsiya yo'q.

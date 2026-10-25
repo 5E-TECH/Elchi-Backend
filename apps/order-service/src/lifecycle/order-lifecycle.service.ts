@@ -110,6 +110,10 @@ import {
   type ReplaceableOrdersQuery,
   type ReplacementReturnsQuery,
 } from './order-replacement';
+import {
+  CANCEL_HANDOVER_TRACKING_ACTION,
+  type CancelHandoverMethod,
+} from '../cancel-return/cancel-return';
 
 const CANCELLED_HANDOVER_MANUAL_REASONS = new Set([
   'QR yirtilgan',
@@ -444,6 +448,31 @@ export class OrderLifecycleService {
     }
 
     return `branch ID: ${id}`;
+  }
+
+  /**
+   * fL79tFbs (BG2) — filial (HQ ham filial) ning ko'rinadigan NOMI — marketga
+   * topshirish tracking'idagi `metadata.branch_name` uchun (frontend tarix
+   * jumlasida joy shundan). Tranzaksiyadan OLDIN chaqiriladi; branch-service
+   * javob bermasa — `null`, topshirish to'xtamaydi.
+   */
+  private async resolveBranchName(
+    branchId?: string | null,
+  ): Promise<string | null> {
+    const id = String(branchId ?? '').trim();
+    if (!id) return null;
+    try {
+      const response = await rmqSend<{ data?: { name?: string | null } }>(
+        this.branchClient,
+        { cmd: 'branch.find_by_id' },
+        { id, requester: { id: 'system', roles: [Roles.SUPERADMIN] } },
+        { attachRequestId: false, retries: 1 },
+      );
+      const name = String(response?.data?.name ?? '').trim();
+      return name || null;
+    } catch {
+      return null;
+    }
   }
 
   async findById(id: string) {
@@ -4181,6 +4210,16 @@ export class OrderLifecycleService {
       );
     }
 
+    // fL79tFbs (BG2) — topshirish JOYI: posilka qayerdan berilyapti (HQ qo'li —
+    // HQ, filial/kuryer qo'li — o'sha filial), bo'lmasa xodimning filiali.
+    const handoverBranchId =
+      (order.holder_type === OrderHolderType.HQ
+        ? (hqBranchId ?? handoverCtx.branchId)
+        : holderBranchId || handoverCtx.branchId) ||
+      String(order.branch_id ?? '').trim() ||
+      null;
+    const handoverBranchName = await this.resolveBranchName(handoverBranchId);
+
     const oldStatus = order.status;
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
@@ -4230,6 +4269,17 @@ export class OrderLifecycleService {
       order.holder_type = OrderHolderType.MARKET;
       order.holder_branch_id = null;
       order.holder_courier_id = null;
+      // fL79tFbs (BG2) — topshirish vaqti/xodimi/usuli/joyi. Ilgari bu yo'l
+      // `last_handover_at` ni ham yangilamasdi (custody MARKET ga o'tsa ham
+      // eski vaqt qolardi) — bulk `complete` yo'li bilan bir xil qilindi.
+      const handoverAt = new Date();
+      const handoverBy = this.numericActorId(requester?.id);
+      order.last_handover_at = handoverAt;
+      order.last_handover_by = handoverBy;
+      order.market_handover_at = handoverAt;
+      order.market_handover_by = handoverBy;
+      order.market_handover_method = 'qr';
+      order.market_handover_branch_id = handoverBranchId;
       await orderRepo.save(order);
 
       await this.custody.createTrackingEvent(
@@ -4242,6 +4292,15 @@ export class OrderLifecycleService {
             ? this.custody.toTrackingRole(requester.roles)
             : 'system',
           note: `Xodim ${String(requester?.id ?? 'unknown')} market egasiga topshirdi`,
+          action: CANCEL_HANDOVER_TRACKING_ACTION.qr,
+          metadata: {
+            method: 'qr',
+            market_id: marketId,
+            branch_id: handoverBranchId,
+            branch_name: handoverBranchName,
+            from_holder_type: priorHolderType,
+            handover_session_id: session.id ? String(session.id) : null,
+          },
         },
         trackingRepo,
       );
@@ -4522,6 +4581,14 @@ export class OrderLifecycleService {
       this.badRequest('authorization_token noto‘g‘ri');
     }
 
+    // fL79tFbs (BG2) — topshirish JOYI: HQ xodimi (SA/admin ham) — HQ, filial
+    // xodimi — o'z filiali. Topshiriladigan buyurtmalar aynan shu joyda turgani
+    // pastdagi holder filtri bilan kafolatlanadi.
+    const handoverBranchId = handoverCtx.isHq
+      ? ((await this.lookup.getHqBranchId()) ?? handoverCtx.branchId)
+      : handoverCtx.branchId;
+    const handoverBranchName = await this.resolveBranchName(handoverBranchId);
+
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
     await queryRunner.startTransaction();
@@ -4608,6 +4675,16 @@ export class OrderLifecycleService {
         order.return_requested = false;
         order.last_handover_at = now;
         order.last_handover_by = requesterId;
+        // fL79tFbs (BG2) — usul va joy buyurtmada ham saqlanadi (ro'yxat uchun).
+        const handoverMethod: CancelHandoverMethod = manualOverrideReason
+          ? 'manual'
+          : isQrRequired
+            ? 'qr'
+            : 'no_qr';
+        order.market_handover_at = now;
+        order.market_handover_by = this.numericActorId(requesterId);
+        order.market_handover_method = handoverMethod;
+        order.market_handover_branch_id = handoverBranchId;
         await orderRepo.save(order);
 
         await this.custody.createTrackingEvent(
@@ -4622,16 +4699,23 @@ export class OrderLifecycleService {
               : isQrRequired
                 ? `Bekor qilingan order market ${marketId}ga QR tasdiqi bilan topshirildi`
                 : `Bekor qilingan order market ${marketId}ga QR talab qilinmasdan topshirildi`,
-            action: manualOverrideReason
-              ? 'cancelled_market_handover_manual'
-              : undefined,
-            metadata: manualOverrideReason
-              ? {
-                  manual_override: true,
-                  manual_reason: manualOverrideReason,
-                  market_id: marketId,
-                }
-              : undefined,
+            // fL79tFbs (BG2): QR yo'li ham aniq `action` + `metadata` bilan
+            // (ilgari ikkalasi ham bo'sh — usul faqat izoh matnidan taxmin qilinardi).
+            action:
+              handoverMethod === 'manual'
+                ? CANCEL_HANDOVER_TRACKING_ACTION.manual
+                : CANCEL_HANDOVER_TRACKING_ACTION.qr,
+            metadata: {
+              method: handoverMethod,
+              market_id: marketId,
+              branch_id: handoverBranchId,
+              branch_name: handoverBranchName,
+              from_holder_type: previousHolderType,
+              handover_session_id: session ? String(session.id) : null,
+              ...(manualOverrideReason
+                ? { manual_override: true, manual_reason: manualOverrideReason }
+                : {}),
+            },
           },
           trackingRepo,
         );
