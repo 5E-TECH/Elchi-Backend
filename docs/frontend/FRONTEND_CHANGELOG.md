@@ -114,6 +114,19 @@ bo'lsa finance hodisa yozmaydi).
   — ilgari har realtime xabardan keyin RMQ kanali yopilib (~5 s), ketma-ket kelgan hodisa (masalan bildirishnomadan
   keyingi smena hodisasi) ~5 s kechikardi; endi ~1 s. Frontend o'zgarishi shart emas.
 
+### 2026-10-25 — Buyurtmalar Excel eksporti: «Holati» = ekrandagi nom (9Bp7VtVj)
+
+Deploy: faqat api-gateway. Migratsiya yo'q. Kontrakt (endpoint, query, sarlavhalar, ustunlar) o'zgarmagan.
+
+- [2026-10-25] ✏️ [gateway] — `GET /orders/export/excel` faylidagi «Holati» ustuni endi FE dizayn v2 yorliqlari bilan
+  AYNAN (`ORDER_STATUS_REGISTRY` + `src/locales/uz/status.json` → `order.*`; eski `orders.json` emas):
+  created «Yaratilgan» (avval «Qabul qilingan»), waiting_customer «Mijoz kutilmoqda» («Kutilmoqda»), partly_paid
+  «Qisman to'langan» («Qisman to'landi»), cancelled (sent) «Bekor — jo'natilgan» («Bekor qilingan»; ro'yxat qatoridagi
+  `cancelled` + `transport_status: 'cancelled (sent)'` ham), returned_to_market «Marketga topshirildi» («Marketga
+  qaytarildi»), closed «Yopilgan» («Yopildi»). Noma'lum holat — o'qiladigan xom qiymat, bo'sh — «Noma'lum». Eksport
+  faqat o'zbekcha (til parametri yo'q). 🟢 FE o'zgarishi shart emas; `status.json` (uz) `order.*` yorlig'i
+  o'zgarsa — backend'da `orders-xlsx.export.ts` `ORDER_EXPORT_STATUS_LABELS` ham yangilansin (spec uni qulflaydi).
+
 ### 2026-10-25 — Market operatori: viloyat tumanlari va tuman tafsiloti (MO-7, OfRSoRUX / N11)
 
 Deploy: faqat api-gateway. Migratsiya yo'q.
