@@ -2,6 +2,7 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
   IsBoolean,
   IsEnum,
+  IsIn,
   IsNumber,
   IsOptional,
   IsPhoneNumber,
@@ -11,7 +12,7 @@ import {
   Min,
   MinLength,
 } from 'class-validator';
-import { Commission_type } from '@app/common';
+import { Commission_type, Status } from '@app/common';
 
 /**
  * POST /market-operators (i76gGjyq). `market_id` va `role` ATAYLAB yo'q:
@@ -78,4 +79,20 @@ export class UpdateMarketOperatorWarehouseAccessRequestDto {
   })
   @IsBoolean()
   can_view_warehouse_stock!: boolean;
+}
+
+/**
+ * PATCH /market-operators/:id/status (mFkrqvMi). Market o'z operatorini
+ * nofaol qiladi (`inactive` — barcha sessiyalari yopiladi) yoki qayta faol
+ * qiladi (`active`). Buyurtmalar, komissiya va daromad tarixi saqlanadi.
+ */
+export class UpdateMarketOperatorStatusRequestDto {
+  @ApiProperty({
+    enum: [Status.ACTIVE, Status.INACTIVE],
+    example: Status.INACTIVE,
+    description:
+      "inactive — operator tizimga kira olmaydi, sessiyalari yopiladi (qurilma keyingi refresh'da chiqariladi); active — qayta faol",
+  })
+  @IsIn([Status.ACTIVE, Status.INACTIVE])
+  status!: Status;
 }

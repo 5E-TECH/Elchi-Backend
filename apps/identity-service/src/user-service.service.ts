@@ -5664,4 +5664,91 @@ export class UserServiceService implements OnModuleInit {
         : "Operatorning ombor qoldig'ini ko'rish ruxsati o'chirildi",
     );
   }
+
+  /**
+   * identity.market_operator.set_status (mFkrqvMi, ega qarori 2026-10-19
+   * MO-S4) — market o'z operatorini nofaol qiladi yoki qayta faollashtiradi.
+   * Ko'lam komissiya bilan bir xil: faqat MARKET, faqat o'z operatori
+   * (begona / yo'q / o'chirilgan — 404, id mavjudligi oshkor qilinmaydi).
+   *
+   * - `inactive`: barcha sessiyalar yopiladi (`invalidateAllSessions` —
+   *   refresh token tozalanadi, `session_epoch` oshadi; AYNI save). Login,
+   *   refresh va Telegram bot aktori nofaol userni allaqachon rad etadi.
+   * - `active`: market o'zi faol bo'lishi shart (bloklangan market operatorni
+   *   «tiriltirib» blokni chetlab o'ta olmasin — yaratishdagi qoida).
+   * - Buyurtmalar, komissiya va daromad tarixi TEGILMAYDI (faqat `status`).
+   * - Holat o'zgarmasa — 200, jurnal yozilmaydi.
+   * RMQ'da ValidationPipe yo'q — `status` faqat 'active' | 'inactive', aks
+   * holda 400.
+   */
+  async setMarketOperatorStatus(
+    id: string,
+    marketId: string,
+    dto: { status?: unknown },
+    requester?: RequesterContext,
+  ) {
+    const scopedMarketId = this.resolveMarketOperatorScope(marketId, requester);
+    const rawStatus = primitiveText(dto?.status).trim().toLowerCase();
+    if (rawStatus !== Status.ACTIVE && rawStatus !== Status.INACTIVE) {
+      this.badRequest("status noto'g'ri (active | inactive)");
+    }
+    const next = rawStatus as Status;
+
+    const operator = await this.findOwnMarketOperator(id, scopedMarketId);
+    const previous = operator.status;
+    if (previous === next) {
+      return successRes(
+        this.toMarketOperatorView(operator),
+        200,
+        next === Status.ACTIVE
+          ? 'Operator allaqachon faol'
+          : 'Operator allaqachon nofaol',
+      );
+    }
+
+    if (next === Status.ACTIVE) {
+      const market = await this.users.findOne({
+        where: { id: scopedMarketId, role: Roles.MARKET, isDeleted: false },
+      });
+      if (!market) {
+        this.notFound('Market topilmadi');
+      }
+      if (market.status !== Status.ACTIVE) {
+        this.forbidden(
+          "Market bloklangan — operatorni faollashtirib bo'lmaydi",
+        );
+      }
+    }
+
+    operator.status = next;
+    if (next !== Status.ACTIVE) {
+      // Qurilma keyingi refresh'da chiqariladi (setUserStatus bilan AYNI).
+      invalidateAllSessions(operator);
+    }
+    const saved = await this.users.save(operator);
+    void this.syncUserToSearch(saved);
+    await this.activityLog.log({
+      entity_type: 'User',
+      entity_id: saved.id,
+      action: ActivityAction.STATUS_CHANGE,
+      old_value: { status: previous },
+      new_value: { status: saved.status },
+      ...this.auditActor(requester),
+      metadata: {
+        market_id: scopedMarketId,
+        reason: 'market_operator_status',
+      },
+      description: ActivityDescribeUz.marketOperatorStatusChanged(
+        saved.id,
+        saved.status === Status.ACTIVE,
+      ),
+    });
+    return successRes(
+      this.toMarketOperatorView(saved),
+      200,
+      saved.status === Status.ACTIVE
+        ? 'Operator qayta faollashtirildi'
+        : 'Operator nofaol qilindi',
+    );
+  }
 }

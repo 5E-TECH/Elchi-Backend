@@ -18746,6 +18746,59 @@
         ]
       }
     },
+    "/market-operators/{id}/status": {
+      "patch": {
+        "description": "Ega qarori 2026-10-19 (MO-S4). `inactive` — operator kira olmaydi: barcha sessiyalari yopiladi (refresh token tozalanadi, qurilma keyingi refresh'da chiqariladi), Telegram bot uni aktor deb tanimaydi. `active` — qayta faol (market o'zi bloklangan bo'lsa 403). Buyurtmalar, komissiya va daromad tarixi o'zgarmaydi. Holat o'zgarmasa ham 200. Javob — operator qatori (`status` bilan). Jurnal: `status_change` (muallif — market).",
+        "operationId": "MarketOperatorGatewayController_updateStatus",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Operator ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateMarketOperatorStatusRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "{ statusCode, message, data: MarketOperator } — `data.status`"
+          },
+          "400": {
+            "description": "status 'active' | 'inactive' emas"
+          },
+          "403": {
+            "description": "Market emas yoki market bloklangan (faollashtirish)"
+          },
+          "404": {
+            "description": "Operator topilmadi yoki begona"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Operatorni nofaol / qayta faol qilish — faqat o`z operatori (mFkrqvMi)",
+        "tags": [
+          "Market operators"
+        ],
+        "x-roles": [
+          "market"
+        ]
+      }
+    },
     "/market-operators/{id}": {
       "delete": {
         "operationId": "MarketOperatorGatewayController_remove",
@@ -27871,6 +27924,23 @@
         },
         "required": [
           "can_view_warehouse_stock"
+        ]
+      },
+      "UpdateMarketOperatorStatusRequestDto": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "inactive"
+            ],
+            "example": "inactive",
+            "description": "inactive — operator tizimga kira olmaydi, sessiyalari yopiladi (qurilma keyingi refresh'da chiqariladi); active — qayta faol"
+          }
+        },
+        "required": [
+          "status"
         ]
       },
       "DeliveryTariffRowDto": {

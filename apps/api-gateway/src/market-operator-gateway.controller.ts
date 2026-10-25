@@ -36,6 +36,7 @@ import { RolesGuard } from './auth/roles.guard';
 import {
   CreateMarketOperatorRequestDto,
   UpdateMarketOperatorCommissionRequestDto,
+  UpdateMarketOperatorStatusRequestDto,
   UpdateMarketOperatorWarehouseAccessRequestDto,
 } from './dto/market-operator.swagger.dto';
 import { ParseBigintIdPipe } from './pipes/parse-bigint-id.pipe';
@@ -252,6 +253,38 @@ export class MarketOperatorGatewayController {
       id,
       market_id: this.ownMarketId(req),
       dto: { can_view_warehouse_stock: dto.can_view_warehouse_stock },
+      requester: this.toRequester(req),
+    });
+  }
+
+  @Patch(':id/status')
+  @Roles(RoleEnum.MARKET)
+  @ApiOperation({
+    summary:
+      'Operatorni nofaol / qayta faol qilish — faqat o`z operatori (mFkrqvMi)',
+    description:
+      "Ega qarori 2026-10-19 (MO-S4). `inactive` — operator kira olmaydi: barcha sessiyalari yopiladi (refresh token tozalanadi, qurilma keyingi refresh'da chiqariladi), Telegram bot uni aktor deb tanimaydi. `active` — qayta faol (market o'zi bloklangan bo'lsa 403). Buyurtmalar, komissiya va daromad tarixi o'zgarmaydi. Holat o'zgarmasa ham 200. Javob — operator qatori (`status` bilan). Jurnal: `status_change` (muallif — market).",
+  })
+  @ApiParam({ name: 'id', description: 'Operator ID' })
+  @ApiBody({ type: UpdateMarketOperatorStatusRequestDto })
+  @ApiOkResponse({
+    description:
+      '{ statusCode, message, data: MarketOperator } — `data.status`',
+  })
+  @ApiBadRequestResponse({ description: "status 'active' | 'inactive' emas" })
+  @ApiForbiddenResponse({
+    description: 'Market emas yoki market bloklangan (faollashtirish)',
+  })
+  @ApiNotFoundResponse({ description: 'Operator topilmadi yoki begona' })
+  updateStatus(
+    @Param('id', ParseBigintIdPipe) id: string,
+    @Body() dto: UpdateMarketOperatorStatusRequestDto,
+    @Req() req: { user: JwtUser },
+  ) {
+    return this.send('identity.market_operator.set_status', {
+      id,
+      market_id: this.ownMarketId(req),
+      dto: { status: dto.status },
       requester: this.toRequester(req),
     });
   }

@@ -23,9 +23,19 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
-### 2026-10-25 — Rollar: mahsulot faqat xodimda (Pc4CAFdB)
+### 2026-10-25 — Rollar: mahsulot faqat xodimda (Pc4CAFdB), market operatorini nofaol/faol qilish (mFkrqvMi)
 
-Deploy: api-gateway (catalog-service — faqat izoh, qayta deploy shart emas). Migratsiya yo'q.
+Deploy: api-gateway, identity-service (catalog-service — faqat izoh, qayta deploy shart emas). Migratsiya yo'q.
+
+- [2026-10-25] 🆕 [gateway/identity] — **`PATCH /market-operators/:id/status`** (mFkrqvMi, ega qarori MO-S4):
+  tana `{ "status": "inactive" | "active" }` (boshqa qiymat / ortiqcha maydon — 400). Faqat MARKET, faqat o'z
+  operatori (begona / o'chirilgan — 404; boshqa rol — 403). `inactive` — operatorning barcha sessiyalari yopiladi
+  (qurilma keyingi refresh'da chiqariladi), login va Telegram bot uni rad etadi; `active` — qayta faol (market o'zi
+  bloklangan bo'lsa 403). Buyurtmalar, komissiya, daromad tarixi o'zgarmaydi. Holat o'zgarmasa ham 200. Javob —
+  `{ statusCode, message, data: MarketOperator }` (`data.status`). Jurnal: `status_change`, muallif — market.
+  `GET /market-operators` har qatorda `status` qaytaradi va `?status=active|inactive` filtrini qabul qiladi
+  (avvaldan). 🔧 FE (i76gGjyq): `operators-deactivate-dialog` / `operators-activate-dialog` shu endpointni
+  chaqiradi, ro'yxatdagi «Faol/Nofaol» belgisi `status` dan.
 
 - [2026-10-25] ⚠️ [gateway/catalog] — **Mahsulot yaratish/o'chirish faqat xodim** (Pc4CAFdB, ega qarori
   2026-10-15): `POST /product` va `DELETE /product/:id` — superadmin, admin, registrator, menejer. **Market va

@@ -244,6 +244,14 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
   (`branch.user.remove`, best-effort, warn log). User-create saga: a failed
   branch assign / cashbox create compensates (unassign + soft-delete) instead
   of leaving an orphan user.
+- **Market operators (`identity.market_operator.*`, MARKET only, own operator
+  else 404):** `create`, `find_by_market`, `delete`, `update_commission`,
+  `update_warehouse_access`, `set_status` (mFkrqvMi, `PATCH
+  /market-operators/:id/status {status: active|inactive}`): `inactive` →
+  `invalidateAllSessions` (same save), `active` → the market itself must be
+  ACTIVE (else 403); orders / commission / earnings untouched; activity log
+  `status_change` (actor = market, `metadata.reason =
+  market_operator_status`); unchanged status → 200 without a log.
 
 ### order-service (`order_schema`) — the core
 - **Entities:** `order` (key cols incl. `status` (`Order_status`), `total_price`;
