@@ -23,6 +23,21 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-10-26 — Buyurtmadagi `customer` — faqat mijoz ko'rinishi (vf4513Zn, ma'lumot sizishi)
+
+Deploy: faqat api-gateway. Migratsiya yo'q.
+
+- [2026-10-26] ⚠️ [gateway/order] — cheklangan rollarda (kuryer, market, market operatori, logist va ro'yxatda
+  yo'q / fail-closed rollar) buyurtma javobidagi **`customer`** obyekti endi identity'ning to'liq foydalanuvchi
+  yozuvi EMAS (ilgari `salary`, `payment_day`, `tariff_*`, `commission_*`, `compensation_mode`,
+  `ai_price_per_order`, `username`, `telegram_username`, `settings`... kelardi), faqat: `id`, `name`,
+  `phone_number`, `extra_number`, `address`, `district_id`, `region_id`, `district`, `region`, `status`.
+  Qamrov — rol proyeksiyasi o'tadigan barcha javoblar: `GET /orders`, `GET /orders/:id`, kuryer ro'yxatlari, QR /
+  skan, pochta/paket, **`GET /finance/history/:id` ning `data.order`** (u `GET /orders/:id` bilan AYNI proyeksiyadan
+  o'tadi). FE faqat shu maydonlarni o'qiydi — o'zgarish shart emas.
+- [2026-10-26] 🟢 [gateway/order] — `order.market` qoidalari o'zgarmagan (kuryerga market tarifi yo'q; market va
+  menejer — mavjud qoida). Superadmin/admin/menejer/filial/registrator — to'liq ko'rinish, o'zgarmagan.
+
 ### 2026-10-25 — Buyurtma: mahsulotsiz va tumansiz buyurtma yaratilmaydi — barcha yo'llarda (IR2OHIiN)
 
 Deploy: api-gateway (DTO/Swagger + `createOrderInternal`), order-service (yagona yaratish nuqtasi

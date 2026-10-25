@@ -34,7 +34,11 @@ import { Roles as RoleEnum } from '@app/common';
  *     va market profili tariflari YO'Q. Ilgari ro'yxatda yo'q rol to'liq
  *     ko'rinish olardi — mijoz o'z buyurtmasida market tarifi va kuryer/filial
  *     ulushini ko'rardi. Yangi rolga ko'proq maydon kerak bo'lsa — u shu
- *     faylda ANIQ ro'yxatga qo'shiladi.
+ *     faylda ANIQ ro'yxatga qo'shiladi;
+ *   - BARCHA cheklangan rollarda (yuqoridagi hammasi) buyurtmaning
+ *     `customer` obyekti — faqat mijoz ko'rinishi (`CUSTOMER_VIEW_FIELDS`,
+ *     vf4513Zn): identity foydalanuvchi yozuvining xodim/pul maydonlari
+ *     (`salary`, `tariff_*`, `commission_*`, `username`, `settings`...) yo'q.
  *
  * ⚠️ OCHIQ QAROR — `to_be_paid` / `paid_amount` (marketga to'lanadigan /
  * market qarzining to'langan qismi) kuryerdan HOZIRCHA olib tashlanmaydi:
@@ -162,6 +166,39 @@ export const LOGIST_HIDDEN_ORDER_FIELDS: readonly string[] = Array.from(
 export const LOGIST_MONEY_KEY_PATTERN =
   /(price|amount|tariff|revenue|salary|balance|cashbox|commission|profit|earning|income|paid|payment|cost|cashback|debt|share|fee(?!d)|compensation|payout|payable|receivable|money|wage|bonus|penalty|leftover)/i;
 
+/**
+ * vf4513Zn (prod tester, 2026-10-26) — buyurtma javobidagi `customer`
+ * obyektining MIJOZ KO'RINISHI (allowlist). Order-service `enrichOrders`
+ * mijozni identity'ning TO'LIQ foydalanuvchi yozuvi sifatida qo'shadi
+ * (`identity.customer.find_by_ids` → `sanitize`): `salary`, `payment_day`,
+ * `tariff_*`, `commission_*`, `compensation_mode`, `ai_price_per_order`,
+ * `username`, `telegram_username`, `settings`... (mijozda qiymatlari null/0,
+ * lekin xodim profili sxemasi ochiladi). Kuryer 26 buni `GET /orders/67` da va
+ * `GET /finance/history/114` ning `data.order.customer` ida (33 qatorning
+ * hammasida) ko'rardi.
+ *
+ * Elchi-Frontend (origin/main 8f81309a) buyurtmaning `customer` idan faqat
+ * shularni o'qiydi: buyurtma tafsiloti (`orderDetailModel`, `CustomerCard` —
+ * id, ism, telefon), kassa tarixi tafsiloti (`FinanceHistoryDetailPopup` —
+ * telefon / qo'shimcha raqam, manzil, `district.name`, `region.name`),
+ * kuryer/pochta kartalari (`entities/mails`, `orders/list/courier`,
+ * `scanBatchView`, `tgScanApi` — ism, telefon, `extra_number`).
+ * `district_id` / `region_id` / `status` — joylashuv va holat (pul/xodim
+ * maydoni emas). Boshqa maydon kerak bo'lsa — shu yerga ANIQ qo'shiladi.
+ */
+export const CUSTOMER_VIEW_FIELDS: readonly string[] = [
+  'id',
+  'name',
+  'phone_number',
+  'extra_number',
+  'address',
+  'district_id',
+  'region_id',
+  'district',
+  'region',
+  'status',
+];
+
 /** To'liq ko'rinishli rollar — proyeksiya qo'llanmaydi. */
 const FULL_VIEW_ROLES: readonly string[] = [
   RoleEnum.SUPERADMIN,
@@ -177,6 +214,11 @@ const MAX_DEPTH = 32;
 export type OrderProjection = {
   orderFields: ReadonlySet<string>;
   marketProfileFields: ReadonlySet<string>;
+  /**
+   * vf4513Zn: `customer` obyektida QOLADIGAN maydonlar (allowlist,
+   * `CUSTOMER_VIEW_FIELDS` + camelCase). Barcha cheklangan rollarda bor.
+   */
+  customerFields: ReadonlySet<string>;
   /** 4BftLLnc: LOGIST — nomi shu naqshga mos kalit ham olib tashlanadi. */
   keyPattern?: RegExp;
 };
@@ -196,6 +238,11 @@ const toCamelKey = (snake: string): string =>
 /** snake_case maydonlar + ularning camelCase ko'rinishi (eski shakllar uchun). */
 const withCamelVariants = (fields: readonly string[]): string[] =>
   fields.flatMap((field) => [field, toCamelKey(field)]);
+
+/** vf4513Zn: barcha cheklangan rollar uchun bitta (o'zgarmas) to'plam. */
+const CUSTOMER_VIEW_KEYS: ReadonlySet<string> = new Set(
+  withCamelVariants(CUSTOMER_VIEW_FIELDS),
+);
 
 /**
  * So'rovchi rollari uchun proyeksiya. `null` — to'liq ko'rinish
@@ -236,9 +283,10 @@ export function resolveOrderProjection(
     }
   }
 
+  const customerFields = CUSTOMER_VIEW_KEYS;
   return keyPattern
-    ? { orderFields, marketProfileFields, keyPattern }
-    : { orderFields, marketProfileFields };
+    ? { orderFields, marketProfileFields, customerFields, keyPattern }
+    : { orderFields, marketProfileFields, customerFields };
 }
 
 const isPlainObject = (value: unknown): value is Record<string, unknown> => {
@@ -263,6 +311,19 @@ const omitKeys = (
   }
   return Object.fromEntries(
     Object.entries(row).filter(([key]) => !fields.has(key)),
+  );
+};
+
+/** Faqat `fields` dagi kalitlar qolgan nusxa; hammasi ruxsatli — ASL obyekt. */
+const pickKeys = (
+  row: Record<string, unknown>,
+  fields: ReadonlySet<string>,
+): Record<string, unknown> => {
+  if (Object.keys(row).every((key) => fields.has(key))) {
+    return row;
+  }
+  return Object.fromEntries(
+    Object.entries(row).filter(([key]) => fields.has(key)),
   );
 };
 
@@ -311,13 +372,18 @@ function projectValue(
     // olib tashlanadi, so'ng u ham odatdagidek aylanadi — 4BftLLnc: logist
     // `LOGIST_MONEY_KEY_PATTERN` i market profili ICHIDA ham ishlaydi
     // (`default_tariff`, `extra_cost_*`; ilgari market bolasi aylanmasdi).
+    // vf4513Zn: `customer` (buyurtma mijozi; `market_id` siz buyurtma
+    // xulosalarida ham — paket/pochta/skan) — faqat mijoz ko'rinishi
+    // (`CUSTOMER_VIEW_FIELDS`), identity'ning to'liq yozuvi emas.
     const child =
       isOrderRow &&
       key === 'market' &&
       isPlainObject(nested) &&
       projection.marketProfileFields.size
         ? omitKeys(nested, projection.marketProfileFields)
-        : nested;
+        : key === 'customer' && isPlainObject(nested)
+          ? pickKeys(nested, projection.customerFields)
+          : nested;
     const projected = projectValue(child, projection, depth + 1);
     changed = changed || projected !== nested;
     next[key] = projected;
