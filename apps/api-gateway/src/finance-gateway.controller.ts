@@ -47,6 +47,7 @@ import {
   PaymentMethod,
   Roles as RoleEnum,
   Source_type,
+  toPublicUserSummary,
 } from '@app/common';
 import {
   CashboxAllInfoQueryDto,
@@ -323,14 +324,17 @@ export class FinanceGatewayController {
       return histories;
     }
 
+    // vf4513Zn — to'liq identity yozuvi EMAS: `{id, name, role,
+    // phone_number}`. Ilgari market o'z kassasida kuryerning tarifi/maoshini,
+    // kuryer menejer/market moliyasini ko'rardi. `getMainCashbox` filtri
+    // `createdByUser.role` ni o'qiydi — u saqlanadi.
     const users = await Promise.all(
       createdByIds.map(async (id) => {
         try {
           const userResponse = await this.sendIdentity<{
             data?: Record<string, any>;
           }>({ cmd: 'identity.user.find_by_id' }, { id });
-          const user = userResponse?.data ?? null;
-          return [id, user] as const;
+          return [id, toPublicUserSummary(userResponse?.data, id)] as const;
         } catch {
           return [id, null] as const;
         }

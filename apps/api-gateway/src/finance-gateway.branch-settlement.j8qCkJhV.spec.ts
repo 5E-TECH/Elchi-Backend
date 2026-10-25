@@ -2,6 +2,8 @@ import 'reflect-metadata';
 import { isObservable, of, throwError } from 'rxjs';
 
 jest.mock('@app/common', () => ({
+  // vf4513Zn — tarixdagi foydalanuvchi proyeksiyasi (sof funksiya) haqiqiy.
+  ...jest.requireActual('@app/common/security/user-summary'),
   Cashbox_type: {
     BRANCH: 'branch',
     FOR_COURIER: 'couriers',

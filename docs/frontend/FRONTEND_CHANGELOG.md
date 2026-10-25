@@ -46,6 +46,37 @@ mahsulotsiz/tumansiz buyurtmalarga tegilmaydi.
 - 🔧 FE (Elchi-Frontend `fe-1025-order-guard`): qo'lda yaratish formasi va AI kartalari mahsulotsiz/tumansiz
   yuborishni bloklaydi, sababini yonida yozadi va backend 400 matnini ko'rsatadi.
 
+### 2026-10-25 (kech) — Logist: `sale_market_paid_max` va boshqa pul kalitlari chiqmaydi (4BftLLnc, ma'lumot sizishi)
+
+Deploy: faqat api-gateway. Migratsiya yo'q.
+
+- [2026-10-25] ⚠️ [gateway/order] — **LOGIST** (`GET /orders`, `GET /orders/:id`, `/tracking`, pochta/paket/qidiruv —
+  logist proyeksiyasi o'tadigan barcha javoblar): prod testida WAITING buyurtmalarda **`sale_market_paid_max`**
+  (sotish oynasi chegarasi = summa − market tarifi) chiqib qolgan edi — endi YO'Q. Pul naqshi kengaytirildi: nomida
+  `paid`, `payment`, `cost`, `share`, `fee`, `debt`, `cashback`, `income`, `compensation`, `payable`/`receivable`,
+  `leftover` va h.k. bo'lgan kalitlar ham olib tashlanadi (`payment_status`, `extra_cost_party`, kuzatuvdagi
+  `already_paid_online`...). Naqsh endi `order.market` profili ICHIDA ham ishlaydi: `market.default_tariff`,
+  `market.extra_cost_enabled`, `market.extra_cost_requires_approval`, `market.can_add_extra_cost` logistda yo'q.
+  Ism, telefon, holat, viloyat/tuman, mahsulot nomi/soni, kuryer, `return_stage`/`cancel_return` — o'zgarmagan.
+- [2026-10-25] ✏️ [gateway/order] — **`sale_market_paid_max` cheklangan rollarda ham yo'q** (mijoz, call-center
+  operatori, investor, noma'lum rol) — u `to_be_paid` kabi market tarifini ochadi. 🟢 **Kuryer va market uchun
+  o'zgarmagan**: kuryer sotish oynasi (SellModal, `readMarketPaidBase`) shu maydonga tayanadi; menejer/admin — to'liq.
+
+### 2026-10-25 (kech) — Kassa tarixi: foydalanuvchi obyektlari faqat `{id, name, role, phone_number}` (vf4513Zn, ma'lumot sizishi)
+
+Deploy: finance-service va api-gateway (ikkalasi ham — biri qolsa sizish shu yo'lda qoladi). Migratsiya yo'q.
+
+- [2026-10-25] ⚠️ [finance/gateway] — **Kassa tarixidagi ichki foydalanuvchi obyektlari endi MINIMAL**: `source_user` /
+  `sourceUser`, `created_by_user` / `createdByUser` va `cashbox.user` — faqat **`{ id, name, role, phone_number }`**
+  (yoki `null`). Ilgari identity'ning TO'LIQ yozuvi edi: kuryer o'z kassasida («sotuvda marketga to'g'ridan-to'g'ri
+  berildi» qatori) market'ning `tariff_home`/`tariff_center`, `default_tariff`, `salary`, `payment_day`,
+  `commission_*`, `compensation_mode`, `ai_price_per_order` ini, market esa kuryerning tarifi/maoshini ko'rardi
+  (prod tester topdi). Yo'llar: `GET /finance/cashbox/my-cashbox` (kuryer, market, menejer),
+  `GET /finance/cashbox/main`, `GET /finance/cashbox/user/:id/main`, `GET /finance/cashbox/user/:user_id`,
+  `GET /finance/history`, `GET /finance/history/:id`. `status`, `username`, `region`, tarif/maosh va h.k. KALITLARI
+  YO'Q. 🟢 FE o'zgarishi shart emas: `getPaymentActorName` (`name`), tafsilot oynasidagi «Kimdan/Kimga» telefoni
+  (`phone_number`), rol belgisi (`role`) va cashDetail (`cashbox.user.name` / `phone_number` / `role`) — hammasi bor.
+
 ### 2026-10-25 — Yetkazish narxi: hajm qaysi kg dan boshlab hisobga olinadi (AQ9lkgVB)
 
 Deploy: logistics-service (migratsiya `1716000000154`), api-gateway (DTO/Swagger). Migratsiyadan keyin chegara
@@ -167,8 +198,9 @@ Deploy: faqat finance-service. Migratsiya yo'q. Endpoint/kontrakt kalitlari olib
   **`GET /finance/cashbox/main`** va **`GET /finance/cashbox/user/:id/main`** javobida (`finance.cashbox.user_by_id`):
   - `data.cashboxHistory[]` qatorlariga `source_user` / `sourceUser` (faqat `courier_payment` va `market_payment`
     qatorlarida — kuryer yoki market; boshqa turlarda `null`) va `created_by_user` / `createdByUser`
-    (identity `find_by_id` yozuvi yoki `null`). Kuryer kassasida `payment_ack` avvalgidek;
-  - `data.cashbox.user` — kassa EGASI: kuryer/market kassasida foydalanuvchi yozuvi, filial (`branch`) va asosiy
+    (`{id, name, role, phone_number}` yoki `null` — yuqoridagi «kech» tuzatishga qarang). Kuryer kassasida
+    `payment_ack` avvalgidek;
+  - `data.cashbox.user` — kassa EGASI: kuryer/market kassasida `{id, name, role, phone_number}`, filial (`branch`) va asosiy
     (`main`) kassada har doim `null` (filial id si odam emas — CODE-08).
   🔧 FE (my-cashbox, M4): menejer filial kassasidagi «Kuryerdan filialga o'tkazma» qatorida kuryer ismi —
   `row.source_user?.name`; kassa egasi nomi profil o'rniga `data.cashbox.user?.name` (kuryer/market).

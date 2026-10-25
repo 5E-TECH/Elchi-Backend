@@ -5,6 +5,8 @@ import { isObservable, of, throwError, TimeoutError } from 'rxjs';
 import request from 'supertest';
 
 jest.mock('@app/common', () => ({
+  // vf4513Zn — tarixdagi foydalanuvchi proyeksiyasi (sof funksiya) haqiqiy.
+  ...jest.requireActual('@app/common/security/user-summary'),
   Cashbox_type: {
     BRANCH: 'branch',
     FOR_COURIER: 'couriers',
