@@ -2985,6 +2985,24 @@ export class UserServiceService implements OnModuleInit {
       qb.andWhere('courier.id IN (:...user_ids)', { user_ids });
     }
 
+    // Z3pUOxou — logist doirasi: kuryerning O'Z viloyati to'plamda (qat'iy).
+    if (Array.isArray(query?.region_ids)) {
+      const scopedRegionIds = Array.from(
+        new Set(
+          query.region_ids
+            .map((id) => String(id ?? '').trim())
+            .filter((id) => /^[0-9]{1,19}$/.test(id)),
+        ),
+      );
+      if (scopedRegionIds.length) {
+        qb.andWhere('courier.region_id IN (:...scoped_region_ids)', {
+          scoped_region_ids: scopedRegionIds,
+        });
+      } else {
+        qb.andWhere('1 = 0');
+      }
+    }
+
     const [rows, total] = await qb
       .orderBy('courier.createdAt', 'DESC')
       .skip(skip)

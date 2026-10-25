@@ -134,3 +134,40 @@ describe('UserServiceService.findAllCouriers — user_ids filtri', () => {
     }
   });
 });
+
+/**
+ * Z3pUOxou — GET /couriers (LOGIST): gateway logistning viloyatlarini
+ * `region_ids` bilan beradi — QAT'IY `courier.region_id IN` (super-kuryer
+ * kengaytmasi yo'q), bo'sh to'plam — hech narsa.
+ */
+describe('UserServiceService.findAllCouriers — region_ids (logist doirasi)', () => {
+  const regionFilterOf = (calls: QbCall[]) =>
+    calls.find(
+      ([sql]) => sql === 'courier.region_id IN (:...scoped_region_ids)',
+    );
+
+  it('region_ids — faqat shu viloyatlar kuryerlari (buzuq qiymat tashlanadi)', async () => {
+    const { service, calls } = makeService();
+    await service.findAllCouriers({ region_ids: ['5', ' 9 ', 'x', ''] });
+
+    expect(regionFilterOf(calls)?.[1]).toEqual({
+      scoped_region_ids: ['5', '9'],
+    });
+    expect(calls.map(([sql]) => sql)).not.toContain('1 = 0');
+  });
+
+  it('region_ids bo‘sh — hech qanday qator (fail-closed)', async () => {
+    const { service, calls } = makeService();
+    await service.findAllCouriers({ region_ids: [] });
+
+    expect(calls.map(([sql]) => sql)).toContain('1 = 0');
+  });
+
+  it('region_ids berilmasa — filtr yo‘q (boshqa rollar o‘zgarmagan)', async () => {
+    const { service, calls } = makeService();
+    await service.findAllCouriers({ region_id: '5' });
+
+    expect(regionFilterOf(calls)).toBeUndefined();
+    expect(calls.map(([sql]) => sql)).not.toContain('1 = 0');
+  });
+});

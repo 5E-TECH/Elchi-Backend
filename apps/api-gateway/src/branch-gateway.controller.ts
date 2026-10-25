@@ -5,11 +5,13 @@ import {
   Delete,
   Get,
   Inject,
+  Optional,
   Param,
   Patch,
   Post,
   Query,
   Req,
+  ServiceUnavailableException,
   UseGuards,
 } from '@nestjs/common';
 import { ClientProxy } from '@nestjs/microservices';
@@ -28,6 +30,14 @@ import { JwtAuthGuard } from './auth/jwt-auth.guard';
 import { Roles } from './auth/roles.decorator';
 import { RolesGuard } from './auth/roles.guard';
 import { ParseBigintIdPipe } from './pipes/parse-bigint-id.pipe';
+import {
+  LOGIST_REGIONS_UNAVAILABLE_MESSAGE,
+  LogistRegionScopeService,
+  isLogistRequester,
+  isRowInLogistRegions,
+  projectLogistPayload,
+  resolveLogistRegionFilter,
+} from './auth/logist-scope';
 import {
   AssignBranchUserRequestDto,
   CancelTransferBatchRequestDto,
@@ -73,7 +83,22 @@ const BRANCH_USER_REMOVE_RPC_TIMEOUT_MS = 20_000;
 @Controller()
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class BranchGatewayController {
-  constructor(@Inject('BRANCH') private readonly branchClient: ClientProxy) {}
+  constructor(
+    @Inject('BRANCH') private readonly branchClient: ClientProxy,
+    // Z3pUOxou — logist viloyatlari. Yo'q bo'lsa logist so'rovi 503
+    // (fail-closed); boshqa rollar unga bog'liq emas.
+    @Optional() private readonly logistScope?: LogistRegionScopeService,
+  ) {}
+
+  /** Z3pUOxou: logistning viloyatlari (xizmat yo'q/xato — 503). */
+  private async logistRegionIds(req: {
+    user?: { sub?: string; roles?: string[] };
+  }): Promise<string[]> {
+    if (!this.logistScope) {
+      throw new ServiceUnavailableException(LOGIST_REGIONS_UNAVAILABLE_MESSAGE);
+    }
+    return this.logistScope.regionIds(req?.user?.sub);
+  }
 
   private toRequester(req: { user?: { sub?: string; roles?: string[] } }) {
     return {
@@ -402,16 +427,28 @@ export class BranchGatewayController {
     RoleEnum.BRANCH,
     RoleEnum.MANAGER,
     RoleEnum.REGISTRATOR,
+    // Z3pUOxou (ega LG-S1/LG-S3): logist — faqat ko'rish, o'z viloyatlari.
+    RoleEnum.LOGIST,
   )
   @ApiOperation({
     summary: 'List transfer batches',
     description:
       "(15N7AHkp) Statussiz yoki `status=PENDING` da bir yo'nalishdagi (manba, manzil, yo'nalish, hudud) PENDING " +
       "partiyalardan faqat eng yangisi qaytadi — yig'ish SQL'da, shuning uchun `meta.total`/`totalPages` HAQIQIY jami " +
-      '(ilgari sahifadagi qatorlar soni edi). Tartib: createdAt DESC, id DESC.',
+      '(ilgari sahifadagi qatorlar soni edi). Tartib: createdAt DESC, id DESC. ' +
+      "Z3pUOxou — LOGIST: faqat o'z viloyatlariga boruvchi paketlar (`target_region_id IN` o'z viloyatlari; " +
+      "`target_region_id` filtri — faqat o'z viloyati, boshqasi 400; biriktirilmagan — bo'sh), `total_price` va " +
+      "`items[].snapshot_price` yo'q.",
   })
   @ApiQuery({ name: 'source_branch_id', required: false, type: String })
   @ApiQuery({ name: 'destination_branch_id', required: false, type: String })
+  @ApiQuery({
+    name: 'target_region_id',
+    required: false,
+    type: String,
+    description:
+      "Z3pUOxou (N17): maqsad viloyat filtri (toraytiradi). Logist uchun — faqat o'z viloyatlaridan biri.",
+  })
   @ApiQuery({
     name: 'status',
     required: false,
@@ -441,25 +478,71 @@ export class BranchGatewayController {
     @Query('page') page: string | undefined,
     @Query('limit') limit: string | undefined,
     @Req() req: { user?: { sub?: string; roles?: string[] } },
+    @Query('target_region_id') targetRegionId?: string,
   ) {
+    const query = {
+      source_branch_id: sourceBranchId,
+      destination_branch_id: destinationBranchId,
+      status,
+      direction,
+      period,
+      date,
+      page: page ? Number(page) : undefined,
+      limit: limit ? Number(limit) : undefined,
+      target_region_id: targetRegionId
+        ? String(targetRegionId).trim()
+        : undefined,
+    };
+    if (isLogistRequester(req?.user?.roles)) {
+      return this.findTransferBatchesForLogist(query, req);
+    }
     return this.branchClient
       .send(
         { cmd: 'branch.transfer_batches.find_all' },
-        {
-          requester: this.toRequester(req),
-          query: {
-            source_branch_id: sourceBranchId,
-            destination_branch_id: destinationBranchId,
-            status,
-            direction,
-            period,
-            date,
-            page: page ? Number(page) : undefined,
-            limit: limit ? Number(limit) : undefined,
-          },
-        },
+        { requester: this.toRequester(req), query },
       )
       .pipe(timeout(BATCH_RPC_TIMEOUT_MS));
+  }
+
+  /**
+   * Z3pUOxou — logist paketlari: viloyatlar gateway'da aniqlanadi va
+   * branch-service'ga `requester.region_ids` sifatida uzatiladi. Javob qatori
+   * yana tekshiriladi (himoya) va pul maydonlari olib tashlanadi.
+   */
+  private async findTransferBatchesForLogist(
+    query: Record<string, unknown> & { target_region_id?: string },
+    req: { user?: { sub?: string; roles?: string[] } },
+  ) {
+    const regionIds = await this.logistRegionIds(req);
+    const targetRegionId = resolveLogistRegionFilter(
+      query.target_region_id,
+      regionIds,
+    );
+    const response: unknown = await firstValueFrom(
+      this.branchClient
+        .send(
+          { cmd: 'branch.transfer_batches.find_all' },
+          {
+            requester: { ...this.toRequester(req), region_ids: regionIds },
+            query: { ...query, target_region_id: targetRegionId ?? undefined },
+          },
+        )
+        .pipe(timeout(BATCH_RPC_TIMEOUT_MS)),
+    );
+    const data = (response as { data?: { items?: unknown } } | null)?.data;
+    const scoped =
+      data && Array.isArray(data.items)
+        ? {
+            ...(response as object),
+            data: {
+              ...data,
+              items: (data.items as unknown[]).filter((batch) =>
+                isRowInLogistRegions(batch, regionIds, 'target_region_id'),
+              ),
+            },
+          }
+        : response;
+    return projectLogistPayload(req?.user?.roles, scoped);
   }
 
   @Get('transfer-batches/:id')
@@ -469,11 +552,14 @@ export class BranchGatewayController {
     RoleEnum.BRANCH,
     RoleEnum.MANAGER,
     RoleEnum.REGISTRATOR,
+    // Z3pUOxou: logist — o'z viloyatiga boruvchi paket (boshqasi 403), pulsiz.
+    RoleEnum.LOGIST,
   )
   @ApiOperation({
     summary: 'Get transfer batch by id',
     description:
-      "3HKvAyhm: javobda `source_branch` / `destination_branch` `{ id, name }` — menejer ham filial nomini ko'radi (`GET branches/:id` faqat SA/admin).",
+      "3HKvAyhm: javobda `source_branch` / `destination_branch` `{ id, name }` — menejer ham filial nomini ko'radi (`GET branches/:id` faqat SA/admin). " +
+      "Z3pUOxou — LOGIST: paket o'z viloyatiga (`target_region_id`) boruvchi bo'lsa, aks holda 403; `total_price`, `items[].snapshot_price` va `items[].order` dagi pul maydonlari yo'q.",
   })
   @ApiParam({ name: 'id', description: 'Transfer batch ID (bigint string)' })
   @ApiOkResponse({ type: TransferBatchDetailDto })
@@ -481,12 +567,35 @@ export class BranchGatewayController {
     @Param('id', ParseBigintIdPipe) id: string,
     @Req() req: { user?: { sub?: string; roles?: string[] } },
   ) {
+    if (isLogistRequester(req?.user?.roles)) {
+      return this.findTransferBatchByIdForLogist(id, req);
+    }
     return this.branchClient
       .send(
         { cmd: 'branch.transfer_batches.find_by_id' },
         { id, requester: this.toRequester(req) },
       )
       .pipe(timeout(BATCH_RPC_TIMEOUT_MS));
+  }
+
+  /** Z3pUOxou — logist paket tafsiloti: doira branch-service'da, pulsiz. */
+  private async findTransferBatchByIdForLogist(
+    id: string,
+    req: { user?: { sub?: string; roles?: string[] } },
+  ) {
+    const regionIds = await this.logistRegionIds(req);
+    const response: unknown = await firstValueFrom(
+      this.branchClient
+        .send(
+          { cmd: 'branch.transfer_batches.find_by_id' },
+          {
+            id,
+            requester: { ...this.toRequester(req), region_ids: regionIds },
+          },
+        )
+        .pipe(timeout(BATCH_RPC_TIMEOUT_MS)),
+    );
+    return projectLogistPayload(req?.user?.roles, response);
   }
 
   @Get('transfer-batches/:id/history')

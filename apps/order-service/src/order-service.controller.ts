@@ -1981,6 +1981,10 @@ export class OrderServiceController {
       date?: string;
       page?: number;
       limit?: number;
+      /** Z3pUOxou (N17): maqsad viloyat filtri. */
+      target_region_id?: string;
+      /** Z3pUOxou: logist doirasi; bo'sh massiv — hech narsa. */
+      target_region_ids?: string[];
     },
     @Ctx() context: RmqContext,
   ) {

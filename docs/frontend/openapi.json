@@ -435,6 +435,7 @@
         ]
       },
       "get": {
+        "description": "Z3pUOxou — LOGIST: faqat `region_id` si o'ziga biriktirilgan viloyatlardan biri bo'lgan kuryerlar (`region_id` filtri — faqat o'z viloyati, boshqasi 400; biriktirilmagan — bo'sh). Maosh va moliya maydonlari (salary, payment_day, compensation_mode, commission_*, tariff_*, balanslar) yo'q; `branch_id` filtri logist uchun e'tiborsiz.",
         "operationId": "ApiGatewayController_getCouriers",
         "parameters": [
           {
@@ -517,7 +518,8 @@
           "admin",
           "branch",
           "manager",
-          "registrator"
+          "registrator",
+          "logist"
         ]
       }
     },
@@ -5150,7 +5152,7 @@
     },
     "/post": {
       "get": {
-        "description": "tveJKICY: javobda `orders_total`, `amount_total` — joriy filtr bo‘yicha (sahifadan qat’i nazar) yig‘indilar.",
+        "description": "tveJKICY: javobda `orders_total`, `amount_total` — joriy filtr bo‘yicha (sahifadan qat’i nazar) yig‘indilar. Z3pUOxou — LOGIST: faqat o'ziga biriktirilgan viloyatlar pochtalari (`region_id` — faqat o'z viloyati, boshqasi 400; biriktirilmagan — bo'sh), `post_total_price` va `amount_total` yo'q.",
         "operationId": "LogisticsGatewayController_getAllPosts",
         "parameters": [
           {
@@ -5264,7 +5266,8 @@
           "branch",
           "manager",
           "registrator",
-          "courier"
+          "courier",
+          "logist"
         ]
       }
     },
@@ -5507,6 +5510,7 @@
     },
     "/post/{id}": {
       "get": {
+        "description": "Z3pUOxou — LOGIST: pochta o'ziga biriktirilgan viloyatda bo'lsa (aks holda 403), `post_total_price` siz.",
         "operationId": "LogisticsGatewayController_getPostById",
         "parameters": [
           {
@@ -5539,7 +5543,8 @@
           "branch",
           "manager",
           "registrator",
-          "courier"
+          "courier",
+          "logist"
         ]
       },
       "delete": {
@@ -5732,6 +5737,7 @@
     },
     "/post/orders/{id}": {
       "get": {
+        "description": "Z3pUOxou — LOGIST: pochta o'ziga biriktirilgan viloyatda bo'lsa (aks holda 403); buyurtma qatorlari pulsiz (`total_price`, tariflar yo'q), `homeOrders`/`centerOrders` da faqat sonlar.",
         "operationId": "LogisticsGatewayController_getOrdersByPost",
         "parameters": [
           {
@@ -5764,7 +5770,8 @@
           "branch",
           "manager",
           "registrator",
-          "courier"
+          "courier",
+          "logist"
         ]
       }
     },
@@ -15242,9 +15249,18 @@
     },
     "/transfer-batches": {
       "get": {
-        "description": "(15N7AHkp) Statussiz yoki `status=PENDING` da bir yo'nalishdagi (manba, manzil, yo'nalish, hudud) PENDING partiyalardan faqat eng yangisi qaytadi — yig'ish SQL'da, shuning uchun `meta.total`/`totalPages` HAQIQIY jami (ilgari sahifadagi qatorlar soni edi). Tartib: createdAt DESC, id DESC.",
+        "description": "(15N7AHkp) Statussiz yoki `status=PENDING` da bir yo'nalishdagi (manba, manzil, yo'nalish, hudud) PENDING partiyalardan faqat eng yangisi qaytadi — yig'ish SQL'da, shuning uchun `meta.total`/`totalPages` HAQIQIY jami (ilgari sahifadagi qatorlar soni edi). Tartib: createdAt DESC, id DESC. Z3pUOxou — LOGIST: faqat o'z viloyatlariga boruvchi paketlar (`target_region_id IN` o'z viloyatlari; `target_region_id` filtri — faqat o'z viloyati, boshqasi 400; biriktirilmagan — bo'sh), `total_price` va `items[].snapshot_price` yo'q.",
         "operationId": "BranchGatewayController_findTransferBatches",
         "parameters": [
+          {
+            "name": "target_region_id",
+            "required": false,
+            "in": "query",
+            "description": "Z3pUOxou (N17): maqsad viloyat filtri (toraytiradi). Logist uchun — faqat o'z viloyatlaridan biri.",
+            "schema": {
+              "type": "string"
+            }
+          },
           {
             "name": "limit",
             "required": false,
@@ -15345,13 +15361,14 @@
           "admin",
           "branch",
           "manager",
-          "registrator"
+          "registrator",
+          "logist"
         ]
       }
     },
     "/transfer-batches/{id}": {
       "get": {
-        "description": "3HKvAyhm: javobda `source_branch` / `destination_branch` `{ id, name }` — menejer ham filial nomini ko'radi (`GET branches/:id` faqat SA/admin).",
+        "description": "3HKvAyhm: javobda `source_branch` / `destination_branch` `{ id, name }` — menejer ham filial nomini ko'radi (`GET branches/:id` faqat SA/admin). Z3pUOxou — LOGIST: paket o'z viloyatiga (`target_region_id`) boruvchi bo'lsa, aks holda 403; `total_price`, `items[].snapshot_price` va `items[].order` dagi pul maydonlari yo'q.",
         "operationId": "BranchGatewayController_findTransferBatchById",
         "parameters": [
           {
@@ -15390,7 +15407,8 @@
           "admin",
           "branch",
           "manager",
-          "registrator"
+          "registrator",
+          "logist"
         ]
       }
     },

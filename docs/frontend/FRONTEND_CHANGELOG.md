@@ -23,7 +23,7 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
-### 2026-10-25 — Logist kabineti: faqat o'z viloyatlari, faqat ko'rish, pulsiz (4BftLLnc, iOnGbEqi)
+### 2026-10-25 — Logist kabineti: faqat o'z viloyatlari, faqat ko'rish, pulsiz (4BftLLnc, iOnGbEqi, Z3pUOxou)
 
 Ega qarori 2026-10-19: LG-S1 — logist ko'radi, moliyaga aralashmaydi; LG-S3 — faqat o'ziga biriktirilgan viloyatlar
 (`regions.logist_id`). Doira SERVERDA: logist so'rovdagi filtr bilan doirani kengaytira olmaydi.
@@ -52,6 +52,27 @@ eski order-service `region_ids` ni bilmaydi, gateway bu holatda ham begona qator
   logist — `regions: []`; stats/:id da boshqa viloyat — 403. Admin/superadmin va filial xodimlari javobi o'zgarmagan.
   🟢 FE: `logistDashboard.ts` dagi `logist_id === me` klient filtri endi ortiqcha (zararsiz — qatorlarda
   `logist_id` = o'zi), olib tashlash ixtiyoriy; «Faol kuryerlar» KPI = `activeCouriers` yig'indisi.
+- [2026-10-25] ✏️ [logistics] — **Pochtalar — LOGIST** (Z3pUOxou; deploy: logistics-service + api-gateway):
+  `GET /post`, `GET /post/:id`, `GET /post/orders/:id` — `x-roles` ga `logist`. Faqat o'z viloyatlari pochtalari
+  (`post.region_id`); `region_id` filtri — faqat o'z viloyati (boshqasi 400), boshqa viloyat pochtasi — 403,
+  biriktirilmagan logist — bo'sh ro'yxat. Pulsiz: `post_total_price`, `amount_total` (ro'yxat yig'indisi; `orders_total`
+  qoladi), `homeOrdersTotalPrice`/`centerOrdersTotalPrice`, buyurtma qatorlaridagi `total_price`/tariflar yo'q. GET
+  hech narsa yozmaydi (filial o'tkazmasi pochtasining `branch_id` si logist ochganda ko'chirilmaydi).
+- [2026-10-25] ✏️ [branch] — **Filial paketlari — LOGIST** (Z3pUOxou; deploy: api-gateway, branch-service,
+  order-service): `GET /transfer-batches` va `GET /transfer-batches/:id` — `x-roles` ga `logist`. Faqat o'z viloyatlariga
+  boruvchi paketlar (`target_region_id`); boshqa viloyat paketi — 403. `total_price`, `items[].snapshot_price` va
+  `items[].order` dagi pul maydonlari yo'q. Manba/manzil filial filtrlari logistda ham toraytiradi.
+- [2026-10-25] 🆕 [branch] — **`GET /transfer-batches?target_region_id=`** (N17, barcha rollar): maqsad viloyat
+  filtri (toraytiradi; buzuq id — 400). Javob qatorida `target_region_id` va `region` avvaldan bor. Logist uchun —
+  faqat o'z viloyatlaridan biri (boshqasi 400).
+- [2026-10-25] ✏️ [identity] — **`GET /couriers` — LOGIST** (Z3pUOxou; deploy: api-gateway, identity-service):
+  `x-roles` ga `logist`. Faqat `region_id` si o'z viloyatlaridan biri bo'lgan kuryerlar (qat'iy; super-kuryerning
+  qo'shimcha viloyatlari hisobga olinmaydi); `region_id` filtri — faqat o'z viloyati (boshqasi 400); `branch_id`
+  filtri logistda e'tiborsiz. Maosh va moliya maydonlari yo'q: `salary`, `payment_day`, `compensation_mode`,
+  `commission_*`, `tariff_*`, kassa/balans. Ism, telefon, holat, `region` qoladi.
+- [2026-10-25] 🟢 [logist] — yozish yo'llari (pochta jo'natish/qabul, skaner, paket yaratish/jo'natish/qabul/bekor,
+  kuryer biriktirish/o'chirish) logistga ochilmagan — 403 (spec bilan qulflangan). 🔧 FE: logist-mails-list/detail,
+  logist-batches-list, logist-couriers-list sahifalari (LG-5) — shu endpointlar.
 
 ### 2026-10-25 — AI idempotentlik qoldiqlari (Cp2v3ZJ7) va kampaniya yuklamasi (xHPdpj0W)
 

@@ -367,6 +367,8 @@ export class LogisticsGatewayController {
   }
 
   // ---------- Post ----------
+  // Z3pUOxou (ega LG-S1/LG-S3): LOGIST — faqat ko'rish, o'z viloyatlari
+  // pochtalari (doira logistics'da), pulsiz.
   @Get('post')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(
@@ -376,12 +378,14 @@ export class LogisticsGatewayController {
     RoleEnum.MANAGER,
     RoleEnum.REGISTRATOR,
     RoleEnum.COURIER,
+    RoleEnum.LOGIST,
   )
   @ApiBearerAuth()
   @ApiOperation({
     summary: 'List all posts (with pagination)',
     description:
-      'tveJKICY: javobda `orders_total`, `amount_total` — joriy filtr bo‘yicha (sahifadan qat’i nazar) yig‘indilar.',
+      'tveJKICY: javobda `orders_total`, `amount_total` — joriy filtr bo‘yicha (sahifadan qat’i nazar) yig‘indilar. ' +
+      "Z3pUOxou — LOGIST: faqat o'ziga biriktirilgan viloyatlar pochtalari (`region_id` — faqat o'z viloyati, boshqasi 400; biriktirilmagan — bo'sh), `post_total_price` va `amount_total` yo'q.",
   })
   @ApiOkResponse({ type: PostListPageResponseDto })
   @ApiQuery({
@@ -449,7 +453,13 @@ export class LogisticsGatewayController {
           requester: { id: req?.user?.sub, roles: req?.user?.roles ?? [] },
         },
       )
-      .pipe(timeout(8000));
+      .pipe(
+        timeout(8000),
+        // Z3pUOxou: logistga pul kaliti chiqmaydi (boshqa rollar o'zgarmagan).
+        map((response: unknown) =>
+          projectLogistPayload(req?.user?.roles, response),
+        ),
+      );
   }
 
   @Get('post/new')
@@ -655,9 +665,15 @@ export class LogisticsGatewayController {
     RoleEnum.MANAGER,
     RoleEnum.REGISTRATOR,
     RoleEnum.COURIER,
+    // Z3pUOxou: logist — o'z viloyati pochtasi (boshqasi 403), pulsiz.
+    RoleEnum.LOGIST,
   )
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Get post by id' })
+  @ApiOperation({
+    summary: 'Get post by id',
+    description:
+      "Z3pUOxou — LOGIST: pochta o'ziga biriktirilgan viloyatda bo'lsa (aks holda 403), `post_total_price` siz.",
+  })
   @ApiParam({ name: 'id', description: 'Post ID (id)' })
   getPostById(@Param('id') id: string, @Req() req?: { user?: JwtUser }) {
     return this.logisticsClient
@@ -668,7 +684,12 @@ export class LogisticsGatewayController {
           requester: { id: req?.user?.sub, roles: req?.user?.roles ?? [] },
         },
       )
-      .pipe(timeout(8000));
+      .pipe(
+        timeout(8000),
+        map((response: unknown) =>
+          projectLogistPayload(req?.user?.roles, response),
+        ),
+      );
   }
 
   @Delete('post/:id')
@@ -783,9 +804,15 @@ export class LogisticsGatewayController {
     RoleEnum.MANAGER,
     RoleEnum.REGISTRATOR,
     RoleEnum.COURIER,
+    // Z3pUOxou: logist — o'z viloyati pochtasi buyurtmalari, pulsiz.
+    RoleEnum.LOGIST,
   )
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Get all orders by post id' })
+  @ApiOperation({
+    summary: 'Get all orders by post id',
+    description:
+      "Z3pUOxou — LOGIST: pochta o'ziga biriktirilgan viloyatda bo'lsa (aks holda 403); buyurtma qatorlari pulsiz (`total_price`, tariflar yo'q), `homeOrders`/`centerOrders` da faqat sonlar.",
+  })
   @ApiParam({ name: 'id', description: 'Post ID (id)' })
   getOrdersByPost(@Param('id') id: string, @Req() req: { user: JwtUser }) {
     return firstValueFrom(

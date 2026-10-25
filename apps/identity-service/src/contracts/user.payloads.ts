@@ -79,6 +79,12 @@ export interface UserFilterQuery {
   role?: string;
   status?: string;
   region_id?: string;
+  /**
+   * Z3pUOxou — faqat `identity.courier.find_all` (GET /couriers, LOGIST):
+   * qat'iy `courier.region_id IN (...)` (super-kuryer kengaytmasi YO'Q).
+   * Bo'sh massiv — hech qanday qator (fail-closed), `undefined` — filtr yo'q.
+   */
+  region_ids?: string[];
   user_ids?: string[];
   /**
    * 2CBnPAeg — menejer ko'lami (faqat `identity.user.find_all`, GET /users):
