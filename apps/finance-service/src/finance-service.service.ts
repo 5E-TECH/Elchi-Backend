@@ -60,6 +60,8 @@ import {
   rmqSend,
   OutboxService,
   tashkentDayRange,
+  toPublicUserSummary,
+  type PublicUserSummary,
 } from '@app/common';
 import { ClientProxy } from '@nestjs/microservices';
 import { firstValueFrom, timeout } from 'rxjs';
@@ -827,6 +829,12 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
     return (response ?? null) as T | null;
   }
 
+  /**
+   * Kassa tarixi/egasi uchun foydalanuvchilar — (vf4513Zn) faqat
+   * `PublicUserSummary` (`{id, name, role, phone_number}`): identity'ning
+   * to'liq yozuvi (tarif, maosh, komissiya, AI narxi...) javobga CHIQMAYDI —
+   * kuryer/market o'z kassasida bir-birining moliyasini ko'rmasin.
+   */
   private async loadUsersByIds(ids: string[]) {
     const uniqueIds = Array.from(
       new Set(
@@ -837,7 +845,7 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
     );
 
     if (!uniqueIds.length) {
-      return new Map<string, any>();
+      return new Map<string, PublicUserSummary | null>();
     }
 
     const pairs = await Promise.all(
@@ -848,14 +856,20 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
             { cmd: 'identity.user.find_by_id' },
             { id },
           );
-          return [id, this.extractResponseData<any>(response)] as const;
+          return [
+            id,
+            toPublicUserSummary(
+              this.extractResponseData<unknown>(response),
+              id,
+            ),
+          ] as const;
         } catch {
           return [id, null] as const;
         }
       }),
     );
 
-    return new Map<string, any>(pairs);
+    return new Map<string, PublicUserSummary | null>(pairs);
   }
 
   /**
@@ -2884,7 +2898,9 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
        * filial kassasidagi «Kuryerdan filialga o'tkazma» qatorida kuryer),
        * `created_by_user` va kassa EGASI `cashbox.user` — faqat kuryer/market
        * kassasida (CODE-08: BRANCH/MAIN `user_id` si odam emas — null).
-       * Identity javob bermasa — null (tarix baribir qaytadi).
+       * Identity javob bermasa — null (tarix baribir qaytadi). Hammasi faqat
+       * `{id, name, role, phone_number}` (loadUsersByIds) — to'liq yozuv
+       * kuryerga market tarifini, marketga kuryer maoshini sizdirardi.
        */
       const ownerIsUser =
         cashbox.cashbox_type === Cashbox_type.FOR_COURIER ||
@@ -2893,7 +2909,7 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         this.enrichHistoryWithUsers(ackedHistory, { courierAck: false }),
         ownerIsUser
           ? this.loadUsersByIds([String(cashbox.user_id)])
-          : Promise.resolve(new Map<string, any>()),
+          : Promise.resolve(new Map<string, PublicUserSummary | null>()),
       ]);
       const cashboxWithOwner = {
         ...cashbox,

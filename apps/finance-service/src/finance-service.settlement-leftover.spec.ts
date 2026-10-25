@@ -19,6 +19,8 @@ import { FinanceServiceService } from './finance-service.service';
 const rmqSendMock = jest.fn();
 
 jest.mock('@app/common', () => ({
+  // vf4513Zn — tarixdagi foydalanuvchi proyeksiyasi (sof funksiya) haqiqiy.
+  ...jest.requireActual('@app/common/security/user-summary'),
   ...jest.requireActual('@app/common/time/tashkent-time'),
   ...jest.requireActual('@app/common/activity-log/describe-uz'),
   Cashbox_type: {

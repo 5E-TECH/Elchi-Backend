@@ -7,6 +7,8 @@ const captureExceptionMock = jest.fn();
 const rmqSendMock = jest.fn();
 
 jest.mock('@app/common', () => ({
+  // vf4513Zn — tarixdagi foydalanuvchi proyeksiyasi (sof funksiya) haqiqiy.
+  ...jest.requireActual('@app/common/security/user-summary'),
   // Haqiqiy Toshkent kun helperlari (SqVMuhKo) — servis ularni barrel'dan
   // oladi, sana filtri chegaralari haqiqiy kod bilan hisoblanishi kerak.
   ...jest.requireActual('@app/common/time/tashkent-time'),
