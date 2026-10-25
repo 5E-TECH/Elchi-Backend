@@ -84,6 +84,34 @@ Deploy: order-service (migratsiya yo'q).
   ismi, manzil, izoh, mahsulot nomlari HTML-escape qilinadi (`<`, `&`, `*` xabarni buzmaydi), uzun qiymat emoji
   yarmida kesilmaydi. FE ta'siri yo'q.
 
+### 2026-10-25 — CSP hisobot manzili `POST /csp-report` (KwodkKWY)
+
+Deploy: faqat api-gateway (env/migratsiya yo'q).
+
+- [2026-10-25] 🆕 [gateway] — `POST /csp-report` — brauzerning CSP buzilish hisobotlari (Report-Only kuzatuvi).
+  Autentifikatsiyasiz (`@Public`), per-IP 30/daqiqa (ortig'i 429). Qabul qilinadi:
+  `Content-Type: application/csp-report` (eski `report-uri`, `{ "csp-report": { … } }`) va
+  `application/reports+json` (Reporting API, `[{ "type": "csp-violation", "body": { … } }]`; boshqa turlar
+  e'tiborsiz). Tana ≤ 32 KB (413), boshqa Content-Type yoki gzip — 415, buzuq JSON — 400. Javob doim BO'SH 204 —
+  kiritilgan ma'lumot qaytmaydi. Buzilishlar faqat gateway logiga yoziladi (`event: "csp_violation"`, URL'lar
+  query'siz, `original-policy` yozilmaydi); RMQ/DB'ga hech narsa ketmaydi. 🔧 FE: `public/_headers` dagi
+  `Content-Security-Policy-Report-Only` oxiriga `; report-uri https://api.elchipochta.uz/csp-report` qo'shing
+  (ixtiyoriy: `Reporting-Endpoints: csp="https://api.elchipochta.uz/csp-report"` + `; report-to csp` — preflight
+  `OPTIONS` uchun sahifa origin'i gateway `CORS_ORIGINS` da bo'lishi kerak, prod'da bor).
+
+### 2026-10-25 — Tuman birlashtirish xatosida qaytarilgan sonlar (Z1c1sNPT, DM-2)
+
+Deploy: logistics-service (gateway filtri o'zgarmagan — yangi maydonlar tekis, `publicErrorData` ularni o'tkazadi).
+
+- [2026-10-25] ✏️ [logistics] — `POST /district/:id/merge` 409/503 javobida `data.details` ga TEKIS sonlar qo'shildi:
+  `rolled_back_orders`, `rolled_back_users`, `rolled_back_branches` — A tumanga qaytarilgan buyurtma/foydalanuvchi/filial
+  soni (uchala maydon doim bor; boshlanmagan qadam — `0`; jami, o'chirilganlar bilan). Ildizdagi `data.rolled_back`
+  (ichma-ich obyekt) avvalgidek FE'ga yetmaydi. `manual_fix: true` da qo'shimcha `details.stranded_order_ids` —
+  A ga QAYTMAGAN buyurtmalarning birinchi ≤10 ta ID'si (to'liq ro'yxat — activity log
+  `district.merge_compensation_failed`; ID'lar noma'lum bo'lsa maydon yo'q). 🔧 FE (DM-2): maket
+  `regions-districts-merge-error` / `-error-unavailable` dagi «… tumaniga qaytarildi: buyurtmalar N · foydalanuvchilar N ·
+  filiallar N» ro'yxatini shu maydonlardan chizing; `-error-manual` dagi «№7001 …» — `stranded_order_ids`.
+
 ### 2026-10-25 — Ombor ↔ buyurtma oqimi (6kHnNH9j, kontrakt `warehouse_v2_contract.md` B)
 
 Deploy: `migration:run` (1716000000153 — `order_schema.orders.fulfillment_source` sukut `HQ`, `warehouse_id`) →

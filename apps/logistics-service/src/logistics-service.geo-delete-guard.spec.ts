@@ -670,6 +670,10 @@ describe('mergeDistricts — xato sababi (tf324cXN)', () => {
       kind: 'users',
       from_district_id: '173',
       to_district_id: '28',
+      // (Z1c1sNPT) qaytarilgan sonlar — tekis.
+      rolled_back_orders: 5,
+      rolled_back_users: 0,
+      rolled_back_branches: 0,
       manual_fix: false,
     });
     expect(err.data.rolled_back).toEqual({ orders: 5 });
@@ -787,6 +791,183 @@ describe('mergeDistricts — xato sababi (tf324cXN)', () => {
     ];
     expect(entry.action).toBe('district.merge_compensation_failed');
     expect(entry.metadata.reason_code).toBe('remote_refused');
+  });
+});
+
+/**
+ * Z1c1sNPT — «A ga qaytarildi: buyurtmalar N · foydalanuvchilar N · filiallar
+ * N» ro'yxati uchun sonlar `data.details` ichida TEKIS maydonlar:
+ * `rolled_back_orders`, `rolled_back_users`, `rolled_back_branches` (uchala
+ * tur doim, boshlanmagan qadam — 0). Ildizdagi `rolled_back` ichma-ich obyekt
+ * — gateway `publicErrorData` uni o'tkazmaydi (orqaga moslik uchun joyida).
+ * Ixtiyoriy qism: qaytmagan buyurtmalarning birinchi ≤10 ta ID'si —
+ * `details.stranded_order_ids`.
+ */
+describe('mergeDistricts — qaytarilgan sonlar data.details da (Z1c1sNPT)', () => {
+  const rolledBackOf = (details: Record<string, unknown> | undefined) => ({
+    orders: details?.rolled_back_orders,
+    users: details?.rolled_back_users,
+    branches: details?.rolled_back_branches,
+  });
+
+  it('⭐ ikkinchi qadam rad etsa — buyurtmalar 5, foydalanuvchilar 0, filiallar 0; gateway filtridan o‘tadi', async () => {
+    const h = make({
+      rows: { orders: fiveInA(), users: [order('301', '173', '3')] },
+      forwardFault: { users: { statusCode: 400 } },
+    });
+    const err = await mergeError(h);
+    expect(err.statusCode).toBe(409);
+    expect(rolledBackOf(err.data.details)).toEqual({
+      orders: 5,
+      users: 0,
+      branches: 0,
+    });
+    // Eski ildiz kaliti o'zgarmadi.
+    expect(err.data.rolled_back).toEqual({ orders: 5 });
+    const pub = publicErrorData(err);
+    expect(rolledBackOf(pub?.details as Record<string, unknown>)).toEqual({
+      orders: 5,
+      users: 0,
+      branches: 0,
+    });
+    // Ildizdagi `rolled_back` (ichma-ich) FE'ga chiqmaydi — shuning uchun tekis.
+    expect(pub).not.toHaveProperty('rolled_back');
+    expect(pub?.details).not.toHaveProperty('stranded_order_ids');
+  });
+
+  it('⭐ oxirgi qadam javob bermasa (503) — buyurtmalar 5, foydalanuvchilar 1, filiallar 0', async () => {
+    const h = make({
+      rows: {
+        orders: fiveInA(),
+        users: [order('301', '173', '3')],
+        branches: [order('7', '173', '3')],
+      },
+      forwardFault: { branches: 'timeout' },
+    });
+    const err = await mergeError(h);
+    expect(err.statusCode).toBe(503);
+    expect(err.data.details.reason).toBe('timeout');
+    expect(
+      rolledBackOf(publicErrorData(err)?.details as Record<string, unknown>),
+    ).toEqual({
+      orders: 5,
+      users: 1,
+      branches: 0,
+    });
+  });
+
+  it('⭐ uchala qadam o‘tib tekshiruv mos kelmasa — hammasi qaytariladi: 5 · 1 · 1', async () => {
+    const h = make({
+      rows: {
+        orders: fiveInA(),
+        users: [order('301', '173', '3')],
+        branches: [order('7', '173', '3')],
+      },
+      afterForward: (kind, rows) => {
+        if (kind === 'orders') rows.orders.push(order('99', '28', '3'));
+      },
+    });
+    const err = await mergeError(h);
+    expect(err.statusCode).toBe(409);
+    expect(err.data.reason).toBe('count_mismatch');
+    expect(rolledBackOf(err.data.details)).toEqual({
+      orders: 5,
+      users: 1,
+      branches: 1,
+    });
+    expect(err.data.details.manual_fix).toBe(false);
+  });
+
+  it('A ni o‘chirish yiqilsa — delete_failed bilan ham sonlar bor', async () => {
+    const h = make({ rows: { orders: fiveInA() }, removeFails: true });
+    const err = await mergeError(h);
+    expect(err.data.reason).toBe('delete_failed');
+    expect(rolledBackOf(err.data.details)).toEqual({
+      orders: 5,
+      users: 0,
+      branches: 0,
+    });
+  });
+
+  it('⭐ kompensatsiya chala — qaytmaganlar sanalmaydi (0), stranded_order_ids da ID’lar', async () => {
+    const h = make({
+      rows: { orders: fiveInA(), users: [order('301', '173', '3')] },
+      forwardFault: { users: { statusCode: 409 } },
+      compensateFault: { orders: 'timeout' },
+    });
+    const err = await mergeError(h);
+    expect(err.data.details.manual_fix).toBe(true);
+    expect(rolledBackOf(err.data.details)).toEqual({
+      orders: 0,
+      users: 0,
+      branches: 0,
+    });
+    expect(err.data.details.stranded_order_ids).toEqual([
+      '11',
+      '12',
+      '13',
+      '14',
+      '15',
+    ]);
+    expect(publicErrorData(err)?.details).toEqual(
+      expect.objectContaining({
+        rolled_back_orders: 0,
+        stranded_order_ids: ['11', '12', '13', '14', '15'],
+      }),
+    );
+  });
+
+  it('qisman qaytsa — qaytgani sanaladi (4), qaytmagani stranded_order_ids da', async () => {
+    const h = make({
+      rows: { orders: fiveInA() },
+      // Ko'chgandan keyin #15 B dan boshqa tumanga o'tib ketdi: tekshiruv mos
+      // kelmaydi, kompensatsiya uni B da topmaydi.
+      afterForward: (kind, rows) => {
+        if (kind !== 'orders') return;
+        const row = rows.orders.find((r) => r.id === '15');
+        if (row) row.district_id = '50';
+      },
+    });
+    const err = await mergeError(h);
+    expect(err.data.details.manual_fix).toBe(true);
+    expect(err.data.details.rolled_back_orders).toBe(4);
+    expect(err.data.details.stranded_order_ids).toEqual(['15']);
+    expect(err.data.rolled_back).toEqual({ orders: 4, users: 0, branches: 0 });
+  });
+
+  it('stranded_order_ids — birinchi 10 tasi (to‘liq ro‘yxat activity log da)', async () => {
+    const many = Array.from({ length: 12 }, (_, i) =>
+      order(String(1001 + i), '173', '3'),
+    );
+    const h = make({
+      rows: { orders: many, users: [order('301', '173', '3')] },
+      forwardFault: { users: { statusCode: 409 } },
+      compensateFault: { orders: { statusCode: 500 } },
+    });
+    const err = await mergeError(h);
+    const ids = err.data.details.stranded_order_ids as string[];
+    expect(ids).toHaveLength(10);
+    expect(ids[0]).toBe('1001');
+    expect(ids[9]).toBe('1010');
+    const [entry] = activityLogOf(h).mock.calls[0] as [
+      { metadata: { stranded: Array<{ ids: string[] }> } },
+    ];
+    expect(entry.metadata.stranded[0].ids).toHaveLength(12);
+  });
+
+  it('faqat ID’si noma’lum (javobi kelmagan) qadam qolsa — stranded_order_ids yo‘q', async () => {
+    const h = make({
+      rows: { orders: fiveInA(), users: [order('301', '173', '3')] },
+      forwardFault: { users: 'timeout_after_move' },
+    });
+    const err = await mergeError(h);
+    expect(err.data.details.manual_fix).toBe(true);
+    expect(err.data.details).not.toHaveProperty('stranded_order_ids');
+    expect(rolledBackOf(err.data.details)).toEqual({
+      orders: 5,
+      users: 0,
+      branches: 0,
+    });
   });
 });
 

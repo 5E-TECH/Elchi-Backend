@@ -1619,7 +1619,9 @@ export class LogisticsGatewayController {
     description:
       'tf324cXN: 409 (va 503 — xuddi shu shakl) — `data.reason` / `data.details.reason`: ' +
       '`count_mismatch` (`details.mismatches`), `remote_refused`, `timeout` (`details.timeout_ms`), ' +
-      '`invalid_response`, `delete_failed`; `details.kind` — qadam (orders/users/branches).',
+      '`invalid_response`, `delete_failed`; `details.kind` — qadam (orders/users/branches). ' +
+      'Z1c1sNPT: `details.rolled_back_orders` / `rolled_back_users` / `rolled_back_branches` — A ga qaytarilgan sonlar; ' +
+      '`manual_fix: true` da `details.stranded_order_ids` — qaytmagan buyurtmalarning birinchi ≤10 ta ID si.',
   })
   mergeDistrict(@Param('id') id: string, @Body() dto: MergeDistrictRequestDto) {
     // Uch servis bo'ylab ko'chirish + qayta sanash, yiqilsa kompensatsiya

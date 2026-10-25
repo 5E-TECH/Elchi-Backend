@@ -7021,7 +7021,7 @@
             }
           },
           "409": {
-            "description": "tf324cXN: 409 (va 503 — xuddi shu shakl) — `data.reason` / `data.details.reason`: `count_mismatch` (`details.mismatches`), `remote_refused`, `timeout` (`details.timeout_ms`), `invalid_response`, `delete_failed`; `details.kind` — qadam (orders/users/branches).",
+            "description": "tf324cXN: 409 (va 503 — xuddi shu shakl) — `data.reason` / `data.details.reason`: `count_mismatch` (`details.mismatches`), `remote_refused`, `timeout` (`details.timeout_ms`), `invalid_response`, `delete_failed`; `details.kind` — qadam (orders/users/branches). Z1c1sNPT: `details.rolled_back_orders` / `rolled_back_users` / `rolled_back_branches` — A ga qaytarilgan sonlar; `manual_fix: true` da `details.stranded_order_ids` — qaytmagan buyurtmalarning birinchi ≤10 ta ID si.",
             "content": {
               "application/json": {
                 "schema": {
@@ -20201,6 +20201,116 @@
         ]
       }
     },
+    "/csp-report": {
+      "post": {
+        "description": "Autentifikatsiyasiz. `Content-Type: application/csp-report` (`{ \"csp-report\": { … } }`) yoki `application/reports+json` (`[{ \"type\": \"csp-violation\", \"body\": { … } }]`, boshqa turlar e'tiborsiz). Tana ≤ 32 KB, per-IP 30/daqiqa. Javob doim bo'sh 204; buzilishlar faqat gateway logiga (`event: \"csp_violation\"`, URL'lar query'siz) yoziladi.",
+        "operationId": "CspReportController_receive",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/csp-report": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "csp-report": {
+                        "type": "object",
+                        "example": {
+                          "document-uri": "https://elchipochta.uz/orders",
+                          "blocked-uri": "https://api.qrserver.com/v1/create-qr-code/",
+                          "effective-directive": "img-src",
+                          "disposition": "report"
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "example": "csp-violation"
+                        },
+                        "url": {
+                          "type": "string"
+                        },
+                        "body": {
+                          "type": "object"
+                        }
+                      }
+                    }
+                  }
+                ]
+              }
+            },
+            "application/reports+json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "csp-report": {
+                        "type": "object",
+                        "example": {
+                          "document-uri": "https://elchipochta.uz/orders",
+                          "blocked-uri": "https://api.qrserver.com/v1/create-qr-code/",
+                          "effective-directive": "img-src",
+                          "disposition": "report"
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "example": "csp-violation"
+                        },
+                        "url": {
+                          "type": "string"
+                        },
+                        "body": {
+                          "type": "object"
+                        }
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Qabul qilindi (tana bo‘sh)"
+          },
+          "400": {
+            "description": "Buzuq JSON"
+          },
+          "413": {
+            "description": "Tana 32 KB dan katta"
+          },
+          "415": {
+            "description": "Content-Type csp-report / reports+json emas"
+          },
+          "429": {
+            "description": "Per-IP chegara (30/daqiqa)"
+          }
+        },
+        "summary": "CSP buzilish hisoboti (brauzer yuboradi; report-uri / report-to) — KwodkKWY",
+        "tags": [
+          "Security"
+        ],
+        "x-roles": null
+      }
+    },
     "/health": {
       "get": {
         "operationId": "HealthController_check",
@@ -23283,6 +23393,21 @@
             "type": "string",
             "example": "28"
           },
+          "rolled_back_orders": {
+            "type": "number",
+            "example": 128,
+            "description": "Z1c1sNPT: A tumanga QAYTARILGAN buyurtmalar soni (jami, o'chirilganlar bilan); boshlanmagan qadam — 0"
+          },
+          "rolled_back_users": {
+            "type": "number",
+            "example": 2,
+            "description": "Z1c1sNPT: A tumanga qaytarilgan foydalanuvchilar soni"
+          },
+          "rolled_back_branches": {
+            "type": "number",
+            "example": 0,
+            "description": "Z1c1sNPT: A tumanga qaytarilgan filiallar soni"
+          },
           "manual_fix": {
             "type": "boolean",
             "example": false,
@@ -23294,6 +23419,17 @@
             "items": {
               "$ref": "#/components/schemas/DistrictMergeStrandedDto"
             }
+          },
+          "stranded_order_ids": {
+            "example": [
+              "7001",
+              "7002"
+            ],
+            "description": "Z1c1sNPT: faqat `manual_fix: true` da — A ga QAYTMAGAN buyurtmalarning birinchi ≤10 ta ID'si (to'liq ro'yxat — activity log); ID'lar noma'lum bo'lsa yo'q",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           }
         },
         "required": [
@@ -23301,6 +23437,9 @@
           "kind",
           "from_district_id",
           "to_district_id",
+          "rolled_back_orders",
+          "rolled_back_users",
+          "rolled_back_branches",
           "manual_fix"
         ]
       },

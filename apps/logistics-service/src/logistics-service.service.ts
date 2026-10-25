@@ -223,6 +223,8 @@ type GeoStranded = {
 const GEO_MOVE_TIMEOUT_MS = 15000;
 /** Xato matnida har tur uchun ko'rsatiladigan ID'lar soni (to'liq ro'yxat — activity log). */
 const GEO_STRANDED_PREVIEW = 50;
+/** (Z1c1sNPT) Xato `data.details.stranded_order_ids` dagi ID'lar soni (FE «№…» ro'yxati). */
+const GEO_STRANDED_DETAILS_IDS = 10;
 
 /**
  * (tf324cXN) Birlashtirish bekor bo'lish sababi — mashina kodi. Xato
@@ -6555,30 +6557,47 @@ export class LogisticsServiceService implements OnModuleInit {
      * moslik); qo'shimcha `reason` + `details` — gateway `publicErrorData`
      * faqat shularni FE'ga o'tkazadi (tekis qiymatlar, `mismatches` /
      * `stranded` — tekis obyektlar ro'yxati; `stranded[].ids` o'tmaydi).
+     *
+     * (Z1c1sNPT) «A ga qaytarildi: buyurtmalar N · foydalanuvchilar N ·
+     * filiallar N» — `rolled_back` ichma-ich obyekt, `publicErrorData` uni
+     * tashlab yuboradi; shuning uchun `details` da TEKIS sonlar
+     * `rolled_back_orders/users/branches` (uchala tur doim; boshlanmagan
+     * qadam — 0). Qaytmagan buyurtmalarning birinchi ≤10 ta ID'si —
+     * `stranded_order_ids` (to'liq ro'yxat — activity log).
      */
-    const machine = (extra: { stranded?: GeoStranded[] } = {}) => ({
-      reason: failure.reason,
-      details: {
+    const machine = (extra: { stranded?: GeoStranded[] } = {}) => {
+      const orderIds = (extra.stranded ?? [])
+        .filter((s) => s.kind === 'orders')
+        .flatMap((s) => s.ids ?? [])
+        .slice(0, GEO_STRANDED_DETAILS_IDS);
+      return {
         reason: failure.reason,
-        kind: failure.kind,
-        ...(failure.timeout_ms !== undefined
-          ? { timeout_ms: failure.timeout_ms }
-          : {}),
-        ...(failure.mismatches ? { mismatches: failure.mismatches } : {}),
-        from_district_id: fromId,
-        to_district_id: toId,
-        manual_fix: Boolean(extra.stranded?.length),
-        ...(extra.stranded?.length
-          ? {
-              stranded: extra.stranded.map((s) => ({
-                kind: s.kind,
-                district_id: s.district_id,
-                count: s.ids === null ? null : s.ids.length,
-              })),
-            }
-          : {}),
-      },
-    });
+        details: {
+          reason: failure.reason,
+          kind: failure.kind,
+          ...(failure.timeout_ms !== undefined
+            ? { timeout_ms: failure.timeout_ms }
+            : {}),
+          ...(failure.mismatches ? { mismatches: failure.mismatches } : {}),
+          from_district_id: fromId,
+          to_district_id: toId,
+          rolled_back_orders: rolledBack.orders ?? 0,
+          rolled_back_users: rolledBack.users ?? 0,
+          rolled_back_branches: rolledBack.branches ?? 0,
+          manual_fix: Boolean(extra.stranded?.length),
+          ...(extra.stranded?.length
+            ? {
+                stranded: extra.stranded.map((s) => ({
+                  kind: s.kind,
+                  district_id: s.district_id,
+                  count: s.ids === null ? null : s.ids.length,
+                })),
+              }
+            : {}),
+          ...(orderIds.length ? { stranded_order_ids: orderIds } : {}),
+        },
+      };
+    };
 
     if (!stranded.length) {
       this.logger.warn(

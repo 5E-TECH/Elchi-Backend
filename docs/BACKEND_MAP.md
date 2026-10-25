@@ -971,7 +971,8 @@ secret (secret never reaches the gateway).
   `trace_id` in every RMQ payload → pino logs. Use for end-to-end correlation.
 - **Rate limiting:** `ThrottlerModule` global (~60/min/IP); auth endpoints have
   their own per-IP counters: login 30/min (`AUTH_THROTTLE_*`), refresh 60/min
-  (`AUTH_REFRESH_THROTTLE_*`) — fix3 RBAC-11.
+  (`AUTH_REFRESH_THROTTLE_*`) — fix3 RBAC-11. `POST /csp-report` — 30/min/IP
+  (KwodkKWY, `CSP_REPORT_THROTTLE`).
 - **Idempotency / outbox / activity-log / soft-delete:** available in
   `libs/common` — use for money ops and audit-sensitive writes.
 - **Validation:** gateway `ValidationPipe` is `whitelist + forbidNonWhitelisted`
@@ -1021,6 +1022,7 @@ secret (secret never reaches the gateway).
 | Auth guards / JWT | `apps/api-gateway/src/auth/`, `apps/identity-service` |
 | Realtime (socket.io) | `apps/api-gateway/src/realtime/` |
 | Inbound webhooks | `apps/api-gateway/src/webhook-gateway.controller.ts` + `integration-service` |
+| CSP violation reports (`POST /csp-report`, @Public, log-only `event: csp_violation`) | `apps/api-gateway/src/csp-report/` |
 | All enums / state machines | `libs/common/enums/index.ts` |
 | Env contracts (Joi) | `libs/common/src/config/index.ts` |
 | Delivery price formula (pure) / tariffs | `libs/common/src/pricing/delivery-pricing.ts` / `apps/logistics-service/src/delivery-pricing/` |

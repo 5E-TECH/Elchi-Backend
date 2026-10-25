@@ -312,6 +312,11 @@ describe('AllExceptionsFilter', () => {
               },
             ],
             rolled_back: { orders: 5 },
+            // (Z1c1sNPT) tekis sonlar va oddiy ID ro'yxati o'tadi.
+            rolled_back_orders: 5,
+            rolled_back_users: 0,
+            rolled_back_branches: 1,
+            stranded_order_ids: ['7001', '7002'],
             empty: [],
           },
         },
@@ -329,6 +334,10 @@ describe('AllExceptionsFilter', () => {
               actual: 1255,
             },
           ],
+          rolled_back_orders: 5,
+          rolled_back_users: 0,
+          rolled_back_branches: 1,
+          stranded_order_ids: ['7001', '7002'],
         },
       });
     });
