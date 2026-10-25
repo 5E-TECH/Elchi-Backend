@@ -2,6 +2,8 @@ import { rmqSend } from '@app/common';
 import { Brackets } from 'typeorm';
 import {
   OrderServiceService,
+  orderIdCandidatesFromSearch,
+  parseElOrderNumberSearch,
   parseOrderNumberSearch,
 } from './order-service.service';
 
@@ -133,10 +135,11 @@ describe('findAllEnriched — qidiruv', () => {
 
     // Ilgari mijoz topilmasa darhol bo'sh ro'yxat qaytardi.
     expect(conds.some((c) => c.sql === '<brackets>')).toBe(true);
+    // «EL-» siz 7 xonali raqam: ichki id va ko'rinadigan raqam (EL-1251175 → id 1151175) — OR (FoCaUF10).
     expect(bracketConds).toEqual([
       {
-        sql: 'order.id = :search_order_id',
-        params: { search_order_id: '1251175' },
+        sql: 'order.id IN (:...search_order_ids)',
+        params: { search_order_ids: ['1251175', '1151175'] },
       },
     ]);
     expect(res.search_truncated).toBe(false);
@@ -150,8 +153,8 @@ describe('findAllEnriched — qidiruv', () => {
 
     expect(bracketConds).toEqual([
       {
-        sql: 'order.id = :search_order_id',
-        params: { search_order_id: '1251175' },
+        sql: 'order.id IN (:...search_order_ids)',
+        params: { search_order_ids: ['1251175', '1151175'] },
       },
       {
         sql: 'order.customer_id IN (:...customer_ids)',
@@ -210,6 +213,7 @@ describe('findAllEnriched — qidiruv', () => {
     expect((rmqSendMock.mock.calls[0] as unknown[])[2]).toEqual({
       search: 'ali',
       limit: 1001,
+      match_extra_number: true,
     });
     expect(res.search_truncated).toBe(true);
     const used = conds.find((c) => c.params && 'customer_ids' in c.params)
@@ -253,9 +257,11 @@ describe('findAllEnriched — qidiruv', () => {
       expect((rmqSendMock.mock.calls[0] as unknown[])[1]).toEqual({
         cmd: 'identity.customer.search',
       });
+      // FoCaUF10: buyurtmalar qidiruvi qo'shimcha raqam bo'yicha ham (ega qarori 2026-10-25).
       expect((rmqSendMock.mock.calls[0] as unknown[])[2]).toEqual({
         search,
         limit: 1001,
+        match_extra_number: true,
       });
       const customerCond = {
         sql: 'order.customer_id IN (:...customer_ids)',
@@ -291,5 +297,139 @@ describe('findAllEnriched — qidiruv', () => {
       ),
     ).toBe(false);
     expect(res.search_truncated).toBe(false);
+  });
+});
+
+/**
+ * FoCaUF10 / rwAy8Qyk — ega qarori (2026-10-25): «EL-…» bilan qidirilsa FAQAT buyurtma id = N − 100000 (mijoz
+ * qidiruvi yo'q); «EL-» siz — id + mijoz ismi + asosiy va qo'shimcha telefon. Mijoz doirasi (`customer_id`) qidiruvda
+ * ham saqlanadi.
+ */
+describe('parseElOrderNumberSearch — «EL-…» (FoCaUF10)', () => {
+  it.each([
+    ['EL-100081', '81'],
+    ['#EL-100081', '81'],
+    ['№EL-100081', '81'],
+    ['№ EL-100081', '81'],
+    ['el 100081', '81'],
+    ['el100081', '81'],
+    ['  EL-1351138 ', '1251138'],
+  ])('%p → id %p', (input, id) => {
+    expect(parseElOrderNumberSearch(input)).toBe(id);
+  });
+
+  it.each(['EL-100000', 'EL-12', 'EL-99999'])(
+    '%p — «EL-» raqami, lekin id chiqmaydi → null (hech narsa topilmaydi)',
+    (input) => {
+      expect(parseElOrderNumberSearch(input)).toBeNull();
+    },
+  );
+
+  it.each(['Elmira', 'El Ali', '100081', '+998901234567', 'EL-', ''])(
+    '%p — «EL-» raqami emas → undefined (odatdagi qidiruv)',
+    (input) => {
+      expect(parseElOrderNumberSearch(input)).toBeUndefined();
+    },
+  );
+});
+
+describe('orderIdCandidatesFromSearch — «EL-» siz raqam (FoCaUF10)', () => {
+  it.each([
+    ['100081', ['100081', '81']],
+    ['1251175', ['1251175', '1151175']],
+    ['81', ['81']],
+    ['100000', ['100000']],
+    // Telefon (9+ xona yoki 0 bilan) — ko'rinadigan raqam deb o'qilmaydi.
+    ['330991009', ['330991009']],
+    ['0330991', ['0330991']],
+    ['Ali', []],
+  ])('%p → %p', (input, ids) => {
+    expect(orderIdCandidatesFromSearch(input)).toEqual(ids);
+  });
+});
+
+describe("findAllEnriched — «EL-…» faqat ID bo'yicha (FoCaUF10)", () => {
+  beforeEach(() => rmqSendMock.mockReset());
+
+  it.each(['EL-100081', '#EL-100081', '№EL-100081', 'el 100081'])(
+    "⭐ %p → identity chaqirilmaydi, shart faqat order.id = '81'",
+    async (search) => {
+      const { service, conds, bracketConds } = setup();
+
+      await service.findAllEnriched({ search, page: 1, limit: 10 });
+
+      expect(rmqSendMock).not.toHaveBeenCalled();
+      expect(bracketConds).toEqual([
+        {
+          sql: 'order.id = :search_order_id',
+          params: { search_order_id: '81' },
+        },
+      ]);
+      expect(conds.some((c) => c.sql.includes('customer_ids'))).toBe(false);
+    },
+  );
+
+  it("«EL-100000» (id chiqmaydi) → bo'sh ro'yxat, identity va baza so'ralmaydi", async () => {
+    const { service, conds } = setup();
+
+    const res = (await service.findAllEnriched({
+      search: 'EL-100000',
+      page: 1,
+      limit: 10,
+    })) as ListResult;
+
+    expect(res.total).toBe(0);
+    expect(res.data).toEqual([]);
+    expect(rmqSendMock).not.toHaveBeenCalled();
+    expect(conds).toEqual([]);
+  });
+
+  it("«EL-» siz matn — identity'ga match_extra_number: true (qo'shimcha telefon ham)", async () => {
+    const { service } = setup();
+    rmqSendMock.mockResolvedValue(customers(1));
+
+    await service.findAllEnriched({ search: '903456744', page: 1, limit: 10 });
+
+    expect((rmqSendMock.mock.calls[0] as unknown[])[2]).toEqual({
+      search: '903456744',
+      limit: 1001,
+      match_extra_number: true,
+    });
+  });
+
+  it('⭐ XAVFSIZLIK: customer_id (mijoz doirasi) qidiruv bilan ham AND — boshqa mijozlar buyurtmasi sizmaydi', async () => {
+    const { service, conds } = setup();
+    rmqSendMock.mockResolvedValue(customers(2));
+
+    await service.findAllEnriched({
+      search: 'Ali',
+      customer_id: '77',
+      page: 1,
+      limit: 10,
+    } as never);
+
+    expect(conds).toContainEqual({
+      sql: 'order.customer_id = :customer_id',
+      params: { customer_id: '77' },
+    });
+  });
+
+  it('XAVFSIZLIK: «EL-…» + customer_id — id sharti va mijoz doirasi birga', async () => {
+    const { service, conds, bracketConds } = setup();
+
+    await service.findAllEnriched({
+      search: 'EL-100081',
+      customer_id: '77',
+      page: 1,
+      limit: 10,
+    } as never);
+
+    expect(bracketConds).toEqual([
+      { sql: 'order.id = :search_order_id', params: { search_order_id: '81' } },
+    ]);
+    expect(conds).toContainEqual({
+      sql: 'order.customer_id = :customer_id',
+      params: { customer_id: '77' },
+    });
   });
 });

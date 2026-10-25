@@ -4650,9 +4650,10 @@ export class UserServiceService implements OnModuleInit {
     limit = 1000,
     /**
      * 9444UAa8 — `matchExtraNumber`: qo'shimcha raqam (`extra_number`) ham
-     * asosiy telefon kabi (normallashtirilgan raqamlar) qidiriladi. Faqat
-     * mijoz taklifi (GET /customers/suggest) yoqadi — buyurtmalar ro'yxati
-     * qidiruvi (order-service) va almashtirish qidiruvi o'zgarmagan.
+     * asosiy telefon kabi (normallashtirilgan raqamlar) qidiriladi. Mijoz
+     * taklifi (GET /customers/suggest) va buyurtmalar ro'yxati qidiruvi
+     * (order-service, FoCaUF10 — ega qarori 2026-10-25) yoqadi; almashtirish
+     * qidiruvi o'zgarmagan.
      */
     options: { matchExtraNumber?: boolean } = {},
   ) {

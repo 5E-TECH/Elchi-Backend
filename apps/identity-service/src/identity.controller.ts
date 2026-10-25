@@ -910,8 +910,8 @@ export class IdentityController {
     payload: { search: string; limit?: number; match_extra_number?: boolean },
     @Ctx() context: RmqContext,
   ) {
-    // 9444UAa8: `match_extra_number` faqat qat'iy `true` bilan (mijoz
-    // taklifi); buyurtmalar qidiruvi yubormaydi — natijasi o'zgarmagan.
+    // 9444UAa8: `match_extra_number` faqat qat'iy `true` bilan — mijoz taklifi
+    // va (FoCaUF10, 2026-10-25) buyurtmalar ro'yxati qidiruvi yuboradi.
     return this.executeAndAck(context, () =>
       this.userService.searchCustomers(payload.search, payload.limit, {
         matchExtraNumber: payload.match_extra_number === true,

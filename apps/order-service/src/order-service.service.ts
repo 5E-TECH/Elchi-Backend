@@ -60,6 +60,42 @@ const MAX_FETCH_ALL = 5000;
 export const parseOrderNumberSearch = (search: string): string | null =>
   /^\d{1,18}$/.test(search) ? search : null;
 
+/** Mijozga ko'rinadigan raqam: «EL-» + (id + 100000) — `formatOrderNumber` bilan bir xil. */
+export const ORDER_NUMBER_OFFSET = 100000;
+const EL_ORDER_NUMBER_SEARCH = /^[#№]?\s*EL[-\s]?(\d{1,18})$/iu;
+
+/**
+ * «EL-…» qidiruvi (ega qarori 2026-10-25, FoCaUF10): «EL-100081», «#EL-100081», «№EL-100081», «el 100081» —
+ * FAQAT buyurtma id = N − 100000, mijoz ismi/telefoni bo'yicha qidirilmaydi.
+ *  - `undefined` — matn «EL-» raqami emas (odatdagi qidiruv);
+ *  - `null` — «EL-» raqami, lekin id chiqmaydi (EL-100000, EL-12) — hech narsa topilmaydi.
+ */
+export const parseElOrderNumberSearch = (
+  search: string,
+): string | null | undefined => {
+  const match = EL_ORDER_NUMBER_SEARCH.exec(search.trim());
+  if (!match) return undefined;
+  const value = Number(match[1]);
+  const id = value - ORDER_NUMBER_OFFSET;
+  return Number.isSafeInteger(value) && id > 0 ? String(id) : null;
+};
+
+/** Ko'rinadigan raqam shakli (6–8 xona, 0 bilan boshlanmaydi) — telefon (9+ xona) bilan adashmasin. */
+const VISIBLE_ORDER_NUMBER_DIGITS = /^[1-9]\d{5,7}$/;
+
+/**
+ * «EL-» siz sof raqam — buyurtma id'si sifatida o'qilishi: ichki id (N) va, raqam ko'rinadigan raqam shaklida bo'lsa,
+ * N − 100000 (foydalanuvchi «EL-» ni yozmasdan raqamni o'zini terdi). Ikkalasi OR — qaysi biri bo'lsa ham topiladi.
+ */
+export const orderIdCandidatesFromSearch = (search: string): string[] => {
+  const raw = parseOrderNumberSearch(search.trim());
+  if (!raw) return [];
+  const visible = Number(raw) - ORDER_NUMBER_OFFSET;
+  return VISIBLE_ORDER_NUMBER_DIGITS.test(raw) && visible > 0
+    ? [raw, String(visible)]
+    : [raw];
+};
+
 /**
  * GET /orders SARALASHI. Ilgari ro'yxat doim `createdAt DESC` edi va frontend
  * faqat ochilgan sahifa ichida saralardi — 2-sahifadagi eng qimmat buyurtma
@@ -695,6 +731,8 @@ export class OrderServiceService {
     customer_ids?: string[];
     /** Qidiruvdagi buyurtma raqami — mijoz qidiruvi bilan OR qilinadi. */
     search_order_id?: string;
+    /** Bir nechta id nomzodi (FoCaUF10: ichki id va ko'rinadigan raqamdan hosil qilingan id) — OR. */
+    search_order_ids?: string[];
     post_id?: string;
     post_ids?: string[];
     exclude_statuses?: Order_status[];
@@ -738,6 +776,7 @@ export class OrderServiceService {
       customer_id,
       customer_ids,
       search_order_id,
+      search_order_ids,
       post_id,
       post_ids,
       exclude_statuses,
@@ -820,12 +859,26 @@ export class OrderServiceService {
     if (market_id) {
       qb.andWhere('order.market_id = :market_id', { market_id });
     }
-    if (search_order_id) {
+    const searchOrderIds = [
+      ...new Set([
+        ...(search_order_id ? [search_order_id] : []),
+        ...(search_order_ids ?? []),
+      ]),
+    ];
+    if (searchOrderIds.length) {
       // Qidiruv: buyurtma raqami YOKI mos mijozlarning buyurtmalari. Boshqa
       // filtrlar (market, filial, status...) baribir AND bilan qo'llanadi.
       qb.andWhere(
         new Brackets((w) => {
-          w.where('order.id = :search_order_id', { search_order_id });
+          if (searchOrderIds.length === 1) {
+            w.where('order.id = :search_order_id', {
+              search_order_id: searchOrderIds[0],
+            });
+          } else {
+            w.where('order.id IN (:...search_order_ids)', {
+              search_order_ids: searchOrderIds,
+            });
+          }
           if (customer_ids?.length) {
             w.orWhere('order.customer_id IN (:...customer_ids)', {
               customer_ids,
@@ -835,7 +888,11 @@ export class OrderServiceService {
       );
     } else if (customer_ids?.length) {
       qb.andWhere('order.customer_id IN (:...customer_ids)', { customer_ids });
-    } else if (customer_id) {
+    }
+    // XAVFSIZLIK (FoCaUF10): `customer_id` — doirani cheklovchi filtr (gateway mijoz roliga o'z id'sini qo'yadi),
+    // qidiruvdan qat'i nazar DOIM AND. Ilgari `else if` zanjirida edi va `search` berilsa tushib qolardi — mijoz
+    // qidiruv orqali boshqalarning buyurtmalarini ko'rardi.
+    if (customer_id) {
       qb.andWhere('order.customer_id = :customer_id', { customer_id });
     }
     if (post_id) {
@@ -1999,7 +2056,7 @@ export class OrderServiceService {
   private formatOrderNumber(id: string | number | null | undefined): string {
     const n = Number(id);
     if (!Number.isFinite(n) || n <= 0) return '';
-    return 'EL-' + (n + 100000);
+    return 'EL-' + (n + ORDER_NUMBER_OFFSET);
   }
 
   /**
@@ -2349,42 +2406,57 @@ export class OrderServiceService {
     const { search, ...orderQuery } = query;
     const trimmedSearch = search?.trim() ?? '';
 
-    // Qidiruv: (1) mijoz ismi/telefoni — identity-service orqali; (2) buyurtma
-    // raqami (id). Ilgari faqat (1) bor edi va raqam bilan hech narsa
-    // topilmasdi.
+    // Qidiruv (ega qarori 2026-10-25, FoCaUF10):
+    //  - «EL-…» (ko'rinadigan raqam) — FAQAT buyurtma id = N − 100000, mijoz qidiruvi yo'q;
+    //  - boshqa matn — mijoz ismi, asosiy VA qo'shimcha telefoni (identity-service, `match_extra_number`) va sof
+    //    raqam bo'lsa buyurtma id'si (ichki id yoki «EL-» siz yozilgan ko'rinadigan raqam) — OR.
     let customer_ids: string[] | undefined;
     let search_truncated = false;
-    const search_order_id = parseOrderNumberSearch(trimmedSearch);
-    if (trimmedSearch) {
+    const elOrderId = parseElOrderNumberSearch(trimmedSearch);
+    const search_order_ids =
+      elOrderId === undefined
+        ? orderIdCandidatesFromSearch(trimmedSearch)
+        : elOrderId === null
+          ? []
+          : [elOrderId];
+    const emptyResult = () => {
+      const pagination = this.normalizePagination(query.page, query.limit);
+      return {
+        data: [],
+        total: 0,
+        page: pagination.page,
+        limit: pagination.limit,
+        total_pages: 0,
+        totalPages: 0,
+        search_truncated,
+      };
+    };
+    if (elOrderId === null) return emptyResult();
+    if (trimmedSearch && elOrderId === undefined) {
       // Bittasini ortiqcha so'raymiz: chegaradan oshgani shundan bilinadi.
       // Ilgari 1000 tadan keyingi mijozlar JIMGINA tushib qolardi.
       const searchRes = await rmqSend<{ data: Array<{ id: string }> }>(
         this.identityClient,
         { cmd: 'identity.customer.search' },
-        { search: trimmedSearch, limit: CUSTOMER_SEARCH_LIMIT + 1 },
+        {
+          search: trimmedSearch,
+          limit: CUSTOMER_SEARCH_LIMIT + 1,
+          match_extra_number: true,
+        },
       ).catch(() => ({ data: [] }));
 
       const ids = (searchRes?.data ?? []).map((c) => String(c.id));
       search_truncated = ids.length > CUSTOMER_SEARCH_LIMIT;
       customer_ids = ids.slice(0, CUSTOMER_SEARCH_LIMIT);
-      if (!customer_ids.length && !search_order_id) {
-        const pagination = this.normalizePagination(query.page, query.limit);
-        return {
-          data: [],
-          total: 0,
-          page: pagination.page,
-          limit: pagination.limit,
-          total_pages: 0,
-          totalPages: 0,
-          search_truncated,
-        };
+      if (!customer_ids.length && !search_order_ids.length) {
+        return emptyResult();
       }
     }
 
     const result = await this.findAll({
       ...orderQuery,
       customer_ids,
-      search_order_id: search_order_id ?? undefined,
+      search_order_ids: search_order_ids.length ? search_order_ids : undefined,
     });
     const enriched = await this.enrichOrders(result.data);
 
