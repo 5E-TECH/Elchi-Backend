@@ -28,7 +28,10 @@ jest.mock('@app/common', () => ({
   Where_deliver: { CENTER: 'center' },
 }));
 
-import { FinanceGatewayController } from './finance-gateway.controller';
+import {
+  BRANCH_TO_MAIN_HQ_ONLY_MESSAGE,
+  FinanceGatewayController,
+} from './finance-gateway.controller';
 import { ROLES_KEY } from './auth/roles.decorator';
 
 describe('FinanceGatewayController', () => {
@@ -53,9 +56,7 @@ describe('FinanceGatewayController', () => {
     };
   }
 
-  it('allows managers to create branch-to-main payments (scoped to own branch)', () => {
-    // Audit I5: managers now have a real branch→HQ settle action — they were
-    // previously locked out with no way to record remitting their branch's cash.
+  it('IjqTYQks: branch-to-main — only superadmin/admin (owner decision #7: managers do not remit to HQ)', () => {
     // Metadata `@Roles` orqali metodning o'ziga (descriptor.value) yoziladi;
     // metodni to'g'ridan-to'g'ri bog'lanmasdan olish o'rniga descriptordan olamiz.
     const descriptor = Object.getOwnPropertyDescriptor(
@@ -64,24 +65,57 @@ describe('FinanceGatewayController', () => {
     );
     const roles = Reflect.getMetadata(ROLES_KEY, descriptor?.value);
 
-    expect(roles).toEqual(['superadmin', 'admin', 'manager']);
+    expect(roles).toEqual(['superadmin', 'admin']);
   });
 
-  it('forbids a manager remitting another branch to HQ', async () => {
-    const { controller } = setup();
-    const req = {
-      user: { sub: 'm1', roles: ['manager'], branch_id: 'B1' },
-    } as any;
+  it.each([
+    ['own branch', 'B1'],
+    ['another branch', 'B2'],
+    ['no branch_id', undefined],
+  ])(
+    'IjqTYQks: a manager is forbidden (%s) — nothing is sent to branch/finance',
+    async (_case, branchId) => {
+      const { controller, financeClient, branchClient } = setup();
+      const req = {
+        user: { sub: 'm1', roles: ['manager'], branch_id: 'B1' },
+      } as any;
 
-    // Manager belongs to B1 but tries to remit B2 → rejected before any send.
-    await expect(
-      controller.paymentBranchToMain(req, {
-        branch_id: 'B2',
+      await expect(
+        controller.paymentBranchToMain(req, {
+          branch_id: branchId,
+          amount: 1000,
+          payment_method: 'cash',
+        } as any),
+      ).rejects.toThrow(BRANCH_TO_MAIN_HQ_ONLY_MESSAGE);
+      expect(financeClient.send).not.toHaveBeenCalled();
+      expect(branchClient.send).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([['superadmin'], ['admin']])(
+    'IjqTYQks: %s receives branch money into the main cashbox',
+    async (role) => {
+      const { controller, financeClient, branchClient } = setup();
+      branchClient.send.mockReturnValue(of({ data: { id: 'B1' } }));
+      financeClient.send.mockReturnValue(of({ statusCode: 201, data: {} }));
+      const req = { user: { sub: 'hq-1', roles: [role] } } as any;
+
+      await controller.paymentBranchToMain(req, {
+        branch_id: 'B1',
         amount: 1000,
         payment_method: 'cash',
-      } as any),
-    ).rejects.toThrow();
-  });
+      } as any);
+
+      expect(financeClient.send).toHaveBeenCalledWith(
+        { cmd: 'finance.cashbox.payment_branch_main' },
+        expect.objectContaining({
+          branch_id: 'B1',
+          amount: 1000,
+          created_by: 'hq-1',
+        }),
+      );
+    },
+  );
 
   it('shows all payment history from the manager branch cashbox', async () => {
     const { controller, financeClient } = setup();

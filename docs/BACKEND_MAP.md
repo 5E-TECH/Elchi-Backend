@@ -904,10 +904,10 @@ Finance mirrors this in cashboxes (`payment_courier`/`payment_market`/
 - **Branch cash → HQ (business decision #7, 2026-10-01):** branch cash reaches
   HQ **only** when SA/admin receive it in "To'lovlar → Qabul qilinishi kerak"
   (choose the branch → `POST /finance/cashbox/payment/branch-to-main`).
-  Managers do **not** push to HQ: the manager's own "HQga o'tkazish" screen is
-  deliberately left as it was before fix3 and is not a supported flow. (The
-  gateway route still lists MANAGER in `@Roles`; removing it is an open lead
-  decision, §9.)
+  Managers do **not** push to HQ (owner re-confirmed 2026-10-25, IjqTYQks): the
+  gateway route is `@Roles(SUPERADMIN, ADMIN)` and the handler rejects any
+  non-HQ caller with 403 `BRANCH_TO_MAIN_HQ_ONLY_MESSAGE`; the FE removed the
+  manager's "HQ'ga o'tkazish" button/form (read-only HQ cashbox page).
 
 ### 5.3 Branch transfer batches
 Orders move between branches in QR-coded batches (forward + return),
@@ -1057,8 +1057,8 @@ secret (secret never reaches the gateway).
   partly-sold orders from before fix3 with 0/stale `extra_cost`; external /
   partner orders with `region_id` NULL; couriers without a cashbox (CODE-26,
   grep logs for "Saga compensation").
-- **fix3 residuals / open decisions:** decision #7 is enforced only by the FE
-  (gateway `branch-to-main` still lists MANAGER); ~~one refresh session per
+- **fix3 residuals / open decisions:** ~~decision #7 is enforced only by the FE~~
+  — enforced by the gateway since 2026-10-25 (IjqTYQks); ~~one refresh session per
   account (RBAC-10)~~ — resolved by Elchi Pochta #3 (per-login sessions,
   2026-10-21); courier assignment is last-write-wins (CODE-25, needs a
   compare-and-set on `courier_id`); the per-order PAID sync after a market

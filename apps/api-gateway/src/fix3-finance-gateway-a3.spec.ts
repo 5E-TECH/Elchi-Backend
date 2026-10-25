@@ -208,6 +208,7 @@ describe('TMgL1zvq — tolov tokeni faqat Idempotency-Key dan', () => {
     expect(res).toEqual({ statusCode: 200, data: { idempotent: true } });
   });
 
+  // IjqTYQks: filial→HQ faqat HQ (superadmin/admin) — menejer endi 403 (ega qarori #7).
   it('filial→HQ: kalitsiz dedup yoq, kalit bolsa aynan kalit', async () => {
     const env = setup();
     route(env.branchClient, {
@@ -218,16 +219,16 @@ describe('TMgL1zvq — tolov tokeni faqat Idempotency-Key dan', () => {
     });
     const base = { branch_id: '15', amount: 300_000, payment_method: 'cash' };
 
-    await env.controller.paymentBranchToMain(manager15, {
+    await env.controller.paymentBranchToMain(superadmin, {
       ...base,
       payment_date: '2026-10-01T06:00:00.000Z',
     } as any);
-    await env.controller.paymentBranchToMain(manager15, {
+    await env.controller.paymentBranchToMain(superadmin, {
       ...base,
       payment_date: '2026-10-01T06:00:07.000Z',
     } as any);
     await env.controller.paymentBranchToMain(
-      manager15,
+      superadmin,
       { ...base, payment_date: '2026-10-01T06:00:08.000Z' } as any,
       'fe-branch-key',
     );

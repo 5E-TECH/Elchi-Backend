@@ -7724,14 +7724,13 @@
             "bearer": []
           }
         ],
-        "summary": "Transfer money from branch manager cashbox to HQ main cashbox",
+        "summary": "HQ receives branch cashbox money into the main cashbox (superadmin/admin only — owner decision #7: managers do not remit to HQ)",
         "tags": [
           "Finance"
         ],
         "x-roles": [
           "superadmin",
-          "admin",
-          "manager"
+          "admin"
         ]
       }
     },

@@ -188,6 +188,10 @@ function toNotFoundException(
   return new NotFoundException(message || fallbackMessage);
 }
 
+/** IjqTYQks — filial puli HQ'ga faqat HQ (superadmin/admin) qabul qilganda o'tadi (ega qarori #7). */
+export const BRANCH_TO_MAIN_HQ_ONLY_MESSAGE =
+  "Filial pulini HQ (superadmin yoki admin) o'zi qabul qiladi — menejer HQ'ga pul o'tkazmaydi";
+
 @ApiTags('Finance')
 @Controller('finance')
 export class FinanceGatewayController {
@@ -2176,10 +2180,14 @@ export class FinanceGatewayController {
 
   @Post('cashbox/payment/branch-to-main')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.MANAGER)
+  // IjqTYQks — ega qarori #7 (2026-10-25 da qayta tasdiqlandi): menejer filial pulini HQ'ga O'TKAZMAYDI, HQ
+  // (superadmin/admin) uni «Pul qabul qilish» orqali o'zi oladi. Ilgari MANAGER ham ro'yxatda edi va qaror faqat
+  // frontendda bajarilardi (BACKEND_MAP «enforced only by the FE»).
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiBearerAuth()
   @ApiOperation({
-    summary: 'Transfer money from branch manager cashbox to HQ main cashbox',
+    summary:
+      'HQ receives branch cashbox money into the main cashbox (superadmin/admin only — owner decision #7: managers do not remit to HQ)',
   })
   @ApiBody({ type: PaymentBranchToMainRequestDto })
   async paymentBranchToMain(
@@ -2187,25 +2195,11 @@ export class FinanceGatewayController {
     @Body() dto: PaymentBranchToMainRequestDto,
     @Headers('idempotency-key') idempotencyKey?: string,
   ) {
-    let branchId = String(dto.branch_id ?? '').trim();
-
-    // A manager may remit ONLY their own branch's cash to HQ — force the branch
-    // to their assignment and reject any attempt to remit another branch.
-    // (Audit I5: managers now have a real branch→HQ settle action.)
-    if (this.isManager(req?.user) && !this.isPrivileged(req?.user)) {
-      const managerBranchId =
-        this.extractBranchId(req.user) ||
-        (await this.resolveBranchIdByUserId(String(req.user.sub), req.user));
-      if (!managerBranchId) {
-        throw new ForbiddenException("Managerning branch'i topilmadi");
-      }
-      if (branchId && branchId !== String(managerBranchId)) {
-        throw new ForbiddenException(
-          "Siz faqat o'z branch'ingiz pulini HQ ga topshira olasiz",
-        );
-      }
-      branchId = String(managerBranchId);
+    // Guard'ni chetlab o'tadigan chaqiruvlar (unit, ichki) uchun ham — faqat HQ.
+    if (!this.isPrivileged(req?.user)) {
+      throw new ForbiddenException(BRANCH_TO_MAIN_HQ_ONLY_MESSAGE);
     }
+    const branchId = String(dto.branch_id ?? '').trim();
 
     if (!branchId) {
       throw new ForbiddenException('branch_id yuborilishi shart');
