@@ -3020,7 +3020,7 @@ export class FinanceGatewayController {
   @ApiOperation({
     summary: 'Close shift',
     description:
-      "Menejer faqat o'z filiali kassasining smenasini yopadi (boshqa kassa smenasi — 404) (R6).",
+      "Menejer faqat o'z filiali kassasining smenasini yopadi (boshqa kassa smenasi — 404) (R6). (8OYPuz7J, ega S5) `closing_balance_cash` (sanalgan naqd) MAJBURIY — yuborilmasa 400; `closing_balance_card` ixtiyoriy.",
   })
   @ApiBody({ type: CloseShiftRequestDto })
   async closeShift(
@@ -3050,7 +3050,7 @@ export class FinanceGatewayController {
   @ApiOperation({
     summary: "Kassaning joriy ochiq smenasi (MAIN; menejer — o'z filiali)",
     description:
-      "(kfdfYDik) `data.shift` — ochiq smena yoki null; `data.required` — shu kassada smenasiz pul operatsiyalari bloklanadimi (FINANCE_REQUIRE_OPEN_SHIFT: MAIN — main/all, filial — all). R6: menejer — o'z filiali kassasi.",
+      "(kfdfYDik) `data.shift` — ochiq smena yoki null; `data.required` — shu kassada smenasiz pul operatsiyalari bloklanadimi (FINANCE_REQUIRE_OPEN_SHIFT: MAIN — main/all, filial — all). R6: menejer — o'z filiali kassasi. (8OYPuz7J) `data.last_closed` — shu kassaning eng oxirgi yopilgan smenasi (closed_at DESC, to'liq qator) yoki null; smena qatorlarida `opened_by_name` / `closed_by_name`.",
   })
   async currentShift(@Req() req: { user: JwtUser }) {
     const scope = await this.resolveShiftCashboxScope(req?.user);
@@ -3352,16 +3352,45 @@ export class FinanceGatewayController {
 
   @Get('shift')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.REGISTRATOR)
+  @Roles(
+    RoleEnum.SUPERADMIN,
+    RoleEnum.ADMIN,
+    RoleEnum.REGISTRATOR,
+    RoleEnum.MANAGER,
+  )
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Find shifts with filters' })
+  @ApiOperation({
+    summary: 'Find shifts with filters',
+    description:
+      "(8OYPuz7J) `cashbox_user_id` ('0' — MAIN, aks holda filial ID si), `sort_by=opened_at|closed_at` + `sort_dir=asc|desc` (sukut opened_at desc). Qatorlarda `opened_by_name` / `closed_by_name`. Menejer — faqat o'z filiali kassasi smenalari (boshqa `cashbox_user_id` — 403).",
+  })
   @ApiQuery({ name: 'opened_by', required: false })
   @ApiQuery({ name: 'status', required: false })
   @ApiQuery({ name: 'from_date', required: false })
   @ApiQuery({ name: 'to_date', required: false })
   @ApiQuery({ name: 'page', required: false, type: Number })
   @ApiQuery({ name: 'limit', required: false, type: Number })
-  findShifts(@Query() query: FindShiftQueryDto) {
+  async findShifts(
+    @Req() req: { user: JwtUser },
+    @Query() query: FindShiftQueryDto,
+  ) {
+    // (8OYPuz7J) Menejer: doira JWT'dan (o'z filiali kassasi) majburlanadi —
+    // aks holda boshqa filiallarning kassa natijalari (kamomad) ko'rinardi.
+    const scope = await this.resolveShiftCashboxScope(req?.user);
+    if (scope.cashbox_user_id) {
+      if (
+        query?.cashbox_user_id != null &&
+        String(query.cashbox_user_id) !== scope.cashbox_user_id
+      ) {
+        throw new ForbiddenException(
+          "Siz faqat o'z filialingiz kassasi smenalarini ko'ra olasiz",
+        );
+      }
+      return this.send(
+        { cmd: 'finance.shift.find_all' },
+        { ...query, cashbox_user_id: scope.cashbox_user_id },
+      );
+    }
     return this.send({ cmd: 'finance.shift.find_all' }, query);
   }
 

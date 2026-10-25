@@ -8648,7 +8648,7 @@
     },
     "/finance/shift/close": {
       "post": {
-        "description": "Menejer faqat o'z filiali kassasining smenasini yopadi (boshqa kassa smenasi — 404) (R6).",
+        "description": "Menejer faqat o'z filiali kassasining smenasini yopadi (boshqa kassa smenasi — 404) (R6). (8OYPuz7J, ega S5) `closing_balance_cash` (sanalgan naqd) MAJBURIY — yuborilmasa 400; `closing_balance_card` ixtiyoriy.",
         "operationId": "FinanceGatewayController_closeShift",
         "parameters": [],
         "requestBody": {
@@ -8685,7 +8685,7 @@
     },
     "/finance/shift/current": {
       "get": {
-        "description": "(kfdfYDik) `data.shift` — ochiq smena yoki null; `data.required` — shu kassada smenasiz pul operatsiyalari bloklanadimi (FINANCE_REQUIRE_OPEN_SHIFT: MAIN — main/all, filial — all). R6: menejer — o'z filiali kassasi.",
+        "description": "(kfdfYDik) `data.shift` — ochiq smena yoki null; `data.required` — shu kassada smenasiz pul operatsiyalari bloklanadimi (FINANCE_REQUIRE_OPEN_SHIFT: MAIN — main/all, filial — all). R6: menejer — o'z filiali kassasi. (8OYPuz7J) `data.last_closed` — shu kassaning eng oxirgi yopilgan smenasi (closed_at DESC, to'liq qator) yoki null; smena qatorlarida `opened_by_name` / `closed_by_name`.",
         "operationId": "FinanceGatewayController_currentShift",
         "parameters": [],
         "responses": {
@@ -9227,6 +9227,7 @@
     },
     "/finance/shift": {
       "get": {
+        "description": "(8OYPuz7J) `cashbox_user_id` ('0' — MAIN, aks holda filial ID si), `sort_by=opened_at|closed_at` + `sort_dir=asc|desc` (sukut opened_at desc). Qatorlarda `opened_by_name` / `closed_by_name`. Menejer — faqat o'z filiali kassasi smenalari (boshqa `cashbox_user_id` — 403).",
         "operationId": "FinanceGatewayController_findShifts",
         "parameters": [
           {
@@ -9286,6 +9287,44 @@
               "example": 20,
               "type": "number"
             }
+          },
+          {
+            "name": "cashbox_user_id",
+            "required": false,
+            "in": "query",
+            "description": "Kassa: '0' — asosiy (MAIN), aks holda filial ID si. Menejer uchun o'z filiali majburlanadi (boshqasi — 403)",
+            "schema": {
+              "example": "0",
+              "type": "string"
+            }
+          },
+          {
+            "name": "sort_by",
+            "required": false,
+            "in": "query",
+            "description": "Saralash maydoni (sukut opened_at). closed_at — ochiq smenalar oxirida",
+            "schema": {
+              "example": "closed_at",
+              "type": "string",
+              "enum": [
+                "opened_at",
+                "closed_at"
+              ]
+            }
+          },
+          {
+            "name": "sort_dir",
+            "required": false,
+            "in": "query",
+            "description": "Saralash yo'nalishi (sukut desc)",
+            "schema": {
+              "example": "desc",
+              "type": "string",
+              "enum": [
+                "asc",
+                "desc"
+              ]
+            }
           }
         ],
         "responses": {
@@ -9305,7 +9344,8 @@
         "x-roles": [
           "superadmin",
           "admin",
-          "registrator"
+          "registrator",
+          "manager"
         ]
       }
     },
@@ -24063,7 +24103,7 @@
           "closing_balance_cash": {
             "type": "number",
             "example": 120000,
-            "description": "Sanab topshirilgan naqd. Yuborilsa discrepancy_cash = shu − expected_balance_cash"
+            "description": "Sanab topshirilgan naqd (MAJBURIY, ega S5). discrepancy_cash = shu − expected_balance_cash"
           },
           "closing_balance_card": {
             "type": "number",
@@ -24074,7 +24114,10 @@
             "type": "string",
             "example": "Smena yopildi"
           }
-        }
+        },
+        "required": [
+          "closing_balance_cash"
+        ]
       },
       "CreateCashboxCardRequestDto": {
         "type": "object",

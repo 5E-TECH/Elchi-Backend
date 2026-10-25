@@ -2,6 +2,7 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import {
   IsBoolean,
+  IsDefined,
   IsEnum,
   IsIn,
   IsInt,
@@ -323,6 +324,10 @@ export class OpenShiftRequestDto {
   comment?: string;
 }
 
+/** (8OYPuz7J, ega S5) POST /finance/shift/close — sanalgan naqd yuborilmasa. */
+export const CLOSING_BALANCE_CASH_REQUIRED_MESSAGE =
+  'Sanalgan naqd summani kiriting (closing_balance_cash majburiy)';
+
 export class CloseShiftRequestDto {
   @ApiPropertyOptional({ example: '12' })
   @IsOptional()
@@ -351,18 +356,19 @@ export class CloseShiftRequestDto {
   @Matches(/^\d+$/)
   closed_by?: string;
 
-  // (QTCUUgjA) Sanab topshirilgan summa: yuborilsa `discrepancy_cash/card`
-  // (= sanalgan − kutilgan) hisoblanadi; yuborilmasa discrepancy NULL.
-  @ApiPropertyOptional({
+  // (QTCUUgjA) Sanab topshirilgan summa: discrepancy_cash = sanalgan − kutilgan.
+  // (8OYPuz7J, ega S5) Sanalgan NAQD MAJBURIY — yopish oynasini chetlab
+  // o'tgan API chaqiruvi ham smenani sanalmagan naqd bilan yopolmaydi.
+  @ApiProperty({
     example: 120000,
     description:
-      'Sanab topshirilgan naqd. Yuborilsa discrepancy_cash = shu − expected_balance_cash',
+      'Sanab topshirilgan naqd (MAJBURIY, ega S5). discrepancy_cash = shu − expected_balance_cash',
   })
-  @IsOptional()
+  @IsDefined({ message: CLOSING_BALANCE_CASH_REQUIRED_MESSAGE })
   @Type(() => Number)
-  @IsNumber()
-  @Min(0)
-  closing_balance_cash?: number;
+  @IsNumber({}, { message: "closing_balance_cash son bo'lishi kerak" })
+  @Min(0, { message: "closing_balance_cash manfiy bo'lmasligi kerak" })
+  closing_balance_cash!: number;
 
   @ApiPropertyOptional({
     example: 50000,
@@ -416,6 +422,39 @@ export class FindShiftQueryDto {
   @IsNumber()
   @Min(1)
   limit?: number;
+
+  /**
+   * (8OYPuz7J, ega S3) Kassa bo'yicha filtr: '0' — markaziy MAIN, aks holda
+   * filial ID si. Menejer — faqat o'z filiali (boshqa qiymat — 403).
+   */
+  @ApiPropertyOptional({
+    example: '0',
+    description:
+      "Kassa: '0' — asosiy (MAIN), aks holda filial ID si. Menejer uchun o'z filiali majburlanadi (boshqasi — 403)",
+  })
+  @IsOptional()
+  @IsString()
+  @Matches(/^\d+$/)
+  cashbox_user_id?: string;
+
+  @ApiPropertyOptional({
+    enum: ['opened_at', 'closed_at'],
+    example: 'closed_at',
+    description:
+      'Saralash maydoni (sukut opened_at). closed_at — ochiq smenalar oxirida',
+  })
+  @IsOptional()
+  @IsIn(['opened_at', 'closed_at'])
+  sort_by?: 'opened_at' | 'closed_at';
+
+  @ApiPropertyOptional({
+    enum: ['asc', 'desc'],
+    example: 'desc',
+    description: "Saralash yo'nalishi (sukut desc)",
+  })
+  @IsOptional()
+  @IsIn(['asc', 'desc'])
+  sort_dir?: 'asc' | 'desc';
 }
 
 export class CreateSalaryRequestDto {

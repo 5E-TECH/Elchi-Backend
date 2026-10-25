@@ -23,6 +23,33 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-10-25 — Kassa smenasi: `last_closed`, smena ro'yxati filtri/saralashi, xodim ismlari, sanalgan naqd majburiy (8OYPuz7J)
+
+Deploy: api-gateway, finance-service. Migratsiya yo'q.
+
+- [2026-10-25] ✏️ [finance/shift] — **`GET /finance/shift/current`** javobiga `data.last_closed` (QO'SHIMCHA kalit):
+  shu kassaning (superadmin/admin — MAIN, menejer — o'z filiali) eng oxirgi YOPILGAN smenasi (`closed_at` DESC) —
+  to'liq smena qatori (`id, opened_at, closed_at, opened_by, closed_by, opening_balance_*, total_income_*,
+  total_expense_*, expected_balance_*, closing_balance_*, discrepancy_*, comment` …) yoki `null` (hali yopilmagan).
+  🔧 FE (kfdfYDik): «Smena yopildi · Bugun, 18:00 · Yopgan xodim: … · Naqd ortiqchasi: … · Natija» bloki va
+  ochish oynasidagi «Oxirgi smena … bilan yopilgan» endi sahifa qayta yuklangandan keyin ham `last_closed` dan
+  chiziladi (`useCashboxShift.ts`, `ShiftResultDialog.tsx`, `OpenShiftDialog.tsx` izohlari).
+- [2026-10-25] ✏️ [finance/shift] — smena qatorlarida (`shift/current` → `shift` va `last_closed`, `GET /finance/shift`
+  → `items[]`) **`opened_by_name` / `closed_by_name`** (matn yoki `null` — identity'da topilmasa). Identity'ga bitta
+  batch so'rov. 🔧 FE: har smena uchun `GET users/:id` endi shart emas.
+- [2026-10-25] ✏️ [finance/shift] — **`GET /finance/shift`**: yangi query `cashbox_user_id` (`'0'` — asosiy MAIN kassa,
+  aks holda filial ID si), `sort_by=opened_at|closed_at` (sukut `opened_at`), `sort_dir=asc|desc` (sukut `desc`).
+  `closed_at` bo'yicha ochiq smenalar har doim oxirida. Noto'g'ri qiymat — 400. MAIN ning oxirgi yopilgan smenasi:
+  `?cashbox_user_id=0&status=closed&sort_by=closed_at&limit=1`. 🔧 FE: MAIN smenasini 20 talik sahifadan klientda
+  qidirish o'rniga shu filtrdan foydalaning.
+- [2026-10-25] ✏️ [finance/shift] — **`GET /finance/shift` — MENEJER ham** (avval faqat superadmin/admin/registrator):
+  doira JWT'dan majburlanadi (o'z filiali kassasi smenalari); boshqa `cashbox_user_id` (`0` yoki boshqa filial) —
+  403 «Siz faqat o'z filialingiz kassasi smenalarini ko'ra olasiz»; filiali topilmagan menejer — 403.
+- [2026-10-25] ⚠️ [finance/shift] — **`POST /finance/shift/close` — `closing_balance_cash` (sanalgan naqd) MAJBURIY**
+  (ega S5). Yuborilmasa yoki `null` — 400 «Sanalgan naqd summani kiriting (closing_balance_cash majburiy)».
+  `closing_balance_card` ixtiyoriy (yuborilmasa `discrepancy_card: null` — «Sanalmadi»). 🟢 FE yopish oynasi
+  `closing_balance_cash` ni allaqachon yuboradi (`CloseShiftRequest`) — o'zgarish shart emas.
+
 ### 2026-10-25 — AI idempotentlik qoldiqlari (Cp2v3ZJ7) va kampaniya yuklamasi (xHPdpj0W)
 
 Deploy: faqat notification-service (bot matni). Migratsiya yo'q. API kontrakti o'zgarmagan.
