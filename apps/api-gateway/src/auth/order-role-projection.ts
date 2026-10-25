@@ -24,8 +24,10 @@ import { Roles as RoleEnum } from '@app/common';
  *     `total_price`, `sale_collectible_amount`, `paid_online_amount`,
  *     `extra_cost`, market tariflari) va nomi pulga xos HAR QANDAY kalit
  *     (`LOGIST_MONEY_KEY_PATTERN`: narx, summa, tarif, tushum, maosh, balans,
- *     kassa, komissiya) — javob daraxtining istalgan joyida (pochta, paket,
- *     kuryer, statistika javoblari ham shu proyeksiyadan o'tadi);
+ *     kassa, komissiya, to'lov/to'langan, xarajat, ulush, qarz, yig'im...) —
+ *     javob daraxtining istalgan joyida, `order.market` profili ICHIDA ham
+ *     (pochta, paket, kuryer, statistika javoblari ham shu proyeksiyadan
+ *     o'tadi);
  *   - QOLGAN HAR QANDAY ROL (CUSTOMER, OPERATOR, INVESTOR, noma'lum
  *     yoki bo'sh rollar) — FAIL-CLOSED (kH2zZsz3 tekshiruvi #3): barcha ichki
  *     moliyaviy maydonlar (tariflar, ulushlar, `to_be_paid`/`paid_amount`)
@@ -104,6 +106,11 @@ export const RESTRICTED_HIDDEN_ORDER_FIELDS: readonly string[] = Array.from(
     'paid_amount',
     // T0UGh8bL: sotuvda marketga berilgan naqd — `paid_amount` ning qismi.
     'sale_market_paid_amount',
+    // uguUEhin: sotish oynasi chegarasi (WAITING) = summa − onlayn − to'langan
+    // − MARKET TARIFI; `to_be_paid` kabi market tarifini ochadi (4BftLLnc prod
+    // testi: logistga 30 000 chiqdi). Kuryer (SellModal `readMarketPaidBase`)
+    // va market uni oladi — ular bu ro'yxatda emas.
+    'sale_market_paid_max',
   ]),
 );
 
@@ -139,12 +146,21 @@ export const LOGIST_HIDDEN_ORDER_FIELDS: readonly string[] = Array.from(
 /**
  * 4BftLLnc — logist uchun nomi pulga xos HAR QANDAY kalit (ro'yxatda
  * unutilgan yangi maydon ham sizmasin): `*price*` (`homeOrdersTotalPrice`,
- * `sent_total_price`), `*amount*` (`amount_total`, `paid_amount`), `*tariff*`,
- * `*revenue*` (`totalRevenue`), `*salary*`, `*balance*`, `*cashbox*`,
- * `*commission*`, `*_share` / `*Share` (kuryer/filial ulushi), `to_be_paid`.
+ * `sent_total_price`, `ai_price_per_order`), `*amount*` (`amount_total`),
+ * `*tariff*` (`default_tariff`), `*revenue*` (`totalRevenue`), `*salary*`,
+ * `*balance*`, `*cashbox*`, `*commission*`, `*profit*`, `*earning*`,
+ * `*income*`, `*paid*` (`to_be_paid`, `paid_amount`, `sale_market_paid_max`,
+ * `already_paid_online`, `is_paid`), `*payment*` (`payment_status`,
+ * `payment_day`), `*cost*` (`extra_cost`, `extra_cost_party`,
+ * `extra_cost_enabled`), `*cashback*`, `*debt*`, `*share*` (kuryer/filial
+ * ulushi), `*fee*` (`pickup_fee`; `feed*` emas), `*compensation*`,
+ * `*payout*`, `*payable*` / `*receivable*`, `*money*`, `*wage*`, `*bonus*`,
+ * `*penalty*`, `*leftover*`. Logist ko'radigan operatsion kalitlar
+ * (`status`, `orders_total`, `totalOrders`, `activeCouriers`, ism/telefon)
+ * bularga mos EMAS.
  */
 export const LOGIST_MONEY_KEY_PATTERN =
-  /(price|amount|tariff|revenue|salary|balance|cashbox|commission|profit|earning|_share$|[a-z]Share$|to_?be_?paid|extra_?cost$)/i;
+  /(price|amount|tariff|revenue|salary|balance|cashbox|commission|profit|earning|income|paid|payment|cost|cashback|debt|share|fee(?!d)|compensation|payout|payable|receivable|money|wage|bonus|penalty|leftover)/i;
 
 /** To'liq ko'rinishli rollar — proyeksiya qo'llanmaydi. */
 const FULL_VIEW_ROLES: readonly string[] = [
@@ -291,17 +307,18 @@ function projectValue(
       changed = true;
       continue;
     }
-    let projected: unknown;
-    if (
+    // Buyurtma qatorining `market` bolasidan avval market profili moliyasi
+    // olib tashlanadi, so'ng u ham odatdagidek aylanadi — 4BftLLnc: logist
+    // `LOGIST_MONEY_KEY_PATTERN` i market profili ICHIDA ham ishlaydi
+    // (`default_tariff`, `extra_cost_*`; ilgari market bolasi aylanmasdi).
+    const child =
       isOrderRow &&
       key === 'market' &&
       isPlainObject(nested) &&
       projection.marketProfileFields.size
-    ) {
-      projected = omitKeys(nested, projection.marketProfileFields);
-    } else {
-      projected = projectValue(nested, projection, depth + 1);
-    }
+        ? omitKeys(nested, projection.marketProfileFields)
+        : nested;
+    const projected = projectValue(child, projection, depth + 1);
     changed = changed || projected !== nested;
     next[key] = projected;
   }

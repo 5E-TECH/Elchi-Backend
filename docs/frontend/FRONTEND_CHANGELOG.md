@@ -23,6 +23,22 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-10-25 (kech) — Logist: `sale_market_paid_max` va boshqa pul kalitlari chiqmaydi (4BftLLnc, ma'lumot sizishi)
+
+Deploy: faqat api-gateway. Migratsiya yo'q.
+
+- [2026-10-25] ⚠️ [gateway/order] — **LOGIST** (`GET /orders`, `GET /orders/:id`, `/tracking`, pochta/paket/qidiruv —
+  logist proyeksiyasi o'tadigan barcha javoblar): prod testida WAITING buyurtmalarda **`sale_market_paid_max`**
+  (sotish oynasi chegarasi = summa − market tarifi) chiqib qolgan edi — endi YO'Q. Pul naqshi kengaytirildi: nomida
+  `paid`, `payment`, `cost`, `share`, `fee`, `debt`, `cashback`, `income`, `compensation`, `payable`/`receivable`,
+  `leftover` va h.k. bo'lgan kalitlar ham olib tashlanadi (`payment_status`, `extra_cost_party`, kuzatuvdagi
+  `already_paid_online`...). Naqsh endi `order.market` profili ICHIDA ham ishlaydi: `market.default_tariff`,
+  `market.extra_cost_enabled`, `market.extra_cost_requires_approval`, `market.can_add_extra_cost` logistda yo'q.
+  Ism, telefon, holat, viloyat/tuman, mahsulot nomi/soni, kuryer, `return_stage`/`cancel_return` — o'zgarmagan.
+- [2026-10-25] ✏️ [gateway/order] — **`sale_market_paid_max` cheklangan rollarda ham yo'q** (mijoz, call-center
+  operatori, investor, noma'lum rol) — u `to_be_paid` kabi market tarifini ochadi. 🟢 **Kuryer va market uchun
+  o'zgarmagan**: kuryer sotish oynasi (SellModal, `readMarketPaidBase`) shu maydonga tayanadi; menejer/admin — to'liq.
+
 ### 2026-10-25 (kech) — Kassa tarixi: foydalanuvchi obyektlari faqat `{id, name, role, phone_number}` (vf4513Zn, ma'lumot sizishi)
 
 Deploy: finance-service va api-gateway (ikkalasi ham — biri qolsa sizish shu yo'lda qoladi). Migratsiya yo'q.
