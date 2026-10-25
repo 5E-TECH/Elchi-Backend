@@ -1540,13 +1540,36 @@ export class LogisticsServiceService implements OnModuleInit {
           continue;
         }
 
+        // SlMjauWC (review 2026-10-26): `sato_code` unique (tirik tumanlar).
+        // Tuman qayta nomlangan bo'lsa, seed eski nomni o'sha kod bilan qayta
+        // qo'shmasin — aks holda 23505 va servis ishga tushmay qoladi.
+        if (districtData.sato_code) {
+          const codeTaken = await this.districtRepo.findOne({
+            where: { sato_code: districtData.sato_code, isDeleted: false },
+          });
+          if (codeTaken) {
+            continue;
+          }
+        }
+
         const district = this.districtRepo.create({
           name: districtName,
           sato_code: districtData.sato_code,
           region_id: regionEntity.id,
           assigned_region: regionEntity.id,
         });
-        const savedDistrict = await this.districtRepo.save(district);
+        let savedDistrict: typeof district;
+        try {
+          savedDistrict = await this.districtRepo.save(district);
+        } catch (error) {
+          if ((error as { code?: string })?.code === '23505') {
+            this.logger.warn(
+              `District seed o'tkazib yuborildi (sato_code band): ${districtName} / ${districtData.sato_code}`,
+            );
+            continue;
+          }
+          throw error;
+        }
         void this.syncDistrictToSearch(savedDistrict);
       }
     }

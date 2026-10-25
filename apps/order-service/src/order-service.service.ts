@@ -2530,6 +2530,17 @@ export class OrderServiceService {
       customer: row.customer_id
         ? {
             ...(customerMap.get(row.customer_id) ?? null),
+            // txmkXVBa (review 2026-10-26): karta endi jimgina yozilmaydi —
+            // shu buyurtma uchun kiritilgan manzil va qo'shimcha raqam
+            // (buyurtmaning o'z ustunlari) kartadagidan ustun: yorliq/kuryer
+            // to'g'ri raqamni ko'radi, boshqa market kartasidagi manzil chiqmaydi.
+            ...(row.address ? { address: row.address } : {}),
+            ...((row as { extra_number?: string | null }).extra_number
+              ? {
+                  extra_number: (row as { extra_number?: string | null })
+                    .extra_number,
+                }
+              : {}),
             district: row.district_id
               ? (districtMap.get(row.district_id) ?? null)
               : null,
