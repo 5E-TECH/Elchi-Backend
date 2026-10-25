@@ -1611,6 +1611,9 @@ export class ApiGatewayController {
     RoleEnum.MANAGER,
     RoleEnum.REGISTRATOR,
     RoleEnum.COURIER,
+    // iFAkvaht (N16): logist buyurtmalari «Market» filtri — faqat minimal
+    // ko'rinish {id, name, status} (tarif, telefon, kassa YO'Q; ega LG-S1).
+    RoleEnum.LOGIST,
   )
   @ApiBearerAuth()
   @ApiOperation({ summary: 'List markets with filtering and pagination' })
@@ -1625,7 +1628,7 @@ export class ApiGatewayController {
   @ApiQuery({ name: 'limit', required: false, type: Number, example: 10 })
   @ApiOkResponse({
     description:
-      "Market list. SUPERADMIN/ADMIN: to'liq qator + cashbox. MANAGER/REGISTRATOR/BRANCH: faqat {id, name, phone_number, status, tariff_home, tariff_center, default_tariff} (yiFTzkzH; tarif maydoni yo'q bo'lsa null). COURIER: faqat {id, name, status}.",
+      "Market list. SUPERADMIN/ADMIN: to'liq qator + cashbox. MANAGER/REGISTRATOR/BRANCH: faqat {id, name, phone_number, status, tariff_home, tariff_center, default_tariff} (yiFTzkzH; tarif maydoni yo'q bo'lsa null). COURIER va LOGIST (iFAkvaht — buyurtmalar «Market» filtri): faqat {id, name, status}.",
   })
   async getMarkets(
     @Req() req: { user: JwtUser },
@@ -1690,8 +1693,9 @@ export class ApiGatewayController {
    *   ishlatadi (orders/create Step1Market, orders, products); yiFTzkzH:
    *   buyurtma yaratishda ikkala narxni (uyga/markazga) ko'rsatish uchun
    *   `tariff_home`, `tariff_center`, `default_tariff` ham (login/kassa yo'q);
-   * - minimal: COURIER (va boshqa har qanday rol) — faqat filtr: id, nom,
-   *   status. Telefon, username, tariflar, kassa — yo'q.
+   * - minimal: COURIER, LOGIST (iFAkvaht — logist buyurtmalari «Market»
+   *   filtri) va boshqa har qanday rol — faqat filtr: id, nom, status.
+   *   Telefon, username, tariflar, kassa — yo'q.
    */
   private marketListView(
     user: JwtUser | undefined,

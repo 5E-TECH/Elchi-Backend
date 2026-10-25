@@ -1149,7 +1149,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Market list. SUPERADMIN/ADMIN: to'liq qator + cashbox. MANAGER/REGISTRATOR/BRANCH: faqat {id, name, phone_number, status, tariff_home, tariff_center, default_tariff} (yiFTzkzH; tarif maydoni yo'q bo'lsa null). COURIER: faqat {id, name, status}."
+            "description": "Market list. SUPERADMIN/ADMIN: to'liq qator + cashbox. MANAGER/REGISTRATOR/BRANCH: faqat {id, name, phone_number, status, tariff_home, tariff_center, default_tariff} (yiFTzkzH; tarif maydoni yo'q bo'lsa null). COURIER va LOGIST (iFAkvaht — buyurtmalar «Market» filtri): faqat {id, name, status}."
           }
         },
         "security": [
@@ -1167,7 +1167,8 @@
           "branch",
           "manager",
           "registrator",
-          "courier"
+          "courier",
+          "logist"
         ]
       }
     },

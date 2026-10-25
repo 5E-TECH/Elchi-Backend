@@ -23,7 +23,7 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
-### 2026-10-25 — Logist kabineti: faqat o'z viloyatlari, faqat ko'rish, pulsiz (4BftLLnc, iOnGbEqi, Z3pUOxou, hGcR8kio)
+### 2026-10-25 — Logist kabineti: faqat o'z viloyatlari, faqat ko'rish, pulsiz (4BftLLnc, iOnGbEqi, Z3pUOxou, hGcR8kio, iFAkvaht)
 
 Ega qarori 2026-10-19: LG-S1 — logist ko'radi, moliyaga aralashmaydi; LG-S3 — faqat o'ziga biriktirilgan viloyatlar
 (`regions.logist_id`). Doira SERVERDA: logist so'rovdagi filtr bilan doirani kengaytira olmaydi.
@@ -77,6 +77,10 @@ eski order-service `region_ids` ni bilmaydi, gateway bu holatda ham begona qator
   va boshqa manbalar (katalog) chiqmaydi. Natija — `{id, source, type, sourceId, title}` (summa, telefon, metadata yo'q).
   Viloyat biriktirilmagan (yoki logistics javob bermagan) logist — faqat viloyat/tuman nomlari. 🔧 FE: header global
   qidiruvi natijasini logistda logist sahifalariga yo'naltirish (buyurtma → logist-orders-detail, LG-4).
+- [2026-10-25] ✏️ [identity] — **`GET /markets` — LOGIST** (iFAkvaht, N16; deploy: faqat api-gateway): `x-roles` ga
+  `logist`. Logist buyurtmalari «Market» filtri uchun — faqat `{id, name, status}` (kuryer bilan bir xil minimal
+  ko'rinish; telefon, login, tariflar, kassa yo'q). 🔧 FE (LG-4): «Market» filtri `GET /markets?search=` dan,
+  tanlangan market `GET /orders?market_id=` ga.
 - [2026-10-25] 🟢 [logist] — yozish yo'llari (pochta jo'natish/qabul, skaner, paket yaratish/jo'natish/qabul/bekor,
   kuryer biriktirish/o'chirish) logistga ochilmagan — 403 (spec bilan qulflangan). 🔧 FE: logist-mails-list/detail,
   logist-batches-list, logist-couriers-list sahifalari (LG-5) — shu endpointlar.
