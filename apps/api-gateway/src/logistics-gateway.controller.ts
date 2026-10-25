@@ -733,12 +733,32 @@ export class LogisticsGatewayController {
     RoleEnum.COURIER,
   )
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Get post by scanner' })
-  @ApiParam({ name: 'id', description: 'Post QR token' })
-  getPostByScan(@Param('id') id: string) {
+  @ApiOperation({
+    summary: 'Get post by scanner',
+    description:
+      "X4RzXk1H: doira `GET /post/orders/:id` bilan bir xil — filial xodimi o'z filiali pochtasini (yoki buyurtmalari to'liq o'z filialida turganini), kuryer o'z pochtasini ko'radi; boshqasi 403. Skan pochtani o'zgartirmaydi. " +
+      "dwJX3NjT: javob — pochta qatori (avvalgi maydonlar o'zgarmagan) + `region` `{id, name}`, `courier` `{id, name, phone_number}` (kuryersiz — null) va `orders[]` `{id, order_number, status, total_price, where_deliver, region, district, customer {name, phone_number}}` — `GET /post/orders/:id` dagi ro'yxat (kuryerga SENT pochtada faqat yo'ldagilar). `GET /scan/:token` (`POST-…`) ham aynan shu javobni `type: post` bilan qaytaradi.",
+  })
+  @ApiParam({ name: 'id', description: 'Post QR token (`POST-…`)' })
+  getPostByScan(@Param('id') id: string, @Req() req?: { user?: JwtUser }) {
     return this.logisticsClient
-      .send({ cmd: 'logistics.post.find_by_scan' }, { id })
-      .pipe(timeout(8000));
+      .send(
+        { cmd: 'logistics.post.find_by_scan' },
+        {
+          id,
+          requester: {
+            id: req?.user?.sub,
+            roles: req?.user?.roles ?? [],
+            branch_id: req?.user?.branch_id ?? null,
+          },
+        },
+      )
+      .pipe(
+        timeout(8000),
+        map((response: unknown) =>
+          projectOrderPayloadForRoles(req?.user?.roles, response),
+        ),
+      );
   }
 
   @Post('post/courier/:id')

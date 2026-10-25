@@ -23,6 +23,44 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-10-25 — Skaner: paket QR qabul qiluvchi filialda, pochta QR `POST-…`, skan javoblarida mazmun (j8hdXE1o, X4RzXk1H, dwJX3NjT)
+
+Deploy: api-gateway, branch-service, logistics-service (umumiy `libs/common` ga yangi helper qo'shildi — boshqa
+servislarga ta'sir yo'q). Migratsiya yo'q. order-service o'zgarmagan (mavjud `order.summary_by_ids` ishlatiladi).
+
+- [2026-10-25] ✏️ [gateway/branch] — **Paket QR (`BTB-…`/`BTR-…`) — `GET /scan/:token`** (j8hdXE1o): ruxsat endi
+  `GET /transfer-batches/:id` bilan AYNI — jo'natuvchi **YOKI qabul qiluvchi** filialni o'qiy oladigan foydalanuvchi
+  (menejer, registrator, kuryer). Ilgari faqat jo'natuvchi tekshirilardi: qabul qiluvchi filial xodimi o'ziga kelgan
+  paketni skanerlasa 403 olardi va «Qabul qilish» tugmasigacha yetmasdi. Begona filial va market — 403 (avvalgidek).
+- [2026-10-25] ✏️ [gateway/branch] — **Paket skani mazmuni** (dwJX3NjT S1, QO'SHIMCHA kalitlar; paket qatorining eski
+  maydonlari va `{ type: "batch", data }` konverti o'zgarmagan):
+  - `data.source_branch` / `data.destination_branch` — `{ id, name }`;
+  - `data.region` — maqsad viloyat `{ id, name }` (topilmasa `null`);
+  - `data.items[].order` — buyurtma XULOSASI `{ id, order_number, status, total_price, region, district,
+    customer: { name, phone_number } | null }` (`region`/`district` — nom, matn). Xulosa xizmati javob bermasa
+    `order: null` — skan baribir javob beradi. To'liq buyurtma (tariflar) EMAS — kuryer ham shu javobni oladi.
+  🟢 FE: `buildScanPackageView` bu kalitlarni allaqachon o'qiydi (`source_branch.name`, `region.name`,
+  `items[].order.customer.name/phone_number`, `.status`, `.total_price`) — kuryerda ham filial/viloyat nomi va
+  buyurtmalar chiqadi. Xodim uchun qo'shimcha `GET transfer-batches/:id` endi ixtiyoriy (olib tashlash mumkin).
+- [2026-10-25] ⚠️ [gateway/logistics] — **Pochta QR — `GET /scan/:token`** (X4RzXk1H): resolver haqiqiy pochta
+  tokenini (`POST-<base36>-<rand>`, logistics `generateToken()`) taniydi — ilgari faqat `PST-` ni kutardi va `POST-…`
+  buyurtma tarmog'iga tushib 404 berardi. `PST-` ham qoladi (moslik). Javob `{ type: "post", data }`, `data` —
+  `GET /post/scan/:token` bilan bir xil (pastda).
+- [2026-10-25] ⚠️ [gateway/logistics] — **Pochta skani ruxsati** (X4RzXk1H; `GET /scan/:token` `POST-…` va
+  `GET /post/scan/:token`): rol — superadmin, admin, branch, manager, registrator, courier; **market, mijoz, operator,
+  investor, logist — 403** (ilgari `/scan` da market ham pochta qatorini to'liq olardi). Doira — `GET /post/orders/:id`
+  bilan AYNI: filial xodimi — o'z filiali pochtasi (yoki buyurtmalari to'liq o'z filialida turgan pochta), kuryer —
+  o'z pochtasi; boshqasi 403 «Siz bu branch pochtasidagi orderlarni ko'ra olmaysiz». Skan pochtani o'zgartirmaydi
+  (sahifa ochilganda bo'ladigan filial o'tkazmasi `branch_id` tuzatishi skanda yozilmaydi).
+- [2026-10-25] ✏️ [logistics] — **Pochta skani mazmuni** (dwJX3NjT S2, `GET /post/scan/:token` va `/scan` `POST-…`;
+  pochta qatorining eski maydonlari o'zgarmagan, QO'SHIMCHA kalitlar): `region` `{ id, name }`, `courier`
+  `{ id, name, phone_number }` (kuryersiz — `null`), `orders[]` — `GET /post/orders/:id` dagi AYNI ro'yxat (kuryerga
+  SENT pochtada faqat yo'ldagilar) xulosa shaklida: `{ id, order_number, status, total_price, where_deliver, region,
+  district, customer: { name, phone_number } | null }`. 🟢 FE: `buildScanPostView` `orders`, `region.name`,
+  `courier.name` ni allaqachon o'qiydi — ro'yxat, viloyat va kuryer karta/qatorda chiqadi. 🔧 FE (ixtiyoriy):
+  `POST-` tokenini vaqtincha `GET post/scan/:token` ga yo'naltirish shart emas — `GET scan/:token` ham ishlaydi
+  (ikkalasining `data` si bir xil).
+
 ### 2026-10-25 — Market operatori: viloyat tumanlari va tuman tafsiloti (MO-7, OfRSoRUX / N11)
 
 Deploy: faqat api-gateway. Migratsiya yo'q.

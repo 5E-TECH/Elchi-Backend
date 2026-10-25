@@ -284,10 +284,30 @@ export class LogisticsServiceController {
     );
   }
 
+  // X4RzXk1H: requester MAJBURIY (rol + filial/kuryer doirasi); requester'siz
+  // chaqiruv — 403 (fail-closed).
   @MessagePattern({ cmd: 'logistics.post.find_by_scan' })
-  findPostByScan(@Payload() data: { id: string }, @Ctx() context: RmqContext) {
+  findPostByScan(
+    @Payload()
+    data: {
+      id: string;
+      requester?: {
+        id?: string;
+        roles?: string[];
+        branch_id?: string | null;
+      };
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    const requester = data?.requester
+      ? {
+          id: String(data.requester.id ?? ''),
+          roles: data.requester.roles ?? [],
+          branch_id: data.requester.branch_id ?? null,
+        }
+      : undefined;
     return this.executeAndAck(context, () =>
-      this.logisticsService.findPostWithQr(data.id),
+      this.logisticsService.findPostWithQr(data?.id, requester),
     );
   }
 

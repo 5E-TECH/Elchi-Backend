@@ -1,4 +1,4 @@
-import { NotFoundException } from '@nestjs/common';
+import { ForbiddenException, NotFoundException } from '@nestjs/common';
 import { of, throwError } from 'rxjs';
 import { ScanGatewayController } from './scan-gateway.controller';
 
@@ -46,7 +46,36 @@ describe('ScanGatewayController', () => {
     expect(res.type).toBe('batch');
   });
 
-  it('routes PST- token to logistics-service and returns type=post', async () => {
+  // X4RzXk1H: haqiqiy pochta tokeni — logistics `generateToken()` shakli
+  // `POST-<base36>-<rand>` (ilgari spec faqat soxta `PST-z` ni tekshirardi,
+  // haqiqiy token esa buyurtma tarmog'iga tushib 404 berardi).
+  const POST_TOKEN = 'POST-mh3k2x9a-4f7q1z8c';
+
+  it('X4RzXk1H: haqiqiy POST- token logistics`ga requester bilan boradi (type=post), order-service`ga EMAS', async () => {
+    const { controller, logisticsClient, orderClient } = setup();
+    logisticsClient.send.mockReturnValue(
+      of({ data: { id: '91', qr_code_token: POST_TOKEN } }),
+    );
+
+    const res = await controller.scan(POST_TOKEN, {
+      user: { sub: 'u1', roles: ['manager'], branch_id: '3' },
+    } as any);
+
+    expect(logisticsClient.send).toHaveBeenCalledWith(
+      { cmd: 'logistics.post.find_by_scan' },
+      {
+        id: POST_TOKEN,
+        requester: { id: 'u1', roles: ['manager'], branch_id: '3' },
+      },
+    );
+    expect(orderClient.send).not.toHaveBeenCalled();
+    expect(res).toEqual({
+      type: 'post',
+      data: { id: '91', qr_code_token: POST_TOKEN },
+    });
+  });
+
+  it('X4RzXk1H: eski PST- prefiksi ham pochta (moslik)', async () => {
     const { controller, logisticsClient } = setup();
     logisticsClient.send.mockReturnValue(
       of({ data: { id: '91', qr_code_token: 'PST-z' } }),
@@ -56,9 +85,102 @@ describe('ScanGatewayController', () => {
 
     expect(logisticsClient.send).toHaveBeenCalledWith(
       { cmd: 'logistics.post.find_by_scan' },
-      { id: 'PST-z' },
+      {
+        id: 'PST-z',
+        requester: { id: 'u1', roles: ['admin'], branch_id: null },
+      },
     );
     expect(res.type).toBe('post');
+  });
+
+  it.each([['market'], ['customer'], ['operator'], ['investor'], ['logist']])(
+    'X4RzXk1H: %s pochta QR`ini skanerlasa 403, logistics`ga so`rov ketmaydi',
+    async (role) => {
+      const { controller, logisticsClient, orderClient } = setup();
+
+      await expect(
+        controller.scan(POST_TOKEN, {
+          user: { sub: '37', roles: [role] },
+        } as any),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+      expect(logisticsClient.send).not.toHaveBeenCalled();
+      expect(orderClient.send).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    ['superadmin'],
+    ['admin'],
+    ['branch'],
+    ['manager'],
+    ['registrator'],
+    ['courier'],
+  ])('X4RzXk1H: %s pochta QR`ini skanerlay oladi', async (role) => {
+    const { controller, logisticsClient } = setup();
+    logisticsClient.send.mockReturnValue(of({ data: { id: '91' } }));
+
+    const res = await controller.scan(POST_TOKEN, {
+      user: { sub: '26', roles: [role] },
+    } as any);
+
+    expect(res.type).toBe('post');
+  });
+
+  it('X4RzXk1H: logistics doira 403 i propagatsiya qilinadi', async () => {
+    const { controller, logisticsClient } = setup();
+    logisticsClient.send.mockReturnValue(
+      throwError(() => ({
+        statusCode: 403,
+        message: "Siz bu branch pochtasidagi orderlarni ko'ra olmaysiz",
+      })),
+    );
+
+    await expect(
+      controller.scan(POST_TOKEN, {
+        user: { sub: '25', roles: ['manager'] },
+      } as any),
+    ).rejects.toMatchObject({ statusCode: 403 });
+  });
+
+  it('dwJX3NjT: kuryer skanida ichki moliyaviy maydonlar (market_tariff, branch_share) olib tashlanadi', async () => {
+    const { controller, branchClient } = setup();
+    branchClient.send.mockReturnValue(
+      of({
+        statusCode: 200,
+        data: {
+          id: '501',
+          qr_code_token: 'BTB-x',
+          items: [
+            {
+              order_id: '700',
+              order: {
+                id: '700',
+                market_id: '37',
+                status: 'on the road',
+                total_price: 65000,
+                market_tariff: 20000,
+                branch_share: 5000,
+                customer: { name: 'Ali', phone_number: '+998901234567' },
+              },
+            },
+          ],
+        },
+      }),
+    );
+
+    const res = await controller.scan('BTB-x', {
+      user: { sub: '26', roles: ['courier'] },
+    } as any);
+
+    const order = res.data.items[0].order;
+    expect(order).not.toHaveProperty('market_tariff');
+    expect(order).not.toHaveProperty('branch_share');
+    expect(order).toMatchObject({
+      id: '700',
+      status: 'on the road',
+      total_price: 65000,
+      customer: { name: 'Ali', phone_number: '+998901234567' },
+    });
   });
 
   it('routes market cancelled QR to its state-changing scan endpoint', async () => {
@@ -144,7 +266,7 @@ describe('ScanGatewayController', () => {
       { token: 'QOP-1' },
     );
     expect(res.type).toBe('batch');
-    expect((res.data as any).count).toBe(2);
+    expect(res.data.count).toBe(2);
   });
 
   it('CyCV4XHR: order ham, qop ham topilmasa 404 propagatsiya qilinadi', async () => {
