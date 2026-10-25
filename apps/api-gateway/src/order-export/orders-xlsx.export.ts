@@ -124,7 +124,54 @@ const humanizeStatus = (raw: unknown): string | null => {
  * `normalizeOrderStatusForDisplay`) — FE `OrdersTable.getDisplayStatus` kabi
  * «Bekor — jo'natilgan» yoziladi.
  */
+/**
+ * 9Bp7VtVj (2-tur) — ro'yxatdagi bekor buyurtma belgisi holat nomini emas,
+ * bekor BOSQICHINI ko'rsatadi (FE `OrderStatusBadge` + `cancelReturnStage.ts`):
+ * `src/locales/uz/status.json` → `cancelStage.*`. Bosqich order-service
+ * `return_stage` (BG1, 5Yy6r6UI) dan olinadi.
+ */
+export const ORDER_EXPORT_CANCEL_STAGE_LABELS: Readonly<
+  Record<string, string>
+> = {
+  courier: 'Bekor · kuryerda', // cancelStage.courier
+  in_transit: "Bekor · yo'lda", // cancelStage.in_transit
+  branch: 'Bekor · filialda', // cancelStage.branch
+  hq: "Bekor · HQ'da", // cancelStage.hq
+  market: 'Marketga topshirildi', // cancelStage.market
+};
+
+/** Ombor buyurtmasi bekor bo'lib omborga qaytgan — cancelStage.warehouse. */
+export const ORDER_EXPORT_WAREHOUSE_RETURN_LABEL = 'Omborga qaytdi';
+
+const lowerText = (value: unknown): string =>
+  typeof value === 'string' || typeof value === 'number'
+    ? String(value).trim().toLowerCase()
+    : '';
+
+/**
+ * FE `isWarehouseReturn` bilan bir xil: ombor buyurtmasi (`fulfillment_source:
+ * WAREHOUSE`) yakuniy «market» bosqichida — mahsulot marketga emas, omborga
+ * qaytgan. Backend bosqichi bunday qatorda `null` (marketga topshirish emas).
+ */
+const isWarehouseReturn = (order: Record<string, unknown>): boolean => {
+  if (lowerText(order.fulfillment_source) !== 'warehouse') return false;
+  const stage = lowerText(order.return_stage);
+  return (
+    stage === 'market' ||
+    (!stage &&
+      normalizeStatus(order.status) === Order_status.RETURNED_TO_MARKET)
+  );
+};
+
 export function orderExportStatusLabel(order: Record<string, unknown>): string {
+  if (isWarehouseReturn(order)) return ORDER_EXPORT_WAREHOUSE_RETURN_LABEL;
+  const stage = lowerText(
+    order.return_stage ??
+      (order.cancel_return as { stage?: unknown } | null | undefined)?.stage,
+  );
+  if (stage && ORDER_EXPORT_CANCEL_STAGE_LABELS[stage]) {
+    return ORDER_EXPORT_CANCEL_STAGE_LABELS[stage];
+  }
   const transport = normalizeStatus(
     order.transport_status ?? order.transportStatus,
   );

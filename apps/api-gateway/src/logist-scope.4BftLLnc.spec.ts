@@ -535,3 +535,22 @@ describe('4BftLLnc — logist uchun yozish yo‘li YO‘Q', () => {
     expect(withLogist).toEqual(['getTracking']);
   });
 });
+
+describe('review 2026-10-25 — order.market ichidagi AI narxi logist/kuryerga chiqmaydi', () => {
+  it.each(['logist', 'courier'])(
+    '%s: market.ai_price_per_order olib tashlanadi',
+    (role) => {
+      const out = projectOrderPayloadForRoles([role], {
+        data: {
+          id: '1',
+          status: 'new',
+          total_price: 10000,
+          market_id: '37',
+          market: { id: '37', name: 'TEST', ai_price_per_order: 500 },
+        },
+      }) as { data: { market: Record<string, unknown> } };
+      expect(out.data.market.name).toBe('TEST');
+      expect(out.data.market).not.toHaveProperty('ai_price_per_order');
+    },
+  );
+});

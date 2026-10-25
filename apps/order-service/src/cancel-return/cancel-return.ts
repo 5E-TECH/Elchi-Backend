@@ -77,6 +77,9 @@ export interface CancelReturnStageInput {
   holder_courier_id?: unknown;
   post_id?: unknown;
   canceled_post_id?: unknown;
+  /** Ombor buyurtmasi omborga qaytganda ham `returned_to_market` bo'ladi — bu marketga topshirish EMAS. */
+  fulfillment_source?: unknown;
+  market_handover_at?: unknown;
 }
 
 const text = (value: unknown): string =>
@@ -97,7 +100,14 @@ export function resolveCancelReturnStage(
   const status = text(order.status).toLowerCase();
   const holder = text(order.holder_type).toUpperCase();
 
-  if (status === STATUS_RETURNED_TO_MARKET) return 'market';
+  if (status === STATUS_RETURNED_TO_MARKET) {
+    // Ombor buyurtmasi bekor bo'lib omborga qaytgan (order-warehouse) — marketga
+    // topshirilmagan: market_handover_* bo'sh. «Olganlarim»ga tushmasin.
+    const warehouseReturn =
+      text(order.fulfillment_source).toUpperCase() === 'WAREHOUSE' &&
+      (order.market_handover_at == null || order.market_handover_at === '');
+    return warehouseReturn ? null : 'market';
+  }
   if (status === STATUS_CLOSED && holder === 'MARKET') return 'market';
   if (status !== STATUS_CANCELLED && status !== STATUS_CANCELLED_SENT) {
     return null;
@@ -300,7 +310,7 @@ export function cancelReturnStageSql(
     case 'hq':
       return `(${a}.status = 'cancelled' AND ${a}.holder_type = 'HQ' AND (${a}.post_id IS NOT NULL OR ${a}.canceled_post_id IS NOT NULL))`;
     case 'market':
-      return `(${a}.status = 'returned_to_market' OR (${a}.status IN ('closed', 'cancelled', 'cancelled (sent)') AND ${a}.holder_type = 'MARKET'))`;
+      return `((${a}.status = 'returned_to_market' AND NOT (${a}.fulfillment_source = 'WAREHOUSE' AND ${a}.market_handover_at IS NULL)) OR (${a}.status IN ('closed', 'cancelled', 'cancelled (sent)') AND ${a}.holder_type = 'MARKET'))`;
   }
 }
 

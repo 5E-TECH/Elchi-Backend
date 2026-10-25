@@ -7,6 +7,7 @@ import {
   resolveCancelReturnStage,
   type CancelReturnContext,
   type CancelReturnStage,
+  cancelReturnStageSql,
 } from './cancel-return';
 
 /**
@@ -517,5 +518,40 @@ describe('M0EPcJVf — parseCancelReturnStages (`stage` so`rov parametri)', () =
       stages: ['hq'],
       invalid: ['yolda'],
     });
+  });
+});
+
+describe('review 2026-10-25 — ombor buyurtmasining omborga qaytishi marketga topshirish emas', () => {
+  it('WAREHOUSE + returned_to_market + market_handover_at yo`q → null', () => {
+    expect(
+      resolveCancelReturnStage({
+        status: 'returned_to_market',
+        holder_type: 'MARKET',
+        fulfillment_source: 'WAREHOUSE',
+        market_handover_at: null,
+      }),
+    ).toBeNull();
+  });
+  it('WAREHOUSE, lekin marketga haqiqatan topshirilgan → market', () => {
+    expect(
+      resolveCancelReturnStage({
+        status: 'returned_to_market',
+        fulfillment_source: 'WAREHOUSE',
+        market_handover_at: new Date('2026-10-25T10:00:00Z'),
+      }),
+    ).toBe('market');
+  });
+  it('HQ buyurtmasi → market (avvalgidek)', () => {
+    expect(
+      resolveCancelReturnStage({
+        status: 'returned_to_market',
+        fulfillment_source: 'HQ',
+      }),
+    ).toBe('market');
+  });
+  it('SQL market sharti ombor qaytishini chiqarib tashlaydi', () => {
+    expect(cancelReturnStageSql('market')).toContain(
+      "fulfillment_source = 'WAREHOUSE' AND order.market_handover_at IS NULL",
+    );
   });
 });

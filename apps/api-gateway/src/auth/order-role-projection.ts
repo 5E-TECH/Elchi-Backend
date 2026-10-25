@@ -84,6 +84,8 @@ export const COURIER_HIDDEN_MARKET_PROFILE_FIELDS: readonly string[] = [
   'compensation_mode',
   'commission_type',
   'commission_value',
+  // Market AI hisob-kitob narxi (pul) — kuryer/logist ko'rmaydi (review 2026-10-25).
+  'ai_price_per_order',
 ];
 
 /**

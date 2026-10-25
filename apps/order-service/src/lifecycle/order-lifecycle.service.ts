@@ -466,7 +466,8 @@ export class OrderLifecycleService {
         this.branchClient,
         { cmd: 'branch.find_by_id' },
         { id, requester: { id: 'system', roles: [Roles.SUPERADMIN] } },
-        { attachRequestId: false, retries: 1 },
+        // Faqat tracking matni uchun nom — topshirishni gateway (8 s) timeout'iga yetkazmasin.
+        { attachRequestId: false, retries: 0, timeoutMs: 1500 },
       );
       const name = String(response?.data?.name ?? '').trim();
       return name || null;
