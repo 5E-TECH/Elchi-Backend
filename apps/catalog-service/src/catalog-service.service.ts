@@ -64,6 +64,13 @@ export function normalizeProductName(raw: unknown): string {
     : '';
 }
 
+/** j4kTqiSQ: GET product* `sort_by` → ustun (whitelist). */
+const PRODUCT_SORT_COLUMNS: Record<string, string> = {
+  name: 'product.name',
+  created_at: 'product.createdAt',
+  price: 'product.price',
+};
+
 /** zRqDRLAZ: `numeric(14,2)` ning yuqori chegarasi. */
 export const PRODUCT_PRICE_MAX = 999_999_999_999.99;
 
@@ -436,7 +443,10 @@ export class CatalogServiceService {
     }
 
     if (name !== undefined) product.name = name;
-    if (dto?.image_url !== undefined) product.image_url = dto.image_url;
+    // j4kTqiSQ: `null` / `''` — rasm o'chiriladi (NULL, bo'sh satr emas).
+    if (dto?.image_url !== undefined) {
+      product.image_url = dto.image_url ? dto.image_url : null;
+    }
     if (price !== undefined) product.price = price;
     if (weightKg !== undefined) product.weight_kg = weightKg;
     for (const field of PRODUCT_DIMENSION_FIELDS) {
@@ -738,6 +748,8 @@ export class CatalogServiceService {
     search?: string;
     page?: number;
     limit?: number;
+    sort_by?: string;
+    sort_dir?: string;
   }) {
     const { user_id, search, page = 1, limit = 10 } = query;
 
@@ -772,7 +784,20 @@ export class CatalogServiceService {
       );
     }
 
-    qb.orderBy('product.createdAt', 'DESC')
+    // j4kTqiSQ: saralash — FAQAT whitelist ustunlar (gateway 400 beradi,
+    // bu yerda noma'lum qiymat — sukut). Bir xil qiymatlarda `id` — barqaror
+    // sahifalash uchun.
+    const sortColumn =
+      PRODUCT_SORT_COLUMNS[String(query.sort_by ?? '').toLowerCase()] ??
+      'product.createdAt';
+    const sortDir: 'ASC' | 'DESC' =
+      String(query.sort_dir ?? '').toLowerCase() === 'asc' ? 'ASC' : 'DESC';
+    qb.orderBy(
+      sortColumn,
+      sortDir,
+      sortColumn === 'product.price' ? 'NULLS LAST' : undefined,
+    )
+      .addOrderBy('product.id', sortDir)
       .skip((page - 1) * limit)
       .take(limit);
 

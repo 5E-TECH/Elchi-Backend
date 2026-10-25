@@ -2131,6 +2131,32 @@
               "example": 10,
               "type": "number"
             }
+          },
+          {
+            "name": "sort_by",
+            "required": false,
+            "in": "query",
+            "description": "j4kTqiSQ: saralash maydoni (sukut — created_at, yangisi tepada); boshqa qiymat 400",
+            "schema": {
+              "enum": [
+                "name",
+                "created_at",
+                "price"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "name": "sort_dir",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "enum": [
+                "asc",
+                "desc"
+              ],
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -2195,6 +2221,32 @@
               "example": 10,
               "type": "number"
             }
+          },
+          {
+            "name": "sort_by",
+            "required": false,
+            "in": "query",
+            "description": "j4kTqiSQ: saralash maydoni (sukut — created_at, yangisi tepada); boshqa qiymat 400",
+            "schema": {
+              "enum": [
+                "name",
+                "created_at",
+                "price"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "name": "sort_dir",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "enum": [
+                "asc",
+                "desc"
+              ],
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -2249,6 +2301,32 @@
             "schema": {
               "example": 10,
               "type": "number"
+            }
+          },
+          {
+            "name": "sort_by",
+            "required": false,
+            "in": "query",
+            "description": "j4kTqiSQ: saralash maydoni (sukut — created_at, yangisi tepada); boshqa qiymat 400",
+            "schema": {
+              "enum": [
+                "name",
+                "created_at",
+                "price"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "name": "sort_dir",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "enum": [
+                "asc",
+                "desc"
+              ],
+              "type": "string"
             }
           }
         ],
@@ -2367,6 +2445,7 @@
         ]
       },
       "patch": {
+        "description": "j4kTqiSQ: rasmni o'chirish — JSON `image: null` (yoki `image_url: null`/`''`), multipart `remove_image=true` (yoki `image=null`, `image_url=''`). Yangi `image` fayl berilsa — fayl ustun.",
         "operationId": "CatalogGatewayController_update",
         "parameters": [
           {
@@ -22043,16 +22122,22 @@
           "image": {
             "type": "string",
             "format": "binary",
-            "description": "Product rasmi. Berilsa gateway uni avtomatik yuklab, `image_url`ni o'zi to'ldiradi."
+            "nullable": true,
+            "description": "Product rasmi. Berilsa gateway uni avtomatik yuklab, `image_url`ni o'zi to'ldiradi. j4kTqiSQ: `null` (JSON) — saqlangan rasm o'chiriladi."
+          },
+          "remove_image": {
+            "type": "boolean",
+            "description": "j4kTqiSQ: multipart'da rasmni o'chirish (`true`); yangi `image` fayl berilsa e'tiborsiz."
           },
           "name": {
             "type": "string",
             "example": "Pepsi Max"
           },
           "image_url": {
-            "type": "string",
+            "type": "object",
             "example": "https://cdn.example.com/product-new.png",
-            "description": "Ixtiyoriy. Agar `image` yuborilsa bu maydonni yuborish shart emas."
+            "nullable": true,
+            "description": "Ixtiyoriy. Agar `image` yuborilsa bu maydonni yuborish shart emas. j4kTqiSQ: `null` yoki `''` — rasm o'chiriladi."
           },
           "price": {
             "type": "object",

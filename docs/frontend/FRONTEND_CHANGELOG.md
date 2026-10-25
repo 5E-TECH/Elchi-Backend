@@ -23,6 +23,22 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-10-25 (tun) — Mahsulotlar: GET product* `sort_by`/`sort_dir`, rasmni o'chirish (`image: null`) (j4kTqiSQ)
+
+Deploy: api-gateway, catalog-service. Migratsiya yo'q. Parametrsiz — eski xulq.
+
+- [2026-10-25] ✏️ [gateway/catalog] — `GET /product`, `GET /product/market/:marketId`, `GET /product/my-products`:
+  ixtiyoriy **`sort_by`** = `name` | `created_at` | `price` va **`sort_dir`** = `asc` | `desc` (sukut — `created_at
+  desc`, ya'ni eski tartib). Boshqa qiymat — **400**. `price` bo'yicha narxsizlar oxirida; teng qiymatlarda `id` —
+  sahifalar barqaror.
+- [2026-10-25] ✏️ [gateway/catalog] — `PATCH /product/:id`: rasmni o'chirish — JSON **`image: null`** (yoki
+  `image_url: null` / `''`); multipart'da (null yuborib bo'lmaydi) **`remove_image=true`** (yoki `image=null`,
+  `image_url=''`). Natija: `image_url: null`. Yangi `image` fayl yuborilsa — fayl ustun. Fayl storage'dan
+  o'chirilmaydi (faqat bog'lanish uziladi).
+- 🟢 `PATCH /product/my/:id` mavjud emas (Pc4CAFdB — market mahsulotni tahrirlamaydi), shuning uchun faqat
+  `PATCH /product/:id`.
+- 🔧 FE: jadval saralashini serverga (`sort_by`/`sort_dir`), «×» — `image: null` / `remove_image=true` yuborish.
+
 ### 2026-10-25 (tun) — Market yangi/bekor ro'yxatlari: `search`, `start_day`/`end_day` (CU4zfcds)
 
 Deploy: api-gateway, order-service. Migratsiya yo'q. Parametrlarsiz chaqiruv — eskisi bilan AYNI (rol doirasi

@@ -127,14 +127,19 @@ export function buildProductListQuery(
   search?: string,
   page?: string,
   limit?: string,
+  sortBy?: string,
+  sortDir?: string,
 ): {
   user_id: string | undefined;
   search: string | undefined;
   page: number | undefined;
   limit: number | undefined;
+  sort_by?: ProductSortBy;
+  sort_dir?: 'asc' | 'desc';
 } {
   const parsedLimit = toPositiveInt(limit);
   const trimmedSearch = typeof search === 'string' ? search.trim() : '';
+  const sort = parseProductSort(sortBy, sortDir);
   return {
     user_id: userId,
     search: trimmedSearch || undefined,
@@ -143,7 +148,57 @@ export function buildProductListQuery(
       parsedLimit === undefined
         ? undefined
         : Math.min(parsedLimit, PRODUCT_LIST_MAX_LIMIT),
+    ...sort,
   };
+}
+
+/** j4kTqiSQ: GET product* saralash — FAQAT shu ro'yxat (SQL'ga xom kirmaydi). */
+export const PRODUCT_SORT_FIELDS = ['name', 'created_at', 'price'] as const;
+export type ProductSortBy = (typeof PRODUCT_SORT_FIELDS)[number];
+
+/**
+ * j4kTqiSQ: `sort_by` / `sort_dir` — ro'yxatdan tashqari qiymat 400.
+ * Berilmasa — eski tartib (yangisi tepada).
+ */
+export function parseProductSort(
+  sortBy?: string,
+  sortDir?: string,
+): { sort_by?: ProductSortBy; sort_dir?: 'asc' | 'desc' } {
+  const by = typeof sortBy === 'string' ? sortBy.trim().toLowerCase() : '';
+  const dir = typeof sortDir === 'string' ? sortDir.trim().toLowerCase() : '';
+  const out: { sort_by?: ProductSortBy; sort_dir?: 'asc' | 'desc' } = {};
+  if (by) {
+    if (!(PRODUCT_SORT_FIELDS as readonly string[]).includes(by)) {
+      throw new BadRequestException(
+        `sort_by faqat: ${PRODUCT_SORT_FIELDS.join(', ')}`,
+      );
+    }
+    out.sort_by = by as ProductSortBy;
+  }
+  if (dir) {
+    if (dir !== 'asc' && dir !== 'desc') {
+      throw new BadRequestException('sort_dir faqat: asc, desc');
+    }
+    out.sort_dir = dir;
+  }
+  return out;
+}
+
+/**
+ * j4kTqiSQ: PATCH /product/:id da rasmni O'CHIRISH so'rovi. JSON:
+ * `image: null` yoki `image_url: null` / `''`; multipart (null yubora
+ * olmaydi): `image=null` (FormData null'ni shunday yozadi), `image_url=''`
+ * yoki `remove_image=true`. Yangi fayl yuklangan bo'lsa — fayl ustun.
+ */
+export function wantsProductImageRemoval(dto: {
+  image?: unknown;
+  image_url?: unknown;
+  remove_image?: unknown;
+}): boolean {
+  if (dto.image === null || dto.image === 'null') return true;
+  if (dto.image_url === null || dto.image_url === '') return true;
+  const flag = dto.remove_image;
+  return flag === true || flag === 'true' || flag === '1' || flag === 1;
 }
 
 /** ugoDD9TT: rasm turi → fayl kengaytmasi. */
@@ -453,6 +508,14 @@ export class CatalogGatewayController {
   @ApiQuery({ name: 'search', required: false, type: String })
   @ApiQuery({ name: 'page', required: false, type: Number, example: 1 })
   @ApiQuery({ name: 'limit', required: false, type: Number, example: 10 })
+  @ApiQuery({
+    name: 'sort_by',
+    required: false,
+    enum: PRODUCT_SORT_FIELDS,
+    description:
+      'j4kTqiSQ: saralash maydoni (sukut — created_at, yangisi tepada); boshqa qiymat 400',
+  })
+  @ApiQuery({ name: 'sort_dir', required: false, enum: ['asc', 'desc'] })
   findAll(
     @Query('market_id') market_id?: string,
     @Query('user_id') user_id?: string,
@@ -460,6 +523,8 @@ export class CatalogGatewayController {
     @Query('page') page?: string,
     @Query('limit') limit?: string,
     @Req() req?: { user: JwtUser },
+    @Query('sort_by') sortBy?: string,
+    @Query('sort_dir') sortDir?: string,
   ) {
     let resolvedUserId = market_id ?? user_id;
     if (this.isMarketOnlyRequester(req?.user)) {
@@ -476,7 +541,16 @@ export class CatalogGatewayController {
     return this.catalogClient
       .send(
         { cmd: 'catalog.product.find_all' },
-        { query: buildProductListQuery(resolvedUserId, search, page, limit) },
+        {
+          query: buildProductListQuery(
+            resolvedUserId,
+            search,
+            page,
+            limit,
+            sortBy,
+            sortDir,
+          ),
+        },
       )
       .pipe(timeout(8000));
   }
@@ -496,16 +570,35 @@ export class CatalogGatewayController {
   @ApiQuery({ name: 'search', required: false, type: String })
   @ApiQuery({ name: 'page', required: false, type: Number, example: 1 })
   @ApiQuery({ name: 'limit', required: false, type: Number, example: 10 })
+  @ApiQuery({
+    name: 'sort_by',
+    required: false,
+    enum: PRODUCT_SORT_FIELDS,
+    description:
+      'j4kTqiSQ: saralash maydoni (sukut — created_at, yangisi tepada); boshqa qiymat 400',
+  })
+  @ApiQuery({ name: 'sort_dir', required: false, enum: ['asc', 'desc'] })
   getByMarketId(
     @Param('marketId') marketId: string,
     @Query('search') search?: string,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
+    @Query('sort_by') sortBy?: string,
+    @Query('sort_dir') sortDir?: string,
   ) {
     return this.catalogClient
       .send(
         { cmd: 'catalog.product.find_all' },
-        { query: buildProductListQuery(marketId, search, page, limit) },
+        {
+          query: buildProductListQuery(
+            marketId,
+            search,
+            page,
+            limit,
+            sortBy,
+            sortDir,
+          ),
+        },
       )
       .pipe(timeout(8000));
   }
@@ -522,18 +615,34 @@ export class CatalogGatewayController {
   @ApiQuery({ name: 'search', required: false, type: String })
   @ApiQuery({ name: 'page', required: false, type: Number, example: 1 })
   @ApiQuery({ name: 'limit', required: false, type: Number, example: 10 })
+  @ApiQuery({
+    name: 'sort_by',
+    required: false,
+    enum: PRODUCT_SORT_FIELDS,
+    description:
+      'j4kTqiSQ: saralash maydoni (sukut — created_at, yangisi tepada); boshqa qiymat 400',
+  })
+  @ApiQuery({ name: 'sort_dir', required: false, enum: ['asc', 'desc'] })
   async getMyProducts(
     @Req() req: { user: JwtUser },
     @Query('search') search?: string,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
+    @Query('sort_by') sortBy?: string,
+    @Query('sort_dir') sortDir?: string,
   ) {
+    const sort = parseProductSort(sortBy, sortDir);
     const ownMarketId = await this.resolveOwnMarketId(req.user);
     return firstValueFrom(
       this.catalogClient
         .send(
           { cmd: 'catalog.product.find_all' },
-          { query: buildProductListQuery(ownMarketId, search, page, limit) },
+          {
+            query: {
+              ...buildProductListQuery(ownMarketId, search, page, limit),
+              ...sort,
+            },
+          },
         )
         .pipe(timeout(8000)),
     ).catch((error: unknown) => {
@@ -674,7 +783,12 @@ export class CatalogGatewayController {
     RoleEnum.MANAGER,
   )
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Update product (admin/registrator)' })
+  @ApiOperation({
+    summary: 'Update product (admin/registrator)',
+    description:
+      "j4kTqiSQ: rasmni o'chirish — JSON `image: null` (yoki `image_url: null`/`''`), multipart `remove_image=true` " +
+      "(yoki `image=null`, `image_url=''`). Yangi `image` fayl berilsa — fayl ustun.",
+  })
   @ApiConsumes('multipart/form-data')
   @ApiParam({ name: 'id', description: 'Product ID (id)' })
   @ApiBody({ type: UpdateProductRequestDto })
@@ -697,17 +811,21 @@ export class CatalogGatewayController {
     @Body() dto: UpdateProductRequestDto,
     @Req() req: { user: JwtUser },
   ) {
-    let imageUrl = dto.image_url;
+    let imageUrl: string | null | undefined = dto.image_url;
     if (file) {
       imageUrl = await this.uploadImageAndResolveUrl(
         file,
         req as unknown as HttpRequestLike,
       );
+    } else if (wantsProductImageRemoval(dto)) {
+      // j4kTqiSQ: «×» — saqlangan rasm olib tashlanadi (`image_url = NULL`).
+      imageUrl = null;
     }
     // `image` faylni yuqorida `image_url`ga aylantirdik — xom binary maydonni
     // servisga uzatmaymiz.
     const safeDto = { ...dto };
     delete safeDto.image;
+    delete safeDto.remove_image;
 
     return this.catalogClient
       .send(
