@@ -116,11 +116,15 @@ const ADMIN = { id: '2', roles: ['admin'] };
                 address: null,
                 region_id: REGION_SAM,
                 region: { id: REGION_SAM, name: 'Samarqand' },
-                eligible: true,
+                // Pa1KaXmj: `eligible` → ombor ochish / viloyat nomzodi.
+                is_hq: false,
+                can_host_warehouse: true,
+                regional: true,
               }
             : null,
         ),
       ),
+      getHqBranchId: jest.fn(() => Promise.resolve(HQ_BRANCH)),
       getBranches: jest.fn(async (ids: string[]) => {
         const map = new Map();
         for (const id of ids) map.set(id, await directory.getBranch(id));

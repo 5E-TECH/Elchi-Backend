@@ -482,3 +482,59 @@ export class TransferBatchHistoryResponseDto {
   @ApiProperty({ type: [TransferBatchHistoryItemDto] })
   data!: TransferBatchHistoryItemDto[];
 }
+
+/** Pa1KaXmj: `GET /branches/hq` — viloyat (`{ id, name }`). */
+export class HqBranchRegionDto {
+  @ApiProperty({ example: '1' })
+  id!: string;
+
+  @ApiProperty({ example: 'Toshkent shahri' })
+  name!: string;
+}
+
+/**
+ * Pa1KaXmj: HQ filiali — «Markaziy ombor» ochish oynasi uchun. Oq ro'yxat:
+ * pul/maosh maydonlari (`ownership`, `per_order_share`, menejer oyligi …)
+ * chiqmaydi.
+ */
+export class HqBranchDto {
+  @ApiProperty({ example: '1' })
+  id!: string;
+
+  @ApiProperty({ example: 'Bosh ofis (Toshkent)' })
+  name!: string;
+
+  @ApiProperty({ example: 'HQ-TSHKNT', nullable: true, type: String })
+  code!: string | null;
+
+  @ApiProperty({ enum: BranchType, example: BranchType.HQ })
+  type!: string;
+
+  @ApiProperty({ example: 'active', enum: ['active', 'inactive'] })
+  status!: string;
+
+  @ApiProperty({ example: null, nullable: true, type: String })
+  address!: string | null;
+
+  @ApiProperty({ example: '1', nullable: true, type: String })
+  region_id!: string | null;
+
+  @ApiProperty({
+    type: HqBranchRegionDto,
+    nullable: true,
+    description:
+      "Logistika hududi nomi bilan; `region_id` yo'q yoki hudud olinmasa — null",
+  })
+  region!: HqBranchRegionDto | null;
+}
+
+export class HqBranchResponseDto {
+  @ApiProperty({ example: 200 })
+  statusCode!: number;
+
+  @ApiProperty({ example: 'HQ branch' })
+  message!: string;
+
+  @ApiProperty({ type: HqBranchDto })
+  data!: HqBranchDto;
+}

@@ -18,8 +18,8 @@ import {
 /**
  * hY7uacJu — ombor modulining sof qismlari (DB'siz): «Hisob vazni», holat,
  * kod yorlig'i, kirish normalizatsiyasi, RMQ `scope` (fail-closed) va
- * boshqa servislar javobini o'qish (filial yaroqliligi, tuman → hudud,
- * market kaliti). DB oqimlari — `warehouse.pg.spec.ts`.
+ * boshqa servislar javobini o'qish (filial yaroqliligi — ombor ochish va
+ * viloyat nomzodi, HQ id, tuman → hudud, market kaliti). DB oqimlari — `warehouse.pg.spec.ts`.
  */
 const rpc = (fn: () => unknown) => {
   try {
@@ -224,13 +224,15 @@ describe('hY7uacJu — WarehouseDirectoryService', () => {
     };
   };
 
-  it('⭐ filial yaroqliligi: faqat FAOL REGIONAL/HYBRID; HQ/PICKUP/nofaol — yo`q', async () => {
-    for (const [type, status, eligible] of [
-      ['REGIONAL', 'active', true],
-      ['HYBRID', 'active', true],
-      ['HQ', 'active', false],
-      ['PICKUP', 'active', false],
-      ['REGIONAL', 'inactive', false],
+  it('⭐ Pa1KaXmj: ombor ochish — FAOL REGIONAL/HYBRID/HQ; viloyat nomzodi — faqat REGIONAL/HYBRID (HQ hech qachon); PICKUP/nofaol — yo`q', async () => {
+    for (const [type, status, deleted, can_host_warehouse, regional, is_hq] of [
+      ['REGIONAL', 'active', false, true, true, false],
+      ['HYBRID', 'active', false, true, true, false],
+      ['HQ', 'active', false, true, false, true],
+      ['HQ', 'inactive', false, false, false, true],
+      ['HQ', 'active', true, false, false, true],
+      ['PICKUP', 'active', false, false, false, false],
+      ['REGIONAL', 'inactive', false, false, false, false],
     ] as const) {
       const { service } = make({
         'branch.find_by_id': () => ({
@@ -239,15 +241,58 @@ describe('hY7uacJu — WarehouseDirectoryService', () => {
             name: 'F',
             type,
             status,
+            is_deleted: deleted,
             region: { id: '7', name: 'Samarqand' },
           },
         }),
       });
-      await expect(service.getBranch('11')).resolves.toMatchObject({
-        eligible,
+      const branch = await service.getBranch('11');
+      expect(branch).toMatchObject({
+        can_host_warehouse,
+        regional,
+        is_hq,
         region_id: '7',
         region: { id: '7', name: 'Samarqand' },
       });
+      expect(branch).not.toHaveProperty('eligible');
+    }
+  });
+
+  it('⭐ Pa1KaXmj: HQ filial id — `branch.find_hq` dan, keshlanadi; 404 — null; servis javob bermasa — oxirgi ma`lum qiymat yoki null', async () => {
+    const { service, client } = make({
+      'branch.find_hq': () => ({
+        statusCode: 200,
+        data: { id: 1, type: 'HQ' },
+      }),
+    });
+    await expect(service.getHqBranchId()).resolves.toBe('1');
+    await expect(service.getHqBranchId()).resolves.toBe('1');
+    expect(client.send).toHaveBeenCalledTimes(1);
+    expect(client.send).toHaveBeenCalledWith({ cmd: 'branch.find_hq' }, {});
+
+    const missing = make({
+      'branch.find_hq': () =>
+        Object.assign(new Error('x'), { statusCode: 404 }),
+    });
+    await expect(missing.service.getHqBranchId()).resolves.toBeNull();
+
+    const down = make({ 'branch.find_hq': () => new Error('timeout') });
+    await expect(down.service.getHqBranchId()).resolves.toBeNull();
+
+    // Kesh eskirgach servis yiqilsa — oxirgi ma'lum id qaytadi.
+    let up = true;
+    const flaky = make({
+      'branch.find_hq': () => (up ? { data: { id: '1' } } : new Error('down')),
+    });
+    const now = jest.spyOn(Date, 'now').mockReturnValue(1_000);
+    try {
+      await expect(flaky.service.getHqBranchId()).resolves.toBe('1');
+      up = false;
+      now.mockReturnValue(1_000 + 6 * 60_000);
+      await expect(flaky.service.getHqBranchId()).resolves.toBe('1');
+      expect(flaky.client.send).toHaveBeenCalledTimes(2);
+    } finally {
+      now.mockRestore();
     }
   });
 

@@ -15,6 +15,7 @@ import {
   WAREHOUSE_NAME_MAX,
   WAREHOUSE_NOTE_MAX,
   WAREHOUSE_STOCK_LEVELS,
+  type WarehouseKind,
   type WarehouseSourceReason,
   type WarehouseStatus,
   type WarehouseStockLevel,
@@ -142,6 +143,9 @@ const str = (value: unknown): string =>
   typeof value === 'string' || typeof value === 'number'
     ? String(value).trim()
     : '';
+
+/** Pa1KaXmj: HQ filialidagi ombor nomi sukuti (UI atamasi). */
+const HQ_WAREHOUSE_DEFAULT_NAME = 'Markaziy ombor';
 
 const asList = (raw: unknown): string[] =>
   (Array.isArray(raw)
@@ -277,6 +281,22 @@ export class WarehouseService {
     };
   }
 
+  /**
+   * Pa1KaXmj: ombor turi. Filial ma'lumoti bo'lsa — uning turi (`is_hq`);
+   * filial olinmagan bo'lsa (servis javob bermadi) — keshlangan HQ id bilan
+   * solishtiriladi. Aniqlanmasa — `REGIONAL` (eski xulq).
+   */
+  private kindOf(
+    branchId: string,
+    branch: WarehouseBranchInfo | null | undefined,
+    hqBranchId: string | null,
+  ): WarehouseKind {
+    if (branch) return branch.is_hq ? 'HQ' : 'REGIONAL';
+    return hqBranchId !== null && String(branchId) === hqBranchId
+      ? 'HQ'
+      : 'REGIONAL';
+  }
+
   private branchView(branch: WarehouseBranchInfo | null | undefined) {
     if (!branch) return null;
     return {
@@ -296,6 +316,7 @@ export class WarehouseService {
       stats?: WarehouseStatsRow;
       reservedOrders?: number;
       lastMovement?: LastMovementRow;
+      hqBranchId?: string | null;
     },
   ) {
     const branch = extra.branch ?? null;
@@ -305,6 +326,7 @@ export class WarehouseService {
       id: warehouse.id,
       name: warehouse.name,
       status: warehouse.status,
+      kind: this.kindOf(warehouse.branch_id, branch, extra.hqBranchId ?? null),
       branch_id: warehouse.branch_id,
       branch: this.branchView(branch),
       region: branch?.region ?? null,
@@ -393,8 +415,10 @@ export class WarehouseService {
   // ------------------------------------------------------------------
 
   /**
-   * Ombor ochish (qaror 1): faqat FAOL viloyat filialida (REGIONAL/HYBRID),
-   * bitta filial — bitta ombor. Nom berilmasa «<filial> ombori».
+   * Ombor ochish (qaror 1): faqat FAOL REGIONAL/HYBRID filialda yoki HQ'da
+   * (Pa1KaXmj — «Markaziy ombor»), bitta filial — bitta ombor. Nom berilmasa
+   * «<filial> ombori» (HQ'da — «Markaziy ombor»). Markaziy omborga mas'ul
+   * menejer biriktirilmaydi (`manager_user_id` — 400, sukut `null`).
    */
   async create(
     dto: WarehouseWriteInput,
@@ -409,10 +433,14 @@ export class WarehouseService {
       fresh: true,
     });
     if (!branch) rpcError(404, `Filial #${branchId} topilmadi`);
-    if (!branch.eligible) {
+    if (!branch.can_host_warehouse) {
       badRequest(
-        "Ombor faqat faol viloyat filialida (REGIONAL yoki HYBRID) ochiladi — HQ va topshirish punktida ombor yo'q",
+        "Ombor faqat faol filialda (HQ, REGIONAL yoki HYBRID) ochiladi — topshirish punktida ombor yo'q",
       );
+    }
+    const isHq = branch.is_hq;
+    if (isHq && input.managerUserId) {
+      badRequest("Markaziy omborga mas'ul menejer biriktirilmaydi");
     }
     if (input.managerUserId) {
       await this.assertBranchManager(branchId, input.managerUserId);
@@ -428,14 +456,18 @@ export class WarehouseService {
 
     const name =
       input.name ??
-      `${branch.name || `Filial #${branchId}`} ombori`.slice(
-        0,
-        WAREHOUSE_NAME_MAX,
-      );
+      (isHq
+        ? HQ_WAREHOUSE_DEFAULT_NAME
+        : `${branch.name || `Filial #${branchId}`} ombori`.slice(
+            0,
+            WAREHOUSE_NAME_MAX,
+          ));
     // XtcEyQjb: tanlanmagan (yoki `null`) — filialning birinchi faol menejeri.
-    const managerUserId =
-      input.managerUserId ??
-      (await this.directory.getFirstActiveBranchManagerId(branchId));
+    // Pa1KaXmj: Markaziy omborda mas'ul yo'q — har doim `null`.
+    const managerUserId = isHq
+      ? null
+      : (input.managerUserId ??
+        (await this.directory.getFirstActiveBranchManagerId(branchId)));
     let saved: Warehouse;
     try {
       saved = await this.warehouseRepo.save(
@@ -464,13 +496,19 @@ export class WarehouseService {
       new_value: this.auditSnapshot(saved),
       user_id: actor.id,
       user_role: actor.role,
-      description: `Ombor #${saved.id} ochildi (filial #${branchId})`,
+      description: isHq
+        ? `Markaziy ombor #${saved.id} ochildi (HQ filiali #${branchId})`
+        : `Ombor #${saved.id} ochildi (filial #${branchId})`,
     });
 
     return this.findOne(saved.id, null);
   }
 
-  /** Ombor ma'lumotlari (filial o'zgarmaydi). `null` — maydonni tozalash. */
+  /**
+   * Ombor ma'lumotlari (filial o'zgarmaydi). `null` — maydonni tozalash.
+   * Pa1KaXmj: Markaziy omborda `manager_user_id` — 400, `null` — `null`
+   * qoladi (avtomatik tanlov yo'q).
+   */
   async update(
     id: unknown,
     dto: WarehouseWriteInput,
@@ -484,18 +522,26 @@ export class WarehouseService {
     const actor = normalizeActor(requester);
     const before = this.auditSnapshot(warehouse);
 
+    const isHq =
+      input.managerUserId !== undefined &&
+      (await this.directory.getBranch(warehouse.branch_id, { strict: true }))
+        ?.is_hq === true;
+    if (isHq && input.managerUserId) {
+      badRequest("Markaziy omborga mas'ul menejer biriktirilmaydi");
+    }
     if (input.managerUserId) {
       await this.assertBranchManager(warehouse.branch_id, input.managerUserId);
     }
     if (input.name) warehouse.name = input.name;
     if (input.managerUserId !== undefined) {
       // XtcEyQjb: `manager_user_id: null` — filialning birinchi faol menejeri
-      // (yo'q bo'lsa null).
-      warehouse.manager_user_id =
-        input.managerUserId ??
-        (await this.directory.getFirstActiveBranchManagerId(
-          warehouse.branch_id,
-        ));
+      // (yo'q bo'lsa null). Pa1KaXmj: Markaziy omborda — `null`.
+      warehouse.manager_user_id = isHq
+        ? null
+        : (input.managerUserId ??
+          (await this.directory.getFirstActiveBranchManagerId(
+            warehouse.branch_id,
+          )));
     }
     if (input.address !== undefined) warehouse.address = input.address;
     if (input.note !== undefined) warehouse.note = input.note;
@@ -616,7 +662,7 @@ export class WarehouseService {
       order: { name: 'ASC', id: 'ASC' },
     });
     const ids = warehouses.map((warehouse) => warehouse.id);
-    const [branches, stats, reservedOrders, lastMovements, managers] =
+    const [branches, stats, reservedOrders, lastMovements, managers, hqId] =
       await Promise.all([
         this.directory.getBranches(warehouses.map((w) => w.branch_id)),
         this.stats(ids),
@@ -627,6 +673,9 @@ export class WarehouseService {
             .map((w) => w.manager_user_id)
             .filter((id): id is string => !!id),
         ),
+        warehouses.length
+          ? this.directory.getHqBranchId()
+          : Promise.resolve(null),
       ]);
 
     const views = warehouses.map((warehouse) =>
@@ -638,6 +687,7 @@ export class WarehouseService {
         stats: stats.get(warehouse.id),
         reservedOrders: reservedOrders.get(warehouse.id),
         lastMovement: lastMovements.get(warehouse.id),
+        hqBranchId: hqId,
       }),
     );
 
@@ -701,21 +751,29 @@ export class WarehouseService {
   async findOne(id: unknown, scope?: WarehouseScope | null) {
     const warehouse = await this.getWarehouse(id, scope);
     const ids = [warehouse.id];
-    const [branch, stats, reservedOrders, lastMovements, managers, counts] =
-      await Promise.all([
-        this.directory.getBranch(warehouse.branch_id),
-        this.stats(ids),
-        this.reservedOrders(ids),
-        this.lastMovements(ids),
-        this.directory.getUsers(
-          warehouse.manager_user_id ? [warehouse.manager_user_id] : [],
-        ),
-        this.manager.query<Array<{ movements: number }>>(
-          `SELECT count(*)::int AS movements FROM ${this.t(StockMovement)}
+    const [
+      branch,
+      stats,
+      reservedOrders,
+      lastMovements,
+      managers,
+      counts,
+      hqId,
+    ] = await Promise.all([
+      this.directory.getBranch(warehouse.branch_id),
+      this.stats(ids),
+      this.reservedOrders(ids),
+      this.lastMovements(ids),
+      this.directory.getUsers(
+        warehouse.manager_user_id ? [warehouse.manager_user_id] : [],
+      ),
+      this.manager.query<Array<{ movements: number }>>(
+        `SELECT count(*)::int AS movements FROM ${this.t(StockMovement)}
             WHERE "warehouse_id" = $1`,
-          [warehouse.id],
-        ),
-      ]);
+        [warehouse.id],
+      ),
+      this.directory.getHqBranchId(),
+    ]);
     return {
       ...this.warehouseView(warehouse, {
         branch,
@@ -725,6 +783,7 @@ export class WarehouseService {
         stats: stats.get(warehouse.id),
         reservedOrders: reservedOrders.get(warehouse.id),
         lastMovement: lastMovements.get(warehouse.id),
+        hqBranchId: hqId,
       }),
       movements_count: counts[0]?.movements ?? 0,
     };
@@ -1133,7 +1192,7 @@ export class WarehouseService {
       params.push(`%${search.replace(/[\\%_]/g, (ch) => `\\${ch}`)}%`);
       searchSql = ` AND p."name" ILIKE $${params.length}`;
     }
-    const [rows, productTotals, branches] = await Promise.all([
+    const [rows, productTotals, branches, hqId] = await Promise.all([
       this.manager.query<MarketStockRow[]>(
         `SELECT s."warehouse_id"::text AS warehouse_id,
                 s."product_id"::text AS product_id, s."on_hand", s."reserved",
@@ -1152,6 +1211,9 @@ export class WarehouseService {
         [marketId],
       ),
       this.directory.getBranches(warehouses.map((w) => w.branch_id)),
+      warehouses.length
+        ? this.directory.getHqBranchId()
+        : Promise.resolve(null),
     ]);
 
     const byProduct = new Map<
@@ -1223,6 +1285,7 @@ export class WarehouseService {
           id: warehouse.id,
           name: warehouse.name,
           status: warehouse.status,
+          kind: this.kindOf(warehouse.branch_id, branch, hqId),
           branch: branch ? { id: branch.id, name: branch.name } : null,
           region: branch?.region ?? null,
         };
@@ -1251,7 +1314,11 @@ export class WarehouseService {
   // Buyurtma manbasi (qaror 4) — order-service va yaratish formasi
   // ------------------------------------------------------------------
 
-  /** Hudud (viloyat/logistika hududi) filialidagi omborlar, id bo'yicha. */
+  /**
+   * Hudud (viloyat/logistika hududi) filialidagi omborlar, id bo'yicha.
+   * Pa1KaXmj: faqat viloyat filiallari (REGIONAL/HYBRID) — Markaziy ombor
+   * (HQ) hech qachon nomzod emas, HQ'ning `region_id` si mos kelsa ham.
+   */
   private async candidatesForRegion(regionId: string) {
     const warehouses = await this.warehouseRepo.find({
       where: { isDeleted: false },
@@ -1268,7 +1335,7 @@ export class WarehouseService {
       .filter(
         (item): item is { warehouse: Warehouse; branch: WarehouseBranchInfo } =>
           !!item.branch &&
-          item.branch.eligible &&
+          item.branch.regional &&
           item.branch.region_id === regionId,
       );
   }
@@ -1281,6 +1348,7 @@ export class WarehouseService {
       id: item.warehouse.id,
       name: item.warehouse.name,
       status: item.warehouse.status,
+      kind: this.kindOf(item.warehouse.branch_id, item.branch, null),
       branch_id: item.branch.id,
       branch_name: item.branch.name,
       region_id: item.branch.region_id,
@@ -1521,11 +1589,16 @@ export class WarehouseService {
     const warehouses = await this.warehouseRepo.find({
       where: { id: In(list) },
     });
+    // Pa1KaXmj: `kind` — filial ma'lumotisiz, keshlangan HQ id bo'yicha.
+    const hqId = warehouses.length
+      ? await this.directory.getHqBranchId()
+      : null;
     return {
       data: warehouses.map((warehouse) => ({
         id: warehouse.id,
         name: warehouse.name,
         status: warehouse.status,
+        kind: this.kindOf(warehouse.branch_id, null, hqId),
         branch_id: warehouse.branch_id,
       })),
     };

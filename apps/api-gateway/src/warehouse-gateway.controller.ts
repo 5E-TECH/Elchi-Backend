@@ -332,7 +332,7 @@ export class WarehouseGatewayController {
   @ApiOperation({
     summary: 'Buyurtma manbasi: ombor yoki HQ (faqat hisoblaydi)',
     description:
-      "Qaror 4: buyurtma tumani filialida FAOL ombor bo'lsa va HAMMA mahsulot yetarli bo'lsa — `source: WAREHOUSE`, aks holda butun buyurtma `HQ` (bo'linmaydi), `reason` va `shortages` bilan. Hech narsa band qilinmaydi — band order-service yaratishda (`catalog.warehouse.reserve`). MARKET/MARKET_OPERATOR — faqat o'z marketi; market kaliti «Ombordan buyurtma yaratish» o'chiq bo'lsa — `HQ` + `MARKET_NOT_ALLOWED`.",
+      "Qaror 4: buyurtma tumani viloyat filialida (REGIONAL/HYBRID) FAOL ombor bo'lsa va HAMMA mahsulot yetarli bo'lsa — `source: WAREHOUSE` (`warehouse.kind: REGIONAL`), aks holda butun buyurtma `HQ` (bo'linmaydi), `reason` va `shortages` bilan. Markaziy ombor (HQ filiali, `kind: HQ`) bu bosqichda manba nomzodi EMAS (Pa1KaXmj). Hech narsa band qilinmaydi — band order-service yaratishda (`catalog.warehouse.reserve`). MARKET/MARKET_OPERATOR — faqat o'z marketi; market kaliti «Ombordan buyurtma yaratish» o'chiq bo'lsa — `HQ` + `MARKET_NOT_ALLOWED`.",
   })
   @ApiBody({ type: WarehouseResolveSourceRequestDto })
   @ApiOkResponse({ type: WarehouseResolveSourceResponseDto })
@@ -355,7 +355,7 @@ export class WarehouseGatewayController {
   @ApiOperation({
     summary: '«Omborda: N» — hudud omboridagi mavjud dona (yaratish formasi)',
     description:
-      "Tuman (yoki hudud) filialidagi birinchi FAOL ombor; `market_id` mahsulotlari yoki `product_ids` (vergul bilan, ≤500). Ombor to'xtatilgan bo'lsa — `warehouse.status = PAUSED`, `items: []`. MARKET/MARKET_OPERATOR — faqat o'z marketi.",
+      "Tuman (yoki hudud) viloyat filialidagi (REGIONAL/HYBRID) birinchi FAOL ombor — Markaziy ombor (HQ) hisobga olinmaydi; `market_id` mahsulotlari yoki `product_ids` (vergul bilan, ≤500). Ombor to'xtatilgan bo'lsa — `warehouse.status = PAUSED`, `items: []`. MARKET/MARKET_OPERATOR — faqat o'z marketi.",
   })
   @ApiQuery({ name: 'district_id', required: false, type: String })
   @ApiQuery({ name: 'region_id', required: false, type: String })
@@ -507,7 +507,7 @@ export class WarehouseGatewayController {
   @ApiOperation({
     summary: 'Ombor ochish',
     description:
-      "Faqat FAOL viloyat filialida (REGIONAL/HYBRID); bitta filial — bitta ombor (409). Nom berilmasa — «<filial> ombori». Mas'ul xodim — shu filial menejeri (aks holda 400); berilmasa — filialning birinchi faol menejeri (yo'q bo'lsa `null`). Yangi ombor — FAOL.",
+      "Faqat FAOL filialda — REGIONAL/HYBRID (viloyat ombori, `kind: REGIONAL`) yoki HQ («Markaziy ombor», `kind: HQ`); PICKUP va nofaol filial — 400 «Ombor faqat faol filialda (HQ, REGIONAL yoki HYBRID) ochiladi — topshirish punktida ombor yo'q». Bitta filial — bitta ombor (409; HQ bitta — Markaziy ombor ham bitta). Nom berilmasa — «<filial> ombori», HQ'da — «Markaziy ombor». Mas'ul xodim — shu filial menejeri (aks holda 400); berilmasa — filialning birinchi faol menejeri (yo'q bo'lsa `null`). HQ'da mas'ul biriktirilmaydi: `manager_user_id` berilsa — 400 «Markaziy omborga mas'ul menejer biriktirilmaydi», sukut `null`. Yangi ombor — FAOL. HQ filiali — `GET /branches/hq`.",
   })
   @ApiBody({ type: CreateWarehouseRequestDto })
   @ApiCreatedResponse({ type: WarehouseDetailDto })
@@ -540,7 +540,7 @@ export class WarehouseGatewayController {
   @ApiOperation({
     summary: "Ombor ma'lumotlarini tahrirlash",
     description:
-      "Filial o'zgarmaydi. `null` — maydonni tozalash; `manager_user_id: null` — filialning birinchi faol menejeri (yo'q bo'lsa `null`).",
+      "Filial o'zgarmaydi. `null` — maydonni tozalash; `manager_user_id: null` — filialning birinchi faol menejeri (yo'q bo'lsa `null`). Markaziy omborda (HQ) `manager_user_id` — 400, `null` — `null` qoladi.",
   })
   @ApiParam({ name: 'id', description: 'Warehouse ID' })
   @ApiBody({ type: UpdateWarehouseRequestDto })

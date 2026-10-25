@@ -8,6 +8,13 @@ const SYSTEM_REQUESTER = { id: 'system', roles: ['superadmin'] };
 const RPC_TIMEOUT_MS = 5000;
 /** Filial ma'lumoti keshi — har buyurtmada branch-service'ga bormaslik uchun. */
 const BRANCH_CACHE_TTL_MS = 30_000;
+/**
+ * Pa1KaXmj: HQ filial id keshi. Tizimda HQ bitta va u o'zgarmaydi — 5 daqiqa;
+ * topilmasa (404) — qisqa kesh (filial keshi bilan bir xil). Servis javob
+ * bermasa keshlanmaydi: oxirgi ma'lum qiymat qaytadi, keyingi so'rov qayta
+ * urinadi.
+ */
+const HQ_CACHE_TTL_MS = 5 * 60_000;
 
 export interface WarehouseBranchInfo {
   id: string;
@@ -17,8 +24,19 @@ export interface WarehouseBranchInfo {
   address: string | null;
   region_id: string | null;
   region: { id: string; name: string } | null;
-  /** Viloyat filiali (REGIONAL/HYBRID), faol va o'chirilmagan. */
-  eligible: boolean;
+  /** Pa1KaXmj: HQ filiali (turi `HQ`; holatidan qat'i nazar). */
+  is_hq: boolean;
+  /**
+   * Pa1KaXmj: bu filialda ombor ochish mumkin — faol, o'chirilmagan
+   * REGIONAL, HYBRID yoki HQ (Markaziy ombor). PICKUP — hech qachon.
+   */
+  can_host_warehouse: boolean;
+  /**
+   * Viloyat filiali (REGIONAL/HYBRID), faol va o'chirilmagan — buyurtma
+   * manbasi nomzodi (`resolve_source`/`availability`). HQ — HECH QACHON
+   * (uning `region_id` si bo'lsa ham).
+   */
+  regional: boolean;
 }
 
 export interface WarehouseUserInfo {
@@ -51,7 +69,14 @@ const unwrap = (value: unknown): unknown => {
   return record && 'data' in record ? record.data : value;
 };
 
-const ELIGIBLE_BRANCH_TYPES = new Set<string>([
+/** Pa1KaXmj: ombor ochish mumkin bo'lgan filial turlari. */
+const HOST_BRANCH_TYPES = new Set<string>([
+  BranchType.REGIONAL,
+  BranchType.HYBRID,
+  BranchType.HQ,
+]);
+/** Viloyat ombori (buyurtma manbasi nomzodi) turlari — HQ'siz. */
+const REGIONAL_BRANCH_TYPES = new Set<string>([
   BranchType.REGIONAL,
   BranchType.HYBRID,
 ]);
@@ -69,6 +94,7 @@ export class WarehouseDirectoryService {
     string,
     { at: number; value: WarehouseBranchInfo | null }
   >();
+  private hqCache: { at: number; value: string | null } | null = null;
 
   constructor(
     @Inject('BRANCH') private readonly branchClient: ClientProxy,
@@ -102,6 +128,7 @@ export class WarehouseDirectoryService {
     const type = str(row.type) || null;
     const status = str(row.status) || null;
     const deleted = row.isDeleted === true || row.is_deleted === true;
+    const active = !deleted && status === Status.ACTIVE && type !== null;
     return {
       id,
       name: str(row.name),
@@ -113,12 +140,42 @@ export class WarehouseDirectoryService {
         region && str(region.id)
           ? { id: str(region.id), name: str(region.name) }
           : null,
-      eligible:
-        !deleted &&
-        status === Status.ACTIVE &&
-        type !== null &&
-        ELIGIBLE_BRANCH_TYPES.has(type),
+      is_hq: type === BranchType.HQ,
+      can_host_warehouse: active && HOST_BRANCH_TYPES.has(type),
+      regional: active && REGIONAL_BRANCH_TYPES.has(type),
     };
+  }
+
+  /**
+   * Pa1KaXmj: HQ filial id (`branch.find_hq`, keshlangan). O'qish yo'li —
+   * topilmasa yoki servis javob bermasa `null` (oxirgi ma'lum qiymat bo'lsa
+   * — o'sha). Ombor turini (`kind`) filial ma'lumotisiz aniqlash uchun.
+   */
+  async getHqBranchId(): Promise<string | null> {
+    const cached = this.hqCache;
+    if (
+      cached &&
+      Date.now() - cached.at <
+        (cached.value ? HQ_CACHE_TTL_MS : BRANCH_CACHE_TTL_MS)
+    ) {
+      return cached.value;
+    }
+    try {
+      const response = await this.send(this.branchClient, 'branch.find_hq', {});
+      const value = str(asRecord(unwrap(response))?.id) || null;
+      this.hqCache = { at: Date.now(), value };
+      return value;
+    } catch (error) {
+      const statusCode = asRecord(error)?.statusCode;
+      if (statusCode === 404) {
+        this.hqCache = { at: Date.now(), value: null };
+        return null;
+      }
+      this.logger.warn(
+        `branch.find_hq olinmadi: ${(error as Error)?.message ?? String(error)}`,
+      );
+      return cached?.value ?? null;
+    }
   }
 
   /**

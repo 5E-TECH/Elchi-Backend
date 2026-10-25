@@ -14896,6 +14896,38 @@
         ]
       }
     },
+    "/branches/hq": {
+      "get": {
+        "description": "Javob `{ statusCode, message, data: { id, name, code, type, status, address, region_id, region: { id, name } | null } }`. «Ombor ochish» oynasida HQ shu yerdan olinadi (Markaziy ombor), viloyat filiallari — `GET /branches/dispatch-destinations`. HQ topilmasa — 404.",
+        "operationId": "BranchGatewayController_findHqBranch",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HqBranchResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "HQ filiali (Markaziy ombor ochish uchun, pul maydonlarisiz)",
+        "tags": [
+          "Branch"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
+        ]
+      }
+    },
     "/branches/new-orders": {
       "get": {
         "operationId": "BranchGatewayController_findBranchesWithNewOrders",
@@ -19118,7 +19150,7 @@
     },
     "/warehouses/resolve-source": {
       "post": {
-        "description": "Qaror 4: buyurtma tumani filialida FAOL ombor bo'lsa va HAMMA mahsulot yetarli bo'lsa — `source: WAREHOUSE`, aks holda butun buyurtma `HQ` (bo'linmaydi), `reason` va `shortages` bilan. Hech narsa band qilinmaydi — band order-service yaratishda (`catalog.warehouse.reserve`). MARKET/MARKET_OPERATOR — faqat o'z marketi; market kaliti «Ombordan buyurtma yaratish» o'chiq bo'lsa — `HQ` + `MARKET_NOT_ALLOWED`.",
+        "description": "Qaror 4: buyurtma tumani viloyat filialida (REGIONAL/HYBRID) FAOL ombor bo'lsa va HAMMA mahsulot yetarli bo'lsa — `source: WAREHOUSE` (`warehouse.kind: REGIONAL`), aks holda butun buyurtma `HQ` (bo'linmaydi), `reason` va `shortages` bilan. Markaziy ombor (HQ filiali, `kind: HQ`) bu bosqichda manba nomzodi EMAS (Pa1KaXmj). Hech narsa band qilinmaydi — band order-service yaratishda (`catalog.warehouse.reserve`). MARKET/MARKET_OPERATOR — faqat o'z marketi; market kaliti «Ombordan buyurtma yaratish» o'chiq bo'lsa — `HQ` + `MARKET_NOT_ALLOWED`.",
         "operationId": "WarehouseGatewayController_resolveSource",
         "parameters": [],
         "requestBody": {
@@ -19163,7 +19195,7 @@
     },
     "/warehouses/availability": {
       "get": {
-        "description": "Tuman (yoki hudud) filialidagi birinchi FAOL ombor; `market_id` mahsulotlari yoki `product_ids` (vergul bilan, ≤500). Ombor to'xtatilgan bo'lsa — `warehouse.status = PAUSED`, `items: []`. MARKET/MARKET_OPERATOR — faqat o'z marketi.",
+        "description": "Tuman (yoki hudud) viloyat filialidagi (REGIONAL/HYBRID) birinchi FAOL ombor — Markaziy ombor (HQ) hisobga olinmaydi; `market_id` mahsulotlari yoki `product_ids` (vergul bilan, ≤500). Ombor to'xtatilgan bo'lsa — `warehouse.status = PAUSED`, `items: []`. MARKET/MARKET_OPERATOR — faqat o'z marketi.",
         "operationId": "WarehouseGatewayController_availability",
         "parameters": [
           {
@@ -19435,7 +19467,7 @@
         ]
       },
       "post": {
-        "description": "Faqat FAOL viloyat filialida (REGIONAL/HYBRID); bitta filial — bitta ombor (409). Nom berilmasa — «<filial> ombori». Mas'ul xodim — shu filial menejeri (aks holda 400); berilmasa — filialning birinchi faol menejeri (yo'q bo'lsa `null`). Yangi ombor — FAOL.",
+        "description": "Faqat FAOL filialda — REGIONAL/HYBRID (viloyat ombori, `kind: REGIONAL`) yoki HQ («Markaziy ombor», `kind: HQ`); PICKUP va nofaol filial — 400 «Ombor faqat faol filialda (HQ, REGIONAL yoki HYBRID) ochiladi — topshirish punktida ombor yo'q». Bitta filial — bitta ombor (409; HQ bitta — Markaziy ombor ham bitta). Nom berilmasa — «<filial> ombori», HQ'da — «Markaziy ombor». Mas'ul xodim — shu filial menejeri (aks holda 400); berilmasa — filialning birinchi faol menejeri (yo'q bo'lsa `null`). HQ'da mas'ul biriktirilmaydi: `manager_user_id` berilsa — 400 «Markaziy omborga mas'ul menejer biriktirilmaydi», sukut `null`. Yangi ombor — FAOL. HQ filiali — `GET /branches/hq`.",
         "operationId": "WarehouseGatewayController_create",
         "parameters": [],
         "requestBody": {
@@ -19522,7 +19554,7 @@
         ]
       },
       "patch": {
-        "description": "Filial o'zgarmaydi. `null` — maydonni tozalash; `manager_user_id: null` — filialning birinchi faol menejeri (yo'q bo'lsa `null`).",
+        "description": "Filial o'zgarmaydi. `null` — maydonni tozalash; `manager_user_id: null` — filialning birinchi faol menejeri (yo'q bo'lsa `null`). Markaziy omborda (HQ) `manager_user_id` — 400, `null` — `null` qoladi.",
         "operationId": "WarehouseGatewayController_update",
         "parameters": [
           {
@@ -26956,6 +26988,110 @@
           "code"
         ]
       },
+      "HqBranchRegionDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "1"
+          },
+          "name": {
+            "type": "string",
+            "example": "Toshkent shahri"
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ]
+      },
+      "HqBranchDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "1"
+          },
+          "name": {
+            "type": "string",
+            "example": "Bosh ofis (Toshkent)"
+          },
+          "code": {
+            "type": "string",
+            "example": "HQ-TSHKNT",
+            "nullable": true
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "HQ",
+              "PICKUP",
+              "REGIONAL",
+              "HYBRID"
+            ],
+            "example": "HQ"
+          },
+          "status": {
+            "type": "string",
+            "example": "active",
+            "enum": [
+              "active",
+              "inactive"
+            ]
+          },
+          "address": {
+            "type": "string",
+            "example": null,
+            "nullable": true
+          },
+          "region_id": {
+            "type": "string",
+            "example": "1",
+            "nullable": true
+          },
+          "region": {
+            "nullable": true,
+            "description": "Logistika hududi nomi bilan; `region_id` yo'q yoki hudud olinmasa — null",
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/HqBranchRegionDto"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "code",
+          "type",
+          "status",
+          "address",
+          "region_id",
+          "region"
+        ]
+      },
+      "HqBranchResponseDto": {
+        "type": "object",
+        "properties": {
+          "statusCode": {
+            "type": "number",
+            "example": 200
+          },
+          "message": {
+            "type": "string",
+            "example": "HQ branch"
+          },
+          "data": {
+            "$ref": "#/components/schemas/HqBranchDto"
+          }
+        },
+        "required": [
+          "statusCode",
+          "message",
+          "data"
+        ]
+      },
       "CreateBranchTransferBatchesRequestDto": {
         "type": "object",
         "properties": {
@@ -28636,6 +28772,15 @@
               "PAUSED"
             ]
           },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "REGIONAL",
+              "HQ"
+            ],
+            "example": "REGIONAL",
+            "description": "Pa1KaXmj: manba nomzodi — hozircha faqat viloyat ombori (REGIONAL)"
+          },
           "branch_id": {
             "type": "string",
             "example": "11"
@@ -28657,6 +28802,7 @@
           "id",
           "name",
           "status",
+          "kind",
           "branch_id",
           "branch_name"
         ]
@@ -28862,6 +29008,15 @@
               "PAUSED"
             ]
           },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "REGIONAL",
+              "HQ"
+            ],
+            "example": "HQ",
+            "description": "Pa1KaXmj: HQ — «Markaziy ombor» ustuni"
+          },
           "branch": {
             "nullable": true,
             "type": "object",
@@ -28884,7 +29039,8 @@
         "required": [
           "id",
           "name",
-          "status"
+          "status",
+          "kind"
         ]
       },
       "WarehouseCodeDto": {
@@ -29215,7 +29371,8 @@
           "type": {
             "type": "string",
             "nullable": true,
-            "example": "REGIONAL"
+            "example": "REGIONAL",
+            "description": "Filial turi: REGIONAL, HYBRID yoki HQ (Markaziy ombor)"
           },
           "status": {
             "type": "string",
@@ -29381,6 +29538,15 @@
             ],
             "example": "ACTIVE"
           },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "REGIONAL",
+              "HQ"
+            ],
+            "example": "REGIONAL",
+            "description": "Pa1KaXmj: REGIONAL — viloyat filiali (REGIONAL/HYBRID) ombori; HQ — «Markaziy ombor» (HQ filialida, ko'pi bilan bitta). Filialdan hisoblanadi."
+          },
           "branch_id": {
             "type": "string",
             "example": "11"
@@ -29473,6 +29639,7 @@
           "id",
           "name",
           "status",
+          "kind",
           "branch_id",
           "low_stock_default",
           "created_at",
@@ -29612,19 +29779,19 @@
           "branch_id": {
             "type": "string",
             "example": "11",
-            "description": "Viloyat filiali (REGIONAL yoki HYBRID, faol). Bitta filial — bitta ombor (takror — 409)."
+            "description": "Faol filial: REGIONAL/HYBRID yoki HQ («Markaziy ombor», Pa1KaXmj); PICKUP va nofaol — 400. Bitta filial — bitta ombor (takror — 409)."
           },
           "name": {
             "type": "string",
             "example": "Samarqand filiali ombori",
             "maxLength": 160,
-            "description": "Berilmasa — «<filial nomi> ombori»."
+            "description": "Berilmasa — «<filial nomi> ombori»; HQ filialida — «Markaziy ombor»."
           },
           "manager_user_id": {
             "type": "object",
             "example": "31",
             "nullable": true,
-            "description": "Mas'ul xodim — shu filialning menejeri (branch_users, rol MANAGER), aks holda 400. Berilmasa yoki `null` — filialning birinchi faol menejeri (foydalanuvchi id bo'yicha), menejer yo'q bo'lsa `null` (XtcEyQjb). Faqat ko'rsatish uchun: o'qish ruxsati filialdan."
+            "description": "Mas'ul xodim — shu filialning menejeri (branch_users, rol MANAGER), aks holda 400. Berilmasa yoki `null` — filialning birinchi faol menejeri (foydalanuvchi id bo'yicha), menejer yo'q bo'lsa `null` (XtcEyQjb). Faqat ko'rsatish uchun: o'qish ruxsati filialdan. HQ filialida (Markaziy ombor) berilmaydi — 400 «Markaziy omborga mas'ul menejer biriktirilmaydi»; sukut `null`."
           },
           "address": {
             "type": "object",
@@ -29668,6 +29835,15 @@
               "PAUSED"
             ],
             "example": "ACTIVE"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "REGIONAL",
+              "HQ"
+            ],
+            "example": "REGIONAL",
+            "description": "Pa1KaXmj: REGIONAL — viloyat filiali (REGIONAL/HYBRID) ombori; HQ — «Markaziy ombor» (HQ filialida, ko'pi bilan bitta). Filialdan hisoblanadi."
           },
           "branch_id": {
             "type": "string",
@@ -29766,6 +29942,7 @@
           "id",
           "name",
           "status",
+          "kind",
           "branch_id",
           "low_stock_default",
           "created_at",
@@ -29784,7 +29961,7 @@
           "manager_user_id": {
             "type": "object",
             "nullable": true,
-            "description": "Shu filial menejeri; `null` — filialning birinchi faol menejeri avtomatik (menejer yo'q bo'lsa `null`, XtcEyQjb)."
+            "description": "Shu filial menejeri; `null` — filialning birinchi faol menejeri avtomatik (menejer yo'q bo'lsa `null`, XtcEyQjb). Markaziy omborda (HQ) — aniq id 400, `null` — `null`."
           },
           "address": {
             "type": "object",
