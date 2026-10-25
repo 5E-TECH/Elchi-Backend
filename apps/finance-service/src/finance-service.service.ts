@@ -881,7 +881,12 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  private async enrichHistoryWithUsers(histories: CashboxHistory[]) {
+  private async enrichHistoryWithUsers<T extends CashboxHistory>(
+    histories: T[],
+    // (vf4513Zn) `getCashboxByUserId` kvitansiya javobini allaqachon
+    // `withPaymentAcks` (`payment_ack`) bilan beradi — qayta so'ralmasin.
+    options: { courierAck?: boolean } = {},
+  ) {
     if (!Array.isArray(histories) || !histories.length) {
       return histories;
     }
@@ -927,7 +932,9 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
       )
       .map((history) => String(history.id));
     const acks =
-      this.courierAcks && courierPaymentIds.length
+      options.courierAck !== false &&
+      this.courierAcks &&
+      courierPaymentIds.length
         ? await this.courierAcks.flags(courierPaymentIds).catch(() => null)
         : null;
     const ackOf = (history: CashboxHistory) =>
@@ -2866,13 +2873,35 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         order: { createdAt: 'DESC' },
       });
       const { income, outcome } = this.calcIncomeOutcome(rawHistory);
-      const cashboxHistory =
+      const ackedHistory =
         cashbox.cashbox_type === Cashbox_type.FOR_COURIER
           ? await this.withPaymentAcks(rawHistory)
           : rawHistory;
 
+      /**
+       * (vf4513Zn) my-cashbox / kassa sahifasi tarixida KONTRAGENT ismi:
+       * `source_user` (COURIER_PAYMENT / MARKET_PAYMENT — masalan menejer
+       * filial kassasidagi «Kuryerdan filialga o'tkazma» qatorida kuryer),
+       * `created_by_user` va kassa EGASI `cashbox.user` — faqat kuryer/market
+       * kassasida (CODE-08: BRANCH/MAIN `user_id` si odam emas — null).
+       * Identity javob bermasa — null (tarix baribir qaytadi).
+       */
+      const ownerIsUser =
+        cashbox.cashbox_type === Cashbox_type.FOR_COURIER ||
+        cashbox.cashbox_type === Cashbox_type.FOR_MARKET;
+      const [cashboxHistory, owners] = await Promise.all([
+        this.enrichHistoryWithUsers(ackedHistory, { courierAck: false }),
+        ownerIsUser
+          ? this.loadUsersByIds([String(cashbox.user_id)])
+          : Promise.resolve(new Map<string, any>()),
+      ]);
+      const cashboxWithOwner = {
+        ...cashbox,
+        user: owners.get(String(cashbox.user_id)) ?? null,
+      };
+
       return this.successRes(
-        { cashbox, cashboxHistory, income, outcome },
+        { cashbox: cashboxWithOwner, cashboxHistory, income, outcome },
         200,
         'Cashbox details',
       );

@@ -23,6 +23,20 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-10-25 — Kassa: my-cashbox tarixida kontragent (`source_user`) va kassa egasi (`cashbox.user`) (vf4513Zn)
+
+Deploy: faqat finance-service. Migratsiya yo'q. Endpoint/kontrakt kalitlari olib tashlanmagan — faqat QO'SHIMCHA maydonlar.
+
+- [2026-10-25] ✏️ [finance/cashbox] — **`GET /finance/cashbox/my-cashbox`** (kuryer, market, menejer), menejer
+  **`GET /finance/cashbox/main`** va **`GET /finance/cashbox/user/:id/main`** javobida (`finance.cashbox.user_by_id`):
+  - `data.cashboxHistory[]` qatorlariga `source_user` / `sourceUser` (faqat `courier_payment` va `market_payment`
+    qatorlarida — kuryer yoki market; boshqa turlarda `null`) va `created_by_user` / `createdByUser`
+    (identity `find_by_id` yozuvi yoki `null`). Kuryer kassasida `payment_ack` avvalgidek;
+  - `data.cashbox.user` — kassa EGASI: kuryer/market kassasida foydalanuvchi yozuvi, filial (`branch`) va asosiy
+    (`main`) kassada har doim `null` (filial id si odam emas — CODE-08).
+  🔧 FE (my-cashbox, M4): menejer filial kassasidagi «Kuryerdan filialga o'tkazma» qatorida kuryer ismi —
+  `row.source_user?.name`; kassa egasi nomi profil o'rniga `data.cashbox.user?.name` (kuryer/market).
+
 ### 2026-10-25 — Moliya: market operatori o'z daromadini ko'radi — `finance/operators/me/*` (E6iEOAVs)
 
 Deploy: faqat api-gateway (finance-service'dagi mavjud RMQ handler'lar qayta ishlatiladi). Migratsiya yo'q.
