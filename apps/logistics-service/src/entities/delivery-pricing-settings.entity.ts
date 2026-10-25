@@ -18,6 +18,20 @@ export class DeliveryPricingSettings extends BaseEntity {
   @Column({ type: 'int' })
   volumetric_divisor!: number;
 
+  /**
+   * (AQ9lkgVB, migratsiya 1716000000154) Hajm shu kg dan (≥) boshlab
+   * hisobga olinadi; hajmli vazn kichik bo'lsa — faqat haqiqiy og'irlik.
+   * 0 — har doim (oldingi xulq).
+   */
+  @Column({
+    type: 'numeric',
+    precision: 10,
+    scale: 3,
+    default: 0,
+    transformer: numericTransformer,
+  })
+  volumetric_from_kg!: number;
+
   /** Baza narxga kiradigan vazn, kg (1.0). */
   @Column({
     type: 'numeric',

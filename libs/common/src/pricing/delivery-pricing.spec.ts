@@ -725,3 +725,199 @@ describe('Elchi qo`shimchalari — numeric satrlar va kirish xatolari', () => {
     expect(run).toThrow(DeliveryPricingInputError);
   });
 });
+
+describe('AQ9lkgVB — hajm chegarasi (volumetric_from_kg)', () => {
+  const FROM_3: DeliveryPricingSettingsValues = {
+    ...SEED_SETTINGS,
+    volumetric_from_kg: 3,
+  };
+  const run = (
+    items: DeliveryPricingItem[],
+    settings: DeliveryPricingSettingsValues = FROM_3,
+    express = false,
+  ) => computeDeliveryQuote({ items, tariff: center, settings, express });
+
+  it('20×20×20 sm, 0,5 kg: hajmli 1,6 < 3 → hajm hisobga olinmaydi, hisob 0,5 kg', () => {
+    const q = run([
+      item({ weight_kg: 0.5, length_cm: 20, width_cm: 20, height_cm: 20 }),
+    ]);
+    expect(q.volumetricKg).toBeCloseTo(1.6, 5);
+    expect(q.volumetricFromKg).toBe(3);
+    expect(q.volumetricApplied).toBe(false);
+    expect(q.billableKg).toBe(0.5);
+    expect(q.basis).toBe('weight');
+    expect(q.extraKg).toBe(0);
+    expect(q.total).toBe(40_000);
+    expect(q.estimated).toBe(false);
+  });
+
+  it('50×35×20 sm, 0,8 kg: hajmli 7,0 ≥ 3 → hisob 7,0 kg (hajm bo`yicha)', () => {
+    const q = run([
+      item({ weight_kg: 0.8, length_cm: 50, width_cm: 35, height_cm: 20 }),
+    ]);
+    expect(q.volumetricKg).toBe(7);
+    expect(q.volumetricApplied).toBe(true);
+    expect(q.billableKg).toBe(7);
+    expect(q.basis).toBe('volume');
+    expect(q.extraKg).toBe(6);
+    expect(q.total).toBe(40_000 + 6 * 4_000);
+  });
+
+  it('aynan 3,0 kg hajmli (30×25×20) — chegara ≥: hajm qo`llanadi', () => {
+    const q = run([
+      item({ weight_kg: 0.5, length_cm: 30, width_cm: 25, height_cm: 20 }),
+    ]);
+    expect(q.volumetricKg).toBe(3);
+    expect(q.volumetricApplied).toBe(true);
+    expect(q.billableKg).toBe(3);
+    expect(q.basis).toBe('volume');
+    expect(q.total).toBe(40_000 + 2 * 4_000);
+  });
+
+  it('chegaradan sal kichik (2,998 kg) — hajm qo`llanmaydi', () => {
+    const q = run([
+      item({ weight_kg: 0.5, length_cm: 10, width_cm: 10, height_cm: 149.9 }),
+    ]);
+    expect(q.volumetricKg).toBe(2.998);
+    expect(q.volumetricApplied).toBe(false);
+    expect(q.billableKg).toBe(0.5);
+  });
+
+  it('ko`p elementli: chegara JO`NATMA yig`indisiga (2 × 1,6 = 3,2 ≥ 3 → hajm)', () => {
+    const small = {
+      weight_kg: 0.5,
+      length_cm: 20,
+      width_cm: 20,
+      height_cm: 20,
+    };
+    const two = run([item(small), item(small)]);
+    expect(two.actualKg).toBe(1);
+    expect(two.volumetricKg).toBeCloseTo(3.2, 5);
+    expect(two.volumetricApplied).toBe(true);
+    expect(two.billableKg).toBe(3.2);
+    expect(two.basis).toBe('volume');
+    expect(two.extraKg).toBe(3);
+    expect(two.total).toBe(40_000 + 3 * 4_000);
+    // quantity ham yig'indiga kiradi.
+    const qty = run([item({ ...small, quantity: 2 })]);
+    expect(qty.billableKg).toBe(3.2);
+    expect(qty.volumetricApplied).toBe(true);
+    // Bitta element — chegaradan past.
+    expect(run([item(small)]).volumetricApplied).toBe(false);
+  });
+
+  it('volumetric_enabled = false element hajm yig`indisiga KIRMAYDI (chegara bilan ham)', () => {
+    const items = [
+      item({
+        weight_kg: 0.8,
+        length_cm: 50,
+        width_cm: 35,
+        height_cm: 20,
+        volumetric_enabled: false,
+      }),
+      item({ weight_kg: 0.5, length_cm: 20, width_cm: 20, height_cm: 20 }),
+    ];
+    const q = run(items);
+    expect(q.actualKg).toBe(1.3);
+    expect(q.volumetricKg).toBeCloseTo(1.6, 5);
+    expect(q.volumetricApplied).toBe(false);
+    expect(q.billableKg).toBe(1.3);
+    expect(q.basis).toBe('weight');
+    // Chegara 0 — hozirgidek: katta(1,3; 1,6) = 1,6.
+    const zero = run(items, { ...SEED_SETTINGS, volumetric_from_kg: 0 });
+    expect(zero.volumetricApplied).toBe(true);
+    expect(zero.billableKg).toBe(1.6);
+    expect(zero.basis).toBe('volume');
+  });
+
+  it('chegara 0 / berilmagan / NULL — natija hozirgidek (yangi maydonlardan tashqari AYNI)', () => {
+    const cases: DeliveryPricingItem[][] = [
+      [item()],
+      [item({ weight_kg: 2, length_cm: 60, width_cm: 40, height_cm: 30 })],
+      [item({ weight_kg: 0.5, length_cm: 20, width_cm: 20, height_cm: 20 })],
+      [item({ quantity: 2 }), item({ weight_kg: 0.5 })],
+      [item({ length_cm: null, width_cm: null, height_cm: null })],
+      [item({ weight_kg: null })],
+    ];
+    for (const items of cases) {
+      for (const express of [false, true]) {
+        const legacy = run(items, SEED_SETTINGS, express);
+        const { volumetricFromKg, volumetricApplied, ...rest } = legacy;
+        expect(volumetricFromKg).toBe(0);
+        expect(volumetricApplied).toBe(legacy.volumetricKg > 0);
+        for (const value of [0, '0.000', null]) {
+          const q = run(
+            items,
+            { ...SEED_SETTINGS, volumetric_from_kg: value },
+            express,
+          );
+          const { volumetricFromKg: f, volumetricApplied: a, ...other } = q;
+          expect(other).toEqual(rest);
+          expect(f).toBe(0);
+          expect(a).toBe(volumetricApplied);
+        }
+      }
+    }
+  });
+
+  it('o`lchamsiz jo`natma — volumetricApplied false (chegara 0 da ham)', () => {
+    const q = run(
+      [item({ length_cm: null, width_cm: null, height_cm: null })],
+      {
+        ...SEED_SETTINGS,
+        volumetric_from_kg: 0,
+      },
+    );
+    expect(q.volumetricApplied).toBe(false);
+    expect(q.basis).toBe('weight');
+  });
+
+  it('og`irligi yo`q, hajmi chegaradan past — baza narx, basis weight, taxminiy', () => {
+    const q = run([
+      item({ weight_kg: null, length_cm: 20, width_cm: 20, height_cm: 20 }),
+    ]);
+    expect(q.volumetricApplied).toBe(false);
+    expect(q.billableKg).toBe(0.1);
+    expect(q.basis).toBe('weight');
+    expect(q.estimated).toBe(true);
+    expect(q.total).toBe(40_000);
+  });
+
+  it('express, minimum va qadam o`zgarmaydi: hajm qo`llanmasa ham odatdagidek', () => {
+    const q = run(
+      [item({ weight_kg: 0.43, length_cm: 20, width_cm: 20, height_cm: 20 })],
+      { ...FROM_3, min_billable_kg: 1 },
+      true,
+    );
+    expect(q.volumetricApplied).toBe(false);
+    expect(q.billableKg).toBe(1);
+    expect(q.expressFee).toBe(16_000);
+    expect(q.total).toBe(56_000);
+    const step = run(
+      [item({ weight_kg: 0.43, length_cm: 20, width_cm: 20, height_cm: 20 })],
+      FROM_3,
+    );
+    expect(step.billableKg).toBe(0.5); // 0,43 → 0,1 qadam bilan yuqoriga
+  });
+
+  it('Postgres numeric satri (`3.000`) — son sifatida', () => {
+    const q = run(
+      [item({ weight_kg: 0.5, length_cm: 20, width_cm: 20, height_cm: 20 })],
+      { ...SEED_SETTINGS, volumetric_from_kg: '3.000' },
+    );
+    expect(q.volumetricFromKg).toBe(3);
+    expect(q.volumetricApplied).toBe(false);
+  });
+
+  it.each<[string, unknown]>([
+    ['manfiy', -1],
+    ['son emas', 'abc'],
+  ])('volumetric_from_kg %s → DeliveryPricingInputError', (_name, value) => {
+    expect(() =>
+      run([item()], {
+        ...SEED_SETTINGS,
+        volumetric_from_kg: value as never,
+      }),
+    ).toThrow(DeliveryPricingInputError);
+  });
+});

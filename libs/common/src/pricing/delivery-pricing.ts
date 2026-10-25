@@ -11,6 +11,9 @@
  * AYNI (landing origin/main 3697d84; 13 oltin vektor `delivery-pricing.spec.ts`
  * da AYNAN ko'chirilgan):
  *   1. hajmli vazn = U × K × B / `volumetric_divisor` (5000);
+ *   1a. (AQ9lkgVB) hajm CHEGARASI: hajmli vazn < `volumetric_from_kg` bo'lsa
+ *      hajm HISOBGA OLINMAYDI (hisob — faqat haqiqiy og'irlik); ≥ bo'lsa —
+ *      odatdagidek. Chegara 0 (sukut) — har doim qo'llanadi (landing bilan AYNI);
  *   2. hisob vazni = max( yuqoriga(max(haqiqiy, hajmli), `billable_step_kg`),
  *      `min_billable_kg` ) — 0.1 kg qadam bilan YUQORIGA, kamida 0.1 kg;
  *   3. qo'shimcha kg = max(0, yuqoriga(hisob vazni − `first_kg_included` − EPS))
@@ -31,6 +34,11 @@
  *   - og'irligi NULL element 0 kg deb HISOBLANMAYDI: `unmeasuredItems` > 0 va
  *     `estimated: true` — narx jimgina 0 ga tushmaydi, kamida baza tarif
  *     (yakuniy sotuv darvozasi KmWO9gTA da);
+ *   - (AQ9lkgVB, ega qarori 2026-10-25) hajm chegarasi butun JO'NATMA
+ *     yig'indisiga qo'llanadi (har elementga alohida emas): «3 kg dan
+ *     kichik hajmli posilka — standart narx». Taqqoslash `volumetricKg`
+ *     ko'rsatiladigan qiymati (grammgacha yaxlitlangan) bilan — UI'da
+ *     ko'ringan son va qaror bir xil bo'lsin; aynan chegara — hajm qo'llanadi;
  *   - PICKUP buyurtma narxiga QO'SHILMAYDI: u bitta TASHRIFGA tegishli
  *     (1–9 posilka → `pickup_fee`, `pickup_free_from_count`+ → 0) va market
  *     hisobiga alohida yoziladi (B824gOu5). `pickupFee` alohida qaytadi;
@@ -82,6 +90,11 @@ export interface DeliveryTariffRate {
 
 export interface DeliveryPricingSettingsValues {
   volumetric_divisor: Numeric;
+  /**
+   * (AQ9lkgVB) Hajm shu kg dan (≥) boshlab hisobga olinadi. Berilmasa / NULL /
+   * 0 — har doim (oldingi xulq).
+   */
+  volumetric_from_kg?: Numeric;
   first_kg_included: Numeric;
   min_billable_kg: Numeric;
   billable_step_kg: Numeric;
@@ -113,8 +126,19 @@ export interface DeliveryQuote {
   daysMax: number | null;
   /** Haqiqiy og'irliklar yig'indisi, kg (o'lchovli elementlar). */
   actualKg: number;
-  /** Hajmli vazn yig'indisi, kg (faqat `volumetric_enabled` va o'lchamli). */
+  /**
+   * Hajmli vazn yig'indisi, kg (faqat `volumetric_enabled` va o'lchamli) —
+   * chegaradan qat'i nazar har doim hisoblangan qiymat.
+   */
   volumetricKg: number;
+  /** (AQ9lkgVB) Qo'llangan hajm chegarasi, kg (`volumetric_from_kg`; 0 — yo'q). */
+  volumetricFromKg: number;
+  /**
+   * (AQ9lkgVB) Hajm hisobga olindimi: o'lchamli hajmli element bor VA
+   * `volumetricKg` ≥ `volumetricFromKg`. false bo'lsa hisob vazni faqat
+   * haqiqiy og'irlikdan (`basis` — 'weight' yoki null).
+   */
+  volumetricApplied: boolean;
   /** Hisob vazni, kg (0.1 kg qadam, minimum bilan). */
   billableKg: number;
   /** Bazadan ortiq to'liq kg soni. */
@@ -218,6 +242,18 @@ export function computeDeliveryQuote(input: DeliveryQuoteInput): DeliveryQuote {
     (n) => n > 0,
     "0 dan katta bo'lishi kerak",
   );
+  // AQ9lkgVB: berilmagan / NULL chegara — 0 (oldingi xulq, oltin vektorlar).
+  const volumetricFromG =
+    toNumberOrNull(settings.volumetric_from_kg) === null
+      ? 0
+      : toGrams(
+          requireNumber(
+            settings.volumetric_from_kg,
+            'volumetric_from_kg',
+            (n) => n >= 0,
+            "manfiy bo'lmasligi kerak",
+          ),
+        );
   const stepG = toGrams(
     requireNumber(
       settings.billable_step_kg,
@@ -345,10 +381,18 @@ export function computeDeliveryQuote(input: DeliveryQuoteInput): DeliveryQuote {
           "manfiy bo'lmagan butun son bo'lishi kerak",
         );
 
+  // AQ9lkgVB: hajm chegarasi — `volumetricKg` (grammgacha) bilan solishtiriladi;
+  // chegaradan kichik hajm hisob vazniga KIRMAYDI.
+  const volumeG = (volumeCm3 * 1000) / divisor;
+  const volumetricApplied =
+    volumeCm3 > 0 && Math.round(volumeG) >= volumetricFromG;
+
   // 0.1 kg qadam bilan YUQORIGA: ceil(max(a, b)) = max(ceil(a), ceil(b)).
   // Hajm: sm³ × 1000 / (bo'luvchi × qadam_g) — bitta bo'lish, butun sonlar.
   const actualSteps = Math.ceil(actualG / stepG);
-  const volumeSteps = Math.ceil((volumeCm3 * 1000) / (divisor * stepG));
+  const volumeSteps = volumetricApplied
+    ? Math.ceil((volumeCm3 * 1000) / (divisor * stepG))
+    : 0;
   const billableG = Math.max(
     Math.max(actualSteps, volumeSteps) * stepG,
     minBillableG,
@@ -363,7 +407,6 @@ export function computeDeliveryQuote(input: DeliveryQuoteInput): DeliveryQuote {
   const pickupT = pickupCount > 0 && !freePickup(pickupCount) ? pickupFeeT : 0;
   const roundTo = (tiyin: number) => Math.round(tiyin / roundToT) * roundToT;
 
-  const volumeG = (volumeCm3 * 1000) / divisor;
   const daysMin = toNumberOrNull(tariff.days_min);
   const daysMax = toNumberOrNull(tariff.days_max);
 
@@ -375,6 +418,8 @@ export function computeDeliveryQuote(input: DeliveryQuoteInput): DeliveryQuote {
     daysMax: daysMax === null || Number.isNaN(daysMax) ? null : daysMax,
     actualKg: actualG / 1000,
     volumetricKg: Math.round(volumeG) / 1000,
+    volumetricFromKg: volumetricFromG / 1000,
+    volumetricApplied,
     billableKg: billableG / 1000,
     extraKg,
     extra: fromTiyin(extraT),
@@ -386,7 +431,7 @@ export function computeDeliveryQuote(input: DeliveryQuoteInput): DeliveryQuote {
     basis:
       actualG === 0 && volumeCm3 === 0
         ? null
-        : volumeG > actualG
+        : volumetricApplied && volumeG > actualG
           ? 'volume'
           : 'weight',
     unmeasuredItems,

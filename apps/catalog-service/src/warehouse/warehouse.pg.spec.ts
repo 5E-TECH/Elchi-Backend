@@ -161,6 +161,8 @@ const pgCode = async (promise: Promise<unknown>) => {
         return map;
       }),
       getBranchManagerIds: jest.fn(() => Promise.resolve(['31'])),
+      // AQ9lkgVB: narx sozlamasidagi hajm chegarasi (sukut 0 — chegara yo'q).
+      volumetricFromKg: jest.fn((): Promise<number> => Promise.resolve(0)),
       // XtcEyQjb: mas'ul xodim tanlanmasa — birinchi faol menejer.
       getFirstActiveBranchManagerId: jest.fn(
         (): Promise<string | null> => Promise.resolve('31'),
@@ -1453,6 +1455,16 @@ const pgCode = async (promise: Promise<unknown>) => {
             market_id: MARKET_B,
           });
           expect(onlyB.data.map((item) => item.product.id)).toEqual([b.id]);
+          // AQ9lkgVB: hajm chegarasi 70 kg — 61,2 kg hajmli < 70 → og'irlik.
+          directory.volumetricFromKg.mockResolvedValueOnce(70);
+          const thresholded = await warehouses.listStock(w.id, {
+            market_id: MARKET_B,
+          });
+          expect(thresholded.data[0].product).toMatchObject({
+            chargeable_weight_kg: 30,
+            volumetric_weight_kg: 61.2,
+            chargeable_basis: 'actual',
+          });
           const searched = await warehouses.listStock(w.id, {
             search: 'kabel',
           });

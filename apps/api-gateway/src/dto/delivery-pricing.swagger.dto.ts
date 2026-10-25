@@ -390,6 +390,14 @@ export class UpdateDeliveryPricingSettingsRequestDto {
   volumetric_divisor?: number;
 
   @KgSettingField(
+    'volumetric_from_kg',
+    0,
+    3,
+    "(AQ9lkgVB) Hajm qaysi kg dan boshlab hisobga olinadi. Hajmli vazn (Σ U×K×B / volumetric_divisor) shundan KICHIK bo'lsa — hajm hisobga olinmaydi (standart narx, faqat haqiqiy og'irlik); KATTA yoki TENG bo'lsa — hisob vazni = katta(haqiqiy, hajmli). 0 — hajm har doim qo'llanadi (sukut).",
+  )
+  volumetric_from_kg?: number;
+
+  @KgSettingField(
     'first_kg_included',
     0,
     1,
@@ -517,8 +525,24 @@ export class DeliveryQuoteResultDto {
   @ApiProperty({ nullable: true, example: 2 }) daysMax!: number | null;
   @ApiProperty({ example: 1.2, description: "Haqiqiy og'irliklar yig'indisi" })
   actualKg!: number;
-  @ApiProperty({ example: 1.98, description: "Hajmli vazn yig'indisi" })
+  @ApiProperty({
+    example: 1.98,
+    description:
+      "Hajmli vazn yig'indisi — chegaradan qat'i nazar har doim hisoblangan qiymat",
+  })
   volumetricKg!: number;
+  @ApiProperty({
+    example: 0,
+    description:
+      "(AQ9lkgVB) Qo'llangan hajm chegarasi, kg (`volumetric_from_kg`; 0 — chegara yo'q)",
+  })
+  volumetricFromKg!: number;
+  @ApiProperty({
+    example: true,
+    description:
+      "(AQ9lkgVB) Hajm hisobga olindimi: o'lchamli hajmli element bor VA `volumetricKg` ≥ `volumetricFromKg`. false — hisob vazni faqat haqiqiy og'irlikdan",
+  })
+  volumetricApplied!: boolean;
   @ApiProperty({ example: 2, description: 'Hisob vazni (0.1 kg qadam)' })
   billableKg!: number;
   @ApiProperty({ example: 1 }) extraKg!: number;
@@ -542,7 +566,12 @@ export class DeliveryQuoteResultDto {
       'Kalkulyator jami: subtotal + express + pickup (bitta yaxlitlash).',
   })
   totalWithPickup!: number;
-  @ApiProperty({ enum: ['weight', 'volume'], nullable: true })
+  @ApiProperty({
+    enum: ['weight', 'volume'],
+    nullable: true,
+    description:
+      "Hisob vazni qaysi biridan; hech narsa o'lchanmagan — null. `volumetricApplied: false` bo'lsa — `weight` (yoki null)",
+  })
   basis!: 'weight' | 'volume' | null;
   @ApiProperty({ example: 0, description: "Og'irligi yo'q elementlar soni" })
   unmeasuredItems!: number;
@@ -574,6 +603,12 @@ export class DeliveryQuoteResponseDto {
 export class DeliveryPricingSettingsRowDto {
   @ApiProperty({ example: '1' }) id!: string;
   @ApiProperty({ example: 5000 }) volumetric_divisor!: number;
+  @ApiProperty({
+    example: 0,
+    description:
+      '(AQ9lkgVB) Hajm shu kg dan (≥) boshlab hisobga olinadi; 0 — har doim',
+  })
+  volumetric_from_kg!: number;
   @ApiProperty({ example: 1 }) first_kg_included!: number;
   @ApiProperty({ example: 0.1 }) min_billable_kg!: number;
   @ApiProperty({ example: 0.1 }) billable_step_kg!: number;

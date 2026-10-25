@@ -23,6 +23,34 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-10-25 — Yetkazish narxi: hajm qaysi kg dan boshlab hisobga olinadi (AQ9lkgVB)
+
+Deploy: logistics-service (migratsiya `1716000000154`), api-gateway (DTO/Swagger), catalog-service (ombordagi
+«Hisob vazni»). Migratsiyadan keyin chegara **0** — narx hozirgidek; ega aytgan chegara (hozir 3 kg) ops
+vositalaridan yoziladi.
+
+- [2026-10-25] ✏️ [gateway/logistics] — `GET /delivery/pricing-settings` (va `.../history` versiyalari, `PATCH`
+  javobi) da yangi maydon **`volumetric_from_kg: number`** (kg, 3 kasr, sukut `0`). `PATCH /delivery/pricing-settings`
+  tanasida ixtiyoriy `volumetric_from_kg` — `0..1000`, ko'pi bilan 3 kasr (xato matnlari: «volumetric_from_kg 0 dan
+  kichik bo'lmasligi kerak», «… 1000 dan oshmasligi kerak», «… — ko'pi bilan 3 kasrli son (kg)»). O'zgartirish — yangi
+  versiya + jurnal (`logistics.delivery_pricing_settings_updated`, eski/yangi qiymatda ham bor); rollar o'zgarmagan
+  (superadmin, admin).
+- [2026-10-25] ✏️ [logistics] — **Qoida:** hajmli vazn (Σ U×K×B ÷ 5000, faqat `volumetric_enabled` va o'lchamli
+  elementlar, butun jo'natma yig'indisi) `volumetric_from_kg` dan **kichik** bo'lsa — hajm hisobga olinmaydi (hisob
+  vazni = haqiqiy og'irlik, `basis: 'weight'`); **katta yoki teng** bo'lsa — hozirgidek katta(haqiqiy, hajmli).
+  0,1 kg qadam, minimum, birinchi kg, kg narxi, express va pickup o'zgarmagan. Misol (chegara 3): 20×20×20 sm, 0,5 kg →
+  hajmli 1,6 < 3 → hisob 0,5 kg; 50×35×20, 0,8 kg → hajmli 7,0 → hisob 7,0 kg; aynan 3,0 — hajm qo'llanadi.
+- [2026-10-25] ✏️ [gateway/logistics] — `POST /delivery/quote` va `POST /delivery/quote/by-tariff` natijasida yangi
+  maydonlar: **`volumetricFromKg`** (qo'llangan chegara, kg) va **`volumetricApplied: boolean`** (hajm hisobga
+  olindimi). `volumetricKg` — doim hisoblangan hajmli vazn (chegaradan qat'i nazar), `basis` — hisob vazni qaysi
+  biridan. Qo'shimcha (additive) — eski FE buzilmaydi.
+- [2026-10-25] 🟢 [catalog] — ombor ro'yxatlaridagi «Hisob vazni» (`product.chargeable_weight_kg` /
+  `chargeable_basis`) ham shu chegarani oladi (bitta dona uchun; sozlama 30 s keshlanadi). Hajm chegaradan past va
+  og'irlik yo'q bo'lsa `chargeable_weight_kg: null` («O'lchov yo'q»).
+- 🔧 FE: Ops vositalari → yetkazish narxi sozlamalari kartasiga «Hajm qaysi kg dan hisobga olinadi» maydoni (kg, 0 —
+  har doim) + tarix ro'yxatida shu maydon; kalkulyator / buyurtma formasidagi narx blokida `volumetricApplied: false`
+  bo'lsa «Hajm {volumetricFromKg} kg dan kichik — og'irlik bo'yicha» izohi.
+
 ### 2026-10-25 — Market operatori: viloyat tumanlari va tuman tafsiloti (MO-7, OfRSoRUX / N11)
 
 Deploy: faqat api-gateway. Migratsiya yo'q.

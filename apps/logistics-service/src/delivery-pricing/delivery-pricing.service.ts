@@ -767,6 +767,12 @@ export class DeliveryPricingService {
         ok: isPositiveInt,
         rule: 'musbat butun son (5000)',
       },
+      // AQ9lkgVB: 0 — hajm har doim; masalan 3 — hajmli vazn 3 kg dan kichik
+      // bo'lsa standart narx (faqat og'irlik).
+      volumetric_from_kg: {
+        ok: (n) => n >= 0 && n <= 1000 && decimals(n, 3),
+        rule: "0..1000, ko'pi bilan 3 kasrli kg",
+      },
       first_kg_included: {
         ok: (n) => n >= 0 && n <= 1000 && decimals(n, 3),
         rule: "0..1000, ko'pi bilan 3 kasrli kg",

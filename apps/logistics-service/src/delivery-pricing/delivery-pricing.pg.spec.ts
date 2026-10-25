@@ -1,6 +1,7 @@
 import { DataSource } from 'typeorm';
 import { of } from 'rxjs';
 import { DeliveryPricingEngine1716000000142 } from '../../../../migrations/1716000000142-DeliveryPricingEngine';
+import { DeliveryPricingVolumetricFromKg1716000000154 } from '../../../../migrations/1716000000154-DeliveryPricingVolumetricFromKg';
 import { DeliveryPricingService } from './delivery-pricing.service';
 import { DeliveryTariff } from '../entities/delivery-tariff.entity';
 import { DeliveryPricingSettings } from '../entities/delivery-pricing-settings.entity';
@@ -12,7 +13,8 @@ import { District } from '../entities/district.entity';
  * (seed, CHECK'lar, yagona faol sozlama, `is_city_zone` SOATO bo'yicha,
  * qayta yurgizish xavfsizligi) va servisning SQL'i (faol versiya
  * `valid_from <= now()`, rejalashtirilgan versiya, sozlama versiyalash +
- * advisory qulf, kesh yo'qligi).
+ * advisory qulf, kesh yo'qligi). AQ9lkgVB: migratsiya 154
+ * (`volumetric_from_kg`, CHECK, up/down) 142 dan keyin birga yuradi.
  *
  * FAQAT lokal test bazasi va FAQAT `logistics_schema` (boshida qayta
  * yaratiladi, oxirida o'chiriladi):
@@ -36,14 +38,22 @@ const ADMIN = { id: '1', roles: ['superadmin'] };
   () => {
     let db: DataSource;
     const migration = new DeliveryPricingEngine1716000000142();
+    const fromKgMigration = new DeliveryPricingVolumetricFromKg1716000000154();
     const activityLog = { log: jest.fn(), logChange: jest.fn() };
     const catalogClient = { send: jest.fn(() => of({ data: [] })) };
     let service: DeliveryPricingService;
 
+    /** 142 + 154 birga (down — teskari tartibda). */
     const run = async (direction: 'up' | 'down') => {
       const runner = db.createQueryRunner();
       try {
-        await migration[direction](runner);
+        if (direction === 'up') {
+          await migration.up(runner);
+          await fromKgMigration.up(runner);
+        } else {
+          await fromKgMigration.down(runner);
+          await migration.down(runner);
+        }
       } finally {
         await runner.release();
       }
@@ -168,13 +178,14 @@ const ADMIN = { id: '1', roles: ['superadmin'] };
         },
       ]);
       const settings = await db.query(`
-        SELECT volumetric_divisor, first_kg_included, min_billable_kg,
-               billable_step_kg, round_to, pickup_fee, pickup_free_from_count,
-               express_multiplier, is_active
+        SELECT volumetric_divisor, volumetric_from_kg, first_kg_included,
+               min_billable_kg, billable_step_kg, round_to, pickup_fee,
+               pickup_free_from_count, express_multiplier, is_active
           FROM logistics_schema.delivery_pricing_settings`);
       expect(settings).toEqual([
         {
           volumetric_divisor: 5000,
+          volumetric_from_kg: '0.000',
           first_kg_included: '1.000',
           min_billable_kg: '0.100',
           billable_step_kg: '0.100',
@@ -256,6 +267,18 @@ const ADMIN = { id: '1', roles: ['superadmin'] };
       await expect(settingsInsert(1.4)).rejects.toMatchObject({
         code: '23505',
       });
+      // AQ9lkgVB: chegara 0..1000 (nofaol qator — unique indeksga tushmaydi).
+      for (const fromKg of [-1, 1000.001]) {
+        await expect(
+          db.query(
+            `INSERT INTO logistics_schema.delivery_pricing_settings
+               (volumetric_divisor, first_kg_included, min_billable_kg, billable_step_kg,
+                round_to, pickup_fee, express_multiplier, is_active, volumetric_from_kg)
+             VALUES (5000, 1, 0.1, 0.1, 500, 0, 1.4, false, $1)`,
+            [fromKg],
+          ),
+        ).rejects.toMatchObject({ code: '23514' });
+      }
     });
 
     it('quote: shahar ichi — city; shahar → viloyat (Zangiota, shahar filialiga biriktirilgan) — center', async () => {
@@ -384,6 +407,54 @@ const ADMIN = { id: '1', roles: ['superadmin'] };
       ).toBe(3);
     });
 
+    it('AQ9lkgVB: volumetric_from_kg PATCH — yangi versiya, quote darhol chegarani oladi, tarixda bor', async () => {
+      const SMALL = {
+        weight_kg: 0.5,
+        length_cm: 20,
+        width_cm: 20,
+        height_cm: 20,
+      };
+      const quote = async () =>
+        (
+          (await service.quote({
+            items: [SMALL],
+            from_region_id: '1',
+            to_region_id: '3',
+            where_deliver: 'center',
+          } as never)) as { data: Record<string, unknown> }
+        ).data;
+      // Chegara 0 — hajm 1,6 kg qo'llanadi.
+      expect(await quote()).toMatchObject({
+        volumetricApplied: true,
+        billableKg: 1.6,
+      });
+      const res = (await service.updateSettings(
+        { volumetric_from_kg: 3 },
+        ADMIN,
+      )) as { data: { volumetric_from_kg: number } };
+      expect(res.data.volumetric_from_kg).toBe(3);
+      expect(await quote()).toMatchObject({
+        volumetricKg: 1.6,
+        volumetricFromKg: 3,
+        volumetricApplied: false,
+        billableKg: 0.5,
+        basis: 'weight',
+      });
+      const history = (await service.listSettingsHistory({ limit: 2 })) as {
+        data: {
+          versions: Array<{ volumetric_from_kg: number; is_active: boolean }>;
+        };
+      };
+      expect(
+        history.data.versions.map((v) => [v.volumetric_from_kg, v.is_active]),
+      ).toEqual([
+        [3, true],
+        [0, false],
+      ]);
+      // Keyingi testlar oldingi kutilmalar bilan: chegarani 0 ga qaytarish.
+      await service.updateSettings({ volumetric_from_kg: 0 }, ADMIN);
+    });
+
     it('ikki admin bir vaqtda — ikkalasi ham o`tadi (advisory qulf), faol qator bitta', async () => {
       await Promise.all([
         service.updateSettings({ pickup_fee: 15000 }, ADMIN),
@@ -401,7 +472,7 @@ const ADMIN = { id: '1', roles: ['superadmin'] };
         await scalar(
           'SELECT count(*)::int AS v FROM logistics_schema.delivery_pricing_settings',
         ),
-      ).toBe(6);
+      ).toBe(8);
     });
 
     it('down(): jadvallar va is_city_zone o`chadi; qayta up() — toza seed', async () => {
@@ -424,6 +495,27 @@ const ADMIN = { id: '1', roles: ['superadmin'] };
         ),
       ).toBe(0);
       await run('down'); // ikkinchi down — xatosiz
+
+      // 154 ning o'zi: up — ustun sukut 0 bilan, down — ustun o'chadi.
+      await run('up');
+      const columnCount = () =>
+        scalar(
+          `SELECT count(*)::int AS v FROM information_schema.columns
+            WHERE table_schema = 'logistics_schema'
+              AND table_name = 'delivery_pricing_settings'
+              AND column_name = 'volumetric_from_kg'`,
+        );
+      expect(await columnCount()).toBe(1);
+      const runner = db.createQueryRunner();
+      try {
+        await fromKgMigration.up(runner); // qayta up — xatosiz
+        await fromKgMigration.down(runner);
+        expect(await columnCount()).toBe(0);
+        await fromKgMigration.down(runner); // ikkinchi down — xatosiz
+      } finally {
+        await runner.release();
+      }
+      await run('down');
 
       await run('up');
       expect(

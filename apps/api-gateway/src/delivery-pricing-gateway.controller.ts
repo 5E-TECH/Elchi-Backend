@@ -133,6 +133,7 @@ export class DeliveryPricingGatewayController {
       'DAqXPeSy. Tarif: ikkala uchi ham `regions.is_city_zone` (Toshkent shahri) → `city`, aks holda `where_deliver` (`center`/`address`). ' +
       "Elementlar BITTA jo'natma: og'irliklar va hajmlar qo'shiladi (× quantity), baza bir marta. `product_id` — o'lchov catalog'dan (MARKET — faqat o'z mahsuloti, begonasi 404). " +
       "O'lchovsiz element jimgina 0 bermaydi: `unmeasuredItems` / `missingDimensionItems` > 0 va `estimated: true`. " +
+      "Hajm chegarasi (AQ9lkgVB): hajmli vazn `volumetric_from_kg` dan kichik bo'lsa hajm hisobga olinmaydi — `volumetricApplied: false`, hisob vazni faqat og'irlikdan. " +
       '`total` — 500 ga karrali YOZILADIGAN narx (pickup kirmaydi); `totalWithPickup` — kalkulyator jami. ' +
       "Xatolar: 400 (validatsiya, tuman–viloyat mos emas), 404 (viloyat/tuman/mahsulot), 409 (faol tarif yoki sozlama yo'q), 503 (catalog javob bermadi).",
   })
@@ -271,6 +272,7 @@ export class DeliveryPricingGatewayController {
     summary: 'Narx formulasi sozlamalarini o`zgartirish (admin; yangi versiya)',
     description:
       "Qisman: faqat yuborilgan maydonlar o'zgaradi. Yangi faol qator yoziladi, eskisi `is_active=false` (tarix qoladi); hech narsa o'zgarmasa versiya ham, jurnal ham yo'q. " +
+      '`volumetric_from_kg` (AQ9lkgVB) — hajm qaysi kg dan boshlab hisobga olinadi (0..1000, 3 kasr; 0 — har doim). ' +
       "Amal activity-log'ga yoziladi (`logistics.delivery_pricing_settings_updated`, eski/yangi qiymat bilan).",
   })
   @ApiBody({ type: UpdateDeliveryPricingSettingsRequestDto })

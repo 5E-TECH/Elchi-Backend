@@ -8,6 +8,8 @@ const SYSTEM_REQUESTER = { id: 'system', roles: ['superadmin'] };
 const RPC_TIMEOUT_MS = 5000;
 /** Filial ma'lumoti keshi — har buyurtmada branch-service'ga bormaslik uchun. */
 const BRANCH_CACHE_TTL_MS = 30_000;
+/** AQ9lkgVB: narx sozlamasidagi hajm chegarasi keshi («Hisob vazni» ko'rinishi). */
+const VOLUMETRIC_FROM_CACHE_TTL_MS = 30_000;
 
 export interface WarehouseBranchInfo {
   id: string;
@@ -69,6 +71,7 @@ export class WarehouseDirectoryService {
     string,
     { at: number; value: WarehouseBranchInfo | null }
   >();
+  private volumetricFromCache: { at: number; value: number } | null = null;
 
   constructor(
     @Inject('BRANCH') private readonly branchClient: ClientProxy,
@@ -263,6 +266,36 @@ export class WarehouseDirectoryService {
       if (/^\d+$/.test(value)) return value;
     }
     return null;
+  }
+
+  /**
+   * AQ9lkgVB: hajm qaysi kg dan hisobga olinadi (`logistics.delivery.settings.get`
+   * → `volumetric_from_kg`) — ombordagi «Hisob vazni» narx dvigateli bilan bir
+   * xil qoidada chiqishi uchun. Keshlangan (30 s); logistics javob bermasa —
+   * oxirgi ma'lum qiymat, u ham yo'q bo'lsa 0 (faqat ko'rsatish — narx
+   * hisoblanmaydi, ro'yxat yiqilmaydi).
+   */
+  async volumetricFromKg(): Promise<number> {
+    const cached = this.volumetricFromCache;
+    if (cached && Date.now() - cached.at < VOLUMETRIC_FROM_CACHE_TTL_MS) {
+      return cached.value;
+    }
+    try {
+      const response = await this.send(
+        this.logisticsClient,
+        'logistics.delivery.settings.get',
+        {},
+      );
+      const raw = Number(asRecord(unwrap(response))?.volumetric_from_kg);
+      const value = Number.isFinite(raw) && raw > 0 ? raw : 0;
+      this.volumetricFromCache = { at: Date.now(), value };
+      return value;
+    } catch (error) {
+      this.logger.warn(
+        `logistics.delivery.settings.get olinmadi: ${(error as Error)?.message ?? String(error)}`,
+      );
+      return cached?.value ?? 0;
+    }
   }
 
   /** Xodimlar (ism + telefon) — mas'ul xodim ko'rsatish uchun. */

@@ -679,11 +679,17 @@ export class WarehouseProductDto {
     type: Number,
     nullable: true,
     example: 38.4,
-    description: '«Hisob vazni» = max(og‘irlik, U×K×B/5000), kg (3 kasr)',
+    description:
+      '«Hisob vazni» = max(og‘irlik, U×K×B/5000), kg (3 kasr). AQ9lkgVB: hajmli vazn narx sozlamasidagi `volumetric_from_kg` dan kichik bo‘lsa — faqat og‘irlik',
   })
   chargeable_weight_kg!: number | null;
 
-  @ApiPropertyOptional({ type: Number, nullable: true })
+  @ApiPropertyOptional({
+    type: Number,
+    nullable: true,
+    description:
+      'U×K×B/5000, kg — chegaradan qat‘i nazar (hajm o‘chiq yoki o‘lcham yo‘q — null)',
+  })
   volumetric_weight_kg!: number | null;
 
   @ApiPropertyOptional({

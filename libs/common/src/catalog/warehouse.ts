@@ -131,7 +131,11 @@ export const WAREHOUSE_RPC = {
   FIND_BY_IDS: 'catalog.warehouse.find_by_ids',
 } as const;
 
-/** Qaror 12: hisob vazni = max(og'irlik, U×K×B / 5000). */
+/**
+ * Qaror 12: hisob vazni = max(og'irlik, U×K×B / 5000). AQ9lkgVB: hajmli
+ * vazn narx sozlamasidagi `volumetric_from_kg` dan kichik bo'lsa — faqat
+ * og'irlik (narx dvigateli bilan bir xil qoida).
+ */
 export const WAREHOUSE_VOLUMETRIC_DIVISOR = 5000;
 /** Yangi ombor uchun «kam qoldiq» chegarasi sukuti (dona). */
 export const WAREHOUSE_LOW_STOCK_DEFAULT = 5;
@@ -160,7 +164,10 @@ export interface WarehouseChargeableWeight {
   chargeable_weight_kg: number | null;
   /** U×K×B/5000 — kg, 3 kasr; o'lcham yo'q yoki hajm o'chiq bo'lsa `null`. */
   volumetric_weight_kg: number | null;
-  /** Qaysi biri katta: «hajm bo'yicha» belgisi uchun. */
+  /**
+   * Qaysi biri olindi: «hajm bo'yicha» belgisi uchun. Hajm chegaradan
+   * (AQ9lkgVB) kichik bo'lsa — 'actual' (og'irlik yo'q bo'lsa null).
+   */
   chargeable_basis: 'actual' | 'volumetric' | null;
   /**
    * Og'irlik yo'q — narx dvigateli uni «o'lchovsiz» deb sanaydi
@@ -182,9 +189,14 @@ const round3 = (value: number): number => Math.round(value * 1000) / 1000;
  * Ekrandagi «Hisob vazni» (qaror 12). Narx dvigateli (`computeDeliveryQuote`)
  * 0.1 kg qadam bilan yuqoriga yaxlitlaydi — bu yerda faqat ko'rsatish
  * qiymati (3 kasr), narx hisoblanmaydi.
+ *
+ * `volumetricFromKg` (AQ9lkgVB) — narx sozlamasidagi hajm chegarasi: bitta
+ * dona hajmli vazni undan kichik bo'lsa hajm olinmaydi (dvigateldagi kabi
+ * ≥ — qo'llanadi). 0 / berilmasa — oldingi xulq.
  */
 export function warehouseChargeableWeight(
   product: WarehouseMeasureInput,
+  volumetricFromKg = 0,
 ): WarehouseChargeableWeight {
   const actual = toPositive(product.weight_kg);
   const length = toPositive(product.length_cm);
@@ -197,17 +209,22 @@ export function warehouseChargeableWeight(
     product.volumetric_enabled !== false
       ? round3((length * width * height) / WAREHOUSE_VOLUMETRIC_DIVISOR)
       : null;
-  if (actual === null && volumetric === null) {
+  const fromKg =
+    Number.isFinite(volumetricFromKg) && volumetricFromKg > 0
+      ? round3(volumetricFromKg)
+      : 0;
+  const volumetricApplied = volumetric !== null && volumetric >= fromKg;
+  const actualValue = actual === null ? null : round3(actual);
+  if (actualValue === null && !volumetricApplied) {
     return {
       chargeable_weight_kg: null,
-      volumetric_weight_kg: null,
+      volumetric_weight_kg: volumetric,
       chargeable_basis: null,
       measure_missing: true,
     };
   }
-  const actualValue = actual === null ? null : round3(actual);
   const useVolumetric =
-    volumetric !== null && (actualValue === null || volumetric > actualValue);
+    volumetricApplied && (actualValue === null || volumetric > actualValue);
   return {
     chargeable_weight_kg: useVolumetric ? volumetric : actualValue,
     volumetric_weight_kg: volumetric,

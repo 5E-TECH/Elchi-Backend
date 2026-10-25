@@ -412,6 +412,45 @@ describe('DAqXPeSy — /delivery/* gateway', () => {
       );
     });
 
+    it('PATCH /delivery/pricing-settings — volumetric_from_kg 2,5 (AQ9lkgVB)', async () => {
+      const res = await request(http())
+        .patch('/delivery/pricing-settings')
+        .set(as(['superadmin'], '1'))
+        .send({ volumetric_from_kg: 2.5 });
+      expect(res.status).toBe(200);
+      expect(logistics.send).toHaveBeenCalledWith(
+        { cmd: 'logistics.delivery.settings.update' },
+        {
+          dto: { volumetric_from_kg: 2.5 },
+          requester: { id: '1', roles: ['superadmin'] },
+        },
+      );
+      // 0 ham ruxsat (chegara yo'q — hajm har doim).
+      const zero = await request(http())
+        .patch('/delivery/pricing-settings')
+        .set(as(['admin']))
+        .send({ volumetric_from_kg: 0 });
+      expect(zero.status).toBe(200);
+    });
+
+    it.each<[string, unknown, string]>([
+      ['−1', -1, "volumetric_from_kg 0 dan kichik bo'lmasligi kerak"],
+      ['1001', 1001, 'volumetric_from_kg 1000 dan oshmasligi kerak'],
+      ['4 kasr', 2.5001, "volumetric_from_kg — ko'pi bilan 3 kasrli son (kg)"],
+      ['satr', '3', 'volumetric_from_kg — son (kg)'],
+    ])(
+      'PATCH /delivery/pricing-settings 400 — volumetric_from_kg %s (AQ9lkgVB)',
+      async (_name, value, message) => {
+        const res = await request(http())
+          .patch('/delivery/pricing-settings')
+          .set(as(['superadmin']))
+          .send({ volumetric_from_kg: value });
+        expect(res.status).toBe(400);
+        expect(res.body.message).toContain(message);
+        expect(logistics.send).not.toHaveBeenCalled();
+      },
+    );
+
     it.each<[string, Record<string, unknown>]>([
       ['express_multiplier < 1', { express_multiplier: 0.9 }],
       ['volumetric_divisor 0', { volumetric_divisor: 0 }],
