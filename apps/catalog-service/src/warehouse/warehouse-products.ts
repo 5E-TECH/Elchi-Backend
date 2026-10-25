@@ -89,12 +89,8 @@ export async function findProductsByCode(
   );
 }
 
-/**
- * Javobdagi mahsulot ko'rinishi (kod yorlig'i + «Hisob vazni»).
- * `volumetricFromKg` — narx sozlamasidagi hajm chegarasi (AQ9lkgVB;
- * `WarehouseDirectoryService.volumetricFromKg()`), 0 — chegara yo'q.
- */
-export function productView(row: WarehouseProductRow, volumetricFromKg = 0) {
+/** Javobdagi mahsulot ko'rinishi (kod yorlig'i + «Hisob vazni»). */
+export function productView(row: WarehouseProductRow) {
   const weight =
     row.weight_kg === null || row.weight_kg === undefined
       ? null
@@ -116,7 +112,7 @@ export function productView(row: WarehouseProductRow, volumetricFromKg = 0) {
     is_deleted: row.is_deleted === true,
     code: warehouseDisplayCode(row),
     ...measure,
-    ...warehouseChargeableWeight(measure, volumetricFromKg),
+    ...warehouseChargeableWeight(measure),
   };
 }
 

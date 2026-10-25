@@ -29009,12 +29009,11 @@
             "type": "number",
             "nullable": true,
             "example": 38.4,
-            "description": "«Hisob vazni» = max(og‘irlik, U×K×B/5000), kg (3 kasr). AQ9lkgVB: hajmli vazn narx sozlamasidagi `volumetric_from_kg` dan kichik bo‘lsa — faqat og‘irlik"
+            "description": "«Hisob vazni» = max(og‘irlik, U×K×B/5000), kg (3 kasr)"
           },
           "volumetric_weight_kg": {
             "type": "number",
-            "nullable": true,
-            "description": "U×K×B/5000, kg — chegaradan qat‘i nazar (hajm o‘chiq yoki o‘lcham yo‘q — null)"
+            "nullable": true
           },
           "chargeable_basis": {
             "type": "string",

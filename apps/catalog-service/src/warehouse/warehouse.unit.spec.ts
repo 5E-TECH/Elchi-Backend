@@ -74,55 +74,30 @@ describe('hY7uacJu — ombor yordamchilari', () => {
     ).toMatchObject({ chargeable_weight_kg: 25, measure_missing: true });
   });
 
-  it('AQ9lkgVB: hajm chegarasi — hajmli < chegara → og`irlik; aynan chegara → hajm', () => {
-    const small = {
-      weight_kg: 0.5,
-      length_cm: 20,
-      width_cm: 20,
-      height_cm: 20,
-    };
-    expect(warehouseChargeableWeight(small, 3)).toEqual({
-      chargeable_weight_kg: 0.5,
+  it('AQ9lkgVB: «Hisob vazni» hajm chegarasiz — chegara faqat jo`natma yig`indisida (narx dvigateli)', () => {
+    // 20×20×20 sm, 0,5 kg: bitta dona hajmli 1,6 kg. Chegara 3 da 1 donali
+    // buyurtma og'irlik bo'yicha, 2 donali (3,2 kg) hajm bo'yicha — bitta
+    // dona ko'rinishi buni aks ettira olmaydi, shuning uchun chegarasiz.
+    expect(
+      warehouseChargeableWeight({
+        weight_kg: 0.5,
+        length_cm: 20,
+        width_cm: 20,
+        height_cm: 20,
+      }),
+    ).toEqual({
+      chargeable_weight_kg: 1.6,
       volumetric_weight_kg: 1.6,
-      chargeable_basis: 'actual',
+      chargeable_basis: 'volumetric',
       measure_missing: false,
     });
-    // Chegara 0 / berilmagan — oldingidek (hajm katta → hajm).
-    expect(warehouseChargeableWeight(small, 0)).toMatchObject({
-      chargeable_weight_kg: 1.6,
-      chargeable_basis: 'volumetric',
-    });
-    expect(warehouseChargeableWeight(small)).toEqual(
-      warehouseChargeableWeight(small, 0),
-    );
+    // Og'irlik yo'q, hajm kichik — hajm qiymati ko'rsatiladi (null emas).
     expect(
-      warehouseChargeableWeight(
-        { weight_kg: 0.8, length_cm: 50, width_cm: 35, height_cm: 20 },
-        3,
-      ),
-    ).toMatchObject({
-      chargeable_weight_kg: 7,
-      chargeable_basis: 'volumetric',
-    });
-    expect(
-      warehouseChargeableWeight(
-        { weight_kg: 0.5, length_cm: 30, width_cm: 25, height_cm: 20 },
-        3,
-      ),
-    ).toMatchObject({
-      chargeable_weight_kg: 3,
-      chargeable_basis: 'volumetric',
-    });
-    // Og'irlik yo'q, hajm chegaradan past — hisob vazni yo'q («O'lchov yo'q»).
-    expect(
-      warehouseChargeableWeight(
-        { length_cm: 20, width_cm: 20, height_cm: 20 },
-        3,
-      ),
+      warehouseChargeableWeight({ length_cm: 20, width_cm: 20, height_cm: 20 }),
     ).toEqual({
-      chargeable_weight_kg: null,
+      chargeable_weight_kg: 1.6,
       volumetric_weight_kg: 1.6,
-      chargeable_basis: null,
+      chargeable_basis: 'volumetric',
       measure_missing: true,
     });
   });
@@ -302,36 +277,6 @@ describe('hY7uacJu — WarehouseDirectoryService', () => {
         region: { id: '7', name: 'Samarqand' },
       });
     }
-  });
-
-  it('AQ9lkgVB: volumetricFromKg — logistics sozlamasidan, keshlanadi; xatoda oxirgi qiymat yoki 0', async () => {
-    let fail = false;
-    const { service, client } = make({
-      'logistics.delivery.settings.get': () =>
-        fail
-          ? new Error('logistics down')
-          : { statusCode: 200, data: { id: '3', volumetric_from_kg: 3 } },
-    });
-    await expect(service.volumetricFromKg()).resolves.toBe(3);
-    await expect(service.volumetricFromKg()).resolves.toBe(3);
-    expect(client.send).toHaveBeenCalledTimes(1);
-    expect(client.send.mock.calls[0][0]).toEqual({
-      cmd: 'logistics.delivery.settings.get',
-    });
-    // Kesh eskirdi, logistics javob bermadi — oxirgi ma'lum qiymat.
-    const now = Date.now();
-    const spy = jest.spyOn(Date, 'now').mockReturnValue(now + 60_000);
-    fail = true;
-    await expect(service.volumetricFromKg()).resolves.toBe(3);
-    spy.mockRestore();
-
-    const { service: fresh } = make({});
-    await expect(fresh.volumetricFromKg()).resolves.toBe(0);
-    const { service: legacy } = make({
-      // Eski logistics (maydon yo'q) — 0.
-      'logistics.delivery.settings.get': () => ({ data: { id: '1' } }),
-    });
-    await expect(legacy.volumetricFromKg()).resolves.toBe(0);
   });
 
   it('filial keshlanadi; 404 — null; yozish yo`lida servis xatosi — 503', async () => {

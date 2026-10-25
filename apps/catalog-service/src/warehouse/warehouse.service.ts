@@ -829,18 +829,14 @@ export class WarehouseService {
       ),
     ]);
 
-    const [markets, volumetricFromKg] = await Promise.all([
-      this.directory.getMarkets(
-        Array.from(
-          new Set([
-            ...rows.map((row) => row.market_id),
-            ...marketFacet.map((row) => row.market_id),
-          ]),
-        ),
+    const markets = await this.directory.getMarkets(
+      Array.from(
+        new Set([
+          ...rows.map((row) => row.market_id),
+          ...marketFacet.map((row) => row.market_id),
+        ]),
       ),
-      // AQ9lkgVB: «Hisob vazni» narx sozlamasidagi hajm chegarasi bilan.
-      this.directory.volumetricFromKg(),
-    ]);
+    );
     const marketName = (marketId: string) =>
       markets.get(marketId)?.name ?? null;
 
@@ -855,7 +851,7 @@ export class WarehouseService {
         const threshold = num(row.threshold);
         return {
           stock_id: row.stock_id,
-          product: productView(row, volumetricFromKg),
+          product: productView(row),
           market: { id: row.market_id, name: marketName(row.market_id) },
           on_hand: row.on_hand,
           reserved: row.reserved,
@@ -1064,10 +1060,9 @@ export class WarehouseService {
           [warehouse.id, products.map((product) => product.id)],
         )
       : [];
-    const [markets, volumetricFromKg] = await Promise.all([
-      this.directory.getMarkets(products.map((product) => product.user_id)),
-      this.directory.volumetricFromKg(),
-    ]);
+    const markets = await this.directory.getMarkets(
+      products.map((product) => product.user_id),
+    );
     return {
       warehouse: {
         id: warehouse.id,
@@ -1084,7 +1079,7 @@ export class WarehouseService {
         const row = stock.find((item) => item.product_id === product.id);
         const available = row ? row.on_hand - row.reserved : 0;
         return {
-          product: productView(product, volumetricFromKg),
+          product: productView(product),
           market: {
             id: product.user_id,
             name: markets.get(product.user_id)?.name ?? null,
@@ -1138,7 +1133,7 @@ export class WarehouseService {
       params.push(`%${search.replace(/[\\%_]/g, (ch) => `\\${ch}`)}%`);
       searchSql = ` AND p."name" ILIKE $${params.length}`;
     }
-    const [rows, productTotals, branches, fromKg] = await Promise.all([
+    const [rows, productTotals, branches] = await Promise.all([
       this.manager.query<MarketStockRow[]>(
         `SELECT s."warehouse_id"::text AS warehouse_id,
                 s."product_id"::text AS product_id, s."on_hand", s."reserved",
@@ -1157,8 +1152,6 @@ export class WarehouseService {
         [marketId],
       ),
       this.directory.getBranches(warehouses.map((w) => w.branch_id)),
-      // AQ9lkgVB: «Hisob vazni» narx sozlamasidagi hajm chegarasi bilan.
-      this.directory.volumetricFromKg(),
     ]);
 
     const byProduct = new Map<
@@ -1178,7 +1171,7 @@ export class WarehouseService {
     >();
     for (const row of rows) {
       const entry = byProduct.get(row.product_id) ?? {
-        product: productView(row, fromKg),
+        product: productView(row),
         cells: [],
       };
       const available = row.on_hand - row.reserved;

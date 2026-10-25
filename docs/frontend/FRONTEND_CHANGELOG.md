@@ -25,9 +25,8 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 ### 2026-10-25 — Yetkazish narxi: hajm qaysi kg dan boshlab hisobga olinadi (AQ9lkgVB)
 
-Deploy: logistics-service (migratsiya `1716000000154`), api-gateway (DTO/Swagger), catalog-service (ombordagi
-«Hisob vazni»). Migratsiyadan keyin chegara **0** — narx hozirgidek; ega aytgan chegara (hozir 3 kg) ops
-vositalaridan yoziladi.
+Deploy: logistics-service (migratsiya `1716000000154`), api-gateway (DTO/Swagger). Migratsiyadan keyin chegara
+**0** — narx hozirgidek; ega aytgan chegara (hozir 3 kg) ops vositalaridan yoziladi.
 
 - [2026-10-25] ✏️ [gateway/logistics] — `GET /delivery/pricing-settings` (va `.../history` versiyalari, `PATCH`
   javobi) da yangi maydon **`volumetric_from_kg: number`** (kg, 3 kasr, sukut `0`). `PATCH /delivery/pricing-settings`
@@ -45,8 +44,9 @@ vositalaridan yoziladi.
   olindimi). `volumetricKg` — doim hisoblangan hajmli vazn (chegaradan qat'i nazar), `basis` — hisob vazni qaysi
   biridan. Qo'shimcha (additive) — eski FE buzilmaydi.
 - [2026-10-25] 🟢 [catalog] — ombor ro'yxatlaridagi «Hisob vazni» (`product.chargeable_weight_kg` /
-  `chargeable_basis`) ham shu chegarani oladi (bitta dona uchun; sozlama 30 s keshlanadi). Hajm chegaradan past va
-  og'irlik yo'q bo'lsa `chargeable_weight_kg: null` («O'lchov yo'q»).
+  `chargeable_basis`) **o'zgarmagan** — chegarasiz, max(og'irlik, U×K×B/5000) bitta dona uchun. Chegara butun
+  jo'natma yig'indisiga qo'llanadi (2 × 1,6 kg = 3,2 kg — chegara 3 da hajm bo'yicha), bitta dona ko'rinishi uni
+  to'g'ri ko'rsata olmaydi. Hajm qo'llandimi — faqat quote'dagi `volumetricApplied` dan.
 - 🔧 FE: Ops vositalari → yetkazish narxi sozlamalari kartasiga «Hajm qaysi kg dan hisobga olinadi» maydoni (kg, 0 —
   har doim) + tarix ro'yxatida shu maydon; kalkulyator / buyurtma formasidagi narx blokida `volumetricApplied: false`
   bo'lsa «Hajm {volumetricFromKg} kg dan kichik — og'irlik bo'yicha» izohi.
