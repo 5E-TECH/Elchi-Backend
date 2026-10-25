@@ -22104,6 +22104,11 @@
           "customer": {
             "$ref": "#/components/schemas/CreateOrderCustomerDto"
           },
+          "update_customer_card": {
+            "type": "boolean",
+            "default": false,
+            "description": "txmkXVBa — POST /orders va ai-confirm: mavjud mijoz kartasi formadagi maydonlar bilan yangilansinmi. `true` — «Kartani ham yangilash»: buyurtma yaratilgach karta `customer` obyektidagi berilgan va farq qiladigan maydonlar (name, district_id, address, extra_number) bilan yangilanadi (customer_id yo'lida ham); market / market operatori faqat o'z marketida buyurtmasi bor mijoz kartasini yangilay oladi (aks holda 403, buyurtma yaratilmaydi). `false` / berilmasa — «Faqat shu buyurtmada»: karta O'ZGARMAYDI (telefon yo'lida ham), manzil, tuman va qo'shimcha raqam faqat buyurtmaning o'z ustunlariga (`address`, `district_id`, `extra_number`) yoziladi. Javobda `customer_card_updated` (boolean) va `customer_card_changed_fields` (string[]). POST /orders/external da e'tiborsiz."
+          },
           "where_deliver": {
             "type": "string",
             "enum": [
@@ -22422,6 +22427,11 @@
               "hq"
             ],
             "description": "6kHnNH9j: shu buyurtma manbasi (auto | hq). Berilmasa — so‘rov darajasidagi `fulfillment`, u ham bo‘lmasa `auto`."
+          },
+          "update_customer_card": {
+            "type": "boolean",
+            "default": false,
+            "description": "txmkXVBa: mavjud mijoz kartasi shu buyurtmadagi ma`lumot bilan yangilansinmi (POST /orders `update_customer_card` bilan bir xil). Berilmasa — karta o`zgarmaydi."
           }
         },
         "required": [
@@ -22536,6 +22546,11 @@
           },
           "customer": {
             "$ref": "#/components/schemas/CreateOrderCustomerDto"
+          },
+          "update_customer_card": {
+            "type": "boolean",
+            "default": false,
+            "description": "txmkXVBa — POST /orders va ai-confirm: mavjud mijoz kartasi formadagi maydonlar bilan yangilansinmi. `true` — «Kartani ham yangilash»: buyurtma yaratilgach karta `customer` obyektidagi berilgan va farq qiladigan maydonlar (name, district_id, address, extra_number) bilan yangilanadi (customer_id yo'lida ham); market / market operatori faqat o'z marketida buyurtmasi bor mijoz kartasini yangilay oladi (aks holda 403, buyurtma yaratilmaydi). `false` / berilmasa — «Faqat shu buyurtmada»: karta O'ZGARMAYDI (telefon yo'lida ham), manzil, tuman va qo'shimcha raqam faqat buyurtmaning o'z ustunlariga (`address`, `district_id`, `extra_number`) yoziladi. Javobda `customer_card_updated` (boolean) va `customer_card_changed_fields` (string[]). POST /orders/external da e'tiborsiz."
           },
           "where_deliver": {
             "type": "string",

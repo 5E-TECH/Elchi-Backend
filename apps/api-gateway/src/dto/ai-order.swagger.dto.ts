@@ -11,6 +11,7 @@ import {
   IsNotEmpty,
   IsNumber,
   IsObject,
+  IsBoolean,
   IsOptional,
   IsString,
   IsUUID,
@@ -341,6 +342,16 @@ export class AiConfirmOrderDto {
     message: "fulfillment faqat 'auto' yoki 'hq' bo'lishi mumkin",
   })
   fulfillment?: OrderFulfillmentMode;
+
+  @ApiPropertyOptional({
+    type: Boolean,
+    default: false,
+    description:
+      'txmkXVBa: mavjud mijoz kartasi shu buyurtmadagi ma`lumot bilan yangilansinmi (POST /orders `update_customer_card` bilan bir xil). Berilmasa — karta o`zgarmaydi.',
+  })
+  @IsOptional()
+  @IsBoolean({ message: "update_customer_card true yoki false bo'lishi kerak" })
+  update_customer_card?: boolean;
 }
 
 export class AiConfirmRequestDto {

@@ -23,6 +23,41 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-10-25 (tun) — Buyurtma yaratish: mavjud mijoz kartasi jimgina yozilmaydi, `update_customer_card` (txmkXVBa)
+
+Deploy: api-gateway (DTO + `createOrderInternal`), identity-service (`identity.customer.create` `update_existing`,
+yangi `identity.customer.update`), order-service (`orders.extra_number`). **Migratsiya bor:**
+`1716000000156-OrderExtraNumber` (`order_schema.orders.extra_number` varchar(32) NULL, backfill yo'q). Deploy tartibi:
+migratsiya → identity-service + order-service → api-gateway. Ega qarori 2026-10-19 (create-step2 S5).
+
+- [2026-10-25] ✏️ [gateway] — `POST /orders` va `POST /orders/ai-confirm` (har buyurtmada) yangi ixtiyoriy
+  **`update_customer_card: boolean`** (sukut `false`):
+  - `false` / berilmasa — «Faqat shu buyurtmada»: mijoz kartasi **o'zgarmaydi** (endi telefon yo'lida — `customer`
+    obyekti bilan — ham identity mavjud kartani jimgina yozmaydi). Formadagi manzil, tuman va qo'shimcha raqam
+    buyurtmaning o'z ustunlariga yoziladi: `address` (yuqori darajada bo'lmasa `customer.address`), `district_id`,
+    yangi **`extra_number`** (`customer.extra_number`).
+  - `true` — «Kartani ham yangilash»: buyurtma yaratilgach karta `customer` obyektidagi berilgan va farq qiladigan
+    maydonlar (`name`, `district_id`, `address`, `extra_number`) bilan yangilanadi — `customer_id` yo'lida ham
+    (shuning uchun `customer` obyektini ham yuboring). Bo'sh qiymat eski qiymatni o'chirmaydi.
+- [2026-10-25] ⚠️ [gateway] — ruxsat: **market va market operatori** o'z marketida buyurtmasi **bo'lmagan** mijoz
+  kartasini yangilay olmaydi → 403 «Mijoz kartasini yangilab bo'lmaydi: bu mijozning sizning marketingizda buyurtmasi
+  yo'q (karta boshqa marketlar bilan umumiy). «Faqat shu buyurtmada» ni tanlang» — **buyurtma yaratilmaydi**.
+  Admin, registrator, menejer, filial — cheklovsiz. Yangi mijoz (telefon bazada yo'q) — karta formadan yaratiladi,
+  403 yo'q.
+- [2026-10-25] ✏️ [gateway] — `POST /orders` javobida (envelope yuqori darajasida) **`customer_card_updated: boolean`**
+  va **`customer_card_changed_fields: string[]`** (masalan `["address","extra_number"]`) — natija toast'i uchun.
+  Karta yangilash buyurtmadan keyin bajariladi; u muvaffaqiyatsiz bo'lsa buyurtma baribir yaratilgan,
+  `customer_card_updated: false`.
+- [2026-10-25] 🟢 [identity] — karta yangilanishi activity log'ga yoziladi (`User`, `updated`): kim (aktyor), qaysi
+  buyurtma orqali (`metadata.order_id`, `market_id`, `source: order_create`), maydon eski → yangi.
+- [2026-10-25] 🟢 [order] — buyurtma javoblarida yangi `extra_number` (eski buyurtmalarda `null`).
+- [2026-10-25] 🟢 — Telegram bot, `POST /orders/external`, hamkor (BeePost) va tashqi import **o'zgarmagan**: identity
+  telefon bo'yicha topilgan kartani avvalgidek yangilaydi (j70YS4zJ); `update_customer_card` u yerda e'tiborsiz.
+- 🔧 FE (hiqRNhkI): mavjud mijoz tanlanib maydonlari o'zgartirilsa «Mijoz kartasi ham yangilansinmi?» dialogi →
+  «Kartani ham yangilash» = `update_customer_card: true`, «Faqat shu buyurtmada» = `false`; javobdagi
+  `customer_card_changed_fields` bilan toast. ⚠️ Dialog chiqmaguncha formadagi o'zgarish kartaga yozilmaydi (faqat
+  buyurtmaga) — avval telefon yo'lida jimgina yozilardi.
+
 ### 2026-10-25 (tun) — Mijoz taklifi: boshqa market mijozi barcha yaratuvchi rollarga, sonlar faqat shu market bo'yicha (WCuZzUCv)
 
 Deploy: faqat api-gateway (`GET /customers/suggest`, `POST /orders` / `ai-confirm` `customer_id` doirasi). Migratsiya

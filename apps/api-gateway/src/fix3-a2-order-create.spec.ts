@@ -123,7 +123,8 @@ describe('fix3 A2 — order create hardening', () => {
 
     expect(identityClient.send).toHaveBeenCalledWith(
       { cmd: 'identity.customer.create' },
-      { dto: abuseDto.customer },
+      // txmkXVBa: qo'lda forma — mavjud karta jimgina yozilmaydi.
+      { dto: abuseDto.customer, update_existing: false },
     );
     expect(sentCreate(orderClient, 'order.create').dto.customer_id).toBe(
       'c-new',

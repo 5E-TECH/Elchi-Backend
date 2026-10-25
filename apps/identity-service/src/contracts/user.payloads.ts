@@ -23,6 +23,27 @@ export interface CreateCourierPayload {
 
 export interface CreateCustomerPayload {
   dto: CreateCustomerDto;
+  /**
+   * txmkXVBa: telefon bo'yicha topilgan MAVJUD mijoz kartasi yangilansinmi
+   * (j70YS4zJ patch). Berilmasa — `true` (hamkor, bot, tashqi import xulqi
+   * o'zgarmaydi); POST /orders va ai-confirm `false` yuboradi — karta faqat
+   * `update_customer_card: true` bilan, `identity.customer.update` orqali.
+   */
+  update_existing?: boolean;
+}
+
+/** txmkXVBa: buyurtma yaratishda «Kartani ham yangilash». */
+export interface UpdateCustomerCardPayload {
+  id: string;
+  dto: {
+    name?: string | null;
+    district_id?: string | null;
+    address?: string | null;
+    extra_number?: string | null;
+  };
+  /** Activity log uchun: qaysi buyurtma orqali va qaysi market. */
+  order_id?: string | null;
+  market_id?: string | null;
 }
 
 export interface CreateManagerPayload {

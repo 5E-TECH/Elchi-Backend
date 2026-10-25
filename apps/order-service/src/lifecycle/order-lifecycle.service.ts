@@ -5037,6 +5037,8 @@ export class OrderLifecycleService {
       district_id?: string | null;
       region_id?: string | null;
       address?: string | null;
+      /** txmkXVBa: qo'shimcha raqam nusxasi (gateway qo'lda yaratish yo'li). */
+      extra_number?: string | null;
       qr_code_token?: string | null;
       parent_order_id?: string | null;
       /**
@@ -5168,6 +5170,10 @@ export class OrderLifecycleService {
         district_id: dto.district_id ?? null,
         region_id: dto.region_id ?? null,
         address: dto.address ?? null,
+        extra_number:
+          typeof dto.extra_number === 'string' && dto.extra_number.trim()
+            ? dto.extra_number.trim().slice(0, 32)
+            : null,
         qr_code_token: dto.qr_code_token ?? this.generateCustomToken(),
         parent_order_id: dto.parent_order_id ?? null,
         // (lQjt6sKP) almashtirish: eskiga havola + kuryer "eskisini oldim" darvozasi.
@@ -9323,6 +9329,8 @@ export class OrderLifecycleService {
           district_id: order.district_id ?? null,
           region_id: order.region_id ?? null,
           address: order.address ?? null,
+          // txmkXVBa: qo'shimcha raqam nusxasi bola buyurtmaga ham.
+          extra_number: order.extra_number ?? null,
           qr_code_token: `CANCEL-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`,
           parent_order_id: String(order.id),
           source: order.source,

@@ -426,6 +426,13 @@ export class Order extends BaseEntity {
   @Column({ type: 'varchar', nullable: true })
   address!: string | null;
 
+  /**
+   * txmkXVBa: mijoz qo'shimcha raqamining buyurtmadagi nusxasi («Faqat shu
+   * buyurtmada» — karta o'zgarmaydi). Migratsiya 1716000000156.
+   */
+  @Column({ type: 'varchar', length: 32, nullable: true })
+  extra_number!: string | null;
+
   // Skaner qidiruvi shu ustun bo'yicha (D148eHMA) — migratsiya 1716000000058.
   @Index('IDX_ORDER_QR_CODE_TOKEN', {
     where: '"qr_code_token" IS NOT NULL',
