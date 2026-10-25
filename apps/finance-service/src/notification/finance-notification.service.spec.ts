@@ -742,9 +742,12 @@ describe('modul ulanishi va TC5 analogi', () => {
     expect(src).toMatch(
       /RmqModule\.register\(\{\s*name:\s*'NOTIFICATION'\s*\}\)/,
     );
-    expect(src).toMatch(/targets:\s*\[\s*'ORDER',\s*'NOTIFICATION'\s*\]/);
+    // (rWdLuoP3) + `GATEWAY` / `realtime.notify` — smena / karta realtime hodisalari.
     expect(src).toMatch(
-      /fireAndForgetPatterns:\s*\[\s*'notification\.dispatch'\s*\]/,
+      /targets:\s*\[\s*'ORDER',\s*'NOTIFICATION',\s*'GATEWAY'\s*\]/,
+    );
+    expect(src).toMatch(
+      /fireAndForgetPatterns:\s*\[\s*'notification\.dispatch',\s*'realtime\.notify'\s*\]/,
     );
     expect(src).toMatch(/FinanceNotificationService/);
   });

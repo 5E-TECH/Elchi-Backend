@@ -405,6 +405,15 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
   shifts (`open`/`close`/`find_all`), salary CRUD, operator earnings/payments/balance.
 - **Invariant:** the cashbox system enforces a money invariant (checked by
   `scripts/check-cashbox-invariant.ts`, `npm run db:check-cashbox`).
+- **Realtime (rWdLuoP3, 2026-10-25):** `FinanceRealtimeService` writes
+  `{cmd:'realtime.notify'}` to the outbox (target `GATEWAY`, fire-and-forget)
+  INSIDE the business transaction: `finance.shift.closed` /
+  `finance.shift.auto_closed` (shift close; MAIN → roles superadmin/admin/
+  registrator, BRANCH → `manager` of that branch only, + opener/closer user
+  rooms), `finance.shift.account_checked` (ready for kiZgTybn, no caller yet),
+  `finance.cashbox.card_changed` (card create/rename/status/transfer/convert →
+  superadmin/admin). Skipped when `RABBITMQ_GATEWAY_QUEUE` is unset. Payloads
+  carry ids + times only (no amounts).
 - **fix3 (2026-10-01):** `payment_market` replies right after commit (+ the 2 s
   bounded ledger publish); the per-order PAID/PARTLY_PAID sync and the partner
   webhook run in the background (serialized per market, in-process, drained
@@ -485,7 +494,10 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
     (socket.io `notification:new` to room `user:<sub>`); best-effort — when
     `RABBITMQ_GATEWAY_QUEUE` is unset the row still persists, push is skipped.
     (identity-service also emits `{cmd:'auth.sessions.kick'}` to the same queue
-    since 2026-10-24 — see Sessions › Socket kick.)
+    since 2026-10-24 — see Sessions › Socket kick. finance-service since
+    2026-10-25 via outbox, with `targets` `[{user_id}|{role}|{role,branch_id}]`
+    → one socket.io emit to `user:` / `role:` / `branch:<id>:role:<role>` rooms;
+    the gateway consumer runs with `noAck: false` — handlers ack manually.)
   - Default channels when omitted: `[in_app, realtime]`. The DB row is the system
     of record regardless of channel outcome. `role`/`broadcast` targeting can't
     reach superadmin/customer (excluded by `identity.user.find_all`) — use

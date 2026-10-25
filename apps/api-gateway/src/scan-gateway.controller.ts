@@ -16,6 +16,7 @@ import { ClientProxy } from '@nestjs/microservices';
 import {
   ApiBearerAuth,
   ApiBody,
+  ApiForbiddenResponse,
   ApiNotFoundResponse,
   ApiOkResponse,
   ApiOperation,
@@ -33,6 +34,11 @@ import {
   canLookupOrderByQr,
 } from './auth/order-qr-visibility';
 import { projectOrderPayloadForRoles } from './auth/order-role-projection';
+import {
+  canScanPost,
+  isPostScanToken,
+  POST_SCAN_FORBIDDEN_MESSAGE,
+} from './auth/post-scan-access';
 import { isOrderQrLightView, sendOrderQrLight } from './order-qr-light-view';
 
 type ScanResponseType =
@@ -43,6 +49,7 @@ type ScanResponseType =
 interface JwtUser {
   sub: string;
   roles?: string[];
+  branch_id?: string | null;
 }
 
 class ScanMarketCancelledHandoverQrDto {
@@ -123,10 +130,17 @@ export class ScanGatewayController {
   @Throttle(SCAN_THROTTLE)
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Resolve scanned QR token to order/batch/post' })
+  @ApiOperation({
+    summary: 'Resolve scanned QR token to order/batch/post',
+    description:
+      "Prefiks bo'yicha: `BTB-`/`BTR-` → paket (`type: batch`), `POST-` (logistics haqiqiy shakli) / `PST-` → pochta (`type: post`), qolgani → buyurtma (404 bo'lsa tashqi qop). " +
+      "j8hdXE1o: paketni jo'natuvchi YOKI qabul qiluvchi filial xodimi ko'radi (`GET /transfer-batches/:id` bilan bir xil). " +
+      "dwJX3NjT: paket javobida qo'shimcha `source_branch` / `destination_branch` `{id, name}`, `region` `{id, name}` va `items[].order` — buyurtma xulosasi `{id, order_number, status, total_price, region, district, customer {name, phone_number}}` (xulosa xizmati javob bermasa `null`). " +
+      "X4RzXk1H: pochta — faqat superadmin/admin/branch/manager/registrator/courier (boshqalar 403) va `GET /post/orders/:id` doirasi (filial xodimi — o'z filiali, kuryer — o'z pochtasi); javob `GET /post/scan/:id` bilan bir xil: pochta qatori + `region`, `courier`, `orders[]`.",
+  })
   @ApiParam({
     name: 'token',
-    description: 'QR token (ORD-/BTB-/BTR-/PST- or legacy token)',
+    description: 'QR token (ORD-/BTB-/BTR-/POST-/PST- or legacy token)',
   })
   @ApiOkResponse({
     description: 'Resolved scan result',
@@ -136,9 +150,41 @@ export class ScanGatewayController {
         data: {
           id: '501',
           qr_code_token: 'BTB-a8c3d4e5',
+          status: 'SENT',
+          order_count: 1,
+          total_price: 65000,
+          source_branch_id: '1',
+          destination_branch_id: '3',
+          target_region_id: '6',
+          source_branch: { id: '1', name: 'Bosh ofis' },
+          destination_branch: { id: '3', name: 'QA filial' },
+          region: { id: '6', name: 'Buxoro viloyati' },
+          items: [
+            {
+              id: '9001',
+              order_id: '700',
+              snapshot_price: 65000,
+              order: {
+                id: '700',
+                order_number: 'EL-100700',
+                status: 'on the road',
+                total_price: 65000,
+                region: 'Buxoro viloyati',
+                district: 'Buxoro tumani',
+                customer: {
+                  name: 'Ali Valiyev',
+                  phone_number: '+998901234567',
+                },
+              },
+            },
+          ],
         },
       },
     },
+  })
+  @ApiForbiddenResponse({
+    description:
+      "Paket: so'rovchi jo'natuvchi filialni ham, qabul qiluvchi filialni ham o'qiy olmaydi. Pochta: rol yoki doira (filial / o'z pochtasi) mos emas.",
   })
   @ApiNotFoundResponse({ description: 'Topilmadi' })
   @ApiQuery({
@@ -165,16 +211,37 @@ export class ScanGatewayController {
           requester: { id: req.user.sub, roles: req.user.roles ?? [] },
         },
       );
-      return this.shapeResponse('batch', response);
+      // dwJX3NjT: `items[].order` — buyurtma xulosasi; rol proyeksiyasi
+      // (kH2zZsz3) himoya qatlami sifatida ham qo'llanadi.
+      return projectOrderPayloadForRoles(
+        req?.user?.roles,
+        this.shapeResponse('batch', response),
+      );
     }
 
-    if (prefix === 'PST-') {
+    // X4RzXk1H: haqiqiy pochta tokeni `POST-…` (5 belgili prefiks) — ilgari
+    // 4 belgili `POST` hech narsaga mos kelmay buyurtma tarmog'iga tushardi
+    // (404). Rol shu yerda, filial/kuryer doirasi logistics'da tekshiriladi.
+    if (isPostScanToken(normalizedToken)) {
+      if (!canScanPost(req?.user?.roles)) {
+        throw new ForbiddenException(POST_SCAN_FORBIDDEN_MESSAGE);
+      }
       const response = await this.sendWithTimeout(
         'logistics',
         { cmd: 'logistics.post.find_by_scan' },
-        { id: normalizedToken },
+        {
+          id: normalizedToken,
+          requester: {
+            id: req.user.sub,
+            roles: req.user.roles ?? [],
+            branch_id: req.user.branch_id ?? null,
+          },
+        },
       );
-      return this.shapeResponse('post', response);
+      return projectOrderPayloadForRoles(
+        req?.user?.roles,
+        this.shapeResponse('post', response),
+      );
     }
 
     // ORD- prefixed and legacy prefixless tokens both resolve as order.

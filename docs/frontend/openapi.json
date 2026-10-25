@@ -5654,13 +5654,14 @@
     },
     "/post/scan/{id}": {
       "get": {
+        "description": "X4RzXk1H: doira `GET /post/orders/:id` bilan bir xil — filial xodimi o'z filiali pochtasini (yoki buyurtmalari to'liq o'z filialida turganini), kuryer o'z pochtasini ko'radi; boshqasi 403. Skan pochtani o'zgartirmaydi. dwJX3NjT: javob — pochta qatori (avvalgi maydonlar o'zgarmagan) + `region` `{id, name}`, `courier` `{id, name, phone_number}` (kuryersiz — null) va `orders[]` `{id, order_number, status, total_price, where_deliver, region, district, customer {name, phone_number}}` — `GET /post/orders/:id` dagi ro'yxat (kuryerga SENT pochtada faqat yo'ldagilar). `GET /scan/:token` (`POST-…`) ham aynan shu javobni `type: post` bilan qaytaradi.",
         "operationId": "LogisticsGatewayController_getPostByScan",
         "parameters": [
           {
             "name": "id",
             "required": true,
             "in": "path",
-            "description": "Post QR token",
+            "description": "Post QR token (`POST-…`)",
             "schema": {
               "type": "string"
             }
@@ -16319,13 +16320,14 @@
     },
     "/scan/{token}": {
       "get": {
+        "description": "Prefiks bo'yicha: `BTB-`/`BTR-` → paket (`type: batch`), `POST-` (logistics haqiqiy shakli) / `PST-` → pochta (`type: post`), qolgani → buyurtma (404 bo'lsa tashqi qop). j8hdXE1o: paketni jo'natuvchi YOKI qabul qiluvchi filial xodimi ko'radi (`GET /transfer-batches/:id` bilan bir xil). dwJX3NjT: paket javobida qo'shimcha `source_branch` / `destination_branch` `{id, name}`, `region` `{id, name}` va `items[].order` — buyurtma xulosasi `{id, order_number, status, total_price, region, district, customer {name, phone_number}}` (xulosa xizmati javob bermasa `null`). X4RzXk1H: pochta — faqat superadmin/admin/branch/manager/registrator/courier (boshqalar 403) va `GET /post/orders/:id` doirasi (filial xodimi — o'z filiali, kuryer — o'z pochtasi); javob `GET /post/scan/:id` bilan bir xil: pochta qatori + `region`, `courier`, `orders[]`.",
         "operationId": "ScanGatewayController_scan",
         "parameters": [
           {
             "name": "token",
             "required": true,
             "in": "path",
-            "description": "QR token (ORD-/BTB-/BTR-/PST- or legacy token)",
+            "description": "QR token (ORD-/BTB-/BTR-/POST-/PST- or legacy token)",
             "schema": {
               "type": "string"
             }
@@ -16353,12 +16355,52 @@
                     "type": "batch",
                     "data": {
                       "id": "501",
-                      "qr_code_token": "BTB-a8c3d4e5"
+                      "qr_code_token": "BTB-a8c3d4e5",
+                      "status": "SENT",
+                      "order_count": 1,
+                      "total_price": 65000,
+                      "source_branch_id": "1",
+                      "destination_branch_id": "3",
+                      "target_region_id": "6",
+                      "source_branch": {
+                        "id": "1",
+                        "name": "Bosh ofis"
+                      },
+                      "destination_branch": {
+                        "id": "3",
+                        "name": "QA filial"
+                      },
+                      "region": {
+                        "id": "6",
+                        "name": "Buxoro viloyati"
+                      },
+                      "items": [
+                        {
+                          "id": "9001",
+                          "order_id": "700",
+                          "snapshot_price": 65000,
+                          "order": {
+                            "id": "700",
+                            "order_number": "EL-100700",
+                            "status": "on the road",
+                            "total_price": 65000,
+                            "region": "Buxoro viloyati",
+                            "district": "Buxoro tumani",
+                            "customer": {
+                              "name": "Ali Valiyev",
+                              "phone_number": "+998901234567"
+                            }
+                          }
+                        }
+                      ]
                     }
                   }
                 }
               }
             }
+          },
+          "403": {
+            "description": "Paket: so'rovchi jo'natuvchi filialni ham, qabul qiluvchi filialni ham o'qiy olmaydi. Pochta: rol yoki doira (filial / o'z pochtasi) mos emas."
           },
           "404": {
             "description": "Topilmadi"
