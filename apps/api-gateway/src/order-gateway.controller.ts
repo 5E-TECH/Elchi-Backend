@@ -189,6 +189,11 @@ type OrderListFilters = {
   cancelled_inventory?: string;
   /** 6kHnNH9j: «Ombordan» filtri — HQ | WAREHOUSE. */
   fulfillment_source?: string;
+  /**
+   * LFNLeSpu (BG4): bekor bosqichi filtri — `courier,in_transit,branch,hq,market`
+   * (vergul yoki massiv, OR). Ta'rif BG1 `return_stage` bilan AYNAN bir xil.
+   */
+  cancel_stage?: string | string[];
 };
 
 type OrderListRequest =
@@ -234,6 +239,17 @@ const CANCEL_RETURN_RESPONSE_DOC =
   'was handed over. `received_at` (branch/hq) — since when it is at that place (last cancelled-post receipt, else ' +
   'custody time); `sent_at` (in_transit); `handed_over_at` + `handover_method` (market, fL79tFbs BG2; null method = ' +
   'legacy/unknown). Cancelled before intake (never left the market) — both null. No money fields; same for every role.';
+
+/**
+ * LFNLeSpu (BG4) — GET /orders (va eksport) `cancel_stage` filtri (Swagger).
+ */
+const CANCEL_STAGE_QUERY_DOC =
+  'LFNLeSpu (BG4): cancel-return stage filter — comma list (or repeated param) of ' +
+  '`courier`, `in_transit`, `branch`, `hq`, `market` (OR, case-insensitive). Same definition as the row `return_stage` ' +
+  '(filter == badge): courier = cancelled + held by courier; in_transit = `cancelled (sent)`; branch = cancelled + held ' +
+  'by branch (received, not in a return post); hq = cancelled + held by HQ; market = handed over to market ' +
+  '(`returned_to_market`, warehouse returns excluded). Combined with all other filters and the role scope (AND); with ' +
+  '`cancel_stage` the implicit cancelled-inventory tab mode is off. Unknown value — 400.';
 
 /** ai-parse rasmi (multer memoryStorage) — faqat RAM'da, hech qayerga yozilmaydi. */
 type UploadedAiImage = {
@@ -3479,6 +3495,13 @@ export class OrderGatewayController {
       "Bekor qilingan posilka INVENTARI rejimi (qo'ldagi, qaytarish pochtasiga biriktirilmagan; holder HQ/BRANCH). " +
       'Berilmasa: SA/admin uchun oddiy status filtri, filial xodimi/HQ registratori uchun inventar (onzwA7CQ).',
   })
+  @ApiQuery({
+    name: 'cancel_stage',
+    required: false,
+    type: String,
+    description: CANCEL_STAGE_QUERY_DOC,
+    example: 'branch,hq',
+  })
   async findAll(
     @Query('market_id') market_id?: string,
     @Query('customer_id') customer_id?: string,
@@ -3502,6 +3525,7 @@ export class OrderGatewayController {
     @Query('sort_dir') sort_dir?: string,
     @Query('cancelled_inventory') cancelled_inventory?: string,
     @Query('fulfillment_source') fulfillment_source?: string,
+    @Query('cancel_stage') cancel_stage?: string | string[],
   ) {
     const request = await this.resolveOrderListRequest(
       {
@@ -3524,6 +3548,7 @@ export class OrderGatewayController {
         sort_dir,
         cancelled_inventory,
         fulfillment_source,
+        cancel_stage,
       },
       req?.user,
       page,
@@ -3685,6 +3710,13 @@ export class OrderGatewayController {
     required: false,
     enum: FULFILLMENT_SOURCES,
   })
+  @ApiQuery({
+    name: 'cancel_stage',
+    required: false,
+    type: String,
+    description: CANCEL_STAGE_QUERY_DOC,
+    example: 'branch,hq',
+  })
   async exportOrdersExcel(
     @Res() res: Response,
     @Req() req: { user: JwtUser },
@@ -3706,6 +3738,7 @@ export class OrderGatewayController {
     @Query('sort_dir') sort_dir?: string,
     @Query('cancelled_inventory') cancelled_inventory?: string,
     @Query('fulfillment_source') fulfillment_source?: string,
+    @Query('cancel_stage') cancel_stage?: string | string[],
   ): Promise<void> {
     const request = await this.resolveOrderListRequest(
       {
@@ -3727,6 +3760,7 @@ export class OrderGatewayController {
         sort_dir,
         cancelled_inventory,
         fulfillment_source,
+        cancel_stage,
       },
       req?.user,
     );
@@ -3827,6 +3861,7 @@ export class OrderGatewayController {
       sort_dir,
       cancelled_inventory,
       fulfillment_source,
+      cancel_stage,
     } = filters;
     // 6kHnNH9j: «Ombordan» filtri — noto'g'ri qiymat 400 (order-service'ga yetmaydi).
     const normalizedFulfillmentSource = fulfillment_source
@@ -3842,6 +3877,14 @@ export class OrderGatewayController {
         `Noto'g'ri fulfillment_source qiymati: ${fulfillment_source} (HQ yoki WAREHOUSE)`,
       );
     }
+    // LFNLeSpu (BG4): bekor bosqichi — noto'g'ri qiymat 400 (order-service'ga yetmaydi).
+    const parsedCancelStages = parseCancelReturnStages(cancel_stage);
+    if (parsedCancelStages.invalid.length) {
+      throw new BadRequestException(
+        `cancel_stage noto'g'ri: ${parsedCancelStages.invalid.join(', ')} (ruxsat: ${CANCEL_RETURN_STAGES.join(', ')})`,
+      );
+    }
+    const cancelStages = parsedCancelStages.stages;
     const roles = user?.roles ?? [];
     const normalizedRoles = this.normalizeRoles(roles);
     const isMarket = normalizedRoles.includes(RoleEnum.MARKET);
@@ -3992,7 +4035,13 @@ export class OrderGatewayController {
       cancelled_inventory === undefined || cancelled_inventory === ''
         ? undefined
         : String(cancelled_inventory).toLowerCase() === 'true';
+    // LFNLeSpu (BG4): `cancel_stage` berilsa bekor qismi AYNAN bosqich bilan
+    // tanlanadi — inventar/kuryer-bekor tab rejimi yoqilmaydi (aks holda
+    // `holder_type`/`canceled_post_unassigned` qotirmasi bosqich bilan AND
+    // bo'lib, masalan `in_transit` doim bo'sh chiqardi). Rol doirasi (market,
+    // operator, filial, kuryer, logist, mijoz) o'zgarishsiz qo'llanadi.
     const isCancelledTab =
+      !cancelStages &&
       onlyCancelledStatuses &&
       (isCourier || (explicitInventory ?? !isSystemPrivilegedRequester));
     // fix3 C4: HQ registratori bekor qilinganlar tabida SA/admin bilan AYNI
@@ -4071,6 +4120,8 @@ export class OrderGatewayController {
         ...(normalizedFulfillmentSource
           ? { fulfillment_source: normalizedFulfillmentSource }
           : {}),
+        // LFNLeSpu (BG4): order-service `findAll` — `cancelReturnStageSql` (OR).
+        ...(cancelStages ? { cancel_stages: cancelStages } : {}),
       },
       ...(logistRegionIds ? { logistRegionIds } : {}),
     };

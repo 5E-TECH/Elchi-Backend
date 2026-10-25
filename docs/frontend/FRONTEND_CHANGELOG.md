@@ -23,6 +23,23 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-10-26 — Bekor holatlari BG4: `GET /orders?cancel_stage=` (LFNLeSpu)
+
+Deploy: api-gateway (yangi query parametri + Swagger), order-service (faqat tip — filtr BG3 dan beri bor).
+Migratsiya yo'q.
+
+- [2026-10-26] ✏️ [gateway] — `GET /orders` va `GET /orders/export/excel`: ixtiyoriy **`cancel_stage`** —
+  `courier,in_transit,branch,hq,market` dan bir yoki bir nechtasi (vergul bilan yoki parametr takrori, harf
+  farqsiz, OR). Ta'rif qatordagi `return_stage` bilan AYNAN bir xil (filtr == badge): `courier` — bekor, kuryer
+  qo'lida; `in_transit` — `cancelled (sent)`; `branch` — bekor, filial qo'lida (qabul qilingan); `hq` — bekor, HQ
+  qo'lida; `market` — marketga topshirilgan (`returned_to_market`, ombor qaytishi emas). Boshqa filtrlar va rol
+  doirasi bilan AND (market — o'z buyurtmalari, filial — o'z filiali, kuryer — o'zi, logist — o'z viloyatlari).
+  Noma'lum qiymat → 400 `cancel_stage noto'g'ri: … (ruxsat: courier, in_transit, branch, hq, market)`.
+- [2026-10-26] 🟢 [gateway] — `cancel_stage` berilsa `status=cancelled` dagi yashirin «bekor inventari» tab
+  rejimi (filial: holder BRANCH + pochtasiz; kuryer: alohida bekor tab) **yoqilmaydi** — bosqich filtrining o'zi
+  ishlaydi. `cancel_stage` siz xatti-harakat o'zgarmagan.
+- 🔧 FE: bekor bosqichi tablari/filtri uchun `cancel_stage` ni yuboring (eksportga ham xuddi shu parametr).
+
 ### 2026-10-25 — Buyurtma: mahsulotsiz va tumansiz buyurtma yaratilmaydi — barcha yo'llarda (IR2OHIiN)
 
 Deploy: api-gateway (DTO/Swagger + `createOrderInternal`), order-service (yagona yaratish nuqtasi
