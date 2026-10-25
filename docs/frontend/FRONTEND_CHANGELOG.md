@@ -23,10 +23,23 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
-### 2026-10-25 — Bekor holatlari: topshirish usuli/joyi saqlanadi (BG2 fL79tFbs)
+### 2026-10-25 — Bekor holatlari: «qayerda turibdi» va marketga topshirish (BG1 5Yy6r6UI, BG2 fL79tFbs)
 
-Deploy: order-service. **Migratsiya bor:** `1716000000154-CancelReturnMarketHandover` (faqat qo'shimcha NULL
-ustunlar + eski topshirishlar backfill'i; jadval qayta yozilmaydi).
+Deploy: order-service (+ api-gateway — Swagger tavsifi). **Migratsiya bor:** `1716000000154-CancelReturnMarketHandover`
+(faqat qo'shimcha NULL ustunlar + eski topshirishlar backfill'i; jadval qayta yozilmaydi).
+
+- [2026-10-25] ✏️ [order] — **BG1:** `GET /orders`, `GET /orders/:id` (va boshqa boyitilgan buyurtma ro'yxatlari —
+  `markets/:id/cancelled`, `branch/cancelled`, kuryer bekor tabi) har qatorda:
+  `return_stage` — `courier` | `in_transit` | `branch` | `hq` | `market` | `null` va
+  `cancel_return` — `null` yoki `{ stage, place_type: "COURIER"|"BRANCH"|"HQ"|null, place_id, place_name,
+  received_at, sent_at, handed_over_at, handover_method }`. Qoida FE `resolveCancelReturnStage` bilan AYNAN bir xil
+  (qabulgacha bekor — `null`). Joy: kuryerda — ushlab turgan kuryer ismi; filial/HQ — nomi; `in_transit` — MAQSAD
+  (qayerga ketyapti); `market` — qayerda topshirilgan. `received_at` (filial/HQ) — shu joyda qachondan beri (oxirgi
+  bekor pochta qabuli; bo'lmasa custody vaqti) — «N kun» shundan; `sent_at` — `in_transit`; `handed_over_at` +
+  `handover_method` — `market`. Pul maydoni yo'q — hamma rol (market ham) bir xil ko'radi.
+  🔧 FE (vOczoOUE 2-bosqich): `cancel_return` bo'lsa shuni o'qing (`cancelReturnStage.ts` hisobi — zaxira); joy nomi
+  hamma rolda `place_name`, kunlar `received_at` dan, «Marketga topshirildi» vaqti/usuli — `handed_over_at` /
+  `handover_method` (ro'yxatda ham).
 
 - [2026-10-25] ✏️ [order] — buyurtmada yangi maydonlar (GET /orders, /orders/:id va boshqa buyurtma javoblarida
   o'z-o'zidan chiqadi): `market_handover_at` (ISO | null), `market_handover_by` (xodim id | null),

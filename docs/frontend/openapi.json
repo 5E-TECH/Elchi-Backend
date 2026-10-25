@@ -2546,6 +2546,7 @@
         ]
       },
       "get": {
+        "description": "5Yy6r6UI (BG1): every order row has `return_stage` (`courier` | `in_transit` | `branch` | `hq` | `market` | null) and `cancel_return` (null unless the order is cancelled / returned to market): `{ stage, place_type: \"COURIER\" | \"BRANCH\" | \"HQ\" | null, place_id, place_name, received_at, sent_at, handed_over_at, handover_method: \"qr\" | \"manual\" | \"no_qr\" | \"pin\" | null }`. Place = where the parcel is now (courier name / branch or HQ name); `in_transit` — destination; `market` — where it was handed over. `received_at` (branch/hq) — since when it is at that place (last cancelled-post receipt, else custody time); `sent_at` (in_transit); `handed_over_at` + `handover_method` (market, fL79tFbs BG2; null method = legacy/unknown). Cancelled before intake (never left the market) — both null. No money fields; same for every role.",
         "operationId": "OrderGatewayController_findAll",
         "parameters": [
           {
@@ -4252,6 +4253,7 @@
     },
     "/orders/{id}": {
       "get": {
+        "description": "5Yy6r6UI (BG1): every order row has `return_stage` (`courier` | `in_transit` | `branch` | `hq` | `market` | null) and `cancel_return` (null unless the order is cancelled / returned to market): `{ stage, place_type: \"COURIER\" | \"BRANCH\" | \"HQ\" | null, place_id, place_name, received_at, sent_at, handed_over_at, handover_method: \"qr\" | \"manual\" | \"no_qr\" | \"pin\" | null }`. Place = where the parcel is now (courier name / branch or HQ name); `in_transit` — destination; `market` — where it was handed over. `received_at` (branch/hq) — since when it is at that place (last cancelled-post receipt, else custody time); `sent_at` (in_transit); `handed_over_at` + `handover_method` (market, fL79tFbs BG2; null method = legacy/unknown). Cancelled before intake (never left the market) — both null. No money fields; same for every role.",
         "operationId": "OrderGatewayController_findById",
         "parameters": [
           {

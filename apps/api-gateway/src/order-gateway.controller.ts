@@ -200,6 +200,20 @@ type UploadedProofFile = {
 
 const PROOF_OPERATION_TIMEOUT_MS = 60000;
 
+/**
+ * 5Yy6r6UI (BG1) — buyurtma javobidagi bekor bosqichi (Swagger tavsifi).
+ * Hisob order-service `cancel-return/cancel-return.ts` da.
+ */
+const CANCEL_RETURN_RESPONSE_DOC =
+  '5Yy6r6UI (BG1): every order row has `return_stage` (`courier` | `in_transit` | `branch` | `hq` | `market` | null) ' +
+  'and `cancel_return` (null unless the order is cancelled / returned to market): ' +
+  '`{ stage, place_type: "COURIER" | "BRANCH" | "HQ" | null, place_id, place_name, received_at, sent_at, ' +
+  'handed_over_at, handover_method: "qr" | "manual" | "no_qr" | "pin" | null }`. ' +
+  'Place = where the parcel is now (courier name / branch or HQ name); `in_transit` — destination; `market` — where it ' +
+  'was handed over. `received_at` (branch/hq) — since when it is at that place (last cancelled-post receipt, else ' +
+  'custody time); `sent_at` (in_transit); `handed_over_at` + `handover_method` (market, fL79tFbs BG2; null method = ' +
+  'legacy/unknown). Cancelled before intake (never left the market) — both null. No money fields; same for every role.';
+
 /** ai-parse rasmi (multer memoryStorage) — faqat RAM'da, hech qayerga yozilmaydi. */
 type UploadedAiImage = {
   originalname?: string;
@@ -3305,7 +3319,10 @@ export class OrderGatewayController {
   @Get()
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'List orders with filters' })
+  @ApiOperation({
+    summary: 'List orders with filters',
+    description: CANCEL_RETURN_RESPONSE_DOC,
+  })
   @ApiQuery({ name: 'market_id', required: false, type: String })
   @ApiQuery({ name: 'customer_id', required: false, type: String })
   @ApiQuery({
@@ -5033,7 +5050,10 @@ export class OrderGatewayController {
   @Get(':id')
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Get order by ID' })
+  @ApiOperation({
+    summary: 'Get order by ID',
+    description: CANCEL_RETURN_RESPONSE_DOC,
+  })
   @ApiParam({ name: 'id', description: 'Order ID (uuid)' })
   async findById(@Param('id') id: string, @Req() req?: { user: JwtUser }) {
     const response = await this.sendOrderWithFallback(

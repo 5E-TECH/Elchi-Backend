@@ -1,5 +1,7 @@
 /* eslint-disable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access */
+import { of } from 'rxjs';
 import { DataSource } from 'typeorm';
+import { OrderServiceService } from '../order-service.service';
 import { Order } from '../entities/order.entity';
 import { OrderItem } from '../entities/order-item.entity';
 import { OrderTracking } from '../entities/order-tracking.entity';
@@ -8,10 +10,12 @@ import { Branch } from '../entities/branch.entity';
 import { CancelReturnMarketHandover1716000000154 } from '../../../../migrations/1716000000154-CancelReturnMarketHandover';
 
 /**
- * Bekor holatlari (BG2 fL79tFbs) — HAQIQIY Postgres'da:
+ * Bekor holatlari (BG1 5Yy6r6UI, BG2 fL79tFbs) — HAQIQIY Postgres'da:
  *   - migratsiya 154: ustunlar, CHECK, indeks, eski topshirishlar backfill'i
  *     (vaqt/xodim/usul tracking'dan, joy custody'dan; ombor qaytishi va hali
- *     topshirilmaganlar tegilmaydi), qayta yurgizish, down.
+ *     topshirilmaganlar tegilmaydi), qayta yurgizish, down;
+ *   - GET /orders yo'li (`findAllEnriched`): `return_stage` / `cancel_return`
+ *     — joy nomi `branch_schema.branches` dan, qabul vaqti tracking'dan.
  *
  * Faqat lokal `/elchi_cancel_test`:
  *   CANCEL_RETURN_PG_TEST_URI=postgres://postgres@127.0.0.1:<port>/elchi_cancel_test
@@ -36,6 +40,7 @@ const HQ_ID = '1';
   'Bekor holatlari — haqiqiy Postgres (pg)',
   () => {
     let db: DataSource;
+    let service: OrderServiceService;
     const migration = new CancelReturnMarketHandover1716000000154(
       ORDER,
       BRANCH,
@@ -119,6 +124,11 @@ const HQ_ID = '1';
       await db.initialize();
       await db.query(`CREATE SCHEMA IF NOT EXISTS "${ORDER}"`);
       await db.query(`CREATE SCHEMA IF NOT EXISTS "${BRANCH}"`);
+      // enrichOrders pochta kuryerini shu jadvaldan o'qiydi (bu yerda bo'sh).
+      await db.query(`CREATE SCHEMA IF NOT EXISTS "logistics_schema"`);
+      await db.query(
+        `CREATE TABLE IF NOT EXISTS "logistics_schema"."posts" ("id" bigint PRIMARY KEY, "courier_id" bigint)`,
+      );
       await db.synchronize();
       // order-service `Branch` faqat `name` ni biladi — HQ qidiruvi `type` ni ham o'qiydi.
       await db.query(
@@ -130,12 +140,38 @@ const HQ_ID = '1';
            (${HQ_ID}, 'Toshkent HQ', 'HQ'), (10, 'Urgut filiali', 'REGIONAL'),
            (12, 'Andijon filiali', 'REGIONAL')`,
       );
+      const rmq = { send: jest.fn(() => of({ data: [] })) };
+      const none = {} as never;
+      service = new OrderServiceService(
+        db,
+        db.getRepository(Order),
+        db.getRepository(OrderItem),
+        db.getRepository(OrderTracking),
+        db.getRepository(OrderCustodyEvent),
+        none,
+        none,
+        none,
+        none,
+        none,
+        rmq as never, // identity
+        rmq as never, // logistics
+        rmq as never, // catalog
+        none,
+        none,
+        none,
+        none,
+        none,
+        none,
+        { getHqBranchId: () => Promise.resolve(HQ_ID) } as never, // lookup
+        none,
+      );
     });
 
     afterAll(async () => {
       if (!db?.isInitialized) return;
       await db.query(`DROP SCHEMA IF EXISTS "${ORDER}" CASCADE`);
       await db.query(`DROP SCHEMA IF EXISTS "${BRANCH}" CASCADE`);
+      await db.query(`DROP SCHEMA IF EXISTS "logistics_schema" CASCADE`);
       await db.destroy();
     });
 
@@ -330,6 +366,99 @@ const HQ_ID = '1';
         expect(columns).toEqual([]);
         await migration.up(db.createQueryRunner());
         expect((await handover(ids.manual)).method).toBe('manual');
+      });
+    });
+
+    describe('GET /orders boyitishi (5Yy6r6UI)', () => {
+      const MARKET = '777';
+      const ids: Record<string, string> = {};
+      const at = (iso: string) => new Date(iso);
+
+      beforeAll(async () => {
+        ids.hq = await insertOrder({
+          market_id: MARKET,
+          status: 'cancelled',
+          holder_type: 'HQ',
+          post_id: '41',
+          branch_id: HQ_ID,
+          last_handover_at: at('2026-10-21T10:00:00Z'),
+        });
+        await track(ids.hq, {
+          from_status: 'cancelled (sent)',
+          to_status: 'cancelled',
+          action: 'cancelled_post_received',
+          created_at: at('2026-10-15T08:00:00Z'),
+        });
+        await track(ids.hq, {
+          from_status: 'cancelled (sent)',
+          to_status: 'cancelled',
+          action: 'cancelled_post_received',
+          created_at: at('2026-10-22T06:30:00Z'),
+        });
+        ids.branch = await insertOrder({
+          market_id: MARKET,
+          status: 'cancelled',
+          holder_type: 'BRANCH',
+          holder_branch_id: '12',
+          post_id: '41',
+          branch_id: '12',
+          last_handover_at: at('2026-10-23T08:00:00Z'),
+        });
+        ids.market = await insertOrder({
+          market_id: MARKET,
+          status: 'returned_to_market',
+          holder_type: 'MARKET',
+          branch_id: '12',
+          market_handover_at: at('2026-10-24T12:00:00Z'),
+          market_handover_method: 'qr',
+          market_handover_branch_id: HQ_ID,
+        });
+        ids.preDelivery = await insertOrder({
+          market_id: MARKET,
+          status: 'cancelled',
+          holder_type: 'HQ',
+        });
+      });
+
+      it('ro`yxat qatorlarida bosqich, joy nomi va vaqtlar', async () => {
+        const result = await service.findAllEnriched({
+          market_id: MARKET,
+          disable_pagination: true,
+        });
+        const byId = new Map<string, Row>(
+          (result.data as Row[]).map((row) => [String(row.id), row]),
+        );
+
+        expect(byId.get(ids.hq)).toEqual(
+          expect.objectContaining({
+            return_stage: 'hq',
+            cancel_return: expect.objectContaining({
+              place_type: 'HQ',
+              place_id: HQ_ID,
+              place_name: 'Toshkent HQ',
+              received_at: '2026-10-22T06:30:00.000Z',
+            }),
+          }),
+        );
+        expect(byId.get(ids.branch)?.cancel_return).toEqual(
+          expect.objectContaining({
+            stage: 'branch',
+            place_name: 'Andijon filiali',
+            received_at: '2026-10-23T08:00:00.000Z',
+          }),
+        );
+        expect(byId.get(ids.market)?.cancel_return).toEqual(
+          expect.objectContaining({
+            stage: 'market',
+            place_type: 'HQ',
+            place_name: 'Toshkent HQ',
+            handed_over_at: '2026-10-24T12:00:00.000Z',
+            handover_method: 'qr',
+          }),
+        );
+        expect(byId.get(ids.preDelivery)).toEqual(
+          expect.objectContaining({ return_stage: null, cancel_return: null }),
+        );
       });
     });
   },
