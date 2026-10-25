@@ -428,7 +428,7 @@ export class Order extends BaseEntity {
 
   /**
    * txmkXVBa: mijoz qo'shimcha raqamining buyurtmadagi nusxasi («Faqat shu
-   * buyurtmada» — karta o'zgarmaydi). Migratsiya 1716000000156.
+   * buyurtmada» — karta o'zgarmaydi). Migratsiya 1716000000157.
    */
   @Column({ type: 'varchar', length: 32, nullable: true })
   extra_number!: string | null;

@@ -27,7 +27,7 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 Deploy: api-gateway (DTO + `createOrderInternal`), identity-service (`identity.customer.create` `update_existing`,
 yangi `identity.customer.update`), order-service (`orders.extra_number`). **Migratsiya bor:**
-`1716000000156-OrderExtraNumber` (`order_schema.orders.extra_number` varchar(32) NULL, backfill yo'q). Deploy tartibi:
+`1716000000157-OrderExtraNumber` (`order_schema.orders.extra_number` varchar(32) NULL, backfill yo'q). Deploy tartibi:
 migratsiya → identity-service + order-service → api-gateway. Ega qarori 2026-10-19 (create-step2 S5).
 
 - [2026-10-25] ✏️ [gateway] — `POST /orders` va `POST /orders/ai-confirm` (har buyurtmada) yangi ixtiyoriy

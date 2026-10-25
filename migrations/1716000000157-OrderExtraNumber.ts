@@ -16,14 +16,14 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  */
 const SCHEMA_NAME = /^[a-z_][a-z0-9_]{0,62}$/;
 
-export class OrderExtraNumber1716000000156 implements MigrationInterface {
-  name = 'OrderExtraNumber1716000000156';
+export class OrderExtraNumber1716000000157 implements MigrationInterface {
+  name = 'OrderExtraNumber1716000000157';
 
   private readonly order: string;
 
   constructor(orderSchema = 'order_schema') {
     if (!SCHEMA_NAME.test(orderSchema)) {
-      throw new Error('OrderExtraNumber1716000000156: noto‘g‘ri sxema nomi');
+      throw new Error('OrderExtraNumber1716000000157: noto‘g‘ri sxema nomi');
     }
     this.order = orderSchema;
   }
