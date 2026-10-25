@@ -123,7 +123,8 @@ describe('fix3 A2 — order create hardening', () => {
 
     expect(identityClient.send).toHaveBeenCalledWith(
       { cmd: 'identity.customer.create' },
-      { dto: abuseDto.customer },
+      // txmkXVBa: qo'lda forma — mavjud karta jimgina yozilmaydi.
+      { dto: abuseDto.customer, update_existing: false },
     );
     expect(sentCreate(orderClient, 'order.create').dto.customer_id).toBe(
       'c-new',
@@ -150,7 +151,7 @@ describe('fix3 A2 — order create hardening', () => {
         } as any,
         userReq('201', ['market']),
       ),
-    ).rejects.toThrow(/customer_id faqat shu marketda buyurtmasi bor mijoz/);
+    ).rejects.toThrow(/customer_id qabul qilinmadi/);
     expect(calls('order.create')).toHaveLength(0);
     expect(calls('order.customer.market_summary')[0][1]).toEqual({
       market_id: '201',

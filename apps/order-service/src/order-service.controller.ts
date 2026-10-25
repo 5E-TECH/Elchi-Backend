@@ -178,6 +178,8 @@ export class OrderServiceController {
         district_id?: string | null;
         region_id?: string | null;
         address?: string | null;
+        /** txmkXVBa: qo'shimcha raqam nusxasi (qo'lda yaratish formasi). */
+        extra_number?: string | null;
         qr_code_token?: string | null;
         parent_order_id?: string | null;
         /** (lQjt6sKP) almashtirish: qaysi yetkazilgan buyurtma o'rniga. */

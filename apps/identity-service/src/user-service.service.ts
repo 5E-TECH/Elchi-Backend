@@ -40,7 +40,10 @@ import { UpdateMarketDto } from './dto/update-market.dto';
 import { CreateCourierDto } from './dto/create-courier.dto';
 import { CreateCustomerDto } from './dto/create-customer.dto';
 import { CreateManagerDto } from './dto/create-manager.dto';
-import { UserFilterQuery } from './contracts/user.payloads';
+import {
+  UpdateCustomerCardPayload,
+  UserFilterQuery,
+} from './contracts/user.payloads';
 import { MARKET_TG_TOKEN_ROTATE_ALL_CONFIRM } from './contracts/market.payloads';
 import {
   CreateMarketOperatorDto,
@@ -3301,7 +3304,10 @@ export class UserServiceService implements OnModuleInit {
     return successRes(this.sanitize(saved), 201, 'Manager yaratildi');
   }
 
-  async createCustomer(dto: CreateCustomerDto) {
+  async createCustomer(
+    dto: CreateCustomerDto,
+    opts: { updateExisting?: boolean } = {},
+  ) {
     /**
      * TELEFON NORMALLASHTIRILADI (zfPNDCCr).
      *
@@ -3340,6 +3346,16 @@ export class UserServiceService implements OnModuleInit {
     if (existing) {
       if (existing.role !== Roles.CUSTOMER) {
         this.conflict('Bu telefon raqam boshqa rolda allaqachon mavjud');
+      }
+
+      // txmkXVBa: POST /orders va ai-confirm — karta jimgina yozilmaydi
+      // (ega qarori S5); yangilash faqat `identity.customer.update` orqali.
+      if (opts.updateExisting === false) {
+        return successRes(
+          this.sanitize(existing),
+          200,
+          'Customer allaqachon mavjud',
+        );
       }
 
       /**
@@ -3428,6 +3444,78 @@ export class UserServiceService implements OnModuleInit {
       },
     });
     return successRes(this.sanitize(saved), 201, 'Customer yaratildi');
+  }
+
+  /**
+   * «KARTANI HAM YANGILASH» (txmkXVBa, ega qarori 2026-10-19 S5).
+   *
+   * Buyurtma formasida mavjud mijoz maydonlari o'zgartirilib «Kartani ham
+   * yangilash» tanlansa gateway buyurtma yaratilgandan KEYIN chaqiradi
+   * (ruxsat — gateway'da). Faqat berilgan (non-null) va FARQ QILADIGAN
+   * maydonlar yoziladi — bo'sh qiymat eski ism/tuman/manzilni o'chirmaydi
+   * (j70YS4zJ bilan bir xil qoida). Activity log: kim (kontekst aktyori),
+   * qaysi buyurtma orqali, maydon eski → yangi.
+   *
+   * Qaytaradi: `{ id, changed_fields }` (o'zgarish bo'lmasa bo'sh ro'yxat).
+   */
+  async updateCustomerCard(
+    id: string,
+    dto: UpdateCustomerCardPayload['dto'],
+    meta: { orderId?: string | null; marketId?: string | null } = {},
+  ) {
+    const customerId = primitiveText(id).trim();
+    if (!/^\d+$/.test(customerId)) {
+      this.badRequest("Mijoz ID noto'g'ri");
+    }
+    const existing = await this.users.findOne({
+      where: { id: customerId, role: Roles.CUSTOMER, isDeleted: false },
+    });
+    if (!existing) {
+      this.notFound('Customer topilmadi');
+    }
+
+    const fields = ['name', 'district_id', 'address', 'extra_number'] as const;
+    const before: Record<string, unknown> = {};
+    const after: Record<string, unknown> = {};
+    const patch: Partial<User> = {};
+    for (const field of fields) {
+      const raw = dto?.[field];
+      if (raw === null || raw === undefined) continue;
+      const value = primitiveText(raw).trim();
+      if (!value || value === primitiveText(existing[field]).trim()) continue;
+      before[field] = existing[field] ?? null;
+      after[field] = value;
+      (patch as Record<string, unknown>)[field] = value;
+    }
+    const changed = Object.keys(patch);
+    if (!changed.length) {
+      return successRes(
+        { id: existing.id, changed_fields: [] as string[] },
+        200,
+        "Mijoz kartasi o'zgarmadi",
+      );
+    }
+
+    Object.assign(existing, patch);
+    const updated = await this.users.save(existing);
+    void this.syncUserToSearch(updated);
+    await this.activityLog.log({
+      entity_type: 'User',
+      entity_id: updated.id,
+      action: ActivityAction.UPDATED,
+      old_value: before,
+      new_value: after,
+      metadata: {
+        source: 'order_create',
+        order_id: meta.orderId ?? null,
+        market_id: meta.marketId ?? null,
+      },
+    });
+    return successRes(
+      { id: updated.id, changed_fields: changed },
+      200,
+      'Mijoz kartasi yangilandi',
+    );
   }
 
   async updateMarket(

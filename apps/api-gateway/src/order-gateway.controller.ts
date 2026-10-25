@@ -106,6 +106,7 @@ import {
   Roles as RoleEnum,
   Where_deliver,
   matchesDeclaredType,
+  normalizeUzPhone,
   parseUzPhoneSearch,
   recordReceiveByScanOutcome,
   requestContext,
@@ -1699,6 +1700,10 @@ export class OrderGatewayController {
         ...(order.customer.address ? { address: order.customer.address } : {}),
       },
       ...(ctx.includeMarketId ? { market_id: ctx.marketId } : {}),
+      // txmkXVBa: «Kartani ham yangilash» (berilmasa — karta o'zgarmaydi).
+      ...(order.update_customer_card === true
+        ? { update_customer_card: true }
+        : {}),
       district_id: item.districtId,
       region_id: item.regionId,
       address: order.address ?? order.customer.address ?? null,
@@ -2034,23 +2039,28 @@ export class OrderGatewayController {
   }
 
   /**
-   * hiqRNhkI TC3 — admin bo'lmagan rol yuborgan `customer_id` ning DOIRASI.
+   * hiqRNhkI TC3 + WCuZzUCv — admin bo'lmagan rol yuborgan `customer_id`.
    *
-   * Qoida `GET /customers/suggest` bilan AYNAN bir xil: mijoz shu marketda
-   * (o'chirilmagan) buyurtmasi bo'lsagina `order.customer.market_summary`
-   * natijasida chiqadi — taklif ro'yxati ham shu xulosa bilan qisqartiriladi.
-   * Ya'ni market/operator/filial xodimi faqat taklifda ko'ra oladigan
-   * mijozni bog'lay oladi; boshqa market mijozining id si (RBAC-01) o'tmaydi.
+   * Qoida `GET /customers/suggest` bilan AYNAN bir xil (ega qarori
+   * 2026-10-19 S3 — mijoz kartasi marketlar orasida umumiy):
+   *  - mijozning SHU marketda (o'chirilmagan) buyurtmasi bor
+   *    (`order.customer.market_summary`) → qabul, `inMarket: true`;
+   *  - aks holda (boshqa market mijozi) — identity'da CUSTOMER rolida va
+   *    o'chirilmagan karta bo'lsa VA so'rovdagi `customer.phone_number`
+   *    kartadagi asosiy telefonga TO'LIQ mos kelsa → qabul,
+   *    `inMarket: false`. Telefon talabi — RBAC-01: ketma-ket id yuborib
+   *    boshqa marketlar mijozlarini sanab chiqib bo'lmaydi (suggest ham
+   *    begona mijozni faqat to'liq telefon bilan ko'rsatadi).
    *
-   * Qaytaradi: doiradagi id yoki `null`. Xulosa olinmasa (timeout/xato) va
-   * `customer` obyekti bor bo'lsa — `null` (avvalgi telefon yo'li); obyekt
+   * Qaytaradi: qabul qilingan id yoki `null`. Xulosa olinmasa (timeout/xato)
+   * va `customer` obyekti bor bo'lsa — `null` (avvalgi telefon yo'li); obyekt
    * yo'q bo'lsa xato yuqoriga otiladi (fail-closed).
    */
   private async resolveScopedCustomerId(
     marketId: string | undefined,
     rawCustomerId: unknown,
-    hasCustomerObject: boolean,
-  ): Promise<string | null> {
+    customer: { phone_number?: unknown } | undefined,
+  ): Promise<{ id: string; inMarket: boolean } | null> {
     const customerId = this.asStr(rawCustomerId).trim();
     const market = String(marketId ?? '').trim();
     if (!/^\d+$/.test(customerId) || !/^\d+$/.test(market)) {
@@ -2063,7 +2073,7 @@ export class OrderGatewayController {
         { market_id: market, customer_ids: [customerId] },
       );
     } catch (error) {
-      if (hasCustomerObject) {
+      if (customer) {
         return null;
       }
       throw error;
@@ -2077,7 +2087,30 @@ export class OrderGatewayController {
           this.asStr((item as { customer_id?: unknown })?.customer_id) ===
           customerId,
       );
-    return inScope ? customerId : null;
+    if (inScope) {
+      return { id: customerId, inMarket: true };
+    }
+
+    // WCuZzUCv: boshqa market mijozi — faqat to'liq telefon mos kelsa.
+    const requestPhone = normalizeUzPhone(customer?.phone_number);
+    if (!requestPhone) {
+      return null;
+    }
+    const card: unknown = await this.sendIdentityWithTimeout(
+      { cmd: 'identity.customer.find_by_id' },
+      { id: customerId },
+    ).catch(() => null);
+    const cardPhone = normalizeUzPhone(
+      (card as { data?: { phone_number?: unknown } } | null)?.data
+        ?.phone_number,
+    );
+    if (!cardPhone || cardPhone !== requestPhone) {
+      return null;
+    }
+    this.logger.log(
+      `order.create out-of-market customer_id accepted: market=${market} customer_id=${customerId}`,
+    );
+    return { id: customerId, inMarket: false };
   }
 
   /**
@@ -2134,17 +2167,28 @@ export class OrderGatewayController {
     // IR2OHIiN: mahsulotsiz / tumansiz buyurtma — hech narsa (mijoz ham)
     // yaratilmasidan OLDIN 400. Bot va AI yo'llari DTO'ni ichkarida yig'adi.
     assertOrderCreateContent(dto);
-    const { customer, ...orderDto } = dto;
+    const {
+      customer,
+      update_customer_card: updateCustomerCardFlag,
+      ...orderDto
+    } = dto;
     const roles = this.normalizeRoles(req.user.roles);
+    // txmkXVBa (ega qarori S5): «Mijoz kartasi ham yangilansinmi?» — faqat
+    // qo'lda yaratish formasi (POST /orders) va ai-confirm. Bot yo'li (va
+    // alohida handlerlardagi hamkor / tashqi import) avvalgidek: identity
+    // telefon bo'yicha topilgan kartani yangilaydi (j70YS4zJ).
+    const manualForm = opts?.createdVia !== 'bot';
+    const updateCustomerCard = manualForm && updateCustomerCardFlag === true;
     const isSystemPrivileged =
       roles.includes(RoleEnum.SUPERADMIN) || roles.includes(RoleEnum.ADMIN);
     // fix3 RBAC-01: tayyor `customer_id` ni SUPERADMIN/ADMIN dan boshqasi
     // ixtiyoriy qabul qila olmaydi — market ketma-ket id yuborib boshqa
     // marketlar mijozlarining ism/telefon/manzilini o'z buyurtmasi orqali
-    // o'qiy olardi. hiqRNhkI TC3: boshqa rollar ham `GET /customers/suggest`
-    // tanlagan mijozni `customer_id` bilan yuboradi, lekin u FAQAT o'sha
-    // doirada qabul qilinadi (shu marketda buyurtmasi bor mijoz) — pastda,
-    // market aniqlangandan keyin (`resolveScopedCustomerId`).
+    // o'qiy olardi. hiqRNhkI TC3 + WCuZzUCv: boshqa rollar ham
+    // `GET /customers/suggest` tanlagan mijozni `customer_id` bilan yuboradi:
+    // shu marketda buyurtmasi bor mijoz, yoki boshqa market mijozi — faqat
+    // `customer.phone_number` kartaga to'liq mos kelsa. Pastda, market
+    // aniqlangandan keyin (`resolveScopedCustomerId`).
     let customerId = isSystemPrivileged ? dto.customer_id : undefined;
     // fix3 C6: hayot sikli/saqlash maydonlari faqat SUPERADMIN/ADMIN dan.
     const safeOrderDto = isSystemPrivileged
@@ -2260,19 +2304,25 @@ export class OrderGatewayController {
       requesterName,
     );
 
+    // txmkXVBa: mavjud kartaning shu marketda buyurtmasi bormi (customer_id
+    // yo'lida doira tekshiruvidan ma'lum; telefon yo'lida — kerak bo'lsa
+    // pastda so'raladi) va karta shu so'rovda YANGI yaratildimi.
+    let customerInMarket: boolean | null = null;
+    let customerCreatedNow = false;
     if (!isSystemPrivileged && this.hasCustomerIdValue(dto.customer_id)) {
-      const scopedCustomerId = await this.resolveScopedCustomerId(
+      const scoped = await this.resolveScopedCustomerId(
         resolvedMarketId,
         dto.customer_id,
-        Boolean(customer),
+        customer,
       );
-      if (scopedCustomerId) {
-        customerId = scopedCustomerId;
+      if (scoped) {
+        customerId = scoped.id;
+        customerInMarket = scoped.inMarket;
       } else if (!customer) {
-        // Doiradan tashqari id + mijoz obyekti yo'q — rad (RBAC-01 himoyasi).
+        // Tasdiqlanmagan id + mijoz obyekti yo'q — rad (RBAC-01 himoyasi).
         // Obyekt bo'lsa — avvalgidek telefon bo'yicha aniqlanadi.
         throw new ForbiddenException(
-          'customer_id faqat shu marketda buyurtmasi bor mijoz uchun (GET /customers/suggest taklifi). Yangi mijoz uchun customer obyekti (ism, telefon, tuman) yuboring',
+          "customer_id qabul qilinmadi: boshqa market mijozi uchun customer.phone_number mijoz telefoniga to'liq mos kelishi kerak (GET /customers/suggest taklifi). Yangi mijoz uchun customer obyekti (ism, telefon, tuman) yuboring",
         );
       }
     }
@@ -2286,7 +2336,15 @@ export class OrderGatewayController {
 
       const customerResponse = await firstValueFrom(
         this.identityClient
-          .send({ cmd: 'identity.customer.create' }, { dto: customer })
+          .send(
+            { cmd: 'identity.customer.create' },
+            // txmkXVBa: qo'lda forma / ai-confirm — mavjud karta jimgina
+            // yozilmaydi (yangilash faqat `update_customer_card: true` bilan,
+            // buyurtmadan keyin `identity.customer.update`).
+            manualForm
+              ? { dto: customer, update_existing: false }
+              : { dto: customer },
+          )
           .pipe(timeout(8000)),
       ).catch((error: unknown) => {
         if (error instanceof TimeoutError) {
@@ -2302,10 +2360,35 @@ export class OrderGatewayController {
       if (!customerId) {
         throw new BadRequestException('Customer yaratildi, lekin id qaytmadi');
       }
+      customerCreatedNow =
+        Number((customerResponse as { statusCode?: unknown })?.statusCode) ===
+        201;
     }
     const finalCustomerId = customerId;
 
-    return firstValueFrom(
+    // txmkXVBa #3: market / market operatori umumiy kartani faqat o'z
+    // marketida buyurtmasi bor mijoz uchun yangilay oladi (admin, HQ va
+    // filial xodimlari — cheklovsiz). Buyurtma yaratilishidan OLDIN —
+    // yaratilgach mijoz shu marketniki bo'lib qolardi.
+    const marketSide =
+      !isSystemPrivileged &&
+      (roles.includes(RoleEnum.MARKET) ||
+        roles.includes(RoleEnum.MARKET_OPERATOR));
+    if (updateCustomerCard && !customerCreatedNow && marketSide) {
+      const inMarket =
+        customerInMarket ??
+        (await this.customerHasOrdersInMarket(
+          resolvedMarketId,
+          String(finalCustomerId),
+        ));
+      if (!inMarket) {
+        throw new ForbiddenException(
+          "Mijoz kartasini yangilab bo'lmaydi: bu mijozning sizning marketingizda buyurtmasi yo'q (karta boshqa marketlar bilan umumiy). «Faqat shu buyurtmada» ni tanlang",
+        );
+      }
+    }
+
+    const createResponse: unknown = await firstValueFrom(
       this.orderClient
         .send(
           { cmd: 'order.create' },
@@ -2329,6 +2412,14 @@ export class OrderGatewayController {
                 : {}),
               market_id: resolvedMarketId,
               customer_id: finalCustomerId,
+              // txmkXVBa: qo'lda forma — formadagi manzil va qo'shimcha raqam
+              // buyurtmaning O'Z ustunlariga (karta yangilansa ham, yo'q ham).
+              ...(manualForm
+                ? {
+                    address: orderDto.address ?? customer?.address ?? null,
+                    extra_number: customer?.extra_number ?? null,
+                  }
+                : {}),
               // IR2OHIiN: tuman buyurtmaga DOIM yoziladi — o'zida bo'lmasa
               // inline mijozniki (bot, filial); mavjud mijozniki va viloyat —
               // order-service'da.
@@ -2374,6 +2465,111 @@ export class OrderGatewayController {
       }
       throw error;
     });
+
+    if (!manualForm) {
+      return createResponse;
+    }
+    const cardResult = updateCustomerCard
+      ? await this.applyCustomerCardUpdate({
+          createResponse,
+          customerId: String(finalCustomerId),
+          customer,
+          marketId: resolvedMarketId,
+          customerCreatedNow,
+        })
+      : { updated: false, changedFields: [] as string[] };
+    // txmkXVBa #4: natija toast'i uchun.
+    return createResponse && typeof createResponse === 'object'
+      ? {
+          ...(createResponse as Record<string, unknown>),
+          customer_card_updated: cardResult.updated,
+          customer_card_changed_fields: cardResult.changedFields,
+        }
+      : createResponse;
+  }
+
+  /**
+   * txmkXVBa: mijozning SHU marketda (o'chirilmagan) buyurtmasi bormi
+   * (`order.customer.market_summary`). Xato yuqoriga otiladi (fail-closed).
+   */
+  private async customerHasOrdersInMarket(
+    marketId: string | undefined,
+    customerId: string,
+  ): Promise<boolean> {
+    const market = String(marketId ?? '').trim();
+    if (!/^\d+$/.test(market) || !/^\d+$/.test(customerId)) {
+      return false;
+    }
+    const summary = await this.sendOrderWithTimeout(
+      { cmd: 'order.customer.market_summary' },
+      { market_id: market, customer_ids: [customerId] },
+    );
+    const items = (summary as { data?: { items?: unknown } } | null)?.data
+      ?.items;
+    return (
+      Array.isArray(items) &&
+      items.some(
+        (item) =>
+          this.asStr((item as { customer_id?: unknown })?.customer_id) ===
+          customerId,
+      )
+    );
+  }
+
+  /**
+   * txmkXVBa «Kartani ham yangilash»: buyurtma yaratilgandan KEYIN (activity
+   * log'ga buyurtma id si yoziladi) formadagi maydonlar bilan
+   * `identity.customer.update`. Yangi yaratilgan mijoz (karta formadan
+   * olingan) va idempotent takror javob — chaqirilmaydi. Xato buyurtmani
+   * bekor qilmaydi (u allaqachon yaratilgan) — `updated: false` va jurnal.
+   */
+  private async applyCustomerCardUpdate(input: {
+    createResponse: unknown;
+    customerId: string;
+    customer: CreateOrderRequestDto['customer'];
+    marketId: string | undefined;
+    customerCreatedNow: boolean;
+  }): Promise<{ updated: boolean; changedFields: string[] }> {
+    const none = { updated: false, changedFields: [] as string[] };
+    const body = (input.createResponse ?? {}) as {
+      id?: unknown;
+      data?: { id?: unknown } | null;
+      idempotent_replay?: unknown;
+    };
+    const orderId = this.asStr(body.data?.id ?? body.id).trim();
+    if (
+      input.customerCreatedNow ||
+      !input.customer ||
+      !orderId ||
+      body.idempotent_replay === true
+    ) {
+      return none;
+    }
+    try {
+      const res = (await this.sendIdentityWithTimeout(
+        { cmd: 'identity.customer.update' },
+        {
+          id: input.customerId,
+          dto: {
+            name: input.customer.name ?? null,
+            district_id: input.customer.district_id ?? null,
+            address: input.customer.address ?? null,
+            extra_number: input.customer.extra_number ?? null,
+          },
+          order_id: orderId,
+          market_id: input.marketId ?? null,
+        },
+      )) as { data?: { changed_fields?: unknown } } | null;
+      const changed = Array.isArray(res?.data?.changed_fields)
+        ? res.data.changed_fields.map((field) => this.asStr(field))
+        : [];
+      return { updated: changed.length > 0, changedFields: changed };
+    } catch (error) {
+      this.logger.warn(
+        `identity.customer.update failed (order=${orderId}, customer=${input.customerId}): ${(error as Error)?.message ?? 'unknown'}`,
+      );
+      return none;
+    }
   }
 
   @Post('telegram/bot/create')

@@ -267,8 +267,9 @@ export class CreateOrderRequestDto {
     example: '1',
     description:
       'Customer ID (as string/bigint). Superadmin/admin — istalgan mijoz. ' +
-      'POST /orders da boshqa rollar (market, filial xodimi) — FAQAT shu marketda buyurtmasi bor mijoz ' +
-      "(GET /customers/suggest taklifi, hiqRNhkI); doiradan tashqari id: `customer` obyekti bo'lsa u ishlatiladi, bo'lmasa 403. " +
+      'POST /orders da boshqa rollar (market, operator, filial xodimi) — GET /customers/suggest qoidasi (hiqRNhkI, WCuZzUCv): ' +
+      "shu marketda buyurtmasi bor mijoz, yoki boshqa market mijozi — faqat `customer.phone_number` kartadagi telefonga TO'LIQ mos kelsa. " +
+      "Tasdiqlanmagan id: `customer` obyekti bo'lsa u ishlatiladi (telefon bo'yicha), bo'lmasa 403. " +
       'POST /orders/external da faqat superadmin/admin (fix3 RBAC-01).',
   })
   @IsOptional()
@@ -280,6 +281,27 @@ export class CreateOrderRequestDto {
   @ValidateNested()
   @Type(() => CreateOrderCustomerDto)
   customer?: CreateOrderCustomerDto;
+
+  /**
+   * txmkXVBa (ega qarori 2026-10-19 S5): «Mijoz kartasi ham yangilansinmi?»
+   * dialogi javobi. Faqat POST /orders (qo'lda forma) va ai-confirm;
+   * POST /orders/external, Telegram bot, hamkor — e'tiborsiz (avvalgi xulq).
+   */
+  @ApiPropertyOptional({
+    type: Boolean,
+    default: false,
+    description:
+      'txmkXVBa — POST /orders va ai-confirm: mavjud mijoz kartasi formadagi maydonlar bilan yangilansinmi. ' +
+      '`true` — «Kartani ham yangilash»: buyurtma yaratilgach karta `customer` obyektidagi berilgan va farq qiladigan ' +
+      "maydonlar (name, district_id, address, extra_number) bilan yangilanadi (customer_id yo'lida ham); market / market " +
+      "operatori faqat o'z marketida buyurtmasi bor mijoz kartasini yangilay oladi (aks holda 403, buyurtma yaratilmaydi). " +
+      "`false` / berilmasa — «Faqat shu buyurtmada»: karta O'ZGARMAYDI (telefon yo'lida ham), manzil, tuman va qo'shimcha " +
+      "raqam faqat buyurtmaning o'z ustunlariga (`address`, `district_id`, `extra_number`) yoziladi. Javobda " +
+      "`customer_card_updated` (boolean) va `customer_card_changed_fields` (string[]). POST /orders/external da e'tiborsiz.",
+  })
+  @IsOptional()
+  @IsBoolean({ message: "update_customer_card true yoki false bo'lishi kerak" })
+  update_customer_card?: boolean;
 
   @ApiPropertyOptional({ enum: Where_deliver, default: Where_deliver.CENTER })
   @Transform(({ value }) =>

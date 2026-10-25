@@ -141,6 +141,7 @@ describe('hiqRNhkI — GET /customers/suggest', () => {
         has_new_orders: false,
         new_order_ids: [],
         last_order_at: null,
+        in_market: true,
         // 9444UAa8: identity `matched_by` bermasa — sukut `phone`.
         matched_by: 'phone',
       },
@@ -160,15 +161,91 @@ describe('hiqRNhkI — GET /customers/suggest', () => {
     );
   });
 
-  it('⭐ TC5 / maxfiylik: market — o`z marketida buyurtmasi yo`q mijoz taklif QILINMAYDI', async () => {
-    const { controller } = setup({
+  it('⭐ WCuZzUCv: market A boshqa market mijozini TO`LIQ telefon bilan topadi — orders_count 0, B sonlari/ID/sanasi yo`q, manzil va qo`shimcha raqam yashirin', async () => {
+    const { controller, orderSend } = setup({
       customers: [customer('153'), customer('154')],
       summary: [{ customer_id: '154', orders: 1, new_orders: 0 }],
     });
     const res = await controller.suggest('+998 99 133 01 52', undefined, {
       user: MARKET,
     });
+    expect(res.data.map((row) => row.id)).toEqual(['153', '154']);
+    // Xulosa FAQAT o'z marketi bo'yicha (boshqa market so'ralmaydi).
+    expect(orderSend).toHaveBeenCalledTimes(1);
+    expect(orderSend.mock.calls[0][1]).toEqual({
+      market_id: '121',
+      customer_ids: ['153', '154'],
+    });
+    expect(res.data[0]).toEqual({
+      id: '153',
+      name: 'Mijoz 153',
+      phone_number: '+998991330152',
+      extra_number: null,
+      address: null,
+      region_id: '1',
+      district_id: '11',
+      orders_count: 0,
+      new_orders_count: 0,
+      has_new_orders: false,
+      new_order_ids: [],
+      last_order_at: null,
+      in_market: false,
+      matched_by: 'phone',
+    });
+    // O'z marketidagi mijoz — to'liq ma'lumot.
+    expect(res.data[1]).toMatchObject({
+      id: '154',
+      in_market: true,
+      orders_count: 1,
+      address: 'Chilonzor 5',
+      extra_number: '+998901112233',
+    });
+  });
+
+  it('⭐ WCuZzUCv / maxfiylik: qisman (7 raqam) qidiruvda boshqa market mijozi CHIQMAYDI', async () => {
+    const { controller } = setup({
+      customers: [customer('153'), customer('154')],
+      summary: [{ customer_id: '154', orders: 1, new_orders: 0 }],
+    });
+    const res = await controller.suggest('9913301', undefined, {
+      user: MARKET,
+    });
     expect(res.data.map((row) => row.id)).toEqual(['154']);
+  });
+
+  it('⭐ WCuZzUCv / maxfiylik: to`liq raqam faqat QO`SHIMCHA raqamga mos kelsa — boshqa market mijozi chiqmaydi', async () => {
+    const { controller } = setup({
+      customers: [
+        customer('153', {
+          phone_number: '+998935554433',
+          extra_number: '+998991330152',
+          matched_by: 'extra_number',
+        }),
+      ],
+      summary: [],
+    });
+    const res = await controller.suggest('991330152', undefined, {
+      user: MARKET,
+    });
+    expect(res.data).toEqual([]);
+  });
+
+  it('⭐ WCuZzUCv: market operatori ham boshqa market mijozini to`liq telefon bilan ko`radi (manzilsiz)', async () => {
+    const { controller } = setup({
+      customers: [customer('153')],
+      summary: [],
+    });
+    const res = await controller.suggest('0991330152', undefined, {
+      user: OPERATOR,
+    });
+    expect(res.data).toHaveLength(1);
+    expect(res.data[0]).toMatchObject({
+      id: '153',
+      in_market: false,
+      orders_count: 0,
+      address: null,
+      extra_number: null,
+    });
   });
 
   it('⭐ TC5: yangi raqam — identity bo`sh, order-service chaqirilmaydi, bo`sh ro`yxat', async () => {
@@ -221,7 +298,7 @@ describe('hiqRNhkI — GET /customers/suggest', () => {
     ).rejects.toBeInstanceOf(BadRequestException);
   });
 
-  it('registrator — market_id majburiy (400), berilsa shu market bilan cheklanadi', async () => {
+  it('registrator — market_id majburiy (400); xulosa shu market bo`yicha, boshqa market mijozi faqat to`liq telefonda', async () => {
     const none = setup();
     await expect(
       none.controller.suggest('991330152', undefined, { user: REGISTRATOR }),
@@ -241,7 +318,20 @@ describe('hiqRNhkI — GET /customers/suggest', () => {
       { cmd: 'order.customer.market_summary' },
       { market_id: '3', customer_ids: ['153', '154'] },
     );
-    expect(res.data.map((row) => row.id)).toEqual(['153']);
+    // WCuZzUCv: to'liq telefon — boshqa market mijozi ham (sonlar 0);
+    // ichki xodim (registrator) manzilni ko'radi.
+    expect(
+      res.data.map((row) => [row.id, row.in_market, row.orders_count]),
+    ).toEqual([
+      ['153', true, 1],
+      ['154', false, 0],
+    ]);
+    expect(res.data[1].address).toBe('Chilonzor 5');
+
+    const partial = await ok.controller.suggest('9913301', '3', {
+      user: REGISTRATOR,
+    });
+    expect(partial.data.map((row) => row.id)).toEqual(['153']);
   });
 
   it('admin — market_id siz: barcha mijozlar, order-service chaqirilmaydi, statistika null', async () => {

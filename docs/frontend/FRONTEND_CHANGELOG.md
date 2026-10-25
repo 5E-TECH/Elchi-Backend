@@ -49,6 +49,67 @@ Deploy: faqat api-gateway. Migratsiya yo'q.
 - [2026-10-26] 🟢 [gateway/order] — `order.market` qoidalari o'zgarmagan (kuryerga market tarifi yo'q; market va
   menejer — mavjud qoida). Superadmin/admin/menejer/filial/registrator — to'liq ko'rinish, o'zgarmagan.
 
+### 2026-10-25 (tun) — Buyurtma yaratish: mavjud mijoz kartasi jimgina yozilmaydi, `update_customer_card` (txmkXVBa)
+
+Deploy: api-gateway (DTO + `createOrderInternal`), identity-service (`identity.customer.create` `update_existing`,
+yangi `identity.customer.update`), order-service (`orders.extra_number`). **Migratsiya bor:**
+`1716000000157-OrderExtraNumber` (`order_schema.orders.extra_number` varchar(32) NULL, backfill yo'q). Deploy tartibi:
+migratsiya → identity-service + order-service → api-gateway. Ega qarori 2026-10-19 (create-step2 S5).
+
+- [2026-10-25] ✏️ [gateway] — `POST /orders` va `POST /orders/ai-confirm` (har buyurtmada) yangi ixtiyoriy
+  **`update_customer_card: boolean`** (sukut `false`):
+  - `false` / berilmasa — «Faqat shu buyurtmada»: mijoz kartasi **o'zgarmaydi** (endi telefon yo'lida — `customer`
+    obyekti bilan — ham identity mavjud kartani jimgina yozmaydi). Formadagi manzil, tuman va qo'shimcha raqam
+    buyurtmaning o'z ustunlariga yoziladi: `address` (yuqori darajada bo'lmasa `customer.address`), `district_id`,
+    yangi **`extra_number`** (`customer.extra_number`).
+  - `true` — «Kartani ham yangilash»: buyurtma yaratilgach karta `customer` obyektidagi berilgan va farq qiladigan
+    maydonlar (`name`, `district_id`, `address`, `extra_number`) bilan yangilanadi — `customer_id` yo'lida ham
+    (shuning uchun `customer` obyektini ham yuboring). Bo'sh qiymat eski qiymatni o'chirmaydi.
+- [2026-10-25] ⚠️ [gateway] — ruxsat: **market va market operatori** o'z marketida buyurtmasi **bo'lmagan** mijoz
+  kartasini yangilay olmaydi → 403 «Mijoz kartasini yangilab bo'lmaydi: bu mijozning sizning marketingizda buyurtmasi
+  yo'q (karta boshqa marketlar bilan umumiy). «Faqat shu buyurtmada» ni tanlang» — **buyurtma yaratilmaydi**.
+  Admin, registrator, menejer, filial — cheklovsiz. Yangi mijoz (telefon bazada yo'q) — karta formadan yaratiladi,
+  403 yo'q.
+- [2026-10-25] ✏️ [gateway] — `POST /orders` javobida (envelope yuqori darajasida) **`customer_card_updated: boolean`**
+  va **`customer_card_changed_fields: string[]`** (masalan `["address","extra_number"]`) — natija toast'i uchun.
+  Karta yangilash buyurtmadan keyin bajariladi; u muvaffaqiyatsiz bo'lsa buyurtma baribir yaratilgan,
+  `customer_card_updated: false`.
+- [2026-10-25] 🟢 [identity] — karta yangilanishi activity log'ga yoziladi (`User`, `updated`): kim (aktyor), qaysi
+  buyurtma orqali (`metadata.order_id`, `market_id`, `source: order_create`), maydon eski → yangi.
+- [2026-10-25] 🟢 [order] — buyurtma javoblarida yangi `extra_number` (eski buyurtmalarda `null`).
+- [2026-10-25] 🟢 — Telegram bot, `POST /orders/external`, hamkor (BeePost) va tashqi import **o'zgarmagan**: identity
+  telefon bo'yicha topilgan kartani avvalgidek yangilaydi (j70YS4zJ); `update_customer_card` u yerda e'tiborsiz.
+- 🔧 FE (hiqRNhkI): mavjud mijoz tanlanib maydonlari o'zgartirilsa «Mijoz kartasi ham yangilansinmi?» dialogi →
+  «Kartani ham yangilash» = `update_customer_card: true`, «Faqat shu buyurtmada» = `false`; javobdagi
+  `customer_card_changed_fields` bilan toast. ⚠️ Dialog chiqmaguncha formadagi o'zgarish kartaga yozilmaydi (faqat
+  buyurtmaga) — avval telefon yo'lida jimgina yozilardi.
+
+### 2026-10-25 (tun) — Mijoz taklifi: boshqa market mijozi barcha yaratuvchi rollarga, sonlar faqat shu market bo'yicha (WCuZzUCv)
+
+Deploy: faqat api-gateway (`GET /customers/suggest`, `POST /orders` / `ai-confirm` `customer_id` doirasi). Migratsiya
+yo'q. Ega qarori 2026-10-19 (create-step2 S3): mijoz kartasi marketlar orasida umumiy, buyurtmalar tarixi esa faqat
+o'z marketiniki.
+
+- [2026-10-25] ✏️ [gateway] — `GET /customers/suggest` (market, market operatori, registrator, menejer, filial):
+  shu marketda buyurtmasi **bo'lmagan** mijoz ham qaytadi, lekin **faqat to'liq (9 raqamli) asosiy telefon aniq mos
+  kelganda** (`+998 90 111 22 33`, `901112233`, `0901112233` — farqi yo'q). Qisman raqam (7–8 raqam) yoki faqat
+  qo'shimcha raqam (`extra_number`) mos kelsa boshqa market mijozi **chiqmaydi** (RBAC-01: sanab chiqishga yo'l yo'q).
+- [2026-10-25] ✏️ [gateway] — yangi maydon **`in_market: boolean | null`** — mijozning shu marketda buyurtmasi bormi
+  (admin `market_id` siz — `null`). `in_market: false` qatorida: `orders_count: 0`, `new_orders_count: 0`,
+  `has_new_orders: false`, `new_order_ids: []`, `last_order_at: null` — boshqa marketlar soni/ID/sanasi **hech
+  qachon** qaytmaydi. Market va market operatori rolida bunday qatorda **`address` va `extra_number` = `null`**
+  (ism, telefon, viloyat/tuman — bor); registrator/menejer/filial ko'radi.
+- [2026-10-25] ✏️ [gateway] — `POST /orders` (va `ai-confirm`): admin bo'lmagan rol `customer_id` ni suggest bilan
+  bir xil qoidada yuboradi — shu marketda buyurtmasi bor mijoz (avvalgidek), yoki boshqa market mijozi: **faqat
+  `customer.phone_number` kartadagi telefonga to'liq mos kelsa** (FE allaqachon `customer` obyektini ham yuboradi).
+  Mos kelmasa — `customer` obyekti bo'yicha avvalgi telefon yo'li; obyekt yo'q bo'lsa 403 «customer_id qabul
+  qilinmadi: boshqa market mijozi uchun customer.phone_number mijoz telefoniga to'liq mos kelishi kerak …».
+- [2026-10-25] 🟢 [gateway] — boshqa market mijozi ko'rsatilganda / qabul qilinganda gateway jurnaliga yoziladi
+  (aktyor, market, mijoz id — telefonsiz). Global per-IP throttle (60/daqiqa) amal qiladi.
+- 🔧 FE (hiqRNhkI): taklif ro'yxati sarlavhasi «Barcha mijozlar · buyurtmalar soni faqat sizda»; `in_market: false`
+  (yoki `orders_count: 0`) qatorida «0 ta buyurtma · Sizda hali buyurtmasi yo'q»; `address`/`extra_number` `null`
+  bo'lsa forma maydoni bo'sh qoladi (operator o'zi to'ldiradi).
+
 ### 2026-10-25 — Buyurtma: mahsulotsiz va tumansiz buyurtma yaratilmaydi — barcha yo'llarda (IR2OHIiN)
 
 Deploy: api-gateway (DTO/Swagger + `createOrderInternal`), order-service (yagona yaratish nuqtasi

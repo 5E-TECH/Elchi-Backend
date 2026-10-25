@@ -226,6 +226,55 @@ describe('OrderGatewayController — POST /orders/ai-confirm', () => {
     );
   });
 
+  it('txmkXVBa: update_customer_card: true — buyurtmadan keyin identity.customer.update (sukut — karta yozilmaydi)', async () => {
+    const fx = makeController();
+    // Mijoz shu marketniki (market roli kartani yangilay oladi).
+    const base = fx.order.send.getMockImplementation()!;
+    fx.order.send.mockImplementation((pattern, payload) =>
+      pattern.cmd === 'order.customer.market_summary'
+        ? of({
+            data: {
+              items: (payload.customer_ids ?? []).map((id: string) => ({
+                customer_id: id,
+              })),
+            },
+          })
+        : base(pattern, payload),
+    );
+    // Haqiqiy identity — raqamli id va mavjud mijoz (200).
+    const baseIdentity = fx.identity.send.getMockImplementation()!;
+    fx.identity.send.mockImplementation((pattern, payload) =>
+      pattern.cmd === 'identity.customer.create'
+        ? of({
+            statusCode: 200,
+            data: { id: String(payload.dto?.phone_number ?? '').slice(-3) },
+          })
+        : baseIdentity(pattern, payload),
+    );
+    await fx.controller.aiConfirm(
+      {
+        orders: [
+          confirmOrder(1, { update_customer_card: true } as any),
+          confirmOrder(2),
+        ],
+      },
+      marketReq,
+    );
+
+    const updates = sendsOf(fx.identity, 'identity.customer.update');
+    expect(updates).toHaveLength(1);
+    expect(updates[0][1]).toMatchObject({
+      id: phoneFor(1).slice(-3),
+      dto: expect.objectContaining({ name: 'Mijoz 1' }),
+    });
+    for (const [, payload] of sendsOf(
+      fx.identity,
+      'identity.customer.create',
+    )) {
+      expect(payload).toMatchObject({ update_existing: false });
+    }
+  });
+
   it('muvaffaqiyat: {results:[{index, ok, order_id}]} va to‘g‘ri mapping', async () => {
     const fx = makeController();
     const res = await fx.controller.aiConfirm(
@@ -269,6 +318,8 @@ describe('OrderGatewayController — POST /orders/ai-confirm', () => {
         extra_number: '97-111-22-33',
         address: 'Chilonzor',
       },
+      // txmkXVBa: ai-confirm — mavjud karta jimgina yozilmaydi.
+      update_existing: false,
     });
 
     const payload = orderCreatePayload(fx.order);

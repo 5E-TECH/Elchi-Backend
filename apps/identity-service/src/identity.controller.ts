@@ -24,6 +24,7 @@ import {
 import type { OtpRequestInput, OtpVerifyInput } from './otp/otp.service';
 import type {
   CreateCustomerPayload,
+  UpdateCustomerCardPayload,
   CreateCourierPayload,
   CreateUserPayload,
   DeleteUserPayload,
@@ -324,7 +325,23 @@ export class IdentityController {
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
-      this.userService.createCustomer(payload.dto),
+      this.userService.createCustomer(payload.dto, {
+        updateExisting: payload.update_existing !== false,
+      }),
+    );
+  }
+
+  /** txmkXVBa: buyurtma formasidan «Kartani ham yangilash». */
+  @MessagePattern({ cmd: 'identity.customer.update' })
+  updateCustomerCard(
+    @Payload() payload: UpdateCustomerCardPayload,
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.userService.updateCustomerCard(payload.id, payload.dto, {
+        orderId: payload.order_id ?? null,
+        marketId: payload.market_id ?? null,
+      }),
     );
   }
 

@@ -4,6 +4,7 @@ import {
   GatewayTimeoutException,
   Get,
   Inject,
+  Logger,
   Query,
   Req,
   UseGuards,
@@ -16,7 +17,11 @@ import {
   ApiTags,
 } from '@nestjs/swagger';
 import { firstValueFrom, timeout, TimeoutError } from 'rxjs';
-import { parseUzPhoneSearch, Roles as RoleEnum } from '@app/common';
+import {
+  normalizeUzPhone,
+  parseUzPhoneSearch,
+  Roles as RoleEnum,
+} from '@app/common';
 import { successRes } from '../../../libs/common/helpers/response';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
 import { Roles } from './auth/roles.decorator';
@@ -31,8 +36,9 @@ interface JwtUser {
 export const CUSTOMER_SUGGEST_LIMIT = 10;
 /**
  * Market doirasidagi rollar uchun identity'dan olinadigan nomzodlar —
- * keyin order-service xulosasi bilan SHU marketda buyurtmasi borlarigacha
- * qisqartiriladi. To'liq (9 raqamli) raqamda nomzod odatda bitta.
+ * keyin SHU marketda buyurtmasi borlar + (WCuZzUCv) to'liq telefoni aniq mos
+ * kelgan boshqa market mijozlarigacha qisqartiriladi. To'liq (9 raqamli)
+ * raqamda nomzod odatda bitta.
  */
 export const CUSTOMER_SUGGEST_CANDIDATES = 50;
 
@@ -49,6 +55,13 @@ export const CUSTOMER_SUGGEST_ROLES: string[] = [
   RoleEnum.MARKET,
   RoleEnum.MARKET_OPERATOR,
 ];
+
+/**
+ * WCuZzUCv: doiradan tashqari (boshqa market) mijoz qatorida manzil va
+ * qo'shimcha raqam qaytmaydigan rollar (market tomoni). Filial/HQ xodimlari
+ * (registrator, menejer, filial) — ichki xodim, ko'radi.
+ */
+const MARKET_SIDE_ROLES: string[] = [RoleEnum.MARKET, RoleEnum.MARKET_OPERATOR];
 
 const ID_RE = /^\d+$/;
 const RPC_TIMEOUT_MS = 8000;
@@ -70,6 +83,13 @@ export interface CustomerSuggestion {
   /** Eng yangi `created`/`new` buyurtma id'lari (ko'pi bilan 5). */
   new_order_ids: string[];
   last_order_at: string | null;
+  /**
+   * WCuZzUCv: mijozning SHU marketda (o'chirilmagan) buyurtmasi bormi.
+   * `false` — boshqa market mijozi (faqat to'liq telefon bilan topiladi;
+   * sonlar 0, market rolida `address`/`extra_number` = null). Market
+   * konteksti bo'lmasa (admin, `market_id` siz) — null.
+   */
+  in_market: boolean | null;
   /**
    * 9444UAa8 — qaysi raqam mos keldi: `phone` (asosiy), `extra_number`
    * («Qo'shimcha raqam: …» belgisi) yoki `name`.
@@ -104,15 +124,24 @@ const text = (value: unknown): string | null =>
  * edi: operator mavjud mijoz raqamini kiritganda ism/tuman/manzil har safar
  * qo'lda yozilardi.
  *
- * DOIRA (shaxsiy ma'lumot oqib chiqmasin — fix3 RBAC-01 tamoyili):
+ * DOIRA (WCuZzUCv, ega qarori 2026-10-19 S3 — mijoz kartasi marketlar orasida
+ * umumiy, buyurtmalar tarixi esa faqat o'z marketiniki):
  *   - SUPERADMIN / ADMIN — barcha mijozlar; `market_id` berilsa shu marketdagi
  *     buyurtma xulosasi qo'shiladi;
- *   - MARKET — FAQAT o'z marketida buyurtmasi bo'lgan mijozlar (query'dagi
- *     `market_id` e'tiborsiz — token `sub`);
+ *   - MARKET — xulosa o'z marketi bo'yicha (query'dagi `market_id` e'tiborsiz
+ *     — token `sub`);
  *   - MARKET_OPERATOR — biriktirilgan marketi (identity `user.market_id`;
  *     biriktirilmagan bo'lsa 400);
  *   - REGISTRATOR / MANAGER / BRANCH — `market_id` MAJBURIY (buyurtma shu
- *     market uchun yaratiladi), faqat shu marketdagi mijozlar.
+ *     market uchun yaratiladi).
+ * Doiradagi rollar SHU marketda buyurtmasi bor mijozni qisman raqam bilan
+ * ham topadi; boshqa market mijozini esa FAQAT to'liq (9 raqamli) asosiy
+ * telefon aniq mos kelganda (qisman raqam / qo'shimcha raqam bilan sanab
+ * chiqib bo'lmaydi — RBAC-01). Bunday qatorda sonlar 0, id/sana yo'q
+ * (boshqa market tarixi HECH QACHON qaytmaydi), market/operator rolida
+ * `address` va `extra_number` = null; har topilish jurnalga yoziladi
+ * (aktyor, market, mijoz id — telefonsiz). Global per-IP throttle
+ * (60/daqiqa/route) shu endpointga ham amal qiladi.
  *
  * Javob — oq ro'yxatdagi maydonlar (parol, username, tariflar va h.k. YO'Q).
  * Telefon jurnalga yozilmaydi.
@@ -120,6 +149,8 @@ const text = (value: unknown): string | null =>
 @ApiTags('Customers')
 @Controller('customers')
 export class CustomerGatewayController {
+  private readonly logger = new Logger(CustomerGatewayController.name);
+
   constructor(
     @Inject('IDENTITY') private readonly identityClient: ClientProxy,
     @Inject('ORDER') private readonly orderClient: ClientProxy,
@@ -215,7 +246,7 @@ export class CustomerGatewayController {
     summary:
       'Mijozni telefon bo`yicha taklif qilish (buyurtma yaratish formasi)',
     description:
-      "Telefon har qanday formatda (+998 90 123 45 67, 901234567, 0901234567; kamida 7 raqam). Asosiy telefon VA qo'shimcha raqam (`extra_number`, 9444UAa8) bo'yicha qidiriladi; `matched_by`: `phone` | `extra_number` | `name` — qaysi raqam mos kelgani («Qo'shimcha raqam: …» belgisi shundan). Market/market operatori/filial xodimi faqat shu marketda buyurtmasi bo'lgan mijozlarni ko'radi (qo'shimcha raqam bo'yicha topilganlar ham); admin — hammasini. Har taklifda shu marketdagi `orders_count`, `new_orders_count`, `has_new_orders` (takroriy buyurtma ogohlantirishi). Ko'pi bilan 10 ta.",
+      "Telefon har qanday formatda (+998 90 123 45 67, 901234567, 0901234567; kamida 7 raqam). Asosiy telefon VA qo'shimcha raqam (`extra_number`, 9444UAa8) bo'yicha qidiriladi; `matched_by`: `phone` | `extra_number` | `name` — qaysi raqam mos kelgani («Qo'shimcha raqam: …» belgisi shundan). WCuZzUCv: market/market operatori/filial xodimi shu marketda buyurtmasi bor mijozlarni (qisman raqam bilan ham) VA boshqa market mijozini faqat TO'LIQ (9 raqamli) asosiy telefon aniq mos kelganda ko'radi (`in_market: false`, sonlar 0, `new_order_ids: []`, `last_order_at: null`; market/operator rolida `address` va `extra_number` null). Sonlar DOIM faqat shu market bo'yicha — boshqa marketlar soni/ID/sanasi qaytmaydi. Admin — hammasini. Har taklifda shu marketdagi `orders_count`, `new_orders_count`, `has_new_orders` (takroriy buyurtma ogohlantirishi). Ko'pi bilan 10 ta.",
   })
   @ApiQuery({ name: 'phone', required: true, example: '901234567' })
   @ApiQuery({
@@ -230,7 +261,8 @@ export class CustomerGatewayController {
     @Req() req: { user: JwtUser },
   ) {
     const phoneText = typeof phone === 'string' ? phone.trim() : '';
-    if (!parseUzPhoneSearch(phoneText)) {
+    const phoneSearch = parseUzPhoneSearch(phoneText);
+    if (!phoneSearch) {
       throw new BadRequestException(
         "phone — telefon raqam kerak (kamida 7 raqam; faqat raqam, +, bo'sh joy, qavs, tire)",
       );
@@ -246,7 +278,8 @@ export class CustomerGatewayController {
           ? CUSTOMER_SUGGEST_CANDIDATES
           : CUSTOMER_SUGGEST_LIMIT,
         // 9444UAa8: qo'shimcha raqam bo'yicha ham. Topilganlar ham pastdagi
-        // market doirasi filtridan o'tadi (doiradan tashqari mijoz chiqmaydi).
+        // market doirasi filtridan o'tadi (doiradan tashqari mijoz faqat
+        // to'liq ASOSIY telefon aniq mos kelsa chiqadi — WCuZzUCv).
         match_extra_number: true,
       },
       'Identity',
@@ -279,40 +312,66 @@ export class CustomerGatewayController {
       );
     }
 
+    // WCuZzUCv: boshqa market mijozi — faqat to'liq (kanonik) qidiruvda va
+    // ASOSIY telefoni aniq mos kelsa (qisman raqam / qo'shimcha raqam bilan
+    // boshqa marketlar mijozlarini sanab chiqib bo'lmaydi — RBAC-01).
+    const fullPhone = phoneSearch.canonical;
+    const exactPhoneMatch = (row: Record<string, unknown>): boolean =>
+      fullPhone !== null &&
+      normalizeUzPhone(text(row.phone_number)) === fullPhone;
     const rows = scope.scoped
-      ? candidates.filter((row) => summaries?.has(text(row.id) ?? ''))
+      ? candidates.filter(
+          (row) => summaries?.has(text(row.id) ?? '') || exactPhoneMatch(row),
+        )
       : candidates;
+    const hideOutOfMarketContact = this.normalizeRoles(req.user).some((role) =>
+      MARKET_SIDE_ROLES.includes(role),
+    );
 
-    const data: CustomerSuggestion[] = rows
-      .slice(0, CUSTOMER_SUGGEST_LIMIT)
-      .map((row) => {
-        const id = text(row.id) ?? '';
-        const summary = summaries?.get(id);
-        const hasMarket = summaries !== null;
-        const lastOrderAt = summary?.last_order_at;
-        return {
-          id,
-          name: text(row.name),
-          phone_number: text(row.phone_number),
-          extra_number: text(row.extra_number),
-          address: text(row.address),
-          region_id: text(row.region_id),
-          district_id: text(row.district_id),
-          orders_count: hasMarket ? Number(summary?.orders ?? 0) : null,
-          new_orders_count: hasMarket ? Number(summary?.new_orders ?? 0) : null,
-          has_new_orders: Number(summary?.new_orders ?? 0) > 0,
-          new_order_ids: (summary?.new_order_ids ?? []).map(String),
-          last_order_at:
-            lastOrderAt instanceof Date
-              ? lastOrderAt.toISOString()
-              : (text(lastOrderAt) ?? null),
-          matched_by: CUSTOMER_MATCHED_BY.includes(
-            row.matched_by as CustomerMatchedBy,
-          )
-            ? (row.matched_by as CustomerMatchedBy)
-            : 'phone',
-        };
-      });
+    const page = rows.slice(0, CUSTOMER_SUGGEST_LIMIT);
+    const revealed: string[] = [];
+    const data: CustomerSuggestion[] = page.map((row) => {
+      const id = text(row.id) ?? '';
+      const summary = summaries?.get(id);
+      const hasMarket = summaries !== null;
+      // Market konteksti bor, lekin shu marketda buyurtmasi yo'q — boshqa
+      // market mijozi: sonlar 0, id/sana yo'q (xulosa faqat SHU market).
+      const outOfMarket = hasMarket && !summary;
+      if (scope.scoped && outOfMarket) revealed.push(id);
+      const hideContact = outOfMarket && scope.scoped && hideOutOfMarketContact;
+      const lastOrderAt = summary?.last_order_at;
+      return {
+        id,
+        name: text(row.name),
+        phone_number: text(row.phone_number),
+        extra_number: hideContact ? null : text(row.extra_number),
+        address: hideContact ? null : text(row.address),
+        region_id: text(row.region_id),
+        district_id: text(row.district_id),
+        orders_count: hasMarket ? Number(summary?.orders ?? 0) : null,
+        new_orders_count: hasMarket ? Number(summary?.new_orders ?? 0) : null,
+        has_new_orders: Number(summary?.new_orders ?? 0) > 0,
+        new_order_ids: (summary?.new_order_ids ?? []).map(String),
+        last_order_at:
+          lastOrderAt instanceof Date
+            ? lastOrderAt.toISOString()
+            : (text(lastOrderAt) ?? null),
+        in_market: hasMarket ? !outOfMarket : null,
+        matched_by: CUSTOMER_MATCHED_BY.includes(
+          row.matched_by as CustomerMatchedBy,
+        )
+          ? (row.matched_by as CustomerMatchedBy)
+          : 'phone',
+      };
+    });
+
+    if (revealed.length) {
+      // WCuZzUCv (d): boshqa market mijozi ko'rsatildi — jurnal (telefon,
+      // ism, manzil YOZILMAYDI; faqat aktyor, market va mijoz id).
+      this.logger.log(
+        `customer.suggest out-of-market reveal: actor=${String(req.user?.sub ?? '')} market=${scope.marketId ?? ''} customer_ids=${revealed.join(',')}`,
+      );
+    }
 
     return successRes(data, 200, 'Customer suggestions');
   }
