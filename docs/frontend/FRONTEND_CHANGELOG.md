@@ -44,6 +44,12 @@ warehouse»); «HQ ombori» iborasi ishlatilmaydi (u bekor posilka qaytishi uchu
   — pul/maosh maydonlarisiz (`ownership`, `per_order_share`, menejer yo'q). HQ topilmasa — 404 «HQ filial
   topilmadi». `region` best-effort (hudud olinmasa `null`, javob baribir 200). 🟢 FE o'ramli va o'ramsiz (`data`
   siz) javobni ham o'qisin.
+  - ⚠️ **Eski backend** (BE-1 hali deploy qilinmagan muhit — FE oldin chiqsa): bu route yo'q, so'rov
+    `GET /branches/:id` ga tushadi va `ParseBigintIdPipe` **400** qaytaradi («id musbat butun son bo'lishi kerak,
+    keldi: hq»), 404 emas.
+  - 🔧 FE: `GET /branches/hq` ning **400 va 404** javobini «Markaziy ombor ochib bo'lmaydi» deb qabul qiling —
+    xato ko'rsatmang, oyna faqat `dispatch-destinations` bilan ishlashda davom etsin. Boshqa xato (5xx, tarmoq) ham
+    oynani to'smasin (HQ qatori shunchaki chiqmaydi).
 - [2026-10-26] ✏️ [catalog] — **Yangi maydon `kind: "REGIONAL" | "HQ"`** (`HQ` — Markaziy ombor, filialdan
   hisoblanadi): `GET /warehouses` qatorlari, `GET /warehouses/:id`, `POST /warehouses`, `PATCH /warehouses/:id`,
   pause/resume javoblari, `GET /market/warehouse-stock` → `warehouses[]` (jadval ustunlari), `resolve-source` va
@@ -56,7 +62,8 @@ warehouse»); «HQ ombori» iborasi ishlatilmaydi (u bekor posilka qaytishi uchu
   `total_available` ga qo'shiladi (FAOL bo'lsa).
 - [2026-10-26] 🔧 FE — «Ombor ochish» oynasidagi **filial ro'yxati**: `GET /branches/hq` (birinchi o'rinda, «Markaziy
   ombor») + `GET /branches/dispatch-destinations` (viloyat filiallari, o'zgarmagan — u pochta manzillari uchun, HQ'siz)
-  minus `GET /warehouses` dagi `branch_id`lar. Ombor turi belgisi — `kind` (yoki `branch.type === "HQ"`).
+  minus `GET /warehouses` dagi `branch_id`lar. `GET /branches/hq` 400/404 (eski backend / HQ yo'q) yoki xato bersa —
+  faqat `dispatch-destinations`. Ombor turi belgisi — `kind` (yoki `branch.type === "HQ"`).
 
 
 ### 2026-10-25 — Market operatori: viloyat tumanlari va tuman tafsiloti (MO-7, OfRSoRUX / N11)

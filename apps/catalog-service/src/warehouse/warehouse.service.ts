@@ -28,6 +28,7 @@ import { StockMovement } from './entities/stock-movement.entity';
 import { StockReservation } from './entities/stock-reservation.entity';
 import { Product } from '../entities/product.entity';
 import {
+  HQ_ID_READ_WAIT_MS,
   WarehouseBranchInfo,
   WarehouseDirectoryService,
   WarehouseMarketInfo,
@@ -295,6 +296,15 @@ export class WarehouseService {
     return hqBranchId !== null && String(branchId) === hqBranchId
       ? 'HQ'
       : 'REGIONAL';
+  }
+
+  /**
+   * Pa1KaXmj: HQ filial id o'qish yo'li uchun — keshdan darhol, aks holda
+   * ko'pi bilan `HQ_ID_READ_WAIT_MS` (branch-service sekin bo'lsa javob
+   * kechikmaydi); aniqlanmasa `null` — `kindOf` zaxirasi.
+   */
+  private hqBranchIdForRead(): Promise<string | null> {
+    return this.directory.getHqBranchId({ maxWaitMs: HQ_ID_READ_WAIT_MS });
   }
 
   private branchView(branch: WarehouseBranchInfo | null | undefined) {
@@ -673,9 +683,7 @@ export class WarehouseService {
             .map((w) => w.manager_user_id)
             .filter((id): id is string => !!id),
         ),
-        warehouses.length
-          ? this.directory.getHqBranchId()
-          : Promise.resolve(null),
+        warehouses.length ? this.hqBranchIdForRead() : Promise.resolve(null),
       ]);
 
     const views = warehouses.map((warehouse) =>
@@ -772,7 +780,7 @@ export class WarehouseService {
             WHERE "warehouse_id" = $1`,
         [warehouse.id],
       ),
-      this.directory.getHqBranchId(),
+      this.hqBranchIdForRead(),
     ]);
     return {
       ...this.warehouseView(warehouse, {
@@ -1211,9 +1219,7 @@ export class WarehouseService {
         [marketId],
       ),
       this.directory.getBranches(warehouses.map((w) => w.branch_id)),
-      warehouses.length
-        ? this.directory.getHqBranchId()
-        : Promise.resolve(null),
+      warehouses.length ? this.hqBranchIdForRead() : Promise.resolve(null),
     ]);
 
     const byProduct = new Map<
@@ -1590,9 +1596,11 @@ export class WarehouseService {
       where: { id: In(list) },
     });
     // Pa1KaXmj: `kind` — filial ma'lumotisiz, keshlangan HQ id bo'yicha.
-    const hqId = warehouses.length
-      ? await this.directory.getHqBranchId()
-      : null;
+    // Yagona chaqiruvchi — order-service ro'yxat/tafsilot boyitishi
+    // (`loadWarehouseRefs`, timeout 3 s): HQ id ko'pi bilan
+    // `HQ_ID_READ_WAIT_MS` kutiladi, branch-service sekin bo'lsa ham ro'yxat
+    // kechikmaydi (`kind` zaxirasi — `REGIONAL`).
+    const hqId = warehouses.length ? await this.hqBranchIdForRead() : null;
     return {
       data: warehouses.map((warehouse) => ({
         id: warehouse.id,

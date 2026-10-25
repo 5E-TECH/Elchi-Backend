@@ -622,7 +622,10 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
     (threshold). Order-driven movements are only in `stock_movements`.
   - New env (catalog): `RABBITMQ_BRANCH_QUEUE` (default `branch_queue`),
     `RABBITMQ_LOGISTICS_QUEUE` (default `logistics_queue`) — branch/region
-    lookups (30 s in-memory branch cache; HQ id via `branch.find_hq`, 5 min).
+    lookups (30 s in-memory branch cache; HQ id via `branch.find_hq` — found
+    id cached for the process lifetime (HQ type is locked, single HQ),
+    404/error → 30 s backoff, one shared in-flight request, warmed on
+    module init; read paths incl. `find_by_ids` wait at most 500 ms).
   - Gateway `WarehouseGatewayController` — see FRONTEND_CHANGELOG
     2026-10-24 «Ombor moduli» for the HTTP list and roles.
   - **Access (XtcEyQjb, 2026-10-24, migration `1716000000152`):** read
@@ -948,7 +951,8 @@ create from a branch by `order_ids` → `send` (vehicle info) → `receive` /
   SUPERADMIN/ADMIN) is also before `:id`: `branch.find_hq` projected to
   `{id, name, code, type, status, address, region_id, region}` (no money
   fields; region via `branch.find_by_id`, best-effort) — the «Markaziy ombor»
-  option of the warehouse-create dialog.
+  option of the warehouse-create dialog. An older gateway without this route
+  answers 400 (`:id` + `ParseBigintIdPipe`), so FE treats 400/404 as «no HQ».
 
 ### 5.4 Cashbox invariant
 The sum of cashbox balances must reconcile with recorded movements. Enforced in
