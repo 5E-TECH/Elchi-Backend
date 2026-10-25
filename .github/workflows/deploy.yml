@@ -47,13 +47,6 @@ jobs:
         env:
           NODE_ENV: test
 
-      # BLOCKING before deploy: the full suite is green, so a money/RBAC/legacy
-      # regression can no longer ship. (Audit testing P1.)
-      - name: Full unit test suite (must pass)
-        run: npm run test:ci
-        env:
-          NODE_ENV: test
-
       - name: Build check
         run: |
           npx nest build api-gateway
@@ -62,9 +55,41 @@ jobs:
           npx nest build integration-service
           npx nest build ai-service
 
+  # BLOCKING before deploy: the full suite is green, so a money/RBAC/legacy
+  # regression can no longer ship. (Audit testing P1.)
+  # 2026-10-26: ci.yml bilan bir xil — suite `--runInBand` bilan ~11 daqiqa,
+  # `test` job'i 20 daqiqalik timeout'ga yaqinlashgan edi. 3 shard'ga
+  # bo'lingan; deploy HAMMA shard yashil bo'lgandagina boshlanadi.
+  unit-tests:
+    name: unit-tests (shard ${{ matrix.shard }}/${{ strategy.job-total }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Full unit test suite (must pass)
+        run: npm run test:ci -- --shard=${{ matrix.shard }}/${{ strategy.job-total }}
+        env:
+          NODE_ENV: test
+
   deploy:
     runs-on: ubuntu-latest
-    needs: test
+    needs: [test, unit-tests]
     environment: production
     timeout-minutes: 60
     steps:

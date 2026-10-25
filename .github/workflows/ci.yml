@@ -79,14 +79,7 @@ jobs:
         env:
           NODE_ENV: test
 
-      # BLOCKING: the full suite is green (the 3 legacy red specs were repaired),
-      # so it now gates merges — this is what puts the settlement / dedup-epoch /
-      # return-flow money-invariant specs (previously only in the non-blocking
-      # run) behind the merge gate. (Audit testing P1.)
-      - name: Full unit test suite (must pass)
-        run: npm run test:ci
-        env:
-          NODE_ENV: test
+      # To'liq unit suite pastdagi alohida `unit-tests` job'ida (shard'langan).
 
       # (7s1bqOT6) Gateway HTTP e2e — HAQIQIY ApiGatewayModule, faqat RMQ
       # mijozlari mock (RabbitMQ/Postgres kerak emas): `GET /health` (liveness)
@@ -107,6 +100,43 @@ jobs:
           npx nest build api-gateway
           npx nest build integration-service
           npx nest build ai-service
+
+  # BLOCKING: the full suite is green (the 3 legacy red specs were repaired),
+  # so it now gates merges — this is what puts the settlement / dedup-epoch /
+  # return-flow money-invariant specs (previously only in the non-blocking
+  # run) behind the merge gate. (Audit testing P1.)
+  # 2026-10-26: suite `--runInBand` bilan ~11 daqiqaga yetdi va
+  # lint-typecheck-test job'ining 15 daqiqalik timeout'idan oshib, dev push
+  # run'lari testlar yashil bo'lsa ham "cancelled" bo'ldi. Endi ALOHIDA job,
+  # 3 ta parallel runner'ga `--shard` bilan bo'linadi; har shard ichida
+  # --runInBand saqlanadi (bajarilish semantikasi o'zgarmaydi). Suite yana
+  # o'ssa — matrix'ga shard qo'shing, `job-total` o'zi moslashadi.
+  unit-tests:
+    name: unit-tests (shard ${{ matrix.shard }}/${{ strategy.job-total }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Full unit test suite (must pass)
+        run: npm run test:ci -- --shard=${{ matrix.shard }}/${{ strategy.job-total }}
+        env:
+          NODE_ENV: test
 
   # 2026-10-17: notification-service prodda Nest DI xatosi (aylanma import
   # → "can't resolve dependencies") bilan ko'tarilmadi — unit testlar DI

@@ -75,3 +75,7 @@ backups/
 # k6 yuk testi natijalari (har yurgizishda qayta yoziladi)
 tests/load/summary.json
 tests/load/capacity-summary.json
+
+# Claude Code agent worktree'lari (lokal git worktree — commit qilinmaydi;
+# gitlink bo'lib tushsa CI checkout cleanup'da "No url found for submodule")
+.claude/worktrees/
