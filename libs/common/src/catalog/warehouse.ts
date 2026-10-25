@@ -182,6 +182,12 @@ const round3 = (value: number): number => Math.round(value * 1000) / 1000;
  * Ekrandagi «Hisob vazni» (qaror 12). Narx dvigateli (`computeDeliveryQuote`)
  * 0.1 kg qadam bilan yuqoriga yaxlitlaydi — bu yerda faqat ko'rsatish
  * qiymati (3 kasr), narx hisoblanmaydi.
+ *
+ * AQ9lkgVB: hajm chegarasi (`volumetric_from_kg`) bu yerda ATAYLAB
+ * qo'llanmaydi — u butun jo'natma yig'indisiga (Σ U×K×B × dona) tegishli,
+ * bitta dona ko'rinishi uni to'g'ri aks ettira olmaydi (2 dona 1,6 kg
+ * hajm = 3,2 kg — chegara 3 da hajm qo'llanadi). Chegara faqat narx
+ * dvigatelida; bu ko'rinish — mahsulotning chegarasiz hisob vazni.
  */
 export function warehouseChargeableWeight(
   product: WarehouseMeasureInput,

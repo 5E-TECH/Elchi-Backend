@@ -23,6 +23,34 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-10-25 — Yetkazish narxi: hajm qaysi kg dan boshlab hisobga olinadi (AQ9lkgVB)
+
+Deploy: logistics-service (migratsiya `1716000000154`), api-gateway (DTO/Swagger). Migratsiyadan keyin chegara
+**0** — narx hozirgidek; ega aytgan chegara (hozir 3 kg) ops vositalaridan yoziladi.
+
+- [2026-10-25] ✏️ [gateway/logistics] — `GET /delivery/pricing-settings` (va `.../history` versiyalari, `PATCH`
+  javobi) da yangi maydon **`volumetric_from_kg: number`** (kg, 3 kasr, sukut `0`). `PATCH /delivery/pricing-settings`
+  tanasida ixtiyoriy `volumetric_from_kg` — `0..1000`, ko'pi bilan 3 kasr (xato matnlari: «volumetric_from_kg 0 dan
+  kichik bo'lmasligi kerak», «… 1000 dan oshmasligi kerak», «… — ko'pi bilan 3 kasrli son (kg)»). O'zgartirish — yangi
+  versiya + jurnal (`logistics.delivery_pricing_settings_updated`, eski/yangi qiymatda ham bor); rollar o'zgarmagan
+  (superadmin, admin).
+- [2026-10-25] ✏️ [logistics] — **Qoida:** hajmli vazn (Σ U×K×B ÷ 5000, faqat `volumetric_enabled` va o'lchamli
+  elementlar, butun jo'natma yig'indisi) `volumetric_from_kg` dan **kichik** bo'lsa — hajm hisobga olinmaydi (hisob
+  vazni = haqiqiy og'irlik, `basis: 'weight'`); **katta yoki teng** bo'lsa — hozirgidek katta(haqiqiy, hajmli).
+  0,1 kg qadam, minimum, birinchi kg, kg narxi, express va pickup o'zgarmagan. Misol (chegara 3): 20×20×20 sm, 0,5 kg →
+  hajmli 1,6 < 3 → hisob 0,5 kg; 50×35×20, 0,8 kg → hajmli 7,0 → hisob 7,0 kg; aynan 3,0 — hajm qo'llanadi.
+- [2026-10-25] ✏️ [gateway/logistics] — `POST /delivery/quote` va `POST /delivery/quote/by-tariff` natijasida yangi
+  maydonlar: **`volumetricFromKg`** (qo'llangan chegara, kg) va **`volumetricApplied: boolean`** (hajm hisobga
+  olindimi). `volumetricKg` — doim hisoblangan hajmli vazn (chegaradan qat'i nazar), `basis` — hisob vazni qaysi
+  biridan. Qo'shimcha (additive) — eski FE buzilmaydi.
+- [2026-10-25] 🟢 [catalog] — ombor ro'yxatlaridagi «Hisob vazni» (`product.chargeable_weight_kg` /
+  `chargeable_basis`) **o'zgarmagan** — chegarasiz, max(og'irlik, U×K×B/5000) bitta dona uchun. Chegara butun
+  jo'natma yig'indisiga qo'llanadi (2 × 1,6 kg = 3,2 kg — chegara 3 da hajm bo'yicha), bitta dona ko'rinishi uni
+  to'g'ri ko'rsata olmaydi. Hajm qo'llandimi — faqat quote'dagi `volumetricApplied` dan.
+- 🟢 FE tayyor (Elchi-Frontend `feat/volumetric-from-kg-ops`): Ops vositalari → «Yetkazish narxi» (`/ops?tab=delivery-pricing`) va Hududlar → «Yetkazish tariflari» → «Hisob qoidalari» da «Hajm bo'yicha hisoblash
+  chegarasi» (kg, 0 — har doim) + tarixda; kalkulyator, mahsulot formasi va ro'yxatdagi «Hisob vazni» chegarani
+  hisobga oladi (`volumetricApplied: false` — «Chegara … kg dan kichik — narx og'irlik bo'yicha»).
+
 ### 2026-10-25 — AI idempotentlik qoldiqlari (Cp2v3ZJ7) va kampaniya yuklamasi (xHPdpj0W)
 
 Deploy: faqat notification-service (bot matni). Migratsiya yo'q. API kontrakti o'zgarmagan.

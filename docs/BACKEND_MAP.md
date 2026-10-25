@@ -386,6 +386,13 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
   `logistics.delivery_pricing_settings_updated`). No cache. Pickup fee is
   returned separately and never part of `total`. **Not wired into the sale
   flow yet** (`market_tariff` unchanged — KmWO9gTA).
+  Volumetric threshold (AQ9lkgVB, migration `1716000000154`):
+  `delivery_pricing_settings.volumetric_from_kg` numeric(10,3) DEFAULT 0 —
+  shipment volumetric weight below it is ignored (billable = actual weight),
+  ≥ applies as before; quote returns `volumetricFromKg` / `volumetricApplied`.
+  catalog-service warehouse «Hisob vazni» (`warehouseChargeableWeight`) stays
+  threshold-free on purpose — the threshold is shipment-level (Σ × quantity),
+  a per-unit view cannot reflect it.
 
 ### finance-service (`finance_schema`)
 - **Entities:** `cashbox` (`Cashbox_type`: main/couriers/markets/branch),
