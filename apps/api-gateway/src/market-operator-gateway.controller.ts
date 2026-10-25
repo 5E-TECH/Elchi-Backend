@@ -181,6 +181,8 @@ export class MarketOperatorGatewayController {
   @Roles(RoleEnum.MARKET)
   @ApiOperation({
     summary: 'Market o`z operatorini yaratadi (rol: market_operator)',
+    description:
+      "B3ZtzCCx: ixtiyoriy komissiya (`commission_type` + `commission_value`, ikkalasi BIRGA) AYNI so'rovda — operator va komissiya bitta yozuvda (atomik). Cheklovlar `PATCH :id/commission` bilan bir xil: percent 0..100, fixed 0..1 000 000 so'm, 2 kasr. Noto'g'ri komissiya — 400 va operator YARATILMAYDI.",
   })
   @ApiBody({ type: CreateMarketOperatorRequestDto })
   @ApiCreatedResponse({ description: 'Operator yaratildi' })
@@ -196,6 +198,14 @@ export class MarketOperatorGatewayController {
         name: dto.name,
         phone_number: dto.phone_number,
         password: dto.password,
+        // B3ZtzCCx: berilgan bo'lsagina uzatiladi (identity ikkalasini birga
+        // va PATCH chegaralari bilan tekshiradi).
+        ...(dto.commission_type !== undefined
+          ? { commission_type: dto.commission_type }
+          : {}),
+        ...(dto.commission_value !== undefined
+          ? { commission_value: dto.commission_value }
+          : {}),
       },
       requester: this.toRequester(req),
     });

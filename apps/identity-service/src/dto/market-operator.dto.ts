@@ -31,6 +31,20 @@ export class CreateMarketOperatorDto {
   @IsString()
   @MinLength(4)
   password: string;
+
+  /**
+   * B3ZtzCCx: ixtiyoriy komissiya — UpdateMarketOperatorCommissionDto bilan
+   * AYNI cheklovlar; ikkalasi birga (servis tekshiradi).
+   */
+  @IsOptional()
+  @IsEnum(Commission_type)
+  commission_type?: Commission_type | null;
+
+  @IsOptional()
+  @IsNumber({ allowNaN: false, allowInfinity: false, maxDecimalPlaces: 2 })
+  @Min(0)
+  @Max(1_000_000)
+  commission_value?: number | null;
 }
 
 /**

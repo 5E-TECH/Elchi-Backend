@@ -251,7 +251,11 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
   `invalidateAllSessions` (same save), `active` → the market itself must be
   ACTIVE (else 403); orders / commission / earnings untouched; activity log
   `status_change` (actor = market, `metadata.reason =
-  market_operator_status`); unchanged status → 200 without a log.
+  market_operator_status`); unchanged status → 200 without a log. `create`
+  takes an optional `commission_type` + `commission_value` (B3ZtzCCx; both
+  or neither, same bounds as `update_commission` via shared
+  `parseMarketOperatorCommission` / `assertMarketOperatorCommissionBounds`),
+  saved in the same INSERT.
 
 ### order-service (`order_schema`) — the core
 - **Entities:** `order` (key cols incl. `status` (`Order_status`), `total_price`;

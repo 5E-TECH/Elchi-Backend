@@ -5311,11 +5311,70 @@ export class UserServiceService implements OnModuleInit {
   }
 
   /**
+   * Operator komissiyasi kirishi (i76gGjyq; B3ZtzCCx da yaratish bilan
+   * UMUMIY — ikki yo'lda qoida bir xil bo'lsin). RMQ'da ValidationPipe yo'q:
+   * turi — percent | fixed | null, qiymati — manfiy bo'lmagan chekli son,
+   * ko'pi bilan 2 kasr (numeric(14,2) — 3+ kasr jimgina yaxlitlanmasin) yoki
+   * null. Berilmagan maydon — null.
+   */
+  private parseMarketOperatorCommission(dto?: {
+    commission_type?: unknown;
+    commission_value?: unknown;
+  }): { type: Commission_type | null; value: number | null } {
+    const type = (dto?.commission_type ?? null) as Commission_type | null;
+    if (type !== null && !Object.values(Commission_type).includes(type)) {
+      this.badRequest("commission_type noto'g'ri (percent | fixed)");
+    }
+    const value = (dto?.commission_value ?? null) as number | null;
+    if (value !== null) {
+      if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
+        this.badRequest("commission_value manfiy bo'lmagan son bo'lishi kerak");
+      }
+      if (Math.abs(Math.round(value * 100) - value * 100) > 1e-6) {
+        this.badRequest("commission_value ko'pi bilan 2 kasr xonali bo'lsin");
+      }
+    }
+    return { type, value };
+  }
+
+  /**
+   * Turi bo'yicha chegara — BIRLASHGAN holat bo'yicha: PERCENT 0..100,
+   * FIXED 0..1 000 000 so'm.
+   */
+  private assertMarketOperatorCommissionBounds(
+    type: Commission_type | null,
+    value: number | string | null,
+  ): void {
+    if (
+      type === Commission_type.PERCENT &&
+      value !== null &&
+      Number(value) > MARKET_OPERATOR_PERCENT_MAX
+    ) {
+      this.badRequest("Komissiya foizi 0 dan 100 gacha bo'lishi kerak");
+    }
+    if (
+      type === Commission_type.FIXED &&
+      value !== null &&
+      Number(value) > MARKET_OPERATOR_FIXED_MAX
+    ) {
+      this.badRequest(
+        "Belgilangan komissiya 0 dan 1 000 000 so'mgacha bo'lishi kerak",
+      );
+    }
+  }
+
+  /**
    * identity.market_operator.create (i76gGjyq) — market o'z operatorini
    * yaratadi. Rol DOIM market_operator, market_id — ko'lamdagi market (mijoz
    * tanasidan EMAS). Kassa YARATILMAYDI: operator pul ushlamaydi — uning
    * daromadi finance `operator_earnings` da hisoblanadi va uni market to'laydi
    * (Cashbox_type'da operator turi yo'q; BeePost'da ham operator kassasiz).
+   *
+   * B3ZtzCCx (ega qarori 2026-10-19, MO-S5): ixtiyoriy komissiya AYNI
+   * so'rovda (bitta save — atomik; ilgari POST + alohida PATCH :id/commission,
+   * ikkinchisi yiqilsa operator komissiyasiz qolardi). Qoida PATCH bilan bir
+   * xil (percent 0..100, fixed 0..1 000 000, 2 kasr) va IKKALASI BIRGA:
+   * faqat turi yoki faqat qiymati — 400; ikkalasi yo'q / null — komissiyasiz.
    */
   async createMarketOperator(
     marketId: string,
@@ -5340,6 +5399,17 @@ export class UserServiceService implements OnModuleInit {
     if (!phone) {
       this.badRequest("Telefon raqam noto'g'ri");
     }
+    // B3ZtzCCx: komissiya — yozishdan OLDIN to'liq tekshiriladi.
+    const commission = this.parseMarketOperatorCommission(dto);
+    if ((commission.type === null) !== (commission.value === null)) {
+      this.badRequest(
+        'commission_type va commission_value birga yuborilishi kerak',
+      );
+    }
+    this.assertMarketOperatorCommissionBounds(
+      commission.type,
+      commission.value,
+    );
 
     // Market bazadan qayta o'qiladi: o'chirilgan yoki bloklangan market
     // operator qo'sha olmaydi (aks holda yangi ACTIVE operator orqali blok
@@ -5376,8 +5446,8 @@ export class UserServiceService implements OnModuleInit {
       add_order: false,
       can_add_extra_cost: false,
       default_tariff: null,
-      commission_type: null,
-      commission_value: null,
+      commission_type: commission.type,
+      commission_value: commission.value,
       isDeleted: false,
     });
 
@@ -5406,6 +5476,9 @@ export class UserServiceService implements OnModuleInit {
         name: saved.name,
         phone_number: saved.phone_number,
         role: saved.role,
+        // B3ZtzCCx: yaratishda berilgan komissiya jurnalda ham ko'rinadi.
+        commission_type: saved.commission_type ?? null,
+        commission_value: saved.commission_value ?? null,
       },
       ...this.auditActor(requester),
       metadata: { market_id: scopedMarketId },
@@ -5538,29 +5611,8 @@ export class UserServiceService implements OnModuleInit {
     if (!hasType && !hasValue) {
       this.badRequest('commission_type yoki commission_value majburiy');
     }
-    const nextTypeInput = hasType ? (dto.commission_type ?? null) : null;
-    if (
-      nextTypeInput !== null &&
-      !Object.values(Commission_type).includes(nextTypeInput)
-    ) {
-      this.badRequest("commission_type noto'g'ri (percent | fixed)");
-    }
-    const nextValueInput = hasValue ? (dto.commission_value ?? null) : null;
-    if (nextValueInput !== null) {
-      if (
-        typeof nextValueInput !== 'number' ||
-        !Number.isFinite(nextValueInput) ||
-        nextValueInput < 0
-      ) {
-        this.badRequest("commission_value manfiy bo'lmagan son bo'lishi kerak");
-      }
-      // numeric(14,2): 3+ kasr jimgina yaxlitlanib qolmasin.
-      if (
-        Math.abs(Math.round(nextValueInput * 100) - nextValueInput * 100) > 1e-6
-      ) {
-        this.badRequest("commission_value ko'pi bilan 2 kasr xonali bo'lsin");
-      }
-    }
+    const { type: nextTypeInput, value: nextValueInput } =
+      this.parseMarketOperatorCommission(dto);
 
     const operator = await this.findOwnMarketOperator(id, scopedMarketId);
     const before = {
@@ -5570,22 +5622,7 @@ export class UserServiceService implements OnModuleInit {
     const nextType = hasType ? nextTypeInput : before.commission_type;
     const nextValue = hasValue ? nextValueInput : before.commission_value;
 
-    if (
-      nextType === Commission_type.PERCENT &&
-      nextValue !== null &&
-      Number(nextValue) > MARKET_OPERATOR_PERCENT_MAX
-    ) {
-      this.badRequest("Komissiya foizi 0 dan 100 gacha bo'lishi kerak");
-    }
-    if (
-      nextType === Commission_type.FIXED &&
-      nextValue !== null &&
-      Number(nextValue) > MARKET_OPERATOR_FIXED_MAX
-    ) {
-      this.badRequest(
-        "Belgilangan komissiya 0 dan 1 000 000 so'mgacha bo'lishi kerak",
-      );
-    }
+    this.assertMarketOperatorCommissionBounds(nextType, nextValue);
 
     operator.commission_type = nextType;
     operator.commission_value = nextValue;

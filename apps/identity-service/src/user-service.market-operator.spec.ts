@@ -1010,4 +1010,192 @@ describe('UserServiceService — market operatorlari (i76gGjyq)', () => {
       });
     });
   });
+
+  describe('createMarketOperator — ixtiyoriy komissiya (B3ZtzCCx)', () => {
+    // Seed'dagi o'chirilgan '60' hisobga kirmaydi — faqat tirik operatorlar.
+    const operatorsOf = (repo: ReturnType<typeof makeService>['repo']) =>
+      repo.rows.filter(
+        (row) =>
+          row.role === Roles.MARKET_OPERATOR &&
+          row.market_id === MARKET_A &&
+          !row.isDeleted,
+      );
+
+    it.each([
+      [Commission_type.PERCENT, 7.5],
+      [Commission_type.PERCENT, 100],
+      [Commission_type.PERCENT, 0],
+      [Commission_type.FIXED, 50000],
+      [Commission_type.FIXED, 1_000_000],
+    ])(
+      '⭐ %s %p — BITTA save bilan operator + komissiya, javob va jurnalda ko`rinadi',
+      async (type, value) => {
+        const { service, repo, activityLog } = makeService();
+        const res: any = await service.createMarketOperator(
+          MARKET_A,
+          { ...dto, commission_type: type, commission_value: value } as never,
+          marketReq(MARKET_A),
+        );
+        expect(res.statusCode).toBe(201);
+        expect(res.data).toMatchObject({
+          commission_type: type,
+          commission_value: value,
+        });
+        // Atomik: alohida PATCH yo'q — yagona INSERT komissiya bilan.
+        expect(repo.save).toHaveBeenCalledTimes(1);
+        expect(repo.save.mock.calls[0][0]).toMatchObject({
+          commission_type: type,
+          commission_value: value,
+        });
+        expect(repo.rows.find((row) => row.id === res.data.id)).toMatchObject({
+          commission_type: type,
+          commission_value: value,
+        });
+        expect(activityLog.log).toHaveBeenCalledWith(
+          expect.objectContaining({
+            action: 'created',
+            entity_id: res.data.id,
+            new_value: expect.objectContaining({
+              commission_type: type,
+              commission_value: value,
+            }),
+          }),
+        );
+        // Ro'yxatda (GET market-operators) ham ko'rinadi.
+        const list: any = await service.findMarketOperators(
+          MARKET_A,
+          {},
+          marketReq(MARKET_A),
+        );
+        expect(list.data.items[0]).toMatchObject({
+          id: res.data.id,
+          commission_type: type,
+          commission_value: value,
+        });
+      },
+    );
+
+    it.each([
+      ['berilmagan', {}],
+      ['ikkalasi null', { commission_type: null, commission_value: null }],
+    ])('komissiya %s — avvalgidek komissiyasiz (null)', async (_l, extra) => {
+      const { service, repo, activityLog } = makeService();
+      const res: any = await service.createMarketOperator(
+        MARKET_A,
+        { ...dto, ...extra } as never,
+        marketReq(MARKET_A),
+      );
+      expect(res.statusCode).toBe(201);
+      expect(repo.rows.find((row) => row.id === res.data.id)).toMatchObject({
+        commission_type: null,
+        commission_value: null,
+      });
+      expect(activityLog.log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          new_value: expect.objectContaining({
+            commission_type: null,
+            commission_value: null,
+          }),
+        }),
+      );
+    });
+
+    it.each([
+      ['faqat turi', { commission_type: Commission_type.PERCENT }],
+      ['faqat qiymati', { commission_value: 5 }],
+      [
+        'turi null, qiymati bor',
+        { commission_type: null, commission_value: 5 },
+      ],
+      [
+        'turi bor, qiymati null',
+        { commission_type: Commission_type.FIXED, commission_value: null },
+      ],
+      [
+        'percent > 100',
+        { commission_type: Commission_type.PERCENT, commission_value: 100.01 },
+      ],
+      [
+        'fixed > 1 000 000',
+        { commission_type: Commission_type.FIXED, commission_value: 1_000_001 },
+      ],
+      [
+        'manfiy',
+        { commission_type: Commission_type.FIXED, commission_value: -1 },
+      ],
+      [
+        '3 kasr',
+        { commission_type: Commission_type.PERCENT, commission_value: 1.005 },
+      ],
+      ['noma`lum tur', { commission_type: 'bonus', commission_value: 5 }],
+      [
+        'qiymat satr',
+        { commission_type: Commission_type.PERCENT, commission_value: '5' },
+      ],
+      [
+        'NaN',
+        { commission_type: Commission_type.PERCENT, commission_value: NaN },
+      ],
+    ])(
+      '⭐ %s → 400, operator YARATILMAYDI (hech narsa yozilmaydi)',
+      async (_label, extra) => {
+        const { service, repo, activityLog } = makeService();
+        expect(
+          await statusOf(
+            service.createMarketOperator(
+              MARKET_A,
+              { ...dto, ...extra } as never,
+              marketReq(MARKET_A),
+            ),
+          ),
+        ).toBe(400);
+        expect(repo.save).not.toHaveBeenCalled();
+        expect(activityLog.log).not.toHaveBeenCalled();
+        expect(operatorsOf(repo)).toHaveLength(0);
+      },
+    );
+
+    it('PATCH :id/commission bilan AYNI chegara xabarlari', async () => {
+      const { service } = makeService();
+      const req = marketReq(MARKET_A);
+      const messageOf = async (promise: Promise<unknown>) => {
+        try {
+          await promise;
+          return undefined;
+        } catch (error) {
+          return ((error as RpcException).getError() as { message?: string })
+            .message;
+        }
+      };
+      const created: any = await service.createMarketOperator(
+        MARKET_A,
+        { ...dto, phone_number: '998901230000' } as never,
+        req,
+      );
+      for (const body of [
+        { commission_type: Commission_type.PERCENT, commission_value: 150 },
+        { commission_type: Commission_type.FIXED, commission_value: 2_000_000 },
+        { commission_type: Commission_type.FIXED, commission_value: -5 },
+        { commission_type: Commission_type.PERCENT, commission_value: 1.005 },
+      ]) {
+        const onCreate = await messageOf(
+          service.createMarketOperator(
+            MARKET_A,
+            { ...dto, ...body } as never,
+            req,
+          ),
+        );
+        const onPatch = await messageOf(
+          service.updateMarketOperatorCommission(
+            created.data.id,
+            MARKET_A,
+            body as never,
+            req,
+          ),
+        );
+        expect(onCreate).toBeDefined();
+        expect(onCreate).toBe(onPatch);
+      }
+    });
+  });
 });

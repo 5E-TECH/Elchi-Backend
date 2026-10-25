@@ -34,6 +34,34 @@ export class CreateMarketOperatorRequestDto {
   @IsString()
   @MinLength(4)
   password!: string;
+
+  // B3ZtzCCx (ega qarori 2026-10-19, MO-S5): ixtiyoriy komissiya — AYNI
+  // so'rovda, atomik. Cheklovlar PATCH :id/commission bilan bir xil;
+  // ikkalasi BIRGA (faqat bittasi — 400, identity tekshiradi).
+  @ApiPropertyOptional({
+    enum: Commission_type,
+    nullable: true,
+    example: Commission_type.PERCENT,
+    description:
+      "Ixtiyoriy. percent — buyurtma total_price foizi; fixed — sotilgan buyurtma uchun so'm. `commission_value` bilan BIRGA yuboriladi (faqat bittasi — 400); ikkalasi yo'q yoki null — komissiyasiz",
+  })
+  @IsOptional()
+  @IsEnum(Commission_type)
+  commission_type?: Commission_type | null;
+
+  @ApiPropertyOptional({
+    example: 5,
+    nullable: true,
+    minimum: 0,
+    maximum: 1_000_000,
+    description:
+      "Ixtiyoriy. Foiz (0..100) yoki so'm (0..1 000 000), ko'pi bilan 2 kasr. `commission_type` bilan BIRGA",
+  })
+  @IsOptional()
+  @IsNumber({ allowNaN: false, allowInfinity: false, maxDecimalPlaces: 2 })
+  @Min(0)
+  @Max(1_000_000)
+  commission_value?: number | null;
 }
 
 /**

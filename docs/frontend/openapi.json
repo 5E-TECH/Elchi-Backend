@@ -18610,6 +18610,7 @@
         ]
       },
       "post": {
+        "description": "B3ZtzCCx: ixtiyoriy komissiya (`commission_type` + `commission_value`, ikkalasi BIRGA) AYNI so'rovda — operator va komissiya bitta yozuvda (atomik). Cheklovlar `PATCH :id/commission` bilan bir xil: percent 0..100, fixed 0..1 000 000 so'm, 2 kasr. Noto'g'ri komissiya — 400 va operator YARATILMAYDI.",
         "operationId": "MarketOperatorGatewayController_create",
         "parameters": [],
         "requestBody": {
@@ -27882,6 +27883,24 @@
             "type": "string",
             "example": "secret123",
             "minLength": 4
+          },
+          "commission_type": {
+            "type": "string",
+            "enum": [
+              "percent",
+              "fixed"
+            ],
+            "nullable": true,
+            "example": "percent",
+            "description": "Ixtiyoriy. percent — buyurtma total_price foizi; fixed — sotilgan buyurtma uchun so'm. `commission_value` bilan BIRGA yuboriladi (faqat bittasi — 400); ikkalasi yo'q yoki null — komissiyasiz"
+          },
+          "commission_value": {
+            "type": "object",
+            "example": 5,
+            "nullable": true,
+            "minimum": 0,
+            "maximum": 1000000,
+            "description": "Ixtiyoriy. Foiz (0..100) yoki so'm (0..1 000 000), ko'pi bilan 2 kasr. `commission_type` bilan BIRGA"
           }
         },
         "required": [

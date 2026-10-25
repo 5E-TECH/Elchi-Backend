@@ -23,7 +23,7 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
-### 2026-10-25 — Rollar: mahsulot faqat xodimda (Pc4CAFdB), market operatorini nofaol/faol qilish (mFkrqvMi)
+### 2026-10-25 — Rollar: mahsulot faqat xodimda (Pc4CAFdB), market operatorini nofaol/faol qilish (mFkrqvMi), operator yaratishda komissiya (B3ZtzCCx)
 
 Deploy: api-gateway, identity-service (catalog-service — faqat izoh, qayta deploy shart emas). Migratsiya yo'q.
 
@@ -36,6 +36,15 @@ Deploy: api-gateway, identity-service (catalog-service — faqat izoh, qayta dep
   `GET /market-operators` har qatorda `status` qaytaradi va `?status=active|inactive` filtrini qabul qiladi
   (avvaldan). 🔧 FE (i76gGjyq): `operators-deactivate-dialog` / `operators-activate-dialog` shu endpointni
   chaqiradi, ro'yxatdagi «Faol/Nofaol» belgisi `status` dan.
+- [2026-10-25] ✏️ [gateway/identity] — **`POST /market-operators` — ixtiyoriy komissiya** (B3ZtzCCx, MO-S5):
+  tanaga QO'SHIMCHA `commission_type` (`percent` | `fixed`) va `commission_value` (son) — ikkalasi BIRGA (faqat
+  bittasi — 400); ikkalasi yo'q yoki `null` — avvalgidek komissiyasiz. Cheklovlar `PATCH :id/commission` bilan AYNI:
+  percent 0..100, fixed 0..1 000 000 so'm, ko'pi bilan 2 kasr. Operator va komissiya BITTA yozuvda (atomik) —
+  noto'g'ri komissiyada operator YARATILMAYDI (400). Javob (`data`) va `GET /market-operators` da
+  `commission_type`/`commission_value`; jurnal (`created`) da ham komissiya. Eski tana (komissiyasiz) o'zgarishsiz
+  ishlaydi. 🔧 FE (KUHGR1Iq / i76gGjyq): «Operator qo'shish» oynasidagi «Komissiya» maydonini POST tanasiga qo'shib,
+  ikkinchi `PATCH :id/commission` so'rovini va «Operator qo'shildi, komissiya saqlanmadi» tarmog'ini olib tashlash
+  mumkin.
 
 - [2026-10-25] ⚠️ [gateway/catalog] — **Mahsulot yaratish/o'chirish faqat xodim** (Pc4CAFdB, ega qarori
   2026-10-15): `POST /product` va `DELETE /product/:id` — superadmin, admin, registrator, menejer. **Market va

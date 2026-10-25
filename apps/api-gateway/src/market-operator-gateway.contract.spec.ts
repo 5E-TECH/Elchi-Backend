@@ -644,4 +644,98 @@ describe('MarketOperatorGatewayController ↔ identity (i76gGjyq)', () => {
       expect(repo.rows.find((r) => r.id === '50')?.status).toBe('active');
     });
   });
+
+  describe('B3ZtzCCx — POST /market-operators ixtiyoriy komissiya bilan (atomik)', () => {
+    const liveOperatorsOfA = () =>
+      repo.rows.filter(
+        (row) =>
+          row.role === Roles.MARKET_OPERATOR &&
+          row.market_id === MARKET_A &&
+          !row.isDeleted,
+      );
+
+    it('⭐ bitta so`rov: operator + komissiya → 201, ro`yxatda ko`rinadi, PATCH chaqirilmaydi', async () => {
+      const created = await createOperator(marketA, {
+        ...operatorBody,
+        commission_type: 'percent',
+        commission_value: 7.5,
+      }).expect(201);
+      expect(created.body.data).toMatchObject({
+        role: 'market_operator',
+        market_id: MARKET_A,
+        commission_type: 'percent',
+        commission_value: 7.5,
+      });
+      // Yagona RMQ chaqiruvi — create, komissiya bilan.
+      expect(transport.send).toHaveBeenCalledTimes(1);
+      expect(transport.send).toHaveBeenCalledWith(
+        { cmd: 'identity.market_operator.create' },
+        expect.objectContaining({
+          market_id: MARKET_A,
+          dto: {
+            ...operatorBody,
+            commission_type: 'percent',
+            commission_value: 7.5,
+          },
+        }),
+      );
+
+      const list = await http()
+        .get('/market-operators')
+        .set('x-test-user', marketA)
+        .expect(200);
+      expect(list.body.data.items[0]).toMatchObject({
+        id: created.body.data.id,
+        commission_type: 'percent',
+        commission_value: 7.5,
+      });
+    });
+
+    it('fixed 12 000 → 201; komissiyasiz (avvalgidek) → 201, null, payload`da komissiya kaliti yo`q', async () => {
+      const fixed = await createOperator(marketA, {
+        ...operatorBody,
+        commission_type: 'fixed',
+        commission_value: 12000,
+      }).expect(201);
+      expect(fixed.body.data).toMatchObject({
+        commission_type: 'fixed',
+        commission_value: 12000,
+      });
+
+      transport.send.mockClear();
+      const plain = await createOperator(marketA, {
+        ...operatorBody,
+        phone_number: '+998901234568',
+      }).expect(201);
+      expect(plain.body.data).toMatchObject({
+        commission_type: null,
+        commission_value: null,
+      });
+      const payload = transport.send.mock.calls[0][1] as {
+        dto: Record<string, unknown>;
+      };
+      expect(payload.dto).not.toHaveProperty('commission_type');
+      expect(payload.dto).not.toHaveProperty('commission_value');
+    });
+
+    it.each([
+      ['DTO: noma`lum tur', { commission_type: 'bonus', commission_value: 1 }],
+      ['DTO: manfiy', { commission_type: 'fixed', commission_value: -5 }],
+      ['DTO: satr', { commission_type: 'percent', commission_value: '5' }],
+      ['DTO: 3 kasr', { commission_type: 'percent', commission_value: 1.005 }],
+      [
+        'DTO: 2 000 000',
+        { commission_type: 'fixed', commission_value: 2_000_000 },
+      ],
+      [
+        'identity: percent 150',
+        { commission_type: 'percent', commission_value: 150 },
+      ],
+      ['identity: faqat turi', { commission_type: 'percent' }],
+      ['identity: faqat qiymati', { commission_value: 5 }],
+    ])('⭐ %s → 400 va operator YARATILMAYDI', async (_label, extra) => {
+      await createOperator(marketA, { ...operatorBody, ...extra }).expect(400);
+      expect(liveOperatorsOfA()).toHaveLength(0);
+    });
+  });
 });
