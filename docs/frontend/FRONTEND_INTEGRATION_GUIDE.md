@@ -676,7 +676,10 @@ still 200 with `branch: null`). `PATCH /users/{id}`
 accepts `district_id` (numeric string, `null` clears): the district must exist
 and belong to the user's `region_id` (400 otherwise, 503 if logistics is
 down); the region itself is not changed there (a courier's region changes only
-through the branch transfer, which clears the district). `superadmin` additionally: `POST /registrators`,
+through the branch transfer, which clears the district). `POST /couriers`
+(perqZ3oM, 2026-10-25): optional `branch_id` — any ACTIVE HQ/REGIONAL/HYBRID
+branch (region taken from the branch; unknown / inactive / PICKUP / region-less
+non-HQ branch → 400); omitted → HQ. `superadmin` additionally: `POST /registrators`,
 `DELETE /district/{id}`, `POST /district/sato-match/apply`, the superadmin-only
 order PATCH fields (`post_id`, `customer_id`, `qr_code_token`, `source`), rollback
 of CLOSED/PAID/PARTLY_PAID and of a courier-remitted sale. (`PATCH /post/{id}`

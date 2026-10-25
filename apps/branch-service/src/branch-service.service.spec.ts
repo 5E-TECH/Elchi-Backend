@@ -1412,6 +1412,75 @@ describe('BranchServiceService', () => {
       );
     });
 
+    /**
+     * perqZ3oM (ega qarori): SA/admin `POST /couriers` HQ bo'lmagan filialga.
+     * Saga `identity.courier.create` → `branch.user.assign` so'rovchini
+     * (SA/admin) uzatadi — kuryer o'sha filialning COURIER qatori bo'ladi
+     * (menejer yaratgan kuryer bilan bir xil), filialda menejer bo'lishi
+     * shart emas. PICKUP — 403 (gateway buni oldindan 400 bilan to'xtatadi).
+     */
+    it.each([
+      ['superadmin', 'REGIONAL'],
+      ['admin', 'HYBRID'],
+    ])(
+      '⭐ perqZ3oM: %s COURIER → %s filial — 201, menejer biriktiruvi talab qilinmaydi',
+      async (role, type) => {
+        branchRepo.findOne.mockResolvedValue({
+          id: '20',
+          type,
+          status: 'active',
+          region_id: '3',
+          isDeleted: false,
+        });
+        identityUser('264', 'courier');
+        branchUserRepo.findOne.mockResolvedValue(null);
+        branchUserRepo.find = jest.fn().mockResolvedValue([]);
+        branchUserRepo.save.mockImplementation((row: any) =>
+          Promise.resolve({ id: 'bu-new', ...row }),
+        );
+
+        const res = await service.assignUserToBranch(
+          { branch_id: '20', user_id: '264', role: 'COURIER' },
+          { id: '1', roles: [role] },
+        );
+
+        expect(res.statusCode).toBe(201);
+        expect(branchUserRepo.save).toHaveBeenCalledWith(
+          expect.objectContaining({
+            branch_id: '20',
+            user_id: '264',
+            role: 'COURIER',
+          }),
+        );
+        // Menejer qatori so'ralmagan: findOne faqat «boshqa filial» va
+        // «mavjud qator» uchun (user_id bo'yicha), so'rovchi bo'yicha emas.
+        for (const [arg] of branchUserRepo.findOne.mock.calls) {
+          expect(arg?.where?.user_id).not.toBe('1');
+        }
+      },
+    );
+
+    it('perqZ3oM: SA COURIER → PICKUP filial — 403, qator yozilmaydi', async () => {
+      branchRepo.findOne.mockResolvedValue({
+        id: '21',
+        type: 'PICKUP',
+        status: 'active',
+        isDeleted: false,
+      });
+      identityUser('265', 'courier');
+      branchUserRepo.findOne.mockResolvedValue(null);
+
+      const err = await rpcErrorOf(
+        service.assignUserToBranch(
+          { branch_id: '21', user_id: '265', role: 'COURIER' },
+          { id: '1', roles: ['superadmin'] },
+        ),
+      );
+
+      expect(err.statusCode).toBe(403);
+      expect(branchUserRepo.save).not.toHaveBeenCalled();
+    });
+
     it("MANAGER → REGIONAL o'zgarmagan: 201 va filial kassasi yaratiladi", async () => {
       branchRepo.findOne.mockResolvedValue({
         id: '20',

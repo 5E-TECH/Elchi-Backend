@@ -399,6 +399,7 @@
     },
     "/couriers": {
       "post": {
+        "description": "Menejer — faqat o'z filialida (`branch_id` yuborilmaydi yoki o'z filiali; boshqasi — 400). perqZ3oM (ega qarori): superadmin/admin `branch_id` bilan istalgan FAOL HQ / REGIONAL / HYBRID filialda yaratadi (viloyat filialdan olinadi); `branch_id` yuborilmasa — HQ (avvalgidek). Noma'lum, nofaol, PICKUP yoki viloyatsiz (HQ bo'lmagan) filial — 400, kuryer yaratilmaydi. Kuryer o'sha filialga biriktiriladi (branch_users) — pul zanjiri menejer yaratgan kuryer bilan bir xil (kuryer → filial → HQ).",
         "operationId": "ApiGatewayController_createCourier",
         "parameters": [],
         "requestBody": {
@@ -20568,7 +20569,7 @@
           "branch_id": {
             "type": "string",
             "example": "12",
-            "description": "Branch ID (manager flowda avtomatik aniqlanadi, yuborish shart emas)"
+            "description": "Filial ID. Menejer — avtomatik o'z filiali (yuborish shart emas; boshqa filial — 400). Superadmin/admin (perqZ3oM) — istalgan FAOL HQ / REGIONAL / HYBRID filial; yuborilmasa — HQ. Noma'lum / nofaol / PICKUP / viloyatsiz filial — 400."
           },
           "name": {
             "type": "string",

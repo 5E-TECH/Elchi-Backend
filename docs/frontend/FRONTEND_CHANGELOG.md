@@ -23,9 +23,18 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
-### 2026-10-25 — Rollar: mahsulot faqat xodimda (Pc4CAFdB), market operatorini nofaol/faol qilish (mFkrqvMi), operator yaratishda komissiya (B3ZtzCCx)
+### 2026-10-25 — Rollar: mahsulot faqat xodimda (Pc4CAFdB), market operatorini nofaol/faol qilish (mFkrqvMi), operator yaratishda komissiya (B3ZtzCCx), SA/admin kuryerni filialga (perqZ3oM)
 
-Deploy: api-gateway, identity-service (catalog-service — faqat izoh, qayta deploy shart emas). Migratsiya yo'q.
+Deploy: api-gateway, identity-service (catalog-service — faqat izoh, branch-service — faqat spec; qayta deploy
+shart emas). Migratsiya yo'q.
+
+- [2026-10-25] ✏️ [gateway/identity] — **`POST /couriers` — SA/admin HQ bo'lmagan filialga** (perqZ3oM, FY-6):
+  superadmin/admin `branch_id` yuborsa — kuryer o'sha **FAOL HQ / REGIONAL / HYBRID** filialda yaratiladi (viloyat
+  — filialdan, `branch_users` ga COURIER bo'lib biriktiriladi; pul zanjiri menejer yaratgan kuryer bilan bir xil:
+  kuryer → filial → HQ). `branch_id` yuborilmasa — avvalgidek HQ. Noma'lum / o'chirilgan, nofaol, PICKUP, viloyatsiz
+  (HQ bo'lmagan) filial yoki raqam bo'lmagan id — **400**, kuryer yaratilmaydi (ilgari SA/admin uchun har qanday
+  HQ'dan boshqa filial 400 edi). Menejer o'zgarmagan — faqat o'z filiali (boshqasi 400). 🔧 FE (FY-6): SA/admin
+  kuryer yaratish formasida filial tanlovi (`GET /branches` dan faol HQ/REGIONAL/HYBRID) → `branch_id`.
 
 - [2026-10-25] 🆕 [gateway/identity] — **`PATCH /market-operators/:id/status`** (mFkrqvMi, ega qarori MO-S4):
   tana `{ "status": "inactive" | "active" }` (boshqa qiymat / ortiqcha maydon — 400). Faqat MARKET, faqat o'z
