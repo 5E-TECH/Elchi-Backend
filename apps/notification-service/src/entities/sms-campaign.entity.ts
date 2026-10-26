@@ -7,7 +7,12 @@ import {
 } from 'typeorm';
 import type { SmsMessageClass } from '../sms/sms.port';
 
-export type SmsCampaignStatus = 'queued' | 'failed';
+/**
+ * (2aS7PFX0) `scheduled` — vaqti kelmagan (sms_outbox'da hali qator YO'Q);
+ * `queued` — navbatga qo'yilgan; `failed` — navbatga qo'yib bo'lmadi;
+ * `cancelled` — rejalashtirilgan holatda bekor qilingan.
+ */
+export type SmsCampaignStatus = 'scheduled' | 'queued' | 'failed' | 'cancelled';
 
 /**
  * Kampaniya tarixi (sVByLMnt #7). `idempotency_key` UNIQUE — 504 dan keyin
@@ -55,6 +60,30 @@ export class SmsCampaign {
 
   @Column({ type: 'numeric', precision: 14, scale: 2, nullable: true })
   estimated_cost!: string | null;
+
+  /** (2aS7PFX0) Haqiqiy yuborish lahzasi (tungi taqiqqa tushsa — surilgan). */
+  @Column({ type: 'timestamptz', nullable: true })
+  scheduled_at!: Date | null;
+
+  /** (2aS7PFX0) Admin so'ragan lahza. */
+  @Column({ type: 'timestamptz', nullable: true })
+  requested_at!: Date | null;
+
+  @Column({ type: 'boolean', default: false })
+  quiet_hours_shifted!: boolean;
+
+  /** Navbatga (sms_outbox) qo'yilgan lahza. */
+  @Column({ type: 'timestamptz', nullable: true })
+  started_at!: Date | null;
+
+  @Column({ type: 'timestamptz', nullable: true })
+  cancelled_at!: Date | null;
+
+  @Column({ type: 'bigint', nullable: true })
+  cancelled_by!: string | null;
+
+  @Column({ type: 'varchar', length: 300, nullable: true })
+  last_error!: string | null;
 
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   created_at!: Date;

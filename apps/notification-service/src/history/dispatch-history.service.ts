@@ -91,6 +91,65 @@ export function historyStatusFor(
   return 'inbox_only';
 }
 
+/** Yo'lda yoki yetkazilgan kanal holatlari (UNDELIVERED_STATUSES dan tashqari). */
+const REACHED_STATUSES: readonly string[] = Object.freeze([
+  'sent',
+  'emitted',
+  'delivered',
+  'queued',
+  'pending',
+  'processing',
+  'accepted',
+]);
+const STATUS_RANK: Partial<Record<DispatchHistoryStatus, number>> = {
+  sent: 2,
+  partial: 1,
+  inbox_only: 0,
+};
+
+/**
+ * (aNynHYU0) Keyingi yetkazish natijalari (SMS DLR rad etdi, push xatosi,
+ * Telegram DM yetmadi) bilan tarix holati — JONLI kanal × holatdan:
+ *   - har tashqi kanal: yetkazilmagani 0 va kamida bittaga ketgan → `sent`;
+ *   - hech bir tashqi kanal hech kimga ketmagan → `inbox_only`;
+ *   - qolgani → `partial`.
+ * Faqat PASAYTIRADI (sent → partial → inbox_only): finish paytidagi qoida
+ * (`summarizeChannels`) bilan bir xil, keyin yaxshilanib qolmaydi. Kanal
+ * ma'lumoti yo'q (eski qator) — saqlangan holat.
+ */
+export function liveHistoryStatus(
+  stored: DispatchHistoryStatus,
+  channels: readonly string[] | null | undefined,
+  channelStatus: Record<string, Record<string, number>> | null | undefined,
+): DispatchHistoryStatus {
+  const storedRank = STATUS_RANK[stored];
+  if (storedRank === undefined || !channelStatus) return stored;
+  const external = (channels ?? []).filter(
+    (channel) => channel !== (NotificationChannel.IN_APP as string),
+  );
+  if (!external.length) return stored;
+  let allFull = true;
+  let anyReached = false;
+  for (const channel of external) {
+    const counts = channelStatus[channel];
+    if (!counts) return stored;
+    let reached = 0;
+    let undelivered = 0;
+    for (const [status, n] of Object.entries(counts)) {
+      if (UNDELIVERED_STATUSES.includes(status)) undelivered += Number(n) || 0;
+      else if (REACHED_STATUSES.includes(status)) reached += Number(n) || 0;
+    }
+    if (reached > 0) anyReached = true;
+    if (undelivered > 0 || reached === 0) allFull = false;
+  }
+  const live: DispatchHistoryStatus = allFull
+    ? 'sent'
+    : anyReached
+      ? 'partial'
+      : 'inbox_only';
+  return (STATUS_RANK[live] ?? storedRank) < storedRank ? live : stored;
+}
+
 const toInt = (value: unknown, fallback: number, max = Infinity) => {
   const num = Number(value);
   return Number.isInteger(num) && num > 0 ? Math.min(num, max) : fallback;
@@ -223,6 +282,104 @@ export class DispatchHistoryService {
     return out;
   }
 
+  /**
+   * (aNynHYU0) Sahifa qatorlariga jonli kanal × holat va holat. O'zgargan
+   * holat DB'ga ham yoziladi (`status` filtri ham yetib olsin). Xato —
+   * saqlangan holat (tarix ochilaveradi).
+   */
+  private async withLiveStatus(
+    rows: NotificationDispatch[],
+  ): Promise<NotificationDispatch[]> {
+    // Faqat tashqi kanalli (in_app'ning o'zi — holat o'zgarmaydi).
+    const candidates = rows.filter(
+      (row) =>
+        STATUS_RANK[row.status] !== undefined &&
+        (row.channels ?? []).some(
+          (channel) => channel !== (NotificationChannel.IN_APP as string),
+        ),
+    );
+    if (!candidates.length) return rows;
+    let live: Map<string, Record<string, Record<string, number>>>;
+    try {
+      const found: Array<{
+        dispatch_id: string;
+        channel: string;
+        status: string;
+        n: number;
+      }> = await this.notifications.query(
+        `SELECT n."dispatch_id" AS "dispatch_id", e.key AS "channel",
+                e.value AS "status", COUNT(*)::int AS "n"
+           FROM "notification_schema"."notifications" n,
+                jsonb_each_text(COALESCE(n."delivery", '{}'::jsonb)) e
+          WHERE n."dispatch_id" = ANY($1::text[])
+            AND e.key = ANY($2::text[])
+          GROUP BY 1, 2, 3`,
+        [
+          candidates.map((row) => row.dispatch_id),
+          [NotificationChannel.IN_APP, ...EXTERNAL_CHANNELS],
+        ],
+      );
+      live = new Map();
+      for (const item of Array.isArray(found) ? found : []) {
+        const byChannel = live.get(item.dispatch_id) ?? {};
+        byChannel[item.channel] = {
+          ...(byChannel[item.channel] ?? {}),
+          [item.status]: Number(item.n),
+        };
+        live.set(item.dispatch_id, byChannel);
+      }
+    } catch (error) {
+      this.logger.warn(
+        `tarix: jonli kanal holati olinmadi — ${maskPhonesForLog(
+          (error as Error)?.message ?? String(error),
+        )}`,
+      );
+      return rows;
+    }
+    const out: NotificationDispatch[] = [];
+    for (const row of rows) {
+      const channelStatus = live.get(row.dispatch_id);
+      if (!channelStatus) {
+        out.push(row);
+        continue;
+      }
+      const status = liveHistoryStatus(row.status, row.channels, channelStatus);
+      if (status !== row.status) {
+        await this.persistStatus(row.dispatch_id, row.status, status);
+      }
+      out.push(
+        Object.assign(
+          Object.create(Object.getPrototypeOf(row) as object),
+          row,
+          {
+            status,
+            channel_status: channelStatus,
+          },
+        ) as NotificationDispatch,
+      );
+    }
+    return out;
+  }
+
+  /** Best-effort: faqat o'sha eski holatdan (poyga — boshqasi yozgan bo'lsa tegmaydi). */
+  private async persistStatus(
+    dispatchId: string,
+    from: DispatchHistoryStatus,
+    to: DispatchHistoryStatus,
+  ) {
+    try {
+      await this.repo.update({ dispatch_id: dispatchId, status: from }, {
+        status: to,
+      } as never);
+    } catch (error) {
+      this.logger.warn(
+        `tarix holati yangilanmadi (${dispatchId}): ${maskPhonesForLog(
+          (error as Error)?.message ?? String(error),
+        )}`,
+      );
+    }
+  }
+
   /** `GET /notifications/sent` — yangilari birinchi, sahifalab. */
   async list(query: {
     page?: unknown;
@@ -262,7 +419,9 @@ export class DispatchHistoryService {
         createdBy: str(query.created_by),
       });
     }
-    const [items, total] = await qb.getManyAndCount();
+    const [found, total] = await qb.getManyAndCount();
+    // (aNynHYU0) holat va kanal × holat JONLI (sahifa uchun bitta GROUP BY).
+    const items = await this.withLiveStatus(found);
     // (NwlmrcMf) bitta odamga yuborilganlar — «Kimga: ism · rol»; ismlar
     // created_by bilan BITTA identity so'rovida.
     const singles = await this.singleRecipients(items);
@@ -330,6 +489,12 @@ export class DispatchHistoryService {
     ]);
     const countRow = (countRows as Array<{ n: number }>)[0];
     const undelivered = undeliveredRows as UndeliveredRow[];
+    // (aNynHYU0) keyingi DLR / push xatosi — `sent` → `partial`.
+    const live = liveHistoryStatus(row.status, row.channels, channelStatus);
+    if (live !== row.status) {
+      await this.persistStatus(row.dispatch_id, row.status, live);
+      row.status = live;
+    }
     const singles = await this.singleRecipients([row]);
     const names = await this.namesFor([
       ...undelivered.map((item) => String(item.recipient_id)),

@@ -643,7 +643,11 @@ export class NotificationInboxService {
               }
               // SMS: navbatga ham shu tranzaksiyada; holat har qatorning delivery.sms ida.
               if (wantsSms && persisted.length) {
-                smsResult = await this.queueSms(persisted, manager);
+                smsResult = await this.queueSms(
+                  persisted,
+                  manager,
+                  internal?.smsMessageClass,
+                );
               }
               if (escalationDueAt && persisted.length && this.escalation) {
                 await this.escalation.schedule(
@@ -777,6 +781,14 @@ export class NotificationInboxService {
           },
           by_channel: summary.by_channel,
           no_provider: summary.no_provider,
+          // (aNynHYU0) tarixdagi bilan BIR xil holat (frontend o'zi hisoblamasin)
+          // va kanal kesimi: full | partial | none.
+          status: historyStatusFor(
+            summary.message,
+            rows.length,
+            plan.skipped.size,
+          ),
+          channel_outcome: summary.channel_outcome,
           // (mP1WGG1W) Sozlama bilan tushib qolganlar — 400 emas, hisob.
           skipped_by_preference: plan.skipped.size,
           // (3SeRYFqx) identity'da topilmagan aniq recipient_id(s) — yozilmadi.
@@ -879,6 +891,7 @@ export class NotificationInboxService {
   private async queueSms(
     rows: Notification[],
     manager: EntityManager,
+    messageClass?: 'promo',
   ): Promise<SmsChannelResult> {
     const eligible = rows.filter(
       (row) =>
@@ -897,10 +910,11 @@ export class NotificationInboxService {
         sms_skipped: skipped,
       };
     }
-    const result = await this.smsDispatch.queueForNotifications(
-      eligible,
-      manager,
-    );
+    const result = messageClass
+      ? await this.smsDispatch.queueForNotifications(eligible, manager, {
+          messageClass,
+        })
+      : await this.smsDispatch.queueForNotifications(eligible, manager);
     if (!skipped) return result;
     return {
       ...result,
@@ -1535,14 +1549,36 @@ export class NotificationInboxService {
     const external = channels.filter(
       (channel) => channel !== NotificationChannel.IN_APP,
     );
-    const delivered = external.filter((channel) => byChannel[channel] > 0);
-    const message =
-      delivered.length === external.length
-        ? 'Notification dispatched'
-        : delivered.length
-          ? 'Partially dispatched'
-          : 'Saved to inbox only — no external channel delivered';
-    return { by_channel: byChannel, no_provider: noProvider, message };
+    // (aNynHYU0) Kanal TO'LIQ — har bir qabul qiluvchiga ketgan (`son >=
+    // qatorlar`), QISMAN — bir qismiga, YO'Q — hech kimga. Ilgari `son > 0`
+    // yetardi: 100 dan 1 kishiga ketgan SMS ham «yuborildi» (sent) edi.
+    // Telegram guruh relay'i (DM emas) qabul qiluvchi bo'yicha emas — >0 = to'liq.
+    const outcome: Record<string, 'full' | 'partial' | 'none'> = {};
+    for (const channel of external) {
+      const reached = Number(byChannel[channel] ?? 0);
+      const groupRelay =
+        channel === NotificationChannel.TELEGRAM && !telegramDm;
+      outcome[channel] =
+        reached <= 0
+          ? 'none'
+          : groupRelay || (reached >= rows && !noProvider.includes(channel))
+            ? 'full'
+            : 'partial';
+    }
+    const reachedAny = external.filter(
+      (channel) => outcome[channel] !== 'none',
+    );
+    const message = external.every((channel) => outcome[channel] === 'full')
+      ? 'Notification dispatched'
+      : reachedAny.length
+        ? 'Partially dispatched'
+        : 'Saved to inbox only — no external channel delivered';
+    return {
+      by_channel: byChannel,
+      no_provider: noProvider,
+      channel_outcome: outcome,
+      message,
+    };
   }
 
   /** `GET /notifications/types` (Eh8y21Ha) — kod katalogi, DB emas. */

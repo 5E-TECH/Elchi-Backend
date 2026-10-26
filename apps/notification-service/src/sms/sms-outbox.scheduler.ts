@@ -3,11 +3,13 @@ import {
   Logger,
   OnModuleDestroy,
   OnModuleInit,
+  Optional,
 } from '@nestjs/common';
 import { SchedulerRegistry } from '@nestjs/schedule';
 import { CronJob } from 'cron';
 import { DataSource } from 'typeorm';
 import { captureException } from '@app/common';
+import { SmsCampaignService } from './sms-campaign.service';
 import { SmsConfigService } from './sms-config.service';
 import { SmsConsentService } from './sms-consent.service';
 import { SmsGateService } from './sms-gate.service';
@@ -49,6 +51,8 @@ export class SmsOutboxScheduler implements OnModuleInit, OnModuleDestroy {
     private readonly dataSource: DataSource,
     private readonly consent: SmsConsentService,
     private readonly gate: SmsGateService,
+    /** (2aS7PFX0) Vaqti kelgan rejalashtirilgan SMS kampaniyalar. */
+    @Optional() private readonly campaigns?: SmsCampaignService,
   ) {}
 
   onModuleInit(): void {
@@ -135,6 +139,17 @@ export class SmsOutboxScheduler implements OnModuleInit, OnModuleDestroy {
     // Kill-switch: navbat SAQLANADI (qatorlar urinish sarflab 'failed' bo'lmaydi),
     // faqat yuborish to'xtaydi. Yoqilganda davom etadi.
     if (!this.config.enabled) return { processed: 0, sent: 0, failed: 0 };
+    // (2aS7PFX0) Vaqti kelgan rejalashtirilgan kampaniyalar avval navbatga
+    // (shu tik qulfi ostida — bitta replika). Xato tikni yiqitmaydi.
+    if (this.campaigns) {
+      await this.campaigns
+        .releaseDue(at ?? new Date())
+        .catch((error: unknown) =>
+          this.logger.error(
+            `SMS rejalashtirilgan kampaniyalar ishga tushmadi: ${(error as Error).message}`,
+          ),
+        );
+    }
     const rows = await this.outbox.claimDue(this.config.batchSize, at);
     let sent = 0;
     let failed = 0;

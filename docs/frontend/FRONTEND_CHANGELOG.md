@@ -98,6 +98,96 @@ sukut `false`) va `1716000000164` (`auth_login_throttle` jadvali). `openapi.json
   `admin.elchipochta.uz` ↔ `api.elchipochta.uz` bitta sayt — kabinetga ta'sir yo'q; Telegram Mini App cookie ishlatmaydi.
   Boshqa saytdan (localhost, `*.pages.dev` preview) prod API'ga silent refresh endi ishlamaydi.
 
+### 2026-10-26 — Bildirishnoma: tashqi kanal bir qismiga yetmasa `partial` (aNynHYU0, N2, NS-4)
+
+Deploy: faqat notification-service. Migratsiya yo'q. `openapi.json` o'zgarmagan.
+
+- [2026-10-26] ⚠️ [notification] — holat qoidasi o'zgardi (karta matnidagi variant — `partial`): tashqi kanal
+  (realtime / push / sms / telegram DM / email) **har bir** qabul qiluvchiga ketgandagina «to'liq»
+  (`by_channel[kanal] >= dispatched`); bir qismiga — «qisman»; hech kimga — «yo'q». Hamma kanal to'liq —
+  `sent` («Notification dispatched»); kamida bittasi bir qismiga/hech kimga, lekin biror kanal ketgan —
+  `partial` («Partially dispatched»); hech bir tashqi kanal ketmagan — `inbox_only`. Ilgari `> 0` yetardi
+  (10 dan 1 kishiga SMS — `sent` edi). Istisno: Telegram GURUH relay'i (DM emas) — 1 ta xabar = to'liq.
+  `no_provider` kanal to'liq hisoblanmaydi.
+- [2026-10-26] ✏️ [notification] — `POST /notifications/dispatch` (va telegram broadcast) javobida yangi
+  **`status`** (`sent | partial | inbox_only | skipped` — tarixdagi bilan AYNI) va **`channel_outcome`**
+  (`{ kanal: 'full' | 'partial' | 'none' }`).
+- [2026-10-26] ✏️ [notification] — `GET /notifications/sent` va `GET /notifications/sent/:dispatch_id`: holat
+  JONLI kanal × holatdan qayta baholanadi — keyin SMS DLR rad etsa / push xato bersa `sent` → `partial` (hamma
+  tashqi yetmasa → `inbox_only`); faqat pasayadi. Ro'yxatdagi `channel_status` ham endi jonli. O'zgargan holat
+  DB'ga yoziladi (`status` filtri o'qilgandan keyin yetib oladi).
+- 🔧 FE (NS-4, birga chiqishi kerak): `deriveDispatchStatus` o'rniga javobdagi `status` ni ishlating (yoki
+  qoidani aynan ko'chiring: kanal to'liq ⇔ `by_channel[ch] >= dispatched`, telegram guruh relay'i — `> 0`).
+
+### 2026-10-26 — `POST /notifications/campaigns` da SMS kanali + preview'da rozilik bo'yicha son (9D1Gl9MS, N7, KM-5)
+
+Deploy: notification-service + api-gateway. Migratsiya yo'q.
+
+- [2026-10-26] ✏️ [gateway/notification] — `POST /notifications/campaigns`: `channels` endi `sms` ni ham qabul
+  qiladi. Kampaniya SMS'i **DOIM reklama (`promo`)** — kategoriyadan qat'i nazar: faqat roziligi borlarga (yo'q —
+  qatorda `delivery.sms: skipped`, `sms_reason: no_consent`; telefon yo'q — `no_phone`), 18:00–09:00 da
+  yuborilmaydi (sms_outbox 09:00 ga suradi), bekor qilish havolasi qo'shiladi, kunlik kvota (`SMS_DAILY_CAP`) —
+  tugasa `sms: blocked`, `sms_reason: daily_cap_exceeded`. Xatolar: SMS o'chiq yoki opt-out sozlanmagan — 409;
+  auditoriya `SMS_MAX_FANOUT` dan katta — 400 (kesilmaydi; partiya davomida ham shu chegara).
+- [2026-10-26] ✏️ [gateway/notification] — `POST /notifications/audience/preview` yangi ixtiyoriy `channels`,
+  `title`, `body`. `channels` da `sms` bo'lsa javobda **`sms`** bloki: `{ exact, message_class: 'promo',
+  recipients (roziligi bor), blocked_no_consent, skipped_invalid_phone, with_valid_phone, encoding, parts,
+  text_provided, tariff, estimated_cost, max_fanout, fanout_exceeded, sms_enabled, opt_out_configured,
+  quiet_hours }` va `by_channel.sms` = roziligi borlar (SMS tanlanmasa — avvalgidek kanonik telefonlilar).
+  Auditoriya `campaign_max` dan katta bo'lsa `exact: false`, sonlar `null`. Telefon javobga chiqmaydi.
+- [2026-10-26] ✏️ [notification] — `GET /notifications/campaigns/:id/report`: SMS kanali bor kampaniyada `sms`
+  bloki (`messages, sent, delivered (DLR yo'q — null), failed, pending, parts_total, dlr, tariff_per_part,
+  estimated_cost, cost_of_sent`) va `cost.paid_channels: ['sms']`. `by_channel` / `undelivered` / CSV eksport —
+  SMS qatorlari boshqa kanallar kabi (`delivery.sms` holati va sababi).
+- 🟢 Ikki yo'l: `POST /notifications/campaigns` (+sms) — identity auditoriyasi (rollar/mijoz segmenti), SMS
+  qatorlari `notification_id` bilan bog'lanadi (`campaign_id` NULL); `POST /notifications/sms/campaigns` — buyurtma
+  bo'yicha mijoz segmenti / qo'lda raqamlar. Ikkalasi bitta `sms_outbox` darvozasidan (rozilik, taqiq, kvota,
+  opt-out); hisobotlar bir-birining qatorlarini sanamaydi. FE bitta kampaniya uchun faqat bitta yo'lni chaqirsin
+  (umumiy konstruktor — `POST /notifications/campaigns`).
+- 🔧 FE (KM-5): umumiy konstruktorda SMS kanali; tasdiq oynasida `sms` blokidagi sonlar va narx.
+
+### 2026-10-26 — SMS kampaniya: `max_orders` («gacha») va saqlangan segment `audience_segment_id` (sdNGqCBa)
+
+Deploy: notification-service + api-gateway. Migratsiya yo'q.
+
+- [2026-10-26] ✏️ [gateway/notification] — `POST /notifications/sms/campaigns(/preview)`: `segment.max_orders`
+  (1–1000, kiradi) — push kampaniyasidagi bilan bir xil; `min_orders > max_orders` — 400
+  «segment: min_orders max_orders dan katta bo'lmasligi kerak (teskari oraliq)» (identity resolver matni).
+- [2026-10-26] ✏️ [gateway/notification] — yangi ixtiyoriy **`audience_segment_id`**: `GET
+  /notifications/audience/segments` dagi saqlangan segment (bitta jadval, ikki kanal). Faqat MIJOZ segmenti
+  (`include_customers` + filtrlar yoki `confirm_all_customers`); xodim rollari / `broadcast` / mijozsiz — 400
+  `reason: segment_not_customer_only` (xodimlarga SMS — `POST /notifications/campaigns` SMS kanali orqali);
+  `segment` bilan birga — 400; topilmasa — 404. Preview va yuborish soni bitta resolverdan; kampaniya qatorida
+  `segment` = hal qilingan shart + `audience_segment_id`.
+- 🔧 FE: umumiy konstruktorda SMS kanali uchun «gacha» maydoni va saqlangan segment tanlovi.
+
+### 2026-10-26 — SMS kampaniyani rejalashtirish: `scheduled_at` (2aS7PFX0, N8, KM-6)
+
+Deploy: notification-service + api-gateway. **Migratsiya bor:** `1716000000165-SmsCampaignSchedule`
+(`notification_schema.sms_campaigns`: `scheduled_at`, `requested_at`, `quiet_hours_shifted`, `started_at`,
+`cancelled_at`, `cancelled_by`, `last_error` — hammasi NULL/sukutli, backfill yo'q). Tartib: migratsiya →
+notification-service → api-gateway.
+
+- [2026-10-26] ✏️ [gateway/notification] — `POST /notifications/sms/campaigns` va `.../campaigns/preview` yangi
+  ixtiyoriy **`scheduled_at`**: ISO 8601 + ANIQ zona (`2026-10-28T10:00:00+05:00` yoki `...Z`), ≤90 kun —
+  bildirishnoma kampaniyasi bilan AYNI qoida (zonasiz — 400, uzoq — 400 `scheduled_at_too_far`; bo'sh yoki o'tgan
+  vaqt — darhol). Reklama 18:00–09:00 oynasiga tushsa — oyna tugashiga (09:00) suriladi.
+- [2026-10-26] ✏️ [notification] — kelajakdagi `scheduled_at` bilan `POST .../campaigns` javobi:
+  `{ campaign_id, status: 'scheduled', queued: 0, recipients, blocked_no_consent, skipped_invalid_phone,
+  estimated_cost, scheduled_for, scheduled_for_tashkent, requested_at, quiet_hours_shifted }` (sonlar — prognoz).
+  SMS navbatga (sms_outbox) **vaqti kelganda** qo'yiladi: auditoriya, rozilik/opt-out va kunlik kvota O'SHA KUNI
+  qayta tekshiriladi; rad etilsa kampaniya `status: 'failed'` + `last_error`. Darhol yuborishda javobga
+  `status: 'queued'` qo'shildi (qolgani o'zgarmagan).
+- [2026-10-26] 🆕 [gateway] — `POST /notifications/sms/campaigns/:id/cancel` (superadmin/admin): faqat
+  `status: 'scheduled'` → `cancelled`; boshqasi — 409, noto'g'ri id — 400, topilmasa — 404.
+- [2026-10-26] ✏️ [notification] — `GET /notifications/sms/campaigns` qatorlarida yangi: `status` endi
+  `scheduled | queued | failed | cancelled`, `scheduled_at`, `scheduled_for`, `scheduled_for_tashkent`,
+  `requested_at`, `quiet_hours_shifted`, `started_at`, `cancelled_at`, `cancelled_by`, `last_error`, `can_cancel`.
+  Preview javobida: `requested_at`, `scheduled_for_tashkent`, `quiet_hours_shifted`. SMS hisoboti
+  (`GET .../campaigns/:id/report`) `campaign` blokida: `scheduled_at(_tashkent)`, `requested_at`,
+  `quiet_hours_shifted`, `cancelled_at`, `last_error`.
+- 🔧 FE (KM-6): SMS kampaniya formasida sana/vaqt tanlagich (`scheduled_at`, `+05:00` bilan), ro'yxatda
+  «Rejalashtirilgan» holati va `can_cancel` bo'lsa «Bekor qilish» tugmasi.
 
 ### 2026-10-26 — Buyurtma yaratish: tumansiz inline mijoz — bitta o'zbekcha xabar (IR2OHIiN)
 

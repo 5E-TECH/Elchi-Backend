@@ -4,6 +4,7 @@ import {
   ArrayMaxSize,
   IsArray,
   IsBoolean,
+  IsDateString,
   IsIn,
   IsInt,
   IsISO8601,
@@ -17,6 +18,10 @@ import {
   Min,
   ValidateNested,
 } from 'class-validator';
+import {
+  SCHEDULED_AT_ZONE_MESSAGE,
+  SCHEDULED_AT_ZONE_RE,
+} from './notification-campaign.swagger.dto';
 
 const MESSAGE_CLASSES = ['transactional', 'promo', 'security'] as const;
 const LANGS = ['uz', 'ru', 'en'] as const;
@@ -198,6 +203,19 @@ export class SmsCampaignSegmentDto {
   @Max(1000)
   min_orders?: number;
 
+  /** (sdNGqCBa) Buyurtmalar soni «gacha» — push kampaniyasi bilan bir xil. */
+  @ApiPropertyOptional({
+    example: 10,
+    description:
+      "Ko'pi bilan shuncha buyurtma (kiradi). min_orders > max_orders — 400 (teskari oraliq)",
+  })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(1000)
+  max_orders?: number;
+
   @ApiPropertyOptional({
     example: ['+998901234567'],
     description: "Segment o'rniga qo'lda ro'yxat",
@@ -254,6 +272,30 @@ export class SmsCampaignDto {
   @ValidateNested()
   @Type(() => SmsCampaignSegmentDto)
   segment?: SmsCampaignSegmentDto;
+
+  /**
+   * (sdNGqCBa) Saqlangan segment (`GET /notifications/audience/segments`) —
+   * push kampaniyasi bilan bitta jadval. Faqat mijozlar segmenti
+   * (`include_customers`); xodim rollari / broadcast — 400. `segment` bilan birga — 400.
+   */
+  @ApiPropertyOptional({
+    example: '3',
+    description:
+      'Saqlangan segment id (notifications/audience/segments). Faqat mijozlar segmenti; segment bilan birga berilmaydi. Preview va yuborish soni — bitta resolverdan',
+  })
+  @IsOptional()
+  @Matches(ID_RE)
+  audience_segment_id?: string;
+  /** (2aS7PFX0) Rejalashtirish — bildirishnoma kampaniyasi bilan bir xil qoida. */
+  @ApiPropertyOptional({
+    example: '2026-10-28T10:00:00+05:00',
+    description:
+      "Rejalashtirish (≤90 kun), ISO + ANIQ zona (+05:00 yoki Z). Zonasiz — 400. Berilmasa yoki o'tgan — darhol. 18:00–09:00 oynasiga tushsa — oyna tugashiga suriladi. Navbatga (sms_outbox) vaqti kelganda qo'yiladi: auditoriya, rozilik va kunlik kvota o'sha kuni tekshiriladi",
+  })
+  @IsOptional()
+  @IsDateString()
+  @Matches(SCHEDULED_AT_ZONE_RE, { message: SCHEDULED_AT_ZONE_MESSAGE })
+  scheduled_at?: string;
 }
 
 // ==================== Rozilik ====================

@@ -12048,7 +12048,7 @@
             "bearer": []
           }
         ],
-        "summary": "Kampaniyani yuborish (Idempotency-Key majburiy — takror 409)",
+        "summary": "Kampaniyani yuborish yoki rejalashtirish (scheduled_at; Idempotency-Key majburiy — takror 409)",
         "tags": [
           "SMS"
         ],
@@ -12079,7 +12079,40 @@
             "bearer": []
           }
         ],
-        "summary": "Kampaniyalar tarixi: sent/failed/blocked",
+        "summary": "Kampaniyalar tarixi: sent/failed/blocked; rejalashtirilgan — status=scheduled, scheduled_for, can_cancel",
+        "tags": [
+          "SMS"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
+        ]
+      }
+    },
+    "/notifications/sms/campaigns/{id}/cancel": {
+      "post": {
+        "operationId": "SmsGatewayController_cancelCampaign",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Rejalashtirilgan SMS kampaniyani bekor qilish (faqat status=scheduled; yuborilgani — 409)",
         "tags": [
           "SMS"
         ],
@@ -25114,6 +25147,30 @@
           "audience_segment_id": {
             "type": "string",
             "example": "3"
+          },
+          "channels": {
+            "type": "array",
+            "example": [
+              "in_app",
+              "sms"
+            ],
+            "items": {
+              "type": "string",
+              "enum": [
+                "in_app",
+                "realtime",
+                "push",
+                "sms"
+              ]
+            }
+          },
+          "title": {
+            "type": "string",
+            "example": "Yangi tarif"
+          },
+          "body": {
+            "type": "string",
+            "example": "1-noyabrdan yangi tariflar amal qiladi."
           }
         }
       },
@@ -25244,13 +25301,14 @@
               "in_app",
               "realtime"
             ],
-            "description": "Faqat in_app / realtime / push (SMS — alohida epik)",
+            "description": "in_app / realtime / push / sms. SMS — DOIM reklama: faqat roziligi borlarga (yo'q — sms: skipped, sms_reason: no_consent), 18:00–09:00 da yuborilmaydi (09:00 ga suriladi), bekor qilish havolasi qo'shiladi, kunlik kvota (SMS_DAILY_CAP); auditoriya SMS_MAX_FANOUT dan katta — 400; SMS o'chiq / opt-out sozlanmagan — 409",
             "items": {
               "type": "string",
               "enum": [
                 "in_app",
                 "realtime",
-                "push"
+                "push",
+                "sms"
               ]
             }
           },
@@ -26302,6 +26360,11 @@
             "type": "number",
             "example": 2
           },
+          "max_orders": {
+            "type": "number",
+            "example": 10,
+            "description": "Ko'pi bilan shuncha buyurtma (kiradi). min_orders > max_orders — 400 (teskari oraliq)"
+          },
           "phones": {
             "example": [
               "+998901234567"
@@ -26350,6 +26413,16 @@
           },
           "segment": {
             "$ref": "#/components/schemas/SmsCampaignSegmentDto"
+          },
+          "audience_segment_id": {
+            "type": "string",
+            "example": "3",
+            "description": "Saqlangan segment id (notifications/audience/segments). Faqat mijozlar segmenti; segment bilan birga berilmaydi. Preview va yuborish soni — bitta resolverdan"
+          },
+          "scheduled_at": {
+            "type": "string",
+            "example": "2026-10-28T10:00:00+05:00",
+            "description": "Rejalashtirish (≤90 kun), ISO + ANIQ zona (+05:00 yoki Z). Zonasiz — 400. Berilmasa yoki o'tgan — darhol. 18:00–09:00 oynasiga tushsa — oyna tugashiga suriladi. Navbatga (sms_outbox) vaqti kelganda qo'yiladi: auditoriya, rozilik va kunlik kvota o'sha kuni tekshiriladi"
           }
         }
       },

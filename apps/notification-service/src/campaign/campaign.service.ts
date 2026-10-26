@@ -5,6 +5,7 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { ClientProxy, RpcException } from '@nestjs/microservices';
@@ -51,6 +52,8 @@ import {
   campaignMaxFanout,
 } from './campaign-limits';
 import { DispatchAbortedError } from './dispatch-hooks';
+import { SmsConfigService } from '../sms/sms-config.service';
+import { SmsConsentService } from '../sms/sms-consent.service';
 import {
   CAMPAIGN_CANCELLABLE_STATUSES,
   CAMPAIGN_DISPLAY_STATUSES,
@@ -139,7 +142,9 @@ const shortError = (error: unknown): string => {
  *
  * ⚠️ Alohida scheduler/cron servisi YO'Q (karta #5) va RabbitMQ navbat
  * argumentlariga tegilmaydi — kechiktirish faqat outbox `scheduled_at`.
- * ⚠️ SMS kanali qabul qilinmaydi (real pul, alohida epik).
+ * (9D1Gl9MS) SMS kanali — DOIM reklama (`promo`): rozilik darvozasi,
+ * 18:00–09:00 taqiq, opt-out havolasi, kunlik kvota; auditoriya
+ * SMS_MAX_FANOUT dan oshsa — 400 (jimgina kesilmaydi).
  */
 @Injectable()
 export class CampaignService {
@@ -153,12 +158,47 @@ export class CampaignService {
     private readonly outbox: OutboxService,
     private readonly activityLog: ActivityLogService,
     private readonly config: ConfigService,
+    /** (9D1Gl9MS) SMS kanali: kill-switch, fan-out, opt-out sozlamasi. */
+    @Optional() private readonly smsConfig?: SmsConfigService,
+    @Optional() private readonly smsConsent?: SmsConsentService,
   ) {}
 
   private get maxFanout(): number {
     return campaignMaxFanout(
       this.config?.get?.('NOTIFICATION_CAMPAIGN_MAX_FANOUT'),
     );
+  }
+
+  private static wantsSms(channels: readonly string[] | null | undefined) {
+    return (channels ?? []).includes(NotificationChannel.SMS);
+  }
+
+  /** (9D1Gl9MS) SMS kanali bo'lsa — SMS_MAX_FANOUT ham chegara (pul). */
+  private fanoutFor(channels: readonly string[] | null | undefined): number {
+    return CampaignService.wantsSms(channels) && this.smsConfig
+      ? Math.min(this.maxFanout, this.smsConfig.maxFanout)
+      : this.maxFanout;
+  }
+
+  /**
+   * (9D1Gl9MS) SMS kanali so'ralgan — yaratishdan OLDIN: SMS yoqiq
+   * (kill-switch), reklama bekor qilish havolasi sozlangan. Aks holda 409 —
+   * kampaniya "SMS bilan" yaratilib, jimgina SMS'siz ketmasin.
+   */
+  private assertSmsReady() {
+    if (!this.smsConfig || !this.smsConsent) {
+      throw new ConflictException('SMS kanali sozlanmagan (sms_disabled)');
+    }
+    if (!this.smsConfig.enabled) {
+      throw new ConflictException(
+        "SMS o'chiq (SMS_ENABLED=false) — SMS kanali bilan kampaniya yaratilmadi (sms_disabled)",
+      );
+    }
+    if (this.smsConsent.appendOptOut('x', '+998900000000') === null) {
+      throw new ConflictException(
+        'Reklama SMS uchun bekor qilish havolasi sozlanmagan (SMS_OPT_OUT_BASE_URL, SMS_DLR_SECRET) — kampaniya yaratilmadi (opt_out_not_configured)',
+      );
+    }
   }
 
   /** (WIsb9Ytq) SMS darvozasi bilan BIR xil sozlama (sukut 18:00-09:00). */
@@ -201,6 +241,8 @@ export class CampaignService {
       });
       if (existing) return this.duplicate(existing, plan.hash);
 
+      const wantsSms = CampaignService.wantsSms(plan.channels);
+      if (wantsSms) this.assertSmsReady();
       const total = await this.countAudience(plan.audience);
       if (!total) {
         throw new BadRequestException(
@@ -211,6 +253,12 @@ export class CampaignService {
         throw new BadRequestException(
           `Kampaniya auditoriyasi ${total} — chegara ${this.maxFanout} ` +
             '(NOTIFICATION_CAMPAIGN_MAX_FANOUT). Nishonni toraytiring — jimgina kesilmaydi.',
+        );
+      }
+      if (wantsSms && total > this.fanoutFor(plan.channels)) {
+        throw new BadRequestException(
+          `SMS kanali bilan kampaniya auditoriyasi ${total} — chegara ${this.fanoutFor(plan.channels)} ` +
+            '(SMS_MAX_FANOUT). Nishonni toraytiring yoki SMS kanalisiz yuboring — jimgina kesilmaydi.',
         );
       }
 
@@ -383,8 +431,8 @@ export class CampaignService {
     if (blocked.length) {
       throw new BadRequestException(
         `Kampaniyada faqat ${CAMPAIGN_ALLOWED_CHANNELS.join(', ')} kanallari: ` +
-          `${blocked.join(', ')} qabul qilinmaydi (SMS — alohida epik, real pul; ` +
-          "telegram — market guruhi relay'i; email — provayder yo'q)",
+          `${blocked.join(', ')} qabul qilinmaydi ` +
+          "(telegram — market guruhi relay'i; email — provayder yo'q)",
       );
     }
 
@@ -622,11 +670,12 @@ export class CampaignService {
 
       // Ishlash davomida auditoriya o'sib chegaradan oshsa — XATO, kesish emas.
       const processed = campaign.sent + campaign.failed;
-      if (processed + items.length > this.maxFanout) {
+      const limit = this.fanoutFor(campaign.channels);
+      if (processed + items.length > limit) {
         await this.fail(
           campaign.id,
           batchNo,
-          `Auditoriya ishlash davomida chegaradan (${this.maxFanout}) oshdi — to'xtatildi`,
+          `Auditoriya ishlash davomida chegaradan (${limit}) oshdi — to'xtatildi`,
         );
         return { campaign_id: id, batch_no: batchNo, status: 'failed' };
       }
@@ -639,6 +688,10 @@ export class CampaignService {
         this.dispatchDto(current, batchNo),
         {
           recipients: items,
+          // (9D1Gl9MS) kampaniya SMS'i — doim reklama (rozilik, taqiq, kvota).
+          ...(CampaignService.wantsSms(current.channels)
+            ? { smsMessageClass: 'promo' as const }
+            : {}),
           beforePersist: (manager) => this.claim(manager, current.id, batchNo),
           afterPersist: (manager, rows) =>
             this.advance(
@@ -705,11 +758,12 @@ export class CampaignService {
   ): Promise<NotificationCampaign | null> {
     // Xato — chaqiruvchida `batchFailed` (outbox qayta urinadi).
     const total = await this.countAudience(campaign.audience);
-    if (total > this.maxFanout) {
+    const limit = this.fanoutFor(campaign.channels);
+    if (total > limit) {
       await this.fail(
         campaign.id,
         campaign.batch_no,
-        `Auditoriya ishga tushishda ${total} — chegara ${this.maxFanout}; yuborilmadi`,
+        `Auditoriya ishga tushishda ${total} — chegara ${limit}; yuborilmadi`,
         ['queued', 'draft'],
       );
       return this.repo.findOne({ where: { id: campaign.id } });

@@ -1,10 +1,11 @@
-import { Inject, Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import { ClientProxy } from '@nestjs/microservices';
 import { InjectRepository } from '@nestjs/typeorm';
 import { EntityManager, Repository } from 'typeorm';
 import { rmqSend } from '@app/common';
 import { Notification } from '../entities/notification.entity';
 import { SmsConfigService } from './sms-config.service';
+import { SmsConsentService } from './sms-consent.service';
 import { SmsBlockedError } from './sms-gate.service';
 import { SmsDuplicateError, SmsOutboxService } from './sms-outbox.service';
 import { SmsProviderRegistry } from './sms-provider.registry';
@@ -60,6 +61,8 @@ export class SmsDispatchService {
     private readonly config: SmsConfigService,
     private readonly outbox: SmsOutboxService,
     private readonly registry: SmsProviderRegistry,
+    /** (9D1Gl9MS) Kampaniya SMS kanali — reklama rozilik darvozasi. */
+    @Optional() private readonly consent?: SmsConsentService,
   ) {}
 
   /** SMS so'ralgan dispatch uchun OLDINDAN tekshiruv: fan-out XATO bo'lsin, kesilmasin. */
@@ -93,7 +96,9 @@ export class SmsDispatchService {
   async queueForNotifications(
     rows: Notification[],
     manager: EntityManager,
+    options: { messageClass?: 'promo' } = {},
   ): Promise<SmsChannelResult> {
+    const promo = options.messageClass === 'promo';
     const ids = rows.map((row) => row.id);
     if (!this.config.enabled) {
       await this.patch(manager, ids, {
@@ -139,12 +144,58 @@ export class SmsDispatchService {
       };
     }
 
+    // (9D1Gl9MS) Reklama: roziligi yo'qlar — `skipped/no_consent` (butun
+    // partiya yiqilmaydi); qolganlari darvozadan (enqueue o'zi ham qayta
+    // tekshiradi — fail-closed). Mijoz roziligi customer_id bo'yicha ham.
+    let sendable = withPhone;
+    let noConsent: string[] = [];
+    if (promo) {
+      if (!this.consent) {
+        await this.patch(
+          manager,
+          withPhone.map((row) => row.id),
+          { sms: 'blocked', sms_reason: 'no_consent' },
+        );
+        return { sms: 0, sms_status: 'blocked', sms_reason: 'no_consent' };
+      }
+      const { allowed } = await this.consent.partition(
+        withPhone.map((row) => ({
+          phone: contacts.get(String(row.recipient_id))?.phone_number ?? '',
+          customer_id:
+            row.recipient_role === 'customer' ? String(row.recipient_id) : null,
+          row,
+        })),
+      );
+      const allowedIds = new Set(allowed.map((item) => item.row.id));
+      sendable = withPhone.filter((row) => allowedIds.has(row.id));
+      noConsent = withPhone
+        .filter((row) => !allowedIds.has(row.id))
+        .map((row) => row.id);
+      await this.patch(manager, noConsent, {
+        sms: 'skipped',
+        sms_reason: 'no_consent',
+      });
+      if (!sendable.length) {
+        return {
+          sms: 0,
+          sms_status: 'skipped',
+          sms_reason: 'no_consent',
+          sms_skipped: rows.length,
+        };
+      }
+    }
+    const skippedCount = withoutPhone.length + noConsent.length;
+
     try {
       const result = await this.outbox.enqueue(
-        withPhone.map((row) => ({
+        sendable.map((row) => ({
           to: contacts.get(String(row.recipient_id))?.phone_number ?? '',
+          customerId:
+            promo && row.recipient_role === 'customer'
+              ? String(row.recipient_id)
+              : null,
           text: smsText(row),
-          messageClass: 'transactional' as const,
+          messageClass: promo ? ('promo' as const) : ('transactional' as const),
           notificationId: row.id,
           clientMessageId: `notif-${row.id}`,
         })),
@@ -152,19 +203,19 @@ export class SmsDispatchService {
       );
       await this.patch(
         manager,
-        withPhone.map((row) => row.id),
+        sendable.map((row) => row.id),
         { sms: 'queued' },
       );
       return {
         sms: result.queued.length,
-        sms_status: withoutPhone.length ? 'partial' : 'queued',
-        ...(withoutPhone.length ? { sms_skipped: withoutPhone.length } : {}),
+        sms_status: skippedCount ? 'partial' : 'queued',
+        ...(skippedCount ? { sms_skipped: skippedCount } : {}),
       };
     } catch (error) {
       if (error instanceof SmsBlockedError) {
         await this.patch(
           manager,
-          withPhone.map((row) => row.id),
+          sendable.map((row) => row.id),
           {
             sms: 'blocked',
             sms_reason: error.reason,

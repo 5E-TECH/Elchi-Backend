@@ -445,7 +445,10 @@ describe('SmsCampaignService', () => {
         blocked: 1,
       }),
     );
-    expect(repo.update).toHaveBeenCalledWith({ id: '5' }, { status: 'failed' });
+    expect(repo.update).toHaveBeenCalledWith(
+      { id: '5' },
+      expect.objectContaining({ status: 'failed' }),
+    );
     // "queued" hech qachon yozilmaydi — tarix muvaffaqiyat ko'rsatmaydi.
     expect(repo.update).not.toHaveBeenCalledWith(
       { id: '5' },

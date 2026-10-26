@@ -219,6 +219,17 @@ export class SmsController {
     );
   }
 
+  /** (2aS7PFX0) Rejalashtirilgan (hali navbatga qo'yilmagan) kampaniyani bekor qilish. */
+  @MessagePattern({ cmd: 'notification.sms.campaign.cancel' })
+  cancelCampaign(
+    @Payload() data: { id?: string; requester_id?: string | null },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.run(context, () =>
+      this.campaigns.cancel(data?.id, data?.requester_id ?? null),
+    );
+  }
+
   @MessagePattern({ cmd: 'notification.sms.campaign.history' })
   campaignHistory(
     @Payload() data: { limit?: number },

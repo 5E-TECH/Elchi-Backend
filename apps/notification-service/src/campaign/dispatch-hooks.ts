@@ -29,6 +29,13 @@ export interface InternalDispatchOptions {
     manager: EntityManager,
     rows: Notification[],
   ) => Promise<void>;
+  /**
+   * (9D1Gl9MS) Kampaniya partiyasining SMS kanali REKLAMA (`promo`) sifatida:
+   * rozilik darvozasi (roziligi yo'q — `sms: skipped`, `sms_reason:
+   * no_consent`), 18:00–09:00 taqiq, opt-out havolasi, kunlik kvota. Oddiy
+   * dispatch (tizim hodisasi) — avvalgidek `transactional`.
+   */
+  smsMessageClass?: 'promo';
 }
 
 /**
