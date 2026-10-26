@@ -188,7 +188,8 @@ export class SmsGatewayController {
 
   @Post('campaigns')
   @ApiOperation({
-    summary: 'Kampaniyani yuborish (Idempotency-Key majburiy — takror 409)',
+    summary:
+      'Kampaniyani yuborish yoki rejalashtirish (scheduled_at; Idempotency-Key majburiy — takror 409)',
   })
   @ApiHeader({ name: 'Idempotency-Key', required: true })
   @ApiBody({ type: SmsCampaignDto })
@@ -208,8 +209,25 @@ export class SmsGatewayController {
     );
   }
 
+  /** (2aS7PFX0) Faqat `scheduled` (hali navbatga qo'yilmagan) — aks holda 409. */
+  @Post('campaigns/:id/cancel')
+  @HttpCode(200)
+  @ApiOperation({
+    summary:
+      'Rejalashtirilgan SMS kampaniyani bekor qilish (faqat status=scheduled; yuborilgani — 409)',
+  })
+  cancelCampaign(@Param('id') id: string, @Req() req: AuthedRequest) {
+    return this.send('notification.sms.campaign.cancel', {
+      id,
+      requester_id: req.user?.sub ?? null,
+    });
+  }
+
   @Get('campaigns')
-  @ApiOperation({ summary: 'Kampaniyalar tarixi: sent/failed/blocked' })
+  @ApiOperation({
+    summary:
+      'Kampaniyalar tarixi: sent/failed/blocked; rejalashtirilgan — status=scheduled, scheduled_for, can_cancel',
+  })
   campaigns(@Query('limit') limit?: string) {
     return this.send('notification.sms.campaign.history', {
       limit: Number(limit) || 50,

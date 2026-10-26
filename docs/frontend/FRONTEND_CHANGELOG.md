@@ -23,6 +23,34 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-10-26 — SMS kampaniyani rejalashtirish: `scheduled_at` (2aS7PFX0, N8, KM-6)
+
+Deploy: notification-service + api-gateway. **Migratsiya bor:** `1716000000165-SmsCampaignSchedule`
+(`notification_schema.sms_campaigns`: `scheduled_at`, `requested_at`, `quiet_hours_shifted`, `started_at`,
+`cancelled_at`, `cancelled_by`, `last_error` — hammasi NULL/sukutli, backfill yo'q). Tartib: migratsiya →
+notification-service → api-gateway.
+
+- [2026-10-26] ✏️ [gateway/notification] — `POST /notifications/sms/campaigns` va `.../campaigns/preview` yangi
+  ixtiyoriy **`scheduled_at`**: ISO 8601 + ANIQ zona (`2026-10-28T10:00:00+05:00` yoki `...Z`), ≤90 kun —
+  bildirishnoma kampaniyasi bilan AYNI qoida (zonasiz — 400, uzoq — 400 `scheduled_at_too_far`; bo'sh yoki o'tgan
+  vaqt — darhol). Reklama 18:00–09:00 oynasiga tushsa — oyna tugashiga (09:00) suriladi.
+- [2026-10-26] ✏️ [notification] — kelajakdagi `scheduled_at` bilan `POST .../campaigns` javobi:
+  `{ campaign_id, status: 'scheduled', queued: 0, recipients, blocked_no_consent, skipped_invalid_phone,
+  estimated_cost, scheduled_for, scheduled_for_tashkent, requested_at, quiet_hours_shifted }` (sonlar — prognoz).
+  SMS navbatga (sms_outbox) **vaqti kelganda** qo'yiladi: auditoriya, rozilik/opt-out va kunlik kvota O'SHA KUNI
+  qayta tekshiriladi; rad etilsa kampaniya `status: 'failed'` + `last_error`. Darhol yuborishda javobga
+  `status: 'queued'` qo'shildi (qolgani o'zgarmagan).
+- [2026-10-26] 🆕 [gateway] — `POST /notifications/sms/campaigns/:id/cancel` (superadmin/admin): faqat
+  `status: 'scheduled'` → `cancelled`; boshqasi — 409, noto'g'ri id — 400, topilmasa — 404.
+- [2026-10-26] ✏️ [notification] — `GET /notifications/sms/campaigns` qatorlarida yangi: `status` endi
+  `scheduled | queued | failed | cancelled`, `scheduled_at`, `scheduled_for`, `scheduled_for_tashkent`,
+  `requested_at`, `quiet_hours_shifted`, `started_at`, `cancelled_at`, `cancelled_by`, `last_error`, `can_cancel`.
+  Preview javobida: `requested_at`, `scheduled_for_tashkent`, `quiet_hours_shifted`. SMS hisoboti
+  (`GET .../campaigns/:id/report`) `campaign` blokida: `scheduled_at(_tashkent)`, `requested_at`,
+  `quiet_hours_shifted`, `cancelled_at`, `last_error`.
+- 🔧 FE (KM-6): SMS kampaniya formasida sana/vaqt tanlagich (`scheduled_at`, `+05:00` bilan), ro'yxatda
+  «Rejalashtirilgan» holati va `can_cancel` bo'lsa «Bekor qilish» tugmasi.
+
 ### 2026-10-26 — Buyurtma yaratish: tumansiz inline mijoz — bitta o'zbekcha xabar (IR2OHIiN)
 
 Deploy: faqat api-gateway (DTO validatsiyasi). Migratsiya yo'q. `openapi.json` o'zgarmagan.

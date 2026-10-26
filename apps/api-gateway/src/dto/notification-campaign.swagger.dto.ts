@@ -30,8 +30,8 @@ import {
  * zonasiz yuborilsa serverda boshqa zona deb o'qilardi (taqiq oynasi 5 soat
  * siljiydi). notification-service ham shuni tekshiradi (RMQ yo'li).
  */
-const SCHEDULED_AT_ZONE_RE = /(?:Z|[+-]\d{2}:\d{2})$/i;
-const SCHEDULED_AT_ZONE_MESSAGE =
+export const SCHEDULED_AT_ZONE_RE = /(?:Z|[+-]\d{2}:\d{2})$/i;
+export const SCHEDULED_AT_ZONE_MESSAGE =
   "scheduled_at: vaqt zonasi bilan bo'lishi kerak (masalan 2026-10-20T09:00:00+05:00 yoki ...Z)";
 
 const toBool = ({ value }: { value: unknown }) =>

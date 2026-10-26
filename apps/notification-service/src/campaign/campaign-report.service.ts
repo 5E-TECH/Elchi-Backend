@@ -556,6 +556,13 @@ export class CampaignReportService {
         channels: [NotificationChannel.SMS as string],
         created_by: campaign.created_by,
         created_at: campaign.created_at,
+        // (2aS7PFX0) rejalashtirish.
+        scheduled_at: campaign.scheduled_at ?? null,
+        scheduled_at_tashkent: toTashkentIso(campaign.scheduled_at ?? null),
+        requested_at: campaign.requested_at ?? null,
+        quiet_hours_shifted: campaign.quiet_hours_shifted ?? false,
+        cancelled_at: campaign.cancelled_at ?? null,
+        last_error: campaign.last_error ?? null,
       },
       stats: {
         audience: campaign.total,

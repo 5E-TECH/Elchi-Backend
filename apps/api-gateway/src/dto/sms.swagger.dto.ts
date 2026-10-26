@@ -4,6 +4,7 @@ import {
   ArrayMaxSize,
   IsArray,
   IsBoolean,
+  IsDateString,
   IsIn,
   IsInt,
   IsISO8601,
@@ -17,6 +18,10 @@ import {
   Min,
   ValidateNested,
 } from 'class-validator';
+import {
+  SCHEDULED_AT_ZONE_MESSAGE,
+  SCHEDULED_AT_ZONE_RE,
+} from './notification-campaign.swagger.dto';
 
 const MESSAGE_CLASSES = ['transactional', 'promo', 'security'] as const;
 const LANGS = ['uz', 'ru', 'en'] as const;
@@ -254,6 +259,16 @@ export class SmsCampaignDto {
   @ValidateNested()
   @Type(() => SmsCampaignSegmentDto)
   segment?: SmsCampaignSegmentDto;
+  /** (2aS7PFX0) Rejalashtirish — bildirishnoma kampaniyasi bilan bir xil qoida. */
+  @ApiPropertyOptional({
+    example: '2026-10-28T10:00:00+05:00',
+    description:
+      "Rejalashtirish (≤90 kun), ISO + ANIQ zona (+05:00 yoki Z). Zonasiz — 400. Berilmasa yoki o'tgan — darhol. 18:00–09:00 oynasiga tushsa — oyna tugashiga suriladi. Navbatga (sms_outbox) vaqti kelganda qo'yiladi: auditoriya, rozilik va kunlik kvota o'sha kuni tekshiriladi",
+  })
+  @IsOptional()
+  @IsDateString()
+  @Matches(SCHEDULED_AT_ZONE_RE, { message: SCHEDULED_AT_ZONE_MESSAGE })
+  scheduled_at?: string;
 }
 
 // ==================== Rozilik ====================

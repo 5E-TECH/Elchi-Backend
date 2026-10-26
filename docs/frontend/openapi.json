@@ -11937,7 +11937,7 @@
             "bearer": []
           }
         ],
-        "summary": "Kampaniyani yuborish (Idempotency-Key majburiy — takror 409)",
+        "summary": "Kampaniyani yuborish yoki rejalashtirish (scheduled_at; Idempotency-Key majburiy — takror 409)",
         "tags": [
           "SMS"
         ],
@@ -11968,7 +11968,40 @@
             "bearer": []
           }
         ],
-        "summary": "Kampaniyalar tarixi: sent/failed/blocked",
+        "summary": "Kampaniyalar tarixi: sent/failed/blocked; rejalashtirilgan — status=scheduled, scheduled_for, can_cancel",
+        "tags": [
+          "SMS"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
+        ]
+      }
+    },
+    "/notifications/sms/campaigns/{id}/cancel": {
+      "post": {
+        "operationId": "SmsGatewayController_cancelCampaign",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Rejalashtirilgan SMS kampaniyani bekor qilish (faqat status=scheduled; yuborilgani — 409)",
         "tags": [
           "SMS"
         ],
@@ -26105,6 +26138,11 @@
           },
           "segment": {
             "$ref": "#/components/schemas/SmsCampaignSegmentDto"
+          },
+          "scheduled_at": {
+            "type": "string",
+            "example": "2026-10-28T10:00:00+05:00",
+            "description": "Rejalashtirish (≤90 kun), ISO + ANIQ zona (+05:00 yoki Z). Zonasiz — 400. Berilmasa yoki o'tgan — darhol. 18:00–09:00 oynasiga tushsa — oyna tugashiga suriladi. Navbatga (sms_outbox) vaqti kelganda qo'yiladi: auditoriya, rozilik va kunlik kvota o'sha kuni tekshiriladi"
           }
         }
       },
