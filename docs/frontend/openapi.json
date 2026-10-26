@@ -20033,6 +20033,203 @@
         ]
       }
     },
+    "/ai/assistant/messages": {
+      "post": {
+        "description": "Javob `text/event-stream`: `event: meta` {conversation_id, message_id, model, max_steps} → `step` {step} → `delta` {step, text} (oraliq matn) → `tool_call` {step, id, tool, input} → `tool_result` {step, id, tool, ok, records, period, truncated} → … → `done` {conversation_id, message_id, answer, stop, steps, sources[], usage{input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, cost_usd}, limits{daily_limit, used_today, remaining_today}} yoki `error` {code, message, conversation_id?, reset_at?}. Har 15 s `: ping` izohi. SSE ochilishidan OLDIN: rol/ruxsat yo‘q → 403, funksiya o‘chiq → 503, kunlik limit tugagan → 429. Yakuniy matn — faqat `done.answer`.",
+        "operationId": "AiAssistantGatewayController_postMessage",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AiAssistantMessageDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "AI moliyaviy yordamchiga savol (SSE oqimi)",
+        "tags": [
+          "AI"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
+        ]
+      }
+    },
+    "/ai/assistant/conversations": {
+      "get": {
+        "description": "`data` = {items[{id, title, turns, last_message_at, created_at, cost_usd}], total, limit, offset}. Ruxsatsiz admin — 403.",
+        "operationId": "AiAssistantGatewayController_conversations",
+        "parameters": [
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20,
+              "type": "number"
+            }
+          },
+          {
+            "name": "offset",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 0,
+              "default": 0,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "AI yordamchi: o‘z suhbatlarim (yangisi birinchi)",
+        "tags": [
+          "AI"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
+        ]
+      }
+    },
+    "/ai/assistant/conversations/{id}": {
+      "get": {
+        "description": "`data` = {id, title, turns, created_at, last_message_at, cost_usd, messages[{id, role: user|assistant, text, created_at, sources?[{tool, period, records, truncated, ok}], stop?}]}. Begona/yo‘q — 404.",
+        "operationId": "AiAssistantGatewayController_conversation",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "AI yordamchi: suhbat xabarlari (faqat o‘ziniki)",
+        "tags": [
+          "AI"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
+        ]
+      }
+    },
+    "/ai/assistant/access/me": {
+      "get": {
+        "description": "`data` = {allowed, reason: null|role_forbidden|access_disabled|feature_disabled|ai_disabled, feature_enabled, daily_limit, used_today, remaining_today, reset_at}.",
+        "operationId": "AiAssistantGatewayController_me",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "AI yordamchi: mening holatim (menyuni ko‘rsatish, limit)",
+        "tags": [
+          "AI"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
+        ]
+      }
+    },
+    "/ai/assistant/access": {
+      "get": {
+        "description": "`data` = {feature_enabled, default_daily_limit, model, items[{user_id, enabled, daily_limit, effective_daily_limit, updated_by, updated_at}]}. Adminlar ro‘yxati — mavjud `GET /admins` dan.",
+        "operationId": "AiAssistantGatewayController_listAccess",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Ruxsatlar ro‘yxati"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "AI yordamchi ruxsatlari (faqat superadmin)",
+        "tags": [
+          "AI"
+        ],
+        "x-roles": [
+          "superadmin"
+        ]
+      },
+      "patch": {
+        "description": "Faqat ADMIN rolli foydalanuvchiga (boshqa rol — 400, topilmasa — 404). Superadmin ruxsatsiz ham doim foydalanadi. `daily_limit: null` — sukut (100).",
+        "operationId": "AiAssistantGatewayController_updateAccess",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AiAssistantAccessUpdateDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "AI yordamchi ruxsatini berish/olish va kunlik limit (faqat superadmin)",
+        "tags": [
+          "AI"
+        ],
+        "x-roles": [
+          "superadmin"
+        ]
+      }
+    },
     "/market-operators": {
       "get": {
         "operationId": "MarketOperatorGatewayController_list",
@@ -30329,6 +30526,50 @@
         "required": [
           "extra_usd",
           "reason"
+        ]
+      },
+      "AiAssistantMessageDto": {
+        "type": "object",
+        "properties": {
+          "message": {
+            "type": "string",
+            "description": "Savol matni (1..2000 belgi)",
+            "example": "Bu oy kassaga qancha kirdi va eng katta chiqimlar qaysilar?"
+          },
+          "conversation_id": {
+            "type": "string",
+            "description": "Davom ettiriladigan suhbat ID si (yo‘q — yangi suhbat). Faqat o‘zingizniki.",
+            "example": "12"
+          }
+        },
+        "required": [
+          "message"
+        ]
+      },
+      "AiAssistantAccessUpdateDto": {
+        "type": "object",
+        "properties": {
+          "user_id": {
+            "type": "string",
+            "description": "ADMIN foydalanuvchi ID si",
+            "example": "25"
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "Yordamchidan foydalanish ruxsati"
+          },
+          "daily_limit": {
+            "type": "object",
+            "description": "Kunlik savol limiti (Toshkent kuni). `null` — sukut (AI_ASSISTANT_DAILY_LIMIT, 100).",
+            "nullable": true,
+            "minimum": 0,
+            "maximum": 10000,
+            "example": 100
+          }
+        },
+        "required": [
+          "user_id",
+          "enabled"
         ]
       },
       "CreateMarketOperatorRequestDto": {

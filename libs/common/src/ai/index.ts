@@ -9,3 +9,4 @@ export * from './ai-status.contract';
 export * from './ai-draft.contract';
 export * from './district-pick.contract';
 export * from './balance-screenshot.contract';
+export * from './assistant.contract';

@@ -38,6 +38,13 @@ export const CLAUDE_DEFAULT_MAX_TOKENS = 4000;
 /** Truncation retry faqat muddatdan kamida shuncha vaqt qolganda qilinadi. */
 export const CLAUDE_RETRY_MIN_BUDGET_MS = 15_000;
 
+/**
+ * F7PWp6cK — tool-use siklining UMUMIY muddati (barcha qadamlar). Har qadam
+ * baribir `ANTHROPIC_TIMEOUT_MS` (55 s) bilan cheklanadi; gateway SSE
+ * oqimi heartbeat bilan ochiq turadi.
+ */
+export const CLAUDE_TOOL_LOOP_TOTAL_MS = 150_000;
+
 /** Bitta urinish uchun minimal qolgan vaqt — undan kam bo'lsa chaqirilmaydi. */
 export const CLAUDE_MIN_ATTEMPT_BUDGET_MS = 10_000;
 

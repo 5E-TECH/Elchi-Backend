@@ -58,6 +58,7 @@ import { AuditGatewayController } from './audit-gateway.controller';
 import { AuditEnrichmentService } from './audit/audit-enrichment.service';
 import { AiGatewayController } from './ai-gateway.controller';
 import { AiUsageGatewayController } from './ai-usage-gateway.controller';
+import { AiAssistantGatewayController } from './ai-assistant-gateway.controller';
 import { MarketOperatorGatewayController } from './market-operator-gateway.controller';
 import { CustomerGatewayController } from './customer-gateway.controller';
 import { DeliveryPricingGatewayController } from './delivery-pricing-gateway.controller';
@@ -155,6 +156,8 @@ import type { StringValue } from 'ms';
     AiGatewayController,
     // Celz3rKJ: "Moliyaviy balans → AI xarajat" paneli (/ai-usage/*).
     AiUsageGatewayController,
+    // F7PWp6cK — AI moliyaviy yordamchi (SSE).
+    AiAssistantGatewayController,
     // i76gGjyq: market o'z operatorlarini boshqaradi (/market-operators).
     MarketOperatorGatewayController,
     // hiqRNhkI: GET /customers/suggest — telefon bo'yicha mijoz taklifi.

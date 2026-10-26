@@ -20,6 +20,15 @@ import {
 import { OrderExtractService } from './order-extract/order-extract.service';
 import { ProductDisambiguateService } from './product-disambiguate/product-disambiguate.service';
 import { AiUsageModule } from './usage/ai-usage.module';
+import {
+  AiAssistantAccess,
+  AiConversation,
+  AiMessage,
+} from './entities/ai-assistant.entity';
+import { AiUsageLog } from './entities/ai-usage-log.entity';
+import { AssistantReader } from './assistant/assistant-reader';
+import { AssistantService } from './assistant/assistant.service';
+import { AssistantStore } from './assistant/assistant-store.service';
 import { AiUsageService } from './usage/ai-usage.service';
 
 /**
@@ -43,6 +52,18 @@ import { AiUsageService } from './usage/ai-usage.service';
     AiUsageModule,
     // vncdmXOy: AI buyurtma audit izi (ai_order_draft, ai_order_draft_item).
     TypeOrmModule.forFeature([AiOrderDraft, AiOrderDraftItem]),
+    // F7PWp6cK: AI moliyaviy yordamchi — suhbatlar, audit, ruxsatlar va
+    // yordamchi xarajati (ai_usage_log, feature='assistant').
+    TypeOrmModule.forFeature([
+      AiConversation,
+      AiMessage,
+      AiAssistantAccess,
+      AiUsageLog,
+    ]),
+    // F7PWp6cK: yordamchi tool'lari FAQAT o'qiydi (AssistantReader oq ro'yxati).
+    RmqModule.register({ name: 'FINANCE' }),
+    RmqModule.register({ name: 'ANALYTICS' }),
+    RmqModule.register({ name: 'BRANCH' }),
     // Xarajat jurnali (sink) va global kunlik shift (budget guard) portlari.
     ClaudeModule.forRoot({
       imports: [AiUsageModule],
@@ -58,6 +79,10 @@ import { AiUsageService } from './usage/ai-usage.service';
     DistrictPickService,
     // kiZgTybn — smena yopishda karta qoldig'i skrinshoti.
     BalanceScreenshotService,
+    // F7PWp6cK — AI moliyaviy yordamchi.
+    AssistantReader,
+    AssistantStore,
+    AssistantService,
   ],
 })
 export class AiServiceModule {}
