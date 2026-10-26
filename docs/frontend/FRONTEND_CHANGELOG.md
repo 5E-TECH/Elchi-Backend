@@ -112,6 +112,46 @@ oqimlar bor). O'chirish: `FINANCE_DAILY_SNAPSHOT_DISABLED=true`.
   javobidan pul kalitlari gateway'da ham olib tashlanadi (search-service allaqachon qisqartirardi; kontrakt
   o'zgarmagan). LOGIST rol tavsifi (`GET /roles` katalogi): «…; moliya — yo'q».
 
+### 2026-10-26 — Bekor holatlari BG7: 3 kunda marketga eslatma, 7 kunda admin eskalatsiyasi (vNKGbg5q) + vOczoOUE 2-bosqich backend kontrakti
+
+Deploy: **order-service + notification-service birga** (yangi bildirishnoma turlari `@app/common` katalogida —
+notification-service eski bo'lsa dispatch noma'lum turni rad etadi), api-gateway (faqat Swagger matni).
+**Migratsiya bor:** `1716000000174-CancelReturnHandoverReminder` (2 ta NULL ustun + qism indeks; backfill yo'q,
+jadval qayta yozilmaydi). `openapi.json` qayta yaratildi.
+
+- [2026-10-26] ✏️ [order] — buyurtma qatorlarida (GET /orders, /orders/:id, `markets/:id/cancelled`, boshqa
+  boyitilgan ro'yxatlar — o'z-o'zidan) yangi maydonlar: **`handover_notified_at`** (ISO | null — marketga
+  «olib keting» eslatmasi ketgan payt) va **`handover_escalated_at`** (ISO | null — admin navbatiga chiqarilgan
+  payt). Hamma rol ko'radi (pul maydoni emas).
+  🔧 FE (vOczoOUE «eslatma kunlari»): «N kun» — `cancel_return.received_at` dan (BG1, `branch` / `hq` bosqichi);
+  **≥ 3 kun — ogohlantirish rangi, ≥ 7 kun — xavf rangi** (ega qarori 3 / 7); `handover_escalated_at` bo'lsa
+  admin/HQ ro'yxatida qizil «Eskalatsiya» belgisi, `handover_notified_at` — «Marketga eslatildi (sana)» izohi.
+- [2026-10-26] 🆕 [order → notification] — jadval (order-service, kuniga bir marta, Toshkent 10:00 dan keyin, tungi
+  taqiq `NOTIF_PROMO_QUIET_HOURS` (sukut 18:00–09:00) dan tashqarida). Nishon — BG1 bosqichi `hq` / `branch`
+  (status `cancelled`, holder HQ/BRANCH, joyda qabul qilingan); ombor buyurtmasi, kuryerda, yo'lda, marketda — yo'q.
+  Holat o'zgarmaydi, faqat belgi. Har buyurtmaga har bosqich **bir marta** (qayta ishga tushish / ko'p replika ham
+  takrorlamaydi):
+  - **D+3** → `order.cancel_return_reminder` — market useriga in-app + marketning **«bekor» Telegram guruhiga**
+    (market bo'yicha BITTA xabar: «⏳ Qaytarishlaringiz markazda kutmoqda», joylar bo'yicha soni, buyurtma
+    raqamlari, «… olib keting»). `link: /new-orders/cancelled/:marketId`, `group_key: cancel_return:reminder:<market>`
+    (inboxda market bo'yicha bitta qator), `data: { market_id, count, oldest_days, order_ids, order_numbers }`.
+  - **D+7** → `order.cancel_return_escalated` — **admin + superadmin** inbox'i (in-app + realtime, Telegram yo'q),
+    buyurtma bo'yicha: «Buyurtma #EL-… markazda 7 kundan beri turibdi — market olib ketmadi» (filialda —
+    «filialda (Nom)»). `link: /orders/edit/:id`, `group_key: cancel_return:escalated:<order>`,
+    `data: { order_id, order_number, market_id, stage, place_id, place_name, received_at, days }`. HIGH, o'chirib
+    bo'lmaydi.
+  🟢 FE: ikkala tur `GET /notifications/types` da — inbox o'zi ko'rsatadi, alohida ish shart emas.
+- [2026-10-26] 🟢 [ops] — env (order-service, `.env.example`): `CANCEL_RETURN_REMINDER_ENABLED` (sukut **yoqiq** —
+  ega qarori 2026-10-19 «eslatma 3 kun / eskalatsiya 7 kun — ha»; `false` — o'chiq), `CANCEL_RETURN_REMIND_AFTER_DAYS`
+  (3), `CANCEL_RETURN_ESCALATE_AFTER_DAYS` (7), `CANCEL_RETURN_REMINDER_HOUR` (10). Noto'g'ri qiymat — sukut.
+  Yoqilgandan keyingi birinchi yugurishda eski (muddati o'tgan) bekorlarga bir martalik eslatma/eskalatsiya ketadi.
+- [2026-10-26] 🟢 [order] — **vOczoOUE 2-bosqich uchun backend tayyor** (FE ishi): joy nomi hamma rolda —
+  `cancel_return.place_name` / `place_type` (BG1); usul — `cancel_return.handover_method` / `market_handover_method`
+  (`qr` | `manual` | `no_qr` | `pin`, BG2); market 3 tabi — `GET /orders/markets/:marketId/cancelled?stage=…`
+  (+ `start_day`/`end_day` «Olganlarim», BG3); server filtri — `GET /orders?cancel_stage=…` (BG4); kod (PIN) —
+  `POST /orders/markets/:marketId/cancelled/qr` javobida `pin`, `POST /scan/market-cancelled { market_id, pin }`
+  (BG6); eslatma kunlari — yuqoridagi BG7. Batafsil: shu fayldagi 2026-10-25 / 2026-10-26 BG1–BG6 yozuvlari.
+
 ### 2026-10-26 — Smena yopilishi: har karta / hisob qoldig'ini tasdiqlash, skrinshot, AI tekshiruvi, hisobot, sozlamalar (kiZgTybn)
 
 Deploy: **finance-service + api-gateway + ai-service birga** (yangi RMQ buyruqlari

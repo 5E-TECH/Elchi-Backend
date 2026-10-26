@@ -241,7 +241,9 @@ const CANCEL_RETURN_RESPONSE_DOC =
   'Place = where the parcel is now (courier name / branch or HQ name); `in_transit` — destination; `market` — where it ' +
   'was handed over. `received_at` (branch/hq) — since when it is at that place (last cancelled-post receipt, else ' +
   'custody time); `sent_at` (in_transit); `handed_over_at` + `handover_method` (market, fL79tFbs BG2; null method = ' +
-  'legacy/unknown). Cancelled before intake (never left the market) — both null. No money fields; same for every role.';
+  'legacy/unknown). Cancelled before intake (never left the market) — both null. No money fields; same for every role. ' +
+  'vNKGbg5q (BG7): rows also carry `handover_notified_at` (market «pick up» reminder sent, D+3) and ' +
+  '`handover_escalated_at` (escalated to the admin queue, D+7) — ISO or null; FE warns on `received_at` age ≥ 3 / ≥ 7 days.';
 
 /**
  * LFNLeSpu (BG4) — GET /orders (va eksport) `cancel_stage` filtri (Swagger).

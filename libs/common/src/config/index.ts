@@ -313,6 +313,14 @@ export const orderValidationSchema = Joi.object({
     .integer()
     .min(1)
     .default(10),
+  // (vNKGbg5q BG7) HQ/filialda turib qolgan bekorlar: eslatma/eskalatsiya.
+  // Qiymatlar kodda yumshoq o'qiladi (noto'g'risi — sukut), shuning uchun
+  // bu yerda faqat satr: noto'g'ri yozuv order-service'ni yiqitmasin.
+  // ENABLED sukut yoqiq; kunlar 3 / 7; soat 10 (Toshkent).
+  CANCEL_RETURN_REMINDER_ENABLED: Joi.string().allow('').optional(),
+  CANCEL_RETURN_REMIND_AFTER_DAYS: Joi.string().allow('').optional(),
+  CANCEL_RETURN_ESCALATE_AFTER_DAYS: Joi.string().allow('').optional(),
+  CANCEL_RETURN_REMINDER_HOUR: Joi.string().allow('').optional(),
   POSTGRES_URI: Joi.string().required(),
   DB_SCHEMA: Joi.string().default('order_schema'),
   RABBITMQ_URI: Joi.string().required(),
