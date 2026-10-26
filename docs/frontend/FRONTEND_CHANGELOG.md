@@ -23,6 +23,29 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-10-26 — Xavfsizlik: fayl yuklash ruxsatlari (rol → papka, limit), integratsiya redirect'lari, CI ta'minot zanjiri (dgvwZasd, bVuDHPFR)
+
+Deploy: **api-gateway + integration-service**. Migratsiya **yo'q**. `openapi.json` qayta yaratildi
+(`POST /files/upload` tavsifi/`folder` enum'i, 403/413 javoblari; `files/upload|qr|pdf` uchun `x-roles`).
+Jonli frontend oqimi (`uploadProofFile`: `folder=proof`, kuryer/menejer, ≤ 10 MB) va bot isboti
+(`folder=proof`, kuryer, video ≤ 20 MB) **o'zgarishsiz ishlaydi** — frontendda ish yo'q.
+
+- [2026-10-26] 🔒 [files] — `POST /files/upload`: endi rolli (`superadmin`, `admin`, `manager`, `courier`;
+  boshqa rol — mijoz, investor, market, operator… → **403**, fayl xotiraga ham yuklanmaydi). `folder` — oq
+  ro'yxat: `proof` (superadmin/admin/menejer/kuryer), `uploads` — `folder` berilmasa (superadmin/admin),
+  `products` (superadmin/admin, faqat png/jpeg). Ro'yxatda yo'q papka yoki rolga ruxsat etilmagan papka → 403;
+  ommaviy `products` ga rasm bo'lmagan fayl → 400. Papka kichik harfga keltiriladi (`Proof` → `proof`).
+- [2026-10-26] 🔒 [files] — limit: rasm/PDF/XLSX **≤ 10 MB**, video (mp4/mov/webm) **≤ 20 MB** (ilgari 50 MB);
+  oshsa **413**. Frontend isbot limiti (10 MB) shu chegara ichida.
+- [2026-10-26] 🔒 [files] — `POST /files/qr`, `POST /files/pdf`: faqat `superadmin`, `admin`, `manager`
+  (ilgari rolsiz — istalgan kirgan foydalanuvchi). Jonli frontend bu endpoint'larni chaqirmaydi.
+- [2026-10-26] 🔒 [integration] — tashqi integratsiya / hamkor webhook so'rovlari endi **redirect'ga ergashmaydi**
+  (SSRF: 3xx ichki xizmatga olib bormasin). Hamkor manzili 3xx qaytarsa «Sinov webhooki» natijasida
+  `ok: false`, `error: "Redirect blocked: <origin> replied with a 3xx redirect…"` ko'rinadi — manzilni
+  yakuniy (redirect'siz, odatda `https://…`) manzilga almashtirish kerak. Kontrakt o'zgarmagan.
+- [2026-10-26] 🛠 [ci] — haftalik `Security (weekly)` workflow (`npm audit --omit=dev --audit-level=high` +
+  gitleaks to'liq tarix), Dependabot (haftalik, guruhlangan), CI gitleaks PR/push diapazoni. Frontendga ta'siri yo'q.
+
 ### 2026-10-26 — Smena yopilishi: har karta / hisob qoldig'ini tasdiqlash, skrinshot, AI tekshiruvi, hisobot, sozlamalar (kiZgTybn)
 
 Deploy: **finance-service + api-gateway + ai-service birga** (yangi RMQ buyruqlari
