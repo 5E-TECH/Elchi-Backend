@@ -10,16 +10,23 @@ describe('oFfOWGuo — logdagi URL: query yo‘q, token maskalangan', () => {
     ['/v1/scan/ORD-123', '/v1/scan/***'],
     ['/orders/qr-code/abc.def', '/orders/qr-code/***'],
     ['/scan/ORD-1/extra', '/scan/***/extra'],
+    // kiZgTybn — smena rasmi havolasi (300 s bearer token).
+    ['/files/signed/AbC-_123xyz', '/files/signed/***'],
+    ['/v1/files/signed/AbC-_123xyz', '/v1/files/signed/***'],
   ])('%s → %s', (input, expected) => {
     expect(sanitizeLogUrl(input)).toBe(expected);
   });
 
-  it.each(['/orders/123', '/health', '/scanner/x', '/sms/templates', '/'])(
-    'oddiy yo‘l o‘zgarmaydi: %s',
-    (url) => {
-      expect(sanitizeLogUrl(url)).toBe(url);
-    },
-  );
+  it.each([
+    '/orders/123',
+    '/health',
+    '/scanner/x',
+    '/sms/templates',
+    '/files/view/products-1.png',
+    '/',
+  ])('oddiy yo‘l o‘zgarmaydi: %s', (url) => {
+    expect(sanitizeLogUrl(url)).toBe(url);
+  });
 
   it('undefined → undefined', () => {
     expect(sanitizeLogUrl(undefined)).toBeUndefined();

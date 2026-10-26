@@ -99,6 +99,11 @@ import {
 } from './dto/finance.swagger.dto';
 import { resolveFinancialActors } from './financial-balance/financial-balance.util';
 import {
+  buildFileLinkUrl,
+  FILE_LINK_TTL_SECONDS,
+  type OriginRequest,
+} from './file-link';
+import {
   buildXlsx,
   excelDate,
   excelNumber,
@@ -113,8 +118,12 @@ const SHIFT_PHOTO_MIME_TYPES: ReadonlySet<string> = new Set([
   'image/png',
   'image/webp',
 ]);
-/** Imzolangan havola muddati (s) — qisqa: rasm shaxsiy (PII). */
-const SHIFT_PHOTO_URL_TTL_SECONDS = 300;
+/**
+ * Imzolangan havola muddati (s) — qisqa: rasm shaxsiy (PII). Havola gateway
+ * orqali ochiladi (`files/signed/:token`, `file-link.ts`) — MinIO ichki manzili
+ * brauzerga chiqmaydi.
+ */
+const SHIFT_PHOTO_URL_TTL_SECONDS = FILE_LINK_TTL_SECONDS;
 /** Yopish AI natijasini 30 s gacha kutadi (+ zaxira). */
 const SHIFT_CLOSE_TIMEOUT_MS = 45000;
 const SHIFT_AI_TIMEOUT_MS = 60000;
@@ -3574,33 +3583,32 @@ export class FinanceGatewayController {
     });
   }
 
-  /** Shaxsiy kalit → qisqa muddatli imzolangan havola (xato — null). */
-  private async signedPhotoUrl(key: unknown): Promise<string | null> {
-    const text = typeof key === 'string' ? key.trim() : '';
-    if (!text || !this.fileClient) return null;
-    try {
-      const res = await this.sendFile<{ data?: { url?: unknown } }>(
-        { cmd: 'file.get_url' },
-        { key: text, expires_in: SHIFT_PHOTO_URL_TTL_SECONDS },
-        5000,
-      );
-      return typeof res?.data?.url === 'string' ? res.data.url : null;
-    } catch {
-      return null;
-    }
+  /**
+   * Shaxsiy kalit → brauzer ochadigan qisqa muddatli havola (300 s) yoki null.
+   *
+   * (kiZgTybn, prod 2026-10-26) Ilgari `file.get_url` — file-service S3
+   * havolasini ICHKI `MINIO_ENDPOINT` bilan imzolardi (`http://minio:9000/…`),
+   * brauzer uni ocha olmasdi. Endi gateway o'zi imzolaydi va baytlarni
+   * `GET files/signed/:token` orqali beradi (dalil fayllari kabi `file.read`).
+   * Havola faqat shu yerda — kassa doirasi tekshirilgan javoblarda — yaratiladi.
+   */
+  private shiftFileUrl(req: OriginRequest, key: unknown): string | null {
+    return buildFileLinkUrl(req, key);
   }
 
   /** Hisobot / javobdagi karta qatori: kalit o'rniga imzolangan havola. */
-  private async withPhotoUrl(
+  private withPhotoUrl(
+    req: OriginRequest,
     row: Record<string, unknown>,
     includeAiRaw: boolean,
-  ): Promise<Record<string, unknown>> {
+  ): Record<string, unknown> {
     const { photo_file_key: key, ai_raw: aiRaw, ...rest } = row;
+    const photoUrl = this.shiftFileUrl(req, key);
     return {
       ...rest,
       has_photo: Boolean(key),
-      photo_url: await this.signedPhotoUrl(key),
-      photo_url_expires_in: key ? SHIFT_PHOTO_URL_TTL_SECONDS : null,
+      photo_url: photoUrl,
+      photo_url_expires_in: photoUrl ? SHIFT_PHOTO_URL_TTL_SECONDS : null,
       ...(includeAiRaw ? { ai_raw: aiRaw ?? null } : {}),
     };
   }
@@ -3619,7 +3627,7 @@ export class FinanceGatewayController {
   @ApiOperation({
     summary: "(kiZgTybn) Smena yopish: karta qoldig'i skrinshotini yuklash",
     description:
-      "`photo` — jpeg / png / webp, ≤ 5 MB, haqiqiy turi magic-bytes bilan tekshiriladi, EXIF/XMP tozalanadi, shaxsiy (private) saqlanadi. Faqat OCHIQ smena; menejer — o'z filiali kassasi kartasi, registrator — asosiy kassa. Javob: `data.check` (qoralama qatori, `ai_status`), `data.photo_url` (qisqa muddatli imzolangan havola, 300 s). AI yoqilgan kartada (`shift.ai_check.enabled` + karta `ai_check_enabled`) `ai_status = pending`; natija realtime `finance.shift.account_checked` bilan keladi.",
+      "`photo` — jpeg / png / webp, ≤ 5 MB, haqiqiy turi magic-bytes bilan tekshiriladi, EXIF/XMP tozalanadi, shaxsiy (private) saqlanadi. Faqat OCHIQ smena; menejer — o'z filiali kassasi kartasi, registrator — asosiy kassa. Javob: `data.check` (qoralama qatori, `ai_status`), `data.photo_url` — brauzer to'g'ridan-to'g'ri ochadigan qisqa muddatli havola, 300 s: `https://<api>/files/signed/<token>` (gateway orqali; MinIO ichki manzili emas, JWT shart emas). AI yoqilgan kartada (`shift.ai_check.enabled` + karta `ai_check_enabled`) `ai_status = pending`; natija realtime `finance.shift.account_checked` bilan keladi.",
   })
   @UseInterceptors(
     FileInterceptor('photo', {
@@ -3628,7 +3636,7 @@ export class FinanceGatewayController {
     }),
   )
   async uploadShiftAccountPhoto(
-    @Req() req: { user: JwtUser },
+    @Req() req: { user: JwtUser } & OriginRequest,
     @Body() dto: ShiftAccountPhotoRequestDto,
     @UploadedFile()
     photo: { buffer?: Buffer; mimetype?: string; size?: number } | undefined,
@@ -3732,8 +3740,8 @@ export class FinanceGatewayController {
       data: {
         shift_id: data.shift_id ?? null,
         ai_enabled: Boolean(data.ai_enabled),
-        check: data.check ? await this.withPhotoUrl(data.check, false) : null,
-        photo_url: await this.signedPhotoUrl(key),
+        check: data.check ? this.withPhotoUrl(req, data.check, false) : null,
+        photo_url: this.shiftFileUrl(req, key),
         photo_url_expires_in: SHIFT_PHOTO_URL_TTL_SECONDS,
       },
     };
@@ -3878,9 +3886,12 @@ export class FinanceGatewayController {
   @ApiOperation({
     summary: "(kiZgTybn) Smena hisoboti: naqd + kartalar bo'yicha natijalar",
     description:
-      "(y8Tqm9Ap / gWI4gYkw) `data.close_reason` (manual | auto | null — ochiq), `data.closed_by_system`, `data.auto_close` (`{ closed_at, label: 'Avtomatik yopildi — HH:MM, kassir yopmagan' }` yoki null — sariq banner), `data.report` (`status`: pending | processing | sent | skipped | failed, `round`, `file_format`, `has_file`, `file_url` — faqat superadmin, 300 s), `data.deliveries[]` — «Hisobot kimlarga yuborildi» (faqat superadmin; boshqalarga bo'sh). `data.cash` / `data.card` — ochilish, kirim, chiqim, kutilgan, sanalgan, farq; `data.accounts[]` — har karta: kutilgan (snapshot), kiritilgan, farq, `ai_status` (not_required | pending | match | mismatch | unreadable | disabled | error), `ai_entered_ok`, `ai_read_balance`, `ai_last4_detected`, `comment`, `comment_required`, `photo_url` (imzolangan, 300 s); `ai_raw` — faqat superadmin. `data.accounts_summary` — holatlar soni; `data.operations[]` — smena oynasidagi kassa operatsiyalari (tur × to'lov usuli: soni, summa). Menejer — faqat o'z filiali, registrator — asosiy kassa (boshqasi 404).",
+      "(y8Tqm9Ap / gWI4gYkw) `data.close_reason` (manual | auto | null — ochiq), `data.closed_by_system`, `data.auto_close` (`{ closed_at, label: 'Avtomatik yopildi — HH:MM, kassir yopmagan' }` yoki null — sariq banner), `data.report` (`status`: pending | processing | sent | skipped | failed, `round`, `file_format`, `has_file`, `file_url` — faqat superadmin, 300 s), `data.deliveries[]` — «Hisobot kimlarga yuborildi» (faqat superadmin; boshqalarga bo'sh). `data.cash` / `data.card` — ochilish, kirim, chiqim, kutilgan, sanalgan, farq; `data.accounts[]` — har karta: kutilgan (snapshot), kiritilgan, farq, `ai_status` (not_required | pending | match | mismatch | unreadable | disabled | error), `ai_entered_ok`, `ai_read_balance`, `ai_last4_detected`, `comment`, `comment_required`, `photo_url` (gateway havolasi `…/files/signed/<token>`, 300 s); `ai_raw` — faqat superadmin. `data.accounts_summary` — holatlar soni; `data.operations[]` — smena oynasidagi kassa operatsiyalari (tur × to'lov usuli: soni, summa). Menejer — faqat o'z filiali, registrator — asosiy kassa (boshqasi 404).",
   })
-  async shiftReport(@Req() req: { user: JwtUser }, @Param('id') id: string) {
+  async shiftReport(
+    @Req() req: { user: JwtUser } & OriginRequest,
+    @Param('id') id: string,
+  ) {
     if (!/^\d+$/.test(String(id ?? ''))) {
       throw new BadRequestException("Smena ID si noto'g'ri");
     }
@@ -3896,8 +3907,8 @@ export class FinanceGatewayController {
     const data = response?.data;
     if (!data || !Array.isArray(data.accounts)) return response;
     const isSuperadmin = this.hasRole(req.user, RoleEnum.SUPERADMIN);
-    const accounts = await Promise.all(
-      data.accounts.map((row) => this.withPhotoUrl(row, isSuperadmin)),
+    const accounts = data.accounts.map((row) =>
+      this.withPhotoUrl(req, row, isSuperadmin),
     );
     // (gWI4gYkw) «Hisobot kimlarga yuborildi» va hisobot fayli — faqat
     // superadmin (kuryer / market ro'yxati boshqa rollarga chiqmaydi).
@@ -3907,6 +3918,7 @@ export class FinanceGatewayController {
     };
     const { file_key: fileKey, ...reportRest } =
       report ?? ({} as Record<string, unknown>);
+    const fileUrl = isSuperadmin ? this.shiftFileUrl(req, fileKey) : null;
     return {
       ...response,
       data: {
@@ -3916,11 +3928,8 @@ export class FinanceGatewayController {
           ? {
               ...reportRest,
               has_file: Boolean(fileKey),
-              file_url: isSuperadmin
-                ? await this.signedPhotoUrl(fileKey)
-                : null,
-              file_url_expires_in:
-                isSuperadmin && fileKey ? SHIFT_PHOTO_URL_TTL_SECONDS : null,
+              file_url: fileUrl,
+              file_url_expires_in: fileUrl ? SHIFT_PHOTO_URL_TTL_SECONDS : null,
             }
           : null,
         deliveries:

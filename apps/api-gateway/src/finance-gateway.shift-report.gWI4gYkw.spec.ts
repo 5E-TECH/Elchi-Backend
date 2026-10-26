@@ -27,8 +27,10 @@ describe('y8Tqm9Ap / gWI4gYkw — gateway: avto-yopish sozlamalari, hisobot yubo
   const ai = { send: jest.fn((): Reply => of({})) };
   const notification = { send: jest.fn((): Reply => of({})) };
   const http = () => app.getHttpServer() as Parameters<typeof request>[0];
+  const previousAccessKey = process.env.ACCESS_TOKEN_KEY;
 
   beforeAll(async () => {
+    process.env.ACCESS_TOKEN_KEY = 'gWI4gYkw-spec-access-token-key';
     const module = await Test.createTestingModule({
       controllers: [FinanceGatewayController],
       providers: [
@@ -71,6 +73,8 @@ describe('y8Tqm9Ap / gWI4gYkw — gateway: avto-yopish sozlamalari, hisobot yubo
 
   afterAll(async () => {
     await app?.close();
+    if (previousAccessKey === undefined) delete process.env.ACCESS_TOKEN_KEY;
+    else process.env.ACCESS_TOKEN_KEY = previousAccessKey;
   });
 
   beforeEach(() => {
@@ -196,7 +200,6 @@ describe('y8Tqm9Ap / gWI4gYkw — gateway: avto-yopish sozlamalari, hisobot yubo
         },
       }),
     );
-    file.send.mockImplementation(() => of({ data: { url: 'https://signed' } }));
     const reg = await request(http()).get('/finance/shift/41/report');
     expect(reg.status).toBe(200);
     expect(reg.body.data.deliveries).toEqual([]);
@@ -211,9 +214,16 @@ describe('y8Tqm9Ap / gWI4gYkw — gateway: avto-yopish sozlamalari, hisobot yubo
     expect(reg.body.data.auto_close.label).toContain('kassir yopmagan');
     const sa = await request(http())
       .get('/finance/shift/41/report')
+      .set('Host', 'api.elchipochta.uz')
+      .set('X-Forwarded-Proto', 'https')
       .set('x-test-role', 'superadmin');
     expect(sa.body.data.deliveries).toHaveLength(1);
-    expect(sa.body.data.report.file_url).toBe('https://signed');
+    // (kiZgTybn, prod 2026-10-26) gateway havolasi — MinIO ichki manzili emas.
+    expect(sa.body.data.report.file_url).toMatch(
+      /^https:\/\/api\.elchipochta\.uz\/files\/signed\/[A-Za-z0-9_-]+$/,
+    );
+    expect(sa.body.data.report.file_url_expires_in).toBe(300);
+    expect(file.send).not.toHaveBeenCalled();
     expect(sa.body.data.report.file_key).toBeUndefined();
     expect(JSON.stringify(sa.body)).not.toContain('shift-report-41.pdf');
   });

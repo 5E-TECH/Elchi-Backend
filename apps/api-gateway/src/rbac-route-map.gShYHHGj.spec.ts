@@ -220,6 +220,8 @@ const NO_ROLES_WHITELIST: readonly string[] = [
   // POST /files/upload|qr|pdf endi @Roles bilan (dgvwZasd) — ro'yxatda yo'q.
   'GET /files/:key',
   'GET /files/:key/content',
+  // kiZgTybn — smena rasmi/hisoboti: ochiq, lekin 300 s shifrlangan token.
+  'GET /files/signed/:token',
   'GET /files/view/:key',
   // Skan / qidiruv / buyurtma ro'yxati — doira servis + gateway proyeksiyasi.
   'GET /orders',
