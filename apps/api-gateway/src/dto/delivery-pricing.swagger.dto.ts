@@ -488,6 +488,46 @@ export class UpdateDeliveryPricingSettingsRequestDto {
   @Min(1, { message: "express_multiplier 1 dan kichik bo'lmasligi kerak" })
   @Max(100, { message: 'express_multiplier juda katta' })
   express_multiplier?: number;
+
+  @ApiPropertyOptional({
+    type: Number,
+    minimum: 0,
+    nullable: true,
+    example: 25000,
+    description:
+      "(KmWO9gTA) DARVOZA 1 — sotuvda dvigatel hisoblagan market tarifi shundan (va kuryer + filial ulushidan) past bo'lsa shu qiymatga ko'tariladi. null — faqat ulushlar. Faqat SALE_PRICING_ENGINE yoqilganda ishlaydi.",
+  })
+  @ValidateIf(
+    (_o: object, value: unknown) => value !== undefined && value !== null,
+  )
+  @IsNumber(
+    { allowNaN: false, allowInfinity: false },
+    { message: "min_delivery_price — son (so'm) yoki null" },
+  )
+  @MaxDecimals(2, "min_delivery_price — ko'pi bilan 2 kasrli son")
+  @Min(0, { message: "min_delivery_price manfiy bo'lmasligi kerak" })
+  @Max(MONEY_MAX, { message: 'min_delivery_price juda katta' })
+  min_delivery_price?: number | null;
+
+  @ApiPropertyOptional({
+    type: Number,
+    minimum: 0,
+    nullable: true,
+    example: 20000,
+    description:
+      "(KmWO9gTA) DARVOZA 2 — dvigatel yoqilgan sotuvda kuryer qo'shimcha xarajatining aniq chegarasi, so'm. null — tarif jadvalidagi `address.base − center.base` (teng bo'lsa center.base ning 50%i).",
+  })
+  @ValidateIf(
+    (_o: object, value: unknown) => value !== undefined && value !== null,
+  )
+  @IsNumber(
+    { allowNaN: false, allowInfinity: false },
+    { message: "extra_cost_limit_amount — son (so'm) yoki null" },
+  )
+  @MaxDecimals(2, "extra_cost_limit_amount — ko'pi bilan 2 kasrli son")
+  @Min(0, { message: "extra_cost_limit_amount manfiy bo'lmasligi kerak" })
+  @Max(MONEY_MAX, { message: 'extra_cost_limit_amount juda katta' })
+  extra_cost_limit_amount?: number | null;
 }
 
 // ------------------------------------------------------------ javob sxemalari
@@ -624,6 +664,21 @@ export class DeliveryPricingSettingsRowDto {
     | number
     | null;
   @ApiProperty({ example: 1.4 }) express_multiplier!: number;
+  @ApiProperty({
+    example: null,
+    nullable: true,
+    type: Number,
+    description: '(KmWO9gTA) DARVOZA 1 minimal narxi; null — faqat ulushlar',
+  })
+  min_delivery_price!: number | null;
+  @ApiProperty({
+    example: null,
+    nullable: true,
+    type: Number,
+    description:
+      '(KmWO9gTA) DARVOZA 2 aniq chegarasi; null — address.base − center.base',
+  })
+  extra_cost_limit_amount!: number | null;
   @ApiProperty() is_active!: boolean;
   @ApiProperty({ nullable: true, type: String }) created_by!: string | null;
   @ApiPropertyOptional({

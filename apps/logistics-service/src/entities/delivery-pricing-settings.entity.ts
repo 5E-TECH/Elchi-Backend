@@ -85,6 +85,36 @@ export class DeliveryPricingSettings extends BaseEntity {
   })
   express_multiplier!: number;
 
+  /**
+   * KmWO9gTA (migratsiya 1716000000183) — DARVOZA 1 minimal narxi, so'm.
+   * Sotuvda dvigatel hisoblagan market tarifi kuryer + filial ulushidan VA
+   * shu summadan past bo'lsa — kattasiga ko'tariladi (sotuv to'xtamaydi).
+   * NULL — faqat ulushlar.
+   */
+  @Column({
+    type: 'numeric',
+    precision: 14,
+    scale: 2,
+    nullable: true,
+    transformer: numericTransformer,
+  })
+  min_delivery_price!: number | null;
+
+  /**
+   * KmWO9gTA (migratsiya 1716000000183) — DARVOZA 2: dvigatel yoqilgan
+   * sotuvda kuryer qo'shimcha xarajatining aniq chegarasi, so'm. NULL —
+   * tarif jadvalidagi `address.base − center.base` (teng bo'lsa
+   * `center.base` ning 50%i).
+   */
+  @Column({
+    type: 'numeric',
+    precision: 14,
+    scale: 2,
+    nullable: true,
+    transformer: numericTransformer,
+  })
+  extra_cost_limit_amount!: number | null;
+
   @Column({ type: 'boolean', default: true })
   is_active!: boolean;
 

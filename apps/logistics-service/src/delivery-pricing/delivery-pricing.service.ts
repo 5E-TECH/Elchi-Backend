@@ -28,6 +28,7 @@ import {
   type DeliveryQuoteItemPayload,
   type DeliveryQuotePayload,
   type DeliveryQuoteByTariffPayload,
+  type DeliverySaleQuotePayload,
   type DeliveryPricingSettingsField,
   type ListDeliveryTariffsPayload,
   type UpdateDeliveryPricingSettingsPayload,
@@ -396,6 +397,150 @@ export class DeliveryPricingService {
           ),
       ),
     });
+  }
+
+  /**
+   * KmWO9gTA — `logistics.delivery.sale_quote`: SOTUV paytidagi market tarifi
+   * uchun vazn/hajm qo'shimchasi. FAQAT hisoblaydi, hech narsa yozmaydi.
+   *
+   * `quote` bilan AYNI hisob (`computeDeliveryQuote`, faol tarif + sozlama),
+   * farqlari ataylab:
+   *   • jo'natuvchi hududi (market profili) ixtiyoriy — yo'q yoki topilmasa
+   *     shahar zonasi EMAS deb olinadi (tarif = `where_deliver`); qabul
+   *     qiluvchi ham shunday (sotuv hudud yo'qligi uchun to'xtamasin);
+   *   • elementlar faqat `product_id` + soni: o'lchov catalog'dan JONLI
+   *     o'qiladi (qulflangan qaror — order_items da o'lchov snapshoti yo'q);
+   *     katalogsiz yoki o'chirilgan mahsulot — o'lchovsiz (`unmeasuredItems`),
+   *     narx jimgina 0 ga tushmaydi (kamida standart narx);
+   *   • egalik tekshiruvi va element chegarasi yo'q (ichki RPC);
+   *   • javobda DARVOZA 1/2 uchun `min_delivery_price`,
+   *     `extra_cost_limit_amount` va `center`/`address` bazalari.
+   */
+  async saleQuote(payload: DeliverySaleQuotePayload) {
+    const whereDeliver = String(payload?.where_deliver ?? '');
+    if (
+      !(DELIVERY_WHERE_DELIVER_IDS as readonly string[]).includes(whereDeliver)
+    ) {
+      this.fail("where_deliver — 'center' yoki 'address' bo'lishi kerak", 400);
+    }
+    const rawItems = Array.isArray(payload?.items) ? payload.items : [];
+
+    const [fromCityZone, toCityZone] = await Promise.all([
+      this.isCityZoneSoft(payload.from_region_id, payload.from_district_id),
+      this.isCityZoneSoft(payload.to_region_id, payload.to_district_id),
+    ]);
+    const tariffId = resolveDeliveryTariffId({
+      fromCityZone,
+      toCityZone,
+      whereDeliver,
+    });
+
+    const productQty = new Map<string, number>();
+    let unmeasuredQty = 0;
+    for (const raw of rawItems) {
+      const quantity = Math.trunc(Number(raw?.quantity ?? 1));
+      if (!Number.isFinite(quantity) || quantity < 1) continue;
+      const productId =
+        raw?.product_id == null ? '' : String(raw.product_id).trim();
+      if (productId && /^\d{1,18}$/.test(productId)) {
+        productQty.set(productId, (productQty.get(productId) ?? 0) + quantity);
+      } else {
+        unmeasuredQty += quantity;
+      }
+    }
+
+    const [tariff, centerTariff, addressTariff, settings, products] =
+      await Promise.all([
+        this.findCurrentTariff(tariffId),
+        this.findCurrentTariff('center'),
+        this.findCurrentTariff('address'),
+        this.requireActiveSettings(),
+        productQty.size
+          ? this.loadProducts([...productQty.keys()])
+          : Promise.resolve(new Map<string, CatalogProductRow>()),
+      ]);
+    if (!tariff) {
+      this.fail(`Faol yetkazish tarifi topilmadi: ${tariffId}`, 409);
+    }
+
+    const items: DeliveryPricingItem[] = [...productQty.entries()].map(
+      ([productId, quantity]) => {
+        const product = products.get(productId);
+        if (!product) {
+          return { weight_kg: null, quantity };
+        }
+        return {
+          weight_kg: product.weight_kg ?? null,
+          length_cm: product.length_cm ?? null,
+          width_cm: product.width_cm ?? null,
+          height_cm: product.height_cm ?? null,
+          volumetric_enabled: product.volumetric_enabled !== false,
+          quantity,
+        };
+      },
+    );
+    if (unmeasuredQty > 0) {
+      items.push({ weight_kg: null, quantity: unmeasuredQty });
+    }
+
+    let result: DeliveryQuote;
+    try {
+      result = computeDeliveryQuote({
+        items,
+        tariff,
+        settings,
+        express: false,
+        pickupCount: 0,
+      });
+    } catch (error) {
+      if (error instanceof DeliveryPricingInputError) {
+        this.fail(error.message, 400);
+      }
+      throw error;
+    }
+
+    const money = (value: unknown): number | null =>
+      value === null || value === undefined ? null : Number(value);
+    return successRes({
+      ...result,
+      tariff_id: tariff.tariff_id,
+      tariff_row_id: String(tariff.id),
+      base_price: Number(tariff.base_price),
+      extra_per_kg: Number(tariff.extra_per_kg),
+      city_route: tariffId === 'city',
+      settings_id: String(settings.id),
+      min_delivery_price: money(settings.min_delivery_price),
+      extra_cost_limit_amount: money(settings.extra_cost_limit_amount),
+      center_base: Number(centerTariff?.base_price ?? 0),
+      address_base: Number(addressTariff?.base_price ?? 0),
+    });
+  }
+
+  /**
+   * KmWO9gTA: hudud shahar zonasidami — XATOSIZ (sotuv uchun). Id yo'q,
+   * noto'g'ri yoki topilmasa — `false` (tarif `where_deliver` bo'yicha).
+   * Tuman berilsa uning GEOGRAFIK viloyati (`quote` dagi qoida).
+   */
+  private async isCityZoneSoft(
+    regionId?: string | number | null,
+    districtId?: string | number | null,
+  ): Promise<boolean> {
+    const regionKey = regionId == null ? '' : String(regionId).trim();
+    const districtKey = districtId == null ? '' : String(districtId).trim();
+    let geoRegionId = /^\d{1,18}$/.test(regionKey) ? regionKey : '';
+    if (/^\d{1,18}$/.test(districtKey)) {
+      const district = await this.districtRepo.findOne({
+        where: { id: districtKey },
+      });
+      if (district?.region_id != null) {
+        geoRegionId = String(district.region_id);
+      }
+    }
+    if (!geoRegionId) return false;
+    const region = await this.regionRepo.findOne({
+      where: { id: geoRegionId },
+    });
+    return region?.is_city_zone === true;
   }
 
   private async resolveRouteRegion(
@@ -798,6 +943,17 @@ export class DeliveryPricingService {
       express_multiplier: {
         ok: (n) => n >= 1 && n < 1000 && decimals(n, 3),
         rule: "1 yoki undan katta, ko'pi bilan 3 kasrli son",
+      },
+      // KmWO9gTA: DARVOZA 1 / 2 — NULL ruxsat (o'chiq).
+      min_delivery_price: {
+        ok: (n) => n >= 0 && n <= 999_999_999_999.99 && decimals(n, 2),
+        rule: "0 yoki musbat, ko'pi bilan 2 kasrli so'm, yoki null",
+        nullable: true,
+      },
+      extra_cost_limit_amount: {
+        ok: (n) => n >= 0 && n <= 999_999_999_999.99 && decimals(n, 2),
+        rule: "0 yoki musbat, ko'pi bilan 2 kasrli so'm, yoki null",
+        nullable: true,
       },
     };
 

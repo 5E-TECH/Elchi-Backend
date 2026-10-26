@@ -13,6 +13,7 @@ import {
   type DeliveryPricingRequester,
   type DeliveryQuotePayload,
   type DeliveryQuoteByTariffPayload,
+  type DeliverySaleQuotePayload,
   type ListDeliveryTariffsPayload,
   type UpdateDeliveryPricingSettingsPayload,
 } from './delivery-pricing.types';
@@ -36,6 +37,15 @@ export class DeliveryPricingController {
   @MessagePattern({ cmd: DELIVERY_PRICING_PATTERNS.QUOTE })
   quote(@Payload() payload: DeliveryQuotePayload, @Ctx() context: RmqContext) {
     return this.executeAndAck(context, () => this.pricing.quote(payload));
+  }
+
+  /** KmWO9gTA — faqat order-service (sotuv); gateway'da HTTP yo'q. */
+  @MessagePattern({ cmd: DELIVERY_PRICING_PATTERNS.SALE_QUOTE })
+  saleQuote(
+    @Payload() payload: DeliverySaleQuotePayload,
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () => this.pricing.saleQuote(payload));
   }
 
   @MessagePattern({ cmd: DELIVERY_PRICING_PATTERNS.QUOTE_BY_TARIFF })

@@ -2,6 +2,7 @@ import { DataSource } from 'typeorm';
 import { of } from 'rxjs';
 import { DeliveryPricingEngine1716000000142 } from '../../../../migrations/1716000000142-DeliveryPricingEngine';
 import { DeliveryPricingVolumetricFromKg1716000000154 } from '../../../../migrations/1716000000154-DeliveryPricingVolumetricFromKg';
+import { DeliveryPricingSaleGates1716000000183 } from '../../../../migrations/1716000000183-DeliveryPricingSaleGates';
 import { DeliveryPricingService } from './delivery-pricing.service';
 import { DeliveryTariff } from '../entities/delivery-tariff.entity';
 import { DeliveryPricingSettings } from '../entities/delivery-pricing-settings.entity';
@@ -39,18 +40,22 @@ const ADMIN = { id: '1', roles: ['superadmin'] };
     let db: DataSource;
     const migration = new DeliveryPricingEngine1716000000142();
     const fromKgMigration = new DeliveryPricingVolumetricFromKg1716000000154();
+    // KmWO9gTA: entity endi `min_delivery_price` / `extra_cost_limit_amount` ni o'qiydi.
+    const saleGatesMigration = new DeliveryPricingSaleGates1716000000183();
     const activityLog = { log: jest.fn(), logChange: jest.fn() };
     const catalogClient = { send: jest.fn(() => of({ data: [] })) };
     let service: DeliveryPricingService;
 
-    /** 142 + 154 birga (down — teskari tartibda). */
+    /** 142 + 154 + 183 birga (down — teskari tartibda). */
     const run = async (direction: 'up' | 'down') => {
       const runner = db.createQueryRunner();
       try {
         if (direction === 'up') {
           await migration.up(runner);
           await fromKgMigration.up(runner);
+          await saleGatesMigration.up(runner);
         } else {
+          await saleGatesMigration.down(runner);
           await fromKgMigration.down(runner);
           await migration.down(runner);
         }
