@@ -1425,3 +1425,151 @@ export class HqCourierReceivablesResponseDto {
   @ApiProperty({ type: HqCourierReceivablesDataDto })
   data!: HqCourierReceivablesDataDto;
 }
+
+/**
+ * qzjTMWPb — GET /finance/history/daily: kunlik kirim/chiqim agregati va kun
+ * boshi / oxiri qoldig'i. Sana — faqat 'YYYY-MM-DD' (Toshkent kuni).
+ */
+export class HistoryDailyQueryDto {
+  @ApiPropertyOptional({
+    example: '2026-10-01',
+    description:
+      'Toshkent kuni (YYYY-MM-DD). Berilmasa — to_date dan 13 kun oldin (oxirgi 14 kun). Oraliq ≤ 366 kun.',
+  })
+  @IsOptional()
+  @IsString()
+  @Matches(/^\d{4}-\d{2}-\d{2}$/)
+  from_date?: string;
+
+  @ApiPropertyOptional({
+    example: '2026-10-08',
+    description: 'Toshkent kuni (YYYY-MM-DD). Berilmasa — bugun.',
+  })
+  @IsOptional()
+  @IsString()
+  @Matches(/^\d{4}-\d{2}-\d{2}$/)
+  to_date?: string;
+
+  @ApiPropertyOptional({
+    example: '2026-10-01',
+    description: 'from_date aliasi',
+  })
+  @IsOptional()
+  @IsString()
+  @Matches(/^\d{4}-\d{2}-\d{2}$/)
+  fromDate?: string;
+
+  @ApiPropertyOptional({ example: '2026-10-08', description: 'to_date aliasi' })
+  @IsOptional()
+  @IsString()
+  @Matches(/^\d{4}-\d{2}-\d{2}$/)
+  toDate?: string;
+
+  @ApiPropertyOptional({ example: '1001' })
+  @IsOptional()
+  @IsString()
+  @Matches(/^\d+$/)
+  cashbox_id?: string;
+
+  @ApiPropertyOptional({ example: '12345' })
+  @IsOptional()
+  @IsString()
+  @Matches(/^\d+$/)
+  user_id?: string;
+
+  @ApiPropertyOptional({ enum: Cashbox_type })
+  @IsOptional()
+  @IsEnum(Cashbox_type)
+  cashbox_type?: Cashbox_type;
+
+  @ApiPropertyOptional({
+    enum: Cashbox_type,
+    description: 'cashbox_type aliasi',
+  })
+  @IsOptional()
+  @IsEnum(Cashbox_type)
+  cashboxType?: Cashbox_type;
+
+  @ApiPropertyOptional({ enum: Operation_type })
+  @IsOptional()
+  @IsEnum(Operation_type)
+  operation_type?: Operation_type;
+
+  @ApiPropertyOptional({ enum: Source_type })
+  @IsOptional()
+  @IsEnum(Source_type)
+  source_type?: Source_type;
+
+  @ApiPropertyOptional({ example: 'courier_payment,market_payment' })
+  @IsOptional()
+  @IsString()
+  source_types?: string;
+
+  @ApiPropertyOptional({ description: 'source_types aliasi' })
+  @IsOptional()
+  @IsString()
+  sourceTypes?: string;
+
+  @ApiPropertyOptional({ example: '555' })
+  @IsOptional()
+  @IsString()
+  @Matches(/^\d+$/)
+  source_user_id?: string;
+
+  @ApiPropertyOptional({ example: '999' })
+  @IsOptional()
+  @IsString()
+  @Matches(/^\d+$/)
+  created_by?: string;
+}
+
+/** qzjTMWPb — GET /finance/financial-balance/daily. */
+export class FinancialBalanceDailyQueryDto {
+  @ApiPropertyOptional({
+    example: '2026-10-01',
+    description:
+      'Toshkent kuni (YYYY-MM-DD). Berilmasa — to_date dan 13 kun oldin. Oraliq ≤ 366 kun.',
+  })
+  @IsOptional()
+  @IsString()
+  @Matches(/^\d{4}-\d{2}-\d{2}$/)
+  from_date?: string;
+
+  @ApiPropertyOptional({
+    example: '2026-10-08',
+    description: 'Berilmasa — bugun.',
+  })
+  @IsOptional()
+  @IsString()
+  @Matches(/^\d{4}-\d{2}-\d{2}$/)
+  to_date?: string;
+
+  @ApiPropertyOptional({
+    example: '2026-10-01',
+    description: 'from_date aliasi',
+  })
+  @IsOptional()
+  @IsString()
+  @Matches(/^\d{4}-\d{2}-\d{2}$/)
+  fromDate?: string;
+
+  @ApiPropertyOptional({ example: '2026-10-08', description: 'to_date aliasi' })
+  @IsOptional()
+  @IsString()
+  @Matches(/^\d{4}-\d{2}-\d{2}$/)
+  toDate?: string;
+}
+
+/** uzWcMR1C — GET /finance/cashbox/payments-meta. */
+export class PaymentsMetaQueryDto {
+  @ApiPropertyOptional({
+    example: 3,
+    description: 'Top marketlar soni (0–10, sukut 3); qolgani «Yana N ta».',
+  })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  @Max(10)
+  top?: number;
+}

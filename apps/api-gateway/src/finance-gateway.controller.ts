@@ -74,6 +74,9 @@ import {
   RecordFinancialBalanceRequestDto,
   FindCashboxByUserQueryDto,
   FindHistoryQueryDto,
+  FinancialBalanceDailyQueryDto,
+  HistoryDailyQueryDto,
+  PaymentsMetaQueryDto,
   FindShiftQueryDto,
   HqCourierReceivablesResponseDto,
   MainCashboxFilterQueryDto,
@@ -1570,6 +1573,149 @@ export class FinanceGatewayController {
     };
   }
 
+  /**
+   * uzWcMR1C — /payments KPI meta sanoqlari (maket «5 ta filial · 2 ta HQ
+   * kuryeri», «6 ta marketga» + top-market segbar). 10 000 lik ro'yxat
+   * so'ralmaydi: filiallar — `all-info` bilan AYNI manba (`branch.find_all`,
+   * faol, HQ bo'lmagan, `olinishi_kerak > 0`), HQ kuryerlari — `hq-couriers`
+   * oynasi bilan AYNI to'plam (HQ filialidagi COURIER, kassasi musbat),
+   * marketlar — `berilishi_kerak` bilan AYNI qoida (faqat musbat kassalar,
+   * audit M16), SQL COUNT/SUM + top N. Faqat o'qish.
+   */
+  @Get('cashbox/payments-meta')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary:
+      "To'lovlar KPI meta: filiallar / HQ kuryerlari / qarzdor marketlar soni, top-market taqsimoti",
+    description:
+      'uzWcMR1C. `receivable.branches` — `all-info.branch_managers_receivable` bilan bir manba (Σ amount teng); ' +
+      "`receivable.hq_couriers` — `GET /finance/cashbox/hq-couriers` ro'yxati bilan bir to'plam (count == total); " +
+      '`payable` — `all-info.berilishi_kerak` bilan bir qoida (faqat musbat market kassalari): ' +
+      '`markets_count`, `amount`, `top_markets[]` (kamayish tartibida, `share` — % ulush), `others` («Yana N ta»). ' +
+      'Manba javob bermasa tegishli blok `null` (sahifa ishlayveradi).',
+  })
+  @ApiOkResponse({
+    schema: {
+      example: {
+        statusCode: 200,
+        message: "To'lovlar KPI meta",
+        data: {
+          receivable: {
+            amount: 9870000,
+            branches: { count: 5, amount: 8770000 },
+            hq_couriers: { count: 2, amount: 1100000 },
+          },
+          payable: {
+            markets_count: 6,
+            amount: 13458000,
+            top_markets: [
+              {
+                market_id: '101',
+                cashbox_id: '55',
+                name: 'Baraka Shop',
+                amount: 4800000,
+                share: 35.7,
+              },
+            ],
+            others: { count: 3, amount: 3200000, share: 23.8 },
+          },
+        },
+      },
+    },
+  })
+  async paymentsMeta(
+    @Query() query: PaymentsMetaQueryDto,
+    @Req() req: { user: JwtUser },
+  ) {
+    const requester = this.toRequester(req?.user);
+    const [branchesResponse, hqCourierIds] = await Promise.all([
+      this.sendBranch<{
+        data?: {
+          items?: Array<{ type?: string; olinishi_kerak?: number | string }>;
+        };
+      }>(
+        { cmd: 'branch.find_all' },
+        { requester, query: { status: 'active', page: 1, limit: 1000 } },
+      ).catch(() => null),
+      this.resolveHqBranchId()
+        .then((hqBranchId) =>
+          this.sendBranch<{
+            data?: Array<{
+              user_id?: string | number | null;
+              role?: string | null;
+            }>;
+          }>(
+            { cmd: 'branch.user.find_by_branch' },
+            { branch_id: hqBranchId, requester },
+          ),
+        )
+        .then((response) =>
+          Array.from(
+            new Set(
+              (Array.isArray(response?.data) ? response.data : [])
+                .filter(
+                  (row) =>
+                    String(row?.role ?? '').toUpperCase() ===
+                    FinanceGatewayController.COURIER_BRANCH_ROLE,
+                )
+                .map((row) => String(row?.user_id ?? '').trim())
+                .filter(Boolean),
+            ),
+          ),
+        )
+        .catch(() => null),
+    ]);
+
+    const financeResponse = await this.send<{
+      data?: {
+        payable?: unknown;
+        hq_couriers?: { count?: number; amount?: number };
+      };
+    }>(
+      { cmd: 'finance.cashbox.payments_meta' },
+      { hq_courier_ids: hqCourierIds ?? [], top: query?.top ?? 3 },
+    );
+
+    let branches: { count: number; amount: number } | null = null;
+    if (branchesResponse) {
+      branches = { count: 0, amount: 0 };
+      for (const branch of branchesResponse?.data?.items ?? []) {
+        if (String(branch?.type ?? '').toUpperCase() === 'HQ') continue;
+        const amount = Number(branch?.olinishi_kerak ?? 0);
+        if (Number.isFinite(amount) && amount > 0) {
+          branches.count += 1;
+          branches.amount += amount;
+        }
+      }
+      branches.amount = Math.round(branches.amount * 100) / 100;
+    }
+    const hqCouriers =
+      hqCourierIds === null
+        ? null
+        : {
+            count: Number(financeResponse?.data?.hq_couriers?.count ?? 0),
+            amount: Number(financeResponse?.data?.hq_couriers?.amount ?? 0),
+          };
+
+    return {
+      statusCode: 200,
+      message: "To'lovlar KPI meta",
+      data: {
+        receivable: {
+          amount:
+            Math.round(
+              ((branches?.amount ?? 0) + (hqCouriers?.amount ?? 0)) * 100,
+            ) / 100,
+          branches,
+          hq_couriers: hqCouriers,
+        },
+        payable: financeResponse?.data?.payable ?? null,
+      },
+    };
+  }
+
   @Get('cashbox/user/:user_id')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(
@@ -2691,6 +2837,94 @@ export class FinanceGatewayController {
     return (await this.attachFinancialActors(response)) as unknown;
   }
 
+  /**
+   * qzjTMWPb — Balans sahifasi: KPI kartalari (Kassa, Yo'ldagi pul, Marketlar
+   * qarzi, Umumiy balans) uchun kunlik snapshot qatori («kechaga nisbatan»,
+   * 14 kunlik chiziq) + P&L daftarining kunlik kirim/chiqim va kun oxiri
+   * qoldig'i («Daftar qoldig'i», «Davr boshida», «Eng yuqori», waterfall
+   * «Davr boshi» o'tgan davr uchun ham). Rollar — boshqa
+   * `financial-balance/*` bilan AYNI (superadmin, admin). Faqat o'qish.
+   */
+  @Get('financial-balance/daily')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: "Balans: kunlik snapshot va daftar qoldig'i",
+    description:
+      'qzjTMWPb. `days[].snapshot` — kun OXIRIDAGI kompaniya holati (bugun uchun `null`: jonli qiymat ' +
+      "`GET /finance/cashbox/financial-balanse` dan). Kartalar: Kassa = `main_balance`, Yo'ldagi pul = `in_transit` " +
+      '(`chain_receivable + provider_receivable`), Marketlar qarzi = `markets_debt` (= −`market_cashbox_total`), ' +
+      'Umumiy balans = `current_situation`. `source: backfill` kunlarida (tarixdan qayta qurilgan) `chain_receivable`, ' +
+      "`provider_receivable`, `in_transit`, `current_situation` = `null` — ularni tarixdan tiklab bo'lmaydi; kassa " +
+      "yig'indilari aniq. «Kechaga nisbatan» = jonli − `days[kecha].snapshot`. `previous_day` — `from_date` dan oldingi " +
+      "kun snapshot'i. `days[].ledger` — P&L daftari: `opening_balance`/`closing_balance` (kun boshi/oxiri), " +
+      "`income`/`expense`/`net`/`count`; `ledger.opening_balance` — davr boshi, `ledger.peak` — eng yuqori kun oxiri qoldig'i.",
+  })
+  @ApiOkResponse({
+    schema: {
+      example: {
+        statusCode: 200,
+        message: 'Kunlik moliyaviy balans',
+        data: {
+          timezone: 'Asia/Tashkent',
+          from: '2026-10-01',
+          to: '2026-10-08',
+          last_snapshot_date: '2026-10-07',
+          previous_day: { date: '2026-09-30', snapshot: null },
+          ledger: {
+            opening_balance: 7507000,
+            closing_balance: 8437500,
+            income: 9836500,
+            expense: 8906000,
+            net: 930500,
+            count: 186,
+            peak: { date: '2026-10-06', balance: 15805000 },
+          },
+          days: [
+            {
+              date: '2026-10-07',
+              snapshot: {
+                source: 'live',
+                captured_at: '2026-10-07T19:05:00.000Z',
+                main_balance: 23700000,
+                main_balance_cash: 17500000,
+                main_balance_card: 6200000,
+                chain_receivable: 11000000,
+                provider_receivable: 1150000,
+                in_transit: 12150000,
+                market_cashbox_total: 12300000,
+                market_payable_total: 12400000,
+                markets_debt: -12300000,
+                courier_cashbox_total: 3100000,
+                branch_cashbox_total: 2400000,
+                current_situation: 23550000,
+                ledger_balance: 8410500,
+              },
+              ledger: {
+                opening_balance: 11878500,
+                closing_balance: 8410500,
+                income: 32000,
+                expense: 3500000,
+                net: -3468000,
+                count: 2,
+              },
+            },
+          ],
+        },
+      },
+    },
+  })
+  financialBalanceDaily(@Query() query: FinancialBalanceDailyQueryDto) {
+    return this.send(
+      { cmd: 'finance.financial_balance.daily' },
+      {
+        from_date: query?.from_date ?? query?.fromDate,
+        to_date: query?.to_date ?? query?.toDate,
+      },
+    );
+  }
+
   @Patch('cashbox/spend')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.MANAGER)
@@ -2966,6 +3200,164 @@ export class FinanceGatewayController {
           ? query
           : { ...query, cashbox_type: Cashbox_type.MAIN },
       ),
+    );
+  }
+
+  /**
+   * qzjTMWPb — kunlik kirim/chiqim agregati + kun boshi / oxiri qoldig'i
+   * (maket «Pul oqimi», «Kassa oqimi», «Balans dinamikasi», «kechaga
+   * nisbatan», sparkline; M5 — kassa tafsilotidagi «Davr boshida» server
+   * tomonidan, 100 qatorga bog'liq emas).
+   *
+   * ROL DOIRASI — `GET /finance/history` bilan AYNI: market / kuryer — faqat
+   * o'z kassasi; menejer / registrator — o'z filiali kassasi; superadmin /
+   * admin — istalgan tanlov (`cashbox_id` / `user_id` / `cashbox_type`),
+   * hech biri bo'lmasa Asosiy kassa. Menejer `cashbox_type=couriers&user_id=`
+   * bilan o'z filiali kuryerining kassasini ham so'ray oladi —
+   * `GET /finance/cashbox/user/:user_id` bilan AYNI ruxsat tekshiruvi.
+   * LOGIST va boshqa rollar — 403 (RolesGuard). Faqat o'qish.
+   *
+   * ⚠️ `history/:id` dan OLDIN e'lon qilingan (aks holda 'daily' id deb
+   * tutilardi).
+   */
+  @Get('history/daily')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(
+    RoleEnum.SUPERADMIN,
+    RoleEnum.ADMIN,
+    RoleEnum.REGISTRATOR,
+    RoleEnum.MANAGER,
+    RoleEnum.COURIER,
+    RoleEnum.MARKET,
+  )
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: "Kassa: kunlik kirim/chiqim va kun boshi/oxiri qoldig'i",
+    description:
+      "qzjTMWPb. Toshkent kunlari bo'yicha `days[]`: `income`, `expense`, `net`, `income_count`, `expense_count` " +
+      "(cashbox_history'dan jonli, filtrlar bilan — /finance/history bilan bir xil filtr ma'nosi) va " +
+      "`opening_balance` / `closing_balance` (kassa doirasining kun boshi/oxiri qoldig'i — manba/tur/yaratgan filtriga " +
+      "BOG'LIQ EMAS). `opening_balance` (davr boshi) = `from_date` dan oldingi kun oxiri; `closing_balance` = oxirgi " +
+      "o'tgan kun yoki bugun (jonli). Kelajak kunlari qoldig'i `null`. `balance_status`: `ok`; `pending` — kunlik " +
+      'snapshot hali qurilmagan (deploydan keyingi birinchi daqiqalar) — qoldiqlar `null`, oqimlar bor; `partial` — ' +
+      'snapshot orqada (catch-up davom etyapti). «Kechaga nisbatan» = bugungi `closing_balance` − kechagi `closing_balance`. ' +
+      "Sukut oraliq — oxirgi 14 kun; ko'pi bilan 366 kun.",
+  })
+  @ApiOkResponse({
+    schema: {
+      example: {
+        statusCode: 200,
+        message: 'Kunlik kirim/chiqim',
+        data: {
+          timezone: 'Asia/Tashkent',
+          from: '2026-10-01',
+          to: '2026-10-08',
+          scope: { cashbox_type: 'main', cashbox_ids: null },
+          filtered: false,
+          balance_status: 'ok',
+          last_snapshot_date: '2026-10-07',
+          opening_balance: 7507000,
+          closing_balance: 24615000,
+          totals: {
+            income: 41260000,
+            expense: 23940000,
+            net: 17320000,
+            income_count: 71,
+            expense_count: 57,
+          },
+          days: [
+            {
+              date: '2026-10-08',
+              income: 6970000,
+              expense: 2400000,
+              net: 4570000,
+              income_count: 9,
+              expense_count: 3,
+              opening_balance: 20045000,
+              closing_balance: 24615000,
+            },
+          ],
+        },
+      },
+    },
+  })
+  async historyDaily(
+    @Query() query: HistoryDailyQueryDto,
+    @Req() req: { user: JwtUser },
+  ) {
+    const user = req?.user;
+    const filters = {
+      from_date: query?.from_date ?? query?.fromDate,
+      to_date: query?.to_date ?? query?.toDate,
+      operation_type: query?.operation_type,
+      source_type: query?.source_type,
+      source_types: query?.source_types ?? query?.sourceTypes,
+      source_user_id: query?.source_user_id,
+      created_by: query?.created_by,
+    };
+    const send = (scope: Record<string, unknown>) =>
+      this.send({ cmd: 'finance.history.daily' }, { ...filters, ...scope });
+
+    if (!this.isPrivileged(user)) {
+      if (this.hasRole(user, RoleEnum.MARKET)) {
+        return send({
+          user_id: String(user.sub),
+          cashbox_type: Cashbox_type.FOR_MARKET,
+        });
+      }
+      if (this.hasRole(user, RoleEnum.COURIER)) {
+        return send({
+          user_id: String(user.sub),
+          cashbox_type: Cashbox_type.FOR_COURIER,
+        });
+      }
+      if (this.hasRole(user, RoleEnum.MANAGER)) {
+        const requestedType = query?.cashbox_type ?? query?.cashboxType;
+        if (
+          requestedType === Cashbox_type.FOR_COURIER &&
+          query?.user_id &&
+          String(query.user_id) !== String(user.sub)
+        ) {
+          if (!(await this.canManagerAccessUser(user, query.user_id))) {
+            throw new ForbiddenException(
+              "Siz bu foydalanuvchi kassasini ko'ra olmaysiz",
+            );
+          }
+          return send({
+            user_id: String(query.user_id),
+            cashbox_type: Cashbox_type.FOR_COURIER,
+          });
+        }
+        const branchId =
+          this.extractBranchId(user) ||
+          (await this.resolveBranchIdByUserId(String(user.sub), user));
+        if (!branchId) {
+          throw new ForbiddenException("Managerning branch'i topilmadi");
+        }
+        return send({ user_id: branchId, cashbox_type: Cashbox_type.BRANCH });
+      }
+      if (this.hasRole(user, RoleEnum.REGISTRATOR)) {
+        const branchId = await this.resolveOwnBranchId(user);
+        if (!branchId) {
+          throw new ForbiddenException('Registratorning filiali topilmadi');
+        }
+        return send({ user_id: branchId, cashbox_type: Cashbox_type.BRANCH });
+      }
+      throw new ForbiddenException("Bu ma'lumot sizga ruxsat etilmagan");
+    }
+
+    const cashboxType = query?.cashbox_type ?? query?.cashboxType;
+    const hasSelector = Boolean(
+      query?.cashbox_id || query?.user_id || cashboxType,
+    );
+    return send(
+      hasSelector
+        ? {
+            cashbox_id: query?.cashbox_id,
+            user_id: query?.user_id,
+            cashbox_type: cashboxType,
+          }
+        : { cashbox_type: Cashbox_type.MAIN },
     );
   }
 

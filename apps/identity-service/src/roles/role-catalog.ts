@@ -83,7 +83,9 @@ export const ROLE_CATALOG: ReadonlyArray<RoleCatalogEntry> = Object.freeze([
   entry(
     Roles.LOGIST,
     'Logist',
-    'Biriktirilgan viloyatlar statistikasi va nazorati',
+    // gShYHHGj (ega LG-S1): logist moliyaga aralashmaydi — To'lovlar, Balans,
+    // Kassa, hisob-kitob yopiq (gateway testlari bilan qotirilgan).
+    "Biriktirilgan viloyatlar statistikasi va nazorati; moliya — yo'q",
     { staff: true, create_endpoint: 'POST /logists', changeable: true },
   ),
   entry(

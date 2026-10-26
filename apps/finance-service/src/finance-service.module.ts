@@ -38,6 +38,12 @@ import { ShiftAccountCheckController } from './shift-account-check/shift-account
 import { SHIFT_ACCOUNT_CHECKS } from './shift-account-check/shift-account-check.token';
 import { ExpenseCategoryService } from './expense-category/expense-category.service';
 import { ExpenseCategoryController } from './expense-category/expense-category.controller';
+import { FinanceCashboxDaily } from './entities/finance-cashbox-daily.entity';
+import { FinanceDailySnapshot } from './entities/finance-daily-snapshot.entity';
+import { FinanceDailySnapshotService } from './aggregates/finance-daily-snapshot.service';
+import { FinanceDailyService } from './aggregates/finance-daily.service';
+import { PaymentsMetaService } from './aggregates/payments-meta.service';
+import { FinanceAggregatesController } from './aggregates/finance-aggregates.controller';
 
 @Module({
   imports: [
@@ -97,6 +103,9 @@ import { ExpenseCategoryController } from './expense-category/expense-category.c
       FinanceSetting,
       // (2crjWf7v) kuryer kvitansiya javobi — faqat audit.
       CourierPaymentAck,
+      // qzjTMWPb — kunlik balans snapshot'i (o'qish modeli, migratsiya 176).
+      FinanceCashboxDaily,
+      FinanceDailySnapshot,
     ]),
   ],
   controllers: [
@@ -105,6 +114,8 @@ import { ExpenseCategoryController } from './expense-category/expense-category.c
     CashboxCardController,
     ExpenseCategoryController,
     ShiftAccountCheckController,
+    // qzjTMWPb / uzWcMR1C — kunlik agregat va /payments KPI meta (o'qish).
+    FinanceAggregatesController,
   ],
   providers: [
     FinanceServiceService,
@@ -117,6 +128,9 @@ import { ExpenseCategoryController } from './expense-category/expense-category.c
     CourierCashReminderScheduler,
     ShiftAccountCheckService,
     { provide: SHIFT_ACCOUNT_CHECKS, useExisting: ShiftAccountCheckService },
+    FinanceDailySnapshotService,
+    FinanceDailyService,
+    PaymentsMetaService,
   ],
 })
 export class FinanceServiceModule {}
