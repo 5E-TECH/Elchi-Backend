@@ -19,6 +19,7 @@ import {
 } from 'class-validator';
 import {
   FULFILLMENT_SOURCES,
+  HQ_WAREHOUSE_REASONS,
   STOCK_MOVEMENT_REF_TYPES,
   STOCK_MOVEMENT_TYPES,
   WAREHOUSE_ADDRESS_MAX,
@@ -1049,7 +1050,7 @@ export class WarehouseCandidateDto {
     enum: WAREHOUSE_KINDS,
     example: 'REGIONAL',
     description:
-      'Pa1KaXmj: manba nomzodi — hozircha faqat viloyat ombori (REGIONAL)',
+      "Pa1KaXmj/VkKDSNNn: REGIONAL — viloyat ombori (1-pog'ona); HQ — Markaziy ombor (2-pog'ona, faqat `WAREHOUSE_HQ_TIER_ENABLED` yoqilganda; viloyat ombori yo'q, to'xtatilgan yoki qoldig'i yetmasa)",
   })
   kind!: string;
   @ApiProperty({ example: '11' }) branch_id!: string;
@@ -1089,7 +1090,7 @@ export class WarehouseResolveSourceResponseDto {
   @ApiProperty({
     enum: WAREHOUSE_SOURCE_REASONS,
     description:
-      "OK — ombor; qolgani — HQ: NO_ITEMS, NO_REGION (tuman hududi aniqlanmadi), NO_WAREHOUSE (hududda ombor yo'q), WAREHOUSE_PAUSED («Tuman ombori to'xtatilgan»), INSUFFICIENT_STOCK («Omborda yetmaydi — butun buyurtma HQ'dan»), MARKET_NOT_ALLOWED (market kaliti o'chiq), PRODUCT_INVALID",
+      "OK — ombor (viloyat yoki, kalit yoqilganda, Markaziy ombor — `warehouse.kind`); qolgani — HQ: NO_ITEMS, NO_REGION (tuman hududi aniqlanmadi), NO_WAREHOUSE (hududda ombor yo'q), WAREHOUSE_PAUSED («Tuman ombori to'xtatilgan»), INSUFFICIENT_STOCK («Omborda yetmaydi — butun buyurtma HQ'dan»), MARKET_NOT_ALLOWED (market kaliti o'chiq), PRODUCT_INVALID. VkKDSNNn: `source: HQ` bo'lsa ham `reason` — viloyat sababi; Markaziy ombor sababi — `hq_reason`.",
   })
   reason!: string;
 
@@ -1104,6 +1105,61 @@ export class WarehouseResolveSourceResponseDto {
 
   @ApiProperty({ type: [WarehouseShortageDto] })
   shortages!: WarehouseShortageDto[];
+
+  @ApiPropertyOptional({
+    type: [String],
+    example: ['142'],
+    description:
+      "Faqat `reason: PRODUCT_INVALID` da — topilmagan, o'chirilgan yoki begona market mahsulotlari",
+  })
+  invalid_product_ids?: string[];
+
+  // VkKDSNNn: Markaziy ombor (2-pog'ona) maydonlari — faqat
+  // WAREHOUSE_HQ_TIER_ENABLED yoqilganda (o'chiq bo'lsa javobda yo'q).
+
+  @ApiPropertyOptional({
+    enum: WAREHOUSE_SOURCE_REASONS,
+    example: 'INSUFFICIENT_STOCK',
+    description:
+      "VkKDSNNn: Markaziy ombor tanlanganda (`source: WAREHOUSE`, `warehouse.kind: HQ`) — viloyat ombori nega tanlanmagani: NO_WAREHOUSE, WAREHOUSE_PAUSED yoki INSUFFICIENT_STOCK. Boshqa holatlarda (viloyat ombori tanlangan, `source: HQ`, kalit o'chiq) — maydon yo'q.",
+  })
+  regional_reason?: string;
+
+  @ApiPropertyOptional({
+    type: WarehouseCandidateDto,
+    nullable: true,
+    description:
+      "VkKDSNNn: Markaziy ombor tanlanganda — viloyat ombori (`kind: REGIONAL`); hududda ombor bo'lmasa null",
+  })
+  regional_warehouse?: WarehouseCandidateDto | null;
+
+  @ApiPropertyOptional({
+    type: [WarehouseShortageDto],
+    description:
+      "VkKDSNNn: Markaziy ombor tanlanganda — viloyat omboridagi yetishmovchilik (INSUFFICIENT_STOCK bo'lsa; aks holda bo'sh)",
+  })
+  regional_shortages?: WarehouseShortageDto[];
+
+  @ApiPropertyOptional({
+    enum: HQ_WAREHOUSE_REASONS,
+    description:
+      "VkKDSNNn: `source: HQ` va viloyat sababi NO_WAREHOUSE / WAREHOUSE_PAUSED / INSUFFICIENT_STOCK bo'lsa — Markaziy ombor nega tanlanmagani: NO_HQ_WAREHOUSE (Markaziy ombor yo'q yoki HQ filiali aniqlanmadi), HQ_WAREHOUSE_PAUSED («Markaziy ombor to'xtatilgan»), HQ_INSUFFICIENT_STOCK («Markaziy omborda ham yetmaydi»). Kalit o'chiq bo'lsa — maydon yo'q.",
+  })
+  hq_reason?: string;
+
+  @ApiPropertyOptional({
+    type: WarehouseCandidateDto,
+    description:
+      'VkKDSNNn: HQ_WAREHOUSE_PAUSED / HQ_INSUFFICIENT_STOCK da — Markaziy ombor (`kind: HQ`)',
+  })
+  hq_warehouse?: WarehouseCandidateDto;
+
+  @ApiPropertyOptional({
+    type: [WarehouseShortageDto],
+    description:
+      'VkKDSNNn: HQ_INSUFFICIENT_STOCK da — Markaziy ombordagi yetishmovchilik',
+  })
+  hq_shortages?: WarehouseShortageDto[];
 }
 
 export class WarehouseAvailabilityItemDto {
@@ -1130,6 +1186,20 @@ export class WarehouseAvailabilityResponseDto {
     description: 'Faqat omborda qatori bor mahsulotlar',
   })
   items!: WarehouseAvailabilityItemDto[];
+
+  @ApiPropertyOptional({
+    type: WarehouseCandidateDto,
+    description:
+      "VkKDSNNn: faqat `WAREHOUSE_HQ_TIER_ENABLED` yoqilgan, hudud aniqlangan va Markaziy ombor FAOL bo'lsa — Markaziy ombor (`kind: HQ`); aks holda maydon yo'q",
+  })
+  hq_warehouse?: WarehouseCandidateDto;
+
+  @ApiPropertyOptional({
+    type: [WarehouseAvailabilityItemDto],
+    description:
+      'VkKDSNNn: `hq_warehouse` bilan birga — Markaziy ombordagi mavjud dona (`items` bilan bir xil shakl va filtr: `market_id` / `product_ids`)',
+  })
+  hq_items?: WarehouseAvailabilityItemDto[];
 }
 
 export class MarketStockWarehouseDto {

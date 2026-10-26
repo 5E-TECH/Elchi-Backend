@@ -266,6 +266,21 @@ export const catalogValidationSchema = Joi.object({
   // hY7uacJu: ombor moduli — filial va tuman → hudud o'qish.
   RABBITMQ_BRANCH_QUEUE: Joi.string().default('branch_queue'),
   RABBITMQ_LOGISTICS_QUEUE: Joi.string().default('logistics_queue'),
+  /**
+   * VkKDSNNn: buyurtma manbasining 2-pog'onasi — Markaziy (HQ) ombor.
+   * `false` (sukut) — Markaziy ombor nomzod emas, javob 1-bosqichdagidek.
+   * ⚠️ `.empty('')`: barcha servislar bitta `.env.production` ni o'qiydi —
+   * qiymatsiz kalit catalog-service'ni yiqitmasin. Yoqishdan oldin
+   * order-service'ning Markaziy ombor oqimi prod'da bo'lishi shart.
+   */
+  WAREHOUSE_HQ_TIER_ENABLED: Joi.boolean()
+    .truthy('true', '1', 'yes')
+    .falsy('false', '0', 'no')
+    .empty('')
+    .default(false)
+    .description(
+      "Markaziy ombor buyurtma manbasining 2-pog'onasi. false — faqat viloyat ombori.",
+    ),
 });
 
 export const logisticsValidationSchema = Joi.object({

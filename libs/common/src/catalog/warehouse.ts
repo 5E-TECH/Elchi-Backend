@@ -9,8 +9,10 @@
  *     TO'XTATILGAN; to'xtatilganda qoldiq saqlanadi, yangi buyurtma tushmaydi;
  *   - turi (`kind`, saqlanmaydi — filialdan hisoblanadi): viloyat ombori
  *     (REGIONAL/HYBRID filial) yoki Markaziy ombor (HQ filiali, Pa1KaXmj).
- *     Markaziy ombor buyurtma manbasi nomzodi EMAS (1-bosqich: faqat ochish,
- *     kirim, inventarizatsiya, qoldiq);
+ *     Buyurtma manbasi (VkKDSNNn, 2-bosqich): avval viloyat ombori, u
+ *     bo'lmasa Markaziy ombor (faqat `WAREHOUSE_HQ_TIER_ENABLED` yoqilganda),
+ *     ikkalasida ham yetmasa — HQ (market olib keladi). Kalit o'chiq bo'lsa
+ *     Markaziy ombor nomzod EMAS (1-bosqichdagidek);
  *   - qoldiq faqat dona: `on_hand` (jismonan bor), `reserved` (faol
  *     buyurtmalarga band), `available = on_hand − reserved`;
  *   - har o'zgarish `stock_movements` ga yoziladi (faqat qo'shiladi).
@@ -102,6 +104,30 @@ export const WAREHOUSE_SOURCE_REASONS = [
 ] as const;
 export type WarehouseSourceReason = (typeof WAREHOUSE_SOURCE_REASONS)[number];
 
+/**
+ * VkKDSNNn: Markaziy ombor pog'onasi sababi (`resolve_source` javobidagi
+ * `hq_reason`). Viloyat ombori tanlanmaganda, kalit yoqilgan bo'lsa Markaziy
+ * ombor ko'rib chiqiladi; u ham to'g'ri kelmasa javob `source: 'HQ'` (market
+ * olib keladi), asosiy `reason` — viloyat sababi, `hq_reason` — Markaziy
+ * omborniki. `WAREHOUSE_SOURCE_REASONS` ga ATAYLAB qo'shilmagan — `reason`
+ * enum'i (va eski frontend) o'zgarmaydi.
+ */
+export const HQ_WAREHOUSE_REASONS = [
+  'NO_HQ_WAREHOUSE',
+  'HQ_WAREHOUSE_PAUSED',
+  'HQ_INSUFFICIENT_STOCK',
+] as const;
+export type HqWarehouseReason = (typeof HQ_WAREHOUSE_REASONS)[number];
+
+/**
+ * VkKDSNNn: Markaziy ombor pog'onasining kaliti (catalog-service env, sukut
+ * `false`). O'chiq bo'lsa `resolve_source`/`availability` javobi 1-bosqichdagi
+ * bilan AYNAN bir xil. ⚠️ Yoqishdan oldin order-service'da Markaziy ombor
+ * buyurtmasi oqimi (HQ'da qabul, pochta, chiqim, qaytish) deploy bo'lgan
+ * bo'lishi shart.
+ */
+export const WAREHOUSE_HQ_TIER_FLAG = 'WAREHOUSE_HQ_TIER_ENABLED';
+
 /** RpcException `code` lari (order-service shu kodlar bo'yicha qaror qiladi). */
 export const WAREHOUSE_ERROR_CODES = {
   NOT_FOUND: 'WAREHOUSE_NOT_FOUND',
@@ -116,6 +142,11 @@ export const WAREHOUSE_ERROR_CODES = {
    * yoqmagan) — gateway 403.
    */
   STOCK_FORBIDDEN: 'WAREHOUSE_STOCK_FORBIDDEN',
+  /**
+   * VkKDSNNn: Markaziy ombor buyurtmasi bekor/qaytishda Markaziy omborga
+   * qaytadi — marketga topshirib bo'lmaydi (order-service, 409).
+   */
+  ORDER_RETURNS_TO_STOCK: 'WAREHOUSE_ORDER_RETURNS_TO_STOCK',
 } as const;
 
 /** RMQ naqshlari — catalog-service `WarehouseController` bilan AYNI. */

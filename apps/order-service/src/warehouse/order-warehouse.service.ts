@@ -1,7 +1,7 @@
-import { Inject, Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import { ClientProxy, RpcException } from '@nestjs/microservices';
 import { firstValueFrom, timeout, TimeoutError } from 'rxjs';
-import type { EntityManager } from 'typeorm';
+import { In, type EntityManager } from 'typeorm';
 import {
   ORDER_FULFILLMENT_MODES,
   type OrderFulfillmentMode,
@@ -9,6 +9,7 @@ import {
   OutboxEvent,
   OutboxService,
   Roles,
+  type WarehouseKind,
   WAREHOUSE_RPC,
 } from '@app/common';
 import { Order, OrderHolderType } from '../entities/order.entity';
@@ -16,6 +17,7 @@ import { OrderItem } from '../entities/order-item.entity';
 import { OrderTracking } from '../entities/order-tracking.entity';
 import { OrderCustodyEvent } from '../entities/order-custody-event.entity';
 import { OrderCustodyService } from '../custody/order-custody.service';
+import { OrderLookupService } from '../lookup/order-lookup.service';
 
 /**
  * 6kHnNH9j — ombor ↔ buyurtma oqimi (order-service tomoni).
@@ -27,7 +29,18 @@ import { OrderCustodyService } from '../custody/order-custody.service';
  *   2) har holat/egalik yozuvi (`updateFull` → `writeOrderChanges`):
  *      `onOrderWritten` — kuryerga berish → `out`, bekor posilka filialga
  *      qaytdi → `return` (o'sha omborga) + buyurtma yopiladi;
- *   3) kuryerga berilmasdan o'chirish (`remove`): `onOrderRemoved` → `release`.
+ *   3) kuryerga berilmasdan o'chirish (`remove`, pochtadan o'chirish):
+ *      `onOrderRemoved` → `release`.
+ *
+ * VkKDSNNn — MARKAZIY OMBOR (2-pog'ona, catalog kaliti
+ * `WAREHOUSE_HQ_TIER_ENABLED`). Markaziy ombor buyurtmasi =
+ * `fulfillment_source = 'WAREHOUSE'` VA `home_branch_id = HQ id` (yangi ustun
+ * yo'q). U HQ'da «qabul qilingan» bo'lib yaratiladi (pochtaga biriktiriladi);
+ * HQ'dan chiqishi (filialga jo'natish yoki kuryer) → `out`; HQ'ga bekor
+ * bo'lib qaytishi (bekor posilka, qaytarish partiyasi yoki HQ'da bekor) →
+ * `return` (Markaziy omborga) va buyurtma yopiladi — marketga topshirilmaydi.
+ * HQ id aniqlanmasa HQ-tur mantiq ishlamaydi (fail-closed); viloyat ombori
+ * xulqi o'zgarmaydi.
  *
  * RPC XATOSI BUYURTMA HOLATINI BUZMAYDI:
  *   - `reserve` — sinxron, buyurtma tranzaksiyasi ichida. Xato/timeout →
@@ -61,19 +74,43 @@ const WAREHOUSE_CREATOR_ROLES: string[] = [
 
 const SYSTEM_ACTOR = { id: null, role: 'system' } as const;
 
+/**
+ * VkKDSNNn: HQ'ga qaytish partiyasida omborga QAYTARILMAYDIGAN holatlar —
+ * pul harakati bor (sotilgan/to'langan) yoki allaqachon yopilgan.
+ */
+const RETURN_BATCH_SKIP_STATUSES: Order_status[] = [
+  Order_status.RETURNED_TO_MARKET,
+  Order_status.SOLD,
+  Order_status.PAID,
+  Order_status.PARTLY_PAID,
+  Order_status.CLOSED,
+];
+
 export interface WarehouseCreatePlan {
   warehouse_id: string;
   warehouse_name: string | null;
-  /** Viloyat filiali — buyurtma shu yerda «qabul qilingan» bo'ladi. */
+  /**
+   * Buyurtma shu filialda «qabul qilingan» bo'ladi: viloyat ombori — viloyat
+   * filiali; Markaziy ombor (VkKDSNNn) — HQ filiali (= HQ id).
+   */
   branch_id: string;
   market_id: string | null;
   items: Array<{ product_id: string; quantity: number }>;
+  /** VkKDSNNn: ombor turi (catalog `warehouse.kind`; noma'lum — REGIONAL). */
+  kind: WarehouseKind;
+  /**
+   * VkKDSNNn: catalog aniqlagan hudud (`resolve_source.region_id`) —
+   * Markaziy ombor buyurtmasining pochtasi shu hududga biriktiriladi.
+   */
+  region_id: string | null;
 }
 
 export interface WarehouseRef {
   id: string;
   name: string | null;
   branch_id: string | null;
+  /** VkKDSNNn: catalog `find_by_ids` dagi tur; catalog javob bermasa `null`. */
+  kind: WarehouseKind | null;
 }
 
 type Requester = { id?: string | null; roles?: string[] | null } | null;
@@ -97,7 +134,7 @@ export function warehouseRefOf(
 ): WarehouseRef | null {
   const id = text(row?.warehouse_id);
   if (!id) return null;
-  return refs.get(id) ?? { id, name: null, branch_id: null };
+  return refs.get(id) ?? { id, name: null, branch_id: null, kind: null };
 }
 
 export function isWarehouseReserveFallback(
@@ -147,7 +184,26 @@ export class OrderWarehouseService {
     @Inject('CATALOG') private readonly catalogClient: ClientProxy,
     private readonly outbox: OutboxService,
     private readonly custody: OrderCustodyService,
+    // VkKDSNNn: HQ id (Markaziy ombor buyurtmasini aniqlash). Ixtiyoriy —
+    // usiz (eski spec'lar) hamma ombor buyurtmasi viloyat semantikasida.
+    @Optional() private readonly lookup?: OrderLookupService,
   ) {}
+
+  /**
+   * VkKDSNNn: HQ filiali id'si (OrderLookupService keshi). Lookup yo'q yoki
+   * xato — `null`: chaqiruvchi HQ-tur mantiqni ishlatmaydi (fail-closed).
+   */
+  private async hqBranchId(): Promise<string | null> {
+    if (!this.lookup) return null;
+    try {
+      return idOrNull(await this.lookup.getHqBranchId());
+    } catch (error) {
+      this.logger.warn(
+        `HQ filiali aniqlanmadi: ${(error as Error)?.message ?? String(error)}`,
+      );
+      return null;
+    }
+  }
 
   private send<T = unknown>(cmd: string, payload: unknown): Promise<T> {
     return firstValueFrom(
@@ -193,6 +249,11 @@ export class OrderWarehouseService {
    * tekshiradi (fail-closed). SA/ADMIN aniq joylashuv (kuryer, pochta, holat,
    * partiya) bergan bo'lsa — HQ: buyurtma qo'lda joylashtirilyapti.
    * Catalog javob bermasa — HQ (buyurtma yaratish to'xtamaydi).
+   *
+   * VkKDSNNn: catalog Markaziy omborni tanlasa (`warehouse.kind = 'HQ'`,
+   * kalit yoqilgan) — reja `kind: 'HQ'`, faqat HQ id aniq, ombor filiali
+   * aynan HQ va hudud (`region_id`) bor bo'lsa. Aks holda `null` (oddiy HQ,
+   * market olib keladi) — noaniq HQ-tur buyurtma yaratilmaydi (fail-closed).
    */
   async planCreate(
     dto: {
@@ -267,12 +328,27 @@ export class OrderWarehouseService {
     if (result?.source !== 'WAREHOUSE' || !warehouseId || !branchId) {
       return null;
     }
+    const kind: WarehouseKind = warehouse?.kind === 'HQ' ? 'HQ' : 'REGIONAL';
+    const resolvedRegionId = idOrNull(result?.region_id);
+    if (kind === 'HQ') {
+      // VkKDSNNn: Markaziy ombor — HQ'da qabul qilinadi va hudud pochtasiga
+      // biriktiriladi; HQ id yoki hudud noaniq bo'lsa yaratilmaydi.
+      const hqId = await this.hqBranchId();
+      if (!hqId || branchId !== hqId || !resolvedRegionId) {
+        this.logger.warn(
+          `Markaziy ombor #${warehouseId} rejasi rad etildi (HQ id: ${hqId ?? "noma'lum"}, ombor filiali: ${branchId}, hudud: ${resolvedRegionId ?? "yo'q"}) — buyurtma HQ orqali`,
+        );
+        return null;
+      }
+    }
     return {
       warehouse_id: warehouseId,
       warehouse_name: text(warehouse?.name) || null,
       branch_id: branchId,
       market_id: marketId,
       items,
+      kind,
+      region_id: resolvedRegionId,
     };
   }
 
@@ -381,18 +457,38 @@ export class OrderWarehouseService {
    *     egalik MARKET (mahsulot marketning ombordagi qoldig'iga qaytdi; HQ
    *     qaytarish oqimi va marketga topshirish yo'q).
    * Takroriy yozuv (o'tish yo'q) — hech narsa yozilmaydi.
+   *
+   * VkKDSNNn — Markaziy ombor buyurtmasi (`home_branch_id = HQ id`). HQ'da
+   * turishi: egalik HQ yoki BRANCH/<HQ id> (partiya qabuli shakli):
+   *   - HQ'dan chiqdi (boshqa filial/kuryer, MARKET emas) yoki kuryerga
+   *     berildi → `out` (lenient; bola — yo'q, chiqim otada);
+   *   - HQ'da turib `cancelled` ga o'tdi (bekor posilka HQ'ga qabul qilindi
+   *     yoki HQ'da to'g'ridan bekor) → `return` (Markaziy omborga) + yopiladi.
+   * HQ id aniqlanmasa — viloyat qoidasi (bugungi kod); lekin uydan/HQ'dan
+   * boshqa filialga o'tish (Markaziy ombordan jo'natish bo'lishi mumkin —
+   * `out` yo'qolmasin) — 503, yozuv bekor (fail-closed).
    */
   async onOrderWritten(
     ctx: {
       order: Order;
       oldStatus: Order_status;
       previousHolderType?: OrderHolderType | null;
+      /** VkKDSNNn: yozuvdan oldingi `holder_branch_id`. */
+      previousHolderBranchId?: string | null;
       requester?: Requester;
     },
     manager: EntityManager,
   ): Promise<void> {
     const { order } = ctx;
     if (order.fulfillment_source !== 'WAREHOUSE') return;
+    const hqId = await this.hqBranchId();
+    if (!hqId && this.lookup) {
+      this.assertNoUnknownHqDispatch(ctx);
+    }
+    if (hqId && text(order.home_branch_id) === hqId) {
+      await this.onHqWarehouseOrderWritten(ctx, hqId, manager);
+      return;
+    }
     const actor = this.actorOf(ctx.requester ?? null);
 
     const handedToCourier =
@@ -416,7 +512,157 @@ export class OrderWarehouseService {
       homeBranchId !== '' &&
       text(order.holder_branch_id) === homeBranchId;
     if (returnedToWarehouseBranch) {
-      await this.returnToWarehouse(order, ctx.requester ?? null, manager);
+      await this.returnToWarehouse(
+        order,
+        ctx.requester ?? null,
+        manager,
+        'REGIONAL',
+      );
+    }
+  }
+
+  /**
+   * VkKDSNNn (C1): HQ id noma'lum — buyurtma Markaziy ombornikimi, bilib
+   * bo'lmaydi. Uydan (BRANCH/home) yoki HQ'dan boshqa filialga o'tish
+   * Markaziy ombordan jo'natish bo'lishi mumkin (`out` kerak) — yozuv 503
+   * bilan to'xtatiladi. Kuryerga o'tish — bugungi qoida bilan `out`
+   * (turdan qat'i nazar), shuning uchun to'xtatilmaydi. Bola — chiqim otada.
+   */
+  private assertNoUnknownHqDispatch(ctx: {
+    order: Order;
+    previousHolderType?: OrderHolderType | null;
+    previousHolderBranchId?: string | null;
+  }): void {
+    const { order } = ctx;
+    if (order.parent_order_id) return;
+    const homeBranchId = text(order.home_branch_id);
+    const wasAtHomeOrHq =
+      ctx.previousHolderType === OrderHolderType.HQ ||
+      (ctx.previousHolderType === OrderHolderType.BRANCH &&
+        homeBranchId !== '' &&
+        text(ctx.previousHolderBranchId) === homeBranchId);
+    const toOtherBranch =
+      order.holder_type === OrderHolderType.BRANCH &&
+      text(order.holder_branch_id) !== homeBranchId;
+    if (wasAtHomeOrHq && toOtherBranch) {
+      throw new RpcException({
+        statusCode: 503,
+        message: "Markaziy filial aniqlanmadi — qayta urinib ko'ring",
+      });
+    }
+  }
+
+  /** VkKDSNNn: Markaziy ombor buyurtmasi (`home_branch_id = hqId`). */
+  private async onHqWarehouseOrderWritten(
+    ctx: {
+      order: Order;
+      oldStatus: Order_status;
+      previousHolderType?: OrderHolderType | null;
+      previousHolderBranchId?: string | null;
+      requester?: Requester;
+    },
+    hqId: string,
+    manager: EntityManager,
+  ): Promise<void> {
+    const { order } = ctx;
+    const atHq = (
+      type: OrderHolderType | null | undefined,
+      branchId: string | null | undefined,
+    ) =>
+      type === OrderHolderType.HQ ||
+      (type === OrderHolderType.BRANCH && text(branchId) === hqId);
+
+    const leftHq =
+      atHq(ctx.previousHolderType, ctx.previousHolderBranchId) &&
+      !atHq(order.holder_type, order.holder_branch_id) &&
+      order.holder_type !== OrderHolderType.MARKET;
+    const toCourier =
+      order.holder_type === OrderHolderType.COURIER &&
+      ctx.previousHolderType !== OrderHolderType.COURIER;
+    // Qisman sotuvning bolasi — chiqim ota buyurtmada.
+    if ((leftHq || toCourier) && !order.parent_order_id) {
+      await this.enqueue(manager, WAREHOUSE_RPC.OUT, {
+        order_id: String(order.id),
+        actor: this.actorOf(ctx.requester ?? null),
+        lenient: true,
+        note: leftHq
+          ? `Buyurtma #${order.id} markaziy ombordan jo'natildi`
+          : `Buyurtma #${order.id} kuryerga berildi`,
+      });
+    }
+
+    const cancelledAtHq =
+      order.status === Order_status.CANCELLED &&
+      ctx.oldStatus !== Order_status.CANCELLED &&
+      atHq(order.holder_type, order.holder_branch_id);
+    if (cancelledAtHq) {
+      await this.returnToWarehouse(order, ctx.requester ?? null, manager, 'HQ');
+    }
+  }
+
+  /**
+   * VkKDSNNn: qaytarish partiyasi (`RETURN`) qabul qilindi — partiya
+   * servisining QB yangilanishidan KEYIN, o'sha tranzaksiyada. Manzil HQ
+   * bo'lsa, undagi Markaziy ombor buyurtmalari (yangi holat bilan) Markaziy
+   * omborga qaytariladi va yopiladi. Sotilgan/to'langan/yopilgan — tegilmaydi.
+   * Viloyat ombori buyurtmasi (K1) va HQ id noma'lum — hech narsa.
+   *
+   * ⚠️ «Tegilmaydi» qarori `priorStatusById` (QB yangilanishidan OLDINGI
+   * holat) bo'yicha: partiya qabuli HAMMA buyurtmani RECEIVED/NEW ga yozadi,
+   * shuning uchun qayta o'qilgan holat bo'yicha sotilgan buyurtmani ajratib
+   * bo'lmaydi (partiyada turgan WAITING buyurtma sotilishi mumkin — sotilgan
+   * tovar qoldiqqa qaytmasin). Oldingi holati noma'lum buyurtma — tegilmaydi
+   * (fail-closed: soxta qoldiqdan ko'ra qaytmagan qoldiq xavfsizroq).
+   */
+  async onReturnBatchReceived(
+    input: {
+      orderIds: Array<string | null | undefined>;
+      destinationBranchId: string | null | undefined;
+      /** Partiya QB yangilanishidan OLDINGI holat (`id` → `status`). */
+      priorStatusById: ReadonlyMap<string, Order_status | null | undefined>;
+      requester?: Requester;
+    },
+    manager: EntityManager,
+  ): Promise<void> {
+    const ids = Array.from(
+      new Set(
+        (input.orderIds ?? [])
+          .map((id) => idOrNull(id))
+          .filter((id): id is string => !!id),
+      ),
+    );
+    if (!ids.length) return;
+    const hqId = await this.hqBranchId();
+    if (!hqId || text(input.destinationBranchId) !== hqId) return;
+    const orders = await manager.getRepository(Order).find({
+      where: {
+        id: In(ids),
+        fulfillment_source: 'WAREHOUSE',
+        home_branch_id: hqId,
+        isDeleted: false,
+      },
+      order: { id: 'ASC' },
+    });
+    for (const order of orders) {
+      const priorStatus = input.priorStatusById?.get(String(order.id));
+      if (
+        !priorStatus ||
+        RETURN_BATCH_SKIP_STATUSES.includes(priorStatus) ||
+        RETURN_BATCH_SKIP_STATUSES.includes(order.status)
+      ) {
+        if (!priorStatus) {
+          this.logger.warn(
+            `Qaytarish partiyasi: buyurtma #${order.id} oldingi holati noma'lum — Markaziy omborga qaytarilmadi`,
+          );
+        }
+        continue;
+      }
+      await this.returnToWarehouse(
+        order,
+        input.requester ?? null,
+        manager,
+        'HQ',
+      );
     }
   }
 
@@ -424,7 +670,11 @@ export class OrderWarehouseService {
     order: Order,
     requester: Requester,
     manager: EntityManager,
+    kind: WarehouseKind,
   ): Promise<void> {
+    // VkKDSNNn: tracking `from_status` — kirishdagi holat (viloyat yo'lida
+    // doim `cancelled`; partiya yo'lida — `received`/`new`).
+    const fromStatus = order.status;
     const parentId = text(order.parent_order_id);
     const items = parentId
       ? (
@@ -444,7 +694,10 @@ export class OrderWarehouseService {
       order_id: parentId || String(order.id),
       ...(items ? { items, idempotency_key: `child-order-${order.id}` } : {}),
       actor: this.actorOf(requester),
-      note: `Buyurtma #${order.id} bekor — omborga qaytdi`,
+      note:
+        kind === 'HQ'
+          ? `Buyurtma #${order.id} markaziy omborga qaytdi`
+          : `Buyurtma #${order.id} bekor — omborga qaytdi`,
     });
 
     const previous = {
@@ -480,17 +733,20 @@ export class OrderWarehouseService {
       ? this.custody.toTrackingRole(requester?.roles ?? [])
       : 'system';
     const note =
-      'Ombor buyurtmasi omborga qaytarildi — qoldiq tiklandi (HQ qaytarish oqimisiz)';
+      kind === 'HQ'
+        ? 'Markaziy ombor buyurtmasi omborga qaytarildi — qoldiq tiklandi'
+        : 'Ombor buyurtmasi omborga qaytarildi — qoldiq tiklandi (HQ qaytarish oqimisiz)';
     await this.custody.createTrackingEvent(
       {
         order_id: String(order.id),
-        from_status: Order_status.CANCELLED,
+        from_status: fromStatus,
         to_status: Order_status.RETURNED_TO_MARKET,
         changed_by: changedBy,
         changed_by_role: changedByRole,
         action: 'warehouse_returned',
-        description: 'Omborga qaytarildi',
-        metadata: { warehouse_id: order.warehouse_id },
+        description:
+          kind === 'HQ' ? 'Markaziy omborga qaytarildi' : 'Omborga qaytarildi',
+        metadata: { warehouse_id: order.warehouse_id, warehouse_kind: kind },
         note,
       },
       manager.getRepository(OrderTracking),
@@ -514,7 +770,9 @@ export class OrderWarehouseService {
 
   /**
    * Kuryerga berilmasdan o'chirish (`remove`, o'sha tranzaksiyada) → band
-   * bo'shaydi. HQ buyurtma — hech narsa.
+   * bo'shaydi. HQ buyurtma — hech narsa. VkKDSNNn: pochtadan o'chirish
+   * (`deleteOrdersFromPostTx`) ham shu yerga — Markaziy ombor bandi osilib
+   * qolmasin.
    */
   async onOrderRemoved(
     order: Pick<Order, 'id' | 'fulfillment_source'>,
@@ -549,9 +807,10 @@ export class OrderWarehouseService {
   }
 
   /**
-   * Ro'yxat/detal boyitishi: `warehouse: { id, name, branch_id }`. Catalog
-   * javob bermasa — id bilan, nom/filial `null` (manba belgisi baribir
-   * `fulfillment_source` da).
+   * Ro'yxat/detal boyitishi: `warehouse: { id, name, branch_id, kind }`.
+   * Catalog javob bermasa — id bilan, nom/filial/tur `null` (manba belgisi
+   * baribir `fulfillment_source` da). VkKDSNNn: `kind` — catalog'dagi tur
+   * (REGIONAL | HQ).
    */
   async loadWarehouseRefs(
     ids: Array<string | null | undefined>,
@@ -560,7 +819,7 @@ export class OrderWarehouseService {
       new Set(ids.map((id) => idOrNull(id)).filter((id): id is string => !!id)),
     );
     const map = new Map<string, WarehouseRef>(
-      unique.map((id) => [id, { id, name: null, branch_id: null }]),
+      unique.map((id) => [id, { id, name: null, branch_id: null, kind: null }]),
     );
     if (!unique.length) return map;
     try {
@@ -579,6 +838,7 @@ export class OrderWarehouseService {
           id,
           name: text(row.name) || null,
           branch_id: idOrNull(row.branch_id),
+          kind: row.kind === 'HQ' || row.kind === 'REGIONAL' ? row.kind : null,
         });
       }
     } catch (error) {

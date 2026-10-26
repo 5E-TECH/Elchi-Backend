@@ -56,6 +56,7 @@ import {
   rmqSend,
   RMQ_SERVICE_TIMEOUT,
   resolvePartnerMoneyFields,
+  WAREHOUSE_ERROR_CODES,
 } from '@app/common';
 
 import type { EntityManager } from 'typeorm';
@@ -279,6 +280,35 @@ function presentFields(dto: object, fields: readonly string[]): string[] {
 /** Pul summasi tiyinda (numeric(14,2) — suzuvchi nuqta qoldig'isiz solishtirish). */
 const toTiyin = (value: unknown): number =>
   Math.round((Number(value) || 0) * 100);
+
+/**
+ * VkKDSNNn: Markaziy ombor buyurtmasini HQ pochtasiga biriktirish muddati.
+ * Gateway `order.create` ni 8 s kutadi; yaratish yo'lidagi oldingi RPC'lar
+ * (hudud ≤2 s, `resolve_source` ≤3 s, `reserve` ≤3 s) bilan birga shu
+ * chegaradan oshmasligi kerak — aks holda buyurtma yaratilgan bo'lsa ham
+ * mijoz 504 ko'radi va qayta yuborib IKKINCHI buyurtma (va band) yaratadi.
+ * Biriktirish ixtiyoriy (`GET /post/new` self-heal oladi), shuning uchun:
+ *   - bitta urinish ≤ `HQ_POST_ATTACH_TIMEOUT_MS`;
+ *   - `create()` boshidan `HQ_POST_ATTACH_DEADLINE_MS` gacha tugashi shart
+ *     (qolgan ~1 s — `findById` va javob uchun);
+ *   - `HQ_POST_ATTACH_MIN_MS` dan kam vaqt qolsa — umuman chaqirilmaydi.
+ */
+export const HQ_POST_ATTACH_TIMEOUT_MS = 2000;
+export const HQ_POST_ATTACH_DEADLINE_MS = 7000;
+export const HQ_POST_ATTACH_MIN_MS = 500;
+
+/** VkKDSNNn: pochtaga biriktirish uchun qolgan muddat (ms); `0` — chaqirilmaydi. */
+export function hqPostAttachTimeoutMs(
+  startedAt: number,
+  now: number = Date.now(),
+): number {
+  const elapsed = Math.max(0, now - startedAt);
+  const timeoutMs = Math.min(
+    HQ_POST_ATTACH_TIMEOUT_MS,
+    HQ_POST_ATTACH_DEADLINE_MS - elapsed,
+  );
+  return timeoutMs >= HQ_POST_ATTACH_MIN_MS ? timeoutMs : 0;
+}
 
 /**
  * fix3b (M6) — superadmin kuryer topshirib bo'lgan (COURIER_SETTLED) sotuvni
@@ -4255,6 +4285,52 @@ export class OrderLifecycleService {
     return successRes(updated, 200, 'Order return initiated');
   }
 
+  /**
+   * VkKDSNNn: Markaziy ombor buyurtmasi (`WAREHOUSE` + `home_branch_id = HQ
+   * id`) marketga TOPSHIRILMAYDI — bekor/qaytishda u Markaziy omborga qaytadi
+   * (qoldiq tiklanadi) → 409 `WAREHOUSE_ORDER_RETURNS_TO_STOCK`. Ro'yxatda
+   * ombor buyurtmasi bo'lib, HQ id aniqlanmasa — 503 (turini bilib bo'lmaydi,
+   * fail-closed). Viloyat ombori buyurtmalari — bugungidek. `hqBranchId`
+   * berilmasa (`undefined`) — faqat ombor buyurtmasi bo'lganda so'raladi.
+   */
+  private async assertNoHqWarehouseMarketHandover(
+    orders: Array<Pick<Order, 'id' | 'fulfillment_source' | 'home_branch_id'>>,
+    hqBranchId?: string | null,
+  ): Promise<void> {
+    const warehouseOrders = orders.filter(
+      (order) => order.fulfillment_source === 'WAREHOUSE',
+    );
+    if (!warehouseOrders.length) return;
+    const hqId = String(
+      (hqBranchId === undefined
+        ? await this.lookup.getHqBranchId()
+        : hqBranchId) ?? '',
+    ).trim();
+    if (!hqId) {
+      throw new RpcException({
+        statusCode: 503,
+        message: "Markaziy filial aniqlanmadi — qayta urinib ko'ring",
+      });
+    }
+    const hqWarehouseOrders = warehouseOrders.filter(
+      (order) => String(order.home_branch_id ?? '').trim() === hqId,
+    );
+    if (hqWarehouseOrders.length) {
+      // Qaysi buyurtma(lar) to'sgani — matnda va `data.details.order_ids`
+      // da (FE tanlovdan olib tashlay olsin; ommaviy topshirish hammasi-yoki-
+      // hech biri).
+      const orderIds = hqWarehouseOrders.map((order) => String(order.id));
+      throw new RpcException({
+        statusCode: 409,
+        message: `Markaziy ombor buyurtmasi markaziy omborga qaytadi — marketga topshirilmaydi: ${orderIds
+          .map((id) => `#${id}`)
+          .join(', ')}`,
+        code: WAREHOUSE_ERROR_CODES.ORDER_RETURNS_TO_STOCK,
+        data: { details: { order_ids: orderIds } },
+      });
+    }
+  }
+
   async markReturnedToMarket(
     requester: { id: string; roles?: string[] },
     id: string,
@@ -4312,6 +4388,9 @@ export class OrderLifecycleService {
     // holder model now tracks. We keep the explicit return-batch check too, for
     // legacy orders whose holder fields predate custody tracking.
     const hqBranchId = await this.lookup.getHqBranchId();
+    // VkKDSNNn (C2): Markaziy ombor buyurtmasi — 409 (HQ id noma'lum — 503);
+    // partiya, uy filiali kuryeri va to'g'ridan yo'llardan OLDIN.
+    await this.assertNoHqWarehouseMarketHandover([order], hqBranchId ?? null);
     const homeBranchId = String(order.home_branch_id ?? '').trim();
     const holderBranchId = String(order.holder_branch_id ?? '').trim();
 
@@ -4970,6 +5049,10 @@ export class OrderLifecycleService {
           'Tanlangan orderlarning ayrimlari marketga tegishli emas, CANCELLED emas, yoki sizning filialingizda/HQda turmagan',
         );
       }
+      // VkKDSNNn: Markaziy ombor buyurtmasi marketga topshirilmaydi — 409
+      // (hammasi-yoki-hech biri; HQ id noma'lum — 503). HQ id filial xodimi
+      // uchun ham shu yerda so'raladi (faqat ombor buyurtmasi bo'lsa).
+      await this.assertNoHqWarehouseMarketHandover(handedOverOrders);
 
       for (const order of handedOverOrders) {
         const manualOverrideReason = manualOverrideByOrderId.get(
@@ -5298,6 +5381,8 @@ export class OrderLifecycleService {
     requester?: { id: string; roles?: string[] },
     opts?: Parameters<OrderLifecycleService['createOnce']>[2],
   ) {
+    // VkKDSNNn: pochtaga biriktirish muddati shu nuqtadan hisoblanadi.
+    const startedAt = Date.now();
     // IR2OHIiN: mahsulotsiz / tumansiz buyurtma YARATILMAYDI — ombor rejasi
     // va tranzaksiyadan OLDIN (hamkor/integratsiya yo'li bundan mustasno).
     const dto = isIntegrationOrderCreate(rawDto, requester)
@@ -5310,7 +5395,13 @@ export class OrderLifecycleService {
       (await this.orderWarehouse?.planCreate(dto, requester)) ?? null;
     if (warehousePlan) {
       try {
-        return await this.createOnce(dto, requester, opts, warehousePlan);
+        return await this.createOnce(
+          dto,
+          requester,
+          opts,
+          warehousePlan,
+          startedAt,
+        );
       } catch (error) {
         if (!isWarehouseReserveFallback(error)) throw error;
       }
@@ -5385,6 +5476,8 @@ export class OrderLifecycleService {
       createdVia?: OrderCreatedVia | null;
     },
     warehousePlan: WarehouseCreatePlan | null = null,
+    /** VkKDSNNn: `create()` boshlangan vaqt (pochtaga biriktirish muddati). */
+    startedAt: number = Date.now(),
   ) {
     // fix3 C6 (RBAC-05, LC-07, LC-14): SUPERADMIN/ADMIN dan boshqa
     // yaratuvchining hayot sikli/saqlash maydonlari olib tashlanadi —
@@ -5409,6 +5502,9 @@ export class OrderLifecycleService {
 
     // 6kHnNH9j: ombor buyurtmasi — darhol viloyat filialida (HQ qabuli va
     // pochtasiz), kuryerga biriktirishga tayyor.
+    // VkKDSNNn: Markaziy ombor (`kind: 'HQ'`) — HQ'da qabul qilingan
+    // (`branch_id` = HQ id), egalik HQ; pochta commit'dan keyin biriktiriladi.
+    const hqWarehousePlan = warehousePlan?.kind === 'HQ' ? warehousePlan : null;
     const resolvedBranchId = warehousePlan
       ? warehousePlan.branch_id
       : await this.resolveBranchIdForOrder(dto.branch_id, requester);
@@ -5473,7 +5569,11 @@ export class OrderLifecycleService {
         // Home (owning) branch — set once, never overwritten. Defaults to the
         // creating branch when not explicitly provided (e.g. partly-sell child
         // orders pass the parent's home branch).
-        home_branch_id: dto.home_branch_id ?? resolvedBranchId,
+        // VkKDSNNn: Markaziy ombor buyurtmasida DOIM HQ id (dto e'tiborsiz) —
+        // `home_branch_id = HQ id` uni Markaziy ombornikiga aylantiradi.
+        home_branch_id: hqWarehousePlan
+          ? hqWarehousePlan.branch_id
+          : (dto.home_branch_id ?? resolvedBranchId),
         current_batch_id: dto.current_batch_id ?? null,
         courier_id: dto.courier_id ?? null,
         assigned_at: this.normalizeDateTimeInput(dto.assigned_at),
@@ -5484,7 +5584,11 @@ export class OrderLifecycleService {
         last_handover_by: this.numericActorId(requester?.id),
         return_reason: dto.return_reason ?? null,
         district_id: dto.district_id ?? null,
-        region_id: dto.region_id ?? null,
+        // VkKDSNNn: Markaziy ombor — hudud bo'lmasa catalog aniqlagani
+        // (pochta shu hududga biriktiriladi).
+        region_id: hqWarehousePlan
+          ? (dto.region_id ?? hqWarehousePlan.region_id ?? null)
+          : (dto.region_id ?? null),
         address: dto.address ?? null,
         extra_number:
           typeof dto.extra_number === 'string' && dto.extra_number.trim()
@@ -5573,9 +5677,11 @@ export class OrderLifecycleService {
           changed_by_role: requester?.id
             ? this.custody.toTrackingRole(requester.roles)
             : 'system',
-          note: warehousePlan
-            ? `Order created — ombordan (#${warehousePlan.warehouse_id}), viloyat filialida qabul qilingan`
-            : 'Order created',
+          note: hqWarehousePlan
+            ? `Order created — markaziy ombordan (#${hqWarehousePlan.warehouse_id}), HQ'da qabul qilingan`
+            : warehousePlan
+              ? `Order created — ombordan (#${warehousePlan.warehouse_id}), viloyat filialida qabul qilingan`
+              : 'Order created',
         },
         trackingRepo,
       );
@@ -5631,6 +5737,8 @@ export class OrderLifecycleService {
           ...(warehousePlan
             ? { warehouse_id: warehousePlan.warehouse_id }
             : {}),
+          // VkKDSNNn: ombor turi — faqat Markaziy omborda (viloyat shakli o'zgarmaydi).
+          ...(hqWarehousePlan ? { warehouse_kind: hqWarehousePlan.kind } : {}),
           // (lQjt6sKP) almashtirish izi — faqat almashtirishda (shakl o'zgarmaydi).
           ...(replacedOrderId
             ? { replacement_of_order_id: replacedOrderId }
@@ -5644,8 +5752,110 @@ export class OrderLifecycleService {
       });
     }
 
+    // VkKDSNNn: Markaziy ombor buyurtmasi — hudud pochtasiga (best-effort).
+    if (savedId && hqWarehousePlan) {
+      await this.attachHqWarehouseOrderToPost(
+        savedId,
+        hqWarehousePlan,
+        Number(dto.total_price ?? 0),
+        hqPostAttachTimeoutMs(startedAt),
+      );
+    }
+
     const fullOrder = await this.findById(savedId);
     return fullOrder;
+  }
+
+  /**
+   * VkKDSNNn: Markaziy ombor buyurtmasini HQ pochtasiga biriktirish —
+   * commit'dan KEYIN, best-effort (`receiveNewOrders` dagi
+   * `logistics.post.receive_orders` bilan bir xil yuklama; hudud — catalog
+   * aniqlagani, filial — HQ). Logistika javob bermasa yoki xato bo'lsa —
+   * faqat ogohlantirish: buyurtma yaratilgan, pochtasiz RECEIVED buyurtmani
+   * logistikaning `GET /post/new` o'z-o'zini tiklashi oladi. `post_id` faqat
+   * hali bo'sh, buyurtma HQ'da (`received`, kuryerda emas) va o'chirilmagan
+   * bo'lsa yoziladi (parallel kuryer skani bilan poyga — yozilmaydi).
+   */
+  private async attachHqWarehouseOrderToPost(
+    orderId: string,
+    plan: WarehouseCreatePlan,
+    totalPrice: number,
+    /** `hqPostAttachTimeoutMs` — `0`: muddat tugagan, chaqirilmaydi. */
+    timeoutMs: number,
+  ): Promise<void> {
+    if (!this.logisticsClient || !plan.region_id) return;
+    if (timeoutMs <= 0) {
+      this.logger.warn(
+        `Markaziy ombor buyurtmasi #${orderId}: yaratish muddati tugayapti — pochtaga biriktirilmadi, self-heal kutiladi`,
+      );
+      return;
+    }
+    try {
+      const response = await rmqSend<{
+        data?: Array<{
+          order_id?: string | number | null;
+          post_id?: string | number | null;
+        }>;
+      }>(
+        this.logisticsClient,
+        { cmd: 'logistics.post.receive_orders' },
+        {
+          orders: [
+            {
+              order_id: orderId,
+              assigned_region: plan.region_id,
+              assigned_branch: plan.branch_id,
+              total_price: Number.isFinite(totalPrice) ? totalPrice : 0,
+            },
+          ],
+        },
+        // Qayta urinish YO'Q: logistika `receiveOrdersIntoPosts` idempotent
+        // emas (kechikkan birinchi so'rov ham bajariladi — pochta sanog'i
+        // ikki marta oshadi), gateway esa yaratishni 8 s kutadi — muddat
+        // qisqa va `create()` boshidan hisoblangan (`hqPostAttachTimeoutMs`).
+        { timeoutMs, retries: 0 },
+      );
+      const assignment = (
+        Array.isArray(response?.data) ? response.data : []
+      ).find((row) => String(row?.order_id ?? '') === String(orderId));
+      const postId = String(assignment?.post_id ?? '').trim();
+      if (!/^\d+$/.test(postId)) {
+        this.logger.warn(
+          `Markaziy ombor buyurtmasi #${orderId}: logistika pochta qaytarmadi — self-heal kutiladi`,
+        );
+        return;
+      }
+      const result = await this.orderRepo
+        .createQueryBuilder()
+        .update(Order)
+        .set({ post_id: postId })
+        .where('"id" = :id', { id: orderId })
+        .andWhere('"post_id" IS NULL')
+        .andWhere('"status" = :status', { status: Order_status.RECEIVED })
+        .andWhere('"holder_type" <> :courier', {
+          courier: OrderHolderType.COURIER,
+        })
+        .andWhere('"is_deleted" = false')
+        .andWhere('"deleted_at" IS NULL')
+        .execute();
+      if (!result?.affected) {
+        this.logger.warn(
+          `Markaziy ombor buyurtmasi #${orderId}: pochta #${postId} yozilmadi (holat o'zgargan)`,
+        );
+        return;
+      }
+      const order = await this.orderRepo.findOne({
+        where: { id: orderId, isDeleted: false },
+      });
+      if (order) {
+        // Manager'siz — enqueue xatosi yutiladi (best-effort).
+        await this.syncOrderToSearch(order);
+      }
+    } catch (error) {
+      this.logger.warn(
+        `Markaziy ombor buyurtmasi #${orderId} pochtaga biriktirilmadi — self-heal kutiladi: ${(error as Error)?.message ?? String(error)}`,
+      );
+    }
   }
 
   /**
@@ -10319,8 +10529,15 @@ export class OrderLifecycleService {
 
       // 6kHnNH9j: ombor buyurtmasi — kuryerga berish → chiqim, bekor posilka
       // filialga qaytdi → omborga qaytish (outbox, shu tranzaksiyada).
+      // VkKDSNNn: oldingi egalik filiali — Markaziy ombordan chiqish/qaytish.
       await this.orderWarehouse?.onOrderWritten(
-        { order, oldStatus, previousHolderType, requester },
+        {
+          order,
+          oldStatus,
+          previousHolderType,
+          previousHolderBranchId,
+          requester,
+        },
         manager,
       );
 
@@ -10637,6 +10854,7 @@ export class OrderLifecycleService {
           reason,
           requesterId,
           trackingRole,
+          requester,
         }),
       );
     } catch (error) {
@@ -10748,6 +10966,8 @@ export class OrderLifecycleService {
       reason: string;
       requesterId: string;
       trackingRole: string;
+      /** VkKDSNNn: ombor bandini bo'shatish (`release`) aktyori. */
+      requester?: { id?: string; roles?: string[] };
     },
   ): Promise<PostOrderDeleteOutcome> {
     const { postId, orderIds, reason } = args;
@@ -10781,7 +11001,8 @@ export class OrderLifecycleService {
                 "holder_type", "sold_at", "canceled_post_id",
                 "return_requested", "paid_amount", "paid_online_amount",
                 "payment_status", "current_batch_id", "total_price",
-                "extra_cost", "market_id", "source", "external_id", "operator"
+                "extra_cost", "market_id", "source", "external_id", "operator",
+                "fulfillment_source"
          FROM "order_schema"."orders"
          WHERE "id" = ANY($1::bigint[])
          ORDER BY "id"
@@ -10871,6 +11092,18 @@ export class OrderLifecycleService {
         message:
           "Buyurtmalar holati o'zgargan — sahifani yangilab qayta urinib ko'ring",
       });
+    }
+
+    // VkKDSNNn: ombor buyurtmasi (viloyat yoki Markaziy) — band bo'shaydi
+    // (`release` lenient, outbox, AYNI tranzaksiyada; `remove()` bilan bir
+    // xil). Kuryerga berilgan buyurtma bu yerga yetmaydi (`classifyPostOrders`).
+    for (const row of plan.toDelete) {
+      if (row.fulfillment_source !== 'WAREHOUSE') continue;
+      await this.orderWarehouse?.onOrderRemoved(
+        { id: String(row.id), fulfillment_source: 'WAREHOUSE' },
+        args.requester,
+        tx,
+      );
     }
 
     // (b) PENDING partiyadan chiqarish + sanog'ini itemlardan qayta hisoblash.

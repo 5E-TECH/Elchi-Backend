@@ -332,7 +332,7 @@ export class WarehouseGatewayController {
   @ApiOperation({
     summary: 'Buyurtma manbasi: ombor yoki HQ (faqat hisoblaydi)',
     description:
-      "Qaror 4: buyurtma tumani viloyat filialida (REGIONAL/HYBRID) FAOL ombor bo'lsa va HAMMA mahsulot yetarli bo'lsa — `source: WAREHOUSE` (`warehouse.kind: REGIONAL`), aks holda butun buyurtma `HQ` (bo'linmaydi), `reason` va `shortages` bilan. Markaziy ombor (HQ filiali, `kind: HQ`) bu bosqichda manba nomzodi EMAS (Pa1KaXmj). Hech narsa band qilinmaydi — band order-service yaratishda (`catalog.warehouse.reserve`). MARKET/MARKET_OPERATOR — faqat o'z marketi; market kaliti «Ombordan buyurtma yaratish» o'chiq bo'lsa — `HQ` + `MARKET_NOT_ALLOWED`.",
+      "Qaror 4: buyurtma tumani viloyat filialida (REGIONAL/HYBRID) FAOL ombor bo'lsa va HAMMA mahsulot yetarli bo'lsa — `source: WAREHOUSE` (`warehouse.kind: REGIONAL`), aks holda butun buyurtma `HQ` (bo'linmaydi), `reason` va `shortages` bilan. VkKDSNNn — 2-pog'ona (faqat `WAREHOUSE_HQ_TIER_ENABLED` yoqilganda): viloyat ombori yo'q (NO_WAREHOUSE), to'xtatilgan (WAREHOUSE_PAUSED) yoki qoldig'i yetmasa (INSUFFICIENT_STOCK) — Markaziy ombor (HQ filiali) ko'rib chiqiladi; unda HAMMA mahsulot yetarli bo'lsa `source: WAREHOUSE`, `warehouse.kind: HQ` + `regional_reason` / `regional_warehouse` / `regional_shortages`; aks holda `source: HQ`, `reason` — viloyat sababi, `hq_reason` (NO_HQ_WAREHOUSE / HQ_WAREHOUSE_PAUSED / HQ_INSUFFICIENT_STOCK) + `hq_warehouse` / `hq_shortages`. Kalit o'chiq bo'lsa Markaziy ombor nomzod EMAS va bu maydonlar javobda yo'q. Hech narsa band qilinmaydi — band order-service yaratishda (`catalog.warehouse.reserve`). MARKET/MARKET_OPERATOR — faqat o'z marketi; market kaliti «Ombordan buyurtma yaratish» o'chiq bo'lsa — `HQ` + `MARKET_NOT_ALLOWED` (Markaziy ombor ham ko'rilmaydi).",
   })
   @ApiBody({ type: WarehouseResolveSourceRequestDto })
   @ApiOkResponse({ type: WarehouseResolveSourceResponseDto })
@@ -355,7 +355,7 @@ export class WarehouseGatewayController {
   @ApiOperation({
     summary: '«Omborda: N» — hudud omboridagi mavjud dona (yaratish formasi)',
     description:
-      "Tuman (yoki hudud) viloyat filialidagi (REGIONAL/HYBRID) birinchi FAOL ombor — Markaziy ombor (HQ) hisobga olinmaydi; `market_id` mahsulotlari yoki `product_ids` (vergul bilan, ≤500). Ombor to'xtatilgan bo'lsa — `warehouse.status = PAUSED`, `items: []`. MARKET/MARKET_OPERATOR — faqat o'z marketi.",
+      "Tuman (yoki hudud) viloyat filialidagi (REGIONAL/HYBRID) birinchi FAOL ombor; `market_id` mahsulotlari yoki `product_ids` (vergul bilan, ≤500). Ombor to'xtatilgan bo'lsa — `warehouse.status = PAUSED`, `items: []`. Markaziy ombor (HQ) `warehouse`/`items` ga hech qachon kirmaydi. VkKDSNNn: `WAREHOUSE_HQ_TIER_ENABLED` yoqilgan, hudud aniqlangan va Markaziy ombor FAOL bo'lsa — qo'shimcha `hq_warehouse` (`kind: HQ`) va `hq_items` (shu shakl va filtr); aks holda bu maydonlar yo'q. MARKET/MARKET_OPERATOR — faqat o'z marketi.",
   })
   @ApiQuery({ name: 'district_id', required: false, type: String })
   @ApiQuery({ name: 'region_id', required: false, type: String })
@@ -563,7 +563,7 @@ export class WarehouseGatewayController {
   @ApiOperation({
     summary: "Omborni to'xtatish",
     description:
-      "Qoldiq joyida saqlanadi va ko'rinadi, yangi buyurtma tushmaydi (manba — HQ). Mavjud bandlar ishlayveradi. Takror — `changed: false`.",
+      "Qoldiq joyida saqlanadi va ko'rinadi, yangi buyurtma tushmaydi (manba — HQ; VkKDSNNn: `WAREHOUSE_HQ_TIER_ENABLED` yoqilgan bo'lsa viloyat ombori to'xtatilganda avval Markaziy ombor ko'rib chiqiladi, Markaziy ombor to'xtatilsa — u 2-pog'onada tanlanmaydi). Mavjud bandlar ishlayveradi. Takror — `changed: false`.",
   })
   @ApiParam({ name: 'id', description: 'Warehouse ID' })
   @ApiBody({ type: WarehouseStatusRequestDto, required: false })

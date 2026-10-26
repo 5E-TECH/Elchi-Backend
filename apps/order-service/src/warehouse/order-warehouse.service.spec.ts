@@ -32,6 +32,9 @@ const PLAN = {
   branch_id: '11',
   market_id: '121',
   items: [{ product_id: '142', quantity: 2 }],
+  // VkKDSNNn: tur va hudud (resolveReply'da hudud yo'q — null).
+  kind: 'REGIONAL' as const,
+  region_id: null,
 };
 
 const resolveReply = (source: 'WAREHOUSE' | 'HQ') => ({
@@ -42,6 +45,8 @@ const resolveReply = (source: 'WAREHOUSE' | 'HQ') => ({
 
 const make = (
   handlers: Record<string, (payload: any) => Observable<unknown>> = {},
+  // VkKDSNNn: HQ id manbai (OrderLookupService); berilmasa — lookup yo'q.
+  lookup?: { getHqBranchId: jest.Mock },
 ) => {
   const send: Send = jest.fn((pattern: { cmd: string }, payload: any) => {
     const handler = handlers[pattern.cmd];
@@ -72,13 +77,16 @@ const make = (
       { product_id: null, quantity: 1 },
     ]),
   );
+  const findOrders = jest.fn<Promise<any[]>, [any]>(() => Promise.resolve([]));
   const repos = new Map<unknown, unknown>([
     [OutboxEvent, { delete: deleteOutbox }],
   ]);
   const manager = {
     getRepository: jest.fn((entity: { name?: string }) => {
       if (repos.has(entity)) return repos.get(entity);
-      if (entity?.name === 'Order') return { update: updateOrder };
+      if (entity?.name === 'Order') {
+        return { update: updateOrder, find: findOrders };
+      }
       if (entity?.name === 'OrderItem') return { find: findItems };
       return {};
     }),
@@ -87,6 +95,7 @@ const make = (
     { send } as never,
     outbox as never,
     custody as never,
+    lookup as never,
   );
   return {
     service,
@@ -97,6 +106,7 @@ const make = (
     deleteOutbox,
     updateOrder,
     findItems,
+    findOrders,
   };
 };
 
@@ -544,6 +554,7 @@ describe('6kHnNH9j — OrderWarehouseService', () => {
                 name: 'Samarqand ombori',
                 branch_id: '11',
                 status: 'ACTIVE',
+                kind: 'REGIONAL',
               },
             ],
           }),
@@ -557,6 +568,7 @@ describe('6kHnNH9j — OrderWarehouseService', () => {
         id: '3',
         name: 'Samarqand ombori',
         branch_id: '11',
+        kind: 'REGIONAL',
       });
       expect(warehouseRefOf({ warehouse_id: null }, refs)).toBeNull();
 
@@ -568,6 +580,7 @@ describe('6kHnNH9j — OrderWarehouseService', () => {
         id: '3',
         name: null,
         branch_id: null,
+        kind: null,
       });
 
       const hq = make();
@@ -589,6 +602,674 @@ describe('6kHnNH9j — OrderWarehouseService', () => {
           warehouse_id: null,
         }),
       ).toEqual({ fulfillment_source: 'HQ', warehouse_id: null });
+    });
+  });
+});
+
+/**
+ * VkKDSNNn — Markaziy ombor (2-pog'ona). Markaziy ombor buyurtmasi =
+ * `WAREHOUSE` + `home_branch_id = HQ id` ('1'). HQ'da turish: egalik HQ/null
+ * yoki BRANCH/'1'. HQ id noma'lum — HQ-tur mantiq yo'q (fail-closed).
+ */
+describe('VkKDSNNn — markaziy ombor (OrderWarehouseService)', () => {
+  const HQ_ID = '1';
+  const hqLookup = (value: string | null | Error = HQ_ID) => ({
+    getHqBranchId: jest.fn(() =>
+      value instanceof Error ? Promise.reject(value) : Promise.resolve(value),
+    ),
+  });
+  const hqReply = (extra: Record<string, unknown> = {}) => ({
+    source: 'WAREHOUSE',
+    reason: 'OK',
+    region_id: '7',
+    warehouse: {
+      id: '9',
+      name: 'Markaziy ombor',
+      branch_id: HQ_ID,
+      kind: 'HQ',
+    },
+    ...extra,
+  });
+  const HQ_PLAN = {
+    warehouse_id: '9',
+    warehouse_name: 'Markaziy ombor',
+    branch_id: HQ_ID,
+    market_id: '121',
+    items: [{ product_id: '142', quantity: 2 }],
+    kind: 'HQ',
+    region_id: '7',
+  };
+  const hqOrder = (extra: Record<string, unknown> = {}) =>
+    warehouseOrder({
+      warehouse_id: '9',
+      home_branch_id: HQ_ID,
+      holder_type: OrderHolderType.HQ,
+      holder_branch_id: null,
+      ...extra,
+    });
+  const MANAGER = { id: '31', roles: ['manager'] };
+
+  describe('planCreate', () => {
+    it('⭐ catalog Markaziy omborni tanladi (HQ id mos, hudud bor) → kind HQ + region_id', async () => {
+      const lookup = hqLookup();
+      const { service } = make(
+        { [WAREHOUSE_RPC.RESOLVE_SOURCE]: () => of(hqReply()) },
+        lookup,
+      );
+      await expect(
+        service.planCreate(createDto(), REGISTRATOR),
+      ).resolves.toEqual(HQ_PLAN);
+      expect(lookup.getHqBranchId).toHaveBeenCalledTimes(1);
+    });
+
+    it('viloyat ombori — kind REGIONAL, hudud catalog`dan; HQ id so`ralmaydi', async () => {
+      const lookup = hqLookup();
+      const { service } = make(
+        {
+          [WAREHOUSE_RPC.RESOLVE_SOURCE]: () =>
+            of({
+              ...resolveReply('WAREHOUSE'),
+              region_id: '7',
+              warehouse: {
+                ...resolveReply('WAREHOUSE').warehouse,
+                kind: 'REGIONAL',
+              },
+            }),
+        },
+        lookup,
+      );
+      await expect(
+        service.planCreate(createDto(), REGISTRATOR),
+      ).resolves.toEqual({ ...PLAN, kind: 'REGIONAL', region_id: '7' });
+      expect(lookup.getHqBranchId).not.toHaveBeenCalled();
+    });
+
+    it('⭐ fail-closed: lookup yo`q / HQ id null / lookup xatosi / ombor filiali HQ emas / hudud yo`q → null (oddiy HQ)', async () => {
+      const cases: Array<
+        [ReturnType<typeof hqLookup> | undefined, Record<string, unknown>]
+      > = [
+        [undefined, hqReply()],
+        [hqLookup(null), hqReply()],
+        [hqLookup(new Error('branch down')), hqReply()],
+        [hqLookup('2'), hqReply()],
+        [hqLookup(), hqReply({ region_id: null })],
+        [hqLookup(), hqReply({ region_id: 'abc' })],
+      ];
+      for (const [lookup, reply] of cases) {
+        const { service } = make(
+          { [WAREHOUSE_RPC.RESOLVE_SOURCE]: () => of(reply) },
+          lookup,
+        );
+        await expect(
+          service.planCreate(createDto(), REGISTRATOR),
+        ).resolves.toBeNull();
+      }
+    });
+  });
+
+  describe('onOrderWritten — chiqim (out)', () => {
+    const write = async (
+      order: unknown,
+      prev: { type: OrderHolderType | null; branch: string | null },
+      lookup = hqLookup(),
+      oldStatus: Order_status = Order_status.RECEIVED,
+    ) => {
+      const h = make({}, lookup);
+      await h.service.onOrderWritten(
+        {
+          order: order as never,
+          oldStatus,
+          previousHolderType: prev.type,
+          previousHolderBranchId: prev.branch,
+          requester: MANAGER,
+        },
+        h.manager,
+      );
+      return h;
+    };
+    const outNote = (h: ReturnType<typeof make>) =>
+      h.outbox.enqueue.mock.calls
+        .filter((call) => call[1] === WAREHOUSE_RPC.OUT)
+        .map((call) => (call[2] as { note: string }).note);
+
+    it('⭐ HQ → kuryer, HQ → filial (jo`natish), BRANCH(HQ) → filial → out (lenient), shu tranzaksiyada', async () => {
+      const toCourier = await write(
+        hqOrder({
+          status: Order_status.ON_THE_ROAD,
+          holder_type: OrderHolderType.COURIER,
+          holder_branch_id: HQ_ID,
+          holder_courier_id: '301',
+        }),
+        { type: OrderHolderType.HQ, branch: null },
+      );
+      expect(toCourier.outbox.enqueue).toHaveBeenCalledWith(
+        'CATALOG',
+        WAREHOUSE_RPC.OUT,
+        {
+          order_id: '900',
+          actor: { id: '31', roles: ['manager'] },
+          lenient: true,
+          note: "Buyurtma #900 markaziy ombordan jo'natildi",
+        },
+        { manager: toCourier.manager },
+      );
+
+      const dispatched = await write(
+        hqOrder({
+          status: Order_status.ON_THE_ROAD,
+          holder_type: OrderHolderType.BRANCH,
+          holder_branch_id: '12',
+        }),
+        { type: OrderHolderType.HQ, branch: null },
+      );
+      expect(outNote(dispatched)).toEqual([
+        "Buyurtma #900 markaziy ombordan jo'natildi",
+      ]);
+
+      const fromBatchForm = await write(
+        hqOrder({
+          holder_type: OrderHolderType.BRANCH,
+          holder_branch_id: '12',
+        }),
+        { type: OrderHolderType.BRANCH, branch: HQ_ID },
+      );
+      expect(outNote(fromBatchForm)).toEqual([
+        "Buyurtma #900 markaziy ombordan jo'natildi",
+      ]);
+    });
+
+    it('viloyat filialida kuryerga berildi (HQ`dan oldin chiqqan) → out «kuryerga berildi»', async () => {
+      const h = await write(
+        hqOrder({
+          status: Order_status.ON_THE_ROAD,
+          holder_type: OrderHolderType.COURIER,
+          holder_branch_id: '12',
+          holder_courier_id: '302',
+        }),
+        { type: OrderHolderType.BRANCH, branch: '12' },
+      );
+      expect(outNote(h)).toEqual(['Buyurtma #900 kuryerga berildi']);
+    });
+
+    it('⭐ HQ ↔ BRANCH(HQ), → MARKET, filial ichida takror, qisman sotuv bolasi — out yo`q', async () => {
+      const cases: Array<
+        [unknown, { type: OrderHolderType | null; branch: string | null }]
+      > = [
+        [
+          hqOrder({
+            holder_type: OrderHolderType.BRANCH,
+            holder_branch_id: HQ_ID,
+          }),
+          { type: OrderHolderType.HQ, branch: null },
+        ],
+        [hqOrder(), { type: OrderHolderType.BRANCH, branch: HQ_ID }],
+        [
+          hqOrder({
+            status: Order_status.RETURNED_TO_MARKET,
+            holder_type: OrderHolderType.MARKET,
+          }),
+          { type: OrderHolderType.HQ, branch: null },
+        ],
+        [
+          hqOrder({
+            holder_type: OrderHolderType.BRANCH,
+            holder_branch_id: '12',
+          }),
+          { type: OrderHolderType.BRANCH, branch: '12' },
+        ],
+        [
+          hqOrder({
+            id: '950',
+            parent_order_id: '900',
+            holder_type: OrderHolderType.BRANCH,
+            holder_branch_id: '12',
+          }),
+          { type: OrderHolderType.HQ, branch: null },
+        ],
+        [
+          hqOrder({
+            id: '951',
+            parent_order_id: '900',
+            holder_type: OrderHolderType.COURIER,
+            holder_courier_id: '301',
+          }),
+          { type: OrderHolderType.HQ, branch: null },
+        ],
+      ];
+      for (const [order, prev] of cases) {
+        const h = await write(order, prev);
+        expect(h.outbox.enqueue).not.toHaveBeenCalled();
+        expect(h.updateOrder).not.toHaveBeenCalled();
+      }
+    });
+  });
+
+  describe('onOrderWritten — qaytish (return)', () => {
+    it('⭐ bekor posilka HQ`ga qabul qilindi (HQ/null va BRANCH/HQ) → Markaziy omborga return + yopiladi', async () => {
+      for (const holder of [
+        { holder_type: OrderHolderType.HQ, holder_branch_id: null },
+        { holder_type: OrderHolderType.BRANCH, holder_branch_id: HQ_ID },
+      ]) {
+        const { service, outbox, manager, updateOrder, custody } = make(
+          {},
+          hqLookup(),
+        );
+        const order = hqOrder({
+          status: Order_status.CANCELLED,
+          ...holder,
+        }) as unknown as Record<string, unknown>;
+        await service.onOrderWritten(
+          {
+            order: order as never,
+            oldStatus: Order_status.CANCELLED_SENT,
+            previousHolderType: OrderHolderType.HQ,
+            previousHolderBranchId: null,
+            requester: MANAGER,
+          },
+          manager,
+        );
+        expect(outboxPatterns(outbox)).toEqual([WAREHOUSE_RPC.RETURN]);
+        expect(outbox.enqueue.mock.calls[0][2]).toEqual({
+          order_id: '900',
+          actor: { id: '31', roles: ['manager'] },
+          note: 'Buyurtma #900 markaziy omborga qaytdi',
+        });
+        expect(updateOrder).toHaveBeenCalledWith(
+          { id: '900' },
+          expect.objectContaining({
+            status: Order_status.RETURNED_TO_MARKET,
+            holder_type: OrderHolderType.MARKET,
+            holder_branch_id: null,
+          }),
+        );
+        expect(order).toMatchObject({
+          status: Order_status.RETURNED_TO_MARKET,
+          holder_type: OrderHolderType.MARKET,
+        });
+        expect(custody.createTrackingEvent).toHaveBeenCalledWith(
+          expect.objectContaining({
+            from_status: Order_status.CANCELLED,
+            to_status: Order_status.RETURNED_TO_MARKET,
+            action: 'warehouse_returned',
+            description: 'Markaziy omborga qaytarildi',
+            metadata: { warehouse_id: '9', warehouse_kind: 'HQ' },
+            note: 'Markaziy ombor buyurtmasi omborga qaytarildi — qoldiq tiklandi',
+          }),
+          expect.anything(),
+        );
+        expect(custody.createCustodyEvent).toHaveBeenCalledWith(
+          expect.objectContaining({
+            from_holder_type: holder.holder_type,
+            from_branch_id: holder.holder_branch_id,
+            to_holder_type: OrderHolderType.MARKET,
+          }),
+          expect.anything(),
+        );
+      }
+    });
+
+    it('HQ`da turgan buyurtma to`g`ridan bekor (WAITING → CANCELLED) → return', async () => {
+      const { service, outbox, manager } = make({}, hqLookup());
+      await service.onOrderWritten(
+        {
+          order: hqOrder({ status: Order_status.CANCELLED }),
+          oldStatus: Order_status.WAITING,
+          previousHolderType: OrderHolderType.HQ,
+          previousHolderBranchId: null,
+        },
+        manager,
+      );
+      expect(outboxPatterns(outbox)).toEqual([WAREHOUSE_RPC.RETURN]);
+    });
+
+    it('⭐ viloyat filialida / kuryerda bekor yoki allaqachon bekor (o`tish yo`q) — qaytish yo`q', async () => {
+      const cases: Array<[Record<string, unknown>, Order_status]> = [
+        [
+          {
+            status: Order_status.CANCELLED,
+            holder_type: OrderHolderType.BRANCH,
+            holder_branch_id: '12',
+          },
+          Order_status.CANCELLED_SENT,
+        ],
+        [
+          {
+            status: Order_status.CANCELLED,
+            holder_type: OrderHolderType.COURIER,
+            holder_branch_id: '12',
+            holder_courier_id: '302',
+          },
+          Order_status.WAITING,
+        ],
+        [{ status: Order_status.CANCELLED }, Order_status.CANCELLED],
+      ];
+      for (const [extra, oldStatus] of cases) {
+        const { service, outbox, manager, updateOrder } = make({}, hqLookup());
+        await service.onOrderWritten(
+          {
+            order: hqOrder(extra),
+            oldStatus,
+            previousHolderType: extra.holder_type as OrderHolderType,
+            previousHolderBranchId: (extra.holder_branch_id as string) ?? null,
+          },
+          manager,
+        );
+        expect(outbox.enqueue).not.toHaveBeenCalled();
+        expect(updateOrder).not.toHaveBeenCalled();
+      }
+    });
+
+    it('viloyat ombori buyurtmasi HQ id ma`lum bo`lsa ham bugungidek (izoh/tur REGIONAL)', async () => {
+      const { service, outbox, manager, custody } = make({}, hqLookup());
+      await service.onOrderWritten(
+        {
+          order: warehouseOrder({ status: Order_status.CANCELLED }),
+          oldStatus: Order_status.CANCELLED_SENT,
+          previousHolderType: OrderHolderType.BRANCH,
+          previousHolderBranchId: '11',
+        },
+        manager,
+      );
+      expect(outbox.enqueue.mock.calls[0][2]).toEqual({
+        order_id: '900',
+        actor: { id: null, role: 'system' },
+        note: 'Buyurtma #900 bekor — omborga qaytdi',
+      });
+      expect(custody.createTrackingEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          from_status: Order_status.CANCELLED,
+          description: 'Omborga qaytarildi',
+          metadata: { warehouse_id: '3', warehouse_kind: 'REGIONAL' },
+          note: 'Ombor buyurtmasi omborga qaytarildi — qoldiq tiklandi (HQ qaytarish oqimisiz)',
+        }),
+        expect.anything(),
+      );
+    });
+  });
+
+  describe('HQ id noma`lum', () => {
+    it('⭐ lookup yo`q → viloyat semantikasi (HQ-tur mantiq yo`q, 503 ham yo`q)', async () => {
+      const dispatch = make();
+      await dispatch.service.onOrderWritten(
+        {
+          order: hqOrder({
+            holder_type: OrderHolderType.BRANCH,
+            holder_branch_id: '12',
+          }),
+          oldStatus: Order_status.RECEIVED,
+          previousHolderType: OrderHolderType.HQ,
+          previousHolderBranchId: null,
+        },
+        dispatch.manager,
+      );
+      // HQ'da qabul — viloyat qoidasida qaytish yo'q (egalik HQ).
+      await dispatch.service.onOrderWritten(
+        {
+          order: hqOrder({ status: Order_status.CANCELLED }),
+          oldStatus: Order_status.CANCELLED_SENT,
+          previousHolderType: OrderHolderType.HQ,
+        },
+        dispatch.manager,
+      );
+      expect(dispatch.outbox.enqueue).not.toHaveBeenCalled();
+
+      // Kuryerga berish — bugungi qoida bilan out.
+      const courier = make();
+      await courier.service.onOrderWritten(
+        {
+          order: hqOrder({
+            holder_type: OrderHolderType.COURIER,
+            holder_courier_id: '301',
+          }),
+          oldStatus: Order_status.RECEIVED,
+          previousHolderType: OrderHolderType.HQ,
+        },
+        courier.manager,
+      );
+      expect(courier.outbox.enqueue.mock.calls[0][2]).toMatchObject({
+        note: 'Buyurtma #900 kuryerga berildi',
+      });
+    });
+
+    it('⭐ (C1) lookup bor, HQ id null: uydan/HQ`dan boshqa filialga o`tish → 503 (yozuv bekor); kuryer — out; bola va uy ichida — o`tadi', async () => {
+      const blocked: Array<
+        [Record<string, unknown>, OrderHolderType, string | null]
+      > = [
+        [
+          { holder_type: OrderHolderType.BRANCH, holder_branch_id: '12' },
+          OrderHolderType.HQ,
+          null,
+        ],
+        [
+          { holder_type: OrderHolderType.BRANCH, holder_branch_id: '12' },
+          OrderHolderType.BRANCH,
+          HQ_ID,
+        ],
+      ];
+      for (const [extra, prevType, prevBranch] of blocked) {
+        const { service, outbox, manager } = make({}, hqLookup(null));
+        const error: unknown = await service
+          .onOrderWritten(
+            {
+              order: hqOrder(extra),
+              oldStatus: Order_status.RECEIVED,
+              previousHolderType: prevType,
+              previousHolderBranchId: prevBranch,
+            },
+            manager,
+          )
+          .catch((e: unknown) => e);
+        expect(error).toBeInstanceOf(RpcException);
+        expect((error as RpcException).getError()).toMatchObject({
+          statusCode: 503,
+        });
+        expect(outbox.enqueue).not.toHaveBeenCalled();
+      }
+
+      // Viloyat buyurtmasi uyidan boshqa filialga — ham 503 (turini bilmaymiz).
+      const regional = make({}, hqLookup(new Error('down')));
+      await expect(
+        regional.service.onOrderWritten(
+          {
+            order: warehouseOrder({ holder_branch_id: '12' }),
+            oldStatus: Order_status.RECEIVED,
+            previousHolderType: OrderHolderType.BRANCH,
+            previousHolderBranchId: '11',
+          },
+          regional.manager,
+        ),
+      ).rejects.toBeInstanceOf(RpcException);
+
+      const passing: Array<
+        [Record<string, unknown>, OrderHolderType, string | null]
+      > = [
+        // kuryerga — bugungi out
+        [
+          {
+            holder_type: OrderHolderType.COURIER,
+            holder_courier_id: '301',
+          },
+          OrderHolderType.HQ,
+          null,
+        ],
+        // bola — chiqim otada
+        [
+          {
+            id: '950',
+            parent_order_id: '900',
+            holder_type: OrderHolderType.BRANCH,
+            holder_branch_id: '12',
+          },
+          OrderHolderType.HQ,
+          null,
+        ],
+        // HQ → BRANCH/uy (= HQ id, noma'lum bo'lsa shu shakl)
+        [
+          { holder_type: OrderHolderType.BRANCH, holder_branch_id: HQ_ID },
+          OrderHolderType.HQ,
+          null,
+        ],
+        // boshqa filial ichida takror
+        [
+          { holder_type: OrderHolderType.BRANCH, holder_branch_id: '12' },
+          OrderHolderType.BRANCH,
+          '12',
+        ],
+      ];
+      const patterns: string[][] = [];
+      for (const [extra, prevType, prevBranch] of passing) {
+        const { service, outbox, manager } = make({}, hqLookup(null));
+        await service.onOrderWritten(
+          {
+            order: hqOrder(extra),
+            oldStatus: Order_status.RECEIVED,
+            previousHolderType: prevType,
+            previousHolderBranchId: prevBranch,
+          },
+          manager,
+        );
+        patterns.push(outboxPatterns(outbox));
+      }
+      expect(patterns).toEqual([[WAREHOUSE_RPC.OUT], [], [], []]);
+    });
+  });
+
+  describe('onReturnBatchReceived (HQ`ga qaytish partiyasi)', () => {
+    const rows = [
+      hqOrder({
+        id: '900',
+        status: Order_status.RECEIVED,
+        holder_type: OrderHolderType.BRANCH,
+        holder_branch_id: HQ_ID,
+      }),
+      // Partiyada turganida SOTILGAN: partiya QB'si uni ham RECEIVED ga
+      // yozgan (haqiqiy oqim) — faqat OLDINGI holat (SOLD) bo'yicha ajraladi.
+      hqOrder({
+        id: '901',
+        status: Order_status.RECEIVED,
+        holder_type: OrderHolderType.BRANCH,
+        holder_branch_id: HQ_ID,
+      }),
+      // Oldingi holati noma'lum (uzatilmagan) — fail-closed, tegilmaydi.
+      hqOrder({
+        id: '904',
+        status: Order_status.RECEIVED,
+        holder_type: OrderHolderType.BRANCH,
+        holder_branch_id: HQ_ID,
+      }),
+      // Viloyat ombori buyurtmasi (K1) — filtrdan o'tmaydi.
+      warehouseOrder({
+        id: '902',
+        status: Order_status.RECEIVED,
+        holder_type: OrderHolderType.BRANCH,
+        holder_branch_id: HQ_ID,
+      }),
+      // HQ buyurtma — filtrdan o'tmaydi.
+      hqOrder({
+        id: '903',
+        fulfillment_source: 'HQ',
+        warehouse_id: null,
+        status: Order_status.NEW,
+        holder_type: OrderHolderType.BRANCH,
+        holder_branch_id: HQ_ID,
+      }),
+    ] as unknown as Array<Record<string, any>>;
+    const withRows = (h: ReturnType<typeof make>) => {
+      h.findOrders.mockImplementation(({ where }: any) =>
+        Promise.resolve(
+          rows
+            .filter(
+              (row) =>
+                (where.id.value as string[]).includes(String(row.id)) &&
+                row.fulfillment_source === where.fulfillment_source &&
+                String(row.home_branch_id) === String(where.home_branch_id),
+            )
+            .map((row) => ({ ...row })),
+        ),
+      );
+      return h;
+    };
+
+    /** Partiya QB'sidan OLDINGI holat (chaqiruvchi o'qigani). */
+    const priorStatusById = new Map<string, Order_status>([
+      ['900', Order_status.CANCELLED],
+      ['901', Order_status.SOLD],
+      ['902', Order_status.CANCELLED],
+      ['903', Order_status.NEW],
+    ]);
+
+    it('⭐ manzil HQ → Markaziy ombor buyurtmasi omborga qaytadi (from_status — yangi holat); sotilgan (oldingi holat bo`yicha), oldingi holati noma`lum, viloyat va HQ buyurtma — yo`q', async () => {
+      const h = withRows(make({}, hqLookup()));
+      await h.service.onReturnBatchReceived(
+        {
+          orderIds: ['900', '901', '902', '903', '904', '900', 'abc'],
+          destinationBranchId: HQ_ID,
+          priorStatusById,
+          requester: { id: '41', roles: ['manager'] },
+        },
+        h.manager,
+      );
+      expect(h.findOrders).toHaveBeenCalledTimes(1);
+      const { where } = h.findOrders.mock.calls[0][0];
+      expect(where).toMatchObject({
+        fulfillment_source: 'WAREHOUSE',
+        home_branch_id: HQ_ID,
+        isDeleted: false,
+      });
+      expect(where.id.value).toEqual(['900', '901', '902', '903', '904']);
+      expect(outboxPatterns(h.outbox)).toEqual([WAREHOUSE_RPC.RETURN]);
+      expect(h.outbox.enqueue.mock.calls[0][2]).toEqual({
+        order_id: '900',
+        actor: { id: '41', roles: ['manager'] },
+        note: 'Buyurtma #900 markaziy omborga qaytdi',
+      });
+      expect(h.updateOrder).toHaveBeenCalledTimes(1);
+      expect(h.updateOrder).toHaveBeenCalledWith(
+        { id: '900' },
+        expect.objectContaining({ status: Order_status.RETURNED_TO_MARKET }),
+      );
+      expect(h.custody.createTrackingEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          from_status: Order_status.RECEIVED,
+          to_status: Order_status.RETURNED_TO_MARKET,
+          metadata: { warehouse_id: '9', warehouse_kind: 'HQ' },
+        }),
+        expect.anything(),
+      );
+      expect(h.custody.createCustodyEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          from_holder_type: OrderHolderType.BRANCH,
+          from_branch_id: HQ_ID,
+          to_holder_type: OrderHolderType.MARKET,
+        }),
+        expect.anything(),
+      );
+    });
+
+    it('manzil viloyat filiali, HQ id noma`lum yoki lookup yo`q — hech narsa (DB ham o`qilmaydi)', async () => {
+      for (const [lookup, destination] of [
+        [hqLookup(), '11'],
+        [hqLookup(null), HQ_ID],
+        [undefined, HQ_ID],
+      ] as Array<[ReturnType<typeof hqLookup> | undefined, string]>) {
+        const h = withRows(make({}, lookup));
+        await h.service.onReturnBatchReceived(
+          {
+            orderIds: ['900'],
+            destinationBranchId: destination,
+            priorStatusById,
+          },
+          h.manager,
+        );
+        expect(h.findOrders).not.toHaveBeenCalled();
+        expect(h.outbox.enqueue).not.toHaveBeenCalled();
+      }
+      const empty = withRows(make({}, hqLookup()));
+      await empty.service.onReturnBatchReceived(
+        { orderIds: [], destinationBranchId: HQ_ID, priorStatusById },
+        empty.manager,
+      );
+      expect(empty.findOrders).not.toHaveBeenCalled();
     });
   });
 });

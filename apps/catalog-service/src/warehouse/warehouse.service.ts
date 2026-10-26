@@ -1,15 +1,18 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import { DataSource, EntityManager, In, Repository } from 'typeorm';
 import {
   ActivityAction,
   ActivityLogService,
   formatProductSkuCode,
+  type HqWarehouseReason,
   parseProductSkuCode,
   productBarcodeLookupVariants,
   STOCK_MOVEMENT_TYPES,
   type StockMovementType,
   WAREHOUSE_ADDRESS_MAX,
+  WAREHOUSE_HQ_TIER_FLAG,
   WAREHOUSE_LOW_STOCK_DEFAULT,
   WAREHOUSE_LOW_STOCK_MAX,
   WAREHOUSE_NAME_MAX,
@@ -48,6 +51,7 @@ import {
   normalizeActor,
   normalizeOrderItems,
   notFoundWarehouse,
+  OrderItem,
   pagination,
   returnedRows,
   rpcError,
@@ -158,6 +162,40 @@ const asList = (raw: unknown): string[] =>
     .map((item) => str(item))
     .filter(Boolean);
 
+/** VkKDSNNn: manba javobidagi qator (`resolve_source.items`). */
+interface SourceLine {
+  product_id: string;
+  name: string | null;
+  required: number;
+  available: number;
+  enough: boolean;
+}
+
+/** Yetishmovchilik (`shortages`, VkKDSNNn: `hq_shortages`). */
+type SourceShortage = Omit<SourceLine, 'enough'>;
+
+const shortagesOf = (lines: SourceLine[]): SourceShortage[] =>
+  lines
+    .filter((line) => !line.enough)
+    .map(({ product_id, name, required, available }) => ({
+      product_id,
+      name,
+      required,
+      available,
+    }));
+
+/**
+ * VkKDSNNn: Markaziy ombor (2-pog'ona) ko'rib chiqiladigan viloyat sabablari
+ * — viloyat ombori yo'q, to'xtatilgan yoki qoldig'i yetmaydi. Qolganlari
+ * (MARKET_NOT_ALLOWED, NO_ITEMS, NO_REGION, PRODUCT_INVALID) — buyurtma
+ * umuman ombordan bo'la olmaydi.
+ */
+const HQ_TIER_REASONS = new Set<WarehouseSourceReason>([
+  'NO_WAREHOUSE',
+  'WAREHOUSE_PAUSED',
+  'INSUFFICIENT_STOCK',
+]);
+
 /**
  * hY7uacJu: ombor moduli — o'qish va ombor boshqaruvi (CRUD, pauza).
  * Qoldiqni o'zgartiruvchi amallar — `WarehouseStockService`.
@@ -173,6 +211,9 @@ export class WarehouseService {
     @InjectDataSource() private readonly dataSource: DataSource,
     private readonly directory: WarehouseDirectoryService,
     private readonly activityLog: ActivityLogService,
+    // VkKDSNNn: OXIRIDA va @Optional — mavjud spec'lar 4 arg bilan quradi
+    // (config yo'q → Markaziy ombor pog'onasi o'chiq).
+    @Optional() private readonly config?: ConfigService,
   ) {}
 
   private get manager(): EntityManager {
@@ -1324,6 +1365,8 @@ export class WarehouseService {
    * Hudud (viloyat/logistika hududi) filialidagi omborlar, id bo'yicha.
    * Pa1KaXmj: faqat viloyat filiallari (REGIONAL/HYBRID) — Markaziy ombor
    * (HQ) hech qachon nomzod emas, HQ'ning `region_id` si mos kelsa ham.
+   * VkKDSNNn: Markaziy ombor — alohida 2-pog'ona (`hqTierWarehouse`, kalit
+   * bilan), bu ro'yxatga kirmaydi.
    */
   private async candidatesForRegion(regionId: string) {
     const warehouses = await this.warehouseRepo.find({
@@ -1374,6 +1417,120 @@ export class WarehouseService {
   }
 
   /**
+   * VkKDSNNn: Markaziy ombor pog'onasi kaliti (`WAREHOUSE_HQ_TIER_ENABLED`).
+   * ConfigService Joi'dan o'tgan boolean qaytaradi; ehtiyot uchun satr
+   * ko'rinishi ham tushuniladi ('true' / '1' / 'yes', katta-kichik harf
+   * farqsiz). Config yo'q (spec) yoki boshqa qiymat — o'chiq (order-gateway
+   * `isAiOrderEnabled` naqshi).
+   */
+  private hqTierEnabled(): boolean {
+    const raw: unknown = this.config?.get<unknown>(WAREHOUSE_HQ_TIER_FLAG);
+    if (typeof raw === 'boolean') return raw;
+    return (
+      typeof raw === 'string' &&
+      ['true', '1', 'yes'].includes(raw.trim().toLowerCase())
+    );
+  }
+
+  /**
+   * VkKDSNNn: Markaziy ombor (2-pog'ona nomzodi) — HQ filial id aniq, filial
+   * haqiqatan HQ va faol (`can_host_warehouse`) bo'lsa, o'sha filialdagi
+   * (o'chirilmagan) ombor. Aks holda `null` — fail-closed: HQ id kelmasa
+   * (branch-service sekin/uzilgan, `HQ_ID_READ_WAIT_MS`) yoki filial
+   * olinmasa Markaziy ombor tanlanmaydi. Holat (FAOL/to'xtatilgan) —
+   * chaqiruvchida.
+   */
+  private async hqTierWarehouse(): Promise<{
+    warehouse: Warehouse;
+    branch: WarehouseBranchInfo;
+  } | null> {
+    const hqId = await this.hqBranchIdForRead();
+    if (!hqId) return null;
+    const branch = await this.directory.getBranch(hqId);
+    if (!branch?.is_hq || !branch.can_host_warehouse) return null;
+    // HQ filialida ko'pi bilan bitta ombor (UQ_warehouses_branch_id).
+    const warehouse = await this.warehouseRepo.findOne({
+      where: { branch_id: hqId, isDeleted: false },
+    });
+    return warehouse ? { warehouse, branch } : null;
+  }
+
+  /**
+   * `source: HQ` natijasi (market olib keladi). VkKDSNNn: `resolveSource`
+   * ichidagi yopilmadan ajratildi — ikkala pog'ona ham ishlatadi; maydonlar
+   * va ularning tartibi o'zgarmagan.
+   */
+  private hqSource(
+    reason: WarehouseSourceReason,
+    extra: Record<string, unknown> = {},
+  ) {
+    return {
+      source: 'HQ' as const,
+      reason,
+      region_id: null as string | null,
+      warehouse: null as ReturnType<WarehouseService['candidateView']> | null,
+      items: [] as SourceLine[],
+      shortages: [] as SourceShortage[],
+      ...extra,
+    };
+  }
+
+  /**
+   * VkKDSNNn: mahsulotlar yaroqliligi (ikkala pog'ona uchun bitta qoida):
+   * topilmagan, o'chirilgan yoki (market berilgan bo'lsa) begona market
+   * mahsuloti — yaroqsiz. `invalid` — qatorlar tartibida.
+   */
+  private async validateProducts(items: OrderItem[], marketId: string | null) {
+    const products = await loadProducts(
+      this.manager,
+      items.map((item) => item.product_id),
+    );
+    const invalid = items
+      .filter((item) => {
+        const product = products.get(item.product_id);
+        return (
+          !product ||
+          product.is_deleted ||
+          (marketId !== null && product.user_id !== marketId)
+        );
+      })
+      .map((item) => item.product_id);
+    return { products, invalid };
+  }
+
+  /**
+   * VkKDSNNn: bitta ombordagi qatorlar — kerak / mavjud (band ayirilgan) /
+   * yetarlimi. Ikkala pog'ona ham shu hisobni ishlatadi.
+   */
+  private async stockLines(
+    warehouseId: string,
+    items: OrderItem[],
+    products: Map<string, WarehouseProductRow>,
+  ): Promise<SourceLine[]> {
+    const stock: Array<{
+      product_id: string;
+      on_hand: number;
+      reserved: number;
+    }> = await this.manager.query(
+      `SELECT "product_id"::text AS product_id, "on_hand", "reserved"
+           FROM ${this.t(WarehouseStock)}
+          WHERE "warehouse_id" = $1 AND "product_id" = ANY($2::bigint[])`,
+      [warehouseId, items.map((item) => item.product_id)],
+    );
+    return items.map((item) => {
+      const row = stock.find((entry) => entry.product_id === item.product_id);
+      const available = row ? Math.max(0, row.on_hand - row.reserved) : 0;
+      return {
+        product_id: item.product_id,
+        name: products.get(item.product_id)?.name ?? null,
+        required: item.quantity,
+        available,
+        enough: available >= item.quantity,
+      };
+    });
+  }
+
+  /**
    * Manba (qaror 4/5): buyurtma hududi filialida FAOL ombor bo'lsa va HAMMA
    * mahsulot yetarli bo'lsa — o'sha ombor, aks holda butun buyurtma HQ
    * (bo'linmaydi). Faqat O'QIYDI — haqiqiy tekshiruv `reserve` da (qulf
@@ -1382,6 +1539,16 @@ export class WarehouseService {
    * Market (yoki market operatori) yaratayotgan bo'lsa — market kaliti
    * `can_order_from_warehouse` yoqilgan bo'lishi shart (sukut o'chiq;
    * aniqlanmasa — HQ, fail-closed).
+   *
+   * VkKDSNNn — 2-pog'ona (faqat `WAREHOUSE_HQ_TIER_ENABLED` yoqilganda):
+   * viloyat ombori yo'q / to'xtatilgan / qoldig'i yetmasa — Markaziy ombor
+   * (HQ filiali) ko'rib chiqiladi. Hammasi yetarli bo'lsa `source: WAREHOUSE`,
+   * `warehouse.kind: HQ` va viloyat sababi `regional_reason` /
+   * `regional_warehouse` / `regional_shortages` da. Markaziy ombor ham to'g'ri
+   * kelmasa — viloyat natijasi (`reason` — viloyat sababi) + `hq_reason`
+   * (`HQ_WAREHOUSE_REASONS`), bo'lsa `hq_warehouse` / `hq_shortages`.
+   * Kalit o'chiq bo'lsa javob 1-bosqichdagi bilan AYNAN bir xil (yangi
+   * maydon yo'q).
    */
   async resolveSource(input: {
     region_id?: unknown;
@@ -1392,30 +1559,79 @@ export class WarehouseService {
   }) {
     const items = normalizeOrderItems(input?.items);
     const marketId = toOptionalId(input?.market_id, 'market_id');
-    const hq = (
-      reason: WarehouseSourceReason,
-      extra: Record<string, unknown> = {},
-    ) => ({
-      source: 'HQ' as const,
-      reason,
-      region_id: null as string | null,
-      warehouse: null as ReturnType<WarehouseService['candidateView']> | null,
-      items: [] as Array<{
-        product_id: string;
-        name: string | null;
-        required: number;
-        available: number;
-        enough: boolean;
-      }>,
-      shortages: [] as Array<{
-        product_id: string;
-        name: string | null;
-        required: number;
-        available: number;
-      }>,
-      ...extra,
-    });
+    const regional = await this.resolveRegional(input, items, marketId);
+    if (regional.source === 'WAREHOUSE') return regional;
+    // I1: kalit o'chiq — javob 1-bosqichdagidek (yangi maydon yo'q).
+    if (!this.hqTierEnabled()) return regional;
+    // MARKET_NOT_ALLOWED, NO_ITEMS, NO_REGION, PRODUCT_INVALID — buyurtma
+    // umuman ombordan bo'la olmaydi, 2-pog'ona yo'q.
+    if (!HQ_TIER_REASONS.has(regional.reason)) return regional;
+    // Yuqoridagi uch sababda `region_id` doim bor (ehtiyot).
+    const regionId = regional.region_id;
+    if (!regionId) return regional;
 
+    const hq = await this.hqTierWarehouse();
+    if (!hq) {
+      return {
+        ...regional,
+        hq_reason: 'NO_HQ_WAREHOUSE' as HqWarehouseReason,
+      };
+    }
+    const view = this.candidateView(hq);
+    if (hq.warehouse.status !== 'ACTIVE') {
+      return {
+        ...regional,
+        hq_reason: 'HQ_WAREHOUSE_PAUSED' as HqWarehouseReason,
+        hq_warehouse: view,
+      };
+    }
+    // Viloyat ombori yo'q/to'xtatilgan bo'lsa mahsulotlar hali
+    // tekshirilmagan — Markaziy ombor uchun ham AYNI qoida.
+    const { products, invalid } = await this.validateProducts(items, marketId);
+    if (invalid.length) {
+      return this.hqSource('PRODUCT_INVALID', {
+        region_id: regionId,
+        invalid_product_ids: invalid,
+      });
+    }
+    const lines = await this.stockLines(hq.warehouse.id, items, products);
+    if (lines.every((line) => line.enough)) {
+      return {
+        source: 'WAREHOUSE' as const,
+        reason: 'OK' as const,
+        region_id: regionId,
+        warehouse: view,
+        items: lines,
+        shortages: [] as SourceShortage[],
+        regional_reason: regional.reason,
+        regional_warehouse: regional.warehouse,
+        regional_shortages: regional.shortages,
+      };
+    }
+    return {
+      ...regional,
+      hq_reason: 'HQ_INSUFFICIENT_STOCK' as HqWarehouseReason,
+      hq_warehouse: view,
+      hq_shortages: shortagesOf(lines),
+    };
+  }
+
+  /**
+   * 1-pog'ona — viloyat ombori (VkKDSNNn: `resolveSource` ning avvalgi
+   * tanasi, xulq o'zgarmagan). Tekshiruv tartibi: MARKET_NOT_ALLOWED →
+   * NO_ITEMS → NO_REGION → NO_WAREHOUSE → WAREHOUSE_PAUSED → PRODUCT_INVALID
+   * → qoldiq (birinchi yetarli FAOL ombor yoki birinchisining
+   * INSUFFICIENT_STOCK).
+   */
+  private async resolveRegional(
+    input: {
+      region_id?: unknown;
+      district_id?: unknown;
+      requester?: WarehouseActorInput | null;
+    },
+    items: OrderItem[],
+    marketId: string | null,
+  ) {
     const requester = input?.requester ?? null;
     const isMarketCreator =
       hasAnyRole(requester, [Roles.MARKET, Roles.MARKET_OPERATOR]) &&
@@ -1429,68 +1645,43 @@ export class WarehouseService {
         ? await this.directory.getMarket(marketId)
         : null;
       if (!market?.can_order_from_warehouse) {
-        return hq('MARKET_NOT_ALLOWED');
+        return this.hqSource('MARKET_NOT_ALLOWED');
       }
     }
-    if (!items.length) return hq('NO_ITEMS');
+    if (!items.length) return this.hqSource('NO_ITEMS');
 
     const regionId = await this.resolveRegion(input);
-    if (!regionId) return hq('NO_REGION');
+    if (!regionId) return this.hqSource('NO_REGION');
 
     const candidates = await this.candidatesForRegion(regionId);
-    if (!candidates.length) return hq('NO_WAREHOUSE', { region_id: regionId });
+    if (!candidates.length) {
+      return this.hqSource('NO_WAREHOUSE', { region_id: regionId });
+    }
     const active = candidates.filter(
       (item) => item.warehouse.status === 'ACTIVE',
     );
     if (!active.length) {
-      return hq('WAREHOUSE_PAUSED', {
+      return this.hqSource('WAREHOUSE_PAUSED', {
         region_id: regionId,
         warehouse: this.candidateView(candidates[0]),
       });
     }
 
-    const products = await loadProducts(
-      this.manager,
-      items.map((item) => item.product_id),
-    );
-    const invalid = items.filter((item) => {
-      const product = products.get(item.product_id);
-      return (
-        !product ||
-        product.is_deleted ||
-        (marketId !== null && product.user_id !== marketId)
-      );
-    });
+    const { products, invalid } = await this.validateProducts(items, marketId);
     if (invalid.length) {
-      return hq('PRODUCT_INVALID', {
+      return this.hqSource('PRODUCT_INVALID', {
         region_id: regionId,
-        invalid_product_ids: invalid.map((item) => item.product_id),
+        invalid_product_ids: invalid,
       });
     }
 
-    let first: ReturnType<typeof hq> | null = null;
+    let first: ReturnType<WarehouseService['hqSource']> | null = null;
     for (const candidate of active) {
-      const stock: Array<{
-        product_id: string;
-        on_hand: number;
-        reserved: number;
-      }> = await this.manager.query(
-        `SELECT "product_id"::text AS product_id, "on_hand", "reserved"
-             FROM ${this.t(WarehouseStock)}
-            WHERE "warehouse_id" = $1 AND "product_id" = ANY($2::bigint[])`,
-        [candidate.warehouse.id, items.map((item) => item.product_id)],
+      const lines = await this.stockLines(
+        candidate.warehouse.id,
+        items,
+        products,
       );
-      const lines = items.map((item) => {
-        const row = stock.find((entry) => entry.product_id === item.product_id);
-        const available = row ? Math.max(0, row.on_hand - row.reserved) : 0;
-        return {
-          product_id: item.product_id,
-          name: products.get(item.product_id)?.name ?? null,
-          required: item.quantity,
-          available,
-          enough: available >= item.quantity,
-        };
-      });
       if (lines.every((line) => line.enough)) {
         return {
           source: 'WAREHOUSE' as const,
@@ -1498,21 +1689,14 @@ export class WarehouseService {
           region_id: regionId,
           warehouse: this.candidateView(candidate),
           items: lines,
-          shortages: [],
+          shortages: [] as SourceShortage[],
         };
       }
-      first ??= hq('INSUFFICIENT_STOCK', {
+      first ??= this.hqSource('INSUFFICIENT_STOCK', {
         region_id: regionId,
         warehouse: this.candidateView(candidate),
         items: lines,
-        shortages: lines
-          .filter((line) => !line.enough)
-          .map(({ product_id, name, required, available }) => ({
-            product_id,
-            name,
-            required,
-            available,
-          })),
+        shortages: shortagesOf(lines),
       });
     }
     return first!;
@@ -1522,6 +1706,10 @@ export class WarehouseService {
    * Yaratish formasi uchun «Omborda: N»: hudud omboridagi (birinchi FAOL)
    * mavjud dona — market mahsulotlari (`market_id`) yoki `product_ids`.
    * Ombor to'xtatilgan bo'lsa `warehouse.status = PAUSED`, `items: []`.
+   *
+   * VkKDSNNn: kalit yoqilgan, hudud aniqlangan va Markaziy ombor FAOL bo'lsa
+   * — qo'shimcha `hq_warehouse` va `hq_items` (shu shakl, shu filtrlar).
+   * Aks holda bu maydonlar YO'Q (kalit o'chiq — javob o'zgarmagan).
    */
   async availability(input: {
     region_id?: unknown;
@@ -1541,6 +1729,34 @@ export class WarehouseService {
     if (!regionId) {
       return { region_id: null, warehouse: null, items: [] };
     }
+    const regional = await this.availabilityRegional(
+      regionId,
+      marketId,
+      productIds,
+    );
+    if (!this.hqTierEnabled()) return regional;
+    const hq = await this.hqTierWarehouse();
+    if (!hq || hq.warehouse.status !== 'ACTIVE') return regional;
+    return {
+      ...regional,
+      hq_warehouse: this.candidateView(hq),
+      hq_items: await this.availabilityItems(
+        hq.warehouse.id,
+        marketId,
+        productIds,
+      ),
+    };
+  }
+
+  /**
+   * Viloyat ombori bloki (VkKDSNNn: `availability` dan ajratildi, xulq
+   * o'zgarmagan).
+   */
+  private async availabilityRegional(
+    regionId: string,
+    marketId: string | null,
+    productIds: string[],
+  ) {
     const candidates = await this.candidatesForRegion(regionId);
     const chosen =
       candidates.find((item) => item.warehouse.status === 'ACTIVE') ??
@@ -1554,7 +1770,28 @@ export class WarehouseService {
         items: [],
       };
     }
-    const params: unknown[] = [chosen.warehouse.id];
+    return {
+      region_id: regionId,
+      warehouse: this.candidateView(chosen),
+      items: await this.availabilityItems(
+        chosen.warehouse.id,
+        marketId,
+        productIds,
+      ),
+    };
+  }
+
+  /**
+   * Bitta ombordagi mavjud dona (faqat qatori bor mahsulotlar), `market_id`
+   * va/yoki `product_ids` filtri bilan. VkKDSNNn: viloyat va Markaziy ombor
+   * uchun bitta so'rov.
+   */
+  private async availabilityItems(
+    warehouseId: string,
+    marketId: string | null,
+    productIds: string[],
+  ) {
+    const params: unknown[] = [warehouseId];
     const where: string[] = [`"warehouse_id" = $1`];
     if (marketId) {
       params.push(marketId);
@@ -1574,16 +1811,12 @@ export class WarehouseService {
           ORDER BY "product_id"`,
       params,
     );
-    return {
-      region_id: regionId,
-      warehouse: this.candidateView(chosen),
-      items: rows.map((row) => ({
-        product_id: row.product_id,
-        on_hand: row.on_hand,
-        reserved: row.reserved,
-        available: Math.max(0, row.on_hand - row.reserved),
-      })),
-    };
+    return rows.map((row) => ({
+      product_id: row.product_id,
+      on_hand: row.on_hand,
+      reserved: row.reserved,
+      available: Math.max(0, row.on_hand - row.reserved),
+    }));
   }
 
   /** Bir nechta omborni id bo'yicha (ichki — order tafsiloti boyitishi). */

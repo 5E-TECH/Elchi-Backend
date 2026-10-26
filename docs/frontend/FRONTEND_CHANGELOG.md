@@ -23,6 +23,55 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-10-26 — Markaziy ombor: buyurtma manbasining 2-pog'onasi (VkKDSNNn, Pa1KaXmj 2-bosqich)
+
+Deploy: **catalog-service + order-service + api-gateway**. Migratsiya **yo'q**. `openapi.json` qayta yaratildi.
+Yangi kalit **`WAREHOUSE_HQ_TIER_ENABLED`** (catalog-service, sukut `false`): o'chiq bo'lsa `resolve-source` /
+`availability` javobi **avvalgidek** (yangi maydon yo'q) va Markaziy ombordan buyurtma yaratilmaydi. Kalit FE-2
+(X7Fd1xXD) prod'da bo'lgach va TC sinovidan keyin yoqiladi (server `.env.production` → catalog-service qayta yaratiladi).
+
+Manba tartibi (kalit yoqilganda, `fulfillment: 'auto'`): (1) tuman filialining **viloyat ombori** FAOL va hamma mahsulot
+yetsa — avvalgidek; (2) aks holda **Markaziy ombor** FAOL va hamma mahsulot yetsa — Markaziy ombor (market olib
+kelmaydi, HQ terib odatdagi yo'l bilan jo'natadi); (3) aks holda HQ — market olib keladi. `fulfillment: 'hq'` —
+avvalgidek «market olib keladi» (ikkala ombor chetlab o'tiladi). Bitta market ruxsati («Ombordan buyurtma yaratish»)
+ikkala omborni ochadi.
+
+- [2026-10-26] ✏️ [catalog] — `POST /warehouses/resolve-source` (kalit yoqilganda): Markaziy ombor tanlansa
+  `source: 'WAREHOUSE'`, `reason: 'OK'`, `warehouse.kind: 'HQ'` + ixtiyoriy `regional_reason` (viloyat nega
+  tanlanmadi: `NO_WAREHOUSE` | `WAREHOUSE_PAUSED` | `INSUFFICIENT_STOCK`), `regional_warehouse`, `regional_shortages`.
+  Markaziy ombor ham to'g'ri kelmasa — `source: 'HQ'`, `reason` = viloyat sababi (o'zgarmaydi) + `hq_reason`
+  (`NO_HQ_WAREHOUSE` | `HQ_WAREHOUSE_PAUSED` | `HQ_INSUFFICIENT_STOCK`), `hq_warehouse`, `hq_shortages`. `reason`
+  enum'i **o'zgarmadi**. `MARKET_NOT_ALLOWED` / `NO_ITEMS` / `NO_REGION` / `PRODUCT_INVALID` da Markaziy ombor
+  ko'rilmaydi. `PRODUCT_INVALID` javobida `invalid_product_ids` (avval ham bor edi, endi hujjatda).
+- [2026-10-26] ✏️ [catalog] — `GET /warehouses/availability` (kalit yoqilgan, hudud aniqlangan, Markaziy ombor FAOL):
+  qo'shimcha `hq_warehouse` va `hq_items[]` (`product_id`, `on_hand`, `reserved`, `available` — viloyat bloki bilan
+  bir xil filtrlar). Viloyat bloki o'zgarmadi.
+- [2026-10-26] 🟢 [order] — Markaziy ombordan yaratilgan buyurtma: darhol **`received`**, `branch_id` =
+  `home_branch_id` = HQ, ega HQ, `fulfillment_source: 'WAREHOUSE'`, `warehouse.kind: 'HQ'`; HQ hudud pochtasiga
+  avtomatik qo'shiladi (`post_id`; logistika javob bermasa — «Yangi pochtalar» ochilganda o'zi qo'shiladi). Qoldiq:
+  yaratilganda «band», HQ'dan chiqqanda (HQ kuryeriga yoki viloyatga pochta bilan) chiqim, bekor bo'lib HQ'ga
+  qaytganda (bekor pochta HQ'da qabul qilinsa yoki RETURN partiyasi HQ'ga kelsa) — Markaziy omborga qaytadi:
+  status `returned_to_market`, tracking `action: 'warehouse_returned'`, description «Markaziy omborga qaytarildi»,
+  `metadata.warehouse_kind: 'HQ'`.
+- [2026-10-26] ✏️ [order] — `warehouse` obyektiga (ro'yxat, tafsilot, export) `kind: 'REGIONAL' | 'HQ' | null` qo'shildi.
+- [2026-10-26] 🆕 [order] — `GET /orders`, `GET /orders/export/excel`, `GET /orders/status-counts`: yangi filtrlar
+  `warehouse_id` (musbat butun son) va `warehouse_kind` (`HQ` — Markaziy ombordan, `REGIONAL` — viloyat omboridan;
+  katta-kichik harf farqsiz). Noto'g'ri qiymat → **400**; HQ filiali aniqlanmasa → **503** (qayta urinish). Kuryerning
+  «Bekor» tabida ham ishlaydi (`fulfillment_source` ham endi u yerda hisobga olinadi).
+- [2026-10-26] ⚠️ [order] — Markaziy ombor buyurtmasini **marketga topshirib bo'lmaydi**:
+  `POST /orders/:id/mark-returned-to-market` va bekorlarni marketga topshirish (`completeMarketCancelledHandover`)
+  → **409** `code: 'WAREHOUSE_ORDER_RETURNS_TO_STOCK'` («Markaziy ombor buyurtmasi markaziy omborga qaytadi —
+  marketga topshirilmaydi»); HQ filiali aniqlanmasa (ombor buyurtmasi uchun) → **503**. Viloyat ombori buyurtmalari —
+  avvalgidek. Marketga topshirishga tayyor bekorlar ro'yxati (`find_cancelled_by_market` / market xulosasi) Markaziy
+  ombor buyurtmalarini **ko'rsatmaydi**.
+- 🔧 FE (X7Fd1xXD): yaratish formasida 3 holat («Viloyat omboridan» / «Markaziy ombordan» — «Market olib kelmaydi» /
+  «HQ — market olib keladi») va «Viloyat omborida yetmaydi — markaziy ombordan ketadi» izohi (`regional_reason`);
+  «Markaziy omborda: N» (`hq_items`); «Markaziy ombordan» belgisi (`warehouse.kind === 'HQ'`) va filtr
+  (`warehouse_kind=HQ`); «Markaziy omborga qaytdi» (kind HQ + `warehouse_returned`); pochta tafsilotida «Ombordan —
+  terish kerak»; Markaziy ombor tafsilotida jo'natilmagan buyurtmalar (`fulfillment_source=WAREHOUSE&warehouse_id=<id>&status=received`);
+  FE-1 dagi «buyurtmalarga keyingi bosqichda ulanadi» izohini olib tashlang. Viloyat filialida bekor bo'lgan Markaziy
+  ombor buyurtmasida «Marketga topshirish» o'rniga «HQ'ga bekor pochta» yo'lini ko'rsating (aks holda 409).
+
 ### 2026-10-26 — Kassa: kartalar va hisob raqamlar — turi, bank, oxirgi 4 raqam, egasi; filial kassalari (Zv3MLn0a)
 
 Deploy: **finance-service + api-gateway birga** (yangi RMQ buyruqlari `finance.cashbox.cards.update` /
