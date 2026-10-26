@@ -350,16 +350,10 @@ describe('Elchi Pochta #3 (2026-10-24) — realtime: yopilgan sessiya socketdan 
       expect(gateway.isOnline('25')).toBe(false);
     });
 
-    it('`presence:list` — autentifikatsiyasi tugamagan socket ro‘yxat olmaydi', async () => {
-      const { client: ok } = socket(token(), 'ok');
-      await gateway.handleConnection(ok as never);
-      expect(gateway.handlePresence(ok as never)).toEqual({
-        online_user_ids: ['25'],
-      });
-      const { client: anon } = socket('bad.token', 'anon');
-      expect(gateway.handlePresence(anon as never)).toEqual({
-        online_user_ids: [],
-      });
+    it('(oFfOWGuo) `presence:list` / `chat:send` olib tashlangan — handler yo‘q', () => {
+      const proto = Object.getOwnPropertyNames(Object.getPrototypeOf(gateway));
+      expect(proto).not.toContain('handlePresence');
+      expect(proto).not.toContain('handleChat');
     });
   });
 

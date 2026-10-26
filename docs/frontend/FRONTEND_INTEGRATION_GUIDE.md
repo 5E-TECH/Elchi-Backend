@@ -22,7 +22,8 @@ multiple roles, each with a distinct app surface.
 - **Base URL (prod):** `https://api.elchipochta.uz`
 - **Base URL (local dev):** `http://localhost:3004`
 - **Swagger UI:** `GET /api` &nbsp;·&nbsp; **Raw OpenAPI:** `GET /api-json`
-  (both HTTP Basic-Auth protected in production).
+  — local dev only; disabled in production since 2026-10-26 (oFfOWGuo). Use
+  `docs/frontend/openapi.json`.
 - **Realtime:** Socket.IO at namespace `/realtime` on the same host (see §9).
 - **API surface size:** 183 routes / 228 operations across 18 domains. Full
   shapes are in `openapi.json`; this guide gives the business meaning.
@@ -548,10 +549,11 @@ backend service can push `{ event, payload }` to a user, a role, or broadcast.
 Treat the event name as a string key and handle the ones your UI cares about
 (order updates, new orders, notifications). Listen broadly and route by event name.
 
-**Client → client (built-in):**
-- `chat:send` `{ to_user_id, text }` → recipient (and your other tabs) get
-  `chat:message` `{ from_user_id, to_user_id, text, ts }`.
-- `presence:list` → `{ online_user_ids: [...] }`.
+**Client → client:** none. (oFfOWGuo, 2026-10-26) `chat:send` / `presence:list`
+were removed. The socket Origin must be in `CORS_ORIGINS` (same as HTTP). When
+the access token's `exp` passes, the server sends `error` `{ message: 'Token
+expired', code: 'TOKEN_EXPIRED' }` and disconnects — reconnect with the
+refreshed token (do NOT log out; only `SESSION_REVOKED` means logout).
 
 Realtime is **best-effort** (offline recipient = no-op). Always also fetch state
 over REST on screen load; use sockets to live-update.

@@ -23,6 +23,36 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-10-26 — API gateway: preflight keshi, /metrics yopildi, Retry-After, HSTS, Swagger prodda o'chiq, realtime yuzasi (oFfOWGuo)
+
+Deploy: **faqat api-gateway** (libs/common o'zgarishi — logger URL, Retry-After filtri, /metrics qoidasi — boshqa
+servislar keyingi deploy'da oladi; notification-service ichki `/metrics` ham shu qoidaga o'tadi). **Migratsiya yo'q.**
+`openapi.json` o'zgarmadi (qayta yaratildi — farq yo'q). Yangi ixtiyoriy env: `METRICS_TOKEN` (≥32 belgi).
+
+- [2026-10-26] ✏️ [gateway] — CORS preflight: `Access-Control-Max-Age: 7200` — brauzer OPTIONS javobini 2 soat
+  saqlaydi (har login / refresh / `Authorization` so'rovidan oldin qo'shimcha OPTIONS ketmaydi).
+- [2026-10-26] ✏️ [gateway] — `Access-Control-Expose-Headers` ga **`Retry-After`** qo'shildi: FE `response.headers
+  ['retry-after']` ni o'qiy oladi. 429 (throttle — ThrottlerGuard qiymati; `LOGIN_LOCKED` — `retry_after_seconds`;
+  OTP — `retry_after`; boshqasi — 60) va 503 (`SESSION_CHECK_UNAVAILABLE` — **5**) javoblarida doim bor (soniya).
+  Javob tanasi o'zgarmagan.
+- [2026-10-26] 🔒 [gateway] — `GET /metrics`: ilgari autentifikatsiyasiz ochiq edi. Endi production'da `METRICS_TOKEN`
+  bo'lmasa **404**; bo'lsa faqat `Authorization: Bearer <METRICS_TOKEN>` (aks holda 401). FE'ga ta'sir yo'q.
+- [2026-10-26] 🔒 [gateway] — `GET /health/readiness` (@Public): `services[].error` endi faqat holat matni
+  (`timeout` | `unavailable` | `reported down` | `client not registered`) — ichki xato matni (IP/port) chiqmaydi.
+  `error_kind` o'zgarmagan; FE `classifyProblem` (system-ops) mos ishlayveradi.
+- [2026-10-26] 🔒 [gateway] — `Strict-Transport-Security: max-age=15552000; includeSubDomains` (preload yo'q).
+- [2026-10-26] ❌ [gateway] — Swagger UI (`/api`, `/api-json`) **production'da o'chiq** (parol bo'lsa ham); `/` endi
+  `/api` ga yo'naltirilmaydi (404). Kontrakt — `docs/frontend/openapi.json`. Dev'da avvalgidek.
+- [2026-10-26] ❌ [realtime] — socket `chat:send` va `presence:list` olib tashlandi (FE ishlatmasdi). Socket CORS /
+  Origin endi HTTP bilan bir xil `CORS_ORIGINS` (ilgari istalgan origin). Token muddati (`exp`) tugaganda server
+  `error` `{ message: 'Token expired', code: 'TOKEN_EXPIRED' }` yuborib uzadi (`io server disconnect`) — FE token
+  yangilanganda yangi token bilan qayta ulanadi (mavjud `RealtimeSync` shunday ishlaydi; `TOKEN_EXPIRED` da chiqarish
+  YO'Q — faqat `SESSION_REVOKED` da).
+- [2026-10-26] 🔧 [gateway] — `keepAliveTimeout` 75 s / `headersTimeout` 76 s (cloudflared'dan uzun — kam uchraydigan
+  502 yo'qoladi). Loglarda URL query'siz, `/sms/stop/:token`, `/scan/:token`, `/orders/qr-code/:token` tokeni `***`.
+- 🔧 FE: majburiy o'zgarish yo'q. Ixtiyoriy: 429/503 xabarida `Retry-After` dan kutish vaqtini ko'rsatish
+  (`LoginForm` allaqachon o'qiydi — endi CORS orqali ko'rinadi).
+
 ### 2026-10-26 — Kassa: kartalar va hisob raqamlar — turi, bank, oxirgi 4 raqam, egasi; filial kassalari (Zv3MLn0a)
 
 Deploy: **finance-service + api-gateway birga** (yangi RMQ buyruqlari `finance.cashbox.cards.update` /

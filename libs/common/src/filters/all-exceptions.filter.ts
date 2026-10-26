@@ -124,6 +124,14 @@ export class AllExceptionsFilter implements ExceptionFilter {
       );
     }
 
+    // (oFfOWGuo) 429 / 503 da `Retry-After` (soniya) — FE kutish vaqtini
+    // ko'rsatadi (CORS `exposedHeaders` da). ThrottlerGuard o'zi qo'ygan
+    // qiymat saqlanadi; aks holda xato tanasidagi `retry_after_seconds`
+    // (LOGIN_LOCKED) / `retry_after` (OTP), bo'lmasa sukut.
+    if (status === 429 || status === 503) {
+      applyRetryAfterHeader(response, status, exception);
+    }
+
     response.status(status).json({
       statusCode: status,
       message,
@@ -132,6 +140,60 @@ export class AllExceptionsFilter implements ExceptionFilter {
       ...(traceId ? { trace_id: traceId } : {}),
     });
   }
+}
+
+/**
+ * (oFfOWGuo) Sarlavha bo'lmasa qo'llanadigan sukut (soniya): 503 — masalan
+ * `SESSION_CHECK_UNAVAILABLE` (identity javob bermadi, qisqa kutib qayta
+ * urinish); 429 — global throttle oynasi (60 s).
+ */
+export const DEFAULT_RETRY_AFTER_SECONDS: Readonly<Record<429 | 503, number>> =
+  { 429: 60, 503: 5 };
+
+const MAX_RETRY_AFTER_SECONDS = 24 * 60 * 60;
+
+function positiveSeconds(value: unknown): number | undefined {
+  const n = typeof value === 'string' ? Number(value) : value;
+  if (typeof n !== 'number' || !Number.isFinite(n) || n <= 0) return undefined;
+  return Math.min(Math.ceil(n), MAX_RETRY_AFTER_SECONDS);
+}
+
+/** Xato tanasidagi (HttpException javobi / RPC payload) kutish soniyasi. */
+export function retryAfterFromException(
+  exception: unknown,
+): number | undefined {
+  const candidates: unknown[] = [];
+  if (exception instanceof HttpException) {
+    candidates.push(exception.getResponse());
+  } else if (typeof exception === 'object' && exception !== null) {
+    candidates.push(exception, (exception as { response?: unknown }).response);
+  }
+  for (const candidate of candidates) {
+    if (typeof candidate !== 'object' || candidate === null) continue;
+    const obj = candidate as Record<string, unknown>;
+    const seconds =
+      positiveSeconds(obj.retry_after_seconds) ??
+      positiveSeconds(obj.retry_after);
+    if (seconds) return seconds;
+  }
+  return undefined;
+}
+
+/** 429/503 javobiga `Retry-After` (allaqachon qo'yilgan bo'lsa tegilmaydi). */
+export function applyRetryAfterHeader(
+  response: Response,
+  status: 429 | 503,
+  exception: unknown,
+): void {
+  if (typeof response.setHeader !== 'function') return;
+  const existing =
+    typeof response.getHeader === 'function'
+      ? response.getHeader('Retry-After')
+      : undefined;
+  if (existing !== undefined && existing !== '') return;
+  const seconds =
+    retryAfterFromException(exception) ?? DEFAULT_RETRY_AFTER_SECONDS[status];
+  response.setHeader('Retry-After', String(seconds));
 }
 
 /** Quyi servis RPC xatosi: `{ statusCode: number, ... }` oddiy obyekt. */

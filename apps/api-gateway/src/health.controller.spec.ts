@@ -177,7 +177,8 @@ describe('HealthController', () => {
       const body = await controller.readiness(fakeRes());
       expect(body.services.find((s) => s.service === 'AI')).toMatchObject({
         status: 'down',
-        error: 'no route',
+        // (oFfOWGuo) xom xato matni javobda yo'q — faqat holat matni.
+        error: 'unavailable',
       });
     });
 
