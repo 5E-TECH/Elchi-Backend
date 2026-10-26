@@ -3535,6 +3535,197 @@
         ]
       }
     },
+    "/orders/status-counts": {
+      "get": {
+        "description": "GaBIPi3Z. Filters and role scope are EXACTLY those of GET /orders (same query params except `status`/`page`/`limit`/`sort_*`/`fetch_all`, which are ignored). One GROUP BY status query. `all` = GET /orders total without status; `paid` = paid + partly_paid; `cancelled` = cancelled + \"cancelled (sent)\" — for branch staff / HQ registrator / courier it is the total of their own cancelled tab (GET /orders?status=cancelled,cancelled (sent) — inventory / courier cancelled tab). `new_incoming` — «Qabul va yaratish» badge: NEW orders not yet received into a batch, scoped like GET /orders/markets/new (branch staff — own branch; SA/admin — all except branch-created; market — own); it ignores the list filters; `null` for roles without that section (operator, courier, logist, customer). `by_status` — raw count per status. Logist with no regions — all zeros. No money fields.",
+        "operationId": "OrderGatewayController_statusCounts",
+        "parameters": [
+          {
+            "name": "market_id",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "customer_id",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "search",
+            "required": false,
+            "in": "query",
+            "description": "Same as GET /orders `search` (FoCaUF10).",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "start_day",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "end_day",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "courier",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "region_id",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "district_id",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "branch_id",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "source",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "enum": [
+                "internal",
+                "external",
+                "branch"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "name": "courier_id",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "where_deliver",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "enum": [
+                "center",
+                "address"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "name": "cancelled_inventory",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "fulfillment_source",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "enum": [
+                "HQ",
+                "WAREHOUSE"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "name": "cancel_stage",
+            "required": false,
+            "in": "query",
+            "description": "LFNLeSpu (BG4): cancel-return stage filter — comma list (or repeated param) of `courier`, `in_transit`, `branch`, `hq`, `market` (OR, case-insensitive). Same definition as the row `return_stage` (filter == badge): courier = cancelled + held by courier; in_transit = `cancelled (sent)`; branch = cancelled + held by branch (received, not in a return post); hq = cancelled + held by HQ; market = handed over to market (`returned_to_market`, warehouse returns excluded). Combined with all other filters and the role scope (AND); with `cancel_stage` the implicit cancelled-inventory tab mode is off. Unknown value — 400.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "example": {
+                    "statusCode": 200,
+                    "message": "Order status counts",
+                    "data": {
+                      "all": 1248,
+                      "new": 32,
+                      "received": 120,
+                      "on_the_road": 80,
+                      "waiting": 41,
+                      "sold": 600,
+                      "paid": 300,
+                      "cancelled": 75,
+                      "new_incoming": 7,
+                      "by_status": {
+                        "new": 32,
+                        "received": 120,
+                        "on the road": 80,
+                        "waiting": 41,
+                        "sold": 600,
+                        "paid": 290,
+                        "partly_paid": 10,
+                        "cancelled": 70,
+                        "cancelled (sent)": 5
+                      },
+                      "search_truncated": false
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Holat tablari sonlari + «Qabul va yaratish» badge'i (GET /orders filtrlari va doirasi bilan)",
+        "tags": [
+          "Orders"
+        ],
+        "x-roles": null
+      }
+    },
     "/orders/market/{marketId}": {
       "get": {
         "operationId": "OrderGatewayController_findAllByMarket",

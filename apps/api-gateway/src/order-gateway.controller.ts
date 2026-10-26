@@ -626,6 +626,26 @@ export class OrderGatewayController {
     );
   }
 
+  /**
+   * Kuryerning «Bekor qilingan» tabi so'rovi (9Rdi2gJF) — ro'yxat
+   * (`findCourierCancelledRows`) va tab soni (GaBIPi3Z `status-counts`) uchun
+   * BITTA ta'rif.
+   */
+  private courierCancelledQuery(
+    requesterId: string,
+    filters: Record<string, unknown>,
+  ): Record<string, unknown> {
+    return {
+      ...filters,
+      status: [Order_status.CANCELLED],
+      courier_ids: [requesterId],
+      holder_courier_ids: [requesterId],
+      courier_scope: 'any',
+      courier_post_history: true,
+      courier_cancelled_tab: true,
+    };
+  }
+
   private async findCourierCancelledRows(
     reqUser: JwtUser | undefined,
     filters: Record<string, unknown>,
@@ -642,13 +662,7 @@ export class OrderGatewayController {
       { cmd: 'order.find_all_enriched' },
       {
         query: {
-          ...filters,
-          status: [Order_status.CANCELLED],
-          courier_ids: [requesterId],
-          holder_courier_ids: [requesterId],
-          courier_scope: 'any',
-          courier_post_history: true,
-          courier_cancelled_tab: true,
+          ...this.courierCancelledQuery(requesterId, filters),
           page,
           limit,
         },
@@ -4023,6 +4037,296 @@ export class OrderGatewayController {
           : String(result.error),
       );
     }
+  }
+
+  /**
+   * GaBIPi3Z — buyurtmalar ro'yxati holat tablari sonlari + «Qabul va
+   * yaratish» badge'i BITTA so'rovda (dizayn v2).
+   *
+   * Doira va filtrlar GET /orders bilan AYNAN bir xil
+   * (`resolveOrderListRequest`: market/operator — o'z marketi, filial xodimi —
+   * o'z filiali, kuryer — o'zi, logist — faqat o'z viloyatlari, mijoz — o'zi;
+   * ruxsatsiz rol — 403, boshqa market_id / begona viloyat — 400). `status`
+   * qabul qilinmaydi (har tab — o'z holati). «Bekor qilingan» tabi rol
+   * bo'yicha alohida rejimda bo'lsa (filial/HQ inventari, kuryer bekor tabi)
+   * soni AYNAN o'sha tab ro'yxatining `total`i bilan hisoblanadi.
+   * ⚠️ `@Get(':id')` dan OLDIN e'lon qilingan.
+   */
+  @Get('status-counts')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary:
+      "Holat tablari sonlari + «Qabul va yaratish» badge'i (GET /orders filtrlari va doirasi bilan)",
+    description:
+      'GaBIPi3Z. Filters and role scope are EXACTLY those of GET /orders (same query params except ' +
+      '`status`/`page`/`limit`/`sort_*`/`fetch_all`, which are ignored). One GROUP BY status query. ' +
+      '`all` = GET /orders total without status; `paid` = paid + partly_paid; `cancelled` = cancelled + ' +
+      '"cancelled (sent)" — for branch staff / HQ registrator / courier it is the total of their own ' +
+      'cancelled tab (GET /orders?status=cancelled,cancelled (sent) — inventory / courier cancelled tab). ' +
+      '`new_incoming` — «Qabul va yaratish» badge: NEW orders not yet received into a batch, scoped like ' +
+      'GET /orders/markets/new (branch staff — own branch; SA/admin — all except branch-created; market — own); ' +
+      'it ignores the list filters; `null` for roles without that section (operator, courier, logist, customer). ' +
+      '`by_status` — raw count per status. Logist with no regions — all zeros. No money fields.',
+  })
+  @ApiQuery({ name: 'market_id', required: false, type: String })
+  @ApiQuery({ name: 'customer_id', required: false, type: String })
+  @ApiQuery({
+    name: 'search',
+    required: false,
+    type: String,
+    description: 'Same as GET /orders `search` (FoCaUF10).',
+  })
+  @ApiQuery({ name: 'start_day', required: false, type: String })
+  @ApiQuery({ name: 'end_day', required: false, type: String })
+  @ApiQuery({ name: 'courier', required: false, type: String })
+  @ApiQuery({ name: 'region_id', required: false, type: String })
+  @ApiQuery({ name: 'district_id', required: false, type: String })
+  @ApiQuery({ name: 'branch_id', required: false, type: String })
+  @ApiQuery({ name: 'courier_id', required: false, type: String })
+  @ApiQuery({ name: 'where_deliver', required: false, enum: Where_deliver })
+  @ApiQuery({
+    name: 'source',
+    required: false,
+    enum: ['internal', 'external', 'branch'],
+  })
+  @ApiQuery({ name: 'cancelled_inventory', required: false, type: Boolean })
+  @ApiQuery({
+    name: 'fulfillment_source',
+    required: false,
+    enum: FULFILLMENT_SOURCES,
+  })
+  @ApiQuery({
+    name: 'cancel_stage',
+    required: false,
+    type: String,
+    description: CANCEL_STAGE_QUERY_DOC,
+  })
+  @ApiOkResponse({
+    schema: {
+      example: {
+        statusCode: 200,
+        message: 'Order status counts',
+        data: {
+          all: 1248,
+          new: 32,
+          received: 120,
+          on_the_road: 80,
+          waiting: 41,
+          sold: 600,
+          paid: 300,
+          cancelled: 75,
+          new_incoming: 7,
+          by_status: {
+            new: 32,
+            received: 120,
+            'on the road': 80,
+            waiting: 41,
+            sold: 600,
+            paid: 290,
+            partly_paid: 10,
+            cancelled: 70,
+            'cancelled (sent)': 5,
+          },
+          search_truncated: false,
+        },
+      },
+    },
+  })
+  async statusCounts(
+    @Req() req: { user: JwtUser },
+    @Query('market_id') market_id?: string,
+    @Query('customer_id') customer_id?: string,
+    @Query('search') search?: string,
+    @Query('start_day') start_day?: string,
+    @Query('end_day') end_day?: string,
+    @Query('courier') courier?: string,
+    @Query('region_id') region_id?: string,
+    @Query('district_id') district_id?: string,
+    @Query('branch_id') branch_id?: string,
+    @Query('courier_ids') courier_ids?: string | string[],
+    @Query('source') source?: string,
+    @Query('courier_id') courier_id?: string,
+    @Query('where_deliver') where_deliver?: string,
+    @Query('cancelled_inventory') cancelled_inventory?: string,
+    @Query('fulfillment_source') fulfillment_source?: string,
+    @Query('cancel_stage') cancel_stage?: string | string[],
+  ) {
+    const filters: OrderListFilters = {
+      market_id,
+      customer_id,
+      search,
+      start_day,
+      end_day,
+      courier,
+      region_id,
+      district_id,
+      branch_id,
+      courier_ids,
+      source,
+      courier_id,
+      where_deliver,
+      cancelled_inventory,
+      fulfillment_source,
+      cancel_stage,
+    };
+    const user = req?.user;
+    // Ikkala doira ham GET /orders'ning o'zi: «Barchasi» (holatsiz) va
+    // «Bekor qilingan» tabi (FE ORDER_STATUS_TABS: cancelled + cancelled (sent)).
+    const base = await this.resolveOrderListRequest(filters, user);
+    const cancelledTab = await this.resolveOrderListRequest(
+      {
+        ...filters,
+        status: [Order_status.CANCELLED, Order_status.CANCELLED_SENT],
+      },
+      user,
+    );
+
+    const toCount = (value: unknown) => {
+      const parsed = Number(value);
+      return Number.isFinite(parsed) && parsed > 0 ? Math.trunc(parsed) : 0;
+    };
+    const build = (
+      byStatus: Record<string, unknown>,
+      all: unknown,
+      cancelled: unknown,
+      newIncoming: unknown,
+      searchTruncated: boolean,
+    ) => {
+      const by = (status: Order_status) => toCount(byStatus[status]);
+      const by_status: Record<string, number> = {};
+      for (const [status, count] of Object.entries(byStatus)) {
+        if (toCount(count) > 0) by_status[status] = toCount(count);
+      }
+      return successRes(
+        {
+          all: toCount(all),
+          new: by(Order_status.NEW),
+          received: by(Order_status.RECEIVED),
+          on_the_road: by(Order_status.ON_THE_ROAD),
+          waiting: by(Order_status.WAITING),
+          sold: by(Order_status.SOLD),
+          paid: by(Order_status.PAID) + by(Order_status.PARTLY_PAID),
+          cancelled:
+            cancelled === null || cancelled === undefined
+              ? by(Order_status.CANCELLED) + by(Order_status.CANCELLED_SENT)
+              : toCount(cancelled),
+          new_incoming:
+            newIncoming === null || newIncoming === undefined
+              ? null
+              : toCount(newIncoming),
+          by_status,
+          search_truncated: searchTruncated,
+        },
+        200,
+        'Order status counts',
+      );
+    };
+
+    if (base.kind !== 'query') {
+      // 4BftLLnc: viloyat biriktirilmagan logist — bo'sh ro'yxat → nol.
+      return build({}, 0, 0, null, false);
+    }
+
+    const stripListKeys = (query: Record<string, unknown>) => {
+      const rest = { ...query };
+      for (const key of ['status', 'fetch_all', 'sort_by', 'sort_dir']) {
+        delete rest[key];
+      }
+      return rest;
+    };
+    const baseQuery = stripListKeys(base.query);
+    let cancelledQuery: Record<string, unknown> | null = null;
+    if (cancelledTab.kind === 'courier_cancelled') {
+      cancelledQuery = this.courierCancelledQuery(
+        String(user?.sub ?? '').trim(),
+        cancelledTab.filters,
+      );
+    } else if (cancelledTab.kind === 'query') {
+      const tabStatuses = (
+        Array.isArray(cancelledTab.query.status)
+          ? (cancelledTab.query.status as unknown[])
+          : [cancelledTab.query.status]
+      ).map(String);
+      const plainStatusFilter =
+        tabStatuses.length === 2 &&
+        tabStatuses.includes(Order_status.CANCELLED) &&
+        tabStatuses.includes(Order_status.CANCELLED_SENT);
+      const tabQuery = stripListKeys(cancelledTab.query);
+      // Tab doirasi «Barchasi» bilan bir xil bo'lsa — GROUP BY dan olinadi;
+      // aks holda (inventar: holder_type/pochtasiz, HQ registratori filialsiz)
+      // tabning o'z so'rovi alohida sanaladi.
+      if (
+        !plainStatusFilter ||
+        JSON.stringify(tabQuery) !== JSON.stringify(baseQuery)
+      ) {
+        cancelledQuery = { ...tabQuery, status: cancelledTab.query.status };
+      }
+    }
+
+    const newIncomingScope = this.newIncomingScope(user, baseQuery);
+    const counts = (await this.sendOrderWithTimeout(
+      { cmd: 'order.status_counts' },
+      {
+        query: baseQuery,
+        cancelled_query: cancelledQuery,
+        new_incoming: newIncomingScope,
+      },
+    )) as {
+      by_status?: Record<string, unknown>;
+      total?: unknown;
+      cancelled?: unknown;
+      new_incoming?: unknown;
+      search_truncated?: unknown;
+    } | null;
+
+    return build(
+      counts?.by_status ?? {},
+      counts?.total,
+      cancelledQuery ? (counts?.cancelled ?? 0) : null,
+      newIncomingScope ? (counts?.new_incoming ?? 0) : null,
+      counts?.search_truncated === true,
+    );
+  }
+
+  /**
+   * GaBIPi3Z — «Qabul va yaratish» badge doirasi: GET /orders/markets/new
+   * bilan AYNI qoida (shu marshrutga kira oladigan rollar: SA, admin,
+   * registrator, menejer, filial, market). Boshqa rollar — `null` (badge yo'q).
+   * Filial xodimining filiali `resolveOrderListRequest` allaqachon tokendan
+   * aniqlagan `branch_id` (so'rov parametridan EMAS).
+   */
+  private newIncomingScope(
+    user: JwtUser | undefined,
+    baseQuery: Record<string, unknown>,
+  ): {
+    branch_id?: string;
+    exclude_branch_source?: boolean;
+    market_id?: string;
+  } | null {
+    const roles = this.normalizeRoles(user?.roles ?? []);
+    const isPrivileged =
+      roles.includes(RoleEnum.SUPERADMIN) || roles.includes(RoleEnum.ADMIN);
+    const isMarket = roles.includes(RoleEnum.MARKET);
+    const isBranchScoped =
+      !roles.includes(RoleEnum.COURIER) &&
+      (roles.includes(RoleEnum.BRANCH) ||
+        roles.includes(RoleEnum.MANAGER) ||
+        roles.includes(RoleEnum.REGISTRATOR));
+    if (isBranchScoped && !isPrivileged) {
+      const branchId = this.asStr(baseQuery.branch_id).trim();
+      return branchId ? { branch_id: branchId } : null;
+    }
+    if (isPrivileged) {
+      return { exclude_branch_source: true };
+    }
+    if (isMarket) {
+      const marketId = String(user?.sub ?? '').trim();
+      return marketId
+        ? { exclude_branch_source: true, market_id: marketId }
+        : null;
+    }
+    return null;
   }
 
   /**

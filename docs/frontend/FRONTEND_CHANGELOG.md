@@ -23,6 +23,31 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-10-26 — Buyurtmalar: holat tablari sonlari + «Qabul va yaratish» badge'i — `GET /orders/status-counts` (GaBIPi3Z)
+
+Deploy: api-gateway + order-service (yangi RMQ `order.status_counts`; ikkalasi birga). Migratsiya yo'q.
+`openapi.json` yangilandi.
+
+- [2026-10-26] 🆕 [gateway, order] — `GET /orders/status-counts` — bitta so'rov, javob `successRes` konvertida:
+  `data: { all, new, received, on_the_road, waiting, sold, paid, cancelled, new_incoming, by_status, search_truncated }`.
+  - Filtrlar va rol doirasi **GET /orders bilan aynan bir xil** (`market_id`, `customer_id`, `search`, `start_day`,
+    `end_day`, `courier`, `region_id`, `district_id`, `branch_id`, `courier_id`, `where_deliver`, `source`,
+    `fulfillment_source`, `cancelled_inventory`, `cancel_stage`). `status`/`page`/`limit`/`sort_*` e'tiborsiz — har
+    tab o'z holati. Market/operator — o'z marketi (boshqa `market_id` — 400), filial xodimi — tokendagi filial,
+    kuryer — o'zi, logist — faqat o'z viloyatlari (begona `region_id` — 400; viloyatsiz — hammasi 0), ruxsatsiz
+    rol — 403. Pul maydonlari yo'q.
+  - `all` — GET /orders `total` (holatsiz); `paid` = `paid` + `partly_paid`; `cancelled` = `cancelled` +
+    `cancelled (sent)` (FE `ORDER_STATUS_TABS` bilan bir xil). Filial xodimi / HQ registratori / kuryerda
+    `cancelled` — o'sha rolning «Bekor qilingan» tabi ro'yxatining `total`i (inventar / kuryer bekor tabi), ya'ni
+    `GET /orders?status=cancelled,cancelled (sent)` bilan bir xil son.
+  - `new_incoming` — «Qabul va yaratish» badge'i: qabul qilinmagan (partiyasiz) NEW buyurtmalar,
+    `GET /orders/markets/new` doirasida (filial xodimi — o'z filiali; SA/admin — filial yaratganlaridan tashqari
+    hammasi; market — o'ziniki). Ro'yxat filtrlariga bog'liq EMAS. `null` — bu bo'lim yo'q rollarda (operator,
+    kuryer, logist, mijoz).
+  - `by_status` — har holat bo'yicha xom son (masalan `waiting_customer`).
+- 🔧 FE: `/orders` Tabs `items[].count` ← `data[tab.id]`; yon menyu / BottomNav «Qabul va yaratish» ←
+  `data.new_incoming` (filtrsiz chaqiriladi).
+
 ### 2026-10-26 — Buyurtma yaratish: tumansiz inline mijoz — bitta o'zbekcha xabar (IR2OHIiN)
 
 Deploy: faqat api-gateway (DTO validatsiyasi). Migratsiya yo'q. `openapi.json` o'zgarmagan.
