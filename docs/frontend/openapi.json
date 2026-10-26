@@ -2897,7 +2897,7 @@
                       "type": "string",
                       "format": "binary"
                     },
-                    "description": "JPEG, PNG yoki WebP; har biri 1,5 MB gacha, jami 20 MB gacha, ko'pi bilan 20 ta (21-rasm — 400). Server rasmni 1568 px gacha kichraytiradi va EXIF'ni olib tashlaydi."
+                    "description": "JPEG, PNG yoki WebP; yuklanadigan fayl 4 MB gacha (kattasi — 413), ko'pi bilan 20 ta (21-rasm — 400). Server rasmni 1568 px gacha kichraytiradi va EXIF'ni olib tashlaydi; kichraytirilgan rasm har biri 1,5 MB gacha, jami 20 MB gacha (aks holda 400)."
                   }
                 }
               }

@@ -3,7 +3,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { AI_IMAGE_MAX_BYTES, deterministicUuid } from '@app/common';
+import { AI_BOT_IMAGE_MAX_BYTES, deterministicUuid } from '@app/common';
 import {
   TelegramAiDraft,
   TelegramAiDraftInput,
@@ -165,7 +165,7 @@ export class AiOrderService {
       for (const file of draft.input?.files ?? []) {
         const downloaded = await this.transport.downloadFile(
           file.file_id,
-          AI_IMAGE_MAX_BYTES,
+          AI_BOT_IMAGE_MAX_BYTES,
         );
         // WHMAIqyo: WebP ham (gateway ruxsat ro'yxati bilan bir xil).
         const mime =

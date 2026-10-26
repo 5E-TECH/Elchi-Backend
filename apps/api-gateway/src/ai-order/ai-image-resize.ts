@@ -1,6 +1,8 @@
 import { Logger } from '@nestjs/common';
 import {
+  AI_IMAGE_MAX_BYTES,
   AI_IMAGE_MAX_EDGE_PX,
+  AI_IMAGE_RAW_MAX_BYTES,
   AI_IMAGE_REENCODE_QUALITY,
   type AiImageMediaType,
 } from '@app/common';
@@ -70,6 +72,15 @@ export function loadSharp(): SharpFactory | null {
     );
   }
   return cachedSharp;
+}
+
+/**
+ * Kichraytirishdan KEYINGI bitta rasm chegarasi: sharp bor — 1,5 MB
+ * (`AI_IMAGE_MAX_BYTES`); sharp yuklanmagan (rasm asl holida ketadi) — xom
+ * chegara (`AI_IMAGE_RAW_MAX_BYTES`), ilgari o'tgan rasm endi rad etilmasin.
+ */
+export function aiProcessedImageMaxBytes(): number {
+  return loadSharp() ? AI_IMAGE_MAX_BYTES : AI_IMAGE_RAW_MAX_BYTES;
 }
 
 /** Testlar uchun: sharp fabrikasini almashtirish (null — "yuklanmadi"). */
