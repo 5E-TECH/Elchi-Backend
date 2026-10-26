@@ -23,6 +23,27 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-10-26 — Bildirishnoma: tashqi kanal bir qismiga yetmasa `partial` (aNynHYU0, N2, NS-4)
+
+Deploy: faqat notification-service. Migratsiya yo'q. `openapi.json` o'zgarmagan.
+
+- [2026-10-26] ⚠️ [notification] — holat qoidasi o'zgardi (karta matnidagi variant — `partial`): tashqi kanal
+  (realtime / push / sms / telegram DM / email) **har bir** qabul qiluvchiga ketgandagina «to'liq»
+  (`by_channel[kanal] >= dispatched`); bir qismiga — «qisman»; hech kimga — «yo'q». Hamma kanal to'liq —
+  `sent` («Notification dispatched»); kamida bittasi bir qismiga/hech kimga, lekin biror kanal ketgan —
+  `partial` («Partially dispatched»); hech bir tashqi kanal ketmagan — `inbox_only`. Ilgari `> 0` yetardi
+  (10 dan 1 kishiga SMS — `sent` edi). Istisno: Telegram GURUH relay'i (DM emas) — 1 ta xabar = to'liq.
+  `no_provider` kanal to'liq hisoblanmaydi.
+- [2026-10-26] ✏️ [notification] — `POST /notifications/dispatch` (va telegram broadcast) javobida yangi
+  **`status`** (`sent | partial | inbox_only | skipped` — tarixdagi bilan AYNI) va **`channel_outcome`**
+  (`{ kanal: 'full' | 'partial' | 'none' }`).
+- [2026-10-26] ✏️ [notification] — `GET /notifications/sent` va `GET /notifications/sent/:dispatch_id`: holat
+  JONLI kanal × holatdan qayta baholanadi — keyin SMS DLR rad etsa / push xato bersa `sent` → `partial` (hamma
+  tashqi yetmasa → `inbox_only`); faqat pasayadi. Ro'yxatdagi `channel_status` ham endi jonli. O'zgargan holat
+  DB'ga yoziladi (`status` filtri o'qilgandan keyin yetib oladi).
+- 🔧 FE (NS-4, birga chiqishi kerak): `deriveDispatchStatus` o'rniga javobdagi `status` ni ishlating (yoki
+  qoidani aynan ko'chiring: kanal to'liq ⇔ `by_channel[ch] >= dispatched`, telegram guruh relay'i — `> 0`).
+
 ### 2026-10-26 — `POST /notifications/campaigns` da SMS kanali + preview'da rozilik bo'yicha son (9D1Gl9MS, N7, KM-5)
 
 Deploy: notification-service + api-gateway. Migratsiya yo'q.
