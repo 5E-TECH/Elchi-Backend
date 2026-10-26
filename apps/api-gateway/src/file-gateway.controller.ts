@@ -53,6 +53,7 @@ import {
   UPLOAD_ROLES,
   uploadPolicySwaggerDescription,
 } from './file-upload-policy';
+import { isFileLinkKey, readFileLinkToken } from './file-link';
 
 // RPC ceiling: this downstream can legitimately run long (base64/provider
 // fetch up to ~60s); an 8s ceiling would premature-fail a working call. See
@@ -228,6 +229,23 @@ export class FileGatewayController {
   ): Promise<void> {
     const roles = this.rolesOf(req);
     const safeKey = String(key ?? '');
+    // (kiZgTybn) Smena karta qoldig'i rasmi / smena hisoboti fayli — kassa
+    // doirasiga bog'liq (menejer — faqat o'z filiali, registrator — asosiy
+    // kassa). Umumiy kalit yo'li doirani bilmaydi, shuning uchun bu yerda
+    // faqat superadmin/admin; qolganlar smena endpoint'lari bergan imzolangan
+    // havola (`files/signed/:token`) orqali ochadi.
+    if (isFileLinkKey(safeKey)) {
+      if (
+        !roles.some(
+          (role) => role === RoleEnum.SUPERADMIN || role === RoleEnum.ADMIN,
+        )
+      ) {
+        throw new ForbiddenException(
+          'Smena fayli faqat smena hisoboti havolasi orqali ochiladi',
+        );
+      }
+      return;
+    }
     const isPrivate = FileGatewayController.PRIVATE_KEY_PREFIXES.some(
       (prefix) => safeKey.startsWith(prefix),
     );
@@ -372,7 +390,9 @@ export class FileGatewayController {
    *
    * Ruxsat `GET files/:key` bilan AYNAN bir xil (`assertCanAccessPrivateKey`):
    * maxfiy kalitlar (`proof-`, `expense-`, …) — xodim rollari yoki faqat O'Z
-   * buyurtmasining dalili (market/kuryer); boshqa kalitlar — kirgan foydalanuvchi.
+   * buyurtmasining dalili (market/kuryer); smena fayllari (`shift-check-`,
+   * `shift-report-`) — faqat superadmin/admin (qolganlar `files/signed/:token`);
+   * boshqa kalitlar — kirgan foydalanuvchi.
    * Fayl topilmasa file-service'ning 404 xatosi qaytadi.
    */
   @Get('files/:key/content')
@@ -385,6 +405,52 @@ export class FileGatewayController {
     @Res() res: Response,
   ) {
     await this.assertCanAccessPrivateKey(key, req);
+    return this.sendPrivateFileBytes(key, res);
+  }
+
+  /**
+   * (kiZgTybn) Smena karta qoldig'i rasmi / smena hisoboti fayli — brauzer
+   * oddiy havola (`<a href target="_blank">`) bilan ochadi, Bearer sarlavhasi
+   * yo'q. Ruxsat havolaning o'zida: gateway shifrlagan va autentifikatsiya
+   * qilgan token (fayl kaliti + muddat ≤ 300 s) — `file-link.ts`. Tokenni
+   * faqat kassa doirasi tekshirilgan smena endpoint'lari yaratadi
+   * (`POST /finance/shift/account-photo`, `GET /finance/shift/:id/report`).
+   * Baytlar `files/:key/content` bilan AYNAN bir xil yo'l (`file.read`) va
+   * sarlavhalar bilan beriladi. Token soxta / o'zgartirilgan / muddati
+   * o'tgan → 403 (fayl o'qilmaydi).
+   */
+  @Public()
+  @Get('files/signed/:token')
+  @ApiOperation({
+    summary: '(kiZgTybn) Open a short-lived gateway-signed shift file link',
+    description:
+      "Smena karta qoldig'i rasmi yoki smena hisoboti fayli. Havola smena endpoint'laridan `photo_url` / `file_url` sifatida tayyor keladi (300 s) — frontend uni o'zi yasamaydi. JWT shart emas (oddiy `<a href>`); token yaroqsiz yoki muddati o'tgan → 403.",
+  })
+  @ApiParam({ name: 'token', description: 'Opaque short-lived link token' })
+  @ApiForbiddenResponse({ description: "Havola yaroqsiz yoki muddati o'tgan" })
+  async getSignedFileContent(
+    @Param('token') token: string,
+    @Res() res: Response,
+  ) {
+    const key = readFileLinkToken(token);
+    if (!key) {
+      throw new ForbiddenException(
+        "Havola yaroqsiz yoki muddati o'tgan — sahifani yangilab qayta oching",
+      );
+    }
+    return this.sendPrivateFileBytes(key, res, { download: true });
+  }
+
+  /**
+   * Maxfiy fayl baytlari (`file.read`) — umumiy kesh va bajarilishsiz.
+   * `download` — rasm bo'lmagan fayl (hisobot PDF/XLSX) yangi oynada
+   * sandbox ichida emas, yuklab olish sifatida ochiladi.
+   */
+  private async sendPrivateFileBytes(
+    key: string,
+    res: Response,
+    options: { download?: boolean } = {},
+  ) {
     const response = await firstValueFrom(
       this.fileClient
         .send<{
@@ -399,16 +465,24 @@ export class FileGatewayController {
     }
 
     const buffer = Buffer.from(bodyBase64, 'base64');
-    res.setHeader(
-      'Content-Type',
-      response?.data?.mime_type ?? 'application/octet-stream',
-    );
+    const mimeType = response?.data?.mime_type ?? 'application/octet-stream';
+    res.setHeader('Content-Type', mimeType);
     res.setHeader('Content-Length', String(buffer.length));
     // Maxfiy dalil — umumiy (CDN/proksi) keshga tushmasin.
     res.setHeader('Cache-Control', 'private, max-age=300');
     // Yuklangan fayl hech qachon sahifa sifatida bajarilmasin.
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox");
+    if (options.download) {
+      const fileName = String(key).replace(/[^\w.-]/g, '_');
+      res.setHeader(
+        'Content-Disposition',
+        mimeType.startsWith('image/')
+          ? 'inline'
+          : `attachment; filename="${fileName}"`,
+      );
+      res.setHeader('Referrer-Policy', 'no-referrer');
+    }
     return res.send(buffer);
   }
 

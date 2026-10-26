@@ -9582,7 +9582,7 @@
     },
     "/finance/shift/account-photo": {
       "post": {
-        "description": "`photo` — jpeg / png / webp, ≤ 5 MB, haqiqiy turi magic-bytes bilan tekshiriladi, EXIF/XMP tozalanadi, shaxsiy (private) saqlanadi. Faqat OCHIQ smena; menejer — o'z filiali kassasi kartasi, registrator — asosiy kassa. Javob: `data.check` (qoralama qatori, `ai_status`), `data.photo_url` (qisqa muddatli imzolangan havola, 300 s). AI yoqilgan kartada (`shift.ai_check.enabled` + karta `ai_check_enabled`) `ai_status = pending`; natija realtime `finance.shift.account_checked` bilan keladi.",
+        "description": "`photo` — jpeg / png / webp, ≤ 5 MB, haqiqiy turi magic-bytes bilan tekshiriladi, EXIF/XMP tozalanadi, shaxsiy (private) saqlanadi. Faqat OCHIQ smena; menejer — o'z filiali kassasi kartasi, registrator — asosiy kassa. Javob: `data.check` (qoralama qatori, `ai_status`), `data.photo_url` — brauzer to'g'ridan-to'g'ri ochadigan qisqa muddatli havola, 300 s: `https://<api>/files/signed/<token>` (gateway orqali; MinIO ichki manzili emas, JWT shart emas). AI yoqilgan kartada (`shift.ai_check.enabled` + karta `ai_check_enabled`) `ai_status = pending`; natija realtime `finance.shift.account_checked` bilan keladi.",
         "operationId": "FinanceGatewayController_uploadShiftAccountPhoto",
         "parameters": [],
         "requestBody": {
@@ -9689,7 +9689,7 @@
     },
     "/finance/shift/{id}/report": {
       "get": {
-        "description": "(y8Tqm9Ap / gWI4gYkw) `data.close_reason` (manual | auto | null — ochiq), `data.closed_by_system`, `data.auto_close` (`{ closed_at, label: 'Avtomatik yopildi — HH:MM, kassir yopmagan' }` yoki null — sariq banner), `data.report` (`status`: pending | processing | sent | skipped | failed, `round`, `file_format`, `has_file`, `file_url` — faqat superadmin, 300 s), `data.deliveries[]` — «Hisobot kimlarga yuborildi» (faqat superadmin; boshqalarga bo'sh). `data.cash` / `data.card` — ochilish, kirim, chiqim, kutilgan, sanalgan, farq; `data.accounts[]` — har karta: kutilgan (snapshot), kiritilgan, farq, `ai_status` (not_required | pending | match | mismatch | unreadable | disabled | error), `ai_entered_ok`, `ai_read_balance`, `ai_last4_detected`, `comment`, `comment_required`, `photo_url` (imzolangan, 300 s); `ai_raw` — faqat superadmin. `data.accounts_summary` — holatlar soni; `data.operations[]` — smena oynasidagi kassa operatsiyalari (tur × to'lov usuli: soni, summa). Menejer — faqat o'z filiali, registrator — asosiy kassa (boshqasi 404).",
+        "description": "(y8Tqm9Ap / gWI4gYkw) `data.close_reason` (manual | auto | null — ochiq), `data.closed_by_system`, `data.auto_close` (`{ closed_at, label: 'Avtomatik yopildi — HH:MM, kassir yopmagan' }` yoki null — sariq banner), `data.report` (`status`: pending | processing | sent | skipped | failed, `round`, `file_format`, `has_file`, `file_url` — faqat superadmin, 300 s), `data.deliveries[]` — «Hisobot kimlarga yuborildi» (faqat superadmin; boshqalarga bo'sh). `data.cash` / `data.card` — ochilish, kirim, chiqim, kutilgan, sanalgan, farq; `data.accounts[]` — har karta: kutilgan (snapshot), kiritilgan, farq, `ai_status` (not_required | pending | match | mismatch | unreadable | disabled | error), `ai_entered_ok`, `ai_read_balance`, `ai_last4_detected`, `comment`, `comment_required`, `photo_url` (gateway havolasi `…/files/signed/<token>`, 300 s); `ai_raw` — faqat superadmin. `data.accounts_summary` — holatlar soni; `data.operations[]` — smena oynasidagi kassa operatsiyalari (tur × to'lov usuli: soni, summa). Menejer — faqat o'z filiali, registrator — asosiy kassa (boshqasi 404).",
         "operationId": "FinanceGatewayController_shiftReport",
         "parameters": [
           {
@@ -17687,6 +17687,38 @@
           }
         ],
         "summary": "Read file bytes through the gateway (JWT)",
+        "tags": [
+          "File"
+        ],
+        "x-roles": null
+      }
+    },
+    "/files/signed/{token}": {
+      "get": {
+        "description": "Smena karta qoldig'i rasmi yoki smena hisoboti fayli. Havola smena endpoint'laridan `photo_url` / `file_url` sifatida tayyor keladi (300 s) — frontend uni o'zi yasamaydi. JWT shart emas (oddiy `<a href>`); token yaroqsiz yoki muddati o'tgan → 403.",
+        "operationId": "FileGatewayController_getSignedFileContent",
+        "parameters": [
+          {
+            "name": "token",
+            "required": true,
+            "in": "path",
+            "description": "Opaque short-lived link token",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "403": {
+            "description": "Havola yaroqsiz yoki muddati o'tgan"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "(kiZgTybn) Open a short-lived gateway-signed shift file link",
         "tags": [
           "File"
         ],

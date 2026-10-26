@@ -23,6 +23,26 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-10-26 — Smena yopish: karta qoldig'i rasmi havolasi brauzerda ochiladi (kiZgTybn, prod bug 23:40)
+
+Deploy: **api-gateway** (+ `libs/common` log maskasi). Migratsiya **yo'q**. `openapi.json` qayta yaratildi
+(yangi `GET /files/signed/{token}`, `photo_url` tavsifi). Jonli frontend (f9f61f46) **o'zgarishsiz ishlaydi**.
+
+- [2026-10-26] 🔧 [finance/files] — `photo_url` (`POST /finance/shift/account-photo` → `data.photo_url` va
+  `data.check.photo_url`; `GET /finance/shift/:id/report` → `data.accounts[].photo_url`) va superadmin uchun
+  `data.report.file_url` ilgari `http://minio:9000/elchi-files/…?X-Amz-…` (MinIO ICHKI manzili) edi — brauzer
+  «Ochish» / «Rasmni ochish» ni ocha olmasdi. Endi: `https://api.elchipochta.uz/files/signed/<token>` —
+  baytlar gateway orqali (buyurtma dalillari kabi), token 300 s (`photo_url_expires_in` = 300 o'zgarmagan),
+  fayl kaliti URL'da yo'q. Oddiy `<a href target="_blank">` bilan ochiladi — **JWT sarlavhasi shart emas**.
+  Muddati o'tgan / o'zgartirilgan havola → **403** — FE havolani saqlamasin, oyna/hisobotni qayta yuklab yangisini
+  olsin (mavjud oqim shunday). → FE'da ish yo'q.
+- [2026-10-26] 🆕 [files] — `GET /files/signed/:token` (`@Public`): faqat smena fayllari (`shift-check-…`,
+  `shift-report-…`); rasm — `inline`, hisobot PDF/XLSX — `attachment`; `Cache-Control: private, max-age=300`,
+  `nosniff`, `CSP sandbox`. FE bu URL'ni o'zi yasamaydi — faqat backend bergan `photo_url` / `file_url`.
+- [2026-10-26] 🔒 [files] — umumiy `GET /files/:key` va `GET /files/:key/content` smena kalitlarini endi faqat
+  superadmin/admin'ga beradi (menejer — faqat o'z filiali, registrator — asosiy kassa doirasi smena
+  endpoint'larida tekshiriladi). FE bu kalitlarni olmaydi (gateway yashiradi) — ta'sir yo'q.
+
 ### 2026-10-26 — Staging (test server) deploy yo'li: dev → test → main
 
 Deploy: hech qaysi servis (faqat CI/CD + ops fayllari). Migratsiya yo'q. Kontrakt o'zgarmagan.
