@@ -8,3 +8,4 @@ export * from './product-disambiguate.contract';
 export * from './ai-status.contract';
 export * from './ai-draft.contract';
 export * from './district-pick.contract';
+export * from './balance-screenshot.contract';

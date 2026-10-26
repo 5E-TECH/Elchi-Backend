@@ -23,6 +23,46 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-10-26 — Smena yopilishi: har karta / hisob qoldig'ini tasdiqlash, skrinshot, AI tekshiruvi, hisobot, sozlamalar (kiZgTybn)
+
+Deploy: **finance-service + api-gateway + ai-service birga** (yangi RMQ buyruqlari
+`finance.shift.account_check.attach_photo` / `.ai_result`, `finance.shift.settings.get|update`,
+`finance.shift.report`, `ai.finance.balance_screenshot`). **Migratsiya bor:** `1716000000166-ShiftAccountChecks`
+(yangi jadvallar `shift_account_checks`, `finance_settings`; mavjud ma'lumotga tegmaydi). `openapi.json` qayta yaratildi.
+Sukut bo'yicha tasdiqlash **o'chiq** — superadmin yoqmaguncha yopish oqimi o'zgarmaydi.
+
+- [2026-10-26] 🆕 [finance] — `POST /finance/shift/account-photo` (multipart: `photo` — jpeg/png/webp ≤ 5 MB,
+  `card_id`, ixtiyoriy `shift_id`, `entered_balance`, `comment`). Rollar: superadmin/admin/registrator/menejer
+  (menejer — o'z filiali kartasi, registrator — asosiy kassa; begona → 403). Faqat OCHIQ smena (yopilgan → 400,
+  ochiq smena yo'q → 404). Rasm EXIF'dan tozalanib shaxsiy saqlanadi. Javob: `data.check` (qoralama qatori:
+  `expected_balance`, `entered_balance`, `difference`, `ai_status`, `has_photo`, `photo_url`), `data.photo_url`
+  (imzolangan, **300 s**), `data.ai_enabled`. Qayta yuklash eski rasmni almashtiradi. Noto'g'ri tur / soxta
+  kontent → 400, > 5 MB → 413.
+- [2026-10-26] 🆕 [realtime] — AI yoqilgan kartada rasmdan keyin `ai_status = pending`; natija
+  `finance.shift.account_checked` (`shift_id`, `card_id`, `ai_status`, `checked_at`) bilan keladi → smena /
+  hisobot so'rovini qayta o'qing. `ai_status`: `not_required | pending | match | mismatch | unreadable | disabled | error`.
+  `ai_entered_ok = false` — kassir kiritgan qiymat rasmdagidan farqli (qizil belgi, izoh majburiy).
+- [2026-10-26] ✏️ [finance] — `POST /finance/shift/close`: yangi `accounts[]` = `{card_id, entered_balance,
+  photo_file_key?, comment?}`. `shift.account_check.enabled` yoqilgan bo'lsa kassaning HAR faol kartasi uchun
+  majburiy (yo'q karta nomi bilan 400). Rasm majburiy kartada rasm yo'q → 400; farq ≠ 0, AI `mismatch` yoki
+  `ai_entered_ok = false` → `comment` majburiy (400, karta nomi bilan). AI `pending` bo'lsa yopish **30 s gacha**
+  kutadi, keyin baribir yopiladi (javob vaqti uzayishi mumkin — gateway timeout 45 s). Javobda
+  `data.accounts_check` (holatlar soni + kartalar). `accounts` yubormasa va tasdiqlash o'chiq bo'lsa — avvalgidek.
+- [2026-10-26] 🆕 [finance] — `GET /finance/shift/:id/report`: `cash` / `card` (ochilish, kirim, chiqim,
+  kutilgan, sanalgan, farq), `accounts[]` (har karta: `card{name,kind,bank_name,last4,…}`, `expected_balance`,
+  `entered_balance`, `difference`, `ai_status`, `ai_read_balance`, `ai_last4_detected`, `ai_entered_ok`,
+  `comment`, `comment_required`, `photo_url` (300 s), `ai_raw` — faqat superadmin), `accounts_summary`,
+  `operations[]` (tur × to'lov usuli: `count`, `total`). Menejer — faqat o'z filiali, registrator — asosiy
+  kassa (boshqasi 404). 3- va 11-band kartalari shu endpointni ishlatadi.
+- [2026-10-26] 🆕 [finance] — `GET /finance/shift/settings?cashbox_user_id=` (yopuvchi rollar o'qiydi; menejer —
+  o'z filiali, boshqasi 403) → `account_check_enabled`, `photo_required`, `ai_check_enabled`, `cards[]`
+  (`require_photo_on_shift_close`, `ai_check_enabled`, hisoblangan `photo_required` / `ai_enabled` — yopish
+  oynasi shu bilan qaysi kartaga rasm so'rashni biladi). `PATCH /finance/shift/settings` — **faqat superadmin**
+  (boshqa rol 403): global kalitlar + `cards[]` (AI faqat rasm talab qilinganda, aks holda 400).
+- 🔧 Frontend: `superadmin-payments-main-cashbox-shift-dialog-accounts`, `superadmin-payments-shift-report`,
+  `superadmin-payments-shift-settings` ekranlari (alohida FE karta).
+
+
 ### 2026-10-26 — Kassa: kartalar va hisob raqamlar — turi, bank, oxirgi 4 raqam, egasi; filial kassalari (Zv3MLn0a)
 
 Deploy: **finance-service + api-gateway birga** (yangi RMQ buyruqlari `finance.cashbox.cards.update` /

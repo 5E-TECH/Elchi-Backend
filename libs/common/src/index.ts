@@ -59,6 +59,7 @@ export * from './sentry/sentry.helper';
 export * from './health/liveness';
 export * from './metrics/metrics';
 export * from './upload/file-signature';
+export * from './upload/image-metadata';
 export * from './ai-text';
 export * from './ai';
 export * from './pii/mask-phones';

@@ -17,6 +17,8 @@ import {
   ClaudeService,
   RmqService,
   executeAndAck,
+  type AiBalanceScreenshotRequest,
+  type AiBalanceScreenshotResponse,
   type AiDistrictPickRequest,
   type AiDistrictPickResponse,
   type AiDraftAttachPreviewRequest,
@@ -33,6 +35,7 @@ import { errorRes } from '../../../libs/common/helpers/response';
 import { AiBudgetService } from './budget/ai-budget.service';
 import { AiDraftService } from './draft/ai-draft.service';
 import { DistrictPickService } from './district-pick/district-pick.service';
+import { BalanceScreenshotService } from './balance-screenshot/balance-screenshot.service';
 import {
   evaluateModelPolicy,
   modelPolicyProblems,
@@ -74,6 +77,8 @@ export class AiServiceController implements OnApplicationBootstrap {
     private readonly districtPick: DistrictPickService,
     // NFiXfmq6: "AI xarajat va marja" hisoboti.
     private readonly margin?: AiMarginService,
+    // kiZgTybn — ixtiyoriy: eski spec'lar usiz quradi.
+    private readonly balanceScreenshot?: BalanceScreenshotService,
   ) {}
 
   /**
@@ -150,6 +155,29 @@ export class AiServiceController implements OnApplicationBootstrap {
         (dl) => this.districtPick.pick(data, dl),
         this.logger,
         'ai.district.pick',
+      ),
+    );
+  }
+
+  /**
+   * kiZgTybn: smena yopishda karta qoldig'i skrinshoti — qoldiq, oxirgi 4
+   * raqam, sana. `runAiHandler` ichida: eskirgan xabar Anthropic'ga bormaydi,
+   * AI xatosi throw bo'lmaydi (xabar doim ack — ikki marta to'lov yo'q).
+   */
+  @MessagePattern({ cmd: 'ai.finance.balance_screenshot' })
+  checkBalanceScreenshot(
+    @Payload() data: AiBalanceScreenshotRequest,
+    @Ctx() ctx: RmqContext,
+  ): Promise<AiBalanceScreenshotResponse> {
+    return executeAndAck(this.rmqService, ctx, () =>
+      runAiHandler(
+        data,
+        (dl): Promise<AiBalanceScreenshotResponse> =>
+          this.balanceScreenshot
+            ? this.balanceScreenshot.check(data, dl)
+            : Promise.resolve({ ok: false, reason: 'disabled' }),
+        this.logger,
+        'ai.finance.balance_screenshot',
       ),
     );
   }

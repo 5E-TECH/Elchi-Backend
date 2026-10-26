@@ -9,7 +9,9 @@ import {
   Headers,
   HttpException,
   Inject,
+  Logger,
   NotFoundException,
+  Optional,
   Param,
   ParseEnumPipe,
   Patch,
@@ -18,12 +20,17 @@ import {
   Req,
   Res,
   ServiceUnavailableException,
+  UploadedFile,
   UseGuards,
+  UseInterceptors,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { memoryStorage } from 'multer';
 import { ClientProxy } from '@nestjs/microservices';
 import {
   ApiBearerAuth,
   ApiBody,
+  ApiConsumes,
   ApiCreatedResponse,
   ApiHeader,
   ApiOkResponse,
@@ -47,11 +54,19 @@ import {
   PaymentMethod,
   Roles as RoleEnum,
   Source_type,
+  matchesDeclaredType,
+  stripImageMetadata,
   toPublicUserSummary,
+  type AiBalanceScreenshotMediaType,
+  type AiBalanceScreenshotResponse,
 } from '@app/common';
 import {
   CashboxAllInfoQueryDto,
   CloseShiftRequestDto,
+  ShiftAccountPhotoRequestDto,
+  ShiftAccountPhotoSwaggerDto,
+  ShiftSettingsQueryDto,
+  UpdateShiftSettingsRequestDto,
   CreateCashboxRequestDto,
   CreateOperatorPaymentRequestDto,
   CreateSalaryRequestDto,
@@ -86,6 +101,20 @@ import {
   excelNumber,
   type ExcelColumn,
 } from './excel/excel.util';
+
+/** (kiZgTybn) Smena yopish: karta qoldig'i rasmi chegaralari. */
+const SHIFT_PHOTO_MAX_BYTES = 5 * 1024 * 1024;
+const SHIFT_PHOTO_MIME_TYPES: ReadonlySet<string> = new Set([
+  'image/jpeg',
+  'image/jpg',
+  'image/png',
+  'image/webp',
+]);
+/** Imzolangan havola muddati (s) — qisqa: rasm shaxsiy (PII). */
+const SHIFT_PHOTO_URL_TTL_SECONDS = 300;
+/** Yopish AI natijasini 30 s gacha kutadi (+ zaxira). */
+const SHIFT_CLOSE_TIMEOUT_MS = 45000;
+const SHIFT_AI_TIMEOUT_MS = 60000;
 
 interface JwtUser {
   sub: string;
@@ -248,7 +277,13 @@ export class FinanceGatewayController {
     @Inject('IDENTITY') private readonly identityClient: ClientProxy,
     @Inject('BRANCH') private readonly branchClient: ClientProxy,
     @Inject('ORDER') private readonly orderClient: ClientProxy,
+    // (kiZgTybn) Smena yopishda karta qoldig'i rasmi (file-service) va AI
+    // tekshiruvi (ai-service). Ixtiyoriy: eski spec'lar usiz quradi.
+    @Optional() @Inject('FILE') private readonly fileClient?: ClientProxy,
+    @Optional() @Inject('AI') private readonly aiClient?: ClientProxy,
   ) {}
+
+  private readonly shiftCheckLogger = new Logger('FinanceShiftCheck');
 
   /**
    * Xom RPC yuklaridagi rol qiymati `unknown` bo'ladi va odatda matn. Obyekt
@@ -3104,10 +3139,370 @@ export class FinanceGatewayController {
     // opened_by berilmasa finance o'zining, bo'lmasa MAIN kassaning ochiq
     // smenasini yopadi. R6: menejer uchun doira — o'z filiali kassasi.
     const scope = await this.resolveShiftCashboxScope(req.user);
+    // (kiZgTybn) Yopish AI natijasini 30 s gacha kutishi mumkin.
     return this.send(
       { cmd: 'finance.shift.close' },
       { ...dto, closed_by: String(req.user.sub), ...scope },
+      SHIFT_CLOSE_TIMEOUT_MS,
     );
+  }
+
+  /**
+   * (kiZgTybn) Kassa doirasi smena tekshiruvi uchun: menejer — o'z filiali,
+   * registrator — MAIN ('0'), superadmin/admin — cheklovsiz.
+   */
+  private async resolveShiftCheckScope(
+    user: JwtUser,
+  ): Promise<{ cashbox_user_id?: string }> {
+    if (this.isPrivileged(user)) return {};
+    if (this.isManager(user)) return this.resolveShiftCashboxScope(user);
+    return { cashbox_user_id: MAIN_SHIFT_CASHBOX_USER_ID };
+  }
+
+  private async sendFile<T = any>(
+    pattern: object,
+    payload: object,
+    timeoutMs = 15000,
+  ): Promise<T> {
+    if (!this.fileClient) {
+      throw new ServiceUnavailableException('File service is not configured');
+    }
+    return firstValueFrom(
+      this.fileClient.send(pattern, payload).pipe(timeout(timeoutMs)),
+    ).catch((error: unknown) => {
+      if (error instanceof TimeoutError) {
+        throw new GatewayTimeoutException('File service response timeout');
+      }
+      throw error;
+    });
+  }
+
+  /** Shaxsiy kalit → qisqa muddatli imzolangan havola (xato — null). */
+  private async signedPhotoUrl(key: unknown): Promise<string | null> {
+    const text = typeof key === 'string' ? key.trim() : '';
+    if (!text || !this.fileClient) return null;
+    try {
+      const res = await this.sendFile<{ data?: { url?: unknown } }>(
+        { cmd: 'file.get_url' },
+        { key: text, expires_in: SHIFT_PHOTO_URL_TTL_SECONDS },
+        5000,
+      );
+      return typeof res?.data?.url === 'string' ? res.data.url : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Hisobot / javobdagi karta qatori: kalit o'rniga imzolangan havola. */
+  private async withPhotoUrl(
+    row: Record<string, unknown>,
+    includeAiRaw: boolean,
+  ): Promise<Record<string, unknown>> {
+    const { photo_file_key: key, ai_raw: aiRaw, ...rest } = row;
+    return {
+      ...rest,
+      has_photo: Boolean(key),
+      photo_url: await this.signedPhotoUrl(key),
+      photo_url_expires_in: key ? SHIFT_PHOTO_URL_TTL_SECONDS : null,
+      ...(includeAiRaw ? { ai_raw: aiRaw ?? null } : {}),
+    };
+  }
+
+  @Post('shift/account-photo')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(
+    RoleEnum.SUPERADMIN,
+    RoleEnum.ADMIN,
+    RoleEnum.REGISTRATOR,
+    RoleEnum.MANAGER,
+  )
+  @ApiBearerAuth()
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({ type: ShiftAccountPhotoSwaggerDto })
+  @ApiOperation({
+    summary: "(kiZgTybn) Smena yopish: karta qoldig'i skrinshotini yuklash",
+    description:
+      "`photo` — jpeg / png / webp, ≤ 5 MB, haqiqiy turi magic-bytes bilan tekshiriladi, EXIF/XMP tozalanadi, shaxsiy (private) saqlanadi. Faqat OCHIQ smena; menejer — o'z filiali kassasi kartasi, registrator — asosiy kassa. Javob: `data.check` (qoralama qatori, `ai_status`), `data.photo_url` (qisqa muddatli imzolangan havola, 300 s). AI yoqilgan kartada (`shift.ai_check.enabled` + karta `ai_check_enabled`) `ai_status = pending`; natija realtime `finance.shift.account_checked` bilan keladi.",
+  })
+  @UseInterceptors(
+    FileInterceptor('photo', {
+      storage: memoryStorage(),
+      limits: { fileSize: SHIFT_PHOTO_MAX_BYTES, files: 1 },
+    }),
+  )
+  async uploadShiftAccountPhoto(
+    @Req() req: { user: JwtUser },
+    @Body() dto: ShiftAccountPhotoRequestDto,
+    @UploadedFile()
+    photo: { buffer?: Buffer; mimetype?: string; size?: number } | undefined,
+  ) {
+    const mime = String(photo?.mimetype ?? '').toLowerCase();
+    const buffer = photo?.buffer;
+    if (!buffer || !buffer.length) {
+      throw new BadRequestException('photo fayli majburiy');
+    }
+    if (!SHIFT_PHOTO_MIME_TYPES.has(mime)) {
+      throw new BadRequestException(
+        'Faqat jpeg, png yoki webp rasm qabul qilinadi',
+      );
+    }
+    if (buffer.length > SHIFT_PHOTO_MAX_BYTES) {
+      throw new BadRequestException('Rasm hajmi 5 MB dan oshmasligi kerak');
+    }
+    if (!matchesDeclaredType(buffer, mime)) {
+      throw new BadRequestException(
+        "Fayl mazmuni e'lon qilingan turga mos emas",
+      );
+    }
+    const clean = stripImageMetadata(buffer, mime);
+    if (!clean) {
+      throw new BadRequestException("Rasm buzilgan yoki o'qib bo'lmaydi");
+    }
+    const scope = await this.resolveShiftCheckScope(req.user);
+    const ext =
+      mime === 'image/png' ? 'png' : mime === 'image/webp' ? 'webp' : 'jpg';
+
+    const uploaded = await this.sendFile<{ data?: { key?: unknown } }>(
+      { cmd: 'file.upload' },
+      {
+        file_name: `balance.${ext}`,
+        mime_type: mime,
+        file_base64: clean.toString('base64'),
+        folder: 'shift-check',
+      },
+      30000,
+    );
+    const key =
+      typeof uploaded?.data?.key === 'string' ? uploaded.data.key.trim() : '';
+    if (!key) {
+      throw new BadRequestException(
+        'Rasm saqlanmadi (file-service kalit qaytarmadi)',
+      );
+    }
+
+    let attached: {
+      data?: {
+        check?: Record<string, unknown>;
+        shift_id?: string;
+        ai_enabled?: boolean;
+        ai_request_id?: string | null;
+        previous_photo_file_key?: string | null;
+      };
+    };
+    try {
+      attached = await this.send(
+        { cmd: 'finance.shift.account_check.attach_photo' },
+        {
+          shift_id: dto.shift_id,
+          card_id: dto.card_id,
+          entered_balance: dto.entered_balance,
+          comment: dto.comment,
+          photo_file_key: key,
+          requester_id: String(req.user.sub),
+          ...scope,
+        },
+      );
+    } catch (error) {
+      // Rad etildi (smena yopiq, begona karta …) — yetim fayl qolmasin.
+      void this.sendFile({ cmd: 'file.delete' }, { key }).catch(
+        () => undefined,
+      );
+      throw error;
+    }
+    const data = attached?.data ?? {};
+    const previousKey = data.previous_photo_file_key;
+    if (previousKey) {
+      void this.sendFile({ cmd: 'file.delete' }, { key: previousKey }).catch(
+        () => undefined,
+      );
+    }
+    if (data.ai_enabled && data.ai_request_id && data.shift_id) {
+      // Fon vazifasi: javob kutilmaydi (natija realtime orqali keladi).
+      void this.runBalanceAiCheck({
+        shift_id: String(data.shift_id),
+        card_id: String(dto.card_id),
+        ai_request_id: String(data.ai_request_id),
+        image: clean,
+        media_type: (mime === 'image/jpg'
+          ? 'image/jpeg'
+          : mime) as AiBalanceScreenshotMediaType,
+        user: req.user,
+      });
+    }
+    return {
+      statusCode: 201,
+      message: 'Shift account photo uploaded',
+      data: {
+        shift_id: data.shift_id ?? null,
+        ai_enabled: Boolean(data.ai_enabled),
+        check: data.check ? await this.withPhotoUrl(data.check, false) : null,
+        photo_url: await this.signedPhotoUrl(key),
+        photo_url_expires_in: SHIFT_PHOTO_URL_TTL_SECONDS,
+      },
+    };
+  }
+
+  /**
+   * (kiZgTybn) AI tekshiruvi — fon vazifasi, HECH QACHON throw qilmaydi.
+   * Natija (yoki xato → `error`) finance'ga yoziladi; finance realtime
+   * `finance.shift.account_checked` ni chiqaradi. Logga faqat ID'lar
+   * (rasm / karta raqami YO'Q).
+   */
+  async runBalanceAiCheck(input: {
+    shift_id: string;
+    card_id: string;
+    ai_request_id: string;
+    image: Buffer;
+    media_type: AiBalanceScreenshotMediaType;
+    user: JwtUser;
+  }): Promise<void> {
+    let result: AiBalanceScreenshotResponse = { ok: false, reason: 'disabled' };
+    if (this.aiClient) {
+      try {
+        result = await firstValueFrom(
+          this.aiClient
+            .send<AiBalanceScreenshotResponse>(
+              { cmd: 'ai.finance.balance_screenshot' },
+              {
+                image_base64: input.image.toString('base64'),
+                media_type: input.media_type,
+                shift_id: input.shift_id,
+                card_id: input.card_id,
+                requester: {
+                  id: String(input.user?.sub ?? ''),
+                  roles: this.getUserRoles(input.user),
+                },
+                deadline_at: Date.now() + SHIFT_AI_TIMEOUT_MS - 5000,
+              },
+            )
+            .pipe(timeout(SHIFT_AI_TIMEOUT_MS)),
+        );
+      } catch (error) {
+        this.shiftCheckLogger.warn(
+          `AI balans tekshiruvi xatosi shift=${input.shift_id} card=${input.card_id}: ${
+            error instanceof TimeoutError ? 'timeout' : 'rpc_error'
+          }`,
+        );
+        result = { ok: false, reason: 'network' };
+      }
+    }
+    try {
+      await this.send(
+        { cmd: 'finance.shift.account_check.ai_result' },
+        {
+          shift_id: input.shift_id,
+          card_id: input.card_id,
+          ai_request_id: input.ai_request_id,
+          result,
+        },
+      );
+    } catch {
+      this.shiftCheckLogger.warn(
+        `AI natijasi yozilmadi shift=${input.shift_id} card=${input.card_id}`,
+      );
+    }
+  }
+
+  @Get('shift/settings')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(
+    RoleEnum.SUPERADMIN,
+    RoleEnum.ADMIN,
+    RoleEnum.REGISTRATOR,
+    RoleEnum.MANAGER,
+  )
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: "(kiZgTybn) Smena yopish sozlamalari (global + karta bo'yicha)",
+    description:
+      "Global `account_check_enabled` / `photo_required` / `ai_check_enabled` va kassa kartalari: `require_photo_on_shift_close`, `ai_check_enabled`, hisoblangan `photo_required` / `ai_enabled` (smena yopish oynasi uchun). O'qish — yopuvchi rollar (menejer — o'z filiali, registrator — '0'); o'zgartirish — faqat superadmin (PATCH).",
+  })
+  async getShiftSettings(
+    @Req() req: { user: JwtUser },
+    @Query() query: ShiftSettingsQueryDto,
+  ) {
+    const scope = await this.resolveShiftCheckScope(req.user);
+    const requested = query?.cashbox_user_id
+      ? String(query.cashbox_user_id)
+      : null;
+    if (
+      scope.cashbox_user_id &&
+      requested &&
+      requested !== scope.cashbox_user_id
+    ) {
+      throw new ForbiddenException(
+        "Siz faqat o'z kassangiz sozlamalarini ko'ra olasiz",
+      );
+    }
+    return this.send(
+      { cmd: 'finance.shift.settings.get' },
+      {
+        cashbox_user_id:
+          scope.cashbox_user_id ?? requested ?? MAIN_SHIFT_CASHBOX_USER_ID,
+      },
+    );
+  }
+
+  @Patch('shift/settings')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN)
+  @ApiBearerAuth()
+  @ApiBody({ type: UpdateShiftSettingsRequestDto })
+  @ApiOperation({
+    summary:
+      "(kiZgTybn) Smena yopish sozlamalarini o'zgartirish — FAQAT superadmin",
+    description:
+      "Global kalitlar va `cards[]` (karta bo'yicha `require_photo_on_shift_close`, `ai_check_enabled`; AI faqat rasm talab qilinganda — aks holda 400). Activity-log: `finance.shift_settings_updated`.",
+  })
+  async updateShiftSettings(
+    @Req() req: { user: JwtUser },
+    @Body() dto: UpdateShiftSettingsRequestDto,
+  ) {
+    return this.send(
+      { cmd: 'finance.shift.settings.update' },
+      {
+        ...dto,
+        requester_id: String(req.user.sub),
+        requester_roles: this.getUserRoles(req.user),
+      },
+    );
+  }
+
+  @Get('shift/:id/report')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(
+    RoleEnum.SUPERADMIN,
+    RoleEnum.ADMIN,
+    RoleEnum.REGISTRATOR,
+    RoleEnum.MANAGER,
+  )
+  @ApiBearerAuth()
+  @ApiParam({ name: 'id', description: 'Smena ID si' })
+  @ApiOperation({
+    summary: "(kiZgTybn) Smena hisoboti: naqd + kartalar bo'yicha natijalar",
+    description:
+      "`data.cash` / `data.card` — ochilish, kirim, chiqim, kutilgan, sanalgan, farq; `data.accounts[]` — har karta: kutilgan (snapshot), kiritilgan, farq, `ai_status` (not_required | pending | match | mismatch | unreadable | disabled | error), `ai_entered_ok`, `ai_read_balance`, `ai_last4_detected`, `comment`, `comment_required`, `photo_url` (imzolangan, 300 s); `ai_raw` — faqat superadmin. `data.accounts_summary` — holatlar soni; `data.operations[]` — smena oynasidagi kassa operatsiyalari (tur × to'lov usuli: soni, summa). Menejer — faqat o'z filiali, registrator — asosiy kassa (boshqasi 404).",
+  })
+  async shiftReport(@Req() req: { user: JwtUser }, @Param('id') id: string) {
+    if (!/^\d+$/.test(String(id ?? ''))) {
+      throw new BadRequestException("Smena ID si noto'g'ri");
+    }
+    const scope = await this.resolveShiftCheckScope(req.user);
+    const response = await this.send<{
+      statusCode?: number;
+      message?: string;
+      data?: { accounts?: Array<Record<string, unknown>> } & Record<
+        string,
+        unknown
+      >;
+    }>({ cmd: 'finance.shift.report' }, { shift_id: String(id), ...scope });
+    const data = response?.data;
+    if (!data || !Array.isArray(data.accounts)) return response;
+    const isSuperadmin = this.hasRole(req.user, RoleEnum.SUPERADMIN);
+    const accounts = await Promise.all(
+      data.accounts.map((row) => this.withPhotoUrl(row, isSuperadmin)),
+    );
+    return { ...response, data: { ...data, accounts } };
   }
 
   @Get('shift/current')

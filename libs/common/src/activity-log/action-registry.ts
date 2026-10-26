@@ -144,6 +144,25 @@ export const ACTIVITY_ACTION_REGISTRY: Readonly<
     'check',
     'blue',
   ),
+  // kiZgTybn: smena yopishda karta qoldig'ini tasdiqlash (rasm, AI, sozlamalar).
+  'finance.shift_settings_updated': entry(
+    "Smena yopish sozlamalari o'zgartirildi",
+    'finance',
+    'edit',
+    'blue',
+  ),
+  'finance.shift_account_photo_uploaded': entry(
+    "Karta qoldig'i rasmi yuklandi",
+    'finance',
+    'plus',
+    'blue',
+  ),
+  'finance.shift_account_ai_checked': entry(
+    "Karta qoldig'i AI bilan tekshirildi",
+    'finance',
+    'check',
+    'blue',
+  ),
   // 3PE0B03q (R6): nomli kassa kartalari
   'finance.card_created': entry(
     'Kassa kartasi yaratildi',

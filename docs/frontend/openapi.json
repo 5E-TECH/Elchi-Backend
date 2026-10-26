@@ -9146,6 +9146,150 @@
         ]
       }
     },
+    "/finance/shift/account-photo": {
+      "post": {
+        "description": "`photo` — jpeg / png / webp, ≤ 5 MB, haqiqiy turi magic-bytes bilan tekshiriladi, EXIF/XMP tozalanadi, shaxsiy (private) saqlanadi. Faqat OCHIQ smena; menejer — o'z filiali kassasi kartasi, registrator — asosiy kassa. Javob: `data.check` (qoralama qatori, `ai_status`), `data.photo_url` (qisqa muddatli imzolangan havola, 300 s). AI yoqilgan kartada (`shift.ai_check.enabled` + karta `ai_check_enabled`) `ai_status = pending`; natija realtime `finance.shift.account_checked` bilan keladi.",
+        "operationId": "FinanceGatewayController_uploadShiftAccountPhoto",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/ShiftAccountPhotoSwaggerDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "(kiZgTybn) Smena yopish: karta qoldig'i skrinshotini yuklash",
+        "tags": [
+          "Finance"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "registrator",
+          "manager"
+        ]
+      }
+    },
+    "/finance/shift/settings": {
+      "get": {
+        "description": "Global `account_check_enabled` / `photo_required` / `ai_check_enabled` va kassa kartalari: `require_photo_on_shift_close`, `ai_check_enabled`, hisoblangan `photo_required` / `ai_enabled` (smena yopish oynasi uchun). O'qish — yopuvchi rollar (menejer — o'z filiali, registrator — '0'); o'zgartirish — faqat superadmin (PATCH).",
+        "operationId": "FinanceGatewayController_getShiftSettings",
+        "parameters": [
+          {
+            "name": "cashbox_user_id",
+            "required": false,
+            "in": "query",
+            "description": "Kassa: '0' — asosiy (MAIN), aks holda filial ID si (faqat superadmin/admin; menejer — o'z filiali, registrator — '0')",
+            "schema": {
+              "example": "0",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "(kiZgTybn) Smena yopish sozlamalari (global + karta bo'yicha)",
+        "tags": [
+          "Finance"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "registrator",
+          "manager"
+        ]
+      },
+      "patch": {
+        "description": "Global kalitlar va `cards[]` (karta bo'yicha `require_photo_on_shift_close`, `ai_check_enabled`; AI faqat rasm talab qilinganda — aks holda 400). Activity-log: `finance.shift_settings_updated`.",
+        "operationId": "FinanceGatewayController_updateShiftSettings",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateShiftSettingsRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "(kiZgTybn) Smena yopish sozlamalarini o'zgartirish — FAQAT superadmin",
+        "tags": [
+          "Finance"
+        ],
+        "x-roles": [
+          "superadmin"
+        ]
+      }
+    },
+    "/finance/shift/{id}/report": {
+      "get": {
+        "description": "`data.cash` / `data.card` — ochilish, kirim, chiqim, kutilgan, sanalgan, farq; `data.accounts[]` — har karta: kutilgan (snapshot), kiritilgan, farq, `ai_status` (not_required | pending | match | mismatch | unreadable | disabled | error), `ai_entered_ok`, `ai_read_balance`, `ai_last4_detected`, `comment`, `comment_required`, `photo_url` (imzolangan, 300 s); `ai_raw` — faqat superadmin. `data.accounts_summary` — holatlar soni; `data.operations[]` — smena oynasidagi kassa operatsiyalari (tur × to'lov usuli: soni, summa). Menejer — faqat o'z filiali, registrator — asosiy kassa (boshqasi 404).",
+        "operationId": "FinanceGatewayController_shiftReport",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Smena ID si",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "(kiZgTybn) Smena hisoboti: naqd + kartalar bo'yicha natijalar",
+        "tags": [
+          "Finance"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "registrator",
+          "manager"
+        ]
+      }
+    },
     "/finance/shift/current": {
       "get": {
         "description": "(kfdfYDik) `data.shift` — ochiq smena yoki null; `data.required` — shu kassada smenasiz pul operatsiyalari bloklanadimi (FINANCE_REQUIRE_OPEN_SHIFT: MAIN — main/all, filial — all). R6: menejer — o'z filiali kassasi. (8OYPuz7J) `data.last_closed` — shu kassaning eng oxirgi yopilgan smenasi (closed_at DESC, to'liq qator) yoki null; smena qatorlarida `opened_by_name` / `closed_by_name`. (32Sw3DfC) `?cashbox_user_id=` — superadmin/admin filial kassasi sahifasida shu filial smenasi va `required` (FAQAT o'qish; mavjud bo'lmagan filial — 404). `data.can_open` — so'rovchi shu kassada smena ocha oladimi (superadmin/admin filialda — yo'q: filial smenasini menejer ochadi); smena yo'q va ocha olmasa `data.lock_message` = «Filial menejeri smenani ochishi kerak», aks holda null. Menejer `?cashbox_user_id=0` — HQ asosiy kassa smenasi HOLATI (`status_only: true`; pul maydonlarisiz, `last_closed` yo'q).",
@@ -25235,6 +25379,34 @@
           }
         }
       },
+      "CloseShiftAccountRequestDto": {
+        "type": "object",
+        "properties": {
+          "card_id": {
+            "type": "string",
+            "example": "3",
+            "description": "Kassa kartasi ID si"
+          },
+          "entered_balance": {
+            "type": "number",
+            "example": 1250000,
+            "description": "Kassir kiritgan qoldiq (so'm)"
+          },
+          "photo_file_key": {
+            "type": "string",
+            "example": "shift-check-1730000000000-uuid-photo.jpg",
+            "description": "Ixtiyoriy: `POST /finance/shift/account-photo` qaytargan kalit (boshqa kalit — 400). Berilmasa — oxirgi yuklangan rasm."
+          },
+          "comment": {
+            "type": "string",
+            "example": "Bank komissiyasi yechilgan"
+          }
+        },
+        "required": [
+          "card_id",
+          "entered_balance"
+        ]
+      },
       "CloseShiftRequestDto": {
         "type": "object",
         "properties": {
@@ -25265,11 +25437,98 @@
           "comment": {
             "type": "string",
             "example": "Smena yopildi"
+          },
+          "accounts": {
+            "description": "(kiZgTybn) Har karta / hisob qoldig'ini tasdiqlash. `shift.account_check.enabled` yoqilgan bo'lsa kassaning HAR faol kartasi uchun majburiy (aks holda 400). Rasm majburiy kartada rasm yo'q — 400; farq ≠ 0, AI `mismatch` yoki kiritilgan qiymat rasmdagidan farqli — `comment` majburiy (400). AI natijasi `pending` bo'lsa yopish 30 s gacha kutadi, keyin baribir yopiladi.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CloseShiftAccountRequestDto"
+            }
           }
         },
         "required": [
           "closing_balance_cash"
         ]
+      },
+      "ShiftAccountPhotoSwaggerDto": {
+        "type": "object",
+        "properties": {
+          "card_id": {
+            "type": "string",
+            "example": "3",
+            "description": "Kassa kartasi ID si"
+          },
+          "shift_id": {
+            "type": "string",
+            "example": "12",
+            "description": "Smena ID si. Berilmasa — karta kassasining ochiq smenasi"
+          },
+          "entered_balance": {
+            "type": "number",
+            "example": 1250000,
+            "description": "Qoralama: kassir kiritgan qoldiq (yopishda qayta yuboriladi)"
+          },
+          "comment": {
+            "type": "string",
+            "example": "Izoh"
+          },
+          "photo": {
+            "type": "string",
+            "format": "binary",
+            "description": "Qoldiq skrinshoti: jpeg / png / webp, ≤ 5 MB (EXIF tozalanadi)"
+          }
+        },
+        "required": [
+          "card_id",
+          "photo"
+        ]
+      },
+      "ShiftCardSettingRequestDto": {
+        "type": "object",
+        "properties": {
+          "card_id": {
+            "type": "string",
+            "example": "3"
+          },
+          "require_photo_on_shift_close": {
+            "type": "boolean",
+            "example": true
+          },
+          "ai_check_enabled": {
+            "type": "boolean",
+            "example": true,
+            "description": "Faqat rasm talab qilinganda yoqiladi (aks holda 400)"
+          }
+        },
+        "required": [
+          "card_id"
+        ]
+      },
+      "UpdateShiftSettingsRequestDto": {
+        "type": "object",
+        "properties": {
+          "account_check_enabled": {
+            "type": "boolean",
+            "example": true,
+            "description": "Global `shift.account_check.enabled` (sukut false): yoqilsa yopishda har faol karta uchun `accounts[]` majburiy"
+          },
+          "photo_required": {
+            "type": "boolean",
+            "example": true,
+            "description": "Global `shift.photo.required` (sukut true) — master kalit: o'chiq bo'lsa hech bir kartada rasm majburiy emas; yoqiq — karta bo'yicha `require_photo_on_shift_close` hal qiladi"
+          },
+          "ai_check_enabled": {
+            "type": "boolean",
+            "example": false,
+            "description": "Global `shift.ai_check.enabled` (sukut false) — master kalit: o'chiq bo'lsa AI chaqirilmaydi; yoqiq — karta bo'yicha `ai_check_enabled` hal qiladi"
+          },
+          "cards": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ShiftCardSettingRequestDto"
+            }
+          }
+        }
       },
       "CreateCashboxCardRequestDto": {
         "type": "object",
