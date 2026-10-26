@@ -25,18 +25,18 @@ import { firstValueFrom, timeout, TimeoutError } from 'rxjs';
  * Faqat yopiq ro'yxat — ichki tafsilot sizmaydi (@Public endpoint).
  *
  * (oFfOWGuo, xavfsizlik P2) `error` ham endi FAQAT holat matni
- * (`READINESS_ERROR_TEXT`): ilgari RPC istisnosining xom `message` i
+ * (`READINESS_ERROR_TEXT`; `reported` da — `reported degraded|down`):
+ * ilgari RPC istisnosining xom `message` i
  * (masalan `connect ECONNREFUSED 172.18.0.5:5672`) @Public javobda
  * qaytardi. Xom matn faqat server logida (warn). Matnlar FE
  * `classifyProblem` (system-ops) bilan mos: /timeout/, /^reported/,
  * /not registered/.
  */
 export const READINESS_ERROR_TEXT: Readonly<
-  Record<ServiceHealthErrorKind, string>
+  Record<Exclude<ServiceHealthErrorKind, 'reported'>, string>
 > = {
   timeout: 'timeout',
   down: 'unavailable',
-  reported: 'reported down',
   not_registered: 'client not registered',
 };
 
@@ -204,7 +204,8 @@ export class HealthController {
           service: token,
           status: 'down',
           latency_ms: Date.now() - startedAt,
-          error: READINESS_ERROR_TEXT.reported,
+          // Faqat servis o'zi bildirgan holat (`degraded` | `down`).
+          error: `reported ${reported}`,
           error_kind: 'reported',
         };
       }

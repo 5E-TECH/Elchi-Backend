@@ -38,7 +38,7 @@ servislar keyingi deploy'da oladi; notification-service ichki `/metrics` ham shu
 - [2026-10-26] 🔒 [gateway] — `GET /metrics`: ilgari autentifikatsiyasiz ochiq edi. Endi production'da `METRICS_TOKEN`
   bo'lmasa **404**; bo'lsa faqat `Authorization: Bearer <METRICS_TOKEN>` (aks holda 401). FE'ga ta'sir yo'q.
 - [2026-10-26] 🔒 [gateway] — `GET /health/readiness` (@Public): `services[].error` endi faqat holat matni
-  (`timeout` | `unavailable` | `reported down` | `client not registered`) — ichki xato matni (IP/port) chiqmaydi.
+  (`timeout` | `unavailable` | `reported degraded` / `reported down` | `client not registered`) — ichki xato matni (IP/port) chiqmaydi.
   `error_kind` o'zgarmagan; FE `classifyProblem` (system-ops) mos ishlayveradi.
 - [2026-10-26] 🔒 [gateway] — `Strict-Transport-Security: max-age=15552000; includeSubDomains` (preload yo'q).
 - [2026-10-26] ❌ [gateway] — Swagger UI (`/api`, `/api-json`) **production'da o'chiq** (parol bo'lsa ham); `/` endi
