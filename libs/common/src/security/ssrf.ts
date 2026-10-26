@@ -15,7 +15,12 @@ import { isIP } from 'node:net';
  * Residual: a TOCTOU DNS-rebind between this check and the actual connect is
  * still theoretically possible (the attacker would need to control both DNS and
  * the admin-only integration config). Acceptable for this threat model; a
- * connect-time pinned lookup can be layered on later if needed.
+ * connect-time pinned lookup can be layered on later if needed (dgvwZasd B).
+ *
+ * Redirects: this guard only vets the FIRST URL. `fetch()` follows 3xx by
+ * default, so a public host could bounce the request to `rabbitmq:15672` or
+ * `minio:9000`. Every guarded outbound call therefore goes through
+ * `fetchWithoutRedirect` below (`redirect: 'error'`, dgvwZasd A).
  */
 
 export class SsrfBlockedError extends Error {
@@ -187,5 +192,71 @@ export async function assertPublicUrl(
         `Host ${host} resolves to a non-public address (${r.address})`,
       );
     }
+  }
+}
+
+/**
+ * (dgvwZasd) Redirect'li manzil rad etildi. `SsrfBlockedError` avlodi — uni
+ * ushlaydigan joylar (masalan `assertOutboundUrlSafe`) shu xatoni ham SSRF
+ * rad etishi deb ko'radi.
+ */
+export class SsrfRedirectBlockedError extends SsrfBlockedError {
+  constructor(message: string) {
+    super(message);
+    this.name = 'SsrfRedirectBlockedError';
+  }
+}
+
+/**
+ * undici (Node `fetch`) `redirect: 'error'` da 3xx javobni
+ * `TypeError('fetch failed', { cause: Error('unexpected redirect') })` qilib
+ * tashlaydi. Boshqa tarmoq xatolari (ECONNREFUSED, timeout) bu emas.
+ */
+function isRedirectRejection(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const cause = (error as { cause?: unknown }).cause;
+  return (
+    cause instanceof Error && /unexpected redirect/i.test(String(cause.message))
+  );
+}
+
+/** Xato matni uchun faqat origin — so'rov qatoridagi token/kalitlar logga tushmasin. */
+function safeOrigin(rawUrl: string): string {
+  try {
+    return new URL(rawUrl).origin;
+  } catch {
+    return '<invalid url>';
+  }
+}
+
+/**
+ * (dgvwZasd A) Operator sozlagan manzilga chiquvchi so'rov — redirect'ga
+ * ERGASHMAYDI.
+ *
+ * `assertPublicUrl` faqat birinchi manzilni tekshiradi; sukut bo'yicha
+ * `fetch()` 3xx `Location` ga o'zi ergashadi va so'rov ichki xizmatga
+ * (`rabbitmq:15672`, `minio:9000`, metadata) yetib boradi — himoya aylanib
+ * o'tiladi. Bu yerda `redirect: 'error'` HAR DOIM qo'yiladi (chaqiruvchi
+ * `init` da boshqa qiymat bersa ham ustidan yoziladi) va 3xx javob
+ * `SsrfRedirectBlockedError` bilan rad etiladi — redirect manzili umuman
+ * chaqirilmaydi. Boshqa xatolar (tarmoq, timeout) o'zgarishsiz qaytadi.
+ *
+ * `fetch` chaqiruv paytida global'dan olinadi — testlardagi
+ * `global.fetch = jest.fn()` mock'lari avvalgidek ishlaydi.
+ */
+export async function fetchWithoutRedirect(
+  url: string,
+  init: RequestInit = {},
+): Promise<Response> {
+  try {
+    return await fetch(url, { ...init, redirect: 'error' });
+  } catch (error) {
+    if (isRedirectRejection(error)) {
+      throw new SsrfRedirectBlockedError(
+        `Redirect blocked: ${safeOrigin(url)} replied with a 3xx redirect; ` +
+          'outbound integration calls do not follow redirects',
+      );
+    }
+    throw error;
   }
 }
