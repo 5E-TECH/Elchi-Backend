@@ -69,7 +69,10 @@ describe('Integratsiya chiquvchi so‘rovlari redirect’ga ergashmaydi (dgvwZas
       svc.dispatchPartnerWebhook({
         id: '1',
         partner_id: '7',
-        payload: { event: 'shipment.status_changed' },
+        payload: {
+          event: 'shipment.status_changed',
+          external_order_id: 'ord-9',
+        },
       }),
     ).rejects.toBeInstanceOf(SsrfRedirectBlockedError);
     expect(internalHits).toBe(0);
