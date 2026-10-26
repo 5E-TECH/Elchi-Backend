@@ -423,9 +423,37 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
   `finance.shift.auto_closed` (shift close; MAIN → roles superadmin/admin/
   registrator, BRANCH → `manager` of that branch only, + opener/closer user
   rooms), `finance.shift.account_checked` (ready for kiZgTybn, no caller yet),
-  `finance.cashbox.card_changed` (card create/rename/status/transfer/convert →
-  superadmin/admin). Skipped when `RABBITMQ_GATEWAY_QUEUE` is unset. Payloads
+  `finance.cashbox.card_changed` (card create/rename/update/status/
+  make-default/transfer/convert → superadmin/admin; Zv3MLn0a: a BRANCH cashbox
+  card also → `manager` of that branch, payload `cashbox_type: 'branch'` +
+  `branch_id`). Skipped when `RABBITMQ_GATEWAY_QUEUE` is unset. Payloads
   carry ids + times only (no amounts).
+- **Cashbox cards / accounts (3PE0B03q base, Zv3MLn0a 2026-10-26):**
+  `finance_schema.cashbox_cards` (migr 105 + 161) lives in MAIN **and BRANCH**
+  cashboxes; invariant per cashbox `Σ(cards) == cashbox.balance_card` (the
+  default «Asosiy karta» balance is derived `balance_card − Σ named`, stored 0).
+  Details (migr 161, additive): `kind` (virtual_card|plastic_card|bank_account,
+  NULL = legacy), `bank_name`, `card_network`, `last4` (ONLY last 4 digits,
+  DB CHECK `^[0-9]{4}$` — full PAN/account numbers are never stored),
+  `holder_name`, `note`, `require_photo_on_shift_close`, `ai_check_enabled`
+  (CHECK: AI only with photo; writable by SUPERADMIN only — gateway 403 for
+  ADMIN + service `allow_shift_settings` flag). `cashbox-card.service.ts`:
+  every mutation locks the cashbox row FOR UPDATE first (id-based ops take the
+  cashbox from the card), then cards; `applyCashboxCardSelection` binds a
+  CLICK leg to a card of the SAME cashbox (MAIN/BRANCH; other cashbox → 403,
+  cash/click_to_market → 400, no `card_id` → default card). `card_id` is
+  accepted by `fill`/`spend` (manager → own branch cashbox), `payment_courier`
+  (receiver leg, MAIN or manager's branch), `payment_market` (MAIN),
+  `payment_branch_main` (`card_id` = MAIN leg, `branch_card_id` = branch leg).
+  `make_default` swaps the default card under the cashbox lock (no money
+  moves; old default keeps its derived balance as stored balance; its
+  card-less CLICK history rows are stamped with its id so both ledgers stay
+  exact). Shift close adds card↔cash conversions of the shift's own cashbox
+  (MAIN or BRANCH). Gateway `/finance/cashbox/cards*`: list / movements /
+  `:id/ledger` / `:id/ledger/export` (xlsx) — SA/ADMIN (+ optional
+  `branch_id`) and MANAGER (always own branch; other branch → 403); create /
+  PATCH `:id` (details, also on the default card — only its name is locked) /
+  `:id/status` / `:id/make-default` / transfer / convert — SA/ADMIN.
 - **fix3 (2026-10-01):** `payment_market` replies right after commit (+ the 2 s
   bounded ledger publish); the per-order PAID/PARTLY_PAID sync and the partner
   webhook run in the background (serialized per market, in-process, drained

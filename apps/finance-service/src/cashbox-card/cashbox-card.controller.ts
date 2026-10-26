@@ -6,12 +6,17 @@ import {
   RmqContext,
 } from '@nestjs/microservices';
 import { RmqService, executeAndAck } from '@app/common';
-import { CashboxCardService } from './cashbox-card.service';
+import {
+  CashboxCardService,
+  type CardCashboxScope,
+  type CardDetailsInput,
+} from './cashbox-card.service';
 import type { CardMovementType } from '../entities/cashbox-card-movement.entity';
 
 /**
- * 3PE0B03q — MAIN kassa nomli kartalari (BeePost `cashbox_card` porti).
- * Gateway: `/finance/cashbox/cards*` (superadmin, admin).
+ * 3PE0B03q — kassa nomli kartalari (BeePost `cashbox_card` porti).
+ * Gateway: `/finance/cashbox/cards*` (CRUD — superadmin, admin; Zv3MLn0a:
+ * o'qish — menejer ham, faqat o'z filiali kassasi: payload `branch_id`).
  */
 @Controller()
 export class CashboxCardController {
@@ -22,7 +27,10 @@ export class CashboxCardController {
 
   @MessagePattern({ cmd: 'finance.cashbox.cards.list' })
   list(
-    @Payload() data: { include_inactive?: boolean | string } | undefined,
+    @Payload()
+    data:
+      | ({ include_inactive?: boolean | string } & CardCashboxScope)
+      | undefined,
     @Ctx() context: RmqContext,
   ) {
     return executeAndAck(this.rmqService, context, () =>
@@ -33,11 +41,47 @@ export class CashboxCardController {
   @MessagePattern({ cmd: 'finance.cashbox.cards.create' })
   create(
     @Payload()
-    data: { name: string; sort_order?: number; created_by?: string | null },
+    data: {
+      name: string;
+      sort_order?: number;
+      created_by?: string | null;
+      make_default?: boolean;
+    } & CardDetailsInput &
+      CardCashboxScope,
     @Ctx() context: RmqContext,
   ) {
     return executeAndAck(this.rmqService, context, () =>
       this.cards.createCard(data),
+    );
+  }
+
+  /** Zv3MLn0a — nom + tafsilotlar (Asosiy kartada ham; nomi — 400). */
+  @MessagePattern({ cmd: 'finance.cashbox.cards.update' })
+  update(
+    @Payload()
+    data: {
+      id: string;
+      name?: string;
+      sort_order?: number;
+      updated_by?: string | null;
+    } & CardDetailsInput &
+      CardCashboxScope,
+    @Ctx() context: RmqContext,
+  ) {
+    return executeAndAck(this.rmqService, context, () =>
+      this.cards.updateCard(data),
+    );
+  }
+
+  /** Zv3MLn0a — kartani kassaning Asosiy kartasi qilish (kassa qulfi ostida). */
+  @MessagePattern({ cmd: 'finance.cashbox.cards.make_default' })
+  makeDefault(
+    @Payload()
+    data: { id: string; updated_by?: string | null } & CardCashboxScope,
+    @Ctx() context: RmqContext,
+  ) {
+    return executeAndAck(this.rmqService, context, () =>
+      this.cards.makeDefault(data),
     );
   }
 
@@ -101,7 +145,9 @@ export class CashboxCardController {
   @MessagePattern({ cmd: 'finance.cashbox.cards.movements' })
   movements(
     @Payload()
-    data: { card_id?: string; page?: number; limit?: number } | undefined,
+    data:
+      | ({ card_id?: string; page?: number; limit?: number } & CardCashboxScope)
+      | undefined,
     @Ctx() context: RmqContext,
   ) {
     return executeAndAck(this.rmqService, context, () =>
@@ -118,7 +164,8 @@ export class CashboxCardController {
       to_date?: string;
       page?: number;
       limit?: number;
-    },
+      all?: boolean;
+    } & CardCashboxScope,
     @Ctx() context: RmqContext,
   ) {
     return executeAndAck(this.rmqService, context, () =>

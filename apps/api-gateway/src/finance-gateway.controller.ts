@@ -69,7 +69,7 @@ import {
   OpenShiftRequestDto,
   ConvertCashboxCardRequestDto,
   CreateCashboxCardRequestDto,
-  RenameCashboxCardRequestDto,
+  UpdateCashboxCardRequestDto,
   SetCashboxCardStatusRequestDto,
   TransferCashboxCardRequestDto,
   PaymentBranchToMainRequestDto,
@@ -80,6 +80,12 @@ import {
   UpdateSalaryRequestDto,
 } from './dto/finance.swagger.dto';
 import { resolveFinancialActors } from './financial-balance/financial-balance.util';
+import {
+  buildXlsx,
+  excelDate,
+  excelNumber,
+  type ExcelColumn,
+} from './excel/excel.util';
 
 interface JwtUser {
   sub: string;
@@ -201,6 +207,36 @@ export const BRANCH_SHIFT_MANAGER_ONLY_MESSAGE =
 const MAIN_SHIFT_CASHBOX_USER_ID = '0';
 
 /** IjqTYQks — filial puli HQ'ga faqat HQ (superadmin/admin) qabul qilganda o'tadi (ega qarori #7). */
+/** Zv3MLn0a — menejer boshqa filial kassasi kartalarini so'radi. */
+export const CARD_OTHER_BRANCH_MESSAGE =
+  "Siz faqat o'z filialingiz kassasi kartalarini ko'ra olasiz";
+/** Zv3MLn0a — smena sozlamalari faqat superadmin. */
+export const CARD_SHIFT_SETTINGS_SUPERADMIN_MESSAGE =
+  "Smena sozlamalarini (rasm / AI tekshiruvi) faqat superadmin o'zgartiradi";
+
+/** Zv3MLn0a — karta ko'chirmasi Excel ustunlari. */
+const CARD_LEDGER_EXCEL_COLUMNS: ExcelColumn[] = [
+  { header: 'Sana', key: 'date', width: 20 },
+  { header: 'Amal', key: 'kind', width: 22 },
+  { header: 'Summa', key: 'amount', width: 14 },
+  { header: "O'zgarish", key: 'delta', width: 14 },
+  { header: 'Qoldiq', key: 'balance_after', width: 14 },
+  { header: "To'lov usuli", key: 'payment_method', width: 14 },
+  { header: 'Manba', key: 'source_type', width: 18 },
+  { header: 'Qarshi karta ID', key: 'counterparty_card_id', width: 14 },
+  { header: 'Izoh', key: 'comment', width: 30 },
+  { header: 'Kiritgan (ID)', key: 'created_by', width: 14 },
+];
+
+const CARD_LEDGER_KIND_LABEL: Record<string, string> = {
+  income: 'Kirim',
+  expense: 'Chiqim',
+  transfer_in: "Kartaga o'tkazma",
+  transfer_out: "Kartadan o'tkazma",
+  cash_to_card: 'Naqddan kartaga',
+  card_to_cash: 'Kartadan naqdga',
+};
+
 export const BRANCH_TO_MAIN_HQ_ONLY_MESSAGE =
   "Filial pulini HQ (superadmin yoki admin) o'zi qabul qiladi — menejer HQ'ga pul o'tkazmaydi";
 
@@ -2242,6 +2278,8 @@ export class FinanceGatewayController {
           : {}),
         // 3PE0B03q — CLICK pul asosiy kassaning qaysi nomli kartasiga.
         ...(dto.card_id ? { card_id: dto.card_id } : {}),
+        // Zv3MLn0a — CLICK pul filial kassasining qaysi kartasidan chiqdi.
+        ...(dto.branch_card_id ? { branch_card_id: dto.branch_card_id } : {}),
       },
     );
     // branch → HQ settlement advance is enqueued by finance-service via the
@@ -3196,21 +3234,81 @@ export class FinanceGatewayController {
     return id;
   }
 
+  /**
+   * Zv3MLn0a — kartalar amalining kassa doirasi (`branch_id`):
+   *   • MENEJER — DOIM o'z filiali (JWT / branch_users); boshqa `branch_id`
+   *     so'ralsa 403; filiali topilmasa 403;
+   *   • superadmin/admin — `branch_id` ixtiyoriy (yo'q — asosiy kassa; id
+   *     bo'yicha amallarda kassa kartaning o'zidan olinadi).
+   * Natija finance'ga `branch_id` bo'lib boradi (menejerda — majburiy doira).
+   */
+  private async resolveCardScope(
+    user: JwtUser | undefined,
+    requested?: string,
+  ): Promise<{ branch_id?: string }> {
+    const raw = String(requested ?? '').trim();
+    if (raw && !/^\d+$/.test(raw)) {
+      throw new BadRequestException("branch_id raqamli ID bo'lishi kerak");
+    }
+    if (!this.isManager(user)) {
+      return raw ? { branch_id: raw } : {};
+    }
+    const own = user ? await this.resolveOwnBranchId(user) : '';
+    if (!own) {
+      throw new ForbiddenException("Managerning branch'i topilmadi");
+    }
+    if (raw && raw !== own) {
+      throw new ForbiddenException(CARD_OTHER_BRANCH_MESSAGE);
+    }
+    return { branch_id: own };
+  }
+
+  /**
+   * Zv3MLn0a — smena sozlamalari (`require_photo_on_shift_close`,
+   * `ai_check_enabled`) faqat SUPERADMIN: ADMIN yuborsa 403. Ruxsat
+   * finance'ga `allow_shift_settings` bo'lib boradi (servis ham tekshiradi).
+   */
+  private cardShiftSettingsFlag(
+    user: JwtUser | undefined,
+    dto: { require_photo_on_shift_close?: unknown; ai_check_enabled?: unknown },
+  ): { allow_shift_settings?: true } {
+    const touches =
+      dto.require_photo_on_shift_close !== undefined ||
+      dto.ai_check_enabled !== undefined;
+    const isSuperadmin = this.hasRole(user, RoleEnum.SUPERADMIN);
+    if (touches && !isSuperadmin) {
+      throw new ForbiddenException(CARD_SHIFT_SETTINGS_SUPERADMIN_MESSAGE);
+    }
+    return touches ? { allow_shift_settings: true } : {};
+  }
+
   @Get('cashbox/cards')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.MANAGER)
   @ApiBearerAuth()
   @ApiOperation({
-    summary: 'Asosiy kassa kartalari (balanslar, moslik nazorati)',
+    summary:
+      'Kassa kartalari va hisob raqamlari (balanslar, moslik nazorati) — asosiy yoki filial kassasi',
     description:
-      '3PE0B03q — `data.cards` (Asosiy karta birinchi, balansi = balance_card − Σ nomli kartalar), `balance_card`, `total_card` (== balance_card), `in_sync` (false — nomli kartalar balance_card dan oshgan).',
+      "3PE0B03q / Zv3MLn0a — `data.cards` (Asosiy karta birinchi, balansi = balance_card − Σ nomli kartalar; har kartada `kind`, `bank_name`, `card_network`, `last4`, `holder_name`, `note`, `require_photo_on_shift_close`, `ai_check_enabled`), `balance_card`, `total_card` (== balance_card), `in_sync`, `cashbox_id`, `cashbox_type` (main|branch), `branch_id`. `branch_id` — filial kassasi (superadmin/admin); MENEJER doim o'z filiali kassasini oladi, boshqa `branch_id` → 403.",
   })
   @ApiQuery({ name: 'include_inactive', required: false, type: Boolean })
-  listCashboxCards(@Query('include_inactive') includeInactive?: string) {
+  @ApiQuery({
+    name: 'branch_id',
+    required: false,
+    description: "Filial ID (yo'q — asosiy kassa; menejer — o'z filiali)",
+  })
+  async listCashboxCards(
+    @Req() req: { user: JwtUser },
+    @Query('include_inactive') includeInactive?: string,
+    @Query('branch_id') branchId?: string,
+  ) {
+    const scope = await this.resolveCardScope(req?.user, branchId);
     return this.send(
       { cmd: 'finance.cashbox.cards.list' },
       {
         include_inactive: includeInactive === 'true' || includeInactive === '1',
+        ...scope,
       },
     );
   }
@@ -3219,7 +3317,11 @@ export class FinanceGatewayController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Yangi nomli karta (balans 0)' })
+  @ApiOperation({
+    summary: 'Yangi karta yoki hisob raqam (balans 0)',
+    description:
+      'Zv3MLn0a — `branch_id` bilan filial kassasiga. `last4` — faqat 4 raqam (uzunroq → 400). Smena sozlamalari (`require_photo_on_shift_close`, `ai_check_enabled`) — FAQAT superadmin (admin → 403). `make_default: true` — darhol Asosiy karta.',
+  })
   @ApiBody({ type: CreateCashboxCardRequestDto })
   createCashboxCard(
     @Req() req: { user: JwtUser },
@@ -3227,86 +3329,207 @@ export class FinanceGatewayController {
   ) {
     return this.send(
       { cmd: 'finance.cashbox.cards.create' },
-      { ...dto, created_by: String(req.user.sub) },
+      {
+        ...dto,
+        ...this.cardShiftSettingsFlag(req?.user, dto),
+        created_by: String(req.user.sub),
+      },
     );
   }
 
   @Get('cashbox/cards/movements')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.MANAGER)
   @ApiBearerAuth()
   @ApiOperation({
     summary: "Kartalararo o'tkazma / konvertatsiya jurnali",
+    description:
+      "Zv3MLn0a — kassa doirasida: `branch_id` (yo'q — asosiy kassa; menejer — o'z filiali). `card_id` — o'sha karta (boshqa filial kartasi → 403).",
   })
   @ApiQuery({ name: 'card_id', required: false })
+  @ApiQuery({ name: 'branch_id', required: false })
   @ApiQuery({ name: 'page', required: false, type: Number })
   @ApiQuery({ name: 'limit', required: false, type: Number })
-  listCashboxCardMovements(
+  async listCashboxCardMovements(
+    @Req() req: { user: JwtUser },
     @Query('card_id') cardId?: string,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
+    @Query('branch_id') branchId?: string,
   ) {
+    const parsedCardId = cardId
+      ? this.assertCardId(cardId, 'card_id')
+      : undefined;
+    const scope = await this.resolveCardScope(req?.user, branchId);
     return this.send(
       { cmd: 'finance.cashbox.cards.movements' },
       {
-        ...(cardId ? { card_id: this.assertCardId(cardId, 'card_id') } : {}),
+        ...(parsedCardId ? { card_id: parsedCardId } : {}),
         page: page ? Number(page) : undefined,
         limit: limit ? Number(limit) : undefined,
+        ...scope,
       },
     );
   }
 
   @Get('cashbox/cards/:id/ledger')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.MANAGER)
   @ApiBearerAuth()
   @ApiOperation({
     summary:
       "Karta ko'chirmasi (kirim/chiqim + ichki harakatlar, har qatordan keyingi balans)",
+    description:
+      "Zv3MLn0a — asosiy yoki filial kassasi kartasi; menejer faqat o'z filiali kartasi (boshqasi → 403).",
   })
   @ApiParam({ name: 'id', description: 'Karta ID' })
   @ApiQuery({ name: 'from_date', required: false })
   @ApiQuery({ name: 'to_date', required: false })
   @ApiQuery({ name: 'page', required: false, type: Number })
   @ApiQuery({ name: 'limit', required: false, type: Number })
-  getCashboxCardLedger(
+  async getCashboxCardLedger(
+    @Req() req: { user: JwtUser },
     @Param('id') id: string,
     @Query('from_date') fromDate?: string,
     @Query('to_date') toDate?: string,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
   ) {
+    const cardId = this.assertCardId(id);
+    const scope = await this.resolveCardScope(req?.user);
     return this.send(
       { cmd: 'finance.cashbox.cards.ledger' },
       {
-        id: this.assertCardId(id),
+        id: cardId,
         from_date: fromDate,
         to_date: toDate,
         page: page ? Number(page) : undefined,
         limit: limit ? Number(limit) : undefined,
+        ...scope,
       },
     );
+  }
+
+  @Get('cashbox/cards/:id/ledger/export')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.MANAGER)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: "Karta ko'chirmasi — Excel (.xlsx)",
+    description:
+      "Zv3MLn0a — `GET /cashbox/cards/:id/ledger` bilan bir xil qatorlar (oraliqdagi HAMMASI, sahifasiz; 2000 dan ortiq bo'lsa 400 — `from_date` bilan qisqartiring). Menejer — faqat o'z filiali kartasi.",
+  })
+  @ApiParam({ name: 'id', description: 'Karta ID' })
+  @ApiQuery({ name: 'from_date', required: false })
+  @ApiQuery({ name: 'to_date', required: false })
+  async exportCashboxCardLedger(
+    @Req() req: { user: JwtUser },
+    @Res() res: Response,
+    @Param('id') id: string,
+    @Query('from_date') fromDate?: string,
+    @Query('to_date') toDate?: string,
+  ): Promise<void> {
+    const cardId = this.assertCardId(id);
+    const scope = await this.resolveCardScope(req?.user);
+    const result = await this.send<{
+      data?: {
+        card?: Record<string, unknown>;
+        items?: Array<Record<string, unknown>>;
+      };
+    }>(
+      { cmd: 'finance.cashbox.cards.ledger' },
+      {
+        id: cardId,
+        from_date: fromDate,
+        to_date: toDate,
+        all: true,
+        ...scope,
+      },
+    );
+    const items = result?.data?.items ?? [];
+    const buffer = await buildXlsx(
+      "Karta ko'chirmasi",
+      CARD_LEDGER_EXCEL_COLUMNS,
+      items.map((row) => ({
+        date: excelDate(row.created_at),
+        kind: CARD_LEDGER_KIND_LABEL[toText(row.kind)] ?? toText(row.kind),
+        amount: excelNumber(row.amount),
+        delta: excelNumber(row.delta),
+        balance_after: excelNumber(row.balance_after),
+        payment_method: toText(row.payment_method),
+        source_type: toText(row.source_type),
+        counterparty_card_id: toText(row.counterparty_card_id),
+        comment: toText(row.comment),
+        created_by: toText(row.created_by),
+      })),
+    );
+    res.set({
+      'Content-Type':
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'Content-Disposition': `attachment; filename="karta-${cardId}-kochirma.xlsx"`,
+    });
+    res.send(buffer);
   }
 
   @Patch('cashbox/cards/:id')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiBearerAuth()
-  @ApiOperation({ summary: "Karta nomini o'zgartirish (Asosiy karta — 400)" })
+  @ApiOperation({
+    summary: 'Karta nomi va tafsilotlarini o`zgartirish',
+    description:
+      "Zv3MLn0a — `name`, `kind`, `bank_name`, `card_network`, `last4` (faqat 4 raqam), `holder_name`, `note`, `sort_order` (hammasi ixtiyoriy). Asosiy kartada ham ishlaydi — faqat Asosiy kartaning NOMI o'zgarmaydi (400). Smena sozlamalari — faqat superadmin (admin → 403).",
+  })
   @ApiParam({ name: 'id', description: 'Karta ID' })
-  @ApiBody({ type: RenameCashboxCardRequestDto })
+  @ApiBody({ type: UpdateCashboxCardRequestDto })
   renameCashboxCard(
     @Req() req: { user: JwtUser },
     @Param('id') id: string,
-    @Body() dto: RenameCashboxCardRequestDto,
+    @Body() dto: UpdateCashboxCardRequestDto,
   ) {
+    const cardId = this.assertCardId(id);
+    const shiftFlag = this.cardShiftSettingsFlag(req?.user, dto);
+    const keys = Object.keys(dto).filter(
+      (key) => (dto as Record<string, unknown>)[key] !== undefined,
+    );
+    if (!keys.length) {
+      throw new BadRequestException("O'zgartirish uchun maydon yuborilmadi");
+    }
+    // Faqat nom — eski `rename` buyrug'i (kontrakt o'zgarmagan).
+    if (keys.length === 1 && keys[0] === 'name') {
+      return this.send(
+        { cmd: 'finance.cashbox.cards.rename' },
+        { id: cardId, name: dto.name, updated_by: String(req.user.sub) },
+      );
+    }
     return this.send(
-      { cmd: 'finance.cashbox.cards.rename' },
+      { cmd: 'finance.cashbox.cards.update' },
       {
-        id: this.assertCardId(id),
-        name: dto.name,
+        ...dto,
+        ...shiftFlag,
+        id: cardId,
         updated_by: String(req.user.sub),
       },
+    );
+  }
+
+  @Post('cashbox/cards/:id/make-default')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Kartani kassaning Asosiy kartasi qilish',
+    description:
+      "Zv3MLn0a — kassa qulfi ostida, pul harakatlanmaydi: eski Asosiy karta nomli bo'lib joriy qoldig'ini saqlaydi, tanlangan karta Asosiy bo'ladi (karta tanlanmagan to'lovlar endi shu kartaga). Σ kartalar == balance_card o'zgarmaydi. Arxivlangan karta yoki Asosiy karta balansi manfiy (moslik buzilgan) → 400.",
+  })
+  @ApiParam({ name: 'id', description: 'Karta ID' })
+  makeCashboxCardDefault(
+    @Req() req: { user: JwtUser },
+    @Param('id') id: string,
+  ) {
+    return this.send(
+      { cmd: 'finance.cashbox.cards.make_default' },
+      { id: this.assertCardId(id), updated_by: String(req.user.sub) },
     );
   }
 

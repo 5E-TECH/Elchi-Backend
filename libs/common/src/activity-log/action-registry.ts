@@ -157,6 +157,20 @@ export const ACTIVITY_ACTION_REGISTRY: Readonly<
     'edit',
     'blue',
   ),
+  // Zv3MLn0a: karta tafsilotlari (turi, bank, oxirgi 4 raqam, egasi, smena
+  // sozlamalari) va Asosiy kartani almashtirish.
+  'finance.card_updated': entry(
+    'Kassa kartasi tahrirlandi',
+    'finance',
+    'edit',
+    'blue',
+  ),
+  'finance.card_made_default': entry(
+    'Asosiy karta almashtirildi',
+    'finance',
+    'check',
+    'blue',
+  ),
   'finance.card_activated': entry(
     'Kassa kartasi faollashtirildi',
     'finance',

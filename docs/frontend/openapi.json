@@ -8903,7 +8903,7 @@
     },
     "/finance/cashbox/cards": {
       "get": {
-        "description": "3PE0B03q — `data.cards` (Asosiy karta birinchi, balansi = balance_card − Σ nomli kartalar), `balance_card`, `total_card` (== balance_card), `in_sync` (false — nomli kartalar balance_card dan oshgan).",
+        "description": "3PE0B03q / Zv3MLn0a — `data.cards` (Asosiy karta birinchi, balansi = balance_card − Σ nomli kartalar; har kartada `kind`, `bank_name`, `card_network`, `last4`, `holder_name`, `note`, `require_photo_on_shift_close`, `ai_check_enabled`), `balance_card`, `total_card` (== balance_card), `in_sync`, `cashbox_id`, `cashbox_type` (main|branch), `branch_id`. `branch_id` — filial kassasi (superadmin/admin); MENEJER doim o'z filiali kassasini oladi, boshqa `branch_id` → 403.",
         "operationId": "FinanceGatewayController_listCashboxCards",
         "parameters": [
           {
@@ -8912,6 +8912,15 @@
             "in": "query",
             "schema": {
               "type": "boolean"
+            }
+          },
+          {
+            "name": "branch_id",
+            "required": false,
+            "in": "query",
+            "description": "Filial ID (yo'q — asosiy kassa; menejer — o'z filiali)",
+            "schema": {
+              "type": "string"
             }
           }
         ],
@@ -8925,16 +8934,18 @@
             "bearer": []
           }
         ],
-        "summary": "Asosiy kassa kartalari (balanslar, moslik nazorati)",
+        "summary": "Kassa kartalari va hisob raqamlari (balanslar, moslik nazorati) — asosiy yoki filial kassasi",
         "tags": [
           "Finance"
         ],
         "x-roles": [
           "superadmin",
-          "admin"
+          "admin",
+          "manager"
         ]
       },
       "post": {
+        "description": "Zv3MLn0a — `branch_id` bilan filial kassasiga. `last4` — faqat 4 raqam (uzunroq → 400). Smena sozlamalari (`require_photo_on_shift_close`, `ai_check_enabled`) — FAQAT superadmin (admin → 403). `make_default: true` — darhol Asosiy karta.",
         "operationId": "FinanceGatewayController_createCashboxCard",
         "parameters": [],
         "requestBody": {
@@ -8957,7 +8968,7 @@
             "bearer": []
           }
         ],
-        "summary": "Yangi nomli karta (balans 0)",
+        "summary": "Yangi karta yoki hisob raqam (balans 0)",
         "tags": [
           "Finance"
         ],
@@ -8969,6 +8980,7 @@
     },
     "/finance/cashbox/cards/movements": {
       "get": {
+        "description": "Zv3MLn0a — kassa doirasida: `branch_id` (yo'q — asosiy kassa; menejer — o'z filiali). `card_id` — o'sha karta (boshqa filial kartasi → 403).",
         "operationId": "FinanceGatewayController_listCashboxCardMovements",
         "parameters": [
           {
@@ -8994,6 +9006,14 @@
             "schema": {
               "type": "number"
             }
+          },
+          {
+            "name": "branch_id",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -9012,12 +9032,14 @@
         ],
         "x-roles": [
           "superadmin",
-          "admin"
+          "admin",
+          "manager"
         ]
       }
     },
     "/finance/cashbox/cards/{id}/ledger": {
       "get": {
+        "description": "Zv3MLn0a — asosiy yoki filial kassasi kartasi; menejer faqat o'z filiali kartasi (boshqasi → 403).",
         "operationId": "FinanceGatewayController_getCashboxCardLedger",
         "parameters": [
           {
@@ -9078,12 +9100,66 @@
         ],
         "x-roles": [
           "superadmin",
-          "admin"
+          "admin",
+          "manager"
+        ]
+      }
+    },
+    "/finance/cashbox/cards/{id}/ledger/export": {
+      "get": {
+        "description": "Zv3MLn0a — `GET /cashbox/cards/:id/ledger` bilan bir xil qatorlar (oraliqdagi HAMMASI, sahifasiz; 2000 dan ortiq bo'lsa 400 — `from_date` bilan qisqartiring). Menejer — faqat o'z filiali kartasi.",
+        "operationId": "FinanceGatewayController_exportCashboxCardLedger",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Karta ID",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from_date",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "to_date",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Karta ko'chirmasi — Excel (.xlsx)",
+        "tags": [
+          "Finance"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "manager"
         ]
       }
     },
     "/finance/cashbox/cards/{id}": {
       "patch": {
+        "description": "Zv3MLn0a — `name`, `kind`, `bank_name`, `card_network`, `last4` (faqat 4 raqam), `holder_name`, `note`, `sort_order` (hammasi ixtiyoriy). Asosiy kartada ham ishlaydi — faqat Asosiy kartaning NOMI o'zgarmaydi (400). Smena sozlamalari — faqat superadmin (admin → 403).",
         "operationId": "FinanceGatewayController_renameCashboxCard",
         "parameters": [
           {
@@ -9101,7 +9177,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/RenameCashboxCardRequestDto"
+                "$ref": "#/components/schemas/UpdateCashboxCardRequestDto"
               }
             }
           }
@@ -9116,7 +9192,42 @@
             "bearer": []
           }
         ],
-        "summary": "Karta nomini o'zgartirish (Asosiy karta — 400)",
+        "summary": "Karta nomi va tafsilotlarini o`zgartirish",
+        "tags": [
+          "Finance"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
+        ]
+      }
+    },
+    "/finance/cashbox/cards/{id}/make-default": {
+      "post": {
+        "description": "Zv3MLn0a — kassa qulfi ostida, pul harakatlanmaydi: eski Asosiy karta nomli bo'lib joriy qoldig'ini saqlaydi, tanlangan karta Asosiy bo'ladi (karta tanlanmagan to'lovlar endi shu kartaga). Σ kartalar == balance_card o'zgarmaydi. Arxivlangan karta yoki Asosiy karta balansi manfiy (moslik buzilgan) → 400.",
+        "operationId": "FinanceGatewayController_makeCashboxCardDefault",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Karta ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Kartani kassaning Asosiy kartasi qilish",
         "tags": [
           "Finance"
         ],
@@ -24262,6 +24373,11 @@
           "comment": {
             "type": "string",
             "example": "Courierdan tolov olindi"
+          },
+          "card_id": {
+            "type": "string",
+            "example": "3",
+            "description": "Zv3MLn0a — pul QABUL QILUVCHI kassaning kartasi ID si (`GET /finance/cashbox/cards`; superadmin/admin — asosiy kassa, menejer — o'z filiali kassasi `?branch_id` siz). Faqat `click` to'lovida (aks holda 400); berilmasa — Asosiy karta. Boshqa kassa (filial) kartasi → 403."
           }
         },
         "required": [
@@ -24374,6 +24490,11 @@
             "type": "string",
             "example": "3",
             "description": "Asosiy kassaning NOMLI kartasi ID si (`GET /finance/cashbox/cards`). Faqat `click` to'lovida; berilmasa — Asosiy karta. Nomli kartada mablag' yetmasa 400."
+          },
+          "branch_card_id": {
+            "type": "string",
+            "example": "7",
+            "description": "Zv3MLn0a — pul chiqadigan FILIAL kassasining kartasi ID si (`GET /finance/cashbox/cards?branch_id=`). Faqat `click` to'lovida; berilmasa — filialning Asosiy kartasi. Boshqa kassa kartasi → 403, mablag' yetmasa 400."
           }
         },
         "required": [
@@ -24447,7 +24568,7 @@
           "card_id": {
             "type": "string",
             "example": "3",
-            "description": "Asosiy kassaning NOMLI kartasi ID si (`GET /finance/cashbox/cards`). Faqat `click` to'lovida; berilmasa — Asosiy karta. Nomli kartada mablag' yetmasa 400."
+            "description": "Kassa kartasi ID si (`GET /finance/cashbox/cards`): superadmin/admin — asosiy kassa kartasi, menejer — o'z filiali kassasi kartasi (boshqa kassa kartasi → 403). Faqat `click` to'lovida; berilmasa — Asosiy karta. Kartada mablag' yetmasa 400."
           },
           "expense_category_id": {
             "type": "string",
@@ -24483,7 +24604,7 @@
           "card_id": {
             "type": "string",
             "example": "3",
-            "description": "Asosiy kassaning NOMLI kartasi ID si (`GET /finance/cashbox/cards`). Faqat `click` to'lovida; berilmasa — Asosiy karta. Nomli kartada mablag' yetmasa 400."
+            "description": "Kassa kartasi ID si (`GET /finance/cashbox/cards`): superadmin/admin — asosiy kassa kartasi, menejer — o'z filiali kassasi kartasi (boshqa kassa kartasi → 403). Faqat `click` to'lovida; berilmasa — Asosiy karta. Kartada mablag' yetmasa 400."
           }
         },
         "required": [
@@ -24552,6 +24673,52 @@
       "CreateCashboxCardRequestDto": {
         "type": "object",
         "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "virtual_card",
+              "plastic_card",
+              "bank_account"
+            ],
+            "example": "virtual_card",
+            "description": "Turi: virtual_card (bank ilovasidagi karta), plastic_card (Uzcard/Humo/Visa), bank_account (korxona hisobi)."
+          },
+          "bank_name": {
+            "type": "string",
+            "example": "Agrobank",
+            "maxLength": 100
+          },
+          "card_network": {
+            "type": "string",
+            "example": "Uzcard",
+            "maxLength": 30,
+            "description": "«Karta tizimi» (Uzcard, Humo, Visa …); hisob raqamida bo`sh."
+          },
+          "last4": {
+            "type": "string",
+            "example": "1234",
+            "description": "FAQAT oxirgi 4 raqam (`^\\d{4}$`). 4 raqamdan uzun qiymat (to'liq karta / hisob raqami) → 400. `''` — tozalash."
+          },
+          "holder_name": {
+            "type": "string",
+            "example": "Shodiyor Ergashev",
+            "maxLength": 150
+          },
+          "note": {
+            "type": "string",
+            "example": "Click to`lovlari uchun",
+            "maxLength": 500
+          },
+          "require_photo_on_shift_close": {
+            "type": "boolean",
+            "example": true,
+            "description": "Smena yopishda shu kartaning qoldiq skrinshoti talab qilinadi. FAQAT superadmin (admin → 403). `false` — AI tekshiruvi ham o`chadi."
+          },
+          "ai_check_enabled": {
+            "type": "boolean",
+            "example": false,
+            "description": "Skrinshot AI bilan tekshiriladi. FAQAT superadmin (admin → 403); faqat rasm talab qilinganda (aks holda 400)."
+          },
           "name": {
             "type": "string",
             "example": "Humo 8600"
@@ -24559,23 +24726,81 @@
           "sort_order": {
             "type": "number",
             "example": 0
+          },
+          "branch_id": {
+            "type": "string",
+            "example": "13",
+            "description": "Zv3MLn0a — filial (BRANCH) kassasiga karta: filial ID si. Berilmasa — asosiy (MAIN) kassa. Filial kassasi yo'q bo'lsa 404."
+          },
+          "make_default": {
+            "type": "boolean",
+            "example": false,
+            "description": "«Asosiy karta qilish»: yaratilgan karta darhol kassaning Asosiy kartasi bo`ladi (karta tanlanmagan to`lovlar shu kartaga). Eski Asosiy karta nomli bo`lib, qoldig`ini saqlaydi."
           }
         },
         "required": [
           "name"
         ]
       },
-      "RenameCashboxCardRequestDto": {
+      "UpdateCashboxCardRequestDto": {
         "type": "object",
         "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "virtual_card",
+              "plastic_card",
+              "bank_account"
+            ],
+            "example": "virtual_card",
+            "description": "Turi: virtual_card (bank ilovasidagi karta), plastic_card (Uzcard/Humo/Visa), bank_account (korxona hisobi)."
+          },
+          "bank_name": {
+            "type": "string",
+            "example": "Agrobank",
+            "maxLength": 100
+          },
+          "card_network": {
+            "type": "string",
+            "example": "Uzcard",
+            "maxLength": 30,
+            "description": "«Karta tizimi» (Uzcard, Humo, Visa …); hisob raqamida bo`sh."
+          },
+          "last4": {
+            "type": "string",
+            "example": "1234",
+            "description": "FAQAT oxirgi 4 raqam (`^\\d{4}$`). 4 raqamdan uzun qiymat (to'liq karta / hisob raqami) → 400. `''` — tozalash."
+          },
+          "holder_name": {
+            "type": "string",
+            "example": "Shodiyor Ergashev",
+            "maxLength": 150
+          },
+          "note": {
+            "type": "string",
+            "example": "Click to`lovlari uchun",
+            "maxLength": 500
+          },
+          "require_photo_on_shift_close": {
+            "type": "boolean",
+            "example": true,
+            "description": "Smena yopishda shu kartaning qoldiq skrinshoti talab qilinadi. FAQAT superadmin (admin → 403). `false` — AI tekshiruvi ham o`chadi."
+          },
+          "ai_check_enabled": {
+            "type": "boolean",
+            "example": false,
+            "description": "Skrinshot AI bilan tekshiriladi. FAQAT superadmin (admin → 403); faqat rasm talab qilinganda (aks holda 400)."
+          },
           "name": {
             "type": "string",
-            "example": "Uzcard 5614"
+            "example": "Uzcard 5614",
+            "description": "Asosiy kartada nomni o`zgartirish → 400."
+          },
+          "sort_order": {
+            "type": "number",
+            "example": 2
           }
-        },
-        "required": [
-          "name"
-        ]
+        }
       },
       "SetCashboxCardStatusRequestDto": {
         "type": "object",
