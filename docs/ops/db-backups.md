@@ -7,6 +7,9 @@
 > Off-site: dumplar DB bilan bir VPS da (Contabo o'chib qolishlari bo'lgan) —
 > shuning uchun har soatda nusxasi VPS dan tashqariga, Cloudflare R2 ga
 > chiqariladi (§6).
+>
+> Fayllar (MinIO) zaxirasi — [minio-backups.md](minio-backups.md); RPO/RTO,
+> oylik tiklash mashqi va nosog'lom backup alerti — [backup-rpo-rto.md](backup-rpo-rto.md).
 
 ## 1. Qayerda nima
 

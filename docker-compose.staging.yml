@@ -113,9 +113,20 @@ services:
   # Its OWN tunnel (Cloudflare Zero Trust: e.g. `elchi-staging`, public
   # hostname test-api.elchipochta.uz -> http://api-gateway:3004). The token is
   # required: a missing one fails every compose command with this message
-  # instead of a crash-looping connector.
+  # instead of a crash-looping connector. Two replicas of that ONE staging
+  # tunnel, like production (x-cloudflared in docker-compose.prod.yml); the
+  # deploy's cloudflared_rollout addresses them as elchi-stg-cloudflared[-2]
+  # (scripts/staging/sync-deploy-workflow.mjs rewrites the names).
   cloudflared:
     container_name: elchi-stg-cloudflared
+    mem_limit: 256m
+    mem_reservation: 32m
+    env_file: !override .env.staging
+    environment:
+      TUNNEL_TOKEN: ${STAGING_TUNNEL_TOKEN:?STAGING_TUNNEL_TOKEN is not set in .env.staging (docs/ops/staging.md)}
+
+  cloudflared-2:
+    container_name: elchi-stg-cloudflared-2
     mem_limit: 256m
     mem_reservation: 32m
     env_file: !override .env.staging

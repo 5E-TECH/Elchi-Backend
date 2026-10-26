@@ -28,7 +28,8 @@ const PROLOGUE = `
 # GENERATED from the production job's script by
 # scripts/staging/sync-deploy-workflow.mjs — never edit this block by hand.
 # Differences: branch test, .env.staging, every compose call also loads
-# docker-compose.staging.yml, /tmp/elchi-stg-*, and the guards below.
+# docker-compose.staging.yml, /tmp/elchi-stg-*, elchi-stg-* container names,
+# and the guards below.
 #
 # Never on a production checkout (e.g. a staging secret that is missing in
 # the GitHub \`staging\` environment falls back to a repository secret).
@@ -86,6 +87,12 @@ const RULES = [
     'if [ -z "$OLD_SHA" ]; then',
     'if [ -z "$OLD_SHA" ] || [ "$STG_FIRST_INSTALL" = true ]; then',
   ],
+  // cloudflared_rollout addresses the connectors by container_name
+  // (docker inspect / docker logs). docker-compose.staging.yml names them
+  // elchi-stg-cloudflared / elchi-stg-cloudflared-2 — never touch (or read
+  // the logs of) the production connectors, even on a shared host.
+  ['container names: cloudflared rollout', 'name="elchi-$s"', 'name="elchi-stg-$s"'],
+  ['container names: hints', 'elchi-cloudflared', 'elchi-stg-cloudflared'],
 ];
 
 /** Body lines of the `script: |` block of job `name` ([start, end) indexes). */
@@ -128,6 +135,9 @@ function toStaging(prodScript) {
     [/origin\/main|checkout -f main|fetch origin main/, 'a main-branch reference'],
     [/\.env\.production/, '.env.production'],
     [/-f docker-compose\.prod\.yml(?! -f docker-compose\.staging\.yml)/, 'a compose call without the staging override'],
+    // production container_name values are `elchi-<service>`; staging's are
+    // `elchi-stg-<service>` (also /tmp/elchi-stg-*).
+    [/(^|[^\w.-])elchi-(?!stg-)[a-z0-9$]/, 'a production container name (elchi-…)'],
   ];
   for (const [re, what] of leftovers) {
     const hit = out.split('\n').find((l) => re.test(l));

@@ -51,7 +51,7 @@ $DC logs --tail 50 api-gateway
 - 15 image'ni 8 GB da build qilish uchun bootstrap 4 GB swap qo'shadi.
 - Xotira chegaralari (`docker-compose.staging.yml`): gateway/order/finance
   768m, qolgan servislar 512m, postgres 1536m, rabbitmq 768m, minio 512m,
-  cloudflared 256m. OOM-kill bo'lsa (`docker inspect … OOMKilled`) — shu yerda
+  cloudflared 256m (x2). OOM-kill bo'lsa (`docker inspect … OOMKilled`) — shu yerda
   oshiring.
 
 ## 3. Serverni tayyorlash (bir marta)
@@ -103,7 +103,8 @@ $DC logs --tail 50 api-gateway
 1. **Tunnel**: Zero Trust → Networks → Tunnels → Create → Cloudflared →
    nom `elchi-staging` (prod tunnelidan ALOHIDA). Token → `.env.staging` dagi
    `STAGING_TUNNEL_TOKEN`. (Prod `TUNNEL_TOKEN` staging'da baribir e'tiborga
-   olinmaydi.)
+   olinmaydi.) Prod kabi 2 ta connector (`elchi-stg-cloudflared`,
+   `elchi-stg-cloudflared-2`) — ikkalasi shu bitta staging tokeni bilan.
 2. **Public hostname** (shu tunnelda): `test-api.elchipochta.uz` → Service
    `HTTP` → `api-gateway:3004`. DNS CNAME'ni Cloudflare o'zi yaratadi.
 3. **Telegram test bot** (BotFather): `/newbot` → masalan `elchi_test_bot` →

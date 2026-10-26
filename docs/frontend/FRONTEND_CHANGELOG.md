@@ -32,6 +32,18 @@ Server olinmaguncha O'CHIQ (`STAGING_ENABLED`). Runbook: `docs/ops/staging.md`.
   `https://test-admin.elchipochta.uz` (+ test-api). → Server tayyor bo'lganda FE: `test` branchi
   deploy'iga `test-admin.elchipochta.uz` domeni va API manzili `https://test-api.elchipochta.uz`.
 
+### 2026-10-26 — Ops: deploy'da gateway uzilishsiz almashadi, cloudflared 2 replika (ZfI9nERJ, AFiXurLH, 6RaEn5cN)
+
+Deploy: faqat `deploy.yml` / `docker-compose.prod.yml` / skriptlar — **API kontrakti o'zgarmagan, migratsiya yo'q**.
+`deploy.yml` o'zgargani uchun keyingi deploy BARCHA servislarni qayta build qiladi (DEPLOY_ALL).
+
+- [2026-10-26] 🟢 [infra] — api-gateway deploy'da endi qayta yaratilmaydi: yangi konteyner eski yonida
+  ko'tariladi, `(healthy)` bo'lgach eskisi to'xtatiladi — deploy paytidagi «Tarmoq xatoligi» (Cloudflare
+  502, CORS'siz) yo'qolishi kerak. Almashinuv soniyalarida realtime (socket.io) qayta ulanishi mumkin —
+  FE'ning mavjud reconnect'i yetarli. → FE'da ish yo'q.
+- [2026-10-26] 🟢 [infra] — Cloudflare Tunnel: 2 ta connector (`elchi-cloudflared`, `elchi-cloudflared-2`),
+  versiya qotirilgan (2026.9.1), deploy'da qayta yaratilmaydi. → FE'da ish yo'q.
+
 ### 2026-10-26 — Smena yopilishi: har karta / hisob qoldig'ini tasdiqlash, skrinshot, AI tekshiruvi, hisobot, sozlamalar (kiZgTybn)
 
 Deploy: **finance-service + api-gateway + ai-service birga** (yangi RMQ buyruqlari
