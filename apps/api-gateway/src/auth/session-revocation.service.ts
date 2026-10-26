@@ -10,17 +10,39 @@ export const SESSION_STATE_PATTERN = {
 
 /** Ochiq sessiya shuncha vaqtdan keyin identity'dan qayta so'raladi. */
 export const SESSION_ACTIVE_RECHECK_MS = 30_000;
-/** identity javob bermasa — «noma'lum» (ruxsat) natija shuncha saqlanadi. */
+/**
+ * identity javob bermasa — «noma'lum» natija shuncha saqlanadi.
+ * (NDmZMzCP) «Noma'lum» endi RAD ETILADI (fail closed, 503) — qisqa, identity
+ * qaytishi bilan so'rovlar tez tiklansin.
+ */
 export const SESSION_UNKNOWN_TTL_MS = 5_000;
 /** identity'ga so'rov chegarasi — so'rov yo'lida turadi, qisqa bo'lishi shart. */
 export const SESSION_STATE_TIMEOUT_MS = 1_500;
+/**
+ * (NDmZMzCP) Fail closed bo'lgani uchun bitta qayta urinish: RMQ'dagi bir
+ * martalik kechikish foydalanuvchiga darhol 503 bo'lib chiqmasin.
+ */
+export const SESSION_STATE_RETRIES = 1;
 /** Kesh hajmi chegarasi (eng eskisi chiqariladi). */
 export const SESSION_CACHE_MAX = 10_000;
-/** Fail-open ogohlantirishi ko'pi bilan shuncha vaqtda bir marta. */
-const FAIL_OPEN_WARN_INTERVAL_MS = 60_000;
+/** Fail-closed ogohlantirishi ko'pi bilan shuncha vaqtda bir marta. */
+const FAIL_CLOSED_WARN_INTERVAL_MS = 60_000;
 const DEFAULT_ACCESS_TOKEN_TTL_MS = 60 * 60 * 1000;
 
-type SessionState = 'active' | 'revoked' | 'unknown';
+/**
+ * (NDmZMzCP) `sid` li token sessiyasini identity'dan tekshirib bo'lmadi —
+ * HTTP 503 / socket rad etish kodi. 401 EMAS: FE buni «chiqib ketish» deb
+ * tushunmasin (refresh / login sahifasi yo'q), foydalanuvchi qayta urinadi.
+ */
+export const SESSION_CHECK_UNAVAILABLE = 'SESSION_CHECK_UNAVAILABLE';
+export const SESSION_CHECK_UNAVAILABLE_MESSAGE =
+  "Sessiyani tekshirib bo'lmadi — birozdan keyin qayta urinib ko'ring";
+
+/**
+ * `active` — ochiq; `revoked` — aniq yopilgan (401); `unknown` — identity
+ * javob bermadi (NDmZMzCP: rad etiladi, 503).
+ */
+export type SessionState = 'active' | 'revoked' | 'unknown';
 
 const SESSION_ID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -141,9 +163,12 @@ export function applyRevokedSessionIds<T>(
  *    qayta oladi, xavfsizlik buzilmaydi);
  *  - keshda yo'q bo'lsa — identity `identity.auth.session_state` (1,5 s).
  *    Bir vaqtdagi bir xil `sid` so'rovlari bitta RMQ chaqiruvini kutadi;
- *  - identity javob bermasa / xato — FAIL OPEN: ruxsat beriladi (identity
- *    uzilishi hammani chiqarib yubormasin), ogohlantirish daqiqasiga bir
- *    marta, natija 5 soniya saqlanadi;
+ *  - identity javob bermasa / xato (bitta qayta urinishdan keyin) — (NDmZMzCP,
+ *    2026-10-26) FAIL CLOSED: `unknown` → HTTP 503 `SESSION_CHECK_UNAVAILABLE`,
+ *    socket rad etiladi. 401 EMAS — FE foydalanuvchini chiqarib yubormaydi,
+ *    identity qaytgach so'rovlar o'z-o'zidan ishlaydi. Ogohlantirish
+ *    daqiqasiga bir marta, natija 5 soniya saqlanadi (identity qaytgach tez
+ *    tiklanish uchun qisqa);
  *  - revoke endpointlari, logout va parol almashtirish (`PATCH
  *    /auth/my-profile`, `PATCH /users/:id`) identity tasdiqlagan id larni
  *    `markRevoked` bilan darhol belgilaydi (shu gateway instansida kutish
@@ -182,13 +207,14 @@ export class SessionRevocationService {
   }
 
   /**
-   * `true` — sessiya aniq yopilgan (token rad etiladi). identity'ga yetib
-   * bo'lmasa `false` (fail open).
+   * (NDmZMzCP) Sessiya holati: `active` / `revoked` / `unknown` (identity
+   * javob bermadi). Chaqiruvchi `unknown` ni RAD ETADI (fail closed):
+   * `JwtStrategy` — 503, socket — `SESSION_CHECK_UNAVAILABLE`.
    */
-  async isRevoked(userId: string, sessionId: string): Promise<boolean> {
+  async state(userId: string, sessionId: string): Promise<SessionState> {
     const key = sessionId.toLowerCase();
     const cached = this.read(key);
-    if (cached !== null) return cached === 'revoked';
+    if (cached !== null) return cached;
 
     let pending = this.inflight.get(key);
     if (!pending) {
@@ -197,7 +223,15 @@ export class SessionRevocationService {
       });
       this.inflight.set(key, pending);
     }
-    return (await pending) === 'revoked';
+    return pending;
+  }
+
+  /**
+   * `true` — sessiya aniq yopilgan. `unknown` uchun `false` — faqat
+   * moslik uchun; so'rov yo'lida `state()` ishlatiladi (fail closed).
+   */
+  async isRevoked(userId: string, sessionId: string): Promise<boolean> {
+    return (await this.state(userId, sessionId)) === 'revoked';
   }
 
   /** identity tasdiqlagan yopilgan sessiyalar — shu instansda darhol 401. */
@@ -293,7 +327,7 @@ export class SessionRevocationService {
         { userId, sessionId: key },
         {
           timeoutMs: SESSION_STATE_TIMEOUT_MS,
-          retries: 0,
+          retries: SESSION_STATE_RETRIES,
           attachRequestId: false,
         },
       );
@@ -303,7 +337,7 @@ export class SessionRevocationService {
       state = reply.active ? 'active' : 'revoked';
     } catch (error) {
       state = 'unknown';
-      this.warnFailOpen(error);
+      this.warnFailClosed(error);
     }
     // So'rov davomida revoke endpointi belgilagan bo'lsa — «yopilgan» ustun.
     if (this.read(key) === 'revoked') return 'revoked';
@@ -311,9 +345,9 @@ export class SessionRevocationService {
     return state;
   }
 
-  private warnFailOpen(error: unknown): void {
+  private warnFailClosed(error: unknown): void {
     const now = this.now();
-    if (now - this.lastWarnAt < FAIL_OPEN_WARN_INTERVAL_MS) {
+    if (now - this.lastWarnAt < FAIL_CLOSED_WARN_INTERVAL_MS) {
       this.suppressedWarnings += 1;
       return;
     }
@@ -328,7 +362,7 @@ export class SessionRevocationService {
           ? message
           : 'unknown';
     this.logger.warn(
-      `Sessiya holati tekshirilmadi (identity.auth.session_state) — ruxsat berildi (fail open): ${reason}${
+      `Sessiya holati tekshirilmadi (identity.auth.session_state) — so'rov rad etildi (fail closed, 503): ${reason}${
         suppressed ? `; oldingi daqiqada yana ${suppressed} marta` : ''
       }`,
     );

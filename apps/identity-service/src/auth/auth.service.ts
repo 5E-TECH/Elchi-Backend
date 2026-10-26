@@ -755,9 +755,12 @@ export class AuthService {
   }
 
   /**
-   * (Elchi Pochta #3) Ichki RMQ (faqat gateway `JwtStrategy`): `sid` li access
-   * token sessiyasi aniq yopilmaganmi (`revoked_at IS NULL`). Epoch / parol
-   * izi / muddat avvalgidek faqat refresh'da tekshiriladi.
+   * (Elchi Pochta #3) Ichki RMQ (faqat gateway `JwtStrategy` / socket): `sid`
+   * li access token sessiyasi hozir yaroqlimi. (NDmZMzCP, 2026-10-26) Endi
+   * TO'LIQ: qator ochiq + foydalanuvchi faol (bloklanmagan, o'chirilmagan) +
+   * epoch joriy (rol / telefon almashmagan) — `AuthSessionService.isUsable`.
+   * Bloklangan foydalanuvchining access tokeni gateway keshi yangilanishi
+   * bilan (≤ 30 soniya) to'xtaydi, soatlik tozalashni kutmaydi.
    */
   async sessionState(data: {
     userId?: unknown;
@@ -768,7 +771,12 @@ export class AuthService {
         ? String(data.userId)
         : '';
     if (!userId || !isSessionId(data?.sessionId)) return { active: false };
-    return { active: await this.sessions.isOpen(userId, data.sessionId) };
+    const session = await this.sessions.findOpenRow(userId, data.sessionId);
+    if (!session) return { active: false };
+    const user = await this.users.findOne({
+      where: { id: userId, isDeleted: false },
+    });
+    return { active: await this.sessions.isUsable(session, user) };
   }
 
   /**

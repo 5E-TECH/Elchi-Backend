@@ -1875,27 +1875,54 @@ describe('Elchi Pochta #3 — identity.auth.session_state (gateway JwtStrategy)'
     expect(w.sessionRepo.findOne).not.toHaveBeenCalled();
   });
 
-  it('epoch (parol almashgan) — bu yerda hali active: xulq o‘zgarmagan, refresh’da 401', async () => {
+  it('⭐ (NDmZMzCP) epoch eskirgan (bloklash / rol / telefon) — session_state DARHOL active: false, qator security_reset + e’lon; refresh ham 401', async () => {
     const w = makeWorld();
     const res = await w.login('25');
+    const sid = w.sidOf(res.accessToken)!;
     invalidateAllSessions(w.users.get('25') as never);
     expect(
-      await w.service.sessionState({
-        userId: '25',
-        sessionId: w.sidOf(res.accessToken),
-      }),
+      await w.service.sessionState({ userId: '25', sessionId: sid }),
+    ).toEqual({ active: false });
+    expect(w.sessionRepo.rows.find((r) => r.id === sid)).toEqual(
+      expect.objectContaining({ revoke_reason: 'security_reset' }),
+    );
+    expect(w.kicks.publish).toHaveBeenCalledWith([sid], 'security_reset');
+    expect(
+      (await errorOf(w.service.refresh({ refreshToken: res.refreshToken })))
+        .statusCode,
+    ).toBe(401);
+  });
+
+  it('⭐ (NDmZMzCP) foydalanuvchi bloklangan / o‘chirilgan (epoch o‘zgarmagan bo‘lsa ham) — active: false', async () => {
+    const w = makeWorld();
+    const res = await w.login('25');
+    const sid = w.sidOf(res.accessToken)!;
+    w.users.get('25')!.status = 'inactive';
+    expect(
+      await w.service.sessionState({ userId: '25', sessionId: sid }),
+    ).toEqual({ active: false });
+    w.users.get('25')!.status = 'active';
+    expect(
+      await w.service.sessionState({ userId: '25', sessionId: sid }),
+    ).toEqual({ active: true });
+    w.users.get('25')!.isDeleted = true;
+    expect(
+      await w.service.sessionState({ userId: '25', sessionId: sid }),
+    ).toEqual({ active: false });
+  });
+
+  it('(NDmZMzCP) faqat parol izi eskirgan — session_state ochiq (parol almashtirish o‘zi darhol yopadi; joriy sessiya poygada chiqmasin), refresh’da 401', async () => {
+    const w = makeWorld();
+    const res = await w.login('25');
+    const sid = w.sidOf(res.accessToken)!;
+    w.users.get('25')!.password = 'bcrypt-hash-25-NEW';
+    expect(
+      await w.service.sessionState({ userId: '25', sessionId: sid }),
     ).toEqual({ active: true });
     expect(
       (await errorOf(w.service.refresh({ refreshToken: res.refreshToken })))
         .statusCode,
     ).toBe(401);
-    // Refresh qatorga security_reset yozdi — endi gateway ham 401 beradi.
-    expect(
-      await w.service.sessionState({
-        userId: '25',
-        sessionId: w.sidOf(res.accessToken),
-      }),
-    ).toEqual({ active: false });
   });
 });
 
@@ -2792,5 +2819,145 @@ describe('Elchi Pochta #3 (2026-10-24) — identity yopgan sessiyalar gateway’
       )
       .mockImplementation(() => undefined);
     await expect(service.cleanup()).resolves.toEqual({ reset: 1, deleted: 0 });
+  });
+});
+
+/**
+ * (NDmZMzCP, 2026-10-26) Bloklash / rol almashishi / o'chirish — sessiyalar
+ * soatlik tozalashni kutmay DARHOL `security_reset` bilan yopiladi va
+ * gateway'ga e'lon qilinadi (`auth.sessions.kick` → kesh + socket). Haqiqiy
+ * UserServiceService + AuthSessionService; `revokeStaleEpoch` SQL'i shu yerda
+ * soxtalashtiriladi (haqiqiysi — user-sessions.pg.spec.ts).
+ */
+describe('NDmZMzCP — bloklash / rol / o‘chirish sessiyalarni DARHOL yopadi', () => {
+  const SUPER = { id: '1', roles: ['superadmin'] };
+  const STALE_SQL = 's."epoch" <> a."session_epoch"';
+
+  function staleEpochWorld() {
+    const w = makePasswordWorld();
+    const original = w.sessionRepo.query.getMockImplementation()!;
+    const staleCalls: string[] = [];
+    w.sessionRepo.query.mockImplementation(((
+      sql: string,
+      params: unknown[] = [],
+    ) => {
+      if (sql.includes(STALE_SQL) && sql.includes('s."user_id" = $2')) {
+        const [now, userId] = params as [Date, string];
+        staleCalls.push(userId);
+        const epoch = Number(w.users.get(userId)?.session_epoch) || 0;
+        const hits = w.sessionRepo.rows.filter(
+          (r) =>
+            r.user_id === userId &&
+            (r.revoked_at === null || r.revoked_at === undefined) &&
+            (Number(r.epoch) || 0) !== epoch,
+        );
+        hits.forEach((r) =>
+          Object.assign(r, {
+            revoked_at: now,
+            revoke_reason: 'security_reset',
+          }),
+        );
+        return Promise.resolve([hits.map((r) => ({ id: r.id })), hits.length]);
+      }
+      return original(sql, params);
+    }) as never);
+    return { ...w, staleCalls };
+  }
+
+  const openSids = (w: ReturnType<typeof staleEpochWorld>, userId: string) =>
+    w.sessionRepo.rows
+      .filter((r) => r.user_id === userId && !r.revoked_at)
+      .map((r) => r.id);
+
+  it('⭐ setUserStatus(inactive) — barcha sessiyalar shu zahoti security_reset, e’lon qilinadi, session_state false', async () => {
+    const w = staleEpochWorld();
+    const phone = await w.login('25', PHONE_CTX);
+    const laptop = await w.login('25', LAPTOP_CTX);
+    const other = await w.login('26', PHONE_CTX);
+    const sids = [phone, laptop].map((r) => w.sidOf(r.accessToken)!);
+
+    await w.userService.setUserStatus('25', 'inactive' as never, SUPER);
+
+    expect(openSids(w, '25')).toEqual([]);
+    for (const sid of sids) {
+      expect(w.sessionRepo.rows.find((r) => r.id === sid)).toMatchObject({
+        revoke_reason: 'security_reset',
+      });
+    }
+    expect(w.kicks.publish).toHaveBeenCalledWith(
+      expect.arrayContaining(sids),
+      'security_reset',
+    );
+    for (const sid of sids) {
+      expect(
+        await w.service.sessionState({ userId: '25', sessionId: sid }),
+      ).toEqual({ active: false });
+    }
+    // Boshqa foydalanuvchiga tegilmadi.
+    expect(openSids(w, '26')).toEqual([w.sidOf(other.accessToken)]);
+  });
+
+  it('setUserStatus(active) — epoch oshmaydi, sessiyalarga tegilmaydi (so‘rov ham yo‘q)', async () => {
+    const w = staleEpochWorld();
+    const res = await w.login('25', PHONE_CTX);
+    await w.userService.setUserStatus('25', 'active' as never, SUPER);
+    expect(w.staleCalls).toEqual([]);
+    expect(openSids(w, '25')).toEqual([w.sidOf(res.accessToken)]);
+  });
+
+  it('⭐ updateUser({ status: inactive }) — DARHOL yopiladi; oddiy tahrir (ism) — sessiyalar ochiq, so‘rov yo‘q', async () => {
+    const w = staleEpochWorld();
+    const res = await w.login('25', PHONE_CTX);
+    const sid = w.sidOf(res.accessToken)!;
+
+    await w.userService.updateUser('25', { name: 'TEST yangi ism' }, SUPER);
+    expect(w.staleCalls).toEqual([]);
+    expect(openSids(w, '25')).toEqual([sid]);
+
+    await w.userService.updateUser(
+      '25',
+      { status: 'inactive' } as never,
+      SUPER,
+    );
+    expect(w.staleCalls).toEqual(['25']);
+    expect(openSids(w, '25')).toEqual([]);
+    expect(w.kicks.publish).toHaveBeenCalledWith([sid], 'security_reset');
+  });
+
+  it('⭐ changeUserRole — eski rol tokenlari DARHOL to‘xtaydi (security_reset + e’lon)', async () => {
+    const w = staleEpochWorld();
+    w.users.get('25')!.role = 'registrator';
+    const res = await w.login('25', PHONE_CTX);
+    const sid = w.sidOf(res.accessToken)!;
+
+    await w.userService.changeUserRole('25', 'manager', SUPER);
+
+    expect(w.users.get('25')!.role).toBe('manager');
+    expect(openSids(w, '25')).toEqual([]);
+    expect(w.kicks.publish).toHaveBeenCalledWith([sid], 'security_reset');
+    expect(
+      await w.service.sessionState({ userId: '25', sessionId: sid }),
+    ).toEqual({ active: false });
+  });
+
+  it('revokeStaleEpoch xatosi biznes amalini buzmaydi — faqat ogohlantirish; session_state baribir epoch bo‘yicha false', async () => {
+    const w = staleEpochWorld();
+    const res = await w.login('25', PHONE_CTX);
+    const sid = w.sidOf(res.accessToken)!;
+    jest
+      .spyOn(w.sessions, 'revokeStaleEpoch')
+      .mockRejectedValue(new Error('db down'));
+    const warn = jest.spyOn(
+      (w.userService as unknown as { logger: { warn: () => void } }).logger,
+      'warn',
+    );
+
+    await expect(
+      w.userService.setUserStatus('25', 'inactive' as never, SUPER),
+    ).resolves.toMatchObject({ statusCode: 200 });
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('db down'));
+    expect(
+      await w.service.sessionState({ userId: '25', sessionId: sid }),
+    ).toEqual({ active: false });
   });
 });

@@ -437,7 +437,7 @@ describe('Elchi Pochta #3 — boshqa sessiyalarni yopish (gateway, haqiqiy JwtSt
     expect(calls('identity.auth.session_state')).toHaveLength(0);
   });
 
-  it('⭐ identity ishlamasa — FAIL OPEN: token ruxsat oladi (hamma chiqarib yuborilmaydi)', async () => {
+  it('⭐ (NDmZMzCP) identity ishlamasa — FAIL CLOSED: 503 (401 EMAS — FE chiqarib yubormaydi), identity qaytgach ishlaydi', async () => {
     identityDown = true;
     const warn = jest
       .spyOn(
@@ -445,12 +445,29 @@ describe('Elchi Pochta #3 — boshqa sessiyalarni yopish (gateway, haqiqiy JwtSt
         'warn',
       )
       .mockImplementation(() => undefined);
+    const res = await request(http())
+      .get('/auth/sessions')
+      .set('Authorization', token(SID_LAPTOP))
+      .expect(503);
+    expect(res.body).toEqual(
+      expect.objectContaining({
+        statusCode: 503,
+        message:
+          "Sessiyani tekshirib bo'lmadi — birozdan keyin qayta urinib ko'ring",
+      }),
+    );
+    expect(warn).toHaveBeenCalled();
+    expect(calls('identity.auth.sessions')).toHaveLength(0);
+    warn.mockRestore();
+
+    // identity qaytdi — «noma'lum» kesh (5 s) o'tgach token yana ishlaydi.
+    identityDown = false;
+    revocation.now = () => Date.now() + 10_000;
     await request(http())
       .get('/auth/sessions')
       .set('Authorization', token(SID_LAPTOP))
       .expect(200);
-    expect(warn).toHaveBeenCalled();
-    warn.mockRestore();
+    revocation.now = () => Date.now();
   });
 
   it('autentifikatsiyasiz — 401, identity chaqirilmaydi', async () => {

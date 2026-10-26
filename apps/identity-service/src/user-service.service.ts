@@ -1795,6 +1795,8 @@ export class UserServiceService implements OnModuleInit {
           requester,
         })
       : null;
+    // (NDmZMzCP) Bloklash / telefon almashishi — sessiyalar DARHOL yopiladi.
+    await this.revokeSessionsAfterSecurityChange(saved, epochBefore);
     void this.syncUserToSearch(saved);
     await this.activityLog.logChange({
       entity_type: 'User',
@@ -1927,6 +1929,38 @@ export class UserServiceService implements OnModuleInit {
    * `revoked_session_ids` (gateway o'z keshida darhol «yopilgan» deb
    * belgilaydi va javobdan OLIB TASHLAYDI).
    */
+  /**
+   * (NDmZMzCP, 2026-10-26) SAQLANGANDAN KEYIN: xavfsizlik hodisasi
+   * (`invalidateAllSessions` — bloklash, rol / telefon almashishi,
+   * o'chirish) epoch'ni oshirgan bo'lsa, ochiq sessiyalar shu zahoti
+   * `security_reset` bilan yopiladi va gateway'ga e'lon qilinadi (keshda
+   * «yopilgan», socketlar `auth:session_revoked` olib uziladi) — soatlik
+   * tozalashni kutmaydi. `epochBefore` berilsa va epoch o'zgarmagan bo'lsa —
+   * hech narsa (oddiy tahrir). Parol almashtirish yo'li o'zgarmagan
+   * (`revokeSessionsAfterPasswordChange` avval yopadi — `password_changed`
+   * sababi saqlanadi). Xato biznes amalini bekor QILMAYDI: gateway
+   * `session_state` baribir epoch bo'yicha ≤ 30 soniyada rad etadi.
+   */
+  private async revokeSessionsAfterSecurityChange(
+    user: Pick<User, 'id' | 'session_epoch'>,
+    epochBefore?: number,
+  ): Promise<void> {
+    if (!this.authSessions) return;
+    if (
+      typeof epochBefore === 'number' &&
+      (Number(user.session_epoch) || 0) === epochBefore
+    ) {
+      return;
+    }
+    try {
+      await this.authSessions.revokeStaleEpoch(String(user.id));
+    } catch (error) {
+      this.logger.warn(
+        `Xavfsizlik hodisasidan keyin sessiyalar yopilmadi (user ${user.id}): ${describeSagaError(error)} — gateway session_state baribir epoch bo'yicha rad etadi`,
+      );
+    }
+  }
+
   private passwordChangeReply(revokedSessionIds: string[] | null): {
     sessions_revoked?: number;
     revoked_session_ids?: string[];
@@ -2353,6 +2387,8 @@ export class UserServiceService implements OnModuleInit {
     invalidateAllSessions(user);
 
     const saved = await this.users.save(user);
+    // (NDmZMzCP) Rol almashdi — eski rol tokenlari DARHOL to'xtaydi.
+    await this.revokeSessionsAfterSecurityChange(saved);
     // Qidiruv indeksi rol bo'yicha kalitlangan: eski rol yozuvi olib
     // tashlanadi, yangisi yoziladi (ikkalasi ham best-effort).
     void this.removeUserFromSearch({ ...saved, role: previousRole } as User);
@@ -2491,6 +2527,7 @@ export class UserServiceService implements OnModuleInit {
     invalidateAllSessions(admin);
 
     const saved = await this.users.save(admin);
+    await this.revokeSessionsAfterSecurityChange(saved);
     void this.removeUserFromSearch(saved);
 
     // fix3b (CODE-07): o'chirilgan menejer/registratorning faol branch_users
@@ -3557,6 +3594,7 @@ export class UserServiceService implements OnModuleInit {
     const defaultOperatorPhone = this.resolveDefaultOperatorPhone(
       dto.default_operator_phone,
     );
+    const marketEpochBefore = Number(market.session_epoch) || 0;
 
     if (dto.phone_number && dto.phone_number !== market.phone_number) {
       await this.ensurePhoneUnique(dto.phone_number, id);
@@ -3664,6 +3702,8 @@ export class UserServiceService implements OnModuleInit {
           requester,
         })
       : null;
+    // (NDmZMzCP) Bloklash / telefon almashishi — sessiyalar DARHOL yopiladi.
+    await this.revokeSessionsAfterSecurityChange(saved, marketEpochBefore);
     void this.syncUserToSearch(saved);
     await this.activityLog.logChange({
       entity_type: 'User',
@@ -3817,6 +3857,7 @@ export class UserServiceService implements OnModuleInit {
     invalidateAllSessions(market);
 
     const saved = await this.users.save(market);
+    await this.revokeSessionsAfterSecurityChange(saved);
     void this.removeUserFromSearch(saved);
 
     await this.activityLog.log({
@@ -4283,6 +4324,10 @@ export class UserServiceService implements OnModuleInit {
       invalidateAllSessions(user);
     }
     const saved = await this.users.save(user);
+    // (NDmZMzCP) Bloklandi — access token / socket DARHOL to'xtaydi.
+    if (status !== Status.ACTIVE) {
+      await this.revokeSessionsAfterSecurityChange(saved);
+    }
     void this.syncUserToSearch(saved);
 
     await this.activityLog.log({
@@ -5684,6 +5729,7 @@ export class UserServiceService implements OnModuleInit {
     invalidateAllSessions(operator);
 
     const saved = await this.users.save(operator);
+    await this.revokeSessionsAfterSecurityChange(saved);
     void this.removeUserFromSearch(saved);
     await this.activityLog.log({
       entity_type: 'User',
@@ -5869,6 +5915,9 @@ export class UserServiceService implements OnModuleInit {
       invalidateAllSessions(operator);
     }
     const saved = await this.users.save(operator);
+    if (next !== Status.ACTIVE) {
+      await this.revokeSessionsAfterSecurityChange(saved);
+    }
     void this.syncUserToSearch(saved);
     await this.activityLog.log({
       entity_type: 'User',

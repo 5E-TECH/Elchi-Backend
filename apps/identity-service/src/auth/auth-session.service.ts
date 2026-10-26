@@ -11,7 +11,7 @@ import {
   Repository,
 } from 'typeorm';
 import { randomUUID } from 'node:crypto';
-import { requestContext } from '@app/common';
+import { Status, requestContext } from '@app/common';
 import { User } from '../entities/user.entity';
 import {
   UserSession,
@@ -573,14 +573,109 @@ export class AuthSessionService {
   }
 
   /**
-   * Sessiya aniq yopilmaganmi: qator bor, SHU foydalanuvchiniki va
+   * Sessiya QATORI aniq yopilmaganmi: qator bor, SHU foydalanuvchiniki va
    * `revoked_at IS NULL` (logout, egasi yopgani yoki tozalash belgilagani
-   * hisoblanadi). Gateway `JwtStrategy` har ~30 soniyada so'raydi
-   * (`identity.auth.session_state`) — bitta PK qidiruvi. Epoch, parol izi va
-   * muddat bu yerda TEKSHIRILMAYDI: ular avvalgidek refresh paytida.
+   * hisoblanadi) — bitta PK qidiruvi. Faqat qator darajasi: gateway
+   * (`identity.auth.session_state`) endi `findOpenRow` + `isUsable` orqali
+   * TO'LIQ tekshiradi (NDmZMzCP).
    */
   async isOpen(userId: string, sessionId: string): Promise<boolean> {
     return (await this.findOpen(userId, sessionId)) !== null;
+  }
+
+  /**
+   * (NDmZMzCP) `isOpen` sharti (bitta PK qidiruvi), lekin to'liq qator —
+   * `isUsable` uchun (epoch, parol izi). Noto'g'ri kirish — bazaga so'rovsiz
+   * `null`.
+   */
+  async findOpenRow(
+    userId: string,
+    sessionId: string,
+  ): Promise<UserSession | null> {
+    if (!/^\d+$/.test(String(userId)) || !isSessionId(sessionId)) {
+      return null;
+    }
+    return this.sessions.findOne({
+      where: {
+        id: sessionId.toLowerCase(),
+        user_id: String(userId),
+        revoked_at: IsNull(),
+      },
+    });
+  }
+
+  /**
+   * (NDmZMzCP, 2026-10-26) Gateway `JwtStrategy` / socket har ~30 soniyada
+   * so'raydigan TO'LIQ tekshiruv (`identity.auth.session_state`): access
+   * token sessiyasi hozir yaroqlimi. Ilgari faqat `revoked_at` qaralardi —
+   * bloklangan / roli yoki telefoni almashgan / o'chirilgan foydalanuvchi
+   * access tokeni soatlik tozalashgacha (≤ 1 soat) ishlardi. Endi:
+   *  - foydalanuvchi yo'q, o'chirilgan yoki `status != ACTIVE` → yopiq;
+   *  - `rejectReason`: begona / yopilgan / `reset` (epoch — bloklash, rol,
+   *    telefon, o'chirish) → yopiq. `reset` qatori shu zahoti
+   *    `security_reset` bilan yopiladi va gateway'ga e'lon qilinadi (socketlar
+   *    uziladi) — refresh'dagi bilan bir xil;
+   *  - `expired` (refresh muddati) — OCHIQ, avvalgidek: access tokenning o'z
+   *    `exp` i bor;
+   *  - `password_changed` — bu yerda OCHIQ: parol almashtirish sessiyalarni
+   *    allaqachon `revoked_at` bilan DARHOL yopadi (`afterPasswordChange`).
+   *    Bu yerda rad etilsa, o'zi parolni almashtirganda saqlanadigan joriy
+   *    sessiya (parol saqlangan, uning izi hali yangilanmagan millisoniyalar)
+   *    chiqib ketishi mumkin edi. Refresh baribir parol izini tekshiradi.
+   */
+  async isUsable(
+    session: UserSession,
+    user: Pick<
+      User,
+      'id' | 'status' | 'isDeleted' | 'session_epoch' | 'password'
+    > | null,
+    now = new Date(),
+  ): Promise<boolean> {
+    if (!user || user.isDeleted || user.status !== Status.ACTIVE) return false;
+    const reason = this.rejectReason(session, user as User, now);
+    if (
+      reason === null ||
+      reason === 'expired' ||
+      reason === 'password_changed'
+    ) {
+      return true;
+    }
+    if (reason === 'reset') {
+      await this.revokeOwn(
+        String(user.id),
+        { sessionId: session.id },
+        'security_reset',
+        now,
+      );
+    }
+    return false;
+  }
+
+  /**
+   * (NDmZMzCP) Xavfsizlik hodisasidan (bloklash, rol / telefon almashishi,
+   * o'chirish — `invalidateAllSessions`) KEYIN, saqlangan zahoti: SHU
+   * foydalanuvchining epoch'i eskirgan ochiq qatorlari `security_reset` bilan
+   * yopiladi va gateway'ga e'lon qilinadi (`auth.sessions.kick` — keshda
+   * «yopilgan» + socketlar `auth:session_revoked` olib uziladi). Soatlik
+   * tozalashning 1-qadami, faqat bitta foydalanuvchi uchun. Qaytadi —
+   * yopilgan id lar.
+   */
+  async revokeStaleEpoch(userId: string, now = new Date()): Promise<string[]> {
+    if (!/^\d+$/.test(String(userId))) return [];
+    const result: unknown = await this.sessions.query(
+      `UPDATE "identity_schema"."user_sessions" s
+          SET "revoked_at" = $1, "revoke_reason" = 'security_reset'
+         FROM "identity_schema"."admins" a
+        WHERE a."id" = s."user_id"
+          AND s."user_id" = $2
+          AND s."revoked_at" IS NULL
+          AND s."epoch" <> a."session_epoch"
+      RETURNING s."id"`,
+      [now, String(userId)],
+    );
+    const ids = returnedIds(result);
+    this.announceSecurityReset(ids);
+    return ids;
   }
 
   /**

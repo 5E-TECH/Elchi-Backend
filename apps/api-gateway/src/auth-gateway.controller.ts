@@ -33,6 +33,7 @@ import { Throttle } from '@nestjs/throttler';
 import type { Request, Response } from 'express';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
 import { Public } from './auth/public.decorator';
+import { refreshCookieOptions } from './auth/refresh-cookie';
 import {
   SessionKickReason,
   SessionRevocationService,
@@ -194,7 +195,6 @@ export class AuthGatewayController {
     refreshToken: string,
     expiresAtMs: number | null,
   ) {
-    const isProduction = process.env.NODE_ENV === 'production';
     const now = Date.now();
     const maxAge = Math.max(
       1,
@@ -202,23 +202,18 @@ export class AuthGatewayController {
         now,
     );
 
+    // (NDmZMzCP) SameSite sukut `Lax` (ilgari prod'da `None`) — refresh-cookie.ts.
     res.cookie(AuthGatewayController.REFRESH_COOKIE_NAME, refreshToken, {
-      httpOnly: true,
-      secure: isProduction,
-      sameSite: isProduction ? 'none' : 'lax',
-      path: '/auth',
+      ...refreshCookieOptions(),
       maxAge,
     });
   }
 
   private clearRefreshCookie(res: Response) {
-    const isProduction = process.env.NODE_ENV === 'production';
-    res.clearCookie(AuthGatewayController.REFRESH_COOKIE_NAME, {
-      httpOnly: true,
-      secure: isProduction,
-      sameSite: isProduction ? 'none' : 'lax',
-      path: '/auth',
-    });
+    res.clearCookie(
+      AuthGatewayController.REFRESH_COOKIE_NAME,
+      refreshCookieOptions(),
+    );
   }
 
   private sanitizeAuthPayload(payload: Record<string, unknown>) {

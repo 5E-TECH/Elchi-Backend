@@ -482,6 +482,66 @@ const sha256 = (value: string) =>
       ).toBe(false);
     });
 
+    it('⭐ (NDmZMzCP) revokeStaleEpoch (pg): faqat SHU foydalanuvchining epoch’i eskirgan ochiq qatorlari; yangi epoch, begona, yopilgan — tegilmaydi; e’lon', async () => {
+      const a = await open('25', 'tok-a');
+      const b = await open('25', 'tok-b');
+      const closed = await open('25', 'tok-closed');
+      await service.revokeOwnById('25', closed.id, 'revoked_by_owner');
+      const other = await open('26', 'tok-other');
+      await db.query(
+        `UPDATE identity_schema.admins SET session_epoch = session_epoch + 1 WHERE id IN (25, 26)`,
+      );
+      const fresh = await open('25', 'tok-fresh');
+
+      const kicks = { publish: jest.fn() };
+      const announcing = new AuthSessionService(
+        db.getRepository(UserSession),
+        kicks as never,
+      );
+      const ids = await announcing.revokeStaleEpoch('25');
+      expect([...ids].sort()).toEqual([a.id, b.id].sort());
+      expect(kicks.publish).toHaveBeenCalledWith(ids, 'security_reset');
+
+      const rows = await db.query<Row[]>(
+        `SELECT id::text, revoked_at, revoke_reason FROM identity_schema.user_sessions`,
+      );
+      const byId = (id: string) => rows.find((r) => r.id === id)!;
+      expect(byId(a.id).revoke_reason).toBe('security_reset');
+      expect(byId(b.id).revoke_reason).toBe('security_reset');
+      expect(byId(closed.id).revoke_reason).toBe('revoked_by_owner');
+      expect(byId(fresh.id).revoked_at).toBeNull();
+      // 26 ning epoch'i ham eskirgan, lekin u boshqa foydalanuvchi.
+      expect(byId(other.id).revoked_at).toBeNull();
+
+      // Qayta chaqirish — hech narsa (idempotent), noto'g'ri id — so'rovsiz [].
+      expect(await announcing.revokeStaleEpoch('25')).toEqual([]);
+      expect(await announcing.revokeStaleEpoch("25' OR 1=1")).toEqual([]);
+    });
+
+    it('(NDmZMzCP) findOpenRow + isUsable (pg): ochiq, epoch joriy, faol — true; epoch eskirgan — false va qator security_reset', async () => {
+      const row = await open('25', 'tok-usable');
+      const user = {
+        ...((await loadUser('25')) as object),
+        status: 'active',
+        isDeleted: false,
+      } as never;
+      const found = await service.findOpenRow('25', row.id);
+      expect(found?.id).toBe(row.id);
+      expect(await service.isUsable(found!, user)).toBe(true);
+      expect(await service.findOpenRow('26', row.id)).toBeNull();
+
+      await db.query(
+        `UPDATE identity_schema.admins SET session_epoch = session_epoch + 1 WHERE id = 25`,
+      );
+      const bumped = {
+        ...((await loadUser('25')) as object),
+        status: 'active',
+        isDeleted: false,
+      } as never;
+      expect(await service.isUsable(found!, bumped)).toBe(false);
+      expect(await service.findOpenRow('25', row.id)).toBeNull();
+    });
+
     it('ownSessionIds (logout javobi): id yoki hash bo‘yicha, faqat o‘ziniki', async () => {
       const mine = await open('25', 'tok-mine');
       const other = await open('26', 'tok-other');

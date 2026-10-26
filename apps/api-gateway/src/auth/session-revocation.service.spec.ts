@@ -1,4 +1,4 @@
-import { NEVER, from, of, throwError } from 'rxjs';
+import { NEVER, Observable, from, of, throwError } from 'rxjs';
 import {
   SESSION_ACTIVE_RECHECK_MS,
   SESSION_CACHE_MAX,
@@ -15,8 +15,9 @@ import {
  * (Elchi Pochta #3) Gateway: yopilgan sessiya tokenini darhol to'xtatish keshi.
  *  - ochiq sessiya 30 s dan keyin qayta so'raladi, yopilgani ACCESS_TOKEN_TIME
  *    saqlanadi, kesh hajmi chegaralangan;
- *  - identity javob bermasa / xato — FAIL OPEN (ruxsat), ogohlantirish
- *    daqiqasiga bir marta, natija 5 s;
+ *  - identity javob bermasa / xato (bitta qayta urinishdan keyin) —
+ *    (NDmZMzCP) FAIL CLOSED: `state()` → `unknown` (JwtStrategy 503, socket
+ *    rad etiladi), ogohlantirish daqiqasiga bir marta, natija 5 s;
  *  - revoke/logout `markRevoked` — identity'siz darhol «yopilgan».
  */
 const SID = '3f2b8c1e-6a4d-4e7b-9c10-2d5f7a8b9c0d';
@@ -102,46 +103,79 @@ describe('SessionRevocationService (Elchi Pochta #3)', () => {
     expect(send).toHaveBeenCalledTimes(1);
   });
 
-  it('⭐ identity xatosi — FAIL OPEN: ruxsat, 5 s kesh, ogohlantirish daqiqasiga bir marta', async () => {
+  it('⭐ (NDmZMzCP) identity xatosi — FAIL CLOSED: state() unknown, 5 s kesh, ogohlantirish daqiqasiga bir marta', async () => {
     const { service, send, advance, warn } = build(() =>
       throwError(() => ({ statusCode: 500, message: 'db down' })),
     );
 
+    await expect(service.state('25', SID)).resolves.toBe('unknown');
+    // Moslik: isRevoked faqat aniq yopilganda true (so'rov yo'li state() ni ishlatadi).
     await expect(service.isRevoked('25', SID)).resolves.toBe(false);
     expect(warn).toHaveBeenCalledTimes(1);
-    expect(warn.mock.calls[0][0]).toContain('fail open');
+    expect(warn.mock.calls[0][0]).toContain('fail closed');
+    expect(warn.mock.calls[0][0]).not.toContain('ruxsat berildi');
     expect(warn.mock.calls[0][0]).toContain('db down');
 
-    // 5 s ichida — identity qayta so'ralmaydi.
+    // 5 s ichida — identity qayta so'ralmaydi (unknown keshda).
     advance(SESSION_UNKNOWN_TTL_MS - 1);
-    await service.isRevoked('25', SID);
+    await expect(service.state('25', SID)).resolves.toBe('unknown');
     expect(send).toHaveBeenCalledTimes(1);
 
     // Keyin — qayta so'raladi, lekin ogohlantirish daqiqada bir marta.
     advance(2);
-    await service.isRevoked('25', SID);
-    await service.isRevoked('25', SID2);
+    await service.state('25', SID);
+    await service.state('25', SID2);
     expect(send).toHaveBeenCalledTimes(3);
     expect(warn).toHaveBeenCalledTimes(1);
 
     advance(60_000);
-    await service.isRevoked('25', SID);
+    await service.state('25', SID);
     expect(warn).toHaveBeenCalledTimes(2);
     expect(warn.mock.calls[1][0]).toContain('yana 2 marta');
   });
 
-  it('identity javob bermasa (timeout 1,5 s) — ruxsat', async () => {
-    const { service, warn } = build(() => NEVER);
-    const startedAt = Date.now();
-    await expect(service.isRevoked('25', SID)).resolves.toBe(false);
-    const elapsed = Date.now() - startedAt;
-    expect(elapsed).toBeGreaterThanOrEqual(1_400);
-    expect(elapsed).toBeLessThan(3_000);
-    expect(warn.mock.calls[0][0]).toContain('TimeoutError');
+  it('(NDmZMzCP) identity qaytdi — unknown 5 s dan keyin active (tez tiklanadi)', async () => {
+    let down = true;
+    const { service, advance } = build(() =>
+      down
+        ? throwError(() => ({ statusCode: 500, message: 'db down' }))
+        : of({ active: true }),
+    );
+    await expect(service.state('25', SID)).resolves.toBe('unknown');
+    down = false;
+    advance(SESSION_UNKNOWN_TTL_MS + 1);
+    await expect(service.state('25', SID)).resolves.toBe('active');
   });
 
-  it('kutilmagan javob shakli — ruxsat (fail open), qulflanmaydi', async () => {
+  it('(NDmZMzCP) bir martalik xato — bitta qayta urinish, keyin active (503 chiqmaydi)', async () => {
+    let attempts = 0;
+    const flaky = new Observable<{ active: boolean }>((subscriber) => {
+      attempts += 1;
+      if (attempts === 1) subscriber.error(new Error('blip'));
+      else {
+        subscriber.next({ active: true });
+        subscriber.complete();
+      }
+    });
+    const { service, warn } = build(() => flaky);
+    await expect(service.state('25', SID)).resolves.toBe('active');
+    expect(attempts).toBe(2);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it('identity javob bermasa (timeout 1,5 s × 2 urinish) — unknown (fail closed)', async () => {
+    const { service, warn } = build(() => NEVER);
+    const startedAt = Date.now();
+    await expect(service.state('25', SID)).resolves.toBe('unknown');
+    const elapsed = Date.now() - startedAt;
+    expect(elapsed).toBeGreaterThanOrEqual(2_900);
+    expect(elapsed).toBeLessThan(5_000);
+    expect(warn.mock.calls[0][0]).toContain('TimeoutError');
+  }, 10_000);
+
+  it('kutilmagan javob shakli — unknown (fail closed), yopilgan deb keshlanmaydi', async () => {
     const { service, warn } = build(() => of({ statusCode: 200, data: {} }));
+    await expect(service.state('25', SID)).resolves.toBe('unknown');
     await expect(service.isRevoked('25', SID)).resolves.toBe(false);
     expect(warn).toHaveBeenCalledTimes(1);
   });

@@ -25,11 +25,18 @@ import { WAREHOUSE_ERROR_CODES } from '../catalog/warehouse';
  * jadvalga bitta qator.
  */
 export const SESSION_TOO_NEW = 'SESSION_TOO_NEW';
+/**
+ * (NDmZMzCP) Gateway sessiya holatini identity'dan bila olmadi — 503
+ * (fail closed). 401 EMAS: FE foydalanuvchini chiqarib yubormaydi.
+ */
+export const SESSION_CHECK_UNAVAILABLE = 'SESSION_CHECK_UNAVAILABLE';
 
 export const PUBLIC_ERROR_CODES: Readonly<Record<string, readonly string[]>> = {
   // Sessiya yaratilganiga SESSION_REVOKE_LOCK_HOURS (sukut 48) to'lmagan:
   // `available_at` — qachondan boshqa sessiyalarni yopish mumkin (ISO).
   [SESSION_TOO_NEW]: ['available_at'],
+  // (NDmZMzCP) identity javob bermadi — 503, qayta urinish (chiqish emas).
+  [SESSION_CHECK_UNAVAILABLE]: [],
   // (XtcEyQjb) to'xtatilgan omborga kirim — 409.
   [WAREHOUSE_ERROR_CODES.PAUSED]: [],
   // (XtcEyQjb) market operatoriga «Ombordagi qoldiq» yopiq — 403.

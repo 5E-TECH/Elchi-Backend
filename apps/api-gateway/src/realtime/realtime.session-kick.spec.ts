@@ -174,16 +174,31 @@ describe('Elchi Pochta #3 (2026-10-24) — realtime: yopilgan sessiya socketdan 
       expect(send).not.toHaveBeenCalled();
     });
 
-    it('identity javob bermasa — FAIL OPEN (HTTP kabi): ulanadi', async () => {
+    it('⭐ (NDmZMzCP) identity javob bermasa — FAIL CLOSED: `error` SESSION_CHECK_UNAVAILABLE (SESSION_REVOKED EMAS), uziladi, `user:`/`role:` yo‘q', async () => {
       identityReply = () => throwError(() => new Error('identity down'));
       const { client, joined } = socket(token(SID_PHONE));
       await gateway.handleConnection(client as never);
-      expect(joined).toEqual([
-        `session:${SID_PHONE}`,
-        'user:25',
-        'role:courier',
-      ]);
-      expect(client.disconnect).not.toHaveBeenCalled();
+      expect(client.emit).toHaveBeenCalledTimes(1);
+      expect(client.emit).toHaveBeenCalledWith('error', {
+        message:
+          "Sessiyani tekshirib bo'lmadi — birozdan keyin qayta urinib ko'ring",
+        code: 'SESSION_CHECK_UNAVAILABLE',
+      });
+      // FE `isSessionRevokedSocketError` faqat «session_revoked» matnini
+      // taniydi — bu xato foydalanuvchini chiqarib yubormaydi.
+      const [, payload] = client.emit.mock.calls[0] as [
+        string,
+        { message: string; code: string },
+      ];
+      expect(
+        `${payload.code} ${payload.message}`
+          .toLowerCase()
+          .replace(/[\s-]+/g, '_'),
+      ).not.toContain('session_revoked');
+      expect(client.disconnect).toHaveBeenCalledWith(true);
+      expect(joined).toEqual([`session:${SID_PHONE}`]);
+      expect(client.data.user).toBeUndefined();
+      expect(gateway.isOnline('25')).toBe(false);
     });
 
     it('⭐ tekshiruv davomida chiqarilsa — hodisa sessiya xonasiga yetadi; kechikkan «active» javobi baribir rad etadi, `user:`/`role:` ga kirmaydi', async () => {
