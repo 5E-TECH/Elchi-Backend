@@ -2,9 +2,9 @@ name: CI
 
 on:
   pull_request:
-    branches: [main, dev]
+    branches: [main, dev, test]
   push:
-    branches: [dev]
+    branches: [dev, test]
   workflow_dispatch:
 
 concurrency:
@@ -57,6 +57,18 @@ jobs:
           npm run openapi:generate
           git diff --exit-code -- docs/frontend/openapi.json \
             || { echo "::error::openapi.json is stale — run 'npm run openapi:generate' and commit the result."; exit 1; }
+
+      # Staging (docs/ops/staging.md): the `deploy-staging` script in deploy.yml
+      # is GENERATED from the production `deploy` script, and every service of
+      # docker-compose.prod.yml must render on top of docker-compose.staging.yml
+      # with ONLY .env.staging present (a service still on .env.production —
+      # e.g. a new one without a staging entry — fails here, not on the server).
+      - name: Staging deploy is in sync
+        run: |
+          node scripts/staging/sync-deploy-workflow.mjs --check
+          cp .env.staging.example .env.staging
+          docker compose --env-file .env.staging -f docker-compose.prod.yml -f docker-compose.staging.yml config --quiet
+          rm -f .env.staging
 
       # New specs added in the observability/idempotency hardening sprint
       # MUST always pass. Legacy specs (predate the sprint) still have

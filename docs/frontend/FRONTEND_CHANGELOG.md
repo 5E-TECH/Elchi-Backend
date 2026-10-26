@@ -23,6 +23,15 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-10-26 — Staging (test server) deploy yo'li: dev → test → main
+
+Deploy: hech qaysi servis (faqat CI/CD + ops fayllari). Migratsiya yo'q. Kontrakt o'zgarmagan.
+Server olinmaguncha O'CHIQ (`STAGING_ENABLED`). Runbook: `docs/ops/staging.md`.
+
+- [2026-10-26] 🟢 [ops] — staging API `https://test-api.elchipochta.uz`, CORS faqat
+  `https://test-admin.elchipochta.uz` (+ test-api). → Server tayyor bo'lganda FE: `test` branchi
+  deploy'iga `test-admin.elchipochta.uz` domeni va API manzili `https://test-api.elchipochta.uz`.
+
 ### 2026-10-26 — Smena yopilishi: har karta / hisob qoldig'ini tasdiqlash, skrinshot, AI tekshiruvi, hisobot, sozlamalar (kiZgTybn)
 
 Deploy: **finance-service + api-gateway + ai-service birga** (yangi RMQ buyruqlari
