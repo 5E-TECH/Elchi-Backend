@@ -23,6 +23,16 @@ export const SESSION_STATE_TIMEOUT_MS = 1_500;
  * martalik kechikish foydalanuvchiga darhol 503 bo'lib chiqmasin.
  */
 export const SESSION_STATE_RETRIES = 1;
+/**
+ * (2026-10-26) identity javob bermasa / xato — shu sessiya oxirgi shuncha
+ * vaqt ichida identity tomonidan «ochiq» deb TASDIQLANGAN bo'lsa so'rov
+ * o'tkaziladi (`active`). Login oqimi (bcrypt identity event loop'ini
+ * band qiladi) yoki qisqa deploy butun API'ni 503 qilmasin. Hech
+ * tasdiqlanmagan (yoki tasdiq bundan eski) sessiya — fail closed (503).
+ * Yopilgan sessiya (`markRevoked` / `kickSessions`) bu muhlatdan
+ * FOYDALANMAYDI — darhol 401.
+ */
+export const SESSION_ACTIVE_GRACE_MS = 5 * 60_000;
 /** Kesh hajmi chegarasi (eng eskisi chiqariladi). */
 export const SESSION_CACHE_MAX = 10_000;
 /** Fail-closed ogohlantirishi ko'pi bilan shuncha vaqtda bir marta. */
@@ -163,8 +173,11 @@ export function applyRevokedSessionIds<T>(
  *    qayta oladi, xavfsizlik buzilmaydi);
  *  - keshda yo'q bo'lsa — identity `identity.auth.session_state` (1,5 s).
  *    Bir vaqtdagi bir xil `sid` so'rovlari bitta RMQ chaqiruvini kutadi;
- *  - identity javob bermasa / xato (bitta qayta urinishdan keyin) — (NDmZMzCP,
- *    2026-10-26) FAIL CLOSED: `unknown` → HTTP 503 `SESSION_CHECK_UNAVAILABLE`,
+ *  - identity javob bermasa / xato (bitta qayta urinishdan keyin) — sessiya
+ *    oxirgi 5 daqiqada identity tomonidan «ochiq» tasdiqlangan bo'lsa
+ *    (alohida `lastActiveAt` xaritasi, kesh muddati tugasa ham qoladi) —
+ *    o'tkaziladi (muhlat; yopilgani muhlatdan foydalanmaydi). Aks holda
+ *    (NDmZMzCP, 2026-10-26) FAIL CLOSED: `unknown` → HTTP 503 `SESSION_CHECK_UNAVAILABLE`,
  *    socket rad etiladi. 401 EMAS — FE foydalanuvchini chiqarib yubormaydi,
  *    identity qaytgach so'rovlar o'z-o'zidan ishlaydi. Ogohlantirish
  *    daqiqasiga bir marta, natija 5 soniya saqlanadi (identity qaytgach tez
@@ -189,6 +202,13 @@ export class SessionRevocationService {
   private readonly logger = new Logger(SessionRevocationService.name);
   private readonly cache = new Map<string, CacheEntry>();
   private readonly inflight = new Map<string, Promise<SessionState>>();
+  /**
+   * (2026-10-26) `sid → identity oxirgi marta «ochiq» deb tasdiqlagan vaqt`.
+   * `read()` bu yozuvni o'chirmaydi (kesh muddati tugasa ham qoladi) —
+   * identity javob bermaganda SESSION_ACTIVE_GRACE_MS muhlati uchun.
+   * Yopilganda (`markRevoked` / identity `active: false`) o'chiriladi.
+   */
+  private readonly lastActiveAt = new Map<string, number>();
   private readonly kickListeners = new Set<SessionKickListener>();
   private readonly revokedTtlMs: number;
   private lastWarnAt = 0;
@@ -210,11 +230,22 @@ export class SessionRevocationService {
    * (NDmZMzCP) Sessiya holati: `active` / `revoked` / `unknown` (identity
    * javob bermadi). Chaqiruvchi `unknown` ni RAD ETADI (fail closed):
    * `JwtStrategy` — 503, socket — `SESSION_CHECK_UNAVAILABLE`.
+   * (2026-10-26) identity javob bermasa, lekin sessiya oxirgi
+   * SESSION_ACTIVE_GRACE_MS ichida «ochiq» deb tasdiqlangan bo'lsa —
+   * `active` (muhlat). Yopilgan sessiya har doim `revoked`.
    */
   async state(userId: string, sessionId: string): Promise<SessionState> {
     const key = sessionId.toLowerCase();
+    const raw = await this.rawState(userId, key);
+    if (raw !== 'unknown') return raw;
+    // Kutish davomida yopilgan bo'lsa — «yopilgan» ustun (muhlat yo'q).
+    if (this.read(key) === 'revoked') return 'revoked';
+    return this.withinActiveGrace(key) ? 'active' : 'unknown';
+  }
+
+  private rawState(userId: string, key: string): Promise<SessionState> {
     const cached = this.read(key);
-    if (cached !== null) return cached;
+    if (cached !== null) return Promise.resolve(cached);
 
     let pending = this.inflight.get(key);
     if (!pending) {
@@ -238,7 +269,9 @@ export class SessionRevocationService {
   markRevoked(sessionIds: Iterable<unknown> | null | undefined): void {
     for (const id of sessionIds ?? []) {
       if (typeof id === 'string' && id) {
-        this.write(id.toLowerCase(), 'revoked');
+        const key = id.toLowerCase();
+        this.lastActiveAt.delete(key);
+        this.write(key, 'revoked');
       }
     }
   }
@@ -301,6 +334,26 @@ export class SessionRevocationService {
     return entry.state;
   }
 
+  /** Sessiya oxirgi SESSION_ACTIVE_GRACE_MS ichida «ochiq» tasdiqlanganmi. */
+  private withinActiveGrace(key: string): boolean {
+    const confirmedAt = this.lastActiveAt.get(key);
+    if (confirmedAt === undefined) return false;
+    if (this.now() - confirmedAt <= SESSION_ACTIVE_GRACE_MS) return true;
+    this.lastActiveAt.delete(key);
+    return false;
+  }
+
+  private rememberActive(key: string): void {
+    // Qayta qo'yish — Map tartibida oxirga o'tadi (eng eskisi birinchi chiqadi).
+    this.lastActiveAt.delete(key);
+    this.lastActiveAt.set(key, this.now());
+    while (this.lastActiveAt.size > SESSION_CACHE_MAX) {
+      const oldest = this.lastActiveAt.keys().next();
+      if (oldest.done) break;
+      this.lastActiveAt.delete(oldest.value);
+    }
+  }
+
   private write(key: string, state: SessionState): void {
     const ttl =
       state === 'revoked'
@@ -341,6 +394,8 @@ export class SessionRevocationService {
     }
     // So'rov davomida revoke endpointi belgilagan bo'lsa — «yopilgan» ustun.
     if (this.read(key) === 'revoked') return 'revoked';
+    if (state === 'active') this.rememberActive(key);
+    else if (state === 'revoked') this.lastActiveAt.delete(key);
     this.write(key, state);
     return state;
   }
@@ -362,7 +417,7 @@ export class SessionRevocationService {
           ? message
           : 'unknown';
     this.logger.warn(
-      `Sessiya holati tekshirilmadi (identity.auth.session_state) — so'rov rad etildi (fail closed, 503): ${reason}${
+      `Sessiya holati tekshirilmadi (identity.auth.session_state) — oxirgi 5 daqiqada tasdiqlanmagan sessiya rad etiladi (fail closed, 503): ${reason}${
         suppressed ? `; oldingi daqiqada yana ${suppressed} marta` : ''
       }`,
     );

@@ -1,5 +1,6 @@
 import { NEVER, Observable, from, of, throwError } from 'rxjs';
 import {
+  SESSION_ACTIVE_GRACE_MS,
   SESSION_ACTIVE_RECHECK_MS,
   SESSION_CACHE_MAX,
   SESSION_STATE_PATTERN,
@@ -172,6 +173,93 @@ describe('SessionRevocationService (Elchi Pochta #3)', () => {
     expect(elapsed).toBeLessThan(5_000);
     expect(warn.mock.calls[0][0]).toContain('TimeoutError');
   }, 10_000);
+
+  describe('(2026-10-26) identity javob bermasa — oxirgi tasdiq muhlati (5 daqiqa)', () => {
+    function flakyIdentity() {
+      let down = false;
+      const ctl = build(() =>
+        down
+          ? throwError(() => ({ statusCode: 500, message: 'event loop busy' }))
+          : of({ active: true }),
+      );
+      return {
+        ...ctl,
+        setDown: (value: boolean) => {
+          down = value;
+        },
+      };
+    }
+
+    it('⭐ 5 daqiqa ichida tasdiqlangan sessiya — xato/timeout bo‘lsa ham active', async () => {
+      const { service, send, advance, setDown } = flakyIdentity();
+      await expect(service.state('25', SID)).resolves.toBe('active');
+      setDown(true);
+      advance(SESSION_ACTIVE_RECHECK_MS + 1);
+      await expect(service.state('25', SID)).resolves.toBe('active');
+      expect(send).toHaveBeenCalledTimes(2);
+      // «unknown» 5 s keshda turganda ham muhlat amal qiladi.
+      advance(SESSION_UNKNOWN_TTL_MS - 1);
+      await expect(service.state('25', SID)).resolves.toBe('active');
+      expect(send).toHaveBeenCalledTimes(2);
+      // Hech tasdiqlanmagan sessiya — fail closed.
+      await expect(service.state('25', SID2)).resolves.toBe('unknown');
+    });
+
+    it('⭐ muhlat o‘tdi (oxirgi tasdiq > 5 daqiqa) — unknown (503)', async () => {
+      const { service, advance, setDown } = flakyIdentity();
+      await service.state('25', SID);
+      setDown(true);
+      advance(SESSION_ACTIVE_GRACE_MS + 1);
+      await expect(service.state('25', SID)).resolves.toBe('unknown');
+    });
+
+    it('identity qayta tasdiqlasa — muhlat yangilanadi; `read()` yozuvni o‘chirmaydi', async () => {
+      const { service, advance, setDown } = flakyIdentity();
+      await service.state('25', SID);
+      advance(4 * 60_000);
+      await service.state('25', SID); // qayta tasdiq (30 s kesh o'tgan)
+      setDown(true);
+      advance(4 * 60_000); // birinchi tasdiqdan 8 daqiqa, oxirgisidan 4
+      await expect(service.state('25', SID)).resolves.toBe('active');
+    });
+
+    it('⭐ muhlat davomida yopilgan sessiya — darhol revoked (markRevoked / kickSessions ustun)', async () => {
+      const { service, advance, setDown } = flakyIdentity();
+      await service.state('25', SID);
+      await service.state('25', SID2);
+      setDown(true);
+      advance(60_000);
+      service.markRevoked([SID.toUpperCase()]);
+      service.kickSessions([SID2], 'revoked_by_owner');
+      await expect(service.state('25', SID)).resolves.toBe('revoked');
+      await expect(service.state('25', SID2)).resolves.toBe('revoked');
+      // Yopilgan yozuv muddati tugasa ham muhlat qaytmaydi.
+      advance(HOUR + 1);
+      await expect(service.state('25', SID)).resolves.toBe('unknown');
+    });
+
+    it('identity `active: false` desa — muhlat o‘chadi', async () => {
+      let reply: () => unknown = () => of({ active: true });
+      const { service, advance } = build(() => reply());
+      await service.state('25', SID);
+      reply = () => of({ active: false });
+      advance(SESSION_ACTIVE_RECHECK_MS + 1);
+      await expect(service.state('25', SID)).resolves.toBe('revoked');
+      reply = () => throwError(() => new Error('down'));
+      advance(HOUR + 1);
+      await expect(service.state('25', SID)).resolves.toBe('unknown');
+    });
+
+    it('so‘rov davomida markRevoked — kechikkan xato muhlat bilan active bo‘lib qaytmaydi', async () => {
+      const { service, setDown, advance } = flakyIdentity();
+      await service.state('25', SID);
+      advance(SESSION_ACTIVE_RECHECK_MS + 1);
+      setDown(true);
+      const pending = service.state('25', SID);
+      service.markRevoked([SID]);
+      await expect(pending).resolves.toBe('revoked');
+    });
+  });
 
   it('kutilmagan javob shakli — unknown (fail closed), yopilgan deb keshlanmaydi', async () => {
     const { service, warn } = build(() => of({ statusCode: 200, data: {} }));

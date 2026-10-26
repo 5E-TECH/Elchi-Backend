@@ -66,9 +66,11 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     // tugashini kutmay 401 (FE refresh qiladi → u ham 401 → login sahifasi).
     // `sid` siz tokenlar (Telegram Mini App, bot aktori, eski) tekshirilmaydi.
     // (NDmZMzCP) Sessiya endi TO'LIQ tekshiriladi (bloklangan / roli
-    // almashgan foydalanuvchi ham 401). identity javob bermasa — FAIL
-    // CLOSED: 503 `SESSION_CHECK_UNAVAILABLE` (401 emas — FE chiqarib
-    // yubormaydi, foydalanuvchi qayta urinadi).
+    // almashgan foydalanuvchi ham 401). identity javob bermasa — sessiya
+    // oxirgi 5 daqiqada «ochiq» tasdiqlangan bo'lsa o'tadi (servis `active`
+    // qaytaradi, 2026-10-26); aks holda FAIL CLOSED: 503
+    // `SESSION_CHECK_UNAVAILABLE` (401 emas — FE chiqarib yubormaydi,
+    // foydalanuvchi qayta urinadi).
     const sessionId = sessionIdClaim(payload.sid);
     if (this.revocation && sessionId) {
       const state = await this.revocation.state(String(payload.sub), sessionId);

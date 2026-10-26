@@ -264,6 +264,11 @@ describe('Elchi Pochta #3 — boshqa sessiyalarni yopish (gateway, haqiqiy JwtSt
     socketLog.length = 0;
     // Har test toza kesh bilan (boshqa gateway instansi kabi).
     (revocation as unknown as { cache: Map<string, unknown> }).cache.clear();
+    // (2026-10-26) 5 daqiqalik «oxirgi tasdiq» muhlati ham — toza.
+    (
+      revocation as unknown as { lastActiveAt: Map<string, number> }
+    ).lastActiveAt.clear();
+    revocation.now = () => Date.now();
   });
 
   const http = () => app.getHttpServer() as Parameters<typeof request>[0];
@@ -468,6 +473,65 @@ describe('Elchi Pochta #3 — boshqa sessiyalarni yopish (gateway, haqiqiy JwtSt
       .set('Authorization', token(SID_LAPTOP))
       .expect(200);
     revocation.now = () => Date.now();
+  });
+
+  describe('(2026-10-26) identity javob bermasa — 5 daqiqalik «oxirgi tasdiq» muhlati', () => {
+    let warn: jest.SpyInstance;
+    let clock: number;
+    beforeEach(() => {
+      warn = jest
+        .spyOn(
+          (revocation as unknown as { logger: { warn: () => void } }).logger,
+          'warn',
+        )
+        .mockImplementation(() => undefined);
+      clock = Date.now();
+      revocation.now = () => clock;
+    });
+    afterEach(() => {
+      warn.mockRestore();
+    });
+    const get = (sid: string) =>
+      request(http()).get('/auth/sessions').set('Authorization', token(sid));
+
+    it('⭐ 5 daqiqa ichida tasdiqlangan sessiya — identity ishlamasa ham 200 (503 EMAS)', async () => {
+      await get(SID_LAPTOP).expect(200);
+      identityDown = true;
+      // «active» kesh (30 s) o'tdi — identity so'raladi va xato beradi.
+      clock += 4 * 60_000;
+      await get(SID_LAPTOP).expect(200);
+      expect(calls('identity.auth.session_state').length).toBeGreaterThan(1);
+      // Hech tasdiqlanmagan sessiya — fail closed.
+      await get(SID_PHONE).expect(503);
+    });
+
+    it('⭐ muhlat o‘tgan (oxirgi tasdiq > 5 daqiqa) — 503', async () => {
+      await get(SID_LAPTOP).expect(200);
+      identityDown = true;
+      clock += 5 * 60_000 + 1;
+      const res = await get(SID_LAPTOP).expect(503);
+      expect(res.body).toEqual(
+        expect.objectContaining({
+          statusCode: 503,
+          message:
+            "Sessiyani tekshirib bo'lmadi — birozdan keyin qayta urinib ko'ring",
+        }),
+      );
+    });
+
+    it('⭐ muhlat davomida yopilgan sessiya — darhol 401 (markRevoked / kick ustun)', async () => {
+      await get(SID_LAPTOP).expect(200);
+      await get(SID_PHONE).expect(200);
+      identityDown = true;
+      clock += 60_000;
+      revocation.markRevoked([SID_LAPTOP]);
+      revocation.kickSessions([SID_PHONE], 'security_reset');
+      await get(SID_LAPTOP).expect(401);
+      await get(SID_PHONE).expect(401);
+      // Yopilgan yozuv muddati tugasa ham muhlat qaytmaydi.
+      clock += 2 * 3600_000;
+      await get(SID_LAPTOP).expect(503);
+    });
   });
 
   it('autentifikatsiyasiz — 401, identity chaqirilmaydi', async () => {
