@@ -15,6 +15,7 @@ import Anthropic, {
 } from '@anthropic-ai/sdk';
 import { createHash } from 'node:crypto';
 import { inspectAnthropicEnv } from './ai-key-check';
+import { isAiAllowedInEnv } from '../staging/outbound-guard';
 import {
   AI_MODEL_DEFAULTS,
   ANTHROPIC_API_KEY_ENV,
@@ -132,6 +133,8 @@ export class ClaudeService implements OnApplicationBootstrap {
   private readonly client: AnthropicClientLike | null;
   private readonly defaultModel: string;
   private readonly keyInfo: AnthropicKeyInspection;
+  /** (staging-safe) APP_ENV=staging va STAGING_AI_ENABLED≠true — AI o'chiq. */
+  private readonly stagingDisabled: boolean;
 
   constructor(
     config: ConfigService,
@@ -156,7 +159,13 @@ export class ClaudeService implements OnApplicationBootstrap {
       (typeof rawModel === 'string' ? rawModel.trim() : '') ||
       AI_MODEL_DEFAULTS.order;
 
-    this.client = apiKey ? this.buildClient(factory, apiKey) : null;
+    // (staging-safe) Staging'da AI sukut bo'yicha O'CHIQ (prod nusxasidagi
+    // matnlar Anthropic'ga ketmasin, pul sarflanmasin) — STAGING_AI_ENABLED.
+    this.stagingDisabled = !isAiAllowedInEnv();
+    this.client =
+      apiKey && !this.stagingDisabled
+        ? this.buildClient(factory, apiKey)
+        : null;
 
     // Faqat NOMLAR — qiymat o'qilmaydi va logga chiqmaydi.
     const scan = inspectAnthropicEnv(process.env);
@@ -193,6 +202,12 @@ export class ClaudeService implements OnApplicationBootstrap {
   onApplicationBootstrap(): void {
     if (this.client) {
       this.logger.log(`AI yoqiq — sukut model: ${this.defaultModel}`);
+      return;
+    }
+    if (this.stagingDisabled) {
+      this.logger.warn(
+        "AI o'chiq — APP_ENV=staging va STAGING_AI_ENABLED=true emas",
+      );
       return;
     }
     if (this.keyInfo.state === 'ok') return; // kalit bor, mijoz xatosi yuqorida loglangan

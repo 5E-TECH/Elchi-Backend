@@ -1,4 +1,10 @@
 import * as Joi from 'joi';
+import {
+  APP_ENVS,
+  STAGING_ALLOWLIST_ENV,
+  invalidAllowlistEntries,
+  type StagingChannel,
+} from '../staging/outbound-guard';
 
 /**
  * Reject obviously low-entropy / placeholder secrets at boot. A 32+ char random
@@ -52,13 +58,55 @@ const strongKey = (description: string) =>
       'string.min': 'must be at least 32 characters of random entropy',
     });
 
+/** Allowlist elementlari yaroqli bo'lsin — xato yozilgan raqam jim bloklanmasin. */
+const allowlistOf = (channel: StagingChannel) =>
+  Joi.string()
+    .allow('')
+    .optional()
+    .custom((value: string, helpers) =>
+      invalidAllowlistEntries(channel, value).length
+        ? helpers.error('any.invalid')
+        : value,
+    )
+    .messages({
+      'any.invalid': `${STAGING_ALLOWLIST_ENV[channel]}: yaroqsiz element bor (vergul bilan ajratilgan ro'yxat)`,
+    });
+
+/**
+ * (staging-safe) Muhit va STAGING chiquvchi darvozasi — HAMMA servisda
+ * (libs/common/src/staging/outbound-guard.ts). Sukut `production` — prod
+ * xatti-harakati o'zgarmaydi. `staging` — SMS/Telegram/push faqat
+ * allowlist'ga (bo'sh allowlist = shu kanal yopiq), AI faqat
+ * STAGING_AI_ENABLED=true bo'lsa va STAGING_AI_DAILY_USD_CAP (sukut 2 USD)
+ * shifti bilan.
+ */
+const appEnvKeys = {
+  APP_ENV: Joi.string()
+    .trim()
+    .lowercase()
+    .valid(...APP_ENVS)
+    .empty('')
+    .default('production'),
+  STAGING_SMS_ALLOWLIST: allowlistOf('sms'),
+  STAGING_TELEGRAM_CHAT_ALLOWLIST: allowlistOf('telegram'),
+  STAGING_PUSH_USER_ALLOWLIST: allowlistOf('push'),
+  STAGING_AI_ENABLED: Joi.boolean()
+    .truthy('true', '1')
+    .falsy('false', '0')
+    .empty('')
+    .default(false),
+  STAGING_AI_DAILY_USD_CAP: Joi.number().positive().empty('').optional(),
+};
+
 /**
  * Observability env keys shared by every service (all call initSentry + use the
  * Pino logger). Optional — absence is tolerated (Sentry no-ops) — but validated
  * so a typo'd DSN or an invalid LOG_LEVEL fails fast at boot.
  * (Audit observability P1: SENTRY_DSN / LOG_LEVEL were unvalidated.)
+ * (staging-safe) `appEnvKeys` ham shu yerda — 15 servisning hammasiga tushadi.
  */
 const observabilityKeys = {
+  ...appEnvKeys,
   SENTRY_DSN: Joi.string().uri().allow('').optional(),
   SENTRY_ENVIRONMENT: Joi.string().optional(),
   LOG_LEVEL: Joi.string()

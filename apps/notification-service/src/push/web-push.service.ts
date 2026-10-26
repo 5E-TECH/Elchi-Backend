@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 import * as webpush from 'web-push';
+import { checkStagingOutbound } from '@app/common';
 import { PushSubscription } from '../entities/push-subscription.entity';
 
 /** Brauzerga boradigan push matni (sw.js `push` hodisasi shuni o'qiydi). */
@@ -32,6 +33,12 @@ export interface PushSendResult {
    * 4xx (yaroqsiz payload, VAPID mos emas) — qayta urinish foydasiz.
    */
   retryable?: boolean;
+  /**
+   * (staging-safe) APP_ENV=staging: STAGING_PUSH_USER_ALLOWLIST da yo'q
+   * foydalanuvchi obunalari — YUBORILMADI (`failed` ichida ham sanaladi,
+   * `retryable=false`, `error` = `staging_blocked: …`).
+   */
+  staging_blocked?: number;
 }
 
 /** Vaqtinchalik (qayta urinsa o'tishi mumkin) provayder xatosi. */
@@ -140,6 +147,33 @@ export class WebPushService implements OnModuleInit {
     const result: PushSendResult = { sent: 0, failed: 0, gone: 0, error: null };
     if (!this.enabled || !subs.length) return result;
 
+    // (staging-safe) ENG PASTKI qatlam: `webpush.sendNotification` faqat
+    // allowlist'dagi foydalanuvchi obunalariga. Bloklangan obuna DB'da
+    // o'zgarmaydi (last_error yozilmaydi, o'chirilmaydi).
+    let stagingReason: string | null = null;
+    let stagingBlocked = 0;
+    const targets = subs.filter((sub) => {
+      const decision = checkStagingOutbound('push', sub.user_id);
+      if (decision.allowed) return true;
+      stagingBlocked += 1;
+      stagingReason ??= decision.reason;
+      return false;
+    });
+    if (stagingBlocked) {
+      this.logger.warn(
+        `Web push staging'da bloklandi: ${stagingBlocked} obuna — ${stagingReason}`,
+      );
+      if (!targets.length) {
+        return {
+          ...result,
+          failed: stagingBlocked,
+          error: stagingReason,
+          retryable: false,
+          staging_blocked: stagingBlocked,
+        };
+      }
+    }
+
     const body = JSON.stringify({
       ...payload,
       body: payload.body ? payload.body.slice(0, MAX_BODY_LENGTH) : null,
@@ -154,9 +188,9 @@ export class WebPushService implements OnModuleInit {
     const failures: Array<{ id: string; error: string; retryable: boolean }> =
       [];
 
-    for (let start = 0; start < subs.length; start += SEND_BATCH_SIZE) {
+    for (let start = 0; start < targets.length; start += SEND_BATCH_SIZE) {
       if (start > 0) await sleep(BATCH_PAUSE_MS);
-      const batch = subs.slice(start, start + SEND_BATCH_SIZE);
+      const batch = targets.slice(start, start + SEND_BATCH_SIZE);
       const settled = await Promise.allSettled(
         batch.map((sub) =>
           webpush.sendNotification(
@@ -211,6 +245,7 @@ export class WebPushService implements OnModuleInit {
     result.error =
       failures[0]?.error ?? (goneIds.length ? 'subscription_gone' : null);
     result.retryable = failures.some((failure) => failure.retryable);
+    if (stagingBlocked) result.staging_blocked = stagingBlocked;
     return result;
   }
 }
