@@ -9255,7 +9255,7 @@
     },
     "/finance/shift/{id}/report": {
       "get": {
-        "description": "`data.cash` / `data.card` — ochilish, kirim, chiqim, kutilgan, sanalgan, farq; `data.accounts[]` — har karta: kutilgan (snapshot), kiritilgan, farq, `ai_status` (not_required | pending | match | mismatch | unreadable | disabled | error), `ai_entered_ok`, `ai_read_balance`, `ai_last4_detected`, `comment`, `comment_required`, `photo_url` (imzolangan, 300 s); `ai_raw` — faqat superadmin. `data.accounts_summary` — holatlar soni; `data.operations[]` — smena oynasidagi kassa operatsiyalari (tur × to'lov usuli: soni, summa). Menejer — faqat o'z filiali, registrator — asosiy kassa (boshqasi 404).",
+        "description": "(y8Tqm9Ap / gWI4gYkw) `data.close_reason` (manual | auto | null — ochiq), `data.closed_by_system`, `data.auto_close` (`{ closed_at, label: 'Avtomatik yopildi — HH:MM, kassir yopmagan' }` yoki null — sariq banner), `data.report` (`status`: pending | processing | sent | skipped | failed, `round`, `file_format`, `has_file`, `file_url` — faqat superadmin, 300 s), `data.deliveries[]` — «Hisobot kimlarga yuborildi» (faqat superadmin; boshqalarga bo'sh). `data.cash` / `data.card` — ochilish, kirim, chiqim, kutilgan, sanalgan, farq; `data.accounts[]` — har karta: kutilgan (snapshot), kiritilgan, farq, `ai_status` (not_required | pending | match | mismatch | unreadable | disabled | error), `ai_entered_ok`, `ai_read_balance`, `ai_last4_detected`, `comment`, `comment_required`, `photo_url` (imzolangan, 300 s); `ai_raw` — faqat superadmin. `data.accounts_summary` — holatlar soni; `data.operations[]` — smena oynasidagi kassa operatsiyalari (tur × to'lov usuli: soni, summa). Menejer — faqat o'z filiali, registrator — asosiy kassa (boshqasi 404).",
         "operationId": "FinanceGatewayController_shiftReport",
         "parameters": [
           {
@@ -9287,6 +9287,40 @@
           "admin",
           "registrator",
           "manager"
+        ]
+      }
+    },
+    "/finance/shift/{id}/report/resend": {
+      "post": {
+        "description": "Yangi raund: superadmin(lar)ga to'liq hisobot (+ PDF/XLSX), kuryerlarga faqat o'z topshiruvlari, marketlarga faqat o'z to'lovlari (sozlamadagi kanallar bo'yicha). Javob: `data.round`, `data.status` (sent | skipped), `data.deliveries[]` (recipient_kind, channel, status: queued | sent | failed | skipped, failed_reason — masalan «Telegram ulanmagan»). Ochiq smena — 400; hozir yuborilayotgan — 400.",
+        "operationId": "FinanceGatewayController_resendShiftReport",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Smena ID si (yopilgan)",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "(gWI4gYkw) Smena hisobotini qayta yuborish — FAQAT superadmin",
+        "tags": [
+          "Finance"
+        ],
+        "x-roles": [
+          "superadmin"
         ]
       }
     },
@@ -25571,6 +25605,91 @@
           "card_id"
         ]
       },
+      "ShiftAutoCloseSettingsRequestDto": {
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "example": true,
+            "description": "`shift.auto_close.enabled` (sukut false). O'chiq — hech bir smena avtomatik yopilmaydi"
+          },
+          "times": {
+            "example": [
+              "14:00",
+              "23:00"
+            ],
+            "description": "`shift.auto_close.times` — kuniga N marta, Toshkent vaqti `HH:MM` (1–12 ta; takrorlar olib tashlanadi, tartiblanadi). Sukut ['23:00']",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "scope": {
+            "type": "string",
+            "example": "main",
+            "enum": [
+              "main",
+              "main+branches"
+            ],
+            "description": "`shift.auto_close.scope`: `main` — faqat asosiy kassa smenasi (sukut), `main+branches` — filial kassalari ham"
+          },
+          "warn_before_min": {
+            "type": "number",
+            "example": 15,
+            "description": "`shift.auto_close.warn_before_min` (sukut 15; 0 — ogohlantirishsiz): smenani ochgan xodimga yopishdan N daqiqa oldin in-app + Telegram"
+          }
+        }
+      },
+      "ShiftReportChannelsRequestDto": {
+        "type": "object",
+        "properties": {
+          "telegram": {
+            "type": "boolean",
+            "example": true
+          },
+          "in_app": {
+            "type": "boolean",
+            "example": true,
+            "description": "Tizim (ichki bildirishnoma)"
+          }
+        }
+      },
+      "ShiftReportRecipientsRequestDto": {
+        "type": "object",
+        "properties": {
+          "superadmin": {
+            "$ref": "#/components/schemas/ShiftReportChannelsRequestDto"
+          },
+          "couriers": {
+            "$ref": "#/components/schemas/ShiftReportChannelsRequestDto"
+          },
+          "markets": {
+            "$ref": "#/components/schemas/ShiftReportChannelsRequestDto"
+          }
+        }
+      },
+      "ShiftReportSettingsRequestDto": {
+        "type": "object",
+        "properties": {
+          "recipients": {
+            "description": "`shift.report.recipients` — superadmin / couriers / markets × telegram / in_app (sukut — hammasi true)",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ShiftReportRecipientsRequestDto"
+              }
+            ]
+          },
+          "format": {
+            "type": "string",
+            "example": "pdf",
+            "enum": [
+              "pdf",
+              "xlsx"
+            ],
+            "description": "`shift.report.format` — superadmin ilovasi (sukut pdf)"
+          }
+        }
+      },
       "UpdateShiftSettingsRequestDto": {
         "type": "object",
         "properties": {
@@ -25594,6 +25713,22 @@
             "items": {
               "$ref": "#/components/schemas/ShiftCardSettingRequestDto"
             }
+          },
+          "auto_close": {
+            "description": "(y8Tqm9Ap) Avtomatik yopish jadvali",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ShiftAutoCloseSettingsRequestDto"
+              }
+            ]
+          },
+          "report": {
+            "description": "(gWI4gYkw) Hisobot qabul qiluvchilari, kanallar va format",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ShiftReportSettingsRequestDto"
+              }
+            ]
           }
         }
       },

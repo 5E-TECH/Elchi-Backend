@@ -515,6 +515,110 @@ export class ShiftCardSettingRequestDto {
   ai_check_enabled?: boolean;
 }
 
+/** (y8Tqm9Ap) Smenani avtomatik yopish jadvali (qisman yangilanadi). */
+export class ShiftAutoCloseSettingsRequestDto {
+  @ApiPropertyOptional({
+    example: true,
+    description:
+      "`shift.auto_close.enabled` (sukut false). O'chiq — hech bir smena avtomatik yopilmaydi",
+  })
+  @IsOptional()
+  @IsBoolean()
+  enabled?: boolean;
+
+  @ApiPropertyOptional({
+    example: ['14:00', '23:00'],
+    description:
+      "`shift.auto_close.times` — kuniga N marta, Toshkent vaqti `HH:MM` (1–12 ta; takrorlar olib tashlanadi, tartiblanadi). Sukut ['23:00']",
+    type: [String],
+  })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(12)
+  @IsString({ each: true })
+  @Matches(/^([01]\d|2[0-3]):([0-5]\d)$/, { each: true })
+  times?: string[];
+
+  @ApiPropertyOptional({
+    example: 'main',
+    enum: ['main', 'main+branches'],
+    description:
+      '`shift.auto_close.scope`: `main` — faqat asosiy kassa smenasi (sukut), `main+branches` — filial kassalari ham',
+  })
+  @IsOptional()
+  @IsIn(['main', 'main+branches'])
+  scope?: 'main' | 'main+branches';
+
+  @ApiPropertyOptional({
+    example: 15,
+    description:
+      '`shift.auto_close.warn_before_min` (sukut 15; 0 — ogohlantirishsiz): smenani ochgan xodimga yopishdan N daqiqa oldin in-app + Telegram',
+  })
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Max(180)
+  warn_before_min?: number;
+}
+
+/** (gWI4gYkw) Bitta qabul qiluvchi guruhi kanallari. */
+export class ShiftReportChannelsRequestDto {
+  @ApiPropertyOptional({ example: true })
+  @IsOptional()
+  @IsBoolean()
+  telegram?: boolean;
+
+  @ApiPropertyOptional({
+    example: true,
+    description: 'Tizim (ichki bildirishnoma)',
+  })
+  @IsOptional()
+  @IsBoolean()
+  in_app?: boolean;
+}
+
+export class ShiftReportRecipientsRequestDto {
+  @ApiPropertyOptional({ type: () => ShiftReportChannelsRequestDto })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => ShiftReportChannelsRequestDto)
+  superadmin?: ShiftReportChannelsRequestDto;
+
+  @ApiPropertyOptional({ type: () => ShiftReportChannelsRequestDto })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => ShiftReportChannelsRequestDto)
+  couriers?: ShiftReportChannelsRequestDto;
+
+  @ApiPropertyOptional({ type: () => ShiftReportChannelsRequestDto })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => ShiftReportChannelsRequestDto)
+  markets?: ShiftReportChannelsRequestDto;
+}
+
+/** (gWI4gYkw) Smena hisobotini kimlarga / qaysi kanal / qaysi formatda yuborish. */
+export class ShiftReportSettingsRequestDto {
+  @ApiPropertyOptional({
+    type: () => ShiftReportRecipientsRequestDto,
+    description:
+      '`shift.report.recipients` — superadmin / couriers / markets × telegram / in_app (sukut — hammasi true)',
+  })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => ShiftReportRecipientsRequestDto)
+  recipients?: ShiftReportRecipientsRequestDto;
+
+  @ApiPropertyOptional({
+    example: 'pdf',
+    enum: ['pdf', 'xlsx'],
+    description: '`shift.report.format` — superadmin ilovasi (sukut pdf)',
+  })
+  @IsOptional()
+  @IsIn(['pdf', 'xlsx'])
+  format?: 'pdf' | 'xlsx';
+}
+
 /** (kiZgTybn) PATCH /finance/shift/settings — FAQAT superadmin. */
 export class UpdateShiftSettingsRequestDto {
   @ApiPropertyOptional({
@@ -551,6 +655,24 @@ export class UpdateShiftSettingsRequestDto {
   @ValidateNested({ each: true })
   @Type(() => ShiftCardSettingRequestDto)
   cards?: ShiftCardSettingRequestDto[];
+
+  @ApiPropertyOptional({
+    type: () => ShiftAutoCloseSettingsRequestDto,
+    description: '(y8Tqm9Ap) Avtomatik yopish jadvali',
+  })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => ShiftAutoCloseSettingsRequestDto)
+  auto_close?: ShiftAutoCloseSettingsRequestDto;
+
+  @ApiPropertyOptional({
+    type: () => ShiftReportSettingsRequestDto,
+    description: '(gWI4gYkw) Hisobot qabul qiluvchilari, kanallar va format',
+  })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => ShiftReportSettingsRequestDto)
+  report?: ShiftReportSettingsRequestDto;
 }
 
 /**

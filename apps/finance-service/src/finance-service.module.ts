@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
+import { ScheduleModule } from '@nestjs/schedule';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { FinanceServiceController } from './finance-service.controller';
 import { FinanceServiceService } from './finance-service.service';
@@ -38,6 +39,12 @@ import { ShiftAccountCheckController } from './shift-account-check/shift-account
 import { SHIFT_ACCOUNT_CHECKS } from './shift-account-check/shift-account-check.token';
 import { ExpenseCategoryService } from './expense-category/expense-category.service';
 import { ExpenseCategoryController } from './expense-category/expense-category.controller';
+import { ShiftScheduleClaim } from './entities/shift-schedule-claim.entity';
+import { ShiftReportDelivery } from './entities/shift-report-delivery.entity';
+import { ShiftAutoCloseScheduler } from './shift-auto-close/shift-auto-close.scheduler';
+import { ShiftReportService } from './shift-report/shift-report.service';
+import { ShiftReportController } from './shift-report/shift-report.controller';
+import { SHIFT_REPORTS } from './shift-report/shift-report.token';
 
 @Module({
   imports: [
@@ -47,6 +54,8 @@ import { ExpenseCategoryController } from './expense-category/expense-category.c
       validationSchema: financeValidationSchema,
     }),
     AppLoggerModule.forRoot({ serviceName: 'finance-service' }),
+    // (y8Tqm9Ap) Smena avtomatik yopish jadvali (CronJob, Asia/Tashkent).
+    ScheduleModule.forRoot(),
     RmqModule,
     RmqModule.register({ name: 'ORDER' }),
     RmqModule.register({ name: 'IDENTITY' }),
@@ -59,6 +68,8 @@ import { ExpenseCategoryController } from './expense-category/expense-category.c
     // (rWdLuoP3) Smena / kassa kartasi realtime hodisalari: gateway navbatiga
     // `realtime.notify` — FAQAT outbox maqsadi (FinanceRealtimeService).
     RmqModule.register({ name: 'GATEWAY' }),
+    // (gWI4gYkw) Smena hisoboti fayli (PDF/XLSX) — file-service (private).
+    RmqModule.register({ name: 'FILE' }),
     DatabaseModule,
     // Transactional outbox: finance publishes `order.settlement.advance` to
     // order-service inside the cashbox-move transaction (Faza 2a). Reliable,
@@ -95,6 +106,9 @@ import { ExpenseCategoryController } from './expense-category/expense-category.c
       // kiZgTybn — smena yopishda karta qoldig'ini tasdiqlash + sozlamalar.
       ShiftAccountCheck,
       FinanceSetting,
+      // y8Tqm9Ap / gWI4gYkw — slot kalitlari va hisobot yetkazish jurnali.
+      ShiftScheduleClaim,
+      ShiftReportDelivery,
       // (2crjWf7v) kuryer kvitansiya javobi — faqat audit.
       CourierPaymentAck,
     ]),
@@ -105,6 +119,7 @@ import { ExpenseCategoryController } from './expense-category/expense-category.c
     CashboxCardController,
     ExpenseCategoryController,
     ShiftAccountCheckController,
+    ShiftReportController,
   ],
   providers: [
     FinanceServiceService,
@@ -117,6 +132,9 @@ import { ExpenseCategoryController } from './expense-category/expense-category.c
     CourierCashReminderScheduler,
     ShiftAccountCheckService,
     { provide: SHIFT_ACCOUNT_CHECKS, useExisting: ShiftAccountCheckService },
+    ShiftReportService,
+    { provide: SHIFT_REPORTS, useExisting: ShiftReportService },
+    ShiftAutoCloseScheduler,
   ],
 })
 export class FinanceServiceModule {}

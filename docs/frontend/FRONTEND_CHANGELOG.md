@@ -23,6 +23,41 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-10-26 — Smena: jadval bo'yicha avtomatik yopish (y8Tqm9Ap) va yopilganda hisobot yuborish (gWI4gYkw)
+
+Deploy: **finance-service + api-gateway + notification-service + identity-service birga** (yangi RMQ:
+`finance.shift.report.resend`, `notification.delivery.by_dispatch`, `identity.user.active_ids_by_role`).
+**Migratsiya bor:** `1716000000167-ShiftAutoCloseAndReports` (`shifts` ga yangi ustunlar, yangi jadvallar
+`shift_schedule_claims`, `shift_report_deliveries`; mavjud qatorlar o'zgarmaydi). `openapi.json` qayta yaratildi.
+Avtomatik yopish sukut bo'yicha **o'chiq** (superadmin yoqadi). Hisobot yuborish sukut bo'yicha **yoqiq**
+(superadmin / kuryerlar / marketlar × Telegram + tizim, PDF).
+
+- [2026-10-26] ✏️ [finance] — `GET /finance/shift/settings` javobiga `auto_close`
+  (`{enabled, times: ['HH:MM'], scope: 'main' | 'main+branches', warn_before_min}`) va `report`
+  (`{recipients: {superadmin, couriers, markets: {telegram, in_app}}, format: 'pdf' | 'xlsx'}`) qo'shildi.
+  `PATCH /finance/shift/settings` (faqat SUPERADMIN) shu ikki obyektni qisman qabul qiladi: `times` — Toshkent
+  vaqti, 1–12 ta (tartiblanadi, takror olib tashlanadi), `warn_before_min` 0–180 (0 — ogohlantirishsiz).
+  Yaroqsiz qiymat → 400. Dizayn: `superadmin-payments-shift-settings` («Avtomatik yopish» va «Qabul qiluvchilar»).
+- [2026-10-26] ✏️ [finance] — `GET /finance/shift/:id/report`: yangi maydonlar `close_reason`
+  (`manual | auto`; ochiq smena — `null`), `closed_by_system`, `auto_close` (`{closed_at, label}` yoki `null`;
+  `label` = «Avtomatik yopildi — HH:MM, kassir yopmagan» → sariq banner), `report` (`status`: pending | processing |
+  sent | skipped | failed, `round`, `file_format`, `has_file`, `file_url` — faqat superadmin, 300 s) va
+  `deliveries[]` — «Hisobot kimlarga yuborildi» (faqat superadmin; boshqa rollarga bo'sh massiv):
+  `{round, recipient_id, recipient_name, recipient_kind: superadmin|courier|market, channel: in_app|telegram|
+  telegram_group, status: queued|sent|failed|skipped, failed_reason (masalan «Telegram ulanmagan»), sent_at}`.
+  Avtomatik yopilgan smenada `cash/card.discrepancy = null` («sanalmadi»), kartalarda `entered_balance = null`,
+  `ai_status = 'not_required'` (tasdiqlanmagan), `closed_by = null`.
+- [2026-10-26] 🆕 [finance] — `POST /finance/shift/:id/report/resend` (faqat SUPERADMIN) — yangi raund bilan
+  qayta yuboradi; javob `data.round`, `data.status`, `data.deliveries[]`. Ochiq smena / hozir yuborilayotgan → 400.
+- [2026-10-26] 🆕 [notification] — yangi turlar: `finance.shift_closed`, `finance.shift_auto_closed` (hisobot;
+  `link` superadmin uchun `/payments/shift-report/:id` — 🔧 frontend shu route'ni qo'shishi kerak, kuryer/market
+  uchun `/cash-box`), `finance.shift_auto_close_warning` (smenani ochgan xodimga, `link` `/payments/main-cashbox`,
+  `data.auto_close_at`, `data.minutes_left`). Kuryer xabarida faqat o'z topshiruvlari, market xabarida faqat
+  o'z to'lovlari.
+- [2026-10-26] 🟢 [realtime] — avtomatik yopilganda `finance.shift.auto_closed` (payload'da `closed_at`,
+  `close_reason: 'auto'`, `closed_by: null`) — rWdLuoP3 ro'yxatidagi nom bilan bir xil; qo'lda —
+  `finance.shift.closed`. Keyingi smena avtomatik OCHILMAYDI.
+
 ### 2026-10-26 — Smena yopilishi: har karta / hisob qoldig'ini tasdiqlash, skrinshot, AI tekshiruvi, hisobot, sozlamalar (kiZgTybn)
 
 Deploy: **finance-service + api-gateway + ai-service birga** (yangi RMQ buyruqlari

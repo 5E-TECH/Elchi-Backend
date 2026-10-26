@@ -326,6 +326,11 @@ export const financeValidationSchema = Joi.object({
   COURIER_CASH_REMINDER_THRESHOLD: Joi.number().min(0).allow('').optional(),
   // Eslatma soati (Asia/Tashkent, 0-23). Sukut 18:00.
   COURIER_CASH_REMINDER_HOUR: Joi.number().integer().min(0).max(23).default(18),
+  // (gWI4gYkw) Smena hisoboti fayli (PDF/XLSX) — file-service navbati.
+  RABBITMQ_FILE_QUEUE: Joi.string().default('file_queue'),
+  // (y8Tqm9Ap) `off` — smena jadvali cron'i umuman ishga tushmaydi
+  // (favqulodda o'chirish; odatiy boshqaruv — superadmin sozlamasi).
+  FINANCE_SHIFT_SCHEDULER: Joi.string().allow('').optional(),
 });
 
 export const notificationValidationSchema = Joi.object({

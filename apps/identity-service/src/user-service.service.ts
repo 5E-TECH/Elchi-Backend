@@ -5329,6 +5329,35 @@ export class UserServiceService implements OnModuleInit {
     );
   }
 
+  /**
+   * (gWI4gYkw) Rol bo'yicha faol (o'chirilmagan, ACTIVE) foydalanuvchilar:
+   * `{ user_id, telegram_linked }`. Faqat xodim rollari (mijoz — yo'q).
+   */
+  async activeIdsByRole(payload: { role?: unknown }) {
+    const role = primitiveText(payload?.role).trim().toLowerCase();
+    if (
+      !(Object.values(Roles) as string[]).includes(role) ||
+      role === (Roles.CUSTOMER as string)
+    ) {
+      throw new RpcException({ statusCode: 400, message: "role noto'g'ri" });
+    }
+    const rows = await this.users
+      .createQueryBuilder('u')
+      .select(['u.id AS user_id', 'u.telegram_id AS telegram_id'])
+      .where('u.is_deleted = false')
+      .andWhere('u.status = :active', { active: Status.ACTIVE })
+      .andWhere('u.role = :role', { role })
+      .orderBy('u.id', 'ASC')
+      .limit(1000)
+      .getRawMany<{ user_id: string; telegram_id: string | null }>();
+    return successRes(
+      rows.map((row) => ({
+        user_id: String(row.user_id),
+        telegram_linked: Boolean(String(row.telegram_id ?? '').trim()),
+      })),
+    );
+  }
+
   /** (9HIaV80X #6) `bot_linked_users{role}` metrikasi uchun. */
   async telegramLinkedCounts() {
     const rows: Array<{ role: string; count: string }> = await this.users
