@@ -15,6 +15,7 @@ import {
   ExpenseProofCondition,
   Where_deliver,
 } from '../../../../libs/common/enums';
+import { IsPasswordPolicy, Roles } from '@app/common';
 
 export class CreateMarketDto {
   @ApiProperty({ example: 'Market 1' })
@@ -126,9 +127,9 @@ export class CreateMarketDto {
   @IsString()
   default_operator_phone?: string | null;
 
-  @ApiProperty({ example: 'secret123' })
+  @ApiProperty({ example: 'Kuchli-Parol-2026' })
   @IsNotEmpty()
   @IsString()
-  @MinLength(4)
+  @IsPasswordPolicy(Roles.MARKET)
   password: string;
 }

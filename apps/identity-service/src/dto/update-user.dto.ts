@@ -9,9 +9,13 @@ import {
   Matches,
   Max,
   Min,
-  MinLength,
 } from 'class-validator';
-import { Commission_type, Status, Where_deliver } from '@app/common';
+import {
+  Commission_type,
+  Status,
+  Where_deliver,
+  IsPasswordPolicy,
+} from '@app/common';
 
 /** NFiXfmq6 — market AI buyurtma narxining yuqori chegarasi (so'm). */
 export const AI_PRICE_PER_ORDER_MAX_UZS = 1_000_000;
@@ -36,7 +40,7 @@ export class UpdateUserDto {
 
   @IsOptional()
   @IsString()
-  @MinLength(4)
+  @IsPasswordPolicy()
   password?: string;
 
   @IsOptional()

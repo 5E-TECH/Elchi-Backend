@@ -43,6 +43,7 @@ export * from './enums';
 
 export * from './security/ssrf';
 export * from './security/user-summary';
+export * from './security/password-policy';
 
 export * from './filters/rpc-exception.filter';
 export * from './filters/all-exceptions.filter';

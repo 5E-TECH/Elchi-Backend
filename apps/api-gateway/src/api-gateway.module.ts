@@ -12,6 +12,7 @@ import { PassportModule } from '@nestjs/passport';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { APP_GUARD } from '@nestjs/core';
 import { JwtStrategy } from './auth/jwt.strategy';
+import { PasswordChangeGuard } from './auth/password-change.guard';
 import { SessionRevocationService } from './auth/session-revocation.service';
 import { LogistRegionScopeService } from './auth/logist-scope';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
@@ -208,6 +209,9 @@ import type { StringValue } from 'ms';
     // explicitly marked @Public() (health, login/refresh, HMAC webhooks, public
     // file view, Partner API which uses its own key guard). (Audit authz P1.)
     { provide: APP_GUARD, useClass: JwtAuthGuard },
+    // (NDmZMzCP) `pwd_change` claim'li token — faqat parol almashtirish
+    // oqimi (`PASSWORD_CHANGE_GATE=on` bo'lganda). JwtAuthGuard'dan KEYIN.
+    { provide: APP_GUARD, useClass: PasswordChangeGuard },
   ],
 })
 export class ApiGatewayModule {}

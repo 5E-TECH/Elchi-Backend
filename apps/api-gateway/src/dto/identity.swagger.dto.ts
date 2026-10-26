@@ -14,7 +14,7 @@ import {
   Min,
   MinLength,
 } from 'class-validator';
-import { ExpenseProofCondition, Roles } from '@app/common';
+import { ExpenseProofCondition, Roles, IsPasswordPolicy } from '@app/common';
 
 export class CreateAdminRequestDto {
   @ApiProperty({ example: 'Admin User' })
@@ -26,9 +26,13 @@ export class CreateAdminRequestDto {
   @IsPhoneNumber('UZ')
   phone_number!: string;
 
-  @ApiProperty({ example: 'strongPassword123' })
+  @ApiProperty({
+    example: 'Kuchli-Parol-2026',
+    minLength: 10,
+    description: 'Kamida 8 belgi (xodim — 10), oddiy parollar taqiqlangan',
+  })
   @IsString()
-  @MinLength(4)
+  @IsPasswordPolicy(Roles.ADMIN)
   password!: string;
 
   @ApiProperty({ example: 3000000 })
@@ -79,10 +83,14 @@ export class UpdateAdminRequestDto {
   @IsPhoneNumber('UZ')
   phone_number?: string;
 
-  @ApiPropertyOptional({ example: 'newStrongPassword123' })
+  @ApiPropertyOptional({
+    example: 'Kuchli-Parol-2026',
+    minLength: 8,
+    description: 'Kamida 8 belgi (xodim — 10), oddiy parollar taqiqlangan',
+  })
   @IsOptional()
   @IsString()
-  @MinLength(4)
+  @IsPasswordPolicy()
   password?: string;
 
   @ApiPropertyOptional({ example: 'active' })
@@ -233,9 +241,13 @@ export class CreateMarketRequestDto {
   @MinLength(3)
   username!: string;
 
-  @ApiProperty({ example: 'secret123' })
+  @ApiProperty({
+    example: 'Kuchli-Parol-2026',
+    minLength: 8,
+    description: 'Kamida 8 belgi (xodim — 10), oddiy parollar taqiqlangan',
+  })
   @IsString()
-  @MinLength(4)
+  @IsPasswordPolicy(Roles.MARKET)
   password!: string;
 
   @ApiPropertyOptional({
@@ -344,9 +356,13 @@ export class CreateCourierRequestDto {
   @IsPhoneNumber('UZ')
   phone_number!: string;
 
-  @ApiProperty({ example: 'secret123' })
+  @ApiProperty({
+    example: 'Kuchli-Parol-2026',
+    minLength: 10,
+    description: 'Kamida 8 belgi (xodim — 10), oddiy parollar taqiqlangan',
+  })
   @IsString()
-  @MinLength(4)
+  @IsPasswordPolicy(Roles.COURIER)
   password!: string;
 
   @ApiPropertyOptional({
@@ -403,9 +419,13 @@ export class CreateManagerRequestDto {
   @IsPhoneNumber('UZ')
   phone_number!: string;
 
-  @ApiProperty({ example: 'secret123' })
+  @ApiProperty({
+    example: 'Kuchli-Parol-2026',
+    minLength: 10,
+    description: 'Kamida 8 belgi (xodim — 10), oddiy parollar taqiqlangan',
+  })
   @IsString()
-  @MinLength(4)
+  @IsPasswordPolicy(Roles.MANAGER)
   password!: string;
 
   @ApiPropertyOptional({ example: 3000000 })
@@ -457,10 +477,14 @@ export class UpdateMarketRequestDto {
   @IsPhoneNumber('UZ')
   phone_number?: string;
 
-  @ApiPropertyOptional({ example: 'newSecret123' })
+  @ApiPropertyOptional({
+    example: 'Kuchli-Parol-2026',
+    minLength: 8,
+    description: 'Kamida 8 belgi (xodim — 10), oddiy parollar taqiqlangan',
+  })
   @IsOptional()
   @IsString()
-  @MinLength(4)
+  @IsPasswordPolicy(Roles.MARKET)
   password?: string;
 
   @ApiPropertyOptional({ example: 'active' })

@@ -77,7 +77,7 @@ const managerDto = (branchId: string) =>
   ({
     name: 'Yangi menejer',
     phone_number: '+998901112233',
-    password: 'secret123',
+    password: 'Test-Parol-2026',
     branch_id: branchId,
   }) as never;
 
@@ -260,7 +260,7 @@ describe('UserServiceService.createManager — HQ ga menejer yo‘q', () => {
       {
         name: 'Filialsiz menejer',
         phone_number: '+998901112244',
-        password: 'secret123',
+        password: 'Test-Parol-2026',
       } as never,
       superadmin,
     );

@@ -7,8 +7,8 @@ import {
   IsString,
   Max,
   Min,
-  MinLength,
 } from 'class-validator';
+import { IsPasswordPolicy, Roles } from '@app/common';
 
 export class CreateManagerDto {
   @ApiProperty({ example: 'Branch manager' })
@@ -21,10 +21,10 @@ export class CreateManagerDto {
   @IsPhoneNumber('UZ')
   phone_number: string;
 
-  @ApiProperty({ example: 'secret123' })
+  @ApiProperty({ example: 'Kuchli-Parol-2026' })
   @IsNotEmpty()
   @IsString()
-  @MinLength(4)
+  @IsPasswordPolicy(Roles.MANAGER)
   password: string;
 
   @ApiPropertyOptional({ example: 3000000, minimum: 0 })

@@ -6,9 +6,14 @@ import {
   IsOptional,
   IsString,
   Min,
-  MinLength,
 } from 'class-validator';
-import { ExpenseProofCondition, Status, Where_deliver } from '@app/common';
+import {
+  ExpenseProofCondition,
+  Status,
+  Where_deliver,
+  IsPasswordPolicy,
+  Roles,
+} from '@app/common';
 
 export class UpdateMarketDto {
   @IsOptional()
@@ -25,7 +30,7 @@ export class UpdateMarketDto {
 
   @IsOptional()
   @IsString()
-  @MinLength(4)
+  @IsPasswordPolicy(Roles.MARKET)
   password?: string;
 
   @IsOptional()

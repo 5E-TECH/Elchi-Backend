@@ -33,6 +33,8 @@ import { Throttle } from '@nestjs/throttler';
 import type { Request, Response } from 'express';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
 import { Public } from './auth/public.decorator';
+import { AllowDuringPasswordChange } from './auth/password-change.guard';
+import { refreshCookieOptions } from './auth/refresh-cookie';
 import {
   SessionKickReason,
   SessionRevocationService,
@@ -194,7 +196,6 @@ export class AuthGatewayController {
     refreshToken: string,
     expiresAtMs: number | null,
   ) {
-    const isProduction = process.env.NODE_ENV === 'production';
     const now = Date.now();
     const maxAge = Math.max(
       1,
@@ -202,23 +203,18 @@ export class AuthGatewayController {
         now,
     );
 
+    // (NDmZMzCP) SameSite sukut `Lax` (ilgari prod'da `None`) — refresh-cookie.ts.
     res.cookie(AuthGatewayController.REFRESH_COOKIE_NAME, refreshToken, {
-      httpOnly: true,
-      secure: isProduction,
-      sameSite: isProduction ? 'none' : 'lax',
-      path: '/auth',
+      ...refreshCookieOptions(),
       maxAge,
     });
   }
 
   private clearRefreshCookie(res: Response) {
-    const isProduction = process.env.NODE_ENV === 'production';
-    res.clearCookie(AuthGatewayController.REFRESH_COOKIE_NAME, {
-      httpOnly: true,
-      secure: isProduction,
-      sameSite: isProduction ? 'none' : 'lax',
-      path: '/auth',
-    });
+    res.clearCookie(
+      AuthGatewayController.REFRESH_COOKIE_NAME,
+      refreshCookieOptions(),
+    );
   }
 
   private sanitizeAuthPayload(payload: Record<string, unknown>) {
@@ -256,6 +252,11 @@ export class AuthGatewayController {
       access_token_expires_at: accessTokenExpiresAt,
       refresh_token_expires_at: refreshTokenExpiresAt,
       refresh_token_warn_at: refreshTokenWarnAt,
+      // (NDmZMzCP) Zaif / vaqtinchalik parol — FE almashtirish ekraniga.
+      must_change_password:
+        payload.must_change_password === true ||
+        (payload.user as { must_change_password?: unknown } | undefined)
+          ?.must_change_password === true,
     };
   }
 
@@ -437,6 +438,7 @@ export class AuthGatewayController {
    * shuning uchun bu so'rovga ham keladi).
    */
   @Post('logout')
+  @AllowDuringPasswordChange()
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
   @ApiOperation({
@@ -587,6 +589,7 @@ export class AuthGatewayController {
   }
 
   @Get('validate')
+  @AllowDuringPasswordChange()
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Validate current JWT token' })
@@ -600,6 +603,7 @@ export class AuthGatewayController {
   }
 
   @Get('my-profile')
+  @AllowDuringPasswordChange()
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Get current user profile' })
@@ -626,6 +630,7 @@ export class AuthGatewayController {
    * `sessions_revoked` (soni).
    */
   @Patch('my-profile')
+  @AllowDuringPasswordChange()
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
   @ApiOperation({

@@ -11,6 +11,11 @@ export class LoginRequestDto {
   @IsPhoneNumber('UZ')
   phone_number!: string;
 
+  /**
+   * (NDmZMzCP) Login ATAYLAB yumshoq (min 4): mavjud foydalanuvchilar eski
+   * paroli bilan kira oladi; yangi siyosatga mos kelmasa javobda
+   * `must_change_password: true` — almashtirishga yo'naltiriladi.
+   */
   @ApiProperty({ example: '0990' })
   @IsString()
   @MinLength(4)
@@ -70,6 +75,13 @@ export class MinimalAuthResponseDto {
 
   @ApiPropertyOptional({ example: 1793101500000, nullable: true })
   refresh_token_warn_at?: number | null;
+
+  @ApiPropertyOptional({
+    example: false,
+    description:
+      "(NDmZMzCP) `true` — parol yangi siyosatga (min 8, xodim 10, oddiy parollar taqiqlangan) mos emas yoki vaqtinchalik: FE «Yangi parol o'rnating» ekraniga yo'naltiradi (PATCH /auth/my-profile `password`, keyin POST /auth/refresh). `PASSWORD_CHANGE_GATE=on` bo'lsa boshqa route'lar 403 `PASSWORD_CHANGE_REQUIRED`.",
+  })
+  must_change_password?: boolean;
 }
 
 export class ValidateResponseDto {

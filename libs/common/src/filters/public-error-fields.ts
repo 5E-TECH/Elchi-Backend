@@ -25,11 +25,32 @@ import { WAREHOUSE_ERROR_CODES } from '../catalog/warehouse';
  * jadvalga bitta qator.
  */
 export const SESSION_TOO_NEW = 'SESSION_TOO_NEW';
+/**
+ * (NDmZMzCP) Gateway sessiya holatini identity'dan bila olmadi — 503
+ * (fail closed). 401 EMAS: FE foydalanuvchini chiqarib yubormaydi.
+ */
+export const SESSION_CHECK_UNAVAILABLE = 'SESSION_CHECK_UNAVAILABLE';
+/**
+ * (NDmZMzCP) Telefon (+IP) bo'yicha ketma-ket xato login — vaqtinchalik qulf,
+ * 429. `retry_after_seconds` — qachon qayta urinish mumkin.
+ */
+export const LOGIN_LOCKED = 'LOGIN_LOCKED';
+/**
+ * (NDmZMzCP / aidsxJ2H) Parolni almashtirish shart — token faqat parol
+ * almashtirish oqimiga ruxsat beradi (gateway `PASSWORD_CHANGE_GATE=on`), 403.
+ */
+export const PASSWORD_CHANGE_REQUIRED = 'PASSWORD_CHANGE_REQUIRED';
 
 export const PUBLIC_ERROR_CODES: Readonly<Record<string, readonly string[]>> = {
   // Sessiya yaratilganiga SESSION_REVOKE_LOCK_HOURS (sukut 48) to'lmagan:
   // `available_at` — qachondan boshqa sessiyalarni yopish mumkin (ISO).
   [SESSION_TOO_NEW]: ['available_at'],
+  // (NDmZMzCP) identity javob bermadi — 503, qayta urinish (chiqish emas).
+  [SESSION_CHECK_UNAVAILABLE]: [],
+  // (NDmZMzCP) login qulfi — 429, qancha soniyadan keyin urinish mumkin.
+  [LOGIN_LOCKED]: ['retry_after_seconds'],
+  // (NDmZMzCP) zaif/vaqtinchalik parol — avval parolni almashtirish, 403.
+  [PASSWORD_CHANGE_REQUIRED]: [],
   // (XtcEyQjb) to'xtatilgan omborga kirim — 409.
   [WAREHOUSE_ERROR_CODES.PAUSED]: [],
   // (XtcEyQjb) market operatoriga «Ombordagi qoldiq» yopiq — 403.

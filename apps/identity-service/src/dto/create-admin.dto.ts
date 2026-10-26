@@ -6,9 +6,9 @@ import {
   IsString,
   Max,
   Min,
-  MinLength,
 } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { IsPasswordPolicy, Roles } from '@app/common';
 
 export class CreateAdminDto {
   @ApiProperty({ example: 'Admin User' })
@@ -24,7 +24,7 @@ export class CreateAdminDto {
   @ApiProperty({ example: 'strongPassword123' })
   @IsNotEmpty()
   @IsString()
-  @MinLength(4)
+  @IsPasswordPolicy(Roles.ADMIN)
   password: string;
 
   @ApiProperty({ example: 3000000, minimum: 0 })

@@ -60,6 +60,44 @@ mavjud kartalar o'zgarmaydi). `openapi.json` qayta yaratildi.
 - 🔧 FE («Kassa: kartalar va hisob raqamlar UI» kartasi): kartalar ro'yxati / forma oynasi / to'ldirish oynasida karta
   tanlash — yuqoridagi maydonlar; `last4` ni `··1234` ko'rinishida chizing.
 
+### 2026-10-26 — Autentifikatsiya xavfsizligi: parol siyosati, login qulfi, sessiyalar, refresh cookie (NDmZMzCP)
+
+Deploy: **identity-service + api-gateway** (ikkalasi birga). Migratsiya **bor**: `1716000000163` (`admins.must_change_password`,
+sukut `false`) va `1716000000164` (`auth_login_throttle` jadvali). `openapi.json` qayta yaratildi.
+
+- [2026-10-26] ⚠️ [identity+gateway] — **Yangi parol siyosati** (faqat parol O'RNATISH / ALMASHTIRISHda; login'ga tegmaydi):
+  kamida **8** belgi, xodimlar (superadmin, admin, manager, registrator, operator, logist, branch, **courier**) — kamida **10**;
+  oddiy parollar (`12345678`, `password123`, `qwerty123`, `elchi123` …), bitta belgining takrori, ketma-ket raqam/harf
+  va telefon raqamining o'zi taqiqlangan; ko'pi bilan 72 bayt; boshida/oxirida bo'shliq yo'q. Rad etilsa 400, xabar
+  o'zbekcha (masalan «Parol kamida 10 belgidan iborat bo'lishi kerak», «Parol juda oddiy — boshqa parol tanlang»).
+  Tegishli: `POST /admins`, `/registrators`, `/logists`, `/couriers`, `/managers`, `/markets`, `/market-operators`,
+  `/investors`, `/users`, `PATCH /users/:id`, `PATCH /markets/:id`, `PATCH /auth/my-profile`.
+  → 🔧 FE: yaratish/tahrirlash formalarida min-uzunlik ko'rsatmasi (8 / xodim 10) va 400 xabarini ko'rsatish.
+- [2026-10-26] ✏️ [gateway] — `POST /auth/login`, `POST /auth/refresh`, `POST /auth/otp/verify` javobida yangi
+  `must_change_password: boolean`. `true` — mavjud parol yangi siyosatga mos emas (login BARIBIR muvaffaqiyatli).
+  Access token'da `pwd_change: true`. → 🔧 FE (`src/auth/**`): `true` bo'lsa «Yangi parol o'rnating» ekrani —
+  `PATCH /auth/my-profile { password }`, keyin `POST /auth/refresh` (yangi token bayroqsiz).
+  Gateway darvozasi `PASSWORD_CHANGE_GATE` (sukut **o'chiq**): yoqilganda bayroqli token bilan faqat
+  `GET/PATCH /auth/my-profile`, `GET /auth/validate`, `POST /auth/logout` ishlaydi, qolgani 403
+  `code: PASSWORD_CHANGE_REQUIRED`. FE ekrani chiqqandan keyin yoqiladi.
+- [2026-10-26] 🆕 [identity] — **Login qulfi**: bir telefon + bir IP'dan 5 ta ketma-ket xato → 1 daqiqa, keyin har xato
+  ikki barobar (2, 4, 8 …, ko'pi bilan **15 daqiqa**); bir telefonga barcha IP'lardan 20 ta xato → umumiy qulf (egasining
+  tanish qurilmasi/IP'si uni chetlab o'tadi). Qulf davomida `POST /auth/login` → **429**
+  `{ code: 'LOGIN_LOCKED', retry_after_seconds, message: "Juda ko'p noto'g'ri urinish — N daqiqadan keyin qayta urinib ko'ring" }`.
+  Muvaffaqiyatli kirish hisobni nolga tushiradi. → 🔧 FE: 429 `LOGIN_LOCKED` xabarini ko'rsatish (ixtiyoriy taymer).
+- [2026-10-26] 🟢 [identity] — bcrypt narxi 10 → 12 (kirish ~0,2–0,3 s sekinroq); eski xeshlar muvaffaqiyatli kirishda
+  jimgina qayta xeshlanadi (boshqa qurilmalar chiqib ketmaydi). Noma'lum telefon / nofaol foydalanuvchida ham bcrypt
+  (javob vaqti telefon mavjudligini oshkor qilmaydi). Javoblar o'zgarmagan (401 `Invalid credentials`).
+- [2026-10-26] ✏️ [identity+gateway] — **Sessiyalar**: bloklash, rol / telefon almashishi, o'chirish — foydalanuvchining
+  barcha qurilmalari darhol chiqariladi (socket `auth:session_revoked` `reason: 'security_reset'`, keyingi HTTP 401).
+  Ilgari access token 1 soatgacha ishlardi.
+- [2026-10-26] ⚠️ [gateway] — identity javob bermasa (sessiyani tekshirib bo'lmasa) endi **fail closed**: HTTP **503**
+  `code: SESSION_CHECK_UNAVAILABLE` (401 EMAS — chiqarib yuborilmaydi, qayta urinish), socket ulanishi shu kod bilan rad.
+  → 🔧 FE: 503 `SESSION_CHECK_UNAVAILABLE` da logout qilmaslik (hozirgi interceptor faqat 401 da chiqaradi — mos).
+- [2026-10-26] ✏️ [gateway] — refresh cookie `SameSite=None` → **`Lax`** (env `REFRESH_COOKIE_SAMESITE=lax|strict|none`).
+  `admin.elchipochta.uz` ↔ `api.elchipochta.uz` bitta sayt — kabinetga ta'sir yo'q; Telegram Mini App cookie ishlatmaydi.
+  Boshqa saytdan (localhost, `*.pages.dev` preview) prod API'ga silent refresh endi ishlamaydi.
+
 
 ### 2026-10-26 — Buyurtma yaratish: tumansiz inline mijoz — bitta o'zbekcha xabar (IR2OHIiN)
 

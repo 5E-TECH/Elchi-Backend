@@ -128,7 +128,7 @@ const admin: RequesterContext = { id: '2', roles: ['admin'] };
 const createDto = {
   name: 'Shaxriyor',
   phone_number: '+998903333334',
-  password: 'secret1',
+  password: 'Test-Parol-2026',
   salary: 4_000_000,
   payment_day: 10,
 };

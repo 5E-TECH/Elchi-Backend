@@ -20,7 +20,7 @@ import {
 const courierBody = (over: Record<string, unknown> = {}) => ({
   name: 'TEST-KURYER',
   phone_number: '+998901112233',
-  password: 'secret123',
+  password: 'Kuryer-Parol-2026',
   tariff_home: 10000,
   tariff_center: 8000,
   ...over,

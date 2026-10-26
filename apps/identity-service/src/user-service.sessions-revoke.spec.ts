@@ -85,7 +85,7 @@ const untouched = { refresh_token: OLD_HASH, session_epoch: 4 };
 
 describe('Elchi Pochta #3 — xavfsizlik hodisasi BARCHA sessiyalarni yopadi', () => {
   it.each([
-    ['admin parolni tiklaydi', { password: 'yangi-parol' }],
+    ['admin parolni tiklaydi', { password: 'Yangi-Parol-2026' }],
     ['telefon (login) almashadi', { phone_number: '+998901112233' }],
     ['bloklash (status inactive)', { status: Status.INACTIVE }],
   ])('⭐ updateUser — %s', async (_label, dto) => {
@@ -100,10 +100,14 @@ describe('Elchi Pochta #3 — xavfsizlik hodisasi BARCHA sessiyalarni yopadi', (
   // `auth/auth.sessions.spec.ts` («parol almashtirish …» bloki).
   it('o‘z parolini almashtirish, sessiyalar servisisiz (zaxira) — hammasi, joriy ham', async () => {
     const h = makeHarness([row('10', Roles.ADMIN)]);
-    await h.service.updateUser('10', { password: 'yangi' } as never, {
-      id: '10',
-      roles: ['admin'],
-    });
+    await h.service.updateUser(
+      '10',
+      { password: 'Yangi-Parol-2026' } as never,
+      {
+        id: '10',
+        roles: ['admin'],
+      },
+    );
     expect(h.saves.at(-1)).toEqual(expect.objectContaining(revokedAll));
   });
 
@@ -151,7 +155,7 @@ describe('Elchi Pochta #3 — xavfsizlik hodisasi BARCHA sessiyalarni yopadi', (
   });
 
   it.each([
-    ['parol', { password: 'yangi' }],
+    ['parol', { password: 'Yangi-Parol-2026' }],
     ['telefon', { phone_number: '+998901112244' }],
     ['bloklash', { status: Status.INACTIVE }],
   ])('updateMarket — %s yopadi', async (_label, dto) => {

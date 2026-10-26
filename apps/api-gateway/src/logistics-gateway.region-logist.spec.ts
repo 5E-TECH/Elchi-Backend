@@ -328,7 +328,7 @@ describe('(dzyVftBx) ApiGatewayController — POST/GET /logists', () => {
   const body = {
     name: 'Shaxriyor',
     phone_number: '+998903333334',
-    password: 'secret1',
+    password: 'Logist-Parol-2026',
     salary: 4000000,
     payment_day: 10,
   };

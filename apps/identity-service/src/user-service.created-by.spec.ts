@@ -49,7 +49,7 @@ const dto = {
   name: 'TEST Partner Market',
   phone_number: '+998887009110',
   username: 'p2_seller_1',
-  password: 'secret',
+  password: 'Test-Parol-2026',
   tariff_home: 0,
   tariff_center: 0,
   default_tariff: 'center',

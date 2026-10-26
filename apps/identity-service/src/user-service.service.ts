@@ -60,6 +60,7 @@ import {
   Status,
   normalizeUzPhone,
   parseUzPhoneSearch,
+  passwordPolicyError,
   rmqSend,
   uzPhoneDigitsLikeSql,
 } from '@app/common';
@@ -739,6 +740,20 @@ export class UserServiceService implements OnModuleInit {
     throw new RpcException(errorRes(message, 404));
   }
 
+  /**
+   * (NDmZMzCP) Yangi parol siyosati (min 8, xodim 10, oddiy parollar
+   * taqiqlangan) — RMQ'da ValidationPipe yo'q, shuning uchun xeshlashdan
+   * OLDIN shu yerda ham. Login'ga TEGMAYDI (mavjud parollar ishlaydi).
+   */
+  private assertPasswordPolicy(
+    password: unknown,
+    role: string | null | undefined,
+    phone?: string | null,
+  ): void {
+    const error = passwordPolicyError(password, { role, phone });
+    if (error) this.badRequest(error);
+  }
+
   private badRequest(message: string): never {
     throw new RpcException(errorRes(message, 400));
   }
@@ -1337,6 +1352,7 @@ export class UserServiceService implements OnModuleInit {
 
     await this.ensurePhoneUnique(dto.phone_number);
 
+    this.assertPasswordPolicy(dto.password, Roles.ADMIN, dto.phone_number);
     const hashedPassword = await this.bcryptEncryption.encrypt(dto.password);
 
     const admin = this.users.create({
@@ -1376,6 +1392,11 @@ export class UserServiceService implements OnModuleInit {
 
     await this.ensurePhoneUnique(dto.phone_number);
 
+    this.assertPasswordPolicy(
+      dto.password,
+      Roles.REGISTRATOR,
+      dto.phone_number,
+    );
     const hashedPassword = await this.bcryptEncryption.encrypt(dto.password);
 
     const registrator = this.users.create({
@@ -1431,6 +1452,7 @@ export class UserServiceService implements OnModuleInit {
 
     await this.ensurePhoneUnique(dto.phone_number);
 
+    this.assertPasswordPolicy(dto.password, Roles.LOGIST, dto.phone_number);
     const hashedPassword = await this.bcryptEncryption.encrypt(dto.password);
 
     const logist = this.users.create({
@@ -1488,6 +1510,7 @@ export class UserServiceService implements OnModuleInit {
 
     await this.ensurePhoneUnique(phoneNumber);
 
+    this.assertPasswordPolicy(password, Roles.INVESTOR, phoneNumber);
     const hashedPassword = await this.bcryptEncryption.encrypt(password);
 
     const investorUser = this.users.create({
@@ -1609,7 +1632,12 @@ export class UserServiceService implements OnModuleInit {
 
     let passwordChanged = false;
     if (dto.password) {
+      // (NDmZMzCP) Yangi parol — siyosat egasining roli bo'yicha (xodim 10).
+      this.assertPasswordPolicy(dto.password, admin.role, admin.phone_number);
       admin.password = await this.bcryptEncryption.encrypt(dto.password);
+      // (NDmZMzCP) O'zi almashtirdi — «parolni almashtiring» bayrog'i
+      // tushadi; admin boshqa odamga o'rnatgan parol esa bayroqni o'zgartirmaydi.
+      if (requesterIsSelf) admin.must_change_password = false;
       // RBAC-09: parol almashtirilsa (o'g'irlangan telefon, ishdan
       // bo'shatilgan kuryer) boshqa qurilmalar DARHOL chiqariladi.
       // (Elchi Pochta #3, 2026-10-23) Qaysi sessiya qolishi — saqlashdan
@@ -1795,6 +1823,8 @@ export class UserServiceService implements OnModuleInit {
           requester,
         })
       : null;
+    // (NDmZMzCP) Bloklash / telefon almashishi — sessiyalar DARHOL yopiladi.
+    await this.revokeSessionsAfterSecurityChange(saved, epochBefore);
     void this.syncUserToSearch(saved);
     await this.activityLog.logChange({
       entity_type: 'User',
@@ -1927,6 +1957,38 @@ export class UserServiceService implements OnModuleInit {
    * `revoked_session_ids` (gateway o'z keshida darhol «yopilgan» deb
    * belgilaydi va javobdan OLIB TASHLAYDI).
    */
+  /**
+   * (NDmZMzCP, 2026-10-26) SAQLANGANDAN KEYIN: xavfsizlik hodisasi
+   * (`invalidateAllSessions` — bloklash, rol / telefon almashishi,
+   * o'chirish) epoch'ni oshirgan bo'lsa, ochiq sessiyalar shu zahoti
+   * `security_reset` bilan yopiladi va gateway'ga e'lon qilinadi (keshda
+   * «yopilgan», socketlar `auth:session_revoked` olib uziladi) — soatlik
+   * tozalashni kutmaydi. `epochBefore` berilsa va epoch o'zgarmagan bo'lsa —
+   * hech narsa (oddiy tahrir). Parol almashtirish yo'li o'zgarmagan
+   * (`revokeSessionsAfterPasswordChange` avval yopadi — `password_changed`
+   * sababi saqlanadi). Xato biznes amalini bekor QILMAYDI: gateway
+   * `session_state` baribir epoch bo'yicha ≤ 30 soniyada rad etadi.
+   */
+  private async revokeSessionsAfterSecurityChange(
+    user: Pick<User, 'id' | 'session_epoch'>,
+    epochBefore?: number,
+  ): Promise<void> {
+    if (!this.authSessions) return;
+    if (
+      typeof epochBefore === 'number' &&
+      (Number(user.session_epoch) || 0) === epochBefore
+    ) {
+      return;
+    }
+    try {
+      await this.authSessions.revokeStaleEpoch(String(user.id));
+    } catch (error) {
+      this.logger.warn(
+        `Xavfsizlik hodisasidan keyin sessiyalar yopilmadi (user ${user.id}): ${describeSagaError(error)} — gateway session_state baribir epoch bo'yicha rad etadi`,
+      );
+    }
+  }
+
   private passwordChangeReply(revokedSessionIds: string[] | null): {
     sessions_revoked?: number;
     revoked_session_ids?: string[];
@@ -2353,6 +2415,8 @@ export class UserServiceService implements OnModuleInit {
     invalidateAllSessions(user);
 
     const saved = await this.users.save(user);
+    // (NDmZMzCP) Rol almashdi — eski rol tokenlari DARHOL to'xtaydi.
+    await this.revokeSessionsAfterSecurityChange(saved);
     // Qidiruv indeksi rol bo'yicha kalitlangan: eski rol yozuvi olib
     // tashlanadi, yangisi yoziladi (ikkalasi ham best-effort).
     void this.removeUserFromSearch({ ...saved, role: previousRole } as User);
@@ -2491,6 +2555,7 @@ export class UserServiceService implements OnModuleInit {
     invalidateAllSessions(admin);
 
     const saved = await this.users.save(admin);
+    await this.revokeSessionsAfterSecurityChange(saved);
     void this.removeUserFromSearch(saved);
 
     // fix3b (CODE-07): o'chirilgan menejer/registratorning faol branch_users
@@ -3056,6 +3121,7 @@ export class UserServiceService implements OnModuleInit {
     await this.ensurePhoneUnique(dto.phone_number);
     await this.ensureUsernameUnique(dto.username);
 
+    this.assertPasswordPolicy(dto.password, Roles.MARKET, dto.phone_number);
     const hashedPassword = await this.bcryptEncryption.encrypt(dto.password);
 
     const market = this.users.create({
@@ -3128,6 +3194,7 @@ export class UserServiceService implements OnModuleInit {
         : await this.resolveUserDistrictId(dto.district_id, dto.region_id);
     await this.ensurePhoneUnique(dto.phone_number);
 
+    this.assertPasswordPolicy(dto.password, Roles.COURIER, dto.phone_number);
     const hashedPassword = await this.bcryptEncryption.encrypt(dto.password);
 
     const courier = this.users.create({
@@ -3249,6 +3316,7 @@ export class UserServiceService implements OnModuleInit {
 
     await this.ensurePhoneUnique(dto.phone_number);
 
+    this.assertPasswordPolicy(dto.password, Roles.MANAGER, dto.phone_number);
     const hashedPassword = await this.bcryptEncryption.encrypt(dto.password);
 
     const manager = this.users.create({
@@ -3557,6 +3625,7 @@ export class UserServiceService implements OnModuleInit {
     const defaultOperatorPhone = this.resolveDefaultOperatorPhone(
       dto.default_operator_phone,
     );
+    const marketEpochBefore = Number(market.session_epoch) || 0;
 
     if (dto.phone_number && dto.phone_number !== market.phone_number) {
       await this.ensurePhoneUnique(dto.phone_number, id);
@@ -3566,7 +3635,15 @@ export class UserServiceService implements OnModuleInit {
     }
 
     if (dto.password) {
+      this.assertPasswordPolicy(
+        dto.password,
+        Roles.MARKET,
+        market.phone_number,
+      );
       market.password = await this.bcryptEncryption.encrypt(dto.password);
+      if (this.isSelfRequester(requester, market.id)) {
+        market.must_change_password = false;
+      }
       // RBAC-09: yangi parol — eski qurilmalar endi refresh qila olmaydi.
       // (Elchi Pochta #3, 2026-10-23) Bu RPC'da joriy sessiya (`sid`) yo'q —
       // HAMMASI; saqlangandan keyin ular `password_changed` bilan aniq
@@ -3664,6 +3741,8 @@ export class UserServiceService implements OnModuleInit {
           requester,
         })
       : null;
+    // (NDmZMzCP) Bloklash / telefon almashishi — sessiyalar DARHOL yopiladi.
+    await this.revokeSessionsAfterSecurityChange(saved, marketEpochBefore);
     void this.syncUserToSearch(saved);
     await this.activityLog.logChange({
       entity_type: 'User',
@@ -3817,6 +3896,7 @@ export class UserServiceService implements OnModuleInit {
     invalidateAllSessions(market);
 
     const saved = await this.users.save(market);
+    await this.revokeSessionsAfterSecurityChange(saved);
     void this.removeUserFromSearch(saved);
 
     await this.activityLog.log({
@@ -4283,6 +4363,10 @@ export class UserServiceService implements OnModuleInit {
       invalidateAllSessions(user);
     }
     const saved = await this.users.save(user);
+    // (NDmZMzCP) Bloklandi — access token / socket DARHOL to'xtaydi.
+    if (status !== Status.ACTIVE) {
+      await this.revokeSessionsAfterSecurityChange(saved);
+    }
     void this.syncUserToSearch(saved);
 
     await this.activityLog.log({
@@ -5303,6 +5387,7 @@ export class UserServiceService implements OnModuleInit {
     password: string,
     phone_number?: string,
   ) {
+    this.assertPasswordPolicy(password, Roles.CUSTOMER, phone_number);
     await this.ensureUsernameUnique(username);
     await this.ensurePhoneUnique(phone_number ?? username);
 
@@ -5535,6 +5620,7 @@ export class UserServiceService implements OnModuleInit {
       await this.ensurePhoneUnique(rawPhone);
     }
 
+    this.assertPasswordPolicy(password, Roles.MARKET_OPERATOR, rawPhone);
     const hashedPassword = await this.bcryptEncryption.encrypt(password);
     const operator = this.users.create({
       name,
@@ -5684,6 +5770,7 @@ export class UserServiceService implements OnModuleInit {
     invalidateAllSessions(operator);
 
     const saved = await this.users.save(operator);
+    await this.revokeSessionsAfterSecurityChange(saved);
     void this.removeUserFromSearch(saved);
     await this.activityLog.log({
       entity_type: 'User',
@@ -5869,6 +5956,9 @@ export class UserServiceService implements OnModuleInit {
       invalidateAllSessions(operator);
     }
     const saved = await this.users.save(operator);
+    if (next !== Status.ACTIVE) {
+      await this.revokeSessionsAfterSecurityChange(saved);
+    }
     void this.syncUserToSearch(saved);
     await this.activityLog.log({
       entity_type: 'User',

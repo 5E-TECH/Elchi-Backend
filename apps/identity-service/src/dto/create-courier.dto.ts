@@ -1,6 +1,5 @@
 import {
   Max,
-  MinLength,
   IsNotEmpty,
   IsNumber,
   IsOptional,
@@ -10,6 +9,7 @@ import {
   Min,
 } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { IsPasswordPolicy, Roles } from '@app/common';
 
 export class CreateCourierDto {
   @ApiProperty({
@@ -30,10 +30,10 @@ export class CreateCourierDto {
   @IsPhoneNumber('UZ')
   phone_number: string;
 
-  @ApiProperty({ example: 'secret123' })
+  @ApiProperty({ example: 'Kuchli-Parol-2026' })
   @IsNotEmpty()
   @IsString()
-  @MinLength(4)
+  @IsPasswordPolicy(Roles.COURIER)
   password: string;
 
   @ApiPropertyOptional({

@@ -1,9 +1,16 @@
-import { Injectable, Optional, UnauthorizedException } from '@nestjs/common';
+import {
+  Injectable,
+  Optional,
+  ServiceUnavailableException,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
 import { ConfigService } from '@nestjs/config';
 import { requestContext } from '@app/common';
 import {
+  SESSION_CHECK_UNAVAILABLE,
+  SESSION_CHECK_UNAVAILABLE_MESSAGE,
   SessionRevocationService,
   sessionIdClaim,
 } from './session-revocation.service';
@@ -58,14 +65,23 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     // tomonidan yopilgan yoki logout qilingan bo'lsa access token muddati
     // tugashini kutmay 401 (FE refresh qiladi → u ham 401 → login sahifasi).
     // `sid` siz tokenlar (Telegram Mini App, bot aktori, eski) tekshirilmaydi.
-    // identity javob bermasa — ruxsat (fail open, SessionRevocationService).
+    // (NDmZMzCP) Sessiya endi TO'LIQ tekshiriladi (bloklangan / roli
+    // almashgan foydalanuvchi ham 401). identity javob bermasa — FAIL
+    // CLOSED: 503 `SESSION_CHECK_UNAVAILABLE` (401 emas — FE chiqarib
+    // yubormaydi, foydalanuvchi qayta urinadi).
     const sessionId = sessionIdClaim(payload.sid);
-    if (
-      this.revocation &&
-      sessionId &&
-      (await this.revocation.isRevoked(String(payload.sub), sessionId))
-    ) {
-      throw new UnauthorizedException('Session revoked');
+    if (this.revocation && sessionId) {
+      const state = await this.revocation.state(String(payload.sub), sessionId);
+      if (state === 'revoked') {
+        throw new UnauthorizedException('Session revoked');
+      }
+      if (state === 'unknown') {
+        throw new ServiceUnavailableException({
+          statusCode: 503,
+          message: SESSION_CHECK_UNAVAILABLE_MESSAGE,
+          code: SESSION_CHECK_UNAVAILABLE,
+        });
+      }
     }
 
     const roles = this.normalizeRoles(payload.roles);

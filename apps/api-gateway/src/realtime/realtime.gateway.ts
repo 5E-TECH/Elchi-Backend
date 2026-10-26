@@ -11,8 +11,11 @@ import {
 } from '@nestjs/websockets';
 import { Server, Socket } from 'socket.io';
 import {
+  SESSION_CHECK_UNAVAILABLE,
+  SESSION_CHECK_UNAVAILABLE_MESSAGE,
   SessionKickReason,
   SessionRevocationService,
+  type SessionState,
   sessionIdClaim,
 } from '../auth/session-revocation.service';
 
@@ -59,7 +62,7 @@ export const branchRoleRoom = (branchId: string, role: string): string =>
 /** Ulanish rad etilganda `error` hodisasi (keyin server uzadi). */
 export interface RealtimeConnectError {
   message: string;
-  code: 'UNAUTHORIZED' | 'SESSION_REVOKED';
+  code: 'UNAUTHORIZED' | 'SESSION_REVOKED' | typeof SESSION_CHECK_UNAVAILABLE;
 }
 
 /**
@@ -139,13 +142,26 @@ export class RealtimeGateway
       // `role:` xonalari — tekshiruvdan keyin (yopilgan sessiya bildirishnoma
       // olmasin).
       await client.join(sessionRoom(user.sid));
-      if (await this.isSessionRevoked(user.sub, user.sid)) {
+      const state = await this.sessionState(user.sub, user.sid);
+      if (state === 'revoked') {
         this.reject(client, {
           message: 'Session revoked',
           code: 'SESSION_REVOKED',
         });
         this.logger.log(
           `socket rejected: user=${user.sub} session revoked (${user.sid})`,
+        );
+        return;
+      }
+      // (NDmZMzCP) identity javob bermadi — fail closed: socket ulanmaydi,
+      // lekin `SESSION_REVOKED` EMAS (mijoz chiqarib yuborilmaydi).
+      if (state === 'unknown') {
+        this.reject(client, {
+          message: SESSION_CHECK_UNAVAILABLE_MESSAGE,
+          code: SESSION_CHECK_UNAVAILABLE,
+        });
+        this.logger.warn(
+          `socket rejected: user=${user.sub} session check unavailable (${user.sid})`,
         );
         return;
       }
@@ -183,16 +199,19 @@ export class RealtimeGateway
     client.disconnect(true);
   }
 
-  /** HTTP `JwtStrategy` bilan bir xil: identity javob bermasa — ruxsat. */
-  private async isSessionRevoked(
+  /**
+   * HTTP `JwtStrategy` bilan bir xil. (NDmZMzCP) identity javob bermasa /
+   * xato — `unknown` (fail closed: socket rad etiladi).
+   */
+  private async sessionState(
     userId: string,
     sessionId: string,
-  ): Promise<boolean> {
-    if (!this.revocation) return false;
+  ): Promise<SessionState> {
+    if (!this.revocation) return 'active';
     try {
-      return await this.revocation.isRevoked(userId, sessionId);
+      return await this.revocation.state(userId, sessionId);
     } catch {
-      return false;
+      return 'unknown';
     }
   }
 

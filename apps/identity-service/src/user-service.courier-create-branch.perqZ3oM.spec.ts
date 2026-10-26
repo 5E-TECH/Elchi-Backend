@@ -61,7 +61,7 @@ const courierDto = (over: Row = {}) =>
   ({
     name: 'TEST Kuryer',
     phone_number: '+998903001288',
-    password: '0990',
+    password: 'Test-Parol-2026',
     tariff_home: 15000,
     tariff_center: 10000,
     region_id: '3',

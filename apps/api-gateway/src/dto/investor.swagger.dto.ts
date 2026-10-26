@@ -1,4 +1,4 @@
-import { Status } from '@app/common';
+import { Status, IsPasswordPolicy, Roles } from '@app/common';
 import { ApiProperty, ApiPropertyOptional, OmitType } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
 import {
@@ -239,8 +239,12 @@ export class CreateInvestorUserRequestDto {
   @IsPhoneNumber('UZ')
   phone_number!: string;
 
-  @ApiProperty({ example: 'strongPassword123', minLength: 6 })
+  @ApiProperty({
+    example: 'Kuchli-Parol-2026',
+    minLength: 8,
+    description: 'Kamida 8 belgi (xodim — 10), oddiy parollar taqiqlangan',
+  })
   @IsString()
-  @MinLength(6)
+  @IsPasswordPolicy(Roles.INVESTOR)
   password!: string;
 }

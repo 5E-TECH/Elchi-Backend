@@ -10,7 +10,7 @@ import {
   Min,
   MinLength,
 } from 'class-validator';
-import { Commission_type } from '@app/common';
+import { Commission_type, IsPasswordPolicy, Roles } from '@app/common';
 
 /**
  * Market O'ZI yaratadigan operator (i76gGjyq). `market_id` va `role` bu yerda
@@ -29,7 +29,7 @@ export class CreateMarketOperatorDto {
 
   @IsNotEmpty()
   @IsString()
-  @MinLength(4)
+  @IsPasswordPolicy(Roles.MARKET_OPERATOR)
   password: string;
 
   /**
