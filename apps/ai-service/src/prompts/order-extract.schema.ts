@@ -1,4 +1,8 @@
-import type { RawOrderExtraction } from '@app/common';
+import {
+  AI_EXTRACT_WARNING_FIELDS,
+  AI_EXTRACT_WARNING_REASONS,
+  type RawOrderExtraction,
+} from '@app/common';
 
 /**
  * Buyurtma ekstraksiyasi JSON sxemasi (yxwpN5h5, 32fNx0Ci; C2/C12).
@@ -11,7 +15,10 @@ import type { RawOrderExtraction } from '@app/common';
  *   soxta ID qaytarsa u BOSHQA haqiqiy tumanga/mahsulotga tushib ketadi va
  *   xato jimgina o'tadi. ID'ni faqat KOD (rezolver) qo'yadi.
  * - Har obyekt `additionalProperties:false`, hamma maydon `required`,
- *   ixtiyoriylik faqat `['string','null']` tip massivi bilan.
+ *   ixtiyoriylik faqat `anyOf: [{type:X}, {type:'null'}]` bilan (J3hEDtFN —
+ *   `type:['string','null']` tip massivi endi YO'Q: Anthropic structured
+ *   outputs uni `enum` bilan birga rad etgan, 46a4a27; bitta shakl — bitta
+ *   qoida).
  * - minimum / maximum / minLength YO'Q: structured outputs ularni qo'llamaydi
  *   (so'rov 400 bilan qaytadi). Son chegaralari (quantity 1..1000, narx >0,
  *   30 buyurtma, 50 mahsulot) sanitize va ai-confirm DTO'sida tekshiriladi.
@@ -40,8 +47,29 @@ export const ORDER_EXTRACT_ITEM_SCHEMA: Record<string, unknown> = deepFreeze({
   required: ['name', 'quantity'],
 });
 
+/** Nullable maydon: `X` YOKI `null` (anyOf — J3hEDtFN). */
+function nullable(schema: Record<string, unknown>): Record<string, unknown> {
+  return { anyOf: [schema, { type: 'null' }] };
+}
+
 /**
- * 13 ta maydon — `RawOrderExtraction` (libs/common/src/ai) bilan
+ * J3hEDtFN: noaniq maydon ogohlantirishi — faqat enum (erkin matn YO'Q:
+ * injection/PII bu kanal orqali UI'ga chiqmasin).
+ */
+export const ORDER_EXTRACT_WARNING_SCHEMA: Record<string, unknown> = deepFreeze(
+  {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      field: { type: 'string', enum: [...AI_EXTRACT_WARNING_FIELDS] },
+      reason: { type: 'string', enum: [...AI_EXTRACT_WARNING_REASONS] },
+    },
+    required: ['field', 'reason'],
+  },
+);
+
+/**
+ * 14 ta maydon — `RawOrderExtraction` (libs/common/src/ai) bilan
  * KOMPILYATSIYA darajasida bog'langan: tipga maydon qo'shilsa yoki
  * o'chirilsa, bu obyekt tsc'dan o'tmaydi. Kalitlar tartibi = `required`
  * tartibi (sxema JSON'i deterministik).
@@ -50,34 +78,34 @@ const ORDER_PROPERTIES: Record<
   keyof RawOrderExtraction,
   Record<string, unknown>
 > = {
-  customer_name: { type: ['string', 'null'] },
-  phone_number: { type: ['string', 'null'] },
-  extra_number: { type: ['string', 'null'] },
-  region_name: { type: ['string', 'null'] },
-  district_name: { type: ['string', 'null'] },
-  address: { type: ['string', 'null'] },
-  full_address: { type: ['string', 'null'] },
+  customer_name: nullable({ type: 'string' }),
+  phone_number: nullable({ type: 'string' }),
+  extra_number: nullable({ type: 'string' }),
+  region_name: nullable({ type: 'string' }),
+  district_name: nullable({ type: 'string' }),
+  address: nullable({ type: 'string' }),
+  full_address: nullable({ type: 'string' }),
   items: { type: 'array', items: ORDER_EXTRACT_ITEM_SCHEMA },
-  total_price: { type: ['number', 'null'] },
-  comment: { type: ['string', 'null'] },
+  total_price: nullable({ type: 'number' }),
+  comment: nullable({ type: 'string' }),
   // Elchi `Where_deliver` enum'i (libs/common/enums/index.ts: CENTER/ADDRESS) —
   // model boshqa qiymat qaytara olmaydi; null = matnda aytilmagan.
   // ⚠️ `anyOf` SHART: Anthropic strukturaviy-chiqishi `type:['string','null']`
   // + `enum` birikmasini RAD etadi ("Enum value 'center' does not match declared
   // type ['string','null']"). Nullable-enum uchun yagona qabul qilinadigan shakl
   // — string-enum YOKI null (jonli API bilan tasdiqlangan).
-  where_deliver: {
-    anyOf: [{ type: 'string', enum: ['center', 'address'] }, { type: 'null' }],
-  },
+  where_deliver: nullable({ type: 'string', enum: ['center', 'address'] }),
   is_replacement: { type: 'boolean' },
-  operator: { type: ['string', 'null'] },
+  operator: nullable({ type: 'string' }),
+  // J3hEDtFN: noaniq maydonlar (taxmin o'rniga null + belgi).
+  warnings: { type: 'array', items: ORDER_EXTRACT_WARNING_SCHEMA },
 };
 
-/** Sxemadagi 13 ta required maydon nomi (sxema bilan bir xil tartibda). */
+/** Sxemadagi 14 ta required maydon nomi (sxema bilan bir xil tartibda). */
 export const ORDER_EXTRACT_FIELDS: ReadonlyArray<keyof RawOrderExtraction> =
   Object.freeze(Object.keys(ORDER_PROPERTIES) as (keyof RawOrderExtraction)[]);
 
-/** Bitta buyurtma obyekti — 13 ta required, nullable maydon. */
+/** Bitta buyurtma obyekti — 14 ta required maydon. */
 export const ORDER_EXTRACT_ORDER_SCHEMA: Record<string, unknown> = deepFreeze({
   type: 'object',
   additionalProperties: false,

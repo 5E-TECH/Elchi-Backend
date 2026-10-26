@@ -1,0 +1,40 @@
+{
+  "id": "multi-numbered-two",
+  "category": [
+    "multi_order"
+  ],
+  "source": "synthetic",
+  "input": {
+    "text": "1. Malika 90 000 11 22 Andijon Xo'jaobod, ko'ylak 2 ta 240 ming\n2. Javlon 91 000 33 44 Andijon Asaka, shim 1 ta 150 ming"
+  },
+  "expected": {
+    "orders": [
+      {
+        "customer_name": "Malika",
+        "phone_number": "+998900001122",
+        "region_name": "Andijon",
+        "district_name": "Xo'jaobod",
+        "items": [
+          {
+            "name": "ko'ylak",
+            "quantity": 2
+          }
+        ],
+        "total_price": 240000
+      },
+      {
+        "customer_name": "Javlon",
+        "phone_number": "+998910003344",
+        "region_name": "Andijon",
+        "district_name": "Asaka",
+        "items": [
+          {
+            "name": "shim",
+            "quantity": 1
+          }
+        ],
+        "total_price": 150000
+      }
+    ]
+  }
+}

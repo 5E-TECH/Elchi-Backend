@@ -1,0 +1,38 @@
+{
+  "id": "multi-one-customer-many-items",
+  "prompt_version": "2026-10-26.1",
+  "model": "claude-sonnet-5",
+  "source": "seed",
+  "recorded_at": "1970-01-01T00:00:00.000Z",
+  "usage": null,
+  "latency_ms": null,
+  "response": {
+    "orders": [
+      {
+        "customer_name": "Nilufar",
+        "phone_number": "[TEL_1]",
+        "extra_number": null,
+        "region_name": "Navoiy",
+        "district_name": "Navoiy",
+        "address": null,
+        "full_address": null,
+        "items": [
+          {
+            "name": "atir",
+            "quantity": 1
+          },
+          {
+            "name": "krem",
+            "quantity": 2
+          }
+        ],
+        "total_price": 400000,
+        "comment": null,
+        "where_deliver": null,
+        "is_replacement": false,
+        "operator": null,
+        "warnings": []
+      }
+    ]
+  }
+}

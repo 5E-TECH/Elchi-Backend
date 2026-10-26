@@ -1,0 +1,28 @@
+{
+  "id": "deliver-pochtadan",
+  "category": [
+    "deliver_type"
+  ],
+  "source": "synthetic",
+  "input": {
+    "text": "Yulduz 95 000 51 62 Jizzax Forish, shampun 3 ta 120 ming, pochtadan o'zi olib ketadi"
+  },
+  "expected": {
+    "orders": [
+      {
+        "customer_name": "Yulduz",
+        "phone_number": "+998950005162",
+        "region_name": "Jizzax",
+        "district_name": "Forish",
+        "items": [
+          {
+            "name": "shampun",
+            "quantity": 3
+          }
+        ],
+        "total_price": 120000,
+        "where_deliver": "center"
+      }
+    ]
+  }
+}

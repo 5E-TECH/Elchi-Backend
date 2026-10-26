@@ -1,0 +1,29 @@
+{
+  "id": "landmark-is-address",
+  "category": [
+    "comment_vs_address"
+  ],
+  "source": "synthetic",
+  "input": {
+    "text": "Otabek 99 000 84 95 Andijon Xo'jaobod, mo'ljal: 5-maktab yonida, oyna 1 ta 230 ming"
+  },
+  "expected": {
+    "orders": [
+      {
+        "customer_name": "Otabek",
+        "phone_number": "+998990008495",
+        "region_name": "Andijon",
+        "district_name": "Xo'jaobod",
+        "items": [
+          {
+            "name": "oyna",
+            "quantity": 1
+          }
+        ],
+        "total_price": 230000,
+        "address": "5-maktab yonida",
+        "comment": null
+      }
+    ]
+  }
+}

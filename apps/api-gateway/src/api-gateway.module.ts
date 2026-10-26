@@ -68,6 +68,7 @@ import { AiStatusPoller } from './ai/ai-status.poller';
 // (KwodkKWY) POST /csp-report — brauzer CSP buzilish hisobotlari (@Public).
 import { CspReportController } from './csp-report/csp-report.controller';
 import type { StringValue } from 'ms';
+import { AI_IMAGE_STORE, AiImageStore } from '@app/common/ai/ai-image-store';
 
 @Module({
   imports: [
@@ -199,6 +200,13 @@ import type { StringValue } from 'ms';
     TelegramIdThrottlerGuard,
     // /health va ai-availability uchun AI holati keshi (30s so'rov, RMQ kutilmaydi).
     AiStatusPoller,
+    // WHMAIqyo #3: ai-parse rasmlari uchun vaqtinchalik saqlov (MinIO, TTL
+    // 1 soat); MINIO_* yo'q bo'lsa null — base64 yo'li.
+    {
+      provide: AI_IMAGE_STORE,
+      inject: [ConfigService],
+      useFactory: (config: ConfigService) => AiImageStore.fromConfig(config),
+    },
     RealtimeGateway,
     AuditEnrichmentService,
     // 4BftLLnc — logistning o'z viloyatlari (regions.logist_id = me), qisqa

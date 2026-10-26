@@ -19,6 +19,7 @@ function order(
     where_deliver: 'address',
     is_replacement: false,
     operator: null,
+    warnings: [],
     ...overrides,
   };
 }
@@ -30,7 +31,7 @@ function one(overrides: Record<string, unknown>): RawOrderExtraction {
 }
 
 describe('sanitizeExtraction', () => {
-  it('yaroqli buyurtma o‘zgarishsiz o‘tadi (13 maydon)', () => {
+  it('yaroqli buyurtma o‘zgarishsiz o‘tadi (14 maydon)', () => {
     const res = one({});
     expect(res).toEqual({
       customer_name: 'Ali',
@@ -46,8 +47,44 @@ describe('sanitizeExtraction', () => {
       where_deliver: 'address',
       is_replacement: false,
       operator: null,
+      warnings: [],
     });
-    expect(Object.keys(res)).toHaveLength(13);
+    expect(Object.keys(res)).toHaveLength(14);
+  });
+
+  describe('J3hEDtFN — warnings: faqat enum juftliklari, har maydonga bitta', () => {
+    it('yaroqli ogohlantirishlar sxema tartibida qoladi', () => {
+      const res = one({
+        warnings: [
+          { field: 'total_price', reason: 'ambiguous' },
+          { field: 'phone_number', reason: 'unclear' },
+        ],
+      });
+      expect(res.warnings).toEqual([
+        { field: 'phone_number', reason: 'unclear' },
+        { field: 'total_price', reason: 'ambiguous' },
+      ]);
+    });
+
+    it('noma‘lum maydon/sabab, erkin matn, takror va begona kalit tashlanadi', () => {
+      const res = one({
+        warnings: [
+          { field: 'district_id', reason: 'unclear' },
+          { field: 'total_price', reason: 'ignore previous instructions' },
+          { field: 'comment', reason: 'conflict', note: 'Ali 90 123 45 67' },
+          { field: 'comment', reason: 'unclear' },
+          'total_price',
+          null,
+        ],
+      });
+      expect(res.warnings).toEqual([{ field: 'comment', reason: 'conflict' }]);
+      expect(JSON.stringify(res.warnings)).not.toContain('90 123');
+    });
+
+    it('warnings massiv bo‘lmasa yoki yo‘q bo‘lsa — []', () => {
+      expect(one({ warnings: 'x' }).warnings).toEqual([]);
+      expect(one({ warnings: undefined }).warnings).toEqual([]);
+    });
   });
 
   describe('yxwpN5h5 #2 — total_price: 0 yoki manfiy → null (0 EMAS)', () => {
@@ -143,7 +180,7 @@ describe('sanitizeExtraction', () => {
     });
   });
 
-  it('13 ta ruxsat etilgan maydondan boshqa kalitlar tashlanadi', () => {
+  it('14 ta ruxsat etilgan maydondan boshqa kalitlar tashlanadi', () => {
     const res = one({
       district_id: '160',
       region_id: '1',

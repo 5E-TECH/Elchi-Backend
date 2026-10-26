@@ -338,6 +338,7 @@ export class ClaudeService implements OnApplicationBootstrap {
 
         calls += 1;
         let raw: unknown;
+        const callStartedAt = Date.now();
         try {
           raw = await client.messages.create(body, { timeout });
         } catch (err) {
@@ -348,6 +349,7 @@ export class ClaudeService implements OnApplicationBootstrap {
           };
         }
 
+        const latencyMs = Date.now() - callStartedAt;
         const response = (raw ?? {}) as AnthropicResponseLike;
         const usage = this.readUsage(response.usage);
         const stopReason =
@@ -393,6 +395,7 @@ export class ClaudeService implements OnApplicationBootstrap {
           inputChars,
           inputSha256,
           imageCount: images.length,
+          latencyMs,
         };
         this.emitUsage(record);
         await this.reportSpend(record);
@@ -402,7 +405,8 @@ export class ClaudeService implements OnApplicationBootstrap {
             `input_tokens=${usage.input_tokens} ` +
             `output_tokens=${usage.output_tokens} ` +
             `cache_creation_input_tokens=${usage.cache_creation_input_tokens} ` +
-            `cache_read_input_tokens=${usage.cache_read_input_tokens}`,
+            `cache_read_input_tokens=${usage.cache_read_input_tokens} ` +
+            `latency_ms=${latencyMs}`,
         );
 
         if (outcome === 'ok') {

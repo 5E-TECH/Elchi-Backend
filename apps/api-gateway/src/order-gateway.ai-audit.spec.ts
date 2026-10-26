@@ -312,11 +312,15 @@ describe('ai-confirm — AI audit metadata (vncdmXOy)', () => {
           item_index: 0,
           order_id: res.data.results[0].order_id,
           edited_fields: [],
+          // J3hEDtFN #4: hech narsa o'zgarmagan — tuzatish yo'q.
+          field_corrections: null,
         },
         {
           item_index: 1,
           order_id: res.data.results[1].order_id,
           edited_fields: ['total_price'],
+          // J3hEDtFN #4: AI taklifi (100001) va operator qiymati (5).
+          field_corrections: { total_price: { ai: 100001, final: 5 } },
         },
       ],
       confirmed_by: MARKET_ID,

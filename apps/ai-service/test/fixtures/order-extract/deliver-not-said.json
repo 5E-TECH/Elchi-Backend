@@ -1,0 +1,28 @@
+{
+  "id": "deliver-not-said",
+  "category": [
+    "deliver_type"
+  ],
+  "source": "synthetic",
+  "input": {
+    "text": "Munisa 98 000 73 84 Navoiy Nurota Mustaqillik ko'chasi 3-uy, lagan 2 ta 140 ming"
+  },
+  "expected": {
+    "orders": [
+      {
+        "customer_name": "Munisa",
+        "phone_number": "+998980007384",
+        "region_name": "Navoiy",
+        "district_name": "Nurota",
+        "items": [
+          {
+            "name": "lagan",
+            "quantity": 2
+          }
+        ],
+        "total_price": 140000,
+        "where_deliver": null
+      }
+    ]
+  }
+}

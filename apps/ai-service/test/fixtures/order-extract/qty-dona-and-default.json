@@ -1,0 +1,31 @@
+{
+  "id": "qty-dona-and-default",
+  "category": [
+    "quantity"
+  ],
+  "source": "synthetic",
+  "input": {
+    "text": "Ilhom 90 000 17 28 Surxondaryo Termiz, soat 2 dona va kamar, jami 500 ming"
+  },
+  "expected": {
+    "orders": [
+      {
+        "customer_name": "Ilhom",
+        "phone_number": "+998900001728",
+        "region_name": "Surxondaryo",
+        "district_name": "Termiz",
+        "items": [
+          {
+            "name": "soat",
+            "quantity": 2
+          },
+          {
+            "name": "kamar",
+            "quantity": 1
+          }
+        ],
+        "total_price": 500000
+      }
+    ]
+  }
+}

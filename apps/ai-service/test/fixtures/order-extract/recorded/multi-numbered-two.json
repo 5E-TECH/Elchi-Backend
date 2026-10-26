@@ -1,0 +1,55 @@
+{
+  "id": "multi-numbered-two",
+  "prompt_version": "2026-10-26.1",
+  "model": "claude-sonnet-5",
+  "source": "seed",
+  "recorded_at": "1970-01-01T00:00:00.000Z",
+  "usage": null,
+  "latency_ms": null,
+  "response": {
+    "orders": [
+      {
+        "customer_name": "Malika",
+        "phone_number": "[TEL_1]",
+        "extra_number": null,
+        "region_name": "Andijon",
+        "district_name": "Xo'jaobod",
+        "address": null,
+        "full_address": null,
+        "items": [
+          {
+            "name": "ko'ylak",
+            "quantity": 2
+          }
+        ],
+        "total_price": 240000,
+        "comment": null,
+        "where_deliver": null,
+        "is_replacement": false,
+        "operator": null,
+        "warnings": []
+      },
+      {
+        "customer_name": "Javlon",
+        "phone_number": "[TEL_2]",
+        "extra_number": null,
+        "region_name": "Andijon",
+        "district_name": "Asaka",
+        "address": null,
+        "full_address": null,
+        "items": [
+          {
+            "name": "shim",
+            "quantity": 1
+          }
+        ],
+        "total_price": 150000,
+        "comment": null,
+        "where_deliver": null,
+        "is_replacement": false,
+        "operator": null,
+        "warnings": []
+      }
+    ]
+  }
+}

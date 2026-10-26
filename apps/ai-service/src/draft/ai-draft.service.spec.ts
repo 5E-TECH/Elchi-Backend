@@ -6,12 +6,15 @@ import type {
   AiOrderDraftItem,
 } from '../entities/ai-order-draft.entity';
 import {
+  AI_DRAFT_ATTACH_RETRY_DELAYS_MS,
   AI_DRAFT_COST_SQL,
+  AI_DRAFT_ITEM_PURGE_SQL,
   AI_DRAFT_LINK_ITEM_SQL,
   AI_DRAFT_PURGE_SQL,
   AI_DRAFT_TEXT_RETENTION_DAYS,
   AiDraftService,
   aiSourceHash,
+  sanitizeFieldCorrections,
   sanitizeSnapshot,
 } from './ai-draft.service';
 
@@ -167,10 +170,62 @@ describe('AiDraftService (vncdmXOy)', () => {
   });
 
   it('attachPreview faqat o‘z marketining draft’ini yangilaydi', async () => {
-    await service.attachPreview(DRAFT, '121', [snapshot(), { bad: true }]);
+    await expect(
+      service.attachPreview(DRAFT, '121', [snapshot(), { bad: true }]),
+    ).resolves.toEqual({ updated: 1 });
     expect(draftsRepo.update).toHaveBeenCalledWith(
       { id: DRAFT, market_id: '121' },
       expect.objectContaining({ preview_count: 1 }),
+    );
+  });
+
+  it('WHMAIqyo #5: attachPreview bosqich vaqtlarini yozadi (axlat qiymat → null)', async () => {
+    await service.attachPreview(DRAFT, '121', [snapshot()], {
+      extract_ms: 4321.4,
+      preview_ms: -5,
+      total_ms: 'x',
+    });
+    expect(draftsRepo.update).toHaveBeenCalledWith(
+      { id: DRAFT, market_id: '121' },
+      expect.objectContaining({
+        extract_ms: 4321,
+        preview_ms: null,
+        total_ms: null,
+      }),
+    );
+  });
+
+  it('WHMAIqyo #1: qator hali yo‘q (audit fire-and-forget) → fonda qayta urinadi', async () => {
+    const sleeps: number[] = [];
+    (service as unknown as { sleep: (ms: number) => Promise<void> }).sleep = (
+      ms: number,
+    ) => {
+      sleeps.push(ms);
+      return Promise.resolve();
+    };
+    draftsRepo.update
+      .mockResolvedValueOnce({ affected: 0 })
+      .mockResolvedValueOnce({ affected: 0 })
+      .mockResolvedValueOnce({ affected: 1 });
+    await expect(
+      service.attachPreview(DRAFT, '121', [snapshot()]),
+    ).resolves.toEqual({ updated: 0, pending: true });
+    await new Promise((r) => setImmediate(r));
+    expect(draftsRepo.update).toHaveBeenCalledTimes(3);
+    expect(sleeps).toEqual(AI_DRAFT_ATTACH_RETRY_DELAYS_MS.slice(0, 2));
+  });
+
+  it('qayta urinishlar tugasa ham throw yo‘q — faqat WARN', async () => {
+    (service as unknown as { sleep: () => Promise<void> }).sleep = () =>
+      Promise.resolve();
+    draftsRepo.update.mockResolvedValue({ affected: 0 });
+    await service.attachPreview(DRAFT, '121', [snapshot()]);
+    await new Promise((r) => setImmediate(r));
+    expect(draftsRepo.update).toHaveBeenCalledTimes(
+      1 + AI_DRAFT_ATTACH_RETRY_DELAYS_MS.length,
+    );
+    expect(String(warn.mock.calls.at(-1)?.[0])).toContain(
+      'ai_draft_attach_no_row',
     );
   });
 
@@ -232,7 +287,43 @@ describe('AiDraftService (vncdmXOy)', () => {
       '7',
       JSON.stringify(['district_id', 'total_price']),
       450,
+      null,
     ]);
+  });
+
+  it('J3hEDtFN #4: field_corrections oq ro‘yxat bo‘yicha yoziladi', async () => {
+    await service.linkItems(DRAFT, '121', [
+      {
+        item_index: 0,
+        order_id: '10',
+        edited_fields: ['total_price'],
+        field_corrections: {
+          total_price: { ai: 75000, final: 750000 },
+          hacker: { ai: 1, final: 2 },
+          district_id: 'not-an-object',
+        },
+      },
+    ]);
+    const params = (itemsRepo.query.mock.calls[0] as [string, unknown[]])[1];
+    expect(AI_DRAFT_LINK_ITEM_SQL).toContain('field_corrections');
+    expect(params[7]).toBe(
+      JSON.stringify({ total_price: { ai: 75000, final: 750000 } }),
+    );
+  });
+
+  it('sanitizeFieldCorrections: bo‘sh/yaroqsiz → null, juda katta → null', () => {
+    expect(sanitizeFieldCorrections(null)).toBeNull();
+    expect(
+      sanitizeFieldCorrections({ hacker: { ai: 1, final: 2 } }),
+    ).toBeNull();
+    expect(
+      sanitizeFieldCorrections({
+        comment: { ai: 'x'.repeat(30_000), final: 'y' },
+      }),
+    ).toBeNull();
+    expect(
+      sanitizeFieldCorrections({ comment: { ai: 'a', final: undefined } }),
+    ).toEqual({ comment: { ai: 'a', final: null } });
   });
 
   it('NFiXfmq6: narx berilmasa (eski chaqiruvchi) applied_price_uzs NULL, charged 0; takroriy (ON CONFLICT) — 0', async () => {
@@ -315,6 +406,11 @@ describe('AiDraftService (vncdmXOy)', () => {
     ]);
     expect(AI_DRAFT_PURGE_SQL).toContain('source_text = NULL');
     expect(AI_DRAFT_PURGE_SQL).not.toContain('source_hash');
+    // J3hEDtFN #4: operator tuzatishlari (ism/manzil) ham shu muddatda.
+    expect(itemsRepo.query).toHaveBeenCalledWith(AI_DRAFT_ITEM_PURGE_SQL, [
+      AI_DRAFT_TEXT_RETENTION_DAYS,
+    ]);
+    expect(AI_DRAFT_ITEM_PURGE_SQL).toContain('field_corrections = NULL');
   });
 
   it('retention xatosi throw bo‘lmaydi', async () => {

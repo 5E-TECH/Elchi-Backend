@@ -1,0 +1,27 @@
+{
+  "id": "cyr-uz-samarqand-urgut",
+  "category": [
+    "district_typo_cyrillic"
+  ],
+  "source": "synthetic",
+  "input": {
+    "text": "Шоҳруҳ 91 000 40 51 Самарқанд вилояти Ургут тумани, гилам 1 та 700 минг"
+  },
+  "expected": {
+    "orders": [
+      {
+        "customer_name": "Шоҳруҳ",
+        "phone_number": "+998910004051",
+        "region_name": "Samarqand",
+        "district_name": "Urgut",
+        "items": [
+          {
+            "name": "гилам",
+            "quantity": 1
+          }
+        ],
+        "total_price": 700000
+      }
+    ]
+  }
+}

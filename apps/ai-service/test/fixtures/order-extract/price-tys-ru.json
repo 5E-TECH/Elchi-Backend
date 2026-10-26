@@ -1,0 +1,27 @@
+{
+  "id": "price-tys-ru",
+  "category": [
+    "price_words"
+  ],
+  "source": "synthetic",
+  "input": {
+    "text": "Ирина 97 000 96 07 Наманган, Чуст, куртка 1 шт 200 тыс"
+  },
+  "expected": {
+    "orders": [
+      {
+        "customer_name": "Ирина",
+        "phone_number": "+998970009607",
+        "region_name": "Namangan",
+        "district_name": "Chust",
+        "items": [
+          {
+            "name": "куртка",
+            "quantity": 1
+          }
+        ],
+        "total_price": 200000
+      }
+    ]
+  }
+}

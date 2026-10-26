@@ -310,6 +310,7 @@ export class AiServiceController implements OnApplicationBootstrap {
           data?.draft_id,
           data?.market_id,
           data?.previews,
+          data?.timings,
         ),
       ),
     );

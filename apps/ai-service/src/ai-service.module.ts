@@ -1,5 +1,5 @@
 import { Module } from '@nestjs/common';
-import { ConfigModule } from '@nestjs/config';
+import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import {
   AppLoggerModule,
@@ -17,6 +17,8 @@ import {
   AiOrderDraft,
   AiOrderDraftItem,
 } from './entities/ai-order-draft.entity';
+import { AI_IMAGE_STORE, AiImageStore } from '@app/common/ai/ai-image-store';
+import { AiImageSweeper } from './order-extract/ai-image-sweeper';
 import { OrderExtractService } from './order-extract/order-extract.service';
 import { ProductDisambiguateService } from './product-disambiguate/product-disambiguate.service';
 import { AiUsageModule } from './usage/ai-usage.module';
@@ -58,6 +60,14 @@ import { AiUsageService } from './usage/ai-usage.service';
     DistrictPickService,
     // kiZgTybn — smena yopishda karta qoldig'i skrinshoti.
     BalanceScreenshotService,
+    // WHMAIqyo #3: ai-parse rasmlari vaqtinchalik saqlovi (MinIO, TTL 1 soat)
+    // va uning tozalovchisi. MINIO_* yo'q bo'lsa null — base64 yo'li.
+    {
+      provide: AI_IMAGE_STORE,
+      inject: [ConfigService],
+      useFactory: (config: ConfigService) => AiImageStore.fromConfig(config),
+    },
+    AiImageSweeper,
   ],
 })
 export class AiServiceModule {}

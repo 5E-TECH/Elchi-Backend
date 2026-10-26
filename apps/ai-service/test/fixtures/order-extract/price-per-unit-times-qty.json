@@ -1,0 +1,28 @@
+{
+  "id": "price-per-unit-times-qty",
+  "category": [
+    "price_words",
+    "quantity"
+  ],
+  "source": "synthetic",
+  "input": {
+    "text": "Madina 95 000 85 96 Farg'ona Qo'qon, ro'mol 4 ta donasi 75 ming"
+  },
+  "expected": {
+    "orders": [
+      {
+        "customer_name": "Madina",
+        "phone_number": "+998950008596",
+        "region_name": "Farg'ona",
+        "district_name": "Qo'qon",
+        "items": [
+          {
+            "name": "ro'mol",
+            "quantity": 4
+          }
+        ],
+        "total_price": 300000
+      }
+    ]
+  }
+}

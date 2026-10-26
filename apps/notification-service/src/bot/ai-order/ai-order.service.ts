@@ -167,14 +167,20 @@ export class AiOrderService {
           file.file_id,
           AI_IMAGE_MAX_BYTES,
         );
+        // WHMAIqyo: WebP ham (gateway ruxsat ro'yxati bilan bir xil).
         const mime =
           file.mime === 'image/png' || /\.png$/i.test(downloaded.file_path)
             ? 'image/png'
-            : 'image/jpeg';
+            : file.mime === 'image/webp' ||
+                /\.webp$/i.test(downloaded.file_path)
+              ? 'image/webp'
+              : 'image/jpeg';
+        const ext =
+          mime === 'image/png' ? 'png' : mime === 'image/webp' ? 'webp' : 'jpg';
         form.append(
           'images',
           new Blob([new Uint8Array(downloaded.buffer)], { type: mime }),
-          mime === 'image/png' ? 'image.png' : 'image.jpg',
+          `image.${ext}`,
         );
       }
     } catch (error) {

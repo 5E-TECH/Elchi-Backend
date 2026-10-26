@@ -1,0 +1,28 @@
+{
+  "id": "deliver-do-dveri-ru",
+  "category": [
+    "deliver_type"
+  ],
+  "source": "synthetic",
+  "input": {
+    "text": "Сергей 97 000 62 73 Самарканд, Ургут, блендер 1 шт 400 тыс, доставка до двери"
+  },
+  "expected": {
+    "orders": [
+      {
+        "customer_name": "Сергей",
+        "phone_number": "+998970006273",
+        "region_name": "Samarqand",
+        "district_name": "Urgut",
+        "items": [
+          {
+            "name": "блендер",
+            "quantity": 1
+          }
+        ],
+        "total_price": 400000,
+        "where_deliver": "address"
+      }
+    ]
+  }
+}

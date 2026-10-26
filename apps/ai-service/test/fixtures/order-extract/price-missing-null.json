@@ -1,0 +1,27 @@
+{
+  "id": "price-missing-null",
+  "category": [
+    "price_words"
+  ],
+  "source": "synthetic",
+  "input": {
+    "text": "Charos 95 000 17 28 Sirdaryo Guliston, atir 1 ta, narxini keyin aytaman"
+  },
+  "expected": {
+    "orders": [
+      {
+        "customer_name": "Charos",
+        "phone_number": "+998950001728",
+        "region_name": "Sirdaryo",
+        "district_name": "Guliston",
+        "items": [
+          {
+            "name": "atir",
+            "quantity": 1
+          }
+        ],
+        "total_price": null
+      }
+    ]
+  }
+}

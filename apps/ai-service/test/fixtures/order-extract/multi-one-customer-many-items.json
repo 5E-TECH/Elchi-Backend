@@ -1,0 +1,32 @@
+{
+  "id": "multi-one-customer-many-items",
+  "category": [
+    "multi_order",
+    "quantity"
+  ],
+  "source": "synthetic",
+  "input": {
+    "text": "Nilufar 93 000 55 66 Navoiy shahri, atir 1 ta, krem 2 ta, jami 400 ming"
+  },
+  "expected": {
+    "orders": [
+      {
+        "customer_name": "Nilufar",
+        "phone_number": "+998930005566",
+        "region_name": "Navoiy",
+        "district_name": "Navoiy",
+        "items": [
+          {
+            "name": "atir",
+            "quantity": 1
+          },
+          {
+            "name": "krem",
+            "quantity": 2
+          }
+        ],
+        "total_price": 400000
+      }
+    ]
+  }
+}

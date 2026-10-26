@@ -1,0 +1,27 @@
+{
+  "id": "qty-x2",
+  "category": [
+    "quantity"
+  ],
+  "source": "synthetic",
+  "input": {
+    "text": "Iroda 97 000 84 95 Navoiy Nurota, krem x2 jami 180 ming"
+  },
+  "expected": {
+    "orders": [
+      {
+        "customer_name": "Iroda",
+        "phone_number": "+998970008495",
+        "region_name": "Navoiy",
+        "district_name": "Nurota",
+        "items": [
+          {
+            "name": "krem",
+            "quantity": 2
+          }
+        ],
+        "total_price": 180000
+      }
+    ]
+  }
+}

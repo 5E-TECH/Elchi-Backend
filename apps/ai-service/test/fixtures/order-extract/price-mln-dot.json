@@ -1,0 +1,27 @@
+{
+  "id": "price-mln-dot",
+  "category": [
+    "price_words"
+  ],
+  "source": "synthetic",
+  "input": {
+    "text": "Farhod 90 000 41 52 Andijon Asaka, muzlatgich 1 ta 1.5 mln"
+  },
+  "expected": {
+    "orders": [
+      {
+        "customer_name": "Farhod",
+        "phone_number": "+998900004152",
+        "region_name": "Andijon",
+        "district_name": "Asaka",
+        "items": [
+          {
+            "name": "muzlatgich",
+            "quantity": 1
+          }
+        ],
+        "total_price": 1500000
+      }
+    ]
+  }
+}

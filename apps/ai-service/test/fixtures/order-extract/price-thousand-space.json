@@ -1,0 +1,27 @@
+{
+  "id": "price-thousand-space",
+  "category": [
+    "price_words"
+  ],
+  "source": "synthetic",
+  "input": {
+    "text": "Zarina 93 000 63 74 Buxoro Kogon, sochiq 5 ta 150 000 so'm"
+  },
+  "expected": {
+    "orders": [
+      {
+        "customer_name": "Zarina",
+        "phone_number": "+998930006374",
+        "region_name": "Buxoro",
+        "district_name": "Kogon",
+        "items": [
+          {
+            "name": "sochiq",
+            "quantity": 5
+          }
+        ],
+        "total_price": 150000
+      }
+    ]
+  }
+}

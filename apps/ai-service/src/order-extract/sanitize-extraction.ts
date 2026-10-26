@@ -1,4 +1,8 @@
-import { isJunkRawOrder, type RawOrderExtraction } from '@app/common';
+import {
+  isJunkRawOrder,
+  sanitizeExtractWarnings,
+  type RawOrderExtraction,
+} from '@app/common';
 
 /**
  * Model chiqishini (Claude JSON) `RawOrderExtraction[]` ga keltiradi —
@@ -7,7 +11,7 @@ import { isJunkRawOrder, type RawOrderExtraction } from '@app/common';
  * ⚠️ Model chiqishi — ISHONCHSIZ ma'lumot (32fNx0Ci): sxema API darajasida
  * majburlansa ham, prompt-injection yoki gallyutsinatsiya bilan kelgan
  * qiymat bu yerda yana tekshiriladi:
- * - faqat 13 ta ruxsat etilgan maydon qoladi — `district_id`, `operator_id`
+ * - faqat 14 ta ruxsat etilgan maydon qoladi — `district_id`, `operator_id`
  *   kabi begona kalitlar TASHLANADI (ID hech qachon modeldan olinmaydi);
  * - `total_price` faqat chekli va > 0 bo'lsa (yaxlitlanadi), aks holda null
  *   (0 ham, manfiy ham "narx aytilmagan" — 0 EMAS);
@@ -17,6 +21,8 @@ import { isJunkRawOrder, type RawOrderExtraction } from '@app/common';
  * - `quantity` butun va ≥ 1 bo'lmasa 1. 1000 dan kattasi ATAYLAB o'zgartirilmaydi
  *   — ai-confirm DTO (`@Max(1000)`) uni ko'rinadigan tarzda to'xtatadi,
  *   jimgina 1000 ga kesib qo'yish esa noto'g'ri buyurtma yaratardi.
+ * - `warnings` (J3hEDtFN) — faqat enum juftliklari (field × reason), har
+ *   maydonga bittadan; erkin matn yoki noma'lum qiymat TASHLANADI.
  * - Telefon HAM, nomli mahsulot HAM yo'q element (axlat) tashlanadi.
  *
  * Kirish: `{orders: [...]}` (Claude javobi) yoki to'g'ridan-to'g'ri massiv.
@@ -84,7 +90,7 @@ function cleanOperator(value: unknown): string | null {
   return cleanString(value.trim().replace(/^#+/, ''));
 }
 
-/** Oq ro'yxat — faqat shu 13 maydon ko'chiriladi, qolgani tashlanadi. */
+/** Oq ro'yxat — faqat shu 14 maydon ko'chiriladi, qolgani tashlanadi. */
 function sanitizeOrder(o: Record<string, unknown>): RawOrderExtraction {
   return {
     customer_name: cleanString(o.customer_name),
@@ -100,5 +106,6 @@ function sanitizeOrder(o: Record<string, unknown>): RawOrderExtraction {
     where_deliver: cleanWhereDeliver(o.where_deliver),
     is_replacement: o.is_replacement === true,
     operator: cleanOperator(o.operator),
+    warnings: sanitizeExtractWarnings(o.warnings),
   };
 }

@@ -1,0 +1,34 @@
+{
+  "id": "call-before-is-comment",
+  "prompt_version": "2026-10-26.1",
+  "model": "claude-sonnet-5",
+  "source": "seed",
+  "recorded_at": "1970-01-01T00:00:00.000Z",
+  "usage": null,
+  "latency_ms": null,
+  "response": {
+    "orders": [
+      {
+        "customer_name": "Mohira",
+        "phone_number": "[TEL_1]",
+        "extra_number": null,
+        "region_name": "Farg'ona",
+        "district_name": "Marg'ilon",
+        "address": "12-uy",
+        "full_address": null,
+        "items": [
+          {
+            "name": "kostyum",
+            "quantity": 1
+          }
+        ],
+        "total_price": 600000,
+        "comment": "qo'ng'iroq qiling",
+        "where_deliver": null,
+        "is_replacement": false,
+        "operator": null,
+        "warnings": []
+      }
+    ]
+  }
+}

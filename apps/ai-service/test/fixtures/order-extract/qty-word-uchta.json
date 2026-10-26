@@ -1,0 +1,27 @@
+{
+  "id": "qty-word-uchta",
+  "category": [
+    "quantity"
+  ],
+  "source": "synthetic",
+  "input": {
+    "text": "Barno 91 000 28 39 Sirdaryo Guliston, uchta likopcha 75 ming"
+  },
+  "expected": {
+    "orders": [
+      {
+        "customer_name": "Barno",
+        "phone_number": "+998910002839",
+        "region_name": "Sirdaryo",
+        "district_name": "Guliston",
+        "items": [
+          {
+            "name": "likopcha",
+            "quantity": 3
+          }
+        ],
+        "total_price": 75000
+      }
+    ]
+  }
+}

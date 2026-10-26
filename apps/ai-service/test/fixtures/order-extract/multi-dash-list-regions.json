@@ -1,0 +1,53 @@
+{
+  "id": "multi-dash-list-regions",
+  "category": [
+    "multi_order"
+  ],
+  "source": "synthetic",
+  "input": {
+    "text": "- Aziza 97 000 10 20 Xorazm Urganch, telefon g'ilofi 3 ta 45 ming\n- Bobur 98 000 20 30 Surxondaryo Termiz, quloqchin 1 ta 130 ming\n- Diyor 99 000 30 40 Andijon Shahrixon, zaryadka 2 ta 80 ming"
+  },
+  "expected": {
+    "orders": [
+      {
+        "customer_name": "Aziza",
+        "phone_number": "+998970001020",
+        "region_name": "Xorazm",
+        "district_name": "Urganch",
+        "items": [
+          {
+            "name": "telefon g'ilofi",
+            "quantity": 3
+          }
+        ],
+        "total_price": 45000
+      },
+      {
+        "customer_name": "Bobur",
+        "phone_number": "+998980002030",
+        "region_name": "Surxondaryo",
+        "district_name": "Termiz",
+        "items": [
+          {
+            "name": "quloqchin",
+            "quantity": 1
+          }
+        ],
+        "total_price": 130000
+      },
+      {
+        "customer_name": "Diyor",
+        "phone_number": "+998990003040",
+        "region_name": "Andijon",
+        "district_name": "Shahrixon",
+        "items": [
+          {
+            "name": "zaryadka",
+            "quantity": 2
+          }
+        ],
+        "total_price": 80000
+      }
+    ]
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "id": "deliver-uygacha",
+  "category": [
+    "deliver_type"
+  ],
+  "source": "synthetic",
+  "input": {
+    "text": "Komila 93 000 39 40 Andijon Asaka Navoiy ko'chasi 8-uy, choynak 1 ta 110 ming, uygacha olib boring"
+  },
+  "expected": {
+    "orders": [
+      {
+        "customer_name": "Komila",
+        "phone_number": "+998930003940",
+        "region_name": "Andijon",
+        "district_name": "Asaka",
+        "items": [
+          {
+            "name": "choynak",
+            "quantity": 1
+          }
+        ],
+        "total_price": 110000,
+        "where_deliver": "address"
+      }
+    ]
+  }
+}
