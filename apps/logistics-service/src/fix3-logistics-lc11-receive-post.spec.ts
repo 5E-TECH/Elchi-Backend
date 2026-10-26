@@ -219,4 +219,64 @@ describe('FIX3 LC-11 — receivePost yo‘lda qolgan buyurtma bo‘lsa pochtani 
       }),
     );
   });
+
+  it('vbu7Wr3o #1: qabul `order.update` i menejer nomidan, filial qabul izohi bilan (tizim emas)', async () => {
+    const ctx = setup({
+      snapshot: [onTheRoad('101'), onTheRoad('102')],
+      onTheRoadAfter: [],
+    });
+
+    await ctx.service.receivePost(manager10, '40', {
+      order_ids: ['101', '102'],
+    });
+
+    const waitingUpdates = ctx.orderClient.send.mock.calls
+      .filter(
+        ([pattern, payload]: [{ cmd: string }, { dto?: Row }]) =>
+          pattern.cmd === 'order.update' &&
+          payload.dto?.status === Order_status.WAITING,
+      )
+      .map(([, payload]: [unknown, Row]) => payload);
+    expect(waitingUpdates.map((payload) => payload.id)).toEqual(['101', '102']);
+    for (const payload of waitingUpdates) {
+      expect(payload.requester).toEqual({
+        id: '198',
+        roles: ['manager'],
+        note: 'Post received by branch',
+      });
+    }
+  });
+
+  it('vbu7Wr3o #1: kuryer o`z pochtasini qabul qilsa — kuryer qabul izohi', async () => {
+    const ctx = setup({
+      snapshot: [onTheRoad('101')],
+      onTheRoadAfter: [],
+    });
+    ctx.postRepo.findOne.mockResolvedValue({
+      id: '40',
+      courier_id: '102',
+      branch_id: '10',
+      region_id: '14',
+      status: Post_status.SENT,
+    });
+
+    await ctx.service.receivePost(
+      { id: '102', roles: ['courier'], branch_id: '10' },
+      '40',
+      { order_ids: ['101'] },
+    );
+
+    expect(ctx.orderClient.send).toHaveBeenCalledWith(
+      { cmd: 'order.update' },
+      expect.objectContaining({
+        id: '101',
+        dto: expect.objectContaining({ status: Order_status.WAITING }),
+        requester: {
+          id: '102',
+          roles: ['courier'],
+          note: 'Post received by courier',
+        },
+      }),
+    );
+  });
 });

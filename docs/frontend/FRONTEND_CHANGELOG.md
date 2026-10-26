@@ -125,6 +125,38 @@ servislar keyingi deploy'da oladi; notification-service ichki `/metrics` ham shu
 - 🔧 FE: majburiy o'zgarish yo'q. Ixtiyoriy: 429/503 xabarida `Retry-After` dan kutish vaqtini ko'rsatish
   (`LoginForm` allaqachon o'qiydi — endi CORS orqali ko'rinadi).
 
+### 2026-10-26 — Tracking: pochta qabuli yozuvi, jo'natish yozuvida filial nomi; menejer sotish chegarasi (vbu7Wr3o)
+
+Deploy: **order-service + logistics-service** (ikkalasi birga; tartib muhim emas — eski logistics bilan yangi
+order-service avvalgidek tizim yozuvini yozadi). Migratsiya **yo'q**, `openapi.json` o'zgarmadi (tracking
+`metadata` erkin obyekt).
+
+- [2026-10-26] ✏️ [order/logistics] — `GET /orders/:id/tracking`: filial menejeri / kuryer pochtani **qabul
+  qilganda** (`on the road → waiting`) yozuv endi qabul qilgan xodim nomidan: `changed_by` = xodim id,
+  `changed_by_role` = `manager` / `courier` (ilgari `system`), **`action: "post_received"`** (ilgari `waiting`),
+  `note`: `Post received by branch` | `Post received by courier`, `description`: «TEST Claude Surxondaryo filiali
+  pochtani qabul qildi» / «Kuryer Ali Valiyev pochtani qabul qildi», `metadata`: `{ post_id, branch_name }`
+  (filial) yoki `{ post_id, courier_name }` (kuryer). Uchala qabul yo'li: `PATCH /post/receive/:id`,
+  `PATCH /post/receive/scan/:id`, `PATCH /post/receive/order/:id`. Eski yozuvlar o'zgarmaydi.
+  🔧 **Frontend:** `describeTrackingEvent.getSentenceTemplate` `on_the_road->waiting` o'tishini shartsiz
+  «{{actor}} buyurtmani kutilmoqda holatiga qaytardi» qiladi — `action === "post_received"` bo'lsa uni
+  tekshirishdan OLDIN qabul jumlasi kerak (masalan «{{actor}} pochtani qabul qildi — {{branch}}»,
+  `metadata.branch_name`), `actionLabelMap` ga `post_received` → «Qabul qilindi». Usiz jumla aktyor nomi bilan
+  chiqadi, lekin matn hali «…kutilmoqda holatiga qaytardi».
+- [2026-10-26] ✏️ [order] — HQ → filial **jo'natish** yozuvi (`received → on the road`, `action: "sent"`):
+  `metadata: { post_id, branch_name }` — manzil filial nomi YOZUV paytida. Eski yozuvlarda (metadata yo'q)
+  `GET /orders/:id/tracking` `metadata.branch_name` ni izohdagi filial id'sidan («… HQ'dan branch #12 ga
+  dispatch qilindi») to'ldiradi — buyurtmaning joriy filialidan EMAS. Frontend `getTrackingName(event,
+  "branch")` uni o'zi oladi — 🟢 o'zgarish shart emas (HQ'ga qaytgan buyurtmada endi «HQ Toshkent filialiga»
+  emas, haqiqiy filial). `metadata` da `*_branch_id` kaliti ATAYIN yo'q (FE id kalitini joriy filial nomi
+  bilan "tiklaydi").
+- [2026-10-26] 🔧 [frontend] — menejer sotish oynasi «Marketga to'langan summa · 0 so'mdan oshmasin»:
+  backend `sale_market_paid_max` ni menejerga ham beradi (ro'yxat va detal, rolga bog'liq emas; logistga
+  yo'q). Sabab FE'da: `src/pages/orders/index.tsx` `selectedActionModalOrder` `ActionOrder` ga
+  `sale_market_paid_max` ni ko'chirmaydi → `readMarketPaidBase` `to_be_paid` (sotuvgacha 0) ga tushadi.
+  Tuzatish: o'sha obyektga `sale_market_paid_max: selectedActionOrder.sale_market_paid_max ?? null`
+  (detal `buildActionOrder` dagidek).
+
 ### 2026-10-26 — Kassa: kartalar va hisob raqamlar — turi, bank, oxirgi 4 raqam, egasi; filial kassalari (Zv3MLn0a)
 
 Deploy: **finance-service + api-gateway birga** (yangi RMQ buyruqlari `finance.cashbox.cards.update` /

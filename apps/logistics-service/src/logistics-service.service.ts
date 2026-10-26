@@ -44,11 +44,13 @@ import {
   BranchType,
   fetchScanOrderSummaries,
   Order_status,
+  POST_RECEIVED_TRACKING_NOTES,
   Post_status,
   Roles,
   Status,
   Where_deliver,
   tashkentDayRange,
+  type PostReceiveKind,
 } from '@app/common';
 
 interface RequesterContext {
@@ -1045,6 +1047,25 @@ export class LogisticsServiceService implements OnModuleInit {
     return {
       received: Boolean(res?.data?.received),
       reason: String(res?.data?.reason ?? ''),
+    };
+  }
+
+  /**
+   * vbu7Wr3o #1 — pochta qabulida `order.update` ga uzatiladigan so'rovchi:
+   * qabul qilgan xodim + qabul izohi (order-service shu izoh bo'yicha
+   * tracking'ni `post_received` amali bilan, xodim nomidan yozadi).
+   * So'rovchi id'si bo'lmasa — `undefined` (avvalgidek tizim yozuvi).
+   */
+  private postReceiveTrackingActor(
+    requester: RequesterContext | null | undefined,
+    kind: PostReceiveKind,
+  ): { id: string; roles: string[]; note: string } | undefined {
+    const id = String(requester?.id ?? '').trim();
+    if (!id) return undefined;
+    return {
+      id,
+      roles: requester?.roles ?? [],
+      note: POST_RECEIVED_TRACKING_NOTES[kind],
     };
   }
 
@@ -3243,15 +3264,25 @@ export class LogisticsServiceService implements OnModuleInit {
     // LC-11 — tanlangan, lekin WAITING ga o'tkazib bo'lmagan buyurtmalar.
     const failedSelectedOrderIds: string[] = [];
 
+    // vbu7Wr3o #1: qabul tracking'i qabul qilgan xodim nomidan (ilgari
+    // so'rovchisiz — «Tizim buyurtmani kutilmoqda holatiga qaytardi»).
+    const receiveActor = this.postReceiveTrackingActor(
+      requester,
+      requesterIsCourier ? 'COURIER' : 'BRANCH',
+    );
     for (const orderId of waitingOrderIds) {
       const target = orderById.get(orderId);
       if (target && target.status !== Order_status.WAITING) {
         try {
-          await this.updateOrder(orderId, {
-            status: Order_status.WAITING,
-            return_requested: false,
-            ...(targetBranchId ? { branch_id: targetBranchId } : {}),
-          });
+          await this.updateOrder(
+            orderId,
+            {
+              status: Order_status.WAITING,
+              return_requested: false,
+              ...(targetBranchId ? { branch_id: targetBranchId } : {}),
+            },
+            receiveActor,
+          );
         } catch (err) {
           failures.push({
             order_id: String(orderId),
@@ -4060,11 +4091,17 @@ export class LogisticsServiceService implements OnModuleInit {
     // eski qaytarish so'rovi belgisi tozalanadi (receivePost bilan bir xil),
     // aks holda u menejerning "Qaytarish" ro'yxatida so'rov bo'lib chiqib,
     // tasdiqlansa custody kuryerdan filialga o'tib ketardi.
+    // vbu7Wr3o #1: qabul — kuryer nomidan (tizim emas).
+    const receiveActor = this.postReceiveTrackingActor(requester, 'COURIER');
     for (const order of orders) {
-      await this.updateOrder(order.id, {
-        status: Order_status.WAITING,
-        return_requested: false,
-      });
+      await this.updateOrder(
+        order.id,
+        {
+          status: Order_status.WAITING,
+          return_requested: false,
+        },
+        receiveActor,
+      );
     }
 
     post.status = Post_status.RECEIVED;
@@ -4103,10 +4140,15 @@ export class LogisticsServiceService implements OnModuleInit {
     }
 
     // CODE-09 / C13 — qaytarish so'rovi belgisi tozalanadi (yuqoriga qarang).
-    await this.updateOrder(order.id, {
-      status: Order_status.WAITING,
-      return_requested: false,
-    });
+    // vbu7Wr3o #1: qabul — kuryer nomidan (tizim emas).
+    await this.updateOrder(
+      order.id,
+      {
+        status: Order_status.WAITING,
+        return_requested: false,
+      },
+      this.postReceiveTrackingActor(requester, 'COURIER'),
+    );
 
     const remaining = await this.findOrders({
       post_id: post.id,
