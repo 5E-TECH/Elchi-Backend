@@ -23,6 +23,19 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-10-26 — Hududlar: `GET /region/my/district-stats` filial / kuryer kesimida (aLx7Di99)
+
+Deploy: faqat logistics-service (+ api-gateway — faqat Swagger tavsifi). Migratsiya yo'q. `openapi.json` yangilandi.
+
+- [2026-10-26] ✏️ [logistics] — `GET /region/my/district-stats` raqamlari endi butun viloyat emas, so'rovchining o'z
+  kesimi (GET /orders doirasi bilan bir xil): **kuryer** — `courier_id` yoki `holder_courier_id` = o'zi;
+  **menejer** — o'z filiali (`branch_id` / `holder_branch_id` / `home_branch_id`). Viloyat — avvalgidek tokendan.
+  `summary` va `districts[]` maydonlari o'zgarmagan (faqat qiymatlar kesimli).
+- 🆕 `data.scope`: `{ type: "courier", courier_id }` yoki `{ type: "branch", branch_id, branch_name }` — sarlavhada
+  filial nomi / «sizga tegishli» ni qaytarish uchun. Filiali aniqlanmagan menejer — 200 va bo'sh holat
+  (`region: null, summary: null, districts: []`, xabar «Sizga filial biriktirilmagan»).
+- 🔧 FE: /regions sarlavhasidagi filial / «sizga tegishli» da'vosini `data.scope` bo'yicha qaytarish.
+
 ### 2026-10-26 — Buyurtmalar: holat tablari sonlari + «Qabul va yaratish» badge'i — `GET /orders/status-counts` (GaBIPi3Z)
 
 Deploy: api-gateway + order-service (yangi RMQ `order.status_counts`; ikkalasi birga). Migratsiya yo'q.

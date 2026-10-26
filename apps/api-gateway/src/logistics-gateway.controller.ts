@@ -1263,6 +1263,51 @@ export class LogisticsGatewayController {
   @ApiBearerAuth()
   @ApiOperation({
     summary: "O'z viloyatim statistikasi (kuryer / menejer, tumanlar kesimida)",
+    description:
+      'aLx7Di99: region — from the token (courier: users.region_id, manager: branch region). Numbers are the ' +
+      "requester's OWN slice, same scope as GET /orders: courier — orders with courier_id or holder_courier_id = me; " +
+      'manager — orders of own branch (branch_id / holder_branch_id / home_branch_id). Response `data.scope`: ' +
+      '`{ type: "courier", courier_id }` | `{ type: "branch", branch_id, branch_name }` (heading: branch / «sizga tegishli»). ' +
+      'No region / no branch — 200 with `{ region: null, summary: null, districts: [] }`.',
+  })
+  @ApiOkResponse({
+    schema: {
+      example: {
+        statusCode: 200,
+        message: 'Viloyat tumanlari statistikasi',
+        data: {
+          region: { id: '5', name: 'Andijon viloyati', satoCode: '1703' },
+          scope: {
+            type: 'branch',
+            branch_id: '7',
+            branch_name: 'Andijon filiali',
+          },
+          summary: {
+            totalOrders: 3,
+            deliveredOrders: 1,
+            cancelledOrders: 1,
+            pendingOrders: 1,
+            totalRevenue: 30000,
+            successRate: 33,
+            districtsCount: 2,
+          },
+          districts: [
+            {
+              id: '501',
+              name: 'Asaka',
+              satoCode: '1703202',
+              totalOrders: 1,
+              deliveredOrders: 1,
+              cancelledOrders: 0,
+              pendingOrders: 0,
+              totalRevenue: 30000,
+              successRate: 100,
+              couriersCount: 1,
+            },
+          ],
+        },
+      },
+    },
   })
   @ApiQuery({
     name: 'startDate',

@@ -69,6 +69,7 @@ interface OrderRow {
   holder_type?: 'HQ' | 'BRANCH' | 'COURIER' | null;
   holder_branch_id?: string | null;
   holder_courier_id?: string | null;
+  home_branch_id?: string | null;
   courier_id?: string | null;
   assigned_at?: string | Date | null;
   region_id?: string | null;
@@ -850,6 +851,10 @@ export class LogisticsServiceService implements OnModuleInit {
       holder_type?: 'HQ' | 'BRANCH' | 'COURIER';
       customer_id?: string;
       qr_code_token?: string;
+      // aLx7Di99: hudud statistikasi doirasi (order.find_all — GET /orders filtrlari).
+      region_id?: string;
+      branch_id?: string;
+      courier_ids?: string[];
       start_day?: string;
       end_day?: string;
       fetch_all?: boolean;
@@ -6005,9 +6010,14 @@ export class LogisticsServiceService implements OnModuleInit {
    *   emas, joriy biriktiruv). `isHqStaff` — filial turi HQ.
    * Aniqlab bo'lmasa `regionId: null` (chaqiruvchi fail-closed qiladi).
    */
-  private async resolveOwnStatsRegion(
-    requester: RequesterContext,
-  ): Promise<{ regionId: string | null; isHqStaff: boolean }> {
+  private async resolveOwnStatsRegion(requester: RequesterContext): Promise<{
+    regionId: string | null;
+    isHqStaff: boolean;
+    /** aLx7Di99: kuryer emas — filial xodimining filiali (yo'q — null). */
+    branchId?: string | null;
+    branchName?: string | null;
+    isCourier?: boolean;
+  }> {
     const requesterId = String(requester?.id ?? '').trim();
     if (!requesterId) {
       this.forbidden('Foydalanuvchi aniqlanmadi');
@@ -6019,7 +6029,7 @@ export class LogisticsServiceService implements OnModuleInit {
     if (roles.includes(Roles.COURIER)) {
       const courier = await this.findCourierById(requesterId);
       const regionId = String(courier?.region_id ?? '').trim();
-      return { regionId: regionId || null, isHqStaff: false };
+      return { regionId: regionId || null, isHqStaff: false, isCourier: true };
     }
 
     const assignment = (await this.findBranchAssignmentByUserId(requesterId, {
@@ -6027,17 +6037,25 @@ export class LogisticsServiceService implements OnModuleInit {
       roles: requester.roles ?? [],
     })) as
       | (BranchAssignmentRow & {
-          branch?: { type?: string | null; region_id?: string | null } | null;
+          branch?: {
+            type?: string | null;
+            region_id?: string | null;
+            name?: string | null;
+          } | null;
         })
       | null;
     const branch = assignment?.branch ?? null;
     const regionId = String(branch?.region_id ?? '').trim();
+    const branchId = String(assignment?.branch_id ?? '').trim();
     return {
       regionId: regionId || null,
       isHqStaff:
         String(branch?.type ?? '')
           .trim()
           .toUpperCase() === String(BranchType.HQ),
+      branchId: branchId || null,
+      branchName: branch?.name ? String(branch.name) : null,
+      isCourier: false,
     };
   }
 
@@ -6302,6 +6320,13 @@ export class LogisticsServiceService implements OnModuleInit {
     startDate?: string,
     endDate?: string,
     requester?: RequesterContext,
+    /**
+     * aLx7Di99 — faqat ichki chaqiruv (`getMyRegionDistrictStats`): raqamlar
+     * so'rovchining o'z buyurtmalari bo'yicha (GET /orders doirasi bilan AYNI:
+     * kuryer — `courier_id`/`holder_courier_id`, filial — `branch_id`/
+     * `holder_branch_id`/`home_branch_id`). RMQ'dan kelmaydi.
+     */
+    orderScope?: { courier_id?: string; branch_id?: string },
   ) {
     const regionId = String(id ?? '').trim();
     if (!regionId) {
@@ -6328,12 +6353,39 @@ export class LogisticsServiceService implements OnModuleInit {
       this.notFound('Region not found');
     }
 
+    const scopedCourierId = String(orderScope?.courier_id ?? '').trim();
+    const scopedBranchId = String(orderScope?.branch_id ?? '').trim();
     const orders = await this.findOrders({
       fetch_all: true,
       start_day: startDate,
       end_day: endDate,
       limit: 100,
+      // aLx7Di99: doira SQL'da (order.find_all) — viloyat + kuryer/filial.
+      ...(orderScope ? { region_id: regionId } : {}),
+      ...(scopedCourierId ? { courier_ids: [scopedCourierId] } : {}),
+      ...(scopedBranchId ? { branch_id: scopedBranchId } : {}),
     });
+    // Himoya qatlami: order-service filtrni qo'llamasa ham begona qator
+    // sanalmaydi (doira berilgan-u, qiymati bo'sh bo'lsa — hech narsa).
+    const inOrderScope = (order: OrderRow) => {
+      if (!orderScope) return true;
+      const same = (value: string | null | undefined, expected: string) =>
+        Boolean(expected) && String(value ?? '').trim() === expected;
+      if (scopedCourierId) {
+        return (
+          same(order.courier_id, scopedCourierId) ||
+          same(order.holder_courier_id, scopedCourierId)
+        );
+      }
+      if (scopedBranchId) {
+        return (
+          same(order.branch_id, scopedBranchId) ||
+          same(order.holder_branch_id, scopedBranchId) ||
+          same(order.home_branch_id, scopedBranchId)
+        );
+      }
+      return false;
+    };
 
     const deliveredStatuses = new Set<Order_status>([
       Order_status.SOLD,
@@ -6346,7 +6398,9 @@ export class LogisticsServiceService implements OnModuleInit {
     ]);
 
     const regionOrders = orders.filter(
-      (order) => String(order.region_id ?? '').trim() === regionId,
+      (order) =>
+        String(order.region_id ?? '').trim() === regionId &&
+        inOrderScope(order),
     );
 
     const summarizeOrders = (rows: OrderRow[]) => {
@@ -6528,9 +6582,23 @@ export class LogisticsServiceService implements OnModuleInit {
     const empty = (message: string) =>
       successRes({ region: null, summary: null, districts: [] }, 200, message);
 
-    const { regionId } = await this.resolveOwnStatsRegion(requester);
+    const own = await this.resolveOwnStatsRegion(requester);
+    const { regionId } = own;
     if (!regionId) {
       return empty('Sizga viloyat biriktirilmagan');
+    }
+    // aLx7Di99: raqamlar so'rovchining kesimida — kuryer: o'z buyurtmalari,
+    // menejer: o'z filiali (avval butun viloyat raqamlari qaytardi).
+    const courierId = String(requester?.id ?? '').trim();
+    const scope = own.isCourier
+      ? { type: 'courier' as const, courier_id: courierId }
+      : {
+          type: 'branch' as const,
+          branch_id: own.branchId ?? '',
+          branch_name: own.branchName ?? null,
+        };
+    if (scope.type === 'branch' && !scope.branch_id) {
+      return empty('Sizga filial biriktirilmagan');
     }
     const exists = await this.regionRepo.findOne({ where: { id: regionId } });
     if (!exists) {
@@ -6542,6 +6610,10 @@ export class LogisticsServiceService implements OnModuleInit {
       regionId,
       startDate,
       endDate,
+      undefined,
+      scope.type === 'courier'
+        ? { courier_id: scope.courier_id }
+        : { branch_id: scope.branch_id },
     )) as {
       data: {
         region: { id: string; name: string; satoCode?: string | null };
@@ -6561,6 +6633,8 @@ export class LogisticsServiceService implements OnModuleInit {
     return successRes(
       {
         region: { id: region.id, name: region.name, satoCode: region.satoCode },
+        // aLx7Di99: raqamlar kimning kesimida (sarlavha: filial / «sizga tegishli»).
+        scope,
         summary: {
           totalOrders: summary.totalOrders,
           deliveredOrders: summary.deliveredOrders,

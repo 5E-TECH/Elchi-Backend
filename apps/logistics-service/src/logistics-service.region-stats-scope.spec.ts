@@ -442,3 +442,161 @@ describe('uherIk8r — getMyRegionDistrictStats (GET /region/my/district-stats)'
     );
   });
 });
+
+/**
+ * aLx7Di99 — GET /region/my/district-stats raqamlari so'rovchining kesimida
+ * (avval butun viloyat): kuryer — o'z buyurtmalari (courier_id /
+ * holder_courier_id), menejer — o'z filiali (branch_id / holder_branch_id /
+ * home_branch_id) — GET /orders doirasi bilan AYNI. Viloyat — tokendan.
+ */
+describe('aLx7Di99 — my/district-stats filial va kuryer kesimida', () => {
+  const SCOPED_ORDERS = [
+    // 5-viloyat, kuryer 77, filial 7
+    {
+      id: 's1',
+      region_id: '5',
+      district_id: '501',
+      courier_id: '77',
+      branch_id: '7',
+      status: Order_status.SOLD,
+      total_price: 30_000,
+    },
+    // 5-viloyat, BOSHQA kuryer (88), BOSHQA filial (8)
+    {
+      id: 's2',
+      region_id: '5',
+      district_id: '501',
+      courier_id: '88',
+      branch_id: '8',
+      status: Order_status.SOLD,
+      total_price: 50_000,
+    },
+    // 5-viloyat, kuryer 77 qo'lida (holder), filial 8 → 7 ga ko'chgan (holder)
+    {
+      id: 's3',
+      region_id: '5',
+      district_id: '502',
+      courier_id: null,
+      holder_courier_id: '77',
+      branch_id: '8',
+      holder_branch_id: '7',
+      status: Order_status.CANCELLED,
+      total_price: 10_000,
+    },
+    // 5-viloyat, filial 7 uyi (home), boshqa kuryer
+    {
+      id: 's4',
+      region_id: '5',
+      district_id: '502',
+      courier_id: '88',
+      branch_id: '9',
+      home_branch_id: '7',
+      status: Order_status.WAITING,
+      total_price: 20_000,
+    },
+    // Boshqa viloyat (9), kuryer 77, filial 7 — viloyat tokendan, sanalmaydi
+    {
+      id: 's5',
+      region_id: '9',
+      district_id: '901',
+      courier_id: '77',
+      branch_id: '7',
+      status: Order_status.PAID,
+      total_price: 99_000,
+    },
+  ];
+
+  it('⭐ kuryer → faqat o‘z buyurtmalari (boshqa kuryerniki sanalmaydi), SQL doirasi: region_id + courier_ids', async () => {
+    const { service, findOrders } = setup({ courierRegion: { '77': '5' } });
+    findOrders.mockResolvedValue(SCOPED_ORDERS as never);
+    const res: any = await service.getMyRegionDistrictStats(
+      '2026-10-01',
+      '2026-10-26',
+      COURIER,
+    );
+    expect(findOrders).toHaveBeenCalledWith(
+      expect.objectContaining({
+        region_id: '5',
+        courier_ids: ['77'],
+        start_day: '2026-10-01',
+        end_day: '2026-10-26',
+      }),
+    );
+    expect(findOrders.mock.calls[0][0]).not.toHaveProperty('branch_id');
+    expect(res.data.scope).toEqual({ type: 'courier', courier_id: '77' });
+    // s1 (sotilgan) + s3 (holder, bekor) — s2/s4 boshqa kuryer, s5 boshqa viloyat.
+    expect(res.data.summary).toEqual(
+      expect.objectContaining({
+        totalOrders: 2,
+        deliveredOrders: 1,
+        cancelledOrders: 1,
+        pendingOrders: 0,
+        totalRevenue: 30_000,
+      }),
+    );
+    const d501 = res.data.districts.find((d: any) => d.id === '501');
+    expect(d501.totalOrders).toBe(1);
+  });
+
+  it('⭐ menejer → faqat o‘z filiali (branch/holder/home), SQL doirasi: region_id + branch_id; scope.branch_id', async () => {
+    const { service, findOrders } = setup({ branchByUser });
+    findOrders.mockResolvedValue(SCOPED_ORDERS as never);
+    const res: any = await service.getMyRegionDistrictStats(
+      undefined,
+      undefined,
+      REGIONAL_MANAGER,
+    );
+    expect(findOrders).toHaveBeenCalledWith(
+      expect.objectContaining({ region_id: '5', branch_id: '7' }),
+    );
+    expect(findOrders.mock.calls[0][0]).not.toHaveProperty('courier_ids');
+    expect(res.data.scope).toEqual(
+      expect.objectContaining({ type: 'branch', branch_id: '7' }),
+    );
+    // s1 (branch), s3 (holder), s4 (home) — s2 boshqa filial, s5 boshqa viloyat.
+    expect(res.data.summary).toEqual(
+      expect.objectContaining({
+        totalOrders: 3,
+        deliveredOrders: 1,
+        cancelledOrders: 1,
+        pendingOrders: 1,
+        totalRevenue: 30_000,
+      }),
+    );
+    expect(JSON.stringify(res.data)).not.toContain('50000');
+  });
+
+  it('filiali aniqlanmagan menejer (viloyat bor, branch_id yo‘q) → 200 bo‘sh holat, buyurtmalar so‘ralmaydi', async () => {
+    const { service, findOrders } = setup({
+      branchByUser: {
+        '20': {
+          branch_id: '',
+          branch: { type: 'REGIONAL', region_id: '5' },
+        },
+      },
+    });
+    const res: any = await service.getMyRegionDistrictStats(
+      undefined,
+      undefined,
+      REGIONAL_MANAGER,
+    );
+    expect(res.data).toEqual({ region: null, summary: null, districts: [] });
+    expect(findOrders).not.toHaveBeenCalled();
+  });
+
+  it('regressiya: stats/:id (admin) — doirasiz, butun viloyat (findOrders’ga region/branch/courier yo‘q)', async () => {
+    const { service, findOrders } = setup({});
+    findOrders.mockResolvedValue(SCOPED_ORDERS as never);
+    const res: any = await service.getRegionDetailedStats(
+      '5',
+      undefined,
+      undefined,
+      { id: '1', roles: ['admin'] },
+    );
+    const query = findOrders.mock.calls[0][0] as Record<string, unknown>;
+    expect(query).not.toHaveProperty('region_id');
+    expect(query).not.toHaveProperty('branch_id');
+    expect(query).not.toHaveProperty('courier_ids');
+    expect(res.data.summary.totalOrders).toBe(4);
+  });
+});
