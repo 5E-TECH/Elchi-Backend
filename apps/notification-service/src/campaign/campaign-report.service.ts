@@ -402,6 +402,11 @@ export class CampaignReportService {
     });
 
     const terminal = CAMPAIGN_TERMINAL_STATUSES.includes(campaign.status);
+    // (9D1Gl9MS) SMS kanali — pulli: sms_outbox qatorlari (kampaniya inbox
+    // qatorlari orqali; UNIQUE client_message_id = 'notif-<id>' indeksi).
+    const smsBlock = campaign.channels.includes(NotificationChannel.SMS)
+      ? await this.notificationSms(id)
+      : null;
     return {
       kind: 'notification' as const,
       campaign: {
@@ -446,15 +451,79 @@ export class CampaignReportService {
         note: "in_app / realtime / push kanallarida provayder yetkazish hisoboti (DLR) yo'q — 'Yetkazildi' o'lchanmaydi (—)",
       },
       by_channel: byChannel,
-      sms: null,
-      cost: {
-        currency: 'UZS',
-        estimated: 0,
-        cost_of_sent: 0,
-        is_estimate: true,
-        paid_channels: [] as string[],
-        note: "Bepul kanallar (in_app / realtime / push) — provayder to'lovi yo'q",
+      sms: smsBlock,
+      cost: smsBlock
+        ? {
+            currency: 'UZS',
+            estimated: smsBlock.estimated_cost,
+            cost_of_sent: smsBlock.cost_of_sent,
+            is_estimate: true,
+            paid_channels: [NotificationChannel.SMS as string],
+            note: "Taxminiy: SMS tarifi (SMS_TARIFF_PROMO) × bo'laklar; in_app / realtime / push — bepul",
+          }
+        : {
+            currency: 'UZS',
+            estimated: 0,
+            cost_of_sent: 0,
+            is_estimate: true,
+            paid_channels: [] as string[],
+            note: "Bepul kanallar (in_app / realtime / push) — provayder to'lovi yo'q",
+          },
+    };
+  }
+
+  /** (9D1Gl9MS) Bildirishnoma kampaniyasining SMS qismi (sms_outbox). */
+  private async notificationSms(id: string) {
+    const finalDlr = ['delivered', ...SMS_DLR_FINAL_FAILURES];
+    const rows: Array<Record<string, unknown>> = await this.campaigns.query(
+      `SELECT COUNT(o."id")::int AS "messages",
+              COUNT(o."id") FILTER (WHERE o."sent_at" IS NOT NULL)::int AS "sent",
+              COUNT(o."id") FILTER (WHERE o."status" = 'delivered')::int AS "delivered",
+              COUNT(o."id") FILTER (WHERE o."status" = 'failed')::int AS "failed",
+              COUNT(o."id") FILTER (WHERE o."status" IN ('pending', 'processing'))::int AS "pending",
+              COUNT(o."id") FILTER (WHERE o."dlr_status" = ANY($3::text[]))::int AS "dlr_final",
+              COUNT(o."id") FILTER (WHERE o."status" = 'sent')::int AS "awaiting_dlr",
+              COALESCE(SUM(o."parts"), 0)::int AS "parts_total",
+              SUM(o."cost") AS "estimated",
+              COUNT(o."id") FILTER (WHERE o."cost" IS NULL)::int AS "untariffed",
+              SUM(o."cost") FILTER (WHERE o."sent_at" IS NOT NULL) AS "cost_of_sent",
+              COUNT(o."id") FILTER (WHERE o."sent_at" IS NOT NULL AND o."cost" IS NULL)::int AS "untariffed_sent"
+         FROM "notification_schema"."notifications" n
+         JOIN "notification_schema"."sms_outbox" o
+           ON o."client_message_id" = 'notif-' || n."id"::text
+          AND o."notification_id" = n."id"
+        WHERE n."group_key" = $1
+          AND n."data"->>'campaign_id' = $2`,
+      [this.groupKey(id), id, finalDlr],
+    );
+    const agg = rows[0] ?? {};
+    const messages = num(agg.messages);
+    const sent = num(agg.sent);
+    const dlrFinal = num(agg.dlr_final);
+    const deliveredCount = num(agg.delivered);
+    const money = (raw: unknown, untariffed: number, count: number) =>
+      count === 0
+        ? 0
+        : untariffed > 0 || raw === null || raw === undefined
+          ? null
+          : num(raw);
+    return {
+      message_class: 'promo' as const,
+      messages,
+      sent,
+      delivered: dlrFinal > 0 ? deliveredCount : null,
+      failed: num(agg.failed),
+      pending: num(agg.pending),
+      parts_total: num(agg.parts_total),
+      dlr: {
+        final: dlrFinal,
+        delivered: deliveredCount,
+        failed: Math.max(dlrFinal - deliveredCount, 0),
+        awaiting: num(agg.awaiting_dlr),
       },
+      tariff_per_part: this.smsConfig.tariff('promo'),
+      estimated_cost: money(agg.estimated, num(agg.untariffed), messages),
+      cost_of_sent: money(agg.cost_of_sent, num(agg.untariffed_sent), sent),
     };
   }
 

@@ -23,6 +23,33 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-10-26 — `POST /notifications/campaigns` da SMS kanali + preview'da rozilik bo'yicha son (9D1Gl9MS, N7, KM-5)
+
+Deploy: notification-service + api-gateway. Migratsiya yo'q.
+
+- [2026-10-26] ✏️ [gateway/notification] — `POST /notifications/campaigns`: `channels` endi `sms` ni ham qabul
+  qiladi. Kampaniya SMS'i **DOIM reklama (`promo`)** — kategoriyadan qat'i nazar: faqat roziligi borlarga (yo'q —
+  qatorda `delivery.sms: skipped`, `sms_reason: no_consent`; telefon yo'q — `no_phone`), 18:00–09:00 da
+  yuborilmaydi (sms_outbox 09:00 ga suradi), bekor qilish havolasi qo'shiladi, kunlik kvota (`SMS_DAILY_CAP`) —
+  tugasa `sms: blocked`, `sms_reason: daily_cap_exceeded`. Xatolar: SMS o'chiq yoki opt-out sozlanmagan — 409;
+  auditoriya `SMS_MAX_FANOUT` dan katta — 400 (kesilmaydi; partiya davomida ham shu chegara).
+- [2026-10-26] ✏️ [gateway/notification] — `POST /notifications/audience/preview` yangi ixtiyoriy `channels`,
+  `title`, `body`. `channels` da `sms` bo'lsa javobda **`sms`** bloki: `{ exact, message_class: 'promo',
+  recipients (roziligi bor), blocked_no_consent, skipped_invalid_phone, with_valid_phone, encoding, parts,
+  text_provided, tariff, estimated_cost, max_fanout, fanout_exceeded, sms_enabled, opt_out_configured,
+  quiet_hours }` va `by_channel.sms` = roziligi borlar (SMS tanlanmasa — avvalgidek kanonik telefonlilar).
+  Auditoriya `campaign_max` dan katta bo'lsa `exact: false`, sonlar `null`. Telefon javobga chiqmaydi.
+- [2026-10-26] ✏️ [notification] — `GET /notifications/campaigns/:id/report`: SMS kanali bor kampaniyada `sms`
+  bloki (`messages, sent, delivered (DLR yo'q — null), failed, pending, parts_total, dlr, tariff_per_part,
+  estimated_cost, cost_of_sent`) va `cost.paid_channels: ['sms']`. `by_channel` / `undelivered` / CSV eksport —
+  SMS qatorlari boshqa kanallar kabi (`delivery.sms` holati va sababi).
+- 🟢 Ikki yo'l: `POST /notifications/campaigns` (+sms) — identity auditoriyasi (rollar/mijoz segmenti), SMS
+  qatorlari `notification_id` bilan bog'lanadi (`campaign_id` NULL); `POST /notifications/sms/campaigns` — buyurtma
+  bo'yicha mijoz segmenti / qo'lda raqamlar. Ikkalasi bitta `sms_outbox` darvozasidan (rozilik, taqiq, kvota,
+  opt-out); hisobotlar bir-birining qatorlarini sanamaydi. FE bitta kampaniya uchun faqat bitta yo'lni chaqirsin
+  (umumiy konstruktor — `POST /notifications/campaigns`).
+- 🔧 FE (KM-5): umumiy konstruktorda SMS kanali; tasdiq oynasida `sms` blokidagi sonlar va narx.
+
 ### 2026-10-26 — SMS kampaniya: `max_orders` («gacha») va saqlangan segment `audience_segment_id` (sdNGqCBa)
 
 Deploy: notification-service + api-gateway. Migratsiya yo'q.

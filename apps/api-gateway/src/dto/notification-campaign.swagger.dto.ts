@@ -179,6 +179,45 @@ export class AudiencePreviewRequestDto extends AudienceTargetFieldsDto {
   @IsString()
   @Matches(/^\d+$/)
   audience_segment_id?: string;
+  /**
+   * (9D1Gl9MS) Kampaniya kanallari — `sms` bo'lsa javobda `sms` bloki:
+   * rozilik bo'yicha bo'linish va taxminiy narx (hech narsa yuborilmaydi).
+   */
+  @ApiPropertyOptional({
+    enum: [
+      NotificationChannel.IN_APP,
+      NotificationChannel.REALTIME,
+      NotificationChannel.PUSH,
+      NotificationChannel.SMS,
+    ],
+    isArray: true,
+    example: ['in_app', 'sms'],
+  })
+  @IsOptional()
+  @IsArray()
+  @IsIn(
+    [
+      NotificationChannel.IN_APP,
+      NotificationChannel.REALTIME,
+      NotificationChannel.PUSH,
+      NotificationChannel.SMS,
+    ],
+    { each: true },
+  )
+  channels?: NotificationChannel[];
+
+  /** (9D1Gl9MS) SMS bo'laklari/narxi uchun — kampaniya `title` (+ `body`). */
+  @ApiPropertyOptional({ example: 'Yangi tarif' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  title?: string;
+
+  @ApiPropertyOptional({ example: '1-noyabrdan yangi tariflar amal qiladi.' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(4096)
+  body?: string;
 }
 
 /**
@@ -199,10 +238,12 @@ export class CreateAudienceSegmentRequestDto extends AudienceTargetFieldsDto {
   description?: string;
 }
 
+/** (9D1Gl9MS) SMS ham — kampaniyada doim reklama (rozilik, 18:00–09:00, kvota). */
 const CAMPAIGN_CHANNELS = [
   NotificationChannel.IN_APP,
   NotificationChannel.REALTIME,
   NotificationChannel.PUSH,
+  NotificationChannel.SMS,
 ] as const;
 
 /**
@@ -255,7 +296,8 @@ export class CreateNotificationCampaignRequestDto extends AudienceTargetFieldsDt
     enum: CAMPAIGN_CHANNELS,
     isArray: true,
     example: ['in_app', 'realtime'],
-    description: 'Faqat in_app / realtime / push (SMS — alohida epik)',
+    description:
+      "in_app / realtime / push / sms. SMS — DOIM reklama: faqat roziligi borlarga (yo'q — sms: skipped, sms_reason: no_consent), 18:00–09:00 da yuborilmaydi (09:00 ga suriladi), bekor qilish havolasi qo'shiladi, kunlik kvota (SMS_DAILY_CAP); auditoriya SMS_MAX_FANOUT dan katta — 400; SMS o'chiq / opt-out sozlanmagan — 409",
   })
   @IsOptional()
   @IsArray()

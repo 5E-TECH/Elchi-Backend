@@ -27,8 +27,9 @@ export const CAMPAIGN_MAX_SCHEDULE_DAYS = 90;
 export const CAMPAIGN_MAX_RECIPIENT_IDS = 5000;
 
 /**
- * Kampaniyada ruxsat etilgan kanallar. SMS — REAL PUL, alohida epikda
- * (kunlik kvota, past chegara, majburiy tasdiq) — bu karta SMSni YOQMAYDI.
+ * Kampaniyada ruxsat etilgan kanallar. (9D1Gl9MS) SMS — REAL PUL: kampaniyada
+ * DOIM reklama (`promo`) — rozilik darvozasi, 18:00–09:00 taqiq, opt-out
+ * havolasi, kunlik kvota (`SMS_DAILY_CAP`) va SMS_MAX_FANOUT chegarasi.
  * Telegram — market guruhi relay'i (qabul qiluvchi bo'yicha emas), email —
  * provayder yo'q.
  */
@@ -37,6 +38,7 @@ export const CAMPAIGN_ALLOWED_CHANNELS: readonly NotificationChannel[] =
     NotificationChannel.IN_APP,
     NotificationChannel.REALTIME,
     NotificationChannel.PUSH,
+    NotificationChannel.SMS,
   ]);
 
 export function campaignMaxFanout(raw: unknown): number {

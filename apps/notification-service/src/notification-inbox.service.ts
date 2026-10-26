@@ -643,7 +643,11 @@ export class NotificationInboxService {
               }
               // SMS: navbatga ham shu tranzaksiyada; holat har qatorning delivery.sms ida.
               if (wantsSms && persisted.length) {
-                smsResult = await this.queueSms(persisted, manager);
+                smsResult = await this.queueSms(
+                  persisted,
+                  manager,
+                  internal?.smsMessageClass,
+                );
               }
               if (escalationDueAt && persisted.length && this.escalation) {
                 await this.escalation.schedule(
@@ -879,6 +883,7 @@ export class NotificationInboxService {
   private async queueSms(
     rows: Notification[],
     manager: EntityManager,
+    messageClass?: 'promo',
   ): Promise<SmsChannelResult> {
     const eligible = rows.filter(
       (row) =>
@@ -897,10 +902,11 @@ export class NotificationInboxService {
         sms_skipped: skipped,
       };
     }
-    const result = await this.smsDispatch.queueForNotifications(
-      eligible,
-      manager,
-    );
+    const result = messageClass
+      ? await this.smsDispatch.queueForNotifications(eligible, manager, {
+          messageClass,
+        })
+      : await this.smsDispatch.queueForNotifications(eligible, manager);
     if (!skipped) return result;
     return {
       ...result,

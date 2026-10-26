@@ -24902,6 +24902,30 @@
           "audience_segment_id": {
             "type": "string",
             "example": "3"
+          },
+          "channels": {
+            "type": "array",
+            "example": [
+              "in_app",
+              "sms"
+            ],
+            "items": {
+              "type": "string",
+              "enum": [
+                "in_app",
+                "realtime",
+                "push",
+                "sms"
+              ]
+            }
+          },
+          "title": {
+            "type": "string",
+            "example": "Yangi tarif"
+          },
+          "body": {
+            "type": "string",
+            "example": "1-noyabrdan yangi tariflar amal qiladi."
           }
         }
       },
@@ -25032,13 +25056,14 @@
               "in_app",
               "realtime"
             ],
-            "description": "Faqat in_app / realtime / push (SMS — alohida epik)",
+            "description": "in_app / realtime / push / sms. SMS — DOIM reklama: faqat roziligi borlarga (yo'q — sms: skipped, sms_reason: no_consent), 18:00–09:00 da yuborilmaydi (09:00 ga suriladi), bekor qilish havolasi qo'shiladi, kunlik kvota (SMS_DAILY_CAP); auditoriya SMS_MAX_FANOUT dan katta — 400; SMS o'chiq / opt-out sozlanmagan — 409",
             "items": {
               "type": "string",
               "enum": [
                 "in_app",
                 "realtime",
-                "push"
+                "push",
+                "sms"
               ]
             }
           },

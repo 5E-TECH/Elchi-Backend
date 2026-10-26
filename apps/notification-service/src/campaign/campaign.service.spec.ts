@@ -237,7 +237,6 @@ describe('xHPdpj0W — CampaignService', () => {
 
     it.each([
       ['Idempotency-Key yo‘q', { idempotency_key: '' }],
-      ['SMS kanali (real pul, alohida epik)', { channels: ['in_app', 'sms'] }],
       ['telegram kanali', { channels: ['telegram'] }],
       ['katalogda yo‘q tur', { type: 'promo.blast' }],
       ['mijoz bayroqsiz (W8aerwL6 TC7)', { roles: ['customer'] }],
