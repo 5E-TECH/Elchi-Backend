@@ -49,7 +49,7 @@ const MONEY_MAX = 999_999_999_999.99;
 const ID_PATTERN = /^\d{1,18}$/;
 
 /** `round(v·10ⁿ)/10ⁿ === v` (catalog DTO'dagi qoida — eksponentli songa ham xavfsiz). */
-const MaxDecimals = (decimals: number, message: string) => {
+export const MaxDecimals = (decimals: number, message: string) => {
   const scale = 10 ** decimals;
   return ValidateBy(
     {
@@ -82,7 +82,11 @@ const IdField = (field: string, description: string) =>
 const hasProduct = (o: { product_id?: unknown }) =>
   o.product_id !== undefined && o.product_id !== null && o.product_id !== '';
 
-const hasAnyDimension = (o: DeliveryQuoteItemRequestDto) =>
+const hasAnyDimension = (o: {
+  length_cm?: unknown;
+  width_cm?: unknown;
+  height_cm?: unknown;
+}) =>
   [o.length_cm, o.width_cm, o.height_cm].some(
     (d) => d !== undefined && d !== null,
   );
@@ -91,7 +95,7 @@ const hasAnyDimension = (o: DeliveryQuoteItemRequestDto) =>
  * L/W/H — uchalasi birga (catalog `CHK_products_dimensions_all_or_none` bilan
  * AYNI): bittasi berilsa qolgan ikkitasi ham majburiy.
  */
-const DimensionField = (
+export const DimensionField = (
   field: 'length_cm' | 'width_cm' | 'height_cm',
   label: string,
   example: number,
@@ -104,7 +108,9 @@ const DimensionField = (
       example,
       description: `${label}, sm (butun son). Uzunlik, kenglik, balandlik — uchalasi birga yoki hech biri. \`product_id\` bilan yuborilmaydi.`,
     }),
-    ValidateIf((o: DeliveryQuoteItemRequestDto) => hasAnyDimension(o)),
+    ValidateIf((o: Parameters<typeof hasAnyDimension>[0]) =>
+      hasAnyDimension(o),
+    ),
     IsDefined({ message: `${field} — L/W/H uchalasi birga yuboriladi` }),
     IsInt({ message: `${field} — butun son (sm)` }),
     Min(PRODUCT_DIMENSION_CM_MIN, {

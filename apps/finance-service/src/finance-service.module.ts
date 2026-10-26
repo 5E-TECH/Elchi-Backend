@@ -31,6 +31,11 @@ import { CashboxCardService } from './cashbox-card/cashbox-card.service';
 import { CashboxCardController } from './cashbox-card/cashbox-card.controller';
 import { FinanceRealtimeService } from './realtime/finance-realtime.service';
 import { CashboxExpenseCategory } from './entities/cashbox-expense-category.entity';
+import { ShiftAccountCheck } from './entities/shift-account-check.entity';
+import { FinanceSetting } from './entities/finance-setting.entity';
+import { ShiftAccountCheckService } from './shift-account-check/shift-account-check.service';
+import { ShiftAccountCheckController } from './shift-account-check/shift-account-check.controller';
+import { SHIFT_ACCOUNT_CHECKS } from './shift-account-check/shift-account-check.token';
 import { ExpenseCategoryService } from './expense-category/expense-category.service';
 import { ExpenseCategoryController } from './expense-category/expense-category.controller';
 
@@ -87,6 +92,9 @@ import { ExpenseCategoryController } from './expense-category/expense-category.c
       CashboxCardMovement,
       // Elchi Pochta №1 — kassa xarajatlari kategoriyalari.
       CashboxExpenseCategory,
+      // kiZgTybn — smena yopishda karta qoldig'ini tasdiqlash + sozlamalar.
+      ShiftAccountCheck,
+      FinanceSetting,
       // (2crjWf7v) kuryer kvitansiya javobi — faqat audit.
       CourierPaymentAck,
     ]),
@@ -96,6 +104,7 @@ import { ExpenseCategoryController } from './expense-category/expense-category.c
     SettlementUnappliedController,
     CashboxCardController,
     ExpenseCategoryController,
+    ShiftAccountCheckController,
   ],
   providers: [
     FinanceServiceService,
@@ -106,6 +115,8 @@ import { ExpenseCategoryController } from './expense-category/expense-category.c
     ExpenseCategoryService,
     CourierPaymentAckService,
     CourierCashReminderScheduler,
+    ShiftAccountCheckService,
+    { provide: SHIFT_ACCOUNT_CHECKS, useExisting: ShiftAccountCheckService },
   ],
 })
 export class FinanceServiceModule {}

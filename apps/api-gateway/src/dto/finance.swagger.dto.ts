@@ -1,6 +1,8 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import {
+  ArrayMaxSize,
+  IsArray,
   IsBoolean,
   IsDefined,
   IsEnum,
@@ -14,6 +16,7 @@ import {
   Max,
   MaxLength,
   Min,
+  ValidateNested,
 } from 'class-validator';
 import {
   Cashbox_type,
@@ -385,6 +388,169 @@ export class CloseShiftRequestDto {
   @IsOptional()
   @IsString()
   comment?: string;
+
+  @ApiPropertyOptional({
+    type: () => [CloseShiftAccountRequestDto],
+    description:
+      "(kiZgTybn) Har karta / hisob qoldig'ini tasdiqlash. `shift.account_check.enabled` yoqilgan bo'lsa kassaning HAR faol kartasi uchun majburiy (aks holda 400). Rasm majburiy kartada rasm yo'q — 400; farq ≠ 0, AI `mismatch` yoki kiritilgan qiymat rasmdagidan farqli — `comment` majburiy (400). AI natijasi `pending` bo'lsa yopish 30 s gacha kutadi, keyin baribir yopiladi.",
+  })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(100)
+  @ValidateNested({ each: true })
+  @Type(() => CloseShiftAccountRequestDto)
+  accounts?: CloseShiftAccountRequestDto[];
+}
+
+/** (kiZgTybn) POST /finance/shift/close — `accounts[]` qatori. */
+export class CloseShiftAccountRequestDto {
+  @ApiProperty({ example: '3', description: 'Kassa kartasi ID si' })
+  @IsString()
+  @Matches(/^\d+$/)
+  card_id!: string;
+
+  @ApiProperty({
+    example: 1250000,
+    description: "Kassir kiritgan qoldiq (so'm)",
+  })
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  entered_balance!: number;
+
+  @ApiPropertyOptional({
+    example: 'shift-check-1730000000000-uuid-photo.jpg',
+    description:
+      'Ixtiyoriy: `POST /finance/shift/account-photo` qaytargan kalit (boshqa kalit — 400). Berilmasa — oxirgi yuklangan rasm.',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  photo_file_key?: string;
+
+  @ApiPropertyOptional({ example: 'Bank komissiyasi yechilgan' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(1000)
+  comment?: string;
+}
+
+/** (kiZgTybn) POST /finance/shift/account-photo — multipart matn maydonlari. */
+export class ShiftAccountPhotoRequestDto {
+  @ApiProperty({ example: '3', description: 'Kassa kartasi ID si' })
+  @IsString()
+  @Matches(/^\d+$/)
+  card_id!: string;
+
+  @ApiPropertyOptional({
+    example: '12',
+    description: 'Smena ID si. Berilmasa — karta kassasining ochiq smenasi',
+  })
+  @IsOptional()
+  @IsString()
+  @Matches(/^\d+$/)
+  shift_id?: string;
+
+  @ApiPropertyOptional({
+    example: 1250000,
+    description: 'Qoralama: kassir kiritgan qoldiq (yopishda qayta yuboriladi)',
+  })
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  entered_balance?: number;
+
+  @ApiPropertyOptional({ example: 'Izoh' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(1000)
+  comment?: string;
+}
+
+/**
+ * (kiZgTybn) Faqat Swagger uchun: `photo` fayl maydoni. `@Body()` da
+ * ISHLATILMAYDI (fayl multer orqali keladi; whitelist uni rad etardi).
+ */
+export class ShiftAccountPhotoSwaggerDto extends ShiftAccountPhotoRequestDto {
+  @ApiProperty({
+    type: 'string',
+    format: 'binary',
+    description:
+      'Qoldiq skrinshoti: jpeg / png / webp, ≤ 5 MB (EXIF tozalanadi)',
+  })
+  photo!: unknown;
+}
+
+/** (kiZgTybn) GET /finance/shift/settings — kassa doirasi. */
+export class ShiftSettingsQueryDto {
+  @ApiPropertyOptional({
+    example: '0',
+    description:
+      "Kassa: '0' — asosiy (MAIN), aks holda filial ID si (faqat superadmin/admin; menejer — o'z filiali, registrator — '0')",
+  })
+  @IsOptional()
+  @IsString()
+  @Matches(/^\d+$/)
+  cashbox_user_id?: string;
+}
+
+export class ShiftCardSettingRequestDto {
+  @ApiProperty({ example: '3' })
+  @IsString()
+  @Matches(/^\d+$/)
+  card_id!: string;
+
+  @ApiPropertyOptional({ example: true })
+  @IsOptional()
+  @IsBoolean()
+  require_photo_on_shift_close?: boolean;
+
+  @ApiPropertyOptional({
+    example: true,
+    description: 'Faqat rasm talab qilinganda yoqiladi (aks holda 400)',
+  })
+  @IsOptional()
+  @IsBoolean()
+  ai_check_enabled?: boolean;
+}
+
+/** (kiZgTybn) PATCH /finance/shift/settings — FAQAT superadmin. */
+export class UpdateShiftSettingsRequestDto {
+  @ApiPropertyOptional({
+    example: true,
+    description:
+      'Global `shift.account_check.enabled` (sukut false): yoqilsa yopishda har faol karta uchun `accounts[]` majburiy',
+  })
+  @IsOptional()
+  @IsBoolean()
+  account_check_enabled?: boolean;
+
+  @ApiPropertyOptional({
+    example: true,
+    description:
+      "Global `shift.photo.required` (sukut true) — master kalit: o'chiq bo'lsa hech bir kartada rasm majburiy emas; yoqiq — karta bo'yicha `require_photo_on_shift_close` hal qiladi",
+  })
+  @IsOptional()
+  @IsBoolean()
+  photo_required?: boolean;
+
+  @ApiPropertyOptional({
+    example: false,
+    description:
+      "Global `shift.ai_check.enabled` (sukut false) — master kalit: o'chiq bo'lsa AI chaqirilmaydi; yoqiq — karta bo'yicha `ai_check_enabled` hal qiladi",
+  })
+  @IsOptional()
+  @IsBoolean()
+  ai_check_enabled?: boolean;
+
+  @ApiPropertyOptional({ type: () => [ShiftCardSettingRequestDto] })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(200)
+  @ValidateNested({ each: true })
+  @Type(() => ShiftCardSettingRequestDto)
+  cards?: ShiftCardSettingRequestDto[];
 }
 
 /**

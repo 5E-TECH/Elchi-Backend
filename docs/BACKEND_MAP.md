@@ -422,7 +422,9 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
   INSIDE the business transaction: `finance.shift.closed` /
   `finance.shift.auto_closed` (shift close; MAIN → roles superadmin/admin/
   registrator, BRANCH → `manager` of that branch only, + opener/closer user
-  rooms), `finance.shift.account_checked` (ready for kiZgTybn, no caller yet),
+  rooms), `finance.shift.account_checked` (kiZgTybn: emitted by
+  `ShiftAccountCheckService.applyAiResult` when a card-balance screenshot AI
+  result lands; payload `shift_id`, `card_id`, `ai_status`, `checked_at`),
   `finance.cashbox.card_changed` (card create/rename/update/status/
   make-default/transfer/convert → superadmin/admin; Zv3MLn0a: a BRANCH cashbox
   card also → `manager` of that branch, payload `cashbox_type: 'branch'` +
@@ -454,6 +456,37 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
   `branch_id`) and MANAGER (always own branch; other branch → 403); create /
   PATCH `:id` (details, also on the default card — only its name is locked) /
   `:id/status` / `:id/make-default` / transfer / convert — SA/ADMIN.
+- **Shift close — per-card balance confirmation (kiZgTybn, 2026-10-26):**
+  `finance_schema.shift_account_checks` (migr 166; UNIQUE shift_id +
+  cashbox_card_id) + `finance_schema.finance_settings` (key/value, SA only).
+  Global keys: `shift.account_check.enabled` (default false → `accounts[]`
+  required for EVERY active card of the shift's cashbox), `shift.photo.required`
+  (default true, master switch AND card `require_photo_on_shift_close`),
+  `shift.ai_check.enabled` (default false, master switch AND card
+  `ai_check_enabled`). Flow: gateway `POST /finance/shift/account-photo`
+  (jpeg/png/webp ≤5 MB, magic bytes, `stripImageMetadata` removes EXIF/XMP/
+  IPTC/text chunks, file-service folder `shift-check`, private, signed URL
+  300 s) → `finance.shift.account_check.attach_photo` (draft row, expected
+  balance snapshot, `ai_status` pending/disabled, new `ai_request_id`) → if AI
+  on, gateway background task → ai-service `ai.finance.balance_screenshot`
+  (feature `finance_balance_screenshot`, area `internal`, counts in
+  `AI_DAILY_USD_CAP`, returns only last4) → `finance.shift.account_check.
+  ai_result` (stale `ai_request_id` ignored; `ai_status` match = |read −
+  system| ≤ 1 so'm AND last4 equal, else mismatch / unreadable / error;
+  `ai_entered_ok` = entered vs read) + realtime. `closeShift` waits ≤30 s
+  (`SHIFT_CLOSE_AI_WAIT_MS`) for fresh pending rows OUTSIDE the lock, then in
+  the shift transaction `confirmAtClose` re-snapshots expected per card
+  (named = balance, default = derived), validates (photo required → 400;
+  difference ≠ 0 / AI mismatch / entered ≠ read → comment required → 400) and
+  finalizes rows. NO money moves (balances only read). `finance.shift.report`
+  (`GET /finance/shift/:id/report`): cash + card aggregates, `accounts[]`,
+  `accounts_summary`, operations (type × method: count, sum) for the shift
+  window; manager → own branch, registrator → MAIN (else 404); gateway signs
+  photo URLs, `ai_raw` only for SUPERADMIN. Settings: `finance.shift.settings.
+  {get,update}` (`GET|PATCH /finance/shift/settings`; PATCH SUPERADMIN only).
+  Activity-log: `finance.shift_settings_updated`,
+  `finance.shift_account_photo_uploaded`, `finance.shift_account_ai_checked`,
+  shift close metadata `accounts`.
 - **fix3 (2026-10-01):** `payment_market` replies right after commit (+ the 2 s
   bounded ledger publish); the per-order PAID/PARTLY_PAID sync and the partner
   webhook run in the background (serialized per market, in-process, drained

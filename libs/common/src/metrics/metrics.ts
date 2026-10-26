@@ -1,4 +1,5 @@
 import { INestApplication } from '@nestjs/common';
+import { createHash, timingSafeEqual } from 'crypto';
 import {
   Registry,
   Counter,
@@ -48,6 +49,7 @@ interface MetricsRequest {
   url: string;
   route?: { path?: string };
   baseUrl?: string;
+  headers?: Record<string, string | string[] | undefined>;
 }
 interface MetricsResponse {
   statusCode: number;
@@ -56,13 +58,47 @@ interface MetricsResponse {
   on(event: string, cb: () => void): void;
 }
 
+export type MetricsAccess = 'allow' | 'unauthorized' | 'disabled';
+
+const sha256 = (value: string): Buffer =>
+  createHash('sha256').update(value, 'utf8').digest();
+
+/**
+ * (oFfOWGuo, xavfsizlik P1) `GET /metrics` kirish qoidasi. Ilgari
+ * autentifikatsiyasiz edi — gateway porti (3004) Cloudflare Tunnel nishoni,
+ * ya'ni `https://api.elchipochta.uz/metrics` internetdan ~240 KB route /
+ * status / xotira ma'lumotini berardi.
+ *  - `METRICS_TOKEN` berilgan → faqat `Authorization: Bearer <token>`
+ *    (timing-safe solishtirish); boshqasi 401. Prometheus:
+ *    `authorization: { credentials: <token> }`.
+ *  - token yo'q + `NODE_ENV=production` → endpoint YOPIQ (404, mavjudligi
+ *    ham bilinmaydi). Repo / docker-compose.prod.yml da scraper yo'q.
+ *  - token yo'q + dev/test → avvalgidek ochiq (lokal qulaylik).
+ */
+export function metricsAccess(
+  authorization: string | string[] | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+): MetricsAccess {
+  const token = (env.METRICS_TOKEN ?? '').trim();
+  if (!token) return env.NODE_ENV === 'production' ? 'disabled' : 'allow';
+  const header = Array.isArray(authorization)
+    ? authorization[0]
+    : authorization;
+  const match = /^Bearer\s+(\S+)\s*$/i.exec(header ?? '');
+  if (!match) return 'unauthorized';
+  return timingSafeEqual(sha256(match[1]), sha256(token))
+    ? 'allow'
+    : 'unauthorized';
+}
+
 /**
  * Prometheus metrics for an HTTP-facing Nest app (audit observability: no
  * metrics endpoint existed). Registers process/GC/event-loop default metrics, a
- * request-duration histogram + in-flight gauge, and an unauthenticated
- * `GET /metrics` (a raw adapter route, so it bypasses the JWT guard — it lives
- * on the internal port, not routed publicly). Cardinality is bounded by
- * labelling on the matched route *pattern* (`/orders/:id`), never the raw path.
+ * request-duration histogram + in-flight gauge, and `GET /metrics` (a raw
+ * adapter route, so it bypasses the JWT guard — access is decided by
+ * `metricsAccess`: METRICS_TOKEN bearer; closed in production without a
+ * token). Cardinality is bounded by labelling on the matched route *pattern*
+ * (`/orders/:id`), never the raw path.
  * Call before `app.listen()`.
  */
 export function registerMetrics(
@@ -103,7 +139,17 @@ export function registerMetrics(
 
   app
     .getHttpAdapter()
-    .get('/metrics', (_req: unknown, res: MetricsResponse) => {
+    .get('/metrics', (req: MetricsRequest, res: MetricsResponse) => {
+      const access = metricsAccess(req.headers?.authorization);
+      if (access !== 'allow') {
+        res.statusCode = access === 'disabled' ? 404 : 401;
+        res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+        if (access === 'unauthorized') {
+          res.setHeader('WWW-Authenticate', 'Bearer realm="metrics"');
+        }
+        res.end(access === 'disabled' ? 'Not Found' : 'Unauthorized');
+        return;
+      }
       res.setHeader('Content-Type', register.contentType);
       register
         .metrics()

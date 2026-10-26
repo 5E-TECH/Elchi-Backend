@@ -28,6 +28,18 @@ export class CloseShiftDto {
   comment?: string;
 
   /**
+   * (kiZgTybn) Har karta / hisob qoldig'ini tasdiqlash. Validatsiya
+   * `ShiftAccountCheckService.confirmAtClose` da (RMQ payload ishonchsiz).
+   */
+  @IsOptional()
+  accounts?: Array<{
+    card_id: string;
+    entered_balance: number;
+    photo_file_key?: string;
+    comment?: string;
+  }>;
+
+  /**
    * R6 — kassa doirasi (filial ID). Gateway faqat menejer uchun qo'yadi:
    * smena shu kassaniki bo'lishi shart, aks holda 404. Berilmasa — avvalgidek.
    */

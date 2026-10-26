@@ -350,6 +350,17 @@ export class FinanceServiceController {
     );
   }
 
+  // (kiZgTybn) Smena hisoboti: naqd + kartalar bo'yicha natijalar.
+  @MessagePattern({ cmd: 'finance.shift.report' })
+  shiftReport(
+    @Payload() data: { shift_id?: string; cashbox_user_id?: string },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.financeService.getShiftReport(data ?? {}),
+    );
+  }
+
   @MessagePattern({ cmd: 'finance.shift.find_all' })
   findAllShifts(@Payload() data: FindShiftsDto, @Ctx() context: RmqContext) {
     return this.executeAndAck(context, () =>

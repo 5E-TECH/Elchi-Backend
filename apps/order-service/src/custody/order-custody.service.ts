@@ -127,6 +127,9 @@ export class OrderCustodyService {
         'Branch manager bekor qilingan pochtani qabul qildi',
       'canceled post created':
         "Courier bekor qilingan pochtani branchga jo'natdi",
+      // vbu7Wr3o #1: pochta qabuli (odatda tavsif yozuvning o'zida bor).
+      'post received by branch': 'Filial pochtani qabul qildi',
+      'post received by courier': 'Kuryer pochtani qabul qildi',
       'partly-sell unsold items canceled':
         'Qisman sotishdan qolgan mahsulotlar bekor qilindi',
       'partly-sell canceled items custody assigned':

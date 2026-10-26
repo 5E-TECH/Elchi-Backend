@@ -12,6 +12,7 @@ import { AiServiceController } from './ai-service.controller';
 import { AiBudgetService } from './budget/ai-budget.service';
 import { AiDraftService } from './draft/ai-draft.service';
 import { DistrictPickService } from './district-pick/district-pick.service';
+import { BalanceScreenshotService } from './balance-screenshot/balance-screenshot.service';
 import {
   AiOrderDraft,
   AiOrderDraftItem,
@@ -55,6 +56,8 @@ import { AiUsageService } from './usage/ai-usage.service';
     ProductDisambiguateService,
     AiDraftService,
     DistrictPickService,
+    // kiZgTybn — smena yopishda karta qoldig'i skrinshoti.
+    BalanceScreenshotService,
   ],
 })
 export class AiServiceModule {}

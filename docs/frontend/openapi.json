@@ -9215,6 +9215,150 @@
         ]
       }
     },
+    "/finance/shift/account-photo": {
+      "post": {
+        "description": "`photo` — jpeg / png / webp, ≤ 5 MB, haqiqiy turi magic-bytes bilan tekshiriladi, EXIF/XMP tozalanadi, shaxsiy (private) saqlanadi. Faqat OCHIQ smena; menejer — o'z filiali kassasi kartasi, registrator — asosiy kassa. Javob: `data.check` (qoralama qatori, `ai_status`), `data.photo_url` (qisqa muddatli imzolangan havola, 300 s). AI yoqilgan kartada (`shift.ai_check.enabled` + karta `ai_check_enabled`) `ai_status = pending`; natija realtime `finance.shift.account_checked` bilan keladi.",
+        "operationId": "FinanceGatewayController_uploadShiftAccountPhoto",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/ShiftAccountPhotoSwaggerDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "(kiZgTybn) Smena yopish: karta qoldig'i skrinshotini yuklash",
+        "tags": [
+          "Finance"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "registrator",
+          "manager"
+        ]
+      }
+    },
+    "/finance/shift/settings": {
+      "get": {
+        "description": "Global `account_check_enabled` / `photo_required` / `ai_check_enabled` va kassa kartalari: `require_photo_on_shift_close`, `ai_check_enabled`, hisoblangan `photo_required` / `ai_enabled` (smena yopish oynasi uchun). O'qish — yopuvchi rollar (menejer — o'z filiali, registrator — '0'); o'zgartirish — faqat superadmin (PATCH).",
+        "operationId": "FinanceGatewayController_getShiftSettings",
+        "parameters": [
+          {
+            "name": "cashbox_user_id",
+            "required": false,
+            "in": "query",
+            "description": "Kassa: '0' — asosiy (MAIN), aks holda filial ID si (faqat superadmin/admin; menejer — o'z filiali, registrator — '0')",
+            "schema": {
+              "example": "0",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "(kiZgTybn) Smena yopish sozlamalari (global + karta bo'yicha)",
+        "tags": [
+          "Finance"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "registrator",
+          "manager"
+        ]
+      },
+      "patch": {
+        "description": "Global kalitlar va `cards[]` (karta bo'yicha `require_photo_on_shift_close`, `ai_check_enabled`; AI faqat rasm talab qilinganda — aks holda 400). Activity-log: `finance.shift_settings_updated`.",
+        "operationId": "FinanceGatewayController_updateShiftSettings",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateShiftSettingsRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "(kiZgTybn) Smena yopish sozlamalarini o'zgartirish — FAQAT superadmin",
+        "tags": [
+          "Finance"
+        ],
+        "x-roles": [
+          "superadmin"
+        ]
+      }
+    },
+    "/finance/shift/{id}/report": {
+      "get": {
+        "description": "`data.cash` / `data.card` — ochilish, kirim, chiqim, kutilgan, sanalgan, farq; `data.accounts[]` — har karta: kutilgan (snapshot), kiritilgan, farq, `ai_status` (not_required | pending | match | mismatch | unreadable | disabled | error), `ai_entered_ok`, `ai_read_balance`, `ai_last4_detected`, `comment`, `comment_required`, `photo_url` (imzolangan, 300 s); `ai_raw` — faqat superadmin. `data.accounts_summary` — holatlar soni; `data.operations[]` — smena oynasidagi kassa operatsiyalari (tur × to'lov usuli: soni, summa). Menejer — faqat o'z filiali, registrator — asosiy kassa (boshqasi 404).",
+        "operationId": "FinanceGatewayController_shiftReport",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Smena ID si",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "(kiZgTybn) Smena hisoboti: naqd + kartalar bo'yicha natijalar",
+        "tags": [
+          "Finance"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "registrator",
+          "manager"
+        ]
+      }
+    },
     "/finance/shift/current": {
       "get": {
         "description": "(kfdfYDik) `data.shift` — ochiq smena yoki null; `data.required` — shu kassada smenasiz pul operatsiyalari bloklanadimi (FINANCE_REQUIRE_OPEN_SHIFT: MAIN — main/all, filial — all). R6: menejer — o'z filiali kassasi. (8OYPuz7J) `data.last_closed` — shu kassaning eng oxirgi yopilgan smenasi (closed_at DESC, to'liq qator) yoki null; smena qatorlarida `opened_by_name` / `closed_by_name`. (32Sw3DfC) `?cashbox_user_id=` — superadmin/admin filial kassasi sahifasida shu filial smenasi va `required` (FAQAT o'qish; mavjud bo'lmagan filial — 404). `data.can_open` — so'rovchi shu kassada smena ocha oladimi (superadmin/admin filialda — yo'q: filial smenasini menejer ochadi); smena yo'q va ocha olmasa `data.lock_message` = «Filial menejeri smenani ochishi kerak», aks holda null. Menejer `?cashbox_user_id=0` — HQ asosiy kassa smenasi HOLATI (`status_only: true`; pul maydonlarisiz, `last_closed` yo'q).",
@@ -20090,6 +20234,73 @@
         ]
       }
     },
+    "/public/delivery-quote": {
+      "post": {
+        "description": "Autentifikatsiyasiz (elchipochta.uz kalkulyatori). Hisob tokenli `POST /delivery/quote` bilan AYNI dvigatel (logistics `logistics.delivery.quote`). Posilka: yuqori darajadagi `weight_kg` (+ ixtiyoriy `length_cm`/`width_cm`/`height_cm` — uchalasi birga, `volumetric_enabled`) YOKI `items[]` (≤ 20, bitta jo'natma). `product_id` qabul qilinmaydi (400). `pickup: true` — bitta posilkali tashrif: `pickupFee` va `totalWithPickup` ga kiradi, `total` ga emas. Tarif: ikkala viloyat ham shahar zonasida → `city`, aks holda `where_deliver`. Javobda faqat hisob — tarif/sozlama id'lari yo'q. Xatolar: 400 (validatsiya, yo'q viloyat), 409 (faol tarif yo'q), 429 (per-IP limit, sukut 30/daqiqa), 504. Javob ≤ 30 s keshlanadi.",
+        "operationId": "PublicDeliveryPricingController_quote",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublicDeliveryQuoteRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicDeliveryQuoteResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Noto'g'ri kirish (manfiy o'lcham, product_id, yo'q viloyat)"
+          },
+          "429": {
+            "description": "Per-IP limit"
+          }
+        },
+        "summary": "Ochiq yetkazish narxi kalkulyatori (tokensiz; hech narsa yozilmaydi) — mSkzzNBJ",
+        "tags": [
+          "Public delivery pricing"
+        ],
+        "x-roles": null
+      }
+    },
+    "/public/delivery-tariffs": {
+      "get": {
+        "description": "elchipochta.uz tariflar jadvali, pickup matni (`pickup_fee`, `pickup_free_from_count`) va kalkulyator hudud tanlovi shu javobdan chiziladi — raqamlar landing repo'sida saqlanmaydi. Faqat HOZIRGI qiymatlar: versiyalar, tarix, `created_by`, id'lar yo'q. Per-IP limit (sukut 30/daqiqa), javob ≤ 30 s keshlanadi.",
+        "operationId": "PublicDeliveryPricingController_tariffs",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicDeliveryTariffsResponseDto"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Per-IP limit"
+          }
+        },
+        "summary": "Ochiq tariflar jadvali + formula sozlamalari + viloyatlar (tokensiz) — mSkzzNBJ",
+        "tags": [
+          "Public delivery pricing"
+        ],
+        "x-roles": null
+      }
+    },
     "/warehouses/resolve-source": {
       "post": {
         "description": "Qaror 4: buyurtma tumani viloyat filialida (REGIONAL/HYBRID) FAOL ombor bo'lsa va HAMMA mahsulot yetarli bo'lsa — `source: WAREHOUSE` (`warehouse.kind: REGIONAL`), aks holda butun buyurtma `HQ` (bo'linmaydi), `reason` va `shortages` bilan. VkKDSNNn — 2-pog'ona (faqat `WAREHOUSE_HQ_TIER_ENABLED` yoqilganda): viloyat ombori yo'q (NO_WAREHOUSE), to'xtatilgan (WAREHOUSE_PAUSED) yoki qoldig'i yetmasa (INSUFFICIENT_STOCK) — Markaziy ombor (HQ filiali) ko'rib chiqiladi; unda HAMMA mahsulot yetarli bo'lsa `source: WAREHOUSE`, `warehouse.kind: HQ` + `regional_reason` / `regional_warehouse` / `regional_shortages`; aks holda `source: HQ`, `reason` — viloyat sababi, `hq_reason` (NO_HQ_WAREHOUSE / HQ_WAREHOUSE_PAUSED / HQ_INSUFFICIENT_STOCK) + `hq_warehouse` / `hq_shortages`. Kalit o'chiq bo'lsa Markaziy ombor nomzod EMAS va bu maydonlar javobda yo'q. Hech narsa band qilinmaydi — band order-service yaratishda (`catalog.warehouse.reserve`). MARKET/MARKET_OPERATOR — faqat o'z marketi; market kaliti «Ombordan buyurtma yaratish» o'chiq bo'lsa — `HQ` + `MARKET_NOT_ALLOWED` (Markaziy ombor ham ko'rilmaydi).",
@@ -25304,6 +25515,34 @@
           }
         }
       },
+      "CloseShiftAccountRequestDto": {
+        "type": "object",
+        "properties": {
+          "card_id": {
+            "type": "string",
+            "example": "3",
+            "description": "Kassa kartasi ID si"
+          },
+          "entered_balance": {
+            "type": "number",
+            "example": 1250000,
+            "description": "Kassir kiritgan qoldiq (so'm)"
+          },
+          "photo_file_key": {
+            "type": "string",
+            "example": "shift-check-1730000000000-uuid-photo.jpg",
+            "description": "Ixtiyoriy: `POST /finance/shift/account-photo` qaytargan kalit (boshqa kalit — 400). Berilmasa — oxirgi yuklangan rasm."
+          },
+          "comment": {
+            "type": "string",
+            "example": "Bank komissiyasi yechilgan"
+          }
+        },
+        "required": [
+          "card_id",
+          "entered_balance"
+        ]
+      },
       "CloseShiftRequestDto": {
         "type": "object",
         "properties": {
@@ -25334,11 +25573,98 @@
           "comment": {
             "type": "string",
             "example": "Smena yopildi"
+          },
+          "accounts": {
+            "description": "(kiZgTybn) Har karta / hisob qoldig'ini tasdiqlash. `shift.account_check.enabled` yoqilgan bo'lsa kassaning HAR faol kartasi uchun majburiy (aks holda 400). Rasm majburiy kartada rasm yo'q — 400; farq ≠ 0, AI `mismatch` yoki kiritilgan qiymat rasmdagidan farqli — `comment` majburiy (400). AI natijasi `pending` bo'lsa yopish 30 s gacha kutadi, keyin baribir yopiladi.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CloseShiftAccountRequestDto"
+            }
           }
         },
         "required": [
           "closing_balance_cash"
         ]
+      },
+      "ShiftAccountPhotoSwaggerDto": {
+        "type": "object",
+        "properties": {
+          "card_id": {
+            "type": "string",
+            "example": "3",
+            "description": "Kassa kartasi ID si"
+          },
+          "shift_id": {
+            "type": "string",
+            "example": "12",
+            "description": "Smena ID si. Berilmasa — karta kassasining ochiq smenasi"
+          },
+          "entered_balance": {
+            "type": "number",
+            "example": 1250000,
+            "description": "Qoralama: kassir kiritgan qoldiq (yopishda qayta yuboriladi)"
+          },
+          "comment": {
+            "type": "string",
+            "example": "Izoh"
+          },
+          "photo": {
+            "type": "string",
+            "format": "binary",
+            "description": "Qoldiq skrinshoti: jpeg / png / webp, ≤ 5 MB (EXIF tozalanadi)"
+          }
+        },
+        "required": [
+          "card_id",
+          "photo"
+        ]
+      },
+      "ShiftCardSettingRequestDto": {
+        "type": "object",
+        "properties": {
+          "card_id": {
+            "type": "string",
+            "example": "3"
+          },
+          "require_photo_on_shift_close": {
+            "type": "boolean",
+            "example": true
+          },
+          "ai_check_enabled": {
+            "type": "boolean",
+            "example": true,
+            "description": "Faqat rasm talab qilinganda yoqiladi (aks holda 400)"
+          }
+        },
+        "required": [
+          "card_id"
+        ]
+      },
+      "UpdateShiftSettingsRequestDto": {
+        "type": "object",
+        "properties": {
+          "account_check_enabled": {
+            "type": "boolean",
+            "example": true,
+            "description": "Global `shift.account_check.enabled` (sukut false): yoqilsa yopishda har faol karta uchun `accounts[]` majburiy"
+          },
+          "photo_required": {
+            "type": "boolean",
+            "example": true,
+            "description": "Global `shift.photo.required` (sukut true) — master kalit: o'chiq bo'lsa hech bir kartada rasm majburiy emas; yoqiq — karta bo'yicha `require_photo_on_shift_close` hal qiladi"
+          },
+          "ai_check_enabled": {
+            "type": "boolean",
+            "example": false,
+            "description": "Global `shift.ai_check.enabled` (sukut false) — master kalit: o'chiq bo'lsa AI chaqirilmaydi; yoqiq — karta bo'yicha `ai_check_enabled` hal qiladi"
+          },
+          "cards": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ShiftCardSettingRequestDto"
+            }
+          }
+        }
       },
       "CreateCashboxCardRequestDto": {
         "type": "object",
@@ -30284,6 +30610,440 @@
             "description": "Tezkor yetkazish ko`paytiruvchisi (1.4 → subtotal × 0.4 ustama)."
           }
         }
+      },
+      "PublicDeliveryTariffDto": {
+        "type": "object",
+        "properties": {
+          "base_price": {
+            "type": "number",
+            "example": 40000
+          },
+          "extra_per_kg": {
+            "type": "number",
+            "example": 4000
+          },
+          "days_min": {
+            "type": "number",
+            "example": 1
+          },
+          "days_max": {
+            "type": "number",
+            "example": 2
+          }
+        },
+        "required": [
+          "base_price",
+          "extra_per_kg",
+          "days_min",
+          "days_max"
+        ]
+      },
+      "PublicDeliveryQuoteItemRequestDto": {
+        "type": "object",
+        "properties": {
+          "weight_kg": {
+            "type": "number",
+            "minimum": 0.001,
+            "maximum": 1000,
+            "example": 1.2,
+            "description": "Og'irlik, kg (ko'pi bilan 3 kasr). `product_id` YO'Q bo'lsa MAJBURIY; bor bo'lsa yuborilmaydi."
+          },
+          "length_cm": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000,
+            "example": 30,
+            "description": "Uzunlik, sm (butun son). Uzunlik, kenglik, balandlik — uchalasi birga yoki hech biri. `product_id` bilan yuborilmaydi."
+          },
+          "width_cm": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000,
+            "example": 22,
+            "description": "Kenglik, sm (butun son). Uzunlik, kenglik, balandlik — uchalasi birga yoki hech biri. `product_id` bilan yuborilmaydi."
+          },
+          "height_cm": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000,
+            "example": 15,
+            "description": "Balandlik, sm (butun son). Uzunlik, kenglik, balandlik — uchalasi birga yoki hech biri. `product_id` bilan yuborilmaydi."
+          },
+          "volumetric_enabled": {
+            "type": "boolean",
+            "default": true,
+            "description": "Hajmga qarab hisoblash (U×K×B / bo'luvchi). false — faqat og'irlik. `product_id` bilan yuborilmaydi."
+          },
+          "quantity": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000,
+            "default": 1,
+            "example": 1,
+            "description": "Soni — og'irlik va hajm shunga ko'paytiriladi."
+          }
+        }
+      },
+      "PublicDeliveryQuoteRequestDto": {
+        "type": "object",
+        "properties": {
+          "from_region_id": {
+            "type": "string",
+            "example": "1",
+            "description": "Jo'natuvchi viloyati (`GET /public/delivery-tariffs` → `regions[].id`)."
+          },
+          "to_region_id": {
+            "type": "string",
+            "example": "1",
+            "description": "Qabul qiluvchi viloyati."
+          },
+          "where_deliver": {
+            "type": "string",
+            "enum": [
+              "center",
+              "address"
+            ],
+            "example": "center",
+            "description": "Yetkazish turi. Ikkala viloyat ham shahar zonasida (Toshkent shahri) bo'lsa e'tiborsiz: har doim `city` tarifi."
+          },
+          "items": {
+            "minItems": 1,
+            "maxItems": 20,
+            "description": "Bir nechta element — BITTA jo'natma (og'irlik va hajm qo'shiladi, baza bir marta). Berilmasa yuqori darajadagi `weight_kg`/L/W/H — bitta posilka.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PublicDeliveryQuoteItemRequestDto"
+            }
+          },
+          "weight_kg": {
+            "type": "number",
+            "minimum": 0.001,
+            "maximum": 1000,
+            "example": 1.2,
+            "description": "Bitta posilka og'irligi, kg (ko'pi bilan 3 kasr). `items` YO'Q bo'lsa MAJBURIY."
+          },
+          "length_cm": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000,
+            "example": 30,
+            "description": "Uzunlik, sm (butun son). Uzunlik, kenglik, balandlik — uchalasi birga yoki hech biri. `product_id` bilan yuborilmaydi."
+          },
+          "width_cm": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000,
+            "example": 22,
+            "description": "Kenglik, sm (butun son). Uzunlik, kenglik, balandlik — uchalasi birga yoki hech biri. `product_id` bilan yuborilmaydi."
+          },
+          "height_cm": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000,
+            "example": 15,
+            "description": "Balandlik, sm (butun son). Uzunlik, kenglik, balandlik — uchalasi birga yoki hech biri. `product_id` bilan yuborilmaydi."
+          },
+          "volumetric_enabled": {
+            "type": "boolean",
+            "default": true,
+            "description": "Hajmga qarab hisoblash. false — faqat og'irlik."
+          },
+          "express": {
+            "type": "boolean",
+            "default": false,
+            "description": "Tezkor yetkazish — subtotal × (express_multiplier − 1) ustama."
+          },
+          "pickup": {
+            "type": "boolean",
+            "default": false,
+            "description": "Kuryer posilkani olib ketadi (bitta posilkali tashrif). `pickupFee` va `totalWithPickup` ga qo'shiladi; `total` (buyurtma narxi) ga KIRMAYDI."
+          }
+        },
+        "required": [
+          "from_region_id",
+          "to_region_id",
+          "where_deliver"
+        ]
+      },
+      "PublicDeliveryQuoteResultDto": {
+        "type": "object",
+        "properties": {
+          "tariffId": {
+            "type": "string",
+            "enum": [
+              "city",
+              "center",
+              "address"
+            ]
+          },
+          "cityRoute": {
+            "type": "boolean",
+            "description": "Ikkala viloyat ham shahar zonasida — `city` tarifi"
+          },
+          "base": {
+            "type": "number",
+            "example": 40000
+          },
+          "perExtraKg": {
+            "type": "number",
+            "example": 4000
+          },
+          "daysMin": {
+            "type": "object",
+            "nullable": true,
+            "example": 1
+          },
+          "daysMax": {
+            "type": "object",
+            "nullable": true,
+            "example": 2
+          },
+          "days": {
+            "example": [
+              1,
+              2
+            ],
+            "description": "`[daysMin, daysMax]` (landing `Quote.days`)",
+            "type": "array",
+            "items": {
+              "type": "number"
+            }
+          },
+          "actualKg": {
+            "type": "number",
+            "example": 1.2
+          },
+          "volumetricKg": {
+            "type": "number",
+            "example": 1.98
+          },
+          "volumetricFromKg": {
+            "type": "number",
+            "example": 3,
+            "description": "Hajm chegarasi, kg: hajmli vazn shundan kichik — hajm hisobga olinmaydi"
+          },
+          "volumetricApplied": {
+            "type": "boolean"
+          },
+          "billableKg": {
+            "type": "number",
+            "example": 2
+          },
+          "extraKg": {
+            "type": "number",
+            "example": 1
+          },
+          "extra": {
+            "type": "number",
+            "example": 4000
+          },
+          "subtotal": {
+            "type": "number",
+            "example": 44000
+          },
+          "expressFee": {
+            "type": "number",
+            "example": 0
+          },
+          "pickupFee": {
+            "type": "number",
+            "example": 0
+          },
+          "total": {
+            "type": "number",
+            "example": 44000,
+            "description": "Buyurtma narxi (500 ga karrali), pickup'siz"
+          },
+          "totalWithPickup": {
+            "type": "number",
+            "example": 44000,
+            "description": "Kalkulyator jami: subtotal + express + pickup (landing `quote().total`)"
+          },
+          "basis": {
+            "type": "string",
+            "enum": [
+              "weight",
+              "volume"
+            ],
+            "nullable": true
+          },
+          "missingDimensionItems": {
+            "type": "number",
+            "example": 0
+          },
+          "estimated": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "tariffId",
+          "cityRoute",
+          "base",
+          "perExtraKg",
+          "daysMin",
+          "daysMax",
+          "days",
+          "actualKg",
+          "volumetricKg",
+          "volumetricFromKg",
+          "volumetricApplied",
+          "billableKg",
+          "extraKg",
+          "extra",
+          "subtotal",
+          "expressFee",
+          "pickupFee",
+          "total",
+          "totalWithPickup",
+          "basis",
+          "missingDimensionItems",
+          "estimated"
+        ]
+      },
+      "PublicDeliveryQuoteResponseDto": {
+        "type": "object",
+        "properties": {
+          "statusCode": {
+            "type": "number",
+            "example": 200
+          },
+          "message": {
+            "type": "string",
+            "example": "success"
+          },
+          "data": {
+            "$ref": "#/components/schemas/PublicDeliveryQuoteResultDto"
+          }
+        },
+        "required": [
+          "statusCode",
+          "message",
+          "data"
+        ]
+      },
+      "PublicDeliveryPricingSettingsDto": {
+        "type": "object",
+        "properties": {
+          "volumetric_divisor": {
+            "type": "number",
+            "example": 5000
+          },
+          "volumetric_from_kg": {
+            "type": "number",
+            "example": 3
+          },
+          "first_kg_included": {
+            "type": "number",
+            "example": 1
+          },
+          "min_billable_kg": {
+            "type": "number",
+            "example": 0.1
+          },
+          "billable_step_kg": {
+            "type": "number",
+            "example": 0.1
+          },
+          "round_to": {
+            "type": "number",
+            "example": 500
+          },
+          "pickup_fee": {
+            "type": "number",
+            "example": 20000,
+            "description": "Pickup tashrifi haqi, so'm"
+          },
+          "pickup_free_from_count": {
+            "type": "number",
+            "example": 10,
+            "nullable": true,
+            "description": "Shuncha va undan ko'p posilka — pickup tekin (null — hech qachon)"
+          },
+          "express_multiplier": {
+            "type": "number",
+            "example": 1.4
+          }
+        },
+        "required": [
+          "volumetric_divisor",
+          "volumetric_from_kg",
+          "first_kg_included",
+          "min_billable_kg",
+          "billable_step_kg",
+          "round_to",
+          "pickup_fee",
+          "pickup_free_from_count",
+          "express_multiplier"
+        ]
+      },
+      "PublicDeliveryRegionDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "1"
+          },
+          "name": {
+            "type": "string",
+            "example": "Toshkent shahri"
+          },
+          "is_city_zone": {
+            "type": "boolean",
+            "description": "Shahar zonasi (ikkala uchi — `city` tarifi)"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "is_city_zone"
+        ]
+      },
+      "PublicDeliveryTariffsDataDto": {
+        "type": "object",
+        "properties": {
+          "tariffs": {
+            "type": "object",
+            "description": "Har tarifning HOZIRGI qiymatlari: `{ city, center, address }` (faol versiyasi yo'q — null).",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/PublicDeliveryTariffDto"
+            }
+          },
+          "settings": {
+            "$ref": "#/components/schemas/PublicDeliveryPricingSettingsDto"
+          },
+          "regions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PublicDeliveryRegionDto"
+            }
+          }
+        },
+        "required": [
+          "tariffs",
+          "settings",
+          "regions"
+        ]
+      },
+      "PublicDeliveryTariffsResponseDto": {
+        "type": "object",
+        "properties": {
+          "statusCode": {
+            "type": "number",
+            "example": 200
+          },
+          "message": {
+            "type": "string",
+            "example": "success"
+          },
+          "data": {
+            "$ref": "#/components/schemas/PublicDeliveryTariffsDataDto"
+          }
+        },
+        "required": [
+          "statusCode",
+          "message",
+          "data"
+        ]
       },
       "WarehouseOrderItemDto": {
         "type": "object",

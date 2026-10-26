@@ -72,6 +72,142 @@ ikkala omborni ochadi.
   FE-1 dagi «buyurtmalarga keyingi bosqichda ulanadi» izohini olib tashlang. Viloyat filialida bekor bo'lgan Markaziy
   ombor buyurtmasida «Marketga topshirish» o'rniga «HQ'ga bekor pochta» yo'lini ko'rsating (aks holda 409).
 
+### 2026-10-26 — Smena yopilishi: har karta / hisob qoldig'ini tasdiqlash, skrinshot, AI tekshiruvi, hisobot, sozlamalar (kiZgTybn)
+
+Deploy: **finance-service + api-gateway + ai-service birga** (yangi RMQ buyruqlari
+`finance.shift.account_check.attach_photo` / `.ai_result`, `finance.shift.settings.get|update`,
+`finance.shift.report`, `ai.finance.balance_screenshot`). **Migratsiya bor:** `1716000000166-ShiftAccountChecks`
+(yangi jadvallar `shift_account_checks`, `finance_settings`; mavjud ma'lumotga tegmaydi). `openapi.json` qayta yaratildi.
+Sukut bo'yicha tasdiqlash **o'chiq** — superadmin yoqmaguncha yopish oqimi o'zgarmaydi.
+
+- [2026-10-26] 🆕 [finance] — `POST /finance/shift/account-photo` (multipart: `photo` — jpeg/png/webp ≤ 5 MB,
+  `card_id`, ixtiyoriy `shift_id`, `entered_balance`, `comment`). Rollar: superadmin/admin/registrator/menejer
+  (menejer — o'z filiali kartasi, registrator — asosiy kassa; begona → 403). Faqat OCHIQ smena (yopilgan → 400,
+  ochiq smena yo'q → 404). Rasm EXIF'dan tozalanib shaxsiy saqlanadi. Javob: `data.check` (qoralama qatori:
+  `expected_balance`, `entered_balance`, `difference`, `ai_status`, `has_photo`, `photo_url`), `data.photo_url`
+  (imzolangan, **300 s**), `data.ai_enabled`. Qayta yuklash eski rasmni almashtiradi. Noto'g'ri tur / soxta
+  kontent → 400, > 5 MB → 413.
+- [2026-10-26] 🆕 [realtime] — AI yoqilgan kartada rasmdan keyin `ai_status = pending`; natija
+  `finance.shift.account_checked` (`shift_id`, `card_id`, `ai_status`, `checked_at`) bilan keladi → smena /
+  hisobot so'rovini qayta o'qing. `ai_status`: `not_required | pending | match | mismatch | unreadable | disabled | error`.
+  `ai_entered_ok = false` — kassir kiritgan qiymat rasmdagidan farqli (qizil belgi, izoh majburiy).
+- [2026-10-26] ✏️ [finance] — `POST /finance/shift/close`: yangi `accounts[]` = `{card_id, entered_balance,
+  photo_file_key?, comment?}`. `shift.account_check.enabled` yoqilgan bo'lsa kassaning HAR faol kartasi uchun
+  majburiy (yo'q karta nomi bilan 400). Rasm majburiy kartada rasm yo'q → 400; farq ≠ 0, AI `mismatch` yoki
+  `ai_entered_ok = false` → `comment` majburiy (400, karta nomi bilan). AI `pending` bo'lsa yopish **15 s gacha** (`SHIFT_CLOSE_AI_WAIT_MS`, ega chegarasi 30 s)
+  kutadi, keyin baribir yopiladi (javob vaqti uzayishi mumkin — gateway timeout 45 s). Javobda
+  `data.accounts_check` (holatlar soni + kartalar). `accounts` yubormasa va tasdiqlash o'chiq bo'lsa — avvalgidek.
+- [2026-10-26] 🆕 [finance] — `GET /finance/shift/:id/report`: `cash` / `card` (ochilish, kirim, chiqim,
+  kutilgan, sanalgan, farq), `accounts[]` (har karta: `card{name,kind,bank_name,last4,…}`, `expected_balance`,
+  `entered_balance`, `difference`, `ai_status`, `ai_read_balance`, `ai_last4_detected`, `ai_entered_ok`,
+  `comment`, `comment_required`, `photo_url` (300 s), `ai_raw` — faqat superadmin), `accounts_summary`,
+  `operations[]` (tur × to'lov usuli: `count`, `total`). Menejer — faqat o'z filiali, registrator — asosiy
+  kassa (boshqasi 404). 3- va 11-band kartalari shu endpointni ishlatadi.
+- [2026-10-26] 🆕 [finance] — `GET /finance/shift/settings?cashbox_user_id=` (yopuvchi rollar o'qiydi; menejer —
+  o'z filiali, boshqasi 403) → `account_check_enabled`, `photo_required`, `ai_check_enabled`, `cards[]`
+  (`require_photo_on_shift_close`, `ai_check_enabled`, hisoblangan `photo_required` / `ai_enabled` — yopish
+  oynasi shu bilan qaysi kartaga rasm so'rashni biladi). `PATCH /finance/shift/settings` — **faqat superadmin**
+  (boshqa rol 403): global kalitlar + `cards[]` (AI faqat rasm talab qilinganda, aks holda 400).
+- 🔧 Frontend: `superadmin-payments-main-cashbox-shift-dialog-accounts`, `superadmin-payments-shift-report`,
+  `superadmin-payments-shift-settings` ekranlari (alohida FE karta).
+
+### 2026-10-26 — Narx: yagona manba — ochiq `POST /public/delivery-quote` va `GET /public/delivery-tariffs` (mSkzzNBJ)
+
+Deploy: **faqat api-gateway** (logistics-service o'zgarmagan — mavjud `logistics.delivery.quote`,
+`logistics.delivery.tariffs.find_all`, `logistics.delivery.settings.get`, `logistics.region.find_all` RPC'lari).
+Migratsiya **yo'q**. `openapi.json` qayta yaratildi. Tokenli `POST /delivery/quote` va admin route'lari **o'zgarmagan**.
+**Prod ENV (server):** yangi `PUBLIC_CORS_ORIGINS=https://elchipochta.uz,https://www.elchipochta.uz` (+ kerakli preview
+origin'lar — aniq moslik), api-gateway qayta yaratiladi. Bu ro'yxat FAQAT `/public/*` uchun va cookie'siz
+(`credentials: false`, faqat `Content-Type`); landing domeni `CORS_ORIGINS` ga QO'SHILMAYDI (u butun API uchun
+credentials bilan — `/auth/refresh` ham). Ixtiyoriy: `PUBLIC_PRICING_THROTTLE_LIMIT`
+(sukut 30/daqiqa/IP, global `THROTTLE_LIMIT` dan yuqori emas), `PUBLIC_PRICING_THROTTLE_TTL_MS`,
+`PUBLIC_PRICING_CACHE_TTL_MS` (sukut 30000; 0 — o'chiq).
+
+- [2026-10-26] 🆕 [gateway] — `POST /public/delivery-quote` (**tokensiz**, `@Public`): elchipochta.uz kalkulyatori.
+  Tana: `from_region_id`, `to_region_id` (raqamli id, majburiy), `where_deliver` (`center` | `address`), posilka —
+  YO yuqori darajada `weight_kg` (+ ixtiyoriy `length_cm`/`width_cm`/`height_cm` — uchalasi birga, butun sm;
+  `volumetric_enabled`), YO `items[]` (≤ 20; har biri o'sha maydonlar + `quantity`), `express?`, `pickup?` (boolean —
+  bitta posilkali tashrif). `product_id`, `*_district_id` va boshqa noma'lum maydon → **400**; manfiy/nol o'lcham,
+  yo'q viloyat → **400** (500 emas); faol tarif yo'q → 409; per-IP limit → **429**. Javob `data` — FAQAT hisob:
+  `tariffId`, `cityRoute`, `base`, `perExtraKg`, `daysMin`, `daysMax`, `days: [min, max]`, `actualKg`,
+  `volumetricKg`, `volumetricFromKg`, `volumetricApplied`, `billableKg`, `extraKg`, `extra`, `subtotal`, `expressFee`,
+  `pickupFee`, `total` (buyurtma narxi, pickup'siz), `totalWithPickup` (kalkulyator jami — landing `quote().total`),
+  `basis`, `missingDimensionItems`, `estimated`. Hisob tokenli `/delivery/quote` bilan AYNI dvigatel; javob ≤ 30 s
+  keshlanadi.
+- [2026-10-26] 🆕 [gateway] — `GET /public/delivery-tariffs` (**tokensiz**): `data.tariffs` —
+  `{ city, center, address }` → `{ base_price, extra_per_kg, days_min, days_max }` (hozirgi versiya; yo'q — `null`);
+  `data.settings` — `volumetric_divisor`, `volumetric_from_kg` (prod: 3), `first_kg_included`, `min_billable_kg`,
+  `billable_step_kg`, `round_to`, `pickup_fee` (20 000), `pickup_free_from_count` (10), `express_multiplier` (1.4);
+  `data.regions` — `[{ id, name, is_city_zone }]` (kalkulyator hudud tanlovi → `*_region_id`). Versiyalar, tarix,
+  `created_by`, id'lar yo'q. ≤ 30 s keshlanadi.
+- 🔧 Landing (elchi_landing_page_front, GiR4WoBl dan keyin): `Calculator.tsx` API'ni **brauzerdan** chaqiradi
+  (~300 ms debounce; Worker serverdan chaqirsa barcha tashrifchilar bitta IP limitiga tushadi); `lib/pricing.ts` zaxira
+  — API javob bermasa (tarmoq/429/5xx) lokal hisob + «taxminiy» belgisi; tariflar jadvali/pickup matni
+  `GET /public/delivery-tariffs` dan; `config/site.ts` raqamlari olib tashlanadi; zaxira formula
+  `volumetric_from_kg` ni ham hisobga olishi kerak (prod'da 3 — aks holda zaxira va API farq qiladi).
+
+### 2026-10-26 — API gateway: preflight keshi, /metrics yopildi, Retry-After, HSTS, Swagger prodda o'chiq, realtime yuzasi (oFfOWGuo)
+
+Deploy: **faqat api-gateway** (libs/common o'zgarishi — logger URL, Retry-After filtri, /metrics qoidasi — boshqa
+servislar keyingi deploy'da oladi; notification-service ichki `/metrics` ham shu qoidaga o'tadi). **Migratsiya yo'q.**
+`openapi.json` o'zgarmadi (qayta yaratildi — farq yo'q). Yangi ixtiyoriy env: `METRICS_TOKEN` (≥32 belgi).
+
+- [2026-10-26] ✏️ [gateway] — CORS preflight: `Access-Control-Max-Age: 7200` — brauzer OPTIONS javobini 2 soat
+  saqlaydi (har login / refresh / `Authorization` so'rovidan oldin qo'shimcha OPTIONS ketmaydi).
+- [2026-10-26] ✏️ [gateway] — `Access-Control-Expose-Headers` ga **`Retry-After`** qo'shildi: FE `response.headers
+  ['retry-after']` ni o'qiy oladi. 429 (throttle — ThrottlerGuard qiymati; `LOGIN_LOCKED` — `retry_after_seconds`;
+  OTP — `retry_after`; boshqasi — 60) va 503 (`SESSION_CHECK_UNAVAILABLE` — **5**) javoblarida doim bor (soniya).
+  Javob tanasi o'zgarmagan.
+- [2026-10-26] 🔒 [gateway] — `GET /metrics`: ilgari autentifikatsiyasiz ochiq edi. Endi production'da `METRICS_TOKEN`
+  bo'lmasa **404**; bo'lsa faqat `Authorization: Bearer <METRICS_TOKEN>` (aks holda 401). FE'ga ta'sir yo'q.
+- [2026-10-26] 🔒 [gateway] — `GET /health/readiness` (@Public): `services[].error` endi faqat holat matni
+  (`timeout` | `unavailable` | `reported degraded` / `reported down` | `client not registered`) — ichki xato matni (IP/port) chiqmaydi.
+  `error_kind` o'zgarmagan; FE `classifyProblem` (system-ops) mos ishlayveradi.
+- [2026-10-26] 🔒 [gateway] — `Strict-Transport-Security: max-age=15552000; includeSubDomains` (preload yo'q).
+- [2026-10-26] ❌ [gateway] — Swagger UI (`/api`, `/api-json`) **production'da o'chiq** (parol bo'lsa ham); `/` endi
+  `/api` ga yo'naltirilmaydi (404). Kontrakt — `docs/frontend/openapi.json`. Dev'da avvalgidek.
+- [2026-10-26] ❌ [realtime] — socket `chat:send` va `presence:list` olib tashlandi (FE ishlatmasdi). Socket CORS /
+  Origin endi HTTP bilan bir xil `CORS_ORIGINS` (ilgari istalgan origin). Token muddati (`exp`) tugaganda server
+  `error` `{ message: 'Token expired', code: 'TOKEN_EXPIRED' }` yuborib uzadi (`io server disconnect`) — FE token
+  yangilanganda yangi token bilan qayta ulanadi (mavjud `RealtimeSync` shunday ishlaydi; `TOKEN_EXPIRED` da chiqarish
+  YO'Q — faqat `SESSION_REVOKED` da).
+- [2026-10-26] 🔧 [gateway] — `keepAliveTimeout` 75 s / `headersTimeout` 76 s (cloudflared'dan uzun — kam uchraydigan
+  502 yo'qoladi). Loglarda URL query'siz, `/sms/stop/:token`, `/scan/:token`, `/orders/qr-code/:token` tokeni `***`.
+- 🔧 FE: majburiy o'zgarish yo'q. Ixtiyoriy: 429/503 xabarida `Retry-After` dan kutish vaqtini ko'rsatish
+  (`LoginForm` allaqachon o'qiydi — endi CORS orqali ko'rinadi).
+
+### 2026-10-26 — Tracking: pochta qabuli yozuvi, jo'natish yozuvida filial nomi; menejer sotish chegarasi (vbu7Wr3o)
+
+Deploy: **order-service + logistics-service** (ikkalasi birga; tartib muhim emas — eski logistics bilan yangi
+order-service avvalgidek tizim yozuvini yozadi). Migratsiya **yo'q**, `openapi.json` o'zgarmadi (tracking
+`metadata` erkin obyekt).
+
+- [2026-10-26] ✏️ [order/logistics] — `GET /orders/:id/tracking`: filial menejeri / kuryer pochtani **qabul
+  qilganda** (`on the road → waiting`) yozuv endi qabul qilgan xodim nomidan: `changed_by` = xodim id,
+  `changed_by_role` = `manager` / `courier` (ilgari `system`), **`action: "post_received"`** (ilgari `waiting`),
+  `note`: `Post received by branch` | `Post received by courier`, `description`: «TEST Claude Surxondaryo filiali
+  pochtani qabul qildi» / «Kuryer Ali Valiyev pochtani qabul qildi», `metadata`: `{ post_id, branch_name }`
+  (filial) yoki `{ post_id, courier_name }` (kuryer). Uchala qabul yo'li: `PATCH /post/receive/:id`,
+  `PATCH /post/receive/scan/:id`, `PATCH /post/receive/order/:id`. Eski yozuvlar o'zgarmaydi.
+  🔧 **Frontend:** `describeTrackingEvent.getSentenceTemplate` `on_the_road->waiting` o'tishini shartsiz
+  «{{actor}} buyurtmani kutilmoqda holatiga qaytardi» qiladi — `action === "post_received"` bo'lsa uni
+  tekshirishdan OLDIN qabul jumlasi kerak (masalan «{{actor}} pochtani qabul qildi — {{branch}}»,
+  `metadata.branch_name`), `actionLabelMap` ga `post_received` → «Qabul qilindi». Usiz jumla aktyor nomi bilan
+  chiqadi, lekin matn hali «…kutilmoqda holatiga qaytardi».
+- [2026-10-26] ✏️ [order] — HQ → filial **jo'natish** yozuvi (`received → on the road`, `action: "sent"`):
+  `metadata: { post_id, branch_name }` — manzil filial nomi YOZUV paytida. Eski yozuvlarda (metadata yo'q)
+  `GET /orders/:id/tracking` `metadata.branch_name` ni izohdagi filial id'sidan («… HQ'dan branch #12 ga
+  dispatch qilindi») to'ldiradi — buyurtmaning joriy filialidan EMAS. Frontend `getTrackingName(event,
+  "branch")` uni o'zi oladi — 🟢 o'zgarish shart emas (HQ'ga qaytgan buyurtmada endi «HQ Toshkent filialiga»
+  emas, haqiqiy filial). `metadata` da `*_branch_id` kaliti ATAYIN yo'q (FE id kalitini joriy filial nomi
+  bilan "tiklaydi").
+- [2026-10-26] 🔧 [frontend] — menejer sotish oynasi «Marketga to'langan summa · 0 so'mdan oshmasin»:
+  backend `sale_market_paid_max` ni menejerga ham beradi (ro'yxat va detal, rolga bog'liq emas; logistga
+  yo'q). Sabab FE'da: `src/pages/orders/index.tsx` `selectedActionModalOrder` `ActionOrder` ga
+  `sale_market_paid_max` ni ko'chirmaydi → `readMarketPaidBase` `to_be_paid` (sotuvgacha 0) ga tushadi.
+  Tuzatish: o'sha obyektga `sale_market_paid_max: selectedActionOrder.sale_market_paid_max ?? null`
+  (detal `buildActionOrder` dagidek).
+
 ### 2026-10-26 — Kassa: kartalar va hisob raqamlar — turi, bank, oxirgi 4 raqam, egasi; filial kassalari (Zv3MLn0a)
 
 Deploy: **finance-service + api-gateway birga** (yangi RMQ buyruqlari `finance.cashbox.cards.update` /

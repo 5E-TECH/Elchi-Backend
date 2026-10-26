@@ -10,6 +10,7 @@ import { Response } from 'express';
 import { captureException } from '../sentry/sentry.helper';
 import { requestContext } from '../context/request-context';
 import { publicErrorData, publicErrorFields } from './public-error-fields';
+import { applyRetryAfterHeader } from './all-exceptions.filter';
 
 @Catch(RpcException)
 export class RpcExceptionFilter implements ExceptionFilter {
@@ -53,6 +54,11 @@ export class RpcExceptionFilter implements ExceptionFilter {
     // RPC handlers and surfaces here, so this is the primary server-error log.
     if (status >= 500) {
       this.logger.error(`${status} ${message} (trace_id=${traceId ?? '-'})`);
+    }
+
+    // (oFfOWGuo) AllExceptionsFilter bilan bir xil `Retry-After`.
+    if (status === 429 || status === 503) {
+      applyRetryAfterHeader(response, status, error);
     }
 
     response.status(status).json({

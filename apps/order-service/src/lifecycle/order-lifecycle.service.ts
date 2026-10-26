@@ -47,11 +47,13 @@ import {
   Order_status,
   OutboxService,
   PaymentMethod,
+  POST_RECEIVED_TRACKING_ACTION,
   Roles,
   SettlementStatus,
   Source_type,
   Where_deliver,
   normalizeUzPhone,
+  postReceiveKindOfNote,
   requestContext,
   rmqSend,
   RMQ_SERVICE_TIMEOUT,
@@ -543,6 +545,77 @@ export class OrderLifecycleService {
     } catch {
       return null;
     }
+  }
+
+  /**
+   * vbu7Wr3o — holat o'zgarishi tracking'ining YOZUV paytidagi qo'shimchalari
+   * (bekor pochta qabulidan tashqari):
+   *   #1 pochta qabuli (`on the road → waiting`, logistics qabul izohi bilan,
+   *      so'rovchi bor) — `post_received` amali, «<Filial> pochtani qabul
+   *      qildi» / «Kuryer <ism> pochtani qabul qildi», metadata: `post_id` +
+   *      `branch_name` (filial) yoki `courier_name` (kuryer);
+   *   #2 HQ → filial jo'natish (`received → on the road`, `branch_id`
+   *      uzatilgan) — metadata: `post_id` + manzil filial `branch_name`.
+   *      Frontend jumlasi («… HQ'dan X filialiga jo'natdi») nomni shu
+   *      metadata'dan oladi; ilgari u buyurtmaning JORIY filialidan olinardi —
+   *      HQ'ga qaytgan buyurtmada «HQ Toshkent filialiga» chiqardi.
+   * Metadata'da `*_branch_id` kalitlari ATAYIN yo'q: frontend id kalitini
+   * buyurtmaning joriy filiali nomi bilan "tiklaydi" (yana o'sha xato).
+   * Nom olinmasa (branch-service/identity javob bermasa) ham yozuv yoziladi.
+   */
+  private async resolveStatusTrackingExtras(
+    oldStatus: Order_status,
+    order: Order,
+    branchChanged: boolean,
+    requester?: { id?: string; roles?: string[]; note?: string | null },
+  ): Promise<{
+    action?: string;
+    description?: string;
+    metadata: Record<string, unknown>;
+  } | null> {
+    if (oldStatus === order.status) return null;
+    const postId = order.post_id ? String(order.post_id) : null;
+    const requesterId = String(requester?.id ?? '').trim();
+
+    const receiveKind =
+      oldStatus === Order_status.ON_THE_ROAD &&
+      order.status === Order_status.WAITING &&
+      requesterId
+        ? postReceiveKindOfNote(requester?.note)
+        : null;
+    if (receiveKind === 'COURIER') {
+      const courierName = await this.resolveUserTrackingName(requesterId);
+      return {
+        action: POST_RECEIVED_TRACKING_ACTION,
+        description: courierName
+          ? `Kuryer ${courierName} pochtani qabul qildi`
+          : 'Kuryer pochtani qabul qildi',
+        metadata: { post_id: postId, courier_name: courierName },
+      };
+    }
+    if (receiveKind === 'BRANCH') {
+      const branchName = await this.resolveBranchName(order.branch_id);
+      return {
+        action: POST_RECEIVED_TRACKING_ACTION,
+        description: branchName
+          ? `${branchName} pochtani qabul qildi`
+          : 'Filial pochtani qabul qildi',
+        metadata: { post_id: postId, branch_name: branchName },
+      };
+    }
+
+    if (
+      oldStatus === Order_status.RECEIVED &&
+      order.status === Order_status.ON_THE_ROAD &&
+      branchChanged &&
+      order.branch_id
+    ) {
+      const branchName = await this.resolveBranchName(order.branch_id);
+      return branchName
+        ? { metadata: { post_id: postId, branch_name: branchName } }
+        : null;
+    }
+    return null;
   }
 
   /**
@@ -10363,6 +10436,16 @@ export class OrderLifecycleService {
       delete (order as Partial<Order>).branch;
     }
 
+    // vbu7Wr3o — pochta qabuli (#1) va HQ → filial jo'natish (#2) tracking'i:
+    // nomlar YOZUV paytida (tranzaksiyadan oldin) olinib metadata'ga yoziladi
+    // — tarix keyin buyurtmaning JORIY filialidan qayta "tiklanmaydi".
+    const statusTrackingExtras = await this.resolveStatusTrackingExtras(
+      oldStatus,
+      order,
+      typeof dto.branch_id !== 'undefined',
+      requester,
+    );
+
     const writeOrderChanges = async (manager: EntityManager): Promise<void> => {
       const orderRepo = manager.getRepository(Order);
       const trackingRepo = manager.getRepository(OrderTracking);
@@ -10428,8 +10511,9 @@ export class OrderLifecycleService {
               : 'system',
             action: canceledPostAccepted
               ? 'cancelled_post_received'
-              : undefined,
-            description: canceledPostDescription,
+              : statusTrackingExtras?.action,
+            description:
+              canceledPostDescription ?? statusTrackingExtras?.description,
             old_value: canceledPostAccepted
               ? {
                   status: oldStatus,
@@ -10471,7 +10555,7 @@ export class OrderLifecycleService {
                   received_by_hq: canceledPostAcceptedByHq,
                   received_by: requester?.id ? String(requester.id) : null,
                 }
-              : undefined,
+              : statusTrackingExtras?.metadata,
             note: requester?.note ?? null,
           },
           trackingRepo,

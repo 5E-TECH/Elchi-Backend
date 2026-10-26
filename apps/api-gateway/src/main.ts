@@ -6,14 +6,16 @@ import {
 } from '@nestjs/common';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import { MicroserviceOptions } from '@nestjs/microservices';
-import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
-import helmet from 'helmet';
-import basicAuth from 'express-basic-auth';
 import { Logger } from 'nestjs-pino';
-import type { NextFunction, Request, Response } from 'express';
 import { ApiGatewayModule } from './api-gateway.module';
 import { gatewayRealtimeConsumerOptions } from './realtime/realtime-consumer.options';
 import { requestContextMiddleware } from './context/request-context.middleware';
+import {
+  applyGatewaySecurityHeaders,
+  applyServerTimeouts,
+  gatewayCorsDelegate,
+  setupGatewaySwagger,
+} from './gateway-http.setup';
 import {
   RpcExceptionFilter,
   AllExceptionsFilter,
@@ -63,95 +65,11 @@ async function bootstrap() {
   // IP manbai `ClientIpThrottlerGuard` bilan AYNI (`resolveTrustedClientIp`).
   app.use(requestContextMiddleware);
 
-  const corsOrigins = (process.env.CORS_ORIGINS ?? '')
-    .split(',')
-    .map((origin) => origin.trim())
-    .filter(Boolean);
-
-  // Helmet-ni HTTP uchun moslaymiz
-  app.use(
-    helmet({
-      crossOriginResourcePolicy: { policy: 'cross-origin' },
-      // HTTPS-ga majburlashni butunlay o'chiramiz
-      hsts: false,
-      contentSecurityPolicy: {
-        directives: {
-          defaultSrc: [`'self'`],
-          styleSrc: [
-            `'self'`,
-            `'unsafe-inline'`,
-            'https://cdnjs.cloudflare.com',
-          ],
-          imgSrc: [`'self'`, 'data:', 'validator.swagger.io'],
-          scriptSrc: [
-            `'self'`,
-            `'unsafe-inline'`,
-            `'unsafe-eval'`,
-            'https://cdnjs.cloudflare.com',
-          ],
-          upgradeInsecureRequests: null, // HTTP -> HTTPS avtomatik o'tkazishni o'chirish
-        },
-      },
-    }),
-  );
-
-  /**
-   * ⚠️ LOCALHOST FAQAT DEV'DA (audit S4).
-   *
-   * Ilgari har qanday `http://localhost:<port>` manbasi PRODDA ham qabul
-   * qilinardi, ustiga `credentials: true` bilan. Ya'ni qurbonning o'z
-   * mashinasida ochilgan zararli sahifa (yoki lokal portda ishlayotgan
-   * begona ilova) brauzer cookie'lari bilan bizning API'ga murojaat qila
-   * olardi. Dev qulayligi uchun qo'yilgan bu yo'l prodda kerak emas: u yerda
-   * frontend faqat `CORS_ORIGINS` ro'yxatidagi domenlardan keladi.
-   */
-  const isProduction = process.env.NODE_ENV === 'production';
-
-  app.enableCors({
-    origin: (origin, callback) => {
-      // Non-browser clients (curl, server-to-server) may not send Origin.
-      if (!origin) {
-        callback(null, true);
-        return;
-      }
-
-      const isLocalhost =
-        !isProduction &&
-        (/^http:\/\/localhost:\d+$/.test(origin) ||
-          /^http:\/\/127\.0\.0\.1:\d+$/.test(origin));
-
-      if (isLocalhost || corsOrigins.includes(origin)) {
-        callback(null, true);
-        return;
-      }
-
-      callback(new Error(`CORS blocked for origin: ${origin}`), false);
-    },
-    credentials: true,
-    methods: ['GET', 'HEAD', 'PUT', 'PATCH', 'POST', 'DELETE', 'OPTIONS'],
-    // Idempotency-Key — hisob-kitob formalari qayta bosilganda pul ikki marta
-    // taqsimlanmasligi uchun (5hBeDuyn).
-    // X-Device-Id / X-Device-Name — jurnalga qurilma (f2Ud5tju); yuborilmasa
-    // qurilma nomi User-Agent'dan olinadi.
-    allowedHeaders: [
-      'Content-Type',
-      'Authorization',
-      'Idempotency-Key',
-      'X-Device-Id',
-      'X-Device-Name',
-      // j9KFyqlS: ommaviy amallar jurnalda ajralsin (`courier-bulk`).
-      'X-Request-Source',
-    ],
-    // xWsCAA5N: GET /orders/export/excel — brauzer fayl nomi va eksport
-    // chegarasi (X-Export-Truncated/Total/Limit) sarlavhalarini o'qiy olsin;
-    // aks holda CORS ularni JS'dan yashiradi va ogohlantirish ko'rsatilmaydi.
-    exposedHeaders: [
-      'Content-Disposition',
-      'X-Export-Total',
-      'X-Export-Limit',
-      'X-Export-Truncated',
-    ],
-  });
+  // Helmet (HSTS yoqilgan — oFfOWGuo) va CORS (preflight keshi 7200 s,
+  // `Retry-After` JS'ga ochiq — oFfOWGuo; localhost faqat dev'da — audit S4).
+  // Batafsil: gateway-http.setup.ts.
+  applyGatewaySecurityHeaders(app);
+  app.enableCors(gatewayCorsDelegate());
 
   app.useGlobalPipes(
     new ValidationPipe({
@@ -164,60 +82,11 @@ async function bootstrap() {
   app.useGlobalFilters(new AllExceptionsFilter(), new RpcExceptionFilter());
 
   try {
-    const swaggerConfig = new DocumentBuilder()
-      .setTitle('Elchi API Gateway')
-      .setDescription('API Gateway docs for all microservice routes')
-      .setVersion('1.0.0')
-      .addBearerAuth()
-      .build();
-
-    const document = SwaggerModule.createDocument(app, swaggerConfig);
-
-    const swaggerUser = process.env.SWAGGER_USER ?? 'admin';
-    const swaggerPassword = process.env.SWAGGER_PASSWORD ?? '';
-    const isProd = isProduction;
-
-    // Productionда Swagger faqat parol belgilangandagina ochiladi va u
-    // har doim HTTP Basic Auth bilan himoyalanadi. Parol bo'lmasa — Swagger
-    // umuman mount qilinmaydi (xato bilan ochiq qolib ketmasligi uchun).
-    if (isProd && !swaggerPassword) {
+    // (oFfOWGuo) Production'da Swagger o'chiq; `/` endi /api ga yo'naltirilmaydi.
+    if (setupGatewaySwagger(app) === 'disabled_in_production') {
       app
         .get(Logger)
-        .warn(
-          'SWAGGER_PASSWORD belgilanmagan — Swagger UI production rejimida o`chirildi',
-        );
-    } else {
-      // Basic Auth: /api (UI) va /api-json (xom OpenAPI schema) himoyalanadi.
-      // Parol mavjud bo'lsa qo'llanadi; dev rejimda parolsiz ham ochiq qoladi.
-      if (swaggerPassword) {
-        app.use(
-          ['/api', '/api-json'],
-          basicAuth({
-            users: { [swaggerUser]: swaggerPassword },
-            challenge: true,
-            realm: 'Elchi API Docs',
-          }),
-        );
-      }
-
-      // Domеn ildiziga (`/`) kirilganda to'g'ridan-to'g'ri Swagger UI ochilsin.
-      app.use((req: Request, res: Response, next: NextFunction) => {
-        if (req.path === '/') {
-          res.redirect('/api');
-          return;
-        }
-        next();
-      });
-
-      SwaggerModule.setup('api', app, document, {
-        customJs: [
-          'https://cdnjs.cloudflare.com/ajax/libs/swagger-ui/4.15.5/swagger-ui-bundle.min.js',
-          'https://cdnjs.cloudflare.com/ajax/libs/swagger-ui/4.15.5/swagger-ui-standalone-preset.min.js',
-        ],
-        customCssUrl: [
-          'https://cdnjs.cloudflare.com/ajax/libs/swagger-ui/4.15.5/swagger-ui.min.css',
-        ],
-      });
+        .log('Swagger UI production rejimida o`chirilgan (oFfOWGuo)');
     }
   } catch (error) {
     // Swagger schema xatosi bo'lsa ham API ishlashda davom etadi.
@@ -246,14 +115,17 @@ async function bootstrap() {
     await app.startAllMicroservices();
   }
 
-  // Prometheus metrics: /metrics (internal port only) + request histogram +
-  // process/GC defaults. Registered before listen so the middleware wraps all
-  // routes.
+  // Prometheus metrics: /metrics + request histogram + process/GC defaults.
+  // (oFfOWGuo) /metrics faqat `Authorization: Bearer <METRICS_TOKEN>` bilan;
+  // production'da token yo'q bo'lsa 404 (tunnel orqali ochiq edi).
+  // Registered before listen so the middleware wraps all routes.
   registerMetrics(app, 'api-gateway');
 
   // AWS va Docker interfeyslari uchun 0.0.0.0 majburiy
   const port = Number(process.env.PORT || 3004);
   await app.listen(port, '0.0.0.0');
+  // (oFfOWGuo) keepAlive 75 s / headers 76 s — cloudflared'dan uzunroq.
+  applyServerTimeouts(app.getHttpServer());
 
   app.get(Logger).log(`Gateway is running on: http://localhost:${port}/api`);
 }

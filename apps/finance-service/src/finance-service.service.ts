@@ -79,6 +79,8 @@ import { FinanceNotificationService } from './notification/finance-notification.
 import { SettlementUnappliedService } from './settlement/settlement-unapplied.service';
 import { CourierPaymentAckService } from './courier-payment/courier-payment-ack.service';
 import { FinanceRealtimeService } from './realtime/finance-realtime.service';
+import type { ShiftAccountCheckService } from './shift-account-check/shift-account-check.service';
+import { SHIFT_ACCOUNT_CHECKS } from './shift-account-check/shift-account-check.token';
 
 /**
  * `order.find_all` qatoridan market to'lovi sinxroni o'qiydigan maydonlar
@@ -157,6 +159,11 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
     // Ixtiyoriy: eski spec'lar servisni usiz quradi — u holda hodisa yo'q.
     @Optional()
     private readonly financeRealtime?: FinanceRealtimeService,
+    // (kiZgTybn) Yopishda har karta qoldig'ini tasdiqlash + hisobot.
+    // Ixtiyoriy: eski spec'lar usiz quradi — u holda `accounts[]` e'tiborsiz.
+    @Optional()
+    @Inject(SHIFT_ACCOUNT_CHECKS)
+    private readonly shiftAccountChecks?: ShiftAccountCheckService,
   ) {}
 
   async onModuleInit() {
@@ -2397,6 +2404,13 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         throw new NotFoundException('Ochiq smena topilmadi');
       }
 
+      // (kiZgTybn) Yaqinda yuklangan rasmlarning AI natijasi hali `pending`
+      // bo'lsa — 30 s gacha kutiladi (smena qulfidan TASHQARIDA), keyin
+      // yopishga ruxsat: AI sekin / ishlamasa kassir bloklanmaydi.
+      if (this.shiftAccountChecks) {
+        await this.shiftAccountChecks.waitForPending(shiftId);
+      }
+
       const queryRunner = this.dataSource.createQueryRunner();
       await queryRunner.connect();
       await queryRunner.startTransaction();
@@ -2404,6 +2418,7 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
       // Captured after a durable commit so the audit row is written once the
       // transaction is committed and the runner released (never inside the tx).
       let auditedShift: Shift | null = null;
+      let accountsSummary: Record<string, unknown> | null = null;
 
       try {
         const shift = await queryRunner.manager.findOne(Shift, {
@@ -2583,6 +2598,22 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
           countedCard == null ? null : round(countedCard - expectedCard);
         shift.comment = dto.comment ?? shift.comment;
 
+        // (kiZgTybn) Har karta / hisob qoldig'i: snapshot + validatsiya
+        // (majburiy rasm, izoh). Shu tranzaksiyada — 400 bo'lsa smena ochiq
+        // qoladi. PUL HARAKATI YO'Q (faqat shift_account_checks).
+        if (this.shiftAccountChecks) {
+          accountsSummary = await this.shiftAccountChecks.confirmAtClose(
+            queryRunner.manager,
+            shift,
+            dto.accounts,
+            String(dto.closed_by),
+          );
+        } else if (Array.isArray(dto.accounts) && dto.accounts.length) {
+          throw new BadRequestException(
+            'Karta qoldiqlarini tasdiqlash hozircha mavjud emas',
+          );
+        }
+
         const saved = await queryRunner.manager.save(shift);
         // (rWdLuoP3) Ochiq kassa sahifalari darhol «Smena yopiq» — outbox
         // qatori shu tranzaksiyada (rollback bo'lsa hodisa ham yo'q).
@@ -2593,7 +2624,13 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         );
         await queryRunner.commitTransaction();
         auditedShift = saved;
-        return this.successRes(saved, 200, 'Shift closed');
+        return this.successRes(
+          accountsSummary
+            ? { ...saved, accounts_check: accountsSummary }
+            : saved,
+          200,
+          'Shift closed',
+        );
       } catch (error) {
         await queryRunner.rollbackTransaction();
         throw error;
@@ -2615,10 +2652,111 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
             metadata: {
               closed_by: dto.closed_by,
               opened_by: auditedShift.opened_by,
+              ...(accountsSummary ? { accounts: accountsSummary } : {}),
             },
           });
         }
       }
+    } catch (error) {
+      this.toRpcError(error);
+    }
+  }
+
+  /**
+   * (kiZgTybn) `GET finance/shift/:id/report` — naqd + kartalar bo'yicha
+   * natijalar (AI holati, rasm kaliti — gateway imzolangan havolaga
+   * aylantiradi) va operatsiyalar xulosasi. `cashbox_user_id` — doira
+   * (menejer — o'z filiali, registrator — MAIN): boshqa kassa smenasi 404.
+   * Ochiq smenada oyna `opened_at → hozir`.
+   */
+  async getShiftReport(input: {
+    shift_id?: string | number;
+    cashbox_user_id?: string | number;
+  }) {
+    try {
+      const shiftId = String(input?.shift_id ?? '').trim();
+      this.assertBigIntId(shiftId, 'shift_id');
+      const rawScope = String(input?.cashbox_user_id ?? '').trim();
+      const scope = rawScope !== '' ? rawScope : null;
+      if (scope) this.assertBigIntId(scope, 'cashbox_user_id');
+      const shift = await this.shiftRepo.findOne({
+        where: { id: shiftId, isDeleted: false },
+      });
+      const cashboxUserId = String(
+        shift?.cashbox_user_id ?? FinanceServiceService.MAIN_CASHBOX_USER_ID,
+      );
+      if (!shift || (scope && scope !== cashboxUserId)) {
+        throw new NotFoundException('Smena topilmadi');
+      }
+      const to = shift.closed_at ?? new Date();
+      const operations = await this.dataSource.manager
+        .createQueryBuilder(CashboxHistory, 'h')
+        .innerJoin(Cashbox, 'cb', 'cb.id = h.cashbox_id')
+        .select('h.operation_type', 'operation_type')
+        .addSelect('h.payment_method', 'payment_method')
+        .addSelect('COUNT(*)', 'count')
+        .addSelect('COALESCE(SUM(h.amount), 0)', 'total')
+        .where('h.isDeleted = :active', { active: false })
+        .andWhere('cb.isDeleted = :active', { active: false })
+        .andWhere('cb.user_id = :ownerId', { ownerId: cashboxUserId })
+        .andWhere('cb.cashbox_type = :cbType', {
+          cbType: FinanceServiceService.shiftCashboxType(cashboxUserId),
+        })
+        .andWhere('h.createdAt BETWEEN :from AND :to', {
+          from: shift.opened_at,
+          to,
+        })
+        .groupBy('h.operation_type')
+        .addGroupBy('h.payment_method')
+        .getRawMany<{
+          operation_type: string;
+          payment_method: string | null;
+          count: string;
+          total: string;
+        }>();
+      const [named] = await this.withShiftUserNames([shift]);
+      const accounts = this.shiftAccountChecks
+        ? await this.shiftAccountChecks.listForShift(shiftId)
+        : [];
+      return this.successRes(
+        {
+          shift: named,
+          cashbox_user_id: cashboxUserId,
+          cashbox_type:
+            cashboxUserId === FinanceServiceService.MAIN_CASHBOX_USER_ID
+              ? 'main'
+              : 'branch',
+          cash: {
+            opening_balance: shift.opening_balance_cash,
+            total_income: shift.total_income_cash,
+            total_expense: shift.total_expense_cash,
+            expected_balance: shift.expected_balance_cash,
+            closing_balance: shift.closing_balance_cash,
+            discrepancy: shift.discrepancy_cash,
+          },
+          card: {
+            opening_balance: shift.opening_balance_card,
+            total_income: shift.total_income_card,
+            total_expense: shift.total_expense_card,
+            expected_balance: shift.expected_balance_card,
+            closing_balance: shift.closing_balance_card,
+            discrepancy: shift.discrepancy_card,
+          },
+          accounts,
+          accounts_summary: this.shiftAccountChecks
+            ? this.shiftAccountChecks.summarize(accounts)
+            : null,
+          operations: operations.map((row) => ({
+            operation_type: row.operation_type,
+            payment_method: row.payment_method,
+            count: Number(row.count) || 0,
+            total: FinanceServiceService.roundMoney(Number(row.total) || 0),
+          })),
+          operations_window: { from: shift.opened_at, to },
+        },
+        200,
+        'Shift report',
+      );
     } catch (error) {
       this.toRpcError(error);
     }

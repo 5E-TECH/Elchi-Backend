@@ -29,7 +29,9 @@ export type AiFeature =
   | 'order_extract_multi'
   | 'order_extract_image'
   | 'order_district'
-  | 'order_item_match';
+  | 'order_item_match'
+  // kiZgTybn — smena yopishda karta qoldig'i skrinshoti (ichki xarajat).
+  | 'finance_balance_screenshot';
 
 /**
  * Dashboard filtri uchun qo'pol guruh (ai_usage_log.request_area).
