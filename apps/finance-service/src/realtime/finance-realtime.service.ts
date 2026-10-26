@@ -45,7 +45,10 @@ export const FINANCE_REALTIME_EVENTS = {
   shiftAutoClosed: 'finance.shift.auto_closed',
   /** Karta qoldig'ining AI tekshiruvi tugadi (kiZgTybn). */
   shiftAccountChecked: 'finance.shift.account_checked',
-  /** Asosiy kassa kartasi o'zgardi (yaratish, nom, holat, o'tkazma, konvertatsiya). */
+  /**
+   * Kassa kartasi o'zgardi (yaratish, nom / tafsilot, holat, asosiy qilish,
+   * o'tkazma, konvertatsiya). Zv3MLn0a: filial kassasi kartasi — menejerga ham.
+   */
   cashboxCardChanged: 'finance.cashbox.card_changed',
 } as const;
 
@@ -80,6 +83,8 @@ export interface ShiftRealtimeSource {
 export type CashboxCardAction =
   | 'created'
   | 'renamed'
+  | 'updated'
+  | 'made_default'
   | 'activated'
   | 'archived'
   | 'transfer'
@@ -187,17 +192,31 @@ export function buildCashboxCardChangedMessage(input: {
   card_ids: Array<string | number>;
   movement_id?: string | number | null;
   at?: Date | string | null;
+  /** Zv3MLn0a — filial kassasi kartasi (sukut: MAIN, avvalgi shakl). */
+  cashbox_type?: 'main' | 'branch';
+  branch_id?: string | number | null;
 }): RealtimeNotifyMessage {
+  const branchId =
+    input.cashbox_type === 'branch' && isUserId(input.branch_id)
+      ? String(input.branch_id)
+      : null;
+  const targets: FinanceRealtimeTarget[] = CASHBOX_CARD_ROLES.map((role) => ({
+    role,
+  }));
+  if (branchId) {
+    targets.push({ role: BRANCH_SHIFT_ROLE, branch_id: branchId });
+  }
   return {
     event: FINANCE_REALTIME_EVENTS.cashboxCardChanged,
     payload: {
       action: input.action,
-      cashbox_type: 'main',
+      cashbox_type: branchId ? 'branch' : 'main',
+      ...(branchId ? { branch_id: branchId } : {}),
       card_ids: [...new Set(input.card_ids.map((id) => String(id)))],
       movement_id: input.movement_id == null ? null : String(input.movement_id),
       at: toIso(input.at),
     },
-    targets: CASHBOX_CARD_ROLES.map((role) => ({ role })),
+    targets,
   };
 }
 

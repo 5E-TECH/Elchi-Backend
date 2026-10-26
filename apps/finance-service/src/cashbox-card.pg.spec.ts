@@ -3,6 +3,7 @@ import { DataSource } from 'typeorm';
 import { of } from 'rxjs';
 import { Cashbox_type, PaymentMethod } from '@app/common';
 import { CreateCashboxCards1716000000105 } from '../../../migrations/1716000000105-CreateCashboxCards';
+import { CashboxCardDetails1716000000161 } from '../../../migrations/1716000000161-CashboxCardDetails';
 import { FinanceServiceService } from './finance-service.service';
 import { CashboxCardService } from './cashbox-card/cashbox-card.service';
 import { Cashbox } from './entities/cashbox.entity';
@@ -35,6 +36,8 @@ describePg('3PE0B03q — asosiy kassa nomli kartalari, haqiqiy Postgres', () => 
   let cards: CashboxCardService;
   let finance: FinanceServiceService;
   const migration = new CreateCashboxCards1716000000105();
+  // Zv3MLn0a — karta tafsilotlari (entity ↔ migratsiya mosligi).
+  const detailsMigration = new CashboxCardDetails1716000000161();
   const ORIGINAL_ENV = process.env.FINANCE_REQUIRE_OPEN_SHIFT;
 
   const dbUrl = () => {
@@ -83,6 +86,7 @@ describePg('3PE0B03q — asosiy kassa nomli kartalari, haqiqiy Postgres', () => 
     await db.initialize();
     const runner = db.createQueryRunner();
     await migration.up(runner);
+    await detailsMigration.up(runner);
     await runner.release();
 
     const activityLog = { log: jest.fn().mockResolvedValue(undefined) };
@@ -218,11 +222,13 @@ describePg('3PE0B03q — asosiy kassa nomli kartalari, haqiqiy Postgres', () => 
 
     const runner = db.createQueryRunner();
     try {
+      await detailsMigration.down(runner);
       await migration.down(runner);
       expect(await cols('cashbox_cards')).toEqual([]);
       expect(await cols('cashbox_history')).not.toContain('card_id');
     } finally {
       await migration.up(runner);
+      await detailsMigration.up(runner);
       await runner.release();
     }
   });

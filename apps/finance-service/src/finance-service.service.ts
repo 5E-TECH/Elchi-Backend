@@ -28,7 +28,7 @@ import {
 import { Cashbox } from './entities/cashbox.entity';
 import { CashboxHistory } from './entities/cashbox-history.entity';
 import { Shift, ShiftStatus } from './entities/shift.entity';
-import { applyMainCardSelection } from './cashbox-card/cashbox-card.service';
+import { applyCashboxCardSelection } from './cashbox-card/cashbox-card.service';
 import { resolveSpendExpenseCategory } from './expense-category/expense-category.service';
 import {
   BRANCH_SHIFT_REQUIRED_MESSAGE,
@@ -1554,9 +1554,10 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
           );
         }
 
-        // 3PE0B03q — CLICK kirim/chiqim tanlangan NOMLI kartaga (MAIN
-        // qulfi ostida). `card_id` yo'q — Asosiy karta (avvalgidek).
-        const historyCardId = await applyMainCardSelection(
+        // 3PE0B03q / Zv3MLn0a — CLICK kirim/chiqim tanlangan NOMLI kartaga
+        // (MAIN yoki filial kassasi qulfi ostida). `card_id` yo'q — Asosiy
+        // karta (avvalgidek).
+        const historyCardId = await applyCashboxCardSelection(
           queryRunner.manager,
           cashbox,
           {
@@ -2483,12 +2484,11 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
          * ortiqcha bo'lib chiqardi (BeePost buni `netConversion` deb alohida
          * ko'rsatadi). Kartalararo o'tkazma `balance_card` ni o'zgartirmaydi.
          */
+        // Zv3MLn0a — filial kassalarida ham kartalar (konvertatsiya) bor:
+        // smena kassasining turi bo'yicha (MAIN yoki filial).
         let cardToCash = 0;
         let cashToCard = 0;
-        if (
-          FinanceServiceService.shiftCashboxType(shiftCashboxUserId) ===
-          Cashbox_type.MAIN
-        ) {
+        {
           const conversionRows = await queryRunner.manager
             .createQueryBuilder(CashboxCardMovement, 'm')
             .innerJoin(Cashbox, 'cb', 'cb.id = m.cashbox_id')
@@ -2497,7 +2497,8 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
             .where('m.is_deleted = false')
             .andWhere('cb.user_id = :ownerId', { ownerId: shiftCashboxUserId })
             .andWhere('cb.cashbox_type = :mainType', {
-              mainType: Cashbox_type.MAIN,
+              mainType:
+                FinanceServiceService.shiftCashboxType(shiftCashboxUserId),
             })
             .andWhere('m.type IN (:...conversionTypes)', {
               conversionTypes: [
@@ -3033,7 +3034,7 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
     cashbox_type?: Cashbox_type;
     created_by?: string;
     dedup_epoch?: string;
-    /** 3PE0B03q — MAIN, `type=click`: qaysi nomli kartadan. */
+    /** 3PE0B03q / Zv3MLn0a — MAIN yoki filial, `type=click`: qaysi kartadan. */
     card_id?: string;
     /**
      * Elchi Pochta №1 — kassa xarajati kategoriyasi (RMQ darajasida
@@ -3085,7 +3086,7 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         dedup_epoch: data.dedup_epoch,
         // (QTCUUgjA) qo'lda operatsiya — kassada ochiq smena talab qilinadi.
         require_open_shift: true,
-        // 3PE0B03q — nomli karta (faqat MAIN + click; aks holda 400).
+        // 3PE0B03q / Zv3MLn0a — karta (MAIN / filial + click; aks holda 400).
         ...(data.card_id ? { card_id: String(data.card_id) } : {}),
         // Elchi Pochta №1 — xarajat kategoriyasi (updateBalance tekshiradi).
         ...(data.expense_category_id
@@ -3157,7 +3158,7 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
     cashbox_type?: Cashbox_type;
     created_by?: string;
     dedup_epoch?: string;
-    /** 3PE0B03q — MAIN, `type=click`: qaysi nomli kartaga. */
+    /** 3PE0B03q / Zv3MLn0a — MAIN yoki filial, `type=click`: qaysi kartaga. */
     card_id?: string;
     /**
      * IgR4FVsR — `true` bo'lsa kirim P&L daftariga ham (+amount,
@@ -3198,7 +3199,7 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         dedup_epoch: data.dedup_epoch,
         // (QTCUUgjA) qo'lda operatsiya — kassada ochiq smena talab qilinadi.
         require_open_shift: true,
-        // 3PE0B03q — nomli karta (faqat MAIN + click; aks holda 400).
+        // 3PE0B03q / Zv3MLn0a — karta (MAIN / filial + click; aks holda 400).
         ...(data.card_id ? { card_id: String(data.card_id) } : {}),
       });
       if (update?.data?.idempotent) {
@@ -3455,6 +3456,11 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
     // Per-request idempotency token from the gateway; dedupes RMQ redelivery /
     // double-submit so the cash is never moved twice. (Audit P0-3.)
     dedup_epoch?: string;
+    /**
+     * Zv3MLn0a — CLICK pul QABUL QILUVCHI kassaning (HQ MAIN yoki menejer
+     * yo'lida filial kassasi) qaysi kartasiga tushdi. Yo'q — Asosiy karta.
+     */
+    card_id?: string;
   }) {
     // (2crjWf7v #3) Kvitansiyadagi "Qabul qildi: <xodim>" — tranzaksiyadan
     // OLDIN, qisqa muddat bilan; xato/timeout — umumiy so'z (pul amali kutmaydi).
@@ -3646,11 +3652,24 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         Operation_type.INCOME,
         data.payment_method ?? PaymentMethod.CASH,
       );
+      // Zv3MLn0a — qabul qiluvchi kassaning tanlangan kartasi (kassa qulfi
+      // ostida; faqat click; boshqa kassa kartasi 403).
+      const receiverCardId = await applyCashboxCardSelection(
+        queryRunner.manager,
+        receiverCashbox,
+        {
+          card_id: data.card_id ?? null,
+          operation: Operation_type.INCOME,
+          amount: Number(data.amount),
+          payment_method: data.payment_method ?? PaymentMethod.CASH,
+        },
+      );
       await queryRunner.manager.save(receiverCashbox);
 
       const receiverHistory = queryRunner.manager.create(CashboxHistory, {
         operation_type: Operation_type.INCOME,
         cashbox_id: receiverCashbox.id,
+        card_id: receiverCardId,
         source_type: Source_type.COURIER_PAYMENT,
         amount: Number(data.amount),
         balance_after: receiverCashbox.balance,
@@ -3902,6 +3921,8 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
     transfer_source_user_id?: string;
     // 3PE0B03q — CLICK pul MAIN kassaning qaysi nomli kartasiga tushdi.
     card_id?: string;
+    // Zv3MLn0a — CLICK pul FILIAL kassasining qaysi kartasidan chiqdi.
+    branch_card_id?: string;
   }) {
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
@@ -3979,11 +4000,23 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         Operation_type.EXPENSE,
         data.payment_method ?? PaymentMethod.CASH,
       );
+      // Zv3MLn0a — filial oyog'i: tanlangan filial kartasidan (yo'q — Asosiy).
+      const branchCardId = await applyCashboxCardSelection(
+        queryRunner.manager,
+        branchCashbox,
+        {
+          card_id: data.branch_card_id ?? null,
+          operation: Operation_type.EXPENSE,
+          amount: Number(data.amount),
+          payment_method: data.payment_method ?? PaymentMethod.CASH,
+        },
+      );
       await queryRunner.manager.save(branchCashbox);
 
       const branchHistory = queryRunner.manager.create(CashboxHistory, {
         operation_type: Operation_type.EXPENSE,
         cashbox_id: branchCashbox.id,
+        card_id: branchCardId,
         source_type: Source_type.BRANCH_TO_MAIN,
         source_id: paymentSourceId,
         dedup_epoch: dedupKey,
@@ -4006,7 +4039,7 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         Operation_type.INCOME,
         data.payment_method ?? PaymentMethod.CASH,
       );
-      const mainCardId = await applyMainCardSelection(
+      const mainCardId = await applyCashboxCardSelection(
         queryRunner.manager,
         mainCashbox,
         {
@@ -4189,7 +4222,7 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         Operation_type.EXPENSE,
         data.payment_method ?? PaymentMethod.CASH,
       );
-      const mainCardId = await applyMainCardSelection(
+      const mainCardId = await applyCashboxCardSelection(
         queryRunner.manager,
         mainCashbox,
         {

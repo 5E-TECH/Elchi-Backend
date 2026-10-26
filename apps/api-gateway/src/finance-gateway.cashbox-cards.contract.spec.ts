@@ -260,13 +260,11 @@ describe('3PE0B03q — /finance/cashbox/cards gateway kontrakti', () => {
     expect(String(res.body.message)).toContain('card_id');
   });
 
-  it('rollar: kartalar — faqat superadmin/admin (BeePost bilan bir xil)', () => {
+  it('rollar: kartalar CRUD — faqat superadmin/admin (Zv3MLn0a: o`qish — menejer ham, pastda)', () => {
     for (const method of [
-      'listCashboxCards',
       'createCashboxCard',
-      'listCashboxCardMovements',
-      'getCashboxCardLedger',
       'renameCashboxCard',
+      'makeCashboxCardDefault',
       'setCashboxCardStatus',
       'transferCashboxCards',
       'convertCashboxCard',
@@ -278,6 +276,23 @@ describe('3PE0B03q — /finance/cashbox/cards gateway kontrakti', () => {
       expect(Reflect.getMetadata(ROLES_KEY, descriptor?.value)).toEqual([
         'superadmin',
         'admin',
+      ]);
+    }
+    // Zv3MLn0a — ro'yxat / jurnal / ko'chirma: menejer ham (faqat o'z filiali).
+    for (const method of [
+      'listCashboxCards',
+      'listCashboxCardMovements',
+      'getCashboxCardLedger',
+      'exportCashboxCardLedger',
+    ]) {
+      const descriptor = Object.getOwnPropertyDescriptor(
+        FinanceGatewayController.prototype,
+        method,
+      );
+      expect(Reflect.getMetadata(ROLES_KEY, descriptor?.value)).toEqual([
+        'superadmin',
+        'admin',
+        'manager',
       ]);
     }
   });

@@ -23,6 +23,44 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-10-26 — Kassa: kartalar va hisob raqamlar — turi, bank, oxirgi 4 raqam, egasi; filial kassalari (Zv3MLn0a)
+
+Deploy: **finance-service + api-gateway birga** (yangi RMQ buyruqlari `finance.cashbox.cards.update` /
+`finance.cashbox.cards.make_default`). **Migratsiya bor:** `1716000000161-CashboxCardDetails` (faqat ADD COLUMN —
+mavjud kartalar o'zgarmaydi). `openapi.json` qayta yaratildi.
+
+- [2026-10-26] ✏️ [finance] — `GET /finance/cashbox/cards`: har kartada yangi maydonlar `kind`
+  (`virtual_card` | `plastic_card` | `bank_account` | `null` — eski karta), `bank_name`, `card_network`
+  (Uzcard/Humo/Visa…), `last4` (faqat oxirgi 4 raqam), `holder_name`, `note`, `require_photo_on_shift_close`,
+  `ai_check_enabled`, `cashbox_id`; javob ildizida `cashbox_id`, `cashbox_type` (`main` | `branch`), `branch_id`.
+  `?branch_id=<filial>` — filial kassasi kartalari (superadmin/admin). **Menejer** ham chaqira oladi — doim o'z
+  filiali kassasi qaytadi (`branch_id` yubormasa ham); boshqa filial → **403**.
+- [2026-10-26] ✏️ [finance] — `POST /finance/cashbox/cards`: yangi ixtiyoriy maydonlar `kind`, `bank_name`,
+  `card_network`, `last4`, `holder_name`, `note`, `branch_id` (filial kassasiga), `make_default` («Asosiy karta
+  qilish»), `require_photo_on_shift_close`, `ai_check_enabled`. `last4` 4 raqamdan uzun / raqam emas → **400**
+  (to'liq karta / hisob raqami yubormang). Smena kalitlari — **faqat superadmin** (admin → 403); AI faqat rasm
+  yoqilganda (aks holda 400).
+- [2026-10-26] ✏️ [finance] — `PATCH /finance/cashbox/cards/:id`: endi hamma maydon ixtiyoriy (`name` + yuqoridagi
+  tafsilotlar, `sort_order`). **Asosiy kartada ham ishlaydi** — faqat Asosiy kartaning **nomi** o'zgarmaydi (400).
+  Bo'sh body → 400. Rasm o'chirilsa AI ham o'chadi.
+- [2026-10-26] 🆕 [finance] — `POST /finance/cashbox/cards/:id/make-default` (superadmin/admin): kartani kassaning
+  Asosiy kartasi qilish. Pul harakatlanmaydi, Σ kartalar = `balance_card` saqlanadi; eski Asosiy karta nomli bo'lib
+  qoldig'ini saqlaydi; karta tanlanmagan to'lovlar endi yangi Asosiy kartaga. Javob: `card`, `previous_default`,
+  `changed`. Arxivlangan karta yoki Asosiy karta balansi manfiy → 400.
+- [2026-10-26] 🆕 [finance] — `GET /finance/cashbox/cards/:id/ledger/export?from_date&to_date` → `.xlsx` (karta
+  ko'chirmasi, sahifasiz). `GET /cards/:id/ledger` va `GET /cards/movements` — menejer ham (faqat o'z filiali
+  kartasi, boshqasi → 403); `movements` `?branch_id` bilan filial jurnali (yo'q — asosiy kassa).
+- [2026-10-26] ✏️ [finance] — to'lovlarda karta: `PATCH /cashbox/spend|fill` — menejer `card_id` bilan **o'z filiali
+  kassasi kartasini** tanlaydi; `POST /cashbox/payment/courier` — yangi `card_id` (qabul qiluvchi kassa: HQ yoki
+  menejerning filiali); `POST /cashbox/payment/branch-to-main` — yangi `branch_card_id` (filial kartasidan),
+  `card_id` (HQ kartasiga). Hammasi faqat `click` da; berilmasa — Asosiy karta (avvalgidek). Boshqa kassa kartasi →
+  **403** (ilgari MAIN da 404 edi).
+- [2026-10-26] 🟢 [realtime] — `finance.cashbox.card_changed`: yangi `action` qiymatlari `updated`, `made_default`;
+  filial kassasi kartasida payload `cashbox_type: 'branch'` + `branch_id`, filial **menejeriga ham** keladi.
+- 🔧 FE («Kassa: kartalar va hisob raqamlar UI» kartasi): kartalar ro'yxati / forma oynasi / to'ldirish oynasida karta
+  tanlash — yuqoridagi maydonlar; `last4` ni `··1234` ko'rinishida chizing.
+
+
 ### 2026-10-26 — Buyurtma yaratish: tumansiz inline mijoz — bitta o'zbekcha xabar (IR2OHIiN)
 
 Deploy: faqat api-gateway (DTO validatsiyasi). Migratsiya yo'q. `openapi.json` o'zgarmagan.

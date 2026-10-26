@@ -566,6 +566,17 @@ export class PaymentFromCourierRequestDto {
   @IsOptional()
   @IsString()
   comment?: string;
+
+  // Zv3MLn0a — qabul qiluvchi kassa kartasi.
+  @ApiPropertyOptional({
+    example: '3',
+    description:
+      "Zv3MLn0a — pul QABUL QILUVCHI kassaning kartasi ID si (`GET /finance/cashbox/cards`; superadmin/admin — asosiy kassa, menejer — o'z filiali kassasi `?branch_id` siz). Faqat `click` to'lovida (aks holda 400); berilmasa — Asosiy karta. Boshqa kassa (filial) kartasi → 403.",
+  })
+  @IsOptional()
+  @IsString()
+  @Matches(/^\d+$/)
+  card_id?: string;
 }
 
 /**
@@ -687,6 +698,17 @@ export class PaymentBranchToMainRequestDto {
   @IsString()
   @Matches(/^\d+$/)
   card_id?: string;
+
+  // Zv3MLn0a — filial oyog'i kartasi.
+  @ApiPropertyOptional({
+    example: '7',
+    description:
+      "Zv3MLn0a — pul chiqadigan FILIAL kassasining kartasi ID si (`GET /finance/cashbox/cards?branch_id=`). Faqat `click` to'lovida; berilmasa — filialning Asosiy kartasi. Boshqa kassa kartasi → 403, mablag' yetmasa 400.",
+  })
+  @IsOptional()
+  @IsString()
+  @Matches(/^\d+$/)
+  branch_card_id?: string;
 }
 
 export class MainCashboxFilterQueryDto {
@@ -782,11 +804,11 @@ export class MainCashboxManualRequestDto {
   @IsString()
   comment?: string;
 
-  // 3PE0B03q — nomli karta (BeePost cashbox_card porti).
+  // 3PE0B03q / Zv3MLn0a — karta (BeePost cashbox_card porti).
   @ApiPropertyOptional({
     example: '3',
     description:
-      "Asosiy kassaning NOMLI kartasi ID si (`GET /finance/cashbox/cards`). Faqat `click` to'lovida; berilmasa — Asosiy karta. Nomli kartada mablag' yetmasa 400.",
+      "Kassa kartasi ID si (`GET /finance/cashbox/cards`): superadmin/admin — asosiy kassa kartasi, menejer — o'z filiali kassasi kartasi (boshqa kassa kartasi → 403). Faqat `click` to'lovida; berilmasa — Asosiy karta. Kartada mablag' yetmasa 400.",
   })
   @IsOptional()
   @IsString()
@@ -876,13 +898,136 @@ export class UpdateCashboxExpenseCategoryRequestDto {
 
 // ───────── 3PE0B03q — asosiy kassa NOMLI kartalari (BeePost cashbox_card) ─────────
 
-export class CreateCashboxCardRequestDto {
+/** Zv3MLn0a — karta / hisob turi (finance `CashboxCardKind` bilan bir xil). */
+export enum CashboxCardKindDto {
+  VIRTUAL_CARD = 'virtual_card',
+  PLASTIC_CARD = 'plastic_card',
+  BANK_ACCOUNT = 'bank_account',
+}
+
+/** Zv3MLn0a — 4 raqamdan uzun / raqam bo'lmagan `last4` — 400 matni. */
+export const CARD_LAST4_DTO_MESSAGE =
+  "last4 — aniq 4 ta raqam (to'liq karta yoki hisob raqami qabul qilinmaydi)";
+
+/**
+ * Zv3MLn0a — karta tafsilotlari (yaratish va tahrirlashda umumiy). To'liq
+ * karta (PAN) / hisob raqami QABUL QILINMAYDI — faqat `last4`.
+ */
+export class CashboxCardDetailsRequestDto {
+  @ApiPropertyOptional({
+    enum: CashboxCardKindDto,
+    example: CashboxCardKindDto.VIRTUAL_CARD,
+    description:
+      'Turi: virtual_card (bank ilovasidagi karta), plastic_card (Uzcard/Humo/Visa), bank_account (korxona hisobi).',
+  })
+  @IsOptional()
+  @IsEnum(CashboxCardKindDto)
+  kind?: CashboxCardKindDto;
+
+  @ApiPropertyOptional({ example: 'Agrobank', maxLength: 100 })
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  bank_name?: string;
+
+  @ApiPropertyOptional({
+    example: 'Uzcard',
+    maxLength: 30,
+    description: '«Karta tizimi» (Uzcard, Humo, Visa …); hisob raqamida bo`sh.',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(30)
+  card_network?: string;
+
+  @ApiPropertyOptional({
+    example: '1234',
+    description:
+      "FAQAT oxirgi 4 raqam (`^\\d{4}$`). 4 raqamdan uzun qiymat (to'liq karta / hisob raqami) → 400. `''` — tozalash.",
+  })
+  @IsOptional()
+  @IsString()
+  @Matches(/^(\d{4})?$/, { message: CARD_LAST4_DTO_MESSAGE })
+  last4?: string;
+
+  @ApiPropertyOptional({ example: 'Shodiyor Ergashev', maxLength: 150 })
+  @IsOptional()
+  @IsString()
+  @MaxLength(150)
+  holder_name?: string;
+
+  @ApiPropertyOptional({ example: 'Click to`lovlari uchun', maxLength: 500 })
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  note?: string;
+
+  @ApiPropertyOptional({
+    example: true,
+    description:
+      'Smena yopishda shu kartaning qoldiq skrinshoti talab qilinadi. FAQAT superadmin (admin → 403). `false` — AI tekshiruvi ham o`chadi.',
+  })
+  @IsOptional()
+  @IsBoolean()
+  require_photo_on_shift_close?: boolean;
+
+  @ApiPropertyOptional({
+    example: false,
+    description:
+      'Skrinshot AI bilan tekshiriladi. FAQAT superadmin (admin → 403); faqat rasm talab qilinganda (aks holda 400).',
+  })
+  @IsOptional()
+  @IsBoolean()
+  ai_check_enabled?: boolean;
+}
+
+export class CreateCashboxCardRequestDto extends CashboxCardDetailsRequestDto {
   @ApiProperty({ example: 'Humo 8600' })
   @IsString()
   @Length(1, 100)
   name!: string;
 
   @ApiPropertyOptional({ example: 0 })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  sort_order?: number;
+
+  @ApiPropertyOptional({
+    example: '13',
+    description:
+      "Zv3MLn0a — filial (BRANCH) kassasiga karta: filial ID si. Berilmasa — asosiy (MAIN) kassa. Filial kassasi yo'q bo'lsa 404.",
+  })
+  @IsOptional()
+  @IsString()
+  @Matches(/^\d+$/)
+  branch_id?: string;
+
+  @ApiPropertyOptional({
+    example: false,
+    description:
+      '«Asosiy karta qilish»: yaratilgan karta darhol kassaning Asosiy kartasi bo`ladi (karta tanlanmagan to`lovlar shu kartaga). Eski Asosiy karta nomli bo`lib, qoldig`ini saqlaydi.',
+  })
+  @IsOptional()
+  @IsBoolean()
+  make_default?: boolean;
+}
+
+/**
+ * Zv3MLn0a — PATCH /finance/cashbox/cards/:id: nom va tafsilotlar (hammasi
+ * ixtiyoriy). Asosiy kartada ham ishlaydi; Asosiy kartaning NOMI o'zgarmaydi.
+ */
+export class UpdateCashboxCardRequestDto extends CashboxCardDetailsRequestDto {
+  @ApiPropertyOptional({
+    example: 'Uzcard 5614',
+    description: 'Asosiy kartada nomni o`zgartirish → 400.',
+  })
+  @IsOptional()
+  @IsString()
+  @Length(1, 100)
+  name?: string;
+
+  @ApiPropertyOptional({ example: 2 })
   @IsOptional()
   @Type(() => Number)
   @IsInt()
