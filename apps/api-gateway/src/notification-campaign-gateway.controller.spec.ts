@@ -177,8 +177,8 @@ describe('NotificationCampaignGatewayController — W8aerwL6 / xHPdpj0W', () => 
       ]);
     });
 
-    it('SMS/telegram kanali gateway’da ham 400 (bu karta SMSni yoqmaydi)', async () => {
-      for (const channel of ['sms', 'telegram', 'email']) {
+    it('telegram/email kanali gateway’da ham 400', async () => {
+      for (const channel of ['telegram', 'email']) {
         await request(http())
           .post('/notifications/campaigns')
           .set('Idempotency-Key', 'k')
@@ -191,6 +191,23 @@ describe('NotificationCampaignGatewayController — W8aerwL6 / xHPdpj0W', () => 
           .expect(400);
       }
       expect(send).not.toHaveBeenCalled();
+    });
+
+    it('(9D1Gl9MS) SMS kanali qabul qilinadi — notification-service’ga uzatiladi (rozilik/kvota u yerda)', async () => {
+      await request(http())
+        .post('/notifications/campaigns')
+        .set('Idempotency-Key', 'k-sms')
+        .send({
+          type: 'marketing.manual',
+          title: 't',
+          roles: ['admin'],
+          channels: ['in_app', 'sms'],
+        })
+        .expect(202);
+      expect(lastCall()).toEqual([
+        { cmd: 'notification.campaign.create' },
+        expect.objectContaining({ channels: ['in_app', 'sms'] }),
+      ]);
     });
 
     it('marshrut tartibi: GET /notifications/campaigns → campaign.list (`:id` telegram config’ga TUSHMAYDI)', async () => {
