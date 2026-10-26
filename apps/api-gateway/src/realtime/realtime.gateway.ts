@@ -12,7 +12,6 @@ import {
 import { Server, Socket } from 'socket.io';
 import {
   SESSION_CHECK_UNAVAILABLE,
-  SESSION_CHECK_UNAVAILABLE_MESSAGE,
   SessionKickReason,
   SessionRevocationService,
   type SessionState,
@@ -37,6 +36,14 @@ export const SESSION_REVOKED_EVENT = 'auth:session_revoked';
  * bo'lmasin; polling transportida ham navbatdagi javobda keladi).
  */
 export const SESSION_KICK_DISCONNECT_DELAY_MS = 250;
+
+/**
+ * (2026-10-26) identity javob bermay (va 5 daqiqalik «oxirgi tasdiq»
+ * muhlati ham yo'q — masalan gateway endigina qayta ishga tushgan) ulangan
+ * socket shuncha ms dan keyin qayta tekshiriladi: yopilgan bo'lsa uziladi,
+ * identity hali ham javob bermasa — yana shuncha kutiladi.
+ */
+export const SESSION_RECHECK_DELAY_MS = 30_000;
 
 /** Sessiya xonasi: shu sessiya (`sid`) bilan ulangan barcha tab/socketlar. */
 export const sessionRoom = (sessionId: string): string =>
@@ -79,7 +86,9 @@ export interface RealtimeConnectError {
  *
  * (Elchi Pochta #3, 2026-10-24) Sessiyalar: `sid` li token bilan ulanish
  * HTTP bilan BIR XIL qoida bo'yicha tekshiriladi (`SessionRevocationService`
- * — kesh / identity `session_state`, identity javob bermasa fail open):
+ * — kesh / identity `session_state`; identity javob bermasa: 5 daqiqa ichida
+ * tasdiqlangan sessiya o'tadi, aks holda socket qabul qilinib 30 s dan keyin
+ * qayta tekshiriladi):
  * yopilgan sessiya → `error` `{ code: 'SESSION_REVOKED' }` va uziladi
  * (chiqarilgan qurilma eski token bilan qayta ulana olmaydi). Ochiq sessiya
  * socketi qo'shimcha `session:<sid>` xonasiga kiradi; sessiya yopilganda
@@ -104,6 +113,11 @@ export class RealtimeGateway
 
   /** Kutilayotgan (emit'dan keyingi) uzishlar — modul yopilganda tozalanadi. */
   private readonly pendingKicks = new Set<ReturnType<typeof setTimeout>>();
+  /** (2026-10-26) socket id → sessiyani qayta tekshirish taymeri. */
+  private readonly sessionRechecks = new Map<
+    string,
+    ReturnType<typeof setTimeout>
+  >();
   private readonly unsubscribeKicks?: () => void;
 
   constructor(
@@ -123,6 +137,8 @@ export class RealtimeGateway
     this.unsubscribeKicks?.();
     for (const timer of this.pendingKicks) clearTimeout(timer);
     this.pendingKicks.clear();
+    for (const timer of this.sessionRechecks.values()) clearTimeout(timer);
+    this.sessionRechecks.clear();
   }
 
   private getUser(client: Socket): SocketUser | undefined {
@@ -153,20 +169,20 @@ export class RealtimeGateway
         );
         return;
       }
-      // (NDmZMzCP) identity javob bermadi — fail closed: socket ulanmaydi,
-      // lekin `SESSION_REVOKED` EMAS (mijoz chiqarib yuborilmaydi).
-      if (state === 'unknown') {
-        this.reject(client, {
-          message: SESSION_CHECK_UNAVAILABLE_MESSAGE,
-          code: SESSION_CHECK_UNAVAILABLE,
-        });
-        this.logger.warn(
-          `socket rejected: user=${user.sub} session check unavailable (${user.sid})`,
-        );
-        return;
-      }
       // Tekshiruv davomida chiqarilgan yoki mijoz o'zi uzilgan.
       if (client.disconnected) return;
+      // (2026-10-26) identity javob bermadi va 5 daqiqalik «oxirgi tasdiq»
+      // muhlati ham yo'q (masalan gateway qayta ishga tushgan / deploy).
+      // Rad etilsa socket.io o'zi qayta ulanmaydi — shuning uchun socket
+      // QABUL QILINADI va SESSION_RECHECK_DELAY_MS dan keyin qayta
+      // tekshiriladi: faqat yopilgan bo'lsa uziladi. Yopilish (kick) bu
+      // vaqtda ham `session:<sid>` xonasi orqali darhol yetadi.
+      if (state === 'unknown') {
+        this.logger.warn(
+          `socket allowed without session check: user=${user.sub} identity unavailable (${user.sid}), re-check in ${SESSION_RECHECK_DELAY_MS} ms`,
+        );
+        this.scheduleSessionRecheck(client, user.sub, user.sid);
+      }
     }
 
     (client.data as { user?: SocketUser }).user = user;
@@ -193,6 +209,53 @@ export class RealtimeGateway
     this.logger.log(`socket connected: user=${user.sub}`);
   }
 
+  /**
+   * (2026-10-26) Tekshirilmay qabul qilingan socket sessiyasini keyinroq
+   * qayta tekshirish. Yopilgan (identity `active: false` / kesh) —
+   * `auth:session_revoked` + `error` SESSION_REVOKED, uziladi; hali ham
+   * noma'lum — yana kutiladi; ochiq — tamom. Socket uzilsa taymer bekor.
+   */
+  private scheduleSessionRecheck(
+    client: Socket,
+    userId: string,
+    sessionId: string,
+  ): void {
+    const previous = this.sessionRechecks.get(client.id);
+    if (previous) clearTimeout(previous);
+    const timer = setTimeout(() => {
+      this.sessionRechecks.delete(client.id);
+      void this.recheckSession(client, userId, sessionId);
+    }, SESSION_RECHECK_DELAY_MS);
+    timer.unref?.();
+    this.sessionRechecks.set(client.id, timer);
+  }
+
+  private async recheckSession(
+    client: Socket,
+    userId: string,
+    sessionId: string,
+  ): Promise<void> {
+    if (client.disconnected) return;
+    const state = await this.sessionState(userId, sessionId);
+    if (client.disconnected) return;
+    if (state === 'unknown') {
+      this.scheduleSessionRecheck(client, userId, sessionId);
+      return;
+    }
+    if (state !== 'revoked') return;
+    client.emit(SESSION_REVOKED_EVENT, {
+      session_id: sessionId,
+      reason: 'security_reset',
+    });
+    this.reject(client, {
+      message: 'Session revoked',
+      code: 'SESSION_REVOKED',
+    });
+    this.logger.log(
+      `socket disconnected on re-check: user=${userId} session revoked (${sessionId})`,
+    );
+  }
+
   /** Rad etish: `error` hodisasi, keyin server uzadi (hodisa avval yetadi). */
   private reject(client: Socket, error: RealtimeConnectError): void {
     client.emit('error', error);
@@ -200,8 +263,9 @@ export class RealtimeGateway
   }
 
   /**
-   * HTTP `JwtStrategy` bilan bir xil. (NDmZMzCP) identity javob bermasa /
-   * xato — `unknown` (fail closed: socket rad etiladi).
+   * HTTP `JwtStrategy` bilan bir xil (5 daqiqalik «oxirgi tasdiq» muhlati
+   * servisning o'zida). identity javob bermasa / xato — `unknown`
+   * (2026-10-26: socket qabul qilinadi, 30 s dan keyin qayta tekshiriladi).
    */
   private async sessionState(
     userId: string,
@@ -254,6 +318,11 @@ export class RealtimeGateway
   }
 
   handleDisconnect(client: Socket) {
+    const recheck = this.sessionRechecks.get(client.id);
+    if (recheck) {
+      clearTimeout(recheck);
+      this.sessionRechecks.delete(client.id);
+    }
     const user = this.getUser(client);
     if (!user) return;
     const set = this.online.get(user.sub);

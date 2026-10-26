@@ -9,6 +9,7 @@ import {
 import {
   RealtimeGateway,
   SESSION_KICK_DISCONNECT_DELAY_MS,
+  SESSION_RECHECK_DELAY_MS,
   SESSION_REVOKED_EVENT,
 } from './realtime.gateway';
 
@@ -106,6 +107,18 @@ describe('Elchi Pochta #3 (2026-10-24) — realtime: yopilgan sessiya socketdan 
     return { client, joined };
   };
 
+  /**
+   * (2026-10-26) Soxta taymerlar bilan ulanish: `rmqSend` qayta urinish
+   * kechikishi (rxjs `timer`) ham soxta — tekshiruv tugashi uchun vaqt
+   * suriladi (SESSION_RECHECK_DELAY_MS dan ancha kam).
+   */
+  const RMQ_SETTLE_MS = 5_000;
+  const connectWithFakeTimers = async (client: unknown) => {
+    const pending = gateway.handleConnection(client as never);
+    await jest.advanceTimersByTimeAsync(RMQ_SETTLE_MS);
+    await pending;
+  };
+
   describe('ulanish', () => {
     it('⭐ ochiq sessiya: avval `session:<sid>`, keyin `user:`/`role:`; `connected` da `session_id`', async () => {
       const { client, joined } = socket(token(SID_PHONE.toUpperCase()));
@@ -174,31 +187,126 @@ describe('Elchi Pochta #3 (2026-10-24) — realtime: yopilgan sessiya socketdan 
       expect(send).not.toHaveBeenCalled();
     });
 
-    it('⭐ (NDmZMzCP) identity javob bermasa — FAIL CLOSED: `error` SESSION_CHECK_UNAVAILABLE (SESSION_REVOKED EMAS), uziladi, `user:`/`role:` yo‘q', async () => {
-      identityReply = () => throwError(() => new Error('identity down'));
+    it('⭐ (2026-10-26) identity javob bermasa, muhlat yozuvi yo‘q (gateway qayta ishga tushgan) — socket QABUL qilinadi, 30 s dan keyin qayta tekshiriladi; yopilgan bo‘lsa uziladi', async () => {
+      jest.useFakeTimers();
+      let down = true;
+      identityReply = (sessionId) =>
+        down
+          ? throwError(() => new Error('identity down'))
+          : of({ active: !closed.has(sessionId) });
       const { client, joined } = socket(token(SID_PHONE));
-      await gateway.handleConnection(client as never);
+      await connectWithFakeTimers(client);
+      // Rad etilmadi: `error` yo'q, uzilmadi, odatiy xonalar va `connected`.
+      expect(client.disconnect).not.toHaveBeenCalled();
       expect(client.emit).toHaveBeenCalledTimes(1);
-      expect(client.emit).toHaveBeenCalledWith('error', {
-        message:
-          "Sessiyani tekshirib bo'lmadi — birozdan keyin qayta urinib ko'ring",
-        code: 'SESSION_CHECK_UNAVAILABLE',
+      expect(client.emit).toHaveBeenCalledWith(
+        'connected',
+        expect.objectContaining({ session_id: SID_PHONE }),
+      );
+      expect(joined).toEqual([
+        `session:${SID_PHONE}`,
+        'user:25',
+        'role:courier',
+      ]);
+      expect(gateway.isOnline('25')).toBe(true);
+
+      // 30 s: identity hali ham javob bermaydi — uzilmaydi, yana kutadi.
+      await jest.advanceTimersByTimeAsync(
+        SESSION_RECHECK_DELAY_MS + RMQ_SETTLE_MS,
+      );
+      expect(client.disconnect).not.toHaveBeenCalled();
+
+      // identity qaytdi, sessiya esa shu orada yopilgan — keyingi tekshiruvda uziladi.
+      down = false;
+      closed.add(SID_PHONE);
+      await jest.advanceTimersByTimeAsync(
+        SESSION_RECHECK_DELAY_MS + RMQ_SETTLE_MS,
+      );
+      expect(client.emit).toHaveBeenCalledWith(SESSION_REVOKED_EVENT, {
+        session_id: SID_PHONE,
+        reason: 'security_reset',
       });
-      // FE `isSessionRevokedSocketError` faqat «session_revoked» matnini
-      // taniydi — bu xato foydalanuvchini chiqarib yubormaydi.
-      const [, payload] = client.emit.mock.calls[0] as [
-        string,
-        { message: string; code: string },
-      ];
-      expect(
-        `${payload.code} ${payload.message}`
-          .toLowerCase()
-          .replace(/[\s-]+/g, '_'),
-      ).not.toContain('session_revoked');
+      expect(client.emit).toHaveBeenCalledWith('error', {
+        message: 'Session revoked',
+        code: 'SESSION_REVOKED',
+      });
       expect(client.disconnect).toHaveBeenCalledWith(true);
-      expect(joined).toEqual([`session:${SID_PHONE}`]);
-      expect(client.data.user).toBeUndefined();
+    });
+
+    it('(2026-10-26) qayta tekshiruvda sessiya ochiq — socket qoladi, boshqa tekshiruv yo‘q', async () => {
+      jest.useFakeTimers();
+      let down = true;
+      identityReply = () =>
+        down
+          ? throwError(() => new Error('identity down'))
+          : of({ active: true });
+      const { client } = socket(token(SID_PHONE));
+      await connectWithFakeTimers(client);
+      down = false;
+      await jest.advanceTimersByTimeAsync(
+        SESSION_RECHECK_DELAY_MS + RMQ_SETTLE_MS,
+      );
+      expect(client.disconnect).not.toHaveBeenCalled();
+      const callsAfter = send.mock.calls.length;
+      await jest.advanceTimersByTimeAsync(SESSION_RECHECK_DELAY_MS * 3);
+      expect(send.mock.calls.length).toBe(callsAfter);
+    });
+
+    it('(2026-10-26) socket uzilsa — qayta tekshiruv taymeri bekor', async () => {
+      jest.useFakeTimers();
+      identityReply = () => throwError(() => new Error('identity down'));
+      const { client } = socket(token(SID_PHONE));
+      await connectWithFakeTimers(client);
+      const callsAfter = send.mock.calls.length;
+      client.disconnected = true;
+      gateway.handleDisconnect(client as never);
+      await jest.advanceTimersByTimeAsync(SESSION_RECHECK_DELAY_MS * 2);
+      expect(send.mock.calls.length).toBe(callsAfter);
       expect(gateway.isOnline('25')).toBe(false);
+    });
+
+    it('⭐ (2026-10-26) 5 daqiqa ichida tasdiqlangan sessiya — identity ishlamasa ham darhol ulanadi (qayta tekshiruv yo‘q)', async () => {
+      let clock = 1_000_000;
+      revocation.now = () => clock;
+      let down = false;
+      identityReply = () =>
+        down
+          ? throwError(() => new Error('identity down'))
+          : of({ active: true });
+      const first = socket(token(SID_PHONE), 's1');
+      await gateway.handleConnection(first.client as never);
+      down = true;
+      clock += 4 * 60_000;
+      const second = socket(token(SID_PHONE), 's2');
+      await gateway.handleConnection(second.client as never);
+      expect(second.client.disconnect).not.toHaveBeenCalled();
+      expect(second.client.emit).toHaveBeenCalledWith(
+        'connected',
+        expect.objectContaining({ session_id: SID_PHONE }),
+      );
+      expect(
+        (gateway as unknown as { sessionRechecks: Map<string, unknown> })
+          .sessionRechecks.size,
+      ).toBe(0);
+    });
+
+    it('⭐ (2026-10-26) muhlatda bo‘lsa ham yopilgan sessiya — rad etiladi (SESSION_REVOKED)', async () => {
+      let down = false;
+      identityReply = () =>
+        down
+          ? throwError(() => new Error('identity down'))
+          : of({ active: true });
+      const first = socket(token(SID_PHONE), 's1');
+      await gateway.handleConnection(first.client as never);
+      down = true;
+      revocation.markRevoked([SID_PHONE]);
+      const second = socket(token(SID_PHONE), 's2');
+      await gateway.handleConnection(second.client as never);
+      expect(second.client.emit).toHaveBeenCalledWith('error', {
+        message: 'Session revoked',
+        code: 'SESSION_REVOKED',
+      });
+      expect(second.client.disconnect).toHaveBeenCalledWith(true);
     });
 
     it('⭐ tekshiruv davomida chiqarilsa — hodisa sessiya xonasiga yetadi; kechikkan «active» javobi baribir rad etadi, `user:`/`role:` ga kirmaydi', async () => {
