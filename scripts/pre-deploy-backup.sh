@@ -22,12 +22,19 @@
 # Env:
 #   BACKUP_PRE_DEPLOY_KEEP   pre-deploy dumps to keep   (default 5)
 #   PRE_DEPLOY_BACKUP_DIR    output dir                 (default ./backups/pre-deploy)
-#   BACKUP_COMPOSE_FILE      compose file               (default docker-compose.prod.yml)
+#   BACKUP_COMPOSE_FILE      compose file(s)            (default docker-compose.prod.yml)
+#                            several files joined with ':' like COMPOSE_FILE —
+#                            staging: docker-compose.prod.yml:docker-compose.staging.yml
 #
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 COMPOSE_FILE="${BACKUP_COMPOSE_FILE:-docker-compose.prod.yml}"
+# `-f a -f b …` — the staging override changes the project name, so a lookup
+# with the base file alone would never find (and never dump) staging's postgres.
+COMPOSE_ARGS=()
+IFS=':' read -r -a _compose_files <<< "$COMPOSE_FILE"
+for _f in "${_compose_files[@]}"; do COMPOSE_ARGS+=(-f "$_f"); done
 DIR="${PRE_DEPLOY_BACKUP_DIR:-./backups/pre-deploy}"
 KEEP="${BACKUP_PRE_DEPLOY_KEEP:-5}"
 
@@ -35,7 +42,7 @@ log() { echo "[pre-deploy] $*" >&2; }
 
 # Is there a database to protect? `ps` errors are fatal: an unreadable compose
 # file must not be mistaken for "no database yet".
-if ! PG_CID="$(docker compose -f "$COMPOSE_FILE" ps --all --quiet postgres)"; then
+if ! PG_CID="$(docker compose "${COMPOSE_ARGS[@]}" ps --all --quiet postgres)"; then
   log "ERROR: could not query the postgres container (docker compose ps failed)"
   exit 1
 fi
@@ -46,7 +53,7 @@ if [ -z "$PG_CID" ]; then
 fi
 if [ "$(docker inspect -f '{{.State.Running}}' "$PG_CID" 2>/dev/null || true)" != true ]; then
   log "ERROR: the postgres container exists but is NOT running, so no backup can be taken."
-  log "       Start it (docker compose -f $COMPOSE_FILE up -d postgres), check the data, then re-run the deploy."
+  log "       Start it (docker compose ${COMPOSE_ARGS[*]} up -d postgres), check the data, then re-run the deploy."
   exit 1
 fi
 

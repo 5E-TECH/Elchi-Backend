@@ -36,6 +36,8 @@
 #   BACKUP_COMPOSE_FILE  host mode: dump through `docker compose -f <file> exec -T
 #                        postgres` with the postgres container's own
 #                        POSTGRES_USER/POSTGRES_DB (what deploy.yml always used).
+#                        Several files joined with ':' (like COMPOSE_FILE) become
+#                        `-f a -f b` (staging: docker-compose.prod.yml:docker-compose.staging.yml).
 #                        Unset: a local pg_dump (the db-backup container) with
 #                        POSTGRES_URI, or POSTGRES_HOST/PORT/USER/PASSWORD/DB.
 #   BACKUP_RESULT_FILE   optional: on success the dump's path is written here
@@ -102,10 +104,16 @@ trap 'rm -f -- "$TMP"' EXIT
 # backups; drop them once they are clearly stale (another run may be writing).
 find "$BACKUP_DIR" -maxdepth 1 -type f -name '.*.partial.*' -mmin +60 -delete 2>/dev/null || true
 
+COMPOSE_ARGS=()
+if [[ -n "${BACKUP_COMPOSE_FILE:-}" ]]; then
+  IFS=':' read -r -a _compose_files <<< "${BACKUP_COMPOSE_FILE}"
+  for _f in "${_compose_files[@]}"; do COMPOSE_ARGS+=(-f "$_f"); done
+fi
+
 run_pg_dump() {
   # --clean --if-exists makes the dump restorable onto an existing DB.
   if [[ -n "${BACKUP_COMPOSE_FILE:-}" ]]; then
-    docker compose -f "${BACKUP_COMPOSE_FILE}" exec -T postgres \
+    docker compose "${COMPOSE_ARGS[@]}" exec -T postgres \
       sh -c 'pg_dump --no-owner --no-privileges --clean --if-exists -U "$POSTGRES_USER" "$POSTGRES_DB"'
   else
     pg_dump --no-owner --no-privileges --clean --if-exists "${CONN[@]}"
