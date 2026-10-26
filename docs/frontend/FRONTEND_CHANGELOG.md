@@ -23,6 +23,16 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-10-26 — Moliya tarixi: «Barchasi / Kirim / Chiqim» tab sonlari — `GET /finance/history` `data.counts` (GaBIPi3Z, 2-band)
+
+Deploy: finance-service (+ api-gateway — faqat Swagger). Migratsiya yo'q. `openapi.json` yangilandi.
+
+- [2026-10-26] ✏️ [finance] — `GET /finance/history` javobiga `data.counts: { all, income, expense }` qo'shildi:
+  AYNI filtrlar va rol doirasi (kassa / kassa turi / manba / sana / foydalanuvchi), faqat `operation_type` siz —
+  qaysi tab tanlanganidan qat'i nazar bir xil. `all = income + expense`. `items` va `pagination` o'zgarmagan
+  (`pagination.total` — joriy tabli ro'yxat jami). Bo'sh natijada `counts` — nol.
+- 🔧 FE: /payments «Barchasi/Kirim/Chiqim» va cash-detail tab sonlari ← `data.counts`.
+
 ### 2026-10-26 — Chek uchun backend: operator/market telefonlari Swagger'da, paket va pochta cheki maydonlari (1mOjtOVC)
 
 Deploy: api-gateway (faqat Swagger) + logistics-service (`GET /post/:id` ga `courier`). Migratsiya yo'q.
