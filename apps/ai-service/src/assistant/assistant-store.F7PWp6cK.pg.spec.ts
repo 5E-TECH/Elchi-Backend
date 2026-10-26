@@ -1,6 +1,5 @@
 import { DataSource } from 'typeorm';
 import { CreateAiSchema1716000000047 } from '../../../../migrations/1716000000047-CreateAiSchema';
-import { AiOrderAppliedPrice1716000000119 } from '../../../../migrations/1716000000119-AiOrderAppliedPrice';
 import { AiAssistant1716000000172 } from '../../../../migrations/1716000000172-AiAssistant';
 import {
   AiAssistantAccess,
@@ -55,7 +54,6 @@ describePg('AssistantStore — real Postgres (F7PWp6cK)', () => {
         `SELECT to_regclass('ai_schema.ai_usage_log') AS t`,
       );
       if (!probe[0]?.t) await new CreateAiSchema1716000000047().up(qr);
-      await new AiOrderAppliedPrice1716000000119().up(qr);
       // up() ikki marta — IF NOT EXISTS (idempotent).
       await new AiAssistant1716000000172().up(qr);
       await new AiAssistant1716000000172().up(qr);
