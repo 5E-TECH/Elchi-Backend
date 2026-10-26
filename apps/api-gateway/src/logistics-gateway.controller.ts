@@ -1267,9 +1267,14 @@ export class LogisticsGatewayController {
   @ApiOperation({
     summary: "O'z viloyatim statistikasi (kuryer / menejer, tumanlar kesimida)",
     description:
-      'aLx7Di99: region — from the token (courier: users.region_id, manager: branch region). Numbers are the ' +
-      "requester's OWN slice, same scope as GET /orders: courier — orders with courier_id or holder_courier_id = me; " +
-      'manager — orders of own branch (branch_id / holder_branch_id / home_branch_id). Response `data.scope`: ' +
+      'aLx7Di99: region — from the token (courier: users.region_id, manager: branch region). Numbers are computed over ' +
+      "EXACTLY the requester's /orders «Barchasi» list (same order-service query, same date filter): courier — " +
+      'GET /orders/courier/orders without status (orders in my posts, i.e. posts.courier_id = me; statuses created / new / ' +
+      'received / on the road are not listed); manager — GET /orders without status (branch_id / holder_branch_id / ' +
+      'home_branch_id = own branch). `summary.*` — the WHOLE list (`summary.totalOrders` = list `total`); `districts[]` — ' +
+      'the part of it in the districts of the region; `summary.outsideDistrictsOrders` — list orders not in any district of ' +
+      'the region (no region/district, or another region): Σ districts[].totalOrders + outsideDistrictsOrders = ' +
+      'summary.totalOrders. Response `data.scope`: ' +
       '`{ type: "courier", courier_id }` | `{ type: "branch", branch_id, branch_name }` (heading: branch / «sizga tegishli»). ' +
       'No region / no branch — 200 with `{ region: null, summary: null, districts: [] }`.',
   })
@@ -1293,6 +1298,7 @@ export class LogisticsGatewayController {
             totalRevenue: 30000,
             successRate: 33,
             districtsCount: 2,
+            outsideDistrictsOrders: 0,
           },
           districts: [
             {

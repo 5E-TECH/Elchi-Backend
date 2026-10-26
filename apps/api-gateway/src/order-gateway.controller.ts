@@ -114,6 +114,7 @@ import {
   AI_RPC_TIMEOUT_MS,
   AI_TEXT_MAX_CHARS,
   CANCEL_RETURN_STAGES,
+  courierPostOrdersQuery,
   FULFILLMENT_SOURCES,
   Order_status,
   parseCancelReturnStages,
@@ -5078,18 +5079,11 @@ export class OrderGatewayController {
     let currentPage = pagination.page;
     let currentLimit = pagination.limit;
 
+    // aLx7Di99: kuryer doirasi — `courierPostOrdersQuery` (badge va /regions
+    // raqamlari ham shu ta'rif bilan sanaladi).
     const payload = {
       query: {
-        post_ids: courierPostIds,
-        status: statuses,
-        exclude_statuses: statuses?.length
-          ? undefined
-          : [
-              Order_status.CREATED,
-              Order_status.NEW,
-              Order_status.RECEIVED,
-              Order_status.ON_THE_ROAD,
-            ],
+        ...courierPostOrdersQuery(courierPostIds, statuses),
         search,
         start_day: startDate,
         end_day: endDate,

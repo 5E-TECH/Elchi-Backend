@@ -23,6 +23,24 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-10-27 — Hududlar: `/regions` raqamlari `/orders` «Barchasi» ro'yxati bilan aynan bir to'plam (aLx7Di99)
+
+Deploy: logistics-service + api-gateway + order-service (gateway/order-service — xatti-harakat o'zgarmagan, faqat
+kuryer ro'yxati doirasi umumiy yordamchiga ko'chdi; gateway — Swagger tavsifi). Migratsiya yo'q. `openapi.json` yangilandi.
+
+- [2026-10-27] ✏️ [logistics] — `GET /region/my/district-stats` raqamlari so'rovchining /orders «Barchasi» ro'yxati
+  yuboradigan AYNI `order.find_all` so'rovi bilan sanaladi (sana filtri ham o'sha):
+  **kuryer** — `GET /orders/courier/orders` (holatsiz): o'z pochtalaridagi buyurtmalar (`courier_id` bo'sh, pochta
+  orqali kelganlar ham), `created` / `new` / `received` / `on the road` sanalmaydi (ro'yxatda ham yo'q);
+  **menejer** — `GET /orders` (holatsiz): filial (`branch_id` / `holder_branch_id` / `home_branch_id`), barcha holat.
+  Avval kuryerda faqat `courier_id` / `holder_courier_id` sanalardi (prod: 39 ≠ 44).
+- ✏️ `summary.*` — butun ro'yxat (`summary.totalOrders` = /orders «Barchasi» `total`i); `districts[]` — shu ro'yxatning
+  viloyat tumanlariga tushgan qismi. 🆕 `summary.outsideDistrictsOrders` — ro'yxatdagi, lekin viloyat tumanlarining
+  birortasiga tushmagan buyurtmalar (tumani/viloyati yo'q yoki boshqa viloyat):
+  `Σ districts[].totalOrders + summary.outsideDistrictsOrders = summary.totalOrders`.
+- 🟢 FE: o'zgarish shart emas (`summary.totalOrders` endi ro'yxat jami bilan teng). Ixtiyoriy: `outsideDistrictsOrders > 0`
+  bo'lsa «Tumani ko'rsatilmagan: N» qatori.
+
 ### 2026-10-26 — Staging (test server) deploy yo'li: dev → test → main
 
 Deploy: hech qaysi servis (faqat CI/CD + ops fayllari). Migratsiya yo'q. Kontrakt o'zgarmagan.
