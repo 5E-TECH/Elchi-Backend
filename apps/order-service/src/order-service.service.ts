@@ -37,8 +37,22 @@ import { errorRes, successRes } from '../../../libs/common/helpers/response';
 import {
   computeSaleMarketPaidMax,
   resolveCourierShare as resolveCourierShareShare,
+  type SaleEngineQuote,
 } from './domain/order-money';
 import { OrderLookupService } from './lookup/order-lookup.service';
+import {
+  buildSaleQuotePayload,
+  fetchSaleDeliveryQuote,
+  isSalePricingEngineActive,
+  readSalePricingConfig,
+  toSaleEngineQuote,
+} from './pricing/sale-pricing';
+
+/**
+ * KmWO9gTA — ro'yxat javobida sotuvdan oldingi chegara uchun dvigatelga
+ * ko'pi bilan shuncha RPC (sahifadagi WAITING, snapshotsiz qatorlar).
+ */
+const SALE_PAID_MAX_ENGINE_ROWS = 10;
 import {
   ORDER_SCAN_LIGHT_SELECT,
   toOrderScanLightView,
@@ -2706,11 +2720,66 @@ export class OrderServiceService {
     const regionMap = toMap(regionsRes?.data ?? []);
     const productMap = toMap(productsRes?.data ?? []);
 
+    /**
+     * KmWO9gTA — dvigatel yoqilgan marketda sotuvdan oldingi chegara SOTUVDAGI
+     * AYNI narxdan (logistics `sale_quote`), aks holda chegara sotuvdagi
+     * narxdan ajralib ketardi. Ro'yxatda RPC soni cheklangan
+     * (`SALE_PAID_MAX_ENGINE_ROWS`); cheklovdan tashqari yoki dvigatel javob
+     * bermagan qatorda — `null` (yakuniy chegarani sotuvning o'zi 400 bilan
+     * beradi). Sotuvchi hali noma'lum — floor faqat `min_delivery_price`.
+     */
+    const salePricingConfig = readSalePricingConfig();
+    const engineRows = salePricingConfig.enabled
+      ? rows.filter(
+          (row) =>
+            row.status === Order_status.WAITING &&
+            row.market_tariff == null &&
+            !!row.market_id &&
+            marketMap.has(row.market_id) &&
+            isSalePricingEngineActive(
+              salePricingConfig,
+              row.market_id,
+              marketMap.get(row.market_id) as {
+                weight_volume_pricing?: boolean | null;
+              },
+            ),
+        )
+      : [];
+    const engineQuotes = new Map<string, SaleEngineQuote | null>();
+    await Promise.all(
+      engineRows.map(async (row, index) => {
+        if (index >= SALE_PAID_MAX_ENGINE_ROWS) {
+          engineQuotes.set(String(row.id), null);
+          return;
+        }
+        try {
+          const quote = await fetchSaleDeliveryQuote(
+            this.logisticsClient,
+            buildSaleQuotePayload(
+              row,
+              marketMap.get(row.market_id) as {
+                region_id?: string | null;
+                district_id?: string | null;
+              },
+            ),
+          );
+          engineQuotes.set(String(row.id), toSaleEngineQuote(quote));
+        } catch {
+          engineQuotes.set(String(row.id), null);
+        }
+      }),
+    );
+
     // (uguUEhin) Sotish oynasidagi «Marketga to'langan summa» chegarasi —
     // faqat sotiladigan (WAITING) buyurtmada; sotuvgacha `to_be_paid` 0 turadi.
     const saleMarketPaidMaxOf = (row: Order): number | null => {
       if (row.status !== Order_status.WAITING) return null;
       const market = row.market_id ? marketMap.get(row.market_id) : undefined;
+      let engine: SaleEngineQuote | null = null;
+      if (engineQuotes.has(String(row.id))) {
+        engine = engineQuotes.get(String(row.id)) ?? null;
+        if (!engine) return null;
+      }
       return computeSaleMarketPaidMax({
         totalPrice: row.total_price,
         paidOnlineAmount: row.paid_online_amount,
@@ -2719,6 +2788,7 @@ export class OrderServiceService {
         isCenter: row.where_deliver === Where_deliver.CENTER,
         centerTariff: market?.tariff_center as number | null | undefined,
         homeTariff: market?.tariff_home as number | null | undefined,
+        engine,
       });
     };
 

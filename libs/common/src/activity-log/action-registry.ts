@@ -127,6 +127,13 @@ export const ACTIVITY_ACTION_REGISTRY: Readonly<
   'order.partly_sell': entry('Qisman sotildi', 'order', 'check', 'amber'),
   'order.cancel': entry('Bekor qilindi', 'order', 'stop', 'red'),
   'order.rollback': entry('Orqaga qaytarildi', 'order', 'rollback', 'rose'),
+  // KmWO9gTA: ochilgandagi yetkazish narxi sotuvda boshqacha chiqdi.
+  'order.delivery_price_changed': entry(
+    "Yetkazish narxi o'zgardi",
+    'order',
+    'calculator',
+    'amber',
+  ),
   'order.initiate_return': entry(
     'Qaytarish boshlandi',
     'order',
