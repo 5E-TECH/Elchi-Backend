@@ -35,6 +35,15 @@ const quote = (tablePath: string) =>
     .join('.');
 
 const BIGINT_RE = /^\d{1,19}$/;
+
+/** Skalyar so'rov qiymati → matn; obyekt/massiv → '' (keyin 400). */
+const scalarText = (value: unknown): string =>
+  typeof value === 'string' ||
+  typeof value === 'number' ||
+  typeof value === 'bigint' ||
+  typeof value === 'boolean'
+    ? String(value).trim()
+    : '';
 const CASHBOX_TYPES = new Set<string>(Object.values(Cashbox_type));
 const OPERATION_TYPES = new Set<string>(Object.values(Operation_type));
 const SOURCE_TYPES = new Set<string>(Object.values(Source_type));
@@ -128,7 +137,7 @@ export class FinanceDailyService {
     if (value === undefined || value === null || value === '') {
       return undefined;
     }
-    const text = String(value).trim();
+    const text = scalarText(value);
     if (!BIGINT_RE.test(text)) {
       throw new BadRequestException(`${field} noto'g'ri`);
     }
@@ -143,7 +152,7 @@ export class FinanceDailyService {
     if (value === undefined || value === null || value === '') {
       return undefined;
     }
-    const text = String(value).trim();
+    const text = scalarText(value);
     if (!allowed.has(text)) {
       throw new BadRequestException(`${field} noto'g'ri: ${text}`);
     }

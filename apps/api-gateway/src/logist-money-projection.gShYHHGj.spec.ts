@@ -37,6 +37,13 @@ const allKeys = (node: Tree, acc: string[] = []): string[] => {
 const moneyKeys = (node: Tree) =>
   allKeys(node).filter((key) => LOGIST_MONEY_KEY_PATTERN.test(key));
 
+/**
+ * JSON nusxa: Jest muhitida `structuredClone` boshqa realm'ning
+ * `Object.prototype` li obyekt qaytaradi — proyeksiya uni "oddiy obyekt"
+ * deb tanimaydi (prod'da RMQ javobi JSON.parse'dan keladi).
+ */
+const jsonClone = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
+
 const LOGIST = ['logist'];
 const MANAGER = ['manager'];
 
@@ -123,7 +130,7 @@ describe('gShYHHGj — LOGIST proyeksiyasi: buyurtma, pochta, paket, qidiruv', (
   it.each(FAMILIES)(
     '%s: logist javobida pul kaliti YO‘Q, operatsion maydonlar qoladi',
     (_name, payload) => {
-      const projected = projectLogistPayload(LOGIST, structuredClone(payload));
+      const projected = projectLogistPayload(LOGIST, jsonClone(payload));
       expect(moneyKeys(projected)).toEqual([]);
       const keys = allKeys(projected);
       expect(keys).toEqual(expect.arrayContaining(['id']));
@@ -141,7 +148,7 @@ describe('gShYHHGj — LOGIST proyeksiyasi: buyurtma, pochta, paket, qidiruv', (
 describe('gShYHHGj — GET /search (gateway) logist javobi pulsiz', () => {
   const searchReply = FAMILIES[4][1];
   const setup = () => {
-    const search = { send: jest.fn(() => of(structuredClone(searchReply))) };
+    const search = { send: jest.fn(() => of(jsonClone(searchReply))) };
     const identity = { send: jest.fn(() => of({ data: {} })) };
     const scope = new LogistRegionScopeService({
       send: jest.fn(() => of({ statusCode: 200, data: { region_ids: ['5'] } })),

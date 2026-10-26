@@ -73,7 +73,7 @@ describe('qzjTMWPb — GET /finance/history/daily (rol doirasi)', () => {
       'logist',
     );
     expect(map.get('FinanceGatewayController_financialBalanceDaily')).toEqual(
-      map.get('FinanceGatewayController_findFinancialBalanceHistory'),
+      map.get('FinanceGatewayController_financialBalanceHistory'),
     );
     expect(map.get('FinanceGatewayController_paymentsMeta')).toEqual([
       'superadmin',

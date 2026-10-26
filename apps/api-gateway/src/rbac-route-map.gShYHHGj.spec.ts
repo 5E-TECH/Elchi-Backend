@@ -142,9 +142,11 @@ function collectGatewayRoutes(): {
       ) {
         continue;
       }
-      const method = RequestMethod[
-        Reflect.getMetadata(METHOD_METADATA, fn) as RequestMethod
-      ] as string;
+      const methodCode: RequestMethod = Reflect.getMetadata(
+        METHOD_METADATA,
+        fn,
+      );
+      const method: string = RequestMethod[methodCode];
       const subPaths = ([] as unknown[]).concat(
         Reflect.getMetadata(PATH_METADATA, fn) ?? '',
       );
@@ -155,7 +157,10 @@ function collectGatewayRoutes(): {
         | undefined;
       for (const base of basePaths) {
         for (const sub of subPaths) {
-          const path = joinPath(String(base ?? ''), String(sub ?? ''));
+          const path = joinPath(
+            typeof base === 'string' ? base : '',
+            typeof sub === 'string' ? sub : '',
+          );
           routes.push({
             key: `${method} ${path}`,
             controller: name,

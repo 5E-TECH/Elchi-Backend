@@ -67,34 +67,38 @@ export class PaymentsMetaService {
     ).slice(0, MAX_HQ_COURIER_IDS);
     const cashboxes = this.cashboxesTable();
 
-    const [marketTotals, topRows, courierTotals] = await Promise.all([
-      this.dataSource.query(
-        `SELECT COUNT(*) AS cnt, COALESCE(SUM("balance"), 0) AS total
-           FROM ${cashboxes}
-          WHERE "cashbox_type"::text = $1 AND "is_deleted" = false AND "balance" > 0`,
-        [Cashbox_type.FOR_MARKET],
-      ) as Promise<Array<{ cnt: string | number; total: string }>>,
+    type TotalsRow = { cnt: string | number; total: string };
+    type TopRow = { cashbox_id: string; user_id: string; balance: string };
+    const marketTotalsQuery: Promise<TotalsRow[]> = this.dataSource.query(
+      `SELECT COUNT(*) AS cnt, COALESCE(SUM("balance"), 0) AS total
+         FROM ${cashboxes}
+        WHERE "cashbox_type"::text = $1 AND "is_deleted" = false AND "balance" > 0`,
+      [Cashbox_type.FOR_MARKET],
+    );
+    const topQuery: Promise<TopRow[]> =
       top > 0
-        ? (this.dataSource.query(
+        ? this.dataSource.query(
             `SELECT "id"::text AS cashbox_id, "user_id"::text AS user_id, "balance"
                FROM ${cashboxes}
               WHERE "cashbox_type"::text = $1 AND "is_deleted" = false AND "balance" > 0
               ORDER BY "balance" DESC, "id" ASC
               LIMIT $2`,
             [Cashbox_type.FOR_MARKET, top],
-          ) as Promise<
-            Array<{ cashbox_id: string; user_id: string; balance: string }>
-          >)
-        : Promise.resolve([]),
-      hqCourierIds.length
-        ? (this.dataSource.query(
-            `SELECT COUNT(*) AS cnt, COALESCE(SUM("balance"), 0) AS total
-               FROM ${cashboxes}
-              WHERE "cashbox_type"::text = $1 AND "is_deleted" = false
-                AND "balance" > 0 AND "user_id" = ANY($2::bigint[])`,
-            [Cashbox_type.FOR_COURIER, hqCourierIds],
-          ) as Promise<Array<{ cnt: string | number; total: string }>>)
-        : Promise.resolve([{ cnt: 0, total: '0' }]),
+          )
+        : Promise.resolve([]);
+    const courierQuery: Promise<TotalsRow[]> = hqCourierIds.length
+      ? this.dataSource.query(
+          `SELECT COUNT(*) AS cnt, COALESCE(SUM("balance"), 0) AS total
+             FROM ${cashboxes}
+            WHERE "cashbox_type"::text = $1 AND "is_deleted" = false
+              AND "balance" > 0 AND "user_id" = ANY($2::bigint[])`,
+          [Cashbox_type.FOR_COURIER, hqCourierIds],
+        )
+      : Promise.resolve([{ cnt: 0, total: '0' }]);
+    const [marketTotals, topRows, courierTotals] = await Promise.all([
+      marketTotalsQuery,
+      topQuery,
+      courierQuery,
     ]);
 
     const names = await this.marketNames(topRows.map((row) => row.user_id));
@@ -150,9 +154,12 @@ export class PaymentsMetaService {
         data?: Array<{ id?: unknown; name?: unknown }>;
       }>(this.identityClient, { cmd: 'identity.market.find_by_ids' }, { ids });
       for (const user of Array.isArray(response?.data) ? response.data : []) {
-        if (user?.id === undefined || user?.id === null) continue;
-        const name = typeof user.name === 'string' ? user.name.trim() : '';
-        if (name) names.set(String(user.id), name);
+        const id =
+          typeof user?.id === 'string' || typeof user?.id === 'number'
+            ? String(user.id)
+            : '';
+        const name = typeof user?.name === 'string' ? user.name.trim() : '';
+        if (id && name) names.set(id, name);
       }
     } catch (error) {
       this.logger.warn(

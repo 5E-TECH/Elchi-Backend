@@ -23,6 +23,52 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-10-26 — Moliya: kunlik balans snapshot + kunlik kirim/chiqim (qzjTMWPb), /payments KPI meta (uzWcMR1C), logist moliya yopiqligi testlari (gShYHHGj)
+
+Deploy: **finance-service + api-gateway birga** (yangi RMQ buyruqlari `finance.history.daily`,
+`finance.financial_balance.daily`, `finance.cashbox.payments_meta`). **Migratsiya bor:**
+`1716000000176-FinanceDailySnapshots` (yangi jadvallar `finance_cashbox_daily`, `finance_daily_snapshots` —
+o'qish modeli; kassa balanslari / tarix / daftarga TEGMAYDI). identity-service — faqat rol tavsifi matni
+(LOGIST). `openapi.json` qayta yaratildi. Hamma yangi endpointlar FAQAT o'qiydi.
+
+Kunlik snapshot job'i finance-service ichida (har 10 daqiqada tekshiradi, advisory qulf — bitta replika
+yozadi, idempotent). Deploydan ~1 daqiqa keyin u o'tgan kunlarni `cashbox_history` ning birinchi kunidan
+kechagacha avtomatik quradi (backfill); shu vaqtgacha `balance_status: "pending"` (qoldiqlar `null`,
+oqimlar bor). O'chirish: `FINANCE_DAILY_SNAPSHOT_DISABLED=true`.
+
+- [2026-10-26] 🆕 [finance] — `GET /finance/history/daily?from_date&to_date&cashbox_id|user_id|cashbox_type&operation_type&source_type|source_types&source_user_id&created_by`
+  (sanalar `YYYY-MM-DD`, Toshkent; sukut — oxirgi 14 kun; ≤ 366 kun). Rollar va doira **`GET /finance/history`
+  bilan bir xil** (market/kuryer — o'z kassasi, menejer/registrator — o'z filiali; menejer
+  `cashbox_type=couriers&user_id=` bilan o'z filiali kuryerini ham — `cashbox/user/:id` ruxsati bilan;
+  superadmin/admin tanlovsiz → Asosiy kassa). Javob: `days[]` = `{date, income, expense, net, income_count,
+  expense_count, opening_balance, closing_balance}`, `totals`, `opening_balance` (davr boshi — `from_date`
+  dan oldingi kun oxiri), `closing_balance`, `balance_status` (`ok | pending | partial`), `filtered`.
+  Qoldiqlar kassa doirasiga bog'liq, manba/tur filtriga emas. → «Pul oqimi», «Kassa oqimi», «Balans
+  dinamikasi» (`closing_balance` 14 kun), «kechaga nisbatan» (bugungi − kechagi `closing_balance`), 7/14
+  kunlik sparkline; kassa tafsilotidagi «Davr boshida» endi `opening_balance` dan (100 qatorlik sahifadan
+  emas — M5).
+- [2026-10-26] 🆕 [finance] — `GET /finance/financial-balance/daily?from_date&to_date` (superadmin/admin):
+  `days[].snapshot` — kun oxiridagi Kassa (`main_balance`, naqd/karta), Yo'ldagi pul (`in_transit` =
+  `chain_receivable + provider_receivable`), Marketlar qarzi (`markets_debt`), Umumiy balans
+  (`current_situation`), `ledger_balance`; bugun uchun `null` (jonli qiymat — `/cashbox/financial-balanse`).
+  `source: "backfill"` kunlarida (deploydan oldingi o'tgan kunlar) `in_transit`/`current_situation` = `null`
+  (tarixdan tiklab bo'lmaydi) — delta/sparkline o'sha nuqtani tashlab chizilsin. `days[].ledger` + `ledger` —
+  P&L daftari: kun boshi/oxiri qoldig'i, kunlik kirim/chiqim/soni, `ledger.opening_balance` (davr boshi —
+  o'tgan davr uchun ham waterfall boshi), `ledger.peak` («Eng yuqori»). → Balans sahifasidagi «Daftar
+  qoldig'i», «Kunlik kirim va chiqim», KPI kartalar delta va 14 kunlik chiziq.
+- [2026-10-26] 🆕 [finance] — `GET /finance/cashbox/payments-meta?top=3` (superadmin/admin):
+  `receivable.branches {count, amount}` (all-info `branch_managers_receivable` bilan bir manba),
+  `receivable.hq_couriers {count, amount}` (`hq-couriers` oynasi bilan bir to'plam), `payable {markets_count,
+  amount, top_markets[{market_id, name, amount, share}], others{count, amount, share}}` (`berilishi_kerak`
+  bilan bir qoida — faqat musbat kassalar). Manba javob bermasa blok `null`. → «5 ta filial · 2 ta HQ
+  kuryeri», «6 ta marketga» va top-market segbar (10 000 lik ro'yxatsiz).
+- [2026-10-26] 🟢 [gateway] — gShYHHGj: LOGIST uchun barcha moliya marshrutlari (finance/*, kassa,
+  settlement, to'lovlar, investor, analytics, ai-usage) 403 — metadata'dan avtomatik olinadigan test bilan
+  qotirildi; @Roles'siz marshrutlar aniq oq ro'yxatda (yangisi CI'ni yiqitadi). `GET /search` — LOGIST
+  javobidan pul kalitlari gateway'da ham olib tashlanadi (search-service allaqachon qisqartirardi; kontrakt
+  o'zgarmagan). LOGIST rol tavsifi (`GET /roles` katalogi): «…; moliya — yo'q».
+
+
 ### 2026-10-26 — Smena yopilishi: har karta / hisob qoldig'ini tasdiqlash, skrinshot, AI tekshiruvi, hisobot, sozlamalar (kiZgTybn)
 
 Deploy: **finance-service + api-gateway + ai-service birga** (yangi RMQ buyruqlari

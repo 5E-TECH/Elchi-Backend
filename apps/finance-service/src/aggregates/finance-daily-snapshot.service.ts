@@ -123,7 +123,10 @@ export class FinanceDailySnapshotService
 
   private enabled(): boolean {
     const raw = this.config?.get<unknown>('FINANCE_DAILY_SNAPSHOT_DISABLED');
-    return !(raw === true || String(raw ?? '').toLowerCase() === 'true');
+    return !(
+      raw === true ||
+      (typeof raw === 'string' && raw.trim().toLowerCase() === 'true')
+    );
   }
 
   onModuleInit(): void {
