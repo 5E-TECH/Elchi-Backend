@@ -47,6 +47,24 @@ export const AI_MODEL_CACHE_MIN_TOKENS: Readonly<Record<string, number>> =
     'fable-5': 512,
   });
 
+/**
+ * `output_config.effort` YUBORILADIGAN modellar (normallashtirilgan id) —
+ * sukut bo'yicha ADAPTIVE thinking'li avlod. Boshqa modellarga kalit
+ * BERILMAYDI: Haiku 4.5 effort'ni qabul qilmaydi (400), Sonnet 4.6 da
+ * thinking sukut o'chiq, noma'lum model — xavf qilinmaydi. district-pick va
+ * order-extract shu BITTA ro'yxatdan foydalanadi.
+ */
+export const AI_LOW_EFFORT_MODELS: ReadonlySet<string> = new Set([
+  'sonnet-5',
+  'opus-5',
+  'fable-5',
+]);
+
+/** Modelga `effort` yuborish mumkinmi (`AI_LOW_EFFORT_MODELS`). */
+export function supportsEffort(model: string): boolean {
+  return AI_LOW_EFFORT_MODELS.has(normalizeModelId(model));
+}
+
 /** Kesh chegarasi; noma'lum model → `null` (keshga tayanilmaydi). */
 export function cacheMinTokensFor(model: string): number | null {
   const key = normalizeModelId(model);

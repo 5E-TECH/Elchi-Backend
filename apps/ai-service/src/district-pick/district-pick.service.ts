@@ -19,7 +19,11 @@ import {
   type DistrictCatalogUserItem,
 } from '../prompts/district-pick.prompt';
 import { DISTRICT_PICK_SCHEMA } from '../prompts/district-pick.schema';
-import { cacheMinTokensFor, normalizeModelId } from '../usage/ai-pricing';
+import {
+  AI_LOW_EFFORT_MODELS,
+  cacheMinTokensFor,
+  supportsEffort,
+} from '../usage/ai-pricing';
 
 /**
  * Javob faqat `{picks:[{item_index, choice}]}`. BeePostda 64 edi — partiya
@@ -33,12 +37,10 @@ export const DISTRICT_PICK_MAX_TOKENS = 256;
  * fikrlaydi) — 256 max_tokens fikrlashga ketib javob kesilmasin (TC11):
  * `output_config.effort: 'low'`. Haiku 4.5 / Sonnet 4.6 da thinking sukut
  * o'chiq (Haiku 4.5 effort'ni qabul qilmaydi — 400), ular uchun BERILMAYDI.
+ * Ro'yxat order-extract bilan umumiy (`AI_LOW_EFFORT_MODELS`).
  */
-export const DISTRICT_LOW_EFFORT_MODELS: ReadonlySet<string> = new Set([
-  'sonnet-5',
-  'opus-5',
-  'fable-5',
-]);
+export const DISTRICT_LOW_EFFORT_MODELS: ReadonlySet<string> =
+  AI_LOW_EFFORT_MODELS;
 
 /**
  * Token bahosi (kesh chegarasi qarori uchun): belgi / 3. O'lchov (karta):
@@ -123,9 +125,7 @@ export class DistrictPickService {
       model,
       maxTokens: DISTRICT_PICK_MAX_TOKENS,
       deadlineAt,
-      ...(DISTRICT_LOW_EFFORT_MODELS.has(normalizeModelId(model))
-        ? { effort: 'low' as const }
-        : {}),
+      ...(supportsEffort(model) ? { effort: 'low' as const } : {}),
       meta: {
         feature: 'order_district',
         requestArea: 'order',
