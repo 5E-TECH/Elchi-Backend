@@ -8,6 +8,7 @@ import {
 } from '../sms.port';
 import { TASHKENT_OFFSET_MINUTES } from '@app/common';
 import { asText } from '../sms-phone.util';
+import { assertSmsAllowedInEnv } from '../sms-staging.guard';
 
 export interface EskizCredentials {
   login: string;
@@ -89,6 +90,8 @@ export class EskizAdapter implements SmsPort {
   ) {}
 
   async send(input: SmsSendInput): Promise<SmsSendResult> {
+    // (staging-safe) staging'da allowlist'dan tashqariga — login ham, send ham YO'Q.
+    assertSmsAllowedInEnv(input.to);
     const body = new URLSearchParams({
       mobile_phone: input.to.replace(/\D/g, ''),
       message: input.text,
