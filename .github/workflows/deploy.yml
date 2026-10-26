@@ -116,7 +116,14 @@ jobs:
             set -ex
             cd ${{ secrets.SERVER_APP_PATH }}
             git config --global --add safe.directory ${{ secrets.SERVER_APP_PATH }} || true
-            cp -f .env.production /tmp/elchi-env-backup 2>/dev/null || true
+            # AFiXurLH: the safety copy of .env.production is PRIVATE (umask 077 +
+            # mktemp = 0600, unpredictable name) and deleted when this script exits
+            # (success, failure or rollback). It used to be a world-readable
+            # /tmp/elchi-env-backup left behind after every deploy.
+            ENV_BACKUP="$(umask 077 && mktemp /tmp/elchi-env-backup.XXXXXXXXXX)"
+            trap 'rm -f "$ENV_BACKUP"' EXIT
+            cp -f .env.production "$ENV_BACKUP" 2>/dev/null || true
+            rm -f /tmp/elchi-env-backup 2>/dev/null || true
 
             OLD_SHA="$(git rev-parse HEAD 2>/dev/null || true)"
             git fetch origin main
@@ -185,6 +192,7 @@ jobs:
               echo "!!! DEPLOY FAILED — rolling back code to ${OLD_SHA:-unknown}"
               if [ -n "$OLD_SHA" ]; then
                 git reset --hard "$OLD_SHA"
+                test -f .env.production || cp -f "$ENV_BACKUP" .env.production
                 ROLLBACK_SERVICES=""
                 for s in $APP_SERVICES; do
                   docker compose -f docker-compose.prod.yml config --services 2>/dev/null | grep -qx "$s" && ROLLBACK_SERVICES="$ROLLBACK_SERVICES $s"
@@ -213,7 +221,7 @@ jobs:
 
             git checkout -f main
             git reset --hard origin/main
-            test -f .env.production || cp -f /tmp/elchi-env-backup .env.production
+            test -f .env.production || cp -f "$ENV_BACKUP" .env.production
 
             # --- Pre-deploy DB backup (gate) -----------------------------------
             # Har bir deploydan oldin backup: EVERY deploy, after the new code is
