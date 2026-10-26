@@ -308,6 +308,9 @@ export class OrderServiceController {
         source?: Order_source | 'internal' | 'external' | 'branch';
         /** 6kHnNH9j: HQ | WAREHOUSE. */
         fulfillment_source?: string;
+        /** VkKDSNNn: aniq ombor (bigint id) / ombor turi — HQ | REGIONAL. */
+        warehouse_id?: string;
+        warehouse_kind?: string;
         fetch_all?: boolean | string;
         fetchAll?: boolean | string;
         page?: number;

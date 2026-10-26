@@ -1546,6 +1546,723 @@ const pgCode = async (promise: Promise<unknown>) => {
         });
       });
 
+      /**
+       * VkKDSNNn: buyurtma manbasining 2-pog'onasi — viloyat ombori yo'q,
+       * to'xtatilgan yoki qoldig'i yetmasa Markaziy ombor (kalit
+       * `WAREHOUSE_HQ_TIER_ENABLED` yoqilgan servis). Yuqoridagi Pa1KaXmj
+       * testlari (kalit o'chiq — Markaziy ombor nomzod emas) o'zgarmagan.
+       */
+      describe('manba: markaziy ombor (VkKDSNNn, kalit yoqilgan)', () => {
+        const withConfig = (value: unknown) =>
+          new WarehouseService(
+            db.getRepository(Warehouse),
+            db,
+            directory as unknown as WarehouseDirectoryService,
+            activityLog as never,
+            { get: () => value } as never,
+          );
+        let tier: WarehouseService;
+        beforeAll(() => {
+          tier = withConfig(true);
+        });
+
+        /** 1-bosqich javobidagi kalitlar — kalit o'chiq bo'lsa AYNAN shular. */
+        const BASE_KEYS = [
+          'source',
+          'reason',
+          'region_id',
+          'warehouse',
+          'items',
+          'shortages',
+        ];
+        const TIER_KEYS = [
+          'regional_reason',
+          'regional_warehouse',
+          'regional_shortages',
+          'hq_reason',
+          'hq_warehouse',
+          'hq_shortages',
+        ];
+        const expectNoTierKeys = (result: object) => {
+          for (const key of TIER_KEYS) {
+            expect(result).not.toHaveProperty(key);
+          }
+        };
+        const hqView = (id: string, status = 'ACTIVE') => ({
+          id,
+          name: 'Markaziy ombor',
+          status,
+          kind: 'HQ',
+          branch_id: BRANCH_HQ,
+          branch_name: 'HQ',
+          region_id: '1',
+          region_name: 'Viloyat 1',
+        });
+        /** Samarqand viloyat ombori — `candidateView` shakli (`kind: REGIONAL`). */
+        const samView = (
+          sam: { id: string; name: string },
+          status = 'ACTIVE',
+        ) => ({
+          id: sam.id,
+          name: sam.name,
+          status,
+          kind: 'REGIONAL',
+          branch_id: BRANCH_SAM,
+          branch_name: 'Samarqand filiali',
+          region_id: REGION_SAM,
+          region_name: `Viloyat ${REGION_SAM}`,
+        });
+        const openHq = async (
+          lines: Array<{ product_id: string; qty: number }>,
+        ) => {
+          const hq = await warehouses.create({ branch_id: BRANCH_HQ }, ADMIN);
+          if (lines.length) await stockIn(hq.id, lines);
+          return hq;
+        };
+
+        it('⭐ viloyat omborida yetarli — viloyat ombori, natija kalit o`chiq bilan AYNAN bir xil; Markaziy omborga qaralmaydi', async () => {
+          const a = await addProduct('Quloqchin');
+          const hq = await openHq([{ product_id: a.id, qty: 50 }]);
+          const sam = await openWarehouse();
+          await stockIn(sam.id, [{ product_id: a.id, qty: 5 }]);
+          directory.getHqBranchId.mockClear();
+
+          const input = {
+            district_id: '700',
+            items: [{ product_id: a.id, quantity: 2 }],
+          };
+          const result = await tier.resolveSource(input);
+          expect(result).toEqual(await warehouses.resolveSource(input));
+          expect(result).toMatchObject({
+            source: 'WAREHOUSE',
+            reason: 'OK',
+            region_id: REGION_SAM,
+            warehouse: { id: sam.id, kind: 'REGIONAL' },
+            shortages: [],
+          });
+          expect(Object.keys(result)).toEqual(BASE_KEYS);
+          expect(directory.getHqBranchId).not.toHaveBeenCalled();
+          expect(await stockRow(hq.id, a.id)).toEqual({
+            on_hand: 50,
+            reserved: 0,
+          });
+        });
+
+        it('⭐ viloyatda yetmaydi, Markaziy omborda yetarli — `kind: HQ`, `regional_reason: INSUFFICIENT_STOCK` + `regional_shortages`', async () => {
+          const a = await addProduct('Quloqchin');
+          const b = await addProduct('Shapka');
+          const hq = await openHq([
+            { product_id: a.id, qty: 10 },
+            { product_id: b.id, qty: 4 },
+          ]);
+          const sam = await openWarehouse();
+          await stockIn(sam.id, [
+            { product_id: a.id, qty: 5 },
+            { product_id: b.id, qty: 1 },
+          ]);
+
+          const result = await tier.resolveSource({
+            district_id: '700',
+            items: [
+              { product_id: b.id, quantity: 3 },
+              { product_id: a.id, quantity: 2 },
+            ],
+          });
+          expect(result).toEqual({
+            source: 'WAREHOUSE',
+            reason: 'OK',
+            // Buyurtma hududi (Markaziy omborniki emas).
+            region_id: REGION_SAM,
+            warehouse: hqView(hq.id),
+            items: [
+              {
+                product_id: a.id,
+                name: 'Quloqchin',
+                required: 2,
+                available: 10,
+                enough: true,
+              },
+              {
+                product_id: b.id,
+                name: 'Shapka',
+                required: 3,
+                available: 4,
+                enough: true,
+              },
+            ],
+            shortages: [],
+            regional_reason: 'INSUFFICIENT_STOCK',
+            regional_warehouse: samView(sam),
+            regional_shortages: [
+              { product_id: b.id, name: 'Shapka', required: 3, available: 1 },
+            ],
+          });
+          expect(Object.keys(result)).toEqual([
+            ...BASE_KEYS,
+            'regional_reason',
+            'regional_warehouse',
+            'regional_shortages',
+          ]);
+          // Faqat O'QIYDI — hech narsa band qilinmagan.
+          expect(await stockRow(hq.id, b.id)).toEqual({
+            on_hand: 4,
+            reserved: 0,
+          });
+        });
+
+        it('⭐ hududda viloyat ombori yo`q yoki to`xtatilgan — Markaziy ombor (kalit o`chiq bo`lsa — bugungidek HQ)', async () => {
+          const a = await addProduct('Termos');
+          const hq = await openHq([{ product_id: a.id, qty: 10 }]);
+          const items = [{ product_id: a.id, quantity: 3 }];
+
+          expect(
+            await tier.resolveSource({ region_id: REGION_FAR, items }),
+          ).toEqual({
+            source: 'WAREHOUSE',
+            reason: 'OK',
+            region_id: REGION_FAR,
+            warehouse: hqView(hq.id),
+            items: [
+              {
+                product_id: a.id,
+                name: 'Termos',
+                required: 3,
+                available: 10,
+                enough: true,
+              },
+            ],
+            shortages: [],
+            regional_reason: 'NO_WAREHOUSE',
+            regional_warehouse: null,
+            regional_shortages: [],
+          });
+          expect(
+            await warehouses.resolveSource({ region_id: REGION_FAR, items }),
+          ).toEqual({
+            source: 'HQ',
+            reason: 'NO_WAREHOUSE',
+            region_id: REGION_FAR,
+            warehouse: null,
+            items: [],
+            shortages: [],
+          });
+
+          const sam = await openWarehouse();
+          await stockIn(sam.id, [{ product_id: a.id, qty: 10 }]);
+          await warehouses.setStatus(sam.id, 'PAUSED', ADMIN);
+          expect(
+            await tier.resolveSource({ region_id: REGION_SAM, items }),
+          ).toMatchObject({
+            source: 'WAREHOUSE',
+            reason: 'OK',
+            region_id: REGION_SAM,
+            warehouse: { id: hq.id, kind: 'HQ' },
+            shortages: [],
+            regional_reason: 'WAREHOUSE_PAUSED',
+            regional_warehouse: {
+              id: sam.id,
+              status: 'PAUSED',
+              kind: 'REGIONAL',
+            },
+            regional_shortages: [],
+          });
+          expect(
+            await warehouses.resolveSource({ region_id: REGION_SAM, items }),
+          ).toMatchObject({ source: 'HQ', reason: 'WAREHOUSE_PAUSED' });
+        });
+
+        it('⭐ Markaziy ombor to`xtatilgan — HQ: `reason` viloyat sababi, `hq_reason: HQ_WAREHOUSE_PAUSED` + `hq_warehouse`', async () => {
+          const a = await addProduct('Choynak');
+          const hq = await openHq([{ product_id: a.id, qty: 10 }]);
+          await warehouses.setStatus(hq.id, 'PAUSED', ADMIN);
+
+          expect(
+            await tier.resolveSource({
+              region_id: REGION_FAR,
+              items: [{ product_id: a.id, quantity: 1 }],
+            }),
+          ).toEqual({
+            source: 'HQ',
+            reason: 'NO_WAREHOUSE',
+            region_id: REGION_FAR,
+            warehouse: null,
+            items: [],
+            shortages: [],
+            hq_reason: 'HQ_WAREHOUSE_PAUSED',
+            hq_warehouse: hqView(hq.id, 'PAUSED'),
+          });
+
+          const sam = await openWarehouse();
+          await stockIn(sam.id, [{ product_id: a.id, qty: 1 }]);
+          const short = await tier.resolveSource({
+            region_id: REGION_SAM,
+            items: [{ product_id: a.id, quantity: 2 }],
+          });
+          expect(short).toMatchObject({
+            source: 'HQ',
+            reason: 'INSUFFICIENT_STOCK',
+            warehouse: { id: sam.id, kind: 'REGIONAL' },
+            shortages: [{ product_id: a.id, required: 2, available: 1 }],
+            hq_reason: 'HQ_WAREHOUSE_PAUSED',
+            hq_warehouse: { id: hq.id, status: 'PAUSED', kind: 'HQ' },
+          });
+          expect(short).not.toHaveProperty('hq_shortages');
+          expect(short).not.toHaveProperty('regional_reason');
+        });
+
+        it('⭐ ikkalasida ham yetmaydi — HQ, viloyat natijasi saqlanadi + `hq_reason: HQ_INSUFFICIENT_STOCK`, `hq_shortages` (qatori yo`q mahsulot — 0)', async () => {
+          const a = await addProduct('Smartfon');
+          const b = await addProduct('G`ilof');
+          const hq = await openHq([{ product_id: a.id, qty: 2 }]);
+          const sam = await openWarehouse();
+          await stockIn(sam.id, [
+            { product_id: a.id, qty: 1 },
+            { product_id: b.id, qty: 5 },
+          ]);
+
+          expect(
+            await tier.resolveSource({
+              region_id: REGION_SAM,
+              items: [
+                { product_id: a.id, quantity: 3 },
+                { product_id: b.id, quantity: 1 },
+              ],
+            }),
+          ).toEqual({
+            source: 'HQ',
+            reason: 'INSUFFICIENT_STOCK',
+            region_id: REGION_SAM,
+            warehouse: samView(sam),
+            items: [
+              {
+                product_id: a.id,
+                name: 'Smartfon',
+                required: 3,
+                available: 1,
+                enough: false,
+              },
+              {
+                product_id: b.id,
+                name: 'G`ilof',
+                required: 1,
+                available: 5,
+                enough: true,
+              },
+            ],
+            shortages: [
+              { product_id: a.id, name: 'Smartfon', required: 3, available: 1 },
+            ],
+            hq_reason: 'HQ_INSUFFICIENT_STOCK',
+            hq_warehouse: hqView(hq.id),
+            hq_shortages: [
+              { product_id: a.id, name: 'Smartfon', required: 3, available: 2 },
+              { product_id: b.id, name: 'G`ilof', required: 1, available: 0 },
+            ],
+          });
+        });
+
+        it('NO_REGION va NO_ITEMS — Markaziy ombor pog`onasi yo`q (javob kalit o`chiq bilan bir xil)', async () => {
+          const a = await addProduct('Termos');
+          await openHq([{ product_id: a.id, qty: 10 }]);
+          directory.getHqBranchId.mockClear();
+          for (const [input, reason] of [
+            [
+              {
+                district_id: '999',
+                items: [{ product_id: a.id, quantity: 1 }],
+              },
+              'NO_REGION',
+            ],
+            [{ region_id: REGION_FAR, items: [] }, 'NO_ITEMS'],
+          ] as const) {
+            const result = await tier.resolveSource(input);
+            expect(result).toEqual(await warehouses.resolveSource(input));
+            expect(result).toMatchObject({ source: 'HQ', reason });
+            expectNoTierKeys(result);
+          }
+          expect(directory.getHqBranchId).not.toHaveBeenCalled();
+        });
+
+        it('⭐ yaroqsiz mahsulot — PRODUCT_INVALID, Markaziy ombor tanlanmaydi (begona market, o`chirilgan; viloyat ombori bo`lsa — 1-pog`ona sababi)', async () => {
+          const a = await addProduct('Choynak', MARKET_A);
+          const foreign = await addProduct('Soat', MARKET_B);
+          const hq = await openHq([
+            { product_id: a.id, qty: 5 },
+            { product_id: foreign.id, qty: 5 },
+          ]);
+          const mixed = {
+            region_id: REGION_FAR,
+            market_id: MARKET_A,
+            items: [
+              { product_id: a.id, quantity: 1 },
+              { product_id: foreign.id, quantity: 1 },
+            ],
+          };
+          // Viloyat ombori yo'q hudud: Markaziy ombor uchun mahsulot
+          // tekshiriladi (kalit o'chiq bo'lsa bugungidek NO_WAREHOUSE).
+          expect(await tier.resolveSource(mixed)).toEqual({
+            source: 'HQ',
+            reason: 'PRODUCT_INVALID',
+            region_id: REGION_FAR,
+            warehouse: null,
+            items: [],
+            shortages: [],
+            invalid_product_ids: [foreign.id],
+          });
+          expect(await warehouses.resolveSource(mixed)).toMatchObject({
+            source: 'HQ',
+            reason: 'NO_WAREHOUSE',
+          });
+
+          await db.query(
+            `UPDATE "${CATALOG}".products SET is_deleted = true WHERE id = $1`,
+            [a.id],
+          );
+          expect(
+            await tier.resolveSource({
+              region_id: REGION_FAR,
+              items: [{ product_id: a.id, quantity: 1 }],
+            }),
+          ).toMatchObject({
+            source: 'HQ',
+            reason: 'PRODUCT_INVALID',
+            invalid_product_ids: [a.id],
+          });
+
+          // Viloyat ombori FAOL — 1-pog'onaning PRODUCT_INVALID, 2-pog'ona yo'q.
+          await openWarehouse();
+          const regional = {
+            region_id: REGION_SAM,
+            market_id: MARKET_A,
+            items: [{ product_id: foreign.id, quantity: 1 }],
+          };
+          const result = await tier.resolveSource(regional);
+          expect(result).toEqual(await warehouses.resolveSource(regional));
+          expect(result).toMatchObject({
+            source: 'HQ',
+            reason: 'PRODUCT_INVALID',
+            invalid_product_ids: [foreign.id],
+          });
+          expectNoTierKeys(result);
+          expect(await stockRow(hq.id, foreign.id)).toEqual({
+            on_hand: 5,
+            reserved: 0,
+          });
+        });
+
+        it('market kaliti o`chiq — MARKET_NOT_ALLOWED (Markaziy ombor ham ko`rilmaydi); yoqiq — Markaziy ombor', async () => {
+          const a = await addProduct('Choynak', MARKET_A);
+          const b = await addProduct('Soat', MARKET_B);
+          const hq = await openHq([
+            { product_id: a.id, qty: 5 },
+            { product_id: b.id, qty: 5 },
+          ]);
+          const off = {
+            region_id: REGION_FAR,
+            market_id: MARKET_B,
+            items: [{ product_id: b.id, quantity: 1 }],
+            requester: { id: MARKET_B, roles: ['market'] },
+          };
+          expect(await tier.resolveSource(off)).toEqual({
+            source: 'HQ',
+            reason: 'MARKET_NOT_ALLOWED',
+            region_id: null,
+            warehouse: null,
+            items: [],
+            shortages: [],
+          });
+          expect(
+            await tier.resolveSource({
+              region_id: REGION_FAR,
+              market_id: MARKET_A,
+              items: [{ product_id: a.id, quantity: 1 }],
+              requester: { id: MARKET_A, roles: ['market'] },
+            }),
+          ).toMatchObject({
+            source: 'WAREHOUSE',
+            warehouse: { id: hq.id, kind: 'HQ' },
+            regional_reason: 'NO_WAREHOUSE',
+          });
+        });
+
+        it('⭐ kalit o`chiq yoki noto`g`ri qiymat — javob 1-bosqichdagidek (yangi maydon yo`q); satr `TRUE` — yoqiq', async () => {
+          const a = await addProduct('Quloqchin');
+          await openHq([{ product_id: a.id, qty: 10 }]);
+          const sam = await openWarehouse();
+          await stockIn(sam.id, [{ product_id: a.id, qty: 1 }]);
+          const short = {
+            region_id: REGION_SAM,
+            items: [{ product_id: a.id, quantity: 2 }],
+          };
+          const none = {
+            region_id: REGION_FAR,
+            items: [{ product_id: a.id, quantity: 1 }],
+          };
+
+          // Bugungi shakl (kalit o'chiq) — to'liq.
+          expect(await warehouses.resolveSource(short)).toEqual({
+            source: 'HQ',
+            reason: 'INSUFFICIENT_STOCK',
+            region_id: REGION_SAM,
+            warehouse: samView(sam),
+            items: [
+              {
+                product_id: a.id,
+                name: 'Quloqchin',
+                required: 2,
+                available: 1,
+                enough: false,
+              },
+            ],
+            shortages: [
+              {
+                product_id: a.id,
+                name: 'Quloqchin',
+                required: 2,
+                available: 1,
+              },
+            ],
+          });
+
+          for (const service of [
+            warehouses,
+            withConfig(false),
+            withConfig('false'),
+            withConfig(undefined),
+            withConfig('on'),
+          ]) {
+            for (const input of [short, none]) {
+              const result = await service.resolveSource(input);
+              expect(result).toEqual(await warehouses.resolveSource(input));
+              expect(Object.keys(result)).toEqual(BASE_KEYS);
+              expect(result.source).toBe('HQ');
+            }
+            const availability = await service.availability({
+              region_id: REGION_SAM,
+              market_id: MARKET_A,
+            });
+            expect(Object.keys(availability)).toEqual([
+              'region_id',
+              'warehouse',
+              'items',
+            ]);
+          }
+          expect(await withConfig('TRUE').resolveSource(short)).toMatchObject({
+            source: 'WAREHOUSE',
+            warehouse: { kind: 'HQ' },
+            regional_reason: 'INSUFFICIENT_STOCK',
+          });
+        });
+
+        it('⭐ HQ aniqlanmasa — NO_HQ_WAREHOUSE (fail-closed): Markaziy ombor ochilmagan, HQ id yo`q, filial-servis HQ`ni bermadi, HQ nofaol, id HQ bo`lmagan filialniki', async () => {
+          const a = await addProduct('Termos');
+          const input = {
+            region_id: REGION_FAR,
+            items: [{ product_id: a.id, quantity: 1 }],
+          };
+          const expected = {
+            source: 'HQ',
+            reason: 'NO_WAREHOUSE',
+            region_id: REGION_FAR,
+            warehouse: null,
+            items: [],
+            shortages: [],
+            hq_reason: 'NO_HQ_WAREHOUSE',
+          };
+          // Markaziy ombor hali ochilmagan.
+          expect(await tier.resolveSource(input)).toEqual(expected);
+
+          const hq = await openHq([{ product_id: a.id, qty: 10 }]);
+          // HQ id aniqlanmadi (branch-service javob bermadi / kutish tugadi).
+          (directory.getHqBranchId as jest.Mock).mockResolvedValueOnce(null);
+          expect(await tier.resolveSource(input)).toEqual(expected);
+
+          // Filial-servis HQ filialini bermadi (getBranch → null).
+          const hqBranch = branches[BRANCH_HQ];
+          delete branches[BRANCH_HQ];
+          try {
+            expect(await tier.resolveSource(input)).toEqual(expected);
+          } finally {
+            branches[BRANCH_HQ] = hqBranch;
+          }
+
+          // HQ filiali nofaol — ombor ochishga yaroqsiz.
+          branches[BRANCH_HQ].status = 'inactive';
+          try {
+            expect(await tier.resolveSource(input)).toEqual(expected);
+          } finally {
+            delete branches[BRANCH_HQ].status;
+          }
+
+          // `find_hq` HQ bo'lmagan filialni qaytardi — ishonilmaydi. O'sha
+          // filialda qoldiqli FAOL ombor BOR (aks holda natija `is_hq`
+          // tekshiruvisiz ham shu bo'lardi — ombor topilmagani uchun).
+          const sam = await openWarehouse();
+          await stockIn(sam.id, [{ product_id: a.id, qty: 10 }]);
+          (directory.getHqBranchId as jest.Mock).mockResolvedValueOnce(
+            BRANCH_SAM,
+          );
+          expect(await tier.resolveSource(input)).toEqual(expected);
+
+          // Hammasi joyida — Markaziy ombor.
+          expect(await tier.resolveSource(input)).toMatchObject({
+            source: 'WAREHOUSE',
+            warehouse: { id: hq.id, kind: 'HQ' },
+          });
+          expect(await stockRow(hq.id, a.id)).toEqual({
+            on_hand: 10,
+            reserved: 0,
+          });
+        });
+
+        it('⭐ Markaziy omborga band (reserve) ishlaydi; poygada ikkinchisi 409 — keyingi manba `HQ_INSUFFICIENT_STOCK`', async () => {
+          const a = await addProduct('Smartfon');
+          const hq = await openHq([{ product_id: a.id, qty: 3 }]);
+          const items = [{ product_id: a.id, quantity: 2 }];
+
+          // Ikkala buyurtma ham (faqat o'qiydi) Markaziy omborni ko'radi.
+          const sources = await Promise.all(
+            [1, 2].map(() =>
+              tier.resolveSource({ region_id: REGION_FAR, items }),
+            ),
+          );
+          for (const source of sources) {
+            expect(source).toMatchObject({
+              source: 'WAREHOUSE',
+              warehouse: { id: hq.id, kind: 'HQ' },
+            });
+          }
+
+          // Band — order-service kabi, natijadagi ombor id bilan (qulf ostida).
+          const results = await Promise.allSettled(
+            ['9001', '9002'].map((orderId, index) =>
+              stock.reserve({
+                order_id: orderId,
+                warehouse_id: String(sources[index].warehouse?.id),
+                items,
+                actor: ADMIN,
+              }),
+            ),
+          );
+          const ok = results.filter((r) => r.status === 'fulfilled');
+          const rejected = results.filter((r) => r.status === 'rejected');
+          expect(ok).toHaveLength(1);
+          expect(rejected).toHaveLength(1);
+          expect((rejected[0].reason as RpcException).getError()).toMatchObject(
+            {
+              statusCode: 409,
+              code: 'WAREHOUSE_STOCK_INSUFFICIENT',
+              warehouse_id: hq.id,
+            },
+          );
+          expect(await stockRow(hq.id, a.id)).toEqual({
+            on_hand: 3,
+            reserved: 2,
+          });
+
+          expect(
+            await tier.resolveSource({ region_id: REGION_FAR, items }),
+          ).toMatchObject({
+            source: 'HQ',
+            reason: 'NO_WAREHOUSE',
+            hq_reason: 'HQ_INSUFFICIENT_STOCK',
+            hq_warehouse: { id: hq.id },
+            hq_shortages: [{ product_id: a.id, required: 2, available: 1 }],
+          });
+        });
+
+        it('⭐ availability: `hq_warehouse` + `hq_items` faqat kalit yoqilgan, hudud aniqlangan va Markaziy ombor FAOL bo`lsa (filtrlar — viloyat bloki bilan bir xil)', async () => {
+          const a = await addProduct('Termos', MARKET_A);
+          const b = await addProduct('Choynak', MARKET_A);
+          const foreign = await addProduct('Soat', MARKET_B);
+          const hq = await openHq([
+            { product_id: a.id, qty: 6 },
+            { product_id: b.id, qty: 2 },
+            { product_id: foreign.id, qty: 9 },
+          ]);
+          await stock.reserve({
+            order_id: '9500',
+            warehouse_id: hq.id,
+            items: [{ product_id: a.id, quantity: 1 }],
+          });
+          const sam = await openWarehouse();
+          await stockIn(sam.id, [{ product_id: a.id, qty: 4 }]);
+          const hqItems = [
+            { product_id: a.id, on_hand: 6, reserved: 1, available: 5 },
+            { product_id: b.id, on_hand: 2, reserved: 0, available: 2 },
+          ];
+
+          const on = await tier.availability({
+            district_id: '700',
+            market_id: MARKET_A,
+          });
+          expect(on).toEqual({
+            region_id: REGION_SAM,
+            warehouse: samView(sam),
+            items: [
+              { product_id: a.id, on_hand: 4, reserved: 0, available: 4 },
+            ],
+            hq_warehouse: hqView(hq.id),
+            hq_items: hqItems,
+          });
+          // Kalit o'chiq — bugungi shakl, viloyat bloki aynan o'sha.
+          const off = await warehouses.availability({
+            district_id: '700',
+            market_id: MARKET_A,
+          });
+          expect(off).toEqual({
+            region_id: REGION_SAM,
+            warehouse: on.warehouse,
+            items: on.items,
+          });
+
+          // `product_ids` filtri (begona market mahsuloti ham — market_id yo'q).
+          expect(
+            await tier.availability({
+              region_id: REGION_SAM,
+              product_ids: `${b.id},${foreign.id}`,
+            }),
+          ).toMatchObject({
+            items: [],
+            hq_items: [
+              { product_id: b.id, available: 2 },
+              { product_id: foreign.id, available: 9 },
+            ],
+          });
+
+          // Viloyat ombori yo'q hudud — Markaziy ombor qoldig'i baribir ko'rinadi.
+          expect(
+            await tier.availability({
+              region_id: REGION_FAR,
+              market_id: MARKET_A,
+            }),
+          ).toEqual({
+            region_id: REGION_FAR,
+            warehouse: null,
+            items: [],
+            hq_warehouse: hqView(hq.id),
+            hq_items: hqItems,
+          });
+
+          // Hudud aniqlanmasa — yangi maydon yo'q.
+          expect(
+            await tier.availability({
+              district_id: '999',
+              market_id: MARKET_A,
+            }),
+          ).toEqual({ region_id: null, warehouse: null, items: [] });
+
+          // Markaziy ombor to'xtatilgan — yangi maydon yo'q.
+          await warehouses.setStatus(hq.id, 'PAUSED', ADMIN);
+          expect(
+            await tier.availability({
+              district_id: '700',
+              market_id: MARKET_A,
+            }),
+          ).toEqual(off);
+        });
+      });
+
       describe('o`qish', () => {
         it('⭐ ro`yxat va tafsilot: jami/band/kam qolgan/tugagan, faol buyurtmalar soni, oxirgi harakat; filial doirasi', async () => {
           const w = await openWarehouse();

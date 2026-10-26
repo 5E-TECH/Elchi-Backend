@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { RpcException } from '@nestjs/microservices';
 import { DataSource, In, IsNull, Repository } from 'typeorm';
@@ -26,6 +26,7 @@ import {
 } from '@app/common';
 import { successRes } from '../../../../libs/common/helpers/response';
 import { OrderCustodyService } from '../custody/order-custody.service';
+import { OrderWarehouseService } from '../warehouse/order-warehouse.service';
 
 /**
  * Branch transfer-batch orchestration, extracted from the OrderServiceService
@@ -60,6 +61,9 @@ export class BranchTransferBatchService {
     private readonly orderCustodyEventRepo: Repository<OrderCustodyEvent>,
     private readonly activityLog: ActivityLogService,
     private readonly custody: OrderCustodyService,
+    // VkKDSNNn: HQ'ga qaytish partiyasi qabul qilinganda Markaziy ombor
+    // buyurtmasi omborga qaytadi. Ixtiyoriy — usiz (eski spec'lar) hook yo'q.
+    @Optional() private readonly orderWarehouse?: OrderWarehouseService,
   ) {}
 
   // ===== leaf helpers duplicated from OrderServiceService (see class doc) =====
@@ -2031,6 +2035,28 @@ export class BranchTransferBatchService {
             );
           }
         }
+
+        // VkKDSNNn: HQ'ga qaytish partiyasi — Markaziy ombor buyurtmalari
+        // (yangi holat bilan) Markaziy omborga qaytadi va yopiladi; shu
+        // tranzaksiyada (outbox). Viloyat ombori buyurtmasi — tegilmaydi.
+        // Sotilgan/yopilgan buyurtma QB'dan OLDINGI holat bo'yicha ajratiladi
+        // (yuqoridagi QB hammasini RECEIVED/NEW ga yozdi).
+        if (batch.direction === BranchTransferDirection.RETURN) {
+          await this.orderWarehouse?.onReturnBatchReceived(
+            {
+              orderIds: orders.map((order) => String(order.id)),
+              destinationBranchId,
+              priorStatusById: new Map(
+                orders.map((order) => [String(order.id), order.status]),
+              ),
+              requester: {
+                id: String(input?.requester_id ?? '').trim() || null,
+                roles: input?.requester_roles ?? [],
+              },
+            },
+            queryRunner.manager,
+          );
+        }
       }
 
       await historyRepo.save(
@@ -2245,6 +2271,26 @@ export class BranchTransferBatchService {
             custodyRepo,
           );
         }
+      }
+
+      // VkKDSNNn: HQ'ga qaytish partiyasidan tanlab qabul — Markaziy ombor
+      // buyurtmalari Markaziy omborga qaytadi (shu tranzaksiyada). Sotilgan/
+      // yopilgan — QB'dan OLDINGI holat bo'yicha ajratiladi (`priorOrders`).
+      if (batch.direction === BranchTransferDirection.RETURN) {
+        await this.orderWarehouse?.onReturnBatchReceived(
+          {
+            orderIds: selectedOrderIds,
+            destinationBranchId,
+            priorStatusById: new Map(
+              priorOrders.map((order) => [String(order.id), order.status]),
+            ),
+            requester: {
+              id: String(input?.requester_id ?? '').trim() || null,
+              roles: input?.requester_roles ?? [],
+            },
+          },
+          queryRunner.manager,
+        );
       }
 
       await batchItemRepo

@@ -85,6 +85,8 @@ export interface LockedPostOrderRow {
   source: string | null;
   external_id: string | null;
   operator: string | null;
+  /** VkKDSNNn: `WAREHOUSE` bo'lsa o'chirishda ombor bandi bo'shatiladi. */
+  fulfillment_source?: string | null;
 }
 
 /** `logistics_schema.posts` qatori — FOR UPDATE bilan qulflangan. */

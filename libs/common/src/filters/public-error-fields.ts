@@ -55,6 +55,8 @@ export const PUBLIC_ERROR_CODES: Readonly<Record<string, readonly string[]>> = {
   [WAREHOUSE_ERROR_CODES.PAUSED]: [],
   // (XtcEyQjb) market operatoriga «Ombordagi qoldiq» yopiq — 403.
   [WAREHOUSE_ERROR_CODES.STOCK_FORBIDDEN]: [],
+  // (VkKDSNNn) Markaziy ombor buyurtmasi marketga topshirilmaydi — 409.
+  [WAREHOUSE_ERROR_CODES.ORDER_RETURNS_TO_STOCK]: [],
 };
 
 export type PublicErrorValue = string | number | boolean | null;

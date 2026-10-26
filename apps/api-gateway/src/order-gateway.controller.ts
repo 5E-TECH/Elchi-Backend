@@ -117,6 +117,7 @@ import {
   CANCEL_RETURN_STAGES,
   courierPostOrdersQuery,
   FULFILLMENT_SOURCES,
+  WAREHOUSE_KINDS,
   Order_status,
   parseCancelReturnStages,
   RMQ_FIRE_AND_FORGET_TIMEOUT,
@@ -210,6 +211,10 @@ type OrderListFilters = {
   cancelled_inventory?: string;
   /** 6kHnNH9j: «Ombordan» filtri — HQ | WAREHOUSE. */
   fulfillment_source?: string;
+  /** VkKDSNNn: aniq ombor — `warehouses.id` (musbat butun son). */
+  warehouse_id?: string;
+  /** VkKDSNNn: ombor turi — HQ (Markaziy ombordan) | REGIONAL (viloyat omboridan). */
+  warehouse_kind?: string;
   /**
    * LFNLeSpu (BG4): bekor bosqichi filtri — `courier,in_transit,branch,hq,market`
    * (vergul yoki massiv, OR). Ta'rif BG1 `return_stage` bilan AYNAN bir xil.
@@ -273,6 +278,23 @@ const CANCEL_STAGE_QUERY_DOC =
   'by branch (received, not in a return post); hq = cancelled + held by HQ; market = handed over to market ' +
   '(`returned_to_market`, warehouse returns excluded). Combined with all other filters and the role scope (AND); with ' +
   '`cancel_stage` the implicit cancelled-inventory tab mode is off. Unknown value — 400.';
+
+const WAREHOUSE_ID_QUERY_MAX = BigInt('9223372036854775807');
+/** VkKDSNNn: `warehouse_id` — musbat bigint (aks holda PG «out of range» 500). */
+const isWarehouseIdQuery = (value: string): boolean =>
+  /^[1-9]\d{0,18}$/.test(value) && BigInt(value) <= WAREHOUSE_ID_QUERY_MAX;
+
+/** VkKDSNNn — GET /orders ombor filtrlari (Swagger tavsifi). */
+const FULFILLMENT_SOURCE_QUERY_DOC =
+  '6kHnNH9j: «Ombordan» — WAREHOUSE (viloyat ombori yoki Markaziy ombor), HQ — hozirgi oqim. Javob qatorida ' +
+  '`fulfillment_source` va `warehouse: { id, name, branch_id, kind } | null` (VkKDSNNn: `kind` — REGIONAL | HQ | null). ' +
+  'Aniq ombor — `warehouse_id`; ombor turi — `warehouse_kind=HQ` (Markaziy ombordan) | `REGIONAL` (viloyat omboridan).';
+const WAREHOUSE_ID_QUERY_DOC =
+  'VkKDSNNn: aniq ombor (`warehouses.id`, musbat butun son) — `order.warehouse_id`. Noto‘g‘ri qiymat — 400.';
+const WAREHOUSE_KIND_QUERY_DOC =
+  'VkKDSNNn: ombor turi (katta-kichik harf farqsiz). HQ — Markaziy ombordan (fulfillment_source=WAREHOUSE va ' +
+  'home_branch_id = HQ filiali); REGIONAL — viloyat omboridan (WAREHOUSE, home_branch_id ≠ HQ). Boshqa filtrlar bilan ' +
+  'AND. Noto‘g‘ri qiymat — 400; HQ filiali aniqlanmasa — 503 (qayta urinib ko‘ring).';
 
 /**
  * ai-parse rasmi (multer memoryStorage) — RAM'da; WHMAIqyo #3: kichraytirilgan
@@ -3882,8 +3904,19 @@ export class OrderGatewayController {
     name: 'fulfillment_source',
     required: false,
     enum: FULFILLMENT_SOURCES,
-    description:
-      '6kHnNH9j: «Ombordan» — WAREHOUSE (viloyat ombori), HQ — hozirgi oqim. Javob qatorida `fulfillment_source` va `warehouse: { id, name, branch_id } | null`.',
+    description: FULFILLMENT_SOURCE_QUERY_DOC,
+  })
+  @ApiQuery({
+    name: 'warehouse_id',
+    required: false,
+    type: String,
+    description: WAREHOUSE_ID_QUERY_DOC,
+  })
+  @ApiQuery({
+    name: 'warehouse_kind',
+    required: false,
+    enum: WAREHOUSE_KINDS,
+    description: WAREHOUSE_KIND_QUERY_DOC,
   })
   @ApiQuery({
     name: 'cancelled_inventory',
@@ -3924,6 +3957,9 @@ export class OrderGatewayController {
     @Query('cancelled_inventory') cancelled_inventory?: string,
     @Query('fulfillment_source') fulfillment_source?: string,
     @Query('cancel_stage') cancel_stage?: string | string[],
+    // VkKDSNNn: oxirida — mavjud pozitsion parametrlar siljimaydi.
+    @Query('warehouse_id') warehouse_id?: string,
+    @Query('warehouse_kind') warehouse_kind?: string,
   ) {
     const request = await this.resolveOrderListRequest(
       {
@@ -3947,6 +3983,8 @@ export class OrderGatewayController {
         cancelled_inventory,
         fulfillment_source,
         cancel_stage,
+        warehouse_id,
+        warehouse_kind,
       },
       req?.user,
       page,
@@ -4107,6 +4145,19 @@ export class OrderGatewayController {
     name: 'fulfillment_source',
     required: false,
     enum: FULFILLMENT_SOURCES,
+    description: FULFILLMENT_SOURCE_QUERY_DOC,
+  })
+  @ApiQuery({
+    name: 'warehouse_id',
+    required: false,
+    type: String,
+    description: WAREHOUSE_ID_QUERY_DOC,
+  })
+  @ApiQuery({
+    name: 'warehouse_kind',
+    required: false,
+    enum: WAREHOUSE_KINDS,
+    description: WAREHOUSE_KIND_QUERY_DOC,
   })
   @ApiQuery({
     name: 'cancel_stage',
@@ -4137,6 +4188,9 @@ export class OrderGatewayController {
     @Query('cancelled_inventory') cancelled_inventory?: string,
     @Query('fulfillment_source') fulfillment_source?: string,
     @Query('cancel_stage') cancel_stage?: string | string[],
+    // VkKDSNNn: oxirida — mavjud pozitsion parametrlar siljimaydi.
+    @Query('warehouse_id') warehouse_id?: string,
+    @Query('warehouse_kind') warehouse_kind?: string,
   ): Promise<void> {
     const request = await this.resolveOrderListRequest(
       {
@@ -4159,6 +4213,8 @@ export class OrderGatewayController {
         cancelled_inventory,
         fulfillment_source,
         cancel_stage,
+        warehouse_id,
+        warehouse_kind,
       },
       req?.user,
     );
@@ -4283,6 +4339,19 @@ export class OrderGatewayController {
     name: 'fulfillment_source',
     required: false,
     enum: FULFILLMENT_SOURCES,
+    description: FULFILLMENT_SOURCE_QUERY_DOC,
+  })
+  @ApiQuery({
+    name: 'warehouse_id',
+    required: false,
+    type: String,
+    description: WAREHOUSE_ID_QUERY_DOC,
+  })
+  @ApiQuery({
+    name: 'warehouse_kind',
+    required: false,
+    enum: WAREHOUSE_KINDS,
+    description: WAREHOUSE_KIND_QUERY_DOC,
   })
   @ApiQuery({
     name: 'cancel_stage',
@@ -4339,6 +4408,9 @@ export class OrderGatewayController {
     @Query('cancelled_inventory') cancelled_inventory?: string,
     @Query('fulfillment_source') fulfillment_source?: string,
     @Query('cancel_stage') cancel_stage?: string | string[],
+    // VkKDSNNn: oxirida — mavjud pozitsion parametrlar siljimaydi.
+    @Query('warehouse_id') warehouse_id?: string,
+    @Query('warehouse_kind') warehouse_kind?: string,
   ) {
     const filters: OrderListFilters = {
       market_id,
@@ -4357,6 +4429,8 @@ export class OrderGatewayController {
       cancelled_inventory,
       fulfillment_source,
       cancel_stage,
+      warehouse_id,
+      warehouse_kind,
     };
     const user = req?.user;
     // Ikkala doira ham GET /orders'ning o'zi: «Barchasi» (holatsiz) va
@@ -4550,7 +4624,29 @@ export class OrderGatewayController {
       cancelled_inventory,
       fulfillment_source,
       cancel_stage,
+      warehouse_id,
+      warehouse_kind,
     } = filters;
+    // VkKDSNNn: ombor filtrlari — noto'g'ri qiymat 400 (order-service'ga yetmaydi).
+    const normalizedWarehouseId = warehouse_id
+      ? String(warehouse_id).trim()
+      : undefined;
+    if (normalizedWarehouseId && !isWarehouseIdQuery(normalizedWarehouseId)) {
+      throw new BadRequestException(
+        `Noto'g'ri warehouse_id qiymati: ${warehouse_id} (musbat butun son)`,
+      );
+    }
+    const normalizedWarehouseKind = warehouse_kind
+      ? String(warehouse_kind).trim().toUpperCase()
+      : undefined;
+    if (
+      normalizedWarehouseKind &&
+      !(WAREHOUSE_KINDS as readonly string[]).includes(normalizedWarehouseKind)
+    ) {
+      throw new BadRequestException(
+        `Noto'g'ri warehouse_kind qiymati: ${warehouse_kind} (HQ yoki REGIONAL)`,
+      );
+    }
     // 6kHnNH9j: «Ombordan» filtri — noto'g'ri qiymat 400 (order-service'ga yetmaydi).
     const normalizedFulfillmentSource = fulfillment_source
       ? String(fulfillment_source).trim().toUpperCase()
@@ -4771,6 +4867,17 @@ export class OrderGatewayController {
           region_id,
           district_id,
           source,
+          // VkKDSNNn: ombor filtrlari kuryer «Bekor» tabida ham (ro'yxat va
+          // `status-counts` soni) — boshqa tablar bilan AYNI (AND).
+          ...(normalizedFulfillmentSource
+            ? { fulfillment_source: normalizedFulfillmentSource }
+            : {}),
+          ...(normalizedWarehouseId
+            ? { warehouse_id: normalizedWarehouseId }
+            : {}),
+          ...(normalizedWarehouseKind
+            ? { warehouse_kind: normalizedWarehouseKind }
+            : {}),
         },
       };
     }
@@ -4807,6 +4914,13 @@ export class OrderGatewayController {
         sort_dir,
         ...(normalizedFulfillmentSource
           ? { fulfillment_source: normalizedFulfillmentSource }
+          : {}),
+        // VkKDSNNn: order-service `buildOrderListQuery` (tur — HQ id bilan).
+        ...(normalizedWarehouseId
+          ? { warehouse_id: normalizedWarehouseId }
+          : {}),
+        ...(normalizedWarehouseKind
+          ? { warehouse_kind: normalizedWarehouseKind }
           : {}),
         // LFNLeSpu (BG4): order-service `findAll` — `cancelReturnStageSql` (OR).
         ...(cancelStages ? { cancel_stages: cancelStages } : {}),
@@ -5654,7 +5768,11 @@ export class OrderGatewayController {
       'pinning is dropped (still only this market). `start_day`/`end_day` (YYYY-MM-DD, Tashkent day) filter ONLY the ' +
       '`market` stage by handover time (`market_handover_at`, legacy: `last_handover_at`). Unknown stage — 400. ' +
       'For other roles `stage`/`start_day`/`end_day` are ignored (handover list unchanged). Rows carry `return_stage` ' +
-      'and `cancel_return` (see GET /orders). Response `{ data, total, truncated? }` (max 5000 rows).',
+      'and `cancel_return` (see GET /orders). Response `{ data, total, truncated? }` (max 5000 rows). ' +
+      'VkKDSNNn: the default handover list (and the cancelled-markets summary) EXCLUDES Central-warehouse orders ' +
+      '(`fulfillment_source=WAREHOUSE` with home branch = HQ) — they return to central stock, not to the market ' +
+      '(handover → 409 `WAREHOUSE_ORDER_RETURNS_TO_STOCK`). While the HQ branch id is unknown, all WAREHOUSE orders ' +
+      'are excluded.',
   })
   @ApiParam({ name: 'marketId', description: 'Market ID (id)' })
   @ApiQuery({
@@ -5789,6 +5907,11 @@ export class OrderGatewayController {
   @ApiOperation({
     summary:
       'Selected CANCELLED orderlarni QR ruxsati bilan marketga topshirish',
+    description:
+      'All-or-nothing. VkKDSNNn: a Central-warehouse order (`fulfillment_source=WAREHOUSE`, home branch = HQ) is ' +
+      'never handed to the market — 409 `{ code: "WAREHOUSE_ORDER_RETURNS_TO_STOCK", data: { details: { order_ids: ' +
+      '[...] } } }` lists the offending ids (deselect them and retry). HQ branch id unknown while the selection ' +
+      'contains a WAREHOUSE order — 503.',
   })
   @ApiParam({ name: 'marketId', description: 'Market ID (id)' })
   @ApiBody({ type: HandoverCancelledOrdersToMarketRequestDto })

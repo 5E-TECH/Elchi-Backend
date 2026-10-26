@@ -2766,11 +2766,33 @@
             "name": "fulfillment_source",
             "required": false,
             "in": "query",
-            "description": "6kHnNH9j: «Ombordan» — WAREHOUSE (viloyat ombori), HQ — hozirgi oqim. Javob qatorida `fulfillment_source` va `warehouse: { id, name, branch_id } | null`.",
+            "description": "6kHnNH9j: «Ombordan» — WAREHOUSE (viloyat ombori yoki Markaziy ombor), HQ — hozirgi oqim. Javob qatorida `fulfillment_source` va `warehouse: { id, name, branch_id, kind } | null` (VkKDSNNn: `kind` — REGIONAL | HQ | null). Aniq ombor — `warehouse_id`; ombor turi — `warehouse_kind=HQ` (Markaziy ombordan) | `REGIONAL` (viloyat omboridan).",
             "schema": {
               "enum": [
                 "HQ",
                 "WAREHOUSE"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "name": "warehouse_id",
+            "required": false,
+            "in": "query",
+            "description": "VkKDSNNn: aniq ombor (`warehouses.id`, musbat butun son) — `order.warehouse_id`. Noto‘g‘ri qiymat — 400.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "warehouse_kind",
+            "required": false,
+            "in": "query",
+            "description": "VkKDSNNn: ombor turi (katta-kichik harf farqsiz). HQ — Markaziy ombordan (fulfillment_source=WAREHOUSE va home_branch_id = HQ filiali); REGIONAL — viloyat omboridan (WAREHOUSE, home_branch_id ≠ HQ). Boshqa filtrlar bilan AND. Noto‘g‘ri qiymat — 400; HQ filiali aniqlanmasa — 503 (qayta urinib ko‘ring).",
+            "schema": {
+              "enum": [
+                "REGIONAL",
+                "HQ"
               ],
               "type": "string"
             }
@@ -3471,10 +3493,33 @@
             "name": "fulfillment_source",
             "required": false,
             "in": "query",
+            "description": "6kHnNH9j: «Ombordan» — WAREHOUSE (viloyat ombori yoki Markaziy ombor), HQ — hozirgi oqim. Javob qatorida `fulfillment_source` va `warehouse: { id, name, branch_id, kind } | null` (VkKDSNNn: `kind` — REGIONAL | HQ | null). Aniq ombor — `warehouse_id`; ombor turi — `warehouse_kind=HQ` (Markaziy ombordan) | `REGIONAL` (viloyat omboridan).",
             "schema": {
               "enum": [
                 "HQ",
                 "WAREHOUSE"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "name": "warehouse_id",
+            "required": false,
+            "in": "query",
+            "description": "VkKDSNNn: aniq ombor (`warehouses.id`, musbat butun son) — `order.warehouse_id`. Noto‘g‘ri qiymat — 400.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "warehouse_kind",
+            "required": false,
+            "in": "query",
+            "description": "VkKDSNNn: ombor turi (katta-kichik harf farqsiz). HQ — Markaziy ombordan (fulfillment_source=WAREHOUSE va home_branch_id = HQ filiali); REGIONAL — viloyat omboridan (WAREHOUSE, home_branch_id ≠ HQ). Boshqa filtrlar bilan AND. Noto‘g‘ri qiymat — 400; HQ filiali aniqlanmasa — 503 (qayta urinib ko‘ring).",
+            "schema": {
+              "enum": [
+                "REGIONAL",
+                "HQ"
               ],
               "type": "string"
             }
@@ -3665,10 +3710,33 @@
             "name": "fulfillment_source",
             "required": false,
             "in": "query",
+            "description": "6kHnNH9j: «Ombordan» — WAREHOUSE (viloyat ombori yoki Markaziy ombor), HQ — hozirgi oqim. Javob qatorida `fulfillment_source` va `warehouse: { id, name, branch_id, kind } | null` (VkKDSNNn: `kind` — REGIONAL | HQ | null). Aniq ombor — `warehouse_id`; ombor turi — `warehouse_kind=HQ` (Markaziy ombordan) | `REGIONAL` (viloyat omboridan).",
             "schema": {
               "enum": [
                 "HQ",
                 "WAREHOUSE"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "name": "warehouse_id",
+            "required": false,
+            "in": "query",
+            "description": "VkKDSNNn: aniq ombor (`warehouses.id`, musbat butun son) — `order.warehouse_id`. Noto‘g‘ri qiymat — 400.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "warehouse_kind",
+            "required": false,
+            "in": "query",
+            "description": "VkKDSNNn: ombor turi (katta-kichik harf farqsiz). HQ — Markaziy ombordan (fulfillment_source=WAREHOUSE va home_branch_id = HQ filiali); REGIONAL — viloyat omboridan (WAREHOUSE, home_branch_id ≠ HQ). Boshqa filtrlar bilan AND. Noto‘g‘ri qiymat — 400; HQ filiali aniqlanmasa — 503 (qayta urinib ko‘ring).",
+            "schema": {
+              "enum": [
+                "REGIONAL",
+                "HQ"
               ],
               "type": "string"
             }
@@ -4285,7 +4353,7 @@
     },
     "/orders/markets/{marketId}/cancelled": {
       "get": {
-        "description": "Default (no `stage`): cancelled orders ready for handover — HQ-held (SA/admin, HQ registrator, market) or held by the requester's branch (branch staff). M0EPcJVf (BG3): MARKET role may pass `stage` to see ALL stages of its own cancellations (tabs «HQ'da», «Yo'lda», «Olganlarim»): any of `courier,in_transit,branch,hq,market` (comma list). With `stage`, HQ/branch pinning is dropped (still only this market). `start_day`/`end_day` (YYYY-MM-DD, Tashkent day) filter ONLY the `market` stage by handover time (`market_handover_at`, legacy: `last_handover_at`). Unknown stage — 400. For other roles `stage`/`start_day`/`end_day` are ignored (handover list unchanged). Rows carry `return_stage` and `cancel_return` (see GET /orders). Response `{ data, total, truncated? }` (max 5000 rows).",
+        "description": "Default (no `stage`): cancelled orders ready for handover — HQ-held (SA/admin, HQ registrator, market) or held by the requester's branch (branch staff). M0EPcJVf (BG3): MARKET role may pass `stage` to see ALL stages of its own cancellations (tabs «HQ'da», «Yo'lda», «Olganlarim»): any of `courier,in_transit,branch,hq,market` (comma list). With `stage`, HQ/branch pinning is dropped (still only this market). `start_day`/`end_day` (YYYY-MM-DD, Tashkent day) filter ONLY the `market` stage by handover time (`market_handover_at`, legacy: `last_handover_at`). Unknown stage — 400. For other roles `stage`/`start_day`/`end_day` are ignored (handover list unchanged). Rows carry `return_stage` and `cancel_return` (see GET /orders). Response `{ data, total, truncated? }` (max 5000 rows). VkKDSNNn: the default handover list (and the cancelled-markets summary) EXCLUDES Central-warehouse orders (`fulfillment_source=WAREHOUSE` with home branch = HQ) — they return to central stock, not to the market (handover → 409 `WAREHOUSE_ORDER_RETURNS_TO_STOCK`). While the HQ branch id is unknown, all WAREHOUSE orders are excluded.",
         "operationId": "OrderGatewayController_findCancelledOrdersByMarket",
         "parameters": [
           {
@@ -4385,6 +4453,7 @@
     },
     "/orders/markets/{marketId}/cancelled/handover": {
       "post": {
+        "description": "All-or-nothing. VkKDSNNn: a Central-warehouse order (`fulfillment_source=WAREHOUSE`, home branch = HQ) is never handed to the market — 409 `{ code: \"WAREHOUSE_ORDER_RETURNS_TO_STOCK\", data: { details: { order_ids: [...] } } }` lists the offending ids (deselect them and retry). HQ branch id unknown while the selection contains a WAREHOUSE order — 503.",
         "operationId": "OrderGatewayController_handoverCancelledOrdersToMarket",
         "parameters": [
           {
@@ -20958,7 +21027,7 @@
     },
     "/warehouses/resolve-source": {
       "post": {
-        "description": "Qaror 4: buyurtma tumani viloyat filialida (REGIONAL/HYBRID) FAOL ombor bo'lsa va HAMMA mahsulot yetarli bo'lsa — `source: WAREHOUSE` (`warehouse.kind: REGIONAL`), aks holda butun buyurtma `HQ` (bo'linmaydi), `reason` va `shortages` bilan. Markaziy ombor (HQ filiali, `kind: HQ`) bu bosqichda manba nomzodi EMAS (Pa1KaXmj). Hech narsa band qilinmaydi — band order-service yaratishda (`catalog.warehouse.reserve`). MARKET/MARKET_OPERATOR — faqat o'z marketi; market kaliti «Ombordan buyurtma yaratish» o'chiq bo'lsa — `HQ` + `MARKET_NOT_ALLOWED`.",
+        "description": "Qaror 4: buyurtma tumani viloyat filialida (REGIONAL/HYBRID) FAOL ombor bo'lsa va HAMMA mahsulot yetarli bo'lsa — `source: WAREHOUSE` (`warehouse.kind: REGIONAL`), aks holda butun buyurtma `HQ` (bo'linmaydi), `reason` va `shortages` bilan. VkKDSNNn — 2-pog'ona (faqat `WAREHOUSE_HQ_TIER_ENABLED` yoqilganda): viloyat ombori yo'q (NO_WAREHOUSE), to'xtatilgan (WAREHOUSE_PAUSED) yoki qoldig'i yetmasa (INSUFFICIENT_STOCK) — Markaziy ombor (HQ filiali) ko'rib chiqiladi; unda HAMMA mahsulot yetarli bo'lsa `source: WAREHOUSE`, `warehouse.kind: HQ` + `regional_reason` / `regional_warehouse` / `regional_shortages`; aks holda `source: HQ`, `reason` — viloyat sababi, `hq_reason` (NO_HQ_WAREHOUSE / HQ_WAREHOUSE_PAUSED / HQ_INSUFFICIENT_STOCK) + `hq_warehouse` / `hq_shortages`. Kalit o'chiq bo'lsa Markaziy ombor nomzod EMAS va bu maydonlar javobda yo'q. Hech narsa band qilinmaydi — band order-service yaratishda (`catalog.warehouse.reserve`). MARKET/MARKET_OPERATOR — faqat o'z marketi; market kaliti «Ombordan buyurtma yaratish» o'chiq bo'lsa — `HQ` + `MARKET_NOT_ALLOWED` (Markaziy ombor ham ko'rilmaydi).",
         "operationId": "WarehouseGatewayController_resolveSource",
         "parameters": [],
         "requestBody": {
@@ -21003,7 +21072,7 @@
     },
     "/warehouses/availability": {
       "get": {
-        "description": "Tuman (yoki hudud) viloyat filialidagi (REGIONAL/HYBRID) birinchi FAOL ombor — Markaziy ombor (HQ) hisobga olinmaydi; `market_id` mahsulotlari yoki `product_ids` (vergul bilan, ≤500). Ombor to'xtatilgan bo'lsa — `warehouse.status = PAUSED`, `items: []`. MARKET/MARKET_OPERATOR — faqat o'z marketi.",
+        "description": "Tuman (yoki hudud) viloyat filialidagi (REGIONAL/HYBRID) birinchi FAOL ombor; `market_id` mahsulotlari yoki `product_ids` (vergul bilan, ≤500). Ombor to'xtatilgan bo'lsa — `warehouse.status = PAUSED`, `items: []`. Markaziy ombor (HQ) `warehouse`/`items` ga hech qachon kirmaydi. VkKDSNNn: `WAREHOUSE_HQ_TIER_ENABLED` yoqilgan, hudud aniqlangan va Markaziy ombor FAOL bo'lsa — qo'shimcha `hq_warehouse` (`kind: HQ`) va `hq_items` (shu shakl va filtr); aks holda bu maydonlar yo'q. MARKET/MARKET_OPERATOR — faqat o'z marketi.",
         "operationId": "WarehouseGatewayController_availability",
         "parameters": [
           {
@@ -21414,7 +21483,7 @@
     },
     "/warehouses/{id}/pause": {
       "post": {
-        "description": "Qoldiq joyida saqlanadi va ko'rinadi, yangi buyurtma tushmaydi (manba — HQ). Mavjud bandlar ishlayveradi. Takror — `changed: false`.",
+        "description": "Qoldiq joyida saqlanadi va ko'rinadi, yangi buyurtma tushmaydi (manba — HQ; VkKDSNNn: `WAREHOUSE_HQ_TIER_ENABLED` yoqilgan bo'lsa viloyat ombori to'xtatilganda avval Markaziy ombor ko'rib chiqiladi, Markaziy ombor to'xtatilsa — u 2-pog'onada tanlanmaydi). Mavjud bandlar ishlayveradi. Takror — `changed: false`.",
         "operationId": "WarehouseGatewayController_pause",
         "parameters": [
           {
@@ -31956,7 +32025,7 @@
               "HQ"
             ],
             "example": "REGIONAL",
-            "description": "Pa1KaXmj: manba nomzodi — hozircha faqat viloyat ombori (REGIONAL)"
+            "description": "Pa1KaXmj/VkKDSNNn: REGIONAL — viloyat ombori (1-pog'ona); HQ — Markaziy ombor (2-pog'ona, faqat `WAREHOUSE_HQ_TIER_ENABLED` yoqilganda; viloyat ombori yo'q, to'xtatilgan yoki qoldig'i yetmasa)"
           },
           "branch_id": {
             "type": "string",
@@ -32064,7 +32133,7 @@
               "MARKET_NOT_ALLOWED",
               "PRODUCT_INVALID"
             ],
-            "description": "OK — ombor; qolgani — HQ: NO_ITEMS, NO_REGION (tuman hududi aniqlanmadi), NO_WAREHOUSE (hududda ombor yo'q), WAREHOUSE_PAUSED («Tuman ombori to'xtatilgan»), INSUFFICIENT_STOCK («Omborda yetmaydi — butun buyurtma HQ'dan»), MARKET_NOT_ALLOWED (market kaliti o'chiq), PRODUCT_INVALID"
+            "description": "OK — ombor (viloyat yoki, kalit yoqilganda, Markaziy ombor — `warehouse.kind`); qolgani — HQ: NO_ITEMS, NO_REGION (tuman hududi aniqlanmadi), NO_WAREHOUSE (hududda ombor yo'q), WAREHOUSE_PAUSED («Tuman ombori to'xtatilgan»), INSUFFICIENT_STOCK («Omborda yetmaydi — butun buyurtma HQ'dan»), MARKET_NOT_ALLOWED (market kaliti o'chiq), PRODUCT_INVALID. VkKDSNNn: `source: HQ` bo'lsa ham `reason` — viloyat sababi; Markaziy ombor sababi — `hq_reason`."
           },
           "region_id": {
             "type": "string",
@@ -32086,6 +32155,72 @@
             }
           },
           "shortages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WarehouseShortageDto"
+            }
+          },
+          "invalid_product_ids": {
+            "example": [
+              "142"
+            ],
+            "description": "Faqat `reason: PRODUCT_INVALID` da — topilmagan, o'chirilgan yoki begona market mahsulotlari",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "regional_reason": {
+            "type": "string",
+            "enum": [
+              "OK",
+              "NO_ITEMS",
+              "NO_REGION",
+              "NO_WAREHOUSE",
+              "WAREHOUSE_PAUSED",
+              "INSUFFICIENT_STOCK",
+              "MARKET_NOT_ALLOWED",
+              "PRODUCT_INVALID"
+            ],
+            "example": "INSUFFICIENT_STOCK",
+            "description": "VkKDSNNn: Markaziy ombor tanlanganda (`source: WAREHOUSE`, `warehouse.kind: HQ`) — viloyat ombori nega tanlanmagani: NO_WAREHOUSE, WAREHOUSE_PAUSED yoki INSUFFICIENT_STOCK. Boshqa holatlarda (viloyat ombori tanlangan, `source: HQ`, kalit o'chiq) — maydon yo'q."
+          },
+          "regional_warehouse": {
+            "nullable": true,
+            "description": "VkKDSNNn: Markaziy ombor tanlanganda — viloyat ombori (`kind: REGIONAL`); hududda ombor bo'lmasa null",
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/WarehouseCandidateDto"
+              }
+            ]
+          },
+          "regional_shortages": {
+            "description": "VkKDSNNn: Markaziy ombor tanlanganda — viloyat omboridagi yetishmovchilik (INSUFFICIENT_STOCK bo'lsa; aks holda bo'sh)",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WarehouseShortageDto"
+            }
+          },
+          "hq_reason": {
+            "type": "string",
+            "enum": [
+              "NO_HQ_WAREHOUSE",
+              "HQ_WAREHOUSE_PAUSED",
+              "HQ_INSUFFICIENT_STOCK"
+            ],
+            "description": "VkKDSNNn: `source: HQ` va viloyat sababi NO_WAREHOUSE / WAREHOUSE_PAUSED / INSUFFICIENT_STOCK bo'lsa — Markaziy ombor nega tanlanmagani: NO_HQ_WAREHOUSE (Markaziy ombor yo'q yoki HQ filiali aniqlanmadi), HQ_WAREHOUSE_PAUSED («Markaziy ombor to'xtatilgan»), HQ_INSUFFICIENT_STOCK («Markaziy omborda ham yetmaydi»). Kalit o'chiq bo'lsa — maydon yo'q."
+          },
+          "hq_warehouse": {
+            "description": "VkKDSNNn: HQ_WAREHOUSE_PAUSED / HQ_INSUFFICIENT_STOCK da — Markaziy ombor (`kind: HQ`)",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/WarehouseCandidateDto"
+              }
+            ]
+          },
+          "hq_shortages": {
+            "description": "VkKDSNNn: HQ_INSUFFICIENT_STOCK da — Markaziy ombordagi yetishmovchilik",
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/WarehouseShortageDto"
@@ -32142,6 +32277,21 @@
           },
           "items": {
             "description": "Faqat omborda qatori bor mahsulotlar",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WarehouseAvailabilityItemDto"
+            }
+          },
+          "hq_warehouse": {
+            "description": "VkKDSNNn: faqat `WAREHOUSE_HQ_TIER_ENABLED` yoqilgan, hudud aniqlangan va Markaziy ombor FAOL bo'lsa — Markaziy ombor (`kind: HQ`); aks holda maydon yo'q",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/WarehouseCandidateDto"
+              }
+            ]
+          },
+          "hq_items": {
+            "description": "VkKDSNNn: `hq_warehouse` bilan birga — Markaziy ombordagi mavjud dona (`items` bilan bir xil shakl va filtr: `market_id` / `product_ids`)",
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/WarehouseAvailabilityItemDto"

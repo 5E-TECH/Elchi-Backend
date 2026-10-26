@@ -26,6 +26,7 @@ import {
   courierPostOrdersQuery,
   dispatchNoteBranchId,
   FULFILLMENT_SOURCES,
+  WAREHOUSE_KINDS,
   Order_status,
   OutboxService,
   Roles,
@@ -390,6 +391,31 @@ export type OrderListQuery = {
   exclude_sources?: Array<Order_source | 'internal' | 'external' | 'branch'>;
   /** 6kHnNH9j: `HQ` | `WAREHOUSE` (gateway tekshiradi). */
   fulfillment_source?: string;
+  /**
+   * VkKDSNNn: aniq ombor — `order.warehouse_id` (catalog `warehouses.id`,
+   * bigint). Noto'g'ri qiymat — 400 (bazaga yetmaydi).
+   */
+  warehouse_id?: string;
+  /**
+   * VkKDSNNn: ombor turi — `HQ` (Markaziy ombordan: WAREHOUSE + `home_branch_id`
+   * = HQ) | `REGIONAL` (viloyat omboridan: WAREHOUSE + `home_branch_id` ≠ HQ
+   * yoki NULL). Yangi ustun yo'q (I2). Noto'g'ri qiymat — 400.
+   */
+  warehouse_kind?: string;
+  /**
+   * VkKDSNNn — ICHKI: HQ filial id'si. Faqat `findAll`/`statusCounts`
+   * qo'yadi (`warehouse_kind` berilganda lookup'dan; chaqiruvchi qiymati
+   * ustidan yoziladi). `warehouse_kind` bor-u, bu `null` — 503 (fail-closed).
+   */
+  warehouse_hq_branch_id?: string | null;
+  /**
+   * VkKDSNNn — ICHKI: Markaziy ombor buyurtmalarini (WAREHOUSE + `home_branch_id`
+   * = HQ) chiqarib tashlash — marketga topshirishga tayyor bekorlar ro'yxati
+   * (`findCancelledOrdersByMarket`): ular marketga topshirilmaydi (409),
+   * Markaziy omborga qaytadi. HQ id noma'lum — BARCHA ombor buyurtmalari
+   * chiqariladi (topshirish ham 503 beradi).
+   */
+  exclude_hq_warehouse?: boolean;
   unbatched_only?: boolean;
   fetch_all?: boolean | string;
   fetchAll?: boolean | string;
@@ -402,6 +428,20 @@ export type OrderListQuery = {
   /** Ichki: sahifa yuqori chegarasi (sukut 100) — PEc4BjVX. */
   max_limit?: number;
 };
+
+/** VkKDSNNn: `warehouse_kind` — katta harfga keltirilgan (bo'sh — ''). */
+const normalizeWarehouseKind = (value: string | undefined): string =>
+  String(value ?? '')
+    .trim()
+    .toUpperCase();
+
+const WAREHOUSE_ID_MAX = BigInt('9223372036854775807');
+/**
+ * VkKDSNNn: `warehouse_id` — musbat bigint (`^[1-9]\d{0,18}$` + diapazon:
+ * chegaradan katta 19 xonali qiymat PG'da «out of range» 500 berardi).
+ */
+const isWarehouseIdParam = (value: string): boolean =>
+  /^[1-9]\d{0,18}$/.test(value) && BigInt(value) <= WAREHOUSE_ID_MAX;
 
 @Injectable()
 export class OrderServiceService {
@@ -926,7 +966,17 @@ export class OrderServiceService {
       useFetchAll,
       max_limit,
     );
-    const qb = this.buildOrderListQuery(query);
+    // VkKDSNNn: HQ id — FAQAT `warehouse_kind` (HQ | REGIONAL) yoki ichki
+    // `exclude_hq_warehouse` berilganda; aks holda so'rov bugungidek (lookup
+    // chaqirilmaydi).
+    const qb = this.buildOrderListQuery(
+      this.wantsWarehouseKindFilter(query) || query.exclude_hq_warehouse
+        ? {
+            ...query,
+            warehouse_hq_branch_id: await this.loadListHqBranchId(),
+          }
+        : query,
+    );
 
     // Hisob join'lardan OLDIN nusxalanadi — shunda u oddiy `COUNT(*)`
     // bo'lib qoladi (yuqoridagi izohga qarang).
@@ -963,6 +1013,54 @@ export class OrderServiceService {
       total_pages: pagination.total_pages(total),
       totalPages: pagination.total_pages(total),
     };
+  }
+
+  /**
+   * VkKDSNNn: `warehouse_kind` to'g'ri (HQ | REGIONAL) berilganmi — HQ id
+   * shundagina so'raladi. Noto'g'ri qiymat — `false` (builder 400 beradi,
+   * lookup'ga bormaydi).
+   */
+  private wantsWarehouseKindFilter(
+    query: Pick<OrderListQuery, 'warehouse_kind'> | null | undefined,
+  ): boolean {
+    return (WAREHOUSE_KINDS as readonly string[]).includes(
+      normalizeWarehouseKind(query?.warehouse_kind),
+    );
+  }
+
+  /**
+   * VkKDSNNn: ro'yxat filtri uchun HQ filial id'si (`loadCancelReturnContext`
+   * naqshi) — lookup yo'q/xato/bo'sh → `null` (builder 503, fail-closed).
+   */
+  private async loadListHqBranchId(): Promise<string | null> {
+    return Promise.resolve(this.lookup?.getHqBranchId())
+      .then((id) => String(id ?? '').trim() || null)
+      .catch(() => null);
+  }
+
+  /**
+   * VkKDSNNn: marketga topshirishga tayyor bekorlar (ro'yxat va market
+   * guruhlari) — Markaziy ombor buyurtmasi (WAREHOUSE + `home_branch_id` = HQ)
+   * chiqariladi: u marketga topshirilmaydi (409), Markaziy omborga qaytadi.
+   * HQ id noma'lum — BARCHA ombor buyurtmalari (turini bilib bo'lmaydi;
+   * topshirish ham 503). Parametr nomlari alohida — `warehouse_kind` filtri
+   * bilan to'qnashmaydi.
+   */
+  private excludeHqWarehouseOrders(
+    qb: SelectQueryBuilder<Order>,
+    hqBranchId: string | null | undefined,
+  ): void {
+    const hqId = String(hqBranchId ?? '').trim();
+    if (hqId) {
+      qb.andWhere(
+        '(order.fulfillment_source <> :exclude_hq_wh_source OR order.home_branch_id IS NULL OR order.home_branch_id <> :exclude_hq_wh_branch_id)',
+        { exclude_hq_wh_source: 'WAREHOUSE', exclude_hq_wh_branch_id: hqId },
+      );
+      return;
+    }
+    qb.andWhere('order.fulfillment_source <> :exclude_hq_wh_source', {
+      exclude_hq_wh_source: 'WAREHOUSE',
+    });
   }
 
   /**
@@ -1009,6 +1107,10 @@ export class OrderServiceService {
       source,
       exclude_sources,
       fulfillment_source,
+      warehouse_id,
+      warehouse_kind,
+      warehouse_hq_branch_id,
+      exclude_hq_warehouse,
       unbatched_only,
     } = query;
     const useCourierHistory =
@@ -1187,6 +1289,53 @@ export class OrderServiceService {
       qb.andWhere('order.fulfillment_source = :fulfillment_source', {
         fulfillment_source: fulfillmentFilter,
       });
+    }
+    // VkKDSNNn: aniq ombor filtri. Noto'g'ri qiymat — 400 (bazaga yetmaydi).
+    const warehouseIdFilter = String(warehouse_id ?? '').trim();
+    if (warehouseIdFilter) {
+      if (!isWarehouseIdParam(warehouseIdFilter)) {
+        this.badRequest("warehouse_id noto'g'ri — musbat butun son");
+      }
+      qb.andWhere('order.warehouse_id = :warehouse_id', {
+        warehouse_id: warehouseIdFilter,
+      });
+    }
+    // VkKDSNNn: ombor TURI filtri. I2 — Markaziy ombor buyurtmasi =
+    // WAREHOUSE + `home_branch_id` = HQ (yangi ustun yo'q). HQ id aniqlanmasa
+    // — 503 (I3: HQ/viloyat chegarasi taxmin qilinmaydi). Parametr nomlari
+    // alohida — `fulfillment_source` filtri bilan birga kelsa ustidan yozilmaydi.
+    const warehouseKindFilter = normalizeWarehouseKind(warehouse_kind);
+    if (warehouseKindFilter) {
+      if (
+        !(WAREHOUSE_KINDS as readonly string[]).includes(warehouseKindFilter)
+      ) {
+        this.badRequest('warehouse_kind — HQ yoki REGIONAL');
+      }
+      const hqBranchId = String(warehouse_hq_branch_id ?? '').trim();
+      if (!hqBranchId) {
+        throw new RpcException({
+          statusCode: 503,
+          message: "Markaziy filial aniqlanmadi — qayta urinib ko'ring",
+        });
+      }
+      qb.andWhere('order.fulfillment_source = :warehouse_kind_source', {
+        warehouse_kind_source: 'WAREHOUSE',
+      });
+      if (warehouseKindFilter === 'HQ') {
+        qb.andWhere('order.home_branch_id = :warehouse_hq_branch_id', {
+          warehouse_hq_branch_id: hqBranchId,
+        });
+      } else {
+        qb.andWhere(
+          '(order.home_branch_id IS NULL OR order.home_branch_id <> :warehouse_hq_branch_id)',
+          { warehouse_hq_branch_id: hqBranchId },
+        );
+      }
+    }
+    // VkKDSNNn: marketga topshirishga tayyor ro'yxat — Markaziy ombor
+    // buyurtmasi chiqariladi (topshirish uni 409 bilan rad etadi).
+    if (exclude_hq_warehouse === true) {
+      this.excludeHqWarehouseOrders(qb, warehouse_hq_branch_id);
     }
     if (courier) {
       qb.andWhere(
@@ -1517,6 +1666,9 @@ export class OrderServiceService {
         branch_source: Order_source.BRANCH,
       });
     }
+    // VkKDSNNn: topshirishga tayyor ro'yxat (`findCancelledOrdersByMarket`)
+    // bilan AYNI — Markaziy ombor buyurtmasi sanalmaydi.
+    this.excludeHqWarehouseOrders(qb, await this.loadListHqBranchId());
     this.applyCreatedDayRange(qb, options.start_day, options.end_day);
 
     let rows: Array<{
@@ -1576,6 +1728,9 @@ export class OrderServiceService {
       ...(options.exclude_branch_source
         ? { exclude_sources: [Order_source.BRANCH] }
         : {}),
+      // VkKDSNNn: Markaziy ombor buyurtmasi marketga topshirilmaydi (409) —
+      // topshirishga tayyor ro'yxatda ham ko'rsatilmaydi.
+      exclude_hq_warehouse: true,
       disable_pagination: true,
     });
   }
@@ -1688,11 +1843,16 @@ export class OrderServiceService {
       if (resolved.empty) {
         return { qb: null, search_truncated: resolved.search_truncated };
       }
+      // VkKDSNNn: `findAll` bilan AYNI — HQ id faqat `warehouse_kind` bilan.
+      const warehouseScope = this.wantsWarehouseKindFilter(rest)
+        ? { warehouse_hq_branch_id: await this.loadListHqBranchId() }
+        : {};
       return {
         qb: this.buildOrderListQuery({
           ...rest,
           customer_ids: resolved.customer_ids,
           search_order_ids: resolved.search_order_ids,
+          ...warehouseScope,
         }),
         search_truncated: resolved.search_truncated,
       };
@@ -3060,6 +3220,9 @@ export class OrderServiceService {
     source?: Order_source | 'internal' | 'external' | 'branch';
     /** 6kHnNH9j: HQ | WAREHOUSE — `findAll` ga o'tadi. */
     fulfillment_source?: string;
+    /** VkKDSNNn: aniq ombor / ombor turi (HQ | REGIONAL) — `findAll` ga o'tadi. */
+    warehouse_id?: string;
+    warehouse_kind?: string;
     /** LFNLeSpu (BG4): GET /orders `cancel_stage` — `findAll` ga o'tadi (OR). */
     cancel_stages?: CancelReturnStage[];
     fetch_all?: boolean | string;
