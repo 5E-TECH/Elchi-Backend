@@ -282,7 +282,7 @@ const daysAgo = (days: number) => new Date(NOW.getTime() - days * DAY);
           expect(event.payload.type).toBe('order.cancel_return_reminder');
           expect(event.payload.telegram.group_type).toBe('cancel');
         }
-        const m37 = events.find((e) => e.payload.telegram.market_id === '37');
+        const m37 = events.find((e) => e.payload.telegram.market_id === '37')!;
         expect(m37.payload.recipient_ids).toEqual(['37']);
         expect(m37.payload.data.order_ids).toEqual(
           [ids.hq4, ids.branch5, ids.hq8].sort((a, b) => Number(a) - Number(b)),

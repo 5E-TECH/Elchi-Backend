@@ -145,14 +145,14 @@ export class CancelReturnReminderService {
       .catch(() => null);
 
     const result = await this.orders.manager.transaction(async (manager) => {
-      const [lock] = (await manager.query(
+      const [lock] = await manager.query<Array<{ locked?: boolean }>>(
         'SELECT pg_try_advisory_xact_lock(hashtext($1)) AS "locked"',
         [
           kind === 'remind'
             ? CANCEL_RETURN_REMIND_LOCK
             : CANCEL_RETURN_ESCALATE_LOCK,
         ],
-      )) as Array<{ locked?: boolean }>;
+      );
       if (!lock?.locked) {
         return { locked: false, orders: 0, notifications: 0, hit_limit: false };
       }
@@ -288,16 +288,16 @@ export class CancelReturnReminderService {
     const result = new Map<string, string>();
     const unique = [...new Set(ids)];
     if (!unique.length) return result;
-    const [table] = (await manager.query(
+    const [table] = await manager.query<Array<{ ok?: boolean }>>(
       `SELECT to_regclass('"branch_schema"."branches"') IS NOT NULL AS "ok"`,
-    )) as Array<{ ok?: boolean }>;
+    );
     if (!table?.ok) return result;
-    const rows = (await manager.query(
+    const rows = await manager.query<Array<{ id: unknown; name: unknown }>>(
       `SELECT "id"::text AS "id", "name"
          FROM "branch_schema"."branches"
         WHERE "id" = ANY($1::bigint[])`,
       [unique],
-    )) as Array<{ id: unknown; name: unknown }>;
+    );
     for (const row of rows ?? []) {
       const name = typeof row?.name === 'string' ? row.name.trim() : '';
       if (name) result.set(String(row.id), name);
