@@ -243,7 +243,9 @@ jobs:
             fi
             echo "Pre-deploy backup: ${PRE_DEPLOY_BK:-skipped (first install, no database yet)}"
 
-            docker compose -f docker-compose.prod.yml pull rabbitmq postgres minio cloudflared || true
+            # cloudflared is NOT pulled here any more: its image is pinned (tag +
+            # digest) and rolled out only when that pin changes — see below.
+            docker compose -f docker-compose.prod.yml pull rabbitmq postgres minio || true
             docker compose -f docker-compose.prod.yml up -d --remove-orphans rabbitmq postgres minio
 
             if [ "$RUN_MIGRATIONS" != true ]; then
@@ -259,9 +261,106 @@ jobs:
               docker compose -f docker-compose.prod.yml rm -f migration-runner || true
             fi
 
-            test -z "$DEPLOY_SERVICES" && echo "No application service changes detected; keeping running containers as-is." || { echo "Deploying services:$DEPLOY_SERVICES"; docker compose -f docker-compose.prod.yml up -d --no-deps --build --remove-orphans $DEPLOY_SERVICES; }
+            # --- api-gateway: zero-downtime swap (ZfI9nERJ) ---------------------
+            # Every deploy that touched the gateway used to RECREATE it: for the
+            # ~10-40 s until Nest listened again cloudflared got "connection
+            # refused" / "lookup api-gateway … server misbehaving" and the browser
+            # saw a CORS-less Cloudflare 502 = «Tarmoq xatoligi» (cloudflared logs,
+            # 2026-10-25 18:55Z / 21:36Z, 2026-10-26 10:32Z). Now: build the new
+            # image while the old container serves, start ONE new container next
+            # to it (--scale 2 --no-recreate), wait until it is (healthy), then
+            # stop the old one (docker stop -t 30: Nest shutdown hooks finish
+            # in-flight requests). Docker DNS returns both during the overlap.
+            # New one never healthy -> it is removed, the old one keeps serving and
+            # the deploy fails (normal rollback). The gateway goes LAST, after the
+            # services it calls. Overlap caveat: for those seconds two consumers
+            # share RABBITMQ_GATEWAY_QUEUE, so a realtime event may reach the
+            # instance a socket is not on yet (clients reconnect right after).
+            # ⚠️ Functions do not inherit `trap rollback ERR` (no `set -E`): a bare
+            # failing command in here would end the script WITHOUT the rollback.
+            # So every fallible step ends in `|| return 1` — the failed CALL
+            # below then fires the trap (rollback) as usual.
+            gateway_swap() {
+              local DC="docker compose -f docker-compose.prod.yml" old new st i
+              old="$($DC ps -q api-gateway 2>/dev/null || true)"
+              if [ -z "$old" ] || [ "$(printf '%s\n' "$old" | wc -l)" -ne 1 ]; then
+                echo "api-gateway: not exactly one running container — plain (re)create"
+                $DC up -d --no-deps --build api-gateway || return 1
+                return 0
+              fi
+              $DC build api-gateway || return 1
+              $DC up -d --no-deps --no-recreate --scale api-gateway=2 api-gateway || return 1
+              new="$($DC ps -q api-gateway | grep -v "^$old" | head -n 1 || true)"
+              if [ -z "$new" ]; then
+                echo "!!! api-gateway: the new container was not created" >&2
+                return 1
+              fi
+              st=starting
+              for i in $(seq 1 60); do
+                st="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$new" 2>/dev/null || echo missing)"
+                case "$st" in healthy | unhealthy | missing | exited | dead) break ;; esac
+                sleep 3
+              done
+              if [ "$st" != healthy ]; then
+                echo "!!! api-gateway: new container is '$st' — removing it; the old one keeps serving" >&2
+                docker logs --tail 60 "$new" || true
+                docker rm -f "$new" || true
+                return 1
+              fi
+              echo "api-gateway: new container healthy — retiring the old one"
+              docker stop -t 30 "$old" || true
+              docker rm -f "$old" || true
+              # bookkeeping only: exactly one container is left, nothing restarts
+              $DC up -d --no-deps --no-recreate --scale api-gateway=1 api-gateway ||
+                echo "WARNING: compose scale bookkeeping failed (one healthy gateway is running)" >&2
+            }
 
-            docker compose -f docker-compose.prod.yml up -d --no-deps cloudflared || true
+            GATEWAY_SWAP=false
+            case " $DEPLOY_SERVICES " in
+              *" api-gateway "*)
+                GATEWAY_SWAP=true
+                DEPLOY_SERVICES="$(echo " $DEPLOY_SERVICES " | sed 's/ api-gateway / /; s/^ *//; s/ *$//')"
+                ;;
+            esac
+            if [ -z "$DEPLOY_SERVICES" ]; then
+              echo "No (non-gateway) application service changes detected; keeping running containers as-is."
+            else
+              echo "Deploying services: $DEPLOY_SERVICES"
+              docker compose -f docker-compose.prod.yml up -d --no-deps --build --remove-orphans $DEPLOY_SERVICES
+            fi
+            if [ "$GATEWAY_SWAP" = true ]; then
+              gateway_swap
+            fi
+
+            # --- Cloudflare Tunnel connectors (ZfI9nERJ) ----------------------------
+            # Two replicas of one tunnel. A routine deploy never recreates them
+            # (--no-recreate: only creates a missing one). Only when the pinned
+            # image in docker-compose.prod.yml differs from what a container runs,
+            # they are rolled ONE AT A TIME — cloudflared-2 first — and each must
+            # log "Registered tunnel connection" before the next one goes, so the
+            # tunnel always has a live connector. Never fatal for the deploy.
+            cloudflared_rollout() {
+              local DC="docker compose -f docker-compose.prod.yml" want s name have since i
+              want="$(sed -n 's/^  image: \(cloudflare\/cloudflared:[^ ]*\)$/\1/p' docker-compose.prod.yml | head -n 1)"
+              for s in cloudflared-2 cloudflared; do
+                name="elchi-$s"
+                have="$(docker inspect -f '{{.Config.Image}}' "$name" 2>/dev/null || echo none)"
+                if [ -n "$want" ] && [ "$have" = "$want" ]; then
+                  $DC up -d --no-deps --no-recreate "$s" || echo "WARNING: $s did not start" >&2
+                  continue
+                fi
+                echo "cloudflared: $s runs '$have', pinned '$want' — rolling it"
+                since="$(date +%s)"
+                $DC up -d --no-deps --force-recreate "$s" || { echo "WARNING: $s did not start" >&2; continue; }
+                for i in $(seq 1 30); do
+                  docker logs --since "$since" "$name" 2>&1 | grep -q 'Registered tunnel connection' && break
+                  sleep 2
+                done
+                docker logs --since "$since" "$name" 2>&1 | grep -q 'Registered tunnel connection' ||
+                  echo "WARNING: $s has not registered a tunnel connection yet" >&2
+              done
+            }
+            cloudflared_rollout || echo "WARNING: cloudflared rollout problem — check: docker logs elchi-cloudflared / elchi-cloudflared-2" >&2
 
             # --- Daily backup sidecar (db-backup) -------------------------------
             # Har kuni 05:00 (Asia/Tashkent) backup, ./backups/daily/, newest 7
