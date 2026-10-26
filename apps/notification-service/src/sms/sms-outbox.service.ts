@@ -611,6 +611,58 @@ export class SmsOutboxService {
       );
   }
 
+  /**
+   * (2026-10-26) Bekor qilingan bildirishnoma kampaniyasining (`campaign:<id>`
+   * guruhi) hali yuborilmagan — `pending` — SMS qatorlari terminal holatga
+   * o'tadi (sms_outbox CHECK'ida `cancelled` yo'q → `failed`,
+   * `last_error = 'cancelled: campaign cancelled'`), bildirishnoma
+   * `delivery.sms = 'skipped'` (`sms_reason: 'campaign_cancelled'`).
+   * `processing` (provayderga ketayotgan) va yuborilganlarga tegilmaydi.
+   * Qaytadi — to'xtatilgan SMS soni.
+   */
+  async cancelPendingForNotificationCampaign(
+    campaignId: string,
+  ): Promise<number> {
+    const id = String(campaignId);
+    const result: unknown = await this.dataSource.query(
+      `WITH cancelled AS (
+         UPDATE "notification_schema"."sms_outbox" o
+            SET "status" = 'failed',
+                "next_retry_at" = NULL,
+                "last_error" = 'cancelled: campaign cancelled',
+                "updated_at" = NOW()
+           FROM "notification_schema"."notifications" n
+          WHERE n."group_key" = $1
+            AND n."data"->>'campaign_id' = $2
+            AND o."notification_id" = n."id"
+            AND o."status" = 'pending'
+         RETURNING o."notification_id"
+       ),
+       patched AS (
+         UPDATE "notification_schema"."notifications" n
+            SET "delivery" = COALESCE(n."delivery", '{}'::jsonb) || $3::jsonb
+          WHERE n."id" IN (SELECT "notification_id" FROM cancelled)
+         RETURNING n."id"
+       )
+       SELECT COUNT(*)::int AS "n" FROM cancelled`,
+      [
+        `campaign:${id}`,
+        id,
+        JSON.stringify({ sms: 'skipped', sms_reason: 'campaign_cancelled' }),
+      ],
+    );
+    const rows = Array.isArray(result)
+      ? (result as Array<{ n?: unknown }>)
+      : [];
+    const count = Number(rows[0]?.n ?? 0);
+    if (count) {
+      this.logger.log(
+        `SMS: kampaniya ${id} bekor qilindi — ${count} ta kutayotgan SMS to'xtatildi`,
+      );
+    }
+    return count;
+  }
+
   async countByCampaign(campaignIds: string[]) {
     if (!campaignIds.length) return new Map<string, Record<string, number>>();
     const rows: Array<{ campaign_id: string; status: string; n: number }> =

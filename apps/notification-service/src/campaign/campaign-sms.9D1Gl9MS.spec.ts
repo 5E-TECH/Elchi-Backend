@@ -5,6 +5,7 @@ import { SmsDispatchService } from '../sms/sms-dispatch.service';
 import { SmsConfigService } from '../sms/sms-config.service';
 import { SmsConsentService } from '../sms/sms-consent.service';
 import { SmsBlockedError } from '../sms/sms-gate.service';
+import { SmsOutboxService } from '../sms/sms-outbox.service';
 import { AudiencePreviewService } from '../audience/audience-preview.service';
 
 /**
@@ -368,5 +369,208 @@ describe('9D1Gl9MS — audience preview: rozilik bo‘yicha SMS son', () => {
     expect(res.data.by_channel.sms).toBe(1);
     // Telefon javobga chiqmaydi.
     expect(JSON.stringify(res)).not.toMatch(/998901111111/);
+  });
+});
+
+describe('(2026-10-26) SMS kanalli kampaniya — tungi taqiq va bekor qilish', () => {
+  let campaigns: any;
+  let repo: any;
+  let outbox: any;
+  let inbox: any;
+  let smsOutbox: any;
+  let activityLog: any;
+  let release: Date;
+  const make = () =>
+    new CampaignService(
+      repo,
+      { send: jest.fn() } as never,
+      inbox,
+      outbox,
+      activityLog,
+      { get: jest.fn(() => undefined) } as never,
+      smsConfig(),
+      consentOf({ find: jest.fn().mockResolvedValue([]) }),
+      smsOutbox,
+    );
+  const updateChain = (affected = 1) => {
+    const chain: any = {
+      update: jest.fn(() => chain),
+      set: jest.fn(() => chain),
+      where: jest.fn(() => chain),
+      andWhere: jest.fn(() => chain),
+      execute: jest.fn().mockResolvedValue({ affected }),
+    };
+    return chain;
+  };
+  const input = (over: Record<string, unknown> = {}) => ({
+    type: 'system.manual',
+    category: 'system',
+    title: 'E’lon',
+    body: 'Ertaga filial yopiq',
+    channels: ['in_app', 'sms'],
+    roles: ['courier'],
+    idempotency_key: 'sms-quiet-k1',
+    requester: { id: '25', roles: ['admin'] },
+    ...over,
+  });
+
+  beforeEach(() => {
+    rmqSendMock.mockReset();
+    // Toshkent 20:00 — taqiq oynasi: yuborish ertangi 09:00 ga.
+    release = new Date(Date.now() + 13 * 3600_000);
+    campaigns = {
+      create: jest.fn((v) => ({ ...v })),
+      save: jest.fn((v) => Promise.resolve({ id: '7', ...v })),
+    };
+    const chain = updateChain();
+    repo = {
+      findOne: jest.fn().mockResolvedValue(null),
+      createQueryBuilder: jest.fn(() => chain),
+      chain,
+      manager: {
+        transaction: jest.fn((work: (m: any) => Promise<unknown>) =>
+          work({ getRepository: () => campaigns }),
+        ),
+        query: jest.fn(() => Promise.resolve([{ release_at: release }])),
+      },
+    };
+    outbox = { enqueue: jest.fn().mockResolvedValue({ id: '1' }) };
+    inbox = { dispatch: jest.fn() };
+    smsOutbox = {
+      cancelPendingForNotificationCampaign: jest.fn().mockResolvedValue(3),
+    };
+    activityLog = { log: jest.fn().mockResolvedValue(undefined) };
+  });
+
+  it('⭐ reklama bo‘lmagan kategoriya + SMS kanali, 18:00–09:00 da — reklama kabi 09:00 ga suriladi', async () => {
+    rmqSendMock.mockResolvedValueOnce({ data: { items: [], total: 5 } });
+    const res: any = await make().create(input());
+    expect(res.statusCode).toBe(202);
+    expect(campaigns.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        category: 'system',
+        scheduled_at: release,
+        quiet_hours_shifted: true,
+      }),
+    );
+  });
+
+  it('SMS kanalisiz tranzaksion kampaniya — tunda ham surilmaydi (avvalgidek)', async () => {
+    rmqSendMock.mockResolvedValueOnce({ data: { items: [], total: 5 } });
+    await make().create(input({ channels: ['in_app'] }));
+    expect(campaigns.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        scheduled_at: null,
+        quiet_hours_shifted: false,
+      }),
+    );
+  });
+
+  it('⭐ partiya: reklama bo‘lmagan kategoriya + SMS — taqiq oynasida yuborilmaydi, 09:00 ga suriladi', async () => {
+    repo.findOne.mockResolvedValue({
+      id: '7',
+      status: 'running',
+      batch_no: 0,
+      batch_size: 200,
+      sent: 0,
+      failed: 0,
+      skipped: 0,
+      total: 1,
+      category: 'system',
+      channels: ['in_app', 'sms'],
+      audience: { roles: ['courier'] },
+      type: 'system.manual',
+      title: 'E’lon',
+      scheduled_at: null,
+      cursor_after_id: null,
+      isDeleted: false,
+    });
+    const res: any = await make().runBatch({ campaign_id: '7', batch_no: 0 });
+    expect(inbox.dispatch).not.toHaveBeenCalled();
+    expect(res).toEqual(
+      expect.objectContaining({ skipped: 'quiet_hours', resume_at: release }),
+    );
+    expect(repo.chain.set).toHaveBeenCalledWith({ paused_until: release });
+  });
+
+  it('⭐ bekor qilish — kampaniyaning kutayotgan (yuborilmagan) SMS’lari ham to‘xtatiladi', async () => {
+    repo.findOne.mockResolvedValue({
+      id: '7',
+      status: 'cancelled',
+      sent: 0,
+      failed: 0,
+      skipped: 3,
+      total: 3,
+      channels: ['in_app', 'sms'],
+      category: 'system',
+    });
+    const res: any = await make().cancel({
+      id: '7',
+      requester: { id: '25', roles: ['admin'] },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(smsOutbox.cancelPendingForNotificationCampaign).toHaveBeenCalledWith(
+      '7',
+    );
+    expect(activityLog.log).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'notification.campaign.cancelled',
+        metadata: expect.objectContaining({ sms_cancelled: 3 }),
+      }),
+    );
+  });
+
+  it('bekor qilib bo‘lmasa (allaqachon yakunlangan) — SMS’larga tegilmaydi; SMS tozalash xatosi bekor qilishni buzmaydi', async () => {
+    repo.chain.execute.mockResolvedValueOnce({ affected: 0 });
+    repo.findOne.mockResolvedValue({
+      id: '7',
+      status: 'done',
+      sent: 1,
+      total: 1,
+    });
+    const err = await errorOf(make().cancel({ id: '7' }));
+    expect(err.statusCode).toBe(409);
+    expect(
+      smsOutbox.cancelPendingForNotificationCampaign,
+    ).not.toHaveBeenCalled();
+
+    repo.findOne.mockResolvedValue({
+      id: '7',
+      status: 'cancelled',
+      sent: 0,
+      total: 1,
+    });
+    smsOutbox.cancelPendingForNotificationCampaign.mockRejectedValueOnce(
+      new Error('db blip'),
+    );
+    const res: any = await make().cancel({ id: '7' });
+    expect(res.statusCode).toBe(200);
+  });
+});
+
+describe('(2026-10-26) SmsOutboxService.cancelPendingForNotificationCampaign', () => {
+  it('faqat `pending` qatorlar (kampaniya guruhi bo‘yicha) — failed + sabab, bildirishnoma sms: skipped/campaign_cancelled; soni qaytadi', async () => {
+    const query = jest.fn().mockResolvedValue([{ n: 2 }]);
+    const service = new SmsOutboxService(
+      {} as never,
+      {} as never,
+      { query } as never,
+      {} as never,
+      {} as never,
+      {} as never,
+    );
+    await expect(
+      service.cancelPendingForNotificationCampaign('7'),
+    ).resolves.toBe(2);
+    const [sql, params] = query.mock.calls[0] as [string, unknown[]];
+    expect(sql).toContain(`o."status" = 'pending'`);
+    expect(sql).toContain(`"status" = 'failed'`);
+    expect(sql).toContain('cancelled: campaign cancelled');
+    expect(sql).not.toContain(`'processing'`);
+    expect(params).toEqual([
+      'campaign:7',
+      '7',
+      JSON.stringify({ sms: 'skipped', sms_reason: 'campaign_cancelled' }),
+    ]);
   });
 });

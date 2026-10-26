@@ -54,6 +54,7 @@ import {
 import { DispatchAbortedError } from './dispatch-hooks';
 import { SmsConfigService } from '../sms/sms-config.service';
 import { SmsConsentService } from '../sms/sms-consent.service';
+import { SmsOutboxService } from '../sms/sms-outbox.service';
 import {
   CAMPAIGN_CANCELLABLE_STATUSES,
   CAMPAIGN_DISPLAY_STATUSES,
@@ -161,6 +162,8 @@ export class CampaignService {
     /** (9D1Gl9MS) SMS kanali: kill-switch, fan-out, opt-out sozlamasi. */
     @Optional() private readonly smsConfig?: SmsConfigService,
     @Optional() private readonly smsConsent?: SmsConsentService,
+    /** (2026-10-26) Bekor qilinganda kutayotgan SMS'lar ham to'xtatiladi. */
+    @Optional() private readonly smsOutbox?: SmsOutboxService,
   ) {}
 
   private get maxFanout(): number {
@@ -171,6 +174,22 @@ export class CampaignService {
 
   private static wantsSms(channels: readonly string[] | null | undefined) {
     return (channels ?? []).includes(NotificationChannel.SMS);
+  }
+
+  /**
+   * (2026-10-26) Tungi taqiq (18:00–09:00) bo'yicha USHLANADIGAN kampaniya:
+   * reklama kategoriyasi YOKI SMS kanali bor (kampaniya SMS'i doim reklama —
+   * `smsMessageClass: 'promo'`). Aks holda SMS'lar baribir 09:00 gacha
+   * sms_outbox'da kutib qolardi, kampaniya esa «bajarildi» ko'rinardi.
+   */
+  private static holdsForQuietHours(campaign: {
+    category?: unknown;
+    channels?: readonly string[] | null;
+  }): boolean {
+    return (
+      isPromoCategory(campaign.category) ||
+      CampaignService.wantsSms(campaign.channels)
+    );
   }
 
   /** (9D1Gl9MS) SMS kanali bo'lsa — SMS_MAX_FANOUT ham chegara (pul). */
@@ -270,7 +289,7 @@ export class CampaignService {
       const requestedMoment = requestedAt ?? new Date();
       let scheduledAt = requestedAt;
       let quietShifted = false;
-      if (isPromoCategory(plan.category)) {
+      if (CampaignService.holdsForQuietHours(plan)) {
         const base = requestedMoment;
         const release = await this.promoRelease(base);
         if (release.getTime() > base.getTime()) {
@@ -628,7 +647,7 @@ export class CampaignService {
     // da boshlangan katta kampaniyaning 18:00 dan keyingi partiyalari ham
     // tunda ketmaydi, oyna tugashiga suriladi (tashlanmaydi). Tranzaksion
     // kampaniya bu yerdan o'tmaydi — tunda ham ketadi.
-    if (isPromoCategory(campaign.category)) {
+    if (CampaignService.holdsForQuietHours(campaign)) {
       const now = new Date();
       const release = await this.promoRelease(now);
       if (release.getTime() > now.getTime() + 1000) {
@@ -1196,6 +1215,26 @@ export class CampaignService {
     }
   }
 
+  /**
+   * (2026-10-26) Bekor qilingan kampaniyaning hali YUBORILMAGAN
+   * (`pending`) SMS'lari — masalan tungi taqiq tufayli 09:00 ni kutayotgan
+   * reklama — ham to'xtatiladi. Provayderga ketayotgani (`processing`) va
+   * yuborilganlariga tegilmaydi. Xato bekor qilishni buzmaydi (ogohlantirish).
+   */
+  private async cancelWaitingSms(id: string): Promise<number | null> {
+    if (!this.smsOutbox) return null;
+    try {
+      return await this.smsOutbox.cancelPendingForNotificationCampaign(id);
+    } catch (error) {
+      this.logger.warn(
+        `campaign ${id}: kutayotgan SMS'lar bekor qilinmadi — ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+      return null;
+    }
+  }
+
   async cancel(
     input: {
       id?: string;
@@ -1234,6 +1273,7 @@ export class CampaignService {
           `Kampaniya allaqachon yakunlangan (${row.status}) — bekor qilib bo'lmaydi`,
         );
       }
+      const smsCancelled = await this.cancelWaitingSms(id);
       await this.activityLog.log({
         entity_type: 'NotificationCampaign',
         entity_id: id,
@@ -1242,7 +1282,11 @@ export class CampaignService {
         user_role: input?.requester?.roles?.length
           ? input.requester.roles.join(',')
           : null,
-        metadata: { sent: row.sent, total: row.total },
+        metadata: {
+          sent: row.sent,
+          total: row.total,
+          ...(smsCancelled !== null ? { sms_cancelled: smsCancelled } : {}),
+        },
       });
       return successRes(this.toPublic(row), 200, 'Campaign cancelled');
     } catch (error) {
