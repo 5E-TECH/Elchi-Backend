@@ -46,12 +46,36 @@ export interface AiDraftPreviewSnapshot {
   items: { name: string; product_id: string | null; quantity: number }[];
 }
 
+/**
+ * WHMAIqyo #5: ai-parse bosqichlari davomiyligi (ms) — gateway o'lchaydi
+ * (RPC kutish bilan birga): extract = `ai.order.extract`, preview =
+ * `order.ai_resolve_preview`, total = butun ai-parse handler'i.
+ */
+export interface AiParseTimings {
+  extract_ms: number;
+  preview_ms: number | null;
+  total_ms: number;
+}
+
 /** `ai.draft.attach_preview` (gateway → ai-service, fire-and-forget). */
 export interface AiDraftAttachPreviewRequest {
   draft_id: string;
   market_id: string;
   previews: AiDraftPreviewSnapshot[];
+  /** WHMAIqyo #5 — ixtiyoriy (eski gateway yubormaydi). */
+  timings?: AiParseTimings;
 }
+
+/**
+ * J3hEDtFN #4: operator tuzatishi — AI taklif qilgan qiymat va operator
+ * TASDIQLAGAN qiymat (faqat o'zgargan maydonlar). Keyingi eval to'plami
+ * uchun manba (`scripts/ai-eval-collect.ts`).
+ * ⚠️ MAXFIYLIK: telefon HAR IKKALA tomonda faqat maskalangan
+ * (`+99890*****67`); ism/manzil retention muddatida (30 kun) NULL bo'ladi.
+ */
+export type AiFieldCorrections = Partial<
+  Record<AiAuditedField, { ai: unknown; final: unknown }>
+>;
 
 /** `ai.draft.confirm_context` so'rovi — faqat shu marketning draft'lari qaytadi. */
 export interface AiDraftConfirmContextRequest {
@@ -82,6 +106,8 @@ export interface AiDraftLinkItem {
   item_index: number | null;
   order_id: string;
   edited_fields: AiAuditedField[] | null;
+  /** J3hEDtFN #4 — o'zgargan maydonlarning AI va yakuniy qiymati. */
+  field_corrections?: AiFieldCorrections | null;
 }
 
 /** `ai.draft.trace_by_order` javobi — `GET /orders/:id/ai-trace` (SUPERADMIN/ADMIN). */

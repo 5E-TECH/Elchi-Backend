@@ -427,6 +427,24 @@ describeGnu(
         );
       });
 
+      it("staging: BACKUP_COMPOSE_FILE='a:b' → every compose call gets `-f a -f b`", () => {
+        const r = preDeploy({
+          BACKUP_COMPOSE_FILE:
+            'docker-compose.prod.yml:docker-compose.staging.yml',
+        });
+        expect(r.status).toBe(0);
+        expect(dumps(preDir())).toHaveLength(1);
+        const calls = readFileSync(fakeLog, 'utf8')
+          .split('\n')
+          .filter((l) => l.startsWith('docker compose'));
+        expect(calls).toEqual([
+          'docker compose -f docker-compose.prod.yml -f docker-compose.staging.yml ps --all --quiet postgres',
+          expect.stringContaining(
+            'docker compose -f docker-compose.prod.yml -f docker-compose.staging.yml exec -T postgres',
+          ),
+        ]);
+      });
+
       it('a failed dump fails the gate and writes nothing', () => {
         const r = preDeploy({ FAKE_PG: 'fail' });
         expect(r.status).not.toBe(0);

@@ -42,6 +42,8 @@ import {
   ActivityLogService,
   ActivityLogQuery,
   BranchType,
+  courierPostOrdersQuery,
+  COURIER_LIST_HIDDEN_STATUSES,
   fetchScanOrderSummaries,
   Order_status,
   POST_RECEIVED_TRACKING_NOTES,
@@ -117,6 +119,59 @@ const RETURN_REQUEST_STATUSES: Order_status[] = [
 
 /** findOrders ning odatiy order.find_all kutish vaqti. */
 const FIND_ORDERS_TIMEOUT_MS = 5000;
+
+const REGION_STATS_DELIVERED_STATUSES = new Set<Order_status>([
+  Order_status.SOLD,
+  Order_status.PAID,
+  Order_status.PARTLY_PAID,
+]);
+const REGION_STATS_CANCELLED_STATUSES = new Set<Order_status>([
+  Order_status.CANCELLED,
+  Order_status.CANCELLED_SENT,
+]);
+
+/**
+ * Hudud statistikasi qatori (viloyat / tuman / kuryer): jami, yetkazilgan
+ * (sold / paid / partly_paid — tushum shulardan), bekor, kutilayotgan
+ * (qolgani) va muvaffaqiyat foizi.
+ */
+function summarizeRegionOrders(rows: readonly OrderRow[]) {
+  let totalOrders = 0;
+  let deliveredOrders = 0;
+  let cancelledOrders = 0;
+  let totalRevenue = 0;
+
+  for (const order of rows) {
+    totalOrders += 1;
+    const status = order.status;
+    const price = Number(order.total_price ?? 0);
+
+    if (status && REGION_STATS_DELIVERED_STATUSES.has(status)) {
+      deliveredOrders += 1;
+      totalRevenue += Number.isFinite(price) ? price : 0;
+    }
+
+    if (status && REGION_STATS_CANCELLED_STATUSES.has(status)) {
+      cancelledOrders += 1;
+    }
+  }
+
+  const pendingOrders = Math.max(
+    0,
+    totalOrders - deliveredOrders - cancelledOrders,
+  );
+  const successRate =
+    totalOrders > 0 ? Math.round((deliveredOrders / totalOrders) * 100) : 0;
+
+  return {
+    totalOrders,
+    deliveredOrders,
+    cancelledOrders,
+    pendingOrders,
+    totalRevenue,
+    successRate,
+  };
+}
 
 /**
  * X4RzXk1H — pochta QR'ini skanerlay oladigan rollar (`logistics.post.find_by_scan`):
@@ -853,10 +908,10 @@ export class LogisticsServiceService implements OnModuleInit {
       holder_type?: 'HQ' | 'BRANCH' | 'COURIER';
       customer_id?: string;
       qr_code_token?: string;
-      // aLx7Di99: hudud statistikasi doirasi (order.find_all — GET /orders filtrlari).
-      region_id?: string;
+      // aLx7Di99: hudud statistikasi doirasi — /orders ro'yxati filtrlari
+      // (menejer: branch_id; kuryer: post_ids + exclude_statuses).
       branch_id?: string;
-      courier_ids?: string[];
+      exclude_statuses?: Order_status[];
       start_day?: string;
       end_day?: string;
       fetch_all?: boolean;
@@ -2473,6 +2528,28 @@ export class LogisticsServiceService implements OnModuleInit {
     }
   }
 
+  /**
+   * aLx7Di99 — «kuryerning pochtalari» ta'rifi BITTA joyda: `myPostsForCourier`
+   * (gateway GET /orders/courier/orders shu ro'yxatdan `post_ids` yig'adi) va
+   * GET /region/my/district-stats (`findCourierPostIds`).
+   */
+  private courierPostsWhere(courierId: string) {
+    return { courier_id: courierId };
+  }
+
+  /** aLx7Di99 — kuryerning BARCHA pochtalari id'lari (sahifasiz). */
+  private async findCourierPostIds(courierId: string): Promise<string[]> {
+    const posts = await this.postRepo.find({
+      where: this.courierPostsWhere(courierId),
+      select: { id: true },
+    });
+    return Array.from(
+      new Set(
+        posts.map((post) => String(post?.id ?? '').trim()).filter(Boolean),
+      ),
+    );
+  }
+
   async myPostsForCourier(
     page: number,
     limit: number,
@@ -2483,7 +2560,7 @@ export class LogisticsServiceService implements OnModuleInit {
     const { take, skip } = paging;
 
     const [data, total] = await this.postRepo.findAndCount({
-      where: { courier_id: requester.id },
+      where: this.courierPostsWhere(requester.id),
       relations: ['region'],
       order: { createdAt: 'DESC' },
       skip,
@@ -6395,12 +6472,11 @@ export class LogisticsServiceService implements OnModuleInit {
     endDate?: string,
     requester?: RequesterContext,
     /**
-     * aLx7Di99 — faqat ichki chaqiruv (`getMyRegionDistrictStats`): raqamlar
-     * so'rovchining o'z buyurtmalari bo'yicha (GET /orders doirasi bilan AYNI:
-     * kuryer — `courier_id`/`holder_courier_id`, filial — `branch_id`/
-     * `holder_branch_id`/`home_branch_id`). RMQ'dan kelmaydi.
+     * aLx7Di99 — faqat ichki chaqiruv (`getMyRegionDistrictStats`): so'rovchi
+     * GET /orders ro'yxatining AYNAN o'sha to'plami (oldindan olingan) —
+     * qaytadan so'ralmaydi. RMQ'dan kelmaydi.
      */
-    orderScope?: { courier_id?: string; branch_id?: string },
+    scopedOrders?: readonly OrderRow[],
   ) {
     const regionId = String(id ?? '').trim();
     if (!regionId) {
@@ -6427,93 +6503,18 @@ export class LogisticsServiceService implements OnModuleInit {
       this.notFound('Region not found');
     }
 
-    const scopedCourierId = String(orderScope?.courier_id ?? '').trim();
-    const scopedBranchId = String(orderScope?.branch_id ?? '').trim();
-    const orders = await this.findOrders({
-      fetch_all: true,
-      start_day: startDate,
-      end_day: endDate,
-      limit: 100,
-      // aLx7Di99: doira SQL'da (order.find_all) — viloyat + kuryer/filial.
-      ...(orderScope ? { region_id: regionId } : {}),
-      ...(scopedCourierId ? { courier_ids: [scopedCourierId] } : {}),
-      ...(scopedBranchId ? { branch_id: scopedBranchId } : {}),
-    });
-    // Himoya qatlami: order-service filtrni qo'llamasa ham begona qator
-    // sanalmaydi (doira berilgan-u, qiymati bo'sh bo'lsa — hech narsa).
-    const inOrderScope = (order: OrderRow) => {
-      if (!orderScope) return true;
-      const same = (value: string | null | undefined, expected: string) =>
-        Boolean(expected) && String(value ?? '').trim() === expected;
-      if (scopedCourierId) {
-        return (
-          same(order.courier_id, scopedCourierId) ||
-          same(order.holder_courier_id, scopedCourierId)
-        );
-      }
-      if (scopedBranchId) {
-        return (
-          same(order.branch_id, scopedBranchId) ||
-          same(order.holder_branch_id, scopedBranchId) ||
-          same(order.home_branch_id, scopedBranchId)
-        );
-      }
-      return false;
-    };
-
-    const deliveredStatuses = new Set<Order_status>([
-      Order_status.SOLD,
-      Order_status.PAID,
-      Order_status.PARTLY_PAID,
-    ]);
-    const cancelledStatuses = new Set<Order_status>([
-      Order_status.CANCELLED,
-      Order_status.CANCELLED_SENT,
-    ]);
+    const orders =
+      scopedOrders ??
+      (await this.findOrders({
+        fetch_all: true,
+        start_day: startDate,
+        end_day: endDate,
+        limit: 100,
+      }));
 
     const regionOrders = orders.filter(
-      (order) =>
-        String(order.region_id ?? '').trim() === regionId &&
-        inOrderScope(order),
+      (order) => String(order.region_id ?? '').trim() === regionId,
     );
-
-    const summarizeOrders = (rows: OrderRow[]) => {
-      let totalOrders = 0;
-      let deliveredOrders = 0;
-      let cancelledOrders = 0;
-      let totalRevenue = 0;
-
-      for (const order of rows) {
-        totalOrders += 1;
-        const status = order.status;
-        const price = Number(order.total_price ?? 0);
-
-        if (status && deliveredStatuses.has(status)) {
-          deliveredOrders += 1;
-          totalRevenue += Number.isFinite(price) ? price : 0;
-        }
-
-        if (status && cancelledStatuses.has(status)) {
-          cancelledOrders += 1;
-        }
-      }
-
-      const pendingOrders = Math.max(
-        0,
-        totalOrders - deliveredOrders - cancelledOrders,
-      );
-      const successRate =
-        totalOrders > 0 ? Math.round((deliveredOrders / totalOrders) * 100) : 0;
-
-      return {
-        totalOrders,
-        deliveredOrders,
-        cancelledOrders,
-        pendingOrders,
-        totalRevenue,
-        successRate,
-      };
-    };
 
     const couriersRaw = await this.listCouriersByRegion(regionId);
     const couriers = couriersRaw.map((courier) => {
@@ -6523,7 +6524,7 @@ export class LogisticsServiceService implements OnModuleInit {
       const courierOrders = regionOrders.filter(
         (order) => String(order.courier_id ?? '').trim() === courierId,
       );
-      const stats = summarizeOrders(courierOrders);
+      const stats = summarizeRegionOrders(courierOrders);
       const districtId = String(
         (courier?.district_id as string | number | undefined) ?? '',
       ).trim();
@@ -6553,7 +6554,7 @@ export class LogisticsServiceService implements OnModuleInit {
       const districtOrders = regionOrders.filter(
         (order) => String(order.district_id ?? '').trim() === districtId,
       );
-      const stats = summarizeOrders(districtOrders);
+      const stats = summarizeRegionOrders(districtOrders);
       const districtCouriers = couriers
         .filter((courier) => String(courier.districtId ?? '') === districtId)
         .map((courier) => ({
@@ -6575,7 +6576,7 @@ export class LogisticsServiceService implements OnModuleInit {
       };
     });
 
-    const summary = summarizeOrders(regionOrders);
+    const summary = summarizeRegionOrders(regionOrders);
     const activeCouriers = couriers.filter(
       (courier) =>
         String(
@@ -6644,6 +6645,15 @@ export class LogisticsServiceService implements OnModuleInit {
    * aniqlanadi (kuryer — users.region_id, menejer — filial viloyati). Kuryer
    * ism/telefoni (PII) qaytmaydi. Viloyat biriktirilmagan bo'lsa — 200 va
    * bo'sh holat ("Sizga viloyat biriktirilmagan").
+   *
+   * aLx7Di99 — raqamlar so'rovchining /orders «Barchasi» ro'yxati bilan AYNI
+   * to'plam ustida (`findOwnOrderListScope`):
+   *  - `summary.*` — shu to'plamning HAMMASI (`summary.totalOrders` =
+   *    ro'yxat `total`i, sana filtri ham o'sha);
+   *  - `districts[]` — o'sha to'plamning viloyat tumanlariga tushgan qismi;
+   *  - `summary.outsideDistrictsOrders` — tumanlarga tushmaganlari (tumani /
+   *    viloyati yo'q yoki boshqa viloyat): Σ districts.totalOrders +
+   *    outsideDistrictsOrders = summary.totalOrders.
    */
   async getMyRegionDistrictStats(
     startDate?: string,
@@ -6679,19 +6689,24 @@ export class LogisticsServiceService implements OnModuleInit {
       return empty('Viloyat topilmadi');
     }
 
+    const scopedOrders = await this.findOwnOrderListScope(
+      scope.type === 'courier'
+        ? { courier_id: scope.courier_id }
+        : { branch_id: scope.branch_id },
+      startDate,
+      endDate,
+    );
+
     // Ichki chaqiruv (requester'siz) — doira yuqorida aniqlangan.
     const detail = (await this.getRegionDetailedStats(
       regionId,
       startDate,
       endDate,
       undefined,
-      scope.type === 'courier'
-        ? { courier_id: scope.courier_id }
-        : { branch_id: scope.branch_id },
+      scopedOrders,
     )) as {
       data: {
         region: { id: string; name: string; satoCode?: string | null };
-        summary: Record<string, number>;
         districts: Array<
           {
             couriers?: unknown[];
@@ -6702,7 +6717,12 @@ export class LogisticsServiceService implements OnModuleInit {
         >;
       };
     };
-    const { region, summary, districts } = detail.data;
+    const { region, districts } = detail.data;
+    const summary = summarizeRegionOrders(scopedOrders);
+    const inDistricts = districts.reduce(
+      (sum, district) => sum + Number(district.totalOrders ?? 0),
+      0,
+    );
 
     return successRes(
       {
@@ -6717,6 +6737,10 @@ export class LogisticsServiceService implements OnModuleInit {
           totalRevenue: summary.totalRevenue,
           successRate: summary.successRate,
           districtsCount: districts.length,
+          outsideDistrictsOrders: Math.max(
+            0,
+            summary.totalOrders - inDistricts,
+          ),
         },
         districts: districts.map(({ couriers, ...district }) => ({
           ...district,
@@ -6731,6 +6755,69 @@ export class LogisticsServiceService implements OnModuleInit {
       },
       200,
       'Viloyat tumanlari statistikasi',
+    );
+  }
+
+  /**
+   * aLx7Di99 — so'rovchining /orders «Barchasi» ro'yxati to'plami (sahifasiz).
+   * Doira qayta yozilmaydi — ro'yxat yuboradigan AYNI `order.find_all` so'rovi:
+   *  - kuryer — GET /orders/courier/orders: kuryer pochtalari
+   *    (`courierPostsWhere`, gateway `findAllCourierPostIds` bilan bir xil)
+   *    + `courierPostOrdersQuery` (holatsiz «Barchasi»: created / new /
+   *    received / on the road ko'rinmaydi). Pochtasi yo'q — bo'sh (ro'yxat
+   *    ham bo'sh);
+   *  - filial xodimi — GET /orders (`resolveOrderListRequest`): faqat
+   *    `branch_id` (order-service: branch_id / holder_branch_id /
+   *    home_branch_id), holat filtrisiz.
+   * Himoya qatlami: order-service filtrni qo'llamasa ham begona qator
+   * sanalmaydi.
+   */
+  private async findOwnOrderListScope(
+    scope: { courier_id: string } | { branch_id: string },
+    startDate?: string,
+    endDate?: string,
+  ): Promise<OrderRow[]> {
+    const dateRange = { start_day: startDate, end_day: endDate };
+    const same = (value: string | null | undefined, expected: string) =>
+      Boolean(expected) && String(value ?? '').trim() === expected;
+
+    if ('courier_id' in scope) {
+      const courierId = String(scope.courier_id ?? '').trim();
+      const postIds = courierId ? await this.findCourierPostIds(courierId) : [];
+      if (!postIds.length) {
+        return [];
+      }
+      const query = courierPostOrdersQuery(postIds);
+      const postIdSet = new Set(postIds);
+      const hidden = new Set<string>(COURIER_LIST_HIDDEN_STATUSES);
+      const rows = await this.findOrders({
+        ...query,
+        ...dateRange,
+        fetch_all: true,
+        limit: 100,
+      });
+      return rows.filter(
+        (order) =>
+          postIdSet.has(String(order.post_id ?? '').trim()) &&
+          !hidden.has(String(order.status ?? '')),
+      );
+    }
+
+    const branchId = String(scope.branch_id ?? '').trim();
+    if (!branchId) {
+      return [];
+    }
+    const rows = await this.findOrders({
+      branch_id: branchId,
+      ...dateRange,
+      fetch_all: true,
+      limit: 100,
+    });
+    return rows.filter(
+      (order) =>
+        same(order.branch_id, branchId) ||
+        same(order.holder_branch_id, branchId) ||
+        same(order.home_branch_id, branchId),
     );
   }
 

@@ -71,6 +71,8 @@ export const MARKET_HIDDEN_ORDER_FIELDS: readonly string[] = [
 /** Kuryer ko'rmaydigan buyurtma maydonlari. */
 export const COURIER_HIDDEN_ORDER_FIELDS: readonly string[] = [
   'market_tariff',
+  // KmWO9gTA: ochilgandagi taxminiy market tarifi — `market_tariff` bilan bir xil.
+  'quoted_market_tariff',
   'branch_share',
   'branch_cashbox_amount',
 ];

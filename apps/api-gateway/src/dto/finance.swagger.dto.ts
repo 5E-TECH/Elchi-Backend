@@ -515,6 +515,110 @@ export class ShiftCardSettingRequestDto {
   ai_check_enabled?: boolean;
 }
 
+/** (y8Tqm9Ap) Smenani avtomatik yopish jadvali (qisman yangilanadi). */
+export class ShiftAutoCloseSettingsRequestDto {
+  @ApiPropertyOptional({
+    example: true,
+    description:
+      "`shift.auto_close.enabled` (sukut false). O'chiq — hech bir smena avtomatik yopilmaydi",
+  })
+  @IsOptional()
+  @IsBoolean()
+  enabled?: boolean;
+
+  @ApiPropertyOptional({
+    example: ['14:00', '23:00'],
+    description:
+      "`shift.auto_close.times` — kuniga N marta, Toshkent vaqti `HH:MM` (1–12 ta; takrorlar olib tashlanadi, tartiblanadi). Sukut ['23:00']",
+    type: [String],
+  })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(12)
+  @IsString({ each: true })
+  @Matches(/^([01]\d|2[0-3]):([0-5]\d)$/, { each: true })
+  times?: string[];
+
+  @ApiPropertyOptional({
+    example: 'main',
+    enum: ['main', 'main+branches'],
+    description:
+      '`shift.auto_close.scope`: `main` — faqat asosiy kassa smenasi (sukut), `main+branches` — filial kassalari ham',
+  })
+  @IsOptional()
+  @IsIn(['main', 'main+branches'])
+  scope?: 'main' | 'main+branches';
+
+  @ApiPropertyOptional({
+    example: 15,
+    description:
+      '`shift.auto_close.warn_before_min` (sukut 15; 0 — ogohlantirishsiz): smenani ochgan xodimga yopishdan N daqiqa oldin in-app + Telegram',
+  })
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Max(180)
+  warn_before_min?: number;
+}
+
+/** (gWI4gYkw) Bitta qabul qiluvchi guruhi kanallari. */
+export class ShiftReportChannelsRequestDto {
+  @ApiPropertyOptional({ example: true })
+  @IsOptional()
+  @IsBoolean()
+  telegram?: boolean;
+
+  @ApiPropertyOptional({
+    example: true,
+    description: 'Tizim (ichki bildirishnoma)',
+  })
+  @IsOptional()
+  @IsBoolean()
+  in_app?: boolean;
+}
+
+export class ShiftReportRecipientsRequestDto {
+  @ApiPropertyOptional({ type: () => ShiftReportChannelsRequestDto })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => ShiftReportChannelsRequestDto)
+  superadmin?: ShiftReportChannelsRequestDto;
+
+  @ApiPropertyOptional({ type: () => ShiftReportChannelsRequestDto })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => ShiftReportChannelsRequestDto)
+  couriers?: ShiftReportChannelsRequestDto;
+
+  @ApiPropertyOptional({ type: () => ShiftReportChannelsRequestDto })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => ShiftReportChannelsRequestDto)
+  markets?: ShiftReportChannelsRequestDto;
+}
+
+/** (gWI4gYkw) Smena hisobotini kimlarga / qaysi kanal / qaysi formatda yuborish. */
+export class ShiftReportSettingsRequestDto {
+  @ApiPropertyOptional({
+    type: () => ShiftReportRecipientsRequestDto,
+    description:
+      "`shift.report.recipients` — superadmin / couriers / markets × telegram / in_app (sukut — hammasi false: hisobot yuborish O'CHIQ, superadmin yoqadi)",
+  })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => ShiftReportRecipientsRequestDto)
+  recipients?: ShiftReportRecipientsRequestDto;
+
+  @ApiPropertyOptional({
+    example: 'pdf',
+    enum: ['pdf', 'xlsx'],
+    description: '`shift.report.format` — superadmin ilovasi (sukut pdf)',
+  })
+  @IsOptional()
+  @IsIn(['pdf', 'xlsx'])
+  format?: 'pdf' | 'xlsx';
+}
+
 /** (kiZgTybn) PATCH /finance/shift/settings — FAQAT superadmin. */
 export class UpdateShiftSettingsRequestDto {
   @ApiPropertyOptional({
@@ -551,6 +655,24 @@ export class UpdateShiftSettingsRequestDto {
   @ValidateNested({ each: true })
   @Type(() => ShiftCardSettingRequestDto)
   cards?: ShiftCardSettingRequestDto[];
+
+  @ApiPropertyOptional({
+    type: () => ShiftAutoCloseSettingsRequestDto,
+    description: '(y8Tqm9Ap) Avtomatik yopish jadvali',
+  })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => ShiftAutoCloseSettingsRequestDto)
+  auto_close?: ShiftAutoCloseSettingsRequestDto;
+
+  @ApiPropertyOptional({
+    type: () => ShiftReportSettingsRequestDto,
+    description: '(gWI4gYkw) Hisobot qabul qiluvchilari, kanallar va format',
+  })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => ShiftReportSettingsRequestDto)
+  report?: ShiftReportSettingsRequestDto;
 }
 
 /**
@@ -1424,4 +1546,152 @@ export class HqCourierReceivablesResponseDto {
 
   @ApiProperty({ type: HqCourierReceivablesDataDto })
   data!: HqCourierReceivablesDataDto;
+}
+
+/**
+ * qzjTMWPb — GET /finance/history/daily: kunlik kirim/chiqim agregati va kun
+ * boshi / oxiri qoldig'i. Sana — faqat 'YYYY-MM-DD' (Toshkent kuni).
+ */
+export class HistoryDailyQueryDto {
+  @ApiPropertyOptional({
+    example: '2026-10-01',
+    description:
+      'Toshkent kuni (YYYY-MM-DD). Berilmasa — to_date dan 13 kun oldin (oxirgi 14 kun). Oraliq ≤ 366 kun.',
+  })
+  @IsOptional()
+  @IsString()
+  @Matches(/^\d{4}-\d{2}-\d{2}$/)
+  from_date?: string;
+
+  @ApiPropertyOptional({
+    example: '2026-10-08',
+    description: 'Toshkent kuni (YYYY-MM-DD). Berilmasa — bugun.',
+  })
+  @IsOptional()
+  @IsString()
+  @Matches(/^\d{4}-\d{2}-\d{2}$/)
+  to_date?: string;
+
+  @ApiPropertyOptional({
+    example: '2026-10-01',
+    description: 'from_date aliasi',
+  })
+  @IsOptional()
+  @IsString()
+  @Matches(/^\d{4}-\d{2}-\d{2}$/)
+  fromDate?: string;
+
+  @ApiPropertyOptional({ example: '2026-10-08', description: 'to_date aliasi' })
+  @IsOptional()
+  @IsString()
+  @Matches(/^\d{4}-\d{2}-\d{2}$/)
+  toDate?: string;
+
+  @ApiPropertyOptional({ example: '1001' })
+  @IsOptional()
+  @IsString()
+  @Matches(/^\d+$/)
+  cashbox_id?: string;
+
+  @ApiPropertyOptional({ example: '12345' })
+  @IsOptional()
+  @IsString()
+  @Matches(/^\d+$/)
+  user_id?: string;
+
+  @ApiPropertyOptional({ enum: Cashbox_type })
+  @IsOptional()
+  @IsEnum(Cashbox_type)
+  cashbox_type?: Cashbox_type;
+
+  @ApiPropertyOptional({
+    enum: Cashbox_type,
+    description: 'cashbox_type aliasi',
+  })
+  @IsOptional()
+  @IsEnum(Cashbox_type)
+  cashboxType?: Cashbox_type;
+
+  @ApiPropertyOptional({ enum: Operation_type })
+  @IsOptional()
+  @IsEnum(Operation_type)
+  operation_type?: Operation_type;
+
+  @ApiPropertyOptional({ enum: Source_type })
+  @IsOptional()
+  @IsEnum(Source_type)
+  source_type?: Source_type;
+
+  @ApiPropertyOptional({ example: 'courier_payment,market_payment' })
+  @IsOptional()
+  @IsString()
+  source_types?: string;
+
+  @ApiPropertyOptional({ description: 'source_types aliasi' })
+  @IsOptional()
+  @IsString()
+  sourceTypes?: string;
+
+  @ApiPropertyOptional({ example: '555' })
+  @IsOptional()
+  @IsString()
+  @Matches(/^\d+$/)
+  source_user_id?: string;
+
+  @ApiPropertyOptional({ example: '999' })
+  @IsOptional()
+  @IsString()
+  @Matches(/^\d+$/)
+  created_by?: string;
+}
+
+/** qzjTMWPb — GET /finance/financial-balance/daily. */
+export class FinancialBalanceDailyQueryDto {
+  @ApiPropertyOptional({
+    example: '2026-10-01',
+    description:
+      'Toshkent kuni (YYYY-MM-DD). Berilmasa — to_date dan 13 kun oldin. Oraliq ≤ 366 kun.',
+  })
+  @IsOptional()
+  @IsString()
+  @Matches(/^\d{4}-\d{2}-\d{2}$/)
+  from_date?: string;
+
+  @ApiPropertyOptional({
+    example: '2026-10-08',
+    description: 'Berilmasa — bugun.',
+  })
+  @IsOptional()
+  @IsString()
+  @Matches(/^\d{4}-\d{2}-\d{2}$/)
+  to_date?: string;
+
+  @ApiPropertyOptional({
+    example: '2026-10-01',
+    description: 'from_date aliasi',
+  })
+  @IsOptional()
+  @IsString()
+  @Matches(/^\d{4}-\d{2}-\d{2}$/)
+  fromDate?: string;
+
+  @ApiPropertyOptional({ example: '2026-10-08', description: 'to_date aliasi' })
+  @IsOptional()
+  @IsString()
+  @Matches(/^\d{4}-\d{2}-\d{2}$/)
+  toDate?: string;
+}
+
+/** uzWcMR1C — GET /finance/cashbox/payments-meta. */
+export class PaymentsMetaQueryDto {
+  @ApiPropertyOptional({
+    example: 3,
+    description: 'Top marketlar soni (0–10, sukut 3); qolgani «Yana N ta».',
+  })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  @Max(10)
+  top?: number;
 }

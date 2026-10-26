@@ -149,4 +149,12 @@ export class AiUsageLog extends BaseEntity {
 
   @Column({ type: 'int', default: 0 })
   image_count!: number;
+
+  /**
+   * WHMAIqyo #5: Anthropic chaqiruvining davomiyligi (ms). Ustundan oldingi
+   * qatorlarda NULL. Bosqichlar (extract / preview / jami) —
+   * `ai_order_draft.extract_ms|preview_ms|total_ms`.
+   */
+  @Column({ type: 'int', nullable: true })
+  latency_ms!: number | null;
 }

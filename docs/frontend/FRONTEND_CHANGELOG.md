@@ -80,6 +80,345 @@ ikkala omborni ochadi.
   FE-1 dagi «buyurtmalarga keyingi bosqichda ulanadi» izohini olib tashlang. Viloyat filialida bekor bo'lgan Markaziy
   ombor buyurtmasida «Marketga topshirish» o'rniga «HQ'ga bekor pochta» yo'lini ko'rsating (aks holda 409).
 
+### 2026-10-26 — Smena yopish: karta qoldig'i rasmi havolasi brauzerda ochiladi (kiZgTybn, prod bug 23:40)
+
+Deploy: **api-gateway** (+ `libs/common` log maskasi). Migratsiya **yo'q**. `openapi.json` qayta yaratildi
+(yangi `GET /files/signed/{token}`, `photo_url` tavsifi). Jonli frontend (f9f61f46) **o'zgarishsiz ishlaydi**.
+
+- [2026-10-26] 🔧 [finance/files] — `photo_url` (`POST /finance/shift/account-photo` → `data.photo_url` va
+  `data.check.photo_url`; `GET /finance/shift/:id/report` → `data.accounts[].photo_url`) va superadmin uchun
+  `data.report.file_url` ilgari `http://minio:9000/elchi-files/…?X-Amz-…` (MinIO ICHKI manzili) edi — brauzer
+  «Ochish» / «Rasmni ochish» ni ocha olmasdi. Endi: `https://api.elchipochta.uz/files/signed/<token>` —
+  baytlar gateway orqali (buyurtma dalillari kabi), token 300 s (`photo_url_expires_in` = 300 o'zgarmagan),
+  fayl kaliti URL'da yo'q. Oddiy `<a href target="_blank">` bilan ochiladi — **JWT sarlavhasi shart emas**.
+  Muddati o'tgan / o'zgartirilgan havola → **403** — FE havolani saqlamasin, oyna/hisobotni qayta yuklab yangisini
+  olsin (mavjud oqim shunday). → FE'da ish yo'q.
+- [2026-10-26] 🆕 [files] — `GET /files/signed/:token` (`@Public`): faqat smena fayllari (`shift-check-…`,
+  `shift-report-…`); rasm — `inline`, hisobot PDF/XLSX — `attachment`; `Cache-Control: private, max-age=300`,
+  `nosniff`, `CSP sandbox`. FE bu URL'ni o'zi yasamaydi — faqat backend bergan `photo_url` / `file_url`.
+- [2026-10-26] 🔒 [files] — umumiy `GET /files/:key` va `GET /files/:key/content` smena kalitlarini endi faqat
+  superadmin/admin'ga beradi (menejer — faqat o'z filiali, registrator — asosiy kassa doirasi smena
+  endpoint'larida tekshiriladi). FE bu kalitlarni olmaydi (gateway yashiradi) — ta'sir yo'q.
+
+### 2026-10-27 — Hududlar: `/regions` raqamlari `/orders` «Barchasi» ro'yxati bilan aynan bir to'plam (aLx7Di99)
+
+Deploy: logistics-service + api-gateway + order-service (gateway/order-service — xatti-harakat o'zgarmagan, faqat
+kuryer ro'yxati doirasi umumiy yordamchiga ko'chdi; gateway — Swagger tavsifi). Migratsiya yo'q. `openapi.json` yangilandi.
+
+- [2026-10-27] ✏️ [logistics] — `GET /region/my/district-stats` raqamlari so'rovchining /orders «Barchasi» ro'yxati
+  yuboradigan AYNI `order.find_all` so'rovi bilan sanaladi (sana filtri ham o'sha):
+  **kuryer** — `GET /orders/courier/orders` (holatsiz): o'z pochtalaridagi buyurtmalar (`courier_id` bo'sh, pochta
+  orqali kelganlar ham), `created` / `new` / `received` / `on the road` sanalmaydi (ro'yxatda ham yo'q);
+  **menejer** — `GET /orders` (holatsiz): filial (`branch_id` / `holder_branch_id` / `home_branch_id`), barcha holat.
+  Avval kuryerda faqat `courier_id` / `holder_courier_id` sanalardi (prod: 39 ≠ 44).
+- ✏️ `summary.*` — butun ro'yxat (`summary.totalOrders` = /orders «Barchasi» `total`i); `districts[]` — shu ro'yxatning
+  viloyat tumanlariga tushgan qismi. 🆕 `summary.outsideDistrictsOrders` — ro'yxatdagi, lekin viloyat tumanlarining
+  birortasiga tushmagan buyurtmalar (tumani/viloyati yo'q yoki boshqa viloyat):
+  `Σ districts[].totalOrders + summary.outsideDistrictsOrders = summary.totalOrders`.
+- 🟢 FE: o'zgarish shart emas (`summary.totalOrders` endi ro'yxat jami bilan teng). Ixtiyoriy: `outsideDistrictsOrders > 0`
+  bo'lsa «Tumani ko'rsatilmagan: N» qatori.
+
+### 2026-10-26 — Staging (test server) deploy yo'li: dev → test → main
+
+Deploy: hech qaysi servis (faqat CI/CD + ops fayllari). Migratsiya yo'q. Kontrakt o'zgarmagan.
+Server olinmaguncha O'CHIQ (`STAGING_ENABLED`). Runbook: `docs/ops/staging.md`.
+
+- [2026-10-26] 🟢 [ops] — staging API `https://test-api.elchipochta.uz`, CORS faqat
+  `https://test-admin.elchipochta.uz` (+ test-api). → Server tayyor bo'lganda FE: `test` branchi
+  deploy'iga `test-admin.elchipochta.uz` domeni va API manzili `https://test-api.elchipochta.uz`.
+
+### 2026-10-26 — Ops: deploy'da gateway uzilishsiz almashadi, cloudflared 2 replika (ZfI9nERJ, AFiXurLH, 6RaEn5cN)
+
+Deploy: faqat `deploy.yml` / `docker-compose.prod.yml` / skriptlar — **API kontrakti o'zgarmagan, migratsiya yo'q**.
+`deploy.yml` o'zgargani uchun keyingi deploy BARCHA servislarni qayta build qiladi (DEPLOY_ALL).
+
+- [2026-10-26] 🟢 [infra] — api-gateway deploy'da endi qayta yaratilmaydi: yangi konteyner eski yonida
+  ko'tariladi, `(healthy)` bo'lgach eskisi to'xtatiladi — deploy paytidagi «Tarmoq xatoligi» (Cloudflare
+  502, CORS'siz) yo'qolishi kerak. Almashinuv soniyalarida realtime (socket.io) qayta ulanishi mumkin —
+  FE'ning mavjud reconnect'i yetarli. → FE'da ish yo'q.
+- [2026-10-26] 🟢 [infra] — Cloudflare Tunnel: 2 ta connector (`elchi-cloudflared`, `elchi-cloudflared-2`),
+  versiya qotirilgan (2026.9.1), deploy'da qayta yaratilmaydi. → FE'da ish yo'q.
+
+### 2026-10-26 — Xavfsizlik: fayl yuklash ruxsatlari (rol → papka, limit), integratsiya redirect'lari, CI ta'minot zanjiri (dgvwZasd, bVuDHPFR)
+
+Deploy: **api-gateway + integration-service**. Migratsiya **yo'q**. `openapi.json` qayta yaratildi
+(`POST /files/upload` tavsifi/`folder` enum'i, 403/413 javoblari; `files/upload|qr|pdf` uchun `x-roles`).
+Jonli frontend oqimi (`uploadProofFile`: `folder=proof`, kuryer/menejer, ≤ 10 MB) va bot isboti
+(`folder=proof`, kuryer, video ≤ 20 MB) **o'zgarishsiz ishlaydi** — frontendda ish yo'q.
+
+- [2026-10-26] 🔒 [files] — `POST /files/upload`: endi rolli (`superadmin`, `admin`, `manager`, `courier`;
+  boshqa rol — mijoz, investor, market, operator… → **403**, fayl xotiraga ham yuklanmaydi). `folder` — oq
+  ro'yxat: `proof` (superadmin/admin/menejer/kuryer), `uploads` — `folder` berilmasa (superadmin/admin),
+  `products` (superadmin/admin, faqat png/jpeg). Ro'yxatda yo'q papka yoki rolga ruxsat etilmagan papka → 403;
+  ommaviy `products` ga rasm bo'lmagan fayl → 400. Papka kichik harfga keltiriladi (`Proof` → `proof`).
+- [2026-10-26] 🔒 [files] — limit: rasm/PDF/XLSX **≤ 10 MB**, video (mp4/mov/webm) **≤ 20 MB** (ilgari 50 MB);
+  oshsa **413**. Frontend isbot limiti (10 MB) shu chegara ichida.
+- [2026-10-26] 🔒 [files] — `POST /files/qr`, `POST /files/pdf`: faqat `superadmin`, `admin`, `manager`
+  (ilgari rolsiz — istalgan kirgan foydalanuvchi). Jonli frontend bu endpoint'larni chaqirmaydi.
+- [2026-10-26] 🔒 [integration] — tashqi integratsiya / hamkor webhook so'rovlari endi **redirect'ga ergashmaydi**
+  (SSRF: 3xx ichki xizmatga olib bormasin). Hamkor manzili 3xx qaytarsa «Sinov webhooki» natijasida
+  `ok: false`, `error: "Redirect blocked: <origin> replied with a 3xx redirect…"` ko'rinadi — manzilni
+  yakuniy (redirect'siz, odatda `https://…`) manzilga almashtirish kerak. Kontrakt o'zgarmagan.
+- [2026-10-26] 🛠 [ci] — haftalik `Security (weekly)` workflow (`npm audit --omit=dev --audit-level=high` +
+  gitleaks to'liq tarix), Dependabot (haftalik, guruhlangan), CI gitleaks PR/push diapazoni. Frontendga ta'siri yo'q.
+
+### 2026-10-26 — Moliya: kunlik balans snapshot + kunlik kirim/chiqim (qzjTMWPb), /payments KPI meta (uzWcMR1C), logist moliya yopiqligi testlari (gShYHHGj)
+
+Deploy: **finance-service + api-gateway birga** (yangi RMQ buyruqlari `finance.history.daily`,
+`finance.financial_balance.daily`, `finance.cashbox.payments_meta`). **Migratsiya bor:**
+`1716000000176-FinanceDailySnapshots` (yangi jadvallar `finance_cashbox_daily`, `finance_daily_snapshots` —
+o'qish modeli; kassa balanslari / tarix / daftarga TEGMAYDI). identity-service — faqat rol tavsifi matni
+(LOGIST). `openapi.json` qayta yaratildi. Hamma yangi endpointlar FAQAT o'qiydi.
+
+Kunlik snapshot job'i finance-service ichida (har 10 daqiqada tekshiradi, advisory qulf — bitta replika
+yozadi, idempotent). Deploydan ~1 daqiqa keyin u o'tgan kunlarni `cashbox_history` ning birinchi kunidan
+kechagacha avtomatik quradi (backfill); shu vaqtgacha `balance_status: "pending"` (qoldiqlar `null`,
+oqimlar bor). O'chirish: `FINANCE_DAILY_SNAPSHOT_DISABLED=true`.
+
+- [2026-10-26] 🆕 [finance] — `GET /finance/history/daily?from_date&to_date&cashbox_id|user_id|cashbox_type&operation_type&source_type|source_types&source_user_id&created_by`
+  (sanalar `YYYY-MM-DD`, Toshkent; sukut — oxirgi 14 kun; ≤ 366 kun). Rollar va doira **`GET /finance/history`
+  bilan bir xil** (market/kuryer — o'z kassasi, menejer/registrator — o'z filiali; menejer
+  `cashbox_type=couriers&user_id=` bilan o'z filiali kuryerini ham — `cashbox/user/:id` ruxsati bilan;
+  superadmin/admin tanlovsiz → Asosiy kassa). Javob: `days[]` = `{date, income, expense, net, income_count,
+  expense_count, opening_balance, closing_balance}`, `totals`, `opening_balance` (davr boshi — `from_date`
+  dan oldingi kun oxiri), `closing_balance`, `balance_status` (`ok | pending | partial`), `filtered`.
+  Qoldiqlar kassa doirasiga bog'liq, manba/tur filtriga emas. → «Pul oqimi», «Kassa oqimi», «Balans
+  dinamikasi» (`closing_balance` 14 kun), «kechaga nisbatan» (bugungi − kechagi `closing_balance`), 7/14
+  kunlik sparkline; kassa tafsilotidagi «Davr boshida» endi `opening_balance` dan (100 qatorlik sahifadan
+  emas — M5).
+- [2026-10-26] 🆕 [finance] — `GET /finance/financial-balance/daily?from_date&to_date` (superadmin/admin):
+  `days[].snapshot` — kun oxiridagi Kassa (`main_balance`, naqd/karta), Yo'ldagi pul (`in_transit` =
+  `chain_receivable + provider_receivable`), Marketlar qarzi (`markets_debt`), Umumiy balans
+  (`current_situation`), `ledger_balance`; bugun uchun `null` (jonli qiymat — `/cashbox/financial-balanse`).
+  `source: "backfill"` kunlarida (deploydan oldingi o'tgan kunlar) `in_transit`/`current_situation` = `null`
+  (tarixdan tiklab bo'lmaydi) — delta/sparkline o'sha nuqtani tashlab chizilsin. `days[].ledger` + `ledger` —
+  P&L daftari: kun boshi/oxiri qoldig'i, kunlik kirim/chiqim/soni, `ledger.opening_balance` (davr boshi —
+  o'tgan davr uchun ham waterfall boshi), `ledger.peak` («Eng yuqori»). → Balans sahifasidagi «Daftar
+  qoldig'i», «Kunlik kirim va chiqim», KPI kartalar delta va 14 kunlik chiziq.
+- [2026-10-26] 🆕 [finance] — `GET /finance/cashbox/payments-meta?top=3` (superadmin/admin):
+  `receivable.branches {count, amount}` (all-info `branch_managers_receivable` bilan bir manba),
+  `receivable.hq_couriers {count, amount}` (`hq-couriers` oynasi bilan bir to'plam), `payable {markets_count,
+  amount, top_markets[{market_id, name, amount, share}], others{count, amount, share}}` (`berilishi_kerak`
+  bilan bir qoida — faqat musbat kassalar). Manba javob bermasa blok `null`. → «5 ta filial · 2 ta HQ
+  kuryeri», «6 ta marketga» va top-market segbar (10 000 lik ro'yxatsiz).
+- [2026-10-26] 🟢 [gateway] — gShYHHGj: LOGIST uchun barcha moliya marshrutlari (finance/*, kassa,
+  settlement, to'lovlar, investor, analytics, ai-usage) 403 — metadata'dan avtomatik olinadigan test bilan
+  qotirildi; @Roles'siz marshrutlar aniq oq ro'yxatda (yangisi CI'ni yiqitadi). `GET /search` — LOGIST
+  javobidan pul kalitlari gateway'da ham olib tashlanadi (search-service allaqachon qisqartirardi; kontrakt
+  o'zgarmagan). LOGIST rol tavsifi (`GET /roles` katalogi): «…; moliya — yo'q».
+
+### 2026-10-26 — Bekor holatlari BG7: 3 kunda marketga eslatma, 7 kunda admin eskalatsiyasi (vNKGbg5q) + vOczoOUE 2-bosqich backend kontrakti
+
+Deploy: **order-service + notification-service birga** (yangi bildirishnoma turlari `@app/common` katalogida —
+notification-service eski bo'lsa dispatch noma'lum turni rad etadi), api-gateway (faqat Swagger matni).
+**Migratsiya bor:** `1716000000174-CancelReturnHandoverReminder` (2 ta NULL ustun + qism indeks; backfill yo'q,
+jadval qayta yozilmaydi). `openapi.json` qayta yaratildi.
+
+- [2026-10-26] ✏️ [order] — buyurtma qatorlarida (GET /orders, /orders/:id, `markets/:id/cancelled`, boshqa
+  boyitilgan ro'yxatlar — o'z-o'zidan) yangi maydonlar: **`handover_notified_at`** (ISO | null — marketga
+  «olib keting» eslatmasi ketgan payt) va **`handover_escalated_at`** (ISO | null — admin navbatiga chiqarilgan
+  payt). Hamma rol ko'radi (pul maydoni emas).
+  🔧 FE (vOczoOUE «eslatma kunlari»): «N kun» — `cancel_return.received_at` dan (BG1, `branch` / `hq` bosqichi);
+  **≥ 3 kun — ogohlantirish rangi, ≥ 7 kun — xavf rangi** (ega qarori 3 / 7); `handover_escalated_at` bo'lsa
+  admin/HQ ro'yxatida qizil «Eskalatsiya» belgisi, `handover_notified_at` — «Marketga eslatildi (sana)» izohi.
+- [2026-10-26] 🆕 [order → notification] — jadval (order-service, kuniga bir marta, Toshkent 10:00 dan keyin, tungi
+  taqiq `NOTIF_PROMO_QUIET_HOURS` (sukut 18:00–09:00) dan tashqarida). Nishon — BG1 bosqichi `hq` / `branch`
+  (status `cancelled`, holder HQ/BRANCH, joyda qabul qilingan); ombor buyurtmasi, kuryerda, yo'lda, marketda — yo'q.
+  Holat o'zgarmaydi, faqat belgi. Har buyurtmaga har bosqich **bir marta** (qayta ishga tushish / ko'p replika ham
+  takrorlamaydi):
+  - **D+3** → `order.cancel_return_reminder` — market useriga in-app + marketning **«bekor» Telegram guruhiga**
+    (market bo'yicha BITTA xabar: «⏳ Qaytarishlaringiz markazda kutmoqda», joylar bo'yicha soni, buyurtma
+    raqamlari, «… olib keting»). `link: /new-orders/cancelled/:marketId`, `group_key: cancel_return:reminder:<market>`
+    (inboxda market bo'yicha bitta qator), `data: { market_id, count, oldest_days, order_ids, order_numbers }`.
+  - **D+7** → `order.cancel_return_escalated` — **admin + superadmin** inbox'i (in-app + realtime, Telegram yo'q),
+    buyurtma bo'yicha: «Buyurtma #EL-… markazda 7 kundan beri turibdi — market olib ketmadi» (filialda —
+    «filialda (Nom)»). `link: /orders/edit/:id`, `group_key: cancel_return:escalated:<order>`,
+    `data: { order_id, order_number, market_id, stage, place_id, place_name, received_at, days }`. HIGH, o'chirib
+    bo'lmaydi.
+  🟢 FE: ikkala tur `GET /notifications/types` da — inbox o'zi ko'rsatadi, alohida ish shart emas.
+- [2026-10-26] 🟢 [ops] — env (order-service, `.env.example`): `CANCEL_RETURN_REMINDER_ENABLED` (sukut **yoqiq** —
+  ega qarori 2026-10-19 «eslatma 3 kun / eskalatsiya 7 kun — ha»; `false` — o'chiq), `CANCEL_RETURN_REMIND_AFTER_DAYS`
+  (3), `CANCEL_RETURN_ESCALATE_AFTER_DAYS` (7), `CANCEL_RETURN_REMINDER_HOUR` (10). Noto'g'ri qiymat — sukut.
+  Yoqilgandan keyingi birinchi yugurishda eski (muddati o'tgan) bekorlarga bir martalik eslatma/eskalatsiya ketadi.
+- [2026-10-26] 🟢 [order] — **vOczoOUE 2-bosqich uchun backend tayyor** (FE ishi): joy nomi hamma rolda —
+  `cancel_return.place_name` / `place_type` (BG1); usul — `cancel_return.handover_method` / `market_handover_method`
+  (`qr` | `manual` | `no_qr` | `pin`, BG2); market 3 tabi — `GET /orders/markets/:marketId/cancelled?stage=…`
+  (+ `start_day`/`end_day` «Olganlarim», BG3); server filtri — `GET /orders?cancel_stage=…` (BG4); kod (PIN) —
+  `POST /orders/markets/:marketId/cancelled/qr` javobida `pin`, `POST /scan/market-cancelled { market_id, pin }`
+  (BG6); eslatma kunlari — yuqoridagi BG7. Batafsil: shu fayldagi 2026-10-25 / 2026-10-26 BG1–BG6 yozuvlari.
+
+### 2026-10-26 — Smena: jadval bo'yicha avtomatik yopish (y8Tqm9Ap) va yopilganda hisobot yuborish (gWI4gYkw)
+
+Deploy: **finance-service + api-gateway + notification-service + identity-service birga** (yangi RMQ:
+`finance.shift.report.resend`, `notification.delivery.by_dispatch`, `identity.user.active_ids_by_role`).
+**Migratsiya bor:** `1716000000167-ShiftAutoCloseAndReports` (`shifts` ga yangi ustunlar, yangi jadvallar
+`shift_schedule_claims`, `shift_report_deliveries`; mavjud qatorlar o'zgarmaydi). `openapi.json` qayta yaratildi.
+Avtomatik yopish sukut bo'yicha **o'chiq** (superadmin yoqadi). Hisobot yuborish ham sukut bo'yicha **o'chiq**
+(reliz-9: `report.recipients` — superadmin / kuryerlar / marketlar × Telegram + tizim — hammasi `false`, format PDF):
+superadmin «Qabul qiluvchilar»da yoqmaguncha hech kimga hech narsa ketmaydi, smena hisobot holati `skipped`.
+
+- [2026-10-26] ✏️ [finance] — `GET /finance/shift/settings` javobiga `auto_close`
+  (`{enabled, times: ['HH:MM'], scope: 'main' | 'main+branches', warn_before_min}`) va `report`
+  (`{recipients: {superadmin, couriers, markets: {telegram, in_app}}, format: 'pdf' | 'xlsx'}`) qo'shildi.
+  `PATCH /finance/shift/settings` (faqat SUPERADMIN) shu ikki obyektni qisman qabul qiladi: `times` — Toshkent
+  vaqti, 1–12 ta (tartiblanadi, takror olib tashlanadi), `warn_before_min` 0–180 (0 — ogohlantirishsiz).
+  Yaroqsiz qiymat → 400. Dizayn: `superadmin-payments-shift-settings` («Avtomatik yopish» va «Qabul qiluvchilar»).
+- [2026-10-26] ✏️ [finance] — `GET /finance/shift/:id/report`: yangi maydonlar `close_reason`
+  (`manual | auto`; ochiq smena — `null`), `closed_by_system`, `auto_close` (`{closed_at, label}` yoki `null`;
+  `label` = «Avtomatik yopildi — HH:MM, kassir yopmagan» → sariq banner), `report` (`status`: pending | processing |
+  sent | skipped | failed, `round`, `file_format`, `has_file`, `file_url` — faqat superadmin, 300 s) va
+  `deliveries[]` — «Hisobot kimlarga yuborildi» (faqat superadmin; boshqa rollarga bo'sh massiv):
+  `{round, recipient_id, recipient_name, recipient_kind: superadmin|courier|market, channel: in_app|telegram|
+  telegram_group, status: queued|sent|failed|skipped, failed_reason (masalan «Telegram ulanmagan»), sent_at}`.
+  Avtomatik yopilgan smenada `cash/card.discrepancy = null` («sanalmadi»), kartalarda `entered_balance = null`,
+  `ai_status = 'not_required'` (tasdiqlanmagan), `closed_by = null`.
+- [2026-10-26] 🆕 [finance] — `POST /finance/shift/:id/report/resend` (faqat SUPERADMIN) — yangi raund bilan
+  qayta yuboradi; javob `data.round`, `data.status`, `data.deliveries[]`. Ochiq smena / hozir yuborilayotgan → 400.
+- [2026-10-26] 🆕 [notification] — yangi turlar: `finance.shift_closed`, `finance.shift_auto_closed` (hisobot;
+  `link` superadmin uchun `/payments/shift-report/:id` — 🔧 frontend shu route'ni qo'shishi kerak, kuryer/market
+  uchun `/cash-box`), `finance.shift_auto_close_warning` (smenani ochgan xodimga, `link` `/payments/main-cashbox`,
+  `data.auto_close_at`, `data.minutes_left`). Kuryer xabarida faqat o'z topshiruvlari, market xabarida faqat
+  o'z to'lovlari.
+- [2026-10-26] 🟢 [realtime] — avtomatik yopilganda `finance.shift.auto_closed` (payload'da `closed_at`,
+  `close_reason: 'auto'`, `closed_by: null`) — rWdLuoP3 ro'yxatidagi nom bilan bir xil; qo'lda —
+  `finance.shift.closed`. Keyingi smena avtomatik OCHILMAYDI.
+
+### 2026-10-26 — Narx: yetkazish narxi dvigateli sotuv oqimiga ulandi — darvozalar, market tariflari legacy (KmWO9gTA)
+
+Deploy: **order-service + logistics-service + identity-service + api-gateway birga** (yangi ichki RMQ
+`logistics.delivery.sale_quote` — faqat order-service chaqiradi, HTTP yo'q). **Migratsiya bor (3 ta):**
+`1716000000182-MarketWeightVolumePricing` (`identity_schema.admins.weight_volume_pricing` boolean NOT NULL
+DEFAULT true), `1716000000183-DeliveryPricingSaleGates` (`delivery_pricing_settings.min_delivery_price`,
+`extra_cost_limit_amount` — NULL), `1716000000184-OrderQuotedMarketTariff` (`orders.quoted_market_tariff` — NULL).
+Hammasi qo'shimcha ustun, mavjud ma'lumot o'zgarmaydi. `openapi.json` qayta yaratildi.
+
+⚠️ **Sukut bo'yicha prod xulqi O'ZGARMAYDI:** order-service `SALE_PRICING_ENGINE=off` (sukut) — market tarifi
+avvalgidek profildan (`tariff_home` / `tariff_center`), pul oyoqlari baytma-bayt aynan. Ega rejasi
+(2026-10-19): avval bayroq hamma marketda TRUE holda chiqariladi, kelishuvli marketlar FALSE qilinadi, so'ng
+`SALE_PRICING_ENGINE=on` (ixtiyoriy canary: `SALE_PRICING_ENGINE_MARKET_IDS=37`).
+
+Dvigatel yoqilgandan keyin (`on` + market `weight_volume_pricing = true`):
+- **market_tariff = standart narx (profil; yo'q bo'lsa tarif jadvali bazasi) + vazn/hajm qo'shimchasi**
+  ((hisob vazni − 1 kg) × tarif jadvalidagi kg narxi). Narx SOTUVDA qotiriladi (`sellOrder`,
+  `partlySellOrder` — butun posilka bo'yicha, `markByProvider`). Snapshot (`market_tariff`) bor buyurtma
+  o'zgarmaydi; rollback dvigatelni chaqirmaydi (snapshotdan teskari yozadi). Kuryer tarifi o'zgarmaydi.
+- **DARVOZA 1 (floor):** hisoblangan narx kuryer + filial ulushidan yoki `min_delivery_price` dan past bo'lsa
+  shu qiymatga ko'tariladi — kichik posilkada sotuv endi 400 bilan to'xtamaydi.
+- **DARVOZA 2:** sotuvdagi qo'shimcha xarajat chegarasi — `extra_cost_limit_amount` (berilsa), aks holda tarif
+  jadvalidagi `address.base − center.base`; xato xabari «(tarif jadvali: markaz X, uy Y)» yoki
+  «(yetkazish narxi sozlamasidagi chegara)». Bekor qilish chegarasi o'zgarmagan.
+- Dvigatel javob bermasa sotuv to'xtamaydi — standart narx olinadi, jurnalga sabab yoziladi.
+
+Frontend uchun:
+- [2026-10-26] ✏️ [identity] — market yaratishda (`POST /markets`) `tariff_home` / `tariff_center` **MAJBURIY
+  EMAS** (LEGACY): berilmasa NULL (0 emas). UI'da «Standart uy/markaz narxi» — ixtiyoriy, izoh bilan.
+  🎨 «eski (ishlatilmaydi)» belgisi / yashirish — **ega dizayn qarori kerak** (v2 maketda majburiy; ega
+  2026-10-19 qarori bilan ular dvigatel BAZASI bo'lib qoladi).
+- [2026-10-26] 🆕 [identity] — market `weight_volume_pricing` (boolean, sukut `true`) «Vazn va hajm bo'yicha
+  narx» kaliti: `PATCH /users/:id` va `POST /markets` da qabul qilinadi (faqat SUPERADMIN/ADMIN; menejer /
+  market o'zi → 403; market bo'lmagan → 400; boolean emas → 400), `GET /users/:id`, `GET /markets` (filial
+  xodimlari ko'rinishida ham) javobida qaytadi. `false` — sotuvda faqat standart narx. Activity-log'da
+  eski/yangi qiymat.
+- [2026-10-26] ✏️ [logistics] — `GET/PATCH /delivery/pricing-settings`: yangi `min_delivery_price` va
+  `extra_cost_limit_amount` (so'm, 2 kasr, ≥ 0 yoki `null` — o'chiq). PATCH yangi versiya + jurnal (avvalgidek).
+- [2026-10-26] 🆕 [order] — buyurtma javobida `quoted_market_tariff` (number | null): buyurtma ochilganda
+  dvigatel ko'rsatgan taxminiy tarif (faqat dvigatel yoqilgan marketda; pulga tegmaydi). Kuryer / logist /
+  cheklangan rollarga chiqmaydi (`market_tariff` kabi). Sotuvdagi narx farq qilsa activity-log'da
+  `order.delivery_price_changed` («Yetkazish narxi o'zgardi», eski → yangi, farq, sabab tafsiloti) yoziladi;
+  `order.sell` / `order.partly_sell` jurnali `metadata.sale_pricing` (standart, qo'shimcha, hisob vazni,
+  floor) ni oladi.
+- [2026-10-26] 🟢 [order] — `sale_market_paid_max` (uguUEhin) dvigatel yoqilgan marketda sotuvdagi AYNI narxdan
+  hisoblanadi; ro'yxatda bir sahifada ko'pi bilan 10 ta qator uchun, qolganida yoki dvigatel javob bermasa
+  `null` (yakuniy chegarani sotuv 400 bilan beradi).
+- [2026-10-26] 🟢 [order] — HQ qabul qilgan buyurtmaning `market_tariff` ini ichki `update` / `update_full`
+  orqali o'zgartirish → 400 (HTTP PATCH'da allaqachon taqiqlangan edi).
+- 🟢 Foyda hisoboti (`order-analytics` SQL) o'zgarmagan: `market_tariff` endi hisoblangan qiymat bo'lgani uchun
+  dvigatel yoqilgandan keyingi sotuvlarda foyda ataylab qo'shimcha summasiga oshadi (eski sotuvlar o'zgarmaydi).
+
+### 2026-10-26 — AI moliyaviy yordamchi: chat + faqat o'qiydigan tool'lar, ruxsat, limit, audit (F7PWp6cK)
+
+Deploy: **ai-service + api-gateway birga** (yangi RMQ buyruqlari `ai.assistant.message` (oqim),
+`ai.assistant.access.check|list|update`, `ai.assistant.conversations`; ai-service endi finance/analytics/branch
+navbatlariga faqat O'QISH so'rovi yuboradi). **Migratsiya bor:** `1716000000172-AiAssistant` (yangi jadvallar
+`ai_schema.ai_conversations`, `ai_messages`, `ai_assistant_access`; mavjud ma'lumotga tegmaydi). `openapi.json` qayta
+yaratildi. Funksiya **sukut bo'yicha O'CHIQ** (`AI_ASSISTANT_ENABLED=false`) — yoqilmaguncha savol 503 qaytaradi.
+Dizayn: `superadmin-ai-assistant`, `superadmin-ai-assistant-access-dialog`.
+
+- [2026-10-26] 🆕 [ai] — `GET /ai/assistant/access/me` (superadmin, admin) → `data` = `{allowed, reason, feature_enabled,
+  daily_limit, used_today, remaining_today, reset_at}`; `reason`: `null | role_forbidden | access_disabled |
+  feature_disabled | ai_disabled`. **Menyu bandi** «AI yordamchi»ni shu bilan ko'rsating: superadmin — doim;
+  admin — faqat `reason !== 'access_disabled'`. `allowed=false` + `feature_disabled` — sahifa ochiladi, kiritish
+  bloklanadi («hozircha o'chirilgan»). Boshqa rollar — 403 (menyuda yo'q).
+- [2026-10-26] 🆕 [ai] — `POST /ai/assistant/messages` (superadmin, ruxsatli admin) body `{message: string (1..2000),
+  conversation_id?: string (raqam)}` → **SSE** (`text/event-stream`; `fetch` + `ReadableStream` bilan o'qing — `EventSource`
+  POST/Authorization qo'llamaydi). Oqim ochilishidan OLDIN oddiy JSON xato: **403** (rol/ruxsat yo'q), **503**
+  (`code: feature_disabled | ai_disabled`), **429** (`code: daily_limit`, `reset_at`). Hodisalar (`event:` nomi = `data.type`):
+  `meta {conversation_id, message_id, model, max_steps}` → `step {step}` → `delta {step, text}` (oraliq matn — jonli ko'rsating,
+  lekin YAKUNIY matn faqat `done.answer`) → `tool_call {step, id, tool, input}` («Kassa holati o'qilmoqda…» kabi holat
+  chipi) → `tool_result {step, id, tool, ok, records, period, truncated}` → … → `done {conversation_id, message_id, answer
+  (markdown), stop: end_turn|max_steps|truncated, steps, sources[{tool, period{from,to}|null, records, truncated, ok}],
+  usage{input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, cost_usd}, limits{daily_limit, used_today,
+  remaining_today}}` **yoki** `error {code, message, conversation_id?, reset_at?}`. Har 15 s `: ping` izoh qatori (e'tiborsiz).
+  `error.code`: `role_forbidden | access_disabled | feature_disabled | ai_disabled | daily_limit | assistant_usd_cap |
+  cap_exceeded | busy (oldingi savol tugamagan) | conversation_not_found | conversation_full (yangi suhbat taklif qiling) |
+  invalid_message | message_limit | refused | truncated | network | ai_error` — `message` o'zbekcha, to'g'ridan-to'g'ri
+  ko'rsatsa bo'ladi. Birinchi savolda `conversation_id` yubormang — `meta.conversation_id` ni saqlab, keyingi savollarda
+  yuboring. Javob 2 daqiqagacha cho'zilishi mumkin (6 qadam) — «Bekor qilish» faqat oqimni uzadi (javob baribir tarixga yoziladi).
+- [2026-10-26] 🆕 [ai] — `GET /ai/assistant/conversations?limit=20&offset=0` → `{items[{id, title, turns, last_message_at,
+  created_at, cost_usd}], total, limit, offset}` (faqat o'zimniki, yangisi tepada). `GET /ai/assistant/conversations/:id` →
+  `{id, title, turns, created_at, last_message_at, cost_usd, messages[{id, role: user|assistant, text, created_at,
+  sources?, stop?}]}` (begona/yo'q → 404). Ruxsati olib qo'yilgan admin — 403; funksiya o'chiq bo'lsa ham tarix ochiq.
+- [2026-10-26] 🆕 [ai] — **faqat superadmin:** `GET /ai/assistant/access` → `{feature_enabled, default_daily_limit, model,
+  items[{user_id, enabled, daily_limit, effective_daily_limit, updated_by, updated_at}]}`; `PATCH /ai/assistant/access`
+  body `{user_id, enabled: boolean, daily_limit?: number(0..10000)|null}` (null — sukut 100). Faqat ADMIN rolli
+  foydalanuvchiga (boshqa rol → 400, yo'q → 404). Dialog: adminlar ro'yxatini mavjud `GET /admins` (search, page,
+  limit) dan oling va `items` bilan `user_id` bo'yicha birlashtiring; qatori yo'q admin = o'chiq.
+- [2026-10-26] 🟢 [ai] — Javob manbasi: yordamchi har javob oxirida «Manba:» qatorini yozadi; `done.sources` ni
+  javob ostida kichik chiplar sifatida ko'rsating (tool nomi → o'zbekcha: get_cash_position «Kassa holati»,
+  get_cashbox_history «Kassa tarixi», get_courier_debts «Kuryerlar qarzi», get_market_payables «Marketlarga qarz»,
+  get_branch_settlements «Filiallar hisobi», get_shift_summaries «Smenalar», get_expenses_by_category «Xarajatlar»,
+  get_revenue_profit «Daromad/foyda», get_order_flow «Buyurtmalar oqimi»; davr, yozuvlar soni, `truncated` → «qisqartirilgan»).
+- [2026-10-26] 🟢 [ai] — Limitlar: foydalanuvchi kuniga 100 savol (Toshkent kuni; ⚠️ ega tasdig'i kutilmoqda), yordamchining
+  kunlik USD shifti (5 $), global AI shifti, bitta savolga 0.5 $ / 200k token, 6 qadam, bir vaqtda bitta savol.
+  Hisoblagich: `done.limits` / `access/me`.
+
+### 2026-10-26 — AI buyurtma: prompt sifati (warnings, eval) va tezlik / 20 tagacha rasm (J3hEDtFN, WHMAIqyo)
+
+Deploy: **api-gateway + ai-service + order-service + notification-service birga** (RMQ payload'lariga
+yangi ixtiyoriy maydonlar: preview `warnings`, `ai.draft.attach_preview.timings`,
+`ai.usage.link_orders.items[].field_corrections`). **Migratsiya bor:** `1716000000170-AiOrderLatency`
+(`ai_usage_log.latency_ms`, `ai_order_draft.extract_ms|preview_ms|total_ms`) va
+`1716000000171-AiDraftFieldCorrections` (`ai_order_draft_item.field_corrections`) — faqat NULL'li ustunlar,
+ma'lumotga tegmaydi. Yangi npm bog'liqlik: `sharp` (gateway, serverda rasm kichraytirish). `openapi.json`
+qayta yaratildi. Prompt versiyasi `2026-10-26.1` (birinchi chaqiruvlarda prompt keshi qayta yoziladi).
+
+- [2026-10-26] ✏️ [orders] — `POST /orders/ai-parse` rasm chegaralari: **20 tagacha** rasm (ilgari 3);
+  yuklanadigan (xom) fayl **≤ 4 MB** (ilgari 2 MB — 1,5..2 MB li rasm avvalgidek o'tadi); server rasmni
+  kichraytiradi (eng uzun tomon 1568 px, q80, EXIF olib tashlanadi) va **kichraytirilgan** rasmni tekshiradi:
+  har biri **≤ 1,5 MB**, **jami ≤ 20 MB**; turlar **JPEG, PNG, WebP** (WebP yangi). 400 xabarlari:
+  `Ko'pi bilan 20 ta rasm yuborish mumkin` (21-rasm), `Rasm 1,5 MB dan katta (kichraytirilgandan keyin ham)`,
+  `Rasmlar jami 20 MB dan oshmasligi kerak`, `Faqat JPEG, PNG yoki WebP rasm`, `Rasm fayli buzilgan yoki
+  o'qib bo'lmadi` (dekodlanmadi). > 4 MB bitta fayl — multer 413. Frontend kichraytirishi shart emas; hozirgi
+  `downscaleImage` (1568 px, JPEG q0.92, bayt chegarasisiz) shu holicha ishlaydi.
+  → 🔧 Frontend: `AiInputPanel` `AI_MAX_IMAGES = 20`, WebP'ga ruxsat, xabarlar matni; frontendda 1,5 MB
+  bayt tekshiruvi QO'YILMASIN (xom fayl 4 MB gacha qabul qilinadi).
+- [2026-10-26] ✏️ [orders] — ai-parse preview'ning har buyurtmasida yangi `warnings: {field, reason}[]`
+  (bo'sh massiv — ogohlantirish yo'q). AI noaniq maydonni **taxmin qilmaydi**: qiymat `null` qoladi va shu
+  ro'yxatga tushadi. `field` ∈ `customer_name | phone_number | extra_number | region_name | district_name |
+  address | items | total_price | comment | where_deliver | is_replacement | operator`; `reason` ∈
+  `unclear` (o'qib bo'lmadi) | `ambiguous` (bir necha talqin) | `conflict` (zid qiymatlar). Faqat enum —
+  erkin matn yo'q, frontend o'z matnini ko'rsatadi (masalan "Narx noaniq — tekshiring").
+  → 🔧 Frontend: preview kartasida tegishli maydon yonida ogohlantirish belgisi/izohi.
+- [2026-10-26] 🟢 [orders] — ai-parse tezroq: ekstraksiya `effort: low` + dinamik `max_tokens`
+  (1500 + 600 × kutilgan buyurtma, ≤ 16 000); 5 tadan ko'p rasm 5 tadan bo'laklab PARALLEL o'qiladi va
+  dublikat buyurtmalar birlashtiriladi; audit yozuvi javobni kutmaydi; rasmlar RabbitMQ'da base64 bo'lib
+  yurmaydi — MinIO'da vaqtinchalik (`ai-tmp/`, TTL 1 soat, o'qilgach darhol o'chiriladi). Javob shakli o'zgarmagan
+  (`{ok, orders, draft_id}` / `{ok:false, reason, …}`); timeout'lar o'zgarmagan (frontend 90 s).
+- [2026-10-26] 🟢 [orders] — ai-confirm'da operator o'zgartirgan maydonlarning AI va yakuniy qiymati
+  (`field_corrections`, telefon maskalangan) server tomonda yoziladi — frontend hech narsa yubormaydi.
+- [2026-10-26] 🟢 [bot] — Telegram bot AI rasmi: JPG/PNG/**WebP**, **2 MB** gacha (o'zgarmagan; gateway
+  xom rasmni 4 MB gacha qabul qiladi va o'zi kichraytiradi).
+
 ### 2026-10-26 — Smena yopilishi: har karta / hisob qoldig'ini tasdiqlash, skrinshot, AI tekshiruvi, hisobot, sozlamalar (kiZgTybn)
 
 Deploy: **finance-service + api-gateway + ai-service birga** (yangi RMQ buyruqlari

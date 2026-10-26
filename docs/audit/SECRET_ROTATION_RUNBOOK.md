@@ -113,6 +113,13 @@ carry the secrets). Old clones and any CI caches should be deleted.
   `*.sql.gz`.
 - CI runs a **gitleaks** secret-scan job (`.github/workflows/ci.yml` +
   `.gitleaks.toml`) that fails a PR adding a real secret to a tracked file.
+  Since bVuDHPFR (2026-10-26) it also scans **git history**: the PR range
+  (base..head) / pushed commits (before..after), plus a weekly full-history scan
+  (`.github/workflows/security-weekly.yml`). Known historical findings are
+  baselined by exact fingerprint in `.gitleaksignore` (incl. the two
+  `.env.production` commits). **After the `git filter-repo` rewrite (§2) commit
+  SHAs change:** delete the `.env.production` lines from `.gitleaksignore` and
+  regenerate the remaining fingerprints from a fresh full-history scan.
 - `.env.example` ships only `__REPLACE_WITH...__` placeholders — no real defaults.
 
 ## 4. Verify
@@ -122,6 +129,9 @@ carry the secrets). Old clones and any CI caches should be deleted.
 git log --all --oneline -- .env.production        # → empty
 # Working tree is clean of secrets:
 gitleaks detect --no-git --config .gitleaks.toml --redact -v
+# Full history is clean (only fingerprints left in .gitleaksignore are
+# non-secret/dummy findings):
+gitleaks detect --source . --config .gitleaks.toml --redact -v
 ```
 
 ## Checklist
@@ -132,3 +142,4 @@ gitleaks detect --no-git --config .gitleaks.toml --redact -v
 - [ ] Team notified to re-clone; stale clones/CI caches purged
 - [ ] `git log --all -- .env.production` is empty
 - [ ] gitleaks working-tree scan is clean
+- [ ] `.gitleaksignore` regenerated after the rewrite (no `.env.production` lines); full-history scan is clean

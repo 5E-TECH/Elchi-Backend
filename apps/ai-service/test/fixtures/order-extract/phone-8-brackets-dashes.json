@@ -1,0 +1,28 @@
+{
+  "id": "phone-8-brackets-dashes",
+  "category": [
+    "phone_format",
+    "region_explicit"
+  ],
+  "source": "synthetic",
+  "input": {
+    "text": "Bekzod 8(91)000-23-45, Toshkent shahri Yunusobod, blender 1 ta 450000"
+  },
+  "expected": {
+    "orders": [
+      {
+        "customer_name": "Bekzod",
+        "phone_number": "+998910002345",
+        "region_name": "Toshkent shahri",
+        "district_name": "Yunusobod",
+        "items": [
+          {
+            "name": "blender",
+            "quantity": 1
+          }
+        ],
+        "total_price": 450000
+      }
+    ]
+  }
+}

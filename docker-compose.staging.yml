@@ -1,0 +1,209 @@
+# STAGING (test server) override — ALWAYS used on top of the production file:
+#
+#   docker compose --env-file .env.staging \
+#     -f docker-compose.prod.yml -f docker-compose.staging.yml <command>
+#
+# deploy.yml (`deploy-staging` job, branch `test`) runs exactly that; the runbook
+# is docs/ops/staging.md. docker-compose.prod.yml stays the single description
+# of the stack — this file only changes what must differ on the test box:
+#
+#   * every service reads .env.staging instead of .env.production. `!override`
+#     is required: without it Compose APPENDS env_file lists, so .env.production
+#     would still be loaded (and must exist). Needs Docker Compose >= 2.24.4.
+#   * APP_ENV=staging / SENTRY_ENVIRONMENT=staging are FORCED here (environment
+#     wins over env_file), so the staging guards (SMS / Telegram / push
+#     allowlists) are on even if someone builds .env.staging from a copy of
+#     .env.production.
+#   * its own Cloudflare tunnel token (STAGING_TUNNEL_TOKEN) and its own R2 /
+#     S3 backup targets (STAGING_R2_*, STAGING_BACKUP_S3_TARGET) — the plain
+#     TUNNEL_TOKEN / R2_* / BACKUP_S3_TARGET keys are masked, so a token copied
+#     from production can never attach staging to the PRODUCTION tunnel or write
+#     staging dumps into the production bucket.
+#   * memory ceilings sized for a 4 vCPU / 8 GB box (prod: ~11 GB).
+#   * its own project name, container names and localhost ports, so it cannot
+#     collide with production even when both run on one host.
+#
+# ⚠️ A new service in docker-compose.prod.yml that has `env_file:` or
+# `container_name:` must get an entry here too — otherwise the staging render
+# fails (.env.production not found) or the name collides. CI checks the render
+# (ci.yml, «Staging deploy is in sync»).
+
+# Volumes (elchi-staging_postgres_data, …) and the network are prefixed with
+# the project name.
+name: elchi-staging
+
+# 8 GB / 4 vCPU. Ceilings, not reservations: steady state of a Nest worker is
+# ~150-250 MB, so 512m still bounds a leak without OOM-killing healthy load.
+x-stg-svc-limits: &stg-svc-limits
+  mem_limit: 512m
+  mem_reservation: 96m
+  pids_limit: 512
+
+# gateway + order + finance (prod: 1536m)
+x-stg-hot-svc-limits: &stg-hot-svc-limits
+  mem_limit: 768m
+  mem_reservation: 192m
+  pids_limit: 512
+
+# Forced for every service that reads the env file (see the header).
+x-stg-env: &stg-env
+  APP_ENV: staging
+  SENTRY_ENVIRONMENT: staging
+
+services:
+  rabbitmq:
+    container_name: elchi-stg-rabbitmq
+    mem_limit: 768m
+    ports: !override
+      - '127.0.0.1:5673:5672'
+      - '127.0.0.1:15673:15672'
+
+  postgres:
+    container_name: elchi-stg-postgres
+    mem_limit: 1536m
+    ports: !override
+      - '127.0.0.1:5433:5432'
+
+  minio:
+    container_name: elchi-stg-minio
+    mem_limit: 512m
+    ports: !override
+      - '127.0.0.1:9100:9000'
+      - '127.0.0.1:9101:9001'
+
+  migration-runner:
+    container_name: elchi-stg-migration-runner
+    env_file: !override .env.staging
+    environment: *stg-env
+
+  # Daily dumps stay LOCAL (./backups/daily, newest 7, 05:00 Tashkent — same
+  # as prod). Off-box copy only when STAGING_BACKUP_S3_TARGET is set.
+  db-backup:
+    container_name: elchi-stg-db-backup
+    env_file: !override .env.staging
+    environment:
+      <<: *stg-env
+      BACKUP_S3_TARGET: ${STAGING_BACKUP_S3_TARGET:-}
+
+  # R2 copy is OFF unless STAGING_R2_* are set in .env.staging (then use a
+  # SEPARATE bucket — never the production one). Off = the container only logs
+  # «R2 sozlanmagan» and stays healthy.
+  backup-offsite:
+    container_name: elchi-stg-backup-offsite
+    env_file: !override .env.staging
+    environment:
+      <<: *stg-env
+      R2_ACCOUNT_ID: ${STAGING_R2_ACCOUNT_ID:-}
+      R2_ACCESS_KEY_ID: ${STAGING_R2_ACCESS_KEY_ID:-}
+      R2_SECRET_ACCESS_KEY: ${STAGING_R2_SECRET_ACCESS_KEY:-}
+      R2_BUCKET: ${STAGING_R2_BUCKET:-elchi-staging-db-backups}
+
+  db-reconcile:
+    container_name: elchi-stg-db-reconcile
+    mem_limit: 768m
+    env_file: !override .env.staging
+    environment: *stg-env
+
+  activity-log-prune:
+    container_name: elchi-stg-activity-log-prune
+    mem_limit: 768m
+    env_file: !override .env.staging
+    environment: *stg-env
+
+  # Its OWN tunnel (Cloudflare Zero Trust: e.g. `elchi-staging`, public
+  # hostname test-api.elchipochta.uz -> http://api-gateway:3004). The token is
+  # required: a missing one fails every compose command with this message
+  # instead of a crash-looping connector. Two replicas of that ONE staging
+  # tunnel, like production (x-cloudflared in docker-compose.prod.yml); the
+  # deploy's cloudflared_rollout addresses them as elchi-stg-cloudflared[-2]
+  # (scripts/staging/sync-deploy-workflow.mjs rewrites the names).
+  cloudflared:
+    container_name: elchi-stg-cloudflared
+    mem_limit: 256m
+    mem_reservation: 32m
+    env_file: !override .env.staging
+    environment:
+      TUNNEL_TOKEN: ${STAGING_TUNNEL_TOKEN:?STAGING_TUNNEL_TOKEN is not set in .env.staging (docs/ops/staging.md)}
+
+  cloudflared-2:
+    container_name: elchi-stg-cloudflared-2
+    mem_limit: 256m
+    mem_reservation: 32m
+    env_file: !override .env.staging
+    environment:
+      TUNNEL_TOKEN: ${STAGING_TUNNEL_TOKEN:?STAGING_TUNNEL_TOKEN is not set in .env.staging (docs/ops/staging.md)}
+
+  api-gateway:
+    <<: *stg-hot-svc-limits
+    env_file: !override .env.staging
+    environment: *stg-env
+
+  identity-service:
+    <<: *stg-svc-limits
+    env_file: !override .env.staging
+    environment: *stg-env
+
+  order-service:
+    <<: *stg-hot-svc-limits
+    env_file: !override .env.staging
+    environment: *stg-env
+
+  catalog-service:
+    <<: *stg-svc-limits
+    env_file: !override .env.staging
+    environment: *stg-env
+
+  logistics-service:
+    <<: *stg-svc-limits
+    env_file: !override .env.staging
+    environment: *stg-env
+
+  finance-service:
+    <<: *stg-hot-svc-limits
+    env_file: !override .env.staging
+    environment: *stg-env
+
+  notification-service:
+    <<: *stg-svc-limits
+    env_file: !override .env.staging
+    environment: *stg-env
+
+  integration-service:
+    <<: *stg-svc-limits
+    env_file: !override .env.staging
+    environment: *stg-env
+
+  analytics-service:
+    <<: *stg-svc-limits
+    env_file: !override .env.staging
+    environment: *stg-env
+
+  branch-service:
+    <<: *stg-svc-limits
+    env_file: !override .env.staging
+    environment: *stg-env
+
+  investor-service:
+    <<: *stg-svc-limits
+    env_file: !override .env.staging
+    environment: *stg-env
+
+  file-service:
+    <<: *stg-svc-limits
+    env_file: !override .env.staging
+    environment: *stg-env
+
+  c2c-service:
+    <<: *stg-svc-limits
+    env_file: !override .env.staging
+    environment: *stg-env
+
+  search-service:
+    <<: *stg-svc-limits
+    env_file: !override .env.staging
+    environment: *stg-env
+
+  ai-service:
+    <<: *stg-svc-limits
+    env_file: !override .env.staging
+    environment: *stg-env

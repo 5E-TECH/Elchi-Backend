@@ -1,0 +1,27 @@
+{
+  "id": "phone-9-digits-solid",
+  "category": [
+    "phone_format"
+  ],
+  "source": "synthetic",
+  "input": {
+    "text": "Gulnora 930003456 Samarqand Urgut choynak 1 dona 120 ming"
+  },
+  "expected": {
+    "orders": [
+      {
+        "customer_name": "Gulnora",
+        "phone_number": "+998930003456",
+        "region_name": "Samarqand",
+        "district_name": "Urgut",
+        "items": [
+          {
+            "name": "choynak",
+            "quantity": 1
+          }
+        ],
+        "total_price": 120000
+      }
+    ]
+  }
+}

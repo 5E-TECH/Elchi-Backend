@@ -5,6 +5,7 @@ import {
   normalizeUzPhone,
   type AiAuditedField,
   type AiDraftPreviewSnapshot,
+  type AiFieldCorrections,
 } from '@app/common';
 
 /**
@@ -191,6 +192,85 @@ export function computeEditedFields(
     changed.add('items');
   }
   return AI_AUDITED_FIELDS.filter((f) => changed.has(f));
+}
+
+/** AI taklif qilgan qiymat (snapshot'dan; telefon faqat maskalangan). */
+function aiValueOf(
+  preview: AiDraftPreviewSnapshot,
+  field: AiAuditedField,
+): unknown {
+  switch (field) {
+    case 'phone_number':
+      return preview.phone_masked;
+    case 'extra_number':
+      return preview.extra_masked;
+    case 'items':
+      return preview.items.map((it) => ({
+        name: it.name,
+        product_id: it.product_id,
+        quantity: it.quantity,
+      }));
+    default:
+      return preview[field] ?? null;
+  }
+}
+
+/** Operator tasdiqlagan qiymat (telefon faqat maskalangan). */
+function finalValueOf(
+  confirmed: AiConfirmedForAudit,
+  field: AiAuditedField,
+): unknown {
+  switch (field) {
+    case 'customer_name':
+      return textOrNull(confirmed.customer?.name);
+    case 'phone_number':
+      return maskedPhone(confirmed.customer?.phone_number);
+    case 'extra_number':
+      return maskedPhone(confirmed.customer?.extra_number);
+    case 'region_id':
+      return idOrNull(confirmed.region_id);
+    case 'district_id':
+      return idOrNull(confirmed.district_id);
+    case 'address':
+      return textOrNull(confirmed.address ?? confirmed.customer?.address);
+    case 'total_price':
+      return priceOrNull(confirmed.total_price);
+    case 'where_deliver':
+      return textOrNull(confirmed.where_deliver)?.toLowerCase() ?? null;
+    case 'comment':
+      return textOrNull(confirmed.comment);
+    case 'operator':
+      return textOrNull(confirmed.operator);
+    case 'items':
+      return confirmed.items
+        .filter((it) => !!it && typeof it === 'object')
+        .map((it) => ({
+          name: text(it?.product_name),
+          product_id: idOrNull(it?.product_id),
+          quantity: Math.round(Number(it?.quantity) || 0),
+        }));
+  }
+}
+
+/**
+ * J3hEDtFN #4 — `field_corrections`: o'zgargan HAR maydon uchun AI taklifi va
+ * operator tasdiqlagan qiymat (`edited` — `computeEditedFields` natijasi).
+ * Keyingi eval to'plamining manbai. Telefon ikkala tomonda maskalangan.
+ */
+export function computeFieldCorrections(
+  preview: AiDraftPreviewSnapshot,
+  confirmed: AiConfirmedForAudit,
+  edited: readonly AiAuditedField[],
+): AiFieldCorrections {
+  const out: AiFieldCorrections = {};
+  for (const field of AI_AUDITED_FIELDS) {
+    if (!edited.includes(field)) continue;
+    out[field] = {
+      ai: aiValueOf(preview, field),
+      final: finalValueOf(confirmed, field),
+    };
+  }
+  return out;
 }
 
 /**

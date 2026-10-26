@@ -33,6 +33,16 @@ import {
   type AiCheckResult,
   type ShiftCheckSettings,
 } from './shift-account-check.rules';
+import {
+  SHIFT_AUTOMATION_KEYS,
+  ShiftSettingsError,
+  parseAutoClosePatch,
+  parseReportPatch,
+  readAutoCloseSettings,
+  readReportSettings,
+  type AutoCloseSettings,
+  type ReportSettings,
+} from '../shift-auto-close/shift-schedule.rules';
 
 const MAIN_CASHBOX_USER_ID = '0';
 /**
@@ -176,6 +186,30 @@ export class ShiftAccountCheckService {
     };
   }
 
+  /**
+   * (y8Tqm9Ap / gWI4gYkw) Avtomatik yopish jadvali va hisobot yuborish
+   * sozlamalari (o'sha `finance_settings` jadvali).
+   */
+  async loadAutomationSettings(
+    manager?: EntityManager,
+  ): Promise<{ auto_close: AutoCloseSettings; report: ReportSettings }> {
+    const rows = await (manager ?? this.dataSource.manager)
+      .getRepository(FinanceSetting)
+      .find({
+        where: {
+          key: In(Object.values(SHIFT_AUTOMATION_KEYS)),
+          isDeleted: false,
+        },
+      });
+    const map = new Map<string, unknown>(
+      rows.map((row) => [row.key, row.value]),
+    );
+    return {
+      auto_close: readAutoCloseSettings(map),
+      report: readReportSettings(map),
+    };
+  }
+
   /** Kassa (MAIN yoki filial) va uning faol kartalari. */
   private async findCashbox(
     manager: EntityManager,
@@ -241,9 +275,11 @@ export class ShiftAccountCheckService {
       const cards = cashbox
         ? await this.activeCards(manager, String(cashbox.id))
         : [];
+      const automation = await this.loadAutomationSettings(manager);
       return successRes(
         {
           ...settings,
+          ...automation,
           cashbox_user_id: cashboxUserId,
           cashbox_type:
             cashboxUserId === MAIN_CASHBOX_USER_ID ? 'main' : 'branch',
@@ -278,6 +314,10 @@ export class ShiftAccountCheckService {
     photo_required?: unknown;
     ai_check_enabled?: unknown;
     cards?: unknown;
+    /** (y8Tqm9Ap) `{ enabled, times[], scope, warn_before_min }` (qisman). */
+    auto_close?: unknown;
+    /** (gWI4gYkw) `{ recipients: {superadmin|couriers|markets: {telegram, in_app}}, format }`. */
+    report?: unknown;
   }) {
     try {
       const roles = Array.isArray(input?.requester_roles)
@@ -324,14 +364,31 @@ export class ShiftAccountCheckService {
           ),
         };
       });
-      if (!globals.length && !cardPatches.length) {
+      // (y8Tqm9Ap / gWI4gYkw) Jadval va hisobot qabul qiluvchilari.
+      const automationBefore = await this.loadAutomationSettings();
+      const automation: Array<[string, unknown]> = [];
+      try {
+        automation.push(...parseAutoClosePatch(input?.auto_close));
+        automation.push(
+          ...parseReportPatch(input?.report, automationBefore.report),
+        );
+      } catch (error) {
+        if (error instanceof ShiftSettingsError) {
+          throw new BadRequestException(error.message);
+        }
+        throw error;
+      }
+      if (!globals.length && !cardPatches.length && !automation.length) {
         throw new BadRequestException("O'zgartiriladigan sozlama berilmadi");
       }
 
-      const before = await this.loadSettings();
+      const before = {
+        ...(await this.loadSettings()),
+        ...automationBefore,
+      };
       const changedCards: Array<Record<string, unknown>> = [];
       await this.dataSource.transaction(async (manager) => {
-        for (const [key, value] of globals) {
+        for (const [key, value] of [...globals, ...automation]) {
           await manager
             .createQueryBuilder()
             .insert()
@@ -379,7 +436,10 @@ export class ShiftAccountCheckService {
           );
         }
       });
-      const after = await this.loadSettings();
+      const after = {
+        ...(await this.loadSettings()),
+        ...(await this.loadAutomationSettings()),
+      };
       await this.activityLog.log({
         entity_type: 'FinanceSetting',
         entity_id: 'shift',
@@ -898,6 +958,80 @@ export class ShiftAccountCheckService {
         difference: row.difference,
         ai_status: row.ai_status,
         ai_entered_ok: row.ai_entered_ok,
+      })),
+    };
+  }
+
+  /**
+   * (y8Tqm9Ap #3) AVTOMATIK yopishda (`autoCloseShift` tranzaksiyasi ICHIDA):
+   * hech kim sanamagan — validatsiya YO'Q (yopish bloklanmaydi), har karta
+   * uchun faqat tizim qoldig'i snapshot'i yoziladi:
+   * `entered_balance = NULL`, `difference = NULL`, `ai_status = not_required`,
+   * `confirmed_at / confirmed_by = NULL` (tasdiqlanmagan).
+   *
+   * Qamrov: tasdiqlash yoqilgan (`shift.account_check.enabled`) bo'lsa —
+   * kassaning HAR faol kartasi (hisobotda «tasdiqlanmagan» bo'lib ko'rinadi);
+   * o'chiq bo'lsa — faqat smenada qoralamasi (rasm yuklangan) bor kartalar.
+   * Qoralamadagi rasm kaliti va AI xom natijasi DALIL sifatida saqlanadi,
+   * lekin holat `not_required` — kassir tasdiqlamagan qiymat solishtirilmaydi.
+   * PUL HARAKATI YO'Q.
+   */
+  async recordAtAutoClose(
+    manager: EntityManager,
+    shift: Shift,
+  ): Promise<Record<string, unknown> | null> {
+    const settings = await this.loadSettings(manager);
+    const cashbox = await this.findCashbox(manager, shiftCashboxUserId(shift));
+    if (!cashbox) return null;
+    const drafts = await manager.find(ShiftAccountCheck, {
+      where: { shift_id: String(shift.id), isDeleted: false },
+      lock: { mode: 'pessimistic_write' },
+    });
+    const draftsByCard = new Map(
+      drafts.map((row) => [String(row.cashbox_card_id), row]),
+    );
+    const cards = settings.account_check_enabled
+      ? await this.activeCards(manager, String(cashbox.id))
+      : drafts.length
+        ? await manager.find(CashboxCard, {
+            where: {
+              id: In(drafts.map((row) => String(row.cashbox_card_id))),
+            },
+          })
+        : [];
+    if (!cards.length) return null;
+    const balances = await this.systemBalances(manager, cashbox);
+    const results: ShiftAccountCheck[] = [];
+    for (const card of cards) {
+      const cardId = String(card.id);
+      const row =
+        draftsByCard.get(cardId) ??
+        manager.create(ShiftAccountCheck, {
+          shift_id: String(shift.id),
+          cashbox_card_id: cardId,
+        });
+      row.isDeleted = false;
+      row.expected_balance = balances.get(cardId) ?? 0;
+      row.entered_balance = null;
+      row.difference = null;
+      row.ai_status = ShiftAccountAiStatus.NOT_REQUIRED;
+      row.ai_entered_ok = null;
+      row.photo_required_snap = isPhotoRequired(settings, card);
+      row.ai_enabled_snap = false;
+      row.confirmed_at = null;
+      row.confirmed_by = null;
+      results.push(await manager.save(row));
+    }
+    return {
+      ...summarizeStatuses(results),
+      unconfirmed: results.length,
+      auto_closed: true,
+      accounts: results.map((row) => ({
+        card_id: String(row.cashbox_card_id),
+        expected_balance: row.expected_balance,
+        entered_balance: null,
+        difference: null,
+        ai_status: row.ai_status,
       })),
     };
   }

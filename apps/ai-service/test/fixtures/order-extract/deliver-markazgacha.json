@@ -1,0 +1,28 @@
+{
+  "id": "deliver-markazgacha",
+  "category": [
+    "deliver_type"
+  ],
+  "source": "synthetic",
+  "input": {
+    "text": "Rustam 94 000 40 51 Qashqadaryo Qarshi, termos 1 ta 85 ming, markazgacha"
+  },
+  "expected": {
+    "orders": [
+      {
+        "customer_name": "Rustam",
+        "phone_number": "+998940004051",
+        "region_name": "Qashqadaryo",
+        "district_name": "Qarshi",
+        "items": [
+          {
+            "name": "termos",
+            "quantity": 1
+          }
+        ],
+        "total_price": 85000,
+        "where_deliver": "center"
+      }
+    ]
+  }
+}

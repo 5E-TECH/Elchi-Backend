@@ -372,9 +372,10 @@ describe('e7KhaeOO — matn → AI preview (mavjud endpoint, operator JWT)', () 
       },
     ],
     [
-      'webp hujjat',
+      // WHMAIqyo: WebP endi qabul qilinadi (gateway bilan bir xil) — GIF yo'q.
+      'gif hujjat',
       {
-        document: { file_id: 'w', mime_type: 'image/webp', file_size: 100_000 },
+        document: { file_id: 'g', mime_type: 'image/gif', file_size: 100_000 },
       },
     ],
     [
@@ -405,6 +406,28 @@ describe('e7KhaeOO — matn → AI preview (mavjud endpoint, operator JWT)', () 
       expect(ctx.transport.downloadFile).not.toHaveBeenCalled();
     },
   );
+
+  it('reliz-9: 1,8 MB PNG hujjat (reliz-9 gacha o‘tardi) — qabul qilinadi, yuklash chegarasi 2 MB', async () => {
+    const { ctx, calls } = setup();
+    await ctx.router.dispatch('elchi', {
+      update_id: 21,
+      message: {
+        message_id: 21,
+        chat: { id: 40, type: 'private' },
+        from: { id: 40 },
+        document: {
+          file_id: 'mid',
+          mime_type: 'image/png',
+          file_size: 1_800_000,
+        },
+      },
+    });
+    expect(sentTexts(ctx)).not.toContain(AI_MEDIA_TEXT);
+    expect(ctx.transport.downloadFile.mock.calls).toEqual([
+      ['mid', 2 * 1024 * 1024],
+    ]);
+    expect(calls.filter((c) => c.path === '/orders/ai-parse')).toHaveLength(1);
+  });
 
   it('⭐ eskirgan (muddati o‘tgan) qoralama tugmasi — aniq "eskirgan" xabari, hech narsa yaratilmaydi', async () => {
     const { ctx, calls } = setup();

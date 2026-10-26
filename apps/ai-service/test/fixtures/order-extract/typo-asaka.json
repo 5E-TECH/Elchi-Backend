@@ -1,0 +1,27 @@
+{
+  "id": "typo-asaka",
+  "category": [
+    "district_typo_cyrillic"
+  ],
+  "source": "synthetic",
+  "input": {
+    "text": "Hulkar 93 000 51 62 Andjon Assaka, ko'zgu 1 ta 95 ming"
+  },
+  "expected": {
+    "orders": [
+      {
+        "customer_name": "Hulkar",
+        "phone_number": "+998930005162",
+        "region_name": "Andijon",
+        "district_name": "Asaka",
+        "items": [
+          {
+            "name": "ko'zgu",
+            "quantity": 1
+          }
+        ],
+        "total_price": 95000
+      }
+    ]
+  }
+}

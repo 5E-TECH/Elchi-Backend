@@ -81,11 +81,12 @@ export const PINO_REDACT_PATHS: readonly string[] = [
  * loglarda qolardi.
  *  - query (`?…`) va fragment olib tashlanadi — yo'lning o'zi qoladi;
  *  - yo'ldagi maxfiy token segmenti `***` bilan almashtiriladi:
- *    `/sms/stop/:token`, `/scan/:token`, `/orders/qr-code/:token`
+ *    `/sms/stop/:token`, `/scan/:token`, `/orders/qr-code/:token`,
+ *    `/files/signed/:token` (kiZgTybn — smena rasmi havolasi)
  *    (`/v1/…` prefiksi bilan ham).
  */
 const LOG_URL_TOKEN_RE =
-  /^((?:\/v\d+)?\/(?:sms\/stop|scan|orders\/qr-code))\/[^/]+/i;
+  /^((?:\/v\d+)?\/(?:sms\/stop|scan|orders\/qr-code|files\/signed))\/[^/]+/i;
 
 export function sanitizeLogUrl(url: string | undefined): string | undefined {
   if (typeof url !== 'string') return url;

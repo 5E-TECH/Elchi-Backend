@@ -1,0 +1,34 @@
+{
+  "id": "ambiguous-two-prices",
+  "category": [
+    "ambiguous",
+    "price_words"
+  ],
+  "source": "synthetic",
+  "input": {
+    "text": "Muhayyo 93 000 95 06 Xorazm Urganch, sumka 1 ta, 200 yoki 220 ming bo'ladi"
+  },
+  "expected": {
+    "orders": [
+      {
+        "customer_name": "Muhayyo",
+        "phone_number": "+998930009506",
+        "region_name": "Xorazm",
+        "district_name": "Urganch",
+        "items": [
+          {
+            "name": "sumka",
+            "quantity": 1
+          }
+        ],
+        "total_price": null,
+        "warnings": [
+          {
+            "field": "total_price",
+            "reason": "ambiguous"
+          }
+        ]
+      }
+    ]
+  }
+}

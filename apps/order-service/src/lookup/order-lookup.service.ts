@@ -110,6 +110,13 @@ export class OrderLookupService implements OnModuleInit {
         /** w2bDrE3i: market bo'yicha qo'shimcha xarajat darvozasi. */
         extra_cost_enabled?: boolean | null;
         extra_cost_requires_approval?: boolean | null;
+        /**
+         * KmWO9gTA: «Vazn va hajm bo'yicha narx» (FALSE — faqat standart narx)
+         * va jo'natuvchi hududi (dvigatelning `from` uchi).
+         */
+        weight_volume_pricing?: boolean | null;
+        region_id?: string | null;
+        district_id?: string | null;
       }>;
     }>(
       this.identityClient,

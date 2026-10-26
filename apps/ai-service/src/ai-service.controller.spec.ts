@@ -524,7 +524,13 @@ describe('AiServiceController', () => {
         { draft_id: 'd', market_id: '1', previews: [] },
         ctx,
       );
-      expect(drafts.attachPreview).toHaveBeenCalledWith('d', '1', []);
+      // WHMAIqyo #5: 4-argument — bosqich vaqtlari (`timings`, ixtiyoriy).
+      expect(drafts.attachPreview).toHaveBeenCalledWith(
+        'd',
+        '1',
+        [],
+        undefined,
+      );
       await c.confirmContext({ market_id: '1', draft_ids: ['d'] }, ctx);
       expect(drafts.confirmContext).toHaveBeenCalledWith('1', ['d']);
       await expect(c.traceByOrder({ order_id: '5' }, ctx)).resolves.toBeNull();

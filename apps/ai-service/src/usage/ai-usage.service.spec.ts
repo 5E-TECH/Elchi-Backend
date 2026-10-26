@@ -214,6 +214,23 @@ describe('AiUsageService (lYVuADRE)', () => {
       expect(JSON.stringify(row)).not.toContain('Chilonzor');
     });
 
+    it('WHMAIqyo #5: latency_ms yoziladi (butun, manfiy/NaN → null)', async () => {
+      const { service, savedRow } = setup();
+      service.record(makeRecord({ latencyMs: 1234.6 }));
+      await flush();
+      expect(savedRow().latency_ms).toBe(1235);
+
+      const second = setup();
+      second.service.record(makeRecord({ latencyMs: Number.NaN }));
+      await flush();
+      expect(second.savedRow().latency_ms).toBeNull();
+
+      const third = setup();
+      third.service.record(makeRecord());
+      await flush();
+      expect(third.savedRow().latency_ms).toBeNull();
+    });
+
     it('#8/#21: repo.save reject → record() qaytadi (throw yo`q), faqat WARN', async () => {
       const { service, save } = setup();
       save.mockRejectedValue(new Error('connection terminated'));

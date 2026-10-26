@@ -1,0 +1,27 @@
+{
+  "id": "cyr-namangan-chust-ru",
+  "category": [
+    "district_typo_cyrillic"
+  ],
+  "source": "synthetic",
+  "input": {
+    "text": "Тимур 95 000 73 84 Наманган Чуст, пылесос 1 шт 1 млн 100"
+  },
+  "expected": {
+    "orders": [
+      {
+        "customer_name": "Тимур",
+        "phone_number": "+998950007384",
+        "region_name": "Namangan",
+        "district_name": "Chust",
+        "items": [
+          {
+            "name": "пылесос",
+            "quantity": 1
+          }
+        ],
+        "total_price": 1100000
+      }
+    ]
+  }
+}

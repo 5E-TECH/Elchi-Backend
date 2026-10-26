@@ -72,13 +72,24 @@ import {
   computeRollbackCourierCashboxDelta,
   computeSaleMarketPaymentLimit,
   computeSalePaymentState,
+  computeSellExtraCostLimit,
   computeSellProfit,
   computeTariffShortfall,
   isCourierRemittedSettlement,
+  type MarketTariffResolution,
   resolveOrderTariff,
+  resolveOrderTariffDetailed,
   resolveRollbackReversalActor,
   resolveSaleActorShare as resolveSaleActorShareAmount,
 } from '../domain/order-money';
+import {
+  buildSaleQuotePayload,
+  fetchSaleDeliveryQuote,
+  isSalePricingEngineActive,
+  readSalePricingConfig,
+  type SaleDeliveryQuote,
+  toSaleEngineQuote,
+} from '../pricing/sale-pricing';
 import { OrderLookupService } from '../lookup/order-lookup.service';
 import {
   isIntegrationOrderCreate,
@@ -209,6 +220,24 @@ const CREATE_LIFECYCLE_FIELDS = [
  * majburan qo'yadi (o'z filiali, `source='branch'`).
  */
 const CREATE_PLACEMENT_FIELDS = ['branch_id', 'source'] as const;
+
+/** KmWO9gTA — sotuvdagi market tarifi va uning manbasi (jurnal uchun). */
+interface SaleMarketPricing {
+  resolution: MarketTariffResolution;
+  /** Dvigatel natijasi; dvigatel ishlatilmagan / javob bermagan bo'lsa null. */
+  quote: SaleDeliveryQuote | null;
+  /** Shu buyurtma uchun dvigatel yoqilganmi (config + market bayrog'i). */
+  engineActive: boolean;
+  /** Dvigatel yoqilgan, lekin javob bermagan — sabab (standart narx olindi). */
+  engineError: string | null;
+}
+
+/** KmWO9gTA — DARVOZA 2 ning dvigatel rejimidagi manbasi. */
+interface SaleExtraCostEngineLimit {
+  limitAmount: number | null;
+  centerBase: number;
+  addressBase: number;
+}
 
 /**
  * PATCH /orders/:id orqali HECH KIM (superadmin ham) o'zgartira olmaydigan
@@ -1095,6 +1124,8 @@ export class OrderLifecycleService {
     dto: {
       total_price?: number;
       paid_online_amount?: number;
+      /** KmWO9gTA — market tarifi (sotuvda qotiriladigan narx). */
+      market_tariff?: number | null;
       items?: Array<{
         product_id?: string | null;
         product_name?: string | null;
@@ -1122,6 +1153,25 @@ export class OrderLifecycleService {
       this.badRequest(
         "HQ qabul qilgan buyurtmaning summasi va mahsulot sonini o'zgartirib bo'lmaydi",
       );
+    }
+
+    /**
+     * KmWO9gTA — MARKET TARIFI HAM QO'RIQLANADI. U endi sotuvda dvigateldan
+     * hisoblanib qotiriladi va settlement oyoqlari, `sell_profit`, hamkor
+     * `elchi_fee` va rollback shunga tayanadi. HQ qabul qilgandan keyin uni
+     * qo'lda (ichki `update`/`updateFull` RPC) ustiga yozish kassa bilan
+     * daftarni ajratib yuborardi. Sotuv/rollback yo'llari tranzaksiya ichida
+     * (`externalManager`) chaqiradi — bu qo'riqchidan o'tmaydi.
+     */
+    if (typeof dto.market_tariff !== 'undefined') {
+      const current =
+        order.market_tariff == null ? null : Number(order.market_tariff);
+      const next = dto.market_tariff == null ? null : Number(dto.market_tariff);
+      if (current !== next) {
+        this.badRequest(
+          "HQ qabul qilgan buyurtmaning market tarifini qo'lda o'zgartirib bo'lmaydi — u sotuvda hisoblanib qotiriladi",
+        );
+      }
     }
   }
 
@@ -1318,6 +1368,245 @@ export class OrderLifecycleService {
     tariff: number,
   ): number {
     return resolveSaleActorShareAmount(isManagerSale, financialActor, tariff);
+  }
+
+  /**
+   * KmWO9gTA — SOTUVDAGI MARKET TARIFI (sellOrder / partlySellOrder /
+   * markByProvider). Yagona yo'l: `resolveOrderTariffDetailed`.
+   *
+   *   1. snapshot (`order.market_tariff`) bor — o'sha (dvigatel CHAQIRILMAYDI;
+   *      eski/sotilgan buyurtma narxi orqaga o'zgarmaydi);
+   *   2. dvigatel o'chiq (`SALE_PRICING_ENGINE`), market canary ro'yxatida
+   *      emas yoki marketning `weight_volume_pricing` = FALSE — avvalgidek
+   *      profil tarifi, pul oyoqlari baytma-bayt AYNI;
+   *   3. aks holda standart narx + vazn/hajm qo'shimchasi (logistics
+   *      `logistics.delivery.sale_quote`), floor — kuryer + filial ulushi va
+   *      `min_delivery_price` (DARVOZA 1).
+   *
+   * Dvigatel javob bermasa (logistics/catalog o'chiq, faol tarif yo'q) —
+   * SOTUV TO'XTAMAYDI: standart narx (2-qadam) bilan davom etadi va bu
+   * jurnalga `engine_error` bilan yoziladi (keyin "nega standart narx?"
+   * savoliga javob bo'ladi). Market topilmasa ham dvigatel ishlatilmaydi —
+   * uning bayrog'ini bilmay narx qo'shib bo'lmaydi.
+   */
+  private async resolveSaleMarketPricing(params: {
+    order: Pick<
+      Order,
+      | 'id'
+      | 'market_id'
+      | 'market_tariff'
+      | 'where_deliver'
+      | 'region_id'
+      | 'district_id'
+    > & {
+      items?: Array<{
+        product_id?: string | null;
+        quantity?: number | null;
+      }> | null;
+    };
+    market:
+      | {
+          tariff_center?: number | null;
+          tariff_home?: number | null;
+          weight_volume_pricing?: boolean | null;
+          region_id?: string | null;
+          district_id?: string | null;
+        }
+      | null
+      | undefined;
+    /** Kuryer + filial ulushi (DARVOZA 1 floor). */
+    sharesFloor: number;
+  }): Promise<SaleMarketPricing> {
+    const { order, market } = params;
+    const tariffInput = {
+      snapshot: order.market_tariff,
+      isCenter: order.where_deliver === Where_deliver.CENTER,
+      centerTariff: market?.tariff_center,
+      homeTariff: market?.tariff_home,
+    };
+    const standardOnly = (
+      engineActive: boolean,
+      engineError: string | null,
+    ): SaleMarketPricing => ({
+      resolution: resolveOrderTariffDetailed(tariffInput),
+      quote: null,
+      engineActive,
+      engineError,
+    });
+    if (order.market_tariff != null || !market) {
+      return standardOnly(false, null);
+    }
+    if (
+      !isSalePricingEngineActive(
+        readSalePricingConfig(),
+        order.market_id,
+        market,
+      )
+    ) {
+      return standardOnly(false, null);
+    }
+
+    let quote: SaleDeliveryQuote;
+    try {
+      quote = await fetchSaleDeliveryQuote(
+        this.logisticsClient,
+        buildSaleQuotePayload(order, market),
+      );
+    } catch (error) {
+      // Masofaviy RpcException mijozga oddiy obyekt ({statusCode, message})
+      // bo'lib keladi — xabar shundan olinadi.
+      const payload: unknown =
+        error instanceof RpcException ? error.getError() : error;
+      const message =
+        payload instanceof Error
+          ? payload.message
+          : payload &&
+              typeof payload === 'object' &&
+              'message' in payload &&
+              (payload as { message?: unknown }).message != null
+            ? String((payload as { message?: unknown }).message)
+            : String(payload);
+      this.logger.warn(
+        `KmWO9gTA: order ${order.id} — yetkazish narxi dvigateli javob bermadi, standart narx olindi: ${message}`,
+      );
+      return standardOnly(true, message);
+    }
+    return {
+      resolution: resolveOrderTariffDetailed({
+        ...tariffInput,
+        engine: toSaleEngineQuote(quote),
+        sharesFloor: params.sharesFloor,
+      }),
+      quote,
+      engineActive: true,
+      engineError: null,
+    };
+  }
+
+  /**
+   * KmWO9gTA — DARVOZA 2 manbasi: narx dvigateldan hisoblangan bo'lsa chegara
+   * tarif jadvali / sozlamadan, aks holda `null` (avvalgi qoida — kuryer
+   * `tariff_home − tariff_center`).
+   */
+  private saleExtraCostEngineLimit(
+    pricing: SaleMarketPricing,
+  ): SaleExtraCostEngineLimit | null {
+    if (pricing.resolution.source !== 'engine' || !pricing.quote) return null;
+    return {
+      limitAmount: pricing.quote.extra_cost_limit_amount,
+      centerBase: pricing.quote.center_base,
+      addressBase: pricing.quote.address_base,
+    };
+  }
+
+  /**
+   * KmWO9gTA — narx JURNALI (sotuv activity-log'ining `metadata.sale_pricing`
+   * qismi). Dvigatel o'chiq marketda `null` — eski jurnal shakli o'zgarmaydi.
+   */
+  private salePricingAudit(
+    pricing: SaleMarketPricing,
+  ): Record<string, unknown> | null {
+    if (!pricing.engineActive) return null;
+    const r = pricing.resolution;
+    const q = pricing.quote;
+    return {
+      source: r.source,
+      market_tariff: r.tariff,
+      standard_price: r.standard,
+      base: r.base,
+      surcharge: r.surcharge,
+      computed: r.computed,
+      floor: r.floor,
+      floor_applied: r.floorApplied,
+      engine_error: pricing.engineError,
+      ...(q
+        ? {
+            tariff_id: q.tariff_id,
+            tariff_row_id: q.tariff_row_id,
+            settings_id: q.settings_id,
+            extra_per_kg: q.extra_per_kg,
+            billable_kg: q.billableKg,
+            actual_kg: q.actualKg,
+            volumetric_kg: q.volumetricKg,
+            extra_kg: q.extraKg,
+            basis: q.basis,
+            estimated: q.estimated,
+            unmeasured_items: q.unmeasuredItems,
+            missing_dimension_items: q.missingDimensionItems,
+          }
+        : {}),
+    };
+  }
+
+  /**
+   * KmWO9gTA E'TIBOR — buyurtma OCHILGANDA ko'rsatilgan narx
+   * (`quoted_market_tariff`) bilan sotuvdagi narx farq qilsa — alohida jurnal
+   * yozuvi. Narx o'lchov mahsulotdan JONLI o'qiladi (qulflangan qaror),
+   * ya'ni sotuvgacha o'lchov/mahsulot o'zgarsa narx ham o'zgaradi — bu yozuv
+   * "nega narx o'zgardi?" savoliga javob.
+   */
+  private async logSalePriceDrift(params: {
+    order: { id: string; quoted_market_tariff?: number | string | null };
+    pricing: SaleMarketPricing;
+    requester: { id: string; roles?: string[] };
+    path: 'sell' | 'partly_sell' | 'provider_sell';
+  }): Promise<void> {
+    const quoted =
+      params.order.quoted_market_tariff == null
+        ? null
+        : Number(params.order.quoted_market_tariff);
+    const sale = params.pricing.resolution.tariff;
+    if (quoted == null || !Number.isFinite(quoted)) return;
+    if (Math.round(quoted * 100) === Math.round(sale * 100)) return;
+    await this.activityLog
+      .log({
+        entity_type: 'Order',
+        entity_id: String(params.order.id),
+        action: 'order.delivery_price_changed',
+        old_value: { market_tariff: quoted },
+        new_value: { market_tariff: sale },
+        ...this.custody.auditActor(params.requester),
+        metadata: {
+          path: params.path,
+          difference: Math.round((sale - quoted) * 100) / 100,
+          sale_pricing: this.salePricingAudit(params.pricing),
+        },
+        description:
+          `Buyurtma #${orderNumberOf(params.order.id)}: yetkazish narxi ` +
+          `ochilgandagi ${formatSom(quoted)} o'rniga sotuvda ` +
+          `${formatSom(sale)} bo'ldi`,
+      })
+      .catch(() => undefined);
+  }
+
+  /**
+   * KmWO9gTA — buyurtma OCHILGANDA yetkazish narxi (taxmin) `orders.
+   * quoted_market_tariff` ga yoziladi: sotuvdagi narx bilan farq jurnal
+   * uchun. Faqat dvigatel shu market uchun yoqilgan bo'lsa; pulga TEGMAYDI
+   * (hech qaysi oyoq bu ustunni o'qimaydi). Yaratishdan KEYIN, javobni
+   * kutdirmasdan (best-effort) — xato yaratishni buzmaydi.
+   */
+  private async captureOpenDeliveryQuote(orderId: string): Promise<void> {
+    const config = readSalePricingConfig();
+    if (!config.enabled) return;
+    const order = await this.orderRepo.findOne({
+      where: { id: String(orderId), isDeleted: false },
+      relations: { items: true },
+    });
+    if (!order || order.market_tariff != null) return;
+    const market = await this.lookup
+      .getMarketsByIds([String(order.market_id)])
+      .then((rows) => rows[0]);
+    const pricing = await this.resolveSaleMarketPricing({
+      order,
+      market,
+      sharesFloor: 0,
+    });
+    if (pricing.resolution.source !== 'engine') return;
+    await this.orderRepo.update(
+      { id: String(order.id), quoted_market_tariff: IsNull() },
+      { quoted_market_tariff: pricing.resolution.tariff },
+    );
   }
 
   /**
@@ -2627,6 +2916,12 @@ export class OrderLifecycleService {
     tariffCenter: number;
     tariffHome: number;
     /**
+     * KmWO9gTA — narx dvigateldan hisoblangan sotuvda SOTUV chegarasi
+     * manbasi (`computeSellExtraCostLimit` 'engine'). `null`/berilmasa —
+     * avvalgi qoida. Bekor qilish qoidasi bunga bog'liq emas.
+     */
+    engineLimit?: SaleExtraCostEngineLimit | null;
+    /**
      * Manager kuryer emas — unda tarif tushunchasi YO'Q (`tariff_*` = 0).
      * Tarifga asoslangan chegarani unga qo'llasak, maksimum 0 chiqib manager
      * umuman xarajat yoza olmasdi. Manager uchun nazorat boshqa: uning
@@ -2661,10 +2956,30 @@ export class OrderLifecycleService {
       );
     }
 
-    const diff = home - center;
     // `Math.floor` — chegara butun so'm bo'lsin, kasrli chegara xato
-    // xabarida tushunarsiz ko'rinadi.
-    const max = diff > 0 ? Math.floor(diff) : Math.floor(center / 2);
+    // xabarida tushunarsiz ko'rinadi (`computeSellExtraCostLimit`).
+    if (params.engineLimit) {
+      const limit = computeSellExtraCostLimit({
+        mode: 'engine',
+        limitAmount: params.engineLimit.limitAmount,
+        centerBase: params.engineLimit.centerBase,
+        addressBase: params.engineLimit.addressBase,
+      });
+      if (extraCost > limit.max) {
+        this.badRequest(
+          `Qo'shimcha xarajat maksimal ${limit.max} so'm bo'lishi mumkin ` +
+            (params.engineLimit.limitAmount != null
+              ? '(yetkazish narxi sozlamasidagi chegara)'
+              : `(tarif jadvali: markaz ${limit.center}, uy ${limit.home})`),
+        );
+      }
+      return;
+    }
+    const { max } = computeSellExtraCostLimit({
+      mode: 'legacy',
+      tariffCenter: center,
+      tariffHome: home,
+    });
     if (extraCost > max) {
       this.badRequest(
         `Qo'shimcha xarajat maksimal ${max} so'm bo'lishi mumkin ` +
@@ -3396,6 +3711,12 @@ export class OrderLifecycleService {
     // mirrors the original sale exactly, even if the market/courier tariff has
     // since changed. Fall back to live tariffs for orders sold before snapshots
     // were recorded.
+    // KmWO9gTA: rollback DVIGATELNI ATAYLAB CHAQIRMAYDI. Dvigatel narxi bilan
+    // sotilgan har buyurtmada snapshot BOR (sotuv uni o'sha tranzaksiyada
+    // yozadi) — teskari oyoq aynan shu summadan. Snapshotsiz buyurtma esa
+    // snapshotdan OLDIN profil tarifi bilan sotilgan — teskarisi ham profil
+    // tarifidan. Rollback narxni qayta hisoblasa kassada qoldiq qolardi
+    // (BeePost B5: 49 001 so'm).
     const marketTariff = resolveOrderTariff({
       snapshot: order.market_tariff,
       isCenter: order.where_deliver === Where_deliver.CENTER,
@@ -5835,6 +6156,18 @@ export class OrderLifecycleService {
       );
     }
 
+    // KmWO9gTA: ochilgandagi yetkazish narxi (jurnal uchun) — best-effort,
+    // javobni kutdirmaydi; dvigatel o'chiq bo'lsa darhol qaytadi.
+    if (savedId) {
+      void this.captureOpenDeliveryQuote(savedId).catch((error: unknown) =>
+        this.logger.warn(
+          `KmWO9gTA: order ${savedId} ochilgandagi narx yozilmadi: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        ),
+      );
+    }
+
     const fullOrder = await this.findById(savedId);
     return fullOrder;
   }
@@ -7904,12 +8237,8 @@ export class OrderLifecycleService {
     // olardi (partlySell va rollback esa snapshotni ustun qo'yardi), ya'ni kassa
     // oyog'i bir tarif bilan, `sell_profit` va rollback boshqa tarif bilan
     // hisoblanardi.
-    const marketTariff = resolveOrderTariff({
-      snapshot: order.market_tariff,
-      isCenter: order.where_deliver === Where_deliver.CENTER,
-      centerTariff: market.tariff_center,
-      homeTariff: market.tariff_home,
-    });
+    // KmWO9gTA: kuryer tarifi AVVALGIDEK kuryer profilidan (dvigatelga
+    // tegmaydi); u market tarifidan OLDIN — DARVOZA 1 floor'i ulushga tayanadi.
     const courierTariff = resolveOrderTariff({
       snapshot: order.courier_tariff,
       isCenter: order.where_deliver === Where_deliver.CENTER,
@@ -7922,8 +8251,17 @@ export class OrderLifecycleService {
       financialActor,
       courierTariff,
     );
+    // KmWO9gTA: market tarifi — snapshot, aks holda (dvigatel yoqilgan
+    // bo'lsa) standart narx + vazn/hajm qo'shimchasi va floor.
+    const marketPricing = await this.resolveSaleMarketPricing({
+      order,
+      market,
+      sharesFloor: courierShare + branchShare,
+    });
+    const marketTariff = marketPricing.resolution.tariff;
     // Tarif qoplamasa sotuv shu yerda to'xtaydi — tranzaksiyadan OLDIN, ya'ni
-    // hech bir kassa oyog'i yozilmaydi.
+    // hech bir kassa oyog'i yozilmaydi. Dvigatel narxi floor bilan
+    // ko'tarilgan — bu yerdan doim o'tadi (KmWO9gTA DARVOZA 1).
     this.assertTariffCoversShares({ marketTariff, courierShare, branchShare });
     const actorExpenseUserId = isManagerRequester
       ? String(requester.branch_id ?? '')
@@ -7953,6 +8291,9 @@ export class OrderLifecycleService {
         whereDeliver: order.where_deliver,
         tariffCenter: Number(financialActor?.tariff_center ?? 0),
         tariffHome: Number(financialActor?.tariff_home ?? 0),
+        // KmWO9gTA DARVOZA 2: narx dvigateldan bo'lsa chegara tarif
+        // jadvali / sozlamadan (kuryer tariflari farqiga tayanmaydi).
+        engineLimit: this.saleExtraCostEngineLimit(marketPricing),
         isManager:
           this.hasRole(requester, Roles.MANAGER) &&
           !this.hasRole(requester, Roles.COURIER),
@@ -8403,8 +8744,19 @@ export class OrderLifecycleService {
         courier_id: courierCashbox ? actorCourierId : null,
         branch_id: settlementBranchId,
         total_price: totalPrice,
+        // KmWO9gTA: narx qayerdan va qanday chiqdi (faqat dvigatel yoqilgan
+        // marketda — aks holda jurnal shakli avvalgidek).
+        ...(marketPricing.engineActive
+          ? { sale_pricing: this.salePricingAudit(marketPricing) }
+          : {}),
       },
       description: ActivityDescribeUz.orderSold(order.id, totalPrice),
+    });
+    await this.logSalePriceDrift({
+      order,
+      pricing: marketPricing,
+      requester,
+      path: 'sell',
     });
 
     /**
@@ -9109,6 +9461,7 @@ export class OrderLifecycleService {
     // hisoblanadi: market ma'lumoti tashqi (RMQ) chaqiruv talab qiladi.
     let providerMarketTariff = 0;
     let providerMarketAmount = 0;
+    let providerMarketPricing: SaleMarketPricing | null = null;
     /**
      * fix3c (MONEY-01) — OYOQLAR KARGO YIG'ADIGAN NAQDDAN, `total_price`
      * DAN EMAS.
@@ -9130,12 +9483,14 @@ export class OrderLifecycleService {
         .getMarketsByIds([String(order.market_id)])
         .then((rows) => rows[0])
         .catch(() => undefined);
-      providerMarketTariff = resolveOrderTariff({
-        snapshot: order.market_tariff,
-        isCenter: order.where_deliver === Where_deliver.CENTER,
-        centerTariff: market?.tariff_center,
-        homeTariff: market?.tariff_home,
+      // KmWO9gTA: `sellOrder` bilan AYNI yo'l. Kargo sotuvida kuryer va
+      // filial ulushi 0 — floor faqat `min_delivery_price`.
+      providerMarketPricing = await this.resolveSaleMarketPricing({
+        order,
+        market,
+        sharesFloor: 0,
       });
+      providerMarketTariff = providerMarketPricing.resolution.tariff;
       providerMarketAmount = providerCollectible - providerMarketTariff;
     }
 
@@ -9287,8 +9642,21 @@ export class OrderLifecycleService {
         provider_slug: input.provider_slug ?? null,
         external_ref: input.external_ref ?? null,
         provider_action: input.action,
+        // KmWO9gTA: narx jurnali (faqat dvigatel yoqilgan marketda).
+        ...(providerMarketPricing?.engineActive
+          ? { sale_pricing: this.salePricingAudit(providerMarketPricing) }
+          : {}),
       },
     });
+    if (providerMarketPricing) {
+      await this.logSalePriceDrift({
+        order,
+        pricing: providerMarketPricing,
+        // Kargo webhooki — foydalanuvchi yo'q (user_id NULL).
+        requester: { id: '', roles: [] },
+        path: 'provider_sell',
+      });
+    }
     return successRes(
       {
         id: updated.id,
@@ -9453,12 +9821,10 @@ export class OrderLifecycleService {
       : 0;
 
     const marketBalanceBefore = Number(marketCashbox.balance ?? 0);
-    const marketTariff = resolveOrderTariff({
-      snapshot: order.market_tariff,
-      isCenter: order.where_deliver === Where_deliver.CENTER,
-      centerTariff: market.tariff_center,
-      homeTariff: market.tariff_home,
-    });
+    // KmWO9gTA: kuryer tarifi kuryer profilidan (o'zgarmaydi), market
+    // tarifi — `sellOrder` bilan AYNI yo'l. Dvigatelga BUTUN posilka
+    // (bo'linishdan oldingi barcha elementlar) beriladi: kuryer hammasini
+    // olib borgan, qisman sotuvda ham market to'liq tarif bilan hisoblanadi.
     const courierTariff = resolveOrderTariff({
       snapshot: order.courier_tariff,
       isCenter: order.where_deliver === Where_deliver.CENTER,
@@ -9470,6 +9836,12 @@ export class OrderLifecycleService {
       financialActor,
       courierTariff,
     );
+    const marketPricing = await this.resolveSaleMarketPricing({
+      order,
+      market,
+      sharesFloor: courierShare + branchShare,
+    });
+    const marketTariff = marketPricing.resolution.tariff;
     // Qisman sotuvda ham kuryer to'liq tarifini oladi va market to'liq tarif
     // bilan hisoblanadi, ya'ni tarif qoplamaslik zarari bu yo'lda ham xuddi
     // shunday yuzaga keladi — sellOrder bilan bir xil qo'riqchi.
@@ -9501,6 +9873,9 @@ export class OrderLifecycleService {
         whereDeliver: order.where_deliver,
         tariffCenter: Number(financialActor?.tariff_center ?? 0),
         tariffHome: Number(financialActor?.tariff_home ?? 0),
+        // KmWO9gTA DARVOZA 2: narx dvigateldan bo'lsa chegara tarif
+        // jadvali / sozlamadan (kuryer tariflari farqiga tayanmaydi).
+        engineLimit: this.saleExtraCostEngineLimit(marketPricing),
         isManager:
           this.hasRole(requester, Roles.MANAGER) &&
           !this.hasRole(requester, Roles.COURIER),
@@ -10027,7 +10402,17 @@ export class OrderLifecycleService {
         market_id: order.market_id,
         courier_id: courierCashbox ? actorCourierId : null,
         cancelled_items: cancelledItems.length,
+        // KmWO9gTA: narx jurnali (faqat dvigatel yoqilgan marketda).
+        ...(marketPricing.engineActive
+          ? { sale_pricing: this.salePricingAudit(marketPricing) }
+          : {}),
       },
+    });
+    await this.logSalePriceDrift({
+      order,
+      pricing: marketPricing,
+      requester,
+      path: 'partly_sell',
     });
 
     return successRes({}, 200, 'Order qisman sotildi');

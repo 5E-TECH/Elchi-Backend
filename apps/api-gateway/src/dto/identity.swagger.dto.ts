@@ -224,6 +224,19 @@ export class UpdateAdminRequestDto {
   @IsOptional()
   @IsBoolean()
   can_order_from_warehouse?: boolean;
+
+  /**
+   * KmWO9gTA — market «Vazn va hajm bo'yicha narx» kaliti. Faqat
+   * SUPERADMIN/ADMIN va faqat market yozuvida (aks holda 403/400).
+   */
+  @ApiPropertyOptional({
+    example: true,
+    description:
+      "(KmWO9gTA) Market «Vazn va hajm bo'yicha narx» kaliti (sukut true). FALSE — sotuvda faqat standart narx (tariff_home/tariff_center), vazn/hajm qo'shimchasiz. Faqat SUPERADMIN/ADMIN, faqat market.",
+  })
+  @IsOptional()
+  @IsBoolean()
+  weight_volume_pricing?: boolean;
 }
 
 export class CreateMarketRequestDto {
@@ -252,18 +265,32 @@ export class CreateMarketRequestDto {
 
   @ApiPropertyOptional({
     example: 10000,
-    description: 'Optional, default is 0',
+    description:
+      '(KmWO9gTA) Standart uy narxi — LEGACY, ixtiyoriy. Berilmasa NULL (0 emas); sotuvda dvigatel yoqilganda baza tarif jadvalidan olinadi.',
   })
   @IsOptional()
   @IsNumber()
   @Min(0)
   tariff_home?: number;
 
-  @ApiPropertyOptional({ example: 8000, description: 'Optional, default is 0' })
+  @ApiPropertyOptional({
+    example: 8000,
+    description:
+      '(KmWO9gTA) Standart markaz narxi — LEGACY, ixtiyoriy. Berilmasa NULL (0 emas).',
+  })
   @IsOptional()
   @IsNumber()
   @Min(0)
   tariff_center?: number;
+
+  @ApiPropertyOptional({
+    example: true,
+    description:
+      "(KmWO9gTA) «Vazn va hajm bo'yicha narx» (sukut true). Faqat SUPERADMIN/ADMIN (menejer — 403).",
+  })
+  @IsOptional()
+  @IsBoolean()
+  weight_volume_pricing?: boolean;
 
   @ApiProperty({ example: 'center', enum: ['center', 'address'] })
   @IsEnum(['center', 'address'])

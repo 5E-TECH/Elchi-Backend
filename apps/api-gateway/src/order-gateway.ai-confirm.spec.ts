@@ -723,8 +723,18 @@ describe('OrderGatewayController — POST /orders/ai-confirm', () => {
           order_ids: [ids[0], ids[1]],
           market_id: MARKET_ID,
           items: [
-            { item_index: null, order_id: ids[0], edited_fields: null },
-            { item_index: null, order_id: ids[1], edited_fields: null },
+            {
+              item_index: null,
+              order_id: ids[0],
+              edited_fields: null,
+              field_corrections: null,
+            },
+            {
+              item_index: null,
+              order_id: ids[1],
+              edited_fields: null,
+              field_corrections: null,
+            },
           ],
           confirmed_by: MARKET_ID,
           // NFiXfmq6: market narxi yo'q — ai-service global narxni muzlatadi.
@@ -734,7 +744,14 @@ describe('OrderGatewayController — POST /orders/ai-confirm', () => {
           draft_id: draftB,
           order_ids: [ids[2]],
           market_id: MARKET_ID,
-          items: [{ item_index: null, order_id: ids[2], edited_fields: null }],
+          items: [
+            {
+              item_index: null,
+              order_id: ids[2],
+              edited_fields: null,
+              field_corrections: null,
+            },
+          ],
           confirmed_by: MARKET_ID,
           ai_price_per_order: null,
         },

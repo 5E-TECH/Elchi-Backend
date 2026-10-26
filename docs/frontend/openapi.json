@@ -2582,7 +2582,7 @@
         ]
       },
       "get": {
-        "description": "5Yy6r6UI (BG1): every order row has `return_stage` (`courier` | `in_transit` | `branch` | `hq` | `market` | null) and `cancel_return` (null unless the order is cancelled / returned to market): `{ stage, place_type: \"COURIER\" | \"BRANCH\" | \"HQ\" | null, place_id, place_name, received_at, sent_at, handed_over_at, handover_method: \"qr\" | \"manual\" | \"no_qr\" | \"pin\" | null }`. Place = where the parcel is now (courier name / branch or HQ name); `in_transit` — destination; `market` — where it was handed over. `received_at` (branch/hq) — since when it is at that place (last cancelled-post receipt, else custody time); `sent_at` (in_transit); `handed_over_at` + `handover_method` (market, fL79tFbs BG2; null method = legacy/unknown). Cancelled before intake (never left the market) — both null. No money fields; same for every role.\n\n4BftLLnc — LOGIST: faqat o'ziga biriktirilgan viloyatlar (regions.logist_id = me) buyurtmalari, pul maydonlarisiz (total_price, sale_collectible_amount, paid_online_amount, extra_cost, tariflar, ulushlar). `region_id` faqat o‘z viloyatlaridan biri bo'lishi mumkin (boshqasi — 400). Viloyat biriktirilmagan logist — 200 va bo'sh ro'yxat.",
+        "description": "5Yy6r6UI (BG1): every order row has `return_stage` (`courier` | `in_transit` | `branch` | `hq` | `market` | null) and `cancel_return` (null unless the order is cancelled / returned to market): `{ stage, place_type: \"COURIER\" | \"BRANCH\" | \"HQ\" | null, place_id, place_name, received_at, sent_at, handed_over_at, handover_method: \"qr\" | \"manual\" | \"no_qr\" | \"pin\" | null }`. Place = where the parcel is now (courier name / branch or HQ name); `in_transit` — destination; `market` — where it was handed over. `received_at` (branch/hq) — since when it is at that place (last cancelled-post receipt, else custody time); `sent_at` (in_transit); `handed_over_at` + `handover_method` (market, fL79tFbs BG2; null method = legacy/unknown). Cancelled before intake (never left the market) — both null. No money fields; same for every role. vNKGbg5q (BG7): rows also carry `handover_notified_at` (market «pick up» reminder sent, D+3) and `handover_escalated_at` (escalated to the admin queue, D+7) — ISO or null; FE warns on `received_at` age ≥ 3 / ≥ 7 days.\n\n4BftLLnc — LOGIST: faqat o'ziga biriktirilgan viloyatlar (regions.logist_id = me) buyurtmalari, pul maydonlarisiz (total_price, sale_collectible_amount, paid_online_amount, extra_cost, tariflar, ulushlar). `region_id` faqat o‘z viloyatlaridan biri bo'lishi mumkin (boshqasi — 400). Viloyat biriktirilmagan logist — 200 va bo'sh ro'yxat.",
         "operationId": "OrderGatewayController_findAll",
         "parameters": [
           {
@@ -2914,12 +2914,12 @@
                   },
                   "images": {
                     "type": "array",
-                    "maxItems": 3,
+                    "maxItems": 20,
                     "items": {
                       "type": "string",
                       "format": "binary"
                     },
-                    "description": "JPEG yoki PNG, har biri 2 MB gacha, ko‘pi bilan 3 ta."
+                    "description": "JPEG, PNG yoki WebP; yuklanadigan fayl 4 MB gacha (kattasi — 413), ko'pi bilan 20 ta (21-rasm — 400). Server rasmni 1568 px gacha kichraytiradi va EXIF'ni olib tashlaydi; kichraytirilgan rasm har biri 1,5 MB gacha, jami 20 MB gacha (aks holda 400)."
                   }
                 }
               }
@@ -4688,7 +4688,7 @@
     },
     "/orders/{id}": {
       "get": {
-        "description": "5Yy6r6UI (BG1): every order row has `return_stage` (`courier` | `in_transit` | `branch` | `hq` | `market` | null) and `cancel_return` (null unless the order is cancelled / returned to market): `{ stage, place_type: \"COURIER\" | \"BRANCH\" | \"HQ\" | null, place_id, place_name, received_at, sent_at, handed_over_at, handover_method: \"qr\" | \"manual\" | \"no_qr\" | \"pin\" | null }`. Place = where the parcel is now (courier name / branch or HQ name); `in_transit` — destination; `market` — where it was handed over. `received_at` (branch/hq) — since when it is at that place (last cancelled-post receipt, else custody time); `sent_at` (in_transit); `handed_over_at` + `handover_method` (market, fL79tFbs BG2; null method = legacy/unknown). Cancelled before intake (never left the market) — both null. No money fields; same for every role.\n\n4BftLLnc — LOGIST: buyurtma o'z viloyatida bo'lsa (aks holda 403), pul maydonlarisiz.",
+        "description": "5Yy6r6UI (BG1): every order row has `return_stage` (`courier` | `in_transit` | `branch` | `hq` | `market` | null) and `cancel_return` (null unless the order is cancelled / returned to market): `{ stage, place_type: \"COURIER\" | \"BRANCH\" | \"HQ\" | null, place_id, place_name, received_at, sent_at, handed_over_at, handover_method: \"qr\" | \"manual\" | \"no_qr\" | \"pin\" | null }`. Place = where the parcel is now (courier name / branch or HQ name); `in_transit` — destination; `market` — where it was handed over. `received_at` (branch/hq) — since when it is at that place (last cancelled-post receipt, else custody time); `sent_at` (in_transit); `handed_over_at` + `handover_method` (market, fL79tFbs BG2; null method = legacy/unknown). Cancelled before intake (never left the market) — both null. No money fields; same for every role. vNKGbg5q (BG7): rows also carry `handover_notified_at` (market «pick up» reminder sent, D+3) and `handover_escalated_at` (escalated to the admin queue, D+7) — ISO or null; FE warns on `received_at` age ≥ 3 / ≥ 7 days.\n\n4BftLLnc — LOGIST: buyurtma o'z viloyatida bo'lsa (aks holda 403), pul maydonlarisiz.",
         "operationId": "OrderGatewayController_findById",
         "parameters": [
           {
@@ -6753,7 +6753,7 @@
     },
     "/region/my/district-stats": {
       "get": {
-        "description": "aLx7Di99: region — from the token (courier: users.region_id, manager: branch region). Numbers are the requester's OWN slice, same scope as GET /orders: courier — orders with courier_id or holder_courier_id = me; manager — orders of own branch (branch_id / holder_branch_id / home_branch_id). Response `data.scope`: `{ type: \"courier\", courier_id }` | `{ type: \"branch\", branch_id, branch_name }` (heading: branch / «sizga tegishli»). No region / no branch — 200 with `{ region: null, summary: null, districts: [] }`.",
+        "description": "aLx7Di99: region — from the token (courier: users.region_id, manager: branch region). Numbers are computed over EXACTLY the requester's /orders «Barchasi» list (same order-service query, same date filter): courier — GET /orders/courier/orders without status (orders in my posts, i.e. posts.courier_id = me; statuses created / new / received / on the road are not listed); manager — GET /orders without status (branch_id / holder_branch_id / home_branch_id = own branch). `summary.*` — the WHOLE list (`summary.totalOrders` = list `total`); `districts[]` — the part of it in the districts of the region; `summary.outsideDistrictsOrders` — list orders not in any district of the region (no region/district, or another region): Σ districts[].totalOrders + outsideDistrictsOrders = summary.totalOrders. Response `data.scope`: `{ type: \"courier\", courier_id }` | `{ type: \"branch\", branch_id, branch_name }` (heading: branch / «sizga tegishli»). No region / no branch — 200 with `{ region: null, summary: null, districts: [] }`.",
         "operationId": "LogisticsGatewayController_getMyRegionDistrictStats",
         "parameters": [
           {
@@ -6802,7 +6802,8 @@
                         "pendingOrders": 1,
                         "totalRevenue": 30000,
                         "successRate": 33,
-                        "districtsCount": 2
+                        "districtsCount": 2,
+                        "outsideDistrictsOrders": 0
                       },
                       "districts": [
                         {
@@ -7707,6 +7708,83 @@
           }
         ],
         "summary": "HQ kuryerlari va kassasidagi naqd (superadmin/admin qabul qiladi)",
+        "tags": [
+          "Finance"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
+        ]
+      }
+    },
+    "/finance/cashbox/payments-meta": {
+      "get": {
+        "description": "uzWcMR1C. `receivable.branches` — `all-info.branch_managers_receivable` bilan bir manba (Σ amount teng); `receivable.hq_couriers` — `GET /finance/cashbox/hq-couriers` ro'yxati bilan bir to'plam (count == total); `payable` — `all-info.berilishi_kerak` bilan bir qoida (faqat musbat market kassalari): `markets_count`, `amount`, `top_markets[]` (kamayish tartibida, `share` — % ulush), `others` («Yana N ta»). Manba javob bermasa tegishli blok `null` (sahifa ishlayveradi).",
+        "operationId": "FinanceGatewayController_paymentsMeta",
+        "parameters": [
+          {
+            "name": "top",
+            "required": false,
+            "in": "query",
+            "description": "Top marketlar soni (0–10, sukut 3); qolgani «Yana N ta».",
+            "schema": {
+              "example": 3,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "example": {
+                    "statusCode": 200,
+                    "message": "To'lovlar KPI meta",
+                    "data": {
+                      "receivable": {
+                        "amount": 9870000,
+                        "branches": {
+                          "count": 5,
+                          "amount": 8770000
+                        },
+                        "hq_couriers": {
+                          "count": 2,
+                          "amount": 1100000
+                        }
+                      },
+                      "payable": {
+                        "markets_count": 6,
+                        "amount": 13458000,
+                        "top_markets": [
+                          {
+                            "market_id": "101",
+                            "cashbox_id": "55",
+                            "name": "Baraka Shop",
+                            "amount": 4800000,
+                            "share": 35.7
+                          }
+                        ],
+                        "others": {
+                          "count": 3,
+                          "amount": 3200000,
+                          "share": 23.8
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "To'lovlar KPI meta: filiallar / HQ kuryerlari / qarzdor marketlar soni, top-market taqsimoti",
         "tags": [
           "Finance"
         ],
@@ -8794,6 +8872,134 @@
         ]
       }
     },
+    "/finance/financial-balance/daily": {
+      "get": {
+        "description": "qzjTMWPb. `days[].snapshot` — kun OXIRIDAGI kompaniya holati (bugun uchun `null`: jonli qiymat `GET /finance/cashbox/financial-balanse` dan). Kartalar: Kassa = `main_balance`, Yo'ldagi pul = `in_transit` (`chain_receivable + provider_receivable`), Marketlar qarzi = `markets_debt` (= −`market_cashbox_total`), Umumiy balans = `current_situation`. `source: backfill` kunlarida (tarixdan qayta qurilgan) `chain_receivable`, `provider_receivable`, `in_transit`, `current_situation` = `null` — ularni tarixdan tiklab bo'lmaydi; kassa yig'indilari aniq. «Kechaga nisbatan» = jonli − `days[kecha].snapshot`. `previous_day` — `from_date` dan oldingi kun snapshot'i. `days[].ledger` — P&L daftari: `opening_balance`/`closing_balance` (kun boshi/oxiri), `income`/`expense`/`net`/`count`; `ledger.opening_balance` — davr boshi, `ledger.peak` — eng yuqori kun oxiri qoldig'i.",
+        "operationId": "FinanceGatewayController_financialBalanceDaily",
+        "parameters": [
+          {
+            "name": "from_date",
+            "required": false,
+            "in": "query",
+            "description": "Toshkent kuni (YYYY-MM-DD). Berilmasa — to_date dan 13 kun oldin. Oraliq ≤ 366 kun.",
+            "schema": {
+              "example": "2026-10-01",
+              "type": "string"
+            }
+          },
+          {
+            "name": "to_date",
+            "required": false,
+            "in": "query",
+            "description": "Berilmasa — bugun.",
+            "schema": {
+              "example": "2026-10-08",
+              "type": "string"
+            }
+          },
+          {
+            "name": "fromDate",
+            "required": false,
+            "in": "query",
+            "description": "from_date aliasi",
+            "schema": {
+              "example": "2026-10-01",
+              "type": "string"
+            }
+          },
+          {
+            "name": "toDate",
+            "required": false,
+            "in": "query",
+            "description": "to_date aliasi",
+            "schema": {
+              "example": "2026-10-08",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "example": {
+                    "statusCode": 200,
+                    "message": "Kunlik moliyaviy balans",
+                    "data": {
+                      "timezone": "Asia/Tashkent",
+                      "from": "2026-10-01",
+                      "to": "2026-10-08",
+                      "last_snapshot_date": "2026-10-07",
+                      "previous_day": {
+                        "date": "2026-09-30",
+                        "snapshot": null
+                      },
+                      "ledger": {
+                        "opening_balance": 7507000,
+                        "closing_balance": 8437500,
+                        "income": 9836500,
+                        "expense": 8906000,
+                        "net": 930500,
+                        "count": 186,
+                        "peak": {
+                          "date": "2026-10-06",
+                          "balance": 15805000
+                        }
+                      },
+                      "days": [
+                        {
+                          "date": "2026-10-07",
+                          "snapshot": {
+                            "source": "live",
+                            "captured_at": "2026-10-07T19:05:00.000Z",
+                            "main_balance": 23700000,
+                            "main_balance_cash": 17500000,
+                            "main_balance_card": 6200000,
+                            "chain_receivable": 11000000,
+                            "provider_receivable": 1150000,
+                            "in_transit": 12150000,
+                            "market_cashbox_total": 12300000,
+                            "market_payable_total": 12400000,
+                            "markets_debt": -12300000,
+                            "courier_cashbox_total": 3100000,
+                            "branch_cashbox_total": 2400000,
+                            "current_situation": 23550000,
+                            "ledger_balance": 8410500
+                          },
+                          "ledger": {
+                            "opening_balance": 11878500,
+                            "closing_balance": 8410500,
+                            "income": 32000,
+                            "expense": 3500000,
+                            "net": -3468000,
+                            "count": 2
+                          }
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Balans: kunlik snapshot va daftar qoldig'i",
+        "tags": [
+          "Finance"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
+        ]
+      }
+    },
     "/finance/cashbox/spend": {
       "patch": {
         "description": "Elchi Pochta №1 — `expense_category_id` MAJBURIY (`GET /finance/cashbox/expense-categories`, raqamli satr): yo'q/bo'sh/raqam emas → 400 «Xarajat kategoriyasini tanlang»; mavjud va o'chirilmagan bo'lishi shart (aks holda 400). `comment` ixtiyoriy. `data.history` va kassa tarixi qatorlarida `expense_category_id` + `expense_category_name` (snapshot).",
@@ -9103,6 +9309,235 @@
         ]
       }
     },
+    "/finance/history/daily": {
+      "get": {
+        "description": "qzjTMWPb. Toshkent kunlari bo'yicha `days[]`: `income`, `expense`, `net`, `income_count`, `expense_count` (cashbox_history'dan jonli, filtrlar bilan — /finance/history bilan bir xil filtr ma'nosi) va `opening_balance` / `closing_balance` (kassa doirasining kun boshi/oxiri qoldig'i — manba/tur/yaratgan filtriga BOG'LIQ EMAS). `opening_balance` (davr boshi) = `from_date` dan oldingi kun oxiri; `closing_balance` = oxirgi o'tgan kun yoki bugun (jonli). Kelajak kunlari qoldig'i `null`. `balance_status`: `ok`; `pending` — kunlik snapshot hali qurilmagan (deploydan keyingi birinchi daqiqalar) — qoldiqlar `null`, oqimlar bor; `partial` — snapshot orqada (catch-up davom etyapti). «Kechaga nisbatan» = bugungi `closing_balance` − kechagi `closing_balance`. Sukut oraliq — oxirgi 14 kun; ko'pi bilan 366 kun.",
+        "operationId": "FinanceGatewayController_historyDaily",
+        "parameters": [
+          {
+            "name": "from_date",
+            "required": false,
+            "in": "query",
+            "description": "Toshkent kuni (YYYY-MM-DD). Berilmasa — to_date dan 13 kun oldin (oxirgi 14 kun). Oraliq ≤ 366 kun.",
+            "schema": {
+              "example": "2026-10-01",
+              "type": "string"
+            }
+          },
+          {
+            "name": "to_date",
+            "required": false,
+            "in": "query",
+            "description": "Toshkent kuni (YYYY-MM-DD). Berilmasa — bugun.",
+            "schema": {
+              "example": "2026-10-08",
+              "type": "string"
+            }
+          },
+          {
+            "name": "fromDate",
+            "required": false,
+            "in": "query",
+            "description": "from_date aliasi",
+            "schema": {
+              "example": "2026-10-01",
+              "type": "string"
+            }
+          },
+          {
+            "name": "toDate",
+            "required": false,
+            "in": "query",
+            "description": "to_date aliasi",
+            "schema": {
+              "example": "2026-10-08",
+              "type": "string"
+            }
+          },
+          {
+            "name": "cashbox_id",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "example": "1001",
+              "type": "string"
+            }
+          },
+          {
+            "name": "user_id",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "example": "12345",
+              "type": "string"
+            }
+          },
+          {
+            "name": "cashbox_type",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "main",
+                "couriers",
+                "markets",
+                "branch"
+              ]
+            }
+          },
+          {
+            "name": "cashboxType",
+            "required": false,
+            "in": "query",
+            "description": "cashbox_type aliasi",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "main",
+                "couriers",
+                "markets",
+                "branch"
+              ]
+            }
+          },
+          {
+            "name": "operation_type",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "income",
+                "expense"
+              ]
+            }
+          },
+          {
+            "name": "source_type",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "courier_payment",
+                "branch_to_main",
+                "market_payment",
+                "manual_expense",
+                "manual_income",
+                "correction",
+                "salary",
+                "sell",
+                "cancel",
+                "extra_cost",
+                "bills"
+              ]
+            }
+          },
+          {
+            "name": "source_types",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "example": "courier_payment,market_payment",
+              "type": "string"
+            }
+          },
+          {
+            "name": "sourceTypes",
+            "required": false,
+            "in": "query",
+            "description": "source_types aliasi",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "source_user_id",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "example": "555",
+              "type": "string"
+            }
+          },
+          {
+            "name": "created_by",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "example": "999",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "example": {
+                    "statusCode": 200,
+                    "message": "Kunlik kirim/chiqim",
+                    "data": {
+                      "timezone": "Asia/Tashkent",
+                      "from": "2026-10-01",
+                      "to": "2026-10-08",
+                      "scope": {
+                        "cashbox_type": "main",
+                        "cashbox_ids": null
+                      },
+                      "filtered": false,
+                      "balance_status": "ok",
+                      "last_snapshot_date": "2026-10-07",
+                      "opening_balance": 7507000,
+                      "closing_balance": 24615000,
+                      "totals": {
+                        "income": 41260000,
+                        "expense": 23940000,
+                        "net": 17320000,
+                        "income_count": 71,
+                        "expense_count": 57
+                      },
+                      "days": [
+                        {
+                          "date": "2026-10-08",
+                          "income": 6970000,
+                          "expense": 2400000,
+                          "net": 4570000,
+                          "income_count": 9,
+                          "expense_count": 3,
+                          "opening_balance": 20045000,
+                          "closing_balance": 24615000
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Kassa: kunlik kirim/chiqim va kun boshi/oxiri qoldig'i",
+        "tags": [
+          "Finance"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "registrator",
+          "manager",
+          "courier",
+          "market"
+        ]
+      }
+    },
     "/finance/history/{id}": {
       "get": {
         "operationId": "FinanceGatewayController_findHistoryById",
@@ -9217,7 +9652,7 @@
     },
     "/finance/shift/account-photo": {
       "post": {
-        "description": "`photo` — jpeg / png / webp, ≤ 5 MB, haqiqiy turi magic-bytes bilan tekshiriladi, EXIF/XMP tozalanadi, shaxsiy (private) saqlanadi. Faqat OCHIQ smena; menejer — o'z filiali kassasi kartasi, registrator — asosiy kassa. Javob: `data.check` (qoralama qatori, `ai_status`), `data.photo_url` (qisqa muddatli imzolangan havola, 300 s). AI yoqilgan kartada (`shift.ai_check.enabled` + karta `ai_check_enabled`) `ai_status = pending`; natija realtime `finance.shift.account_checked` bilan keladi.",
+        "description": "`photo` — jpeg / png / webp, ≤ 5 MB, haqiqiy turi magic-bytes bilan tekshiriladi, EXIF/XMP tozalanadi, shaxsiy (private) saqlanadi. Faqat OCHIQ smena; menejer — o'z filiali kassasi kartasi, registrator — asosiy kassa. Javob: `data.check` (qoralama qatori, `ai_status`), `data.photo_url` — brauzer to'g'ridan-to'g'ri ochadigan qisqa muddatli havola, 300 s: `https://<api>/files/signed/<token>` (gateway orqali; MinIO ichki manzili emas, JWT shart emas). AI yoqilgan kartada (`shift.ai_check.enabled` + karta `ai_check_enabled`) `ai_status = pending`; natija realtime `finance.shift.account_checked` bilan keladi.",
         "operationId": "FinanceGatewayController_uploadShiftAccountPhoto",
         "parameters": [],
         "requestBody": {
@@ -9324,7 +9759,7 @@
     },
     "/finance/shift/{id}/report": {
       "get": {
-        "description": "`data.cash` / `data.card` — ochilish, kirim, chiqim, kutilgan, sanalgan, farq; `data.accounts[]` — har karta: kutilgan (snapshot), kiritilgan, farq, `ai_status` (not_required | pending | match | mismatch | unreadable | disabled | error), `ai_entered_ok`, `ai_read_balance`, `ai_last4_detected`, `comment`, `comment_required`, `photo_url` (imzolangan, 300 s); `ai_raw` — faqat superadmin. `data.accounts_summary` — holatlar soni; `data.operations[]` — smena oynasidagi kassa operatsiyalari (tur × to'lov usuli: soni, summa). Menejer — faqat o'z filiali, registrator — asosiy kassa (boshqasi 404).",
+        "description": "(y8Tqm9Ap / gWI4gYkw) `data.close_reason` (manual | auto | null — ochiq), `data.closed_by_system`, `data.auto_close` (`{ closed_at, label: 'Avtomatik yopildi — HH:MM, kassir yopmagan' }` yoki null — sariq banner), `data.report` (`status`: pending | processing | sent | skipped | failed, `round`, `file_format`, `has_file`, `file_url` — faqat superadmin, 300 s), `data.deliveries[]` — «Hisobot kimlarga yuborildi» (faqat superadmin; boshqalarga bo'sh). `data.cash` / `data.card` — ochilish, kirim, chiqim, kutilgan, sanalgan, farq; `data.accounts[]` — har karta: kutilgan (snapshot), kiritilgan, farq, `ai_status` (not_required | pending | match | mismatch | unreadable | disabled | error), `ai_entered_ok`, `ai_read_balance`, `ai_last4_detected`, `comment`, `comment_required`, `photo_url` (gateway havolasi `…/files/signed/<token>`, 300 s); `ai_raw` — faqat superadmin. `data.accounts_summary` — holatlar soni; `data.operations[]` — smena oynasidagi kassa operatsiyalari (tur × to'lov usuli: soni, summa). Menejer — faqat o'z filiali, registrator — asosiy kassa (boshqasi 404).",
         "operationId": "FinanceGatewayController_shiftReport",
         "parameters": [
           {
@@ -9356,6 +9791,40 @@
           "admin",
           "registrator",
           "manager"
+        ]
+      }
+    },
+    "/finance/shift/{id}/report/resend": {
+      "post": {
+        "description": "Yangi raund: superadmin(lar)ga to'liq hisobot (+ PDF/XLSX), kuryerlarga faqat o'z topshiruvlari, marketlarga faqat o'z to'lovlari (sozlamadagi kanallar bo'yicha). Javob: `data.round`, `data.status` (sent | skipped), `data.deliveries[]` (recipient_kind, channel, status: queued | sent | failed | skipped, failed_reason — masalan «Telegram ulanmagan»). Ochiq smena — 400; hozir yuborilayotgan — 400.",
+        "operationId": "FinanceGatewayController_resendShiftReport",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Smena ID si (yopilgan)",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "(gWI4gYkw) Smena hisobotini qayta yuborish — FAQAT superadmin",
+        "tags": [
+          "Finance"
+        ],
+        "x-roles": [
+          "superadmin"
         ]
       }
     },
@@ -17100,6 +17569,7 @@
     },
     "/files/upload": {
       "post": {
+        "description": "Limit: rasm/PDF/XLSX ≤ 10 MB, video (mp4/mov/webm) ≤ 20 MB — oshsa 413.\nPapka (`folder`) — oq ro'yxat; berilmasa `uploads`. Ro'yxatda yo'q papka yoki rolga ruxsat etilmagan papka — 403:\n- `proof` — superadmin, admin, manager, courier (buyurtma isboti (maxfiy `proof-` kaliti))\n- `uploads` — superadmin, admin (`folder` berilmaganda (sukut))\n- `products` — superadmin, admin (ommaviy katalog rasmi (`products-` kaliti ochiq ko‘rinadi); faqat image/png, image/jpeg, image/jpg)",
         "operationId": "FileGatewayController_uploadFile",
         "parameters": [],
         "requestBody": {
@@ -17115,7 +17585,13 @@
                   },
                   "folder": {
                     "type": "string",
-                    "example": "uploads"
+                    "enum": [
+                      "proof",
+                      "uploads",
+                      "products"
+                    ],
+                    "default": "uploads",
+                    "example": "proof"
                   }
                 },
                 "required": [
@@ -17127,7 +17603,13 @@
         },
         "responses": {
           "201": {
-            "description": ""
+            "description": "Fayl yuklandi"
+          },
+          "403": {
+            "description": "Rolga ruxsat yo'q yoki papka oq ro'yxatda emas"
+          },
+          "413": {
+            "description": "Fayl limitdan katta (rasm/PDF/XLSX 10 MB, video 20 MB)"
           }
         },
         "security": [
@@ -17139,7 +17621,12 @@
         "tags": [
           "File"
         ],
-        "x-roles": null
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "manager",
+          "courier"
+        ]
       }
     },
     "/files/{key}": {
@@ -17276,6 +17763,38 @@
         "x-roles": null
       }
     },
+    "/files/signed/{token}": {
+      "get": {
+        "description": "Smena karta qoldig'i rasmi yoki smena hisoboti fayli. Havola smena endpoint'laridan `photo_url` / `file_url` sifatida tayyor keladi (300 s) — frontend uni o'zi yasamaydi. JWT shart emas (oddiy `<a href>`); token yaroqsiz yoki muddati o'tgan → 403.",
+        "operationId": "FileGatewayController_getSignedFileContent",
+        "parameters": [
+          {
+            "name": "token",
+            "required": true,
+            "in": "path",
+            "description": "Opaque short-lived link token",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "403": {
+            "description": "Havola yaroqsiz yoki muddati o'tgan"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "(kiZgTybn) Open a short-lived gateway-signed shift file link",
+        "tags": [
+          "File"
+        ],
+        "x-roles": null
+      }
+    },
     "/files/qr": {
       "post": {
         "operationId": "FileGatewayController_generateQr",
@@ -17304,7 +17823,11 @@
         "tags": [
           "File"
         ],
-        "x-roles": null
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "manager"
+        ]
       }
     },
     "/files/pdf": {
@@ -17335,7 +17858,11 @@
         "tags": [
           "File"
         ],
-        "x-roles": null
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "manager"
+        ]
       }
     },
     "/scan/{token}": {
@@ -19605,6 +20132,203 @@
         "x-roles": [
           "superadmin",
           "admin"
+        ]
+      }
+    },
+    "/ai/assistant/messages": {
+      "post": {
+        "description": "Javob `text/event-stream`: `event: meta` {conversation_id, message_id, model, max_steps} → `step` {step} → `delta` {step, text} (oraliq matn) → `tool_call` {step, id, tool, input} → `tool_result` {step, id, tool, ok, records, period, truncated} → … → `done` {conversation_id, message_id, answer, stop, steps, sources[], usage{input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, cost_usd}, limits{daily_limit, used_today, remaining_today}} yoki `error` {code, message, conversation_id?, reset_at?}. Har 15 s `: ping` izohi. SSE ochilishidan OLDIN: rol/ruxsat yo‘q → 403, funksiya o‘chiq → 503, kunlik limit tugagan → 429. Yakuniy matn — faqat `done.answer`.",
+        "operationId": "AiAssistantGatewayController_postMessage",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AiAssistantMessageDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "AI moliyaviy yordamchiga savol (SSE oqimi)",
+        "tags": [
+          "AI"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
+        ]
+      }
+    },
+    "/ai/assistant/conversations": {
+      "get": {
+        "description": "`data` = {items[{id, title, turns, last_message_at, created_at, cost_usd}], total, limit, offset}. Ruxsatsiz admin — 403.",
+        "operationId": "AiAssistantGatewayController_conversations",
+        "parameters": [
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20,
+              "type": "number"
+            }
+          },
+          {
+            "name": "offset",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 0,
+              "default": 0,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "AI yordamchi: o‘z suhbatlarim (yangisi birinchi)",
+        "tags": [
+          "AI"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
+        ]
+      }
+    },
+    "/ai/assistant/conversations/{id}": {
+      "get": {
+        "description": "`data` = {id, title, turns, created_at, last_message_at, cost_usd, messages[{id, role: user|assistant, text, created_at, sources?[{tool, period, records, truncated, ok}], stop?}]}. Begona/yo‘q — 404.",
+        "operationId": "AiAssistantGatewayController_conversation",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "AI yordamchi: suhbat xabarlari (faqat o‘ziniki)",
+        "tags": [
+          "AI"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
+        ]
+      }
+    },
+    "/ai/assistant/access/me": {
+      "get": {
+        "description": "`data` = {allowed, reason: null|role_forbidden|access_disabled|feature_disabled|ai_disabled, feature_enabled, daily_limit, used_today, remaining_today, reset_at}.",
+        "operationId": "AiAssistantGatewayController_me",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "AI yordamchi: mening holatim (menyuni ko‘rsatish, limit)",
+        "tags": [
+          "AI"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
+        ]
+      }
+    },
+    "/ai/assistant/access": {
+      "get": {
+        "description": "`data` = {feature_enabled, default_daily_limit, model, items[{user_id, enabled, daily_limit, effective_daily_limit, updated_by, updated_at}]}. Adminlar ro‘yxati — mavjud `GET /admins` dan.",
+        "operationId": "AiAssistantGatewayController_listAccess",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Ruxsatlar ro‘yxati"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "AI yordamchi ruxsatlari (faqat superadmin)",
+        "tags": [
+          "AI"
+        ],
+        "x-roles": [
+          "superadmin"
+        ]
+      },
+      "patch": {
+        "description": "Faqat ADMIN rolli foydalanuvchiga (boshqa rol — 400, topilmasa — 404). Superadmin ruxsatsiz ham doim foydalanadi. `daily_limit: null` — sukut (100).",
+        "operationId": "AiAssistantGatewayController_updateAccess",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AiAssistantAccessUpdateDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "AI yordamchi ruxsatini berish/olish va kunlik limit (faqat superadmin)",
+        "tags": [
+          "AI"
+        ],
+        "x-roles": [
+          "superadmin"
         ]
       }
     },
@@ -21955,6 +22679,11 @@
             "type": "boolean",
             "example": true,
             "description": "Market «Ombordan buyurtma yaratish» kaliti (sukut false). Faqat SUPERADMIN/ADMIN, faqat market."
+          },
+          "weight_volume_pricing": {
+            "type": "boolean",
+            "example": true,
+            "description": "(KmWO9gTA) Market «Vazn va hajm bo'yicha narx» kaliti (sukut true). FALSE — sotuvda faqat standart narx (tariff_home/tariff_center), vazn/hajm qo'shimchasiz. Faqat SUPERADMIN/ADMIN, faqat market."
           }
         }
       },
@@ -22025,12 +22754,17 @@
           "tariff_home": {
             "type": "number",
             "example": 10000,
-            "description": "Optional, default is 0"
+            "description": "(KmWO9gTA) Standart uy narxi — LEGACY, ixtiyoriy. Berilmasa NULL (0 emas); sotuvda dvigatel yoqilganda baza tarif jadvalidan olinadi."
           },
           "tariff_center": {
             "type": "number",
             "example": 8000,
-            "description": "Optional, default is 0"
+            "description": "(KmWO9gTA) Standart markaz narxi — LEGACY, ixtiyoriy. Berilmasa NULL (0 emas)."
+          },
+          "weight_volume_pricing": {
+            "type": "boolean",
+            "example": true,
+            "description": "(KmWO9gTA) «Vazn va hajm bo'yicha narx» (sukut true). Faqat SUPERADMIN/ADMIN (menejer — 403)."
           },
           "default_tariff": {
             "type": "string",
@@ -25640,6 +26374,91 @@
           "card_id"
         ]
       },
+      "ShiftAutoCloseSettingsRequestDto": {
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "example": true,
+            "description": "`shift.auto_close.enabled` (sukut false). O'chiq — hech bir smena avtomatik yopilmaydi"
+          },
+          "times": {
+            "example": [
+              "14:00",
+              "23:00"
+            ],
+            "description": "`shift.auto_close.times` — kuniga N marta, Toshkent vaqti `HH:MM` (1–12 ta; takrorlar olib tashlanadi, tartiblanadi). Sukut ['23:00']",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "scope": {
+            "type": "string",
+            "example": "main",
+            "enum": [
+              "main",
+              "main+branches"
+            ],
+            "description": "`shift.auto_close.scope`: `main` — faqat asosiy kassa smenasi (sukut), `main+branches` — filial kassalari ham"
+          },
+          "warn_before_min": {
+            "type": "number",
+            "example": 15,
+            "description": "`shift.auto_close.warn_before_min` (sukut 15; 0 — ogohlantirishsiz): smenani ochgan xodimga yopishdan N daqiqa oldin in-app + Telegram"
+          }
+        }
+      },
+      "ShiftReportChannelsRequestDto": {
+        "type": "object",
+        "properties": {
+          "telegram": {
+            "type": "boolean",
+            "example": true
+          },
+          "in_app": {
+            "type": "boolean",
+            "example": true,
+            "description": "Tizim (ichki bildirishnoma)"
+          }
+        }
+      },
+      "ShiftReportRecipientsRequestDto": {
+        "type": "object",
+        "properties": {
+          "superadmin": {
+            "$ref": "#/components/schemas/ShiftReportChannelsRequestDto"
+          },
+          "couriers": {
+            "$ref": "#/components/schemas/ShiftReportChannelsRequestDto"
+          },
+          "markets": {
+            "$ref": "#/components/schemas/ShiftReportChannelsRequestDto"
+          }
+        }
+      },
+      "ShiftReportSettingsRequestDto": {
+        "type": "object",
+        "properties": {
+          "recipients": {
+            "description": "`shift.report.recipients` — superadmin / couriers / markets × telegram / in_app (sukut — hammasi false: hisobot yuborish O'CHIQ, superadmin yoqadi)",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ShiftReportRecipientsRequestDto"
+              }
+            ]
+          },
+          "format": {
+            "type": "string",
+            "example": "pdf",
+            "enum": [
+              "pdf",
+              "xlsx"
+            ],
+            "description": "`shift.report.format` — superadmin ilovasi (sukut pdf)"
+          }
+        }
+      },
       "UpdateShiftSettingsRequestDto": {
         "type": "object",
         "properties": {
@@ -25663,6 +26482,22 @@
             "items": {
               "$ref": "#/components/schemas/ShiftCardSettingRequestDto"
             }
+          },
+          "auto_close": {
+            "description": "(y8Tqm9Ap) Avtomatik yopish jadvali",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ShiftAutoCloseSettingsRequestDto"
+              }
+            ]
+          },
+          "report": {
+            "description": "(gWI4gYkw) Hisobot qabul qiluvchilari, kanallar va format",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ShiftReportSettingsRequestDto"
+              }
+            ]
           }
         }
       },
@@ -29795,6 +30630,50 @@
           "reason"
         ]
       },
+      "AiAssistantMessageDto": {
+        "type": "object",
+        "properties": {
+          "message": {
+            "type": "string",
+            "description": "Savol matni (1..2000 belgi)",
+            "example": "Bu oy kassaga qancha kirdi va eng katta chiqimlar qaysilar?"
+          },
+          "conversation_id": {
+            "type": "string",
+            "description": "Davom ettiriladigan suhbat ID si (yo‘q — yangi suhbat). Faqat o‘zingizniki.",
+            "example": "12"
+          }
+        },
+        "required": [
+          "message"
+        ]
+      },
+      "AiAssistantAccessUpdateDto": {
+        "type": "object",
+        "properties": {
+          "user_id": {
+            "type": "string",
+            "description": "ADMIN foydalanuvchi ID si",
+            "example": "25"
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "Yordamchidan foydalanish ruxsati"
+          },
+          "daily_limit": {
+            "type": "object",
+            "description": "Kunlik savol limiti (Toshkent kuni). `null` — sukut (AI_ASSISTANT_DAILY_LIMIT, 100).",
+            "nullable": true,
+            "minimum": 0,
+            "maximum": 10000,
+            "example": 100
+          }
+        },
+        "required": [
+          "user_id",
+          "enabled"
+        ]
+      },
       "CreateMarketOperatorRequestDto": {
         "type": "object",
         "properties": {
@@ -30498,6 +31377,18 @@
             "type": "number",
             "example": 1.4
           },
+          "min_delivery_price": {
+            "type": "number",
+            "example": null,
+            "nullable": true,
+            "description": "(KmWO9gTA) DARVOZA 1 minimal narxi; null — faqat ulushlar"
+          },
+          "extra_cost_limit_amount": {
+            "type": "number",
+            "example": null,
+            "nullable": true,
+            "description": "(KmWO9gTA) DARVOZA 2 aniq chegarasi; null — address.base − center.base"
+          },
           "is_active": {
             "type": "boolean"
           },
@@ -30522,6 +31413,8 @@
           "pickup_fee",
           "pickup_free_from_count",
           "express_multiplier",
+          "min_delivery_price",
+          "extra_cost_limit_amount",
           "is_active",
           "created_by"
         ]
@@ -30608,6 +31501,20 @@
             "minimum": 1,
             "example": 1.4,
             "description": "Tezkor yetkazish ko`paytiruvchisi (1.4 → subtotal × 0.4 ustama)."
+          },
+          "min_delivery_price": {
+            "type": "number",
+            "minimum": 0,
+            "nullable": true,
+            "example": 25000,
+            "description": "(KmWO9gTA) DARVOZA 1 — sotuvda dvigatel hisoblagan market tarifi shundan (va kuryer + filial ulushidan) past bo'lsa shu qiymatga ko'tariladi. null — faqat ulushlar. Faqat SALE_PRICING_ENGINE yoqilganda ishlaydi."
+          },
+          "extra_cost_limit_amount": {
+            "type": "number",
+            "minimum": 0,
+            "nullable": true,
+            "example": 20000,
+            "description": "(KmWO9gTA) DARVOZA 2 — dvigatel yoqilgan sotuvda kuryer qo'shimcha xarajatining aniq chegarasi, so'm. null — tarif jadvalidagi `address.base − center.base` (teng bo'lsa center.base ning 50%i)."
           }
         }
       },

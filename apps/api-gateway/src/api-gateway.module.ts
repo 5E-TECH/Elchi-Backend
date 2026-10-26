@@ -58,6 +58,7 @@ import { AuditGatewayController } from './audit-gateway.controller';
 import { AuditEnrichmentService } from './audit/audit-enrichment.service';
 import { AiGatewayController } from './ai-gateway.controller';
 import { AiUsageGatewayController } from './ai-usage-gateway.controller';
+import { AiAssistantGatewayController } from './ai-assistant-gateway.controller';
 import { MarketOperatorGatewayController } from './market-operator-gateway.controller';
 import { CustomerGatewayController } from './customer-gateway.controller';
 import { DeliveryPricingGatewayController } from './delivery-pricing-gateway.controller';
@@ -68,6 +69,7 @@ import { AiStatusPoller } from './ai/ai-status.poller';
 // (KwodkKWY) POST /csp-report — brauzer CSP buzilish hisobotlari (@Public).
 import { CspReportController } from './csp-report/csp-report.controller';
 import type { StringValue } from 'ms';
+import { AI_IMAGE_STORE, AiImageStore } from '@app/common/ai/ai-image-store';
 
 @Module({
   imports: [
@@ -155,6 +157,8 @@ import type { StringValue } from 'ms';
     AiGatewayController,
     // Celz3rKJ: "Moliyaviy balans → AI xarajat" paneli (/ai-usage/*).
     AiUsageGatewayController,
+    // F7PWp6cK — AI moliyaviy yordamchi (SSE).
+    AiAssistantGatewayController,
     // i76gGjyq: market o'z operatorlarini boshqaradi (/market-operators).
     MarketOperatorGatewayController,
     // hiqRNhkI: GET /customers/suggest — telefon bo'yicha mijoz taklifi.
@@ -199,6 +203,13 @@ import type { StringValue } from 'ms';
     TelegramIdThrottlerGuard,
     // /health va ai-availability uchun AI holati keshi (30s so'rov, RMQ kutilmaydi).
     AiStatusPoller,
+    // WHMAIqyo #3: ai-parse rasmlari uchun vaqtinchalik saqlov (MinIO, TTL
+    // 1 soat); MINIO_* yo'q bo'lsa null — base64 yo'li.
+    {
+      provide: AI_IMAGE_STORE,
+      inject: [ConfigService],
+      useFactory: (config: ConfigService) => AiImageStore.fromConfig(config),
+    },
     RealtimeGateway,
     AuditEnrichmentService,
     // 4BftLLnc — logistning o'z viloyatlari (regions.logist_id = me), qisqa

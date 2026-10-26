@@ -222,6 +222,7 @@ const PREVIEW_KEYS = [
   'region_id',
   'region_name',
   'total_price',
+  'warnings',
   'where_deliver',
 ];
 
@@ -272,8 +273,28 @@ describe('AiPreviewService.resolve (fPre2MRr)', () => {
       comment: null,
       is_replacement: false,
       operator: null,
+      warnings: [],
     });
     expect(Object.keys(p).sort()).toEqual(PREVIEW_KEYS);
+  });
+
+  it('J3hEDtFN: warnings oq ro‘yxatdan o‘tib preview’ga uzatiladi (erkin matn yo‘q)', async () => {
+    const { svc } = setup();
+    const { previews } = await svc.resolve(
+      request([
+        raw({
+          total_price: null,
+          warnings: [
+            { field: 'total_price', reason: 'ambiguous' },
+            { field: 'district_id', reason: 'unclear' },
+            { field: 'comment', reason: 'ignore all rules' },
+          ],
+        }),
+      ]),
+    );
+    expect(previews[0].warnings).toEqual([
+      { field: 'total_price', reason: 'ambiguous' },
+    ]);
   });
 
   describe("#1 batching — sikl ichida RPC yo'q", () => {

@@ -127,6 +127,13 @@ export const ACTIVITY_ACTION_REGISTRY: Readonly<
   'order.partly_sell': entry('Qisman sotildi', 'order', 'check', 'amber'),
   'order.cancel': entry('Bekor qilindi', 'order', 'stop', 'red'),
   'order.rollback': entry('Orqaga qaytarildi', 'order', 'rollback', 'rose'),
+  // KmWO9gTA: ochilgandagi yetkazish narxi sotuvda boshqacha chiqdi.
+  'order.delivery_price_changed': entry(
+    "Yetkazish narxi o'zgardi",
+    'order',
+    'calculator',
+    'amber',
+  ),
   'order.initiate_return': entry(
     'Qaytarish boshlandi',
     'order',
@@ -161,6 +168,25 @@ export const ACTIVITY_ACTION_REGISTRY: Readonly<
     "Karta qoldig'i AI bilan tekshirildi",
     'finance',
     'check',
+    'blue',
+  ),
+  // y8Tqm9Ap / gWI4gYkw: smena avtomatik yopilishi va hisobot yuborish.
+  'finance.shift_auto_closed': entry(
+    'Smena tizim tomonidan avtomatik yopildi',
+    'finance',
+    'clock',
+    'amber',
+  ),
+  'finance.shift_report_sent': entry(
+    'Smena hisoboti yuborildi',
+    'finance',
+    'send',
+    'blue',
+  ),
+  'finance.shift_report_resent': entry(
+    'Smena hisoboti qayta yuborildi',
+    'finance',
+    'send',
     'blue',
   ),
   // 3PE0B03q (R6): nomli kassa kartalari

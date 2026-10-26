@@ -24,16 +24,19 @@ import { PRODUCT_DISAMBIG_SCHEMA } from './product-disambiguate.schema';
  * Shuning uchun quyidagi sha256 qiymatlari QO'LDA qulflangan.
  *
  * Bu test qizarsa: o'zgarish ATAYLAB bo'lsa, u ALOHIDA karta bilan qilinadi —
- * yangi hash shu yerga yoziladi, ORDER_EXTRACT_PROMPT_VERSION oshiriladi va
- * `scripts/ai-extract-eval.ts` jonli eval'i (ega roziligi bilan) qayta
- * o'tkaziladi. Tasodifiy o'zgarish bo'lsa — qaytaring.
+ * yangi hash shu yerga yoziladi, ORDER_EXTRACT_PROMPT_VERSION oshiriladi,
+ * `npm run ai:eval -- --ci` (replay, CI) o'tadi va jonli eval
+ * (`npm run ai:eval -- --live --yes --record`, ega roziligi bilan) qayta
+ * yoziladi. Tasodifiy o'zgarish bo'lsa — qaytaring.
  */
 const LOCKED = {
-  ORDER_EXTRACT_PROMPT_VERSION: '2026-09-27.1',
+  // J3hEDtFN (2026-10-26.1): xato to'plami qoidalari, 8-misol, anyOf
+  // nullable, warnings[].
+  ORDER_EXTRACT_PROMPT_VERSION: '2026-10-26.1',
   ORDER_EXTRACT_SYSTEM:
-    '33988f408097a6f30b4148f03125f20403029dfa983166fc98616620d3ea8492',
+    'c749e7ae493a2c61135334bbab354f63b070b1437c1638f8d243c950e811ffa2',
   ORDER_EXTRACT_SCHEMA:
-    '38e2f7424c7da20bf8282df186bcda6ba6879313d68d298ca0f46536aa583ea2',
+    '45777b5c1fbedb1491ff65a3243f3dd25eb403dc8f920d6573622183f0b3a8e8',
   PRODUCT_DISAMBIG_SYSTEM:
     'c2d12f1d7e514955261fa657725871a73c1b416d30aa8b4ad0ca1677ad5be4ab',
   PRODUCT_DISAMBIG_SCHEMA:

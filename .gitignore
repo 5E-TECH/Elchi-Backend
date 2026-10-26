@@ -41,6 +41,11 @@ lerna-debug.log*
 .env.test.local
 .env.production
 .env.local
+# Staging server env (docs/ops/staging.md) — secrets; only the template
+# .env.staging.example is committed.
+.env.staging
+.env.staging.*
+!.env.staging.example
 # Secret-rotation temp files (never commit): .env.production.new, .env.production.bak.*
 .env.production.*
 .env.*.bak
@@ -79,3 +84,7 @@ tests/load/capacity-summary.json
 # Claude Code agent worktree'lari (lokal git worktree — commit qilinmaydi;
 # gitlink bo'lib tushsa CI checkout cleanup'da "No url found for submodule")
 .claude/worktrees/
+
+# (bVuDHPFR) Tasodifan commit qilingan pager/terminal chiqishi (5c848dc) —
+# o'chirildi; qayta tushmasin.
+/ithdefault

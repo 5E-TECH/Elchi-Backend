@@ -226,4 +226,39 @@ export class TelegramDmDeliveryReportService {
       }),
     );
   }
+
+  /**
+   * (gWI4gYkw) Smena hisoboti yetkazish holati: `dispatch_id` lar (finance
+   * deterministik `client_request_id` si) bo'yicha qatorlarning `delivery`
+   * JSONB'i. Faqat o'qish; matn / sarlavha / data QAYTARILMAYDI.
+   */
+  async byDispatch(input: { dispatch_ids?: unknown }) {
+    const ids = (Array.isArray(input?.dispatch_ids) ? input.dispatch_ids : [])
+      .map((id) => (typeof id === 'string' ? id.trim().toLowerCase() : ''))
+      .filter((id) =>
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(
+          id,
+        ),
+      )
+      .slice(0, 500);
+    if (!ids.length) return successRes([]);
+    const rows = await this.notifications
+      .createQueryBuilder('n')
+      .select('n.dispatch_id', 'dispatch_id')
+      .addSelect('n.recipient_id', 'recipient_id')
+      .addSelect('n.delivery', 'delivery')
+      .where('n.dispatch_id IN (:...ids)', { ids })
+      .getRawMany<{
+        dispatch_id: string;
+        recipient_id: string;
+        delivery: Record<string, unknown> | null;
+      }>();
+    return successRes(
+      rows.map((row) => ({
+        dispatch_id: String(row.dispatch_id),
+        recipient_id: String(row.recipient_id),
+        delivery: row.delivery ?? {},
+      })),
+    );
+  }
 }

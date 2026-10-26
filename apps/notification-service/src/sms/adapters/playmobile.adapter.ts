@@ -7,6 +7,7 @@ import {
   SmsSendResult,
 } from '../sms.port';
 import { asText } from '../sms-phone.util';
+import { assertSmsAllowedInEnv } from '../sms-staging.guard';
 
 export interface PlayMobileCredentials {
   login: string;
@@ -43,6 +44,8 @@ export class PlayMobileAdapter implements SmsPort {
   ) {}
 
   async send(input: SmsSendInput): Promise<SmsSendResult> {
+    // (staging-safe) staging'da allowlist'dan tashqariga HTTP so'rov YO'Q.
+    assertSmsAllowedInEnv(input.to);
     const messageId = input.clientMessageId.replace(/-/g, '').slice(0, 40);
     const auth = Buffer.from(
       `${this.credentials.login}:${this.credentials.password}`,

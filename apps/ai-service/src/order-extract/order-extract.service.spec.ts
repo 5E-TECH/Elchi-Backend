@@ -15,12 +15,17 @@ import {
 } from '../prompts/order-extract.prompt';
 import { ORDER_EXTRACT_SCHEMA } from '../prompts/order-extract.schema';
 import {
+  ORDER_EXTRACT_EFFORT,
   ORDER_EXTRACT_MAX_TOKENS,
   OrderExtractService,
+  chunkImages,
+  estimateOrderCount,
+  orderExtractMaxTokens,
 } from './order-extract.service';
 
-const TEXT_MODEL = 'test-order-model';
-const VISION_MODEL = 'test-vision-model';
+// Ikkalasi ham effort qabul qiladigan modellar (AI_LOW_EFFORT_MODELS).
+const TEXT_MODEL = 'claude-sonnet-5';
+const VISION_MODEL = 'claude-opus-5';
 
 function rawOrder(overrides: Record<string, unknown> = {}) {
   return {
@@ -37,6 +42,7 @@ function rawOrder(overrides: Record<string, unknown> = {}) {
     where_deliver: 'address',
     is_replacement: false,
     operator: null,
+    warnings: [],
     ...overrides,
   };
 }
@@ -103,15 +109,18 @@ describe('OrderExtractService', () => {
   });
 
   describe('model va feature tanlovi', () => {
-    it('faqat matn → AI_ORDER_MODEL, order_extract_multi, maxTokens 32000', async () => {
+    it('faqat matn → AI_ORDER_MODEL, order_extract_multi, effort low, max_tokens 1500+600×N', async () => {
       const req = baseReq();
       await service.extract(req, 1234);
       const opts = sentOptions();
       expect(opts.system).toBe(ORDER_EXTRACT_SYSTEM);
       expect(opts.schema).toBe(ORDER_EXTRACT_SCHEMA);
       expect(opts.model).toBe(TEXT_MODEL);
-      expect(opts.maxTokens).toBe(32000);
-      expect(ORDER_EXTRACT_MAX_TOKENS).toBe(32000);
+      // WHMAIqyo #1: bitta telefon → 1 buyurtma → 1500 + 600.
+      expect(opts.maxTokens).toBe(2100);
+      expect(opts.effort).toBe('low');
+      expect(ORDER_EXTRACT_EFFORT).toBe('low');
+      expect(ORDER_EXTRACT_MAX_TOKENS).toBe(16000);
       expect(opts.meta.feature).toBe('order_extract_multi');
       expect(opts.images).toEqual([]);
       expect(opts.deadlineAt).toBe(1234);
@@ -129,7 +138,9 @@ describe('OrderExtractService', () => {
       );
       const opts = sentOptions();
       expect(opts.model).toBe(VISION_MODEL);
-      expect(opts.maxTokens).toBe(32000);
+      // matn (1) + 2 rasm × 3 = 7 buyurtma → 1500 + 600 × 7.
+      expect(opts.maxTokens).toBe(5700);
+      expect(opts.effort).toBe('low');
       expect(opts.meta.feature).toBe('order_extract_image');
       expect(opts.images).toEqual([
         { mediaType: 'image/jpeg', dataBase64: 'QUJD' },
@@ -145,6 +156,35 @@ describe('OrderExtractService', () => {
         }),
       );
       expect(sentOptions().userText).toBe('');
+    });
+
+    it('effort faqat AI_LOW_EFFORT_MODELS dagi modelga (district-pick bilan bitta ro‘yxat) — Haiku 4.5 / Sonnet 4.6 / noma’lum modelda kalit YO‘Q', async () => {
+      for (const model of [
+        'claude-haiku-4-5',
+        'claude-sonnet-4-6',
+        'claude-haiku-4-5-20251001',
+        'test-order-model',
+      ]) {
+        extractJson.mockClear();
+        configValues = { AI_ORDER_MODEL: model, AI_ORDER_VISION_MODEL: model };
+        await service.extract(baseReq());
+        const opts = sentOptions();
+        expect(opts.model).toBe(model);
+        expect(opts).not.toHaveProperty('effort');
+        // max_tokens o'zgarmaydi (1 telefon → 1500 + 600).
+        expect(opts.maxTokens).toBe(2100);
+      }
+      // Sana qo'shimchali / katta harfli sonnet-5 — normallashtiriladi, effort bor.
+      for (const model of ['claude-sonnet-5-20260101', 'Claude-Fable-5']) {
+        extractJson.mockClear();
+        configValues = { AI_ORDER_MODEL: model, AI_ORDER_VISION_MODEL: model };
+        await service.extract(
+          baseReq({
+            images: [{ media_type: 'image/png', data_base64: 'QQ==' }],
+          }),
+        );
+        expect(sentOptions().effort).toBe('low');
+      }
     });
 
     it('env bo‘sh bo‘lsa AI_MODEL_DEFAULTS ishlatiladi', async () => {
@@ -401,6 +441,221 @@ describe('OrderExtractService', () => {
     expect(logged).not.toContain('Maxfiy');
     expect(logged).not.toContain('901234567');
     expect(logged).not.toContain('90 123 45 67');
+  });
+});
+
+describe('WHMAIqyo — max_tokens taxmini, bo‘laklash, birlashtirish', () => {
+  it('estimateOrderCount: telefon tokenlari / ro‘yxat / bo‘sh qator bloklari; rasm × 3; chegara 30', () => {
+    expect(estimateOrderCount('Ali [TEL_1] Asaka', 1, 0)).toBe(1);
+    expect(estimateOrderCount('1. a [TEL_1]\n2. b [TEL_2]\n3. c', 2, 0)).toBe(
+      3,
+    );
+    expect(estimateOrderCount('a\n\nb\n\nc\n\nd', 0, 0)).toBe(4);
+    expect(estimateOrderCount('', 0, 5)).toBe(15);
+    expect(estimateOrderCount('x', 0, 20)).toBe(AI_MAX_ORDERS_PER_PARSE);
+  });
+
+  it('orderExtractMaxTokens: 1500 + 600 × N, chegara 16000', () => {
+    expect(orderExtractMaxTokens(1)).toBe(2100);
+    expect(orderExtractMaxTokens(10)).toBe(7500);
+    expect(orderExtractMaxTokens(30)).toBe(16000);
+    expect(orderExtractMaxTokens(0)).toBe(2100);
+  });
+
+  it('chunkImages: 5 tadan, tartib saqlanadi', () => {
+    expect(chunkImages([1, 2, 3, 4, 5, 6, 7], 5)).toEqual([
+      [1, 2, 3, 4, 5],
+      [6, 7],
+    ]);
+    expect(chunkImages([], 5)).toEqual([]);
+  });
+
+  function build(results: unknown[]) {
+    const extractJson = jest.fn();
+    for (const r of results) extractJson.mockResolvedValueOnce(r);
+    const config = { get: jest.fn(() => undefined) };
+    const recordExtraction = jest.fn().mockResolvedValue(undefined);
+    const service = new OrderExtractService(
+      { extractJson } as unknown as ClaudeService,
+      config as unknown as ConfigService,
+      { recordExtraction } as unknown as AiDraftService,
+    );
+    return { service, extractJson, recordExtraction };
+  }
+
+  const images = (n: number) =>
+    Array.from({ length: n }, (_, i) => ({
+      media_type: 'image/jpeg' as const,
+      data_base64: `IMG${i}`,
+    }));
+
+  it('12 rasm → 3 bo‘lak (5/5/2) PARALLEL, matn faqat 1-bo‘lakda', async () => {
+    const { service, extractJson } = build([
+      okResult({ orders: [rawOrder()] }),
+      okResult({ orders: [rawOrder({ phone_number: '+998 91 000 22 33' })] }),
+      okResult({ orders: [] }),
+    ]);
+    const res = await service.extract(
+      baseReq({ text: 'Ali 90 123 45 67', images: images(12) }),
+    );
+    expect(extractJson).toHaveBeenCalledTimes(3);
+    const calls = extractJson.mock.calls.map((c) => c[0] as ExtractJsonOptions);
+    expect(calls.map((c) => (c.images ?? []).length)).toEqual([5, 5, 2]);
+    expect(calls[0].userText).toContain('[TEL_1]');
+    expect(calls[1].userText).toBe('');
+    expect(calls[2].userText).toBe('');
+    expect(calls.every((c) => c.effort === 'low')).toBe(true);
+    expect(calls.map((c) => c.maxTokens)).toEqual([
+      1500 + 600 * 16,
+      1500 + 600 * 15,
+      1500 + 600 * 6,
+    ]);
+    expect(calls.every((c) => c.meta.feature === 'order_extract_image')).toBe(
+      true,
+    );
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.orders).toHaveLength(2);
+  });
+
+  it('bo‘laklar orasidagi DUBLIKAT birlashtiriladi (bir telefon, bir tomonda mahsulot yo‘q)', async () => {
+    const { service } = build([
+      okResult({
+        orders: [rawOrder({ items: [], total_price: null, address: 'X 5-uy' })],
+      }),
+      okResult({ orders: [rawOrder({ phone_number: '90 123 45 67' })] }),
+    ]);
+    const res = await service.extract(
+      baseReq({ text: 'Ali 90 123 45 67', images: images(6) }),
+    );
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.orders).toHaveLength(1);
+    expect(res.orders[0]).toMatchObject({
+      address: 'X 5-uy',
+      total_price: 750000,
+      items: [{ name: 'atir', quantity: 3 }],
+    });
+  });
+
+  it('rasm-faqat bo‘lakda o‘ylab topilgan [TEL_1] matndagi raqamga aylanmaydi', async () => {
+    const { service } = build([
+      okResult({ orders: [] }),
+      okResult({ orders: [rawOrder({ customer_name: 'Vali' })] }),
+    ]);
+    const res = await service.extract(
+      baseReq({ text: 'Ali 90 123 45 67', images: images(6) }),
+    );
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.orders).toHaveLength(1);
+    expect(res.orders[0].customer_name).toBe('Vali');
+    expect(res.orders[0].phone_number).toBeNull();
+  });
+
+  it('bitta bo‘lak yiqilsa — butun parse yiqiladi (yarim natija berilmaydi)', async () => {
+    const { service, recordExtraction } = build([
+      okResult({ orders: [rawOrder()] }),
+      { ok: false, reason: 'network', attempts: 1 },
+    ]);
+    await expect(
+      service.extract(baseReq({ text: '', images: images(7) })),
+    ).resolves.toEqual({ ok: false, reason: 'network' });
+    expect(recordExtraction.mock.calls[0][0]).toMatchObject({
+      outcome: 'network',
+      rawExtraction: null,
+    });
+  });
+
+  it('audit yozuvi KUTILMAYDI (fire-and-forget) — javob recordExtraction tugashini kutmaydi', async () => {
+    const { service, recordExtraction } = build([
+      okResult({ orders: [rawOrder()] }),
+    ]);
+    recordExtraction.mockReturnValue(new Promise(() => {}));
+    const res = await service.extract(baseReq());
+    expect(res.ok).toBe(true);
+    expect(recordExtraction).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('WHMAIqyo #3 — image_refs (rasm RMQ’da base64 emas)', () => {
+  const DRAFT_ID = '0b9f7c3e-1d2a-4b5c-8d6e-7f8091a2b3c4';
+  function build(store: unknown) {
+    const extractJson = jest
+      .fn()
+      .mockResolvedValue(okResult({ orders: [rawOrder()] }));
+    const config = { get: jest.fn(() => undefined) };
+    const service = new OrderExtractService(
+      { extractJson } as unknown as ClaudeService,
+      config as unknown as ConfigService,
+      undefined,
+      store as never,
+    );
+    return { service, extractJson };
+  }
+  const refs = [
+    { key: `ai-tmp/${DRAFT_ID}/0.jpg`, media_type: 'image/jpeg' as const },
+    { key: `ai-tmp/${DRAFT_ID}/1.webp`, media_type: 'image/webp' as const },
+  ];
+
+  beforeEach(() => {
+    jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => {});
+  });
+  afterEach(() => jest.restoreAllMocks());
+
+  it('kalitlar saqlovdan o‘qiladi, Claude’ga rasm bo‘lib ketadi va DARHOL o‘chiriladi', async () => {
+    const store = {
+      getAll: jest.fn().mockResolvedValue([
+        { media_type: 'image/jpeg', data_base64: 'QUJD' },
+        { media_type: 'image/webp', data_base64: 'REVG' },
+      ]),
+      deleteAll: jest.fn().mockResolvedValue(undefined),
+    };
+    const { service, extractJson } = build(store);
+    const res = await service.extract(
+      baseReq({ text: '', images: [], image_refs: refs }),
+    );
+    expect(res.ok).toBe(true);
+    expect(store.getAll).toHaveBeenCalledWith(refs);
+    expect(store.deleteAll).toHaveBeenCalledWith(refs);
+    const opts = extractJson.mock.calls[0][0] as ExtractJsonOptions;
+    expect(opts.images).toEqual([
+      { mediaType: 'image/jpeg', dataBase64: 'QUJD' },
+      { mediaType: 'image/webp', dataBase64: 'REVG' },
+    ]);
+    expect(opts.meta.feature).toBe('order_extract_image');
+  });
+
+  it('begona kalit (boshqa draft / boshqa papka) → ai_error, saqlov O‘QILMAYDI', async () => {
+    const store = { getAll: jest.fn(), deleteAll: jest.fn() };
+    const { service, extractJson } = build(store);
+    await expect(
+      service.extract(
+        baseReq({
+          images: [],
+          image_refs: [{ key: 'products/1.jpg', media_type: 'image/jpeg' }],
+        }),
+      ),
+    ).resolves.toEqual({ ok: false, reason: 'ai_error' });
+    expect(store.getAll).not.toHaveBeenCalled();
+    expect(extractJson).not.toHaveBeenCalled();
+  });
+
+  it('saqlov sozlanmagan yoki o‘qib bo‘lmasa → ai_error (Claude chaqirilmaydi)', async () => {
+    const none = build(null);
+    await expect(
+      none.service.extract(baseReq({ images: [], image_refs: refs })),
+    ).resolves.toEqual({ ok: false, reason: 'ai_error' });
+    const failing = {
+      getAll: jest.fn().mockRejectedValue(new Error('NoSuchKey')),
+      deleteAll: jest.fn().mockResolvedValue(undefined),
+    };
+    const broken = build(failing);
+    await expect(
+      broken.service.extract(baseReq({ images: [], image_refs: refs })),
+    ).resolves.toEqual({ ok: false, reason: 'ai_error' });
+    expect(failing.deleteAll).toHaveBeenCalledWith(refs);
+    expect(broken.extractJson).not.toHaveBeenCalled();
   });
 });
 

@@ -1,0 +1,27 @@
+{
+  "id": "region-tashkent-viloyati",
+  "category": [
+    "region_explicit"
+  ],
+  "source": "synthetic",
+  "input": {
+    "text": "Elyor 95 000 39 40 Toshkent viloyati Chirchiq, plita 1 ta 2 mln"
+  },
+  "expected": {
+    "orders": [
+      {
+        "customer_name": "Elyor",
+        "phone_number": "+998950003940",
+        "region_name": "Toshkent viloyati",
+        "district_name": "Chirchiq",
+        "items": [
+          {
+            "name": "plita",
+            "quantity": 1
+          }
+        ],
+        "total_price": 2000000
+      }
+    ]
+  }
+}

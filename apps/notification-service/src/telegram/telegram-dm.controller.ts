@@ -85,4 +85,15 @@ export class TelegramDmController {
       this.deliveryReport.report(data ?? {}),
     );
   }
+
+  /** (gWI4gYkw) Smena hisoboti yetkazish holati (finance, faqat o'qish). */
+  @MessagePattern({ cmd: 'notification.delivery.by_dispatch' })
+  deliveryByDispatch(
+    @Payload() data: { dispatch_ids?: unknown },
+    @Ctx() context: RmqContext,
+  ) {
+    return executeAndAck(this.rmqService, context, () =>
+      this.deliveryReport.byDispatch(data ?? {}),
+    );
+  }
 }

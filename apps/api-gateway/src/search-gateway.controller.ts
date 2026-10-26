@@ -22,6 +22,7 @@ import { Public } from './auth/public.decorator';
 import {
   LogistRegionScopeService,
   isLogistRequester,
+  projectLogistPayload,
 } from './auth/logist-scope';
 
 interface JwtUser {
@@ -139,7 +140,11 @@ export class SearchGatewayController {
   ) {
     const operatorMarketId = await this.resolveOperatorMarketId(req?.user);
     const logistRegionIds = await this.resolveLogistRegionIds(req?.user);
-    return firstValueFrom(
+    // gShYHHGj — ikkinchi qavat: search-service logist natijasini allaqachon
+    // {id, source, type, sourceId, title} gacha qisqartiradi; gateway ham
+    // LOGIST javobidan pul kalitlarini olib tashlaydi (servis o'zgarsa ham
+    // moliya sizmaydi). Boshqa rollar uchun javob o'zgarmaydi.
+    const result = await firstValueFrom(
       this.searchClient
         .send<unknown>(
           { cmd: 'search.query' },
@@ -166,5 +171,6 @@ export class SearchGatewayController {
         )
         .pipe(timeout(8000)),
     );
+    return projectLogistPayload(req?.user?.roles, result);
   }
 }

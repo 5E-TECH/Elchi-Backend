@@ -23,6 +23,7 @@ import {
   flushSentry,
   registerMetrics,
 } from '@app/common';
+import { aiParseStageSeconds } from './ai-order/ai-parse-metrics';
 
 async function bootstrap() {
   // Initialise Sentry before app creation so any boot-time errors are captured.
@@ -119,7 +120,8 @@ async function bootstrap() {
   // (oFfOWGuo) /metrics faqat `Authorization: Bearer <METRICS_TOKEN>` bilan;
   // production'da token yo'q bo'lsa 404 (tunnel orqali ochiq edi).
   // Registered before listen so the middleware wraps all routes.
-  registerMetrics(app, 'api-gateway');
+  // WHMAIqyo #5: ai-parse bosqichlari histogrammasi (p50/p95).
+  registerMetrics(app, 'api-gateway', [aiParseStageSeconds]);
 
   // AWS va Docker interfeyslari uchun 0.0.0.0 majburiy
   const port = Number(process.env.PORT || 3004);

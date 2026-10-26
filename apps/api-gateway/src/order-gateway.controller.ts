@@ -66,9 +66,22 @@ import {
   type AiParseFailureReason,
 } from './ai-order/ai-order.helpers';
 import {
+  AiImageDecodeError,
+  aiProcessedImageMaxBytes,
+  downscaleAiImages,
+  toBase64Images,
+} from './ai-order/ai-image-resize';
+import {
+  AI_IMAGE_STORE,
+  AiImageStore,
+  type AiImageRef,
+} from '@app/common/ai/ai-image-store';
+import { observeAiParseStage } from './ai-order/ai-parse-metrics';
+import {
   aiStableRequestId,
   buildPreviewSnapshots,
   computeEditedFields,
+  computeFieldCorrections,
 } from './ai-order/ai-edited-fields';
 import {
   AiConfirmOrderDto,
@@ -96,11 +109,13 @@ import {
   UpdateOrderByIdRequestDto,
 } from './dto/order.swagger.dto';
 import {
-  AI_IMAGE_MAX_BYTES,
+  AI_IMAGE_RAW_MAX_BYTES,
+  AI_IMAGES_TOTAL_MAX_BYTES,
   AI_MAX_IMAGES,
   AI_RPC_TIMEOUT_MS,
   AI_TEXT_MAX_CHARS,
   CANCEL_RETURN_STAGES,
+  courierPostOrdersQuery,
   FULFILLMENT_SOURCES,
   WAREHOUSE_KINDS,
   Order_status,
@@ -114,6 +129,9 @@ import {
   recordReceiveByScanOutcome,
   requestContext,
   type AiAuditedField,
+  type AiFieldCorrections,
+  type AiImageMediaType,
+  type AiParseTimings,
   type AiDraftConfirmContext,
   type AiDraftLinkItem,
   type AiDraftTrace,
@@ -246,7 +264,9 @@ const CANCEL_RETURN_RESPONSE_DOC =
   'Place = where the parcel is now (courier name / branch or HQ name); `in_transit` — destination; `market` — where it ' +
   'was handed over. `received_at` (branch/hq) — since when it is at that place (last cancelled-post receipt, else ' +
   'custody time); `sent_at` (in_transit); `handed_over_at` + `handover_method` (market, fL79tFbs BG2; null method = ' +
-  'legacy/unknown). Cancelled before intake (never left the market) — both null. No money fields; same for every role.';
+  'legacy/unknown). Cancelled before intake (never left the market) — both null. No money fields; same for every role. ' +
+  'vNKGbg5q (BG7): rows also carry `handover_notified_at` (market «pick up» reminder sent, D+3) and ' +
+  '`handover_escalated_at` (escalated to the admin queue, D+7) — ISO or null; FE warns on `received_at` age ≥ 3 / ≥ 7 days.';
 
 /**
  * LFNLeSpu (BG4) — GET /orders (va eksport) `cancel_stage` filtri (Swagger).
@@ -276,7 +296,10 @@ const WAREHOUSE_KIND_QUERY_DOC =
   'home_branch_id = HQ filiali); REGIONAL — viloyat omboridan (WAREHOUSE, home_branch_id ≠ HQ). Boshqa filtrlar bilan ' +
   'AND. Noto‘g‘ri qiymat — 400; HQ filiali aniqlanmasa — 503 (qayta urinib ko‘ring).';
 
-/** ai-parse rasmi (multer memoryStorage) — faqat RAM'da, hech qayerga yozilmaydi. */
+/**
+ * ai-parse rasmi (multer memoryStorage) — RAM'da; WHMAIqyo #3: kichraytirilgan
+ * nusxasi vaqtinchalik saqlovga (MinIO `ai-tmp/`, TTL 1 soat) yoziladi.
+ */
 type UploadedAiImage = {
   originalname?: string;
   mimetype: string;
@@ -341,22 +364,40 @@ type EligibleAiOrder = {
   aiAudit: Record<string, unknown> | null;
   /** Server hisoblagan o'zgargan maydonlar; preview topilmasa null. */
   editedFields: AiAuditedField[] | null;
+  /** J3hEDtFN #4: o'zgargan maydonlarning AI / yakuniy qiymati. */
+  fieldCorrections?: AiFieldCorrections | null;
 };
 
 /**
- * ai-parse rasm turlari — faqat JPEG va PNG. Frontend rasmni canvas orqali
- * JPEG'ga o'giradi; webp/gif file-service'da ham yo'q.
+ * ai-parse rasm turlari — JPEG, PNG va WebP (WHMAIqyo: frontend WebP ham
+ * yuboradi). Haqiqiy imzo (magic bytes) alohida tekshiriladi.
  */
-const AI_IMAGE_MIME_ALLOWLIST = new Set(['image/jpeg', 'image/png']);
+const AI_IMAGE_MIME_ALLOWLIST = new Set<AiImageMediaType>([
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+]);
 /**
- * multer'ning o'z chegarasi ATAYLAB 2 MB dan katta: 2..8 MB li rasmni handler
- * tushunarli 400 ("Rasm 2 MB dan katta") bilan rad etadi, multer esa 413
- * qaytarardi.
+ * multer chegarasi = xom yuklash chegarasi (`AI_IMAGE_RAW_MAX_BYTES`, 4 MB):
+ * 4 MB dan katta fayl — multer 413 (20 rasm × 8 MB RAM'da ushlanmasin).
+ * 1,5 MB chegarasi XOM rasmga EMAS — server kichraytirgandan keyingi rasmga
+ * (`assertAiProcessedImages`): frontend 1568 px JPEG q0.92 ni bayt
+ * chegarasisiz yuboradi, 1,5..2 MB li rasm reliz-9 gacha o'tardi.
  */
-const AI_MULTER_FILE_SIZE_LIMIT = 8 * 1024 * 1024;
+const AI_MULTER_FILE_SIZE_LIMIT = AI_IMAGE_RAW_MAX_BYTES;
 /**
- * multer `memoryStorage` — ai-parse rasmi faqat RAM'dagi Buffer'da qoladi
- * (diskka/MinIO'ga YOZILMAYDI). `multer` paketida TS tiplari yo'q
+ * multer fayl soni chegarasi = AI_MAX_IMAGES + 1: 21-rasm handler'gacha
+ * yetib boradi va aniq 400 ("Ko'pi bilan 20 ta rasm…") oladi; multer'ning
+ * o'zi 21 dan ko'pida "Too many files" (400) beradi.
+ */
+const AI_MULTER_MAX_FILES = AI_MAX_IMAGES + 1;
+/** Bayt → xabardagi o'zbekcha MB ko'rinishi (1,5 / 4 / 20). */
+const aiMbLabel = (bytes: number): string =>
+  String(bytes / (1024 * 1024)).replace('.', ',');
+const AI_IMAGES_TOTAL_MAX_MB_LABEL = aiMbLabel(AI_IMAGES_TOTAL_MAX_BYTES);
+/**
+ * multer `memoryStorage` — ai-parse rasmi RAM'dagi Buffer'da (multer diskka
+ * yozmaydi; vaqtinchalik saqlov — `storeAiImages`). `multer` paketida TS tiplari yo'q
  * (@types/multer o'rnatilmagan), shu sabab imzo shu yerda aniq berilgan —
  * aks holda chaqiruv tiplanmagan (`any`) qiymat bo'lib qoladi.
  */
@@ -499,6 +540,11 @@ export class OrderGatewayController {
     // 4BftLLnc — logist viloyatlari (umumiy kesh). Yo'q bo'lsa (eski
     // spec'lar) — shu kontrollerning LOGISTICS mijozi bilan lokal nusxa.
     @Optional() private readonly logistScope?: LogistRegionScopeService,
+    // WHMAIqyo #3: ai-parse rasmlari uchun vaqtinchalik saqlov (MinIO, TTL
+    // 1 soat). null/yo'q — eski yo'l (base64 RMQ payload'ida).
+    @Optional()
+    @Inject(AI_IMAGE_STORE)
+    private readonly aiImageStore?: AiImageStore | null,
   ) {}
 
   private readonly logger = new Logger(OrderGatewayController.name);
@@ -1405,8 +1451,10 @@ export class OrderGatewayController {
 
   /**
    * ai-parse kiritmasini Claude'ga BORISHDAN OLDIN tekshiradi — xato 400.
-   * Tartib: bo'sh kiritish → matn uzunligi → rasm soni → har rasm uchun
-   * tur (allowlist) → hajm (2 MB) → haqiqiy imzo (magic bytes).
+   * Tartib: bo'sh kiritish → matn uzunligi → rasm soni (≤20) → har rasm
+   * uchun tur (JPEG/PNG/WebP) → XOM hajm (4 MB) → haqiqiy imzo (magic
+   * bytes). WHMAIqyo. 1,5 MB / jami 20 MB — kichraytirilgandan keyin
+   * (`assertAiProcessedImages`).
    */
   private assertAiParseInput(text: string, images: UploadedAiImage[]): void {
     if (!text && !images.length) {
@@ -1424,18 +1472,66 @@ export class OrderGatewayController {
     }
     for (const image of images) {
       const mime = this.asStr(image?.mimetype).toLowerCase();
-      if (!AI_IMAGE_MIME_ALLOWLIST.has(mime)) {
-        throw new BadRequestException('Faqat JPEG yoki PNG rasm');
+      if (!AI_IMAGE_MIME_ALLOWLIST.has(mime as AiImageMediaType)) {
+        throw new BadRequestException('Faqat JPEG, PNG yoki WebP rasm');
       }
       const buffer = image.buffer;
       const size = Math.max(Number(image.size) || 0, buffer?.length ?? 0);
-      if (size > AI_IMAGE_MAX_BYTES) {
-        throw new BadRequestException('Rasm 2 MB dan katta');
+      if (size > AI_IMAGE_RAW_MAX_BYTES) {
+        throw new BadRequestException(
+          `Rasm ${aiMbLabel(AI_IMAGE_RAW_MAX_BYTES)} MB dan katta`,
+        );
       }
       // `mimetype` ni MIJOZ yozadi — haqiqiy imzo tekshiriladi (audit S8).
       if (!Buffer.isBuffer(buffer) || !matchesDeclaredType(buffer, mime)) {
         throw new BadRequestException('Rasm fayli buzilgan yoki turi mos emas');
       }
+    }
+  }
+
+  /**
+   * Server KICHRAYTIRGANDAN KEYINGI rasmlar (Claude'ga aynan ketadigan
+   * baytlar): har biri ≤ 1,5 MB (sharp yuklanmagan bo'lsa — xom chegara
+   * 4 MB, ilgari o'tgan rasm rad etilmasin), jami ≤ 20 MB. Xato — 400.
+   */
+  private assertAiProcessedImages(
+    images: ReadonlyArray<{ buffer: Buffer }>,
+  ): void {
+    const maxBytes = aiProcessedImageMaxBytes();
+    let totalBytes = 0;
+    for (const image of images) {
+      const size = image.buffer.length;
+      if (size > maxBytes) {
+        throw new BadRequestException(
+          `Rasm ${aiMbLabel(maxBytes)} MB dan katta (kichraytirilgandan keyin ham)`,
+        );
+      }
+      totalBytes += size;
+    }
+    if (totalBytes > AI_IMAGES_TOTAL_MAX_BYTES) {
+      throw new BadRequestException(
+        `Rasmlar jami ${AI_IMAGES_TOTAL_MAX_MB_LABEL} MB dan oshmasligi kerak`,
+      );
+    }
+  }
+
+  /**
+   * WHMAIqyo #3: rasmlarni vaqtinchalik saqlovga yozadi. Rasm yo'q, saqlov
+   * sozlanmagan yoki yozish yiqilsa — null (chaqiruvchi base64 yo'liga
+   * qaytadi; faqat WARN, rasm/kalit mazmuni log qilinmaydi).
+   */
+  private async storeAiImages(
+    draftId: string,
+    images: ReadonlyArray<{ buffer: Buffer; mediaType: AiImageMediaType }>,
+  ): Promise<AiImageRef[] | null> {
+    if (!this.aiImageStore || images.length === 0) return null;
+    try {
+      return await this.aiImageStore.putAll(draftId, images);
+    } catch (error: unknown) {
+      this.logger.warn(
+        `ai-parse rasm saqlovi ishlamadi (${this.errorName(error)}) — base64 yo'li`,
+      );
+      return null;
     }
   }
 
@@ -1857,6 +1953,9 @@ export class OrderGatewayController {
     const editedByIndex = new Map(
       eligible.map((item) => [item.index, item.editedFields]),
     );
+    const correctionsByIndex = new Map(
+      eligible.map((item) => [item.index, item.fieldCorrections ?? null]),
+    );
     const byDraft = new Map<
       string,
       { orderIds: string[]; items: AiDraftLinkItem[] }
@@ -1873,6 +1972,7 @@ export class OrderGatewayController {
           typeof order.ai_item_index === 'number' ? order.ai_item_index : null,
         order_id: result.order_id,
         edited_fields: editedByIndex.get(index) ?? null,
+        field_corrections: correctionsByIndex.get(index) ?? null,
       });
       byDraft.set(draftId, entry);
     });
@@ -1959,19 +2059,30 @@ export class OrderGatewayController {
         ctx?.previews && itemIndex !== null
           ? (ctx.previews.find((p) => p.index === itemIndex) ?? null)
           : null;
+      const confirmedForAudit = {
+        customer: item.order.customer,
+        district_id: item.districtId,
+        region_id: item.regionId,
+        address: item.order.address,
+        total_price: item.order.total_price,
+        where_deliver: item.order.where_deliver,
+        comment: item.order.comment,
+        operator: item.order.operator,
+        items: item.order.items,
+      };
       item.editedFields = preview
-        ? computeEditedFields(preview, {
-            customer: item.order.customer,
-            district_id: item.districtId,
-            region_id: item.regionId,
-            address: item.order.address,
-            total_price: item.order.total_price,
-            where_deliver: item.order.where_deliver,
-            comment: item.order.comment,
-            operator: item.order.operator,
-            items: item.order.items,
-          })
+        ? computeEditedFields(preview, confirmedForAudit)
         : null;
+      // J3hEDtFN #4: eval manbai — faqat ai_order_draft_item'ga (activity_log
+      // metadata'siga EMAS: u yerda ism/manzil qiymati kerak emas).
+      item.fieldCorrections =
+        preview && item.editedFields && item.editedFields.length > 0
+          ? computeFieldCorrections(
+              preview,
+              confirmedForAudit,
+              item.editedFields,
+            )
+          : null;
       const draftCostUzs = ctx ? Number(ctx.cost_uzs) || 0 : null;
       item.aiAudit = {
         ai: true,
@@ -2004,6 +2115,7 @@ export class OrderGatewayController {
     draftId: string,
     marketId: string,
     previews: unknown[],
+    timings?: AiParseTimings,
   ): void {
     if (!this.aiClient || previews.length === 0) return;
     try {
@@ -2015,6 +2127,7 @@ export class OrderGatewayController {
               draft_id: draftId,
               market_id: marketId,
               previews: buildPreviewSnapshots(previews),
+              ...(timings ? { timings } : {}),
             },
           )
           .pipe(timeout(RMQ_FIRE_AND_FORGET_TIMEOUT)),
@@ -2676,14 +2789,18 @@ export class OrderGatewayController {
    *    reason ∈ disabled | refused | truncated | network | ai_error |
    *    no_market | cap_exceeded — har biriga frontend BOSHQA harakat
    *    ko'rsatadi (bVeyEuIR). ClaudeService'ning `invalid_json` i `ai_error`.
-   * Faqat validatsiya xatolari 400: bo'sh kiritish, >4000 belgi, 4-rasm,
-   * noto'g'ri tur/hajm/imzo, admin/menejerda market_id yo'q.
+   * Faqat validatsiya xatolari 400: bo'sh kiritish, >4000 belgi, 21-rasm,
+   * noto'g'ri tur/hajm (xom 4 MB; kichraytirilgandan keyin 1,5 MB, jami
+   * 20 MB)/imzo, buzilgan rasm,
+   * admin/menejerda market_id yo'q.
    *
    * ⚠️ MAXFIYLIK (HD5zOyBp): mijoz matni va rasmi Anthropic'ga faqat
    * ai-service orqali ketadi (telefonlar u yerda [TEL_n] bilan maskalanadi).
-   * Bu yerda rasm buffer'dan TO'G'RIDAN base64'ga o'giriladi va faqat RAM'da
-   * yashaydi: MinIO'ga (`file.upload`), diskka yoki DB'ga YOZILMAYDI —
-   * `fileClient` bu endpointda umuman chaqirilmaydi. Matn, rasm va
+   * Bu yerda rasm RAM'da kichraytiriladi (WHMAIqyo: 1568 px, q80, EXIF yo'q)
+   * va VAQTINCHALIK saqlovga (MinIO `ai-tmp/<draft_id>/`, TTL 1 soat —
+   * ai-service o'qigach darhol o'chiradi) yoziladi; RMQ'ga faqat kalit
+   * ketadi. Saqlov yo'q/ishlamasa — eski yo'l (base64 RMQ payload'ida).
+   * Doimiy fayl (`file.upload`) va DB'ga YOZILMAYDI. Matn, rasm va
    * buyurtmalar (telefon/manzil) HECH QACHON log qilinmaydi — faqat sabab.
    *
    * ⚠️ TIMEOUT: `ai.order.extract` — `timeout(AI_RPC_TIMEOUT_MS)` (60s), preview
@@ -2729,16 +2846,20 @@ export class OrderGatewayController {
           type: 'array',
           maxItems: AI_MAX_IMAGES,
           items: { type: 'string', format: 'binary' },
-          description: 'JPEG yoki PNG, har biri 2 MB gacha, ko‘pi bilan 3 ta.',
+          description:
+            'JPEG, PNG yoki WebP; yuklanadigan fayl 4 MB gacha (kattasi — 413), ' +
+            "ko'pi bilan 20 ta (21-rasm — 400). Server rasmni 1568 px gacha " +
+            "kichraytiradi va EXIF'ni olib tashlaydi; kichraytirilgan rasm " +
+            'har biri 1,5 MB gacha, jami 20 MB gacha (aks holda 400).',
         },
       },
     },
   })
   @UseInterceptors(
-    FilesInterceptor('images', AI_MAX_IMAGES, {
+    FilesInterceptor('images', AI_MULTER_MAX_FILES, {
       storage: createAiImageMemoryStorage(),
       limits: {
-        files: AI_MAX_IMAGES,
+        files: AI_MULTER_MAX_FILES,
         fileSize: AI_MULTER_FILE_SIZE_LIMIT,
         fields: 4,
         fieldSize: 64 * 1024,
@@ -2770,16 +2891,41 @@ export class OrderGatewayController {
       roles: this.normalizeRoles(req.user.roles),
     };
     const startedAt = Date.now();
+    const source: 'text' | 'image' = images.length > 0 ? 'image' : 'text';
 
-    // MAXFIYLIK: rasm faqat base64 ko'rinishida RPC payloadiga tushadi.
+    // WHMAIqyo #2: serverda kichraytirish (1568 px, q80, EXIF olib
+    // tashlanadi) — RAM'da.
+    let downscaled: { buffer: Buffer; mediaType: AiImageMediaType }[];
+    try {
+      downscaled = await downscaleAiImages(
+        images.map((image) => ({
+          buffer: image.buffer,
+          mediaType: this.asStr(
+            image.mimetype,
+          ).toLowerCase() as AiImageMediaType,
+        })),
+      );
+    } catch (error: unknown) {
+      if (error instanceof AiImageDecodeError) {
+        throw new BadRequestException(
+          "Rasm fayli buzilgan yoki o'qib bo'lmadi",
+        );
+      }
+      throw error;
+    }
+    // 1,5 MB / jami 20 MB — Claude'ga ketadigan (kichraytirilgan) baytlar.
+    this.assertAiProcessedImages(downscaled);
+
+    // WHMAIqyo #3: rasm RMQ'da base64 bo'lib yurmaydi — vaqtinchalik saqlovga
+    // (MinIO, `ai-tmp/<draft_id>/`, TTL 1 soat) yoziladi, payload'da faqat
+    // kalit. Saqlov yo'q yoki yozib bo'lmasa — eski base64 yo'li (parse
+    // to'xtamaydi). MAXFIYLIK: ai-service o'qigach darhol o'chiradi.
+    const imageRefs = await this.storeAiImages(draftId, downscaled);
     const extractRequest: AiOrderExtractRequest = {
       text,
-      images: images.map((image) => ({
-        media_type: this.asStr(image.mimetype).toLowerCase() as
-          | 'image/jpeg'
-          | 'image/png',
-        data_base64: image.buffer.toString('base64'),
-      })),
+      ...(imageRefs
+        ? { images: [], image_refs: imageRefs }
+        : { images: toBase64Images(downscaled) }),
       market_id: market.marketId,
       requester,
       trace_id: traceId,
@@ -2787,7 +2933,25 @@ export class OrderGatewayController {
       deadline_at: startedAt + AI_RPC_TIMEOUT_MS - 2_000,
     };
 
+    // WHMAIqyo #5: bosqichlar vaqti (histogram + ai_order_draft).
+    const finish = (
+      outcome: 'ok' | 'fail',
+      extractMs: number | null,
+      previewMs: number | null,
+    ): number => {
+      const totalMs = Date.now() - startedAt;
+      if (extractMs !== null) {
+        observeAiParseStage('extract', source, outcome, extractMs);
+      }
+      if (previewMs !== null) {
+        observeAiParseStage('preview', source, outcome, previewMs);
+      }
+      observeAiParseStage('total', source, outcome, totalMs);
+      return totalMs;
+    };
+
     let extracted: AiOrderExtractResponse | null;
+    const extractStartedAt = Date.now();
     try {
       extracted = await firstValueFrom(
         this.aiClient
@@ -2798,23 +2962,29 @@ export class OrderGatewayController {
           .pipe(timeout(AI_RPC_TIMEOUT_MS)),
       );
     } catch (error: unknown) {
+      finish('fail', Date.now() - extractStartedAt, null);
       return successRes(
         toParseFailure({
           reason: this.aiRpcFailureReason(error, 'ai.order.extract'),
         }),
       );
     }
+    const extractMs = Date.now() - extractStartedAt;
 
     if (!extracted || typeof extracted !== 'object') {
+      finish('fail', extractMs, null);
       return successRes(toParseFailure({ reason: 'ai_error' }));
     }
     if (extracted.ok !== true) {
+      finish('fail', extractMs, null);
       return successRes(toParseFailure(extracted));
     }
     if (!Array.isArray(extracted.orders)) {
+      finish('fail', extractMs, null);
       return successRes(toParseFailure({ reason: 'ai_error' }));
     }
     if (!extracted.orders.length) {
+      finish('ok', extractMs, null);
       return successRes({ ok: true, orders: [], draft_id: draftId });
     }
 
@@ -2823,10 +2993,12 @@ export class OrderGatewayController {
       AI_PARSE_TOTAL_BUDGET_MS - (Date.now() - startedAt),
     );
     if (previewTimeoutMs < AI_MIN_PREVIEW_BUDGET_MS) {
+      finish('fail', extractMs, null);
       return successRes(toParseFailure({ reason: 'network' }));
     }
 
     let previews: unknown[] | null;
+    const previewStartedAt = Date.now();
     try {
       const previewResponse: unknown = await firstValueFrom(
         this.orderClient
@@ -2846,18 +3018,27 @@ export class OrderGatewayController {
       );
       previews = this.extractAiPreviews(previewResponse);
     } catch (error: unknown) {
+      finish('fail', extractMs, Date.now() - previewStartedAt);
       return successRes(
         toParseFailure({
           reason: this.aiRpcFailureReason(error, 'order.ai_resolve_preview'),
         }),
       );
     }
+    const previewMs = Date.now() - previewStartedAt;
     if (!previews) {
+      finish('fail', extractMs, previewMs);
       return successRes(toParseFailure({ reason: 'ai_error' }));
     }
 
-    // vncdmXOy: AI taklifi audit izi uchun (fire-and-forget).
-    this.attachAiDraftPreview(draftId, market.marketId, previews);
+    const totalMs = finish('ok', extractMs, previewMs);
+    // vncdmXOy: AI taklifi audit izi uchun (fire-and-forget) + WHMAIqyo #5
+    // bosqich vaqtlari.
+    this.attachAiDraftPreview(draftId, market.marketId, previews, {
+      extract_ms: extractMs,
+      preview_ms: previewMs,
+      total_ms: totalMs,
+    });
     return successRes({ ok: true, orders: previews, draft_id: draftId });
   }
 
@@ -5038,18 +5219,11 @@ export class OrderGatewayController {
     let currentPage = pagination.page;
     let currentLimit = pagination.limit;
 
+    // aLx7Di99: kuryer doirasi — `courierPostOrdersQuery` (badge va /regions
+    // raqamlari ham shu ta'rif bilan sanaladi).
     const payload = {
       query: {
-        post_ids: courierPostIds,
-        status: statuses,
-        exclude_statuses: statuses?.length
-          ? undefined
-          : [
-              Order_status.CREATED,
-              Order_status.NEW,
-              Order_status.RECEIVED,
-              Order_status.ON_THE_ROAD,
-            ],
+        ...courierPostOrdersQuery(courierPostIds, statuses),
         search,
         start_day: startDate,
         end_day: endDate,

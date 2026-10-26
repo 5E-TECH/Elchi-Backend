@@ -1,9 +1,12 @@
 import {
+  BadRequestException,
   Controller,
   HttpException,
   Logger,
+  NotFoundException,
   OnApplicationBootstrap,
 } from '@nestjs/common';
+import { Observable, of } from 'rxjs';
 import { ConfigService } from '@nestjs/config';
 import {
   Ctx,
@@ -28,6 +31,9 @@ import {
   type AiOrderExtractResponse,
   type AiProductDisambiguateRequest,
   type AiProductDisambiguateResponse,
+  type AiAssistantEvent,
+  type AiAssistantMessageRequest,
+  type AiAssistantRequester,
   type AiRequester,
   type AiStatusResponse,
 } from '@app/common';
@@ -36,6 +42,7 @@ import { AiBudgetService } from './budget/ai-budget.service';
 import { AiDraftService } from './draft/ai-draft.service';
 import { DistrictPickService } from './district-pick/district-pick.service';
 import { BalanceScreenshotService } from './balance-screenshot/balance-screenshot.service';
+import { AssistantService } from './assistant/assistant.service';
 import {
   evaluateModelPolicy,
   modelPolicyProblems,
@@ -79,6 +86,8 @@ export class AiServiceController implements OnApplicationBootstrap {
     private readonly margin?: AiMarginService,
     // kiZgTybn — ixtiyoriy: eski spec'lar usiz quradi.
     private readonly balanceScreenshot?: BalanceScreenshotService,
+    // F7PWp6cK — ixtiyoriy: eski spec'lar usiz quradi.
+    private readonly assistant?: AssistantService,
   ) {}
 
   /**
@@ -180,6 +189,124 @@ export class AiServiceController implements OnApplicationBootstrap {
         'ai.finance.balance_screenshot',
       ),
     );
+  }
+
+  // ─── F7PWp6cK — AI moliyaviy yordamchi ─────────────────────────────────
+
+  /**
+   * Savol → hodisalar OQIMI (Observable: meta, step, delta, tool_call,
+   * tool_result, done | error). Xabar DARHOL ack qilinadi (qayta yuborilmaydi —
+   * AI pul yechadi); oqim hech qachon xato bilan tugamaydi.
+   */
+  @MessagePattern({ cmd: 'ai.assistant.message' })
+  assistantMessage(
+    @Payload() data: AiAssistantMessageRequest,
+    @Ctx() ctx: RmqContext,
+  ): Promise<Observable<AiAssistantEvent>> {
+    return executeAndAck(this.rmqService, ctx, () =>
+      this.assistant
+        ? this.assistant.stream(data)
+        : of<AiAssistantEvent>({
+            type: 'error',
+            code: 'feature_disabled',
+            message: "AI yordamchi hozircha o'chirilgan",
+          }),
+    );
+  }
+
+  @MessagePattern({ cmd: 'ai.assistant.access.check' })
+  assistantAccessCheck(
+    @Payload() data: { requester: AiAssistantRequester },
+    @Ctx() ctx: RmqContext,
+  ) {
+    return executeAndAck(this.rmqService, ctx, () =>
+      this.adminCall('ai.assistant.access.check', () =>
+        this.requireAssistant().accessState(data?.requester),
+      ),
+    );
+  }
+
+  @MessagePattern({ cmd: 'ai.assistant.conversations' })
+  assistantConversations(
+    @Payload()
+    data: {
+      requester: AiAssistantRequester;
+      conversation_id?: string | null;
+      limit?: number;
+      offset?: number;
+    },
+    @Ctx() ctx: RmqContext,
+  ) {
+    return executeAndAck(this.rmqService, ctx, () =>
+      this.adminCall('ai.assistant.conversations', async () => {
+        const assistant = this.requireAssistant();
+        if (data?.conversation_id) {
+          const found = await assistant.getConversation(
+            data.requester,
+            String(data.conversation_id),
+          );
+          if (!found) throw new NotFoundException('Suhbat topilmadi');
+          return found;
+        }
+        return assistant.listConversations(
+          data?.requester,
+          data?.limit,
+          data?.offset,
+        );
+      }),
+    );
+  }
+
+  @MessagePattern({ cmd: 'ai.assistant.access.list' })
+  assistantAccessList(@Ctx() ctx: RmqContext) {
+    return executeAndAck(this.rmqService, ctx, () =>
+      this.adminCall('ai.assistant.access.list', () =>
+        this.requireAssistant().listAccess(),
+      ),
+    );
+  }
+
+  @MessagePattern({ cmd: 'ai.assistant.access.update' })
+  assistantAccessUpdate(
+    @Payload()
+    data: {
+      requester: AiAssistantRequester;
+      user_id: string;
+      enabled: boolean;
+      daily_limit?: number | null;
+    },
+    @Ctx() ctx: RmqContext,
+  ) {
+    return executeAndAck(this.rmqService, ctx, () =>
+      this.adminCall('ai.assistant.access.update', () => {
+        const userId = String(data?.user_id ?? '').trim();
+        if (!/^\d{1,19}$/.test(userId)) {
+          throw new BadRequestException("user_id noto'g'ri");
+        }
+        if (typeof data?.enabled !== 'boolean') {
+          throw new BadRequestException('enabled boolean bo‘lishi kerak');
+        }
+        const limit = data?.daily_limit;
+        if (
+          limit !== undefined &&
+          limit !== null &&
+          (!Number.isInteger(limit) || limit < 0 || limit > 10_000)
+        ) {
+          throw new BadRequestException('daily_limit 0..10000 butun son');
+        }
+        return this.requireAssistant().updateAccess(
+          data.requester,
+          userId,
+          data.enabled,
+          limit ?? null,
+        );
+      }),
+    );
+  }
+
+  private requireAssistant(): AssistantService {
+    if (!this.assistant) throw new Error('AssistantService ulanmagan');
+    return this.assistant;
   }
 
   @MessagePattern({ cmd: 'ai.cap.raise' })
@@ -310,6 +437,7 @@ export class AiServiceController implements OnApplicationBootstrap {
           data?.draft_id,
           data?.market_id,
           data?.previews,
+          data?.timings,
         ),
       ),
     );

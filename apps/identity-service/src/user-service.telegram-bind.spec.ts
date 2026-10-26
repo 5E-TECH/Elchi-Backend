@@ -210,6 +210,37 @@ describe('identity — Telegram ulash (rCFZAmOz / td89SKXQ)', () => {
     );
   });
 
+  it('(gWI4gYkw) active_ids_by_role — faol superadminlar (ulanmaganlar ham), mijoz / noto‘g‘ri rol 400', async () => {
+    const svc = make();
+    const qb = {
+      select: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      limit: jest.fn().mockReturnThis(),
+      getRawMany: jest.fn().mockResolvedValue([
+        { user_id: 1, telegram_id: '5550001' },
+        { user_id: 2, telegram_id: null },
+      ]),
+    };
+    Object.assign(svc.usersMock, { createQueryBuilder: jest.fn(() => qb) });
+    const res = await svc.activeIdsByRole({ role: 'superadmin' });
+    expect(qb.where).toHaveBeenCalledWith('u.is_deleted = false');
+    expect(qb.andWhere).toHaveBeenCalledWith('u.role = :role', {
+      role: 'superadmin',
+    });
+    expect(qb.andWhere).not.toHaveBeenCalledWith('u.telegram_id IS NOT NULL');
+    expect(res.data).toEqual([
+      { user_id: '1', telegram_linked: true },
+      { user_id: '2', telegram_linked: false },
+    ]);
+    for (const role of ['hacker', 'customer']) {
+      expect(await errorOf(svc.activeIdsByRole({ role }))).toEqual(
+        expect.objectContaining({ statusCode: 400 }),
+      );
+    }
+  });
+
   it('contactsByIds — telegram_id qaytadi (DM uchun), null ham', async () => {
     const svc = make(1, [
       {

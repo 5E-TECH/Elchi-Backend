@@ -8,6 +8,7 @@ import {
   type ClaudeBudgetDecision,
   type ClaudeBudgetGuard,
   type ClaudeUsageRecord,
+  stagingAiDailyUsdCap,
 } from '@app/common';
 import { computeCostUsd, roundMoney2, roundUsd } from '../usage/ai-pricing';
 import { AiSpendCounterService } from '../usage/ai-spend-counter.service';
@@ -78,11 +79,16 @@ export class AiBudgetService implements ClaudeBudgetGuard {
     private readonly activityLog: ActivityLogService,
     config: ConfigService,
   ) {
-    this.capUsd = readPositive(
+    const envCapUsd = readPositive(
       config,
       'AI_DAILY_USD_CAP',
       DEFAULT_DAILY_USD_CAP,
     );
+    // (staging-safe) APP_ENV=staging: qattiq shift STAGING_AI_DAILY_USD_CAP
+    // (sukut 2 USD) — AI_DAILY_USD_CAP undan katta bo'lsa ham. Prod'da null.
+    const stagingCap = stagingAiDailyUsdCap();
+    this.capUsd =
+      stagingCap === null ? envCapUsd : Math.min(envCapUsd, stagingCap);
     const ratio = readPositive(config, 'AI_CAP_WARN_RATIO', DEFAULT_WARN_RATIO);
     this.warnRatio = ratio < 1 ? ratio : DEFAULT_WARN_RATIO;
     this.raiseMaxUsd = readPositive(

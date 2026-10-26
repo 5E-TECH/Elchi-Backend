@@ -47,6 +47,10 @@ describe('katalog (Eh8y21Ha TC12 analogi)', () => {
       // (2crjWf7v) kvitansiya e'tirozi va kassa eslatmasi.
       'finance.payment_disputed',
       'finance.cash_reminder',
+      // (gWI4gYkw / y8Tqm9Ap) smena hisoboti va avto-yopish ogohlantirishi.
+      'finance.shift_closed',
+      'finance.shift_auto_closed',
+      'finance.shift_auto_close_warning',
     ]);
     FINANCE_NOTIFICATION_TYPES.forEach((type) =>
       expect(isKnownNotificationType(type)).toBe(true),

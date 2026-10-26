@@ -89,6 +89,11 @@ export class UpdateMarketDto {
   @IsBoolean()
   can_order_from_warehouse?: boolean;
 
+  /** KmWO9gTA: «Vazn va hajm bo'yicha narx» — faqat admin/superadmin. */
+  @IsOptional()
+  @IsBoolean()
+  weight_volume_pricing?: boolean;
+
   /** VRyloH62: `+998XXXXXXXXX` ga keltiriladi; null/'' — o'chirish. */
   @IsOptional()
   @IsString()

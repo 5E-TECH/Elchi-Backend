@@ -1,12 +1,17 @@
 name: Elchi CI/CD
 
+# main -> production (`deploy`), test -> staging server (`deploy-staging`,
+# inert until the repository variable STAGING_ENABLED is 'true'). Release flow
+# dev -> test -> main: docs/ops/staging.md.
 on:
   push:
-    branches: [main]
+    branches: [main, test]
   workflow_dispatch:
 
+# Production keeps its group; staging gets its own, so a push to `test` never
+# cancels a running production deploy (and vice versa).
 concurrency:
-  group: production-deploy
+  group: ${{ github.ref == 'refs/heads/test' && 'staging-deploy' || 'production-deploy' }}
   cancel-in-progress: true
 
 jobs:
@@ -90,6 +95,7 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     needs: [test, unit-tests]
+    if: github.ref == 'refs/heads/main'
     environment: production
     timeout-minutes: 60
     steps:
@@ -116,7 +122,14 @@ jobs:
             set -ex
             cd ${{ secrets.SERVER_APP_PATH }}
             git config --global --add safe.directory ${{ secrets.SERVER_APP_PATH }} || true
-            cp -f .env.production /tmp/elchi-env-backup 2>/dev/null || true
+            # AFiXurLH: the safety copy of .env.production is PRIVATE (umask 077 +
+            # mktemp = 0600, unpredictable name) and deleted when this script exits
+            # (success, failure or rollback). It used to be a world-readable
+            # /tmp/elchi-env-backup left behind after every deploy.
+            ENV_BACKUP="$(umask 077 && mktemp /tmp/elchi-env-backup.XXXXXXXXXX)"
+            trap 'rm -f "$ENV_BACKUP"' EXIT
+            cp -f .env.production "$ENV_BACKUP" 2>/dev/null || true
+            rm -f /tmp/elchi-env-backup 2>/dev/null || true
 
             OLD_SHA="$(git rev-parse HEAD 2>/dev/null || true)"
             git fetch origin main
@@ -185,6 +198,7 @@ jobs:
               echo "!!! DEPLOY FAILED — rolling back code to ${OLD_SHA:-unknown}"
               if [ -n "$OLD_SHA" ]; then
                 git reset --hard "$OLD_SHA"
+                test -f .env.production || cp -f "$ENV_BACKUP" .env.production
                 ROLLBACK_SERVICES=""
                 for s in $APP_SERVICES; do
                   docker compose -f docker-compose.prod.yml config --services 2>/dev/null | grep -qx "$s" && ROLLBACK_SERVICES="$ROLLBACK_SERVICES $s"
@@ -213,7 +227,7 @@ jobs:
 
             git checkout -f main
             git reset --hard origin/main
-            test -f .env.production || cp -f /tmp/elchi-env-backup .env.production
+            test -f .env.production || cp -f "$ENV_BACKUP" .env.production
 
             # --- Pre-deploy DB backup (gate) -----------------------------------
             # Har bir deploydan oldin backup: EVERY deploy, after the new code is
@@ -235,7 +249,9 @@ jobs:
             fi
             echo "Pre-deploy backup: ${PRE_DEPLOY_BK:-skipped (first install, no database yet)}"
 
-            docker compose -f docker-compose.prod.yml pull rabbitmq postgres minio cloudflared || true
+            # cloudflared is NOT pulled here any more: its image is pinned (tag +
+            # digest) and rolled out only when that pin changes — see below.
+            docker compose -f docker-compose.prod.yml pull rabbitmq postgres minio || true
             docker compose -f docker-compose.prod.yml up -d --remove-orphans rabbitmq postgres minio
 
             if [ "$RUN_MIGRATIONS" != true ]; then
@@ -251,9 +267,108 @@ jobs:
               docker compose -f docker-compose.prod.yml rm -f migration-runner || true
             fi
 
-            test -z "$DEPLOY_SERVICES" && echo "No application service changes detected; keeping running containers as-is." || { echo "Deploying services:$DEPLOY_SERVICES"; docker compose -f docker-compose.prod.yml up -d --no-deps --build --remove-orphans $DEPLOY_SERVICES; }
+            # --- api-gateway: zero-downtime swap (ZfI9nERJ) ---------------------
+            # Every deploy that touched the gateway used to RECREATE it: for the
+            # ~10-40 s until Nest listened again cloudflared got "connection
+            # refused" / "lookup api-gateway … server misbehaving" and the browser
+            # saw a CORS-less Cloudflare 502 = «Tarmoq xatoligi» (cloudflared logs,
+            # 2026-10-25 18:55Z / 21:36Z, 2026-10-26 10:32Z). Now: build the new
+            # image while the old container serves, start ONE new container next
+            # to it (--scale 2 --no-recreate), wait until it is (healthy), then
+            # stop the old one (docker stop -t 30: Nest shutdown hooks finish
+            # in-flight requests). Docker DNS returns both during the overlap.
+            # New one never healthy -> it is removed, the old one keeps serving and
+            # the deploy fails (normal rollback). The gateway goes LAST, after the
+            # services it calls. Overlap caveat: for those seconds two consumers
+            # share RABBITMQ_GATEWAY_QUEUE, so a realtime event may reach the
+            # instance a socket is not on yet (clients reconnect right after).
+            # ⚠️ Functions do not inherit `trap rollback ERR` (no `set -E`): a bare
+            # failing command in here would end the script WITHOUT the rollback.
+            # So every fallible step ends in `|| return 1` — the failed CALL
+            # below then fires the trap (rollback) as usual.
+            gateway_swap() {
+              local DC="docker compose -f docker-compose.prod.yml" old new st i
+              old="$($DC ps -q api-gateway 2>/dev/null || true)"
+              if [ -z "$old" ] || [ "$(printf '%s\n' "$old" | wc -l)" -ne 1 ]; then
+                echo "api-gateway: not exactly one running container — plain (re)create"
+                $DC up -d --no-deps --build api-gateway || return 1
+                return 0
+              fi
+              $DC build api-gateway || return 1
+              $DC up -d --no-deps --no-recreate --scale api-gateway=2 api-gateway || return 1
+              new="$($DC ps -q api-gateway | grep -v "^$old" | head -n 1 || true)"
+              if [ -z "$new" ]; then
+                echo "!!! api-gateway: the new container was not created" >&2
+                return 1
+              fi
+              st=starting
+              for i in $(seq 1 60); do
+                st="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$new" 2>/dev/null || echo missing)"
+                case "$st" in healthy | unhealthy | missing | exited | dead) break ;; esac
+                sleep 3
+              done
+              if [ "$st" != healthy ]; then
+                echo "!!! api-gateway: new container is '$st' — removing it; the old one keeps serving" >&2
+                docker logs --tail 60 "$new" || true
+                docker rm -f "$new" || true
+                return 1
+              fi
+              echo "api-gateway: new container healthy — retiring the old one"
+              docker stop -t 30 "$old" || true
+              docker rm -f "$old" || true
+              # bookkeeping only: exactly one container is left, nothing restarts
+              $DC up -d --no-deps --no-recreate --scale api-gateway=1 api-gateway ||
+                echo "WARNING: compose scale bookkeeping failed (one healthy gateway is running)" >&2
+            }
 
-            docker compose -f docker-compose.prod.yml up -d --no-deps cloudflared || true
+            GATEWAY_SWAP=false
+            case " $DEPLOY_SERVICES " in
+              *" api-gateway "*)
+                GATEWAY_SWAP=true
+                DEPLOY_SERVICES="$(echo " $DEPLOY_SERVICES " | sed 's/ api-gateway / /; s/^ *//; s/ *$//')"
+                ;;
+            esac
+            if [ -z "$DEPLOY_SERVICES" ]; then
+              echo "No (non-gateway) application service changes detected; keeping running containers as-is."
+            else
+              echo "Deploying services: $DEPLOY_SERVICES"
+              docker compose -f docker-compose.prod.yml up -d --no-deps --build --remove-orphans $DEPLOY_SERVICES
+            fi
+            if [ "$GATEWAY_SWAP" = true ]; then
+              gateway_swap
+            fi
+
+            # --- Cloudflare Tunnel connectors (ZfI9nERJ) ----------------------------
+            # Two replicas of one tunnel. A routine deploy never recreates them
+            # (--no-recreate: only creates a missing one). Only when the pinned
+            # image in docker-compose.prod.yml differs from what a container runs,
+            # they are rolled ONE AT A TIME — cloudflared-2 first — and each must
+            # log "Registered tunnel connection" before the next one goes, so the
+            # tunnel always has a live connector. Never fatal for the deploy.
+            cloudflared_rollout() {
+              local DC="docker compose -f docker-compose.prod.yml" want s name have since i
+              want="$(sed -n 's/^  image: \(cloudflare\/cloudflared:[^ ]*\)$/\1/p' docker-compose.prod.yml | head -n 1)"
+              for s in cloudflared-2 cloudflared; do
+                name="elchi-$s"
+                have="$(docker inspect -f '{{.Config.Image}}' "$name" 2>/dev/null || echo none)"
+                if [ -n "$want" ] && [ "$have" = "$want" ]; then
+                  $DC up -d --no-deps --no-recreate "$s" || echo "WARNING: $s did not start" >&2
+                  continue
+                fi
+                echo "cloudflared: $s runs '$have', pinned '$want' — rolling it"
+                since="$(date +%s)"
+                # cloudflared-2 must be live before the main connector is touched —
+                # otherwise stop the rollout (main connector keeps serving).
+                $DC up -d --no-deps --force-recreate "$s" || { echo "WARNING: $s did not start" >&2; [ "$s" = cloudflared-2 ] && return 1; continue; }
+                for i in $(seq 1 30); do
+                  docker logs --since "$since" "$name" 2>&1 | grep -q 'Registered tunnel connection' && break
+                  sleep 2
+                done
+                docker logs --since "$since" "$name" 2>&1 | grep -q 'Registered tunnel connection' ||
+                  { echo "WARNING: $s has not registered a tunnel connection yet" >&2; [ "$s" = cloudflared-2 ] && return 1; }
+              done
+            }
+            cloudflared_rollout || echo "WARNING: cloudflared rollout problem — check: docker logs elchi-cloudflared / elchi-cloudflared-2" >&2
 
             # --- Daily backup sidecar (db-backup) -------------------------------
             # Har kuni 05:00 (Asia/Tashkent) backup, ./backups/daily/, newest 7
@@ -305,5 +420,376 @@ jobs:
               trap - ERR
               echo "!!! The deploy itself succeeded, but the db-backup sidecar is NOT running — daily backups are OFF." >&2
               echo "!!! Check: docker compose -f docker-compose.prod.yml logs db-backup   (state: ${DB_BACKUP_STATE:-unknown})" >&2
+              exit 1
+            fi
+
+  # STAGING (test server): push to `test` -> the SAME deploy as production, on
+  # the staging server, with .env.staging and
+  # `-f docker-compose.prod.yml -f docker-compose.staging.yml`. Gated by the
+  # same tests. Inert until the REPOSITORY variable STAGING_ENABLED is 'true'
+  # (Settings -> Secrets and variables -> Actions -> Variables; an environment
+  # variable is not visible to a job-level `if`). Secrets have the production
+  # names but live in the GitHub Environment `staging`. Runbook:
+  # docs/ops/staging.md.
+  deploy-staging:
+    runs-on: ubuntu-latest
+    needs: [test, unit-tests]
+    if: github.ref == 'refs/heads/test' && vars.STAGING_ENABLED == 'true'
+    environment: staging
+    timeout-minutes: 60
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Deploy via SSH (staging)
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SERVER_IP }}
+          port: ${{ secrets.SERVER_SSH_PORT || 22 }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          command_timeout: 50m
+          # script_stop: false — same reason as the production job.
+          script_stop: false
+          # GENERATED from the production `deploy` script — do not edit here.
+          # Change the production script, then run
+          # `node scripts/staging/sync-deploy-workflow.mjs` (CI: --check).
+          script: |
+            set -ex
+            cd ${{ secrets.SERVER_APP_PATH }}
+            # --- STAGING ----------------------------------------------------------------
+            # GENERATED from the production job's script by
+            # scripts/staging/sync-deploy-workflow.mjs — never edit this block by hand.
+            # Differences: branch test, .env.staging, every compose call also loads
+            # docker-compose.staging.yml, /tmp/elchi-stg-*, elchi-stg-* container names,
+            # and the guards below.
+            #
+            # Never on a production checkout (e.g. a staging secret that is missing in
+            # the GitHub `staging` environment falls back to a repository secret).
+            if [ -f .env.production ] || [ ! -f .env.staging ]; then
+              echo "!!! $(pwd) is not a staging checkout (.env.production present or .env.staging missing) — staging deploy refused, nothing was touched. docs/ops/staging.md" >&2
+              exit 1
+            fi
+            if grep -q '__REPLACE_WITH' .env.staging; then
+              echo "!!! .env.staging still has __REPLACE_WITH…__ placeholders ($(grep -o '^[A-Z0-9_]*=__REPLACE_WITH' .env.staging | cut -d= -f1 | tr '\n' ' ')) — fill them first; nothing was touched." >&2
+              exit 1
+            fi
+            # `env_file: !override` in docker-compose.staging.yml needs Compose >= 2.24.4.
+            STG_COMPOSE_VERSION="$(docker compose version --short 2>/dev/null || echo 0)"
+            if [ "$(printf '%s\n' 2.24.4 "${STG_COMPOSE_VERSION#v}" | sort -V | head -n 1)" != 2.24.4 ]; then
+              echo "!!! Docker Compose ${STG_COMPOSE_VERSION} is older than 2.24.4 (docker-compose.staging.yml needs it) — nothing was touched." >&2
+              exit 1
+            fi
+            # Compose ${…} interpolation reads .env.staging (production: .env), also in
+            # the helper scripts; pre-deploy-backup.sh / backup-db.sh get both compose
+            # files through BACKUP_COMPOSE_FILE.
+            export COMPOSE_ENV_FILES=.env.staging
+            export BACKUP_COMPOSE_FILE=docker-compose.prod.yml:docker-compose.staging.yml
+            # No app container yet (fresh server, or someone removed them) -> deploy
+            # everything, like production's first install.
+            STG_FIRST_INSTALL=false
+            if [ -z "$(docker compose -f docker-compose.prod.yml -f docker-compose.staging.yml ps -aq api-gateway 2>/dev/null || true)" ]; then
+              STG_FIRST_INSTALL=true
+            fi
+            # --- end STAGING --------------------------------------------------------------
+            git config --global --add safe.directory ${{ secrets.SERVER_APP_PATH }} || true
+            # AFiXurLH: the safety copy of .env.staging is PRIVATE (umask 077 +
+            # mktemp = 0600, unpredictable name) and deleted when this script exits
+            # (success, failure or rollback). It used to be a world-readable
+            # /tmp/elchi-stg-env-backup left behind after every deploy.
+            ENV_BACKUP="$(umask 077 && mktemp /tmp/elchi-stg-env-backup.XXXXXXXXXX)"
+            trap 'rm -f "$ENV_BACKUP"' EXIT
+            cp -f .env.staging "$ENV_BACKUP" 2>/dev/null || true
+            rm -f /tmp/elchi-stg-env-backup 2>/dev/null || true
+
+            OLD_SHA="$(git rev-parse HEAD 2>/dev/null || true)"
+            git fetch origin test
+            NEW_SHA="$(git rev-parse origin/test)"
+
+            APP_SERVICES="api-gateway identity-service order-service catalog-service logistics-service finance-service notification-service integration-service analytics-service branch-service investor-service file-service c2c-service search-service ai-service"
+            DEPLOY_SERVICES=""
+            DEPLOY_ALL=false
+            RUN_MIGRATIONS=false
+            BACKUP_SIDECAR_RECREATE=false
+            BACKUP_OFFSITE_RECREATE=false
+
+            if [ -z "$OLD_SHA" ] || [ "$STG_FIRST_INSTALL" = true ]; then
+              DEPLOY_ALL=true
+            elif [ "$OLD_SHA" != "$NEW_SHA" ]; then
+              git diff --name-only "$OLD_SHA" "$NEW_SHA" > /tmp/elchi-stg-changed-files
+              cat /tmp/elchi-stg-changed-files
+
+              if grep -Eq '^(libs/|package\.json$|package-lock\.json$|nest-cli\.json$|tsconfig.*\.json$|docker-compose\.(prod|staging)\.yml$|\.github/workflows/deploy\.yml$)' /tmp/elchi-stg-changed-files; then
+                DEPLOY_ALL=true
+              fi
+              if grep -Eq '^(migrations/|scripts/init-schemas\.sql$)' /tmp/elchi-stg-changed-files; then
+                RUN_MIGRATIONS=true
+              fi
+              # db-backup runs its bind-mounted scripts from a long-lived bash
+              # loop, so a script change only takes effect after a recreate.
+              if grep -Eq '^scripts/backup-(cron|db)\.sh$' /tmp/elchi-stg-changed-files; then
+                BACKUP_SIDECAR_RECREATE=true
+              fi
+              # Same for the off-site (R2) copier's loop script.
+              if grep -Eq '^scripts/backup-offsite\.sh$' /tmp/elchi-stg-changed-files; then
+                BACKUP_OFFSITE_RECREATE=true
+              fi
+              for service in $APP_SERVICES; do
+                if grep -q "^apps/$service/" /tmp/elchi-stg-changed-files; then
+                  DEPLOY_SERVICES="$DEPLOY_SERVICES $service"
+                fi
+              done
+            fi
+
+            if [ "$DEPLOY_ALL" = true ]; then
+              DEPLOY_SERVICES="$APP_SERVICES"
+              RUN_MIGRATIONS=true
+            fi
+
+            # --- Rollback safety net -------------------------------------------
+            # On ANY failure after this point (bad migration, failed build,
+            # crashing container), revert the code to the previously-deployed
+            # commit and rebuild the running services from it, so production is
+            # never left half-deployed on new code. A failed migration may have
+            # partially applied schema changes — the pre-deploy dump written to
+            # ./backups/pre-deploy/ below ($PRE_DEPLOY_BK) is the DB restore
+            # point. The rollback never restores the DB by itself (that would
+            # drop writes made since the dump) — docs/ops/db-backups.md.
+            #
+            # ⚠️ Only services that EXIST in the rolled-back compose file are
+            # rebuilt. APP_SERVICES is the NEW list: on the first deploy of a new
+            # service (e.g. ai-service) the old docker-compose.prod.yml restored
+            # by `git reset --hard $OLD_SHA` has no such service, and a single
+            # unknown name makes `docker compose up` abort ("no such service")
+            # WITHOUT rebuilding any of the others — production would stay on the
+            # half-deployed new code. A service left over from the failed deploy
+            # keeps running untouched; nothing on the old code calls it.
+            rollback() {
+              set +e
+              echo "!!! DEPLOY FAILED — rolling back code to ${OLD_SHA:-unknown}"
+              if [ -n "$OLD_SHA" ]; then
+                git reset --hard "$OLD_SHA"
+                test -f .env.staging || cp -f "$ENV_BACKUP" .env.staging
+                ROLLBACK_SERVICES=""
+                for s in $APP_SERVICES; do
+                  docker compose -f docker-compose.prod.yml -f docker-compose.staging.yml config --services 2>/dev/null | grep -qx "$s" && ROLLBACK_SERVICES="$ROLLBACK_SERVICES $s"
+                done
+                # An empty list must never reach `up`: with no service names it
+                # would start EVERY service in the file (migration-runner too).
+                if [ -n "$ROLLBACK_SERVICES" ]; then
+                  echo "!!! Rebuilding from $OLD_SHA:$ROLLBACK_SERVICES"
+                  docker compose -f docker-compose.prod.yml -f docker-compose.staging.yml up -d --no-deps --build $ROLLBACK_SERVICES
+                else
+                  echo "!!! Could not list services from the old compose file — no service was rebuilt; fix manually."
+                fi
+                if [ -n "${PRE_DEPLOY_BK:-}" ]; then
+                  echo "!!! Rolled back to $OLD_SHA. If migrations ran, restore the DB from this deploy's pre-deploy dump: $PRE_DEPLOY_BK (runbook: docs/ops/db-backups.md)"
+                else
+                  echo "!!! Rolled back to $OLD_SHA. If migrations ran, restore the DB from the newest ./backups/pre-deploy/pre-deploy-*.sql.gz (runbook: docs/ops/db-backups.md)"
+                fi
+              fi
+              docker compose -f docker-compose.prod.yml -f docker-compose.staging.yml ps || true
+              # The `set +e` above outlives the trap: without this exit the
+              # script carried on with the remaining deploy steps on the
+              # rolled-back code and ended 0 — a failed deploy showed green.
+              exit 1
+            }
+            trap 'rollback' ERR
+
+            git checkout -f test
+            git reset --hard origin/test
+            test -f .env.staging || cp -f "$ENV_BACKUP" .env.staging
+
+            # --- Pre-deploy DB backup (gate) -----------------------------------
+            # Har bir deploydan oldin backup: EVERY deploy, after the new code is
+            # checked out (so the new scripts run) but BEFORE any image is pulled,
+            # any container is (re)built or any migration runs. Verified dump in
+            # ./backups/pre-deploy/ (newest 5 kept, scripts/pre-deploy-backup.sh);
+            # it is also this deploy's migration restore point — no second dump.
+            # If it fails, nothing has been touched yet: reset the code back to
+            # OLD_SHA (so the next run still sees the full diff), skip the
+            # rollback rebuild, and stop. Old ./backups/pre-migration/ dumps are
+            # left as they are (no longer written or rotated).
+            PRE_DEPLOY_BK=""
+            if ! PRE_DEPLOY_BK="$(bash scripts/pre-deploy-backup.sh "$OLD_SHA" "$NEW_SHA")"; then
+              trap - ERR
+              echo "!!! Pre-deploy DB backup FAILED — deploy aborted BEFORE touching any container (see the [pre-deploy]/[backup-db] lines above)." >&2
+              if [ -n "$OLD_SHA" ]; then git reset --hard "$OLD_SHA"; fi
+              echo "!!! Running containers are unchanged and the code is back on ${OLD_SHA:-the previous commit}. Fix the backup, then re-run the deploy." >&2
+              exit 1
+            fi
+            echo "Pre-deploy backup: ${PRE_DEPLOY_BK:-skipped (first install, no database yet)}"
+
+            # cloudflared is NOT pulled here any more: its image is pinned (tag +
+            # digest) and rolled out only when that pin changes — see below.
+            docker compose -f docker-compose.prod.yml -f docker-compose.staging.yml pull rabbitmq postgres minio || true
+            docker compose -f docker-compose.prod.yml -f docker-compose.staging.yml up -d --remove-orphans rabbitmq postgres minio
+
+            if [ "$RUN_MIGRATIONS" != true ]; then
+              echo "No migration changes detected."
+            else
+              # A buggy/destructive migration must always be recoverable: the
+              # migration only runs because the pre-deploy backup above passed
+              # (pg_dump ok, gzip intact, "dump complete" trailer). That dump is
+              # the restore point.
+              echo "Migration restore point: ${PRE_DEPLOY_BK:-none (first install, no database yet)}"
+
+              docker compose -f docker-compose.prod.yml -f docker-compose.staging.yml up --build --force-recreate --abort-on-container-exit migration-runner
+              docker compose -f docker-compose.prod.yml -f docker-compose.staging.yml rm -f migration-runner || true
+            fi
+
+            # --- api-gateway: zero-downtime swap (ZfI9nERJ) ---------------------
+            # Every deploy that touched the gateway used to RECREATE it: for the
+            # ~10-40 s until Nest listened again cloudflared got "connection
+            # refused" / "lookup api-gateway … server misbehaving" and the browser
+            # saw a CORS-less Cloudflare 502 = «Tarmoq xatoligi» (cloudflared logs,
+            # 2026-10-25 18:55Z / 21:36Z, 2026-10-26 10:32Z). Now: build the new
+            # image while the old container serves, start ONE new container next
+            # to it (--scale 2 --no-recreate), wait until it is (healthy), then
+            # stop the old one (docker stop -t 30: Nest shutdown hooks finish
+            # in-flight requests). Docker DNS returns both during the overlap.
+            # New one never healthy -> it is removed, the old one keeps serving and
+            # the deploy fails (normal rollback). The gateway goes LAST, after the
+            # services it calls. Overlap caveat: for those seconds two consumers
+            # share RABBITMQ_GATEWAY_QUEUE, so a realtime event may reach the
+            # instance a socket is not on yet (clients reconnect right after).
+            # ⚠️ Functions do not inherit `trap rollback ERR` (no `set -E`): a bare
+            # failing command in here would end the script WITHOUT the rollback.
+            # So every fallible step ends in `|| return 1` — the failed CALL
+            # below then fires the trap (rollback) as usual.
+            gateway_swap() {
+              local DC="docker compose -f docker-compose.prod.yml -f docker-compose.staging.yml" old new st i
+              old="$($DC ps -q api-gateway 2>/dev/null || true)"
+              if [ -z "$old" ] || [ "$(printf '%s\n' "$old" | wc -l)" -ne 1 ]; then
+                echo "api-gateway: not exactly one running container — plain (re)create"
+                $DC up -d --no-deps --build api-gateway || return 1
+                return 0
+              fi
+              $DC build api-gateway || return 1
+              $DC up -d --no-deps --no-recreate --scale api-gateway=2 api-gateway || return 1
+              new="$($DC ps -q api-gateway | grep -v "^$old" | head -n 1 || true)"
+              if [ -z "$new" ]; then
+                echo "!!! api-gateway: the new container was not created" >&2
+                return 1
+              fi
+              st=starting
+              for i in $(seq 1 60); do
+                st="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$new" 2>/dev/null || echo missing)"
+                case "$st" in healthy | unhealthy | missing | exited | dead) break ;; esac
+                sleep 3
+              done
+              if [ "$st" != healthy ]; then
+                echo "!!! api-gateway: new container is '$st' — removing it; the old one keeps serving" >&2
+                docker logs --tail 60 "$new" || true
+                docker rm -f "$new" || true
+                return 1
+              fi
+              echo "api-gateway: new container healthy — retiring the old one"
+              docker stop -t 30 "$old" || true
+              docker rm -f "$old" || true
+              # bookkeeping only: exactly one container is left, nothing restarts
+              $DC up -d --no-deps --no-recreate --scale api-gateway=1 api-gateway ||
+                echo "WARNING: compose scale bookkeeping failed (one healthy gateway is running)" >&2
+            }
+
+            GATEWAY_SWAP=false
+            case " $DEPLOY_SERVICES " in
+              *" api-gateway "*)
+                GATEWAY_SWAP=true
+                DEPLOY_SERVICES="$(echo " $DEPLOY_SERVICES " | sed 's/ api-gateway / /; s/^ *//; s/ *$//')"
+                ;;
+            esac
+            if [ -z "$DEPLOY_SERVICES" ]; then
+              echo "No (non-gateway) application service changes detected; keeping running containers as-is."
+            else
+              echo "Deploying services: $DEPLOY_SERVICES"
+              docker compose -f docker-compose.prod.yml -f docker-compose.staging.yml up -d --no-deps --build --remove-orphans $DEPLOY_SERVICES
+            fi
+            if [ "$GATEWAY_SWAP" = true ]; then
+              gateway_swap
+            fi
+
+            # --- Cloudflare Tunnel connectors (ZfI9nERJ) ----------------------------
+            # Two replicas of one tunnel. A routine deploy never recreates them
+            # (--no-recreate: only creates a missing one). Only when the pinned
+            # image in docker-compose.prod.yml differs from what a container runs,
+            # they are rolled ONE AT A TIME — cloudflared-2 first — and each must
+            # log "Registered tunnel connection" before the next one goes, so the
+            # tunnel always has a live connector. Never fatal for the deploy.
+            cloudflared_rollout() {
+              local DC="docker compose -f docker-compose.prod.yml -f docker-compose.staging.yml" want s name have since i
+              want="$(sed -n 's/^  image: \(cloudflare\/cloudflared:[^ ]*\)$/\1/p' docker-compose.prod.yml | head -n 1)"
+              for s in cloudflared-2 cloudflared; do
+                name="elchi-stg-$s"
+                have="$(docker inspect -f '{{.Config.Image}}' "$name" 2>/dev/null || echo none)"
+                if [ -n "$want" ] && [ "$have" = "$want" ]; then
+                  $DC up -d --no-deps --no-recreate "$s" || echo "WARNING: $s did not start" >&2
+                  continue
+                fi
+                echo "cloudflared: $s runs '$have', pinned '$want' — rolling it"
+                since="$(date +%s)"
+                # cloudflared-2 must be live before the main connector is touched —
+                # otherwise stop the rollout (main connector keeps serving).
+                $DC up -d --no-deps --force-recreate "$s" || { echo "WARNING: $s did not start" >&2; [ "$s" = cloudflared-2 ] && return 1; continue; }
+                for i in $(seq 1 30); do
+                  docker logs --since "$since" "$name" 2>&1 | grep -q 'Registered tunnel connection' && break
+                  sleep 2
+                done
+                docker logs --since "$since" "$name" 2>&1 | grep -q 'Registered tunnel connection' ||
+                  { echo "WARNING: $s has not registered a tunnel connection yet" >&2; [ "$s" = cloudflared-2 ] && return 1; }
+              done
+            }
+            cloudflared_rollout || echo "WARNING: cloudflared rollout problem — check: docker logs elchi-stg-cloudflared / elchi-stg-cloudflared-2" >&2
+
+            # --- Daily backup sidecar (db-backup) -------------------------------
+            # Har kuni 05:00 (Asia/Tashkent) backup, ./backups/daily/, newest 7
+            # kept. Started/updated on EVERY deploy — it was never started before,
+            # so prod had no scheduled backup at all. `up -d` creates it when it
+            # does not exist yet and is a no-op when nothing changed; a change to
+            # its scripts forces a recreate. --no-deps: postgres is already up.
+            # Then make sure it stays up (not crash-looping). A sidecar problem
+            # must not roll back an app deploy that already succeeded, so it is
+            # reported at the very end and turns the job red instead.
+            DB_BACKUP_SIDECAR_OK=true
+            if [ "$BACKUP_SIDECAR_RECREATE" = true ]; then
+              docker compose -f docker-compose.prod.yml -f docker-compose.staging.yml up -d --no-deps --force-recreate db-backup || DB_BACKUP_SIDECAR_OK=false
+            else
+              docker compose -f docker-compose.prod.yml -f docker-compose.staging.yml up -d --no-deps db-backup || DB_BACKUP_SIDECAR_OK=false
+            fi
+            DB_BACKUP_CID="$(docker compose -f docker-compose.prod.yml -f docker-compose.staging.yml ps -q db-backup 2>/dev/null || true)"
+            DB_BACKUP_R1="$(docker inspect -f '{{.RestartCount}}' "$DB_BACKUP_CID" 2>/dev/null || echo none)"
+            sleep 5
+            DB_BACKUP_STATE="$(docker inspect -f '{{.State.Status}} {{.RestartCount}}' "$DB_BACKUP_CID" 2>/dev/null || echo none)"
+            [ -n "$DB_BACKUP_CID" ] && [ "$DB_BACKUP_STATE" = "running $DB_BACKUP_R1" ] || DB_BACKUP_SIDECAR_OK=false
+            docker compose -f docker-compose.prod.yml -f docker-compose.staging.yml logs --tail 20 db-backup || true
+
+            # --- Off-site copies -> Cloudflare R2 (backup-offsite) --------------
+            # Started on EVERY deploy like db-backup: `up -d` creates it on the
+            # first deploy and recreates it by itself when its compose definition
+            # (or .env.staging) changed; a change to its script forces a
+            # recreate. It is NOT a gate: nothing waits for its health, and a
+            # problem here only prints a warning — never a rollback, never a red
+            # job (without R2 keys it just logs «R2 sozlanmagan» and stays up).
+            if [ "$BACKUP_OFFSITE_RECREATE" = true ]; then
+              docker compose -f docker-compose.prod.yml -f docker-compose.staging.yml up -d --no-deps --force-recreate backup-offsite || echo "WARNING: backup-offsite (R2 off-site copies) did not start — deploy continues; see docs/ops/db-backups.md" >&2
+            else
+              docker compose -f docker-compose.prod.yml -f docker-compose.staging.yml up -d --no-deps backup-offsite || echo "WARNING: backup-offsite (R2 off-site copies) did not start — deploy continues; see docs/ops/db-backups.md" >&2
+            fi
+            docker compose -f docker-compose.prod.yml -f docker-compose.staging.yml logs --tail 5 backup-offsite || true
+
+            docker compose -f docker-compose.prod.yml -f docker-compose.staging.yml ps
+
+            # Reclaim what this deploy just superseded: the previous service
+            # images (now unreferenced) and stale build cache. Without it the
+            # box filled to 156G/81% over five months. Rollback does not need
+            # the old images — it rebuilds from OLD_SHA — so this is safe to run
+            # here. Never fatal: a cleanup problem must not fail, or roll back,
+            # a deploy that already succeeded.
+            bash scripts/docker-gc.sh || true
+
+            if [ "$DB_BACKUP_SIDECAR_OK" != true ]; then
+              trap - ERR
+              echo "!!! The deploy itself succeeded, but the db-backup sidecar is NOT running — daily backups are OFF." >&2
+              echo "!!! Check: docker compose -f docker-compose.prod.yml -f docker-compose.staging.yml logs db-backup   (state: ${DB_BACKUP_STATE:-unknown})" >&2
               exit 1
             fi

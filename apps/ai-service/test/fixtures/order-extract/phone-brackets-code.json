@@ -1,0 +1,27 @@
+{
+  "id": "phone-brackets-code",
+  "category": [
+    "phone_format"
+  ],
+  "source": "synthetic",
+  "input": {
+    "text": "Dilfuza (97) 000 67 89 Farg'ona Marg'ilon, sumka 1 ta 180 ming"
+  },
+  "expected": {
+    "orders": [
+      {
+        "customer_name": "Dilfuza",
+        "phone_number": "+998970006789",
+        "region_name": "Farg'ona",
+        "district_name": "Marg'ilon",
+        "items": [
+          {
+            "name": "sumka",
+            "quantity": 1
+          }
+        ],
+        "total_price": 180000
+      }
+    ]
+  }
+}

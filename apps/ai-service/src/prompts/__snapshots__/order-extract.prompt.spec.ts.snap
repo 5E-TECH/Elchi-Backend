@@ -9,39 +9,63 @@ exports[`ORDER_EXTRACT_SCHEMA (C2/C12) snapshot (32fNx0Ci #3 — sxemaga *_id qo
         "additionalProperties": false,
         "properties": {
           "address": {
-            "type": [
-              "string",
-              "null",
+            "anyOf": [
+              {
+                "type": "string",
+              },
+              {
+                "type": "null",
+              },
             ],
           },
           "comment": {
-            "type": [
-              "string",
-              "null",
+            "anyOf": [
+              {
+                "type": "string",
+              },
+              {
+                "type": "null",
+              },
             ],
           },
           "customer_name": {
-            "type": [
-              "string",
-              "null",
+            "anyOf": [
+              {
+                "type": "string",
+              },
+              {
+                "type": "null",
+              },
             ],
           },
           "district_name": {
-            "type": [
-              "string",
-              "null",
+            "anyOf": [
+              {
+                "type": "string",
+              },
+              {
+                "type": "null",
+              },
             ],
           },
           "extra_number": {
-            "type": [
-              "string",
-              "null",
+            "anyOf": [
+              {
+                "type": "string",
+              },
+              {
+                "type": "null",
+              },
             ],
           },
           "full_address": {
-            "type": [
-              "string",
-              "null",
+            "anyOf": [
+              {
+                "type": "string",
+              },
+              {
+                "type": "null",
+              },
             ],
           },
           "is_replacement": {
@@ -67,28 +91,82 @@ exports[`ORDER_EXTRACT_SCHEMA (C2/C12) snapshot (32fNx0Ci #3 — sxemaga *_id qo
             "type": "array",
           },
           "operator": {
-            "type": [
-              "string",
-              "null",
+            "anyOf": [
+              {
+                "type": "string",
+              },
+              {
+                "type": "null",
+              },
             ],
           },
           "phone_number": {
-            "type": [
-              "string",
-              "null",
+            "anyOf": [
+              {
+                "type": "string",
+              },
+              {
+                "type": "null",
+              },
             ],
           },
           "region_name": {
-            "type": [
-              "string",
-              "null",
+            "anyOf": [
+              {
+                "type": "string",
+              },
+              {
+                "type": "null",
+              },
             ],
           },
           "total_price": {
-            "type": [
-              "number",
-              "null",
+            "anyOf": [
+              {
+                "type": "number",
+              },
+              {
+                "type": "null",
+              },
             ],
+          },
+          "warnings": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "field": {
+                  "enum": [
+                    "customer_name",
+                    "phone_number",
+                    "extra_number",
+                    "region_name",
+                    "district_name",
+                    "address",
+                    "items",
+                    "total_price",
+                    "comment",
+                    "where_deliver",
+                    "is_replacement",
+                    "operator",
+                  ],
+                  "type": "string",
+                },
+                "reason": {
+                  "enum": [
+                    "unclear",
+                    "ambiguous",
+                    "conflict",
+                  ],
+                  "type": "string",
+                },
+              },
+              "required": [
+                "field",
+                "reason",
+              ],
+              "type": "object",
+            },
+            "type": "array",
           },
           "where_deliver": {
             "anyOf": [
@@ -119,6 +197,7 @@ exports[`ORDER_EXTRACT_SCHEMA (C2/C12) snapshot (32fNx0Ci #3 — sxemaga *_id qo
           "where_deliver",
           "is_replacement",
           "operator",
+          "warnings",
         ],
         "type": "object",
       },

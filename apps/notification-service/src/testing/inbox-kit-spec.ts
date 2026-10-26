@@ -33,6 +33,8 @@ export function makeInbox(
     dm?: object | null;
     dedup?: object | null;
     telegramService?: { sendNotification: jest.Mock };
+    /** (vNKGbg5q) `roles` nishoni uchun identity (`identity.audience.resolve`). */
+    identityClient?: { send: jest.Mock };
   } = {},
 ) {
   let nextId = 1;
@@ -103,7 +105,7 @@ export function makeInbox(
   const activityLog = { log: jest.fn().mockResolvedValue(undefined) };
   const service = new NotificationInboxService(
     repo as never,
-    { send: jest.fn() } as never,
+    (options.identityClient ?? { send: jest.fn() }) as never,
     { emit: jest.fn(() => of(null)) } as never,
     telegramService as never,
     activityLog as never,

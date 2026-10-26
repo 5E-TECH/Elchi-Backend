@@ -4,6 +4,8 @@ import { DataSource } from 'typeorm';
 import { CreateAiSchema1716000000047 } from '../../../../migrations/1716000000047-CreateAiSchema';
 import { CreateAiOrderDraft1716000000077 } from '../../../../migrations/1716000000077-CreateAiOrderDraft';
 import { AiOrderAppliedPrice1716000000119 } from '../../../../migrations/1716000000119-AiOrderAppliedPrice';
+import { AiOrderLatency1716000000170 } from '../../../../migrations/1716000000170-AiOrderLatency';
+import { AiDraftFieldCorrections1716000000171 } from '../../../../migrations/1716000000171-AiDraftFieldCorrections';
 import {
   AiOrderDraft,
   AiOrderDraftItem,
@@ -54,6 +56,11 @@ describePg('ai_order_draft — real Postgres (vncdmXOy)', () => {
       // NFiXfmq6: applied_price_uzs — up() ikki marta (IF NOT EXISTS).
       await new AiOrderAppliedPrice1716000000119().up(qr);
       await new AiOrderAppliedPrice1716000000119().up(qr);
+      // WHMAIqyo #5 / J3hEDtFN #4 — up() ikki marta (IF NOT EXISTS).
+      await new AiOrderLatency1716000000170().up(qr);
+      await new AiOrderLatency1716000000170().up(qr);
+      await new AiDraftFieldCorrections1716000000171().up(qr);
+      await new AiDraftFieldCorrections1716000000171().up(qr);
     } finally {
       await qr.release();
     }

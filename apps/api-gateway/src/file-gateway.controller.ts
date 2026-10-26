@@ -22,8 +22,11 @@ import {
   ApiBearerAuth,
   ApiBody,
   ApiConsumes,
+  ApiCreatedResponse,
   ApiOperation,
+  ApiForbiddenResponse,
   ApiParam,
+  ApiPayloadTooLargeResponse,
   ApiQuery,
   ApiTags,
 } from '@nestjs/swagger';
@@ -40,6 +43,17 @@ import {
 } from './dto/file.swagger.dto';
 import type { Response } from 'express';
 import { matchesDeclaredType } from '@app/common';
+import {
+  assertFolderAllowed,
+  assertUploadFits,
+  canonicalUploadFolder,
+  DEFAULT_UPLOAD_FOLDER,
+  UPLOAD_FOLDERS,
+  UPLOAD_MULTER_MAX_BYTES,
+  UPLOAD_ROLES,
+  uploadPolicySwaggerDescription,
+} from './file-upload-policy';
+import { isFileLinkKey, readFileLinkToken } from './file-link';
 
 // RPC ceiling: this downstream can legitimately run long (base64/provider
 // fetch up to ~60s); an 8s ceiling would premature-fail a working call. See
@@ -67,26 +81,49 @@ export class FileGatewayController {
     @Inject('ORDER') private readonly orderClient: ClientProxy,
   ) {}
 
+  /**
+   * (dgvwZasd A) Rol → papka oq ro'yxati va limit — `file-upload-policy.ts`.
+   * `RolesGuard` multer'dan OLDIN ishlaydi: ruxsatsiz rol (mijoz, investor…)
+   * faylni xotiraga yuklatmay 403 oladi. Papka multipart maydoni bo'lgani
+   * uchun papka/rol mosligi handler'da tekshiriladi.
+   */
   @Post('files/upload')
-  @UseGuards(JwtAuthGuard)
-  @ApiOperation({ summary: 'Upload file to MinIO (multipart/form-data)' })
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(...UPLOAD_ROLES)
+  @ApiOperation({
+    summary: 'Upload file to MinIO (multipart/form-data)',
+    description: uploadPolicySwaggerDescription(),
+  })
   @ApiConsumes('multipart/form-data')
   @ApiBody({
     schema: {
       type: 'object',
       properties: {
         file: { type: 'string', format: 'binary' },
-        folder: { type: 'string', example: 'uploads' },
+        folder: {
+          type: 'string',
+          enum: UPLOAD_FOLDERS,
+          default: DEFAULT_UPLOAD_FOLDER,
+          example: 'proof',
+        },
       },
       required: ['file'],
     },
   })
+  @ApiCreatedResponse({ description: 'Fayl yuklandi' })
+  @ApiForbiddenResponse({
+    description: "Rolga ruxsat yo'q yoki papka oq ro'yxatda emas",
+  })
+  @ApiPayloadTooLargeResponse({
+    description: 'Fayl limitdan katta (rasm/PDF/XLSX 10 MB, video 20 MB)',
+  })
   @UseInterceptors(
-    // 50MB ceiling to allow video expense-proof uploads. file-service still
-    // enforces the real per-type limit (10MB image/doc, 50MB video).
+    // Xotira chegarasi — siyosatdagi eng katta limit (video 20 MB; ilgari
+    // 50 MB). Tur bo'yicha aniq limit handler'da, file-service ham o'zinikini
+    // tekshiradi.
     FileInterceptor('file', {
       storage: memoryStorage(),
-      limits: { fileSize: 50 * 1024 * 1024 },
+      limits: { fileSize: UPLOAD_MULTER_MAX_BYTES },
     }),
   )
   async uploadFile(
@@ -98,15 +135,19 @@ export class FileGatewayController {
           buffer: Buffer;
         }
       | undefined,
-    @Req() req: { body?: Record<string, unknown> },
+    @Req() req: { body?: Record<string, unknown>; user?: { roles?: string[] } },
   ) {
     if (!file) {
       throw new BadRequestException('file is required');
     }
 
+    const folder = canonicalUploadFolder(req?.body?.folder);
+    assertFolderAllowed(folder, this.rolesOf(req));
+
     if (!this.allowedMime.has(file.mimetype)) {
       throw new BadRequestException('Unsupported file type');
     }
+    assertUploadFits(folder, file.mimetype, file.buffer.length);
     // E'lon qilingan tur faylning haqiqiy imzosiga mos kelishi shart —
     // `mimetype` ni mijoz yozadi, unga yolg'iz ishonib bo'lmaydi (audit S8).
     if (!matchesDeclaredType(file.buffer, file.mimetype)) {
@@ -123,10 +164,9 @@ export class FileGatewayController {
             file_name: file.originalname,
             mime_type: file.mimetype,
             file_base64: file.buffer.toString('base64'),
-            folder:
-              typeof req?.body?.folder === 'string'
-                ? req.body.folder
-                : undefined,
+            // Kanonik (tozalangan, kichik harf) papka — kalit prefiksi
+            // maxfiy/ommaviy qoidalarga aynan mos tushadi.
+            folder,
           },
         )
         .pipe(timeout(FILE_RPC_TIMEOUT_MS)),
@@ -189,6 +229,23 @@ export class FileGatewayController {
   ): Promise<void> {
     const roles = this.rolesOf(req);
     const safeKey = String(key ?? '');
+    // (kiZgTybn) Smena karta qoldig'i rasmi / smena hisoboti fayli — kassa
+    // doirasiga bog'liq (menejer — faqat o'z filiali, registrator — asosiy
+    // kassa). Umumiy kalit yo'li doirani bilmaydi, shuning uchun bu yerda
+    // faqat superadmin/admin; qolganlar smena endpoint'lari bergan imzolangan
+    // havola (`files/signed/:token`) orqali ochadi.
+    if (isFileLinkKey(safeKey)) {
+      if (
+        !roles.some(
+          (role) => role === RoleEnum.SUPERADMIN || role === RoleEnum.ADMIN,
+        )
+      ) {
+        throw new ForbiddenException(
+          'Smena fayli faqat smena hisoboti havolasi orqali ochiladi',
+        );
+      }
+      return;
+    }
     const isPrivate = FileGatewayController.PRIVATE_KEY_PREFIXES.some(
       (prefix) => safeKey.startsWith(prefix),
     );
@@ -333,7 +390,9 @@ export class FileGatewayController {
    *
    * Ruxsat `GET files/:key` bilan AYNAN bir xil (`assertCanAccessPrivateKey`):
    * maxfiy kalitlar (`proof-`, `expense-`, …) — xodim rollari yoki faqat O'Z
-   * buyurtmasining dalili (market/kuryer); boshqa kalitlar — kirgan foydalanuvchi.
+   * buyurtmasining dalili (market/kuryer); smena fayllari (`shift-check-`,
+   * `shift-report-`) — faqat superadmin/admin (qolganlar `files/signed/:token`);
+   * boshqa kalitlar — kirgan foydalanuvchi.
    * Fayl topilmasa file-service'ning 404 xatosi qaytadi.
    */
   @Get('files/:key/content')
@@ -346,6 +405,52 @@ export class FileGatewayController {
     @Res() res: Response,
   ) {
     await this.assertCanAccessPrivateKey(key, req);
+    return this.sendPrivateFileBytes(key, res);
+  }
+
+  /**
+   * (kiZgTybn) Smena karta qoldig'i rasmi / smena hisoboti fayli — brauzer
+   * oddiy havola (`<a href target="_blank">`) bilan ochadi, Bearer sarlavhasi
+   * yo'q. Ruxsat havolaning o'zida: gateway shifrlagan va autentifikatsiya
+   * qilgan token (fayl kaliti + muddat ≤ 300 s) — `file-link.ts`. Tokenni
+   * faqat kassa doirasi tekshirilgan smena endpoint'lari yaratadi
+   * (`POST /finance/shift/account-photo`, `GET /finance/shift/:id/report`).
+   * Baytlar `files/:key/content` bilan AYNAN bir xil yo'l (`file.read`) va
+   * sarlavhalar bilan beriladi. Token soxta / o'zgartirilgan / muddati
+   * o'tgan → 403 (fayl o'qilmaydi).
+   */
+  @Public()
+  @Get('files/signed/:token')
+  @ApiOperation({
+    summary: '(kiZgTybn) Open a short-lived gateway-signed shift file link',
+    description:
+      "Smena karta qoldig'i rasmi yoki smena hisoboti fayli. Havola smena endpoint'laridan `photo_url` / `file_url` sifatida tayyor keladi (300 s) — frontend uni o'zi yasamaydi. JWT shart emas (oddiy `<a href>`); token yaroqsiz yoki muddati o'tgan → 403.",
+  })
+  @ApiParam({ name: 'token', description: 'Opaque short-lived link token' })
+  @ApiForbiddenResponse({ description: "Havola yaroqsiz yoki muddati o'tgan" })
+  async getSignedFileContent(
+    @Param('token') token: string,
+    @Res() res: Response,
+  ) {
+    const key = readFileLinkToken(token);
+    if (!key) {
+      throw new ForbiddenException(
+        "Havola yaroqsiz yoki muddati o'tgan — sahifani yangilab qayta oching",
+      );
+    }
+    return this.sendPrivateFileBytes(key, res, { download: true });
+  }
+
+  /**
+   * Maxfiy fayl baytlari (`file.read`) — umumiy kesh va bajarilishsiz.
+   * `download` — rasm bo'lmagan fayl (hisobot PDF/XLSX) yangi oynada
+   * sandbox ichida emas, yuklab olish sifatida ochiladi.
+   */
+  private async sendPrivateFileBytes(
+    key: string,
+    res: Response,
+    options: { download?: boolean } = {},
+  ) {
     const response = await firstValueFrom(
       this.fileClient
         .send<{
@@ -360,16 +465,24 @@ export class FileGatewayController {
     }
 
     const buffer = Buffer.from(bodyBase64, 'base64');
-    res.setHeader(
-      'Content-Type',
-      response?.data?.mime_type ?? 'application/octet-stream',
-    );
+    const mimeType = response?.data?.mime_type ?? 'application/octet-stream';
+    res.setHeader('Content-Type', mimeType);
     res.setHeader('Content-Length', String(buffer.length));
     // Maxfiy dalil — umumiy (CDN/proksi) keshga tushmasin.
     res.setHeader('Cache-Control', 'private, max-age=300');
     // Yuklangan fayl hech qachon sahifa sifatida bajarilmasin.
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox");
+    if (options.download) {
+      const fileName = String(key).replace(/[^\w.-]/g, '_');
+      res.setHeader(
+        'Content-Disposition',
+        mimeType.startsWith('image/')
+          ? 'inline'
+          : `attachment; filename="${fileName}"`,
+      );
+      res.setHeader('Referrer-Policy', 'no-referrer');
+    }
     return res.send(buffer);
   }
 
@@ -389,8 +502,15 @@ export class FileGatewayController {
       .pipe(timeout(FILE_RPC_TIMEOUT_MS));
   }
 
+  /**
+   * (dgvwZasd A) Ilgari rolsiz edi — istalgan kirgan foydalanuvchi (mijoz
+   * ham) MinIO'ga ixtiyoriy papkaga fayl yozdira olardi. Jonli frontend bu
+   * endpoint'ni chaqirmaydi (yorliq QR'i brauzerda chiziladi); branch-service
+   * QR'ni to'g'ridan-to'g'ri RPC bilan yaratadi. Endi — faqat xodimlar.
+   */
   @Post('files/qr')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.MANAGER)
   @ApiOperation({ summary: 'Generate QR and upload to MinIO' })
   @ApiBody({ type: GenerateQrRequestDto })
   generateQr(@Body() dto: GenerateQrRequestDto) {
@@ -399,8 +519,10 @@ export class FileGatewayController {
       .pipe(timeout(FILE_RPC_TIMEOUT_MS));
   }
 
+  /** (dgvwZasd A) `files/qr` bilan bir xil — faqat xodimlar. */
   @Post('files/pdf')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.MANAGER)
   @ApiOperation({ summary: 'Generate PDF and upload to MinIO' })
   @ApiBody({ type: GeneratePdfRequestDto })
   generatePdf(@Body() dto: GeneratePdfRequestDto) {

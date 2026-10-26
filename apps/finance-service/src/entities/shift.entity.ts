@@ -15,6 +15,15 @@ export enum ShiftStatus {
   CLOSED = 'closed',
 }
 
+export type ShiftCloseReason = 'manual' | 'auto';
+
+export type ShiftReportStatus =
+  | 'pending'
+  | 'processing'
+  | 'sent'
+  | 'skipped'
+  | 'failed';
+
 @Entity({ name: 'shifts' })
 @Index('IDX_SHIFT_OPENED_BY', ['opened_by'])
 @Index('IDX_SHIFT_STATUS', ['status'])
@@ -102,4 +111,38 @@ export class Shift extends BaseEntity {
 
   @Column({ type: 'text', nullable: true })
   comment!: string | null;
+
+  /**
+   * (y8Tqm9Ap) Qanday yopildi: `manual` — xodim, `auto` — jadval bo'yicha
+   * tizim. Ochiq smenada va migratsiya 167 dan oldin yopilganlarda NULL
+   * (API ularni `manual` deb ko'rsatadi).
+   */
+  @Column({ type: 'varchar', length: 10, nullable: true })
+  close_reason!: ShiftCloseReason | null;
+
+  /** (y8Tqm9Ap) Tizim yopgan — `closed_by` shunda NULL. */
+  @Column({ type: 'boolean', default: false })
+  closed_by_system!: boolean;
+
+  /**
+   * (gWI4gYkw) Hisobot yuborish navbati: yopish tranzaksiyasida `pending`,
+   * ishlov beruvchi `processing` ga atomik da'vo qiladi, so'ng `sent` /
+   * `skipped` / `failed`. Eski smenalarda NULL.
+   */
+  @Column({ type: 'varchar', length: 16, nullable: true })
+  report_status!: ShiftReportStatus | null;
+
+  @Column({ type: 'timestamptz', nullable: true })
+  report_claimed_at!: Date | null;
+
+  /** Necha marta yuborildi (1 — yopilganda, keyingilari — qayta yuborish). */
+  @Column({ type: 'int', default: 0 })
+  report_round!: number;
+
+  /** Hisobot fayli (file-service, private) — superadmin ilovasi. */
+  @Column({ type: 'varchar', length: 500, nullable: true })
+  report_file_key!: string | null;
+
+  @Column({ type: 'varchar', length: 8, nullable: true })
+  report_file_format!: string | null;
 }

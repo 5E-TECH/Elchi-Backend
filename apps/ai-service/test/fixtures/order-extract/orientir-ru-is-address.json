@@ -1,0 +1,30 @@
+{
+  "id": "orientir-ru-is-address",
+  "category": [
+    "comment_vs_address",
+    "district_typo_cyrillic"
+  ],
+  "source": "synthetic",
+  "input": {
+    "text": "Дилшод 91 000 06 17 Наманган Чуст, ул. Мустакиллик 4, ориентир: рынок, кроссовки 1 шт 300 тыс"
+  },
+  "expected": {
+    "orders": [
+      {
+        "customer_name": "Дилшод",
+        "phone_number": "+998910000617",
+        "region_name": "Namangan",
+        "district_name": "Chust",
+        "items": [
+          {
+            "name": "кроссовки",
+            "quantity": 1
+          }
+        ],
+        "total_price": 300000,
+        "address": "рынок",
+        "comment": null
+      }
+    ]
+  }
+}

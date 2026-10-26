@@ -1,0 +1,27 @@
+{
+  "id": "typo-margilon-no-apostrophe",
+  "category": [
+    "district_typo_cyrillic"
+  ],
+  "source": "synthetic",
+  "input": {
+    "text": "Rano 94 000 62 73 Fargona Margilon shahar, tufli 1 ta 260 ming"
+  },
+  "expected": {
+    "orders": [
+      {
+        "customer_name": "Rano",
+        "phone_number": "+998940006273",
+        "region_name": "Farg'ona",
+        "district_name": "Marg'ilon",
+        "items": [
+          {
+            "name": "tufli",
+            "quantity": 1
+          }
+        ],
+        "total_price": 260000
+      }
+    ]
+  }
+}

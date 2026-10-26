@@ -1,5 +1,6 @@
 import { Injectable, Logger, Optional } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { checkStagingOutbound } from '@app/common';
 import { isUsableBotToken } from './bot-config';
 import { botSendLatencyMs, botSendTotal } from './bot-metrics';
 import type {
@@ -141,6 +142,42 @@ export function splitMessage(
   return chunks;
 }
 
+/**
+ * (staging-safe) APP_ENV=staging da chat STAGING_TELEGRAM_CHAT_ALLOWLIST da
+ * yo'q (yoki allowlist bo'sh) — Telegram'ga so'rov KETMAYDI. Status 400 →
+ * `kind='bad_request'`: outbox qatorni darhol `dead` qiladi (qayta
+ * urinilmaydi) va kanal nofaol QILINMAYDI (bu 403 emas — chat tirik).
+ */
+export class TelegramStagingBlockedError extends TelegramApiError {
+  readonly stagingBlocked = true;
+
+  constructor(method: string, reason: string) {
+    super(method, 400, reason, null);
+    this.name = 'TelegramStagingBlockedError';
+  }
+}
+
+/**
+ * `chat_id` li HAR metod (sendMessage/sendPhoto/sendDocument/sendMediaGroup/
+ * editMessageText/editMessageReplyMarkup …) shu tekshiruvdan o'tadi.
+ * `chat_id` siz metodlar (getMe, getUpdates, getFile, answerCallbackQuery,
+ * setWebhook) — kimgadir xabar yubormaydi, o'tkaziladi.
+ * production/development'da hech narsa qilmaydi.
+ */
+export function assertTelegramChatAllowedInEnv(
+  method: string,
+  chatId: unknown,
+): void {
+  if (chatId === undefined || chatId === null || chatId === '') return;
+  const decision = checkStagingOutbound('telegram', chatId);
+  if (!decision.allowed) {
+    throw new TelegramStagingBlockedError(
+      method,
+      decision.reason ?? 'staging_blocked',
+    );
+  }
+}
+
 /** Metrika yorlig'i: 429/5xx — qayta urinish, 403 — bloklangan. */
 function sendResultOf(error: unknown): string {
   if (!(error instanceof TelegramApiError)) return 'failed';
@@ -162,6 +199,7 @@ export async function callTelegramApi<T>(
   payload?: Record<string, unknown>,
   options: { timeoutMs?: number; fetchImpl?: FetchLike } = {},
 ): Promise<T> {
+  assertTelegramChatAllowedInEnv(method, payload?.chat_id);
   const fetchImpl: FetchLike = options.fetchImpl ?? fetch;
   let response: Response;
   try {
@@ -200,6 +238,7 @@ export async function callTelegramApiMultipart<T>(
   form: FormData,
   options: { timeoutMs?: number; fetchImpl?: FetchLike } = {},
 ): Promise<T> {
+  assertTelegramChatAllowedInEnv(method, form.get('chat_id'));
   const fetchImpl: FetchLike = options.fetchImpl ?? fetch;
   let response: Response;
   try {

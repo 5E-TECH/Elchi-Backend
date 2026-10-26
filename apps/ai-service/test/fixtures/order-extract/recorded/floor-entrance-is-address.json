@@ -1,0 +1,34 @@
+{
+  "id": "floor-entrance-is-address",
+  "prompt_version": "2026-10-26.1",
+  "model": "claude-sonnet-5",
+  "source": "seed",
+  "recorded_at": "1970-01-01T00:00:00.000Z",
+  "usage": null,
+  "latency_ms": null,
+  "response": {
+    "orders": [
+      {
+        "customer_name": "Sabina",
+        "phone_number": "[TEL_1]",
+        "extra_number": null,
+        "region_name": "Toshkent shahri",
+        "district_name": "Chilonzor",
+        "address": "4-qavat",
+        "full_address": null,
+        "items": [
+          {
+            "name": "chang yutgich",
+            "quantity": 1
+          }
+        ],
+        "total_price": 1200000,
+        "comment": null,
+        "where_deliver": null,
+        "is_replacement": false,
+        "operator": null,
+        "warnings": []
+      }
+    ]
+  }
+}

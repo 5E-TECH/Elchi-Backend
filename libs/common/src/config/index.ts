@@ -1,4 +1,10 @@
 import * as Joi from 'joi';
+import {
+  APP_ENVS,
+  STAGING_ALLOWLIST_ENV,
+  invalidAllowlistEntries,
+  type StagingChannel,
+} from '../staging/outbound-guard';
 
 /**
  * Reject obviously low-entropy / placeholder secrets at boot. A 32+ char random
@@ -52,13 +58,55 @@ const strongKey = (description: string) =>
       'string.min': 'must be at least 32 characters of random entropy',
     });
 
+/** Allowlist elementlari yaroqli bo'lsin — xato yozilgan raqam jim bloklanmasin. */
+const allowlistOf = (channel: StagingChannel) =>
+  Joi.string()
+    .allow('')
+    .optional()
+    .custom((value: string, helpers) =>
+      invalidAllowlistEntries(channel, value).length
+        ? helpers.error('any.invalid')
+        : value,
+    )
+    .messages({
+      'any.invalid': `${STAGING_ALLOWLIST_ENV[channel]}: yaroqsiz element bor (vergul bilan ajratilgan ro'yxat)`,
+    });
+
+/**
+ * (staging-safe) Muhit va STAGING chiquvchi darvozasi — HAMMA servisda
+ * (libs/common/src/staging/outbound-guard.ts). Sukut `production` — prod
+ * xatti-harakati o'zgarmaydi. `staging` — SMS/Telegram/push faqat
+ * allowlist'ga (bo'sh allowlist = shu kanal yopiq), AI faqat
+ * STAGING_AI_ENABLED=true bo'lsa va STAGING_AI_DAILY_USD_CAP (sukut 2 USD)
+ * shifti bilan.
+ */
+const appEnvKeys = {
+  APP_ENV: Joi.string()
+    .trim()
+    .lowercase()
+    .valid(...APP_ENVS)
+    .empty('')
+    .default('production'),
+  STAGING_SMS_ALLOWLIST: allowlistOf('sms'),
+  STAGING_TELEGRAM_CHAT_ALLOWLIST: allowlistOf('telegram'),
+  STAGING_PUSH_USER_ALLOWLIST: allowlistOf('push'),
+  STAGING_AI_ENABLED: Joi.boolean()
+    .truthy('true', '1')
+    .falsy('false', '0')
+    .empty('')
+    .default(false),
+  STAGING_AI_DAILY_USD_CAP: Joi.number().positive().empty('').optional(),
+};
+
 /**
  * Observability env keys shared by every service (all call initSentry + use the
  * Pino logger). Optional — absence is tolerated (Sentry no-ops) — but validated
  * so a typo'd DSN or an invalid LOG_LEVEL fails fast at boot.
  * (Audit observability P1: SENTRY_DSN / LOG_LEVEL were unvalidated.)
+ * (staging-safe) `appEnvKeys` ham shu yerda — 15 servisning hammasiga tushadi.
  */
 const observabilityKeys = {
+  ...appEnvKeys,
   SENTRY_DSN: Joi.string().uri().allow('').optional(),
   SENTRY_ENVIRONMENT: Joi.string().optional(),
   LOG_LEVEL: Joi.string()
@@ -265,6 +313,14 @@ export const orderValidationSchema = Joi.object({
     .integer()
     .min(1)
     .default(10),
+  // (vNKGbg5q BG7) HQ/filialda turib qolgan bekorlar: eslatma/eskalatsiya.
+  // Qiymatlar kodda yumshoq o'qiladi (noto'g'risi — sukut), shuning uchun
+  // bu yerda faqat satr: noto'g'ri yozuv order-service'ni yiqitmasin.
+  // ENABLED sukut yoqiq; kunlar 3 / 7; soat 10 (Toshkent).
+  CANCEL_RETURN_REMINDER_ENABLED: Joi.string().allow('').optional(),
+  CANCEL_RETURN_REMIND_AFTER_DAYS: Joi.string().allow('').optional(),
+  CANCEL_RETURN_ESCALATE_AFTER_DAYS: Joi.string().allow('').optional(),
+  CANCEL_RETURN_REMINDER_HOUR: Joi.string().allow('').optional(),
   POSTGRES_URI: Joi.string().required(),
   DB_SCHEMA: Joi.string().default('order_schema'),
   RABBITMQ_URI: Joi.string().required(),
@@ -280,6 +336,20 @@ export const orderValidationSchema = Joi.object({
   // orqali ai-service'ga boradi. `required()` emas — kalit yo'q bo'lsa ham
   // order-service ko'tariladi.
   RABBITMQ_AI_QUEUE: Joi.string().empty('').default('ai_queue'),
+  // KmWO9gTA: yetkazish narxi dvigateli SOTUVGA ulanadimi. `off` (sukut) —
+  // market tarifi avvalgidek profildan (pul oyoqlari o'zgarmaydi); `on` —
+  // standart narx + vazn/hajm qo'shimchasi (`pricing/sale-pricing.ts`).
+  SALE_PRICING_ENGINE: Joi.string()
+    .trim()
+    .lowercase()
+    .valid('on', 'off')
+    .empty('')
+    .default('off'),
+  // Bo'sh — barcha marketlar; aks holda faqat shu market id'lari (canary).
+  SALE_PRICING_ENGINE_MARKET_IDS: Joi.string()
+    .pattern(/^\s*\d{1,18}(\s*,\s*\d{1,18})*\s*$/)
+    .empty('')
+    .optional(),
 });
 
 export const catalogValidationSchema = Joi.object({
@@ -341,6 +411,13 @@ export const financeValidationSchema = Joi.object({
   COURIER_CASH_REMINDER_THRESHOLD: Joi.number().min(0).allow('').optional(),
   // Eslatma soati (Asia/Tashkent, 0-23). Sukut 18:00.
   COURIER_CASH_REMINDER_HOUR: Joi.number().integer().min(0).max(23).default(18),
+  // (qzjTMWPb) Kunlik moliya snapshot job'ini o'chirish (sukut: yoqilgan).
+  FINANCE_DAILY_SNAPSHOT_DISABLED: Joi.boolean().default(false),
+  // (gWI4gYkw) Smena hisoboti fayli (PDF/XLSX) — file-service navbati.
+  RABBITMQ_FILE_QUEUE: Joi.string().default('file_queue'),
+  // (y8Tqm9Ap) `off` — smena jadvali cron'i umuman ishga tushmaydi
+  // (favqulodda o'chirish; odatiy boshqaruv — superadmin sozlamasi).
+  FINANCE_SHIFT_SCHEDULER: Joi.string().allow('').optional(),
 });
 
 export const notificationValidationSchema = Joi.object({
@@ -785,6 +862,66 @@ export const aiValidationSchema = Joi.object({
   AI_CAP_WARN_RATIO: Joi.number().min(0.1).max(0.99).empty('').default(0.8),
   // SUPERADMIN'ning bir kunlik "shiftni ko'tarish" amali uchun yuqori chegara.
   AI_CAP_RAISE_MAX_USD: Joi.number().positive().empty('').default(50),
+  /**
+   * F7PWp6cK — AI moliyaviy yordamchi. Sukut bo'yicha O'CHIQ.
+   * Tool'lar faqat o'qiydi: finance / analytics / branch navbatlari.
+   */
+  AI_ASSISTANT_ENABLED: Joi.boolean()
+    .truthy('1')
+    .falsy('0')
+    .empty('')
+    .default(false),
+  AI_ASSISTANT_MODEL: Joi.string().empty('').default('claude-sonnet-5'),
+  AI_ASSISTANT_EFFORT: Joi.string()
+    .valid('low', 'medium', 'high')
+    .empty('')
+    .default('medium'),
+  // Karta: «max 6 qadam» — 6 dan oshirib bo'lmaydi.
+  AI_ASSISTANT_MAX_STEPS: Joi.number()
+    .integer()
+    .min(1)
+    .max(6)
+    .empty('')
+    .default(6),
+  // Har qadamning max_tokens'i (thinking + javob).
+  AI_ASSISTANT_MAX_TOKENS: Joi.number()
+    .integer()
+    .min(1024)
+    .max(32000)
+    .empty('')
+    .default(8000),
+  // Foydalanuvchi kunlik savol limiti (Toshkent kuni) — ⚠️ ega tasdig'i kutilmoqda.
+  AI_ASSISTANT_DAILY_LIMIT: Joi.number()
+    .integer()
+    .min(0)
+    .empty('')
+    .default(100),
+  // Yordamchining kunlik USD shifti (ai_usage_log.feature='assistant'); 0 — o'chiq.
+  AI_ASSISTANT_DAILY_USD_CAP: Joi.number().min(0).empty('').default(5),
+  // Bitta savol uchun shift (USD va token, barcha qadamlar yig'indisi).
+  AI_ASSISTANT_MAX_USD_PER_MESSAGE: Joi.number().min(0).empty('').default(0.5),
+  AI_ASSISTANT_MAX_TOKENS_PER_MESSAGE: Joi.number()
+    .integer()
+    .min(1000)
+    .empty('')
+    .default(200000),
+  // Bitta suhbatdagi savollar va tarix hajmi (belgi) chegarasi.
+  AI_ASSISTANT_MAX_TURNS: Joi.number().integer().min(1).empty('').default(20),
+  AI_ASSISTANT_MAX_HISTORY_CHARS: Joi.number()
+    .integer()
+    .min(10000)
+    .empty('')
+    .default(400000),
+  // Bir vaqtda ishlaydigan yordamchi sikllari (butun ai-service bo'yicha).
+  AI_ASSISTANT_MAX_CONCURRENT: Joi.number()
+    .integer()
+    .min(1)
+    .max(20)
+    .empty('')
+    .default(4),
+  RABBITMQ_FINANCE_QUEUE: Joi.string().empty('').default('finance_queue'),
+  RABBITMQ_ANALYTICS_QUEUE: Joi.string().empty('').default('analytics_queue'),
+  RABBITMQ_BRANCH_QUEUE: Joi.string().empty('').default('branch_queue'),
   // ai-service navbatining prefetch'i (faqat kanal QoS). Bir vaqtda nechta
   // Anthropic chaqiruvi ochiq turishi mumkinligini cheklaydi.
   AI_RMQ_PREFETCH: Joi.number().integer().min(1).max(50).empty('').default(8),

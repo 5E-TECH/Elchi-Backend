@@ -18,7 +18,8 @@ import { FinanceGatewayController } from './finance-gateway.controller';
  *    yetim fayl o'chiriladi; AI fonda (MOCK ai-service) → ai_result;
  *  - GET/PATCH /finance/shift/settings: o'qish — yopuvchi rollar (doira),
  *    o'zgartirish — faqat superadmin;
- *  - GET /finance/shift/:id/report: imzolangan havola, ai_raw faqat SA;
+ *  - GET /finance/shift/:id/report: gateway havolasi (`files/signed/:token`,
+ *    MinIO ichki manzili emas), ai_raw faqat SA;
  *  - POST /finance/shift/close: accounts[] validatsiyasi va uzun timeout.
  * Haqiqiy AI CHAQIRILMAYDI.
  */
@@ -29,8 +30,11 @@ describe('kiZgTybn — gateway: smena karta qoldig‘i rasmi, sozlamalar, hisobo
   const file = { send: jest.fn((): Reply => of({})) };
   const ai = { send: jest.fn((): Reply => of({})) };
   const http = () => app.getHttpServer() as Parameters<typeof request>[0];
+  // Gateway havola tokeni (`file-link.ts`) shu sir'dan olinadi.
+  const previousAccessKey = process.env.ACCESS_TOKEN_KEY;
 
   beforeAll(async () => {
+    process.env.ACCESS_TOKEN_KEY = 'kiZgTybn-spec-access-token-key';
     const module = await Test.createTestingModule({
       controllers: [FinanceGatewayController],
       providers: [
@@ -72,6 +76,8 @@ describe('kiZgTybn — gateway: smena karta qoldig‘i rasmi, sozlamalar, hisobo
 
   afterAll(async () => {
     await app?.close();
+    if (previousAccessKey === undefined) delete process.env.ACCESS_TOKEN_KEY;
+    else process.env.ACCESS_TOKEN_KEY = previousAccessKey;
   });
 
   beforeEach(() => {
@@ -105,7 +111,7 @@ describe('kiZgTybn — gateway: smena karta qoldig‘i rasmi, sozlamalar, hisobo
       pattern.cmd === 'file.upload'
         ? of({ data: { key: 'shift-check-1-photo.jpg' } })
         : of({
-            data: { url: 'https://minio/signed?X-Amz-Expires=300' },
+            data: { url: 'http://minio:9000/elchi-files/x?X-Amz-Expires=300' },
           })) as never);
     finance.send.mockImplementation(((pattern: { cmd: string }) =>
       pattern.cmd === 'finance.shift.account_check.attach_photo'
@@ -138,6 +144,8 @@ describe('kiZgTybn — gateway: smena karta qoldig‘i rasmi, sozlamalar, hisobo
 
     const res = await request(http())
       .post('/finance/shift/account-photo')
+      .set('Host', 'api.elchipochta.uz')
+      .set('X-Forwarded-Proto', 'https')
       .field('card_id', '3')
       .field('entered_balance', '100000')
       .attach('photo', jpegWithExif(), {
@@ -150,10 +158,18 @@ describe('kiZgTybn — gateway: smena karta qoldig‘i rasmi, sozlamalar, hisobo
       expect.objectContaining({
         shift_id: '41',
         ai_enabled: true,
-        photo_url: 'https://minio/signed?X-Amz-Expires=300',
+        photo_url: expect.stringMatching(
+          /^https:\/\/api\.elchipochta\.uz\/files\/signed\/[A-Za-z0-9_-]+$/,
+        ),
         photo_url_expires_in: 300,
       }),
     );
+    // (prod 2026-10-26) MinIO ichki manzili / S3 imzosi brauzerga chiqmaydi.
+    expect(JSON.stringify(res.body)).not.toMatch(/minio|:9000|X-Amz/);
+    expect(res.body.data.check.photo_url).toMatch(
+      /^https:\/\/api\.elchipochta\.uz\/files\/signed\//,
+    );
+    expect(cmd(file.send, 'file.get_url')).toHaveLength(0);
     expect(res.body.data.check.photo_file_key).toBeUndefined();
     expect(res.body.data.check.has_photo).toBe(true);
 
@@ -369,7 +385,7 @@ describe('kiZgTybn — gateway: smena karta qoldig‘i rasmi, sozlamalar, hisobo
             {
               card_id: '3',
               ai_status: 'match',
-              photo_file_key: 'k.jpg',
+              photo_file_key: 'shift-check-9-k.jpg',
               ai_raw: { balance: 1 },
             },
             {
@@ -382,20 +398,34 @@ describe('kiZgTybn — gateway: smena karta qoldig‘i rasmi, sozlamalar, hisobo
         },
       }),
     );
-    file.send.mockImplementation(() => of({ data: { url: 'https://signed' } }));
-    const reg = await request(http()).get('/finance/shift/41/report');
+    const reg = await request(http())
+      .get('/finance/shift/41/report')
+      .set('Host', 'api.elchipochta.uz')
+      .set('X-Forwarded-Proto', 'https');
     expect(reg.status).toBe(200);
     expect(cmd(finance.send, 'finance.shift.report')[0][1]).toEqual({
       shift_id: '41',
       cashbox_user_id: '0',
     });
     expect(reg.body.data.accounts[0]).toEqual(
-      expect.objectContaining({ photo_url: 'https://signed', has_photo: true }),
+      expect.objectContaining({
+        photo_url: expect.stringMatching(
+          /^https:\/\/api\.elchipochta\.uz\/files\/signed\/[A-Za-z0-9_-]+$/,
+        ),
+        photo_url_expires_in: 300,
+        has_photo: true,
+      }),
     );
+    expect(JSON.stringify(reg.body)).not.toContain('shift-check-9-k.jpg');
+    expect(file.send).not.toHaveBeenCalled();
     expect(reg.body.data.accounts[0].photo_file_key).toBeUndefined();
     expect(reg.body.data.accounts[0].ai_raw).toBeUndefined();
     expect(reg.body.data.accounts[1]).toEqual(
-      expect.objectContaining({ photo_url: null, has_photo: false }),
+      expect.objectContaining({
+        photo_url: null,
+        photo_url_expires_in: null,
+        has_photo: false,
+      }),
     );
     const sa = await request(http())
       .get('/finance/shift/41/report')

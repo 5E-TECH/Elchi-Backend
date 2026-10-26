@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { DataSource } from 'typeorm';
 import { randomUUID } from 'node:crypto';
 import { CreateAiSchema1716000000047 } from '../../../../migrations/1716000000047-CreateAiSchema';
+import { AiOrderLatency1716000000170 } from '../../../../migrations/1716000000170-AiOrderLatency';
 import { AiSpendCounter } from '../entities/ai-spend-counter.entity';
 import { AiUsageLog } from '../entities/ai-usage-log.entity';
 import {
@@ -75,6 +76,13 @@ describePg('ai_spend_counter / ai_usage_log — real Postgres', () => {
         await qr.release();
       }
       createdSchema = true;
+    }
+    // WHMAIqyo #5: latency_ms (AiUsageLog entity'sida) — mavjud jadvalga ham.
+    const qrLatency = ds.createQueryRunner();
+    try {
+      await new AiOrderLatency1716000000170().up(qrLatency);
+    } finally {
+      await qrLatency.release();
     }
     await cleanup();
   });

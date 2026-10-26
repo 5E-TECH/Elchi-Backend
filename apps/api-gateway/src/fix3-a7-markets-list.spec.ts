@@ -94,6 +94,8 @@ describe('FIX3 A7 — GET /markets maydonlari rolga qarab', () => {
         tariff_home: 30000,
         tariff_center: 20000,
         default_tariff: 'center',
+        // KmWO9gTA: maydon yo'q (eski qator) — sukut true.
+        weight_volume_pricing: true,
       };
       expect(res.data.items).toEqual([
         {
@@ -134,8 +136,16 @@ describe('FIX3 A7 — GET /markets maydonlari rolga qarab', () => {
       of({
         statusCode: 200,
         data: {
-          items: [{ id: '9', name: 'Yangi', status: 'active' }],
-          meta: { total: 1 },
+          items: [
+            { id: '9', name: 'Yangi', status: 'active' },
+            {
+              id: '10',
+              name: 'Standart',
+              status: 'active',
+              weight_volume_pricing: false,
+            },
+          ],
+          meta: { total: 2 },
         },
       }),
     );
@@ -153,6 +163,19 @@ describe('FIX3 A7 — GET /markets maydonlari rolga qarab', () => {
         tariff_home: null,
         tariff_center: null,
         default_tariff: null,
+        // KmWO9gTA: maydon yo'q — sukut true (vazn/hajm qo'shimchasi bilan).
+        weight_volume_pricing: true,
+      },
+      {
+        id: '10',
+        name: 'Standart',
+        status: 'active',
+        phone_number: null,
+        tariff_home: null,
+        tariff_center: null,
+        default_tariff: null,
+        // KmWO9gTA: false — faqat standart narx, o'zgarishsiz uzatiladi.
+        weight_volume_pricing: false,
       },
     ]);
   });

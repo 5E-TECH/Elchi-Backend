@@ -1,0 +1,27 @@
+{
+  "id": "price-k-suffix",
+  "category": [
+    "price_words"
+  ],
+  "source": "synthetic",
+  "input": {
+    "text": "Umid 98 000 17 28 Jizzax Forish, sport poyabzal 1 ta 350k"
+  },
+  "expected": {
+    "orders": [
+      {
+        "customer_name": "Umid",
+        "phone_number": "+998980001728",
+        "region_name": "Jizzax",
+        "district_name": "Forish",
+        "items": [
+          {
+            "name": "sport poyabzal",
+            "quantity": 1
+          }
+        ],
+        "total_price": 350000
+      }
+    ]
+  }
+}

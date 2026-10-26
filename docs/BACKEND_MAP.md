@@ -396,8 +396,23 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
   `.create`, `logistics.delivery.settings.get` / `.update` (audit verbs
   `logistics.delivery_tariff_created`,
   `logistics.delivery_pricing_settings_updated`). No cache. Pickup fee is
-  returned separately and never part of `total`. **Not wired into the sale
-  flow yet** (`market_tariff` unchanged — KmWO9gTA).
+  returned separately and never part of `total`. **Sale wiring (KmWO9gTA)**:
+  `logistics.delivery.sale_quote` (internal, order-service only; optional
+  `from` = market region, unknown → not city; `product_id` items, unknown →
+  unmeasured; returns `extra`, table bases, `min_delivery_price`,
+  `extra_cost_limit_amount` — migration `1716000000183`). order-service
+  `pricing/sale-pricing.ts` + `domain/order-money.ts`
+  `resolveOrderTariffDetailed`: snapshot first; with
+  `SALE_PRICING_ENGINE=on` (default `off` = old behaviour byte-for-byte),
+  optional canary `SALE_PRICING_ENGINE_MARKET_IDS` and market
+  `weight_volume_pricing` (identity, migration `1716000000182`, default
+  true) the MARKET leg = standard price (`tariff_home`/`tariff_center`, else
+  table base) + weight/volume surcharge, floored at courier + branch share /
+  `min_delivery_price`; sell extra-cost limit from table
+  `address.base − center.base` / `extra_cost_limit_amount`. Courier tariff
+  and rollback (snapshot) untouched. `orders.quoted_market_tariff`
+  (migration `1716000000184`) = open-time quote; drift →
+  `order.delivery_price_changed` activity log.
   Volumetric threshold (AQ9lkgVB, migration `1716000000154`):
   `delivery_pricing_settings.volumetric_from_kg` numeric(10,3) DEFAULT 0 —
   shipment volumetric weight below it is ignored (billable = actual weight),
@@ -487,6 +502,57 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
   Activity-log: `finance.shift_settings_updated`,
   `finance.shift_account_photo_uploaded`, `finance.shift_account_ai_checked`,
   shift close metadata `accounts`.
+- **Shift auto-close + shift report delivery (y8Tqm9Ap + gWI4gYkw,
+  2026-10-26):** migr 167 adds `shifts.close_reason` (manual|auto, NULL =
+  open / legacy → API `manual`), `closed_by_system`, `report_status`
+  (pending|processing|sent|skipped|failed), `report_claimed_at`,
+  `report_round`, `report_file_key`, `report_file_format`; tables
+  `shift_schedule_claims` (PK `key` = `auto_close:<shift>:<slot>` /
+  `warn:<shift>:<slot>`) and `shift_report_deliveries` (UNIQUE shift, round,
+  recipient, channel; status queued|sent|failed|skipped + `failed_reason`).
+  Settings in `finance_settings` (SA only, `PATCH /finance/shift/settings`
+  `auto_close{enabled,times[],scope,warn_before_min}` + `report{recipients:
+  {superadmin|couriers|markets: {telegram,in_app}}, format pdf|xlsx}`).
+  Defaults: auto-close OFF and report delivery OFF (every recipient × channel
+  `false`, release 9) — until SA enables `report.recipients`, `deliver` sends
+  nothing and sets `report_status = skipped`.
+  `ShiftAutoCloseScheduler` (`ScheduleModule`, CronJob every minute,
+  Asia/Tashkent; `FINANCE_SHIFT_SCHEDULER=off` kills it): session
+  `pg_try_advisory_lock(716000000167)` per tick (skip if busy) → warn window
+  (`warn:` claim + `finance.shift_auto_close_warning` outbox in ONE tx, to
+  `opened_by`) → due slots (slot ≤ now < slot+10 min) → `autoCloseShift`
+  for open shifts in scope (`main` = cashbox '0'/NULL, `main+branches` = all)
+  opened BEFORE the slot: shift row FOR UPDATE + status open + `auto_close:`
+  claim (ON CONFLICT DO NOTHING) → same totals as manual close
+  (`fillShiftCloseTotals`), counted = NULL → `discrepancy_* = NULL`,
+  `closed_by = NULL`, `closed_by_system = true`; card rows via
+  `recordAtAutoClose` (all active cards if account check is on, else only
+  drafts; `entered_balance/difference = NULL`, `ai_status = not_required`,
+  unconfirmed); realtime `finance.shift.auto_closed`; activity-log
+  `finance.shift_auto_closed`. Next shift is NOT opened. Report:
+  `ShiftReportService` — close tx sets `report_status = pending`, after
+  commit `deliverSoon` (+ scheduler `processPending` for pending > 30 s /
+  stale processing > 10 min) → atomic claim (UPDATE … RETURNING) → snapshot
+  (shift money blocks, card rows, courier slices = INCOME courier_payment
+  rows of the shift cashbox grouped by `source_user_id` + FOR_COURIER
+  balance, market slices = EXPENSE market_payment rows + FOR_MARKET balance)
+  → superadmins (`identity.user.active_ids_by_role`, explicit ids) get full
+  text + PDF/XLSX in file-service folder `shift-report` (private,
+  `data.telegram_media`); couriers/markets only their own slice (no ops → no
+  message); markets' Telegram = group relay (`telegram.market_id`, text +
+  link); Telegram link pre-check `identity.telegram.resolve_many` → unlinked
+  = `failed` «Telegram ulanmagan», in-app only. ONE tx: delivery rows +
+  `notification.dispatch` outbox (`client_request_id` = UUIDv5
+  `shift-report:<shift>:<round>:<recipient>`) + `report_status = sent`.
+  Types `finance.shift_closed` / `finance.shift_auto_closed` (group key
+  `finance:shift:{{shift_id}}:report:{{round}}`). `queued` rows are synced on
+  read by the GATEWAY (SA report view): notification-service
+  `notification.delivery.by_dispatch` → `finance.shift.report.deliveries.sync`
+  (finance itself never injects the NOTIFICATION client — outbox only).
+  `POST /finance/shift/:id/report/resend` (SA) → new round. Report response
+  adds `close_reason`, `closed_by_system`, `auto_close{closed_at,label}`,
+  `report{status,round,file_format,has_file,file_url(SA)}`, `deliveries[]`
+  (SA only). NO money moves anywhere in this flow.
 - **fix3 (2026-10-01):** `payment_market` replies right after commit (+ the 2 s
   bounded ledger publish); the per-order PAID/PARTLY_PAID sync and the partner
   webhook run in the background (serialized per market, in-process, drained

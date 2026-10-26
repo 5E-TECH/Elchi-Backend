@@ -50,6 +50,10 @@ export const FINANCE_NOTIFICATION_TYPES = [
   'finance.balance_topup',
   'finance.payment_disputed',
   'finance.cash_reminder',
+  // (gWI4gYkw / y8Tqm9Ap) smena hisoboti va avtomatik yopish ogohlantirishi.
+  'finance.shift_closed',
+  'finance.shift_auto_closed',
+  'finance.shift_auto_close_warning',
 ] as const;
 
 /** (2crjWf7v) Kvitansiya tugmalari — notification-service bot handler nomlari. */
@@ -84,6 +88,59 @@ export interface FinanceNotificationPayload {
   channels: string[];
   /** Barqaror dispatch ID (UUID) — takror yuborilmaydi (kuniga bir eslatma). */
   client_request_id?: string;
+  /**
+   * (gWI4gYkw #4) Market Telegram GURUHI relay'i (matn + havola). Berilsa
+   * notification-service shaxsiy DM emas, guruhga yuboradi.
+   */
+  telegram?: {
+    market_id: string;
+    group_type?: 'create' | 'cancel';
+    text: string;
+  };
+}
+
+export interface ShiftAutoCloseWarningInput {
+  shift_id: string | number;
+  /** Smenani ochgan xodim. */
+  recipient_id: string | number | null | undefined;
+  /** `YYYY-MM-DDTHH:MM` (Toshkent). */
+  slot: string;
+  /** `HH:MM` (Toshkent). */
+  time: string;
+  minutes_left: number;
+}
+
+/** (y8Tqm9Ap #4) «Smena HH:MM da avtomatik yopiladi» — slot uchun bir marta. */
+export function buildShiftAutoCloseWarningPayload(
+  input: ShiftAutoCloseWarningInput,
+): FinanceNotificationPayload | null {
+  const type: FinanceNotificationType = 'finance.shift_auto_close_warning';
+  const entry = findNotificationType(type);
+  if (!entry || !isId(input.recipient_id) || !isId(input.shift_id)) {
+    return null;
+  }
+  const shiftId = String(input.shift_id);
+  const data: Record<string, unknown> = {
+    shift_id: shiftId,
+    slot: input.slot,
+    auto_close_at: input.time,
+    minutes_left: Math.max(0, Math.round(input.minutes_left)),
+  };
+  const groupKey = renderNotificationGroupKey(entry.group_key_pattern, data);
+  const minutes = Math.max(1, Math.round(input.minutes_left));
+  return {
+    type,
+    category: entry.category,
+    priority: entry.priority,
+    title: '⏰ Smena tez orada avtomatik yopiladi',
+    body: `Smena #${shiftId} soat ${input.time} da (${minutes} daqiqadan keyin) avtomatik yopiladi. Sanab, o'zingiz yopishga ulguring — avtomatik yopilsa hisobotda «kassir yopmagan» deb yoziladi.`,
+    data,
+    link: '/payments/main-cashbox',
+    recipient_ids: [String(input.recipient_id)],
+    ...(groupKey ? { group_key: groupKey } : {}),
+    channels: [...entry.default_channels],
+    client_request_id: deterministicUuid(`shift-warn:${shiftId}:${input.slot}`),
+  };
 }
 
 export interface PaymentReceivedInput {
@@ -448,6 +505,39 @@ export class FinanceNotificationService {
     if (!payload) return false;
     await this.enqueueSafely('finance.cash_reminder', () => payload, undefined);
     return true;
+  }
+
+  /** (y8Tqm9Ap #4) Avtomatik yopish ogohlantirishi — slot kaliti bilan BITTA tranzaksiyada. */
+  async shiftAutoCloseWarning(
+    input: ShiftAutoCloseWarningInput,
+    manager?: EntityManager,
+  ): Promise<boolean> {
+    let built: FinanceNotificationPayload | null = null;
+    try {
+      built = buildShiftAutoCloseWarningPayload(input);
+    } catch {
+      built = null;
+    }
+    if (!built) return false;
+    const payload = built;
+    await this.enqueueSafely(
+      'finance.shift_auto_close_warning',
+      () => payload,
+      manager,
+    );
+    return true;
+  }
+
+  /**
+   * (gWI4gYkw) Smena hisoboti — tayyor payload (har qabul qiluvchiga alohida,
+   * deterministik `client_request_id`). `shift_report_deliveries` qatorlari
+   * bilan BITTA tranzaksiyada.
+   */
+  async shiftReport(
+    payload: FinanceNotificationPayload,
+    manager?: EntityManager,
+  ): Promise<void> {
+    await this.enqueueSafely(payload.type, () => payload, manager);
   }
 
   /** Balans qo'lda to'ldirildi (faqat market/kuryer kassasiga MANUAL_INCOME). */
