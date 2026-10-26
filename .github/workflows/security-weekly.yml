@@ -1,0 +1,61 @@
+# (bVuDHPFR) Haftalik ta'minot zanjiri / sekret tekshiruvi.
+#
+# ALOHIDA workflow: deploy.yml (prod) va ci.yml ga bog'lanmagan — bu yerdagi
+# qizil natija deploy'ni TO'XTATMAYDI, faqat signal beradi (Actions'da qizil
+# run + GitHub bildirishnomasi). Tuzatish — Dependabot PR'i yoki qo'lda
+# `npm audit fix` (oxirgi qo'lda tuzatish: b519253, 2026-09-14).
+name: Security (weekly)
+
+on:
+  schedule:
+    # Har dushanba 03:00 UTC (08:00 Toshkent).
+    - cron: '0 3 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-weekly-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Faqat prod bog'liqliklari (`--omit=dev`), high va critical darajada qizil.
+  # `npm audit` lockfile bo'yicha ishlaydi — `npm ci` shart emas.
+  npm-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: npm audit (production deps, high+)
+        run: npm audit --omit=dev --audit-level=high
+
+  # To'liq git tarixi (barcha branch'lar). Ma'lum eski topilmalar
+  # `.gitleaksignore` da aniq fingerprint bilan — yangi topilma qizil qiladi.
+  gitleaks-history:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout (full history)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install gitleaks
+        run: |
+          set -e
+          GITLEAKS_VERSION=8.18.4
+          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" -o /tmp/gitleaks.tar.gz
+          tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
+          sudo mv /tmp/gitleaks /usr/local/bin/gitleaks
+          gitleaks version
+
+      - name: Scan full git history
+        run: gitleaks detect --source . --config .gitleaks.toml --redact --verbose --exit-code 1

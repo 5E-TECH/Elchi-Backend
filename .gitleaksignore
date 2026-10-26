@@ -1,0 +1,33 @@
+# gitleaks BASELINE — tarix skanerida MA'LUM topilmalar (bVuDHPFR, 2026-10-26).
+#
+# Format: <commit>:<fayl>:<qoida>:<qator> — gitleaks fingerprint'i. Har qator
+# AYNAN BITTA topilmani yopadi (commit + fayl + qator); xuddi shu qiymat yangi
+# commit'da yoki boshqa faylda paydo bo'lsa — CI yana qizil bo'ladi. Sekret
+# qiymatlari bu yerda YO'Q. Umumiy (fayl/regex bo'yicha) e'tiborsizlik
+# QO'SHILMAYDI — yangi topilma bo'lsa, sekretni almashtiring, keyin shu yerga
+# faqat o'sha fingerprint'ni yozing.
+#
+# Ro'yxatni qayta tekshirish (sekretlar yashiriladi):
+#   gitleaks detect --source . --config .gitleaks.toml --redact \
+#     --report-format json --report-path /tmp/gl.json
+# ⚠️ Tarix qayta yozilsa (AFiXurLH: git filter-repo), commit SHA'lari o'zgaradi —
+# bu ro'yxat o'sha kuni qayta yaratiladi (.env.production qatorlari esa
+# o'chiriladi).
+
+# .env.production prod sekretlari bilan commit qilingan (2026-04-21). Sekretlarni
+# almashtirish + tarixni tozalash — AFiXurLH kartasi
+# (docs/audit/SECRET_ROTATION_RUNBOOK.md). Shu ikki commit'dan boshqasi YOPILMAYDI.
+fd000bee9fda1285e21f66b4033704b51fdb41e6:.env.production:generic-api-key:52
+266c00ee610eb98ac7a28a3fb5ec11187ee11b2e:.env.production:generic-api-key:52
+
+# DI boot smoke skriptining birinchi versiyasi: faqat CI'da servisni DB/RMQ'siz
+# ko'tarish uchun bir martalik soxta qiymatlar (prod/lokal .env bilan mos emas).
+# 7dda8a0 dan beri ular har ishga tushishda tasodifiy generatsiya qilinadi.
+92383e65e52e427a29b91274184678a3af982cc7:scripts/di-boot-smoke.sh:generic-api-key:31
+92383e65e52e427a29b91274184678a3af982cc7:scripts/di-boot-smoke.sh:generic-api-key:32
+92383e65e52e427a29b91274184678a3af982cc7:scripts/di-boot-smoke.sh:generic-api-key:35
+92383e65e52e427a29b91274184678a3af982cc7:scripts/di-boot-smoke.sh:generic-api-key:36
+
+# NestJS shablon README'sidagi CircleCI nishoni (ommaviy namuna token, Elchi'ga
+# tegishli emas) — birinchi commit.
+f68a30b35d13d7a8d677dafcef53d3d97c31ca79:README.md:generic-api-key:5
