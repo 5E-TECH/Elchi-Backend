@@ -90,7 +90,11 @@ function sandbox(): Sandbox {
   return s;
 }
 
-function runMinio(s: Sandbox, args: string[] = [], env: Record<string, string> = {}) {
+function runMinio(
+  s: Sandbox,
+  args: string[] = [],
+  env: Record<string, string> = {},
+) {
   return spawnSync('sh', [MINIO_SCRIPT, ...args], {
     encoding: 'utf8',
     env: {
@@ -132,7 +136,14 @@ describe('backup-minio-offsite.sh (6RaEn5cN)', () => {
     rmSync(join(s.minio, 'elchi-files', 'b.pdf'));
     const r2 = runMinio(s, [], { MINIO_OFFSITE_NOW: String(2_000_000_000) });
     expect(r2.status).toBe(0);
-    const ver = join(s.r2, 'bkt', 'minio', 'elchi-files', 'versions', '20330518T033320Z');
+    const ver = join(
+      s.r2,
+      'bkt',
+      'minio',
+      'elchi-files',
+      'versions',
+      '20330518T033320Z',
+    );
     expect(readFileSync(join(ver, 'cod', 'a.jpg'), 'utf8')).toBe('AAAA');
     expect(readFileSync(join(ver, 'b.pdf'), 'utf8')).toBe('BBBBBB');
     expect(readFileSync(join(cur, 'cod', 'a.jpg'), 'utf8')).toBe('NEW');
@@ -140,10 +151,21 @@ describe('backup-minio-offsite.sh (6RaEn5cN)', () => {
     expect(status(s)).toMatch(/^versioned=2$/m);
 
     const calls = readFileSync(s.log, 'utf8');
-    expect(calls).toMatch(/rclone sync minio:elchi-files r2:bkt\/minio\/elchi-files\/current --backup-dir r2:bkt\/minio\/elchi-files\/versions\/\d{8}T\d{6}Z --checksum/);
+    expect(calls).toMatch(
+      /rclone sync minio:elchi-files r2:bkt\/minio\/elchi-files\/current --backup-dir r2:bkt\/minio\/elchi-files\/versions\/\d{8}T\d{6}Z --checksum/,
+    );
     expect(calls).toMatch(/--max-delete 50/);
-    expect(calls).toMatch(/rclone check minio:elchi-files r2:bkt\/minio\/elchi-files\/current --one-way/);
-    for (const out of [r1.stdout, r1.stderr, r2.stdout, r2.stderr, calls, status(s)]) {
+    expect(calls).toMatch(
+      /rclone check minio:elchi-files r2:bkt\/minio\/elchi-files\/current --one-way/,
+    );
+    for (const out of [
+      r1.stdout,
+      r1.stderr,
+      r2.stdout,
+      r2.stderr,
+      calls,
+      status(s),
+    ]) {
       expect(out).not.toContain(SECRET);
       expect(out).not.toContain(RO_SECRET);
     }
@@ -155,8 +177,12 @@ describe('backup-minio-offsite.sh (6RaEn5cN)', () => {
     mkdirSync(join(s.minio, 'elchi-files'));
     const r = runMinio(s);
     expect(r.status).toBe(1);
-    expect(r.stderr).toMatch(/EMPTY while the R2 copy holds 2 objects — refused/);
-    expect(readdirSync(join(s.r2, 'bkt', 'minio', 'elchi-files'))).toEqual(['current']);
+    expect(r.stderr).toMatch(
+      /EMPTY while the R2 copy holds 2 objects — refused/,
+    );
+    expect(readdirSync(join(s.r2, 'bkt', 'minio', 'elchi-files'))).toEqual([
+      'current',
+    ]);
     expect(status(s)).toMatch(/^state=error$/m);
   });
 
@@ -176,7 +202,14 @@ describe('backup-minio-offsite.sh (6RaEn5cN)', () => {
   });
 
   it('a failed sync prunes nothing and marks the status error', () => {
-    const vroot = join(s.r2, 'bkt', 'minio', 'elchi-files', 'versions', '20200101T000000Z');
+    const vroot = join(
+      s.r2,
+      'bkt',
+      'minio',
+      'elchi-files',
+      'versions',
+      '20200101T000000Z',
+    );
     mkdirSync(vroot, { recursive: true });
     const r = runMinio(s, [], { FAKE_RCLONE: 'fail-sync' });
     expect(r.status).toBe(1);
@@ -198,8 +231,13 @@ describe('backup-minio-offsite.sh (6RaEn5cN)', () => {
   it('--check: fresh success healthy, > 26h unhealthy', () => {
     const now = Math.floor(Date.now() / 1000);
     expect(runMinio(s, [], { MINIO_OFFSITE_NOW: String(now) }).status).toBe(0);
-    expect(runMinio(s, ['--check'], { MINIO_OFFSITE_NOW: String(now + 3600) }).status).toBe(0);
-    const stale = runMinio(s, ['--check'], { MINIO_OFFSITE_NOW: String(now + 27 * 3600) });
+    expect(
+      runMinio(s, ['--check'], { MINIO_OFFSITE_NOW: String(now + 3600) })
+        .status,
+    ).toBe(0);
+    const stale = runMinio(s, ['--check'], {
+      MINIO_OFFSITE_NOW: String(now + 27 * 3600),
+    });
     expect(stale.status).toBe(1);
     expect(stale.stderr).toMatch(/UNHEALTHY: last successful run/);
   });
@@ -228,9 +266,18 @@ describe('backup-alert.sh (6RaEn5cN)', () => {
     writeFileSync(join(dir, 'bin', 'curl'), FAKE_CURL);
     chmodSync(join(dir, 'bin', 'docker'), 0o755);
     chmodSync(join(dir, 'bin', 'curl'), 0o755);
-    writeFileSync(join(dir, 'app', '.env.production'), `TELEGRAM_BOT_TOKEN=${token}\n`);
-    writeFileSync(join(dir, 'ops', 'backup-alert.env'), 'BACKUP_ALERT_TELEGRAM_CHAT_ID=42\n');
-    writeFileSync(join(dir, 'ops', 'backup-minio-offsite.sh'), readFileSync(MINIO_SCRIPT));
+    writeFileSync(
+      join(dir, 'app', '.env.production'),
+      `TELEGRAM_BOT_TOKEN=${token}\n`,
+    );
+    writeFileSync(
+      join(dir, 'ops', 'backup-alert.env'),
+      'BACKUP_ALERT_TELEGRAM_CHAT_ID=42\n',
+    );
+    writeFileSync(
+      join(dir, 'ops', 'backup-minio-offsite.sh'),
+      readFileSync(MINIO_SCRIPT),
+    );
   });
   afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
@@ -254,7 +301,9 @@ describe('backup-alert.sh (6RaEn5cN)', () => {
       `state=ok\nlast_success_at=${at}\nmessage=ok\n`,
     );
   const curlCalls = () =>
-    existsSync(join(dir, 'curl.log')) ? readFileSync(join(dir, 'curl.log'), 'utf8').trim().split('\n') : [];
+    existsSync(join(dir, 'curl.log'))
+      ? readFileSync(join(dir, 'curl.log'), 'utf8').trim().split('\n')
+      : [];
 
   it('all healthy -> no message; problem -> one Telegram message (token only via stdin); repeat suppressed; recovery message', () => {
     const now = Math.floor(Date.now() / 1000);
@@ -262,35 +311,56 @@ describe('backup-alert.sh (6RaEn5cN)', () => {
     expect(run({ BACKUP_ALERT_NOW: String(now) }).status).toBe(0);
     expect(curlCalls()).toEqual([]);
 
-    const bad = { BACKUP_ALERT_NOW: String(now + 60), FAKE_elchi_db_backup: 'running unhealthy' };
+    const bad = {
+      BACKUP_ALERT_NOW: String(now + 60),
+      FAKE_elchi_db_backup: 'running unhealthy',
+    };
     expect(run(bad).status).toBe(1);
     expect(curlCalls()).toHaveLength(1);
     expect(curlCalls()[0]).toMatch(/-K -/);
     expect(curlCalls()[0]).toMatch(/chat_id=42/);
-    expect(curlCalls()[0]).toMatch(/DB kunlik backup: elchi-db-backup = running unhealthy/);
+    expect(curlCalls()[0]).toMatch(
+      /DB kunlik backup: elchi-db-backup = running unhealthy/,
+    );
     expect(curlCalls()[0]).not.toContain(token);
-    expect(readFileSync(join(dir, 'curl.log.stdin'), 'utf8')).toContain(`bot${token}/sendMessage`);
+    expect(readFileSync(join(dir, 'curl.log.stdin'), 'utf8')).toContain(
+      `bot${token}/sendMessage`,
+    );
 
     expect(run({ ...bad, BACKUP_ALERT_NOW: String(now + 900) }).status).toBe(1);
     expect(curlCalls()).toHaveLength(1); // same problem, < 6h: no repeat
-    expect(run({ ...bad, BACKUP_ALERT_NOW: String(now + 7 * 3600) }).status).toBe(1);
+    expect(
+      run({ ...bad, BACKUP_ALERT_NOW: String(now + 7 * 3600) }).status,
+    ).toBe(1);
     expect(curlCalls()).toHaveLength(2); // repeat after 6h
 
     minioOk(now + 7 * 3600);
-    expect(run({ BACKUP_ALERT_NOW: String(now + 7 * 3600 + 60) }).status).toBe(0);
+    expect(run({ BACKUP_ALERT_NOW: String(now + 7 * 3600 + 60) }).status).toBe(
+      0,
+    );
     expect(curlCalls()).toHaveLength(3);
     expect(curlCalls()[2]).toMatch(/tiklandi/);
-    const log = readFileSync(join(dir, 'ops', 'logs', 'backup-alert.log'), 'utf8');
+    const log = readFileSync(
+      join(dir, 'ops', 'logs', 'backup-alert.log'),
+      'utf8',
+    );
     expect(log).not.toContain(token);
   });
 
   it('missing container / stale MinIO copy are problems; --dry-run sends nothing', () => {
     const now = Math.floor(Date.now() / 1000);
     minioOk(now - 2 * DAY);
-    const r = run({ BACKUP_ALERT_NOW: String(now), FAKE_elchi_backup_offsite: '' }, ['--dry-run']);
+    const r = run(
+      { BACKUP_ALERT_NOW: String(now), FAKE_elchi_backup_offsite: '' },
+      ['--dry-run'],
+    );
     expect(r.stdout).toMatch(/send=problem/);
-    expect(r.stdout).toMatch(/DB off-site \(R2\): elchi-backup-offsite = missing/);
-    expect(r.stdout).toMatch(/MinIO off-site \(R2\): UNHEALTHY: last successful run/);
+    expect(r.stdout).toMatch(
+      /DB off-site \(R2\): elchi-backup-offsite = missing/,
+    );
+    expect(r.stdout).toMatch(
+      /MinIO off-site \(R2\): UNHEALTHY: last successful run/,
+    );
     expect(curlCalls()).toEqual([]);
   });
 
@@ -298,9 +368,16 @@ describe('backup-alert.sh (6RaEn5cN)', () => {
     rmSync(join(dir, 'ops', 'backup-alert.env'));
     const now = Math.floor(Date.now() / 1000);
     minioOk(now);
-    expect(run({ BACKUP_ALERT_NOW: String(now), FAKE_elchi_db_backup: 'exited no-healthcheck' }).status).toBe(1);
+    expect(
+      run({
+        BACKUP_ALERT_NOW: String(now),
+        FAKE_elchi_db_backup: 'exited no-healthcheck',
+      }).status,
+    ).toBe(1);
     expect(curlCalls()).toEqual([]);
-    expect(readFileSync(join(dir, 'ops', 'logs', 'backup-alert.log'), 'utf8')).toMatch(/kanal sozlanmagan/);
+    expect(
+      readFileSync(join(dir, 'ops', 'logs', 'backup-alert.log'), 'utf8'),
+    ).toMatch(/kanal sozlanmagan/);
   });
 });
 
@@ -311,10 +388,19 @@ describe('ops wiring — compose / deploy.yml / rotation (ZfI9nERJ, AFiXurLH)', 
 
   it('cloudflared: pinned tag+digest (never :latest), two replicas, no depends_on gateway, grace period', () => {
     expect(compose).not.toMatch(/cloudflared:latest/);
-    expect(compose).toMatch(/^ {2}image: cloudflare\/cloudflared:\d{4}\.\d+\.\d+@sha256:[0-9a-f]{64}$/m);
-    expect(compose).toMatch(/^ {2}cloudflared:\n {4}<<: \*cloudflared\n {4}container_name: elchi-cloudflared$/m);
-    expect(compose).toMatch(/^ {2}cloudflared-2:\n {4}<<: \*cloudflared\n {4}container_name: elchi-cloudflared-2$/m);
-    const block = compose.slice(compose.indexOf('x-cloudflared:'), compose.indexOf('\nservices:'));
+    expect(compose).toMatch(
+      /^ {2}image: cloudflare\/cloudflared:\d{4}\.\d+\.\d+@sha256:[0-9a-f]{64}$/m,
+    );
+    expect(compose).toMatch(
+      /^ {2}cloudflared:\n {4}<<: \*cloudflared\n {4}container_name: elchi-cloudflared$/m,
+    );
+    expect(compose).toMatch(
+      /^ {2}cloudflared-2:\n {4}<<: \*cloudflared\n {4}container_name: elchi-cloudflared-2$/m,
+    );
+    const block = compose.slice(
+      compose.indexOf('x-cloudflared:'),
+      compose.indexOf('\nservices:'),
+    );
     expect(block).not.toMatch(/depends_on/);
     expect(block).toMatch(/stop_grace_period: 35s/);
   });
@@ -337,15 +423,26 @@ describe('ops wiring — compose / deploy.yml / rotation (ZfI9nERJ, AFiXurLH)', 
     expect(deploy).toMatch(/sed 's\/ api-gateway \/ \/;/);
     const bulk = deploy.indexOf('--build --remove-orphans $DEPLOY_SERVICES');
     expect(bulk).toBeGreaterThan(deploy.indexOf('GATEWAY_SWAP=true'));
-    expect(deploy.indexOf('            if [ "$GATEWAY_SWAP" = true ]; then')).toBeGreaterThan(bulk);
+    expect(
+      deploy.indexOf('            if [ "$GATEWAY_SWAP" = true ]; then'),
+    ).toBeGreaterThan(bulk);
   });
 
   it('deploy: the .env.production safety copy is private and deleted (AFiXurLH)', () => {
-    expect(deploy).not.toMatch(/cp -f \.env\.production \/tmp\/elchi-env-backup /);
-    expect(deploy).toMatch(/ENV_BACKUP="\$\(umask 077 && mktemp \/tmp\/elchi-env-backup\.XXXXXXXXXX\)"/);
+    expect(deploy).not.toMatch(
+      /cp -f \.env\.production \/tmp\/elchi-env-backup /,
+    );
+    expect(deploy).toMatch(
+      /ENV_BACKUP="\$\(umask 077 && mktemp \/tmp\/elchi-env-backup\.XXXXXXXXXX\)"/,
+    );
     expect(deploy).toMatch(/trap 'rm -f "\$ENV_BACKUP"' EXIT/);
-    expect(deploy).toMatch(/test -f \.env\.production \|\| cp -f "\$ENV_BACKUP" \.env\.production/);
-    const rollback = deploy.slice(deploy.indexOf('rollback() {'), deploy.indexOf("trap 'rollback' ERR"));
+    expect(deploy).toMatch(
+      /test -f \.env\.production \|\| cp -f "\$ENV_BACKUP" \.env\.production/,
+    );
+    const rollback = deploy.slice(
+      deploy.indexOf('rollback() {'),
+      deploy.indexOf("trap 'rollback' ERR"),
+    );
     expect(rollback).toContain('cp -f "$ENV_BACKUP" .env.production');
   });
 
@@ -355,16 +452,31 @@ describe('ops wiring — compose / deploy.yml / rotation (ZfI9nERJ, AFiXurLH)', 
     expect(rot).not.toMatch(/rabbitmqctl[^\n]*add_user "\$u" "\$p"/);
     expect(rot).not.toMatch(/rabbitmqctl[^\n`]*authenticate_user "/);
     expect(rot).toMatch(/-K - "http:\/\/127\.0\.0\.1:15672\/api\/whoami"/);
-    const syntax = spawnSync('bash', ['-n', join(ROOT, 'scripts', 'rotate-datastore-secrets.sh')]);
+    const syntax = spawnSync('bash', [
+      '-n',
+      join(ROOT, 'scripts', 'rotate-datastore-secrets.sh'),
+    ]);
     expect(syntax.status).toBe(0);
     // ships WITH the rotation (prod password is 17 chars today) — see docs/ops/secret-rotation.md §5
-    expect(read('libs/common/src/config/index.ts')).not.toMatch(/POSTGRES_PASSWORD: Joi\.when/);
-    expect(existsSync(join(ROOT, 'docs', 'ops', 'rotation', 'postgres-password-min24.patch'))).toBe(true);
+    expect(read('libs/common/src/config/index.ts')).not.toMatch(
+      /POSTGRES_PASSWORD: Joi\.when/,
+    );
+    expect(
+      existsSync(
+        join(ROOT, 'docs', 'ops', 'rotation', 'postgres-password-min24.patch'),
+      ),
+    ).toBe(true);
   });
 
   it('all new shell scripts parse', () => {
-    for (const f of ['backup-minio-offsite-cron.sh', 'backup-alert.sh', 'restore-drill.sh']) {
-      expect(spawnSync('bash', ['-n', join(ROOT, 'scripts', f)]).status).toBe(0);
+    for (const f of [
+      'backup-minio-offsite-cron.sh',
+      'backup-alert.sh',
+      'restore-drill.sh',
+    ]) {
+      expect(spawnSync('bash', ['-n', join(ROOT, 'scripts', f)]).status).toBe(
+        0,
+      );
     }
     expect(spawnSync('sh', ['-n', MINIO_SCRIPT]).status).toBe(0);
   });
