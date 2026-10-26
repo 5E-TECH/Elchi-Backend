@@ -357,13 +357,15 @@ jobs:
                 fi
                 echo "cloudflared: $s runs '$have', pinned '$want' — rolling it"
                 since="$(date +%s)"
-                $DC up -d --no-deps --force-recreate "$s" || { echo "WARNING: $s did not start" >&2; continue; }
+                # cloudflared-2 must be live before the main connector is touched —
+                # otherwise stop the rollout (main connector keeps serving).
+                $DC up -d --no-deps --force-recreate "$s" || { echo "WARNING: $s did not start" >&2; [ "$s" = cloudflared-2 ] && return 1; continue; }
                 for i in $(seq 1 30); do
                   docker logs --since "$since" "$name" 2>&1 | grep -q 'Registered tunnel connection' && break
                   sleep 2
                 done
                 docker logs --since "$since" "$name" 2>&1 | grep -q 'Registered tunnel connection' ||
-                  echo "WARNING: $s has not registered a tunnel connection yet" >&2
+                  { echo "WARNING: $s has not registered a tunnel connection yet" >&2; [ "$s" = cloudflared-2 ] && return 1; }
               done
             }
             cloudflared_rollout || echo "WARNING: cloudflared rollout problem — check: docker logs elchi-cloudflared / elchi-cloudflared-2" >&2
@@ -726,13 +728,15 @@ jobs:
                 fi
                 echo "cloudflared: $s runs '$have', pinned '$want' — rolling it"
                 since="$(date +%s)"
-                $DC up -d --no-deps --force-recreate "$s" || { echo "WARNING: $s did not start" >&2; continue; }
+                # cloudflared-2 must be live before the main connector is touched —
+                # otherwise stop the rollout (main connector keeps serving).
+                $DC up -d --no-deps --force-recreate "$s" || { echo "WARNING: $s did not start" >&2; [ "$s" = cloudflared-2 ] && return 1; continue; }
                 for i in $(seq 1 30); do
                   docker logs --since "$since" "$name" 2>&1 | grep -q 'Registered tunnel connection' && break
                   sleep 2
                 done
                 docker logs --since "$since" "$name" 2>&1 | grep -q 'Registered tunnel connection' ||
-                  echo "WARNING: $s has not registered a tunnel connection yet" >&2
+                  { echo "WARNING: $s has not registered a tunnel connection yet" >&2; [ "$s" = cloudflared-2 ] && return 1; }
               done
             }
             cloudflared_rollout || echo "WARNING: cloudflared rollout problem — check: docker logs elchi-stg-cloudflared / elchi-stg-cloudflared-2" >&2
