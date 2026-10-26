@@ -128,6 +128,23 @@ export const gatewayValidationSchema = Joi.object({
   // (process.env, global THROTTLE_LIMIT dan past emas) — sukutlar AYNI.
   SCAN_THROTTLE_LIMIT: Joi.number().integer().min(1).empty('').default(300),
   SCAN_THROTTLE_TTL_MS: Joi.number().integer().min(1000).empty(''),
+  // mSkzzNBJ: ochiq kalkulyator (POST /public/delivery-quote, GET
+  // /public/delivery-tariffs) — per-IP, QATTIQROQ limit (global THROTTLE_LIMIT
+  // dan yuqori emas) va qisqa javob keshi (0 — o'chiq). Haqiqiy qiymat
+  // `public-delivery-pricing/public-delivery-pricing.ts` da (process.env) —
+  // sukutlar AYNI.
+  PUBLIC_PRICING_THROTTLE_LIMIT: Joi.number()
+    .integer()
+    .min(1)
+    .empty('')
+    .default(30),
+  PUBLIC_PRICING_THROTTLE_TTL_MS: Joi.number().integer().min(1000).empty(''),
+  PUBLIC_PRICING_CACHE_TTL_MS: Joi.number()
+    .integer()
+    .min(0)
+    .max(600_000)
+    .empty('')
+    .default(30_000),
   // Comma-separated list of allowed browser origins for CORS.
   // localhost/127.0.0.1 are always allowed in code regardless of this value.
   CORS_ORIGINS: Joi.string().allow('').default(''),
