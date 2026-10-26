@@ -49,6 +49,7 @@ import {
   DistrictMergeErrorResponseDto,
   DistrictMergeResponseDto,
   PostListPageResponseDto,
+  PostReceiptResponseDto,
   DistrictUsageResponseDto,
   MergeDistrictRequestDto,
   ReassignPostRequestDto,
@@ -672,9 +673,11 @@ export class LogisticsGatewayController {
   @ApiOperation({
     summary: 'Get post by id',
     description:
-      "Z3pUOxou — LOGIST: pochta o'ziga biriktirilgan viloyatda bo'lsa (aks holda 403), `post_total_price` siz.",
+      "Z3pUOxou — LOGIST: pochta o'ziga biriktirilgan viloyatda bo'lsa (aks holda 403), `post_total_price` siz. " +
+      '1mOjtOVC: javobda `courier { id, name, phone_number } | null` — pochta chekidagi haydovchi (kuryersiz pochta — null).',
   })
   @ApiParam({ name: 'id', description: 'Post ID (id)' })
+  @ApiOkResponse({ type: PostReceiptResponseDto })
   getPostById(@Param('id') id: string, @Req() req?: { user?: JwtUser }) {
     return this.logisticsClient
       .send(

@@ -385,7 +385,11 @@ export class TransferBatchBranchRefDto {
   name!: string | null;
 }
 
-/** (3HKvAyhm) `GET /transfer-batches/:id` — yangi maydonlar (qolganlari avvalgidek). */
+/**
+ * (3HKvAyhm) `GET /transfer-batches/:id`. 1mOjtOVC: paket cheki maydonlari
+ * (token, filiallar, yo'nalish, soni, summa, haydovchi, telefon, avtomobil,
+ * vaqt) ham hujjatlashtirildi — javob o'zgarmagan.
+ */
 export class TransferBatchDetailDto {
   @ApiProperty({ example: '601' })
   id!: string;
@@ -395,6 +399,80 @@ export class TransferBatchDetailDto {
 
   @ApiProperty({ example: '1' })
   destination_branch_id!: string;
+
+  @ApiProperty({
+    example: 'BTB-8F3K2Q9X',
+    description:
+      '1mOjtOVC (paket cheki): QR token — `BTB-` (FORWARD) / `BTR-` (RETURN)',
+  })
+  qr_code_token!: string;
+
+  @ApiProperty({
+    enum: ['FORWARD', 'RETURN'],
+    example: 'FORWARD',
+    description: "Yo'nalish: FORWARD — HQ → filial, RETURN — filial → HQ",
+  })
+  direction!: string;
+
+  @ApiProperty({
+    enum: ['PENDING', 'SENT', 'RECEIVED', 'CANCELLED'],
+    example: 'SENT',
+  })
+  status!: string;
+
+  @ApiProperty({ example: '5', description: 'Manzil viloyati' })
+  target_region_id!: string;
+
+  @ApiProperty({ example: 12, description: 'Paketdagi buyurtmalar soni' })
+  order_count!: number;
+
+  @ApiPropertyOptional({
+    example: 1250000,
+    description:
+      "Jami summa. LOGIST javobida YO'Q (Z3pUOxou — pulsiz proyeksiya)",
+  })
+  total_price?: number;
+
+  @ApiProperty({
+    example: 'Aliyev Vali',
+    nullable: true,
+    type: String,
+    description:
+      "1mOjtOVC: haydovchi — jo'natishda (`POST /transfer-batches/:id/send`) yoziladi; jo'natilmagan paketda null",
+  })
+  driver_name!: string | null;
+
+  @ApiProperty({
+    example: '+998901234567',
+    nullable: true,
+    type: String,
+    description: '1mOjtOVC: haydovchi telefoni (jo‘natishda)',
+  })
+  driver_phone!: string | null;
+
+  @ApiProperty({
+    example: '01A123BC',
+    nullable: true,
+    type: String,
+    description: '1mOjtOVC: avtomobil raqami (jo‘natishda)',
+  })
+  vehicle_plate!: string | null;
+
+  @ApiProperty({
+    example: '2026-10-26T09:15:00.000Z',
+    description: 'Yaratilgan vaqt',
+  })
+  createdAt!: string;
+
+  @ApiProperty({
+    example: '2026-10-26T10:00:00.000Z',
+    nullable: true,
+    type: String,
+  })
+  sent_at!: string | null;
+
+  @ApiProperty({ example: null, nullable: true, type: String })
+  received_at!: string | null;
 
   @ApiProperty({
     type: TransferBatchBranchRefDto,

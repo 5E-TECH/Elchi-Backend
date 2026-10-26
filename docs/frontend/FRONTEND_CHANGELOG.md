@@ -23,6 +23,27 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-10-26 — Chek uchun backend: operator/market telefonlari Swagger'da, paket va pochta cheki maydonlari (1mOjtOVC)
+
+Deploy: api-gateway (faqat Swagger) + logistics-service (`GET /post/:id` ga `courier`). Migratsiya yo'q.
+`openapi.json` yangilandi.
+
+- [2026-10-26] 🟢 [gateway] — `GET /orders` qatorlari va `GET /orders/:id` da `operator_phone`,
+  `secondary_operator_phone`, `market { id, name, phone_number }` ALLAQACHON qaytadi (buyurtmani ko'ra oladigan har
+  rolga, rol proyeksiyasi ularni olib tashlamaydi) — endi Swagger'da: `OrderReceiptFieldsDto` /
+  `OrderListReceiptPageDto` (qisman sxema — faqat chek maydonlari; boshqa maydonlar o'zgarmagan).
+- 🟢 [gateway] — `GET /transfer-batches/:id` (`TransferBatchDetailDto`) paket cheki maydonlari hujjatlashtirildi:
+  `qr_code_token` (`BTB-`/`BTR-`), `source_branch`/`destination_branch` `{id,name}`, `direction`, `status`,
+  `order_count`, `total_price` (logistda yo'q), `driver_name`, `driver_phone`, `vehicle_plate` (jo'natishda yoziladi,
+  undan oldin `null`), `createdAt`, `sent_at`, `received_at`. Javob o'zgarmagan.
+- 🆕 [logistics] — `GET /post/:id`: javobga `courier: { id, name, phone_number } | null` qo'shildi (pochta chekidagi
+  haydovchi = pochta kuryeri; kuryersiz/filial pochtasi yoki identity javob bermasa — `null`). Pochtada avtomobil
+  raqami maydoni yo'q (ma'lumot manbai yo'q).
+- 🟢 `POST /printer/thermal-pdf`, `POST /printer/receipt` — o'zgarmagan (o'chirish yoki yangi dizaynga moslash —
+  ega qarori; FE ularni chaqirmaydi, faqat `miscCoverage.ts` da ishlatilmagan hook bor).
+- 🔧 FE: `ApiOrder` turiga `operator_phone`, `secondary_operator_phone`, `market.phone_number`; paket/pochta cheki
+  shu maydonlardan.
+
 ### 2026-10-26 — Hududlar: `GET /region/my/district-stats` filial / kuryer kesimida (aLx7Di99)
 
 Deploy: faqat logistics-service (+ api-gateway — faqat Swagger tavsifi). Migratsiya yo'q. `openapi.json` yangilandi.

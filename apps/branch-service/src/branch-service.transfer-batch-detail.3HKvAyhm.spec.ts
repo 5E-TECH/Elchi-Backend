@@ -187,3 +187,58 @@ describe('3HKvAyhm — GET /transfer-batches/:id/history', () => {
     expect(res.data.every((row) => row.user === null)).toBe(true);
   });
 });
+
+/**
+ * 1mOjtOVC — paket cheki: `GET /transfer-batches/:id` javobida token,
+ * filiallar, yo'nalish, soni, summa, haydovchi, telefoni, avtomobil raqami,
+ * yaratilgan vaqt — order-service yozuvidan o'zgarishsiz o'tadi.
+ */
+describe('1mOjtOVC — paket cheki maydonlari (GET /transfer-batches/:id)', () => {
+  const SENT_BATCH = {
+    ...BATCH,
+    qr_code_token: 'BTB-8F3K2Q9X',
+    direction: 'FORWARD',
+    status: 'SENT',
+    order_count: 12,
+    total_price: 1250000,
+    driver_name: 'Aliyev Vali',
+    driver_phone: '+998901234567',
+    vehicle_plate: '01A123BC',
+    createdAt: '2026-10-26T09:15:00.000Z',
+    sent_at: '2026-10-26T10:00:00.000Z',
+  };
+
+  it('⭐ menejer — chek maydonlari javobda (haydovchi/avtomobil bilan), filial nomlari bilan', async () => {
+    const svc = make();
+    svc.sendOrderCommand.mockImplementation((cmd: string) =>
+      Promise.resolve(
+        cmd === 'order.transfer_batch.find_by_id'
+          ? { statusCode: 200, data: { ...SENT_BATCH } }
+          : {},
+      ),
+    );
+    const res = (await svc.findTransferBatchById('601', MANAGER)) as Record<
+      string,
+      unknown
+    >;
+    expect(res).toMatchObject({
+      qr_code_token: 'BTB-8F3K2Q9X',
+      direction: 'FORWARD',
+      order_count: 12,
+      total_price: 1250000,
+      driver_name: 'Aliyev Vali',
+      driver_phone: '+998901234567',
+      vehicle_plate: '01A123BC',
+      createdAt: '2026-10-26T09:15:00.000Z',
+      source_branch: { id: '3', name: 'QA filial' },
+      destination_branch: { id: '1', name: 'Bosh ofis' },
+    });
+  });
+
+  it('ruxsatsiz menejer — 403 (chek maydonlari ham ko‘rinmaydi)', async () => {
+    const svc = make();
+    expect(await statusOf(svc.findTransferBatchById('601', OUTSIDER))).toBe(
+      403,
+    );
+  });
+});

@@ -85,6 +85,8 @@ import {
   CreateOrderRequestDto,
   HandoverCancelledOrdersToMarketRequestDto,
   OrdersArrayDto,
+  OrderListReceiptPageDto,
+  OrderReceiptFieldsDto,
   ReceiveByScanDto,
   PartlySellOrderRequestDto,
   RollbackOrderRequestDto,
@@ -3612,6 +3614,11 @@ export class OrderGatewayController {
       '(total_price, sale_collectible_amount, paid_online_amount, extra_cost, tariflar, ulushlar). `region_id` faqat o‘z ' +
       "viloyatlaridan biri bo'lishi mumkin (boshqasi — 400). Viloyat biriktirilmagan logist — 200 va bo'sh ro'yxat.",
   })
+  @ApiOkResponse({
+    type: OrderListReceiptPageDto,
+    description:
+      "1mOjtOVC: qisman sxema — chek maydonlari (operator_phone, secondary_operator_phone, market.phone_number); qatorda boshqa maydonlar ham bor. Telefonlar buyurtmani ko'ra oladigan har rolga qaytadi.",
+  })
   @ApiQuery({ name: 'market_id', required: false, type: String })
   @ApiQuery({ name: 'customer_id', required: false, type: String })
   @ApiQuery({
@@ -5896,6 +5903,11 @@ export class OrderGatewayController {
       "4BftLLnc — LOGIST: buyurtma o'z viloyatida bo'lsa (aks holda 403), pul maydonlarisiz.",
   })
   @ApiParam({ name: 'id', description: 'Order ID (uuid)' })
+  @ApiOkResponse({
+    type: OrderReceiptFieldsDto,
+    description:
+      '1mOjtOVC: qisman sxema — chek maydonlari (operator_phone, secondary_operator_phone, market.phone_number); javobda boshqa maydonlar ham bor.',
+  })
   async findById(@Param('id') id: string, @Req() req?: { user: JwtUser }) {
     const response = await this.sendOrderWithFallback(
       { cmd: 'order.find_by_id_enriched' },

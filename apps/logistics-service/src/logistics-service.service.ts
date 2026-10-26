@@ -2481,7 +2481,11 @@ export class LogisticsServiceService implements OnModuleInit {
     // yozilmaydi.
     if (requester && this.isLogistRequester(requester)) {
       await this.assertLogistPostRegion(post, requester);
-      return successRes(this.withoutPostMoney(post), 200, 'Post found');
+      return successRes(
+        await this.withPostCourier(this.withoutPostMoney(post)),
+        200,
+        'Post found',
+      );
     }
     const scopedBranchId = await this.resolveScopedBranchId(requester);
     let belongsToScopedBranch = false;
@@ -2517,9 +2521,37 @@ export class LogisticsServiceService implements OnModuleInit {
       post.branch_id = scopedBranchId;
       const saved = await this.postRepo.save(post);
       void this.syncPostToSearch(saved);
-      return successRes(saved, 200, 'Post found');
+      return successRes(await this.withPostCourier(saved), 200, 'Post found');
     }
-    return successRes(post, 200, 'Post found');
+    return successRes(await this.withPostCourier(post), 200, 'Post found');
+  }
+
+  /**
+   * 1mOjtOVC — pochta cheki: «haydovchi» = pochta kuryeri. `GET /post/:id`
+   * javobiga `courier: { id, name, phone_number } | null` qo'shiladi (ro'yxat
+   * `attachPostCouriers` bilan AYNI shakl). Filial/hudud pochtasi (kuryer
+   * '0'/yo'q) yoki identity javob bermasa — `null`, javob yiqilmaydi.
+   */
+  private async withPostCourier<T extends { courier_id?: string | null }>(
+    post: T,
+  ): Promise<
+    T & {
+      courier: {
+        id: string;
+        name: string | null;
+        phone_number: string | null;
+      } | null;
+    }
+  > {
+    const courierId = String(post?.courier_id ?? '').trim();
+    const courierMap =
+      courierId && courierId !== '0'
+        ? await this.findCouriersByIds([courierId])
+        : new Map<string, Record<string, unknown>>();
+    return {
+      ...post,
+      courier: this.toPostCourierRef(courierId, courierMap),
+    };
   }
 
   async deletePost(id: string) {

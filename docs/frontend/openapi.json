@@ -2814,7 +2814,14 @@
         ],
         "responses": {
           "200": {
-            "description": ""
+            "description": "1mOjtOVC: qisman sxema — chek maydonlari (operator_phone, secondary_operator_phone, market.phone_number); qatorda boshqa maydonlar ham bor. Telefonlar buyurtmani ko'ra oladigan har rolga qaytadi.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrderListReceiptPageDto"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -4627,7 +4634,14 @@
         ],
         "responses": {
           "200": {
-            "description": ""
+            "description": "1mOjtOVC: qisman sxema — chek maydonlari (operator_phone, secondary_operator_phone, market.phone_number); javobda boshqa maydonlar ham bor.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrderReceiptFieldsDto"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -5867,7 +5881,7 @@
     },
     "/post/{id}": {
       "get": {
-        "description": "Z3pUOxou — LOGIST: pochta o'ziga biriktirilgan viloyatda bo'lsa (aks holda 403), `post_total_price` siz.",
+        "description": "Z3pUOxou — LOGIST: pochta o'ziga biriktirilgan viloyatda bo'lsa (aks holda 403), `post_total_price` siz. 1mOjtOVC: javobda `courier { id, name, phone_number } | null` — pochta chekidagi haydovchi (kuryersiz pochta — null).",
         "operationId": "LogisticsGatewayController_getPostById",
         "parameters": [
           {
@@ -5882,7 +5896,14 @@
         ],
         "responses": {
           "200": {
-            "description": ""
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PostReceiptResponseDto"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -23106,6 +23127,158 @@
           "items"
         ]
       },
+      "OrderReceiptMarketDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "37"
+          },
+          "name": {
+            "type": "string",
+            "example": "TEST Market",
+            "nullable": true
+          },
+          "phone_number": {
+            "type": "string",
+            "example": "+998901234567",
+            "nullable": true,
+            "description": "Market telefoni — chekdagi «Muammo bo'lsa» qatori uchun"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "phone_number"
+        ]
+      },
+      "OrderReceiptFieldsDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "81"
+          },
+          "order_number": {
+            "type": "string",
+            "example": "EL-100081"
+          },
+          "status": {
+            "type": "string",
+            "example": "new",
+            "enum": [
+              "created",
+              "new",
+              "received",
+              "on the road",
+              "waiting",
+              "waiting_customer",
+              "sold",
+              "cancelled",
+              "returned_to_market",
+              "paid",
+              "partly_paid",
+              "cancelled (sent)",
+              "closed"
+            ]
+          },
+          "operator": {
+            "type": "string",
+            "example": "Operator Ali",
+            "nullable": true,
+            "description": "Market operatori (matn)"
+          },
+          "operator_phone": {
+            "type": "string",
+            "example": "+998901112233",
+            "nullable": true,
+            "description": "1mOjtOVC: operator telefoni (chekdagi «Muammo bo'lsa: …»)"
+          },
+          "secondary_operator_phone": {
+            "type": "string",
+            "example": "+998904445566",
+            "nullable": true,
+            "description": "1mOjtOVC: operatorning qo'shimcha telefoni"
+          },
+          "market": {
+            "nullable": true,
+            "description": "Enriched javobda (GET /orders, GET /orders/:id) — market nomi va telefoni",
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/OrderReceiptMarketDto"
+              }
+            ]
+          },
+          "district_id": {
+            "type": "string",
+            "example": "501",
+            "nullable": true
+          },
+          "region_id": {
+            "type": "string",
+            "example": "5",
+            "nullable": true
+          },
+          "where_deliver": {
+            "type": "string",
+            "example": "center",
+            "enum": [
+              "center",
+              "address"
+            ]
+          },
+          "qr_code_token": {
+            "type": "string",
+            "example": "ORD-6f1c2a",
+            "nullable": true,
+            "description": "Chekdagi QR (buyurtma tokeni)"
+          },
+          "createdAt": {
+            "type": "string",
+            "example": "2026-10-26T09:15:00.000Z"
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "operator_phone",
+          "secondary_operator_phone"
+        ]
+      },
+      "OrderListReceiptPageDto": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OrderReceiptFieldsDto"
+            }
+          },
+          "total": {
+            "type": "number",
+            "example": 120
+          },
+          "page": {
+            "type": "number",
+            "example": 1
+          },
+          "limit": {
+            "type": "number",
+            "example": 10
+          },
+          "search_truncated": {
+            "type": "boolean",
+            "example": false
+          }
+        },
+        "required": [
+          "data",
+          "total",
+          "page",
+          "limit"
+        ]
+      },
       "CancelledManualOverrideDto": {
         "type": "object",
         "properties": {
@@ -23629,6 +23802,119 @@
           "post_id",
           "order_ids",
           "reason"
+        ]
+      },
+      "PostCourierRefDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "26"
+          },
+          "name": {
+            "type": "string",
+            "example": "TEST Kuryer",
+            "nullable": true
+          },
+          "phone_number": {
+            "type": "string",
+            "example": "+998901234567",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "phone_number"
+        ]
+      },
+      "PostReceiptDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "11"
+          },
+          "courier_id": {
+            "type": "string",
+            "example": "26",
+            "description": "Kuryer id; '0' — filial/hudud pochtasi (kuryersiz)"
+          },
+          "courier": {
+            "nullable": true,
+            "description": "1mOjtOVC: haydovchi = pochta kuryeri `{ id, name, phone_number }`; kuryersiz pochta yoki identity javob bermasa — null",
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PostCourierRefDto"
+              }
+            ]
+          },
+          "post_total_price": {
+            "type": "number",
+            "example": 1250000,
+            "description": "Jami summa. LOGIST javobida YO'Q (Z3pUOxou)"
+          },
+          "order_quantity": {
+            "type": "number",
+            "example": 12,
+            "description": "Buyurtmalar soni"
+          },
+          "qr_code_token": {
+            "type": "string",
+            "example": "PST-4KD9",
+            "nullable": true
+          },
+          "region_id": {
+            "type": "string",
+            "example": "5",
+            "nullable": true
+          },
+          "branch_id": {
+            "type": "string",
+            "example": "7",
+            "nullable": true
+          },
+          "status": {
+            "type": "string",
+            "example": "sent"
+          },
+          "createdAt": {
+            "type": "string",
+            "example": "2026-10-26T09:15:00.000Z"
+          }
+        },
+        "required": [
+          "id",
+          "courier_id",
+          "courier",
+          "order_quantity",
+          "qr_code_token",
+          "region_id",
+          "branch_id",
+          "status",
+          "createdAt"
+        ]
+      },
+      "PostReceiptResponseDto": {
+        "type": "object",
+        "properties": {
+          "statusCode": {
+            "type": "number",
+            "example": 200
+          },
+          "message": {
+            "type": "string",
+            "example": "Post found"
+          },
+          "data": {
+            "$ref": "#/components/schemas/PostReceiptDto"
+          }
+        },
+        "required": [
+          "statusCode",
+          "message",
+          "data"
         ]
       },
       "SendPostRequestDto": {
@@ -27944,6 +28230,78 @@
             "type": "string",
             "example": "1"
           },
+          "qr_code_token": {
+            "type": "string",
+            "example": "BTB-8F3K2Q9X",
+            "description": "1mOjtOVC (paket cheki): QR token — `BTB-` (FORWARD) / `BTR-` (RETURN)"
+          },
+          "direction": {
+            "type": "string",
+            "enum": [
+              "FORWARD",
+              "RETURN"
+            ],
+            "example": "FORWARD",
+            "description": "Yo'nalish: FORWARD — HQ → filial, RETURN — filial → HQ"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "PENDING",
+              "SENT",
+              "RECEIVED",
+              "CANCELLED"
+            ],
+            "example": "SENT"
+          },
+          "target_region_id": {
+            "type": "string",
+            "example": "5",
+            "description": "Manzil viloyati"
+          },
+          "order_count": {
+            "type": "number",
+            "example": 12,
+            "description": "Paketdagi buyurtmalar soni"
+          },
+          "total_price": {
+            "type": "number",
+            "example": 1250000,
+            "description": "Jami summa. LOGIST javobida YO'Q (Z3pUOxou — pulsiz proyeksiya)"
+          },
+          "driver_name": {
+            "type": "string",
+            "example": "Aliyev Vali",
+            "nullable": true,
+            "description": "1mOjtOVC: haydovchi — jo'natishda (`POST /transfer-batches/:id/send`) yoziladi; jo'natilmagan paketda null"
+          },
+          "driver_phone": {
+            "type": "string",
+            "example": "+998901234567",
+            "nullable": true,
+            "description": "1mOjtOVC: haydovchi telefoni (jo‘natishda)"
+          },
+          "vehicle_plate": {
+            "type": "string",
+            "example": "01A123BC",
+            "nullable": true,
+            "description": "1mOjtOVC: avtomobil raqami (jo‘natishda)"
+          },
+          "createdAt": {
+            "type": "string",
+            "example": "2026-10-26T09:15:00.000Z",
+            "description": "Yaratilgan vaqt"
+          },
+          "sent_at": {
+            "type": "string",
+            "example": "2026-10-26T10:00:00.000Z",
+            "nullable": true
+          },
+          "received_at": {
+            "type": "string",
+            "example": null,
+            "nullable": true
+          },
           "source_branch": {
             "nullable": true,
             "description": "3HKvAyhm: jo'natuvchi filial nomi — barcha ruxsat etilgan rollarga (menejer ham)",
@@ -27981,6 +28339,17 @@
           "id",
           "source_branch_id",
           "destination_branch_id",
+          "qr_code_token",
+          "direction",
+          "status",
+          "target_region_id",
+          "order_count",
+          "driver_name",
+          "driver_phone",
+          "vehicle_plate",
+          "createdAt",
+          "sent_at",
+          "received_at",
           "source_branch",
           "destination_branch",
           "items"
