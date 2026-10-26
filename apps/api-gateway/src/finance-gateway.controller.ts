@@ -2743,7 +2743,26 @@ export class FinanceGatewayController {
     RoleEnum.MARKET,
   )
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Find cashbox history list' })
+  @ApiOperation({
+    summary: 'Find cashbox history list',
+    description:
+      'GaBIPi3Z (2-band): `data.counts` — `{ all, income, expense }` tab sonlari («Barchasi / Kirim / Chiqim»): ' +
+      'AYNI filtrlar va rol doirasi (kassa, kassa turi, manba, sana, foydalanuvchi), faqat `operation_type` SIZ — ' +
+      "tanlangan tabdan qat'i nazar. `all = income + expense`. `pagination.total` — joriy (tabli) ro'yxat jami.",
+  })
+  @ApiOkResponse({
+    schema: {
+      example: {
+        statusCode: 200,
+        message: 'Cashbox histories',
+        data: {
+          items: [],
+          counts: { all: 11, income: 9, expense: 2 },
+          pagination: { total: 2, page: 1, limit: 20, totalPages: 1 },
+        },
+      },
+    },
+  })
   @ApiQuery({ name: 'cashbox_id', required: false })
   @ApiQuery({ name: 'user_id', required: false })
   @ApiQuery({

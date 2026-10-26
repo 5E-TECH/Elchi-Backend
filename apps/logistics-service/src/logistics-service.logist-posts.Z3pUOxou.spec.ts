@@ -245,3 +245,47 @@ describe('Z3pUOxou — GET /post/orders/:id (logist)', () => {
     });
   });
 });
+
+/**
+ * 1mOjtOVC — pochta cheki: `GET /post/:id` javobida haydovchi = pochta
+ * kuryeri `courier { id, name, phone_number }` (kuryersiz pochta / identity
+ * javob bermasa — null, javob yiqilmaydi).
+ */
+describe('1mOjtOVC — GET /post/:id: courier (pochta cheki haydovchisi)', () => {
+  const SA = { id: '1', roles: ['superadmin'] };
+
+  it('⭐ superadmin — courier {id, name, phone_number}, qolgan maydonlar o‘zgarmagan', async () => {
+    const { service } = setup();
+    const res: any = await service.findPostById('11', SA);
+    expect(res.statusCode).toBe(200);
+    expect(res.data.courier).toEqual({
+      id: '26',
+      name: 'Kuryer',
+      phone_number: '+99890',
+    });
+    expect(res.data).toMatchObject({
+      id: '11',
+      qr_code_token: 'POST-abc',
+      order_quantity: 2,
+      post_total_price: 250000,
+    });
+  });
+
+  it('logist — courier bor, post_total_price yo‘q', async () => {
+    const { service } = setup();
+    const res: any = await service.findPostById('11', LOGIST);
+    expect(res.data.courier).toEqual(
+      expect.objectContaining({ id: '26', name: 'Kuryer' }),
+    );
+    expect(res.data).not.toHaveProperty('post_total_price');
+  });
+
+  it("kuryersiz (filial) pochta — courier null, identity so'ralmaydi", async () => {
+    const { service } = setup({ post: postRow({ courier_id: '0' }) });
+    const identity = (service as any).identityClient.send as jest.Mock;
+    identity.mockClear();
+    const res: any = await service.findPostById('11', SA);
+    expect(res.data.courier).toBeNull();
+    expect(identity).not.toHaveBeenCalled();
+  });
+});

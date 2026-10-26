@@ -189,6 +189,75 @@ notification-service → api-gateway.
 - 🔧 FE (KM-6): SMS kampaniya formasida sana/vaqt tanlagich (`scheduled_at`, `+05:00` bilan), ro'yxatda
   «Rejalashtirilgan» holati va `can_cancel` bo'lsa «Bekor qilish» tugmasi.
 
+### 2026-10-26 — Moliya tarixi: «Barchasi / Kirim / Chiqim» tab sonlari — `GET /finance/history` `data.counts` (GaBIPi3Z, 2-band)
+
+Deploy: finance-service (+ api-gateway — faqat Swagger). Migratsiya yo'q. `openapi.json` yangilandi.
+
+- [2026-10-26] ✏️ [finance] — `GET /finance/history` javobiga `data.counts: { all, income, expense }` qo'shildi:
+  AYNI filtrlar va rol doirasi (kassa / kassa turi / manba / sana / foydalanuvchi), faqat `operation_type` siz —
+  qaysi tab tanlanganidan qat'i nazar bir xil. `all = income + expense`. `items` va `pagination` o'zgarmagan
+  (`pagination.total` — joriy tabli ro'yxat jami). Bo'sh natijada `counts` — nol.
+- 🔧 FE: /payments «Barchasi/Kirim/Chiqim» va cash-detail tab sonlari ← `data.counts`.
+
+### 2026-10-26 — Chek uchun backend: operator/market telefonlari Swagger'da, paket va pochta cheki maydonlari (1mOjtOVC)
+
+Deploy: api-gateway (faqat Swagger) + logistics-service (`GET /post/:id` ga `courier`). Migratsiya yo'q.
+`openapi.json` yangilandi.
+
+- [2026-10-26] 🟢 [gateway] — `GET /orders` qatorlari va `GET /orders/:id` da `operator_phone`,
+  `secondary_operator_phone`, `market { id, name, phone_number }` ALLAQACHON qaytadi (buyurtmani ko'ra oladigan har
+  rolga, rol proyeksiyasi ularni olib tashlamaydi) — endi Swagger'da: `OrderReceiptFieldsDto` /
+  `OrderListReceiptPageDto` (qisman sxema — faqat chek maydonlari; boshqa maydonlar o'zgarmagan).
+- 🟢 [gateway] — `GET /transfer-batches/:id` (`TransferBatchDetailDto`) paket cheki maydonlari hujjatlashtirildi:
+  `qr_code_token` (`BTB-`/`BTR-`), `source_branch`/`destination_branch` `{id,name}`, `direction`, `status`,
+  `order_count`, `total_price` (logistda yo'q), `driver_name`, `driver_phone`, `vehicle_plate` (jo'natishda yoziladi,
+  undan oldin `null`), `createdAt`, `sent_at`, `received_at`. Javob o'zgarmagan.
+- 🆕 [logistics] — `GET /post/:id`: javobga `courier: { id, name, phone_number } | null` qo'shildi (pochta chekidagi
+  haydovchi = pochta kuryeri; kuryersiz/filial pochtasi yoki identity javob bermasa — `null`). Pochtada avtomobil
+  raqami maydoni yo'q (ma'lumot manbai yo'q).
+- 🟢 `POST /printer/thermal-pdf`, `POST /printer/receipt` — o'zgarmagan (o'chirish yoki yangi dizaynga moslash —
+  ega qarori; FE ularni chaqirmaydi, faqat `miscCoverage.ts` da ishlatilmagan hook bor).
+- 🔧 FE: `ApiOrder` turiga `operator_phone`, `secondary_operator_phone`, `market.phone_number`; paket/pochta cheki
+  shu maydonlardan.
+
+### 2026-10-26 — Hududlar: `GET /region/my/district-stats` filial / kuryer kesimida (aLx7Di99)
+
+Deploy: faqat logistics-service (+ api-gateway — faqat Swagger tavsifi). Migratsiya yo'q. `openapi.json` yangilandi.
+
+- [2026-10-26] ✏️ [logistics] — `GET /region/my/district-stats` raqamlari endi butun viloyat emas, so'rovchining o'z
+  kesimi (GET /orders doirasi bilan bir xil): **kuryer** — `courier_id` yoki `holder_courier_id` = o'zi;
+  **menejer** — o'z filiali (`branch_id` / `holder_branch_id` / `home_branch_id`). Viloyat — avvalgidek tokendan.
+  `summary` va `districts[]` maydonlari o'zgarmagan (faqat qiymatlar kesimli).
+- 🆕 `data.scope`: `{ type: "courier", courier_id }` yoki `{ type: "branch", branch_id, branch_name }` — sarlavhada
+  filial nomi / «sizga tegishli» ni qaytarish uchun. Filiali aniqlanmagan menejer — 200 va bo'sh holat
+  (`region: null, summary: null, districts: []`, xabar «Sizga filial biriktirilmagan»).
+- 🔧 FE: /regions sarlavhasidagi filial / «sizga tegishli» da'vosini `data.scope` bo'yicha qaytarish.
+
+### 2026-10-26 — Buyurtmalar: holat tablari sonlari + «Qabul va yaratish» badge'i — `GET /orders/status-counts` (GaBIPi3Z)
+
+Deploy: api-gateway + order-service (yangi RMQ `order.status_counts`; ikkalasi birga). Migratsiya yo'q.
+`openapi.json` yangilandi.
+
+- [2026-10-26] 🆕 [gateway, order] — `GET /orders/status-counts` — bitta so'rov, javob `successRes` konvertida:
+  `data: { all, new, received, on_the_road, waiting, sold, paid, cancelled, new_incoming, by_status, search_truncated }`.
+  - Filtrlar va rol doirasi **GET /orders bilan aynan bir xil** (`market_id`, `customer_id`, `search`, `start_day`,
+    `end_day`, `courier`, `region_id`, `district_id`, `branch_id`, `courier_id`, `where_deliver`, `source`,
+    `fulfillment_source`, `cancelled_inventory`, `cancel_stage`). `status`/`page`/`limit`/`sort_*` e'tiborsiz — har
+    tab o'z holati. Market/operator — o'z marketi (boshqa `market_id` — 400), filial xodimi — tokendagi filial,
+    kuryer — o'zi, logist — faqat o'z viloyatlari (begona `region_id` — 400; viloyatsiz — hammasi 0), ruxsatsiz
+    rol — 403. Pul maydonlari yo'q.
+  - `all` — GET /orders `total` (holatsiz); `paid` = `paid` + `partly_paid`; `cancelled` = `cancelled` +
+    `cancelled (sent)` (FE `ORDER_STATUS_TABS` bilan bir xil). Filial xodimi / HQ registratori / kuryerda
+    `cancelled` — o'sha rolning «Bekor qilingan» tabi ro'yxatining `total`i (inventar / kuryer bekor tabi), ya'ni
+    `GET /orders?status=cancelled,cancelled (sent)` bilan bir xil son.
+  - `new_incoming` — «Qabul va yaratish» badge'i: qabul qilinmagan (partiyasiz) NEW buyurtmalar,
+    `GET /orders/markets/new` doirasida (filial xodimi — o'z filiali; SA/admin — filial yaratganlaridan tashqari
+    hammasi; market — o'ziniki). Ro'yxat filtrlariga bog'liq EMAS. `null` — bu bo'lim yo'q rollarda (operator,
+    kuryer, logist, mijoz).
+  - `by_status` — har holat bo'yicha xom son (masalan `waiting_customer`).
+- 🔧 FE: `/orders` Tabs `items[].count` ← `data[tab.id]`; yon menyu / BottomNav «Qabul va yaratish» ←
+  `data.new_incoming` (filtrsiz chaqiriladi).
+
 ### 2026-10-26 — Buyurtma yaratish: tumansiz inline mijoz — bitta o'zbekcha xabar (IR2OHIiN)
 
 Deploy: faqat api-gateway (DTO validatsiyasi). Migratsiya yo'q. `openapi.json` o'zgarmagan.

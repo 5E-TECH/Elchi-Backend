@@ -325,6 +325,68 @@ function geoReassignResult(
   };
 }
 
+/** GET /orders (`findAll`) so'rovi — filtrlar + sahifalash/saralash. */
+export type OrderListQuery = {
+  market_id?: string;
+  customer_id?: string;
+  customer_ids?: string[];
+  /** Qidiruvdagi buyurtma raqami — mijoz qidiruvi bilan OR qilinadi. */
+  search_order_id?: string;
+  /** Bir nechta id nomzodi (FoCaUF10: ichki id va ko'rinadigan raqamdan hosil qilingan id) — OR. */
+  search_order_ids?: string[];
+  post_id?: string;
+  post_ids?: string[];
+  exclude_statuses?: Order_status[];
+  canceled_post_id?: string;
+  canceled_post_unassigned?: boolean;
+  holder_type?: OrderHolderType;
+  qr_code_token?: string;
+  status?: Order_status | Order_status[] | string | string[];
+  /**
+   * M0EPcJVf (BG3) — bekor bosqichlari (OR). `market` bosqichiga
+   * `handover_start_day`/`handover_end_day` (Toshkent kuni, topshirish vaqti
+   * bo'yicha) qo'llanadi; boshqa bosqichlar — hozirgi holat, sanasiz.
+   */
+  cancel_stages?: CancelReturnStage[];
+  handover_start_day?: string;
+  handover_end_day?: string;
+  where_deliver?: Where_deliver;
+  return_requested?: boolean;
+  start_day?: string;
+  end_day?: string;
+  courier?: string;
+  courier_ids?: string[];
+  holder_courier_ids?: string[];
+  courier_scope?: 'any';
+  courier_post_history?: boolean;
+  courier_cancelled_tab?: boolean;
+  include_courier_history?: boolean | string;
+  region_id?: string;
+  /**
+   * 4BftLLnc — LOGIST doirasi: faqat shu viloyatlar (gateway logistning
+   * `regions.logist_id = me` to'plamini beradi). Bo'sh massiv — HECH NARSA
+   * (fail-closed), `undefined` — filtr yo'q.
+   */
+  region_ids?: string[];
+  district_id?: string;
+  branch_id?: string;
+  source?: Order_source | 'internal' | 'external' | 'branch';
+  exclude_sources?: Array<Order_source | 'internal' | 'external' | 'branch'>;
+  /** 6kHnNH9j: `HQ` | `WAREHOUSE` (gateway tekshiradi). */
+  fulfillment_source?: string;
+  unbatched_only?: boolean;
+  fetch_all?: boolean | string;
+  fetchAll?: boolean | string;
+  disable_pagination?: boolean;
+  /** GET /orders saralashi — `parseOrderListSort` oq ro'yxati. */
+  sort_by?: string;
+  sort_dir?: string;
+  page?: number;
+  limit?: number;
+  /** Ichki: sahifa yuqori chegarasi (sukut 100) — PEc4BjVX. */
+  max_limit?: number;
+};
+
 @Injectable()
 export class OrderServiceService {
   private readonly logger = new Logger(OrderServiceService.name);
@@ -781,66 +843,80 @@ export class OrderServiceService {
     return resolveCourierShareShare(courier, courierTariff);
   }
 
-  async findAll(query: {
-    market_id?: string;
-    customer_id?: string;
-    customer_ids?: string[];
-    /** Qidiruvdagi buyurtma raqami — mijoz qidiruvi bilan OR qilinadi. */
-    search_order_id?: string;
-    /** Bir nechta id nomzodi (FoCaUF10: ichki id va ko'rinadigan raqamdan hosil qilingan id) — OR. */
-    search_order_ids?: string[];
-    post_id?: string;
-    post_ids?: string[];
-    exclude_statuses?: Order_status[];
-    canceled_post_id?: string;
-    canceled_post_unassigned?: boolean;
-    holder_type?: OrderHolderType;
-    qr_code_token?: string;
-    status?: Order_status | Order_status[] | string | string[];
-    /**
-     * M0EPcJVf (BG3) — bekor bosqichlari (OR). `market` bosqichiga
-     * `handover_start_day`/`handover_end_day` (Toshkent kuni, topshirish vaqti
-     * bo'yicha) qo'llanadi; boshqa bosqichlar — hozirgi holat, sanasiz.
-     */
-    cancel_stages?: CancelReturnStage[];
-    handover_start_day?: string;
-    handover_end_day?: string;
-    where_deliver?: Where_deliver;
-    return_requested?: boolean;
-    start_day?: string;
-    end_day?: string;
-    courier?: string;
-    courier_ids?: string[];
-    holder_courier_ids?: string[];
-    courier_scope?: 'any';
-    courier_post_history?: boolean;
-    courier_cancelled_tab?: boolean;
-    include_courier_history?: boolean | string;
-    region_id?: string;
-    /**
-     * 4BftLLnc — LOGIST doirasi: faqat shu viloyatlar (gateway logistning
-     * `regions.logist_id = me` to'plamini beradi). Bo'sh massiv — HECH NARSA
-     * (fail-closed), `undefined` — filtr yo'q.
-     */
-    region_ids?: string[];
-    district_id?: string;
-    branch_id?: string;
-    source?: Order_source | 'internal' | 'external' | 'branch';
-    exclude_sources?: Array<Order_source | 'internal' | 'external' | 'branch'>;
-    /** 6kHnNH9j: `HQ` | `WAREHOUSE` (gateway tekshiradi). */
-    fulfillment_source?: string;
-    unbatched_only?: boolean;
-    fetch_all?: boolean | string;
-    fetchAll?: boolean | string;
-    disable_pagination?: boolean;
-    /** GET /orders saralashi — `parseOrderListSort` oq ro'yxati. */
-    sort_by?: string;
-    sort_dir?: string;
-    page?: number;
-    limit?: number;
-    /** Ichki: sahifa yuqori chegarasi (sukut 100) — PEc4BjVX. */
-    max_limit?: number;
-  }) {
+  async findAll(query: OrderListQuery) {
+    const {
+      fetch_all,
+      fetchAll,
+      disable_pagination,
+      sort_by,
+      sort_dir,
+      page,
+      limit,
+      max_limit,
+    } = query;
+    // So'rov qurilishidan OLDIN — noto'g'ri qiymat bazaga yetib bormaydi.
+    const sort = parseOrderListSort(sort_by, sort_dir);
+
+    const useFetchAll =
+      fetch_all === true ||
+      fetchAll === true ||
+      String(fetch_all).toLowerCase() === 'true' ||
+      String(fetchAll).toLowerCase() === 'true';
+
+    const pagination = this.normalizePagination(
+      page,
+      limit,
+      useFetchAll,
+      max_limit,
+    );
+    const qb = this.buildOrderListQuery(query);
+
+    // Hisob join'lardan OLDIN nusxalanadi — shunda u oddiy `COUNT(*)`
+    // bo'lib qoladi (yuqoridagi izohga qarang).
+    const countQb = qb.clone();
+
+    qb.leftJoinAndSelect('order.items', 'items').leftJoinAndSelect(
+      'order.branch',
+      'branch',
+    );
+    this.applyOrderListSort(qb, sort);
+    if (disable_pagination) {
+      qb.take(MAX_FETCH_ALL);
+    } else {
+      qb.skip((pagination.page - 1) * pagination.limit).take(pagination.limit);
+    }
+
+    let data: Order[];
+    let total: number;
+    try {
+      [data, total] = await Promise.all([qb.getMany(), countQb.getCount()]);
+    } catch (error) {
+      this.handleDbError(error);
+    }
+
+    if (disable_pagination) {
+      return { data, total, truncated: total > MAX_FETCH_ALL };
+    }
+
+    return {
+      data,
+      total,
+      page: pagination.page,
+      limit: pagination.limit,
+      total_pages: pagination.total_pages(total),
+      totalPages: pagination.total_pages(total),
+    };
+  }
+
+  /**
+   * GaBIPi3Z — GET /orders filtrlari (sahifalash/saralashsiz) BITTA joyda:
+   * `findAll` (ro'yxat + `total`) va `statusCounts` (tab sonlari) aynan shu
+   * qurilmadan foydalanadi — tab soni va ro'yxat `total`i bir-biridan farq
+   * qilmaydi. Join YO'Q (pastdagi izoh): chaqiruvchi o'zi qo'shadi.
+   */
+  private buildOrderListQuery(
+    query: OrderListQuery,
+  ): SelectQueryBuilder<Order> {
     const {
       market_id,
       customer_id,
@@ -877,33 +953,10 @@ export class OrderServiceService {
       exclude_sources,
       fulfillment_source,
       unbatched_only,
-      fetch_all,
-      fetchAll,
-      disable_pagination,
-      sort_by,
-      sort_dir,
-      page,
-      limit,
-      max_limit,
     } = query;
-    // So'rov qurilishidan OLDIN — noto'g'ri qiymat bazaga yetib bormaydi.
-    const sort = parseOrderListSort(sort_by, sort_dir);
-
-    const useFetchAll =
-      fetch_all === true ||
-      fetchAll === true ||
-      String(fetch_all).toLowerCase() === 'true' ||
-      String(fetchAll).toLowerCase() === 'true';
     const useCourierHistory =
       include_courier_history === true ||
       String(include_courier_history).toLowerCase() === 'true';
-
-    const pagination = this.normalizePagination(
-      page,
-      limit,
-      useFetchAll,
-      max_limit,
-    );
     const statusFilter = this.normalizeStatusFilter(status);
     const sourceFilter = this.normalizeSourceFilter(source);
     const excludeSourceFilters = (exclude_sources ?? [])
@@ -1243,41 +1296,7 @@ export class OrderServiceService {
       qb.andWhere('order.createdAt <= :endDate', { endDate });
     }
 
-    // Hisob join'lardan OLDIN nusxalanadi — shunda u oddiy `COUNT(*)`
-    // bo'lib qoladi (yuqoridagi izohga qarang).
-    const countQb = qb.clone();
-
-    qb.leftJoinAndSelect('order.items', 'items').leftJoinAndSelect(
-      'order.branch',
-      'branch',
-    );
-    this.applyOrderListSort(qb, sort);
-    if (disable_pagination) {
-      qb.take(MAX_FETCH_ALL);
-    } else {
-      qb.skip((pagination.page - 1) * pagination.limit).take(pagination.limit);
-    }
-
-    let data: Order[];
-    let total: number;
-    try {
-      [data, total] = await Promise.all([qb.getMany(), countQb.getCount()]);
-    } catch (error) {
-      this.handleDbError(error);
-    }
-
-    if (disable_pagination) {
-      return { data, total, truncated: total > MAX_FETCH_ALL };
-    }
-
-    return {
-      data,
-      total,
-      page: pagination.page,
-      limit: pagination.limit,
-      total_pages: pagination.total_pages(total),
-      totalPages: pagination.total_pages(total),
-    };
+    return qb;
   }
 
   /**
@@ -1586,6 +1605,123 @@ export class OrderServiceService {
       }),
     ]);
     return { waiting, all, cancelled };
+  }
+
+  /**
+   * GaBIPi3Z — GET /orders/status-counts: holat tablari sonlari BITTA
+   * `GROUP BY status` so'rovida. Filtr qurilmasi `findAll` bilan AYNI
+   * (`buildOrderListQuery` + `resolveListSearch`) — tab soni ro'yxat
+   * `total`idan farq qilmaydi. Join yo'q (oddiy COUNT, Scale 1 izohi).
+   *  - `query` — gateway `resolveOrderListRequest` natijasi (holat filtrisiz);
+   *  - `cancelled_query` — «Bekor qilingan» tabi alohida doirada bo'lsa
+   *    (filial/HQ inventari, kuryer bekor tabi) shu tabning o'z so'rovi;
+   *  - `new_incoming` — «Qabul va yaratish» badge'i: `findNewMarkets` bilan
+   *    AYNI shart (NEW + partiyasiz, filial xodimi — `branch_id`, boshqalar —
+   *    `source != branch`, market — o'z id'si).
+   */
+  async statusCounts(payload: {
+    query?: OrderListQuery & { search?: string };
+    cancelled_query?: (OrderListQuery & { search?: string }) | null;
+    new_incoming?: {
+      branch_id?: string;
+      exclude_branch_source?: boolean;
+      market_id?: string;
+    } | null;
+  }): Promise<{
+    by_status: Record<string, number>;
+    total: number;
+    cancelled: number | null;
+    new_incoming: number | null;
+    search_truncated: boolean;
+  }> {
+    const listQuery = async (raw: OrderListQuery & { search?: string }) => {
+      const { search, ...rest } = raw ?? {};
+      const resolved = await this.resolveListSearch(search);
+      if (resolved.empty) {
+        return { qb: null, search_truncated: resolved.search_truncated };
+      }
+      return {
+        qb: this.buildOrderListQuery({
+          ...rest,
+          customer_ids: resolved.customer_ids,
+          search_order_ids: resolved.search_order_ids,
+        }),
+        search_truncated: resolved.search_truncated,
+      };
+    };
+
+    const byStatusTask = (async () => {
+      const { qb, search_truncated } = await listQuery(payload?.query ?? {});
+      if (!qb) return { rows: [], search_truncated };
+      const rows: Array<{ status: string; count: string }> = await qb
+        .select('order.status', 'status')
+        .addSelect('COUNT(*)', 'count')
+        .groupBy('order.status')
+        .getRawMany();
+      return { rows, search_truncated };
+    })();
+    const cancelledTask = payload?.cancelled_query
+      ? (async () => {
+          const { qb } = await listQuery(payload.cancelled_query!);
+          return qb ? qb.getCount() : 0;
+        })()
+      : Promise.resolve(null);
+    const newIncomingTask = payload?.new_incoming
+      ? (() => {
+          const scope = payload.new_incoming;
+          const qb = this.orderRepo
+            .createQueryBuilder('order')
+            .where('order.isDeleted = :isDeleted', { isDeleted: false })
+            .andWhere('order.status = :status', { status: Order_status.NEW })
+            .andWhere('order.current_batch_id IS NULL');
+          if (scope.branch_id) {
+            qb.andWhere('order.branch_id = :branch_id', {
+              branch_id: scope.branch_id,
+            });
+          }
+          if (scope.exclude_branch_source) {
+            qb.andWhere('order.source != :branch_source', {
+              branch_source: Order_source.BRANCH,
+            });
+          }
+          if (scope.market_id) {
+            qb.andWhere('order.market_id = :market_id', {
+              market_id: scope.market_id,
+            });
+          }
+          return qb.getCount();
+        })()
+      : Promise.resolve(null);
+
+    let byStatus: Awaited<typeof byStatusTask>;
+    let cancelled: number | null;
+    let newIncoming: number | null;
+    try {
+      [byStatus, cancelled, newIncoming] = await Promise.all([
+        byStatusTask,
+        cancelledTask,
+        newIncomingTask,
+      ]);
+    } catch (error) {
+      if (error instanceof RpcException) throw error;
+      this.handleDbError(error);
+    }
+
+    const by_status: Record<string, number> = {};
+    let total = 0;
+    for (const row of byStatus.rows) {
+      const count = Number(row.count) || 0;
+      if (!row.status || count <= 0) continue;
+      by_status[row.status] = (by_status[row.status] ?? 0) + count;
+      total += count;
+    }
+    return {
+      by_status,
+      total,
+      cancelled: cancelled === null ? null : Number(cancelled) || 0,
+      new_incoming: newIncoming === null ? null : Number(newIncoming) || 0,
+      search_truncated: byStatus.search_truncated,
+    };
   }
 
   async findById(id: string, requester?: OrderLookupRequester | null) {
@@ -2709,6 +2845,59 @@ export class OrderServiceService {
 
   // ==================== Enriched Endpoints ====================
 
+  /**
+   * GET /orders `search` (ega qarori 2026-10-25, FoCaUF10) — `findAllEnriched`
+   * va `statusCounts` (GaBIPi3Z) uchun BITTA qoida:
+   *  - «EL-…» (ko'rinadigan raqam) — FAQAT buyurtma id = N − 100000, mijoz qidiruvi yo'q;
+   *  - boshqa matn — mijoz ismi, asosiy VA qo'shimcha telefoni (identity-service, `match_extra_number`) va sof
+   *    raqam bo'lsa buyurtma id'si (ichki id yoki «EL-» siz yozilgan ko'rinadigan raqam) — OR.
+   * `empty: true` — hech narsa mos kelmaydi (so'rov bazaga yetmaydi).
+   */
+  private async resolveListSearch(search?: string): Promise<{
+    empty: boolean;
+    customer_ids?: string[];
+    search_order_ids?: string[];
+    search_truncated: boolean;
+  }> {
+    const trimmedSearch = search?.trim() ?? '';
+    const elOrderId = parseElOrderNumberSearch(trimmedSearch);
+    if (elOrderId === null) {
+      return { empty: true, search_truncated: false };
+    }
+    const search_order_ids =
+      elOrderId === undefined
+        ? orderIdCandidatesFromSearch(trimmedSearch)
+        : [elOrderId];
+    let customer_ids: string[] | undefined;
+    let search_truncated = false;
+    if (trimmedSearch && elOrderId === undefined) {
+      // Bittasini ortiqcha so'raymiz: chegaradan oshgani shundan bilinadi.
+      // Ilgari 1000 tadan keyingi mijozlar JIMGINA tushib qolardi.
+      const searchRes = await rmqSend<{ data: Array<{ id: string }> }>(
+        this.identityClient,
+        { cmd: 'identity.customer.search' },
+        {
+          search: trimmedSearch,
+          limit: CUSTOMER_SEARCH_LIMIT + 1,
+          match_extra_number: true,
+        },
+      ).catch(() => ({ data: [] }));
+
+      const ids = (searchRes?.data ?? []).map((c) => String(c.id));
+      search_truncated = ids.length > CUSTOMER_SEARCH_LIMIT;
+      customer_ids = ids.slice(0, CUSTOMER_SEARCH_LIMIT);
+      if (!customer_ids.length && !search_order_ids.length) {
+        return { empty: true, search_truncated };
+      }
+    }
+    return {
+      empty: false,
+      customer_ids,
+      search_order_ids: search_order_ids.length ? search_order_ids : undefined,
+      search_truncated,
+    };
+  }
+
   async findAllEnriched(query: {
     market_id?: string;
     customer_id?: string;
@@ -2753,22 +2942,9 @@ export class OrderServiceService {
     max_limit?: number;
   }) {
     const { search, ...orderQuery } = query;
-    const trimmedSearch = search?.trim() ?? '';
-
-    // Qidiruv (ega qarori 2026-10-25, FoCaUF10):
-    //  - «EL-…» (ko'rinadigan raqam) — FAQAT buyurtma id = N − 100000, mijoz qidiruvi yo'q;
-    //  - boshqa matn — mijoz ismi, asosiy VA qo'shimcha telefoni (identity-service, `match_extra_number`) va sof
-    //    raqam bo'lsa buyurtma id'si (ichki id yoki «EL-» siz yozilgan ko'rinadigan raqam) — OR.
-    let customer_ids: string[] | undefined;
-    let search_truncated = false;
-    const elOrderId = parseElOrderNumberSearch(trimmedSearch);
-    const search_order_ids =
-      elOrderId === undefined
-        ? orderIdCandidatesFromSearch(trimmedSearch)
-        : elOrderId === null
-          ? []
-          : [elOrderId];
-    const emptyResult = () => {
+    const resolved = await this.resolveListSearch(search);
+    const { search_truncated } = resolved;
+    if (resolved.empty) {
       const pagination = this.normalizePagination(query.page, query.limit);
       return {
         data: [],
@@ -2779,33 +2955,12 @@ export class OrderServiceService {
         totalPages: 0,
         search_truncated,
       };
-    };
-    if (elOrderId === null) return emptyResult();
-    if (trimmedSearch && elOrderId === undefined) {
-      // Bittasini ortiqcha so'raymiz: chegaradan oshgani shundan bilinadi.
-      // Ilgari 1000 tadan keyingi mijozlar JIMGINA tushib qolardi.
-      const searchRes = await rmqSend<{ data: Array<{ id: string }> }>(
-        this.identityClient,
-        { cmd: 'identity.customer.search' },
-        {
-          search: trimmedSearch,
-          limit: CUSTOMER_SEARCH_LIMIT + 1,
-          match_extra_number: true,
-        },
-      ).catch(() => ({ data: [] }));
-
-      const ids = (searchRes?.data ?? []).map((c) => String(c.id));
-      search_truncated = ids.length > CUSTOMER_SEARCH_LIMIT;
-      customer_ids = ids.slice(0, CUSTOMER_SEARCH_LIMIT);
-      if (!customer_ids.length && !search_order_ids.length) {
-        return emptyResult();
-      }
     }
 
     const result = await this.findAll({
       ...orderQuery,
-      customer_ids,
-      search_order_ids: search_order_ids.length ? search_order_ids : undefined,
+      customer_ids: resolved.customer_ids,
+      search_order_ids: resolved.search_order_ids,
     });
     const enriched = await this.enrichOrders(result.data);
 

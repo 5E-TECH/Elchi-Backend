@@ -143,6 +143,8 @@ function makeService(manager: MockManager) {
   const historyRepo: any = {
     find: jest.fn(),
     findAndCount: jest.fn(),
+    // GaBIPi3Z (2-band): GET /finance/history tab sonlari.
+    count: jest.fn().mockResolvedValue(0),
     createQueryBuilder: jest.fn(),
   };
   const shiftRepo: any = { findOne: jest.fn(), save: jest.fn() };
@@ -2020,6 +2022,62 @@ describe('Toshkent kun chegarasi (SqVMuhKo)', () => {
       await service.findAllHistory({ page: 1, limit: 20 });
 
       expect(whereOf(historyRepo.findAndCount)).not.toHaveProperty('createdAt');
+    });
+  });
+
+  describe('GaBIPi3Z (2-band) — GET /finance/history tab sonlari {all, income, expense}', () => {
+    it('⭐ AYNI filtrlar (kassa turi, sana, manba), operation_type SIZ; all = income + expense', async () => {
+      const { service, historyRepo, cashboxRepo } = setup();
+      (cashboxRepo as { find?: jest.Mock }).find = jest
+        .fn()
+        .mockResolvedValue([{ id: '1' }, { id: '2' }]);
+      historyRepo.findAndCount.mockResolvedValue([[], 2]);
+      historyRepo.count.mockImplementation(
+        ({ where }: { where: { operation_type?: string } }) =>
+          Promise.resolve(where.operation_type === 'income' ? 9 : 2),
+      );
+
+      const res = (await service.findAllHistory({
+        cashbox_type: 'main' as never,
+        operation_type: 'expense' as never,
+        source_type: 'manual_expense' as never,
+        from_date: '2026-10-01',
+        to_date: '2026-10-01',
+        page: 1,
+        limit: 20,
+      })) as { data: { counts: unknown; pagination: { total: number } } };
+
+      expect(res.data.counts).toEqual({ all: 11, income: 9, expense: 2 });
+      // Ro'yxat — tanlangan tab (chiqim) bo'yicha, sonlar — tabsiz.
+      expect(res.data.pagination.total).toBe(2);
+      expect(whereOf(historyRepo.findAndCount).operation_type).toBe('expense');
+      const countWheres = (historyRepo.count.mock.calls as unknown[][]).map(
+        (args) => (args[0] as { where: Record<string, unknown> }).where,
+      );
+      expect(countWheres.map((w) => w.operation_type).sort()).toEqual([
+        'expense',
+        'income',
+      ]);
+      for (const where of countWheres) {
+        expect(where.createdAt).toEqual(Between(OCT_1_START, OCT_1_END));
+        expect(where.source_type).toBe('manual_expense');
+        expect(where.cashbox_id).toEqual(
+          whereOf(historyRepo.findAndCount).cashbox_id,
+        );
+      }
+    });
+
+    it('kassa topilmasa — bo`sh javobda ham counts nol', async () => {
+      const { service, cashboxRepo } = setup();
+      (cashboxRepo as { find?: jest.Mock }).find = jest
+        .fn()
+        .mockResolvedValue([]);
+      const res = (await service.findAllHistory({
+        cashbox_type: 'main' as never,
+        page: 1,
+        limit: 20,
+      })) as { data: { counts: unknown } };
+      expect(res.data.counts).toEqual({ all: 0, income: 0, expense: 0 });
     });
   });
 });

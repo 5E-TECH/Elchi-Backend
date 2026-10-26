@@ -1224,6 +1224,18 @@ export class OrderServiceController {
     );
   }
 
+  // GaBIPi3Z — GET /orders/status-counts (holat tablari + «Qabul va yaratish»).
+  @MessagePattern({ cmd: 'order.status_counts' })
+  orderStatusCounts(
+    @Payload()
+    data: Parameters<OrderServiceService['statusCounts']>[0] | undefined,
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.orderService.statusCounts(data ?? {}),
+    );
+  }
+
   @MessagePattern({ cmd: 'order.external.create' })
   createExternal(
     @Payload()

@@ -1780,6 +1780,7 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
           return this.successRes(
             {
               items: [],
+              counts: { all: 0, income: 0, expense: 0 },
               pagination: {
                 total: 0,
                 page,
@@ -1797,6 +1798,7 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
             return this.successRes(
               {
                 items: [],
+                counts: { all: 0, income: 0, expense: 0 },
                 pagination: {
                   total: 0,
                   page,
@@ -1844,6 +1846,7 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
           return this.successRes(
             {
               items: [],
+              counts: { all: 0, income: 0, expense: 0 },
               pagination: {
                 total: 0,
                 page,
@@ -1862,6 +1865,7 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
             return this.successRes(
               {
                 items: [],
+                counts: { all: 0, income: 0, expense: 0 },
                 pagination: {
                   total: 0,
                   page,
@@ -1878,22 +1882,36 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         }
       }
 
-      const [items, total] = await this.historyRepo.findAndCount({
-        where,
-        relations: ['cashbox'],
-        order: { createdAt: 'DESC' },
-        ...(noPagination
-          ? {}
-          : {
-              skip: (page - 1) * limit,
-              take: limit,
-            }),
-      });
+      // GaBIPi3Z (2-band): «Barchasi / Kirim / Chiqim» tab sonlari — AYNI
+      // filtrlar, faqat `operation_type` siz (tanlangan tabdan qat'i nazar).
+      const countWhere: FindOptionsWhere<CashboxHistory> = { ...where };
+      delete countWhere.operation_type;
+      const [[items, total], income, expense] = await Promise.all([
+        this.historyRepo.findAndCount({
+          where,
+          relations: ['cashbox'],
+          order: { createdAt: 'DESC' },
+          ...(noPagination
+            ? {}
+            : {
+                skip: (page - 1) * limit,
+                take: limit,
+              }),
+        }),
+        this.historyRepo.count({
+          where: { ...countWhere, operation_type: Operation_type.INCOME },
+        }),
+        this.historyRepo.count({
+          where: { ...countWhere, operation_type: Operation_type.EXPENSE },
+        }),
+      ]);
       const enrichedItems = await this.enrichHistoryWithUsers(items);
 
       return this.successRes(
         {
           items: enrichedItems,
+          // operation_type majburiy (income | expense) — all = income + expense.
+          counts: { all: income + expense, income, expense },
           pagination: {
             total,
             page,

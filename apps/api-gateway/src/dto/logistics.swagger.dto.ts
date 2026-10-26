@@ -463,6 +463,76 @@ export class PostListPageResponseDto {
   data!: PostListPageDto;
 }
 
+/** 1mOjtOVC — pochta kuryeri (pochta chekidagi «haydovchi»). */
+export class PostCourierRefDto {
+  @ApiProperty({ example: '26' })
+  id!: string;
+
+  @ApiProperty({ example: 'TEST Kuryer', nullable: true, type: String })
+  name!: string | null;
+
+  @ApiProperty({ example: '+998901234567', nullable: true, type: String })
+  phone_number!: string | null;
+}
+
+/**
+ * 1mOjtOVC — `GET /post/:id` pochta cheki maydonlari (javob o'zgarmagan,
+ * faqat `courier` QO'SHILDI).
+ */
+export class PostReceiptDto {
+  @ApiProperty({ example: '11' })
+  id!: string;
+
+  @ApiProperty({
+    example: '26',
+    description: "Kuryer id; '0' — filial/hudud pochtasi (kuryersiz)",
+  })
+  courier_id!: string;
+
+  @ApiProperty({
+    type: PostCourierRefDto,
+    nullable: true,
+    description:
+      '1mOjtOVC: haydovchi = pochta kuryeri `{ id, name, phone_number }`; kuryersiz pochta yoki identity javob bermasa — null',
+  })
+  courier!: PostCourierRefDto | null;
+
+  @ApiPropertyOptional({
+    example: 1250000,
+    description: "Jami summa. LOGIST javobida YO'Q (Z3pUOxou)",
+  })
+  post_total_price?: number;
+
+  @ApiProperty({ example: 12, description: 'Buyurtmalar soni' })
+  order_quantity!: number;
+
+  @ApiProperty({ example: 'PST-4KD9', nullable: true, type: String })
+  qr_code_token!: string | null;
+
+  @ApiProperty({ example: '5', nullable: true, type: String })
+  region_id!: string | null;
+
+  @ApiProperty({ example: '7', nullable: true, type: String })
+  branch_id!: string | null;
+
+  @ApiProperty({ example: 'sent' })
+  status!: string;
+
+  @ApiProperty({ example: '2026-10-26T09:15:00.000Z' })
+  createdAt!: string;
+}
+
+export class PostReceiptResponseDto {
+  @ApiProperty({ example: 200 })
+  statusCode!: number;
+
+  @ApiProperty({ example: 'Post found' })
+  message!: string;
+
+  @ApiProperty({ type: PostReceiptDto })
+  data!: PostReceiptDto;
+}
+
 export class CreatePostRequestDto {
   @ApiProperty({ example: '1' })
   @IsNotEmpty()

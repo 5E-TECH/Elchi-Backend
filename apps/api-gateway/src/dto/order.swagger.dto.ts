@@ -1204,3 +1204,111 @@ export class SettlementHqToMarketDto extends SettlementAmountDto {
   @IsString()
   market_id!: string;
 }
+
+/**
+ * 1mOjtOVC — chek uchun market ma'lumoti (`order.market`, enriched javob).
+ * Kuryer/logist uchun market tariflari olib tashlanadi; nom va telefon qoladi.
+ */
+export class OrderReceiptMarketDto {
+  @ApiProperty({ example: '37' })
+  id!: string;
+
+  @ApiProperty({ example: 'TEST Market', nullable: true, type: String })
+  name!: string | null;
+
+  @ApiProperty({
+    example: '+998901234567',
+    nullable: true,
+    type: String,
+    description: "Market telefoni — chekdagi «Muammo bo'lsa» qatori uchun",
+  })
+  phone_number!: string | null;
+}
+
+/**
+ * 1mOjtOVC — buyurtma javobining CHEK uchun kerakli maydonlari (qisman sxema:
+ * javobda boshqa maydonlar ham bor, ular o'zgarmagan). `GET /orders`
+ * qatorlari va `GET /orders/:id` da buyurtmani ko'ra oladigan HAR rolga
+ * (rol proyeksiyasi telefonlarni olib tashlamaydi; pul maydonlari — rol
+ * bo'yicha, kH2zZsz3 / 4BftLLnc).
+ */
+export class OrderReceiptFieldsDto {
+  @ApiProperty({ example: '81' })
+  id!: string;
+
+  @ApiPropertyOptional({ example: 'EL-100081' })
+  order_number?: string;
+
+  @ApiProperty({ example: 'new', enum: Order_status })
+  status!: Order_status;
+
+  @ApiPropertyOptional({
+    example: 'Operator Ali',
+    nullable: true,
+    type: String,
+    description: 'Market operatori (matn)',
+  })
+  operator?: string | null;
+
+  @ApiProperty({
+    example: '+998901112233',
+    nullable: true,
+    type: String,
+    description: "1mOjtOVC: operator telefoni (chekdagi «Muammo bo'lsa: …»)",
+  })
+  operator_phone!: string | null;
+
+  @ApiProperty({
+    example: '+998904445566',
+    nullable: true,
+    type: String,
+    description: "1mOjtOVC: operatorning qo'shimcha telefoni",
+  })
+  secondary_operator_phone!: string | null;
+
+  @ApiPropertyOptional({
+    type: OrderReceiptMarketDto,
+    nullable: true,
+    description:
+      'Enriched javobda (GET /orders, GET /orders/:id) — market nomi va telefoni',
+  })
+  market?: OrderReceiptMarketDto | null;
+
+  @ApiPropertyOptional({ example: '501', nullable: true, type: String })
+  district_id?: string | null;
+
+  @ApiPropertyOptional({ example: '5', nullable: true, type: String })
+  region_id?: string | null;
+
+  @ApiPropertyOptional({ example: 'center', enum: Where_deliver })
+  where_deliver?: Where_deliver;
+
+  @ApiPropertyOptional({
+    example: 'ORD-6f1c2a',
+    nullable: true,
+    type: String,
+    description: 'Chekdagi QR (buyurtma tokeni)',
+  })
+  qr_code_token?: string | null;
+
+  @ApiPropertyOptional({ example: '2026-10-26T09:15:00.000Z' })
+  createdAt?: string;
+}
+
+/** 1mOjtOVC — `GET /orders` sahifasi (qatorlar — `OrderReceiptFieldsDto`, qisman sxema). */
+export class OrderListReceiptPageDto {
+  @ApiProperty({ type: [OrderReceiptFieldsDto] })
+  data!: OrderReceiptFieldsDto[];
+
+  @ApiProperty({ example: 120 })
+  total!: number;
+
+  @ApiProperty({ example: 1 })
+  page!: number;
+
+  @ApiProperty({ example: 10 })
+  limit!: number;
+
+  @ApiPropertyOptional({ example: false })
+  search_truncated?: boolean;
+}
