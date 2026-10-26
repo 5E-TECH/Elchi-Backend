@@ -1,6 +1,17 @@
-import { ForbiddenException } from '@nestjs/common';
-import { of } from 'rxjs';
+import {
+  BadRequestException,
+  ForbiddenException,
+  PayloadTooLargeException,
+} from '@nestjs/common';
+import { firstValueFrom, isObservable, of } from 'rxjs';
+import { ROLES_KEY } from './auth/roles.decorator';
 import { FileGatewayController } from './file-gateway.controller';
+import {
+  canonicalUploadFolder,
+  UPLOAD_MAX_FILE_BYTES,
+  UPLOAD_MAX_VIDEO_BYTES,
+  UPLOAD_ROLES,
+} from './file-upload-policy';
 
 // Audit P1: previously any authenticated user (any role) could mint a signed
 // URL for OR delete ANY object by key — including private COD-evidence /
@@ -329,6 +340,164 @@ describe('FileGatewayController object-level access control', () => {
         { cmd: 'file.delete' },
         { key: 'expense-9-proof.pdf' },
       );
+    });
+  });
+
+  /**
+   * (dgvwZasd A) `POST files/upload` — rol → papka oq ro'yxati, limit.
+   * Ilgari istalgan rol (mijoz ham) istalgan papkaga, jumladan ommaviy
+   * `products` ga 50 MB gacha yuklay olardi.
+   */
+  describe('uploadFile — rol/papka oq ro‘yxati va limit (dgvwZasd)', () => {
+    const PNG_SIG = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+    const png = (size = 64) => {
+      const b = Buffer.alloc(size);
+      Buffer.from(PNG_SIG).copy(b);
+      return { originalname: 'p.png', mimetype: 'image/png', buffer: b };
+    };
+    const mp4 = (size: number) => {
+      const b = Buffer.alloc(size);
+      b.write('ftyp', 4, 'latin1');
+      return { originalname: 'v.mp4', mimetype: 'video/mp4', buffer: b };
+    };
+    const pdf = () => ({
+      originalname: 'd.pdf',
+      mimetype: 'application/pdf',
+      buffer: Buffer.from('%PDF-1.4 test'),
+    });
+    const upReq = (roles: string[], folder?: unknown) =>
+      ({
+        user: { roles, sub: 'u1' },
+        body: folder === undefined ? {} : { folder },
+      }) as any;
+    const upload = async (
+      controller: FileGatewayController,
+      file: any,
+      req: any,
+    ) => {
+      const out: unknown = await controller.uploadFile(file, req);
+      return isObservable(out) ? firstValueFrom(out) : out;
+    };
+
+    it('route: JWT + RolesGuard, mijoz/investor/market rollari ro‘yxatda yo‘q', () => {
+      const handler = (FileGatewayController.prototype as any).uploadFile;
+      const roles: string[] = Reflect.getMetadata(ROLES_KEY, handler);
+      expect(roles).toEqual(expect.arrayContaining(['courier', 'manager']));
+      for (const denied of [
+        'customer',
+        'investor',
+        'market',
+        'market_operator',
+      ]) {
+        expect(roles).not.toContain(denied);
+      }
+      expect(UPLOAD_ROLES).toEqual(roles);
+    });
+
+    it('⭐ kuryer `products` ga yuklay olmaydi (403), fayl yuborilmaydi', async () => {
+      const { controller, fileClient } = makeController();
+      await expect(
+        upload(controller, png(), upReq(['courier'], 'products')),
+      ).rejects.toThrow(ForbiddenException);
+      expect(fileClient.send).not.toHaveBeenCalled();
+    });
+
+    it('mijoz handler darajasida ham hech qaysi papkaga yuklay olmaydi (403)', async () => {
+      const { controller, fileClient } = makeController();
+      for (const folder of ['products', 'proof', undefined]) {
+        await expect(
+          upload(controller, png(), upReq(['customer'], folder)),
+        ).rejects.toThrow(ForbiddenException);
+      }
+      expect(fileClient.send).not.toHaveBeenCalled();
+    });
+
+    it('oq ro‘yxatda yo‘q papka — admin uchun ham 403', async () => {
+      const { controller, fileClient } = makeController();
+      await expect(
+        upload(controller, png(), upReq(['admin'], 'expense')),
+      ).rejects.toThrow(ForbiddenException);
+      expect(fileClient.send).not.toHaveBeenCalled();
+    });
+
+    it('jonli oqim: kuryer/menejer `proof` ga yuklaydi, papka file-service’ga o‘tadi', async () => {
+      for (const role of ['courier', 'manager']) {
+        const { controller, fileClient } = makeController();
+        await upload(controller, png(), upReq([role], 'proof'));
+        expect(fileClient.send).toHaveBeenCalledWith(
+          { cmd: 'file.upload' },
+          expect.objectContaining({ folder: 'proof', mime_type: 'image/png' }),
+        );
+      }
+    });
+
+    it('papka kanonik shaklga keltiriladi (`Proof ` → `proof`, maxfiy prefiks)', async () => {
+      const { controller, fileClient } = makeController();
+      await upload(controller, png(), upReq(['courier'], ' Proof '));
+      expect(fileClient.send).toHaveBeenCalledWith(
+        { cmd: 'file.upload' },
+        expect.objectContaining({ folder: 'proof' }),
+      );
+      expect(canonicalUploadFolder(undefined)).toBe('uploads');
+      expect(canonicalUploadFolder('pro/../of')).toBe('proof');
+    });
+
+    it('admin `products` ga rasm yuklaydi, PDF esa ommaviy papkaga 400', async () => {
+      const { controller, fileClient } = makeController();
+      await upload(controller, png(), upReq(['admin'], 'products'));
+      expect(fileClient.send).toHaveBeenCalledTimes(1);
+      await expect(
+        upload(controller, pdf(), upReq(['admin'], 'products')),
+      ).rejects.toThrow(BadRequestException);
+      expect(fileClient.send).toHaveBeenCalledTimes(1);
+    });
+
+    it('papka berilmasa (`uploads`) — faqat superadmin/admin', async () => {
+      const { controller, fileClient } = makeController();
+      await expect(
+        upload(controller, png(), upReq(['courier'])),
+      ).rejects.toThrow(ForbiddenException);
+      await upload(controller, png(), upReq(['superadmin']));
+      expect(fileClient.send).toHaveBeenCalledWith(
+        { cmd: 'file.upload' },
+        expect.objectContaining({ folder: 'uploads' }),
+      );
+    });
+
+    it('limit: rasm 10 MB dan katta → 413; video 20 MB gacha (bot isboti) o‘tadi', async () => {
+      const { controller, fileClient } = makeController();
+      await expect(
+        upload(
+          controller,
+          png(UPLOAD_MAX_FILE_BYTES + 1),
+          upReq(['courier'], 'proof'),
+        ),
+      ).rejects.toThrow(PayloadTooLargeException);
+      expect(fileClient.send).not.toHaveBeenCalled();
+
+      await upload(
+        controller,
+        mp4(15 * 1024 * 1024),
+        upReq(['courier'], 'proof'),
+      );
+      expect(fileClient.send).toHaveBeenCalledTimes(1);
+
+      await expect(
+        upload(
+          controller,
+          mp4(UPLOAD_MAX_VIDEO_BYTES + 1),
+          upReq(['courier'], 'proof'),
+        ),
+      ).rejects.toThrow(PayloadTooLargeException);
+      expect(fileClient.send).toHaveBeenCalledTimes(1);
+    });
+
+    it('`files/qr` va `files/pdf` endi rolli (xodimlar), mijoz yo‘q', () => {
+      const proto = FileGatewayController.prototype as any;
+      for (const name of ['generateQr', 'generatePdf']) {
+        const roles: string[] = Reflect.getMetadata(ROLES_KEY, proto[name]);
+        expect(roles).toEqual(['superadmin', 'admin', 'manager']);
+      }
     });
   });
 });

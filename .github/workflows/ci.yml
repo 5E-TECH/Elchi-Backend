@@ -221,12 +221,20 @@ jobs:
   # Scans the working tree so a PR that adds a real credential to a tracked file
   # fails CI. History remediation (git filter-repo + rotation) is a separate,
   # one-time task documented in docs/audit/SECRET_ROTATION_RUNBOOK.md.
+  # (bVuDHPFR) Ishchi daraxtdan TASHQARI commit TARIXI ham skanerlanadi: PR'da —
+  # PR diapazoni (base..head), dev push'da — yangi commitlar (before..after).
+  # Aks holda bir commitda qo'shilib keyingisida o'chirilgan sekret daraxtda
+  # ko'rinmay o'tib ketardi. To'liq tarix — haftalik security-weekly.yml'da.
+  # Ma'lum eski topilmalar `.gitleaksignore` da (aniq fingerprint'lar).
   secret-scan:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # Diapazon skaneri uchun base/before commit'lari ham kerak.
+          fetch-depth: 0
 
       - name: Install gitleaks
         run: |
@@ -239,6 +247,34 @@ jobs:
 
       - name: Scan working tree for committed secrets
         run: gitleaks detect --no-git --config .gitleaks.toml --redact --verbose --exit-code 1
+
+      # PR → base..head; dev push → before..after; qo'lda ishga tushirish,
+      # yangi branch yoki force-push (before tarixda yo'q) → to'liq tarix.
+      - name: Scan commit history (PR range / pushed commits)
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          PUSH_AFTER: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          RANGE=""
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            RANGE="${PR_BASE}..${PR_HEAD}"
+          elif [ "$EVENT_NAME" = "push" ] \
+            && [ -n "$PUSH_BEFORE" ] \
+            && ! [[ "$PUSH_BEFORE" =~ ^0+$ ]] \
+            && git cat-file -e "${PUSH_BEFORE}^{commit}" 2>/dev/null; then
+            RANGE="${PUSH_BEFORE}..${PUSH_AFTER}"
+          fi
+          if [ -n "$RANGE" ]; then
+            echo "gitleaks: commit range $RANGE"
+            gitleaks detect --source . --config .gitleaks.toml --redact --verbose --exit-code 1 --log-opts="$RANGE"
+          else
+            echo "gitleaks: full history"
+            gitleaks detect --source . --config .gitleaks.toml --redact --verbose --exit-code 1
+          fi
 
   coverage-summary:
     runs-on: ubuntu-latest

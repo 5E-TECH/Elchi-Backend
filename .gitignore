@@ -84,3 +84,7 @@ tests/load/capacity-summary.json
 # Claude Code agent worktree'lari (lokal git worktree — commit qilinmaydi;
 # gitlink bo'lib tushsa CI checkout cleanup'da "No url found for submodule")
 .claude/worktrees/
+
+# (bVuDHPFR) Tasodifan commit qilingan pager/terminal chiqishi (5c848dc) —
+# o'chirildi; qayta tushmasin.
+/ithdefault

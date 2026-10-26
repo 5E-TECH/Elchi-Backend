@@ -31,6 +31,7 @@ import {
   verifyHmacSignature,
   computeHmacSignature,
   assertPublicUrl,
+  fetchWithoutRedirect,
   SsrfBlockedError,
   normalizeUzPhone,
   maskPiiPayload,
@@ -3225,7 +3226,7 @@ export class IntegrationServiceService {
     }
     const signature = computeHmacSignature(rawBody, secret, 'sha256', 'hex');
 
-    const res = await fetch(partner.webhook_url, {
+    const res = await fetchWithoutRedirect(partner.webhook_url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -3351,7 +3352,7 @@ export class IntegrationServiceService {
         'hex',
       );
 
-      const res = await fetch(target, {
+      const res = await fetchWithoutRedirect(target, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -3494,7 +3495,7 @@ export class IntegrationServiceService {
     let error: string | null = null;
 
     try {
-      const res = await fetch(target, {
+      const res = await fetchWithoutRedirect(target, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -4307,7 +4308,7 @@ export class IntegrationServiceService {
 
     await this.assertOutboundUrlSafe(integration.auth_url);
     try {
-      const response = await fetch(integration.auth_url, {
+      const response = await fetchWithoutRedirect(integration.auth_url, {
         method,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
@@ -5056,7 +5057,7 @@ export class IntegrationServiceService {
         Math.max(Number(input.timeout_ms ?? 0) || 15_000, 1_000),
         60_000,
       );
-      const response = await fetch(finalUrl, {
+      const response = await fetchWithoutRedirect(finalUrl, {
         method,
         headers,
         body:
@@ -5671,7 +5672,7 @@ export class IntegrationServiceService {
     const startedAt = Date.now();
     await this.assertOutboundUrlSafe(url);
     try {
-      const response = await fetch(url, {
+      const response = await fetchWithoutRedirect(url, {
         method,
         headers,
         signal: AbortSignal.timeout(Math.max(1000, input?.timeout_ms ?? 8000)),

@@ -17031,6 +17031,7 @@
     },
     "/files/upload": {
       "post": {
+        "description": "Limit: rasm/PDF/XLSX ≤ 10 MB, video (mp4/mov/webm) ≤ 20 MB — oshsa 413.\nPapka (`folder`) — oq ro'yxat; berilmasa `uploads`. Ro'yxatda yo'q papka yoki rolga ruxsat etilmagan papka — 403:\n- `proof` — superadmin, admin, manager, courier (buyurtma isboti (maxfiy `proof-` kaliti))\n- `uploads` — superadmin, admin (`folder` berilmaganda (sukut))\n- `products` — superadmin, admin (ommaviy katalog rasmi (`products-` kaliti ochiq ko‘rinadi); faqat image/png, image/jpeg, image/jpg)",
         "operationId": "FileGatewayController_uploadFile",
         "parameters": [],
         "requestBody": {
@@ -17046,7 +17047,13 @@
                   },
                   "folder": {
                     "type": "string",
-                    "example": "uploads"
+                    "enum": [
+                      "proof",
+                      "uploads",
+                      "products"
+                    ],
+                    "default": "uploads",
+                    "example": "proof"
                   }
                 },
                 "required": [
@@ -17058,7 +17065,13 @@
         },
         "responses": {
           "201": {
-            "description": ""
+            "description": "Fayl yuklandi"
+          },
+          "403": {
+            "description": "Rolga ruxsat yo'q yoki papka oq ro'yxatda emas"
+          },
+          "413": {
+            "description": "Fayl limitdan katta (rasm/PDF/XLSX 10 MB, video 20 MB)"
           }
         },
         "security": [
@@ -17070,7 +17083,12 @@
         "tags": [
           "File"
         ],
-        "x-roles": null
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "manager",
+          "courier"
+        ]
       }
     },
     "/files/{key}": {
@@ -17235,7 +17253,11 @@
         "tags": [
           "File"
         ],
-        "x-roles": null
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "manager"
+        ]
       }
     },
     "/files/pdf": {
@@ -17266,7 +17288,11 @@
         "tags": [
           "File"
         ],
-        "x-roles": null
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "manager"
+        ]
       }
     },
     "/scan/{token}": {
