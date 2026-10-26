@@ -23,6 +23,59 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-10-26 — Narx: yetkazish narxi dvigateli sotuv oqimiga ulandi — darvozalar, market tariflari legacy (KmWO9gTA)
+
+Deploy: **order-service + logistics-service + identity-service + api-gateway birga** (yangi ichki RMQ
+`logistics.delivery.sale_quote` — faqat order-service chaqiradi, HTTP yo'q). **Migratsiya bor (3 ta):**
+`1716000000182-MarketWeightVolumePricing` (`identity_schema.admins.weight_volume_pricing` boolean NOT NULL
+DEFAULT true), `1716000000183-DeliveryPricingSaleGates` (`delivery_pricing_settings.min_delivery_price`,
+`extra_cost_limit_amount` — NULL), `1716000000184-OrderQuotedMarketTariff` (`orders.quoted_market_tariff` — NULL).
+Hammasi qo'shimcha ustun, mavjud ma'lumot o'zgarmaydi. `openapi.json` qayta yaratildi.
+
+⚠️ **Sukut bo'yicha prod xulqi O'ZGARMAYDI:** order-service `SALE_PRICING_ENGINE=off` (sukut) — market tarifi
+avvalgidek profildan (`tariff_home` / `tariff_center`), pul oyoqlari baytma-bayt aynan. Ega rejasi
+(2026-10-19): avval bayroq hamma marketda TRUE holda chiqariladi, kelishuvli marketlar FALSE qilinadi, so'ng
+`SALE_PRICING_ENGINE=on` (ixtiyoriy canary: `SALE_PRICING_ENGINE_MARKET_IDS=37`).
+
+Dvigatel yoqilgandan keyin (`on` + market `weight_volume_pricing = true`):
+- **market_tariff = standart narx (profil; yo'q bo'lsa tarif jadvali bazasi) + vazn/hajm qo'shimchasi**
+  ((hisob vazni − 1 kg) × tarif jadvalidagi kg narxi). Narx SOTUVDA qotiriladi (`sellOrder`,
+  `partlySellOrder` — butun posilka bo'yicha, `markByProvider`). Snapshot (`market_tariff`) bor buyurtma
+  o'zgarmaydi; rollback dvigatelni chaqirmaydi (snapshotdan teskari yozadi). Kuryer tarifi o'zgarmaydi.
+- **DARVOZA 1 (floor):** hisoblangan narx kuryer + filial ulushidan yoki `min_delivery_price` dan past bo'lsa
+  shu qiymatga ko'tariladi — kichik posilkada sotuv endi 400 bilan to'xtamaydi.
+- **DARVOZA 2:** sotuvdagi qo'shimcha xarajat chegarasi — `extra_cost_limit_amount` (berilsa), aks holda tarif
+  jadvalidagi `address.base − center.base`; xato xabari «(tarif jadvali: markaz X, uy Y)» yoki
+  «(yetkazish narxi sozlamasidagi chegara)». Bekor qilish chegarasi o'zgarmagan.
+- Dvigatel javob bermasa sotuv to'xtamaydi — standart narx olinadi, jurnalga sabab yoziladi.
+
+Frontend uchun:
+- [2026-10-26] ✏️ [identity] — market yaratishda (`POST /markets`) `tariff_home` / `tariff_center` **MAJBURIY
+  EMAS** (LEGACY): berilmasa NULL (0 emas). UI'da «Standart uy/markaz narxi» — ixtiyoriy, izoh bilan.
+  🎨 «eski (ishlatilmaydi)» belgisi / yashirish — **ega dizayn qarori kerak** (v2 maketda majburiy; ega
+  2026-10-19 qarori bilan ular dvigatel BAZASI bo'lib qoladi).
+- [2026-10-26] 🆕 [identity] — market `weight_volume_pricing` (boolean, sukut `true`) «Vazn va hajm bo'yicha
+  narx» kaliti: `PATCH /users/:id` va `POST /markets` da qabul qilinadi (faqat SUPERADMIN/ADMIN; menejer /
+  market o'zi → 403; market bo'lmagan → 400; boolean emas → 400), `GET /users/:id`, `GET /markets` (filial
+  xodimlari ko'rinishida ham) javobida qaytadi. `false` — sotuvda faqat standart narx. Activity-log'da
+  eski/yangi qiymat.
+- [2026-10-26] ✏️ [logistics] — `GET/PATCH /delivery/pricing-settings`: yangi `min_delivery_price` va
+  `extra_cost_limit_amount` (so'm, 2 kasr, ≥ 0 yoki `null` — o'chiq). PATCH yangi versiya + jurnal (avvalgidek).
+- [2026-10-26] 🆕 [order] — buyurtma javobida `quoted_market_tariff` (number | null): buyurtma ochilganda
+  dvigatel ko'rsatgan taxminiy tarif (faqat dvigatel yoqilgan marketda; pulga tegmaydi). Kuryer / logist /
+  cheklangan rollarga chiqmaydi (`market_tariff` kabi). Sotuvdagi narx farq qilsa activity-log'da
+  `order.delivery_price_changed` («Yetkazish narxi o'zgardi», eski → yangi, farq, sabab tafsiloti) yoziladi;
+  `order.sell` / `order.partly_sell` jurnali `metadata.sale_pricing` (standart, qo'shimcha, hisob vazni,
+  floor) ni oladi.
+- [2026-10-26] 🟢 [order] — `sale_market_paid_max` (uguUEhin) dvigatel yoqilgan marketda sotuvdagi AYNI narxdan
+  hisoblanadi; ro'yxatda bir sahifada ko'pi bilan 10 ta qator uchun, qolganida yoki dvigatel javob bermasa
+  `null` (yakuniy chegarani sotuv 400 bilan beradi).
+- [2026-10-26] 🟢 [order] — HQ qabul qilgan buyurtmaning `market_tariff` ini ichki `update` / `update_full`
+  orqali o'zgartirish → 400 (HTTP PATCH'da allaqachon taqiqlangan edi).
+- 🟢 Foyda hisoboti (`order-analytics` SQL) o'zgarmagan: `market_tariff` endi hisoblangan qiymat bo'lgani uchun
+  dvigatel yoqilgandan keyingi sotuvlarda foyda ataylab qo'shimcha summasiga oshadi (eski sotuvlar o'zgarmaydi).
+
+
 ### 2026-10-26 — Smena yopilishi: har karta / hisob qoldig'ini tasdiqlash, skrinshot, AI tekshiruvi, hisobot, sozlamalar (kiZgTybn)
 
 Deploy: **finance-service + api-gateway + ai-service birga** (yangi RMQ buyruqlari

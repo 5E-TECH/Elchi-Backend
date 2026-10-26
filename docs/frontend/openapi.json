@@ -21886,6 +21886,11 @@
             "type": "boolean",
             "example": true,
             "description": "Market «Ombordan buyurtma yaratish» kaliti (sukut false). Faqat SUPERADMIN/ADMIN, faqat market."
+          },
+          "weight_volume_pricing": {
+            "type": "boolean",
+            "example": true,
+            "description": "(KmWO9gTA) Market «Vazn va hajm bo'yicha narx» kaliti (sukut true). FALSE — sotuvda faqat standart narx (tariff_home/tariff_center), vazn/hajm qo'shimchasiz. Faqat SUPERADMIN/ADMIN, faqat market."
           }
         }
       },
@@ -21956,12 +21961,17 @@
           "tariff_home": {
             "type": "number",
             "example": 10000,
-            "description": "Optional, default is 0"
+            "description": "(KmWO9gTA) Standart uy narxi — LEGACY, ixtiyoriy. Berilmasa NULL (0 emas); sotuvda dvigatel yoqilganda baza tarif jadvalidan olinadi."
           },
           "tariff_center": {
             "type": "number",
             "example": 8000,
-            "description": "Optional, default is 0"
+            "description": "(KmWO9gTA) Standart markaz narxi — LEGACY, ixtiyoriy. Berilmasa NULL (0 emas)."
+          },
+          "weight_volume_pricing": {
+            "type": "boolean",
+            "example": true,
+            "description": "(KmWO9gTA) «Vazn va hajm bo'yicha narx» (sukut true). Faqat SUPERADMIN/ADMIN (menejer — 403)."
           },
           "default_tariff": {
             "type": "string",
@@ -30429,6 +30439,18 @@
             "type": "number",
             "example": 1.4
           },
+          "min_delivery_price": {
+            "type": "number",
+            "example": null,
+            "nullable": true,
+            "description": "(KmWO9gTA) DARVOZA 1 minimal narxi; null — faqat ulushlar"
+          },
+          "extra_cost_limit_amount": {
+            "type": "number",
+            "example": null,
+            "nullable": true,
+            "description": "(KmWO9gTA) DARVOZA 2 aniq chegarasi; null — address.base − center.base"
+          },
           "is_active": {
             "type": "boolean"
           },
@@ -30453,6 +30475,8 @@
           "pickup_fee",
           "pickup_free_from_count",
           "express_multiplier",
+          "min_delivery_price",
+          "extra_cost_limit_amount",
           "is_active",
           "created_by"
         ]
@@ -30539,6 +30563,20 @@
             "minimum": 1,
             "example": 1.4,
             "description": "Tezkor yetkazish ko`paytiruvchisi (1.4 → subtotal × 0.4 ustama)."
+          },
+          "min_delivery_price": {
+            "type": "number",
+            "minimum": 0,
+            "nullable": true,
+            "example": 25000,
+            "description": "(KmWO9gTA) DARVOZA 1 — sotuvda dvigatel hisoblagan market tarifi shundan (va kuryer + filial ulushidan) past bo'lsa shu qiymatga ko'tariladi. null — faqat ulushlar. Faqat SALE_PRICING_ENGINE yoqilganda ishlaydi."
+          },
+          "extra_cost_limit_amount": {
+            "type": "number",
+            "minimum": 0,
+            "nullable": true,
+            "example": 20000,
+            "description": "(KmWO9gTA) DARVOZA 2 — dvigatel yoqilgan sotuvda kuryer qo'shimcha xarajatining aniq chegarasi, so'm. null — tarif jadvalidagi `address.base − center.base` (teng bo'lsa center.base ning 50%i)."
           }
         }
       },
