@@ -1,10 +1,12 @@
 import { Logger } from '@nestjs/common';
 import {
   AiImageDecodeError,
+  aiProcessedImageMaxBytes,
   downscaleAiImage,
   loadSharp,
   prepareAiImages,
   setSharpForTesting,
+  type SharpFactory,
 } from './ai-image-resize';
 
 /**
@@ -142,6 +144,15 @@ describe('ai-image-resize — sharp yo‘q bo‘lsa (fallback)', () => {
       buffer: buf,
       mediaType: 'image/png',
     });
+  });
+
+  it('kichraytirilgan rasm chegarasi: sharp bor — 1,5 MB; yo‘q — xom 4 MB (ilgari o‘tgan rasm rad etilmaydi)', () => {
+    setSharpForTesting((() => {
+      throw new Error('chaqirilmaydi');
+    }) as unknown as SharpFactory);
+    expect(aiProcessedImageMaxBytes()).toBe(1.5 * 1024 * 1024);
+    setSharpForTesting(null);
+    expect(aiProcessedImageMaxBytes()).toBe(4 * 1024 * 1024);
   });
 
   it('require xatosi bir marta WARN bilan null bo‘ladi', () => {

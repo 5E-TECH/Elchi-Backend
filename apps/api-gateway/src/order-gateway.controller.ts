@@ -67,6 +67,7 @@ import {
 } from './ai-order/ai-order.helpers';
 import {
   AiImageDecodeError,
+  aiProcessedImageMaxBytes,
   downscaleAiImages,
   toBase64Images,
 } from './ai-order/ai-image-resize';
@@ -108,7 +109,7 @@ import {
   UpdateOrderByIdRequestDto,
 } from './dto/order.swagger.dto';
 import {
-  AI_IMAGE_MAX_BYTES,
+  AI_IMAGE_RAW_MAX_BYTES,
   AI_IMAGES_TOTAL_MAX_BYTES,
   AI_MAX_IMAGES,
   AI_RPC_TIMEOUT_MS,
@@ -355,22 +356,23 @@ const AI_IMAGE_MIME_ALLOWLIST = new Set<AiImageMediaType>([
   'image/webp',
 ]);
 /**
- * multer'ning o'z chegarasi ATAYLAB 1,5 MB dan katta: 1,5..4 MB li rasmni
- * handler tushunarli 400 ("Rasm 1,5 MB dan katta") bilan rad etadi, multer
- * esa 413 qaytarardi. 20 rasm × 8 MB RAM'da ushlanmasin — 4 MB.
+ * multer chegarasi = xom yuklash chegarasi (`AI_IMAGE_RAW_MAX_BYTES`, 4 MB):
+ * 4 MB dan katta fayl — multer 413 (20 rasm × 8 MB RAM'da ushlanmasin).
+ * 1,5 MB chegarasi XOM rasmga EMAS — server kichraytirgandan keyingi rasmga
+ * (`assertAiProcessedImages`): frontend 1568 px JPEG q0.92 ni bayt
+ * chegarasisiz yuboradi, 1,5..2 MB li rasm reliz-9 gacha o'tardi.
  */
-const AI_MULTER_FILE_SIZE_LIMIT = 4 * 1024 * 1024;
+const AI_MULTER_FILE_SIZE_LIMIT = AI_IMAGE_RAW_MAX_BYTES;
 /**
  * multer fayl soni chegarasi = AI_MAX_IMAGES + 1: 21-rasm handler'gacha
  * yetib boradi va aniq 400 ("Ko'pi bilan 20 ta rasm…") oladi; multer'ning
  * o'zi 21 dan ko'pida "Too many files" (400) beradi.
  */
 const AI_MULTER_MAX_FILES = AI_MAX_IMAGES + 1;
-/** 1,5 MB / 20 MB — xabarlarda o'zbekcha ko'rinish. */
-const AI_IMAGE_MAX_MB_LABEL = '1,5';
-const AI_IMAGES_TOTAL_MAX_MB_LABEL = String(
-  AI_IMAGES_TOTAL_MAX_BYTES / (1024 * 1024),
-);
+/** Bayt → xabardagi o'zbekcha MB ko'rinishi (1,5 / 4 / 20). */
+const aiMbLabel = (bytes: number): string =>
+  String(bytes / (1024 * 1024)).replace('.', ',');
+const AI_IMAGES_TOTAL_MAX_MB_LABEL = aiMbLabel(AI_IMAGES_TOTAL_MAX_BYTES);
 /**
  * multer `memoryStorage` — ai-parse rasmi RAM'dagi Buffer'da (multer diskka
  * yozmaydi; vaqtinchalik saqlov — `storeAiImages`). `multer` paketida TS tiplari yo'q
@@ -1428,8 +1430,9 @@ export class OrderGatewayController {
   /**
    * ai-parse kiritmasini Claude'ga BORISHDAN OLDIN tekshiradi — xato 400.
    * Tartib: bo'sh kiritish → matn uzunligi → rasm soni (≤20) → har rasm
-   * uchun tur (JPEG/PNG/WebP) → hajm (1,5 MB) → haqiqiy imzo (magic bytes) →
-   * jami hajm (20 MB). WHMAIqyo.
+   * uchun tur (JPEG/PNG/WebP) → XOM hajm (4 MB) → haqiqiy imzo (magic
+   * bytes). WHMAIqyo. 1,5 MB / jami 20 MB — kichraytirilgandan keyin
+   * (`assertAiProcessedImages`).
    */
   private assertAiParseInput(text: string, images: UploadedAiImage[]): void {
     if (!text && !images.length) {
@@ -1445,7 +1448,6 @@ export class OrderGatewayController {
         `Ko'pi bilan ${AI_MAX_IMAGES} ta rasm yuborish mumkin`,
       );
     }
-    let totalBytes = 0;
     for (const image of images) {
       const mime = this.asStr(image?.mimetype).toLowerCase();
       if (!AI_IMAGE_MIME_ALLOWLIST.has(mime as AiImageMediaType)) {
@@ -1453,16 +1455,36 @@ export class OrderGatewayController {
       }
       const buffer = image.buffer;
       const size = Math.max(Number(image.size) || 0, buffer?.length ?? 0);
-      if (size > AI_IMAGE_MAX_BYTES) {
+      if (size > AI_IMAGE_RAW_MAX_BYTES) {
         throw new BadRequestException(
-          `Rasm ${AI_IMAGE_MAX_MB_LABEL} MB dan katta`,
+          `Rasm ${aiMbLabel(AI_IMAGE_RAW_MAX_BYTES)} MB dan katta`,
         );
       }
-      totalBytes += size;
       // `mimetype` ni MIJOZ yozadi — haqiqiy imzo tekshiriladi (audit S8).
       if (!Buffer.isBuffer(buffer) || !matchesDeclaredType(buffer, mime)) {
         throw new BadRequestException('Rasm fayli buzilgan yoki turi mos emas');
       }
+    }
+  }
+
+  /**
+   * Server KICHRAYTIRGANDAN KEYINGI rasmlar (Claude'ga aynan ketadigan
+   * baytlar): har biri ≤ 1,5 MB (sharp yuklanmagan bo'lsa — xom chegara
+   * 4 MB, ilgari o'tgan rasm rad etilmasin), jami ≤ 20 MB. Xato — 400.
+   */
+  private assertAiProcessedImages(
+    images: ReadonlyArray<{ buffer: Buffer }>,
+  ): void {
+    const maxBytes = aiProcessedImageMaxBytes();
+    let totalBytes = 0;
+    for (const image of images) {
+      const size = image.buffer.length;
+      if (size > maxBytes) {
+        throw new BadRequestException(
+          `Rasm ${aiMbLabel(maxBytes)} MB dan katta (kichraytirilgandan keyin ham)`,
+        );
+      }
+      totalBytes += size;
     }
     if (totalBytes > AI_IMAGES_TOTAL_MAX_BYTES) {
       throw new BadRequestException(
@@ -2746,7 +2768,8 @@ export class OrderGatewayController {
    *    no_market | cap_exceeded — har biriga frontend BOSHQA harakat
    *    ko'rsatadi (bVeyEuIR). ClaudeService'ning `invalid_json` i `ai_error`.
    * Faqat validatsiya xatolari 400: bo'sh kiritish, >4000 belgi, 21-rasm,
-   * noto'g'ri tur/hajm (1,5 MB; jami 20 MB)/imzo, buzilgan rasm,
+   * noto'g'ri tur/hajm (xom 4 MB; kichraytirilgandan keyin 1,5 MB, jami
+   * 20 MB)/imzo, buzilgan rasm,
    * admin/menejerda market_id yo'q.
    *
    * ⚠️ MAXFIYLIK (HD5zOyBp): mijoz matni va rasmi Anthropic'ga faqat
@@ -2802,9 +2825,10 @@ export class OrderGatewayController {
           maxItems: AI_MAX_IMAGES,
           items: { type: 'string', format: 'binary' },
           description:
-            'JPEG, PNG yoki WebP; har biri 1,5 MB gacha, jami 20 MB gacha, ' +
+            'JPEG, PNG yoki WebP; yuklanadigan fayl 4 MB gacha (kattasi — 413), ' +
             "ko'pi bilan 20 ta (21-rasm — 400). Server rasmni 1568 px gacha " +
-            "kichraytiradi va EXIF'ni olib tashlaydi.",
+            "kichraytiradi va EXIF'ni olib tashlaydi; kichraytirilgan rasm " +
+            'har biri 1,5 MB gacha, jami 20 MB gacha (aks holda 400).',
         },
       },
     },
@@ -2867,6 +2891,8 @@ export class OrderGatewayController {
       }
       throw error;
     }
+    // 1,5 MB / jami 20 MB — Claude'ga ketadigan (kichraytirilgan) baytlar.
+    this.assertAiProcessedImages(downscaled);
 
     // WHMAIqyo #3: rasm RMQ'da base64 bo'lib yurmaydi — vaqtinchalik saqlovga
     // (MinIO, `ai-tmp/<draft_id>/`, TTL 1 soat) yoziladi, payload'da faqat

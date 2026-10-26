@@ -146,10 +146,31 @@ export type AiOrderExtractResponse =
 export const AI_TEXT_MAX_CHARS = 4000;
 /** Bitta parse'dagi maksimal rasm soni (WHMAIqyo: 3 → 20). */
 export const AI_MAX_IMAGES = 20;
-/** Bitta rasmning maksimal hajmi (bayt) — 1,5 MB (WHMAIqyo). */
+/**
+ * Bitta YUKLANGAN (xom, kichraytirishdan OLDINGI) rasmning maksimal hajmi —
+ * 4 MB (= gateway multer chegarasi). Jonli frontend 1568 px JPEG q0.92 ni
+ * bayt chegarasisiz yuboradi: 1,5..2 MB li rasm reliz-9 gacha (2 MB) o'tardi —
+ * u xom holida 1,5 MB bilan RAD ETILMAYDI.
+ */
+export const AI_IMAGE_RAW_MAX_BYTES = 4 * 1024 * 1024;
+/**
+ * Bitta rasmning maksimal hajmi (bayt) — 1,5 MB (WHMAIqyo), server
+ * KICHRAYTIRGANDAN KEYIN tekshiriladi. sharp yuklanmagan bo'lsa (rasm asl
+ * holida ketadi) — o'rniga `AI_IMAGE_RAW_MAX_BYTES`.
+ */
 export const AI_IMAGE_MAX_BYTES = 1.5 * 1024 * 1024;
-/** Bitta parse'dagi barcha rasmlarning jami hajmi (bayt) — 20 MB (WHMAIqyo). */
+/**
+ * Bitta parse'dagi barcha rasmlarning jami hajmi (bayt) — 20 MB (WHMAIqyo),
+ * kichraytirilgandan KEYINGI baytlar bo'yicha.
+ */
 export const AI_IMAGES_TOTAL_MAX_BYTES = 20 * 1024 * 1024;
+/**
+ * Telegram bot: Telegram'dan yuklab olinadigan bitta rasm chegarasi — 2 MB.
+ * Reliz-9 gacha bot aynan shuni qabul qilardi (o'sha paytdagi
+ * AI_IMAGE_MAX_BYTES) — bot xulqi o'zgarmaydi; gateway xom chegarasi
+ * (`AI_IMAGE_RAW_MAX_BYTES`) undan katta.
+ */
+export const AI_BOT_IMAGE_MAX_BYTES = 2 * 1024 * 1024;
 /**
  * Serverda kichraytirish (WHMAIqyo #2): eng uzun tomon shu pikseldan oshmaydi,
  * qayta kodlash sifati ~80, EXIF olib tashlanadi.

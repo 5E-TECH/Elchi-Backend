@@ -234,26 +234,22 @@ export class ShiftReportService {
     if (!claimed) return { claimed: false, shift_id: shiftId };
     const round = claimed.round;
     try {
+      // Sozlama BIRINCHI: hisobot o'chiq (sukut — hech bir qabul qiluvchi ×
+      // kanal yoqilmagan) bo'lsa snapshot / fayl QURILMAYDI — darhol
+      // `skipped`. Aks holda qurish xatosi qatorni `pending` ga qaytarib,
+      // o'chiq funksiya har daqiqa qayta urinardi.
+      const { report } = await this.checks.loadAutomationSettings();
+      if (!this.anyRecipientEnabled(report)) {
+        return await this.markSkipped(shiftId, round);
+      }
       const shift = await this.dataSource.manager.findOne(Shift, {
         where: { id: shiftId },
       });
       if (!shift) throw new NotFoundException('Smena topilmadi');
-      const { report } = await this.checks.loadAutomationSettings();
       const snapshot = await this.buildSnapshot(shift, round);
       const recipients = await this.planRecipients(snapshot, report);
       if (!recipients.length) {
-        await this.dataSource.manager.update(
-          Shift,
-          { id: shiftId },
-          { report_status: 'skipped' },
-        );
-        return {
-          claimed: true,
-          shift_id: shiftId,
-          round,
-          status: 'skipped',
-          recipients: 0,
-        };
+        return await this.markSkipped(shiftId, round);
       }
       const linked = await this.telegramLinked(
         recipients
@@ -328,6 +324,37 @@ export class ShiftReportService {
       await this.release(shiftId, 'pending').catch(() => undefined);
       throw error;
     }
+  }
+
+  /**
+   * Kamida bitta qabul qiluvchi guruhida kamida bitta kanal yoqilganmi
+   * (`planRecipients` bilan bir xil shart).
+   */
+  private anyRecipientEnabled(report: ReportSettings): boolean {
+    const groups = report?.recipients;
+    return [groups?.superadmin, groups?.couriers, groups?.markets].some(
+      (channels?: ReportChannels) =>
+        Boolean(channels?.in_app || channels?.telegram),
+    );
+  }
+
+  /** Yuboriladigan hech kim yo'q — `skipped` (outbox / fayl yo'q, qayta urinilmaydi). */
+  private async markSkipped(
+    shiftId: string,
+    round: number,
+  ): Promise<ShiftReportDeliverResult> {
+    await this.dataSource.manager.update(
+      Shift,
+      { id: shiftId },
+      { report_status: 'skipped' },
+    );
+    return {
+      claimed: true,
+      shift_id: shiftId,
+      round,
+      status: 'skipped',
+      recipients: 0,
+    };
   }
 
   /**

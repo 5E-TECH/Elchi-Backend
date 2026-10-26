@@ -335,15 +335,16 @@ yangi ixtiyoriy maydonlar: preview `warnings`, `ai.draft.attach_preview.timings`
 ma'lumotga tegmaydi. Yangi npm bog'liqlik: `sharp` (gateway, serverda rasm kichraytirish). `openapi.json`
 qayta yaratildi. Prompt versiyasi `2026-10-26.1` (birinchi chaqiruvlarda prompt keshi qayta yoziladi).
 
-- [2026-10-26] ✏️ [orders] — `POST /orders/ai-parse` rasm chegaralari: **20 tagacha** rasm (ilgari 3),
-  har biri **≤ 1,5 MB** (ilgari 2 MB), **jami ≤ 20 MB**; turlar **JPEG, PNG, WebP** (WebP yangi). 400 xabarlari:
-  `Ko'pi bilan 20 ta rasm yuborish mumkin` (21-rasm), `Rasm 1,5 MB dan katta`, `Rasmlar jami 20 MB dan
-  oshmasligi kerak`, `Faqat JPEG, PNG yoki WebP rasm`, `Rasm fayli buzilgan yoki o'qib bo'lmadi` (dekodlanmadi).
-  > 4 MB bitta fayl — multer 413. Server rasmni o'zi kichraytiradi (eng uzun tomon 1568 px, q80, EXIF olib
-  tashlanadi) — frontend kichraytirishi shart emas, lekin 1,5 MB chegarasiga sig'dirish uchun
-  `downscaleImage` qoldirilsin (WebP yuborish mumkin).
-  → 🔧 Frontend: `AiInputPanel` `AI_MAX_IMAGES = 20`, hajm 1,5 MB / jami 20 MB tekshiruvi, WebP'ga ruxsat,
-  xabarlar matni.
+- [2026-10-26] ✏️ [orders] — `POST /orders/ai-parse` rasm chegaralari: **20 tagacha** rasm (ilgari 3);
+  yuklanadigan (xom) fayl **≤ 4 MB** (ilgari 2 MB — 1,5..2 MB li rasm avvalgidek o'tadi); server rasmni
+  kichraytiradi (eng uzun tomon 1568 px, q80, EXIF olib tashlanadi) va **kichraytirilgan** rasmni tekshiradi:
+  har biri **≤ 1,5 MB**, **jami ≤ 20 MB**; turlar **JPEG, PNG, WebP** (WebP yangi). 400 xabarlari:
+  `Ko'pi bilan 20 ta rasm yuborish mumkin` (21-rasm), `Rasm 1,5 MB dan katta (kichraytirilgandan keyin ham)`,
+  `Rasmlar jami 20 MB dan oshmasligi kerak`, `Faqat JPEG, PNG yoki WebP rasm`, `Rasm fayli buzilgan yoki
+  o'qib bo'lmadi` (dekodlanmadi). > 4 MB bitta fayl — multer 413. Frontend kichraytirishi shart emas; hozirgi
+  `downscaleImage` (1568 px, JPEG q0.92, bayt chegarasisiz) shu holicha ishlaydi.
+  → 🔧 Frontend: `AiInputPanel` `AI_MAX_IMAGES = 20`, WebP'ga ruxsat, xabarlar matni; frontendda 1,5 MB
+  bayt tekshiruvi QO'YILMASIN (xom fayl 4 MB gacha qabul qilinadi).
 - [2026-10-26] ✏️ [orders] — ai-parse preview'ning har buyurtmasida yangi `warnings: {field, reason}[]`
   (bo'sh massiv — ogohlantirish yo'q). AI noaniq maydonni **taxmin qilmaydi**: qiymat `null` qoladi va shu
   ro'yxatga tushadi. `field` ∈ `customer_name | phone_number | extra_number | region_name | district_name |
@@ -358,7 +359,8 @@ qayta yaratildi. Prompt versiyasi `2026-10-26.1` (birinchi chaqiruvlarda prompt 
   (`{ok, orders, draft_id}` / `{ok:false, reason, …}`); timeout'lar o'zgarmagan (frontend 90 s).
 - [2026-10-26] 🟢 [orders] — ai-confirm'da operator o'zgartirgan maydonlarning AI va yakuniy qiymati
   (`field_corrections`, telefon maskalangan) server tomonda yoziladi — frontend hech narsa yubormaydi.
-- [2026-10-26] 🟢 [bot] — Telegram bot AI rasmi: JPG/PNG/**WebP**, **1,5 MB** gacha (gateway bilan bir xil).
+- [2026-10-26] 🟢 [bot] — Telegram bot AI rasmi: JPG/PNG/**WebP**, **2 MB** gacha (o'zgarmagan; gateway
+  xom rasmni 4 MB gacha qabul qiladi va o'zi kichraytiradi).
 
 ### 2026-10-26 — Smena yopilishi: har karta / hisob qoldig'ini tasdiqlash, skrinshot, AI tekshiruvi, hisobot, sozlamalar (kiZgTybn)
 

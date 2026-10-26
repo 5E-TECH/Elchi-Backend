@@ -1,7 +1,9 @@
 import {
   AI_EXTRACT_IMAGES_PER_CHUNK,
+  AI_BOT_IMAGE_MAX_BYTES,
   AI_IMAGE_MAX_BYTES,
   AI_IMAGE_MAX_EDGE_PX,
+  AI_IMAGE_RAW_MAX_BYTES,
   AI_IMAGE_REENCODE_QUALITY,
   AI_IMAGES_TOTAL_MAX_BYTES,
   AI_MAX_IMAGES,
@@ -127,9 +129,14 @@ describe('isJunkRawOrder (yxwpN5h5 #10 — axlat filtri)', () => {
 describe('ekstraksiya chegaralari (C2)', () => {
   it('qiymatlar kontraktga mos', () => {
     expect(AI_TEXT_MAX_CHARS).toBe(4000);
-    // WHMAIqyo: 20 tagacha rasm, har biri 1,5 MB, jami 20 MB, 1568 px.
+    // WHMAIqyo: 20 tagacha rasm, har biri 1,5 MB (kichraytirilgandan
+    // keyin), jami 20 MB, 1568 px. Xom yuklash 4 MB gacha (reliz-9
+    // regressiyasi: 1,5..2 MB li rasm ilgari o'tardi); bot — 2 MB (o'zgarmagan).
     expect(AI_MAX_IMAGES).toBe(20);
     expect(AI_IMAGE_MAX_BYTES).toBe(1.5 * 1024 * 1024);
+    expect(AI_IMAGE_RAW_MAX_BYTES).toBe(4 * 1024 * 1024);
+    expect(AI_BOT_IMAGE_MAX_BYTES).toBe(2 * 1024 * 1024);
+    expect(AI_BOT_IMAGE_MAX_BYTES).toBeLessThanOrEqual(AI_IMAGE_RAW_MAX_BYTES);
     expect(AI_IMAGES_TOTAL_MAX_BYTES).toBe(20 * 1024 * 1024);
     expect(AI_IMAGE_MAX_EDGE_PX).toBe(1568);
     expect(AI_IMAGE_REENCODE_QUALITY).toBe(80);

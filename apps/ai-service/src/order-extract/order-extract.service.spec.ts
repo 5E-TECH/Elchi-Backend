@@ -23,8 +23,9 @@ import {
   orderExtractMaxTokens,
 } from './order-extract.service';
 
-const TEXT_MODEL = 'test-order-model';
-const VISION_MODEL = 'test-vision-model';
+// Ikkalasi ham effort qabul qiladigan modellar (AI_LOW_EFFORT_MODELS).
+const TEXT_MODEL = 'claude-sonnet-5';
+const VISION_MODEL = 'claude-opus-5';
 
 function rawOrder(overrides: Record<string, unknown> = {}) {
   return {
@@ -155,6 +156,35 @@ describe('OrderExtractService', () => {
         }),
       );
       expect(sentOptions().userText).toBe('');
+    });
+
+    it('effort faqat AI_LOW_EFFORT_MODELS dagi modelga (district-pick bilan bitta ro‘yxat) — Haiku 4.5 / Sonnet 4.6 / noma’lum modelda kalit YO‘Q', async () => {
+      for (const model of [
+        'claude-haiku-4-5',
+        'claude-sonnet-4-6',
+        'claude-haiku-4-5-20251001',
+        'test-order-model',
+      ]) {
+        extractJson.mockClear();
+        configValues = { AI_ORDER_MODEL: model, AI_ORDER_VISION_MODEL: model };
+        await service.extract(baseReq());
+        const opts = sentOptions();
+        expect(opts.model).toBe(model);
+        expect(opts).not.toHaveProperty('effort');
+        // max_tokens o'zgarmaydi (1 telefon → 1500 + 600).
+        expect(opts.maxTokens).toBe(2100);
+      }
+      // Sana qo'shimchali / katta harfli sonnet-5 — normallashtiriladi, effort bor.
+      for (const model of ['claude-sonnet-5-20260101', 'Claude-Fable-5']) {
+        extractJson.mockClear();
+        configValues = { AI_ORDER_MODEL: model, AI_ORDER_VISION_MODEL: model };
+        await service.extract(
+          baseReq({
+            images: [{ media_type: 'image/png', data_base64: 'QQ==' }],
+          }),
+        );
+        expect(sentOptions().effort).toBe('low');
+      }
     });
 
     it('env bo‘sh bo‘lsa AI_MODEL_DEFAULTS ishlatiladi', async () => {

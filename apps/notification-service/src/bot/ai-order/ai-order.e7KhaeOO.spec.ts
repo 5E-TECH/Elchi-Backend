@@ -362,7 +362,7 @@ describe('e7KhaeOO — matn → AI preview (mavjud endpoint, operator JWT)', () 
 
   it.each([
     [
-      '1,5MB dan katta rasm (barcha o‘lchamlar)',
+      '2MB dan katta rasm (barcha o‘lchamlar)',
       { photo: [{ file_id: 'big', file_size: 3_000_000 }] },
     ],
     [
@@ -379,7 +379,7 @@ describe('e7KhaeOO — matn → AI preview (mavjud endpoint, operator JWT)', () 
       },
     ],
     [
-      '1,5MB dan katta PNG hujjat',
+      '2MB dan katta PNG hujjat',
       {
         document: {
           file_id: 'p',
@@ -406,6 +406,28 @@ describe('e7KhaeOO — matn → AI preview (mavjud endpoint, operator JWT)', () 
       expect(ctx.transport.downloadFile).not.toHaveBeenCalled();
     },
   );
+
+  it('reliz-9: 1,8 MB PNG hujjat (reliz-9 gacha o‘tardi) — qabul qilinadi, yuklash chegarasi 2 MB', async () => {
+    const { ctx, calls } = setup();
+    await ctx.router.dispatch('elchi', {
+      update_id: 21,
+      message: {
+        message_id: 21,
+        chat: { id: 40, type: 'private' },
+        from: { id: 40 },
+        document: {
+          file_id: 'mid',
+          mime_type: 'image/png',
+          file_size: 1_800_000,
+        },
+      },
+    });
+    expect(sentTexts(ctx)).not.toContain(AI_MEDIA_TEXT);
+    expect(ctx.transport.downloadFile.mock.calls).toEqual([
+      ['mid', 2 * 1024 * 1024],
+    ]);
+    expect(calls.filter((c) => c.path === '/orders/ai-parse')).toHaveLength(1);
+  });
 
   it('⭐ eskirgan (muddati o‘tgan) qoralama tugmasi — aniq "eskirgan" xabari, hech narsa yaratilmaydi', async () => {
     const { ctx, calls } = setup();

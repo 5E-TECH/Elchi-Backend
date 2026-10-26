@@ -26,6 +26,7 @@ import {
   ORDER_EXTRACT_SYSTEM,
 } from '../prompts/order-extract.prompt';
 import { ORDER_EXTRACT_SCHEMA } from '../prompts/order-extract.schema';
+import { supportsEffort } from '../usage/ai-pricing';
 import { mergeExtractedOrders } from './merge-orders';
 import { sanitizeExtraction } from './sanitize-extraction';
 
@@ -44,6 +45,8 @@ export const ORDER_EXTRACT_ORDERS_PER_IMAGE = 3;
  * javob tezroq). Sonnet 5 da effort qo'llanadi (thinking sukut bo'yicha
  * adaptive, `thinking` kaliti BERILMAYDI). Butun yo'nalish uchun QAT'IY —
  * so'rovdan so'rovga o'zgarmaydi (effort o'zgarishi prompt keshini buzadi).
+ * Faqat `AI_LOW_EFFORT_MODELS` dagi modelga yuboriladi (district-pick bilan
+ * bitta ro'yxat): Haiku 4.5 kabi effort'siz model 400 olmasin.
  */
 export const ORDER_EXTRACT_EFFORT = 'low' as const;
 
@@ -226,7 +229,7 @@ export class OrderExtractService {
         schema: ORDER_EXTRACT_SCHEMA,
         model,
         maxTokens: orderExtractMaxTokens(expected),
-        effort: ORDER_EXTRACT_EFFORT,
+        ...(supportsEffort(model) ? { effort: ORDER_EXTRACT_EFFORT } : {}),
         images: chunkImagesList,
         deadlineAt,
         meta: {

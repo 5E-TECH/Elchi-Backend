@@ -56,8 +56,11 @@ const WEBP = Buffer.from([
 ]);
 const MB = 1024 * 1024;
 
-/** Soxta sharp: chaqiruvlarni yozadi, `OUT:<format>` baytlarini qaytaradi. */
-const fakeSharp = (opts: { fail?: boolean } = {}) => {
+/**
+ * Soxta sharp: chaqiruvlarni yozadi, `OUT:<format>` baytlarini (yoki
+ * `outBytes` berilsa — shuncha baytni) qaytaradi.
+ */
+const fakeSharp = (opts: { fail?: boolean; outBytes?: number } = {}) => {
   const calls: Array<{ op: string; arg?: unknown }> = [];
   const factory = ((input: Buffer, o?: unknown) => {
     calls.push({ op: 'input', arg: { bytes: input.length, o } });
@@ -81,7 +84,11 @@ const fakeSharp = (opts: { fail?: boolean } = {}) => {
           ? Promise.reject(
               new Error('Input buffer contains unsupported image format'),
             )
-          : Promise.resolve(Buffer.from(`OUT:${format}`)),
+          : Promise.resolve(
+              opts.outBytes === undefined
+                ? Buffer.from(`OUT:${format}`)
+                : Buffer.alloc(opts.outBytes),
+            ),
     };
     return pipe;
   }) as unknown as SharpFactory;
@@ -273,7 +280,7 @@ describe('OrderGatewayController — POST /orders/ai-parse', () => {
 
     it('MAXFIYLIK: rasm faqat RAM’da — multer storage MemoryStorage (modul `dest` bersa ham)', () => {
       type MulterMixin = new (moduleOptions?: object) => {
-        multer: { storage: object };
+        multer: { storage: object; limits?: { fileSize?: number } };
       };
       const interceptors = Reflect.getMetadata(
         INTERCEPTORS_METADATA,
@@ -285,6 +292,9 @@ describe('OrderGatewayController — POST /orders/ai-parse', () => {
         dest: '/tmp/ai-parse-yozilmasin',
       });
       expect(interceptor.multer.storage.constructor.name).toBe('MemoryStorage');
+      // Xom yuklash chegarasi = AI_IMAGE_RAW_MAX_BYTES (4 MB); 1,5 MB —
+      // kichraytirilgandan keyin (reliz-9 regressiyasi).
+      expect(interceptor.multer.limits?.fileSize).toBe(4 * MB);
     });
 
     it('ai-availability `:id` dan OLDIN e’lon qilingan', () => {
@@ -352,7 +362,14 @@ describe('OrderGatewayController — POST /orders/ai-parse', () => {
       expect(fx.ai.send).not.toHaveBeenCalled();
     });
 
-    it('WHMAIqyo: 21-rasm → aniq 400; 1,5 MB dan katta → 400; jami 20 MB dan katta → 400', async () => {
+    /** JPEG imzoli, `bytes` hajmli soxta rasm. */
+    const jpegOf = (bytes: number) => {
+      const buf = Buffer.alloc(bytes);
+      JPEG.copy(buf);
+      return buf;
+    };
+
+    it('WHMAIqyo: 21-rasm → aniq 400; xom 4 MB dan katta → 400; jami 20 MB dan katta → 400', async () => {
       const fx = makeController();
       await expect(
         fx.controller.aiParse(
@@ -362,23 +379,79 @@ describe('OrderGatewayController — POST /orders/ai-parse', () => {
         ),
       ).rejects.toThrow("Ko'pi bilan 20 ta rasm yuborish mumkin");
 
-      const big = Buffer.alloc(1.5 * MB + 1);
-      JPEG.copy(big);
       await expect(
-        fx.controller.aiParse({}, [image(big)], marketReq()),
-      ).rejects.toThrow('Rasm 1,5 MB dan katta');
+        fx.controller.aiParse({}, [image(jpegOf(4 * MB + 1))], marketReq()),
+      ).rejects.toThrow('Rasm 4 MB dan katta');
 
-      // Har biri aynan 1,5 MB (ruxsat), 14 tasi = 21 MB > 20 MB.
-      const edge = Buffer.alloc(1.5 * MB);
-      JPEG.copy(edge);
+      // sharp yo'q (sukut): rasm asl holida — har biri 3,5 MB (xom chegara
+      // ichida), 6 tasi = 21 MB > 20 MB.
+      const edge = jpegOf(3.5 * MB);
       await expect(
         fx.controller.aiParse(
           {},
-          Array.from({ length: 14 }, () => image(edge)),
+          Array.from({ length: 6 }, () => image(edge)),
           marketReq(),
         ),
       ).rejects.toThrow('Rasmlar jami 20 MB dan oshmasligi kerak');
       expect(fx.ai.send).not.toHaveBeenCalled();
+    });
+
+    it('reliz-9 regressiyasi: 1,8 MB li xom rasm (frontend 1568 px q0.92) o‘tadi — 1,5 MB kichraytirilgandan KEYIN tekshiriladi', async () => {
+      const raw = jpegOf(1.8 * MB);
+      const sharp = fakeSharp({ outBytes: 400 * 1024 });
+      setSharpForTesting(sharp.factory);
+      const fx = makeController();
+      fx.ai.send.mockReturnValue(of({ ok: true, orders: [] }));
+      const res = await fx.controller.aiParse({}, [image(raw)], marketReq());
+      expect(res.data.ok).toBe(true);
+      const sent = fx.ai.send.mock.calls[0][1].images ?? [];
+      expect(sent).toHaveLength(1);
+      expect(Buffer.from(sent[0].data_base64, 'base64').length).toBe(
+        400 * 1024,
+      );
+      expect(sharp.calls[0].arg).toMatchObject({ bytes: raw.length });
+    });
+
+    it('sharp yuklanmagan: 1,8 MB li rasm asl holida o‘tadi (xom 4 MB chegarasi) — ilgari o‘tgan rasm rad etilmaydi', async () => {
+      const raw = jpegOf(1.8 * MB);
+      const fx = makeController();
+      fx.ai.send.mockReturnValue(of({ ok: true, orders: [] }));
+      const res = await fx.controller.aiParse({}, [image(raw)], marketReq());
+      expect(res.data.ok).toBe(true);
+      expect(fx.ai.send.mock.calls[0][1].images).toEqual([
+        { media_type: 'image/jpeg', data_base64: raw.toString('base64') },
+      ]);
+    });
+
+    it('kichraytirilgandan keyin ham 1,5 MB dan katta → 400; jami KICHRAYTIRILGAN baytlar bo‘yicha', async () => {
+      setSharpForTesting(fakeSharp({ outBytes: 1.5 * MB + 1 }).factory);
+      const fx = makeController();
+      await expect(
+        fx.controller.aiParse({}, [image(jpegOf(3 * MB))], marketReq()),
+      ).rejects.toThrow('Rasm 1,5 MB dan katta (kichraytirilgandan keyin ham)');
+
+      // Har biri aynan 1,5 MB (ruxsat), 14 tasi = 21 MB > 20 MB.
+      setSharpForTesting(fakeSharp({ outBytes: 1.5 * MB }).factory);
+      await expect(
+        fx.controller.aiParse(
+          {},
+          Array.from({ length: 14 }, () => image(JPEG)),
+          marketReq(),
+        ),
+      ).rejects.toThrow('Rasmlar jami 20 MB dan oshmasligi kerak');
+      expect(fx.ai.send).not.toHaveBeenCalled();
+
+      // 20 × 3,9 MB xom (78 MB) — kichraytirilgach 20 × 300 KB: o'tadi.
+      setSharpForTesting(fakeSharp({ outBytes: 300 * 1024 }).factory);
+      fx.ai.send.mockReturnValue(of({ ok: true, orders: [] }));
+      const big = jpegOf(3.9 * MB);
+      const res = await fx.controller.aiParse(
+        {},
+        Array.from({ length: 20 }, () => image(big)),
+        marketReq(),
+      );
+      expect(res.data.ok).toBe(true);
+      expect(fx.ai.send.mock.calls[0][1].images).toHaveLength(20);
     });
 
     it('WHMAIqyo: aynan 20 ta rasm (jami ≤ 20 MB) qabul qilinadi', async () => {

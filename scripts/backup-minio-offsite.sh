@@ -25,6 +25,11 @@
 #   5. one log line + key=value status file ($MINIO_OFFSITE_STATE_DIR/status)
 #      that `--check` (host alert, scripts/backup-alert.sh) reads.
 #
+# Temporary AI-parse images (`ai-tmp/` at the bucket root — customer photos
+# kept at most 1 h, deleted as soon as ai-service reads them; WHMAIqyo) are
+# NEVER copied off-site: every count / sync / check / size runs with
+# `--exclude '/ai-tmp/**'` (MO_EXCLUDE).
+#
 # MinIO is read with a dedicated READ-ONLY MinIO user (policy: ListBucket +
 # GetObject + GetBucketLocation on the source bucket) — MINIO_BACKUP_ACCESS_KEY
 # / MINIO_BACKUP_SECRET_KEY — never the root or the app (readwrite) key.
@@ -61,6 +66,10 @@ export LC_ALL=C
 
 MO_STATE_DIR="${MINIO_OFFSITE_STATE_DIR:-/state}"
 MO_STATUS="$MO_STATE_DIR/status"
+
+# Bucket-root prefixes that never leave MinIO (see header). Leading `/` = only
+# at the root of the listed remote path (bucket root / current/).
+MO_EXCLUDE='/ai-tmp/**'
 
 mo_log() { echo "[minio-offsite] $*"; }
 mo_warn() { echo "[minio-offsite] WARNING: $*" >&2; }
@@ -221,7 +230,7 @@ mo_status_write() {
 # Count of objects under a remote path; "directory not found" (exit 3) = 0.
 mo_count() {
   _mc_out="$MO_RUN_DIR/count.$$"
-  rclone lsf "$1" -R --files-only --fast-list > "$_mc_out" 2>> "$MO_RUN_ERR"
+  rclone lsf "$1" -R --files-only --fast-list --exclude "$MO_EXCLUDE" > "$_mc_out" 2>> "$MO_RUN_ERR"
   _mc_rc=$?
   if [ "$_mc_rc" -eq 3 ]; then
     echo 0
@@ -257,6 +266,7 @@ mo_sync_bucket() {
   fi
 
   rclone sync "$_sb_src" "$_sb_cur" --backup-dir "$_sb_ver" --checksum --fast-list \
+    --exclude "$MO_EXCLUDE" \
     --max-delete "$MO_MAX_DELETE" --transfers 4 --checkers 8 --stats 0 -v \
     > "$_sb_log" 2>&1
   _sb_rc=$?
@@ -270,12 +280,12 @@ mo_sync_bucket() {
     return 1
   fi
 
-  rclone check "$_sb_src" "$_sb_cur" --one-way --fast-list 2>> "$MO_RUN_ERR" || {
+  rclone check "$_sb_src" "$_sb_cur" --one-way --fast-list --exclude "$MO_EXCLUDE" 2>> "$MO_RUN_ERR" || {
     MO_B_STEP="verify (size+md5)"
     return 1
   }
   # {"count":117,"bytes":24722429,"sizeless":0}
-  _sb_size="$(rclone size "$_sb_cur" --fast-list --json 2>> "$MO_RUN_ERR")" || {
+  _sb_size="$(rclone size "$_sb_cur" --fast-list --json --exclude "$MO_EXCLUDE" 2>> "$MO_RUN_ERR")" || {
     MO_B_STEP="size R2"
     return 1
   }
