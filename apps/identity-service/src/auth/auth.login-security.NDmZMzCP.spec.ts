@@ -313,6 +313,46 @@ describe('NDmZMzCP — login: timing, qulf, zaif parol, rehash', () => {
     expect(opened.user.password).toBe(patch.password);
   });
 
+  describe('(2026-10-26) rehash poygasi — shartli UPDATE 0 qator', () => {
+    it('⭐ parallel login allaqachon qayta xeshlagan — joriy xesh qayta o‘qiladi, sessiya izi undan (o‘zi chiqarib yuborilmaydi)', async () => {
+      const oldHash = bcrypt.hashSync('Kuchli-Parol-2026', 4);
+      const t = setup(baseUser({ password: oldHash }));
+      // Boshqa login shu orada qayta xeshlagan: DB'da o'sha parolning boshqa xeshi.
+      const otherHash = bcrypt.hashSync('Kuchli-Parol-2026', 12);
+      t.managerUpdate.mockResolvedValueOnce({ affected: 0 });
+      t.users.findOne
+        .mockResolvedValueOnce({ ...baseUser({ password: oldHash }) })
+        .mockResolvedValueOnce({ id: '25', password: otherHash } as never);
+      const res = await t.login('+998935557711', 'Kuchli-Parol-2026');
+      expect(res.statusCode).toBe(200);
+      expect(t.users.findOne).toHaveBeenLastCalledWith({
+        where: { id: '25' },
+        select: { id: true, password: true },
+      });
+      expect(t.sessions.repointPasswordFingerprint).not.toHaveBeenCalled();
+      const opened = (
+        t.sessions.open.mock.calls[0] as unknown as [{ user: UserRow }]
+      )[0];
+      expect(opened.user.password).toBe(otherHash);
+    });
+
+    it('parol shu orada ALMASHGAN (yangi xesh bu parolga mos emas) — eski xesh qoladi (sessiya eskiradi, yangi parolga bog‘lanmaydi)', async () => {
+      const oldHash = bcrypt.hashSync('Kuchli-Parol-2026', 4);
+      const t = setup(baseUser({ password: oldHash }));
+      const changedHash = bcrypt.hashSync('Boshqa-Parol-2027', 4);
+      t.managerUpdate.mockResolvedValueOnce({ affected: 0 });
+      t.users.findOne
+        .mockResolvedValueOnce({ ...baseUser({ password: oldHash }) })
+        .mockResolvedValueOnce({ id: '25', password: changedHash } as never);
+      const res = await t.login('+998935557711', 'Kuchli-Parol-2026');
+      expect(res.statusCode).toBe(200);
+      const opened = (
+        t.sessions.open.mock.calls[0] as unknown as [{ user: UserRow }]
+      )[0];
+      expect(opened.user.password).toBe(oldHash);
+    });
+  });
+
   it('qayta xeshlash xatosi login’ni to‘xtatmaydi', async () => {
     const t = setup(
       baseUser({ password: bcrypt.hashSync('Kuchli-Parol-2026', 4) }),

@@ -360,7 +360,8 @@ export class AuthService {
    * bcrypt narxi joriydan (12) past — yangi xesh. Sessiyalarning parol izi
    * (`password_fp`, xeshdan olinadi) AYNI tranzaksiyada yangilanadi, aks
    * holda qayta xeshlash foydalanuvchining boshqa qurilmalarini «parol
-   * almashdi» deb chiqarib yuborardi. Xato — login'ni to'xtatmaydi.
+   * almashdi» deb chiqarib yuborardi. Shartli UPDATE 0 qator bo'lsa (poyga)
+   * — joriy xesh qayta o'qiladi (pastda). Xato — login'ni to'xtatmaydi.
    */
   private async rehashIfNeeded(user: User, password: string): Promise<void> {
     try {
@@ -382,7 +383,25 @@ export class AuthService {
         );
         return true;
       });
-      if (updated) user.password = newHash;
+      if (updated) {
+        user.password = newHash;
+        return;
+      }
+      // (2026-10-26) 0 qator — xesh shu orada o'zgargan: parallel login
+      // allaqachon qayta xeshlagan (o'sha parolning BOSHQA xeshi) yoki parol
+      // almashtirilgan. Sessiya izi eski xeshdan olinsa, yangi sessiya
+      // darhol «parol almashdi» deb yopilardi — joriy xesh qayta o'qiladi.
+      // U shu parolga mos bo'lsagina olinadi; mos kelmasa (parol haqiqatan
+      // almashgan) eski xesh qoladi va sessiya o'z-o'zidan eskiradi.
+      const fresh = await this.users.findOne({
+        where: { id: user.id },
+        select: { id: true, password: true },
+      });
+      const freshHash = fresh?.password;
+      if (!freshHash || freshHash === oldHash) return;
+      if (await this.bcryptEncryption.compare(password, freshHash)) {
+        user.password = freshHash;
+      }
     } catch (error) {
       this.logger.warn(
         `Parol qayta xeshlanmadi (user ${user.id}): ${(error as Error)?.message ?? 'unknown'}`,
