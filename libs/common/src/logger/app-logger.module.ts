@@ -75,6 +75,25 @@ export const PINO_REDACT_PATHS: readonly string[] = [
  *   - `request_id`  taken from x-request-id header (or auto-generated)
  *   - `level`, `time`, `pid`, `hostname` (Pino built-ins)
  */
+/**
+ * (oFfOWGuo, xavfsizlik P2) Logga yoziladigan URL. Ilgari to'liq `req.url`
+ * yozilardi: `/search?q=<telefon>`, `/sms/stop/<token>`, `/scan/<token>`
+ * loglarda qolardi.
+ *  - query (`?…`) va fragment olib tashlanadi — yo'lning o'zi qoladi;
+ *  - yo'ldagi maxfiy token segmenti `***` bilan almashtiriladi:
+ *    `/sms/stop/:token`, `/scan/:token`, `/orders/qr-code/:token`
+ *    (`/v1/…` prefiksi bilan ham).
+ */
+const LOG_URL_TOKEN_RE =
+  /^((?:\/v\d+)?\/(?:sms\/stop|scan|orders\/qr-code))\/[^/]+/i;
+
+export function sanitizeLogUrl(url: string | undefined): string | undefined {
+  if (typeof url !== 'string') return url;
+  const cut = url.search(/[?#]/);
+  const path = cut === -1 ? url : url.slice(0, cut);
+  return path.replace(LOG_URL_TOKEN_RE, '$1/***');
+}
+
 @Module({})
 export class AppLoggerModule {
   static forRoot(options: AppLoggerOptions): DynamicModule {
@@ -126,7 +145,8 @@ export class AppLoggerModule {
           req: (req: IncomingMessage & { id?: string }) => ({
             id: req.id,
             method: req.method,
-            url: req.url,
+            // (oFfOWGuo) query'siz, token maskalangan (`sanitizeLogUrl`).
+            url: sanitizeLogUrl(req.url),
           }),
           res: (res: ServerResponse) => ({ statusCode: res.statusCode }),
         },

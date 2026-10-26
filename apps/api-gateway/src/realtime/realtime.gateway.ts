@@ -3,11 +3,8 @@ import { JwtService } from '@nestjs/jwt';
 import {
   OnGatewayConnection,
   OnGatewayDisconnect,
-  SubscribeMessage,
   WebSocketGateway,
   WebSocketServer,
-  MessageBody,
-  ConnectedSocket,
 } from '@nestjs/websockets';
 import { Server, Socket } from 'socket.io';
 import {
@@ -17,6 +14,8 @@ import {
   type SessionState,
   sessionIdClaim,
 } from '../auth/session-revocation.service';
+import type { IncomingMessage } from 'http';
+import { corsOriginCallback, isAllowedCorsOrigin } from '../gateway-http.setup';
 
 interface SocketUser {
   sub: string;
@@ -25,7 +24,15 @@ interface SocketUser {
   branch_id?: string | null;
   /** (Elchi Pochta #3) Access token `sid` i; Telegram / eski tokenlarda `null`. */
   sid: string | null;
+  /** (oFfOWGuo) JWT `exp` (unix soniya) — shu paytda socket uziladi. */
+  exp?: number;
 }
+
+/**
+ * (oFfOWGuo) setTimeout chegarasi (~24.8 kun); undan uzoq `exp` — taymer
+ * zanjiri bilan.
+ */
+const MAX_TIMER_MS = 2_147_483_647;
 
 /** (Elchi Pochta #3, 2026-10-24) Sessiya yopilganda socketga hodisa. */
 export const SESSION_REVOKED_EVENT = 'auth:session_revoked';
@@ -69,14 +76,34 @@ export const branchRoleRoom = (branchId: string, role: string): string =>
 /** Ulanish rad etilganda `error` hodisasi (keyin server uzadi). */
 export interface RealtimeConnectError {
   message: string;
-  code: 'UNAUTHORIZED' | 'SESSION_REVOKED' | typeof SESSION_CHECK_UNAVAILABLE;
+  code:
+    | 'UNAUTHORIZED'
+    | 'SESSION_REVOKED'
+    | 'TOKEN_EXPIRED'
+    | typeof SESSION_CHECK_UNAVAILABLE;
 }
 
 /**
- * Realtime gateway (socket.io). Two purposes only (per product decision):
- *   1. server → client notifications, pushed from any service via the
- *      `realtime.notify` RMQ message (see realtime.controller.ts),
- *   2. online client ↔ client messaging (simple chat relay).
+ * (oFfOWGuo) socket.io `allowRequest`: Origin — HTTP CORS bilan bir xil
+ * qoida (`CORS_ORIGINS`; localhost faqat dev'da; Origin'siz — ruxsat).
+ */
+export function realtimeAllowRequest(
+  req: Pick<IncomingMessage, 'headers'>,
+  callback: (err: string | null | undefined, success: boolean) => void,
+): void {
+  const allowed = isAllowedCorsOrigin(req.headers.origin);
+  callback(allowed ? null : 'origin not allowed', allowed);
+}
+
+/**
+ * Realtime gateway (socket.io) — FAQAT server → client bildirishnomalar
+ * (any service pushes via the `realtime.notify` RMQ message, see
+ * realtime.controller.ts). (oFfOWGuo, xavfsizlik P2) client → client
+ * `chat:send` (istalgan userga cheksiz matn) va `presence:list` (online
+ * id'lar ro'yxati) OLIB TASHLANDI — Elchi-Frontend ularni ishlatmaydi.
+ * CORS — HTTP bilan BIR XIL `CORS_ORIGINS` qoidasi (ilgari `origin: true`).
+ * Token muddati (`exp`) tugaganda socket `error` `{ code: 'TOKEN_EXPIRED' }`
+ * bilan uziladi — FE yangilangan token bilan qayta ulanadi.
  *
  * Every connection is JWT-authenticated with the same ACCESS_TOKEN_KEY the HTTP
  * guards use. On connect the socket joins `user:<sub>` and `role:<role>` rooms,
@@ -98,7 +125,11 @@ export interface RealtimeConnectError {
  */
 @WebSocketGateway({
   namespace: '/realtime',
-  cors: { origin: true, credentials: true },
+  cors: { origin: corsOriginCallback, credentials: true },
+  // (oFfOWGuo) `cors` faqat polling so'rovlariga ta'sir qiladi; WebSocket
+  // upgrade'da brauzer CORS'ni tekshirmaydi — Origin shu yerda ham
+  // `CORS_ORIGINS` bo'yicha tekshiriladi (Origin'siz mijoz — ruxsat).
+  allowRequest: realtimeAllowRequest,
 })
 export class RealtimeGateway
   implements OnGatewayConnection, OnGatewayDisconnect, OnModuleDestroy
@@ -115,6 +146,11 @@ export class RealtimeGateway
   private readonly pendingKicks = new Set<ReturnType<typeof setTimeout>>();
   /** (2026-10-26) socket id → sessiyani qayta tekshirish taymeri. */
   private readonly sessionRechecks = new Map<
+    string,
+    ReturnType<typeof setTimeout>
+  >();
+  /** (oFfOWGuo) socket id → token muddati (`exp`) taymeri. */
+  private readonly tokenExpiryTimers = new Map<
     string,
     ReturnType<typeof setTimeout>
   >();
@@ -139,6 +175,8 @@ export class RealtimeGateway
     this.pendingKicks.clear();
     for (const timer of this.sessionRechecks.values()) clearTimeout(timer);
     this.sessionRechecks.clear();
+    for (const timer of this.tokenExpiryTimers.values()) clearTimeout(timer);
+    this.tokenExpiryTimers.clear();
   }
 
   private getUser(client: Socket): SocketUser | undefined {
@@ -186,6 +224,8 @@ export class RealtimeGateway
     }
 
     (client.data as { user?: SocketUser }).user = user;
+    this.scheduleTokenExpiry(client, user);
+    if (client.disconnected) return;
     void client.join(userRoom(user.sub));
     for (const role of user.roles) {
       void client.join(roleRoom(role));
@@ -256,6 +296,42 @@ export class RealtimeGateway
     );
   }
 
+  /**
+   * (oFfOWGuo) Ulanishdan keyingi muddat tekshiruvi: ilgari token faqat
+   * ulanishda tekshirilardi — muddati o'tgan token bilan ochilgan socket
+   * cheksiz yashardi. `exp` kelganda `error` `{ code: 'TOKEN_EXPIRED' }` va
+   * server uzadi. `exp` siz token — taymer yo'q (avvalgidek).
+   */
+  private scheduleTokenExpiry(client: Socket, user: SocketUser): void {
+    if (typeof user.exp !== 'number' || !Number.isFinite(user.exp)) return;
+    const previous = this.tokenExpiryTimers.get(client.id);
+    if (previous) clearTimeout(previous);
+    const remaining = user.exp * 1000 - Date.now();
+    if (remaining <= 0) {
+      this.expireSocket(client, user);
+      return;
+    }
+    const timer = setTimeout(
+      () => {
+        this.tokenExpiryTimers.delete(client.id);
+        if (client.disconnected) return;
+        if (user.exp! * 1000 > Date.now()) {
+          this.scheduleTokenExpiry(client, user);
+          return;
+        }
+        this.expireSocket(client, user);
+      },
+      Math.min(remaining, MAX_TIMER_MS),
+    );
+    timer.unref?.();
+    this.tokenExpiryTimers.set(client.id, timer);
+  }
+
+  private expireSocket(client: Socket, user: SocketUser): void {
+    this.reject(client, { message: 'Token expired', code: 'TOKEN_EXPIRED' });
+    this.logger.log(`socket disconnected: user=${user.sub} token expired`);
+  }
+
   /** Rad etish: `error` hodisasi, keyin server uzadi (hodisa avval yetadi). */
   private reject(client: Socket, error: RealtimeConnectError): void {
     client.emit('error', error);
@@ -323,6 +399,11 @@ export class RealtimeGateway
       clearTimeout(recheck);
       this.sessionRechecks.delete(client.id);
     }
+    const expiry = this.tokenExpiryTimers.get(client.id);
+    if (expiry) {
+      clearTimeout(expiry);
+      this.tokenExpiryTimers.delete(client.id);
+    }
     const user = this.getUser(client);
     if (!user) return;
     const set = this.online.get(user.sub);
@@ -346,6 +427,7 @@ export class RealtimeGateway
         roles?: string[];
         branch_id?: string | number | null;
         sid?: string | null;
+        exp?: number;
       }>(raw);
       const branchId =
         payload.branch_id == null ? '' : String(payload.branch_id).trim();
@@ -355,6 +437,7 @@ export class RealtimeGateway
         roles: (payload.roles ?? []).map((r) => String(r).toLowerCase()),
         branch_id: branchId || null,
         sid: sessionIdClaim(payload.sid),
+        exp: typeof payload.exp === 'number' ? payload.exp : undefined,
       };
     } catch {
       return null;
@@ -365,42 +448,6 @@ export class RealtimeGateway
     if (!header) return undefined;
     const [scheme, token] = header.split(' ');
     return scheme?.toLowerCase() === 'bearer' ? token : undefined;
-  }
-
-  // ===== client → client messaging =====
-
-  @SubscribeMessage('chat:send')
-  handleChat(
-    @ConnectedSocket() client: Socket,
-    @MessageBody() body: { to_user_id?: string; text?: string },
-  ): { ok: boolean; error?: string } {
-    const user = this.getUser(client);
-    if (!user) return { ok: false, error: 'unauthorized' };
-    const to = String(body?.to_user_id ?? '').trim();
-    const text = String(body?.text ?? '').trim();
-    if (!to || !text)
-      return { ok: false, error: 'to_user_id and text required' };
-
-    const message = {
-      from_user_id: user.sub,
-      to_user_id: to,
-      text,
-      ts: Date.now(),
-    };
-    // deliver to recipient's room and echo back to the sender's other tabs
-    this.server.to(`user:${to}`).emit('chat:message', message);
-    this.server.to(`user:${user.sub}`).emit('chat:message', message);
-    return { ok: true };
-  }
-
-  @SubscribeMessage('presence:list')
-  handlePresence(@ConnectedSocket() client: Socket): {
-    online_user_ids: string[];
-  } {
-    // (Elchi Pochta #3) Sessiya tekshiruvi tugamagan / rad etilgan socket
-    // ro'yxatni olmaydi.
-    if (!this.getUser(client)) return { online_user_ids: [] };
-    return { online_user_ids: [...this.online.keys()] };
   }
 
   // ===== server → client push (called by realtime.controller) =====

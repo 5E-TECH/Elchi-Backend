@@ -57,6 +57,7 @@ interface ReadinessBody {
     status: string;
     latency_ms?: number;
     error?: string;
+    error_kind?: string;
   }>;
 }
 
@@ -147,8 +148,13 @@ describe('7s1bqOT6 — GET /health va GET /health/readiness (e2e)', () => {
     expect(body.status).toBe('degraded');
     expect(body.services).toHaveLength(14);
     const order = body.services.find((s) => s.service === 'ORDER');
-    expect(order).toMatchObject({ status: 'down' });
-    expect(order?.error).toContain('ORDER');
+    // (oFfOWGuo) @Public javobda xom xato matni yo'q — faqat holat matni.
+    expect(order).toMatchObject({
+      status: 'down',
+      error: 'unavailable',
+      error_kind: 'down',
+    });
+    expect(order?.error).not.toContain('ORDER');
     expect(
       body.services.filter((s) => s.service !== 'ORDER').map((s) => s.status),
     ).toEqual(Array(13).fill('ok'));

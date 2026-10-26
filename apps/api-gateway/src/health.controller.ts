@@ -3,6 +3,7 @@ import {
   Get,
   HttpStatus,
   Inject,
+  Logger,
   Optional,
   Res,
 } from '@nestjs/common';
@@ -22,7 +23,23 @@ import { firstValueFrom, timeout, TimeoutError } from 'rxjs';
  *   - `reported` — servis javob berdi, lekin o'zini `degraded`/`down` dedi;
  *   - `not_registered` — gateway'da bu servis mijozi yo'q.
  * Faqat yopiq ro'yxat — ichki tafsilot sizmaydi (@Public endpoint).
+ *
+ * (oFfOWGuo, xavfsizlik P2) `error` ham endi FAQAT holat matni
+ * (`READINESS_ERROR_TEXT`; `reported` da — `reported degraded|down`):
+ * ilgari RPC istisnosining xom `message` i
+ * (masalan `connect ECONNREFUSED 172.18.0.5:5672`) @Public javobda
+ * qaytardi. Xom matn faqat server logida (warn). Matnlar FE
+ * `classifyProblem` (system-ops) bilan mos: /timeout/, /^reported/,
+ * /not registered/.
  */
+export const READINESS_ERROR_TEXT: Readonly<
+  Record<Exclude<ServiceHealthErrorKind, 'reported'>, string>
+> = {
+  timeout: 'timeout',
+  down: 'unavailable',
+  not_registered: 'client not registered',
+};
+
 export type ServiceHealthErrorKind =
   | 'timeout'
   | 'down'
@@ -63,6 +80,7 @@ const PROBE_TIMEOUT_MS = 1500;
 @SkipThrottle()
 @Controller('health')
 export class HealthController {
+  private readonly logger = new Logger(HealthController.name);
   private readonly clients: Map<string, ClientProxy>;
 
   constructor(
@@ -164,7 +182,7 @@ export class HealthController {
       return {
         service: token,
         status: 'unknown',
-        error: 'client not registered',
+        error: READINESS_ERROR_TEXT.not_registered,
         error_kind: 'not_registered',
       };
     }
@@ -186,6 +204,7 @@ export class HealthController {
           service: token,
           status: 'down',
           latency_ms: Date.now() - startedAt,
+          // Faqat servis o'zi bildirgan holat (`degraded` | `down`).
           error: `reported ${reported}`,
           error_kind: 'reported',
         };
@@ -196,12 +215,20 @@ export class HealthController {
         latency_ms: Date.now() - startedAt,
       };
     } catch (error) {
+      const kind: ServiceHealthErrorKind =
+        error instanceof TimeoutError ? 'timeout' : 'down';
+      // Xom sabab faqat server logida (javobda emas — oFfOWGuo).
+      this.logger.warn(
+        `readiness ${token}: ${kind} — ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
       return {
         service: token,
         status: 'down',
         latency_ms: Date.now() - startedAt,
-        error: (error as Error)?.message ?? 'unknown error',
-        error_kind: error instanceof TimeoutError ? 'timeout' : 'down',
+        error: READINESS_ERROR_TEXT[kind],
+        error_kind: kind,
       };
     }
   }

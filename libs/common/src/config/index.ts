@@ -64,6 +64,14 @@ const observabilityKeys = {
   LOG_LEVEL: Joi.string()
     .valid('fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent')
     .optional(),
+  // (oFfOWGuo) `GET /metrics` Bearer tokeni (kamida 32 belgi, masalan
+  // `openssl rand -hex 32`). Bo'sh — production'da /metrics yopiq (404),
+  // dev'da ochiq. `metrics.ts` `metricsAccess`.
+  METRICS_TOKEN: Joi.string()
+    .trim()
+    .pattern(/^[A-Za-z0-9_.~+/=-]{32,512}$/)
+    .empty('')
+    .optional(),
 };
 
 export const gatewayValidationSchema = Joi.object({
@@ -148,8 +156,9 @@ export const gatewayValidationSchema = Joi.object({
   // Comma-separated list of allowed browser origins for CORS.
   // localhost/127.0.0.1 are always allowed in code regardless of this value.
   CORS_ORIGINS: Joi.string().allow('').default(''),
-  // Swagger UI (/api) HTTP Basic Auth credentials. In production Swagger is
-  // served only when SWAGGER_PASSWORD is set, and always behind Basic Auth.
+  // Swagger UI (/api) HTTP Basic Auth credentials (faqat dev). (oFfOWGuo)
+  // Production'da Swagger umuman mount qilinmaydi — parol bo'lsa ham
+  // (gateway-http.setup.ts `setupGatewaySwagger`).
   SWAGGER_USER: Joi.string().default('admin'),
   SWAGGER_PASSWORD: Joi.string().allow('').default(''),
   /**
