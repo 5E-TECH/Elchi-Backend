@@ -217,12 +217,10 @@ const NO_ROLES_WHITELIST: readonly string[] = [
   'POST /notifications/push/subscribe',
   'POST /notifications/telegram/link',
   // Fayllar — kalit bo'yicha (servisda egasi tekshiriladi), view — ochiq.
+  // POST /files/upload|qr|pdf endi @Roles bilan (dgvwZasd) — ro'yxatda yo'q.
   'GET /files/:key',
   'GET /files/:key/content',
   'GET /files/view/:key',
-  'POST /files/pdf',
-  'POST /files/qr',
-  'POST /files/upload',
   // Skan / qidiruv / buyurtma ro'yxati — doira servis + gateway proyeksiyasi.
   'GET /orders',
   'GET /orders/:id',
