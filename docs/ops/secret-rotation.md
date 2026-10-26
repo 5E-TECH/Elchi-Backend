@@ -36,7 +36,7 @@ Qo'shimcha topilmalar:
 |---|---|---|
 | 0 | `preflight` — faqat o'qish | — |
 | 1 | `prepare --execute` → `new.env` ni **darhol parol menejeriga** | — |
-| 2 | `postgres --execute` | barcha app konteynerlari qayta yaratiladi: ~30–60 s API uzilishi |
+| 2 | `postgres --execute` | postgres (~5–10 s) + barcha app konteynerlari qayta yaratiladi: ~30–60 s API uzilishi |
 | 3 | `verify` | — |
 | 4 | `rabbitmq --execute` | yana ~30–60 s uzilish |
 | 5 | `minio-app --execute` | faqat file-service (~20 s yuklash/yuklab olish yo'q) |
@@ -71,13 +71,23 @@ bash $S verify
 2. `.env.production`: `POSTGRES_PASSWORD` va `POSTGRES_URI` ichidagi parol;
    `.env`: `POSTGRES_PASSWORD` (postgres konteyneri env'i — faqat initdb uchun,
    lekin mos turishi kerak). Fayllar JOYIDA yoziladi (egasi/guruh/rejim o'zgarmaydi).
-3. Barcha app servislari + `db-backup` (+ ishlayotgan bo'lsa `db-reconcile`,
-   `activity-log-prune`) `up -d --no-deps --force-recreate`, health kutiladi.
+3. Avval `postgres` konteyneri qayta yaratiladi (~5–10 s; o'sha image, volume
+   tegilmaydi): `.env` dagi parol compose orqali uning env'iga tushadi —
+   aks holda KEYINGI deploy (`up -d … postgres`) uni kutilmaganda qayta
+   yaratardi. So'ng barcha app servislari + `db-backup` (+ ishlayotgan bo'lsa
+   `db-reconcile`, `activity-log-prune`) `up -d --no-deps --force-recreate`,
+   health kutiladi.
 4. Tekshiruv: docker tarmog'i orqali `psql -h postgres` — yangi parol ✅,
    eski parol ❌; readiness 200.
 
 Rollback: `bash $S rollback postgres --execute` — eski parol `ALTER ROLE` bilan
-qaytadi, env fayllar eski qiymatga, servislar qayta yaratiladi.
+qaytadi, env fayllar eski qiymatga, postgres va servislar qayta yaratiladi.
+
+Dry-run (2026-10-26, prod, release 8 dan keyin): `preflight` — compose
+servislari, postgres tarmoq logini, RabbitMQ management API, `mc` va MinIO
+admin API, ilova/root loginlari, readiness — hammasi OK; `postgres`,
+`rabbitmq`, `minio-app`, `minio-root`, `rollback` dry-run'lari xatosiz reja
+chiqardi.
 
 ## 3. RabbitMQ (`rabbitmq`)
 

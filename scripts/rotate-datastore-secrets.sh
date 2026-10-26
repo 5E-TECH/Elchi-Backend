@@ -82,8 +82,12 @@ len() { printf '%s' "$1" | wc -c | tr -d ' '; }
 same() { [ "$1" = "$2" ] && echo yes || echo no; }
 
 need_prepared() {
-  [ -f "$ROT_DIR/new.env" ] && [ -f "$ROT_DIR/env.production.before" ] && [ -f "$ROT_DIR/env.before" ] ||
-    die "run 'prepare --execute' first ($ROT_DIR)"
+  if [ -f "$ROT_DIR/new.env" ] && [ -f "$ROT_DIR/env.production.before" ] && [ -f "$ROT_DIR/env.before" ]; then
+    return 0
+  fi
+  # A dry run may be checked before `prepare` — it only prints the plan.
+  $EXECUTE && die "run 'prepare --execute' first ($ROT_DIR)"
+  say "(dry-run) not prepared yet — new/old values unknown, printing the plan only"
 }
 newv() { getv "$1" "$ROT_DIR/new.env"; }
 oldp() { getv "$1" "$ROT_DIR/env.production.before"; }
@@ -156,6 +160,25 @@ step_preflight() {
   say "MinIO root password len=$(len "$(getv MINIO_ROOT_PASSWORD "$ENVP")"); app secret len=$(len "$(getv MINIO_SECRET_KEY "$ENVP")")"
   say "deploy-user check: .env.production is $(stat -c '%U:%G %a' "$ENVP")"
   if [ -f "$ROT_DIR/new.env" ]; then say "prepared: yes ($ROT_DIR)"; else say "prepared: no"; fi
+  # --- what the steps rely on (all read-only) ---
+  local svcs missing s
+  svcs="$($DC config --services 2>/dev/null)" || die "docker compose config failed"
+  missing=""
+  for s in $APP_SERVICES db-backup minio; do printf '%s\n' "$svcs" | grep -qx "$s" || missing="$missing $s"; done
+  [ -z "$missing" ] && say "compose services: all present" || die "compose services missing:$missing"
+  say "compose ps (healthy/total): $($DC ps --format '{{.Service}} {{.Status}}' 2>/dev/null | grep -c '(healthy)')/$($DC ps --format '{{.Service}}' 2>/dev/null | wc -l)"
+  say "DB_SERVICES to recreate in 'postgres': $(echo $DB_SERVICES | wc -w) ($(echo $DB_SERVICES | tr ' ' '\n' | grep -v -- '-service$' | tr '\n' ' '))"
+  docker image inspect "$PG_IMG" >/dev/null 2>&1 && say "$PG_IMG image present (network login checks)" || say "WARNING: $PG_IMG image not present (will be pulled)"
+  pg_login "$(getv POSTGRES_PASSWORD "$ENVP")" && say "postgres network login with current password: OK" || die "postgres network login FAILS with current password"
+  mq_auth guest guest && say "rabbitmq management API reachable (guest -> 200)" || say "rabbitmq management API: guest rejected/unreachable"
+  docker exec elchi-rabbitmq rabbitmqctl -q list_users | awk '{print $1}' | grep -qx "$MQ_NEW_USER" &&
+    say "WARNING: rabbitmq user $MQ_NEW_USER already exists (step will change its password)" || say "rabbitmq user $MQ_NEW_USER: not yet created"
+  docker exec elchi-minio sh -c 'command -v mc >/dev/null || [ -x /usr/bin/mc ]' && say "mc present in elchi-minio" || die "mc missing in elchi-minio"
+  printf '%s\n' "$(getv MINIO_ACCESS_KEY "$ENVP")" | minio_admin 'mc admin user info local "$L1" >/dev/null' &&
+    say "minio: app IAM user exists (admin API reachable with root)" || die "minio admin API / app user check failed"
+  minio_login "$(getv MINIO_ACCESS_KEY "$ENVP")" "$(getv MINIO_SECRET_KEY "$ENVP")" && say "minio: app key login OK" || die "minio app key login FAILS"
+  minio_login "$(getv MINIO_ROOT_USER "$ENVP")" "$(getv MINIO_ROOT_PASSWORD "$ENVP")" && say "minio: root login OK" || die "minio root login FAILS"
+  readiness || say "WARNING: readiness not 200"
 }
 
 step_prepare() {
@@ -184,7 +207,7 @@ step_postgres() {
   pg_user="$(getv POSTGRES_USER "$ENVP")"
   new="$(newv NEW_PG_PASSWORD)"
   old="$(oldp POSTGRES_PASSWORD)"
-  [ "$(len "$new")" -ge 24 ] || die "new password too short"
+  if $EXECUTE; then [ "$(len "$new")" -ge 24 ] || die "new password too short"; fi
   say "1/4 ALTER ROLE (password over stdin; existing connections stay logged in)"
   if $EXECUTE; then
     printf 'ALTER ROLE "%s" WITH PASSWORD %s;\n' "$pg_user" "'$new'" |
@@ -196,7 +219,13 @@ step_postgres() {
     set_uri_creds POSTGRES_URI "$ENVP" "$new"
     V="$new" setv POSTGRES_PASSWORD "$ENVD"
   fi
-  say "3/4 recreate DB services"
+  # .env POSTGRES_PASSWORD is interpolated into the postgres container env: the
+  # NEXT deploy (`up -d … postgres`) would recreate Postgres by surprise. Do it
+  # now, inside this window (same image, data volume untouched; the password in
+  # that env is only used by initdb), right before the services restart anyway.
+  say "3/4 recreate postgres (env changed; ~5-10 s) then the DB services"
+  recreate postgres
+  wait_healthy postgres || die "postgres unhealthy — check: docker logs elchi-postgres"
   # shellcheck disable=SC2086
   recreate $DB_SERVICES
   # shellcheck disable=SC2086
@@ -337,6 +366,8 @@ step_rollback() {
         V="$(oldp POSTGRES_URI)" setv POSTGRES_URI "$ENVP"
         V="$(oldd POSTGRES_PASSWORD)" setv POSTGRES_PASSWORD "$ENVD"
       fi
+      recreate postgres
+      wait_healthy postgres || say "WARNING: postgres not healthy yet"
       # shellcheck disable=SC2086
       recreate $DB_SERVICES
       ;;
