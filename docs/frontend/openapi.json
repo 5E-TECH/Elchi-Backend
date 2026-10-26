@@ -26339,7 +26339,7 @@
         "type": "object",
         "properties": {
           "recipients": {
-            "description": "`shift.report.recipients` — superadmin / couriers / markets × telegram / in_app (sukut — hammasi true)",
+            "description": "`shift.report.recipients` — superadmin / couriers / markets × telegram / in_app (sukut — hammasi false: hisobot yuborish O'CHIQ, superadmin yoqadi)",
             "allOf": [
               {
                 "$ref": "#/components/schemas/ShiftReportRecipientsRequestDto"
