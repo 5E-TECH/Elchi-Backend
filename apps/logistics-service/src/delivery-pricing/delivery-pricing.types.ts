@@ -16,6 +16,8 @@ export const DELIVERY_PRICING_PATTERNS = {
   SETTINGS_GET: 'logistics.delivery.settings.get',
   SETTINGS_UPDATE: 'logistics.delivery.settings.update',
   SETTINGS_HISTORY: 'logistics.delivery.settings.history',
+  /** KmWO9gTA — sotuvda market tarifi uchun (order-service, ichki). */
+  SALE_QUOTE: 'logistics.delivery.sale_quote',
 } as const;
 
 /** Bitta hisobdagi elementlar chegarasi (gateway DTO bilan AYNI). */
@@ -33,6 +35,16 @@ export const DELIVERY_PRICING_SETTINGS_FIELDS = [
   'pickup_fee',
   'pickup_free_from_count',
   'express_multiplier',
+  /**
+   * KmWO9gTA — DARVOZA 1: sotuvda dvigatel hisoblagan market tarifi shundan
+   * past bo'lsa shu qiymatga ko'tariladi (NULL — faqat kuryer + filial ulushi).
+   */
+  'min_delivery_price',
+  /**
+   * KmWO9gTA — DARVOZA 2: dvigatel yoqilgan sotuvda kuryer qo'shimcha
+   * xarajatining aniq chegarasi, so'm (NULL — `address.base − center.base`).
+   */
+  'extra_cost_limit_amount',
 ] as const;
 
 export type DeliveryPricingSettingsField =
@@ -76,6 +88,26 @@ export interface DeliveryQuotePayload {
   /** Bitta pickup tashrifidagi posilkalar soni; pickup narxi `total` ga kirmaydi. */
   pickup_count?: number;
   requester?: DeliveryPricingRequester;
+}
+
+/**
+ * KmWO9gTA — `logistics.delivery.sale_quote`: sotuv paytidagi market tarifi
+ * uchun. Gateway'ga CHIQMAYDI (faqat order-service). `quote` dan farqi:
+ * jo'natuvchi hududi ixtiyoriy (market profilida bo'lmasa — shahar emas),
+ * elementlar faqat `product_id` (NULL — katalogsiz, o'lchovsiz), egalik
+ * tekshiruvi yo'q, element soni cheklanmaydi; javobda DARVOZA 1/2 uchun
+ * sozlamalar va center/address bazalari ham bor.
+ */
+export interface DeliverySaleQuotePayload {
+  where_deliver: string;
+  from_region_id?: string | number | null;
+  from_district_id?: string | number | null;
+  to_region_id?: string | number | null;
+  to_district_id?: string | number | null;
+  items: Array<{
+    product_id?: string | number | null;
+    quantity?: number | null;
+  }>;
 }
 
 export interface ListDeliveryTariffsPayload {

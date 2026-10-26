@@ -141,6 +141,21 @@ export class Order extends BaseEntity {
   })
   market_tariff!: number | null;
 
+  /**
+   * KmWO9gTA — buyurtma OCHILGANDA yetkazish narxi dvigateli ko'rsatgan
+   * taxminiy market tarifi (faqat `SALE_PRICING_ENGINE` yoqilgan marketda,
+   * migratsiya 1716000000184). Pulga TEGMAYDI — sotuvdagi qotirilgan narx
+   * (`market_tariff`) bilan farq jurnalga yoziladi.
+   */
+  @Column({
+    type: 'numeric',
+    precision: 14,
+    scale: 2,
+    nullable: true,
+    transformer: numericTransformer,
+  })
+  quoted_market_tariff!: number | null;
+
   @Column({
     type: 'numeric',
     precision: 14,

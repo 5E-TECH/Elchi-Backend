@@ -115,6 +115,17 @@ export class User extends BaseEntity {
   @Column({ type: 'int', nullable: true })
   tariff_center: number | null;
 
+  /**
+   * KmWO9gTA (ega qarori 2026-10-19, migratsiya 1716000000182) — faqat
+   * MARKET: «Vazn va hajm bo'yicha narx» kaliti. TRUE (sukut) — sotuvda
+   * market tarifi = standart narx (`tariff_home` / `tariff_center`) +
+   * vazn/hajm qo'shimchasi (dvigatel; faqat order-service'da
+   * `SALE_PRICING_ENGINE=on` bo'lganda). FALSE — faqat standart narx
+   * (kelishuvli market). Faqat SUPERADMIN/ADMIN o'zgartiradi.
+   */
+  @Column({ type: 'boolean', default: true })
+  weight_volume_pricing: boolean;
+
   // hEjjuJaT: super-kuryer — bir nechta viloyatga xizmat qiladi
   // (identity_schema.courier_regions, har viloyatga ixtiyoriy tarif).
   @Column({ type: 'boolean', default: false })

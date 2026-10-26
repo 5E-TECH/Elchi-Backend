@@ -396,8 +396,23 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
   `.create`, `logistics.delivery.settings.get` / `.update` (audit verbs
   `logistics.delivery_tariff_created`,
   `logistics.delivery_pricing_settings_updated`). No cache. Pickup fee is
-  returned separately and never part of `total`. **Not wired into the sale
-  flow yet** (`market_tariff` unchanged — KmWO9gTA).
+  returned separately and never part of `total`. **Sale wiring (KmWO9gTA)**:
+  `logistics.delivery.sale_quote` (internal, order-service only; optional
+  `from` = market region, unknown → not city; `product_id` items, unknown →
+  unmeasured; returns `extra`, table bases, `min_delivery_price`,
+  `extra_cost_limit_amount` — migration `1716000000183`). order-service
+  `pricing/sale-pricing.ts` + `domain/order-money.ts`
+  `resolveOrderTariffDetailed`: snapshot first; with
+  `SALE_PRICING_ENGINE=on` (default `off` = old behaviour byte-for-byte),
+  optional canary `SALE_PRICING_ENGINE_MARKET_IDS` and market
+  `weight_volume_pricing` (identity, migration `1716000000182`, default
+  true) the MARKET leg = standard price (`tariff_home`/`tariff_center`, else
+  table base) + weight/volume surcharge, floored at courier + branch share /
+  `min_delivery_price`; sell extra-cost limit from table
+  `address.base − center.base` / `extra_cost_limit_amount`. Courier tariff
+  and rollback (snapshot) untouched. `orders.quoted_market_tariff`
+  (migration `1716000000184`) = open-time quote; drift →
+  `order.delivery_price_changed` activity log.
   Volumetric threshold (AQ9lkgVB, migration `1716000000154`):
   `delivery_pricing_settings.volumetric_from_kg` numeric(10,3) DEFAULT 0 —
   shipment volumetric weight below it is ignored (billable = actual weight),

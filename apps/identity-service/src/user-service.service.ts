@@ -1612,6 +1612,7 @@ export class UserServiceService implements OnModuleInit {
       language: admin.language,
       ai_price_per_order: admin.ai_price_per_order ?? null,
       can_order_from_warehouse: admin.can_order_from_warehouse ?? false,
+      weight_volume_pricing: admin.weight_volume_pricing ?? true,
       district_id: admin.district_id ?? null,
       password_changed: false,
     };
@@ -1788,6 +1789,27 @@ export class UserServiceService implements OnModuleInit {
       admin.can_order_from_warehouse = dto.can_order_from_warehouse;
     }
 
+    // KmWO9gTA — «Vazn va hajm bo'yicha narx»: faqat SUPERADMIN/ADMIN, faqat
+    // MARKET yozuvida; RMQ'da ValidationPipe yo'q — qiymat boolean bo'lsin.
+    if (typeof dto.weight_volume_pricing !== 'undefined') {
+      if (!requesterIsPrivileged || requesterIsSelf) {
+        this.forbidden(
+          "«Vazn va hajm bo'yicha narx» kalitini faqat admin yoki superadmin o'zgartira oladi",
+        );
+      }
+      if (admin.role !== Roles.MARKET) {
+        this.badRequest(
+          "«Vazn va hajm bo'yicha narx» kaliti faqat market uchun",
+        );
+      }
+      if (typeof dto.weight_volume_pricing !== 'boolean') {
+        this.badRequest(
+          "weight_volume_pricing boolean (true/false) bo'lishi kerak",
+        );
+      }
+      admin.weight_volume_pricing = dto.weight_volume_pricing;
+    }
+
     /**
      * YEThmZBn — tuman (`district_id`). Ilgari DTO'da yo'q edi: PATCH
      * forbidNonWhitelisted tufayli 400 qaytarardi. Tuman mavjud va
@@ -1848,6 +1870,7 @@ export class UserServiceService implements OnModuleInit {
         language: saved.language,
         ai_price_per_order: saved.ai_price_per_order ?? null,
         can_order_from_warehouse: saved.can_order_from_warehouse ?? false,
+        weight_volume_pricing: saved.weight_volume_pricing ?? true,
         district_id: saved.district_id ?? null,
         // Surface that the password was rotated without ever logging its value.
         password_changed: Boolean(dto.password),
@@ -3113,6 +3136,8 @@ export class UserServiceService implements OnModuleInit {
     }
     // w2bDrE3i: qo'shimcha xarajat sozlamasi — faqat admin/superadmin.
     this.assertCanSetMarketExtraCost(dto, requester);
+    // KmWO9gTA: «Vazn va hajm bo'yicha narx» — faqat admin/superadmin.
+    this.assertCanSetMarketWeightVolumePricing(dto, requester);
     // VRyloH62: doimiy operator raqami kanonik `+998XXXXXXXXX` (yoki null).
     const defaultOperatorPhone = this.resolveDefaultOperatorPhone(
       dto.default_operator_phone,
@@ -3140,8 +3165,11 @@ export class UserServiceService implements OnModuleInit {
       status: Status.ACTIVE,
       // fix #3: created_by — manager egaligi uchun.
       created_by: this.createdByOf(requester),
-      tariff_home: dto.tariff_home,
-      tariff_center: dto.tariff_center,
+      // KmWO9gTA: tariflar LEGACY va ixtiyoriy — berilmasa NULL (0 emas:
+      // 0 "bepul yetkazish" kelishuvi degani bo'lardi).
+      tariff_home: dto.tariff_home ?? null,
+      tariff_center: dto.tariff_center ?? null,
+      weight_volume_pricing: dto.weight_volume_pricing ?? true,
       add_order: dto.add_order ?? false,
       cancelled_handover_qr_required:
         dto.cancelled_handover_qr_required ?? true,
@@ -3616,12 +3644,14 @@ export class UserServiceService implements OnModuleInit {
       default_operator_phone: market.default_operator_phone,
       tg_group_show_customer_pii: market.tg_group_show_customer_pii,
       can_order_from_warehouse: market.can_order_from_warehouse ?? false,
+      weight_volume_pricing: market.weight_volume_pricing ?? true,
       password_changed: false,
     };
 
     // w2bDrE3i: tekshiruvlar HECH NARSA o'zgartirilmasdan OLDIN.
     this.assertCanSetMarketExtraCost(dto, requester);
     this.assertCanSetMarketWarehouseOrder(dto, requester);
+    this.assertCanSetMarketWeightVolumePricing(dto, requester);
     const defaultOperatorPhone = this.resolveDefaultOperatorPhone(
       dto.default_operator_phone,
     );
@@ -3733,6 +3763,10 @@ export class UserServiceService implements OnModuleInit {
       market.can_order_from_warehouse = dto.can_order_from_warehouse;
     }
 
+    if (typeof dto.weight_volume_pricing !== 'undefined') {
+      market.weight_volume_pricing = dto.weight_volume_pricing;
+    }
+
     const saved = await this.users.save(market);
     const revokedSessionIds = dto.password
       ? await this.revokeSessionsAfterPasswordChange(saved, {
@@ -3766,6 +3800,7 @@ export class UserServiceService implements OnModuleInit {
         default_operator_phone: saved.default_operator_phone,
         tg_group_show_customer_pii: saved.tg_group_show_customer_pii,
         can_order_from_warehouse: saved.can_order_from_warehouse ?? false,
+        weight_volume_pricing: saved.weight_volume_pricing ?? true,
         password_changed: Boolean(dto.password),
       },
     });
@@ -3798,6 +3833,32 @@ export class UserServiceService implements OnModuleInit {
     if (typeof dto.can_order_from_warehouse !== 'boolean') {
       this.badRequest(
         "can_order_from_warehouse boolean (true/false) bo'lishi kerak",
+      );
+    }
+  }
+  /**
+   * KmWO9gTA — «Vazn va hajm bo'yicha narx» (`weight_volume_pricing`) ni faqat
+   * SUPERADMIN/ADMIN o'zgartiradi (market o'zi yoki menejer — 403); qiymat
+   * boolean bo'lmasa — 400 (RMQ'da ValidationPipe yo'q).
+   */
+  private assertCanSetMarketWeightVolumePricing(
+    dto: { weight_volume_pricing?: unknown },
+    requester?: RequesterContext,
+  ): void {
+    if (dto.weight_volume_pricing === undefined) {
+      return;
+    }
+    if (
+      !this.hasRole(requester, Roles.SUPERADMIN) &&
+      !this.hasRole(requester, Roles.ADMIN)
+    ) {
+      this.forbidden(
+        "«Vazn va hajm bo'yicha narx» kalitini faqat admin yoki superadmin o'zgartira oladi",
+      );
+    }
+    if (typeof dto.weight_volume_pricing !== 'boolean') {
+      this.badRequest(
+        "weight_volume_pricing boolean (true/false) bo'lishi kerak",
       );
     }
   }

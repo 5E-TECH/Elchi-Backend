@@ -1634,8 +1634,12 @@ export class ApiGatewayController {
             phone_number: dto.phone_number,
             username: dto.username,
             password: dto.password,
+            // KmWO9gTA: tariflar LEGACY va ixtiyoriy (berilmasa NULL).
             tariff_home: dto.tariff_home,
             tariff_center: dto.tariff_center,
+            // KmWO9gTA: «Vazn va hajm bo'yicha narx» (faqat admin/superadmin —
+            // identity tekshiradi).
+            weight_volume_pricing: dto.weight_volume_pricing,
             default_tariff: dto.default_tariff,
             add_order: dto.add_order,
             cancelled_handover_qr_required: dto.cancelled_handover_qr_required,
@@ -1784,6 +1788,8 @@ export class ApiGatewayController {
           tariff_home: market?.tariff_home ?? null,
           tariff_center: market?.tariff_center ?? null,
           default_tariff: market?.default_tariff ?? null,
+          // KmWO9gTA: FALSE — faqat standart narx (vazn/hajm qo'shimchasiz).
+          weight_volume_pricing: market?.weight_volume_pricing ?? true,
         }
       : base;
   }

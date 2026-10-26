@@ -336,6 +336,20 @@ export const orderValidationSchema = Joi.object({
   // orqali ai-service'ga boradi. `required()` emas — kalit yo'q bo'lsa ham
   // order-service ko'tariladi.
   RABBITMQ_AI_QUEUE: Joi.string().empty('').default('ai_queue'),
+  // KmWO9gTA: yetkazish narxi dvigateli SOTUVGA ulanadimi. `off` (sukut) —
+  // market tarifi avvalgidek profildan (pul oyoqlari o'zgarmaydi); `on` —
+  // standart narx + vazn/hajm qo'shimchasi (`pricing/sale-pricing.ts`).
+  SALE_PRICING_ENGINE: Joi.string()
+    .trim()
+    .lowercase()
+    .valid('on', 'off')
+    .empty('')
+    .default('off'),
+  // Bo'sh — barcha marketlar; aks holda faqat shu market id'lari (canary).
+  SALE_PRICING_ENGINE_MARKET_IDS: Joi.string()
+    .pattern(/^\s*\d{1,18}(\s*,\s*\d{1,18})*\s*$/)
+    .empty('')
+    .optional(),
 });
 
 export const catalogValidationSchema = Joi.object({
