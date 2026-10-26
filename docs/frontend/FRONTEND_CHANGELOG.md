@@ -23,6 +23,14 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-10-26 — Ombor jurnali: qisman sotuv bolasining qaytishi bola buyurtma raqami bilan (hfkhYrGk №1)
+
+Deploy: **catalog-service + order-service**. Migratsiya yo'q.
+
+- [2026-10-26] 🟢 [catalog] — `GET /warehouses/:id/movements`: qisman sotuvdan qolgan bekor qism (bola buyurtma)
+  omborga qaytganda `RETURN` harakatining `order_id` endi **bola buyurtma** (avval ota buyurtma edi — sarlavha
+  «Qaytdi · Buyurtma №<ota>» chiqardi). Eski yozuvlar o'zgarmaydi. Frontend o'zgarishi shart emas.
+
 ### 2026-10-26 — Markaziy ombor: buyurtma manbasining 2-pog'onasi (VkKDSNNn, Pa1KaXmj 2-bosqich)
 
 Deploy: **catalog-service + order-service + api-gateway**. Migratsiya **yo'q**. `openapi.json` qayta yaratildi.

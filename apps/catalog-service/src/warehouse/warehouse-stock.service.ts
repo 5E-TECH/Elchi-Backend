@@ -135,6 +135,13 @@ export interface OrderOpInput {
 export interface ReturnInput extends OrderOpInput {
   items?: unknown;
   idempotency_key?: unknown;
+  /**
+   * hfkhYrGk: harakat jurnalida ko'rsatiladigan buyurtma (`ref_id`). Qisman
+   * sotuvning bolasi qaytganda band ota buyurtmada (`order_id`), lekin
+   * jurnal sarlavhasi bola buyurtmani ko'rsatsin. Berilmasa — `order_id`.
+   * Idempotentlik kaliti o'zgarmaydi (ota buyurtma bo'yicha).
+   */
+  ref_order_id?: unknown;
 }
 
 const ORDER_LOCK_NAMESPACE = 'catalog.warehouse.order:';
@@ -1269,6 +1276,8 @@ export class WarehouseStockService {
       toOptionalText(input?.note, 'note', WAREHOUSE_NOTE_MAX) ?? null;
     const requested = normalizeOrderItems(input?.items);
     const suffix = optionalIdempotencyKey(input?.idempotency_key) ?? 'full';
+    const refOrderId =
+      toOptionalId(input?.ref_order_id, 'ref_order_id') ?? orderId;
 
     return this.tx(async (manager) => {
       const t = this.tables(manager);
@@ -1361,7 +1370,7 @@ export class WarehouseStockService {
                 onHandDelta: item.quantity,
                 reservedDelta: 0,
                 refType: 'order',
-                refId: orderId,
+                refId: refOrderId,
                 actor,
                 note,
                 key: `order:${orderId}:return:${item.row.id}:${suffix}`,

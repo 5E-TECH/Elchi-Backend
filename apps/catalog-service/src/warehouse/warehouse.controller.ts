@@ -228,6 +228,8 @@ export class WarehouseController {
         order_id: data?.order_id,
         items: data?.items,
         idempotency_key: data?.idempotency_key,
+        // hfkhYrGk: jurnalda ko'rsatiladigan buyurtma (qisman sotuv bolasi).
+        ref_order_id: data?.ref_order_id,
         actor: data?.actor ?? data?.requester,
         note: data?.note,
       }),

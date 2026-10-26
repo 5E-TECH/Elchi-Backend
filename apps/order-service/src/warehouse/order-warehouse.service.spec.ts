@@ -461,6 +461,7 @@ describe('6kHnNH9j — OrderWarehouseService', () => {
         order_id: '900',
         items: [{ product_id: '142', quantity: 1 }],
         idempotency_key: 'child-order-950',
+        ref_order_id: '950',
         actor: { id: null, role: 'system' },
         note: 'Buyurtma #950 bekor — omborga qaytdi',
       });

@@ -739,9 +739,18 @@ const ADMIN = { id: '2', roles: ['admin'] };
         order_id: parent.id,
         items: [{ product_id: productId, quantity: 1 }],
         idempotency_key: `child-order-${child.id}`,
+        ref_order_id: String(child.id),
       });
       await deliver();
       expect(await stockRow()).toEqual({ on_hand: 4, reserved: 0 });
+      // hfkhYrGk: jurnalda qaytish bola buyurtma bilan (band — otada).
+      const returns = await catalogDb.query(
+        `SELECT ref_id FROM "${CATALOG}".stock_movements
+          WHERE type = 'RETURN' AND ref_type = 'order' ORDER BY id`,
+      );
+      expect(returns.map((row: Row) => String(row.ref_id))).toEqual([
+        String(child.id),
+      ]);
       await redeliverAll(parent.id);
       expect(await stockRow()).toEqual({ on_hand: 4, reserved: 0 });
     });

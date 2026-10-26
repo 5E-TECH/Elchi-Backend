@@ -693,6 +693,8 @@ export class OrderWarehouseService {
       // (alohida kalit: ota buyurtmaning boshqa qaytishlari bilan aralashmaydi).
       order_id: parentId || String(order.id),
       ...(items ? { items, idempotency_key: `child-order-${order.id}` } : {}),
+      // hfkhYrGk: jurnal sarlavhasi bola buyurtmani ko'rsatsin (band — otada).
+      ...(parentId ? { ref_order_id: String(order.id) } : {}),
       actor: this.actorOf(requester),
       note:
         kind === 'HQ'
