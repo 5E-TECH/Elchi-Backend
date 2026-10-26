@@ -62,6 +62,38 @@ Sukut bo'yicha tasdiqlash **o'chiq** — superadmin yoqmaguncha yopish oqimi o'z
 - 🔧 Frontend: `superadmin-payments-main-cashbox-shift-dialog-accounts`, `superadmin-payments-shift-report`,
   `superadmin-payments-shift-settings` ekranlari (alohida FE karta).
 
+### 2026-10-26 — Narx: yagona manba — ochiq `POST /public/delivery-quote` va `GET /public/delivery-tariffs` (mSkzzNBJ)
+
+Deploy: **faqat api-gateway** (logistics-service o'zgarmagan — mavjud `logistics.delivery.quote`,
+`logistics.delivery.tariffs.find_all`, `logistics.delivery.settings.get`, `logistics.region.find_all` RPC'lari).
+Migratsiya **yo'q**. `openapi.json` qayta yaratildi. Tokenli `POST /delivery/quote` va admin route'lari **o'zgarmagan**.
+**Prod ENV (server):** `CORS_ORIGINS` ga `https://elchipochta.uz` (+ `https://www.elchipochta.uz` va kerakli preview
+origin'lar — ro'yxat aniq moslik) qo'shiladi, api-gateway qayta yaratiladi. Ixtiyoriy: `PUBLIC_PRICING_THROTTLE_LIMIT`
+(sukut 30/daqiqa/IP, global `THROTTLE_LIMIT` dan yuqori emas), `PUBLIC_PRICING_THROTTLE_TTL_MS`,
+`PUBLIC_PRICING_CACHE_TTL_MS` (sukut 30000; 0 — o'chiq).
+
+- [2026-10-26] 🆕 [gateway] — `POST /public/delivery-quote` (**tokensiz**, `@Public`): elchipochta.uz kalkulyatori.
+  Tana: `from_region_id`, `to_region_id` (raqamli id, majburiy), `where_deliver` (`center` | `address`), posilka —
+  YO yuqori darajada `weight_kg` (+ ixtiyoriy `length_cm`/`width_cm`/`height_cm` — uchalasi birga, butun sm;
+  `volumetric_enabled`), YO `items[]` (≤ 20; har biri o'sha maydonlar + `quantity`), `express?`, `pickup?` (boolean —
+  bitta posilkali tashrif). `product_id`, `*_district_id` va boshqa noma'lum maydon → **400**; manfiy/nol o'lcham,
+  yo'q viloyat → **400** (500 emas); faol tarif yo'q → 409; per-IP limit → **429**. Javob `data` — FAQAT hisob:
+  `tariffId`, `cityRoute`, `base`, `perExtraKg`, `daysMin`, `daysMax`, `days: [min, max]`, `actualKg`,
+  `volumetricKg`, `volumetricFromKg`, `volumetricApplied`, `billableKg`, `extraKg`, `extra`, `subtotal`, `expressFee`,
+  `pickupFee`, `total` (buyurtma narxi, pickup'siz), `totalWithPickup` (kalkulyator jami — landing `quote().total`),
+  `basis`, `missingDimensionItems`, `estimated`. Hisob tokenli `/delivery/quote` bilan AYNI dvigatel; javob ≤ 30 s
+  keshlanadi.
+- [2026-10-26] 🆕 [gateway] — `GET /public/delivery-tariffs` (**tokensiz**): `data.tariffs` —
+  `{ city, center, address }` → `{ base_price, extra_per_kg, days_min, days_max }` (hozirgi versiya; yo'q — `null`);
+  `data.settings` — `volumetric_divisor`, `volumetric_from_kg` (prod: 3), `first_kg_included`, `min_billable_kg`,
+  `billable_step_kg`, `round_to`, `pickup_fee` (20 000), `pickup_free_from_count` (10), `express_multiplier` (1.4);
+  `data.regions` — `[{ id, name, is_city_zone }]` (kalkulyator hudud tanlovi → `*_region_id`). Versiyalar, tarix,
+  `created_by`, id'lar yo'q. ≤ 30 s keshlanadi.
+- 🔧 Landing (elchi_landing_page_front, GiR4WoBl dan keyin): `Calculator.tsx` API'ni **brauzerdan** chaqiradi
+  (~300 ms debounce; Worker serverdan chaqirsa barcha tashrifchilar bitta IP limitiga tushadi); `lib/pricing.ts` zaxira
+  — API javob bermasa (tarmoq/429/5xx) lokal hisob + «taxminiy» belgisi; tariflar jadvali/pickup matni
+  `GET /public/delivery-tariffs` dan; `config/site.ts` raqamlari olib tashlanadi; zaxira formula
+  `volumetric_from_kg` ni ham hisobga olishi kerak (prod'da 3 — aks holda zaxira va API farq qiladi).
 
 ### 2026-10-26 — Kassa: kartalar va hisob raqamlar — turi, bank, oxirgi 4 raqam, egasi; filial kassalari (Zv3MLn0a)
 

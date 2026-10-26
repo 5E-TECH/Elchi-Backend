@@ -61,6 +61,8 @@ import { AiUsageGatewayController } from './ai-usage-gateway.controller';
 import { MarketOperatorGatewayController } from './market-operator-gateway.controller';
 import { CustomerGatewayController } from './customer-gateway.controller';
 import { DeliveryPricingGatewayController } from './delivery-pricing-gateway.controller';
+// mSkzzNBJ: ochiq kalkulyator — POST /public/delivery-quote, GET /public/delivery-tariffs.
+import { PublicDeliveryPricingController } from './public-delivery-pricing/public-delivery-pricing.controller';
 import { WarehouseGatewayController } from './warehouse-gateway.controller';
 import { AiStatusPoller } from './ai/ai-status.poller';
 // (KwodkKWY) POST /csp-report — brauzer CSP buzilish hisobotlari (@Public).
@@ -160,6 +162,8 @@ import type { StringValue } from 'ms';
     // DAqXPeSy: yetkazish narxi dvigateli (/delivery/quote, /delivery/tariffs,
     // /delivery/pricing-settings) — logistics-service.
     DeliveryPricingGatewayController,
+    // mSkzzNBJ: o'sha dvigatelning ochiq (tokensiz) yo'li — /public/delivery-*.
+    PublicDeliveryPricingController,
     // hY7uacJu: vaqtinchalik ombor moduli (/warehouses, /market/warehouse-stock,
     // /markets/:id/warehouse-order) — catalog-service.
     WarehouseGatewayController,
