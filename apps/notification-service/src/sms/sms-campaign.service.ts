@@ -1,4 +1,4 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Optional } from '@nestjs/common';
 import { ClientProxy, RpcException } from '@nestjs/microservices';
 import { InjectRepository } from '@nestjs/typeorm';
 import { LessThanOrEqual, Repository } from 'typeorm';
@@ -8,6 +8,7 @@ import {
   parseZonedInstant,
   toTashkentIso,
 } from '../campaign/campaign-schedule';
+import { NotificationAudienceSegment } from '../audience/audience-segment.entity';
 import { SmsCampaign } from '../entities/sms-campaign.entity';
 import { SmsConfigService } from './sms-config.service';
 import { SmsConsentService } from './sms-consent.service';
@@ -32,9 +33,24 @@ export interface CampaignSegment {
   last_order_from?: string | null;
   last_order_to?: string | null;
   min_orders?: number | null;
+  /** (sdNGqCBa) Buyurtmalar soni «gacha» (kiradi) — push kampaniyasi bilan bir xil. */
+  max_orders?: number | null;
   /** Qo'lda raqamlar ro'yxati (segment o'rniga). */
   phones?: string[] | null;
+  /** (sdNGqCBa) Qaysi saqlangan segmentdan olingan (faqat ma'lumot). */
+  audience_segment_id?: string | null;
 }
+
+/** order-service `order.customer.segment` tushunadigan filtrlar (boshqasi yuborilmaydi). */
+const ORDER_SEGMENT_KEYS = [
+  'market_id',
+  'region_id',
+  'district_id',
+  'last_order_from',
+  'last_order_to',
+  'min_orders',
+  'max_orders',
+] as const;
 
 export interface CampaignInput {
   /** Faqat 'promo' (berilmasa ham promo); boshqasi — 400 campaign_promo_only. */
@@ -44,6 +60,11 @@ export interface CampaignInput {
   lang?: string | null;
   vars?: Record<string, unknown> | null;
   segment?: CampaignSegment | null;
+  /**
+   * (sdNGqCBa) Saqlangan segment (`notifications/audience/segments`) — push
+   * kampaniyasi bilan BITTA jadval. `segment` bilan birga berilmaydi.
+   */
+  audience_segment_id?: string | null;
   /**
    * (2aS7PFX0) Rejalashtirish: ISO 8601 + ANIQ zona (`+05:00` yoki `Z`), ≤90
    * kun. O'tgan/bo'sh — darhol. Reklama taqiq oynasiga tushsa — oyna tugashiga.
@@ -100,6 +121,49 @@ const promoOnly = (requested: unknown) =>
     message_class: requested ?? null,
   });
 
+const isBlank = (value: unknown) =>
+  value === undefined ||
+  value === null ||
+  String(value as string).trim() === '';
+
+/**
+ * (sdNGqCBa) Segment tekshiruvi — identity audience-resolver bilan BIR XIL
+ * xabarlar: buyurtmalar soni musbat butun, teskari oraliq — 400 (jim 0 emas).
+ */
+export const normalizeCampaignSegment = (
+  raw: CampaignSegment,
+): CampaignSegment => {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw rpcError(400, "segment obyekt bo'lishi kerak");
+  }
+  const segment: CampaignSegment = { ...raw };
+  for (const key of ['min_orders', 'max_orders'] as const) {
+    if (isBlank(segment[key])) {
+      delete segment[key];
+      continue;
+    }
+    const value = Number(segment[key]);
+    if (!Number.isInteger(value) || value < 1) {
+      throw rpcError(400, `segment.${key} — musbat butun son bo'lishi kerak`);
+    }
+    segment[key] = value;
+  }
+  if (
+    segment.min_orders !== undefined &&
+    segment.min_orders !== null &&
+    segment.max_orders !== undefined &&
+    segment.max_orders !== null &&
+    segment.min_orders > segment.max_orders
+  ) {
+    throw rpcError(
+      400,
+      "segment: min_orders max_orders dan katta bo'lmasligi kerak (teskari oraliq)",
+      { reason: 'segment_inverted_range' },
+    );
+  }
+  return segment;
+};
+
 const shortError = (error: unknown): string => {
   const rpc =
     error instanceof RpcException
@@ -130,6 +194,10 @@ export class SmsCampaignService {
     private readonly gate: SmsGateService,
     private readonly outbox: SmsOutboxService,
     private readonly templates: SmsTemplateService,
+    /** (sdNGqCBa) Saqlangan auditoriya segmentlari (push bilan umumiy jadval). */
+    @Optional()
+    @InjectRepository(NotificationAudienceSegment)
+    private readonly savedSegments?: Repository<NotificationAudienceSegment>,
   ) {}
 
   /** Tasdiq oynasi uchun: hech narsa yuborilmaydi. */
@@ -247,7 +315,9 @@ export class SmsCampaignService {
           message_class: plan.messageClass,
           template_code: input.template_code ?? null,
           text: plan.text,
-          segment: (input.segment ?? {}) as Record<string, unknown>,
+          // (sdNGqCBa) Hal qilingan shart (saqlangan segmentdan ham) — vaqti
+          // kelganda (2aS7PFX0) aynan shu shart bilan qayta sanaladi.
+          segment: plan.segment as Record<string, unknown>,
           status: schedule ? 'scheduled' : 'queued',
           scheduled_at: schedule?.scheduledAt ?? null,
           requested_at: schedule?.requestedAt ?? null,
@@ -461,8 +531,70 @@ export class SmsCampaignService {
   // ---------------------------------------------------------------------------
 
   private async plan(input: CampaignInput): Promise<CampaignPlan> {
+    const segment = await this.segmentOf(input);
     const { text } = await this.resolveText(input);
-    return this.planFor(text, input.segment ?? {});
+    return this.planFor(text, segment);
+  }
+
+  /**
+   * (sdNGqCBa) Kampaniya sharti: `segment` YOKI `audience_segment_id`
+   * (saqlangan segment — push kampaniyasi bilan bitta jadval). Saqlangan
+   * shartdan faqat MIJOZ segmenti olinadi: xodim rollari / broadcast — SMS
+   * reklama kampaniyasida 400 (bu API buyurtmalar bo'yicha mijozlarga).
+   */
+  private async segmentOf(input: CampaignInput): Promise<CampaignSegment> {
+    const rawId = input?.audience_segment_id;
+    if (rawId === undefined || rawId === null || rawId === '') {
+      return normalizeCampaignSegment(input?.segment ?? {});
+    }
+    const id =
+      typeof rawId === 'string' || typeof rawId === 'number'
+        ? String(rawId).trim()
+        : '';
+    if (!ID_RE.test(id)) {
+      throw rpcError(400, "audience_segment_id noto'g'ri");
+    }
+    const given = input?.segment ?? {};
+    if (
+      (Array.isArray(given.phones) && given.phones.length) ||
+      ORDER_SEGMENT_KEYS.some((key) => !isBlank(given[key]))
+    ) {
+      throw rpcError(
+        400,
+        'audience_segment_id va segment birga berilmaydi — bittasini tanlang',
+      );
+    }
+    const saved = this.savedSegments
+      ? await this.savedSegments.findOne({ where: { id, isDeleted: false } })
+      : null;
+    if (!saved) throw rpcError(404, 'Segment topilmadi');
+    const audience = saved.audience ?? {};
+    const staffRoles = (audience.roles ?? []).filter(
+      (role) => String(role).toLowerCase() !== 'customer',
+    );
+    if (audience.broadcast === true || staffRoles.length) {
+      throw rpcError(
+        400,
+        'Saqlangan segmentda xodim rollari / broadcast bor — SMS reklama kampaniyasi faqat mijozlar segmenti bilan (POST /notifications/campaigns da SMS kanalidan foydalaning)',
+        { reason: 'segment_not_customer_only' },
+      );
+    }
+    if (audience.include_customers !== true) {
+      throw rpcError(
+        400,
+        "Saqlangan segment mijozlarni nishonlamaydi (include_customers yo'q)",
+        { reason: 'segment_not_customer_only' },
+      );
+    }
+    const source = (audience.segment ?? {}) as Record<string, unknown>;
+    const mapped: Record<string, unknown> = {};
+    for (const key of ORDER_SEGMENT_KEYS) {
+      if (!isBlank(source[key])) mapped[key] = source[key];
+    }
+    return normalizeCampaignSegment({
+      ...(mapped as CampaignSegment),
+      audience_segment_id: id,
+    });
   }
 
   /**
@@ -498,6 +630,7 @@ export class SmsCampaignService {
       messageClass,
       text,
       sampleText,
+      segment,
       segments,
       total,
       allowed,
@@ -583,7 +716,12 @@ export class SmsCampaignService {
       this.orderClient,
       { cmd: 'order.customer.segment' },
       {
-        ...segment,
+        // (sdNGqCBa) faqat order-service filtrlari (max_orders ham).
+        ...Object.fromEntries(
+          ORDER_SEGMENT_KEYS.filter((key) => !isBlank(segment[key])).map(
+            (key) => [key, segment[key]],
+          ),
+        ),
         limit: this.config.maxFanout,
       },
     );

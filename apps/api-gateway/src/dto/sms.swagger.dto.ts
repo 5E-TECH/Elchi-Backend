@@ -203,6 +203,19 @@ export class SmsCampaignSegmentDto {
   @Max(1000)
   min_orders?: number;
 
+  /** (sdNGqCBa) Buyurtmalar soni «gacha» — push kampaniyasi bilan bir xil. */
+  @ApiPropertyOptional({
+    example: 10,
+    description:
+      "Ko'pi bilan shuncha buyurtma (kiradi). min_orders > max_orders — 400 (teskari oraliq)",
+  })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(1000)
+  max_orders?: number;
+
   @ApiPropertyOptional({
     example: ['+998901234567'],
     description: "Segment o'rniga qo'lda ro'yxat",
@@ -259,6 +272,20 @@ export class SmsCampaignDto {
   @ValidateNested()
   @Type(() => SmsCampaignSegmentDto)
   segment?: SmsCampaignSegmentDto;
+
+  /**
+   * (sdNGqCBa) Saqlangan segment (`GET /notifications/audience/segments`) —
+   * push kampaniyasi bilan bitta jadval. Faqat mijozlar segmenti
+   * (`include_customers`); xodim rollari / broadcast — 400. `segment` bilan birga — 400.
+   */
+  @ApiPropertyOptional({
+    example: '3',
+    description:
+      'Saqlangan segment id (notifications/audience/segments). Faqat mijozlar segmenti; segment bilan birga berilmaydi. Preview va yuborish soni — bitta resolverdan',
+  })
+  @IsOptional()
+  @Matches(ID_RE)
+  audience_segment_id?: string;
   /** (2aS7PFX0) Rejalashtirish — bildirishnoma kampaniyasi bilan bir xil qoida. */
   @ApiPropertyOptional({
     example: '2026-10-28T10:00:00+05:00',

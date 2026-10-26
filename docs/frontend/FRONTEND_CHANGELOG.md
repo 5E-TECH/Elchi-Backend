@@ -23,6 +23,21 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-10-26 — SMS kampaniya: `max_orders` («gacha») va saqlangan segment `audience_segment_id` (sdNGqCBa)
+
+Deploy: notification-service + api-gateway. Migratsiya yo'q.
+
+- [2026-10-26] ✏️ [gateway/notification] — `POST /notifications/sms/campaigns(/preview)`: `segment.max_orders`
+  (1–1000, kiradi) — push kampaniyasidagi bilan bir xil; `min_orders > max_orders` — 400
+  «segment: min_orders max_orders dan katta bo'lmasligi kerak (teskari oraliq)» (identity resolver matni).
+- [2026-10-26] ✏️ [gateway/notification] — yangi ixtiyoriy **`audience_segment_id`**: `GET
+  /notifications/audience/segments` dagi saqlangan segment (bitta jadval, ikki kanal). Faqat MIJOZ segmenti
+  (`include_customers` + filtrlar yoki `confirm_all_customers`); xodim rollari / `broadcast` / mijozsiz — 400
+  `reason: segment_not_customer_only` (xodimlarga SMS — `POST /notifications/campaigns` SMS kanali orqali);
+  `segment` bilan birga — 400; topilmasa — 404. Preview va yuborish soni bitta resolverdan; kampaniya qatorida
+  `segment` = hal qilingan shart + `audience_segment_id`.
+- 🔧 FE: umumiy konstruktorda SMS kanali uchun «gacha» maydoni va saqlangan segment tanlovi.
+
 ### 2026-10-26 — SMS kampaniyani rejalashtirish: `scheduled_at` (2aS7PFX0, N8, KM-6)
 
 Deploy: notification-service + api-gateway. **Migratsiya bor:** `1716000000165-SmsCampaignSchedule`

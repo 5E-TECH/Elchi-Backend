@@ -26090,6 +26090,11 @@
             "type": "number",
             "example": 2
           },
+          "max_orders": {
+            "type": "number",
+            "example": 10,
+            "description": "Ko'pi bilan shuncha buyurtma (kiradi). min_orders > max_orders — 400 (teskari oraliq)"
+          },
           "phones": {
             "example": [
               "+998901234567"
@@ -26138,6 +26143,11 @@
           },
           "segment": {
             "$ref": "#/components/schemas/SmsCampaignSegmentDto"
+          },
+          "audience_segment_id": {
+            "type": "string",
+            "example": "3",
+            "description": "Saqlangan segment id (notifications/audience/segments). Faqat mijozlar segmenti; segment bilan birga berilmaydi. Preview va yuborish soni — bitta resolverdan"
           },
           "scheduled_at": {
             "type": "string",
