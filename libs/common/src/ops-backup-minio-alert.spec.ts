@@ -31,10 +31,11 @@ const FAKE_RCLONE = `#!/usr/bin/env bash
 echo "rclone $*" >> "$FAKE_LOG"
 map() { case "$1" in r2:*) echo "$FAKE_R2/\${1#r2:}" ;; minio:*) echo "$FAKE_MINIO/\${1#minio:}" ;; *) echo "$1" ;; esac; }
 cmd="$1"; shift
-pos=(); bdir=""; dirs=false; json=false
+pos=(); bdir=""; dirs=false; json=false; ex=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --backup-dir) bdir="$2"; shift 2 ;;
+    --exclude) ex="\${2#/}"; ex="\${ex%'**'}"; shift 2 ;;
     --max-delete|--transfers|--checkers|--stats|--max-depth) shift 2 ;;
     --dirs-only) dirs=true; shift ;;
     --json) json=true; shift ;;
@@ -42,22 +43,24 @@ while [ $# -gt 0 ]; do
     *) pos+=("$1"); shift ;;
   esac
 done
+# Files under a dir (relative), minus the --exclude'd root prefix.
+files() { (cd "$1" && find . -type f | sed 's#^\\./##' | sort) | { if [ -n "$ex" ]; then grep -v "^$ex" || true; else cat; fi; }; }
 case "$cmd" in
   lsf)
     d=$(map "\${pos[0]}")
     [ -d "$d" ] || { echo "ERROR : directory not found" >&2; exit 3; }
-    if $dirs; then (cd "$d" && for x in */; do [ -d "$x" ] && echo "$x"; done); else (cd "$d" && find . -type f | sed 's#^\\./##' | sort); fi ;;
+    if $dirs; then (cd "$d" && for x in */; do [ -d "$x" ] && echo "$x"; done); else files "$d"; fi ;;
   sync)
     [ "\${FAKE_RCLONE:-}" = fail-sync ] && { echo "ERROR : max delete limit reached" >&2; exit 7; }
     s=$(map "\${pos[0]}"); t=$(map "\${pos[1]}"); b=$(map "$bdir"); mkdir -p "$t"
-    (cd "$t" && find . -type f | sed 's#^\\./##') | while IFS= read -r f; do
+    files "$t" | while IFS= read -r f; do
       if [ ! -f "$s/$f" ] || ! cmp -s "$s/$f" "$t/$f"; then mkdir -p "$b/$(dirname "$f")"; mv "$t/$f" "$b/$f"; echo "INFO  : $f: Moved (server-side) to: backup" >&2; fi
     done
-    (cd "$s" && find . -type f | sed 's#^\\./##') | while IFS= read -r f; do
+    files "$s" | while IFS= read -r f; do
       [ -f "$t/$f" ] || { mkdir -p "$t/$(dirname "$f")"; cp "$s/$f" "$t/$f"; echo "INFO  : $f: Copied (new)" >&2; }
     done ;;
-  check) diff -r "$(map "\${pos[0]}")" "$(map "\${pos[1]}")" >/dev/null || { echo "ERROR : 1 differences found" >&2; exit 1; } ;;
-  size) d=$(map "\${pos[0]}"); n=$(find "$d" -type f | wc -l); b=$(find "$d" -type f -exec cat {} + | wc -c); echo "{\\"count\\":$n,\\"bytes\\":$b,\\"sizeless\\":0}" ;;
+  check) x=(); [ -n "$ex" ] && x=(-x "\${ex%/}"); diff -r "\${x[@]}" "$(map "\${pos[0]}")" "$(map "\${pos[1]}")" >/dev/null || { echo "ERROR : 1 differences found" >&2; exit 1; } ;;
+  size) d=$(map "\${pos[0]}"); n=$(files "$d" | wc -l); b=$(files "$d" | while IFS= read -r f; do cat "$d/$f"; done | wc -c); echo "{\\"count\\":$n,\\"bytes\\":$b,\\"sizeless\\":0}" ;;
   purge) rm -rf "$(map "\${pos[0]}")" ;;
   *) echo "fake rclone: unsupported $cmd" >&2; exit 9 ;;
 esac
@@ -169,6 +172,56 @@ describe('backup-minio-offsite.sh (6RaEn5cN)', () => {
       expect(out).not.toContain(SECRET);
       expect(out).not.toContain(RO_SECRET);
     }
+  });
+
+  it('never copies temporary AI images (ai-tmp/) off-site; verify still passes', () => {
+    const tmp = join(
+      s.minio,
+      'elchi-files',
+      'ai-tmp',
+      '0b9f7c3e-1d2a-4b5c-8d6e-7f8091a2b3c4',
+    );
+    mkdirSync(tmp, { recursive: true });
+    writeFileSync(join(tmp, '0.jpg'), 'CUSTOMER-PHOTO');
+    const r1 = runMinio(s);
+    expect(r1.status).toBe(0);
+    const cur = join(s.r2, 'bkt', 'minio', 'elchi-files', 'current');
+    expect(readFileSync(join(cur, 'cod', 'a.jpg'), 'utf8')).toBe('AAAA');
+    expect(existsSync(join(cur, 'ai-tmp'))).toBe(false);
+    expect(status(s)).toMatch(/^objects=2$/m);
+    expect(status(s)).toMatch(/^copied=2$/m);
+    const calls = readFileSync(s.log, 'utf8');
+    // Obyekt sanash (lsf --files-only), sync, check, size — hammasida
+    // exclude; versions/ papka ro'yxati (prune) bunga kirmaydi.
+    for (const prefix of [
+      'rclone lsf ',
+      'rclone sync ',
+      'rclone check ',
+      'rclone size ',
+    ]) {
+      const lines = calls
+        .split('\n')
+        .filter(
+          (line) =>
+            line.startsWith(prefix) &&
+            (prefix !== 'rclone lsf ' || line.includes('--files-only')),
+        );
+      expect(lines.length).toBeGreaterThan(0);
+      for (const line of lines) expect(line).toContain('--exclude /ai-tmp/**');
+    }
+    expect(calls).toMatch(/rclone sync .*--exclude \/ai-tmp\/\*\*/);
+
+    // ai-tmp TTL bilan o'chdi — off-site nusxada hech narsa ko'chmaydi.
+    rmSync(join(s.minio, 'elchi-files', 'ai-tmp'), {
+      recursive: true,
+      force: true,
+    });
+    const r2 = runMinio(s, [], { MINIO_OFFSITE_NOW: String(2_000_000_000) });
+    expect(r2.status).toBe(0);
+    expect(status(s)).toMatch(/^versioned=0$/m);
+    expect(
+      existsSync(join(s.r2, 'bkt', 'minio', 'elchi-files', 'versions')),
+    ).toBe(false);
   });
 
   it('refuses (nothing moved) when MinIO is empty but the R2 copy is not', () => {
