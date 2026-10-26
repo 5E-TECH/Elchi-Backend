@@ -702,6 +702,10 @@ describe('mSkzzNBJ — POST /public/delivery-quote: kirish, javob, kesh', () => 
       },
     ],
     ['pickup satr', { ...BODY, pickup: 'yes' }],
+    [
+      'items: null va weight_kg yo`q',
+      { ...BODY, weight_kg: undefined, items: null },
+    ],
   ])('%s → 400 (500 emas), logistics chaqirilmaydi', async (_name, body) => {
     const res = await post(body);
     expect(res.status).toBe(400);

@@ -1,5 +1,6 @@
 import {
   Controller,
+  Post,
   Get,
   HttpException,
   INestApplication,
@@ -21,7 +22,7 @@ import {
   SERVER_KEEP_ALIVE_TIMEOUT_MS,
   applyGatewaySecurityHeaders,
   applyServerTimeouts,
-  gatewayCorsOptions,
+  gatewayCorsDelegate,
   setupGatewaySwagger,
 } from './gateway-http.setup';
 
@@ -29,6 +30,11 @@ import {
 class ProbeController {
   @Get('ping')
   ping() {
+    return { ok: true };
+  }
+
+  @Post('public/quote')
+  quote() {
     return { ok: true };
   }
 
@@ -56,6 +62,7 @@ class ProbeController {
 }
 
 const FRONTEND = 'https://admin.elchipochta.uz';
+const LANDING = 'https://elchipochta.uz';
 
 /**
  * (oFfOWGuo) Gateway HTTP yuzasi — main.ts dagi AYNI funksiyalar
@@ -71,7 +78,7 @@ describe('oFfOWGuo — gateway HTTP: preflight keshi, Retry-After, HSTS, Swagger
     }).compile();
     const nest = moduleRef.createNestApplication({ logger: false });
     applyGatewaySecurityHeaders(nest);
-    nest.enableCors(gatewayCorsOptions());
+    nest.enableCors(gatewayCorsDelegate());
     nest.useGlobalFilters(new AllExceptionsFilter());
     setupGatewaySwagger(nest);
     registerMetrics(nest, 'api-gateway-spec');
@@ -81,7 +88,8 @@ describe('oFfOWGuo — gateway HTTP: preflight keshi, Retry-After, HSTS, Swagger
 
   beforeEach(() => {
     process.env.NODE_ENV = 'production';
-    process.env.CORS_ORIGINS = `${FRONTEND},https://elchipochta.uz`;
+    process.env.CORS_ORIGINS = FRONTEND;
+    process.env.PUBLIC_CORS_ORIGINS = `${LANDING},https://www.elchipochta.uz`;
     delete process.env.METRICS_TOKEN;
     delete process.env.SWAGGER_PASSWORD;
   });
@@ -134,6 +142,50 @@ describe('oFfOWGuo — gateway HTTP: preflight keshi, Retry-After, HSTS, Swagger
           .set('Origin', origin);
         expect(res.headers['access-control-allow-origin']).toBeUndefined();
       }
+    });
+
+    it('⭐ /public/*: landing (PUBLIC_CORS_ORIGINS) — cookie’siz CORS, faqat Content-Type (mSkzzNBJ)', async () => {
+      const pre = await request(app.getHttpServer())
+        .options('/public/quote')
+        .set('Origin', LANDING)
+        .set('Access-Control-Request-Method', 'POST')
+        .set('Access-Control-Request-Headers', 'content-type');
+      expect(pre.status).toBe(204);
+      expect(pre.headers['access-control-allow-origin']).toBe(LANDING);
+      expect(pre.headers['access-control-allow-credentials']).toBeUndefined();
+      expect(pre.headers['access-control-allow-headers']).toBe('Content-Type');
+
+      const res = await request(app.getHttpServer())
+        .post('/public/quote')
+        .set('Origin', LANDING);
+      expect(res.status).toBe(201);
+      expect(res.headers['access-control-allow-origin']).toBe(LANDING);
+      expect(res.headers['access-control-allow-credentials']).toBeUndefined();
+    });
+
+    it('⭐ landing domeni /public/* dan tashqarida (masalan /auth/refresh) — CORS yo‘q', async () => {
+      const pre = await request(app.getHttpServer())
+        .options('/ping')
+        .set('Origin', LANDING)
+        .set('Access-Control-Request-Method', 'POST');
+      expect(pre.headers['access-control-allow-origin']).toBeUndefined();
+      expect(pre.headers['access-control-allow-credentials']).toBeUndefined();
+      const res = await request(app.getHttpServer())
+        .get('/ping')
+        .set('Origin', LANDING);
+      expect(res.headers['access-control-allow-origin']).toBeUndefined();
+    });
+
+    it('/public/*: admin origin ham ruxsat (cookie’siz), begona origin — yo‘q', async () => {
+      const admin = await request(app.getHttpServer())
+        .post('/public/quote')
+        .set('Origin', FRONTEND);
+      expect(admin.headers['access-control-allow-origin']).toBe(FRONTEND);
+      expect(admin.headers['access-control-allow-credentials']).toBeUndefined();
+      const evil = await request(app.getHttpServer())
+        .post('/public/quote')
+        .set('Origin', 'https://evil.example');
+      expect(evil.headers['access-control-allow-origin']).toBeUndefined();
     });
   });
 
@@ -248,14 +300,14 @@ describe('oFfOWGuo — gateway HTTP: preflight keshi, Retry-After, HSTS, Swagger
     });
   });
 
-  it('keepAlive 75 s / headers 76 s (headers > keepAlive)', () => {
+  it('keepAlive 95 s / headers 96 s (cloudflared 90 s dan uzun, headers > keepAlive)', () => {
     const server = { keepAliveTimeout: 5_000, headersTimeout: 60_000 };
     applyServerTimeouts(server as never);
     expect(server).toEqual({
       keepAliveTimeout: SERVER_KEEP_ALIVE_TIMEOUT_MS,
       headersTimeout: SERVER_HEADERS_TIMEOUT_MS,
     });
-    expect(SERVER_KEEP_ALIVE_TIMEOUT_MS).toBe(75_000);
+    expect(SERVER_KEEP_ALIVE_TIMEOUT_MS).toBe(95_000);
     expect(SERVER_HEADERS_TIMEOUT_MS).toBeGreaterThan(
       SERVER_KEEP_ALIVE_TIMEOUT_MS,
     );
@@ -264,7 +316,7 @@ describe('oFfOWGuo — gateway HTTP: preflight keshi, Retry-After, HSTS, Swagger
   it('main.ts shu funksiyalarni ishlatadi (helmet/CORS/Swagger/timeouts, `/` redirect yo‘q)', () => {
     const main = readFileSync(join(__dirname, 'main.ts'), 'utf8');
     expect(main).toContain('applyGatewaySecurityHeaders(app)');
-    expect(main).toContain('app.enableCors(gatewayCorsOptions())');
+    expect(main).toContain('app.enableCors(gatewayCorsDelegate())');
     expect(main).toContain('setupGatewaySwagger(app)');
     expect(main).toContain('applyServerTimeouts(app.getHttpServer())');
     expect(main).not.toMatch(/redirect\(/);

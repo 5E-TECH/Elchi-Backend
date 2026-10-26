@@ -35,8 +35,12 @@ import {
 } from './shift-account-check.rules';
 
 const MAIN_CASHBOX_USER_ID = '0';
-/** Yopishda AI `pending` ni kutish (ega: 30 s gacha). */
-const DEFAULT_CLOSE_WAIT_MS = 30_000;
+/**
+ * Yopishda AI `pending` ni kutish (ega: 30 s gacha). Sukut 15 s: jonli
+ * frontend so'rov timeout'i 20 s — undan oshsa kassir «vaqt tugadi» ko'radi,
+ * smena esa baribir yopiladi (qayta urinish → 404). Env: `SHIFT_CLOSE_AI_WAIT_MS`.
+ */
+const DEFAULT_CLOSE_WAIT_MS = 15_000;
 const CLOSE_WAIT_POLL_MS = 1_000;
 /** Shundan eski `pending` (masalan gateway qayta ishga tushgan) kutilmaydi. */
 const PENDING_STALE_MS = 3 * 60_000;

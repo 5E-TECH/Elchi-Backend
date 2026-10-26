@@ -88,7 +88,7 @@ export class PublicDeliveryQuoteItemRequestDto extends OmitType(
   quantity?: number;
 }
 
-const noItems = (o: { items?: unknown }) => o.items === undefined;
+const noItems = (o: { items?: unknown }) => o.items == null;
 
 /**
  * `POST /public/delivery-quote`. Posilka — YO `items[]`, YO yuqori darajadagi

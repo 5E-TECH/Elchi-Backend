@@ -13,7 +13,7 @@ import { requestContextMiddleware } from './context/request-context.middleware';
 import {
   applyGatewaySecurityHeaders,
   applyServerTimeouts,
-  gatewayCorsOptions,
+  gatewayCorsDelegate,
   setupGatewaySwagger,
 } from './gateway-http.setup';
 import {
@@ -69,7 +69,7 @@ async function bootstrap() {
   // `Retry-After` JS'ga ochiq — oFfOWGuo; localhost faqat dev'da — audit S4).
   // Batafsil: gateway-http.setup.ts.
   applyGatewaySecurityHeaders(app);
-  app.enableCors(gatewayCorsOptions());
+  app.enableCors(gatewayCorsDelegate());
 
   app.useGlobalPipes(
     new ValidationPipe({

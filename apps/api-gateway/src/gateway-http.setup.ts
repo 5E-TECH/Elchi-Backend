@@ -1,5 +1,8 @@
 import type { INestApplication } from '@nestjs/common';
-import type { CorsOptions } from '@nestjs/common/interfaces/external/cors-options.interface';
+import type {
+  CorsOptions,
+  CorsOptionsDelegate,
+} from '@nestjs/common/interfaces/external/cors-options.interface';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import helmet from 'helmet';
 import basicAuth from 'express-basic-auth';
@@ -104,6 +107,59 @@ export function gatewayCorsOptions(): CorsOptions {
 }
 
 /**
+ * Ochiq narx endpointlari (mSkzzNBJ): `/public/*` — elchipochta.uz landing
+ * kalkulyatori. Landing domeni asosiy `CORS_ORIGINS` ga QO'SHILMAYDI: u
+ * `credentials: true` bilan butun API'ga (jumladan `POST /auth/refresh`,
+ * refresh cookie `SameSite=Lax`, elchipochta.uz ↔ api.elchipochta.uz bitta
+ * «site») ochilib qolardi. `/public/*` uchun alohida qoida — cookie'siz
+ * (`credentials: false`), faqat GET/POST va `Content-Type`.
+ * `PUBLIC_CORS_ORIGINS` (vergul bilan) + asosiy ro'yxat (admin ham chaqira oladi).
+ */
+export const PUBLIC_CORS_PATH_PREFIX = '/public/';
+
+export function isPublicCorsPath(url: string | undefined): boolean {
+  return (url ?? '').startsWith(PUBLIC_CORS_PATH_PREFIX);
+}
+
+export function isAllowedPublicCorsOrigin(
+  origin: string | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  return (
+    isAllowedCorsOrigin(origin, env) ||
+    parseCorsOrigins(env.PUBLIC_CORS_ORIGINS).includes(origin ?? '')
+  );
+}
+
+export function publicCorsOptions(): CorsOptions {
+  return {
+    origin: (origin: string | undefined, callback: OriginCallback) => {
+      if (isAllowedPublicCorsOrigin(origin)) {
+        callback(null, true);
+        return;
+      }
+      callback(new Error(`CORS blocked for origin: ${origin}`), false);
+    },
+    credentials: false,
+    methods: ['GET', 'HEAD', 'POST', 'OPTIONS'],
+    allowedHeaders: ['Content-Type'],
+    exposedHeaders: ['Retry-After'],
+    maxAge: CORS_PREFLIGHT_MAX_AGE_SECONDS,
+  };
+}
+
+/** `enableCors` uchun: `/public/*` — `publicCorsOptions`, qolgani — `gatewayCorsOptions`. */
+export function gatewayCorsDelegate(): CorsOptionsDelegate<{
+  originalUrl?: string;
+  url?: string;
+}> {
+  const main = gatewayCorsOptions();
+  const pub = publicCorsOptions();
+  return (req, callback) =>
+    callback(null, isPublicCorsPath(req.originalUrl ?? req.url) ? pub : main);
+}
+
+/**
  * HSTS (oFfOWGuo, xavfsizlik P2): ilgari `hsts: false`. api.elchipochta.uz
  * faqat HTTPS (Cloudflare) orqali ochiladi; brauzer HTTP sahifadagi HSTS'ni
  * e'tiborsiz qoldiradi, shuning uchun lokal dev'ga ta'sir qilmaydi.
@@ -146,10 +202,10 @@ export function applyGatewaySecurityHeaders(app: INestApplication): void {
  * keepAlive (oFfOWGuo #5): Node sukuti 5 s — cloudflared bo'sh ulanishni
  * uzoqroq ushlaydi va Node yopgan ulanishga so'rov yuborsa kam uchraydigan
  * 502 bo'ladi (POST qayta urinilmaydi). Server tomoni proksidan UZUNROQ
- * kutishi kerak; `headersTimeout` > `keepAliveTimeout` (Node talabi).
+ * kutishi kerak (cloudflared sukuti — 90 s); `headersTimeout` > `keepAliveTimeout` (Node talabi).
  */
-export const SERVER_KEEP_ALIVE_TIMEOUT_MS = 75_000;
-export const SERVER_HEADERS_TIMEOUT_MS = 76_000;
+export const SERVER_KEEP_ALIVE_TIMEOUT_MS = 95_000;
+export const SERVER_HEADERS_TIMEOUT_MS = 96_000;
 
 export function applyServerTimeouts(
   server: Pick<Server, 'keepAliveTimeout' | 'headersTimeout'>,

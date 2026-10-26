@@ -45,7 +45,7 @@ Sukut bo'yicha tasdiqlash **o'chiq** — superadmin yoqmaguncha yopish oqimi o'z
 - [2026-10-26] ✏️ [finance] — `POST /finance/shift/close`: yangi `accounts[]` = `{card_id, entered_balance,
   photo_file_key?, comment?}`. `shift.account_check.enabled` yoqilgan bo'lsa kassaning HAR faol kartasi uchun
   majburiy (yo'q karta nomi bilan 400). Rasm majburiy kartada rasm yo'q → 400; farq ≠ 0, AI `mismatch` yoki
-  `ai_entered_ok = false` → `comment` majburiy (400, karta nomi bilan). AI `pending` bo'lsa yopish **30 s gacha**
+  `ai_entered_ok = false` → `comment` majburiy (400, karta nomi bilan). AI `pending` bo'lsa yopish **15 s gacha** (`SHIFT_CLOSE_AI_WAIT_MS`, ega chegarasi 30 s)
   kutadi, keyin baribir yopiladi (javob vaqti uzayishi mumkin — gateway timeout 45 s). Javobda
   `data.accounts_check` (holatlar soni + kartalar). `accounts` yubormasa va tasdiqlash o'chiq bo'lsa — avvalgidek.
 - [2026-10-26] 🆕 [finance] — `GET /finance/shift/:id/report`: `cash` / `card` (ochilish, kirim, chiqim,
@@ -67,8 +67,10 @@ Sukut bo'yicha tasdiqlash **o'chiq** — superadmin yoqmaguncha yopish oqimi o'z
 Deploy: **faqat api-gateway** (logistics-service o'zgarmagan — mavjud `logistics.delivery.quote`,
 `logistics.delivery.tariffs.find_all`, `logistics.delivery.settings.get`, `logistics.region.find_all` RPC'lari).
 Migratsiya **yo'q**. `openapi.json` qayta yaratildi. Tokenli `POST /delivery/quote` va admin route'lari **o'zgarmagan**.
-**Prod ENV (server):** `CORS_ORIGINS` ga `https://elchipochta.uz` (+ `https://www.elchipochta.uz` va kerakli preview
-origin'lar — ro'yxat aniq moslik) qo'shiladi, api-gateway qayta yaratiladi. Ixtiyoriy: `PUBLIC_PRICING_THROTTLE_LIMIT`
+**Prod ENV (server):** yangi `PUBLIC_CORS_ORIGINS=https://elchipochta.uz,https://www.elchipochta.uz` (+ kerakli preview
+origin'lar — aniq moslik), api-gateway qayta yaratiladi. Bu ro'yxat FAQAT `/public/*` uchun va cookie'siz
+(`credentials: false`, faqat `Content-Type`); landing domeni `CORS_ORIGINS` ga QO'SHILMAYDI (u butun API uchun
+credentials bilan — `/auth/refresh` ham). Ixtiyoriy: `PUBLIC_PRICING_THROTTLE_LIMIT`
 (sukut 30/daqiqa/IP, global `THROTTLE_LIMIT` dan yuqori emas), `PUBLIC_PRICING_THROTTLE_TTL_MS`,
 `PUBLIC_PRICING_CACHE_TTL_MS` (sukut 30000; 0 — o'chiq).
 
