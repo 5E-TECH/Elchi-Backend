@@ -113,7 +113,10 @@ describe('fetchWithoutRedirect (dgvwZasd)', () => {
     const error = await fetchWithoutRedirect(`${base}/x`).catch(
       (e: unknown) => e,
     );
-    expect(error).toBeInstanceOf(TypeError);
+    // undici xatosi boshqa realm'dan (Jest VM) — `instanceof TypeError`
+    // emas, nomi bo'yicha tekshiriladi.
+    expect((error as Error).name).toBe('TypeError');
+    expect((error as Error).message).toBe('fetch failed');
     expect(error).not.toBeInstanceOf(SsrfBlockedError);
   });
 

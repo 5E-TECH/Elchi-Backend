@@ -213,11 +213,14 @@ export class SsrfRedirectBlockedError extends SsrfBlockedError {
  * tashlaydi. Boshqa tarmoq xatolari (ECONNREFUSED, timeout) bu emas.
  */
 function isRedirectRejection(error: unknown): boolean {
-  if (!(error instanceof Error)) return false;
+  // `instanceof Error` ISHLATILMAYDI: undici xatosi boshqa realm'da
+  // yaratilishi mumkin (Jest VM sandbox'ida `instanceof` doim false) —
+  // shakl bo'yicha tekshiriladi.
+  if (!error || typeof error !== 'object') return false;
   const cause = (error as { cause?: unknown }).cause;
-  return (
-    cause instanceof Error && /unexpected redirect/i.test(String(cause.message))
-  );
+  if (!cause || typeof cause !== 'object') return false;
+  const message = (cause as { message?: unknown }).message;
+  return typeof message === 'string' && /unexpected redirect/i.test(message);
 }
 
 /** Xato matni uchun faqat origin — so'rov qatoridagi token/kalitlar logga tushmasin. */
