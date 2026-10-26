@@ -23,6 +23,7 @@ import {
   ActivityLogService,
   ActivityLogQuery,
   BranchTransferBatchStatus,
+  courierPostOrdersQuery,
   dispatchNoteBranchId,
   FULFILLMENT_SOURCES,
   Order_status,
@@ -1636,21 +1637,12 @@ export class OrderServiceService {
     const countOf = async (query: Parameters<typeof this.findAll>[0]) =>
       Number((await this.findAll({ ...query, page: 1, limit: 1 })).total ?? 0);
 
+    // aLx7Di99: waiting / all — ro'yxat bilan AYNI ta'rif (`courierPostOrdersQuery`).
     const [waiting, all, cancelled] = await Promise.all([
       postIds.length
-        ? countOf({ post_ids: postIds, status: [Order_status.WAITING] })
+        ? countOf(courierPostOrdersQuery(postIds, [Order_status.WAITING]))
         : 0,
-      postIds.length
-        ? countOf({
-            post_ids: postIds,
-            exclude_statuses: [
-              Order_status.CREATED,
-              Order_status.NEW,
-              Order_status.RECEIVED,
-              Order_status.ON_THE_ROAD,
-            ],
-          })
-        : 0,
+      postIds.length ? countOf(courierPostOrdersQuery(postIds)) : 0,
       countOf({
         status: [Order_status.CANCELLED],
         courier_ids: [courierId],

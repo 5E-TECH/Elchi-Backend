@@ -1,6 +1,6 @@
 import { RpcException } from '@nestjs/microservices';
 import { of } from 'rxjs';
-import { Order_status } from '@app/common';
+import { courierPostOrdersQuery, Order_status } from '@app/common';
 import { LogisticsServiceService } from './logistics-service.service';
 
 /**
@@ -37,6 +37,7 @@ const ORDERS = [
     region_id: '5',
     district_id: '501',
     courier_id: '77',
+    post_id: 'p77',
     status: Order_status.SOLD,
     total_price: 30_000,
   },
@@ -45,6 +46,7 @@ const ORDERS = [
     region_id: '5',
     district_id: '502',
     courier_id: '77',
+    post_id: 'p77',
     status: Order_status.CANCELLED,
     total_price: 10_000,
   },
@@ -54,6 +56,7 @@ const ORDERS = [
     region_id: '9',
     district_id: '901',
     courier_id: '88',
+    post_id: 'p88',
     status: Order_status.PAID,
     total_price: 99_000,
   },
@@ -67,7 +70,19 @@ type BranchReply = {
 function setup(opts: {
   branchByUser?: Record<string, BranchReply>;
   courierRegion?: Record<string, string | null>;
+  /** aLx7Di99: kuryer pochtalari (`posts.courier_id`); sukut — 77 → p77. */
+  postsByCourier?: Record<string, string[]>;
 }) {
+  const postsByCourier = opts.postsByCourier ?? { '77': ['p77'] };
+  const postRepo = {
+    find: jest.fn(({ where }: { where: { courier_id?: string } }) =>
+      Promise.resolve(
+        (postsByCourier[String(where?.courier_id ?? '')] ?? []).map((id) => ({
+          id,
+        })),
+      ),
+    ),
+  };
   const regionRepo = {
     find: jest.fn((options?: { where?: { logist_id?: string } }) =>
       Promise.resolve(
@@ -116,7 +131,7 @@ function setup(opts: {
     }),
   };
   const service = new LogisticsServiceService(
-    {} as any,
+    postRepo as any,
     regionRepo as any,
     {} as any,
     { send: jest.fn(() => of({})) } as any, // order
@@ -128,7 +143,7 @@ function setup(opts: {
   const findOrders = jest
     .spyOn(service as any, 'findOrders')
     .mockResolvedValue(ORDERS as never);
-  return { service, findOrders, branchClient, identityClient };
+  return { service, findOrders, branchClient, identityClient, postRepo };
 }
 
 const REGIONAL_MANAGER = { id: '20', roles: ['manager'], branch_id: '7' };
@@ -444,101 +459,184 @@ describe('uherIk8r — getMyRegionDistrictStats (GET /region/my/district-stats)'
 });
 
 /**
- * aLx7Di99 — GET /region/my/district-stats raqamlari so'rovchining kesimida
- * (avval butun viloyat): kuryer — o'z buyurtmalari (courier_id /
- * holder_courier_id), menejer — o'z filiali (branch_id / holder_branch_id /
- * home_branch_id) — GET /orders doirasi bilan AYNI. Viloyat — tokendan.
+ * aLx7Di99 — GET /region/my/district-stats raqamlari so'rovchining /orders
+ * «Barchasi» ro'yxati bilan AYNI to'plam ustida (prod 2026-10-27: kuryer 26
+ * /regions 39, /orders 44 — stat faqat courier_id/holder_courier_id ni
+ * sanardi, ro'yxat esa kuryer POCHTALARI bo'yicha; #27 «Yo'lda» ro'yxatda
+ * yo'q, lekin sanalardi):
+ *  - kuryer — GET /orders/courier/orders: o'z pochtalari (post_ids) +
+ *    created/new/received/on the road ko'rinmaydi;
+ *  - menejer — GET /orders: filial (branch / holder / home), barcha holat;
+ *  - summary — butun ro'yxat; districts — viloyat tumanlariga tushgani;
+ *    outsideDistrictsOrders — qolgani (tumansiz / boshqa viloyat).
  */
-describe('aLx7Di99 — my/district-stats filial va kuryer kesimida', () => {
+describe('aLx7Di99 — my/district-stats = /orders ro‘yxati to‘plami', () => {
+  const POSTS = { '77': ['p77a', 'p77b'] };
   const SCOPED_ORDERS = [
-    // 5-viloyat, kuryer 77, filial 7
+    // kuryer 77 pochtasida, courier_id = 77, filial 7
     {
       id: 's1',
       region_id: '5',
       district_id: '501',
       courier_id: '77',
+      post_id: 'p77a',
       branch_id: '7',
       status: Order_status.SOLD,
       total_price: 30_000,
     },
-    // 5-viloyat, BOSHQA kuryer (88), BOSHQA filial (8)
+    // BOSHQA kuryer (88) pochtasi, BOSHQA filial (8)
     {
       id: 's2',
       region_id: '5',
       district_id: '501',
       courier_id: '88',
+      post_id: 'p88',
       branch_id: '8',
       status: Order_status.SOLD,
       total_price: 50_000,
     },
-    // 5-viloyat, kuryer 77 qo'lida (holder), filial 8 → 7 ga ko'chgan (holder)
+    // ⭐ prod #141/#140/#36 analogi: courier_id/holder_courier_id BO'SH, faqat
+    // kuryer pochtasi orqali (ro'yxatda bor — avval sanalmasdi); filial 8 → 7
     {
       id: 's3',
       region_id: '5',
       district_id: '502',
       courier_id: null,
-      holder_courier_id: '77',
+      holder_courier_id: null,
+      post_id: 'p77b',
       branch_id: '8',
       holder_branch_id: '7',
       status: Order_status.CANCELLED,
       total_price: 10_000,
     },
-    // 5-viloyat, filial 7 uyi (home), boshqa kuryer
+    // filial 7 uyi (home), boshqa kuryer pochtasi
     {
       id: 's4',
       region_id: '5',
       district_id: '502',
       courier_id: '88',
+      post_id: 'p88',
       branch_id: '9',
       home_branch_id: '7',
       status: Order_status.WAITING,
       total_price: 20_000,
     },
-    // Boshqa viloyat (9), kuryer 77, filial 7 — viloyat tokendan, sanalmaydi
+    // prod #56 analogi: viloyati/tumani YO'Q — ro'yxatda bor (jami), tumanda yo'q
     {
       id: 's5',
-      region_id: '9',
-      district_id: '901',
+      region_id: null,
+      district_id: null,
       courier_id: '77',
+      holder_courier_id: '77',
+      post_id: 'p77a',
       branch_id: '7',
-      status: Order_status.PAID,
+      status: Order_status.SOLD,
       total_price: 99_000,
+    },
+    // ⭐ prod #27 analogi: «Yo'lda» — kuryer ro'yxatida YO'Q (avval sanalardi),
+    // menejerning GET /orders ro'yxatida bor
+    {
+      id: 's6',
+      region_id: '5',
+      district_id: '501',
+      courier_id: '77',
+      holder_courier_id: '77',
+      post_id: 'p77a',
+      branch_id: '7',
+      status: Order_status.ON_THE_ROAD,
+      total_price: 40_000,
+    },
+    // courier_id = 77, lekin kuryer pochtasida EMAS — kuryer ro'yxatida yo'q
+    {
+      id: 's7',
+      region_id: '5',
+      district_id: '501',
+      courier_id: '77',
+      post_id: null,
+      branch_id: '8',
+      status: Order_status.WAITING,
+      total_price: 5_000,
     },
   ];
 
-  it('⭐ kuryer → faqat o‘z buyurtmalari (boshqa kuryerniki sanalmaydi), SQL doirasi: region_id + courier_ids', async () => {
-    const { service, findOrders } = setup({ courierRegion: { '77': '5' } });
+  it('⭐ kuryer → pochtalari orqali kelganlar ham sanaladi; SQL so‘rovi = GET /orders/courier/orders «Barchasi»', async () => {
+    const { service, findOrders, postRepo } = setup({
+      courierRegion: { '77': '5' },
+      postsByCourier: POSTS,
+    });
     findOrders.mockResolvedValue(SCOPED_ORDERS as never);
     const res: any = await service.getMyRegionDistrictStats(
       '2026-10-01',
       '2026-10-26',
       COURIER,
     );
-    expect(findOrders).toHaveBeenCalledWith(
-      expect.objectContaining({
-        region_id: '5',
-        courier_ids: ['77'],
-        start_day: '2026-10-01',
-        end_day: '2026-10-26',
-      }),
+    expect(postRepo.find).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { courier_id: '77' } }),
     );
-    expect(findOrders.mock.calls[0][0]).not.toHaveProperty('branch_id');
+    expect(findOrders).toHaveBeenCalledTimes(1);
+    expect(findOrders.mock.calls[0][0]).toEqual({
+      ...courierPostOrdersQuery(['p77a', 'p77b']),
+      start_day: '2026-10-01',
+      end_day: '2026-10-26',
+      fetch_all: true,
+      limit: 100,
+    });
+    const query = findOrders.mock.calls[0][0] as Record<string, unknown>;
+    expect(query.exclude_statuses).toEqual([
+      Order_status.CREATED,
+      Order_status.NEW,
+      Order_status.RECEIVED,
+      Order_status.ON_THE_ROAD,
+    ]);
+    for (const key of ['region_id', 'branch_id', 'courier_ids']) {
+      expect(query).not.toHaveProperty(key);
+    }
     expect(res.data.scope).toEqual({ type: 'courier', courier_id: '77' });
-    // s1 (sotilgan) + s3 (holder, bekor) — s2/s4 boshqa kuryer, s5 boshqa viloyat.
-    expect(res.data.summary).toEqual(
-      expect.objectContaining({
-        totalOrders: 2,
-        deliveredOrders: 1,
-        cancelledOrders: 1,
-        pendingOrders: 0,
-        totalRevenue: 30_000,
-      }),
+    // s1 + s3 (faqat pochta orqali) + s5 (tumansiz); s6 «Yo'lda» va s7
+    // (pochtasiz) ro'yxatda yo'q, s2/s4 — boshqa kuryer pochtasi.
+    expect(res.data.summary).toEqual({
+      totalOrders: 3,
+      deliveredOrders: 2,
+      cancelledOrders: 1,
+      pendingOrders: 0,
+      totalRevenue: 129_000,
+      successRate: 67,
+      districtsCount: 2,
+      outsideDistrictsOrders: 1,
+    });
+    const byId = (id: string) =>
+      res.data.districts.find((d: any) => d.id === id);
+    expect(byId('501').totalOrders).toBe(1);
+    expect(byId('502').totalOrders).toBe(1);
+    expect(byId('502').cancelledOrders).toBe(1);
+    const inDistricts = res.data.districts.reduce(
+      (sum: number, d: any) => sum + d.totalOrders,
+      0,
     );
-    const d501 = res.data.districts.find((d: any) => d.id === '501');
-    expect(d501.totalOrders).toBe(1);
+    expect(inDistricts + res.data.summary.outsideDistrictsOrders).toBe(
+      res.data.summary.totalOrders,
+    );
   });
 
-  it('⭐ menejer → faqat o‘z filiali (branch/holder/home), SQL doirasi: region_id + branch_id; scope.branch_id', async () => {
+  it('pochtasi yo‘q kuryer → ro‘yxat kabi 0 (buyurtmalar so‘ralmaydi), viloyat va tumanlar bor', async () => {
+    const { service, findOrders } = setup({
+      courierRegion: { '77': '5' },
+      postsByCourier: {},
+    });
+    const res: any = await service.getMyRegionDistrictStats(
+      undefined,
+      undefined,
+      COURIER,
+    );
+    expect(findOrders).not.toHaveBeenCalled();
+    expect(res.data.region.id).toBe('5');
+    expect(res.data.summary).toEqual(
+      expect.objectContaining({ totalOrders: 0, outsideDistrictsOrders: 0 }),
+    );
+    expect(res.data.districts).toHaveLength(2);
+  });
+
+  it('⭐ menejer → GET /orders doirasi (faqat branch_id, holat filtrisiz); scope.branch_id', async () => {
     const { service, findOrders } = setup({ branchByUser });
     findOrders.mockResolvedValue(SCOPED_ORDERS as never);
     const res: any = await service.getMyRegionDistrictStats(
@@ -546,23 +644,32 @@ describe('aLx7Di99 — my/district-stats filial va kuryer kesimida', () => {
       undefined,
       REGIONAL_MANAGER,
     );
-    expect(findOrders).toHaveBeenCalledWith(
-      expect.objectContaining({ region_id: '5', branch_id: '7' }),
-    );
-    expect(findOrders.mock.calls[0][0]).not.toHaveProperty('courier_ids');
+    expect(findOrders.mock.calls[0][0]).toEqual({
+      branch_id: '7',
+      start_day: undefined,
+      end_day: undefined,
+      fetch_all: true,
+      limit: 100,
+    });
     expect(res.data.scope).toEqual(
       expect.objectContaining({ type: 'branch', branch_id: '7' }),
     );
-    // s1 (branch), s3 (holder), s4 (home) — s2 boshqa filial, s5 boshqa viloyat.
+    // s1 (branch), s3 (holder), s4 (home), s5 (tumansiz), s6 (Yo'lda — menejer
+    // ro'yxatida bor) — s2/s7 boshqa filial.
     expect(res.data.summary).toEqual(
       expect.objectContaining({
-        totalOrders: 3,
-        deliveredOrders: 1,
+        totalOrders: 5,
+        deliveredOrders: 2,
         cancelledOrders: 1,
-        pendingOrders: 1,
-        totalRevenue: 30_000,
+        pendingOrders: 2,
+        totalRevenue: 129_000,
+        outsideDistrictsOrders: 1,
       }),
     );
+    const byId = (id: string) =>
+      res.data.districts.find((d: any) => d.id === id);
+    expect(byId('501').totalOrders).toBe(2);
+    expect(byId('502').totalOrders).toBe(2);
     expect(JSON.stringify(res.data)).not.toContain('50000');
   });
 
@@ -597,6 +704,9 @@ describe('aLx7Di99 — my/district-stats filial va kuryer kesimida', () => {
     expect(query).not.toHaveProperty('region_id');
     expect(query).not.toHaveProperty('branch_id');
     expect(query).not.toHaveProperty('courier_ids');
-    expect(res.data.summary.totalOrders).toBe(4);
+    expect(query).not.toHaveProperty('post_ids');
+    expect(query).not.toHaveProperty('exclude_statuses');
+    // 5-viloyatning hammasi (s1, s2, s3, s4, s6, s7); s5 — viloyatsiz.
+    expect(res.data.summary.totalOrders).toBe(6);
   });
 });
