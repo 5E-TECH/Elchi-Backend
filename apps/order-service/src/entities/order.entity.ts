@@ -97,6 +97,15 @@ export enum OrderHolderType {
 @Index('IDX_orders_market_handover', ['market_id', 'market_handover_at'], {
   where: '"market_handover_at" IS NOT NULL',
 })
+/**
+ * vNKGbg5q (BG7) — eslatma/eskalatsiya cron'ining skani: faqat HQ/filialda
+ * turgan, hali eskalatsiya qilinmagan bekorlar (kichik qism indeks).
+ * Migratsiya 1716000000174.
+ */
+@Index('IDX_orders_cancel_return_waiting', ['market_id'], {
+  where:
+    '"status" = \'cancelled\' AND "holder_type" IN (\'HQ\', \'BRANCH\') AND "handover_escalated_at" IS NULL',
+})
 export class Order extends BaseEntity {
   @Column({ type: 'bigint' })
   market_id!: string;
@@ -419,6 +428,20 @@ export class Order extends BaseEntity {
 
   @Column({ type: 'bigint', nullable: true })
   market_handover_branch_id!: string | null;
+
+  /**
+   * vNKGbg5q (BG7) — bekor posilka HQ/filialda uzoq turib qolsa: marketga
+   * eslatma (`CANCEL_RETURN_REMIND_AFTER_DAYS`, sukut 3 kun) va admin
+   * navbatiga eskalatsiya (`CANCEL_RETURN_ESCALATE_AFTER_DAYS`, sukut 7 kun)
+   * yuborilgan payt. Takror yubormaslik belgisi — har buyurtmaga har bosqich
+   * BIR marta (`CancelReturnReminderService` shartli UPDATE bilan qo'yadi).
+   * Holat o'zgarmaydi. Migratsiya 1716000000174.
+   */
+  @Column({ type: 'timestamptz', nullable: true })
+  handover_notified_at!: Date | null;
+
+  @Column({ type: 'timestamptz', nullable: true })
+  handover_escalated_at!: Date | null;
 
   @Column({ type: 'text', nullable: true })
   return_reason!: string | null;

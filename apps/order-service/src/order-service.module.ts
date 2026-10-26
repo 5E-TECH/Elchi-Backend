@@ -9,6 +9,8 @@ import { OrderSettlementService } from './settlement/order-settlement.service';
 import { OrderLookupService } from './lookup/order-lookup.service';
 import { OrderLifecycleService } from './lifecycle/order-lifecycle.service';
 import { ExtraCostAutoApproveScheduler } from './lifecycle/extra-cost-auto-approve.scheduler';
+import { CancelReturnReminderService } from './cancel-return/cancel-return-reminder.service';
+import { CancelReturnReminderScheduler } from './cancel-return/cancel-return-reminder.scheduler';
 import { OrderCustodyService } from './custody/order-custody.service';
 import { OrderTelegramCardPublisher } from './notification/order-telegram-card.publisher';
 import { OrderNotificationService } from './notification/order-notification.service';
@@ -133,6 +135,10 @@ import { CustomerSegmentController } from './segment/customer-segment.controller
     OrderLifecycleService,
     // (1tnpaIqd) muddat o'tgan extra-cost so'rovlarini avtomatik tasdiqlash.
     ExtraCostAutoApproveScheduler,
+    // (vNKGbg5q BG7) HQ/filialda uzoq turgan bekorlar: 3 kun — marketga
+    // eslatma, 7 kun — admin navbatiga (CANCEL_RETURN_REMINDER_ENABLED).
+    CancelReturnReminderService,
+    CancelReturnReminderScheduler,
     OrderCustodyService,
     OrderNotificationService,
     OrderTelegramCardPublisher,
