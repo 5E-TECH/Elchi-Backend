@@ -326,6 +326,8 @@ export const financeValidationSchema = Joi.object({
   COURIER_CASH_REMINDER_THRESHOLD: Joi.number().min(0).allow('').optional(),
   // Eslatma soati (Asia/Tashkent, 0-23). Sukut 18:00.
   COURIER_CASH_REMINDER_HOUR: Joi.number().integer().min(0).max(23).default(18),
+  // (qzjTMWPb) Kunlik moliya snapshot job'ini o'chirish (sukut: yoqilgan).
+  FINANCE_DAILY_SNAPSHOT_DISABLED: Joi.boolean().default(false),
 });
 
 export const notificationValidationSchema = Joi.object({
