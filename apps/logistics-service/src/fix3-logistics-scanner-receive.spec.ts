@@ -54,6 +54,12 @@ describe('FIX3 CODE-09 — skan bilan qabul return_requested ni tozalaydi', () =
     return { service, updates };
   }
 
+  const courierReceiver = {
+    id: '179',
+    roles: ['courier'],
+    note: 'Post received by courier',
+  };
+
   const flaggedOnTheRoad = (id: string) => ({
     id,
     status: Order_status.ON_THE_ROAD,
@@ -71,14 +77,17 @@ describe('FIX3 CODE-09 — skan bilan qabul return_requested ni tozalaydi', () =
       'POST-token',
     );
 
+    // vbu7Wr3o #1: qabul tracking'i kuryer nomidan (ilgari so'rovchisiz → «Tizim»).
     expect(ctx.updates()).toEqual([
       {
         id: '101',
         dto: { status: Order_status.WAITING, return_requested: false },
+        requester: courierReceiver,
       },
       {
         id: '102',
         dto: { status: Order_status.WAITING, return_requested: false },
+        requester: courierReceiver,
       },
     ]);
   });
@@ -95,6 +104,7 @@ describe('FIX3 CODE-09 — skan bilan qabul return_requested ni tozalaydi', () =
       {
         id: '101',
         dto: { status: Order_status.WAITING, return_requested: false },
+        requester: courierReceiver,
       },
     ]);
   });

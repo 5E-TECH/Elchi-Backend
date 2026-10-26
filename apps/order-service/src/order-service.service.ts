@@ -23,6 +23,7 @@ import {
   ActivityLogService,
   ActivityLogQuery,
   BranchTransferBatchStatus,
+  dispatchNoteBranchId,
   FULFILLMENT_SOURCES,
   Order_status,
   OutboxService,
@@ -578,6 +579,47 @@ export class OrderServiceService {
     }
 
     return `branch ID: ${id}`;
+  }
+
+  /**
+   * vbu7Wr3o #2 — ESKI HQ → filial jo'natish yozuvlari (metadata'da filial
+   * nomi yo'q, reliz 2026-10-26 gacha). Filial — yozuv paytidagi izohdagi id
+   * («… HQ'dan branch #12 ga dispatch qilindi»), buyurtmaning JORIY filiali
+   * EMAS: HQ'ga qaytgan buyurtmada frontend joriy filialni olib «HQ Toshkent
+   * filialiga jo'natdi» deb ko'rsatardi. Yangi yozuvlarda nom yozuv paytida
+   * metadata'ga yoziladi (order-lifecycle `resolveStatusTrackingExtras`).
+   */
+  private legacyDispatchBranchId(row: OrderTracking): string | null {
+    if (
+      row.from_status !== Order_status.RECEIVED ||
+      row.to_status !== Order_status.ON_THE_ROAD
+    ) {
+      return null;
+    }
+    const storedName = row.metadata?.branch_name;
+    if (typeof storedName === 'string' && storedName.trim()) return null;
+    return dispatchNoteBranchId(row.note);
+  }
+
+  /** Filialning ko'rinadigan nomi (tracking o'qish uchun); xato — `null`. */
+  private async resolveBranchPlainName(
+    branchId: string,
+  ): Promise<string | null> {
+    try {
+      const response = await rmqSend<{ data?: { name?: string | null } }>(
+        this.branchClient,
+        { cmd: 'branch.find_by_id' },
+        {
+          id: branchId,
+          requester: { id: 'system', roles: [Roles.SUPERADMIN] },
+        },
+        { attachRequestId: false, retries: 0, timeoutMs: 1500 },
+      );
+      const name = String(response?.data?.name ?? '').trim();
+      return name || null;
+    } catch {
+      return null;
+    }
   }
 
   private async resolveTrackingActors(actorIds: string[]) {
@@ -2180,6 +2222,29 @@ export class OrderServiceService {
       }),
     );
 
+    const legacyDispatchBranchNames = new Map<string, string>();
+    await Promise.all(
+      Array.from(
+        new Set(
+          rows
+            .map((row) => this.legacyDispatchBranchId(row))
+            .filter((branchId): branchId is string => Boolean(branchId)),
+        ),
+      ).map(async (branchId) => {
+        const name = await this.resolveBranchPlainName(branchId);
+        if (name) legacyDispatchBranchNames.set(branchId, name);
+      }),
+    );
+    const trackingMetadataOf = (row: OrderTracking) => {
+      const legacyBranchId = this.legacyDispatchBranchId(row);
+      const legacyBranchName = legacyBranchId
+        ? legacyDispatchBranchNames.get(legacyBranchId)
+        : undefined;
+      return legacyBranchName
+        ? { ...(row.metadata ?? {}), branch_name: legacyBranchName }
+        : (row.metadata ?? null);
+    };
+
     const trackingEvents = rows.map((row) => {
       const inferredAction = this.custody.inferTrackingAction(
         row.from_status,
@@ -2229,7 +2294,7 @@ export class OrderServiceService {
         changed_by: row.changed_by,
         changed_by_role: changedByRole,
         actor,
-        metadata: row.metadata ?? null,
+        metadata: trackingMetadataOf(row),
         note: row.note,
         created_at: this.toUzIsoString(row.created_at),
         created_at_ms: row.created_at.getTime(),

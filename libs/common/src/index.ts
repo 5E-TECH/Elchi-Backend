@@ -71,6 +71,7 @@ export * from './catalog/product-code';
 export * from './catalog/warehouse';
 export * from './order/cancel-return-stage';
 export * from './order/order-create-content';
+export * from './order/order-tracking-notes';
 export * from './pricing/delivery-pricing';
 export * from './notification/notification-types';
 export * from './notification/notification-type.validator';
