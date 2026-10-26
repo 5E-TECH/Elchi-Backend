@@ -110,6 +110,36 @@ describe('y8Tqm9Ap — smena jadvali qoidalari', () => {
       expect(readReportSettings(new Map())).toEqual(REPORT_DEFAULTS);
     });
 
+    it("sukut: hisobot yuborish O'CHIQ — hech bir qabul qiluvchi × kanal yoqilmagan", () => {
+      const off = { telegram: false, in_app: false };
+      expect(readReportSettings(new Map())).toEqual({
+        recipients: { superadmin: off, couriers: off, markets: off },
+        format: 'pdf',
+      });
+      // Yaroqsiz / qisman saqlangan qiymat ham yoqilgan deb o'qilmaydi.
+      expect(
+        readReportSettings(
+          new Map<string, unknown>([
+            [
+              SHIFT_AUTOMATION_KEYS.reportRecipients,
+              { couriers: { telegram: 'yes' }, markets: null },
+            ],
+          ]),
+        ).recipients,
+      ).toEqual({ superadmin: off, couriers: off, markets: off });
+      // Superadmin faqat bitta guruhni yoqsa — qolganlari o'chiq qoladi.
+      const [[key, value]] = parseReportPatch(
+        { recipients: { superadmin: { in_app: true } } },
+        REPORT_DEFAULTS,
+      );
+      expect(key).toBe(SHIFT_AUTOMATION_KEYS.reportRecipients);
+      expect(value).toEqual({
+        superadmin: { telegram: false, in_app: true },
+        couriers: off,
+        markets: off,
+      });
+    });
+
     it('normalizeTimes — tartib, takror, yaroqsiz', () => {
       expect(normalizeTimes(['23:00', '14:00', '14:00'])).toEqual([
         '14:00',
@@ -144,9 +174,13 @@ describe('y8Tqm9Ap — smena jadvali qoidalari', () => {
       expect(() => parseAutoClosePatch({ enabled: 'yes' })).toThrow(
         ShiftSettingsError,
       );
+      const on = { telegram: true, in_app: true };
       const report = parseReportPatch(
         { recipients: { couriers: { telegram: false } }, format: 'xlsx' },
-        REPORT_DEFAULTS,
+        {
+          recipients: { superadmin: on, couriers: on, markets: on },
+          format: 'pdf',
+        },
       );
       expect(report[0][1]).toEqual({
         superadmin: { telegram: true, in_app: true },

@@ -513,6 +513,9 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
   Settings in `finance_settings` (SA only, `PATCH /finance/shift/settings`
   `auto_close{enabled,times[],scope,warn_before_min}` + `report{recipients:
   {superadmin|couriers|markets: {telegram,in_app}}, format pdf|xlsx}`).
+  Defaults: auto-close OFF and report delivery OFF (every recipient × channel
+  `false`, release 9) — until SA enables `report.recipients`, `deliver` sends
+  nothing and sets `report_status = skipped`.
   `ShiftAutoCloseScheduler` (`ScheduleModule`, CronJob every minute,
   Asia/Tashkent; `FINANCE_SHIFT_SCHEDULER=off` kills it): session
   `pg_try_advisory_lock(716000000167)` per tick (skip if busy) → warn window

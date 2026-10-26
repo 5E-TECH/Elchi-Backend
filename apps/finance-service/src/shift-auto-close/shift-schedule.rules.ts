@@ -51,8 +51,11 @@ export interface ReportSettings {
 
 /**
  * Sukut: avtomatik yopish O'CHIQ (superadmin yoqadi), vaqt 23:00, faqat MAIN
- * kassa, ogohlantirish 15 daqiqa oldin. Hisobot — kartadagidek hammaga
- * (superadmin / kuryer / market × Telegram + tizim), format PDF.
+ * kassa, ogohlantirish 15 daqiqa oldin. Hisobot yuborish ham O'CHIQ —
+ * barcha qabul qiluvchi × kanal `false` (reliz-9 qarori): funksiya test
+ * qilinmaguncha haqiqiy kuryer / market / superadminga hech narsa ketmaydi
+ * (`deliver` → `report_status = 'skipped'`, outbox / fayl yo'q). Superadmin
+ * `PATCH /finance/shift/settings` `report.recipients` bilan yoqadi. Format PDF.
  */
 export const AUTO_CLOSE_DEFAULTS: AutoCloseSettings = Object.freeze({
   enabled: false,
@@ -63,9 +66,9 @@ export const AUTO_CLOSE_DEFAULTS: AutoCloseSettings = Object.freeze({
 
 export const REPORT_DEFAULTS: ReportSettings = Object.freeze({
   recipients: {
-    superadmin: { telegram: true, in_app: true },
-    couriers: { telegram: true, in_app: true },
-    markets: { telegram: true, in_app: true },
+    superadmin: { telegram: false, in_app: false },
+    couriers: { telegram: false, in_app: false },
+    markets: { telegram: false, in_app: false },
   },
   format: 'pdf',
 }) as ReportSettings;

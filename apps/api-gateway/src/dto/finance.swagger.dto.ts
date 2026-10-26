@@ -602,7 +602,7 @@ export class ShiftReportSettingsRequestDto {
   @ApiPropertyOptional({
     type: () => ShiftReportRecipientsRequestDto,
     description:
-      '`shift.report.recipients` — superadmin / couriers / markets × telegram / in_app (sukut — hammasi true)',
+      "`shift.report.recipients` — superadmin / couriers / markets × telegram / in_app (sukut — hammasi false: hisobot yuborish O'CHIQ, superadmin yoqadi)",
   })
   @IsOptional()
   @ValidateNested()

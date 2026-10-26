@@ -158,8 +158,9 @@ Deploy: **finance-service + api-gateway + notification-service + identity-servic
 `finance.shift.report.resend`, `notification.delivery.by_dispatch`, `identity.user.active_ids_by_role`).
 **Migratsiya bor:** `1716000000167-ShiftAutoCloseAndReports` (`shifts` ga yangi ustunlar, yangi jadvallar
 `shift_schedule_claims`, `shift_report_deliveries`; mavjud qatorlar o'zgarmaydi). `openapi.json` qayta yaratildi.
-Avtomatik yopish sukut bo'yicha **o'chiq** (superadmin yoqadi). Hisobot yuborish sukut bo'yicha **yoqiq**
-(superadmin / kuryerlar / marketlar × Telegram + tizim, PDF).
+Avtomatik yopish sukut bo'yicha **o'chiq** (superadmin yoqadi). Hisobot yuborish ham sukut bo'yicha **o'chiq**
+(reliz-9: `report.recipients` — superadmin / kuryerlar / marketlar × Telegram + tizim — hammasi `false`, format PDF):
+superadmin «Qabul qiluvchilar»da yoqmaguncha hech kimga hech narsa ketmaydi, smena hisobot holati `skipped`.
 
 - [2026-10-26] ✏️ [finance] — `GET /finance/shift/settings` javobiga `auto_close`
   (`{enabled, times: ['HH:MM'], scope: 'main' | 'main+branches', warn_before_min}`) va `report`

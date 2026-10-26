@@ -573,6 +573,59 @@ describePg(
         expect(res.data.report_status).toBe('pending');
       };
 
+      /**
+       * Reliz-9: hisobot yuborish SUKUT bo'yicha O'CHIQ (REPORT_DEFAULTS).
+       * Quyidagi testlar funksiya superadmin tomonidan YOQILGAN holatni
+       * tekshiradi — har testdan oldin hamma qabul qiluvchi × kanal yoqiladi.
+       */
+      const ALL_ON = { telegram: true, in_app: true };
+      beforeEach(async () => {
+        await settings({
+          report: {
+            recipients: {
+              superadmin: ALL_ON,
+              couriers: ALL_ON,
+              markets: ALL_ON,
+            },
+          },
+        });
+      });
+
+      it("sukut (sozlama yo'q): hisobot O'CHIQ — hech kimga yuborilmaydi, fayl yo'q, holat skipped", async () => {
+        // beforeEach yoqqan sozlamani olib tashlaymiz — toza o'rnatish holati.
+        await db.query(
+          `DELETE FROM "${schema}".finance_settings WHERE key = 'shift.report.recipients'`,
+        );
+        const current = (await checks.getSettings()) as any;
+        expect(current.data.report.recipients).toEqual({
+          superadmin: { telegram: false, in_app: false },
+          couriers: { telegram: false, in_app: false },
+          markets: { telegram: false, in_app: false },
+        });
+        await seedOperations();
+        await closeManually();
+        const outboxBefore = outboxCalls().length;
+        const result = await reports.deliver(mainShiftId);
+        expect(result).toMatchObject({
+          claimed: true,
+          status: 'skipped',
+          recipients: 0,
+        });
+        expect(outboxCalls()).toHaveLength(outboxBefore);
+        expect(dispatches()).toHaveLength(0);
+        expect(file.send).not.toHaveBeenCalled();
+        expect(await db.getRepository(ShiftReportDelivery).count()).toBe(0);
+        const shift = await db.getRepository(Shift).findOneByOrFail({
+          id: mainShiftId,
+        });
+        expect(shift.report_status).toBe('skipped');
+        // Scheduler ham qayta urinmaydi (skipped — pending emas).
+        expect(
+          await reports.processPending(new Date(Date.now() + 3_600_000)),
+        ).toBe(0);
+        expect(outboxCalls()).toHaveLength(outboxBefore);
+      });
+
       it("qo'lda yopildi → superadmin (fayl), kuryer/market faqat o'zi; Telegram ulanmagan — faqat tizim", async () => {
         await seedOperations();
         await closeManually();
