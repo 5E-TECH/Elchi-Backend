@@ -25,6 +25,7 @@ import {
   CLAUDE_DEFAULT_MAX_TOKENS,
   CLAUDE_MIN_ATTEMPT_BUDGET_MS,
   CLAUDE_RETRY_MIN_BUDGET_MS,
+  CLAUDE_TOOL_LOOP_TOTAL_MS,
   CLAUDE_USAGE_SINK,
 } from './claude.constants';
 import type {
@@ -40,6 +41,10 @@ import type {
   ClaudeUsageMeta,
   ClaudeUsageRecord,
   ClaudeUsageSink,
+  ClaudeToolCallResult,
+  ClaudeToolLoopOptions,
+  ClaudeToolLoopResult,
+  ClaudeToolLoopStop,
   ExtractJsonOptions,
 } from './claude.types';
 
@@ -71,6 +76,15 @@ interface AnthropicResponseLike {
   stop_details?: { category?: string | null } | null;
   content?: Array<{ type?: string; text?: unknown } | null> | null;
   usage?: AnthropicUsageLike | null;
+}
+
+/** Tool-use siklida o'qiladigan content bloki (thinking/text/tool_use). */
+interface ToolLoopBlockLike {
+  type?: string;
+  text?: unknown;
+  id?: unknown;
+  name?: unknown;
+  input?: unknown;
 }
 
 type BudgetBlock =
@@ -444,6 +458,313 @@ export class ClaudeService implements OnApplicationBootstrap {
         `Claude extractJson kutilmagan xato feature=${opts.meta?.feature}: ${describeError(err)}`,
       );
       return { ok: false, reason: 'ai_error', attempts: calls };
+    }
+  }
+
+  /**
+   * F7PWp6cK — ko'p qadamli suhbat + tool-use sikli (QO'LDA sikl).
+   *
+   * Nega SDK tool runner emas: runner beta (`client.beta.messages.toolRunner`)
+   * va `AnthropicClientLike` (testdagi soxta mijoz) uni qo'llamaydi; bu yerda
+   * esa HAR qadamdan oldin FAIL-CLOSED global shift + xabar boshiga shift
+   * (`beforeStep`), har javobdan keyin xarajat jurnali va SSE hodisalari kerak.
+   *
+   * Qoidalar (claude-api skill, Streaming Manual Loop):
+   * - `messages.stream()` + `finalMessage()`; matn bo'laklari `text_delta`
+   *   hodisasi bilan chiqadi (SSE);
+   * - har tool `eager_input_streaming: true` — kirish validatsiyasi
+   *   chaqiruvchining `executeTool` ida (sxemaga mos bo'lmasa is_error);
+   *   SDK JSON'ni umuman o'qiy olmasa (API xatosi emas) — qadam qayta
+   *   yuboriladi (ketma-ket 2 martagacha, har biri qadam hisoblanadi);
+   * - `refusal` — tool'lar ishga tushmaydi; `max_tokens` + tool_use — tool
+   *   ishga tushmaydi (kesilgan kirish valid ko'rinishi mumkin);
+   * - javob `content`i tarixga O'ZGARISHSIZ qo'shiladi (thinking imzolari
+   *   saqlanadi — preserved thinking); barcha tool_result'lar BITTA user
+   *   xabarida;
+   * - system prompt keshlanadi (tools + system prefiksi) + top-level
+   *   `cache_control` (avtomatik — oxirgi blok): keyingi qadam oldingi
+   *   qadam yozgan keshni o'qiydi;
+   * - temperature/top_p/top_k/thinking BERILMAYDI (Sonnet 5 sukuti adaptive);
+   *   `tool_choice` berilmaydi (auto).
+   *
+   * HECH QACHON throw qilmaydi — har holat `ClaudeToolLoopResult` bilan.
+   */
+  async runToolLoop(
+    opts: ClaudeToolLoopOptions,
+  ): Promise<ClaudeToolLoopResult> {
+    const model = opts.model?.trim() || this.defaultModel;
+    const total: ClaudeUsage = {
+      input_tokens: 0,
+      output_tokens: 0,
+      cache_creation_input_tokens: 0,
+      cache_read_input_tokens: 0,
+    };
+    const history = [...(opts.messages as Anthropic.MessageParam[])];
+    const added: Anthropic.MessageParam[] = [];
+    let steps = 0;
+    const finish = (
+      stop: ClaudeToolLoopStop,
+      text: string,
+      extra: Partial<ClaudeToolLoopResult> = {},
+    ): ClaudeToolLoopResult => ({
+      ok: stop === 'end_turn',
+      stop,
+      text,
+      newMessages: added,
+      steps,
+      usage: { ...total },
+      model,
+      ...extra,
+    });
+
+    const client = this.client;
+    if (!client) return finish('disabled', '');
+
+    try {
+      const deadline = Math.min(
+        Date.now() + CLAUDE_TOOL_LOOP_TOTAL_MS,
+        typeof opts.deadlineAt === 'number' && Number.isFinite(opts.deadlineAt)
+          ? opts.deadlineAt
+          : Infinity,
+      );
+      const tools: Anthropic.Tool[] = opts.tools.map((t) => ({
+        name: t.name,
+        description: t.description,
+        input_schema: t.input_schema as Anthropic.Tool.InputSchema,
+        eager_input_streaming: true,
+      }));
+      const inputSha256 = createHash('sha256')
+        .update(opts.inputText ?? '', 'utf8')
+        .digest('hex');
+      const maxSteps = Math.max(1, Math.floor(opts.maxSteps));
+      let jsonRetries = 0;
+
+      for (let step = 1; step <= maxSteps; step++) {
+        if (deadline - Date.now() < CLAUDE_MIN_ATTEMPT_BUDGET_MS) {
+          this.logBudgetExhausted(opts.meta, step, deadline);
+          return finish('network', '');
+        }
+        const guard = opts.beforeStep?.({ step, usage: { ...total }, model });
+        if (guard && guard.ok === false) {
+          return finish('limit', '', { limitReason: guard.reason });
+        }
+        const block = await this.checkBudget(opts.meta);
+        if (block) {
+          return block.reason === 'cap_exceeded'
+            ? finish('cap_exceeded', '', { reset_at: block.reset_at })
+            : finish('disabled', '');
+        }
+
+        steps = step;
+        opts.onEvent?.({ type: 'step_start', step });
+        const body: Anthropic.MessageStreamParams = {
+          model,
+          max_tokens: opts.maxTokens,
+          system: this.cachedSystem(opts.system),
+          messages: history,
+          tools,
+          cache_control: { type: 'ephemeral' },
+          ...(opts.effort ? { output_config: { effort: opts.effort } } : {}),
+        };
+        const timeout = Math.min(ANTHROPIC_TIMEOUT_MS, deadline - Date.now());
+
+        let raw: unknown;
+        try {
+          if (client.messages.stream) {
+            const stream = client.messages.stream(body, { timeout });
+            stream.on('text', (delta: string) => {
+              if (typeof delta === 'string' && delta.length > 0) {
+                opts.onEvent?.({ type: 'text_delta', step, text: delta });
+              }
+            });
+            raw = await stream.finalMessage();
+          } else {
+            raw = await client.messages.create(body, { timeout });
+          }
+          jsonRetries = 0;
+        } catch (err) {
+          // eager_input_streaming: SDK tool kirishini umuman o'qiy olmasa
+          // (API xatosi EMAS) — qadam qayta yuboriladi, ketma-ket 2 martagacha.
+          if (!(err instanceof APIError) && jsonRetries < 2) {
+            jsonRetries += 1;
+            this.logger.warn(
+              `Claude tool kirishi o'qilmadi — qadam qayta yuboriladi feature=${opts.meta.feature} step=${step}: ${describeError(err)}`,
+            );
+            continue;
+          }
+          const reason = this.classifyError(err, opts.meta, step);
+          return finish(reason, '');
+        }
+
+        const response = (raw ?? {}) as AnthropicResponseLike;
+        const usage = this.readUsage(response.usage);
+        total.input_tokens += usage.input_tokens;
+        total.output_tokens += usage.output_tokens;
+        total.cache_creation_input_tokens += usage.cache_creation_input_tokens;
+        total.cache_read_input_tokens += usage.cache_read_input_tokens;
+        const stopReason =
+          typeof response.stop_reason === 'string'
+            ? response.stop_reason
+            : null;
+        const content: ToolLoopBlockLike[] = Array.isArray(response.content)
+          ? (response.content as unknown[]).filter(
+              (b): b is ToolLoopBlockLike => !!b && typeof b === 'object',
+            )
+          : [];
+        const toolUses = content.filter(
+          (b) => b.type === 'tool_use' && typeof b.id === 'string',
+        ) as Array<{
+          type: 'tool_use';
+          id: string;
+          name: unknown;
+          input: unknown;
+        }>;
+        const text = content
+          .filter((b) => b.type === 'text' && typeof b.text === 'string')
+          .map((b) => b.text as string)
+          .join('');
+
+        const outcome: ClaudeOutcome =
+          stopReason === 'refusal'
+            ? 'refused'
+            : stopReason === 'max_tokens'
+              ? 'truncated'
+              : 'ok';
+        const record: ClaudeUsageRecord = {
+          feature: opts.meta.feature,
+          requestArea: opts.meta.requestArea,
+          marketId: opts.meta.marketId,
+          userId: opts.meta.userId,
+          traceId: opts.meta.traceId,
+          draftId: opts.meta.draftId,
+          model,
+          inputTokens: usage.input_tokens,
+          outputTokens: usage.output_tokens,
+          cacheCreationTokens: usage.cache_creation_input_tokens,
+          cacheReadTokens: usage.cache_read_input_tokens,
+          steps: step,
+          stopReason,
+          outcome,
+          inputChars: (opts.inputText ?? '').length,
+          inputSha256,
+          imageCount: 0,
+        };
+        this.emitUsage(record);
+        await this.reportSpend(record);
+        this.logger.log(
+          `claude_usage feature=${opts.meta.feature} model=${model} step=${step} ` +
+            `stop_reason=${stopReason ?? 'null'} tool_calls=${toolUses.length} ` +
+            `input_tokens=${usage.input_tokens} output_tokens=${usage.output_tokens} ` +
+            `cache_creation_input_tokens=${usage.cache_creation_input_tokens} ` +
+            `cache_read_input_tokens=${usage.cache_read_input_tokens}`,
+        );
+        opts.onStep?.({
+          step,
+          model,
+          usage,
+          stopReason,
+          toolCalls: toolUses.length,
+        });
+
+        if (stopReason === 'refusal') {
+          // Refusal tool_use'ni yarim kesishi mumkin — bu qadam tarixga
+          // QO'SHILMAYDI va tool'lar ishga tushmaydi.
+          this.logger.warn(
+            `Claude so'rovni rad etdi (refusal) feature=${opts.meta.feature} ` +
+              `category=${response.stop_details?.category ?? 'null'}`,
+          );
+          return finish('refused', '');
+        }
+        if (stopReason === 'max_tokens' && toolUses.length > 0) {
+          // Kesilgan tool kirishi valid ko'rinishi mumkin — ijro YO'Q va
+          // yarim tool_use tarixga yozilmaydi.
+          this.logger.warn(
+            `Claude tool kirishi kesildi (max_tokens=${opts.maxTokens}) feature=${opts.meta.feature} step=${step}`,
+          );
+          return finish('truncated', '');
+        }
+
+        const assistantMessage: Anthropic.MessageParam = {
+          role: 'assistant',
+          content: content as unknown as Anthropic.ContentBlockParam[],
+        };
+        history.push(assistantMessage);
+        added.push(assistantMessage);
+
+        if (toolUses.length === 0) {
+          return finish(
+            stopReason === 'max_tokens' ? 'truncated' : 'end_turn',
+            text,
+          );
+        }
+
+        // Oxirgi ruxsat etilgan qadamda ham tool so'raldi — ijro YO'Q, lekin
+        // tarix yaroqli qolishi uchun har tool_use'ga is_error javob yoziladi
+        // (keyingi savolda API 400 bermasin).
+        const exhausted = step >= maxSteps;
+        const results: Anthropic.ToolResultBlockParam[] = [];
+        for (const use of toolUses) {
+          const name = typeof use.name === 'string' ? use.name : '';
+          opts.onEvent?.({
+            type: 'tool_call',
+            step,
+            id: use.id,
+            name,
+            input: use.input,
+          });
+          let result: ClaudeToolCallResult;
+          if (exhausted) {
+            result = {
+              content: JSON.stringify({
+                error: 'step_limit',
+                message: `Qadam chegarasi (${maxSteps}) tugadi — tool bajarilmadi.`,
+              }),
+              isError: true,
+            };
+          } else {
+            try {
+              result = await opts.executeTool(name, use.input, {
+                step,
+                id: use.id,
+              });
+            } catch (err) {
+              this.logger.error(
+                `assistant_tool_failed name=${name}: ${describeError(err)}`,
+              );
+              result = {
+                content: JSON.stringify({ error: 'tool_failed' }),
+                isError: true,
+              };
+            }
+          }
+          opts.onEvent?.({
+            type: 'tool_result',
+            step,
+            id: use.id,
+            name,
+            isError: result.isError,
+          });
+          results.push({
+            type: 'tool_result',
+            tool_use_id: use.id,
+            content: result.content,
+            ...(result.isError ? { is_error: true } : {}),
+          });
+        }
+        const toolMessage: Anthropic.MessageParam = {
+          role: 'user',
+          content: results,
+        };
+        history.push(toolMessage);
+        added.push(toolMessage);
+        if (exhausted) return finish('max_steps', text);
+      }
+      return finish('max_steps', '');
+    } catch (err) {
+      this.logger.error(
+        `Claude runToolLoop kutilmagan xato feature=${opts.meta?.feature}: ${describeError(err)}`,
+      );
+      return finish('ai_error', '');
     }
   }
 

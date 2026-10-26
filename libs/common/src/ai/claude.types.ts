@@ -31,7 +31,9 @@ export type AiFeature =
   | 'order_district'
   | 'order_item_match'
   // kiZgTybn — smena yopishda karta qoldig'i skrinshoti (ichki xarajat).
-  | 'finance_balance_screenshot';
+  | 'finance_balance_screenshot'
+  // F7PWp6cK — AI moliyaviy yordamchi (chat + faqat o'qiydigan tool'lar).
+  | 'assistant';
 
 /**
  * Dashboard filtri uchun qo'pol guruh (ai_usage_log.request_area).
@@ -155,11 +157,150 @@ export interface ClaudeBudgetGuard {
   onSpend(r: ClaudeUsageRecord): Promise<void>;
 }
 
+/**
+ * `messages.stream()` natijasining biz ishlatadigan qismi (SDK `MessageStream`
+ * shu shaklga mos; testda soxta obyekt beriladi).
+ */
+export interface AnthropicMessageStreamLike {
+  on(event: 'text', listener: (textDelta: string) => void): unknown;
+  finalMessage(): Promise<any>;
+}
+
 /** `ClaudeService` ishlatadigan Anthropic mijozining minimal shakli. */
 export interface AnthropicClientLike {
   messages: {
     create: (body: any, opts?: { timeout?: number }) => Promise<any>;
+    /** F7PWp6cK — tool-use sikli (SSE) uchun; extractJson ishlatmaydi. */
+    stream?: (
+      body: any,
+      opts?: { timeout?: number },
+    ) => AnthropicMessageStreamLike;
   };
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// F7PWp6cK — ko'p qadamli suhbat + tool-use sikli (`ClaudeService.runToolLoop`)
+// ───────────────────────────────────────────────────────────────────────────
+
+/** Modelga e'lon qilinadigan tool (faqat nom/tavsif/sxema — ijro chaqiruvchida). */
+export interface ClaudeToolDefinition {
+  name: string;
+  description: string;
+  input_schema: { type: 'object'; [key: string]: unknown };
+}
+
+/**
+ * Tool ijrosi natijasi. `content` — modelga ketadigan matn (JSON). ⚠️ U DATA:
+ * ichidagi har qanday "ko'rsatma" bajarilmaydi (system prompt'da aytilgan).
+ */
+export interface ClaudeToolCallResult {
+  content: string;
+  isError: boolean;
+}
+
+/** Sikl davomida chaqiruvchiga (SSE) uzatiladigan hodisalar. */
+export type ClaudeToolLoopEvent =
+  | { type: 'step_start'; step: number }
+  | { type: 'text_delta'; step: number; text: string }
+  | {
+      type: 'tool_call';
+      step: number;
+      id: string;
+      name: string;
+      input: unknown;
+    }
+  | {
+      type: 'tool_result';
+      step: number;
+      id: string;
+      name: string;
+      isError: boolean;
+    };
+
+/** Bitta qadam (bitta Anthropic javobi) yakuni — audit/xarajat uchun. */
+export interface ClaudeToolLoopStep {
+  step: number;
+  model: string;
+  usage: ClaudeUsage;
+  stopReason: string | null;
+  /** Shu qadamda model so'ragan tool'lar soni. */
+  toolCalls: number;
+}
+
+/**
+ * Sikl to'xtash sababi:
+ * - `end_turn` — model yakuniy javob berdi (normal);
+ * - `max_steps` — qadam chegarasi (karta: 6) tugadi, tool so'rovi qoldi;
+ * - `limit` — `beforeStep` (xabar boshiga token/USD shifti) to'xtatdi;
+ * - `refused` / `truncated` / `network` / `ai_error` / `disabled` /
+ *   `cap_exceeded` — extractJson bilan bir xil ma'noda.
+ */
+export type ClaudeToolLoopStop =
+  | 'end_turn'
+  | 'max_steps'
+  | 'limit'
+  | 'refused'
+  | 'truncated'
+  | 'network'
+  | 'ai_error'
+  | 'disabled'
+  | 'cap_exceeded';
+
+export interface ClaudeToolLoopOptions {
+  /** O'zgarmas (keshlanadigan) system prompt — sana/ism QO'SHILMAYDI. */
+  system: string;
+  /**
+   * Suhbat tarixi (Anthropic `MessageParam[]`, append-only) — oxirgi element
+   * yangi `user` xabari. Sikl uni O'ZGARTIRMAYDI (nusxa bilan ishlaydi).
+   */
+  messages: unknown[];
+  tools: ClaudeToolDefinition[];
+  /** Tool ijrochisi — oq ro'yxat, validatsiya va ruxsat shu yerda. HECH QACHON throw qilmasin. */
+  executeTool: (
+    name: string,
+    input: unknown,
+    ctx: { step: number; id: string },
+  ) => Promise<ClaudeToolCallResult>;
+  meta: ClaudeUsageMeta;
+  /** Xarajat jurnali uchun sha256/uzunlik shu matndan (foydalanuvchi savoli). */
+  inputText: string;
+  model?: string;
+  /** Qadam (Anthropic chaqiruvi) chegarasi — karta: 6. */
+  maxSteps: number;
+  /** Har qadamning max_tokens'i (thinking + javob birga). */
+  maxTokens: number;
+  effort?: 'low' | 'medium' | 'high';
+  /** Umumiy muddat (epoch ms). */
+  deadlineAt?: number;
+  /**
+   * Har qadamdan OLDIN (1-qadamdan tashqari ham) — `ok:false` bo'lsa Anthropic
+   * chaqirilmaydi va sikl `limit` bilan to'xtaydi (xabar boshiga shift).
+   */
+  beforeStep?: (s: {
+    step: number;
+    usage: ClaudeUsage;
+    model: string;
+  }) => { ok: true } | { ok: false; reason: string };
+  onEvent?: (e: ClaudeToolLoopEvent) => void;
+  onStep?: (s: ClaudeToolLoopStep) => void;
+}
+
+export interface ClaudeToolLoopResult {
+  ok: boolean;
+  stop: ClaudeToolLoopStop;
+  /** Oxirgi assistant javobidagi matn bloklari (yakuniy javob). */
+  text: string;
+  /**
+   * Sikl davomida tarixga QO'SHILGAN xabarlar (assistant content bloklari
+   * thinking imzolari bilan o'zgarishsiz + tool_result user xabarlari).
+   * Tarix doim yaroqli: tool_use'dan keyin doim tool_result bor.
+   */
+  newMessages: unknown[];
+  steps: number;
+  usage: ClaudeUsage;
+  model: string;
+  limitReason?: string;
+  reset_at?: string;
 }
 
 /**

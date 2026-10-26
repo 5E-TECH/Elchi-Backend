@@ -770,6 +770,66 @@ export const aiValidationSchema = Joi.object({
   AI_CAP_WARN_RATIO: Joi.number().min(0.1).max(0.99).empty('').default(0.8),
   // SUPERADMIN'ning bir kunlik "shiftni ko'tarish" amali uchun yuqori chegara.
   AI_CAP_RAISE_MAX_USD: Joi.number().positive().empty('').default(50),
+  /**
+   * F7PWp6cK — AI moliyaviy yordamchi. Sukut bo'yicha O'CHIQ.
+   * Tool'lar faqat o'qiydi: finance / analytics / branch navbatlari.
+   */
+  AI_ASSISTANT_ENABLED: Joi.boolean()
+    .truthy('1')
+    .falsy('0')
+    .empty('')
+    .default(false),
+  AI_ASSISTANT_MODEL: Joi.string().empty('').default('claude-sonnet-5'),
+  AI_ASSISTANT_EFFORT: Joi.string()
+    .valid('low', 'medium', 'high')
+    .empty('')
+    .default('medium'),
+  // Karta: «max 6 qadam» — 6 dan oshirib bo'lmaydi.
+  AI_ASSISTANT_MAX_STEPS: Joi.number()
+    .integer()
+    .min(1)
+    .max(6)
+    .empty('')
+    .default(6),
+  // Har qadamning max_tokens'i (thinking + javob).
+  AI_ASSISTANT_MAX_TOKENS: Joi.number()
+    .integer()
+    .min(1024)
+    .max(32000)
+    .empty('')
+    .default(8000),
+  // Foydalanuvchi kunlik savol limiti (Toshkent kuni) — ⚠️ ega tasdig'i kutilmoqda.
+  AI_ASSISTANT_DAILY_LIMIT: Joi.number()
+    .integer()
+    .min(0)
+    .empty('')
+    .default(100),
+  // Yordamchining kunlik USD shifti (ai_usage_log.feature='assistant'); 0 — o'chiq.
+  AI_ASSISTANT_DAILY_USD_CAP: Joi.number().min(0).empty('').default(5),
+  // Bitta savol uchun shift (USD va token, barcha qadamlar yig'indisi).
+  AI_ASSISTANT_MAX_USD_PER_MESSAGE: Joi.number().min(0).empty('').default(0.5),
+  AI_ASSISTANT_MAX_TOKENS_PER_MESSAGE: Joi.number()
+    .integer()
+    .min(1000)
+    .empty('')
+    .default(200000),
+  // Bitta suhbatdagi savollar va tarix hajmi (belgi) chegarasi.
+  AI_ASSISTANT_MAX_TURNS: Joi.number().integer().min(1).empty('').default(20),
+  AI_ASSISTANT_MAX_HISTORY_CHARS: Joi.number()
+    .integer()
+    .min(10000)
+    .empty('')
+    .default(400000),
+  // Bir vaqtda ishlaydigan yordamchi sikllari (butun ai-service bo'yicha).
+  AI_ASSISTANT_MAX_CONCURRENT: Joi.number()
+    .integer()
+    .min(1)
+    .max(20)
+    .empty('')
+    .default(4),
+  RABBITMQ_FINANCE_QUEUE: Joi.string().empty('').default('finance_queue'),
+  RABBITMQ_ANALYTICS_QUEUE: Joi.string().empty('').default('analytics_queue'),
+  RABBITMQ_BRANCH_QUEUE: Joi.string().empty('').default('branch_queue'),
   // ai-service navbatining prefetch'i (faqat kanal QoS). Bir vaqtda nechta
   // Anthropic chaqiruvi ochiq turishi mumkinligini cheklaydi.
   AI_RMQ_PREFETCH: Joi.number().integer().min(1).max(50).empty('').default(8),

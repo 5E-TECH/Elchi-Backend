@@ -23,6 +23,53 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-10-26 — AI moliyaviy yordamchi: chat + faqat o'qiydigan tool'lar, ruxsat, limit, audit (F7PWp6cK)
+
+Deploy: **ai-service + api-gateway birga** (yangi RMQ buyruqlari `ai.assistant.message` (oqim),
+`ai.assistant.access.check|list|update`, `ai.assistant.conversations`; ai-service endi finance/analytics/branch
+navbatlariga faqat O'QISH so'rovi yuboradi). **Migratsiya bor:** `1716000000172-AiAssistant` (yangi jadvallar
+`ai_schema.ai_conversations`, `ai_messages`, `ai_assistant_access`; mavjud ma'lumotga tegmaydi). `openapi.json` qayta
+yaratildi. Funksiya **sukut bo'yicha O'CHIQ** (`AI_ASSISTANT_ENABLED=false`) — yoqilmaguncha savol 503 qaytaradi.
+Dizayn: `superadmin-ai-assistant`, `superadmin-ai-assistant-access-dialog`.
+
+- [2026-10-26] 🆕 [ai] — `GET /ai/assistant/access/me` (superadmin, admin) → `data` = `{allowed, reason, feature_enabled,
+  daily_limit, used_today, remaining_today, reset_at}`; `reason`: `null | role_forbidden | access_disabled |
+  feature_disabled | ai_disabled`. **Menyu bandi** «AI yordamchi»ni shu bilan ko'rsating: superadmin — doim;
+  admin — faqat `reason !== 'access_disabled'`. `allowed=false` + `feature_disabled` — sahifa ochiladi, kiritish
+  bloklanadi («hozircha o'chirilgan»). Boshqa rollar — 403 (menyuda yo'q).
+- [2026-10-26] 🆕 [ai] — `POST /ai/assistant/messages` (superadmin, ruxsatli admin) body `{message: string (1..2000),
+  conversation_id?: string (raqam)}` → **SSE** (`text/event-stream`; `fetch` + `ReadableStream` bilan o'qing — `EventSource`
+  POST/Authorization qo'llamaydi). Oqim ochilishidan OLDIN oddiy JSON xato: **403** (rol/ruxsat yo'q), **503**
+  (`code: feature_disabled | ai_disabled`), **429** (`code: daily_limit`, `reset_at`). Hodisalar (`event:` nomi = `data.type`):
+  `meta {conversation_id, message_id, model, max_steps}` → `step {step}` → `delta {step, text}` (oraliq matn — jonli ko'rsating,
+  lekin YAKUNIY matn faqat `done.answer`) → `tool_call {step, id, tool, input}` («Kassa holati o'qilmoqda…» kabi holat
+  chipi) → `tool_result {step, id, tool, ok, records, period, truncated}` → … → `done {conversation_id, message_id, answer
+  (markdown), stop: end_turn|max_steps|truncated, steps, sources[{tool, period{from,to}|null, records, truncated, ok}],
+  usage{input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, cost_usd}, limits{daily_limit, used_today,
+  remaining_today}}` **yoki** `error {code, message, conversation_id?, reset_at?}`. Har 15 s `: ping` izoh qatori (e'tiborsiz).
+  `error.code`: `role_forbidden | access_disabled | feature_disabled | ai_disabled | daily_limit | assistant_usd_cap |
+  cap_exceeded | busy (oldingi savol tugamagan) | conversation_not_found | conversation_full (yangi suhbat taklif qiling) |
+  invalid_message | message_limit | refused | truncated | network | ai_error` — `message` o'zbekcha, to'g'ridan-to'g'ri
+  ko'rsatsa bo'ladi. Birinchi savolda `conversation_id` yubormang — `meta.conversation_id` ni saqlab, keyingi savollarda
+  yuboring. Javob 2 daqiqagacha cho'zilishi mumkin (6 qadam) — «Bekor qilish» faqat oqimni uzadi (javob baribir tarixga yoziladi).
+- [2026-10-26] 🆕 [ai] — `GET /ai/assistant/conversations?limit=20&offset=0` → `{items[{id, title, turns, last_message_at,
+  created_at, cost_usd}], total, limit, offset}` (faqat o'zimniki, yangisi tepada). `GET /ai/assistant/conversations/:id` →
+  `{id, title, turns, created_at, last_message_at, cost_usd, messages[{id, role: user|assistant, text, created_at,
+  sources?, stop?}]}` (begona/yo'q → 404). Ruxsati olib qo'yilgan admin — 403; funksiya o'chiq bo'lsa ham tarix ochiq.
+- [2026-10-26] 🆕 [ai] — **faqat superadmin:** `GET /ai/assistant/access` → `{feature_enabled, default_daily_limit, model,
+  items[{user_id, enabled, daily_limit, effective_daily_limit, updated_by, updated_at}]}`; `PATCH /ai/assistant/access`
+  body `{user_id, enabled: boolean, daily_limit?: number(0..10000)|null}` (null — sukut 100). Faqat ADMIN rolli
+  foydalanuvchiga (boshqa rol → 400, yo'q → 404). Dialog: adminlar ro'yxatini mavjud `GET /admins` (search, page,
+  limit) dan oling va `items` bilan `user_id` bo'yicha birlashtiring; qatori yo'q admin = o'chiq.
+- [2026-10-26] 🟢 [ai] — Javob manbasi: yordamchi har javob oxirida «Manba:» qatorini yozadi; `done.sources` ni
+  javob ostida kichik chiplar sifatida ko'rsating (tool nomi → o'zbekcha: get_cash_position «Kassa holati»,
+  get_cashbox_history «Kassa tarixi», get_courier_debts «Kuryerlar qarzi», get_market_payables «Marketlarga qarz»,
+  get_branch_settlements «Filiallar hisobi», get_shift_summaries «Smenalar», get_expenses_by_category «Xarajatlar»,
+  get_revenue_profit «Daromad/foyda», get_order_flow «Buyurtmalar oqimi»; davr, yozuvlar soni, `truncated` → «qisqartirilgan»).
+- [2026-10-26] 🟢 [ai] — Limitlar: foydalanuvchi kuniga 100 savol (Toshkent kuni; ⚠️ ega tasdig'i kutilmoqda), yordamchining
+  kunlik USD shifti (5 $), global AI shifti, bitta savolga 0.5 $ / 200k token, 6 qadam, bir vaqtda bitta savol.
+  Hisoblagich: `done.limits` / `access/me`.
+
 ### 2026-10-26 — Smena yopilishi: har karta / hisob qoldig'ini tasdiqlash, skrinshot, AI tekshiruvi, hisobot, sozlamalar (kiZgTybn)
 
 Deploy: **finance-service + api-gateway + ai-service birga** (yangi RMQ buyruqlari
