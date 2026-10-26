@@ -133,6 +133,11 @@ export interface ClaudeUsageRecord extends ClaudeUsageMeta {
   inputChars: number;
   inputSha256: string;
   imageCount: number;
+  /**
+   * WHMAIqyo #5: shu Anthropic chaqiruvining davomiyligi (ms) — so'rov
+   * yuborilgandan javob kelguncha (`ai_usage_log.latency_ms`, p50/p95).
+   */
+  latencyMs?: number | null;
 }
 
 /**

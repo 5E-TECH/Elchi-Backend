@@ -1,0 +1,27 @@
+{
+  "id": "price-thousand-dot",
+  "category": [
+    "price_words"
+  ],
+  "source": "synthetic",
+  "input": {
+    "text": "Jasur 94 000 74 85 Samarqand Urgut, kepka 2 ta jami 150.000"
+  },
+  "expected": {
+    "orders": [
+      {
+        "customer_name": "Jasur",
+        "phone_number": "+998940007485",
+        "region_name": "Samarqand",
+        "district_name": "Urgut",
+        "items": [
+          {
+            "name": "kepka",
+            "quantity": 2
+          }
+        ],
+        "total_price": 150000
+      }
+    ]
+  }
+}

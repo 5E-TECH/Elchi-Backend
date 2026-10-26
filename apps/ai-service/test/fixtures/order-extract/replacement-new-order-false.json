@@ -1,0 +1,28 @@
+{
+  "id": "replacement-new-order-false",
+  "category": [
+    "replacement"
+  ],
+  "source": "synthetic",
+  "input": {
+    "text": "Gavhar 99 000 62 73 Andijon Asaka, yangi mikser 1 ta 380 ming"
+  },
+  "expected": {
+    "orders": [
+      {
+        "customer_name": "Gavhar",
+        "phone_number": "+998990006273",
+        "region_name": "Andijon",
+        "district_name": "Asaka",
+        "items": [
+          {
+            "name": "mikser",
+            "quantity": 1
+          }
+        ],
+        "total_price": 380000,
+        "is_replacement": false
+      }
+    ]
+  }
+}

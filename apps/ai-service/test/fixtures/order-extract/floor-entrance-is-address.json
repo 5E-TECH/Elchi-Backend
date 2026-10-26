@@ -1,0 +1,29 @@
+{
+  "id": "floor-entrance-is-address",
+  "category": [
+    "comment_vs_address"
+  ],
+  "source": "synthetic",
+  "input": {
+    "text": "Sabina 93 000 17 28 Toshkent shahri Chilonzor 19-kvartal 7-uy, 3-podyezd 4-qavat, chang yutgich 1 ta 1.2 mln"
+  },
+  "expected": {
+    "orders": [
+      {
+        "customer_name": "Sabina",
+        "phone_number": "+998930001728",
+        "region_name": "Toshkent shahri",
+        "district_name": "Chilonzor",
+        "items": [
+          {
+            "name": "chang yutgich",
+            "quantity": 1
+          }
+        ],
+        "total_price": 1200000,
+        "address": "4-qavat",
+        "comment": null
+      }
+    ]
+  }
+}

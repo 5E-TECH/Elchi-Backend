@@ -12,8 +12,9 @@
  * - Ism va manzil maskalanMAYDI — ekstraksiyaning o'zi aynan shularni ajratib
  *   olishi kerak (region/tuman/manzil matni Claude'ga ochiq ketadi).
  * - RASMNI maskalab BO'LMAYDI: varaqa suratidagi telefon/ism/manzil Anthropic'ga
- *   o'z holicha ketadi. Rasm bazaga ham, diskka ham YOZILMAYDI — faqat RAM'dan
- *   o'tadi (NsxoDSmm §4 / HD5zOyBp §3).
+ *   o'z holicha ketadi. Rasm bazaga YOZILMAYDI; WHMAIqyo #3 dan beri u
+ *   kichraytirilib MinIO'da VAQTINCHALIK (`ai-tmp/`, TTL 1 soat, ai-service
+ *   o'qigach darhol o'chiriladi) turadi (NsxoDSmm §4 / HD5zOyBp §3).
  *
  * Qidiriladigan shakl (C4): ixtiyoriy prefiks (+998 | 998 | 8 | 0) + AYNAN 9
  * ta milliy raqam — yoki yaxlit (`901234567`, `998901234567`, `0901234567`),

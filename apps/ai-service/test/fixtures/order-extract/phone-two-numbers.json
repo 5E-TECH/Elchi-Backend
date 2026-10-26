@@ -1,0 +1,28 @@
+{
+  "id": "phone-two-numbers",
+  "category": [
+    "phone_format"
+  ],
+  "source": "synthetic",
+  "input": {
+    "text": "Mijoz: Sardor, tel: 998 94 000 45 67, qo'shimcha: 95-000-56-78, Buxoro Kogon, dazmol 1 ta 210 ming"
+  },
+  "expected": {
+    "orders": [
+      {
+        "customer_name": "Sardor",
+        "phone_number": "+998940004567",
+        "region_name": "Buxoro",
+        "district_name": "Kogon",
+        "items": [
+          {
+            "name": "dazmol",
+            "quantity": 1
+          }
+        ],
+        "total_price": 210000,
+        "extra_number": "+998950005678"
+      }
+    ]
+  }
+}

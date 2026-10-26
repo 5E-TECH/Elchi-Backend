@@ -1,0 +1,28 @@
+{
+  "id": "replacement-brak",
+  "category": [
+    "replacement"
+  ],
+  "source": "synthetic",
+  "input": {
+    "text": "Oybek 98 000 51 62 Samarqand Urgut, oldingi mikser brak chiqdi, yangisiga almashtirib bering"
+  },
+  "expected": {
+    "orders": [
+      {
+        "customer_name": "Oybek",
+        "phone_number": "+998980005162",
+        "region_name": "Samarqand",
+        "district_name": "Urgut",
+        "items": [
+          {
+            "name": "mikser",
+            "quantity": 1
+          }
+        ],
+        "total_price": null,
+        "is_replacement": true
+      }
+    ]
+  }
+}

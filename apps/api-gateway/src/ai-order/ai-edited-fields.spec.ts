@@ -3,6 +3,7 @@ import {
   aiStableRequestId,
   buildPreviewSnapshots,
   computeEditedFields,
+  computeFieldCorrections,
   type AiConfirmedForAudit,
 } from './ai-edited-fields';
 
@@ -126,6 +127,43 @@ describe('computeEditedFields', () => {
     expect(computeEditedFields(noPrice, confirmedFrom())).toEqual([
       'total_price',
     ]);
+  });
+});
+
+describe('computeFieldCorrections (J3hEDtFN #4)', () => {
+  const [snap] = buildPreviewSnapshots([PREVIEW]);
+
+  it('faqat o‘zgargan maydonlar: AI taklifi va operator qiymati, telefon ikkala tomonda maskalangan', () => {
+    const confirmed = confirmedFrom({
+      customer: { name: 'Dilnoza opa', phone_number: '+998911112233' },
+      district_id: '16',
+      total_price: 700000,
+      items: [{ product_id: '9', product_name: 'Atir', quantity: 2 }],
+    });
+    const edited = computeEditedFields(snap, confirmed);
+    const corrections = computeFieldCorrections(snap, confirmed, edited);
+    expect(Object.keys(corrections)).toEqual(edited);
+    expect(corrections).toEqual({
+      customer_name: { ai: 'Dilnoza', final: 'Dilnoza opa' },
+      phone_number: { ai: '+99890*****67', final: '+99891*****33' },
+      district_id: { ai: '15', final: '16' },
+      total_price: { ai: 750000, final: 700000 },
+      items: {
+        ai: [
+          { name: 'atir', product_id: '9', quantity: 3 },
+          { name: 'krem', product_id: null, quantity: 1 },
+        ],
+        final: [{ name: 'Atir', product_id: '9', quantity: 2 }],
+      },
+    });
+    // MAXFIYLIK: to'liq telefon raqami YO'Q.
+    const json = JSON.stringify(corrections);
+    expect(json).not.toContain('998911112233');
+    expect(json).not.toContain('998901234567');
+  });
+
+  it('hech narsa o‘zgarmasa — bo‘sh obyekt', () => {
+    expect(computeFieldCorrections(snap, confirmedFrom(), [])).toEqual({});
   });
 });
 

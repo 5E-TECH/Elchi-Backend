@@ -2892,12 +2892,12 @@
                   },
                   "images": {
                     "type": "array",
-                    "maxItems": 3,
+                    "maxItems": 20,
                     "items": {
                       "type": "string",
                       "format": "binary"
                     },
-                    "description": "JPEG yoki PNG, har biri 2 MB gacha, ko‘pi bilan 3 ta."
+                    "description": "JPEG, PNG yoki WebP; har biri 1,5 MB gacha, jami 20 MB gacha, ko'pi bilan 20 ta (21-rasm — 400). Server rasmni 1568 px gacha kichraytiradi va EXIF'ni olib tashlaydi."
                   }
                 }
               }

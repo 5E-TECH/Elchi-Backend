@@ -1,0 +1,42 @@
+{
+  "id": "multi-shared-operator",
+  "category": [
+    "multi_order"
+  ],
+  "source": "synthetic",
+  "input": {
+    "text": "Kamol 94 000 77 88 Qashqadaryo Qarshi, choynak 1 ta 90 ming\nLola 95 000 88 99 Qashqadaryo Qarshi, piyola 6 ta 60 ming\nMutaxassis: #dilnoza"
+  },
+  "expected": {
+    "orders": [
+      {
+        "customer_name": "Kamol",
+        "phone_number": "+998940007788",
+        "region_name": "Qashqadaryo",
+        "district_name": "Qarshi",
+        "items": [
+          {
+            "name": "choynak",
+            "quantity": 1
+          }
+        ],
+        "total_price": 90000,
+        "operator": "dilnoza"
+      },
+      {
+        "customer_name": "Lola",
+        "phone_number": "+998950008899",
+        "region_name": "Qashqadaryo",
+        "district_name": "Qarshi",
+        "items": [
+          {
+            "name": "piyola",
+            "quantity": 6
+          }
+        ],
+        "total_price": 60000,
+        "operator": "dilnoza"
+      }
+    ]
+  }
+}

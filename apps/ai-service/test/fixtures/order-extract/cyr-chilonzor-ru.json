@@ -1,0 +1,27 @@
+{
+  "id": "cyr-chilonzor-ru",
+  "category": [
+    "district_typo_cyrillic"
+  ],
+  "source": "synthetic",
+  "input": {
+    "text": "Анвар 99 000 28 39 Чиланзар 9 квартал, утюг 1 шт 160 тыс"
+  },
+  "expected": {
+    "orders": [
+      {
+        "customer_name": "Анвар",
+        "phone_number": "+998990002839",
+        "region_name": "Toshkent shahri",
+        "district_name": "Chilonzor",
+        "items": [
+          {
+            "name": "утюг",
+            "quantity": 1
+          }
+        ],
+        "total_price": 160000
+      }
+    ]
+  }
+}

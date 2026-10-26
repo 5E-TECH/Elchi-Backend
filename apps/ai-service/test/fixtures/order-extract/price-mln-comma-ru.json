@@ -1,0 +1,28 @@
+{
+  "id": "price-mln-comma-ru",
+  "category": [
+    "price_words",
+    "district_typo_cyrillic"
+  ],
+  "source": "synthetic",
+  "input": {
+    "text": "Олег 91 000 52 63 Ташкент, Юнусабад, телевизор 1 шт 3,2 млн"
+  },
+  "expected": {
+    "orders": [
+      {
+        "customer_name": "Олег",
+        "phone_number": "+998910005263",
+        "region_name": "Toshkent shahri",
+        "district_name": "Yunusobod",
+        "items": [
+          {
+            "name": "телевизор",
+            "quantity": 1
+          }
+        ],
+        "total_price": 3200000
+      }
+    ]
+  }
+}

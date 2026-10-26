@@ -1,0 +1,53 @@
+{
+  "id": "multi-blank-lines-three",
+  "category": [
+    "multi_order"
+  ],
+  "source": "synthetic",
+  "input": {
+    "text": "Ozoda 93 000 21 43 Navoiy Nurota, gilam 1 ta 900 ming\n\nRavshan 94 000 32 54 Jizzax Forish, adyol 2 ta 400 ming\n\nSevara 95 000 43 65 Sirdaryo Guliston, parda 3 ta 270 ming"
+  },
+  "expected": {
+    "orders": [
+      {
+        "customer_name": "Ozoda",
+        "phone_number": "+998930002143",
+        "region_name": "Navoiy",
+        "district_name": "Nurota",
+        "items": [
+          {
+            "name": "gilam",
+            "quantity": 1
+          }
+        ],
+        "total_price": 900000
+      },
+      {
+        "customer_name": "Ravshan",
+        "phone_number": "+998940003254",
+        "region_name": "Jizzax",
+        "district_name": "Forish",
+        "items": [
+          {
+            "name": "adyol",
+            "quantity": 2
+          }
+        ],
+        "total_price": 400000
+      },
+      {
+        "customer_name": "Sevara",
+        "phone_number": "+998950004365",
+        "region_name": "Sirdaryo",
+        "district_name": "Guliston",
+        "items": [
+          {
+            "name": "parda",
+            "quantity": 3
+          }
+        ],
+        "total_price": 270000
+      }
+    ]
+  }
+}

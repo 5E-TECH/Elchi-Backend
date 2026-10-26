@@ -1,4 +1,8 @@
-import type { AiRequester, RawOrderExtraction } from '@app/common';
+import type {
+  AiExtractWarning,
+  AiRequester,
+  RawOrderExtraction,
+} from '@app/common';
 
 /**
  * `order.ai_resolve_preview` shartnomasi (C7/C9): ai-service chiqargan XOM
@@ -9,7 +13,8 @@ import type { AiRequester, RawOrderExtraction } from '@app/common';
  * (yassi: customer_name, region_id, district_id, items[].name ...). Bir tomonda
  * o'zgarsa ikkinchisi ham o'zgarishi SHART, aks holda frontend javobni o'qiy
  * olmaydi. Frontend e'tiborsiz qoldiradigan qo'shimcha kalitlar: index, ready,
- * issues, price_confirmed, is_replacement, items[].unresolved.
+ * issues, price_confirmed, is_replacement, items[].unresolved, warnings
+ * (J3hEDtFN — frontend ko'rsatishi kerak, FRONTEND_CHANGELOG 2026-10-26).
  */
 
 /**
@@ -103,6 +108,11 @@ export interface AiOrderPreview {
    * SOATO darvozasidan o'tgan). Frontend e'tiborsiz qoldirishi mumkin.
    */
   district_source?: 'ai';
+  /**
+   * J3hEDtFN: AI noaniq deb belgilagan maydonlar (`{field, reason}` — faqat
+   * enum; maydon qiymati null qoldirilgan). Bo'sh massiv — ogohlantirish yo'q.
+   */
+  warnings: AiExtractWarning[];
 }
 
 /** `logistics.district.resolve_by_text` so'rovining bitta elementi (C7). */

@@ -1,0 +1,29 @@
+{
+  "id": "call-before-is-comment",
+  "category": [
+    "comment_vs_address"
+  ],
+  "source": "synthetic",
+  "input": {
+    "text": "Mohira 90 000 95 06 Farg'ona Marg'ilon Bog'ishamol ko'chasi 12-uy, kostyum 1 ta 600 ming, kechqurun 6 dan keyin qo'ng'iroq qiling"
+  },
+  "expected": {
+    "orders": [
+      {
+        "customer_name": "Mohira",
+        "phone_number": "+998900009506",
+        "region_name": "Farg'ona",
+        "district_name": "Marg'ilon",
+        "items": [
+          {
+            "name": "kostyum",
+            "quantity": 1
+          }
+        ],
+        "total_price": 600000,
+        "address": "12-uy",
+        "comment": "qo'ng'iroq qiling"
+      }
+    ]
+  }
+}

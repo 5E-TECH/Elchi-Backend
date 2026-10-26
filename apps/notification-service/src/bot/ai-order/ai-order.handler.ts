@@ -18,10 +18,11 @@ export const AI_ORDER_ROLES: readonly string[] = [
   Roles.MARKET,
   Roles.MARKET_OPERATOR,
 ];
-const AI_IMAGE_MIME = ['image/jpeg', 'image/png'];
+/** WHMAIqyo: gateway ai-parse bilan bir xil turlar (JPEG/PNG/WebP). */
+const AI_IMAGE_MIME = ['image/jpeg', 'image/png', 'image/webp'];
 
 export const AI_MEDIA_TEXT =
-  '📷 Rasmni SURAT sifatida yuboring — JPG/PNG, 2MB gacha. HEIC, katta fayl va boshqa formatlar qabul qilinmaydi (AI chaqirilmadi).';
+  '📷 Rasmni SURAT sifatida yuboring — JPG/PNG/WebP, 1,5MB gacha. HEIC, katta fayl va boshqa formatlar qabul qilinmaydi (AI chaqirilmadi).';
 export const AI_HINT_TEXT =
   '📝 Buyurtma yaratish: mijoz ismi, telefoni, manzili, mahsulot va narxini BITTA xabarda yuboring yoki rasm tashlang. Buyruqlar: /status <id>, /balans, /help.';
 export const AI_TEXT_TOO_LONG_TEXT = `✂️ Matn juda uzun (${AI_TEXT_MAX_CHARS} belgigacha) — qismlarga bo‘lib yuboring.`;
@@ -64,7 +65,9 @@ export class AiOrderHandler implements BotMessageHandler {
   }
 
   /**
-   * Rasm: limit (2MB) ostidagi eng katta o'lcham; hujjat — faqat JPG/PNG ≤2MB.
+   * Rasm: limit (AI_IMAGE_MAX_BYTES = 1,5MB) ostidagi eng katta o'lcham;
+   * hujjat — faqat JPG/PNG/WebP ≤1,5MB. Bitta xabarda bitta rasm (albom
+   * yig'ilmaydi) — gateway chegarasi (20) bot uchun ham amal qiladi.
    * HEIC / katta / boshqa format → yo'naltiruvchi matn, AI CHAQIRILMAYDI.
    */
   async handleMedia(ctx: BotContext): Promise<boolean> {

@@ -13,6 +13,7 @@ import {
   IdempotencyService,
   isJunkRawOrder,
   normalizeUzPhone,
+  sanitizeExtractWarnings,
   rmqSend,
   type AiRequester,
   type RawOrderExtraction,
@@ -428,6 +429,8 @@ export class AiPreviewService implements OnModuleInit, OnModuleDestroy {
       ...(districtId && district?.llm_picked === true
         ? { district_source: 'ai' as const }
         : {}),
+      // J3hEDtFN: AI noaniq deb belgilagan maydonlar — faqat enum (oq ro'yxat).
+      warnings: sanitizeExtractWarnings(raw.warnings),
     };
   }
 

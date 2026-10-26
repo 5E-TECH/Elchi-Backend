@@ -1,0 +1,27 @@
+{
+  "id": "qty-sht-ru",
+  "category": [
+    "quantity"
+  ],
+  "source": "synthetic",
+  "input": {
+    "text": "Наргиза 99 000 06 17 Бухара, Каган, полотенце 3 шт 90 тыс"
+  },
+  "expected": {
+    "orders": [
+      {
+        "customer_name": "Наргиза",
+        "phone_number": "+998990000617",
+        "region_name": "Buxoro",
+        "district_name": "Kogon",
+        "items": [
+          {
+            "name": "полотенце",
+            "quantity": 3
+          }
+        ],
+        "total_price": 90000
+      }
+    ]
+  }
+}

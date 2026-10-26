@@ -1,0 +1,27 @@
+{
+  "id": "cyr-kokand-ru",
+  "category": [
+    "district_typo_cyrillic"
+  ],
+  "source": "synthetic",
+  "input": {
+    "text": "Мадина 90 000 39 40 г. Коканд, чайник 2 шт 140 тыс"
+  },
+  "expected": {
+    "orders": [
+      {
+        "customer_name": "Мадина",
+        "phone_number": "+998900003940",
+        "region_name": "Farg'ona",
+        "district_name": "Qo'qon",
+        "items": [
+          {
+            "name": "чайник",
+            "quantity": 2
+          }
+        ],
+        "total_price": 140000
+      }
+    ]
+  }
+}

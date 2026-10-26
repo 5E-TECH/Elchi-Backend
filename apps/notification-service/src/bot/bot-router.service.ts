@@ -214,7 +214,7 @@ export class BotRouterService implements OnModuleDestroy {
     // (z2FRwu2c) isbot rejimida — kuryer isboti sifatida qabul qilinadi.
     if (message.photo || message.document || message.video) {
       if (await this.courier.handleMedia(ctx)) return;
-      // (e7KhaeOO) market/operator rasmi → AI (2MB, JPG/PNG; boshqasi — yo'naltiruv).
+      // (e7KhaeOO) market/operator rasmi → AI (1,5MB, JPG/PNG/WebP; boshqasi — yo'naltiruv).
       if (this.aiOrder && (await this.aiOrder.handleMedia(ctx))) return;
       const media = checkIncomingMedia(message);
       if (!media.ok && media.reply) await ctx.reply(media.reply);

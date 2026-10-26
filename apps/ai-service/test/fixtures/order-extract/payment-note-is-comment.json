@@ -1,0 +1,28 @@
+{
+  "id": "payment-note-is-comment",
+  "category": [
+    "comment_vs_address"
+  ],
+  "source": "synthetic",
+  "input": {
+    "text": "Akmal 94 000 28 39 Buxoro Kogon, dazmol 1 ta 190 ming, to'lov naqd, qadoqni yaxshilab o'rang"
+  },
+  "expected": {
+    "orders": [
+      {
+        "customer_name": "Akmal",
+        "phone_number": "+998940002839",
+        "region_name": "Buxoro",
+        "district_name": "Kogon",
+        "items": [
+          {
+            "name": "dazmol",
+            "quantity": 1
+          }
+        ],
+        "total_price": 190000,
+        "comment": "naqd"
+      }
+    ]
+  }
+}

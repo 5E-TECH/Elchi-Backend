@@ -1,0 +1,34 @@
+{
+  "id": "ambiguous-currency-usd",
+  "category": [
+    "ambiguous",
+    "price_words"
+  ],
+  "source": "synthetic",
+  "input": {
+    "text": "Rahim 94 000 06 17 Surxondaryo Termiz, telefon 1 ta 150$"
+  },
+  "expected": {
+    "orders": [
+      {
+        "customer_name": "Rahim",
+        "phone_number": "+998940000617",
+        "region_name": "Surxondaryo",
+        "district_name": "Termiz",
+        "items": [
+          {
+            "name": "telefon",
+            "quantity": 1
+          }
+        ],
+        "total_price": null,
+        "warnings": [
+          {
+            "field": "total_price",
+            "reason": "ambiguous"
+          }
+        ]
+      }
+    ]
+  }
+}

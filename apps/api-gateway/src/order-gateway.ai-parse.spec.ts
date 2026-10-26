@@ -20,6 +20,10 @@ import { OrderGatewayController } from './order-gateway.controller';
 import { UserThrottlerGuard } from './auth/user-throttler.guard';
 import { ROLES_KEY } from './auth/roles.decorator';
 import type { AiStatusPoller } from './ai/ai-status.poller';
+import {
+  setSharpForTesting,
+  type SharpFactory,
+} from './ai-order/ai-image-resize';
 
 /** Nest route metadata'si metod funksiyasining o'zida saqlanadi. */
 const handlerOf = (name: keyof OrderGatewayController): object =>
@@ -47,6 +51,42 @@ const PNG = Buffer.from([
   0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00,
 ]);
 const PDF = Buffer.from('%PDF-1.7\n1 0 obj\n<<>>\nendobj\n');
+const WEBP = Buffer.from([
+  0x52, 0x49, 0x46, 0x46, 0x24, 0x00, 0x00, 0x00, 0x57, 0x45, 0x42, 0x50,
+]);
+const MB = 1024 * 1024;
+
+/** Soxta sharp: chaqiruvlarni yozadi, `OUT:<format>` baytlarini qaytaradi. */
+const fakeSharp = (opts: { fail?: boolean } = {}) => {
+  const calls: Array<{ op: string; arg?: unknown }> = [];
+  const factory = ((input: Buffer, o?: unknown) => {
+    calls.push({ op: 'input', arg: { bytes: input.length, o } });
+    let format = 'none';
+    const pipe = {
+      rotate: () => (calls.push({ op: 'rotate' }), pipe),
+      resize: (a: unknown) => (calls.push({ op: 'resize', arg: a }), pipe),
+      flatten: (a: unknown) => (calls.push({ op: 'flatten', arg: a }), pipe),
+      jpeg: (a: unknown) => {
+        format = 'jpeg';
+        calls.push({ op: 'jpeg', arg: a });
+        return pipe;
+      },
+      webp: (a: unknown) => {
+        format = 'webp';
+        calls.push({ op: 'webp', arg: a });
+        return pipe;
+      },
+      toBuffer: () =>
+        opts.fail
+          ? Promise.reject(
+              new Error('Input buffer contains unsupported image format'),
+            )
+          : Promise.resolve(Buffer.from(`OUT:${format}`)),
+    };
+    return pipe;
+  }) as unknown as SharpFactory;
+  return { factory, calls };
+};
 
 const image = (buffer: Buffer, mimetype = 'image/jpeg') => ({
   originalname: 'buyurtma.jpg',
@@ -190,12 +230,16 @@ const allSends = (fakes: Fake[]) =>
 
 describe('OrderGatewayController — POST /orders/ai-parse', () => {
   beforeEach(() => {
+    // WHMAIqyo: sukut — sharp "yuklanmagan" (rasm o'zgarishsiz o'tadi);
+    // kichraytirish alohida testlarda soxta sharp bilan.
+    setSharpForTesting(null);
     // Kutilgan WARN'lar (timeout/ai_error) test chiqishini to'ldirmasin;
     // MAXFIYLIK testi o'z spy'i bilan ularning MAZMUNINI tekshiradi.
     jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
   });
 
   afterEach(() => {
+    setSharpForTesting(undefined);
     jest.useRealTimers();
     jest.restoreAllMocks();
   });
@@ -308,31 +352,117 @@ describe('OrderGatewayController — POST /orders/ai-parse', () => {
       expect(fx.ai.send).not.toHaveBeenCalled();
     });
 
-    it('#3 4-rasm → 400; 2 MB dan katta rasm → 400', async () => {
+    it('WHMAIqyo: 21-rasm → aniq 400; 1,5 MB dan katta → 400; jami 20 MB dan katta → 400', async () => {
       const fx = makeController();
       await expect(
         fx.controller.aiParse(
           {},
-          [image(JPEG), image(JPEG), image(JPEG), image(JPEG)],
+          Array.from({ length: 21 }, () => image(JPEG)),
           marketReq(),
         ),
-      ).rejects.toBeInstanceOf(BadRequestException);
+      ).rejects.toThrow("Ko'pi bilan 20 ta rasm yuborish mumkin");
 
-      const big = Buffer.alloc(2 * 1024 * 1024 + 1);
+      const big = Buffer.alloc(1.5 * MB + 1);
       JPEG.copy(big);
       await expect(
         fx.controller.aiParse({}, [image(big)], marketReq()),
-      ).rejects.toThrow('Rasm 2 MB dan katta');
+      ).rejects.toThrow('Rasm 1,5 MB dan katta');
+
+      // Har biri aynan 1,5 MB (ruxsat), 14 tasi = 21 MB > 20 MB.
+      const edge = Buffer.alloc(1.5 * MB);
+      JPEG.copy(edge);
+      await expect(
+        fx.controller.aiParse(
+          {},
+          Array.from({ length: 14 }, () => image(edge)),
+          marketReq(),
+        ),
+      ).rejects.toThrow('Rasmlar jami 20 MB dan oshmasligi kerak');
       expect(fx.ai.send).not.toHaveBeenCalled();
     });
 
-    it('faqat JPEG/PNG: gif/webp/pdf turi → 400', async () => {
+    it('WHMAIqyo: aynan 20 ta rasm (jami ≤ 20 MB) qabul qilinadi', async () => {
       const fx = makeController();
-      for (const mime of ['image/gif', 'image/webp', 'application/pdf']) {
+      fx.ai.send.mockReturnValue(of({ ok: true, orders: [] }));
+      const res = await fx.controller.aiParse(
+        {},
+        Array.from({ length: 20 }, () => image(JPEG)),
+        marketReq(),
+      );
+      expect(res.data.ok).toBe(true);
+      expect(fx.ai.send.mock.calls[0][1].images).toHaveLength(20);
+    });
+
+    it('faqat JPEG/PNG/WebP: gif/pdf turi → 400; WebP (haqiqiy imzo bilan) o‘tadi', async () => {
+      const fx = makeController();
+      for (const mime of ['image/gif', 'application/pdf', 'image/heic']) {
         await expect(
           fx.controller.aiParse({}, [image(JPEG, mime)], marketReq()),
-        ).rejects.toThrow('Faqat JPEG yoki PNG rasm');
+        ).rejects.toThrow('Faqat JPEG, PNG yoki WebP rasm');
       }
+      // WebP deb e'lon qilingan JPEG — imzo mos emas.
+      await expect(
+        fx.controller.aiParse({}, [image(JPEG, 'image/webp')], marketReq()),
+      ).rejects.toThrow('Rasm fayli buzilgan yoki turi mos emas');
+      expect(fx.ai.send).not.toHaveBeenCalled();
+
+      fx.ai.send.mockReturnValue(of({ ok: true, orders: [] }));
+      await fx.controller.aiParse({}, [image(WEBP, 'image/webp')], marketReq());
+      expect(fx.ai.send.mock.calls[0][1].images).toEqual([
+        { media_type: 'image/webp', data_base64: WEBP.toString('base64') },
+      ]);
+    });
+
+    it('WHMAIqyo: serverda kichraytirish — 1568 px, q80, EXIF (rotate), PNG→JPEG, WebP→WebP', async () => {
+      const sharp = fakeSharp();
+      setSharpForTesting(sharp.factory);
+      const fx = makeController();
+      fx.ai.send.mockReturnValue(of({ ok: true, orders: [] }));
+      await fx.controller.aiParse(
+        {},
+        [image(JPEG), image(PNG, 'image/png'), image(WEBP, 'image/webp')],
+        marketReq(),
+      );
+      expect(fx.ai.send.mock.calls[0][1].images).toEqual([
+        {
+          media_type: 'image/jpeg',
+          data_base64: Buffer.from('OUT:jpeg').toString('base64'),
+        },
+        {
+          media_type: 'image/jpeg',
+          data_base64: Buffer.from('OUT:jpeg').toString('base64'),
+        },
+        {
+          media_type: 'image/webp',
+          data_base64: Buffer.from('OUT:webp').toString('base64'),
+        },
+      ]);
+      const resizes = sharp.calls.filter((c) => c.op === 'resize');
+      expect(resizes).toHaveLength(3);
+      expect(resizes[0].arg).toEqual({
+        width: 1568,
+        height: 1568,
+        fit: 'inside',
+        withoutEnlargement: true,
+      });
+      expect(sharp.calls.filter((c) => c.op === 'rotate')).toHaveLength(3);
+      expect(sharp.calls.find((c) => c.op === 'jpeg')?.arg).toMatchObject({
+        quality: 80,
+      });
+      expect(sharp.calls.find((c) => c.op === 'webp')?.arg).toEqual({
+        quality: 80,
+      });
+      expect(sharp.calls.find((c) => c.op === 'flatten')?.arg).toEqual({
+        background: '#ffffff',
+      });
+    });
+
+    it('WHMAIqyo: rasm dekodlanmasa → 400, Claude chaqirilmaydi', async () => {
+      setSharpForTesting(fakeSharp({ fail: true }).factory);
+      const fx = makeController();
+      await expect(
+        fx.controller.aiParse({}, [image(JPEG)], marketReq()),
+      ).rejects.toThrow("Rasm fayli buzilgan yoki o'qib bo'lmadi");
       expect(fx.ai.send).not.toHaveBeenCalled();
     });
 
@@ -454,6 +584,12 @@ describe('OrderGatewayController — POST /orders/ai-parse', () => {
       expect(attachPayload).toMatchObject({
         draft_id: res.data.draft_id,
         market_id: '77',
+        // WHMAIqyo #5: bosqich vaqtlari (ms).
+        timings: {
+          extract_ms: anyNumber(),
+          preview_ms: anyNumber(),
+          total_ms: anyNumber(),
+        },
         previews: [
           expect.objectContaining({
             index: 0,
@@ -529,6 +665,67 @@ describe('OrderGatewayController — POST /orders/ai-parse', () => {
         .flatMap((fake) => fake.send.mock.calls)
         .map(([pattern]) => pattern.cmd);
       expect(everyPattern).not.toContain('file.upload');
+    });
+  });
+
+  describe('WHMAIqyo #3 — rasm vaqtinchalik saqlovga, RMQ’da faqat kalit', () => {
+    const withStore = (store: unknown) => {
+      const fx = makeController();
+      const controller = new OrderGatewayController(
+        asClient(fx.order),
+        asClient(fx.identity),
+        asClient(fx.logistics),
+        asClient(fx.branch),
+        asClient(fx.file),
+        asClient(fx.ai),
+        asClient(fx.catalog),
+        fx.config as unknown as ConfigService,
+        fx.poller as unknown as AiStatusPoller,
+        undefined,
+        store as never,
+      );
+      return { ...fx, controller };
+    };
+
+    it('saqlov bor → payload’da image_refs, base64 YO‘Q', async () => {
+      const refs = [{ key: 'ai-tmp/x/0.jpg', media_type: 'image/jpeg' }];
+      const store = { putAll: jest.fn().mockResolvedValue(refs) };
+      const fx = withStore(store);
+      fx.ai.send.mockReturnValue(of({ ok: true, orders: [] }));
+      await fx.controller.aiParse({}, [image(JPEG)], marketReq());
+      const payload = fx.ai.send.mock.calls[0][1] as Record<string, unknown>;
+      expect(payload.image_refs).toEqual(refs);
+      expect(payload.images).toEqual([]);
+      expect(JSON.stringify(payload)).not.toContain(JPEG.toString('base64'));
+      const [draftId, imgs] = store.putAll.mock.calls[0] as [
+        string,
+        { mediaType: string; buffer: Buffer }[],
+      ];
+      expect(draftId).toBe(payload.draft_id);
+      expect(imgs.map((i) => i.mediaType)).toEqual(['image/jpeg']);
+    });
+
+    it('saqlov yiqilsa — base64 yo‘liga qaytadi (parse to‘xtamaydi)', async () => {
+      const store = {
+        putAll: jest.fn().mockRejectedValue(new Error('minio down')),
+      };
+      const fx = withStore(store);
+      fx.ai.send.mockReturnValue(of({ ok: true, orders: [] }));
+      const res = await fx.controller.aiParse({}, [image(JPEG)], marketReq());
+      expect(res.data.ok).toBe(true);
+      const payload = fx.ai.send.mock.calls[0][1] as Record<string, unknown>;
+      expect(payload).not.toHaveProperty('image_refs');
+      expect(payload.images).toEqual([
+        { media_type: 'image/jpeg', data_base64: JPEG.toString('base64') },
+      ]);
+    });
+
+    it('rasmsiz so‘rovda saqlov chaqirilmaydi', async () => {
+      const store = { putAll: jest.fn() };
+      const fx = withStore(store);
+      fx.ai.send.mockReturnValue(of({ ok: true, orders: [] }));
+      await fx.controller.aiParse({ text: SECRET_TEXT }, [], marketReq());
+      expect(store.putAll).not.toHaveBeenCalled();
     });
   });
 

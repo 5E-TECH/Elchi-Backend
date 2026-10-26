@@ -1,0 +1,35 @@
+{
+  "id": "phone-incomplete",
+  "category": [
+    "phone_format",
+    "ambiguous"
+  ],
+  "source": "synthetic",
+  "note": "7 raqam — to'liq emas: telefon null + warnings (to'ldirilmaydi)",
+  "input": {
+    "text": "Anvar 90 000 12, Namangan Chust, kurtka 1 ta 350 ming"
+  },
+  "expected": {
+    "orders": [
+      {
+        "customer_name": "Anvar",
+        "phone_number": null,
+        "region_name": "Namangan",
+        "district_name": "Chust",
+        "items": [
+          {
+            "name": "kurtka",
+            "quantity": 1
+          }
+        ],
+        "total_price": 350000,
+        "warnings": [
+          {
+            "field": "phone_number",
+            "reason": "unclear"
+          }
+        ]
+      }
+    ]
+  }
+}

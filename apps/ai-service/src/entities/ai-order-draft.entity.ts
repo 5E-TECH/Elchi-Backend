@@ -88,6 +88,20 @@ export class AiOrderDraft {
   @Column({ type: 'int', default: 0 })
   preview_count!: number;
 
+  /**
+   * WHMAIqyo #5: ai-parse bosqichlari (ms, gateway o'lchagan): extract =
+   * `ai.order.extract` RPC, preview = `order.ai_resolve_preview`, total =
+   * butun handler. Ustundan oldingi qatorlarda NULL.
+   */
+  @Column({ type: 'int', nullable: true })
+  extract_ms!: number | null;
+
+  @Column({ type: 'int', nullable: true })
+  preview_ms!: number | null;
+
+  @Column({ type: 'int', nullable: true })
+  total_ms!: number | null;
+
   @Column({ type: 'timestamptz', nullable: true })
   text_purged_at!: Date | null;
 
@@ -135,6 +149,14 @@ export class AiOrderDraftItem {
    */
   @Column({ type: 'jsonb', nullable: true })
   edited_fields!: string[] | null;
+
+  /**
+   * J3hEDtFN #4 — operator tuzatishlari: `{ [maydon]: {ai, final} }` (faqat
+   * o'zgarganlar; telefon maskalangan). Eval to'plami manbai. Ism/manzil bor
+   * → `AI_DRAFT_TEXT_RETENTION_DAYS` tugagach NULL.
+   */
+  @Column({ type: 'jsonb', nullable: true })
+  field_corrections!: Record<string, unknown> | null;
 
   /**
    * NFiXfmq6 — shu buyurtma uchun AMAL QILGAN narx (so'm): market

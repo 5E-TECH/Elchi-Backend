@@ -1,5 +1,9 @@
 import {
+  AI_EXTRACT_IMAGES_PER_CHUNK,
   AI_IMAGE_MAX_BYTES,
+  AI_IMAGE_MAX_EDGE_PX,
+  AI_IMAGE_REENCODE_QUALITY,
+  AI_IMAGES_TOTAL_MAX_BYTES,
   AI_MAX_IMAGES,
   AI_MAX_ITEMS_PER_ORDER,
   AI_MAX_ORDERS_PER_PARSE,
@@ -8,6 +12,7 @@ import {
   AI_TEXT_MAX_CHARS,
   type RawOrderExtraction,
   isJunkRawOrder,
+  sanitizeExtractWarnings,
 } from './order-extract.contract';
 
 type JunkInput = Pick<
@@ -113,6 +118,7 @@ describe('isJunkRawOrder (yxwpN5h5 #10 — axlat filtri)', () => {
       where_deliver: null,
       is_replacement: false,
       operator: null,
+      warnings: [],
     };
     expect(isJunkRawOrder(order)).toBe(false);
   });
@@ -121,11 +127,40 @@ describe('isJunkRawOrder (yxwpN5h5 #10 — axlat filtri)', () => {
 describe('ekstraksiya chegaralari (C2)', () => {
   it('qiymatlar kontraktga mos', () => {
     expect(AI_TEXT_MAX_CHARS).toBe(4000);
-    expect(AI_MAX_IMAGES).toBe(3);
-    expect(AI_IMAGE_MAX_BYTES).toBe(2 * 1024 * 1024);
+    // WHMAIqyo: 20 tagacha rasm, har biri 1,5 MB, jami 20 MB, 1568 px.
+    expect(AI_MAX_IMAGES).toBe(20);
+    expect(AI_IMAGE_MAX_BYTES).toBe(1.5 * 1024 * 1024);
+    expect(AI_IMAGES_TOTAL_MAX_BYTES).toBe(20 * 1024 * 1024);
+    expect(AI_IMAGE_MAX_EDGE_PX).toBe(1568);
+    expect(AI_IMAGE_REENCODE_QUALITY).toBe(80);
+    expect(AI_EXTRACT_IMAGES_PER_CHUNK).toBe(5);
     expect(AI_MAX_ORDERS_PER_PARSE).toBe(30);
     expect(AI_MAX_ITEMS_PER_ORDER).toBe(50);
     expect(AI_MAX_QUANTITY).toBe(1000);
     expect(AI_PRICE_CONFIRM_THRESHOLD).toBe(10_000);
+  });
+});
+
+describe('J3hEDtFN — sanitizeExtractWarnings (ai-service va order-service umumiy)', () => {
+  it('faqat ma‘lum maydon + sabab, har maydonga bitta, sxema tartibida', () => {
+    expect(
+      sanitizeExtractWarnings([
+        { field: 'total_price', reason: 'ambiguous' },
+        { field: 'customer_name', reason: 'unclear' },
+        { field: 'total_price', reason: 'conflict' },
+        { field: 'district_id', reason: 'unclear' },
+        { field: 'comment', reason: 'free text' },
+        'x',
+        null,
+      ]),
+    ).toEqual([
+      { field: 'customer_name', reason: 'unclear' },
+      { field: 'total_price', reason: 'ambiguous' },
+    ]);
+  });
+
+  it('massiv bo‘lmasa — []', () => {
+    expect(sanitizeExtractWarnings(undefined)).toEqual([]);
+    expect(sanitizeExtractWarnings({ field: 'comment' })).toEqual([]);
   });
 });

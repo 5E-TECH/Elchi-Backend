@@ -84,6 +84,14 @@ jobs:
         env:
           NODE_ENV: test
 
+      # J3hEDtFN: AI buyurtma ekstraksiyasi eval'i — yozib olingan javoblar
+      # bilan (replay), ANTHROPIC_API_KEY KERAK EMAS, tarmoqqa chiqmaydi.
+      # Telefon / narx / tuman aniqligi ≥95% va baseline'dan past emas.
+      - name: AI eval (replay, kalitsiz)
+        run: npm run ai:eval -- --ci
+        env:
+          NODE_ENV: test
+
       # Elchi Partner API (marketplace integration: auth guard, partner CRUD,
       # key rotation, market provisioning, geo passthrough) — must always pass.
       - name: Partner API tests (must pass)

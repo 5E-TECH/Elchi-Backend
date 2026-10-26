@@ -362,7 +362,7 @@ describe('e7KhaeOO — matn → AI preview (mavjud endpoint, operator JWT)', () 
 
   it.each([
     [
-      '2MB dan katta rasm (barcha o‘lchamlar)',
+      '1,5MB dan katta rasm (barcha o‘lchamlar)',
       { photo: [{ file_id: 'big', file_size: 3_000_000 }] },
     ],
     [
@@ -372,13 +372,14 @@ describe('e7KhaeOO — matn → AI preview (mavjud endpoint, operator JWT)', () 
       },
     ],
     [
-      'webp hujjat',
+      // WHMAIqyo: WebP endi qabul qilinadi (gateway bilan bir xil) — GIF yo'q.
+      'gif hujjat',
       {
-        document: { file_id: 'w', mime_type: 'image/webp', file_size: 100_000 },
+        document: { file_id: 'g', mime_type: 'image/gif', file_size: 100_000 },
       },
     ],
     [
-      '2MB dan katta PNG hujjat',
+      '1,5MB dan katta PNG hujjat',
       {
         document: {
           file_id: 'p',

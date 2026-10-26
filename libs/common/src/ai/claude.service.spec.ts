@@ -741,7 +741,10 @@ describe('ClaudeService', () => {
         inputChars: userText.length,
         inputSha256: sha256(userText),
         imageCount: 0,
+        // WHMAIqyo #5: chaqiruv davomiyligi (ms) — soxta mijozda ~0.
+        latencyMs: expect.any(Number),
       });
+      expect(usage.record.mock.calls[0][0].latencyMs).toBeGreaterThanOrEqual(0);
     });
 
     it('retry → har javob alohida yozuv (steps 1 va 2), rasm soni yoziladi', async () => {

@@ -486,6 +486,10 @@ export class AiUsageService implements ClaudeUsageSink {
           ? r.inputSha256.toLowerCase()
           : null,
       image_count: safeTokenCount(r.imageCount),
+      latency_ms:
+        typeof r.latencyMs === 'number' && Number.isFinite(r.latencyMs)
+          ? Math.max(0, Math.round(r.latencyMs))
+          : null,
     };
   }
 

@@ -14,6 +14,8 @@ import {
   type AiDraftLinkItem,
   type AiDraftPreviewSnapshot,
   type AiDraftTrace,
+  type AiFieldCorrections,
+  type AiParseTimings,
 } from '@app/common';
 import {
   AiOrderDraft,
@@ -35,6 +37,19 @@ export const AI_DRAFT_TEXT_RETENTION_DAYS = 30;
 /** Retention tozalash davri — 6 soat (va servis ishga tushganda bir marta). */
 export const AI_DRAFT_PURGE_INTERVAL_MS = 6 * 3_600_000;
 
+/**
+ * WHMAIqyo #1: `recordExtraction` endi FIRE-AND-FORGET — gateway'ning
+ * `attach_preview` UPDATE'i qator INSERT'idan oldin kelib qolishi mumkin.
+ * Shunda UPDATE fonda shu kechikishlar bilan qayta uriladi (jami ~4 s).
+ */
+export const AI_DRAFT_ATTACH_RETRY_DELAYS_MS: readonly number[] = [
+  250, 1_000, 3_000,
+];
+/** Bosqich davomiyligining yuqori chegarasi (ms) — axlat qiymat yozilmasin. */
+const MAX_STAGE_MS = 10 * 60_000;
+/** field_corrections JSON'ining maksimal hajmi (belgi). */
+const MAX_CORRECTIONS_CHARS = 20_000;
+
 /** Bitta draft'dagi maksimal snapshot (AI_MAX_ORDERS_PER_PARSE bilan bir xil). */
 const MAX_PREVIEWS = 30;
 const MAX_LINK_ITEMS = 30;
@@ -44,6 +59,17 @@ const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const SHA_RE = /^[0-9a-f]{64}$/;
 const AUDITED = new Set<string>(AI_AUDITED_FIELDS);
+
+/**
+ * J3hEDtFN #4: operator tuzatishlarida (field_corrections) ism/manzil qiymati
+ * bor — draft matni bilan BIR XIL retention (30 kun) tugagach NULL.
+ */
+export const AI_DRAFT_ITEM_PURGE_SQL = `
+  UPDATE ai_schema.ai_order_draft_item
+  SET field_corrections = NULL
+  WHERE field_corrections IS NOT NULL
+    AND created_at < now() - ($1::int * interval '1 day')
+`;
 
 /** Retention UPDATE — `source_hash` ga TEGMAYDI (TC12). */
 export const AI_DRAFT_PURGE_SQL = `
@@ -78,9 +104,9 @@ export const AI_DRAFT_COST_SQL = `
 export const AI_DRAFT_LINK_ITEM_SQL = `
   INSERT INTO ai_schema.ai_order_draft_item
     (draft_id, item_index, order_id, market_id, confirmed_by, edited_fields,
-     applied_price_uzs)
+     applied_price_uzs, field_corrections)
   SELECT $1::uuid, $2::int, $3::bigint, $4::bigint, $5::bigint, $6::jsonb,
-         $7::numeric
+         $7::numeric, $8::jsonb
   WHERE EXISTS (
     SELECT 1 FROM ai_schema.ai_order_draft d
     WHERE d.id = $1::uuid AND d.market_id = $4::bigint
@@ -198,6 +224,45 @@ function sanitizeEditedFields(value: unknown): AiAuditedField[] | null {
   return AI_AUDITED_FIELDS.filter((f) => fields.includes(f));
 }
 
+/**
+ * J3hEDtFN #4: gateway hisoblagan tuzatishlar — faqat AUDITED kalitlar,
+ * har biri `{ai, final}`; JSON hajmi cheklangan (oshsa — null).
+ */
+export function sanitizeFieldCorrections(
+  value: unknown,
+): AiFieldCorrections | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const v = value as Row;
+  const out: AiFieldCorrections = {};
+  for (const field of AI_AUDITED_FIELDS) {
+    const entry = v[field];
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) continue;
+    const e = entry as Row;
+    out[field] = { ai: e.ai ?? null, final: e.final ?? null };
+  }
+  if (Object.keys(out).length === 0) return null;
+  return JSON.stringify(out).length > MAX_CORRECTIONS_CHARS ? null : out;
+}
+
+/** Bosqich davomiyligi (ms) — butun, 0..10 daqiqa; aks holda null. */
+function stageMs(value: unknown): number | null {
+  const n = Number(value);
+  if (value === null || value === undefined || !Number.isFinite(n)) {
+    return null;
+  }
+  return n >= 0 && n <= MAX_STAGE_MS ? Math.round(n) : null;
+}
+
+function timingsOf(value: unknown): Partial<AiOrderDraft> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  const t = value as Partial<Record<keyof AiParseTimings, unknown>>;
+  return {
+    extract_ms: stageMs(t.extract_ms),
+    preview_ms: stageMs(t.preview_ms),
+    total_ms: stageMs(t.total_ms),
+  };
+}
+
 function snapshotsOf(value: unknown): AiDraftPreviewSnapshot[] | null {
   if (!Array.isArray(value)) return null;
   return value
@@ -243,8 +308,8 @@ export class AiDraftService implements OnModuleInit, OnModuleDestroy {
 
   /**
    * ai.order.extract natijasi. Promise HECH QACHON reject bo'lmaydi (xato
-   * faqat WARN). Chaqiruvchi uni kutadi (bir necha ms) — gateway'ning
-   * `ai.draft.attach_preview` UPDATE'i qator yozilishidan OLDIN kelib qolmasin.
+   * faqat WARN). WHMAIqyo #1: chaqiruvchi uni KUTMAYDI (javob tezroq) —
+   * `attachPreview` qator hali yo'q bo'lsa fonda qayta urinadi.
    */
   async recordExtraction(input: RecordExtractionInput): Promise<void> {
     try {
@@ -282,23 +347,68 @@ export class AiDraftService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  /** `ai.draft.attach_preview` — AI taklifining snapshot'i (faqat o'z marketi). */
+  /**
+   * `ai.draft.attach_preview` — AI taklifining snapshot'i (faqat o'z marketi)
+   * va WHMAIqyo #5 bosqich davomiyliklari (`timings`). Qator hali yozilmagan
+   * bo'lsa (recordExtraction fire-and-forget) — fonda qayta uriladi
+   * (`AI_DRAFT_ATTACH_RETRY_DELAYS_MS`), javob kutmaydi (`pending: true`).
+   */
   async attachPreview(
     draftId: unknown,
     marketId: unknown,
     previews: unknown,
-  ): Promise<{ updated: number }> {
+    timings?: unknown,
+  ): Promise<{ updated: number; pending?: boolean }> {
     const id = typeof draftId === 'string' ? draftId.trim() : '';
     const market = idOrNull(marketId);
     const list = Array.isArray(previews)
       ? (snapshotsOf(previews.slice(0, MAX_PREVIEWS)) ?? [])
       : [];
     if (!UUID_RE.test(id) || !market) return { updated: 0 };
-    const result = await this.drafts.update(
-      { id, market_id: market },
-      { resolved_preview: list, preview_count: list.length },
-    );
-    return { updated: result.affected ?? 0 };
+    const patch: Partial<AiOrderDraft> = {
+      resolved_preview: list,
+      preview_count: list.length,
+      ...timingsOf(timings),
+    };
+    const updated = await this.updateDraft(id, market, patch);
+    if (updated > 0) return { updated };
+    void this.retryAttach(id, market, patch);
+    return { updated: 0, pending: true };
+  }
+
+  private async updateDraft(
+    id: string,
+    market: string,
+    patch: Partial<AiOrderDraft>,
+  ): Promise<number> {
+    const result = await this.drafts.update({ id, market_id: market }, patch);
+    return result.affected ?? 0;
+  }
+
+  /** Fonda qayta urinish — HECH QACHON reject qilmaydi. */
+  private async retryAttach(
+    id: string,
+    market: string,
+    patch: Partial<AiOrderDraft>,
+  ): Promise<void> {
+    for (const delay of AI_DRAFT_ATTACH_RETRY_DELAYS_MS) {
+      await this.sleep(delay);
+      try {
+        if ((await this.updateDraft(id, market, patch)) > 0) return;
+      } catch (err) {
+        this.logger.warn(`ai_draft_attach_retry_failed: ${describeError(err)}`);
+        return;
+      }
+    }
+    this.logger.warn(`ai_draft_attach_no_row draft=${id}`);
+  }
+
+  /** Testda almashtiriladi (soxta taymer). */
+  protected sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => {
+      const t = setTimeout(resolve, ms);
+      t.unref?.();
+    });
   }
 
   /**
@@ -375,6 +485,7 @@ export class AiDraftService implements OnModuleInit, OnModuleDestroy {
       if (!orderId) continue;
       const idx = Number(item.item_index);
       const edited = sanitizeEditedFields(item.edited_fields);
+      const corrections = sanitizeFieldCorrections(item.field_corrections);
       const result: unknown = await this.items.query(AI_DRAFT_LINK_ITEM_SQL, [
         id,
         Number.isInteger(idx) && idx >= 0 ? idx : null,
@@ -383,6 +494,7 @@ export class AiDraftService implements OnModuleInit, OnModuleDestroy {
         idOrNull(confirmedBy),
         edited === null ? null : JSON.stringify(edited),
         price,
+        corrections === null ? null : JSON.stringify(corrections),
       ]);
       // INSERT … RETURNING — TypeORM faqat qatorlarni qaytaradi.
       linked += Array.isArray(result) ? result.length : 0;
@@ -446,6 +558,10 @@ export class AiDraftService implements OnModuleInit, OnModuleDestroy {
         AI_DRAFT_TEXT_RETENTION_DAYS,
       ]);
       const n = affectedOf(result);
+      // J3hEDtFN #4: tuzatishlardagi ism/manzil ham shu muddatda o'chadi.
+      await this.items.query(AI_DRAFT_ITEM_PURGE_SQL, [
+        AI_DRAFT_TEXT_RETENTION_DAYS,
+      ]);
       if (n > 0) this.logger.log(`ai_draft_text_purged count=${n}`);
       return n;
     } catch (err) {

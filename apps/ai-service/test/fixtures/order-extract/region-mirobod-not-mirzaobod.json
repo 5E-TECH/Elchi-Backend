@@ -1,0 +1,27 @@
+{
+  "id": "region-mirobod-not-mirzaobod",
+  "category": [
+    "region_explicit"
+  ],
+  "source": "synthetic",
+  "input": {
+    "text": "Feruza 97 000 40 51 Toshkent shahri Mirobod, ko'rpa 2 ta 500 ming"
+  },
+  "expected": {
+    "orders": [
+      {
+        "customer_name": "Feruza",
+        "phone_number": "+998970004051",
+        "region_name": "Toshkent shahri",
+        "district_name": "Mirobod",
+        "items": [
+          {
+            "name": "ko'rpa",
+            "quantity": 2
+          }
+        ],
+        "total_price": 500000
+      }
+    ]
+  }
+}

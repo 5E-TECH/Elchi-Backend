@@ -1,0 +1,27 @@
+{
+  "id": "phone-plus998-spaces",
+  "category": [
+    "phone_format"
+  ],
+  "source": "synthetic",
+  "input": {
+    "text": "Shahnoza +998 90 000 12 34 Andijon Asaka, atir 2 ta 300 ming"
+  },
+  "expected": {
+    "orders": [
+      {
+        "customer_name": "Shahnoza",
+        "phone_number": "+998900001234",
+        "region_name": "Andijon",
+        "district_name": "Asaka",
+        "items": [
+          {
+            "name": "atir",
+            "quantity": 2
+          }
+        ],
+        "total_price": 300000
+      }
+    ]
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "id": "qty-word-ikkita",
+  "category": [
+    "quantity"
+  ],
+  "source": "synthetic",
+  "input": {
+    "text": "Sanjar 98 000 95 06 Xorazm Urganch, ikkita ryukzak 320 ming"
+  },
+  "expected": {
+    "orders": [
+      {
+        "customer_name": "Sanjar",
+        "phone_number": "+998980009506",
+        "region_name": "Xorazm",
+        "district_name": "Urganch",
+        "items": [
+          {
+            "name": "ryukzak",
+            "quantity": 2
+          }
+        ],
+        "total_price": 320000
+      }
+    ]
+  }
+}
