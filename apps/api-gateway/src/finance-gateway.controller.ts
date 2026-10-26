@@ -284,6 +284,11 @@ export class FinanceGatewayController {
     // tekshiruvi (ai-service). Ixtiyoriy: eski spec'lar usiz quradi.
     @Optional() @Inject('FILE') private readonly fileClient?: ClientProxy,
     @Optional() @Inject('AI') private readonly aiClient?: ClientProxy,
+    // (gWI4gYkw) Smena hisoboti yetkazish holati — FAQAT o'qish
+    // (`notification.delivery.by_dispatch`). Ixtiyoriy: eski spec'lar usiz.
+    @Optional()
+    @Inject('NOTIFICATION')
+    private readonly notificationClient?: ClientProxy,
   ) {}
 
   private readonly shiftCheckLogger = new Logger('FinanceShiftCheck');
@@ -3873,7 +3878,7 @@ export class FinanceGatewayController {
   @ApiOperation({
     summary: "(kiZgTybn) Smena hisoboti: naqd + kartalar bo'yicha natijalar",
     description:
-      "`data.cash` / `data.card` — ochilish, kirim, chiqim, kutilgan, sanalgan, farq; `data.accounts[]` — har karta: kutilgan (snapshot), kiritilgan, farq, `ai_status` (not_required | pending | match | mismatch | unreadable | disabled | error), `ai_entered_ok`, `ai_read_balance`, `ai_last4_detected`, `comment`, `comment_required`, `photo_url` (imzolangan, 300 s); `ai_raw` — faqat superadmin. `data.accounts_summary` — holatlar soni; `data.operations[]` — smena oynasidagi kassa operatsiyalari (tur × to'lov usuli: soni, summa). Menejer — faqat o'z filiali, registrator — asosiy kassa (boshqasi 404).",
+      "(y8Tqm9Ap / gWI4gYkw) `data.close_reason` (manual | auto | null — ochiq), `data.closed_by_system`, `data.auto_close` (`{ closed_at, label: 'Avtomatik yopildi — HH:MM, kassir yopmagan' }` yoki null — sariq banner), `data.report` (`status`: pending | processing | sent | skipped | failed, `round`, `file_format`, `has_file`, `file_url` — faqat superadmin, 300 s), `data.deliveries[]` — «Hisobot kimlarga yuborildi» (faqat superadmin; boshqalarga bo'sh). `data.cash` / `data.card` — ochilish, kirim, chiqim, kutilgan, sanalgan, farq; `data.accounts[]` — har karta: kutilgan (snapshot), kiritilgan, farq, `ai_status` (not_required | pending | match | mismatch | unreadable | disabled | error), `ai_entered_ok`, `ai_read_balance`, `ai_last4_detected`, `comment`, `comment_required`, `photo_url` (imzolangan, 300 s); `ai_raw` — faqat superadmin. `data.accounts_summary` — holatlar soni; `data.operations[]` — smena oynasidagi kassa operatsiyalari (tur × to'lov usuli: soni, summa). Menejer — faqat o'z filiali, registrator — asosiy kassa (boshqasi 404).",
   })
   async shiftReport(@Req() req: { user: JwtUser }, @Param('id') id: string) {
     if (!/^\d+$/.test(String(id ?? ''))) {
@@ -3894,7 +3899,121 @@ export class FinanceGatewayController {
     const accounts = await Promise.all(
       data.accounts.map((row) => this.withPhotoUrl(row, isSuperadmin)),
     );
-    return { ...response, data: { ...data, accounts } };
+    // (gWI4gYkw) «Hisobot kimlarga yuborildi» va hisobot fayli — faqat
+    // superadmin (kuryer / market ro'yxati boshqa rollarga chiqmaydi).
+    const { deliveries, report, ...rest } = data as Record<string, unknown> & {
+      deliveries?: unknown;
+      report?: { file_key?: unknown } & Record<string, unknown>;
+    };
+    const { file_key: fileKey, ...reportRest } =
+      report ?? ({} as Record<string, unknown>);
+    return {
+      ...response,
+      data: {
+        ...rest,
+        accounts,
+        report: report
+          ? {
+              ...reportRest,
+              has_file: Boolean(fileKey),
+              file_url: isSuperadmin
+                ? await this.signedPhotoUrl(fileKey)
+                : null,
+              file_url_expires_in:
+                isSuperadmin && fileKey ? SHIFT_PHOTO_URL_TTL_SECONDS : null,
+            }
+          : null,
+        deliveries:
+          isSuperadmin && Array.isArray(deliveries)
+            ? (
+                await this.syncShiftReportDeliveries(
+                  String(id),
+                  deliveries as Array<Record<string, unknown>>,
+                )
+              ).map((row) => {
+                const copy = { ...row };
+                delete copy.dispatch_id;
+                return copy;
+              })
+            : [],
+      },
+    };
+  }
+
+  /**
+   * (gWI4gYkw) `queued` yetkazishlar — notification-service'dagi haqiqiy holat
+   * (`delivery.telegram` sent / failed / «Telegram ulanmagan») o'qiladi va
+   * finance'ga saqlash uchun beriladi. Fail-open: xato / javob yo'q — finance
+   * ro'yxati o'zgarmasdan qaytadi (3 s chegara).
+   */
+  private async syncShiftReportDeliveries(
+    shiftId: string,
+    deliveries: Array<Record<string, unknown>>,
+  ): Promise<Array<Record<string, unknown>>> {
+    const dispatchIds = [
+      ...new Set(
+        deliveries
+          .filter((row) => row.status === 'queued' && row.dispatch_id)
+          .map((row) => String(row.dispatch_id)),
+      ),
+    ].slice(0, 500);
+    if (!dispatchIds.length || !this.notificationClient) return deliveries;
+    try {
+      const lookup = await firstValueFrom(
+        this.notificationClient
+          .send(
+            { cmd: 'notification.delivery.by_dispatch' },
+            { dispatch_ids: dispatchIds },
+          )
+          .pipe(timeout(3000)),
+      );
+      const found = (lookup as { data?: unknown } | null)?.data;
+      if (!Array.isArray(found) || !found.length) return deliveries;
+      const synced = await this.send<{
+        data?: { deliveries?: Array<Record<string, unknown>> };
+      }>(
+        { cmd: 'finance.shift.report.deliveries.sync' },
+        { shift_id: shiftId, found },
+        5000,
+      );
+      return Array.isArray(synced?.data?.deliveries)
+        ? synced.data.deliveries
+        : deliveries;
+    } catch (error) {
+      this.shiftCheckLogger.warn(
+        `smena #${shiftId} hisobot holati sinxronlanmadi: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+      return deliveries;
+    }
+  }
+
+  @Post('shift/:id/report/resend')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN)
+  @ApiBearerAuth()
+  @ApiParam({ name: 'id', description: 'Smena ID si (yopilgan)' })
+  @ApiOperation({
+    summary: '(gWI4gYkw) Smena hisobotini qayta yuborish — FAQAT superadmin',
+    description:
+      "Yangi raund: superadmin(lar)ga to'liq hisobot (+ PDF/XLSX), kuryerlarga faqat o'z topshiruvlari, marketlarga faqat o'z to'lovlari (sozlamadagi kanallar bo'yicha). Javob: `data.round`, `data.status` (sent | skipped), `data.deliveries[]` (recipient_kind, channel, status: queued | sent | failed | skipped, failed_reason — masalan «Telegram ulanmagan»). Ochiq smena — 400; hozir yuborilayotgan — 400.",
+  })
+  async resendShiftReport(
+    @Req() req: { user: JwtUser },
+    @Param('id') id: string,
+  ) {
+    if (!/^\d+$/.test(String(id ?? ''))) {
+      throw new BadRequestException("Smena ID si noto'g'ri");
+    }
+    return this.send(
+      { cmd: 'finance.shift.report.resend' },
+      {
+        shift_id: String(id),
+        requester_id: String(req.user.sub),
+        requester_roles: this.getUserRoles(req.user),
+      },
+    );
   }
 
   @Get('shift/current')

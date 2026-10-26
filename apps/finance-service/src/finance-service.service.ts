@@ -81,6 +81,15 @@ import { CourierPaymentAckService } from './courier-payment/courier-payment-ack.
 import { FinanceRealtimeService } from './realtime/finance-realtime.service';
 import type { ShiftAccountCheckService } from './shift-account-check/shift-account-check.service';
 import { SHIFT_ACCOUNT_CHECKS } from './shift-account-check/shift-account-check.token';
+import {
+  SHIFT_REPORTS,
+  type ShiftReportTrigger,
+} from './shift-report/shift-report.token';
+import { ShiftScheduleClaim } from './entities/shift-schedule-claim.entity';
+import {
+  autoCloseClaimKey,
+  autoClosedLabel,
+} from './shift-auto-close/shift-schedule.rules';
 
 /**
  * `order.find_all` qatoridan market to'lovi sinxroni o'qiydigan maydonlar
@@ -164,6 +173,12 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
     @Optional()
     @Inject(SHIFT_ACCOUNT_CHECKS)
     private readonly shiftAccountChecks?: ShiftAccountCheckService,
+    // (gWI4gYkw) Yopilgandan keyin smena hisobotini yuborish (fon).
+    // Ixtiyoriy: eski spec'lar usiz quradi — u holda navbat `pending`
+    // qoladi (scheduler oladi) yoki umuman ishlatilmaydi.
+    @Optional()
+    @Inject(SHIFT_REPORTS)
+    private readonly shiftReports?: ShiftReportTrigger,
   ) {}
 
   async onModuleInit() {
@@ -2446,156 +2461,19 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         }
 
         const closeTime = new Date();
-
-        /**
-         * ⚠️ SMENA YIG'INDISI FAQAT O'Z KASSASI BO'YICHA (audit M7).
-         *
-         * Ilgari bu yerda oraliqdagi BARCHA `cashbox_history` qatorlari
-         * yuklanardi — kassa filtri ham, `is_deleted` filtri ham yo'q edi.
-         * Ya'ni bitta operator smenasining "kirim/chiqim" raqami butun
-         * kompaniyaning (barcha kuryer, market, filial va MAIN kassalari)
-         * yig'indisi bo'lardi. Natijada sanab topshirilgan naqdni tizim
-         * raqami bilan solishtirib bo'lmasdi — kassadagi kamomadni
-         * aniqlaydigan yagona nazorat ishlamasdi. Yon ta'siri: uzoq turgan
-         * smena yuz minglab qatorni xotiraga yuklardi.
-         *
-         * Endi yig'indi SQL'da, faqat smenaga biriktirilgan kassa bo'yicha
-         * olinadi (sukut — markaziy MAIN kassa). (QTCUUgjA) Kassa TURI ham
-         * filtrlanadi: filial id si bir xil raqamli kuryer/market user_id si
-         * bilan to'qnashib, begona kassa harakatlari filial smenasiga
-         * qo'shilmasin.
-         */
-        const shiftCashboxUserId = String(
-          shift.cashbox_user_id ?? FinanceServiceService.MAIN_CASHBOX_USER_ID,
+        await this.fillShiftCloseTotals(
+          queryRunner.manager,
+          shift,
+          closeTime,
+          countedCash,
+          countedCard,
         );
-        const totalsRows = await queryRunner.manager
-          .createQueryBuilder(CashboxHistory, 'h')
-          .innerJoin(Cashbox, 'cb', 'cb.id = h.cashbox_id')
-          .select('h.operation_type', 'operation_type')
-          .addSelect('h.payment_method', 'payment_method')
-          .addSelect('COALESCE(SUM(h.amount), 0)', 'total')
-          .where('h.isDeleted = :active', { active: false })
-          .andWhere('cb.isDeleted = :active', { active: false })
-          .andWhere('cb.user_id = :ownerId', { ownerId: shiftCashboxUserId })
-          .andWhere('cb.cashbox_type = :cbType', {
-            cbType: FinanceServiceService.shiftCashboxType(shiftCashboxUserId),
-          })
-          .andWhere('h.createdAt BETWEEN :from AND :to', {
-            from: shift.opened_at,
-            to: closeTime,
-          })
-          .groupBy('h.operation_type')
-          .addGroupBy('h.payment_method')
-          .getRawMany<{
-            operation_type: string;
-            payment_method: string | null;
-            total: string;
-          }>();
-
-        let totalIncomeCash = 0;
-        let totalIncomeCard = 0;
-        let totalExpenseCash = 0;
-        let totalExpenseCard = 0;
-
-        for (const row of totalsRows) {
-          const total = Number(row.total) || 0;
-          // Eski xatti-harakat bilan bir xil: CASH bo'lmagani — karta.
-          const isCash = row.payment_method === PaymentMethod.CASH;
-          if (row.operation_type === Operation_type.INCOME) {
-            if (isCash) totalIncomeCash += total;
-            else totalIncomeCard += total;
-          } else if (row.operation_type === Operation_type.EXPENSE) {
-            if (isCash) totalExpenseCash += total;
-            else totalExpenseCard += total;
-          }
-        }
-
-        /**
-         * 3PE0B03q — MAIN kassada karta↔naqd KONVERTATSIYA (kirim/chiqim
-         * emas, `cashbox_history` da yo'q) naqd/karta ajratmasini o'zgartiradi:
-         * kutilgan qoldiqqa qo'shilmasa har konvertatsiya soxta kamomad /
-         * ortiqcha bo'lib chiqardi (BeePost buni `netConversion` deb alohida
-         * ko'rsatadi). Kartalararo o'tkazma `balance_card` ni o'zgartirmaydi.
-         */
-        // Zv3MLn0a — filial kassalarida ham kartalar (konvertatsiya) bor:
-        // smena kassasining turi bo'yicha (MAIN yoki filial).
-        let cardToCash = 0;
-        let cashToCard = 0;
-        {
-          const conversionRows = await queryRunner.manager
-            .createQueryBuilder(CashboxCardMovement, 'm')
-            .innerJoin(Cashbox, 'cb', 'cb.id = m.cashbox_id')
-            .select('m.type', 'type')
-            .addSelect('COALESCE(SUM(m.amount), 0)', 'total')
-            .where('m.is_deleted = false')
-            .andWhere('cb.user_id = :ownerId', { ownerId: shiftCashboxUserId })
-            .andWhere('cb.cashbox_type = :mainType', {
-              mainType:
-                FinanceServiceService.shiftCashboxType(shiftCashboxUserId),
-            })
-            .andWhere('m.type IN (:...conversionTypes)', {
-              conversionTypes: [
-                CardMovementType.CARD_TO_CASH,
-                CardMovementType.CASH_TO_CARD,
-              ],
-            })
-            .andWhere('m.createdAt BETWEEN :from AND :to', {
-              from: shift.opened_at,
-              to: closeTime,
-            })
-            .groupBy('m.type')
-            .getRawMany<{ type?: string; total?: string }>();
-          for (const row of conversionRows ?? []) {
-            const total = Number(row?.total) || 0;
-            if (row?.type === CardMovementType.CARD_TO_CASH) {
-              cardToCash += total;
-            } else if (row?.type === CardMovementType.CASH_TO_CARD) {
-              cashToCard += total;
-            }
-          }
-        }
-
-        /**
-         * (QTCUUgjA) Kamomad hisobi:
-         *   expected    = opening_balance + total_income − total_expense
-         *                 (+ naqd↔karta konvertatsiyasi, 3PE0B03q)
-         *   discrepancy = closing_balance (sanab topshirilgan) − expected
-         * Manfiy — kamomad, musbat — ortiqcha. Sanalgan summa yuborilmasa
-         * discrepancy NULL: "sanalmadi" holati soxta kamomad bo'lib
-         * ko'rinmasin (closing_balance avvalgidek 0 yoziladi).
-         */
-        const round = (value: number) =>
-          FinanceServiceService.roundMoney(value);
-        const expectedCash = round(
-          Number(shift.opening_balance_cash ?? 0) +
-            totalIncomeCash -
-            totalExpenseCash +
-            cardToCash -
-            cashToCard,
-        );
-        const expectedCard = round(
-          Number(shift.opening_balance_card ?? 0) +
-            totalIncomeCard -
-            totalExpenseCard -
-            cardToCash +
-            cashToCard,
-        );
-
         shift.closed_by = dto.closed_by;
-        shift.closed_at = closeTime;
-        shift.status = ShiftStatus.CLOSED;
-        shift.total_income_cash = round(totalIncomeCash);
-        shift.total_income_card = round(totalIncomeCard);
-        shift.total_expense_cash = round(totalExpenseCash);
-        shift.total_expense_card = round(totalExpenseCard);
-        shift.closing_balance_cash = countedCash ?? 0;
-        shift.closing_balance_card = countedCard ?? 0;
-        shift.expected_balance_cash = expectedCash;
-        shift.expected_balance_card = expectedCard;
-        shift.discrepancy_cash =
-          countedCash == null ? null : round(countedCash - expectedCash);
-        shift.discrepancy_card =
-          countedCard == null ? null : round(countedCard - expectedCard);
+        shift.close_reason = 'manual';
+        shift.closed_by_system = false;
+        // (gWI4gYkw) Hisobot yuborish navbati — shu tranzaksiyada.
+        shift.report_status = 'pending';
+        shift.report_round = 1;
         shift.comment = dto.comment ?? shift.comment;
 
         // (kiZgTybn) Har karta / hisob qoldig'i: snapshot + validatsiya
@@ -2652,14 +2530,299 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
             metadata: {
               closed_by: dto.closed_by,
               opened_by: auditedShift.opened_by,
+              close_reason: 'manual',
               ...(accountsSummary ? { accounts: accountsSummary } : {}),
             },
           });
+          // (gWI4gYkw) Hisobot — fonda (javob kutilmaydi).
+          this.shiftReports?.deliverSoon(String(auditedShift.id));
         }
       }
     } catch (error) {
       this.toRpcError(error);
     }
+  }
+
+  /**
+   * (y8Tqm9Ap) Jadval bo'yicha AVTOMATIK yopish — scheduler chaqiradi.
+   *
+   * Bir martalik: smena qatori FOR UPDATE + `status = open` tekshiruvi VA
+   * `shift_schedule_claims` ga `auto_close:<shift_id>:<slot>` kaliti (PRIMARY
+   * KEY, ON CONFLICT DO NOTHING) — ikkala replika bir vaqtda kelsa ham
+   * smena bitta marta yopiladi, ikkinchisi `not_open` / `claimed` oladi.
+   *
+   * Hisob — qo'lda yopish bilan AYNAN bir xil (`fillShiftCloseTotals`), faqat
+   * sanalgan qiymat yo'q: `closing_balance_* = 0`, `discrepancy_* = NULL`.
+   * `closed_by = NULL`, `closed_by_system = true`, `close_reason = 'auto'`.
+   * Kartalar — `recordAtAutoClose` (tasdiqlanmagan snapshot). Keyingi smena
+   * avtomatik OCHILMAYDI. Pul harakati YO'Q.
+   */
+  async autoCloseShift(input: {
+    shift_id: string;
+    slot_key: string;
+    slot_at: Date;
+  }): Promise<{ closed: boolean; reason: string; shift_id: string }> {
+    const shiftId = String(input.shift_id);
+    this.assertBigIntId(shiftId, 'shift_id');
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+    let saved: Shift | null = null;
+    let accounts: Record<string, unknown> | null = null;
+    try {
+      const manager = queryRunner.manager;
+      const shift = await manager.findOne(Shift, {
+        where: { id: shiftId, isDeleted: false },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!shift || shift.status !== ShiftStatus.OPEN) {
+        await queryRunner.rollbackTransaction();
+        return { closed: false, reason: 'not_open', shift_id: shiftId };
+      }
+      // Slotdan KEYIN ochilgan smena shu slotda yopilmaydi.
+      if (new Date(shift.opened_at).getTime() >= input.slot_at.getTime()) {
+        await queryRunner.rollbackTransaction();
+        return {
+          closed: false,
+          reason: 'opened_after_slot',
+          shift_id: shiftId,
+        };
+      }
+      const claim = await manager
+        .createQueryBuilder()
+        .insert()
+        .into(ShiftScheduleClaim)
+        .values({
+          key: autoCloseClaimKey(shiftId, input.slot_key),
+          shift_id: shiftId,
+          kind: 'auto_close',
+          slot: input.slot_key,
+        })
+        .orIgnore()
+        .returning(['key'])
+        .execute();
+      if (!Array.isArray(claim.raw) || !claim.raw.length) {
+        await queryRunner.rollbackTransaction();
+        return { closed: false, reason: 'claimed', shift_id: shiftId };
+      }
+
+      const closeTime = new Date();
+      await this.fillShiftCloseTotals(manager, shift, closeTime, null, null);
+      shift.closed_by = null;
+      shift.closed_by_system = true;
+      shift.close_reason = 'auto';
+      shift.report_status = 'pending';
+      shift.report_round = 1;
+      if (this.shiftAccountChecks) {
+        accounts = await this.shiftAccountChecks.recordAtAutoClose(
+          manager,
+          shift,
+        );
+      }
+      saved = await manager.save(shift);
+      // (rWdLuoP3) `finance.shift.auto_closed` (payload'da `closed_at`).
+      await this.financeRealtime?.shiftClosed(saved, 'auto', manager);
+      await queryRunner.commitTransaction();
+    } catch (error) {
+      if (queryRunner.isTransactionActive) {
+        await queryRunner.rollbackTransaction();
+      }
+      throw error;
+    } finally {
+      await queryRunner.release();
+    }
+    if (!saved) return { closed: false, reason: 'not_open', shift_id: shiftId };
+
+    await this.activityLog.log({
+      entity_type: 'Shift',
+      entity_id: saved.id,
+      action: 'finance.shift_auto_closed',
+      old_value: { status: ShiftStatus.OPEN },
+      new_value: {
+        status: saved.status,
+        closed_at: saved.closed_at,
+        close_reason: 'auto',
+        closed_by_system: true,
+        expected_balance_cash: saved.expected_balance_cash,
+        expected_balance_card: saved.expected_balance_card,
+        discrepancy_cash: null,
+        discrepancy_card: null,
+      },
+      user_id: null,
+      metadata: {
+        description: 'Smena tizim tomonidan avtomatik yopildi',
+        label: autoClosedLabel(saved.closed_at),
+        slot: input.slot_key,
+        opened_by: saved.opened_by,
+        cashbox_user_id: saved.cashbox_user_id,
+        ...(accounts ? { accounts } : {}),
+      },
+    });
+    this.shiftReports?.deliverSoon(String(saved.id));
+    return { closed: true, reason: 'auto_closed', shift_id: shiftId };
+  }
+
+  /**
+   * (y8Tqm9Ap) Smenani yopish HISOBI — qo'lda (`closeShift`) va avtomatik
+   * (`autoCloseShift`) yopishda AYNAN bir xil: oyna `opened_at → closeTime`,
+   * faqat smena kassasi bo'yicha kirim/chiqim, konvertatsiya, kutilgan qoldiq
+   * va farq (`counted` NULL — farq NULL). Smena qatori chaqiruvchida
+   * FOR UPDATE bilan qulflangan bo'lishi SHART. Pul harakati YO'Q — faqat
+   * smena qatoriga yig'indilar yoziladi.
+   */
+  private async fillShiftCloseTotals(
+    manager: EntityManager,
+    shift: Shift,
+    closeTime: Date,
+    countedCash: number | null,
+    countedCard: number | null,
+  ): Promise<void> {
+    /**
+     * ⚠️ SMENA YIG'INDISI FAQAT O'Z KASSASI BO'YICHA (audit M7).
+     *
+     * Ilgari bu yerda oraliqdagi BARCHA `cashbox_history` qatorlari
+     * yuklanardi — kassa filtri ham, `is_deleted` filtri ham yo'q edi.
+     * Ya'ni bitta operator smenasining "kirim/chiqim" raqami butun
+     * kompaniyaning (barcha kuryer, market, filial va MAIN kassalari)
+     * yig'indisi bo'lardi. Natijada sanab topshirilgan naqdni tizim
+     * raqami bilan solishtirib bo'lmasdi — kassadagi kamomadni
+     * aniqlaydigan yagona nazorat ishlamasdi. Yon ta'siri: uzoq turgan
+     * smena yuz minglab qatorni xotiraga yuklardi.
+     *
+     * Endi yig'indi SQL'da, faqat smenaga biriktirilgan kassa bo'yicha
+     * olinadi (sukut — markaziy MAIN kassa). (QTCUUgjA) Kassa TURI ham
+     * filtrlanadi: filial id si bir xil raqamli kuryer/market user_id si
+     * bilan to'qnashib, begona kassa harakatlari filial smenasiga
+     * qo'shilmasin.
+     */
+    const shiftCashboxUserId = String(
+      shift.cashbox_user_id ?? FinanceServiceService.MAIN_CASHBOX_USER_ID,
+    );
+    const totalsRows = await manager
+      .createQueryBuilder(CashboxHistory, 'h')
+      .innerJoin(Cashbox, 'cb', 'cb.id = h.cashbox_id')
+      .select('h.operation_type', 'operation_type')
+      .addSelect('h.payment_method', 'payment_method')
+      .addSelect('COALESCE(SUM(h.amount), 0)', 'total')
+      .where('h.isDeleted = :active', { active: false })
+      .andWhere('cb.isDeleted = :active', { active: false })
+      .andWhere('cb.user_id = :ownerId', { ownerId: shiftCashboxUserId })
+      .andWhere('cb.cashbox_type = :cbType', {
+        cbType: FinanceServiceService.shiftCashboxType(shiftCashboxUserId),
+      })
+      .andWhere('h.createdAt BETWEEN :from AND :to', {
+        from: shift.opened_at,
+        to: closeTime,
+      })
+      .groupBy('h.operation_type')
+      .addGroupBy('h.payment_method')
+      .getRawMany<{
+        operation_type: string;
+        payment_method: string | null;
+        total: string;
+      }>();
+
+    let totalIncomeCash = 0;
+    let totalIncomeCard = 0;
+    let totalExpenseCash = 0;
+    let totalExpenseCard = 0;
+
+    for (const row of totalsRows) {
+      const total = Number(row.total) || 0;
+      // Eski xatti-harakat bilan bir xil: CASH bo'lmagani — karta.
+      const isCash = row.payment_method === PaymentMethod.CASH;
+      if (row.operation_type === Operation_type.INCOME) {
+        if (isCash) totalIncomeCash += total;
+        else totalIncomeCard += total;
+      } else if (row.operation_type === Operation_type.EXPENSE) {
+        if (isCash) totalExpenseCash += total;
+        else totalExpenseCard += total;
+      }
+    }
+
+    /**
+     * 3PE0B03q — MAIN kassada karta↔naqd KONVERTATSIYA (kirim/chiqim
+     * emas, `cashbox_history` da yo'q) naqd/karta ajratmasini o'zgartiradi:
+     * kutilgan qoldiqqa qo'shilmasa har konvertatsiya soxta kamomad /
+     * ortiqcha bo'lib chiqardi (BeePost buni `netConversion` deb alohida
+     * ko'rsatadi). Kartalararo o'tkazma `balance_card` ni o'zgartirmaydi.
+     */
+    // Zv3MLn0a — filial kassalarida ham kartalar (konvertatsiya) bor:
+    // smena kassasining turi bo'yicha (MAIN yoki filial).
+    let cardToCash = 0;
+    let cashToCard = 0;
+    {
+      const conversionRows = await manager
+        .createQueryBuilder(CashboxCardMovement, 'm')
+        .innerJoin(Cashbox, 'cb', 'cb.id = m.cashbox_id')
+        .select('m.type', 'type')
+        .addSelect('COALESCE(SUM(m.amount), 0)', 'total')
+        .where('m.is_deleted = false')
+        .andWhere('cb.user_id = :ownerId', { ownerId: shiftCashboxUserId })
+        .andWhere('cb.cashbox_type = :mainType', {
+          mainType: FinanceServiceService.shiftCashboxType(shiftCashboxUserId),
+        })
+        .andWhere('m.type IN (:...conversionTypes)', {
+          conversionTypes: [
+            CardMovementType.CARD_TO_CASH,
+            CardMovementType.CASH_TO_CARD,
+          ],
+        })
+        .andWhere('m.createdAt BETWEEN :from AND :to', {
+          from: shift.opened_at,
+          to: closeTime,
+        })
+        .groupBy('m.type')
+        .getRawMany<{ type?: string; total?: string }>();
+      for (const row of conversionRows ?? []) {
+        const total = Number(row?.total) || 0;
+        if (row?.type === CardMovementType.CARD_TO_CASH) {
+          cardToCash += total;
+        } else if (row?.type === CardMovementType.CASH_TO_CARD) {
+          cashToCard += total;
+        }
+      }
+    }
+
+    /**
+     * (QTCUUgjA) Kamomad hisobi:
+     *   expected    = opening_balance + total_income − total_expense
+     *                 (+ naqd↔karta konvertatsiyasi, 3PE0B03q)
+     *   discrepancy = closing_balance (sanab topshirilgan) − expected
+     * Manfiy — kamomad, musbat — ortiqcha. Sanalgan summa yuborilmasa
+     * discrepancy NULL: "sanalmadi" holati soxta kamomad bo'lib
+     * ko'rinmasin (closing_balance avvalgidek 0 yoziladi).
+     */
+    const round = (value: number) => FinanceServiceService.roundMoney(value);
+    const expectedCash = round(
+      Number(shift.opening_balance_cash ?? 0) +
+        totalIncomeCash -
+        totalExpenseCash +
+        cardToCash -
+        cashToCard,
+    );
+    const expectedCard = round(
+      Number(shift.opening_balance_card ?? 0) +
+        totalIncomeCard -
+        totalExpenseCard -
+        cardToCash +
+        cashToCard,
+    );
+
+    shift.closed_at = closeTime;
+    shift.status = ShiftStatus.CLOSED;
+    shift.total_income_cash = round(totalIncomeCash);
+    shift.total_income_card = round(totalIncomeCard);
+    shift.total_expense_cash = round(totalExpenseCash);
+    shift.total_expense_card = round(totalExpenseCard);
+    shift.closing_balance_cash = countedCash ?? 0;
+    shift.closing_balance_card = countedCard ?? 0;
+    shift.expected_balance_cash = expectedCash;
+    shift.expected_balance_card = expectedCard;
+    shift.discrepancy_cash =
+      countedCash == null ? null : round(countedCash - expectedCash);
+    shift.discrepancy_card =
+      countedCard == null ? null : round(countedCard - expectedCard);
   }
 
   /**
@@ -2718,9 +2881,43 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
       const accounts = this.shiftAccountChecks
         ? await this.shiftAccountChecks.listForShift(shiftId)
         : [];
+      // (y8Tqm9Ap) Yopilish turi; eski (167 dan oldingi) yopilgan smena — manual.
+      const closeReason =
+        shift.status === ShiftStatus.CLOSED
+          ? (shift.close_reason ?? 'manual')
+          : null;
       return this.successRes(
         {
           shift: named,
+          close_reason: closeReason,
+          closed_by_system: Boolean(shift.closed_by_system),
+          // Sariq banner: «Avtomatik yopildi — HH:MM, kassir yopmagan».
+          auto_close:
+            closeReason === 'auto'
+              ? {
+                  closed_at: shift.closed_at,
+                  label: autoClosedLabel(shift.closed_at),
+                }
+              : null,
+          // (gWI4gYkw) Hisobot yuborish holati + «Hisobot kimlarga yuborildi».
+          report: {
+            status: shift.report_status ?? null,
+            round: shift.report_round ?? 0,
+            file_key: shift.report_file_key ?? null,
+            file_format: shift.report_file_format ?? null,
+          },
+          deliveries: this.shiftReports
+            ? await this.shiftReports
+                .listDeliveries(shiftId)
+                .catch((error: unknown) => {
+                  this.logger.warn(
+                    `smena #${shiftId} yetkazish ro'yxati: ${
+                      error instanceof Error ? error.message : String(error)
+                    }`,
+                  );
+                  return [];
+                })
+            : [],
           cashbox_user_id: cashboxUserId,
           cashbox_type:
             cashboxUserId === FinanceServiceService.MAIN_CASHBOX_USER_ID

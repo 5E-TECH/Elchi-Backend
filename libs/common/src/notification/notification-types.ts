@@ -306,6 +306,60 @@ export const NOTIFICATION_TYPES: readonly NotificationTypeDefinition[] =
       default_audience: [Roles.MARKET, Roles.COURIER],
       user_can_mute: true,
     }),
+    // (gWI4gYkw) Smena yopildi — hisobot: superadminga to'liq (+ PDF/XLSX
+    // ilova), kuryerga faqat o'z operatsiyalari, marketga faqat o'z
+    // to'lovlari. Nishon — har doim aniq `recipient_ids` (rol/broadcast EMAS).
+    // Har yuborish raundi — inboxda alohida qator.
+    def({
+      key: 'finance.shift_closed',
+      category: NotificationCategory.FINANCE,
+      priority: NotificationPriority.NORMAL,
+      group_key_pattern: 'finance:shift:{{shift_id}}:report:{{round}}',
+      label_uz: 'Smena yopildi — hisobot',
+      default_audience: [Roles.SUPERADMIN, Roles.COURIER, Roles.MARKET],
+      user_can_mute: true,
+      default_channels: [
+        NotificationChannel.IN_APP,
+        NotificationChannel.REALTIME,
+        NotificationChannel.TELEGRAM,
+      ],
+    }),
+    // (y8Tqm9Ap / gWI4gYkw) Smena jadval bo'yicha AVTOMATIK yopildi — hisobot.
+    def({
+      key: 'finance.shift_auto_closed',
+      category: NotificationCategory.FINANCE,
+      priority: NotificationPriority.NORMAL,
+      group_key_pattern: 'finance:shift:{{shift_id}}:report:{{round}}',
+      label_uz: 'Smena avtomatik yopildi — hisobot',
+      default_audience: [Roles.SUPERADMIN, Roles.COURIER, Roles.MARKET],
+      user_can_mute: true,
+      default_channels: [
+        NotificationChannel.IN_APP,
+        NotificationChannel.REALTIME,
+        NotificationChannel.TELEGRAM,
+      ],
+    }),
+    // (y8Tqm9Ap #4) «Smena N daqiqadan keyin avtomatik yopiladi» — smenani
+    // ochgan xodimga (slot uchun bir marta).
+    def({
+      key: 'finance.shift_auto_close_warning',
+      category: NotificationCategory.FINANCE,
+      priority: NotificationPriority.HIGH,
+      group_key_pattern: 'finance:shift:{{shift_id}}:warn:{{slot}}',
+      label_uz: 'Smena tez orada avtomatik yopiladi',
+      default_audience: [
+        Roles.SUPERADMIN,
+        Roles.ADMIN,
+        Roles.REGISTRATOR,
+        Roles.MANAGER,
+      ],
+      user_can_mute: false,
+      default_channels: [
+        NotificationChannel.IN_APP,
+        NotificationChannel.REALTIME,
+        NotificationChannel.TELEGRAM,
+      ],
+    }),
     def({
       key: 'finance.settlement_closed',
       category: NotificationCategory.FINANCE,

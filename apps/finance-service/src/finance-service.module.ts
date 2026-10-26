@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
+import { ScheduleModule } from '@nestjs/schedule';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { FinanceServiceController } from './finance-service.controller';
 import { FinanceServiceService } from './finance-service.service';
@@ -44,6 +45,12 @@ import { FinanceDailySnapshotService } from './aggregates/finance-daily-snapshot
 import { FinanceDailyService } from './aggregates/finance-daily.service';
 import { PaymentsMetaService } from './aggregates/payments-meta.service';
 import { FinanceAggregatesController } from './aggregates/finance-aggregates.controller';
+import { ShiftScheduleClaim } from './entities/shift-schedule-claim.entity';
+import { ShiftReportDelivery } from './entities/shift-report-delivery.entity';
+import { ShiftAutoCloseScheduler } from './shift-auto-close/shift-auto-close.scheduler';
+import { ShiftReportService } from './shift-report/shift-report.service';
+import { ShiftReportController } from './shift-report/shift-report.controller';
+import { SHIFT_REPORTS } from './shift-report/shift-report.token';
 
 @Module({
   imports: [
@@ -53,6 +60,8 @@ import { FinanceAggregatesController } from './aggregates/finance-aggregates.con
       validationSchema: financeValidationSchema,
     }),
     AppLoggerModule.forRoot({ serviceName: 'finance-service' }),
+    // (y8Tqm9Ap) Smena avtomatik yopish jadvali (CronJob, Asia/Tashkent).
+    ScheduleModule.forRoot(),
     RmqModule,
     RmqModule.register({ name: 'ORDER' }),
     RmqModule.register({ name: 'IDENTITY' }),
@@ -65,6 +74,8 @@ import { FinanceAggregatesController } from './aggregates/finance-aggregates.con
     // (rWdLuoP3) Smena / kassa kartasi realtime hodisalari: gateway navbatiga
     // `realtime.notify` — FAQAT outbox maqsadi (FinanceRealtimeService).
     RmqModule.register({ name: 'GATEWAY' }),
+    // (gWI4gYkw) Smena hisoboti fayli (PDF/XLSX) — file-service (private).
+    RmqModule.register({ name: 'FILE' }),
     DatabaseModule,
     // Transactional outbox: finance publishes `order.settlement.advance` to
     // order-service inside the cashbox-move transaction (Faza 2a). Reliable,
@@ -101,6 +112,9 @@ import { FinanceAggregatesController } from './aggregates/finance-aggregates.con
       // kiZgTybn — smena yopishda karta qoldig'ini tasdiqlash + sozlamalar.
       ShiftAccountCheck,
       FinanceSetting,
+      // y8Tqm9Ap / gWI4gYkw — slot kalitlari va hisobot yetkazish jurnali.
+      ShiftScheduleClaim,
+      ShiftReportDelivery,
       // (2crjWf7v) kuryer kvitansiya javobi — faqat audit.
       CourierPaymentAck,
       // qzjTMWPb — kunlik balans snapshot'i (o'qish modeli, migratsiya 176).
@@ -116,6 +130,7 @@ import { FinanceAggregatesController } from './aggregates/finance-aggregates.con
     ShiftAccountCheckController,
     // qzjTMWPb / uzWcMR1C — kunlik agregat va /payments KPI meta (o'qish).
     FinanceAggregatesController,
+    ShiftReportController,
   ],
   providers: [
     FinanceServiceService,
@@ -131,6 +146,9 @@ import { FinanceAggregatesController } from './aggregates/finance-aggregates.con
     FinanceDailySnapshotService,
     FinanceDailyService,
     PaymentsMetaService,
+    ShiftReportService,
+    { provide: SHIFT_REPORTS, useExisting: ShiftReportService },
+    ShiftAutoCloseScheduler,
   ],
 })
 export class FinanceServiceModule {}

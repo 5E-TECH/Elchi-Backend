@@ -492,6 +492,21 @@ export class IdentityController {
     );
   }
 
+  /**
+   * (gWI4gYkw) Rol bo'yicha FAOL foydalanuvchilar id lari (Telegram ulanganmi
+   * qat'i nazar) — smena hisobotini superadminlarga aniq `recipient_ids`
+   * bilan yuborish uchun (ichki RMQ).
+   */
+  @MessagePattern({ cmd: 'identity.user.active_ids_by_role' })
+  activeIdsByRole(
+    @Payload() payload: { role?: unknown },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.userService.activeIdsByRole(payload),
+    );
+  }
+
   /** (9uNhwTZp #6) Rol bo'yicha ulangan/jami — admin dashboard. */
   @MessagePattern({ cmd: 'identity.telegram.stats' })
   telegramStats(@Ctx() context: RmqContext) {

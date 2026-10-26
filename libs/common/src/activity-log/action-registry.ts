@@ -163,6 +163,25 @@ export const ACTIVITY_ACTION_REGISTRY: Readonly<
     'check',
     'blue',
   ),
+  // y8Tqm9Ap / gWI4gYkw: smena avtomatik yopilishi va hisobot yuborish.
+  'finance.shift_auto_closed': entry(
+    'Smena tizim tomonidan avtomatik yopildi',
+    'finance',
+    'clock',
+    'amber',
+  ),
+  'finance.shift_report_sent': entry(
+    'Smena hisoboti yuborildi',
+    'finance',
+    'send',
+    'blue',
+  ),
+  'finance.shift_report_resent': entry(
+    'Smena hisoboti qayta yuborildi',
+    'finance',
+    'send',
+    'blue',
+  ),
   // 3PE0B03q (R6): nomli kassa kartalari
   'finance.card_created': entry(
     'Kassa kartasi yaratildi',
