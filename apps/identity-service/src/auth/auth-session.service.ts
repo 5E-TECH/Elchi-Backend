@@ -3,6 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import {
   Between,
+  EntityManager,
   FindOptionsOrder,
   IsNull,
   LessThan,
@@ -332,6 +333,50 @@ export class AuthSessionService {
           revoked_at: IsNull(),
         },
       });
+    }
+  }
+
+  /**
+   * (NDmZMzCP) Parol qayta xeshlandi (bcrypt 10 → 12, parolning o'zi
+   * o'zgarmagan): shu foydalanuvchining eski xeshdan olingan parol izi
+   * (`password_fp`) yangisiga ko'chiriladi — AYNI tranzaksiyada, aks holda
+   * boshqa qurilmalar refresh'da «parol almashdi» deb chiqib ketardi.
+   */
+  async repointPasswordFingerprint(
+    manager: EntityManager,
+    userId: string,
+    oldHash: string,
+    newHash: string,
+  ): Promise<number> {
+    const result = await manager.update(
+      UserSession,
+      { user_id: String(userId), password_fp: passwordFingerprint(oldHash) },
+      { password_fp: passwordFingerprint(newHash) },
+    );
+    return result.affected ?? 0;
+  }
+
+  /**
+   * (NDmZMzCP) Login qulfi uchun: shu qurilma (`X-Device-Id`) yoki IP'dan
+   * shu foydalanuvchi ilgari kirganmi (`user_sessions` da qator bor —
+   * yopilgani ham). Tanish qurilma telefonning UMUMIY qulfini chetlab
+   * o'tadi (hujumchi boshqa IP'lardan urinib egasini chiqarib qo'ya olmasin).
+   * Xato — `false` (qulf amal qiladi).
+   */
+  async isKnownDevice(
+    userId: string,
+    input: { deviceId?: string | null; ip?: string | null },
+  ): Promise<boolean> {
+    const where: Array<Record<string, unknown>> = [];
+    if (isReusableDeviceId(input.deviceId)) {
+      where.push({ user_id: String(userId), device_id: input.deviceId });
+    }
+    if (input.ip) where.push({ user_id: String(userId), ip: input.ip });
+    if (!where.length || !/^\d+$/.test(String(userId))) return false;
+    try {
+      return (await this.sessions.count({ where, take: 1 })) > 0;
+    } catch {
+      return false;
     }
   }
 

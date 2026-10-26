@@ -218,14 +218,14 @@ describe('RBAC-19: admin o‘z profilini tahrirlaydi', () => {
 
     const res = await h.service.updateUser(
       '10',
-      { password: 'yangi-parol', name: 'Yangi ism' } as never,
+      { password: 'Yangi-Parol-2026', name: 'Yangi ism' } as never,
       admin10,
     );
 
     expect(res.statusCode).toBe(200);
     expect(h.saves.at(-1)).toEqual(
       expect.objectContaining({
-        password: 'hashed:yangi-parol',
+        password: 'hashed:Yangi-Parol-2026',
         name: 'Yangi ism',
       }),
     );
@@ -280,11 +280,15 @@ describe('RBAC-09: parol/telefon o‘zgarsa sessiyalar yopiladi', () => {
     // #3 — manager faqat O'ZI yaratgan foydalanuvchini tahrirlaydi: courier.created_by = manager.id ('2').
     const h = makeHarness({ rows: [{ ...courierRow(), created_by: '2' }] });
 
-    await h.service.updateUser('9', { password: 'yangi' } as never, manager);
+    await h.service.updateUser(
+      '9',
+      { password: 'Yangi-Parol-2026' } as never,
+      manager,
+    );
 
     expect(h.saves.at(-1)).toEqual(
       expect.objectContaining({
-        password: 'hashed:yangi',
+        password: 'hashed:Yangi-Parol-2026',
         refresh_token: null,
       }),
     );
@@ -326,13 +330,13 @@ describe('RBAC-09: parol/telefon o‘zgarsa sessiyalar yopiladi', () => {
 
     await h.service.updateMarket(
       '3',
-      { password: 'yangi' } as never,
+      { password: 'Yangi-Parol-2026' } as never,
       superadmin,
     );
 
     expect(h.saves.at(-1)).toEqual(
       expect.objectContaining({
-        password: 'hashed:yangi',
+        password: 'hashed:Yangi-Parol-2026',
         refresh_token: null,
       }),
     );
@@ -353,7 +357,7 @@ const courierDto = () =>
   ({
     name: 'Yangi kuryer',
     phone_number: '+998903001234',
-    password: '0990',
+    password: 'Test-Parol-2026',
     tariff_home: 15000,
     tariff_center: 10000,
     region_id: '13',
@@ -364,7 +368,7 @@ const managerDto = () =>
   ({
     name: 'Yangi menejer',
     phone_number: '+998903001235',
-    password: '0990',
+    password: 'Test-Parol-2026',
     branch_id: '15',
   }) as never;
 
@@ -373,7 +377,7 @@ const marketDto = () =>
     name: 'Yangi market',
     phone_number: '+998903001236',
     username: 'yangi_market',
-    password: '0990',
+    password: 'Test-Parol-2026',
     tariff_home: 30000,
     tariff_center: 20000,
   }) as never;

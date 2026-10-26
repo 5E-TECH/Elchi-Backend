@@ -22,17 +22,26 @@ import {
 import type { UserSession } from '../entities/user-session.entity';
 import { BcryptEncryption } from '../../../../libs/common/helpers/bcrypt';
 import { LoginDto } from './dto/login.dto';
+import {
+  type LoginThrottleKeys,
+  LoginThrottleService,
+  loginThrottleKeys,
+} from './login-throttle.service';
 import { RefreshDto } from './dto/refresh.dto';
 import {
   ActivityAction,
   ActivityDescribeUz,
   ActivityLogMaintenanceService,
   ActivityLogService,
+  LOGIN_LOCKED,
   Roles,
   SESSION_TOO_NEW,
   Status,
+  captureException,
   computeHmacSignature,
+  isPasswordPolicyCompliant,
   normalizeUzPhone,
+  requestContext,
   resolveLoginDedupWindowMs,
   rmqSend,
   verifyTelegramInitData,
@@ -92,6 +101,12 @@ export class AuthService {
      */
     @Optional()
     private readonly activityLogMaintenance?: ActivityLogMaintenanceService,
+    /**
+     * (NDmZMzCP) Telefon bo'yicha xato login hisoblagichi. Ixtiyoriy:
+     * spec'lar servisni usiz quradi — u holda qulf yo'q (avvalgidek).
+     */
+    @Optional()
+    private readonly loginThrottle?: LoginThrottleService,
   ) {}
 
   /**
@@ -185,16 +200,61 @@ export class AuthService {
     });
   }
 
+  /**
+   * Parol bilan kirish. (NDmZMzCP, 2026-10-26):
+   *  - TIMING: noma'lum telefon va nofaol foydalanuvchida ham bcrypt
+   *    (soxta xesh bilan) — javob vaqti telefon mavjudligini oshkor qilmaydi;
+   *  - QULF: telefon (+IP) bo'yicha ketma-ket xatolar → vaqtinchalik qulf
+   *    (`LoginThrottleService`, ko'pi bilan 15 daqiqa) — 429 `LOGIN_LOCKED`,
+   *    parol TEKSHIRILMAYDI; qulf boshlanganda ogohlantirish (log + Sentry +
+   *    faoliyat jurnali);
+   *  - REHASH: xesh narxi 12 dan past bo'lsa muvaffaqiyatli kirishda qayta
+   *    xeshlanadi (sessiyalar parol izi bilan birga — hech kim chiqmaydi);
+   *  - ZAIF PAROL: mavjud parol yangi siyosatga mos kelmasa login BARIBIR
+   *    muvaffaqiyatli, faqat `must_change_password = true` (javobda va
+   *    tokenda `pwd_change`) — foydalanuvchi parolni almashtirishga
+   *    yo'naltiriladi, chiqarib yuborilmaydi.
+   */
   async login(dto: LoginDto) {
+    const now = new Date();
+    const audit = requestContext.getAuditContext();
+    const throttleKeys = this.loginThrottleKeys(dto.phone_number, audit.ip);
     const user = await this.users.findOne({
       where: { phone_number: dto.phone_number, isDeleted: false },
     });
-    if (!user) {
-      await this.logAuthFailure(dto.phone_number, 'user_not_found');
-      throw new RpcException(errorRes('Invalid credentials', 401));
+
+    if (this.loginThrottle && throttleKeys) {
+      let lock = await this.loginThrottle.activeLock(throttleKeys, now);
+      // Telefonning UMUMIY qulfi (taqsimlangan hujum) — egasining tanish
+      // qurilmasi / IP'sini to'xtatmaydi (faqat shu IP qulfi qoladi).
+      if (
+        lock?.scope === 'phone' &&
+        user &&
+        (await this.sessions.isKnownDevice(user.id, {
+          deviceId: audit.device_id ?? null,
+          ip: audit.ip ?? null,
+        }))
+      ) {
+        lock = await this.loginThrottle.activeLock(throttleKeys, now, {
+          ignorePhoneScope: true,
+        });
+      }
+      if (lock) {
+        await this.logAuthFailure(dto.phone_number, 'locked', user?.id);
+        throw this.loginLockedError(lock.locked_until, now);
+      }
     }
-    if (user.status !== Status.ACTIVE) {
-      await this.logAuthFailure(dto.phone_number, 'inactive', user.id);
+
+    if (!user || user.status !== Status.ACTIVE) {
+      // Timing: topilmagan / nofaol foydalanuvchida ham AYNI narxdagi bcrypt.
+      await this.burnPasswordCheck(dto.password);
+      await this.onLoginFailure(
+        dto.phone_number,
+        user ? 'inactive' : 'user_not_found',
+        throttleKeys,
+        now,
+        user?.id,
+      );
       throw new RpcException(errorRes('Invalid credentials', 401));
     }
 
@@ -203,11 +263,156 @@ export class AuthService {
       user.password,
     );
     if (!isMatch) {
-      await this.logAuthFailure(dto.phone_number, 'bad_password', user.id);
+      await this.onLoginFailure(
+        dto.phone_number,
+        'bad_password',
+        throttleKeys,
+        now,
+        user.id,
+      );
       throw new RpcException(errorRes('Invalid credentials', 401));
     }
 
+    if (this.loginThrottle && throttleKeys) {
+      await this.loginThrottle.reset(throttleKeys);
+    }
+    await this.rehashIfNeeded(user, dto.password);
+    await this.flagWeakPassword(user, dto.password);
     return this.sessionForUser(user);
+  }
+
+  /** Timing: soxta xesh bilan bcrypt (natija ahamiyatsiz, xato yutiladi). */
+  private async burnPasswordCheck(password: string): Promise<void> {
+    try {
+      await this.bcryptEncryption.compareDummy(password);
+    } catch {
+      // faqat vaqt uchun
+    }
+  }
+
+  /** Telefon hash'i (bo'lmasa normallashgan raqam) + IP → qulf kalitlari. */
+  private loginThrottleKeys(
+    phone: string,
+    ip: string | undefined,
+  ): LoginThrottleKeys | null {
+    const audit = this.phoneForAudit(phone);
+    const normalized = normalizeUzPhone(phone);
+    const phoneKey =
+      audit.phone_hash ??
+      (normalized
+        ? normalized.slice(1)
+        : String(phone ?? '')
+            .replace(/\D/g, '')
+            .slice(0, 20));
+    return phoneKey ? loginThrottleKeys(phoneKey, ip ?? null) : null;
+  }
+
+  /** 429 — qachon qayta urinish mumkin (soniya, daqiqaga yaxlitlangan matn). */
+  private loginLockedError(lockedUntil: Date, now: Date): RpcException {
+    const retryAfterSeconds = Math.max(
+      1,
+      Math.ceil((lockedUntil.getTime() - now.getTime()) / 1000),
+    );
+    const minutes = Math.max(1, Math.ceil(retryAfterSeconds / 60));
+    return new RpcException({
+      statusCode: 429,
+      message: `Juda ko'p noto'g'ri urinish — ${minutes} daqiqadan keyin qayta urinib ko'ring`,
+      data: null,
+      code: LOGIN_LOCKED,
+      retry_after_seconds: retryAfterSeconds,
+    });
+  }
+
+  /**
+   * Xato urinish: jurnal (avvalgidek) + hisoblagich. Qulf YANGI boshlansa —
+   * ogohlantirish: `warn` log, Sentry xabari va faoliyat jurnalida
+   * `login_locked` (telefon faqat maska/hash).
+   */
+  private async onLoginFailure(
+    phone: string,
+    reason: string,
+    keys: LoginThrottleKeys | null,
+    now: Date,
+    userId?: string,
+  ): Promise<void> {
+    await this.logAuthFailure(phone, reason, userId);
+    if (!this.loginThrottle || !keys) return;
+    const { locked } = await this.loginThrottle.recordFailure(keys, now);
+    for (const lock of locked) {
+      const audit = this.phoneForAudit(phone);
+      const minutes = Math.round(
+        (lock.locked_until.getTime() - now.getTime()) / 60_000,
+      );
+      const text = `Login qulfi: ${audit.phone_masked} — ${lock.fail_count} ta xato (${lock.scope}), ${minutes} daqiqa`;
+      this.logger.warn(text);
+      captureException(new Error(text), {
+        kind: 'login_lockout',
+        scope: lock.scope,
+        fail_count: lock.fail_count,
+        phone_hash: audit.phone_hash,
+        user_id: userId ?? null,
+      });
+      await this.logAuthFailure(phone, `login_locked_${lock.scope}`, userId);
+    }
+  }
+
+  /**
+   * bcrypt narxi joriydan (12) past — yangi xesh. Sessiyalarning parol izi
+   * (`password_fp`, xeshdan olinadi) AYNI tranzaksiyada yangilanadi, aks
+   * holda qayta xeshlash foydalanuvchining boshqa qurilmalarini «parol
+   * almashdi» deb chiqarib yuborardi. Xato — login'ni to'xtatmaydi.
+   */
+  private async rehashIfNeeded(user: User, password: string): Promise<void> {
+    try {
+      if (!this.bcryptEncryption.needsRehash(user.password)) return;
+      const oldHash = user.password;
+      const newHash = await this.bcryptEncryption.encrypt(password);
+      const updated = await this.users.manager.transaction(async (manager) => {
+        const result = await manager.update(
+          User,
+          { id: user.id, password: oldHash },
+          { password: newHash },
+        );
+        if (!result.affected) return false;
+        await this.sessions.repointPasswordFingerprint(
+          manager,
+          user.id,
+          oldHash,
+          newHash,
+        );
+        return true;
+      });
+      if (updated) user.password = newHash;
+    } catch (error) {
+      this.logger.warn(
+        `Parol qayta xeshlanmadi (user ${user.id}): ${(error as Error)?.message ?? 'unknown'}`,
+      );
+    }
+  }
+
+  /**
+   * Mavjud parol yangi siyosatga mos emas → `must_change_password = true`
+   * (login baribir davom etadi). Bayroq bu yerda faqat QO'YILADI — tushirish
+   * faqat foydalanuvchi parolni o'zi almashtirganda.
+   */
+  private async flagWeakPassword(user: User, password: string): Promise<void> {
+    if (user.must_change_password) return;
+    if (
+      isPasswordPolicyCompliant(password, {
+        role: user.role,
+        phone: user.phone_number,
+      })
+    ) {
+      return;
+    }
+    try {
+      await this.users.update({ id: user.id }, { must_change_password: true });
+      user.must_change_password = true;
+    } catch (error) {
+      this.logger.warn(
+        `must_change_password yozilmadi (user ${user.id}): ${(error as Error)?.message ?? 'unknown'}`,
+      );
+    }
   }
 
   /**
@@ -251,6 +456,8 @@ export class AuthService {
       statusCode: 200,
       message: 'success',
       user: this.sanitize(user),
+      // (NDmZMzCP) Zaif / vaqtinchalik parol — keyingi qadam parolni almashtirish.
+      must_change_password: Boolean(user.must_change_password),
       ...tokens,
       access_token_expires_at: tokens.accessTokenExpiresAt,
       refresh_token_expires_at: tokens.refreshTokenExpiresAt,
@@ -888,7 +1095,10 @@ export class AuthService {
     });
     await this.saveRefreshToken(user.id, refreshToken);
 
-    const accessTokenResult = await this.signAccessToken(payload, session.id);
+    const accessTokenResult = await this.signAccessToken(
+      this.withPasswordChangeClaim(payload, user),
+      session.id,
+    );
     const refreshTokenWarnAt =
       refreshTokenExpiresAt !== null
         ? refreshTokenExpiresAt - 15 * 60 * 1000
@@ -903,7 +1113,27 @@ export class AuthService {
   }
 
   private async issueAccessToken(user: User, sessionId: string) {
-    return this.signAccessToken(await this.createTokenPayload(user), sessionId);
+    return this.signAccessToken(
+      this.withPasswordChangeClaim(await this.createTokenPayload(user), user),
+      sessionId,
+    );
+  }
+
+  /**
+   * (NDmZMzCP) `must_change_password` → access token'da `pwd_change: true`
+   * (faqat parol/OTP sessiyalari; Telegram tokenlariga qo'shilmaydi —
+   * ular parol bilan olinmaydi). Gateway `PasswordChangeGuard` shu claim
+   * bo'yicha tokenni parol almashtirish oqimi bilan cheklaydi
+   * (`PASSWORD_CHANGE_GATE=on`). Bayroq yo'q — token avvalgidek.
+   * Parol almashtirilgach `POST /auth/refresh` claim'siz token beradi.
+   */
+  private withPasswordChangeClaim<T extends object>(
+    payload: T,
+    user: Pick<User, 'must_change_password'>,
+  ): T & { pwd_change?: true } {
+    return user.must_change_password
+      ? { ...payload, pwd_change: true }
+      : payload;
   }
 
   /**
@@ -913,7 +1143,9 @@ export class AuthService {
    * qaramaydi. Telegram tokenlarida `sid` yo'q (sessiya emas).
    */
   private async signAccessToken(
-    payload: Awaited<ReturnType<AuthService['createTokenPayload']>>,
+    payload: Awaited<ReturnType<AuthService['createTokenPayload']>> & {
+      pwd_change?: true;
+    },
     sessionId: string,
   ) {
     const accessToken = await this.jwtService.signAsync({
@@ -958,6 +1190,8 @@ export class AuthService {
       phone_number: user.phone_number,
       role: user.role,
       status: user.status,
+      // (NDmZMzCP) `true` — FE parolni almashtirish ekraniga yo'naltiradi.
+      must_change_password: Boolean(user.must_change_password),
       createdAt: user.createdAt,
       updatedAt: user.updatedAt,
     };

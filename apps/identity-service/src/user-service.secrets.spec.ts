@@ -315,7 +315,7 @@ describe('UserServiceService — market_tg_token va boshqa sirlar javobda yo‘q
         name: 'M',
         phone_number: '+998900000777',
         username: 'm777',
-        password: 'x',
+        password: 'Test-Parol-2026',
         tariff_home: 1,
         tariff_center: 1,
       } as never,

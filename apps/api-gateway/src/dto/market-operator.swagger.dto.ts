@@ -12,7 +12,7 @@ import {
   Min,
   MinLength,
 } from 'class-validator';
-import { Commission_type, Status } from '@app/common';
+import { Commission_type, Status, IsPasswordPolicy, Roles } from '@app/common';
 
 /**
  * POST /market-operators (i76gGjyq). `market_id` va `role` ATAYLAB yo'q:
@@ -30,9 +30,13 @@ export class CreateMarketOperatorRequestDto {
   @IsPhoneNumber('UZ')
   phone_number!: string;
 
-  @ApiProperty({ example: 'secret123', minLength: 4 })
+  @ApiProperty({
+    example: 'Kuchli-Parol-2026',
+    minLength: 8,
+    description: 'Kamida 8 belgi (xodim — 10), oddiy parollar taqiqlangan',
+  })
   @IsString()
-  @MinLength(4)
+  @IsPasswordPolicy(Roles.MARKET_OPERATOR)
   password!: string;
 
   // B3ZtzCCx (ega qarori 2026-10-19, MO-S5): ixtiyoriy komissiya — AYNI

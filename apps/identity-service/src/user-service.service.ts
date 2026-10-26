@@ -60,6 +60,7 @@ import {
   Status,
   normalizeUzPhone,
   parseUzPhoneSearch,
+  passwordPolicyError,
   rmqSend,
   uzPhoneDigitsLikeSql,
 } from '@app/common';
@@ -739,6 +740,20 @@ export class UserServiceService implements OnModuleInit {
     throw new RpcException(errorRes(message, 404));
   }
 
+  /**
+   * (NDmZMzCP) Yangi parol siyosati (min 8, xodim 10, oddiy parollar
+   * taqiqlangan) — RMQ'da ValidationPipe yo'q, shuning uchun xeshlashdan
+   * OLDIN shu yerda ham. Login'ga TEGMAYDI (mavjud parollar ishlaydi).
+   */
+  private assertPasswordPolicy(
+    password: unknown,
+    role: string | null | undefined,
+    phone?: string | null,
+  ): void {
+    const error = passwordPolicyError(password, { role, phone });
+    if (error) this.badRequest(error);
+  }
+
   private badRequest(message: string): never {
     throw new RpcException(errorRes(message, 400));
   }
@@ -1337,6 +1352,7 @@ export class UserServiceService implements OnModuleInit {
 
     await this.ensurePhoneUnique(dto.phone_number);
 
+    this.assertPasswordPolicy(dto.password, Roles.ADMIN, dto.phone_number);
     const hashedPassword = await this.bcryptEncryption.encrypt(dto.password);
 
     const admin = this.users.create({
@@ -1376,6 +1392,11 @@ export class UserServiceService implements OnModuleInit {
 
     await this.ensurePhoneUnique(dto.phone_number);
 
+    this.assertPasswordPolicy(
+      dto.password,
+      Roles.REGISTRATOR,
+      dto.phone_number,
+    );
     const hashedPassword = await this.bcryptEncryption.encrypt(dto.password);
 
     const registrator = this.users.create({
@@ -1431,6 +1452,7 @@ export class UserServiceService implements OnModuleInit {
 
     await this.ensurePhoneUnique(dto.phone_number);
 
+    this.assertPasswordPolicy(dto.password, Roles.LOGIST, dto.phone_number);
     const hashedPassword = await this.bcryptEncryption.encrypt(dto.password);
 
     const logist = this.users.create({
@@ -1488,6 +1510,7 @@ export class UserServiceService implements OnModuleInit {
 
     await this.ensurePhoneUnique(phoneNumber);
 
+    this.assertPasswordPolicy(password, Roles.INVESTOR, phoneNumber);
     const hashedPassword = await this.bcryptEncryption.encrypt(password);
 
     const investorUser = this.users.create({
@@ -1609,7 +1632,12 @@ export class UserServiceService implements OnModuleInit {
 
     let passwordChanged = false;
     if (dto.password) {
+      // (NDmZMzCP) Yangi parol — siyosat egasining roli bo'yicha (xodim 10).
+      this.assertPasswordPolicy(dto.password, admin.role, admin.phone_number);
       admin.password = await this.bcryptEncryption.encrypt(dto.password);
+      // (NDmZMzCP) O'zi almashtirdi — «parolni almashtiring» bayrog'i
+      // tushadi; admin boshqa odamga o'rnatgan parol esa bayroqni o'zgartirmaydi.
+      if (requesterIsSelf) admin.must_change_password = false;
       // RBAC-09: parol almashtirilsa (o'g'irlangan telefon, ishdan
       // bo'shatilgan kuryer) boshqa qurilmalar DARHOL chiqariladi.
       // (Elchi Pochta #3, 2026-10-23) Qaysi sessiya qolishi — saqlashdan
@@ -3093,6 +3121,7 @@ export class UserServiceService implements OnModuleInit {
     await this.ensurePhoneUnique(dto.phone_number);
     await this.ensureUsernameUnique(dto.username);
 
+    this.assertPasswordPolicy(dto.password, Roles.MARKET, dto.phone_number);
     const hashedPassword = await this.bcryptEncryption.encrypt(dto.password);
 
     const market = this.users.create({
@@ -3165,6 +3194,7 @@ export class UserServiceService implements OnModuleInit {
         : await this.resolveUserDistrictId(dto.district_id, dto.region_id);
     await this.ensurePhoneUnique(dto.phone_number);
 
+    this.assertPasswordPolicy(dto.password, Roles.COURIER, dto.phone_number);
     const hashedPassword = await this.bcryptEncryption.encrypt(dto.password);
 
     const courier = this.users.create({
@@ -3286,6 +3316,7 @@ export class UserServiceService implements OnModuleInit {
 
     await this.ensurePhoneUnique(dto.phone_number);
 
+    this.assertPasswordPolicy(dto.password, Roles.MANAGER, dto.phone_number);
     const hashedPassword = await this.bcryptEncryption.encrypt(dto.password);
 
     const manager = this.users.create({
@@ -3604,7 +3635,15 @@ export class UserServiceService implements OnModuleInit {
     }
 
     if (dto.password) {
+      this.assertPasswordPolicy(
+        dto.password,
+        Roles.MARKET,
+        market.phone_number,
+      );
       market.password = await this.bcryptEncryption.encrypt(dto.password);
+      if (this.isSelfRequester(requester, market.id)) {
+        market.must_change_password = false;
+      }
       // RBAC-09: yangi parol — eski qurilmalar endi refresh qila olmaydi.
       // (Elchi Pochta #3, 2026-10-23) Bu RPC'da joriy sessiya (`sid`) yo'q —
       // HAMMASI; saqlangandan keyin ular `password_changed` bilan aniq
@@ -5348,6 +5387,7 @@ export class UserServiceService implements OnModuleInit {
     password: string,
     phone_number?: string,
   ) {
+    this.assertPasswordPolicy(password, Roles.CUSTOMER, phone_number);
     await this.ensureUsernameUnique(username);
     await this.ensurePhoneUnique(phone_number ?? username);
 
@@ -5580,6 +5620,7 @@ export class UserServiceService implements OnModuleInit {
       await this.ensurePhoneUnique(rawPhone);
     }
 
+    this.assertPasswordPolicy(password, Roles.MARKET_OPERATOR, rawPhone);
     const hashedPassword = await this.bcryptEncryption.encrypt(password);
     const operator = this.users.create({
       name,

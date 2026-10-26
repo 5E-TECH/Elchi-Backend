@@ -118,7 +118,7 @@ const courierDto = () =>
   ({
     name: 'E2E PICKUP kuryer',
     phone_number: '+998903001234',
-    password: '0990',
+    password: 'Test-Parol-2026',
     tariff_home: 15000,
     tariff_center: 10000,
     region_id: '13',
@@ -129,7 +129,7 @@ const staffDto = () =>
   ({
     name: 'Yangi xodim',
     phone_number: '+998903001235',
-    password: '0990',
+    password: 'Test-Parol-2026',
     branch_id: '15',
   }) as never;
 

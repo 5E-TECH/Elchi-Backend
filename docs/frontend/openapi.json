@@ -20884,7 +20884,9 @@
           },
           "password": {
             "type": "string",
-            "example": "strongPassword123"
+            "example": "Kuchli-Parol-2026",
+            "minLength": 10,
+            "description": "Kamida 8 belgi (xodim — 10), oddiy parollar taqiqlangan"
           },
           "salary": {
             "type": "number",
@@ -20915,7 +20917,9 @@
           },
           "password": {
             "type": "string",
-            "example": "strongPassword123"
+            "example": "Kuchli-Parol-2026",
+            "minLength": 10,
+            "description": "Kamida 8 belgi (xodim — 10), oddiy parollar taqiqlangan"
           },
           "salary": {
             "type": "number",
@@ -20951,7 +20955,9 @@
           },
           "password": {
             "type": "string",
-            "example": "strongPassword123"
+            "example": "Kuchli-Parol-2026",
+            "minLength": 10,
+            "description": "Kamida 8 belgi (xodim — 10), oddiy parollar taqiqlangan"
           },
           "salary": {
             "type": "number",
@@ -20982,8 +20988,9 @@
           },
           "password": {
             "type": "string",
-            "example": "strongPassword123",
-            "minLength": 6
+            "example": "Kuchli-Parol-2026",
+            "minLength": 8,
+            "description": "Kamida 8 belgi (xodim — 10), oddiy parollar taqiqlangan"
           }
         },
         "required": [
@@ -21010,7 +21017,9 @@
           },
           "password": {
             "type": "string",
-            "example": "secret123"
+            "example": "Kuchli-Parol-2026",
+            "minLength": 10,
+            "description": "Kamida 8 belgi (xodim — 10), oddiy parollar taqiqlangan"
           },
           "salary": {
             "type": "number",
@@ -21057,7 +21066,9 @@
           },
           "password": {
             "type": "string",
-            "example": "secret123"
+            "example": "Kuchli-Parol-2026",
+            "minLength": 10,
+            "description": "Kamida 8 belgi (xodim — 10), oddiy parollar taqiqlangan"
           },
           "salary": {
             "type": "number",
@@ -21155,7 +21166,9 @@
           },
           "password": {
             "type": "string",
-            "example": "newStrongPassword123"
+            "example": "Kuchli-Parol-2026",
+            "minLength": 8,
+            "description": "Kamida 8 belgi (xodim — 10), oddiy parollar taqiqlangan"
           },
           "status": {
             "type": "string",
@@ -21298,7 +21311,9 @@
           },
           "password": {
             "type": "string",
-            "example": "secret123"
+            "example": "Kuchli-Parol-2026",
+            "minLength": 8,
+            "description": "Kamida 8 belgi (xodim — 10), oddiy parollar taqiqlangan"
           },
           "tariff_home": {
             "type": "number",
@@ -21618,6 +21633,11 @@
             "type": "object",
             "example": 1793101500000,
             "nullable": true
+          },
+          "must_change_password": {
+            "type": "boolean",
+            "example": false,
+            "description": "(NDmZMzCP) `true` — parol yangi siyosatga (min 8, xodim 10, oddiy parollar taqiqlangan) mos emas yoki vaqtinchalik: FE «Yangi parol o'rnating» ekraniga yo'naltiradi (PATCH /auth/my-profile `password`, keyin POST /auth/refresh). `PASSWORD_CHANGE_GATE=on` bo'lsa boshqa route'lar 403 `PASSWORD_CHANGE_REQUIRED`."
           }
         },
         "required": [
@@ -28466,8 +28486,9 @@
           },
           "password": {
             "type": "string",
-            "example": "secret123",
-            "minLength": 4
+            "example": "Kuchli-Parol-2026",
+            "minLength": 8,
+            "description": "Kamida 8 belgi (xodim — 10), oddiy parollar taqiqlangan"
           },
           "commission_type": {
             "type": "string",

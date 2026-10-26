@@ -6,6 +6,7 @@ import {
   IsString,
   MinLength,
 } from 'class-validator';
+import { IsPasswordPolicy } from '@app/common';
 
 export class CreateUserRequestDto {
   @ApiPropertyOptional({ example: 'Ali Valiyev' })
@@ -23,9 +24,13 @@ export class CreateUserRequestDto {
   @IsPhoneNumber('UZ')
   phone_number?: string;
 
-  @ApiProperty({ example: '123456' })
+  @ApiProperty({
+    example: 'Kuchli-Parol-2026',
+    minLength: 8,
+    description: 'Kamida 8 belgi (xodim — 10), oddiy parollar taqiqlangan',
+  })
   @IsString()
-  @MinLength(4)
+  @IsPasswordPolicy((dto) => (typeof dto.role === 'string' ? dto.role : null))
   password!: string;
 
   @ApiPropertyOptional({ example: 'customer' })
@@ -56,10 +61,14 @@ export class UpdateUserRequestDto {
   @IsPhoneNumber('UZ')
   phone_number?: string;
 
-  @ApiPropertyOptional({ example: '654321' })
+  @ApiPropertyOptional({
+    example: 'Kuchli-Parol-2026',
+    minLength: 8,
+    description: 'Kamida 8 belgi (xodim — 10), oddiy parollar taqiqlangan',
+  })
   @IsOptional()
   @IsString()
-  @MinLength(4)
+  @IsPasswordPolicy()
   password?: string;
 
   @ApiPropertyOptional({ example: 'admin' })

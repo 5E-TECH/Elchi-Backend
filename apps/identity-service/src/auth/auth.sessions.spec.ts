@@ -2405,7 +2405,7 @@ describe('Elchi Pochta #3 (2026-10-23) — parol almashtirish boshqa qurilmalarn
     // ...lekin parolni almashtirish ishlaydi.
     const res = (await w.userService.updateUser(
       '25',
-      { password: 'yangi-parol' } as never,
+      { password: 'Yangi-Parol-2026' } as never,
       SELF('25'),
       { currentSessionId: laptopSid },
     )) as PasswordReply;
@@ -2422,12 +2422,12 @@ describe('Elchi Pochta #3 (2026-10-23) — parol almashtirish boshqa qurilmalarn
     });
     expect(byId(laptopSid)).toMatchObject({
       revoked_at: null,
-      password_fp: passwordFingerprint('bcrypt-hash-NEW-yangi-parol'),
+      password_fp: passwordFingerprint('bcrypt-hash-NEW-Yangi-Parol-2026'),
     });
 
     // Epoch OSHMAGAN (joriy sessiya yaroqli), eski ustun tozalangan.
     const user = w.users.get('25')!;
-    expect(user.password).toBe('bcrypt-hash-NEW-yangi-parol');
+    expect(user.password).toBe('bcrypt-hash-NEW-Yangi-Parol-2026');
     expect(user.session_epoch).toBe(0);
     expect(user.refresh_token).toBeNull();
 
@@ -2462,7 +2462,7 @@ describe('Elchi Pochta #3 (2026-10-23) — parol almashtirish boshqa qurilmalarn
 
     const res = (await w.userService.updateUser(
       '25',
-      { password: 'tiklangan' } as never,
+      { password: 'Tiklangan-Parol-2026' } as never,
       { id: '26', roles: ['superadmin'] },
       { currentSessionId: adminSid },
     )) as PasswordReply;
@@ -2496,7 +2496,7 @@ describe('Elchi Pochta #3 (2026-10-23) — parol almashtirish boshqa qurilmalarn
     await w.login('25', LAPTOP_CTX);
     const res = (await w.userService.updateUser(
       '25',
-      { password: 'yangi' } as never,
+      { password: 'Yangi-Parol-2026' } as never,
       SELF('25'),
       { currentSessionId: null },
     )) as PasswordReply;
@@ -2511,7 +2511,7 @@ describe('Elchi Pochta #3 (2026-10-23) — parol almashtirish boshqa qurilmalarn
     await w.login('25', PHONE_CTX);
     const res = (await w.userService.updateUser(
       '25',
-      { password: 'yangi', phone_number: '+998901112233' } as never,
+      { password: 'Yangi-Parol-2026', phone_number: '+998901112233' } as never,
       SELF('25'),
       { currentSessionId: w.sidOf(laptop.accessToken) },
     )) as PasswordReply;
@@ -2530,7 +2530,7 @@ describe('Elchi Pochta #3 (2026-10-23) — parol almashtirish boshqa qurilmalarn
     // Begona sid (26 ning sessiyasi) — 25 ning hech biri saqlanmaydi.
     const res = (await w.userService.updateUser(
       '25',
-      { password: 'yangi' } as never,
+      { password: 'Yangi-Parol-2026' } as never,
       SELF('25'),
       { currentSessionId: w.sidOf(other.accessToken) },
     )) as PasswordReply;
@@ -2551,7 +2551,7 @@ describe('Elchi Pochta #3 (2026-10-23) — parol almashtirish boshqa qurilmalarn
     const laptopSid = w.sidOf(laptop.accessToken)!;
     await w.userService.updateUser(
       '25',
-      { password: 'yangi' } as never,
+      { password: 'Yangi-Parol-2026' } as never,
       SELF('25'),
       { currentSessionId: laptopSid },
     );
@@ -2578,7 +2578,7 @@ describe('Elchi Pochta #3 (2026-10-23) — parol almashtirish boshqa qurilmalarn
     const phoneSid = w.sidOf(phone.accessToken)!;
     await w.userService.updateUser(
       '25',
-      { password: 'yangi' } as never,
+      { password: 'Yangi-Parol-2026' } as never,
       SELF('25'),
       { currentSessionId: w.sidOf(laptop.accessToken) },
     );
@@ -2616,7 +2616,7 @@ describe('Elchi Pochta #3 (2026-10-23) — parol almashtirish boshqa qurilmalarn
 
     await w.userService.updateUser(
       '25',
-      { password: 'tiklangan' } as never,
+      { password: 'Tiklangan-Parol-2026' } as never,
       { id: '26', roles: ['superadmin'] },
       {},
     );
@@ -2637,13 +2637,15 @@ describe('Elchi Pochta #3 (2026-10-23) — parol almashtirish boshqa qurilmalarn
       .mockRejectedValueOnce(new Error('db down'));
     const res = (await w.userService.updateUser(
       '25',
-      { password: 'yangi' } as never,
+      { password: 'Yangi-Parol-2026' } as never,
       SELF('25'),
       { currentSessionId: w.sidOf(laptop.accessToken) },
     )) as PasswordReply;
     expect(res.statusCode).toBe(200);
     expect(res).not.toHaveProperty('revoked_session_ids');
-    expect(w.users.get('25')!.password).toBe('bcrypt-hash-NEW-yangi');
+    expect(w.users.get('25')!.password).toBe(
+      'bcrypt-hash-NEW-Yangi-Parol-2026',
+    );
     expect(await w.refreshStatus(phone.refreshToken)).toMatchObject({
       statusCode: 401,
     });
@@ -2671,7 +2673,7 @@ describe('Elchi Pochta #3 (2026-10-23) — parol almashtirish boshqa qurilmalarn
     await w.login('25', LAPTOP_CTX);
     const res = (await w.userService.updateMarket(
       '25',
-      { password: 'market-yangi' } as never,
+      { password: 'Market-Yangi-2026' } as never,
       { id: '26', roles: ['superadmin'] },
     )) as PasswordReply;
     expect(res.sessions_revoked).toBe(2);

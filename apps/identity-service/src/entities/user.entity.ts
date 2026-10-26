@@ -49,6 +49,15 @@ export class User extends BaseEntity {
   @Column({ type: 'integer', default: 0 })
   session_epoch: number;
 
+  /**
+   * (NDmZMzCP / aidsxJ2H) Keyingi kirishda parolni almashtirish kerak. Login
+   * paytida mavjud parol yangi siyosatga mos kelmasa `true` qilinadi (login
+   * baribir muvaffaqiyatli); foydalanuvchi parolni O'ZI almashtirsa `false`.
+   * Login javobida va access token'da (`pwd_change`) ko'rinadi.
+   */
+  @Column({ type: 'boolean', default: false })
+  must_change_password: boolean;
+
   @Column({
     type: 'decimal',
     precision: 12,

@@ -33,6 +33,7 @@ import { Throttle } from '@nestjs/throttler';
 import type { Request, Response } from 'express';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
 import { Public } from './auth/public.decorator';
+import { AllowDuringPasswordChange } from './auth/password-change.guard';
 import { refreshCookieOptions } from './auth/refresh-cookie';
 import {
   SessionKickReason,
@@ -251,6 +252,11 @@ export class AuthGatewayController {
       access_token_expires_at: accessTokenExpiresAt,
       refresh_token_expires_at: refreshTokenExpiresAt,
       refresh_token_warn_at: refreshTokenWarnAt,
+      // (NDmZMzCP) Zaif / vaqtinchalik parol — FE almashtirish ekraniga.
+      must_change_password:
+        payload.must_change_password === true ||
+        (payload.user as { must_change_password?: unknown } | undefined)
+          ?.must_change_password === true,
     };
   }
 
@@ -432,6 +438,7 @@ export class AuthGatewayController {
    * shuning uchun bu so'rovga ham keladi).
    */
   @Post('logout')
+  @AllowDuringPasswordChange()
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
   @ApiOperation({
@@ -582,6 +589,7 @@ export class AuthGatewayController {
   }
 
   @Get('validate')
+  @AllowDuringPasswordChange()
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Validate current JWT token' })
@@ -595,6 +603,7 @@ export class AuthGatewayController {
   }
 
   @Get('my-profile')
+  @AllowDuringPasswordChange()
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Get current user profile' })
@@ -621,6 +630,7 @@ export class AuthGatewayController {
    * `sessions_revoked` (soni).
    */
   @Patch('my-profile')
+  @AllowDuringPasswordChange()
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
   @ApiOperation({

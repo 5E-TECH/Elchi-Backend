@@ -14,6 +14,10 @@ import { UserServiceService } from './user-service.service';
 import { AuthService } from './auth/auth.service';
 import { AuthSessionService } from './auth/auth-session.service';
 import { SessionKickPublisher } from './auth/session-kick.publisher';
+import {
+  AuthLoginThrottle,
+  LoginThrottleService,
+} from './auth/login-throttle.service';
 import { User } from './entities/user.entity';
 import { CourierRegion } from './entities/courier-region.entity';
 import { UserSession } from './entities/user-session.entity';
@@ -46,7 +50,13 @@ import { OtpService } from './otp/otp.service';
     ScheduleModule.forRoot(),
     DatabaseModule,
     ActivityLogModule.forService('identity-service'),
-    TypeOrmModule.forFeature([User, OtpCode, CourierRegion, UserSession]),
+    TypeOrmModule.forFeature([
+      User,
+      OtpCode,
+      CourierRegion,
+      UserSession,
+      AuthLoginThrottle,
+    ]),
     JwtModule.registerAsync({
       inject: [ConfigService],
       useFactory: (configService: ConfigService) => ({
@@ -64,6 +74,7 @@ import { OtpService } from './otp/otp.service';
     AuthService,
     AuthSessionService,
     SessionKickPublisher,
+    LoginThrottleService,
     BcryptEncryption,
     OtpService,
   ],
