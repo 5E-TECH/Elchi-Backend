@@ -110,6 +110,9 @@ const toNumber = (value: unknown): number => {
   const n = Number(value);
   return Number.isFinite(n) ? n : 0;
 };
+/** Id / kod — faqat satr yoki son (obyekt `[object Object]` bo'lib ketmasin). */
+const toIdOrNull = (value: unknown): string | null =>
+  typeof value === 'string' || typeof value === 'number' ? String(value) : null;
 const toNullable = (value: unknown): number | null => {
   if (value === null || value === undefined || value === '') return null;
   const n = Number(value);
@@ -203,9 +206,8 @@ export async function fetchSaleDeliveryQuote(
   }
   const basis = data.basis;
   return {
-    tariff_id: String(data.tariff_id ?? ''),
-    tariff_row_id:
-      data.tariff_row_id == null ? null : String(data.tariff_row_id),
+    tariff_id: toIdOrNull(data.tariff_id) ?? '',
+    tariff_row_id: toIdOrNull(data.tariff_row_id),
     base_price: toNumber(data.base_price),
     extra_per_kg: toNumber(data.extra_per_kg),
     extra: toNumber(data.extra),
@@ -217,7 +219,7 @@ export async function fetchSaleDeliveryQuote(
     estimated: data.estimated === true,
     unmeasuredItems: toNumber(data.unmeasuredItems),
     missingDimensionItems: toNumber(data.missingDimensionItems),
-    settings_id: data.settings_id == null ? null : String(data.settings_id),
+    settings_id: toIdOrNull(data.settings_id),
     min_delivery_price: toNullable(data.min_delivery_price),
     extra_cost_limit_amount: toNullable(data.extra_cost_limit_amount),
     center_base: toNumber(data.center_base),

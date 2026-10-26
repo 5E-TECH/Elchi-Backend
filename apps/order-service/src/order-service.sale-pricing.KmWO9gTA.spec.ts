@@ -186,7 +186,11 @@ interface WorldOpts {
 
 /** Sotuv / qisman sotuv / bekor qilish uchun dunyo (fix3 makeSellService). */
 function makeSaleWorld(opts: WorldOpts = {}) {
-  const order: Row = { ...WAITING_ORDER, ...(opts.order ?? {}) };
+  const order: Row = {
+    ...WAITING_ORDER,
+    items: ITEMS.map((item) => ({ ...item })),
+    ...(opts.order ?? {}),
+  };
   const market =
     opts.market === null ? undefined : { ...MARKET, ...(opts.market ?? {}) };
   const legs: Leg[] = [];
@@ -270,7 +274,11 @@ function makeSaleWorld(opts: WorldOpts = {}) {
       createCustodyEvent: jest.fn().mockResolvedValue(undefined),
       toTrackingRole: jest.fn(() => 'courier'),
     },
-    orderItemRepo: { find: jest.fn().mockResolvedValue(ITEMS) },
+    // Har chaqiruvda yangi nusxa: qisman sotuv qatorlar sonini joyida
+    // kamaytiradi (umumiy ITEMS buzilmasin).
+    orderItemRepo: {
+      find: jest.fn(() => Promise.resolve(ITEMS.map((item) => ({ ...item })))),
+    },
     lookup: {
       getMarketsByIds: jest.fn(() => Promise.resolve(market ? [market] : [])),
       getCouriersByIds: jest.fn(() =>
