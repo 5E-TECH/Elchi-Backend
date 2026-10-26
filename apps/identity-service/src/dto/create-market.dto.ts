@@ -39,17 +39,42 @@ export class CreateMarketDto {
   @IsString()
   address?: string;
 
-  @ApiProperty({ example: 10000, minimum: 0 })
-  @IsNotEmpty()
+  /**
+   * KmWO9gTA — market profil tariflari LEGACY: endi MAJBURIY EMAS (ustunlar
+   * eski snapshotlar va audit uchun qoladi). Berilsa — standart uy/markaz
+   * narxi (dvigatelning bazasi); berilmasa NULL (0 EMAS — 0 "bepul yetkazish"
+   * degani) va sotuvda baza tarif jadvalidan olinadi (dvigatel yoqilganda).
+   */
+  @ApiPropertyOptional({
+    example: 10000,
+    minimum: 0,
+    description:
+      'Standart uy narxi (eski majburiy maydon; endi ixtiyoriy — berilmasa NULL)',
+  })
+  @IsOptional()
   @IsNumber()
   @Min(0)
-  tariff_home: number;
+  tariff_home?: number | null;
 
-  @ApiProperty({ example: 8000, minimum: 0 })
-  @IsNotEmpty()
+  @ApiPropertyOptional({
+    example: 8000,
+    minimum: 0,
+    description:
+      'Standart markaz narxi (eski majburiy maydon; endi ixtiyoriy — berilmasa NULL)',
+  })
+  @IsOptional()
   @IsNumber()
   @Min(0)
-  tariff_center: number;
+  tariff_center?: number | null;
+
+  /**
+   * KmWO9gTA — «Vazn va hajm bo'yicha narx» (sukut TRUE). Faqat
+   * SUPERADMIN/ADMIN beradi (menejer — 403).
+   */
+  @ApiPropertyOptional({ example: true })
+  @IsOptional()
+  @IsBoolean()
+  weight_volume_pricing?: boolean;
 
   @ApiProperty({
     example: Where_deliver.CENTER,

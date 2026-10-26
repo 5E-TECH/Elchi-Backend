@@ -123,4 +123,12 @@ export class UpdateUserDto {
   @IsOptional()
   @IsBoolean()
   can_order_from_warehouse?: boolean;
+
+  /**
+   * KmWO9gTA — market «Vazn va hajm bo'yicha narx» kaliti. Faqat
+   * SUPERADMIN/ADMIN va faqat MARKET uchun.
+   */
+  @IsOptional()
+  @IsBoolean()
+  weight_volume_pricing?: boolean;
 }
