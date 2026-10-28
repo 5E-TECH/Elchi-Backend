@@ -9,18 +9,19 @@
 >                          └─(fast-forward)──► main ──► deploy (prod) ──► api.elchipochta.uz
 > ```
 >
-> **Hozirgi holat: hamma narsa tayyor, lekin O'CHIQ.** Server sotib olinmagan,
-> `test` branchi yo'q, `STAGING_ENABLED` o'rnatilmagan — shuning uchun hech
-> narsa ishga tushmaydi va prod deploy avvalgidek ishlaydi.
+> **Hozirgi holat: kod tayyor, lekin O'CHIQ.** Server olingan (2026-10-28),
+> §3–§5 bo'yicha sozlanadi. `test` branchi yo'q, `STAGING_ENABLED`
+> o'rnatilmagan — shuning uchun hech narsa ishga tushmaydi va prod deploy
+> avvalgidek ishlaydi (staging darvozasi ham o'chiq).
 
 ## 1. Nima qayerda
 
 | Fayl | Vazifasi |
 |---|---|
-| `.github/workflows/deploy.yml` | `main` push → `deploy` (prod, o'zgarmagan). `test` push → `deploy-staging` (faqat `vars.STAGING_ENABLED == 'true'` bo'lsa). Ikkalasi ham `test` + `unit-tests` (3 shard) yashil bo'lgandagina. |
+| `.github/workflows/deploy.yml` | `main` push → `deploy` (prod). `test` push → `deploy-staging` (faqat `vars.STAGING_ENABLED == 'true'` bo'lsa). Ikkalasi ham `test` + `unit-tests` (3 shard) yashil bo'lgandagina. `STAGING_ENABLED` yoqiq bo'lsa prod deploy **staging darvozasidan** o'tadi (§6.2). Deploy yarim yo'lda bekor qilinmaydi (`cancel-in-progress: false`), har run faqat o'z commitini deploy qiladi. |
 | `scripts/staging/sync-deploy-workflow.mjs` | `deploy-staging` skripti prod skriptidan **generatsiya qilinadi** (qo'lda tahrirlanmaydi). Prod skript o'zgarsa: `node scripts/staging/sync-deploy-workflow.mjs` → commit. CI (`ci.yml`, «Staging deploy is in sync») farq bo'lsa qizil. |
 | `docker-compose.staging.yml` | prod compose ustidan override: `.env.staging`, 8 GB ga mos xotira chegaralari, `elchi-staging` loyiha nomi (volume/network), `elchi-stg-*` konteyner nomlari, boshqa localhost portlar, o'z tunnel tokeni, backup faqat lokal. |
-| `.env.staging.example` | `.env.staging` shabloni (hamma kalit + staging qiymatlari). |
+| `.env.staging.example` | `.env.staging` shabloni (hamma kalit + staging qiymatlari). CI (`ci.yml`, «Staging deploy is in sync») `.env.example` dagi har kalit shu yerda borligini tekshiradi. Funksiya kalitlari (`…_ENABLED`, `SALE_PRICING_ENGINE`, `FINANCE_*`) serverdagi `.env.staging` da prod qiymati bilan bir xil bo'lsin. |
 | `scripts/staging/bootstrap-server.sh` | yangi serverni bir marta tayyorlash (idempotent). |
 | `scripts/staging/restore-anonymize.sh` (+ `anonymize.sql`) | prod nusxasini staging'ga tiklash va anonimlashtirish — alohida ish (staging-safe), §8. |
 
@@ -68,13 +69,17 @@ $DC logs --tail 50 api-gateway
    ssh root@<IP> "ACTIONS_PUBKEY='$(cat ~/.ssh/elchi-staging-actions.pub)' bash bootstrap-server.sh"
    ```
    Skript: Docker (Docker'ning rasmiy apt repo'sidan), `deploy` foydalanuvchisi
-   (docker guruhida), Actions kaliti, repo uchun read-only deploy key, `ufw`
-   (faqat SSH), `fail2ban`, swap. Qayta ishga tushirish xavfsiz — bor narsaga
+   (docker guruhida), Actions kaliti, `ufw` (faqat SSH), `fail2ban`, swap. Qayta ishga tushirish xavfsiz — bor narsaga
    tegmaydi. O'zgartirish: `DEPLOY_USER`, `APP_DIR` (sukut
    `/opt/elchi-staging`), `SSH_PORT`, `SWAP_SIZE`, `REPO_URL`, `REPO_BRANCH`.
-3. Skript oxirida chiqqan **deploy key** (`ssh-ed25519 … elchi-staging-deploy@…`)
-   → GitHub → `5E-TECH/Elchi-Backend` → Settings → Deploy keys → Add,
-   **Allow write access — O'CHIQ**.
+3. **Repo kirishi.** Repo ochiq (public): server uni HTTPS orqali kalitsiz
+   oladi (`REPO_URL` sukuti, prod ham shunday) — deploy key kerak emas
+   (5E-TECH'da deploy key'lar baribir o'chiq). Repo yopiq qilinsa: tashkilotda
+   deploy key'larni yoqish, bootstrap'ni
+   `REPO_URL=git@github.com:5E-TECH/Elchi-Backend.git` bilan qayta ishga
+   tushirish, chiqqan kalitni GitHub → Settings → Deploy keys ga
+   **Allow write access — O'CHIQ** bilan qo'shish va serverda
+   `git remote set-url origin` — prod uchun ham xuddi shunday.
 4. `test` branchi bo'lishi kerak (§6.1). So'ng bootstrap'ni yana bir marta
    ishga tushiring — repo `/opt/elchi-staging` ga klonlanadi,
    `.env.staging` shablondan (chmod 600) va `backups/` (egasi `deploy`) yaratiladi.
@@ -170,11 +175,22 @@ git push origin origin/test:refs/heads/main
 
 - Ikkala push ham **fast-forward** — `--force` yo'q; tarix ajralgan bo'lsa
   git o'zi rad etadi. Natija: `main` = `test` = `dev` (bitta commit).
-- Prod'ga staging'da tekshirilgan commit chiqadi — `test` ga ko'tarilmagan
-  narsa `main` ga o'tmaydi.
-- Deploy skripti doim branch'ning **eng oxirgi** commitini deploy qiladi
-  (`origin/test` / `origin/main`), run'ning SHA'sini emas: eski run'ni
-  "Re-run" qilish eski versiyani qaytarmaydi.
+- **Staging darvozasi** (`deploy` job'ining birinchi qadami, faqat
+  `STAGING_ENABLED=true` da): prod faqat test serverga **muvaffaqiyatli**
+  chiqqan kodni oladi — commit'ning daraxti (tree) oxirgi 30 ta `staging`
+  deployment'dan birortasining daraxtiga teng va u deployment `success`
+  bo'lishi shart. Fast-forward ham, `test` → `main` merge commit (PR) ham
+  o'tadi (kod bir xil). `main` ga to'g'ridan-to'g'ri push yoki `test` ni
+  chetlab o'tgan PR — run qizil, serverga tegilmaydi.
+- **Shoshilinch hotfix** ham `dev → test → main` yo'lidan o'tadi. Faqat test
+  server ishlamay qolganda: `STAGING_ENABLED=false` (staging deploy ham,
+  darvoza ham o'chadi) → `main` ga chiqarish → darhol `true` ga qaytarish.
+- Har run faqat **o'z** commitini deploy qiladi: branch undan oldinga ketgan
+  bo'lsa run «Superseded» deb hech narsa qilmay yashil tugaydi, keyingi
+  (navbatda turgan) run yangi commitni o'z darvozasi bilan deploy qiladi.
+  Eski run'ni "Re-run" qilish eski versiyani qaytarmaydi.
+- Deploy yarim yo'lda bekor qilinmaydi: yangi push navbatda kutadi
+  (navbatda faqat eng yangisi qoladi).
 
 ## 7. Rollback
 

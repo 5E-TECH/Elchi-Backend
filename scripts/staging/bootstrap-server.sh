@@ -18,8 +18,10 @@
 #   2. deploy user ($DEPLOY_USER, in the docker group) — GitHub Actions logs in
 #      as this user with the key in ACTIONS_PUBKEY (its private half goes only
 #      into the GitHub `staging` environment secret SSH_PRIVATE_KEY).
-#   3. read-only GitHub deploy key for that user (the server `git fetch`es the
-#      repo); prints the PUBLIC key to add in GitHub -> Deploy keys.
+#   3. only for an SSH REPO_URL (git@github.com:…): read-only GitHub deploy key
+#      for that user; prints the PUBLIC key to add in GitHub -> Deploy keys.
+#      The default HTTPS URL needs no key: the repo is public and production
+#      fetches it the same way (5E-TECH also has deploy keys turned off).
 #   4. $APP_DIR: clone of branch $REPO_BRANCH (once the deploy key is added) and
 #      .env.staging from .env.staging.example (chmod 600) — to be filled in.
 #   5. swap file ($SWAP_SIZE) if the box has no swap: building 15 images on
@@ -32,7 +34,8 @@
 # Env (all optional):
 #   DEPLOY_USER     deploy                          SSH user for GitHub Actions
 #   APP_DIR         /opt/elchi-staging              = GitHub secret SERVER_APP_PATH
-#   REPO_URL        git@github.com:5E-TECH/Elchi-Backend.git
+#   REPO_URL        https://github.com/5E-TECH/Elchi-Backend.git (repo private ->
+#                   git@github.com:5E-TECH/Elchi-Backend.git + the deploy key)
 #   REPO_BRANCH     test
 #   ACTIONS_PUBKEY  public key line for Actions (skipped when empty)
 #   SSH_PORT        22                              extra port to allow in ufw
@@ -43,7 +46,7 @@ set -euo pipefail
 
 DEPLOY_USER="${DEPLOY_USER:-deploy}"
 APP_DIR="${APP_DIR:-/opt/elchi-staging}"
-REPO_URL="${REPO_URL:-git@github.com:5E-TECH/Elchi-Backend.git}"
+REPO_URL="${REPO_URL:-https://github.com/5E-TECH/Elchi-Backend.git}"
 REPO_BRANCH="${REPO_BRANCH:-test}"
 ACTIONS_PUBKEY="${ACTIONS_PUBKEY:-}"
 SSH_PORT="${SSH_PORT:-22}"
@@ -128,20 +131,23 @@ elif [ ! -s "$AUTH_KEYS" ]; then
   NEXT+=("GitHub Actions kaliti yo'q: ACTIONS_PUBKEY='ssh-ed25519 …' bilan skriptni qayta ishga tushiring")
 fi
 
-# --- 3. GitHub deploy key (read-only fetch of the repo) ---------------------------
+# --- 3. GitHub deploy key (read-only fetch of the repo) — SSH REPO_URL only ------
 GH_KEY="$DEPLOY_HOME/.ssh/elchi_github"
-if [ ! -f "$GH_KEY" ]; then
+case "$REPO_URL" in git@*) USE_DEPLOY_KEY=true ;; *) USE_DEPLOY_KEY=false ;; esac
+if [ "$USE_DEPLOY_KEY" != true ]; then
+  log "GitHub deploy key: not needed ($REPO_URL)"
+elif [ ! -f "$GH_KEY" ]; then
   log "GitHub deploy key: generating $GH_KEY"
   as_deploy ssh-keygen -q -t ed25519 -N '' -C "elchi-staging-deploy@$(hostname)" -f "$GH_KEY"
 fi
 SSH_CFG="$DEPLOY_HOME/.ssh/config"
-if ! grep -qs 'elchi_github' "$SSH_CFG"; then
+if [ "$USE_DEPLOY_KEY" = true ] && ! grep -qs 'elchi_github' "$SSH_CFG"; then
   printf 'Host github.com\n  IdentityFile ~/.ssh/elchi_github\n  IdentitiesOnly yes\n' >> "$SSH_CFG"
   chown "$DEPLOY_USER:$DEPLOY_USER" "$SSH_CFG"
   chmod 600 "$SSH_CFG"
 fi
 KNOWN="$DEPLOY_HOME/.ssh/known_hosts"
-if ! as_deploy ssh-keygen -F github.com -f "$KNOWN" >/dev/null 2>&1; then
+if [ "$USE_DEPLOY_KEY" = true ] && ! as_deploy ssh-keygen -F github.com -f "$KNOWN" >/dev/null 2>&1; then
   SCAN="$(ssh-keyscan -t ed25519 github.com 2>/dev/null || true)"
   if [ -n "$SCAN" ] && [ "$(printf '%s\n' "$SCAN" | ssh-keygen -lf - | awk '{print $2}')" = "$GITHUB_ED25519_FP" ]; then
     printf '%s\n' "$SCAN" >> "$KNOWN"
@@ -163,7 +169,7 @@ elif [ -n "$(ls -A "$APP_DIR")" ]; then
 elif as_deploy git clone -q -b "$REPO_BRANCH" "$REPO_URL" "$APP_DIR"; then
   log "checkout: cloned $REPO_URL ($REPO_BRANCH) into $APP_DIR"
 else
-  NEXT+=("Repo klonlanmadi: deploy key qo'shilganini va '$REPO_BRANCH' branchi borligini tekshiring, so'ng skriptni qayta ishga tushiring")
+  NEXT+=("Repo klonlanmadi: '$REPO_BRANCH' branchi borligini (SSH REPO_URL bo'lsa — deploy key qo'shilganini) tekshiring, so'ng skriptni qayta ishga tushiring")
 fi
 if [ -d "$APP_DIR/.git" ] && [ ! -f "$APP_DIR/.env.staging" ] && [ -f "$APP_DIR/.env.staging.example" ]; then
   install -m 600 -o "$DEPLOY_USER" -g "$DEPLOY_USER" "$APP_DIR/.env.staging.example" "$APP_DIR/.env.staging"
@@ -176,7 +182,8 @@ if [ -d "$APP_DIR/.git" ] && [ ! -e "$APP_DIR/backups" ]; then
   install -d -m 755 -o "$DEPLOY_USER" -g "$DEPLOY_USER" "$APP_DIR/backups"
   log "backups: created $APP_DIR/backups (owner $DEPLOY_USER)"
 fi
-if [ -f "$APP_DIR/.env.staging" ] && grep -q '__REPLACE_WITH' "$APP_DIR/.env.staging"; then
+# KEY=value lines only: the template's comments mention the marker too.
+if [ -f "$APP_DIR/.env.staging" ] && grep -qE '^[A-Za-z_][A-Za-z0-9_]*=.*__REPLACE_WITH' "$APP_DIR/.env.staging"; then
   NEXT+=("$APP_DIR/.env.staging ni to'ldiring (__REPLACE_WITH…__ qolgan — deploy ularsiz ishlamaydi)")
 fi
 
@@ -230,9 +237,11 @@ log "  SERVER_SSH_PORT  = $SSH_PORT"
 log "  SERVER_USER      = $DEPLOY_USER"
 log "  SERVER_APP_PATH  = $APP_DIR"
 log "  SSH_PRIVATE_KEY  = private half of ACTIONS_PUBKEY (stays on your machine / in GitHub only)"
-echo
-log "GitHub -> repo Settings -> Deploy keys -> Add (read-only, NO write access):"
-cat "$GH_KEY.pub"
+if [ "$USE_DEPLOY_KEY" = true ]; then
+  echo
+  log "GitHub -> repo Settings -> Deploy keys -> Add (read-only, NO write access):"
+  cat "$GH_KEY.pub"
+fi
 if [ "${#NEXT[@]}" -gt 0 ]; then
   echo
   log "keyingi qadamlar:"

@@ -63,9 +63,18 @@ jobs:
       # docker-compose.prod.yml must render on top of docker-compose.staging.yml
       # with ONLY .env.staging present (a service still on .env.production —
       # e.g. a new one without a staging entry — fails here, not on the server).
+      # Every key of .env.example must also be in .env.staging.example: a key
+      # (feature flag) missing there means the test server runs on its default
+      # while production may not — «passed on staging» would prove nothing.
       - name: Staging deploy is in sync
         run: |
           node scripts/staging/sync-deploy-workflow.mjs --check
+          env_keys() { grep -oE '^[A-Z][A-Z0-9_]*=' "$1" | tr -d = | sort -u; }
+          missing="$(comm -23 <(env_keys .env.example) <(env_keys .env.staging.example))"
+          if [ -n "$missing" ]; then
+            echo "::error::.env.staging.example lacks keys from .env.example: $(echo $missing) — add them (same value as production; docs/ops/staging.md)."
+            exit 1
+          fi
           cp .env.staging.example .env.staging
           docker compose --env-file .env.staging -f docker-compose.prod.yml -f docker-compose.staging.yml config --quiet
           rm -f .env.staging
@@ -224,6 +233,53 @@ jobs:
         env:
           NODE_ENV: test
           BOT_PG_TEST_URI: postgres://postgres@127.0.0.1:5432/elchi_bot_test
+
+  # (O9ATqZ27) Ombor real-Postgres spec'lari: parallel band (manfiy qoldiq /
+  # ortiqcha band yo'q), idempotent kirim/qaytish, market IDOR, Markaziy ombor
+  # zanjiri (VkKDSNNn), ro'yxat filtrlari. Ular `CATALOG_PG_TEST_URI` /
+  # `ORDER_WAREHOUSE_PG_TEST_URI` siz skip bo'ladi — shuning uchun alohida job.
+  # Spec'lar faqat lokal `/elchi_e_test` bazasini qabul qiladi va o'z per-pid
+  # sxemalarini yaratadi; bot job'i bilan baza nomi to'qnashmaydi.
+  warehouse-postgres-specs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+          POSTGRES_DB: elchi_e_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Warehouse Postgres specs
+        run: >-
+          npx jest --runInBand --ci
+          apps/catalog-service/src/warehouse/warehouse.pg.spec.ts
+          apps/order-service/src/warehouse/order-warehouse.pg.spec.ts
+          apps/order-service/src/order-service.list-warehouse-filter.VkKDSNNn.pg.spec.ts
+        env:
+          NODE_ENV: test
+          CATALOG_PG_TEST_URI: postgres://postgres@127.0.0.1:5432/elchi_e_test
+          ORDER_WAREHOUSE_PG_TEST_URI: postgres://postgres@127.0.0.1:5432/elchi_e_test
 
   # Secret-scanning gate (Audit P0/P1: live secrets were committed to history).
   # Scans the working tree so a PR that adds a real credential to a tracked file
