@@ -58,6 +58,19 @@ filters, entities base) lives in `libs/common`.
 Native (no Docker) is the common dev setup; infra (Postgres + RabbitMQ + MinIO)
 can run via Docker.
 
+**Node.js 22 LTS** is required — the same major as CI (`node-version-file:
+.nvmrc`) and the service images (`node:22-alpine`). Node 20 is EOL and is not
+supported; npm warns (`EBADENGINE`) on an older Node. `.nvmrc` pins the major,
+so a version manager picks it up:
+
+```bash
+fnm install && fnm use        # or: nvm install && nvm use
+node -v                       # v22.x
+```
+
+After switching Node majors, reinstall dependencies (`rm -rf node_modules &&
+npm ci`) so nothing built for the old Node is left behind.
+
 ```bash
 npm install
 cp .env.example .env          # fill in real values (see .env.example comments)
