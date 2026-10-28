@@ -151,8 +151,12 @@
     "rootDir": ".",
     "testRegex": ".*\\.spec\\.ts$",
     "transform": {
+      "node_modules/(@nestjs/jwt|promise-breaker)/.+\\.js$": "<rootDir>/tests/jest/esm-package.transformer.js",
       "^.+\\.(t|j)s$": "ts-jest"
     },
+    "transformIgnorePatterns": [
+      "/node_modules/(?!(@nestjs/jwt|promise-breaker)/)"
+    ],
     "collectCoverageFrom": [
       "**/*.(t|j)s"
     ],
