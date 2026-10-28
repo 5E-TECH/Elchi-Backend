@@ -69,13 +69,17 @@ $DC logs --tail 50 api-gateway
    ssh root@<IP> "ACTIONS_PUBKEY='$(cat ~/.ssh/elchi-staging-actions.pub)' bash bootstrap-server.sh"
    ```
    Skript: Docker (Docker'ning rasmiy apt repo'sidan), `deploy` foydalanuvchisi
-   (docker guruhida), Actions kaliti, repo uchun read-only deploy key, `ufw`
-   (faqat SSH), `fail2ban`, swap. Qayta ishga tushirish xavfsiz — bor narsaga
+   (docker guruhida), Actions kaliti, `ufw` (faqat SSH), `fail2ban`, swap. Qayta ishga tushirish xavfsiz — bor narsaga
    tegmaydi. O'zgartirish: `DEPLOY_USER`, `APP_DIR` (sukut
    `/opt/elchi-staging`), `SSH_PORT`, `SWAP_SIZE`, `REPO_URL`, `REPO_BRANCH`.
-3. Skript oxirida chiqqan **deploy key** (`ssh-ed25519 … elchi-staging-deploy@…`)
-   → GitHub → `5E-TECH/Elchi-Backend` → Settings → Deploy keys → Add,
-   **Allow write access — O'CHIQ**.
+3. **Repo kirishi.** Repo ochiq (public): server uni HTTPS orqali kalitsiz
+   oladi (`REPO_URL` sukuti, prod ham shunday) — deploy key kerak emas
+   (5E-TECH'da deploy key'lar baribir o'chiq). Repo yopiq qilinsa: tashkilotda
+   deploy key'larni yoqish, bootstrap'ni
+   `REPO_URL=git@github.com:5E-TECH/Elchi-Backend.git` bilan qayta ishga
+   tushirish, chiqqan kalitni GitHub → Settings → Deploy keys ga
+   **Allow write access — O'CHIQ** bilan qo'shish va serverda
+   `git remote set-url origin` — prod uchun ham xuddi shunday.
 4. `test` branchi bo'lishi kerak (§6.1). So'ng bootstrap'ni yana bir marta
    ishga tushiring — repo `/opt/elchi-staging` ga klonlanadi,
    `.env.staging` shablondan (chmod 600) va `backups/` (egasi `deploy`) yaratiladi.
