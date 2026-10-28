@@ -63,9 +63,18 @@ jobs:
       # docker-compose.prod.yml must render on top of docker-compose.staging.yml
       # with ONLY .env.staging present (a service still on .env.production —
       # e.g. a new one without a staging entry — fails here, not on the server).
+      # Every key of .env.example must also be in .env.staging.example: a key
+      # (feature flag) missing there means the test server runs on its default
+      # while production may not — «passed on staging» would prove nothing.
       - name: Staging deploy is in sync
         run: |
           node scripts/staging/sync-deploy-workflow.mjs --check
+          env_keys() { grep -oE '^[A-Z][A-Z0-9_]*=' "$1" | tr -d = | sort -u; }
+          missing="$(comm -23 <(env_keys .env.example) <(env_keys .env.staging.example))"
+          if [ -n "$missing" ]; then
+            echo "::error::.env.staging.example lacks keys from .env.example: $(echo $missing) — add them (same value as production; docs/ops/staging.md)."
+            exit 1
+          fi
           cp .env.staging.example .env.staging
           docker compose --env-file .env.staging -f docker-compose.prod.yml -f docker-compose.staging.yml config --quiet
           rm -f .env.staging

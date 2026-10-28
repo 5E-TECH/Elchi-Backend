@@ -10,9 +10,13 @@ on:
 
 # Production keeps its group; staging gets its own, so a push to `test` never
 # cancels a running production deploy (and vice versa).
+# cancel-in-progress is OFF: cancelling a run mid-deploy kills the SSH session
+# with the server half-deployed (no rollback runs) while the next run starts its
+# own deploy. A newer push now waits; only the newest pending run is kept, and
+# each run deploys only its own commit (see «superseded» in the script).
 concurrency:
   group: ${{ github.ref == 'refs/heads/test' && 'staging-deploy' || 'production-deploy' }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   test:
@@ -98,7 +102,41 @@ jobs:
     if: github.ref == 'refs/heads/main'
     environment: production
     timeout-minutes: 60
+    # deployments: read — the staging gate reads the `staging` deployments.
+    permissions:
+      contents: read
+      deployments: read
     steps:
+      # --- Staging gate (dev -> test -> main) ---------------------------------
+      # With the test server on (STAGING_ENABLED), production takes ONLY code
+      # that `deploy-staging` already deployed successfully: this commit's tree
+      # must equal the tree of a successful `staging` deployment (so a
+      # fast-forward and a merge commit of `test` both pass). A commit pushed
+      # straight to main, or a PR merged into main past `test`, never reached the
+      # test server and is refused here, before the server is touched.
+      # Emergency only: STAGING_ENABLED=false turns staging deploys AND this
+      # gate off; turn it back on right after. docs/ops/staging.md §6.
+      - name: Staging gate (commit passed the test server)
+        if: vars.STAGING_ENABLED == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          tree="$(gh api "repos/$GITHUB_REPOSITORY/git/commits/$SHA" --jq .tree.sha)"
+          # newest first; enough history for a few test pushes ahead of main
+          deps="$(gh api "repos/$GITHUB_REPOSITORY/deployments?environment=staging&per_page=30" --jq '.[] | "\(.id) \(.sha)"')"
+          while read -r id dsha; do
+            [ -n "$id" ] || continue
+            [ "$(gh api "repos/$GITHUB_REPOSITORY/git/commits/$dsha" --jq .tree.sha)" = "$tree" ] || continue
+            if [ "$(gh api "repos/$GITHUB_REPOSITORY/deployments/$id/statuses?per_page=100" --jq 'any(.[]; .state == "success")')" = true ]; then
+              echo "Staging gate OK: this code was deployed to the test server ($dsha, deployment $id)."
+              exit 0
+            fi
+          done <<< "$deps"
+          echo "::error::$SHA was never deployed to the test server successfully — production refused. Release: dev -> test (check on test-admin) -> main (docs/ops/staging.md §6)."
+          exit 1
+
       - name: Checkout repository
         uses: actions/checkout@v4
 
@@ -134,6 +172,14 @@ jobs:
             OLD_SHA="$(git rev-parse HEAD 2>/dev/null || true)"
             git fetch origin main
             NEW_SHA="$(git rev-parse origin/main)"
+            # Only the commit this run was started for (the one the staging gate
+            # checked) is deployed. The branch moved on -> the newer run, queued
+            # behind this one, deploys it after its own gate; re-running an old
+            # run never rolls the server back.
+            if [ "$NEW_SHA" != "${{ github.sha }}" ]; then
+              echo "Superseded: the branch is at $NEW_SHA, this run is for ${{ github.sha }} — nothing deployed; the newer run deploys it."
+              exit 0
+            fi
 
             APP_SERVICES="api-gateway identity-service order-service catalog-service logistics-service finance-service notification-service integration-service analytics-service branch-service investor-service file-service c2c-service search-service ai-service"
             DEPLOY_SERVICES=""
@@ -505,6 +551,14 @@ jobs:
             OLD_SHA="$(git rev-parse HEAD 2>/dev/null || true)"
             git fetch origin test
             NEW_SHA="$(git rev-parse origin/test)"
+            # Only the commit this run was started for (the one the staging gate
+            # checked) is deployed. The branch moved on -> the newer run, queued
+            # behind this one, deploys it after its own gate; re-running an old
+            # run never rolls the server back.
+            if [ "$NEW_SHA" != "${{ github.sha }}" ]; then
+              echo "Superseded: the branch is at $NEW_SHA, this run is for ${{ github.sha }} — nothing deployed; the newer run deploys it."
+              exit 0
+            fi
 
             APP_SERVICES="api-gateway identity-service order-service catalog-service logistics-service finance-service notification-service integration-service analytics-service branch-service investor-service file-service c2c-service search-service ai-service"
             DEPLOY_SERVICES=""
