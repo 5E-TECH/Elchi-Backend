@@ -516,8 +516,9 @@ jobs:
               echo "!!! $(pwd) is not a staging checkout (.env.production present or .env.staging missing) — staging deploy refused, nothing was touched. docs/ops/staging.md" >&2
               exit 1
             fi
-            if grep -q '__REPLACE_WITH' .env.staging; then
-              echo "!!! .env.staging still has __REPLACE_WITH…__ placeholders ($(grep -o '^[A-Z0-9_]*=__REPLACE_WITH' .env.staging | cut -d= -f1 | tr '\n' ' ')) — fill them first; nothing was touched." >&2
+            # Only KEY=value lines count — the template's own comments mention the marker.
+            if grep -qE '^[A-Za-z_][A-Za-z0-9_]*=.*__REPLACE_WITH' .env.staging; then
+              echo "!!! .env.staging still has __REPLACE_WITH…__ placeholders ($(grep -oE '^[A-Za-z_][A-Za-z0-9_]*=.*__REPLACE_WITH' .env.staging | cut -d= -f1 | tr '\n' ' ')) — fill them first; nothing was touched." >&2
               exit 1
             fi
             # `env_file: !override` in docker-compose.staging.yml needs Compose >= 2.24.4.

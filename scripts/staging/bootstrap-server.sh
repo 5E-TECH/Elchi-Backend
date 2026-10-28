@@ -182,7 +182,8 @@ if [ -d "$APP_DIR/.git" ] && [ ! -e "$APP_DIR/backups" ]; then
   install -d -m 755 -o "$DEPLOY_USER" -g "$DEPLOY_USER" "$APP_DIR/backups"
   log "backups: created $APP_DIR/backups (owner $DEPLOY_USER)"
 fi
-if [ -f "$APP_DIR/.env.staging" ] && grep -q '__REPLACE_WITH' "$APP_DIR/.env.staging"; then
+# KEY=value lines only: the template's comments mention the marker too.
+if [ -f "$APP_DIR/.env.staging" ] && grep -qE '^[A-Za-z_][A-Za-z0-9_]*=.*__REPLACE_WITH' "$APP_DIR/.env.staging"; then
   NEXT+=("$APP_DIR/.env.staging ni to'ldiring (__REPLACE_WITH…__ qolgan — deploy ularsiz ishlamaydi)")
 fi
 
