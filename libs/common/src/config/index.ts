@@ -307,8 +307,13 @@ export const identityValidationSchema = Joi.object({
 export const orderValidationSchema = Joi.object({
   ...observabilityKeys,
   // (1tnpaIqd, ega qarori) market javob bermasa qo'shimcha xarajat shuncha
-  // daqiqadan keyin AVTOMATIK tasdiqlanadi; berilmasa — o'chiq.
-  EXTRA_COST_AUTO_APPROVE_MINUTES: Joi.number().integer().min(1).optional(),
+  // daqiqadan keyin AVTOMATIK tasdiqlanadi; berilmasa — o'chiq. `.empty('')`:
+  // `.env.example` dagi `KEY=` (bo'sh — o'chiq) boot'ni yiqitmasin.
+  EXTRA_COST_AUTO_APPROVE_MINUTES: Joi.number()
+    .integer()
+    .min(1)
+    .empty('')
+    .optional(),
   EXTRA_COST_AUTO_APPROVE_REMINDER_MINUTES: Joi.number()
     .integer()
     .min(1)
