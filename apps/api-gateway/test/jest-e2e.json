@@ -5,8 +5,12 @@
   "testEnvironment": "node",
   "testRegex": ".e2e-spec.ts$",
   "transform": {
+    "node_modules/(@nestjs/jwt|promise-breaker)/.+\\.js$": "<rootDir>/tests/jest/esm-package.transformer.js",
     "^.+\\.(t|j)s$": "ts-jest"
   },
+  "transformIgnorePatterns": [
+    "/node_modules/(?!(@nestjs/jwt|promise-breaker)/)"
+  ],
   "moduleNameMapper": {
     "^@app/common(|/.*)$": "<rootDir>/libs/common/src/$1"
   }
