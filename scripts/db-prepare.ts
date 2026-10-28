@@ -68,12 +68,37 @@ async function runOrderMigrations(): Promise<void> {
 
   await ds.initialize();
   try {
-    await ds.runMigrations();
+    // A brand-new database (first install: a new staging server, a rebuild)
+    // cannot run the whole history in ONE transaction on Postgres 15: some
+    // migrations ADD VALUE to an enum and a later one uses it (1715000000000
+    // adds cashbox_type 'branch', 1716000000008 inserts it) and Postgres
+    // refuses a new enum value before it is committed (55P04), even for a type
+    // created in the same transaction. So a database with no executed migration
+    // yet runs one transaction PER migration; an existing one (production)
+    // keeps the default single all-or-nothing transaction.
+    const fresh = !(await hasExecutedMigrations(ds));
+    await ds.runMigrations(fresh ? { transaction: 'each' } : undefined);
     // eslint-disable-next-line no-console
-    console.log('[db-prepare] order migrations completed');
+    console.log(
+      `[db-prepare] order migrations completed${fresh ? ' (fresh database: one transaction per migration)' : ''}`,
+    );
   } finally {
     await ds.destroy();
   }
+}
+
+/** order_schema's migrations table exists and has at least one row. */
+async function hasExecutedMigrations(ds: DataSource): Promise<boolean> {
+  const table = `"order_schema"."${ds.options.migrationsTableName ?? 'migrations'}"`;
+  const [reg] = await ds.query(
+    `SELECT to_regclass($1) IS NOT NULL AS present`,
+    [table],
+  );
+  if (!reg?.present) return false;
+  const [run] = await ds.query(
+    `SELECT EXISTS (SELECT 1 FROM ${table}) AS present`,
+  );
+  return run?.present === true;
 }
 
 async function verifyOrderRelations(): Promise<void> {
