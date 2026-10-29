@@ -8,7 +8,10 @@ import { NestExpressApplication } from '@nestjs/platform-express';
 import { MicroserviceOptions } from '@nestjs/microservices';
 import { Logger } from 'nestjs-pino';
 import { ApiGatewayModule } from './api-gateway.module';
-import { gatewayRealtimeConsumerOptions } from './realtime/realtime-consumer.options';
+import {
+  ensureGatewayRealtimeQueue,
+  gatewayRealtimeConsumerOptions,
+} from './realtime/realtime-consumer.options';
 import { requestContextMiddleware } from './context/request-context.middleware';
 import {
   applyGatewaySecurityHeaders,
@@ -110,6 +113,27 @@ async function bootstrap() {
   // (rWdLuoP3) Handlerlar xabarni o'zi ack qiladi — `noAck: false`
   // (realtime-consumer.options.ts).
   if (gatewayQueue) {
+    // Yangi RabbitMQ'da navbatni hech kim yaratmaydi (`noAssert: true`) —
+    // yo'q bo'lsa shu yerda bir marta yaratiladi; mavjudiga tegilmaydi.
+    // Broker yetib bo'lmasa boot yiqilmaydi: transport o'zi qayta ulanadi.
+    try {
+      const status = await ensureGatewayRealtimeQueue(
+        process.env.RABBITMQ_URI!,
+        gatewayQueue,
+      );
+      if (status === 'created') {
+        app.get(Logger).log(`Gateway navbati yaratildi: ${gatewayQueue}`);
+      }
+    } catch (error) {
+      // nestjs-pino: oxirgi argument — context; matn `msg` ga tushishi uchun.
+      app
+        .get(Logger)
+        .warn(
+          { err: error },
+          `Gateway navbati (${gatewayQueue}) tekshirilmadi — yo'q bo'lsa realtime hodisalar kelmaydi`,
+          'GatewayRealtimeQueue',
+        );
+    }
     app.connectMicroservice<MicroserviceOptions>(
       gatewayRealtimeConsumerOptions(process.env.RABBITMQ_URI!, gatewayQueue),
     );

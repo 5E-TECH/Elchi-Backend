@@ -16,7 +16,10 @@ import WebSocket from 'ws';
 import { RequestContextRmqSerializer } from '@app/common';
 import { RealtimeController } from './realtime.controller';
 import { RealtimeGateway } from './realtime.gateway';
-import { gatewayRealtimeConsumerOptions } from './realtime-consumer.options';
+import {
+  ensureGatewayRealtimeQueue,
+  gatewayRealtimeConsumerOptions,
+} from './realtime-consumer.options';
 import { buildShiftClosedMessage } from '../../../finance-service/src/realtime/finance-realtime.service';
 
 /**
@@ -86,6 +89,62 @@ class RawClient {
     this.ws.terminate();
   }
 }
+
+describeRmq('haqiqiy RabbitMQ: gateway navbati yo`q bo`lsa yaratiladi', () => {
+  const fresh = `spec_gateway_fresh_${randomUUID().slice(0, 8)}`;
+  const legacy = `spec_gateway_legacy_${randomUUID().slice(0, 8)}`;
+
+  /** Har tekshiruv alohida ulanishda — 404/406 kanalni (ba'zan ulanishni) yopadi. */
+  const declare = async (
+    queue: string,
+    options: { durable: boolean; messageTtl?: number },
+  ) => {
+    const connection = await amqp.connect(rmqUri!);
+    connection.on('error', () => undefined);
+    const channel = await connection.createChannel();
+    channel.on('error', () => undefined);
+    try {
+      await channel.assertQueue(queue, options);
+      return 'ok';
+    } catch (error) {
+      return `code ${(error as { code?: number }).code}`;
+    } finally {
+      await connection.close().catch(() => undefined);
+    }
+  };
+
+  afterAll(async () => {
+    const connection = await amqp.connect(rmqUri!);
+    const channel = await connection.createChannel();
+    await channel.deleteQueue(fresh);
+    await channel.deleteQueue(legacy);
+    await connection.close();
+  });
+
+  it('bo`sh broker: bir marta `durable: true` bilan yaratiladi, ikkinchi chaqiruv tegmaydi', async () => {
+    await expect(ensureGatewayRealtimeQueue(rmqUri!, fresh)).resolves.toBe(
+      'created',
+    );
+    await expect(ensureGatewayRealtimeQueue(rmqUri!, fresh)).resolves.toBe(
+      'exists',
+    );
+    // durable: false bilan qayta e'lon 406 bersa — navbat haqiqatan durable.
+    await expect(declare(fresh, { durable: true })).resolves.toBe('ok');
+    await expect(declare(fresh, { durable: false })).resolves.toBe('code 406');
+  });
+
+  it('boshqa argumentli mavjud navbat (prod) — tegilmaydi, 406 PRECONDITION_FAILED yo`q', async () => {
+    const legacyArgs = { durable: true, messageTtl: 60_000 };
+    await expect(declare(legacy, legacyArgs)).resolves.toBe('ok');
+    // Oddiy `assertQueue({ durable: true })` aynan shu yerda yiqilardi.
+    await expect(declare(legacy, { durable: true })).resolves.toBe('code 406');
+
+    await expect(ensureGatewayRealtimeQueue(rmqUri!, legacy)).resolves.toBe(
+      'exists',
+    );
+    await expect(declare(legacy, legacyArgs)).resolves.toBe('ok');
+  });
+});
 
 describeRmq(
   'rWdLuoP3 — haqiqiy RabbitMQ: ketma-ket realtime hodisalari kechikmaydi',
