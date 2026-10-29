@@ -118,7 +118,7 @@ services:
       retries: 10
 
   migration-runner:
-    image: node:20-alpine
+    image: node:22-alpine
     container_name: elchi-migration-runner
     working_dir: /app
     env_file: .env.production
@@ -204,7 +204,7 @@ services:
   # any cashbox I1/I2 drift or settlement mismatch is reported to Sentry. Reuses
   # the migration-runner pattern (repo mount + dev deps for ts-node).
   db-reconcile:
-    image: node:20-alpine
+    image: node:22-alpine
     container_name: elchi-db-reconcile
     working_dir: /app
     env_file: .env.production
@@ -230,7 +230,7 @@ services:
   # never just deleted; a schema without that table is skipped (exit 1).
   activity-log-prune:
     <<: *svc-limits
-    image: node:20-alpine
+    image: node:22-alpine
     container_name: elchi-activity-log-prune
     working_dir: /app
     env_file: .env.production

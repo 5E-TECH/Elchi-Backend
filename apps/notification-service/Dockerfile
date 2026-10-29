@@ -1,4 +1,4 @@
-FROM node:20-alpine AS builder
+FROM node:22-alpine AS builder
 WORKDIR /app
 COPY package*.json ./
 RUN npm ci
@@ -10,12 +10,12 @@ RUN npx nest build notification-service
 # node_modules instead of each carrying its own copy. It also drops the build
 # toolchain (typescript, @nestjs/cli, webpack, eslint...) the runtime never
 # loads.
-FROM node:20-alpine AS deps
+FROM node:22-alpine AS deps
 WORKDIR /app
 COPY package*.json ./
 RUN npm ci --omit=dev
 
-FROM node:20-alpine
+FROM node:22-alpine
 # The logger falls back to pino-pretty (a devDependency) off production, so the
 # image pins the env it was built for rather than trusting the caller's.
 ENV NODE_ENV=production

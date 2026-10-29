@@ -23,7 +23,7 @@ let processHandlersInstalled = false;
  * Install process-level last-resort handlers (Audit resilience P1: no
  * unhandledRejection / uncaughtException handler existed in any service).
  *
- * - unhandledRejection: log + alert but DO NOT exit. Under Node 20 an unhandled
+ * - unhandledRejection: log + alert but DO NOT exit. Under Node 22 an unhandled
  *   rejection would otherwise terminate the whole service; a single rejected
  *   fire-and-forget promise must not take a money service down.
  * - uncaughtException: the process state may be corrupt, so log + alert, flush
