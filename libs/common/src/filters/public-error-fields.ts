@@ -1,4 +1,5 @@
 import { PAYMENT_CORRECTION_ERROR_CODES as PC } from '../finance/payment-correction';
+import { CASHBOX_RECEIPT_ERROR_CODES as RC } from '../finance/cashbox-receipt';
 import { WAREHOUSE_ERROR_CODES } from '../catalog/warehouse';
 import { CONTACT_ERROR_CODES } from '../contacts/contacts';
 import { SPECIAL_CATEGORIES_ERROR_CODES } from '../order/order-special-categories';
@@ -102,6 +103,10 @@ export const PUBLIC_ERROR_CODES: Readonly<Record<string, readonly string[]>> = {
   // (T1 K1 s6xY4f5C) hamkor sotuvchisi / market allaqachon bog'langan — 409.
   [PARTNER_MARKET_ERROR_CODES.SELLER_TAKEN]: [],
   [PARTNER_MARKET_ERROR_CODES.MARKET_TAKEN]: [],
+  // (T3 QlLf33Ma) kassa cheki — sozlama, yuklash, bog'lash, AI.
+  ...Object.fromEntries(
+    Object.values(RC).map((code) => [code, [] as readonly string[]]),
+  ),
 };
 
 export type PublicErrorValue = string | number | boolean | null;

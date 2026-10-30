@@ -9,6 +9,11 @@ import {
 } from 'class-validator';
 
 export class FindHistoryDto {
+  /** T3 — «Chek holati» filtri (gateway tekshiradi: AI holatlari + `none`). */
+  @IsOptional()
+  @IsString()
+  receipt_status?: string;
+
   @IsOptional()
   @IsString()
   @Matches(/^\d+$/)

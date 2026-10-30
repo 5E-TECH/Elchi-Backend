@@ -278,6 +278,8 @@ jobs:
           apps/order-service/src/warehouse/order-warehouse.pg.spec.ts
           apps/order-service/src/order-service.list-warehouse-filter.VkKDSNNn.pg.spec.ts
           apps/order-service/src/lifecycle/order-special-categories.T8.pg.spec.ts
+          apps/finance-service/src/cashbox-receipt/cashbox-receipt.T3.pg.spec.ts
+          apps/finance-service/src/cashbox-receipt/cashbox-receipt-link.T3.pg.spec.ts
         env:
           NODE_ENV: test
           CATALOG_PG_TEST_URI: postgres://postgres@127.0.0.1:5432/elchi_e_test
@@ -285,6 +287,8 @@ jobs:
           # T8: spec o'z vaqtinchalik bazasini yaratadi (migratsiya 187 `order_schema`
           # ga yozadi) va oxirida o'chiradi — elchi_e_test faqat ulanish uchun.
           ORDER_T8_PG_TEST_URI: postgres://postgres@127.0.0.1:5432/elchi_e_test
+          # T3: kassa cheki — o'z vaqtinchalik bazasi (migratsiya 188 `finance_schema`).
+          FINANCE_T3_PG_TEST_URI: postgres://postgres@127.0.0.1:5432/elchi_e_test
 
   # Secret-scanning gate (Audit P0/P1: live secrets were committed to history).
   # Scans the working tree so a PR that adds a real credential to a tracked file

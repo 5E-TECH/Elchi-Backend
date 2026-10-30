@@ -8,6 +8,7 @@ import {
   GatewayTimeoutException,
   Get,
   Headers,
+  HttpCode,
   HttpException,
   Inject,
   Logger,
@@ -41,7 +42,7 @@ import {
   ApiTags,
 } from '@nestjs/swagger';
 import type { Response } from 'express';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { firstValueFrom, TimeoutError, timeout } from 'rxjs';
 import { Roles } from './auth/roles.decorator';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
@@ -53,6 +54,10 @@ import {
   FinancialSource_type,
   Operation_type,
   PAYMENT_CORRECTION_ERROR_CODES,
+  CASHBOX_RECEIPT_ERROR_CODES,
+  CASHBOX_RECEIPT_FILE_FOLDER,
+  CASHBOX_RECEIPT_MAX_BYTES,
+  CASHBOX_RECEIPT_MESSAGES,
   PaymentMethod,
   Roles as RoleEnum,
   Source_type,
@@ -61,6 +66,8 @@ import {
   toPublicUserSummary,
   type AiBalanceScreenshotMediaType,
   type AiBalanceScreenshotResponse,
+  type AiReceiptExtractResponse,
+  type AiReceiptMediaType,
 } from '@app/common';
 import {
   CashboxAllInfoQueryDto,
@@ -101,8 +108,17 @@ import {
   UpdatePaymentCorrectionSettingsRequestDto,
   ReversePaymentRequestDto,
   CorrectPaymentAmountRequestDto,
+  UpdateReceiptSettingsRequestDto,
+  UploadReceiptRequestDto,
+  ReceiptSummaryQueryDto,
+  UploadReceiptSwaggerDto,
 } from './dto/finance.swagger.dto';
 import { BodyStatusCodeInterceptor } from './body-status-code.interceptor';
+import {
+  ReceiptProjectionInterceptor,
+  canSeeReceipts,
+  projectFullReceipt,
+} from './finance-receipt-projection';
 import { resolveFinancialActors } from './financial-balance/financial-balance.util';
 import {
   buildFileLinkUrl,
@@ -1760,6 +1776,8 @@ export class FinanceGatewayController {
     RoleEnum.COURIER,
     RoleEnum.MANAGER,
   )
+  // T3 — tarixdagi `receipt`: rol bo'yicha (kuryer/market/registrator — yo'q).
+  @UseInterceptors(ReceiptProjectionInterceptor)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Find cashbox(es) by user' })
   @ApiParam({ name: 'user_id', description: 'User id (bigint string)' })
@@ -2081,6 +2099,8 @@ export class FinanceGatewayController {
   @Get('cashbox/main')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.MANAGER)
+  // T3 — tarixdagi `receipt`: rol bo'yicha (kuryer/market/registrator — yo'q).
+  @UseInterceptors(ReceiptProjectionInterceptor)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Get main cashbox summary' })
   async getMainCashbox(
@@ -2286,6 +2306,15 @@ export class FinanceGatewayController {
   ) {
     const isManager = this.isManager(req?.user);
     let receiverBranchId = '';
+    // T3 (ega qarori): chek faqat superadmin/admin'ning HQ'ga qabulida —
+    // menejerning kuryerdan qabulida chek qo'llanmaydi.
+    if (isManager && dto.receipt_id) {
+      throw new BadRequestException({
+        statusCode: 400,
+        code: CASHBOX_RECEIPT_ERROR_CODES.NOT_APPLICABLE,
+        message: CASHBOX_RECEIPT_MESSAGES.RECEIPT_NOT_APPLICABLE,
+      });
+    }
     if (isManager) {
       // Audit M4: filial kassasi orqali "Marketga o'tkazma" soxta filial
       // qarzini qoldiradi — menejer bu usulni ishlata olmaydi.
@@ -2336,12 +2365,13 @@ export class FinanceGatewayController {
               receiver_user_id: receiverBranchId,
               receiver_cashbox_type: Cashbox_type.BRANCH,
             }
-          : {}),
+          : // T3 — HQ'ga qabul: chek siyosati (majburiylik finance'da).
+            { receipt_policy: { kind: 'courier_to_hq' } }),
       },
     );
     // courier → branch settlement advance is enqueued by finance-service via the
     // transactional outbox in the same tx as the cashbox move (Faza 2a).
-    return result;
+    return this.withReceiptResponse(result, req.user);
   }
 
   /**
@@ -2492,6 +2522,9 @@ export class FinanceGatewayController {
         ...(dto.source_user_id
           ? { transfer_source_user_id: dto.source_user_id }
           : {}),
+        // T3 — chek siyosati (faqat click; majburiylik finance'da).
+        receipt_policy: { kind: 'branch_to_hq' },
+        ...(dto.receipt_id ? { receipt_id: dto.receipt_id } : {}),
         // 3PE0B03q — CLICK pul asosiy kassaning qaysi nomli kartasiga.
         ...(dto.card_id ? { card_id: dto.card_id } : {}),
         // Zv3MLn0a — CLICK pul filial kassasining qaysi kartasidan chiqdi.
@@ -2500,7 +2533,7 @@ export class FinanceGatewayController {
     );
     // branch → HQ settlement advance is enqueued by finance-service via the
     // transactional outbox in the same tx as the cashbox move (Faza 2a).
-    return result;
+    return this.withReceiptResponse(result, req.user);
   }
 
   @Get('cashbox/all-info')
@@ -2985,7 +3018,7 @@ export class FinanceGatewayController {
     }
     const targetUserId = isManager ? branchId : req.user.sub;
     const token = this.resolveTransferToken(idempotencyKey);
-    return this.send(
+    const result = await this.send(
       { cmd: 'finance.cashbox.spend' },
       {
         ...dto,
@@ -2996,8 +3029,120 @@ export class FinanceGatewayController {
         // IgR4FVsR — qo'lda operatsiya P&L daftariga AYNI tranzaksiyada
         // yoziladi (alohida POST /financial-balance/entries KERAK EMAS).
         financial_ledger: true,
+        // T3 — qo'lda chiqim cheki (majburiylik finance'da, sozlama bo'yicha).
+        receipt_policy: { kind: 'manual_expense' },
       },
     );
+    return this.withReceiptResponse(result, req.user);
+  }
+
+  /**
+   * T3 — javobdagi `data.receipt` dan ichki `ai_request_id` olib tashlanadi
+   * (FE'ga `{ id, ai_status }`); `pending` bo'lsa AI tahlili fonda boshlanadi
+   * (T3-3, javob kutilmaydi).
+   */
+  private withReceiptResponse<T>(result: T, user: JwtUser): T {
+    const data = (result as { data?: { receipt?: unknown } } | null)?.data;
+    if (!data || !('receipt' in data)) return result;
+    const receipt = data.receipt as {
+      id?: unknown;
+      ai_status?: unknown;
+      ai_request_id?: unknown;
+      file_key?: unknown;
+      mime?: unknown;
+    } | null;
+    if (receipt && typeof receipt === 'object') {
+      if (
+        receipt.ai_status === 'pending' &&
+        typeof receipt.ai_request_id === 'string' &&
+        receipt.ai_request_id &&
+        typeof receipt.file_key === 'string'
+      ) {
+        // Fon vazifasi: javob kutilmaydi (natija realtime orqali keladi).
+        void this.runReceiptAiCheck({
+          receipt_id: String(receipt.id),
+          ai_request_id: receipt.ai_request_id,
+          file_key: receipt.file_key,
+          mime: typeof receipt.mime === 'string' ? receipt.mime : 'image/jpeg',
+          user,
+        });
+      }
+      data.receipt = {
+        id: receipt.id ?? null,
+        ai_status: receipt.ai_status ?? null,
+      };
+    }
+    return result;
+  }
+
+  /**
+   * (T3-3) Chek AI tahlili — fon vazifasi, HECH QACHON throw qilmaydi
+   * (`runBalanceAiCheck` naqshi): `file.read` → `ai.finance.receipt_extract`
+   * (60 s) → `finance.receipt.ai_result`. Finance eski `ai_request_id` li
+   * natijani e'tiborsiz qoldiradi. Logga faqat ID (rasm / karta / ism YO'Q).
+   */
+  async runReceiptAiCheck(input: {
+    receipt_id: string;
+    ai_request_id: string;
+    file_key: string;
+    mime: string;
+    user: JwtUser;
+  }): Promise<void> {
+    let result: AiReceiptExtractResponse = { ok: false, reason: 'disabled' };
+    try {
+      const file = await this.sendFile<{ data?: { body_base64?: unknown } }>(
+        { cmd: 'file.read' },
+        { key: input.file_key },
+      );
+      const image =
+        typeof file?.data?.body_base64 === 'string'
+          ? file.data.body_base64
+          : '';
+      if (!image) {
+        result = { ok: false, reason: 'network' };
+      } else if (this.aiClient) {
+        result = await firstValueFrom(
+          this.aiClient
+            .send<AiReceiptExtractResponse>(
+              { cmd: 'ai.finance.receipt_extract' },
+              {
+                image_base64: image,
+                media_type: (input.mime === 'image/jpg'
+                  ? 'image/jpeg'
+                  : input.mime) as AiReceiptMediaType,
+                receipt_id: input.receipt_id,
+                requester: {
+                  id: String(input.user?.sub ?? ''),
+                  roles: this.getUserRoles(input.user),
+                },
+                deadline_at: Date.now() + SHIFT_AI_TIMEOUT_MS - 5000,
+              },
+            )
+            .pipe(timeout(SHIFT_AI_TIMEOUT_MS)),
+        );
+      }
+    } catch (error) {
+      this.shiftCheckLogger.warn(
+        `Chek AI tahlili xatosi receipt=${input.receipt_id}: ${
+          error instanceof TimeoutError ? 'timeout' : 'rpc_error'
+        }`,
+      );
+      result = { ok: false, reason: 'network' };
+    }
+    try {
+      await this.send(
+        { cmd: 'finance.receipt.ai_result' },
+        {
+          receipt_id: input.receipt_id,
+          ai_request_id: input.ai_request_id,
+          result,
+        },
+      );
+    } catch {
+      this.shiftCheckLogger.warn(
+        `Chek AI natijasi yozilmadi receipt=${input.receipt_id}`,
+      );
+    }
   }
 
   @Patch('cashbox/fill')
@@ -3046,6 +3191,8 @@ export class FinanceGatewayController {
     RoleEnum.COURIER,
     RoleEnum.MARKET,
   )
+  // T3 — tarixdagi `receipt`: rol bo'yicha (kuryer/market/registrator — yo'q).
+  @UseInterceptors(ReceiptProjectionInterceptor)
   @ApiBearerAuth()
   @ApiOperation({
     summary: 'Find cashbox history list',
@@ -3092,6 +3239,12 @@ export class FinanceGatewayController {
     @Query() query: FindHistoryQueryDto,
     @Req() req: { user: JwtUser },
   ) {
+    // T3 — «Chek holati» filtri faqat chekni ko'ra oladigan rollarga.
+    if (query.receipt_status && !canSeeReceipts(this.getUserRoles(req?.user))) {
+      throw new ForbiddenException(
+        'Chek holati filtri faqat SA/admin/menejerga',
+      );
+    }
     if (
       this.hasRole(req?.user, RoleEnum.MARKET) &&
       !this.isPrivileged(req?.user)
@@ -3406,6 +3559,8 @@ export class FinanceGatewayController {
     RoleEnum.MARKET,
     RoleEnum.MANAGER,
   )
+  // T3 — tarixdagi `receipt`: rol bo'yicha (kuryer/market/registrator — yo'q).
+  @UseInterceptors(ReceiptProjectionInterceptor)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Find cashbox history detail by id' })
   @ApiParam({ name: 'id', description: 'History id (bigint string)' })
@@ -4273,6 +4428,291 @@ export class FinanceGatewayController {
         requester_roles: this.getUserRoles(req.user),
       },
     );
+  }
+
+  // ───────────────────────── T3: kassa cheki ─────────────────────────
+
+  @Get('receipt-settings')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.MANAGER)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: '(T3) Kassa cheki sozlamalari',
+    description:
+      "`{ manual_expense: { photo_required, ai_enabled }, hq_transfer: { photo_required, ai_enabled }, updated_at, updated_by }`. Sozlama qatori yo'q — `true` (sukut — ikkalasi yoqiq). `hq_transfer` — kuryer → HQ va filial → HQ. O'zgartirish — faqat superadmin (PATCH).",
+  })
+  async getReceiptSettings() {
+    return this.send({ cmd: 'finance.receipt.settings.get' }, {});
+  }
+
+  @Patch('receipt-settings')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN)
+  @ApiBearerAuth()
+  @ApiBody({ type: UpdateReceiptSettingsRequestDto })
+  @ApiOperation({
+    summary: "(T3) Kassa cheki sozlamalarini o'zgartirish — FAQAT superadmin",
+    description:
+      "Faqat `photo_required:false` kelsa — AI ham o'chadi; rasm qayta yoqilsa AI o'chiq qoladi; natijada AI yoqiq + rasm o'chiq → 400 `RECEIPT_AI_REQUIRES_PHOTO`. Activity-log: `finance.receipt_settings_updated`.",
+  })
+  async updateReceiptSettings(
+    @Req() req: { user: JwtUser },
+    @Body() dto: UpdateReceiptSettingsRequestDto,
+  ) {
+    return this.send(
+      { cmd: 'finance.receipt.settings.update' },
+      {
+        ...dto,
+        requester_id: String(req.user.sub),
+        requester_roles: this.getUserRoles(req.user),
+      },
+    );
+  }
+
+  @Post('receipts')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.MANAGER)
+  @ApiBearerAuth()
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({ type: UploadReceiptSwaggerDto })
+  @ApiOperation({
+    summary: '(T3) Kassa cheki rasmini yuklash (qoralama)',
+    description:
+      "`photo` — jpeg / png / webp, ≤ 5 MB, turi magic-bytes bilan tekshiriladi, EXIF/XMP tozalanadi, shaxsiy saqlanadi. `kind`: superadmin/admin — har tur; menejer — faqat `manual_expense` (filial — JWT'dan); boshqalar 403. Rasm o'chiq turga → 400 `RECEIPT_DISABLED` (fayl yuklanmaydi). 201 → `{ receipt_id, kind, state: 'draft', photo_url, photo_url_expires_in: 300 }`. Qoralama 24 soat ichida operatsiyaga biriktirilmasa o'chiriladi; biriktirilgan chek va rasmi saqlanib qoladi.",
+  })
+  @UseInterceptors(
+    FileInterceptor('photo', {
+      storage: memoryStorage(),
+      // Multer chegarasi kengroq: 5 MB dan katta rasm handler'da aniq 400
+      // oladi (multer limiti 413 berardi); juda katta tana baribir kesiladi.
+      limits: { fileSize: 2 * CASHBOX_RECEIPT_MAX_BYTES, files: 1 },
+    }),
+  )
+  async uploadReceipt(
+    @Req() req: { user: JwtUser } & OriginRequest,
+    @Body() dto: UploadReceiptRequestDto,
+    @UploadedFile()
+    photo: { buffer?: Buffer; mimetype?: string; size?: number } | undefined,
+  ) {
+    const scope = await this.resolveReceiptUploadScope(req.user);
+    const roles = this.getUserRoles(req.user);
+    // Avval rol va sozlama: rasm o'chiq bo'lsa fayl umuman yuklanmaydi.
+    await this.send(
+      { cmd: 'finance.receipt.upload_check' },
+      { kind: dto.kind, requester_roles: roles, ...scope },
+    );
+    const mime = String(photo?.mimetype ?? '').toLowerCase();
+    const buffer = photo?.buffer;
+    if (!buffer || !buffer.length) {
+      throw new BadRequestException('photo fayli majburiy');
+    }
+    if (!SHIFT_PHOTO_MIME_TYPES.has(mime)) {
+      throw new BadRequestException(
+        'Faqat jpeg, png yoki webp rasm qabul qilinadi',
+      );
+    }
+    if (buffer.length > CASHBOX_RECEIPT_MAX_BYTES) {
+      throw new BadRequestException('Rasm hajmi 5 MB dan oshmasligi kerak');
+    }
+    if (!matchesDeclaredType(buffer, mime)) {
+      throw new BadRequestException(
+        "Fayl mazmuni e'lon qilingan turga mos emas",
+      );
+    }
+    const clean = stripImageMetadata(buffer, mime);
+    if (!clean) {
+      throw new BadRequestException("Rasm buzilgan yoki o'qib bo'lmaydi");
+    }
+    const normalizedMime = mime === 'image/jpg' ? 'image/jpeg' : mime;
+    const ext =
+      normalizedMime === 'image/png'
+        ? 'png'
+        : normalizedMime === 'image/webp'
+          ? 'webp'
+          : 'jpg';
+    const uploaded = await this.sendFile<{ data?: { key?: unknown } }>(
+      { cmd: 'file.upload' },
+      {
+        file_name: `receipt.${ext}`,
+        mime_type: normalizedMime,
+        file_base64: clean.toString('base64'),
+        folder: CASHBOX_RECEIPT_FILE_FOLDER,
+      },
+      30000,
+    );
+    const key =
+      typeof uploaded?.data?.key === 'string' ? uploaded.data.key.trim() : '';
+    if (!key) {
+      throw new BadRequestException(
+        'Rasm saqlanmadi (file-service kalit qaytarmadi)',
+      );
+    }
+    let created: {
+      data?: { receipt_id?: string; kind?: string; state?: string };
+    };
+    try {
+      created = await this.send(
+        { cmd: 'finance.receipt.create_draft' },
+        {
+          kind: dto.kind,
+          file_key: key,
+          file_sha256: createHash('sha256').update(clean).digest('hex'),
+          mime: normalizedMime,
+          size_bytes: clean.length,
+          requester_id: String(req.user.sub),
+          requester_roles: roles,
+          ...scope,
+        },
+      );
+    } catch (error) {
+      // Qoralama yozilmadi — yetim fayl qolmasin.
+      void this.sendFile({ cmd: 'file.delete' }, { key }).catch(
+        () => undefined,
+      );
+      throw error;
+    }
+    const data = created?.data ?? {};
+    return {
+      statusCode: 201,
+      message: 'Receipt uploaded',
+      data: {
+        receipt_id: data.receipt_id ?? null,
+        kind: data.kind ?? dto.kind,
+        state: data.state ?? 'draft',
+        photo_url: buildFileLinkUrl(req, key),
+        photo_url_expires_in: FILE_LINK_TTL_SECONDS,
+      },
+    };
+  }
+
+  // `receipts/:id` dan OLDIN — aks holda `summary` id sifatida ushlanadi.
+  @Get('receipts/summary')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: '(T3-4) Kassa cheklari tekshiruvi xulosasi',
+    description:
+      "Davr (Toshkent kuni, ≤ 366 kun, sukut — joriy oy) bo'yicha: `{ period, counts: { match, mismatch, unreadable, pending, error, disabled, none }, total, mismatch_total (Σ|farq|), by_branch: [{ branch_id, counts }], by_category: [{ expense_category_id, name, counts }], top: [≤ 15, |farq| bo'yicha — { receipt_id, history_id, kind, entered_amount, difference, date }] }`. Operatsiya sanasi bo'yicha; `none` — `GET /finance/history?receipt_status=none` bilan AYNI shart. Ism, rasm havolasi, karta raqami yo'q. Faqat superadmin/admin (menejer, kuryer — 403).",
+  })
+  async receiptChecksSummary(
+    @Req() req: { user: JwtUser },
+    @Query() query: ReceiptSummaryQueryDto,
+  ) {
+    return this.send(
+      { cmd: 'finance.receipt_checks.summary' },
+      {
+        from: query.from,
+        to: query.to,
+        kind: query.kind,
+        ai_status: query.ai_status,
+        requester_roles: this.getUserRoles(req.user),
+      },
+    );
+  }
+
+  @Post('receipts/:id/reanalyze')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @HttpCode(202)
+  @ApiBearerAuth()
+  @ApiParam({ name: 'id', description: 'Chek ID si' })
+  @ApiOperation({
+    summary: '(T3) Kassa chekini AI bilan qayta tahlil qilish',
+    description:
+      "202 → `{ receipt_id, ai_status: 'pending' }`; natija realtime `finance.receipt.checked` bilan. Ruxsat: `mismatch`, `unreadable`, `error`, 3 daqiqadan oshgan `pending`. Rad: `match` → 409 `RECEIPT_ALREADY_MATCHED`; `disabled` yoki joriy sozlamada AI o'chiq → 400 `RECEIPT_AI_DISABLED`; tahlil davom etmoqda → 409 `RECEIPT_AI_PENDING`; urinishlar ≥ 5 → 429 `RECEIPT_AI_ATTEMPTS_EXHAUSTED`. Audit `finance.receipt_reanalyze_requested`.",
+  })
+  async reanalyzeReceipt(
+    @Param('id') id: string,
+    @Req() req: { user: JwtUser },
+  ) {
+    if (!/^\d{1,18}$/.test(String(id ?? ''))) {
+      throw new BadRequestException("Chek id si noto'g'ri");
+    }
+    const response = await this.send<{
+      data?: {
+        receipt_id?: string;
+        ai_request_id?: string;
+        file_key?: string;
+        mime?: string;
+      };
+    }>(
+      { cmd: 'finance.receipt.reanalyze' },
+      {
+        receipt_id: id,
+        requester_id: String(req.user.sub),
+        requester_roles: this.getUserRoles(req.user),
+      },
+    );
+    const data = response?.data ?? {};
+    if (data.ai_request_id && data.file_key) {
+      void this.runReceiptAiCheck({
+        receipt_id: String(data.receipt_id ?? id),
+        ai_request_id: data.ai_request_id,
+        file_key: data.file_key,
+        mime: data.mime ?? 'image/jpeg',
+        user: req.user,
+      });
+    }
+    return {
+      statusCode: 202,
+      message: 'Receipt reanalyze requested',
+      data: { receipt_id: String(data.receipt_id ?? id), ai_status: 'pending' },
+    };
+  }
+
+  @Get('receipts/:id')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.MANAGER)
+  @ApiBearerAuth()
+  @ApiParam({ name: 'id', description: 'Chek ID si' })
+  @ApiOperation({
+    summary: '(T3) Kassa cheki tafsiloti (rasm havolasi + AI natijasi)',
+    description:
+      "Superadmin/admin — har chek; menejer — faqat o'z filiali (`branch_id`), boshqasi 403. `{ id, kind, history_id, counter_history_id, entered_amount, payment_method, photo_url, photo_url_expires_in: 300, uploaded_by: { id, name }, uploaded_at, ai_status, ai_stale (pending > 3 daqiqa), can_reanalyze (faqat SA/admin), ai: { amount, difference, currency, date, recipient, recipient_last4, payer, payer_last4, bank, reference, confidence, flags[], checked_at, attempts, max_attempts: 5, error_reason } | null }`. Biriktirilgan chek va rasmi saqlanadi — havola har so'rovda yangidan beriladi.",
+  })
+  async getReceipt(
+    @Param('id') id: string,
+    @Req() req: { user: JwtUser } & OriginRequest,
+  ) {
+    if (!/^\d{1,18}$/.test(String(id ?? ''))) {
+      throw new BadRequestException("Chek id si noto'g'ri");
+    }
+    const response = await this.send<{ data?: Record<string, unknown> }>(
+      { cmd: 'finance.receipt.get' },
+      { id },
+    );
+    const receipt = response?.data;
+    if (!receipt || typeof receipt !== 'object') {
+      throw new NotFoundException('Chek topilmadi');
+    }
+    const roles = this.getUserRoles(req.user);
+    const branchId = this.isPrivileged(req.user)
+      ? null
+      : await this.resolveOwnBranchId(req.user);
+    const projected = projectFullReceipt(receipt, {
+      roles,
+      branchId: branchId ? String(branchId) : null,
+      req,
+    });
+    if (!projected) {
+      throw new ForbiddenException(
+        'Bu chek sizning filialingizga tegishli emas',
+      );
+    }
+    return { statusCode: 200, message: 'Receipt', data: projected };
+  }
+
+  /** Menejer — o'z filiali (JWT / branch_users); superadmin/admin — doirasiz. */
+  private async resolveReceiptUploadScope(
+    user: JwtUser,
+  ): Promise<{ branch_id?: string }> {
+    if (this.isPrivileged(user)) return {};
+    const branchId = await this.resolveOwnBranchId(user);
+    if (!branchId) {
+      throw new ForbiddenException("Managerning branch'i topilmadi");
+    }
+    return { branch_id: String(branchId) };
   }
 
   @Get('shift/:id/report')

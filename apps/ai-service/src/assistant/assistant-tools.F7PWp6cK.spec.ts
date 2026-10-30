@@ -58,7 +58,7 @@ const WRITE_VERB_RE =
   /\.(create|update|delete|remove|spend|fill|payment|pay|transfer|convert|open|close|record|raise|link|attach|ack|make_default|set_|rename|cancel|sell|approve|reject|assign|import|upsert|save|restore|revoke|send)/i;
 
 describe('AI yordamchi tool oq ro‘yxati (F7PWp6cK)', () => {
-  it('kartadagi AYNAN 9 tool, registry bilan bir xil tartibda', () => {
+  it('kartadagi 9 tool + T3-4 get_receipt_checks (OXIRIDA), registry bilan bir xil tartibda', () => {
     expect(AI_ASSISTANT_TOOL_NAMES).toEqual([
       'get_cash_position',
       'get_cashbox_history',
@@ -69,6 +69,7 @@ describe('AI yordamchi tool oq ro‘yxati (F7PWp6cK)', () => {
       'get_expenses_by_category',
       'get_revenue_profit',
       'get_order_flow',
+      'get_receipt_checks',
     ]);
     expect(assistantToolSpecNames()).toEqual([...AI_ASSISTANT_TOOL_NAMES]);
   });
@@ -116,7 +117,7 @@ describe('AI yordamchi tool oq ro‘yxati (F7PWp6cK)', () => {
     expect(assistantToolDefinitions(['superadmin']).map((t) => t.name)).toEqual(
       [...AI_ASSISTANT_TOOL_NAMES],
     );
-    expect(assistantToolDefinitions(['admin'])).toHaveLength(9);
+    expect(assistantToolDefinitions(['admin'])).toHaveLength(10);
     for (const role of [
       'market',
       'courier',
@@ -316,6 +317,100 @@ describe('AI yordamchi tool oq ro‘yxati (F7PWp6cK)', () => {
     expect(exec.result.content).not.toContain('1112233');
     expect(body.period).toEqual({ from: '2026-10-01', to: '2026-10-26' });
     expect(body.records).toBe(3);
+  });
+
+  it('⭐ get_receipt_checks (T3-4): payload API bilan bir xil (rollar bilan), natija top-15 bilan cheklangan', async () => {
+    const counts = {
+      match: 3,
+      mismatch: 2,
+      unreadable: 0,
+      pending: 0,
+      error: 0,
+      disabled: 0,
+      none: 1,
+    };
+    const { reader, sent } = fakeClients({
+      'finance.receipt_checks.summary': {
+        statusCode: 200,
+        data: {
+          period: { from: '2026-10-01', to: '2026-10-26' },
+          counts,
+          total: 6,
+          mismatch_total: 7000,
+          by_branch: Array.from({ length: 20 }, (_, i) => ({
+            branch_id: String(i + 1),
+            counts,
+          })),
+          by_category: [{ expense_category_id: '4', name: 'Ijara', counts }],
+          top: [
+            {
+              receipt_id: '41',
+              history_id: '501',
+              kind: 'manual_expense',
+              entered_amount: 145000,
+              difference: 5000,
+              date: '2026-10-20T07:00:00.000Z',
+              file_key: 'cashbox-receipt-1-x.jpg',
+              uploaded_by: { id: '7', name: 'Ali' },
+            },
+          ],
+        },
+      },
+    });
+    const exec = await executeAssistantTool(
+      'get_receipt_checks',
+      { from: '2026-10-01', ai_status: 'mismatch' },
+      ctx(reader, ADMIN),
+    );
+    expect(sent).toEqual([
+      {
+        client: 'FINANCE',
+        cmd: 'finance.receipt_checks.summary',
+        payload: {
+          from: '2026-10-01',
+          to: '2026-10-26',
+          ai_status: 'mismatch',
+          requester_roles: ['admin'],
+        },
+      },
+    ]);
+    expect(exec.result.isError).toBe(false);
+    const body = JSON.parse(exec.result.content);
+    expect(body).toMatchObject({
+      tool: 'get_receipt_checks',
+      records: 6,
+      truncated: true,
+      data: { counts, total: 6, mismatch_total: 7000 },
+    });
+    expect(body.data.by_branch).toHaveLength(15);
+    expect(body.data.largest_differences).toEqual([
+      {
+        receipt_id: '41',
+        history_id: '501',
+        kind: 'manual_expense',
+        entered_amount: 145000,
+        difference: 5000,
+        date: '2026-10-20T07:00:00.000Z',
+      },
+    ]);
+    expect(exec.result.content).not.toMatch(/file_key|cashbox-receipt-|Ali/);
+  });
+
+  it('get_receipt_checks: noto`g`ri kind / ai_status / davr — invalid_input, o`qish YO`Q', async () => {
+    const { reader, sent } = fakeClients({});
+    for (const input of [
+      { kind: 'salary' },
+      { ai_status: 'linked' },
+      { from: '2024-01-01', to: '2026-10-26' },
+    ]) {
+      const exec = await executeAssistantTool(
+        'get_receipt_checks',
+        input,
+        ctx(reader),
+      );
+      expect(exec.result.isError).toBe(true);
+    }
+    expect(sent).toHaveLength(0);
   });
 
   it('RMQ xatosi — is_error, xato matni modelga ketmaydi', async () => {

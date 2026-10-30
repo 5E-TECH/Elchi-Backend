@@ -95,6 +95,62 @@ Deploy: **notification-service**. Migratsiya yo'q.
 - [2026-10-30] 🟢 [notification] — market guruhi supergroup'ga aylansa ulanish yangi chat id'ga o'zi ko'chadi
   (`GET /notifications` da `group_id` yangilanadi), xabarlar qayta yuboriladi. Botdan yozish huquqi olinsa — guruh nofaol
   (`inactive_reason: "blocked_on_send"`) + adminga xabar. → FE o'zgarishi shart emas.
+### 2026-10-30 — T3: kassa — qo'lda chiqim va HQ'ga o'tkazmalarda chek rasmi + AI tahlili (QlLf33Ma)
+
+Deploy: **finance-service + api-gateway + ai-service** (+ libs/common). Migratsiya **`1716000000188`**
+(`finance_schema.cashbox_receipts`). `openapi.json` qayta yaratildi. Faqat qo'shimcha maydonlar — chek talab
+qilinadigan uch operatsiyadan tashqari ortga mos.
+
+**Qayerda chek:** (a) qo'lda chiqim `PATCH /finance/cashbox/spend` (`manual_expense`); (b) kuryer → HQ
+`POST /finance/cashbox/payment/courier` va (c) filial → HQ `POST /finance/cashbox/branch-to-main` — faqat
+`payment_method: "click"` da (`courier_to_hq` / `branch_to_hq`). Naqd o'tkazma, `click_to_market` — chek yo'q.
+
+**Saqlash:** operatsiyaga biriktirilgan chek va rasmi **o'chirilmaydi** — tarix qatori, tafsilot va
+`GET /finance/receipts/:id` orqali istalgan vaqtda ko'riladi (havola har so'rovda yangidan, 300 s). Faqat
+24 soat ichida biriktirilmagan qoralama tozalanadi.
+
+- [2026-10-30] 🆕 [finance] — `GET /finance/receipt-settings` (superadmin/admin/menejer) →
+  `{ manual_expense: { photo_required, ai_enabled }, hq_transfer: { photo_required, ai_enabled }, updated_at,
+  updated_by }`; sukut — hammasi `true`. `PATCH /finance/receipt-settings` — **faqat superadmin**;
+  `photo_required:false` yolg'iz kelsa AI ham o'chadi; AI yoqiq + rasm o'chiq → 400 `RECEIPT_AI_REQUIRES_PHOTO`.
+  → Sozlamalar sahifasida ikki guruh uchun ikki kalit.
+- [2026-10-30] 🆕 [finance] — `POST /finance/receipts` (multipart: `kind`, `photo` — jpeg/png/webp ≤ 5 MB) →
+  201 `{ receipt_id, kind, state: "draft", photo_url, photo_url_expires_in: 300 }`. Superadmin/admin — har tur,
+  menejer — faqat `manual_expense`, boshqalar 403. Rasm o'chiq turga → 400 `RECEIPT_DISABLED`; > 5 MB yoki
+  boshqa tur → 400. → Operatsiya formasida avval rasm yuklanadi, keyin `receipt_id` yuboriladi.
+- [2026-10-30] ✏️ [finance] — yuqoridagi uch operatsiya tanasida ixtiyoriy **`receipt_id`**. Rasm yoqiq turda
+  cheksiz → 400 `RECEIPT_REQUIRED` («Chek rasmini yuklang», pul o'zgarmaydi). Xatolar (`code` bo'yicha xabar):
+  `RECEIPT_NOT_FOUND` 400, `RECEIPT_NOT_OWNER` 403 (boshqa xodim yuklagan), `RECEIPT_KIND_MISMATCH` 400,
+  `RECEIPT_ALREADY_USED` 409, `RECEIPT_NOT_APPLICABLE` 400 (naqd o'tkazma + chek; menejerning kuryerdan qabuli +
+  chek). Javobda `data.receipt: { id, kind, ai_status } | null` (rasm o'chiq — `null`). Takroriy
+  `Idempotency-Key` — asl chek qaytadi.
+- [2026-10-30] ✏️ [finance] — kassa tarixi (`GET /finance/history`, kassa sahifalari): har qatorda
+  `receipt: { id, ai_status } | null` (o'tkazmada MAIN va qarshi qatorda bitta chek). `GET /finance/history/:id` —
+  to'liq: `{ id, kind, history_id, counter_history_id, entered_amount, payment_method, photo_url,
+  photo_url_expires_in, uploaded_by: { id, name }, uploaded_at, ai_status, ai_stale, can_reanalyze, ai: { amount,
+  difference, currency, date, recipient, recipient_last4, payer, payer_last4, bank, reference, confidence,
+  flags[], checked_at, attempts, max_attempts, error_reason } | null }`. `receipt` faqat superadmin/admin/menejerga
+  (menejer — o'z filiali; boshqasi `null`), kuryer/market/registrator javobida kalit yo'q.
+  `GET /finance/receipts/:id` — xuddi shu to'liq ko'rinish (menejer boshqa filial → 403).
+- [2026-10-30] 🆕 [finance] — «Chek holati» filtri: `GET /finance/history?receipt_status=` `match | mismatch |
+  unreadable | pending | error | disabled | none` (`none` — chek so'raladigan, lekin cheksiz: kategoriyali qo'lda
+  chiqim yoki MAIN'ga click kuryer/filial o'tkazmasi). `counts` ham filtrlanadi. Kuryer va boshqalar → 403.
+- [2026-10-30] 🆕 [finance] — AI tahlili fonda: holat `pending` → `match` (|farq| ≤ 1 so'm) / `mismatch` /
+  `unreadable` / `error`; AI o'chiq — `disabled`. Bayroqlar (`ai.flags`): `duplicate_photo`,
+  `duplicate_reference`, `date_far`, `card_mismatch` — faqat ogohlantirish. Realtime **`finance.receipt.checked`**
+  `{ receipt_id, history_id, kind, ai_status, at }` (summasiz) → superadmin, admin, filial menejeri, yuklagan
+  xodim. → Tarix qatorida holat belgisi, tafsilotda AI bloki.
+- [2026-10-30] 🆕 [finance] — `POST /finance/receipts/:id/reanalyze` (superadmin/admin) → **202**
+  `{ receipt_id, ai_status: "pending" }`. Rad: `RECEIPT_ALREADY_MATCHED` 409, `RECEIPT_AI_DISABLED` 400,
+  `RECEIPT_AI_PENDING` 409, `RECEIPT_AI_ATTEMPTS_EXHAUSTED` 429 (5 urinish). 3 daqiqadan oshgan `pending`
+  (`ai_stale: true`) — qayta tahlil mumkin. → Tugma `can_reanalyze` bo'yicha.
+- [2026-10-30] 🆕 [finance] — `GET /finance/receipts/summary?from&to&kind&ai_status` (superadmin/admin; menejer,
+  kuryer → 403) → `{ period, counts: { match, mismatch, unreadable, pending, error, disabled, none }, total,
+  mismatch_total, by_branch: [{ branch_id, counts }], by_category: [{ expense_category_id, name, counts }],
+  top: [≤ 15 — { receipt_id, history_id, kind, entered_amount, difference, date }] }`. Davr — Toshkent sanalari,
+  ≤ 366 kun, sukut — joriy oy. `counts.none` = `GET /finance/history?receipt_status=none` jami (shu davrda).
+- [2026-10-30] 🟢 [ai] — AI moliyaviy yordamchida yangi tool `get_receipt_checks` (shu xulosa; ism, rasm,
+  karta yo'q).
 
 ### 2026-10-30 — T8: buyurtmaning maxsus belgilari (mo'rt, diniy kitob, suyuqlik …) (0OUcHZ7R)
 
