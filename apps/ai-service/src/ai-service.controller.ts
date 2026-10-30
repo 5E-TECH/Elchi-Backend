@@ -22,6 +22,8 @@ import {
   executeAndAck,
   type AiBalanceScreenshotRequest,
   type AiBalanceScreenshotResponse,
+  type AiReceiptExtractRequest,
+  type AiReceiptExtractResponse,
   type AiDistrictPickRequest,
   type AiDistrictPickResponse,
   type AiDraftAttachPreviewRequest,
@@ -42,6 +44,7 @@ import { AiBudgetService } from './budget/ai-budget.service';
 import { AiDraftService } from './draft/ai-draft.service';
 import { DistrictPickService } from './district-pick/district-pick.service';
 import { BalanceScreenshotService } from './balance-screenshot/balance-screenshot.service';
+import { ReceiptExtractService } from './receipt-extract/receipt-extract.service';
 import { AssistantService } from './assistant/assistant.service';
 import {
   evaluateModelPolicy,
@@ -88,6 +91,8 @@ export class AiServiceController implements OnApplicationBootstrap {
     private readonly balanceScreenshot?: BalanceScreenshotService,
     // F7PWp6cK — ixtiyoriy: eski spec'lar usiz quradi.
     private readonly assistant?: AssistantService,
+    // T3 — kassa cheki tahlili. Ixtiyoriy: eski spec'lar usiz quradi.
+    private readonly receiptExtract?: ReceiptExtractService,
   ) {}
 
   /**
@@ -187,6 +192,29 @@ export class AiServiceController implements OnApplicationBootstrap {
             : Promise.resolve({ ok: false, reason: 'disabled' }),
         this.logger,
         'ai.finance.balance_screenshot',
+      ),
+    );
+  }
+
+  /**
+   * T3 (QlLf33Ma): kassa cheki — summa, valyuta, sana, oluvchi / to'lovchi
+   * (karta — faqat last4), bank, referens. `runAiHandler` ichida: eskirgan
+   * xabar Anthropic'ga bormaydi, AI xatosi throw bo'lmaydi.
+   */
+  @MessagePattern({ cmd: 'ai.finance.receipt_extract' })
+  extractReceipt(
+    @Payload() data: AiReceiptExtractRequest,
+    @Ctx() ctx: RmqContext,
+  ): Promise<AiReceiptExtractResponse> {
+    return executeAndAck(this.rmqService, ctx, () =>
+      runAiHandler(
+        data,
+        (dl): Promise<AiReceiptExtractResponse> =>
+          this.receiptExtract
+            ? this.receiptExtract.extract(data, dl)
+            : Promise.resolve({ ok: false, reason: 'disabled' }),
+        this.logger,
+        'ai.finance.receipt_extract',
       ),
     );
   }

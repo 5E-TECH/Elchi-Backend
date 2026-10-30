@@ -13,6 +13,8 @@ import {
   EntityManager,
   In,
   LessThan,
+  MoreThanOrEqual,
+  Not,
   QueryFailedError,
 } from 'typeorm';
 import {
@@ -24,9 +26,12 @@ import {
   CASHBOX_RECEIPT_MESSAGES,
   CASHBOX_RECEIPT_SETTING_GROUPS,
   CASHBOX_RECEIPT_SETTING_KEYS,
+  Cashbox_type,
+  RECEIPT_REANALYZE_STATUS,
   Roles,
   applyReceiptSettingsPatch,
   isCashboxReceiptKind,
+  receiptReanalyzeBlock,
   receiptSettingGroupOf,
   rmqSend,
   type CashboxReceiptErrorCode,
@@ -34,7 +39,15 @@ import {
   type CashboxReceiptSettings,
   type CashboxReceiptSettingsPatch,
 } from '@app/common';
+import { Cashbox } from '../entities/cashbox.entity';
+import { CashboxCard } from '../entities/cashbox-card.entity';
 import { CashboxReceipt } from '../entities/cashbox-receipt.entity';
+import { FinanceRealtimeService } from '../realtime/finance-realtime.service';
+import {
+  RECEIPT_DUPLICATE_REFERENCE_DAYS,
+  deriveReceiptFlags,
+  deriveReceiptOutcome,
+} from './receipt.rules';
 import { FinanceSetting } from '../entities/finance-setting.entity';
 import type {
   LinkedReceiptRef,
@@ -129,6 +142,7 @@ export class CashboxReceiptService {
     private readonly dataSource: DataSource,
     private readonly activityLog: ActivityLogService,
     @Optional() @Inject('FILE') private readonly fileClient?: ClientProxy,
+    @Optional() private readonly realtime?: FinanceRealtimeService,
   ) {}
 
   // ───────────────────────── sozlamalar ─────────────────────────
@@ -478,6 +492,7 @@ export class CashboxReceiptService {
       kind: receipt.kind,
       ai_status: aiOn ? 'pending' : 'disabled',
       ai_request_id: aiRequestId,
+      ...(aiOn ? { file_key: receipt.file_key, mime: receipt.mime } : {}),
     };
   }
 
@@ -503,6 +518,288 @@ export class CashboxReceiptService {
           ai_request_id: null,
         }
       : null;
+  }
+
+  // ───────────────────────── AI (T3-3) ─────────────────────────
+
+  /**
+   * Gateway AI natijasi (`finance.receipt.ai_result`). `ai_request_id`
+   * joriy so'rovniki bo'lmasa (qayta tahlil boshlangan / eski javob) —
+   * e'tiborsiz (`ignored:true`). Holat — `deriveReceiptOutcome`, bayroqlar —
+   * `deriveReceiptFlags`; `ai_attempts + 1`; realtime `finance.receipt.
+   * checked` (outbox, AYNI tranzaksiyada) va jurnal. Rasm / karta raqami /
+   * ism logga YOZILMAYDI.
+   */
+  async applyAiResult(input: {
+    receipt_id?: unknown;
+    ai_request_id?: unknown;
+    result?: unknown;
+  }) {
+    try {
+      const receiptId = text(input?.receipt_id);
+      const requestId = text(input?.ai_request_id);
+      if (!/^\d{1,18}$/.test(receiptId) || !requestId) {
+        throw new BadRequestException("receipt_id / ai_request_id noto'g'ri");
+      }
+      const result = (
+        input?.result && typeof input.result === 'object' ? input.result : {}
+      ) as Record<string, unknown>;
+      const outcome = await this.dataSource.transaction(async (manager) => {
+        const repo = manager.getRepository(CashboxReceipt);
+        const row = await repo.findOne({
+          where: { id: receiptId, isDeleted: false },
+          lock: { mode: 'pessimistic_write' },
+        });
+        if (
+          !row ||
+          row.ai_request_id !== requestId ||
+          row.ai_status !== 'pending'
+        ) {
+          return null;
+        }
+        const derived = deriveReceiptOutcome(
+          result,
+          row.entered_amount === null ? null : Number(row.entered_amount),
+        );
+        const ok = result.ok === true;
+        const str = (value: unknown, max: number) =>
+          typeof value === 'string' && value.trim()
+            ? value.trim().slice(0, max)
+            : null;
+        const last4 = (value: unknown) =>
+          typeof value === 'string' && /^\d{4}$/.test(value) ? value : null;
+        const reference = ok ? str(result.reference, 120) : null;
+        const isTransfer = row.kind !== 'manual_expense';
+        const flags = deriveReceiptFlags({
+          duplicate_photo: await this.hasDuplicatePhoto(manager, row),
+          duplicate_reference: reference
+            ? await this.hasDuplicateReference(manager, row, reference)
+            : false,
+          receipt_date: ok ? result.date : null,
+          operation_at: row.linked_at ?? row.uploaded_at,
+          expected_last4: await this.expectedCardLast4(manager, row),
+          detected_last4: ok
+            ? last4(
+                isTransfer
+                  ? result.recipient_card_last4
+                  : result.payer_card_last4,
+              )
+            : null,
+        });
+        const amount =
+          ok &&
+          typeof result.amount === 'number' &&
+          Number.isFinite(result.amount)
+            ? Math.round(result.amount * 100) / 100
+            : null;
+        const confidence =
+          ok &&
+          typeof result.confidence === 'number' &&
+          Number.isFinite(result.confidence)
+            ? Math.min(1, Math.max(0, result.confidence))
+            : null;
+        const now = new Date();
+        await repo.update(
+          { id: row.id },
+          {
+            ai_status: derived.status,
+            ai_attempts: Number(row.ai_attempts ?? 0) + 1,
+            ai_error_reason: derived.error_reason,
+            ai_amount: amount,
+            ai_difference: derived.difference,
+            ai_currency: ok ? str(result.currency, 8) : null,
+            ai_date: ok ? str(result.date, 40) : null,
+            ai_recipient: ok ? str(result.recipient_name, 120) : null,
+            ai_recipient_last4: ok ? last4(result.recipient_card_last4) : null,
+            ai_payer: ok ? str(result.payer_name, 120) : null,
+            ai_payer_last4: ok ? last4(result.payer_card_last4) : null,
+            ai_bank: ok ? str(result.bank, 80) : null,
+            ai_reference: reference,
+            ai_confidence: confidence,
+            ai_flags: flags,
+            ai_model: ok ? str(result.model, 80) : null,
+            ai_checked_at: now,
+          },
+        );
+        await this.realtime?.receiptChecked(
+          {
+            receipt_id: String(row.id),
+            history_id: row.history_id,
+            kind: row.kind,
+            ai_status: derived.status,
+            branch_id: row.branch_id,
+            uploaded_by: row.uploaded_by,
+            at: now,
+          },
+          manager,
+        );
+        return { row, status: derived.status, flags };
+      });
+      if (!outcome) {
+        return successRes({ ignored: true }, 200, 'Stale AI result ignored');
+      }
+      await this.activityLog.log({
+        entity_type: 'CashboxReceipt',
+        entity_id: String(outcome.row.id),
+        action: 'finance.receipt_ai_checked',
+        new_value: { ai_status: outcome.status, flags: outcome.flags },
+        metadata: {
+          kind: outcome.row.kind,
+          history_id: outcome.row.history_id,
+          attempt: Number(outcome.row.ai_attempts ?? 0) + 1,
+        },
+        user_id: null,
+      });
+      return successRes(
+        { receipt_id: String(outcome.row.id), ai_status: outcome.status },
+        200,
+        'Receipt AI result applied',
+      );
+    } catch (error) {
+      receiptRpcError(error);
+    }
+  }
+
+  /**
+   * `POST /finance/receipts/:id/reanalyze` (faqat SA/admin): ruxsat —
+   * `receiptReanalyzeBlock` (T3-2 `can_reanalyze` bilan bitta qoida). Yangi
+   * `ai_request_id` → `pending` (eski kechikkan javob yozilmaydi). Gateway
+   * AI'ni fonda boshlaydi.
+   */
+  async requestReanalyze(input: {
+    receipt_id?: unknown;
+    requester_id?: unknown;
+    requester_roles?: unknown;
+  }) {
+    try {
+      const roles = rolesOf(input?.requester_roles);
+      if (!roles.includes(Roles.SUPERADMIN) && !roles.includes(Roles.ADMIN)) {
+        forbidden('Qayta tahlil faqat superadmin/admin uchun');
+      }
+      const receiptId = text(input?.receipt_id);
+      if (!/^\d{1,18}$/.test(receiptId)) {
+        throw new NotFoundException('Chek topilmadi');
+      }
+      const settings = await this.loadSettings();
+      const result = await this.dataSource.transaction(async (manager) => {
+        const repo = manager.getRepository(CashboxReceipt);
+        const row = await repo.findOne({
+          where: { id: receiptId, isDeleted: false, state: 'linked' },
+          lock: { mode: 'pessimistic_write' },
+        });
+        if (!row) throw new NotFoundException('Chek topilmadi');
+        const group = settings[receiptSettingGroupOf(row.kind)];
+        const block = receiptReanalyzeBlock(
+          row,
+          group.photo_required && group.ai_enabled,
+        );
+        if (block) {
+          receiptFail(RECEIPT_REANALYZE_STATUS[block] ?? 409, block);
+        }
+        const aiRequestId = randomUUID();
+        await repo.update(
+          { id: row.id },
+          {
+            ai_status: 'pending',
+            ai_request_id: aiRequestId,
+            ai_requested_at: new Date(),
+          },
+        );
+        return { row, aiRequestId };
+      });
+      await this.activityLog.log({
+        entity_type: 'CashboxReceipt',
+        entity_id: String(result.row.id),
+        action: 'finance.receipt_reanalyze_requested',
+        old_value: { ai_status: result.row.ai_status },
+        new_value: { ai_status: 'pending' },
+        metadata: { attempts: Number(result.row.ai_attempts ?? 0) },
+        user_id: text(input?.requester_id) || null,
+      });
+      return successRes(
+        {
+          receipt_id: String(result.row.id),
+          ai_status: 'pending',
+          ai_request_id: result.aiRequestId,
+          file_key: result.row.file_key,
+          mime: result.row.mime,
+        },
+        202,
+        'Receipt reanalyze requested',
+      );
+    } catch (error) {
+      receiptRpcError(error);
+    }
+  }
+
+  private async hasDuplicatePhoto(
+    manager: EntityManager,
+    row: CashboxReceipt,
+  ): Promise<boolean> {
+    return (
+      (await manager.getRepository(CashboxReceipt).count({
+        where: {
+          file_sha256: row.file_sha256,
+          isDeleted: false,
+          id: Not(row.id),
+        },
+      })) > 0
+    );
+  }
+
+  private async hasDuplicateReference(
+    manager: EntityManager,
+    row: CashboxReceipt,
+    reference: string,
+  ): Promise<boolean> {
+    const since = new Date(
+      Date.now() - RECEIPT_DUPLICATE_REFERENCE_DAYS * 86_400_000,
+    );
+    return (
+      (await manager.getRepository(CashboxReceipt).count({
+        where: {
+          ai_reference: reference,
+          isDeleted: false,
+          id: Not(row.id),
+          uploaded_at: MoreThanOrEqual(since),
+        },
+      })) > 0
+    );
+  }
+
+  /**
+   * `card_mismatch` uchun kutilgan last4: o'tkazmada — HQ (MAIN) kassa
+   * kartalari; chiqimda — to'lov qilingan karta (click). Topilmasa — [].
+   */
+  private async expectedCardLast4(
+    manager: EntityManager,
+    row: CashboxReceipt,
+  ): Promise<string[]> {
+    try {
+      if (row.kind === 'manual_expense') {
+        if (!row.card_id || row.payment_method !== 'click') return [];
+        const card = await manager.findOne(CashboxCard, {
+          where: { id: String(row.card_id) },
+        });
+        return card?.last4 ? [String(card.last4)] : [];
+      }
+      const main = await manager.findOne(Cashbox, {
+        where: {
+          user_id: '0',
+          cashbox_type: Cashbox_type.MAIN,
+          isDeleted: false,
+        },
+      });
+      if (!main) return [];
+      const cards = await manager.find(CashboxCard, {
+        where: { cashbox_id: String(main.id), isDeleted: false },
+      });
+      return cards
+        .map((card) => (card.last4 ? String(card.last4) : ''))
+        .filter(Boolean);
+    } catch {
+      return [];
+    }
   }
 
   // ───────────────────────── tozalash ─────────────────────────

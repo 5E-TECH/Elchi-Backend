@@ -19,6 +19,7 @@ import { FinanceSetting } from '../entities/finance-setting.entity';
 import { FinancialBalanceHistory } from '../entities/financial-balance-history.entity';
 import { Shift } from '../entities/shift.entity';
 import { FinanceNotificationService } from '../notification/finance-notification.service';
+import { FinanceRealtimeService } from '../realtime/finance-realtime.service';
 import { CashboxReceiptService } from './cashbox-receipt.service';
 
 /**
@@ -92,9 +93,13 @@ describePg('T3-2 chekni bog`lash — haqiqiy Postgres', () => {
       db.getRepository(ActivityLog),
       'finance-service',
     );
-    receipts = new CashboxReceiptService(db, activityLog, {
-      send: jest.fn(() => of({})),
-    } as never);
+    process.env.RABBITMQ_GATEWAY_QUEUE = 'gateway_queue';
+    receipts = new CashboxReceiptService(
+      db,
+      activityLog,
+      { send: jest.fn(() => of({})) } as never,
+      new FinanceRealtimeService(outbox as never),
+    );
     const identityClient = {
       send: jest.fn((_p: { cmd: string }, payload: any) =>
         of({
@@ -132,6 +137,7 @@ describePg('T3-2 chekni bog`lash — haqiqiy Postgres', () => {
   }, 60_000);
 
   afterAll(async () => {
+    delete process.env.RABBITMQ_GATEWAY_QUEUE;
     if (db?.isInitialized) await db.destroy();
     if (admin?.isInitialized) {
       await admin.query(`DROP DATABASE IF EXISTS "${dbName}" WITH (FORCE)`);
@@ -575,5 +581,235 @@ describePg('T3-2 chekni bog`lash — haqiqiy Postgres', () => {
     await expect(rpcError(find('salary'))).resolves.toMatchObject({
       statusCode: 400,
     });
+  });
+
+  // ───────────────────────── AI (T3-3) ─────────────────────────
+
+  const linkedReceipt = async (amount = 145_000) => {
+    const receiptId = await upload('manual_expense');
+    const res = await spend({ receipt_id: receiptId, amount });
+    return {
+      receiptId,
+      requestId: String(res.data.receipt.ai_request_id),
+      historyId: String(res.data.history.id),
+    };
+  };
+
+  const aiOk = (over: Record<string, unknown> = {}) => ({
+    ok: true,
+    amount: 150_000,
+    currency: 'UZS',
+    date: new Date().toISOString().slice(0, 10),
+    recipient_name: 'Ijara MChJ',
+    recipient_card_last4: null,
+    payer_name: null,
+    payer_card_last4: null,
+    bank: 'Kapitalbank',
+    reference: `TX-${randomUUID().slice(0, 8)}`,
+    confidence: 0.92,
+    model: 'claude-test',
+    ...over,
+  });
+
+  const realtimeEvents = () =>
+    outbox.enqueue.mock.calls
+      .map(
+        (call: unknown[]) =>
+          call[2] as { event?: string; payload?: any; targets?: any[] },
+      )
+      .filter((msg) => msg?.event === 'finance.receipt.checked');
+
+  it('⭐ AI: 150 000 vs 145 000 → mismatch, difference +5 000, attempts 1, realtime (summasiz) + jurnal', async () => {
+    const { receiptId, requestId, historyId } = await linkedReceipt();
+    outbox.enqueue.mockClear();
+    const res = (await receipts.applyAiResult({
+      receipt_id: receiptId,
+      ai_request_id: requestId,
+      result: aiOk(),
+    })) as any;
+    expect(res.data).toEqual({ receipt_id: receiptId, ai_status: 'mismatch' });
+    const row = await receiptRow(receiptId);
+    expect(row).toMatchObject({
+      ai_status: 'mismatch',
+      ai_amount: 150_000,
+      ai_difference: 5_000,
+      ai_attempts: 1,
+      ai_currency: 'UZS',
+      ai_bank: 'Kapitalbank',
+      ai_flags: [],
+    });
+    const [event] = realtimeEvents();
+    expect(event.payload).toMatchObject({
+      receipt_id: receiptId,
+      history_id: historyId,
+      kind: 'manual_expense',
+      ai_status: 'mismatch',
+    });
+    expect(JSON.stringify(event)).not.toContain('150000');
+    expect(event.targets).toEqual(
+      expect.arrayContaining([
+        { role: 'superadmin' },
+        { role: 'admin' },
+        { user_id: '7' },
+      ]),
+    );
+    const logs = await db.getRepository(ActivityLog).find({
+      where: { action: 'finance.receipt_ai_checked' } as never,
+    });
+    expect(logs).toHaveLength(1);
+    expect(JSON.stringify(logs[0])).not.toMatch(/Ijara|Kapitalbank|TX-/);
+
+    const detail = (await finance.findHistoryById(historyId)) as any;
+    expect(detail.data.receipt).toMatchObject({
+      ai_status: 'mismatch',
+      can_reanalyze: true,
+      ai: { amount: 150_000, difference: 5_000, attempts: 1, max_attempts: 5 },
+    });
+  });
+
+  it('eski ai_request_id natijasi e`tiborsiz; xato → error (attempts +1)', async () => {
+    const { receiptId, requestId } = await linkedReceipt();
+    const stale = (await receipts.applyAiResult({
+      receipt_id: receiptId,
+      ai_request_id: randomUUID(),
+      result: aiOk({ amount: 145_000 }),
+    })) as any;
+    expect(stale.data).toEqual({ ignored: true });
+    expect((await receiptRow(receiptId)).ai_status).toBe('pending');
+
+    await receipts.applyAiResult({
+      receipt_id: receiptId,
+      ai_request_id: requestId,
+      result: { ok: false, reason: 'network' },
+    });
+    expect(await receiptRow(receiptId)).toMatchObject({
+      ai_status: 'error',
+      ai_error_reason: 'network',
+      ai_attempts: 1,
+    });
+  });
+
+  it('⭐ bir rasm ikki chekda → duplicate_photo; o`sha referens → duplicate_reference', async () => {
+    const first = await linkedReceipt(150_000);
+    await receipts.applyAiResult({
+      receipt_id: first.receiptId,
+      ai_request_id: first.requestId,
+      result: aiOk({ reference: 'TX-SAME' }),
+    });
+    const second = await linkedReceipt(150_000);
+    await receipts.applyAiResult({
+      receipt_id: second.receiptId,
+      ai_request_id: second.requestId,
+      result: aiOk({ reference: 'TX-SAME' }),
+    });
+    expect(await receiptRow(second.receiptId)).toMatchObject({
+      ai_status: 'match',
+      ai_flags: ['duplicate_photo', 'duplicate_reference'],
+    });
+  });
+
+  it('⭐ qayta tahlil: mismatch → 202 pending (yangi request_id); match → 409; disabled → 400; urinishlar 5 → 429; menejer → 403', async () => {
+    const { receiptId, requestId } = await linkedReceipt();
+    await receipts.applyAiResult({
+      receipt_id: receiptId,
+      ai_request_id: requestId,
+      result: aiOk(),
+    });
+    const res = (await receipts.requestReanalyze({
+      receipt_id: receiptId,
+      requester_id: '1',
+      requester_roles: SA,
+    })) as any;
+    expect(res).toMatchObject({
+      statusCode: 202,
+      data: { receipt_id: receiptId, ai_status: 'pending' },
+    });
+    expect(res.data.ai_request_id).not.toBe(requestId);
+    expect(String(res.data.file_key)).toMatch(/^cashbox-receipt-/);
+    // Ikkinchi so'rov — tahlil davom etmoqda.
+    await expect(
+      rpcError(
+        receipts.requestReanalyze({
+          receipt_id: receiptId,
+          requester_roles: SA,
+        }),
+      ),
+    ).resolves.toMatchObject({ statusCode: 409, code: 'RECEIPT_AI_PENDING' });
+    // Yangi natija — match → qayta tahlil yo'q.
+    await receipts.applyAiResult({
+      receipt_id: receiptId,
+      ai_request_id: res.data.ai_request_id,
+      result: aiOk({ amount: 145_000 }),
+    });
+    expect((await receiptRow(receiptId)).ai_attempts).toBe(2);
+    await expect(
+      rpcError(
+        receipts.requestReanalyze({
+          receipt_id: receiptId,
+          requester_roles: SA,
+        }),
+      ),
+    ).resolves.toMatchObject({
+      statusCode: 409,
+      code: 'RECEIPT_ALREADY_MATCHED',
+    });
+    await expect(
+      rpcError(
+        receipts.requestReanalyze({
+          receipt_id: receiptId,
+          requester_roles: ['manager'],
+        }),
+      ),
+    ).resolves.toMatchObject({ statusCode: 403 });
+
+    // Urinishlar tugagan.
+    await db.query(
+      `UPDATE finance_schema.cashbox_receipts SET ai_status = 'error', ai_attempts = 5 WHERE id = $1`,
+      [receiptId],
+    );
+    await expect(
+      rpcError(
+        receipts.requestReanalyze({
+          receipt_id: receiptId,
+          requester_roles: SA,
+        }),
+      ),
+    ).resolves.toMatchObject({
+      statusCode: 429,
+      code: 'RECEIPT_AI_ATTEMPTS_EXHAUSTED',
+    });
+
+    // AI o'chirildi → disabled emas, lekin joriy sozlamada o'chiq → 400.
+    await db.query(
+      `UPDATE finance_schema.cashbox_receipts SET ai_attempts = 1 WHERE id = $1`,
+      [receiptId],
+    );
+    await setSettings({ manual_expense: { ai_enabled: false } });
+    await expect(
+      rpcError(
+        receipts.requestReanalyze({
+          receipt_id: receiptId,
+          requester_roles: SA,
+        }),
+      ),
+    ).resolves.toMatchObject({ statusCode: 400, code: 'RECEIPT_AI_DISABLED' });
+  });
+
+  it('3 daqiqadan oshgan pending — ai_stale, qayta tahlil ruxsat', async () => {
+    const { receiptId, historyId } = await linkedReceipt();
+    await db.query(
+      `UPDATE finance_schema.cashbox_receipts
+          SET ai_requested_at = now() - interval '4 minutes' WHERE id = $1`,
+      [receiptId],
+    );
+    const detail = (await finance.findHistoryById(historyId)) as any;
+    expect(detail.data.receipt).toMatchObject({
+      ai_status: 'pending',
+      ai_stale: true,
+      can_reanalyze: true,
+    });
+    await expect(
+      receipts.requestReanalyze({ receipt_id: receiptId, requester_roles: SA }),
+    ).resolves.toMatchObject({ statusCode: 202 });
   });
 });

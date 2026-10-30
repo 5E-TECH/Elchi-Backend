@@ -1,7 +1,7 @@
 import 'reflect-metadata';
 import { BadRequestException, ForbiddenException } from '@nestjs/common';
 import { INTERCEPTORS_METADATA } from '@nestjs/common/constants';
-import { of } from 'rxjs';
+import { of, throwError } from 'rxjs';
 import { FinanceGatewayController } from './finance-gateway.controller';
 import {
   ReceiptProjectionInterceptor,
@@ -236,5 +236,138 @@ describe('T3-2 — gateway yo`llari', () => {
       controller.findHistory({ receipt_status: 'none' }, user(['courier'])),
     ).rejects.toBeInstanceOf(ForbiddenException);
     expect(finance.send).not.toHaveBeenCalled();
+  });
+});
+
+describe('T3-3 — gateway: AI tahlili (fon) va qayta tahlil', () => {
+  const cmdCalls = (mock: jest.Mock, name: string) =>
+    (mock.mock.calls as unknown as Array<[{ cmd: string }, any]>).filter(
+      ([pattern]) => pattern.cmd === name,
+    );
+  const make = (opts: {
+    ai?: unknown;
+    aiThrows?: boolean;
+    finance?: unknown;
+  }) => {
+    const finance = {
+      send: jest.fn(() => of(opts.finance ?? { statusCode: 200, data: {} })),
+    };
+    const file = {
+      send: jest.fn(() =>
+        of({ data: { body_base64: 'aGVsbG8=', mime_type: 'image/jpeg' } }),
+      ),
+    };
+    const ai = {
+      send: jest.fn(() =>
+        opts.aiThrows ? throwError(() => new Error('down')) : of(opts.ai),
+      ),
+    };
+    const controller = new FinanceGatewayController(
+      finance as never,
+      { send: jest.fn() } as never,
+      { send: jest.fn() } as never,
+      { send: jest.fn() } as never,
+      file as never,
+      ai as never,
+    );
+    return { controller, finance, file, ai };
+  };
+  const user = { sub: '9', roles: ['superadmin'] } as never;
+
+  it('⭐ file.read → ai.finance.receipt_extract → finance.receipt.ai_result (o`sha ai_request_id)', async () => {
+    const aiReply = { ok: true, amount: 150000, model: 'm' };
+    const { controller, finance, file, ai } = make({ ai: aiReply });
+    await controller.runReceiptAiCheck({
+      receipt_id: '41',
+      ai_request_id: 'req-1',
+      file_key: 'cashbox-receipt-x.jpg',
+      mime: 'image/jpeg',
+      user,
+    });
+    expect(cmdCalls(file.send, 'file.read')[0][1]).toEqual({
+      key: 'cashbox-receipt-x.jpg',
+    });
+    expect(cmdCalls(ai.send, 'ai.finance.receipt_extract')[0][1]).toMatchObject(
+      {
+        image_base64: 'aGVsbG8=',
+        media_type: 'image/jpeg',
+        receipt_id: '41',
+      },
+    );
+    expect(cmdCalls(finance.send, 'finance.receipt.ai_result')[0][1]).toEqual({
+      receipt_id: '41',
+      ai_request_id: 'req-1',
+      result: aiReply,
+    });
+  });
+
+  it('AI xatosi / timeout — throw yo`q, natija network (finance error qiladi)', async () => {
+    const { controller, finance } = make({ aiThrows: true });
+    await expect(
+      controller.runReceiptAiCheck({
+        receipt_id: '41',
+        ai_request_id: 'req-1',
+        file_key: 'cashbox-receipt-x.jpg',
+        mime: 'image/png',
+        user,
+      }),
+    ).resolves.toBeUndefined();
+    expect(
+      cmdCalls(finance.send, 'finance.receipt.ai_result')[0][1].result,
+    ).toEqual({ ok: false, reason: 'network' });
+  });
+
+  it('⭐ spend javobidagi pending chek → AI fonda boshlanadi; FE javobida file_key / ai_request_id yo`q', async () => {
+    const { controller, file } = make({
+      finance: {
+        statusCode: 200,
+        data: {
+          receipt: {
+            id: '41',
+            ai_status: 'pending',
+            ai_request_id: 'req-1',
+            file_key: 'cashbox-receipt-x.jpg',
+            mime: 'image/jpeg',
+          },
+        },
+      },
+      ai: { ok: false, reason: 'refused' },
+    });
+    const res: any = await controller.spendMoney(
+      { user },
+      { amount: 1000, expense_category_id: '2', receipt_id: '41' },
+    );
+    expect(res.data.receipt).toEqual({ id: '41', ai_status: 'pending' });
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(cmdCalls(file.send, 'file.read')).toHaveLength(1);
+  });
+
+  it('⭐ POST /finance/receipts/:id/reanalyze → 202 {receipt_id, ai_status:pending}, AI boshlanadi', async () => {
+    const { controller, finance, file } = make({
+      finance: {
+        statusCode: 202,
+        data: {
+          receipt_id: '41',
+          ai_status: 'pending',
+          ai_request_id: 'req-2',
+          file_key: 'cashbox-receipt-x.jpg',
+          mime: 'image/jpeg',
+        },
+      },
+      ai: { ok: false, reason: 'network' },
+    });
+    const res = await controller.reanalyzeReceipt('41', { user });
+    expect(res).toEqual({
+      statusCode: 202,
+      message: 'Receipt reanalyze requested',
+      data: { receipt_id: '41', ai_status: 'pending' },
+    });
+    expect(cmdCalls(finance.send, 'finance.receipt.reanalyze')[0][1]).toEqual({
+      receipt_id: '41',
+      requester_id: '9',
+      requester_roles: ['superadmin'],
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(cmdCalls(file.send, 'file.read')).toHaveLength(1);
   });
 });

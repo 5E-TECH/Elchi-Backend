@@ -8,6 +8,7 @@ import {
   GatewayTimeoutException,
   Get,
   Headers,
+  HttpCode,
   HttpException,
   Inject,
   Logger,
@@ -65,6 +66,8 @@ import {
   toPublicUserSummary,
   type AiBalanceScreenshotMediaType,
   type AiBalanceScreenshotResponse,
+  type AiReceiptExtractResponse,
+  type AiReceiptMediaType,
 } from '@app/common';
 import {
   CashboxAllInfoQueryDto,
@@ -3044,18 +3047,24 @@ export class FinanceGatewayController {
       id?: unknown;
       ai_status?: unknown;
       ai_request_id?: unknown;
+      file_key?: unknown;
+      mime?: unknown;
     } | null;
     if (receipt && typeof receipt === 'object') {
       if (
         receipt.ai_status === 'pending' &&
         typeof receipt.ai_request_id === 'string' &&
-        receipt.ai_request_id
+        receipt.ai_request_id &&
+        typeof receipt.file_key === 'string'
       ) {
-        this.startReceiptAiCheck(
-          String(receipt.id),
-          receipt.ai_request_id,
+        // Fon vazifasi: javob kutilmaydi (natija realtime orqali keladi).
+        void this.runReceiptAiCheck({
+          receipt_id: String(receipt.id),
+          ai_request_id: receipt.ai_request_id,
+          file_key: receipt.file_key,
+          mime: typeof receipt.mime === 'string' ? receipt.mime : 'image/jpeg',
           user,
-        );
+        });
       }
       data.receipt = {
         id: receipt.id ?? null,
@@ -3065,16 +3074,74 @@ export class FinanceGatewayController {
     return result;
   }
 
-  /** T3-3 da AI tahlili ulanadi; hozircha natija `pending` qoladi. */
-  private startReceiptAiCheck(
-    receiptId: string,
-    aiRequestId: string,
-    user: JwtUser,
-  ): void {
-    // T3-3: runReceiptAiCheck.
-    void receiptId;
-    void aiRequestId;
-    void user;
+  /**
+   * (T3-3) Chek AI tahlili — fon vazifasi, HECH QACHON throw qilmaydi
+   * (`runBalanceAiCheck` naqshi): `file.read` → `ai.finance.receipt_extract`
+   * (60 s) → `finance.receipt.ai_result`. Finance eski `ai_request_id` li
+   * natijani e'tiborsiz qoldiradi. Logga faqat ID (rasm / karta / ism YO'Q).
+   */
+  async runReceiptAiCheck(input: {
+    receipt_id: string;
+    ai_request_id: string;
+    file_key: string;
+    mime: string;
+    user: JwtUser;
+  }): Promise<void> {
+    let result: AiReceiptExtractResponse = { ok: false, reason: 'disabled' };
+    try {
+      const file = await this.sendFile<{ data?: { body_base64?: unknown } }>(
+        { cmd: 'file.read' },
+        { key: input.file_key },
+      );
+      const image =
+        typeof file?.data?.body_base64 === 'string'
+          ? file.data.body_base64
+          : '';
+      if (!image) {
+        result = { ok: false, reason: 'network' };
+      } else if (this.aiClient) {
+        result = await firstValueFrom(
+          this.aiClient
+            .send<AiReceiptExtractResponse>(
+              { cmd: 'ai.finance.receipt_extract' },
+              {
+                image_base64: image,
+                media_type: (input.mime === 'image/jpg'
+                  ? 'image/jpeg'
+                  : input.mime) as AiReceiptMediaType,
+                receipt_id: input.receipt_id,
+                requester: {
+                  id: String(input.user?.sub ?? ''),
+                  roles: this.getUserRoles(input.user),
+                },
+                deadline_at: Date.now() + SHIFT_AI_TIMEOUT_MS - 5000,
+              },
+            )
+            .pipe(timeout(SHIFT_AI_TIMEOUT_MS)),
+        );
+      }
+    } catch (error) {
+      this.shiftCheckLogger.warn(
+        `Chek AI tahlili xatosi receipt=${input.receipt_id}: ${
+          error instanceof TimeoutError ? 'timeout' : 'rpc_error'
+        }`,
+      );
+      result = { ok: false, reason: 'network' };
+    }
+    try {
+      await this.send(
+        { cmd: 'finance.receipt.ai_result' },
+        {
+          receipt_id: input.receipt_id,
+          ai_request_id: input.ai_request_id,
+          result,
+        },
+      );
+    } catch {
+      this.shiftCheckLogger.warn(
+        `Chek AI natijasi yozilmadi receipt=${input.receipt_id}`,
+      );
+    }
   }
 
   @Patch('cashbox/fill')
@@ -4514,6 +4581,56 @@ export class FinanceGatewayController {
         photo_url: buildFileLinkUrl(req, key),
         photo_url_expires_in: FILE_LINK_TTL_SECONDS,
       },
+    };
+  }
+
+  @Post('receipts/:id/reanalyze')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @HttpCode(202)
+  @ApiBearerAuth()
+  @ApiParam({ name: 'id', description: 'Chek ID si' })
+  @ApiOperation({
+    summary: '(T3) Kassa chekini AI bilan qayta tahlil qilish',
+    description:
+      "202 → `{ receipt_id, ai_status: 'pending' }`; natija realtime `finance.receipt.checked` bilan. Ruxsat: `mismatch`, `unreadable`, `error`, 3 daqiqadan oshgan `pending`. Rad: `match` → 409 `RECEIPT_ALREADY_MATCHED`; `disabled` yoki joriy sozlamada AI o'chiq → 400 `RECEIPT_AI_DISABLED`; tahlil davom etmoqda → 409 `RECEIPT_AI_PENDING`; urinishlar ≥ 5 → 429 `RECEIPT_AI_ATTEMPTS_EXHAUSTED`. Audit `finance.receipt_reanalyze_requested`.",
+  })
+  async reanalyzeReceipt(
+    @Param('id') id: string,
+    @Req() req: { user: JwtUser },
+  ) {
+    if (!/^\d{1,18}$/.test(String(id ?? ''))) {
+      throw new BadRequestException("Chek id si noto'g'ri");
+    }
+    const response = await this.send<{
+      data?: {
+        receipt_id?: string;
+        ai_request_id?: string;
+        file_key?: string;
+        mime?: string;
+      };
+    }>(
+      { cmd: 'finance.receipt.reanalyze' },
+      {
+        receipt_id: id,
+        requester_id: String(req.user.sub),
+        requester_roles: this.getUserRoles(req.user),
+      },
+    );
+    const data = response?.data ?? {};
+    if (data.ai_request_id && data.file_key) {
+      void this.runReceiptAiCheck({
+        receipt_id: String(data.receipt_id ?? id),
+        ai_request_id: data.ai_request_id,
+        file_key: data.file_key,
+        mime: data.mime ?? 'image/jpeg',
+        user: req.user,
+      });
+    }
+    return {
+      statusCode: 202,
+      message: 'Receipt reanalyze requested',
+      data: { receipt_id: String(data.receipt_id ?? id), ai_status: 'pending' },
     };
   }
 

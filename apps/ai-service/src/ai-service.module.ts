@@ -13,6 +13,7 @@ import { AiBudgetService } from './budget/ai-budget.service';
 import { AiDraftService } from './draft/ai-draft.service';
 import { DistrictPickService } from './district-pick/district-pick.service';
 import { BalanceScreenshotService } from './balance-screenshot/balance-screenshot.service';
+import { ReceiptExtractService } from './receipt-extract/receipt-extract.service';
 import {
   AiOrderDraft,
   AiOrderDraftItem,
@@ -81,6 +82,7 @@ import { AiUsageService } from './usage/ai-usage.service';
     DistrictPickService,
     // kiZgTybn — smena yopishda karta qoldig'i skrinshoti.
     BalanceScreenshotService,
+    ReceiptExtractService,
     // F7PWp6cK — AI moliyaviy yordamchi.
     AssistantReader,
     AssistantStore,

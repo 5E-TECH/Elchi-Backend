@@ -32,6 +32,8 @@ export type AiFeature =
   | 'order_item_match'
   // kiZgTybn — smena yopishda karta qoldig'i skrinshoti (ichki xarajat).
   | 'finance_balance_screenshot'
+  // T3 (QlLf33Ma) — kassa cheki tahlili (ichki xarajat).
+  | 'finance_receipt_check'
   // F7PWp6cK — AI moliyaviy yordamchi (chat + faqat o'qiydigan tool'lar).
   | 'assistant';
 

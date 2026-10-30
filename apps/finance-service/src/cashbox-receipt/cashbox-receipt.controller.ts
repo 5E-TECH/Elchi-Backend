@@ -55,4 +55,24 @@ export class CashboxReceiptController {
       this.receipts.createDraft(data ?? {}),
     );
   }
+
+  @MessagePattern({ cmd: 'finance.receipt.ai_result' })
+  applyAiResult(
+    @Payload() data: Parameters<CashboxReceiptService['applyAiResult']>[0],
+    @Ctx() context: RmqContext,
+  ) {
+    return executeAndAck(this.rmqService, context, () =>
+      this.receipts.applyAiResult(data ?? {}),
+    );
+  }
+
+  @MessagePattern({ cmd: 'finance.receipt.reanalyze' })
+  requestReanalyze(
+    @Payload() data: Parameters<CashboxReceiptService['requestReanalyze']>[0],
+    @Ctx() context: RmqContext,
+  ) {
+    return executeAndAck(this.rmqService, context, () =>
+      this.receipts.requestReanalyze(data ?? {}),
+    );
+  }
 }

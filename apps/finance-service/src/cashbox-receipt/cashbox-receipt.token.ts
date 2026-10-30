@@ -18,4 +18,7 @@ export interface LinkedReceiptRef {
   kind: string;
   ai_status: string;
   ai_request_id: string | null;
+  /** ICHKI (gateway AI uchun faylni o'qiydi, FE'ga bermaydi). */
+  file_key?: string;
+  mime?: string;
 }
