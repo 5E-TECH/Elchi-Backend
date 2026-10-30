@@ -99,11 +99,24 @@ export function makeOutboxRepo() {
       rows.set(id, { ...value, id } as OutboxRow);
       return Promise.resolve({ identifiers: [{ id }] });
     }),
-    update: jest.fn((where: { id: string }, patch: Partial<OutboxRow>) => {
-      const row = rows.get(String(where.id));
-      if (row) Object.assign(row, patch);
-      return Promise.resolve({ affected: row ? 1 : 0 });
-    }),
+    update: jest.fn(
+      (
+        where: { id: string } & Partial<OutboxRow>,
+        patch: Partial<OutboxRow>,
+      ) => {
+        const row = rows.get(String(where.id));
+        // Qo'shimcha shartlar (masalan `status: 'sending'`) ham hisobga olinadi.
+        const matches =
+          row &&
+          Object.entries(where).every(
+            ([key, value]) =>
+              key === 'id' ||
+              (row as unknown as Record<string, unknown>)[key] === value,
+          );
+        if (matches) Object.assign(row, patch);
+        return Promise.resolve({ affected: matches ? 1 : 0 });
+      },
+    ),
     /** Worker da'vosi: muddati kelgan `pending` qatorlar. */
     query: jest.fn(() => {
       const due = [...rows.values()].filter(

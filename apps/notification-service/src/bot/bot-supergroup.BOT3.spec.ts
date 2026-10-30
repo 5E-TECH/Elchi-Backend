@@ -58,7 +58,7 @@ describe('BOT-3 #6 — xato turlari', () => {
 });
 
 describe('BOT-3 #6 — outbox: supergroup', () => {
-  it('⭐ 400 + migrate_to_chat_id → ulanish ko`chadi, xabar YANGI id`ga qayta yuboriladi (urinish hisoblanmaydi)', async () => {
+  it('⭐ 400 + migrate_to_chat_id → ulanish ko`chadi, xabar SHU urinishda YANGI id`ga yuboriladi (urinish hisoblanmaydi, natija chaqiruvchiga)', async () => {
     const fetchMock = makeFetch();
     fetchMock.mockResolvedValueOnce(
       telegramResponse(400, {
@@ -68,25 +68,23 @@ describe('BOT-3 #6 — outbox: supergroup', () => {
         parameters: { migrate_to_chat_id: -1009999 },
       }),
     );
+    fetchMock.mockResolvedValueOnce(okResponse({ message_id: 4242 }));
     const { outbox, repo, channels } = makeOutbox(fetchMock);
     const first = await outbox.send({
       chatId: '-100777',
       text: 'salom',
       source: 'test',
     });
-    expect(first.status).toBe('queued');
-    expect(channels.migrateChat).toHaveBeenCalledWith('-100777', '-1009999');
-    expect(channels.markInactive).not.toHaveBeenCalled();
-    const [row] = [...repo.rows.values()];
-    expect(row).toEqual(
+    // (#595 ko'rib chiqish) «queued» emas: guruh kartasi message_id ni oladi.
+    expect(first).toEqual(
       expect.objectContaining({
-        chat_id: '-1009999',
-        status: 'pending',
-        retry_count: 0,
+        status: 'sent',
+        result: expect.objectContaining({ message_id: 4242 }),
       }),
     );
-    fetchMock.mockResolvedValueOnce(okResponse());
-    expect(await outbox.processDue()).toBe(1);
+    expect(channels.migrateChat).toHaveBeenCalledWith('-100777', '-1009999');
+    expect(channels.markInactive).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
     const lastBody = JSON.parse(
       String(
         (fetchMock.mock.calls.at(-1)?.[1] as { body?: string } | undefined)
@@ -94,7 +92,42 @@ describe('BOT-3 #6 — outbox: supergroup', () => {
       ),
     ) as { chat_id?: string };
     expect(String(lastBody.chat_id)).toBe('-1009999');
-    expect(row.status).toBe('sent');
+    const [row] = [...repo.rows.values()];
+    expect(row).toEqual(
+      expect.objectContaining({
+        chat_id: '-1009999',
+        status: 'sent',
+        retry_count: 0,
+      }),
+    );
+    // Chaqiruvchi (guruh kartasi) yakuniy chatni biladi.
+    expect(first.chat_id).toBe('-1009999');
+    // Worker'da takror yo'q.
+    expect(await outbox.processDue()).toBe(0);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('yangi id ham «migrated» qaytarsa — cheksiz aylanmaydi (bir marta ko`chirish)', async () => {
+    const fetchMock = makeFetch();
+    const migrated = () =>
+      telegramResponse(400, {
+        ok: false,
+        description:
+          'Bad Request: group chat was upgraded to a supergroup chat',
+        parameters: { migrate_to_chat_id: -1009999 },
+      });
+    fetchMock
+      .mockResolvedValueOnce(migrated())
+      .mockResolvedValueOnce(migrated());
+    const { outbox, channels } = makeOutbox(fetchMock);
+    const result = await outbox.send({
+      chatId: '-100777',
+      text: 'salom',
+      source: 'test',
+    });
+    expect(channels.migrateChat).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(result.status).not.toBe('sent');
   });
 
   it('⭐ «not enough rights» → dead + guruh nofaol (blocked_on_send)', async () => {
@@ -118,6 +151,51 @@ describe('BOT-3 #6 — outbox: supergroup', () => {
       expect.any(String),
       'blocked_on_send',
     );
+  });
+
+  it.each([
+    'Forbidden: bot was kicked from the supergroup chat',
+    'Forbidden: bot is not a member of the group chat',
+  ])(
+    '⭐ yuborishda chiqarilgani aniqlandi (%s) → `kicked` (huquq qaytsa o`zi yoqilmaydi)',
+    async (description) => {
+      const fetchMock = makeFetch();
+      fetchMock.mockResolvedValueOnce(
+        telegramResponse(403, { ok: false, description }),
+      );
+      const { outbox, channels } = makeOutbox(fetchMock);
+      await outbox.send({ chatId: '-100777', text: 'x', source: 'test' });
+      expect(channels.markInactive).toHaveBeenCalledWith(
+        '-100777',
+        expect.any(String),
+        'kicked',
+      );
+    },
+  );
+
+  it('⭐ migrate paytida qator boshqa ishchi tomonidan yakunlangan — QAYTA yuborilmaydi', async () => {
+    const fetchMock = makeFetch();
+    fetchMock.mockResolvedValueOnce(
+      telegramResponse(400, {
+        ok: false,
+        description:
+          'Bad Request: group chat was upgraded to a supergroup chat',
+        parameters: { migrate_to_chat_id: -1009999 },
+      }),
+    );
+    const { outbox, repo, channels } = makeOutbox(fetchMock);
+    channels.migrateChat.mockImplementation(() => {
+      // Boshqa ishchi shu orada yakunladi.
+      for (const row of repo.rows.values()) row.status = 'sent';
+      return Promise.resolve({ markets: 1, outbox: 0 });
+    });
+    const result = await outbox.send({
+      chatId: '-100777',
+      text: 'x',
+      source: 'test',
+    });
+    expect(result.status).toBe('queued');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it('HTML xatosi — faqat xabar dead, guruh nofaol QILINMAYDI', async () => {

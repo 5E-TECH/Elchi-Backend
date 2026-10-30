@@ -46,11 +46,21 @@ warn (listen to'silmaydi). Readiness (`GET /health/readiness`) bot navbatini
 `down`); `scripts/rmq-cleanup-queues.sh` ham bu navbatni biladi.
 **Guruh holati (BOT-3 #6).** Guruh supergroup'ga aylansa (`migrate_to_chat_id`
 — yuborish javobida yoki eski guruhdagi servis xabarida) `telegram_markets.group_id`
-(trigger orqali `telegram_chats` ham), navbatdagi `telegram_outbox` qatorlari va
-kartalar YANGI id'ga ko'chadi, xabar qayta yuboriladi (urinish hisoblanmaydi;
-audit `notification.tg_group_migrated`). «Not enough rights» — guruh nofaol
-(`blocked_on_send`) + admin xabari. HTML xatosi (`can't parse entities`) — faqat
-o'sha xabar `dead`, guruh faol qoladi.
+(trigger orqali `telegram_chats` ham) va navbatdagi (`pending`) `telegram_outbox`
+qatorlari YANGI id'ga ko'chadi; boshqa urinishdagi (`sending`) qatorlarning faqat
+`chat_id` si yangilanadi (holatiga tegilmaydi — xabar ikki marta ketmaydi). Javobda
+migrate kelgan xabar SHU urinishda yangi id'ga qayta yuboriladi (urinish hisoblanmaydi,
+bir marta; guruh kartasi message_id ni oladi). Eski guruh kartalari ko'chirilmaydi
+(message_id supergroup'da yaroqsiz) — o'chiriladi. Audit `notification.tg_group_migrated`.
+«Not enough rights» — guruh nofaol (`blocked_on_send`) + admin va market EGASIGA
+(`telegram.market_channel_inactive`, in-app + shaxsiy Telegram) xabar; huquq qaytib
+bot `member` / `administrator` bo'lsa ulanish O'ZI qayta faol (Telegram har doim
+`my_chat_member` yubormaydi — yoqilmasa egasi kod bilan qayta ulaydi). Yuborishda
+aniqlangan chiqarilish (`kicked` / `not a member`) — `kicked` (avvalgi `blocked_on_send`
+ham ustidan yoziladi). Chiqarilgan (`kicked` / `left` / `chat_not_found`) guruh — market
+kabinetdan kod bilan qayta ulaydi (o'sha marketning nofaol qatori qayta yoqiladi, boshqa
+marketniki — yo'q); admin o'chirgan (`manual`) yoki sababsiz qator — faqat admin PATCH. HTML xatosi (`can't parse entities`)
+— faqat o'sha xabar `dead`, guruh faol qoladi.
 
 ## 2. Rejimlar (`TELEGRAM_BOT_MODE`, sukut `auto`)
 

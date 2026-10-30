@@ -228,11 +228,13 @@ export class OrderCardSyncService {
         source: 'bot.group_card',
       });
       const messageId = sent.result?.message_id;
+      // (BOT-3 #6) Guruh supergroup'ga aylangan bo'lsa — yangi id ostida.
+      const chatId = sent.chat_id ?? group.chat_id;
       if (sent.status === 'sent' && messageId) {
         await manager.getRepository(TelegramOrderCard).upsert(
           {
             order_id: data.id,
-            chat_id: group.chat_id,
+            chat_id: chatId,
             message_id: String(messageId),
             kind: 'group',
             actor_user_id: null,
@@ -242,7 +244,7 @@ export class OrderCardSyncService {
           ['order_id', 'chat_id'],
         );
       }
-      await this.audit(data.id, group.chat_id, data, 'sent', sent.status);
+      await this.audit(data.id, chatId, data, 'sent', sent.status);
       return sent.status === 'sent' || sent.status === 'queued';
     } catch (error) {
       // Guruhga yuborib bo'lmadi (bot chiqarilgan va h.k.) — buyurtma oqimiga
