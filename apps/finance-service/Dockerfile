@@ -26,4 +26,9 @@ WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY --from=deps /app/package.json ./
 COPY --from=builder /app/dist ./dist
+# qUEE0Bgd: ilova root ostida ishlamaydi. Fayllar root'niki bo'lib qoladi (ilova
+# o'z kodini o'zgartira olmaydi), chown yo'q — umumiy qatlamlar buzilmaydi. USER
+# qatlam yaratmaydi; hech narsa diskka yozilmaydi (multer memoryStorage, log
+# stdout), /tmp ochiq.
+USER node
 CMD ["node", "dist/apps/finance-service/main.js"]

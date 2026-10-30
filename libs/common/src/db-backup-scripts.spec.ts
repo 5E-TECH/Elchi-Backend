@@ -500,7 +500,8 @@ describe('db backups — wiring (deploy.yml + docker-compose.prod.yml)', () => {
     );
     for (const step of [
       ' pull rabbitmq',
-      ' up -d --remove-orphans rabbitmq',
+      ' up -d --no-recreate --remove-orphans rabbitmq',
+      ' up -d --remove-orphans postgres minio',
       '--abort-on-container-exit migration-runner',
       '--build --remove-orphans $DEPLOY_SERVICES',
     ]) {

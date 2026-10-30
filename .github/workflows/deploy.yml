@@ -297,8 +297,15 @@ jobs:
 
             # cloudflared is NOT pulled here any more: its image is pinned (tag +
             # digest) and rolled out only when that pin changes — see below.
+            # qUEE0Bgd: mavjud serverda amalda faqat rabbitmq'ning qotirilgan digest'i:
+            # minio `pull_policy: never`, postgres `missing` (docker-compose.prod.yml).
             docker compose -f docker-compose.prod.yml pull rabbitmq postgres minio || true
-            docker compose -f docker-compose.prod.yml up -d --remove-orphans rabbitmq postgres minio
+            # qUEE0Bgd: rabbitmq deploy'da HECH QACHON qayta yaratilmaydi (faqat yo'q
+            # bo'lsa yaratiladi): node nomi = konteyner id, yangi konteyner volume'da
+            # bo'sh mnesia ochadi — brokerdagi foydalanuvchilar yo'qoladi, guest
+            # qaytadi va hamma servis ulanolmay qoladi. Rollback buni tuzatmaydi.
+            docker compose -f docker-compose.prod.yml up -d --no-recreate --remove-orphans rabbitmq
+            docker compose -f docker-compose.prod.yml up -d --remove-orphans postgres minio
 
             if [ "$RUN_MIGRATIONS" != true ]; then
               echo "No migration changes detected."
@@ -451,6 +458,22 @@ jobs:
               docker compose -f docker-compose.prod.yml up -d --no-deps backup-offsite || echo "WARNING: backup-offsite (R2 off-site copies) did not start — deploy continues; see docs/ops/db-backups.md" >&2
             fi
             docker compose -f docker-compose.prod.yml logs --tail 5 backup-offsite || true
+
+            # --- Ops sidecars (db-reconcile, activity-log-prune) --------------------
+            # qUEE0Bgd: endi Dockerfile.ops image'idan ishlaydi (repo bind-mount yo'q),
+            # kod image'ga build paytida kiradi — yangilanmasa eski kodda qolardi.
+            # Faqat HOZIR ISHLAYOTGANLARI yangilanadi: deploy ularni o'zi yoqmaydi
+            # (avvalgidek qo'lda yoqiladi). backup-offsite kabi gate emas: xato faqat
+            # ogohlantirish, muvaffaqiyatli deploy'ni qaytarmaydi.
+            OPS_SIDECARS=""
+            for s in db-reconcile activity-log-prune; do
+              if [ -n "$(docker compose -f docker-compose.prod.yml ps -q "$s" 2>/dev/null || true)" ]; then
+                OPS_SIDECARS="$OPS_SIDECARS $s"
+              fi
+            done
+            if [ -n "$OPS_SIDECARS" ]; then
+              docker compose -f docker-compose.prod.yml up -d --no-deps --build $OPS_SIDECARS || echo "WARNING: ops sidecars ($OPS_SIDECARS) were not updated — they keep running the previous code" >&2
+            fi
 
             docker compose -f docker-compose.prod.yml ps
 
@@ -677,8 +700,15 @@ jobs:
 
             # cloudflared is NOT pulled here any more: its image is pinned (tag +
             # digest) and rolled out only when that pin changes — see below.
+            # qUEE0Bgd: mavjud serverda amalda faqat rabbitmq'ning qotirilgan digest'i:
+            # minio `pull_policy: never`, postgres `missing` (docker-compose.prod.yml).
             docker compose -f docker-compose.prod.yml -f docker-compose.staging.yml pull rabbitmq postgres minio || true
-            docker compose -f docker-compose.prod.yml -f docker-compose.staging.yml up -d --remove-orphans rabbitmq postgres minio
+            # qUEE0Bgd: rabbitmq deploy'da HECH QACHON qayta yaratilmaydi (faqat yo'q
+            # bo'lsa yaratiladi): node nomi = konteyner id, yangi konteyner volume'da
+            # bo'sh mnesia ochadi — brokerdagi foydalanuvchilar yo'qoladi, guest
+            # qaytadi va hamma servis ulanolmay qoladi. Rollback buni tuzatmaydi.
+            docker compose -f docker-compose.prod.yml -f docker-compose.staging.yml up -d --no-recreate --remove-orphans rabbitmq
+            docker compose -f docker-compose.prod.yml -f docker-compose.staging.yml up -d --remove-orphans postgres minio
 
             if [ "$RUN_MIGRATIONS" != true ]; then
               echo "No migration changes detected."
@@ -831,6 +861,22 @@ jobs:
               docker compose -f docker-compose.prod.yml -f docker-compose.staging.yml up -d --no-deps backup-offsite || echo "WARNING: backup-offsite (R2 off-site copies) did not start — deploy continues; see docs/ops/db-backups.md" >&2
             fi
             docker compose -f docker-compose.prod.yml -f docker-compose.staging.yml logs --tail 5 backup-offsite || true
+
+            # --- Ops sidecars (db-reconcile, activity-log-prune) --------------------
+            # qUEE0Bgd: endi Dockerfile.ops image'idan ishlaydi (repo bind-mount yo'q),
+            # kod image'ga build paytida kiradi — yangilanmasa eski kodda qolardi.
+            # Faqat HOZIR ISHLAYOTGANLARI yangilanadi: deploy ularni o'zi yoqmaydi
+            # (avvalgidek qo'lda yoqiladi). backup-offsite kabi gate emas: xato faqat
+            # ogohlantirish, muvaffaqiyatli deploy'ni qaytarmaydi.
+            OPS_SIDECARS=""
+            for s in db-reconcile activity-log-prune; do
+              if [ -n "$(docker compose -f docker-compose.prod.yml -f docker-compose.staging.yml ps -q "$s" 2>/dev/null || true)" ]; then
+                OPS_SIDECARS="$OPS_SIDECARS $s"
+              fi
+            done
+            if [ -n "$OPS_SIDECARS" ]; then
+              docker compose -f docker-compose.prod.yml -f docker-compose.staging.yml up -d --no-deps --build $OPS_SIDECARS || echo "WARNING: ops sidecars ($OPS_SIDECARS) were not updated — they keep running the previous code" >&2
+            fi
 
             docker compose -f docker-compose.prod.yml -f docker-compose.staging.yml ps
 

@@ -94,8 +94,9 @@ $DC logs --tail 50 api-gateway
    bir xil bo'lsa staging tokeni prod'da ham o'tadi. `SMS_CREDENTIAL_SECRET` va
    `INTEGRATION_CREDENTIAL_SECRET` boshqacha bo'lgani uchun prod nusxasidagi
    Eskiz/hamkor kredensiallari staging'da ochilmaydi — bu ataylab.
-6. **MinIO image.** `minio/minio` endi anonim `docker pull` ga ruxsat bermasligi
-   mumkin. `docker pull minio/minio:latest` ishlamasa — prod'dan ko'chiring:
+6. **MinIO image.** `minio/minio` Docker Hub'da yo'q (2026-10-30: repo 404) va
+   compose'da `pull_policy: never` (qUEE0Bgd): image serverda birinchi deploy'dan
+   OLDIN bo'lishi shart, aks holda `up` yiqiladi. Prod'dan ko'chiring:
    ```bash
    # prod'da
    docker save minio/minio:latest | gzip > /root/minio-image.tar.gz
