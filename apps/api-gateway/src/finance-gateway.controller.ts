@@ -51,6 +51,7 @@ import {
   Cashbox_type,
   FinancialSource_type,
   Operation_type,
+  PAYMENT_CORRECTION_ERROR_CODES,
   PaymentMethod,
   Roles as RoleEnum,
   Source_type,
@@ -96,6 +97,9 @@ import {
   PaymentToMarketRequestDto,
   UpdateCashboxBalanceRequestDto,
   UpdateSalaryRequestDto,
+  UpdatePaymentCorrectionSettingsRequestDto,
+  ReversePaymentRequestDto,
+  CorrectPaymentAmountRequestDto,
 } from './dto/finance.swagger.dto';
 import { resolveFinancialActors } from './financial-balance/financial-balance.util';
 import {
@@ -3394,7 +3398,11 @@ export class FinanceGatewayController {
   ) {
     const response = await this.send(
       { cmd: 'finance.history.find_by_id' },
-      { id },
+      {
+        id,
+        // T6 — `correctable` bloki faqat superadminga (amal faqat unda).
+        include_correctable: this.hasRole(req?.user, RoleEnum.SUPERADMIN),
+      },
     );
 
     if (this.isPrivileged(req?.user)) {
@@ -3469,6 +3477,228 @@ export class FinanceGatewayController {
     // market esa kuryer tarifi/ulushini olardi. GET /orders/:id bilan AYNI
     // rol proyeksiyasi (filial xodimlari — o'zgarishsiz).
     return projectOrderPayloadForRoles(req?.user?.roles, response);
+  }
+
+  // ─────────── T6 — to'lovni qaytarish / summasini tuzatish ───────────
+
+  @Get('payment-corrections/settings')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: "(T6) To'lovni qaytarish / tuzatish muddati — FAQAT superadmin",
+    description:
+      "`window_days` (1…365, qator yo'q — 30), `updated_by`, `updated_at`. Muddat zanjirning birinchi to'lovidan hisoblanadi; o'zgarsa darhol hammaga.",
+  })
+  @ApiOkResponse({
+    schema: {
+      example: {
+        statusCode: 200,
+        message: 'success',
+        data: {
+          window_days: 30,
+          updated_by: null,
+          updated_at: null,
+        },
+      },
+    },
+  })
+  getPaymentCorrectionSettings() {
+    return this.send({ cmd: 'finance.payment_correction.settings.get' }, {});
+  }
+
+  @Patch('payment-corrections/settings')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN)
+  @ApiBearerAuth()
+  @ApiBody({ type: UpdatePaymentCorrectionSettingsRequestDto })
+  @ApiOperation({
+    summary:
+      "(T6) To'lovni qaytarish / tuzatish muddatini o'zgartirish — FAQAT superadmin",
+    description:
+      "`window_days` — butun son 1…365, aks holda 400. Activity-log: `finance.payment_correction_settings_updated`.",
+  })
+  updatePaymentCorrectionSettings(
+    @Req() req: { user: JwtUser },
+    @Body() dto: UpdatePaymentCorrectionSettingsRequestDto,
+  ) {
+    return this.send(
+      { cmd: 'finance.payment_correction.settings.update' },
+      {
+        window_days: dto.window_days,
+        requester_id: String(req.user.sub),
+        requester_roles: this.getUserRoles(req.user),
+      },
+    );
+  }
+
+  @Post('history/:id/reverse')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN)
+  @ApiBearerAuth()
+  @ApiParam({
+    name: 'id',
+    description:
+      "To'lovning ISTALGAN oyog'i (kuryer / qabul qiluvchi / market kassasidagi cashbox_history id)",
+  })
+  @ApiHeader({ name: 'Idempotency-Key', required: true })
+  @ApiBody({ type: ReversePaymentRequestDto })
+  @ApiOperation({
+    summary:
+      "(T6) Kuryerdan qabul / marketga to'lovni TO'LIQ qaytarish — FAQAT superadmin",
+    description:
+      "Har asl oyoqqa teskari qator (`payment_reversal`, `reverses_history_id`, `comment` = sabab); asl qatorlar o'zgarmaydi. Kuryer to'lovi: kuryer +X, qabul qiluvchi (MAIN/BRANCH) −X; click_to_market: + MAIN sof 0, market +X. Marketga to'lov: MAIN +X, market +X. Bitta tranzaksiya, xatoda pul o'zgarmaydi. " +
+      "201 `{ correction, cashboxes, idempotent: false }`; o'sha kalit → 200 `idempotent: true`; o'sha kalit boshqa so'rovda → 409 `IDEMPOTENCY_KEY_REUSED`. " +
+      'Xatolar (`code`): 404 `NOT_FOUND`; 409 `NOT_CORRECTABLE` / `LEGACY_UNLINKED` / `ALREADY_CORRECTED` / `WINDOW_EXPIRED` (+ `deadline`) / `INSUFFICIENT_BALANCE` / `CARD_ARCHIVED`; 400 `SHIFT_REQUIRED` / `BRANCH_SHIFT_REQUIRED` / `IDEMPOTENCY_KEY_REQUIRED`.',
+  })
+  @ApiCreatedResponse({
+    schema: {
+      example: {
+        statusCode: 201,
+        message: "To'lov qaytarildi",
+        data: {
+          correction: {
+            id: '12',
+            action: 'reverse',
+            payment_kind: 'courier_payment',
+            original_amount: 500000,
+            new_amount: null,
+            reason: 'Kuryer pulni bermagan — xato bosilgan',
+            created_by: '1',
+            created_at: '2026-10-30T09:00:00.000Z',
+          },
+          cashboxes: [
+            {
+              id: '7',
+              user_id: '301',
+              cashbox_type: 'couriers',
+              balance: 500000,
+              balance_cash: 500000,
+              balance_card: 0,
+            },
+            {
+              id: '1',
+              user_id: '0',
+              cashbox_type: 'main',
+              balance: 0,
+              balance_cash: 0,
+              balance_card: 0,
+            },
+          ],
+          idempotent: false,
+        },
+      },
+    },
+  })
+  async reversePayment(
+    @Req() req: { user: JwtUser },
+    @Param('id') id: string,
+    @Body() dto: ReversePaymentRequestDto,
+    @Headers('idempotency-key') idempotencyKey?: string,
+  ) {
+    return this.sendPaymentCorrection(
+      'finance.payment_correction.reverse',
+      req.user,
+      id,
+      { reason: dto.reason },
+      idempotencyKey,
+    );
+  }
+
+  @Post('history/:id/correct-amount')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN)
+  @ApiBearerAuth()
+  @ApiParam({
+    name: 'id',
+    description: "To'lovning ISTALGAN oyog'i (cashbox_history id)",
+  })
+  @ApiHeader({ name: 'Idempotency-Key', required: true })
+  @ApiBody({ type: CorrectPaymentAmountRequestDto })
+  @ApiOperation({
+    summary:
+      "(T6) To'lov summasini tuzatish (qaytarish + yangi summa) — FAQAT superadmin",
+    description:
+      "Qaytarish + yangi summali to'lov (o'sha usul / karta / qabul qiluvchi), BITTA tranzaksiyada; kvitansiya (`finance.payment_received`) yo'q, tomonlarga `finance.payment_corrected`. Javob `/reverse` bilan bir xil shakl (`correction.action = edit`). " +
+      "Qo'shimcha xatolar: 409 `SAME_AMOUNT`; 409 `AMOUNT_EXCEEDS` + `max` (kuryer qoldig'i + X; market qarzi + X — kichigi). Tahrirdan keyingi to'lovni yana tuzatish mumkin, muddat zanjirning birinchi to'lovidan.",
+  })
+  async correctPaymentAmount(
+    @Req() req: { user: JwtUser },
+    @Param('id') id: string,
+    @Body() dto: CorrectPaymentAmountRequestDto,
+    @Headers('idempotency-key') idempotencyKey?: string,
+  ) {
+    return this.sendPaymentCorrection(
+      'finance.payment_correction.correct_amount',
+      req.user,
+      id,
+      { reason: dto.reason, new_amount: dto.new_amount },
+      idempotencyKey,
+    );
+  }
+
+  /**
+   * (T6) Umumiy: `Idempotency-Key` majburiy; BRANCH qabul qilgan to'lovda
+   * filial boshlig'i (`branches.manager_id`) bildirishnomaga qo'shiladi
+   * (best-effort — topilmasa faqat kuryer/market). Superadmin tekshiruvi
+   * servisda ham (`requester_roles`).
+   */
+  private async sendPaymentCorrection(
+    cmd: string,
+    user: JwtUser,
+    id: string,
+    body: Record<string, unknown>,
+    idempotencyKey?: string,
+  ) {
+    if (!/^\d{1,19}$/.test(String(id ?? ''))) {
+      throw new BadRequestException("Kassa yozuvi id si noto'g'ri");
+    }
+    const key = this.readIdempotencyKey(idempotencyKey);
+    if (!key) {
+      throw new BadRequestException({
+        statusCode: 400,
+        message: 'Idempotency-Key sarlavhasi majburiy',
+        code: PAYMENT_CORRECTION_ERROR_CODES.IDEMPOTENCY_KEY_REQUIRED,
+      });
+    }
+    const notify = await this.paymentCorrectionManagerIds(id, user);
+    return this.send(
+      { cmd },
+      {
+        history_id: String(id),
+        ...body,
+        idempotency_key: key,
+        requester_id: String(user.sub),
+        requester_roles: this.getUserRoles(user),
+        notify_user_ids: notify,
+      },
+    );
+  }
+
+  private async paymentCorrectionManagerIds(
+    historyId: string,
+    user: JwtUser,
+  ): Promise<string[]> {
+    try {
+      const context = await this.send<{
+        data?: { receiver_branch_id?: string | null };
+      }>(
+        { cmd: 'finance.payment_correction.context' },
+        { history_id: historyId },
+        3000,
+      );
+      const branchId = context?.data?.receiver_branch_id;
+      if (!branchId) return [];
+      const res = await this.sendBranch<{ data?: { manager_id?: unknown } }>(
+        { cmd: 'branch.find_by_id' },
+        { id: String(branchId), requester: this.toRequester(user) },
+        3000,
+      );
+      const managerId = toText(res?.data?.manager_id);
+      return /^\d+$/.test(managerId) ? [managerId] : [];
+    } catch {
+      return [];
+    }
   }
 
   /**

@@ -52,6 +52,8 @@ import { ShiftReportService } from './shift-report/shift-report.service';
 import { ShiftReportController } from './shift-report/shift-report.controller';
 import { SHIFT_REPORTS } from './shift-report/shift-report.token';
 import { PaymentCorrection } from './entities/payment-correction.entity';
+import { PaymentCorrectionService } from './payment-correction/payment-correction.service';
+import { PaymentCorrectionController } from './payment-correction/payment-correction.controller';
 
 @Module({
   imports: [
@@ -134,6 +136,8 @@ import { PaymentCorrection } from './entities/payment-correction.entity';
     // qzjTMWPb / uzWcMR1C — kunlik agregat va /payments KPI meta (o'qish).
     FinanceAggregatesController,
     ShiftReportController,
+    // T6 — to'lovni qaytarish / summasini tuzatish (superadmin).
+    PaymentCorrectionController,
   ],
   providers: [
     FinanceServiceService,
@@ -152,6 +156,7 @@ import { PaymentCorrection } from './entities/payment-correction.entity';
     ShiftReportService,
     { provide: SHIFT_REPORTS, useExisting: ShiftReportService },
     ShiftAutoCloseScheduler,
+    PaymentCorrectionService,
   ],
 })
 export class FinanceServiceModule {}

@@ -91,6 +91,12 @@ import {
   autoCloseClaimKey,
   autoClosedLabel,
 } from './shift-auto-close/shift-schedule.rules';
+import {
+  attachCorrectionViews,
+  evaluateCorrectable,
+  readWindowSetting,
+  type HistoryWithCashbox,
+} from './payment-correction/payment-correction.rules';
 
 /**
  * `order.find_all` qatoridan market to'lovi sinxroni o'qiydigan maydonlar
@@ -767,6 +773,134 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  /**
+   * T6 — marketga to'lov QAYTARILGANDA buyurtmalardagi to'langan qismni
+   * kamaytirish: ENG YANGI PAID / PARTLY_PAID buyurtmadan boshlab (to'lov
+   * oxirgi yopganlarini birinchi ochadi), `order.payment_reversal.apply`.
+   *
+   * Buyurtmaning to'lovdan olgan qismi: PAID — `paid_amount − extra_cost`
+   * (`applyPaymentToOrders` PAID da `paid_amount = to_be_paid` yozadi, market
+   * esa `to_be_paid − extra_cost` olgan), PARTLY_PAID — `paid_amount`. Shu
+   * qism kamayadi: qolsa PARTLY_PAID, qolmasa SOLD. Market bizga qarzdor
+   * bo'lgan (qismi ≤ 0) PAID buyurtma va CLOSED — tegilmaydi. Birinchi xatoda
+   * to'xtaydi (best-effort, fonda — pul allaqachon commit bo'lgan).
+   */
+  private async revertPaymentFromOrders(marketId: string, amount: number) {
+    let left = Math.round(Number(amount) * 100) / 100;
+    if (!(left > 0)) {
+      return;
+    }
+    const pageSize = FinanceServiceService.MARKET_SYNC_PAGE_SIZE;
+    const orders: MarketPayableOrder[] = [];
+    let covered = 0;
+    for (
+      let page = 1;
+      page <= FinanceServiceService.MARKET_SYNC_MAX_PAGES;
+      page += 1
+    ) {
+      const response = await rmqSend<{ data?: MarketPayableOrder[] }>(
+        this.orderClient,
+        { cmd: 'order.find_all' },
+        {
+          query: {
+            market_id: marketId,
+            status: [Order_status.PAID, Order_status.PARTLY_PAID],
+            sort_by: 'created_at',
+            sort_dir: 'desc',
+            page,
+            limit: pageSize,
+          },
+        },
+      );
+      const rows = Array.isArray(response?.data) ? response.data : [];
+      for (const row of rows) {
+        orders.push(row);
+        covered += this.orderPaidPortion(row);
+      }
+      if (rows.length < pageSize || covered >= left) {
+        break;
+      }
+    }
+
+    for (const order of orders) {
+      if (!(left > 0)) break;
+      const portion = this.orderPaidPortion(order);
+      if (!(portion > 0)) continue;
+      const take = Math.min(portion, left);
+      const rest = Math.round((portion - take) * 100) / 100;
+      await rmqSend(
+        this.orderClient,
+        { cmd: 'order.payment_reversal.apply' },
+        {
+          order_id: String(order.id),
+          paid_amount: rest,
+          status: rest > 0 ? Order_status.PARTLY_PAID : Order_status.SOLD,
+        },
+      );
+      left = Math.round((left - take) * 100) / 100;
+    }
+  }
+
+  /** Buyurtmaning market to'lovidan olgan qismi (`revertPaymentFromOrders`). */
+  private orderPaidPortion(order: MarketPayableOrder): number {
+    const paid = Math.max(Number(order?.paid_amount ?? 0) || 0, 0);
+    if (order?.status === Order_status.PAID) {
+      const extraCost = Math.max(Number(order?.extra_cost ?? 0) || 0, 0);
+      return Math.max(paid - extraCost, 0);
+    }
+    return order?.status === Order_status.PARTLY_PAID ? paid : 0;
+  }
+
+  /**
+   * T6 — to'lov qaytarilgan / tuzatilgan market buyurtmalari sinxroni
+   * (commit'dan keyin, FONDA, oddiy to'lov sinxroni bilan BIR navbatda —
+   * `marketOrderSyncChains`). Avval `reverted` qaytariladi, keyin (tahrirda)
+   * `applied` qo'llanadi. Hamkorga xabar YO'Q (ega qarori: jurnalda
+   * `partner_notified: false`). Promise hech qachon reject bo'lmaydi.
+   */
+  scheduleMarketPaymentCorrectionSync(input: {
+    market_id: string;
+    reverted: number;
+    applied?: number | null;
+  }): Promise<void> {
+    const marketId = String(input.market_id);
+    const run = async () => {
+      try {
+        await this.revertPaymentFromOrders(marketId, Number(input.reverted));
+        if (Number(input.applied) > 0) {
+          await this.applyPaymentToOrders(marketId, Number(input.applied));
+        }
+      } catch (error) {
+        this.logger.warn(
+          `payment correction committed, but order sync failed (market_id=${marketId}, reverted=${input.reverted}, applied=${input.applied ?? 0}): ${this.rpcErrorMessage(error, 'unknown sync error')}`,
+        );
+      }
+    };
+    const previous = this.marketOrderSyncChains.get(marketId);
+    const sync = (previous ?? Promise.resolve())
+      .then(run)
+      .catch(() => undefined);
+    this.marketOrderSyncChains.set(marketId, sync);
+    void sync.then(() => {
+      if (this.marketOrderSyncChains.get(marketId) === sync) {
+        this.marketOrderSyncChains.delete(marketId);
+      }
+    });
+    this.pendingFollowUps.add(sync);
+    void sync.then(() => {
+      this.pendingFollowUps.delete(sync);
+    });
+    return sync;
+  }
+
+  /** T6 — xodim ismlari (`created_by_name`); identity javob bermasa — null. */
+  async userNames(ids: string[]): Promise<Map<string, string | null>> {
+    const users = await this.loadUsersByIds(ids);
+    return new Map(
+      [...users.entries()].map(([id, user]) => [id, user?.name ?? null]),
+    );
+  }
+
   private async syncMarketPaymentsSafely(marketId: string, amount: number) {
     try {
       await this.applyPaymentToOrders(marketId, amount);
@@ -1203,7 +1337,7 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
     return FinanceServiceService.isBranchNegativeAllowedSource(dto.source_type);
   }
 
-  private updateBalancesByMethod(
+  updateBalancesByMethod(
     cashbox: Cashbox,
     amount: number,
     operation: Operation_type,
@@ -1384,10 +1518,11 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
           take: limit,
         });
         // (2crjWf7v) menejer kuryer kassasi tafsilotida ham «Noto'g'ri» belgisini ko'rsin.
-        const history =
+        const history = await this.withCorrections(
           cashbox.cashbox_type === Cashbox_type.FOR_COURIER
             ? await this.withPaymentAcks(rows)
-            : rows;
+            : rows,
+        );
 
         return this.successRes(
           {
@@ -1459,9 +1594,11 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
       }
 
       const [rows, total] = await historyQuery.getManyAndCount();
-      const history = await this.withPaymentAcks(
-        rows,
-        (row) => row.cashbox?.cashbox_type === Cashbox_type.FOR_COURIER,
+      const history = await this.withCorrections(
+        await this.withPaymentAcks(
+          rows,
+          (row) => row.cashbox?.cashbox_type === Cashbox_type.FOR_COURIER,
+        ),
       );
 
       return this.successRes(
@@ -1787,6 +1924,34 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
       : this.updateBalance(dto);
   }
 
+  /**
+   * T6 — tarix qatorlariga `correction` bloki (qaytarilgan / tuzatilgan
+   * to'lov). FAIL-OPEN: o'qish xatosi ro'yxatni yiqitmaydi (`correction:
+   * null`, WARN).
+   */
+  private async withCorrections<
+    T extends {
+      id: string;
+      cashbox_id: string;
+      transfer_id?: string | null;
+      reverses_history_id?: string | null;
+    },
+  >(rows: T[]): Promise<Array<T & { correction: unknown }>> {
+    if (!Array.isArray(rows) || !rows.length) {
+      return (rows ?? []) as Array<T & { correction: unknown }>;
+    }
+    try {
+      return await attachCorrectionViews(this.dataSource.manager, rows, (ids) =>
+        this.userNames(ids),
+      );
+    } catch (error) {
+      this.logger.warn(
+        `tarixga tuzatish ma'lumoti qo'shilmadi (T6): ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return rows.map((row) => ({ ...row, correction: null }));
+    }
+  }
+
   async findAllHistory(dto: FindHistoryDto) {
     try {
       const noPagination = dto.page === 0 || dto.limit === 0;
@@ -1965,7 +2130,9 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
           where: { ...countWhere, operation_type: Operation_type.EXPENSE },
         }),
       ]);
-      const enrichedItems = await this.enrichHistoryWithUsers(items);
+      const enrichedItems = await this.withCorrections(
+        await this.enrichHistoryWithUsers(items),
+      );
 
       return this.successRes(
         {
@@ -1991,7 +2158,10 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  async findHistoryById(id: string) {
+  async findHistoryById(
+    id: string,
+    options: { include_correctable?: boolean } = {},
+  ) {
     try {
       this.assertBigIntId(id, 'id');
 
@@ -2022,18 +2192,51 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
 
         order = orderResponse?.data ?? orderResponse ?? null;
       }
-      const [enrichedHistory] = await this.enrichHistoryWithUsers([history]);
+      const [enrichedHistory] = await this.withCorrections(
+        await this.enrichHistoryWithUsers([history]),
+      );
+      // T6 — superadmin uchun: shu to'lovni qaytarish / tuzatish mumkinmi.
+      const correctable = options.include_correctable
+        ? await this.correctableBlock(history as HistoryWithCashbox)
+        : undefined;
 
       return this.successRes(
         {
           ...enrichedHistory,
           order,
+          ...(correctable ? { correctable } : {}),
         },
         200,
         'Cashbox history detail',
       );
     } catch (error) {
       this.toRpcError(error);
+    }
+  }
+
+  /**
+   * T6 — `/history/:id` dagi `correctable: { allowed, code?, deadline,
+   * window_days }`. Smena / balans / karta amal paytida tekshiriladi.
+   */
+  private async correctableBlock(history: HistoryWithCashbox) {
+    try {
+      const { window_days } = await readWindowSetting(this.dataSource.manager);
+      const verdict = await evaluateCorrectable(
+        this.dataSource.manager,
+        history,
+        { windowDays: window_days },
+      );
+      return {
+        allowed: verdict.allowed,
+        ...(verdict.code ? { code: verdict.code } : {}),
+        deadline: verdict.deadline,
+        window_days: verdict.window_days,
+      };
+    } catch (error) {
+      this.logger.warn(
+        `correctable hisoblanmadi (T6, history=${String(history.id)}): ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return null;
     }
   }
 
@@ -2118,7 +2321,7 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
    * bekor qilish) QO'YILMAYDI: aks holda sotuvlar smenaga bog'liq bo'lib
    * qolardi va outbox oyoqlari poison-drop bo'lardi.
    */
-  private async requireOpenShift(
+  async requireOpenShift(
     manager: EntityManager,
     target: { user_id: string; cashbox_type?: Cashbox_type | null },
   ): Promise<void> {
@@ -3210,11 +3413,12 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         where.source_type = In(sourceTypes);
       }
 
-      const cashboxHistory = await this.historyRepo.find({
+      const rows = await this.historyRepo.find({
         where,
         order: { createdAt: 'DESC' },
       });
-      const { income, outcome } = this.calcIncomeOutcome(cashboxHistory);
+      const { income, outcome } = this.calcIncomeOutcome(rows);
+      const cashboxHistory = await this.withCorrections(rows);
       return this.successRes(
         { cashbox: mainCashbox, cashboxHistory, income, outcome },
         200,
@@ -3298,7 +3502,9 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         cashbox.cashbox_type === Cashbox_type.FOR_COURIER ||
         cashbox.cashbox_type === Cashbox_type.FOR_MARKET;
       const [cashboxHistory, owners] = await Promise.all([
-        this.enrichHistoryWithUsers(ackedHistory, { courierAck: false }),
+        this.enrichHistoryWithUsers(ackedHistory, { courierAck: false }).then(
+          (rows) => this.withCorrections(rows),
+        ),
         ownerIsUser
           ? this.loadUsersByIds([String(cashbox.user_id)])
           : Promise.resolve(new Map<string, PublicUserSummary | null>()),

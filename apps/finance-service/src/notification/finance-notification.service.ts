@@ -54,6 +54,8 @@ export const FINANCE_NOTIFICATION_TYPES = [
   'finance.shift_closed',
   'finance.shift_auto_closed',
   'finance.shift_auto_close_warning',
+  // (T6-BE-4) superadmin to'lovni qaytardi / summasini tuzatdi.
+  'finance.payment_corrected',
 ] as const;
 
 /** (2crjWf7v) Kvitansiya tugmalari — notification-service bot handler nomlari. */
@@ -400,6 +402,153 @@ export function buildCashReminderPayload(
   };
 }
 
+export type PaymentCorrectedLanguage = 'uz' | 'ru' | 'en';
+
+export interface PaymentCorrectedInput {
+  correction_id: string | number;
+  action: 'reverse' | 'edit';
+  recipient_id: string | number | null | undefined;
+  /** Oluvchining tili (`identity.audience.resolve`); noma'lum — uz. */
+  language?: string | null;
+  /** Oluvchi kassasidagi asl to'lov qatori (raqam matnda). */
+  payment_id: string | number | null | undefined;
+  /** Asl to'lov summasi. */
+  amount: number | string | null | undefined;
+  /** Tahrirda — yangi summa. */
+  new_amount?: number | string | null;
+  /** Asl to'lov sanasi (`payment_date`, bo'lmasa yozilgan vaqt). */
+  payment_date?: Date | string | null;
+  /** Oluvchi kassasining qoldig'i (qaytarishda: oldin → keyin). */
+  balance_before?: number | string | null;
+  balance_after?: number | string | null;
+}
+
+export function normalizeCorrectionLanguage(
+  value: unknown,
+): PaymentCorrectedLanguage {
+  const lang = typeof value === 'string' ? value.trim().toLowerCase() : '';
+  if (lang.startsWith('ru')) return 'ru';
+  if (lang.startsWith('en')) return 'en';
+  return 'uz';
+}
+
+const CORRECTION_CURRENCY: Record<PaymentCorrectedLanguage, string> = {
+  uz: "so'm",
+  ru: 'сум',
+  en: 'UZS',
+};
+
+const formatMoneyIn = (value: unknown, lang: PaymentCorrectedLanguage) => {
+  const amount = Number(value ?? 0);
+  if (!Number.isFinite(amount)) return '';
+  const digits = Math.round(amount)
+    .toString()
+    .replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+  return `${digits} ${CORRECTION_CURRENCY[lang]}`;
+};
+
+/**
+ * (T6-BE-4) `finance.payment_corrected` — oluvchi tilida, SABABSIZ (sabab
+ * faqat ilovadagi tafsilotda). Qaytarish: sana, summa, to'lov raqami,
+ * qoldiq oldin → keyin; tahrir: eski → yangi summa. Oluvchi / summa
+ * yaroqsiz — `null`.
+ */
+export function buildPaymentCorrectedPayload(
+  input: PaymentCorrectedInput,
+): FinanceNotificationPayload | null {
+  const type: FinanceNotificationType = 'finance.payment_corrected';
+  const entry = findNotificationType(type);
+  const amount = positiveAmount(input.amount);
+  if (
+    !entry ||
+    !isId(input.recipient_id) ||
+    !isId(input.correction_id) ||
+    amount === null
+  ) {
+    return null;
+  }
+  const lang = normalizeCorrectionLanguage(input.language);
+  const correctionId = String(input.correction_id);
+  const recipientId = String(input.recipient_id);
+  const ref = isId(input.payment_id) ? String(input.payment_id) : correctionId;
+  const money = (value: unknown) => formatMoneyIn(value, lang);
+  const day = formatDay(input.payment_date);
+  const before = finiteOrNull(input.balance_before);
+  const after = finiteOrNull(input.balance_after);
+  const newAmount = positiveAmount(input.new_amount);
+  const data: Record<string, unknown> = {
+    correction_id: correctionId,
+    action: input.action,
+    payment_id: ref,
+    amount,
+    language: lang,
+    ...(newAmount !== null ? { new_amount: newAmount } : {}),
+    ...(before !== null ? { balance_before: before } : {}),
+    ...(after !== null ? { balance_after: after } : {}),
+  };
+  const groupKey = renderNotificationGroupKey(entry.group_key_pattern, data);
+
+  let title: string;
+  let body: string;
+  if (input.action === 'edit' && newAmount !== null) {
+    const texts: Record<PaymentCorrectedLanguage, [string, string]> = {
+      uz: [
+        "To'lov summasi tuzatildi",
+        `To'lov #${ref}: ${money(amount)} → ${money(newAmount)}.`,
+      ],
+      ru: [
+        'Сумма платежа исправлена',
+        `Платёж #${ref}: ${money(amount)} → ${money(newAmount)}.`,
+      ],
+      en: [
+        'Payment amount corrected',
+        `Payment #${ref}: ${money(amount)} → ${money(newAmount)}.`,
+      ],
+    };
+    [title, body] = texts[lang];
+  } else {
+    const balance =
+      before !== null && after !== null
+        ? {
+            uz: ` Qoldiq: ${money(before)} → ${money(after)}.`,
+            ru: ` Остаток: ${money(before)} → ${money(after)}.`,
+            en: ` Balance: ${money(before)} → ${money(after)}.`,
+          }[lang]
+        : '';
+    const texts: Record<PaymentCorrectedLanguage, [string, string]> = {
+      uz: [
+        "To'lov qaytarildi",
+        `${day} dagi ${money(amount)} to'lov (#${ref}) qaytarildi.${balance}`,
+      ],
+      ru: [
+        'Платёж отменён',
+        `Платёж #${ref} от ${day} на ${money(amount)} отменён.${balance}`,
+      ],
+      en: [
+        'Payment reversed',
+        `Payment #${ref} of ${money(amount)} on ${day} was reversed.${balance}`,
+      ],
+    };
+    [title, body] = texts[lang];
+  }
+
+  return {
+    type,
+    category: entry.category,
+    priority: entry.priority,
+    title,
+    body,
+    data,
+    link: FINANCE_SELF_CASHBOX_LINK,
+    recipient_ids: [recipientId],
+    ...(groupKey ? { group_key: groupKey } : {}),
+    channels: [...entry.default_channels],
+    client_request_id: deterministicUuid(
+      `payment-corrected:${correctionId}:${recipientId}`,
+    ),
+  };
+}
+
 /**
  * Qo'lda balans to'ldirishmi: market/kuryer kassasiga MANUAL_INCOME kirimi.
  * Tizim oyoqlari (sotuv, bekor qilish, tuzatish) va MAIN/BRANCH kassasini
@@ -538,6 +687,21 @@ export class FinanceNotificationService {
     manager?: EntityManager,
   ): Promise<void> {
     await this.enqueueSafely(payload.type, () => payload, manager);
+  }
+
+  /**
+   * (T6-BE-4) To'lov qaytarildi / summasi tuzatildi — HAR oluvchiga alohida
+   * (o'z tili, o'z qoldig'i). Pul yozuvlari bilan BITTA tranzaksiyada.
+   */
+  async paymentCorrected(
+    input: PaymentCorrectedInput,
+    manager?: EntityManager,
+  ): Promise<void> {
+    await this.enqueueSafely(
+      'finance.payment_corrected',
+      () => buildPaymentCorrectedPayload(input),
+      manager,
+    );
   }
 
   /** Balans qo'lda to'ldirildi (faqat market/kuryer kassasiga MANUAL_INCOME). */

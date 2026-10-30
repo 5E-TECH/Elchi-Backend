@@ -1,4 +1,5 @@
 import { WAREHOUSE_ERROR_CODES } from '../catalog/warehouse';
+import { PAYMENT_CORRECTION_ERROR_CODES as PC } from '../finance/payment-correction';
 
 /**
  * (Elchi Pochta #3) Xato javobidagi mashina o'qiydigan qo'shimcha maydonlar.
@@ -57,6 +58,23 @@ export const PUBLIC_ERROR_CODES: Readonly<Record<string, readonly string[]>> = {
   [WAREHOUSE_ERROR_CODES.STOCK_FORBIDDEN]: [],
   // (VkKDSNNn) Markaziy ombor buyurtmasi marketga topshirilmaydi — 409.
   [WAREHOUSE_ERROR_CODES.ORDER_RETURNS_TO_STOCK]: [],
+  // (T6) to'lovni qaytarish / summasini tuzatish — superadmin.
+  [PC.NOT_FOUND]: [],
+  [PC.NOT_CORRECTABLE]: [],
+  [PC.LEGACY_UNLINKED]: [],
+  [PC.ALREADY_CORRECTED]: [],
+  // Muddat o'tgan: `deadline` — qachongacha tuzatish mumkin edi (ISO).
+  [PC.WINDOW_EXPIRED]: ['deadline'],
+  [PC.SHIFT_REQUIRED]: [],
+  [PC.BRANCH_SHIFT_REQUIRED]: [],
+  [PC.INSUFFICIENT_BALANCE]: [],
+  [PC.CARD_ARCHIVED]: [],
+  [PC.SAME_AMOUNT]: [],
+  // Yangi summa chegarasi: `max` (kuryer qoldig'i + X; market qarzi + X).
+  [PC.AMOUNT_EXCEEDS]: ['max'],
+  [PC.IDEMPOTENCY_KEY_REUSED]: [],
+  [PC.IDEMPOTENCY_KEY_REQUIRED]: [],
+  [PC.PAYMENT_CORRECTED]: [],
 };
 
 export type PublicErrorValue = string | number | boolean | null;
