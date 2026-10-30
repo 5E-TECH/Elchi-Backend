@@ -44,6 +44,16 @@ Deploy: **integration-service + api-gateway** (+ libs/common). Migratsiya **yo'q
 - [2026-10-30] 🟢 [integration] — `settlement.payment` webhooki endi faqat **faol** bog'lanish bo'yicha yuboriladi
   (o'chirilgan bog'lanishdagi marketga to'lov hamkorga ketmaydi).
 
+**Hodisalar (hamkor webhooki).** Deploy: **order-service** (K3).
+
+- [2026-10-30] 🟢 [order] — hamkor posilkasi (`external_id` bor) uchun `shipment.status_changed` endi yana ikki
+  holatda yuboriladi: `status: "received"` — Elchi HQ'da qabul qildi (`POST /orders/receive`, skan qabuli ham) va
+  `status: "on the road"` — posilka pochta bilan yo'lga chiqdi (pochta kuryerga jo'natildi yoki filiallararo
+  FORWARD paket jo'natildi). Bu hodisalarda `collected_from_customer`, `elchi_fee`, `market_amount` — `null`,
+  `cod_collected` — 0. Webhook navbatga qo'yilmasa ham (integration ishlamasa) qabul javobi 200. Eski tashqi
+  adapterlar (`integration.sync.enqueue`) bu holatlarni olmaydi; o'tgan buyurtmalar uchun backfill yo'q. Hamkor
+  monitorida (`GET /admin/partners/webhooks`) yangi `new_status` qiymatlari ko'rinadi. → FE o'zgarishi shart emas.
+
 ### 2026-10-30 — T8: buyurtmaning maxsus belgilari (mo'rt, diniy kitob, suyuqlik …) (0OUcHZ7R)
 
 Deploy: **order-service + api-gateway** (+ libs/common). Migratsiya **`1716000000187`**
