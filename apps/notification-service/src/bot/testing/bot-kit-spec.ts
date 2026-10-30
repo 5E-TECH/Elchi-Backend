@@ -120,12 +120,14 @@ export function makeOutboxRepo() {
 export interface FakeChannels {
   markInactive: jest.Mock;
   markActive: jest.Mock;
+  migrateChat: jest.Mock;
 }
 
 export function makeChannels(): FakeChannels {
   return {
     markInactive: jest.fn(() => Promise.resolve({ deactivated: 1 })),
     markActive: jest.fn(() => Promise.resolve()),
+    migrateChat: jest.fn(() => Promise.resolve({ markets: 1, outbox: 1 })),
   };
 }
 
@@ -383,7 +385,10 @@ export function makeRouter(
       ),
   };
   const activityLog = { log: jest.fn(() => Promise.resolve()) };
-  const membership = { handle: jest.fn(() => Promise.resolve()) };
+  const membership = {
+    handle: jest.fn(() => Promise.resolve()),
+    migrate: jest.fn(() => Promise.resolve()),
+  };
   const notifications = {
     connectGroupByCodeText: jest.fn(() =>
       Promise.resolve({ message: 'ulandi' }),

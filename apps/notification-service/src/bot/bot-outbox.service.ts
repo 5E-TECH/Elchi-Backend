@@ -209,6 +209,37 @@ export class BotOutboxService implements OnModuleDestroy {
       return { id: row.id, status: 'sent', result };
     } catch (error) {
       const reason = this.transport.describe(error).slice(0, ERROR_MAX);
+      // (BOT-3 #6) Guruh supergroup'ga aylangan — ulanish va navbat yangi
+      // id'ga ko'chadi, shu xabar DARHOL qayta yuboriladi (urinish
+      // hisoblanmaydi).
+      if (
+        error instanceof TelegramApiError &&
+        error.kind === 'migrated' &&
+        error.migrateToChatId
+      ) {
+        const moved = await this.channels
+          .migrateChat(row.chat_id, error.migrateToChatId)
+          .then(() => true)
+          .catch((migrateError: unknown) => {
+            this.logger.error(
+              `guruh ko'chirilmadi (${row.chat_id} → ${error.migrateToChatId}): ${this.transport.describe(migrateError)}`,
+            );
+            return false;
+          });
+        if (moved) {
+          await this.outbox.update(
+            { id: row.id },
+            {
+              chat_id: error.migrateToChatId,
+              status: 'pending',
+              next_attempt_at: new Date(),
+              last_error: reason,
+              updated_at: new Date(),
+            },
+          );
+          return { id: row.id, status: 'queued', error: reason };
+        }
+      }
       const retryCount = row.retry_count + 1;
       // Token umuman sozlanmagan — restartsiz tuzalmaydi: qayta urinilmaydi.
       const permanent =

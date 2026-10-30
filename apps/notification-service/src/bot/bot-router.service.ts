@@ -240,6 +240,14 @@ export class BotRouterService implements OnModuleDestroy {
       if (!media.ok && media.reply) await ctx.reply(media.reply);
       return;
     }
+    // (BOT-3 #6) guruh supergroup'ga aylandi — ulanish yangi id'ga ko'chadi.
+    if (!ctx.isPrivate && message.migrate_to_chat_id) {
+      await this.membership.migrate(
+        ctx.chatId,
+        String(message.migrate_to_chat_id),
+      );
+      return;
+    }
     // (ysBqD9Nx) guruhga yangi a'zo — market ogohlantiriladi (servis xabari).
     if (!ctx.isPrivate && message.new_chat_members?.length) {
       await this.group.onNewMembers(ctx, message.new_chat_members);

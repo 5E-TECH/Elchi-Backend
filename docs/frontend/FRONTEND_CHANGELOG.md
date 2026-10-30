@@ -88,6 +88,13 @@ Deploy: **notification-service + api-gateway** (+ libs/common). Migratsiya yo'q.
 - [2026-10-30] 🟢 [notification] — bot update'lari alohida navbatda: bildirishnoma to'lqinida ham bot tugmalari
   kechikmaydi. `GET /health/readiness` → `NOTIFICATION` qatorida ixtiyoriy `bot_queue: {status, latency_ms?, error?, error_kind?}`
   (yangi xizmat qatori YO'Q; bot navbati ishlamasa `NOTIFICATION` qatori `down`). → FE o'zgarishi shart emas.
+### 2026-10-30 — BOT-3 #6: Telegram guruhi supergroup'ga aylanganda xabarlar yo'qolmaydi
+
+Deploy: **notification-service**. Migratsiya yo'q.
+
+- [2026-10-30] 🟢 [notification] — market guruhi supergroup'ga aylansa ulanish yangi chat id'ga o'zi ko'chadi
+  (`GET /notifications` da `group_id` yangilanadi), xabarlar qayta yuboriladi. Botdan yozish huquqi olinsa — guruh nofaol
+  (`inactive_reason: "blocked_on_send"`) + adminga xabar. → FE o'zgarishi shart emas.
 
 ### 2026-10-30 — T8: buyurtmaning maxsus belgilari (mo'rt, diniy kitob, suyuqlik …) (0OUcHZ7R)
 

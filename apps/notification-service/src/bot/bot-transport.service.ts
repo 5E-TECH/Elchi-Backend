@@ -57,7 +57,9 @@ export type TelegramErrorKind =
   | 'rate_limited'
   | 'unauthorized'
   | 'retryable'
-  | 'bad_request';
+  | 'bad_request'
+  /** (BOT-3 #6) guruh supergroup'ga aylangan — `migrateToChatId` bor. */
+  | 'migrated';
 
 /** Bot API xatosi. `description` da token bo'lmaydi (redaktsiya qilingan). */
 export class TelegramApiError extends Error {
@@ -68,11 +70,29 @@ export class TelegramApiError extends Error {
     readonly status: number,
     readonly description: string,
     readonly retryAfterSec: number | null,
+    /**
+     * (BOT-3 #6) Guruh supergroup'ga aylangan: Telegram 400 bilan YANGI chat
+     * id'sini beradi (`parameters.migrate_to_chat_id`). Xabar yangi id'ga
+     * qayta yuboriladi, ulanish ko'chiriladi.
+     */
+    readonly migrateToChatId: string | null = null,
   ) {
     super(`Telegram ${method} failed (${status}): ${description}`);
     this.name = 'TelegramApiError';
-    this.kind = classifyTelegramError(status, description);
+    this.kind = migrateToChatId
+      ? 'migrated'
+      : classifyTelegramError(status, description);
   }
+}
+
+/** `parameters.migrate_to_chat_id` → satr (yo'q / buzuq — null). */
+export function migrateTargetOf(parameters: unknown): string | null {
+  const raw = (parameters as { migrate_to_chat_id?: unknown } | null)
+    ?.migrate_to_chat_id;
+  return (typeof raw === 'number' || typeof raw === 'string') &&
+    /^-?\d{1,20}$/.test(String(raw))
+    ? String(raw)
+    : null;
 }
 
 export function classifyTelegramError(
@@ -84,7 +104,14 @@ export function classifyTelegramError(
   if (status === 403) return 'blocked';
   if (status === 0 || status >= 500) return 'retryable';
   // 400 "chat not found" — chat o'chgan / bot chiqarilgan: qayta urinish befoyda.
-  if (/chat not found|bot was kicked|user is deactivated/i.test(description)) {
+  // (BOT-3 #6) "not enough rights" — botdan yozish huquqi olingan: guruh
+  // nofaol (`blocked_on_send`) + admin xabari. HTML xatosi (can't parse
+  // entities) esa `bad_request` — faqat shu xabar dead, guruh FAOL qoladi.
+  if (
+    /chat not found|bot was kicked|user is deactivated|not enough rights|have no rights/i.test(
+      description,
+    )
+  ) {
     return 'blocked';
   }
   return 'bad_request';
@@ -217,7 +244,7 @@ export async function callTelegramApi<T>(
     ok?: boolean;
     result?: T;
     description?: string;
-    parameters?: { retry_after?: number };
+    parameters?: { retry_after?: number; migrate_to_chat_id?: unknown };
   } | null;
   if (!response.ok || !body || body.ok !== true) {
     const retryAfter = Number(body?.parameters?.retry_after);
@@ -226,6 +253,7 @@ export async function callTelegramApi<T>(
       response.status,
       redactToken(body?.description ?? `HTTP ${response.status}`, token),
       Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter : null,
+      migrateTargetOf(body?.parameters),
     );
   }
   return body.result as T;
@@ -255,7 +283,7 @@ export async function callTelegramApiMultipart<T>(
     ok?: boolean;
     result?: T;
     description?: string;
-    parameters?: { retry_after?: number };
+    parameters?: { retry_after?: number; migrate_to_chat_id?: unknown };
   } | null;
   if (!response.ok || !body || body.ok !== true) {
     const retryAfter = Number(body?.parameters?.retry_after);
@@ -264,6 +292,7 @@ export async function callTelegramApiMultipart<T>(
       response.status,
       redactToken(body?.description ?? `HTTP ${response.status}`, token),
       Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter : null,
+      migrateTargetOf(body?.parameters),
     );
   }
   return body.result as T;

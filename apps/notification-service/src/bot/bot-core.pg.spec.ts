@@ -2,6 +2,7 @@ import { Logger } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import { TelegramBotCore1716000000120 } from '../../../../migrations/1716000000120-TelegramBotCore';
 import { TelegramMarketInactiveReason1716000000150 } from '../../../../migrations/1716000000150-TelegramMarketInactiveReason';
+import { TelegramChats1716000000126 } from '../../../../migrations/1716000000126-TelegramChats';
 import { TelegramBotAction } from '../entities/telegram-bot-action.entity';
 import { TelegramMarket } from '../entities/telegram-market.entity';
 import { TelegramOutbox } from '../entities/telegram-outbox.entity';
@@ -449,6 +450,61 @@ const migration = new TelegramBotCore1716000000120();
             .deactivated,
         ).toBe(0);
         expect(dispatch).toHaveBeenCalledTimes(1);
+      });
+    });
+
+    describe('BOT-3 #6 — supergroup migratsiyasi (BotChannelService.migrateChat)', () => {
+      beforeAll(async () => {
+        const runner = db.createQueryRunner();
+        try {
+          await new TelegramChats1716000000126().up(runner);
+        } finally {
+          await runner.release();
+        }
+      });
+
+      it('⭐ ulanish (trigger telegram_chats ham) va navbatdagi xabarlar yangi id`ga; yuborilganlar tegilmaydi', async () => {
+        await db.query(`DELETE FROM notification_schema.telegram_outbox`);
+        await db.query(`
+          INSERT INTO notification_schema.telegram_markets (market_id, group_id, group_type)
+          VALUES (9, '-100900', 'create')`);
+        await db.query(`
+          INSERT INTO notification_schema.telegram_outbox (bot_slug, chat_id, payload, status)
+          VALUES ('elchi', '-100900', '{"text":"a"}', 'pending'),
+                 ('elchi', '-100900', '{"text":"b"}', 'sending'),
+                 ('elchi', '-100900', '{}', 'sent')`);
+        const channels = new BotChannelService(
+          db.getRepository(TelegramMarket),
+          {} as never,
+          { log: jest.fn().mockResolvedValue(undefined) } as never,
+          {} as never,
+        );
+        const moved = await channels.migrateChat('-100900', '-1009009');
+        expect(moved).toEqual({ markets: 1, outbox: 2 });
+        const [market]: Array<{ group_id: string }> = await db.query(
+          `SELECT group_id FROM notification_schema.telegram_markets WHERE market_id = 9`,
+        );
+        expect(market.group_id).toBe('-1009009');
+        const [chat]: Array<{ chat_id: string; is_active: boolean }> =
+          await db.query(
+            `SELECT chat_id, is_active FROM notification_schema.telegram_chats
+              WHERE owner_id = 9`,
+          );
+        expect(chat).toEqual({ chat_id: '-1009009', is_active: true });
+        const outbox: Array<{ chat_id: string; status: string }> =
+          await db.query(
+            `SELECT chat_id, status FROM notification_schema.telegram_outbox ORDER BY id`,
+          );
+        expect(outbox).toEqual([
+          { chat_id: '-1009009', status: 'pending' },
+          { chat_id: '-1009009', status: 'pending' },
+          { chat_id: '-100900', status: 'sent' },
+        ]);
+        // Takror (kiruvchi xabar ham keldi) — idempotent.
+        expect(await channels.migrateChat('-100900', '-1009009')).toEqual({
+          markets: 0,
+          outbox: 0,
+        });
       });
     });
 

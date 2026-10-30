@@ -44,6 +44,13 @@ bootstrap'idagi e'lon 5 s ulanish / 15 s umumiy chegara bilan, xato — faqat
 warn (listen to'silmaydi). Readiness (`GET /health/readiness`) bot navbatini
 `NOTIFICATION` qatorining `bot_queue` maydonida tekshiradi (ishlamasa qator
 `down`); `scripts/rmq-cleanup-queues.sh` ham bu navbatni biladi.
+**Guruh holati (BOT-3 #6).** Guruh supergroup'ga aylansa (`migrate_to_chat_id`
+— yuborish javobida yoki eski guruhdagi servis xabarida) `telegram_markets.group_id`
+(trigger orqali `telegram_chats` ham), navbatdagi `telegram_outbox` qatorlari va
+kartalar YANGI id'ga ko'chadi, xabar qayta yuboriladi (urinish hisoblanmaydi;
+audit `notification.tg_group_migrated`). «Not enough rights» — guruh nofaol
+(`blocked_on_send`) + admin xabari. HTML xatosi (`can't parse entities`) — faqat
+o'sha xabar `dead`, guruh faol qoladi.
 
 ## 2. Rejimlar (`TELEGRAM_BOT_MODE`, sukut `auto`)
 
