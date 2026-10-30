@@ -20301,6 +20301,103 @@
         ]
       }
     },
+    "/admin/partners/{id}/markets": {
+      "get": {
+        "operationId": "PartnerAdminGatewayController_listMarkets",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PartnerMarketListResponseDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Hamkor topilmadi"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Hamkor sotuvchilari (bog‘langan Elchi marketlari)",
+        "tags": [
+          "Partners (admin)"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
+        ]
+      },
+      "post": {
+        "operationId": "PartnerAdminGatewayController_linkMarket",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LinkPartnerMarketRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PartnerMarketLinkResponseDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Hamkor yoki market topilmadi (o‘chirilgan / market emas)"
+          },
+          "409": {
+            "description": "`code`: PARTNER_SELLER_TAKEN — sotuvchi shu hamkorda bog‘langan; PARTNER_MARKET_TAKEN — market boshqa hamkorga bog‘langan"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Hamkor sotuvchisini mavjud Elchi marketiga bog‘lash. Market tarifi o‘zgarmaydi. O‘chirilgan bog‘lanish bo‘lsa — tiklanadi.",
+        "tags": [
+          "Partners (admin)"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
+        ]
+      }
+    },
     "/admin/partners/{id}/webhook-test": {
       "post": {
         "operationId": "PartnerAdminGatewayController_testWebhook",
@@ -31824,6 +31921,154 @@
         },
         "required": [
           "name"
+        ]
+      },
+      "PartnerMarketRowDto": {
+        "type": "object",
+        "properties": {
+          "ref_id": {
+            "type": "string",
+            "example": "12"
+          },
+          "external_seller_id": {
+            "type": "string",
+            "example": "shop-9"
+          },
+          "elchi_market_id": {
+            "type": "string",
+            "example": "1234"
+          },
+          "tariff_home": {
+            "type": "number",
+            "nullable": true,
+            "example": 30000
+          },
+          "tariff_center": {
+            "type": "number",
+            "nullable": true,
+            "example": 20000
+          },
+          "market_name": {
+            "type": "string",
+            "nullable": true,
+            "description": "Market topilmasa (o‘chirilgan) — null"
+          },
+          "phone_number": {
+            "type": "string",
+            "nullable": true
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "ref_id",
+          "external_seller_id",
+          "elchi_market_id",
+          "tariff_home",
+          "tariff_center",
+          "market_name",
+          "phone_number",
+          "created_at"
+        ]
+      },
+      "PartnerMarketListResponseDto": {
+        "type": "object",
+        "properties": {
+          "statusCode": {
+            "type": "number",
+            "example": 200
+          },
+          "message": {
+            "type": "string",
+            "example": "partner markets"
+          },
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PartnerMarketRowDto"
+            }
+          }
+        },
+        "required": [
+          "statusCode",
+          "message",
+          "data"
+        ]
+      },
+      "LinkPartnerMarketRequestDto": {
+        "type": "object",
+        "properties": {
+          "external_seller_id": {
+            "type": "string",
+            "example": "shop-9",
+            "description": "Hamkor tomonidagi sotuvchi id (trim, 1..100 belgi)"
+          },
+          "elchi_market_id": {
+            "type": "string",
+            "example": "1234",
+            "description": "Elchi’dagi MAVJUD market id’si (faqat raqam)"
+          }
+        },
+        "required": [
+          "external_seller_id",
+          "elchi_market_id"
+        ]
+      },
+      "PartnerMarketLinkDto": {
+        "type": "object",
+        "properties": {
+          "ref_id": {
+            "type": "string",
+            "example": "12"
+          },
+          "external_seller_id": {
+            "type": "string",
+            "example": "shop-9"
+          },
+          "elchi_market_id": {
+            "type": "string",
+            "example": "1234"
+          },
+          "tariff_home": {
+            "type": "number",
+            "nullable": true,
+            "example": 30000
+          },
+          "tariff_center": {
+            "type": "number",
+            "nullable": true,
+            "example": 20000
+          }
+        },
+        "required": [
+          "ref_id",
+          "external_seller_id",
+          "elchi_market_id",
+          "tariff_home",
+          "tariff_center"
+        ]
+      },
+      "PartnerMarketLinkResponseDto": {
+        "type": "object",
+        "properties": {
+          "statusCode": {
+            "type": "number",
+            "example": 201
+          },
+          "message": {
+            "type": "string",
+            "example": "partner market linked"
+          },
+          "data": {
+            "$ref": "#/components/schemas/PartnerMarketLinkDto"
+          }
+        },
+        "required": [
+          "statusCode",
+          "message",
+          "data"
         ]
       },
       "UpdatePartnerRequestDto": {

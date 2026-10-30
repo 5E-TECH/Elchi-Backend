@@ -9,7 +9,7 @@ import { BaseEntity } from '@app/common';
  *  2. Egalik — qaysi market qaysi hamkorники (COD settlement, xavfsizlik).
  *
  * `partner_id` va `elchi_market_id` — mantiqiy bog'lanish (bigint), fizik FK emas
- * (market boshqa servis — identity — domenida). Kontrakt: docs/PARTNER_API.md §3.2.
+ * (market boshqa servis — identity — domenida). Kontrakt: docs/public/MARKETPLACE_API.md §5.1.
  */
 @Entity({ name: 'partner_market_refs' })
 @Index('IDX_PMR_PARTNER_EXTERNAL', ['partner_id', 'external_seller_id'], {

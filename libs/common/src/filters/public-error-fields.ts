@@ -2,6 +2,7 @@ import { PAYMENT_CORRECTION_ERROR_CODES as PC } from '../finance/payment-correct
 import { WAREHOUSE_ERROR_CODES } from '../catalog/warehouse';
 import { CONTACT_ERROR_CODES } from '../contacts/contacts';
 import { SPECIAL_CATEGORIES_ERROR_CODES } from '../order/order-special-categories';
+import { PARTNER_MARKET_ERROR_CODES } from '../integration/partner-markets';
 
 /**
  * (Elchi Pochta #3) Xato javobidagi mashina o'qiydigan qo'shimcha maydonlar.
@@ -85,6 +86,9 @@ export const PUBLIC_ERROR_CODES: Readonly<Record<string, readonly string[]>> = {
   [CONTACT_ERROR_CODES.NOT_A_MARKET]: [],
   // (T8 0OUcHZ7R) maxsus belgi bu holatda o'zgarmaydi — 409.
   [SPECIAL_CATEGORIES_ERROR_CODES.LOCKED]: [],
+  // (T1 K1 s6xY4f5C) hamkor sotuvchisi / market allaqachon bog'langan — 409.
+  [PARTNER_MARKET_ERROR_CODES.SELLER_TAKEN]: [],
+  [PARTNER_MARKET_ERROR_CODES.MARKET_TAKEN]: [],
 };
 
 export type PublicErrorValue = string | number | boolean | null;

@@ -22,6 +22,41 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+### 2026-10-30 — T1: hamkor (marketpleys) integratsiyasini jonli sinash (RJcckQ6I)
+
+Deploy: **integration-service + api-gateway** (+ libs/common). Migratsiya **yo'q**. `openapi.json` qayta yaratildi.
+
+- [2026-10-30] 🆕 [integration] — `GET /admin/partners/:id/markets` (superadmin, admin; registrator / menejer → 403) —
+  hamkorning faol sotuvchilari, yangi → eski, sahifalashsiz:
+  `{ data: [{ ref_id, external_seller_id, elchi_market_id, market_name, phone_number, tariff_home, tariff_center,
+  created_at }] }`. Market o'chirilgan / topilmasa — `market_name`, `phone_number`, tariflar `null` (qator qoladi).
+  Hamkor yo'q → 404. → Hamkor kartasida «Sotuvchilar» jadvali.
+- [2026-10-30] 🆕 [integration] — `POST /admin/partners/:id/markets` `{ "external_seller_id": "shop-9",
+  "elchi_market_id": "1234" }` — hamkor sotuvchisini Elchi'dagi **mavjud** marketga bog'lash (superadmin, admin).
+  `external_seller_id` trim, 1..100; `elchi_market_id` faqat raqam (son ham qabul qilinadi). Javob **201**
+  `{ data: { ref_id, external_seller_id, elchi_market_id, tariff_home, tariff_center } }` — tariflar marketning
+  hozirgi qiymati (bog'lash ularni **o'zgartirmaydi**). Xatolar: hamkor yo'q / market yo'q, o'chirilgan yoki market
+  emas (masalan kuryer id) → 404; shu sotuvchi bu hamkorda allaqachon faol → 409 `code: "PARTNER_SELLER_TAKEN"`;
+  market boshqa hamkorning faol sotuvchisida → 409 `code: "PARTNER_MARKET_TAKEN"`. Avval o'chirilgan o'sha
+  (hamkor, sotuvchi) juftligi bo'lsa — yangi qator emas, o'sha **tiklanadi** (`ref_id` eski). Jurnalda
+  `PartnerMarketRef` (yangi — `created`, tiklash — `updated`). Bog'lagandan keyin hamkorning `POST /partner/markets`
+  (o'sha `external_seller_id`) → 200 `idempotent: true` (yangi market ochilmaydi), `POST /partner/shipments` shu
+  marketga ruxsat beradi. → «Mavjud marketni bog'lash» formasi; 409 da `code` bo'yicha xabar.
+- [2026-10-30] 🟢 [integration] — `settlement.payment` webhooki endi faqat **faol** bog'lanish bo'yicha yuboriladi
+  (o'chirilgan bog'lanishdagi marketga to'lov hamkorga ketmaydi).
+
+**Hodisalar (hamkor webhooki).** Deploy: **order-service** (K3).
+
+- [2026-10-30] 🟢 [order] — hamkor posilkasi (`external_id` bor) uchun `shipment.status_changed` endi yana ikki
+  holatda yuboriladi: `status: "received"` — Elchi HQ'da qabul qildi (`POST /orders/receive`, skan qabuli ham) va
+  `status: "on the road"` — posilka pochta bilan yo'lga chiqdi (pochta kuryerga jo'natildi yoki filiallararo
+  FORWARD paket jo'natildi). Bu hodisalarda `collected_from_customer`, `elchi_fee`, `market_amount` — `null`,
+  `cod_collected` — 0. Webhook navbatga qo'yilmasa ham (integration ishlamasa) qabul javobi 200. Eski tashqi
+  adapterlar (`integration.sync.enqueue`) bu holatlarni olmaydi; o'tgan buyurtmalar uchun backfill yo'q. Hamkor
+  monitorida (`GET /admin/partners/webhooks`) yangi `new_status` qiymatlari ko'rinadi. → FE o'zgarishi shart emas.
+- [2026-10-30] 🟢 [docs] — hamkor hujjati `docs/public/MARKETPLACE_API.md` kodga moslandi (§5.1 javoblari 201/200,
+  §5.2 maydonlari — `label_token`, qop maydonlari, `comment`, `where_deliver` standarti `center`; §6.5 haqiqiy statuslar;
+  §6.6 `settlement.payment`) va Postman to'plami qo'shildi: `docs/public/elchi-partner-api.postman_collection.json`.
 
 ### 2026-10-30 — T8: buyurtmaning maxsus belgilari (mo'rt, diniy kitob, suyuqlik …) (0OUcHZ7R)
 
