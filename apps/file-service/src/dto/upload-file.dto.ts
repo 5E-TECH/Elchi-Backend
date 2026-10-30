@@ -1,4 +1,5 @@
 import { IsOptional, IsString, MinLength } from 'class-validator';
+import type { FileOwnerInput } from '../file-ownership.service';
 
 export class UploadFileDto {
   @IsString()
@@ -16,4 +17,11 @@ export class UploadFileDto {
   @IsOptional()
   @IsString()
   folder?: string;
+
+  /**
+   * (dgvwZasd B) Yuklovchi — egalik reestriga yoziladi. Berilmasa (katalog
+   * rasmi kabi ommaviy fayl) reestrga tushmaydi.
+   */
+  @IsOptional()
+  owner?: FileOwnerInput | null;
 }

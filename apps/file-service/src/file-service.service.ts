@@ -25,6 +25,7 @@ import { GenerateQrDto } from './dto/generate-qr.dto';
 import { UploadFileDto } from './dto/upload-file.dto';
 import { GetFileUrlDto } from './dto/get-file-url.dto';
 import { DeleteFileDto } from './dto/delete-file.dto';
+import { FileOwnershipService } from './file-ownership.service';
 
 type UploadResult = {
   key: string;
@@ -63,7 +64,10 @@ export class FileServiceService implements OnModuleInit {
   ]);
   private readonly s3: S3Client;
 
-  constructor(private readonly configService: ConfigService) {
+  constructor(
+    private readonly configService: ConfigService,
+    private readonly ownership: FileOwnershipService,
+  ) {
     const endpointHost =
       this.configService.getOrThrow<string>('MINIO_ENDPOINT');
     const port = Number(this.configService.get<string>('MINIO_PORT') ?? 9000);
@@ -347,6 +351,13 @@ export class FileServiceService implements OnModuleInit {
         mimeType,
         folder: data?.folder,
       });
+      await this.ownership.record({
+        key: result.key,
+        folder: this.normalizeFolder(data?.folder),
+        owner: data?.owner,
+        mimeType,
+        size: result.size,
+      });
 
       return this.successRes(result, 201, 'File uploaded');
     } catch (error) {
@@ -412,6 +423,35 @@ export class FileServiceService implements OnModuleInit {
     }
   }
 
+  /**
+   * (dgvwZasd B) Egalik reestri qatori. Qator yo'q — `data: null` (eski fayl,
+   * gateway eski qoidani qo'llaydi). DB xatosi — 500: "topilmadi" bilan
+   * aralashmasligi shart.
+   */
+  async findOwner(data: { key?: string }) {
+    try {
+      const key = String(data?.key ?? '').trim();
+      if (!key) throw new BadRequestException('key is required');
+      const row = await this.ownership.find(key);
+      return this.successRes(
+        row
+          ? {
+              key: row.key,
+              folder: row.folder,
+              owner_id: row.owner_id,
+              owner_role: row.owner_role,
+              owner_branch_id: row.owner_branch_id,
+              created_at: row.created_at,
+            }
+          : null,
+        200,
+        'File owner',
+      );
+    } catch (error) {
+      this.toRpcError(error);
+    }
+  }
+
   async read(data: { key: string }) {
     try {
       const key = String(data?.key ?? '').trim();
@@ -463,6 +503,7 @@ export class FileServiceService implements OnModuleInit {
           Key: key,
         }),
       );
+      await this.ownership.forget(key);
 
       return this.successRes({ key, bucket: this.bucket }, 200, 'File deleted');
     } catch (error) {

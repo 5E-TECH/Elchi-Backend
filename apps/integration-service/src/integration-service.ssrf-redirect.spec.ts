@@ -57,6 +57,8 @@ describe('Integratsiya chiquvchi so‘rovlari redirect’ga ergashmaydi (dgvwZas
     svc.activityLog = { log: jest.fn().mockResolvedValue(undefined) };
     // Birinchi manzil "ochiq" deb o'tadi — hujum aynan shu bo'shliqda.
     svc.assertOutboundUrlSafe = jest.fn().mockResolvedValue(undefined);
+    // Lokal server (127.0.0.1) — `fetchPinned` literal IP'ni rad etmasin.
+    svc.allowPrivateHosts = true;
     svc.decryptCredential = jest.fn(() => 'topsecret');
     svc.resolvePartnerWebhookSecret = jest.fn(() => 'topsecret');
     return svc;
@@ -94,15 +96,16 @@ describe('Integratsiya chiquvchi so‘rovlari redirect’ga ergashmaydi (dgvwZas
     expect(internalHits).toBe(0);
   });
 
-  it("servisda to'g'ridan-to'g'ri fetch() qolmagan — 6 joy ham fetchWithoutRedirect", () => {
+  it("servisda to'g'ridan-to'g'ri fetch() qolmagan — 6 joy ham outboundFetch", () => {
     // Fayl ichida NUL bayt bor — matn sifatida o'qiladi, regex unga befarq.
     const source = readFileSync(
       join(__dirname, 'integration-service.service.ts'),
       'utf8',
     );
     const bareFetch = source.match(/(?<![\w.])fetch\(/g) ?? [];
-    const guarded = source.match(/\bfetchWithoutRedirect\(/g) ?? [];
+    const guarded = source.match(/\bthis\.outboundFetch\(/g) ?? [];
     expect(bareFetch).toHaveLength(0);
     expect(guarded).toHaveLength(6);
+    expect(source).not.toContain('fetchWithoutRedirect');
   });
 });

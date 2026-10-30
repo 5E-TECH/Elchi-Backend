@@ -31,7 +31,7 @@ import {
   verifyHmacSignature,
   computeHmacSignature,
   assertPublicUrl,
-  fetchWithoutRedirect,
+  fetchPinned,
   SsrfBlockedError,
   normalizeUzPhone,
   maskPiiPayload,
@@ -3448,7 +3448,7 @@ export class IntegrationServiceService {
     }
     const signature = computeHmacSignature(rawBody, secret, 'sha256', 'hex');
 
-    const res = await fetchWithoutRedirect(partner.webhook_url, {
+    const res = await this.outboundFetch(partner.webhook_url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -3574,7 +3574,7 @@ export class IntegrationServiceService {
         'hex',
       );
 
-      const res = await fetchWithoutRedirect(target, {
+      const res = await this.outboundFetch(target, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -3717,7 +3717,7 @@ export class IntegrationServiceService {
     let error: string | null = null;
 
     try {
-      const res = await fetchWithoutRedirect(target, {
+      const res = await this.outboundFetch(target, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -4422,6 +4422,16 @@ export class IntegrationServiceService {
     }
   }
 
+  /**
+   * (dgvwZasd B) Operator sozlagan manzilga chiqishning yagona yo'li: tekshirilgan
+   * IP'ga ulanadi, redirect'ga ergashmaydi. `assertOutboundUrlSafe` chaqiruv
+   * joyida qoladi — u aniq 400 beradi, bu esa tekshiruv va ulanish orasidagi
+   * DNS rebinding'ni yopadi.
+   */
+  private outboundFetch(url: string, init: RequestInit): Promise<Response> {
+    return fetchPinned(url, init, { allowPrivate: this.allowPrivateHosts });
+  }
+
   private extractPath(source: unknown, path?: string): unknown {
     if (!path || !path.trim()) {
       return source;
@@ -4530,7 +4540,7 @@ export class IntegrationServiceService {
 
     await this.assertOutboundUrlSafe(integration.auth_url);
     try {
-      const response = await fetchWithoutRedirect(integration.auth_url, {
+      const response = await this.outboundFetch(integration.auth_url, {
         method,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
@@ -5279,7 +5289,7 @@ export class IntegrationServiceService {
         Math.max(Number(input.timeout_ms ?? 0) || 15_000, 1_000),
         60_000,
       );
-      const response = await fetchWithoutRedirect(finalUrl, {
+      const response = await this.outboundFetch(finalUrl, {
         method,
         headers,
         body:
@@ -5894,7 +5904,7 @@ export class IntegrationServiceService {
     const startedAt = Date.now();
     await this.assertOutboundUrlSafe(url);
     try {
-      const response = await fetchWithoutRedirect(url, {
+      const response = await this.outboundFetch(url, {
         method,
         headers,
         signal: AbortSignal.timeout(Math.max(1000, input?.timeout_ms ?? 8000)),

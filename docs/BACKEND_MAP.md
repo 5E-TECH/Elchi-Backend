@@ -64,7 +64,7 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
 | **integration-service** | `integration_schema` | `external_integration`, `provider_shipment`, `provider_receivable`, `provider_remittance`, `sync_queue`, `sync_history`, `provider_webhook_log` | External providers (cargo/marketplace): credentials (AES-encrypted), sync queue, dispatch shipments, COD receivables/remittances, inbound HMAC webhooks |
 | **notification-service** | `notification_schema` | `telegram_market`, `notification` | Per-user in-app notification inbox (dispatch/list/read/unread) + realtime socket.io push + Telegram group notifications (configs, connect-by-token, send) |
 | **analytics-service** | — (no DB; aggregator) | — | Dashboards, KPI, revenue, reports — **reads other services** (order/finance/branch/identity) via RMQ; stores nothing |
-| **file-service** | — (MinIO, no DB) | — | Upload/download (signed URLs), PDF & QR generation in MinIO |
+| **file-service** | `file_schema` (only the ownership registry; objects in MinIO) | `file_objects` | Upload/download (signed URLs), PDF & QR generation in MinIO, per-object ownership registry (dgvwZasd B) |
 | **c2c-service** | `c2c_schema` | `listing`, `c2c_order`, `review`, `dispute` | Consumer-to-consumer marketplace (listings/orders/reviews/disputes). **Not yet exposed via gateway** — no c2c gateway controller |
 | **search-service** | `search_schema` | `search_document` | Global search index (upsert/remove/query); other services push index updates |
 
@@ -913,9 +913,32 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
   resolved); `report.finance` monthly buckets use Tashkent months. (Order
   revenue chart buckets in order-service also use the Tashkent wall clock.)
 
-### file-service (MinIO, no DB)
-- `file.{upload,get_url,delete,exists,generate_pdf,generate_qr}`. Signed URLs;
-  size/TTL from env.
+### file-service (MinIO + `file_schema`)
+- `file.{upload,get_url,delete,exists,read,find_owner,generate_pdf,generate_qr}`.
+  Signed URLs; size/TTL from env.
+- **Ownership registry (dgvwZasd B, migr 191):** `file_schema.file_objects`
+  (`key` PK, `folder`, `owner_id` varchar — user id or `system`, `owner_role`,
+  `owner_branch_id`, `mime_type`, `size_bytes`, `created_at`). Written by
+  `file.upload` only when the payload has `owner` (gateway JWT: `POST
+  files/upload`, order sell/cancel proof, shift photo, cashbox receipt;
+  `system`: shift report); catalog images and generated QR/PDF stay out.
+  Row is removed by `file.delete`. A failed registry write never fails the
+  upload (no row = legacy rule); `file.find_owner` DB error is an error, not
+  "not found". Internal `file.read`/`file.exists` callers (Telegram DM, AI
+  receipt/balance check, order proof check) are not gated by the registry.
+- **Read rule** (`FileGatewayController.assertCanAccessPrivateKey`, `GET
+  files/:key`, `GET files/:key/content`; gateway env
+  `FILE_OWNERSHIP_ENFORCE`, default `off` = registry is write-only). With `on`
+  a private-prefix key that has a row: SA/admin; the uploader; market/courier
+  who is on the order (`order.proof_files`); branch staff (manager,
+  registrator, branch, operator) when the order's `branch_id` /
+  `holder_branch_id` / `home_branch_id` or the uploader's branch is theirs,
+  or they are in the HQ branch. Registry lookup failure → 503, never the
+  legacy rule. Key WITHOUT a row (files uploaded before migr 191) → legacy
+  rule in both modes (role gate + order owner for market/courier). `GET
+  files/signed/:token` is a bearer link and does not consult the registry;
+  `shift-check-` / `shift-report-` / `cashbox-receipt-` via `GET files/:key`
+  stay SA/admin only.
 
 ### search-service (`search_schema`)
 - `search_document` index. `search.{index.upsert,index.remove,query}`. Other
@@ -987,6 +1010,14 @@ Imported as `@app/common`. Top level: `enums/`, `helpers/`, `src/`.
 - **`src/soft-delete`** — soft-delete base (deleted rows kept for audit).
 - **`src/security`** — SSRF guard for outbound URLs from operator-supplied
   integration config (`INTEGRATION_ALLOW_PRIVATE_HOSTS` toggles private hosts).
+  `assertPublicUrl` is the early check (config time + before each call);
+  `fetchPinned` is the only outbound path: `redirect: 'error'` plus a shared
+  undici `Agent` whose connect-time lookup (`createPinnedLookup`) validates
+  every answer and hands exactly those IPs to the socket, so a DNS rebind
+  between check and connect cannot reach an internal host (dgvwZasd B). URL is
+  not rewritten: Host header, SNI and certificate check use the hostname.
+  `undici` stays on the major bundled with Node (22 → 6.x): global `fetch` gets
+  the `Agent` as `dispatcher`.
 - **`src/webhook`** — HMAC signature helpers for inbound provider webhooks.
 
 ---
@@ -1335,8 +1366,8 @@ secret (secret never reaches the gateway).
 ## 9. Open / notable state (as of last sync)
 
 - **c2c-service** is fully built internally but **not exposed via the gateway**.
-- **analytics-service** and **file-service** have **no database** (aggregator /
-  MinIO respectively).
+- **analytics-service** has **no database** (aggregator). **file-service** keeps
+  objects in MinIO; its only table is the ownership registry (`file_schema`).
 - Frontend has significant **coverage gaps** vs backend — see
   [`docs/frontend/COVERAGE_REPORT.md`](./frontend/COVERAGE_REPORT.md)
   (Investor, Integration-sync, Finance shift/salary/operator, Files, Excel,

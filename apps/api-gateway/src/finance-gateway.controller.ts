@@ -125,6 +125,7 @@ import {
   FILE_LINK_TTL_SECONDS,
   type OriginRequest,
 } from './file-link';
+import { fileOwnerOf } from './file-ownership';
 import {
   buildXlsx,
   excelDate,
@@ -4231,6 +4232,7 @@ export class FinanceGatewayController {
         mime_type: mime,
         file_base64: clean.toString('base64'),
         folder: 'shift-check',
+        owner: fileOwnerOf(req.user),
       },
       30000,
     );
@@ -4537,6 +4539,7 @@ export class FinanceGatewayController {
         mime_type: normalizedMime,
         file_base64: clean.toString('base64'),
         folder: CASHBOX_RECEIPT_FILE_FOLDER,
+        owner: fileOwnerOf(req.user),
       },
       30000,
     );

@@ -6,12 +6,14 @@ import {
   ForbiddenException,
   Get,
   Inject,
+  Optional,
   Param,
   ParseIntPipe,
   Post,
   Query,
   Req,
   Res,
+  ServiceUnavailableException,
   UploadedFile,
   UseGuards,
   UseInterceptors,
@@ -23,6 +25,7 @@ import {
   ApiBody,
   ApiConsumes,
   ApiCreatedResponse,
+  ApiOkResponse,
   ApiOperation,
   ApiForbiddenResponse,
   ApiParam,
@@ -54,11 +57,26 @@ import {
   uploadPolicySwaggerDescription,
 } from './file-upload-policy';
 import { isFileLinkKey, readFileLinkToken } from './file-link';
+import {
+  fileOwnerOf,
+  fileOwnershipEnforced,
+  isOrderInBranch,
+  isOrderParticipant,
+  type FileOwnerRecord,
+  type ProofOrderOwner,
+} from './file-ownership';
 
 // RPC ceiling: this downstream can legitimately run long (base64/provider
 // fetch up to ~60s); an 8s ceiling would premature-fail a working call. See
 // integration-service AbortSignal.timeout / file base64 transfer.
 const FILE_RPC_TIMEOUT_MS = 60_000;
+
+type PrivateFileRequest = {
+  user?: { sub?: string; roles?: string[]; branch_id?: string | null };
+};
+
+const PRIVATE_FILE_FORBIDDEN_DESCRIPTION =
+  "Maxfiy faylga ruxsat yo'q (rol yoki egalik): reestrdagi fayl — yuklagan foydalanuvchi, buyurtma ishtirokchisi, shu filial yoki HQ xodimi, admin.";
 
 @ApiTags('File')
 @ApiBearerAuth()
@@ -79,6 +97,10 @@ export class FileGatewayController {
     @Inject('FILE') private readonly fileClient: ClientProxy,
     // Dalil faylining egasini aniqlash uchun (audit S5).
     @Inject('ORDER') private readonly orderClient: ClientProxy,
+    // (dgvwZasd B) Xodim filiali — egalik reestri doirasi uchun.
+    @Optional()
+    @Inject('BRANCH')
+    private readonly branchClient?: ClientProxy,
   ) {}
 
   /**
@@ -135,7 +157,11 @@ export class FileGatewayController {
           buffer: Buffer;
         }
       | undefined,
-    @Req() req: { body?: Record<string, unknown>; user?: { roles?: string[] } },
+    @Req()
+    req: {
+      body?: Record<string, unknown>;
+      user?: { sub?: string; roles?: string[]; branch_id?: string | null };
+    },
   ) {
     if (!file) {
       throw new BadRequestException('file is required');
@@ -167,6 +193,7 @@ export class FileGatewayController {
             // Kanonik (tozalangan, kichik harf) papka — kalit prefiksi
             // maxfiy/ommaviy qoidalarga aynan mos tushadi.
             folder,
+            owner: fileOwnerOf(req?.user),
           },
         )
         .pipe(timeout(FILE_RPC_TIMEOUT_MS)),
@@ -178,10 +205,8 @@ export class FileGatewayController {
   // evidence*, so minting it requires a staff/business role — not merely any
   // logged-in account. This narrows the previous "any authenticated user → any
   // file" object-level IDOR on GET/DELETE (Audit P1). The lowest-trust read-only
-  // roles (customer, investor) are denied outright. NOTE: full per-object
-  // ownership ("only the uploader/assignee") still needs a file-ownership
-  // registry in file-service — tracked as a follow-up; this closes the
-  // cross-role leak and the destructive delete, which are the exploitable parts.
+  // roles (customer, investor) are denied outright. Per-object ownership
+  // (dgvwZasd B): `assertRegisteredFileAccess` below, for keys in the registry.
   //
   // 'ai-' (HD5zOyBp #6) — AI buyurtma rasmlari. Hozir ular UMUMAN saqlanmaydi
   // (ai-parse rasmni faqat RAM'da base64 qilib ai-service'ga uzatadi, MinIO'ga
@@ -225,7 +250,7 @@ export class FileGatewayController {
 
   private async assertCanAccessPrivateKey(
     key: string,
-    req: { user?: { sub?: string; roles?: string[]; branch_id?: string } },
+    req: PrivateFileRequest,
   ): Promise<void> {
     const roles = this.rolesOf(req);
     const safeKey = String(key ?? '');
@@ -261,6 +286,23 @@ export class FileGatewayController {
       );
     }
 
+    const isScoped = roles.some((role) =>
+      FileGatewayController.SCOPED_FILE_ROLES.has(role),
+    );
+
+    // (dgvwZasd B) Reestrda bor fayl — egalik qoidasi; reestrda YO'Q (eski)
+    // fayl — pastdagi eski qoida o'zgarishsiz. Admin reestrga qaramaydi.
+    const isAdmin = roles.some(
+      (role) => role === RoleEnum.SUPERADMIN || role === RoleEnum.ADMIN,
+    );
+    if (!isAdmin && fileOwnershipEnforced()) {
+      const record = await this.findFileOwner(safeKey);
+      if (record) {
+        await this.assertRegisteredFileAccess(record, req, isScoped);
+        return;
+      }
+    }
+
     /**
      * ⚠️ PER-OBYEKT EGALIK TEKSHIRUVI (audit S5).
      *
@@ -276,44 +318,139 @@ export class FileGatewayController {
      * manager, operator, registrator) avvalgidek ishlaydi: ular allaqachon
      * butun oqimni ko'radi.
      */
-    const isScoped = roles.some((role) =>
-      FileGatewayController.SCOPED_FILE_ROLES.has(role),
-    );
     if (!isScoped) {
       return;
     }
 
-    const sub = String(req?.user?.sub ?? '');
-    const owner = await firstValueFrom(
-      this.orderClient
-        .send<{
-          data?: {
-            market_id?: string | null;
-            courier_id?: string | null;
-            holder_courier_id?: string | null;
-          } | null;
-        }>({ cmd: 'order.find_owner_by_proof_file' }, { key: safeKey })
-        .pipe(timeout(FILE_RPC_TIMEOUT_MS)),
-    ).catch(() => null);
-
-    const ownerData = owner?.data ?? null;
-    const belongsToRequester =
-      Boolean(ownerData) &&
-      (String(ownerData?.market_id ?? '') === sub ||
-        String(ownerData?.courier_id ?? '') === sub ||
-        String(ownerData?.holder_courier_id ?? '') === sub);
-
-    if (!belongsToRequester) {
+    const order = await this.findProofOrder(safeKey);
+    if (!isOrderParticipant(order, String(req?.user?.sub ?? ''))) {
       throw new ForbiddenException(
         'Bu fayl sizning buyurtmangizga tegishli emas',
       );
     }
   }
 
+  /** Dalil biriktirilgan buyurtma; topilmasa yoki xato bo'lsa — null. */
+  private async findProofOrder(key: string): Promise<ProofOrderOwner | null> {
+    const response = await firstValueFrom(
+      this.orderClient
+        .send<{
+          data?: ProofOrderOwner | null;
+        }>({ cmd: 'order.find_owner_by_proof_file' }, { key })
+        .pipe(timeout(FILE_RPC_TIMEOUT_MS)),
+    ).catch(() => null);
+    return response?.data ?? null;
+  }
+
+  /**
+   * (dgvwZasd B) Reestr qatori; qator yo'q — null. Tekshirib bo'lmasa 503:
+   * "reestrda yo'q" deb eski (kengroq) qoidaga tushib ketmasin.
+   */
+  private async findFileOwner(key: string): Promise<FileOwnerRecord | null> {
+    const response = await firstValueFrom(
+      this.fileClient
+        .send<{
+          data?: FileOwnerRecord | null;
+        }>({ cmd: 'file.find_owner' }, { key })
+        .pipe(timeout(FILE_RPC_TIMEOUT_MS)),
+    ).catch(() => {
+      throw new ServiceUnavailableException(
+        "Fayl egaligini tekshirib bo'lmadi — keyinroq urinib ko'ring",
+      );
+    });
+    return response?.data ?? null;
+  }
+
+  /**
+   * (dgvwZasd B) Reestrdagi shaxsiy faylni kim o'qiydi:
+   *  - yuklagan foydalanuvchining o'zi (buyurtmaga biriktirilmasdan oldin ham);
+   *  - market / kuryer — fayl biriktirilgan buyurtmaning ishtirokchisi
+   *    (audit S5 qoidasi);
+   *  - filial xodimi (menejer, registrator, filial, operator) — buyurtma
+   *    uning filiali doirasida (`GET /orders/:id` bilan bir xil uch ustun)
+   *    yoki yuklovchi uning filialidan; HQ xodimi — hammasi (HQ qo'lidagi
+   *    bekor qilingan mollar, asosiy kassa dalillari).
+   * Superadmin/admin bu yerga kelmaydi. Filial aniqlanmasa — rad.
+   */
+  private async assertRegisteredFileAccess(
+    record: FileOwnerRecord,
+    req: PrivateFileRequest,
+    isScoped: boolean,
+  ): Promise<void> {
+    const sub = String(req?.user?.sub ?? '');
+    if (sub && record.owner_id === sub) {
+      return;
+    }
+
+    const order = await this.findProofOrder(record.key);
+    if (isScoped) {
+      if (isOrderParticipant(order, sub)) {
+        return;
+      }
+      throw new ForbiddenException(
+        'Bu fayl sizning buyurtmangizga tegishli emas',
+      );
+    }
+
+    const branchId =
+      String(req?.user?.branch_id ?? '').trim() ||
+      (await this.findUserBranchId(sub));
+    if (branchId) {
+      if (isOrderInBranch(order, branchId)) {
+        return;
+      }
+      const ownerBranchId =
+        record.owner_branch_id ||
+        (await this.findUserBranchId(record.owner_id));
+      if (
+        ownerBranchId === branchId ||
+        (await this.findHqBranchId()) === branchId
+      ) {
+        return;
+      }
+    }
+    throw new ForbiddenException('Bu fayl boshqa filialga tegishli');
+  }
+
+  /** Foydalanuvchi filiali (`branch.user.find_by_user`); xato — bo'sh. */
+  private async findUserBranchId(userId: string | null): Promise<string> {
+    if (!userId || !this.branchClient) {
+      return '';
+    }
+    const response = await firstValueFrom(
+      this.branchClient
+        .send<{
+          data?: { branch_id?: string | number | null } | null;
+        }>(
+          { cmd: 'branch.user.find_by_user' },
+          { user_id: userId, requester: { id: userId, roles: [] } },
+        )
+        .pipe(timeout(FILE_RPC_TIMEOUT_MS)),
+    ).catch(() => null);
+    return String(response?.data?.branch_id ?? '').trim();
+  }
+
+  /** HQ filiali id si; xato — bo'sh (fail-closed). */
+  private async findHqBranchId(): Promise<string> {
+    if (!this.branchClient) {
+      return '';
+    }
+    const response = await firstValueFrom(
+      this.branchClient
+        .send<{
+          data?: { id?: string | number | null } | null;
+        }>({ cmd: 'branch.find_hq' }, {})
+        .pipe(timeout(FILE_RPC_TIMEOUT_MS)),
+    ).catch(() => null);
+    return String(response?.data?.id ?? '').trim();
+  }
+
   @Get('files/:key')
   @UseGuards(JwtAuthGuard)
   @ApiOperation({ summary: 'Get signed URL for file key' })
   @ApiParam({ name: 'key', description: 'Object key in MinIO' })
+  @ApiOkResponse({ description: 'Imzolangan URL' })
+  @ApiForbiddenResponse({ description: PRIVATE_FILE_FORBIDDEN_DESCRIPTION })
   @ApiQuery({
     name: 'expires_in',
     required: false,
@@ -322,7 +459,7 @@ export class FileGatewayController {
   })
   async getFileUrl(
     @Param('key') key: string,
-    @Req() req: { user?: { sub?: string; roles?: string[] } },
+    @Req() req: PrivateFileRequest,
     @Query('expires_in', new ParseIntPipe({ optional: true }))
     expires_in?: number,
   ) {
@@ -399,9 +536,11 @@ export class FileGatewayController {
   @UseGuards(JwtAuthGuard)
   @ApiOperation({ summary: 'Read file bytes through the gateway (JWT)' })
   @ApiParam({ name: 'key', description: 'Object key in MinIO' })
+  @ApiOkResponse({ description: 'Fayl baytlari' })
+  @ApiForbiddenResponse({ description: PRIVATE_FILE_FORBIDDEN_DESCRIPTION })
   async getFileContent(
     @Param('key') key: string,
-    @Req() req: { user?: { sub?: string; roles?: string[] } },
+    @Req() req: PrivateFileRequest,
     @Res() res: Response,
   ) {
     await this.assertCanAccessPrivateKey(key, req);

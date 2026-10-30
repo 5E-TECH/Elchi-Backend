@@ -51,7 +51,7 @@ BEGIN
      WHERE c.table_schema IN ('identity_schema','order_schema','catalog_schema',
              'logistics_schema','finance_schema','notification_schema',
              'integration_schema','branch_schema','investor_schema','c2c_schema',
-             'search_schema','ai_schema')
+             'search_schema','ai_schema','file_schema')
        AND c.column_name ILIKE '%phone%'
        AND c.data_type IN ('text', 'character varying', 'character')
   LOOP
@@ -78,7 +78,7 @@ BEGIN
      WHERE c.table_schema IN ('identity_schema','order_schema','catalog_schema',
              'logistics_schema','finance_schema','notification_schema',
              'integration_schema','branch_schema','investor_schema','c2c_schema',
-             'search_schema','ai_schema')
+             'search_schema','ai_schema','file_schema')
        AND c.data_type IN ('text', 'character varying', 'character', 'jsonb', 'json')
        AND c.column_name !~* '(token|hash|password|secret|_key$|^key$|_id$|_ref$|_enc$|^code$|sha256|qr)'
        AND c.table_name NOT LIKE 'stock\_%'

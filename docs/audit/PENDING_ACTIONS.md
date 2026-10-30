@@ -49,12 +49,12 @@ Commands in `SECRET_ROTATION_RUNBOOK.md §2` (`git filter-repo --path
 
 ## 🟡 MEDIUM
 
-### 3. File per-object ownership registry  ·  Owner: 🛠️
-File IDOR is currently closed by a prefix + staff-role heuristic
-(`file-gateway.controller.ts`). A staff user could still fetch another entity's
-private file if the key prefix matches. A true per-object ownership record
-(who/what entity owns each stored key, checked on signed-URL / read) closes it
-fully. Needs a small ownership table + a check on the file read/URL paths.
+### 3. File per-object ownership registry  ·  Owner: 👤 (enable)
+Built (dgvwZasd B): `file_schema.file_objects`, checked on `GET files/:key` and
+`GET files/:key/content`. Reading is enforced only with
+`FILE_OWNERSHIP_ENFORCE=on` on api-gateway (default `off`, staging `on`): set it
+in `.env.production` after the test-server pass. Files uploaded before migration
+191 have no row and keep the prefix + order-owner rule by design.
 
 ### 4. DB-backed integration tests  ·  Owner: 🛠️ (env)
 Unit tests mock the repo, so SQL correctness (money aggregations, migrations, the
