@@ -21,6 +21,9 @@ import {
 import { User } from './entities/user.entity';
 import { CourierRegion } from './entities/courier-region.entity';
 import { UserSession } from './entities/user-session.entity';
+import { AppSetting } from './entities/app-setting.entity';
+import { ContactsService } from './contacts/contacts.service';
+import { ContactsController } from './contacts/contacts.controller';
 import { BcryptEncryption } from '../../../libs/common/helpers/bcrypt';
 import type { StringValue } from 'ms';
 
@@ -56,6 +59,7 @@ import { OtpService } from './otp/otp.service';
       CourierRegion,
       UserSession,
       AuthLoginThrottle,
+      AppSetting,
     ]),
     JwtModule.registerAsync({
       inject: [ConfigService],
@@ -68,7 +72,7 @@ import { OtpService } from './otp/otp.service';
       }),
     }),
   ],
-  controllers: [IdentityController],
+  controllers: [IdentityController, ContactsController],
   providers: [
     UserServiceService,
     AuthService,
@@ -77,6 +81,7 @@ import { OtpService } from './otp/otp.service';
     LoginThrottleService,
     BcryptEncryption,
     OtpService,
+    ContactsService,
   ],
 })
 export class IdentityServiceModule {}

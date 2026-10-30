@@ -65,6 +65,8 @@ import { DeliveryPricingGatewayController } from './delivery-pricing-gateway.con
 // mSkzzNBJ: ochiq kalkulyator — POST /public/delivery-quote, GET /public/delivery-tariffs.
 import { PublicDeliveryPricingController } from './public-delivery-pricing/public-delivery-pricing.controller';
 import { WarehouseGatewayController } from './warehouse-gateway.controller';
+// T7 (QPq2C1co) aloqa raqamlari: /settings/contacts, market mas'ullari, /users/me/contacts.
+import { ContactsGatewayController } from './contacts-gateway.controller';
 import { AiStatusPoller } from './ai/ai-status.poller';
 // (KwodkKWY) POST /csp-report — brauzer CSP buzilish hisobotlari (@Public).
 import { CspReportController } from './csp-report/csp-report.controller';
@@ -128,6 +130,7 @@ import { AI_IMAGE_STORE, AiImageStore } from '@app/common/ai/ai-image-store';
   ],
   controllers: [
     ApiGatewayController,
+    ContactsGatewayController,
     AuthGatewayController,
     CatalogGatewayController,
     OrderGatewayController,

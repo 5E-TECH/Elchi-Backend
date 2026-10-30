@@ -1,4 +1,5 @@
 import { WAREHOUSE_ERROR_CODES } from '../catalog/warehouse';
+import { CONTACT_ERROR_CODES } from '../contacts/contacts';
 
 /**
  * (Elchi Pochta #3) Xato javobidagi mashina o'qiydigan qo'shimcha maydonlar.
@@ -57,6 +58,11 @@ export const PUBLIC_ERROR_CODES: Readonly<Record<string, readonly string[]>> = {
   [WAREHOUSE_ERROR_CODES.STOCK_FORBIDDEN]: [],
   // (VkKDSNNn) Markaziy ombor buyurtmasi marketga topshirilmaydi — 409.
   [WAREHOUSE_ERROR_CODES.ORDER_RETURNS_TO_STOCK]: [],
+  // (T7 QPq2C1co) aloqa sozlamalari va market mas'uli — 400.
+  [CONTACT_ERROR_CODES.SUPPORT_PHONES_INVALID]: [],
+  [CONTACT_ERROR_CODES.RESPONSIBLE_ROLE_INVALID]: [],
+  [CONTACT_ERROR_CODES.RESPONSIBLE_INACTIVE]: [],
+  [CONTACT_ERROR_CODES.NOT_A_MARKET]: [],
 };
 
 export type PublicErrorValue = string | number | boolean | null;

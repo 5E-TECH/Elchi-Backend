@@ -24,6 +24,7 @@ import { User } from './entities/user.entity';
 import { CourierRegion } from './entities/courier-region.entity';
 import { invalidateAllSessions, isSessionId } from './auth/session-security';
 import { AuthSessionService } from './auth/auth-session.service';
+import { ContactsService } from './contacts/contacts.service';
 import {
   CHANGEABLE_ROLES,
   ROLE_CATALOG,
@@ -58,6 +59,7 @@ import {
   Commission_type,
   Roles,
   Status,
+  isMarketResponsibleRole,
   normalizeUzPhone,
   parseUzPhoneSearch,
   passwordPolicyError,
@@ -464,6 +466,13 @@ export class UserServiceService implements OnModuleInit {
      * quradi — u holda avvalgidek faqat epoch (hammasi, refresh paytida).
      */
     @Optional() private readonly authSessions?: AuthSessionService,
+    /**
+     * T7 (QPq2C1co) Market mas'uli: `GET /markets` / `GET /users/:id`
+     * (market) da `responsible`, mas'ul o'chirilganda / roli o'zgarganda
+     * marketlarini sukutga qaytarish. Ixtiyoriy — spec'lar servisni usiz
+     * quradi (u holda mas'ul maydonlari qo'shilmaydi).
+     */
+    @Optional() private readonly contacts?: ContactsService,
   ) {}
 
   /**
@@ -2437,7 +2446,16 @@ export class UserServiceService implements OnModuleInit {
     }
     invalidateAllSessions(user);
 
-    const saved = await this.users.save(user);
+    // T7 (B4): mas'ul bo'la olmaydigan rolga o'tdi — uning marketlari va
+    // sukut sozlamasi AYNI tranzaksiyada bo'shatiladi.
+    const releasesResponsible =
+      isMarketResponsibleRole(previousRole) &&
+      !isMarketResponsibleRole(target.role);
+    const { saved, release } = await this.saveWithResponsibleRelease(
+      user,
+      releasesResponsible,
+      requester,
+    );
     // (NDmZMzCP) Rol almashdi — eski rol tokenlari DARHOL to'xtaydi.
     await this.revokeSessionsAfterSecurityChange(saved);
     // Qidiruv indeksi rol bo'yicha kalitlangan: eski rol yozuvi olib
@@ -2460,6 +2478,14 @@ export class UserServiceService implements OnModuleInit {
       metadata: { change: 'role', sessions_revoked: true },
       ...this.auditActor(requester),
     });
+    if (release) {
+      await this.contacts?.logRelease(
+        String(saved.id),
+        release,
+        'responsible_role_changed',
+        requester,
+      );
+    }
 
     return successRes(
       this.sanitize(saved),
@@ -2515,6 +2541,35 @@ export class UserServiceService implements OnModuleInit {
         `Foydalanuvchi ${name ? `'${name}' filialiga` : `#${branchId} filialga`} biriktirilgan — avval filialdan chiqaring (DELETE /branches/${branchId}/users/${userId}), rol o'zgargach yangi rol bilan qayta biriktiring`,
       );
     }
+  }
+
+  /**
+   * T7 (B4) — foydalanuvchini saqlaydi; `release` bo'lsa (mas'ul o'chirildi
+   * yoki roli mas'ul bo'lmaydiganga o'zgardi) uning marketlari sukutga
+   * (`market_responsible_id = NULL`) va sukut sozlamasi `null` — HAMMASI
+   * bitta tranzaksiyada. `ContactsService` yo'q (spec) — oddiy save.
+   */
+  private async saveWithResponsibleRelease(
+    user: User,
+    release: boolean,
+    requester?: RequesterContext,
+  ): Promise<{
+    saved: User;
+    release: { market_ids: string[]; default_cleared: boolean } | null;
+  }> {
+    const contacts = this.contacts;
+    if (!release || !contacts) {
+      return { saved: await this.users.save(user), release: null };
+    }
+    return this.users.manager.transaction(async (manager) => {
+      const saved = await manager.getRepository(User).save(user);
+      const released = await contacts.releaseResponsible(
+        manager,
+        saved.id,
+        this.createdByOf(requester),
+      );
+      return { saved, release: released };
+    });
   }
 
   async deleteAdmin(id: string) {
@@ -2577,7 +2632,13 @@ export class UserServiceService implements OnModuleInit {
     // (Elchi Pochta #3) O'chirilgan akkauntning sessiyalari ham yopiladi.
     invalidateAllSessions(admin);
 
-    const saved = await this.users.save(admin);
+    // T7 (B4): o'chirilgan mas'ulning marketlari va sukut sozlamasi AYNI
+    // tranzaksiyada bo'shatiladi.
+    const { saved, release } = await this.saveWithResponsibleRelease(
+      admin,
+      isMarketResponsibleRole(admin.role),
+      requester,
+    );
     await this.revokeSessionsAfterSecurityChange(saved);
     void this.removeUserFromSearch(saved);
 
@@ -2596,6 +2657,14 @@ export class UserServiceService implements OnModuleInit {
       old_value: { name: admin.name, role: admin.role },
       ...this.auditActor(requester),
     });
+    if (release) {
+      await this.contacts?.logRelease(
+        String(saved.id),
+        release,
+        'responsible_deleted',
+        requester,
+      );
+    }
 
     return successRes({ id }, 200, 'User o‘chirildi');
   }
@@ -2678,6 +2747,14 @@ export class UserServiceService implements OnModuleInit {
       });
     }
 
+    // T7 (QPq2C1co) — GET /users/:id (market): Elchi mas'uli va manbasi.
+    const responsibleLookup: Promise<unknown> =
+      user.role === Roles.MARKET && this.contacts
+        ? this.contacts
+            .resolveMarketResponsibles([user])
+            .then((views) => views.get(String(user.id)) ?? null)
+        : Promise.resolve(null);
+
     /**
      * YEThmZBn — GET /users/:id (gateway `include_branch`) kuryer / menejer /
      * registrator filialini ham qaytaradi: `branch: { id, name } | null`.
@@ -2695,13 +2772,15 @@ export class UserServiceService implements OnModuleInit {
     // bir xil). Faqat gateway (`include_branch`) yo'li — ichki chaqiruvlar
     // uchun so'rov ham, shakl ham o'zgarmagan.
     const isMarketOperator = user.role === Roles.MARKET_OPERATOR;
-    const [profileRegion, branchAssignment, marketById] = await Promise.all([
-      this.getRegionById(safeUser.region_id),
-      branchLookup,
-      isMarketOperator
-        ? this.findMarketSummaries([user.market_id])
-        : Promise.resolve(null),
-    ]);
+    const [profileRegion, branchAssignment, marketById, responsible] =
+      await Promise.all([
+        this.getRegionById(safeUser.region_id),
+        branchLookup,
+        isMarketOperator
+          ? this.findMarketSummaries([user.market_id])
+          : Promise.resolve(null),
+        responsibleLookup,
+      ]);
     const branch = this.toBranchSummary(branchAssignment);
     return successRes({
       ...safeUser,
@@ -2711,6 +2790,7 @@ export class UserServiceService implements OnModuleInit {
       branch_id: branch?.id ?? null,
       branch,
       ...(marketById ? { market: this.marketSummaryOf(user, marketById) } : {}),
+      ...(responsible && typeof responsible === 'object' ? responsible : {}),
     });
   }
 
@@ -4386,14 +4466,33 @@ export class UserServiceService implements OnModuleInit {
       qb.andWhere('market.status = :status', { status });
     }
 
+    // T7 (QPq2C1co) — `?responsible_id=<id>|none`: saqlangan biriktiruv
+    // bo'yicha (`none` — sukutdagi, ya'ni biriktirilmagan marketlar).
+    const responsibleFilter = primitiveText(query.responsible_id).trim();
+    if (responsibleFilter.toLowerCase() === 'none') {
+      qb.andWhere('market.market_responsible_id IS NULL');
+    } else if (/^\d{1,19}$/.test(responsibleFilter)) {
+      qb.andWhere('market.market_responsible_id = :responsibleId', {
+        responsibleId: responsibleFilter,
+      });
+    } else if (responsibleFilter) {
+      this.badRequest("responsible_id — xodim id si yoki 'none'");
+    }
+
     const [rows, total] = await qb
       .orderBy('market.createdAt', 'DESC')
       .skip(skip)
       .take(limit)
       .getManyAndCount();
 
+    const responsibles = this.contacts
+      ? await this.contacts.resolveMarketResponsibles(rows)
+      : null;
     return successRes({
-      items: rows.map((row) => this.sanitize(row)),
+      items: rows.map((row) => ({
+        ...this.sanitize(row),
+        ...(responsibles?.get(String(row.id)) ?? {}),
+      })),
       meta: {
         page,
         limit,

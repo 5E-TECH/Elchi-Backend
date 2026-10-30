@@ -86,6 +86,15 @@ export class User extends BaseEntity {
   market_id?: string | null;
 
   /**
+   * T7 (QPq2C1co, migratsiya 1716000000185) — faqat MARKET: marketning Elchi
+   * mas'uli (superadmin / admin / registrator / logist, `admins.id`). NULL —
+   * sukut mas'ul (`app_settings.contacts.default_market_responsible_id`).
+   * Mas'ul o'chirilsa yoki roli mas'ul bo'lmaydiganga o'zgarsa — NULL.
+   */
+  @Column({ type: 'bigint', nullable: true })
+  market_responsible_id?: string | null;
+
+  /**
    * Shaxsiy Telegram (bot `/start <bir martalik kod>`). PARTIAL UNIQUE
    * (`UQ_ADMINS_TELEGRAM_ID`, migratsiya 1716000000121) — bitta Telegram
    * akkaunt = bitta xodim. Umumiy javoblarda QAYTMAYDI (sanitize →
