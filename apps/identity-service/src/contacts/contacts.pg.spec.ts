@@ -390,6 +390,31 @@ maybe('T7 — market mas`uli, sozlamalar, aloqa rezolverlari (Postgres)', () => 
       expect(await responsibleOf(m1)).toBeNull();
     });
 
+    it('poyga: mas`ul parallel o`chirilsa (commit kutiladi) — biriktirilmaydi (FOR SHARE)', async () => {
+      const x = await addUser(Roles.ADMIN);
+      const market = await addUser(Roles.MARKET);
+      // Boshqa tranzaksiya mas'ulni o'chiryapti, hali commit qilmagan.
+      const other = db.createQueryRunner();
+      await other.connect();
+      await other.startTransaction();
+      await other.query(
+        'UPDATE identity_schema.admins SET is_deleted = true WHERE id = $1',
+        [x],
+      );
+      // Oldindan tekshiruv (tranzaksiyadan tashqari) hali eski holatni ko'radi;
+      // yozuvdagi FOR SHARE esa commit'ni kutadi va o'chirilganini ko'radi.
+      const pending = rpcError(
+        contacts.bulkAssign({ responsible_id: x, market_ids: [market] }, SA),
+      );
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      await other.commitTransaction();
+      await other.release();
+      expect(await pending).toEqual(
+        expect.objectContaining({ statusCode: 404 }),
+      );
+      expect(await responsibleOf(market)).toBeNull();
+    });
+
     it('market bo`lmagan id → 400 NOT_A_MARKET, hech narsa o`zgarmaydi', async () => {
       const y = await addUser(Roles.ADMIN);
       const market = await addUser(Roles.MARKET);

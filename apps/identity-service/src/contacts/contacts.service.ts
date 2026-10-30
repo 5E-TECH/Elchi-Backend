@@ -237,16 +237,24 @@ export class ContactsService {
     );
   }
 
-  /** Xodimni mas'ul sifatida tekshiradi: 404 / RESPONSIBLE_ROLE_INVALID / RESPONSIBLE_INACTIVE. */
+  /**
+   * Xodimni mas'ul sifatida tekshiradi: 404 / RESPONSIBLE_ROLE_INVALID /
+   * RESPONSIBLE_INACTIVE. `lock` — yozuv tranzaksiyasi ICHIDA `FOR SHARE`
+   * bilan qayta tekshirish: parallel o'chirish / rol almashtirish
+   * (`deleteUser`, `changeUserRole` — shu qatorni UPDATE qiladi) commit
+   * bo'lguncha kutadi va o'chirilgan / roli o'zgargan xodim biriktirilmaydi.
+   */
   private async loadAssignableResponsible(
     rawId: unknown,
     manager: EntityManager = this.users.manager,
+    lock = false,
   ): Promise<User> {
     const id = asId(rawId);
     const user = id
-      ? await manager
-          .getRepository(User)
-          .findOne({ where: { id, isDeleted: false } })
+      ? await manager.getRepository(User).findOne({
+          where: { id, isDeleted: false },
+          ...(lock ? { lock: { mode: 'pessimistic_read' as const } } : {}),
+        })
       : null;
     if (!user) {
       throw rpcError('Xodim topilmadi', 404);
@@ -346,6 +354,9 @@ export class ContactsService {
     const updatedBy = asId(requester?.id);
     const { before, after } = await this.settings.manager.transaction(
       async (manager) => {
+        if (defaultId) {
+          await this.loadAssignableResponsible(defaultId, manager, true);
+        }
         const previous = await this.readSettings(manager);
         if (phones) {
           await this.writeSetting(
@@ -490,6 +501,9 @@ export class ContactsService {
     const targetId = responsible ? String(responsible.id) : null;
 
     const changed = await this.users.manager.transaction(async (manager) => {
+      if (targetId) {
+        await this.loadAssignableResponsible(targetId, manager, true);
+      }
       const rows = returnedRows<{
         id: string;
         role: string;
@@ -586,10 +600,17 @@ export class ContactsService {
     const previous = asId(market.market_responsible_id);
 
     if (previous !== targetId) {
-      await this.users.update(
-        { id: String(market.id) },
-        { market_responsible_id: targetId },
-      );
+      await this.users.manager.transaction(async (manager) => {
+        if (targetId) {
+          await this.loadAssignableResponsible(targetId, manager, true);
+        }
+        await manager
+          .getRepository(User)
+          .update(
+            { id: String(market.id) },
+            { market_responsible_id: targetId },
+          );
+      });
       await this.activityLog.log({
         entity_type: 'User',
         entity_id: String(market.id),
