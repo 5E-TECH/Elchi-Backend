@@ -464,6 +464,7 @@ export function makeRouter(
         actions as never,
         transport as never,
         config as never,
+        outbox as never,
       )
     : null;
   const aiHandler = aiService ? new AiOrderHandler(aiService) : undefined;
@@ -517,6 +518,7 @@ export function makeRouter(
     cards,
     inbox,
     aiDrafts,
+    aiService,
   };
 }
 
@@ -529,6 +531,12 @@ export function makeAiDraftsStore(now: () => number = Date.now) {
   return {
     rows,
     insert: jest.fn((row: Record<string, any>) => {
+      // (BOT-3b) id update'dan deterministik — takror update unique xatosi.
+      if (rows.has(row.id)) {
+        return Promise.reject(
+          Object.assign(new Error('duplicate key'), { code: '23505' }),
+        );
+      }
       rows.set(row.id, {
         input: {},
         orders: null,
@@ -550,6 +558,21 @@ export function makeAiDraftsStore(now: () => number = Date.now) {
       Promise.resolve(rows.get(where.id) ? { ...rows.get(where.id) } : null),
     ),
     query: jest.fn((sql: string, params: unknown[]) => {
+      // (BOT-3b) fondagi ishchi da'vosi: `worker_at IS NULL` bo'lsa oladi.
+      if (/"worker_at" = now\(\)/.test(sql) && /"id" = \$1/.test(sql)) {
+        const [claimId, status] = params as [string, string];
+        const target = rows.get(claimId);
+        if (
+          !target ||
+          target.status !== status ||
+          target.worker_at ||
+          new Date(target.expires_at).getTime() <= now()
+        ) {
+          return Promise.resolve([[], 0]);
+        }
+        target.worker_at = new Date(now());
+        return Promise.resolve([[{ ...target }], 1]);
+      }
       const [id, from, to] = params as [string, string[], string];
       const row = rows.get(id);
       if (
@@ -561,6 +584,7 @@ export function makeAiDraftsStore(now: () => number = Date.now) {
         return Promise.resolve([[], 0]);
       }
       row.status = to;
+      row.worker_at = null;
       return Promise.resolve([[{ ...row }], 1]);
     }),
   };

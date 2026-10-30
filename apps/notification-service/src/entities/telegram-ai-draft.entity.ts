@@ -60,4 +60,10 @@ export class TelegramAiDraft {
 
   @Column({ type: 'timestamptz', default: () => "now() + interval '24 hours'" })
   expires_at!: Date;
+  /**
+   * (BOT-3b, migratsiya 1716000000190) Fondagi ishchi AI ishini (parse /
+   * confirm) qachon oldi. NULL — navbatda; 2 daqiqadan eski — tiklanadi.
+   */
+  @Column({ type: 'timestamptz', nullable: true })
+  worker_at!: Date | null;
 }

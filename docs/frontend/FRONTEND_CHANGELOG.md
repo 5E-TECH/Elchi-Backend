@@ -21,6 +21,15 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 ## Yozuvlar
 
+### 2026-10-30 — BOT-3b: chat qulfi DB ulanishini ushlamaydi, AI bot orqali fonda
+
+Deploy: **notification-service**. Migratsiya **`1716000000190`** (`notification_schema.telegram_chat_locks`,
+`telegram_ai_drafts.worker_at`).
+
+- [2026-10-30] 🟢 [notification] — botda AI orqali buyurtma: «⏳» xabari darhol, preview fonda keladi; AI xatosi
+  qayta-qayta urinilmaydi («🔁 Qayta urinish» tugmasi), 2 daqiqadan ko'p qotgan qoralama o'zi tiklanadi. Kuryer
+  tugmalari AI to'lqinida kutmaydi. API o'zgarmagan. → FE o'zgarishi shart emas.
+
 ### 2026-10-30 — T8: buyurtmaning maxsus belgilari (mo'rt, diniy kitob, suyuqlik …) (0OUcHZ7R)
 
 Deploy: **order-service + api-gateway** (+ libs/common). Migratsiya **`1716000000187`**

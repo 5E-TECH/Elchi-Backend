@@ -152,12 +152,24 @@ const editButtons = (
   return {};
 };
 
+/** (BOT-3b) AI fonda — update tugagach ishchi ham tugashi kutiladi. */
+const settle = async <T>(ctx: ReturnType<typeof makeRouter>, p: Promise<T>) => {
+  const result = await p;
+  await ctx.aiService?.idle();
+  return result;
+};
 const send = (ctx: ReturnType<typeof makeRouter>, text: string, updateId = 1) =>
-  ctx.router.dispatch('elchi', textUpdate(text, { chatId: 40, updateId }));
+  settle(
+    ctx,
+    ctx.router.dispatch('elchi', textUpdate(text, { chatId: 40, updateId })),
+  );
 const press = (ctx: ReturnType<typeof makeRouter>, data: string) =>
-  ctx.router.dispatch(
-    'elchi',
-    callbackUpdate(data, { chatId: 40, fromId: 40 }),
+  settle(
+    ctx,
+    ctx.router.dispatch(
+      'elchi',
+      callbackUpdate(data, { chatId: 40, fromId: 40 }),
+    ),
   );
 
 describe('e7KhaeOO — matn → AI preview (mavjud endpoint, operator JWT)', () => {

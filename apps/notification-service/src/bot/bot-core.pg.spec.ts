@@ -2,6 +2,8 @@ import { Logger } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import { TelegramBotCore1716000000120 } from '../../../../migrations/1716000000120-TelegramBotCore';
 import { TelegramMarketInactiveReason1716000000150 } from '../../../../migrations/1716000000150-TelegramMarketInactiveReason';
+import { TelegramAiDrafts1716000000128 } from '../../../../migrations/1716000000128-TelegramAiDrafts';
+import { TelegramChatLocksAiWorker1716000000190 } from '../../../../migrations/1716000000190-TelegramChatLocksAiWorker';
 import { TelegramBotAction } from '../entities/telegram-bot-action.entity';
 import { TelegramMarket } from '../entities/telegram-market.entity';
 import { TelegramOutbox } from '../entities/telegram-outbox.entity';
@@ -14,6 +16,8 @@ import { BotOutboxService } from './bot-outbox.service';
 import { BotRateLimiterService } from './bot-rate-limiter.service';
 import { BotSessionService } from './bot-session.service';
 import { ChatSequencer } from './chat-sequencer';
+import { TelegramAiDraft } from '../entities/telegram-ai-draft.entity';
+import { AI_STALE_TEXT, AiOrderService } from './ai-order/ai-order.service';
 import {
   makeChannels,
   makeFetch,
@@ -77,6 +81,7 @@ const migration = new TelegramBotCore1716000000120();
           TelegramRateLimit,
           TelegramOutbox,
           TelegramMarket,
+          TelegramAiDraft,
         ],
         extra: { max: 10 },
       });
@@ -107,6 +112,10 @@ const migration = new TelegramBotCore1716000000120();
       const reasonRunner = db.createQueryRunner();
       try {
         await new TelegramMarketInactiveReason1716000000150().up(reasonRunner);
+        // (BOT-3b) AI qoralamalari + chat lease qulfi (ikki marta — xatosiz).
+        await new TelegramAiDrafts1716000000128().up(reasonRunner);
+        await new TelegramChatLocksAiWorker1716000000190().up(reasonRunner);
+        await new TelegramChatLocksAiWorker1716000000190().up(reasonRunner);
       } finally {
         await reasonRunner.release();
       }
@@ -433,6 +442,106 @@ const migration = new TelegramBotCore1716000000120();
       });
     });
 
+    describe('BOT-3b — AI fondagi ishchi (telegram_ai_drafts)', () => {
+      const makeAi = (parse: jest.Mock) => {
+        const outboxSend = jest.fn().mockResolvedValue({
+          id: '1',
+          status: 'sent',
+          result: { message_id: 77 },
+        });
+        const ai = new AiOrderService(
+          db.getRepository(TelegramAiDraft),
+          { request: parse } as never,
+          {
+            create: jest.fn().mockResolvedValue('a:1234567890abcdef'),
+            attachMessage: jest.fn().mockResolvedValue(undefined),
+          } as never,
+          {
+            editMessage: jest.fn().mockResolvedValue(false),
+            describe: () => 'err',
+          } as never,
+          { get: () => undefined } as never,
+          { send: outboxSend } as never,
+        );
+        return { ai, outboxSend };
+      };
+      const insert = (
+        id: string,
+        status: string,
+        ageMs: number,
+        worker: boolean,
+      ) =>
+        db.query(
+          `INSERT INTO notification_schema.telegram_ai_drafts
+             (id, chat_id, actor_user_id, status, input, updated_at, worker_at)
+           VALUES ($1, '40', 40, $2, '{"text": "x"}',
+                   now() - ($3::int * interval '1 millisecond'),
+                   CASE WHEN $4 THEN now() - ($3::int * interval '1 millisecond') END)`,
+          [id, status, ageMs, worker],
+        );
+
+      it('⭐ 2 daqiqadan eski parsing → failed + «🔁 Qayta urinish»; creating → preview; yangisi tegilmaydi', async () => {
+        await db.query(`DELETE FROM notification_schema.telegram_ai_drafts`);
+        await insert(
+          '00000000-0000-4000-8000-000000000001',
+          'parsing',
+          3 * 60_000,
+          true,
+        );
+        await insert(
+          '00000000-0000-4000-8000-000000000002',
+          'creating',
+          3 * 60_000,
+          true,
+        );
+        await insert(
+          '00000000-0000-4000-8000-000000000003',
+          'parsing',
+          30_000,
+          true,
+        );
+        const parse = jest.fn();
+        const { ai, outboxSend } = makeAi(parse);
+        await ai.tick();
+        await ai.idle();
+        const rows: Array<{ id: string; status: string }> = await db.query(
+          `SELECT id, status FROM notification_schema.telegram_ai_drafts ORDER BY id`,
+        );
+        expect(rows.map((r) => r.status)).toEqual([
+          'failed',
+          'preview',
+          'parsing',
+        ]);
+        const texts = outboxSend.mock.calls.map(([m]) => String(m.text));
+        expect(texts).toContain(AI_STALE_TEXT);
+        // Qotgan qoralama uchun AI QAYTA chaqirilmaydi.
+        expect(parse).not.toHaveBeenCalled();
+      });
+
+      it('⭐ olinmagan qoralamani ishchi BIR marta oladi (ikki replika — bitta AI chaqiruvi)', async () => {
+        await db.query(`DELETE FROM notification_schema.telegram_ai_drafts`);
+        await insert(
+          '00000000-0000-4000-8000-000000000010',
+          'parsing',
+          0,
+          false,
+        );
+        const parse = jest.fn().mockResolvedValue({
+          status: 200,
+          body: { data: { ok: true, orders: [] } },
+        });
+        const a = makeAi(parse);
+        const b = makeAi(parse);
+        await Promise.all([a.ai.tick(), b.ai.tick()]);
+        await Promise.all([a.ai.idle(), b.ai.idle()]);
+        expect(parse).toHaveBeenCalledTimes(1);
+        const [row]: Array<{ status: string }> = await db.query(
+          `SELECT status FROM notification_schema.telegram_ai_drafts`,
+        );
+        expect(row.status).toBe('empty');
+      });
+    });
+
     describe('replikalararo ketma-ketlik (GL2GgtEc #3)', () => {
       it('⭐ ikki "replika" bitta chatning ishini ustma-ust bajarmaydi', async () => {
         const replicaA = new ChatSequencer(db);
@@ -451,6 +560,39 @@ const migration = new TelegramBotCore1716000000120();
         // Ikkinchisi birinchisi tugagandan KEYIN boshlanadi.
         expect(events[1]).toMatch(/:end$/);
         expect(events[0].split(':')[0]).toBe(events[1].split(':')[0]);
+        // (BOT-3b) qulf bo'shatildi — qator qolmaydi.
+        const left: unknown[] = await db.query(
+          `SELECT 1 FROM notification_schema.telegram_chat_locks WHERE chat_id = '900030'`,
+        );
+        expect(left).toEqual([]);
+      });
+
+      it('⭐ BOT-3b: ish davomida qulf DB ulanishini (ochiq tranzaksiyani) USHLAMAYDI', async () => {
+        const sequencer = new ChatSequencer(db);
+        let during: Array<{ n: string }> = [];
+        await sequencer.run('900031', async () => {
+          during = await db.query(
+            `SELECT count(*)::text AS n FROM pg_stat_activity
+              WHERE datname = current_database()
+                AND state = 'idle in transaction'`,
+          );
+          const [row]: Array<{ owner: string }> = await db.query(
+            `SELECT owner FROM notification_schema.telegram_chat_locks WHERE chat_id = '900031'`,
+          );
+          expect(row?.owner).toBeTruthy();
+        });
+        expect(during[0]?.n).toBe('0');
+      });
+
+      it('BOT-3b: egasi yiqilgan qulf muddati o`tgach olinadi', async () => {
+        await db.query(`
+          INSERT INTO notification_schema.telegram_chat_locks (chat_id, owner, lock_until)
+          VALUES ('900032', 'dead-replica', now() - interval '1 second')`);
+        const ran = jest.fn().mockResolvedValue(undefined);
+        await expect(new ChatSequencer(db).run('900032', ran)).resolves.toBe(
+          'done',
+        );
+        expect(ran).toHaveBeenCalledTimes(1);
       });
     });
   },
