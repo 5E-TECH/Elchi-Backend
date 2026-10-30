@@ -27,6 +27,14 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 `POST /integrations/:id/remittances` endi ixtiyoriy `Idempotency-Key` sarlavhasini qabul qiladi. Ayni kalit bilan takror so'rov yangi to'lov ochmaydi, kassaga ikkinchi marta yozmaydi va birinchi to'lovni `idempotent_replay: true` bilan qaytaradi (200). Migratsiya 196. Deploy: integration-service, api-gateway.
 
 → Frontend: to'lov oynasi har ochilganda bitta kalit yaratib yuborsin (tarmoq takrorida ham pul ikki marta yozilmaydi). Hozir UI kalit yubormaydi, ikki marta bosish esa bitta so'rov bilan himoyalangan.
+### 2026-10-30 — 🟢 RMQ requester imzosi (gShYHHGj, P2·B)
+
+Deploy: **barcha servislar** (`libs/common`). Migratsiya **yo'q**, `openapi.json` o'zgarmagan, frontend ishi **yo'q**.
+Yangi env: `RMQ_REQUESTER_SIG_MODE` (`off` sukut, test serverda `log`), `RMQ_REQUESTER_SIG_SECRET`.
+
+Ichki RMQ xabarlaridagi `requester` HMAC bilan imzolanadi. HTTP kontrakti o'zgarmaydi. Faqat `enforce` yoqilgandan keyin
+imzosi yaroqsiz ichki xabar `403 So'rov imzosi yaroqsiz` qaytaradi — oddiy foydalanuvchi oqimida bu chiqmasligi kerak.
+Runbook: [`docs/ops/rmq-service-users.md`](../ops/rmq-service-users.md).
 
 ### 2026-10-30 — Inglizcha xatolar o'zbekchaga: 4xx/5xx matnlari va class-validator (ZDweRm02)
 

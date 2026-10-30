@@ -23,6 +23,7 @@ import {
   initSentry,
   flushSentry,
   registerMetrics,
+  setRmqSignerKind,
 } from '@app/common';
 import { aiParseStageSeconds } from './ai-order/ai-parse-metrics';
 
@@ -38,6 +39,10 @@ async function bootstrap() {
     // re-serialisation could change them.
     { bufferLogs: true, rawBody: true },
   );
+
+  // (gShYHHGj) Shu jarayon yuborgan requester da'volari `gateway` sifatida
+  // imzolanadi; qolgan servislarda sukut — `internal`.
+  setRmqSignerKind('gateway');
   app.enableShutdownHooks();
   // Replace the built-in Nest logger with Pino so every line (incl. ones
   // emitted by Nest internals) goes through the structured pipeline.

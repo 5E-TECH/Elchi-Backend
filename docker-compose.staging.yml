@@ -49,6 +49,10 @@ x-stg-hot-svc-limits: &stg-hot-svc-limits
 x-stg-env: &stg-env
   APP_ENV: staging
   SENTRY_ENVIRONMENT: staging
+  # (gShYHHGj) Requester imzosi test serverda faqat kuzatiladi: imzo yo'q yoki
+  # noto'g'ri bo'lsa ogohlantirish, trafik to'xtamaydi. Prod sukuti — off.
+  # Sir: .env.staging dagi RMQ_REQUESTER_SIG_SECRET (docs/ops/rmq-service-users.md).
+  RMQ_REQUESTER_SIG_MODE: log
 
 services:
   rabbitmq:

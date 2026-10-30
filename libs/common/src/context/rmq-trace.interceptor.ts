@@ -4,13 +4,18 @@ import {
   Injectable,
   NestInterceptor,
 } from '@nestjs/common';
-import { Observable, from } from 'rxjs';
+import { Observable, from, throwError } from 'rxjs';
 import { switchMap } from 'rxjs/operators';
+import {
+  assertRmqRequesterSigConfig,
+  checkRmqRequester,
+} from '../rmq/rmq-requester-signature';
 import { RequestContextStore, requestContext } from './request-context';
 import {
   auditActorFromRmqHeaders,
   auditContextFromRmqHeaders,
   readRmqHeaders,
+  requesterSigFromRmqHeaders,
   traceIdFromRmqHeaders,
 } from './rmq-context.serializer';
 
@@ -28,10 +33,19 @@ import {
  * ularni metadata'ga avtomatik qo'shadi. Trace bo'lmasa (cron/outbox relay)
  * kontekst ochilmaydi — avvalgidek.
  *
+ * gShYHHGj: requester imzosi ham shu yerda tekshiriladi — interceptor har
+ * servisda global (`inheritAppConfig`), ya'ni har handler'ga tegmasdan barcha
+ * RMQ kirishlarini qamrab oladi (`executeAndAck`/`executeIdempotent` siz
+ * handler'lar ham). Pipe va handler'dan OLDIN, `data` hali o'zgarmagan.
+ *
  * No-op for HTTP requests (those are handled by the gateway middleware).
  */
 @Injectable()
 export class RmqTraceInterceptor implements NestInterceptor {
+  constructor() {
+    assertRmqRequesterSigConfig();
+  }
+
   intercept(context: ExecutionContext, next: CallHandler): Observable<unknown> {
     if (context.getType() !== 'rpc') {
       return next.handle();
@@ -39,6 +53,15 @@ export class RmqTraceInterceptor implements NestInterceptor {
 
     const rpc = context.switchToRpc();
     const payload = rpc.getData();
+    const headers = readRmqHeaders(rpc.getContext());
+
+    const rejection = checkRmqRequester(
+      rpc.getContext(),
+      payload,
+      requesterSigFromRmqHeaders(headers),
+    );
+    if (rejection) return throwError(() => rejection);
+
     const payloadTraceId =
       payload && typeof payload === 'object' && !Array.isArray(payload)
         ? typeof payload.trace_id === 'string' && payload.trace_id.length > 0
@@ -46,7 +69,6 @@ export class RmqTraceInterceptor implements NestInterceptor {
           : undefined
         : undefined;
 
-    const headers = readRmqHeaders(rpc.getContext());
     const traceId = payloadTraceId ?? traceIdFromRmqHeaders(headers);
 
     if (!traceId) {
