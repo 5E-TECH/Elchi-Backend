@@ -413,7 +413,11 @@ export class OrderAnalyticsService {
       .andWhere('t.to_status IN (:...statuses)', { statuses })
       .andWhere('(t.action IS NULL OR t.action != :cancelledPostReceived)', {
         cancelledPostReceived: 'cancelled_post_received',
-      });
+      })
+      // T8: holatsiz yozuv (from = to — masalan bekor buyurtmada maxsus belgi
+      // o'zgarishi) qayta bekor deb sanalmaydi.
+      // Ikki ustun alohida enum tiplari — matn sifatida solishtiriladi.
+      .andWhere('t.from_status::text IS DISTINCT FROM t.to_status::text');
 
     if (branchId) {
       query.andWhere(
@@ -1892,6 +1896,8 @@ export class OrderAnalyticsService {
           WHERE o.is_deleted = false
             AND t.to_status::text = ANY($7::text[])
             AND (t.action IS NULL OR t.action != $8)
+            -- T8: from = to (holat o'zgarmagan yozuv) — bekor emas.
+            AND t.from_status::text IS DISTINCT FROM t.to_status::text
             AND t.created_at BETWEEN $9 AND $10
           GROUP BY p.courier_id
        )

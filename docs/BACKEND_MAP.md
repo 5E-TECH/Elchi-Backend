@@ -1023,6 +1023,37 @@ Money (settlement, cashboxes) and tariffs are unchanged. Details: order-service
   `holder_branch_id` / `home_branch_id` is its branch (403, fail-closed).
 - **Delete:** a market deletes only its own NEW orders; a registrator only in
   its branch scope (403).
+- **Special categories (T8, 2026-10-30, migr `1716000000187`):**
+  `orders.special_categories varchar(32)[] NOT NULL DEFAULT '{}'` with a CHECK
+  limited to `fragile, religious_book, liquid, perishable, battery, heavy,
+  documents` (`OrderSpecialCategory` / `ORDER_SPECIAL_CATEGORIES` /
+  `normalizeSpecialCategories` in `libs/common/enums`; canonical order, unknown
+  or duplicate code → 400 «Noma'lum maxsus belgi: <kod>»). Set at create
+  (`POST /orders`, `/orders/external`, ai-confirm per order; `create()` also
+  validates bot/partner payloads, missing → `[]`); a partly-sold cancelled
+  child inherits the parent's set, a replacement order does not. PATCH DTOs
+  do not carry the field (400) and `update_full` ignores it. Changes go only
+  through `PUT /orders/:id/special-categories` → `order.special_categories.set`
+  (`OrderLifecycleService.setSpecialCategories`): same roles as POST /orders;
+  scope in the gateway (market own, market_operator its market — none → 403,
+  REGISTRATOR/MANAGER/BRANCH own branch triple), market ownership re-checked
+  under FOR UPDATE; lock (`libs/common/src/order/order-special-categories.ts`):
+  market side `created`/`new`, staff also `received`, `on the road`,
+  `waiting`, `waiting_customer`, `cancelled`, `cancelled (sent)`; terminal
+  statuses → 409 `SPECIAL_CATEGORIES_LOCKED`. Unchanged set → `changed:false`
+  with no tracking/journal; otherwise `order_tracking` `action:
+  special_categories_changed` (from = to = current status, old/new
+  `{special_categories}`) + activity verb `order.special_categories_changed`.
+  The column is in the scan light view (`ORDER_SCAN_LIGHT_SELECT`), the scan
+  summaries (`order.summary_by_ids` → `ScanOrderSummaryRef`: post `POST-` and
+  batch `BTB-`/`BTR-` scans) and `POST /orders/scan-assign` `data.order`.
+  `updateFull` never writes it (dropped before `save()`, so a stale PATCH read
+  cannot overwrite a concurrent PUT); a partly-sold child takes the set from the
+  row locked by `lockWaitingOrder`. Analytics cancel counts
+  (`historicallyCancelledTrackingQuery`, courier report `canceled`) skip
+  tracking rows with `from_status = to_status` (status-less edits on a
+  cancelled order). Migration: CHECK `NOT VALID`, `lock_timeout` 5 s inside
+  the block.
 - **Read scope (gateway):** `GET /orders/:id` — market own, market_operator own
   market, customer own, courier (`courier_id`/`holder_courier_id`), branch
   staff own branch triple (+ HQ staff: HQ-held), operator/investor 403;

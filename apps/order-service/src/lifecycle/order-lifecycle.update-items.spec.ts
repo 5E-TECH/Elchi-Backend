@@ -288,3 +288,20 @@ describe('52NJNGaH - normalizeUpdatePayload (PATCH /orders/:id/full)', () => {
     ]);
   });
 });
+
+describe('T8 — updateFull maxsus belgilarni yozmaydi', () => {
+  it('save payload`ida special_categories yo`q (parallel PUT bosilmaydi); dto`dagisi ham e`tiborsiz', async () => {
+    const h = setup({ special_categories: ['fragile'] });
+
+    await h.service.updateFull(
+      '1251134',
+      { comment: 'yangi izoh', special_categories: ['heavy'] } as never,
+      requester,
+    );
+
+    expect(h.orderRepo.save).toHaveBeenCalledTimes(1);
+    const saved = h.orderRepo.save.mock.calls[0][0] as Record<string, unknown>;
+    expect(saved).toMatchObject({ comment: 'yangi izoh' });
+    expect(saved).not.toHaveProperty('special_categories');
+  });
+});

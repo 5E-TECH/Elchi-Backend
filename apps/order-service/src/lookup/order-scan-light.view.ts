@@ -17,6 +17,7 @@ import type { Order } from '../entities/order.entity';
  *  - moslashtirish identifikatorlari: `id`, `qr_code_token`, `parent_order_id`,
  *    `customer_id`, `market_id`, `district_id`, `region_id`;
  *  - ekran: holat, yetkazish turi, summa, manzil, izoh, sana, operator;
+ *  - T8: maxsus belgilar (`special_categories`) — ehtiyot bo'lish uchun;
  *  - nomlar: mijoz (ism, telefon, manzil), market nomi, tuman/viloyat nomi,
  *    mahsulot nomi + soni.
  *
@@ -41,6 +42,8 @@ export const ORDER_SCAN_LIGHT_SELECT: FindOptionsSelect<Order> = {
   customer_id: true,
   district_id: true,
   region_id: true,
+  // T8: kuryer/ombor skanda «mo'rt», «suyuqlik» … belgisini ko'radi.
+  special_categories: true,
   items: {
     id: true,
     product_id: true,
@@ -65,6 +68,7 @@ const ORDER_FIELDS = [
   'customer_id',
   'district_id',
   'region_id',
+  'special_categories',
 ] as const;
 
 const ID_NAME = ['id', 'name'] as const;

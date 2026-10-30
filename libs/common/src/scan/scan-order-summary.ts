@@ -19,6 +19,8 @@ export interface ScanOrderSummaryRef {
   region: string | null;
   district: string | null;
   customer: { name: string | null; phone_number: string | null } | null;
+  /** T8: maxsus belgilar (mo'rt, suyuqlik …) — skanda ehtiyot uchun; yo'q — []. */
+  special_categories: string[];
 }
 
 /** order-service `ORDER_SUMMARY_MAX_IDS` — bitta so'rovdagi id chegarasi. */
@@ -38,6 +40,12 @@ const text = (value: unknown): string | null =>
     : typeof value === 'number' && Number.isFinite(value)
       ? String(value)
       : null;
+
+/** Satrlar massivi (boshqa qiymatlar tashlanadi); massiv emas — []. */
+const textList = (value: unknown): string[] =>
+  Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === 'string')
+    : [];
 
 /** `order.summary_by_ids` qatori → skaner xulosasi (`id` siz qator — `null`). */
 export function toScanOrderSummaryRef(
@@ -65,6 +73,7 @@ export function toScanOrderSummaryRef(
       customerName || customerPhone
         ? { name: customerName, phone_number: customerPhone }
         : null,
+    special_categories: textList(row.special_categories),
   };
 }
 

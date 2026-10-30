@@ -155,6 +155,95 @@ export enum Order_status {
 }
 
 /**
+ * T8 (0OUcHZ7R) — buyurtmaning MAXSUS BELGILARI (ehtiyot bo'lish kerak bo'lgan
+ * yuk turi). Bir buyurtmada bir nechtasi bo'lishi mumkin; DB'da
+ * `order_schema.orders.special_categories varchar(32)[]` (CHECK aynan shu
+ * kodlar bilan — 1716000000187). Belgi pulga ham, holatga ham TA'SIR QILMAYDI.
+ */
+export enum OrderSpecialCategory {
+  FRAGILE = 'fragile',
+  RELIGIOUS_BOOK = 'religious_book',
+  LIQUID = 'liquid',
+  PERISHABLE = 'perishable',
+  BATTERY = 'battery',
+  HEAVY = 'heavy',
+  DOCUMENTS = 'documents',
+}
+
+/** Kanonik tartib: API har doim shu tartibda qaytaradi. */
+export const ORDER_SPECIAL_CATEGORIES: readonly OrderSpecialCategory[] =
+  Object.freeze([
+    OrderSpecialCategory.FRAGILE,
+    OrderSpecialCategory.RELIGIOUS_BOOK,
+    OrderSpecialCategory.LIQUID,
+    OrderSpecialCategory.PERISHABLE,
+    OrderSpecialCategory.BATTERY,
+    OrderSpecialCategory.HEAVY,
+    OrderSpecialCategory.DOCUMENTS,
+  ]);
+
+/**
+ * Xato xabaridagi qiymat — `String(raw)` CHAQIRILMAYDI: `{ toString: null }`
+ * kabi obyekt TypeError (500) berardi. Satr 64 belgigacha kesiladi.
+ */
+function describeSpecialCategoryInput(raw: unknown): string {
+  if (typeof raw === 'string') {
+    return raw.length > 64 ? `${raw.slice(0, 64)}…` : raw;
+  }
+  if (
+    typeof raw === 'number' ||
+    typeof raw === 'boolean' ||
+    typeof raw === 'bigint'
+  ) {
+    return String(raw);
+  }
+  return raw === null ? 'null' : typeof raw;
+}
+
+export type NormalizeSpecialCategoriesResult =
+  { ok: true; value: OrderSpecialCategory[] } | { ok: false; message: string };
+
+/**
+ * Kirgan ro'yxatni tekshiradi va kanonik tartibga keltiradi.
+ * `undefined` / `null` → `[]`. Massiv emas, noma'lum kod yoki takror kod →
+ * `ok:false` (chaqiruvchi 400 qaytaradi). DTO'ni chetlab o'tadigan yo'llar
+ * (bot, hamkor API, AI tasdiqlash) ham shu funksiyadan o'tadi.
+ */
+export function normalizeSpecialCategories(
+  input: unknown,
+): NormalizeSpecialCategoriesResult {
+  if (input === undefined || input === null) {
+    return { ok: true, value: [] };
+  }
+  if (!Array.isArray(input)) {
+    return {
+      ok: false,
+      message: "special_categories massiv bo'lishi kerak",
+    };
+  }
+  const seen = new Set<string>();
+  for (const raw of input) {
+    if (
+      typeof raw !== 'string' ||
+      !ORDER_SPECIAL_CATEGORIES.includes(raw as OrderSpecialCategory)
+    ) {
+      return {
+        ok: false,
+        message: `Noma'lum maxsus belgi: ${describeSpecialCategoryInput(raw)}`,
+      };
+    }
+    if (seen.has(raw)) {
+      return { ok: false, message: `Maxsus belgi takrorlangan: ${raw}` };
+    }
+    seen.add(raw);
+  }
+  return {
+    ok: true,
+    value: ORDER_SPECIAL_CATEGORIES.filter((code) => seen.has(code)),
+  };
+}
+
+/**
  * Bekor qilish sababi — YOPIQ ro'yxat (Andijon E2E, PUvKXWVw).
  *
  * Ilgari sabab erkin, ixtiyoriy matn edi va bekor qilishlarni tahlil qilib

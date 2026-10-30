@@ -188,6 +188,8 @@ export class OrderServiceController {
         source?: Order_source;
         /** 6kHnNH9j: `auto` | `hq` (gateway); berilmasa — HQ. */
         fulfillment?: string | null;
+        /** T8: maxsus belgilar (lifecycle `normalizeSpecialCategories`). */
+        special_categories?: string[] | null;
         items?: Array<{
           product_id?: string | null;
           product_name?: string | null;
@@ -1068,6 +1070,26 @@ export class OrderServiceController {
         data.requester,
         data.id,
         data.dto ?? {},
+      ),
+    );
+  }
+
+  /** T8 (0OUcHZ7R): maxsus belgilar — PUT /orders/:id/special-categories. */
+  @MessagePattern({ cmd: 'order.special_categories.set' })
+  setSpecialCategories(
+    @Payload()
+    data: {
+      id: string;
+      special_categories: unknown;
+      requester: { id: string; roles?: string[]; market_id?: string | null };
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.lifecycleService.setSpecialCategories(
+        data.id,
+        data.special_categories,
+        data.requester,
       ),
     );
   }

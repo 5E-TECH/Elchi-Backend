@@ -35,6 +35,7 @@ import {
   type OrderFulfillmentMode,
   Where_deliver,
 } from '@app/common';
+import { OptionalOrderSpecialCategories } from '../order-create/order-special-categories';
 
 /**
  * AI BUYURTMA DTO'LARI — `POST /orders/ai-parse` va `POST /orders/ai-confirm`
@@ -352,6 +353,10 @@ export class AiConfirmOrderDto {
   @IsOptional()
   @IsBoolean({ message: "update_customer_card true yoki false bo'lishi kerak" })
   update_customer_card?: boolean;
+
+  /** T8 (0OUcHZ7R): har buyurtmaga alohida (masalan, faqat 2-siga religious_book). */
+  @OptionalOrderSpecialCategories()
+  special_categories?: string[];
 }
 
 export class AiConfirmRequestDto {

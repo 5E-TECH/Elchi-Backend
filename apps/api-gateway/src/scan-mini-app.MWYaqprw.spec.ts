@@ -124,6 +124,7 @@ describe('MWYaqprw — scan-assign javobida buyurtma xulosasi', () => {
       },
       district: { id: '173', name: 'Andijon shahri' },
       region: { id: '3', name: 'Andijon' },
+      special_categories: ['fragile', 'religious_book'],
     },
   };
 
@@ -138,7 +139,12 @@ describe('MWYaqprw — scan-assign javobida buyurtma xulosasi', () => {
       region: 'Andijon',
       market: 'TEST Market',
       customer: { name: 'TEST Mijoz', phone_number: '+998887009299' },
+      // T8: «O'zimga olish» kartasida maxsus belgilar.
+      special_categories: ['fragile', 'religious_book'],
     });
+    expect(scanOrderSummary({ data: { id: '1' } })?.special_categories).toEqual(
+      [],
+    );
     expect(scanOrderSummary({ data: { foo: 1 } })).toBeNull();
   });
 

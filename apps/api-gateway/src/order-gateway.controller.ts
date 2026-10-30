@@ -16,6 +16,7 @@ import {
   Param,
   Patch,
   Post,
+  Put,
   Query,
   Req,
   Res,
@@ -108,6 +109,7 @@ import {
   CancelOrderRequestDto,
   UpdateOrderByIdRequestDto,
 } from './dto/order.swagger.dto';
+import { SetOrderSpecialCategoriesRequestDto } from './order-create/order-special-categories';
 import {
   AI_IMAGE_RAW_MAX_BYTES,
   AI_IMAGES_TOTAL_MAX_BYTES,
@@ -1861,6 +1863,10 @@ export class OrderGatewayController {
       // txmkXVBa: «Kartani ham yangilash» (berilmasa — karta o'zgarmaydi).
       ...(order.update_customer_card === true
         ? { update_customer_card: true }
+        : {}),
+      // T8: maxsus belgilar har buyurtmaga ALOHIDA (partiyadagi boshqasiga o'tmaydi).
+      ...(order.special_categories
+        ? { special_categories: order.special_categories }
         : {}),
       district_id: item.districtId,
       region_id: item.regionId,
@@ -6327,7 +6333,7 @@ export class OrderGatewayController {
   @ApiBearerAuth()
   @ApiOperation({
     summary:
-      "Scan QR and assign order to current courier. MWYaqprw: muvaffaqiyatli javobda `data.order` — { id, order_number, status, total_price, address, district, region, market, customer: { name, phone_number } } (skaner ekrani uchun; olinmasa maydon bo'lmaydi, skan baribir o'tgan).",
+      "Scan QR and assign order to current courier. MWYaqprw: muvaffaqiyatli javobda `data.order` — { id, order_number, status, total_price, address, district, region, market, customer: { name, phone_number }, special_categories (T8) } (skaner ekrani uchun; olinmasa maydon bo'lmaydi, skan baribir o'tgan).",
   })
   @ApiBody({ type: ScanAssignOrderRequestDto })
   async scanAssignOrder(
@@ -6910,6 +6916,96 @@ export class OrderGatewayController {
       throw error;
     }); // T7 (B3): javobdagi to'liq buyurtma — menejerga operator telefonlarisiz.
     return projectOrderContactsForRoles(req.user.roles, response);
+  }
+
+  /**
+   * T8 (0OUcHZ7R) — maxsus belgilarni o'zgartirish. Rollar — POST /orders
+   * bilan AYNI. Doira shu yerda: market — o'z buyurtmasi, market operatori —
+   * biriktirilgan market (yo'q — 403), filial xodimi — o'z filiali; holat
+   * qulfi va market egaligi (himoya chuqurligi) order-service'da FOR UPDATE
+   * ostida. PATCH /orders/:id bu maydonni qabul qilmaydi (400).
+   */
+  @Put(':id/special-categories')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(
+    RoleEnum.SUPERADMIN,
+    RoleEnum.ADMIN,
+    RoleEnum.REGISTRATOR,
+    RoleEnum.MARKET,
+    RoleEnum.MANAGER,
+    RoleEnum.BRANCH,
+    RoleEnum.MARKET_OPERATOR,
+  )
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: "Buyurtmaning maxsus belgilarini o'zgartirish (T8)",
+    description:
+      "Yangi TO'LIQ to'plam yuboriladi (`[]` — hammasini olib tashlash); javobda kanonik tartibda. " +
+      'Market / market operatori — faqat `created`, `new`; xodimlar — yana `received`, `on the road`, `waiting`, ' +
+      '`waiting_customer`, `cancelled`, `cancelled (sent)`. Yakunlangan buyurtma (sold, paid, partly_paid, closed, ' +
+      'returned_to_market) — hech kim: 409 `SPECIAL_CATEGORIES_LOCKED`. To`plam o`zgarmasa — `changed: false` ' +
+      "(tarixga yozilmaydi). Begona buyurtma — 403, yo'q/o'chirilgan — 404, noma'lum/takror kod — 400.",
+  })
+  @ApiParam({ name: 'id', description: 'Order ID (bigint)' })
+  @ApiBody({ type: SetOrderSpecialCategoriesRequestDto })
+  @ApiOkResponse({
+    description:
+      "{ statusCode: 200, message: 'success', data: { id, special_categories, changed } }",
+  })
+  @ApiConflictResponse({
+    description:
+      "SPECIAL_CATEGORIES_LOCKED — bu holatda maxsus belgini o'zgartirib bo'lmaydi",
+  })
+  async setSpecialCategories(
+    @Param('id') id: string,
+    @Body() dto: SetOrderSpecialCategoriesRequestDto,
+    @Req() req: { user: JwtUser },
+  ) {
+    const roles = this.normalizeRoles(req.user.roles);
+    const isSystemPrivileged =
+      roles.includes(RoleEnum.SUPERADMIN) || roles.includes(RoleEnum.ADMIN);
+    let marketId: string | null = null;
+    if (!isSystemPrivileged && roles.includes(RoleEnum.MARKET)) {
+      marketId = String(req.user.sub ?? '').trim();
+    } else if (
+      !isSystemPrivileged &&
+      roles.includes(RoleEnum.MARKET_OPERATOR)
+    ) {
+      marketId = await this.resolveMarketOperatorMarketId(req.user);
+      if (!marketId) {
+        throw new ForbiddenException(
+          'Market operatori hech qaysi marketga biriktirilmagan',
+        );
+      }
+    } else if (!isSystemPrivileged) {
+      await this.assertOrderInRequesterBranch(
+        req.user,
+        id,
+        "Bu buyurtma sizning filialingizga tegishli emas — uni o'zgartira olmaysiz",
+      );
+    }
+
+    return firstValueFrom(
+      this.orderClient
+        .send<unknown>(
+          { cmd: 'order.special_categories.set' },
+          {
+            id,
+            special_categories: dto.special_categories,
+            requester: {
+              id: req.user.sub,
+              roles,
+              ...(marketId ? { market_id: marketId } : {}),
+            },
+          },
+        )
+        .pipe(timeout(8000)),
+    ).catch((error: unknown) => {
+      if (error instanceof TimeoutError) {
+        throw new GatewayTimeoutException('Order service response timeout');
+      }
+      throw error;
+    });
   }
 
   // Full order edit (money/status fields) — SUPERADMIN/ADMIN/REGISTRATOR only

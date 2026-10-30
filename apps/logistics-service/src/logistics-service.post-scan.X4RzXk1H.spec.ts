@@ -44,6 +44,7 @@ const SUMMARIES: Record<string, Record<string, unknown>> = {
     customer_phone: '+998907654321',
     region_name: 'Buxoro viloyati',
     district_name: 'Kogon tumani',
+    special_categories: ['heavy'],
   },
 };
 
@@ -57,6 +58,7 @@ const ORDERS: OrderRowLike[] = [
     total_price: 65000,
     branch_id: '1',
     market_tariff: 20000,
+    special_categories: ['fragile', 'battery'],
   },
   {
     id: '701',
@@ -300,6 +302,8 @@ describe('dwJX3NjT (S2) — pochta skani mazmuni', () => {
         customer: { name: 'Ali Valiyev', phone_number: '+998901234567' },
         region: 'Buxoro viloyati',
         district: 'Buxoro tumani',
+        // T8: pochta skanida maxsus belgilar (buyurtma qatoridan).
+        special_categories: ['fragile', 'battery'],
       },
       {
         id: '701',
@@ -310,6 +314,8 @@ describe('dwJX3NjT (S2) — pochta skani mazmuni', () => {
         customer: { name: 'Vali Aliyev', phone_number: '+998907654321' },
         region: 'Buxoro viloyati',
         district: 'Kogon tumani',
+        // Qatorda ustun yo'q — xulosadan.
+        special_categories: ['heavy'],
       },
     ]);
     // Xom buyurtma qatori (tariflar) javobga chiqmaydi.
@@ -340,8 +346,13 @@ describe('dwJX3NjT (S2) — pochta skani mazmuni', () => {
         total_price: 65000,
         customer: null,
         order_number: null,
+        special_categories: ['fragile', 'battery'],
       }),
-      expect.objectContaining({ id: '701', customer: null }),
+      expect.objectContaining({
+        id: '701',
+        customer: null,
+        special_categories: [],
+      }),
     ]);
   });
 

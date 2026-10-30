@@ -17,6 +17,8 @@ export interface ScanOrderSummary {
   region: string | null;
   market: string | null;
   customer: { name: string | null; phone_number: string | null } | null;
+  /** T8: maxsus belgilar (mo'rt, suyuqlik …); yo'q / massiv emas — []. */
+  special_categories: string[];
 }
 
 type Row = Record<string, unknown>;
@@ -65,5 +67,10 @@ export function scanOrderSummary(payload: unknown): ScanOrderSummary | null {
           phone_number: text(customer.phone_number),
         }
       : null,
+    special_categories: Array.isArray(order.special_categories)
+      ? order.special_categories.filter(
+          (code): code is string => typeof code === 'string',
+        )
+      : [],
   };
 }
