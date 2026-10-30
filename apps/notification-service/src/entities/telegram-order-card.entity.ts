@@ -16,8 +16,13 @@ export class TelegramOrderCard {
   @PrimaryColumn({ type: 'varchar', length: 64 })
   chat_id!: string;
 
-  @Column({ type: 'bigint' })
-  message_id!: string;
+  /**
+   * NULL — guruh kartasi «yuborilmoqda» (BOT-3 #4, migratsiya 1716000000191):
+   * joy band qilingan, xabar hali outbox navbatida; yuborilgach outbox o'zi
+   * yozadi.
+   */
+  @Column({ type: 'bigint', nullable: true })
+  message_id!: string | null;
 
   @Column({ type: 'varchar', length: 16 })
   kind!: string;

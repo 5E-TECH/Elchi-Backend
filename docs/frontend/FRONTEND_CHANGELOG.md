@@ -21,6 +21,14 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 ## Yozuvlar
 
+### 2026-10-30 — BOT-3: Telegram karta tranzaksiyadan tashqarida, kechikkan karta tahrirlanadi
+
+Deploy: **notification-service** (docker-compose.prod.yml: `DB_POOL_MAX=20`). Migratsiya **`1716000000191`**
+(`telegram_order_cards.message_id` NULL bo'lishi mumkin, `telegram_outbox.card_order_id`).
+
+- [2026-10-30] 🟢 [notification] — market guruhi kartasi Telegram 429 bilan kechiksa ham keyingi holatlarda yangilanadi,
+  ikkinchi karta yuborilmaydi. API o'zgarmagan. → FE o'zgarishi shart emas.
+
 ### 2026-10-30 — T8: buyurtmaning maxsus belgilari (mo'rt, diniy kitob, suyuqlik …) (0OUcHZ7R)
 
 Deploy: **order-service + api-gateway** (+ libs/common). Migratsiya **`1716000000187`**

@@ -452,6 +452,11 @@ services:
       context: .
       dockerfile: apps/notification-service/Dockerfile
     env_file: .env.production
+    # BOT-3: bot (chat qulfi, AI ishchisi, karta sinxroni, outbox) va
+    # dispatch bir pool'da — sukut 10 tor edi. Budjet: order 20 + finance 20 +
+    # notification 20 + qolganlar ~10 — max_connections=200 dan ancha past.
+    environment:
+      DB_POOL_MAX: '20'
     depends_on:
       rabbitmq:
         condition: service_healthy

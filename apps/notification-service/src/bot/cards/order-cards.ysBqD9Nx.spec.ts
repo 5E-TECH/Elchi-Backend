@@ -121,37 +121,85 @@ function makeSync(
       cards.set(`${row.order_id}:${row.chat_id}`, row);
       return Promise.resolve();
     }),
-    update: jest.fn(() => Promise.resolve()),
+    update: jest.fn(
+      (
+        where: { order_id: string; chat_id: string },
+        patch: Partial<TelegramOrderCard>,
+      ) => {
+        const row = cards.get(`${where.order_id}:${where.chat_id}`);
+        if (row) Object.assign(row, patch);
+        return Promise.resolve();
+      },
+    ),
   };
   const chatRepo = {
     find: jest.fn(() => Promise.resolve(options.groups ?? [])),
   };
   const queries: string[] = [];
+  /**
+   * (BOT-3 #4) Tranzaksiyada faqat qulf + band qilish (`INSERT … message_id
+   * NULL … ON CONFLICT DO NOTHING`); tarmoq — tashqarida (`dataSource`).
+   */
+  let inTransaction = false;
+  const sqlQuery = jest.fn((sql: string, params: unknown[] = []) => {
+    queries.push(sql);
+    if (/INSERT INTO "notification_schema"."telegram_order_cards"/.test(sql)) {
+      const [orderId, chatId] = params as [string, string];
+      const key = `${orderId}:${chatId}`;
+      if (cards.has(key)) return Promise.resolve([]);
+      cards.set(key, {
+        order_id: orderId,
+        chat_id: chatId,
+        message_id: null,
+        kind: 'group',
+      });
+      return Promise.resolve([{ chat_id: chatId }]);
+    }
+    if (/DELETE FROM "notification_schema"."telegram_order_cards"/.test(sql)) {
+      const [orderId, chatId] = params as [string, string];
+      const key = `${orderId}:${chatId}`;
+      if (cards.get(key)?.message_id == null) cards.delete(key);
+      return Promise.resolve([[], 1]);
+    }
+    return Promise.resolve([]);
+  });
   const manager = {
-    query: jest.fn((sql: string) => {
-      queries.push(sql);
-      return Promise.resolve([]);
-    }),
+    query: sqlQuery,
     getRepository: (entity: unknown) =>
       entity === TelegramOrderCard ? cardRepo : chatRepo,
   };
   const dataSource = {
-    transaction: (work: (m: unknown) => Promise<unknown>) => work(manager),
+    transaction: async (work: (m: unknown) => Promise<unknown>) => {
+      inTransaction = true;
+      try {
+        return await work(manager);
+      } finally {
+        inTransaction = false;
+      }
+    },
+    query: sqlQuery,
+    getRepository: (entity: unknown) =>
+      entity === TelegramOrderCard ? cardRepo : chatRepo,
   };
   let seq = 900;
+  const networkInTransaction: string[] = [];
   const outbox = {
     send:
       options.send ??
-      jest.fn(() =>
-        Promise.resolve({
+      jest.fn(() => {
+        if (inTransaction) networkInTransaction.push('send');
+        return Promise.resolve({
           id: '1',
           status: 'sent',
           result: { message_id: ++seq },
-        }),
-      ),
+        });
+      }),
   };
   const transport = {
-    editMessage: jest.fn(() => Promise.resolve(true)),
+    editMessage: jest.fn(() => {
+      if (inTransaction) networkInTransaction.push('edit');
+      return Promise.resolve(true);
+    }),
     describe: (error: unknown) =>
       error instanceof Error ? error.message : String(error),
   };
@@ -181,6 +229,7 @@ function makeSync(
     courier,
     activityLog,
     queries,
+    networkInTransaction,
   };
 }
 
@@ -540,5 +589,61 @@ describe('h9newLsd #5 — CourierService.refreshCardForChat', () => {
       'skipped',
     );
     expect(env.transport.editMessage).not.toHaveBeenCalled();
+  });
+
+  describe('BOT-3 #4 — tarmoq tranzaksiyadan tashqarida, kechikkan karta', () => {
+    const creationEvent = {
+      order_id: '81',
+      from_status: 'created',
+      to_status: 'new',
+      market_id: '5',
+    };
+
+    it('⭐ yaratish va tahrir — Telegram chaqiruvi tranzaksiya ICHIDA emas', async () => {
+      const env = makeSync({
+        groups: [{ chat_id: '-1001' }],
+        cards: [
+          { order_id: '81', chat_id: '-1009', message_id: '5', kind: 'group' },
+        ],
+      });
+      const result = await env.service.sync(creationEvent);
+      expect(result.sent).toBe(1);
+      expect(env.networkInTransaction).toEqual([]);
+      // band qilish qatori message_id bilan to'ldirildi
+      expect(env.cards.get('81:-1001')).toEqual(
+        expect.objectContaining({ message_id: '901' }),
+      );
+    });
+
+    it('⭐ 429 (navbatda) — band qilish qoladi, takror hodisada ikkinchi karta yo`q, tahrir ham yo`q', async () => {
+      const send = jest.fn(() =>
+        Promise.resolve({ id: '7', status: 'queued', result: null }),
+      );
+      const env = makeSync({ groups: [{ chat_id: '-1001' }], send });
+      await env.service.sync(creationEvent);
+      expect(env.cards.get('81:-1001')).toEqual(
+        expect.objectContaining({ message_id: null }),
+      );
+      expect(send).toHaveBeenCalledWith(
+        expect.objectContaining({ cardOrderId: '81' }),
+      );
+      await env.service.sync(creationEvent);
+      await env.service.sync({
+        order_id: '81',
+        from_status: 'new',
+        to_status: 'received',
+      });
+      expect(send).toHaveBeenCalledTimes(1);
+      expect(env.transport.editMessage).not.toHaveBeenCalled();
+    });
+
+    it('yuborib bo`lmadi (dead / xato) — band qilish bo`shatiladi', async () => {
+      const send = jest.fn(() =>
+        Promise.resolve({ id: '7', status: 'dead', error: 'blocked' }),
+      );
+      const env = makeSync({ groups: [{ chat_id: '-1001' }], send });
+      await env.service.sync(creationEvent);
+      expect(env.cards.has('81:-1001')).toBe(false);
+    });
   });
 });

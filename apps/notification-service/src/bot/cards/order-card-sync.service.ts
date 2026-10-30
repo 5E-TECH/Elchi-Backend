@@ -1,7 +1,7 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { ClientProxy } from '@nestjs/microservices';
-import { DataSource, EntityManager, In } from 'typeorm';
+import { DataSource, In } from 'typeorm';
 import { ActivityLogService, rmqSend } from '@app/common';
 import { TelegramChat } from '../../entities/telegram-chat.entity';
 import { TelegramOrderCard } from '../../entities/telegram-order-card.entity';
@@ -82,20 +82,22 @@ export class OrderCardSyncService {
       CREATION_STATUSES.has(toStatus) &&
       (!fromStatus || fromStatus === 'created');
 
-    await this.dataSource.transaction(async (manager) => {
+    /**
+     * (BOT-3 #4) Tranzaksiya FAQAT qisqa: buyurtma bo'yicha qulf, kartalarni
+     * o'qish va yangi guruh kartasi uchun JOY BAND QILISH (`message_id`
+     * NULL qator — har guruhga bitta karta kafolati). Telegram'ga chiqish
+     * va order-service RPC tranzaksiyadan TASHQARIDA — ulanish va qulf
+     * tarmoqni kutib turmaydi.
+     */
+    const claimed: TelegramChat[] = [];
+    const cards = await this.dataSource.transaction(async (manager) => {
       await manager.query('SELECT pg_advisory_xact_lock($1, hashtext($2))', [
         CARD_LOCK_NS,
         orderId,
       ]);
-      const cards = await manager
+      const rows = await manager
         .getRepository(TelegramOrderCard)
         .find({ where: { order_id: orderId } });
-      let data: GroupCardData | null | undefined;
-      const card = async () => {
-        if (data === undefined) data = await this.fetchCard(orderId);
-        return data;
-      };
-
       if (creation && /^\d{1,20}$/.test(marketId)) {
         const groups = await manager.getRepository(TelegramChat).find({
           where: {
@@ -106,53 +108,77 @@ export class OrderCardSyncService {
             chat_type: In(['group', 'channel']),
           },
         });
-        const known = new Set(cards.map((row) => row.chat_id));
+        const known = new Set(rows.map((row) => row.chat_id));
         for (const group of groups) {
           if (known.has(group.chat_id)) continue;
           known.add(group.chat_id);
-          const current = await card();
-          if (!current) break;
-          if (await this.sendGroupCard(manager, group, current))
-            result.sent += 1;
-        }
-      }
-
-      for (const row of cards) {
-        try {
-          if (row.kind === 'group') {
-            const current = await card();
-            if (!current) continue;
-            await this.transport.editMessage(row.chat_id, row.message_id, {
-              text: groupCardText(current),
-              parse_mode: 'HTML',
-              reply_markup: {
-                inline_keyboard: groupCardKeyboard(this.cabinetUrl, orderId),
-              },
-            });
-            await manager
-              .getRepository(TelegramOrderCard)
-              .update(
-                { order_id: orderId, chat_id: row.chat_id },
-                { status: current.status, updated_at: new Date() },
-              );
-            await this.audit(orderId, row.chat_id, current, 'edited');
-            result.edited += 1;
-          } else if (row.kind === 'courier') {
-            const outcome = await this.courier.refreshCardForChat(
-              row.chat_id,
-              orderId,
-              row.actor_user_id ? String(row.actor_user_id) : null,
-            );
-            if (outcome === 'edited') result.edited += 1;
-            if (outcome === 'revoked') result.revoked += 1;
-          }
-        } catch (error) {
-          this.logger.warn(
-            `karta #${orderId} (${row.kind}, chat ${row.chat_id}) yangilanmadi: ${this.transport.describe(error)}`,
+          const inserted: unknown = await manager.query(
+            `INSERT INTO "notification_schema"."telegram_order_cards"
+                    ("order_id", "chat_id", "message_id", "kind", "updated_at")
+             VALUES ($1, $2, NULL, 'group', now())
+             ON CONFLICT ("order_id", "chat_id") DO NOTHING
+             RETURNING "chat_id"`,
+            [orderId, group.chat_id],
           );
+          if (Array.isArray(inserted) && inserted.length) claimed.push(group);
         }
       }
+      return rows;
     });
+
+    let data: GroupCardData | null | undefined;
+    const card = async () => {
+      if (data === undefined) data = await this.fetchCard(orderId);
+      return data;
+    };
+
+    for (const group of claimed) {
+      const current = await card();
+      if (!current) {
+        await this.releaseClaim(orderId, group.chat_id);
+        continue;
+      }
+      if (await this.sendGroupCard(group, current)) result.sent += 1;
+    }
+
+    for (const row of cards) {
+      try {
+        if (row.kind === 'group') {
+          // Hali yuborilmagan (outbox navbatida) — yuborilgach outbox
+          // message_id ni yozadi, keyingi hodisa tahrirlaydi.
+          if (!row.message_id) continue;
+          const current = await card();
+          if (!current) continue;
+          await this.transport.editMessage(row.chat_id, row.message_id, {
+            text: groupCardText(current),
+            parse_mode: 'HTML',
+            reply_markup: {
+              inline_keyboard: groupCardKeyboard(this.cabinetUrl, orderId),
+            },
+          });
+          await this.dataSource
+            .getRepository(TelegramOrderCard)
+            .update(
+              { order_id: orderId, chat_id: row.chat_id },
+              { status: current.status, updated_at: new Date() },
+            );
+          await this.audit(orderId, row.chat_id, current, 'edited');
+          result.edited += 1;
+        } else if (row.kind === 'courier') {
+          const outcome = await this.courier.refreshCardForChat(
+            row.chat_id,
+            orderId,
+            row.actor_user_id ? String(row.actor_user_id) : null,
+          );
+          if (outcome === 'edited') result.edited += 1;
+          if (outcome === 'revoked') result.revoked += 1;
+        }
+      } catch (error) {
+        this.logger.warn(
+          `karta #${orderId} (${row.kind}, chat ${row.chat_id}) yangilanmadi: ${this.transport.describe(error)}`,
+        );
+      }
+    }
     return result;
   }
 
@@ -175,8 +201,12 @@ export class OrderCardSyncService {
     }
   }
 
+  /**
+   * Guruhga karta (band qilingan joyga). Darhol yuborilsa — `message_id`
+   * shu yerda yoziladi; navbatga tushsa (429/5xx) — outbox yuborganda O'ZI
+   * yozadi (`card_order_id`); yuborib bo'lmasa — band qilish bo'shatiladi.
+   */
   private async sendGroupCard(
-    manager: EntityManager,
     group: TelegramChat,
     data: GroupCardData,
   ): Promise<boolean> {
@@ -189,21 +219,27 @@ export class OrderCardSyncService {
           inline_keyboard: groupCardKeyboard(this.cabinetUrl, data.id),
         },
         source: 'bot.group_card',
+        cardOrderId: data.id,
       });
       const messageId = sent.result?.message_id;
       if (sent.status === 'sent' && messageId) {
-        await manager.getRepository(TelegramOrderCard).upsert(
+        await this.dataSource.getRepository(TelegramOrderCard).update(
+          { order_id: data.id, chat_id: group.chat_id },
           {
-            order_id: data.id,
-            chat_id: group.chat_id,
             message_id: String(messageId),
-            kind: 'group',
-            actor_user_id: null,
             status: data.status,
             updated_at: new Date(),
           },
-          ['order_id', 'chat_id'],
         );
+      } else if (sent.status === 'queued') {
+        await this.dataSource
+          .getRepository(TelegramOrderCard)
+          .update(
+            { order_id: data.id, chat_id: group.chat_id },
+            { status: data.status, updated_at: new Date() },
+          );
+      } else {
+        await this.releaseClaim(data.id, group.chat_id);
       }
       await this.audit(data.id, group.chat_id, data, 'sent', sent.status);
       return sent.status === 'sent' || sent.status === 'queued';
@@ -213,8 +249,20 @@ export class OrderCardSyncService {
       this.logger.warn(
         `guruh kartasi #${data.id} (chat ${group.chat_id}) yuborilmadi: ${this.transport.describe(error)}`,
       );
+      await this.releaseClaim(data.id, group.chat_id);
       return false;
     }
+  }
+
+  /** Yuborilmagan band qilish qatorini bo'shatadi (keyingi hodisa qayta urinadi). */
+  private async releaseClaim(orderId: string, chatId: string): Promise<void> {
+    await this.dataSource
+      .query(
+        `DELETE FROM "notification_schema"."telegram_order_cards"
+          WHERE "order_id" = $1 AND "chat_id" = $2 AND "message_id" IS NULL`,
+        [orderId, chatId],
+      )
+      .catch(() => undefined);
   }
 
   private async audit(

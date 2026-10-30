@@ -2,6 +2,8 @@ import { Logger } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import { TelegramBotCore1716000000120 } from '../../../../migrations/1716000000120-TelegramBotCore';
 import { TelegramMarketInactiveReason1716000000150 } from '../../../../migrations/1716000000150-TelegramMarketInactiveReason';
+import { TelegramOrderCards1716000000122 } from '../../../../migrations/1716000000122-TelegramOrderCards';
+import { TelegramOrderCardsPending1716000000191 } from '../../../../migrations/1716000000191-TelegramOrderCardsPending';
 import { TelegramBotAction } from '../entities/telegram-bot-action.entity';
 import { TelegramMarket } from '../entities/telegram-market.entity';
 import { TelegramOutbox } from '../entities/telegram-outbox.entity';
@@ -107,6 +109,10 @@ const migration = new TelegramBotCore1716000000120();
       const reasonRunner = db.createQueryRunner();
       try {
         await new TelegramMarketInactiveReason1716000000150().up(reasonRunner);
+        // (BOT-3 #4) karta band qilish + outbox.card_order_id (ikki marta).
+        await new TelegramOrderCards1716000000122().up(reasonRunner);
+        await new TelegramOrderCardsPending1716000000191().up(reasonRunner);
+        await new TelegramOrderCardsPending1716000000191().up(reasonRunner);
       } finally {
         await reasonRunner.release();
       }
@@ -329,6 +335,17 @@ const migration = new TelegramBotCore1716000000120();
     });
 
     describe('telegram_outbox worker (9HIaV80X #3)', () => {
+      // 120-migratsiyaning down→up testi telegram_outbox ni qayta yaratadi —
+      // BOT-3 #4 ustuni (card_order_id) qayta qo'shiladi.
+      beforeAll(async () => {
+        const runner = db.createQueryRunner();
+        try {
+          await new TelegramOrderCardsPending1716000000191().up(runner);
+        } finally {
+          await runner.release();
+        }
+      });
+
       it('⭐ 429 → pending (retry_count++), worker keyin yuboradi → sent', async () => {
         await db.query(`DELETE FROM notification_schema.telegram_outbox`);
         const fetchMock = makeFetch();
@@ -375,6 +392,50 @@ const migration = new TelegramBotCore1716000000120();
         );
         expect(row.status).toBe('sent');
         expect(fetchMock).toHaveBeenCalledTimes(2);
+      });
+
+      it('⭐ BOT-3 #4: navbatga tushgan guruh kartasi keyin yuborilsa — message_id kartaga yoziladi', async () => {
+        await db.query(`DELETE FROM notification_schema.telegram_outbox`);
+        await db.query(`
+          INSERT INTO notification_schema.telegram_order_cards
+            (order_id, chat_id, message_id, kind)
+          VALUES (81, '-100555', NULL, 'group')`);
+        const fetchMock = makeFetch();
+        fetchMock.mockResolvedValueOnce(
+          telegramResponse(429, {
+            ok: false,
+            description: 'Too Many Requests: retry after 1',
+            parameters: { retry_after: 1 },
+          }),
+        );
+        const env = {
+          TELEGRAM_BOT_TOKEN: '1234567890:ENV_TOKEN_aaaaaaaaaaaaaaaaaaaaaaaaa',
+        };
+        const outbox = new BotOutboxService(
+          db.getRepository(TelegramOutbox),
+          makeTransport(fetchMock, env),
+          makeChannels() as never,
+          {
+            get: (key: string) => (env as Record<string, unknown>)[key],
+          } as never,
+        );
+        const first = await outbox.send({
+          chatId: '-100555',
+          text: 'karta',
+          source: 'bot.group_card',
+          cardOrderId: '81',
+        });
+        expect(first.status).toBe('queued');
+        await db.query(
+          `UPDATE notification_schema.telegram_outbox SET next_attempt_at = now()`,
+        );
+        fetchMock.mockResolvedValueOnce(okResponse());
+        expect(await outbox.processDue()).toBe(1);
+        const [card]: Array<{ message_id: string | null }> = await db.query(
+          `SELECT message_id FROM notification_schema.telegram_order_cards
+            WHERE order_id = 81 AND chat_id = '-100555'`,
+        );
+        expect(card.message_id).not.toBeNull();
       });
     });
 
