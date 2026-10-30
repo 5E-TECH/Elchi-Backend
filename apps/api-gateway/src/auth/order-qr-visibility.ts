@@ -64,3 +64,36 @@ export function assertQrOrderVisible(
     throw new ForbiddenException("Bu buyurtmani ko'rishga ruxsat yo'q");
   }
 }
+
+/**
+ * Sm3LZ6EN — qop QR'i (`GET /scan/:token`) doirasi. `GET /orders/external` ga
+ * gateway beradigan market/filial bilan AYNI, shuning uchun skandagi son
+ * ro'yxatdagi son bilan bir xil chiqadi.
+ *
+ * Market — faqat o'zi (`assertQrOrderVisible` bilan ayni tekshiruv). Filial
+ * xodimining filiali JWT'dan: RMQ yo'q, chunki bu yo'l har kamera skanida
+ * ishlaydi. JWT'da filial bo'lmasa son doirasiz — xodim shu qop a'zolarini
+ * javobning o'zida ko'radi, ya'ni yangi ma'lumot ochilmaydi.
+ */
+export function qrBatchScope(
+  user:
+    { sub?: string; roles?: string[]; branch_id?: string | null } | undefined,
+): { market_id?: string; branch_id?: string } {
+  const roles = normalizeRoles(user?.roles);
+  if (roles.includes(RoleEnum.SUPERADMIN) || roles.includes(RoleEnum.ADMIN)) {
+    return {};
+  }
+  if (roles.includes(RoleEnum.MARKET)) {
+    const sub = String(user?.sub ?? '').trim();
+    if (!sub) {
+      throw new ForbiddenException("Bu buyurtmani ko'rishga ruxsat yo'q");
+    }
+    return { market_id: sub };
+  }
+  const branchId = String(user?.branch_id ?? '').trim();
+  const isBranchStaff =
+    roles.includes(RoleEnum.BRANCH) ||
+    roles.includes(RoleEnum.MANAGER) ||
+    roles.includes(RoleEnum.REGISTRATOR);
+  return isBranchStaff && branchId ? { branch_id: branchId } : {};
+}

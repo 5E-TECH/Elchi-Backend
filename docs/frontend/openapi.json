@@ -3385,6 +3385,7 @@
     },
     "/orders/external/receive-by-scan": {
       "post": {
+        "description": "Sm3LZ6EN: qop QR'i skanerlansa javobda `data.batch` `{external_batch_token, size, received_count, pending_count, scanned_count}` (qabuldan keyingi holat; `scanned_count` — shu so'rovda qabul qilinganlari, `received_count` ichida) va `data.batches` (shu shakl, har qop uchun). Bir so'rovda bir necha qop bo'lsa `batch: null`. Qop skanlanmagan yoki son olinmagan bo'lsa `batch: null`, `batches: []`. Filial doirasi — so'rovchi filiali. Keldi = `received_count + pending_count`.",
         "operationId": "OrderGatewayController_receiveExternalByScan",
         "parameters": [],
         "requestBody": {
@@ -3482,6 +3483,7 @@
     },
     "/orders/external": {
       "get": {
+        "description": "Sm3LZ6EN: `meta.batches` — sahifada uchragan har qop (`external_batch_token` bor qatorlar) uchun `{external_batch_token, external_batch_ref, external_batch_size, received_count, pending_count}`. Sonlar BUTUN qop bo'yicha: sahifa, `status` va sana bilan kesilmaydi, o'chirilganlar kirmaydi. Doira ro'yxat bilan bir xil: market — o'zi, menejer/registrator — o'z filiali, `market_id` filtri ham qo'llanadi. `received_count` — qabul qilingan a'zolar (qabuldan oldin bekor qilingani kirmaydi), `pending_count` — hali `new`. Keldi = `received_count + pending_count`; `external_batch_size` — hamkor aytgan son, ikkisi farq qilsa qop chala.",
         "operationId": "OrderGatewayController_findAllExternal",
         "parameters": [
           {
@@ -18705,7 +18707,7 @@
     },
     "/scan/{token}": {
       "get": {
-        "description": "Prefiks bo'yicha: `BTB-`/`BTR-` → paket (`type: batch`), `POST-` (logistics haqiqiy shakli) / `PST-` → pochta (`type: post`), qolgani → buyurtma (404 bo'lsa tashqi qop). j8hdXE1o: paketni jo'natuvchi YOKI qabul qiluvchi filial xodimi ko'radi (`GET /transfer-batches/:id` bilan bir xil). dwJX3NjT: paket javobida qo'shimcha `source_branch` / `destination_branch` `{id, name}`, `region` `{id, name}` va `items[].order` — buyurtma xulosasi `{id, order_number, status, total_price, region, district, customer {name, phone_number}}` (xulosa xizmati javob bermasa `null`). X4RzXk1H: pochta — faqat superadmin/admin/branch/manager/registrator/courier (boshqalar 403) va `GET /post/orders/:id` doirasi (filial xodimi — o'z filiali, kuryer — o'z pochtasi); javob `GET /post/scan/:id` bilan bir xil: pochta qatori + `region`, `courier`, `orders[]`. T7 (QPq2C1co): har buyurtma qatorida `problem_contacts: [{name, phone, source: 'logist'|'support'}]` («Muammo bo'lsa», ≤ 2); `operator_phone`, `secondary_operator_phone`, `market.phone_number` menejer/filial/kuryerga YO'Q.",
+        "description": "Prefiks bo'yicha: `BTB-`/`BTR-` → paket (`type: batch`), `POST-` (logistics haqiqiy shakli) / `PST-` → pochta (`type: post`), qolgani → buyurtma (404 bo'lsa tashqi qop). j8hdXE1o: paketni jo'natuvchi YOKI qabul qiluvchi filial xodimi ko'radi (`GET /transfer-batches/:id` bilan bir xil). dwJX3NjT: paket javobida qo'shimcha `source_branch` / `destination_branch` `{id, name}`, `region` `{id, name}` va `items[].order` — buyurtma xulosasi `{id, order_number, status, total_price, region, district, customer {name, phone_number}}` (xulosa xizmati javob bermasa `null`). X4RzXk1H: pochta — faqat superadmin/admin/branch/manager/registrator/courier (boshqalar 403) va `GET /post/orders/:id` doirasi (filial xodimi — o'z filiali, kuryer — o'z pochtasi); javob `GET /post/scan/:id` bilan bir xil: pochta qatori + `region`, `courier`, `orders[]`. T7 (QPq2C1co): har buyurtma qatorida `problem_contacts: [{name, phone, source: 'logist'|'support'}]` («Muammo bo'lsa», ≤ 2); `operator_phone`, `secondary_operator_phone`, `market.phone_number` menejer/filial/kuryerga YO'Q. Sm3LZ6EN: tashqi qop javobida `batch` `{external_batch_token, size, received_count, pending_count, scanned_count}` (`scanned_count` — qabulni kutayotganlari, hech narsa qabul qilinmagan); son `GET /orders/external` `meta.batches` bilan bir xil doirada, doirada a'zo bo'lmasa `batch: null`. Market faqat o'z a'zolarini ko'radi, begona qop — 404. Keldi = `received_count + pending_count`.",
         "operationId": "ScanGatewayController_scan",
         "parameters": [
           {

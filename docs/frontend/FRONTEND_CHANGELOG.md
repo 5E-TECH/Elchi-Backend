@@ -22,6 +22,38 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+### 2026-10-30 — Kiruvchi posilkalar: qop bo'yicha keldi soni (Sm3LZ6EN)
+
+Deploy: **order-service + api-gateway**. Migratsiya **yo'q**. `openapi.json` qayta yaratildi.
+
+- [2026-10-30] ✏️ [order] — `GET /orders/external` javobiga `meta.batches` qo'shildi (qolgan maydonlar o'zgarmagan):
+  `{ meta: { batches: [{ external_batch_token, external_batch_ref, external_batch_size, received_count, pending_count }] } }`.
+  Sahifada uchragan har qop uchun bitta yozuv (`external_batch_token` bo'sh qatorlar kirmaydi, qopsiz sahifada `[]`).
+  Sonlar **butun qop** bo'yicha — sahifa, `status` va sana filtrlari kesmaydi, o'chirilganlar kirmaydi; bitta GROUP BY.
+  - `received_count` — qabul qilingan a'zolar (`new` dan keyingi holat). Hamkor qabuldan **oldin** bekor qilgan posilka
+    (`cancelled`, pochtasiz) Elchiga yetib kelmagan, u **kirmaydi**.
+  - `pending_count` — hali `new` a'zolar.
+  - **Keldi = `received_count + pending_count`**, `external_batch_size` — hamkor aytgan son (`null` bo'lishi mumkin).
+    Misol: hamkor 3 dedi, 1 tasi avval qabul qilingan, 1 tasi ro'yxatda → `3 / 1 / 1`, ya'ni «2/3 keldi».
+  - Doira ro'yxat bilan bir xil: market — o'zi, menejer/registrator — o'z filiali (filial sharti ro'yxatdagidek
+    `branch_id` / `holder_branch_id` / `home_branch_id`), `market_id` filtri ham qo'llanadi. Begona filial yoki market
+    a'zosi sanalmaydi — filial doirasida son `external_batch_size` dan kam chiqishi mumkin.
+  - Bir necha sahifa olganda (`fetchAllIncomingOrders`) har sahifaning `meta.batches` i token bo'yicha birlashtiriladi —
+    bir qop uchun sonlar sahifalarda bir xil.
+  → Frontend: «N ta qop chala keldi» bloki va «2/3» belgisi shu sonlardan, har qop uchun `GET /scan/:token` so'ralmaydi
+  (DamKku7C). Faqat `external_batch_ref` bor, token yo'q qop bu ro'yxatga **kirmaydi**.
+- [2026-10-30] ✏️ [order] — `POST /orders/external/receive-by-scan`: qop QR'i skanerlanganda javobda
+  `data.batch: { external_batch_token, size, received_count, pending_count, scanned_count }` va `data.batches` (shu shakl,
+  har qop uchun). Sonlar **qabuldan keyingi** holat; `scanned_count` — shu so'rovda qabul qilinganlari (`received_count`
+  ichida). Bir so'rovda bir necha qop bo'lsa `batch: null` — `batches` dan oling. Qop skanlanmagan yoki son olinmagan bo'lsa
+  `batch: null`, `batches: []` (qabul baribir bajarilgan, `ok`/`received` o'zgarmaydi). `ok: false` javobida bu maydonlar yo'q.
+- [2026-10-30] ✏️ [order] — `GET /scan/:token` (`type: batch`) javobida ham `data.batch` (shu shakl): hech narsa qabul
+  qilinmagan, `received_count` — avval qabul qilinganlari, `scanned_count` = `pending_count` (shu QR ochadigan posilkalar).
+  Doirada a'zo bo'lmasa `batch: null`. → Sariq «Qop BP-24817: 2/3 keldi» ikkala javobda ham
+  `received_count + pending_count` / `size` formulasi bilan (`received_count / size` skan oldidan kam ko'rsatadi).
+- [2026-10-30] ⚠️ [order] — `GET /scan/:token` (`type: batch`) market rolida endi faqat **o'z** a'zolarini qaytaradi
+  (`count`, `members`), begona qop — 404 (buyurtma QR qoidasi bilan bir xil). Xodim rollari uchun `count`/`members` o'zgarmagan.
+
 ### 2026-10-30 — T1: hamkor (marketpleys) integratsiyasini jonli sinash (RJcckQ6I)
 
 Deploy: **integration-service + api-gateway** (+ libs/common). Migratsiya **yo'q**. `openapi.json` qayta yaratildi.

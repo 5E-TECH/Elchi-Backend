@@ -291,6 +291,17 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
   `order.update_from_api`, `order.delete`. Reads: `find_all(_enriched)`, `find_by_id(_enriched)`,
   `find_by_qr(_enriched)`, `find_new_by_market`, `find_new_markets`, `tracking`,
   `custody_history`, `print.find`.
+  - **Sm3LZ6EN (2026-10-30) — incoming bags:** `order.external.find_all` adds
+    `meta.batches` (`lookup/external-batch-counts.ts`): one `GROUP BY
+    external_batch_token` over whole bags seen on the page — not cut by
+    page/status/date, same market + branch scope as the list.
+    `received_count` = past `created`/`new`, except `cancelled` with no post
+    (partner cancelled before intake); `pending_count` = `new`; arrived =
+    received + pending vs. the partner's `external_batch_size`. The same counts
+    answer `order.receive_by_scan` (`batch`/`batches`, after intake, failure
+    swallowed — parcels are already received) and
+    `order.find_batch_by_external_token` (`batch`; `market_id` also limits
+    `members`, so a market gets 404 on a foreign bag).
   - **fix3 (2026-10-01):** `order.update_from_api` `{id, dto, requester}` is the
     **only** target of the gateway's HTTP `PATCH /orders/:id` and `/:id/full`
     → `updateFromApi` (API field/role/branch rules, §5.1; a call without a
