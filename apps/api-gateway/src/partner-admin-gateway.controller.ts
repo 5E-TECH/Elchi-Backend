@@ -16,6 +16,9 @@ import { Roles as RoleEnum } from '@app/common';
 import {
   ApiBearerAuth,
   ApiBody,
+  ApiConflictResponse,
+  ApiCreatedResponse,
+  ApiNotFoundResponse,
   ApiOkResponse,
   ApiOperation,
   ApiParam,
@@ -30,6 +33,11 @@ import {
   SetPartnerActiveRequestDto,
   UpdatePartnerRequestDto,
 } from './dto/partner.swagger.dto';
+import {
+  LinkPartnerMarketRequestDto,
+  PartnerMarketLinkResponseDto,
+  PartnerMarketListResponseDto,
+} from './dto/partner-market-admin.swagger.dto';
 
 /**
  * Elchi Partner API hamkorlarini boshqarish (admin). Bu — hamkor kaliti bilan
@@ -182,6 +190,69 @@ export class PartnerAdminGatewayController {
           },
         )
         .pipe(timeout(8000)),
+    );
+  }
+
+  /**
+   * T1 K1 (s6xY4f5C) — hamkorning faol sotuvchilari (`partner_market_refs`).
+   * Yangi → eski; sahifalashsiz. Market topilmasa maydonlari `null`.
+   */
+  @Get(':id/markets')
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiOperation({
+    summary: 'Hamkor sotuvchilari (bog‘langan Elchi marketlari)',
+  })
+  @ApiParam({ name: 'id' })
+  @ApiOkResponse({ type: PartnerMarketListResponseDto })
+  @ApiNotFoundResponse({ description: 'Hamkor topilmadi' })
+  listMarkets(@Param('id') id: string) {
+    return firstValueFrom(
+      this.integrationClient
+        .send({ cmd: 'integration.partner.markets.list' }, { partner_id: id })
+        .pipe(timeout(10000)),
+    );
+  }
+
+  /**
+   * T1 K1 — hamkor sotuvchisini Elchi'dagi MAVJUD marketga bog'lash.
+   * Keyin hamkorning `POST /partner/markets` chaqiruvi idempotent (200),
+   * `POST /partner/shipments` esa shu marketga ruxsat beradi.
+   */
+  @Post(':id/markets')
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiOperation({
+    summary:
+      'Hamkor sotuvchisini mavjud Elchi marketiga bog‘lash. Market tarifi ' +
+      'o‘zgarmaydi. O‘chirilgan bog‘lanish bo‘lsa — tiklanadi.',
+  })
+  @ApiParam({ name: 'id' })
+  @ApiBody({ type: LinkPartnerMarketRequestDto })
+  @ApiCreatedResponse({ type: PartnerMarketLinkResponseDto })
+  @ApiNotFoundResponse({
+    description: 'Hamkor yoki market topilmadi (o‘chirilgan / market emas)',
+  })
+  @ApiConflictResponse({
+    description:
+      '`code`: PARTNER_SELLER_TAKEN — sotuvchi shu hamkorda bog‘langan; ' +
+      'PARTNER_MARKET_TAKEN — market boshqa hamkorga bog‘langan',
+  })
+  linkMarket(
+    @Param('id') id: string,
+    @Body() dto: LinkPartnerMarketRequestDto,
+    @Req() req: { user?: { sub?: string; roles?: string[] } },
+  ) {
+    return firstValueFrom(
+      this.integrationClient
+        .send(
+          { cmd: 'integration.partner.markets.link' },
+          {
+            partner_id: id,
+            external_seller_id: dto.external_seller_id,
+            elchi_market_id: dto.elchi_market_id,
+            requester: this.auditActor(req),
+          },
+        )
+        .pipe(timeout(15000)),
     );
   }
 

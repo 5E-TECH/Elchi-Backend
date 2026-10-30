@@ -21,6 +21,29 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 ## Yozuvlar
 
+### 2026-10-30 — T1: hamkor (marketpleys) integratsiyasini jonli sinash (RJcckQ6I)
+
+Deploy: **integration-service + api-gateway** (+ libs/common). Migratsiya **yo'q**. `openapi.json` qayta yaratildi.
+
+- [2026-10-30] 🆕 [integration] — `GET /admin/partners/:id/markets` (superadmin, admin; registrator / menejer → 403) —
+  hamkorning faol sotuvchilari, yangi → eski, sahifalashsiz:
+  `{ data: [{ ref_id, external_seller_id, elchi_market_id, market_name, phone_number, tariff_home, tariff_center,
+  created_at }] }`. Market o'chirilgan / topilmasa — `market_name`, `phone_number`, tariflar `null` (qator qoladi).
+  Hamkor yo'q → 404. → Hamkor kartasida «Sotuvchilar» jadvali.
+- [2026-10-30] 🆕 [integration] — `POST /admin/partners/:id/markets` `{ "external_seller_id": "shop-9",
+  "elchi_market_id": "1234" }` — hamkor sotuvchisini Elchi'dagi **mavjud** marketga bog'lash (superadmin, admin).
+  `external_seller_id` trim, 1..100; `elchi_market_id` faqat raqam (son ham qabul qilinadi). Javob **201**
+  `{ data: { ref_id, external_seller_id, elchi_market_id, tariff_home, tariff_center } }` — tariflar marketning
+  hozirgi qiymati (bog'lash ularni **o'zgartirmaydi**). Xatolar: hamkor yo'q / market yo'q, o'chirilgan yoki market
+  emas (masalan kuryer id) → 404; shu sotuvchi bu hamkorda allaqachon faol → 409 `code: "PARTNER_SELLER_TAKEN"`;
+  market boshqa hamkorning faol sotuvchisida → 409 `code: "PARTNER_MARKET_TAKEN"`. Avval o'chirilgan o'sha
+  (hamkor, sotuvchi) juftligi bo'lsa — yangi qator emas, o'sha **tiklanadi** (`ref_id` eski). Jurnalda
+  `PartnerMarketRef` (yangi — `created`, tiklash — `updated`). Bog'lagandan keyin hamkorning `POST /partner/markets`
+  (o'sha `external_seller_id`) → 200 `idempotent: true` (yangi market ochilmaydi), `POST /partner/shipments` shu
+  marketga ruxsat beradi. → «Mavjud marketni bog'lash» formasi; 409 da `code` bo'yicha xabar.
+- [2026-10-30] 🟢 [integration] — `settlement.payment` webhooki endi faqat **faol** bog'lanish bo'yicha yuboriladi
+  (o'chirilgan bog'lanishdagi marketga to'lov hamkorga ketmaydi).
+
 ### 2026-10-30 — T8: buyurtmaning maxsus belgilari (mo'rt, diniy kitob, suyuqlik …) (0OUcHZ7R)
 
 Deploy: **order-service + api-gateway** (+ libs/common). Migratsiya **`1716000000187`**

@@ -225,6 +225,36 @@ export class IntegrationServiceController {
     );
   }
 
+  /** T1 K1 — hamkorning faol sotuvchilari (admin). */
+  @MessagePattern({ cmd: 'integration.partner.markets.list' })
+  listPartnerMarkets(
+    @Payload() data: { partner_id?: string },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.integrationService.listPartnerMarkets(
+        String(data?.partner_id ?? ''),
+      ),
+    );
+  }
+
+  /** T1 K1 — hamkor sotuvchisini mavjud Elchi marketiga bog'lash (admin). */
+  @MessagePattern({ cmd: 'integration.partner.markets.link' })
+  linkPartnerMarket(
+    @Payload()
+    data: {
+      partner_id?: string;
+      external_seller_id?: string;
+      elchi_market_id?: string | number;
+      requester?: { id?: string; roles?: string[] } | null;
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.integrationService.linkPartnerMarket(data ?? {}),
+    );
+  }
+
   @MessagePattern({ cmd: 'integration.partner.create_shipment' })
   createPartnerShipment(
     @Payload()

@@ -67,6 +67,7 @@ export * from './pii/mask-payload';
 export * from './time/tashkent-time';
 export * from './integration/status-catalog';
 export * from './integration/partner-money';
+export * from './integration/partner-markets';
 export * from './catalog/product-measure';
 export * from './catalog/product-code';
 export * from './catalog/warehouse';

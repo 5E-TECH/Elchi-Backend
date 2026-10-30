@@ -37,6 +37,7 @@ import {
   maskPiiPayload,
   resolvePartnerMoneyFields,
   tashkentDayRange,
+  PARTNER_MARKET_ERROR_CODES,
 } from '@app/common';
 import {
   ExternalIntegration,
@@ -1398,6 +1399,225 @@ export class IntegrationServiceService {
   }
 
   /**
+   * T1 K1 (s6xY4f5C) — hamkorning faol sotuvchilari (admin paneli).
+   *
+   * Sahifalash YO'Q (hamkorda sotuvchi soni o'nlab). Market ma'lumoti
+   * BITTA `identity.market.find_by_ids` bilan olinadi; market topilmasa
+   * (o'chirilgan / identity javob bermadi) — maydonlar `null`, qator qoladi.
+   */
+  async listPartnerMarkets(partnerIdRaw: string) {
+    const partnerId = await this.requirePartnerId(partnerIdRaw);
+    const refs = await this.partnerMarketRefRepo.find({
+      where: { partner_id: partnerId, isDeleted: false },
+      order: { createdAt: 'DESC', id: 'DESC' },
+    });
+    const markets = await this.findPartnerMarketsByIds(
+      refs.map((ref) => String(ref.elchi_market_id)),
+    );
+    return successRes(
+      refs.map((ref) => {
+        const market = markets?.get(String(ref.elchi_market_id)) ?? null;
+        return {
+          ref_id: String(ref.id),
+          external_seller_id: ref.external_seller_id,
+          elchi_market_id: String(ref.elchi_market_id),
+          market_name: market?.name ?? null,
+          phone_number: market?.phone_number ?? null,
+          tariff_home: market ? this.nullableNumber(market.tariff_home) : null,
+          tariff_center: market
+            ? this.nullableNumber(market.tariff_center)
+            : null,
+          created_at: ref.createdAt,
+        };
+      }),
+      200,
+      'partner markets',
+    );
+  }
+
+  /**
+   * T1 K1 (s6xY4f5C) — hamkor sotuvchisini MAVJUD Elchi marketiga bog'lash.
+   *
+   * `POST /partner/markets` (provisionPartnerMarket) har doim YANGI market
+   * ochadi; Elchi'da allaqachon ishlayotgan market hamkorga o'tganda admin
+   * shu yerda bog'laydi. Keyin hamkorning `POST /partner/markets` chaqiruvi
+   * idempotent (200) bo'ladi va `POST /partner/shipments` egalik
+   * tekshiruvidan o'tadi.
+   *
+   * Tekshiruv tartibi: hamkor yo'q → 404; market yo'q / o'chirilgan / market
+   * emas → 404; shu sotuvchi faol bog'langan → 409 PARTNER_SELLER_TAKEN;
+   * market boshqa hamkorning faol sotuvchisida → 409 PARTNER_MARKET_TAKEN.
+   * Shu juftlikning O'CHIRILGAN qatori bo'lsa — yangi qator emas, o'sha
+   * TIKLANADI (unique indeks o'chirilganlarni ham qamraydi).
+   *
+   * ⚠️ Market tarifi va `cancelled_handover_qr_required` ga TEGILMAYDI —
+   * bu ichki market, uning sozlamalari admin qo'lida.
+   */
+  async linkPartnerMarket(dto: {
+    partner_id?: string;
+    external_seller_id?: string;
+    elchi_market_id?: string | number;
+    requester?: { id?: string; roles?: string[] } | null;
+  }) {
+    const partnerId = await this.requirePartnerId(dto?.partner_id);
+    const externalSellerId = String(dto?.external_seller_id ?? '').trim();
+    const marketId = String(dto?.elchi_market_id ?? '').trim();
+    if (!externalSellerId || externalSellerId.length > 100) {
+      this.badRequest('external_seller_id 1..100 belgi bo‘lishi kerak');
+    }
+    if (!/^\d{1,18}$/.test(marketId)) {
+      this.badRequest('elchi_market_id faqat raqam bo‘lishi kerak');
+    }
+
+    // find_by_ids faqat FAOL (o'chirilmagan) `market` rolini qaytaradi:
+    // kuryer / admin id'si ham, o'chirilgan market ham shu yerda 404.
+    const markets = await this.findPartnerMarketsByIds([marketId]);
+    if (!markets) {
+      throw new RpcException(
+        errorRes('Marketni tekshirib bo‘lmadi (identity javob bermadi)', 502),
+      );
+    }
+    const market = markets.get(marketId);
+    if (!market) {
+      this.notFound('Market topilmadi');
+    }
+
+    const sameSeller = await this.partnerMarketRefRepo.findOne({
+      where: { partner_id: partnerId, external_seller_id: externalSellerId },
+    });
+    if (sameSeller && !sameSeller.isDeleted) {
+      this.partnerMarketConflict(
+        PARTNER_MARKET_ERROR_CODES.SELLER_TAKEN,
+        'Bu sotuvchi shu hamkorda allaqachon bog‘langan',
+      );
+    }
+    const marketOwner = await this.partnerMarketRefRepo.findOne({
+      where: {
+        elchi_market_id: marketId,
+        partner_id: Not(partnerId),
+        isDeleted: false,
+      },
+    });
+    if (marketOwner) {
+      this.partnerMarketConflict(
+        PARTNER_MARKET_ERROR_CODES.MARKET_TAKEN,
+        'Market boshqa hamkorga bog‘langan',
+      );
+    }
+
+    const restoredFrom = sameSeller ? String(sameSeller.elchi_market_id) : null;
+    let ref: PartnerMarketRef;
+    try {
+      if (sameSeller) {
+        // O'chirilgan qator — tiklanadi (shartli: poygada boshqasi tiklagan
+        // bo'lsa 0 qator yangilanadi → SELLER_TAKEN).
+        const res = await this.partnerMarketRefRepo.update(
+          { id: sameSeller.id, isDeleted: true },
+          { isDeleted: false, elchi_market_id: marketId },
+        );
+        if (!res.affected) {
+          this.partnerMarketConflict(
+            PARTNER_MARKET_ERROR_CODES.SELLER_TAKEN,
+            'Bu sotuvchi shu hamkorda allaqachon bog‘langan',
+          );
+        }
+        ref = { ...sameSeller, isDeleted: false, elchi_market_id: marketId };
+      } else {
+        ref = await this.partnerMarketRefRepo.save(
+          this.partnerMarketRefRepo.create({
+            partner_id: partnerId,
+            external_seller_id: externalSellerId,
+            elchi_market_id: marketId,
+          }),
+        );
+      }
+    } catch (error) {
+      if (this.isUniqueViolation(error)) {
+        this.partnerMarketConflict(
+          PARTNER_MARKET_ERROR_CODES.SELLER_TAKEN,
+          'Bu sotuvchi shu hamkorda allaqachon bog‘langan',
+        );
+      }
+      throw error;
+    }
+
+    await this.activityLog.log({
+      entity_type: 'PartnerMarketRef',
+      entity_id: marketId,
+      action: sameSeller ? ActivityAction.UPDATED : ActivityAction.CREATED,
+      ...(sameSeller
+        ? {
+            old_value: { is_deleted: true, elchi_market_id: restoredFrom },
+          }
+        : {}),
+      new_value: {
+        ref_id: String(ref.id),
+        partner_id: partnerId,
+        external_seller_id: externalSellerId,
+        elchi_market_id: marketId,
+        linked_existing: true,
+      },
+      ...this.auditActor(dto?.requester),
+    });
+
+    return successRes(
+      {
+        ref_id: String(ref.id),
+        external_seller_id: externalSellerId,
+        elchi_market_id: marketId,
+        tariff_home: this.nullableNumber(market.tariff_home),
+        tariff_center: this.nullableNumber(market.tariff_center),
+      },
+      201,
+      sameSeller ? 'partner market link restored' : 'partner market linked',
+    );
+  }
+
+  /** Hamkor mavjud (o'chirilmagan) bo'lsa — uning id'si, aks holda 404. */
+  private async requirePartnerId(raw?: string): Promise<string> {
+    const id = String(raw ?? '').trim();
+    const partner = /^\d{1,18}$/.test(id)
+      ? await this.partnerRepo.findOne({
+          where: { id, isDeleted: false },
+          select: { id: true },
+        })
+      : null;
+    if (!partner) {
+      this.notFound('Hamkor topilmadi');
+    }
+    return String(partner.id);
+  }
+
+  /**
+   * Marketlar (id → qator) BITTA `identity.market.find_by_ids` bilan.
+   * identity javob bermasa — `null` (chaqiruvchi qaror qiladi).
+   */
+  private async findPartnerMarketsByIds(
+    ids: string[],
+  ): Promise<Map<string, Record<string, any>> | null> {
+    const unique = [...new Set(ids)];
+    if (!unique.length) return new Map();
+    const res = await this.rmqRequest<{ data?: Record<string, any>[] }>(
+      this.identityClient,
+      { cmd: 'identity.market.find_by_ids' },
+      { ids: unique },
+      8000,
+    );
+    if (!res || !Array.isArray(res.data)) return null;
+    return new Map(res.data.map((row) => [String(row.id), row]));
+  }
+
+  private nullableNumber(value: unknown): number | null {
+    if (value === null || value === undefined || value === '') return null;
+    const n = Number(value);
+    return Number.isFinite(n) ? n : null;
+  }
+
+  private partnerMarketConflict(code: string, message: string): never {
+    throw new RpcException({ ...errorRes(message, 409), code });
+  }
+
+  /**
    * LC-13 (fix3b) — hamkor posilkasining viloyati (`order.region_id`).
    *
    * ⚠️ NEGA KERAK. `region_id` kontraktda ixtiyoriy edi va berilmasa NULL
@@ -2726,8 +2946,10 @@ export class IntegrationServiceService {
     }
 
     // Bu market bir hamkornikimi? (teskari lookup — IDX_PMR_MARKET indeksi).
+    // O'chirilgan bog'lanish hisobga olinmaydi: market hamkordan ajratilgan
+    // bo'lsa (yoki K1 da boshqa hamkorga o'tgan) to'lov eski hamkorga ketmasin.
     const ref = await this.partnerMarketRefRepo.findOne({
-      where: { elchi_market_id: marketId },
+      where: { elchi_market_id: marketId, isDeleted: false },
     });
     if (!ref) {
       // Oddiy market — hamkorga yuboradigan hech narsa yo'q. Bu NORMAL
