@@ -25,7 +25,8 @@ type Row = {
   quantity: number;
 };
 
-function setup(existingItems: Row[]) {
+function setup(existingItems: Row[], orderExtra: Record<string, unknown> = {}) {
+  const childOrders: Array<Record<string, unknown>> = [];
   const savedItems: Array<{ id: string; quantity: number }> = [];
   const childItems: Array<Record<string, unknown>> = [];
   const orderUpdates: Array<Record<string, unknown>> = [];
@@ -56,8 +57,10 @@ function setup(existingItems: Row[]) {
         if (entity === Order) {
           return {
             create: (value: Record<string, unknown>) => value,
-            save: (value: Record<string, unknown>) =>
-              Promise.resolve({ id: '9900', ...value }),
+            save: (value: Record<string, unknown>) => {
+              childOrders.push(value);
+              return Promise.resolve({ id: '9900', ...value });
+            },
             update: (_where: unknown, value: Record<string, unknown>) => {
               orderUpdates.push(value);
               return Promise.resolve({ affected: 1 });
@@ -80,6 +83,7 @@ function setup(existingItems: Row[]) {
     where_deliver: 'center',
     branch_id: '77',
     comment: null,
+    ...orderExtra,
   };
 
   const s = Object.create(
@@ -145,7 +149,14 @@ function setup(existingItems: Row[]) {
       totalPrice,
     });
 
-  return { partlySell, savedItems, childItems, orderUpdates, queryRunner };
+  return {
+    partlySell,
+    savedItems,
+    childItems,
+    childOrders,
+    orderUpdates,
+    queryRunner,
+  };
 }
 
 describe('partlySellOrder — katalogsiz (hamkor) qatorlar', () => {
@@ -217,5 +228,31 @@ describe('partlySellOrder — katalogsiz (hamkor) qatorlar', () => {
     });
     expect(t.queryRunner.startTransaction).not.toHaveBeenCalled();
     expect(t.childItems).toEqual([]);
+  });
+
+  it('T8: bekor qilingan bola ota buyurtmaning maxsus belgilarini meros oladi', async () => {
+    const t = setup(
+      [{ id: '5501', product_id: null, product_name: 'tv', quantity: 2 }],
+      { special_categories: ['fragile', 'battery'] },
+    );
+
+    await t.partlySell([{ order_item_id: '5501', quantity: 1 }]);
+
+    expect(t.childOrders).toHaveLength(1);
+    expect(t.childOrders[0]).toMatchObject({
+      status: Order_status.CANCELLED,
+      parent_order_id: '120',
+      special_categories: ['fragile', 'battery'],
+    });
+  });
+
+  it('T8: belgisiz eski buyurtma — bolada ham `[]`', async () => {
+    const t = setup([
+      { id: '5501', product_id: null, product_name: 'tv', quantity: 2 },
+    ]);
+
+    await t.partlySell([{ order_item_id: '5501', quantity: 1 }]);
+
+    expect(t.childOrders[0]?.special_categories).toEqual([]);
   });
 });

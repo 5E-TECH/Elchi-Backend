@@ -52,8 +52,13 @@ import {
   SettlementStatus,
   Source_type,
   Where_deliver,
+  isSpecialCategoriesEditable,
+  normalizeSpecialCategories,
   normalizeUzPhone,
   postReceiveKindOfNote,
+  SPECIAL_CATEGORIES_ERROR_CODES,
+  SPECIAL_CATEGORIES_LOCKED_MESSAGE,
+  SPECIAL_CATEGORIES_TRACKING_ACTION,
   requestContext,
   rmqSend,
   RMQ_SERVICE_TIMEOUT,
@@ -4593,6 +4598,123 @@ export class OrderLifecycleService {
     );
   }
 
+  /**
+   * T8 (0OUcHZ7R) — `order.special_categories.set`: maxsus belgilarning
+   * yangi TO'LIQ to'plami (`[]` — hammasini olib tashlash).
+   *
+   * Doira (kimning buyurtmasi) gateway'da tekshiriladi; bu yerda himoya
+   * chuqurligi: market tomonida `requester.market_id` buyurtma marketiga
+   * teng bo'lishi shart (403). Holat qulfi FOR UPDATE ostida — parallel
+   * sotuv/bekor bilan poyga yo'q: market/operator `created`/`new` da, xodim
+   * yo'ldagi va bekor qilingan posilkada ham; yakunlangan — 409
+   * `SPECIAL_CATEGORIES_LOCKED`. To'plam o'zgarmasa — `changed:false`, hech
+   * qanday tracking/jurnal yozuvi yo'q. Pulga ham, holatga ham tegmaydi.
+   */
+  async setSpecialCategories(
+    id: string,
+    input: unknown,
+    requester: { id?: string; roles?: string[]; market_id?: string | null },
+  ) {
+    // Yo'q qiymat `[]` emas — bo'sh so'rov belgilarni jimgina o'chirmasin.
+    if (input === undefined || input === null) {
+      this.badRequest('special_categories majburiy (bo`sh massiv — `[]`)');
+    }
+    const normalized = normalizeSpecialCategories(input);
+    if (!normalized.ok) {
+      this.badRequest(normalized.message);
+    }
+    const next = normalized.value;
+    const orderId = String(id ?? '').trim();
+    if (!/^\d{1,18}$/.test(orderId)) {
+      this.notFound('Buyurtma topilmadi');
+    }
+    const roles = new Set(
+      (requester?.roles ?? []).map((role) => String(role).toLowerCase()),
+    );
+    const isStaff = [
+      Roles.SUPERADMIN,
+      Roles.ADMIN,
+      Roles.REGISTRATOR,
+      Roles.MANAGER,
+      Roles.BRANCH,
+    ].some((role) => roles.has(role));
+    const marketScope = String(requester?.market_id ?? '').trim();
+    // Fail-closed: xodim ham, market doirasi ham bo'lmasa — ruxsat yo'q.
+    if (!requester?.id || (!isStaff && !marketScope)) {
+      this.forbidden("Maxsus belgini o'zgartirishga ruxsat yo'q");
+    }
+    const tier = marketScope ? 'market' : 'staff';
+
+    let previous: string[] = [];
+    let status: Order_status = Order_status.NEW;
+    const changed = await this.dataSource.transaction(async (manager) => {
+      const order = await manager.getRepository(Order).findOne({
+        where: { id: orderId, isDeleted: false },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!order) {
+        this.notFound('Buyurtma topilmadi');
+      }
+      if (marketScope && String(order.market_id) !== marketScope) {
+        this.forbidden(
+          "Bu buyurtma sizning marketingizga tegishli emas — uni o'zgartira olmaysiz",
+        );
+      }
+      previous = [...(order.special_categories ?? [])];
+      status = order.status;
+      if (
+        previous.length === next.length &&
+        previous.every((code, index) => code === next[index])
+      ) {
+        return false;
+      }
+      if (!isSpecialCategoriesEditable(tier, order.status)) {
+        throw new RpcException({
+          statusCode: 409,
+          code: SPECIAL_CATEGORIES_ERROR_CODES.LOCKED,
+          message: SPECIAL_CATEGORIES_LOCKED_MESSAGE,
+        });
+      }
+      await manager
+        .getRepository(Order)
+        .update({ id: orderId }, { special_categories: next });
+      await this.custody.createTrackingEvent(
+        {
+          order_id: orderId,
+          from_status: order.status,
+          to_status: order.status,
+          action: SPECIAL_CATEGORIES_TRACKING_ACTION,
+          old_value: { special_categories: previous },
+          new_value: { special_categories: next },
+          changed_by: String(requester.id),
+          changed_by_role: this.custody.toTrackingRole(requester.roles),
+          note: `Maxsus belgilar: ${next.length ? next.join(', ') : "yo'q"}`,
+        },
+        manager.getRepository(OrderTracking),
+      );
+      return true;
+    });
+
+    if (changed) {
+      await this.activityLog.log({
+        entity_type: 'Order',
+        entity_id: orderId,
+        // Literal — action-registry AST tekshiruvi (y8CxCtcK).
+        action: 'order.special_categories_changed',
+        old_value: { special_categories: previous },
+        new_value: { special_categories: next },
+        ...this.custody.auditActor(requester),
+        metadata: { status },
+      });
+    }
+
+    return successRes(
+      { id: orderId, special_categories: next, changed },
+      200,
+      'success',
+    );
+  }
+
   async initiateReturn(
     requester: { id: string; roles?: string[] },
     id: string,
@@ -5855,6 +5977,8 @@ export class OrderLifecycleService {
       external_batch_token?: string | null;
       external_batch_size?: number | null;
       source?: Order_source;
+      /** T8: maxsus belgilar — `normalizeSpecialCategories` (bot/hamkor DTO'siz keladi). */
+      special_categories?: unknown;
       items?: Array<{
         product_id?: string | null;
         product_name?: string | null;
@@ -5879,6 +6003,14 @@ export class OrderLifecycleService {
     // buyurtma DOIM NEW, kuryersiz va pochtasiz.
     const dto = this.sanitizeCreateDtoForRequester(rawDto, requester);
     this.assertCreateAmounts(dto);
+    // T8: DTO'ni chetlab o'tadigan yo'llar (bot, hamkor, ichki) ham shu
+    // qoidadan o'tadi; berilmasa — `[]`, natija kanonik tartibda.
+    const specialCategories = normalizeSpecialCategories(
+      dto.special_categories,
+    );
+    if (!specialCategories.ok) {
+      this.badRequest(specialCategories.message);
+    }
     // (lQjt6sKP) shakl tranzaksiyadan OLDIN; egalik/holat/takror — ichida, qulf bilan.
     const replacedOrderId = normalizeReplacedOrderId(dto.replaced_order_id);
     // fix3b: hamkor prepaid summasi endi SAQLANADI (tozalashdan keyin —
@@ -5991,6 +6123,7 @@ export class OrderLifecycleService {
             : null,
         qr_code_token: dto.qr_code_token ?? this.generateCustomToken(),
         parent_order_id: dto.parent_order_id ?? null,
+        special_categories: specialCategories.value,
         // (lQjt6sKP) almashtirish: eskiga havola + kuryer "eskisini oldim" darvozasi.
         replacement_of_order_id: replacedOrderId,
         replacement_state: replacedOrderId
@@ -10325,6 +10458,8 @@ export class OrderLifecycleService {
           extra_number: order.extra_number ?? null,
           qr_code_token: `CANCEL-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`,
           parent_order_id: String(order.id),
+          // T8: qolgan mahsulotlar o'sha posilka — belgilar meros.
+          special_categories: [...(order.special_categories ?? [])],
           source: order.source,
           // 6kHnNH9j: bola ota buyurtma bandida — omborga qaytishi uchun.
           ...(this.orderWarehouse?.inheritedFields(order) ?? {}),
