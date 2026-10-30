@@ -42,6 +42,8 @@ export interface TelegramMessage {
   video?: TelegramFile;
   /** (ysBqD9Nx) guruhga qo'shilgan a'zolar (servis xabari, matnsiz). */
   new_chat_members?: TelegramUser[];
+  /** (BOT-3 #6) guruh supergroup'ga aylandi — yangi chat id (eski guruhda). */
+  migrate_to_chat_id?: number;
 }
 
 export interface TelegramCallbackQuery {

@@ -85,7 +85,7 @@ export class ShipmentItemDto {
   external_product_id?: string;
 }
 
-/** `POST /partner/shipments` — kontrakt: docs/PARTNER_API.md §3.3. */
+/** `POST /partner/shipments` — kontrakt: docs/public/MARKETPLACE_API.md §5.2. */
 export class CreatePartnerShipmentRequestDto {
   @ApiProperty({ description: 'Marketplace buyurtma id (idempotency kaliti)' })
   @IsString()

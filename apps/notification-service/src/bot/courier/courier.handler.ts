@@ -9,7 +9,7 @@ import {
 import { NotificationInboxService } from '../../notification-inbox.service';
 import type { TelegramBotAction } from '../../entities/telegram-bot-action.entity';
 import { BotActionsService } from '../bot-actions.service';
-import { BotGatewayClient } from '../bot-gateway.client';
+import { BotGatewayClient, rethrowPasswordChange } from '../bot-gateway.client';
 import {
   BOT_MEDIA_LIMITS,
   MEDIA_SEND_AS_PHOTO_TEXT,
@@ -93,6 +93,7 @@ export class CourierHandler implements BotMessageHandler {
       else if (command === 'kun') await this.dailyReport(ctx);
       else await this.cashbox(ctx, actor.role === Roles.COURIER);
     } catch (error) {
+      rethrowPasswordChange(error);
       this.logger.warn(
         `/${command}: ${error instanceof Error ? error.message : String(error)}`,
       );
@@ -324,6 +325,7 @@ export class CourierHandler implements BotMessageHandler {
         `✅ Qabul qilindi (${count}/${PROOF_MAX_FILES}). Yana yuboring yoki «✅ Tugatdim» ni bosing.`,
       );
     } catch (error) {
+      rethrowPasswordChange(error);
       this.logger.warn(
         `isbot yuklash: ${error instanceof Error ? error.message : String(error)}`,
       );
@@ -564,7 +566,10 @@ export class CourierActions {
     if (op === 'sell' || op === 'cancel') {
       const order = await this.courier
         .getOrder(ctx.fromId, orderId)
-        .catch(() => null);
+        .catch((error: unknown) => {
+          rethrowPasswordChange(error);
+          return null;
+        });
       if (order && proofRequired(order, op)) {
         await this.startProof(ctx, { op, order_id: orderId, reason, keys: [] });
         return;

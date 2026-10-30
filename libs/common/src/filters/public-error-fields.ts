@@ -1,7 +1,9 @@
 import { PAYMENT_CORRECTION_ERROR_CODES as PC } from '../finance/payment-correction';
+import { CASHBOX_RECEIPT_ERROR_CODES as RC } from '../finance/cashbox-receipt';
 import { WAREHOUSE_ERROR_CODES } from '../catalog/warehouse';
 import { CONTACT_ERROR_CODES } from '../contacts/contacts';
 import { SPECIAL_CATEGORIES_ERROR_CODES } from '../order/order-special-categories';
+import { PARTNER_MARKET_ERROR_CODES } from '../integration/partner-markets';
 
 /**
  * (Elchi Pochta #3) Xato javobidagi mashina o'qiydigan qo'shimcha maydonlar.
@@ -43,6 +45,17 @@ export const LOGIN_LOCKED = 'LOGIN_LOCKED';
  * almashtirish oqimiga ruxsat beradi (gateway `PASSWORD_CHANGE_GATE=on`), 403.
  */
 export const PASSWORD_CHANGE_REQUIRED = 'PASSWORD_CHANGE_REQUIRED';
+/**
+ * (BOT-2 #2) Telegram Mini App tokeni (`POST /auth/telegram`) faqat kuryerga
+ * beriladi — boshqa rol 403.
+ */
+export const TELEGRAM_COURIER_ONLY = 'TELEGRAM_COURIER_ONLY';
+/**
+ * (BOT-2 #2) Telegram Mini App tokenining `scope` claim'i — gateway u bilan
+ * faqat skan oqimini (`POST /orders/scan-assign`, `POST /telegram/scan/done`)
+ * o'tkazadi.
+ */
+export const TELEGRAM_SCAN_SCOPE = 'tg_scan';
 
 export const PUBLIC_ERROR_CODES: Readonly<Record<string, readonly string[]>> = {
   // (T6) to'lovni qaytarish / summasini tuzatish — superadmin.
@@ -72,6 +85,8 @@ export const PUBLIC_ERROR_CODES: Readonly<Record<string, readonly string[]>> = {
   [LOGIN_LOCKED]: ['retry_after_seconds'],
   // (NDmZMzCP) zaif/vaqtinchalik parol — avval parolni almashtirish, 403.
   [PASSWORD_CHANGE_REQUIRED]: [],
+  // (BOT-2) Telegram Mini App tokeni faqat kuryerga — 403.
+  [TELEGRAM_COURIER_ONLY]: [],
   // (XtcEyQjb) to'xtatilgan omborga kirim — 409.
   [WAREHOUSE_ERROR_CODES.PAUSED]: [],
   // (XtcEyQjb) market operatoriga «Ombordagi qoldiq» yopiq — 403.
@@ -85,6 +100,13 @@ export const PUBLIC_ERROR_CODES: Readonly<Record<string, readonly string[]>> = {
   [CONTACT_ERROR_CODES.NOT_A_MARKET]: [],
   // (T8 0OUcHZ7R) maxsus belgi bu holatda o'zgarmaydi — 409.
   [SPECIAL_CATEGORIES_ERROR_CODES.LOCKED]: [],
+  // (T1 K1 s6xY4f5C) hamkor sotuvchisi / market allaqachon bog'langan — 409.
+  [PARTNER_MARKET_ERROR_CODES.SELLER_TAKEN]: [],
+  [PARTNER_MARKET_ERROR_CODES.MARKET_TAKEN]: [],
+  // (T3 QlLf33Ma) kassa cheki — sozlama, yuklash, bog'lash, AI.
+  ...Object.fromEntries(
+    Object.values(RC).map((code) => [code, [] as readonly string[]]),
+  ),
 };
 
 export type PublicErrorValue = string | number | boolean | null;
@@ -167,8 +189,7 @@ export function publicErrorFields(
 export const PUBLIC_ERROR_DATA_KEYS = ['reason', 'usage', 'details'] as const;
 
 export type PublicErrorDetailsItem =
-  | PublicErrorValue
-  | Record<string, PublicErrorValue>;
+  PublicErrorValue | Record<string, PublicErrorValue>;
 
 export type PublicErrorData = {
   reason?: string;

@@ -30,7 +30,7 @@ import { BaseEntity } from '@app/common';
  *
  * Ataylab ExternalIntegration `sync_queue`'dan AJRATILGAN — u ExternalIntegration
  * `integration_id`'ga (NOT NULL + FK) bog'langan; hamkor webhook'lari esa
- * `partner_id`'ga bog'lanadi. Kontrakt: docs/PARTNER_API.md §4.
+ * `partner_id`'ga bog'lanadi. Kontrakt: docs/public/MARKETPLACE_API.md §6.
  */
 export type PartnerWebhookStatus =
   | 'pending'

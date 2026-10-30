@@ -1,7 +1,14 @@
 import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { ClientProxy, RpcException } from '@nestjs/microservices';
-import { DataSource, In, IsNull, QueryFailedError, Repository } from 'typeorm';
+import {
+  DataSource,
+  In,
+  IsNull,
+  Not,
+  QueryFailedError,
+  Repository,
+} from 'typeorm';
 import {
   createHash,
   randomBytes,
@@ -361,6 +368,23 @@ interface RemittedCourierCredit {
   /** Tekshirilgan qator holati (qulf ostida o'zgarmagan bo'lishi shart). */
   status: SettlementStatus;
 }
+
+/**
+ * Hamkor / tashqi tizimga yuboriladigan holat harakati. `received` va
+ * `on_the_road` (T1 K3) — faqat hamkor webhooki (`integration.partner.
+ * webhook.enqueue`), eski adapter yo'li (`integration.sync.enqueue`) olmaydi.
+ */
+type ExternalSyncAction =
+  | 'sold'
+  | 'canceled'
+  | 'paid'
+  | 'rollback'
+  | 'waiting'
+  | 'received'
+  | 'on_the_road';
+
+const PARTNER_ONLY_SYNC_ACTIONS: ReadonlySet<ExternalSyncAction> =
+  new Set<ExternalSyncAction>(['received', 'on_the_road']);
 
 /**
  * Order lifecycle: the write/mutation core (create/receive/sell/partly-sell/
@@ -6625,9 +6649,48 @@ export class OrderLifecycleService {
     }
   }
 
+  /**
+   * T1 K3 — holati xom SQL bilan o'zgargan buyurtmalar (filiallararo FORWARD
+   * paket jo'natilishi) uchun hamkor webhooki. `external_id` li buyurtmalar
+   * bitta so'rov bilan o'qiladi; xato faqat log — chaqiruvchi javobiga
+   * ta'sir qilmaydi.
+   */
+  async notifyPartnerStatusChanged(
+    orderIds: string[],
+    action: 'received' | 'on_the_road',
+    oldStatusById: ReadonlyMap<string, string>,
+    newStatus: Order_status,
+  ): Promise<void> {
+    const ids = [...new Set(orderIds.map(String).filter(Boolean))];
+    if (!ids.length) return;
+    try {
+      const orders = await this.orderRepo.find({
+        where: { id: In(ids), isDeleted: false, external_id: Not(IsNull()) },
+      });
+      for (const order of orders) {
+        void this.queueExternalStatusSync(
+          order,
+          action,
+          oldStatusById.get(String(order.id)) ?? '',
+          newStatus,
+        ).catch((error: unknown) =>
+          this.logger.warn(
+            `${action} webhook navbatga qo'yilmadi (order=${order.id}): ` +
+              (error instanceof Error ? error.message : String(error)),
+          ),
+        );
+      }
+    } catch (error) {
+      this.logger.warn(
+        `${action} webhook: buyurtmalarni o'qib bo'lmadi: ` +
+          (error instanceof Error ? error.message : String(error)),
+      );
+    }
+  }
+
   private async queueExternalStatusSync(
     order: Order,
-    action: 'sold' | 'canceled' | 'paid' | 'rollback' | 'waiting',
+    action: ExternalSyncAction,
     old_status: string,
     new_status: string,
   ) {
@@ -6735,6 +6798,14 @@ export class OrderLifecycleService {
     if (!order.external_id || !order.operator?.startsWith('external_')) {
       return;
     }
+    /**
+     * T1 K3 — `received` / `on_the_road` FAQAT hamkor webhookiga. Eski
+     * adapterlar (`resolveExternalStatus`) bu harakatlarni bilmaydi; ularga
+     * yuborilsa noma'lum holat sifatida xato / takroriy urinish bo'lardi.
+     */
+    if (PARTNER_ONLY_SYNC_ACTIONS.has(action)) {
+      return;
+    }
 
     await rmqSend(
       this.integrationClient,
@@ -6753,7 +6824,7 @@ export class OrderLifecycleService {
   private resolveSyncAction(
     oldStatus: string,
     newStatus: string,
-  ): 'sold' | 'canceled' | 'paid' | 'rollback' | 'waiting' | null {
+  ): ExternalSyncAction | null {
     // CANCELLED_SENT ("bekor qilinib pochtaga qo'shildi") tashqi tizim uchun ham
     // BEKOR QILISH: posilka mijozga bormaydi. Avval bu holat null qaytarardi va
     // hech qanday signal chiqmasdi — hamkor buyurtmani kutilmoqdada deb o'ylardi.
@@ -6788,6 +6859,12 @@ export class OrderLifecycleService {
     // qolardi — hech qachon yangilanmaydigan holat.
     if (newStatus === Order_status.WAITING_CUSTOMER) {
       return 'waiting';
+    }
+
+    // T1 K3 — posilka pochta bilan yo'lga chiqdi (kuryerga EMAS — pochta
+    // kuryeri / filiallararo paket). Faqat hamkor webhookiga boradi.
+    if (newStatus === Order_status.ON_THE_ROAD) {
+      return 'on_the_road';
     }
 
     if (newStatus === Order_status.WAITING) {
@@ -7191,6 +7268,26 @@ export class OrderLifecycleService {
           Order_status.RECEIVED,
         ),
       });
+    }
+
+    /**
+     * T1 K3 — hamkorga `received` («Elchi qabul qildi») webhooki. Tranzaksiya
+     * yopilgandan KEYIN va kutilmaydi: integration-service ishlamasa ham
+     * qabul javobi 200 (signal yo'qolsa — faqat log).
+     */
+    for (const order of orders) {
+      if (!order.external_id) continue;
+      void this.queueExternalStatusSync(
+        order,
+        'received',
+        Order_status.NEW,
+        Order_status.RECEIVED,
+      ).catch((error: unknown) =>
+        this.logger.warn(
+          `received webhook navbatga qo'yilmadi (order=${order.id}): ` +
+            (error instanceof Error ? error.message : String(error)),
+        ),
+      );
     }
 
     return successRes({}, 200, 'Orders received');
@@ -9069,9 +9166,7 @@ export class OrderLifecycleService {
 
     // Look up cashboxes (remote reads) before opening the transaction.
     let actorExpenseCashbox:
-      | { id: string; balance?: number }
-      | null
-      | undefined;
+      { id: string; balance?: number } | null | undefined;
     const actorExpenseUserId = isManagerRequester
       ? String(requester.branch_id ?? '')
       : actorCourierId;
@@ -9704,6 +9799,7 @@ export class OrderLifecycleService {
        * yoziladi va bu yerdagi foyda faqat market tarifi bo'lib qoladi.
        */
       if (input.action === 'sell') {
+        // Tizim oyog'i: `created_by` berilmaydi (ustun bigint, FE «Avtomatik»).
         const pay = (
           data: Parameters<typeof this.updateCashboxBalance>[0],
         ): Promise<void> =>
@@ -9721,7 +9817,6 @@ export class OrderLifecycleService {
               operation_type: Operation_type.INCOME,
               source_type: Source_type.SELL,
               source_id: String(order.id),
-              created_by: 'system',
               comment: note,
             });
           } else if (providerMarketAmount < 0) {
@@ -9732,7 +9827,6 @@ export class OrderLifecycleService {
               operation_type: Operation_type.EXPENSE,
               source_type: Source_type.SELL,
               source_id: String(order.id),
-              created_by: 'system',
               comment: note,
             });
           }

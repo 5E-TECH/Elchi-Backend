@@ -417,6 +417,15 @@ describe('fix3c — markByProvider: oyoqlar yig`iladigan naqddan (MONEY-01)', ()
     expect(profit).toMatchObject({ amount: MARKET_TARIFF });
   });
 
+  it('⭐ market oyog`ida `created_by` yo`q: `system` bigint ustunga yozilmaydi, outbox tiqilmaydi', async () => {
+    const h = await providerSell(
+      parcel(FULLY_PREPAID.total, FULLY_PREPAID.online),
+    );
+
+    expect(h.legs.length).toBeGreaterThan(0);
+    for (const leg of h.legs) expect(leg).not.toHaveProperty('created_by');
+  });
+
   it('cancel/return javobida `cod_collected` yo`q (kargo qarzi faqat sotuvda)', async () => {
     const h = makeProviderHarness(parcel(300000, 200000));
 

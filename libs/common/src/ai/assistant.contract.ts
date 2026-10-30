@@ -19,8 +19,9 @@ export const AI_ASSISTANT_DEFAULT_DAILY_LIMIT = 100;
 export const AI_ASSISTANT_MESSAGE_MAX_CHARS = 2000;
 
 /**
- * Kartadagi 9 ta FAQAT O'QIYDIGAN tool. Tartib o'zgarmaydi (tool ro'yxati
- * prompt prefiksida — tartib o'zgarsa kesh o'ladi).
+ * Kartadagi 9 ta FAQAT O'QIYDIGAN tool + T3-4 `get_receipt_checks`. Tartib
+ * o'zgarmaydi (tool ro'yxati prompt prefiksida — tartib o'zgarsa kesh
+ * o'ladi); yangi tool — FAQAT oxiriga.
  */
 export const AI_ASSISTANT_TOOL_NAMES = [
   'get_cash_position',
@@ -32,6 +33,7 @@ export const AI_ASSISTANT_TOOL_NAMES = [
   'get_expenses_by_category',
   'get_revenue_profit',
   'get_order_flow',
+  'get_receipt_checks',
 ] as const;
 export type AiAssistantToolName = (typeof AI_ASSISTANT_TOOL_NAMES)[number];
 
@@ -55,6 +57,7 @@ export const AI_ASSISTANT_READ_PATTERNS: ReadonlyArray<{
   { client: 'ANALYTICS', cmd: 'analytics.revenue' },
   { client: 'ANALYTICS', cmd: 'analytics.dashboard' },
   { client: 'BRANCH', cmd: 'branch.find_all' },
+  { client: 'FINANCE', cmd: 'finance.receipt_checks.summary' },
 ]);
 
 /**
@@ -150,6 +153,13 @@ export const AI_ASSISTANT_TOOL_ENDPOINTS: Readonly<
       handler: 'getDashboard',
     },
   ],
+  get_receipt_checks: [
+    {
+      route: 'GET /finance/receipts/summary',
+      controller: 'FinanceGatewayController',
+      handler: 'receiptChecksSummary',
+    },
+  ],
 });
 
 /** Har tool chaqira oladigan rollar (endpoint rollari bilan test tenglashtiradi). */
@@ -165,6 +175,7 @@ export const AI_ASSISTANT_TOOL_ROLES: Readonly<
   get_expenses_by_category: ['superadmin', 'admin'],
   get_revenue_profit: ['superadmin', 'admin'],
   get_order_flow: ['superadmin', 'admin'],
+  get_receipt_checks: ['superadmin', 'admin'],
 });
 
 /** JWT'dan olingan so'rovchi (gateway beradi; ai-service qayta tekshiradi). */

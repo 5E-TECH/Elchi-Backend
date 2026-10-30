@@ -1,0 +1,351 @@
+{
+  "info": {
+    "name": "Elchi Partner API",
+    "description": "Elchi Pochta Marketplace API — docs/public/MARKETPLACE_API.md. O'zgaruvchilarni to'ldiring: base_url, api_key (haqiqiy kalitni kolleksiyaga saqlamang — Postman muhitida 'secret' turida saqlang).",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "1. Ping (kalitni tekshirish)",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "X-Api-Key",
+            "value": "{{api_key}}",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{base_url}}/partner/ping",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "partner",
+            "ping"
+          ]
+        },
+        "description": "API kalit ishlashini tekshiradi (§2)."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"HTTP 200\", function () {",
+              "  pm.expect(pm.response.code).to.be.oneOf([200]);",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "2. Sotuvchini ro'yxatga olish",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "X-Api-Key",
+            "value": "{{api_key}}",
+            "type": "text"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{base_url}}/partner/markets",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "partner",
+            "markets"
+          ]
+        },
+        "description": "Birinchi chaqiruv 201 { elchi_market_id }, takror — 200 { elchi_market_id, idempotent: true, tariff_updated } (§5.1). Javobdagi elchi_market_id {{elchi_market_id}} ga yoziladi.",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"external_seller_id\": \"seller-demo-1\",\n  \"name\": \"Demo Store\",\n  \"phone\": \"+998900000000\",\n  \"tariff_home\": 25000,\n  \"tariff_center\": 15000\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"HTTP 200 / 201\", function () {",
+              "  pm.expect(pm.response.code).to.be.oneOf([200, 201]);",
+              "});",
+              "const id = pm.response.json()?.data?.elchi_market_id;",
+              "if (id) pm.collectionVariables.set('elchi_market_id', String(id));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "3. Posilka yuborish",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "X-Api-Key",
+            "value": "{{api_key}}",
+            "type": "text"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{base_url}}/partner/shipments",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "partner",
+            "shipments"
+          ]
+        },
+        "description": "Yangi — 201, ayni external_order_id bilan takror — 200 idempotent (§5.2). Javobdagi shipment_id {{shipment_id}} ga yoziladi.",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"external_order_id\": \"DEMO-ORDER-1\",\n  \"elchi_market_id\": \"{{elchi_market_id}}\",\n  \"customer\": {\n    \"name\": \"Demo Mijoz\",\n    \"phone\": \"+998900000001\"\n  },\n  \"district_id\": \"1\",\n  \"where_deliver\": \"address\",\n  \"address\": \"Demo ko'chasi 1\",\n  \"items\": [\n    {\n      \"name\": \"Demo mahsulot\",\n      \"quantity\": 1,\n      \"external_product_id\": \"DEMO-SKU-1\"\n    }\n  ],\n  \"cod_amount\": 100000,\n  \"subtotal\": 100000,\n  \"comment\": \"Sinov posilkasi\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"HTTP 200 / 201\", function () {",
+              "  pm.expect(pm.response.code).to.be.oneOf([200, 201]);",
+              "});",
+              "const id = pm.response.json()?.data?.shipment_id;",
+              "if (id) pm.collectionVariables.set('shipment_id', String(id));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "4. Ko'p posilka holati",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "X-Api-Key",
+            "value": "{{api_key}}",
+            "type": "text"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{base_url}}/partner/shipments/status",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "partner",
+            "shipments",
+            "status"
+          ]
+        },
+        "description": "100 tagacha id; shipment_id yoki external_order_id (§5.6).",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"shipment_ids\": [\n    \"{{shipment_id}}\",\n    \"DEMO-ORDER-1\"\n  ]\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"HTTP 200\", function () {",
+              "  pm.expect(pm.response.code).to.be.oneOf([200]);",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "5. Posilka holati",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "X-Api-Key",
+            "value": "{{api_key}}",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{base_url}}/partner/shipments/{{shipment_id}}",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "partner",
+            "shipments",
+            "{{shipment_id}}"
+          ]
+        },
+        "description": "shipment_id yoki external_order_id (§5.3)."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"HTTP 200\", function () {",
+              "  pm.expect(pm.response.code).to.be.oneOf([200]);",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "6. Posilkani yangilash",
+      "request": {
+        "method": "PATCH",
+        "header": [
+          {
+            "key": "X-Api-Key",
+            "value": "{{api_key}}",
+            "type": "text"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{base_url}}/partner/shipments/{{shipment_id}}",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "partner",
+            "shipments",
+            "{{shipment_id}}"
+          ]
+        },
+        "description": "Faqat yuborilgan maydonlar o'zgaradi; narx — qabul qilinmaguncha (§5.5).",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"cod_amount\": 90000,\n  \"subtotal\": 90000\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"HTTP 200\", function () {",
+              "  pm.expect(pm.response.code).to.be.oneOf([200]);",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "7. Posilkani bekor qilish",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "X-Api-Key",
+            "value": "{{api_key}}",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{base_url}}/partner/shipments/{{shipment_id}}/cancel",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "partner",
+            "shipments",
+            "{{shipment_id}}",
+            "cancel"
+          ]
+        },
+        "description": "Bekor qilish 200; allaqachon bekor — 200 idempotent: true; yetkazilgan — 409 (§5.4)."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"HTTP 200\", function () {",
+              "  pm.expect(pm.response.code).to.be.oneOf([200]);",
+              "});"
+            ]
+          }
+        }
+      ]
+    }
+  ],
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "https://api.elchipochta.uz"
+    },
+    {
+      "key": "api_key",
+      "value": "elp_REPLACE_ME"
+    },
+    {
+      "key": "elchi_market_id",
+      "value": ""
+    },
+    {
+      "key": "shipment_id",
+      "value": ""
+    }
+  ]
+}

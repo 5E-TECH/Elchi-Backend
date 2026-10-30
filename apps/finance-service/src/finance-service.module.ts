@@ -54,6 +54,11 @@ import { SHIFT_REPORTS } from './shift-report/shift-report.token';
 import { PaymentCorrection } from './entities/payment-correction.entity';
 import { PaymentCorrectionService } from './payment-correction/payment-correction.service';
 import { PaymentCorrectionController } from './payment-correction/payment-correction.controller';
+import { CashboxReceipt } from './entities/cashbox-receipt.entity';
+import { CashboxReceiptService } from './cashbox-receipt/cashbox-receipt.service';
+import { CashboxReceiptController } from './cashbox-receipt/cashbox-receipt.controller';
+import { CashboxReceiptCleanupScheduler } from './cashbox-receipt/cashbox-receipt-cleanup.scheduler';
+import { CASHBOX_RECEIPTS } from './cashbox-receipt/cashbox-receipt.token';
 
 @Module({
   imports: [
@@ -125,6 +130,8 @@ import { PaymentCorrectionController } from './payment-correction/payment-correc
       FinanceDailySnapshot,
       // T6 — to'lovni qaytarish / summasini tuzatish jurnali (migratsiya 186).
       PaymentCorrection,
+      // T3 — kassa cheki (migratsiya 188).
+      CashboxReceipt,
     ]),
   ],
   controllers: [
@@ -138,6 +145,8 @@ import { PaymentCorrectionController } from './payment-correction/payment-correc
     ShiftReportController,
     // T6 — to'lovni qaytarish / summasini tuzatish (superadmin).
     PaymentCorrectionController,
+    // T3 — kassa cheki (sozlama, yuklash, bog'lash, AI).
+    CashboxReceiptController,
   ],
   providers: [
     FinanceServiceService,
@@ -157,6 +166,9 @@ import { PaymentCorrectionController } from './payment-correction/payment-correc
     { provide: SHIFT_REPORTS, useExisting: ShiftReportService },
     ShiftAutoCloseScheduler,
     PaymentCorrectionService,
+    CashboxReceiptService,
+    { provide: CASHBOX_RECEIPTS, useExisting: CashboxReceiptService },
+    CashboxReceiptCleanupScheduler,
   ],
 })
 export class FinanceServiceModule {}

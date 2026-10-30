@@ -286,6 +286,14 @@ export class FinanceServiceController {
     );
   }
 
+  /** T3 — chek tafsiloti (doira — gateway: menejer o'z filiali). */
+  @MessagePattern({ cmd: 'finance.receipt.get' })
+  getReceipt(@Payload() data: { id?: string }, @Ctx() context: RmqContext) {
+    return this.executeAndAck(context, () =>
+      this.financeService.getReceipt(data ?? {}),
+    );
+  }
+
   @MessagePattern({ cmd: 'finance.cashbox.spend' })
   spendMoney(
     @Payload()

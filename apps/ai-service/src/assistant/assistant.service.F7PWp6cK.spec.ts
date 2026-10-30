@@ -432,7 +432,7 @@ describe('AssistantService (F7PWp6cK)', () => {
       });
       expect(loopOpts.maxSteps).toBe(6);
       expect(loopOpts.model).toBe('claude-sonnet-5');
-      expect(loopOpts.tools).toHaveLength(9);
+      expect(loopOpts.tools).toHaveLength(10);
       const lastUser = loopOpts.messages[loopOpts.messages.length - 1] as any;
       expect(lastUser.content[0].text).toContain('<user_message>');
       expect(lastUser.content[0].text).toContain('Bugungi sana (Toshkent)');

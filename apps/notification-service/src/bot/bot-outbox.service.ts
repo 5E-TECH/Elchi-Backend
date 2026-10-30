@@ -85,6 +85,7 @@ export class BotOutboxService implements OnModuleDestroy {
   private readonly logger = new Logger(BotOutboxService.name);
   private readonly botSlug: string;
   private draining = false;
+  private cardSent?: (orderId: string) => Promise<unknown>;
   private stopped = false;
 
   constructor(
@@ -212,6 +213,9 @@ export class BotOutboxService implements OnModuleDestroy {
           sent_at: new Date(),
           updated_at: new Date(),
           last_error: null,
+          // (BOT-2 #4) Yuborilgan xabar matni (mijoz PII, summalar) bazada
+          // saqlanmaydi — qator faqat holat / vaqt uchun qoladi.
+          payload: {} as never,
         },
       );
       if (row.card_order_id && result?.message_id) {
@@ -224,6 +228,37 @@ export class BotOutboxService implements OnModuleDestroy {
       return { id: row.id, status: 'sent', result };
     } catch (error) {
       const reason = this.transport.describe(error).slice(0, ERROR_MAX);
+      // (BOT-3 #6) Guruh supergroup'ga aylangan — ulanish va navbat yangi
+      // id'ga ko'chadi, shu xabar DARHOL qayta yuboriladi (urinish
+      // hisoblanmaydi).
+      if (
+        error instanceof TelegramApiError &&
+        error.kind === 'migrated' &&
+        error.migrateToChatId
+      ) {
+        const moved = await this.channels
+          .migrateChat(row.chat_id, error.migrateToChatId)
+          .then(() => true)
+          .catch((migrateError: unknown) => {
+            this.logger.error(
+              `guruh ko'chirilmadi (${row.chat_id} → ${error.migrateToChatId}): ${this.transport.describe(migrateError)}`,
+            );
+            return false;
+          });
+        if (moved) {
+          await this.outbox.update(
+            { id: row.id },
+            {
+              chat_id: error.migrateToChatId,
+              status: 'pending',
+              next_attempt_at: new Date(),
+              last_error: reason,
+              updated_at: new Date(),
+            },
+          );
+          return { id: row.id, status: 'queued', error: reason };
+        }
+      }
       const retryCount = row.retry_count + 1;
       // Token umuman sozlanmagan — restartsiz tuzalmaydi: qayta urinilmaydi.
       const permanent =
@@ -268,24 +303,49 @@ export class BotOutboxService implements OnModuleDestroy {
     }
   }
 
+  /**
+   * (BOT-3 #4) Karta yuborilgach chaqiriladi (`OrderCardSyncService`):
+   * navbatda turganda holat o'zgargan bo'lsa (`resync_pending`) karta
+   * oxirgi holatga qayta sinxronlanadi. Kutilmaydi — buyurtma navbati
+   * (sync ichidagi darhol yuborish) o'zini kutib qolmasin.
+   */
+  onCardSent(listener: (orderId: string) => Promise<unknown>): void {
+    this.cardSent = listener;
+  }
+
   /** (BOT-3 #4) Kechikib yuborilgan guruh kartasi — message_id yoziladi. */
   private async recordCard(
     orderId: string,
     chatId: string,
     messageId: number,
   ): Promise<void> {
-    await this.outbox
-      .query(
+    try {
+      const updated: unknown = await this.outbox.query(
         `UPDATE "notification_schema"."telegram_order_cards"
             SET "message_id" = $3, "updated_at" = now()
-          WHERE "order_id" = $1 AND "chat_id" = $2 AND "message_id" IS NULL`,
+          WHERE "order_id" = $1 AND "chat_id" = $2 AND "message_id" IS NULL
+        RETURNING "resync_pending"`,
         [orderId, chatId, String(messageId)],
-      )
-      .catch((error: unknown) =>
-        this.logger.warn(
-          `karta #${orderId} message_id yozilmadi: ${this.transport.describe(error)}`,
-        ),
       );
+      const rows = (
+        Array.isArray(updated) && Array.isArray(updated[0])
+          ? updated[0]
+          : Array.isArray(updated)
+            ? updated
+            : []
+      ) as Array<{ resync_pending?: boolean }>;
+      if (rows[0]?.resync_pending && this.cardSent) {
+        void this.cardSent(orderId).catch((error: unknown) =>
+          this.logger.warn(
+            `karta #${orderId} qayta sinxronlanmadi: ${this.transport.describe(error)}`,
+          ),
+        );
+      }
+    } catch (error) {
+      this.logger.warn(
+        `karta #${orderId} message_id yozilmadi: ${this.transport.describe(error)}`,
+      );
+    }
   }
 
   /** (BOT-3 #4) Yuborib bo'lmagan karta — band qilish bo'shatiladi. */
@@ -296,6 +356,10 @@ export class BotOutboxService implements OnModuleDestroy {
           WHERE "order_id" = $1 AND "chat_id" = $2 AND "message_id" IS NULL`,
         [orderId, chatId],
       )
-      .catch(() => undefined);
+      .catch((error: unknown) =>
+        this.logger.warn(
+          `karta #${orderId} band qilishi bo'shatilmadi (tozalovchi o'chiradi): ${this.transport.describe(error)}`,
+        ),
+      );
   }
 }

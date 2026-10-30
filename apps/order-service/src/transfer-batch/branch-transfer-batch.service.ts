@@ -27,6 +27,7 @@ import {
 import { successRes } from '../../../../libs/common/helpers/response';
 import { OrderCustodyService } from '../custody/order-custody.service';
 import { OrderWarehouseService } from '../warehouse/order-warehouse.service';
+import { OrderLifecycleService } from '../lifecycle/order-lifecycle.service';
 
 /**
  * Branch transfer-batch orchestration, extracted from the OrderServiceService
@@ -64,6 +65,9 @@ export class BranchTransferBatchService {
     // VkKDSNNn: HQ'ga qaytish partiyasi qabul qilinganda Markaziy ombor
     // buyurtmasi omborga qaytadi. Ixtiyoriy — usiz (eski spec'lar) hook yo'q.
     @Optional() private readonly orderWarehouse?: OrderWarehouseService,
+    // T1 K3: FORWARD jo'natishda hamkorga `on the road` webhooki. Ixtiyoriy —
+    // usiz (eski spec'lar) signal yo'q.
+    @Optional() private readonly lifecycle?: OrderLifecycleService,
   ) {}
 
   // ===== leaf helpers duplicated from OrderServiceService (see class doc) =====
@@ -1793,6 +1797,26 @@ export class BranchTransferBatchService {
           note: `Batch #${sentBatchId} jo'natildi`,
         });
       }
+    }
+
+    /**
+     * T1 K3 — holat xom UPDATE bilan o'zgardi (`updateFull` chetlab
+     * o'tiladi), shu bois hamkor webhooki shu yerda: allaqachon yo'lda
+     * bo'lganlar (takroriy jo'natish) chiqarib tashlanadi. Kutilmaydi.
+     */
+    if (
+      batch.direction === BranchTransferDirection.FORWARD &&
+      toMarkOrderIds.length &&
+      this.lifecycle
+    ) {
+      void this.lifecycle.notifyPartnerStatusChanged(
+        toMarkOrderIds.filter(
+          (orderId) => priorById.get(orderId) !== Order_status.ON_THE_ROAD,
+        ),
+        'on_the_road',
+        priorById,
+        Order_status.ON_THE_ROAD,
+      );
     }
 
     const actor =

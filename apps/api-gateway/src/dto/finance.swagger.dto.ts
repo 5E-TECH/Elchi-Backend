@@ -19,6 +19,8 @@ import {
   ValidateNested,
 } from 'class-validator';
 import {
+  CASHBOX_RECEIPT_FILTER_STATUSES,
+  CASHBOX_RECEIPT_KINDS,
   Cashbox_type,
   FinancialSource_type,
   Operation_type,
@@ -193,6 +195,17 @@ export class UpdateCashboxBalanceRequestDto {
 }
 
 export class FindHistoryQueryDto {
+  /** T3 — «Chek holati» filtri (faqat SA/admin/menejer; boshqa rol → 403). */
+  @ApiPropertyOptional({
+    enum: CASHBOX_RECEIPT_FILTER_STATUSES,
+    description:
+      "(T3) Chek holati: AI holatlari yoki `none` — «Chek yo'q» (chek so'raladigan, lekin cheksiz: qo'lda chiqim kategoriyali; MAIN'ga click kuryer/filial o'tkazmasi). `counts` ham shu filtr bilan.",
+  })
+  @IsOptional()
+  // Mock'langan `@app/common` (eski spec'lar) bilan ham yuklanadi.
+  @IsIn(Array.from(CASHBOX_RECEIPT_FILTER_STATUSES ?? []))
+  receipt_status?: string;
+
   @ApiPropertyOptional({ example: '1001' })
   @IsOptional()
   @IsString()
@@ -824,6 +837,17 @@ export class UpdateSalaryRequestDto {
 }
 
 export class PaymentFromCourierRequestDto {
+  /** T3 (QlLf33Ma) — `POST /finance/receipts` qoralamasi. */
+  @ApiPropertyOptional({
+    example: '41',
+    description:
+      "(T3) Chek qoralamasi ID si. Faqat superadmin/admin'ning HQ'ga `click` qabulida; chek rasmi yoqiq bo'lsa `click` da MAJBURIY (yo'q → 400 `RECEIPT_REQUIRED`). Naqd, click_to_market yoki menejer qabuli + chek → 400 `RECEIPT_NOT_APPLICABLE`.",
+  })
+  @IsOptional()
+  @IsString()
+  @Matches(/^\d{1,18}$/)
+  receipt_id?: string;
+
   @ApiProperty({ example: '1001' })
   @IsString()
   @Matches(/^\d+$/)
@@ -934,6 +958,17 @@ export class PaymentToMarketRequestDto {
 }
 
 export class PaymentBranchToMainRequestDto {
+  /** T3 (QlLf33Ma) — `POST /finance/receipts` qoralamasi. */
+  @ApiPropertyOptional({
+    example: '41',
+    description:
+      "(T3) Chek qoralamasi ID si. Faqat `click` da; chek rasmi yoqiq bo'lsa MAJBURIY (yo'q → 400 `RECEIPT_REQUIRED`). Naqd + chek → 400 `RECEIPT_NOT_APPLICABLE`.",
+  })
+  @IsOptional()
+  @IsString()
+  @Matches(/^\d{1,18}$/)
+  receipt_id?: string;
+
   @ApiProperty({
     example: '13',
     description: 'Branch ID (branch cashboxdan yechiladi)',
@@ -1117,6 +1152,17 @@ export const SPEND_CATEGORY_REQUIRED_MESSAGE = 'Xarajat kategoriyasini tanlang';
  * qiladi (investor foyda to'lovi va boshqa servis→servis chaqiruvlari).
  */
 export class MainCashboxSpendRequestDto extends MainCashboxManualRequestDto {
+  /** T3 (QlLf33Ma) — `POST /finance/receipts` qoralamasi. */
+  @ApiPropertyOptional({
+    example: '41',
+    description:
+      "(T3) Chek qoralamasi ID si. Chek rasmi yoqiq bo'lsa MAJBURIY (yo'q → 400 `RECEIPT_REQUIRED`); boshqa xodimning cheki → 403, ishlatilgan → 409 `RECEIPT_ALREADY_USED`.",
+  })
+  @IsOptional()
+  @IsString()
+  @Matches(/^\d{1,18}$/)
+  receipt_id?: string;
+
   // Elchi Pochta №1 — kassa xarajati kategoriyasi.
   @ApiProperty({
     example: '2',
@@ -1737,4 +1783,97 @@ export class CorrectPaymentAmountRequestDto extends ReversePaymentRequestDto {
   @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0.01)
   new_amount!: number;
+}
+
+/** (T3) Chek sozlamasi guruhi: «Chek rasmi majburiy» va «AI tahlili». */
+export class ReceiptGroupSettingsRequestDto {
+  @ApiPropertyOptional({
+    example: true,
+    description: "Chek rasmi majburiy. `false` — AI tahlili ham o'chadi",
+  })
+  @IsOptional()
+  @IsBoolean()
+  photo_required?: boolean;
+
+  @ApiPropertyOptional({
+    example: true,
+    description:
+      'AI tahlili. Faqat chek rasmi yoqiq bo`lganda; aks holda 400 `RECEIPT_AI_REQUIRES_PHOTO`',
+  })
+  @IsOptional()
+  @IsBoolean()
+  ai_enabled?: boolean;
+}
+
+/** (T3) PATCH /finance/receipt-settings — FAQAT superadmin. */
+export class UpdateReceiptSettingsRequestDto {
+  @ApiPropertyOptional({ type: () => ReceiptGroupSettingsRequestDto })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => ReceiptGroupSettingsRequestDto)
+  manual_expense?: ReceiptGroupSettingsRequestDto;
+
+  @ApiPropertyOptional({
+    type: () => ReceiptGroupSettingsRequestDto,
+    description: 'Kuryer → HQ va filial → HQ o`tkazmalari',
+  })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => ReceiptGroupSettingsRequestDto)
+  hq_transfer?: ReceiptGroupSettingsRequestDto;
+}
+
+/** (T3) POST /finance/receipts — chek rasmini yuklash (qoralama). */
+export class UploadReceiptRequestDto {
+  @ApiProperty({
+    enum: CASHBOX_RECEIPT_KINDS,
+    example: 'manual_expense',
+    description:
+      "Qaysi operatsiya uchun: qo'lda chiqim, kuryer → HQ yoki filial → HQ (menejer — faqat manual_expense)",
+  })
+  @IsIn(Array.from(CASHBOX_RECEIPT_KINDS ?? []))
+  kind!: string;
+}
+
+/** (T3-4) GET /finance/receipts/summary — chek tekshiruvi xulosasi. */
+export class ReceiptSummaryQueryDto {
+  @ApiPropertyOptional({
+    example: '2026-10-01',
+    description:
+      'Davr boshi, Toshkent sanasi YYYY-MM-DD (kiradi). Sukut — `to` oyining 1-kuni',
+  })
+  @IsOptional()
+  @Matches(/^\d{4}-\d{2}-\d{2}$/)
+  from?: string;
+
+  @ApiPropertyOptional({
+    example: '2026-10-30',
+    description:
+      'Davr oxiri, Toshkent sanasi YYYY-MM-DD (kiradi). Sukut — bugun. Davr ≤ 366 kun',
+  })
+  @IsOptional()
+  @Matches(/^\d{4}-\d{2}-\d{2}$/)
+  to?: string;
+
+  @ApiPropertyOptional({ enum: CASHBOX_RECEIPT_KINDS })
+  @IsOptional()
+  @IsIn(Array.from(CASHBOX_RECEIPT_KINDS ?? []))
+  kind?: string;
+
+  @ApiPropertyOptional({
+    enum: CASHBOX_RECEIPT_FILTER_STATUSES,
+    description: "`none` — chek so'raladigan, lekin cheksiz qator",
+  })
+  @IsOptional()
+  @IsIn(Array.from(CASHBOX_RECEIPT_FILTER_STATUSES ?? []))
+  ai_status?: string;
+}
+
+export class UploadReceiptSwaggerDto extends UploadReceiptRequestDto {
+  @ApiProperty({
+    type: 'string',
+    format: 'binary',
+    description: 'Chek rasmi: jpeg / png / webp, ≤ 5 MB (EXIF tozalanadi)',
+  })
+  photo!: unknown;
 }

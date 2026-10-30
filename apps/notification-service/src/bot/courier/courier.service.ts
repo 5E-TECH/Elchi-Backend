@@ -5,7 +5,7 @@ import { Repository } from 'typeorm';
 import { escapeTelegramHtml } from '@app/common';
 import { TelegramOrderCard } from '../../entities/telegram-order-card.entity';
 import { BotActionsService } from '../bot-actions.service';
-import { BotGatewayClient } from '../bot-gateway.client';
+import { BotGatewayClient, rethrowPasswordChange } from '../bot-gateway.client';
 import { BotOutboxService } from '../bot-outbox.service';
 import { BotTransportService } from '../bot-transport.service';
 import type { BotContext } from '../handlers/bot-context';
@@ -222,7 +222,12 @@ export class CourierService {
     });
     if (!card?.message_id) return;
     const messageId = card.message_id;
-    const order = await this.getOrder(telegramId, orderId).catch(() => null);
+    const order = await this.getOrder(telegramId, orderId).catch(
+      (error: unknown) => {
+        rethrowPasswordChange(error);
+        return null;
+      },
+    );
     if (!order) return;
     const keyboard = note
       ? []
@@ -263,7 +268,8 @@ export class CourierService {
         'GET',
         `/orders/${encodeURIComponent(orderId)}`,
       );
-    } catch {
+    } catch (error) {
+      rethrowPasswordChange(error);
       return 'skipped';
     }
     if (res.status === 403 || res.status === 404) {
@@ -331,6 +337,7 @@ export class CourierService {
         },
       );
     } catch (error) {
+      rethrowPasswordChange(error);
       this.logger.warn(
         `courier ${op} #${orderId}: ${error instanceof Error ? error.message : 'error'}`,
       );

@@ -9438,6 +9438,24 @@
         "operationId": "FinanceGatewayController_findHistory",
         "parameters": [
           {
+            "name": "receipt_status",
+            "required": false,
+            "in": "query",
+            "description": "(T3) Chek holati: AI holatlari yoki `none` — «Chek yo'q» (chek so'raladigan, lekin cheksiz: qo'lda chiqim kategoriyali; MAIN'ga click kuryer/filial o'tkazmasi). `counts` ham shu filtr bilan.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "match",
+                "mismatch",
+                "unreadable",
+                "pending",
+                "error",
+                "disabled",
+                "none"
+              ]
+            }
+          },
+          {
             "name": "cashbox_id",
             "required": false,
             "in": "query",
@@ -10331,6 +10349,248 @@
         ],
         "x-roles": [
           "superadmin"
+        ]
+      }
+    },
+    "/finance/receipt-settings": {
+      "get": {
+        "description": "`{ manual_expense: { photo_required, ai_enabled }, hq_transfer: { photo_required, ai_enabled }, updated_at, updated_by }`. Sozlama qatori yo'q — `true` (sukut — ikkalasi yoqiq). `hq_transfer` — kuryer → HQ va filial → HQ. O'zgartirish — faqat superadmin (PATCH).",
+        "operationId": "FinanceGatewayController_getReceiptSettings",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "(T3) Kassa cheki sozlamalari",
+        "tags": [
+          "Finance"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "manager"
+        ]
+      },
+      "patch": {
+        "description": "Faqat `photo_required:false` kelsa — AI ham o'chadi; rasm qayta yoqilsa AI o'chiq qoladi; natijada AI yoqiq + rasm o'chiq → 400 `RECEIPT_AI_REQUIRES_PHOTO`. Activity-log: `finance.receipt_settings_updated`.",
+        "operationId": "FinanceGatewayController_updateReceiptSettings",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateReceiptSettingsRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "(T3) Kassa cheki sozlamalarini o'zgartirish — FAQAT superadmin",
+        "tags": [
+          "Finance"
+        ],
+        "x-roles": [
+          "superadmin"
+        ]
+      }
+    },
+    "/finance/receipts": {
+      "post": {
+        "description": "`photo` — jpeg / png / webp, ≤ 5 MB, turi magic-bytes bilan tekshiriladi, EXIF/XMP tozalanadi, shaxsiy saqlanadi. `kind`: superadmin/admin — har tur; menejer — faqat `manual_expense` (filial — JWT'dan); boshqalar 403. Rasm o'chiq turga → 400 `RECEIPT_DISABLED` (fayl yuklanmaydi). 201 → `{ receipt_id, kind, state: 'draft', photo_url, photo_url_expires_in: 300 }`. Qoralama 24 soat ichida operatsiyaga biriktirilmasa o'chiriladi; biriktirilgan chek va rasmi saqlanib qoladi.",
+        "operationId": "FinanceGatewayController_uploadReceipt",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/UploadReceiptSwaggerDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "(T3) Kassa cheki rasmini yuklash (qoralama)",
+        "tags": [
+          "Finance"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "manager"
+        ]
+      }
+    },
+    "/finance/receipts/summary": {
+      "get": {
+        "description": "Davr (Toshkent kuni, ≤ 366 kun, sukut — joriy oy) bo'yicha: `{ period, counts: { match, mismatch, unreadable, pending, error, disabled, none }, total, mismatch_total (Σ|farq|), by_branch: [{ branch_id, counts }], by_category: [{ expense_category_id, name, counts }], top: [≤ 15, |farq| bo'yicha — { receipt_id, history_id, kind, entered_amount, difference, date }] }`. Operatsiya sanasi bo'yicha; `none` — `GET /finance/history?receipt_status=none` bilan AYNI shart. Ism, rasm havolasi, karta raqami yo'q. Faqat superadmin/admin (menejer, kuryer — 403).",
+        "operationId": "FinanceGatewayController_receiptChecksSummary",
+        "parameters": [
+          {
+            "name": "from",
+            "required": false,
+            "in": "query",
+            "description": "Davr boshi, Toshkent sanasi YYYY-MM-DD (kiradi). Sukut — `to` oyining 1-kuni",
+            "schema": {
+              "example": "2026-10-01",
+              "type": "string"
+            }
+          },
+          {
+            "name": "to",
+            "required": false,
+            "in": "query",
+            "description": "Davr oxiri, Toshkent sanasi YYYY-MM-DD (kiradi). Sukut — bugun. Davr ≤ 366 kun",
+            "schema": {
+              "example": "2026-10-30",
+              "type": "string"
+            }
+          },
+          {
+            "name": "kind",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "manual_expense",
+                "courier_to_hq",
+                "branch_to_hq"
+              ]
+            }
+          },
+          {
+            "name": "ai_status",
+            "required": false,
+            "in": "query",
+            "description": "`none` — chek so'raladigan, lekin cheksiz qator",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "match",
+                "mismatch",
+                "unreadable",
+                "pending",
+                "error",
+                "disabled",
+                "none"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "(T3-4) Kassa cheklari tekshiruvi xulosasi",
+        "tags": [
+          "Finance"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
+        ]
+      }
+    },
+    "/finance/receipts/{id}/reanalyze": {
+      "post": {
+        "description": "202 → `{ receipt_id, ai_status: 'pending' }`; natija realtime `finance.receipt.checked` bilan. Ruxsat: `mismatch`, `unreadable`, `error`, 3 daqiqadan oshgan `pending`. Rad: `match` → 409 `RECEIPT_ALREADY_MATCHED`; `disabled` yoki joriy sozlamada AI o'chiq → 400 `RECEIPT_AI_DISABLED`; tahlil davom etmoqda → 409 `RECEIPT_AI_PENDING`; urinishlar ≥ 5 → 429 `RECEIPT_AI_ATTEMPTS_EXHAUSTED`. Audit `finance.receipt_reanalyze_requested`.",
+        "operationId": "FinanceGatewayController_reanalyzeReceipt",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Chek ID si",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "(T3) Kassa chekini AI bilan qayta tahlil qilish",
+        "tags": [
+          "Finance"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
+        ]
+      }
+    },
+    "/finance/receipts/{id}": {
+      "get": {
+        "description": "Superadmin/admin — har chek; menejer — faqat o'z filiali (`branch_id`), boshqasi 403. `{ id, kind, history_id, counter_history_id, entered_amount, payment_method, photo_url, photo_url_expires_in: 300, uploaded_by: { id, name }, uploaded_at, ai_status, ai_stale (pending > 3 daqiqa), can_reanalyze (faqat SA/admin), ai: { amount, difference, currency, date, recipient, recipient_last4, payer, payer_last4, bank, reference, confidence, flags[], checked_at, attempts, max_attempts: 5, error_reason } | null }`. Biriktirilgan chek va rasmi saqlanadi — havola har so'rovda yangidan beriladi.",
+        "operationId": "FinanceGatewayController_getReceipt",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Chek ID si",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "(T3) Kassa cheki tafsiloti (rasm havolasi + AI natijasi)",
+        "tags": [
+          "Finance"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "manager"
         ]
       }
     },
@@ -20301,6 +20561,103 @@
         ]
       }
     },
+    "/admin/partners/{id}/markets": {
+      "get": {
+        "operationId": "PartnerAdminGatewayController_listMarkets",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PartnerMarketListResponseDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Hamkor topilmadi"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Hamkor sotuvchilari (bog‘langan Elchi marketlari)",
+        "tags": [
+          "Partners (admin)"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
+        ]
+      },
+      "post": {
+        "operationId": "PartnerAdminGatewayController_linkMarket",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LinkPartnerMarketRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PartnerMarketLinkResponseDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Hamkor yoki market topilmadi (o‘chirilgan / market emas)"
+          },
+          "409": {
+            "description": "`code`: PARTNER_SELLER_TAKEN — sotuvchi shu hamkorda bog‘langan; PARTNER_MARKET_TAKEN — market boshqa hamkorga bog‘langan"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Hamkor sotuvchisini mavjud Elchi marketiga bog‘lash. Market tarifi o‘zgarmaydi. O‘chirilgan bog‘lanish bo‘lsa — tiklanadi.",
+        "tags": [
+          "Partners (admin)"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
+        ]
+      }
+    },
     "/admin/partners/{id}/webhook-test": {
       "post": {
         "operationId": "PartnerAdminGatewayController_testWebhook",
@@ -22816,7 +23173,7 @@
     },
     "/health/readiness": {
       "get": {
-        "description": "`services[]`: `{service, status: ok|down|unknown, latency_ms?, error?, error_kind?}`. Ifpimq2x: `error_kind` (faqat ok bo‘lmaganda) — `timeout` | `down` | `reported` | `not_registered`.",
+        "description": "`services[]`: `{service, status: ok|down|unknown, latency_ms?, error?, error_kind?}`. BOT-3a: `NOTIFICATION` qatorida `bot_queue` (Telegram bot navbati; ishlamasa qator `down`). Ifpimq2x: `error_kind` (faqat ok bo‘lmaganda) — `timeout` | `down` | `reported` | `not_registered`.",
         "operationId": "HealthController_readiness",
         "parameters": [],
         "responses": {
@@ -27177,6 +27534,11 @@
       "PaymentFromCourierRequestDto": {
         "type": "object",
         "properties": {
+          "receipt_id": {
+            "type": "string",
+            "example": "41",
+            "description": "(T3) Chek qoralamasi ID si. Faqat superadmin/admin'ning HQ'ga `click` qabulida; chek rasmi yoqiq bo'lsa `click` da MAJBURIY (yo'q → 400 `RECEIPT_REQUIRED`). Naqd, click_to_market yoki menejer qabuli + chek → 400 `RECEIPT_NOT_APPLICABLE`."
+          },
           "courier_id": {
             "type": "string",
             "example": "1001"
@@ -27287,6 +27649,11 @@
       "PaymentBranchToMainRequestDto": {
         "type": "object",
         "properties": {
+          "receipt_id": {
+            "type": "string",
+            "example": "41",
+            "description": "(T3) Chek qoralamasi ID si. Faqat `click` da; chek rasmi yoqiq bo'lsa MAJBURIY (yo'q → 400 `RECEIPT_REQUIRED`). Naqd + chek → 400 `RECEIPT_NOT_APPLICABLE`."
+          },
           "branch_id": {
             "type": "string",
             "example": "13",
@@ -27401,6 +27768,11 @@
             "type": "string",
             "example": "3",
             "description": "Kassa kartasi ID si (`GET /finance/cashbox/cards`): superadmin/admin — asosiy kassa kartasi, menejer — o'z filiali kassasi kartasi (boshqa kassa kartasi → 403). Faqat `click` to'lovida; berilmasa — Asosiy karta. Kartada mablag' yetmasa 400."
+          },
+          "receipt_id": {
+            "type": "string",
+            "example": "41",
+            "description": "(T3) Chek qoralamasi ID si. Chek rasmi yoqiq bo'lsa MAJBURIY (yo'q → 400 `RECEIPT_REQUIRED`); boshqa xodimning cheki → 403, ishlatilgan → 409 `RECEIPT_ALREADY_USED`."
           },
           "expense_category_id": {
             "type": "string",
@@ -27768,6 +28140,61 @@
             ]
           }
         }
+      },
+      "ReceiptGroupSettingsRequestDto": {
+        "type": "object",
+        "properties": {
+          "photo_required": {
+            "type": "boolean",
+            "example": true,
+            "description": "Chek rasmi majburiy. `false` — AI tahlili ham o'chadi"
+          },
+          "ai_enabled": {
+            "type": "boolean",
+            "example": true,
+            "description": "AI tahlili. Faqat chek rasmi yoqiq bo`lganda; aks holda 400 `RECEIPT_AI_REQUIRES_PHOTO`"
+          }
+        }
+      },
+      "UpdateReceiptSettingsRequestDto": {
+        "type": "object",
+        "properties": {
+          "manual_expense": {
+            "$ref": "#/components/schemas/ReceiptGroupSettingsRequestDto"
+          },
+          "hq_transfer": {
+            "description": "Kuryer → HQ va filial → HQ o`tkazmalari",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ReceiptGroupSettingsRequestDto"
+              }
+            ]
+          }
+        }
+      },
+      "UploadReceiptSwaggerDto": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "manual_expense",
+              "courier_to_hq",
+              "branch_to_hq"
+            ],
+            "example": "manual_expense",
+            "description": "Qaysi operatsiya uchun: qo'lda chiqim, kuryer → HQ yoki filial → HQ (menejer — faqat manual_expense)"
+          },
+          "photo": {
+            "type": "string",
+            "format": "binary",
+            "description": "Chek rasmi: jpeg / png / webp, ≤ 5 MB (EXIF tozalanadi)"
+          }
+        },
+        "required": [
+          "kind",
+          "photo"
+        ]
       },
       "CreateCashboxCardRequestDto": {
         "type": "object",
@@ -28914,6 +29341,18 @@
             "nullable": true,
             "example": null,
             "description": "(G085w5Qr) Nofaol sababi; faol, ulanmagan yoki sababi noma‘lum bo‘lsa null"
+          },
+          "linked_by": {
+            "type": "string",
+            "nullable": true,
+            "example": "37",
+            "description": "(BOT-2) Guruhni ulagan xodim id’si; ulanmagan / noma‘lum bo‘lsa null."
+          },
+          "linked_by_owner": {
+            "type": "boolean",
+            "nullable": true,
+            "example": false,
+            "description": "(BOT-2, ega qarori Q2 = A) true — guruhni market egasining o‘zi ulagan; false — boshqa xodim (avval operator ham ulay olardi, admin) ulagan: FE egaga «Bu guruhni siz ulamagansiz» deb ko‘rsatadi; null — ulanmagan yoki kim ulagani noma‘lum (eski ulanish)."
           }
         },
         "required": [
@@ -28921,7 +29360,9 @@
           "linked",
           "is_active",
           "linked_at",
-          "inactive_reason"
+          "inactive_reason",
+          "linked_by",
+          "linked_by_owner"
         ]
       },
       "DispatchTelegramTargetDto": {
@@ -29145,6 +29586,12 @@
             "nullable": true,
             "example": "2026-10-21T08:00:00.000Z",
             "description": "(G085w5Qr) Qachon nofaol bo‘ldi; faol qatorda null."
+          },
+          "linked_by": {
+            "type": "string",
+            "nullable": true,
+            "example": "37",
+            "description": "(BOT-2) Guruhni ulagan xodim id’si; eski / noma‘lum ulanishda null."
           }
         },
         "required": [
@@ -29157,7 +29604,8 @@
           "bot_slug",
           "is_active",
           "inactive_reason",
-          "inactive_at"
+          "inactive_at",
+          "linked_by"
         ]
       },
       "UpdateTelegramMarketRequestDto": {
@@ -30209,7 +30657,7 @@
           "market_id": {
             "type": "string",
             "example": "37",
-            "description": "Faqat `market_group` + admin/superadmin uchun MAJBURIY. Market va operator — o‘z marketi (server yechadi; boshqasi → 403)."
+            "description": "Faqat `market_group` + admin/superadmin uchun MAJBURIY. Market egasi — o‘z marketi (server yechadi; boshqasi → 403). BOT-2: market operatori guruh ulay olmaydi (403)."
           },
           "group_type": {
             "type": "string",
@@ -31824,6 +32272,154 @@
         },
         "required": [
           "name"
+        ]
+      },
+      "PartnerMarketRowDto": {
+        "type": "object",
+        "properties": {
+          "ref_id": {
+            "type": "string",
+            "example": "12"
+          },
+          "external_seller_id": {
+            "type": "string",
+            "example": "shop-9"
+          },
+          "elchi_market_id": {
+            "type": "string",
+            "example": "1234"
+          },
+          "tariff_home": {
+            "type": "number",
+            "nullable": true,
+            "example": 30000
+          },
+          "tariff_center": {
+            "type": "number",
+            "nullable": true,
+            "example": 20000
+          },
+          "market_name": {
+            "type": "string",
+            "nullable": true,
+            "description": "Market topilmasa (o‘chirilgan) — null"
+          },
+          "phone_number": {
+            "type": "string",
+            "nullable": true
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "ref_id",
+          "external_seller_id",
+          "elchi_market_id",
+          "tariff_home",
+          "tariff_center",
+          "market_name",
+          "phone_number",
+          "created_at"
+        ]
+      },
+      "PartnerMarketListResponseDto": {
+        "type": "object",
+        "properties": {
+          "statusCode": {
+            "type": "number",
+            "example": 200
+          },
+          "message": {
+            "type": "string",
+            "example": "partner markets"
+          },
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PartnerMarketRowDto"
+            }
+          }
+        },
+        "required": [
+          "statusCode",
+          "message",
+          "data"
+        ]
+      },
+      "LinkPartnerMarketRequestDto": {
+        "type": "object",
+        "properties": {
+          "external_seller_id": {
+            "type": "string",
+            "example": "shop-9",
+            "description": "Hamkor tomonidagi sotuvchi id (trim, 1..100 belgi)"
+          },
+          "elchi_market_id": {
+            "type": "string",
+            "example": "1234",
+            "description": "Elchi’dagi MAVJUD market id’si (faqat raqam)"
+          }
+        },
+        "required": [
+          "external_seller_id",
+          "elchi_market_id"
+        ]
+      },
+      "PartnerMarketLinkDto": {
+        "type": "object",
+        "properties": {
+          "ref_id": {
+            "type": "string",
+            "example": "12"
+          },
+          "external_seller_id": {
+            "type": "string",
+            "example": "shop-9"
+          },
+          "elchi_market_id": {
+            "type": "string",
+            "example": "1234"
+          },
+          "tariff_home": {
+            "type": "number",
+            "nullable": true,
+            "example": 30000
+          },
+          "tariff_center": {
+            "type": "number",
+            "nullable": true,
+            "example": 20000
+          }
+        },
+        "required": [
+          "ref_id",
+          "external_seller_id",
+          "elchi_market_id",
+          "tariff_home",
+          "tariff_center"
+        ]
+      },
+      "PartnerMarketLinkResponseDto": {
+        "type": "object",
+        "properties": {
+          "statusCode": {
+            "type": "number",
+            "example": 201
+          },
+          "message": {
+            "type": "string",
+            "example": "partner market linked"
+          },
+          "data": {
+            "$ref": "#/components/schemas/PartnerMarketLinkDto"
+          }
+        },
+        "required": [
+          "statusCode",
+          "message",
+          "data"
         ]
       },
       "UpdatePartnerRequestDto": {

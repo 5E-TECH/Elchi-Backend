@@ -284,6 +284,12 @@ export interface OrderTelegramDetails {
   region_name?: string | null;
   district_name?: string | null;
   items?: Array<{ name: string; quantity: number }>;
+  /**
+   * (BOT-2 #1) Market `tg_group_show_customer_pii` — guruh kartasidagidek.
+   * `false` → ism yo'q, telefon niqoblangan, manzil faqat tuman. Berilmasa
+   * (`undefined`) — to'liq ko'rinish (eski chaqiruvchilar).
+   */
+  show_customer_pii?: boolean;
 }
 
 type TelegramOrder = Pick<
@@ -305,14 +311,25 @@ export function buildOrderTelegramText(
   order: TelegramOrder,
   details: OrderTelegramDetails = {},
 ): string {
+  // (BOT-2 #1) Market sozlamasi o'chiq — guruh kartasi bilan bir xil
+  // qoida: ism yo'q, telefon niqoblangan, manzil faqat tuman.
+  const showPii = details.show_customer_pii !== false;
+  const rawPhone = clip(details.customer?.phone_number, 40);
+  const phone = rawPhone && !showPii ? maskPhoneForGroup(rawPhone) : rawPhone;
   const lines: string[] = [
     `${ICON[type]} <b>${escapeTelegramHtml(TEXT[type].title)}</b>`,
     `Buyurtma: <b>#${escapeTelegramHtml(orderNumberOf(order.id))}</b>`,
     '',
-    `👤 <b>Mijoz:</b> ${field(details.customer?.name, 120)}`,
-    `📞 <b>Telefon:</b> ${field(details.customer?.phone_number, 40)}`,
+    ...(showPii
+      ? [`👤 <b>Mijoz:</b> ${field(details.customer?.name, 120)}`]
+      : []),
+    `📞 <b>Telefon:</b> ${field(phone, 40)}`,
   ];
-  const place = [details.region_name, details.district_name, order.address]
+  const place = (
+    showPii
+      ? [details.region_name, details.district_name, order.address]
+      : [details.district_name]
+  )
     .map((part) => clip(part, 300))
     .filter(Boolean)
     .join(', ');
@@ -353,7 +370,12 @@ export function buildOrderTelegramText(
       CANCEL_REASON_UZ[String(order.return_reason)] ?? order.return_reason;
     lines.push(`↩️ <b>Sabab:</b> ${field(reason, 200)}`);
   }
-  lines.push(`📝 <b>Izoh:</b> ${field(order.comment, 800)}`);
+  // (BOT-2) Izohga operatorlar ikkinchi telefon, mo'ljal, oluvchi ismini
+  // yozadi — sozlama o'chiq bo'lsa PII sifatida chiqarilmaydi (guruh
+  // kartasi ham izohni ko'rsatmaydi).
+  if (showPii) {
+    lines.push(`📝 <b>Izoh:</b> ${field(order.comment, 800)}`);
+  }
 
   // Chegaradan oshsa — butun satrlar bo'yicha kesiladi (teg/entity buzilmaydi).
   let text = '';
@@ -883,8 +905,9 @@ export class OrderNotificationService implements OnApplicationBootstrap {
       ),
     ];
 
-    const [directory, customerRes, courierRes, productsRes] = await Promise.all(
-      [
+    const marketId = idOrNull(order.market_id);
+    const [directory, customerRes, courierRes, productsRes, marketRes] =
+      await Promise.all([
         this.getRegionDirectory(),
         wantsTelegram && customerId
           ? this.lookup<unknown>(
@@ -910,8 +933,16 @@ export class OrderNotificationService implements OnApplicationBootstrap {
               { ids: missingProductIds },
             )
           : null,
-      ],
-    );
+        // (BOT-2 #1) guruhdagi mijoz PII sozlamasi — `telegramCardData` bilan bir xil.
+        wantsTelegram && marketId
+          ? this.lookup<{ data?: { tg_group_show_customer_pii?: unknown } }>(
+              'identity',
+              this.identityClient,
+              'identity.user.find_by_id',
+              { id: marketId },
+            )
+          : null,
+      ]);
 
     const regionId = directory ? regionOf(order, directory) : null;
     const logistId = regionId
@@ -936,6 +967,10 @@ export class OrderNotificationService implements OnApplicationBootstrap {
     return {
       logist_id: logistId,
       telegram: {
+        // O'qib bo'lmasa — FAIL-CLOSED (niqoblanadi), karta bilan bir xil.
+        show_customer_pii: marketRes?.data
+          ? marketRes.data.tg_group_show_customer_pii !== false
+          : false,
         customer: customer
           ? { name: customer.name, phone_number: customer.phone_number }
           : null,

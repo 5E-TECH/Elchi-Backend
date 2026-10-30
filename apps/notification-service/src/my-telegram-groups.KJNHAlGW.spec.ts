@@ -47,6 +47,8 @@ describe('KJNHAlGW — findMyTelegramGroups', () => {
         is_active: null,
         linked_at: null,
         inactive_reason: null,
+        linked_by: null,
+        linked_by_owner: null,
       },
       {
         group_type: 'cancel',
@@ -54,6 +56,8 @@ describe('KJNHAlGW — findMyTelegramGroups', () => {
         is_active: null,
         linked_at: null,
         inactive_reason: null,
+        linked_by: null,
+        linked_by_owner: null,
       },
     ]);
   });
@@ -68,6 +72,7 @@ describe('KJNHAlGW — findMyTelegramGroups', () => {
         group_type: 'cancel',
         is_active: false,
         inactive_reason: 'kicked',
+        linked_by: null,
         group_id: '-100777',
         bot_slug: 'elchi',
       },
@@ -77,6 +82,7 @@ describe('KJNHAlGW — findMyTelegramGroups', () => {
         group_type: 'create',
         is_active: true,
         inactive_reason: null,
+        linked_by: null,
         group_id: '-100555',
       },
     ]);
@@ -92,6 +98,8 @@ describe('KJNHAlGW — findMyTelegramGroups', () => {
         is_active: true,
         linked_at: createdAt,
         inactive_reason: null,
+        linked_by: null,
+        linked_by_owner: null,
       },
       {
         group_type: 'cancel',
@@ -99,6 +107,8 @@ describe('KJNHAlGW — findMyTelegramGroups', () => {
         is_active: false,
         linked_at: cancelAt,
         inactive_reason: 'kicked',
+        linked_by: null,
+        linked_by_owner: null,
       },
     ]);
     expect(JSON.stringify(res?.data)).not.toContain('-100');
@@ -134,5 +144,68 @@ describe('KJNHAlGW — findMyTelegramGroups', () => {
       ).rejects.toMatchObject({ error: { statusCode: 403 } });
     }
     expect(repo.find).not.toHaveBeenCalled();
+  });
+
+  it('⭐ BOT-2 #5: kim ulagan — ega (true), operator/admin (false), noma`lum (null)', async () => {
+    repo.find.mockResolvedValue([
+      {
+        id: '11',
+        createdAt: new Date(),
+        group_type: 'cancel',
+        is_active: true,
+        inactive_reason: null,
+        linked_by: '40',
+      },
+      {
+        id: '10',
+        createdAt: new Date(),
+        group_type: 'create',
+        is_active: true,
+        inactive_reason: null,
+        linked_by: '37',
+      },
+    ]);
+    const res = await service.findMyTelegramGroups({
+      requester: { id: '37', roles: ['market'] },
+    });
+    expect(findArgs(repo.find).select).toHaveProperty('linked_by', true);
+    expect(
+      (res?.data as Array<Record<string, unknown>>).map((row) => [
+        row.group_type,
+        row.linked_by,
+        row.linked_by_owner,
+      ]),
+    ).toEqual([
+      ['create', '37', true],
+      ['cancel', '40', false],
+    ]);
+  });
+});
+
+describe('BOT-2 #5 — admin qo`lda yaratgan guruh (POST /notifications) linked_by', () => {
+  it('⭐ createTelegramMarket — linked_by = admin id (egasi emas → linked_by_owner false)', async () => {
+    const repo = {
+      findOne: jest.fn().mockResolvedValue(null),
+      create: jest.fn((row: Record<string, unknown>) => row),
+      save: jest.fn((row: Record<string, unknown>) =>
+        Promise.resolve({ id: '10', ...row }),
+      ),
+    };
+    const service = new NotificationServiceService(
+      repo as never,
+      {} as never,
+      { log: jest.fn().mockResolvedValue(undefined) } as never,
+      {} as never,
+      {} as never,
+    );
+    await service.createTelegramMarket({
+      market_id: '37',
+      group_id: '-100777',
+      group_type: 'create',
+      requester: { id: '1', roles: ['admin'] },
+    } as never);
+    expect(repo.create).toHaveBeenCalledWith(
+      expect.objectContaining({ market_id: '37', linked_by: '1' }),
+    );
   });
 });

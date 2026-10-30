@@ -1,5 +1,6 @@
 import { DataSource } from 'typeorm';
 import { TelegramAiDrafts1716000000128 } from '../../../../../migrations/1716000000128-TelegramAiDrafts';
+import { TelegramChatLocksAiWorker1716000000190 } from '../../../../../migrations/1716000000190-TelegramChatLocksAiWorker';
 import { TelegramAiDraft } from '../../entities/telegram-ai-draft.entity';
 import { AiOrderService } from './ai-order.service';
 
@@ -55,6 +56,8 @@ const DB = 'elchi_ai_drafts_test';
       try {
         await new TelegramAiDrafts1716000000128().up(runner);
         await new TelegramAiDrafts1716000000128().up(runner);
+        // (BOT-3b) worker_at ustuni — da'vo uni NULL qiladi.
+        await new TelegramChatLocksAiWorker1716000000190().up(runner);
       } finally {
         await runner.release();
       }
@@ -64,6 +67,7 @@ const DB = 'elchi_ai_drafts_test';
         {} as never,
         {} as never,
         { get: () => undefined } as never,
+        {} as never,
       );
       claim = (id, from, to) =>
         (

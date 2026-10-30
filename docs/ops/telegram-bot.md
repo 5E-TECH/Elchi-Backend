@@ -9,13 +9,13 @@
 ```
 Telegram ──HTTPS 443──▶ Cloudflare Tunnel ──▶ api-gateway
    POST /telegram/webhook/:botSlug   (X-Telegram-Bot-Api-Secret-Token, timingSafeEqual)
-        │  emit notification.telegram.update (RMQ), DARHOL 200
+        │  emit notification.telegram.webhook_update → NOTIFICATION_BOT navbati (BOT-3a), DARHOL 200
         ▼
 notification-service  BotController → BotRouterService
         ├─ botSlug tekshiruvi (noto'g'ri → jim)
         ├─ my_chat_member → BotChannelService (kanal nofaol + admin inbox)
         ├─ kiruvchi cheklov: chat 20/daqiqa (telegram_rate_limits)
-        ├─ ChatSequencer: chat bo'yicha ketma-ket (advisory lock, replikalararo)
+        ├─ ChatSequencer: chat bo'yicha ketma-ket (BOT-3b: `telegram_chat_locks` lease, ulanish ushlanmaydi)
         └─ handlerlar: start / group / market (+ `a:<id>` tugmalar → telegram_bot_actions)
 Chiquvchi: BotOutboxService (telegram_outbox) → BotTransportService (yagona api.telegram.org nuqtasi)
 ```
@@ -28,6 +28,29 @@ Chiquvchi: BotOutboxService (telegram_outbox) → BotTransportService (yagona ap
 | `telegram_outbox` | chiquvchi xabarlar: 429/5xx → qayta urinish, 403/400 → dead |
 
 Tozalash: `BotMaintenanceService` (har soat, `:17`).
+
+**Navbatlar (BOT-3a).** Bot update'lari (gateway webhook) —
+`RABBITMQ_NOTIFICATION_BOT_QUEUE` (sukut `notification_bot_queue`, o'z DLQ'si
+`…_dlq`): umumiy `notification_queue` (dispatch, push) to'lqini bot javobini
+kechiktirmaydi. Karta hodisalari (`notification.telegram.order_status`) ATAYLAB
+umumiy navbatda qoladi — ommaviy holat o'zgarishi interaktiv bot navbatini
+tiqmasin. Navbatni iste'molchi (notification-service) ham, publisher
+(api-gateway bootstrap'ida `RmqService.ensureQueue`, ayni argumentlar bilan) ham
+e'lon qiladi — xabar JIM tashlanmaydi, lekin navbatda `RMQ_RPC_TTL_MS` (60 s)
+TTL bor va DLQ'ni hech kim qayta o'ynamaydi: iste'molchi 60 s ichida turmasa
+update DLQ'ga tushadi (yo'qoladi). Update faqat consumer TTL ichida tursa
+yo'qolmaydi — **deploy'da notification-service baribir BIRINCHI**. Gateway
+bootstrap'idagi e'lon 5 s ulanish / 15 s umumiy chegara bilan, xato — faqat
+warn (listen to'silmaydi). Readiness (`GET /health/readiness`) bot navbatini
+`NOTIFICATION` qatorining `bot_queue` maydonida tekshiradi (ishlamasa qator
+`down`); `scripts/rmq-cleanup-queues.sh` ham bu navbatni biladi.
+**Guruh holati (BOT-3 #6).** Guruh supergroup'ga aylansa (`migrate_to_chat_id`
+— yuborish javobida yoki eski guruhdagi servis xabarida) `telegram_markets.group_id`
+(trigger orqali `telegram_chats` ham), navbatdagi `telegram_outbox` qatorlari va
+kartalar YANGI id'ga ko'chadi, xabar qayta yuboriladi (urinish hisoblanmaydi;
+audit `notification.tg_group_migrated`). «Not enough rights» — guruh nofaol
+(`blocked_on_send`) + admin xabari. HTML xatosi (`can't parse entities`) — faqat
+o'sha xabar `dead`, guruh faol qoladi.
 
 ## 2. Rejimlar (`TELEGRAM_BOT_MODE`, sukut `auto`)
 
@@ -92,11 +115,20 @@ Tozalash: `BotMaintenanceService` (har soat, `:17`).
 | Oqim | Endpoint / buyruq | Natija |
 |---|---|---|
 | Xodim o'z Telegram'ini ulaydi | `POST /users/me/telegram/link-code` (yoki `POST /telegram/link-code {purpose:'user'}`, eski `POST /notifications/telegram/link`) → `t.me/<bot>?start=<kod>` | bot `/start <kod>` → kod ATOMIK band → `identity.telegram.link` (band id 409, boshqa id bilan ulangan 409, nofaol/mijoz/investor 403) → `users.telegram_id`, `telegram_username`, `telegram_linked_at` |
-| Market guruhini ulash | `POST /telegram/link-code {purpose:'market_group', group_type}` (market — o'zi, operator — o'z marketi, admin — `market_id`) → `t.me/<bot>?startgroup=<kod>` | guruhda `/start@bot <kod>` → `telegram_markets` qatori; mavjud ulanish ustidan yozilmaydi; marketga `telegram.group_connected` |
+| Market guruhini ulash | `POST /telegram/link-code {purpose:'market_group', group_type}` (market EGASI — o'zi, admin — `market_id`; operator — 403, BOT-2 Q2 = A) → `t.me/<bot>?startgroup=<kod>` | guruhda `/start@bot <kod>` → `telegram_markets` qatori (`linked_by` — kodni yaratgan xodim, trigger `telegram_chats.linked_by` ga); mavjud ulanish ustidan yozilmaydi; marketga `telegram.group_connected`. `GET /notifications/me/telegram-groups` → `linked_by`, `linked_by_owner` (false — egasi ulamagan eski guruh) |
 | Uzish | `DELETE /users/me/telegram` yoki botda `/uzish` | `telegram_id` NULL + audit |
 | Statistika | `GET /telegram/stats` (admin) | rol bo'yicha `{total, linked, ratio}` |
-| Mini App kirishi | `POST /auth/telegram {init_data}` | initData HMAC + `auth_date` ≤5 daqiqa → 30 daqiqalik JWT, refresh yo'q; IP + Telegram id 5/daqiqa |
+| Mini App kirishi | `POST /auth/telegram {init_data}` | initData HMAC + `auth_date` ≤5 daqiqa → 30 daqiqalik JWT, refresh yo'q; IP + Telegram id 5/daqiqa. **Faqat kuryer** (boshqa rol 403 `TELEGRAM_COURIER_ONLY`); token `scope: 'tg_scan'` — gateway faqat `POST /orders/scan-assign` va `POST /telegram/scan/done` ni o'tkazadi (BOT-2) |
 | Bot amallari | `BotGatewayClient` | `identity.auth.telegram_actor` → aktor JWT → MAVJUD gateway endpointlari (RBAC bitta joyda) |
+
+**Telegram tokenlari (BOT-2).** Mini App va bot aktori tokenida `auth: 'telegram'`
+va `tg_id`. Gateway `JwtStrategy` har so'rovda (≤60 s kesh) identity
+`identity.auth.telegram_token_state` dan so'raydi: xodim faol, roli tokendagidek,
+Telegram hamon SHU id'ga ulangan — aks holda 401 (nofaol qilingan yoki `/uzish`
+qilgan xodim tokeni 60 s ichida to'xtaydi); identity javob bermasa — 503
+(oxirgi 5 daqiqada «faol» tasdiqlangan token o'tadi). `must_change_password` →
+tokenda `pwd_change`; `PASSWORD_CHANGE_GATE=on` da gateway 403, bot «🔐 Avval
+kabinetda parolni almashtiring» deydi.
 
 Kod: `randomBytes(32)` base64url (43 belgi), DB'da faqat SHA-256, TTL 10 daqiqa,
 bir martalik; bog'lash urinishlari odam bo'yicha 5/daqiqa → 15 daqiqa blok.
@@ -185,6 +217,13 @@ bazasiga o'zi yozmaydi, doira/holat mashinasi/isbot/extra-cost — serverda.
 
 ## 10. Moliya xabarlari (VICfJuoi, 2crjWf7v)
 
+> ⚠️ **QOIDA: pul — faqat shaxsiy chatga (BOT-2).** Summa, to'lov usuli, karta,
+> qoldiq hech qachon guruhga yuborilmaydi (guruhda operator, kuryer va boshqa
+> a'zolar bor). Smena hisoboti marketga: egasi Telegram'ga ulangan bo'lsa — uning
+> SHAXSIY chatiga to'liq hisobot; ulanmagan (yoki holat noma'lum) bo'lsa — market
+> guruhiga faqat summasiz «Smena yakunlandi — kabinetda ko'ring» + havola
+> (ega sukut qarori Q1 = A, keyin o'zgarishi mumkin).
+
 - HQ → market to'lovi (`POST /finance/cashbox/payment/market`): pul
   yozuvlari bilan AYNI tranzaksiyada `finance.payment_received` → market
   egasiga in-app + Telegram DM: summa, sana, hisob qoldig'i (oldin → keyin),
@@ -222,6 +261,13 @@ bazasiga o'zi yozmaydi, doira/holat mashinasi/isbot/extra-cost — serverda.
 > o'zi yozadi — keyingi holat hodisasi uni tahrirlaydi; yuborib bo'lmasa
 > band qilish bo'shatiladi. Migratsiya `1716000000191`. notification-service
 > `DB_POOL_MAX=20` (docker-compose.prod.yml).
+>
+> BOT-2: karta faqat guruh `telegram_chats` da hamon FAOL bo'lsa tahrirlanadi
+> (uzilgan / nofaol guruhdagi eski karta yangilanmaydi). Bekor guruhi xabari
+> ham `tg_group_show_customer_pii` ga bo'ysunadi (o'chiq — ism yo'q, telefon
+> niqobli, manzil faqat tuman; sozlama o'qilmasa — niqoblanadi).
+> Saqlash: yuborilgan `telegram_outbox` qatorida matn o'chiriladi, `dead` —
+> 7 kun, `telegram_link_tokens` — 30 kun.
 
 - Guruh — KO'RINISH joyi, qaror joyi emas: holatni o'zgartiruvchi har
   callback ODAM bo'yicha (telegram_id → user → rol/market); chat bo'yicha
@@ -257,6 +303,20 @@ bazasiga o'zi yozmaydi, doira/holat mashinasi/isbot/extra-cost — serverda.
   (keyin qo'shilgan odam eski xabarlarni ham o'qiy oladi).
 
 ## 12. AI orqali buyurtma (e7KhaeOO) — bot faqat CHAQIRUVCHI
+
+> **BOT-3b — AI fonda.** Matn / rasm → qoralama (`telegram_ai_drafts`, id
+> update'dan deterministik — takror update ikkinchi qoralama ochmaydi) + «⏳»
+> xabari; bot update'i shu bilan TUGAYDI. ai-parse va ai-confirm'ni fondagi
+> ishchi (`AiOrderService`, shu replikada darhol, zaxira — har 5 s, bir
+> replikada 5 tagacha parallel) bajaradi: `worker_at` bilan bir marta oladi,
+> QAYTA URINMAYDI (xato — «🔁 Qayta urinish»). Ishchi olganiga 4 daqiqadan
+> oshgan `parsing` → `failed` + «🔁 Qayta urinish», `creating` → preview +
+> «✅ Yaratish» ni qayta bosish (server dedupe); navbatdagi (hali olinmagan)
+> qoralama tegilmaydi. Har yakuniy yozuv da'vo tokeni (`worker_token`) bilan:
+> tiklangan qoralamaning kech natijasi tashlanadi, xabar tahrirlanmaydi.
+> Zaxira tick 5 s dan yangi qoralamani olmaydi. Chat qulfi lease 12 s,
+> uzaytirish har 4 s. Migratsiya `1716000000190` (`worker_at`, `worker_token`,
+> `telegram_chat_locks`).
 
 - Market / market operatori shaxsiy chatda buyruq emas MATN (telefon raqami
   bor — kamida 7 ta raqam) yoki RASM tashlaydi → `POST /orders/ai-parse`

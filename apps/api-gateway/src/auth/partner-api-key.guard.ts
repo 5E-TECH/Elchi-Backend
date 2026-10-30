@@ -20,7 +20,7 @@ import { isIpAllowed, normalizeIp } from './ip-allowlist.util';
  * `request.partner = { id, name }` to'ldiriladi va o'tadi.
  *
  * Faqat `/partner/*` route'larida ishlaydi; JWT guard bu route'larga qo'yilmaydi.
- * Kontrakt: docs/PARTNER_API.md §2.
+ * Kontrakt: docs/public/MARKETPLACE_API.md §2.
  */
 export interface PartnerPrincipal {
   id: string;

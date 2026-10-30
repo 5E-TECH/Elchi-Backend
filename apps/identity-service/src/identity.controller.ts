@@ -128,6 +128,18 @@ export class IdentityController {
     );
   }
 
+  /** (BOT-2 #2c) Ichki RMQ (gateway JwtStrategy): Telegram tokeni hali amaldami. */
+  @MessagePattern({ cmd: 'identity.auth.telegram_token_state' })
+  telegramTokenState(
+    @Payload()
+    data: { user_id?: unknown; telegram_id?: unknown; role?: unknown },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.authService.telegramTokenState(data ?? {}),
+    );
+  }
+
   @MessagePattern({ cmd: 'identity.refresh' })
   refresh(
     @Payload() data: { refreshToken: string },

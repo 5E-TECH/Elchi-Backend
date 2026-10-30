@@ -4,11 +4,7 @@ import { Group_type } from '@app/common';
 
 /** (G085w5Qr) `telegram_markets.inactive_reason` qiymatlari. */
 export type TelegramMarketInactiveReason =
-  | 'kicked'
-  | 'left'
-  | 'blocked_on_send'
-  | 'chat_not_found'
-  | 'manual';
+  'kicked' | 'left' | 'blocked_on_send' | 'chat_not_found' | 'manual';
 
 @Entity({ name: 'telegram_markets' })
 @Index('IDX_TG_MARKET_ID', ['market_id'])
@@ -52,4 +48,12 @@ export class TelegramMarket extends BaseEntity {
   /** (G085w5Qr) Qachon nofaol bo'ldi; faol qatorda NULL. */
   @Column({ type: 'timestamptz', nullable: true })
   inactive_at!: Date | null;
+
+  /**
+   * (BOT-2 #5, migratsiya 1716000000189) Guruhni kim ulagan (ulash kodini
+   * yaratgan xodim). Eski qatorlar audit jurnalidan; topilmasa NULL. Trigger
+   * `telegram_chats.linked_by` ga aks ettiradi.
+   */
+  @Column({ type: 'bigint', nullable: true })
+  linked_by!: string | null;
 }
