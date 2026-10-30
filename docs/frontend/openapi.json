@@ -28914,6 +28914,18 @@
             "nullable": true,
             "example": null,
             "description": "(G085w5Qr) Nofaol sababi; faol, ulanmagan yoki sababi noma‘lum bo‘lsa null"
+          },
+          "linked_by": {
+            "type": "string",
+            "nullable": true,
+            "example": "37",
+            "description": "(BOT-2) Guruhni ulagan xodim id’si; ulanmagan / noma‘lum bo‘lsa null."
+          },
+          "linked_by_owner": {
+            "type": "boolean",
+            "nullable": true,
+            "example": false,
+            "description": "(BOT-2, ega qarori Q2 = A) true — guruhni market egasining o‘zi ulagan; false — boshqa xodim (avval operator ham ulay olardi, admin) ulagan: FE egaga «Bu guruhni siz ulamagansiz» deb ko‘rsatadi; null — ulanmagan yoki kim ulagani noma‘lum (eski ulanish)."
           }
         },
         "required": [
@@ -28921,7 +28933,9 @@
           "linked",
           "is_active",
           "linked_at",
-          "inactive_reason"
+          "inactive_reason",
+          "linked_by",
+          "linked_by_owner"
         ]
       },
       "DispatchTelegramTargetDto": {
@@ -29145,6 +29159,12 @@
             "nullable": true,
             "example": "2026-10-21T08:00:00.000Z",
             "description": "(G085w5Qr) Qachon nofaol bo‘ldi; faol qatorda null."
+          },
+          "linked_by": {
+            "type": "string",
+            "nullable": true,
+            "example": "37",
+            "description": "(BOT-2) Guruhni ulagan xodim id’si; eski / noma‘lum ulanishda null."
           }
         },
         "required": [
@@ -29157,7 +29177,8 @@
           "bot_slug",
           "is_active",
           "inactive_reason",
-          "inactive_at"
+          "inactive_at",
+          "linked_by"
         ]
       },
       "UpdateTelegramMarketRequestDto": {
@@ -30209,7 +30230,7 @@
           "market_id": {
             "type": "string",
             "example": "37",
-            "description": "Faqat `market_group` + admin/superadmin uchun MAJBURIY. Market va operator — o‘z marketi (server yechadi; boshqasi → 403)."
+            "description": "Faqat `market_group` + admin/superadmin uchun MAJBURIY. Market egasi — o‘z marketi (server yechadi; boshqasi → 403). BOT-2: market operatori guruh ulay olmaydi (403)."
           },
           "group_type": {
             "type": "string",

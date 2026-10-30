@@ -21,6 +21,29 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 ## Yozuvlar
 
+### 2026-10-30 — BOT-2: Telegram bot maxfiyligi
+
+Deploy: **identity-service + api-gateway + notification-service + order-service + finance-service** (+ libs/common).
+Migratsiya **`1716000000189`** (`notification_schema.telegram_markets.linked_by`, eskilari audit jurnalidan; trigger
+`telegram_chats.linked_by` ga ham). `openapi.json` qayta yaratildi.
+
+- [2026-10-30] ⚠️ [identity/gateway] — `POST /auth/telegram` (Mini App) endi **faqat kuryerga**: boshqa rol → **403**
+  `{ code: "TELEGRAM_COURIER_ONLY" }`. Mini App tokeni bilan faqat `POST /orders/scan-assign` va
+  `POST /telegram/scan/done` ishlaydi, qolgan har qanday route (masalan `GET /orders`) → **403**. Nofaol qilingan yoki
+  Telegram'ni uzgan xodimning Telegram tokeni ≤60 s ichida **401**. `must_change_password` bo'lsa va
+  `PASSWORD_CHANGE_GATE=on` — skan 403 `PASSWORD_CHANGE_REQUIRED`. → `/tg/scan`: 403 `TELEGRAM_COURIER_ONLY` da
+  «Mini App faqat kuryerlar uchun» xabari; 401 da Mini App'ni qayta ochishni so'rash.
+- [2026-10-30] ⚠️ [notification] — market Telegram guruhini endi faqat **market egasi** yoki admin ulaydi:
+  `POST /telegram/link-code {purpose:'market_group'}` market operatoriga → **403**. → Operator kabinetida «Guruhni
+  ulash» tugmasini yashirish.
+- [2026-10-30] 🆕 [notification] — `GET /notifications/me/telegram-groups` elementlarida `linked_by` (id | null) va
+  `linked_by_owner` (true — egasi ulagan; **false — boshqa xodim, masalan avval operator ulagan**; null — ulanmagan yoki
+  noma'lum). `GET /notifications` (telegram_markets) qatorlarida `linked_by`. → `linked_by_owner === false` bo'lsa
+  egaga «Bu guruhni siz ulamagansiz — tekshirib, kerak bo'lsa qayta ulang» ogohlantirishi.
+- [2026-10-30] 🟢 [order] — bekor guruhi xabari «Guruhda mijoz ismi va telefoni» sozlamasiga bo'ysunadi (o'chiq — ism
+  yo'q, telefon `+998 90 *** ** 12`, manzil faqat tuman). Smena hisoboti marketga — egasining shaxsiy Telegram'iga;
+  ulanmagan bo'lsa guruhga faqat summasiz «Smena yakunlandi — kabinetda ko'ring». FE o'zgarishi shart emas.
+
 ### 2026-10-30 — T8: buyurtmaning maxsus belgilari (mo'rt, diniy kitob, suyuqlik …) (0OUcHZ7R)
 
 Deploy: **order-service + api-gateway** (+ libs/common). Migratsiya **`1716000000187`**

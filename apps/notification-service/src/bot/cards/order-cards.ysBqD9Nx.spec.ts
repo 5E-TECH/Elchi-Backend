@@ -249,6 +249,8 @@ describe('ysBqD9Nx #4 / h9newLsd #5 — karta sinxroni', () => {
       cards: [
         { order_id: '81', chat_id: '-1001', message_id: '901', kind: 'group' },
       ],
+      // (BOT-2 #5) guruh hamon faol.
+      groups: [{ chat_id: '-1001' }],
       card: cardData({ status: 'cancelled' }),
     });
     const result = await env.service.sync({
@@ -275,6 +277,24 @@ describe('ysBqD9Nx #4 / h9newLsd #5 — karta sinxroni', () => {
         },
       }),
     );
+  });
+
+  it('⭐ BOT-2 #5: uzilgan / nofaol guruhdagi eski karta TAHRIRLANMAYDI', async () => {
+    const env = makeSync({
+      cards: [
+        { order_id: '81', chat_id: '-1001', message_id: '901', kind: 'group' },
+      ],
+      // telegram_chats da faol qator yo'q.
+      groups: [],
+      card: cardData({ status: 'cancelled' }),
+    });
+    const result = await env.service.sync({
+      order_id: '81',
+      from_status: 'waiting',
+      to_status: 'cancelled',
+    });
+    expect(result.edited).toBe(0);
+    expect(env.transport.editMessage).not.toHaveBeenCalled();
   });
 
   it('created → new ketma-ket — guruhda allaqachon karta bor: ikkinchi karta YUBORILMAYDI', async () => {

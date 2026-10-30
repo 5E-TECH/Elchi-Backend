@@ -92,7 +92,7 @@ Tozalash: `BotMaintenanceService` (har soat, `:17`).
 | Oqim | Endpoint / buyruq | Natija |
 |---|---|---|
 | Xodim o'z Telegram'ini ulaydi | `POST /users/me/telegram/link-code` (yoki `POST /telegram/link-code {purpose:'user'}`, eski `POST /notifications/telegram/link`) → `t.me/<bot>?start=<kod>` | bot `/start <kod>` → kod ATOMIK band → `identity.telegram.link` (band id 409, boshqa id bilan ulangan 409, nofaol/mijoz/investor 403) → `users.telegram_id`, `telegram_username`, `telegram_linked_at` |
-| Market guruhini ulash | `POST /telegram/link-code {purpose:'market_group', group_type}` (market — o'zi, operator — o'z marketi, admin — `market_id`) → `t.me/<bot>?startgroup=<kod>` | guruhda `/start@bot <kod>` → `telegram_markets` qatori; mavjud ulanish ustidan yozilmaydi; marketga `telegram.group_connected` |
+| Market guruhini ulash | `POST /telegram/link-code {purpose:'market_group', group_type}` (market EGASI — o'zi, admin — `market_id`; operator — 403, BOT-2 Q2 = A) → `t.me/<bot>?startgroup=<kod>` | guruhda `/start@bot <kod>` → `telegram_markets` qatori (`linked_by` — kodni yaratgan xodim, trigger `telegram_chats.linked_by` ga); mavjud ulanish ustidan yozilmaydi; marketga `telegram.group_connected`. `GET /notifications/me/telegram-groups` → `linked_by`, `linked_by_owner` (false — egasi ulamagan eski guruh) |
 | Uzish | `DELETE /users/me/telegram` yoki botda `/uzish` | `telegram_id` NULL + audit |
 | Statistika | `GET /telegram/stats` (admin) | rol bo'yicha `{total, linked, ratio}` |
 | Mini App kirishi | `POST /auth/telegram {init_data}` | initData HMAC + `auth_date` ≤5 daqiqa → 30 daqiqalik JWT, refresh yo'q; IP + Telegram id 5/daqiqa. **Faqat kuryer** (boshqa rol 403 `TELEGRAM_COURIER_ONLY`); token `scope: 'tg_scan'` — gateway faqat `POST /orders/scan-assign` va `POST /telegram/scan/done` ni o'tkazadi (BOT-2) |
@@ -229,6 +229,13 @@ bazasiga o'zi yozmaydi, doira/holat mashinasi/isbot/extra-cost — serverda.
   alert `TelegramReceiptDeliveryLow` (< 80%) — `telegram-bot.rules.yml`.
 
 ## 11. Market guruhi kartalari va kartalarni yangilash (ysBqD9Nx, h9newLsd #5)
+
+> BOT-2: karta faqat guruh `telegram_chats` da hamon FAOL bo'lsa tahrirlanadi
+> (uzilgan / nofaol guruhdagi eski karta yangilanmaydi). Bekor guruhi xabari
+> ham `tg_group_show_customer_pii` ga bo'ysunadi (o'chiq — ism yo'q, telefon
+> niqobli, manzil faqat tuman; sozlama o'qilmasa — niqoblanadi).
+> Saqlash: yuborilgan `telegram_outbox` qatorida matn o'chiriladi, `dead` —
+> 7 kun, `telegram_link_tokens` — 30 kun.
 
 - Guruh — KO'RINISH joyi, qaror joyi emas: holatni o'zgartiruvchi har
   callback ODAM bo'yicha (telegram_id → user → rol/market); chat bo'yicha

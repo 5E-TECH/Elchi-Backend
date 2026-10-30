@@ -91,6 +91,8 @@ const TG_MARKET_SELECT: FindOptionsSelect<TelegramMarket> = {
   // (G085w5Qr) nofaol sababi jadvalda ko'rinadi.
   inactive_reason: true,
   inactive_at: true,
+  // (BOT-2 #5) kim ulagan.
+  linked_by: true,
 };
 
 /**
@@ -113,6 +115,8 @@ export function toPublicTelegramMarket(row: TelegramMarket) {
     // 'manual' | null (faol yoki sabab noma'lum — eski qator).
     inactive_reason: row.inactive_reason ?? null,
     inactive_at: row.inactive_at ?? null,
+    // (BOT-2 #5) guruhni ulagan xodim id'si; eski / noma'lum — null.
+    linked_by: row.linked_by ?? null,
   };
 }
 
@@ -398,6 +402,8 @@ export class NotificationServiceService {
       group_id: groupId,
       group_type: input.group_type,
       is_active: true,
+      // (BOT-2 #5) kim ulagani saqlanadi (trigger telegram_chats ga ham).
+      linked_by: input.created_by,
     });
 
     const saved = await this.tgMarketRepo.save(created);
@@ -663,6 +669,7 @@ export class NotificationServiceService {
           group_type: true,
           is_active: true,
           inactive_reason: true,
+          linked_by: true,
         },
         where: { market_id: marketId, isDeleted: false },
         order: { createdAt: 'DESC' },
@@ -676,6 +683,15 @@ export class NotificationServiceService {
           linked_at: row ? row.createdAt : null,
           // (G085w5Qr) nofaol sababi; faol yoki ulanmagan — null.
           inactive_reason: row ? (row.inactive_reason ?? null) : null,
+          /**
+           * (BOT-2 #5, ega qarori Q2 = A) Guruhni endi faqat market egasi
+           * yoki admin ulaydi. Avval operator ulagan eski guruhlar egaga
+           * ko'rsatiladi: `linked_by_owner: false` — boshqa xodim (operator /
+           * admin) ulagan, `null` — noma'lum (eski, audit izi yo'q).
+           */
+          linked_by: row ? (row.linked_by ?? null) : null,
+          linked_by_owner:
+            row && row.linked_by ? String(row.linked_by) === marketId : null,
         };
       });
       return this.successRes(items, 200, 'Telegram guruhlari holati');

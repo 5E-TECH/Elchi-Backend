@@ -117,9 +117,38 @@ export class OrderCardSyncService {
         }
       }
 
+      /**
+       * (BOT-2 #5) Guruh kartasi faqat guruh hamon FAOL va (ma'lum bo'lsa)
+       * SHU marketga ulangan bo'lsa tahrirlanadi: uzilgan / nofaol qilingan
+       * yoki boshqa marketga o'tgan guruhdagi eski karta yangilanmaydi.
+       */
+      const groupChatIds = [
+        ...new Set(
+          cards.filter((row) => row.kind === 'group').map((row) => row.chat_id),
+        ),
+      ];
+      const activeGroups = groupChatIds.length
+        ? new Set(
+            (
+              await manager.getRepository(TelegramChat).find({
+                select: { chat_id: true },
+                where: {
+                  chat_id: In(groupChatIds),
+                  owner_type: 'market',
+                  is_active: true,
+                  ...(/^\d{1,20}$/.test(marketId)
+                    ? { owner_id: marketId }
+                    : {}),
+                },
+              })
+            ).map((chat) => chat.chat_id),
+          )
+        : new Set<string>();
+
       for (const row of cards) {
         try {
           if (row.kind === 'group') {
+            if (!activeGroups.has(row.chat_id)) continue;
             const current = await card();
             if (!current) continue;
             await this.transport.editMessage(row.chat_id, row.message_id, {
