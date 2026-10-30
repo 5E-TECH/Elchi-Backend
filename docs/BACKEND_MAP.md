@@ -290,8 +290,12 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
     hq_to_market, match_value, amount, request_id}` (finance outbox, persistent,
     `runIdempotent` + `reclaimFailed`, applied marker
     `order.settlement.retreat.applied:<sha256>`): takes min(carry, X), then
-    reopens the newest rows not yet past the next hop (COURIER_SETTLED /
-    HQ-courier BRANCH_SETTLED → PENDING; MARKET_SETTLED → BRANCH_SETTLED),
+    reopens the newest rows not yet past the next hop of the ORIGINAL
+    receiver (`receiver_cashbox_type`/`receiver_branch_id`: branch →
+    COURIER_SETTLED of that branch, main → BRANCH_SETTLED with NULL branch →
+    PENDING; MARKET_SETTLED → BRANCH_SETTLED; click_to_market enqueues
+    `hq_to_market` first). Rows are locked FOR UPDATE in createdAt order and
+    `runFifoSettlement` now locks its candidates too (no lost update),
     excess → carry, shortfall → NEGATIVE carry. `runFifoSettlement` no longer
     clamps a negative carry (the next payment closes it first); summaries and
     `courier_scope.carry_amount` are signed. `order.payment_reversal.apply`

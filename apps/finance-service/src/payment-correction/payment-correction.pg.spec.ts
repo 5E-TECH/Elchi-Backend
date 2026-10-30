@@ -20,6 +20,7 @@ import { CourierPaymentAckService } from '../courier-payment/courier-payment-ack
 import { FinanceNotificationService } from '../notification/finance-notification.service';
 import { FinanceRealtimeService } from '../realtime/finance-realtime.service';
 import { PaymentCorrectionService } from './payment-correction.service';
+import { ShiftReportService } from '../shift-report/shift-report.service';
 
 /**
  * T6-BE-2 — to'lovni qaytarish / summasini tuzatish, HAQIQIY Postgres
@@ -426,6 +427,8 @@ describePg('T6 payment correction — haqiqiy Postgres', () => {
         (await legOf(tid, Cashbox_type.FOR_COURIER)).id,
       ),
     });
+    // Teskari qator kontragenti — asl oyoqniki (frontda ism).
+    expect(reversalRow.source_user).toMatchObject({ id: '301' });
     expect(reversalRow.reverses_history_id).toBe(
       reversalRow.correction.related_history_id,
     );
@@ -456,6 +459,13 @@ describePg('T6 payment correction — haqiqiy Postgres', () => {
 
     expect(res.statusCode).toBe(201);
     expect(await box('15', Cashbox_type.BRANCH)).toMatchObject({ card: 0 });
+    expect(enqueued('order.settlement.retreat')).toEqual([
+      expect.objectContaining({
+        level: 'courier_to_branch',
+        receiver_cashbox_type: 'branch',
+        receiver_branch_id: '15',
+      }),
+    ]);
     expect(await box('301', Cashbox_type.FOR_COURIER)).toMatchObject({
       balance: 200_000,
     });
@@ -497,11 +507,21 @@ describePg('T6 payment correction — haqiqiy Postgres', () => {
         .getRepository(CashboxHistory)
         .count({ where: { source_type: Source_type.PAYMENT_REVERSAL } }),
     ).toBe(4);
-    expect(
-      enqueued('order.settlement.retreat')
-        .map((p) => p.level)
-        .sort(),
-    ).toEqual(['courier_to_branch', 'hq_to_market']);
+    // Tartib: avval market bo'g'ini, keyin kuryer (outbox ketma-ket).
+    expect(enqueued('order.settlement.retreat')).toEqual([
+      expect.objectContaining({
+        level: 'hq_to_market',
+        match_value: '501',
+        receiver_cashbox_type: 'main',
+        receiver_branch_id: null,
+      }),
+      expect.objectContaining({
+        level: 'courier_to_branch',
+        match_value: '301',
+        receiver_cashbox_type: 'main',
+        receiver_branch_id: null,
+      }),
+    ]);
     expect(
       enqueued('notification.dispatch')
         .map((n) => n.recipient_ids[0])
@@ -843,6 +863,59 @@ describePg('T6 payment correction — haqiqiy Postgres', () => {
       code: 'INSUFFICIENT_BALANCE',
     });
     expect(await box('0', Cashbox_type.MAIN)).toMatchObject({ card: 100_000 });
+  });
+
+  it('smena hisoboti: qaytarilgan kuryer topshirig`i jamidan ayiriladi, market to`lovi «qaytarildi» qatori', async () => {
+    await seed('0', Cashbox_type.MAIN, 1_000_000);
+    await seed('301', Cashbox_type.FOR_COURIER);
+    await seed('501', Cashbox_type.FOR_MARKET);
+    await sale('301', Cashbox_type.FOR_COURIER, 700_000);
+    await sale('501', Cashbox_type.FOR_MARKET, 900_000);
+    const shift = await db.getRepository(Shift).save(
+      db.getRepository(Shift).create({
+        cashbox_user_id: '0',
+        opened_by: '1',
+        opened_at: new Date(Date.now() - 60_000),
+        status: ShiftStatus.OPEN,
+      } as never),
+    );
+    const t1 = await payCourier(500_000);
+    await payCourier(200_000);
+    const mp = (await finance.paymentsToMarket({
+      market_id: '501',
+      amount: 300_000,
+      payment_method: PaymentMethod.CASH,
+      created_by: '5',
+      dedup_epoch: 'mp-shift',
+    })) as any;
+    await reverse(String((await legOf(t1, Cashbox_type.FOR_COURIER)).id));
+    await reverse(
+      String((await legOf(mp.data.transfer_id, Cashbox_type.MAIN)).id),
+    );
+    shift.closed_at = new Date(Date.now() + 1_000);
+    const reports = new ShiftReportService(
+      db,
+      activityLog as never,
+      { listForShift: jest.fn().mockResolvedValue([]) } as never,
+      {} as never,
+      { send: jest.fn(() => of({ data: [] })) } as never,
+    );
+    const snapshot = await reports.buildSnapshot(shift, 1);
+    expect(snapshot.couriers).toEqual([
+      expect.objectContaining({
+        courier_id: '301',
+        count: 2,
+        total: 200_000,
+        reversed: 500_000,
+      }),
+    ]);
+    expect(snapshot.markets[0].total).toBe(0);
+    expect(
+      snapshot.markets[0].payments.map((p) => [p.amount, !!p.reversed]),
+    ).toEqual([
+      [300_000, false],
+      [-300_000, true],
+    ]);
   });
 
   it('⭐ 11: qaytarilgan to`lov kvitansiyasida «Tasdiqlayman» → 409 PAYMENT_CORRECTED', async () => {

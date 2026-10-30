@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   Body,
+  ConflictException,
   Controller,
   Delete,
   ForbiddenException,
@@ -101,6 +102,7 @@ import {
   ReversePaymentRequestDto,
   CorrectPaymentAmountRequestDto,
 } from './dto/finance.swagger.dto';
+import { BodyStatusCodeInterceptor } from './body-status-code.interceptor';
 import { resolveFinancialActors } from './financial-balance/financial-balance.util';
 import {
   buildFileLinkUrl,
@@ -147,6 +149,14 @@ interface CourierSettlementScope {
   branch_pending_amount: number;
   branch_ids: string[];
   carry_amount: number;
+}
+
+/** (T6) `finance.payment_correction.context` javobi. */
+interface PaymentCorrectionContext {
+  payment_kind?: 'courier_payment' | 'market_payment' | null;
+  receiver_cashbox_type?: Cashbox_type | null;
+  receiver_branch_id?: string | null;
+  courier_id?: string | null;
 }
 
 /** Kuryer kassasi sahifasi uchun foydalanuvchi qisqa ma'lumoti (C3). */
@@ -3533,6 +3543,8 @@ export class FinanceGatewayController {
   }
 
   @Post('history/:id/reverse')
+  // T6: yangi tuzatish — 201, o'sha Idempotency-Key bilan takror — 200.
+  @UseInterceptors(BodyStatusCodeInterceptor)
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(RoleEnum.SUPERADMIN)
   @ApiBearerAuth()
@@ -3606,6 +3618,8 @@ export class FinanceGatewayController {
   }
 
   @Post('history/:id/correct-amount')
+  // T6: yangi tuzatish — 201, o'sha Idempotency-Key bilan takror — 200.
+  @UseInterceptors(BodyStatusCodeInterceptor)
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(RoleEnum.SUPERADMIN)
   @ApiBearerAuth()
@@ -3661,7 +3675,11 @@ export class FinanceGatewayController {
         code: PAYMENT_CORRECTION_ERROR_CODES.IDEMPOTENCY_KEY_REQUIRED,
       });
     }
-    const notify = await this.paymentCorrectionManagerIds(id, user);
+    const context = await this.paymentCorrectionContext(id);
+    if (cmd === 'finance.payment_correction.correct_amount') {
+      await this.assertCorrectionReceivable(context, user);
+    }
+    const notify = await this.paymentCorrectionManagerIds(context, user);
     return this.send(
       { cmd },
       {
@@ -3675,19 +3693,71 @@ export class FinanceGatewayController {
     );
   }
 
-  private async paymentCorrectionManagerIds(
+  /** (T6) To'lov konteksti (qabul qiluvchi, kuryer). Xato — bo'sh kontekst. */
+  private async paymentCorrectionContext(
     historyId: string,
-    user: JwtUser,
-  ): Promise<string[]> {
+  ): Promise<PaymentCorrectionContext> {
     try {
-      const context = await this.send<{
-        data?: { receiver_branch_id?: string | null };
-      }>(
+      const res = await this.send<{ data?: PaymentCorrectionContext }>(
         { cmd: 'finance.payment_correction.context' },
         { history_id: historyId },
         3000,
       );
-      const branchId = context?.data?.receiver_branch_id;
+      return res?.data ?? {};
+    } catch (error) {
+      // 404 / 400 — finance amalning o'zida aniq kod bilan qaytaradi.
+      const status = rpcErrorStatus(error);
+      if (status !== null && status >= 400 && status < 500) return {};
+      throw new ServiceUnavailableException(
+        FinanceGatewayController.RECEIVE_CHECK_UNAVAILABLE_MESSAGE,
+      );
+    }
+  }
+
+  /**
+   * (T6, C3/C4) Summani tuzatish = YANGI kuryer to'lovi: asl qabul qiluvchi
+   * bo'yicha oddiy qabul bilan AYNI joylashuv qoidasi — HQ (MAIN) uchun
+   * kuryer HQ'niki va filialga tegishli topshirilmagan savdosi yo'q (C4),
+   * filial uchun kuryer AYNAN o'sha filialda (C3). Aks holda FIFO boshqa
+   * filial qatorlarini yopardi → 409 NOT_CORRECTABLE (to'liq qaytarish
+   * mumkin). Tekshiruv xizmati javob bermasa — 503.
+   */
+  private async assertCorrectionReceivable(
+    context: PaymentCorrectionContext,
+    user: JwtUser,
+  ): Promise<void> {
+    const courierId = context.courier_id ? String(context.courier_id) : '';
+    if (context.payment_kind !== 'courier_payment' || !courierId) return;
+    try {
+      if (context.receiver_cashbox_type === Cashbox_type.BRANCH) {
+        if (!context.receiver_branch_id) return;
+        await this.assertCourierInManagerBranch(
+          courierId,
+          String(context.receiver_branch_id),
+          user,
+        );
+      } else {
+        await this.assertHqCourierReceivable(courierId, user);
+      }
+    } catch (error) {
+      if (error instanceof ServiceUnavailableException) throw error;
+      const status = rpcErrorStatus(error);
+      if (status !== null && status >= 500) throw error;
+      throw new ConflictException({
+        statusCode: 409,
+        code: PAYMENT_CORRECTION_ERROR_CODES.NOT_CORRECTABLE,
+        message:
+          "Summani tuzatib bo'lmaydi: kuryer endi asl qabul qiluvchiga tegishli emas yoki filialga tegishli topshirilmagan savdosi bor — to'lovni to'liq qaytaring",
+      });
+    }
+  }
+
+  private async paymentCorrectionManagerIds(
+    context: PaymentCorrectionContext,
+    user: JwtUser,
+  ): Promise<string[]> {
+    try {
+      const branchId = context.receiver_branch_id;
       if (!branchId) return [];
       const res = await this.sendBranch<{ data?: { manager_id?: unknown } }>(
         { cmd: 'branch.find_by_id' },

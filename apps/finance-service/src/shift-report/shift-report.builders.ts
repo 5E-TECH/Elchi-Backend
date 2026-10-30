@@ -52,7 +52,10 @@ export interface CourierSlice {
   courier_id: string;
   name: string | null;
   count: number;
+  /** Smenadagi SOF qabul: topshirilgan − (T6) shu smenada qaytarilgani. */
   total: number;
+  /** (T6) Shu smenada qaytarilgan / tuzatilgan to'lovlar summasi (bo'lsa). */
+  reversed?: number;
   /** Kuryer kassasidagi joriy qoldiq (qarz) — hisobot paytida. */
   remaining_debt: number | null;
 }
@@ -63,6 +66,8 @@ export interface MarketPaymentLine {
   payment_method: string;
   card_name: string | null;
   at: Date | string;
+  /** (T6) Teskari qator — to'lov qaytarilgan (summa manfiy). */
+  reversed?: boolean;
 }
 
 export interface MarketSlice {
@@ -211,6 +216,9 @@ export function buildCourierMessage(
   const lines = [
     `Smena #${snapshot.shift_id} (${tashkentDateTime(snapshot.closed_at)}) yakuni:`,
     `Siz topshirgan: ${formatSom(slice.total)} (${slice.count} ta to'lov)`,
+    ...(slice.reversed
+      ? [`Shundan qaytarilgan: ${formatSom(slice.reversed)}`]
+      : []),
     ...(slice.remaining_debt != null
       ? [`Qolgan qarzingiz: ${formatSom(slice.remaining_debt)}`]
       : []),
@@ -224,6 +232,7 @@ export function buildCourierMessage(
       courier_id: slice.courier_id,
       total: slice.total,
       count: slice.count,
+      ...(slice.reversed ? { reversed: slice.reversed } : {}),
       remaining_debt: slice.remaining_debt,
       telegram_cabinet_link: true,
     },
@@ -246,7 +255,7 @@ export function buildMarketMessage(
       (line) =>
         `• ${formatSom(line.amount)} — ${methodLabel(line.payment_method)}${
           line.card_name ? ` (${line.card_name})` : ''
-        }`,
+        }${line.reversed ? ' — qaytarildi' : ''}`,
     );
   if (slice.payments.length > 20) {
     paymentLines.push(`… yana ${slice.payments.length - 20} ta`);

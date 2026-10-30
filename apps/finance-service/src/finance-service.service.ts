@@ -688,12 +688,17 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
   private async writeOrderPayment(
     order: MarketPayableOrder,
     dto: { paid_amount: number; status: Order_status },
+    // T6 — to'lov tuzatishi sinxroni: hamkorga holat yuborilmaydi.
+    opts: { suppressExternalSync?: boolean } = {},
   ): Promise<void> {
+    const extra = opts.suppressExternalSync
+      ? { suppress_external_sync: true }
+      : {};
     try {
       await rmqSend(
         this.orderClient,
         { cmd: 'order.update_normalized' },
-        { id: order.id, dto },
+        { id: order.id, dto, ...extra },
       );
     } catch (error) {
       const status = this.rpcErrorStatus(error);
@@ -709,7 +714,7 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
       await rmqSend(
         this.orderClient,
         { cmd: 'order.update_normalized' },
-        { id: order.id, dto: { paid_amount: dto.paid_amount } },
+        { id: order.id, dto: { paid_amount: dto.paid_amount }, ...extra },
       );
     }
   }
@@ -721,7 +726,11 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
    * (`marketOrderRemaining`) olinadi. Birinchi xatoda to'xtaydi — FIFO
    * ketma-ketligida "teshik" qolmasin.
    */
-  private async applyPaymentToOrders(marketId: string, amount: number) {
+  private async applyPaymentToOrders(
+    marketId: string,
+    amount: number,
+    opts: { suppressExternalSync?: boolean } = {},
+  ) {
     let paymentInProcess = Number(amount);
     if (!(paymentInProcess > 0)) {
       return;
@@ -742,32 +751,48 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         // ⚠️ `break` EMAS: hovuz bo'sh bo'lsa ham manfiy qator uni to'ldirishi
         // mumkin — shu bois davom etamiz (BeePost namunasi).
         paymentInProcess -= remaining; // remaining manfiy → pool oshadi
-        await this.writeOrderPayment(order, {
-          paid_amount: fullPaid,
-          status: Order_status.PAID,
-        });
+        await this.writeOrderPayment(
+          order,
+          {
+            paid_amount: fullPaid,
+            status: Order_status.PAID,
+          },
+          opts,
+        );
       } else if (remaining === 0) {
         // Hisob teng — statusни yopamiz (pulga tegmaymiz).
-        await this.writeOrderPayment(order, {
-          paid_amount: fullPaid,
-          status: Order_status.PAID,
-        });
+        await this.writeOrderPayment(
+          order,
+          {
+            paid_amount: fullPaid,
+            status: Order_status.PAID,
+          },
+          opts,
+        );
       } else if (paymentInProcess <= 0) {
         // Pul tugadi — musbat qatorni o'tkazib yuboramiz (oldinda manfiy qator
         // hovuzni to'ldirib keyingisini yopishi mumkin, shuning uchun break emas).
         continue;
       } else if (paymentInProcess >= remaining) {
         paymentInProcess -= remaining;
-        await this.writeOrderPayment(order, {
-          paid_amount: fullPaid,
-          status: Order_status.PAID,
-        });
+        await this.writeOrderPayment(
+          order,
+          {
+            paid_amount: fullPaid,
+            status: Order_status.PAID,
+          },
+          opts,
+        );
       } else {
         const paidBefore = Math.max(Number(order.paid_amount ?? 0) || 0, 0);
-        await this.writeOrderPayment(order, {
-          paid_amount: paidBefore + paymentInProcess,
-          status: Order_status.PARTLY_PAID,
-        });
+        await this.writeOrderPayment(
+          order,
+          {
+            paid_amount: paidBefore + paymentInProcess,
+            status: Order_status.PARTLY_PAID,
+          },
+          opts,
+        );
         paymentInProcess = 0;
       }
     }
@@ -868,7 +893,9 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
       try {
         await this.revertPaymentFromOrders(marketId, Number(input.reverted));
         if (Number(input.applied) > 0) {
-          await this.applyPaymentToOrders(marketId, Number(input.applied));
+          await this.applyPaymentToOrders(marketId, Number(input.applied), {
+            suppressExternalSync: true,
+          });
         }
       } catch (error) {
         this.logger.warn(
@@ -1103,6 +1130,8 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
     const userBackedSources = new Set<Source_type>([
       Source_type.COURIER_PAYMENT,
       Source_type.MARKET_PAYMENT,
+      // T6: teskari qatorning `source_user_id` si — asl oyoqniki (kuryer / market).
+      Source_type.PAYMENT_REVERSAL,
     ]);
     /**
      * Kassa egasi FOYDALANUVCHI bo'lgan turlar (audit CODE-08). BRANCH

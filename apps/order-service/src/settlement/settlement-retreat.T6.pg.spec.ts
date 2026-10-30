@@ -267,4 +267,107 @@ describePg('T6-BE-3 settlement retreat — haqiqiy Postgres', () => {
       }),
     ).rejects.toMatchObject({ error: { statusCode: 400 } });
   });
+  it('⭐ qabul qiluvchi bo`yicha: kuryer HQ → filial B ga o`tgan; eski HQ to`lovi qaytarilsa faqat HQ qatorlari ochiladi', async () => {
+    const hq = await row({
+      courier_id: '10',
+      courier_amount: 100_000,
+      status: SettlementStatus.BRANCH_SETTLED, // HQ'da qabul qilingan
+    });
+    const b = await row({
+      courier_id: '10',
+      branch_id: '22',
+      courier_amount: 100_000,
+      status: SettlementStatus.COURIER_SETTLED, // keyin filial B da
+    });
+    await service.retreatSettlement({
+      level: 'courier_to_branch',
+      match_value: '10',
+      amount: 100_000,
+      request_id: 'pc:20:courier_to_branch',
+      receiver_cashbox_type: 'main',
+      receiver_branch_id: null,
+    });
+    expect(await statusOf(hq.id)).toBe(SettlementStatus.PENDING);
+    expect(await statusOf(b.id)).toBe(SettlementStatus.COURIER_SETTLED);
+
+    // Filial B qabul qilgan to'lov — faqat B qatorlari; yetmagani manfiy, B bilan.
+    await service.retreatSettlement({
+      level: 'courier_to_branch',
+      match_value: '10',
+      amount: 150_000,
+      request_id: 'pc:21:courier_to_branch',
+      receiver_cashbox_type: 'branch',
+      receiver_branch_id: '22',
+    });
+    expect(await statusOf(b.id)).toBe(SettlementStatus.PENDING);
+    const carryRow = await db
+      .getRepository(OrderSettlementCarry)
+      .findOneByOrFail({ level: 'courier_to_branch', party_id: '10' });
+    expect(Number(carryRow.amount)).toBe(-50_000);
+    expect(carryRow.branch_id).toBe('22');
+  });
+
+  it('⭐ click_to_market tartibi: avval hq_to_market, keyin courier_to_branch — MARKET_SETTLED qator PENDING gacha', async () => {
+    const r = await row({
+      courier_id: '11',
+      market_id: '601',
+      courier_amount: 80_000,
+      market_amount: 80_000,
+      status: SettlementStatus.MARKET_SETTLED,
+    });
+    await service.retreatSettlement({
+      level: 'hq_to_market',
+      match_value: '601',
+      amount: 80_000,
+      request_id: 'pc:30:hq_to_market',
+      receiver_cashbox_type: 'main',
+    });
+    expect(await statusOf(r.id)).toBe(SettlementStatus.BRANCH_SETTLED);
+    await service.retreatSettlement({
+      level: 'courier_to_branch',
+      match_value: '11',
+      amount: 80_000,
+      request_id: 'pc:30:courier_to_branch',
+      receiver_cashbox_type: 'main',
+    });
+    expect(await statusOf(r.id)).toBe(SettlementStatus.PENDING);
+    expect(await carry('courier_to_branch', '11')).toBe(0);
+    expect(await carry('hq_to_market', '601')).toBe(0);
+  });
+
+  it('⭐ poyga: FIFO qulf kutgan qatorni boshqa tranzaksiya qayta ochsa — FIFO uni bosib ketmaydi', async () => {
+    const r = await row({
+      courier_id: '12',
+      branch_id: '33',
+      courier_amount: 50_000,
+      status: SettlementStatus.COURIER_SETTLED,
+    });
+    await db.query(
+      `UPDATE "${schema}".order_settlement SET branch_amount = 50000 WHERE id = $1`,
+      [r.id],
+    );
+    const qr = db.createQueryRunner();
+    await qr.connect();
+    await qr.startTransaction();
+    await qr.query(
+      `SELECT id FROM "${schema}".order_settlement WHERE id = $1 FOR UPDATE`,
+      [r.id],
+    );
+    const fifo = service.advanceSettlement({
+      level: 'branch_to_hq',
+      match_value: '33',
+      amount: 50_000,
+      request_id: 'race-1',
+    });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    await qr.query(
+      `UPDATE "${schema}".order_settlement SET status = 'pending' WHERE id = $1`,
+      [r.id],
+    );
+    await qr.commitTransaction();
+    await qr.release();
+    await fifo;
+    expect(await statusOf(r.id)).toBe(SettlementStatus.PENDING);
+    expect(await carry('branch_to_hq', '33')).toBe(50_000);
+  });
 });

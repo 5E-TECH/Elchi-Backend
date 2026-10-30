@@ -10,6 +10,7 @@ import { TelegramDmService } from '../../telegram/telegram-dm.service';
 import {
   PAYMENT_ACK_ALREADY_TEXT,
   PAYMENT_ACK_CONFIRMED_TEXT,
+  PAYMENT_ACK_CORRECTED_TEXT,
   PAYMENT_ACK_DISPUTED_TEXT,
   PAYMENT_ACK_FOREIGN_TEXT,
 } from './payment-ack.actions';
@@ -132,6 +133,28 @@ describe('2crjWf7v — 👍 / ❗️ kvitansiya tugmalari', () => {
     });
     await press(ctx, ok);
     expect(sentTexts(ctx).at(-1)).toBe(PAYMENT_ACK_FOREIGN_TEXT);
+  });
+
+  it('⭐ T6: qaytarilgan to`lov (409 PAYMENT_CORRECTED) — tugmalar olinadi, yakuniy matn', async () => {
+    const { ctx, ok } = await setup({
+      status: 409,
+      body: { statusCode: 409, code: 'PAYMENT_CORRECTED', message: 'x' },
+    });
+    await press(ctx, ok);
+    expect(ctx.transport.editMessage).toHaveBeenCalledWith('44', '555', {
+      reply_markup: { inline_keyboard: [] },
+    });
+    expect(sentTexts(ctx).at(-1)).toBe(PAYMENT_ACK_CORRECTED_TEXT);
+  });
+
+  it('boshqa 409 — tugmalar qoladi, «keyinroq urinib ko`ring»', async () => {
+    const { ctx, ok } = await setup({
+      status: 409,
+      body: { statusCode: 409, message: 'x' },
+    });
+    await press(ctx, ok);
+    expect(ctx.transport.editMessage).not.toHaveBeenCalled();
+    expect(sentTexts(ctx).at(-1)).toContain('keyinroq');
   });
 });
 

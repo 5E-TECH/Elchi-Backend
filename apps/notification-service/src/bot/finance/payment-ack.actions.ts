@@ -17,6 +17,11 @@ export const PAYMENT_ACK_DISPUTED_TEXT =
   "❗️ E'tirozingiz qabul qilindi — menejer va filial boshlig'iga yuborildi. Kassa qoldig'i o'zgarmadi.";
 export const PAYMENT_ACK_ALREADY_TEXT =
   'ℹ️ Bu kvitansiyaga allaqachon javob berilgan.';
+/** (T6) Superadmin to'lovni qaytargan / tuzatgan — javob qabul qilinmaydi. */
+export const PAYMENT_ACK_CORRECTED_TEXT =
+  "ℹ️ Bu to'lov qaytarilgan yoki tuzatilgan — yangi holat bildirishnomada.";
+/** finance-service 409 kodi (`PAYMENT_CORRECTION_ERROR_CODES.PAYMENT_CORRECTED`). */
+const PAYMENT_CORRECTED_CODE = 'PAYMENT_CORRECTED';
 
 const str = (value: unknown): string =>
   typeof value === 'string' || typeof value === 'number' ? String(value) : '';
@@ -95,6 +100,13 @@ export class PaymentAckActions {
     }
     if (res.status === 403 || res.status === 404) {
       await ctx.reply(PAYMENT_ACK_FOREIGN_TEXT);
+      return;
+    }
+    // (T6) To'lov qaytarilgan / tuzatilgan — yakuniy holat: tugmalar olinadi.
+    const code = (res.body as { code?: unknown } | null)?.code;
+    if (res.status === 409 && code === PAYMENT_CORRECTED_CODE) {
+      await this.clearButtons(ctx, action);
+      await ctx.reply(PAYMENT_ACK_CORRECTED_TEXT);
       return;
     }
     await ctx.reply(

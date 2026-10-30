@@ -77,7 +77,16 @@ qayta yaratildi. Maket: frontend `design/T6-pul-qaytarish`.
 - [2026-10-30] 🟢 [finance] — jurnal fe'llari: `finance.payment_reversed`, `finance.payment_amount_corrected`
   (metadata: summalar, `correction_id`, `reason`, `partner_notified: false`), `finance.payment_correction_settings_updated`.
   Market buyurtmalari: oxirgi PAID / PARTLY_PAID buyurtmadan to'langan qism kamayadi (→ PARTLY_PAID / SOLD; CLOSED
-  tegilmaydi), fonda. `branch_to_main` tuzatilmaydi (alohida karta); hamkor marketiga xabar yuborilmaydi.
+  tegilmaydi), fonda. `branch_to_main` tuzatilmaydi (alohida karta); hamkor marketiga xabar yuborilmaydi
+  (buyurtma holati sinxroni ham hamkorga ketmaydi).
+- [2026-10-30] ✏️ [finance] — `correct-amount` kuryer to'lovida yangi to'lov oddiy qabul qoidasi bilan: HQ qabul
+  qilgan bo'lsa kuryer HQ'niki va filialga tegishli topshirilmagan savdosi yo'q, filial qabul qilgan bo'lsa kuryer
+  o'sha filialda; aks holda 409 `NOT_CORRECTABLE` (to'liq qaytarish mumkin). Tekshiruv xizmati javob bermasa — 503.
+- [2026-10-30] 🟢 [finance] — smena hisoboti: shu smenada qaytarilgan kuryer topshirig'i kuryer jamidan ayiriladi
+  (`reversed`), qaytarilgan market to'lovi manfiy qator (`reversed: true`, «qaytarildi»). Teskari qatorlarda
+  `source_user` (asl kontragent) to'ldiriladi.
+- [2026-10-30] 🟢 [bot] — qaytarilgan to'lov kvitansiyasidagi tugma bosilsa: tugmalar olinadi, «Bu to'lov qaytarilgan
+  yoki tuzatilgan — yangi holat bildirishnomada.»
 
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->

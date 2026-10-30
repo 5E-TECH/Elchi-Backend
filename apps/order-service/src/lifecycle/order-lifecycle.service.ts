@@ -10587,7 +10587,7 @@ export class OrderLifecycleService {
       { paid_amount: paidAmount, status },
       undefined,
       undefined,
-      { paymentReversal: true },
+      { paymentReversal: true, suppressExternalSync: true },
     );
     return successRes(
       { order_id: orderId, skipped: false, status, paid_amount: paidAmount },
@@ -10676,8 +10676,15 @@ export class OrderLifecycleService {
      * T6 `paymentReversal: true` — to'lov qaytarilishi qirralari
      * (`isValidPaymentReversalStatusTransition`: PAID → PARTLY_PAID / SOLD).
      * Faqat `applyPaymentReversal` beradi.
+     * T6 `suppressExternalSync: true` — hamkor (tashqi) holat sinxroni
+     * yuborilmaydi: superadmin to'lovni tuzatganda hamkorga xabar yo'q
+     * (ega qarori, jurnalda `partner_notified: false`).
      */
-    options?: { rollback?: boolean; paymentReversal?: boolean },
+    options?: {
+      rollback?: boolean;
+      paymentReversal?: boolean;
+      suppressExternalSync?: boolean;
+    },
   ) {
     const order = await this.findById(id);
     if (!externalManager) {
@@ -11125,7 +11132,7 @@ export class OrderLifecycleService {
 
     const updated = await this.findById(order.id);
     const newStatus = updated.status;
-    if (oldStatus !== newStatus) {
+    if (oldStatus !== newStatus && !options?.suppressExternalSync) {
       const action = this.resolveSyncAction(oldStatus, newStatus);
       if (action) {
         void this.queueExternalStatusSync(

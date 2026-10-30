@@ -1218,20 +1218,24 @@ export class OrderSettlementService {
         carryBefore = Number(carryRow?.amount ?? 0) || 0;
       }
 
+      // T6: qatorlar FOR UPDATE — parallel `retreatSettlement` qayta ochgan
+      // qatorni bu FIFO eski holat bilan bosib ketmasin (Postgres qulfdan
+      // keyin `status` shartini qayta tekshiradi). Tartib retreat bilan bir xil.
       const candidates = await repo.find({
         where: {
           [params.matchColumn]: params.matchValue,
           status: params.fromStatus,
           isDeleted: false,
         } as Record<string, unknown>,
-        order: { createdAt: 'ASC' },
+        order: { createdAt: 'ASC', id: 'ASC' },
+        lock: { mode: 'pessimistic_write' },
       });
 
       let remaining = lumpSum + carryBefore;
       const now = new Date();
       const advanceRow = async (row: OrderSettlement): Promise<void> => {
         await repo.update(
-          { id: row.id },
+          { id: row.id, status: params.fromStatus },
           { status: params.toStatus(row), ...params.stamp(now) },
         );
         settledOrderIds.push(String(row.order_id));
@@ -1906,6 +1910,10 @@ export class OrderSettlementService {
     amount: number;
     requester_id?: string;
     request_id?: string;
+    /** Asl to'lovni qabul qilgan kassa: `main` (HQ) yoki `branch`. */
+    receiver_cashbox_type?: string | null;
+    /** `branch` bo'lsa — filial id si. */
+    receiver_branch_id?: string | null;
   }) {
     const level = String(data?.level ?? '');
     if (level !== 'courier_to_branch' && level !== 'hq_to_market') {
@@ -1921,6 +1929,15 @@ export class OrderSettlementService {
       );
     }
     const requesterId = String(data?.requester_id ?? '').trim();
+    const rawReceiver = String(data?.receiver_cashbox_type ?? '').trim();
+    const receiverBranchId =
+      String(data?.receiver_branch_id ?? '').trim() || null;
+    const receiverType: 'main' | 'branch' | null =
+      rawReceiver === 'main'
+        ? 'main'
+        : rawReceiver === 'branch' && receiverBranchId
+          ? 'branch'
+          : null;
     const token = String(data?.request_id ?? '').trim();
     const appliedKey = token
       ? this.advanceAppliedKey(token, RETREAT_APPLIED_PATTERN)
@@ -1967,32 +1984,52 @@ export class OrderSettlementService {
 
       const rest = round2(amount - Math.min(Math.max(carryBefore, 0), amount));
       if (rest > 0) {
+        // Qatorlar FOR UPDATE — FIFO (`runFifoSettlement`) bilan BIR XIL
+        // tartibda (createdAt ASC) qulflanadi (deadlock yo'q), keyin eng
+        // yangisidan yuriladi. Parallel FIFO qatorni boshqa holatga o'tkazgan
+        // bo'lsa, Postgres qulfdan keyin WHERE ni qayta tekshiradi — qator
+        // tushib qoladi (yo'qolgan yangilanish yo'q).
         const qb = repo
           .createQueryBuilder('s')
           .where('s.isDeleted = :deleted', { deleted: false })
-          .orderBy('s.createdAt', 'DESC')
-          .addOrderBy('s.id', 'DESC')
+          .orderBy('s.createdAt', 'ASC')
+          .addOrderBy('s.id', 'ASC')
           .setLock('pessimistic_write');
         if (level === 'courier_to_branch') {
-          qb.andWhere('s.courier_id = :party', { party: matchValue }).andWhere(
-            new Brackets((w) => {
-              w.where(
-                '(s.status = :courierSettled AND s.branch_id IS NOT NULL)',
-                {
-                  courierSettled: SettlementStatus.COURIER_SETTLED,
-                },
-              ).orWhere('(s.status = :branchSettled AND s.branch_id IS NULL)', {
-                branchSettled: SettlementStatus.BRANCH_SETTLED,
-              });
-            }),
-          );
+          qb.andWhere('s.courier_id = :party', { party: matchValue });
+          if (receiverType === 'branch' && receiverBranchId) {
+            // Asl qabul qiluvchi — filial: faqat SHU filial qatorlari.
+            qb.andWhere('s.status = :courierSettled', {
+              courierSettled: SettlementStatus.COURIER_SETTLED,
+            }).andWhere('s.branch_id = :receiverBranch', {
+              receiverBranch: receiverBranchId,
+            });
+          } else if (receiverType === 'main') {
+            // Asl qabul qiluvchi — HQ: faqat HQ qatorlari (branch_id NULL).
+            qb.andWhere('s.status = :branchSettled', {
+              branchSettled: SettlementStatus.BRANCH_SETTLED,
+            }).andWhere('s.branch_id IS NULL');
+          } else {
+            // Eski payload (qabul qiluvchisiz) — ikkala tur.
+            qb.andWhere(
+              new Brackets((w) => {
+                w.where(
+                  '(s.status = :courierSettled AND s.branch_id IS NOT NULL)',
+                  { courierSettled: SettlementStatus.COURIER_SETTLED },
+                ).orWhere(
+                  '(s.status = :branchSettled AND s.branch_id IS NULL)',
+                  { branchSettled: SettlementStatus.BRANCH_SETTLED },
+                );
+              }),
+            );
+          }
         } else {
           qb.andWhere('s.market_id = :party', { party: matchValue }).andWhere(
             's.status = :marketSettled',
             { marketSettled: SettlementStatus.MARKET_SETTLED },
           );
         }
-        const candidates = await qb.getMany();
+        const candidates = (await qb.getMany()).reverse();
         const field =
           level === 'courier_to_branch' ? 'courier_amount' : 'market_amount';
         for (const row of candidates) {
@@ -2022,7 +2059,10 @@ export class OrderSettlementService {
       if (carryRepo && carryRow) {
         carryAfter = round2(carryBefore - amount + reopened);
         let branchId = carryRow.branch_id ?? null;
-        if (level === 'courier_to_branch' && !branchId) {
+        if (level === 'courier_to_branch' && receiverType) {
+          // Qoldiq (manfiy bo'lsa ham) asl qabul qiluvchi bilan belgilanadi.
+          branchId = receiverType === 'branch' ? receiverBranchId : null;
+        } else if (level === 'courier_to_branch' && !branchId) {
           const sample = await repo.findOne({
             where: { courier_id: matchValue },
             order: { createdAt: 'DESC' },

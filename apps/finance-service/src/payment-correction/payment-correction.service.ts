@@ -257,11 +257,15 @@ export class PaymentCorrectionService {
                 shape.receiverCashbox.cashbox_type === Cashbox_type.BRANCH
                   ? String(shape.receiverCashbox.user_id)
                   : null,
+              courier_id: shape.courierLeg
+                ? String(shape.courierLeg.cashbox.user_id)
+                : null,
             }
           : {
               payment_kind: null,
               receiver_cashbox_type: null,
               receiver_branch_id: null,
+              courier_id: null,
             },
       };
     } catch (error) {
@@ -439,17 +443,19 @@ export class PaymentCorrectionService {
         });
       }
 
-      // Daftar orqaga (finance → order, doimiy pattern).
-      if (shape.courierLeg) {
-        await this.enqueueRetreat(
-          tx,
-          'courier_to_branch',
-          shape.counterpartyUserId,
-          X,
-          epoch,
-          input.requesterId,
-        );
-      }
+      // Daftar orqaga (finance → order, doimiy pattern). TARTIB muhim
+      // (outbox ketma-ket yetkazadi): click_to_market da AVVAL market
+      // bo'g'ini (MARKET_SETTLED → BRANCH_SETTLED), keyin kuryer bo'g'ini —
+      // aks holda kuryer retreat'i market yopgan qatorlarni ko'rmaydi.
+      // Qabul qiluvchi (MAIN / filial) — qaysi qatorlar qayta ochilishi
+      // shundan (kuryer boshqa filialga o'tgan bo'lsa ham asl qabul qiluvchi).
+      const receiver = {
+        receiver_cashbox_type: receiverBox.cashbox_type,
+        receiver_branch_id:
+          receiverBox.cashbox_type === Cashbox_type.BRANCH
+            ? String(receiverBox.user_id)
+            : null,
+      };
       if (shape.marketLeg) {
         await this.enqueueRetreat(
           tx,
@@ -458,6 +464,18 @@ export class PaymentCorrectionService {
           X,
           epoch,
           input.requesterId,
+          receiver,
+        );
+      }
+      if (shape.courierLeg) {
+        await this.enqueueRetreat(
+          tx,
+          'courier_to_branch',
+          shape.counterpartyUserId,
+          X,
+          epoch,
+          input.requesterId,
+          receiver,
         );
       }
 
@@ -648,6 +666,10 @@ export class PaymentCorrectionService {
     amount: number,
     epoch: string,
     requesterId: string,
+    receiver: {
+      receiver_cashbox_type: Cashbox_type;
+      receiver_branch_id: string | null;
+    },
   ) {
     const requestId = `${epoch}:${level}`;
     await this.outbox.enqueue(
@@ -659,6 +681,7 @@ export class PaymentCorrectionService {
         amount: Number(amount),
         requester_id: requesterId,
         request_id: requestId,
+        ...receiver,
       },
       { manager: tx, requestId },
     );

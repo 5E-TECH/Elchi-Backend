@@ -21,6 +21,9 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  *     `payment_method`, kontragent, vaqt farqi ≤ 5 s. Har oyoq uchun
  *     juftlik YAGONA bo'lishi shart; noaniq (ikki nomzod) — NULL qoladi
  *     (API `LEGACY_UNLINKED`). Pulga TEGMAYDI: faqat bog'lovchi ustun.
+ *     Yagonalik `count(*) OVER (PARTITION BY …)` bilan (korrelyatsion
+ *     sub-so'rov O(n²) edi: 20k juftda ~41 s → ~0,4 s) — migratsiya
+ *     `cashbox_history` ALTER qulfi ostida qisqa tursin.
  *  5. Sozlama `payment_correction.window_days` (finance_settings) — qator
  *     yaratilmaydi: yo'q bo'lsa servis 30 kun deb o'qiydi.
  *
@@ -175,9 +178,14 @@ export class PaymentCorrections1716000000186 implements MigrationInterface {
            AND r."source_user_id" IS NOT DISTINCT FROM c."source_user_id"
            AND abs(extract(epoch FROM (r.created_at - c.created_at))) <= 5
       )
-      SELECT p.* FROM p
-       WHERE (SELECT count(*) FROM p p2 WHERE p2.courier_leg = p.courier_leg) = 1
-         AND (SELECT count(*) FROM p p3 WHERE p3.receiver_leg = p.receiver_leg) = 1
+      SELECT courier_leg, receiver_leg, created_at, "amount", "created_by", payment_method
+        FROM (
+          SELECT p.*,
+                 count(*) OVER (PARTITION BY p.courier_leg) AS n_courier,
+                 count(*) OVER (PARTITION BY p.receiver_leg) AS n_receiver
+            FROM p
+        ) x
+       WHERE n_courier = 1 AND n_receiver = 1
     `);
 
     // Marketga to'lov oyoqlari: MAIN EXPENSE ↔ market EXPENSE.
@@ -202,9 +210,14 @@ export class PaymentCorrections1716000000186 implements MigrationInterface {
            AND k.cashbox_user_id = m."source_user_id"
            AND abs(extract(epoch FROM (k.created_at - m.created_at))) <= 5
       )
-      SELECT p.* FROM p
-       WHERE (SELECT count(*) FROM p p2 WHERE p2.main_leg = p.main_leg) = 1
-         AND (SELECT count(*) FROM p p3 WHERE p3.market_leg = p.market_leg) = 1
+      SELECT main_leg, market_leg, created_at, "amount", "created_by", payment_method
+        FROM (
+          SELECT p.*,
+                 count(*) OVER (PARTITION BY p.main_leg) AS n_main,
+                 count(*) OVER (PARTITION BY p.market_leg) AS n_market
+            FROM p
+        ) x
+       WHERE n_main = 1 AND n_market = 1
     `);
 
     /**
@@ -226,9 +239,14 @@ export class PaymentCorrections1716000000186 implements MigrationInterface {
            AND abs(extract(epoch FROM (mp.created_at - cp.created_at))) <= 5
          WHERE cp.payment_method = 'click_to_market'
       )
-      SELECT g.* FROM g
-       WHERE (SELECT count(*) FROM g g2 WHERE g2.courier_leg = g.courier_leg) = 1
-         AND (SELECT count(*) FROM g g3 WHERE g3.main_leg = g.main_leg) = 1
+      SELECT courier_leg, receiver_leg, main_leg, market_leg
+        FROM (
+          SELECT g.*,
+                 count(*) OVER (PARTITION BY g.courier_leg) AS n_courier,
+                 count(*) OVER (PARTITION BY g.main_leg) AS n_main
+            FROM g
+        ) x
+       WHERE n_courier = 1 AND n_main = 1
     `);
 
     await queryRunner.query(`

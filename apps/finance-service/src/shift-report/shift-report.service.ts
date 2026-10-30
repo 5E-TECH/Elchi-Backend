@@ -535,6 +535,73 @@ export class ShiftReportService {
         at: Date;
       }>();
 
+    /**
+     * (T6) Shu smenada QAYTARILGAN to'lovlar — teskari qatorlar
+     * (`payment_reversal`) asl oyoq turi bo'yicha: kuryer topshirig'i
+     * (asl INCOME `courier_payment`) kuryer jamidan ayiriladi; market
+     * to'lovi (asl EXPENSE `market_payment`) — manfiy «qaytarildi» qatori.
+     * Shunda hisobot qatorlari smena jamiga mos keladi.
+     */
+    const reversalRows = await window(
+      manager.createQueryBuilder(CashboxHistory, 'h'),
+    )
+      .innerJoin(CashboxHistory, 'o', 'o.id = h.reverses_history_id')
+      .select('h.id', 'id')
+      .addSelect('h.source_user_id', 'user_id')
+      .addSelect('h.amount', 'amount')
+      .addSelect('h.payment_method', 'payment_method')
+      .addSelect('h.card_id', 'card_id')
+      .addSelect('h.createdAt', 'at')
+      .addSelect('o.source_type', 'original_source')
+      .andWhere('h.source_type = :reversal', {
+        reversal: Source_type.PAYMENT_REVERSAL,
+      })
+      .andWhere('h.source_user_id IS NOT NULL')
+      .andWhere('o.source_type IN (:...originals)', {
+        originals: [Source_type.COURIER_PAYMENT, Source_type.MARKET_PAYMENT],
+      })
+      .orderBy('h.createdAt', 'ASC')
+      .addOrderBy('h.id', 'ASC')
+      .getRawMany<{
+        id: string;
+        user_id: string;
+        amount: string;
+        payment_method: string;
+        card_id: string | null;
+        at: Date;
+        original_source: string;
+      }>();
+    const courierReversed = new Map<string, number>();
+    for (const row of reversalRows) {
+      if (row.original_source !== String(Source_type.COURIER_PAYMENT)) continue;
+      const id = String(row.user_id);
+      courierReversed.set(
+        id,
+        Math.round(
+          ((courierReversed.get(id) ?? 0) + (num(row.amount) ?? 0)) * 100,
+        ) / 100,
+      );
+      if (!courierRows.some((r) => String(r.user_id) === id)) {
+        courierRows.push({ user_id: id, count: '0', total: '0' });
+      }
+    }
+    for (const row of reversalRows) {
+      if (row.original_source !== String(Source_type.MARKET_PAYMENT)) continue;
+      marketRows.push({ ...row, amount: String(-(num(row.amount) ?? 0)) });
+    }
+    marketRows.sort(
+      (a, b) =>
+        new Date(a.at).getTime() - new Date(b.at).getTime() ||
+        Number(a.id) - Number(b.id),
+    );
+    const reversedMarketIds = new Set(
+      reversalRows
+        .filter(
+          (row) => row.original_source === String(Source_type.MARKET_PAYMENT),
+        )
+        .map((row) => String(row.id)),
+    );
+
     const courierIds = courierRows.map((row) => String(row.user_id));
     const marketIds = [
       ...new Set(marketRows.map((row) => String(row.user_id))),
@@ -566,14 +633,18 @@ export class ShiftReportService {
     ]);
 
     const couriers: CourierSlice[] = courierRows
-      .map((row) => ({
-        courier_id: String(row.user_id),
-        name: names.get(String(row.user_id)) ?? null,
-        count: Number(row.count) || 0,
-        total: num(row.total) ?? 0,
-        remaining_debt: balances.couriers.get(String(row.user_id)) ?? null,
-      }))
-      .filter((slice) => slice.count > 0);
+      .map((row) => {
+        const reversed = courierReversed.get(String(row.user_id)) ?? 0;
+        return {
+          courier_id: String(row.user_id),
+          name: names.get(String(row.user_id)) ?? null,
+          count: Number(row.count) || 0,
+          total: Math.round(((num(row.total) ?? 0) - reversed) * 100) / 100,
+          ...(reversed > 0 ? { reversed } : {}),
+          remaining_debt: balances.couriers.get(String(row.user_id)) ?? null,
+        };
+      })
+      .filter((slice) => slice.count > 0 || (slice.reversed ?? 0) > 0);
 
     const marketMap = new Map<string, MarketSlice>();
     for (const row of marketRows) {
@@ -596,6 +667,7 @@ export class ShiftReportService {
           ? (cardName.get(String(row.card_id)) ?? null)
           : null,
         at: row.at,
+        ...(reversedMarketIds.has(String(row.id)) ? { reversed: true } : {}),
       });
       slice.total = Math.round((slice.total + amount) * 100) / 100;
       marketMap.set(id, slice);

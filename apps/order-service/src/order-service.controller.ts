@@ -1570,16 +1570,26 @@ export class OrderServiceController {
       id: string;
       dto: Record<string, any>;
       requester?: { id?: string; roles?: string[]; note?: string | null };
+      /** T6 — finance to'lov tuzatishi sinxroni: hamkorga holat yuborilmaydi. */
+      suppress_external_sync?: boolean;
     },
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () => {
       const normalized = this.orderService.normalizeUpdatePayload(data.dto);
-      return this.lifecycleService.updateFull(
-        data.id,
-        normalized as any,
-        data.requester,
-      );
+      return data.suppress_external_sync === true
+        ? this.lifecycleService.updateFull(
+            data.id,
+            normalized as any,
+            data.requester,
+            undefined,
+            { suppressExternalSync: true },
+          )
+        : this.lifecycleService.updateFull(
+            data.id,
+            normalized as any,
+            data.requester,
+          );
     });
   }
 
