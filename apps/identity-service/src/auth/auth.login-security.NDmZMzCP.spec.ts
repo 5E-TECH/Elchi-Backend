@@ -33,6 +33,8 @@ interface UserRow {
   refresh_token: string | null;
   session_epoch: number;
   must_change_password: boolean;
+  /** (aidsxJ2H) admin/tizim bergan parol. */
+  password_change_forced?: boolean;
 }
 
 function setup(row: UserRow | null) {
@@ -284,6 +286,25 @@ describe('NDmZMzCP — login: timing, qulf, zaif parol, rehash', () => {
       { id: '25' },
       expect.objectContaining({ must_change_password: false }),
     );
+  });
+
+  it('(aidsxJ2H) admin/tizim bergan parol — tokenda pwd_change + pwd_forced (darvoza env’siz)', async () => {
+    const t = setup(
+      baseUser({ must_change_password: true, password_change_forced: true }),
+    );
+    const res = await t.login('+998935557711', 'Kuchli-Parol-2026');
+    expect(res.must_change_password).toBe(true);
+    const claims = t.jwt.decode<Record<string, unknown>>(res.accessToken);
+    expect(claims.pwd_change).toBe(true);
+    expect(claims.pwd_forced).toBe(true);
+  });
+
+  it('(aidsxJ2H) faqat zaif parol bayrog‘i — pwd_forced YO‘Q (mavjud foydalanuvchi env bilan)', async () => {
+    const t = setup(baseUser({ must_change_password: true }));
+    const res = await t.login('+998935557711', 'Kuchli-Parol-2026');
+    const claims = t.jwt.decode<Record<string, unknown>>(res.accessToken);
+    expect(claims.pwd_change).toBe(true);
+    expect(claims).not.toHaveProperty('pwd_forced');
   });
 
   it('eski bcrypt narxi — 12 bilan qayta xesh, sessiyalar parol izi AYNI tranzaksiyada ko‘chadi', async () => {

@@ -681,15 +681,13 @@ export class ShiftReportService {
     const marketMap = new Map<string, MarketSlice>();
     for (const row of marketRows) {
       const id = String(row.user_id);
-      const slice =
-        marketMap.get(id) ??
-        ({
-          market_id: id,
-          name: names.get(id) ?? null,
-          payments: [],
-          total: 0,
-          balance: balances.markets.get(id) ?? null,
-        } as MarketSlice);
+      const slice = marketMap.get(id) ?? {
+        market_id: id,
+        name: names.get(id) ?? null,
+        payments: [],
+        total: 0,
+        balance: balances.markets.get(id) ?? null,
+      };
       const amount = num(row.amount) ?? 0;
       slice.payments.push({
         history_id: String(row.id),
@@ -918,6 +916,8 @@ export class ShiftReportService {
           mime_type: REPORT_MIME[report.format],
           file_base64: buffer.toString('base64'),
           folder: 'shift-report',
+          // (dgvwZasd B) Tizim yaratadi — yuklovchi foydalanuvchi yo'q.
+          owner: { id: 'system', role: 'system', branch_id: null },
         },
         { timeoutMs: 20_000, retries: 1 },
       );

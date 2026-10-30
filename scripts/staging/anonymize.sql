@@ -37,7 +37,7 @@ CREATE FUNCTION pg_temp.app_schemas() RETURNS text[] LANGUAGE sql IMMUTABLE AS $
   SELECT ARRAY['identity_schema','order_schema','catalog_schema','logistics_schema',
                'finance_schema','notification_schema','integration_schema',
                'branch_schema','investor_schema','c2c_schema','search_schema',
-               'ai_schema']
+               'ai_schema','file_schema']
 $$;
 
 CREATE FUNCTION pg_temp.tbl(s text, t text) RETURNS boolean LANGUAGE sql STABLE AS $$
@@ -324,6 +324,8 @@ END $$;
 SELECT pg_temp.setcol('notification_schema', 'sms_outbox', 'to_phone', 'pg_temp.mask_phone(id)');
 SELECT pg_temp.setcol('notification_schema', 'sms_outbox', 'text', '''[staging] SMS matni #'' || id');
 SELECT pg_temp.clear('notification_schema', 'sms_outbox', 'last_response');
+-- (aidsxJ2H) maskalangan parol SMS'i matnida login (telefon) bor.
+SELECT pg_temp.clear('notification_schema', 'sms_outbox', 'redacted_text');
 SELECT pg_temp.setcol('notification_schema', 'customer_consent', 'phone', 'pg_temp.mask_phone(id)');
 SELECT pg_temp.scrubcol('notification_schema', 'customer_consent', 'evidence');
 -- Rejalashtirilgan / navbatdagi SMS kampaniyalar — bekor.

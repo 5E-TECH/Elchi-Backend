@@ -361,9 +361,12 @@ export class OrderCardSyncService implements OnModuleInit {
         cardOrderId: data.id,
       });
       const messageId = sent.result?.message_id;
+      // (BOT-3 #6) Guruh supergroup'ga aylangan bo'lsa — yangi id ostida.
+      const chatId = sent.chat_id ?? group.chat_id;
+      // Band qilish qatori migrateChat'da yangi id'ga ko'chgan bo'ladi.
       if (sent.status === 'sent' && messageId) {
         await this.dataSource.getRepository(TelegramOrderCard).update(
-          { order_id: data.id, chat_id: group.chat_id },
+          { order_id: data.id, chat_id: chatId },
           {
             message_id: String(messageId),
             status: data.status,
@@ -374,13 +377,13 @@ export class OrderCardSyncService implements OnModuleInit {
         await this.dataSource
           .getRepository(TelegramOrderCard)
           .update(
-            { order_id: data.id, chat_id: group.chat_id },
+            { order_id: data.id, chat_id: chatId },
             { status: data.status, updated_at: new Date() },
           );
       } else {
-        await this.releaseClaim(data.id, group.chat_id);
+        await this.releaseClaim(data.id, chatId);
       }
-      await this.audit(data.id, group.chat_id, data, 'sent', sent.status);
+      await this.audit(data.id, chatId, data, 'sent', sent.status);
       return sent.status === 'sent' || sent.status === 'queued';
     } catch (error) {
       // Guruhga yuborib bo'lmadi (bot chiqarilgan va h.k.) — buyurtma oqimiga

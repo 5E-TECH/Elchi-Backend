@@ -43,4 +43,11 @@ export type AiReceiptExtractResponse =
       confidence: number | null;
       model: string;
     }
-  | { ok: false; reason: AiParseReason };
+  | {
+      ok: false;
+      /**
+       * `too_large` / `image_decode_failed` — gateway rasmni tayyorlay olmadi
+       * (AI chaqirilmaydi; finance — `unreadable`).
+       */
+      reason: AiParseReason | 'too_large' | 'image_decode_failed';
+    };

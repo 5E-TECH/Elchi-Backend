@@ -5,10 +5,16 @@ import {
   Payload,
   RmqContext,
 } from '@nestjs/microservices';
-import { RmqService, executeAndAck, ActivityLogQuery } from '@app/common';
+import {
+  RmqService,
+  executeAndAck,
+  ActivityLogQuery,
+  ProductRequester,
+} from '@app/common';
 import {
   CatalogServiceService,
   ProductCreateDto,
+  ProductMeasureFillDto,
   ProductWriteDto,
 } from './catalog-service.service';
 
@@ -40,14 +46,31 @@ export class CatalogServiceController {
     @Payload()
     data: {
       // MH-3: o'lchov (weight_kg, length_cm, width_cm, height_cm,
-      // volumetric_enabled) va barcode — ixtiyoriy (hamkor yo'li
-      // `{ name, user_id }` bilan yaratadi).
+      // volumetric_enabled) va barcode — ixtiyoriy (hamkor yo'li o'lchovsiz
+      // ham yaratadi).
       dto: ProductCreateDto;
+      // 6tGZzupr: HTTP — foydalanuvchi, hamkor yo'li — `system`.
+      requester?: ProductRequester;
     },
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
-      this.catalogService.create(data.dto),
+      this.catalogService.create(data.dto, data.requester),
+    );
+  }
+
+  @MessagePattern({ cmd: 'catalog.product.fill_missing_measure' })
+  fillMissingMeasure(
+    @Payload()
+    data: {
+      id: string;
+      dto: ProductMeasureFillDto;
+      requester?: ProductRequester;
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.catalogService.fillMissingMeasure(data.id, data.dto, data.requester),
     );
   }
 
@@ -62,6 +85,7 @@ export class CatalogServiceController {
         limit?: number;
         sort_by?: string;
         sort_dir?: string;
+        needs_measurement?: boolean;
       };
     },
     @Ctx() context: RmqContext,

@@ -1,8 +1,13 @@
 import 'reflect-metadata';
 import { BadRequestException, ForbiddenException } from '@nestjs/common';
 import { INTERCEPTORS_METADATA } from '@nestjs/common/constants';
-import { of, throwError } from 'rxjs';
-import { FinanceGatewayController } from './finance-gateway.controller';
+import { lastValueFrom, of, throwError } from 'rxjs';
+import sharp from 'sharp';
+import { setSharpForTesting } from './ai-order/ai-image-resize';
+import {
+  FinanceGatewayController,
+  prepareReceiptAiImage,
+} from './finance-gateway.controller';
 import {
   ReceiptProjectionInterceptor,
   projectReceiptsForViewer,
@@ -115,6 +120,8 @@ describe('T3-2 — tarixdagi receipt proyeksiyasi', () => {
       'findHistoryById',
       'getMainCashbox',
       'findCashboxByUser',
+      'myCashbox',
+      'cashboxByUserId',
     ]) {
       const handler = Object.getOwnPropertyDescriptor(
         FinanceGatewayController.prototype,
@@ -125,6 +132,76 @@ describe('T3-2 — tarixdagi receipt proyeksiyasi', () => {
       ).toContain(ReceiptProjectionInterceptor);
       expect(proto[name]).toBeDefined();
     }
+  });
+  const runInterceptor = async (
+    user: Record<string, unknown>,
+    branchClient?: { send: jest.Mock },
+  ) => {
+    const interceptor = new ReceiptProjectionInterceptor(branchClient as never);
+    const context = {
+      switchToHttp: () => ({ getRequest: () => ({ ...req, user }) }),
+    } as never;
+    return (await lastValueFrom(
+      interceptor.intercept(context, { handle: () => of(payload()) }),
+    )) as any;
+  };
+
+  it('⭐ interceptor: JWT`da branch_id yo`q menejer — filial branch_users`dan (handler bilan bir xil)', async () => {
+    const branch = {
+      send: jest.fn(() => of({ data: { branch_id: '13', role: 'MANAGER' } })),
+    };
+    const out = await runInterceptor({ sub: '25', roles: ['manager'] }, branch);
+    expect(branch.send).toHaveBeenCalledWith(
+      { cmd: 'branch.user.find_by_user' },
+      expect.objectContaining({ user_id: '25' }),
+    );
+    expect(out.data.detail.receipt).toMatchObject({ id: '41' });
+  });
+
+  it('⭐ interceptor: kuryer my-cashbox javobidagi receipt (brief va to`liq) olib tashlanadi', async () => {
+    const out = await runInterceptor({ sub: '301', roles: ['courier'] });
+    expect(JSON.stringify(out)).not.toContain('"receipt"');
+    expect(out.data.items[0]).toEqual({ id: '1' });
+  });
+
+  it('interceptor: to`liq chek bo`lmasa — menejer uchun branch RMQ chaqirilmaydi', async () => {
+    const branch = { send: jest.fn(() => of({ data: { branch_id: '13' } })) };
+    const interceptor = new ReceiptProjectionInterceptor(branch as never);
+    const context = {
+      switchToHttp: () => ({
+        getRequest: () => ({ ...req, user: { sub: '25', roles: ['manager'] } }),
+      }),
+    } as never;
+    const out = (await lastValueFrom(
+      interceptor.intercept(context, {
+        handle: () =>
+          of({
+            data: {
+              items: [{ id: '1', receipt: { id: '41', ai_status: 'match' } }],
+            },
+          }),
+      }),
+    )) as any;
+    expect(branch.send).not.toHaveBeenCalled();
+    expect(out.data.items[0].receipt).toEqual({ id: '41', ai_status: 'match' });
+  });
+
+  it('interceptor: filial aniqlanmadi (xato) — chek null (fail closed); SA — so`rov yo`q', async () => {
+    const failing = {
+      send: jest.fn(() => throwError(() => new Error('down'))),
+    };
+    const out = await runInterceptor(
+      { sub: '25', roles: ['manager'] },
+      failing,
+    );
+    expect(out.data.detail.receipt).toBeNull();
+    const branch = { send: jest.fn(() => of({ data: {} })) };
+    const sa = await runInterceptor(
+      { sub: '1', roles: ['superadmin'] },
+      branch,
+    );
+    expect(branch.send).not.toHaveBeenCalled();
+    expect(sa.data.detail.receipt).toMatchObject({ id: '41' });
   });
 });
 
@@ -237,9 +314,77 @@ describe('T3-2 — gateway yo`llari', () => {
     ).rejects.toBeInstanceOf(ForbiddenException);
     expect(finance.send).not.toHaveBeenCalled();
   });
+  it.each([
+    [['superadmin'], true],
+    [['admin'], true],
+    [['manager'], true],
+    [['courier'], false],
+    [['market'], false],
+    [['registrator'], false],
+  ])(
+    '⭐ fail closed: tarix %j → include_receipts %s',
+    async (roles, expected) => {
+      const { controller, finance } = make({
+        statusCode: 200,
+        data: { items: [] },
+      });
+      await controller.findHistory({}, user(roles, { branch_id: '13' }));
+      expect(lastPayload(finance).include_receipts).toBe(expected);
+    },
+  );
+
+  it.each([
+    [['admin'], true],
+    [['superadmin'], true],
+  ])(
+    'cashbox/user/:user_id tarixi (loadCashboxHistory) %j → include_receipts %s',
+    async (roles, expected) => {
+      const { controller, finance } = make({
+        statusCode: 200,
+        data: { id: '77', items: [] },
+      });
+      await controller.findCashboxByUser('5', {}, user(roles));
+      const historyCall = (
+        finance.send.mock.calls as unknown as Array<[{ cmd: string }, any]>
+      ).find(([pattern]) => pattern.cmd === 'finance.history.find_all');
+      expect(historyCall?.[1]).toMatchObject({
+        cashbox_id: '77',
+        include_receipts: expected,
+      });
+    },
+  );
+
+  it('⭐ my-cashbox (kuryer) — finance`dan chek SO`RALMAYDI; tafsilot — rolga qarab', async () => {
+    const { controller, finance } = make({ statusCode: 200, data: {} });
+    await controller.myCashbox(user(['courier']), {});
+    expect(lastPayload(finance)).not.toHaveProperty('include_receipts');
+    // Begona qator — 403, lekin finance so'rovida chek allaqachon so'ralmagan.
+    await controller
+      .findHistoryById('5', user(['courier']))
+      .catch(() => undefined);
+    expect(lastPayload(finance).include_receipts).toBe(false);
+    await controller.findHistoryById('5', user(['admin']));
+    expect(lastPayload(finance).include_receipts).toBe(true);
+  });
 });
 
 describe('T3-3 — gateway: AI tahlili (fon) va qayta tahlil', () => {
+  // Haqiqiy 3000×1500 JPEG — AI'ga 1568 px gacha kichraytirilib ketadi.
+  let photoBase64 = '';
+  beforeAll(async () => {
+    photoBase64 = (
+      await sharp({
+        create: {
+          width: 3000,
+          height: 1500,
+          channels: 3,
+          background: { r: 240, g: 240, b: 240 },
+        },
+      })
+        .jpeg({ quality: 95 })
+        .toBuffer()
+    ).toString('base64');
+  });
   const cmdCalls = (mock: jest.Mock, name: string) =>
     (mock.mock.calls as unknown as Array<[{ cmd: string }, any]>).filter(
       ([pattern]) => pattern.cmd === name,
@@ -248,13 +393,19 @@ describe('T3-3 — gateway: AI tahlili (fon) va qayta tahlil', () => {
     ai?: unknown;
     aiThrows?: boolean;
     finance?: unknown;
+    body?: string;
   }) => {
     const finance = {
       send: jest.fn(() => of(opts.finance ?? { statusCode: 200, data: {} })),
     };
     const file = {
       send: jest.fn(() =>
-        of({ data: { body_base64: 'aGVsbG8=', mime_type: 'image/jpeg' } }),
+        of({
+          data: {
+            body_base64: opts.body ?? photoBase64,
+            mime_type: 'image/jpeg',
+          },
+        }),
       ),
     };
     const ai = {
@@ -287,13 +438,14 @@ describe('T3-3 — gateway: AI tahlili (fon) va qayta tahlil', () => {
     expect(cmdCalls(file.send, 'file.read')[0][1]).toEqual({
       key: 'cashbox-receipt-x.jpg',
     });
-    expect(cmdCalls(ai.send, 'ai.finance.receipt_extract')[0][1]).toMatchObject(
-      {
-        image_base64: 'aGVsbG8=',
-        media_type: 'image/jpeg',
-        receipt_id: '41',
-      },
-    );
+    const sent = cmdCalls(ai.send, 'ai.finance.receipt_extract')[0][1];
+    expect(sent).toMatchObject({ media_type: 'image/jpeg', receipt_id: '41' });
+    // Kichraytirilgan: eng uzun tomon 1568 px, asl rasmdan kichik.
+    const meta = await sharp(
+      Buffer.from(sent.image_base64, 'base64'),
+    ).metadata();
+    expect(Math.max(meta.width ?? 0, meta.height ?? 0)).toBe(1568);
+    expect(sent.image_base64.length).toBeLessThan(photoBase64.length);
     expect(cmdCalls(finance.send, 'finance.receipt.ai_result')[0][1]).toEqual({
       receipt_id: '41',
       ai_request_id: 'req-1',
@@ -315,6 +467,33 @@ describe('T3-3 — gateway: AI tahlili (fon) va qayta tahlil', () => {
     expect(
       cmdCalls(finance.send, 'finance.receipt.ai_result')[0][1].result,
     ).toEqual({ ok: false, reason: 'network' });
+  });
+
+  it('buzilgan fayl — AI chaqirilmaydi, image_decode_failed (finance: unreadable)', async () => {
+    const { controller, finance, ai } = make({ ai: {}, body: 'aGVsbG8=' });
+    await controller.runReceiptAiCheck({
+      receipt_id: '41',
+      ai_request_id: 'req-1',
+      file_key: 'cashbox-receipt-x.jpg',
+      mime: 'image/jpeg',
+      user,
+    });
+    expect(cmdCalls(ai.send, 'ai.finance.receipt_extract')).toHaveLength(0);
+    expect(
+      cmdCalls(finance.send, 'finance.receipt.ai_result')[0][1].result,
+    ).toEqual({ ok: false, reason: 'image_decode_failed' });
+  });
+
+  it('sharp yo`q va rasm katta — too_large, AI chaqirilmaydi', async () => {
+    setSharpForTesting(null);
+    try {
+      const big = Buffer.alloc(5 * 1024 * 1024, 1).toString('base64');
+      await expect(prepareReceiptAiImage(big, 'image/jpeg')).resolves.toEqual({
+        reason: 'too_large',
+      });
+    } finally {
+      setSharpForTesting(undefined);
+    }
   });
 
   it('⭐ spend javobidagi pending chek → AI fonda boshlanadi; FE javobida file_key / ai_request_id yo`q', async () => {

@@ -2,7 +2,18 @@ import {
   Cashbox_type,
   CourierCompensationMode,
   Order_status,
+  resolveOrderTariffDetailed,
+  type SaleEngineQuote,
   SettlementStatus,
+} from '@app/common';
+
+// 6tGZzupr: market tarifi qarori `@app/common` da — `GET /partner/tariff` ham
+// shuni chaqiradi (yagona manba). Bu yerdan import qiluvchilar uchun qayta eksport.
+export {
+  type MarketTariffResolution,
+  type MarketTariffSource,
+  resolveOrderTariffDetailed,
+  type SaleEngineQuote,
 } from '@app/common';
 
 /**
@@ -122,135 +133,11 @@ export function computeTariffShortfall(
   return shortfall > TARIFF_SHORTFALL_TOLERANCE ? shortfall : 0;
 }
 
-/**
- * KmWO9gTA — sotuvda yetkazish narxi dvigateli (logistics
- * `logistics.delivery.sale_quote`) natijasining MARKET oyog'iga kerakli
- * qismi. Dvigatel FAQAT `SALE_PRICING_ENGINE` yoqilgan va marketning
- * `weight_volume_pricing` bayrog'i TRUE bo'lganda chaqiriladi.
- */
-export interface SaleEngineQuote {
-  /**
-   * Vazn/hajm qo'shimchasi, so'm: (hisob vazni − 1-kg) × tarif jadvalidagi
-   * kg narxi (`computeDeliveryQuote().extra`). Ega qarori 2026-10-19:
-   * «standart narx + vazn yoki hajm uchun qo'shimcha».
-   */
-  surcharge: number;
-  /**
-   * Tarif jadvali bazasi (yo'nalish tarifining `base_price`). Faqat market
-   * profilida standart narx YO'Q (NULL) bo'lganda baza sifatida olinadi.
-   */
-  tableBase: number;
-  /** Sozlamadagi minimal yetkazish narxi (`min_delivery_price`), NULL — yo'q. */
-  minDeliveryPrice?: number | null;
-}
-
-/** Market tarifi qayerdan olindi — jurnal va testlar uchun. */
-export type MarketTariffSource = 'snapshot' | 'profile' | 'engine';
-
-export interface MarketTariffResolution {
-  /** Sotuvda ishlatiladigan (va snapshot qilinadigan) tarif. */
-  tariff: number;
-  source: MarketTariffSource;
-  /** Market profilidagi standart narx (`where_deliver` bo'yicha), NULL — yo'q. */
-  standard: number | null;
-  /** Dvigatel bazasi: standart narx, u bo'lmasa — tarif jadvali bazasi. */
-  base: number;
-  /** Vazn/hajm qo'shimchasi (faqat `engine`), aks holda 0. */
-  surcharge: number;
-  /** base + surcharge — floor'dan OLDINGI hisob (faqat `engine`). */
-  computed: number;
-  /** Minimal narx: max(kuryer + filial ulushi, `min_delivery_price`). */
-  floor: number;
-  /** Hisoblangan narx floor'dan past bo'lib, floor'ga ko'tarildimi. */
-  floorApplied: boolean;
-}
-
 const toNullableNumber = (value: unknown): number | null => {
   if (value === null || value === undefined || value === '') return null;
   const n = Number(value);
   return Number.isFinite(n) ? n : null;
 };
-
-/**
- * The tariff ONE order must be settled with — with the full breakdown.
- *
- *   1. snapshot (`order.market_tariff` / `courier_tariff`) — HAR DOIM birinchi:
- *      eski / allaqachon sotilgan buyurtmaning narxi hech qachon orqaga
- *      o'zgarmaydi (KmWO9gTA TC2);
- *   2. `engine` berilmasa — avvalgi xulq BAYTMA-BAYT: profil tarifi
- *      (`isCenter ? center : home`), ikkisi ham yo'q bo'lsa 0;
- *   3. `engine` berilsa (KmWO9gTA, ega qarori 2026-10-19) — standart narx
- *      (profil; yo'q bo'lsa tarif jadvali bazasi) + vazn/hajm qo'shimchasi,
- *      so'ng MINIMAL NARX (floor) — kuryer + filial ulushi va
- *      `min_delivery_price` dan past bo'lsa shu qiymatga ko'tariladi
- *      (DARVOZA 1: kichik/yengil posilkada sotuv to'xtamaydi).
- *
- * Kuryer tarifi bu yerga `engine`siz keladi — u kuryer profilidan, o'zgarmaydi.
- */
-export function resolveOrderTariffDetailed(params: {
-  /** Per-order snapshot/override (`order.market_tariff` / `courier_tariff`). */
-  snapshot: number | null | undefined;
-  /** True when the order is delivered to a center (vs the customer's address). */
-  isCenter: boolean;
-  centerTariff: number | null | undefined;
-  homeTariff: number | null | undefined;
-  /** KmWO9gTA: faqat MARKET oyog'i va faqat dvigatel yoqilgan bo'lsa. */
-  engine?: SaleEngineQuote | null;
-  /** KmWO9gTA floor: kuryer + filial ulushi (faqat `engine` bilan ishlaydi). */
-  sharesFloor?: number | null;
-}): MarketTariffResolution {
-  const standard = toNullableNumber(
-    params.isCenter ? params.centerTariff : params.homeTariff,
-  );
-  if (params.snapshot != null) {
-    const tariff = Number(params.snapshot);
-    return {
-      tariff,
-      source: 'snapshot',
-      standard,
-      base: tariff,
-      surcharge: 0,
-      computed: tariff,
-      floor: 0,
-      floorApplied: false,
-    };
-  }
-  if (!params.engine) {
-    const tariff = Number(
-      (params.isCenter ? params.centerTariff : params.homeTariff) ?? 0,
-    );
-    return {
-      tariff,
-      source: 'profile',
-      standard,
-      base: tariff,
-      surcharge: 0,
-      computed: tariff,
-      floor: 0,
-      floorApplied: false,
-    };
-  }
-  const base = standard ?? Math.max(Number(params.engine.tableBase) || 0, 0);
-  const surcharge = Math.max(Number(params.engine.surcharge) || 0, 0);
-  const computed = round2(base + surcharge);
-  const floor = round2(
-    Math.max(
-      Math.max(Number(params.sharesFloor) || 0, 0),
-      Math.max(Number(params.engine.minDeliveryPrice) || 0, 0),
-    ),
-  );
-  const floorApplied = computed < floor;
-  return {
-    tariff: floorApplied ? floor : computed,
-    source: 'engine',
-    standard,
-    base,
-    surcharge,
-    computed,
-    floor,
-    floorApplied,
-  };
-}
 
 /**
  * The tariff ONE order must be settled with: the per-order snapshot/override

@@ -459,6 +459,51 @@ describe('ysBqD9Nx #4 / h9newLsd #5 — karta sinxroni', () => {
     expect(env.transport.editMessage).toHaveBeenCalledTimes(1);
   });
 
+  it('⭐ BOT-3 #6: guruh supergroup`ga aylandi (outbox yangi id`ga yubordi) — karta YANGI id ostida; created → new — Telegram`ga bitta xabar', async () => {
+    const groups = [group('-1001')];
+    const holder: { cards?: Map<string, Partial<TelegramOrderCard>> } = {};
+    const send = jest.fn(() => {
+      // migrateChat (outbox ichida) band qilish qatorini yangi id'ga ko'chiradi.
+      const claim = holder.cards?.get('81:-1001');
+      if (claim) {
+        holder.cards!.delete('81:-1001');
+        holder.cards!.set('81:-1009999', { ...claim, chat_id: '-1009999' });
+      }
+      return Promise.resolve({
+        id: '1',
+        status: 'sent',
+        result: { message_id: 4242 },
+        chat_id: '-1009999',
+      });
+    });
+    const env = makeSync({ groups, send });
+    holder.cards = env.cards;
+    await env.service.sync({
+      order_id: '81',
+      from_status: null,
+      to_status: 'created',
+      market_id: '5',
+    });
+    expect([...env.cards.keys()]).toEqual(['81:-1009999']);
+    expect(env.cards.get('81:-1009999')).toEqual(
+      expect.objectContaining({ message_id: '4242' }),
+    );
+    // migrateChat telegram_chats ni ham yangiladi.
+    groups[0] = group('-1009999');
+    await env.service.sync({
+      order_id: '81',
+      from_status: 'created',
+      to_status: 'new',
+      market_id: '5',
+    });
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(env.transport.editMessage).toHaveBeenCalledWith(
+      '-1009999',
+      '4242',
+      expect.anything(),
+    );
+  });
+
   it('⭐ guruhga yuborib bo‘lmasa (bot chiqarilgan) — sync YIQILMAYDI (buyurtma oqimiga ta’sir yo‘q)', async () => {
     const env = makeSync({
       groups: [group('-1001')],

@@ -27,6 +27,8 @@ import {
   type PaymentCorrectionErrorCode,
 } from '@app/common';
 import { FinanceServiceService } from '../finance-service.service';
+import type { CashboxReceiptService } from '../cashbox-receipt/cashbox-receipt.service';
+import { CASHBOX_RECEIPTS } from '../cashbox-receipt/cashbox-receipt.token';
 import { Cashbox } from '../entities/cashbox.entity';
 import { CashboxCard } from '../entities/cashbox-card.entity';
 import { CashboxHistory } from '../entities/cashbox-history.entity';
@@ -161,6 +163,13 @@ export class PaymentCorrectionService {
     @Inject('IDENTITY') private readonly identityClient: ClientProxy,
     @Optional() private readonly notifications?: FinanceNotificationService,
     @Optional() private readonly realtime?: FinanceRealtimeService,
+    // T3 — tuzatilgan to'lovning cheki yangi oyoqlarga ko'chadi.
+    @Optional()
+    @Inject(CASHBOX_RECEIPTS)
+    private readonly receipts?: Pick<
+      CashboxReceiptService,
+      'carryOverForCorrection'
+    >,
   ) {}
 
   // ───────────────────────── sozlama ─────────────────────────
@@ -501,6 +510,12 @@ export class PaymentCorrectionService {
           transferId: replacementTransferId as string,
           epoch,
           requesterId: input.requesterId,
+        });
+        // T3 — chek yangi MAIN oyog'iga, holat yangi summa bilan.
+        await this.receipts?.carryOverForCorrection(tx, {
+          original_transfer_id: String(history.transfer_id),
+          replacement_transfer_id: replacementTransferId,
+          new_amount: input.newAmount,
         });
       }
 

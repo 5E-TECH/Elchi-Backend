@@ -35,3 +35,37 @@ export const PRODUCT_DIMENSION_FIELDS = [
 ] as const;
 
 export type ProductDimensionField = (typeof PRODUCT_DIMENSION_FIELDS)[number];
+
+/**
+ * 6tGZzupr — «o'lchov kutilmoqda». Saqlanmaydi, o'lchovdan KELIB CHIQADI: narx
+ * dvigatelining `estimated` qoidasi bilan AYNI (og'irlik yo'q yoki hajm yoqiq
+ * va L/W/H yo'q). Shuning uchun xodim o'lchov kiritishi bilan holat o'zi
+ * tushadi. Ro'yxat filtri — catalog-service `PRODUCT_NEEDS_MEASUREMENT_SQL`.
+ */
+export function productNeedsMeasurement(row: {
+  weight_kg?: number | string | null;
+  length_cm?: number | null;
+  width_cm?: number | null;
+  height_cm?: number | null;
+  volumetric_enabled?: boolean | null;
+}): boolean {
+  const missing = (value: unknown) => value === null || value === undefined;
+  if (missing(row.weight_kg)) return true;
+  if (row.volumetric_enabled === false) return false;
+  return PRODUCT_DIMENSION_FIELDS.some((field) => missing(row[field]));
+}
+
+/** 6tGZzupr: `catalog.product.create` / `fill_missing_measure` chaqiruvchisi. */
+export interface ProductRequester {
+  id: string;
+  roles: string[];
+  /** Ichki yo'l qayerdan kelgani (jurnal uchun), masalan `partner:7`. */
+  via?: string;
+}
+
+/** Odam emas, tizim: hamkor posilkasidan avtomatik mahsulot. */
+export const PRODUCT_SYSTEM_ROLE = 'system';
+
+export function productSystemRequester(via: string): ProductRequester {
+  return { id: PRODUCT_SYSTEM_ROLE, roles: [PRODUCT_SYSTEM_ROLE], via };
+}

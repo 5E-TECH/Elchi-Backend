@@ -106,6 +106,13 @@ chiqardi.
 Rollback: `rollback rabbitmq --execute` — guest qayta yaratiladi (administrator,
 `/` ga to'liq ruxsat), URI eski, servislar qayta yaratiladi.
 
+⚠️ `elchi` foydalanuvchisi brokerning mnesia'sida turadi, node nomi esa konteyner
+id'si (`rabbit@<id>`, compose'da `hostname:` yo'q). `elchi-rabbitmq` qayta
+yaratilsa volume'da bo'sh mnesia ochiladi: `elchi` yo'qoladi, guest qaytadi,
+hamma servis brokerga ulana olmaydi. Shuning uchun `deploy.yml` uni
+`--no-recreate` bilan ko'taradi (qUEE0Bgd); qo'lda `--force-recreate rabbitmq`
+qilmang.
+
 ## 4. MinIO (`minio-app`, `minio-root`)
 
 - `minio-app`: ilova IAM foydalanuvchisiga (kalit nomi o'zgarmaydi) yangi

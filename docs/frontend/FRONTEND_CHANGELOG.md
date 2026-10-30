@@ -30,6 +30,163 @@ Deploy: **notification-service** (docker-compose.prod.yml: `DB_POOL_MAX=20`). Mi
 - [2026-10-30] 🟢 [notification] — market guruhi kartasi Telegram 429 bilan kechiksa ham keyingi holatlarda yangilanadi,
   ikkinchi karta yuborilmaydi. API o'zgarmagan. → FE o'zgarishi shart emas.
 
+### 2026-10-30 — Xavfsizlik B: SSRF DNS pinning va fayl egaligi reestri (dgvwZasd)
+
+Deploy: **file-service + api-gateway + integration-service + finance-service** (+ libs/common). Migratsiya **191**
+(`file_schema.file_objects`). Yangi env: `FILE_OWNERSHIP_ENFORCE` (api-gateway, sukut `off`). `openapi.json` qayta
+yaratildi. Frontend'da kod o'zgarishi **shart emas**.
+
+- [2026-10-30] 🟢 [file] — `GET /files/:key` va `GET /files/:key/content`: yangi yuklangan (reestrdagi) maxfiy fayl uchun
+  `FILE_OWNERSHIP_ENFORCE=on` bo'lganda 403 ko'proq holatda keladi: boshqa filial xodimi (HQ'dan tashqari) o'z doirasidan
+  tashqaridagi faylni ocha olmaydi. Yuklagan foydalanuvchi esa faylni buyurtmaga biriktirilishidan oldin ham oladi (kuryer
+  uchun ilgari 403). Reestrni tekshirib bo'lmasa — **503** (keyinroq qayta urinish). Eski fayllar, `files/signed/:token`
+  havolalari, `photo_url` / `file_url` va javob shakllari o'zgarmadi. → `ProofGallery` 403 ni allaqachon «ochib bo'lmadi»
+  deb ko'rsatadi, o'zgarish shart emas.
+- [2026-10-30] 🟢 [integration] — SSRF: chiquvchi integratsiya so'rovi endi tekshirilgan IP'ga ulanadi (DNS rebinding).
+  Xato matni `Host … resolves to a non-public address` yoki `Could not resolve host` bo'lishi mumkin (`POST
+  /admin/partners/:id/webhook-test` javobidagi `error`). Kontrakt o'zgarmadi.
+### 2026-10-30 — Foydalanuvchi yaratishda tasodifiy parol + SMS, birinchi kirishda parolni almashtirish, eski parol tekshiruvi (aidsxJ2H)
+
+Deploy: **identity-service + notification-service + api-gateway** (birga; avval notification — yangi RMQ buyruqlari
+`notification.sms.send_temp_password`, `notification.sms.delivery_status`). **Migratsiya bor:** `1716000000194-UserTempPasswordSms`
+(`identity_schema.admins.password_change_forced` sukut `false` — mavjud foydalanuvchilar o'zgarmaydi; yangi jadval
+`identity_schema.user_password_sms` — parol YO'Q, faqat SMS jurnali) va `1716000000195-SmsTempPasswordTemplate`
+(`notification_schema.sms_outbox.redacted_text`; `sms_templates` ga `user.temp_password` (uz, «security») — **provayderda
+(Eskiz) tasdiqlatish kerak**, `needs_provider_approval: true`). Yangi env: `PASSWORD_CHANGE_REQUIRE_OLD` (identity, sukut
+`off`). `openapi.json` qayta yaratildi.
+
+- [2026-10-30] ✏️ [identity+gateway] — `POST /admins`, `/registrators`, `/logists`, `/couriers`, `/managers`, `/markets`:
+  yangi `password_mode: 'generate_sms' | 'manual'` (sukut **`generate_sms`**) va `must_change_password?: boolean`.
+  `generate_sms` — tizim 12 belgili tasodifiy parol yaratadi (chalkash belgilarsiz, siyosatga mos), foydalanuvchi telefoniga
+  SMS (`sms_outbox`, «security» — tungi taqiqqa tushmaydi), `must_change_password` doim `true`; `password` **yuborilmaydi**
+  (yuborilsa 400), `must_change_password: false` — 400. `manual` — `password` majburiy, SMS yo'q, `must_change_password`
+  ixtiyoriy (sukut `false`). **Moslik:** `password_mode` yo'q, `password` bor — `manual` (hozirgi forma o'zgarishsiz ishlaydi).
+  Javob `data`: foydalanuvchi + `password_mode` + `password_sms` (`manual` da `null`):
+  `{ status: 'pending'|'sent'|'delivered'|'failed', failure_reason, failure_message, requested_at, sent_at, delivered_at,
+  resend_available_at, resends_left_today }`. `pending` — navbatda (provayderga hali berilmagan), `sent` — provayder qabul
+  qildi. **Parol javobda YO'Q.** SMS yuborilmasa ham foydalanuvchi yaratiladi: 201, `status: 'failed'` + `failure_reason`
+  (`sms_disabled`, `daily_cap_exceeded`, `provider_not_configured`, `invalid_phone`, `template_error`,
+  `notification_unavailable`, `provider_rejected`, `provider_unavailable`, `not_delivered`, `staging_blocked`),
+  `failure_message` — o'zbekcha, top-level `message` ham «…yaratildi, lekin SMS yuborilmadi: …».
+- [2026-10-30] 🆕 [gateway] — `POST /users/:id/password/resend-sms` (superadmin; admin — admin/superadmin'dan boshqasi;
+  menejer — faqat o'zi yaratgan kuryer; o'ziga — 403; nishon roli admin/registrator/logist/courier/manager/market, boshqasi
+  400): YANGI vaqtinchalik parol + SMS, eski parol darhol ishlamaydi, foydalanuvchining barcha sessiyalari yopiladi
+  (`sessions_revoked`), `must_change_password: true`. 200 `data: { user_id, must_change_password, password_sms }`.
+  **SMS navbatga tushmasa (`status: 'failed'`) parol va sessiyalar O'ZGARMAYDI** — foydalanuvchi qulflanmaydi, xabar
+  «SMS yuborilmadi: … Parol o'zgarmadi». Navbatga tushib, keyin provayder rad etsa (`sms-status` → `failed`) — parol allaqachon
+  yangi: qayta yuborish yoki `PATCH /users/:id { password }`.
+  Chegara: **60 s da bir marta** — 429 `code: PASSWORD_SMS_COOLDOWN`, **kuniga 5 marta** (Toshkent kuni) — 429
+  `PASSWORD_SMS_DAILY_LIMIT`; ikkalasida `retry_after_seconds` (+ `Retry-After`).
+- [2026-10-30] 🆕 [gateway] — `GET /users/:id/password/sms-status` (huquq — resend bilan bir xil): oxirgi parol SMS'ining
+  JONLI holati `data: { user_id, must_change_password, password_sms | null }` — natija oynasidagi «SMS yuborildi /
+  Yetkazildi» qadamlari uchun (bir necha soniyada bir so'rash; `delivered` / `failed` — to'xtatish).
+- [2026-10-30] ⚠️ [gateway] — **Birinchi kirish darvozasi:** admin / tizim bergan parol (`generate_sms`, `manual` +
+  `must_change_password: true`, resend) bilan kirgan foydalanuvchi tokenida `pwd_change` + `pwd_forced`; parolni
+  almashtirmaguncha **`PASSWORD_CHANGE_GATE` ga qaramay** faqat `GET/PATCH /auth/my-profile`, `GET /auth/validate`,
+  `POST /auth/logout`, `POST /auth/refresh` ishlaydi, qolgani **403 `code: PASSWORD_CHANGE_REQUIRED`**. NDmZMzCP ning «zaif
+  eski parol» bayrog'i (faqat `pwd_change`) — avvalgidek env bilan (sukut o'chiq) — mavjud foydalanuvchilar qulflanmaydi.
+- [2026-10-30] ✏️ [identity+gateway] — `PATCH /auth/my-profile` (va o'zini `PATCH /users/:id`): ixtiyoriy **`old_password`**.
+  Berilsa DOIM tekshiriladi — noto'g'ri: 400 `OLD_PASSWORD_INVALID` («Joriy parol noto'g'ri»; 401 EMAS — chiqarib
+  yuborilmaydi). Berilmasa: `PASSWORD_CHANGE_REQUIRE_OLD=off` (sukut) — avvalgidek saqlanadi (hozirgi `{ password }` so'rovi
+  buzilmaydi); `on` — 400 `OLD_PASSWORD_REQUIRED` («Joriy parolni kiriting»). Yangisi joriysi bilan bir xil — 400.
+  Yangi parol — siyosat (kamida 8, xodim 10). Muvaffaqiyatda `must_change_password` va `pwd_forced` tushadi — keyin
+  `POST /auth/refresh` (bayroqsiz token). Admin boshqa foydalanuvchi parolini o'rnatganda `old_password` kerak emas.
+- 🔧 FE (`src/auth/**`, urozov04; tayyor ish: `fe-1026-userpw` branch, `dev` ga kirmagan): **Profil «Parolni o'zgartirish» oynasi va
+  «Yangi parol o'rnating»** (`ChangePasswordDialog`) ga «Joriy parol» maydoni (`old_password`) — FE chiqqach prod'da
+  `PASSWORD_CHANGE_REQUIRE_OLD=on`. Hozirgi oyna 403 `PASSWORD_CHANGE_REQUIRED` da ochiladi — darvozaga tayyor, lekin «Keyinroq»
+  tugmasi `pwd_forced` da ma'nosiz. Yaratish formasi (`superadmin-users-create-password-sms`): «Parolni qanday berish» —
+  `password_mode` (sukut `generate_sms`, parol maydoni yashirin), `manual` da parol + «Birinchi kirishda parolni almashtirishni
+  talab qilish» (`must_change_password`); natija oynasi (`superadmin-users-create-password-result-dialog`) — `password_sms`
+  holati, `sms-status` bilan yangilash, «SMS'ni qayta yuborish» (`resend_available_at` gacha sanoq, 429 da
+  `retry_after_seconds`), `failure_message`.
+- 🟢 Ops: prod Eskiz hozir TEST rejimda — haqiqiy matn rad etiladi (`status: failed`, `provider_rejected`) to `user.temp_password`
+  shabloni moderatsiyadan o'tmaguncha; «security» SMS OTP kvotasini ishlatadi (`SMS_OTP_DAILY_CAP`, prod 5). Shungacha
+  yaratishda `manual` ishlating. `sms_outbox.text` da parol faqat yuborilguncha turadi (OTP kabi); provayder qabul qilgach yoki
+  terminal xatoda `redacted_text` bilan almashadi, provayder xatosi matnni aks ettirsa ham `last_error` / `last_response` / log
+  tozalanadi.
+### 2026-10-30 — Kiruvchi posilkalar: qop bo'yicha keldi soni (Sm3LZ6EN)
+
+Deploy: **order-service + api-gateway**. Migratsiya **yo'q**. `openapi.json` qayta yaratildi.
+
+- [2026-10-30] ✏️ [order] — `GET /orders/external` javobiga `meta.batches` qo'shildi (qolgan maydonlar o'zgarmagan):
+  `{ meta: { batches: [{ external_batch_token, external_batch_ref, external_batch_size, received_count, pending_count }] } }`.
+  Sahifada uchragan har qop uchun bitta yozuv (`external_batch_token` bo'sh qatorlar kirmaydi, qopsiz sahifada `[]`).
+  Sonlar **butun qop** bo'yicha — sahifa, `status` va sana filtrlari kesmaydi, o'chirilganlar kirmaydi; bitta GROUP BY.
+  - `received_count` — qabul qilingan a'zolar (`new` dan keyingi holat). Hamkor qabuldan **oldin** bekor qilgan posilka
+    (`cancelled`, pochtasiz) Elchiga yetib kelmagan, u **kirmaydi**.
+  - `pending_count` — hali `new` a'zolar.
+  - **Keldi = `received_count + pending_count`**, `external_batch_size` — hamkor aytgan son (`null` bo'lishi mumkin).
+    Misol: hamkor 3 dedi, 1 tasi avval qabul qilingan, 1 tasi ro'yxatda → `3 / 1 / 1`, ya'ni «2/3 keldi».
+  - Doira ro'yxat bilan bir xil: market — o'zi, menejer/registrator — o'z filiali (filial sharti ro'yxatdagidek
+    `branch_id` / `holder_branch_id` / `home_branch_id`), `market_id` filtri ham qo'llanadi. Begona filial yoki market
+    a'zosi sanalmaydi — filial doirasida son `external_batch_size` dan kam chiqishi mumkin.
+  - Bir necha sahifa olganda (`fetchAllIncomingOrders`) har sahifaning `meta.batches` i token bo'yicha birlashtiriladi —
+    bir qop uchun sonlar sahifalarda bir xil.
+  → Frontend: «N ta qop chala keldi» bloki va «2/3» belgisi shu sonlardan, har qop uchun `GET /scan/:token` so'ralmaydi
+  (DamKku7C). Faqat `external_batch_ref` bor, token yo'q qop bu ro'yxatga **kirmaydi**.
+- [2026-10-30] ✏️ [order] — `POST /orders/external/receive-by-scan`: qop QR'i skanerlanganda javobda
+  `data.batch: { external_batch_token, size, received_count, pending_count, scanned_count }` va `data.batches` (shu shakl,
+  har qop uchun). Sonlar **qabuldan keyingi** holat; `scanned_count` — shu so'rovda qabul qilinganlari (`received_count`
+  ichida). Bir so'rovda bir necha qop bo'lsa `batch: null` — `batches` dan oling. Qop skanlanmagan yoki son olinmagan bo'lsa
+  `batch: null`, `batches: []` (qabul baribir bajarilgan, `ok`/`received` o'zgarmaydi). `ok: false` javobida bu maydonlar yo'q.
+- [2026-10-30] ✏️ [order] — `GET /scan/:token` (`type: batch`) javobida ham `data.batch` (shu shakl): hech narsa qabul
+  qilinmagan, `received_count` — avval qabul qilinganlari, `scanned_count` = `pending_count` (shu QR ochadigan posilkalar).
+  Doirada a'zo bo'lmasa `batch: null`. → Sariq «Qop BP-24817: 2/3 keldi» ikkala javobda ham
+  `received_count + pending_count` / `size` formulasi bilan (`received_count / size` skan oldidan kam ko'rsatadi).
+- [2026-10-30] ⚠️ [order] — `GET /scan/:token` (`type: batch`) market rolida endi faqat **o'z** a'zolarini qaytaradi
+  (`count`, `members`), begona qop — 404 (buyurtma QR qoidasi bilan bir xil). Xodim rollari uchun `count`/`members` o'zgarmagan.
+### 2026-10-30 — BOT-3 #6 tuzatishlari: supergroup va nofaol guruh
+
+Deploy: **notification-service** (+ libs/common). Migratsiya yo'q.
+
+- [2026-10-30] 🆕 [notification] — yangi bildirishnoma turi `telegram.market_channel_inactive` (market EGASIGA, in-app +
+  shaxsiy Telegram): «Telegram guruhingiz nofaol» — bot guruhdan chiqarildi yoki xabar yuborish huquqi olindi.
+  `data: { chat_id, reason: "kicked" | "left" | "blocked_on_send" | "chat_not_found" }`. → FE: tur nomi/ikon
+  (sozlamalar ro'yxatida o'chirib bo'lmaydi — `user_can_mute: false`).
+- [2026-10-30] 🔧 [notification] — nofaol market guruhini market o'zi qayta ulay oladi: `GET
+  /notifications/me/telegram-groups` da `is_active: false` va `inactive_reason` ∈ `kicked` | `left` | `chat_not_found` |
+  `blocked_on_send` bo'lgan qator uchun kabinetdagi «Telegram guruhini ulash» kodi (avval «allaqachon ulangan» xatosi
+  berardi) o'sha qatorni qayta yoqadi. `manual` (admin o'chirgan) va sababsiz (eski) qatorlar — faqat admin PATCH orqali.
+  `blocked_on_send` (huquq olingan) — huquq qaytsa odatda bir necha daqiqada o'zi yoqiladi.
+  → FE: shu sabablardagi nofaol qatorga «Qayta ulash» tugmasi (hozir `canLink` faqat `kind === 'none'`), kuzatuvchi
+  `is_active === true` ni kutadi; `manual` / sababsiz qatorda tugma yo'q («Admin o'chirgan»).
+
+### 2026-10-30 — Narx: hamkor tarifi dvigatelga ulandi, «o'lchov kutilmoqda» (6tGZzupr)
+
+Deploy: **api-gateway + catalog-service + integration-service + logistics-service + order-service** (+ libs/common).
+Migratsiya **yo'q**, yangi env **yo'q** (gateway mavjud `SALE_PRICING_ENGINE` / `SALE_PRICING_ENGINE_MARKET_IDS` ni o'qiydi,
+sukut `off` — prod narxlari o'zgarmaydi). `openapi.json` qayta yaratildi.
+
+- [2026-10-30] ✏️ [catalog] — mahsulot qatorlariga `needs_measurement: boolean` qo'shildi (`GET /product`, `/product/:id`,
+  `/product/market/:id`, `/product/my-products`). Saqlanmaydi — o'lchovdan kelib chiqadi: og'irlik yo'q yoki hajm yoqiq va
+  L/W/H yo'q (narx dvigateli `estimated` qoidasi bilan AYNI). Registrator `PATCH /product/:id` bilan o'lchov kiritsa o'zi
+  `false` bo'ladi. O'lchovsiz **eski** mahsulotlar ham `true`.
+- [2026-10-30] 🆕 [catalog] — `GET /product?needs_measurement=true|false` (`1`/`0` ham) — «O'lchov kutilmoqda» filtri;
+  boshqa qiymat 400. Soni uchun javobdagi `total` (`limit=1` yetarli). → **Registrator ro'yxati (frontend ishi):**
+  `/products` hozir v1 (`src/pages/products/list/index.tsx`) — jadval v2 `DataTable` + `Pagination` ga o'tadi, nom yonida
+  `Badge` «O'lchov kutilmoqda» va holat filtri (taklif; maketda joyi yo'q — ega qarori kerak), o'lchov tahrirlash oynasida
+  `weight_kg`, `length_cm`, `width_cm`, `height_cm`, `volumetric_enabled` maydonlari. Kunduzgi/tungi va 390px skrinshot,
+  `npm run design:guard -- --diff`.
+- [2026-10-30] ✏️ [partner] — `GET /partner/tariff`: yangi ixtiyoriy query `weight_kg`, `length_cm`, `width_cm`, `height_cm`,
+  `express`, `pickup`, `region_id`, `district_id`; javobga `estimated`, `tariff_source` (`profile`|`engine`), `quote`
+  (dvigatel hisobi yoki `null`) qo'shildi. `market_tariff` — Elchi sotuvda oladigan summa (`SALE_PRICING_ENGINE` o'chiq —
+  profil tarifi, avvalgidek). O'lchovsiz — `estimated: true` va baza tarif; profilda tarif `null` bo'lsa tarif jadvali bazasi
+  (jimgina 0 emas), u ham bo'lmasa 503; profilda aniq 0 — 0 qoladi (sotuvda ham 0), yonida `quote`.
+  Kontrakt: `docs/public/MARKETPLACE_API.md` §4. Hamkor kabineti ekrani ishlatmaydi — FE o'zgarishi shart emas.
+- [2026-10-30] ✏️ [partner] — `POST /partner/shipments`, `PATCH /partner/shipments/:id`: `items[]` ga ixtiyoriy `weight_kg`,
+  `length_cm`, `width_cm`, `height_cm` (L/W/H uchalasi birga). `external_product_id` bilan yuborilsa avtomatik mahsulotga
+  yoziladi, mavjud mahsulotda faqat bo'sh maydon to'ldiriladi (xodim o'lchovi almashtirilmaydi). Eski so'rov o'zgarishsiz.
+- [2026-10-30] 🟢 [catalog] — hamkor yo'lidan yaratilgan mahsulot jurnalda `user_role: "system"`, `metadata.source: "system"`,
+  `metadata.via: "partner:<id>"`, `metadata.needs_measurement` bilan ko'rinadi.
+- [2026-10-30] 🟢 [marketplace — alohida repo, alohida karta] — Elchi tomoni tayyor, marketplace hali o'lchov yubormaydi:
+  `apps/elchi-integration/src/elchi-api.client.ts` `ElchiTariffInput` (`weight_kg`, `length_cm`, `width_cm`, `height_cm`,
+  `region_id`, `district_id`) va `getTariff`; `apps/checkout-service/src/checkout.service.ts` `quote()` savat o'lchovini
+  yuborishi kerak (hozir `regionId`/`districtId` klientda jimgina tashlab yuboriladi); `confirm-sales-order.service.ts`
+  posilka `items` ga `external_product_id` va o'lchov qo'shishi kerak (hozir `{ name, quantity }`). Solishtirish
+  (`marketplace` a01e861 o'qildi): hozir savatdagi `deliveryFee` = `market_tariff` = profil tarifi = Elchi sotuvda oladigan
+  summa, farq yo'q. Dvigatel yoqilgach ham erkin matnli posilkada qo'shimcha 0 — farq faqat minimal narx qoidasida
+  (`min_delivery_price`, kuryer + filial ulushi) va savat bilan sotuv orasida tarif o'zgarsa. Marketplace o'lchov yuborishni
+  posilkada boshlab, tarif so'rovida boshlamasa — savat past chiqadi. To'liq jadval: `MARKETPLACE_API.md` §4.
 ### 2026-10-30 — T1: hamkor (marketpleys) integratsiyasini jonli sinash (RJcckQ6I)
 
 Deploy: **integration-service + api-gateway** (+ libs/common). Migratsiya **yo'q**. `openapi.json` qayta yaratildi.
@@ -159,6 +316,17 @@ qilinadigan uch operatsiyadan tashqari ortga mos.
   ≤ 366 kun, sukut — joriy oy. `counts.none` = `GET /finance/history?receipt_status=none` jami (shu davrda).
 - [2026-10-30] 🟢 [ai] — AI moliyaviy yordamchida yangi tool `get_receipt_checks` (shu xulosa; ism, rasm,
   karta yo'q).
+- [2026-10-30] 🟢 [finance] — T6 bilan **summasi tuzatilgan** kuryer to'lovining cheki yangi to'lov qatoriga
+  ko'chadi (`history_id`, `entered_amount` — yangi summa; AI o'qigan summa bilan holat qayta hisoblanadi, AI qayta
+  chaqirilmaydi). **Qaytarilgan** to'lov qatori «Chek yo'q» va xulosaga kirmaydi.
+- [2026-10-30] 🟢 [finance] — chek `ai` blokida karta raqami hech qachon chiqmaydi: ism / bank / sanada
+  (bo'sh joy, chiziqcha, `/`, `_`, vergul bilan guruhlangan bo'lsa ham) — `***`; karta raqamiga o'xshash
+  `reference` — `null` (12 raqamli RRN saqlanadi). → FE o'zgarishi shart emas.
+- [2026-10-30] 🟢 [finance] — AI'ga rasm 1568 px gacha kichraytirib yuboriladi. Buzilgan / juda katta fayl —
+  `ai_status: "unreadable"`, `ai.error_reason`: `image_decode_failed` / `too_large`.
+- [2026-10-30] 🟢 [finance] — `GET /finance/cashbox/my-cashbox` va `cashbox/user/:id/main` javobida `receipt`
+  bo'lmaydi (chek — tarix sahifasi va tafsilotda).
+
 ### 2026-10-30 — BOT-3b: chat qulfi DB ulanishini ushlamaydi, AI bot orqali fonda
 
 Deploy: **notification-service**. Migratsiya **`1716000000190`** (`notification_schema.telegram_chat_locks`,

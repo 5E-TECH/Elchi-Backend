@@ -13,7 +13,7 @@ import { SmsCampaignService } from './sms-campaign.service';
 import { SmsConfigService } from './sms-config.service';
 import { SmsConsentService } from './sms-consent.service';
 import { SmsGateService } from './sms-gate.service';
-import { SmsOutboxService } from './sms-outbox.service';
+import { SmsOutboxService, scrubSmsSecret } from './sms-outbox.service';
 import { SmsProviderRegistry } from './sms-provider.registry';
 import { maskPhone } from './sms-phone.util';
 import { SmsProviderError } from './sms.port';
@@ -221,7 +221,7 @@ export class SmsOutboxScheduler implements OnModuleInit, OnModuleDestroy {
         );
         if (terminal) failed += 1;
         this.logger.warn(
-          `SMS #${row.id} (${maskPhone(row.to_phone)}) yuborilmadi${terminal ? ' — TERMINAL' : ', qayta urinadi'}: ${message}`,
+          `SMS #${row.id} (${maskPhone(row.to_phone)}) yuborilmadi${terminal ? ' — TERMINAL' : ', qayta urinadi'}: ${scrubSmsSecret(row, message)}`,
         );
       }
       await sleep(SEND_PAUSE_MS);

@@ -99,4 +99,15 @@ describe('BalanceScreenshotService (kiZgTybn)', () => {
     expect(sanitizeLast4(null)).toBeNull();
     expect(sanitizeDate('')).toBeNull();
   });
+
+  it('⭐ sanitizeDate: guruhlangan karta raqami niqoblanadi, sana-vaqt saqlanadi', () => {
+    expect(sanitizeDate('30.10.2026 8600 1234 5678 9012')).toBe(
+      '30.10.2026 ***',
+    );
+    expect(sanitizeDate('30.10.2026 8600-1234-5678-9012')).toBe(
+      '30.10.2026 ***',
+    );
+    expect(sanitizeDate('30.10.2026 14.05.33')).toBe('30.10.2026 14.05.33');
+    expect(sanitizeDate('2026-10-30 14:05')).toBe('2026-10-30 14:05');
+  });
 });

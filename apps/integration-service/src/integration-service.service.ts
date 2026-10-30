@@ -25,13 +25,15 @@ import {
   Cashbox_type,
   HmacAlgorithm,
   Order_status,
+  productNeedsMeasurement,
+  productSystemRequester,
   Roles,
   Where_deliver,
   rmqSend,
   verifyHmacSignature,
   computeHmacSignature,
   assertPublicUrl,
-  fetchWithoutRedirect,
+  fetchPinned,
   SsrfBlockedError,
   normalizeUzPhone,
   maskPiiPayload,
@@ -107,6 +109,37 @@ import {
   SHIPMENT_FILTERS,
   type ShipmentFilter,
 } from './shipment-filters';
+
+/** 6tGZzupr: hamkor posilkasi qatoridagi o'lchov (DTO tekshirgan). */
+type PartnerItemMeasure = {
+  weight_kg?: number;
+  length_cm?: number;
+  width_cm?: number;
+  height_cm?: number;
+};
+
+type PartnerShipmentItemInput = PartnerItemMeasure & {
+  name?: string;
+  quantity?: number;
+  external_product_id?: string | null;
+};
+
+/** Yuborilgan o'lchov maydonlarigina; hech biri yo'q bo'lsa — null. */
+const partnerItemMeasure = (
+  item: PartnerShipmentItemInput,
+): PartnerItemMeasure | null => {
+  const measure: PartnerItemMeasure = {};
+  for (const field of [
+    'weight_kg',
+    'length_cm',
+    'width_cm',
+    'height_cm',
+  ] as const) {
+    const value = item?.[field];
+    if (value !== null && value !== undefined) measure[field] = value;
+  }
+  return Object.keys(measure).length ? measure : null;
+};
 
 const nullableText = (value: unknown): string | null => {
   const text = toText(value).trim();
@@ -1716,11 +1749,7 @@ export class IntegrationServiceService {
     region_id?: string | null;
     district_id?: string | null;
     where_deliver?: string;
-    items?: Array<{
-      name?: string;
-      quantity?: number;
-      external_product_id?: string | null;
-    }>;
+    items?: PartnerShipmentItemInput[];
     cod_amount?: number;
     subtotal?: number;
     /** Hamkor yorlig'idagi QR qiymati (K3). */
@@ -2430,11 +2459,7 @@ export class IntegrationServiceService {
     region_id?: string | null;
     district_id?: string | null;
     where_deliver?: string;
-    items?: Array<{
-      name?: string;
-      quantity?: number;
-      external_product_id?: string | null;
-    }>;
+    items?: PartnerShipmentItemInput[];
     comment?: string | null;
   }) {
     const partnerId = String(dto?.partner_id ?? '').trim();
@@ -3448,7 +3473,7 @@ export class IntegrationServiceService {
     }
     const signature = computeHmacSignature(rawBody, secret, 'sha256', 'hex');
 
-    const res = await fetchWithoutRedirect(partner.webhook_url, {
+    const res = await this.outboundFetch(partner.webhook_url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -3574,7 +3599,7 @@ export class IntegrationServiceService {
         'hex',
       );
 
-      const res = await fetchWithoutRedirect(target, {
+      const res = await this.outboundFetch(target, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -3717,7 +3742,7 @@ export class IntegrationServiceService {
     let error: string | null = null;
 
     try {
-      const res = await fetchWithoutRedirect(target, {
+      const res = await this.outboundFetch(target, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -3972,15 +3997,16 @@ export class IntegrationServiceService {
    *
    * Id bermagan hamkor uchun eski xulq saqlanadi (faqat matn) — integratsiya
    * buzilmasin.
+   *
+   * 6tGZzupr: hamkor yuborgan o'lchov mahsulotga yoziladi. O'lchovsiz ham
+   * posilka RAD ETILMAYDI: mahsulot «o'lchov kutilmoqda» bo'lib qoladi va narx
+   * baza tarifga tushadi. `external_product_id` siz o'lchovni saqlaydigan
+   * mahsulot yo'q — buyurtma qatorida o'lchov snapshoti yo'q (qulflangan qaror).
    */
   private async resolvePartnerOrderItems(
     partnerId: string,
     elchiMarketId: string,
-    items?: Array<{
-      name?: string;
-      quantity?: number;
-      external_product_id?: string | null;
-    }>,
+    items?: PartnerShipmentItemInput[],
   ): Promise<
     Array<{
       product_id: string | null;
@@ -4000,6 +4026,7 @@ export class IntegrationServiceService {
       if (!name || !Number.isFinite(quantity) || quantity <= 0) continue;
 
       const externalId = String(item?.external_product_id ?? '').trim();
+      const measure = partnerItemMeasure(item);
       let productId: string | null = null;
 
       if (externalId) {
@@ -4009,6 +4036,7 @@ export class IntegrationServiceService {
             elchiMarketId,
             externalId,
             name,
+            measure,
           );
         } catch (error) {
           /**
@@ -4024,6 +4052,11 @@ export class IntegrationServiceService {
               }`,
           );
         }
+      } else if (measure) {
+        this.logger.warn(
+          `6tGZzupr: o'lchov saqlanmadi — external_product_id yo'q ` +
+            `(partner=${partnerId}, mahsulot="${name}")`,
+        );
       }
 
       out.push({ product_id: productId, product_name: name, quantity });
@@ -4045,6 +4078,7 @@ export class IntegrationServiceService {
     elchiMarketId: string,
     externalProductId: string,
     name: string,
+    measure: PartnerItemMeasure | null,
   ): Promise<string | null> {
     const existingRef = await this.partnerProductRefRepo.findOne({
       where: {
@@ -4054,12 +4088,34 @@ export class IntegrationServiceService {
       },
     });
     if (existingRef) {
-      return String(existingRef.elchi_product_id);
+      const linkedId = String(existingRef.elchi_product_id);
+      await this.fillCatalogProductMeasure(
+        partnerId,
+        elchiMarketId,
+        linkedId,
+        measure,
+      );
+      return linkedId;
     }
 
+    const foundId = await this.findCatalogProductByName(elchiMarketId, name);
+    if (foundId) {
+      await this.fillCatalogProductMeasure(
+        partnerId,
+        elchiMarketId,
+        foundId,
+        measure,
+      );
+    }
     const productId =
-      (await this.findCatalogProductByName(elchiMarketId, name)) ??
-      (await this.createCatalogProduct(elchiMarketId, name));
+      foundId ??
+      (await this.createCatalogProduct(
+        partnerId,
+        elchiMarketId,
+        externalProductId,
+        name,
+        measure,
+      ));
 
     if (!productId) return null;
 
@@ -4118,21 +4174,64 @@ export class IntegrationServiceService {
    * Ikkalasida ham xulq bir xil: nom bo'yicha QAYTA qidiramiz. Agar mahsulot
    * poygada boshqa oqim tomonidan yaratilgan bo'lsa (`(name, user_id)` noyob),
    * shu ikkinchi qidiruv uni topadi.
+   *
+   * 6tGZzupr: bu yo'l gateway rol qoidasidan o'tmaydi — ATAYLAB `system`
+   * sifatida belgilanadi, catalog jurnalida ko'rinadi. O'lchovsiz yaratilgani
+   * shu yerda ham ogohlantiriladi.
    */
   private async createCatalogProduct(
+    partnerId: string,
     elchiMarketId: string,
+    externalProductId: string,
     name: string,
+    measure: PartnerItemMeasure | null,
   ): Promise<string | null> {
     const res = await this.rmqRequest<Record<string, any>>(
       this.catalogClient,
       { cmd: 'catalog.product.create' },
-      { dto: { name, user_id: String(elchiMarketId) } },
+      {
+        dto: { name, user_id: String(elchiMarketId), ...measure },
+        requester: productSystemRequester(`partner:${partnerId}`),
+      },
       8000,
     );
     const created = this.pluckId(res);
-    if (created) return created;
+    if (created) {
+      if (productNeedsMeasurement(measure ?? {})) {
+        this.logger.warn(
+          `6tGZzupr: o'lchovsiz avtomatik mahsulot #${created} — narx baza ` +
+            `tarifga tushadi (partner=${partnerId}, ` +
+            `external_product_id=${externalProductId})`,
+        );
+      }
+      return created;
+    }
 
     return this.findCatalogProductByName(elchiMarketId, name);
+  }
+
+  /**
+   * 6tGZzupr: avval o'lchovsiz yaratilgan mahsulot — bo'sh o'lchovi hamkor
+   * yuborgani bilan to'ldiriladi (xodim kiritgani almashtirilmaydi, catalog
+   * qoidasi). `rmqRequest` xatoni `null` ga aylantiradi — posilka to'xtamaydi.
+   */
+  private async fillCatalogProductMeasure(
+    partnerId: string,
+    elchiMarketId: string,
+    productId: string,
+    measure: PartnerItemMeasure | null,
+  ): Promise<void> {
+    if (!measure) return;
+    await this.rmqRequest(
+      this.catalogClient,
+      { cmd: 'catalog.product.fill_missing_measure' },
+      {
+        id: productId,
+        dto: { user_id: String(elchiMarketId), ...measure },
+        requester: productSystemRequester(`partner:${partnerId}`),
+      },
+      8000,
+    );
   }
 
   /** Javob qobig'idan qatorlar ro'yxatini himoyalangan ochish. */
@@ -4422,6 +4521,16 @@ export class IntegrationServiceService {
     }
   }
 
+  /**
+   * (dgvwZasd B) Operator sozlagan manzilga chiqishning yagona yo'li: tekshirilgan
+   * IP'ga ulanadi, redirect'ga ergashmaydi. `assertOutboundUrlSafe` chaqiruv
+   * joyida qoladi — u aniq 400 beradi, bu esa tekshiruv va ulanish orasidagi
+   * DNS rebinding'ni yopadi.
+   */
+  private outboundFetch(url: string, init: RequestInit): Promise<Response> {
+    return fetchPinned(url, init, { allowPrivate: this.allowPrivateHosts });
+  }
+
   private extractPath(source: unknown, path?: string): unknown {
     if (!path || !path.trim()) {
       return source;
@@ -4530,7 +4639,7 @@ export class IntegrationServiceService {
 
     await this.assertOutboundUrlSafe(integration.auth_url);
     try {
-      const response = await fetchWithoutRedirect(integration.auth_url, {
+      const response = await this.outboundFetch(integration.auth_url, {
         method,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
@@ -5279,7 +5388,7 @@ export class IntegrationServiceService {
         Math.max(Number(input.timeout_ms ?? 0) || 15_000, 1_000),
         60_000,
       );
-      const response = await fetchWithoutRedirect(finalUrl, {
+      const response = await this.outboundFetch(finalUrl, {
         method,
         headers,
         body:
@@ -5894,7 +6003,7 @@ export class IntegrationServiceService {
     const startedAt = Date.now();
     await this.assertOutboundUrlSafe(url);
     try {
-      const response = await fetchWithoutRedirect(url, {
+      const response = await this.outboundFetch(url, {
         method,
         headers,
         signal: AbortSignal.timeout(Math.max(1000, input?.timeout_ms ?? 8000)),

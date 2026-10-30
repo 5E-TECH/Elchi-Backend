@@ -31,6 +31,7 @@ const schemaConfigs: SchemaConfig[] = [
   { schema: 'c2c_schema' },
   { schema: 'search_schema' },
   { schema: 'ai_schema' },
+  { schema: 'file_schema' },
 ];
 
 function makeBaseOptions(): BasePostgresOptions {

@@ -951,6 +951,93 @@
         ]
       }
     },
+    "/users/{id}/password/resend-sms": {
+      "post": {
+        "description": "Yangi vaqtinchalik parol yaratib SMS bilan yuboradi (`password_mode: 'generate_sms'` bilan yaratilgan foydalanuvchi uchun «SMS kelmadimi? Qayta yuborish»). Rollar: superadmin; admin (admin/superadmin'dan boshqasi); menejer — faqat o'zi yaratgan kuryer. Nishon roli: admin, registrator, logist, courier, manager, market (boshqasi 400); o'ziga — 403. Eski parol darhol ishlamaydi, barcha sessiyalar yopiladi (`sessions_revoked`), birinchi kirishda parol almashtirish majburiy. Javob `data`: `user_id`, `must_change_password: true`, `password_sms` { `status`: `pending | sent | delivered | failed`, `failure_reason`, `failure_message`, `requested_at`, `sent_at`, `delivered_at`, `resend_available_at`, `resends_left_today` }. SMS yuborilmasa ham 200 (`status: failed` + sabab). 429 — `PASSWORD_SMS_COOLDOWN` (60 s) / `PASSWORD_SMS_DAILY_LIMIT` (kuniga 5), `retry_after_seconds`.",
+        "operationId": "ApiGatewayController_resendTempPasswordSms",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "User ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "New temporary password queued via SMS"
+          },
+          "400": {
+            "description": "Role not supported"
+          },
+          "403": {
+            "description": "Not allowed"
+          },
+          "404": {
+            "description": "Not found"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Resend temporary password via SMS (aidsxJ2H)",
+        "tags": [
+          "Identity"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "manager"
+        ]
+      }
+    },
+    "/users/{id}/password/sms-status": {
+      "get": {
+        "description": "Oxirgi vaqtinchalik parol SMS'i holati — jonli (`sms_outbox` + provayder hisoboti): `data`: `user_id`, `must_change_password` (false — foydalanuvchi parolni allaqachon almashtirgan), `password_sms` (`status`: `pending | sent | delivered | failed`, `failure_reason`, `failure_message`, `requested_at`, `sent_at`, `delivered_at`, `resend_available_at`, `resends_left_today`; SMS hech yuborilmagan — `null`). Huquq — resend-sms bilan bir xil.",
+        "operationId": "ApiGatewayController_tempPasswordSmsStatus",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "User ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Password SMS status"
+          },
+          "403": {
+            "description": "Not allowed"
+          },
+          "404": {
+            "description": "Not found"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Temporary password SMS delivery status (aidsxJ2H)",
+        "tags": [
+          "Identity"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "manager"
+        ]
+      }
+    },
     "/users/{id}/role": {
       "patch": {
         "operationId": "ApiGatewayController_changeUserRole",
@@ -2445,6 +2532,15 @@
               ],
               "type": "string"
             }
+          },
+          {
+            "name": "needs_measurement",
+            "required": false,
+            "in": "query",
+            "description": "6tGZzupr: true — «o'lchov kutilmoqda» (og'irlik yoki o'lcham yo'q) mahsulotlar, false — o'lchovi to'liqlar. Qatorlarda `needs_measurement` qaytadi.",
+            "schema": {
+              "type": "boolean"
+            }
           }
         ],
         "responses": {
@@ -3385,6 +3481,7 @@
     },
     "/orders/external/receive-by-scan": {
       "post": {
+        "description": "Sm3LZ6EN: qop QR'i skanerlansa javobda `data.batch` `{external_batch_token, size, received_count, pending_count, scanned_count}` (qabuldan keyingi holat; `scanned_count` — shu so'rovda qabul qilinganlari, `received_count` ichida) va `data.batches` (shu shakl, har qop uchun). Bir so'rovda bir necha qop bo'lsa `batch: null`. Qop skanlanmagan yoki son olinmagan bo'lsa `batch: null`, `batches: []`. Filial doirasi — so'rovchi filiali. Keldi = `received_count + pending_count`.",
         "operationId": "OrderGatewayController_receiveExternalByScan",
         "parameters": [],
         "requestBody": {
@@ -3482,6 +3579,7 @@
     },
     "/orders/external": {
       "get": {
+        "description": "Sm3LZ6EN: `meta.batches` — sahifada uchragan har qop (`external_batch_token` bor qatorlar) uchun `{external_batch_token, external_batch_ref, external_batch_size, received_count, pending_count}`. Sonlar BUTUN qop bo'yicha: sahifa, `status` va sana bilan kesilmaydi, o'chirilganlar kirmaydi. Doira ro'yxat bilan bir xil: market — o'zi, menejer/registrator — o'z filiali, `market_id` filtri ham qo'llanadi. `received_count` — qabul qilingan a'zolar (qabuldan oldin bekor qilingani kirmaydi), `pending_count` — hali `new`. Keldi = `received_count + pending_count`; `external_batch_size` — hamkor aytgan son, ikkisi farq qilsa qop chala.",
         "operationId": "OrderGatewayController_findAllExternal",
         "parameters": [
           {
@@ -18492,7 +18590,10 @@
         ],
         "responses": {
           "200": {
-            "description": ""
+            "description": "Imzolangan URL"
+          },
+          "403": {
+            "description": "Maxfiy faylga ruxsat yo'q (rol yoki egalik): reestrdagi fayl — yuklagan foydalanuvchi, buyurtma ishtirokchisi, shu filial yoki HQ xodimi, admin."
           }
         },
         "security": [
@@ -18586,7 +18687,10 @@
         ],
         "responses": {
           "200": {
-            "description": ""
+            "description": "Fayl baytlari"
+          },
+          "403": {
+            "description": "Maxfiy faylga ruxsat yo'q (rol yoki egalik): reestrdagi fayl — yuklagan foydalanuvchi, buyurtma ishtirokchisi, shu filial yoki HQ xodimi, admin."
           }
         },
         "security": [
@@ -18705,7 +18809,7 @@
     },
     "/scan/{token}": {
       "get": {
-        "description": "Prefiks bo'yicha: `BTB-`/`BTR-` → paket (`type: batch`), `POST-` (logistics haqiqiy shakli) / `PST-` → pochta (`type: post`), qolgani → buyurtma (404 bo'lsa tashqi qop). j8hdXE1o: paketni jo'natuvchi YOKI qabul qiluvchi filial xodimi ko'radi (`GET /transfer-batches/:id` bilan bir xil). dwJX3NjT: paket javobida qo'shimcha `source_branch` / `destination_branch` `{id, name}`, `region` `{id, name}` va `items[].order` — buyurtma xulosasi `{id, order_number, status, total_price, region, district, customer {name, phone_number}}` (xulosa xizmati javob bermasa `null`). X4RzXk1H: pochta — faqat superadmin/admin/branch/manager/registrator/courier (boshqalar 403) va `GET /post/orders/:id` doirasi (filial xodimi — o'z filiali, kuryer — o'z pochtasi); javob `GET /post/scan/:id` bilan bir xil: pochta qatori + `region`, `courier`, `orders[]`. T7 (QPq2C1co): har buyurtma qatorida `problem_contacts: [{name, phone, source: 'logist'|'support'}]` («Muammo bo'lsa», ≤ 2); `operator_phone`, `secondary_operator_phone`, `market.phone_number` menejer/filial/kuryerga YO'Q.",
+        "description": "Prefiks bo'yicha: `BTB-`/`BTR-` → paket (`type: batch`), `POST-` (logistics haqiqiy shakli) / `PST-` → pochta (`type: post`), qolgani → buyurtma (404 bo'lsa tashqi qop). j8hdXE1o: paketni jo'natuvchi YOKI qabul qiluvchi filial xodimi ko'radi (`GET /transfer-batches/:id` bilan bir xil). dwJX3NjT: paket javobida qo'shimcha `source_branch` / `destination_branch` `{id, name}`, `region` `{id, name}` va `items[].order` — buyurtma xulosasi `{id, order_number, status, total_price, region, district, customer {name, phone_number}}` (xulosa xizmati javob bermasa `null`). X4RzXk1H: pochta — faqat superadmin/admin/branch/manager/registrator/courier (boshqalar 403) va `GET /post/orders/:id` doirasi (filial xodimi — o'z filiali, kuryer — o'z pochtasi); javob `GET /post/scan/:id` bilan bir xil: pochta qatori + `region`, `courier`, `orders[]`. T7 (QPq2C1co): har buyurtma qatorida `problem_contacts: [{name, phone, source: 'logist'|'support'}]` («Muammo bo'lsa», ≤ 2); `operator_phone`, `secondary_operator_phone`, `market.phone_number` menejer/filial/kuryerga YO'Q. Sm3LZ6EN: tashqi qop javobida `batch` `{external_batch_token, size, received_count, pending_count, scanned_count}` (`scanned_count` — qabulni kutayotganlari, hech narsa qabul qilinmagan); son `GET /orders/external` `meta.batches` bilan bir xil doirada, doirada a'zo bo'lmasa `batch: null`. Market faqat o'z a'zolarini ko'radi, begona qop — 404. Keldi = `received_count + pending_count`.",
         "operationId": "ScanGatewayController_scan",
         "parameters": [
           {
@@ -20089,6 +20193,7 @@
     },
     "/partner/tariff": {
       "get": {
+        "description": "`market_tariff` — Elchi sotuvda oladigan summa. O'lchov berilsa `quote` da dvigatel hisobi; o'lchovsiz — `estimated: true` va baza tarif (jimgina 0 emas).",
         "operationId": "PartnerGatewayController_getTariff",
         "parameters": [
           {
@@ -20119,11 +20224,81 @@
               ],
               "type": "string"
             }
+          },
+          {
+            "name": "district_id",
+            "required": false,
+            "in": "query",
+            "description": "Qabul qiluvchi tumani (yo‘nalish tarifi uchun)",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "region_id",
+            "required": false,
+            "in": "query",
+            "description": "Qabul qiluvchi viloyati (yo‘nalish tarifi uchun)",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "pickup",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "express",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "height_cm",
+            "required": false,
+            "in": "query",
+            "description": "Balandlik, sm — L/W/H uchalasi birga",
+            "schema": {
+              "type": "number"
+            }
+          },
+          {
+            "name": "width_cm",
+            "required": false,
+            "in": "query",
+            "description": "Kenglik, sm — L/W/H uchalasi birga",
+            "schema": {
+              "type": "number"
+            }
+          },
+          {
+            "name": "length_cm",
+            "required": false,
+            "in": "query",
+            "description": "Uzunlik, sm — L/W/H uchalasi birga",
+            "schema": {
+              "type": "number"
+            }
+          },
+          {
+            "name": "weight_kg",
+            "required": false,
+            "in": "query",
+            "description": "Jami og'irlik, kg (ko'pi bilan 3 kasr, 10000 gacha)",
+            "schema": {
+              "type": "number"
+            }
           }
         ],
         "responses": {
           "200": {
-            "description": "{ statusCode, message, data: { elchi_market_id, where_deliver, market_tariff } }"
+            "description": "{ statusCode, message, data: { elchi_market_id, where_deliver, market_tariff, tariff_source, estimated, quote } }"
           },
           "404": {
             "description": "Market topilmadi yoki shu hamkorga tegishli emas"
@@ -23252,7 +23427,22 @@
             "type": "string",
             "example": "Kuchli-Parol-2026",
             "minLength": 10,
-            "description": "Kamida 8 belgi (xodim — 10), oddiy parollar taqiqlangan"
+            "description": "(aidsxJ2H) Faqat `password_mode: 'manual'` da (yoki `password_mode` yuborilmagan eski so'rovda). Kamida 8 belgi (xodim — 10), oddiy parollar taqiqlangan"
+          },
+          "password_mode": {
+            "type": "string",
+            "enum": [
+              "generate_sms",
+              "manual"
+            ],
+            "default": "generate_sms",
+            "example": "generate_sms",
+            "description": "(aidsxJ2H) Parolni qanday berish. `generate_sms` (SUKUT) — tizim 12 belgili tasodifiy parol yaratadi va foydalanuvchi telefoniga SMS qiladi (`sms_outbox`, «security» shablon `user.temp_password`); `password` YUBORILMAYDI (400), javobda parol YO'Q, `must_change_password` doim true — birinchi kirishda parol almashtiriladi. `manual` — `password` majburiy, SMS yo'q, `must_change_password` ixtiyoriy. Moslik: `password_mode` yuborilmasa va `password` bor — `manual` (eski forma). Javob `data`: foydalanuvchi + `password_mode` + `password_sms` (`generate_sms` da: `status` `pending | sent | delivered | failed`, `failure_reason`, `failure_message`, `requested_at`, `sent_at`, `delivered_at`, `resend_available_at`, `resends_left_today`; `manual` da `null`). SMS yuborilmasa ham foydalanuvchi yaratiladi (`status: failed` + sabab) — `POST /users/:id/password/resend-sms`."
+          },
+          "must_change_password": {
+            "type": "boolean",
+            "example": true,
+            "description": "(aidsxJ2H) Faqat `manual` da: true — birinchi kirishda parolni almashtirish majburiy (login javobida `must_change_password: true`, almashtirmaguncha boshqa API 403 `PASSWORD_CHANGE_REQUIRED`). `generate_sms` da doim true (false — 400)."
           },
           "salary": {
             "type": "number",
@@ -23266,7 +23456,6 @@
         "required": [
           "name",
           "phone_number",
-          "password",
           "salary"
         ]
       },
@@ -23285,7 +23474,22 @@
             "type": "string",
             "example": "Kuchli-Parol-2026",
             "minLength": 10,
-            "description": "Kamida 8 belgi (xodim — 10), oddiy parollar taqiqlangan"
+            "description": "(aidsxJ2H) Faqat `password_mode: 'manual'` da (yoki `password_mode` yuborilmagan eski so'rovda). Kamida 8 belgi (xodim — 10), oddiy parollar taqiqlangan"
+          },
+          "password_mode": {
+            "type": "string",
+            "enum": [
+              "generate_sms",
+              "manual"
+            ],
+            "default": "generate_sms",
+            "example": "generate_sms",
+            "description": "(aidsxJ2H) Parolni qanday berish. `generate_sms` (SUKUT) — tizim 12 belgili tasodifiy parol yaratadi va foydalanuvchi telefoniga SMS qiladi (`sms_outbox`, «security» shablon `user.temp_password`); `password` YUBORILMAYDI (400), javobda parol YO'Q, `must_change_password` doim true — birinchi kirishda parol almashtiriladi. `manual` — `password` majburiy, SMS yo'q, `must_change_password` ixtiyoriy. Moslik: `password_mode` yuborilmasa va `password` bor — `manual` (eski forma). Javob `data`: foydalanuvchi + `password_mode` + `password_sms` (`generate_sms` da: `status` `pending | sent | delivered | failed`, `failure_reason`, `failure_message`, `requested_at`, `sent_at`, `delivered_at`, `resend_available_at`, `resends_left_today`; `manual` da `null`). SMS yuborilmasa ham foydalanuvchi yaratiladi (`status: failed` + sabab) — `POST /users/:id/password/resend-sms`."
+          },
+          "must_change_password": {
+            "type": "boolean",
+            "example": true,
+            "description": "(aidsxJ2H) Faqat `manual` da: true — birinchi kirishda parolni almashtirish majburiy (login javobida `must_change_password: true`, almashtirmaguncha boshqa API 403 `PASSWORD_CHANGE_REQUIRED`). `generate_sms` da doim true (false — 400)."
           },
           "salary": {
             "type": "number",
@@ -23304,7 +23508,6 @@
         "required": [
           "name",
           "phone_number",
-          "password",
           "salary"
         ]
       },
@@ -23323,7 +23526,22 @@
             "type": "string",
             "example": "Kuchli-Parol-2026",
             "minLength": 10,
-            "description": "Kamida 8 belgi (xodim — 10), oddiy parollar taqiqlangan"
+            "description": "(aidsxJ2H) Faqat `password_mode: 'manual'` da (yoki `password_mode` yuborilmagan eski so'rovda). Kamida 8 belgi (xodim — 10), oddiy parollar taqiqlangan"
+          },
+          "password_mode": {
+            "type": "string",
+            "enum": [
+              "generate_sms",
+              "manual"
+            ],
+            "default": "generate_sms",
+            "example": "generate_sms",
+            "description": "(aidsxJ2H) Parolni qanday berish. `generate_sms` (SUKUT) — tizim 12 belgili tasodifiy parol yaratadi va foydalanuvchi telefoniga SMS qiladi (`sms_outbox`, «security» shablon `user.temp_password`); `password` YUBORILMAYDI (400), javobda parol YO'Q, `must_change_password` doim true — birinchi kirishda parol almashtiriladi. `manual` — `password` majburiy, SMS yo'q, `must_change_password` ixtiyoriy. Moslik: `password_mode` yuborilmasa va `password` bor — `manual` (eski forma). Javob `data`: foydalanuvchi + `password_mode` + `password_sms` (`generate_sms` da: `status` `pending | sent | delivered | failed`, `failure_reason`, `failure_message`, `requested_at`, `sent_at`, `delivered_at`, `resend_available_at`, `resends_left_today`; `manual` da `null`). SMS yuborilmasa ham foydalanuvchi yaratiladi (`status: failed` + sabab) — `POST /users/:id/password/resend-sms`."
+          },
+          "must_change_password": {
+            "type": "boolean",
+            "example": true,
+            "description": "(aidsxJ2H) Faqat `manual` da: true — birinchi kirishda parolni almashtirish majburiy (login javobida `must_change_password: true`, almashtirmaguncha boshqa API 403 `PASSWORD_CHANGE_REQUIRED`). `generate_sms` da doim true (false — 400)."
           },
           "salary": {
             "type": "number",
@@ -23337,7 +23555,6 @@
         "required": [
           "name",
           "phone_number",
-          "password",
           "salary"
         ]
       },
@@ -23385,7 +23602,22 @@
             "type": "string",
             "example": "Kuchli-Parol-2026",
             "minLength": 10,
-            "description": "Kamida 8 belgi (xodim — 10), oddiy parollar taqiqlangan"
+            "description": "(aidsxJ2H) Faqat `password_mode: 'manual'` da (yoki `password_mode` yuborilmagan eski so'rovda). Kamida 8 belgi (xodim — 10), oddiy parollar taqiqlangan"
+          },
+          "password_mode": {
+            "type": "string",
+            "enum": [
+              "generate_sms",
+              "manual"
+            ],
+            "default": "generate_sms",
+            "example": "generate_sms",
+            "description": "(aidsxJ2H) Parolni qanday berish. `generate_sms` (SUKUT) — tizim 12 belgili tasodifiy parol yaratadi va foydalanuvchi telefoniga SMS qiladi (`sms_outbox`, «security» shablon `user.temp_password`); `password` YUBORILMAYDI (400), javobda parol YO'Q, `must_change_password` doim true — birinchi kirishda parol almashtiriladi. `manual` — `password` majburiy, SMS yo'q, `must_change_password` ixtiyoriy. Moslik: `password_mode` yuborilmasa va `password` bor — `manual` (eski forma). Javob `data`: foydalanuvchi + `password_mode` + `password_sms` (`generate_sms` da: `status` `pending | sent | delivered | failed`, `failure_reason`, `failure_message`, `requested_at`, `sent_at`, `delivered_at`, `resend_available_at`, `resends_left_today`; `manual` da `null`). SMS yuborilmasa ham foydalanuvchi yaratiladi (`status: failed` + sabab) — `POST /users/:id/password/resend-sms`."
+          },
+          "must_change_password": {
+            "type": "boolean",
+            "example": true,
+            "description": "(aidsxJ2H) Faqat `manual` da: true — birinchi kirishda parolni almashtirish majburiy (login javobida `must_change_password: true`, almashtirmaguncha boshqa API 403 `PASSWORD_CHANGE_REQUIRED`). `generate_sms` da doim true (false — 400)."
           },
           "salary": {
             "type": "number",
@@ -23414,7 +23646,6 @@
         "required": [
           "name",
           "phone_number",
-          "password",
           "tariff_home",
           "tariff_center"
         ]
@@ -23434,7 +23665,22 @@
             "type": "string",
             "example": "Kuchli-Parol-2026",
             "minLength": 10,
-            "description": "Kamida 8 belgi (xodim — 10), oddiy parollar taqiqlangan"
+            "description": "(aidsxJ2H) Faqat `password_mode: 'manual'` da (yoki `password_mode` yuborilmagan eski so'rovda). Kamida 8 belgi (xodim — 10), oddiy parollar taqiqlangan"
+          },
+          "password_mode": {
+            "type": "string",
+            "enum": [
+              "generate_sms",
+              "manual"
+            ],
+            "default": "generate_sms",
+            "example": "generate_sms",
+            "description": "(aidsxJ2H) Parolni qanday berish. `generate_sms` (SUKUT) — tizim 12 belgili tasodifiy parol yaratadi va foydalanuvchi telefoniga SMS qiladi (`sms_outbox`, «security» shablon `user.temp_password`); `password` YUBORILMAYDI (400), javobda parol YO'Q, `must_change_password` doim true — birinchi kirishda parol almashtiriladi. `manual` — `password` majburiy, SMS yo'q, `must_change_password` ixtiyoriy. Moslik: `password_mode` yuborilmasa va `password` bor — `manual` (eski forma). Javob `data`: foydalanuvchi + `password_mode` + `password_sms` (`generate_sms` da: `status` `pending | sent | delivered | failed`, `failure_reason`, `failure_message`, `requested_at`, `sent_at`, `delivered_at`, `resend_available_at`, `resends_left_today`; `manual` da `null`). SMS yuborilmasa ham foydalanuvchi yaratiladi (`status: failed` + sabab) — `POST /users/:id/password/resend-sms`."
+          },
+          "must_change_password": {
+            "type": "boolean",
+            "example": true,
+            "description": "(aidsxJ2H) Faqat `manual` da: true — birinchi kirishda parolni almashtirish majburiy (login javobida `must_change_password: true`, almashtirmaguncha boshqa API 403 `PASSWORD_CHANGE_REQUIRED`). `generate_sms` da doim true (false — 400)."
           },
           "salary": {
             "type": "number",
@@ -23461,7 +23707,6 @@
         "required": [
           "name",
           "phone_number",
-          "password",
           "branch_id"
         ]
       },
@@ -23535,6 +23780,11 @@
             "example": "Kuchli-Parol-2026",
             "minLength": 8,
             "description": "Kamida 8 belgi (xodim — 10), oddiy parollar taqiqlangan"
+          },
+          "old_password": {
+            "type": "string",
+            "example": "Joriy-Parol-2026",
+            "description": "(aidsxJ2H) O'z parolini almashtirishda (`PATCH /auth/my-profile`, o'zini `PATCH /users/:id`) — joriy parol. Berilsa doim tekshiriladi: noto'g'ri — 400 `OLD_PASSWORD_INVALID` (401 emas), yangisi joriysi bilan bir xil — 400. Berilmasa: `PASSWORD_CHANGE_REQUIRE_OLD=on` da 400 `OLD_PASSWORD_REQUIRED`, sukut (off) da avvalgidek. Admin boshqa foydalanuvchi parolini o'rnatganda kerak emas."
           },
           "status": {
             "type": "string",
@@ -23684,7 +23934,22 @@
             "type": "string",
             "example": "Kuchli-Parol-2026",
             "minLength": 8,
-            "description": "Kamida 8 belgi (xodim — 10), oddiy parollar taqiqlangan"
+            "description": "(aidsxJ2H) Faqat `password_mode: 'manual'` da (yoki `password_mode` yuborilmagan eski so'rovda). Kamida 8 belgi (xodim — 10), oddiy parollar taqiqlangan"
+          },
+          "password_mode": {
+            "type": "string",
+            "enum": [
+              "generate_sms",
+              "manual"
+            ],
+            "default": "generate_sms",
+            "example": "generate_sms",
+            "description": "(aidsxJ2H) Parolni qanday berish. `generate_sms` (SUKUT) — tizim 12 belgili tasodifiy parol yaratadi va foydalanuvchi telefoniga SMS qiladi (`sms_outbox`, «security» shablon `user.temp_password`); `password` YUBORILMAYDI (400), javobda parol YO'Q, `must_change_password` doim true — birinchi kirishda parol almashtiriladi. `manual` — `password` majburiy, SMS yo'q, `must_change_password` ixtiyoriy. Moslik: `password_mode` yuborilmasa va `password` bor — `manual` (eski forma). Javob `data`: foydalanuvchi + `password_mode` + `password_sms` (`generate_sms` da: `status` `pending | sent | delivered | failed`, `failure_reason`, `failure_message`, `requested_at`, `sent_at`, `delivered_at`, `resend_available_at`, `resends_left_today`; `manual` da `null`). SMS yuborilmasa ham foydalanuvchi yaratiladi (`status: failed` + sabab) — `POST /users/:id/password/resend-sms`."
+          },
+          "must_change_password": {
+            "type": "boolean",
+            "example": true,
+            "description": "(aidsxJ2H) Faqat `manual` da: true — birinchi kirishda parolni almashtirish majburiy (login javobida `must_change_password: true`, almashtirmaguncha boshqa API 403 `PASSWORD_CHANGE_REQUIRED`). `generate_sms` da doim true (false — 400)."
           },
           "tariff_home": {
             "type": "number",
@@ -23767,7 +24032,6 @@
           "name",
           "phone_number",
           "username",
-          "password",
           "default_tariff"
         ]
       },
@@ -24525,7 +24789,7 @@
           "must_change_password": {
             "type": "boolean",
             "example": false,
-            "description": "(NDmZMzCP) `true` — parol yangi siyosatga (min 8, xodim 10, oddiy parollar taqiqlangan) mos emas yoki vaqtinchalik: FE «Yangi parol o'rnating» ekraniga yo'naltiradi (PATCH /auth/my-profile `password`, keyin POST /auth/refresh). `PASSWORD_CHANGE_GATE=on` bo'lsa boshqa route'lar 403 `PASSWORD_CHANGE_REQUIRED`."
+            "description": "(NDmZMzCP) `true` — parol yangi siyosatga (min 8, xodim 10, oddiy parollar taqiqlangan) mos emas yoki vaqtinchalik: FE «Yangi parol o'rnating» ekraniga yo'naltiradi (PATCH /auth/my-profile `password`, keyin POST /auth/refresh). `PASSWORD_CHANGE_GATE=on` bo'lsa boshqa route'lar 403 `PASSWORD_CHANGE_REQUIRED`; (aidsxJ2H) parolni admin / tizim bergan bo'lsa (`pwd_forced`) — env'ga qaramay 403."
           }
         },
         "required": [
@@ -32090,6 +32354,34 @@
             "type": "string",
             "description": "Hamkor tizimidagi mahsulot id — katalog bog‘lanishi shu bo‘yicha (nom bo‘yicha emas)",
             "example": "a3f1c8e2-7b44-4d91-9f02-1c5e6d8a4b30"
+          },
+          "weight_kg": {
+            "type": "number",
+            "minimum": 0.001,
+            "maximum": 1000,
+            "example": 1.2,
+            "description": "Og'irlik, kg (ko'pi bilan 3 kasr). Yuborilsa `external_product_id` bo'yicha yaratilgan mahsulotga yoziladi."
+          },
+          "length_cm": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000,
+            "example": 30,
+            "description": "Uzunlik, sm (butun son). Uzunlik, kenglik, balandlik — uchalasi birga yoki hech biri. Yuborilsa `external_product_id` bo'yicha yaratilgan mahsulotga yoziladi."
+          },
+          "width_cm": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000,
+            "example": 22,
+            "description": "Kenglik, sm (butun son). Uzunlik, kenglik, balandlik — uchalasi birga yoki hech biri. Yuborilsa `external_product_id` bo'yicha yaratilgan mahsulotga yoziladi."
+          },
+          "height_cm": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000,
+            "example": 15,
+            "description": "Balandlik, sm (butun son). Uzunlik, kenglik, balandlik — uchalasi birga yoki hech biri. Yuborilsa `external_product_id` bo'yicha yaratilgan mahsulotga yoziladi."
           }
         },
         "required": [

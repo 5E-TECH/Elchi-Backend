@@ -1,4 +1,6 @@
 import {
+  IsBoolean,
+  IsIn,
   IsNotEmpty,
   IsNumber,
   IsOptional,
@@ -8,7 +10,12 @@ import {
   Min,
 } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsPasswordPolicy, Roles } from '@app/common';
+import {
+  IsPasswordPolicy,
+  PASSWORD_MODES,
+  Roles,
+  type PasswordMode,
+} from '@app/common';
 
 export class CreateAdminDto {
   @ApiProperty({ example: 'Admin User' })
@@ -21,11 +28,25 @@ export class CreateAdminDto {
   @IsPhoneNumber('UZ')
   phone_number: string;
 
-  @ApiProperty({ example: 'strongPassword123' })
-  @IsNotEmpty()
+  /**
+   * (aidsxJ2H) Faqat `password_mode: 'manual'` (yoki rejimsiz eski so'rov).
+   * `generate_sms` da yuborilmaydi — parolni identity o'zi yaratadi.
+   */
+  @ApiPropertyOptional({ example: 'Kuchli-Parol-2026' })
+  @IsOptional()
   @IsString()
   @IsPasswordPolicy(Roles.ADMIN)
-  password: string;
+  password?: string;
+
+  /** (aidsxJ2H) `generate_sms` (sukut) | `manual` — `resolveCreatePassword`. */
+  @IsOptional()
+  @IsIn(PASSWORD_MODES)
+  password_mode?: PasswordMode;
+
+  /** (aidsxJ2H) Faqat `manual`: birinchi kirishda almashtirish majburiymi. */
+  @IsOptional()
+  @IsBoolean()
+  must_change_password?: boolean;
 
   @ApiProperty({ example: 3000000, minimum: 0 })
   @IsNotEmpty()

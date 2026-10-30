@@ -43,7 +43,7 @@ export const isReceiptFilterStatus = (
  *  (b) HQ'ga o'tkazma: MAIN INCOME, `courier_payment | branch_to_main`,
  *      `click`.
  * Naqd o'tkazma, click_to_market, kirim, maosh, sotuv, qarshi EXPENSE
- * qatorlar kirmaydi. Funksiyadan oldingi va rasm o'chiq paytdagilar ham
+ * qatorlar va T6 bilan qaytarilgan oyoqlar (`notReversedSql`) kirmaydi. Funksiyadan oldingi va rasm o'chiq paytdagilar ham
  * shu predikat bilan `none`. `h` — tarix alias'i, `c` — kassa alias'i.
  */
 export const RECEIPT_EXPECTED_SQL = `(
@@ -54,16 +54,34 @@ export const RECEIPT_EXPECTED_SQL = `(
     AND h."payment_method" = 'click' AND c."cashbox_type" = 'main')
 )`;
 
-/** Bog'langan chekning tarix qatorlari (asosiy va qarshi oyoq). */
+/**
+ * T6 — qaytarilgan (`payment_reversal` bilan yopilgan) oyoq «Chek yo'q» va
+ * xulosaga kirmaydi: tuzatishdan keyin to'lov yangi (replacement) oyoqda.
+ */
+export function notReversedSql(
+  historyTable: string,
+  alias: string,
+  column = 'id',
+): string {
+  return `NOT EXISTS (SELECT 1 FROM ${historyTable} rv
+      WHERE rv."reverses_history_id" = ${alias}."${column}"
+        AND rv."is_deleted" = false)`;
+}
+
+/**
+ * Bog'langan chekning tarix qatorlari (asosiy va qarshi oyoq). Asosiy oyog'i
+ * T6 bilan qaytarilgan chek kirmaydi — status filtri xulosa bilan bir xil.
+ */
 function linkedIdsSql(tables: ReceiptTables, statusParam?: string): string {
   const r = quote(tables.receipts);
   const status = statusParam ? ` AND r."ai_status" = :${statusParam}` : '';
+  const live = ` AND ${notReversedSql(quote(tables.history), 'r', 'history_id')}`;
   return `SELECT r."history_id" FROM ${r} r
-      WHERE r."is_deleted" = false AND r."state" = 'linked'${status}
+      WHERE r."is_deleted" = false AND r."state" = 'linked'${status}${live}
     UNION ALL
     SELECT r."counter_history_id" FROM ${r} r
       WHERE r."is_deleted" = false AND r."state" = 'linked'
-        AND r."counter_history_id" IS NOT NULL${status}`;
+        AND r."counter_history_id" IS NOT NULL${status}${live}`;
 }
 
 /**
@@ -81,7 +99,8 @@ export function receiptStatusIdCondition(
     return {
       sql: `${alias} IN (SELECT h."id" FROM ${h} h
           JOIN ${c} c ON c."id" = h."cashbox_id"
-          WHERE h."is_deleted" = false AND ${RECEIPT_EXPECTED_SQL})
+          WHERE h."is_deleted" = false AND ${RECEIPT_EXPECTED_SQL}
+            AND ${notReversedSql(h, 'h')})
         AND ${alias} NOT IN (${linkedIdsSql(tables)})`,
       params: {},
     };

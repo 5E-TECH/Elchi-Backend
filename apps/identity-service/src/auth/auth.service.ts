@@ -1208,14 +1208,18 @@ export class AuthService {
    * bo'yicha tokenni parol almashtirish oqimi bilan cheklaydi
    * (`PASSWORD_CHANGE_GATE=on`). Bayroq yo'q — token avvalgidek.
    * Parol almashtirilgach `POST /auth/refresh` claim'siz token beradi.
+   *
+   * (aidsxJ2H) Parolni admin / tizim bergan (`password_change_forced`) —
+   * qo'shimcha `pwd_forced: true`: gateway darvozasi env'ga qaramay ishlaydi.
    */
   private withPasswordChangeClaim<T extends object>(
     payload: T,
-    user: Pick<User, 'must_change_password'>,
-  ): T & { pwd_change?: true } {
-    return user.must_change_password
-      ? { ...payload, pwd_change: true }
-      : payload;
+    user: Pick<User, 'must_change_password' | 'password_change_forced'>,
+  ): T & { pwd_change?: true; pwd_forced?: true } {
+    if (!user.must_change_password) return payload;
+    return user.password_change_forced
+      ? { ...payload, pwd_change: true, pwd_forced: true }
+      : { ...payload, pwd_change: true };
   }
 
   /**
@@ -1227,6 +1231,7 @@ export class AuthService {
   private async signAccessToken(
     payload: Awaited<ReturnType<AuthService['createTokenPayload']>> & {
       pwd_change?: true;
+      pwd_forced?: true;
     },
     sessionId: string,
   ) {

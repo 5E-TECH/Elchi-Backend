@@ -1,6 +1,14 @@
 import { ClientProxy } from '@nestjs/microservices';
 import { rmqSend, Where_deliver } from '@app/common';
-import type { SaleEngineQuote } from '../domain/order-money';
+
+// 6tGZzupr: kalit qarori `@app/common` da — `GET /partner/tariff` ham shuni
+// o'qiydi, savatdagi narx sotuvdagidan ajralmasin.
+export {
+  isSalePricingEngineActive,
+  readSalePricingConfig,
+  type SalePricingConfig,
+  toSaleEngineQuote,
+} from '@app/common';
 
 /**
  * KmWO9gTA — YETKAZISH NARXI DVIGATELINI SOTUV OQIMIGA ULASH (sozlama + RPC).
@@ -29,44 +37,6 @@ import type { SaleEngineQuote } from '../domain/order-money';
  */
 
 export const SALE_QUOTE_PATTERN = 'logistics.delivery.sale_quote';
-
-export interface SalePricingConfig {
-  enabled: boolean;
-  /** NULL — barcha marketlar; aks holda faqat shu id'lar (canary). */
-  marketIds: ReadonlySet<string> | null;
-}
-
-export function readSalePricingConfig(
-  env: Record<string, string | undefined> = process.env,
-): SalePricingConfig {
-  const raw = String(env.SALE_PRICING_ENGINE ?? '')
-    .trim()
-    .toLowerCase();
-  const ids = String(env.SALE_PRICING_ENGINE_MARKET_IDS ?? '')
-    .split(',')
-    .map((id) => id.trim())
-    .filter((id) => /^\d{1,18}$/.test(id));
-  return {
-    enabled: raw === 'on',
-    marketIds: ids.length ? new Set(ids) : null,
-  };
-}
-
-/**
- * Shu market buyurtmasi dvigateldan narx oladimi. `weight_volume_pricing`
- * berilmagan (eski identity javobi) — DB sukuti kabi TRUE.
- */
-export function isSalePricingEngineActive(
-  config: SalePricingConfig,
-  marketId: string | number | null | undefined,
-  market: { weight_volume_pricing?: boolean | null } | null | undefined,
-): boolean {
-  if (!config.enabled) return false;
-  const id = String(marketId ?? '').trim();
-  if (!id) return false;
-  if (config.marketIds && !config.marketIds.has(id)) return false;
-  return market?.weight_volume_pricing !== false;
-}
 
 export interface SaleQuoteItemPayload {
   product_id: string | null;
@@ -224,13 +194,5 @@ export async function fetchSaleDeliveryQuote(
     extra_cost_limit_amount: toNullable(data.extra_cost_limit_amount),
     center_base: toNumber(data.center_base),
     address_base: toNumber(data.address_base),
-  };
-}
-
-export function toSaleEngineQuote(quote: SaleDeliveryQuote): SaleEngineQuote {
-  return {
-    surcharge: quote.extra,
-    tableBase: quote.base_price,
-    minDeliveryPrice: quote.min_delivery_price,
   };
 }

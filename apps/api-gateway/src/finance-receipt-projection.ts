@@ -1,11 +1,14 @@
 import {
   CallHandler,
   ExecutionContext,
+  Inject,
   Injectable,
   NestInterceptor,
+  Optional,
 } from '@nestjs/common';
-import { map, type Observable } from 'rxjs';
-import { Roles as RoleEnum } from '@app/common';
+import type { ClientProxy } from '@nestjs/microservices';
+import { from, map, switchMap, type Observable } from 'rxjs';
+import { Roles as RoleEnum, rmqSend } from '@app/common';
 import {
   buildFileLinkUrl,
   FILE_LINK_TTL_SECONDS,
@@ -21,7 +24,9 @@ import {
  *    almashtiriladi (FE'ga kalit chiqmaydi), `reanalyze_block` olib
  *    tashlanadi, `can_reanalyze` — faqat SA/admin;
  *  - menejer — faqat o'z filiali (`branch_id`) chekining to'liq
- *    ko'rinishi; boshqasi `null`.
+ *    ko'rinishi; boshqasi `null`. Filial — handler'lardagi
+ *    `resolveOwnBranchId` bilan AYNI: JWT `branch_id`, bo'lmasa
+ *    `branch.user.find_by_user`; aniqlanmasa — `null` (fail closed).
  */
 const MAX_DEPTH = 8;
 
@@ -98,32 +103,102 @@ export function projectReceiptsForViewer<T>(
   return walk(payload, viewer, 0) as T;
 }
 
+/** Javobda to'liq ko'rinishli (`file_key`) chek bormi — filial shundagina kerak. */
+export function hasFullReceipt(value: unknown, depth = 0): boolean {
+  if (depth > MAX_DEPTH) return false;
+  if (Array.isArray(value)) {
+    return value.some((item) => hasFullReceipt(item, depth + 1));
+  }
+  if (!isObject(value)) return false;
+  for (const [key, item] of Object.entries(value)) {
+    if (key === 'receipt') {
+      if (isObject(item) && 'file_key' in item) return true;
+      continue;
+    }
+    if (hasFullReceipt(item, depth + 1)) return true;
+  }
+  return false;
+}
+
+const text = (value: unknown): string =>
+  typeof value === 'string' || typeof value === 'number'
+    ? String(value).trim()
+    : '';
+
+/** `extractBranchId` (gateway) bilan bir xil kalitlar. */
+export function branchIdOf(value: unknown): string {
+  if (!isObject(value)) return '';
+  const branch = isObject(value.branch) ? value.branch : {};
+  return (
+    text(value.branch_id) ||
+    text(value.branchId) ||
+    text(branch.id) ||
+    text(branch.branch_id)
+  );
+}
+
+const BRANCH_LOOKUP_TIMEOUT_MS = 5000;
+
 /** Handler javobiga `projectReceiptsForViewer` (JWT'dagi rol va filial). */
 @Injectable()
 export class ReceiptProjectionInterceptor implements NestInterceptor {
-  intercept(context: ExecutionContext, next: CallHandler): Observable<unknown> {
-    const req = context.switchToHttp().getRequest<
-      OriginRequest & {
-        user?: { roles?: unknown; role?: unknown; branch_id?: unknown };
-      }
-    >();
-    const roles = [
-      ...(Array.isArray(req?.user?.roles) ? req.user.roles : []),
-      req?.user?.role,
-    ]
-      .filter((role) => typeof role === 'string')
-      .map((role) => String(role).trim().toLowerCase());
-    const branchRaw = req?.user?.branch_id;
-    const branchId =
-      typeof branchRaw === 'string' || typeof branchRaw === 'number'
-        ? String(branchRaw).trim() || null
-        : null;
-    return next
-      .handle()
-      .pipe(
-        map((payload) =>
-          projectReceiptsForViewer(payload, { roles, branchId, req }),
-        ),
+  constructor(
+    @Optional() @Inject('BRANCH') private readonly branchClient?: ClientProxy,
+  ) {}
+
+  /** Menejer filiali: JWT, bo'lmasa `branch_users` (xato — ''). */
+  private async viewerBranchId(
+    user: Record<string, unknown> | undefined,
+    roles: string[],
+  ): Promise<string> {
+    const fromJwt = branchIdOf(user);
+    if (fromJwt || isPrivileged(roles) || !canSeeReceipts(roles)) {
+      return fromJwt;
+    }
+    const userId = text(user?.sub);
+    if (!userId || !this.branchClient) return '';
+    try {
+      const res = await rmqSend<{ data?: unknown }>(
+        this.branchClient,
+        { cmd: 'branch.user.find_by_user' },
+        {
+          user_id: userId,
+          requester: { id: userId, roles, branch_id: null },
+        },
+        { timeoutMs: BRANCH_LOOKUP_TIMEOUT_MS, retries: 0 },
       );
+      return branchIdOf(res?.data);
+    } catch {
+      return '';
+    }
+  }
+
+  intercept(context: ExecutionContext, next: CallHandler): Observable<unknown> {
+    const req = context
+      .switchToHttp()
+      .getRequest<OriginRequest & { user?: Record<string, unknown> }>();
+    const user = req?.user;
+    const rawRoles: unknown[] = Array.isArray(user?.roles) ? user.roles : [];
+    const roles = [...rawRoles, user?.role]
+      .filter((role): role is string => typeof role === 'string')
+      .map((role) => role.trim().toLowerCase());
+    return next.handle().pipe(
+      switchMap((payload: unknown) =>
+        // Branch RMQ — faqat menejerga ko'rsatiladigan to'liq chek bo'lsa.
+        from(
+          hasFullReceipt(payload)
+            ? this.viewerBranchId(user, roles)
+            : Promise.resolve(branchIdOf(user)),
+        ).pipe(
+          map((branchId) =>
+            projectReceiptsForViewer<unknown>(payload, {
+              roles,
+              branchId: branchId || null,
+              req,
+            }),
+          ),
+        ),
+      ),
+    );
   }
 }

@@ -30,6 +30,8 @@ import type { StringValue } from 'ms';
 import { ScheduleModule } from '@nestjs/schedule';
 import { OtpCode } from './entities/otp-code.entity';
 import { OtpService } from './otp/otp.service';
+import { UserPasswordSms } from './entities/user-password-sms.entity';
+import { TempPasswordService } from './temp-password/temp-password.service';
 @Module({
   imports: [
     ConfigModule.forRoot({
@@ -60,6 +62,8 @@ import { OtpService } from './otp/otp.service';
       UserSession,
       AuthLoginThrottle,
       AppSetting,
+      // (aidsxJ2H) vaqtinchalik parol SMS jurnali.
+      UserPasswordSms,
     ]),
     JwtModule.registerAsync({
       inject: [ConfigService],
@@ -82,6 +86,7 @@ import { OtpService } from './otp/otp.service';
     BcryptEncryption,
     OtpService,
     ContactsService,
+    TempPasswordService,
   ],
 })
 export class IdentityServiceModule {}

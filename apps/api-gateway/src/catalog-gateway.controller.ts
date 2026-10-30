@@ -88,10 +88,10 @@ const PRODUCT_DETAIL_ROLES: string[] = [
  * o'qiydi va buyurtma yaratadi — PRODUCT_READ_ROLES / buyurtma rollari
  * tegilmaydi), BRANCH qo'shilmaydi.
  *
- * DIQQAT: cheklov FAQAT shu gateway dekoratorida. catalog-service
- * `catalog.product.create` (servis qatlami) himoyalanmagan — hamkor
- * posilkasidan avtomatik mahsulot yaratish yo'li undan to'g'ridan-to'g'ri
- * foydalanadi; bu 8-kartada (epik «Mahsulot o'lchovi») hal qilinadi.
+ * 6tGZzupr: servis qatlami `catalog.product.create` requester oladi — market
+ * rollari u yerda ham rad etiladi; hamkor posilkasidan avtomatik yaratish
+ * yo'li gateway'dan o'tmaydi va ATAYLAB `system` deb belgilanadi (jurnalda
+ * ko'rinadi).
  */
 export const PRODUCT_WRITE_ROLES: string[] = [
   RoleEnum.SUPERADMIN,
@@ -130,6 +130,7 @@ export function buildProductListQuery(
   limit?: string,
   sortBy?: string,
   sortDir?: string,
+  needsMeasurement?: string,
 ): {
   user_id: string | undefined;
   search: string | undefined;
@@ -137,10 +138,12 @@ export function buildProductListQuery(
   limit: number | undefined;
   sort_by?: ProductSortBy;
   sort_dir?: 'asc' | 'desc';
+  needs_measurement?: boolean;
 } {
   const parsedLimit = toPositiveInt(limit);
   const trimmedSearch = typeof search === 'string' ? search.trim() : '';
   const sort = parseProductSort(sortBy, sortDir);
+  const measurement = parseNeedsMeasurement(needsMeasurement);
   return {
     user_id: userId,
     search: trimmedSearch || undefined,
@@ -150,7 +153,19 @@ export function buildProductListQuery(
         ? undefined
         : Math.min(parsedLimit, PRODUCT_LIST_MAX_LIMIT),
     ...sort,
+    ...(measurement === undefined ? {} : { needs_measurement: measurement }),
   };
+}
+
+/** 6tGZzupr: «o'lchov kutilmoqda» filtri; noto'g'ri qiymat — 400. */
+function parseNeedsMeasurement(raw?: string): boolean | undefined {
+  if (raw === undefined || raw === '') return undefined;
+  const value = String(raw).trim().toLowerCase();
+  if (value === 'true' || value === '1') return true;
+  if (value === 'false' || value === '0') return false;
+  throw new BadRequestException(
+    "needs_measurement — true yoki false bo'lishi kerak",
+  );
 }
 
 /** j4kTqiSQ: GET product* saralash — FAQAT shu ro'yxat (SQL'ga xom kirmaydi). */
@@ -474,6 +489,8 @@ export class CatalogGatewayController {
                 : {}),
               ...(dto.barcode !== undefined ? { barcode: dto.barcode } : {}),
             },
+            // 6tGZzupr: `remove` naqshi — jurnalda aktyor, market rollari 403.
+            requester: { id: req.user.sub, roles: req.user.roles ?? [] },
           },
         )
         .pipe(timeout(8000)),
@@ -517,6 +534,13 @@ export class CatalogGatewayController {
       'j4kTqiSQ: saralash maydoni (sukut — created_at, yangisi tepada); boshqa qiymat 400',
   })
   @ApiQuery({ name: 'sort_dir', required: false, enum: ['asc', 'desc'] })
+  @ApiQuery({
+    name: 'needs_measurement',
+    required: false,
+    type: Boolean,
+    description:
+      "6tGZzupr: true — «o'lchov kutilmoqda» (og'irlik yoki o'lcham yo'q) mahsulotlar, false — o'lchovi to'liqlar. Qatorlarda `needs_measurement` qaytadi.",
+  })
   findAll(
     @Query('market_id') market_id?: string,
     @Query('user_id') user_id?: string,
@@ -526,6 +550,7 @@ export class CatalogGatewayController {
     @Req() req?: { user: JwtUser },
     @Query('sort_by') sortBy?: string,
     @Query('sort_dir') sortDir?: string,
+    @Query('needs_measurement') needsMeasurement?: string,
   ) {
     let resolvedUserId = market_id ?? user_id;
     if (this.isMarketOnlyRequester(req?.user)) {
@@ -550,6 +575,7 @@ export class CatalogGatewayController {
             limit,
             sortBy,
             sortDir,
+            needsMeasurement,
           ),
         },
       )

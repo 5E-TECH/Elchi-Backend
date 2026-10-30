@@ -77,6 +77,7 @@ export class FinanceServiceController {
       toDate?: string;
       sourceTypes?: string;
       source_types?: string;
+      include_receipts?: boolean;
     },
     @Ctx() context: RmqContext,
   ) {
@@ -86,6 +87,7 @@ export class FinanceServiceController {
         toDate: data?.toDate,
         sourceTypes: data?.sourceTypes,
         source_types: data?.source_types,
+        include_receipts: data?.include_receipts === true,
       }),
     );
   }
@@ -102,6 +104,7 @@ export class FinanceServiceController {
       history_source_types?: string;
       sourceTypes?: string;
       source_types?: string;
+      include_receipts?: boolean;
     },
     @Ctx() context: RmqContext,
   ) {
@@ -148,12 +151,18 @@ export class FinanceServiceController {
 
   @MessagePattern({ cmd: 'finance.history.find_by_id' })
   findHistoryById(
-    @Payload() data: { id: string; include_correctable?: boolean },
+    @Payload()
+    data: {
+      id: string;
+      include_correctable?: boolean;
+      include_receipts?: boolean;
+    },
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
       this.financeService.findHistoryById(data.id, {
         include_correctable: data.include_correctable === true,
+        include_receipts: data.include_receipts === true,
       }),
     );
   }

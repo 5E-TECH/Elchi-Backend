@@ -64,7 +64,7 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
 | **integration-service** | `integration_schema` | `external_integration`, `provider_shipment`, `provider_receivable`, `provider_remittance`, `sync_queue`, `sync_history`, `provider_webhook_log` | External providers (cargo/marketplace): credentials (AES-encrypted), sync queue, dispatch shipments, COD receivables/remittances, inbound HMAC webhooks |
 | **notification-service** | `notification_schema` | `telegram_market`, `notification` | Per-user in-app notification inbox (dispatch/list/read/unread) + realtime socket.io push + Telegram group notifications (configs, connect-by-token, send) |
 | **analytics-service** | — (no DB; aggregator) | — | Dashboards, KPI, revenue, reports — **reads other services** (order/finance/branch/identity) via RMQ; stores nothing |
-| **file-service** | — (MinIO, no DB) | — | Upload/download (signed URLs), PDF & QR generation in MinIO |
+| **file-service** | `file_schema` (only the ownership registry; objects in MinIO) | `file_objects` | Upload/download (signed URLs), PDF & QR generation in MinIO, per-object ownership registry (dgvwZasd B) |
 | **c2c-service** | `c2c_schema` | `listing`, `c2c_order`, `review`, `dispute` | Consumer-to-consumer marketplace (listings/orders/reviews/disputes). **Not yet exposed via gateway** — no c2c gateway controller |
 | **search-service** | `search_schema` | `search_document` | Global search index (upsert/remove/query); other services push index updates |
 
@@ -229,6 +229,38 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
   save the password stays changed (warn): stale rows are still refused at
   refresh by the fingerprint. No OTP / forgot-password reset exists (OTP
   purposes: `login`, `phone_verify`).
+  **Temporary password + SMS (aidsxJ2H, 2026-10-30):** `POST /admins`,
+  `/registrators`, `/logists`, `/couriers`, `/managers`, `/markets` take
+  `password_mode: generate_sms (default) | manual` and
+  `must_change_password` (`temp-password/create-password.ts`). No mode +
+  `password` → `manual` (legacy form). `generate_sms`: 12-char
+  `generateTempPassword` (`libs/common/src/security/temp-password.ts`), hash
+  only, SMS after the create saga, `must_change_password` and
+  `admins.password_change_forced` both true; reply adds `password_mode` and
+  `password_sms` (`pending|sent|delivered|failed` + `failure_reason`,
+  `failure_message`), never the password. SMS failure never fails creation.
+  `TempPasswordService` keeps `user_password_sms` (no secret: who, when,
+  status, `client_message_id`), sends via `notification.sms.send_temp_password`
+  with no RMQ retry, and reads live status via `notification.sms.delivery_status`.
+  In `sms_outbox` the password lives in `text` only until the provider accepts
+  or the row is terminal, then `text` becomes `redacted_text` (added by
+  migration 195); `last_error`, `last_response` and the scheduler log are
+  scrubbed with `scrubSmsSecret`. Template `user.temp_password` (class
+  `security`, OTP quota) needs provider approval.
+  `POST /users/:id/password/resend-sms`: SA; admin except admin/SA; manager only
+  own (`created_by`) courier; 60 s cooldown and 5/Tashkent day under a per-user
+  advisory xact lock (429 `PASSWORD_SMS_COOLDOWN` / `PASSWORD_SMS_DAILY_LIMIT`).
+  The hash is swapped and all sessions revoked only AFTER the SMS is queued; a
+  queue failure leaves password and sessions untouched. `GET
+  /users/:id/password/sms-status` is the live status. `pwd_forced` JWT claim
+  (from `password_change_forced`) makes `PasswordChangeGuard` return 403
+  `PASSWORD_CHANGE_REQUIRED` regardless of `PASSWORD_CHANGE_GATE` (which still
+  governs NDmZMzCP's weak-password `pwd_change`). Self password change:
+  `old_password`, when sent, is always verified (400 `OLD_PASSWORD_INVALID`);
+  when absent, `PASSWORD_CHANGE_REQUIRE_OLD=on` gives 400
+  `OLD_PASSWORD_REQUIRED`, default off keeps the current FE working. A
+  must-change user cannot reuse the current password; a self change clears both
+  flags.
 - **Per-role create/list:** `identity.{courier,manager,registrator,market,customer}.*`,
   generic `identity.user.{create,find_all,find_by_id,update,delete,status}`.
   YEThmZBn (2026-10-23): `find_by_id` with `include_branch: true` (only the
@@ -291,6 +323,17 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
   `order.update_from_api`, `order.delete`. Reads: `find_all(_enriched)`, `find_by_id(_enriched)`,
   `find_by_qr(_enriched)`, `find_new_by_market`, `find_new_markets`, `tracking`,
   `custody_history`, `print.find`.
+  - **Sm3LZ6EN (2026-10-30) — incoming bags:** `order.external.find_all` adds
+    `meta.batches` (`lookup/external-batch-counts.ts`): one `GROUP BY
+    external_batch_token` over whole bags seen on the page — not cut by
+    page/status/date, same market + branch scope as the list.
+    `received_count` = past `created`/`new`, except `cancelled` with no post
+    (partner cancelled before intake); `pending_count` = `new`; arrived =
+    received + pending vs. the partner's `external_batch_size`. The same counts
+    answer `order.receive_by_scan` (`batch`/`batches`, after intake, failure
+    swallowed — parcels are already received) and
+    `order.find_batch_by_external_token` (`batch`; `market_id` also limits
+    `members`, so a market gets 404 on a foreign bag).
   - **fix3 (2026-10-01):** `order.update_from_api` `{id, dto, requester}` is the
     **only** target of the gateway's HTTP `PATCH /orders/:id` and `/:id/full`
     → `updateFromApi` (API field/role/branch rules, §5.1; a call without a
@@ -432,9 +475,9 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
   `logistics.delivery_tariff_created`,
   `logistics.delivery_pricing_settings_updated`). No cache. Pickup fee is
   returned separately and never part of `total`. **Sale wiring (KmWO9gTA)**:
-  `logistics.delivery.sale_quote` (internal, order-service only; optional
-  `from` = market region, unknown → not city; `product_id` items, unknown →
-  unmeasured; returns `extra`, table bases, `min_delivery_price`,
+  `logistics.delivery.sale_quote` (internal: order-service and the partner
+  tariff; optional `from` = market region, unknown → not city; `product_id`
+  items, unknown → unmeasured; returns `extra`, table bases, `min_delivery_price`,
   `extra_cost_limit_amount` — migration `1716000000183`). order-service
   `pricing/sale-pricing.ts` + `domain/order-money.ts`
   `resolveOrderTariffDetailed`: snapshot first; with
@@ -448,6 +491,22 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
   and rollback (snapshot) untouched. `orders.quoted_market_tariff`
   (migration `1716000000184`) = open-time quote; drift →
   `order.delivery_price_changed` activity log.
+  **Partner tariff (6tGZzupr)**: `GET /partner/tariff` (gateway) no longer has
+  its own center/home ternary — `market_tariff` comes from
+  `resolveOrderTariffDetailed`, moved with `readSalePricingConfig` /
+  `isSalePricingEngineActive` to `libs/common/src/pricing/sale-tariff.ts`
+  (order-service re-exports them, behaviour unchanged). Same switches as the
+  sale: engine off → profile tariff, on → standard + surcharge, floored at
+  `min_delivery_price` only (seller share unknown before the sale). The gateway
+  calls `logistics.delivery.sale_quote` (not `quote`: `from` must stay optional
+  like in the sale) only when measures/`express`/`pickup` are given, the engine
+  is active or the profile tariff is NULL/0; `sale_quote` gained raw measure
+  items and `express` / `pickup_count` (sale payload unchanged). Response adds
+  `estimated`, `tariff_source`, `quote`; a NULL profile → table base, never a
+  silent 0 (no quote → 503); an explicit 0 stays 0 (contract, sale charges 0).
+  Engine failure → profile tariff, `estimated: true`, `quote: null`.
+  External import `delivery_price` is the shop's own price: it only joins
+  `total_price`, never `market_tariff` (guard spec).
   Volumetric threshold (AQ9lkgVB, migration `1716000000154`):
   `delivery_pricing_settings.volumetric_from_kg` numeric(10,3) DEFAULT 0 —
   shipment volumetric weight below it is ignored (billable = actual weight),
@@ -663,6 +722,13 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
   (+ `PUBLIC_ERROR_CODES`). AI assistant tool `get_receipt_checks`. RMQ:
   `finance.receipt.{settings.get,settings.update,upload_check,create_draft,
   ai_result,reanalyze,get}`, `finance.receipt_checks.summary`.
+  History `receipt` blocks are FAIL CLOSED: finance attaches them only when
+  the gateway passes `include_receipts` (SA/admin/manager routes; never for
+  courier/market cashboxes or `my-cashbox`). T6 `correctAmount` moves the
+  receipt to the replacement legs in the same tx
+  (`carryOverForCorrection`); reversed legs (`notReversedSql`) are out of
+  «no receipt» and the summary. The gateway downsizes the photo (1568 px)
+  before `ai.finance.receipt_extract`.
 
 ### branch-service (`branch_schema`)
 - **Entities:** `branch` (`BranchType`, `BranchOwnership`), `branch_config`
@@ -701,6 +767,16 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
   without a region → 400, logistics transport/5xx → 503 (partner retries). It
   passes `paid_online_amount = subtotal − cod_amount` to `order.create`, which
   now persists it (§5.2).
+- **6tGZzupr (2026-10-30):** partner `items[]` accept `weight_kg`, `length_cm`,
+  `width_cm`, `height_cm` (optional, `ShipmentItemDto`, L/W/H together).
+  `resolvePartnerOrderItems`: with `external_product_id` the measures go to the
+  auto-created product (`createCatalogProduct`, `system` requester) or, for an
+  existing ref / same-name product, to `catalog.product.fill_missing_measure`
+  (NULL fields only). Without measures the shipment is still accepted, the
+  product stays `needs_measurement` and a warning is logged (price falls to the
+  base tariff at sale). Measures without `external_product_id` are not stored
+  (logged). Marketplace repo is separate: its `ElchiTariffInput` and checkout
+  still send no measures — tracked outside this repo.
 
 ### investor-service (`investor_schema`)
 - **Entities:** `investor`, `investment`, `profit_share`.
@@ -786,7 +862,23 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
     removed (Pc4CAFdB): product create/delete/update is staff-only
     (superadmin/admin/registrator/manager), market/market_operator read only.
     Service level (`catalog.product.create`) keeps measures optional —
-    `integration-service` partner path still creates `{ name, user_id }`.
+    the `integration-service` partner path may create `{ name, user_id }`.
+  - **6tGZzupr (2026-10-30, no migration):** `catalog.product.create` takes
+    `{ dto, requester? }` (`remove` pattern). Gateway sends the HTTP user; the
+    partner path sends `PRODUCT_SYSTEM_REQUESTER` (`{ id: 'system', roles:
+    ['system'], via: 'partner:<id>' }`), so auto-created products are visible
+    in `activity_log` (`user_role = 'system'`, `metadata.source`, `via`,
+    `needs_measurement`). `market`/`market_operator` requester → 403; no
+    requester still works (rolling deploy, `source: 'unknown'`).
+    `needs_measurement` is **derived, not stored**
+    (`productNeedsMeasurement`, same rule as the engine's `estimated`: no
+    weight, or volumetric on and L/W/H missing) — returned on product rows and
+    filterable: `GET /product?needs_measurement=true|false`
+    (`catalog.product.find_all`); a registrator PATCH clears it. Legacy
+    products without measures are included. New RMQ
+    `catalog.product.fill_missing_measure { id, dto: { user_id, …measures },
+    requester }` fills only NULL measures (a staff value is never replaced;
+    other market → 403).
   - `update` and `update_own` use the same field whitelist (name, image_url,
     price, measures, barcode); `update_own` only adds the ownership check.
   - New RMQ `catalog.product.find_by_code {code, user_id?}` → `{data, total,
@@ -913,9 +1005,32 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
   resolved); `report.finance` monthly buckets use Tashkent months. (Order
   revenue chart buckets in order-service also use the Tashkent wall clock.)
 
-### file-service (MinIO, no DB)
-- `file.{upload,get_url,delete,exists,generate_pdf,generate_qr}`. Signed URLs;
-  size/TTL from env.
+### file-service (MinIO + `file_schema`)
+- `file.{upload,get_url,delete,exists,read,find_owner,generate_pdf,generate_qr}`.
+  Signed URLs; size/TTL from env.
+- **Ownership registry (dgvwZasd B, migr 193):** `file_schema.file_objects`
+  (`key` PK, `folder`, `owner_id` varchar — user id or `system`, `owner_role`,
+  `owner_branch_id`, `mime_type`, `size_bytes`, `created_at`). Written by
+  `file.upload` only when the payload has `owner` (gateway JWT: `POST
+  files/upload`, order sell/cancel proof, shift photo, cashbox receipt;
+  `system`: shift report); catalog images and generated QR/PDF stay out.
+  Row is removed by `file.delete`. A failed registry write never fails the
+  upload (no row = legacy rule); `file.find_owner` DB error is an error, not
+  "not found". Internal `file.read`/`file.exists` callers (Telegram DM, AI
+  receipt/balance check, order proof check) are not gated by the registry.
+- **Read rule** (`FileGatewayController.assertCanAccessPrivateKey`, `GET
+  files/:key`, `GET files/:key/content`; gateway env
+  `FILE_OWNERSHIP_ENFORCE`, default `off` = registry is write-only). With `on`
+  a private-prefix key that has a row: SA/admin; the uploader; market/courier
+  who is on the order (`order.proof_files`); branch staff (manager,
+  registrator, branch, operator) when the order's `branch_id` /
+  `holder_branch_id` / `home_branch_id` or the uploader's branch is theirs,
+  or they are in the HQ branch. Registry lookup failure → 503, never the
+  legacy rule. Key WITHOUT a row (files uploaded before migr 193) → legacy
+  rule in both modes (role gate + order owner for market/courier). `GET
+  files/signed/:token` is a bearer link and does not consult the registry;
+  `shift-check-` / `shift-report-` / `cashbox-receipt-` via `GET files/:key`
+  stay SA/admin only.
 
 ### search-service (`search_schema`)
 - `search_document` index. `search.{index.upsert,index.remove,query}`. Other
@@ -987,6 +1102,14 @@ Imported as `@app/common`. Top level: `enums/`, `helpers/`, `src/`.
 - **`src/soft-delete`** — soft-delete base (deleted rows kept for audit).
 - **`src/security`** — SSRF guard for outbound URLs from operator-supplied
   integration config (`INTEGRATION_ALLOW_PRIVATE_HOSTS` toggles private hosts).
+  `assertPublicUrl` is the early check (config time + before each call);
+  `fetchPinned` is the only outbound path: `redirect: 'error'` plus a shared
+  undici `Agent` whose connect-time lookup (`createPinnedLookup`) validates
+  every answer and hands exactly those IPs to the socket, so a DNS rebind
+  between check and connect cannot reach an internal host (dgvwZasd B). URL is
+  not rewritten: Host header, SNI and certificate check use the hostname.
+  `undici` stays on the major bundled with Node (22 → 6.x): global `fetch` gets
+  the `Agent` as `dispatcher`.
 - **`src/webhook`** — HMAC signature helpers for inbound provider webhooks.
 
 ---
@@ -1280,6 +1403,24 @@ secret (secret never reaches the gateway).
 - **docker-compose.prod.yml** services: `rabbitmq`, `postgres`, `minio`,
   `migration-runner`, `api-gateway`, `cloudflared`, + all 13 other services.
   Volumes: `rabbitmq_data`, `postgres_data`, `minio_data`.
+- **Konteyner qotirish (qUEE0Bgd):** servis image'lari `USER node` (fayllar
+  root'niki, `/app` ga yozilmaydi — ilova diskka yozmasligi kerak, kerak bo'lsa
+  faqat `/tmp`). Compose: `x-hardening` (`no-new-privileges`, `cap_drop: ALL`) app
+  servislari, cloudflared va ops sidecar'lariga; `x-backup-hardening`
+  (+ `DAC_OVERRIDE`, `DAC_READ_SEARCH`) `db-backup` / `backup-offsite` ga — ular
+  root qoladi, chunki `backups/` dagi dump'lar 0600 va turli egalarniki.
+  postgres/rabbitmq/minio ta'rifiga hardening qo'shilmagan (entrypoint root'da
+  ishlaydi; ta'rif o'zgarsa deploy qayta yaratadi).
+- **Ops sidecar'lari (qUEE0Bgd):** `migration-runner`, `db-reconcile`,
+  `activity-log-prune` — `Dockerfile.ops` (kod + dev deps image ichida, repo
+  bind-mount va ishga tushishdagi `npm ci` yo'q). Kod image'da bo'lgani uchun
+  `deploy.yml` ishlayotgan sidecar'larni har deploy'da yangilaydi; ularni o'zi
+  yoqmaydi.
+- **Image'lar (qUEE0Bgd):** rabbitmq va cloudflared — tag + digest. rabbitmq
+  deploy'da `--no-recreate`: qayta yaratilsa broker foydalanuvchilari yo'qoladi
+  (`docs/ops/secret-rotation.md` §3). minio — `pull_policy: never`
+  (`minio/minio` Docker Hub'da 404, digest'ga o'tish uchun serverdagi image
+  tekshirilishi kerak), postgres — `pull_policy: missing`.
 - **Schemas:** `scripts/init-schemas.sql` auto-creates every `*_schema` on
   Postgres start. Per-service `DB_SCHEMA` env (defaults in `libs/common/src/config`).
 - **Migrations:** TypeORM (`typeorm.config.ts`, `migrations/`,
@@ -1335,8 +1476,8 @@ secret (secret never reaches the gateway).
 ## 9. Open / notable state (as of last sync)
 
 - **c2c-service** is fully built internally but **not exposed via the gateway**.
-- **analytics-service** and **file-service** have **no database** (aggregator /
-  MinIO respectively).
+- **analytics-service** has **no database** (aggregator). **file-service** keeps
+  objects in MinIO; its only table is the ownership registry (`file_schema`).
 - Frontend has significant **coverage gaps** vs backend — see
   [`docs/frontend/COVERAGE_REPORT.md`](./frontend/COVERAGE_REPORT.md)
   (Investor, Integration-sync, Finance shift/salary/operator, Files, Excel,

@@ -10,6 +10,11 @@ import {
 } from 'class-validator';
 
 export class FindCashboxByUserDto {
+  /** T3 — `receipt` blokini qo'shish (FAQAT gateway, SA/admin/menejer). */
+  @IsOptional()
+  @IsBoolean()
+  include_receipts?: boolean;
+
   @IsString()
   @Matches(/^\d+$/)
   user_id!: string;

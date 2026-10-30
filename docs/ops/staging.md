@@ -21,7 +21,7 @@
 | `.github/workflows/deploy.yml` | `main` push → `deploy` (prod). `test` push → `deploy-staging` (faqat `vars.STAGING_ENABLED == 'true'` bo'lsa). Ikkalasi ham `test` + `unit-tests` (3 shard) yashil bo'lgandagina. `STAGING_ENABLED` yoqiq bo'lsa prod deploy **staging darvozasidan** o'tadi (§6.2). Deploy yarim yo'lda bekor qilinmaydi (`cancel-in-progress: false`), har run faqat o'z commitini deploy qiladi. |
 | `scripts/staging/sync-deploy-workflow.mjs` | `deploy-staging` skripti prod skriptidan **generatsiya qilinadi** (qo'lda tahrirlanmaydi). Prod skript o'zgarsa: `node scripts/staging/sync-deploy-workflow.mjs` → commit. CI (`ci.yml`, «Staging deploy is in sync») farq bo'lsa qizil. |
 | `docker-compose.staging.yml` | prod compose ustidan override: `.env.staging`, 8 GB ga mos xotira chegaralari, `elchi-staging` loyiha nomi (volume/network), `elchi-stg-*` konteyner nomlari, boshqa localhost portlar, o'z tunnel tokeni, backup faqat lokal. |
-| `.env.staging.example` | `.env.staging` shabloni (hamma kalit + staging qiymatlari). CI (`ci.yml`, «Staging deploy is in sync») `.env.example` dagi har kalit shu yerda borligini tekshiradi. Funksiya kalitlari (`…_ENABLED`, `SALE_PRICING_ENGINE`, `FINANCE_*`) serverdagi `.env.staging` da prod qiymati bilan bir xil bo'lsin. |
+| `.env.staging.example` | `.env.staging` shabloni (hamma kalit + staging qiymatlari). CI (`ci.yml`, «Staging deploy is in sync») `.env.example` dagi har kalit shu yerda borligini tekshiradi. Funksiya kalitlari (`…_ENABLED`, `SALE_PRICING_ENGINE`, `FINANCE_*`) serverdagi `.env.staging` da prod qiymati bilan bir xil bo'lsin. Istisno: `FILE_OWNERSHIP_ENFORCE` — `docker-compose.staging.yml` uni `on` qiladi (egalik qoidasi prod'dan oldin shu yerda sinaladi). |
 | `scripts/staging/bootstrap-server.sh` | yangi serverni bir marta tayyorlash (idempotent). |
 | `scripts/staging/restore-anonymize.sh` (+ `anonymize.sql`) | prod nusxasini staging'ga tiklash va anonimlashtirish — alohida ish (staging-safe), §8. |
 
@@ -94,8 +94,9 @@ $DC logs --tail 50 api-gateway
    bir xil bo'lsa staging tokeni prod'da ham o'tadi. `SMS_CREDENTIAL_SECRET` va
    `INTEGRATION_CREDENTIAL_SECRET` boshqacha bo'lgani uchun prod nusxasidagi
    Eskiz/hamkor kredensiallari staging'da ochilmaydi — bu ataylab.
-6. **MinIO image.** `minio/minio` endi anonim `docker pull` ga ruxsat bermasligi
-   mumkin. `docker pull minio/minio:latest` ishlamasa — prod'dan ko'chiring:
+6. **MinIO image.** `minio/minio` Docker Hub'da yo'q (2026-10-30: repo 404) va
+   compose'da `pull_policy: never` (qUEE0Bgd): image serverda birinchi deploy'dan
+   OLDIN bo'lishi shart, aks holda `up` yiqiladi. Prod'dan ko'chiring:
    ```bash
    # prod'da
    docker save minio/minio:latest | gzip > /root/minio-image.tar.gz

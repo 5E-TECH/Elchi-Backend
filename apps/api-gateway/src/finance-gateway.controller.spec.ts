@@ -444,6 +444,8 @@ describe('FinanceGatewayController', () => {
         page: 1,
         limit: 100,
         cashbox_type: 'branch',
+        // T3 — menejer chekni ko'radi (finance faqat shu bayroq bilan qo'shadi).
+        include_receipts: true,
       },
     );
   });

@@ -75,6 +75,17 @@ const MANUAL_GROUP_EDIT_FORBIDDEN_MESSAGE =
   "Faqat is_active o'zgartiriladi. Guruhni almashtirish uchun ulanishni o'chirib, bir martalik bot havolasi orqali qayta ulang.";
 
 /**
+ * (BOT-3 #6) Market kod bilan o'zi qayta ulay oladigan nofaollik sabablari
+ * (Telegram tomonida yuz bergan). `manual` (admin) va NULL — yo'q.
+ */
+const RECONNECTABLE_INACTIVE_REASONS = new Set([
+  'kicked',
+  'left',
+  'blocked_on_send',
+  'chat_not_found',
+]);
+
+/**
  * (bOMYoOtV) Telegram ulanishining o'qiladigan ustunlari. Bot TOKENI bazada
  * UMUMAN yo'q (faqat env); `connect_token_hash` — `select: false`, bu yerda
  * tanlanmaydi.
@@ -375,6 +386,22 @@ export class NotificationServiceService {
       },
     });
 
+    // (BOT-3 #6) Shu market, shu guruh, shu tur — lekin NOFAOL (bot
+    // chiqarilgan / huquq olingan): kod bilan qayta ulash uni qayta yoqadi
+    // (boshqa marketniki emas — tortib olish yo'q).
+    // Faqat Telegram sababli nofaol bo'lganlar: admin qo'lda o'chirgan
+    // (`manual`) yoki sababi noma'lum (eski, NULL) — faqat admin PATCH bilan.
+    if (
+      existsByGroup &&
+      !existsByGroup.is_active &&
+      RECONNECTABLE_INACTIVE_REASONS.has(
+        String(existsByGroup.inactive_reason ?? ''),
+      ) &&
+      String(existsByGroup.market_id) === String(input.market_id)
+    ) {
+      return this.reactivateBinding(existsByGroup, input, market);
+    }
+
     if (existsByGroup) {
       throw new BadRequestException(GROUP_ALREADY_CONNECTED_MESSAGE);
     }
@@ -432,6 +459,51 @@ export class NotificationServiceService {
       this.toPublic(saved),
       201,
       `${market.name ?? 'Market'} uchun Telegram guruhi ulandi`,
+    );
+  }
+
+  private async reactivateBinding(
+    row: TelegramMarket,
+    input: {
+      market_id: string;
+      group_type: Group_type;
+      group_id: string;
+      created_by: string | null;
+      via: string;
+    },
+    market: { name?: string },
+  ) {
+    await this.tgMarketRepo.update(
+      { id: row.id },
+      {
+        is_active: true,
+        inactive_reason: null,
+        inactive_at: null,
+        linked_by: input.created_by,
+      },
+    );
+    const saved = { ...row, is_active: true, inactive_reason: null };
+    await this.activityLog.log({
+      entity_type: 'TelegramMarket',
+      entity_id: row.id,
+      action: 'notification.tg_group_connected',
+      metadata: {
+        group_id: input.group_id,
+        market_id: input.market_id,
+        via: input.via,
+        reactivated: true,
+        ...(input.created_by ? { linked_by: input.created_by } : {}),
+      },
+    });
+    await this.notifyMarketGroupConnected(
+      input.market_id,
+      input.group_type,
+      input.group_id,
+    );
+    return this.successRes(
+      this.toPublic(saved),
+      200,
+      `${market.name ?? 'Market'} uchun Telegram guruhi qayta ulandi`,
     );
   }
 

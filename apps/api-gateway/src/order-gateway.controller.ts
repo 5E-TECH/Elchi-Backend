@@ -146,6 +146,7 @@ import {
 import { successRes } from '../../../libs/common/helpers/response';
 import { Roles } from './auth/roles.decorator';
 import { RolesGuard } from './auth/roles.guard';
+import { fileOwnerOf } from './file-ownership';
 import {
   ORDER_QR_LOOKUP_ROLES,
   assertQrOrderVisible,
@@ -788,7 +789,10 @@ export class OrderGatewayController {
       .filter(Boolean);
   }
 
-  private async uploadProofFile(file?: UploadedProofFile): Promise<string[]> {
+  private async uploadProofFile(
+    file: UploadedProofFile | undefined,
+    user: JwtUser,
+  ): Promise<string[]> {
     if (!file) return [];
     if (!this.fileClient) {
       throw new BadRequestException('File service is not configured');
@@ -803,6 +807,7 @@ export class OrderGatewayController {
             mime_type: file.mimetype,
             file_base64: file.buffer.toString('base64'),
             folder: 'proof',
+            owner: fileOwnerOf(user),
           },
         )
         .pipe(timeout(PROOF_OPERATION_TIMEOUT_MS)),
@@ -825,9 +830,9 @@ export class OrderGatewayController {
 
   private async withUploadedProof<
     T extends { proofFileKeys?: string[]; proofFileKeysVerified?: boolean },
-  >(dto: T, file?: UploadedProofFile): Promise<T> {
+  >(dto: T, file: UploadedProofFile | undefined, user: JwtUser): Promise<T> {
     const existingKeys = this.normalizeProofFileKeys(dto?.proofFileKeys);
-    const uploadedKeys = await this.uploadProofFile(file);
+    const uploadedKeys = await this.uploadProofFile(file, user);
     return {
       ...dto,
       proofFileKeys: Array.from(new Set([...existingKeys, ...uploadedKeys])),
@@ -3436,6 +3441,8 @@ export class OrderGatewayController {
   @ApiBearerAuth()
   @ApiOperation({
     summary: 'Receive external parcels by scanned label tokens',
+    description:
+      "Sm3LZ6EN: qop QR'i skanerlansa javobda `data.batch` `{external_batch_token, size, received_count, pending_count, scanned_count}` (qabuldan keyingi holat; `scanned_count` — shu so'rovda qabul qilinganlari, `received_count` ichida) va `data.batches` (shu shakl, har qop uchun). Bir so'rovda bir necha qop bo'lsa `batch: null`. Qop skanlanmagan yoki son olinmagan bo'lsa `batch: null`, `batches: []`. Filial doirasi — so'rovchi filiali. Keldi = `received_count + pending_count`.",
   })
   @ApiBody({ type: ReceiveByScanDto })
   receiveExternalByScan(
@@ -3578,7 +3585,11 @@ export class OrderGatewayController {
     RoleEnum.MARKET,
   )
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'List external orders with filters' })
+  @ApiOperation({
+    summary: 'List external orders with filters',
+    description:
+      "Sm3LZ6EN: `meta.batches` — sahifada uchragan har qop (`external_batch_token` bor qatorlar) uchun `{external_batch_token, external_batch_ref, external_batch_size, received_count, pending_count}`. Sonlar BUTUN qop bo'yicha: sahifa, `status` va sana bilan kesilmaydi, o'chirilganlar kirmaydi. Doira ro'yxat bilan bir xil: market — o'zi, menejer/registrator — o'z filiali, `market_id` filtri ham qo'llanadi. `received_count` — qabul qilingan a'zolar (qabuldan oldin bekor qilingani kirmaydi), `pending_count` — hali `new`. Keldi = `received_count + pending_count`; `external_batch_size` — hamkor aytgan son, ikkisi farq qilsa qop chala.",
+  })
   @ApiQuery({ name: 'market_id', required: false, type: String })
   @ApiQuery({
     name: 'status',
@@ -6552,7 +6563,7 @@ export class OrderGatewayController {
     @UploadedFile() proof: UploadedProofFile | undefined,
     @Req() req: { user: JwtUser },
   ) {
-    const dtoWithProof = await this.withUploadedProof(dto, proof);
+    const dtoWithProof = await this.withUploadedProof(dto, proof, req.user);
     return firstValueFrom(
       this.orderClient
         .send(
@@ -6597,7 +6608,7 @@ export class OrderGatewayController {
     @UploadedFile() proof: UploadedProofFile | undefined,
     @Req() req: { user: JwtUser },
   ) {
-    const dtoWithProof = await this.withUploadedProof(dto, proof);
+    const dtoWithProof = await this.withUploadedProof(dto, proof, req.user);
     return firstValueFrom(
       this.orderClient
         .send(
@@ -6769,7 +6780,7 @@ export class OrderGatewayController {
     @UploadedFile() proof: UploadedProofFile | undefined,
     @Req() req: { user: JwtUser },
   ) {
-    const dtoWithProof = await this.withUploadedProof(dto, proof);
+    const dtoWithProof = await this.withUploadedProof(dto, proof, req.user);
     return firstValueFrom(
       this.orderClient
         .send(

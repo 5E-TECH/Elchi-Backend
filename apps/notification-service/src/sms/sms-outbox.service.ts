@@ -38,6 +38,12 @@ export interface EnqueueSmsInput {
   /** BIZNING id (DLR moslash va takrorni to'sish). Berilmasa UUID. */
   clientMessageId?: string;
   senderProfile?: SmsSenderProfile;
+  /**
+   * (aidsxJ2H) Maxfiy matnning maskalangan nusxasi (masalan vaqtinchalik
+   * parol `••••` bilan). Faqat `security` sinfida; yuborilgach / terminal
+   * xatoda `text` shu bilan almashtiriladi.
+   */
+  redactedText?: string | null;
 }
 
 export interface EnqueueSmsResult {
@@ -125,11 +131,55 @@ export const smsReportRange = (
   return { from, to };
 };
 
-/** OTP kodi DB'da yuborilgandan keyin qolmasin (rkz0yBxr: ochiq kod hech qayerda). */
+/**
+ * OTP kodi DB'da yuborilgandan keyin qolmasin (rkz0yBxr: ochiq kod hech
+ * qayerda). (aidsxJ2H) Vaqtinchalik parol qatorida tayyor maskalangan matn
+ * (`redacted_text`) bor — `text` aynan shu bilan almashtiriladi (parol
+ * harf+raqam, raqam regex'i uni ushlamaydi).
+ */
 const redactSecurity = (row: SmsOutbox) =>
   row.message_class === 'security'
-    ? { text: row.text.replace(/\d{4,8}/g, '******') }
+    ? {
+        text:
+          typeof row.redacted_text === 'string'
+            ? row.redacted_text
+            : row.text.replace(/\d{4,8}/g, '******'),
+      }
     : {};
+
+/**
+ * (aidsxJ2H) Maxfiy qatordagi parol: `text` va `redacted_text` orasidagi farq.
+ * Ochiq matn yo'q (allaqachon maskalangan yoki oddiy qator) — `null`.
+ */
+const secretOf = (
+  row: Pick<SmsOutbox, 'text' | 'redacted_text'>,
+): string | null => {
+  const { text, redacted_text: masked } = row;
+  if (typeof masked !== 'string') return null;
+  let head = 0;
+  while (head < masked.length && text[head] === masked[head]) head += 1;
+  let tail = 0;
+  while (
+    tail < masked.length - head &&
+    tail < text.length - head &&
+    text[text.length - 1 - tail] === masked[masked.length - 1 - tail]
+  ) {
+    tail += 1;
+  }
+  return text.slice(head, text.length - tail) || null;
+};
+
+/**
+ * (aidsxJ2H) Provayder xatosi / javobi matnni aks ettirsa ham parol
+ * `last_error`, `last_response` va logga tushmasin.
+ */
+export const scrubSmsSecret = (
+  row: Pick<SmsOutbox, 'text' | 'redacted_text'>,
+  value: string,
+): string => {
+  const secret = secretOf(row);
+  return secret ? value.split(secret).join('***') : value;
+};
 
 const backoffMs = (attempts: number) =>
   Math.min(RETRY_BASE_MS * 2 ** Math.max(0, attempts - 1), RETRY_MAX_MS);
@@ -213,6 +263,11 @@ export class SmsOutboxService {
         to_phone: input.to,
         customer_id: input.customerId ?? null,
         text,
+        redacted_text:
+          input.messageClass === 'security' &&
+          typeof input.redactedText === 'string'
+            ? input.redactedText
+            : null,
         message_class: input.messageClass,
         template_code: input.templateCode ?? null,
         parts: segments.parts,
@@ -335,7 +390,7 @@ export class SmsOutboxService {
               "retry_count" = CASE WHEN "attempts" + 1 >= "max_attempts" THEN "retry_count" ELSE "retry_count" + 1 END,
               "next_retry_at" = NULL,
               "text" = CASE WHEN "message_class" = 'security' AND "attempts" + 1 >= "max_attempts"
-                            THEN regexp_replace("text", '\\d{4,8}', '******', 'g') ELSE "text" END,
+                            THEN COALESCE("redacted_text", regexp_replace("text", '\\d{4,8}', '******', 'g')) ELSE "text" END,
               "last_error" = 'recovered: processing timed out',
               "updated_at" = NOW()
         WHERE "status" = 'processing' AND "updated_at" < $1`,
@@ -391,7 +446,7 @@ export class SmsOutboxService {
         sent_at: now,
         attempts: row.attempts + 1,
         last_error: null,
-        last_response: this.compact(raw),
+        last_response: this.compact(raw, row),
         next_retry_at: null,
       },
     );
@@ -418,8 +473,8 @@ export class SmsOutboxService {
         ...(terminal ? redactSecurity(row) : {}),
         attempts,
         retry_count: terminal ? row.retry_count : row.retry_count + 1,
-        last_error: error.slice(0, MAX_ERROR),
-        last_response: this.compact(raw),
+        last_error: scrubSmsSecret(row, error).slice(0, MAX_ERROR),
+        last_response: this.compact(raw, row),
         next_retry_at: terminal
           ? null
           : new Date(now.getTime() + backoffMs(attempts)),
@@ -428,7 +483,7 @@ export class SmsOutboxService {
     if (terminal) {
       await this.patchNotification(row.notification_id, {
         sms: 'failed',
-        sms_error: error.slice(0, MAX_ERROR),
+        sms_error: scrubSmsSecret(row, error).slice(0, MAX_ERROR),
       });
     }
     return terminal;
@@ -686,11 +741,13 @@ export class SmsOutboxService {
   /** jsonb ustuni — TypeORM deep-partial turiga sig'maydi, shuning uchun cast. */
   private compact(
     raw: unknown,
+    row: Pick<SmsOutbox, 'text' | 'redacted_text'>,
   ): QueryDeepPartialEntity<SmsOutbox>['last_response'] {
     if (raw === null || raw === undefined) return null;
     const json = JSON.stringify(raw);
-    return (
-      json.length > 2000 ? { truncated: json.slice(0, 2000) } : raw
-    ) as QueryDeepPartialEntity<SmsOutbox>['last_response'];
+    const clean = scrubSmsSecret(row, json);
+    if (clean.length > 2000) return { truncated: clean.slice(0, 2000) };
+    const value: unknown = clean === json ? raw : JSON.parse(clean);
+    return value as QueryDeepPartialEntity<SmsOutbox>['last_response'];
   }
 }

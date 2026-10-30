@@ -14,7 +14,21 @@ import {
   Min,
   MinLength,
 } from 'class-validator';
-import { ExpenseProofCondition, Roles, IsPasswordPolicy } from '@app/common';
+import {
+  ExpenseProofCondition,
+  Roles,
+  IsPasswordPolicy,
+  PASSWORD_MODES,
+  type PasswordMode,
+} from '@app/common';
+
+/** (aidsxJ2H) Yaratish DTO'laridagi parol rejimi tavsifi (Swagger). */
+const PASSWORD_MODE_DESCRIPTION =
+  "(aidsxJ2H) Parolni qanday berish. `generate_sms` (SUKUT) — tizim 12 belgili tasodifiy parol yaratadi va foydalanuvchi telefoniga SMS qiladi (`sms_outbox`, «security» shablon `user.temp_password`); `password` YUBORILMAYDI (400), javobda parol YO'Q, `must_change_password` doim true — birinchi kirishda parol almashtiriladi. `manual` — `password` majburiy, SMS yo'q, `must_change_password` ixtiyoriy. Moslik: `password_mode` yuborilmasa va `password` bor — `manual` (eski forma). Javob `data`: foydalanuvchi + `password_mode` + `password_sms` (`generate_sms` da: `status` `pending | sent | delivered | failed`, `failure_reason`, `failure_message`, `requested_at`, `sent_at`, `delivered_at`, `resend_available_at`, `resends_left_today`; `manual` da `null`). SMS yuborilmasa ham foydalanuvchi yaratiladi (`status: failed` + sabab) — `POST /users/:id/password/resend-sms`.";
+const MUST_CHANGE_PASSWORD_DESCRIPTION =
+  '(aidsxJ2H) Faqat `manual` da: true — birinchi kirishda parolni almashtirish majburiy (login javobida `must_change_password: true`, almashtirmaguncha boshqa API 403 `PASSWORD_CHANGE_REQUIRED`). `generate_sms` da doim true (false — 400).';
+const MANUAL_PASSWORD_DESCRIPTION =
+  "(aidsxJ2H) Faqat `password_mode: 'manual'` da (yoki `password_mode` yuborilmagan eski so'rovda). Kamida 8 belgi (xodim — 10), oddiy parollar taqiqlangan";
 
 export class CreateAdminRequestDto {
   @ApiProperty({ example: 'Admin User' })
@@ -26,14 +40,33 @@ export class CreateAdminRequestDto {
   @IsPhoneNumber('UZ')
   phone_number!: string;
 
-  @ApiProperty({
+  @ApiPropertyOptional({
     example: 'Kuchli-Parol-2026',
     minLength: 10,
-    description: 'Kamida 8 belgi (xodim — 10), oddiy parollar taqiqlangan',
+    description: MANUAL_PASSWORD_DESCRIPTION,
   })
+  @IsOptional()
   @IsString()
   @IsPasswordPolicy(Roles.ADMIN)
-  password!: string;
+  password?: string;
+
+  @ApiPropertyOptional({
+    enum: PASSWORD_MODES,
+    default: 'generate_sms',
+    example: 'generate_sms',
+    description: PASSWORD_MODE_DESCRIPTION,
+  })
+  @IsOptional()
+  @IsIn(PASSWORD_MODES)
+  password_mode?: PasswordMode;
+
+  @ApiPropertyOptional({
+    example: true,
+    description: MUST_CHANGE_PASSWORD_DESCRIPTION,
+  })
+  @IsOptional()
+  @IsBoolean()
+  must_change_password?: boolean;
 
   @ApiProperty({ example: 3000000 })
   @IsNumber()
@@ -92,6 +125,15 @@ export class UpdateAdminRequestDto {
   @IsString()
   @IsPasswordPolicy()
   password?: string;
+
+  @ApiPropertyOptional({
+    example: 'Joriy-Parol-2026',
+    description:
+      "(aidsxJ2H) O'z parolini almashtirishda (`PATCH /auth/my-profile`, o'zini `PATCH /users/:id`) — joriy parol. Berilsa doim tekshiriladi: noto'g'ri — 400 `OLD_PASSWORD_INVALID` (401 emas), yangisi joriysi bilan bir xil — 400. Berilmasa: `PASSWORD_CHANGE_REQUIRE_OLD=on` da 400 `OLD_PASSWORD_REQUIRED`, sukut (off) da avvalgidek. Admin boshqa foydalanuvchi parolini o'rnatganda kerak emas.",
+  })
+  @IsOptional()
+  @IsString()
+  old_password?: string;
 
   @ApiPropertyOptional({ example: 'active' })
   @IsOptional()
@@ -254,14 +296,33 @@ export class CreateMarketRequestDto {
   @MinLength(3)
   username!: string;
 
-  @ApiProperty({
+  @ApiPropertyOptional({
     example: 'Kuchli-Parol-2026',
     minLength: 8,
-    description: 'Kamida 8 belgi (xodim — 10), oddiy parollar taqiqlangan',
+    description: MANUAL_PASSWORD_DESCRIPTION,
   })
+  @IsOptional()
   @IsString()
   @IsPasswordPolicy(Roles.MARKET)
-  password!: string;
+  password?: string;
+
+  @ApiPropertyOptional({
+    enum: PASSWORD_MODES,
+    default: 'generate_sms',
+    example: 'generate_sms',
+    description: PASSWORD_MODE_DESCRIPTION,
+  })
+  @IsOptional()
+  @IsIn(PASSWORD_MODES)
+  password_mode?: PasswordMode;
+
+  @ApiPropertyOptional({
+    example: true,
+    description: MUST_CHANGE_PASSWORD_DESCRIPTION,
+  })
+  @IsOptional()
+  @IsBoolean()
+  must_change_password?: boolean;
 
   @ApiPropertyOptional({
     example: 10000,
@@ -383,14 +444,33 @@ export class CreateCourierRequestDto {
   @IsPhoneNumber('UZ')
   phone_number!: string;
 
-  @ApiProperty({
+  @ApiPropertyOptional({
     example: 'Kuchli-Parol-2026',
     minLength: 10,
-    description: 'Kamida 8 belgi (xodim — 10), oddiy parollar taqiqlangan',
+    description: MANUAL_PASSWORD_DESCRIPTION,
   })
+  @IsOptional()
   @IsString()
   @IsPasswordPolicy(Roles.COURIER)
-  password!: string;
+  password?: string;
+
+  @ApiPropertyOptional({
+    enum: PASSWORD_MODES,
+    default: 'generate_sms',
+    example: 'generate_sms',
+    description: PASSWORD_MODE_DESCRIPTION,
+  })
+  @IsOptional()
+  @IsIn(PASSWORD_MODES)
+  password_mode?: PasswordMode;
+
+  @ApiPropertyOptional({
+    example: true,
+    description: MUST_CHANGE_PASSWORD_DESCRIPTION,
+  })
+  @IsOptional()
+  @IsBoolean()
+  must_change_password?: boolean;
 
   @ApiPropertyOptional({
     example: 2000000,
@@ -446,14 +526,33 @@ export class CreateManagerRequestDto {
   @IsPhoneNumber('UZ')
   phone_number!: string;
 
-  @ApiProperty({
+  @ApiPropertyOptional({
     example: 'Kuchli-Parol-2026',
     minLength: 10,
-    description: 'Kamida 8 belgi (xodim — 10), oddiy parollar taqiqlangan',
+    description: MANUAL_PASSWORD_DESCRIPTION,
   })
+  @IsOptional()
   @IsString()
   @IsPasswordPolicy(Roles.MANAGER)
-  password!: string;
+  password?: string;
+
+  @ApiPropertyOptional({
+    enum: PASSWORD_MODES,
+    default: 'generate_sms',
+    example: 'generate_sms',
+    description: PASSWORD_MODE_DESCRIPTION,
+  })
+  @IsOptional()
+  @IsIn(PASSWORD_MODES)
+  password_mode?: PasswordMode;
+
+  @ApiPropertyOptional({
+    example: true,
+    description: MUST_CHANGE_PASSWORD_DESCRIPTION,
+  })
+  @IsOptional()
+  @IsBoolean()
+  must_change_password?: boolean;
 
   @ApiPropertyOptional({ example: 3000000 })
   @IsOptional()

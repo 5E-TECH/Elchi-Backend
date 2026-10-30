@@ -211,6 +211,17 @@ export function passwordPolicyError(
   return null;
 }
 
+/** Parol oqimi kalitlari (`PASSWORD_CHANGE_GATE` …): `on`/`true`/`1`/`yes`. */
+export function isPasswordSwitchOn(raw: unknown): boolean {
+  const value =
+    typeof raw === 'string' ||
+    typeof raw === 'number' ||
+    typeof raw === 'boolean'
+      ? String(raw)
+      : '';
+  return ['on', 'true', '1', 'yes'].includes(value.trim().toLowerCase());
+}
+
 /** `passwordPolicyError(...) === null`. */
 export function isPasswordPolicyCompliant(
   password: unknown,

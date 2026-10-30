@@ -8,7 +8,11 @@ import {
 import { RpcException } from '@nestjs/microservices';
 import { randomUUID } from 'node:crypto';
 import { DataSource, EntityManager, In } from 'typeorm';
-import { ActivityLogService, Cashbox_type } from '@app/common';
+import {
+  ActivityLogService,
+  Cashbox_type,
+  maskCardLikeDigitsKeepingDates,
+} from '@app/common';
 import { Cashbox } from '../entities/cashbox.entity';
 import { CashboxCard } from '../entities/cashbox-card.entity';
 import { FinanceSetting } from '../entities/finance-setting.entity';
@@ -693,7 +697,8 @@ export class ShiftAccountCheckService {
             ? Math.min(1, Math.max(0, Number(okResult.confidence)))
             : null;
         const date = okResult
-          ? scalarText(okResult.date)
+          ? // ai-service bilan bir xil niqob (guruhlangan karta raqami ham).
+            maskCardLikeDigitsKeepingDates(scalarText(okResult.date))
               .replace(/\d{9,}/g, '***')
               .slice(0, 40) || null
           : null;

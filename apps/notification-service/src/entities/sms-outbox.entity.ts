@@ -75,6 +75,14 @@ export class SmsOutbox {
   @Column({ type: 'text' })
   text!: string;
 
+  /**
+   * (aidsxJ2H, migratsiya 1716000000195) Maxfiy SMS'ning (vaqtinchalik
+   * parol) ALLAQACHON maskalangan matni: provayder qabul qilgach / terminal
+   * xatoda `text` shu bilan almashtiriladi. OTP va boshqa qatorlarda NULL.
+   */
+  @Column({ type: 'text', nullable: true })
+  redacted_text!: string | null;
+
   @Column({ type: 'varchar', length: 16 })
   message_class!: SmsMessageClass;
 
