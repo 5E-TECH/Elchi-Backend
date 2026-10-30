@@ -22,6 +22,10 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+### 2026-10-31 — To'lov tuzatish xabari filial menejerlariga (CsEZD8EX)
+
+- 🟢 [notification] — `finance.payment_corrected`: BRANCH qabul qilgan to'lovda endi `branch_users` dagi MANAGER lar xabar oladi (`POST /managers` bilan yaratilganlar ham); eski `branches.manager_id` qiymati bo'lsa u ham, takror yuborilmaydi. FE'da o'zgarish shart emas.
+
 ### 2026-10-31 — To'lov tuzatish: xato maydonlari, `correction.related`, `correctable` (iPlY5yop)
 
 - ✏️ [finance] — `POST /finance/history/:id/reverse` va `/correct-amount` xatolari (additive): `INSUFFICIENT_BALANCE` + `required` (kassa usuli yoki kartasi qoldig'ida kerak bo'lgan summa; kuryer to'lovida X, tahrirda ham X — avval X chiqadi; marketga to'lov tahririda farq), `NOT_CORRECTABLE` + `reason` (`unsupported_type` | `reversal_row` | `cashbox_deleted`), `WINDOW_EXPIRED` + `window_days` (`deadline` bilan birga). Istisno: `correct-amount` da kuryer joylashuvi mos kelmasa (gateway, 409 `NOT_CORRECTABLE`) `reason` yo'q, matn tushuntiradi.

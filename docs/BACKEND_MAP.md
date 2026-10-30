@@ -681,7 +681,8 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
   from the chain root. Same tx outbox: `order.settlement.retreat` (persistent
   pattern; courier → `courier_to_branch`, market leg → `hq_to_market`), then
   (edit) `order.settlement.advance`, `finance.payment_corrected` per recipient
-  (recipient language via `identity.audience.resolve`), realtime
+  (BRANCH: gateway passes `branch_users` MANAGERs + legacy `branches.manager_id`,
+  deduped; recipient language via `identity.audience.resolve`), realtime
   `finance.payment.corrected`. After commit: audit
   `finance.payment_reversed` / `finance.payment_amount_corrected`
   (`partner_notified: false`) and, for market legs, background
