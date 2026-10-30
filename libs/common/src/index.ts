@@ -75,6 +75,7 @@ export * from './order/cancel-return-stage';
 export * from './order/courier-order-list';
 export * from './order/order-create-content';
 export * from './order/order-tracking-notes';
+export * from './order/order-number';
 export * from './pricing/delivery-pricing';
 export * from './notification/notification-types';
 export * from './notification/notification-type.validator';

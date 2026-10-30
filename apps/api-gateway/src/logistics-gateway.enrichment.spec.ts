@@ -1,11 +1,12 @@
 import 'reflect-metadata';
-import { of } from 'rxjs';
+import { NEVER, of } from 'rxjs';
 import { ROLES_KEY } from './auth/roles.decorator';
 import {
   LogisticsGatewayController,
   POST_ORDER_CUSTOMER_FIELDS,
   POST_ORDER_DISTRICT_FIELDS,
   POST_ORDER_MARKET_FIELDS,
+  POST_ORDER_PRODUCT_FIELDS,
   POST_ORDER_REGION_FIELDS,
 } from './logistics-gateway.controller';
 
@@ -97,7 +98,20 @@ const row = {
   region_id: '5',
   status: 'received',
   total_price: 100000,
+  items: [{ id: '501', product_id: '700', quantity: 2 }],
 };
+
+/** catalog `find_by_ids` — mahsulotning TO'LIQ qatori (narx, market, rasm...). */
+const productRow = (id: string) => ({
+  id,
+  name: `Mahsulot ${id}`,
+  price: 50000,
+  user_id: '2',
+  image_url: 'https://cdn/x.png',
+  market: { id: '2', name: 'Market', phone_number: '+998901112233' },
+  weight_kg: 1,
+  isDeleted: false,
+});
 
 const build = () => {
   const logistics = {
@@ -135,7 +149,18 @@ const build = () => {
       }),
     ),
   };
-  return new LogisticsGatewayController(logistics as any, identity as any);
+  const catalog = {
+    send: jest.fn((_pattern: unknown, payload: { ids: string[] }) =>
+      of({ data: payload.ids.map(productRow) }),
+    ),
+  };
+  return new LogisticsGatewayController(
+    logistics as any,
+    identity as any,
+    undefined,
+    undefined,
+    catalog as any,
+  );
 };
 
 const sortedKeys = (value: unknown) =>
@@ -169,8 +194,19 @@ describe('VfgcnxDa - pochta buyurtmalarining xavfsiz boyitilishi', () => {
     const enriched = result.data.allOrdersByPostId[0];
 
     expect(sortedKeys(enriched)).toEqual(
-      [...Object.keys(row), 'market', 'customer', 'district'].sort(),
+      [
+        ...Object.keys(row),
+        'order_number',
+        'market',
+        'customer',
+        'district',
+      ].sort(),
     );
+    // T9 (BE-1): mahsulotdan faqat id, name.
+    expect(sortedKeys(enriched.items[0])).toEqual(
+      ['id', 'product_id', 'quantity', 'product'].sort(),
+    );
+    expect(sortedKeys(enriched.items[0].product)).toEqual(['id', 'name']);
     expect(sortedKeys(enriched.market)).toEqual(
       ['id', 'name', 'phone_number'].sort(),
     );
@@ -211,6 +247,7 @@ describe('VfgcnxDa - pochta buyurtmalarining xavfsiz boyitilishi', () => {
     expect(POST_ORDER_CUSTOMER_FIELDS).toHaveLength(7);
     expect(POST_ORDER_DISTRICT_FIELDS).toHaveLength(7);
     expect(POST_ORDER_REGION_FIELDS).toHaveLength(3);
+    expect([...POST_ORDER_PRODUCT_FIELDS]).toEqual(['id', 'name']);
   });
 
   it("pochta detali ishlatadigan maxfiy bo'lmagan maydonlar saqlanadi (LC-09, chop etish)", async () => {
@@ -313,5 +350,162 @@ describe('VfgcnxDa - pochta buyurtmalarining xavfsiz boyitilishi', () => {
     expect(JSON.stringify(result.data.groups[0].orders)).not.toMatch(
       SECRET_KEYS,
     );
+  });
+});
+
+describe('T9 (HJ5sLHiz, BE-1) — pochta buyurtmalarida order_number va mahsulot nomi', () => {
+  const rowsOf = (count: number, products: number) =>
+    Array.from({ length: count }, (_, i) => ({
+      ...row,
+      id: String(i + 1),
+      items: [
+        { id: `i${i}`, product_id: String(700 + (i % products)), quantity: 1 },
+      ],
+    }));
+
+  const controllerWith = (
+    rows: Array<Record<string, unknown>>,
+    catalog: { send: jest.Mock } | undefined,
+  ) => {
+    const logistics = {
+      send: jest.fn((pattern: { cmd: string }) => {
+        if (pattern.cmd === 'logistics.post.orders_by_post') {
+          return of({ statusCode: 200, data: { allOrdersByPostId: rows } });
+        }
+        if (pattern.cmd === 'logistics.post.rejected_orders_by_post') {
+          return of({ statusCode: 200, data: rows });
+        }
+        if (pattern.cmd === 'logistics.post.return_requests') {
+          return of({
+            statusCode: 200,
+            data: { groups: [{ courier: null, orders: rows }] },
+          });
+        }
+        return of({ data: district });
+      }),
+    };
+    const identity = {
+      send: jest.fn((pattern: { cmd: string }) =>
+        of({
+          data:
+            pattern.cmd === 'identity.market.find_by_id' ? market : customer,
+        }),
+      ),
+    };
+    return new LogisticsGatewayController(
+      logistics as any,
+      identity as any,
+      undefined,
+      undefined,
+      catalog as any,
+    );
+  };
+
+  it('⭐ id=81 → "EL-100081", items[0].product = {id, name}', async () => {
+    const catalog = {
+      send: jest.fn((_p: unknown, payload: { ids: string[] }) =>
+        of({ data: payload.ids.map(productRow) }),
+      ),
+    };
+    const result = await controllerWith(
+      [{ ...row, id: '81' }],
+      catalog,
+    ).getOrdersByPost('1', { user: { sub: '9', roles: ['manager'] } });
+    const enriched = result.data.allOrdersByPostId[0];
+    expect(enriched.order_number).toBe('EL-100081');
+    expect(enriched.items[0].product).toEqual({
+      id: '700',
+      name: 'Mahsulot 700',
+    });
+  });
+
+  it('⭐ 100 qator / 30 mahsulot — katalogga BITTA so`rov (N+1 yo`q)', async () => {
+    const catalog = {
+      send: jest.fn((_p: unknown, payload: { ids: string[] }) =>
+        of({ data: payload.ids.map(productRow) }),
+      ),
+    };
+    const result = await controllerWith(
+      rowsOf(100, 30),
+      catalog,
+    ).getOrdersByPost('1', { user: { sub: '9', roles: ['superadmin'] } });
+    expect(catalog.send).toHaveBeenCalledTimes(1);
+    expect(
+      (catalog.send.mock.calls[0] as [unknown, { ids: string[] }])[1].ids,
+    ).toHaveLength(30);
+    expect(
+      result.data.allOrdersByPostId.every((o: any) => o.items[0].product?.name),
+    ).toBe(true);
+  });
+
+  it('katalog xatosi / yo`q / o`chirilgan mahsulot → product: null, javob 200', async () => {
+    const failing = {
+      send: jest.fn(() => {
+        throw new Error('catalog down');
+      }),
+    };
+    const failed = await controllerWith([row], failing).getOrdersByPost('1', {
+      user: { sub: '9', roles: ['superadmin'] },
+    });
+    expect(failed.data.allOrdersByPostId[0].items[0].product).toBeNull();
+    expect(failed.data.allOrdersByPostId[0].order_number).toBe('EL-100010');
+
+    const missing = await controllerWith([row], undefined).getOrdersByPost(
+      '1',
+      { user: { sub: '9', roles: ['superadmin'] } },
+    );
+    expect(missing.data.allOrdersByPostId[0].items[0].product).toBeNull();
+
+    const deleted = {
+      send: jest.fn(() => of({ data: [] })),
+    };
+    const gone = await controllerWith([row], deleted).getOrdersByPost('1', {
+      user: { sub: '9', roles: ['superadmin'] },
+    });
+    expect(gone.data.allOrdersByPostId[0].items[0].product).toBeNull();
+  });
+
+  it('⭐ katalog javob bermaydi → 8000 ms dan keyin product: null, javob yiqilmaydi', async () => {
+    jest.useFakeTimers();
+    try {
+      const catalog = { send: jest.fn(() => NEVER) };
+      let settled: any;
+      const pending = controllerWith([row], catalog)
+        .getOrdersByPost('1', { user: { sub: '9', roles: ['superadmin'] } })
+        .then((r) => {
+          settled = r;
+        });
+      await jest.advanceTimersByTimeAsync(7999);
+      expect(settled).toBeUndefined();
+      await jest.advanceTimersByTimeAsync(1);
+      await pending;
+      expect(settled.data.allOrdersByPostId[0].items[0].product).toBeNull();
+      expect(settled.data.allOrdersByPostId[0].order_number).toBe('EL-100010');
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('rad etilganlar va qaytarish so`rovlarida ham; logistga ham (pulsiz)', async () => {
+    const catalog = {
+      send: jest.fn((_p: unknown, payload: { ids: string[] }) =>
+        of({ data: payload.ids.map(productRow) }),
+      ),
+    };
+    const controller = controllerWith([{ ...row, id: '81' }], catalog);
+    const rejected = await controller.getRejectedOrdersByPost('1', {
+      user: { sub: '9', roles: ['courier'] },
+    });
+    expect(rejected.data[0].order_number).toBe('EL-100081');
+    expect(rejected.data[0].items[0].product.name).toBe('Mahsulot 700');
+
+    const returns: any = await controller.getReturnRequests({
+      user: { sub: '9', roles: ['manager'] },
+    });
+    expect(returns.data.groups[0].orders[0].order_number).toBe('EL-100081');
+    expect(returns.data.groups[0].orders[0].items[0].product).toEqual({
+      id: '700',
+      name: 'Mahsulot 700',
+    });
   });
 });

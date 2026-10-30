@@ -6487,7 +6487,7 @@
         ],
         "responses": {
           "200": {
-            "description": ""
+            "description": "`data.allOrdersByPostId[]` — buyurtma qatorlari (`market`, `customer`, `district` oq ro'yxat bilan). T9 (HJ5sLHiz): har buyurtma qatorida `order_number` («EL-…», ro'yxat va skan bilan bir xil) va `items[].product: {id, name} | null` (katalogda yo'q / javob bermasa — null; narx, market, rasm yo'q). `data.post` — pochta meta'si: `id`, `status`, `courier_id`, `courier`, `qr_code_token`, `order_quantity`, `branch_id`, `region_id`, `region`, `createdAt` va T9 `branch: {id, name} | null` — «Qayerdan» (pochtani JO'NATGAN filial; `branch_id` emas — u ko'pincha manzil). Kuryerli pochta (bekorlarni HQ'ga yuborgan menejer pochtasi ham) — shu foydalanuvchining filiali; kuryersiz yig'ilayotgan (new) — `branch_id` filiali, bo'lmasa HQ; kuryersiz o'tkazma (sent/received) — HQ; boshqa hollar yoki filial xizmati javob bermasa — null (chekda qator chiqmaydi)."
           }
         },
         "security": [
@@ -6527,7 +6527,7 @@
         ],
         "responses": {
           "200": {
-            "description": ""
+            "description": "`data[]` — rad etilgan buyurtma qatorlari. T9 (HJ5sLHiz): har buyurtma qatorida `order_number` («EL-…», ro'yxat va skan bilan bir xil) va `items[].product: {id, name} | null` (katalogda yo'q / javob bermasa — null; narx, market, rasm yo'q)."
           }
         },
         "security": [
@@ -6839,7 +6839,7 @@
         "parameters": [],
         "responses": {
           "200": {
-            "description": ""
+            "description": "`data.groups[].orders[]` — qaytariladigan buyurtma qatorlari. T9 (HJ5sLHiz): har qatorda `order_number` («EL-…») va `items[].product: {id, name} | null`."
           }
         },
         "security": [

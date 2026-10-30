@@ -17,6 +17,7 @@ import {
   findNotificationType,
   renderNotificationGroupKey,
   rmqSend,
+  formatOrderNumber,
 } from '@app/common';
 import { Order } from '../entities/order.entity';
 import { CANCEL_REASON_UZ } from '../domain/cancel-reason';
@@ -186,10 +187,7 @@ export function orderDetailLink(orderId: string | number): string {
 
 /** Mijozga ko'rinadigan raqam: "EL-" + (id + 100000) (formatOrderNumber bilan bir xil). */
 export function orderNumberOf(id: string | number | null | undefined) {
-  const numeric = Number(id);
-  return Number.isSafeInteger(numeric) && numeric > 0
-    ? `EL-${numeric + 100000}`
-    : '';
+  return formatOrderNumber(id) ?? '';
 }
 
 const TEXT: Record<OrderNotificationType, { title: string; status: string }> = {

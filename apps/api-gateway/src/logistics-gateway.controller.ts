@@ -18,7 +18,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ClientProxy } from '@nestjs/microservices';
-import { Roles as RoleEnum } from '@app/common';
+import { formatOrderNumber, Roles as RoleEnum } from '@app/common';
 import { firstValueFrom, map, TimeoutError, timeout } from 'rxjs';
 import {
   ApiBadRequestResponse,
@@ -130,6 +130,12 @@ export const POST_ORDER_DISTRICT_FIELDS = [
 ] as const;
 export const POST_ORDER_REGION_FIELDS = ['id', 'name', 'sato_code'] as const;
 /**
+ * T9 (HJ5sLHiz, BE-1) — `items[].product`: chek uchun faqat nom (narx, market,
+ * rasm, o'lchov — yo'q). Sahifadagi barcha mahsulot BITTA
+ * `catalog.product.find_by_ids` bilan olinadi.
+ */
+export const POST_ORDER_PRODUCT_FIELDS = ['id', 'name'] as const;
+/**
  * Qaytarish so'rovlari (`GET /post/return-requests/list`) guruhidagi `courier`
  * — identity `admins` qatori (username, salary, tarif, komissiya, settings,
  * created_by…). Menejer brauzeriga faqat ekran ishlatadigan maydonlar chiqadi
@@ -140,6 +146,16 @@ export const RETURN_REQUEST_COURIER_FIELDS = [
   'name',
   'phone_number',
 ] as const;
+
+/** Buyurtma qatorining `items` massivi (obyekt elementlari); yo'q — []. */
+function itemsOf(row: OrderRowForEnrichment): Array<Record<string, unknown>> {
+  return Array.isArray(row.items)
+    ? row.items.filter(
+        (item): item is Record<string, unknown> =>
+          Boolean(item) && typeof item === 'object' && !Array.isArray(item),
+      )
+    : [];
+}
 
 function pickPostOrderDistrict(value: unknown) {
   const district = pickFields(value, POST_ORDER_DISTRICT_FIELDS);
@@ -189,7 +205,48 @@ export class LogisticsGatewayController {
     // T7 (QPq2C1co, B2): pochta buyurtmalariga `problem_contacts`. Yo'q
     // (eski spec'lar) — maydon qo'shilmaydi.
     @Optional() private readonly problemContacts?: ProblemContactsService,
+    // T9 (BE-1): `items[].product` nomi. Yo'q (eski spec'lar) yoki javob
+    // bermasa — `product: null`, javob yiqilmaydi.
+    @Optional()
+    @Inject('CATALOG')
+    private readonly catalogClient?: ClientProxy,
   ) {}
+
+  /**
+   * T9 (BE-1) — sahifadagi mahsulotlar: BITTA `catalog.product.find_by_ids`
+   * (N+1 yo'q). Katalog yo'q / xato / timeout — bo'sh xarita (`product: null`).
+   */
+  private async findProductsByIds(
+    ids: string[],
+  ): Promise<Map<string, Record<string, unknown>>> {
+    if (!ids.length || !this.catalogClient) {
+      return new Map();
+    }
+    try {
+      const res: unknown = await firstValueFrom(
+        this.catalogClient
+          .send({ cmd: 'catalog.product.find_by_ids' }, { ids })
+          .pipe(timeout(8000)),
+      );
+      const data = (res as { data?: unknown } | null)?.data;
+      const rows = Array.isArray(data) ? data : [];
+      const map = new Map<string, Record<string, unknown>>();
+      for (const row of rows) {
+        const product = pickFields(row, POST_ORDER_PRODUCT_FIELDS);
+        const id = product?.id;
+        if (
+          product &&
+          (typeof id === 'string' || typeof id === 'number') &&
+          String(id)
+        ) {
+          map.set(String(id), product);
+        }
+      }
+      return map;
+    } catch {
+      return new Map();
+    }
+  }
 
   private sendLogisticsWithTimeout(pattern: { cmd: string }, payload: object) {
     return firstValueFrom(
@@ -212,8 +269,22 @@ export class LogisticsGatewayController {
     const districtIds = Array.from(
       new Set(rows.map((row) => row.district_id).filter(Boolean) as string[]),
     );
+    const productIds = Array.from(
+      new Set(
+        rows.flatMap((row) =>
+          itemsOf(row)
+            .map((item) => item.product_id)
+            .filter(
+              (id): id is string | number =>
+                (typeof id === 'string' || typeof id === 'number') &&
+                String(id).trim() !== '',
+            )
+            .map((id) => String(id)),
+        ),
+      ),
+    );
 
-    const [markets, customers, districts] = await Promise.all([
+    const [markets, customers, districts, products] = await Promise.all([
       Promise.all(
         marketIds.map(async (itemId) => {
           try {
@@ -256,6 +327,7 @@ export class LogisticsGatewayController {
           }
         }),
       ),
+      this.findProductsByIds(productIds),
     ]);
 
     const marketMap = new Map(markets);
@@ -264,6 +336,21 @@ export class LogisticsGatewayController {
 
     return rows.map((row) => ({
       ...row,
+      // T9 (BE-1): ro'yxat va skan bilan bir xil «EL-…» raqam.
+      order_number: formatOrderNumber(row.id),
+      ...(Array.isArray(row.items)
+        ? {
+            items: itemsOf(row).map((item) => ({
+              ...item,
+              product:
+                (typeof item.product_id === 'string' ||
+                  typeof item.product_id === 'number') &&
+                products.has(String(item.product_id))
+                  ? products.get(String(item.product_id))
+                  : null,
+            })),
+          }
+        : {}),
       market: row.market_id
         ? pickFields(marketMap.get(row.market_id), POST_ORDER_MARKET_FIELDS)
         : null,
@@ -826,6 +913,12 @@ export class LogisticsGatewayController {
       "T7 (QPq2C1co): har buyurtma qatorida `problem_contacts: [{name, phone, source: 'logist'|'support'}]` («Muammo bo'lsa», ≤ 2); `operator_phone`, `secondary_operator_phone`, `market.phone_number` menejer/filial/kuryerga YO'Q.",
   })
   @ApiParam({ name: 'id', description: 'Post ID (id)' })
+  @ApiOkResponse({
+    description:
+      "`data.allOrdersByPostId[]` — buyurtma qatorlari (`market`, `customer`, `district` oq ro'yxat bilan). T9 (HJ5sLHiz): har buyurtma qatorida `order_number` («EL-…», ro'yxat va skan bilan bir xil) va `items[].product: {id, name} | null` (katalogda yo'q / javob bermasa — null; narx, market, rasm yo'q). " +
+      "`data.post` — pochta meta'si: `id`, `status`, `courier_id`, `courier`, `qr_code_token`, `order_quantity`, `branch_id`, `region_id`, `region`, `createdAt` va T9 `branch: {id, name} | null` — «Qayerdan» (pochtani JO'NATGAN filial; `branch_id` emas — u ko'pincha manzil). " +
+      "Kuryerli pochta (bekorlarni HQ'ga yuborgan menejer pochtasi ham) — shu foydalanuvchining filiali; kuryersiz yig'ilayotgan (new) — `branch_id` filiali, bo'lmasa HQ; kuryersiz o'tkazma (sent/received) — HQ; boshqa hollar yoki filial xizmati javob bermasa — null (chekda qator chiqmaydi).",
+  })
   getOrdersByPost(@Param('id') id: string, @Req() req: { user: JwtUser }) {
     return firstValueFrom(
       this.logisticsClient
@@ -838,6 +931,8 @@ export class LogisticsGatewayController {
               roles: req.user.roles ?? [],
               branch_id: req.user.branch_id ?? null,
             },
+            // T9 (BE-2): detal — `data.post.branch` («Qayerdan»).
+            with_sender_branch: true,
           },
         )
         .pipe(timeout(8000)),
@@ -872,6 +967,10 @@ export class LogisticsGatewayController {
       "T7 (QPq2C1co): har buyurtma qatorida `problem_contacts: [{name, phone, source: 'logist'|'support'}]` («Muammo bo'lsa», ≤ 2); `operator_phone`, `secondary_operator_phone`, `market.phone_number` menejer/filial/kuryerga YO'Q.",
   })
   @ApiParam({ name: 'id', description: 'Post ID (id)' })
+  @ApiOkResponse({
+    description:
+      "`data[]` — rad etilgan buyurtma qatorlari. T9 (HJ5sLHiz): har buyurtma qatorida `order_number` («EL-…», ro'yxat va skan bilan bir xil) va `items[].product: {id, name} | null` (katalogda yo'q / javob bermasa — null; narx, market, rasm yo'q).",
+  })
   getRejectedOrdersByPost(
     @Param('id') id: string,
     @Req() req?: { user?: JwtUser },
@@ -1076,6 +1175,10 @@ export class LogisticsGatewayController {
   @ApiOperation({
     summary:
       'List courier return requests grouped by courier (SA/admin/HQ registrator: HQ couriers; manager/registrator: own-branch couriers)',
+  })
+  @ApiOkResponse({
+    description:
+      '`data.groups[].orders[]` — qaytariladigan buyurtma qatorlari. T9 (HJ5sLHiz): har qatorda `order_number` («EL-…») va `items[].product: {id, name} | null`.',
   })
   async getReturnRequests(@Req() req: { user: JwtUser }) {
     const response = (await this.sendLogisticsWithTimeout(

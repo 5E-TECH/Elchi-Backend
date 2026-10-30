@@ -321,11 +321,18 @@ export class LogisticsServiceController {
   @MessagePattern({ cmd: 'logistics.post.orders_by_post' })
   ordersByPost(
     @Payload()
-    data: { id: string; requester: { id: string; roles?: string[] } },
+    data: {
+      id: string;
+      requester: { id: string; roles?: string[] };
+      // T9 (BE-2): faqat gateway detali (GET /post/orders/:id) — «Qayerdan».
+      with_sender_branch?: boolean;
+    },
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
-      this.logisticsService.getPostOrders(data.id, data.requester),
+      this.logisticsService.getPostOrders(data.id, data.requester, {
+        withSenderBranch: data?.with_sender_branch === true,
+      }),
     );
   }
 
