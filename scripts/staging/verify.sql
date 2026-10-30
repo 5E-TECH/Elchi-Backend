@@ -141,6 +141,7 @@ SELECT pg_temp.chk('telegram_ai_drafts rows', 'notification_schema', 'telegram_a
 SELECT pg_temp.chk('push_subscriptions rows', 'notification_schema', 'push_subscriptions', 'SELECT count(*) FROM notification_schema.push_subscriptions');
 SELECT pg_temp.chk('sms_outbox pending/processing', 'notification_schema', 'sms_outbox', $q$SELECT count(*) FROM notification_schema.sms_outbox WHERE status IN ('pending','processing')$q$);
 SELECT pg_temp.chkcol('sms_outbox: text not masked', 'notification_schema', 'sms_outbox', 'text', 'text !~ ''^\[staging\]''');
+SELECT pg_temp.chkcol('sms_outbox: redacted_text not cleared', 'notification_schema', 'sms_outbox', 'redacted_text', 'redacted_text IS NOT NULL');
 SELECT pg_temp.chk('sms_provider_accounts rows (credentials)', 'notification_schema', 'sms_provider_accounts', 'SELECT count(*) FROM notification_schema.sms_provider_accounts');
 SELECT pg_temp.chk('sms_campaigns scheduled/queued/running', 'notification_schema', 'sms_campaigns', $q$SELECT count(*) FROM notification_schema.sms_campaigns WHERE status IN ('scheduled','queued','running')$q$);
 SELECT pg_temp.chk('notification_campaigns queued/running', 'notification_schema', 'notification_campaigns', $q$SELECT count(*) FROM notification_schema.notification_campaigns WHERE status IN ('queued','running')$q$);

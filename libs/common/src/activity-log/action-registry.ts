@@ -332,6 +332,13 @@ export const ACTIVITY_ACTION_REGISTRY: Readonly<
   // ---- kirish ----
   'auth.otp_requested': entry("SMS kod so'raldi", 'auth', 'message', 'slate'),
   'auth.otp_verified': entry('SMS kod tasdiqlandi', 'auth', 'check', 'green'),
+  // (aidsxJ2H) vaqtinchalik parol SMS'i (yaratish / qayta yuborish) — parol YO'Q.
+  'auth.temp_password_sms': entry(
+    'Vaqtinchalik parol SMS orqali yuborildi',
+    'auth',
+    'message',
+    'violet',
+  ),
 
   // ---- filial ----
   'branch.transfer_batch_create': entry(

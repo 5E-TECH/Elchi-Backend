@@ -659,6 +659,9 @@ export class ApiGatewayController {
               name: dto.name,
               phone_number: dto.phone_number,
               password: dto.password,
+              // (aidsxJ2H) parol rejimi — identity hal qiladi.
+              password_mode: dto.password_mode,
+              must_change_password: dto.must_change_password,
               salary: dto.salary,
               payment_day: dto.payment_day,
               tariff_home: dto.tariff_home,
@@ -1509,6 +1512,69 @@ export class ApiGatewayController {
     return applyRevokedSessionIds(response, this.revocation);
   }
 
+  /**
+   * (aidsxJ2H) Vaqtinchalik parolni QAYTA yuborish: identity yangi 12
+   * belgili parol yaratadi (eskisi darhol yaroqsiz, foydalanuvchining barcha
+   * sessiyalari yopiladi), SMS'ni `sms_outbox` orqali yuboradi. Parol
+   * javobda YO'Q. Chegara: 60 s da bir marta, kuniga 5 marta — 429
+   * `PASSWORD_SMS_COOLDOWN` / `PASSWORD_SMS_DAILY_LIMIT` (`retry_after_seconds`).
+   */
+  @Post('users/:id/password/resend-sms')
+  @HttpCode(200)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.MANAGER)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Resend temporary password via SMS (aidsxJ2H)',
+    description:
+      "Yangi vaqtinchalik parol yaratib SMS bilan yuboradi (`password_mode: 'generate_sms'` bilan yaratilgan foydalanuvchi uchun «SMS kelmadimi? Qayta yuborish»). Rollar: superadmin; admin (admin/superadmin'dan boshqasi); menejer — faqat o'zi yaratgan kuryer. Nishon roli: admin, registrator, logist, courier, manager, market (boshqasi 400); o'ziga — 403. Eski parol darhol ishlamaydi, barcha sessiyalar yopiladi (`sessions_revoked`), birinchi kirishda parol almashtirish majburiy. Javob `data`: `user_id`, `must_change_password: true`, `password_sms` { `status`: `pending | sent | delivered | failed`, `failure_reason`, `failure_message`, `requested_at`, `sent_at`, `delivered_at`, `resend_available_at`, `resends_left_today` }. SMS yuborilmasa ham 200 (`status: failed` + sabab). 429 — `PASSWORD_SMS_COOLDOWN` (60 s) / `PASSWORD_SMS_DAILY_LIMIT` (kuniga 5), `retry_after_seconds`.",
+  })
+  @ApiParam({ name: 'id', description: 'User ID' })
+  @ApiOkResponse({ description: 'New temporary password queued via SMS' })
+  @ApiBadRequestResponse({ description: 'Role not supported' })
+  @ApiForbiddenResponse({ description: 'Not allowed' })
+  @ApiNotFoundResponse({ description: 'Not found' })
+  async resendTempPasswordSms(
+    @Param('id', ParseBigintIdPipe) id: string,
+    @Req() req: { user: JwtUser },
+  ) {
+    const response = await firstValueFrom(
+      this.identityClient
+        .send<unknown>(
+          { cmd: 'identity.user.password.resend_sms' },
+          { id, requester: this.toRequester(req) },
+        )
+        .pipe(timeout(8000)),
+    );
+    return applyRevokedSessionIds(response, this.revocation);
+  }
+
+  /** (aidsxJ2H) Oxirgi parol SMS'ining yetkazish holati (natija oynasi). */
+  @Get('users/:id/password/sms-status')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.MANAGER)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Temporary password SMS delivery status (aidsxJ2H)',
+    description:
+      "Oxirgi vaqtinchalik parol SMS'i holati — jonli (`sms_outbox` + provayder hisoboti): `data`: `user_id`, `must_change_password` (false — foydalanuvchi parolni allaqachon almashtirgan), `password_sms` (`status`: `pending | sent | delivered | failed`, `failure_reason`, `failure_message`, `requested_at`, `sent_at`, `delivered_at`, `resend_available_at`, `resends_left_today`; SMS hech yuborilmagan — `null`). Huquq — resend-sms bilan bir xil.",
+  })
+  @ApiParam({ name: 'id', description: 'User ID' })
+  @ApiOkResponse({ description: 'Password SMS status' })
+  @ApiForbiddenResponse({ description: 'Not allowed' })
+  @ApiNotFoundResponse({ description: 'Not found' })
+  tempPasswordSmsStatus(
+    @Param('id', ParseBigintIdPipe) id: string,
+    @Req() req: { user: JwtUser },
+  ) {
+    return this.identityClient
+      .send(
+        { cmd: 'identity.user.password.sms_status' },
+        { id, requester: this.toRequester(req) },
+      )
+      .pipe(timeout(8000));
+  }
+
   @Delete('users/:id')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
@@ -1648,6 +1714,9 @@ export class ApiGatewayController {
             phone_number: dto.phone_number,
             username: dto.username,
             password: dto.password,
+            // (aidsxJ2H) parol rejimi — identity hal qiladi.
+            password_mode: dto.password_mode,
+            must_change_password: dto.must_change_password,
             // KmWO9gTA: tariflar LEGACY va ixtiyoriy (berilmasa NULL).
             tariff_home: dto.tariff_home,
             tariff_center: dto.tariff_center,

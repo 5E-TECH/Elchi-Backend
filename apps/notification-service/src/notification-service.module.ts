@@ -82,6 +82,7 @@ import { SmsCampaignService } from './sms/sms-campaign.service';
 import { SmsDlrService } from './sms/sms-dlr.service';
 import { SmsBalanceMonitor } from './sms/sms-balance.monitor';
 import { SmsOtpService } from './sms/sms-otp.service';
+import { SmsTempPasswordService } from './sms/sms-temp-password.service';
 // (W8aerwL6 / xHPdpj0W) auditoriya ko'rinishi va kampaniya navbati.
 import { NotificationCampaign } from './campaign/notification-campaign.entity';
 import { CampaignController } from './campaign/campaign.controller';
@@ -265,6 +266,8 @@ import { RecipientDirectoryService } from './recipients/recipient-directory.serv
     SmsDlrService,
     SmsBalanceMonitor,
     SmsOtpService,
+    // (aidsxJ2H) Vaqtinchalik parol SMS'i (identity → notification).
+    SmsTempPasswordService,
     AudiencePreviewService,
     CampaignService,
     CampaignReportService,

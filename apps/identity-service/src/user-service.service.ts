@@ -26,6 +26,15 @@ import { invalidateAllSessions, isSessionId } from './auth/session-security';
 import { AuthSessionService } from './auth/auth-session.service';
 import { ContactsService } from './contacts/contacts.service';
 import {
+  type CreatePasswordFields,
+  type ResolvedCreatePassword,
+  resolveCreatePassword,
+} from './temp-password/create-password';
+import {
+  type PasswordSmsView,
+  TempPasswordService,
+} from './temp-password/temp-password.service';
+import {
   CHANGEABLE_ROLES,
   ROLE_CATALOG,
   roleCatalogEntry,
@@ -57,6 +66,10 @@ import {
   ActivityLogService,
   Cashbox_type,
   Commission_type,
+  generateTempPassword,
+  isPasswordSwitchOn,
+  OLD_PASSWORD_INVALID,
+  OLD_PASSWORD_REQUIRED,
   Roles,
   Status,
   isMarketResponsibleRole,
@@ -473,6 +486,12 @@ export class UserServiceService implements OnModuleInit {
      * quradi (u holda mas'ul maydonlari qo'shilmaydi).
      */
     @Optional() private readonly contacts?: ContactsService,
+    /**
+     * (aidsxJ2H) Vaqtinchalik parol SMS'i (yaratish, qayta yuborish, holat).
+     * Ixtiyoriy: spec'lar servisni usiz quradi — `generate_sms` da SMS
+     * yuborilmaydi (`password_sms: null`).
+     */
+    @Optional() private readonly tempPasswords?: TempPasswordService,
   ) {}
 
   /**
@@ -761,6 +780,123 @@ export class UserServiceService implements OnModuleInit {
   ): void {
     const error = passwordPolicyError(password, { role, phone });
     if (error) this.badRequest(error);
+  }
+
+  /**
+   * (aidsxJ2H) Yaratishdagi parol: `password_mode` (sukut `generate_sms` —
+   * tasodifiy 12 belgi; `password` yuborilgan eski so'rov — `manual`) va
+   * siyosat tekshiruvi. Ochiq parol faqat qaytgan obyektda (xotirada).
+   */
+  private resolveInitialPassword(
+    dto: CreatePasswordFields,
+    role: Roles,
+    phone: string | null | undefined,
+  ): ResolvedCreatePassword {
+    const resolved = resolveCreatePassword(dto, { role, phone });
+    this.assertPasswordPolicy(resolved.password, role, phone);
+    return resolved;
+  }
+
+  /** Yangi foydalanuvchi ustunlari: birinchi kirishda parol almashtirilsinmi. */
+  private initialPasswordFlags(
+    initial: ResolvedCreatePassword,
+  ): Pick<User, 'must_change_password' | 'password_change_forced'> {
+    return {
+      must_change_password: initial.mustChange,
+      password_change_forced: initial.mustChange,
+    };
+  }
+
+  /**
+   * (aidsxJ2H) Yaratish javobi: foydalanuvchi + `password_mode` +
+   * `password_sms` (faqat `generate_sms`; SMS saga muvaffaqiyatli tugagach
+   * yuboriladi — kompensatsiya qilingan foydalanuvchiga SMS ketmaydi).
+   * Parol javobda YO'Q. SMS xatosi yaratishni buzmaydi — `status: failed`.
+   */
+  private async createdUserReply(
+    saved: User,
+    initial: ResolvedCreatePassword,
+    requester: RequesterContext | undefined,
+    message: string,
+  ) {
+    let passwordSms: PasswordSmsView | null = null;
+    if (initial.sendSms) {
+      if (this.tempPasswords) {
+        passwordSms = await this.tempPasswords.send(saved, initial.password, {
+          reason: 'create',
+          requestedBy: this.createdByOf(requester),
+        });
+      } else {
+        this.logger.warn(
+          `Parol SMS servisi ulanmagan — user ${saved.id} uchun SMS yuborilmadi`,
+        );
+      }
+    }
+    return successRes(
+      {
+        ...this.sanitize(saved),
+        password_mode: initial.mode,
+        password_sms: passwordSms,
+      },
+      201,
+      passwordSms?.status === 'failed'
+        ? `${message}, lekin SMS yuborilmadi: ${passwordSms.failure_message}`
+        : message,
+    );
+  }
+
+  /**
+   * (aidsxJ2H, US:1548 kamchiligi) O'z parolini almashtirish — joriy parol
+   * tekshiriladi: o'g'irlangan sessiya / ochiq qolgan qurilma parolni
+   * almashtirib egasini chiqarib yubora olmasin. 400 (401 EMAS — FE
+   * chiqarib yubormaydi): `OLD_PASSWORD_REQUIRED` / `OLD_PASSWORD_INVALID`.
+   *
+   * XAVFSIZ YOQISH: `old_password` berilsa DOIM tekshiriladi; BERILMASA 400
+   * faqat `PASSWORD_CHANGE_REQUIRE_OLD=on` da (sukut O'CHIQ) — hozirgi FE
+   * (`PATCH /auth/my-profile { password }`) «Joriy parol» maydonisiz, unda
+   * parol almashtirish buzilmasin. FE maydoni chiqqach yoqiladi.
+   *
+   * Yangi parol joriysi bilan bir xil bo'lmasin: vaqtinchalik parolni
+   * «almashtirib» `must_change_password` ni tushirib bo'lmasin.
+   */
+  private async assertOldPassword(
+    user: User,
+    dto: Pick<UpdateUserDto, 'password' | 'old_password'>,
+  ): Promise<void> {
+    const matches = (candidate: string) =>
+      Promise.resolve(
+        this.bcryptEncryption.compare(candidate, user.password),
+      ).catch(() => false);
+    const oldPassword = dto.old_password;
+    const provided = typeof oldPassword === 'string' && oldPassword.length > 0;
+    if (provided) {
+      if (!(await matches(oldPassword))) {
+        throw new RpcException({
+          statusCode: 400,
+          message: "Joriy parol noto'g'ri",
+          data: null,
+          code: OLD_PASSWORD_INVALID,
+        });
+      }
+    } else if (
+      isPasswordSwitchOn(
+        this.configService?.get<string>('PASSWORD_CHANGE_REQUIRE_OLD') ??
+          process.env.PASSWORD_CHANGE_REQUIRE_OLD,
+      )
+    ) {
+      throw new RpcException({
+        statusCode: 400,
+        message: 'Joriy parolni kiriting',
+        data: null,
+        code: OLD_PASSWORD_REQUIRED,
+      });
+    }
+    const sameAsCurrent = provided
+      ? dto.password === oldPassword
+      : user.must_change_password && (await matches(String(dto.password)));
+    if (sameAsCurrent) {
+      this.badRequest('Yangi parol joriy paroldan farq qilishi kerak');
+    }
   }
 
   private badRequest(message: string): never {
@@ -1361,14 +1497,23 @@ export class UserServiceService implements OnModuleInit {
 
     await this.ensurePhoneUnique(dto.phone_number);
 
-    this.assertPasswordPolicy(dto.password, Roles.ADMIN, dto.phone_number);
-    const hashedPassword = await this.bcryptEncryption.encrypt(dto.password);
+    // (aidsxJ2H) Parol rejimi: `generate_sms` (sukut) — tizim yaratadi va
+    // SMS yuboradi; `manual` — admin kiritgan parol (siyosat tekshiriladi).
+    const initialPassword = this.resolveInitialPassword(
+      dto,
+      Roles.ADMIN,
+      dto.phone_number,
+    );
+    const hashedPassword = await this.bcryptEncryption.encrypt(
+      initialPassword.password,
+    );
 
     const admin = this.users.create({
       name: dto.name,
       phone_number: dto.phone_number,
       username: null,
       password: hashedPassword,
+      ...this.initialPasswordFlags(initialPassword),
       salary: dto.salary ?? 0,
       payment_day: dto.payment_day ?? this.getBusinessPaymentDay(),
       role: Roles.ADMIN,
@@ -1393,7 +1538,12 @@ export class UserServiceService implements OnModuleInit {
       },
       ...this.auditActor(requester),
     });
-    return successRes(this.sanitize(saved), 201, 'Admin yaratildi');
+    return this.createdUserReply(
+      saved,
+      initialPassword,
+      requester,
+      'Admin yaratildi',
+    );
   }
 
   async createRegistrator(dto: CreateAdminDto, requester?: RequesterContext) {
@@ -1401,18 +1551,23 @@ export class UserServiceService implements OnModuleInit {
 
     await this.ensurePhoneUnique(dto.phone_number);
 
-    this.assertPasswordPolicy(
-      dto.password,
+    // (aidsxJ2H) Parol rejimi: `generate_sms` (sukut) — tizim yaratadi va
+    // SMS yuboradi; `manual` — admin kiritgan parol (siyosat tekshiriladi).
+    const initialPassword = this.resolveInitialPassword(
+      dto,
       Roles.REGISTRATOR,
       dto.phone_number,
     );
-    const hashedPassword = await this.bcryptEncryption.encrypt(dto.password);
+    const hashedPassword = await this.bcryptEncryption.encrypt(
+      initialPassword.password,
+    );
 
     const registrator = this.users.create({
       name: dto.name,
       phone_number: dto.phone_number,
       username: null,
       password: hashedPassword,
+      ...this.initialPasswordFlags(initialPassword),
       salary: dto.salary,
       payment_day: dto.payment_day ?? this.getBusinessPaymentDay(),
       role: Roles.REGISTRATOR,
@@ -1446,7 +1601,12 @@ export class UserServiceService implements OnModuleInit {
       ...this.auditActor(requester),
       metadata: dto.branch_id ? { branch_id: dto.branch_id } : null,
     });
-    return successRes(this.sanitize(saved), 201, "Ro'yxatchi yaratildi");
+    return this.createdUserReply(
+      saved,
+      initialPassword,
+      requester,
+      "Ro'yxatchi yaratildi",
+    );
   }
 
   /**
@@ -1461,14 +1621,23 @@ export class UserServiceService implements OnModuleInit {
 
     await this.ensurePhoneUnique(dto.phone_number);
 
-    this.assertPasswordPolicy(dto.password, Roles.LOGIST, dto.phone_number);
-    const hashedPassword = await this.bcryptEncryption.encrypt(dto.password);
+    // (aidsxJ2H) Parol rejimi: `generate_sms` (sukut) — tizim yaratadi va
+    // SMS yuboradi; `manual` — admin kiritgan parol (siyosat tekshiriladi).
+    const initialPassword = this.resolveInitialPassword(
+      dto,
+      Roles.LOGIST,
+      dto.phone_number,
+    );
+    const hashedPassword = await this.bcryptEncryption.encrypt(
+      initialPassword.password,
+    );
 
     const logist = this.users.create({
       name: dto.name,
       phone_number: dto.phone_number,
       username: null,
       password: hashedPassword,
+      ...this.initialPasswordFlags(initialPassword),
       salary: dto.salary ?? 0,
       payment_day: dto.payment_day ?? this.getBusinessPaymentDay(),
       role: Roles.LOGIST,
@@ -1490,7 +1659,12 @@ export class UserServiceService implements OnModuleInit {
       },
       ...this.auditActor(requester),
     });
-    return successRes(this.sanitize(saved), 201, 'Logist yaratildi');
+    return this.createdUserReply(
+      saved,
+      initialPassword,
+      requester,
+      'Logist yaratildi',
+    );
   }
 
   /**
@@ -1575,6 +1749,151 @@ export class UserServiceService implements OnModuleInit {
     };
   }
 
+  /**
+   * (aidsxJ2H) Vaqtinchalik parol SMS orqali beriladigan rollar — kartadagi
+   * yaratish route'lari: `POST /admins`, `/registrators`, `/logists`,
+   * `/couriers`, `/managers`, `/markets`.
+   */
+  private static readonly TEMP_PASSWORD_ROLES: ReadonlySet<string> = new Set([
+    Roles.ADMIN,
+    Roles.REGISTRATOR,
+    Roles.LOGIST,
+    Roles.COURIER,
+    Roles.MANAGER,
+    Roles.MARKET,
+  ]);
+
+  /**
+   * (aidsxJ2H) Parol SMS'ini qayta yuborish / holatini ko'rish huquqi:
+   * superadmin — hammasi; admin — admin/superadmin'dan boshqasi; menejer —
+   * faqat O'Z kuryeri (`created_by` — tahrirlash huquqi bilan bir xil
+   * qoida). O'ziga — yo'q (o'z paroli profil orqali almashtiriladi).
+   */
+  private async findTempPasswordTarget(
+    id: string,
+    requester?: RequesterContext,
+  ): Promise<User> {
+    const user = await this.users.findOne({
+      where: { id, isDeleted: false },
+    });
+    if (!user) this.notFound('Foydalanuvchi topilmadi');
+    if (!UserServiceService.TEMP_PASSWORD_ROLES.has(user.role)) {
+      this.badRequest('Bu rol uchun parol SMS orqali yuborilmaydi');
+    }
+    if (!requester) return user;
+    if (this.isSelfRequester(requester, user.id)) {
+      this.forbidden("O'z parolingizni profil orqali almashtiring");
+    }
+    if (this.hasRole(requester, Roles.SUPERADMIN)) return user;
+    if (this.hasRole(requester, Roles.ADMIN)) {
+      if (user.role === Roles.ADMIN) {
+        this.forbidden('Admin admin yoki superadminni boshqara olmaydi');
+      }
+      return user;
+    }
+    if (this.hasRole(requester, Roles.MANAGER)) {
+      if (
+        user.role !== Roles.COURIER ||
+        String(user.created_by ?? '') !== String(requester.id ?? '')
+      ) {
+        this.forbidden("Menejer faqat o'z kuryeriga parol yubora oladi");
+      }
+      return user;
+    }
+    this.forbidden('Bu amal uchun ruxsat yoq');
+  }
+
+  /**
+   * (aidsxJ2H) POST /users/:id/password/resend-sms — YANGI vaqtinchalik
+   * parol yaratiladi va SMS bilan yuboriladi (eskisi darhol yaroqsiz,
+   * barcha sessiyalar yopiladi, birinchi kirishda almashtirish majburiy).
+   * Chegara: 60 s da bir marta, kuniga 5 marta (429). Parol javobda YO'Q.
+   *
+   * SMS navbatga TUSHMASA (o'chirilgan, kvota, xizmat javob bermadi) parol
+   * va sessiyalar O'ZGARMAYDI — foydalanuvchi qulflanib qolmaydi; javobda
+   * `status: failed` + sabab.
+   */
+  async resendTempPasswordSms(id: string, requester?: RequesterContext) {
+    const user = await this.findTempPasswordTarget(id, requester);
+    const tempPasswords = this.tempPasswords;
+    if (!tempPasswords) {
+      throw new RpcException(errorRes('Parol SMS xizmati ulanmagan', 503));
+    }
+    const requestedBy = this.createdByOf(requester);
+    // Chegara + jurnal qatori — foydalanuvchi bo'yicha qulf ostida (ikki
+    // parallel bosishdan faqat bittasi o'tadi), parol almashtirishdan OLDIN.
+    const row = await this.users.manager.transaction((manager) =>
+      tempPasswords.reserveResend(manager, String(user.id), requestedBy),
+    );
+    const password = generateTempPassword({
+      role: user.role,
+      phone: user.phone_number,
+    });
+    // Hash SMS'dan OLDIN (bcrypt sekin): navbatga tushgan parol darhol amal
+    // qilsin, tushmagani hech narsani o'zgartirmasin.
+    const hashedPassword = await this.bcryptEncryption.encrypt(password);
+    const passwordSms = await tempPasswords.send(user, password, {
+      reason: 'resend',
+      requestedBy,
+      row,
+    });
+    if (passwordSms.status === 'failed') {
+      return successRes(
+        {
+          user_id: String(user.id),
+          must_change_password: Boolean(user.must_change_password),
+          password_sms: passwordSms,
+        },
+        200,
+        `SMS yuborilmadi: ${passwordSms.failure_message}. Parol o'zgarmadi`,
+      );
+    }
+    user.password = hashedPassword;
+    user.must_change_password = true;
+    user.password_change_forced = true;
+    // Admin parolni tikladi — barcha qurilmalar chiqariladi (updateUser'da
+    // boshqa foydalanuvchi parolini o'rnatish bilan bir xil).
+    invalidateAllSessions(user);
+    const saved = await this.users.save(user);
+    const revokedSessionIds = await this.revokeSessionsAfterPasswordChange(
+      saved,
+      { keepSessionId: null, isSelf: false, requester },
+    );
+    return {
+      ...successRes(
+        {
+          user_id: String(saved.id),
+          must_change_password: true,
+          password_sms: passwordSms,
+        },
+        200,
+        'Yangi parol SMS orqali yuborildi',
+      ),
+      ...this.passwordChangeReply(revokedSessionIds),
+    };
+  }
+
+  /**
+   * (aidsxJ2H) GET /users/:id/password/sms-status — oxirgi parol SMS'ining
+   * holati (`pending | sent | delivered | failed`, jonli). SMS hech
+   * yuborilmagan — `password_sms: null`.
+   */
+  async tempPasswordSmsStatus(id: string, requester?: RequesterContext) {
+    const user = await this.findTempPasswordTarget(id, requester);
+    const passwordSms = this.tempPasswords
+      ? await this.tempPasswords.latest(String(user.id))
+      : null;
+    return successRes(
+      {
+        user_id: String(user.id),
+        must_change_password: Boolean(user.must_change_password),
+        password_sms: passwordSms,
+      },
+      200,
+      'success',
+    );
+  }
+
   async updateAdmin(id: string, dto: UpdateUserDto) {
     return this.updateUser(id, dto);
   }
@@ -1642,12 +1961,18 @@ export class UserServiceService implements OnModuleInit {
 
     let passwordChanged = false;
     if (dto.password) {
+      // (aidsxJ2H, US:1548) O'zi almashtirmoqda — avval JORIY parol.
+      if (requesterIsSelf) await this.assertOldPassword(admin, dto);
       // (NDmZMzCP) Yangi parol — siyosat egasining roli bo'yicha (xodim 10).
       this.assertPasswordPolicy(dto.password, admin.role, admin.phone_number);
       admin.password = await this.bcryptEncryption.encrypt(dto.password);
       // (NDmZMzCP) O'zi almashtirdi — «parolni almashtiring» bayrog'i
       // tushadi; admin boshqa odamga o'rnatgan parol esa bayroqni o'zgartirmaydi.
-      if (requesterIsSelf) admin.must_change_password = false;
+      // (aidsxJ2H) Admin/tizim bergan parol ham shu bilan «o'ziniki» bo'ladi.
+      if (requesterIsSelf) {
+        admin.must_change_password = false;
+        admin.password_change_forced = false;
+      }
       // RBAC-09: parol almashtirilsa (o'g'irlangan telefon, ishdan
       // bo'shatilgan kuryer) boshqa qurilmalar DARHOL chiqariladi.
       // (Elchi Pochta #3, 2026-10-23) Qaysi sessiya qolishi — saqlashdan
@@ -3226,8 +3551,16 @@ export class UserServiceService implements OnModuleInit {
     await this.ensurePhoneUnique(dto.phone_number);
     await this.ensureUsernameUnique(dto.username);
 
-    this.assertPasswordPolicy(dto.password, Roles.MARKET, dto.phone_number);
-    const hashedPassword = await this.bcryptEncryption.encrypt(dto.password);
+    // (aidsxJ2H) Parol rejimi: `generate_sms` (sukut) — tizim yaratadi va
+    // SMS yuboradi; `manual` — admin kiritgan parol (siyosat tekshiriladi).
+    const initialPassword = this.resolveInitialPassword(
+      dto,
+      Roles.MARKET,
+      dto.phone_number,
+    );
+    const hashedPassword = await this.bcryptEncryption.encrypt(
+      initialPassword.password,
+    );
 
     const market = this.users.create({
       name: dto.name,
@@ -3235,6 +3568,7 @@ export class UserServiceService implements OnModuleInit {
       username: dto.username,
       address: dto.address ?? null,
       password: hashedPassword,
+      ...this.initialPasswordFlags(initialPassword),
       salary: 0,
       payment_day: undefined,
       market_tg_token: this.generateGroupToken(),
@@ -3283,7 +3617,12 @@ export class UserServiceService implements OnModuleInit {
       },
       ...this.auditActor(requester),
     });
-    return successRes(this.sanitize(saved), 201, 'Market yaratildi');
+    return this.createdUserReply(
+      saved,
+      initialPassword,
+      requester,
+      'Market yaratildi',
+    );
   }
 
   async createCourier(dto: CreateCourierDto, requester?: RequesterContext) {
@@ -3302,14 +3641,23 @@ export class UserServiceService implements OnModuleInit {
         : await this.resolveUserDistrictId(dto.district_id, dto.region_id);
     await this.ensurePhoneUnique(dto.phone_number);
 
-    this.assertPasswordPolicy(dto.password, Roles.COURIER, dto.phone_number);
-    const hashedPassword = await this.bcryptEncryption.encrypt(dto.password);
+    // (aidsxJ2H) Parol rejimi: `generate_sms` (sukut) — tizim yaratadi va
+    // SMS yuboradi; `manual` — admin kiritgan parol (siyosat tekshiriladi).
+    const initialPassword = this.resolveInitialPassword(
+      dto,
+      Roles.COURIER,
+      dto.phone_number,
+    );
+    const hashedPassword = await this.bcryptEncryption.encrypt(
+      initialPassword.password,
+    );
 
     const courier = this.users.create({
       name: dto.name,
       phone_number: dto.phone_number,
       username: null,
       password: hashedPassword,
+      ...this.initialPasswordFlags(initialPassword),
       salary: dto.salary,
       payment_day: dto.payment_day ?? this.getBusinessPaymentDay(),
       region_id: dto.region_id,
@@ -3357,7 +3705,12 @@ export class UserServiceService implements OnModuleInit {
       ...this.auditActor(requester),
       metadata: dto.branch_id ? { branch_id: dto.branch_id } : null,
     });
-    return successRes(this.sanitize(saved), 201, 'Courier yaratildi');
+    return this.createdUserReply(
+      saved,
+      initialPassword,
+      requester,
+      'Courier yaratildi',
+    );
   }
 
   /**
@@ -3424,14 +3777,23 @@ export class UserServiceService implements OnModuleInit {
 
     await this.ensurePhoneUnique(dto.phone_number);
 
-    this.assertPasswordPolicy(dto.password, Roles.MANAGER, dto.phone_number);
-    const hashedPassword = await this.bcryptEncryption.encrypt(dto.password);
+    // (aidsxJ2H) Parol rejimi: `generate_sms` (sukut) — tizim yaratadi va
+    // SMS yuboradi; `manual` — admin kiritgan parol (siyosat tekshiriladi).
+    const initialPassword = this.resolveInitialPassword(
+      dto,
+      Roles.MANAGER,
+      dto.phone_number,
+    );
+    const hashedPassword = await this.bcryptEncryption.encrypt(
+      initialPassword.password,
+    );
 
     const manager = this.users.create({
       name: dto.name,
       phone_number: dto.phone_number,
       username: null,
       password: hashedPassword,
+      ...this.initialPasswordFlags(initialPassword),
       salary: dto.salary ?? 0,
       payment_day: dto.payment_day ?? this.getBusinessPaymentDay(),
       role: Roles.MANAGER,
@@ -3477,7 +3839,12 @@ export class UserServiceService implements OnModuleInit {
       ...this.auditActor(requester),
       metadata: dto.branch_id ? { branch_id: dto.branch_id } : null,
     });
-    return successRes(this.sanitize(saved), 201, 'Manager yaratildi');
+    return this.createdUserReply(
+      saved,
+      initialPassword,
+      requester,
+      'Manager yaratildi',
+    );
   }
 
   async createCustomer(
@@ -3753,6 +4120,7 @@ export class UserServiceService implements OnModuleInit {
       market.password = await this.bcryptEncryption.encrypt(dto.password);
       if (this.isSelfRequester(requester, market.id)) {
         market.must_change_password = false;
+        market.password_change_forced = false;
       }
       // RBAC-09: yangi parol — eski qurilmalar endi refresh qila olmaydi.
       // (Elchi Pochta #3, 2026-10-23) Bu RPC'da joriy sessiya (`sid`) yo'q —

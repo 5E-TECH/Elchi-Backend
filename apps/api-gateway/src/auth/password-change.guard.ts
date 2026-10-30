@@ -8,7 +8,7 @@ import {
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { ConfigService } from '@nestjs/config';
-import { PASSWORD_CHANGE_REQUIRED } from '@app/common';
+import { PASSWORD_CHANGE_REQUIRED, isPasswordSwitchOn } from '@app/common';
 
 export const ALLOW_DURING_PASSWORD_CHANGE_KEY = 'allowDuringPasswordChange';
 
@@ -24,15 +24,7 @@ export const PASSWORD_CHANGE_REQUIRED_MESSAGE =
   'Avval parolingizni almashtiring — yangi parol kamida 8 belgi (xodimlar 10), oddiy parollar taqiqlangan';
 
 /** `PASSWORD_CHANGE_GATE` = `on` / `true` / `1` — darvoza yoqilgan. */
-export function isPasswordChangeGateEnabled(raw: unknown): boolean {
-  const value =
-    typeof raw === 'string' ||
-    typeof raw === 'number' ||
-    typeof raw === 'boolean'
-      ? String(raw)
-      : '';
-  return ['on', 'true', '1', 'yes'].includes(value.trim().toLowerCase());
-}
+export const isPasswordChangeGateEnabled = isPasswordSwitchOn;
 
 /**
  * (NDmZMzCP, 2026-10-26) Parolni almashtirish shart bo'lgan foydalanuvchi
@@ -41,6 +33,10 @@ export function isPasswordChangeGateEnabled(raw: unknown): boolean {
  * almashtirish oqimidan foydalana oladi; boshqa har qanday route — 403
  * `PASSWORD_CHANGE_REQUIRED`. Global APP_GUARD — `JwtAuthGuard` dan KEYIN
  * (`req.user` tayyor). `@Public()` route'larda foydalanuvchi yo'q — o'tadi.
+ *
+ * (aidsxJ2H) `pwd_forced: true` (parolni admin / tizim bergan —
+ * `password_mode: 'generate_sms'`, `manual` + `must_change_password`, SMS'ni
+ * qayta yuborish) — darvoza `PASSWORD_CHANGE_GATE` ga qaramay YOQIQ.
  *
  * XAVFSIZ YOQISH: `PASSWORD_CHANGE_GATE` (sukut — O'CHIQ). FE'da majburiy
  * «Yangi parol o'rnating» ekrani chiqmaguncha yoqilmaydi — aks holda zaif
@@ -58,9 +54,15 @@ export class PasswordChangeGuard implements CanActivate {
     if (context.getType() !== 'http') return true;
     const request = context
       .switchToHttp()
-      .getRequest<{ user?: { pwd_change?: unknown } }>();
+      .getRequest<{ user?: { pwd_change?: unknown; pwd_forced?: unknown } }>();
     if (request?.user?.pwd_change !== true) return true;
+    // (aidsxJ2H) Parolni admin / tizim bergan (vaqtinchalik SMS paroli yoki
+    // «birinchi kirishda almashtirsin») — darvoza env'ga QARAMAY ishlaydi.
+    // Faqat yangi yaratilgan / parolni qayta yuborilgan foydalanuvchilar;
+    // NDmZMzCP ning «zaif eski parol» bayrog'i env bilan qoladi.
+    const forced = request.user.pwd_forced === true;
     if (
+      !forced &&
       !isPasswordChangeGateEnabled(
         this.config?.get<string>('PASSWORD_CHANGE_GATE') ??
           process.env.PASSWORD_CHANGE_GATE,

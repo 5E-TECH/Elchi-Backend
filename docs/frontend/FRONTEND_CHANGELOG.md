@@ -22,6 +22,66 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+### 2026-10-30 — Foydalanuvchi yaratishda tasodifiy parol + SMS, birinchi kirishda parolni almashtirish, eski parol tekshiruvi (aidsxJ2H)
+
+Deploy: **identity-service + notification-service + api-gateway** (birga; avval notification — yangi RMQ buyruqlari
+`notification.sms.send_temp_password`, `notification.sms.delivery_status`). **Migratsiya bor:** `1716000000191-UserTempPasswordSms`
+(`identity_schema.admins.password_change_forced` sukut `false` — mavjud foydalanuvchilar o'zgarmaydi; yangi jadval
+`identity_schema.user_password_sms` — parol YO'Q, faqat SMS jurnali) va `1716000000192-SmsTempPasswordTemplate`
+(`notification_schema.sms_outbox.redacted_text`; `sms_templates` ga `user.temp_password` (uz, «security») — **provayderda
+(Eskiz) tasdiqlatish kerak**, `needs_provider_approval: true`). Yangi env: `PASSWORD_CHANGE_REQUIRE_OLD` (identity, sukut
+`off`). `openapi.json` qayta yaratildi.
+
+- [2026-10-30] ✏️ [identity+gateway] — `POST /admins`, `/registrators`, `/logists`, `/couriers`, `/managers`, `/markets`:
+  yangi `password_mode: 'generate_sms' | 'manual'` (sukut **`generate_sms`**) va `must_change_password?: boolean`.
+  `generate_sms` — tizim 12 belgili tasodifiy parol yaratadi (chalkash belgilarsiz, siyosatga mos), foydalanuvchi telefoniga
+  SMS (`sms_outbox`, «security» — tungi taqiqqa tushmaydi), `must_change_password` doim `true`; `password` **yuborilmaydi**
+  (yuborilsa 400), `must_change_password: false` — 400. `manual` — `password` majburiy, SMS yo'q, `must_change_password`
+  ixtiyoriy (sukut `false`). **Moslik:** `password_mode` yo'q, `password` bor — `manual` (hozirgi forma o'zgarishsiz ishlaydi).
+  Javob `data`: foydalanuvchi + `password_mode` + `password_sms` (`manual` da `null`):
+  `{ status: 'pending'|'sent'|'delivered'|'failed', failure_reason, failure_message, requested_at, sent_at, delivered_at,
+  resend_available_at, resends_left_today }`. `pending` — navbatda (provayderga hali berilmagan), `sent` — provayder qabul
+  qildi. **Parol javobda YO'Q.** SMS yuborilmasa ham foydalanuvchi yaratiladi: 201, `status: 'failed'` + `failure_reason`
+  (`sms_disabled`, `daily_cap_exceeded`, `provider_not_configured`, `invalid_phone`, `template_error`,
+  `notification_unavailable`, `provider_rejected`, `provider_unavailable`, `not_delivered`, `staging_blocked`),
+  `failure_message` — o'zbekcha, top-level `message` ham «…yaratildi, lekin SMS yuborilmadi: …».
+- [2026-10-30] 🆕 [gateway] — `POST /users/:id/password/resend-sms` (superadmin; admin — admin/superadmin'dan boshqasi;
+  menejer — faqat o'zi yaratgan kuryer; o'ziga — 403; nishon roli admin/registrator/logist/courier/manager/market, boshqasi
+  400): YANGI vaqtinchalik parol + SMS, eski parol darhol ishlamaydi, foydalanuvchining barcha sessiyalari yopiladi
+  (`sessions_revoked`), `must_change_password: true`. 200 `data: { user_id, must_change_password, password_sms }`.
+  **SMS navbatga tushmasa (`status: 'failed'`) parol va sessiyalar O'ZGARMAYDI** — foydalanuvchi qulflanmaydi, xabar
+  «SMS yuborilmadi: … Parol o'zgarmadi». Navbatga tushib, keyin provayder rad etsa (`sms-status` → `failed`) — parol allaqachon
+  yangi: qayta yuborish yoki `PATCH /users/:id { password }`.
+  Chegara: **60 s da bir marta** — 429 `code: PASSWORD_SMS_COOLDOWN`, **kuniga 5 marta** (Toshkent kuni) — 429
+  `PASSWORD_SMS_DAILY_LIMIT`; ikkalasida `retry_after_seconds` (+ `Retry-After`).
+- [2026-10-30] 🆕 [gateway] — `GET /users/:id/password/sms-status` (huquq — resend bilan bir xil): oxirgi parol SMS'ining
+  JONLI holati `data: { user_id, must_change_password, password_sms | null }` — natija oynasidagi «SMS yuborildi /
+  Yetkazildi» qadamlari uchun (bir necha soniyada bir so'rash; `delivered` / `failed` — to'xtatish).
+- [2026-10-30] ⚠️ [gateway] — **Birinchi kirish darvozasi:** admin / tizim bergan parol (`generate_sms`, `manual` +
+  `must_change_password: true`, resend) bilan kirgan foydalanuvchi tokenida `pwd_change` + `pwd_forced`; parolni
+  almashtirmaguncha **`PASSWORD_CHANGE_GATE` ga qaramay** faqat `GET/PATCH /auth/my-profile`, `GET /auth/validate`,
+  `POST /auth/logout`, `POST /auth/refresh` ishlaydi, qolgani **403 `code: PASSWORD_CHANGE_REQUIRED`**. NDmZMzCP ning «zaif
+  eski parol» bayrog'i (faqat `pwd_change`) — avvalgidek env bilan (sukut o'chiq) — mavjud foydalanuvchilar qulflanmaydi.
+- [2026-10-30] ✏️ [identity+gateway] — `PATCH /auth/my-profile` (va o'zini `PATCH /users/:id`): ixtiyoriy **`old_password`**.
+  Berilsa DOIM tekshiriladi — noto'g'ri: 400 `OLD_PASSWORD_INVALID` («Joriy parol noto'g'ri»; 401 EMAS — chiqarib
+  yuborilmaydi). Berilmasa: `PASSWORD_CHANGE_REQUIRE_OLD=off` (sukut) — avvalgidek saqlanadi (hozirgi `{ password }` so'rovi
+  buzilmaydi); `on` — 400 `OLD_PASSWORD_REQUIRED` («Joriy parolni kiriting»). Yangisi joriysi bilan bir xil — 400.
+  Yangi parol — siyosat (kamida 8, xodim 10). Muvaffaqiyatda `must_change_password` va `pwd_forced` tushadi — keyin
+  `POST /auth/refresh` (bayroqsiz token). Admin boshqa foydalanuvchi parolini o'rnatganda `old_password` kerak emas.
+- 🔧 FE (`src/auth/**`, urozov04; tayyor ish: `fe-1026-userpw` branch, `dev` ga kirmagan): **Profil «Parolni o'zgartirish» oynasi va
+  «Yangi parol o'rnating»** (`ChangePasswordDialog`) ga «Joriy parol» maydoni (`old_password`) — FE chiqqach prod'da
+  `PASSWORD_CHANGE_REQUIRE_OLD=on`. Hozirgi oyna 403 `PASSWORD_CHANGE_REQUIRED` da ochiladi — darvozaga tayyor, lekin «Keyinroq»
+  tugmasi `pwd_forced` da ma'nosiz. Yaratish formasi (`superadmin-users-create-password-sms`): «Parolni qanday berish» —
+  `password_mode` (sukut `generate_sms`, parol maydoni yashirin), `manual` da parol + «Birinchi kirishda parolni almashtirishni
+  talab qilish» (`must_change_password`); natija oynasi (`superadmin-users-create-password-result-dialog`) — `password_sms`
+  holati, `sms-status` bilan yangilash, «SMS'ni qayta yuborish» (`resend_available_at` gacha sanoq, 429 da
+  `retry_after_seconds`), `failure_message`.
+- 🟢 Ops: prod Eskiz hozir TEST rejimda — haqiqiy matn rad etiladi (`status: failed`, `provider_rejected`) to `user.temp_password`
+  shabloni moderatsiyadan o'tmaguncha; «security» SMS OTP kvotasini ishlatadi (`SMS_OTP_DAILY_CAP`, prod 5). Shungacha
+  yaratishda `manual` ishlating. `sms_outbox.text` da parol faqat yuborilguncha turadi (OTP kabi); provayder qabul qilgach yoki
+  terminal xatoda `redacted_text` bilan almashadi, provayder xatosi matnni aks ettirsa ham `last_error` / `last_response` / log
+  tozalanadi.
+
 ### 2026-10-30 — T1: hamkor (marketpleys) integratsiyasini jonli sinash (RJcckQ6I)
 
 Deploy: **integration-service + api-gateway** (+ libs/common). Migratsiya **yo'q**. `openapi.json` qayta yaratildi.

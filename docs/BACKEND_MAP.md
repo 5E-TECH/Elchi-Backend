@@ -229,6 +229,38 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
   save the password stays changed (warn): stale rows are still refused at
   refresh by the fingerprint. No OTP / forgot-password reset exists (OTP
   purposes: `login`, `phone_verify`).
+  **Temporary password + SMS (aidsxJ2H, 2026-10-30):** `POST /admins`,
+  `/registrators`, `/logists`, `/couriers`, `/managers`, `/markets` take
+  `password_mode: generate_sms (default) | manual` and
+  `must_change_password` (`temp-password/create-password.ts`). No mode +
+  `password` → `manual` (legacy form). `generate_sms`: 12-char
+  `generateTempPassword` (`libs/common/src/security/temp-password.ts`), hash
+  only, SMS after the create saga, `must_change_password` and
+  `admins.password_change_forced` both true; reply adds `password_mode` and
+  `password_sms` (`pending|sent|delivered|failed` + `failure_reason`,
+  `failure_message`), never the password. SMS failure never fails creation.
+  `TempPasswordService` keeps `user_password_sms` (no secret: who, when,
+  status, `client_message_id`), sends via `notification.sms.send_temp_password`
+  with no RMQ retry, and reads live status via `notification.sms.delivery_status`.
+  In `sms_outbox` the password lives in `text` only until the provider accepts
+  or the row is terminal, then `text` becomes `redacted_text` (added by
+  migration 192); `last_error`, `last_response` and the scheduler log are
+  scrubbed with `scrubSmsSecret`. Template `user.temp_password` (class
+  `security`, OTP quota) needs provider approval.
+  `POST /users/:id/password/resend-sms`: SA; admin except admin/SA; manager only
+  own (`created_by`) courier; 60 s cooldown and 5/Tashkent day under a per-user
+  advisory xact lock (429 `PASSWORD_SMS_COOLDOWN` / `PASSWORD_SMS_DAILY_LIMIT`).
+  The hash is swapped and all sessions revoked only AFTER the SMS is queued; a
+  queue failure leaves password and sessions untouched. `GET
+  /users/:id/password/sms-status` is the live status. `pwd_forced` JWT claim
+  (from `password_change_forced`) makes `PasswordChangeGuard` return 403
+  `PASSWORD_CHANGE_REQUIRED` regardless of `PASSWORD_CHANGE_GATE` (which still
+  governs NDmZMzCP's weak-password `pwd_change`). Self password change:
+  `old_password`, when sent, is always verified (400 `OLD_PASSWORD_INVALID`);
+  when absent, `PASSWORD_CHANGE_REQUIRE_OLD=on` gives 400
+  `OLD_PASSWORD_REQUIRED`, default off keeps the current FE working. A
+  must-change user cannot reuse the current password; a self change clears both
+  flags.
 - **Per-role create/list:** `identity.{courier,manager,registrator,market,customer}.*`,
   generic `identity.user.{create,find_all,find_by_id,update,delete,status}`.
   YEThmZBn (2026-10-23): `find_by_id` with `include_branch: true` (only the

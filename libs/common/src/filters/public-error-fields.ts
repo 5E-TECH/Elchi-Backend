@@ -56,6 +56,19 @@ export const TELEGRAM_COURIER_ONLY = 'TELEGRAM_COURIER_ONLY';
  * o'tkazadi.
  */
 export const TELEGRAM_SCAN_SCOPE = 'tg_scan';
+/**
+ * (aidsxJ2H) O'z parolini almashtirishda joriy (eski) parol berilmagan /
+ * noto'g'ri — 400 (401 EMAS: FE foydalanuvchini chiqarib yubormasin).
+ */
+export const OLD_PASSWORD_REQUIRED = 'OLD_PASSWORD_REQUIRED';
+export const OLD_PASSWORD_INVALID = 'OLD_PASSWORD_INVALID';
+/**
+ * (aidsxJ2H) Vaqtinchalik parol SMS'ini qayta yuborish chegarasi — 429:
+ * 60 soniyada bir marta (`PASSWORD_SMS_COOLDOWN`) va kuniga 5 marta
+ * (`PASSWORD_SMS_DAILY_LIMIT`); `retry_after_seconds` — qachon mumkin.
+ */
+export const PASSWORD_SMS_COOLDOWN = 'PASSWORD_SMS_COOLDOWN';
+export const PASSWORD_SMS_DAILY_LIMIT = 'PASSWORD_SMS_DAILY_LIMIT';
 
 export const PUBLIC_ERROR_CODES: Readonly<Record<string, readonly string[]>> = {
   // (T6) to'lovni qaytarish / summasini tuzatish — superadmin.
@@ -87,6 +100,12 @@ export const PUBLIC_ERROR_CODES: Readonly<Record<string, readonly string[]>> = {
   [PASSWORD_CHANGE_REQUIRED]: [],
   // (BOT-2) Telegram Mini App tokeni faqat kuryerga — 403.
   [TELEGRAM_COURIER_ONLY]: [],
+  // (aidsxJ2H) o'z parolini almashtirish — eski parol yo'q / noto'g'ri, 400.
+  [OLD_PASSWORD_REQUIRED]: [],
+  [OLD_PASSWORD_INVALID]: [],
+  // (aidsxJ2H) parol SMS'ini qayta yuborish chegarasi — 429.
+  [PASSWORD_SMS_COOLDOWN]: ['retry_after_seconds'],
+  [PASSWORD_SMS_DAILY_LIMIT]: ['retry_after_seconds'],
   // (XtcEyQjb) to'xtatilgan omborga kirim — 409.
   [WAREHOUSE_ERROR_CODES.PAUSED]: [],
   // (XtcEyQjb) market operatoriga «Ombordagi qoldiq» yopiq — 403.
