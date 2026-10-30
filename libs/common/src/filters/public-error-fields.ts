@@ -1,6 +1,7 @@
 import { PAYMENT_CORRECTION_ERROR_CODES as PC } from '../finance/payment-correction';
 import { WAREHOUSE_ERROR_CODES } from '../catalog/warehouse';
 import { CONTACT_ERROR_CODES } from '../contacts/contacts';
+import { SPECIAL_CATEGORIES_ERROR_CODES } from '../order/order-special-categories';
 
 /**
  * (Elchi Pochta #3) Xato javobidagi mashina o'qiydigan qo'shimcha maydonlar.
@@ -82,6 +83,8 @@ export const PUBLIC_ERROR_CODES: Readonly<Record<string, readonly string[]>> = {
   [CONTACT_ERROR_CODES.RESPONSIBLE_ROLE_INVALID]: [],
   [CONTACT_ERROR_CODES.RESPONSIBLE_INACTIVE]: [],
   [CONTACT_ERROR_CODES.NOT_A_MARKET]: [],
+  // (T8 0OUcHZ7R) maxsus belgi bu holatda o'zgarmaydi — 409.
+  [SPECIAL_CATEGORIES_ERROR_CODES.LOCKED]: [],
 };
 
 export type PublicErrorValue = string | number | boolean | null;

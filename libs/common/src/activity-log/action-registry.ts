@@ -140,6 +140,13 @@ export const ACTIVITY_ACTION_REGISTRY: Readonly<
     'undo',
     'amber',
   ),
+  // T8 (0OUcHZ7R): mo'rt / suyuqlik / diniy kitob … belgilari o'zgardi.
+  'order.special_categories_changed': entry(
+    "Maxsus belgilar o'zgardi",
+    'order',
+    'tag',
+    'amber',
+  ),
 
   // ---- moliya ----
   'finance.manual_income': entry("Qo'lda kirim", 'finance', 'plus', 'green'),

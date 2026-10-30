@@ -363,6 +363,15 @@ export class Order extends BaseEntity {
   @Column({ type: 'jsonb', nullable: true })
   proof_files!: string[] | null;
 
+  /**
+   * T8 (0OUcHZ7R) — maxsus belgilar (`OrderSpecialCategory` kodlari, kanonik
+   * tartibda). Yaratishda beriladi, keyin faqat
+   * `order.special_categories.set` (PUT /orders/:id/special-categories)
+   * o'zgartiradi; `update_full` bu maydonni e'tiborsiz qoldiradi.
+   */
+  @Column({ type: 'varchar', length: 32, array: true, default: () => "'{}'" })
+  special_categories!: string[];
+
   @Column({ type: 'bigint', nullable: true })
   sold_at!: string | null;
 
