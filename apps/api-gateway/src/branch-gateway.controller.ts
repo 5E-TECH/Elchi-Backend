@@ -17,7 +17,8 @@ import {
 } from '@nestjs/common';
 import { ClientProxy } from '@nestjs/microservices';
 import { Roles as RoleEnum } from '@app/common';
-import { firstValueFrom, timeout } from 'rxjs';
+import { firstValueFrom, map, timeout } from 'rxjs';
+import { projectOrderContactsForRoles } from './auth/order-contact-projection';
 import {
   ApiBearerAuth,
   ApiBody,
@@ -423,7 +424,13 @@ export class BranchGatewayController {
         { cmd: 'branch.analytics.markets' },
         { id, requester: this.toRequester(req) },
       )
-      .pipe(timeout(8000));
+      .pipe(
+        timeout(8000),
+        // T7 (B3): menejer/filialga market telefonlarisiz.
+        map((response: unknown) =>
+          projectOrderContactsForRoles(req?.user?.roles, response),
+        ),
+      );
   }
 
   @Post('branches/transfer-batches')
@@ -659,7 +666,14 @@ export class BranchGatewayController {
         { cmd: 'branch.transfer_batches.find_by_id' },
         { id, requester: this.toRequester(req) },
       )
-      .pipe(timeout(BATCH_RPC_TIMEOUT_MS));
+      .pipe(
+        timeout(BATCH_RPC_TIMEOUT_MS),
+        // T7 (B3): `items[].order` — menejer/filialga market va operator
+        // telefonlarisiz.
+        map((response: unknown) =>
+          projectOrderContactsForRoles(req?.user?.roles, response),
+        ),
+      );
   }
 
   /** Z3pUOxou — logist paket tafsiloti: doira branch-service'da, pulsiz. */
@@ -730,7 +744,13 @@ export class BranchGatewayController {
         { cmd: 'branch.transfer_batches.find_remaining' },
         { id, requester: this.toRequester(req) },
       )
-      .pipe(timeout(BATCH_RPC_TIMEOUT_MS));
+      .pipe(
+        timeout(BATCH_RPC_TIMEOUT_MS),
+        // T7 (B3): menejer/filialga market va operator telefonlarisiz.
+        map((response: unknown) =>
+          projectOrderContactsForRoles(req?.user?.roles, response),
+        ),
+      );
   }
 
   @Post('transfer-batches/:id/receive')

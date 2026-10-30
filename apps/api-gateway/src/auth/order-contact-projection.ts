@@ -51,6 +51,8 @@ export const HIDDEN_MARKET_CONTACT_FIELDS: readonly string[] = [
   'extra_number',
   'default_operator_phone',
   'username',
+  // Elchi mas'uli — faqat SA/admin ko'radi (market qatorida ham).
+  'market_responsible_id',
   'phoneNumber',
   'extraNumber',
   'defaultOperatorPhone',
@@ -171,4 +173,49 @@ export function projectMarketRowContactsForRoles<T>(
     return row;
   }
   return omitKeys(omitKeys(row, MARKET_CONTACT_KEYS), OPERATOR_KEYS) as T;
+}
+
+/** Foydalanuvchi yozuvi market tomoniga tegishlimi (market yoki uning operatori). */
+const MARKET_SIDE_ROLES: ReadonlySet<string> = new Set([
+  RoleEnum.MARKET,
+  RoleEnum.MARKET_OPERATOR,
+]);
+
+/** Elchi mas'uli maydonlari — faqat SUPERADMIN / ADMIN ga. */
+const RESPONSIBLE_KEYS: ReadonlySet<string> = new Set([
+  'responsible',
+  'responsible_source',
+  'market_responsible_id',
+]);
+
+/**
+ * Foydalanuvchi QATORI (GET /users ro'yxati, GET /users/:id): market yoki
+ * market operatori yozuvi bo'lsa — menejer/filial/kuryerga telefon va login
+ * maydonlarisiz; Elchi mas'uli (`responsible`, `responsible_source`,
+ * `market_responsible_id`) SUPERADMIN / ADMIN dan boshqasiga berilmaydi.
+ * Boshqa rollar qatori — ASL.
+ */
+export function projectUserRowContactsForRoles<T>(
+  roles: string[] | undefined,
+  row: T,
+): T {
+  if (!isPlainObject(row)) {
+    return row;
+  }
+  const role = typeof row.role === 'string' ? row.role.toLowerCase() : '';
+  if (!MARKET_SIDE_ROLES.has(role)) {
+    return row;
+  }
+  let next: Record<string, unknown> = projectMarketRowContactsForRoles(
+    roles,
+    row,
+  );
+  const normalized = normalizeRoles(roles);
+  if (
+    !normalized.includes(RoleEnum.SUPERADMIN) &&
+    !normalized.includes(RoleEnum.ADMIN)
+  ) {
+    next = omitKeys(next, RESPONSIBLE_KEYS);
+  }
+  return next as T;
 }

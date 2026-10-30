@@ -59,10 +59,13 @@ o'z Elchi mas'uliga bog'lanadi. Mijoz telefoni qoladi.
   logisti (super kuryer — `courier_regions` logistlari, ≤ 5; `serves_all_regions` — zaxira); menejer / branch — filial
   viloyati logisti («Viloyatingiz logisti»). Logist / mas'ul yo'q yoki nofaol — zaxira raqamlar (`user_id`, `name`,
   `role` — null, `source: 'support'`); ular ham bo'sh — `contacts: []`, `source: null`. Boshqa rollar — `kind: 'none'`.
+- [2026-10-30] ✏️ [gateway] — Swagger: buyurtma javobida `problem_contacts` (`ProblemContactDto`), `operator_phone`,
+  `secondary_operator_phone`, `market.phone_number` endi ixtiyoriy (menejer/filial/kuryerga kelmaydi).
 - [2026-10-30] ✏️ [gateway] — buyurtma javoblariga **`problem_contacts: [{ name: string | null, phone, source: 'logist' |
   'support' }]`** (≤ 2, takrorsiz; HAR rolga): `GET /orders`, `GET /orders/:id`, `GET /orders/qr-code/:token`,
-  `GET /orders/courier-orders`, `GET /orders/market/:marketId`, `GET /post/orders/:id`, `GET /post/orders/rejected/:id`,
-  `GET /scan/:token` (buyurtma va pochta). Hisob: buyurtma viloyati (`region_id`; yo'q — tuman viloyati) logisti
+  `GET /orders/courier-orders`, `GET /orders/courier/orders`, `GET /orders/market/:marketId`,
+  `GET /orders/markets/:marketId/new|cancelled` (yorliq chop etish ro'yxati), `GET /post/orders/:id`,
+  `GET /post/orders/rejected/:id`, `GET /scan/:token` (buyurtma va pochta). Hisob: buyurtma viloyati (`region_id`; yo'q — tuman viloyati) logisti
   (`regions.logist_id`, faol), aks holda zaxira raqamlar; ikkalasi ham yo'q — `[]`. Kesh 60 s (logist almashsa ≤ 60 s).
   identity javob bermasa maydon **yo'q** (FE «raqam yo'q» deb ko'rsatsin — market/operator raqamiga QAYTMAYDI).
 - [2026-10-30] ⚠️ [gateway] — `POST /printer/thermal-pdf`, `POST /printer/receipt`: «Muammo bo'lsa» endi FAQAT
@@ -73,8 +76,13 @@ o'z Elchi mas'uliga bog'lanadi. Mijoz telefoni qoladi.
   `secondary_operator_phone`; `market` obyektidan `phone_number`, `extra_number`, `default_operator_phone`, `username`
   **o'chiriladi** (null emas). `customer` va `courier` ga tegilmaydi. Joylar: buyurtma qaytaradigan barcha yo'llar
   (rol proyeksiyasi orqali), `GET /orders/markets/new|cancelled`, `GET /orders/markets/:marketId/new|cancelled`,
-  `GET /orders/branch/orders|cancelled`, `GET /markets` (menejer/filial qatorida `phone_number` yo'q; registrator —
-  bor), `GET /users/:id` (market yozuvi). Pul proyeksiyasi o'zgarmadi.
+  `GET /orders/branch/orders|cancelled`, `GET /orders/courier/orders` (filial doirasi), `GET /orders/external/sources`,
+  `GET /orders/replaceable`, `PATCH /orders/:id` va `/:id/full` javobi, `GET /transfer-batches/:id` va `/remaining`
+  (`items[].order`), `GET /branches/:id/analytics/markets`, `GET /post/return-requests/list`, `GET /markets`
+  (menejer/filial qatorida `phone_number` yo'q; registrator — bor), `GET /users` va `GET /users/:id` (market va market
+  operatori qatorlari; `responsible`, `responsible_source`, `market_responsible_id` — faqat SA/admin).
+  `GET /orders/:id/tracking`: kuryer/menejer/filialga market va market operatori aktyori `{id, name, role}`, tavsifda
+  ularning login/telefoni yo'q. Pul proyeksiyasi o'zgarmadi.
 - 🔧 FE: F1 — chek/yorliq `problem_contacts` dan (bo'sh — qism yo'q); F2 — menejer/kuryerda market telefoni yo'q,
   «Muammo bo'lsa» qatori; F3 — `GET /users/me/contacts` kartasi; F4 — «Market mas'ullari» sahifasi (yuqoridagi
   endpointlar, xato kodlari `users.json → responsibles.*`).

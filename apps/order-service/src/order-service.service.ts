@@ -715,7 +715,13 @@ export class OrderServiceService {
       return fallbackId ? `user ID: ${fallbackId}` : 'Nomaʼlum foydalanuvchi';
     }
 
-    const name = actor.name ?? actor.username ?? actor.phone_number;
+    // T7 (QPq2C1co): market / market operatori — tavsifga login yoki telefon
+    // chiqmaydi (tarix kuryer va menejerga ham ko'rinadi), faqat ism.
+    const isMarketSide =
+      actor.role === Roles.MARKET || actor.role === Roles.MARKET_OPERATOR;
+    const name = isMarketSide
+      ? actor.name
+      : (actor.name ?? actor.username ?? actor.phone_number);
     const role = actor.role ? `, role: ${actor.role}` : '';
     return name
       ? `${name}${role}, ID: ${actor.id ?? fallbackId ?? '-'}`

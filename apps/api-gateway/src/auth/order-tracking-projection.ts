@@ -1,4 +1,8 @@
 import { Roles as RoleEnum } from '@app/common';
+import {
+  projectOrderContactsForRoles,
+  shouldHideMarketContacts,
+} from './order-contact-projection';
 
 /**
  * (Ho5qcDn4 TC9) Market o'z buyurtmasining tarixini (`GET /orders/:id/tracking`)
@@ -59,10 +63,33 @@ export function projectOrderTrackingForRoles(
   roles: string[] | undefined,
   response: unknown,
 ): unknown {
+  // T7 (QPq2C1co, B3): kuryer / menejer / filial — market va operator
+  // aktyorlari `{id, name, role}`, hodisalarda operator telefonlari yo'q.
+  if (shouldHideMarketContacts(roles)) {
+    return projectMarketSideActors(
+      projectOrderContactsForRoles(roles, response),
+    );
+  }
   if (!isMarketOnly(roles)) return response;
+  return mapTrackingEvents(response, () => true);
+}
+
+const isMarketSideActor = (actor: unknown): boolean =>
+  isRecord(actor) &&
+  typeof actor.role === 'string' &&
+  MARKET_ROLES.includes(actor.role.toLowerCase());
+
+const projectMarketSideActors = (response: unknown): unknown =>
+  mapTrackingEvents(response, isMarketSideActor);
+
+/** `actor` i `shouldProject` ga mos hodisalarda aktyor qisqartiriladi. */
+function mapTrackingEvents(
+  response: unknown,
+  shouldProject: (actor: unknown) => boolean,
+): unknown {
   const projectEvents = (events: unknown[]) =>
     events.map((event) =>
-      isRecord(event) && 'actor' in event
+      isRecord(event) && 'actor' in event && shouldProject(event.actor)
         ? { ...event, actor: projectActor(event.actor) }
         : event,
     );

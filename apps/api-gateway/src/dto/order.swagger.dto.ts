@@ -1,4 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { ProblemContactDto } from './contacts.swagger.dto';
 import {
   ArrayNotEmpty,
   IsArray,
@@ -1207,7 +1208,8 @@ export class SettlementHqToMarketDto extends SettlementAmountDto {
 
 /**
  * 1mOjtOVC — chek uchun market ma'lumoti (`order.market`, enriched javob).
- * Kuryer/logist uchun market tariflari olib tashlanadi; nom va telefon qoladi.
+ * Kuryer/logist uchun market tariflari olib tashlanadi. T7 (QPq2C1co):
+ * menejer / filial / kuryerga telefon YO'Q.
  */
 export class OrderReceiptMarketDto {
   @ApiProperty({ example: '37' })
@@ -1216,13 +1218,14 @@ export class OrderReceiptMarketDto {
   @ApiProperty({ example: 'TEST Market', nullable: true, type: String })
   name!: string | null;
 
-  @ApiProperty({
+  @ApiPropertyOptional({
     example: '+998901234567',
     nullable: true,
     type: String,
-    description: "Market telefoni — chekdagi «Muammo bo'lsa» qatori uchun",
+    description:
+      "Market telefoni. T7: menejer/filial/kuryerga YO'Q (SA/admin/registrator/logist/market — bor). Chekdagi «Muammo bo'lsa» manbasi EMAS — `problem_contacts`.",
   })
-  phone_number!: string | null;
+  phone_number?: string | null;
 }
 
 /**
@@ -1250,21 +1253,30 @@ export class OrderReceiptFieldsDto {
   })
   operator?: string | null;
 
-  @ApiProperty({
+  @ApiPropertyOptional({
     example: '+998901112233',
     nullable: true,
     type: String,
-    description: "1mOjtOVC: operator telefoni (chekdagi «Muammo bo'lsa: …»)",
+    description:
+      "Operator telefoni. T7: menejer/filial/kuryerga YO'Q. Chekdagi «Muammo bo'lsa» manbasi EMAS — `problem_contacts`.",
   })
-  operator_phone!: string | null;
+  operator_phone?: string | null;
 
-  @ApiProperty({
+  @ApiPropertyOptional({
     example: '+998904445566',
     nullable: true,
     type: String,
-    description: "1mOjtOVC: operatorning qo'shimcha telefoni",
+    description:
+      "Operatorning qo'shimcha telefoni. T7: menejer/filial/kuryerga YO'Q.",
   })
-  secondary_operator_phone!: string | null;
+  secondary_operator_phone?: string | null;
+
+  @ApiPropertyOptional({
+    type: [ProblemContactDto],
+    description:
+      "T7: «Muammo bo'lsa» — buyurtma viloyati logisti (`source: logist`), u yo'q/nofaol — zaxira raqamlar (`source: support`); ≤ 2, har rolga. `[]` — raqam yo'q (chekda qism chiqmaydi). Maydon umuman yo'q — aloqa xizmati javob bermadi.",
+  })
+  problem_contacts?: ProblemContactDto[];
 
   @ApiPropertyOptional({
     type: OrderReceiptMarketDto,

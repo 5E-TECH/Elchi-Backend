@@ -38,6 +38,7 @@ import { Roles } from './auth/roles.decorator';
 import { RolesGuard } from './auth/roles.guard';
 import { ParseBigintIdPipe } from './pipes/parse-bigint-id.pipe';
 import { projectOrderPayloadForRoles } from './auth/order-role-projection';
+import { projectOrderContactsForRoles } from './auth/order-contact-projection';
 import {
   ProblemContactsService,
   attachProblemContacts,
@@ -821,7 +822,8 @@ export class LogisticsGatewayController {
   @ApiOperation({
     summary: 'Get all orders by post id',
     description:
-      "Z3pUOxou — LOGIST: pochta o'ziga biriktirilgan viloyatda bo'lsa (aks holda 403); buyurtma qatorlari pulsiz (`total_price`, tariflar yo'q), `homeOrders`/`centerOrders` da faqat sonlar.",
+      "Z3pUOxou — LOGIST: pochta o'ziga biriktirilgan viloyatda bo'lsa (aks holda 403); buyurtma qatorlari pulsiz (`total_price`, tariflar yo'q), `homeOrders`/`centerOrders` da faqat sonlar." +
+      "T7 (QPq2C1co): har buyurtma qatorida `problem_contacts: [{name, phone, source: 'logist'|'support'}]` («Muammo bo'lsa», ≤ 2); `operator_phone`, `secondary_operator_phone`, `market.phone_number` menejer/filial/kuryerga YO'Q.",
   })
   @ApiParam({ name: 'id', description: 'Post ID (id)' })
   getOrdersByPost(@Param('id') id: string, @Req() req: { user: JwtUser }) {
@@ -864,7 +866,11 @@ export class LogisticsGatewayController {
     RoleEnum.COURIER,
   )
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Get rejected orders by post id' })
+  @ApiOperation({
+    summary: 'Get rejected orders by post id',
+    description:
+      "T7 (QPq2C1co): har buyurtma qatorida `problem_contacts: [{name, phone, source: 'logist'|'support'}]` («Muammo bo'lsa», ≤ 2); `operator_phone`, `secondary_operator_phone`, `market.phone_number` menejer/filial/kuryerga YO'Q.",
+  })
   @ApiParam({ name: 'id', description: 'Post ID (id)' })
   getRejectedOrdersByPost(
     @Param('id') id: string,
@@ -1082,7 +1088,11 @@ export class LogisticsGatewayController {
         },
       },
     )) as ReturnRequestsResponse;
-    return this.enrichReturnRequestsResponse(response);
+    // T7 (B3): menejerga market va operator telefonlarisiz.
+    return projectOrderContactsForRoles(
+      req.user.roles,
+      await this.enrichReturnRequestsResponse(response),
+    );
   }
 
   @Post('post/return-requests/approve')

@@ -69,7 +69,10 @@ import {
 import { SetCourierRegionsRequestDto } from './dto/courier-regions.swagger.dto';
 import { CreateInvestorUserRequestDto } from './dto/investor.swagger.dto';
 import { isRpcNotFoundError } from './order-qr-light-view';
-import { projectMarketRowContactsForRoles } from './auth/order-contact-projection';
+import {
+  projectMarketRowContactsForRoles,
+  projectUserRowContactsForRoles,
+} from './auth/order-contact-projection';
 import { ParseBigintIdPipe } from './pipes/parse-bigint-id.pipe';
 import {
   LOGIST_REGIONS_UNAVAILABLE_MESSAGE,
@@ -1260,6 +1263,11 @@ export class ApiGatewayController {
         pageItems as Array<Record<string, unknown>>,
         req,
       );
+      // T7 (B3): market / operator qatorlari — menejerga telefonlarsiz,
+      // Elchi mas'uli faqat SUPERADMIN/ADMIN ga.
+      (response as { data: { items: unknown[] } }).data.items = pageItems.map(
+        (item) => projectUserRowContactsForRoles(req?.user?.roles, item),
+      );
     }
 
     return response;
@@ -1448,26 +1456,11 @@ export class ApiGatewayController {
         .send({ cmd: 'identity.user.find_by_id' }, { id, include_branch: true })
         .pipe(timeout(8000)),
     );
-    // T7 (B3): market yozuvi — menejer/filial/kuryerga telefonlarsiz;
-    // `responsible` (Elchi mas'uli) faqat SUPERADMIN/ADMIN ga.
-    const data = response?.data as Record<string, unknown> | null | undefined;
-    if (data && typeof data === 'object' && data.role === RoleEnum.MARKET) {
-      let row = projectMarketRowContactsForRoles(req?.user?.roles, data);
-      if (
-        !requesterIsPrivileged &&
-        ('responsible' in row || 'responsible_source' in row)
-      ) {
-        row = Object.fromEntries(
-          Object.entries(row).filter(
-            ([key]) => key !== 'responsible' && key !== 'responsible_source',
-          ),
-        );
-      }
-      if (row !== data) {
-        return { ...response, data: row };
-      }
-    }
-    return response;
+    // T7 (B3): market / operator yozuvi — menejer/filial/kuryerga
+    // telefonlarsiz; `responsible` (Elchi mas'uli) faqat SUPERADMIN/ADMIN ga.
+    const data: unknown = response?.data;
+    const row = projectUserRowContactsForRoles(req?.user?.roles, data);
+    return row === data ? response : { ...response, data: row };
   }
 
   @Patch('users/:id')
