@@ -136,7 +136,10 @@ services:
   api-gateway:
     <<: *stg-hot-svc-limits
     env_file: !override .env.staging
-    environment: *stg-env
+    environment:
+      <<: *stg-env
+      # (dgvwZasd B) Test serverda egalik qoidasi yoqiq, prod sukuti — off.
+      FILE_OWNERSHIP_ENFORCE: 'on'
 
   identity-service:
     <<: *stg-svc-limits

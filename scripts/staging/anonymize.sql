@@ -37,7 +37,7 @@ CREATE FUNCTION pg_temp.app_schemas() RETURNS text[] LANGUAGE sql IMMUTABLE AS $
   SELECT ARRAY['identity_schema','order_schema','catalog_schema','logistics_schema',
                'finance_schema','notification_schema','integration_schema',
                'branch_schema','investor_schema','c2c_schema','search_schema',
-               'ai_schema']
+               'ai_schema','file_schema']
 $$;
 
 CREATE FUNCTION pg_temp.tbl(s text, t text) RETURNS boolean LANGUAGE sql STABLE AS $$

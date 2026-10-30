@@ -111,6 +111,7 @@
     "socket.io": "^4.8.4",
     "swagger-ui-express": "^5.0.1",
     "typeorm": "^0.3.28",
+    "undici": "^6.29.1",
     "web-push": "^3.6.7"
   },
   "devDependencies": {

@@ -657,8 +657,14 @@ services:
       context: .
       dockerfile: apps/file-service/Dockerfile
     env_file: .env.production
+    # (dgvwZasd B) DB faqat egalik reestri uchun (file_schema) — kam trafik,
+    # shuning uchun default 10 emas, 5 (max_connections=200 byudjeti).
+    environment:
+      DB_POOL_MAX: '5'
     depends_on:
       rabbitmq:
+        condition: service_healthy
+      postgres:
         condition: service_healthy
       minio:
         condition: service_healthy

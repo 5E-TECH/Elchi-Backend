@@ -146,6 +146,7 @@ import {
 import { successRes } from '../../../libs/common/helpers/response';
 import { Roles } from './auth/roles.decorator';
 import { RolesGuard } from './auth/roles.guard';
+import { fileOwnerOf } from './file-ownership';
 import {
   ORDER_QR_LOOKUP_ROLES,
   assertQrOrderVisible,
@@ -788,7 +789,10 @@ export class OrderGatewayController {
       .filter(Boolean);
   }
 
-  private async uploadProofFile(file?: UploadedProofFile): Promise<string[]> {
+  private async uploadProofFile(
+    file: UploadedProofFile | undefined,
+    user: JwtUser,
+  ): Promise<string[]> {
     if (!file) return [];
     if (!this.fileClient) {
       throw new BadRequestException('File service is not configured');
@@ -803,6 +807,7 @@ export class OrderGatewayController {
             mime_type: file.mimetype,
             file_base64: file.buffer.toString('base64'),
             folder: 'proof',
+            owner: fileOwnerOf(user),
           },
         )
         .pipe(timeout(PROOF_OPERATION_TIMEOUT_MS)),
@@ -825,9 +830,9 @@ export class OrderGatewayController {
 
   private async withUploadedProof<
     T extends { proofFileKeys?: string[]; proofFileKeysVerified?: boolean },
-  >(dto: T, file?: UploadedProofFile): Promise<T> {
+  >(dto: T, file: UploadedProofFile | undefined, user: JwtUser): Promise<T> {
     const existingKeys = this.normalizeProofFileKeys(dto?.proofFileKeys);
-    const uploadedKeys = await this.uploadProofFile(file);
+    const uploadedKeys = await this.uploadProofFile(file, user);
     return {
       ...dto,
       proofFileKeys: Array.from(new Set([...existingKeys, ...uploadedKeys])),
@@ -6552,7 +6557,7 @@ export class OrderGatewayController {
     @UploadedFile() proof: UploadedProofFile | undefined,
     @Req() req: { user: JwtUser },
   ) {
-    const dtoWithProof = await this.withUploadedProof(dto, proof);
+    const dtoWithProof = await this.withUploadedProof(dto, proof, req.user);
     return firstValueFrom(
       this.orderClient
         .send(
@@ -6597,7 +6602,7 @@ export class OrderGatewayController {
     @UploadedFile() proof: UploadedProofFile | undefined,
     @Req() req: { user: JwtUser },
   ) {
-    const dtoWithProof = await this.withUploadedProof(dto, proof);
+    const dtoWithProof = await this.withUploadedProof(dto, proof, req.user);
     return firstValueFrom(
       this.orderClient
         .send(
@@ -6769,7 +6774,7 @@ export class OrderGatewayController {
     @UploadedFile() proof: UploadedProofFile | undefined,
     @Req() req: { user: JwtUser },
   ) {
-    const dtoWithProof = await this.withUploadedProof(dto, proof);
+    const dtoWithProof = await this.withUploadedProof(dto, proof, req.user);
     return firstValueFrom(
       this.orderClient
         .send(

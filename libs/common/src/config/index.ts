@@ -227,6 +227,15 @@ export const gatewayValidationSchema = Joi.object({
    * yiqitmasin — bo'sh qiymat sukutga tushadi (AI_ORDER_ENABLED uchun `false`).
    */
   RABBITMQ_AI_QUEUE: Joi.string().empty('').default('ai_queue'),
+  // (dgvwZasd B) Shaxsiy fayl egaligi reestrini o'qishda qo'llash. `off` —
+  // reestr faqat yoziladi, kirish eski qoida bilan; `on` — reestrdagi fayl
+  // egalik qoidasi bilan (reestrda yo'q eski fayl baribir eski qoida bilan).
+  FILE_OWNERSHIP_ENFORCE: Joi.string()
+    .trim()
+    .lowercase()
+    .valid('on', 'off')
+    .empty('')
+    .default('off'),
   /**
    * AI buyurtma operatsion o'chirgichi (kill switch). `false` bo'lsa
    * `POST /orders/ai-parse` Anthropic'ga bormasdan 200 `{ok:false,
@@ -752,6 +761,9 @@ export const investorValidationSchema = Joi.object({
 
 export const fileValidationSchema = Joi.object({
   ...observabilityKeys,
+  // (dgvwZasd B) Faqat egalik reestri — `file_schema.file_objects`.
+  POSTGRES_URI: Joi.string().required(),
+  DB_SCHEMA: Joi.string().default('file_schema'),
   RABBITMQ_URI: Joi.string().required(),
   RABBITMQ_FILE_QUEUE: Joi.string().required(),
   MINIO_ENDPOINT: Joi.string().required(),

@@ -22,6 +22,22 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+### 2026-10-30 — Xavfsizlik B: SSRF DNS pinning va fayl egaligi reestri (dgvwZasd)
+
+Deploy: **file-service + api-gateway + integration-service + finance-service** (+ libs/common). Migratsiya **191**
+(`file_schema.file_objects`). Yangi env: `FILE_OWNERSHIP_ENFORCE` (api-gateway, sukut `off`). `openapi.json` qayta
+yaratildi. Frontend'da kod o'zgarishi **shart emas**.
+
+- [2026-10-30] 🟢 [file] — `GET /files/:key` va `GET /files/:key/content`: yangi yuklangan (reestrdagi) maxfiy fayl uchun
+  `FILE_OWNERSHIP_ENFORCE=on` bo'lganda 403 ko'proq holatda keladi: boshqa filial xodimi (HQ'dan tashqari) o'z doirasidan
+  tashqaridagi faylni ocha olmaydi. Yuklagan foydalanuvchi esa faylni buyurtmaga biriktirilishidan oldin ham oladi (kuryer
+  uchun ilgari 403). Reestrni tekshirib bo'lmasa — **503** (keyinroq qayta urinish). Eski fayllar, `files/signed/:token`
+  havolalari, `photo_url` / `file_url` va javob shakllari o'zgarmadi. → `ProofGallery` 403 ni allaqachon «ochib bo'lmadi»
+  deb ko'rsatadi, o'zgarish shart emas.
+- [2026-10-30] 🟢 [integration] — SSRF: chiquvchi integratsiya so'rovi endi tekshirilgan IP'ga ulanadi (DNS rebinding).
+  Xato matni `Host … resolves to a non-public address` yoki `Could not resolve host` bo'lishi mumkin (`POST
+  /admin/partners/:id/webhook-test` javobidagi `error`). Kontrakt o'zgarmadi.
+
 ### 2026-10-30 — T1: hamkor (marketpleys) integratsiyasini jonli sinash (RJcckQ6I)
 
 Deploy: **integration-service + api-gateway** (+ libs/common). Migratsiya **yo'q**. `openapi.json` qayta yaratildi.

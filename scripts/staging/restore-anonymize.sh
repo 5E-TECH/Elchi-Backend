@@ -39,7 +39,7 @@ ROOT="$(cd "$HERE/../.." && pwd)"
 PSQL="${PSQL:-psql}"
 PG_RESTORE="${PG_RESTORE:-pg_restore}"
 KEEP_IDS="${STAGING_KEEP_USER_IDS:-1,25,26,37,53}"
-APP_SCHEMAS="identity_schema order_schema catalog_schema logistics_schema finance_schema notification_schema integration_schema branch_schema investor_schema c2c_schema search_schema ai_schema"
+APP_SCHEMAS="identity_schema order_schema catalog_schema logistics_schema finance_schema notification_schema integration_schema branch_schema investor_schema c2c_schema search_schema ai_schema file_schema"
 PROD_HOSTS_RE='(^|[@/])(5\.189\.141\.169)([:/]|$)'
 
 DUMP=""

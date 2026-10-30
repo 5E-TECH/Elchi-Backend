@@ -52,6 +52,12 @@ export class FileServiceController {
     return this.executeAndAck(context, () => this.fileService.exists(data));
   }
 
+  /** (dgvwZasd B) Egalik reestri qatori yoki `data: null` (eski fayl). */
+  @MessagePattern({ cmd: 'file.find_owner' })
+  findOwner(@Payload() data: { key?: string }, @Ctx() context: RmqContext) {
+    return this.executeAndAck(context, () => this.fileService.findOwner(data));
+  }
+
   @MessagePattern({ cmd: 'file.read' })
   read(@Payload() data: ReadFileDto, @Ctx() context: RmqContext) {
     return this.executeAndAck(context, () => this.fileService.read(data));

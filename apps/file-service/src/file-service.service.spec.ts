@@ -33,7 +33,11 @@ describe('FileServiceService', () => {
       }),
     } as any;
 
-    service = new FileServiceService(config);
+    service = new FileServiceService(config, {
+      record: jest.fn().mockResolvedValue(undefined),
+      find: jest.fn().mockResolvedValue(null),
+      forget: jest.fn().mockResolvedValue(undefined),
+    } as any);
   });
 
   it('upload throws when file_name is missing', async () => {
@@ -71,7 +75,7 @@ describe('FileServiceService', () => {
       file_name: 'a.png',
       mime_type: 'image/png',
       file_base64: b64,
-    } as any);
+    });
 
     expect(res.statusCode).toBe(201);
     expect(res.data.key).toBe('k1');
@@ -98,7 +102,7 @@ describe('FileServiceService', () => {
         file_name: 'a.webp',
         mime_type: 'image/webp',
         file_base64: WEBP.toString('base64'),
-      } as any);
+      });
       expect(res.statusCode).toBe(201);
     });
 
@@ -150,7 +154,7 @@ describe('FileServiceService', () => {
       .mockResolvedValue(undefined);
     jest.spyOn((service as any).s3, 'send').mockResolvedValue({});
 
-    const res = await service.remove({ key: 'uploads-a.png' } as any);
+    const res = await service.remove({ key: 'uploads-a.png' });
 
     expect(res.statusCode).toBe(200);
     expect(res.data.key).toBe('uploads-a.png');
@@ -199,7 +203,7 @@ describe('FileServiceService', () => {
     const res = await service.generatePdf({
       content: 'hello',
       title: 'T',
-    } as any);
+    });
 
     expect(res.statusCode).toBe(201);
     expect(res.data.key).toBe('pdf-k');

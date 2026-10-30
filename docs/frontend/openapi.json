@@ -18492,7 +18492,10 @@
         ],
         "responses": {
           "200": {
-            "description": ""
+            "description": "Imzolangan URL"
+          },
+          "403": {
+            "description": "Maxfiy faylga ruxsat yo'q (rol yoki egalik): reestrdagi fayl — yuklagan foydalanuvchi, buyurtma ishtirokchisi, shu filial yoki HQ xodimi, admin."
           }
         },
         "security": [
@@ -18586,7 +18589,10 @@
         ],
         "responses": {
           "200": {
-            "description": ""
+            "description": "Fayl baytlari"
+          },
+          "403": {
+            "description": "Maxfiy faylga ruxsat yo'q (rol yoki egalik): reestrdagi fayl — yuklagan foydalanuvchi, buyurtma ishtirokchisi, shu filial yoki HQ xodimi, admin."
           }
         },
         "security": [
