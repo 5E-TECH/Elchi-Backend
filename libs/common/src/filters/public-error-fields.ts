@@ -1,5 +1,5 @@
-import { WAREHOUSE_ERROR_CODES } from '../catalog/warehouse';
 import { PAYMENT_CORRECTION_ERROR_CODES as PC } from '../finance/payment-correction';
+import { WAREHOUSE_ERROR_CODES } from '../catalog/warehouse';
 
 /**
  * (Elchi Pochta #3) Xato javobidagi mashina o'qiydigan qo'shimcha maydonlar.
@@ -43,21 +43,6 @@ export const LOGIN_LOCKED = 'LOGIN_LOCKED';
 export const PASSWORD_CHANGE_REQUIRED = 'PASSWORD_CHANGE_REQUIRED';
 
 export const PUBLIC_ERROR_CODES: Readonly<Record<string, readonly string[]>> = {
-  // Sessiya yaratilganiga SESSION_REVOKE_LOCK_HOURS (sukut 48) to'lmagan:
-  // `available_at` — qachondan boshqa sessiyalarni yopish mumkin (ISO).
-  [SESSION_TOO_NEW]: ['available_at'],
-  // (NDmZMzCP) identity javob bermadi — 503, qayta urinish (chiqish emas).
-  [SESSION_CHECK_UNAVAILABLE]: [],
-  // (NDmZMzCP) login qulfi — 429, qancha soniyadan keyin urinish mumkin.
-  [LOGIN_LOCKED]: ['retry_after_seconds'],
-  // (NDmZMzCP) zaif/vaqtinchalik parol — avval parolni almashtirish, 403.
-  [PASSWORD_CHANGE_REQUIRED]: [],
-  // (XtcEyQjb) to'xtatilgan omborga kirim — 409.
-  [WAREHOUSE_ERROR_CODES.PAUSED]: [],
-  // (XtcEyQjb) market operatoriga «Ombordagi qoldiq» yopiq — 403.
-  [WAREHOUSE_ERROR_CODES.STOCK_FORBIDDEN]: [],
-  // (VkKDSNNn) Markaziy ombor buyurtmasi marketga topshirilmaydi — 409.
-  [WAREHOUSE_ERROR_CODES.ORDER_RETURNS_TO_STOCK]: [],
   // (T6) to'lovni qaytarish / summasini tuzatish — superadmin.
   [PC.NOT_FOUND]: [],
   [PC.NOT_CORRECTABLE]: [],
@@ -75,6 +60,21 @@ export const PUBLIC_ERROR_CODES: Readonly<Record<string, readonly string[]>> = {
   [PC.IDEMPOTENCY_KEY_REUSED]: [],
   [PC.IDEMPOTENCY_KEY_REQUIRED]: [],
   [PC.PAYMENT_CORRECTED]: [],
+  // Sessiya yaratilganiga SESSION_REVOKE_LOCK_HOURS (sukut 48) to'lmagan:
+  // `available_at` — qachondan boshqa sessiyalarni yopish mumkin (ISO).
+  [SESSION_TOO_NEW]: ['available_at'],
+  // (NDmZMzCP) identity javob bermadi — 503, qayta urinish (chiqish emas).
+  [SESSION_CHECK_UNAVAILABLE]: [],
+  // (NDmZMzCP) login qulfi — 429, qancha soniyadan keyin urinish mumkin.
+  [LOGIN_LOCKED]: ['retry_after_seconds'],
+  // (NDmZMzCP) zaif/vaqtinchalik parol — avval parolni almashtirish, 403.
+  [PASSWORD_CHANGE_REQUIRED]: [],
+  // (XtcEyQjb) to'xtatilgan omborga kirim — 409.
+  [WAREHOUSE_ERROR_CODES.PAUSED]: [],
+  // (XtcEyQjb) market operatoriga «Ombordagi qoldiq» yopiq — 403.
+  [WAREHOUSE_ERROR_CODES.STOCK_FORBIDDEN]: [],
+  // (VkKDSNNn) Markaziy ombor buyurtmasi marketga topshirilmaydi — 409.
+  [WAREHOUSE_ERROR_CODES.ORDER_RETURNS_TO_STOCK]: [],
 };
 
 export type PublicErrorValue = string | number | boolean | null;

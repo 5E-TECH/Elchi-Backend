@@ -21,8 +21,6 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 ## Yozuvlar
 
-<!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
-
 ### 2026-10-30 — T6: kuryerdan olingan / marketga berilgan pulni qaytarish yoki summasini tuzatish (superadmin)
 
 Deploy: **finance-service + order-service + api-gateway** (+ libs/common: notification-service bir xil katalog
@@ -81,6 +79,8 @@ qayta yaratildi. Maket: frontend `design/T6-pul-qaytarish`.
   Market buyurtmalari: oxirgi PAID / PARTLY_PAID buyurtmadan to'langan qism kamayadi (→ PARTLY_PAID / SOLD; CLOSED
   tegilmaydi), fonda. `branch_to_main` tuzatilmaydi (alohida karta); hamkor marketiga xabar yuborilmaydi.
 
+
+<!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
 ### 2026-10-26 — Ombor jurnali: qisman sotuv bolasining qaytishi bola buyurtma raqami bilan (hfkhYrGk №1)
 
