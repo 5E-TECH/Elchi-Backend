@@ -1977,7 +1977,7 @@ export class OrderServiceService {
     // (3ZfiXuaW #3 / 5i3UZjiF #4) `requester` berilsa doira SERVER tomonda:
     // doiradan tashqari buyurtma "topilmadi" (mavjudligi ham oshkor emas).
     if (!order || (requester && !orderVisibleTo(order, requester))) {
-      this.notFound(`Order #${id} topilmadi`);
+      this.notFound(`Buyurtma #${id} topilmadi`);
     }
     return order;
   }

@@ -719,7 +719,7 @@ export class OrderLifecycleService {
       this.handleDbError(error);
     }
     if (!order) {
-      this.notFound(`Order #${id} topilmadi`);
+      this.notFound(`Buyurtma #${id} topilmadi`);
     }
     return order;
   }
