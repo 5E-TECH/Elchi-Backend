@@ -1,5 +1,9 @@
 import { RmqRecord, Serializer } from '@nestjs/microservices';
 import {
+  RMQ_REQUESTER_SIG_HEADER,
+  buildRmqRequesterSigHeaders,
+} from '../rmq/rmq-requester-signature';
+import {
   AuditActor,
   AuditContext,
   RequestContextStore,
@@ -88,6 +92,13 @@ export function readRmqHeaders(rpcContext: unknown): Record<string, unknown> {
   }
 }
 
+/** (gShYHHGj) `x-requester-sig` sarlavhasi (bo'sh bo'lsa `undefined`). */
+export function requesterSigFromRmqHeaders(
+  headers: Record<string, unknown>,
+): string | undefined {
+  return headerString(headers[RMQ_REQUESTER_SIG_HEADER]);
+}
+
 /** `x-trace-id` sarlavhasi (bo'sh/juda uzun bo'lsa `undefined`). */
 export function traceIdFromRmqHeaders(
   headers: Record<string, unknown>,
@@ -137,6 +148,10 @@ export function auditActorFromRmqHeaders(
  * `ClientProxy.send/emit` serializer'ni chaqiruvchining async kontekstida
  * ishga tushiradi (`defer` → `then` zanjiri), shuning uchun ALS shu yerda
  * ko'rinadi.
+ *
+ * (gShYHHGj) Requester imzosi ham shu yerda qo'yiladi: barcha klientlar
+ * (gateway, servis→servis, outbox relay) uchun yagona chiqish nuqtasi. ALS'ga
+ * bog'liq emas — HTTP'siz xabar ham imzolanadi.
  */
 export class RequestContextRmqSerializer implements Serializer {
   serialize(packet: unknown): unknown {
@@ -149,7 +164,10 @@ export class RequestContextRmqSerializer implements Serializer {
       options = record.options as Record<string, unknown> | undefined;
     }
 
-    const contextHeaders = buildRmqContextHeaders();
+    const contextHeaders = {
+      ...buildRmqContextHeaders(),
+      ...buildRmqRequesterSigHeaders(out.pattern, out.data),
+    };
     if (Object.keys(contextHeaders).length === 0) {
       return options ? { ...out, options } : out;
     }

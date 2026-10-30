@@ -22,6 +22,15 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+### 2026-10-30 — 🟢 RMQ requester imzosi (gShYHHGj, P2·B)
+
+Deploy: **barcha servislar** (`libs/common`). Migratsiya **yo'q**, `openapi.json` o'zgarmagan, frontend ishi **yo'q**.
+Yangi env: `RMQ_REQUESTER_SIG_MODE` (`off` sukut, test serverda `log`), `RMQ_REQUESTER_SIG_SECRET`.
+
+Ichki RMQ xabarlaridagi `requester` HMAC bilan imzolanadi. HTTP kontrakti o'zgarmaydi. Faqat `enforce` yoqilgandan keyin
+imzosi yaroqsiz ichki xabar `403 So'rov imzosi yaroqsiz` qaytaradi — oddiy foydalanuvchi oqimida bu chiqmasligi kerak.
+Runbook: [`docs/ops/rmq-service-users.md`](../ops/rmq-service-users.md).
+
 ### 2026-10-30 — Inglizcha xatolar o'zbekchaga: 4xx/5xx matnlari va class-validator (ZDweRm02)
 
 Deploy: **api-gateway, identity, order, logistics, finance, branch, investor, notification, file, catalog, c2c** (faqat

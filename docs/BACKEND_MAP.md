@@ -1379,6 +1379,21 @@ secret (secret never reaches the gateway).
 ## 6. Cross-cutting conventions (apply everywhere)
 
 - **Response envelope:** `{ statusCode, message, data }` via `successRes`.
+- **Requester signature (gShYHHGj, P2·B):** a message whose payload carries a
+  requester claim (`requester`, `requester_id`, `requester_roles`, `actor`,
+  `user`) gets an `x-requester-sig` AMQP header, `v1.<kind>.<iat>.<hmac>` over
+  kind + cmd + iat + sha256(data), 120 s TTL. Signed once in
+  `RequestContextRmqSerializer` (every RMQ client; `kind` = `gateway` in
+  api-gateway via `setRmqSignerKind`, `internal` for service→service and the
+  outbox relay, signed at publish time), checked once in `RmqTraceInterceptor`
+  (global in every service) before pipes/handlers. Claim-less messages are
+  `system` and need no signature. `RMQ_REQUESTER_SIG_MODE`: `off` (default, no
+  header, no check), `log` (warn only, staging forces it),
+  `enforce` (403 + DLQ, boot fails without `RMQ_REQUESTER_SIG_SECRET`).
+  Handlers and payloads are unchanged. Not checked: the gateway's own realtime
+  consumer (no interceptor, no requester). HMAC is symmetric, so this does not
+  stop a container that has read the secret; rollout, limits and the per-service
+  RabbitMQ permissions: `docs/ops/rmq-service-users.md`.
 - **RMQ handler pattern:** controllers wrap logic in `executeAndAck`. Errors →
   nack `requeue=false` (message dropped) — be careful adding new patterns.
 - **Auth/RBAC:** JWT (`ACCESS_TOKEN_KEY`); gateway guards `JwtAuthGuard` +

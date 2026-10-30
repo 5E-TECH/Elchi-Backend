@@ -9,6 +9,7 @@ export * from './rmq/rmq.service';
 export * from './rmq/rmq.module';
 export * from './rmq/rmq-client.helper';
 export * from './rmq/execute-and-ack.helper';
+export * from './rmq/rmq-requester-signature';
 
 export * from './idempotency/idempotency-key.entity';
 export * from './idempotency/idempotency.service';
