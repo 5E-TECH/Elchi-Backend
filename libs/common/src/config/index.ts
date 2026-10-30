@@ -120,6 +120,22 @@ const observabilityKeys = {
     .pattern(/^[A-Za-z0-9_.~+/=-]{32,512}$/)
     .empty('')
     .optional(),
+  /**
+   * (AFiXurLH) Postgres paroli production'da kamida 24 belgi (`openssl rand -hex
+   * 24` = 48). Faqat uzunlik: deploy.yml env preflight'i aynan shuni tekshiradi,
+   * shuning uchun preflight'dan o'tgan qiymat bu yerda servislarni yiqitmaydi
+   * (env fayl git'da emas, rollback bunday yiqilishni tuzata olmaydi). Chegarani
+   * o'zgartirsangiz deploy.yml'dagi preflight ham o'zgaradi. Dev/test
+   * (NODE_ENV != production) da cheklov yo'q.
+   */
+  POSTGRES_PASSWORD: Joi.when('NODE_ENV', {
+    is: 'production',
+    then: Joi.string().min(24).optional().messages({
+      'string.min':
+        'POSTGRES_PASSWORD must be at least 24 characters in production (openssl rand -hex 24) — docs/ops/secret-rotation.md',
+    }),
+    otherwise: Joi.string().allow('').optional(),
+  }),
 };
 
 /**

@@ -499,7 +499,7 @@ describe('ops wiring — compose / deploy.yml / rotation (ZfI9nERJ, AFiXurLH)', 
     expect(rollback).toContain('cp -f "$ENV_BACKUP" .env.production');
   });
 
-  it('rotation script: dry-run by default, secrets never in argv, POSTGRES min-24 validator NOT applied yet', () => {
+  it('rotation script: dry-run by default, secrets never in argv', () => {
     const rot = read('scripts/rotate-datastore-secrets.sh');
     expect(rot).toMatch(/EXECUTE=false/);
     expect(rot).not.toMatch(/rabbitmqctl[^\n]*add_user "\$u" "\$p"/);
@@ -510,15 +510,6 @@ describe('ops wiring — compose / deploy.yml / rotation (ZfI9nERJ, AFiXurLH)', 
       join(ROOT, 'scripts', 'rotate-datastore-secrets.sh'),
     ]);
     expect(syntax.status).toBe(0);
-    // ships WITH the rotation (prod password is 17 chars today) — see docs/ops/secret-rotation.md §5
-    expect(read('libs/common/src/config/index.ts')).not.toMatch(
-      /POSTGRES_PASSWORD: Joi\.when/,
-    );
-    expect(
-      existsSync(
-        join(ROOT, 'docs', 'ops', 'rotation', 'postgres-password-min24.patch'),
-      ),
-    ).toBe(true);
   });
 
   it('all new shell scripts parse', () => {

@@ -42,7 +42,7 @@ Qo'shimcha topilmalar:
 | 5 | `minio-app --execute` | faqat file-service (~20 s yuklash/yuklab olish yo'q) |
 | 6 | `minio-root --execute` | MinIO qayta ishga tushadi (~5–10 s) |
 | 7 | `verify` → hammasi `OK` | — |
-| 8 | Validator patch'ni relizga qo'shish (§5) | keyingi deploy |
+| 8 | Validator va preflight allaqachon kodda (§5) | — |
 | 9 | `cleanup --execute` (eski qiymatlar `shred`) — faqat 1–2 kun barqaror ishlagandan keyin | — |
 
 Har qadamdan keyin: `https://api.elchipochta.uz/health/readiness` 200,
@@ -130,18 +130,24 @@ qilmang.
 
 Rollback: `rollback minio-app --execute` / `rollback minio-root --execute`.
 
-## 5. `POSTGRES_PASSWORD` Joi validatori (min 24) — rotatsiya BILAN chiqadi
+## 5. `POSTGRES_PASSWORD` Joi validatori (min 24) va deploy preflight'i
 
-Hozirgi prod paroli 17 belgi: validator undan oldin chiqsa, barcha servislar
-boot'da yiqiladi. Shuning uchun u branch'ga kiritilmagan — tayyor patch:
-`docs/ops/rotation/postgres-password-min24.patch` (`libs/common/src/config/index.ts`
-`observabilityKeys` ga: production'da `POSTGRES_PASSWORD` ≥ 24 + zaif-qiymat
-tekshiruvi, dev/test'da cheklov yo'q; + spec). Rotatsiya `verify` dan o'tgach:
+Rotatsiyadan keyin (2026-10-27: prod paroli 48 belgi) validator kodga kirdi:
+`libs/common/src/config/index.ts` `observabilityKeys` — production'da
+`POSTGRES_PASSWORD` ≥ 24, dev/test'da cheklov yo'q. Validator o'tkazmaydigan qiymat
+hamma servisni boot'da yiqitadi va rollback buni tuzatmaydi (env fayl git'da emas),
+shuning uchun `deploy.yml` skriptining boshida **env preflight** turadi (prod va
+staging): serverga tegilmasdan `POSTGRES_PASSWORD` ≥ 24 va `SUPERADMIN_PASSWORD` ≥ 12
+tekshiriladi. Deploy logida:
 
-```bash
-git apply docs/ops/rotation/postgres-password-min24.patch
-npx jest libs/common/src/config/postgres-password.spec.ts
 ```
+!!! .env.production: missing or too short: POSTGRES_PASSWORD (min 24) — deploy refused, nothing was touched.
+```
+
+Hech narsa o'zgarmagan: serverda qiymatni tuzating (Postgres uchun avval `ALTER ROLE`
+— §2) va deploy'ni qayta ishga tushiring. Logga qiymat ham, uzunlik ham chiqmaydi.
+Preflight faqat uzunlikni ko'radi: `SUPERADMIN_PASSWORD` ning zaif-qiymat tekshiruvi
+(`rejectWeakPassword`) Joi'da qoladi, uni deploy oxiridagi readiness darvozasi ushlaydi.
 
 ## 6. `TELEGRAM_BOT_TOKEN` — Dilshod (BotFather, uning Telegrami)
 

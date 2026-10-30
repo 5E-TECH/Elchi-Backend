@@ -1431,6 +1431,11 @@ secret (secret never reaches the gateway).
   (`docs/ops/secret-rotation.md` §3). minio — `pull_policy: never`
   (`minio/minio` Docker Hub'da 404, digest'ga o'tish uchun serverdagi image
   tekshirilishi kerak), postgres — `pull_policy: missing`.
+- **Deploy darvozalari (AFiXurLH):** `deploy.yml` skriptining boshida env preflight
+  (`POSTGRES_PASSWORD` ≥ 24, `SUPERADMIN_PASSWORD` ≥ 12, serverga tegilmasdan; chegaralar
+  Joi bilan bir xil, biri o'zgarsa ikkinchisi ham), gateway almashgandan keyin readiness
+  darvozasi: `/health/readiness` ~3 daqiqada ketma-ket 2 marta 200 bermasa rollback.
+  Readiness'ga notification'ning `degraded` holati ham kiradi (bot tokeni bor, `getMe` o'tmagan).
 - **Schemas:** `scripts/init-schemas.sql` auto-creates every `*_schema` on
   Postgres start. Per-service `DB_SCHEMA` env (defaults in `libs/common/src/config`).
 - **Migrations:** TypeORM (`typeorm.config.ts`, `migrations/`,

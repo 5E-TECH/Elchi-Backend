@@ -22,6 +22,15 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+### 2026-10-31 — Ops: deploy env preflight va readiness darvozasi, POSTGRES_PASSWORD validatori (AFiXurLH)
+
+Deploy: `deploy.yml` va `libs/common` o'zgargani uchun keyingi deploy BARCHA servislarni qayta build qiladi. Migratsiya
+**yo'q**, yangi env **yo'q**, API kontrakti o'zgarmagan.
+
+- [2026-10-31] 🟢 [infra] — `POSTGRES_PASSWORD` production'da ≥ 24 belgi (Joi). `SUPERADMIN_PASSWORD` ≥ 12 bilan birga deploy
+  boshida, serverga tegilmasdan tekshiriladi. Deploy endi `/health/readiness` hamma servis uchun ok bo'lgandagina yashil,
+  aks holda rollback. → FE'da ish yo'q.
+
 ### 2026-10-30 — Inglizcha xatolar o'zbekchaga: 4xx/5xx matnlari va class-validator (ZDweRm02)
 
 Deploy: **api-gateway, identity, order, logistics, finance, branch, investor, notification, file, catalog, c2c** (faqat

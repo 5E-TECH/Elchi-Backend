@@ -159,6 +159,45 @@ jobs:
           script: |
             set -ex
             cd ${{ secrets.SERVER_APP_PATH }}
+            # --- Env preflight (AFiXurLH) ---------------------------------------
+            # BEFORE anything on the server is touched. It lives here and not in
+            # scripts/ because the checkout on disk is still the OLD commit. A value
+            # Joi refuses crash-loops the service, and a rollback cannot fix it: the
+            # env file is not in git (2026-10-30: a 10-char SUPERADMIN_PASSWORD on
+            # the test server killed identity-service while the deploy stayed green).
+            # Same limits as libs/common/src/config/index.ts. awk does the measuring,
+            # values never reach a shell variable, so `set -x` cannot log them; only
+            # KEY names are printed. Quotes, an inline comment, CRLF and a repeated
+            # key are read the way compose's env_file parser reads them.
+            test -f .env.production || { echo "!!! .env.production not found in $(pwd) — deploy refused, nothing was touched." >&2; exit 1; }
+            ENV_PREFLIGHT_BAD="$(awk '
+              BEGIN { n = split("POSTGRES_PASSWORD SUPERADMIN_PASSWORD", key, " "); min["POSTGRES_PASSWORD"] = 24; min["SUPERADMIN_PASSWORD"] = 12 }
+              {
+                line = $0
+                sub(/\r$/, "", line)
+                sub(/^[ \t]*(export[ \t]+)?/, "", line)
+                eq = index(line, "=")
+                k = substr(line, 1, eq - 1)
+                if (eq < 2 || !(k in min)) next
+                v = substr(line, eq + 1)
+                q = substr(v, 1, 1)
+                if (q == "\"" || q == "\047") {
+                  v = substr(v, 2)
+                  e = index(v, q)
+                  if (e > 0) v = substr(v, 1, e - 1)
+                } else {
+                  sub(/[ \t]+#.*$/, "", v)
+                  sub(/[ \t]+$/, "", v)
+                }
+                len[k] = length(v)
+              }
+              END { for (i = 1; i <= n; i++) if (len[key[i]] + 0 < min[key[i]]) printf "%s (min %d) ", key[i], min[key[i]] }
+            ' .env.production)"
+            if [ -n "$ENV_PREFLIGHT_BAD" ]; then
+              echo "!!! .env.production: missing or too short: $ENV_PREFLIGHT_BAD— deploy refused, nothing was touched. Fix the value on the server, then re-run. docs/ops/secret-rotation.md §5" >&2
+              exit 1
+            fi
+            # --- end env preflight ----------------------------------------------
             git config --global --add safe.directory ${{ secrets.SERVER_APP_PATH }} || true
             # AFiXurLH: the safety copy of .env.production is PRIVATE (umask 077 +
             # mktemp = 0600, unpredictable name) and deleted when this script exits
@@ -391,6 +430,37 @@ jobs:
               gateway_swap
             fi
 
+            # --- Readiness gate (AFiXurLH) --------------------------------------
+            # A healthy gateway says nothing about the services behind it: on
+            # 2026-10-30 identity-service was crash-looping and the deploy went
+            # green. Now every service must answer /health/readiness (RPC round trip
+            # through the broker), twice in a row, within ~3 minutes; otherwise the
+            # CALL below fails and fires `trap rollback ERR` as usual. `docker exec`,
+            # not `compose exec`: after gateway_swap the container is usually #2 and
+            # older Compose only looks for #1. The gateway has no host port.
+            READINESS_PROBE="setTimeout(()=>{console.log('timeout');process.exit(1)},10000).unref();require('http').get('http://127.0.0.1:3004/health/readiness',r=>{let b='';r.on('data',d=>b+=d);r.on('end',()=>{if(r.statusCode===200)process.exit(0);let s=b.slice(0,200);try{s=JSON.parse(b).services.filter(x=>x.status!=='ok').map(x=>x.service+':'+(x.error_kind||x.status)).join(' ')}catch(e){}console.log(r.statusCode+' '+s);process.exit(1)})}).on('error',e=>{console.log(e.code||'error');process.exit(1)})"
+            readiness_gate() {
+              local DC="docker compose -f docker-compose.prod.yml" gw out="" i passed=0
+              for i in $(seq 1 36); do
+                gw="$($DC ps -q api-gateway 2>/dev/null | head -n 1 || true)"
+                if [ -n "$gw" ] && out="$(docker exec "$gw" node -e "$READINESS_PROBE" 2>&1)"; then
+                  passed=$((passed + 1))
+                  if [ "$passed" -ge 2 ]; then
+                    echo "Readiness OK: every service answered"
+                    return 0
+                  fi
+                else
+                  passed=0
+                fi
+                sleep 5
+              done
+              echo "!!! Readiness failed after ~3 minutes: ${out:-no api-gateway container}" >&2
+              $DC ps >&2 || true
+              return 1
+            }
+            readiness_gate
+            # --- end readiness gate ---------------------------------------------
+
             # --- Cloudflare Tunnel connectors (ZfI9nERJ) ----------------------------
             # Two replicas of one tunnel. A routine deploy never recreates them
             # (--no-recreate: only creates a missing one). Only when the pinned
@@ -562,6 +632,45 @@ jobs:
               STG_FIRST_INSTALL=true
             fi
             # --- end STAGING --------------------------------------------------------------
+            # --- Env preflight (AFiXurLH) ---------------------------------------
+            # BEFORE anything on the server is touched. It lives here and not in
+            # scripts/ because the checkout on disk is still the OLD commit. A value
+            # Joi refuses crash-loops the service, and a rollback cannot fix it: the
+            # env file is not in git (2026-10-30: a 10-char SUPERADMIN_PASSWORD on
+            # the test server killed identity-service while the deploy stayed green).
+            # Same limits as libs/common/src/config/index.ts. awk does the measuring,
+            # values never reach a shell variable, so `set -x` cannot log them; only
+            # KEY names are printed. Quotes, an inline comment, CRLF and a repeated
+            # key are read the way compose's env_file parser reads them.
+            test -f .env.staging || { echo "!!! .env.staging not found in $(pwd) — deploy refused, nothing was touched." >&2; exit 1; }
+            ENV_PREFLIGHT_BAD="$(awk '
+              BEGIN { n = split("POSTGRES_PASSWORD SUPERADMIN_PASSWORD", key, " "); min["POSTGRES_PASSWORD"] = 24; min["SUPERADMIN_PASSWORD"] = 12 }
+              {
+                line = $0
+                sub(/\r$/, "", line)
+                sub(/^[ \t]*(export[ \t]+)?/, "", line)
+                eq = index(line, "=")
+                k = substr(line, 1, eq - 1)
+                if (eq < 2 || !(k in min)) next
+                v = substr(line, eq + 1)
+                q = substr(v, 1, 1)
+                if (q == "\"" || q == "\047") {
+                  v = substr(v, 2)
+                  e = index(v, q)
+                  if (e > 0) v = substr(v, 1, e - 1)
+                } else {
+                  sub(/[ \t]+#.*$/, "", v)
+                  sub(/[ \t]+$/, "", v)
+                }
+                len[k] = length(v)
+              }
+              END { for (i = 1; i <= n; i++) if (len[key[i]] + 0 < min[key[i]]) printf "%s (min %d) ", key[i], min[key[i]] }
+            ' .env.staging)"
+            if [ -n "$ENV_PREFLIGHT_BAD" ]; then
+              echo "!!! .env.staging: missing or too short: $ENV_PREFLIGHT_BAD— deploy refused, nothing was touched. Fix the value on the server, then re-run. docs/ops/secret-rotation.md §5" >&2
+              exit 1
+            fi
+            # --- end env preflight ----------------------------------------------
             git config --global --add safe.directory ${{ secrets.SERVER_APP_PATH }} || true
             # AFiXurLH: the safety copy of .env.staging is PRIVATE (umask 077 +
             # mktemp = 0600, unpredictable name) and deleted when this script exits
@@ -793,6 +902,37 @@ jobs:
             if [ "$GATEWAY_SWAP" = true ]; then
               gateway_swap
             fi
+
+            # --- Readiness gate (AFiXurLH) --------------------------------------
+            # A healthy gateway says nothing about the services behind it: on
+            # 2026-10-30 identity-service was crash-looping and the deploy went
+            # green. Now every service must answer /health/readiness (RPC round trip
+            # through the broker), twice in a row, within ~3 minutes; otherwise the
+            # CALL below fails and fires `trap rollback ERR` as usual. `docker exec`,
+            # not `compose exec`: after gateway_swap the container is usually #2 and
+            # older Compose only looks for #1. The gateway has no host port.
+            READINESS_PROBE="setTimeout(()=>{console.log('timeout');process.exit(1)},10000).unref();require('http').get('http://127.0.0.1:3004/health/readiness',r=>{let b='';r.on('data',d=>b+=d);r.on('end',()=>{if(r.statusCode===200)process.exit(0);let s=b.slice(0,200);try{s=JSON.parse(b).services.filter(x=>x.status!=='ok').map(x=>x.service+':'+(x.error_kind||x.status)).join(' ')}catch(e){}console.log(r.statusCode+' '+s);process.exit(1)})}).on('error',e=>{console.log(e.code||'error');process.exit(1)})"
+            readiness_gate() {
+              local DC="docker compose -f docker-compose.prod.yml -f docker-compose.staging.yml" gw out="" i passed=0
+              for i in $(seq 1 36); do
+                gw="$($DC ps -q api-gateway 2>/dev/null | head -n 1 || true)"
+                if [ -n "$gw" ] && out="$(docker exec "$gw" node -e "$READINESS_PROBE" 2>&1)"; then
+                  passed=$((passed + 1))
+                  if [ "$passed" -ge 2 ]; then
+                    echo "Readiness OK: every service answered"
+                    return 0
+                  fi
+                else
+                  passed=0
+                fi
+                sleep 5
+              done
+              echo "!!! Readiness failed after ~3 minutes: ${out:-no api-gateway container}" >&2
+              $DC ps >&2 || true
+              return 1
+            }
+            readiness_gate
+            # --- end readiness gate ---------------------------------------------
 
             # --- Cloudflare Tunnel connectors (ZfI9nERJ) ----------------------------
             # Two replicas of one tunnel. A routine deploy never recreates them
