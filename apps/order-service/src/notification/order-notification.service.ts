@@ -66,11 +66,6 @@ import { CANCEL_REASON_UZ } from '../domain/cancel-reason';
  */
 
 export const NOTIFICATION_OUTBOX_TARGET = 'NOTIFICATION';
-/**
- * (BOT-3a) Telegram karta hodisalari (`notification.telegram.order_status`)
- * maqsadi — notification-service'ning ALOHIDA bot navbati.
- */
-export const NOTIFICATION_BOT_OUTBOX_TARGET = 'NOTIFICATION_BOT';
 export const NOTIFICATION_DISPATCH_PATTERN = 'notification.dispatch';
 
 /**

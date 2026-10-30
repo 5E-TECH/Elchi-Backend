@@ -29,15 +29,16 @@ Chiquvchi: BotOutboxService (telegram_outbox) → BotTransportService (yagona ap
 
 Tozalash: `BotMaintenanceService` (har soat, `:17`).
 
-**Navbatlar (BOT-3a).** Bot update'lari (gateway webhook) va karta hodisalari
-(`notification.telegram.order_status`, order-service outbox) —
+**Navbatlar (BOT-3a).** Bot update'lari (gateway webhook) —
 `RABBITMQ_NOTIFICATION_BOT_QUEUE` (sukut `notification_bot_queue`, o'z DLQ'si
-`…_dlq`). Umumiy `notification_queue` (dispatch, push) to'lqini bot javobini
-kechiktirmaydi. ⚠️ **Deploy tartibi:** avval **notification-service** (navbatni
-yaratadi va tinglaydi), keyin api-gateway va order-service — aks holda navbat
-hali yo'q paytda yuborilgan update'lar yo'qoladi (mijozlar navbatni e'lon
-qilmaydi, `noAssert`). Eski `notification_queue` dagi karta hodisalari ham
-ishlanadi (handler'lar ikkala navbatda bir xil).
+`…_dlq`): umumiy `notification_queue` (dispatch, push) to'lqini bot javobini
+kechiktirmaydi. Karta hodisalari (`notification.telegram.order_status`) ATAYLAB
+umumiy navbatda qoladi — ommaviy holat o'zgarishi interaktiv bot navbatini
+tiqmasin. Navbatni iste'molchi (notification-service) ham, publisher
+(api-gateway bootstrap'ida `RmqService.ensureQueue`, ayni argumentlar bilan) ham
+e'lon qiladi — deploy tartibidan qat'i nazar update yo'qolmaydi. Readiness
+(`GET /health/readiness`) `NOTIFICATION_BOT` ni alohida tekshiradi;
+`scripts/rmq-cleanup-queues.sh` ham bu navbatni biladi.
 
 ## 2. Rejimlar (`TELEGRAM_BOT_MODE`, sukut `auto`)
 

@@ -13,18 +13,16 @@ import {
  * (7s1bqOT6) «Tizim holati» — backend e2e.
  *
  * TC: `GET /health` va `GET /health/readiness` turli javob beradi, readiness
- * `services` ichida barcha 14 servis nomi bor. Ilova — HAQIQIY
+ * `services` ichida barcha 14 servis nomi (+ notification bot navbati) bor. Ilova — HAQIQIY
  * ApiGatewayModule (kontrollerlar modul tartibida); faqat RMQ mijozlari mock.
  * Ilgari `LogisticsGatewayController` `@Get('health')` (prefikssiz) bilan
  * `GET /health` ni egallab olgan edi — javob `logistics-service` ni nomlardi.
  */
 
-// (BOT-3a) `NOTIFICATION_BOT` — notification-service'ning ikkinchi navbati,
-// alohida servis emas: readiness ro'yxatida yo'q.
-type ServiceToken = Exclude<GatewayClientToken, 'NOTIFICATION_BOT'>;
-const SERVICES: ServiceToken[] = GATEWAY_CLIENT_TOKENS.filter(
-  (token): token is ServiceToken => token !== 'NOTIFICATION_BOT',
-);
+// (BOT-3a) `NOTIFICATION_BOT` — notification-service'ning bot navbati ham
+// alohida tekshiriladi (iste'molchi ulanmagan bo'lsa — down).
+type ServiceToken = GatewayClientToken;
+const SERVICES: ServiceToken[] = [...GATEWAY_CLIENT_TOKENS];
 
 const PROBE_CMD: Record<ServiceToken, string> = {
   IDENTITY: 'identity.health',
@@ -33,6 +31,7 @@ const PROBE_CMD: Record<ServiceToken, string> = {
   LOGISTICS: 'logistics.health',
   FINANCE: 'finance.health',
   NOTIFICATION: 'notification.health',
+  NOTIFICATION_BOT: 'notification.health',
   INTEGRATION: 'integration.health',
   ANALYTICS: 'analytics.health',
   BRANCH: 'branch.health',
@@ -111,12 +110,12 @@ describe('7s1bqOT6 — GET /health va GET /health/readiness (e2e)', () => {
     }
   });
 
-  it('GET /health/readiness — 200 ok, `services` da 14 servisning hammasi', async () => {
+  it('GET /health/readiness — 200 ok, `services` da 14 servis + bot navbati', async () => {
     const res = await request(http()).get('/health/readiness').expect(200);
     const body = res.body as ReadinessBody;
 
     expect(body.status).toBe('ok');
-    expect(body.services).toHaveLength(14);
+    expect(body.services).toHaveLength(SERVICES.length);
     expect(body.services.map((s) => s.service).sort()).toEqual(
       [...SERVICES].sort(),
     );
@@ -145,13 +144,13 @@ describe('7s1bqOT6 — GET /health va GET /health/readiness (e2e)', () => {
     expect(Array.isArray(ready.services)).toBe(true);
   });
 
-  it("bitta servis ishlamasa — 503 degraded, ro'yxatda baribir 14 servis", async () => {
+  it("bitta servis ishlamasa — 503 degraded, ro'yxatda baribir hammasi", async () => {
     down.add('ORDER');
     const res = await request(http()).get('/health/readiness').expect(503);
     const body = res.body as ReadinessBody;
 
     expect(body.status).toBe('degraded');
-    expect(body.services).toHaveLength(14);
+    expect(body.services).toHaveLength(SERVICES.length);
     const order = body.services.find((s) => s.service === 'ORDER');
     // (oFfOWGuo) @Public javobda xom xato matni yo'q — faqat holat matni.
     expect(order).toMatchObject({
@@ -162,7 +161,7 @@ describe('7s1bqOT6 — GET /health va GET /health/readiness (e2e)', () => {
     expect(order?.error).not.toContain('ORDER');
     expect(
       body.services.filter((s) => s.service !== 'ORDER').map((s) => s.status),
-    ).toEqual(Array(13).fill('ok'));
+    ).toEqual(Array(SERVICES.length - 1).fill('ok'));
   });
 
   it('logistics-service health — endi `GET /logistics/health` da', async () => {

@@ -26,6 +26,7 @@ QUEUES=(
   logistics_queue
   finance_queue
   notification_queue
+  notification_bot_queue
   integration_queue
   analytics_queue
   branch_queue

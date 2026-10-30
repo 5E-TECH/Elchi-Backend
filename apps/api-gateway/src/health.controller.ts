@@ -41,10 +41,7 @@ export const READINESS_ERROR_TEXT: Readonly<
 };
 
 export type ServiceHealthErrorKind =
-  | 'timeout'
-  | 'down'
-  | 'reported'
-  | 'not_registered';
+  'timeout' | 'down' | 'reported' | 'not_registered';
 
 interface ServiceHealth {
   service: string;
@@ -62,6 +59,9 @@ const SERVICE_HEALTH_PROBES: Array<{ token: string; cmd: string }> = [
   { token: 'LOGISTICS', cmd: 'logistics.health' },
   { token: 'FINANCE', cmd: 'finance.health' },
   { token: 'NOTIFICATION', cmd: 'notification.health' },
+  // (BOT-3a) Telegram bot navbati: handler ikkala navbatda bor — javob faqat
+  // notification-service shu navbatni tinglayotgan bo'lsa keladi.
+  { token: 'NOTIFICATION_BOT', cmd: 'notification.health' },
   { token: 'INTEGRATION', cmd: 'integration.health' },
   { token: 'ANALYTICS', cmd: 'analytics.health' },
   { token: 'BRANCH', cmd: 'branch.health' },
@@ -100,6 +100,9 @@ export class HealthController {
     // Ixtiyoriy (oxirida) — mavjud pozitsion konstruktor chaqiruvlari buzilmaydi.
     @Optional() @Inject('AI') aiClient?: ClientProxy,
     @Optional() private readonly aiStatus?: AiStatusPoller,
+    @Optional()
+    @Inject('NOTIFICATION_BOT')
+    notificationBotClient?: ClientProxy,
   ) {
     this.clients = new Map<string, ClientProxy>([
       ['IDENTITY', identityClient],
@@ -118,6 +121,9 @@ export class HealthController {
     ]);
     if (aiClient) {
       this.clients.set('AI', aiClient);
+    }
+    if (notificationBotClient) {
+      this.clients.set('NOTIFICATION_BOT', notificationBotClient);
     }
   }
 
@@ -161,9 +167,12 @@ export class HealthController {
   })
   async readiness(@Res({ passthrough: true }) res: Response) {
     const probes = await Promise.all(
-      SERVICE_HEALTH_PROBES.map((probe) =>
-        this.probeOne(probe.token, probe.cmd),
-      ),
+      SERVICE_HEALTH_PROBES.filter(
+        // Bot navbati mijozi (ixtiyoriy) ro'yxatdan o'tmagan bo'lsa — alohida
+        // servis emas, `unknown` bilan readiness'ni buzmaydi.
+        (probe) =>
+          probe.token !== 'NOTIFICATION_BOT' || this.clients.has(probe.token),
+      ).map((probe) => this.probeOne(probe.token, probe.cmd)),
     );
 
     const allOk = probes.every((p) => p.status === 'ok');

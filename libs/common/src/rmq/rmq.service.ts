@@ -72,6 +72,37 @@ export class RmqService {
   }
 
   /**
+   * (BOT-3a) Navbatni PUBLISHER tomonida ham e'lon qilish — iste'molchi
+   * (`getOptions`) bilan AYNI argumentlar (`mainQueueArguments`), ya'ni
+   * ekvivalent va idempotent. Mijozlar `noAssert: true` (RmqModule): navbat
+   * hali yo'q paytda (yangi navbat, deploy tartibi, tozalangan broker)
+   * yuborilgan xabarni RabbitMQ JIM tashlab yuboradi — publisher bootstrap'ida
+   * shu chaqiriladi. Xato — faqat log (servis ishga tushaveradi).
+   */
+  async ensureQueue(queueId: string): Promise<void> {
+    await this.setupDlqTopology(queueId);
+    const url = this.configService.get<string>('RABBITMQ_URI')!;
+    const { main } = this.getQueueNames(queueId);
+    const connection = await amqplib.connect(url);
+    try {
+      const channel = await connection.createChannel();
+      channel.on('error', () => undefined);
+      await channel.assertQueue(main, {
+        durable: true,
+        ...this.mainQueueArguments(queueId),
+      });
+      await channel.close().catch(() => undefined);
+      this.logger.log(`Queue ensured for ${queueId}: ${main}`);
+    } catch (error) {
+      this.logger.error(
+        `Navbat e'lon qilinmadi (${main}): ${(error as Error)?.message ?? String(error)}`,
+      );
+    } finally {
+      await connection.close().catch(() => undefined);
+    }
+  }
+
+  /**
    * Mavjud asosiy navbat argumentlari kod kutayotgani bilan mos keladimi.
    *
    * Tekshiruv ALOHIDA kanalda bajariladi: `assertQueue` nomuvofiqlikda

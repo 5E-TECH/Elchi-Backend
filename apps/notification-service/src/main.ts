@@ -45,12 +45,13 @@ async function bootstrap() {
     inheritAppConfig: true,
   });
   /**
-   * (BOT-3a) Telegram bot update'lari (gateway webhook) va karta hodisalari
-   * (order-service outbox) — ALOHIDA navbat va iste'molchi. Umumiy
-   * NOTIFICATION navbatidagi `notification.dispatch` / push to'lqini (bitta
-   * dispatch Telegram'ni 10 s gacha kutadi) bot javobini kechiktirib, 60 s
-   * TTL dan keyin update'ni DLQ'ga tushirardi. Handler'lar bir xil — faqat
-   * navbat (prefetch, TTL, DLQ) ajratilgan.
+   * (BOT-3a) Telegram bot update'lari (gateway webhook) — ALOHIDA navbat va
+   * iste'molchi. Umumiy NOTIFICATION navbatidagi `notification.dispatch` /
+   * push / karta hodisalari to'lqini (bitta dispatch Telegram'ni 10 s gacha
+   * kutadi) bot javobini kechiktirib, 60 s TTL dan keyin update'ni DLQ'ga
+   * tushirardi. Karta hodisalari ATAYLAB umumiy navbatda qoladi: ommaviy
+   * holat o'zgarishi interaktiv bot navbatini tiqmasin. Handler'lar bir xil
+   * — faqat navbat (prefetch, TTL, DLQ) ajratilgan.
    */
   await rmqService.setupDlqTopology('NOTIFICATION_BOT');
   app.connectMicroservice(rmqService.getOptions('NOTIFICATION_BOT'), {

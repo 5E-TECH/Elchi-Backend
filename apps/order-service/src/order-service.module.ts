@@ -76,8 +76,6 @@ import { CustomerSegmentController } from './segment/customer-segment.controller
     // maqsadi sifatida (OrderNotificationService) — to'g'ridan-to'g'ri
     // rmqSend TAQIQ (tranzaksiya rollback bo'lsa ham xabar ketib qolardi).
     RmqModule.register({ name: 'NOTIFICATION' }),
-    // (BOT-3a) Telegram karta hodisalari — alohida bot navbati.
-    RmqModule.register({ name: 'NOTIFICATION_BOT' }),
     DatabaseModule,
     IdempotencyModule.forService(),
     OutboxModule.forService({
@@ -90,7 +88,6 @@ import { CustomerSegmentController } from './segment/customer-segment.controller
         'INTEGRATION',
         'BRANCH',
         'NOTIFICATION',
-        'NOTIFICATION_BOT',
       ],
       // (OA16fdSq) Bildirishnoma javobi KUTILMAYDI: dispatch Telegram'ni ham
       // kutadi (10 s gacha), notification-service yiqilsa esa har hodisa
