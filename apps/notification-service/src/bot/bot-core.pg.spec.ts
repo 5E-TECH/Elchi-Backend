@@ -740,6 +740,21 @@ const migration = new TelegramBotCore1716000000120();
         expect(fetchMock).toHaveBeenCalledTimes(1);
       });
 
+      it('⭐ eski band qilish, lekin outbox`da navbati BOR (pending) — qayta olinmaydi, ikkinchi karta yuborilmaydi', async () => {
+        await db.query(`
+          INSERT INTO notification_schema.telegram_order_cards
+            (order_id, chat_id, message_id, kind, updated_at)
+          VALUES (97, '-100111', NULL, 'group', now() - interval '10 minutes')`);
+        await db.query(`
+          INSERT INTO notification_schema.telegram_outbox
+            (bot_slug, chat_id, payload, status, card_order_id, next_attempt_at)
+          VALUES ('elchi', '-100111', '{"text":"k"}', 'pending', 97, now() + interval '1 hour')`);
+        const { sync, fetchMock } = make();
+        expect((await sync.sync(creation('97'))).sent).toBe(0);
+        expect(fetchMock).not.toHaveBeenCalled();
+        expect(await cardRow('97')).toMatchObject({ message_id: null });
+      });
+
       it('tozalovchi: 1 soatdan eski yetim band qilish o`chadi, outbox navbatidagisi qoladi', async () => {
         await db.query(`
           INSERT INTO notification_schema.telegram_order_cards

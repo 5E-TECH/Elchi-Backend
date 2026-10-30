@@ -249,22 +249,31 @@ export class OrderCardSyncService implements OnModuleInit {
       try {
         if (row.kind === 'group') {
           if (claimedChats.has(row.chat_id)) continue;
-          if (!activeGroups.has(row.chat_id)) continue;
           if (!row.message_id) {
             // Hali yuborilmagan (outbox navbatida): hodisa TASHLANMAYDI —
             // outbox yuborgach karta oxirgi holatga qayta sinxronlanadi.
+            // Ega / faol guruh tekshiruvidan OLDIN: RPC yiqilsa ham belgi
+            // qoladi; qayta sinxron o'sha qo'riqchilarni qayta qo'llaydi.
             await this.markResync(orderId, row.chat_id);
             continue;
           }
+          if (!activeGroups.has(row.chat_id)) continue;
           const current = await card();
           if (!current) continue;
-          await this.transport.editMessage(row.chat_id, row.message_id, {
-            text: groupCardText(current),
-            parse_mode: 'HTML',
-            reply_markup: {
-              inline_keyboard: groupCardKeyboard(this.cabinetUrl, orderId),
+          const edited = await this.transport.editMessage(
+            row.chat_id,
+            row.message_id,
+            {
+              text: groupCardText(current),
+              parse_mode: 'HTML',
+              reply_markup: {
+                inline_keyboard: groupCardKeyboard(this.cabinetUrl, orderId),
+              },
             },
-          });
+          );
+          // Tahrir o'tmadi (editMessage throw qilmaydi) — holat yozilmaydi,
+          // `resync_pending` qoladi (keyingi hodisa / yuborish qayta uradi).
+          if (!edited) continue;
           await this.dataSource.getRepository(TelegramOrderCard).update(
             { order_id: orderId, chat_id: row.chat_id },
             {

@@ -814,6 +814,66 @@ describe('h9newLsd #5 — CourierService.refreshCardForChat', () => {
       );
     });
 
+    it('⭐ oddiy holat hodisasi (market_id YO`Q — ega kartadan RPC orqali) — RPC va tahrir tranzaksiya ICHIDA emas', async () => {
+      const env = makeSync({
+        groups: [group('-1009')],
+        cards: [
+          { order_id: '81', chat_id: '-1009', message_id: '5', kind: 'group' },
+        ],
+      });
+      const result = await env.service.sync({
+        order_id: '81',
+        from_status: 'new',
+        to_status: 'received',
+      });
+      expect(result.edited).toBe(1);
+      expect(rmqSendMock).toHaveBeenCalled();
+      expect(env.networkInTransaction).toEqual([]);
+    });
+
+    it('⭐ tahrir o`tmadi (editMessage false) — holat / resync_pending yozilmaydi, audit `edited` yo`q', async () => {
+      const env = makeSync({
+        groups: [group('-1009')],
+        cards: [
+          {
+            order_id: '81',
+            chat_id: '-1009',
+            message_id: '5',
+            kind: 'group',
+            status: 'new',
+            resync_pending: true,
+          },
+        ],
+      });
+      env.transport.editMessage.mockResolvedValue(false);
+      const result = await env.service.sync({
+        order_id: '81',
+        from_status: 'new',
+        to_status: 'received',
+      });
+      expect(result.edited).toBe(0);
+      expect(env.cards.get('81:-1009')).toEqual(
+        expect.objectContaining({ status: 'new', resync_pending: true }),
+      );
+      expect(env.activityLog.log).not.toHaveBeenCalled();
+    });
+
+    it('⭐ navbatdagi karta + order RPC yiqildi — resync belgisi baribir qo`yiladi', async () => {
+      const env = makeSync({
+        groups: [group('-1001')],
+        cards: [
+          { order_id: '81', chat_id: '-1001', message_id: null, kind: 'group' },
+        ],
+      });
+      rmqSendMock.mockRejectedValue(new Error('order-service down'));
+      await env.service.sync({
+        order_id: '81',
+        from_status: 'new',
+        to_status: 'received',
+      });
+      expect(env.cards.get('81:-1001')?.resync_pending).toBe(true);
+    });
+
     it('⭐ bir buyurtmaning ikki parallel hodisasi — kechroq tugagan ERTA o`qish yangi holatni bosib ketmaydi', async () => {
       const env = makeSync({
         groups: [group('-1009')],
