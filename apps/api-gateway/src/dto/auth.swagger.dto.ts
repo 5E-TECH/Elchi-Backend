@@ -79,7 +79,7 @@ export class MinimalAuthResponseDto {
   @ApiPropertyOptional({
     example: false,
     description:
-      "(NDmZMzCP) `true` — parol yangi siyosatga (min 8, xodim 10, oddiy parollar taqiqlangan) mos emas yoki vaqtinchalik: FE «Yangi parol o'rnating» ekraniga yo'naltiradi (PATCH /auth/my-profile `password`, keyin POST /auth/refresh). `PASSWORD_CHANGE_GATE=on` bo'lsa boshqa route'lar 403 `PASSWORD_CHANGE_REQUIRED`.",
+      "(NDmZMzCP) `true` — parol yangi siyosatga (min 8, xodim 10, oddiy parollar taqiqlangan) mos emas yoki vaqtinchalik: FE «Yangi parol o'rnating» ekraniga yo'naltiradi (PATCH /auth/my-profile `password`, keyin POST /auth/refresh). `PASSWORD_CHANGE_GATE=on` bo'lsa boshqa route'lar 403 `PASSWORD_CHANGE_REQUIRED`; (aidsxJ2H) parolni admin / tizim bergan bo'lsa (`pwd_forced`) — env'ga qaramay 403.",
   })
   must_change_password?: boolean;
 }

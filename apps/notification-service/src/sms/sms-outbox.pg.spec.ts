@@ -3,6 +3,7 @@ import { CreateSmsOutbox1716000000054 } from '../../../../migrations/17160000000
 import { CreateSmsProviderTemplatesConsent1716000000055 } from '../../../../migrations/1716000000055-CreateSmsProviderTemplatesConsent';
 import { EncryptSmsSender1716000000068 } from '../../../../migrations/1716000000068-EncryptSmsSender';
 import { SmsOutboxConsentIdentity1716000000069 } from '../../../../migrations/1716000000069-SmsOutboxConsentIdentity';
+import { SmsTempPasswordTemplate1716000000192 } from '../../../../migrations/1716000000192-SmsTempPasswordTemplate';
 import { SmsOutbox } from '../entities/sms-outbox.entity';
 import { Notification } from '../entities/notification.entity';
 import { SmsConfigService } from './sms-config.service';
@@ -33,6 +34,7 @@ const MIGRATIONS = [
   new CreateSmsProviderTemplatesConsent1716000000055(),
   new EncryptSmsSender1716000000068(),
   new SmsOutboxConsentIdentity1716000000069(),
+  new SmsTempPasswordTemplate1716000000192(),
 ];
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -454,6 +456,39 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
       expect(await service.claimDue(10)).toEqual([]);
       const [row] = await rows();
       expect(row).toMatchObject({ status: 'failed', attempts: 3 });
+    });
+
+    it('aidsxJ2H: vaqtinchalik parol — qabul qilingach / qotib terminal bo‘lganda DB’da ochiq parol QOLMAYDI', async () => {
+      const password = 'Ab3dEf7hJk9m';
+      const secret = {
+        to: '+998901234567',
+        text: `parol: ${password} .`,
+        redactedText: 'parol: •••• .',
+        messageClass: 'security' as const,
+      };
+      await service.enqueue([secret]);
+      const [accepted] = await service.claimDue(10);
+      await service.markAccepted(accepted, 'p-1', { echo: password });
+
+      await service.enqueue([secret]);
+      const [stuck] = await service.claimDue(10);
+      await db.query(
+        `UPDATE notification_schema.sms_outbox
+            SET attempts = max_attempts - 1, updated_at = NOW() - INTERVAL '1 hour'
+          WHERE id = $1`,
+        [stuck.id],
+      );
+      expect(await service.claimDue(10)).toEqual([]);
+
+      const rows: Array<Record<string, unknown>> = await db.query(
+        `SELECT status, text, last_response FROM notification_schema.sms_outbox ORDER BY id`,
+      );
+      expect(rows.map((row) => row.status)).toEqual(['sent', 'failed']);
+      expect(rows.map((row) => row.text)).toEqual([
+        'parol: •••• .',
+        'parol: •••• .',
+      ]);
+      expect(JSON.stringify(rows)).not.toContain(password);
     });
 
     it('TC11 (shutdown): releaseClaimed urinish sarflamaydi', async () => {

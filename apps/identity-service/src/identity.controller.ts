@@ -357,6 +357,28 @@ export class IdentityController {
     );
   }
 
+  /** (aidsxJ2H) POST /users/:id/password/resend-sms. */
+  @MessagePattern({ cmd: 'identity.user.password.resend_sms' })
+  resendTempPasswordSms(
+    @Payload() payload: { id: string; requester?: RequesterContext },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.userService.resendTempPasswordSms(payload.id, payload.requester),
+    );
+  }
+
+  /** (aidsxJ2H) GET /users/:id/password/sms-status. */
+  @MessagePattern({ cmd: 'identity.user.password.sms_status' })
+  tempPasswordSmsStatus(
+    @Payload() payload: { id: string; requester?: RequesterContext },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.userService.tempPasswordSmsStatus(payload.id, payload.requester),
+    );
+  }
+
   @MessagePattern({ cmd: 'identity.user.update' })
   updateAdmin(
     @Payload() payload: UpdateUserPayload,

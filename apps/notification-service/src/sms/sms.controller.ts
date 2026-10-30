@@ -6,7 +6,12 @@ import {
   RmqContext,
   RpcException,
 } from '@nestjs/microservices';
-import { RmqService, executeAndAck } from '@app/common';
+import {
+  NOTIFICATION_SMS_DELIVERY_STATUS_PATTERN,
+  NOTIFICATION_SMS_TEMP_PASSWORD_PATTERN,
+  RmqService,
+  executeAndAck,
+} from '@app/common';
 import { SmsCampaignService } from './sms-campaign.service';
 import type { CampaignInput } from './sms-campaign.service';
 import { SmsConfigService } from './sms-config.service';
@@ -17,6 +22,8 @@ import type { SmsDlrInput } from './sms-dlr.service';
 import { SmsGateService } from './sms-gate.service';
 import { SmsOtpService } from './sms-otp.service';
 import type { SendOtpInput } from './sms-otp.service';
+import { SmsTempPasswordService } from './sms-temp-password.service';
+import type { SendTempPasswordInput } from './sms-temp-password.service';
 import { SmsOutboxService, smsReportRange } from './sms-outbox.service';
 import { SmsProviderAccountsService } from './sms-provider-accounts.service';
 import type { UpsertAccountInput } from './sms-provider-accounts.service';
@@ -64,6 +71,7 @@ export class SmsController {
     private readonly consent: SmsConsentService,
     private readonly dlr: SmsDlrService,
     private readonly otp: SmsOtpService,
+    private readonly tempPassword: SmsTempPasswordService,
   ) {}
 
   private run<T>(context: RmqContext, work: () => Promise<T> | T) {
@@ -78,6 +86,30 @@ export class SmsController {
   @MessagePattern({ cmd: 'notification.sms.send_otp' })
   sendOtp(@Payload() data: SendOtpInput, @Ctx() context: RmqContext) {
     return this.run(context, () => this.otp.send(data));
+  }
+
+  /**
+   * (aidsxJ2H) identity: yangi foydalanuvchining vaqtinchalik paroli —
+   * `security` SMS navbatiga. Xato TASHLAMAYDI (DLQ'ga parol tushmasin) —
+   * `{ status: 'pending' | 'failed', failure_reason }`.
+   */
+  @MessagePattern({ cmd: NOTIFICATION_SMS_TEMP_PASSWORD_PATTERN })
+  sendTempPassword(
+    @Payload() data: SendTempPasswordInput,
+    @Ctx() context: RmqContext,
+  ) {
+    return this.run(context, () => this.tempPassword.send(data));
+  }
+
+  /** (aidsxJ2H) `client_message_ids` bo'yicha SMS yetkazish holati. */
+  @MessagePattern({ cmd: NOTIFICATION_SMS_DELIVERY_STATUS_PATTERN })
+  deliveryStatus(
+    @Payload() data: { client_message_ids?: unknown },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.run(context, () =>
+      this.tempPassword.statuses(data?.client_message_ids),
+    );
   }
 
   /** Admin ekrani uchun holat: yoqilganmi, akkauntlar, bugungi sarf, tariflar. */

@@ -951,6 +951,93 @@
         ]
       }
     },
+    "/users/{id}/password/resend-sms": {
+      "post": {
+        "description": "Yangi vaqtinchalik parol yaratib SMS bilan yuboradi (`password_mode: 'generate_sms'` bilan yaratilgan foydalanuvchi uchun «SMS kelmadimi? Qayta yuborish»). Rollar: superadmin; admin (admin/superadmin'dan boshqasi); menejer — faqat o'zi yaratgan kuryer. Nishon roli: admin, registrator, logist, courier, manager, market (boshqasi 400); o'ziga — 403. Eski parol darhol ishlamaydi, barcha sessiyalar yopiladi (`sessions_revoked`), birinchi kirishda parol almashtirish majburiy. Javob `data`: `user_id`, `must_change_password: true`, `password_sms` { `status`: `pending | sent | delivered | failed`, `failure_reason`, `failure_message`, `requested_at`, `sent_at`, `delivered_at`, `resend_available_at`, `resends_left_today` }. SMS yuborilmasa ham 200 (`status: failed` + sabab). 429 — `PASSWORD_SMS_COOLDOWN` (60 s) / `PASSWORD_SMS_DAILY_LIMIT` (kuniga 5), `retry_after_seconds`.",
+        "operationId": "ApiGatewayController_resendTempPasswordSms",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "User ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "New temporary password queued via SMS"
+          },
+          "400": {
+            "description": "Role not supported"
+          },
+          "403": {
+            "description": "Not allowed"
+          },
+          "404": {
+            "description": "Not found"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Resend temporary password via SMS (aidsxJ2H)",
+        "tags": [
+          "Identity"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "manager"
+        ]
+      }
+    },
+    "/users/{id}/password/sms-status": {
+      "get": {
+        "description": "Oxirgi vaqtinchalik parol SMS'i holati — jonli (`sms_outbox` + provayder hisoboti): `data`: `user_id`, `must_change_password` (false — foydalanuvchi parolni allaqachon almashtirgan), `password_sms` (`status`: `pending | sent | delivered | failed`, `failure_reason`, `failure_message`, `requested_at`, `sent_at`, `delivered_at`, `resend_available_at`, `resends_left_today`; SMS hech yuborilmagan — `null`). Huquq — resend-sms bilan bir xil.",
+        "operationId": "ApiGatewayController_tempPasswordSmsStatus",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "User ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Password SMS status"
+          },
+          "403": {
+            "description": "Not allowed"
+          },
+          "404": {
+            "description": "Not found"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Temporary password SMS delivery status (aidsxJ2H)",
+        "tags": [
+          "Identity"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "manager"
+        ]
+      }
+    },
     "/users/{id}/role": {
       "patch": {
         "operationId": "ApiGatewayController_changeUserRole",
@@ -23258,7 +23345,22 @@
             "type": "string",
             "example": "Kuchli-Parol-2026",
             "minLength": 10,
-            "description": "Kamida 8 belgi (xodim — 10), oddiy parollar taqiqlangan"
+            "description": "(aidsxJ2H) Faqat `password_mode: 'manual'` da (yoki `password_mode` yuborilmagan eski so'rovda). Kamida 8 belgi (xodim — 10), oddiy parollar taqiqlangan"
+          },
+          "password_mode": {
+            "type": "string",
+            "enum": [
+              "generate_sms",
+              "manual"
+            ],
+            "default": "generate_sms",
+            "example": "generate_sms",
+            "description": "(aidsxJ2H) Parolni qanday berish. `generate_sms` (SUKUT) — tizim 12 belgili tasodifiy parol yaratadi va foydalanuvchi telefoniga SMS qiladi (`sms_outbox`, «security» shablon `user.temp_password`); `password` YUBORILMAYDI (400), javobda parol YO'Q, `must_change_password` doim true — birinchi kirishda parol almashtiriladi. `manual` — `password` majburiy, SMS yo'q, `must_change_password` ixtiyoriy. Moslik: `password_mode` yuborilmasa va `password` bor — `manual` (eski forma). Javob `data`: foydalanuvchi + `password_mode` + `password_sms` (`generate_sms` da: `status` `pending | sent | delivered | failed`, `failure_reason`, `failure_message`, `requested_at`, `sent_at`, `delivered_at`, `resend_available_at`, `resends_left_today`; `manual` da `null`). SMS yuborilmasa ham foydalanuvchi yaratiladi (`status: failed` + sabab) — `POST /users/:id/password/resend-sms`."
+          },
+          "must_change_password": {
+            "type": "boolean",
+            "example": true,
+            "description": "(aidsxJ2H) Faqat `manual` da: true — birinchi kirishda parolni almashtirish majburiy (login javobida `must_change_password: true`, almashtirmaguncha boshqa API 403 `PASSWORD_CHANGE_REQUIRED`). `generate_sms` da doim true (false — 400)."
           },
           "salary": {
             "type": "number",
@@ -23272,7 +23374,6 @@
         "required": [
           "name",
           "phone_number",
-          "password",
           "salary"
         ]
       },
@@ -23291,7 +23392,22 @@
             "type": "string",
             "example": "Kuchli-Parol-2026",
             "minLength": 10,
-            "description": "Kamida 8 belgi (xodim — 10), oddiy parollar taqiqlangan"
+            "description": "(aidsxJ2H) Faqat `password_mode: 'manual'` da (yoki `password_mode` yuborilmagan eski so'rovda). Kamida 8 belgi (xodim — 10), oddiy parollar taqiqlangan"
+          },
+          "password_mode": {
+            "type": "string",
+            "enum": [
+              "generate_sms",
+              "manual"
+            ],
+            "default": "generate_sms",
+            "example": "generate_sms",
+            "description": "(aidsxJ2H) Parolni qanday berish. `generate_sms` (SUKUT) — tizim 12 belgili tasodifiy parol yaratadi va foydalanuvchi telefoniga SMS qiladi (`sms_outbox`, «security» shablon `user.temp_password`); `password` YUBORILMAYDI (400), javobda parol YO'Q, `must_change_password` doim true — birinchi kirishda parol almashtiriladi. `manual` — `password` majburiy, SMS yo'q, `must_change_password` ixtiyoriy. Moslik: `password_mode` yuborilmasa va `password` bor — `manual` (eski forma). Javob `data`: foydalanuvchi + `password_mode` + `password_sms` (`generate_sms` da: `status` `pending | sent | delivered | failed`, `failure_reason`, `failure_message`, `requested_at`, `sent_at`, `delivered_at`, `resend_available_at`, `resends_left_today`; `manual` da `null`). SMS yuborilmasa ham foydalanuvchi yaratiladi (`status: failed` + sabab) — `POST /users/:id/password/resend-sms`."
+          },
+          "must_change_password": {
+            "type": "boolean",
+            "example": true,
+            "description": "(aidsxJ2H) Faqat `manual` da: true — birinchi kirishda parolni almashtirish majburiy (login javobida `must_change_password: true`, almashtirmaguncha boshqa API 403 `PASSWORD_CHANGE_REQUIRED`). `generate_sms` da doim true (false — 400)."
           },
           "salary": {
             "type": "number",
@@ -23310,7 +23426,6 @@
         "required": [
           "name",
           "phone_number",
-          "password",
           "salary"
         ]
       },
@@ -23329,7 +23444,22 @@
             "type": "string",
             "example": "Kuchli-Parol-2026",
             "minLength": 10,
-            "description": "Kamida 8 belgi (xodim — 10), oddiy parollar taqiqlangan"
+            "description": "(aidsxJ2H) Faqat `password_mode: 'manual'` da (yoki `password_mode` yuborilmagan eski so'rovda). Kamida 8 belgi (xodim — 10), oddiy parollar taqiqlangan"
+          },
+          "password_mode": {
+            "type": "string",
+            "enum": [
+              "generate_sms",
+              "manual"
+            ],
+            "default": "generate_sms",
+            "example": "generate_sms",
+            "description": "(aidsxJ2H) Parolni qanday berish. `generate_sms` (SUKUT) — tizim 12 belgili tasodifiy parol yaratadi va foydalanuvchi telefoniga SMS qiladi (`sms_outbox`, «security» shablon `user.temp_password`); `password` YUBORILMAYDI (400), javobda parol YO'Q, `must_change_password` doim true — birinchi kirishda parol almashtiriladi. `manual` — `password` majburiy, SMS yo'q, `must_change_password` ixtiyoriy. Moslik: `password_mode` yuborilmasa va `password` bor — `manual` (eski forma). Javob `data`: foydalanuvchi + `password_mode` + `password_sms` (`generate_sms` da: `status` `pending | sent | delivered | failed`, `failure_reason`, `failure_message`, `requested_at`, `sent_at`, `delivered_at`, `resend_available_at`, `resends_left_today`; `manual` da `null`). SMS yuborilmasa ham foydalanuvchi yaratiladi (`status: failed` + sabab) — `POST /users/:id/password/resend-sms`."
+          },
+          "must_change_password": {
+            "type": "boolean",
+            "example": true,
+            "description": "(aidsxJ2H) Faqat `manual` da: true — birinchi kirishda parolni almashtirish majburiy (login javobida `must_change_password: true`, almashtirmaguncha boshqa API 403 `PASSWORD_CHANGE_REQUIRED`). `generate_sms` da doim true (false — 400)."
           },
           "salary": {
             "type": "number",
@@ -23343,7 +23473,6 @@
         "required": [
           "name",
           "phone_number",
-          "password",
           "salary"
         ]
       },
@@ -23391,7 +23520,22 @@
             "type": "string",
             "example": "Kuchli-Parol-2026",
             "minLength": 10,
-            "description": "Kamida 8 belgi (xodim — 10), oddiy parollar taqiqlangan"
+            "description": "(aidsxJ2H) Faqat `password_mode: 'manual'` da (yoki `password_mode` yuborilmagan eski so'rovda). Kamida 8 belgi (xodim — 10), oddiy parollar taqiqlangan"
+          },
+          "password_mode": {
+            "type": "string",
+            "enum": [
+              "generate_sms",
+              "manual"
+            ],
+            "default": "generate_sms",
+            "example": "generate_sms",
+            "description": "(aidsxJ2H) Parolni qanday berish. `generate_sms` (SUKUT) — tizim 12 belgili tasodifiy parol yaratadi va foydalanuvchi telefoniga SMS qiladi (`sms_outbox`, «security» shablon `user.temp_password`); `password` YUBORILMAYDI (400), javobda parol YO'Q, `must_change_password` doim true — birinchi kirishda parol almashtiriladi. `manual` — `password` majburiy, SMS yo'q, `must_change_password` ixtiyoriy. Moslik: `password_mode` yuborilmasa va `password` bor — `manual` (eski forma). Javob `data`: foydalanuvchi + `password_mode` + `password_sms` (`generate_sms` da: `status` `pending | sent | delivered | failed`, `failure_reason`, `failure_message`, `requested_at`, `sent_at`, `delivered_at`, `resend_available_at`, `resends_left_today`; `manual` da `null`). SMS yuborilmasa ham foydalanuvchi yaratiladi (`status: failed` + sabab) — `POST /users/:id/password/resend-sms`."
+          },
+          "must_change_password": {
+            "type": "boolean",
+            "example": true,
+            "description": "(aidsxJ2H) Faqat `manual` da: true — birinchi kirishda parolni almashtirish majburiy (login javobida `must_change_password: true`, almashtirmaguncha boshqa API 403 `PASSWORD_CHANGE_REQUIRED`). `generate_sms` da doim true (false — 400)."
           },
           "salary": {
             "type": "number",
@@ -23420,7 +23564,6 @@
         "required": [
           "name",
           "phone_number",
-          "password",
           "tariff_home",
           "tariff_center"
         ]
@@ -23440,7 +23583,22 @@
             "type": "string",
             "example": "Kuchli-Parol-2026",
             "minLength": 10,
-            "description": "Kamida 8 belgi (xodim — 10), oddiy parollar taqiqlangan"
+            "description": "(aidsxJ2H) Faqat `password_mode: 'manual'` da (yoki `password_mode` yuborilmagan eski so'rovda). Kamida 8 belgi (xodim — 10), oddiy parollar taqiqlangan"
+          },
+          "password_mode": {
+            "type": "string",
+            "enum": [
+              "generate_sms",
+              "manual"
+            ],
+            "default": "generate_sms",
+            "example": "generate_sms",
+            "description": "(aidsxJ2H) Parolni qanday berish. `generate_sms` (SUKUT) — tizim 12 belgili tasodifiy parol yaratadi va foydalanuvchi telefoniga SMS qiladi (`sms_outbox`, «security» shablon `user.temp_password`); `password` YUBORILMAYDI (400), javobda parol YO'Q, `must_change_password` doim true — birinchi kirishda parol almashtiriladi. `manual` — `password` majburiy, SMS yo'q, `must_change_password` ixtiyoriy. Moslik: `password_mode` yuborilmasa va `password` bor — `manual` (eski forma). Javob `data`: foydalanuvchi + `password_mode` + `password_sms` (`generate_sms` da: `status` `pending | sent | delivered | failed`, `failure_reason`, `failure_message`, `requested_at`, `sent_at`, `delivered_at`, `resend_available_at`, `resends_left_today`; `manual` da `null`). SMS yuborilmasa ham foydalanuvchi yaratiladi (`status: failed` + sabab) — `POST /users/:id/password/resend-sms`."
+          },
+          "must_change_password": {
+            "type": "boolean",
+            "example": true,
+            "description": "(aidsxJ2H) Faqat `manual` da: true — birinchi kirishda parolni almashtirish majburiy (login javobida `must_change_password: true`, almashtirmaguncha boshqa API 403 `PASSWORD_CHANGE_REQUIRED`). `generate_sms` da doim true (false — 400)."
           },
           "salary": {
             "type": "number",
@@ -23467,7 +23625,6 @@
         "required": [
           "name",
           "phone_number",
-          "password",
           "branch_id"
         ]
       },
@@ -23541,6 +23698,11 @@
             "example": "Kuchli-Parol-2026",
             "minLength": 8,
             "description": "Kamida 8 belgi (xodim — 10), oddiy parollar taqiqlangan"
+          },
+          "old_password": {
+            "type": "string",
+            "example": "Joriy-Parol-2026",
+            "description": "(aidsxJ2H) O'z parolini almashtirishda (`PATCH /auth/my-profile`, o'zini `PATCH /users/:id`) — joriy parol. Berilsa doim tekshiriladi: noto'g'ri — 400 `OLD_PASSWORD_INVALID` (401 emas), yangisi joriysi bilan bir xil — 400. Berilmasa: `PASSWORD_CHANGE_REQUIRE_OLD=on` da 400 `OLD_PASSWORD_REQUIRED`, sukut (off) da avvalgidek. Admin boshqa foydalanuvchi parolini o'rnatganda kerak emas."
           },
           "status": {
             "type": "string",
@@ -23690,7 +23852,22 @@
             "type": "string",
             "example": "Kuchli-Parol-2026",
             "minLength": 8,
-            "description": "Kamida 8 belgi (xodim — 10), oddiy parollar taqiqlangan"
+            "description": "(aidsxJ2H) Faqat `password_mode: 'manual'` da (yoki `password_mode` yuborilmagan eski so'rovda). Kamida 8 belgi (xodim — 10), oddiy parollar taqiqlangan"
+          },
+          "password_mode": {
+            "type": "string",
+            "enum": [
+              "generate_sms",
+              "manual"
+            ],
+            "default": "generate_sms",
+            "example": "generate_sms",
+            "description": "(aidsxJ2H) Parolni qanday berish. `generate_sms` (SUKUT) — tizim 12 belgili tasodifiy parol yaratadi va foydalanuvchi telefoniga SMS qiladi (`sms_outbox`, «security» shablon `user.temp_password`); `password` YUBORILMAYDI (400), javobda parol YO'Q, `must_change_password` doim true — birinchi kirishda parol almashtiriladi. `manual` — `password` majburiy, SMS yo'q, `must_change_password` ixtiyoriy. Moslik: `password_mode` yuborilmasa va `password` bor — `manual` (eski forma). Javob `data`: foydalanuvchi + `password_mode` + `password_sms` (`generate_sms` da: `status` `pending | sent | delivered | failed`, `failure_reason`, `failure_message`, `requested_at`, `sent_at`, `delivered_at`, `resend_available_at`, `resends_left_today`; `manual` da `null`). SMS yuborilmasa ham foydalanuvchi yaratiladi (`status: failed` + sabab) — `POST /users/:id/password/resend-sms`."
+          },
+          "must_change_password": {
+            "type": "boolean",
+            "example": true,
+            "description": "(aidsxJ2H) Faqat `manual` da: true — birinchi kirishda parolni almashtirish majburiy (login javobida `must_change_password: true`, almashtirmaguncha boshqa API 403 `PASSWORD_CHANGE_REQUIRED`). `generate_sms` da doim true (false — 400)."
           },
           "tariff_home": {
             "type": "number",
@@ -23773,7 +23950,6 @@
           "name",
           "phone_number",
           "username",
-          "password",
           "default_tariff"
         ]
       },
@@ -24531,7 +24707,7 @@
           "must_change_password": {
             "type": "boolean",
             "example": false,
-            "description": "(NDmZMzCP) `true` — parol yangi siyosatga (min 8, xodim 10, oddiy parollar taqiqlangan) mos emas yoki vaqtinchalik: FE «Yangi parol o'rnating» ekraniga yo'naltiradi (PATCH /auth/my-profile `password`, keyin POST /auth/refresh). `PASSWORD_CHANGE_GATE=on` bo'lsa boshqa route'lar 403 `PASSWORD_CHANGE_REQUIRED`."
+            "description": "(NDmZMzCP) `true` — parol yangi siyosatga (min 8, xodim 10, oddiy parollar taqiqlangan) mos emas yoki vaqtinchalik: FE «Yangi parol o'rnating» ekraniga yo'naltiradi (PATCH /auth/my-profile `password`, keyin POST /auth/refresh). `PASSWORD_CHANGE_GATE=on` bo'lsa boshqa route'lar 403 `PASSWORD_CHANGE_REQUIRED`; (aidsxJ2H) parolni admin / tizim bergan bo'lsa (`pwd_forced`) — env'ga qaramay 403."
           }
         },
         "required": [

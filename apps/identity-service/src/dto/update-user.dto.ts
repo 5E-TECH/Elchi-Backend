@@ -43,6 +43,16 @@ export class UpdateUserDto {
   @IsPasswordPolicy()
   password?: string;
 
+  /**
+   * (aidsxJ2H) O'z parolini almashtirishda (`PATCH /auth/my-profile`, o'zini
+   * `PATCH /users/:id`) — joriy parol: berilsa doim tekshiriladi, majburiyligi
+   * `PASSWORD_CHANGE_REQUIRE_OLD` bilan. Admin boshqa foydalanuvchi parolini
+   * o'rnatganda kerak emas. Hech qayerga yozilmaydi.
+   */
+  @IsOptional()
+  @IsString()
+  old_password?: string;
+
   @IsOptional()
   @IsEnum(Status)
   status?: Status;
