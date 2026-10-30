@@ -58,6 +58,7 @@ import { CashboxReceipt } from './entities/cashbox-receipt.entity';
 import { CashboxReceiptService } from './cashbox-receipt/cashbox-receipt.service';
 import { CashboxReceiptController } from './cashbox-receipt/cashbox-receipt.controller';
 import { CashboxReceiptCleanupScheduler } from './cashbox-receipt/cashbox-receipt-cleanup.scheduler';
+import { CASHBOX_RECEIPTS } from './cashbox-receipt/cashbox-receipt.token';
 
 @Module({
   imports: [
@@ -166,6 +167,7 @@ import { CashboxReceiptCleanupScheduler } from './cashbox-receipt/cashbox-receip
     ShiftAutoCloseScheduler,
     PaymentCorrectionService,
     CashboxReceiptService,
+    { provide: CASHBOX_RECEIPTS, useExisting: CashboxReceiptService },
     CashboxReceiptCleanupScheduler,
   ],
 })

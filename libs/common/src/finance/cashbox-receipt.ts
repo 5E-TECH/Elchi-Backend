@@ -200,3 +200,65 @@ export function applyReceiptSettingsPatch(
   }
   return { ok: true, value: next };
 }
+
+const timeOf = (value: unknown): number | null => {
+  if (value instanceof Date) return value.getTime();
+  if (typeof value === 'string' || typeof value === 'number') {
+    const ms = new Date(value).getTime();
+    return Number.isFinite(ms) ? ms : null;
+  }
+  return null;
+};
+
+/** `pending` 3 daqiqadan oshgan (gateway qayta ishga tushgan, javob yo'q). */
+export function isReceiptAiStale(
+  receipt: { ai_status?: unknown; ai_requested_at?: unknown },
+  now: number = Date.now(),
+): boolean {
+  if (receipt.ai_status !== 'pending') return false;
+  const requested = timeOf(receipt.ai_requested_at);
+  return requested === null || now - requested > CASHBOX_RECEIPT_AI_STALE_MS;
+}
+
+/**
+ * Qayta tahlil RUXSATI (T3-3 endpoint'i va T3-2 `can_reanalyze` — bitta
+ * qoida). `null` — ruxsat; aks holda rad etish kodi:
+ *  - `match` → `RECEIPT_ALREADY_MATCHED` (ega qarori);
+ *  - `disabled` yoki joriy sozlamada AI o'chiq → `RECEIPT_AI_DISABLED`;
+ *  - eskirmagan `pending` → `RECEIPT_AI_PENDING`;
+ *  - urinishlar ≥ 5 → `RECEIPT_AI_ATTEMPTS_EXHAUSTED`.
+ * Ruxsat: `mismatch`, `unreadable`, `error`, eskirgan `pending`.
+ */
+export function receiptReanalyzeBlock(
+  receipt: {
+    ai_status?: unknown;
+    ai_attempts?: unknown;
+    ai_requested_at?: unknown;
+  },
+  aiEnabledNow: boolean,
+  now: number = Date.now(),
+): CashboxReceiptErrorCode | null {
+  if (receipt.ai_status === 'match') {
+    return CASHBOX_RECEIPT_ERROR_CODES.ALREADY_MATCHED;
+  }
+  if (receipt.ai_status === 'disabled' || !aiEnabledNow) {
+    return CASHBOX_RECEIPT_ERROR_CODES.AI_DISABLED;
+  }
+  if (receipt.ai_status === 'pending' && !isReceiptAiStale(receipt, now)) {
+    return CASHBOX_RECEIPT_ERROR_CODES.AI_PENDING;
+  }
+  if (Number(receipt.ai_attempts ?? 0) >= CASHBOX_RECEIPT_AI_MAX_ATTEMPTS) {
+    return CASHBOX_RECEIPT_ERROR_CODES.AI_ATTEMPTS_EXHAUSTED;
+  }
+  return null;
+}
+
+/** Rad etish kodi → HTTP holati (`receiptReanalyzeBlock`). */
+export const RECEIPT_REANALYZE_STATUS: Readonly<
+  Partial<Record<CashboxReceiptErrorCode, number>>
+> = Object.freeze({
+  RECEIPT_ALREADY_MATCHED: 409,
+  RECEIPT_AI_DISABLED: 400,
+  RECEIPT_AI_PENDING: 409,
+  RECEIPT_AI_ATTEMPTS_EXHAUSTED: 429,
+});

@@ -7,7 +7,14 @@ import {
   Optional,
 } from '@nestjs/common';
 import { ClientProxy, RpcException } from '@nestjs/microservices';
-import { DataSource, EntityManager, In, LessThan } from 'typeorm';
+import { randomUUID } from 'node:crypto';
+import {
+  DataSource,
+  EntityManager,
+  In,
+  LessThan,
+  QueryFailedError,
+} from 'typeorm';
 import {
   ActivityLogService,
   CASHBOX_RECEIPT_DEFAULTS,
@@ -29,6 +36,10 @@ import {
 } from '@app/common';
 import { CashboxReceipt } from '../entities/cashbox-receipt.entity';
 import { FinanceSetting } from '../entities/finance-setting.entity';
+import type {
+  LinkedReceiptRef,
+  ReceiptLinkRequest,
+} from './cashbox-receipt.token';
 
 const RC = CASHBOX_RECEIPT_ERROR_CODES;
 const ALLOWED_MIME = new Set(['image/jpeg', 'image/png', 'image/webp']);
@@ -369,6 +380,129 @@ export class CashboxReceiptService {
     } catch (error) {
       receiptRpcError(error);
     }
+  }
+
+  // ───────────────────────── bog'lash (T3-2) ─────────────────────────
+
+  /**
+   * Pul tranzaksiyasi ICHIDA (chaqiruvchining `manager`i, tarix qatorlari
+   * saqlangandan keyin): chekni operatsiyaga bog'laydi. Xato → throw →
+   * butun tranzaksiya (pul ham) rollback.
+   *
+   *  - `applicable:false` (naqd / click_to_market o'tkazma) + `receipt_id`
+   *    → 400 `RECEIPT_NOT_APPLICABLE`; `receipt_id` siz — `null`;
+   *  - rasm majburiy va `receipt_id` yo'q → 400 `RECEIPT_REQUIRED`; rasm
+   *    o'chiq va yo'q → `null`;
+   *  - chek qatori FOR UPDATE: yo'q → 400 `RECEIPT_NOT_FOUND`; boshqa
+   *    xodimniki → 403; tur mos emas → 400; `linked` → 409;
+   *  - bog'lash: `linked`, tarix ID'lari, operatsiya maydonlari, sozlama
+   *    snapshot'i; `ai_status` = `pending` (yangi `ai_request_id`) yoki
+   *    `disabled`.
+   */
+  async linkInTx(
+    manager: EntityManager,
+    request: ReceiptLinkRequest,
+    ctx: {
+      applicable: boolean;
+      history_id: string;
+      counter_history_id?: string | null;
+      entered_amount: number;
+      payment_method: string;
+      card_id?: string | null;
+      courier_id?: string | null;
+      branch_id?: string | null;
+    },
+  ): Promise<LinkedReceiptRef | null> {
+    const receiptId = text(request.receipt_id);
+    if (!ctx.applicable) {
+      if (receiptId) receiptFail(400, RC.NOT_APPLICABLE);
+      return null;
+    }
+    const settings = await this.loadSettings(manager);
+    const group = settings[receiptSettingGroupOf(request.kind)];
+    if (!receiptId) {
+      if (group.photo_required) receiptFail(400, RC.REQUIRED);
+      return null;
+    }
+    if (!/^\d{1,18}$/.test(receiptId)) receiptFail(400, RC.NOT_FOUND);
+    const repo = manager.getRepository(CashboxReceipt);
+    const receipt = await repo.findOne({
+      where: { id: receiptId, isDeleted: false },
+      lock: { mode: 'pessimistic_write' },
+    });
+    if (!receipt) receiptFail(400, RC.NOT_FOUND);
+    if (String(receipt.uploaded_by) !== text(request.requester_id)) {
+      receiptFail(403, RC.NOT_OWNER);
+    }
+    if (receipt.kind !== request.kind) receiptFail(400, RC.KIND_MISMATCH);
+    if (receipt.state === 'linked') receiptFail(409, RC.ALREADY_USED);
+
+    const aiOn = group.photo_required && group.ai_enabled;
+    const now = new Date();
+    const aiRequestId = aiOn ? randomUUID() : null;
+    try {
+      await repo.update(
+        { id: receipt.id },
+        {
+          state: 'linked',
+          history_id: String(ctx.history_id),
+          counter_history_id: ctx.counter_history_id
+            ? String(ctx.counter_history_id)
+            : null,
+          entered_amount: Number(ctx.entered_amount),
+          payment_method: ctx.payment_method,
+          card_id: ctx.card_id ? String(ctx.card_id) : null,
+          courier_id: ctx.courier_id ? String(ctx.courier_id) : null,
+          branch_id: ctx.branch_id ? String(ctx.branch_id) : receipt.branch_id,
+          linked_at: now,
+          linked_by: text(request.requester_id) || null,
+          photo_required_snap: group.photo_required,
+          ai_enabled_snap: aiOn,
+          ai_status: aiOn ? 'pending' : 'disabled',
+          ai_request_id: aiRequestId,
+          ai_requested_at: aiOn ? now : null,
+        },
+      );
+    } catch (error) {
+      // UNIQUE history_id — boshqa chek shu operatsiyaga bog'langan.
+      if (
+        error instanceof QueryFailedError &&
+        (error.driverError as { code?: string })?.code === '23505'
+      ) {
+        receiptFail(409, RC.ALREADY_USED);
+      }
+      throw error;
+    }
+    return {
+      id: String(receipt.id),
+      kind: receipt.kind,
+      ai_status: aiOn ? 'pending' : 'disabled',
+      ai_request_id: aiRequestId,
+    };
+  }
+
+  /** Idempotent takror: asl operatsiyaning cheki (bo'lmasa `null`). */
+  async findForReplay(
+    manager: EntityManager,
+    where: { history_id?: string | null; counter_history_id?: string | null },
+  ): Promise<LinkedReceiptRef | null> {
+    const historyId = text(where.history_id);
+    const counterId = text(where.counter_history_id);
+    if (!historyId && !counterId) return null;
+    const row = await manager.getRepository(CashboxReceipt).findOne({
+      where: historyId
+        ? { history_id: historyId, isDeleted: false }
+        : { counter_history_id: counterId, isDeleted: false },
+    });
+    return row
+      ? {
+          id: String(row.id),
+          kind: row.kind,
+          ai_status: row.ai_status,
+          // Takrorda AI qayta ishga tushirilmaydi.
+          ai_request_id: null,
+        }
+      : null;
   }
 
   // ───────────────────────── tozalash ─────────────────────────

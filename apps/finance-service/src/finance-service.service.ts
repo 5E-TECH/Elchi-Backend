@@ -22,6 +22,7 @@ import {
   MoreThanOrEqual,
   Not,
   QueryFailedError,
+  Raw,
   Repository,
   SelectQueryBuilder,
 } from 'typeorm';
@@ -83,6 +84,27 @@ import { FinanceRealtimeService } from './realtime/finance-realtime.service';
 import type { ShiftAccountCheckService } from './shift-account-check/shift-account-check.service';
 import { SHIFT_ACCOUNT_CHECKS } from './shift-account-check/shift-account-check.token';
 import {
+  CASHBOX_RECEIPTS,
+  type LinkedReceiptRef,
+  type ReceiptLinkRequest,
+} from './cashbox-receipt/cashbox-receipt.token';
+import type { CashboxReceiptService } from './cashbox-receipt/cashbox-receipt.service';
+import {
+  briefReceipt,
+  fullReceipt,
+  isReceiptFilterStatus,
+  loadReceiptsForHistory,
+  receiptStatusIdCondition,
+  type ReceiptTables,
+} from './cashbox-receipt/cashbox-receipt.views';
+import type { CashboxReceipt } from './entities/cashbox-receipt.entity';
+
+/**
+ * T3 — entity NOMI bo'yicha (sinf importi emas): eski spec'lar `@app/common`
+ * ni mock qiladi, `BaseEntity` li entity'ni yuklash ularni yiqitardi.
+ */
+const CASHBOX_RECEIPT_ENTITY = 'CashboxReceipt';
+import {
   SHIFT_REPORTS,
   type ShiftReportTrigger,
 } from './shift-report/shift-report.token';
@@ -131,6 +153,9 @@ export interface CourierPaymentInput {
    * yo'lida filial kassasi) qaysi kartasiga tushdi. Yo'q — Asosiy karta.
    */
   card_id?: string;
+  /** T3 — gateway: faqat superadmin/admin'ning HQ'ga qabul yo'li. */
+  receipt_policy?: { kind?: unknown };
+  receipt_id?: unknown;
 }
 
 /** `paymentsToMarket` / `applyMarketPaymentInTx` kirishi. */
@@ -223,7 +248,124 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
     @Optional()
     @Inject(SHIFT_REPORTS)
     private readonly shiftReports?: ShiftReportTrigger,
+    // T3 — kassa chekini pul tranzaksiyasida bog'lash. Ixtiyoriy: eski
+    // spec'lar usiz quradi — u holda `receipt_policy` e'tiborsiz.
+    @Optional()
+    @Inject(CASHBOX_RECEIPTS)
+    private readonly receipts?: CashboxReceiptService,
   ) {}
+
+  /**
+   * T3 — gateway'ning `receipt_policy` si (faqat 3 HTTP yo'li: qo'lda
+   * chiqim, kuryer → HQ, filial → HQ). Ichki RMQ chaqiruvlarida yo'q —
+   * chek talab qilinmaydi.
+   */
+  private receiptRequest(
+    data: {
+      receipt_policy?: { kind?: unknown };
+      receipt_id?: unknown;
+      created_by?: unknown;
+    },
+    kind: ReceiptLinkRequest['kind'],
+  ): ReceiptLinkRequest | null {
+    if (!this.receipts || data?.receipt_policy?.kind !== kind) return null;
+    return {
+      kind,
+      receipt_id: data.receipt_id,
+      requester_id: data.created_by,
+    };
+  }
+
+  /**
+   * T3 — HQ'ga o'tkazma cheki: `history_id` — MAIN INCOME, `counter` —
+   * kuryer EXPENSE; ikkalasi `transfer_id` (T6) bo'yicha topiladi (vaqt
+   * taxminiga tayanmaydi).
+   */
+  private async linkTransferReceipt(
+    manager: EntityManager,
+    request: ReceiptLinkRequest,
+    ctx: {
+      transfer_id: string;
+      receiver_cashbox_id: string;
+      counter_cashbox_id: string;
+      amount: number;
+      payment_method: PaymentMethod | string;
+      courier_id?: string | null;
+    },
+  ): Promise<LinkedReceiptRef | null> {
+    if (!this.receipts) return null;
+    const legs = await manager.find(CashboxHistory, {
+      where: { transfer_id: ctx.transfer_id },
+    });
+    const income = legs.find(
+      (leg) =>
+        String(leg.cashbox_id) === ctx.receiver_cashbox_id &&
+        leg.operation_type === Operation_type.INCOME,
+    );
+    const expense = legs.find(
+      (leg) =>
+        String(leg.cashbox_id) === ctx.counter_cashbox_id &&
+        leg.operation_type === Operation_type.EXPENSE,
+    );
+    const applicable =
+      ctx.payment_method === PaymentMethod.CLICK && Boolean(income);
+    return this.receipts.linkInTx(manager, request, {
+      applicable,
+      history_id: String(income?.id ?? ''),
+      counter_history_id: expense ? String(expense.id) : null,
+      entered_amount: ctx.amount,
+      payment_method: String(ctx.payment_method),
+      card_id: income?.card_id ? String(income.card_id) : null,
+      courier_id: ctx.courier_id ?? null,
+    });
+  }
+
+  private async findCourierReplayReceipt(
+    manager: EntityManager,
+    data: CourierPaymentInput,
+  ): Promise<LinkedReceiptRef | null> {
+    if (!this.receipts) return null;
+    const courierCashbox = await manager.findOne(Cashbox, {
+      where: {
+        user_id: String(data.courier_id),
+        cashbox_type: Cashbox_type.FOR_COURIER,
+      },
+    });
+    if (!courierCashbox) return null;
+    const leg = await this.findDedupLeg(manager, {
+      cashbox_id: String(courierCashbox.id),
+      source_type: Source_type.COURIER_PAYMENT,
+      source_id: String(data.courier_id),
+      dedup_epoch: String(data.dedup_epoch ?? '').trim(),
+    });
+    return leg
+      ? this.receipts.findForReplay(manager, {
+          counter_history_id: String(leg.id),
+        })
+      : null;
+  }
+
+  /** O'tkazmaning manba (kuryer / filial) EXPENSE oyog'i — takror uchun. */
+  private findDedupLeg(
+    manager: EntityManager,
+    params: {
+      cashbox_id: string;
+      source_type: Source_type;
+      source_id: string;
+      dedup_epoch: string;
+    },
+  ) {
+    if (!params.dedup_epoch) return Promise.resolve(null);
+    return manager.findOne(CashboxHistory, {
+      where: {
+        cashbox_id: String(params.cashbox_id),
+        source_type: params.source_type,
+        source_id: String(params.source_id),
+        operation_type: Operation_type.EXPENSE,
+        dedup_epoch: params.dedup_epoch,
+      },
+    });
+  }
 
   async onModuleInit() {
     const main = await this.cashboxRepo.findOne({
@@ -1662,6 +1804,8 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         source_type: FinancialSource_type;
         comment?: string | null;
       };
+      /** T3 — qo'lda chiqim cheki (gateway `receipt_policy`), AYNI tranzaksiyada. */
+      receipt?: ReceiptLinkRequest;
     },
   ) {
     // Captured after a successful (non-idempotent) commit so we can write the
@@ -1719,9 +1863,23 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
             },
           );
           if (existingHistory) {
+            // T3 — takror: asl operatsiyaning cheki (yangi chek bog'lanmaydi).
+            const replayReceipt =
+              options?.receipt && this.receipts
+                ? await this.receipts.findForReplay(queryRunner.manager, {
+                    history_id: String(existingHistory.id),
+                  })
+                : undefined;
             await queryRunner.commitTransaction();
             return this.successRes(
-              { cashbox, history: existingHistory, idempotent: true },
+              {
+                cashbox,
+                history: existingHistory,
+                idempotent: true,
+                ...(replayReceipt !== undefined
+                  ? { receipt: replayReceipt }
+                  : {}),
+              },
               200,
               'Cashbox balance already applied (idempotent replay)',
             );
@@ -1825,6 +1983,27 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
 
         const savedHistory = await queryRunner.manager.save(history);
 
+        // T3 — qo'lda chiqim cheki: AYNI tranzaksiyada bog'lanadi (xato —
+        // pul ham rollback). Chek talab qilinsa-yu yo'q bo'lsa — 400.
+        const linkedReceipt =
+          options?.receipt && this.receipts
+            ? await this.receipts.linkInTx(
+                queryRunner.manager,
+                options.receipt,
+                {
+                  applicable: true,
+                  history_id: String(savedHistory.id),
+                  entered_amount: Number(dto.amount),
+                  payment_method: paymentMethod,
+                  card_id: historyCardId,
+                  branch_id:
+                    savedCashbox.cashbox_type === Cashbox_type.BRANCH
+                      ? String(savedCashbox.user_id)
+                      : null,
+                },
+              )
+            : undefined;
+
         /**
          * IgR4FVsR — qo'lda kirim/chiqim P&L daftariga AYNI tranzaksiyada.
          * Ilgari faqat kassa + cashbox_history o'zgarardi, `financial_balance
@@ -1882,6 +2061,8 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
             history: savedHistory,
             // IgR4FVsR — qo'lda operatsiyada P&L yozuvi (aks holda kalit yo'q).
             ...(savedLedger ? { financial_balance_entry: savedLedger } : {}),
+            // T3 — `receipt_policy` bo'lsa: chek yoki null.
+            ...(linkedReceipt !== undefined ? { receipt: linkedReceipt } : {}),
           },
           200,
           'Cashbox balance updated',
@@ -1947,9 +2128,14 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         }
       | undefined,
     dto: UpdateCashboxBalanceDto,
+    receipt?: ReceiptLinkRequest | null,
   ) {
-    return ledger
-      ? this.updateBalance(dto, { financialLedger: ledger })
+    const options = {
+      ...(ledger ? { financialLedger: ledger } : {}),
+      ...(receipt ? { receipt } : {}),
+    };
+    return Object.keys(options).length
+      ? this.updateBalance(dto, options)
       : this.updateBalance(dto);
   }
 
@@ -1965,19 +2151,108 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
       transfer_id?: string | null;
       reverses_history_id?: string | null;
     },
-  >(rows: T[]): Promise<Array<T & { correction: unknown }>> {
+  >(
+    rows: T[],
+    receiptMode: 'brief' | 'full' = 'brief',
+  ): Promise<Array<T & { correction: unknown; receipt?: unknown }>> {
     if (!Array.isArray(rows) || !rows.length) {
       return (rows ?? []) as Array<T & { correction: unknown }>;
     }
+    let corrected: Array<T & { correction: unknown }>;
     try {
-      return await attachCorrectionViews(this.dataSource.manager, rows, (ids) =>
-        this.userNames(ids),
+      corrected = await attachCorrectionViews(
+        this.dataSource.manager,
+        rows,
+        (ids) => this.userNames(ids),
       );
     } catch (error) {
       this.logger.warn(
         `tarixga tuzatish ma'lumoti qo'shilmadi (T6): ${error instanceof Error ? error.message : String(error)}`,
       );
-      return rows.map((row) => ({ ...row, correction: null }));
+      corrected = rows.map((row) => ({ ...row, correction: null }));
+    }
+    return this.withReceipts(corrected, receiptMode);
+  }
+
+  /** T3 — chek jadvali / tarix / kassa yo'llari (TypeORM metadata). */
+  private receiptTables(): ReceiptTables | null {
+    try {
+      return {
+        receipts: this.dataSource.getMetadata(CASHBOX_RECEIPT_ENTITY).tablePath,
+        history: this.dataSource.getMetadata(CashboxHistory).tablePath,
+        cashbox: this.dataSource.getMetadata(Cashbox).tablePath,
+      };
+    } catch {
+      // Eski spec'lar DataSource'siz / entity ro'yxatisiz.
+      return null;
+    }
+  }
+
+  /**
+   * T3 — tarix qatorlariga `receipt` (bitta batch so'rov, N+1 yo'q):
+   * ro'yxatda `{ id, ai_status } | null`, tafsilotda to'liq (gateway
+   * `file_key` ni havolaga almashtiradi, rolga qarab olib tashlaydi).
+   * FAIL-OPEN: o'qish xatosi ro'yxatni yiqitmaydi (`receipt: null`).
+   */
+  private async withReceipts<T extends { id: string }>(
+    rows: T[],
+    mode: 'brief' | 'full',
+  ): Promise<Array<T & { receipt?: unknown }>> {
+    const tables = this.receiptTables();
+    if (!tables || !this.receipts) return rows;
+    try {
+      const map = await loadReceiptsForHistory(
+        this.dataSource.manager,
+        tables.receipts,
+        rows.map((row) => String(row.id)),
+      );
+      if (mode === 'brief') {
+        return rows.map((row) => ({
+          ...row,
+          receipt: briefReceipt(map.get(String(row.id))),
+        }));
+      }
+      const settings = await this.receipts.loadSettings();
+      const names = await this.userNames(
+        [...map.values()].map((row) => String(row.uploaded_by)),
+      ).catch(() => new Map<string, string | null>());
+      return rows.map((row) => {
+        const found = map.get(String(row.id));
+        return {
+          ...row,
+          receipt: found ? fullReceipt(found, settings, names) : null,
+        };
+      });
+    } catch (error) {
+      this.logger.warn(
+        `tarixga chek ma'lumoti qo'shilmadi (T3): ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return rows.map((row) => ({ ...row, receipt: null }));
+    }
+  }
+
+  /** T3 — `GET /finance/receipts/:id` (to'liq ko'rinish; doira — gateway). */
+  async getReceipt(input: { id?: unknown }) {
+    try {
+      const raw = input?.id;
+      const id =
+        typeof raw === 'string' || typeof raw === 'number'
+          ? String(raw).trim()
+          : '';
+      if (!/^\d{1,18}$/.test(id) || !this.receipts) {
+        throw new NotFoundException('Chek topilmadi');
+      }
+      const row = await this.dataSource
+        .getRepository<CashboxReceipt>(CASHBOX_RECEIPT_ENTITY)
+        .findOne({ where: { id, isDeleted: false } });
+      if (!row) throw new NotFoundException('Chek topilmadi');
+      const settings = await this.receipts.loadSettings();
+      const names = await this.userNames([String(row.uploaded_by)]).catch(
+        () => new Map<string, string | null>(),
+      );
+      return this.successRes(fullReceipt(row, settings, names), 200, 'Receipt');
+    } catch (error) {
+      this.toRpcError(error);
     }
   }
 
@@ -2021,6 +2296,18 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
       if (dto.created_by) {
         this.assertBigIntId(dto.created_by, 'created_by');
         where.created_by = dto.created_by;
+      }
+      // T3 — «Chek holati» filtri (counts ham shu filtr bilan).
+      if (dto.receipt_status !== undefined && dto.receipt_status !== '') {
+        const tables = this.receiptTables();
+        if (!isReceiptFilterStatus(dto.receipt_status) || !tables) {
+          throw new BadRequestException("receipt_status noto'g'ri");
+        }
+        const status = dto.receipt_status;
+        where.id = Raw(
+          (alias) => receiptStatusIdCondition(alias, status, tables).sql,
+          receiptStatusIdCondition('x', status, tables).params,
+        );
       }
       if (historyCashboxType) {
         const cashboxesByType = await this.cashboxRepo.find({
@@ -2223,6 +2510,7 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
       }
       const [enrichedHistory] = await this.withCorrections(
         await this.enrichHistoryWithUsers([history]),
+        'full',
       );
       // T6 — superadmin uchun: shu to'lovni qaytarish / tuzatish mumkinmi.
       const correctable = options.include_correctable
@@ -3677,6 +3965,9 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
      * tizim chaqiruvchilari yubormaydi — ikki marta yozilmaydi.
      */
     financial_ledger?: boolean;
+    /** T3 — faqat gateway'ning qo'lda chiqimi: `{ kind: 'manual_expense' }`. */
+    receipt_policy?: { kind?: unknown };
+    receipt_id?: unknown;
   }) {
     try {
       const targetCashboxType = data.cashbox_type ?? Cashbox_type.MAIN;
@@ -3684,6 +3975,7 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         targetCashboxType === Cashbox_type.MAIN
           ? FinanceServiceService.MAIN_CASHBOX_USER_ID
           : data.user_id;
+      const receiptRequest = this.receiptRequest(data, 'manual_expense');
       // IgR4FVsR — P&L yozuvi faqat gateway'ning qo'lda marshrutidan.
       const ledger =
         data.financial_ledger === true
@@ -3693,32 +3985,36 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
               comment: data.comment ?? null,
             }
           : undefined;
-      const update = await this.updateBalanceWithLedger(ledger, {
-        user_id: targetUserId,
-        amount: data.amount,
-        operation_type: Operation_type.EXPENSE,
-        source_type: Source_type.MANUAL_EXPENSE,
-        payment_method: data.type ?? PaymentMethod.CASH,
-        comment: data.comment,
-        created_by: data.created_by ?? data.user_id,
-        cashbox_type: targetCashboxType,
-        // (i75GDixP) Qo'lda chiqim — manfiyga hech qachon ruxsat yo'q.
-        allow_negative: false,
-        // Idempotency for a manual expense is keyed on the gateway's dedup_epoch
-        // token ONLY. source_id stays NULL — it is a bigint column and the token
-        // is a free-form hex/idempotency-key string, so writing it there throws.
-        // updateBalance's pre-check dedupes on the token (serialised by the
-        // cashbox row lock). Absent token → no dedup (prior behaviour).
-        dedup_epoch: data.dedup_epoch,
-        // (QTCUUgjA) qo'lda operatsiya — kassada ochiq smena talab qilinadi.
-        require_open_shift: true,
-        // 3PE0B03q / Zv3MLn0a — karta (MAIN / filial + click; aks holda 400).
-        ...(data.card_id ? { card_id: String(data.card_id) } : {}),
-        // Elchi Pochta №1 — xarajat kategoriyasi (updateBalance tekshiradi).
-        ...(data.expense_category_id
-          ? { expense_category_id: String(data.expense_category_id) }
-          : {}),
-      });
+      const update = await this.updateBalanceWithLedger(
+        ledger,
+        {
+          user_id: targetUserId,
+          amount: data.amount,
+          operation_type: Operation_type.EXPENSE,
+          source_type: Source_type.MANUAL_EXPENSE,
+          payment_method: data.type ?? PaymentMethod.CASH,
+          comment: data.comment,
+          created_by: data.created_by ?? data.user_id,
+          cashbox_type: targetCashboxType,
+          // (i75GDixP) Qo'lda chiqim — manfiyga hech qachon ruxsat yo'q.
+          allow_negative: false,
+          // Idempotency for a manual expense is keyed on the gateway's dedup_epoch
+          // token ONLY. source_id stays NULL — it is a bigint column and the token
+          // is a free-form hex/idempotency-key string, so writing it there throws.
+          // updateBalance's pre-check dedupes on the token (serialised by the
+          // cashbox row lock). Absent token → no dedup (prior behaviour).
+          dedup_epoch: data.dedup_epoch,
+          // (QTCUUgjA) qo'lda operatsiya — kassada ochiq smena talab qilinadi.
+          require_open_shift: true,
+          // 3PE0B03q / Zv3MLn0a — karta (MAIN / filial + click; aks holda 400).
+          ...(data.card_id ? { card_id: String(data.card_id) } : {}),
+          // Elchi Pochta №1 — xarajat kategoriyasi (updateBalance tekshiradi).
+          ...(data.expense_category_id
+            ? { expense_category_id: String(data.expense_category_id) }
+            : {}),
+        },
+        receiptRequest,
+      );
       if (update?.data?.idempotent) {
         // (TMgL1zvq) Takroriy so'rov pul ham, audit ham qayta yozmaydi.
         return this.successRes(
@@ -3727,6 +4023,9 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
           "Kassa chiqimi allaqachon bajarilgan (takroriy so'rov)",
         );
       }
+      const linkedReceipt = (
+        update?.data as { receipt?: LinkedReceiptRef | null } | undefined
+      )?.receipt;
       const savedHistory = (
         update?.data as
           | {
@@ -3760,6 +4059,8 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
           ...(expenseCategory
             ? { expense_category_id: expenseCategory.id }
             : {}),
+          // T3 — biriktirilgan chek (rasm/PII yo'q, faqat ID).
+          ...(linkedReceipt ? { receipt_id: linkedReceipt.id } : {}),
         },
         // 2WRzdWpZ: izoh (comment) gapga KIRMAYDI — erkin matn. Kategoriya
         // nomi — superadmin boshqaradigan ro'yxatdan (PII emas).
@@ -4079,16 +4380,25 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
     // Captured after a durable commit so the audit row is written once the
     // transaction is committed and the runner released (never inside the tx).
     let auditedCourierCashboxId: string | null = null;
+    let auditedReceiptId: string | null = null;
     try {
+      const receiptRequest = this.receiptRequest(data, 'courier_to_hq');
       const applied = await this.applyCourierPaymentInTx(
         queryRunner.manager,
         data,
         { notify: true, acceptedByName },
       );
       if (applied.idempotent) {
+        // T3 — takror: asl to'lovning cheki (kuryer EXPENSE oyog'i orqali).
+        const replayReceipt = receiptRequest
+          ? await this.findCourierReplayReceipt(queryRunner.manager, data)
+          : undefined;
         await queryRunner.commitTransaction();
         return this.successRes(
-          { idempotent: true },
+          {
+            idempotent: true,
+            ...(replayReceipt !== undefined ? { receipt: replayReceipt } : {}),
+          },
           200,
           "To'lov allaqachon qabul qilingan (takroriy so'rov)",
         );
@@ -4102,6 +4412,19 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         dedupKey,
       } = applied;
 
+      // T3 — chek: HQ (MAIN) INCOME + kuryer EXPENSE oyoqlari (`transfer_id`).
+      // Faqat `click` da; naqd / click_to_market + chek → 400. Xato — rollback.
+      const linkedReceipt = receiptRequest
+        ? await this.linkTransferReceipt(queryRunner.manager, receiptRequest, {
+            transfer_id: applied.transferId,
+            receiver_cashbox_id: String(receiverCashbox.id),
+            counter_cashbox_id: String(courierCashbox.id),
+            amount: Number(data.amount),
+            payment_method: data.payment_method,
+            courier_id: String(data.courier_id),
+          })
+        : undefined;
+
       await queryRunner.commitTransaction();
       // Immediate best-effort publish to close the outbox-poll lag (Faza 2c).
       await this.tryPublishAdvanceNow(advancePayload);
@@ -4109,6 +4432,7 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         await this.tryPublishAdvanceNow(marketAdvancePayload);
       }
       auditedCourierCashboxId = String(courierCashbox.id);
+      auditedReceiptId = linkedReceipt?.id ?? null;
 
       if (clickMarketCashbox) {
         // Buyurtma holati sinxroni va hamkor xabari javobni KUTDIRMAYDI —
@@ -4152,6 +4476,8 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
           },
           // T6 — to'lov oyoqlari kaliti (qaytarish / tahrirlash shu bilan).
           transfer_id: applied.transferId,
+          // T3 — `receipt_policy` bo'lsa: chek yoki null.
+          ...(linkedReceipt !== undefined ? { receipt: linkedReceipt } : {}),
         },
         201,
         "To'lov qabul qilindi !!! ",
@@ -4179,6 +4505,7 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
             receiver_user_id:
               data.receiver_user_id ??
               FinanceServiceService.MAIN_CASHBOX_USER_ID,
+            ...(auditedReceiptId ? { receipt_id: auditedReceiptId } : {}),
           },
           description: ActivityDescribeUz.courierPayment(
             data.courier_id,
@@ -4607,6 +4934,9 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
     card_id?: string;
     // Zv3MLn0a — CLICK pul FILIAL kassasining qaysi kartasidan chiqdi.
     branch_card_id?: string;
+    /** T3 — gateway: `{ kind: 'branch_to_hq' }`. */
+    receipt_policy?: { kind?: unknown };
+    receipt_id?: unknown;
   }) {
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
@@ -4614,6 +4944,8 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
     // Captured after a durable commit so the audit row is written once the
     // transaction is committed and the runner released (never inside the tx).
     let auditedBranchCashboxId: string | null = null;
+    let auditedReceiptId: string | null = null;
+    const receiptRequest = this.receiptRequest(data, 'branch_to_hq');
     try {
       this.assertBigIntId(data.branch_id, 'branch_id');
       this.assertPositiveAmount(Number(data.amount));
@@ -4638,9 +4970,27 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
           dedup_epoch: dedupKey,
         })
       ) {
+        // T3 — takror: asl to'lovning cheki (filial EXPENSE oyog'i orqali).
+        let replayReceipt: LinkedReceiptRef | null | undefined;
+        if (receiptRequest && this.receipts) {
+          const leg = await this.findDedupLeg(queryRunner.manager, {
+            cashbox_id: String(branchCashbox.id),
+            source_type: Source_type.BRANCH_TO_MAIN,
+            source_id: String(data.branch_id),
+            dedup_epoch: dedupKey,
+          });
+          replayReceipt = leg
+            ? await this.receipts.findForReplay(queryRunner.manager, {
+                counter_history_id: String(leg.id),
+              })
+            : null;
+        }
         await queryRunner.commitTransaction();
         return this.successRes(
-          { idempotent: true },
+          {
+            idempotent: true,
+            ...(replayReceipt !== undefined ? { receipt: replayReceipt } : {}),
+          },
           200,
           "To'lov allaqachon qabul qilingan (takroriy so'rov)",
         );
@@ -4753,6 +5103,23 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
       });
       await queryRunner.manager.save(mainHistory);
 
+      // T3 — chek: MAIN INCOME + filial EXPENSE (ikkalasi qo'lda — shu yerda).
+      // Faqat `click` da; naqd + chek → 400. Xato — butun to'lov rollback.
+      const linkedReceipt =
+        receiptRequest && this.receipts
+          ? await this.receipts.linkInTx(queryRunner.manager, receiptRequest, {
+              applicable:
+                (data.payment_method ?? PaymentMethod.CASH) ===
+                PaymentMethod.CLICK,
+              history_id: String(mainHistory.id),
+              counter_history_id: String(branchHistory.id),
+              entered_amount: Number(data.amount),
+              payment_method: String(data.payment_method ?? PaymentMethod.CASH),
+              card_id: mainCardId ? String(mainCardId) : null,
+              branch_id: String(data.branch_id),
+            })
+          : undefined;
+
       // Advance the per-order FIFO settlement ledger (branch → HQ) in the SAME
       // transaction as the cashbox move (Faza 2a). Reliable outbox delivery to
       // order-service replaces the old best-effort gateway bridge.
@@ -4769,10 +5136,13 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
       // Immediate best-effort publish to close the outbox-poll lag (Faza 2c).
       await this.tryPublishAdvanceNow(advancePayload);
       auditedBranchCashboxId = String(branchCashbox.id);
+      auditedReceiptId = linkedReceipt?.id ?? null;
       return this.successRes(
         {
           branch_cashbox: branchCashbox,
           main_cashbox: mainCashbox,
+          // T3 — `receipt_policy` bo'lsa: chek yoki null.
+          ...(linkedReceipt !== undefined ? { receipt: linkedReceipt } : {}),
         },
         200,
         'Branch to main payment successful',
@@ -4796,6 +5166,7 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
             branch_id: data.branch_id,
             amount: Number(data.amount),
             created_by: data.created_by ?? null,
+            ...(auditedReceiptId ? { receipt_id: auditedReceiptId } : {}),
           },
           description: ActivityDescribeUz.branchToMainPayment(
             data.branch_id,
