@@ -421,7 +421,7 @@ echo "curl $*" >> "$FAKE_LOG"
 cat >> "$FAKE_LOG.stdin" 2>/dev/null
 url="\${@: -1}"
 out=""; while [ $# -gt 0 ]; do [ "$1" = -o ] && out="$2"; shift; done
-case "$url" in *api.telegram.org*|https://x*) ;; esac
+case "$url" in *api.telegram*|https://x*) ;; esac
 if grep -q "api.telegram" "$FAKE_LOG.stdin" 2>/dev/null && [ -z "$out" -o "$out" = /dev/null ]; then echo -n 200; exit 0; fi
 n=$(cat "$FAKE_LOG.n" 2>/dev/null || echo 0); n=$((n + 1)); echo "$n" > "$FAKE_LOG.n"
 if [ -n "\${FAKE_DOWN:-}" ] || { [ -n "\${FAKE_BLIP:-}" ] && [ "$n" = 1 ]; }; then
