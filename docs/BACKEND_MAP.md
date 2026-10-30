@@ -58,7 +58,7 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
 | **order-service** | `order_schema` | `order`, `order_item`, `order_tracking`, `order_settlement`, `order_custody_event`, `branch` (mirror), `branch_transfer_batch(+item,+history)`, `order_batch_inbox_message` | The core. Order lifecycle, sell/cancel/return/rollback, per-order FIFO settlement, transfer batches, order analytics source |
 | **catalog-service** | `catalog_schema` | `product`, `warehouses`, `warehouse_stock`, `stock_movements`, `stock_reservations` | Market product catalog + **temporary warehouse module** (hY7uacJu: regional-branch stock, stock-in/inventory, order reserve/out/release/return RPCs) |
 | **logistics-service** | `logistics_schema` | `region`, `district`, `post`, `delivery_tariff`, `delivery_pricing_settings` | Geo (regions/districts, SATO codes) + **posts** (courier delivery batches): create/send/receive/reassign/cancel/return-requests + **delivery pricing engine** (DAqXPeSy: versioned tariffs, formula settings, `logistics.delivery.quote`) |
-| **finance-service** | `finance_schema` | `cashbox`, `cashbox_history`, `shift`, `user_salary`, `operator_earning`, `operator_payment`, `financial_balance_history` | Cashboxes (main/courier/market/branch), payments, shifts, salaries, operator earnings, company P&L ledger |
+| **finance-service** | `finance_schema` | `cashbox`, `cashbox_history`, `shift`, `user_salary`, `operator_earning`, `operator_payment`, `financial_balance_history`, `payment_corrections` (T6) | Cashboxes (main/courier/market/branch), payments, shifts, salaries, operator earnings, company P&L ledger |
 | **branch-service** | `branch_schema` | `branch`, `branch_config`, `branch_user` | Branch tree (HQ→regional→pickup), per-branch config (ownership/compensation), branch staff, transfer-batch orchestration, branch analytics/dashboard |
 | **investor-service** | `investor_schema` | `investor`, `investment`, `profit_share` | Investor capital, investments, profit-share calculation/payout |
 | **integration-service** | `integration_schema` | `external_integration`, `provider_shipment`, `provider_receivable`, `provider_remittance`, `sync_queue`, `sync_history`, `provider_webhook_log` | External providers (cargo/marketplace): credentials (AES-encrypted), sync queue, dispatch shipments, COD receivables/remittances, inbound HMAC webhooks |
@@ -286,6 +286,17 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
   only via the finance payment endpoints) / `find_by_order`;
   `order.settlement.advance` (per-order FIFO advance enqueued by finance's
   outbox). (See §5.2.)
+  - **T6 (2026-10-30):** `order.settlement.retreat` `{level: courier_to_branch |
+    hq_to_market, match_value, amount, request_id}` (finance outbox, persistent,
+    `runIdempotent` + `reclaimFailed`, applied marker
+    `order.settlement.retreat.applied:<sha256>`): takes min(carry, X), then
+    reopens the newest rows not yet past the next hop (COURIER_SETTLED /
+    HQ-courier BRANCH_SETTLED → PENDING; MARKET_SETTLED → BRANCH_SETTLED),
+    excess → carry, shortfall → NEGATIVE carry. `runFifoSettlement` no longer
+    clamps a negative carry (the next payment closes it first); summaries and
+    `courier_scope.carry_amount` are signed. `order.payment_reversal.apply`
+    `{order_id, paid_amount, status}` uses `ORDER_PAYMENT_REVERSAL_EXTRA_
+    TRANSITIONS` (PAID → PARTLY_PAID|SOLD, PARTLY_PAID → SOLD) — only there.
   - **fix3 (2026-10-01):** `order.settlement.advance` runs with
     `reclaimFailed: true` and writes an "applied" marker
     (`order.settlement.advance.applied:<sha256(token)>` in `idempotency_keys`)
@@ -566,6 +577,36 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
   `marketPayableTotal` (sum of positive market balances). Financial-balance
   history/analytics/top-impacts and the cashbox history date filters use
   Tashkent days for `YYYY-MM-DD`.
+- **Payment correction (T6, 2026-10-30, migr `1716000000186`):** SUPERADMIN
+  only reverses or re-amounts a courier receipt (`courier_payment`, MAIN/BRANCH,
+  cash/click/click_to_market) or an HQ market payment (`market_payment`).
+  Every payment leg now carries `cashbox_history.transfer_id` (uuid; written
+  by `applyCourierPaymentInTx` / `applyMarketPaymentInTx` — the tx-scoped money
+  parts of `paymentsFromCourier` / `paymentsToMarket`; migration backfilled 365
+  days of unambiguous pairs, ambiguous → NULL = `LEGACY_UNLINKED`).
+  `PaymentCorrectionService` (`payment-correction/`): locks courier → MAIN/
+  BRANCH → market, writes one `payment_reversal` row per original leg
+  (`reverses_history_id` UNIQUE partial, `source_id` = leg id, `dedup_epoch`
+  `pc:<id>`, comment = reason; originals untouched), edit = reversal +
+  replacement payment in ONE tx (`dedup_epoch pc:<id>`, no
+  `finance.payment_received` / PAYMENT audit). Journal
+  `finance_schema.payment_corrections` (`original_transfer_id` and
+  `idempotency_key` UNIQUE, chain `root_transfer_id` / `root_created_at`).
+  Window `finance_settings` `payment_correction.window_days` (1…365, none → 30)
+  from the chain root. Same tx outbox: `order.settlement.retreat` (persistent
+  pattern; courier → `courier_to_branch`, market leg → `hq_to_market`), then
+  (edit) `order.settlement.advance`, `finance.payment_corrected` per recipient
+  (recipient language via `identity.audience.resolve`), realtime
+  `finance.payment.corrected`. After commit: audit
+  `finance.payment_reversed` / `finance.payment_amount_corrected`
+  (`partner_notified: false`) and, for market legs, background
+  `revertPaymentFromOrders` (newest PAID/PARTLY_PAID → `order.payment_
+  reversal.apply`) then `applyPaymentToOrders(new)`. Coded errors in
+  `libs/common/src/finance/payment-correction.ts` (+ `PUBLIC_ERROR_CODES`).
+  History responses carry `transfer_id`, `reverses_history_id`, `correction`;
+  `/history/:id` gives SA `correctable`. Courier ack on a corrected payment →
+  409 `PAYMENT_CORRECTED`. RMQ: `finance.payment_correction.{reverse,
+  correct_amount,context,settings.get,settings.update}`.
 - **Expense categories (Elchi Pochta №1):** `cashbox_expense_categories`
   (superadmin CRUD, soft delete); a manual `spend` stores the category id +
   name snapshot on its history row. Since 2026-10-22 the HTTP
@@ -887,6 +928,7 @@ Imported as `@app/common`. Top level: `enums/`, `helpers/`, `src/`.
 - **`src/outbox`** — transactional outbox pattern support (reliable RMQ emit).
   fix3 (2026-10-01, M8): **money events never become `failed`** —
   `DEFAULT_PERSISTENT_OUTBOX_PATTERNS` = `finance.*` + `order.settlement.advance`
+  (+ `order.settlement.retreat`, T6)
   retry forever at the 60 s backoff cap (other events still poison after
   `maxAttempts`, default 10). New `OutboxOptions`: `maxAttempts`,
   `persistentPatterns` (`[]` = old behaviour), `stuckAlertAttempts` (pending

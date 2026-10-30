@@ -8355,7 +8355,8 @@
                 "sell",
                 "cancel",
                 "extra_cost",
-                "bills"
+                "bills",
+                "payment_reversal"
               ]
             }
           },
@@ -9171,7 +9172,8 @@
                 "sell",
                 "cancel",
                 "extra_cost",
-                "bills"
+                "bills",
+                "payment_reversal"
               ]
             }
           },
@@ -9430,7 +9432,8 @@
                 "sell",
                 "cancel",
                 "extra_cost",
-                "bills"
+                "bills",
+                "payment_reversal"
               ]
             }
           },
@@ -9573,6 +9576,238 @@
           "courier",
           "market",
           "manager"
+        ]
+      }
+    },
+    "/finance/payment-corrections/settings": {
+      "get": {
+        "description": "`window_days` (1…365, qator yo'q — 30), `updated_by`, `updated_at`. Muddat zanjirning birinchi to'lovidan hisoblanadi; o'zgarsa darhol hammaga.",
+        "operationId": "FinanceGatewayController_getPaymentCorrectionSettings",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "example": {
+                    "statusCode": 200,
+                    "message": "success",
+                    "data": {
+                      "window_days": 30,
+                      "updated_by": null,
+                      "updated_at": null
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "(T6) To'lovni qaytarish / tuzatish muddati — FAQAT superadmin",
+        "tags": [
+          "Finance"
+        ],
+        "x-roles": [
+          "superadmin"
+        ]
+      },
+      "patch": {
+        "description": "`window_days` — butun son 1…365, aks holda 400. Activity-log: `finance.payment_correction_settings_updated`.",
+        "operationId": "FinanceGatewayController_updatePaymentCorrectionSettings",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdatePaymentCorrectionSettingsRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "(T6) To'lovni qaytarish / tuzatish muddatini o'zgartirish — FAQAT superadmin",
+        "tags": [
+          "Finance"
+        ],
+        "x-roles": [
+          "superadmin"
+        ]
+      }
+    },
+    "/finance/history/{id}/reverse": {
+      "post": {
+        "description": "Har asl oyoqqa teskari qator (`payment_reversal`, `reverses_history_id`, `comment` = sabab); asl qatorlar o'zgarmaydi. Kuryer to'lovi: kuryer +X, qabul qiluvchi (MAIN/BRANCH) −X; click_to_market: + MAIN sof 0, market +X. Marketga to'lov: MAIN +X, market +X. Bitta tranzaksiya, xatoda pul o'zgarmaydi. 201 `{ correction, cashboxes, idempotent: false }`; o'sha kalit → 200 `idempotent: true`; o'sha kalit boshqa so'rovda → 409 `IDEMPOTENCY_KEY_REUSED`. Xatolar (`code`): 404 `NOT_FOUND`; 409 `NOT_CORRECTABLE` / `LEGACY_UNLINKED` / `ALREADY_CORRECTED` / `WINDOW_EXPIRED` (+ `deadline`) / `INSUFFICIENT_BALANCE` / `CARD_ARCHIVED`; 400 `SHIFT_REQUIRED` / `BRANCH_SHIFT_REQUIRED` / `IDEMPOTENCY_KEY_REQUIRED`.",
+        "operationId": "FinanceGatewayController_reversePayment",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "To'lovning ISTALGAN oyog'i (kuryer / qabul qiluvchi / market kassasidagi cashbox_history id)",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "idempotency-key",
+            "required": true,
+            "in": "header",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReversePaymentRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "example": {
+                    "statusCode": 201,
+                    "message": "To'lov qaytarildi",
+                    "data": {
+                      "correction": {
+                        "id": "12",
+                        "action": "reverse",
+                        "payment_kind": "courier_payment",
+                        "original_amount": 500000,
+                        "new_amount": null,
+                        "reason": "Kuryer pulni bermagan — xato bosilgan",
+                        "created_by": "1",
+                        "created_at": "2026-10-30T09:00:00.000Z"
+                      },
+                      "cashboxes": [
+                        {
+                          "id": "7",
+                          "user_id": "301",
+                          "cashbox_type": "couriers",
+                          "balance": 500000,
+                          "balance_cash": 500000,
+                          "balance_card": 0
+                        },
+                        {
+                          "id": "1",
+                          "user_id": "0",
+                          "cashbox_type": "main",
+                          "balance": 0,
+                          "balance_cash": 0,
+                          "balance_card": 0
+                        }
+                      ],
+                      "idempotent": false
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "(T6) Kuryerdan qabul / marketga to'lovni TO'LIQ qaytarish — FAQAT superadmin",
+        "tags": [
+          "Finance"
+        ],
+        "x-roles": [
+          "superadmin"
+        ]
+      }
+    },
+    "/finance/history/{id}/correct-amount": {
+      "post": {
+        "description": "Qaytarish + yangi summali to'lov (o'sha usul / karta / qabul qiluvchi), BITTA tranzaksiyada; kvitansiya (`finance.payment_received`) yo'q, tomonlarga `finance.payment_corrected`. Javob `/reverse` bilan bir xil shakl (`correction.action = edit`). Qo'shimcha xatolar: 409 `SAME_AMOUNT`; 409 `AMOUNT_EXCEEDS` + `max` (kuryer qoldig'i + X; market qarzi + X — kichigi). Tahrirdan keyingi to'lovni yana tuzatish mumkin, muddat zanjirning birinchi to'lovidan.",
+        "operationId": "FinanceGatewayController_correctPaymentAmount",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "To'lovning ISTALGAN oyog'i (cashbox_history id)",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "idempotency-key",
+            "required": true,
+            "in": "header",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CorrectPaymentAmountRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "(T6) To'lov summasini tuzatish (qaytarish + yangi summa) — FAQAT superadmin",
+        "tags": [
+          "Finance"
+        ],
+        "x-roles": [
+          "superadmin"
         ]
       }
     },
@@ -15026,7 +15261,8 @@
               "enum": [
                 "finance.payment_received",
                 "finance.payment_disputed",
-                "finance.cash_reminder"
+                "finance.cash_reminder",
+                "finance.payment_corrected"
               ]
             }
           }
@@ -25917,7 +26153,8 @@
               "sell",
               "cancel",
               "extra_cost",
-              "bills"
+              "bills",
+              "payment_reversal"
             ],
             "example": "courier_payment"
           },
@@ -26224,6 +26461,57 @@
         },
         "required": [
           "amount"
+        ]
+      },
+      "UpdatePaymentCorrectionSettingsRequestDto": {
+        "type": "object",
+        "properties": {
+          "window_days": {
+            "type": "number",
+            "example": 7,
+            "minimum": 1,
+            "maximum": 365,
+            "description": "To'lovni qaytarish / tuzatish muddati (kun): zanjirning birinchi to'lovidan `window_days × 24 soat`. Sukut 30."
+          }
+        },
+        "required": [
+          "window_days"
+        ]
+      },
+      "ReversePaymentRequestDto": {
+        "type": "object",
+        "properties": {
+          "reason": {
+            "type": "string",
+            "example": "Kuryer pulni bermagan — xato bosilgan",
+            "minLength": 5,
+            "maxLength": 500,
+            "description": "Sabab (5…500 belgi). Jurnalda va kuryer/market tafsilotida ko'rinadi, bildirishnoma matnida YO'Q."
+          }
+        },
+        "required": [
+          "reason"
+        ]
+      },
+      "CorrectPaymentAmountRequestDto": {
+        "type": "object",
+        "properties": {
+          "reason": {
+            "type": "string",
+            "example": "Kuryer pulni bermagan — xato bosilgan",
+            "minLength": 5,
+            "maxLength": 500,
+            "description": "Sabab (5…500 belgi). Jurnalda va kuryer/market tafsilotida ko'rinadi, bildirishnoma matnida YO'Q."
+          },
+          "new_amount": {
+            "type": "number",
+            "example": 450000,
+            "description": "Yangi summa (> 0, ko'pi bilan 2 kasr). Eskisiga teng — 409 SAME_AMOUNT; `max` dan katta — 409 AMOUNT_EXCEEDS."
+          }
+        },
+        "required": [
+          "reason",
+          "new_amount"
         ]
       },
       "OpenShiftRequestDto": {
@@ -29181,7 +29469,8 @@
             "enum": [
               "finance.payment_received",
               "finance.payment_disputed",
-              "finance.cash_reminder"
+              "finance.cash_reminder",
+              "finance.payment_corrected"
             ],
             "example": "finance.payment_received"
           },
