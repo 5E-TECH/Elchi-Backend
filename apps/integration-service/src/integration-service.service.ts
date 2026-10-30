@@ -126,7 +126,7 @@ const PAID_STATUSES = new Set<string>([
 ]);
 
 /**
- * `external_order_id` uchun KELISHILGAN SHAKL (kontrakt: docs/PARTNER_API.md §4).
+ * `external_order_id` uchun KELISHILGAN SHAKL (kontrakt: docs/public/MARKETPLACE_API.md §6).
  *
  * NEGA TEKSHIRILADI. Qiymat hamkorda odatda UUID ustuniga yoziladi. Shakli
  * buzilgan qiymat (bo'sh joy, satr ko'chirish, qo'shtirnoq, juda uzun matn)
@@ -1197,7 +1197,7 @@ export class IntegrationServiceService {
    * Per-seller market provisioning (C1.5). Hamkorning tashqi sotuvchisi uchun
    * Elchi'da market akkaunt (+ avtomat cashbox) ochadi. Idempotent:
    * (partner_id, external_seller_id) bo'yicha ikkinchi marta yangi market
-   * ochilmaydi — mavjud elchi_market_id qaytadi. Kontrakt: docs/PARTNER_API.md §3.2.
+   * ochilmaydi — mavjud elchi_market_id qaytadi. Kontrakt: docs/public/MARKETPLACE_API.md §5.1.
    */
   async provisionPartnerMarket(dto: {
     partner_id?: string;
@@ -1705,7 +1705,7 @@ export class IntegrationServiceService {
    * bilan yaratiladi/topiladi (phone bo'yicha idempotent). Item nomlari hozircha
    * `product_id=null`, `product_name` va quantity bilan order item sifatida
    * saqlanadi (C2.5).
-   * Kontrakt: docs/PARTNER_API.md §3.3.
+   * Kontrakt: docs/public/MARKETPLACE_API.md §5.2.
    */
   async createPartnerShipment(dto: {
     partner_id?: string;
@@ -2021,7 +2021,7 @@ export class IntegrationServiceService {
    * javobidagi `shipment_id`). Faqat shu hamkorning o'z posilkasi ko'rinadi:
    * partner_shipment_ref (partner_id, order_id) bo'yicha scope tekshiriladi —
    * topilmasa 404 (boshqa hamkor posilkasi ham 404, ma'lumot sizib chiqmaydi).
-   * Kontrakt: docs/PARTNER_API.md §3.4.
+   * Kontrakt: docs/public/MARKETPLACE_API.md §5.3.
    */
   /**
    * `GET|POST /partner/shipments/:id` uchun posilkani topadi.
@@ -2312,7 +2312,7 @@ export class IntegrationServiceService {
    * C2.2 — Partner shipment bekor qilish. Faqat o'z posilkasi (ref scope).
    * Yetkazib bo'lingan (`SOLD`) posilkani bekor qilib bo'lmaydi → 409. Allaqachon
    * bekor qilingan bo'lsa — idempotent 200. Aks holda Elchi `order.cancel`
-   * chaqiriladi. Kontrakt: docs/PARTNER_API.md §3.4.
+   * chaqiriladi. Kontrakt: docs/public/MARKETPLACE_API.md §5.4.
    */
   async cancelPartnerShipment(dto: {
     partner_id?: string;

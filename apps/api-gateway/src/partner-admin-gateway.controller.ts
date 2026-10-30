@@ -44,7 +44,7 @@ import {
  * kiriladigan `/partner/*` EMAS: bu Elchi adminlari hamkor yaratadigan,
  * kalitini rotate qiladigan, faollashtiradigan JWT+rol bilan himoyalangan panel.
  * Haqiqiy logika integration-service'da; kalit hash, secret AES, har amal
- * activity-log. Kontrakt: docs/PARTNER_API.md §7.3.
+ * activity-log. Kontrakt: docs/public/MARKETPLACE_API.md §7.
  */
 @ApiTags('Partners (admin)')
 @ApiBearerAuth()

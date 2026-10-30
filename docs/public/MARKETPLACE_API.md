@@ -1,6 +1,9 @@
 # Elchi Pochta — Marketplace API
 
-**Dasturchilar uchun qo'llanma** · Versiya 1 · Oxirgi yangilanish: 2026-09-12
+**Dasturchilar uchun qo'llanma** · Versiya 1 · Oxirgi yangilanish: 2026-10-30
+
+> Tayyor so'rovlar to'plami (Postman): [`elchi-partner-api.postman_collection.json`](./elchi-partner-api.postman_collection.json)
+> — o'zgaruvchilar `{{base_url}}`, `{{api_key}}`, `{{elchi_market_id}}`, `{{shipment_id}}`.
 
 Bu hujjat marketplace, do'kon, CRM yoki boshqa tizim dasturchisi uchun: Elchi
 Pochta'ga qanday ulanish, buyurtmani yetkazishga topshirish va statusni
@@ -202,7 +205,7 @@ Narxni mijozga ko'rsatishdan oldin shu bilan tekshiring. `where_deliver`:
 
 Har bir sotuvchi (do'kon) Elchi tomonida **market akkaunti** oladi. Bu bir
 marta bajariladi va **idempotent** — takror chaqirsangiz o'sha akkaunt
-qaytadi.
+qaytadi, yangisi ochilmaydi.
 
 ```http
 POST /partner/markets
@@ -213,25 +216,53 @@ Content-Type: application/json
   "external_seller_id": "seller-4471",
   "name": "Zamon Store",
   "phone": "+998901234567",
-  "region_id": "3",
   "tariff_home": 25000,
   "tariff_center": 15000
 }
 ```
 
+**Birinchi chaqiruv** — yangi market ochildi, **201**:
+
 ```json
 {
-  "statusCode": 200,
+  "statusCode": 201,
   "message": "market provisioned",
-  "data": { "elchi_market_id": "121", "tariff_home": 25000, "tariff_center": 15000 }
+  "data": { "elchi_market_id": "121" }
 }
 ```
 
-- `external_seller_id` — **idempotency kaliti**. Sizning tizimingizdagi
-  sotuvchi id'si. O'zgarmas bo'lishi kerak.
-- `elchi_market_id` ni **saqlab qo'ying** — har posilkada kerak.
-- Tariflar berilsa yangilanadi; **berilmasa mavjudi saqlanadi** (tasodifan
-  0 ga tushib, bepul yetkazishga aylanib qolmasin).
+**Takror chaqiruv** (ayni `external_seller_id`) — **200**, yangi market
+ochilmaydi:
+
+```json
+{
+  "statusCode": 200,
+  "message": "market already provisioned",
+  "data": { "elchi_market_id": "121", "idempotent": true, "tariff_updated": false }
+}
+```
+
+| Maydon | Majburiy | Izoh |
+|---|---|---|
+| `external_seller_id` | ✅ | **Idempotency kaliti** — sizning tizimingizdagi sotuvchi id'si. O'zgarmas bo'lishi kerak |
+| `name`, `phone` | ✅ | Faqat **birinchi** chaqiruvda ishlatiladi (market nomi va telefoni) |
+| `tariff_home`, `tariff_center` | — | Elchi xizmat haqi (so'm): uyga / punktgacha. Birinchi chaqiruvda berilmasa — 0 |
+| `region_id`, `district_id` | — | Qabul qilinadi, hozircha ishlatilmaydi |
+
+- `elchi_market_id` ni **saqlab qo'ying** — har posilkada kerak (§5.2).
+- **Tarif yangilash.** Takror chaqiruvda tarif berilsa, Elchi'dagi tarif
+  **ustidan yoziladi** va javobda `tariff_updated: true`. Faqat bittasini
+  yuborsangiz (masalan `tariff_center`), ikkinchisi **o'zgarmaydi** (0 ga
+  tushib, bepul yetkazishga aylanib qolmaydi). Tarif berilmasa — hech narsa
+  o'zgarmaydi.
+- **Market kabinetiga kirish.** Market akkaunti tasodifiy parol bilan
+  ochiladi — sotuvchi Elchi kabinetiga kirishi kerak bo'lsa, login/parolni
+  Elchi operatori o'rnatadi.
+- **Sotuvchi Elchi'da allaqachon market bo'lsa.** Yangi market ochish o'rniga
+  Elchi operatori sizning `external_seller_id` ni o'sha **mavjud marketga
+  bog'laydi** (admin panel). Shundan keyin `POST /partner/markets` ni
+  **tarifsiz** chaqiring — javob 200 `idempotent: true` va mavjud
+  `elchi_market_id` bo'ladi (tarif yuborsangiz, ichki tarif ustidan yoziladi).
 
 ### 5.2 Buyurtmani topshirish
 
@@ -276,12 +307,20 @@ Content-Type: application/json
 | `external_order_id` | ✅ | **Idempotency kaliti.** Sizning buyurtma id'ingiz |
 | `elchi_market_id` | ✅ | §5.1 dan |
 | `customer.name`, `customer.phone` | ✅ | Mijoz — telefon bo'yicha topiladi/yaratiladi. Telefon O'zbekiston raqami bo'lishi shart (pastga qara) |
-| `region_id`, `district_id` | ✅ | §4 dan |
-| `address` | uyga yetkazishda | `where_deliver: "address"` bo'lsa shart |
-| `where_deliver` | — | `center` \| `address` (standart: `address`) |
-| `items[]` | — | `{ name, quantity, external_product_id? }` |
+| `district_id` | ✅ | §4 dan |
+| `region_id` | — | §4 dan. Berilmasa tumandan aniqlanadi |
+| `where_deliver` | — | `center` \| `address` (**standart: `center`** — punktdan olib ketish) |
+| `address` | — | Uyga yetkazish manzili. ⚠️ `where_deliver: "address"` da bo'sh manzil ham **qabul qilinadi** (rad etilmaydi) — lekin kuryer manzilni mijozdan so'rab aniqlaydi, shuning uchun **yuboring** |
+| `items[]` | — | `{ name, quantity?, external_product_id? }` |
 | `cod_amount` | ✅ | Kuryer mijozdan **yig'adigan** summa. `0` = oldindan to'langan |
-| `subtotal` | ✅ | Buyurtma summasi — **`cod_amount` bilan teng yuboring** (pastga qara) |
+| `subtotal` | ✅ | Buyurtma summasi — **`cod_amount` bilan teng yuboring** (pastga qara). Berilmasa `cod_amount` olinadi |
+| `label_token` | — | Sizning **yorlig'ingizdagi QR** qiymati: 8–128 belgi, faqat `A-Z a-z 0-9 _ -`. Berilsa Elchi uni posilkaga yozadi va yorliq **QR sifatida chop etiladi / skanerlanadi**. Boshqa posilkada band bo'lsa — **409**. Berilmasa Elchi o'z tokenini yaratadi (javobdagi `qr_code_token`) |
+| `batch_ref` | — | Qop / pochta id'ingiz (≤128) — kiruvchi ekranda posilkalarni guruhlash uchun |
+| `batch_label_token` | — | **Qop ustidagi QR** (format `label_token` bilan bir xil). Operator bitta skan bilan qopdagi barcha posilkani qabul qiladi |
+| `batch_size` | — | Qopdagi posilka soni (1–10000) — Elchi o'zi sanagani bilan solishtiradi |
+| `comment` | — | Izoh (≤1000) — Elchi kuryeri yetkazishda ko'radi. Berilmasa mahsulotlar ro'yxatidan tuziladi |
+
+Jadvalda yo'q maydon yuborilsa — **400** (`property … should not exist`).
 
 #### ⚠️ `cod_amount` va `subtotal` teng bo'lishi kerak
 
@@ -397,6 +436,7 @@ X-Api-Key: elp_...
 ```
 
 - Yetkazilgan posilka **bekor qilinmaydi** → **409**.
+- Muvaffaqiyatli bekor qilishda webhook `status: "cancelled"` keladi (§6.5).
 - Allaqachon bekor qilingan bo'lsa **200** va `idempotent: true`.
 
 ### 5.5 Yangilash
@@ -463,6 +503,9 @@ Operatorga bering:
 
 ### 6.1 So'rov
 
+Ikki xil hodisa keladi (`event` maydoni): `shipment.status_changed` — posilka
+holati (§6.5) va `settlement.payment` — Elchi sotuvchiga to'lov qildi (§6.6).
+
 ```http
 POST /your/webhook HTTP/1.1
 Content-Type: application/json
@@ -475,11 +518,21 @@ X-Elchi-Signature: 5d41402abc4b2a76b9719d911017c592...
   "shipment_id": "124",
   "status": "sold",
   "cod_collected": 0,
+  "market_paid_amount": 0,
+  "collected_from_customer": 450000,
+  "elchi_fee": 15000,
+  "market_amount": 435000,
   "total_price": 450000,
   "extra_cost": 0,
   "occurred_at": "2026-09-12T09:30:01.235Z"
 }
 ```
+
+`collected_from_customer` (kuryer mijozdan yig'gan naqd), `elchi_fee` (Elchi
+ushlagan tarif) va `market_amount` (Elchi sizga qarz) — sotuvdan keyin
+(`sold`, `paid`, `partly_paid`) raqam; sotuvgacha (`received`, `on the road`,
+`waiting` …) **`null`** — "hali hisoblanmagan", 0 emas. `cod_collected` /
+`market_paid_amount` — sotuv holatlaridan boshqasida 0.
 
 ### 6.2 Imzoni tekshirish — MAJBURIY
 
@@ -571,21 +624,58 @@ Busiz bitta sotuv ikki marta hisoblanib, **pul xatosi** bo'ladi.
 
 ### 6.5 Statuslar
 
+`shipment.status_changed` hodisasida **haqiqatan yuboriladigan** `status`
+qiymatlari:
+
 | `status` | Ma'nosi | Terminalmi |
 |---|---|---|
-| `new` | Elchi qabul qildi | yo'q |
-| `received` | Punktda | yo'q |
-| `on the road` | Kuryerda | yo'q |
-| `waiting` | Yetkazish jarayonida | yo'q |
+| `received` | Elchi posilkani **qabul qildi** (HQ / punktga keldi, skanerlandi) | yo'q |
+| `on the road` | Posilka **pochta bilan yo'lda** — filial / viloyat punktiga ketmoqda (kuryer qo'lida mijozga ketayotgani **emas**) | yo'q |
+| `waiting` | Yetkazish jarayonida (kuryerda / yetkazib bo'lmadi, qayta uriniladi; bekor yoki sotuvdan qaytarilganda ham shu) | yo'q |
+| `waiting_customer` | Kuryer mijozga yetkaza olmadi (javob bermadi / keyinga qoldirdi) — hali terminal emas | yo'q |
 | `sold` | **Yetkazildi**, pul yig'ildi | ✅ ha |
 | `paid` / `partly_paid` | Yetkazildi va hisob-kitob qilindi | ✅ ha |
 | `cancelled` | Bekor qilindi | ✅ ha |
+| `cancelled (sent)` | Bekor qilindi va posilka sotuvchiga qaytarish pochtasiga qo'shildi | ✅ ha |
 | `returned_to_market` | Sotuvchiga qaytarildi | ✅ ha |
+
+`new` (posilka Elchi'da **yaratildi**, hali qabul qilinmagan) — `POST
+/partner/shipments` javobidagi `order_status` va `GET /partner/shipments/:id`
+da ko'rinadi; webhook sifatida **kelmaydi**.
 
 Ro'yxatda yo'q statusni **xato deb hisoblamang** — yozib qo'ying va
 e'tiborsiz qoldiring. Biz yangi oraliq status qo'shishimiz mumkin.
 
-### 6.6 Sandbox — sinov manzili
+### 6.6 `settlement.payment` — sotuvchiga to'lov
+
+Elchi sizning sotuvchingizga (market) pul to'laganda yuboriladi. Imzo, qayta
+urinish va `event_id` qoidalari — yuqoridagidek.
+
+```json
+{
+  "event": "settlement.payment",
+  "event_id": "5b0e7d0a-2f7f-4c43-9a4a-2a8d6c1f8e11",
+  "payment_id": "8812",
+  "amount": 1250000,
+  "paid_at": 1789203601000,
+  "market_id": "121",
+  "occurred_at": "2026-09-12T09:40:01.000Z",
+  "note": null
+}
+```
+
+| Maydon | Izoh |
+|---|---|
+| `payment_id` | To'lovning barqaror id'si — **daftaringizda takror kaliti** (bir to'lov ikki marta kelsa ham bir marta yozing) |
+| `amount` | To'langan summa (so'm, > 0) |
+| `paid_at` | To'lov vaqti, epoch **millisekund** |
+| `occurred_at` | O'sha vaqt ISO formatda |
+| `market_id` | `elchi_market_id` (§5.1) |
+| `note` | Izoh yoki `null` |
+
+Faqat sizga **faol bog'langan** marketlar bo'yicha keladi.
+
+### 6.7 Sandbox — sinov manzili
 
 Operator qo'shimcha **`sandbox_webhook_url`** qo'yishi mumkin. Unda har bir
 hodisaning **nusxasi** o'sha manzilga ham boradi:
@@ -597,7 +687,7 @@ Bu prodakshn qabul qiluvchisiga tegmasdan haqiqiy hodisalar oqimini
 kuzatish uchun. Sandbox xatosi **asosiy yetkazishga ta'sir qilmaydi** va
 qayta urinilmaydi.
 
-### 6.7 Ulanishni sinash
+### 6.8 Ulanishni sinash
 
 Operator admin panelidan **sinov hodisasi** yubora oladi — haqiqiy buyurtma
 kutmasdan:
@@ -624,6 +714,7 @@ narsa qilmang.
 - [ ] `regions` va `districts` ni olib **keshlang**, tumanlarni **SOATO
       bo'yicha** moslang
 - [ ] Har sotuvchi uchun `POST /partner/markets`, `elchi_market_id` ni saqlang
+      (sotuvchi Elchi'da allaqachon market bo'lsa — avval operator bog'laydi, §5.1)
 - [ ] Webhook endpointini yozing: **xom tana** + **imzo tekshiruvi** +
       **`event_id` bo'yicha takror himoyasi** + tez 2xx
 - [ ] Operatorga `webhook_url` va `webhook_secret` bering

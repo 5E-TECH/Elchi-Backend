@@ -53,6 +53,9 @@ Deploy: **integration-service + api-gateway** (+ libs/common). Migratsiya **yo'q
   `cod_collected` — 0. Webhook navbatga qo'yilmasa ham (integration ishlamasa) qabul javobi 200. Eski tashqi
   adapterlar (`integration.sync.enqueue`) bu holatlarni olmaydi; o'tgan buyurtmalar uchun backfill yo'q. Hamkor
   monitorida (`GET /admin/partners/webhooks`) yangi `new_status` qiymatlari ko'rinadi. → FE o'zgarishi shart emas.
+- [2026-10-30] 🟢 [docs] — hamkor hujjati `docs/public/MARKETPLACE_API.md` kodga moslandi (§5.1 javoblari 201/200,
+  §5.2 maydonlari — `label_token`, qop maydonlari, `comment`, `where_deliver` standarti `center`; §6.5 haqiqiy statuslar;
+  §6.6 `settlement.payment`) va Postman to'plami qo'shildi: `docs/public/elchi-partner-api.postman_collection.json`.
 
 ### 2026-10-30 — T8: buyurtmaning maxsus belgilari (mo'rt, diniy kitob, suyuqlik …) (0OUcHZ7R)
 
