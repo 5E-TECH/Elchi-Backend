@@ -59,6 +59,9 @@ const ORDERS: OrderRowLike[] = [
     branch_id: '1',
     market_tariff: 20000,
     special_categories: ['fragile', 'battery'],
+    // CqBD8V4p: qisqa qatorda ham (gateway `problem_contacts`).
+    region_id: '6',
+    district_id: '60',
   },
   {
     id: '701',
@@ -302,6 +305,8 @@ describe('dwJX3NjT (S2) — pochta skani mazmuni', () => {
         customer: { name: 'Ali Valiyev', phone_number: '+998901234567' },
         region: 'Buxoro viloyati',
         district: 'Buxoro tumani',
+        region_id: '6',
+        district_id: '60',
         // T8: pochta skanida maxsus belgilar (buyurtma qatoridan).
         special_categories: ['fragile', 'battery'],
       },
@@ -314,6 +319,8 @@ describe('dwJX3NjT (S2) — pochta skani mazmuni', () => {
         customer: { name: 'Vali Aliyev', phone_number: '+998907654321' },
         region: 'Buxoro viloyati',
         district: 'Kogon tumani',
+        region_id: null,
+        district_id: null,
         // Qatorda ustun yo'q — xulosadan.
         special_categories: ['heavy'],
       },

@@ -6549,7 +6549,7 @@
     },
     "/post/scan/{id}": {
       "get": {
-        "description": "X4RzXk1H: doira `GET /post/orders/:id` bilan bir xil — filial xodimi o'z filiali pochtasini (yoki buyurtmalari to'liq o'z filialida turganini), kuryer o'z pochtasini ko'radi; boshqasi 403. Skan pochtani o'zgartirmaydi. dwJX3NjT: javob — pochta qatori (avvalgi maydonlar o'zgarmagan) + `region` `{id, name}`, `courier` `{id, name, phone_number}` (kuryersiz — null) va `orders[]` `{id, order_number, status, total_price, where_deliver, region, district, customer {name, phone_number}}` — `GET /post/orders/:id` dagi ro'yxat (kuryerga SENT pochtada faqat yo'ldagilar). `GET /scan/:token` (`POST-…`) ham aynan shu javobni `type: post` bilan qaytaradi.",
+        "description": "X4RzXk1H: doira `GET /post/orders/:id` bilan bir xil — filial xodimi o'z filiali pochtasini (yoki buyurtmalari to'liq o'z filialida turganini), kuryer o'z pochtasini ko'radi; boshqasi 403. Skan pochtani o'zgartirmaydi. dwJX3NjT: javob — pochta qatori (avvalgi maydonlar o'zgarmagan) + `region` `{id, name}`, `courier` `{id, name, phone_number}` (kuryersiz — null) va `orders[]` `{id, order_number, status, total_price, where_deliver, region, district, region_id, district_id, customer {name, phone_number}, problem_contacts}` — `GET /post/orders/:id` dagi ro'yxat (kuryerga SENT pochtada faqat yo'ldagilar). `GET /scan/:token` (`POST-…`) ham aynan shu javobni `type: post` bilan qaytaradi.",
         "operationId": "LogisticsGatewayController_getPostByScan",
         "parameters": [
           {
@@ -17787,7 +17787,7 @@
     },
     "/transfer-batches/{id}": {
       "get": {
-        "description": "3HKvAyhm: javobda `source_branch` / `destination_branch` `{ id, name }` — menejer ham filial nomini ko'radi (`GET branches/:id` faqat SA/admin). Z3pUOxou — LOGIST: paket o'z viloyatiga (`target_region_id`) boruvchi bo'lsa, aks holda 403; `total_price`, `items[].snapshot_price` va `items[].order` dagi pul maydonlari yo'q.",
+        "description": "3HKvAyhm: javobda `source_branch` / `destination_branch` `{ id, name }` — menejer ham filial nomini ko'radi (`GET branches/:id` faqat SA/admin). Z3pUOxou — LOGIST: paket o'z viloyatiga (`target_region_id`) boruvchi bo'lsa, aks holda 403; `total_price`, `items[].snapshot_price` va `items[].order` dagi pul maydonlari yo'q. T7 (CqBD8V4p): `items[].order.problem_contacts: [{name, phone, source: 'logist'|'support'}]` — chop etish uchun.",
         "operationId": "BranchGatewayController_findTransferBatchById",
         "parameters": [
           {
@@ -17878,6 +17878,7 @@
     },
     "/transfer-batches/{id}/remaining": {
       "get": {
+        "description": "T7 (CqBD8V4p): `items[].order.problem_contacts: [{name, phone, source: 'logist'|'support'}]` — chop etish uchun.",
         "operationId": "BranchGatewayController_findRemainingTransferBatchById",
         "parameters": [
           {

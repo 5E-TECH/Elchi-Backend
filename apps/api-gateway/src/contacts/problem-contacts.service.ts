@@ -49,11 +49,13 @@ const isPlainObject = (value: unknown): value is Record<string, unknown> => {
 
 /**
  * Buyurtma qatori: `market_id` VA `customer_id` kalitlari bor obyekt
- * (market/mijoz foydalanuvchi yozuvida `customer_id` yo'q).
+ * (market/mijoz foydalanuvchi yozuvida `customer_id` yo'q) yoki pochta skani
+ * `orders[]` dagi qisqa shakl (CqBD8V4p): `order_number` + viloyat/tuman id.
  */
 const isOrderRow = (row: Record<string, unknown>): boolean =>
-  ('market_id' in row || 'marketId' in row) &&
-  ('customer_id' in row || 'customerId' in row);
+  (('market_id' in row || 'marketId' in row) &&
+    ('customer_id' in row || 'customerId' in row)) ||
+  ('order_number' in row && ('region_id' in row || 'district_id' in row));
 
 const nestedId = (value: unknown): unknown =>
   isPlainObject(value) ? value.id : undefined;

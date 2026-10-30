@@ -19,7 +19,7 @@ import {
 } from '@nestjs/common';
 import { ClientProxy } from '@nestjs/microservices';
 import { formatOrderNumber, Roles as RoleEnum } from '@app/common';
-import { firstValueFrom, map, TimeoutError, timeout } from 'rxjs';
+import { firstValueFrom, map, switchMap, TimeoutError, timeout } from 'rxjs';
 import {
   ApiBadRequestResponse,
   ApiConflictResponse,
@@ -859,7 +859,7 @@ export class LogisticsGatewayController {
     summary: 'Get post by scanner',
     description:
       "X4RzXk1H: doira `GET /post/orders/:id` bilan bir xil — filial xodimi o'z filiali pochtasini (yoki buyurtmalari to'liq o'z filialida turganini), kuryer o'z pochtasini ko'radi; boshqasi 403. Skan pochtani o'zgartirmaydi. " +
-      "dwJX3NjT: javob — pochta qatori (avvalgi maydonlar o'zgarmagan) + `region` `{id, name}`, `courier` `{id, name, phone_number}` (kuryersiz — null) va `orders[]` `{id, order_number, status, total_price, where_deliver, region, district, customer {name, phone_number}}` — `GET /post/orders/:id` dagi ro'yxat (kuryerga SENT pochtada faqat yo'ldagilar). `GET /scan/:token` (`POST-…`) ham aynan shu javobni `type: post` bilan qaytaradi.",
+      "dwJX3NjT: javob — pochta qatori (avvalgi maydonlar o'zgarmagan) + `region` `{id, name}`, `courier` `{id, name, phone_number}` (kuryersiz — null) va `orders[]` `{id, order_number, status, total_price, where_deliver, region, district, region_id, district_id, customer {name, phone_number}, problem_contacts}` — `GET /post/orders/:id` dagi ro'yxat (kuryerga SENT pochtada faqat yo'ldagilar). `GET /scan/:token` (`POST-…`) ham aynan shu javobni `type: post` bilan qaytaradi.",
   })
   @ApiParam({ name: 'id', description: 'Post QR token (`POST-…`)' })
   getPostByScan(@Param('id') id: string, @Req() req?: { user?: JwtUser }) {
@@ -877,6 +877,10 @@ export class LogisticsGatewayController {
       )
       .pipe(
         timeout(8000),
+        // CqBD8V4p: `GET /scan/POST-…` bilan bir xil javob.
+        switchMap((response: unknown) =>
+          attachProblemContacts(this.problemContacts, response),
+        ),
         map((response: unknown) =>
           projectOrderPayloadForRoles(req?.user?.roles, response),
         ),

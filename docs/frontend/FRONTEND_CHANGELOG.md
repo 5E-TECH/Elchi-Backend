@@ -22,6 +22,11 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+### 2026-10-31 — `problem_contacts` paket va pochta skanida (CqBD8V4p)
+
+- ✏️ [order] — `GET /transfer-batches/:id` va `GET /transfer-batches/:id/remaining`: `items[].order.problem_contacts: [{ name, phone, source }]` (paket sahifasi ham chop etadi).
+- ✏️ [order] — `GET /scan/POST-…` va `GET /post/scan/:id`: `orders[]` qisqa shaklda `problem_contacts`, `region_id`, `district_id` qo'shildi (additive). Mantiq `GET /orders/:id` bilan bir xil: viloyat logisti, u yo'q — zaxira raqam, hech biri — `[]`; identity javob bermasa maydon yo'q.
+
 ### 2026-10-31 — To'lov tuzatish xabari filial menejerlariga (CsEZD8EX)
 
 - 🟢 [notification] — `finance.payment_corrected`: BRANCH qabul qilgan to'lovda endi `branch_users` dagi MANAGER lar xabar oladi (`POST /managers` bilan yaratilganlar ham); eski `branches.manager_id` qiymati bo'lsa u ham, takror yuborilmaydi. FE'da o'zgarish shart emas.

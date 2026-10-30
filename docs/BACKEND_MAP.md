@@ -94,7 +94,8 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
   responsible or changing its role to a non-responsible one resets its markets
   and the default in the SAME transaction (`saveWithResponsibleRelease`).
   Gateway: `contacts-gateway.controller.ts`, `contacts/problem-contacts.service.ts`
-  (`problem_contacts` on order responses before the role projection, 60 s
+  (`problem_contacts` on order responses, incl. `GET /transfer-batches/:id`,
+  `/remaining` and the short post-scan `orders[]`, before the role projection, 60 s
   cache) and `auth/order-contact-projection.ts` (market/operator phones hidden
   from MANAGER/BRANCH/COURIER unless SA/admin/registrator/logist; applied inside
   `projectOrderPayloadForRoles` + market lists). Printer «Muammo bo'lsa» —
