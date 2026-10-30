@@ -243,6 +243,9 @@ export function buildCourierMessage(
   };
 }
 
+/** (BOT-2 #3) Market guruhiga ketadigan summasiz xabar sarlavhasi. */
+export const MARKET_GROUP_NOTICE_TITLE = 'Smena yakunlandi — kabinetda ko‘ring';
+
 /** Market — FAQAT o'z to'lovlari (`slice`). */
 export function buildMarketMessage(
   snapshot: Pick<
@@ -291,8 +294,15 @@ export function buildMarketMessage(
       })),
     },
     link: SELF_CASHBOX_LINK,
-    // Market guruhi relay'i (matn + havola) — HTML-escape qilingan.
-    group_text: `<b>${escapeTelegramHtml(title)}</b>\n\n${escapeTelegramHtml(body)}${cabinetLink(cabinetUrl)}`,
+    /**
+     * (BOT-2 #3) Market GURUHI uchun — SUMMASIZ. Pul (summa, to'lov usuli,
+     * karta, qoldiq) faqat egasining SHAXSIY chatiga ketadi; guruhga
+     * (operatorlar, kuryerlar ham a'zo) faqat «yakunlandi — kabinetda
+     * ko'ring». Faqat egasi Telegram'ga ulanmagan bo'lsa ishlatiladi.
+     */
+    group_text: `<b>${escapeTelegramHtml(MARKET_GROUP_NOTICE_TITLE)}</b>\n\n${escapeTelegramHtml(
+      `Smena #${snapshot.shift_id} yakunlandi — to'lovlarni kabinetda ko'ring.`,
+    )}${cabinetLink(cabinetUrl)}`,
   };
 }
 

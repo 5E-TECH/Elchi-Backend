@@ -251,9 +251,10 @@ export class ShiftReportService {
       if (!recipients.length) {
         return await this.markSkipped(shiftId, round);
       }
+      // (BOT-2 #3) market ham — egasi shaxsiy Telegram'ga ulanganmi.
       const linked = await this.telegramLinked(
         recipients
-          .filter((r) => r.kind !== 'market' && r.channels.telegram)
+          .filter((r) => r.channels.telegram)
           .map((r) => r.recipient_id),
       );
       const fileKey = recipients.some((r) => r.kind === 'superadmin')
@@ -386,8 +387,24 @@ export class ShiftReportService {
     }
     let telegram: FinanceNotificationPayload['telegram'];
     if (recipient.channels.telegram) {
-      if (recipient.kind === 'market') {
-        // Market — Telegram GURUHI (telegram_markets), matn + havola.
+      if (
+        recipient.kind === 'market' &&
+        linked?.get(recipient.recipient_id) === true
+      ) {
+        /**
+         * (BOT-2 #3, ega sukut qarori Q1 = A) Pul faqat SHAXSIY chatga:
+         * market egasi Telegram'ga ulangan — to'liq hisobot (summa, usul,
+         * karta, qoldiq) unga, guruhga HECH NARSA.
+         */
+        channels.push(NotificationChannel.TELEGRAM);
+        rows.push({
+          channel: 'telegram',
+          status: 'queued',
+          failed_reason: null,
+        });
+      } else if (recipient.kind === 'market') {
+        // Egasi ulanmagan (yoki holat noma'lum) — GURUHGA faqat summasiz
+        // «Smena yakunlandi — kabinetda ko'ring» (`group_text`).
         channels.push(NotificationChannel.TELEGRAM);
         // Asosiy (`create`) guruh — market ikki guruhga ulangan bo'lsa ham
         // bitta xabar.
