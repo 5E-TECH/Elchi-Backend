@@ -44,6 +44,18 @@ async function bootstrap() {
   app.connectMicroservice(rmqService.getOptions('NOTIFICATION'), {
     inheritAppConfig: true,
   });
+  /**
+   * (BOT-3a) Telegram bot update'lari (gateway webhook) va karta hodisalari
+   * (order-service outbox) — ALOHIDA navbat va iste'molchi. Umumiy
+   * NOTIFICATION navbatidagi `notification.dispatch` / push to'lqini (bitta
+   * dispatch Telegram'ni 10 s gacha kutadi) bot javobini kechiktirib, 60 s
+   * TTL dan keyin update'ni DLQ'ga tushirardi. Handler'lar bir xil — faqat
+   * navbat (prefetch, TTL, DLQ) ajratilgan.
+   */
+  await rmqService.setupDlqTopology('NOTIFICATION_BOT');
+  app.connectMicroservice(rmqService.getOptions('NOTIFICATION_BOT'), {
+    inheritAppConfig: true,
+  });
 
   await app.startAllMicroservices();
   registerLiveness(app, 'notification-service');

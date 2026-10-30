@@ -139,6 +139,12 @@ export const gatewayValidationSchema = Joi.object({
   RABBITMQ_LOGISTICS_QUEUE: Joi.string().required(),
   RABBITMQ_FINANCE_QUEUE: Joi.string().required(),
   RABBITMQ_NOTIFICATION_QUEUE: Joi.string().required(),
+  // (BOT-3a) Telegram bot update'lari va karta hodisalari — ALOHIDA navbat:
+  // umumiy NOTIFICATION navbatidagi dispatch / push oqimi bot javobini
+  // kechiktirmasin (60 s TTL → DLQ).
+  RABBITMQ_NOTIFICATION_BOT_QUEUE: Joi.string().default(
+    'notification_bot_queue',
+  ),
   // (uCrzrElu) Telegram webhook sekreti — `POST /telegram/webhook/:botSlug`
   // `X-Telegram-Bot-Api-Secret-Token` bilan timingSafeEqual solishtiradi.
   // Bo'sh bo'lsa webhook yo'li YOPIQ (hamma so'rov 401) — bot o'chiq.
@@ -332,6 +338,12 @@ export const orderValidationSchema = Joi.object({
   RABBITMQ_ORDER_QUEUE: Joi.string().required(),
   // (OA16fdSq/ePpLHPX2) Hodisa → bildirishnoma outbox maqsadi (NOTIFICATION).
   RABBITMQ_NOTIFICATION_QUEUE: Joi.string().default('notification_queue'),
+  // (BOT-3a) Telegram bot update'lari va karta hodisalari — ALOHIDA navbat:
+  // umumiy NOTIFICATION navbatidagi dispatch / push oqimi bot javobini
+  // kechiktirmasin (60 s TTL → DLQ).
+  RABBITMQ_NOTIFICATION_BOT_QUEUE: Joi.string().default(
+    'notification_bot_queue',
+  ),
   RABBITMQ_SEARCH_QUEUE: Joi.string().required(),
   RABBITMQ_IDENTITY_QUEUE: Joi.string().required(),
   RABBITMQ_LOGISTICS_QUEUE: Joi.string().required(),
@@ -431,6 +443,12 @@ export const notificationValidationSchema = Joi.object({
   DB_SCHEMA: Joi.string().default('notification_schema'),
   RABBITMQ_URI: Joi.string().required(),
   RABBITMQ_NOTIFICATION_QUEUE: Joi.string().required(),
+  // (BOT-3a) Telegram bot update'lari va karta hodisalari — ALOHIDA navbat:
+  // umumiy NOTIFICATION navbatidagi dispatch / push oqimi bot javobini
+  // kechiktirmasin (60 s TTL → DLQ).
+  RABBITMQ_NOTIFICATION_BOT_QUEUE: Joi.string().default(
+    'notification_bot_queue',
+  ),
   RABBITMQ_IDENTITY_QUEUE: Joi.string().required(),
   RABBITMQ_ORDER_QUEUE: Joi.string().required(),
   // Optional: gateway queue for realtime socket.io push. When unset, in-app

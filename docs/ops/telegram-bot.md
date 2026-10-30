@@ -9,7 +9,7 @@
 ```
 Telegram ──HTTPS 443──▶ Cloudflare Tunnel ──▶ api-gateway
    POST /telegram/webhook/:botSlug   (X-Telegram-Bot-Api-Secret-Token, timingSafeEqual)
-        │  emit notification.telegram.update (RMQ), DARHOL 200
+        │  emit notification.telegram.webhook_update → NOTIFICATION_BOT navbati (BOT-3a), DARHOL 200
         ▼
 notification-service  BotController → BotRouterService
         ├─ botSlug tekshiruvi (noto'g'ri → jim)
@@ -28,6 +28,16 @@ Chiquvchi: BotOutboxService (telegram_outbox) → BotTransportService (yagona ap
 | `telegram_outbox` | chiquvchi xabarlar: 429/5xx → qayta urinish, 403/400 → dead |
 
 Tozalash: `BotMaintenanceService` (har soat, `:17`).
+
+**Navbatlar (BOT-3a).** Bot update'lari (gateway webhook) va karta hodisalari
+(`notification.telegram.order_status`, order-service outbox) —
+`RABBITMQ_NOTIFICATION_BOT_QUEUE` (sukut `notification_bot_queue`, o'z DLQ'si
+`…_dlq`). Umumiy `notification_queue` (dispatch, push) to'lqini bot javobini
+kechiktirmaydi. ⚠️ **Deploy tartibi:** avval **notification-service** (navbatni
+yaratadi va tinglaydi), keyin api-gateway va order-service — aks holda navbat
+hali yo'q paytda yuborilgan update'lar yo'qoladi (mijozlar navbatni e'lon
+qilmaydi, `noAssert`). Eski `notification_queue` dagi karta hodisalari ham
+ishlanadi (handler'lar ikkala navbatda bir xil).
 
 ## 2. Rejimlar (`TELEGRAM_BOT_MODE`, sukut `auto`)
 

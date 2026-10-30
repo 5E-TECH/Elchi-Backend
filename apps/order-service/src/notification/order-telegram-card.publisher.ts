@@ -4,7 +4,7 @@ import { EntityManager, Repository } from 'typeorm';
 import { Order_status, OutboxService } from '@app/common';
 import { Order } from '../entities/order.entity';
 import {
-  NOTIFICATION_OUTBOX_TARGET,
+  NOTIFICATION_BOT_OUTBOX_TARGET,
   TELEGRAM_ORDER_STATUS_PATTERN,
   type TrackingTransition,
 } from './order-notification.service';
@@ -52,7 +52,7 @@ export class OrderTelegramCardPublisher {
         marketId = order?.market_id ? String(order.market_id) : null;
       }
       await this.outbox.enqueue(
-        NOTIFICATION_OUTBOX_TARGET,
+        NOTIFICATION_BOT_OUTBOX_TARGET,
         TELEGRAM_ORDER_STATUS_PATTERN,
         {
           order_id: String(transition.order_id),

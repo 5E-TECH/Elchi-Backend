@@ -52,7 +52,8 @@ describe('ysBqD9Nx / h9newLsd #5 — holat o‘zgarishi → karta sinxron hodisa
       manager as never,
     );
     expect(outbox.enqueue).toHaveBeenCalledWith(
-      'NOTIFICATION',
+      // (BOT-3a) alohida bot navbati.
+      'NOTIFICATION_BOT',
       TELEGRAM_ORDER_STATUS_PATTERN,
       {
         order_id: '81',

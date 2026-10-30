@@ -19,9 +19,14 @@ import {
  * `GET /health` ni egallab olgan edi — javob `logistics-service` ni nomlardi.
  */
 
-const SERVICES: GatewayClientToken[] = [...GATEWAY_CLIENT_TOKENS];
+// (BOT-3a) `NOTIFICATION_BOT` — notification-service'ning ikkinchi navbati,
+// alohida servis emas: readiness ro'yxatida yo'q.
+type ServiceToken = Exclude<GatewayClientToken, 'NOTIFICATION_BOT'>;
+const SERVICES: ServiceToken[] = GATEWAY_CLIENT_TOKENS.filter(
+  (token): token is ServiceToken => token !== 'NOTIFICATION_BOT',
+);
 
-const PROBE_CMD: Record<GatewayClientToken, string> = {
+const PROBE_CMD: Record<ServiceToken, string> = {
   IDENTITY: 'identity.health',
   ORDER: 'salom_ber_order',
   CATALOG: 'catalog.health',
