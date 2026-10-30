@@ -55,6 +55,11 @@ export const FINANCE_REALTIME_EVENTS = {
    * sahifalari (MAIN yoki filial, kuryer / market o'z kassasi) qayta o'qisin.
    */
   paymentCorrected: 'finance.payment.corrected',
+  /**
+   * (T3) Kassa chekining AI tahlili tugadi — tarix / tafsilot qayta o'qilsin.
+   * Pul summasi YO'Q.
+   */
+  receiptChecked: 'finance.receipt.checked',
 } as const;
 
 export type FinanceRealtimeEvent =
@@ -265,6 +270,47 @@ export function buildPaymentCorrectedMessage(input: {
   };
 }
 
+/** (T3) Chek AI tahlili natijasi nishonlari. */
+export const RECEIPT_CHECKED_ROLES = ['superadmin', 'admin'] as const;
+
+/**
+ * (T3) `finance.receipt.checked` — SUMMASIZ. Nishon: superadmin/admin,
+ * chek filiali menejerlari (`branch_id` bo'lsa), chekni yuklagan xodim.
+ */
+export function buildReceiptCheckedMessage(input: {
+  receipt_id: string | number;
+  history_id: string | number | null;
+  kind: string;
+  ai_status: string;
+  branch_id?: string | number | null;
+  uploaded_by?: string | number | null;
+  at?: Date | string | null;
+}): RealtimeNotifyMessage {
+  const targets: FinanceRealtimeTarget[] = RECEIPT_CHECKED_ROLES.map(
+    (role) => ({ role }),
+  );
+  if (isUserId(input.branch_id)) {
+    targets.push({
+      role: BRANCH_SHIFT_ROLE,
+      branch_id: String(input.branch_id),
+    });
+  }
+  if (isUserId(input.uploaded_by)) {
+    targets.push({ user_id: String(input.uploaded_by) });
+  }
+  return {
+    event: FINANCE_REALTIME_EVENTS.receiptChecked,
+    payload: {
+      receipt_id: String(input.receipt_id),
+      history_id: input.history_id == null ? null : String(input.history_id),
+      kind: input.kind,
+      ai_status: input.ai_status,
+      at: toIso(input.at),
+    },
+    targets,
+  };
+}
+
 @Injectable()
 export class FinanceRealtimeService {
   private readonly logger = new Logger(FinanceRealtimeService.name);
@@ -303,6 +349,14 @@ export class FinanceRealtimeService {
     manager?: EntityManager,
   ): Promise<void> {
     return this.enqueue(() => buildCashboxCardChangedMessage(input), manager);
+  }
+
+  /** (T3) Chek AI tahlili tugadi — natija yozilgan tranzaksiya ichida. */
+  receiptChecked(
+    input: Parameters<typeof buildReceiptCheckedMessage>[0],
+    manager?: EntityManager,
+  ): Promise<void> {
+    return this.enqueue(() => buildReceiptCheckedMessage(input), manager);
   }
 
   /** (T6) To'lov qaytarildi / tuzatildi — pul tranzaksiyasi ichida. */

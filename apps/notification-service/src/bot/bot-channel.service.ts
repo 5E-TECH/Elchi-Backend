@@ -97,6 +97,77 @@ export class BotChannelService {
   }
 
   /**
+   * (BOT-3 #6) Guruh supergroup'ga aylandi (`migrate_to_chat_id` — Telegram
+   * javobida yoki kiruvchi servis xabarida): ulanish (`telegram_markets.
+   * group_id`, trigger `telegram_chats` ni ham), navbatdagi xabarlar va
+   * kartalar YANGI chat id'ga ko'chadi. Avval xabar `dead` bo'lardi, guruh
+   * esa «faol» ko'rinib, hech narsa yetib bormasdi. Idempotent.
+   */
+  async migrateChat(
+    oldChatId: string,
+    newChatId: string,
+  ): Promise<{ markets: number; outbox: number }> {
+    if (!oldChatId || !newChatId || oldChatId === newChatId) {
+      return { markets: 0, outbox: 0 };
+    }
+    const changed = <T>(result: unknown): T[] =>
+      Array.isArray(result) && Array.isArray(result[0])
+        ? (result[0] as T[])
+        : Array.isArray(result)
+          ? (result as T[])
+          : [];
+    const markets = changed<{ id: string; market_id: string }>(
+      await this.markets.query(
+        `UPDATE "notification_schema"."telegram_markets"
+            SET "group_id" = $2, "updatedAt" = now()
+          WHERE "group_id" = $1 AND "is_deleted" = false
+        RETURNING "id", "market_id"`,
+        [oldChatId, newChatId],
+      ),
+    );
+    const outbox = changed<{ id: string }>(
+      await this.markets.query(
+        `UPDATE "notification_schema"."telegram_outbox"
+            SET "chat_id" = $2, "status" = CASE WHEN "status" = 'sending' THEN 'pending' ELSE "status" END,
+                "next_attempt_at" = now(), "updated_at" = now()
+          WHERE "chat_id" = $1 AND "status" IN ('pending', 'sending')
+        RETURNING "id"`,
+        [oldChatId, newChatId],
+      ),
+    );
+    await this.markets
+      .query(
+        `UPDATE "notification_schema"."telegram_order_cards"
+            SET "chat_id" = $2
+          WHERE "chat_id" = $1
+            AND NOT EXISTS (
+              SELECT 1 FROM "notification_schema"."telegram_order_cards" c
+               WHERE c."order_id" = "telegram_order_cards"."order_id"
+                 AND c."chat_id" = $2)`,
+        [oldChatId, newChatId],
+      )
+      .catch(() => undefined);
+    for (const row of markets) {
+      await this.activityLog.log({
+        entity_type: 'TelegramMarket',
+        entity_id: String(row.id),
+        action: 'notification.tg_group_migrated',
+        metadata: {
+          from_group_id: oldChatId,
+          to_group_id: newChatId,
+          market_id: String(row.market_id),
+        },
+      });
+    }
+    if (markets.length || outbox.length) {
+      this.logger.warn(
+        `Telegram guruh ${oldChatId} supergroup'ga aylandi → ${newChatId}: ${markets.length} ulanish, ${outbox.length} navbatdagi xabar ko'chirildi`,
+      );
+    }
+    return { markets: markets.length, outbox: outbox.length };
+  }
+
+  /**
    * Shaxsiy chat botni qayta ishga tushirdi (`member` yoki `/start`) — blok
    * olib tashlanadi (eski sessiya belgisi ham).
    */

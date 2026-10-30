@@ -178,6 +178,31 @@ export const ACTIVITY_ACTION_REGISTRY: Readonly<
     'blue',
   ),
   // y8Tqm9Ap / gWI4gYkw: smena avtomatik yopilishi va hisobot yuborish.
+  // T3 (QlLf33Ma): kassa cheki — sozlama, yuklash, AI natijasi, qayta tahlil.
+  'finance.receipt_settings_updated': entry(
+    "Chek sozlamalari o'zgardi",
+    'finance',
+    'setting',
+    'blue',
+  ),
+  'finance.receipt_uploaded': entry(
+    'Chek rasmi yuklandi',
+    'finance',
+    'upload',
+    'blue',
+  ),
+  'finance.receipt_ai_checked': entry(
+    'Chek AI tahlili',
+    'finance',
+    'check',
+    'violet',
+  ),
+  'finance.receipt_reanalyze_requested': entry(
+    'Chek qayta tahlilga yuborildi',
+    'finance',
+    'sync',
+    'amber',
+  ),
   'finance.shift_auto_closed': entry(
     'Smena tizim tomonidan avtomatik yopildi',
     'finance',
@@ -467,6 +492,13 @@ export const ACTIVITY_ACTION_REGISTRY: Readonly<
     'notification',
     'stop',
     'red',
+  ),
+  // (BOT-3 #6) guruh supergroup'ga aylandi — ulanish yangi chat id'ga.
+  'notification.tg_group_migrated': entry(
+    "Telegram guruhi supergroup'ga ko'chdi",
+    'notification',
+    'link',
+    'slate',
   ),
   'notification.tg_channel_active': entry(
     'Telegram kanali qayta faol',

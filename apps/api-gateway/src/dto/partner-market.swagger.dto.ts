@@ -9,7 +9,7 @@ import {
 
 /**
  * `POST /partner/markets` — hamkor tomonidan sotuvchi uchun Elchi market
- * provisioning. Kontrakt: docs/PARTNER_API.md §3.2.
+ * provisioning. Kontrakt: docs/public/MARKETPLACE_API.md §5.1.
  */
 export class CreatePartnerMarketRequestDto {
   @ApiProperty({

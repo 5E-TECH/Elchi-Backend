@@ -117,9 +117,46 @@ export class OrderCardSyncService {
         }
       }
 
+      /**
+       * (BOT-2 #5) Guruh kartasi faqat guruh hamon FAOL va buyurtmaning
+       * O'Z marketining `create` guruhi bo'lsa tahrirlanadi: uzilgan /
+       * nofaol qilingan yoki boshqa marketga o'tgan guruhdagi eski karta
+       * yangilanmaydi. Hodisada `market_id` faqat yaratilishda keladi —
+       * qolgan holatlarda u order-service kartasidan olinadi; aniqlanmasa
+       * hech bir guruh kartasi tahrirlanmaydi (fail-closed).
+       */
+      const groupChatIds = [
+        ...new Set(
+          cards.filter((row) => row.kind === 'group').map((row) => row.chat_id),
+        ),
+      ];
+      const ownerMarketId = groupChatIds.length
+        ? /^\d{1,20}$/.test(marketId)
+          ? marketId
+          : text((await card())?.market_id)
+        : '';
+      const activeGroups =
+        groupChatIds.length && /^\d{1,20}$/.test(ownerMarketId)
+          ? new Set(
+              (
+                await manager.getRepository(TelegramChat).find({
+                  select: { chat_id: true },
+                  where: {
+                    chat_id: In(groupChatIds),
+                    owner_type: 'market',
+                    owner_id: ownerMarketId,
+                    scope: 'create',
+                    is_active: true,
+                  },
+                })
+              ).map((chat) => chat.chat_id),
+            )
+          : new Set<string>();
+
       for (const row of cards) {
         try {
           if (row.kind === 'group') {
+            if (!activeGroups.has(row.chat_id)) continue;
             const current = await card();
             if (!current) continue;
             await this.transport.editMessage(row.chat_id, row.message_id, {

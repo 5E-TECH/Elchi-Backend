@@ -120,12 +120,14 @@ export function makeOutboxRepo() {
 export interface FakeChannels {
   markInactive: jest.Mock;
   markActive: jest.Mock;
+  migrateChat: jest.Mock;
 }
 
 export function makeChannels(): FakeChannels {
   return {
     markInactive: jest.fn(() => Promise.resolve({ deactivated: 1 })),
     markActive: jest.fn(() => Promise.resolve()),
+    migrateChat: jest.fn(() => Promise.resolve({ markets: 1, outbox: 1 })),
   };
 }
 
@@ -383,7 +385,10 @@ export function makeRouter(
       ),
   };
   const activityLog = { log: jest.fn(() => Promise.resolve()) };
-  const membership = { handle: jest.fn(() => Promise.resolve()) };
+  const membership = {
+    handle: jest.fn(() => Promise.resolve()),
+    migrate: jest.fn(() => Promise.resolve()),
+  };
   const notifications = {
     connectGroupByCodeText: jest.fn(() =>
       Promise.resolve({ message: 'ulandi' }),
@@ -464,6 +469,7 @@ export function makeRouter(
         actions as never,
         transport as never,
         config as never,
+        outbox as never,
       )
     : null;
   const aiHandler = aiService ? new AiOrderHandler(aiService) : undefined;
@@ -517,6 +523,7 @@ export function makeRouter(
     cards,
     inbox,
     aiDrafts,
+    aiService,
   };
 }
 
@@ -526,9 +533,16 @@ export function makeRouter(
  */
 export function makeAiDraftsStore(now: () => number = Date.now) {
   const rows = new Map<string, Record<string, any>>();
+  let tokenSeq = 0;
   return {
     rows,
     insert: jest.fn((row: Record<string, any>) => {
+      // (BOT-3b) id update'dan deterministik — takror update unique xatosi.
+      if (rows.has(row.id)) {
+        return Promise.reject(
+          Object.assign(new Error('duplicate key'), { code: '23505' }),
+        );
+      }
       rows.set(row.id, {
         input: {},
         orders: null,
@@ -541,15 +555,44 @@ export function makeAiDraftsStore(now: () => number = Date.now) {
       });
       return Promise.resolve();
     }),
-    update: jest.fn((where: { id: string }, patch: Record<string, any>) => {
-      const row = rows.get(where.id);
-      if (row) Object.assign(row, patch);
-      return Promise.resolve();
-    }),
+    update: jest.fn(
+      (
+        where: { id: string; worker_token?: string },
+        patch: Record<string, any>,
+      ) => {
+        const row = rows.get(where.id);
+        // (BOT-3b) da'vo tokeni bilan yakuniy yozuv.
+        if (
+          !row ||
+          (where.worker_token !== undefined &&
+            row.worker_token !== where.worker_token)
+        ) {
+          return Promise.resolve({ affected: 0 });
+        }
+        Object.assign(row, patch);
+        return Promise.resolve({ affected: 1 });
+      },
+    ),
     findOne: jest.fn(({ where }: { where: { id: string } }) =>
       Promise.resolve(rows.get(where.id) ? { ...rows.get(where.id) } : null),
     ),
     query: jest.fn((sql: string, params: unknown[]) => {
+      // (BOT-3b) fondagi ishchi da'vosi: `worker_at IS NULL` bo'lsa oladi.
+      if (/"worker_at" = now\(\)/.test(sql) && /"id" = \$1/.test(sql)) {
+        const [claimId, status] = params as [string, string];
+        const target = rows.get(claimId);
+        if (
+          !target ||
+          target.status !== status ||
+          target.worker_at ||
+          new Date(target.expires_at).getTime() <= now()
+        ) {
+          return Promise.resolve([[], 0]);
+        }
+        target.worker_at = new Date(now());
+        target.worker_token = `token-${++tokenSeq}`;
+        return Promise.resolve([[{ ...target }], 1]);
+      }
       const [id, from, to] = params as [string, string[], string];
       const row = rows.get(id);
       if (
@@ -561,6 +604,8 @@ export function makeAiDraftsStore(now: () => number = Date.now) {
         return Promise.resolve([[], 0]);
       }
       row.status = to;
+      row.worker_at = null;
+      row.worker_token = null;
       return Promise.resolve([[{ ...row }], 1]);
     }),
   };

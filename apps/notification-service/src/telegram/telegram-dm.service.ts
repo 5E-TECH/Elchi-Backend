@@ -676,21 +676,16 @@ export class TelegramDmService {
       }
       return requested;
     }
-    let own = '';
-    if (roles.includes('market')) {
-      own = userId;
-    } else if (roles.includes('market_operator')) {
-      const profile = await rmqSend<{ data?: { market_id?: unknown } }>(
-        this.identityClient,
-        { cmd: 'identity.user.find_by_id' },
-        { id: userId },
-      ).catch(() => null);
-      own = str(profile?.data?.market_id).trim();
-    }
+    /**
+     * (BOT-2 #5, ega qarori Q2 = A) Market guruhini faqat market EGASI yoki
+     * admin ulaydi. Operator endi ulay olmaydi: guruhga kartalar (mijoz
+     * ma'lumoti bilan) ketadi, ega kim qo'shilganini nazorat qilishi kerak.
+     */
+    const own = roles.includes('market') ? userId : '';
     if (!own) {
       throw new RpcException({
         statusCode: 403,
-        message: 'Guruhni faqat market, uning operatori yoki admin ulay oladi',
+        message: 'Guruhni faqat market egasi yoki admin ulay oladi',
       });
     }
     if (requested && requested !== own) {

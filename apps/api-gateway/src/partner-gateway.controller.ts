@@ -52,7 +52,7 @@ import {
  * PartnerThrottlerGuard bilan per-hamkor rate limit qo'llanadi.
  * C1.2: auth+limit+ping. C1.4: geo passthrough (regions/districts/tariff) —
  * ichkarida mavjud `logistics.*` / `identity.market.*` patternlari.
- * markets/shipments keyingi tasklarda (C1.5+, C2). Kontrakt: docs/PARTNER_API.md.
+ * markets/shipments keyingi tasklarda (C1.5+, C2). Kontrakt: docs/public/MARKETPLACE_API.md.
  */
 
 // Per-hamkor rate limit (ENV bilan sozlanadi). Global IP-limitdan ustun.

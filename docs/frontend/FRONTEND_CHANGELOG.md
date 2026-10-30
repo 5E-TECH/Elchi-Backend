@@ -21,6 +21,7 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 ## Yozuvlar
 
+<!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 ### 2026-10-30 — BOT-3c: Telegram yetkazish holati jim yo'qolmaydi
 
 Deploy: **notification-service** (+ libs/common enum). Migratsiya **`1716000000192`** (`telegram_outbox.notification_ids`,
@@ -34,6 +35,144 @@ yangi `telegram_blocked_chats` + eski sessiya blok belgilarini ko'chirish) — s
 - [2026-10-30] 🟢 [notification] — bekor guruhi xabari dispatch tranzaksiyasi ichida navbatga yoziladi (servis restartida
   ham ketadi); botni bloklagan odamga 24 soatdan keyin ham urinilmaydi (`member` / `/start` da qayta ochiladi).
   → FE o'zgarishi shart emas.
+
+### 2026-10-30 — T1: hamkor (marketpleys) integratsiyasini jonli sinash (RJcckQ6I)
+
+Deploy: **integration-service + api-gateway** (+ libs/common). Migratsiya **yo'q**. `openapi.json` qayta yaratildi.
+
+- [2026-10-30] 🆕 [integration] — `GET /admin/partners/:id/markets` (superadmin, admin; registrator / menejer → 403) —
+  hamkorning faol sotuvchilari, yangi → eski, sahifalashsiz:
+  `{ data: [{ ref_id, external_seller_id, elchi_market_id, market_name, phone_number, tariff_home, tariff_center,
+  created_at }] }`. Market o'chirilgan / topilmasa — `market_name`, `phone_number`, tariflar `null` (qator qoladi).
+  Hamkor yo'q → 404. → Hamkor kartasida «Sotuvchilar» jadvali.
+- [2026-10-30] 🆕 [integration] — `POST /admin/partners/:id/markets` `{ "external_seller_id": "shop-9",
+  "elchi_market_id": "1234" }` — hamkor sotuvchisini Elchi'dagi **mavjud** marketga bog'lash (superadmin, admin).
+  `external_seller_id` trim, 1..100; `elchi_market_id` faqat raqam (son ham qabul qilinadi). Javob **201**
+  `{ data: { ref_id, external_seller_id, elchi_market_id, tariff_home, tariff_center } }` — tariflar marketning
+  hozirgi qiymati (bog'lash ularni **o'zgartirmaydi**). Xatolar: hamkor yo'q / market yo'q, o'chirilgan yoki market
+  emas (masalan kuryer id) → 404; shu sotuvchi bu hamkorda allaqachon faol → 409 `code: "PARTNER_SELLER_TAKEN"`;
+  market boshqa hamkorning faol sotuvchisida → 409 `code: "PARTNER_MARKET_TAKEN"`. Avval o'chirilgan o'sha
+  (hamkor, sotuvchi) juftligi bo'lsa — yangi qator emas, o'sha **tiklanadi** (`ref_id` eski). Jurnalda
+  `PartnerMarketRef` (yangi — `created`, tiklash — `updated`). Bog'lagandan keyin hamkorning `POST /partner/markets`
+  (o'sha `external_seller_id`) → 200 `idempotent: true` (yangi market ochilmaydi), `POST /partner/shipments` shu
+  marketga ruxsat beradi. → «Mavjud marketni bog'lash» formasi; 409 da `code` bo'yicha xabar.
+- [2026-10-30] 🟢 [integration] — `settlement.payment` webhooki endi faqat **faol** bog'lanish bo'yicha yuboriladi
+  (o'chirilgan bog'lanishdagi marketga to'lov hamkorga ketmaydi).
+
+**Hodisalar (hamkor webhooki).** Deploy: **order-service** (K3).
+
+- [2026-10-30] 🟢 [order] — hamkor posilkasi (`external_id` bor) uchun `shipment.status_changed` endi yana ikki
+  holatda yuboriladi: `status: "received"` — Elchi HQ'da qabul qildi (`POST /orders/receive`, skan qabuli ham) va
+  `status: "on the road"` — posilka pochta bilan yo'lga chiqdi (pochta kuryerga jo'natildi yoki filiallararo
+  FORWARD paket jo'natildi). Bu hodisalarda `collected_from_customer`, `elchi_fee`, `market_amount` — `null`,
+  `cod_collected` — 0. Webhook navbatga qo'yilmasa ham (integration ishlamasa) qabul javobi 200. Eski tashqi
+  adapterlar (`integration.sync.enqueue`) bu holatlarni olmaydi; o'tgan buyurtmalar uchun backfill yo'q. Hamkor
+  monitorida (`GET /admin/partners/webhooks`) yangi `new_status` qiymatlari ko'rinadi. → FE o'zgarishi shart emas.
+- [2026-10-30] 🟢 [docs] — hamkor hujjati `docs/public/MARKETPLACE_API.md` kodga moslandi (§5.1 javoblari 201/200,
+  §5.2 maydonlari — `label_token`, qop maydonlari, `comment`, `where_deliver` standarti `center`; §6.5 haqiqiy statuslar;
+  §6.6 `settlement.payment`) va Postman to'plami qo'shildi: `docs/public/elchi-partner-api.postman_collection.json`.
+### 2026-10-30 — BOT-2: Telegram bot maxfiyligi
+
+Deploy: **identity-service + api-gateway + notification-service + order-service + finance-service** (+ libs/common).
+Migratsiya **`1716000000189`** (`notification_schema.telegram_markets.linked_by`, eskilari audit jurnalidan; trigger
+`telegram_chats.linked_by` ga ham). `openapi.json` qayta yaratildi.
+
+- [2026-10-30] ⚠️ [identity/gateway] — `POST /auth/telegram` (Mini App) endi **faqat kuryerga**: boshqa rol → **403**
+  `{ code: "TELEGRAM_COURIER_ONLY" }`. Mini App tokeni bilan faqat `POST /orders/scan-assign` va
+  `POST /telegram/scan/done` ishlaydi, qolgan har qanday route (masalan `GET /orders`) → **403**. Nofaol qilingan yoki
+  Telegram'ni uzgan xodimning Telegram tokeni ≤60 s ichida **401**. `must_change_password` bo'lsa va
+  `PASSWORD_CHANGE_GATE=on` — skan 403 `PASSWORD_CHANGE_REQUIRED`. → `/tg/scan`: 403 `TELEGRAM_COURIER_ONLY` da
+  «Mini App faqat kuryerlar uchun» xabari; 401 da Mini App'ni qayta ochishni so'rash.
+- [2026-10-30] ⚠️ [notification] — market Telegram guruhini endi faqat **market egasi** yoki admin ulaydi:
+  `POST /telegram/link-code {purpose:'market_group'}` market operatoriga → **403**. → Operator kabinetida «Guruhni
+  ulash» tugmasini yashirish.
+- [2026-10-30] 🆕 [notification] — `GET /notifications/me/telegram-groups` elementlarida `linked_by` (id | null) va
+  `linked_by_owner` (true — egasi ulagan; **false — boshqa xodim, masalan avval operator ulagan**; null — ulanmagan yoki
+  noma'lum). `GET /notifications` (telegram_markets) qatorlarida `linked_by`. → `linked_by_owner === false` bo'lsa
+  egaga «Bu guruhni siz ulamagansiz — tekshirib, kerak bo'lsa qayta ulang» ogohlantirishi.
+- [2026-10-30] 🟢 [order] — bekor guruhi xabari «Guruhda mijoz ismi va telefoni» sozlamasiga bo'ysunadi (o'chiq — ism
+  yo'q, telefon `+998 90 *** ** 12`, manzil faqat tuman). Smena hisoboti marketga — egasining shaxsiy Telegram'iga;
+  ulanmagan bo'lsa guruhga faqat summasiz «Smena yakunlandi — kabinetda ko'ring». FE o'zgarishi shart emas.
+### 2026-10-30 — BOT-3a: Telegram bot uchun alohida RMQ navbati
+
+Deploy: **notification-service + api-gateway** (+ libs/common). Migratsiya yo'q. Yangi env
+`RABBITMQ_NOTIFICATION_BOT_QUEUE` (sukut `notification_bot_queue`); navbatni gateway ham e'lon qiladi, lekin navbat
+60 s TTL bilan — update faqat consumer TTL ichida tursa yo'qolmaydi: **notification-service baribir birinchi**.
+
+- [2026-10-30] 🟢 [notification] — bot update'lari alohida navbatda: bildirishnoma to'lqinida ham bot tugmalari
+  kechikmaydi. `GET /health/readiness` → `NOTIFICATION` qatorida ixtiyoriy `bot_queue: {status, latency_ms?, error?, error_kind?}`
+  (yangi xizmat qatori YO'Q; bot navbati ishlamasa `NOTIFICATION` qatori `down`). → FE o'zgarishi shart emas.
+### 2026-10-30 — BOT-3 #6: Telegram guruhi supergroup'ga aylanganda xabarlar yo'qolmaydi
+
+Deploy: **notification-service**. Migratsiya yo'q.
+
+- [2026-10-30] 🟢 [notification] — market guruhi supergroup'ga aylansa ulanish yangi chat id'ga o'zi ko'chadi
+  (`GET /notifications` da `group_id` yangilanadi), xabarlar qayta yuboriladi. Botdan yozish huquqi olinsa — guruh nofaol
+  (`inactive_reason: "blocked_on_send"`) + adminga xabar. → FE o'zgarishi shart emas.
+### 2026-10-30 — T3: kassa — qo'lda chiqim va HQ'ga o'tkazmalarda chek rasmi + AI tahlili (QlLf33Ma)
+
+Deploy: **finance-service + api-gateway + ai-service** (+ libs/common). Migratsiya **`1716000000188`**
+(`finance_schema.cashbox_receipts`). `openapi.json` qayta yaratildi. Faqat qo'shimcha maydonlar — chek talab
+qilinadigan uch operatsiyadan tashqari ortga mos.
+
+**Qayerda chek:** (a) qo'lda chiqim `PATCH /finance/cashbox/spend` (`manual_expense`); (b) kuryer → HQ
+`POST /finance/cashbox/payment/courier` va (c) filial → HQ `POST /finance/cashbox/branch-to-main` — faqat
+`payment_method: "click"` da (`courier_to_hq` / `branch_to_hq`). Naqd o'tkazma, `click_to_market` — chek yo'q.
+
+**Saqlash:** operatsiyaga biriktirilgan chek va rasmi **o'chirilmaydi** — tarix qatori, tafsilot va
+`GET /finance/receipts/:id` orqali istalgan vaqtda ko'riladi (havola har so'rovda yangidan, 300 s). Faqat
+24 soat ichida biriktirilmagan qoralama tozalanadi.
+
+- [2026-10-30] 🆕 [finance] — `GET /finance/receipt-settings` (superadmin/admin/menejer) →
+  `{ manual_expense: { photo_required, ai_enabled }, hq_transfer: { photo_required, ai_enabled }, updated_at,
+  updated_by }`; sukut — hammasi `true`. `PATCH /finance/receipt-settings` — **faqat superadmin**;
+  `photo_required:false` yolg'iz kelsa AI ham o'chadi; AI yoqiq + rasm o'chiq → 400 `RECEIPT_AI_REQUIRES_PHOTO`.
+  → Sozlamalar sahifasida ikki guruh uchun ikki kalit.
+- [2026-10-30] 🆕 [finance] — `POST /finance/receipts` (multipart: `kind`, `photo` — jpeg/png/webp ≤ 5 MB) →
+  201 `{ receipt_id, kind, state: "draft", photo_url, photo_url_expires_in: 300 }`. Superadmin/admin — har tur,
+  menejer — faqat `manual_expense`, boshqalar 403. Rasm o'chiq turga → 400 `RECEIPT_DISABLED`; > 5 MB yoki
+  boshqa tur → 400. → Operatsiya formasida avval rasm yuklanadi, keyin `receipt_id` yuboriladi.
+- [2026-10-30] ✏️ [finance] — yuqoridagi uch operatsiya tanasida ixtiyoriy **`receipt_id`**. Rasm yoqiq turda
+  cheksiz → 400 `RECEIPT_REQUIRED` («Chek rasmini yuklang», pul o'zgarmaydi). Xatolar (`code` bo'yicha xabar):
+  `RECEIPT_NOT_FOUND` 400, `RECEIPT_NOT_OWNER` 403 (boshqa xodim yuklagan), `RECEIPT_KIND_MISMATCH` 400,
+  `RECEIPT_ALREADY_USED` 409, `RECEIPT_NOT_APPLICABLE` 400 (naqd o'tkazma + chek; menejerning kuryerdan qabuli +
+  chek). Javobda `data.receipt: { id, kind, ai_status } | null` (rasm o'chiq — `null`). Takroriy
+  `Idempotency-Key` — asl chek qaytadi.
+- [2026-10-30] ✏️ [finance] — kassa tarixi (`GET /finance/history`, kassa sahifalari): har qatorda
+  `receipt: { id, ai_status } | null` (o'tkazmada MAIN va qarshi qatorda bitta chek). `GET /finance/history/:id` —
+  to'liq: `{ id, kind, history_id, counter_history_id, entered_amount, payment_method, photo_url,
+  photo_url_expires_in, uploaded_by: { id, name }, uploaded_at, ai_status, ai_stale, can_reanalyze, ai: { amount,
+  difference, currency, date, recipient, recipient_last4, payer, payer_last4, bank, reference, confidence,
+  flags[], checked_at, attempts, max_attempts, error_reason } | null }`. `receipt` faqat superadmin/admin/menejerga
+  (menejer — o'z filiali; boshqasi `null`), kuryer/market/registrator javobida kalit yo'q.
+  `GET /finance/receipts/:id` — xuddi shu to'liq ko'rinish (menejer boshqa filial → 403).
+- [2026-10-30] 🆕 [finance] — «Chek holati» filtri: `GET /finance/history?receipt_status=` `match | mismatch |
+  unreadable | pending | error | disabled | none` (`none` — chek so'raladigan, lekin cheksiz: kategoriyali qo'lda
+  chiqim yoki MAIN'ga click kuryer/filial o'tkazmasi). `counts` ham filtrlanadi. Kuryer va boshqalar → 403.
+- [2026-10-30] 🆕 [finance] — AI tahlili fonda: holat `pending` → `match` (|farq| ≤ 1 so'm) / `mismatch` /
+  `unreadable` / `error`; AI o'chiq — `disabled`. Bayroqlar (`ai.flags`): `duplicate_photo`,
+  `duplicate_reference`, `date_far`, `card_mismatch` — faqat ogohlantirish. Realtime **`finance.receipt.checked`**
+  `{ receipt_id, history_id, kind, ai_status, at }` (summasiz) → superadmin, admin, filial menejeri, yuklagan
+  xodim. → Tarix qatorida holat belgisi, tafsilotda AI bloki.
+- [2026-10-30] 🆕 [finance] — `POST /finance/receipts/:id/reanalyze` (superadmin/admin) → **202**
+  `{ receipt_id, ai_status: "pending" }`. Rad: `RECEIPT_ALREADY_MATCHED` 409, `RECEIPT_AI_DISABLED` 400,
+  `RECEIPT_AI_PENDING` 409, `RECEIPT_AI_ATTEMPTS_EXHAUSTED` 429 (5 urinish). 3 daqiqadan oshgan `pending`
+  (`ai_stale: true`) — qayta tahlil mumkin. → Tugma `can_reanalyze` bo'yicha.
+- [2026-10-30] 🆕 [finance] — `GET /finance/receipts/summary?from&to&kind&ai_status` (superadmin/admin; menejer,
+  kuryer → 403) → `{ period, counts: { match, mismatch, unreadable, pending, error, disabled, none }, total,
+  mismatch_total, by_branch: [{ branch_id, counts }], by_category: [{ expense_category_id, name, counts }],
+  top: [≤ 15 — { receipt_id, history_id, kind, entered_amount, difference, date }] }`. Davr — Toshkent sanalari,
+  ≤ 366 kun, sukut — joriy oy. `counts.none` = `GET /finance/history?receipt_status=none` jami (shu davrda).
+- [2026-10-30] 🟢 [ai] — AI moliyaviy yordamchida yangi tool `get_receipt_checks` (shu xulosa; ism, rasm,
+  karta yo'q).
+### 2026-10-30 — BOT-3b: chat qulfi DB ulanishini ushlamaydi, AI bot orqali fonda
+
+Deploy: **notification-service**. Migratsiya **`1716000000190`** (`notification_schema.telegram_chat_locks`,
+`telegram_ai_drafts.worker_at`).
+
+- [2026-10-30] 🟢 [notification] — botda AI orqali buyurtma: «⏳» xabari darhol, preview fonda keladi; AI xatosi
+  qayta-qayta urinilmaydi («🔁 Qayta urinish» tugmasi), 2 daqiqadan ko'p qotgan qoralama o'zi tiklanadi. Kuryer
+  tugmalari AI to'lqinida kutmaydi. API o'zgarmagan. → FE o'zgarishi shart emas.
 
 ### 2026-10-30 — T8: buyurtmaning maxsus belgilari (mo'rt, diniy kitob, suyuqlik …) (0OUcHZ7R)
 
@@ -70,6 +209,25 @@ Kodlar (kanonik tartib — API har doim shu tartibda qaytaradi): `fragile` (mo'r
   `{ special_categories }`, holat o'zgarmaydi; jurnalda `order.special_categories_changed` («Maxsus belgilar
   o'zgardi»). Qisman sotuvda qolgan qism (bekor qilingan bola buyurtma) ota buyurtmaning belgilarini oladi;
   almashtirish buyurtmasi — yo'q (o'zi tanlanadi). → Kuryer/ombor skanida va ro'yxatda belgilarni ko'rsatish.
+
+### 2026-10-30 — Chek: pochta buyurtmalarida «EL-…» raqam, mahsulot nomi va «Qayerdan» (T9, HJ5sLHiz BE-1/BE-2)
+
+Deploy: **api-gateway + logistics-service** (`libs/common` o'zgardi — order-service ham bir xil helper'ni ishlatadi).
+Migratsiya yo'q. `openapi.json` qayta yaratildi. Faqat qo'shimcha maydonlar (ortga mos).
+
+- [2026-10-30] ✏️ [gateway] — `GET /post/orders/:id`, `GET /post/orders/rejected/:id`, `GET /post/return-requests/list`:
+  har buyurtma qatorida **`order_number`** («EL-100081» — `GET /orders` ro'yxati va pochta skani bilan bir xil;
+  noto'g'ri id — `null`) va **`items[].product: { id, name } | null`** (sahifadagi barcha mahsulot bitta katalog
+  so'rovi bilan; katalog javob bermasa yoki mahsulot o'chirilgan — `null`, javob yiqilmaydi; narx, market, rasm yo'q).
+  Rol va T7 kontakt proyeksiyalari o'zgarmadi.
+- [2026-10-30] ✏️ [logistics] — `GET /post/orders/:id` → `data.post.branch: { id, name } | null` — «Qayerdan»:
+  pochtani JO'NATGAN filial (`branch_id` emas — u ko'pincha manzil). Kuryerli pochta (bekorlarni HQ'ga yuborgan
+  menejer pochtasi ham) — shu foydalanuvchining filiali; kuryersiz yig'ilayotgan (`new`) — `branch_id` filiali, bo'lmasa
+  HQ; kuryersiz o'tkazma (`sent`/`received`, faqat HQ jo'natadi) — HQ; aniqlab bo'lmasa yoki filial xizmati javob
+  bermasa (5 s) — `null`, javob 200. Nom har rolga (boshqa filial menejeriga ham) chiqadi. Faqat shu detal yo'lida —
+  `GET /post/scan/:id`, `GET /scan/:token` javobida `branch` yo'q.
+- 🔧 FE (Elchi-Frontend#359): chekda `№{order_number}`, mahsulot nomi (`items[].product.name`) va «Qayerdan:
+  `post.branch.name`»; maydon yo'q bo'lsa — mavjud zaxiralar.
 
 ### 2026-10-30 — T6: kuryerdan olingan / marketga berilgan pulni qaytarish yoki summasini tuzatish (superadmin)
 
@@ -146,27 +304,6 @@ qayta yaratildi. Maket: frontend `design/T6-pul-qaytarish`.
 - [2026-10-30] 🟢 [bot] — qaytarilgan to'lov kvitansiyasidagi tugma bosilsa: tugmalar olinadi, «Bu to'lov qaytarilgan
   yoki tuzatilgan — yangi holat bildirishnomada.»
 
-
-<!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
-
-### 2026-10-30 — Chek: pochta buyurtmalarida «EL-…» raqam, mahsulot nomi va «Qayerdan» (T9, HJ5sLHiz BE-1/BE-2)
-
-Deploy: **api-gateway + logistics-service** (`libs/common` o'zgardi — order-service ham bir xil helper'ni ishlatadi).
-Migratsiya yo'q. `openapi.json` qayta yaratildi. Faqat qo'shimcha maydonlar (ortga mos).
-
-- [2026-10-30] ✏️ [gateway] — `GET /post/orders/:id`, `GET /post/orders/rejected/:id`, `GET /post/return-requests/list`:
-  har buyurtma qatorida **`order_number`** («EL-100081» — `GET /orders` ro'yxati va pochta skani bilan bir xil;
-  noto'g'ri id — `null`) va **`items[].product: { id, name } | null`** (sahifadagi barcha mahsulot bitta katalog
-  so'rovi bilan; katalog javob bermasa yoki mahsulot o'chirilgan — `null`, javob yiqilmaydi; narx, market, rasm yo'q).
-  Rol va T7 kontakt proyeksiyalari o'zgarmadi.
-- [2026-10-30] ✏️ [logistics] — `GET /post/orders/:id` → `data.post.branch: { id, name } | null` — «Qayerdan»:
-  pochtani JO'NATGAN filial (`branch_id` emas — u ko'pincha manzil). Kuryerli pochta (bekorlarni HQ'ga yuborgan
-  menejer pochtasi ham) — shu foydalanuvchining filiali; kuryersiz yig'ilayotgan (`new`) — `branch_id` filiali, bo'lmasa
-  HQ; kuryersiz o'tkazma (`sent`/`received`, faqat HQ jo'natadi) — HQ; aniqlab bo'lmasa yoki filial xizmati javob
-  bermasa (5 s) — `null`, javob 200. Nom har rolga (boshqa filial menejeriga ham) chiqadi. Faqat shu detal yo'lida —
-  `GET /post/scan/:id`, `GET /scan/:token` javobida `branch` yo'q.
-- 🔧 FE (Elchi-Frontend#359): chekda `№{order_number}`, mahsulot nomi (`items[].product.name`) va «Qayerdan:
-  `post.branch.name`»; maydon yo'q bo'lsa — mavjud zaxiralar.
 
 ### 2026-10-30 — Aloqa raqamlari: market mas'uli, «Muammo bo'lsa» = viloyat logisti, market telefoni menejer/kuryerdan yashirildi (T7, QPq2C1co)
 

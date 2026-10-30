@@ -10,7 +10,7 @@ import { BaseEntity } from '@app/common';
  *     `external_order_id`'ga webhook yuborishni topish.
  *
  * `partner_id` va `order_id` — mantiqiy bog'lanish (bigint), fizik FK emas.
- * Batafsil: docs/PARTNER_API.md.
+ * Batafsil: docs/public/MARKETPLACE_API.md §5.2.
  *
  * yokjwjXG: unique faqat FAOL qatorlar uchun (`is_deleted = false`,
  * migratsiya 1716000000098). Superadmin buyurtmani pochtadan o'chirganda

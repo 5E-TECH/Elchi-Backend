@@ -557,7 +557,7 @@ export class TelegramLinkCodeRequestDto {
   @ApiPropertyOptional({
     example: '37',
     description:
-      'Faqat `market_group` + admin/superadmin uchun MAJBURIY. Market va operator — o‘z marketi (server yechadi; boshqasi → 403).',
+      'Faqat `market_group` + admin/superadmin uchun MAJBURIY. Market egasi — o‘z marketi (server yechadi; boshqasi → 403). BOT-2: market operatori guruh ulay olmaydi (403).',
   })
   @IsOptional()
   @IsString()
@@ -651,6 +651,14 @@ export class TelegramMarketPublicDto {
     description: '(G085w5Qr) Qachon nofaol bo‘ldi; faol qatorda null.',
   })
   inactive_at!: string | null;
+  @ApiProperty({
+    type: String,
+    nullable: true,
+    example: '37',
+    description:
+      '(BOT-2) Guruhni ulagan xodim id’si; eski / noma‘lum ulanishda null.',
+  })
+  linked_by!: string | null;
 }
 
 /**
@@ -686,4 +694,24 @@ export class MyTelegramGroupStatusDto {
       '(G085w5Qr) Nofaol sababi; faol, ulanmagan yoki sababi noma‘lum bo‘lsa null',
   })
   inactive_reason!: (typeof TELEGRAM_MARKET_INACTIVE_REASONS)[number] | null;
+  @ApiProperty({
+    type: String,
+    nullable: true,
+    example: '37',
+    description:
+      '(BOT-2) Guruhni ulagan xodim id’si; ulanmagan / noma‘lum bo‘lsa null.',
+  })
+  linked_by!: string | null;
+
+  @ApiProperty({
+    type: Boolean,
+    nullable: true,
+    example: false,
+    description:
+      '(BOT-2, ega qarori Q2 = A) true — guruhni market egasining o‘zi ulagan; ' +
+      'false — boshqa xodim (avval operator ham ulay olardi, admin) ulagan: ' +
+      'FE egaga «Bu guruhni siz ulamagansiz» deb ko‘rsatadi; null — ulanmagan ' +
+      'yoki kim ulagani noma‘lum (eski ulanish).',
+  })
+  linked_by_owner!: boolean | null;
 }

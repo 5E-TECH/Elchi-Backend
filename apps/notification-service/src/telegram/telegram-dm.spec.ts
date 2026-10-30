@@ -365,7 +365,7 @@ describe('rCFZAmOz — TelegramDmService', () => {
     },
   );
 
-  it('⭐ market_group: market — o‘zi; operator — identity’dagi marketi; admin — market_id majburiy; kuryer — 403', async () => {
+  it('⭐ market_group: market — o‘zi; operator — 403 (BOT-2 Q2 = A); admin — market_id majburiy; kuryer — 403', async () => {
     env = {
       TELEGRAM_BOT_TOKEN: 'bot-token',
       TELEGRAM_BOT_USERNAME: 'ElchiBot',
@@ -384,16 +384,19 @@ describe('rCFZAmOz — TelegramDmService', () => {
       }),
     );
 
-    rmqSendMock.mockResolvedValueOnce({ data: { market_id: '37' } });
-    await make().issueLinkCode({
-      purpose: 'market_group',
-      requester: { id: '40', roles: ['market_operator'] },
-    });
-    expect(links.issued.at(-1)).toEqual(
-      expect.objectContaining({ owner_id: '37', created_by: '40' }),
-    );
+    // (BOT-2 #5, ega qarori Q2 = A) operator o'z marketi guruhini ham
+    // ulay olmaydi — faqat ega yoki admin.
+    const issuedBefore = links.issued.length;
+    expect(
+      await rpcStatus(
+        make().issueLinkCode({
+          purpose: 'market_group',
+          requester: { id: '40', roles: ['market_operator'] },
+        }),
+      ),
+    ).toEqual(expect.objectContaining({ statusCode: 403 }));
+    expect(links.issued).toHaveLength(issuedBefore);
 
-    rmqSendMock.mockResolvedValueOnce({ data: { market_id: '37' } });
     expect(
       await rpcStatus(
         make().issueLinkCode({

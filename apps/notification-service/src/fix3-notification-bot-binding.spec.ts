@@ -132,6 +132,8 @@ describe('6jXw0DDr / CODE-02: guruhni ulash faqat BIR MARTALIK kod bilan', () =>
       group_id: '-100777',
       group_type: 'create',
       is_active: true,
+      // (BOT-2 #5) ulash kodini yaratgan xodim.
+      linked_by: '37',
     });
     expect(cmdCalls('identity.market.rotate_tg_token')).toHaveLength(0);
     expect(JSON.stringify(repo.save.mock.calls)).not.toContain(CODE);

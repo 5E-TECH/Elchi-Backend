@@ -7,7 +7,7 @@ import { BaseEntity } from '@app/common';
  * HASH ko'rinishida saqlanadi (parol kabi). Chiquvchi (outbound) status
  * webhook'lari `webhook_secret` bilan HMAC-SHA256 imzolanadi.
  *
- * Batafsil kontrakt: docs/PARTNER_API.md.
+ * Batafsil kontrakt: docs/public/MARKETPLACE_API.md.
  */
 @Entity({ name: 'partners' })
 @Index('IDX_PARTNER_API_KEY_HASH', ['api_key_hash'], { unique: true })

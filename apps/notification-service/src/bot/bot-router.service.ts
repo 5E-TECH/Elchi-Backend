@@ -9,6 +9,10 @@ import { ConfigService } from '@nestjs/config';
 import { DataSource } from 'typeorm';
 import { ActivityLogService } from '@app/common';
 import { BotActionsService } from './bot-actions.service';
+import {
+  BOT_PASSWORD_CHANGE_TEXT,
+  BotPasswordChangeRequiredError,
+} from './bot-gateway.client';
 import { BotActorService, type BotActor } from './bot-actor.service';
 import { resolveBotConfig } from './bot-config';
 import { checkIncomingMedia } from './bot-media';
@@ -203,6 +207,22 @@ export class BotRouterService implements OnModuleDestroy {
 
   private async process(update: TelegramUpdate, chatId: string): Promise<void> {
     const ctx = this.buildContext(update, chatId);
+    try {
+      await this.handleUpdate(ctx, update);
+    } catch (error) {
+      // (BOT-2 #2d) Qayta urinish befoyda — aniq ko'rsatma bilan javob.
+      if (error instanceof BotPasswordChangeRequiredError) {
+        await ctx.reply(BOT_PASSWORD_CHANGE_TEXT);
+        return;
+      }
+      throw error;
+    }
+  }
+
+  private async handleUpdate(
+    ctx: BotContext,
+    update: TelegramUpdate,
+  ): Promise<void> {
     if (update.callback_query) {
       await this.handleCallback(ctx, update);
       return;
@@ -218,6 +238,14 @@ export class BotRouterService implements OnModuleDestroy {
       if (this.aiOrder && (await this.aiOrder.handleMedia(ctx))) return;
       const media = checkIncomingMedia(message);
       if (!media.ok && media.reply) await ctx.reply(media.reply);
+      return;
+    }
+    // (BOT-3 #6) guruh supergroup'ga aylandi — ulanish yangi id'ga ko'chadi.
+    if (!ctx.isPrivate && message.migrate_to_chat_id) {
+      await this.membership.migrate(
+        ctx.chatId,
+        String(message.migrate_to_chat_id),
+      );
       return;
     }
     // (ysBqD9Nx) guruhga yangi a'zo — market ogohlantiriladi (servis xabari).
