@@ -103,6 +103,23 @@ export function projectReceiptsForViewer<T>(
   return walk(payload, viewer, 0) as T;
 }
 
+/** Javobda to'liq ko'rinishli (`file_key`) chek bormi — filial shundagina kerak. */
+export function hasFullReceipt(value: unknown, depth = 0): boolean {
+  if (depth > MAX_DEPTH) return false;
+  if (Array.isArray(value)) {
+    return value.some((item) => hasFullReceipt(item, depth + 1));
+  }
+  if (!isObject(value)) return false;
+  for (const [key, item] of Object.entries(value)) {
+    if (key === 'receipt') {
+      if (isObject(item) && 'file_key' in item) return true;
+      continue;
+    }
+    if (hasFullReceipt(item, depth + 1)) return true;
+  }
+  return false;
+}
+
 const text = (value: unknown): string =>
   typeof value === 'string' || typeof value === 'number'
     ? String(value).trim()
@@ -167,7 +184,12 @@ export class ReceiptProjectionInterceptor implements NestInterceptor {
       .map((role) => role.trim().toLowerCase());
     return next.handle().pipe(
       switchMap((payload: unknown) =>
-        from(this.viewerBranchId(user, roles)).pipe(
+        // Branch RMQ — faqat menejerga ko'rsatiladigan to'liq chek bo'lsa.
+        from(
+          hasFullReceipt(payload)
+            ? this.viewerBranchId(user, roles)
+            : Promise.resolve(branchIdOf(user)),
+        ).pipe(
           map((branchId) =>
             projectReceiptsForViewer<unknown>(payload, {
               roles,

@@ -158,6 +158,34 @@ describe('T3-2 — tarixdagi receipt proyeksiyasi', () => {
     expect(out.data.detail.receipt).toMatchObject({ id: '41' });
   });
 
+  it('⭐ interceptor: kuryer my-cashbox javobidagi receipt (brief va to`liq) olib tashlanadi', async () => {
+    const out = await runInterceptor({ sub: '301', roles: ['courier'] });
+    expect(JSON.stringify(out)).not.toContain('"receipt"');
+    expect(out.data.items[0]).toEqual({ id: '1' });
+  });
+
+  it('interceptor: to`liq chek bo`lmasa — menejer uchun branch RMQ chaqirilmaydi', async () => {
+    const branch = { send: jest.fn(() => of({ data: { branch_id: '13' } })) };
+    const interceptor = new ReceiptProjectionInterceptor(branch as never);
+    const context = {
+      switchToHttp: () => ({
+        getRequest: () => ({ ...req, user: { sub: '25', roles: ['manager'] } }),
+      }),
+    } as never;
+    const out = (await lastValueFrom(
+      interceptor.intercept(context, {
+        handle: () =>
+          of({
+            data: {
+              items: [{ id: '1', receipt: { id: '41', ai_status: 'match' } }],
+            },
+          }),
+      }),
+    )) as any;
+    expect(branch.send).not.toHaveBeenCalled();
+    expect(out.data.items[0].receipt).toEqual({ id: '41', ai_status: 'match' });
+  });
+
   it('interceptor: filial aniqlanmadi (xato) — chek null (fail closed); SA — so`rov yo`q', async () => {
     const failing = {
       send: jest.fn(() => throwError(() => new Error('down'))),
@@ -302,6 +330,27 @@ describe('T3-2 — gateway yo`llari', () => {
       });
       await controller.findHistory({}, user(roles, { branch_id: '13' }));
       expect(lastPayload(finance).include_receipts).toBe(expected);
+    },
+  );
+
+  it.each([
+    [['admin'], true],
+    [['superadmin'], true],
+  ])(
+    'cashbox/user/:user_id tarixi (loadCashboxHistory) %j → include_receipts %s',
+    async (roles, expected) => {
+      const { controller, finance } = make({
+        statusCode: 200,
+        data: { id: '77', items: [] },
+      });
+      await controller.findCashboxByUser('5', {}, user(roles));
+      const historyCall = (
+        finance.send.mock.calls as unknown as Array<[{ cmd: string }, any]>
+      ).find(([pattern]) => pattern.cmd === 'finance.history.find_all');
+      expect(historyCall?.[1]).toMatchObject({
+        cashbox_id: '77',
+        include_receipts: expected,
+      });
     },
   );
 

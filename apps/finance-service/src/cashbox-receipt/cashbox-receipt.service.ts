@@ -56,7 +56,7 @@ import {
   isReceiptSummaryKind,
   loadReceiptChecksSummary,
 } from './cashbox-receipt.summary';
-import { isReceiptFilterStatus } from './cashbox-receipt.views';
+import { isReceiptFilterStatus, notReversedSql } from './cashbox-receipt.views';
 import type {
   LinkedReceiptRef,
   ReceiptLinkRequest,
@@ -951,19 +951,35 @@ export class CashboxReceiptService {
     return { receipt_id: String(receipt.id) };
   }
 
+  /**
+   * Shu rasm / referens BOSHQA biriktirilgan chekda bormi. Hisobga
+   * olinmaydi: qoralamalar (rad etilgan urinish qonuniy chekni «takror»
+   * qilmasin) va T6 bilan QAYTARILGAN to'lovdagi chek (to'g'ri kuryerga shu
+   * skrinshot bilan qayta kiritish — takror emas).
+   */
+  private duplicateQuery(manager: EntityManager, row: CashboxReceipt) {
+    const history = manager
+      .getRepository(CashboxHistory)
+      .metadata.tablePath.split('.')
+      .map((part) => `"${part}"`)
+      .join('.');
+    return manager
+      .getRepository(CashboxReceipt)
+      .createQueryBuilder('r')
+      .where('r.is_deleted = false')
+      .andWhere("r.state = 'linked'")
+      .andWhere('r.id <> :self', { self: row.id })
+      .andWhere(notReversedSql(history, 'r', 'history_id'));
+  }
+
   private async hasDuplicatePhoto(
     manager: EntityManager,
     row: CashboxReceipt,
   ): Promise<boolean> {
     return (
-      (await manager.getRepository(CashboxReceipt).count({
-        where: {
-          file_sha256: row.file_sha256,
-          isDeleted: false,
-          state: 'linked',
-          id: Not(row.id),
-        },
-      })) > 0
+      (await this.duplicateQuery(manager, row)
+        .andWhere('r.file_sha256 = :sha', { sha: row.file_sha256 })
+        .getCount()) > 0
     );
   }
 
@@ -972,18 +988,17 @@ export class CashboxReceiptService {
     row: CashboxReceipt,
     reference: string,
   ): Promise<boolean> {
+    // Niqoblangan (`*`) referens solishtirilmaydi — soxta takror bermasin.
+    if (!reference || reference.includes('*')) return false;
     const since = new Date(
       Date.now() - RECEIPT_DUPLICATE_REFERENCE_DAYS * 86_400_000,
     );
     return (
-      (await manager.getRepository(CashboxReceipt).count({
-        where: {
-          ai_reference: reference,
-          isDeleted: false,
-          id: Not(row.id),
-          uploaded_at: MoreThanOrEqual(since),
-        },
-      })) > 0
+      (await this.duplicateQuery(manager, row)
+        .andWhere('r.ai_reference = :reference', { reference })
+        .andWhere("r.ai_reference NOT LIKE '%*%'")
+        .andWhere('r.uploaded_at >= :since', { since })
+        .getCount()) > 0
     );
   }
 

@@ -1,7 +1,6 @@
 import {
   RECEIPT_EXTRACT_SYSTEM,
   ReceiptExtractService,
-  maskCardLikeDigits,
   sanitizeCurrency,
   sanitizeReceiptDate,
   sanitizeReference,
@@ -96,30 +95,51 @@ describe('ReceiptExtractService', () => {
   });
 
   it.each([
-    '8600 1234 5678 9012',
-    '8600-1234-5678-9012',
-    '8600.1234.5678.9012',
     '8600123456789012',
+    '8600 1234 5678 9012',
+    '8600  1234  5678  9012',
+    '8600-1234-5678-9012',
+    '8600–1234–5678–9012',
+    '8600 - 1234 - 5678 - 9012',
+    '8600/1234/5678/9012',
+    '8600_1234_5678_9012',
+    '8600.1234.5678.9012',
+    '8600,1234,5678,9012',
     '9860 0101 2345 6789',
-  ])('⭐ guruhlangan karta raqami %s — uchala maydonda maskalanadi', (pan) => {
+  ])('⭐ karta raqami %s — uchala maydonda yashiriladi', (pan) => {
     const digits = pan.replace(/\D/g, '');
     for (const out of [
       sanitizeReference(pan),
       sanitizeReference(`TX ${pan}`),
+      sanitizeReference(`RRN ${pan}`),
       sanitizeText(`Ali Valiyev ${pan}`, 120),
+      sanitizeText(`Kapitalbank ${pan} karta`, 80),
       sanitizeReceiptDate(`30.10.2026 ${pan}`),
     ]) {
-      expect(String(out)).not.toContain(digits);
-      expect(String(out)).not.toMatch(/\d{4}[\s.-]?\d{4}[\s.-]?\d{4}/);
+      const plain = String(out).replace(/\D/g, '');
+      expect(plain).not.toContain(digits.slice(0, 12));
     }
+    // Referens — niqob o'rniga null (soxta duplicate_reference bo'lmasin).
     expect(sanitizeReference(pan)).toBeNull();
-    expect(sanitizeReference(`TX ${pan}`)).toBe('TX***');
+    expect(sanitizeReference(`TX ${pan}`)).toBeNull();
+    expect(sanitizeReference(`RRN ${pan}`)).toBeNull();
+    expect(sanitizeText(`Ali ${pan}`, 120)).toBe('Ali ***');
+    expect(sanitizeReceiptDate(`30.10.2026 ${pan}`)).toBe('30.10.2026 ***');
   });
 
-  it('sana, summa, qisqa referens maskalanmaydi', () => {
-    expect(maskCardLikeDigits('30.10.2026 14:05')).toBe('30.10.2026 14:05');
-    expect(maskCardLikeDigits('150 000 so`m')).toBe('150 000 so`m');
-    expect(sanitizeReceiptDate('2026-10-30 14:05')).toBe('2026-10-30 14:05');
+  it('⭐ 12 raqamli RRN saqlanadi; sana-vaqt va summa niqoblanmaydi', () => {
+    expect(sanitizeReference('430512345678')).toBe('430512345678');
+    expect(sanitizeReference('RRN 4305 1234 5678')).toBe('RRN430512345678');
     expect(sanitizeReference('TX-00123456')).toBe('TX-00123456');
+    expect(sanitizeReference('***')).toBeNull();
+    for (const date of [
+      '30.10.2026 14.05.33',
+      '30.10.2026 14:05:33',
+      '2026-10-30 14:05',
+      '2026-10-30T14:05',
+    ]) {
+      expect(sanitizeReceiptDate(date)).toBe(date);
+    }
+    expect(sanitizeText('To`lov 150 000 so`m', 80)).toBe('To`lov 150 000 so`m');
   });
 });

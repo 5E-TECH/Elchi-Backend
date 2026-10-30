@@ -1437,6 +1437,8 @@ export class FinanceGatewayController {
       fromDate?: string;
       toDate?: string;
     },
+    /** T3 — `receipt` bloki (faqat SA/admin/menejer; finance sukut — yo'q). */
+    includeReceipts = false,
   ): Promise<any[]> {
     if (!cashboxId) {
       return [];
@@ -1452,6 +1454,7 @@ export class FinanceGatewayController {
         // FE-PAY-04 / C2: sana filtri (Toshkent kuni — finance'da).
         from_date: query.fromDate,
         to_date: query.toDate,
+        include_receipts: includeReceipts,
       },
     );
     const histories = historyResponse?.data?.items ?? [];
@@ -1996,6 +1999,7 @@ export class FinanceGatewayController {
           cashboxHistory: await this.loadCashboxHistory(
             String(cashbox?.id ?? ''),
             query,
+            this.canSeeReceiptsOf(req?.user),
           ),
         })),
       );
@@ -2089,6 +2093,7 @@ export class FinanceGatewayController {
       response.data.cashboxHistory = await this.loadCashboxHistory(
         String(response.data.id),
         query,
+        this.canSeeReceiptsOf(req?.user),
       );
       if (
         this.isManager(req?.user) &&

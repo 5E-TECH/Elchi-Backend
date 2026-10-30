@@ -154,6 +154,9 @@ qilinadigan uch operatsiyadan tashqari ortga mos.
 - [2026-10-30] 🟢 [finance] — T6 bilan **summasi tuzatilgan** kuryer to'lovining cheki yangi to'lov qatoriga
   ko'chadi (`history_id`, `entered_amount` — yangi summa; AI o'qigan summa bilan holat qayta hisoblanadi, AI qayta
   chaqirilmaydi). **Qaytarilgan** to'lov qatori «Chek yo'q» va xulosaga kirmaydi.
+- [2026-10-30] 🟢 [finance] — chek `ai` blokida karta raqami hech qachon chiqmaydi: ism / bank / sanada
+  (bo'sh joy, chiziqcha, `/`, `_`, vergul bilan guruhlangan bo'lsa ham) — `***`; karta raqamiga o'xshash
+  `reference` — `null` (12 raqamli RRN saqlanadi). → FE o'zgarishi shart emas.
 - [2026-10-30] 🟢 [finance] — AI'ga rasm 1568 px gacha kichraytirib yuboriladi. Buzilgan / juda katta fayl —
   `ai_status: "unreadable"`, `ai.error_reason`: `image_decode_failed` / `too_large`.
 - [2026-10-30] 🟢 [finance] — `GET /finance/cashbox/my-cashbox` va `cashbox/user/:id/main` javobida `receipt`

@@ -1099,4 +1099,110 @@ describePg('T3-2 chekni bog`lash — haqiqiy Postgres', () => {
     });
     expect((await receiptRow(first.receiptId)).ai_flags).toEqual([]);
   });
+
+  // ───────────────────────── #598 ko'rib chiqish ─────────────────────────
+
+  const reverseCourier = async (transferId: string) => {
+    const legs = await courierLegs(transferId);
+    const res = (await corrections.reverse({
+      history_id: String(legs.income.id),
+      reason: "Xato kiritilgan to'lov",
+      idempotency_key: randomUUID(),
+      requester_id: '1',
+      requester_roles: SA,
+    })) as any;
+    expect(res.statusCode).toBe(201);
+  };
+
+  const historyCount = async (receipt_status: string) =>
+    (
+      (await finance.findAllHistory({
+        page: 0,
+        limit: 0,
+        receipt_status,
+        include_receipts: true,
+      })) as any
+    ).data.counts.all as number;
+
+  it('⭐ mismatch to`lov T6 bilan qaytarildi — summary.mismatch = tarix filtri (0)', async () => {
+    const receiptId = await upload('courier_to_hq');
+    const res = await payCourier({ receipt_id: receiptId });
+    await receipts.applyAiResult({
+      receipt_id: receiptId,
+      ai_request_id: String(res.data.receipt.ai_request_id),
+      result: aiOk({ amount: 95_000 }),
+    });
+    expect(await historyCount('mismatch')).toBe(2);
+    await reverseCourier(res.data.transfer_id);
+    const sum = await summary();
+    expect(sum.data.counts.mismatch).toBe(0);
+    expect(await historyCount('mismatch')).toBe(sum.data.counts.mismatch);
+  });
+
+  it('⭐ qaytarilgan to`lovdagi chek — shu skrinshot bilan qayta kiritish duplicate_photo / duplicate_reference EMAS', async () => {
+    const first = await upload('courier_to_hq');
+    const res = await payCourier({ receipt_id: first });
+    await receipts.applyAiResult({
+      receipt_id: first,
+      ai_request_id: String(res.data.receipt.ai_request_id),
+      result: aiOk({ amount: 90_000, reference: 'RRN430512345678' }),
+    });
+    await reverseCourier(res.data.transfer_id);
+    // upload() — o'sha sha256 (o'sha rasm).
+    const again = await upload('courier_to_hq');
+    const res2 = await payCourier({ receipt_id: again });
+    await receipts.applyAiResult({
+      receipt_id: again,
+      ai_request_id: String(res2.data.receipt.ai_request_id),
+      result: aiOk({ amount: 90_000, reference: 'RRN430512345678' }),
+    });
+    expect((await receiptRow(again)).ai_flags).toEqual([]);
+  });
+
+  it('niqoblangan (`*`) referens solishtirilmaydi — soxta duplicate_reference yo`q', async () => {
+    const a = await linkedReceipt(150_000);
+    await receipts.applyAiResult({
+      receipt_id: a.receiptId,
+      ai_request_id: a.requestId,
+      result: aiOk({ reference: 'TX***' }),
+    });
+    await db.query(
+      `UPDATE finance_schema.cashbox_receipts SET file_sha256 = $2 WHERE id = $1`,
+      [a.receiptId, 'c'.repeat(64)],
+    );
+    const b = await linkedReceipt(150_000);
+    await receipts.applyAiResult({
+      receipt_id: b.receiptId,
+      ai_request_id: b.requestId,
+      result: aiOk({ reference: 'TX***' }),
+    });
+    expect((await receiptRow(b.receiptId)).ai_flags).toEqual([]);
+  });
+
+  it('⭐ NOWAIT: chek boshqa tranzaksiyada qulflangan — spend darhol 409 RECEIPT_ALREADY_USED, MAIN o`zgarmaydi', async () => {
+    const receiptId = await upload('manual_expense');
+    const before = await mainBalance();
+    const holder = db.createQueryRunner();
+    await holder.connect();
+    await holder.startTransaction();
+    try {
+      await holder.query(
+        `SELECT id FROM finance_schema.cashbox_receipts WHERE id = $1 FOR UPDATE`,
+        [receiptId],
+      );
+      const started = Date.now();
+      await expect(
+        rpcError(spend({ receipt_id: receiptId })),
+      ).resolves.toMatchObject({
+        statusCode: 409,
+        code: 'RECEIPT_ALREADY_USED',
+      });
+      expect(Date.now() - started).toBeLessThan(5_000);
+    } finally {
+      await holder.rollbackTransaction();
+      await holder.release();
+    }
+    expect(await mainBalance()).toBe(before);
+    expect((await receiptRow(receiptId)).state).toBe('draft');
+  });
 });

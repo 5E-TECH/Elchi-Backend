@@ -2,7 +2,11 @@ import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
   AI_MODEL_DEFAULTS,
+  CARD_MASK,
   ClaudeService,
+  hasCardLikeDigits,
+  maskCardLikeDigits,
+  maskCardLikeDigitsKeepingDates,
   type AiReceiptExtractRequest,
   type AiReceiptExtractResponse,
 } from '@app/common';
@@ -65,45 +69,44 @@ export const RECEIPT_EXTRACT_SCHEMA: Record<string, unknown> = Object.freeze({
 export const RECEIPT_EXTRACT_MAX_TOKENS = 384;
 const MEDIA_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
 
-/** Shu qadar raqamli guruhlangan ketma-ketlik — ehtimoliy karta raqami (PAN). */
-export const RECEIPT_PAN_MIN_DIGITS = 12;
+/**
+ * Referensda PAN shaklidagi (13–19 raqam) ketma-ketlik — referens rad etiladi
+ * (`null`): `***` li qiymat saqlansa, keyingi cheklarga soxta
+ * `duplicate_reference` beradi. 12 raqamli RRN (Uzcard/Humo) saqlanadi.
+ */
+export const RECEIPT_REFERENCE_PAN_MIN_DIGITS = 13;
 
 /**
- * Raqamlar orasidagi bitta bo'sh joy / `-` / `.` bilan guruhlangan
- * ketma-ketlik («8600 1234 5678 9012», «8600-1234-…») ham, yaxlit ham —
- * ≥ 12 raqam bo'lsa `***`. Sana («30.10.2026 14:05») va summa qoladi.
+ * Qisqa matn (ism, bank): karta raqami / telefon — har qanday ajratgich bilan
+ * (`maskCardLikeDigits`), yaxlit 9+ raqam ham — `***`; ≤ `max` belgi.
  */
-export function maskCardLikeDigits(text: string): string {
-  return text.replace(/\d(?:[\s.-]?\d)*/g, (run) =>
-    run.replace(/\D/g, '').length >= RECEIPT_PAN_MIN_DIGITS ? '***' : run,
-  );
-}
-
-/** Qisqa matn: uzun raqamlar (ehtimoliy PAN, telefon) maskalanadi, ≤ `max` belgi. */
 export function sanitizeText(value: unknown, max: number): string | null {
   if (typeof value !== 'string') return null;
   const text = maskCardLikeDigits(value)
-    .replace(/\d{9,}/g, '***')
+    .replace(/\d{9,}/g, CARD_MASK)
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, max);
   return text || null;
 }
 
-/** Referens: harf-raqam; karta raqamiga o'xshash ketma-ketlik AVVAL maskalanadi. */
+/** Referens: harf-raqam; karta raqamiga o'xshash bo'lsa — `null` (niqobsiz ham, `***` ham saqlanmaydi). */
 export function sanitizeReference(value: unknown): string | null {
   if (typeof value !== 'string' && typeof value !== 'number') return null;
-  const text = maskCardLikeDigits(String(value))
-    .replace(/\d{13,}/g, '***')
-    .replace(/[^\p{L}\p{N}\-_/#.*]/gu, '')
-    .slice(0, 120);
-  return text && !/^\**$/.test(text) ? text : null;
+  const raw = String(value);
+  if (hasCardLikeDigits(raw, RECEIPT_REFERENCE_PAN_MIN_DIGITS)) return null;
+  const text = raw.replace(/[^\p{L}\p{N}\-_/#.]/gu, '').slice(0, 120);
+  // Filtr ajratgichlarni olib tashlagandan KEYIN ham PAN chiqmasin.
+  if (new RegExp(`\\d{${RECEIPT_REFERENCE_PAN_MIN_DIGITS},}`).test(text)) {
+    return null;
+  }
+  return text || null;
 }
 
-/** Chek sanasi: guruhlangan karta raqami ham maskalanadi. */
+/** Chek sanasi: sana-vaqt saqlanadi, qolgan karta raqami niqoblanadi. */
 export function sanitizeReceiptDate(value: unknown): string | null {
   return sanitizeDate(
-    typeof value === 'string' ? maskCardLikeDigits(value) : value,
+    typeof value === 'string' ? maskCardLikeDigitsKeepingDates(value) : value,
   );
 }
 
