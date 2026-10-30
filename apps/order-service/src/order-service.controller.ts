@@ -443,11 +443,15 @@ export class OrderServiceController {
   // order topa olmaganda (prefiksiz qop yorlig'i) gateway shu yo'lga tushadi.
   @MessagePattern({ cmd: 'order.find_batch_by_external_token' })
   findBatchByExternalToken(
-    @Payload() data: { token: string },
+    @Payload()
+    data: { token: string; market_id?: string; branch_id?: string },
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
-      this.orderService.findBatchByExternalToken(data.token),
+      this.orderService.findBatchByExternalToken(data.token, {
+        market_id: data.market_id,
+        branch_id: data.branch_id,
+      }),
     );
   }
 
@@ -1269,6 +1273,7 @@ export class OrderServiceController {
     data: {
       query: {
         market_id?: string;
+        branch_id?: string;
         status?: Order_status | Order_status[] | string | string[];
         start_day?: string;
         end_day?: string;

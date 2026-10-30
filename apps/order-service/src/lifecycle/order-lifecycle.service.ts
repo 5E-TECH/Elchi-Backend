@@ -103,6 +103,11 @@ import {
   type SaleDeliveryQuote,
   toSaleEngineQuote,
 } from '../pricing/sale-pricing';
+import {
+  countExternalBatches,
+  ScannedExternalBatch,
+  toScannedBatch,
+} from '../lookup/external-batch-counts';
 import { OrderLookupService } from '../lookup/order-lookup.service';
 import {
   isIntegrationOrderCreate,
@@ -7455,6 +7460,12 @@ export class OrderLifecycleService {
       { scanVerified: true },
     );
 
+    const batches = await this.scannedBatchCounts(
+      Array.from(batchTokens),
+      orders,
+      input.requester,
+    );
+
     return successRes(
       {
         ok: true,
@@ -7466,11 +7477,55 @@ export class OrderLifecycleService {
          * 12 ta qabul qilindi" degan natijani TUSHUNISHI kerak.
          */
         batch_tokens: Array.from(batchTokens),
+        /**
+         * Sm3LZ6EN — chala qop ogohlantirishi: `batch` bitta qop skanida,
+         * `batches` har doim (bir so'rovda bir nechta qop bo'lishi mumkin).
+         */
+        batch: batches.length === 1 ? batches[0] : null,
+        batches,
         detail: (result as { data?: unknown })?.data ?? null,
       },
       200,
       'Scanned parcels received',
     );
+  }
+
+  /**
+   * Sm3LZ6EN — skanerlangan qoplar sonlari, qabul qilingandan KEYINGI holatda.
+   *
+   * ⚠️ XATO YUTILADI va bu ataylab: posilkalar allaqachon qabul qilingan
+   * (tranzaksiya yopilgan). Son olinmagani uchun xato qaytarsak operator
+   * qayta skanerlaydi va "allaqachon qabul qilingan" oladi — asosiy natija
+   * yo'qolardi.
+   */
+  private async scannedBatchCounts(
+    batchTokens: string[],
+    orders: Order[],
+    requester?: { id?: string; roles?: string[] } | null,
+  ): Promise<ScannedExternalBatch[]> {
+    if (!batchTokens.length) return [];
+    try {
+      const branchId = await this.resolveReceiveBranchScope(requester);
+      const counts = await countExternalBatches(this.orderRepo, batchTokens, {
+        branch_id: branchId ?? undefined,
+      });
+      return counts.map((count) =>
+        toScannedBatch(
+          count,
+          orders.filter(
+            (order) =>
+              order.external_batch_token === count.external_batch_token,
+          ).length,
+        ),
+      );
+    } catch (error) {
+      this.logger.warn(
+        `receive-by-scan: qop sonlarini olib bo'lmadi: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+      return [];
+    }
   }
 
   /**

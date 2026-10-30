@@ -277,6 +277,7 @@ jobs:
           apps/catalog-service/src/warehouse/warehouse.pg.spec.ts
           apps/order-service/src/warehouse/order-warehouse.pg.spec.ts
           apps/order-service/src/order-service.list-warehouse-filter.VkKDSNNn.pg.spec.ts
+          apps/order-service/src/order-service.external-batches.Sm3LZ6EN.pg.spec.ts
           apps/order-service/src/lifecycle/order-special-categories.T8.pg.spec.ts
           apps/finance-service/src/cashbox-receipt/cashbox-receipt.T3.pg.spec.ts
           apps/finance-service/src/cashbox-receipt/cashbox-receipt-link.T3.pg.spec.ts

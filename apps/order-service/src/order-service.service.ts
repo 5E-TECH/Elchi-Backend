@@ -43,6 +43,13 @@ import {
   resolveCourierShare as resolveCourierShareShare,
   type SaleEngineQuote,
 } from './domain/order-money';
+import {
+  countExternalBatches,
+  ExternalBatchCount,
+  ExternalBatchScope,
+  toScannedBatch,
+  uniqueBatchTokens,
+} from './lookup/external-batch-counts';
 import { OrderLookupService } from './lookup/order-lookup.service';
 import {
   buildSaleQuotePayload,
@@ -1745,6 +1752,7 @@ export class OrderServiceService {
 
   async findAllExternal(query: {
     market_id?: string;
+    branch_id?: string;
     status?: Order_status | Order_status[] | string | string[];
     start_day?: string;
     end_day?: string;
@@ -1759,12 +1767,28 @@ export class OrderServiceService {
      * qaytardi). `findAllEnriched` mijoz (identity) + tuman ma'lumotini
      * qo'shadi — oddiy /orders sahifasi ishlatadigan AYNI yo'l.
      */
-    return this.findAllEnriched({
+    const result = await this.findAllEnriched({
       ...query,
       source: Order_source.EXTERNAL,
       // PEc4BjVX: skan ekrani butun qopni oladi (gateway limit=200 ga ruxsat beradi).
       max_limit: EXTERNAL_LIST_MAX_LIMIT,
     });
+
+    /**
+     * Sm3LZ6EN — sahifada uchragan har qop uchun keldi soni. Doira FAQAT
+     * market + filial: status, sana va sahifa sonni kesmasligi shart.
+     */
+    let batches: ExternalBatchCount[] = [];
+    try {
+      batches = await countExternalBatches(
+        this.orderRepo,
+        uniqueBatchTokens(result.data),
+        { market_id: query.market_id, branch_id: query.branch_id },
+      );
+    } catch (error) {
+      this.handleDbError(error);
+    }
+    return { ...result, meta: { batches } };
   }
 
   /**
@@ -2304,16 +2328,30 @@ export class OrderServiceService {
    * Faqat qisqa, xavfsiz maydonlar qaytadi (mijoz PII EMAS) — ro'yxat qopni
    * tasdiqlash + qabul uchun yetarli; har bir posilkaning batafsil ma'lumoti
    * alohida ko'rinish tekshiruvidan (visibility) o'tadi.
+   *
+   * Sm3LZ6EN: `batch` — chala qop ogohlantirishi uchun sonlar (`meta.batches`
+   * bilan AYNI hisob). `scope.market_id` a'zolarni ham cheklaydi: market faqat
+   * o'z buyurtmasini ko'radi (`assertQrOrderVisible` qoidasi). Filial esa faqat
+   * sonni: xodim qo'lidagi qopni ko'rishi kerak (skaner oqimi), lekin son
+   * ro'yxatdagi bilan bir xil chiqadi; doirada a'zo bo'lmasa `batch: null`.
    */
-  async findBatchByExternalToken(token: string) {
+  async findBatchByExternalToken(
+    token: string,
+    scope: ExternalBatchScope = {},
+  ) {
     const t = String(token ?? '').trim();
     if (!t) {
       this.notFound('Batch not found');
     }
     let members: Order[] = [];
+    let counts: ExternalBatchCount[] = [];
     try {
       members = await this.orderRepo.find({
-        where: { external_batch_token: t, isDeleted: false },
+        where: {
+          external_batch_token: t,
+          isDeleted: false,
+          ...(scope.market_id ? { market_id: scope.market_id } : {}),
+        },
         select: [
           'id',
           'qr_code_token',
@@ -2324,6 +2362,9 @@ export class OrderServiceService {
         order: { createdAt: 'ASC' },
         take: 500,
       });
+      if (members.length) {
+        counts = await countExternalBatches(this.orderRepo, [t], scope);
+      }
     } catch (error) {
       this.handleDbError(error);
     }
@@ -2336,6 +2377,9 @@ export class OrderServiceService {
         is_external_batch: true,
         count: members.length,
         members,
+        batch: counts[0]
+          ? toScannedBatch(counts[0], counts[0].pending_count)
+          : null,
       },
       200,
       'Batch by external token',

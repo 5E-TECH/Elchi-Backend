@@ -12,7 +12,22 @@ import { OrderServiceService } from './order-service.service';
  */
 function buildSvc(members: Record<string, unknown>[]) {
   const svc: any = Object.create(OrderServiceService.prototype);
-  svc.orderRepo = { find: jest.fn(() => Promise.resolve(members)) };
+  const countsQb: Record<string, jest.Mock> = {};
+  for (const method of [
+    'select',
+    'addSelect',
+    'where',
+    'andWhere',
+    'setParameters',
+    'groupBy',
+  ]) {
+    countsQb[method] = jest.fn(() => countsQb);
+  }
+  countsQb.getRawMany = jest.fn(() => Promise.resolve([]));
+  svc.orderRepo = {
+    find: jest.fn(() => Promise.resolve(members)),
+    createQueryBuilder: jest.fn(() => countsQb),
+  };
   return svc;
 }
 
