@@ -51,8 +51,9 @@ the running datastores:
   `POSTGRES_PASSWORD` / `POSTGRES_URI`.
 - **MinIO**: rotate the root user/password (or create a new access key and retire
   the old) and update `MINIO_ACCESS_KEY` / `MINIO_SECRET_KEY`.
-- **RabbitMQ**: create a real user, set `RABBITMQ_DEFAULT_USER` / `_PASS`, update
-  `RABBITMQ_URI`, and disable the default `guest` account.
+- **RabbitMQ**: `rabbitmqctl add_user` / `change_password` on the running broker,
+  update `RABBITMQ_URI`, delete `guest` (`docs/ops/secret-rotation.md` §3). Never
+  through `RABBITMQ_DEFAULT_USER` / `_PASS`: they need a new container, see below.
 - **Cloudflare Tunnel**: revoke the leaked `TUNNEL_TOKEN` in the Zero-Trust
   dashboard and issue a new one.
 - **JWT keys**: rotating `ACCESS_TOKEN_KEY` / `REFRESH_TOKEN_KEY` invalidates all
@@ -70,11 +71,24 @@ the running datastores:
 > (+ `RABBITMQ_URI`), `SUPERADMIN_PASSWORD`, `TUNNEL_TOKEN`, `TELEGRAM_BOT_TOKEN`,
 > `ORDER_BOT_TOKEN`, `SWAGGER_USER`, `SWAGGER_PASSWORD`.
 
-Restart the stack so every service picks up the new `.env.production`:
+Restart so every service picks up the new `.env.production`, the gateway last, by
+swap (no API gap):
 
 ```bash
-docker compose -f docker-compose.prod.yml up -d --force-recreate
+docker compose -f docker-compose.prod.yml up -d --no-deps --force-recreate \
+  postgres minio db-backup backup-offsite identity-service order-service \
+  catalog-service logistics-service finance-service notification-service \
+  integration-service analytics-service branch-service investor-service \
+  file-service c2c-service search-service ai-service
+bash scripts/rotate-datastore-secrets.sh gateway-swap --execute
 ```
+
+> ⚠️ Never a bare `up -d`, or `--force-recreate` without `--no-deps` and a service
+> list: compose recreates `rabbitmq` too. Its node name is the container id, a new
+> container opens an empty mnesia, the broker users are gone and every service loses
+> the broker (qUEE0Bgd; a rollback does not fix it). `cloudflared` is rolled one at a
+> time by hand (`docs/ops/secret-rotation.md` §8). `db-reconcile` /
+> `activity-log-prune`, if running, join the first list.
 
 ## 2. Purge `.env.production` from git history
 

@@ -103,9 +103,11 @@ jobs:
     environment: production
     timeout-minutes: 60
     # deployments: read — the staging gate reads the `staging` deployments.
+    # packages: write — CI-built images (ZfI9nERJ, only with CI_IMAGES_ENABLED).
     permissions:
       contents: read
       deployments: read
+      packages: write
     steps:
       # --- Staging gate (dev -> test -> main) ---------------------------------
       # With the test server on (STAGING_ENABLED), production takes ONLY code
@@ -140,14 +142,32 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v7
 
+      # --- CI-built images (ZfI9nERJ) -------------------------------------------
+      # OFF unless the REPOSITORY variable CI_IMAGES_ENABLED says so: 'true' = both
+      # deploy jobs, 'staging' = only the test server. Off: this step is skipped,
+      # the server script gets CI_IMAGES=false and builds with --build as always.
+      # Images: ghcr.io/<owner>/<repo>/<service>:<sha>, reused when `test` already
+      # built this commit. docs/ops/staging.md §6.3.
+      - name: Build and push images
+        if: vars.CI_IMAGES_ENABLED == 'true'
+        env:
+          GHCR_TOKEN: ${{ github.token }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: bash scripts/ci-build-images.sh
+
       - name: Deploy via SSH
         uses: appleboy/ssh-action@v1.2.5
+        env:
+          CI_IMAGES: ${{ vars.CI_IMAGES_ENABLED == 'true' && 'true' || 'false' }}
+          GHCR_TOKEN: ${{ vars.CI_IMAGES_ENABLED == 'true' && github.token || '' }}
+          GHCR_USER: ${{ github.actor }}
         with:
           host: ${{ secrets.SERVER_IP }}
           port: ${{ secrets.SERVER_SSH_PORT || 22 }}
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           command_timeout: 50m
+          envs: CI_IMAGES,GHCR_TOKEN,GHCR_USER
           # NOT script_stop: drone-ssh's script_stop instruments the script
           # line-by-line and treats ANY `[ test ]` in an `if` that evaluates
           # false as a fatal error — so `if [ "$RUN_MIGRATIONS" != true ]` aborted
@@ -334,6 +354,45 @@ jobs:
             fi
             echo "Pre-deploy backup: ${PRE_DEPLOY_BK:-skipped (first install, no database yet)}"
 
+            # --- CI-built images (ZfI9nERJ) --------------------------------------
+            # CI_IMAGES comes from the job (`envs:`), off unless the repository
+            # variable CI_IMAGES_ENABLED is set. Off: nothing here runs and every
+            # command below is the server-side --build path. On: this commit's images
+            # are pulled while the old containers still serve and tagged with the
+            # name compose gives its own builds, so every `up` below runs --no-build.
+            # `config --images` also prints the dependencies: pick the service's line.
+            # A registry problem falls back to --build, nothing is touched yet. The
+            # job token only lives in a throwaway DOCKER_CONFIG; `set +x` keeps it
+            # out of the log. The rollback always builds on the server: OLD_SHA's
+            # images need not exist in the registry.
+            ci_images_pull() {
+              local DC="docker compose -f docker-compose.prod.yml" repo cfg s img target rc=0
+              repo="ghcr.io/$(printf '%s' '${{ github.repository }}' | tr 'A-Z' 'a-z')"
+              cfg="$(umask 077 && mktemp -d)"
+              { set +x; } 2>/dev/null
+              printf '%s' "${GHCR_TOKEN:-}" | DOCKER_CONFIG="$cfg" docker login ghcr.io -u "${GHCR_USER:-token}" --password-stdin >/dev/null 2>&1 || rc=1
+              unset GHCR_TOKEN
+              set -x
+              for s in $DEPLOY_SERVICES migration-runner db-reconcile activity-log-prune; do
+                [ "$rc" = 0 ] || break
+                case "$s" in
+                  migration-runner | db-reconcile | activity-log-prune) img=ops ;;
+                  *) img="$s" ;;
+                esac
+                target="$($DC config --images "$s" 2>/dev/null | grep -E -- "-$s\$" | head -n 1 || true)"
+                if [ -z "$target" ] || ! DOCKER_CONFIG="$cfg" docker pull -q "$repo/$img:$NEW_SHA" || ! docker tag "$repo/$img:$NEW_SHA" "$target"; then
+                  rc=1
+                fi
+              done
+              rm -rf "$cfg"
+              return "$rc"
+            }
+            CI_IMAGES="${CI_IMAGES:-false}"
+            if [ "$CI_IMAGES" = true ] && ! ci_images_pull; then
+              echo "WARNING: CI images could not be pulled — building on this server as before" >&2
+              CI_IMAGES=false
+            fi
+
             # cloudflared is NOT pulled here any more: its image is pinned (tag +
             # digest) and rolled out only when that pin changes — see below.
             # qUEE0Bgd: mavjud serverda amalda faqat rabbitmq'ning qotirilgan digest'i:
@@ -355,7 +414,11 @@ jobs:
               # the restore point.
               echo "Migration restore point: ${PRE_DEPLOY_BK:-none (first install, no database yet)}"
 
-              docker compose -f docker-compose.prod.yml up --build --force-recreate --abort-on-container-exit migration-runner
+              if [ "$CI_IMAGES" = true ]; then
+                docker compose -f docker-compose.prod.yml up --no-build --force-recreate --abort-on-container-exit migration-runner
+              else
+                docker compose -f docker-compose.prod.yml up --build --force-recreate --abort-on-container-exit migration-runner
+              fi
               docker compose -f docker-compose.prod.yml rm -f migration-runner || true
             fi
 
@@ -383,10 +446,16 @@ jobs:
               old="$($DC ps -q api-gateway 2>/dev/null || true)"
               if [ -z "$old" ] || [ "$(printf '%s\n' "$old" | wc -l)" -ne 1 ]; then
                 echo "api-gateway: not exactly one running container — plain (re)create"
-                $DC up -d --no-deps --build api-gateway || return 1
+                if [ "$CI_IMAGES" = true ]; then
+                  $DC up -d --no-deps --no-build api-gateway || return 1
+                else
+                  $DC up -d --no-deps --build api-gateway || return 1
+                fi
                 return 0
               fi
-              $DC build api-gateway || return 1
+              if [ "$CI_IMAGES" != true ]; then
+                $DC build api-gateway || return 1
+              fi
               $DC up -d --no-deps --no-recreate --scale api-gateway=2 api-gateway || return 1
               new="$($DC ps -q api-gateway | grep -v "^$old" | head -n 1 || true)"
               if [ -z "$new" ]; then
@@ -424,7 +493,11 @@ jobs:
               echo "No (non-gateway) application service changes detected; keeping running containers as-is."
             else
               echo "Deploying services: $DEPLOY_SERVICES"
-              docker compose -f docker-compose.prod.yml up -d --no-deps --build --remove-orphans $DEPLOY_SERVICES
+              if [ "$CI_IMAGES" = true ]; then
+                docker compose -f docker-compose.prod.yml up -d --no-deps --no-build --remove-orphans $DEPLOY_SERVICES
+              else
+                docker compose -f docker-compose.prod.yml up -d --no-deps --build --remove-orphans $DEPLOY_SERVICES
+              fi
             fi
             if [ "$GATEWAY_SWAP" = true ]; then
               gateway_swap
@@ -542,7 +615,11 @@ jobs:
               fi
             done
             if [ -n "$OPS_SIDECARS" ]; then
-              docker compose -f docker-compose.prod.yml up -d --no-deps --build $OPS_SIDECARS || echo "WARNING: ops sidecars ($OPS_SIDECARS) were not updated — they keep running the previous code" >&2
+              if [ "$CI_IMAGES" = true ]; then
+                docker compose -f docker-compose.prod.yml up -d --no-deps --no-build $OPS_SIDECARS || echo "WARNING: ops sidecars ($OPS_SIDECARS) were not updated — they keep running the previous code" >&2
+              else
+                docker compose -f docker-compose.prod.yml up -d --no-deps --build $OPS_SIDECARS || echo "WARNING: ops sidecars ($OPS_SIDECARS) were not updated — they keep running the previous code" >&2
+              fi
             fi
 
             docker compose -f docker-compose.prod.yml ps
@@ -576,18 +653,34 @@ jobs:
     if: github.ref == 'refs/heads/test' && vars.STAGING_ENABLED == 'true'
     environment: staging
     timeout-minutes: 60
+    # packages: write — CI-built images (ZfI9nERJ, only with CI_IMAGES_ENABLED).
+    permissions:
+      contents: read
+      packages: write
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
 
+      - name: Build and push images
+        if: vars.CI_IMAGES_ENABLED == 'true' || vars.CI_IMAGES_ENABLED == 'staging'
+        env:
+          GHCR_TOKEN: ${{ github.token }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: bash scripts/ci-build-images.sh
+
       - name: Deploy via SSH (staging)
         uses: appleboy/ssh-action@v1.2.5
+        env:
+          CI_IMAGES: ${{ (vars.CI_IMAGES_ENABLED == 'true' || vars.CI_IMAGES_ENABLED == 'staging') && 'true' || 'false' }}
+          GHCR_TOKEN: ${{ (vars.CI_IMAGES_ENABLED == 'true' || vars.CI_IMAGES_ENABLED == 'staging') && github.token || '' }}
+          GHCR_USER: ${{ github.actor }}
         with:
           host: ${{ secrets.SERVER_IP }}
           port: ${{ secrets.SERVER_SSH_PORT || 22 }}
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           command_timeout: 50m
+          envs: CI_IMAGES,GHCR_TOKEN,GHCR_USER
           # script_stop: false — same reason as the production job.
           script_stop: false
           # GENERATED from the production `deploy` script — do not edit here.
@@ -807,6 +900,45 @@ jobs:
             fi
             echo "Pre-deploy backup: ${PRE_DEPLOY_BK:-skipped (first install, no database yet)}"
 
+            # --- CI-built images (ZfI9nERJ) --------------------------------------
+            # CI_IMAGES comes from the job (`envs:`), off unless the repository
+            # variable CI_IMAGES_ENABLED is set. Off: nothing here runs and every
+            # command below is the server-side --build path. On: this commit's images
+            # are pulled while the old containers still serve and tagged with the
+            # name compose gives its own builds, so every `up` below runs --no-build.
+            # `config --images` also prints the dependencies: pick the service's line.
+            # A registry problem falls back to --build, nothing is touched yet. The
+            # job token only lives in a throwaway DOCKER_CONFIG; `set +x` keeps it
+            # out of the log. The rollback always builds on the server: OLD_SHA's
+            # images need not exist in the registry.
+            ci_images_pull() {
+              local DC="docker compose -f docker-compose.prod.yml -f docker-compose.staging.yml" repo cfg s img target rc=0
+              repo="ghcr.io/$(printf '%s' '${{ github.repository }}' | tr 'A-Z' 'a-z')"
+              cfg="$(umask 077 && mktemp -d)"
+              { set +x; } 2>/dev/null
+              printf '%s' "${GHCR_TOKEN:-}" | DOCKER_CONFIG="$cfg" docker login ghcr.io -u "${GHCR_USER:-token}" --password-stdin >/dev/null 2>&1 || rc=1
+              unset GHCR_TOKEN
+              set -x
+              for s in $DEPLOY_SERVICES migration-runner db-reconcile activity-log-prune; do
+                [ "$rc" = 0 ] || break
+                case "$s" in
+                  migration-runner | db-reconcile | activity-log-prune) img=ops ;;
+                  *) img="$s" ;;
+                esac
+                target="$($DC config --images "$s" 2>/dev/null | grep -E -- "-$s\$" | head -n 1 || true)"
+                if [ -z "$target" ] || ! DOCKER_CONFIG="$cfg" docker pull -q "$repo/$img:$NEW_SHA" || ! docker tag "$repo/$img:$NEW_SHA" "$target"; then
+                  rc=1
+                fi
+              done
+              rm -rf "$cfg"
+              return "$rc"
+            }
+            CI_IMAGES="${CI_IMAGES:-false}"
+            if [ "$CI_IMAGES" = true ] && ! ci_images_pull; then
+              echo "WARNING: CI images could not be pulled — building on this server as before" >&2
+              CI_IMAGES=false
+            fi
+
             # cloudflared is NOT pulled here any more: its image is pinned (tag +
             # digest) and rolled out only when that pin changes — see below.
             # qUEE0Bgd: mavjud serverda amalda faqat rabbitmq'ning qotirilgan digest'i:
@@ -828,7 +960,11 @@ jobs:
               # the restore point.
               echo "Migration restore point: ${PRE_DEPLOY_BK:-none (first install, no database yet)}"
 
-              docker compose -f docker-compose.prod.yml -f docker-compose.staging.yml up --build --force-recreate --abort-on-container-exit migration-runner
+              if [ "$CI_IMAGES" = true ]; then
+                docker compose -f docker-compose.prod.yml -f docker-compose.staging.yml up --no-build --force-recreate --abort-on-container-exit migration-runner
+              else
+                docker compose -f docker-compose.prod.yml -f docker-compose.staging.yml up --build --force-recreate --abort-on-container-exit migration-runner
+              fi
               docker compose -f docker-compose.prod.yml -f docker-compose.staging.yml rm -f migration-runner || true
             fi
 
@@ -856,10 +992,16 @@ jobs:
               old="$($DC ps -q api-gateway 2>/dev/null || true)"
               if [ -z "$old" ] || [ "$(printf '%s\n' "$old" | wc -l)" -ne 1 ]; then
                 echo "api-gateway: not exactly one running container — plain (re)create"
-                $DC up -d --no-deps --build api-gateway || return 1
+                if [ "$CI_IMAGES" = true ]; then
+                  $DC up -d --no-deps --no-build api-gateway || return 1
+                else
+                  $DC up -d --no-deps --build api-gateway || return 1
+                fi
                 return 0
               fi
-              $DC build api-gateway || return 1
+              if [ "$CI_IMAGES" != true ]; then
+                $DC build api-gateway || return 1
+              fi
               $DC up -d --no-deps --no-recreate --scale api-gateway=2 api-gateway || return 1
               new="$($DC ps -q api-gateway | grep -v "^$old" | head -n 1 || true)"
               if [ -z "$new" ]; then
@@ -897,7 +1039,11 @@ jobs:
               echo "No (non-gateway) application service changes detected; keeping running containers as-is."
             else
               echo "Deploying services: $DEPLOY_SERVICES"
-              docker compose -f docker-compose.prod.yml -f docker-compose.staging.yml up -d --no-deps --build --remove-orphans $DEPLOY_SERVICES
+              if [ "$CI_IMAGES" = true ]; then
+                docker compose -f docker-compose.prod.yml -f docker-compose.staging.yml up -d --no-deps --no-build --remove-orphans $DEPLOY_SERVICES
+              else
+                docker compose -f docker-compose.prod.yml -f docker-compose.staging.yml up -d --no-deps --build --remove-orphans $DEPLOY_SERVICES
+              fi
             fi
             if [ "$GATEWAY_SWAP" = true ]; then
               gateway_swap
@@ -1015,7 +1161,11 @@ jobs:
               fi
             done
             if [ -n "$OPS_SIDECARS" ]; then
-              docker compose -f docker-compose.prod.yml -f docker-compose.staging.yml up -d --no-deps --build $OPS_SIDECARS || echo "WARNING: ops sidecars ($OPS_SIDECARS) were not updated — they keep running the previous code" >&2
+              if [ "$CI_IMAGES" = true ]; then
+                docker compose -f docker-compose.prod.yml -f docker-compose.staging.yml up -d --no-deps --no-build $OPS_SIDECARS || echo "WARNING: ops sidecars ($OPS_SIDECARS) were not updated — they keep running the previous code" >&2
+              else
+                docker compose -f docker-compose.prod.yml -f docker-compose.staging.yml up -d --no-deps --build $OPS_SIDECARS || echo "WARNING: ops sidecars ($OPS_SIDECARS) were not updated — they keep running the previous code" >&2
+              fi
             fi
 
             docker compose -f docker-compose.prod.yml -f docker-compose.staging.yml ps

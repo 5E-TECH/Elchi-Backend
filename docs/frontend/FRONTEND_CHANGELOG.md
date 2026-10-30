@@ -22,6 +22,11 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+### 2026-10-31 — Ops: image'lar CI'da (kalit bilan), tashqi uptime monitor, rotatsiyada gateway swap (ZfI9nERJ)
+
+Deploy: `deploy.yml` o'zgargani uchun keyingi deploy BARCHA servislarni qayta build qiladi. Migratsiya **yo'q**, API kontrakti
+o'zgarmagan. Yangi repo variable: `CI_IMAGES_ENABLED` (sukut o'chiq). → FE'da ish yo'q.
+
 ### 2026-10-31 — Ops: zaxira nusxalarni shifrlash (kalit bilan) va oylik tiklash mashqi (6RaEn5cN)
 
 Deploy: faqat skriptlar va workflow. Migratsiya **yo'q**, API kontrakti o'zgarmagan. Yangi env: `OFFSITE_ENCRYPTION_KEY`

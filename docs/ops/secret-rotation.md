@@ -36,9 +36,9 @@ Qo'shimcha topilmalar:
 |---|---|---|
 | 0 | `preflight` — faqat o'qish | — |
 | 1 | `prepare --execute` → `new.env` ni **darhol parol menejeriga** | — |
-| 2 | `postgres --execute` | postgres (~5–10 s) + barcha app konteynerlari qayta yaratiladi: ~30–60 s API uzilishi |
+| 2 | `postgres --execute` | postgres (~5–10 s) + barcha app konteynerlari qayta yaratiladi: backend ~30–60 s javob bermaydi, gateway swap bilan almashadi (ZfI9nERJ) |
 | 3 | `verify` | — |
-| 4 | `rabbitmq --execute` | yana ~30–60 s uzilish |
+| 4 | `rabbitmq --execute` | yana ~30–60 s, gateway swap bilan |
 | 5 | `minio-app --execute` | faqat file-service (~20 s yuklash/yuklab olish yo'q) |
 | 6 | `minio-root --execute` | MinIO qayta ishga tushadi (~5–10 s) |
 | 7 | `verify` → hammasi `OK` | — |
@@ -74,9 +74,10 @@ bash $S verify
 3. Avval `postgres` konteyneri qayta yaratiladi (~5–10 s; o'sha image, volume
    tegilmaydi): `.env` dagi parol compose orqali uning env'iga tushadi —
    aks holda KEYINGI deploy (`up -d … postgres`) uni kutilmaganda qayta
-   yaratardi. So'ng barcha app servislari + `db-backup` (+ ishlayotgan bo'lsa
-   `db-reconcile`, `activity-log-prune`) `up -d --no-deps --force-recreate`,
-   health kutiladi.
+   yaratardi. So'ng app servislari + `db-backup` (+ ishlayotgan bo'lsa
+   `db-reconcile`, `activity-log-prune`) `up -d --no-deps --force-recreate`, api-gateway
+   oxirida deploy'dagi swap bilan (yangi konteyner healthy bo'lgach eskisi to'xtaydi,
+   `gateway-swap` qadami ham alohida bor), health kutiladi.
 4. Tekshiruv: docker tarmog'i orqali `psql -h postgres` — yangi parol ✅,
    eski parol ❌; readiness 200.
 
@@ -97,7 +98,7 @@ chiqardi.
    `RABBITMQ_USER=elchi RABBITMQ_PASS=…` bilan chaqiriladi; sukut guest edi).
    Bu qadam qo'shimcha — guest hali ishlaydi.
 2. `RABBITMQ_URI` → `amqp://elchi:<yangi>@rabbitmq:5672` (`.env.production` va `.env`).
-3. 15 app servisi qayta yaratiladi, health kutiladi.
+3. 14 app servisi qayta yaratiladi, api-gateway swap bilan almashadi, health kutiladi.
 4. `rabbitmqctl list_connections user` da **birorta ham `guest` qolmagani**
    tekshiriladi (qolsa — skript to'xtaydi, guest o'chirilmaydi).
 5. `rabbitmqctl delete_user guest`; tekshiruv: management API
@@ -111,7 +112,8 @@ id'si (`rabbit@<id>`, compose'da `hostname:` yo'q). `elchi-rabbitmq` qayta
 yaratilsa volume'da bo'sh mnesia ochiladi: `elchi` yo'qoladi, guest qaytadi,
 hamma servis brokerga ulana olmaydi. Shuning uchun `deploy.yml` uni
 `--no-recreate` bilan ko'taradi (qUEE0Bgd); qo'lda `--force-recreate rabbitmq`
-qilmang.
+yoki `--no-deps` siz `up -d` qilmang: compose uni qayta yaratadi. Har doim
+`up -d --no-deps <servislar>`.
 
 ## 4. MinIO (`minio-app`, `minio-root`)
 
@@ -162,7 +164,8 @@ Almashtirish — gigiyena, qaror Dilshodniki. Qadamlar:
    `cd /home/shodiyor/apps/backend && cp .env.production .env.production.bak.$(date +%s)`,
    so'ng `.env.production` dagi `TELEGRAM_BOT_TOKEN=` qatorini yangilang
    (ixtiyoriy: `TELEGRAM_WEBHOOK_SECRET` ham — `openssl rand -hex 32`).
-3. `docker compose -f docker-compose.prod.yml up -d --no-deps --force-recreate notification-service identity-service api-gateway`
+3. `docker compose -f docker-compose.prod.yml up -d --no-deps --force-recreate notification-service identity-service`,
+   so'ng `bash scripts/rotate-datastore-secrets.sh gateway-swap --execute`
    (identity — Mini App `initData` imzosini shu token bilan tekshiradi).
 4. Webhook: `npm run telegram:setup` (docs/ops/telegram-bot.md §3–4) — `getWebhookInfo` da URL va `pending_update_count` tekshiriladi.
 5. Tekshiruv: botga `/start` → javob; Mini App ochiladi; eski token bilan

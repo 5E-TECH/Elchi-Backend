@@ -193,6 +193,25 @@ git push origin origin/test:refs/heads/main
 - Deploy yarim yo'lda bekor qilinmaydi: yangi push navbatda kutadi
   (navbatda faqat eng yangisi qoladi).
 
+### 6.3 Image'larni CI'da build qilish (ZfI9nERJ, sukut o'chiq)
+
+Repository variable `CI_IMAGES_ENABLED`: yo'q = o'chiq (serverda `--build`, hech narsa
+o'zgarmagan), `staging` = faqat test server, `true` = test va prod. Yoqilganda deploy job'i
+`scripts/ci-build-images.sh` bilan 15 servis + `ops` image'ini
+`ghcr.io/<owner>/<repo>/<nom>:<commit sha>` ga chiqaradi (`test` shu commitni allaqachon
+chiqargan bo'lsa qayta build qilmaydi: prod test serverdagi aynan o'sha image'ni oladi). Server
+faqat o'zgargan servislarni oladi, compose nomi bilan tag qiladi va `up --no-build` ishlatadi.
+
+- Registry'dan olib bo'lmasa (`WARNING: CI images could not be pulled`) deploy serverda build
+  qiladi. Rollback har doim serverda build qiladi.
+- Server GHCR'ga job token bilan vaqtinchalik `DOCKER_CONFIG` orqali kiradi, token diskda qolmaydi.
+- GHCR'dagi eski tag'lar o'zi o'chmaydi (public repo'da bepul). Tashkilotda paket yaratish yopiq
+  bo'lsa: Organization → Packages → ruxsat.
+
+Sinash tartibi: `CI_IMAGES_ENABLED=staging` → `dev` dan `test` ga push → Actions'da
+«Build and push images» yashil, server logida `docker pull`, `--no-build`, `--build` yo'q, test-api
+ishlaydi → muammo bo'lmasa `true`. O'chirish: variable'ni o'chiring, keyingi deploy eski yo'lga qaytadi.
+
 ## 7. Rollback
 
 - **Avtomatik** (prod bilan bir xil): deploy yiqilsa kod oldingi commitga

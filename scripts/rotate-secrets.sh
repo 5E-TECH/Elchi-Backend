@@ -68,13 +68,19 @@ echo "✋ MANUAL rotation still required (these can't be openssl-generated):"
 echo "   - TELEGRAM_BOT_TOKEN / ORDER_BOT_TOKEN : @BotFather -> /revoke each, paste new token into $NEW"
 echo "   - TUNNEL_TOKEN                         : Cloudflare Zero-Trust dashboard -> revoke + reissue"
 echo "   - SUPERADMIN_PASSWORD                  : choose a strong, unique value (NOT the old one)"
-echo "   - RABBITMQ user (if URI still uses guest): create a real user; the new password above is ready"
+echo "   - RABBITMQ user: rabbitmqctl change_password with the new password, never recreate the container"
 echo ""
 echo "Next:"
 echo "   1. Fill the MANUAL values into $NEW."
 echo "   2. Apply the datastore-side changes (Postgres ALTER USER, MinIO, RabbitMQ, Cloudflare, BotFather)"
 echo "      using the NEW values — see docs/audit/SECRET_ROTATION_RUNBOOK.md §1."
 echo "   3. mv $NEW $SRC   (review the diff first: diff $BAK $NEW)"
-echo "   4. docker compose -f docker-compose.prod.yml up -d --force-recreate"
+echo "   4. Recreate the services, then swap the gateway (no API gap):"
+# Never a bare `up -d` / `up -d --force-recreate`: it recreates rabbitmq, whose
+# node name is the container id. A new container opens an empty mnesia, the broker
+# users are gone and no service can connect (qUEE0Bgd). --no-deps + an explicit
+# list leaves it alone. cloudflared is rolled by hand (docs/ops/secret-rotation.md §8).
+echo "      docker compose -f docker-compose.prod.yml up -d --no-deps --force-recreate postgres minio db-backup backup-offsite identity-service order-service catalog-service logistics-service finance-service notification-service integration-service analytics-service branch-service investor-service file-service c2c-service search-service ai-service"
+echo "      bash scripts/rotate-datastore-secrets.sh gateway-swap --execute"
 echo ""
 echo "⚠️  $NEW and $BAK are git-ignored — never commit them. Delete backups once verified."
