@@ -11,6 +11,16 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  * XAVFSIZLIK: PULGA HAM, HOLATGA HAM TEGMAYDI. Mavjud qatorlar `'{}'` oladi.
  * `IF NOT EXISTS` — qayta yurgizish xatosiz.
  *
+ * QULF: `ADD COLUMN … NOT NULL DEFAULT '{}'` (doimiy sukut) — PG 11+ da faqat
+ * metama'lumot, jadval qayta yozilmaydi. CHECK `NOT VALID` bilan — mavjud
+ * qatorlar skanerlanmaydi (hammasi `'{}'`, ya'ni baribir to'g'ri), yangi va
+ * o'zgargan qatorlar tekshiriladi. `VALIDATE CONSTRAINT` kerak bo'lsa keyin
+ * alohida (SHARE UPDATE EXCLUSIVE — yozuvni to'smaydi). `lock_timeout` 5 s:
+ * band jadvalda ACCESS EXCLUSIVE navbatida cheksiz kutib, butun trafikni
+ * to'xtatib qo'ymasin — deploy xato bilan to'xtaydi va qayta yurgiziladi.
+ * Sozlama faqat shu blokda (oxirida avvalgisi tiklanadi): TypeORM barcha
+ * migratsiyalarni bitta tranzaksiyada yurgizadi.
+ *
  * down(): CHECK va ustun o'chiriladi — qo'yilgan belgilar yo'qoladi
  * (order_tracking / jurnaldagi tarix qoladi).
  */
@@ -20,10 +30,13 @@ export class OrderSpecialCategories1716000000187 implements MigrationInterface {
   public async up(queryRunner: QueryRunner): Promise<void> {
     await queryRunner.query(`
       DO $$
+      DECLARE
+        previous_lock_timeout text := current_setting('lock_timeout');
       BEGIN
         IF to_regclass('order_schema.orders') IS NULL THEN
           RETURN;
         END IF;
+        PERFORM set_config('lock_timeout', '5s', true);
         ALTER TABLE "order_schema"."orders"
           ADD COLUMN IF NOT EXISTS "special_categories" VARCHAR(32)[] NOT NULL DEFAULT '{}';
         IF NOT EXISTS (
@@ -36,8 +49,9 @@ export class OrderSpecialCategories1716000000187 implements MigrationInterface {
             CHECK ("special_categories" <@ ARRAY[
               'fragile', 'religious_book', 'liquid', 'perishable',
               'battery', 'heavy', 'documents'
-            ]::varchar[]);
+            ]::varchar[]) NOT VALID;
         END IF;
+        PERFORM set_config('lock_timeout', previous_lock_timeout, true);
       END
       $$
     `);

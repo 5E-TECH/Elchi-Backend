@@ -444,3 +444,12 @@ describe('D148eHMA — order.find_by_qr_light naqshi', () => {
     expect(orderService.findByQrCodeLight).toHaveBeenCalledWith('tok-1');
   });
 });
+
+describe('T8 — skaner yengil javobida maxsus belgilar', () => {
+  it('ORDER_SCAN_LIGHT_SELECT ustunni o`qiydi, toOrderScanLightView kalitni saqlaydi', () => {
+    expect(ORDER_SCAN_LIGHT_SELECT.special_categories).toBe(true);
+    expect(
+      toOrderScanLightView({ id: '1', special_categories: ['fragile'] }),
+    ).toMatchObject({ id: '1', special_categories: ['fragile'] });
+  });
+});

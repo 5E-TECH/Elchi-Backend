@@ -236,7 +236,8 @@ jobs:
 
   # (O9ATqZ27) Ombor real-Postgres spec'lari: parallel band (manfiy qoldiq /
   # ortiqcha band yo'q), idempotent kirim/qaytish, market IDOR, Markaziy ombor
-  # zanjiri (VkKDSNNn), ro'yxat filtrlari. Ular `CATALOG_PG_TEST_URI` /
+  # zanjiri (VkKDSNNn), ro'yxat filtrlari; T8 maxsus belgilar (migratsiya 187,
+  # FOR UPDATE, analitika). Ular `CATALOG_PG_TEST_URI` /
   # `ORDER_WAREHOUSE_PG_TEST_URI` siz skip bo'ladi — shuning uchun alohida job.
   # Spec'lar faqat lokal `/elchi_e_test` bazasini qabul qiladi va o'z per-pid
   # sxemalarini yaratadi; bot job'i bilan baza nomi to'qnashmaydi.
@@ -276,10 +277,14 @@ jobs:
           apps/catalog-service/src/warehouse/warehouse.pg.spec.ts
           apps/order-service/src/warehouse/order-warehouse.pg.spec.ts
           apps/order-service/src/order-service.list-warehouse-filter.VkKDSNNn.pg.spec.ts
+          apps/order-service/src/lifecycle/order-special-categories.T8.pg.spec.ts
         env:
           NODE_ENV: test
           CATALOG_PG_TEST_URI: postgres://postgres@127.0.0.1:5432/elchi_e_test
           ORDER_WAREHOUSE_PG_TEST_URI: postgres://postgres@127.0.0.1:5432/elchi_e_test
+          # T8: spec o'z vaqtinchalik bazasini yaratadi (migratsiya 187 `order_schema`
+          # ga yozadi) va oxirida o'chiradi — elchi_e_test faqat ulanish uchun.
+          ORDER_T8_PG_TEST_URI: postgres://postgres@127.0.0.1:5432/elchi_e_test
 
   # Secret-scanning gate (Audit P0/P1: live secrets were committed to history).
   # Scans the working tree so a PR that adds a real credential to a tracked file

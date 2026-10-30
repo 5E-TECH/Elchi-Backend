@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { RpcException } from '@nestjs/microservices';
+import { of } from 'rxjs';
 import { DataSource } from 'typeorm';
 import {
   ActivityLog,
@@ -9,6 +10,7 @@ import {
   OutboxService,
 } from '@app/common';
 import { OrderSpecialCategories1716000000187 } from '../../../../migrations/1716000000187-OrderSpecialCategories';
+import { OrderAnalyticsService } from '../analytics/order-analytics.service';
 import { OrderCustodyService } from '../custody/order-custody.service';
 import { Branch } from '../entities/branch.entity';
 import { OrderCustodyEvent } from '../entities/order-custody-event.entity';
@@ -313,6 +315,99 @@ describePg('T8 maxsus belgilar — haqiqiy Postgres', () => {
     expect(tracking[tracking.length - 1].new_value).toEqual({
       special_categories: final,
     });
+  });
+
+  it('⭐ analitika: bekor buyurtmaga bugun belgi qo`yilsa — bugungi «Bekor» va kuryer hisoboti o`zgarmaydi', async () => {
+    const analytics = new OrderAnalyticsService(
+      db.getRepository(Order),
+      db.getRepository(OrderTracking),
+      db.getRepository(OrderCustodyEvent),
+      {} as never,
+      {} as never,
+      { send: () => of({ data: { data: [], totalPages: 1 } }) } as never,
+      {} as never,
+    );
+    const courierId = '9301';
+    const id = await insertOrder(Order_status.CANCELLED);
+    await db.query(
+      `UPDATE order_schema.orders SET courier_id = $1, total_price = 50000 WHERE id = $2`,
+      [courierId, id],
+    );
+    // Asl bekor — 10 kun oldin.
+    await db.query(
+      `INSERT INTO order_schema.order_tracking
+         (order_id, from_status, to_status, changed_by, changed_by_role, created_at)
+       VALUES ($1, 'waiting', 'cancelled', '301', 'courier', now() - interval '10 days')`,
+      [id],
+    );
+    const today = new Date(Date.now() + 5 * 3600_000)
+      .toISOString()
+      .slice(0, 10);
+    const todayRange = {
+      start: new Date(Date.now() - 3600_000),
+      end: new Date(Date.now() + 3600_000),
+    };
+    const counts = () =>
+      (
+        analytics as unknown as {
+          historicallyCancelledCountAndAmount: (
+            range: unknown,
+          ) => Promise<{ count: number; amount: number }>;
+        }
+      ).historicallyCancelledCountAndAmount(todayRange);
+    const before = await counts();
+    const courierBefore = await analytics.getCourierStat(
+      courierId,
+      today,
+      today,
+    );
+    const detailsBefore = await analytics.getCourierReportDetails(
+      [courierId],
+      today,
+      today,
+    );
+
+    // Xodim bekor buyurtmada belgini o'zgartiradi (from = to = cancelled).
+    const res = await service.setSpecialCategories(id, ['fragile'], {
+      id: '2',
+      roles: ['admin'],
+    });
+    expect(res.data.changed).toBe(true);
+    expect(await trackingOf(id)).toHaveLength(1);
+
+    expect(await counts()).toEqual(before);
+    expect(
+      (await analytics.getCourierStat(courierId, today, today)).canceledOrders,
+    ).toBe(courierBefore.canceledOrders);
+    expect(
+      (await analytics.getCourierReportDetails([courierId], today, today)).get(
+        courierId,
+      )?.canceledOrders,
+    ).toBe(detailsBefore.get(courierId)?.canceledOrders);
+    expect(courierBefore.canceledOrders).toBe(0);
+  });
+
+  it('⭐ updateFull (PATCH yo`li) parallel PUT natijasini eski massiv bilan bosmaydi', async () => {
+    const id = await insertOrder(Order_status.NEW, ['heavy']);
+    // updateFull'ning qulfsiz o'qishi PUT'dan OLDIN bo'lgan holat:
+    // findById eski ['heavy'] ni qaytaradi, PUT esa oraliqda yozadi.
+    const stale = await rowOf(id);
+    await service.setSpecialCategories(id, ['fragile'], {
+      id: '2',
+      roles: ['admin'],
+    });
+    const svc = service as unknown as Record<string, unknown>;
+    const originalFindById = svc.findById;
+    svc.findById = () => Promise.resolve(stale);
+    try {
+      await service.updateFull(id, { comment: 'patch' }, undefined);
+    } catch {
+      // Ichki yon ta'sirlar (sync, outbox) bu spec'da yo'q — natija bazada.
+    } finally {
+      svc.findById = originalFindById;
+    }
+    const row = await rowOf(id);
+    expect(row.special_categories).toEqual(['fragile']);
   });
 
   it('skaner yengil select ustunni o`qiydi', async () => {
