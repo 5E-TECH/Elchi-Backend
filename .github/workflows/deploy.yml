@@ -161,13 +161,18 @@ jobs:
           CI_IMAGES: ${{ vars.CI_IMAGES_ENABLED == 'true' && 'true' || 'false' }}
           GHCR_TOKEN: ${{ vars.CI_IMAGES_ENABLED == 'true' && github.token || '' }}
           GHCR_USER: ${{ github.actor }}
+          # The script below must stay free of `${{ }}`: GitHub would turn it into
+          # one expression, and over 21000 characters the workflow does not start.
+          DEPLOY_APP_PATH: ${{ secrets.SERVER_APP_PATH }}
+          DEPLOY_SHA: ${{ github.sha }}
+          DEPLOY_REPO: ${{ github.repository }}
         with:
           host: ${{ secrets.SERVER_IP }}
           port: ${{ secrets.SERVER_SSH_PORT || 22 }}
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           command_timeout: 50m
-          envs: CI_IMAGES,GHCR_TOKEN,GHCR_USER
+          envs: CI_IMAGES,GHCR_TOKEN,GHCR_USER,DEPLOY_APP_PATH,DEPLOY_SHA,DEPLOY_REPO
           # NOT script_stop: drone-ssh's script_stop instruments the script
           # line-by-line and treats ANY `[ test ]` in an `if` that evaluates
           # false as a fatal error — so `if [ "$RUN_MIGRATIONS" != true ]` aborted
@@ -178,7 +183,7 @@ jobs:
           script_stop: false
           script: |
             set -ex
-            cd ${{ secrets.SERVER_APP_PATH }}
+            cd "$DEPLOY_APP_PATH"
             # --- Env preflight (AFiXurLH) ---------------------------------------
             # BEFORE anything on the server is touched. It lives here and not in
             # scripts/ because the checkout on disk is still the OLD commit. A value
@@ -218,7 +223,7 @@ jobs:
               exit 1
             fi
             # --- end env preflight ----------------------------------------------
-            git config --global --add safe.directory ${{ secrets.SERVER_APP_PATH }} || true
+            git config --global --add safe.directory "$DEPLOY_APP_PATH" || true
             # AFiXurLH: the safety copy of .env.production is PRIVATE (umask 077 +
             # mktemp = 0600, unpredictable name) and deleted when this script exits
             # (success, failure or rollback). It used to be a world-readable
@@ -235,8 +240,8 @@ jobs:
             # checked) is deployed. The branch moved on -> the newer run, queued
             # behind this one, deploys it after its own gate; re-running an old
             # run never rolls the server back.
-            if [ "$NEW_SHA" != "${{ github.sha }}" ]; then
-              echo "Superseded: the branch is at $NEW_SHA, this run is for ${{ github.sha }} — nothing deployed; the newer run deploys it."
+            if [ "$NEW_SHA" != "$DEPLOY_SHA" ]; then
+              echo "Superseded: the branch is at $NEW_SHA, this run is for $DEPLOY_SHA — nothing deployed; the newer run deploys it."
               exit 0
             fi
 
@@ -367,7 +372,7 @@ jobs:
             # images need not exist in the registry.
             ci_images_pull() {
               local DC="docker compose -f docker-compose.prod.yml" repo cfg s img target rc=0
-              repo="ghcr.io/$(printf '%s' '${{ github.repository }}' | tr 'A-Z' 'a-z')"
+              repo="ghcr.io/$(printf '%s' "$DEPLOY_REPO" | tr 'A-Z' 'a-z')"
               cfg="$(umask 077 && mktemp -d)"
               { set +x; } 2>/dev/null
               printf '%s' "${GHCR_TOKEN:-}" | DOCKER_CONFIG="$cfg" docker login ghcr.io -u "${GHCR_USER:-token}" --password-stdin >/dev/null 2>&1 || rc=1
@@ -674,13 +679,18 @@ jobs:
           CI_IMAGES: ${{ (vars.CI_IMAGES_ENABLED == 'true' || vars.CI_IMAGES_ENABLED == 'staging') && 'true' || 'false' }}
           GHCR_TOKEN: ${{ (vars.CI_IMAGES_ENABLED == 'true' || vars.CI_IMAGES_ENABLED == 'staging') && github.token || '' }}
           GHCR_USER: ${{ github.actor }}
+          # The script below must stay free of `${{ }}`: GitHub would turn it into
+          # one expression, and over 21000 characters the workflow does not start.
+          DEPLOY_APP_PATH: ${{ secrets.SERVER_APP_PATH }}
+          DEPLOY_SHA: ${{ github.sha }}
+          DEPLOY_REPO: ${{ github.repository }}
         with:
           host: ${{ secrets.SERVER_IP }}
           port: ${{ secrets.SERVER_SSH_PORT || 22 }}
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           command_timeout: 50m
-          envs: CI_IMAGES,GHCR_TOKEN,GHCR_USER
+          envs: CI_IMAGES,GHCR_TOKEN,GHCR_USER,DEPLOY_APP_PATH,DEPLOY_SHA,DEPLOY_REPO
           # script_stop: false — same reason as the production job.
           script_stop: false
           # GENERATED from the production `deploy` script — do not edit here.
@@ -688,7 +698,7 @@ jobs:
           # `node scripts/staging/sync-deploy-workflow.mjs` (CI: --check).
           script: |
             set -ex
-            cd ${{ secrets.SERVER_APP_PATH }}
+            cd "$DEPLOY_APP_PATH"
             # --- STAGING ----------------------------------------------------------------
             # GENERATED from the production job's script by
             # scripts/staging/sync-deploy-workflow.mjs — never edit this block by hand.
@@ -764,7 +774,7 @@ jobs:
               exit 1
             fi
             # --- end env preflight ----------------------------------------------
-            git config --global --add safe.directory ${{ secrets.SERVER_APP_PATH }} || true
+            git config --global --add safe.directory "$DEPLOY_APP_PATH" || true
             # AFiXurLH: the safety copy of .env.staging is PRIVATE (umask 077 +
             # mktemp = 0600, unpredictable name) and deleted when this script exits
             # (success, failure or rollback). It used to be a world-readable
@@ -781,8 +791,8 @@ jobs:
             # checked) is deployed. The branch moved on -> the newer run, queued
             # behind this one, deploys it after its own gate; re-running an old
             # run never rolls the server back.
-            if [ "$NEW_SHA" != "${{ github.sha }}" ]; then
-              echo "Superseded: the branch is at $NEW_SHA, this run is for ${{ github.sha }} — nothing deployed; the newer run deploys it."
+            if [ "$NEW_SHA" != "$DEPLOY_SHA" ]; then
+              echo "Superseded: the branch is at $NEW_SHA, this run is for $DEPLOY_SHA — nothing deployed; the newer run deploys it."
               exit 0
             fi
 
@@ -913,7 +923,7 @@ jobs:
             # images need not exist in the registry.
             ci_images_pull() {
               local DC="docker compose -f docker-compose.prod.yml -f docker-compose.staging.yml" repo cfg s img target rc=0
-              repo="ghcr.io/$(printf '%s' '${{ github.repository }}' | tr 'A-Z' 'a-z')"
+              repo="ghcr.io/$(printf '%s' "$DEPLOY_REPO" | tr 'A-Z' 'a-z')"
               cfg="$(umask 077 && mktemp -d)"
               { set +x; } 2>/dev/null
               printf '%s' "${GHCR_TOKEN:-}" | DOCKER_CONFIG="$cfg" docker login ghcr.io -u "${GHCR_USER:-token}" --password-stdin >/dev/null 2>&1 || rc=1

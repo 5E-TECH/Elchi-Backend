@@ -130,15 +130,14 @@ function deployRun(
       'echo /backups/pre-deploy/x.sql.gz\n',
     );
     writeFileSync(join(app, 'scripts', 'docker-gc.sh'), 'exit 0\n');
-    const script = jobScript(name)
-      .split('${{ secrets.SERVER_APP_PATH }}')
-      .join(app)
-      .split('${{ github.sha }}')
-      .join(SHA)
-      .split('${{ github.repository }}')
-      .join('5E-TECH/Elchi-Backend');
+    const script = jobScript(name);
+    // GitHub'da `${{ }}` li matn bitta ifoda: 21000 belgidan oshsa workflow
+    // umuman ishga tushmaydi (2026-10-31, test deploy shunday to'xtagan).
     expect(script).not.toContain('${{');
-    writeFileSync(join(dir, 'run.sh'), script);
+    writeFileSync(
+      join(dir, 'run.sh'),
+      `export DEPLOY_APP_PATH='${app}' DEPLOY_SHA='${SHA}' DEPLOY_REPO='5E-TECH/Elchi-Backend'\n${script}`,
+    );
     const r = spawnSync('bash', ['run.sh'], {
       cwd: dir,
       encoding: 'utf8',

@@ -145,7 +145,7 @@ function toStaging(prodScript) {
     if (hit) throw new Error(`staging script still has ${what}: ${hit.trim()}`);
   }
   // Last, so the rules above never rewrite the prologue itself.
-  const cd = `${IND}cd \${{ secrets.SERVER_APP_PATH }}\n`;
+  const cd = `${IND}cd "$DEPLOY_APP_PATH"\n`;
   if (out.split(cd).length !== 2) {
     throw new Error(`expected exactly one "${cd.trim()}" line in the production script`);
   }
