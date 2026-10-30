@@ -12,6 +12,7 @@ import { CreateProviderReceivables1715800000000 } from '../../../migrations/1715
 import { ProviderRemittanceSettledUnapplied1716000000080 } from '../../../migrations/1716000000080-ProviderRemittanceSettledUnapplied';
 import { ProviderRemittanceCancel1716000000081 } from '../../../migrations/1716000000081-ProviderRemittanceCancel';
 import { ProviderRemittanceAdvance1716000000104 } from '../../../migrations/1716000000104-ProviderRemittanceAdvance';
+import { ProviderRemittanceIdempotency1716000000196 } from '../../../migrations/1716000000196-ProviderRemittanceIdempotency';
 import { FinanceServiceService } from '../../finance-service/src/finance-service.service';
 import { Cashbox } from '../../finance-service/src/entities/cashbox.entity';
 import { CashboxCard } from '../../finance-service/src/entities/cashbox-card.entity';
@@ -88,6 +89,7 @@ describePg('N3yNa6rO — remittance → MAIN kassa, haqiqiy Postgres', () => {
       new ProviderRemittanceSettledUnapplied1716000000080(),
       new ProviderRemittanceCancel1716000000081(),
       new ProviderRemittanceAdvance1716000000104(),
+      new ProviderRemittanceIdempotency1716000000196(),
     ]) {
       await migration.up(runner);
     }

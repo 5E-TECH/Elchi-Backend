@@ -10,6 +10,7 @@ import { CreateProviderReceivables1715800000000 } from '../../../migrations/1715
 import { ProviderRemittanceSettledUnapplied1716000000080 } from '../../../migrations/1716000000080-ProviderRemittanceSettledUnapplied';
 import { ProviderRemittanceCancel1716000000081 } from '../../../migrations/1716000000081-ProviderRemittanceCancel';
 import { ProviderRemittanceAdvance1716000000104 } from '../../../migrations/1716000000104-ProviderRemittanceAdvance';
+import { ProviderRemittanceIdempotency1716000000196 } from '../../../migrations/1716000000196-ProviderRemittanceIdempotency';
 import { IntegrationServiceService } from './integration-service.service';
 import {
   ProviderReceivable,
@@ -43,6 +44,7 @@ describePg('B4 remittance (utIffRFx, DxdZFdIk) — haqiqiy Postgres', () => {
     new ProviderRemittanceSettledUnapplied1716000000080(),
     new ProviderRemittanceCancel1716000000081(),
     new ProviderRemittanceAdvance1716000000104(),
+    new ProviderRemittanceIdempotency1716000000196(),
   ];
   // Finance idempotentligi simulyatsiyasi: bir token — bir harakat.
   const appliedTokens = new Map<string, number>();

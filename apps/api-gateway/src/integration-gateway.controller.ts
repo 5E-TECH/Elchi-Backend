@@ -841,7 +841,7 @@ export class IntegrationGatewayController {
     name: 'Idempotency-Key',
     required: false,
     description:
-      'N3yNa6rO: ayni kalit bilan takror so\'rov birinchi to\'lovni qaytaradi (idempotent_replay: true), kassaga ikkinchi marta yozilmaydi.',
+      "N3yNa6rO: ayni kalit bilan takror so'rov birinchi to'lovni qaytaradi (idempotent_replay: true), kassaga ikkinchi marta yozilmaydi.",
   })
   @ApiBody({ type: CreateRemittanceRequestDto })
   createRemittance(
