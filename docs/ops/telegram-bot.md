@@ -9,7 +9,7 @@
 ```
 Telegram ──HTTPS 443──▶ Cloudflare Tunnel ──▶ api-gateway
    POST /telegram/webhook/:botSlug   (X-Telegram-Bot-Api-Secret-Token, timingSafeEqual)
-        │  emit notification.telegram.update (RMQ), DARHOL 200
+        │  emit notification.telegram.webhook_update → NOTIFICATION_BOT navbati (BOT-3a), DARHOL 200
         ▼
 notification-service  BotController → BotRouterService
         ├─ botSlug tekshiruvi (noto'g'ri → jim)
@@ -28,6 +28,22 @@ Chiquvchi: BotOutboxService (telegram_outbox) → BotTransportService (yagona ap
 | `telegram_outbox` | chiquvchi xabarlar: 429/5xx → qayta urinish, 403/400 → dead |
 
 Tozalash: `BotMaintenanceService` (har soat, `:17`).
+
+**Navbatlar (BOT-3a).** Bot update'lari (gateway webhook) —
+`RABBITMQ_NOTIFICATION_BOT_QUEUE` (sukut `notification_bot_queue`, o'z DLQ'si
+`…_dlq`): umumiy `notification_queue` (dispatch, push) to'lqini bot javobini
+kechiktirmaydi. Karta hodisalari (`notification.telegram.order_status`) ATAYLAB
+umumiy navbatda qoladi — ommaviy holat o'zgarishi interaktiv bot navbatini
+tiqmasin. Navbatni iste'molchi (notification-service) ham, publisher
+(api-gateway bootstrap'ida `RmqService.ensureQueue`, ayni argumentlar bilan) ham
+e'lon qiladi — xabar JIM tashlanmaydi, lekin navbatda `RMQ_RPC_TTL_MS` (60 s)
+TTL bor va DLQ'ni hech kim qayta o'ynamaydi: iste'molchi 60 s ichida turmasa
+update DLQ'ga tushadi (yo'qoladi). Update faqat consumer TTL ichida tursa
+yo'qolmaydi — **deploy'da notification-service baribir BIRINCHI**. Gateway
+bootstrap'idagi e'lon 5 s ulanish / 15 s umumiy chegara bilan, xato — faqat
+warn (listen to'silmaydi). Readiness (`GET /health/readiness`) bot navbatini
+`NOTIFICATION` qatorining `bot_queue` maydonida tekshiradi (ishlamasa qator
+`down`); `scripts/rmq-cleanup-queues.sh` ham bu navbatni biladi.
 
 ## 2. Rejimlar (`TELEGRAM_BOT_MODE`, sukut `auto`)
 

@@ -64,7 +64,10 @@ export class TelegramWebhookController {
   private missingSecretLogged = false;
 
   constructor(
-    @Inject('NOTIFICATION') private readonly notificationClient: ClientProxy,
+    // (BOT-3a) alohida bot navbati — umumiy NOTIFICATION navbatidagi
+    // dispatch to'lqini bot javobini kechiktirmaydi.
+    @Inject('NOTIFICATION_BOT')
+    private readonly notificationClient: ClientProxy,
     config: ConfigService,
   ) {
     const secret = String(config.get('TELEGRAM_WEBHOOK_SECRET') ?? '').trim();

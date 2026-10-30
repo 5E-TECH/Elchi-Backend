@@ -119,6 +119,8 @@ import { AI_IMAGE_STORE, AiImageStore } from '@app/common/ai/ai-image-store';
     RmqModule.register({ name: 'LOGISTICS' }),
     RmqModule.register({ name: 'FINANCE' }),
     RmqModule.register({ name: 'NOTIFICATION' }),
+    // (BOT-3a) Telegram webhook update'lari — alohida bot navbati.
+    RmqModule.register({ name: 'NOTIFICATION_BOT' }),
     RmqModule.register({ name: 'INTEGRATION' }),
     RmqModule.register({ name: 'ANALYTICS' }),
     // New services

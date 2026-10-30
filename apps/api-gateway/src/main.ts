@@ -22,6 +22,7 @@ import {
 import {
   RpcExceptionFilter,
   AllExceptionsFilter,
+  RmqService,
   initSentry,
   flushSentry,
   registerMetrics,
@@ -138,6 +139,25 @@ async function bootstrap() {
       gatewayRealtimeConsumerOptions(process.env.RABBITMQ_URI!, gatewayQueue),
     );
     await app.startAllMicroservices();
+  }
+
+  /**
+   * (BOT-3a) Telegram webhook update'lari alohida `NOTIFICATION_BOT`
+   * navbatiga ketadi. Navbatni notification-service (iste'molchi) yaratadi;
+   * u hali ko'tarilmagan bo'lsa (bir vaqtda deploy, yangi broker) gateway
+   * yuborgan update JIM yo'qolardi — shuning uchun gateway ham ayni
+   * argumentlar bilan e'lon qiladi. Xato deploy'ni to'xtatmaydi.
+   */
+  try {
+    await app.get(RmqService).ensureQueue('NOTIFICATION_BOT');
+  } catch (error) {
+    app
+      .get(Logger)
+      .warn(
+        { err: error },
+        "NOTIFICATION_BOT navbati e'lon qilinmadi — notification-service yaratadi",
+        'NotificationBotQueue',
+      );
   }
 
   // Prometheus metrics: /metrics + request histogram + process/GC defaults.
