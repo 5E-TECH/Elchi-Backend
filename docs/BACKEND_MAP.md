@@ -1446,6 +1446,20 @@ secret (secret never reaches the gateway).
   (`docs/ops/secret-rotation.md` §3). minio — `pull_policy: never`
   (`minio/minio` Docker Hub'da 404, digest'ga o'tish uchun serverdagi image
   tekshirilishi kerak), postgres — `pull_policy: missing`.
+- **Deploy darvozalari (AFiXurLH):** `deploy.yml` skriptining boshida env preflight
+  (`POSTGRES_PASSWORD` ≥ 24, `SUPERADMIN_PASSWORD` ≥ 12, serverga tegilmasdan; chegaralar
+  Joi bilan bir xil, biri o'zgarsa ikkinchisi ham), gateway almashgandan keyin readiness
+  darvozasi: `/health/readiness` ~3 daqiqada ketma-ket 2 marta 200 bermasa rollback.
+  Readiness'ga notification'ning `degraded` holati ham kiradi (bot tokeni bor, `getMe` o'tmagan).
+- **Off-site zaxira (6RaEn5cN):** `backup-offsite` (DB) va host cron `backup-minio-offsite.sh`
+  (MinIO) → R2. `OFFSITE_ENCRYPTION_KEY` (≥ 32, sukut bo'sh) bilan rclone `crypt` orqali
+  `encrypted/` prefiksiga; kalit yaroqsiz bo'lsa run yiqiladi, ochiq nusxaga qaytmaydi. Oylik mashq:
+  `restore-drill.yml` (`RESTORE_DRILL_ENABLED`, sukut o'chiq). `docs/ops/db-backups.md` §6.7.
+- **CI image'lar (ZfI9nERJ):** repo variable `CI_IMAGES_ENABLED` (`staging` | `true`, sukut
+  o'chiq) bilan deploy job'i GHCR'ga build qiladi, server `up --no-build` ishlatadi; o'chiq yoki
+  registry xatosi — serverda `--build`, rollback har doim serverda. `docs/ops/staging.md` §6.3.
+  Tashqi monitor: `uptime-monitor.yml`. Rotatsiyada gateway swap bilan almashadi; rabbitmq'ga
+  tegmaslik uchun qo'lda `up -d` faqat `--no-deps` + servis ro'yxati bilan.
 - **Schemas:** `scripts/init-schemas.sql` auto-creates every `*_schema` on
   Postgres start. Per-service `DB_SCHEMA` env (defaults in `libs/common/src/config`).
 - **Migrations:** TypeORM (`typeorm.config.ts`, `migrations/`,

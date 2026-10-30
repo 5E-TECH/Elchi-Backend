@@ -1,0 +1,50 @@
+# (6RaEn5cN) Oylik tiklash mashqi: R2 dagi eng yangi DB dump va MinIO nusxasi
+# bir martalik postgres:15 ga / runner diskiga tiklanadi, natija Job Summary'da.
+# Sukut o'chiq: RESTORE_DRILL_ENABLED=true + `restore-drill` environment sirlari
+# (docs/ops/backup-rpo-rto.md §3). Prod'ga tegmaydi, deploy'ga bog'lanmagan.
+name: Restore drill
+
+on:
+  schedule:
+    # Har oyning 1-kuni 02:30 UTC (07:30 Toshkent).
+    - cron: '30 2 1 * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: restore-drill
+  cancel-in-progress: false
+
+jobs:
+  drill:
+    if: vars.RESTORE_DRILL_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: restore-drill
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Restore drill
+        env:
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+          OFFSITE_ENCRYPTION_KEY: ${{ secrets.OFFSITE_ENCRYPTION_KEY }}
+          RESTORE_DRILL_MINIO_BUCKET: elchi-files
+        run: |
+          set -o pipefail
+          bash scripts/restore-drill.sh "$RUNNER_TEMP/drill" | tee "$RUNNER_TEMP/drill.log"
+          { echo '```'; cat "$RUNNER_TEMP/drill.log"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Telegram alert
+        if: failure()
+        env:
+          BACKUP_ALERT_TELEGRAM_BOT_TOKEN: ${{ secrets.BACKUP_ALERT_TELEGRAM_BOT_TOKEN }}
+          BACKUP_ALERT_TELEGRAM_CHAT_ID: ${{ secrets.BACKUP_ALERT_TELEGRAM_CHAT_ID }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          bash scripts/ci-telegram-alert.sh "⚠️ Elchi tiklash mashqi YIQILDI: $RUN_URL"

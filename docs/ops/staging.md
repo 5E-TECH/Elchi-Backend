@@ -18,7 +18,7 @@
 
 | Fayl | Vazifasi |
 |---|---|
-| `.github/workflows/deploy.yml` | `main` push → `deploy` (prod). `test` push → `deploy-staging` (faqat `vars.STAGING_ENABLED == 'true'` bo'lsa). Ikkalasi ham `test` + `unit-tests` (3 shard) yashil bo'lgandagina. `STAGING_ENABLED` yoqiq bo'lsa prod deploy **staging darvozasidan** o'tadi (§6.2). Deploy yarim yo'lda bekor qilinmaydi (`cancel-in-progress: false`), har run faqat o'z commitini deploy qiladi. |
+| `.github/workflows/deploy.yml` | `main` push → `deploy` (prod). `test` push → `deploy-staging` (faqat `vars.STAGING_ENABLED == 'true'` bo'lsa). Ikkalasi ham `test` + `unit-tests` (3 shard) yashil bo'lgandagina. `STAGING_ENABLED` yoqiq bo'lsa prod deploy **staging darvozasidan** o'tadi (§6.2). Deploy yarim yo'lda bekor qilinmaydi (`cancel-in-progress: false`), har run faqat o'z commitini deploy qiladi. Skript boshida env preflight (AFiXurLH: `POSTGRES_PASSWORD` ≥ 24, `SUPERADMIN_PASSWORD` ≥ 12, serverga tegilmasdan), gateway almashgach readiness darvozasi (hamma servis ok bo'lmasa rollback). |
 | `scripts/staging/sync-deploy-workflow.mjs` | `deploy-staging` skripti prod skriptidan **generatsiya qilinadi** (qo'lda tahrirlanmaydi). Prod skript o'zgarsa: `node scripts/staging/sync-deploy-workflow.mjs` → commit. CI (`ci.yml`, «Staging deploy is in sync») farq bo'lsa qizil. |
 | `docker-compose.staging.yml` | prod compose ustidan override: `.env.staging`, 8 GB ga mos xotira chegaralari, `elchi-staging` loyiha nomi (volume/network), `elchi-stg-*` konteyner nomlari, boshqa localhost portlar, o'z tunnel tokeni, backup faqat lokal. |
 | `.env.staging.example` | `.env.staging` shabloni (hamma kalit + staging qiymatlari). CI (`ci.yml`, «Staging deploy is in sync») `.env.example` dagi har kalit shu yerda borligini tekshiradi. Funksiya kalitlari (`…_ENABLED`, `SALE_PRICING_ENGINE`, `FINANCE_*`) serverdagi `.env.staging` da prod qiymati bilan bir xil bo'lsin. Istisno: `FILE_OWNERSHIP_ENFORCE` — `docker-compose.staging.yml` uni `on` qiladi (egalik qoidasi prod'dan oldin shu yerda sinaladi); `RMQ_REQUESTER_SIG_MODE` — `log` qiladi (sir `RMQ_REQUESTER_SIG_SECRET` serverdagi `.env.staging` da, [`rmq-service-users.md`](./rmq-service-users.md)). |
@@ -192,6 +192,25 @@ git push origin origin/test:refs/heads/main
   Eski run'ni "Re-run" qilish eski versiyani qaytarmaydi.
 - Deploy yarim yo'lda bekor qilinmaydi: yangi push navbatda kutadi
   (navbatda faqat eng yangisi qoladi).
+
+### 6.3 Image'larni CI'da build qilish (ZfI9nERJ, sukut o'chiq)
+
+Repository variable `CI_IMAGES_ENABLED`: yo'q = o'chiq (serverda `--build`, hech narsa
+o'zgarmagan), `staging` = faqat test server, `true` = test va prod. Yoqilganda deploy job'i
+`scripts/ci-build-images.sh` bilan 15 servis + `ops` image'ini
+`ghcr.io/<owner>/<repo>/<nom>:<commit sha>` ga chiqaradi (`test` shu commitni allaqachon
+chiqargan bo'lsa qayta build qilmaydi: prod test serverdagi aynan o'sha image'ni oladi). Server
+faqat o'zgargan servislarni oladi, compose nomi bilan tag qiladi va `up --no-build` ishlatadi.
+
+- Registry'dan olib bo'lmasa (`WARNING: CI images could not be pulled`) deploy serverda build
+  qiladi. Rollback har doim serverda build qiladi.
+- Server GHCR'ga job token bilan vaqtinchalik `DOCKER_CONFIG` orqali kiradi, token diskda qolmaydi.
+- GHCR'dagi eski tag'lar o'zi o'chmaydi (public repo'da bepul). Tashkilotda paket yaratish yopiq
+  bo'lsa: Organization → Packages → ruxsat.
+
+Sinash tartibi: `CI_IMAGES_ENABLED=staging` → `dev` dan `test` ga push → Actions'da
+«Build and push images» yashil, server logida `docker pull`, `--no-build`, `--build` yo'q, test-api
+ishlaydi → muammo bo'lmasa `true`. O'chirish: variable'ni o'chiring, keyingi deploy eski yo'lga qaytadi.
 
 ## 7. Rollback
 

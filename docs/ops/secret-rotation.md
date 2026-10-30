@@ -36,13 +36,13 @@ Qo'shimcha topilmalar:
 |---|---|---|
 | 0 | `preflight` — faqat o'qish | — |
 | 1 | `prepare --execute` → `new.env` ni **darhol parol menejeriga** | — |
-| 2 | `postgres --execute` | postgres (~5–10 s) + barcha app konteynerlari qayta yaratiladi: ~30–60 s API uzilishi |
+| 2 | `postgres --execute` | postgres (~5–10 s) + barcha app konteynerlari qayta yaratiladi: backend ~30–60 s javob bermaydi, gateway swap bilan almashadi (ZfI9nERJ) |
 | 3 | `verify` | — |
-| 4 | `rabbitmq --execute` | yana ~30–60 s uzilish |
+| 4 | `rabbitmq --execute` | yana ~30–60 s, gateway swap bilan |
 | 5 | `minio-app --execute` | faqat file-service (~20 s yuklash/yuklab olish yo'q) |
 | 6 | `minio-root --execute` | MinIO qayta ishga tushadi (~5–10 s) |
 | 7 | `verify` → hammasi `OK` | — |
-| 8 | Validator patch'ni relizga qo'shish (§5) | keyingi deploy |
+| 8 | Validator va preflight allaqachon kodda (§5) | — |
 | 9 | `cleanup --execute` (eski qiymatlar `shred`) — faqat 1–2 kun barqaror ishlagandan keyin | — |
 
 Har qadamdan keyin: `https://api.elchipochta.uz/health/readiness` 200,
@@ -74,9 +74,10 @@ bash $S verify
 3. Avval `postgres` konteyneri qayta yaratiladi (~5–10 s; o'sha image, volume
    tegilmaydi): `.env` dagi parol compose orqali uning env'iga tushadi —
    aks holda KEYINGI deploy (`up -d … postgres`) uni kutilmaganda qayta
-   yaratardi. So'ng barcha app servislari + `db-backup` (+ ishlayotgan bo'lsa
-   `db-reconcile`, `activity-log-prune`) `up -d --no-deps --force-recreate`,
-   health kutiladi.
+   yaratardi. So'ng app servislari + `db-backup` (+ ishlayotgan bo'lsa
+   `db-reconcile`, `activity-log-prune`) `up -d --no-deps --force-recreate`, api-gateway
+   oxirida deploy'dagi swap bilan (yangi konteyner healthy bo'lgach eskisi to'xtaydi,
+   `gateway-swap` qadami ham alohida bor), health kutiladi.
 4. Tekshiruv: docker tarmog'i orqali `psql -h postgres` — yangi parol ✅,
    eski parol ❌; readiness 200.
 
@@ -97,7 +98,7 @@ chiqardi.
    `RABBITMQ_USER=elchi RABBITMQ_PASS=…` bilan chaqiriladi; sukut guest edi).
    Bu qadam qo'shimcha — guest hali ishlaydi.
 2. `RABBITMQ_URI` → `amqp://elchi:<yangi>@rabbitmq:5672` (`.env.production` va `.env`).
-3. 15 app servisi qayta yaratiladi, health kutiladi.
+3. 14 app servisi qayta yaratiladi, api-gateway swap bilan almashadi, health kutiladi.
 4. `rabbitmqctl list_connections user` da **birorta ham `guest` qolmagani**
    tekshiriladi (qolsa — skript to'xtaydi, guest o'chirilmaydi).
 5. `rabbitmqctl delete_user guest`; tekshiruv: management API
@@ -111,7 +112,8 @@ id'si (`rabbit@<id>`, compose'da `hostname:` yo'q). `elchi-rabbitmq` qayta
 yaratilsa volume'da bo'sh mnesia ochiladi: `elchi` yo'qoladi, guest qaytadi,
 hamma servis brokerga ulana olmaydi. Shuning uchun `deploy.yml` uni
 `--no-recreate` bilan ko'taradi (qUEE0Bgd); qo'lda `--force-recreate rabbitmq`
-qilmang.
+yoki `--no-deps` siz `up -d` qilmang: compose uni qayta yaratadi. Har doim
+`up -d --no-deps <servislar>`.
 
 ## 4. MinIO (`minio-app`, `minio-root`)
 
@@ -130,18 +132,24 @@ qilmang.
 
 Rollback: `rollback minio-app --execute` / `rollback minio-root --execute`.
 
-## 5. `POSTGRES_PASSWORD` Joi validatori (min 24) — rotatsiya BILAN chiqadi
+## 5. `POSTGRES_PASSWORD` Joi validatori (min 24) va deploy preflight'i
 
-Hozirgi prod paroli 17 belgi: validator undan oldin chiqsa, barcha servislar
-boot'da yiqiladi. Shuning uchun u branch'ga kiritilmagan — tayyor patch:
-`docs/ops/rotation/postgres-password-min24.patch` (`libs/common/src/config/index.ts`
-`observabilityKeys` ga: production'da `POSTGRES_PASSWORD` ≥ 24 + zaif-qiymat
-tekshiruvi, dev/test'da cheklov yo'q; + spec). Rotatsiya `verify` dan o'tgach:
+Rotatsiyadan keyin (2026-10-27: prod paroli 48 belgi) validator kodga kirdi:
+`libs/common/src/config/index.ts` `observabilityKeys` — production'da
+`POSTGRES_PASSWORD` ≥ 24, dev/test'da cheklov yo'q. Validator o'tkazmaydigan qiymat
+hamma servisni boot'da yiqitadi va rollback buni tuzatmaydi (env fayl git'da emas),
+shuning uchun `deploy.yml` skriptining boshida **env preflight** turadi (prod va
+staging): serverga tegilmasdan `POSTGRES_PASSWORD` ≥ 24 va `SUPERADMIN_PASSWORD` ≥ 12
+tekshiriladi. Deploy logida:
 
-```bash
-git apply docs/ops/rotation/postgres-password-min24.patch
-npx jest libs/common/src/config/postgres-password.spec.ts
 ```
+!!! .env.production: missing or too short: POSTGRES_PASSWORD (min 24) — deploy refused, nothing was touched.
+```
+
+Hech narsa o'zgarmagan: serverda qiymatni tuzating (Postgres uchun avval `ALTER ROLE`
+— §2) va deploy'ni qayta ishga tushiring. Logga qiymat ham, uzunlik ham chiqmaydi.
+Preflight faqat uzunlikni ko'radi: `SUPERADMIN_PASSWORD` ning zaif-qiymat tekshiruvi
+(`rejectWeakPassword`) Joi'da qoladi, uni deploy oxiridagi readiness darvozasi ushlaydi.
 
 ## 6. `TELEGRAM_BOT_TOKEN` — Dilshod (BotFather, uning Telegrami)
 
@@ -156,7 +164,8 @@ Almashtirish — gigiyena, qaror Dilshodniki. Qadamlar:
    `cd /home/shodiyor/apps/backend && cp .env.production .env.production.bak.$(date +%s)`,
    so'ng `.env.production` dagi `TELEGRAM_BOT_TOKEN=` qatorini yangilang
    (ixtiyoriy: `TELEGRAM_WEBHOOK_SECRET` ham — `openssl rand -hex 32`).
-3. `docker compose -f docker-compose.prod.yml up -d --no-deps --force-recreate notification-service identity-service api-gateway`
+3. `docker compose -f docker-compose.prod.yml up -d --no-deps --force-recreate notification-service identity-service`,
+   so'ng `bash scripts/rotate-datastore-secrets.sh gateway-swap --execute`
    (identity — Mini App `initData` imzosini shu token bilan tekshiradi).
 4. Webhook: `npm run telegram:setup` (docs/ops/telegram-bot.md §3–4) — `getWebhookInfo` da URL va `pending_update_count` tekshiriladi.
 5. Tekshiruv: botga `/start` → javob; Mini App ochiladi; eski token bilan

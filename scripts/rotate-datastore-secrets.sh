@@ -16,6 +16,7 @@
 #   rabbitmq               user elchi (+perms on /) -> RABBITMQ_URI -> recreate app services -> verify -> delete guest
 #   minio-app              new secret for the app IAM user (MINIO_ACCESS_KEY) -> recreate file-service -> verify
 #   minio-root             new root user+password (.env + .env.production) -> recreate minio -> verify
+#   gateway-swap           new api-gateway next to the old one, then retire the old (no gap; ZfI9nERJ)
 #   verify                 read-only: old values rejected, new values work, readiness
 #   rollback <step>        put that step's OLD value back (postgres|rabbitmq|minio-app|minio-root)
 #   cleanup                shred $ROT_DIR once everything is verified (old values gone for good)
@@ -25,8 +26,9 @@
 # psql/rabbitmqctl/mc get them on stdin, docker gets them via env (-e NAME).
 # Live env files are rewritten IN PLACE (same inode, owner, mode, group).
 #
-# Downtime: `postgres`, `rabbitmq` recreate every app container (~30-60 s
-# API gap each) — run in a quiet window. `minio-app`: file-service only.
+# Downtime: `postgres`, `rabbitmq` recreate every app container (backend calls
+# fail ~30-60 s each; api-gateway itself is swapped, the tunnel always has a
+# target) — run in a quiet window. `minio-app`: file-service only.
 # `minio-root`: MinIO restarts (~5-10 s; uploads/downloads fail meanwhile).
 set -euo pipefail
 umask 077
@@ -97,6 +99,52 @@ recreate() {
   say "recreating: $*"
   # shellcheck disable=SC2086
   run $DC up -d --no-deps --force-recreate "$@"
+}
+# Same swap as deploy.yml `gateway_swap` (ZfI9nERJ: a plain recreate here gave
+# cloudflared «connection refused» during the 2026-10-27 rotation). The new
+# container reads the env files as they are now; the old one serves until the new
+# one is (healthy), then finishes in-flight requests (docker stop -t 30).
+gateway_swap() {
+  if ! $EXECUTE; then
+    say "(dry-run) would swap api-gateway: scale 2, wait healthy, retire the old one"
+    return 0
+  fi
+  local old new st i
+  old="$($DC ps -q api-gateway 2>/dev/null || true)"
+  if [ -z "$old" ] || [ "$(printf '%s\n' "$old" | wc -l)" -ne 1 ]; then
+    say "api-gateway: not exactly one running container — plain recreate"
+    recreate api-gateway
+    return 0
+  fi
+  $DC up -d --no-deps --no-recreate --scale api-gateway=2 api-gateway
+  new="$($DC ps -q api-gateway | grep -v "^$old" | head -n 1 || true)"
+  [ -n "$new" ] || die "api-gateway: the new container was not created"
+  st=starting
+  for i in $(seq 1 60); do
+    st="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$new" 2>/dev/null || echo missing)"
+    case "$st" in healthy | unhealthy | missing | exited | dead) break ;; esac
+    sleep 3
+  done
+  if [ "$st" != healthy ]; then
+    docker logs --tail 60 "$new" || true
+    docker rm -f "$new" || true
+    die "api-gateway: new container is '$st' — removed it, the old one keeps serving"
+  fi
+  say "api-gateway: new container healthy — retiring the old one"
+  docker stop -t 30 "$old" || true
+  docker rm -f "$old" || true
+  $DC up -d --no-deps --no-recreate --scale api-gateway=1 api-gateway ||
+    say "WARNING: compose scale bookkeeping failed (one healthy gateway is running)"
+}
+# Services first (plain recreate), the gateway last by swap — deploy.yml order.
+recreate_app() {
+  local rest="" s swap=false
+  for s in "$@"; do
+    if [ "$s" = api-gateway ]; then swap=true; else rest="$rest $s"; fi
+  done
+  # shellcheck disable=SC2086
+  [ -z "$rest" ] || recreate $rest
+  if $swap; then gateway_swap; fi
 }
 wait_healthy() {
   $EXECUTE || return 0
@@ -227,7 +275,7 @@ step_postgres() {
   recreate postgres
   wait_healthy postgres || die "postgres unhealthy — check: docker logs elchi-postgres"
   # shellcheck disable=SC2086
-  recreate $DB_SERVICES
+  recreate_app $DB_SERVICES
   # shellcheck disable=SC2086
   wait_healthy $DB_SERVICES || die "services unhealthy — consider: rollback postgres --execute"
   say "4/4 verify"
@@ -262,7 +310,7 @@ step_rabbitmq() {
   fi
   say "3/5 recreate all app services"
   # shellcheck disable=SC2086
-  recreate $APP_SERVICES
+  recreate_app $APP_SERVICES
   # shellcheck disable=SC2086
   wait_healthy $APP_SERVICES || die "services unhealthy — rollback rabbitmq --execute"
   say "4/5 verify: no connection left as guest"
@@ -369,7 +417,7 @@ step_rollback() {
       recreate postgres
       wait_healthy postgres || say "WARNING: postgres not healthy yet"
       # shellcheck disable=SC2086
-      recreate $DB_SERVICES
+      recreate_app $DB_SERVICES
       ;;
     rabbitmq)
       if $EXECUTE; then
@@ -382,7 +430,7 @@ step_rollback() {
         grep -qE '^RABBITMQ_URI=' "$ENVD" && V="$(oldd RABBITMQ_URI)" setv RABBITMQ_URI "$ENVD"
       fi
       # shellcheck disable=SC2086
-      recreate $APP_SERVICES
+      recreate_app $APP_SERVICES
       ;;
     minio-app)
       if $EXECUTE; then
@@ -418,6 +466,7 @@ case "$STEP" in
   rabbitmq) step_rabbitmq ;;
   minio-app) step_minio_app ;;
   minio-root) step_minio_root ;;
+  gateway-swap) gateway_swap ;;
   verify) step_verify ;;
   rollback) step_rollback "$@" ;;
   cleanup) step_cleanup ;;

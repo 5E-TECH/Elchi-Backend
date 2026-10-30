@@ -1,0 +1,33 @@
+# (ZfI9nERJ) Tashqi uptime monitor: server butunlay o'chsa ham ishlaydi. Yiqilsa
+# Telegram xabar va job qizil, Telegram sirlari yo'q bo'lsa ham job qizil.
+# deploy.yml ga bog'lanmagan. Runbook: docs/ops/backup-rpo-rto.md §5.
+name: Uptime monitor
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: uptime-monitor
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Check /health
+        env:
+          BACKUP_ALERT_TELEGRAM_BOT_TOKEN: ${{ secrets.BACKUP_ALERT_TELEGRAM_BOT_TOKEN }}
+          BACKUP_ALERT_TELEGRAM_CHAT_ID: ${{ secrets.BACKUP_ALERT_TELEGRAM_CHAT_ID }}
+        run: |
+          bash scripts/uptime-check.sh \
+            https://api.elchipochta.uz/health \
+            https://test-api.elchipochta.uz/health

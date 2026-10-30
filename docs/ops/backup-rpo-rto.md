@@ -29,7 +29,9 @@ jadvalni biladi).
 
 ## 3. Oylik tiklash mashqi
 
-Har oyning birinchi dushanbasi (kalendar kartasi). ~15 daqiqa, prod'ga tegmaydi.
+Har oyning 1-kuni, 07:30 Toshkent: `.github/workflows/restore-drill.yml` (sukut
+o'chiq, `RESTORE_DRILL_ENABLED=true` bilan yoqiladi — pastda). Yoqilmagan bo'lsa
+qo'lda, ~15 daqiqa. Prod'ga tegmaydi.
 
 1. **DB** — R2 dagi eng yangi dumpni VPS'dan TASHQARIDAGI mashinaga yuklab,
    bir martalik `postgres:15` ga tiklash va jadvallardagi qatorlar sonini
@@ -43,8 +45,25 @@ Har oyning birinchi dushanbasi (kalendar kartasi). ~15 daqiqa, prod'ga tegmaydi.
    --one-way` + bitta obyektni R2 dan yuklab MD5 solishtirish
    (minio-backups.md §4); yiliga bir marta — butun bucket'ni bo'sh MinIO
    konteyneriga tiklash.
+   `RESTORE_DRILL_MINIO_BUCKET=elchi-files` berilsa skript butun nusxani yuklab,
+   obyekt soni va baytini R2 bilan solishtiradi (har obyekt yuklashda tekshiriladi);
+   nusxalar shifrlangan bo'lsa `OFFSITE_ENCRYPTION_KEY` ham kerak.
 3. Natijani pastdagi jurnalga va kartaga yozing: sana, fayl, hajm, vaqt, mos
    kelmagan jadvallar.
+
+**Avtomatik mashq.** Job GitHub Actions runner'ida `scripts/restore-drill.sh` ni ishlatadi,
+natija Job Summary'da, yiqilsa job qizil va Telegram xabar. Yoqish (repo admini):
+
+1. Settings → Environments → `restore-drill`: secrets `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`,
+   `R2_SECRET_ACCESS_KEY`, `R2_BUCKET`, (shifr yoqilgan bo'lsa) `OFFSITE_ENCRYPTION_KEY`,
+   `BACKUP_ALERT_TELEGRAM_BOT_TOKEN`, `BACKUP_ALERT_TELEGRAM_CHAT_ID`. Faqat o'qish uchun alohida
+   R2 token tavsiya qilinadi.
+2. Settings → Variables: `RESTORE_DRILL_ENABLED=true`.
+3. Actions → Restore drill → Run workflow bilan birinchi marta sinash.
+
+⚠️ Mashq paytida prod dump shu runner'da ochiladi (vaqtinchalik VM, disk job bilan yo'qoladi).
+Repo public bo'lsa log hammaga ko'rinadi: skript faqat fayl nomi, hajm, vaqt va jami qatorlarni chiqaradi.
+`schedule` faqat default branch'dagi workflow'ni ishlatadi.
 
 ### Mashqlar jurnali
 
@@ -86,14 +105,19 @@ Muammo bo'lsa: `docker logs --tail 50 elchi-db-backup` / `elchi-backup-offsite`,
 `tail ~/elchi-ops/logs/minio-offsite.log`; runbook'lar — db-backups.md §4/§6.3,
 minio-backups.md §4.
 
-## 5. Tashqi monitoring (ZfI9nERJ) — akkaunt talab qiladi
+## 5. Tashqi monitoring (ZfI9nERJ)
 
 Serverning o'zi o'chsa yuqoridagi alert ham ishlamaydi — tashqaridan kuzatish kerak:
 
-1. **Uptime monitor** (UptimeRobot / Better Stack, bepul reja): HTTP(S) monitor
-   `https://api.elchipochta.uz/health` (200 kutiladi, oraliq 1–5 daqiqa) va
-   `https://api.elchipochta.uz/health/readiness`; ogohlantirish — email +
-   Telegram (UptimeRobot'da Telegram integratsiyasi bor).
+1. **Uptime monitor**: `.github/workflows/uptime-monitor.yml` (cron har 5 daqiqa,
+   `scripts/uptime-check.sh`): `https://api.elchipochta.uz/health` va
+   `https://test-api.elchipochta.uz/health` — HTTP 200 + `"status":"ok"`, 3 urinish,
+   oralig'i 15 s. Yiqilsa Telegram xabar va job qizil. Sirlar (Settings → Secrets → Actions):
+   `BACKUP_ALERT_TELEGRAM_BOT_TOKEN`, `BACKUP_ALERT_TELEGRAM_CHAT_ID`; biri yo'q bo'lsa job
+   har run'da qizil, endpoint sog'lom bo'lsa ham: xabar yubora olmaydigan monitor ishlamayotgan monitor.
+   Yiqilgan payt har run'da xabar keladi, tiklanish xabari yo'q (holat saqlanmaydi). Cheklovlar:
+   `schedule` faqat default branch'dagi workflow'ni ishlatadi, GitHub cron'ni kechiktirishi mumkin,
+   repo 60 kun faol bo'lmasa o'chiradi. Tezroq signal kerak bo'lsa UptimeRobot / Better Stack.
 2. **healthchecks.io** check (period 15 min, grace 30 min) → ping URL ni
    `BACKUP_ALERT_HEARTBEAT_URL` ga yozish — backup alerti uchun dead-man switch.
 3. **Cloudflare Zero Trust → Notifications → "Tunnel health alert"** (mavjud

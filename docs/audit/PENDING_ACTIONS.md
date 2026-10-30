@@ -34,7 +34,7 @@ rotation logs everyone out; DB/RabbitMQ password change needs a restart):**
    - Cloudflare / BotFather: done in step 1 (dashboard / revoke)
 3. **Swap + restart** — `diff .env.production.bak.* .env.production.new` (review),
    `mv .env.production.new .env.production`,
-   `docker compose -f docker-compose.prod.yml up -d --force-recreate`
+   `docs/audit/SECRET_ROTATION_RUNBOOK.md` §1 dagi buyruqlar (yalang `up -d` rabbitmq'ni qayta yaratadi)
 4. **Verify** — services healthy (docker healthchecks green), login works (new JWT
    keys), a DB write works (new pg password), bots respond (new tokens). Delete
    the `.env.production.bak.*` once confirmed.

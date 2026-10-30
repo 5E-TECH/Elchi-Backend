@@ -35,6 +35,26 @@ Yangi env: `RMQ_REQUESTER_SIG_MODE` (`off` sukut, test serverda `log`), `RMQ_REQ
 Ichki RMQ xabarlaridagi `requester` HMAC bilan imzolanadi. HTTP kontrakti o'zgarmaydi. Faqat `enforce` yoqilgandan keyin
 imzosi yaroqsiz ichki xabar `403 So'rov imzosi yaroqsiz` qaytaradi — oddiy foydalanuvchi oqimida bu chiqmasligi kerak.
 Runbook: [`docs/ops/rmq-service-users.md`](../ops/rmq-service-users.md).
+### 2026-10-31 — Ops: image'lar CI'da (kalit bilan), tashqi uptime monitor, rotatsiyada gateway swap (ZfI9nERJ)
+
+Deploy: `deploy.yml` o'zgargani uchun keyingi deploy BARCHA servislarni qayta build qiladi. Migratsiya **yo'q**, API kontrakti
+o'zgarmagan. Yangi repo variable: `CI_IMAGES_ENABLED` (sukut o'chiq). → FE'da ish yo'q.
+
+### 2026-10-31 — Ops: zaxira nusxalarni shifrlash (kalit bilan) va oylik tiklash mashqi (6RaEn5cN)
+
+Deploy: faqat skriptlar va workflow. Migratsiya **yo'q**, API kontrakti o'zgarmagan. Yangi env: `OFFSITE_ENCRYPTION_KEY`
+(sukut bo'sh, eski xulq), repo variable `RESTORE_DRILL_ENABLED` (sukut o'chiq).
+
+- [2026-10-31] 🟢 [infra] — off-site DB va MinIO nusxalari kalit berilsa client-side shifrlanadi. → FE'da ish yo'q.
+
+### 2026-10-31 — Ops: deploy env preflight va readiness darvozasi, POSTGRES_PASSWORD validatori (AFiXurLH)
+
+Deploy: `deploy.yml` va `libs/common` o'zgargani uchun keyingi deploy BARCHA servislarni qayta build qiladi. Migratsiya
+**yo'q**, yangi env **yo'q**, API kontrakti o'zgarmagan.
+
+- [2026-10-31] 🟢 [infra] — `POSTGRES_PASSWORD` production'da ≥ 24 belgi (Joi). `SUPERADMIN_PASSWORD` ≥ 12 bilan birga deploy
+  boshida, serverga tegilmasdan tekshiriladi. Deploy endi `/health/readiness` hamma servis uchun ok bo'lgandagina yashil,
+  aks holda rollback. → FE'da ish yo'q.
 
 ### 2026-10-30 — Inglizcha xatolar o'zbekchaga: 4xx/5xx matnlari va class-validator (ZDweRm02)
 

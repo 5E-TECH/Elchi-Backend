@@ -33,6 +33,15 @@
 # derived from R2_* below; RCLONE_CONFIG="" = no config file) — no file with
 # secrets on disk. Secrets are never printed.
 #
+# Client-side encryption (6RaEn5cN, OFF by default): with OFFSITE_ENCRYPTION_KEY
+# set the dumps go through an rclone `crypt` remote to
+# r2:$R2_BUCKET/encrypted/<subdir>/<name>.bin (content encrypted, names readable),
+# verified with `rclone cryptcheck`. Without the key nothing below changes. A bad
+# key never falls back to plaintext: the run fails and uploads nothing. Plaintext
+# copies already in R2 are left alone and age out with the same retention, once a
+# fresh encrypted daily copy exists. The key must also live OFF the VPS
+# (password manager): without it the copies cannot be read.
+#
 # Env (.env.production; runbook docs/ops/db-backups.md):
 #   R2_ACCOUNT_ID             Cloudflare account id (endpoint https://<id>.r2.cloudflarestorage.com)
 #   R2_ACCESS_KEY_ID          R2 API token: Access Key ID   (Object Read & Write, this bucket only)
@@ -41,6 +50,7 @@
 #   R2_ENDPOINT               optional endpoint override (e.g. an EU-jurisdiction bucket)
 #   OFFSITE_INTERVAL_SECONDS  seconds between runs            (default 3600, min 60)
 #   OFFSITE_RETENTION_DAYS    keep R2 copies this many days   (default 30)
+#   OFFSITE_ENCRYPTION_KEY    >= 32 chars (openssl rand -hex 32); empty = no client-side encryption
 #   OFFSITE_HEALTH_MAX_AGE_SECONDS  `--check`: last success must be younger (default 93600 = 26h)
 #   OFFSITE_SRC_ROOT          local dumps root (default /backups — the read-only mount)
 #   OFFSITE_STATE_DIR         status dir       (default /tmp/backup-offsite, in the container)
@@ -113,6 +123,9 @@ offsite_missing() {
 
 offsite_configured() { [ -z "$(offsite_missing)" ]; }
 
+# 6RaEn5cN: shablon qiymati shifrlash hisoblanmaydi (offsite_unset kabi).
+offsite_encrypted() { ! offsite_unset "${OFFSITE_ENCRYPTION_KEY:-}"; }
+
 # Values that end up in a URL / remote path must be plain tokens.
 offsite_validate() {
   case "$OFFSITE_BUCKET" in
@@ -128,6 +141,10 @@ offsite_validate() {
         return 1
         ;;
     esac
+  fi
+  if offsite_encrypted && [ "${#OFFSITE_ENCRYPTION_KEY}" -lt 32 ]; then
+    echo "OFFSITE_ENCRYPTION_KEY is shorter than 32 characters (openssl rand -hex 32)"
+    return 1
   fi
   return 0
 }
@@ -153,13 +170,31 @@ offsite_rclone_env() {
     RCLONE_CONFIG_R2_ENDPOINT RCLONE_CONFIG_R2_REGION RCLONE_CONFIG_R2_ACL \
     RCLONE_CONFIG_R2_ENV_AUTH RCLONE_CONFIG_R2_NO_CHECK_BUCKET \
     RCLONE_CONFIG_R2_ACCESS_KEY_ID RCLONE_CONFIG_R2_SECRET_ACCESS_KEY
+  offsite_encrypted || return 0
+
+  # `r2crypt:` over `r2:<bucket>`. The key reaches rclone on stdin only.
+  RCLONE_CONFIG_R2CRYPT_TYPE=crypt
+  RCLONE_CONFIG_R2CRYPT_REMOTE="r2:$OFFSITE_BUCKET"
+  RCLONE_CONFIG_R2CRYPT_FILENAME_ENCRYPTION=off
+  RCLONE_CONFIG_R2CRYPT_DIRECTORY_NAME_ENCRYPTION=false
+  RCLONE_CONFIG_R2CRYPT_PASSWORD="$(printf '%s\n' "$OFFSITE_ENCRYPTION_KEY" | rclone obscure -)" || return 1
+  [ -n "$RCLONE_CONFIG_R2CRYPT_PASSWORD" ] || return 1
+  export RCLONE_CONFIG_R2CRYPT_TYPE RCLONE_CONFIG_R2CRYPT_REMOTE \
+    RCLONE_CONFIG_R2CRYPT_FILENAME_ENCRYPTION RCLONE_CONFIG_R2CRYPT_DIRECTORY_NAME_ENCRYPTION \
+    RCLONE_CONFIG_R2CRYPT_PASSWORD
 }
 
 offsite_resolve_config() {
   OFFSITE_BUCKET="${R2_BUCKET:-elchi-db-backups}"
   OFFSITE_INTERVAL="$(offsite_int OFFSITE_INTERVAL_SECONDS 3600 60)"
   OFFSITE_RETENTION="$(offsite_int OFFSITE_RETENTION_DAYS 30)"
-  OFFSITE_REMOTE="r2:$OFFSITE_BUCKET"
+  OFFSITE_PLAIN_REMOTE="r2:$OFFSITE_BUCKET"
+  OFFSITE_REMOTE="$OFFSITE_PLAIN_REMOTE"
+  OFFSITE_PRUNE_ROOTS="$OFFSITE_REMOTE"
+  if offsite_encrypted; then
+    OFFSITE_REMOTE="r2crypt:encrypted"
+    OFFSITE_PRUNE_ROOTS="$OFFSITE_REMOTE $OFFSITE_PLAIN_REMOTE"
+  fi
 }
 
 # ---- status file (key=value lines; read with sed, never sourced) -------------
@@ -204,6 +239,17 @@ offsite_lsf() {
   return "$_lsf_rc"
 }
 
+# size + MD5 of the new objects. Through crypt the stored bytes differ from the
+# local file by design: cryptcheck encrypts the local file with the object's own
+# nonce and compares that hash.
+offsite_verify() {
+  if offsite_encrypted; then
+    rclone cryptcheck "$1" "$2" --one-way --files-from-raw "$3"
+  else
+    rclone check "$1" "$2" --one-way --files-from-raw "$3"
+  fi
+}
+
 # Upload the new dumps of one subdir. Sets OFFSITE_DIR_UPLOADED; on failure
 # sets OFFSITE_DIR_STEP and returns 1.
 offsite_sync_dir() {
@@ -243,7 +289,7 @@ offsite_sync_dir() {
     return 1
   }
   # Explicit verification of what was just uploaded: size + MD5 vs the local file.
-  rclone check "$_sd_src" "$_sd_dst" --one-way --files-from-raw "$_sd_new" \
+  offsite_verify "$_sd_src" "$_sd_dst" "$_sd_new" \
     2>> "$OFFSITE_RUN_ERR" || {
     OFFSITE_DIR_STEP="verify (size+md5)"
     return 1
@@ -264,15 +310,17 @@ offsite_prune() {
     offsite_warn "R2 da ${OFFSITE_RETENTION} kundan yangi kunlik nusxa yo'q — eski nusxalar O'CHIRILMADI (kunlik backup ishlayaptimi?)"
     return 0
   fi
-  for _pr_sub in $OFFSITE_SUBDIRS; do
-    _pr_old="$OFFSITE_RUN_DIR/$_pr_sub.old"
-    offsite_lsf "$OFFSITE_REMOTE/$_pr_sub" "$_pr_old" \
-      --min-age "${OFFSITE_RETENTION}d" || return 1
-    [ -s "$_pr_old" ] || continue
-    rclone delete "$OFFSITE_REMOTE/$_pr_sub" --max-depth 1 --include "$OFFSITE_PATTERN" \
-      --min-age "${OFFSITE_RETENTION}d" \
-      2>> "$OFFSITE_RUN_ERR" || return 1
-    OFFSITE_PRUNED=$((OFFSITE_PRUNED + $(wc -l < "$_pr_old")))
+  for _pr_root in $OFFSITE_PRUNE_ROOTS; do
+    for _pr_sub in $OFFSITE_SUBDIRS; do
+      _pr_old="$OFFSITE_RUN_DIR/$_pr_sub.old"
+      offsite_lsf "$_pr_root/$_pr_sub" "$_pr_old" \
+        --min-age "${OFFSITE_RETENTION}d" || return 1
+      [ -s "$_pr_old" ] || continue
+      rclone delete "$_pr_root/$_pr_sub" --max-depth 1 --include "$OFFSITE_PATTERN" \
+        --min-age "${OFFSITE_RETENTION}d" \
+        2>> "$OFFSITE_RUN_ERR" || return 1
+      OFFSITE_PRUNED=$((OFFSITE_PRUNED + $(wc -l < "$_pr_old")))
+    done
   done
   return 0
 }
@@ -299,7 +347,12 @@ offsite_run() {
     offsite_status_write error "$_r_why"
     return 1
   }
-  offsite_rclone_env
+  offsite_rclone_env || {
+    _r_why="could not derive the rclone crypt password"
+    offsite_err "$_r_why — off-site copy NOT done"
+    offsite_status_write error "$_r_why"
+    return 1
+  }
 
   _r_up=0
   _r_detail=""
@@ -422,7 +475,10 @@ case "${1:-}" in
       exit 1
     fi
     offsite_resolve_config
-    offsite_rclone_env
+    offsite_rclone_env || {
+      offsite_err "could not derive the rclone crypt password"
+      exit 1
+    }
     exec rclone "$@"
     ;;
   *)
