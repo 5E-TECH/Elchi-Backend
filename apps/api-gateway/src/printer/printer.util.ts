@@ -17,6 +17,8 @@
 import * as fs from 'node:fs';
 import PDFDocument from 'pdfkit';
 import * as QRCode from 'qrcode';
+import { formatContactPhone, PROBLEM_CONTACTS_MAX } from '@app/common';
+import type { ProblemContact } from '@app/common';
 import { ELCHI_LOGO_PATHS, ELCHI_LOGO_VIEWBOX } from './elchi-logo';
 
 export interface PrintRow {
@@ -40,31 +42,36 @@ export interface PrintRow {
   operator_phone?: string;
   /** VRyloH62: 2-operator raqami (bo'sh — yo'q). */
   secondary_operator_phone?: string;
+  /** T7: buyurtma viloyati (gateway `problem_contacts` uchun). */
+  region_id?: string | null;
+  /** T7: buyurtma tumani (viloyat yo'q bo'lsa — tuman viloyati). */
+  district_id?: string | null;
+  /**
+   * T7 (QPq2C1co): «Muammo bo'lsa» — buyurtma viloyati logisti, u yo'q /
+   * nofaol — zaxira raqamlar. Gateway `ProblemContactsService` qo'shadi.
+   */
+  problem_contacts?: ProblemContact[];
   products: Array<{ name: string; quantity: number }>;
 }
 
 /**
- * VRyloH62 — "Muammo bo'lsa" qatorining raqamlari: buyurtmani qabul qilgan
- * operatorning 1- va 2-raqami (BeePost `printer.service.ts` :97-112 kabi —
- * qaysi biri bor bo'lsa shular, tartib bilan). Buyurtmada operator raqami
- * umuman yo'q bo'lsa (eski buyurtmalar, raqamsiz market) — avvalgidek
- * marketning umumiy raqami. Formatlangan; hech biri yo'q — `[]`.
+ * T7 (QPq2C1co) — "Muammo bo'lsa" qatorining raqamlari: FAQAT
+ * `problem_contacts` (viloyat logisti yoki zaxira raqamlar), takrorsiz,
+ * ko'pi bilan 2 ta, `+998 90 111 22 33` ko'rinishida. Operator va market
+ * raqamlari ENDI chiqmaydi (ega qarori: kuryer/mijoz marketga emas,
+ * logistga bog'lanadi). Hech biri yo'q — `[]`: qator umuman chizilmaydi.
  */
 export function contactPhonesOf(
-  order: Pick<
-    PrintRow,
-    'operator_phone' | 'secondary_operator_phone' | 'market_phone'
-  >,
+  order: Pick<PrintRow, 'problem_contacts'>,
 ): string[] {
-  const operatorPhones = [order.operator_phone, order.secondary_operator_phone]
-    .map((phone) => String(phone ?? '').trim())
-    .filter(Boolean)
-    .map(formatPhoneNumber);
-  if (operatorPhones.length > 0) {
-    return operatorPhones;
+  const phones: string[] = [];
+  for (const contact of order.problem_contacts ?? []) {
+    const phone = formatContactPhone(contact?.phone);
+    if (phone && !phones.includes(phone)) {
+      phones.push(phone);
+    }
   }
-  const marketPhone = String(order.market_phone ?? '').trim();
-  return marketPhone ? [formatPhoneNumber(marketPhone)] : [];
+  return phones.slice(0, PROBLEM_CONTACTS_MAX);
 }
 
 const DEJAVU_CANDIDATES: Array<{ regular: string; bold: string }> = [
@@ -209,11 +216,11 @@ export async function renderThermalPdf(rows: PrintRow[]): Promise<Buffer> {
     const whereDeliver = whereDeliverLabel(order.where_deliver);
     const qrCode = order.qr_code_token ?? '';
 
-    // "Muammo bo'lsa" qatori (VRyloH62): buyurtmadagi operator raqamlari
-    // (1-, 2-raqam); ular yo'q bo'lsa — avvalgidek market raqami.
+    // "Muammo bo'lsa" qatori (T7): viloyat logisti / zaxira raqamlar.
+    // Raqam yo'q — qator UMUMAN chizilmaydi (bo'sh joy A zonasiga o'tadi).
     const contactPhones = contactPhonesOf(order);
-    const contactDisplay =
-      contactPhones.length > 0 ? contactPhones.join('    ') : '-';
+    const hasContacts = contactPhones.length > 0;
+    const contactDisplay = contactPhones.join('    ');
 
     const productStr = productString(order.products);
 
@@ -232,7 +239,7 @@ export async function renderThermalPdf(rows: PrintRow[]): Promise<Buffer> {
     const MAHSULOT_H = 16;
     const MOLJAL_H = 16;
     const IZOH_H = 13;
-    const LOGIST_H = 13;
+    const LOGIST_H = hasContacts ? 13 : 0;
     const ZONE_B_H = MAHSULOT_H + MOLJAL_H + IZOH_H + LOGIST_H;
     const B_LABEL_COL = 17 * MM;
     const B_VALUE_X = M + B_LABEL_COL;
@@ -243,13 +250,13 @@ export async function renderThermalPdf(rows: PrintRow[]): Promise<Buffer> {
       productStr || '-',
       address || '-',
       comment || '-',
-      contactDisplay,
+      ...(hasContacts ? [contactDisplay] : []),
     ];
     const zoneBRows = [
       { label: 'Mahsulot:', h: MAHSULOT_H },
       { label: "Mo'ljal:", h: MOLJAL_H },
       { label: 'Izoh:', h: IZOH_H },
-      { label: "Muammo bo'lsa:", h: LOGIST_H },
+      ...(hasContacts ? [{ label: "Muammo bo'lsa:", h: LOGIST_H }] : []),
     ];
 
     const ZONE_A_H = TABLE_H - ZONE_B_H;
@@ -432,16 +439,18 @@ export async function renderThermalPdf(rows: PrintRow[]): Promise<Buffer> {
 
     doc.rect(M, ZONE_B_Y, FULL_W, TABLE_BOT - ZONE_B_Y).stroke();
     doc.moveTo(B_VALUE_X, ZONE_B_Y).lineTo(B_VALUE_X, LOGIST_ROW_Y).stroke();
-    doc
-      .moveTo(LOGIST_VALUE_X, LOGIST_ROW_Y)
-      .lineTo(LOGIST_VALUE_X, TABLE_BOT)
-      .stroke();
+    if (hasContacts) {
+      doc
+        .moveTo(LOGIST_VALUE_X, LOGIST_ROW_Y)
+        .lineTo(LOGIST_VALUE_X, TABLE_BOT)
+        .stroke();
+    }
 
     let bRowY = ZONE_B_Y;
     for (let r = 0; r < zoneBRows.length; r++) {
       const row = zoneBRows[r];
       const val = zoneBTexts[r];
-      const isLogist = r === zoneBRows.length - 1;
+      const isLogist = hasContacts && r === zoneBRows.length - 1;
 
       if (r > 0) {
         doc
@@ -510,14 +519,18 @@ export async function renderReceiptHtml(rows: PrintRow[]): Promise<string> {
     const whereDeliver = whereDeliverLabel(order.where_deliver);
     const qrCode = order.qr_code_token ?? '';
 
-    // VRyloH62: operator raqamlari (1-, 2-) — yo'q bo'lsa market raqami.
+    // T7: viloyat logisti / zaxira raqamlar; yo'q — qator chizilmaydi.
     const contactPhones = contactPhonesOf(order).map(escapeHtml);
     const contactPhonesHtml =
-      contactPhones.length === 0
-        ? '-'
-        : contactPhones.length === 1
-          ? `<b>${contactPhones[0]}</b>`
-          : `<b>${contactPhones[0]}</b> <b class="logist-phone">${contactPhones[1]}</b>`;
+      contactPhones.length === 1
+        ? `<b>${contactPhones[0]}</b>`
+        : `<b>${contactPhones[0]}</b> <b class="logist-phone">${contactPhones[1]}</b>`;
+    const logistRowHtml = contactPhones.length
+      ? `<div class="b-row b-row-last b-row-logist"><table class="logist-tbl"><tr><td class="logist-td-lbl">Muammo bo'lsa:</td><td class="logist-td-val">${contactPhonesHtml}</td></tr></table></div>`
+      : '';
+    const izohRowClass = contactPhones.length
+      ? 'b-row b-row-compact b-row-izoh'
+      : 'b-row b-row-compact b-row-izoh b-row-last';
 
     const productStr = escapeHtml(productString(order.products));
 
@@ -560,8 +573,8 @@ export async function renderReceiptHtml(rows: PrintRow[]): Promise<string> {
           <div class="zone-b">
             <div class="b-row b-row-compact"><span class="lbl-b">Mahsulot:</span><span class="val-b">${productStr || '-'}</span></div>
             <div class="b-row b-row-compact"><span class="lbl-b">Mo'ljal:</span><span class="val-b">${address || '-'}</span></div>
-            <div class="b-row b-row-compact b-row-izoh"><span class="lbl-b">Izoh:</span><span class="val-b">${comment || '-'}</span></div>
-            <div class="b-row b-row-last b-row-logist"><table class="logist-tbl"><tr><td class="logist-td-lbl">Muammo bo'lsa:</td><td class="logist-td-val">${contactPhonesHtml}</td></tr></table></div>
+            <div class="${izohRowClass}"><span class="lbl-b">Izoh:</span><span class="val-b">${comment || '-'}</span></div>
+            ${logistRowHtml}
           </div>
         </div>
       </div>

@@ -67,6 +67,7 @@ import { PublicDeliveryPricingController } from './public-delivery-pricing/publi
 import { WarehouseGatewayController } from './warehouse-gateway.controller';
 // T7 (QPq2C1co) aloqa raqamlari: /settings/contacts, market mas'ullari, /users/me/contacts.
 import { ContactsGatewayController } from './contacts-gateway.controller';
+import { ProblemContactsService } from './contacts/problem-contacts.service';
 import { AiStatusPoller } from './ai/ai-status.poller';
 // (KwodkKWY) POST /csp-report — brauzer CSP buzilish hisobotlari (@Public).
 import { CspReportController } from './csp-report/csp-report.controller';
@@ -218,6 +219,7 @@ import { AI_IMAGE_STORE, AiImageStore } from '@app/common/ai/ai-image-store';
     // 4BftLLnc — logistning o'z viloyatlari (regions.logist_id = me), qisqa
     // kesh: buyurtmalar, paketlar, kuryerlar va qidiruv doirasi.
     LogistRegionScopeService,
+    ProblemContactsService,
     // Rate limit kaliti soxtalashtirib bo'lmaydigan mijoz IP'si bo'yicha
     // olinadi (audit S3) — standart guard `req.ip` ni ishlatadi, u esa
     // `trust proxy` yoqilganda mijozning o'z `X-Forwarded-For` qiymati bo'lib

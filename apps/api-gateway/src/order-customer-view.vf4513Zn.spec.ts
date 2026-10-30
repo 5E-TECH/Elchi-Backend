@@ -494,7 +494,11 @@ describe('vf4513Zn — buyurtmadagi `customer` faqat mijoz ko`rinishi (cheklanga
 
   it('menejer / superadmin: to`liq ko`rinish (o`zgarmagan)', () => {
     const payload = { data: row };
-    expect(projectOrderPayloadForRoles(['manager'], payload)).toBe(payload);
+    // T7 (QPq2C1co, B3): menejerda faqat market telefonlari olib tashlanadi —
+    // `customer` to'liq (o'zgarmagan).
+    const manager: { data: Record<string, unknown> } =
+      projectOrderPayloadForRoles(['manager'], payload);
+    expect(manager.data.customer).toBe(row.customer);
     expect(projectOrderPayloadForRoles(['superadmin'], payload)).toBe(payload);
   });
 

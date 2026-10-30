@@ -7,6 +7,7 @@ import {
   GatewayTimeoutException,
   HttpCode,
   Inject,
+  Optional,
   Param,
   Post,
   Query,
@@ -37,6 +38,10 @@ import {
   canLookupOrderByQr,
 } from './auth/order-qr-visibility';
 import { projectOrderPayloadForRoles } from './auth/order-role-projection';
+import {
+  ProblemContactsService,
+  attachProblemContacts,
+} from './contacts/problem-contacts.service';
 import {
   canScanPost,
   isPostScanToken,
@@ -108,6 +113,9 @@ export class ScanGatewayController {
     @Inject('ORDER') private readonly orderClient: ClientProxy,
     @Inject('BRANCH') private readonly branchClient: ClientProxy,
     @Inject('LOGISTICS') private readonly logisticsClient: ClientProxy,
+    // T7 (QPq2C1co, B2): skan qilingan buyurtma/pochtaga `problem_contacts`.
+    // Yo'q (eski spec'lar) — maydon qo'shilmaydi.
+    @Optional() private readonly problemContacts?: ProblemContactsService,
   ) {}
 
   private normalizeToken(token: string): string {
@@ -283,7 +291,10 @@ export class ScanGatewayController {
       );
       return projectOrderPayloadForRoles(
         req?.user?.roles,
-        this.shapeResponse('post', response),
+        await attachProblemContacts(
+          this.problemContacts,
+          this.shapeResponse('post', response),
+        ),
       );
     }
 
@@ -316,7 +327,11 @@ export class ScanGatewayController {
       // kH2zZsz3: skan qilingan buyurtma `GET /orders/:id` bilan AYNI rol
       // proyeksiyasida — kuryer market tarifi/filial ulushini, market esa
       // kuryer tarifi/ulushini ko'rmaydi.
-      return projectOrderPayloadForRoles(req?.user?.roles, shaped);
+      // T7: `problem_contacts` proyeksiyadan OLDIN.
+      return projectOrderPayloadForRoles(
+        req?.user?.roles,
+        await attachProblemContacts(this.problemContacts, shaped),
+      );
     } catch (error) {
       /**
        * CyCV4XHR — buyurtma topilmadi. Token QOP (`external_batch_token`)

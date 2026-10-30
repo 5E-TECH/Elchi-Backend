@@ -80,7 +80,7 @@ describe('FIX3 A7 — GET /markets maydonlari rolga qarab', () => {
   );
 
   it.each([['manager'], ['registrator'], ['branch']])(
-    "%s: {id, name, status, phone_number} + tariflar (yiFTzkzH) — login, kassa yo'q",
+    "%s: {id, name, status, (registrator: phone_number)} + tariflar (yiFTzkzH) — login, kassa yo'q",
     async (role) => {
       const res = await controller.getMarkets(
         user([role]),
@@ -97,19 +97,23 @@ describe('FIX3 A7 — GET /markets maydonlari rolga qarab', () => {
         // KmWO9gTA: maydon yo'q (eski qator) — sukut true.
         weight_volume_pricing: true,
       };
+      // T7 (QPq2C1co, B3): menejer / filial market telefonini ko'rmaydi
+      // (registrator — ko'radi).
+      const phone = (id: string) =>
+        role === 'registrator' ? { phone_number: `+99890000000${id}` } : {};
       expect(res.data.items).toEqual([
         {
           id: '5',
           name: 'Market 5',
           status: 'active',
-          phone_number: '+998900000005',
+          ...phone('5'),
           ...tariffs,
         },
         {
           id: '7',
           name: 'Market 7',
           status: 'active',
-          phone_number: '+998900000007',
+          ...phone('7'),
           ...tariffs,
         },
       ]);
@@ -131,6 +135,7 @@ describe('FIX3 A7 — GET /markets maydonlari rolga qarab', () => {
     },
   );
 
+  // T7 (B3): menejerda `phone_number` umuman yo'q (null ham emas).
   it("yiFTzkzH: filial xodimi — tarif maydoni yo'q market'da null (undefined emas)", async () => {
     identityClient.send.mockReturnValueOnce(
       of({
@@ -159,7 +164,6 @@ describe('FIX3 A7 — GET /markets maydonlari rolga qarab', () => {
         id: '9',
         name: 'Yangi',
         status: 'active',
-        phone_number: null,
         tariff_home: null,
         tariff_center: null,
         default_tariff: null,
@@ -170,7 +174,6 @@ describe('FIX3 A7 — GET /markets maydonlari rolga qarab', () => {
         id: '10',
         name: 'Standart',
         status: 'active',
-        phone_number: null,
         tariff_home: null,
         tariff_center: null,
         default_tariff: null,

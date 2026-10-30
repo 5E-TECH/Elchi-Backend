@@ -38,6 +38,10 @@ import { Roles } from './auth/roles.decorator';
 import { RolesGuard } from './auth/roles.guard';
 import { ParseBigintIdPipe } from './pipes/parse-bigint-id.pipe';
 import { projectOrderPayloadForRoles } from './auth/order-role-projection';
+import {
+  ProblemContactsService,
+  attachProblemContacts,
+} from './contacts/problem-contacts.service';
 import { projectLogistPayload } from './auth/logist-scope';
 import {
   AssignRegionLogistRequestDto,
@@ -181,6 +185,9 @@ export class LogisticsGatewayController {
     @Optional()
     @Inject('ORDER')
     private readonly orderClient?: ClientProxy,
+    // T7 (QPq2C1co, B2): pochta buyurtmalariga `problem_contacts`. Yo'q
+    // (eski spec'lar) — maydon qo'shilmaydi.
+    @Optional() private readonly problemContacts?: ProblemContactsService,
   ) {}
 
   private sendLogisticsWithTimeout(pattern: { cmd: string }, payload: object) {
@@ -834,10 +841,14 @@ export class LogisticsGatewayController {
         .pipe(timeout(8000)),
     ).then(async (response) =>
       // kH2zZsz3: kuryer pochta buyurtmalari — market tarifi/filial ulushisiz
-      // (GET /orders/:id bilan AYNI rol proyeksiyasi).
+      // (GET /orders/:id bilan AYNI rol proyeksiyasi). T7: `problem_contacts`
+      // proyeksiyadan OLDIN.
       projectOrderPayloadForRoles(
         req.user.roles,
-        await this.enrichOrdersByPostResponse(response),
+        await attachProblemContacts(
+          this.problemContacts,
+          await this.enrichOrdersByPostResponse(response),
+        ),
       ),
     );
   }
@@ -875,9 +886,13 @@ export class LogisticsGatewayController {
         .pipe(timeout(8000)),
     ).then(async (response) =>
       // kH2zZsz3: GET /orders/:id bilan AYNI rol proyeksiyasi.
+      // T7: `problem_contacts` proyeksiyadan OLDIN.
       projectOrderPayloadForRoles(
         req?.user?.roles,
-        await this.enrichRejectedOrdersByPostResponse(response),
+        await attachProblemContacts(
+          this.problemContacts,
+          await this.enrichRejectedOrdersByPostResponse(response),
+        ),
       ),
     );
   }
