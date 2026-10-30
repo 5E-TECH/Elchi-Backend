@@ -175,3 +175,72 @@ describe('gWI4gYkw — smena hisoboti xabarlari', () => {
     expect(pdf.subarray(0, 5).toString()).toBe('%PDF-');
   });
 });
+
+describe('T6 — qaytarilgan to`lovlar smena hisobotida', () => {
+  const reversedSnapshot: ShiftReportSnapshot = {
+    ...snapshot,
+    couriers: [
+      {
+        courier_id: '501',
+        name: 'Ali',
+        count: 1,
+        received: 700_000,
+        reversed: 500_000,
+        total: 200_000,
+        remaining_debt: 500_000,
+      },
+    ],
+    markets: [
+      {
+        market_id: '601',
+        name: 'Market A',
+        payments: [
+          {
+            history_id: '1',
+            amount: 300_000,
+            payment_method: 'cash',
+            card_name: null,
+            at: '2026-10-30T05:00:00.000Z',
+          },
+          {
+            history_id: '2',
+            amount: -300_000,
+            payment_method: 'cash',
+            card_name: null,
+            at: '2026-10-30T06:00:00.000Z',
+            reversed: true,
+          },
+        ],
+        total: 0,
+        balance: 700_000,
+      },
+    ],
+  };
+
+  it('kuryer: «Topshirgan · Qaytarilgan · Sof»; market: «qaytarildi» qatori va data.reversed', async () => {
+    const courier = buildCourierMessage(
+      reversedSnapshot,
+      reversedSnapshot.couriers[0],
+    );
+    expect(courier.body).toContain(
+      "Topshirgan: 700 000 so'm (1 ta) · Qaytarilgan: 500 000 so'm · Sof: 200 000 so'm",
+    );
+    expect(courier.data).toMatchObject({
+      reversed: 500_000,
+      received: 700_000,
+    });
+    const market = buildMarketMessage(
+      reversedSnapshot,
+      reversedSnapshot.markets[0],
+    );
+    expect(market.body).toContain("−300 000 so'm — naqd — qaytarildi");
+    expect((market.data.payments as unknown[])[1]).toMatchObject({
+      amount: -300_000,
+      reversed: true,
+    });
+    const xlsx = await buildXlsx(reversedSnapshot);
+    expect(xlsx.subarray(0, 2).toString()).toBe('PK');
+    const pdf = await buildPdf(reversedSnapshot);
+    expect(pdf.subarray(0, 5).toString()).toBe('%PDF-');
+  });
+});

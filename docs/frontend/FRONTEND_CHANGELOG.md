@@ -47,7 +47,7 @@ qayta yaratildi. Maket: frontend `design/T6-pul-qaytarish`.
   `NOT_CORRECTABLE` (tur qamrovda emas / teskari qator / kontragent kassasi o'chirilgan), `LEGACY_UNLINKED` (eski,
   bog'lanmagan yozuv), `ALREADY_CORRECTED` (ikki superadmin bir vaqtda ham — ikkinchisiga), `WINDOW_EXPIRED` +
   `deadline` (ISO), `INSUFFICIENT_BALANCE` (masalan filial pulni HQ'ga bergan), `CARD_ARCHIVED`, `SAME_AMOUNT`,
-  `AMOUNT_EXCEEDS` + `max` (kuryer qoldig'i + X; market qarzi + X — kichigi); 400 `SHIFT_REQUIRED` /
+  `AMOUNT_EXCEEDS` + `max` (kuryer qoldig'i + X; market qarzi + X — kichigi), `COURIER_MOVED`; 400 `SHIFT_REQUIRED` /
   `BRANCH_SHIFT_REQUIRED`. Xatoda pul o'zgarmaydi.
 - [2026-10-30] 🆕 [finance] — `GET /finance/payment-corrections/settings` → `{ data: { window_days, updated_by,
   updated_at } }` (qator yo'q — `window_days: 30`); `PATCH` `{ "window_days": 7 }` — butun son 1…365, aks holda 400.
@@ -79,11 +79,19 @@ qayta yaratildi. Maket: frontend `design/T6-pul-qaytarish`.
   Market buyurtmalari: oxirgi PAID / PARTLY_PAID buyurtmadan to'langan qism kamayadi (→ PARTLY_PAID / SOLD; CLOSED
   tegilmaydi), fonda. `branch_to_main` tuzatilmaydi (alohida karta); hamkor marketiga xabar yuborilmaydi
   (buyurtma holati sinxroni ham hamkorga ketmaydi).
+- [2026-10-30] 🆕 [finance] — **kuryer ko'chgan**: kuryer to'lovini (click_to_market ning kuryer oyog'i ham)
+  qaytarish / tuzatish faqat kuryerning HOZIRGI joylashuvi asl qabul qiluvchiga mos bo'lsa (MAIN ↔ kuryer HQ'da;
+  filial X ↔ kuryer X da). Aks holda 409 **`COURIER_MOVED`** «Kuryer boshqa filialga o'tgan — bu to'lovni qaytarib
+  yoki tuzatib bo'lmaydi» (TZ «Kuryer boshqa filialga o'tgan» qatori shu sukut qaror bilan almashadi, ega tasdig'i
+  kutilmoqda). `GET /finance/history/:id` superadminga shu holatda `correctable: { allowed: false, code:
+  "COURIER_MOVED" }`. Tekshiruv xizmati javob bermasa — 503.
 - [2026-10-30] ✏️ [finance] — `correct-amount` kuryer to'lovida yangi to'lov oddiy qabul qoidasi bilan: HQ qabul
-  qilgan bo'lsa kuryer HQ'niki va filialga tegishli topshirilmagan savdosi yo'q, filial qabul qilgan bo'lsa kuryer
-  o'sha filialda; aks holda 409 `NOT_CORRECTABLE` (to'liq qaytarish mumkin). Tekshiruv xizmati javob bermasa — 503.
-- [2026-10-30] 🟢 [finance] — smena hisoboti: shu smenada qaytarilgan kuryer topshirig'i kuryer jamidan ayiriladi
-  (`reversed`), qaytarilgan market to'lovi manfiy qator (`reversed: true`, «qaytarildi»). Teskari qatorlarda
+  qilgan bo'lsa kuryerda filialga tegishli topshirilmagan savdo bo'lmasligi kerak, filial qabul qilgan bo'lsa kuryer
+  o'sha filialda; aks holda 409 `NOT_CORRECTABLE` (to'liq qaytarish mumkin). O'sha `Idempotency-Key` bilan takror —
+  tekshiruvsiz 200 `idempotent: true`.
+- [2026-10-30] 🟢 [finance] — smena hisoboti: kuryer bo'lagida `received` (yalpi), `reversed` (shu smenada
+  qaytarilgan), `total` (sof), `count` — qaytarilmaganlar; matn «Topshirgan · Qaytarilgan · Sof». Qaytarilgan market
+  to'lovi manfiy qator (`reversed: true`, «qaytarildi»; bildirishnoma `data.payments[].reversed`, XLSX/PDF ham). Teskari qatorlarda
   `source_user` (asl kontragent) to'ldiriladi.
 - [2026-10-30] 🟢 [bot] — qaytarilgan to'lov kvitansiyasidagi tugma bosilsa: tugmalar olinadi, «Bu to'lov qaytarilgan
   yoki tuzatilgan — yangi holat bildirishnomada.»

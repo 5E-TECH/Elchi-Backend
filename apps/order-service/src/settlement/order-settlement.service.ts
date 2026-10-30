@@ -1014,23 +1014,44 @@ export class OrderSettlementService {
       );
     }
 
-    const result = await this.orderSettlementRepo
-      .createQueryBuilder()
-      .update(OrderSettlement)
-      .set({
-        status: SettlementStatus.PENDING,
-        courier_to_branch_at: null,
-        branch_to_hq_at: null,
-        branch_to_hq_by: null,
-      })
-      .where('order_id IN (:...orderIds)', { orderIds })
-      .andWhere('status = :status', {
-        status: SettlementStatus.BRANCH_SETTLED,
-      })
-      .andWhere('courier_id IS NULL')
-      .andWhere('branch_id IS NULL')
-      .andWhere('is_deleted = :isDeleted', { isDeleted: false })
-      .execute();
+    /**
+     * T6: FIFO endi o'z nomzodlarini FOR UPDATE (createdAt, id) tartibida
+     * qulflaydi. Bulk UPDATE qatorlarni skan tartibida qulflab, `hq_to_market`
+     * FIFO bilan deadlock berishi mumkin edi — avval AYNI tartibda SELECT …
+     * FOR UPDATE, keyin UPDATE (bitta tranzaksiyada).
+     */
+    const result = await this.dataSource.transaction(async (tx) => {
+      const rows = await tx
+        .getRepository(OrderSettlement)
+        .createQueryBuilder('s')
+        .select(['s.id'])
+        .where('s.order_id IN (:...orderIds)', { orderIds })
+        .andWhere('s.status = :status', {
+          status: SettlementStatus.BRANCH_SETTLED,
+        })
+        .andWhere('s.courier_id IS NULL')
+        .andWhere('s.branch_id IS NULL')
+        .andWhere('s.isDeleted = :isDeleted', { isDeleted: false })
+        .orderBy('s.createdAt', 'ASC')
+        .addOrderBy('s.id', 'ASC')
+        .setLock('pessimistic_write')
+        .getMany();
+      if (!rows.length) return { affected: 0 };
+      return tx
+        .createQueryBuilder()
+        .update(OrderSettlement)
+        .set({
+          status: SettlementStatus.PENDING,
+          courier_to_branch_at: null,
+          branch_to_hq_at: null,
+          branch_to_hq_by: null,
+        })
+        .where('id IN (:...ids)', { ids: rows.map((row) => row.id) })
+        .andWhere('status = :status', {
+          status: SettlementStatus.BRANCH_SETTLED,
+        })
+        .execute();
+    });
 
     const marketSettled = await this.orderSettlementRepo.find({
       where: {
@@ -1932,11 +1953,27 @@ export class OrderSettlementService {
     const rawReceiver = String(data?.receiver_cashbox_type ?? '').trim();
     const receiverBranchId =
       String(data?.receiver_branch_id ?? '').trim() || null;
-    const receiverType: 'main' | 'branch' | null =
+    let receiverType: 'main' | 'branch' | null =
       rawReceiver === 'main'
         ? 'main'
         : rawReceiver === 'branch' && receiverBranchId
           ? 'branch'
+          : null;
+    // HQ filialining o'z BRANCH kassasi qabul qilgan bo'lsa — HQ qatorlari
+    // (`branch_id` NULL, c2b FIFO ularni BRANCH_SETTLED qiladi): MAIN kabi.
+    if (
+      receiverType === 'branch' &&
+      receiverBranchId &&
+      (await this.resolveHqBranchId()) === receiverBranchId
+    ) {
+      receiverType = 'main';
+    }
+    /** Qoldiq tegi: MAIN → NULL, filial → id; qabul qiluvchi noma'lum — undefined. */
+    const receiverTag: string | null | undefined =
+      level !== 'courier_to_branch' || !receiverType
+        ? undefined
+        : receiverType === 'branch'
+          ? receiverBranchId
           : null;
     const token = String(data?.request_id ?? '').trim();
     const appliedKey = token
@@ -1982,7 +2019,13 @@ export class OrderSettlementService {
         carryBefore = Number(carryRow?.amount ?? 0) || 0;
       }
 
-      const rest = round2(amount - Math.min(Math.max(carryBefore, 0), amount));
+      // Musbat qoldiq faqat SHU qabul qiluvchiniki bo'lsa ishlatiladi (boshqa
+      // filial qoldig'i bu qaytarishni qoplamaydi).
+      const carryTag = carryRow?.branch_id ? String(carryRow.branch_id) : null;
+      const carryUsable = receiverTag === undefined || carryTag === receiverTag;
+      const rest = round2(
+        amount - (carryUsable ? Math.min(Math.max(carryBefore, 0), amount) : 0),
+      );
       if (rest > 0) {
         // Qatorlar FOR UPDATE — FIFO (`runFifoSettlement`) bilan BIR XIL
         // tartibda (createdAt ASC) qulflanadi (deadlock yo'q), keyin eng
@@ -2059,9 +2102,13 @@ export class OrderSettlementService {
       if (carryRepo && carryRow) {
         carryAfter = round2(carryBefore - amount + reopened);
         let branchId = carryRow.branch_id ?? null;
-        if (level === 'courier_to_branch' && receiverType) {
-          // Qoldiq (manfiy bo'lsa ham) asl qabul qiluvchi bilan belgilanadi.
-          branchId = receiverType === 'branch' ? receiverBranchId : null;
+        if (receiverTag !== undefined) {
+          // Teg faqat qoldiq qabul qiluvchiniki bo'lib qolganda o'zgaradi
+          // (0 / manfiy — qarz shu qabul qiluvchida); boshqa filialning
+          // musbat qoldig'i o'z tegini saqlaydi.
+          if (carryAfter <= 0 || carryTag === receiverTag) {
+            branchId = receiverTag;
+          }
         } else if (level === 'courier_to_branch' && !branchId) {
           const sample = await repo.findOne({
             where: { courier_id: matchValue },

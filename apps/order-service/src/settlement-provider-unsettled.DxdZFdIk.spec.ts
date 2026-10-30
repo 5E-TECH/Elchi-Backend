@@ -12,7 +12,9 @@ type Row = Record<string, unknown>;
 function makeService(marketSettled: Row[] = []) {
   const setCalls: Row[] = [];
   const whereCalls: Array<[string, Row | undefined]> = [];
+  const lockCalls: string[] = [];
   const qb = {
+    select: jest.fn(() => qb),
     update: jest.fn(() => qb),
     set: jest.fn((patch: Row) => {
       setCalls.push(patch);
@@ -26,18 +28,33 @@ function makeService(marketSettled: Row[] = []) {
       whereCalls.push([sql, params]);
       return qb;
     }),
+    orderBy: jest.fn(() => qb),
+    addOrderBy: jest.fn(() => qb),
+    setLock: jest.fn((mode: string) => {
+      lockCalls.push(mode);
+      return qb;
+    }),
+    // T6: avval qatorlar FOR UPDATE bilan tanlanadi (deadlock'siz tartib).
+    getMany: jest.fn(() => Promise.resolve([{ id: '7' }])),
     execute: jest.fn(() => Promise.resolve({ affected: 1 })),
+  };
+  const tx = {
+    getRepository: jest.fn(() => ({ createQueryBuilder: jest.fn(() => qb) })),
+    createQueryBuilder: jest.fn(() => qb),
+  };
+  const dataSource = {
+    transaction: jest.fn((cb: (manager: typeof tx) => unknown) => cb(tx)),
   };
   const repo = {
     createQueryBuilder: jest.fn(() => qb),
     find: jest.fn(() => Promise.resolve(marketSettled)),
   };
   const service = new OrderSettlementService(
-    {} as never,
+    dataSource as never,
     repo as never,
     {} as never,
   );
-  return { service, setCalls, whereCalls, repo, qb };
+  return { service, setCalls, whereCalls, lockCalls, repo, qb, dataSource };
 }
 
 describe('DxdZFdIk — revertProviderSettledToHq', () => {
@@ -58,12 +75,18 @@ describe('DxdZFdIk — revertProviderSettledToHq', () => {
     const sqls = h.whereCalls.map(([sql]) => sql);
     expect(sqls).toEqual(
       expect.arrayContaining([
-        'order_id IN (:...orderIds)',
+        's.order_id IN (:...orderIds)',
+        's.status = :status',
+        's.courier_id IS NULL',
+        's.branch_id IS NULL',
+        'id IN (:...ids)',
         'status = :status',
-        'courier_id IS NULL',
-        'branch_id IS NULL',
       ]),
     );
+    expect(h.lockCalls).toEqual(['pessimistic_write']);
+    expect(
+      h.whereCalls.find(([sql]) => sql === 's.status = :status')?.[1],
+    ).toEqual({ status: SettlementStatus.BRANCH_SETTLED });
     expect(
       h.whereCalls.find(([sql]) => sql === 'status = :status')?.[1],
     ).toEqual({ status: SettlementStatus.BRANCH_SETTLED });
@@ -81,7 +104,7 @@ describe('DxdZFdIk — revertProviderSettledToHq', () => {
       order_ids: ['', 'abc'],
     })) as { data: Row };
 
-    expect(h.repo.createQueryBuilder).not.toHaveBeenCalled();
+    expect(h.dataSource.transaction).not.toHaveBeenCalled();
     expect(res.data.affected).toBe(0);
   });
 });

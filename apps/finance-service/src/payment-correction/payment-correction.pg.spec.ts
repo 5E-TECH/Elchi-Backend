@@ -904,7 +904,9 @@ describePg('T6 payment correction — haqiqiy Postgres', () => {
     expect(snapshot.couriers).toEqual([
       expect.objectContaining({
         courier_id: '301',
-        count: 2,
+        // Qaytarilgani sanalmaydi; yalpi 700 000, qaytarilgan 500 000, sof 200 000.
+        count: 1,
+        received: 700_000,
         total: 200_000,
         reversed: 500_000,
       }),
@@ -916,6 +918,44 @@ describePg('T6 payment correction — haqiqiy Postgres', () => {
       [300_000, false],
       [-300_000, true],
     ]);
+  });
+
+  it('G: marketga to`lov TAHRIRI — buyurtma sinxroni hamkorga holat yubormaydi (suppress_external_sync)', async () => {
+    await seed('0', Cashbox_type.MAIN, 1_000_000);
+    await seed('501', Cashbox_type.FOR_MARKET);
+    await sale('501', Cashbox_type.FOR_MARKET, 700_000);
+    const res0 = (await finance.paymentsToMarket({
+      market_id: '501',
+      amount: 300_000,
+      payment_method: PaymentMethod.CASH,
+      created_by: '5',
+      dedup_epoch: 'mp-g',
+    })) as { data: { transfer_id: string } };
+    marketOrders = [
+      {
+        id: '911',
+        status: 'paid',
+        to_be_paid: 300_000,
+        paid_amount: 300_000,
+        extra_cost: 0,
+      },
+    ];
+    const leg = await legOf(res0.data.transfer_id, Cashbox_type.MAIN);
+    await correct(String(leg.id), 200_000);
+    await Promise.all(syncs);
+    const writes = orderCalls.filter(
+      (c) => c.cmd === 'order.update_normalized',
+    );
+    expect(writes.length).toBeGreaterThan(0);
+    for (const call of writes) {
+      expect(call.payload).toMatchObject({ suppress_external_sync: true });
+    }
+    expect(
+      orderCalls.some(
+        (c) => c.cmd === 'integration.partner.settlement.enqueue',
+      ),
+    ).toBe(false);
+    expect(await box('0', Cashbox_type.MAIN)).toMatchObject({ cash: 800_000 });
   });
 
   it('⭐ 11: qaytarilgan to`lov kvitansiyasida «Tasdiqlayman» → 409 PAYMENT_CORRECTED', async () => {

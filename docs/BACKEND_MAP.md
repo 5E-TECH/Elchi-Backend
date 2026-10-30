@@ -609,7 +609,12 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
   `libs/common/src/finance/payment-correction.ts` (+ `PUBLIC_ERROR_CODES`).
   History responses carry `transfer_id`, `reverses_history_id`, `correction`;
   `/history/:id` gives SA `correctable`. Courier ack on a corrected payment →
-  409 `PAYMENT_CORRECTED`. RMQ: `finance.payment_correction.{reverse,
+  409 `PAYMENT_CORRECTED`. Gateway (via `finance.payment_correction.context`:
+  receiver, courier, `replay`) refuses a courier payment whose courier no
+  longer sits at the original receiver (409 `COURIER_MOVED`) and, for
+  correct-amount, applies C3/C4; a same-key replay skips both. Retreat maps
+  an HQ-branch BRANCH receiver to MAIN and only spends carry tagged for the
+  same receiver. RMQ: `finance.payment_correction.{reverse,
   correct_amount,context,settings.get,settings.update}`.
 - **Expense categories (Elchi Pochta №1):** `cashbox_expense_categories`
   (superadmin CRUD, soft delete); a manual `spend` stores the category id +

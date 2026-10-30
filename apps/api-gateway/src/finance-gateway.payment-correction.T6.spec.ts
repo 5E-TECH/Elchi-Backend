@@ -84,6 +84,7 @@ describe('T6 — /finance/history/:id/{reverse,correct-amount} gateway', () => {
 
   let hqCheck: jest.SpyInstance;
   let branchCheck: jest.SpyInstance;
+  let placement: jest.SpyInstance;
   beforeEach(() => {
     finance.send.mockClear();
     branch.send.mockClear();
@@ -104,6 +105,21 @@ describe('T6 — /finance/history/:id/{reverse,correct-amount} gateway', () => {
     branchCheck = jest
       .spyOn(controller as never, 'assertCourierInManagerBranch')
       .mockResolvedValue(undefined as never);
+    jest
+      .spyOn(controller as never, 'resolveHqBranchId')
+      .mockResolvedValue('1' as never);
+    placement = jest
+      .spyOn(controller as never, 'findBranchAssignmentOrThrow')
+      .mockImplementation((() =>
+        Promise.resolve({
+          branch_id:
+            context.receiver_cashbox_type === 'branch'
+              ? String(context.receiver_branch_id)
+              : '1',
+          role: 'COURIER',
+          name: '',
+          phone_number: null,
+        })) as never);
   });
   afterEach(() => jest.restoreAllMocks());
 
@@ -239,5 +255,83 @@ describe('T6 — /finance/history/:id/{reverse,correct-amount} gateway', () => {
     expect(ok.status).toBe(201);
     expect(hqCheck).not.toHaveBeenCalled();
     expect(branchCheck).not.toHaveBeenCalled();
+  });
+
+  it('⭐ B: kuryer boshqa filialga o`tgan — reverse ham, correct-amount ham 409 COURIER_MOVED', async () => {
+    placement.mockResolvedValue({ branch_id: '22', role: 'COURIER' });
+    const edit = await request(http())
+      .post('/finance/history/845/correct-amount')
+      .set('Idempotency-Key', 'm-edit')
+      .send({ reason: 'Xato kiritildi', new_amount: 100 });
+    expect(edit.status).toBe(409);
+    expect(edit.body.code).toBe('COURIER_MOVED');
+    expect(hqCheck).not.toHaveBeenCalled();
+    const res = await request(http())
+      .post('/finance/history/845/reverse')
+      .set('Idempotency-Key', 'm-r2')
+      .send({ reason: 'Xato kiritildi' });
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('COURIER_MOVED');
+    expect(correctionCall()).toBeUndefined();
+  });
+
+  it('E2: o`sha kalit bilan takror (context.replay) — joylashuv tekshiruvisiz finance ga', async () => {
+    context = { ...context, replay: true };
+    placement.mockResolvedValue({ branch_id: '22', role: 'COURIER' });
+    hqCheck.mockRejectedValue(new BadRequestException('x'));
+    reply = { statusCode: 200, data: { idempotent: true } };
+    const res = await request(http())
+      .post('/finance/history/845/correct-amount')
+      .set('Idempotency-Key', 'k-replay')
+      .send({ reason: 'Summa xato', new_amount: 50000 });
+    expect(res.status).toBe(200);
+    expect(res.body.data.idempotent).toBe(true);
+    expect(placement).not.toHaveBeenCalled();
+    const ctxCall = (
+      finance.send.mock.calls as unknown as Array<
+        [{ cmd: string }, Record<string, unknown>]
+      >
+    ).find(([p]) => p.cmd === 'finance.payment_correction.context');
+    expect(ctxCall?.[1]).toEqual({
+      history_id: '845',
+      idempotency_key: 'k-replay',
+    });
+  });
+
+  it('E3: kodsiz xato (RMQ / identity bo`sh) — 503, 409 emas; joylashuvni o`qib bo`lmasa — 503', async () => {
+    hqCheck.mockRejectedValueOnce(new Error('connection closed'));
+    const res = await request(http())
+      .post('/finance/history/845/correct-amount')
+      .set('Idempotency-Key', 'k-e3')
+      .send({ reason: 'Summa xato', new_amount: 50000 });
+    expect(res.status).toBe(503);
+    placement.mockRejectedValueOnce(new Error('branch down'));
+    const down = await request(http())
+      .post('/finance/history/845/reverse')
+      .set('Idempotency-Key', 'k-e3b')
+      .send({ reason: 'Xato kiritildi' });
+    expect(down.status).toBe(503);
+  });
+
+  it('GET /history/:id (superadmin): kuryer ko`chgan — correctable.allowed=false, code COURIER_MOVED', async () => {
+    placement.mockResolvedValue({ branch_id: '22', role: 'COURIER' });
+    finance.send.mockImplementation((pattern: { cmd: string }) =>
+      of(
+        pattern.cmd === 'finance.payment_correction.context'
+          ? { data: context }
+          : {
+              statusCode: 200,
+              data: {
+                id: '845',
+                correctable: { allowed: true, deadline: 'x', window_days: 30 },
+              },
+            },
+      ),
+    );
+    const res = await request(http()).get('/finance/history/845');
+    expect(res.body.data.correctable).toMatchObject({
+      allowed: false,
+      code: 'COURIER_MOVED',
+    });
   });
 });

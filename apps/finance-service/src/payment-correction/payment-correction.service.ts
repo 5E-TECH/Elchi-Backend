@@ -108,6 +108,8 @@ const MESSAGES: Record<PaymentCorrectionErrorCode, string> = {
   IDEMPOTENCY_KEY_REUSED: "Bu Idempotency-Key boshqa so'rov uchun ishlatilgan",
   IDEMPOTENCY_KEY_REQUIRED: 'Idempotency-Key sarlavhasi majburiy',
   PAYMENT_CORRECTED: "To'lov qaytarilgan yoki tuzatilgan",
+  COURIER_MOVED:
+    "Kuryer boshqa filialga o'tgan — bu to'lovni qaytarib yoki tuzatib bo'lmaydi",
 };
 
 function failCode(
@@ -236,9 +238,20 @@ export class PaymentCorrectionService {
    * Gateway uchun: to'lovni qaysi kassa qabul qilgan (BRANCH bo'lsa —
    * filial boshlig'ini bildirishnomaga qo'shish uchun). Pul o'zgarmaydi.
    */
-  async context(input: { history_id?: unknown }) {
+  async context(input: { history_id?: unknown; idempotency_key?: unknown }) {
     try {
       const history = await this.loadHistory(text(input.history_id));
+      // O'sha `Idempotency-Key` bilan tuzatish allaqachon bor — gateway
+      // joylashuv tekshiruvini o'tkazib yuboradi (javob 200 idempotent).
+      const key = text(input.idempotency_key);
+      const replay = key
+        ? Boolean(
+            await this.dataSource.manager.findOne(PaymentCorrection, {
+              where: { idempotency_key: key },
+              select: ['id'],
+            }),
+          )
+        : false;
       const shape = history.transfer_id
         ? (
             await evaluateCorrectable(this.dataSource.manager, history, {
@@ -260,12 +273,14 @@ export class PaymentCorrectionService {
               courier_id: shape.courierLeg
                 ? String(shape.courierLeg.cashbox.user_id)
                 : null,
+              replay,
             }
           : {
               payment_kind: null,
               receiver_cashbox_type: null,
               receiver_branch_id: null,
               courier_id: null,
+              replay,
             },
       };
     } catch (error) {

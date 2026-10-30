@@ -495,7 +495,14 @@ export class ShiftReportService {
       manager.createQueryBuilder(CashboxHistory, 'h'),
     )
       .select('h.source_user_id', 'user_id')
-      .addSelect('COUNT(*)', 'count')
+      // (T6) soni — faqat qaytarilmagan to'lovlar; summa — yalpi (qaytarilgan
+      // qism pastda alohida ayiriladi).
+      .addSelect(
+        `COUNT(*) FILTER (WHERE NOT EXISTS (
+           SELECT 1 FROM ${manager.connection.getMetadata(CashboxHistory).tablePath} r
+            WHERE r.reverses_history_id = h.id AND r.is_deleted = false))`,
+        'count',
+      )
       .addSelect('COALESCE(SUM(h.amount), 0)', 'total')
       .andWhere('h.operation_type = :income', {
         income: Operation_type.INCOME,
@@ -635,12 +642,13 @@ export class ShiftReportService {
     const couriers: CourierSlice[] = courierRows
       .map((row) => {
         const reversed = courierReversed.get(String(row.user_id)) ?? 0;
+        const received = num(row.total) ?? 0;
         return {
           courier_id: String(row.user_id),
           name: names.get(String(row.user_id)) ?? null,
           count: Number(row.count) || 0,
-          total: Math.round(((num(row.total) ?? 0) - reversed) * 100) / 100,
-          ...(reversed > 0 ? { reversed } : {}),
+          total: Math.round((received - reversed) * 100) / 100,
+          ...(reversed > 0 ? { received, reversed } : {}),
           remaining_debt: balances.couriers.get(String(row.user_id)) ?? null,
         };
       })

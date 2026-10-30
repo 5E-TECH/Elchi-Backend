@@ -34,6 +34,11 @@ export const PAYMENT_CORRECTION_ERROR_CODES = {
   IDEMPOTENCY_KEY_REQUIRED: 'IDEMPOTENCY_KEY_REQUIRED',
   /** 409 — kuryer qaytarilgan / tuzatilgan to'lov kvitansiyasiga javob berdi. */
   PAYMENT_CORRECTED: 'PAYMENT_CORRECTED',
+  /**
+   * 409 — kuryer asl qabul qiluvchidan (HQ / o'sha filial) boshqa joyga
+   * o'tgan: kuryer to'lovini qaytarib ham, tuzatib ham bo'lmaydi.
+   */
+  COURIER_MOVED: 'COURIER_MOVED',
 } as const;
 
 export type PaymentCorrectionErrorCode =

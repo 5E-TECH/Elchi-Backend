@@ -60,6 +60,7 @@ export const PUBLIC_ERROR_CODES: Readonly<Record<string, readonly string[]>> = {
   [PC.IDEMPOTENCY_KEY_REUSED]: [],
   [PC.IDEMPOTENCY_KEY_REQUIRED]: [],
   [PC.PAYMENT_CORRECTED]: [],
+  [PC.COURIER_MOVED]: [],
   // Sessiya yaratilganiga SESSION_REVOKE_LOCK_HOURS (sukut 48) to'lmagan:
   // `available_at` — qachondan boshqa sessiyalarni yopish mumkin (ISO).
   [SESSION_TOO_NEW]: ['available_at'],

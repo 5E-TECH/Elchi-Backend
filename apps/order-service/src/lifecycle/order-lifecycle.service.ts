@@ -6472,6 +6472,23 @@ export class OrderLifecycleService {
     return fieldPath.split('.').reduce((acc, key) => acc?.[key], obj);
   }
 
+  /**
+   * `updateFull` dan keyin hamkor (tashqi) holat sinxroni. T6:
+   * `suppressExternalSync` — superadmin to'lov tuzatishi, hamkorga xabar yo'q.
+   */
+  private syncExternalAfterUpdate(
+    updated: Order,
+    oldStatus: Order_status,
+    options?: { suppressExternalSync?: boolean },
+  ): void {
+    const newStatus = updated.status;
+    if (oldStatus === newStatus || options?.suppressExternalSync) return;
+    const action = this.resolveSyncAction(oldStatus, newStatus);
+    if (action) {
+      void this.queueExternalStatusSync(updated, action, oldStatus, newStatus);
+    }
+  }
+
   private async queueExternalStatusSync(
     order: Order,
     action: 'sold' | 'canceled' | 'paid' | 'rollback' | 'waiting',
@@ -11132,17 +11149,7 @@ export class OrderLifecycleService {
 
     const updated = await this.findById(order.id);
     const newStatus = updated.status;
-    if (oldStatus !== newStatus && !options?.suppressExternalSync) {
-      const action = this.resolveSyncAction(oldStatus, newStatus);
-      if (action) {
-        void this.queueExternalStatusSync(
-          updated,
-          action,
-          oldStatus,
-          newStatus,
-        );
-      }
-    }
+    this.syncExternalAfterUpdate(updated, oldStatus, options);
 
     // Generic edit audit. Skipped when an internal caller already recorded a
     // richer domain event (audit: false). `items` is summarised to a count so

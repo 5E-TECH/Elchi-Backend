@@ -45,7 +45,7 @@ export class PaymentCorrectionController {
 
   @MessagePattern({ cmd: 'finance.payment_correction.context' })
   context(
-    @Payload() data: { history_id?: string },
+    @Payload() data: { history_id?: string; idempotency_key?: string },
     @Ctx() context: RmqContext,
   ) {
     return executeAndAck(this.rmqService, context, () =>

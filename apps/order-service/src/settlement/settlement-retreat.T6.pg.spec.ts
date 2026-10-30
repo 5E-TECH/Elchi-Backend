@@ -44,6 +44,8 @@ describePg('T6-BE-3 settlement retreat — haqiqiy Postgres', () => {
       db,
       db.getRepository(OrderSettlement),
       { send: jest.fn() } as never,
+      // HQ filial id si — 1.
+      { getHqBranchId: () => Promise.resolve('1') } as never,
     );
   }, 30_000);
 
@@ -369,5 +371,73 @@ describePg('T6-BE-3 settlement retreat — haqiqiy Postgres', () => {
     await fifo;
     expect(await statusOf(r.id)).toBe(SettlementStatus.PENDING);
     expect(await carry('branch_to_hq', '33')).toBe(50_000);
+  });
+  it('⭐ A: HQ filialining BRANCH kassasi qabul qilgan — MAIN kabi (HQ qatorlari ochiladi, teg NULL)', async () => {
+    const hq = await row({
+      courier_id: '13',
+      courier_amount: 70_000,
+      status: SettlementStatus.BRANCH_SETTLED,
+    });
+    await service.retreatSettlement({
+      level: 'courier_to_branch',
+      match_value: '13',
+      amount: 70_000,
+      request_id: 'pc:40:courier_to_branch',
+      receiver_cashbox_type: 'branch',
+      receiver_branch_id: '1',
+    });
+    expect(await statusOf(hq.id)).toBe(SettlementStatus.PENDING);
+    const carryRow = await db
+      .getRepository(OrderSettlementCarry)
+      .findOneByOrFail({ level: 'courier_to_branch', party_id: '13' });
+    expect(Number(carryRow.amount)).toBe(0);
+    expect(carryRow.branch_id).toBeNull();
+  });
+
+  it('C: boshqa filialning musbat qoldig`i HQ qaytarishini qoplamaydi va tegini saqlaydi', async () => {
+    const hq = await row({
+      courier_id: '14',
+      courier_amount: 30_000,
+      status: SettlementStatus.BRANCH_SETTLED,
+    });
+    await db.getRepository(OrderSettlementCarry).save({
+      level: 'courier_to_branch',
+      party_id: '14',
+      branch_id: '22',
+      amount: 50_000,
+    });
+    await service.retreatSettlement({
+      level: 'courier_to_branch',
+      match_value: '14',
+      amount: 30_000,
+      request_id: 'pc:41:courier_to_branch',
+      receiver_cashbox_type: 'main',
+    });
+    expect(await statusOf(hq.id)).toBe(SettlementStatus.PENDING);
+    const carryRow = await db
+      .getRepository(OrderSettlementCarry)
+      .findOneByOrFail({ level: 'courier_to_branch', party_id: '14' });
+    expect(Number(carryRow.amount)).toBe(50_000);
+    expect(carryRow.branch_id).toBe('22');
+  });
+
+  it('D: revertProviderSettledToHq — qulflab qaytaradi, MARKET_SETTLED tegilmaydi', async () => {
+    const a = await row({
+      market_id: '701',
+      status: SettlementStatus.BRANCH_SETTLED,
+    });
+    const b = await row({
+      market_id: '701',
+      status: SettlementStatus.MARKET_SETTLED,
+    });
+    const res = await service.revertProviderSettledToHq({
+      order_ids: [a.order_id, b.order_id],
+    });
+    expect(res.data).toMatchObject({
+      affected: 1,
+      market_settled_order_ids: [b.order_id],
+    });
+    expect(await statusOf(a.id)).toBe(SettlementStatus.PENDING);
+    expect(await statusOf(b.id)).toBe(SettlementStatus.MARKET_SETTLED);
   });
 });

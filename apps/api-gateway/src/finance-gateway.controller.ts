@@ -157,6 +157,8 @@ interface PaymentCorrectionContext {
   receiver_cashbox_type?: Cashbox_type | null;
   receiver_branch_id?: string | null;
   courier_id?: string | null;
+  /** O'sha `Idempotency-Key` bilan tuzatish allaqachon bor. */
+  replay?: boolean;
 }
 
 /** Kuryer kassasi sahifasi uchun foydalanuvchi qisqa ma'lumoti (C3). */
@@ -3416,6 +3418,22 @@ export class FinanceGatewayController {
     );
 
     if (this.isPrivileged(req?.user)) {
+      // T6: kuryer ko'chgan bo'lsa — `correctable.allowed = false` (COURIER_MOVED).
+      const correctable = response?.data?.correctable;
+      if (correctable?.allowed === true) {
+        try {
+          const context = await this.paymentCorrectionContext(id);
+          if ((await this.courierMovedVerdict(context, req.user)) === 'moved') {
+            response.data.correctable = {
+              ...correctable,
+              allowed: false,
+              code: PAYMENT_CORRECTION_ERROR_CODES.COURIER_MOVED,
+            };
+          }
+        } catch {
+          // Ko'rsatish uchun — amalning o'zi qayta tekshiradi.
+        }
+      }
       return response;
     }
 
@@ -3675,9 +3693,14 @@ export class FinanceGatewayController {
         code: PAYMENT_CORRECTION_ERROR_CODES.IDEMPOTENCY_KEY_REQUIRED,
       });
     }
-    const context = await this.paymentCorrectionContext(id);
-    if (cmd === 'finance.payment_correction.correct_amount') {
-      await this.assertCorrectionReceivable(context, user);
+    const context = await this.paymentCorrectionContext(id, key);
+    // O'sha kalit bilan tuzatish allaqachon commit bo'lgan — finance 200
+    // idempotent qaytaradi; kuryer orada ko'chgan bo'lsa ham tekshirmaymiz.
+    if (!context.replay) {
+      await this.assertCourierNotMoved(context, user);
+      if (cmd === 'finance.payment_correction.correct_amount') {
+        await this.assertCorrectionReceivable(context, user);
+      }
     }
     const notify = await this.paymentCorrectionManagerIds(context, user);
     return this.send(
@@ -3696,11 +3719,15 @@ export class FinanceGatewayController {
   /** (T6) To'lov konteksti (qabul qiluvchi, kuryer). Xato — bo'sh kontekst. */
   private async paymentCorrectionContext(
     historyId: string,
+    idempotencyKey?: string,
   ): Promise<PaymentCorrectionContext> {
     try {
       const res = await this.send<{ data?: PaymentCorrectionContext }>(
         { cmd: 'finance.payment_correction.context' },
-        { history_id: historyId },
+        {
+          history_id: historyId,
+          ...(idempotencyKey ? { idempotency_key: idempotencyKey } : {}),
+        },
         3000,
       );
       return res?.data ?? {};
@@ -3740,16 +3767,72 @@ export class FinanceGatewayController {
         await this.assertHqCourierReceivable(courierId, user);
       }
     } catch (error) {
-      if (error instanceof ServiceUnavailableException) throw error;
+      // Faqat 4xx joylashuv hukmlari (400 filial savdosi, 403, 404) — 409.
+      // Kodsiz xato (RMQ, identity bo'sh javob) — tekshirib bo'lmadi: 503.
       const status = rpcErrorStatus(error);
-      if (status !== null && status >= 500) throw error;
+      if (status === null || status >= 500) {
+        throw new ServiceUnavailableException(
+          FinanceGatewayController.RECEIVE_CHECK_UNAVAILABLE_MESSAGE,
+        );
+      }
       throw new ConflictException({
         statusCode: 409,
         code: PAYMENT_CORRECTION_ERROR_CODES.NOT_CORRECTABLE,
         message:
-          "Summani tuzatib bo'lmaydi: kuryer endi asl qabul qiluvchiga tegishli emas yoki filialga tegishli topshirilmagan savdosi bor — to'lovni to'liq qaytaring",
+          "Summani tuzatib bo'lmaydi: kuryerda filialga tegishli topshirilmagan savdo bor yoki u qabul qilinmaydi — to'lovni to'liq qaytaring",
       });
     }
+  }
+
+  /**
+   * (T6, ega sukut qarori) Kuryer to'lovini qaytarish / tuzatish faqat
+   * kuryerning HOZIRGI joylashuvi asl qabul qiluvchiga mos bo'lsa: MAIN ↔
+   * kuryer HQ filialida, BRANCH X ↔ kuryer X filialida. Aks holda daftar va
+   * kassa turli filiallarda ajralib ketardi → 409 `COURIER_MOVED`.
+   * Tekshirib bo'lmasa — 503.
+   */
+  private async assertCourierNotMoved(
+    context: PaymentCorrectionContext,
+    user: JwtUser,
+  ): Promise<void> {
+    const verdict = await this.courierMovedVerdict(context, user);
+    if (verdict === 'moved') {
+      throw new ConflictException({
+        statusCode: 409,
+        code: PAYMENT_CORRECTION_ERROR_CODES.COURIER_MOVED,
+        message:
+          "Kuryer boshqa filialga o'tgan — bu to'lovni qaytarib yoki tuzatib bo'lmaydi",
+      });
+    }
+    if (verdict === 'unavailable') {
+      throw new ServiceUnavailableException(
+        FinanceGatewayController.RECEIVE_CHECK_UNAVAILABLE_MESSAGE,
+      );
+    }
+  }
+
+  /** `ok` | `moved` | `unavailable` (kuryer to'lovi emas — `ok`). */
+  private async courierMovedVerdict(
+    context: PaymentCorrectionContext,
+    user: JwtUser,
+  ): Promise<'ok' | 'moved' | 'unavailable'> {
+    const courierId = context.courier_id ? String(context.courier_id) : '';
+    if (context.payment_kind !== 'courier_payment' || !courierId) return 'ok';
+    let expected: string;
+    let assignment: BranchAssignment | null;
+    try {
+      [expected, assignment] = await Promise.all([
+        context.receiver_cashbox_type === Cashbox_type.BRANCH
+          ? Promise.resolve(String(context.receiver_branch_id ?? ''))
+          : this.resolveHqBranchId(),
+        this.findBranchAssignmentOrThrow(courierId, user),
+      ]);
+    } catch {
+      return 'unavailable';
+    }
+    return assignment && expected && assignment.branch_id === expected
+      ? 'ok'
+      : 'moved';
   }
 
   private async paymentCorrectionManagerIds(

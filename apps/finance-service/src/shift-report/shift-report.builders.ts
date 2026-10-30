@@ -56,6 +56,8 @@ export interface CourierSlice {
   total: number;
   /** (T6) Shu smenada qaytarilgan / tuzatilgan to'lovlar summasi (bo'lsa). */
   reversed?: number;
+  /** (T6) Qaytarish bo'lsa — smenadagi yalpi topshirilgan summa. */
+  received?: number;
   /** Kuryer kassasidagi joriy qoldiq (qarz) — hisobot paytida. */
   remaining_debt: number | null;
 }
@@ -215,10 +217,9 @@ export function buildCourierMessage(
 ): ShiftReportMessage {
   const lines = [
     `Smena #${snapshot.shift_id} (${tashkentDateTime(snapshot.closed_at)}) yakuni:`,
-    `Siz topshirgan: ${formatSom(slice.total)} (${slice.count} ta to'lov)`,
-    ...(slice.reversed
-      ? [`Shundan qaytarilgan: ${formatSom(slice.reversed)}`]
-      : []),
+    slice.reversed
+      ? `Topshirgan: ${formatSom(slice.received ?? slice.total + slice.reversed)} (${slice.count} ta) · Qaytarilgan: ${formatSom(slice.reversed)} · Sof: ${formatSom(slice.total)}`
+      : `Siz topshirgan: ${formatSom(slice.total)} (${slice.count} ta to'lov)`,
     ...(slice.remaining_debt != null
       ? [`Qolgan qarzingiz: ${formatSom(slice.remaining_debt)}`]
       : []),
@@ -232,7 +233,9 @@ export function buildCourierMessage(
       courier_id: slice.courier_id,
       total: slice.total,
       count: slice.count,
-      ...(slice.reversed ? { reversed: slice.reversed } : {}),
+      ...(slice.reversed
+        ? { reversed: slice.reversed, received: slice.received ?? null }
+        : {}),
       remaining_debt: slice.remaining_debt,
       telegram_cabinet_link: true,
     },
@@ -284,6 +287,7 @@ export function buildMarketMessage(
         amount: line.amount,
         payment_method: line.payment_method,
         card_name: line.card_name,
+        ...(line.reversed ? { reversed: true } : {}),
       })),
     },
     link: SELF_CASHBOX_LINK,
