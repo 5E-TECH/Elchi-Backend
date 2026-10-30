@@ -9,7 +9,9 @@ export const CHAT_CONCURRENCY = 4;
 /** Boshqa replika qulfni ushlab tursa — ko'pi bilan shuncha kutiladi. */
 export const LOCK_WAIT_MS = 15_000;
 /** Lease muddati; ish davom etsa har uchdan birida uzaytiriladi. */
-export const LOCK_LEASE_MS = 60_000;
+export const LOCK_LEASE_MS = 12_000;
+/** Lease uzaytirish oralig'i — bitta-ikkita o'tkazib yuborilsa ham qulf yo'qolmaydi. */
+export const LOCK_HEARTBEAT_MS = 4_000;
 const LOCK_POLL_MS = 200;
 
 export type SequenceResult = 'done' | 'dropped' | 'failed';
@@ -106,7 +108,7 @@ export class ChatSequencer {
    * ochiq tranzaksiya EMAS: ish davomida pool ulanishi band qilinmaydi
    * (avval har faol chat advisory qulf uchun bitta ulanishni ishlov oxirigacha
    * ushlardi). Qulf `LOCK_LEASE_MS` ga olinadi va ish davom etsa har
-   * uchdan birida uzaytiriladi; egasi yiqilsa muddat o'tgach o'zi bo'shaydi.
+   * `LOCK_HEARTBEAT_MS` da uzaytiriladi (o'zi qoldirgan qator ham qayta olinadi); egasi yiqilsa muddat o'tgach o'zi bo'shaydi.
    * Boshqa replika ushlab tursa — `LOCK_WAIT_MS` gacha kutiladi, keyin xato.
    */
   private async withChatLock(
@@ -116,19 +118,16 @@ export class ChatSequencer {
     if (!this.dataSource) return task();
     const owner = this.owner;
     await this.acquireLease(chatId, owner);
-    const heartbeat = setInterval(
-      () => {
-        void this.dataSource
-          ?.query(
-            `UPDATE "notification_schema"."telegram_chat_locks"
+    const heartbeat = setInterval(() => {
+      void this.dataSource
+        ?.query(
+          `UPDATE "notification_schema"."telegram_chat_locks"
               SET "lock_until" = now() + ($3::int * interval '1 millisecond')
             WHERE "chat_id" = $1 AND "owner" = $2`,
-            [chatId, owner, LOCK_LEASE_MS],
-          )
-          .catch(() => undefined);
-      },
-      Math.floor(LOCK_LEASE_MS / 3),
-    );
+          [chatId, owner, LOCK_LEASE_MS],
+        )
+        .catch(() => undefined);
+    }, LOCK_HEARTBEAT_MS);
     heartbeat.unref?.();
     try {
       await task();
@@ -158,6 +157,7 @@ export class ChatSequencer {
          ON CONFLICT ("chat_id") DO UPDATE
             SET "owner" = EXCLUDED."owner", "lock_until" = EXCLUDED."lock_until"
           WHERE "telegram_chat_locks"."lock_until" < now()
+             OR "telegram_chat_locks"."owner" = EXCLUDED."owner"
          RETURNING "chat_id"`,
         [chatId, owner, LOCK_LEASE_MS],
       );

@@ -66,4 +66,12 @@ export class TelegramAiDraft {
    */
   @Column({ type: 'timestamptz', nullable: true })
   worker_at!: Date | null;
+
+  /**
+   * (BOT-3b) Da'vo tokeni — yakuniy yozuv `WHERE worker_token = <o'zi>`:
+   * qotgan deb tiklangan yoki qayta urinilgan ishning kech natijasi
+   * tashlanadi.
+   */
+  @Column({ type: 'uuid', nullable: true })
+  worker_token!: string | null;
 }

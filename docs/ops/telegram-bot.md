@@ -254,9 +254,13 @@ bazasiga o'zi yozmaydi, doira/holat mashinasi/isbot/extra-cost — serverda.
 > xabari; bot update'i shu bilan TUGAYDI. ai-parse va ai-confirm'ni fondagi
 > ishchi (`AiOrderService`, shu replikada darhol, zaxira — har 5 s, bir
 > replikada 5 tagacha parallel) bajaradi: `worker_at` bilan bir marta oladi,
-> QAYTA URINMAYDI (xato — «🔁 Qayta urinish»). 2 daqiqadan eski `parsing` →
-> `failed` + «🔁 Qayta urinish», `creating` → preview + «✅ Yaratish» ni qayta
-> bosish (server dedupe). Migratsiya `1716000000190` (`worker_at`,
+> QAYTA URINMAYDI (xato — «🔁 Qayta urinish»). Ishchi olganiga 4 daqiqadan
+> oshgan `parsing` → `failed` + «🔁 Qayta urinish», `creating` → preview +
+> «✅ Yaratish» ni qayta bosish (server dedupe); navbatdagi (hali olinmagan)
+> qoralama tegilmaydi. Har yakuniy yozuv da'vo tokeni (`worker_token`) bilan:
+> tiklangan qoralamaning kech natijasi tashlanadi, xabar tahrirlanmaydi.
+> Zaxira tick 5 s dan yangi qoralamani olmaydi. Chat qulfi lease 12 s,
+> uzaytirish har 4 s. Migratsiya `1716000000190` (`worker_at`, `worker_token`,
 > `telegram_chat_locks`).
 
 - Market / market operatori shaxsiy chatda buyruq emas MATN (telefon raqami

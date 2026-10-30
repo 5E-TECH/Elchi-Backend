@@ -480,18 +480,18 @@ const migration = new TelegramBotCore1716000000120();
           [id, status, ageMs, worker],
         );
 
-      it('⭐ 2 daqiqadan eski parsing → failed + «🔁 Qayta urinish»; creating → preview; yangisi tegilmaydi', async () => {
+      it('⭐ ishchi olganiga 4 daqiqadan oshgan parsing → failed + «🔁 Qayta urinish»; creating → preview; yangisi tegilmaydi', async () => {
         await db.query(`DELETE FROM notification_schema.telegram_ai_drafts`);
         await insert(
           '00000000-0000-4000-8000-000000000001',
           'parsing',
-          3 * 60_000,
+          5 * 60_000,
           true,
         );
         await insert(
           '00000000-0000-4000-8000-000000000002',
           'creating',
-          3 * 60_000,
+          5 * 60_000,
           true,
         );
         await insert(
@@ -523,7 +523,7 @@ const migration = new TelegramBotCore1716000000120();
         await insert(
           '00000000-0000-4000-8000-000000000010',
           'parsing',
-          0,
+          10_000,
           false,
         );
         const parse = jest.fn().mockResolvedValue({
@@ -539,6 +539,71 @@ const migration = new TelegramBotCore1716000000120();
           `SELECT status FROM notification_schema.telegram_ai_drafts`,
         );
         expect(row.status).toBe('empty');
+      });
+
+      it('⭐ navbatdagi (worker_at NULL) eski qoralama FAILED qilinmaydi — ishchi oladi; 5 s dan yangisi tegilmaydi', async () => {
+        await db.query(`DELETE FROM notification_schema.telegram_ai_drafts`);
+        await insert(
+          '00000000-0000-4000-8000-000000000020',
+          'parsing',
+          10 * 60_000,
+          false,
+        );
+        await insert(
+          '00000000-0000-4000-8000-000000000021',
+          'parsing',
+          1_000,
+          false,
+        );
+        const parse = jest.fn().mockResolvedValue({
+          status: 200,
+          body: { data: { ok: true, orders: [] } },
+        });
+        const { ai } = makeAi(parse);
+        await ai.tick();
+        await ai.idle();
+        expect(parse).toHaveBeenCalledTimes(1);
+        const rows: Array<{ status: string; worker_at: Date | null }> =
+          await db.query(
+            `SELECT status, worker_at FROM notification_schema.telegram_ai_drafts ORDER BY id`,
+          );
+        expect(rows.map((r) => r.status)).toEqual(['empty', 'parsing']);
+        // Tugagan da'vo bo'shaydi; yangisi hali olinmagan.
+        expect(rows.map((r) => r.worker_at)).toEqual([null, null]);
+      });
+
+      it('⭐ qotgan deb tiklangan qoralamaning KECH natijasi tashlanadi (da’vo tokeni) — holat va xabar o‘zgarmaydi', async () => {
+        await db.query(`DELETE FROM notification_schema.telegram_ai_drafts`);
+        await insert(
+          '00000000-0000-4000-8000-000000000030',
+          'parsing',
+          10_000,
+          false,
+        );
+        let release: (v: unknown) => void = () => undefined;
+        const parse = jest.fn(
+          () =>
+            new Promise((resolve) => {
+              release = resolve;
+            }),
+        );
+        const { ai, outboxSend } = makeAi(parse);
+        await ai.tick();
+        // AI ishlayotganda: tiklash (boshqa replika) → failed, keyin qayta urinish da'vosi.
+        await db.query(
+          `UPDATE notification_schema.telegram_ai_drafts
+              SET status = 'failed', worker_at = NULL, worker_token = NULL`,
+        );
+        release({
+          status: 200,
+          body: { data: { ok: true, orders: [] } },
+        });
+        await ai.idle();
+        const [row]: Array<{ status: string }> = await db.query(
+          `SELECT status FROM notification_schema.telegram_ai_drafts`,
+        );
+        expect(row.status).toBe('failed');
+        expect(outboxSend).not.toHaveBeenCalled();
       });
     });
 
@@ -593,6 +658,21 @@ const migration = new TelegramBotCore1716000000120();
           'done',
         );
         expect(ran).toHaveBeenCalledTimes(1);
+      });
+
+      it('BOT-3b: o‘zi qoldirgan (bo‘shatilmagan) qulfni ayni replika kutmasdan qayta oladi', async () => {
+        const sequencer = new ChatSequencer(db);
+        const owner = (sequencer as unknown as { owner: string }).owner;
+        await db.query(
+          `INSERT INTO notification_schema.telegram_chat_locks (chat_id, owner, lock_until)
+           VALUES ('900033', $1, now() + interval '1 minute')`,
+          [owner],
+        );
+        const startedAt = Date.now();
+        const ran = jest.fn().mockResolvedValue(undefined);
+        await expect(sequencer.run('900033', ran)).resolves.toBe('done');
+        expect(ran).toHaveBeenCalledTimes(1);
+        expect(Date.now() - startedAt).toBeLessThan(2_000);
       });
     });
   },

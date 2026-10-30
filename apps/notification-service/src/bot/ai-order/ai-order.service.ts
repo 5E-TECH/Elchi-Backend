@@ -51,8 +51,15 @@ export const AI_CONFIRM_FAILED_TEXT =
 export const AI_STALE_TEXT =
   '⏳ AI javobi kechikdi. Matningiz saqlangan — «🔁 Qayta urinish» ni bosing.';
 
-/** (BOT-3b) Shundan eski `parsing` / `creating` — qotgan, tiklanadi. */
-export const AI_STALE_AFTER_MS = 2 * 60_000;
+/**
+ * (BOT-3b) Shundan eski (ishchi olgan) `parsing` / `creating` — qotgan,
+ * tiklanadi. Eng yomon budjetdan (getFile + 429 kutish + yuklab olish +
+ * token + ai-parse 95 s ≈ 3 daqiqa) katta; baribir kech natija da'vo tokeni
+ * bilan tashlanadi.
+ */
+export const AI_STALE_AFTER_MS = 4 * 60_000;
+/** Yangi qoralamani zaxira tick shuncha kutadi (start «⏳» message_id ni yozsin). */
+const AI_TICK_MIN_AGE_MS = 5_000;
 /** (BOT-3b) Bir replikada bir vaqtda ishlanadigan AI qoralamalar. */
 export const AI_WORKER_PARALLEL = 5;
 
@@ -120,7 +127,6 @@ interface ConfirmResult {
 export class AiOrderService implements OnModuleDestroy {
   private readonly logger = new Logger(AiOrderService.name);
   private readonly inflight = new Set<Promise<void>>();
-  private running = 0;
   private ticking = false;
   private stopped = false;
 
@@ -210,6 +216,9 @@ export class AiOrderService implements OnModuleDestroy {
   /** Shu replikada darhol fonda ishlash (interval — zaxira / restartdan keyin). */
   private schedule(draftId: string, status: 'parsing' | 'creating'): void {
     if (this.stopped) return;
+    // Replikadagi AI parallelligi chegarasi: band bo'lsa qoralama navbatda
+    // qoladi (`worker_at` NULL) — zaxira tick bo'shaganda oladi.
+    if (this.inflight.size >= AI_WORKER_PARALLEL) return;
     const job: Promise<void> = this.claimAndWork(draftId, status)
       .catch((error: unknown) =>
         this.logger.error(
@@ -229,7 +238,8 @@ export class AiOrderService implements OnModuleDestroy {
     const rows = rowsOf<TelegramAiDraft>(
       await this.drafts.query(
         `UPDATE "notification_schema"."telegram_ai_drafts"
-            SET "worker_at" = now(), "updated_at" = now()
+            SET "worker_at" = now(), "worker_token" = gen_random_uuid(),
+                "updated_at" = now()
           WHERE "id" = $1 AND "status" = $2 AND "worker_at" IS NULL
             AND "expires_at" > now()
         RETURNING *`,
@@ -242,7 +252,6 @@ export class AiOrderService implements OnModuleDestroy {
   /** Bitta qoralama: parse yoki confirm. QAYTA URINMAYDI — xato tugma bilan. */
   private async work(draft: TelegramAiDraft): Promise<void> {
     const ctx = this.workerContext(draft);
-    this.running += 1;
     try {
       if (draft.status === 'creating') await this.runConfirm(ctx, draft);
       else await this.runParse(ctx, draft);
@@ -255,8 +264,6 @@ export class AiOrderService implements OnModuleDestroy {
       } else {
         await this.fail(ctx, draft, AI_NETWORK_TEXT, true);
       }
-    } finally {
-      this.running -= 1;
     }
   }
 
@@ -283,7 +290,7 @@ export class AiOrderService implements OnModuleDestroy {
 
   /**
    * (BOT-3b) Zaxira: restart / boshqa replika yiqilganidan keyin olinmay
-   * qolgan qoralamalar va 2 daqiqadan eski qotganlar.
+   * qolgan qoralamalar va `AI_STALE_AFTER_MS` dan eski qotganlar.
    */
   @Interval('telegram-ai-worker', 5_000)
   async tick(): Promise<number> {
@@ -291,21 +298,23 @@ export class AiOrderService implements OnModuleDestroy {
     this.ticking = true;
     try {
       await this.recoverStale();
-      const capacity = AI_WORKER_PARALLEL - this.running;
+      const capacity = AI_WORKER_PARALLEL - this.inflight.size;
       if (capacity <= 0) return 0;
       const rows = rowsOf<TelegramAiDraft>(
         await this.drafts.query(
           `UPDATE "notification_schema"."telegram_ai_drafts" d
-              SET "worker_at" = now(), "updated_at" = now()
+              SET "worker_at" = now(), "worker_token" = gen_random_uuid(),
+                  "updated_at" = now()
             WHERE d."id" IN (
                   SELECT "id" FROM "notification_schema"."telegram_ai_drafts"
                    WHERE "status" IN ('parsing', 'creating')
                      AND "worker_at" IS NULL AND "expires_at" > now()
+                     AND "updated_at" < now() - ($2::int * interval '1 millisecond')
                    ORDER BY "updated_at"
                    LIMIT $1
                    FOR UPDATE SKIP LOCKED)
           RETURNING d.*`,
-          [capacity],
+          [capacity, AI_TICK_MIN_AGE_MS],
         ),
       );
       for (const row of rows) {
@@ -333,12 +342,13 @@ export class AiOrderService implements OnModuleDestroy {
            SELECT "id", "status" AS "old_status"
              FROM "notification_schema"."telegram_ai_drafts"
             WHERE "status" IN ('parsing', 'creating')
-              AND COALESCE("worker_at", "updated_at") < now() - ($1::int * interval '1 millisecond')
+              AND "worker_at" IS NOT NULL
+              AND "worker_at" < now() - ($1::int * interval '1 millisecond')
               AND "expires_at" > now()
             FOR UPDATE SKIP LOCKED)
          UPDATE "notification_schema"."telegram_ai_drafts" d
             SET "status" = CASE WHEN s."old_status" = 'parsing' THEN 'failed' ELSE 'preview' END,
-                "worker_at" = NULL, "updated_at" = now()
+                "worker_at" = NULL, "worker_token" = NULL, "updated_at" = now()
            FROM stale s
           WHERE d."id" = s."id"
         RETURNING d.*, s."old_status"`,
@@ -445,20 +455,20 @@ export class AiOrderService implements OnModuleDestroy {
     }
     const orders = Array.isArray(data.orders) ? data.orders : [];
     if (!orders.length) {
-      await this.setStatus(draft.id, 'empty');
+      if (!(await this.finish(draft, { status: 'empty' }))) return;
       await this.show(ctx, draft, AI_EMPTY_TEXT, []);
       return;
     }
-    await this.drafts.update(
-      { id: draft.id },
-      {
+    if (
+      !(await this.finish(draft, {
         status: 'preview',
-        orders: orders as never,
+        orders,
         ai_draft_id: str(data.draft_id) || null,
         error: null,
-        updated_at: new Date(),
-      },
-    );
+      }))
+    ) {
+      return;
+    }
     const rows: InlineKeyboardButton[][] = [];
     const creatable = orders.filter(isCreatable).length;
     if (creatable) {
@@ -530,10 +540,14 @@ export class AiOrderService implements OnModuleDestroy {
       return;
     }
     const results = body.data.results;
-    await this.drafts.update(
-      { id: draft.id },
-      { status: 'created', results: results as never, updated_at: new Date() },
-    );
+    if (
+      !(await this.finish(draft, {
+        status: 'created',
+        results,
+      }))
+    ) {
+      return;
+    }
     const lines = results.map((result) => {
       const order = ready[result.index];
       const n = (order?.index ?? result.index) + 1;
@@ -579,7 +593,7 @@ export class AiOrderService implements OnModuleDestroy {
     draft: TelegramAiDraft,
     text: string,
   ) {
-    await this.setStatus(draft.id, 'preview');
+    if (!(await this.finish(draft, { status: 'preview' }))) return;
     const rows: InlineKeyboardButton[][] = [
       [await this.button(ctx, draft, '✅ Yaratish', AI_ORDER_ACTIONS.confirm)],
       [
@@ -603,10 +617,14 @@ export class AiOrderService implements OnModuleDestroy {
     text: string,
     retryable: boolean,
   ) {
-    await this.drafts.update(
-      { id: draft.id },
-      { status: 'failed', error: text.slice(0, 300), updated_at: new Date() },
-    );
+    if (
+      !(await this.finish(draft, {
+        status: 'failed',
+        error: text.slice(0, 300),
+      }))
+    ) {
+      return;
+    }
     const rows: InlineKeyboardButton[][] = retryable
       ? [
           [
@@ -648,7 +666,8 @@ export class AiOrderService implements OnModuleDestroy {
     const rows = rowsOf<TelegramAiDraft>(
       await this.drafts.query(
         `UPDATE "notification_schema"."telegram_ai_drafts"
-            SET "status" = $3, "worker_at" = NULL, "updated_at" = now()
+            SET "status" = $3, "worker_at" = NULL, "worker_token" = NULL,
+                "updated_at" = now()
           WHERE "id" = $1 AND "status" = ANY($2::varchar[]) AND "expires_at" > now()
         RETURNING *`,
         [draftId, from, to],
@@ -657,8 +676,44 @@ export class AiOrderService implements OnModuleDestroy {
     return rows[0] ?? null;
   }
 
-  private async setStatus(id: string, status: TelegramAiDraftStatus) {
-    await this.drafts.update({ id }, { status, updated_at: new Date() });
+  /**
+   * (BOT-3b) Yakuniy yozuv. Ishchi olgan qoralama — faqat da'vo tokeni hali
+   * SHU ish bo'lsa (`worker_token`): qotgan deb tiklangan / qayta urinilgan
+   * qoralamaning kech natijasi tashlanadi (xabar ham tahrirlanmaydi) — AI
+   * natijasi ustidan yozilmaydi, buyurtma ikki marta yaratilmaydi. Da'vo
+   * tugaydi (`worker_*` NULL). `false` — natija tashlandi.
+   */
+  private async finish(
+    draft: TelegramAiDraft,
+    patch: Partial<
+      Pick<
+        TelegramAiDraft,
+        'status' | 'orders' | 'ai_draft_id' | 'error' | 'results'
+      >
+    >,
+  ): Promise<boolean> {
+    const values = {
+      ...patch,
+      worker_at: null,
+      worker_token: null,
+      updated_at: new Date(),
+    };
+    if (!draft.worker_token) {
+      await this.drafts.update({ id: draft.id }, values as never);
+      return true;
+    }
+    const res = await this.drafts.update(
+      { id: draft.id, worker_token: draft.worker_token },
+      values as never,
+    );
+    if (res?.affected) {
+      draft.worker_token = null;
+      return true;
+    }
+    this.logger.warn(
+      `ai draft ${draft.id}: natija kech keldi (qoralama boshqa holatda) — tashlandi`,
+    );
+    return false;
   }
 
   private async button(

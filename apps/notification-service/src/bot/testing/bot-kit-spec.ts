@@ -528,6 +528,7 @@ export function makeRouter(
  */
 export function makeAiDraftsStore(now: () => number = Date.now) {
   const rows = new Map<string, Record<string, any>>();
+  let tokenSeq = 0;
   return {
     rows,
     insert: jest.fn((row: Record<string, any>) => {
@@ -549,11 +550,24 @@ export function makeAiDraftsStore(now: () => number = Date.now) {
       });
       return Promise.resolve();
     }),
-    update: jest.fn((where: { id: string }, patch: Record<string, any>) => {
-      const row = rows.get(where.id);
-      if (row) Object.assign(row, patch);
-      return Promise.resolve();
-    }),
+    update: jest.fn(
+      (
+        where: { id: string; worker_token?: string },
+        patch: Record<string, any>,
+      ) => {
+        const row = rows.get(where.id);
+        // (BOT-3b) da'vo tokeni bilan yakuniy yozuv.
+        if (
+          !row ||
+          (where.worker_token !== undefined &&
+            row.worker_token !== where.worker_token)
+        ) {
+          return Promise.resolve({ affected: 0 });
+        }
+        Object.assign(row, patch);
+        return Promise.resolve({ affected: 1 });
+      },
+    ),
     findOne: jest.fn(({ where }: { where: { id: string } }) =>
       Promise.resolve(rows.get(where.id) ? { ...rows.get(where.id) } : null),
     ),
@@ -571,6 +585,7 @@ export function makeAiDraftsStore(now: () => number = Date.now) {
           return Promise.resolve([[], 0]);
         }
         target.worker_at = new Date(now());
+        target.worker_token = `token-${++tokenSeq}`;
         return Promise.resolve([[{ ...target }], 1]);
       }
       const [id, from, to] = params as [string, string[], string];
@@ -585,6 +600,7 @@ export function makeAiDraftsStore(now: () => number = Date.now) {
       }
       row.status = to;
       row.worker_at = null;
+      row.worker_token = null;
       return Promise.resolve([[{ ...row }], 1]);
     }),
   };

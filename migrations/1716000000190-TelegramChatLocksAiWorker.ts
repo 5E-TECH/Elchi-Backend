@@ -33,6 +33,13 @@ export class TelegramChatLocksAiWorker1716000000190 implements MigrationInterfac
       ALTER TABLE "notification_schema"."telegram_ai_drafts"
         ADD COLUMN IF NOT EXISTS "worker_at" timestamptz NULL
     `);
+    // Da'vo tokeni: yakuniy yozuv faqat qoralamani hali SHU ishchi ushlab
+    // tursa o'tadi (qotgan deb tiklangan / qayta urinilgan ish natijasi
+    // tashlanadi — AI va buyurtma ikki marta yaratilmaydi).
+    await queryRunner.query(`
+      ALTER TABLE "notification_schema"."telegram_ai_drafts"
+        ADD COLUMN IF NOT EXISTS "worker_token" uuid NULL
+    `);
     // Ishchi navbati: olinmagan / qotgan parsing-creating qoralamalar.
     await queryRunner.query(`
       CREATE INDEX IF NOT EXISTS "IDX_TELEGRAM_AI_DRAFTS_WORK"
@@ -45,6 +52,10 @@ export class TelegramChatLocksAiWorker1716000000190 implements MigrationInterfac
     await queryRunner.query(
       `DROP INDEX IF EXISTS "notification_schema"."IDX_TELEGRAM_AI_DRAFTS_WORK"`,
     );
+    await queryRunner.query(`
+      ALTER TABLE "notification_schema"."telegram_ai_drafts"
+        DROP COLUMN IF EXISTS "worker_token"
+    `);
     await queryRunner.query(`
       ALTER TABLE "notification_schema"."telegram_ai_drafts"
         DROP COLUMN IF EXISTS "worker_at"
