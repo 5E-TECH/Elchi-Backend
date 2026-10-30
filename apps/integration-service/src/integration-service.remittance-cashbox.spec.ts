@@ -82,6 +82,24 @@ describe('createRemittance — MAIN kassaga yozuv va cashbox_posted (N3yNa6rO)',
     expect(res.data.remittance_id).toBe('77');
   });
 
+  it('⭐ TC: bitta remittance — finance.cashbox.fill AYNAN bir marta, P&L daftariga yozmasdan', async () => {
+    rmqSendMock.mockResolvedValue({ statusCode: 200 });
+    const svc = makeSvc();
+
+    await svc.createRemittance({
+      integration_id: '2',
+      amount: 150000,
+      created_by: '1',
+    });
+
+    const fills = rmqSendMock.mock.calls.filter(
+      (c: any[]) => c[1]?.cmd === 'finance.cashbox.fill',
+    );
+    expect(fills).toHaveLength(1);
+    // Debitor qarz yig'imi: foyda sotuvda yozilgan, kirim P&L ga kirmaydi.
+    expect(fills[0][2].financial_ledger).toBeUndefined();
+  });
+
   it('kassa yozuvi yiqilsa — remittance saqlanadi, lekin cashbox_posted=false va xato log', async () => {
     rmqSendMock.mockRejectedValue(new Error('finance down'));
     const svc = makeSvc();
