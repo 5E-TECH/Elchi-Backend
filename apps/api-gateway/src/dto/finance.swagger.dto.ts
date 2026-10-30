@@ -1835,6 +1835,40 @@ export class UploadReceiptRequestDto {
   kind!: string;
 }
 
+/** (T3-4) GET /finance/receipts/summary — chek tekshiruvi xulosasi. */
+export class ReceiptSummaryQueryDto {
+  @ApiPropertyOptional({
+    example: '2026-10-01',
+    description:
+      'Davr boshi, Toshkent sanasi YYYY-MM-DD (kiradi). Sukut — `to` oyining 1-kuni',
+  })
+  @IsOptional()
+  @Matches(/^\d{4}-\d{2}-\d{2}$/)
+  from?: string;
+
+  @ApiPropertyOptional({
+    example: '2026-10-30',
+    description:
+      'Davr oxiri, Toshkent sanasi YYYY-MM-DD (kiradi). Sukut — bugun. Davr ≤ 366 kun',
+  })
+  @IsOptional()
+  @Matches(/^\d{4}-\d{2}-\d{2}$/)
+  to?: string;
+
+  @ApiPropertyOptional({ enum: CASHBOX_RECEIPT_KINDS })
+  @IsOptional()
+  @IsIn(Array.from(CASHBOX_RECEIPT_KINDS ?? []))
+  kind?: string;
+
+  @ApiPropertyOptional({
+    enum: CASHBOX_RECEIPT_FILTER_STATUSES,
+    description: "`none` — chek so'raladigan, lekin cheksiz qator",
+  })
+  @IsOptional()
+  @IsIn(Array.from(CASHBOX_RECEIPT_FILTER_STATUSES ?? []))
+  ai_status?: string;
+}
+
 export class UploadReceiptSwaggerDto extends UploadReceiptRequestDto {
   @ApiProperty({
     type: 'string',

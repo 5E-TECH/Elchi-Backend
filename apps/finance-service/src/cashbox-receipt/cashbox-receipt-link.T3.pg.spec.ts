@@ -812,4 +812,117 @@ describePg('T3-2 chekni bog`lash — haqiqiy Postgres', () => {
       receipts.requestReanalyze({ receipt_id: receiptId, requester_roles: SA }),
     ).resolves.toMatchObject({ statusCode: 202 });
   });
+
+  // ───────────────────────── xulosa (T3-4) ─────────────────────────
+
+  const summary = (extra: Record<string, unknown> = {}) =>
+    receipts.summary({ requester_roles: SA, ...extra }) as Promise<any>;
+
+  const checked = async (entered: number, read: number) => {
+    const r = await linkedReceipt(entered);
+    await receipts.applyAiResult({
+      receipt_id: r.receiptId,
+      ai_request_id: r.requestId,
+      result: aiOk({ amount: read }),
+    });
+    return r;
+  };
+
+  it('⭐ xulosa: 3 match, 2 mismatch (+5 000, −2 000), 1 cheksiz → none 1, mismatch_total 7 000; none = tarix filtri', async () => {
+    for (const amount of [100_000, 110_000, 120_000]) {
+      await checked(amount, amount);
+    }
+    const plus = await checked(145_000, 150_000);
+    const minus = await checked(52_000, 50_000);
+    await setSettings({ manual_expense: { photo_required: false } });
+    await spend();
+    // Kategoriyasiz ichki chiqim — hisobga kirmaydi.
+    await spend({ expense_category_id: undefined, receipt_policy: undefined });
+
+    const res = await summary();
+    expect(res.statusCode).toBe(200);
+    expect(res.data.counts).toEqual({
+      match: 3,
+      mismatch: 2,
+      unreadable: 0,
+      pending: 0,
+      error: 0,
+      disabled: 0,
+      none: 1,
+    });
+    expect(res.data.total).toBe(6);
+    expect(res.data.mismatch_total).toBe(7_000);
+    expect(res.data.top.map((t: any) => [t.receipt_id, t.difference])).toEqual([
+      [plus.receiptId, 5_000],
+      [minus.receiptId, -2_000],
+    ]);
+    expect(res.data.top[0]).toMatchObject({
+      history_id: plus.historyId,
+      kind: 'manual_expense',
+      entered_amount: 145_000,
+    });
+    expect(res.data.by_category).toEqual([
+      {
+        expense_category_id: categoryId,
+        name: 'Ijara',
+        counts: expect.objectContaining({ match: 3, mismatch: 2, none: 1 }),
+      },
+    ]);
+    expect(res.data.by_branch).toEqual([]);
+    // Ism, rasm havolasi, karta yo'q.
+    expect(JSON.stringify(res.data)).not.toMatch(
+      /file_key|photo|cashbox-receipt-|last4|U-7|Kapitalbank/,
+    );
+
+    const history = (await finance.findAllHistory({
+      page: 0,
+      limit: 0,
+      receipt_status: 'none',
+    })) as any;
+    expect(history.data.counts.all).toBe(res.data.counts.none);
+
+    const onlyMismatch = await summary({ ai_status: 'mismatch' });
+    expect(onlyMismatch.data.counts).toMatchObject({
+      match: 0,
+      mismatch: 2,
+      none: 0,
+    });
+    const hqOnly = await summary({ kind: 'courier_to_hq' });
+    expect(hqOnly.data.total).toBe(0);
+  });
+
+  it('xulosa: filial → HQ cheki va cheksiz click o`tkazma by_branch da; davr tashqarisi kirmaydi', async () => {
+    const receiptId = await upload('branch_to_hq');
+    await branchToMain({ receipt_id: receiptId });
+    await setSettings({ hq_transfer: { photo_required: false } });
+    await branchToMain();
+    const res = await summary({ kind: 'branch_to_hq' });
+    expect(res.data.counts).toMatchObject({ pending: 1, none: 1 });
+    expect(res.data.by_branch).toEqual([
+      {
+        branch_id: '15',
+        counts: expect.objectContaining({ pending: 1, none: 1 }),
+      },
+    ]);
+    const past = await summary({ from: '2020-01-01', to: '2020-01-31' });
+    expect(past.data.total).toBe(0);
+    expect(past.data.period).toEqual({ from: '2020-01-01', to: '2020-01-31' });
+  });
+
+  it('xulosa: menejer → 403; davr > 366 kun, noto`g`ri sana / kind / ai_status → 400', async () => {
+    await expect(
+      rpcError(receipts.summary({ requester_roles: ['manager'] })),
+    ).resolves.toMatchObject({ statusCode: 403 });
+    for (const bad of [
+      { from: '2024-01-01', to: '2025-06-01' },
+      { from: '2025-02-30' },
+      { from: '2025-03-02', to: '2025-03-01' },
+      { kind: 'salary' },
+      { ai_status: 'linked' },
+    ]) {
+      await expect(rpcError(summary(bad))).resolves.toMatchObject({
+        statusCode: 400,
+      });
+    }
+  });
 });

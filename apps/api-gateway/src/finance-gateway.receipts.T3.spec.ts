@@ -304,6 +304,54 @@ describe('T3-1 — gateway: kassa cheki sozlamalari va yuklash', () => {
       );
     }
   });
+  // ───────────────────────── T3-4: xulosa ─────────────────────────
+
+  it('⭐ GET /finance/receipts/summary — `receipts/:id` ga tushmaydi; davr/kind/ai_status + rollar finance`ga', async () => {
+    finance.send.mockReturnValue(
+      of({ statusCode: 200, data: { counts: { match: 3 } } }),
+    );
+    const res = await request(http())
+      .get('/finance/receipts/summary')
+      .query({
+        from: '2026-10-01',
+        to: '2026-10-30',
+        kind: 'manual_expense',
+        ai_status: 'mismatch',
+      })
+      .set('x-test-role', 'admin');
+    expect(res.status).toBe(200);
+    expect(res.body.data).toEqual({ counts: { match: 3 } });
+    expect(cmd(finance.send, 'finance.receipt.get')).toHaveLength(0);
+    const [[, payload]] = cmd(finance.send, 'finance.receipt_checks.summary');
+    expect(payload).toEqual({
+      from: '2026-10-01',
+      to: '2026-10-30',
+      kind: 'manual_expense',
+      ai_status: 'mismatch',
+      requester_roles: ['admin'],
+    });
+  });
+
+  it.each(['manager', 'courier'])(
+    'GET /finance/receipts/summary: %s → 403 (finance`ga bormaydi)',
+    async (role) => {
+      const res = await request(http())
+        .get('/finance/receipts/summary')
+        .set('x-test-role', role);
+      expect(res.status).toBe(403);
+      expect(finance.send).not.toHaveBeenCalled();
+    },
+  );
+
+  it('GET /finance/receipts/summary: noto`g`ri sana / kind → 400', async () => {
+    for (const query of [{ from: '01.10.2026' }, { kind: 'salary' }]) {
+      const res = await request(http())
+        .get('/finance/receipts/summary')
+        .query(query);
+      expect(res.status).toBe(400);
+    }
+    expect(finance.send).not.toHaveBeenCalled();
+  });
 });
 
 describe('T3-1 — cashbox-receipt- fayl kaliti: havola va umumiy yo`l', () => {

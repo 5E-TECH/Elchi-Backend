@@ -75,4 +75,14 @@ export class CashboxReceiptController {
       this.receipts.requestReanalyze(data ?? {}),
     );
   }
+
+  @MessagePattern({ cmd: 'finance.receipt_checks.summary' })
+  summary(
+    @Payload() data: Parameters<CashboxReceiptService['summary']>[0],
+    @Ctx() context: RmqContext,
+  ) {
+    return executeAndAck(this.rmqService, context, () =>
+      this.receipts.summary(data ?? {}),
+    );
+  }
 }

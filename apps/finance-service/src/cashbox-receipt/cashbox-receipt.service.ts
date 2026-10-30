@@ -34,6 +34,7 @@ import {
   receiptReanalyzeBlock,
   receiptSettingGroupOf,
   rmqSend,
+  tashkentDayRange,
   type CashboxReceiptErrorCode,
   type CashboxReceiptKind,
   type CashboxReceiptSettings,
@@ -41,6 +42,7 @@ import {
 } from '@app/common';
 import { Cashbox } from '../entities/cashbox.entity';
 import { CashboxCard } from '../entities/cashbox-card.entity';
+import { CashboxHistory } from '../entities/cashbox-history.entity';
 import { CashboxReceipt } from '../entities/cashbox-receipt.entity';
 import { FinanceRealtimeService } from '../realtime/finance-realtime.service';
 import {
@@ -49,6 +51,11 @@ import {
   deriveReceiptOutcome,
 } from './receipt.rules';
 import { FinanceSetting } from '../entities/finance-setting.entity';
+import {
+  isReceiptSummaryKind,
+  loadReceiptChecksSummary,
+} from './cashbox-receipt.summary';
+import { isReceiptFilterStatus } from './cashbox-receipt.views';
 import type {
   LinkedReceiptRef,
   ReceiptLinkRequest,
@@ -58,6 +65,8 @@ const RC = CASHBOX_RECEIPT_ERROR_CODES;
 const ALLOWED_MIME = new Set(['image/jpeg', 'image/png', 'image/webp']);
 /** Bir yugurishda ko'pi bilan shuncha qoralama (qolgani keyingi soatda). */
 const CLEANUP_BATCH = 200;
+/** Xulosa davri (kun) — AI yordamchi bilan bir xil. */
+export const RECEIPT_SUMMARY_MAX_DAYS = 366;
 
 const text = (value: unknown): string =>
   typeof value === 'string' || typeof value === 'number'
@@ -102,6 +111,51 @@ export function receiptRpcError(error: unknown): never {
     statusCode: 500,
     message: error instanceof Error ? error.message : 'Internal server error',
   });
+}
+
+const optionalText = (value: unknown): string | undefined => {
+  const v = text(value);
+  return v === '' ? undefined : v;
+};
+
+/** Aniq `YYYY-MM-DD` (haqiqiy sana) yoki undefined; boshqasi — 400. */
+function parseYmd(value: unknown, field: string): string | undefined {
+  const v = optionalText(value);
+  if (v === undefined) return undefined;
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(v);
+  const date = match ? new Date(`${v}T00:00:00Z`) : null;
+  if (
+    !date ||
+    Number.isNaN(date.getTime()) ||
+    date.toISOString().slice(0, 10) !== v
+  ) {
+    throw new BadRequestException(
+      `${field} YYYY-MM-DD formatida bo'lishi kerak`,
+    );
+  }
+  return v;
+}
+
+export function parseSummaryPeriod(
+  fromRaw: unknown,
+  toRaw: unknown,
+  now: Date = new Date(),
+): { from: string; to: string } {
+  const today = new Date(now.getTime() + 5 * 3_600_000)
+    .toISOString()
+    .slice(0, 10);
+  const to = parseYmd(toRaw, 'to') ?? today;
+  const from = parseYmd(fromRaw, 'from') ?? `${to.slice(0, 8)}01`;
+  if (from > to) throw new BadRequestException("from to dan keyin bo'lmasin");
+  const days =
+    (Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) /
+    86_400_000;
+  if (days > RECEIPT_SUMMARY_MAX_DAYS) {
+    throw new BadRequestException(
+      `Davr ${RECEIPT_SUMMARY_MAX_DAYS} kundan oshmasin`,
+    );
+  }
+  return { from, to };
 }
 
 function parseBool(value: unknown, field: string): boolean | undefined {
@@ -726,6 +780,52 @@ export class CashboxReceiptService {
         },
         202,
         'Receipt reanalyze requested',
+      );
+    } catch (error) {
+      receiptRpcError(error);
+    }
+  }
+
+  /**
+   * T3-4 — chek tekshiruvi xulosasi (SA/admin; gateway `@Roles` + bu yerda).
+   * Davr — Toshkent sanalari (kiradi), sukut: joriy oy boshidan bugungacha,
+   * ≤ 366 kun. `none` — tarixdagi «Chek yo'q» filtri bilan AYNI shart.
+   */
+  async summary(input: {
+    requester_roles?: unknown;
+    from?: unknown;
+    to?: unknown;
+    kind?: unknown;
+    ai_status?: unknown;
+  }) {
+    try {
+      const roles = rolesOf(input?.requester_roles);
+      if (!roles.includes(Roles.SUPERADMIN) && !roles.includes(Roles.ADMIN)) {
+        forbidden('Chek xulosasi faqat superadmin/admin uchun');
+      }
+      const period = parseSummaryPeriod(input?.from, input?.to);
+      const kind = optionalText(input?.kind);
+      if (kind !== undefined && !isReceiptSummaryKind(kind)) {
+        throw new BadRequestException("kind noto'g'ri");
+      }
+      const aiStatus = optionalText(input?.ai_status);
+      if (aiStatus !== undefined && !isReceiptFilterStatus(aiStatus)) {
+        throw new BadRequestException("ai_status noto'g'ri");
+      }
+      const range = tashkentDayRange(period.from, period.to);
+      const data = await loadReceiptChecksSummary(
+        this.dataSource.manager,
+        {
+          receipts: this.dataSource.getMetadata(CashboxReceipt).tablePath,
+          history: this.dataSource.getMetadata(CashboxHistory).tablePath,
+          cashbox: this.dataSource.getMetadata(Cashbox).tablePath,
+        },
+        { start: range.start!, end: range.end!, kind, ai_status: aiStatus },
+      );
+      return successRes(
+        { period: { from: period.from, to: period.to }, ...data },
+        200,
+        'Receipt checks summary',
       );
     } catch (error) {
       receiptRpcError(error);

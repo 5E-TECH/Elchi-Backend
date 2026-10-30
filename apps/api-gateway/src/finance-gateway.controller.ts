@@ -110,6 +110,7 @@ import {
   CorrectPaymentAmountRequestDto,
   UpdateReceiptSettingsRequestDto,
   UploadReceiptRequestDto,
+  ReceiptSummaryQueryDto,
   UploadReceiptSwaggerDto,
 } from './dto/finance.swagger.dto';
 import { BodyStatusCodeInterceptor } from './body-status-code.interceptor';
@@ -4582,6 +4583,32 @@ export class FinanceGatewayController {
         photo_url_expires_in: FILE_LINK_TTL_SECONDS,
       },
     };
+  }
+
+  // `receipts/:id` dan OLDIN — aks holda `summary` id sifatida ushlanadi.
+  @Get('receipts/summary')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: '(T3-4) Kassa cheklari tekshiruvi xulosasi',
+    description:
+      "Davr (Toshkent kuni, ≤ 366 kun, sukut — joriy oy) bo'yicha: `{ period, counts: { match, mismatch, unreadable, pending, error, disabled, none }, total, mismatch_total (Σ|farq|), by_branch: [{ branch_id, counts }], by_category: [{ expense_category_id, name, counts }], top: [≤ 15, |farq| bo'yicha — { receipt_id, history_id, kind, entered_amount, difference, date }] }`. Operatsiya sanasi bo'yicha; `none` — `GET /finance/history?receipt_status=none` bilan AYNI shart. Ism, rasm havolasi, karta raqami yo'q. Faqat superadmin/admin (menejer, kuryer — 403).",
+  })
+  async receiptChecksSummary(
+    @Req() req: { user: JwtUser },
+    @Query() query: ReceiptSummaryQueryDto,
+  ) {
+    return this.send(
+      { cmd: 'finance.receipt_checks.summary' },
+      {
+        from: query.from,
+        to: query.to,
+        kind: query.kind,
+        ai_status: query.ai_status,
+        requester_roles: this.getUserRoles(req.user),
+      },
+    );
   }
 
   @Post('receipts/:id/reanalyze')

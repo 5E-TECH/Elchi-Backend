@@ -1,6 +1,8 @@
 import {
   AI_ASSISTANT_TOOL_NAMES,
   AI_ASSISTANT_TOOL_ROLES,
+  CASHBOX_RECEIPT_FILTER_STATUSES,
+  CASHBOX_RECEIPT_KINDS,
   type AiAssistantRequester,
   type AiAssistantSource,
   type AiAssistantToolName,
@@ -12,7 +14,8 @@ import type { AssistantReader } from './assistant-reader';
 import { capResultSize, sanitizeForModel } from './assistant-sanitize';
 
 /**
- * F7PWp6cK — AI moliyaviy yordamchining 9 ta FAQAT O'QIYDIGAN tool'i.
+ * F7PWp6cK — AI moliyaviy yordamchining FAQAT O'QIYDIGAN tool'lari (9 ta +
+ * T3-4 `get_receipt_checks`).
  *
  * Har tool:
  *  - faqat `AssistantReader` orqali (RMQ oq ro'yxati) mavjud o'qish
@@ -182,6 +185,10 @@ const CASHBOX_TYPES = {
   courier: 'couriers',
   market: 'markets',
 } as const;
+
+/** T3-4 — chek turi va holati (finance bilan bitta ro'yxat). */
+const RECEIPT_KINDS = CASHBOX_RECEIPT_KINDS;
+const RECEIPT_STATUSES = CASHBOX_RECEIPT_FILTER_STATUSES;
 
 const SOURCE_TYPES = [
   'courier_payment',
@@ -871,6 +878,84 @@ const TOOL_SPECS: readonly AssistantToolSpec[] = [
         })(),
         period,
         truncated: false,
+      };
+    },
+  },
+  {
+    name: 'get_receipt_checks',
+    description:
+      "Kassa CHEKLARI tekshiruvi (qo'lda chiqim, kuryer → HQ va filial → HQ click o'tkazmalari) davr bo'yicha: AI holati soni " +
+      '(match — summa mos, mismatch — farq bor, unreadable, pending, error, disabled, none — chek so‘raladigan, lekin yuklanmagan), ' +
+      "farqlar yig'indisi (Σ|farq|), filial va xarajat kategoriyasi kesimi, eng katta farqli 15 chek. «Cheklar mosmi», «qaysi chiqimda chek yo'q» savollarida chaqiring.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        ...PERIOD_PROPS,
+        kind: {
+          type: 'string',
+          enum: [...RECEIPT_KINDS],
+          description: 'Operatsiya turi (berilmasa — hammasi).',
+        },
+        ai_status: {
+          type: 'string',
+          enum: [...RECEIPT_STATUSES],
+          description: 'Faqat shu holat (berilmasa — hammasi).',
+        },
+      },
+      additionalProperties: false,
+    },
+    keys: ['from', 'to', 'kind', 'ai_status'],
+    async run(input, ctx) {
+      const period = parsePeriod(input, ctx.today);
+      const kind = enumInput(input, 'kind', RECEIPT_KINDS);
+      const aiStatus = enumInput(input, 'ai_status', RECEIPT_STATUSES);
+      // API: GET /finance/receipts/summary — servis rolni qayta tekshiradi.
+      const res = unwrap(
+        await ctx.reader.read('FINANCE', 'finance.receipt_checks.summary', {
+          from: period.from,
+          to: period.to,
+          ...(kind ? { kind } : {}),
+          ...(aiStatus ? { ai_status: aiStatus } : {}),
+          requester_roles: ctx.requester.roles,
+        }),
+      );
+      const counts = (c: unknown) => {
+        const row = (c ?? {}) as Record<string, unknown>;
+        return Object.fromEntries(
+          RECEIPT_STATUSES.map((status) => [status, num(row[status])]),
+        );
+      };
+      const branches = arr(res.by_branch);
+      const categories = arr(res.by_category);
+      const top = arr(res.top);
+      return {
+        data: {
+          counts: counts(res.counts),
+          total: num(res.total),
+          mismatch_total: num(res.mismatch_total),
+          by_branch: branches.slice(0, ASSISTANT_TOP_N).map((b) => ({
+            branch_id: str(b.branch_id),
+            counts: counts(b.counts),
+          })),
+          by_category: categories.slice(0, ASSISTANT_TOP_N).map((c) => ({
+            expense_category_id: str(c.expense_category_id),
+            name: str(c.name),
+            counts: counts(c.counts),
+          })),
+          largest_differences: top.slice(0, ASSISTANT_TOP_N).map((t) => ({
+            receipt_id: str(t.receipt_id),
+            history_id: str(t.history_id),
+            kind: str(t.kind),
+            entered_amount: numOrNull(t.entered_amount),
+            difference: num(t.difference),
+            date: str(t.date),
+          })),
+        },
+        records: num(res.total),
+        period,
+        truncated:
+          branches.length > ASSISTANT_TOP_N ||
+          categories.length > ASSISTANT_TOP_N,
       };
     },
   },
