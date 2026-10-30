@@ -35,6 +35,7 @@ import {
   IsOrderCreateItems,
   isProvidedDistrictId,
 } from '../order-create/order-create-content';
+import { OptionalOrderSpecialCategories } from '../order-create/order-special-categories';
 
 /**
  * (lQjt6sKP) Sotuv `multipart/form-data` bilan ham keladi — "true"/"1"
@@ -499,6 +500,10 @@ export class CreateOrderRequestDto {
   @ValidateNested({ each: true })
   @Type(() => OrderItemDto)
   items!: OrderItemDto[];
+
+  /** T8 (0OUcHZ7R): keyin faqat PUT /orders/:id/special-categories o'zgartiradi. */
+  @OptionalOrderSpecialCategories()
+  special_categories?: string[];
 }
 
 export class UpdateOrderRequestDto {
