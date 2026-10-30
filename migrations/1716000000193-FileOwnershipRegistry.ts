@@ -16,8 +16,8 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  * down(): jadval o'chiriladi (MinIO fayllariga tegilmaydi, hammasi yana eski
  * qoidaga o'tadi). Sxema qoladi: `init-schemas.sql` / `db-prepare` ham yaratadi.
  */
-export class FileOwnershipRegistry1716000000191 implements MigrationInterface {
-  name = 'FileOwnershipRegistry1716000000191';
+export class FileOwnershipRegistry1716000000193 implements MigrationInterface {
+  name = 'FileOwnershipRegistry1716000000193';
 
   public async up(queryRunner: QueryRunner): Promise<void> {
     await queryRunner.query(`CREATE SCHEMA IF NOT EXISTS "file_schema"`);

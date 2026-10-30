@@ -40,9 +40,9 @@ yaratildi. Frontend'da kod o'zgarishi **shart emas**.
 ### 2026-10-30 — Foydalanuvchi yaratishda tasodifiy parol + SMS, birinchi kirishda parolni almashtirish, eski parol tekshiruvi (aidsxJ2H)
 
 Deploy: **identity-service + notification-service + api-gateway** (birga; avval notification — yangi RMQ buyruqlari
-`notification.sms.send_temp_password`, `notification.sms.delivery_status`). **Migratsiya bor:** `1716000000191-UserTempPasswordSms`
+`notification.sms.send_temp_password`, `notification.sms.delivery_status`). **Migratsiya bor:** `1716000000194-UserTempPasswordSms`
 (`identity_schema.admins.password_change_forced` sukut `false` — mavjud foydalanuvchilar o'zgarmaydi; yangi jadval
-`identity_schema.user_password_sms` — parol YO'Q, faqat SMS jurnali) va `1716000000192-SmsTempPasswordTemplate`
+`identity_schema.user_password_sms` — parol YO'Q, faqat SMS jurnali) va `1716000000195-SmsTempPasswordTemplate`
 (`notification_schema.sms_outbox.redacted_text`; `sms_templates` ga `user.temp_password` (uz, «security») — **provayderda
 (Eskiz) tasdiqlatish kerak**, `needs_provider_approval: true`). Yangi env: `PASSWORD_CHANGE_REQUIRE_OLD` (identity, sukut
 `off`). `openapi.json` qayta yaratildi.

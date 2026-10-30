@@ -1,9 +1,9 @@
 import { DataSource } from 'typeorm';
-import { UserTempPasswordSms1716000000191 } from '../../../../migrations/1716000000191-UserTempPasswordSms';
-import { SmsTempPasswordTemplate1716000000192 } from '../../../../migrations/1716000000192-SmsTempPasswordTemplate';
+import { UserTempPasswordSms1716000000194 } from '../../../../migrations/1716000000194-UserTempPasswordSms';
+import { SmsTempPasswordTemplate1716000000195 } from '../../../../migrations/1716000000195-SmsTempPasswordTemplate';
 
 /**
- * (aidsxJ2H) 191/192 migratsiyalari — haqiqiy Postgres: qayta yurgizish
+ * (aidsxJ2H) 194/195 migratsiyalari — haqiqiy Postgres: qayta yurgizish
  * xavfsiz, mavjud foydalanuvchilar darvozaga tushmaydi, SMS jurnalida parol
  * ustuni yo'q, shablon tasdiqlanmagan, `down()` ochiq parol qoldirmaydi.
  * Faqat lokal baza (`/elchi_tmppw_test`):
@@ -20,7 +20,7 @@ const localTestDatabase = (() => {
 })();
 
 (localTestDatabase ? describe : describe.skip)(
-  'aidsxJ2H — 191/192 migratsiyalari (lokal Postgres)',
+  'aidsxJ2H — 194/195 migratsiyalari (lokal Postgres)',
   () => {
     jest.setTimeout(30_000);
     let db: DataSource;
@@ -87,7 +87,7 @@ const localTestDatabase = (() => {
     });
 
     it('191: qayta yurgizish xatosiz; mavjud foydalanuvchi — forced false; jurnalda parol ustuni yo‘q', async () => {
-      const migration = new UserTempPasswordSms1716000000191();
+      const migration = new UserTempPasswordSms1716000000194();
       await run(migration, 'up');
       await run(migration, 'up');
 
@@ -118,7 +118,7 @@ const localTestDatabase = (() => {
     });
 
     it('192: shablon tasdiqlanmagan, mavjudiga tegmaydi, redacted_text ustuni', async () => {
-      const migration = new SmsTempPasswordTemplate1716000000192();
+      const migration = new SmsTempPasswordTemplate1716000000195();
       await run(migration, 'up');
       await run(migration, 'up');
       const rows = await db.query<Array<Record<string, unknown>>>(
@@ -146,7 +146,7 @@ const localTestDatabase = (() => {
     });
 
     it('192 down(): yuborilmagan parol SMS’i maskalanib yopiladi, tasdiqlangan shablon qoladi', async () => {
-      const migration = new SmsTempPasswordTemplate1716000000192();
+      const migration = new SmsTempPasswordTemplate1716000000195();
       await db.query(`
         INSERT INTO notification_schema.sms_outbox (status, text, redacted_text) VALUES
           ('pending', 'parol: Ab3dEf7hJk9m .', 'parol: •••• .'),
@@ -175,7 +175,7 @@ const localTestDatabase = (() => {
     });
 
     it('191 down(): ustun va jadval o‘chadi, up qayta ishlaydi', async () => {
-      const migration = new UserTempPasswordSms1716000000191();
+      const migration = new UserTempPasswordSms1716000000194();
       await run(migration, 'down');
       const [state] = await db.query<
         Array<{ tbl: string | null; col: number }>

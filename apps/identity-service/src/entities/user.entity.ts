@@ -59,7 +59,7 @@ export class User extends BaseEntity {
   must_change_password: boolean;
 
   /**
-   * (aidsxJ2H, migratsiya 1716000000191) Parolni ADMIN / TIZIM bergan va
+   * (aidsxJ2H, migratsiya 1716000000194) Parolni ADMIN / TIZIM bergan va
    * egasi uni hali almashtirmagan: `password_mode: 'generate_sms'`,
    * `manual` + `must_change_password: true` yoki «SMS'ni qayta yuborish».
    * `must_change_password` bilan birga `true` — access token'da

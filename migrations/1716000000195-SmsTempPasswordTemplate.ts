@@ -23,8 +23,8 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  * parolni maskalab bo'lmaydi — yuborilmagan parol SMS'lari OLDIN yopiladi
  * (`text` maskalanadi, holat `failed`).
  */
-export class SmsTempPasswordTemplate1716000000192 implements MigrationInterface {
-  name = 'SmsTempPasswordTemplate1716000000192';
+export class SmsTempPasswordTemplate1716000000195 implements MigrationInterface {
+  name = 'SmsTempPasswordTemplate1716000000195';
 
   public async up(queryRunner: QueryRunner): Promise<void> {
     await queryRunner.query(`

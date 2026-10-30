@@ -28,8 +28,8 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  * down(): jadval va ustun o'chiriladi (SMS jurnali yo'qoladi, parollarga
  * tegmaydi).
  */
-export class UserTempPasswordSms1716000000191 implements MigrationInterface {
-  name = 'UserTempPasswordSms1716000000191';
+export class UserTempPasswordSms1716000000194 implements MigrationInterface {
+  name = 'UserTempPasswordSms1716000000194';
 
   public async up(queryRunner: QueryRunner): Promise<void> {
     await queryRunner.query(`

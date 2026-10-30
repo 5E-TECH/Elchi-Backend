@@ -11,7 +11,7 @@ import type { PasswordSmsStatus } from '@app/common';
 export type PasswordSmsReason = 'create' | 'resend';
 
 /**
- * (aidsxJ2H, migratsiya 1716000000191) Vaqtinchalik parol SMS'lari jurnali:
+ * (aidsxJ2H, migratsiya 1716000000194) Vaqtinchalik parol SMS'lari jurnali:
  * qayta yuborish chegarasi (60 s / kuniga 5) va yetkazish holati
  * (`client_message_id` → notification `sms_outbox`). PAROL YOZILMAYDI —
  * faqat kimga, kim so'radi, qachon va holat.

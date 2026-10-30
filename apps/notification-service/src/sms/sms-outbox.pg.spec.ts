@@ -3,7 +3,7 @@ import { CreateSmsOutbox1716000000054 } from '../../../../migrations/17160000000
 import { CreateSmsProviderTemplatesConsent1716000000055 } from '../../../../migrations/1716000000055-CreateSmsProviderTemplatesConsent';
 import { EncryptSmsSender1716000000068 } from '../../../../migrations/1716000000068-EncryptSmsSender';
 import { SmsOutboxConsentIdentity1716000000069 } from '../../../../migrations/1716000000069-SmsOutboxConsentIdentity';
-import { SmsTempPasswordTemplate1716000000192 } from '../../../../migrations/1716000000192-SmsTempPasswordTemplate';
+import { SmsTempPasswordTemplate1716000000195 } from '../../../../migrations/1716000000195-SmsTempPasswordTemplate';
 import { SmsOutbox } from '../entities/sms-outbox.entity';
 import { Notification } from '../entities/notification.entity';
 import { SmsConfigService } from './sms-config.service';
@@ -34,7 +34,7 @@ const MIGRATIONS = [
   new CreateSmsProviderTemplatesConsent1716000000055(),
   new EncryptSmsSender1716000000068(),
   new SmsOutboxConsentIdentity1716000000069(),
-  new SmsTempPasswordTemplate1716000000192(),
+  new SmsTempPasswordTemplate1716000000195(),
 ];
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));

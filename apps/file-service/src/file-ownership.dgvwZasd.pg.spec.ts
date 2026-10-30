@@ -1,5 +1,5 @@
 import { DataSource } from 'typeorm';
-import { FileOwnershipRegistry1716000000191 } from '../../../migrations/1716000000191-FileOwnershipRegistry';
+import { FileOwnershipRegistry1716000000193 } from '../../../migrations/1716000000193-FileOwnershipRegistry';
 import { FileObject } from './entities/file-object.entity';
 import { FileOwnershipService } from './file-ownership.service';
 
@@ -20,7 +20,7 @@ const describePg = PG_URI ? describe : describe.skip;
 describePg('file_objects — real Postgres (dgvwZasd B)', () => {
   let ds: DataSource;
   let service: FileOwnershipService;
-  const migration = new FileOwnershipRegistry1716000000191();
+  const migration = new FileOwnershipRegistry1716000000193();
 
   beforeAll(async () => {
     ds = await new DataSource({

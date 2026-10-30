@@ -244,7 +244,7 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
   with no RMQ retry, and reads live status via `notification.sms.delivery_status`.
   In `sms_outbox` the password lives in `text` only until the provider accepts
   or the row is terminal, then `text` becomes `redacted_text` (added by
-  migration 192); `last_error`, `last_response` and the scheduler log are
+  migration 195); `last_error`, `last_response` and the scheduler log are
   scrubbed with `scrubSmsSecret`. Template `user.temp_password` (class
   `security`, OTP quota) needs provider approval.
   `POST /users/:id/password/resend-sms`: SA; admin except admin/SA; manager only
@@ -948,7 +948,7 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
 ### file-service (MinIO + `file_schema`)
 - `file.{upload,get_url,delete,exists,read,find_owner,generate_pdf,generate_qr}`.
   Signed URLs; size/TTL from env.
-- **Ownership registry (dgvwZasd B, migr 191):** `file_schema.file_objects`
+- **Ownership registry (dgvwZasd B, migr 193):** `file_schema.file_objects`
   (`key` PK, `folder`, `owner_id` varchar — user id or `system`, `owner_role`,
   `owner_branch_id`, `mime_type`, `size_bytes`, `created_at`). Written by
   `file.upload` only when the payload has `owner` (gateway JWT: `POST
@@ -966,7 +966,7 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
   registrator, branch, operator) when the order's `branch_id` /
   `holder_branch_id` / `home_branch_id` or the uploader's branch is theirs,
   or they are in the HQ branch. Registry lookup failure → 503, never the
-  legacy rule. Key WITHOUT a row (files uploaded before migr 191) → legacy
+  legacy rule. Key WITHOUT a row (files uploaded before migr 193) → legacy
   rule in both modes (role gate + order owner for market/courier). `GET
   files/signed/:token` is a bearer link and does not consult the registry;
   `shift-check-` / `shift-report-` / `cashbox-receipt-` via `GET files/:key`

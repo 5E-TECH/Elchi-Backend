@@ -76,7 +76,7 @@ export class SmsOutbox {
   text!: string;
 
   /**
-   * (aidsxJ2H, migratsiya 1716000000192) Maxfiy SMS'ning (vaqtinchalik
+   * (aidsxJ2H, migratsiya 1716000000195) Maxfiy SMS'ning (vaqtinchalik
    * parol) ALLAQACHON maskalangan matni: provayder qabul qilgach / terminal
    * xatoda `text` shu bilan almashtiriladi. OTP va boshqa qatorlarda NULL.
    */
