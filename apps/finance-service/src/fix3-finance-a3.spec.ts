@@ -606,7 +606,7 @@ describe('M12 — filial kassasi qo`lda chiqimda manfiyga tushmaydi', () => {
     expect(error).toBeInstanceOf(RpcException);
     expect((error as RpcException).getError()).toEqual({
       statusCode: 400,
-      message: 'Insufficient cash balance',
+      message: "Naqd kassada yetarli mablag' yo'q",
     });
     expect(env.manager.save).not.toHaveBeenCalled();
     expect(env.queryRunner.rollbackTransaction).toHaveBeenCalled();
@@ -1101,7 +1101,7 @@ describe('C2 / CODE-22 — moliyaviy balans sana filtri Toshkent kuni', () => {
 
     expect((error as RpcException).getError()).toEqual({
       statusCode: 400,
-      message: 'Invalid date format: abc',
+      message: "Sana formati noto'g'ri: abc",
     });
   });
 

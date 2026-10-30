@@ -55,7 +55,7 @@ const FULL = {
     branch: { id: '3' },
   },
 };
-const NOT_FOUND = { statusCode: 404, message: 'Order not found' };
+const NOT_FOUND = { statusCode: 404, message: 'Buyurtma topilmadi' };
 
 const user = (sub: string, roles: string[]) => ({
   user: { sub, username: `u${sub}`, roles },

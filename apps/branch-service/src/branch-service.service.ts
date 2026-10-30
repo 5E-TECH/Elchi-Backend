@@ -6857,7 +6857,7 @@ export class BranchServiceService implements OnModuleInit {
       requester?.branch_id ?? managerAssignment?.branch_id ?? '',
     ).trim();
     if (!managerBranchId) {
-      return successRes(null, 200, 'Manager branch assignment not found');
+      return successRes(null, 200, 'Menejer filialga biriktirilmagan');
     }
 
     const managerBranch = await this.getBranchOrThrow(managerBranchId);

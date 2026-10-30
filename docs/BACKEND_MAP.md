@@ -1394,7 +1394,17 @@ secret (secret never reaches the gateway).
 - **Idempotency / outbox / activity-log / soft-delete:** available in
   `libs/common` — use for money ops and audit-sensitive writes.
 - **Validation:** gateway `ValidationPipe` is `whitelist + forbidNonWhitelisted`
-  → unknown body fields are rejected (400).
+  → unknown body fields are rejected (400). The global pipe is `UzValidationPipe`
+  (ZDweRm02, `apps/api-gateway/src/validation`): class-validator texts are
+  translated to Uzbek by `translateValidationMessage` (`libs/common/src/validation`)
+  keeping the field name and nested path; custom DTO messages stay.
+- **Error texts (ZDweRm02):** user-facing 4xx/5xx messages are Uzbek. Exceptions:
+  `/partner/*` DTOs (list `PARTNER_API_DTOS`, a spec walks the controller — add new
+  partner DTOs there), `order.cancel` on the partner path
+  (`partner-cancel-messages.ts`: `rmqRequestStrict` forwards the text to the
+  partner), webhooks, `integration-service`, and strings matched by code/FE
+  (`Session revoked`, `Idempotency in_progress`, `Cashbox already exists`).
+  Business logic must branch on `statusCode` / `code`, never on message text.
 
 ---
 
@@ -1513,7 +1523,7 @@ secret (secret never reaches the gateway).
   (RBAC-02 decision); registrators no longer see MAIN cashbox history; no SA
   "detach order from NEW post" endpoint (FE hides the action, LC-15); no
   salary payout command (FE hides "Maosh to'lash"); `GET /export/shifts.xlsx`
-  is not wired in the FE and finance shift errors are English; bound Telegram
+  is not wired in the FE; bound Telegram
   groups get no automatic order alerts; FE popups are capped at 100 rows
   (FE-PAY-13).
 ```

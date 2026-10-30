@@ -107,7 +107,7 @@ describe('nCAFnqIe — markets/:marketId/new MARKET_OPERATOR (faqat o‘z market
       controller.findNewOrdersByMarket('502', req('26', ['market_operator'])),
     ).rejects.toThrow(
       new ForbiddenException(
-        'market_operator role cannot query other market_id',
+        "Market operatori boshqa market ma'lumotini so'rashi mumkin emas",
       ),
     );
     expect(sentTo(order, 'order.find_new_by_market_enriched')).toHaveLength(0);

@@ -182,7 +182,7 @@ describe('BranchTransferBatchService bulk batch handlers', () => {
     expect(hasNullGuard).toBe(true);
   });
 
-  it('bulkAssignBatch error message mentions "already assigned" on mismatch', async () => {
+  it('bulkAssignBatch xabarda «allaqachon» saqlanadi (FE shu so‘z bo‘yicha taniydi)', async () => {
     // The new error wording helps an operator distinguish "order missing"
     // from "concurrent batch took it" when reading logs.
     const { service } = createSetup({ affected: 0 });
@@ -197,7 +197,9 @@ describe('BranchTransferBatchService bulk batch handlers', () => {
     } catch (err: any) {
       const payload = err.getError();
       expect(payload.statusCode).toBe(409);
-      expect(payload.message).toMatch(/already assigned to another batch/i);
+      expect(payload.message).toMatch(
+        /allaqachon boshqa paketga biriktirilgan/,
+      );
     }
   });
 });

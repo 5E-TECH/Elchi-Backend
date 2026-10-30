@@ -19,7 +19,7 @@ export class C2cServiceController {
 
   private notImplemented(): never {
     throw new RpcException(
-      errorRes('C2C functionality is not implemented yet', 501),
+      errorRes('C2C funksiyasi hali ishga tushirilmagan', 501),
     );
   }
 

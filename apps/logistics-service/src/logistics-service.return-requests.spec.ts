@@ -68,7 +68,7 @@ describe('LogisticsServiceService — qaytarish so‘rovlari', () => {
                 () =>
                   new RpcException({
                     statusCode: 404,
-                    message: 'Order not found',
+                    message: 'Buyurtma topilmadi',
                   }),
               );
             }
@@ -651,7 +651,7 @@ describe('LogisticsServiceService — qaytarish so‘rovlari', () => {
             remainingErrors: {
               '55': new RpcException({
                 statusCode: 502,
-                message: 'Order list request failed',
+                message: "Buyurtmalar ro'yxatini olib bo'lmadi",
               }),
             },
           },

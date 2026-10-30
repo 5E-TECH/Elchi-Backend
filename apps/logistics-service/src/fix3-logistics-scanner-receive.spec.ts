@@ -193,9 +193,9 @@ describe('FIX3 CODE-13 — P1b receive_one_by_scan xatosi holat kodi bilan qayta
   });
 
   it('xom {statusCode:404} — RpcException 404', async () => {
-    const ctx = setup({ statusCode: 404, message: 'Order not found' });
+    const ctx = setup({ statusCode: 404, message: 'Buyurtma topilmadi' });
 
-    await expectRpc(scan(ctx.service), 404, 'Order not found');
+    await expectRpc(scan(ctx.service), 404, 'Buyurtma topilmadi');
   });
 
   it('timeout — RpcException 502 (o‘zbekcha matn)', async () => {

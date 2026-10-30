@@ -242,7 +242,7 @@ describe('YEThmZBn (b) — PATCH /users/:id district_id', () => {
     const { service, saved } = makeService(courierRow(), {
       district: () => {
         // RMQ klienti xatoni `{ statusCode, message }` shaklida qaytaradi.
-        throw Object.assign(new Error('District not found'), {
+        throw Object.assign(new Error('Tuman topilmadi'), {
           statusCode: 404,
         });
       },

@@ -211,7 +211,7 @@ export class NotificationPreferencesService {
   async update(input: { user_id?: unknown; items?: unknown }) {
     const userId = this.requireUserId(input?.user_id);
     if (!Array.isArray(input?.items) || !input.items.length) {
-      throw badRequest('items must be a non-empty array');
+      throw badRequest("items bo'sh bo'lmagan ro'yxat bo'lishi kerak");
     }
     if (input.items.length > MAX_ITEMS) {
       throw badRequest(`items: ko'pi bilan ${MAX_ITEMS} ta`);
@@ -247,7 +247,7 @@ export class NotificationPreferencesService {
         );
       }
       if (item.enabled !== null && typeof item.enabled !== 'boolean') {
-        throw badRequest('enabled must be boolean or null');
+        throw badRequest("enabled true, false yoki null bo'lishi kerak");
       }
       if (
         item.enabled === false &&
@@ -306,7 +306,7 @@ export class NotificationPreferencesService {
 
   private requireUserId(value: unknown): string {
     if (!isUserId(value)) {
-      throw badRequest('user_id must be a bigint-like numeric string');
+      throw badRequest("user_id raqamli bo'lishi kerak");
     }
     return String(value).trim();
   }

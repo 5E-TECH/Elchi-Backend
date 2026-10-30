@@ -274,7 +274,7 @@ export class OtpService {
       });
       throw new RpcException({
         statusCode: 401,
-        message: 'Invalid credentials',
+        message: "Telefon raqami yoki kod noto'g'ri",
       });
     }
     return this.auth.sessionForUser(user, 'otp');

@@ -91,7 +91,7 @@ export class NotificationCampaignGatewayController {
     ).catch((error: unknown) => {
       if (error instanceof TimeoutError) {
         throw new GatewayTimeoutException(
-          'Notification service response timeout',
+          'Bildirishnoma xizmati vaqtida javob bermadi (timeout)',
         );
       }
       throw error;

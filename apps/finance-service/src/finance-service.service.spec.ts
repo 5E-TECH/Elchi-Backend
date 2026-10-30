@@ -1922,7 +1922,7 @@ describe('Toshkent kun chegarasi (SqVMuhKo)', () => {
       expect(error).toBeInstanceOf(RpcException);
       expect((error as RpcException).getError()).toEqual({
         statusCode: 400,
-        message: 'Invalid date format: abc',
+        message: "Sana formati noto'g'ri: abc",
       });
       expect(historyRepo.find).not.toHaveBeenCalled();
     });
@@ -2019,7 +2019,7 @@ describe('Toshkent kun chegarasi (SqVMuhKo)', () => {
       expect(error).toBeInstanceOf(RpcException);
       expect((error as RpcException).getError()).toEqual({
         statusCode: 400,
-        message: 'Invalid date format: abc',
+        message: "Sana formati noto'g'ri: abc",
       });
       expect(historyRepo.findAndCount).not.toHaveBeenCalled();
     });

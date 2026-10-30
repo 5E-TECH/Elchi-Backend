@@ -189,7 +189,7 @@ describe('Elchi Pochta #3 — boshqa sessiyalarni yopish (gateway, haqiqiy JwtSt
           return String(payload.refreshToken).startsWith('rt-phone')
             ? throwError(() => ({
                 statusCode: 401,
-                message: 'Invalid refresh token',
+                message: 'Refresh token yaroqsiz',
                 data: null,
               }))
             : of({
@@ -323,7 +323,7 @@ describe('Elchi Pochta #3 — boshqa sessiyalarni yopish (gateway, haqiqiy JwtSt
       .set('Cookie', 'refreshToken=rt-phone')
       .expect(401);
     expect((refresh.body as { message: string }).message).toBe(
-      'Invalid refresh token',
+      'Refresh token yaroqsiz',
     );
 
     await request(http())

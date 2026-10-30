@@ -31,7 +31,7 @@ const badRequest = (message: string) =>
 
 const requireText = (value: unknown, field: string): string => {
   const text = typeof value === 'string' ? value.trim() : '';
-  if (!text) throw badRequest(`${field} is required`);
+  if (!text) throw badRequest(`${field} majburiy`);
   return text;
 };
 
@@ -68,7 +68,7 @@ export class PushSubscriptionService {
     const userId = requireText(input?.user_id, 'user_id');
     const endpoint = requireText(input?.endpoint, 'endpoint');
     if (!/^https:\/\//i.test(endpoint)) {
-      throw badRequest('endpoint must be an https URL');
+      throw badRequest("endpoint https manzil bo'lishi kerak");
     }
     const p256dh = requireText(input?.keys?.p256dh, 'keys.p256dh');
     const auth = requireText(input?.keys?.auth, 'keys.auth');

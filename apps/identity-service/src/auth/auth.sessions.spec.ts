@@ -901,7 +901,7 @@ describe('Elchi Pochta #3 — refresh', () => {
     expect(w.sidOf(refreshed.accessToken)).toBe(row.id);
   });
 
-  it('yopilgan sessiya (logout) — 401 "Invalid refresh token", eski ustun uni tiriltirmaydi', async () => {
+  it('yopilgan sessiya (logout) — 401 "Refresh token yaroqsiz", eski ustun uni tiriltirmaydi', async () => {
     const w = makeWorld();
     const res = await w.login('25');
     await w.service.logout('25', { sessionId: w.sidOf(res.accessToken) });
@@ -914,7 +914,7 @@ describe('Elchi Pochta #3 — refresh', () => {
     expect(err).toEqual(
       expect.objectContaining({
         statusCode: 401,
-        message: 'Invalid refresh token',
+        message: 'Refresh token yaroqsiz',
       }),
     );
     expect(failureReasons(w.activityLog)).toEqual(['refresh_session_revoked']);
@@ -1401,7 +1401,7 @@ describe('Elchi Pochta #3 — egasi boshqa sessiyasini yopadi (identity.auth.ses
     expect(err).toEqual(
       expect.objectContaining({
         statusCode: 401,
-        message: 'Invalid refresh token',
+        message: 'Refresh token yaroqsiz',
       }),
     );
     expect(failureReasons(w.activityLog)).toEqual(['refresh_session_revoked']);

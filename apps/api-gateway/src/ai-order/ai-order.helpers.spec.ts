@@ -215,7 +215,9 @@ describe('ai-order.helpers', () => {
     it('GatewayTimeoutException → timeout_unknown', () => {
       expect(
         toConfirmFailure(
-          new GatewayTimeoutException('Order service response timeout'),
+          new GatewayTimeoutException(
+            'Buyurtma xizmati vaqtida javob bermadi (timeout)',
+          ),
         ),
       ).toEqual({
         code: 'timeout_unknown',
@@ -429,7 +431,7 @@ describe('ai-order.helpers', () => {
       };
       for (const error of [
         leaky,
-        new NotFoundException('Order not found'),
+        new NotFoundException('Buyurtma topilmadi'),
         new Error('socket hang up +998901234567'),
         // Gateway'ning O'Z xatosi (RMQ javobi emas) — noma'lum deb olinmaydi.
         new Error('Internal server error'),

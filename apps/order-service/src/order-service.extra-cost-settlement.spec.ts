@@ -297,7 +297,7 @@ describe("bekor qilingan buyurtmaning qo'shimcha xarajati", () => {
  * Audit M3 dan beri filial kassasi faqat kuryerdan pul qabul qilinganda
  * ko'payadi. Menejer o'zi sotganda kuryer yo'q — ilgari bu naqd filial
  * kassasiga umuman tushmasdi: 150 000 lik sotuvdan 140 000 ni HQ'ga
- * topshirishda `branch-to-main` "Insufficient cash balance" qaytardi.
+ * topshirishda `branch-to-main` "Naqd kassada yetarli mablag' yo'q" qaytardi.
  */
 /** Harness stub'lariga bog'lanmagan (unbound) murojaat qilmaslik uchun. */
 const mocksOf = (s: unknown) => s as Record<string, jest.Mock>;

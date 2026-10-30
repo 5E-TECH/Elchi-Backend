@@ -316,7 +316,8 @@ describe('LogisticsServiceService.openReturnPostsForCourier', () => {
       expect((error as RpcException).getError()).toEqual(
         expect.objectContaining({
           statusCode: 502,
-          message: 'Order list request failed',
+          // (ZDweRm02) o'zbekcha xabar.
+          message: "Buyurtmalar ro'yxatini olib bo'lmadi",
         }),
       );
     } finally {

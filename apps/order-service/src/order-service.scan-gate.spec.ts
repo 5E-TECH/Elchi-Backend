@@ -130,7 +130,7 @@ describe("receiveExternalByScan — token qo'riqchisi", () => {
     const { svc } = makeSvc([]);
     await expect(
       (svc as any).receiveExternalByScan({ tokens: [] }),
-    ).rejects.toThrow(/tokens is required/);
+    ).rejects.toThrow(/tokens majburiy/);
   });
 
   it("⭐ 200 dan ko'p token rad etiladi", async () => {

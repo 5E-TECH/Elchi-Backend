@@ -22,6 +22,7 @@ import { OrderAnalyticsService } from './analytics/order-analytics.service';
 import { BranchTransferBatchService } from './transfer-batch/branch-transfer-batch.service';
 import { OrderSettlementService } from './settlement/order-settlement.service';
 import { OrderLifecycleService } from './lifecycle/order-lifecycle.service';
+import { keepPartnerCancelMessage } from './lifecycle/partner-cancel-messages';
 import { OrderNotificationService } from './notification/order-notification.service';
 import type { PartlySellRequestItem } from './lifecycle/partly-sell-items';
 import type { CancelReturnStage } from './cancel-return/cancel-return';
@@ -660,11 +661,14 @@ export class OrderServiceController {
     @Ctx() context: RmqContext,
   ) {
     return this.runIdempotent(context, 'order.cancel', data.request_id, () =>
-      this.lifecycleService.cancelOrder(
-        data.requester,
-        data.id,
-        data.dto ?? {},
-        data.request_id,
+      // (ZDweRm02) Hamkor yo'lida xato matni — tashqi shartnoma, o'zgarmaydi.
+      keepPartnerCancelMessage(data.requester, () =>
+        this.lifecycleService.cancelOrder(
+          data.requester,
+          data.id,
+          data.dto ?? {},
+          data.request_id,
+        ),
       ),
     );
   }

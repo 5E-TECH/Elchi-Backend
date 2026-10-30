@@ -253,7 +253,9 @@ export class LogisticsGatewayController {
       this.logisticsClient.send(pattern, payload).pipe(timeout(8000)),
     ).catch((error: unknown) => {
       if (error instanceof TimeoutError) {
-        throw new GatewayTimeoutException('Logistics service response timeout');
+        throw new GatewayTimeoutException(
+          'Logistika xizmati vaqtida javob bermadi (timeout)',
+        );
       }
       throw error;
     });

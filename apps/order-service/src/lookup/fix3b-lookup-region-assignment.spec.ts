@@ -70,7 +70,7 @@ describe('fix3b — resolveRegionIdForDistrict (LC-13)', () => {
   it('logistika xatosi (404 / timeout) — null, xato otilmaydi', async () => {
     const lookup = makeLookup({
       logistics: jest.fn(() =>
-        throwError(() => ({ statusCode: 404, message: 'District not found' })),
+        throwError(() => ({ statusCode: 404, message: 'Tuman topilmadi' })),
       ),
     });
 

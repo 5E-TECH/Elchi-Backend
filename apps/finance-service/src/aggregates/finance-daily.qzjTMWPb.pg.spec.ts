@@ -484,7 +484,7 @@ describePg('qzjTMWPb — kunlik balans snapshot va agregat (Postgres)', () => {
   it('noto‘g‘ri sana / oraliq — 400', async () => {
     await expect(
       daily.historyDaily({ from_date: '2026-13-01' }, NOW),
-    ).rejects.toThrow('Invalid from_date');
+    ).rejects.toThrow("from_date noto'g'ri");
     await expect(
       daily.historyDaily(
         { from_date: '2026-10-05', to_date: '2026-10-01' },

@@ -95,7 +95,7 @@ export class BranchTransferBatchService {
       normalized !== BranchTransferDirection.RETURN
     ) {
       this.badRequest(
-        `direction must be one of: ${BranchTransferDirection.FORWARD}, ${BranchTransferDirection.RETURN}`,
+        `direction quyidagilardan biri bo'lishi kerak: ${BranchTransferDirection.FORWARD}, ${BranchTransferDirection.RETURN}`,
       );
     }
     return normalized as BranchTransferDirection;
@@ -104,10 +104,10 @@ export class BranchTransferBatchService {
   private normalizeTransferRequestKey(value?: string): string {
     const normalized = String(value ?? '').trim();
     if (!normalized) {
-      this.badRequest('request_key is required');
+      this.badRequest('request_key majburiy');
     }
     if (!/^[A-Za-z0-9_-]{8,80}$/.test(normalized)) {
-      this.badRequest('request_key must match /^[A-Za-z0-9_-]{8,80}$/');
+      this.badRequest("request_key formati noto'g'ri");
     }
     return normalized;
   }
@@ -115,10 +115,10 @@ export class BranchTransferBatchService {
   private normalizeInboxMessageId(value?: string): string {
     const normalized = String(value ?? '').trim();
     if (!normalized) {
-      this.badRequest('message_id is required');
+      this.badRequest('message_id majburiy');
     }
     if (!/^[A-Za-z0-9:_-]{8,128}$/.test(normalized)) {
-      this.badRequest('message_id must match /^[A-Za-z0-9:_-]{8,128}$/');
+      this.badRequest("message_id formati noto'g'ri");
     }
     return normalized;
   }
@@ -154,7 +154,7 @@ export class BranchTransferBatchService {
     }
     throw new RpcException({
       statusCode: 500,
-      message: 'QR token generate failed',
+      message: "QR token yaratib bo'lmadi",
     });
   }
 
@@ -208,9 +208,7 @@ export class BranchTransferBatchService {
     const maxRegionalPendingBatches = 13;
 
     if (!sourceBranchId || !destinationBranchId) {
-      this.badRequest(
-        'source_branch_id and destination_branch_id are required',
-      );
+      this.badRequest('source_branch_id va destination_branch_id majburiy');
     }
 
     const existing = await this.transferBatchRepo.find({
@@ -275,7 +273,7 @@ export class BranchTransferBatchService {
       unassignedOrders.length !== selectedOrderIds.length
     ) {
       this.badRequest(
-        'Some orders are not found, not NEW, or already assigned to another batch',
+        'Buyurtmalarning bir qismi topilmadi, yangi (NEW) holatda emas yoki allaqachon boshqa paketga biriktirilgan',
       );
     }
 
@@ -283,7 +281,7 @@ export class BranchTransferBatchService {
       Boolean(order.region_id),
     );
     if (!candidateOrders.length) {
-      this.badRequest('Unassigned orders for transfer not found');
+      this.badRequest('Paketga biriktirilmagan buyurtmalar topilmadi');
     }
 
     const grouped = new Map<string, Order[]>();
@@ -382,7 +380,7 @@ export class BranchTransferBatchService {
         if (!batch) {
           throw new RpcException({
             statusCode: 500,
-            message: 'Batch create failed',
+            message: "Paket yaratib bo'lmadi",
           });
         }
         touchedBatchIds.add(String(batch.id));
@@ -400,7 +398,8 @@ export class BranchTransferBatchService {
         if (Number(updateResult.affected ?? 0) !== orderIds.length) {
           throw new RpcException({
             statusCode: 409,
-            message: 'Some orders are already assigned to another batch',
+            message:
+              'Buyurtmalarning bir qismi allaqachon boshqa paketga biriktirilgan',
           });
         }
 
@@ -506,10 +505,10 @@ export class BranchTransferBatchService {
     );
 
     if (!sourceBranchId) {
-      this.badRequest('source_branch_id is required');
+      this.badRequest('source_branch_id majburiy');
     }
     if (!orderIds.length) {
-      this.badRequest('order_ids is required');
+      this.badRequest('order_ids majburiy');
     }
 
     const existing = await this.transferBatchRepo.find({
@@ -559,7 +558,7 @@ export class BranchTransferBatchService {
 
     if (orders.length !== orderIds.length) {
       this.badRequest(
-        'Some orders are not found or already assigned to another batch',
+        'Buyurtmalarning bir qismi topilmadi yoki allaqachon boshqa paketga biriktirilgan',
       );
     }
 
@@ -606,7 +605,9 @@ export class BranchTransferBatchService {
     for (const order of orders) {
       const destinationBranchId = resolveReturnDestination(order);
       if (!destinationBranchId) {
-        this.badRequest(`Order ${String(order.id)} has no home branch_id`);
+        this.badRequest(
+          `Buyurtma #${String(order.id)} uchun asosiy filial (branch_id) aniqlanmagan`,
+        );
       }
       const list = groupedByDestinationBranch.get(destinationBranchId) ?? [];
       list.push(order);
@@ -639,7 +640,7 @@ export class BranchTransferBatchService {
         const targetRegionId = String(branchOrders[0]?.region_id ?? '').trim();
         if (!targetRegionId) {
           this.badRequest(
-            `Orders for destination branch ${destinationBranchId} must have region_id`,
+            `Manzil filiali ${destinationBranchId} uchun buyurtmalarda region_id bo'lishi kerak`,
           );
         }
 
@@ -705,7 +706,7 @@ export class BranchTransferBatchService {
         if (!batch) {
           throw new RpcException({
             statusCode: 500,
-            message: 'Return batch create failed',
+            message: "Qaytarish paketini yaratib bo'lmadi",
           });
         }
 
@@ -722,7 +723,8 @@ export class BranchTransferBatchService {
         if (Number(updateResult.affected ?? 0) !== branchOrderIds.length) {
           throw new RpcException({
             statusCode: 409,
-            message: 'Some orders are already assigned to another batch',
+            message:
+              'Buyurtmalarning bir qismi allaqachon boshqa paketga biriktirilgan',
           });
         }
 
@@ -812,7 +814,7 @@ export class BranchTransferBatchService {
       ),
     );
     if (!batchIds.length) {
-      this.badRequest('batch_ids is required');
+      this.badRequest('batch_ids majburiy');
     }
 
     const requesterId = String(input?.requester_id ?? '').trim() || '0';
@@ -893,7 +895,7 @@ export class BranchTransferBatchService {
   }) {
     const batchId = String(input?.batch_id ?? '').trim();
     if (!batchId) {
-      this.badRequest('batch_id is required');
+      this.badRequest('batch_id majburiy');
     }
 
     const messageId = this.normalizeInboxMessageId(input?.message_id);
@@ -904,7 +906,7 @@ export class BranchTransferBatchService {
     );
 
     if (!orderIds.length) {
-      this.badRequest('order_ids is required');
+      this.badRequest('order_ids majburiy');
     }
 
     const queryRunner = this.dataSource.createQueryRunner();
@@ -955,7 +957,7 @@ export class BranchTransferBatchService {
         throw new RpcException({
           statusCode: 409,
           message:
-            'Some orders are not found or already assigned to another batch',
+            'Buyurtmalarning bir qismi topilmadi yoki allaqachon boshqa paketga biriktirilgan',
         });
       }
 
@@ -992,7 +994,7 @@ export class BranchTransferBatchService {
   async bulkRemoveFromBatch(input: { batch_id?: string; message_id?: string }) {
     const batchId = String(input?.batch_id ?? '').trim();
     if (!batchId) {
-      this.badRequest('batch_id is required');
+      this.badRequest('batch_id majburiy');
     }
 
     const messageId = this.normalizeInboxMessageId(input?.message_id);
@@ -1074,7 +1076,7 @@ export class BranchTransferBatchService {
   }) {
     const batchId = String(input?.batch_id ?? '').trim();
     if (!batchId) {
-      this.badRequest('batch_id is required');
+      this.badRequest('batch_id majburiy');
     }
 
     const userId = String(input?.user_id ?? '').trim() || '0';
@@ -1086,7 +1088,7 @@ export class BranchTransferBatchService {
     );
     if (!allowedActions.has(actionRaw)) {
       this.badRequest(
-        `action must be one of: ${Object.values(BranchTransferBatchAction).join(', ')}`,
+        `action quyidagilardan biri bo'lishi kerak: ${Object.values(BranchTransferBatchAction).join(', ')}`,
       );
     }
 
@@ -1095,7 +1097,7 @@ export class BranchTransferBatchService {
       select: ['id'],
     });
     if (!batch) {
-      this.notFound('Transfer batch not found');
+      this.notFound('Paket topilmadi');
     }
 
     const entity = this.transferBatchHistoryRepo.create({
@@ -1124,7 +1126,7 @@ export class BranchTransferBatchService {
   async findBranchTransferBatchHistory(batchId: string) {
     const id = String(batchId ?? '').trim();
     if (!id) {
-      this.badRequest('batch_id is required');
+      this.badRequest('batch_id majburiy');
     }
 
     const batch = await this.transferBatchRepo.findOne({
@@ -1132,7 +1134,7 @@ export class BranchTransferBatchService {
       select: ['id'],
     });
     if (!batch) {
-      this.notFound('Transfer batch not found');
+      this.notFound('Paket topilmadi');
     }
 
     const rows = await this.transferBatchHistoryRepo.find({
@@ -1156,14 +1158,14 @@ export class BranchTransferBatchService {
   async findBranchTransferBatchById(batchId: string) {
     const id = String(batchId ?? '').trim();
     if (!id) {
-      this.badRequest('batch_id is required');
+      this.badRequest('batch_id majburiy');
     }
 
     const batch = await this.transferBatchRepo.findOne({
       where: { id, isDeleted: false },
     });
     if (!batch) {
-      this.notFound('Transfer batch not found');
+      this.notFound('Paket topilmadi');
     }
 
     const items = await this.transferBatchItemRepo.find({
@@ -1277,7 +1279,7 @@ export class BranchTransferBatchService {
         )
       ) {
         this.badRequest(
-          `status must be one of: ${Object.values(BranchTransferBatchStatus).join(', ')}`,
+          `status quyidagilardan biri bo'lishi kerak: ${Object.values(BranchTransferBatchStatus).join(', ')}`,
         );
       }
       qb.andWhere('batch.status = :status', { status: statusRaw });
@@ -1290,7 +1292,7 @@ export class BranchTransferBatchService {
         )
       ) {
         this.badRequest(
-          `direction must be one of: ${Object.values(BranchTransferDirection).join(', ')}`,
+          `direction quyidagilardan biri bo'lishi kerak: ${Object.values(BranchTransferDirection).join(', ')}`,
         );
       }
       qb.andWhere('batch.direction = :direction', { direction: directionRaw });
@@ -1299,7 +1301,7 @@ export class BranchTransferBatchService {
     const parseDate = (value: string, field: 'date') => {
       const parsed = new Date(value);
       if (Number.isNaN(parsed.getTime())) {
-        this.badRequest(`${field} is invalid date format`);
+        this.badRequest(`${field} sana formati noto'g'ri`);
       }
       return parsed;
     };
@@ -1322,7 +1324,9 @@ export class BranchTransferBatchService {
     } else if (periodRaw) {
       const allowedPeriods = new Set(['today', 'week', 'month']);
       if (!allowedPeriods.has(periodRaw)) {
-        this.badRequest('period must be one of: today, week, month');
+        this.badRequest(
+          "period quyidagilardan biri bo'lishi kerak: today, week, month",
+        );
       }
 
       const now = new Date();
@@ -1474,7 +1478,7 @@ export class BranchTransferBatchService {
         )
       ) {
         this.badRequest(
-          `direction must be one of: ${Object.values(BranchTransferDirection).join(', ')}`,
+          `direction quyidagilardan biri bo'lishi kerak: ${Object.values(BranchTransferDirection).join(', ')}`,
         );
       }
     }
@@ -1528,14 +1532,14 @@ export class BranchTransferBatchService {
   async findRemainingBranchTransferBatchItems(batchId: string) {
     const id = String(batchId ?? '').trim();
     if (!id) {
-      this.badRequest('batch_id is required');
+      this.badRequest('batch_id majburiy');
     }
 
     const batch = await this.transferBatchRepo.findOne({
       where: { id, isDeleted: false },
     });
     if (!batch) {
-      this.notFound('Transfer batch not found');
+      this.notFound('Paket topilmadi');
     }
 
     const items = await this.transferBatchItemRepo.find({
@@ -1565,14 +1569,14 @@ export class BranchTransferBatchService {
   async findBranchTransferBatchByQrToken(token: string) {
     const normalizedToken = String(token ?? '').trim();
     if (!normalizedToken) {
-      this.badRequest('token is required');
+      this.badRequest('token majburiy');
     }
 
     const batch = await this.transferBatchRepo.findOne({
       where: { qr_code_token: normalizedToken, isDeleted: false },
     });
     if (!batch) {
-      this.notFound('Transfer batch not found');
+      this.notFound('Paket topilmadi');
     }
 
     const items = await this.transferBatchItemRepo.find({
@@ -1614,7 +1618,7 @@ export class BranchTransferBatchService {
     const driverPhone = String(input?.driver_phone ?? '').trim();
 
     if (!batchId) {
-      this.badRequest('batch_id is required');
+      this.badRequest('batch_id majburiy');
     }
 
     const orderIds = Array.from(
@@ -1625,7 +1629,7 @@ export class BranchTransferBatchService {
       ),
     );
     if (!orderIds.length) {
-      this.badRequest('orderIds is required');
+      this.badRequest('orderIds majburiy');
     }
 
     if (!vehiclePlate || !driverName || !driverPhone) {
@@ -1638,7 +1642,7 @@ export class BranchTransferBatchService {
       where: { id: batchId, isDeleted: false },
     });
     if (!batch) {
-      this.notFound('Transfer batch not found');
+      this.notFound('Paket topilmadi');
     }
 
     if (batch.status === BranchTransferBatchStatus.CANCELLED) {
@@ -1669,7 +1673,7 @@ export class BranchTransferBatchService {
       .filter((item): item is BranchTransferBatchItem => Boolean(item));
 
     if (selectedItems.length !== orderIds.length) {
-      this.badRequest('Some orderIds are not part of this batch');
+      this.badRequest("Tanlangan buyurtmalarning bir qismi bu paketda yo'q");
     }
 
     const now = new Date();
@@ -1859,7 +1863,7 @@ export class BranchTransferBatchService {
   }) {
     const batchId = String(input?.batch_id ?? '').trim();
     if (!batchId) {
-      this.badRequest('batch_id is required');
+      this.badRequest('batch_id majburiy');
     }
 
     const requesterId = String(input?.requester_id ?? '').trim() || '0';
@@ -1886,7 +1890,7 @@ export class BranchTransferBatchService {
         where: { id: batchId, isDeleted: false },
       });
       if (!batch) {
-        this.notFound('Transfer batch not found');
+        this.notFound('Paket topilmadi');
       }
 
       if (batch.status === BranchTransferBatchStatus.RECEIVED) {
@@ -2123,7 +2127,7 @@ export class BranchTransferBatchService {
   }) {
     const batchId = String(input?.batch_id ?? '').trim();
     if (!batchId) {
-      this.badRequest('batch_id is required');
+      this.badRequest('batch_id majburiy');
     }
 
     const orderIds = Array.isArray(input?.order_ids)
@@ -2161,7 +2165,7 @@ export class BranchTransferBatchService {
         where: { id: batchId, isDeleted: false },
       });
       if (!batch) {
-        this.notFound('Transfer batch not found');
+        this.notFound('Paket topilmadi');
       }
 
       if (batch.status === BranchTransferBatchStatus.RECEIVED) {
@@ -2514,10 +2518,10 @@ export class BranchTransferBatchService {
     const orderId = String(input?.order_id ?? '').trim();
     const courierBranchId = String(input?.courier_branch_id ?? '').trim();
     if (!orderId) {
-      this.badRequest('order_id is required');
+      this.badRequest('order_id majburiy');
     }
     if (!courierBranchId) {
-      this.badRequest('courier_branch_id is required');
+      this.badRequest('courier_branch_id majburiy');
     }
 
     const requesterId = String(input?.requester_id ?? '').trim() || '0';
@@ -2553,7 +2557,7 @@ export class BranchTransferBatchService {
         ],
       });
       if (!order) {
-        this.notFound('Order not found');
+        this.notFound('Buyurtma topilmadi');
       }
 
       const batchId = String(order.current_batch_id ?? '').trim();
@@ -2572,7 +2576,7 @@ export class BranchTransferBatchService {
         where: { id: batchId, isDeleted: false },
       });
       if (!batch) {
-        this.notFound('Transfer batch not found');
+        this.notFound('Paket topilmadi');
       }
 
       // Manzil mos kelmasa — bu boshqa filialning posilkasi. Chaqiruvchi o'zining
@@ -2813,7 +2817,7 @@ export class BranchTransferBatchService {
   }) {
     const batchId = String(input?.batch_id ?? '').trim();
     if (!batchId) {
-      this.badRequest('batch_id is required');
+      this.badRequest('batch_id majburiy');
     }
 
     const reason = String(input?.reason ?? '').trim();
@@ -2842,7 +2846,7 @@ export class BranchTransferBatchService {
         where: { id: batchId, isDeleted: false },
       });
       if (!batch) {
-        this.notFound('Transfer batch not found');
+        this.notFound('Paket topilmadi');
       }
 
       if (batch.status === BranchTransferBatchStatus.RECEIVED) {

@@ -801,7 +801,9 @@ export class LogisticsServiceService implements OnModuleInit {
       ) {
         throw new RpcException(downstreamError);
       }
-      throw new RpcException(errorRes(`Order #${id} lookup failed`, 502));
+      throw new RpcException(
+        errorRes(`Buyurtma #${id} ma'lumotini olib bo'lmadi`, 502),
+      );
     }
   }
 
@@ -994,7 +996,7 @@ export class LogisticsServiceService implements OnModuleInit {
       }
 
       throw new RpcException(
-        errorRes('Order service returned an invalid order list', 502),
+        errorRes("Buyurtmalar xizmati noto'g'ri ro'yxat qaytardi", 502),
       );
     } catch (error) {
       const downstreamError =
@@ -1006,7 +1008,9 @@ export class LogisticsServiceService implements OnModuleInit {
       ) {
         throw new RpcException(downstreamError);
       }
-      throw new RpcException(errorRes('Order list request failed', 502));
+      throw new RpcException(
+        errorRes("Buyurtmalar ro'yxatini olib bo'lmadi", 502),
+      );
     }
   }
 
@@ -1177,7 +1181,7 @@ export class LogisticsServiceService implements OnModuleInit {
       ) {
         throw new RpcException(downstreamError);
       }
-      throw new RpcException(errorRes(`Order #${id} update failed`, 502));
+      throw new RpcException(errorRes(`Buyurtma #${id} yangilanmadi`, 502));
     }
   }
 
@@ -1288,7 +1292,9 @@ export class LogisticsServiceService implements OnModuleInit {
       ) {
         throw new RpcException(downstreamError);
       }
-      throw new RpcException(errorRes('Order QR lookup failed', 502));
+      throw new RpcException(
+        errorRes("Buyurtma QR kodini tekshirib bo'lmadi", 502),
+      );
     }
 
     const candidates = [response?.data?.data, response?.data, response];
@@ -1502,7 +1508,7 @@ export class LogisticsServiceService implements OnModuleInit {
   ): Promise<BranchAssignmentRow | null> {
     const normalizedUserId = String(userId ?? '').trim();
     if (!normalizedUserId) {
-      this.badRequest('user_id is required');
+      this.badRequest('user_id majburiy');
     }
 
     try {
@@ -1776,7 +1782,7 @@ export class LogisticsServiceService implements OnModuleInit {
 
   async createPost(dto: CreatePostDto) {
     if (!dto.courier_id?.trim()) {
-      this.badRequest('courier_id is required');
+      this.badRequest('courier_id majburiy');
     }
 
     const uniqueOrderIds = [...new Set((dto.orderIDs ?? []).filter(Boolean))];
@@ -2691,7 +2697,7 @@ export class LogisticsServiceService implements OnModuleInit {
   async findPostById(id: string, requester?: RequesterContext) {
     const post = await this.postRepo.findOne({ where: { id } });
     if (!post) {
-      this.notFound('Post not found');
+      this.notFound('Pochta topilmadi');
     }
     // Z3pUOxou: logist — faqat o'z viloyati pochtasi, pulsiz, hech narsa
     // yozilmaydi.
@@ -2773,7 +2779,7 @@ export class LogisticsServiceService implements OnModuleInit {
   async deletePost(id: string) {
     const post = await this.postRepo.findOne({ where: { id } });
     if (!post) {
-      this.notFound('Post not found');
+      this.notFound('Pochta topilmadi');
     }
 
     const deletedSnapshot = {
@@ -2855,7 +2861,7 @@ export class LogisticsServiceService implements OnModuleInit {
         })
       : null;
     if (!post) {
-      this.notFound('Post not found');
+      this.notFound('Pochta topilmadi');
     }
 
     const view = (await this.getPostOrders(String(post.id), requester, {
@@ -2915,14 +2921,14 @@ export class LogisticsServiceService implements OnModuleInit {
   async findAllCouriersByPostId(id: string) {
     const post = await this.postRepo.findOne({ where: { id } });
     if (!post) {
-      this.notFound('Post not found');
+      this.notFound('Pochta topilmadi');
     }
 
     const couriers = post.region_id
       ? await this.listCouriersByRegion(post.region_id)
       : await this.listCouriers();
     if (!couriers.length) {
-      this.notFound('There are not any couriers for this region');
+      this.notFound('Bu viloyat uchun kuryer topilmadi');
     }
 
     return successRes(
@@ -2951,7 +2957,7 @@ export class LogisticsServiceService implements OnModuleInit {
       relations: ['region'],
     });
     if (!post) {
-      this.notFound('Post not found');
+      this.notFound('Pochta topilmadi');
     }
     const isCourier = (requester.roles ?? []).some(
       (role) => String(role).toLowerCase() === Roles.COURIER,
@@ -3103,10 +3109,10 @@ export class LogisticsServiceService implements OnModuleInit {
       where: { id, courier_id: requester.id },
     });
     if (!post) {
-      this.notFound('Post not found');
+      this.notFound('Pochta topilmadi');
     }
     if (post.status !== Post_status.SENT) {
-      this.badRequest('Only sent posts are available for courier');
+      this.badRequest("Kuryerga faqat jo'natilgan pochtalar ko'rinadi");
     }
 
     return this.getPostOrders(id, requester);
@@ -3115,7 +3121,7 @@ export class LogisticsServiceService implements OnModuleInit {
   async getRejectedPostOrders(id: string, requester?: RequesterContext) {
     const post = await this.postRepo.findOne({ where: { id } });
     if (!post) {
-      this.notFound('Post not found');
+      this.notFound('Pochta topilmadi');
     }
     const isCourier = (requester?.roles ?? []).some(
       (role) => String(role).toLowerCase() === Roles.COURIER,
@@ -3144,7 +3150,7 @@ export class LogisticsServiceService implements OnModuleInit {
 
   async checkPost(qrToken: string, dto: PostIdDto) {
     if (!dto.postId) {
-      this.badRequest('Post not found');
+      this.badRequest('Pochta topilmadi');
     }
 
     const orders = await this.findOrders({
@@ -3156,7 +3162,7 @@ export class LogisticsServiceService implements OnModuleInit {
     });
 
     if (!orders.length) {
-      this.notFound('Order not found');
+      this.notFound('Buyurtma topilmadi');
     }
 
     return successRes(
@@ -3168,7 +3174,7 @@ export class LogisticsServiceService implements OnModuleInit {
 
   async checkCancelPost(qrToken: string, dto: PostIdDto) {
     if (!dto.postId) {
-      this.badRequest('Post not found');
+      this.badRequest('Pochta topilmadi');
     }
 
     const orders = await this.findOrders({
@@ -3180,7 +3186,7 @@ export class LogisticsServiceService implements OnModuleInit {
     });
 
     if (!orders.length) {
-      this.notFound('Order not found');
+      this.notFound('Buyurtma topilmadi');
     }
 
     return successRes(
@@ -3193,16 +3199,16 @@ export class LogisticsServiceService implements OnModuleInit {
   async sendPost(id: string, dto: SendPostDto, requester?: RequesterContext) {
     const post = await this.postRepo.findOne({ where: { id } });
     if (!post) {
-      this.notFound('Post not found');
+      this.notFound('Pochta topilmadi');
     }
 
     const courier = await this.findCourierById(dto.courierId);
     if (!courier) {
-      this.notFound('Courier not found');
+      this.notFound('Kuryer topilmadi');
     }
 
     if (!dto.orderIds?.length) {
-      this.badRequest('You can not send an empty post');
+      this.badRequest("Bo'sh pochtani jo'natib bo'lmaydi");
     }
 
     const currentOrders = await this.findOrders({
@@ -3211,7 +3217,7 @@ export class LogisticsServiceService implements OnModuleInit {
       limit: 1000,
     });
     if (!currentOrders.length) {
-      this.badRequest('Post has no orders');
+      this.badRequest("Pochtada buyurtma yo'q");
     }
 
     const currentIds = currentOrders.map((o) => o.id);
@@ -3220,7 +3226,7 @@ export class LogisticsServiceService implements OnModuleInit {
       (orderId) => !currentIds.includes(orderId),
     );
     if (invalidIds.length) {
-      this.badRequest('Some selected orders are not inside this post');
+      this.badRequest("Tanlangan buyurtmalarning bir qismi bu pochtada yo'q");
     }
     const remainingIds = currentIds.filter(
       (orderId) => !selectedIds.includes(orderId),
@@ -3378,7 +3384,7 @@ export class LogisticsServiceService implements OnModuleInit {
   ) {
     const post = await this.postRepo.findOne({ where: { id } });
     if (!post) {
-      this.notFound('Post not found');
+      this.notFound('Pochta topilmadi');
     }
     const requesterRoles = (requester?.roles ?? []).map((role) =>
       String(role ?? '').toLowerCase(),
@@ -3440,7 +3446,7 @@ export class LogisticsServiceService implements OnModuleInit {
       post.status !== Post_status.SENT &&
       !(post.status === Post_status.RECEIVED && selectedHasReceivableOrder)
     ) {
-      this.badRequest('Cannot receive post with this status');
+      this.badRequest("Bu holatdagi pochtani qabul qilib bo'lmaydi");
     }
 
     const isBranchTransferPost =
@@ -3716,18 +3722,20 @@ export class LogisticsServiceService implements OnModuleInit {
   async reassignCourier(postId: string, courierId: string) {
     const post = await this.postRepo.findOne({ where: { id: postId } });
     if (!post) {
-      this.notFound('Post not found');
+      this.notFound('Pochta topilmadi');
     }
     if (post.status !== Post_status.SENT) {
-      this.badRequest('Only sent post can be reassigned');
+      this.badRequest(
+        "Faqat jo'natilgan pochtani boshqa kuryerga berish mumkin",
+      );
     }
     if (post.courier_id === courierId) {
-      this.badRequest('Post already assigned to this courier');
+      this.badRequest('Pochta allaqachon shu kuryerga biriktirilgan');
     }
 
     const courier = await this.findCourierById(courierId);
     if (!courier) {
-      this.notFound('Courier not found');
+      this.notFound('Kuryer topilmadi');
     }
 
     const oldCourierId = post.courier_id;
@@ -4126,7 +4134,7 @@ export class LogisticsServiceService implements OnModuleInit {
               result.reason instanceof RpcException
                 ? result.reason
                 : new RpcException(
-                    errorRes(`Order #${String(order.id)} update failed`, 502),
+                    errorRes(`Buyurtma #${String(order.id)} yangilanmadi`, 502),
                   );
           }
           continue;
@@ -4250,7 +4258,7 @@ export class LogisticsServiceService implements OnModuleInit {
           ? reason
           : new RpcException(
               errorRes(
-                `Order #${String(chunk[failedIndex].id)} update failed`,
+                `Buyurtma #${String(chunk[failedIndex].id)} yangilanmadi`,
                 502,
               ),
             );
@@ -4286,10 +4294,10 @@ export class LogisticsServiceService implements OnModuleInit {
       where: { qr_code_token: token, courier_id: requester.id },
     });
     if (!post) {
-      this.notFound('Post not found');
+      this.notFound('Pochta topilmadi');
     }
     if (post.status !== Post_status.SENT) {
-      this.badRequest('Post can not be received');
+      this.badRequest("Pochtani qabul qilib bo'lmaydi");
     }
 
     const orders = await this.findOrders({
@@ -4300,7 +4308,7 @@ export class LogisticsServiceService implements OnModuleInit {
     });
 
     if (!orders.length) {
-      this.notFound('There are not orders in this post');
+      this.notFound("Bu pochtada buyurtma yo'q");
     }
 
     // CODE-09 / C13 — skan bilan qabul qilingan posilka kuryer qo'lida:
@@ -4345,14 +4353,14 @@ export class LogisticsServiceService implements OnModuleInit {
   ) {
     const order = await this.findOrderById(orderId);
     if (!order.post_id) {
-      this.notFound('Order has no post');
+      this.notFound('Buyurtma hech qaysi pochtada emas');
     }
 
     const post = await this.postRepo.findOne({
       where: { id: String(order.post_id), courier_id: requester.id },
     });
     if (!post) {
-      this.notFound('Post not found or not assigned to this courier');
+      this.notFound('Pochta topilmadi yoki bu kuryerga biriktirilmagan');
     }
 
     // CODE-09 / C13 — qaytarish so'rovi belgisi tozalanadi (yuqoriga qarang).
@@ -4438,7 +4446,7 @@ export class LogisticsServiceService implements OnModuleInit {
   ) {
     const qrToken = String(dto?.qr_token ?? '').trim();
     if (!qrToken) {
-      this.badRequest('qr_token is required');
+      this.badRequest('qr_token majburiy');
     }
 
     let order = await this.findOrderByQrToken(qrToken);
@@ -4686,7 +4694,7 @@ export class LogisticsServiceService implements OnModuleInit {
       this.badRequest('order_ids bo‘sh bo‘lishi mumkin emas');
     }
     if (!courierId) {
-      this.badRequest('courier_id is required');
+      this.badRequest('courier_id majburiy');
     }
 
     const requesterId = String(requester?.id ?? '').trim();
@@ -5005,7 +5013,7 @@ export class LogisticsServiceService implements OnModuleInit {
 
     const orderIds = [...new Set(dto.order_ids ?? [])];
     if (!orderIds.length) {
-      this.badRequest('No orders provided');
+      this.badRequest('Buyurtmalar tanlanmagan');
     }
     const courierBranchId = await this.findCourierBranchId(requester);
     let canceledPost = await this.postRepo.findOne({
@@ -5020,7 +5028,9 @@ export class LogisticsServiceService implements OnModuleInit {
     for (const orderId of orderIds) {
       const order = await this.findOrderById(orderId);
       if (!this.isCancelledPostEligibleOrder(order.status)) {
-        this.badRequest('Some orders are not in CANCELED status');
+        this.badRequest(
+          'Tanlangan buyurtmalarning bir qismi bekor qilingan (CANCELED) holatda emas',
+        );
       }
       if (
         this.isCancelledOrder(order.status) &&
@@ -5172,7 +5182,7 @@ export class LogisticsServiceService implements OnModuleInit {
 
     const orderIds = [...new Set(dto.order_ids ?? [])];
     if (!orderIds.length) {
-      this.badRequest('No orders provided');
+      this.badRequest('Buyurtmalar tanlanmagan');
     }
 
     let canceledPost = await this.postRepo.findOne({
@@ -5187,7 +5197,9 @@ export class LogisticsServiceService implements OnModuleInit {
     for (const orderId of orderIds) {
       const order = await this.findOrderById(orderId);
       if (!this.isCancelledPostEligibleOrder(order.status)) {
-        this.badRequest('Some orders are not in CANCELED status');
+        this.badRequest(
+          'Tanlangan buyurtmalarning bir qismi bekor qilingan (CANCELED) holatda emas',
+        );
       }
       if (
         this.isCancelledOrder(order.status) &&
@@ -5465,10 +5477,10 @@ export class LogisticsServiceService implements OnModuleInit {
   ) {
     const post = await this.postRepo.findOne({ where: { id } });
     if (!post) {
-      this.notFound('Post not found');
+      this.notFound('Pochta topilmadi');
     }
     if (post.status !== Post_status.CANCELED) {
-      this.badRequest('Post with this status can not be received');
+      this.badRequest("Bu holatdagi pochtani qabul qilib bo'lmaydi");
     }
     const scopedBranchId = await this.resolveScopedBranchId(requester);
     const targetBranchId =
@@ -5504,7 +5516,7 @@ export class LogisticsServiceService implements OnModuleInit {
 
     if (invalidIds.length) {
       this.badRequest(
-        `Some order_ids do not belong to this post: ${invalidIds.join(', ')}`,
+        `Bu buyurtmalar ushbu pochtaga tegishli emas: ${invalidIds.join(', ')}`,
       );
     }
 
@@ -5647,7 +5659,7 @@ export class LogisticsServiceService implements OnModuleInit {
       where: { id: dto.region_id },
     });
     if (!region) {
-      this.notFound('Region not found');
+      this.notFound('Viloyat topilmadi');
     }
 
     const trimmedName = dto.name.trim();
@@ -5657,7 +5669,7 @@ export class LogisticsServiceService implements OnModuleInit {
       where: { name: trimmedName, region_id: dto.region_id },
     });
     if (exists) {
-      this.conflict('District already exists in this region');
+      this.conflict('Bu viloyatda shunday tuman allaqachon mavjud');
     }
 
     if (satoCode) {
@@ -5665,7 +5677,7 @@ export class LogisticsServiceService implements OnModuleInit {
         where: { sato_code: satoCode },
       });
       if (existingBySato) {
-        this.conflict('District sato_code already exists');
+        this.conflict('Bunday SATO kodli tuman allaqachon mavjud');
       }
     }
 
@@ -5681,7 +5693,7 @@ export class LogisticsServiceService implements OnModuleInit {
       saved = await this.districtRepo.save(district);
     } catch (err) {
       if (this.isUniqueViolation(err)) {
-        this.conflict('District sato_code already exists');
+        this.conflict('Bunday SATO kodli tuman allaqachon mavjud');
       }
       throw err;
     }
@@ -5718,7 +5730,7 @@ export class LogisticsServiceService implements OnModuleInit {
       relations: ['region', 'assignedToRegion'],
     });
     if (!district) {
-      this.notFound('District not found');
+      this.notFound('Tuman topilmadi');
     }
     return successRes(district);
   }
@@ -5750,20 +5762,20 @@ export class LogisticsServiceService implements OnModuleInit {
 
     const district = await this.districtRepo.findOne({ where: { id } });
     if (!district) {
-      this.notFound('District not found');
+      this.notFound('Tuman topilmadi');
     }
 
     const before = { assigned_region: district.assigned_region };
 
     if (district.assigned_region === dto.assigned_region) {
-      this.badRequest('The district already assigned to this region');
+      this.badRequest('Tuman allaqachon shu viloyatga biriktirilgan');
     }
 
     const assigningRegion = await this.regionRepo.findOne({
       where: { id: dto.assigned_region },
     });
     if (!assigningRegion) {
-      this.notFound('The region you are trying to assign does not exist');
+      this.notFound('Biriktirilayotgan viloyat topilmadi');
     }
 
     district.assigned_region = assigningRegion.id;
@@ -5787,21 +5799,21 @@ export class LogisticsServiceService implements OnModuleInit {
   async updateDistrictName(id: string, dto: UpdateDistrictNameDto) {
     const district = await this.districtRepo.findOne({ where: { id } });
     if (!district) {
-      this.notFound('District not found');
+      this.notFound('Tuman topilmadi');
     }
 
     const before = { name: district.name };
 
     const trimmedName = dto.name.trim();
     if (!trimmedName) {
-      this.badRequest('District name is required');
+      this.badRequest('Tuman nomi majburiy');
     }
 
     const duplicate = await this.districtRepo.findOne({
       where: { name: trimmedName, region_id: district.region_id },
     });
     if (duplicate && duplicate.id !== district.id) {
-      this.conflict('District name already exists in this region');
+      this.conflict('Bu viloyatda shu nomli tuman allaqachon mavjud');
     }
 
     district.name = trimmedName;
@@ -5822,21 +5834,21 @@ export class LogisticsServiceService implements OnModuleInit {
   async updateDistrictSatoCode(id: string, dto: UpdateDistrictSatoCodeDto) {
     const district = await this.districtRepo.findOne({ where: { id } });
     if (!district) {
-      this.notFound('District not found');
+      this.notFound('Tuman topilmadi');
     }
 
     const before = { sato_code: district.sato_code };
 
     const satoCode = dto.sato_code.trim();
     if (!satoCode) {
-      this.badRequest('District sato_code is required');
+      this.badRequest('Tuman SATO kodi majburiy');
     }
 
     const existingWithCode = await this.districtRepo.findOne({
       where: { sato_code: satoCode },
     });
     if (existingWithCode && existingWithCode.id !== id) {
-      this.conflict('District sato_code already exists');
+      this.conflict('Bunday SATO kodli tuman allaqachon mavjud');
     }
 
     district.sato_code = satoCode;
@@ -5846,7 +5858,7 @@ export class LogisticsServiceService implements OnModuleInit {
     } catch (err) {
       // SlMjauWC: tekshiruv va yozish orasidagi poyga — unique indeks 23505.
       if (this.isUniqueViolation(err)) {
-        this.conflict('District sato_code already exists');
+        this.conflict('Bunday SATO kodli tuman allaqachon mavjud');
       }
       throw err;
     }
@@ -5869,7 +5881,7 @@ export class LogisticsServiceService implements OnModuleInit {
       relations: ['region', 'assignedToRegion'],
     });
     if (!district) {
-      this.notFound('District not found');
+      this.notFound('Tuman topilmadi');
     }
     return successRes(district);
   }
@@ -6160,7 +6172,7 @@ export class LogisticsServiceService implements OnModuleInit {
   async deleteDistrict(id: string) {
     const district = await this.districtRepo.findOne({ where: { id } });
     if (!district) {
-      this.notFound('District not found');
+      this.notFound('Tuman topilmadi');
     }
     // oNAE3LW9: ilgari hech narsa tekshirilmasdan `remove` qilinardi.
     const usage = await this.collectGeoUsage({ district_id: String(id) });
@@ -6237,7 +6249,7 @@ export class LogisticsServiceService implements OnModuleInit {
   async getDistrictUsage(id: string) {
     const district = await this.districtRepo.findOne({ where: { id } });
     if (!district) {
-      this.notFound('District not found');
+      this.notFound('Tuman topilmadi');
     }
     const usage = await this.collectGeoUsage(
       { district_id: String(id) },
@@ -6255,19 +6267,19 @@ export class LogisticsServiceService implements OnModuleInit {
     const satoCode = dto.sato_code.trim();
 
     if (!name || !satoCode) {
-      this.badRequest('name and sato_code are required');
+      this.badRequest('name va sato_code majburiy');
     }
 
     const existingByName = await this.regionRepo.findOne({ where: { name } });
     if (existingByName) {
-      this.conflict('Region name already exists');
+      this.conflict('Shu nomli viloyat allaqachon mavjud');
     }
 
     const existingBySato = await this.regionRepo.findOne({
       where: { sato_code: satoCode },
     });
     if (existingBySato) {
-      this.conflict('Region sato_code already exists');
+      this.conflict('Bunday SATO kodli viloyat allaqachon mavjud');
     }
 
     const region = this.regionRepo.create({ name, sato_code: satoCode });
@@ -6619,7 +6631,7 @@ export class LogisticsServiceService implements OnModuleInit {
   ) {
     const regionId = String(id ?? '').trim();
     if (!regionId) {
-      this.badRequest('Region id is required');
+      this.badRequest('Viloyat ID majburiy');
     }
 
     // uherIk8r: bu javobda har bir kuryerning ismi/telefoni/daromadi bor —
@@ -6639,7 +6651,7 @@ export class LogisticsServiceService implements OnModuleInit {
     });
 
     if (!region) {
-      this.notFound('Region not found');
+      this.notFound('Viloyat topilmadi');
     }
 
     const orders =
@@ -6966,7 +6978,7 @@ export class LogisticsServiceService implements OnModuleInit {
       relations: ['districts'],
     });
     if (!region) {
-      this.notFound('Region not found');
+      this.notFound('Viloyat topilmadi');
     }
     return successRes(region);
   }
@@ -7140,7 +7152,7 @@ export class LogisticsServiceService implements OnModuleInit {
   async updateRegion(id: string, dto: UpdateRegionDto) {
     const region = await this.regionRepo.findOne({ where: { id } });
     if (!region) {
-      this.notFound('Region not found');
+      this.notFound('Viloyat topilmadi');
     }
 
     const before = { name: region.name, sato_code: region.sato_code };
@@ -7148,13 +7160,13 @@ export class LogisticsServiceService implements OnModuleInit {
     if (typeof dto.name !== 'undefined') {
       const nextName = dto.name.trim();
       if (!nextName) {
-        this.badRequest('name cannot be empty');
+        this.badRequest("Nomi bo'sh bo'lmasligi kerak");
       }
       const existing = await this.regionRepo.findOne({
         where: { name: nextName },
       });
       if (existing && existing.id !== id) {
-        this.conflict('Region name already exists');
+        this.conflict('Shu nomli viloyat allaqachon mavjud');
       }
       region.name = nextName;
     }
@@ -7162,13 +7174,13 @@ export class LogisticsServiceService implements OnModuleInit {
     if (typeof dto.sato_code !== 'undefined') {
       const nextSato = dto.sato_code.trim();
       if (!nextSato) {
-        this.badRequest('sato_code cannot be empty');
+        this.badRequest("sato_code bo'sh bo'lmasligi kerak");
       }
       const existing = await this.regionRepo.findOne({
         where: { sato_code: nextSato },
       });
       if (existing && existing.id !== id) {
-        this.conflict('Region sato_code already exists');
+        this.conflict('Bunday SATO kodli viloyat allaqachon mavjud');
       }
       region.sato_code = nextSato;
     }
@@ -7602,8 +7614,8 @@ export class LogisticsServiceService implements OnModuleInit {
       this.districtRepo.findOne({ where: { id: fromId } }),
       this.districtRepo.findOne({ where: { id: toId } }),
     ]);
-    if (!from) this.notFound('District not found');
-    if (!to) this.notFound('Target district not found');
+    if (!from) this.notFound('Tuman topilmadi');
+    if (!to) this.notFound('Birlashtiriladigan (maqsad) tuman topilmadi');
 
     // 1. OLDIN: A va B sanog'i (B ning eski soni — 3-bosqichda tasdiqlanadi).
     const [beforeA, beforeB] = await Promise.all([
@@ -7788,7 +7800,7 @@ export class LogisticsServiceService implements OnModuleInit {
   async deleteRegion(id: string) {
     const region = await this.regionRepo.findOne({ where: { id } });
     if (!region) {
-      this.notFound('Region not found');
+      this.notFound('Viloyat topilmadi');
     }
     /**
      * oNAE3LW9: `District.region_id` `onDelete: CASCADE` — viloyat o'chsa
@@ -7981,7 +7993,7 @@ export class LogisticsServiceService implements OnModuleInit {
 
     const region = await this.regionRepo.findOne({ where: { id: regionId } });
     if (!region) {
-      this.notFound('Region not found');
+      this.notFound('Viloyat topilmadi');
     }
 
     const logist = logistId ? await this.resolveActiveLogist(logistId) : null;

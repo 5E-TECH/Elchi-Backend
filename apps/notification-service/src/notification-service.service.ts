@@ -237,14 +237,14 @@ export class NotificationServiceService {
         where: { id: data.id, isDeleted: false },
       });
       if (!byId) {
-        throw new NotFoundException('Telegram market not found');
+        throw new NotFoundException('Telegram market topilmadi');
       }
       return byId;
     }
 
     if (!data.market_id || !data.group_type) {
       throw new BadRequestException(
-        'id OR (market_id + group_type) is required',
+        'id yoki (market_id + group_type) majburiy',
       );
     }
 
@@ -260,7 +260,7 @@ export class NotificationServiceService {
     });
 
     if (!byMarketType) {
-      throw new NotFoundException('Telegram market not found');
+      throw new NotFoundException('Telegram market topilmadi');
     }
 
     return byMarketType;
@@ -628,7 +628,7 @@ export class NotificationServiceService {
 
       if (existing) {
         throw new BadRequestException(
-          'Telegram market for this market_id and group_type already exists',
+          'Shu market_id va group_type uchun Telegram market allaqachon mavjud',
         );
       }
 
@@ -831,7 +831,7 @@ export class NotificationServiceService {
       });
 
       if (!item) {
-        throw new NotFoundException('Telegram market not found');
+        throw new NotFoundException('Telegram market topilmadi');
       }
 
       return this.successRes(this.toPublic(item), 200, 'Telegram market');
@@ -969,7 +969,7 @@ export class NotificationServiceService {
   async sendNotification(dto: SendNotificationDto) {
     try {
       if (!dto.message?.trim()) {
-        throw new BadRequestException('message is required');
+        throw new BadRequestException('message majburiy');
       }
       // (n0kLbx3d) Gateway `requester` ni qo'shadi. SUPERADMIN/ADMIN —
       // cheklovsiz; boshqa rol (REGISTRATOR) — faqat Elchi'da ulangan
@@ -1031,9 +1031,7 @@ export class NotificationServiceService {
         });
 
         if (!rows.length) {
-          throw new NotFoundException(
-            'Telegram target group not found for market',
-          );
+          throw new NotFoundException('Market uchun Telegram guruhi topilmadi');
         }
 
         targets = rows.map((row) => ({
@@ -1043,7 +1041,7 @@ export class NotificationServiceService {
           group_id: row.group_id,
         }));
       } else {
-        throw new BadRequestException('group_id or market_id is required');
+        throw new BadRequestException('group_id yoki market_id majburiy');
       }
 
       const results: Array<{

@@ -167,7 +167,7 @@ export class CustomerGatewayController {
     ).catch((error: unknown) => {
       if (error instanceof TimeoutError) {
         throw new GatewayTimeoutException(
-          `${service} service response timeout`,
+          `${service} xizmati vaqtida javob bermadi (timeout)`,
         );
       }
       throw error;

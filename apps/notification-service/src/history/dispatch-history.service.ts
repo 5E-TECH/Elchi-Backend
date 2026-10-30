@@ -413,7 +413,7 @@ export class DispatchHistoryService {
       if (!/^\d+$/.test(str(query.created_by)))
         throw new RpcException({
           statusCode: 400,
-          message: 'created_by must be numeric',
+          message: "created_by raqamli bo'lishi kerak",
         });
       qb.andWhere('d.created_by = :createdBy', {
         createdBy: str(query.created_by),

@@ -1388,7 +1388,7 @@ export class ApiGatewayController {
     // /users/profile) reached the DB and 500'd on "invalid input syntax for
     // type bigint". Reject it as 404 up front. (Live-E2E fix.)
     if (!/^\d+$/.test(String(id))) {
-      throw new NotFoundException('User not found');
+      throw new NotFoundException('Foydalanuvchi topilmadi');
     }
     const requesterRoles = (req?.user?.roles ?? []).map((r) =>
       String(r).toLowerCase(),

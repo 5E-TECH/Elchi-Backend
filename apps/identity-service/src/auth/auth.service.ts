@@ -257,7 +257,9 @@ export class AuthService {
         now,
         user?.id,
       );
-      throw new RpcException(errorRes('Invalid credentials', 401));
+      throw new RpcException(
+        errorRes("Telefon raqami yoki parol noto'g'ri", 401),
+      );
     }
 
     const isMatch = await this.bcryptEncryption.compare(
@@ -272,7 +274,9 @@ export class AuthService {
         now,
         user.id,
       );
-      throw new RpcException(errorRes('Invalid credentials', 401));
+      throw new RpcException(
+        errorRes("Telefon raqami yoki parol noto'g'ri", 401),
+      );
     }
 
     if (this.loginThrottle && throttleKeys) {
@@ -632,10 +636,10 @@ export class AuthService {
       where: { id: userId, isDeleted: false },
     });
     if (!user) {
-      throw new RpcException(errorRes('User not found', 401));
+      throw new RpcException(errorRes('Foydalanuvchi topilmadi', 401));
     }
     if (user.status !== Status.ACTIVE) {
-      throw new RpcException(errorRes('User not found', 401));
+      throw new RpcException(errorRes('Foydalanuvchi topilmadi', 401));
     }
 
     return {
@@ -659,7 +663,7 @@ export class AuthService {
         iat?: number;
       }>(dto.refreshToken, { secret: refreshSecret });
     } catch {
-      throw new RpcException(errorRes('Invalid refresh token', 401));
+      throw new RpcException(errorRes('Refresh token yaroqsiz', 401));
     }
 
     const user = await this.users.findOne({
@@ -670,7 +674,7 @@ export class AuthService {
       user.username !== payload.username ||
       user.status !== Status.ACTIVE
     ) {
-      throw new RpcException(errorRes('Invalid refresh token', 401));
+      throw new RpcException(errorRes('Refresh token yaroqsiz', 401));
     }
 
     const now = new Date();
@@ -703,7 +707,7 @@ export class AuthService {
       // login bilan almashtirilgan token yoki muddati o'tib tozalangan qator.
       // RBAC-10 dagidek boshqa sessiyalarga TEGILMAYDI — faqat shu token 401.
       await this.logRefreshRejected(user, 'refresh_session_not_found');
-      throw new RpcException(errorRes('Invalid refresh token', 401));
+      throw new RpcException(errorRes('Refresh token yaroqsiz', 401));
     }
 
     const rejected = this.sessions.rejectReason(session, user, now);
@@ -724,7 +728,7 @@ export class AuthService {
           : 'refresh_session_revoked',
         { session_id: session.id, cause: rejected },
       );
-      throw new RpcException(errorRes('Invalid refresh token', 401));
+      throw new RpcException(errorRes('Refresh token yaroqsiz', 401));
     }
 
     // `revoked_at IS NULL` sharti bilan: shu orada logout bo'lgan bo'lsa 401.
@@ -733,7 +737,7 @@ export class AuthService {
         session_id: session.id,
         cause: 'revoked',
       });
-      throw new RpcException(errorRes('Invalid refresh token', 401));
+      throw new RpcException(errorRes('Refresh token yaroqsiz', 401));
     }
 
     // Refresh token ROTATSIYA QILINMAYDI (avvalgidek): sessiya muddati —
@@ -798,7 +802,7 @@ export class AuthService {
     });
 
     if (!user) {
-      throw new RpcException(errorRes('User not found', 401));
+      throw new RpcException(errorRes('Foydalanuvchi topilmadi', 401));
     }
 
     const refreshTokenHash =
@@ -872,7 +876,7 @@ export class AuthService {
       where: { id: data.userId, isDeleted: false },
     });
     if (!user || user.status !== Status.ACTIVE) {
-      throw new RpcException(errorRes('User not found', 401));
+      throw new RpcException(errorRes('Foydalanuvchi topilmadi', 401));
     }
     const now = new Date();
     const list = await this.sessions.listOwn(user, data.sessionId ?? null, now);
@@ -1086,7 +1090,7 @@ export class AuthService {
       where: { id: userId, isDeleted: false },
     });
     if (!user || user.status !== Status.ACTIVE) {
-      throw new RpcException(errorRes('User not found', 401));
+      throw new RpcException(errorRes('Foydalanuvchi topilmadi', 401));
     }
     if (currentSessionId === null) return { user, session: null };
     const session = await this.sessions.findOpen(user.id, currentSessionId);

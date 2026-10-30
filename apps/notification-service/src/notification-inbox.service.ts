@@ -268,7 +268,7 @@ export class NotificationInboxService {
     }
     if (dto.recipient_ids !== undefined && dto.recipient_ids !== null) {
       if (!Array.isArray(dto.recipient_ids)) {
-        throw new BadRequestException('recipient_ids must be an array');
+        throw new BadRequestException("recipient_ids ro'yxat bo'lishi kerak");
       }
       for (const id of dto.recipient_ids) {
         if (!isBigintId(id)) invalid.push(String(id));
@@ -363,9 +363,8 @@ export class NotificationInboxService {
     // (7Vozou5x) Tarix qatori ochilgan bo'lsa — xato ham tarixga (`failed`).
     let historyId: string | null = null;
     try {
-      if (!dto.type?.trim()) throw new BadRequestException('type is required');
-      if (!dto.title?.trim())
-        throw new BadRequestException('title is required');
+      if (!dto.type?.trim()) throw new BadRequestException('type majburiy');
+      if (!dto.title?.trim()) throw new BadRequestException('title majburiy');
       // (Eh8y21Ha) Reyestr — FAIL-CLOSED. RMQ'da ValidationPipe yo'q, shuning
       // uchun ichki chaqiruvchilar (order-service outbox, ai-service) uchun
       // tekshiruv shu yerda; gateway DTO ham xuddi shuni tekshiradi.
@@ -1780,9 +1779,7 @@ export class NotificationInboxService {
 
   private assertId(value: string | undefined, field: string) {
     if (!value || !/^\d+$/.test(String(value))) {
-      throw new BadRequestException(
-        `${field} must be a bigint-like numeric string`,
-      );
+      throw new BadRequestException(`${field} raqamli bo'lishi kerak`);
     }
   }
 
@@ -1793,7 +1790,7 @@ export class NotificationInboxService {
     const row = await this.repo.findOne({
       where: { id, recipient_id: recipientId, isDeleted: false },
     });
-    if (!row) throw new NotFoundException('Notification not found');
+    if (!row) throw new NotFoundException('Bildirishnoma topilmadi');
     return row;
   }
 

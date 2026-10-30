@@ -921,7 +921,7 @@ export class OrderServiceService {
       (value) => !allowedStatuses.has(value as Order_status),
     );
     if (invalidValues.length) {
-      this.badRequest(`Invalid status value(s): ${invalidValues.join(', ')}`);
+      this.badRequest(`Noto'g'ri holat qiymati: ${invalidValues.join(', ')}`);
     }
 
     return Array.from(new Set(flattened)) as Order_status[];
@@ -940,7 +940,7 @@ export class OrderServiceService {
     }
 
     if (!Object.values(Order_source).includes(normalized as Order_source)) {
-      this.badRequest(`Invalid source value: ${source}`);
+      this.badRequest(`Noto'g'ri manba (source) qiymati: ${source}`);
     }
 
     return normalized as Order_source;
@@ -2205,7 +2205,7 @@ export class OrderServiceService {
   async branchCanDelete(branchId: string) {
     const id = String(branchId ?? '').trim();
     if (!id) {
-      this.badRequest('branch_id is required');
+      this.badRequest('branch_id majburiy');
     }
 
     const closedOrderStatuses = [
@@ -2260,7 +2260,7 @@ export class OrderServiceService {
       this.handleDbError(error);
     }
     if (!order) {
-      this.notFound('Order not found');
+      this.notFound('Buyurtma topilmadi');
     }
     return successRes(order, 200, 'Order by QR code');
   }
@@ -2291,7 +2291,7 @@ export class OrderServiceService {
     // Bo'sh token DB'ga bormaydi: TypeORM `undefined` shartni tashlab
     // yuboradi va IXTIYORIY buyurtmani qaytarishi mumkin edi.
     if (!qrToken.trim()) {
-      this.notFound('Order not found');
+      this.notFound('Buyurtma topilmadi');
     }
     let order: Order | null = null;
     try {
@@ -2304,7 +2304,7 @@ export class OrderServiceService {
       this.handleDbError(error);
     }
     if (!order) {
-      this.notFound('Order not found');
+      this.notFound('Buyurtma topilmadi');
     }
     // Nomlar (mijoz, market, tuman/viloyat, mahsulot) — to'liq javobdagi
     // AYNI manbadan; keyin faqat oq ro'yxatdagi maydonlar qoldiriladi.
@@ -2341,7 +2341,7 @@ export class OrderServiceService {
   ) {
     const t = String(token ?? '').trim();
     if (!t) {
-      this.notFound('Batch not found');
+      this.notFound('Paket topilmadi');
     }
     let members: Order[] = [];
     let counts: ExternalBatchCount[] = [];
@@ -2369,7 +2369,7 @@ export class OrderServiceService {
       this.handleDbError(error);
     }
     if (!members.length) {
-      this.notFound('Batch not found');
+      this.notFound('Paket topilmadi');
     }
     return successRes(
       {

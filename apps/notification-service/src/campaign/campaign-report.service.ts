@@ -310,7 +310,7 @@ export class CampaignReportService {
   private idOf(raw: unknown, field = 'id'): string {
     const id = text(raw).trim();
     if (!ID_RE.test(id)) {
-      throw new BadRequestException(`${field} must be a bigint-like string`);
+      throw new BadRequestException(`${field} raqamli bo'lishi kerak`);
     }
     return id;
   }

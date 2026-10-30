@@ -451,7 +451,7 @@ describe('BranchServiceService — kuryerni filialdan filialga o`tkazish (R3)', 
       addRow({ branch_id: '15' });
       replies['finance.cashbox.find_by_user'] = fail({
         statusCode: 404,
-        message: 'Cashbox not found',
+        message: 'Kassa topilmadi',
       });
 
       const res: any = await check();
@@ -700,7 +700,7 @@ describe('BranchServiceService — kuryerni filialdan filialga o`tkazish (R3)', 
       });
       replies['finance.cashbox.find_by_user'] = fail({
         statusCode: 404,
-        message: 'Cashbox not found',
+        message: 'Kassa topilmadi',
       });
 
       const res: any = await check();

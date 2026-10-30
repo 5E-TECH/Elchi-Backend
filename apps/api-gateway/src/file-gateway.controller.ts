@@ -164,14 +164,14 @@ export class FileGatewayController {
     },
   ) {
     if (!file) {
-      throw new BadRequestException('file is required');
+      throw new BadRequestException('Fayl majburiy');
     }
 
     const folder = canonicalUploadFolder(req?.body?.folder);
     assertFolderAllowed(folder, this.rolesOf(req));
 
     if (!this.allowedMime.has(file.mimetype)) {
-      throw new BadRequestException('Unsupported file type');
+      throw new BadRequestException("Bu fayl turi qo'llab-quvvatlanmaydi");
     }
     assertUploadFits(folder, file.mimetype, file.buffer.length);
     // E'lon qilingan tur faylning haqiqiy imzosiga mos kelishi shart —
@@ -507,7 +507,7 @@ export class FileGatewayController {
     const bodyBase64 = response?.data?.body_base64;
     const mimeType = response?.data?.mime_type ?? 'application/octet-stream';
     if (!bodyBase64 || typeof bodyBase64 !== 'string') {
-      throw new BadRequestException('File read failed');
+      throw new BadRequestException("Faylni o'qib bo'lmadi");
     }
 
     const buffer = Buffer.from(bodyBase64, 'base64');
@@ -600,7 +600,7 @@ export class FileGatewayController {
 
     const bodyBase64 = response?.data?.body_base64;
     if (!bodyBase64 || typeof bodyBase64 !== 'string') {
-      throw new BadRequestException('File read failed');
+      throw new BadRequestException("Faylni o'qib bo'lmadi");
     }
 
     const buffer = Buffer.from(bodyBase64, 'base64');

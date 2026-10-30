@@ -90,7 +90,7 @@ describe('BranchTransferBatchService transfer batch day filter (SqVMuhKo)', () =
       expect(error).toBeInstanceOf(RpcException);
       expect((error as RpcException).getError()).toEqual({
         statusCode: 400,
-        message: 'date is invalid date format',
+        message: "date sana formati noto'g'ri",
       });
       expect(qb.getManyAndCount).not.toHaveBeenCalled();
     });
@@ -182,7 +182,8 @@ describe('BranchTransferBatchService transfer batch day filter (SqVMuhKo)', () =
       expect(error).toBeInstanceOf(RpcException);
       expect((error as RpcException).getError()).toEqual({
         statusCode: 400,
-        message: 'period must be one of: today, week, month',
+        message:
+          "period quyidagilardan biri bo'lishi kerak: today, week, month",
       });
       expect(qb.getManyAndCount).not.toHaveBeenCalled();
     });

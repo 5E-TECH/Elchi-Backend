@@ -112,7 +112,9 @@ export class DeliveryPricingGatewayController {
         .pipe(timeout(LOGISTICS_TIMEOUT_MS)),
     ).catch((error: unknown) => {
       if (error instanceof TimeoutError) {
-        throw new GatewayTimeoutException('Logistics service response timeout');
+        throw new GatewayTimeoutException(
+          'Logistika xizmati vaqtida javob bermadi (timeout)',
+        );
       }
       throw error;
     });

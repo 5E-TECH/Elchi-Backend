@@ -473,15 +473,13 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
 
   private assertBigIntId(value: string | undefined, fieldName: string) {
     if (!value || !/^\d+$/.test(String(value))) {
-      throw new BadRequestException(
-        `${fieldName} must be a bigint-like numeric string`,
-      );
+      throw new BadRequestException(`${fieldName} raqamli bo'lishi kerak`);
     }
   }
 
   private assertPositiveAmount(value: number, fieldName = 'amount') {
     if (!Number.isFinite(value) || value <= 0) {
-      throw new BadRequestException(`${fieldName} must be greater than 0`);
+      throw new BadRequestException(`${fieldName} 0 dan katta bo'lishi kerak`);
     }
   }
 
@@ -492,7 +490,7 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
 
     const date = new Date(value);
     if (Number.isNaN(date.getTime())) {
-      throw new BadRequestException(`Invalid date format: ${value}`);
+      throw new BadRequestException(`Sana formati noto'g'ri: ${value}`);
     }
 
     return date;
@@ -512,7 +510,7 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
 
     for (const sourceType of sourceTypes) {
       if (!allowed.has(sourceType as Source_type)) {
-        throw new BadRequestException(`Invalid source_type: ${sourceType}`);
+        throw new BadRequestException(`source_type noto'g'ri: ${sourceType}`);
       }
     }
 
@@ -1384,14 +1382,14 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         where: { id: selector.cashbox_id, isDeleted: false },
       });
       if (!byId) {
-        throw new NotFoundException('Cashbox not found');
+        throw new NotFoundException('Kassa topilmadi');
       }
       return byId;
     }
 
     if (!selector.user_id || !selector.cashbox_type) {
       throw new BadRequestException(
-        'Either cashbox_id OR (user_id + cashbox_type) is required',
+        'cashbox_id yoki (user_id + cashbox_type) majburiy',
       );
     }
 
@@ -1405,7 +1403,7 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
     });
 
     if (!byUserType) {
-      throw new NotFoundException('Cashbox not found');
+      throw new NotFoundException('Kassa topilmadi');
     }
 
     return byUserType;
@@ -1434,14 +1432,14 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         lock,
       });
       if (!byId) {
-        throw new NotFoundException('Cashbox not found');
+        throw new NotFoundException('Kassa topilmadi');
       }
       return byId;
     }
 
     if (!selector.user_id || !selector.cashbox_type) {
       throw new BadRequestException(
-        'Either cashbox_id OR (user_id + cashbox_type) is required',
+        'cashbox_id yoki (user_id + cashbox_type) majburiy',
       );
     }
 
@@ -1456,7 +1454,7 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
     });
 
     if (!byUserType) {
-      throw new NotFoundException('Cashbox not found');
+      throw new NotFoundException('Kassa topilmadi');
     }
 
     return byUserType;
@@ -1580,14 +1578,14 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
     if (resolvedMethod === PaymentMethod.CASH) {
       const nextCash = Number(cashbox.balance_cash) + sign * amount;
       if (!allowNegativeBalance && nextCash < 0) {
-        throw new BadRequestException('Insufficient cash balance');
+        throw new BadRequestException("Naqd kassada yetarli mablag' yo'q");
       }
       cashbox.balance_cash = nextCash;
     } else {
       // isCardMethod — CLICK / CLICK_TO_MARKET (boshqasi yuqorida 400).
       const nextCard = Number(cashbox.balance_card) + sign * amount;
       if (!allowNegativeBalance && nextCard < 0) {
-        throw new BadRequestException('Insufficient card balance');
+        throw new BadRequestException("Karta hisobida yetarli mablag' yo'q");
       }
       cashbox.balance_card = nextCard;
     }
@@ -1669,7 +1667,7 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         });
 
         if (!cashbox) {
-          throw new NotFoundException('Cashbox not found');
+          throw new NotFoundException('Kassa topilmadi');
         }
 
         if (!dto.with_history) {
@@ -2505,7 +2503,7 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
       });
 
       if (!history) {
-        throw new NotFoundException('Cashbox history not found');
+        throw new NotFoundException('Kassa tarixi topilmadi');
       }
 
       const sourceTypesWithOrder = new Set<Source_type>([
@@ -3611,13 +3609,15 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
       });
       if (existing) {
         throw new BadRequestException(
-          'Salary row already exists for this user',
+          'Bu foydalanuvchi uchun maosh yozuvi allaqachon mavjud',
         );
       }
 
       const paymentDay = Number(dto.payment_day ?? 1);
       if (paymentDay < 1 || paymentDay > 31) {
-        throw new BadRequestException('payment_day must be between 1 and 31');
+        throw new BadRequestException(
+          "payment_day 1 dan 31 gacha bo'lishi kerak",
+        );
       }
 
       const salary = this.salaryRepo.create({
@@ -3656,7 +3656,9 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         where: { user_id: dto.user_id },
       });
       if (!salary) {
-        throw new NotFoundException('Salary not found for this user');
+        throw new NotFoundException(
+          'Bu foydalanuvchi uchun maosh yozuvi topilmadi',
+        );
       }
 
       // Snapshot BEFORE mutating so logChange can diff only the changed fields.
@@ -3679,7 +3681,9 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
       if (dto.payment_day !== undefined) {
         const paymentDay = Number(dto.payment_day);
         if (paymentDay < 1 || paymentDay > 31) {
-          throw new BadRequestException('payment_day must be between 1 and 31');
+          throw new BadRequestException(
+            "payment_day 1 dan 31 gacha bo'lishi kerak",
+          );
         }
         salary.payment_day = paymentDay;
       }
@@ -3713,7 +3717,9 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
       });
 
       if (!salary) {
-        throw new NotFoundException('Salary not found for this user');
+        throw new NotFoundException(
+          'Bu foydalanuvchi uchun maosh yozuvi topilmadi',
+        );
       }
 
       return this.successRes(salary, 200, 'Salary found');
@@ -3799,7 +3805,7 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         where,
         order: { createdAt: 'DESC' },
       });
-      if (!cashbox) throw new NotFoundException('Cashbox not found');
+      if (!cashbox) throw new NotFoundException('Kassa topilmadi');
 
       const { start, end } = this.parseDateRange(data.fromDate, data.toDate);
       const historyWhere: FindOptionsWhere<CashboxHistory> = {
@@ -4623,7 +4629,7 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
       lock: { mode: 'pessimistic_write' },
     });
     if (!courierCashbox)
-      throw new NotFoundException('Courier cashbox not found');
+      throw new NotFoundException('Kuryer kassasi topilmadi');
 
     // Idempotency: under the courier-cashbox lock, bail out if this exact
     // payment was already applied (duplicate delivery / double-submit).
@@ -4985,7 +4991,7 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         lock: { mode: 'pessimistic_write' },
       });
       if (!branchCashbox)
-        throw new NotFoundException('Branch cashbox not found');
+        throw new NotFoundException('Filial kassasi topilmadi');
 
       // Idempotency: under the branch-cashbox lock, bail out if already applied.
       const dedupKey = String(data.dedup_epoch ?? '').trim();
@@ -5319,7 +5325,7 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
       },
       lock: { mode: 'pessimistic_write' },
     });
-    if (!mainCashbox) throw new NotFoundException('Main cashbox not found');
+    if (!mainCashbox) throw new NotFoundException('Asosiy kassa topilmadi');
 
     const marketCashbox = await manager.findOne(Cashbox, {
       where: {
@@ -5328,7 +5334,7 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
       },
       lock: { mode: 'pessimistic_write' },
     });
-    if (!marketCashbox) throw new NotFoundException('Market cashbox not found');
+    if (!marketCashbox) throw new NotFoundException('Market kassasi topilmadi');
 
     // Idempotency: under the main+market cashbox locks, bail out if already
     // applied (duplicate delivery / double-submit). (Audit P0-3.)
@@ -6598,7 +6604,8 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
           ) {
             throw new RpcException({
               statusCode: 409,
-              message: 'Idempotency-Key was already used for another entry',
+              message:
+                'Idempotency-Key boshqa yozuv uchun allaqachon ishlatilgan',
             });
           }
           await queryRunner.commitTransaction();

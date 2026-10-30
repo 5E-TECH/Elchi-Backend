@@ -118,7 +118,7 @@ maybe('hEjjuJaT — super-kuryer viloyatlari (identity, Postgres)', () => {
   const logisticsSend = jest.fn((_p: unknown, payload: { id: string }) =>
     Number(payload.id) >= 1 && Number(payload.id) <= 14
       ? of({ data: { id: payload.id, name: `V-${payload.id}` } })
-      : throwError(() => ({ statusCode: 404, message: 'Region not found' })),
+      : throwError(() => ({ statusCode: 404, message: 'Viloyat topilmadi' })),
   );
   let seq = 0;
   const addCourier = async (over: Partial<User> = {}) => {

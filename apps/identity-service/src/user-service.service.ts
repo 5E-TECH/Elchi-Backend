@@ -669,7 +669,7 @@ export class UserServiceService implements OnModuleInit {
   /**
    * CODE-26: yangi user kassasini yaratish. Ilgari xato xom holda otilardi:
    * kuryer faol va filialga biriktirilgan, lekin kassasiz qolardi (keyingi
-   * pul amallari 'Cashbox not found'), mijoz esa 500 ko'rardi; qayta urinish
+   * pul amallari 'Kassa topilmadi'), mijoz esa 500 ko'rardi; qayta urinish
    * esa 409 "telefon band" bilan tugardi. Endi kassa yaratilmasa saga orqaga
    * qaytariladi — filial qatori (bo'lsa) best-effort olib tashlanadi, user
    * soft-delete — va xato biriktirish bosqichidagi kabi qaytariladi (4xx →
@@ -1255,10 +1255,10 @@ export class UserServiceService implements OnModuleInit {
       );
       const region = res?.data ?? res ?? null;
       if (!region) {
-        this.badRequest('Region not found');
+        this.badRequest('Viloyat topilmadi');
       }
     } catch {
-      this.badRequest('Region not found');
+      this.badRequest('Viloyat topilmadi');
     }
   }
 
@@ -4575,13 +4575,13 @@ export class UserServiceService implements OnModuleInit {
   async findMarketByTelegramToken(market_tg_token: string) {
     const token = String(market_tg_token ?? '').trim();
     if (!token) {
-      throw new RpcException(errorRes('market_tg_token is required', 400));
+      throw new RpcException(errorRes('market_tg_token majburiy', 400));
     }
 
     // Backward compatible, but still restricts to expected token-like shape.
     if (!/^group_token-[a-z0-9]{14,64}$/i.test(token)) {
       throw new RpcException(
-        errorRes('market_tg_token format is invalid', 400),
+        errorRes("market_tg_token formati noto'g'ri", 400),
       );
     }
 

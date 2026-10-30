@@ -407,7 +407,9 @@ export class FinanceGatewayController {
       this.financeClient.send(pattern, payload).pipe(timeout(timeoutMs)),
     ).catch((error: unknown) => {
       if (error instanceof TimeoutError) {
-        throw new GatewayTimeoutException('Finance service response timeout');
+        throw new GatewayTimeoutException(
+          'Moliya xizmati vaqtida javob bermadi (timeout)',
+        );
       }
       throw error;
     });
@@ -422,7 +424,9 @@ export class FinanceGatewayController {
       this.identityClient.send(pattern, payload).pipe(timeout(timeoutMs)),
     ).catch((error: unknown) => {
       if (error instanceof TimeoutError) {
-        throw new GatewayTimeoutException('Identity service response timeout');
+        throw new GatewayTimeoutException(
+          'Foydalanuvchilar xizmati vaqtida javob bermadi (timeout)',
+        );
       }
       throw error;
     });
@@ -437,7 +441,9 @@ export class FinanceGatewayController {
       this.orderClient.send(pattern, payload).pipe(timeout(timeoutMs)),
     ).catch((error: unknown) => {
       if (error instanceof TimeoutError) {
-        throw new GatewayTimeoutException('Order service response timeout');
+        throw new GatewayTimeoutException(
+          'Buyurtma xizmati vaqtida javob bermadi (timeout)',
+        );
       }
       throw error;
     });
@@ -452,7 +458,9 @@ export class FinanceGatewayController {
       this.branchClient.send(pattern, payload).pipe(timeout(timeoutMs)),
     ).catch((error: unknown) => {
       if (error instanceof TimeoutError) {
-        throw new GatewayTimeoutException('Branch service response timeout');
+        throw new GatewayTimeoutException(
+          'Filial xizmati vaqtida javob bermadi (timeout)',
+        );
       }
       throw error;
     });
@@ -2826,7 +2834,9 @@ export class FinanceGatewayController {
   ) {
     const clientKey = String(idempotencyKey ?? '').trim();
     if (!clientKey || clientKey.length > 255) {
-      throw new BadRequestException('Idempotency-Key must be 1-255 characters');
+      throw new BadRequestException(
+        "Idempotency-Key 1-255 belgi bo'lishi kerak",
+      );
     }
     const actorId = String(req.user?.sub ?? '');
     return this.send<{ statusCode?: number; data?: unknown }>(
@@ -4205,13 +4215,15 @@ export class FinanceGatewayController {
     timeoutMs = 15000,
   ): Promise<T> {
     if (!this.fileClient) {
-      throw new ServiceUnavailableException('File service is not configured');
+      throw new ServiceUnavailableException('Fayl xizmati sozlanmagan');
     }
     return firstValueFrom(
       this.fileClient.send(pattern, payload).pipe(timeout(timeoutMs)),
     ).catch((error: unknown) => {
       if (error instanceof TimeoutError) {
-        throw new GatewayTimeoutException('File service response timeout');
+        throw new GatewayTimeoutException(
+          'Fayl xizmati vaqtida javob bermadi (timeout)',
+        );
       }
       throw error;
     });

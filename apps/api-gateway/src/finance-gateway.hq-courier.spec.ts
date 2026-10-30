@@ -575,7 +575,7 @@ describe('C4 — o`chirilgan (soft-delete) HQ kuryeri', () => {
     const env = receiveEnv({
       findUser: deletedUser,
       cashbox: () =>
-        throwError(() => ({ statusCode: 404, message: 'Cashbox not found' })),
+        throwError(() => ({ statusCode: 404, message: 'Kassa topilmadi' })),
     });
 
     await expect(
@@ -700,7 +700,7 @@ describe('C1 — GET cashbox/hq-couriers', () => {
         if (balance === 'error' || balance === 'missing') {
           return throwError(() => ({
             statusCode: 404,
-            message: 'Cashbox not found',
+            message: 'Kassa topilmadi',
           }));
         }
         return {

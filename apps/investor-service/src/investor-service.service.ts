@@ -218,7 +218,7 @@ export class InvestorServiceService {
       (row) => String(row.id) !== String(exceptInvestorId ?? ''),
     );
     if (taken) {
-      this.badRequest('user_id already linked to another investor');
+      this.badRequest("user_id allaqachon boshqa investorga bog'langan");
     }
   }
 
@@ -241,7 +241,7 @@ export class InvestorServiceService {
     }
     const parsed = new Date(value);
     if (Number.isNaN(parsed.getTime())) {
-      this.badRequest(`${fieldName} is invalid`);
+      this.badRequest(`${fieldName} noto'g'ri`);
     }
     return parsed;
   }
@@ -249,7 +249,7 @@ export class InvestorServiceService {
   private validateUzPhoneNumber(phone: string): void {
     const normalized = String(phone).trim();
     if (!/^\+998\d{9}$/.test(normalized)) {
-      this.badRequest("phone_number must be in '+998XXXXXXXXX' format");
+      this.badRequest("phone_number '+998XXXXXXXXX' formatida bo'lishi kerak");
     }
   }
 
@@ -258,7 +258,7 @@ export class InvestorServiceService {
       where: { id: String(id), isDeleted: false },
     });
     if (!investor) {
-      this.notFound('investor not found');
+      this.notFound('Investor topilmadi');
     }
     return investor;
   }
@@ -268,7 +268,7 @@ export class InvestorServiceService {
       where: { id: String(id), isDeleted: false },
     });
     if (!investment) {
-      this.notFound('investment not found');
+      this.notFound('Investitsiya topilmadi');
     }
     return investment;
   }
@@ -280,10 +280,10 @@ export class InvestorServiceService {
     const name = String(dto.name ?? '').trim();
     const phoneNumber = String(dto.phone_number ?? '').trim();
     if (!name) {
-      this.badRequest('name is required');
+      this.badRequest('Nomi majburiy');
     }
     if (!phoneNumber) {
-      this.badRequest('phone_number is required');
+      this.badRequest('phone_number majburiy');
     }
     this.validateUzPhoneNumber(phoneNumber);
 
@@ -291,7 +291,7 @@ export class InvestorServiceService {
       where: { phone_number: phoneNumber, isDeleted: false },
     });
     if (exists) {
-      this.badRequest('phone_number already exists');
+      this.badRequest('Bu telefon raqami allaqachon mavjud');
     }
 
     // vpKijXce: login bilan bog'lash — `/investors/me` investorni shu orqali
@@ -304,7 +304,7 @@ export class InvestorServiceService {
     ) {
       const normalized = this.normalizeLinkedUserId(dto.user_id);
       if (!normalized) {
-        this.badRequest('user_id must be a positive integer');
+        this.badRequest("user_id musbat butun son bo'lishi kerak");
       }
       await this.assertUserIdFree(normalized);
       linkedUserId = normalized;
@@ -343,7 +343,7 @@ export class InvestorServiceService {
     if (status) {
       const safeStatus = String(status).toLowerCase();
       if (![Status.ACTIVE, Status.INACTIVE].includes(safeStatus as Status)) {
-        this.badRequest('status must be active or inactive');
+        this.badRequest("status active yoki inactive bo'lishi kerak");
       }
       where.status = safeStatus;
     }
@@ -432,14 +432,14 @@ export class InvestorServiceService {
     if (dto.name !== undefined) {
       const name = String(dto.name).trim();
       if (!name) {
-        this.badRequest('name cannot be empty');
+        this.badRequest("Nomi bo'sh bo'lmasligi kerak");
       }
       investor.name = name;
     }
     if (dto.phone_number !== undefined) {
       const phoneNumber = String(dto.phone_number ?? '').trim();
       if (!phoneNumber) {
-        this.badRequest('phone_number cannot be empty');
+        this.badRequest("phone_number bo'sh bo'lmasligi kerak");
       }
       this.validateUzPhoneNumber(phoneNumber);
 
@@ -448,7 +448,7 @@ export class InvestorServiceService {
           where: { phone_number: phoneNumber, isDeleted: false },
         });
         if (exists) {
-          this.badRequest('phone_number already exists');
+          this.badRequest('Bu telefon raqami allaqachon mavjud');
         }
       }
       investor.phone_number = phoneNumber;
@@ -460,7 +460,7 @@ export class InvestorServiceService {
     }
     if (dto.status !== undefined) {
       if (![Status.ACTIVE, Status.INACTIVE].includes(dto.status)) {
-        this.badRequest('status must be active or inactive');
+        this.badRequest("status active yoki inactive bo'lishi kerak");
       }
       investor.status = dto.status;
     }
@@ -471,7 +471,7 @@ export class InvestorServiceService {
       } else {
         const normalized = this.normalizeLinkedUserId(dto.user_id);
         if (!normalized) {
-          this.badRequest('user_id must be a positive integer');
+          this.badRequest("user_id musbat butun son bo'lishi kerak");
         }
         if (normalized !== String(investor.user_id)) {
           await this.assertUserIdFree(normalized, investor.id);
@@ -519,18 +519,18 @@ export class InvestorServiceService {
   ) {
     const investor_id = String(dto.investor_id ?? '').trim();
     if (!investor_id) {
-      this.badRequest('investor_id is required');
+      this.badRequest('investor_id majburiy');
     }
     await this.getInvestorOrThrow(investor_id);
 
     const amount = Number(dto.amount ?? 0);
     if (!(amount > 0)) {
-      this.badRequest('amount must be greater than 0');
+      this.badRequest("amount 0 dan katta bo'lishi kerak");
     }
 
     const investedAt = this.parseDate(dto.invested_at, 'invested_at');
     if (!investedAt) {
-      this.badRequest('invested_at is required');
+      this.badRequest('invested_at majburiy');
     }
 
     const investment = this.investmentRepo.create({
@@ -573,7 +573,7 @@ export class InvestorServiceService {
     const fromDate = this.parseDate(query?.from_date, 'from_date');
     const toDate = this.parseDate(query?.to_date, 'to_date');
     if (fromDate && toDate && fromDate > toDate) {
-      this.badRequest('from_date must be less than or equal to to_date');
+      this.badRequest("from_date to_date dan katta bo'lmasligi kerak");
     }
     let range: [Date, Date] | null = null;
     if (fromDate && toDate) {
@@ -663,7 +663,7 @@ export class InvestorServiceService {
       return;
     }
     if (String(investment.investor_id) !== String(scopeInvestorId).trim()) {
-      this.notFound('investment not found for this investor');
+      this.notFound('Bu investor uchun investitsiya topilmadi');
     }
   }
 
@@ -680,7 +680,7 @@ export class InvestorServiceService {
     if (dto.investor_id !== undefined) {
       const investorId = String(dto.investor_id ?? '').trim();
       if (!investorId) {
-        this.badRequest('investor_id cannot be empty');
+        this.badRequest("investor_id bo'sh bo'lmasligi kerak");
       }
       await this.getInvestorOrThrow(investorId);
       investment.investor_id = investorId;
@@ -695,7 +695,7 @@ export class InvestorServiceService {
     if (dto.amount !== undefined) {
       const amount = Number(dto.amount);
       if (!(amount > 0)) {
-        this.badRequest('amount must be greater than 0');
+        this.badRequest("amount 0 dan katta bo'lishi kerak");
       }
       investment.amount = amount;
     }
@@ -703,7 +703,7 @@ export class InvestorServiceService {
     if (dto.invested_at !== undefined) {
       const investedAt = this.parseDate(dto.invested_at, 'invested_at');
       if (!investedAt) {
-        this.badRequest('invested_at is required');
+        this.badRequest('invested_at majburiy');
       }
       investment.invested_at = investedAt;
     }
@@ -755,27 +755,27 @@ export class InvestorServiceService {
   ) {
     const investor_id = String(dto.investor_id ?? '').trim();
     if (!investor_id) {
-      this.badRequest('investor_id is required');
+      this.badRequest('investor_id majburiy');
     }
     await this.getInvestorOrThrow(investor_id);
 
     const amount = Number(dto.amount ?? 0);
     if (!(amount >= 0)) {
-      this.badRequest('amount must be greater than or equal to 0');
+      this.badRequest("amount 0 dan kichik bo'lmasligi kerak");
     }
 
     const percentage = Number(dto.percentage ?? 0);
     if (percentage < 0 || percentage > 100) {
-      this.badRequest('percentage must be between 0 and 100');
+      this.badRequest("percentage 0 dan 100 gacha bo'lishi kerak");
     }
 
     const period_start = this.parseDate(dto.period_start, 'period_start');
     const period_end = this.parseDate(dto.period_end, 'period_end');
     if (!period_start || !period_end) {
-      this.badRequest('period_start and period_end are required');
+      this.badRequest('period_start va period_end majburiy');
     }
     if (period_start > period_end) {
-      this.badRequest('period_start must be less than or equal to period_end');
+      this.badRequest("period_start period_end dan katta bo'lmasligi kerak");
     }
 
     const row = this.profitShareRepo.create({
@@ -810,15 +810,15 @@ export class InvestorServiceService {
     const period_start = this.parseDate(input?.period_start, 'period_start');
     const period_end = this.parseDate(input?.period_end, 'period_end');
     if (!period_start || !period_end) {
-      this.badRequest('period_start and period_end are required');
+      this.badRequest('period_start va period_end majburiy');
     }
     if (period_start > period_end) {
-      this.badRequest('period_start must be less than or equal to period_end');
+      this.badRequest("period_start period_end dan katta bo'lmasligi kerak");
     }
 
     const percentage = Number(input?.percentage ?? 0);
     if (percentage < 0 || percentage > 100) {
-      this.badRequest('percentage must be between 0 and 100');
+      this.badRequest("percentage 0 dan 100 gacha bo'lishi kerak");
     }
 
     const investors = input?.investor_id
@@ -1005,7 +1005,7 @@ export class InvestorServiceService {
       where: { id: String(id), isDeleted: false },
     });
     if (!row) {
-      this.notFound('profit share not found');
+      this.notFound('Foyda ulushi topilmadi');
     }
 
     // GADgsW5G: pul aktorsiz chiqmasin. Ilgari requester yo'q bo'lsa kassa
@@ -1093,11 +1093,11 @@ export class InvestorServiceService {
         .toLowerCase(),
     );
     if (!roles.includes(Roles.INVESTOR)) {
-      this.forbidden('investor role required');
+      this.forbidden('Investor roli kerak');
     }
     const userId = this.normalizeLinkedUserId(requester?.id);
     if (!userId) {
-      this.forbidden('investor profile is not available');
+      this.forbidden('Investor profili mavjud emas');
     }
 
     const rows = await this.investorRepo.find({
@@ -1106,15 +1106,17 @@ export class InvestorServiceService {
       take: 2,
     });
     if (rows.length === 0) {
-      this.notFound('investor profile not linked to this user');
+      this.notFound("Investor profili bu foydalanuvchiga bog'lanmagan");
     }
     if (rows.length > 1) {
       // Qaysi biri "men" ekanini taxmin qilmaymiz — admin tuzatishi kerak.
-      this.conflict('multiple investor profiles linked to this user');
+      this.conflict(
+        "Bu foydalanuvchiga bir nechta investor profili bog'langan",
+      );
     }
     const investor = rows[0];
     if (investor.status !== Status.ACTIVE) {
-      this.forbidden('investor profile is inactive');
+      this.forbidden('Investor profili faol emas');
     }
     return investor;
   }
@@ -1225,7 +1227,9 @@ export class InvestorServiceService {
     }
     const months = Number(raw);
     if (!Number.isInteger(months) || months < 1 || months > MONTHLY_MAX) {
-      this.badRequest(`months must be an integer between 1 and ${MONTHLY_MAX}`);
+      this.badRequest(
+        `months 1 dan ${MONTHLY_MAX} gacha butun son bo'lishi kerak`,
+      );
     }
     return months;
   }

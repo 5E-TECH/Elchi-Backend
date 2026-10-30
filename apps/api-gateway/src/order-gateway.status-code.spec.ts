@@ -118,7 +118,7 @@ describe('OrderGatewayController — HTTP kodi javob tanasiga mos', () => {
   it("mavjud bo'lmagan buyurtma -> HTTP 404, tanadagi kod bilan bir xil", async () => {
     // Haqiqiy ClientProxy mikroservis xatosini oddiy obyekt sifatida uzatadi.
     orderSend.mockReturnValue(
-      throwError(() => ({ statusCode: 404, message: 'Order not found' })),
+      throwError(() => ({ statusCode: 404, message: 'Buyurtma topilmadi' })),
     );
 
     const res = await request(http())

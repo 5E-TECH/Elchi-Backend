@@ -710,7 +710,7 @@ export class CatalogServiceService {
         ['market', 'market_operator'].includes(role),
       )
     ) {
-      this.forbidden('You are not allowed to create product');
+      this.forbidden("Mahsulot yaratishga ruxsat yo'q");
     }
     // Aws1oApe: nom normalizatsiyasi (registr saqlanadi) va registrga befarq
     // dublikat tekshiruvi; bo'sh nom / noto'g'ri narx / o'lchov / shtrix
@@ -974,7 +974,7 @@ export class CatalogServiceService {
   ) {
     const product = await this.findByIdEntity(id);
     if (!dto?.user_id || product.user_id !== String(dto.user_id)) {
-      this.forbidden('You can update only your own product');
+      this.forbidden("Faqat o'z mahsulotingizni tahrirlashingiz mumkin");
     }
 
     const weightKg = this.normalizeWeightKg(dto.weight_kg, 'create');
@@ -1034,7 +1034,7 @@ export class CatalogServiceService {
   ) {
     const product = await this.findByIdEntity(id);
     if (!userId || product.user_id !== String(userId)) {
-      this.forbidden('You can update only your own product');
+      this.forbidden("Faqat o'z mahsulotingizni tahrirlashingiz mumkin");
     }
 
     const before = this.auditSnapshot(product);
@@ -1073,7 +1073,7 @@ export class CatalogServiceService {
       requester?.roles?.includes('market') &&
       product.user_id !== requester.id
     ) {
-      this.forbidden('You can delete only your own product');
+      this.forbidden("Faqat o'z mahsulotingizni o'chirishingiz mumkin");
     }
 
     product.isDeleted = true;

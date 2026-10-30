@@ -31,6 +31,30 @@ function makeHost() {
 describe('AllExceptionsFilter', () => {
   const filter = new AllExceptionsFilter();
 
+  it('(ZDweRm02) Nest standart 403 matni (RolesGuard) o‘zbekcha, status o‘sha', () => {
+    const { host, status, json } = makeHost();
+
+    filter.catch(new ForbiddenException('Forbidden resource'), host);
+
+    expect(status).toHaveBeenCalledWith(HttpStatus.FORBIDDEN);
+    expect(json).toHaveBeenCalledWith(
+      expect.objectContaining({
+        statusCode: 403,
+        message: "Bu amal uchun ruxsat yo'q",
+      }),
+    );
+  });
+
+  it('(ZDweRm02) kod yozgan 403 matni o‘zgarmaydi', () => {
+    const { host, json } = makeHost();
+
+    filter.catch(new ForbiddenException('Hamkor faol emas'), host);
+
+    expect(json).toHaveBeenCalledWith(
+      expect.objectContaining({ message: 'Hamkor faol emas' }),
+    );
+  });
+
   it('maps an rxjs downstream TimeoutError to 504 Gateway Timeout', () => {
     const { host, status, json } = makeHost();
 

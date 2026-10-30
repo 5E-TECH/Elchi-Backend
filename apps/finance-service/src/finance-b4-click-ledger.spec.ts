@@ -233,11 +233,11 @@ describe('1bz6tOle — updateBalancesByMethod usul tarmoqlari', () => {
     const main = cashbox('main', 1_000_000, 100_000);
 
     expect(() => apply(service, main, 200_000, 'expense', 'click')).toThrow(
-      'Insufficient card balance',
+      "Karta hisobida yetarli mablag' yo'q",
     );
     expect(() =>
       apply(service, main, 200_000, 'expense', 'click_to_market'),
-    ).toThrow('Insufficient card balance');
+    ).toThrow("Karta hisobida yetarli mablag' yo'q");
     expect(main).toMatchObject({
       balance_cash: 1_000_000,
       balance_card: 100_000,
@@ -351,7 +351,7 @@ describe('1bz6tOle — to`lov oqimlari', () => {
 
     expect((error as RpcException).getError()).toMatchObject({
       statusCode: 400,
-      message: 'Insufficient card balance',
+      message: "Karta hisobida yetarli mablag' yo'q",
     });
     expect(env.manager.save).not.toHaveBeenCalled();
     expect(env.queryRunner.rollbackTransaction).toHaveBeenCalled();

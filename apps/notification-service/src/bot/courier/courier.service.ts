@@ -373,7 +373,9 @@ export class CourierService {
         message: "🔒 Avval Telegram'ni Elchi akkauntingizga ulang.",
       };
     }
-    if (res.status === 403 || /not assigned/i.test(text)) {
+    // (ZDweRm02) order-service xabari o'zbekcha («… kuryerga biriktirilmagan»);
+    // eski inglizcha matn ham (rolling deploy) tan olinadi.
+    if (res.status === 403 || /not assigned|biriktirilmagan/i.test(text)) {
       return {
         kind: 'denied',
         message: '🔒 Bu buyurtma sizga biriktirilmagan.',

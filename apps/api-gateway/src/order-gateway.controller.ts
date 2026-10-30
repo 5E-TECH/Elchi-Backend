@@ -623,7 +623,9 @@ export class OrderGatewayController {
       this.orderClient.send(pattern, payload).pipe(timeout(8000)),
     ).catch((error: unknown) => {
       if (error instanceof TimeoutError) {
-        throw new GatewayTimeoutException('Order service response timeout');
+        throw new GatewayTimeoutException(
+          'Buyurtma xizmati vaqtida javob bermadi (timeout)',
+        );
       }
       throw error;
     });
@@ -652,7 +654,9 @@ export class OrderGatewayController {
       this.identityClient.send(pattern, payload).pipe(timeout(8000)),
     ).catch((error: unknown) => {
       if (error instanceof TimeoutError) {
-        throw new GatewayTimeoutException('Identity service response timeout');
+        throw new GatewayTimeoutException(
+          'Foydalanuvchilar xizmati vaqtida javob bermadi (timeout)',
+        );
       }
       throw error;
     });
@@ -666,7 +670,9 @@ export class OrderGatewayController {
       this.logisticsClient.send(pattern, payload).pipe(timeout(8000)),
     ).catch((error: unknown) => {
       if (error instanceof TimeoutError) {
-        throw new GatewayTimeoutException('Logistics service response timeout');
+        throw new GatewayTimeoutException(
+          'Logistika xizmati vaqtida javob bermadi (timeout)',
+        );
       }
       throw error;
     });
@@ -795,7 +801,7 @@ export class OrderGatewayController {
   ): Promise<string[]> {
     if (!file) return [];
     if (!this.fileClient) {
-      throw new BadRequestException('File service is not configured');
+      throw new BadRequestException('Fayl xizmati sozlanmagan');
     }
 
     const response = await firstValueFrom(
@@ -813,7 +819,9 @@ export class OrderGatewayController {
         .pipe(timeout(PROOF_OPERATION_TIMEOUT_MS)),
     ).catch((error: unknown) => {
       if (error instanceof TimeoutError) {
-        throw new GatewayTimeoutException('File service response timeout');
+        throw new GatewayTimeoutException(
+          'Fayl xizmati vaqtida javob bermadi (timeout)',
+        );
       }
       throw error;
     });
@@ -823,7 +831,9 @@ export class OrderGatewayController {
         (response as { key?: unknown })?.key,
     ).trim();
     if (!key) {
-      throw new BadRequestException('Proof file upload did not return a key');
+      throw new BadRequestException(
+        "Isbot faylini yuklab bo'lmadi (kalit qaytmadi)",
+      );
     }
     return [key];
   }
@@ -849,7 +859,9 @@ export class OrderGatewayController {
       this.branchClient.send(pattern, payload).pipe(timeout(8000)),
     ).catch((error: unknown) => {
       if (error instanceof TimeoutError) {
-        throw new GatewayTimeoutException('Branch service response timeout');
+        throw new GatewayTimeoutException(
+          'Filial xizmati vaqtida javob bermadi (timeout)',
+        );
       }
       throw error;
     });
@@ -2464,7 +2476,7 @@ export class OrderGatewayController {
         roles.includes(RoleEnum.REGISTRATOR)) &&
       !resolvedMarketId
     ) {
-      throw new BadRequestException('market_id is required');
+      throw new BadRequestException('market_id majburiy');
     }
     // UER0MpMX: mijoz yaratilishidan OLDIN — rad etilsa yetim mijoz qolmaydi.
     // ai-confirm (opts.marketId) marketni partiya boshida, mahsulot egaligini
@@ -2536,7 +2548,7 @@ export class OrderGatewayController {
       ).catch((error: unknown) => {
         if (error instanceof TimeoutError) {
           throw new GatewayTimeoutException(
-            'Identity service response timeout',
+            'Foydalanuvchilar xizmati vaqtida javob bermadi (timeout)',
           );
         }
         throw error;
@@ -2648,7 +2660,9 @@ export class OrderGatewayController {
         .pipe(timeout(8000)),
     ).catch((error: unknown) => {
       if (error instanceof TimeoutError) {
-        throw new GatewayTimeoutException('Order service response timeout');
+        throw new GatewayTimeoutException(
+          'Buyurtma xizmati vaqtida javob bermadi (timeout)',
+        );
       }
       throw error;
     });
@@ -3408,7 +3422,9 @@ export class OrderGatewayController {
         .pipe(timeout(8000)),
     ).catch((error: unknown) => {
       if (error instanceof TimeoutError) {
-        throw new GatewayTimeoutException('Order service response timeout');
+        throw new GatewayTimeoutException(
+          'Buyurtma xizmati vaqtida javob bermadi (timeout)',
+        );
       }
       throw error;
     });
@@ -3468,7 +3484,9 @@ export class OrderGatewayController {
       })
       .catch((error: unknown) => {
         if (error instanceof TimeoutError) {
-          throw new GatewayTimeoutException('Order service response timeout');
+          throw new GatewayTimeoutException(
+            'Buyurtma xizmati vaqtida javob bermadi (timeout)',
+          );
         }
         throw error;
       });
@@ -3487,7 +3505,9 @@ export class OrderGatewayController {
         .pipe(timeout(15000)),
     ).catch((error: unknown) => {
       if (error instanceof TimeoutError) {
-        throw new GatewayTimeoutException('Order service response timeout');
+        throw new GatewayTimeoutException(
+          'Buyurtma xizmati vaqtida javob bermadi (timeout)',
+        );
       }
       throw error;
     });
@@ -3550,7 +3570,9 @@ export class OrderGatewayController {
         .pipe(timeout(8000)),
     ).catch((error: unknown) => {
       if (error instanceof TimeoutError) {
-        throw new GatewayTimeoutException('Order service response timeout');
+        throw new GatewayTimeoutException(
+          'Buyurtma xizmati vaqtida javob bermadi (timeout)',
+        );
       }
       throw error;
     });
@@ -3640,7 +3662,9 @@ export class OrderGatewayController {
       requesterId &&
       String(market_id) !== String(requesterId)
     ) {
-      throw new BadRequestException('market role cannot query other market_id');
+      throw new BadRequestException(
+        "Market boshqa market ma'lumotini so'rashi mumkin emas",
+      );
     }
 
     const resolvedMarketId = isMarket && requesterId ? requesterId : market_id;
@@ -3706,7 +3730,9 @@ export class OrderGatewayController {
     )
       .catch((error: unknown) => {
         if (error instanceof TimeoutError) {
-          throw new GatewayTimeoutException('Order service response timeout');
+          throw new GatewayTimeoutException(
+            'Buyurtma xizmati vaqtida javob bermadi (timeout)',
+          );
         }
         throw error;
       })
@@ -3760,7 +3786,7 @@ export class OrderGatewayController {
         roles.includes(RoleEnum.REGISTRATOR)) &&
       !resolvedMarketId
     ) {
-      throw new BadRequestException('market_id is required');
+      throw new BadRequestException('market_id majburiy');
     }
     // UER0MpMX: mijoz yaratilishidan OLDIN — rad etilsa yetim mijoz qolmaydi.
     await this.assertOrderMarket(resolvedMarketId, roles);
@@ -3787,7 +3813,7 @@ export class OrderGatewayController {
       ).catch((error: unknown) => {
         if (error instanceof TimeoutError) {
           throw new GatewayTimeoutException(
-            'Identity service response timeout',
+            'Foydalanuvchilar xizmati vaqtida javob bermadi (timeout)',
           );
         }
         throw error;
@@ -3827,7 +3853,9 @@ export class OrderGatewayController {
       )
       .catch((error: unknown) => {
         if (error instanceof TimeoutError) {
-          throw new GatewayTimeoutException('Order service response timeout');
+          throw new GatewayTimeoutException(
+            'Buyurtma xizmati vaqtida javob bermadi (timeout)',
+          );
         }
         throw error;
       });
@@ -4289,7 +4317,9 @@ export class OrderGatewayController {
           .pipe(timeout(ORDER_EXPORT_PAGE_TIMEOUT_MS)),
       ).catch((error: unknown) => {
         if (error instanceof TimeoutError) {
-          throw new GatewayTimeoutException('Order service response timeout');
+          throw new GatewayTimeoutException(
+            'Buyurtma xizmati vaqtida javob bermadi (timeout)',
+          );
         }
         throw error;
       });
@@ -4763,7 +4793,9 @@ export class OrderGatewayController {
       requesterId &&
       String(market_id) !== String(requesterId)
     ) {
-      throw new BadRequestException('market role cannot query other market_id');
+      throw new BadRequestException(
+        "Market boshqa market ma'lumotini so'rashi mumkin emas",
+      );
     }
 
     let resolvedMarketId = isMarket && requesterId ? requesterId : market_id;
@@ -4779,7 +4811,7 @@ export class OrderGatewayController {
       // ochiq 400 — jimgina o'z marketiga almashtirilmaydi.
       if (market_id && String(market_id) !== String(operatorMarketId)) {
         throw new BadRequestException(
-          'market_operator role cannot query other market_id',
+          "Market operatori boshqa market ma'lumotini so'rashi mumkin emas",
         );
       }
       resolvedMarketId = operatorMarketId;
@@ -5014,7 +5046,9 @@ export class OrderGatewayController {
       roles.includes(RoleEnum.MARKET) &&
       String(req?.user?.sub ?? '') !== String(marketId)
     ) {
-      throw new ForbiddenException('market role cannot query other market_id');
+      throw new ForbiddenException(
+        "Market boshqa market ma'lumotini so'rashi mumkin emas",
+      );
     }
     const pagination = this.parsePaginationQuery(page, limit);
 
@@ -5756,7 +5790,9 @@ export class OrderGatewayController {
       normalizedRoles.includes(RoleEnum.MARKET) &&
       String(req?.user?.sub ?? '') !== String(marketId)
     ) {
-      throw new ForbiddenException('market role cannot query other market_id');
+      throw new ForbiddenException(
+        "Market boshqa market ma'lumotini so'rashi mumkin emas",
+      );
     }
     if (
       normalizedRoles.includes(RoleEnum.MARKET_OPERATOR) &&
@@ -5775,7 +5811,7 @@ export class OrderGatewayController {
       }
       if (operatorMarketId !== String(marketId ?? '').trim()) {
         throw new ForbiddenException(
-          'market_operator role cannot query other market_id',
+          "Market operatori boshqa market ma'lumotini so'rashi mumkin emas",
         );
       }
     }
@@ -6532,7 +6568,9 @@ export class OrderGatewayController {
         .pipe(timeout(8000)),
     ).catch((error: unknown) => {
       if (error instanceof TimeoutError) {
-        throw new GatewayTimeoutException('Order service response timeout');
+        throw new GatewayTimeoutException(
+          'Buyurtma xizmati vaqtida javob bermadi (timeout)',
+        );
       }
       throw error;
     });
@@ -6582,7 +6620,9 @@ export class OrderGatewayController {
         .pipe(timeout(PROOF_OPERATION_TIMEOUT_MS)),
     ).catch((error: unknown) => {
       if (error instanceof TimeoutError) {
-        throw new GatewayTimeoutException('Order service response timeout');
+        throw new GatewayTimeoutException(
+          'Buyurtma xizmati vaqtida javob bermadi (timeout)',
+        );
       }
       throw error;
     });
@@ -6627,7 +6667,9 @@ export class OrderGatewayController {
         .pipe(timeout(PROOF_OPERATION_TIMEOUT_MS)),
     ).catch((error: unknown) => {
       if (error instanceof TimeoutError) {
-        throw new GatewayTimeoutException('Order service response timeout');
+        throw new GatewayTimeoutException(
+          'Buyurtma xizmati vaqtida javob bermadi (timeout)',
+        );
       }
       throw error;
     });
@@ -6718,7 +6760,9 @@ export class OrderGatewayController {
         .pipe(timeout(8000)),
     ).catch((error: unknown) => {
       if (error instanceof TimeoutError) {
-        throw new GatewayTimeoutException('Order service response timeout');
+        throw new GatewayTimeoutException(
+          'Buyurtma xizmati vaqtida javob bermadi (timeout)',
+        );
       }
       throw error;
     });
@@ -6754,7 +6798,9 @@ export class OrderGatewayController {
         .pipe(timeout(8000)),
     ).catch((error: unknown) => {
       if (error instanceof TimeoutError) {
-        throw new GatewayTimeoutException('Order service response timeout');
+        throw new GatewayTimeoutException(
+          'Buyurtma xizmati vaqtida javob bermadi (timeout)',
+        );
       }
       throw error;
     });
@@ -6799,7 +6845,9 @@ export class OrderGatewayController {
         .pipe(timeout(PROOF_OPERATION_TIMEOUT_MS)),
     ).catch((error: unknown) => {
       if (error instanceof TimeoutError) {
-        throw new GatewayTimeoutException('Order service response timeout');
+        throw new GatewayTimeoutException(
+          'Buyurtma xizmati vaqtida javob bermadi (timeout)',
+        );
       }
       throw error;
     });
@@ -6838,7 +6886,9 @@ export class OrderGatewayController {
         .pipe(timeout(8000)),
     ).catch((error: unknown) => {
       if (error instanceof TimeoutError) {
-        throw new GatewayTimeoutException('Order service response timeout');
+        throw new GatewayTimeoutException(
+          'Buyurtma xizmati vaqtida javob bermadi (timeout)',
+        );
       }
       throw error;
     });
@@ -6872,7 +6922,9 @@ export class OrderGatewayController {
         .pipe(timeout(8000)),
     ).catch((error: unknown) => {
       if (error instanceof TimeoutError) {
-        throw new GatewayTimeoutException('Order service response timeout');
+        throw new GatewayTimeoutException(
+          'Buyurtma xizmati vaqtida javob bermadi (timeout)',
+        );
       }
       throw error;
     });
@@ -6925,7 +6977,9 @@ export class OrderGatewayController {
         .pipe(timeout(8000)),
     ).catch((error: unknown) => {
       if (error instanceof TimeoutError) {
-        throw new GatewayTimeoutException('Order service response timeout');
+        throw new GatewayTimeoutException(
+          'Buyurtma xizmati vaqtida javob bermadi (timeout)',
+        );
       }
       throw error;
     }); // T7 (B3): javobdagi to'liq buyurtma — menejerga operator telefonlarisiz.
@@ -7016,7 +7070,9 @@ export class OrderGatewayController {
         .pipe(timeout(8000)),
     ).catch((error: unknown) => {
       if (error instanceof TimeoutError) {
-        throw new GatewayTimeoutException('Order service response timeout');
+        throw new GatewayTimeoutException(
+          'Buyurtma xizmati vaqtida javob bermadi (timeout)',
+        );
       }
       throw error;
     });
@@ -7134,7 +7190,9 @@ export class OrderGatewayController {
         .pipe(timeout(8000)),
     ).catch((error: unknown) => {
       if (error instanceof TimeoutError) {
-        throw new GatewayTimeoutException('Order service response timeout');
+        throw new GatewayTimeoutException(
+          'Buyurtma xizmati vaqtida javob bermadi (timeout)',
+        );
       }
       throw error;
     });
@@ -7201,7 +7259,9 @@ export class OrderGatewayController {
         .pipe(timeout(8000)),
     ).catch((error: unknown) => {
       if (error instanceof TimeoutError) {
-        throw new GatewayTimeoutException('Order service response timeout');
+        throw new GatewayTimeoutException(
+          'Buyurtma xizmati vaqtida javob bermadi (timeout)',
+        );
       }
       throw error;
     });

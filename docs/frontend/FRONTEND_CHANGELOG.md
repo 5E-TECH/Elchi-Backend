@@ -22,6 +22,31 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+### 2026-10-30 — Inglizcha xatolar o'zbekchaga: 4xx/5xx matnlari va class-validator (ZDweRm02)
+
+Deploy: **api-gateway, identity, order, logistics, finance, branch, investor, notification, file, catalog, c2c** (faqat
+matnlar, har biri alohida chiqishi mumkin). Migratsiya **yo'q**, yangi env **yo'q**, `openapi.json` o'zgarmagan.
+HTTP status, `code` maydonlari va javob konverti **o'zgarmagan**.
+
+- [2026-10-30] ✏️ [ko'p servis] — foydalanuvchiga chiqadigan xabarlar o'zbekcha: «Order not found» → «Buyurtma topilmadi»,
+  «Transfer batch not found» / «Batch not found» → «Paket topilmadi», «Post not found» → «Pochta topilmadi», kuryer, menejer,
+  market, viloyat, tuman, kassa, fayl, bildirishnoma, foydalanuvchi, investor; `X is required` → `X majburiy`; «Insufficient
+  cash balance» → «Naqd kassada yetarli mablag' yo'q»; `… service response timeout` (504) → `… xizmati vaqtida javob bermadi
+  (timeout)`; 401 «Invalid credentials» → «Telefon raqami yoki parol noto'g'ri», «Invalid refresh token» → «Refresh token
+  yaroqsiz»; Nest'ning 403 «Forbidden resource» → «Bu amal uchun ruxsat yo'q».
+- [2026-10-30] ✏️ [gateway] — class-validator xabarlari o'zbekcha (global `UzValidationPipe`, `apps/api-gateway/src/validation`):
+  `name must be longer than or equal to 2 characters` → `name: kamida 2 belgi bo'lishi kerak`, `property x should not exist` →
+  `x: bunday maydon qabul qilinmaydi`, `items.0.each value in tags must be a string` → `items.0.tags (har bir qiymat): matn
+  bo'lishi kerak`. **Maydon nomi va yo'li saqlanadi** (`/scheduled_at/` kabi tekshiruvlar ishlaydi), DTO'dagi maxsus o'zbekcha
+  xabarlar o'zgarmaydi, konvert avvalgidek (`message: string[]`, `. ` bilan qo'shiladi).
+- ⚠️ **Inglizcha qoldi (ataylab):** 401 `Session revoked` — FE aynan shu matnni solishtiradi (`setupInterceptors.ts`,
+  `sessionRevoked.ts`); `Idempotency in_progress` — gateway matndan taniydi; hamkor API (`/partner/*`) va webhook javoblari —
+  tashqi shartnoma (`POST /partner/shipments/:id/cancel` ham eski matnni oladi: `partner-cancel-messages.ts`);
+  `integration-service` va provayder/settlement ichki yo'llari; 5xx «Internal server error».
+- 🔧 FE: majburiy o'zgarish yo'q. Matn bo'yicha taniladigan joylar tekshirildi va ishlaydi: `getPackageReceiveError`,
+  `new_orderDetail` («allaqachon»), `backendBranchErrors`, `courierDistrict` («tuman topilmadi»). Eslatma: FE test mock'larida
+  inglizcha matnlar qolgan (`Order not found` va h.k.) — ishga ta'sir qilmaydi.
+
 ### 2026-10-30 — Xavfsizlik B: SSRF DNS pinning va fayl egaligi reestri (dgvwZasd)
 
 Deploy: **file-service + api-gateway + integration-service + finance-service** (+ libs/common). Migratsiya **191**

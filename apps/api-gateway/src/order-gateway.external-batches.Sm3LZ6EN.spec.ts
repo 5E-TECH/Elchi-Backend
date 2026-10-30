@@ -122,7 +122,7 @@ describe('GET /scan/:token — qop doirasi (Sm3LZ6EN)', () => {
     );
     orderClient.send
       .mockReturnValueOnce(
-        throwError(() => ({ statusCode: 404, message: 'Order not found' })),
+        throwError(() => ({ statusCode: 404, message: 'Buyurtma topilmadi' })),
       )
       .mockReturnValueOnce(
         of({

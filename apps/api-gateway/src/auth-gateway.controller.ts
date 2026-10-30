@@ -158,7 +158,9 @@ export class AuthGatewayController {
       this.identityClient.send<T>(pattern, payload).pipe(timeout(8000)),
     ).catch((error: unknown) => {
       if (error instanceof TimeoutError) {
-        throw new GatewayTimeoutException('Identity service response timeout');
+        throw new GatewayTimeoutException(
+          'Foydalanuvchilar xizmati vaqtida javob bermadi (timeout)',
+        );
       }
       throw error;
     });
@@ -222,7 +224,7 @@ export class AuthGatewayController {
       typeof payload.accessToken === 'string' ? payload.accessToken : null;
 
     if (!accessToken) {
-      throw new UnauthorizedException('Access token not found');
+      throw new UnauthorizedException('Access token topilmadi');
     }
 
     const accessTokenExpiresAt =
@@ -409,7 +411,7 @@ export class AuthGatewayController {
     const refreshToken = refreshTokenFromCookie ?? dto?.refreshToken;
 
     if (!refreshToken) {
-      throw new UnauthorizedException('Refresh token not found');
+      throw new UnauthorizedException('Refresh token topilmadi');
     }
 
     const response = await this.sendIdentity<Record<string, unknown>>(

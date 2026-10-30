@@ -344,7 +344,7 @@ export class CatalogGatewayController {
     const host = req?.get?.('host') || String(req?.headers?.host || '').trim();
     if (!host) {
       throw new BadRequestException(
-        'Unable to resolve public host for uploaded file',
+        "Yuklangan fayl uchun ochiq manzilni aniqlab bo'lmadi",
       );
     }
     return `${protocol}://${host}/files/view/${encodeURIComponent(key)}`;
@@ -390,7 +390,7 @@ export class CatalogGatewayController {
     const payload = uploadResponse?.data ?? uploadResponse;
     const key = payload?.key;
     if (!key || typeof key !== 'string') {
-      throw new BadRequestException('Image upload failed');
+      throw new BadRequestException("Rasmni yuklab bo'lmadi");
     }
 
     return this.buildPublicFileUrl(req, key);
@@ -444,18 +444,18 @@ export class CatalogGatewayController {
     @Req() req: { user: JwtUser },
   ) {
     if (!dto?.name) {
-      throw new BadRequestException('name is required');
+      throw new BadRequestException('Nomi majburiy');
     }
 
     // Pc4CAFdB: market / market operatori tarmoqlari olib tashlandi — rol
     // RolesGuard'da tekshiriladi, bu yerda ham (himoya qatlami) faqat xodim.
     if (!PRODUCT_WRITE_ROLES.some((role) => this.hasRole(req.user, role))) {
-      throw new ForbiddenException('You are not allowed to create product');
+      throw new ForbiddenException("Mahsulot yaratishga ruxsat yo'q");
     }
     const marketId = String(dto.market_id ?? '').trim();
     if (!marketId) {
       throw new BadRequestException(
-        'market_id is required for admin/superadmin/registrator/manager',
+        'admin/superadmin/registrator/manager uchun market_id majburiy',
       );
     }
 
@@ -496,7 +496,9 @@ export class CatalogGatewayController {
         .pipe(timeout(8000)),
     ).catch((error: unknown) => {
       if (error instanceof TimeoutError) {
-        throw new GatewayTimeoutException('Catalog service response timeout');
+        throw new GatewayTimeoutException(
+          'Katalog xizmati vaqtida javob bermadi (timeout)',
+        );
       }
       throw error;
     });
@@ -687,7 +689,9 @@ export class CatalogGatewayController {
         .pipe(timeout(8000)),
     ).catch((error: unknown) => {
       if (error instanceof TimeoutError) {
-        throw new GatewayTimeoutException('Catalog service response timeout');
+        throw new GatewayTimeoutException(
+          'Katalog xizmati vaqtida javob bermadi (timeout)',
+        );
       }
       throw error;
     });
@@ -758,7 +762,9 @@ export class CatalogGatewayController {
         .pipe(timeout(8000)),
     ).catch((error: unknown) => {
       if (error instanceof TimeoutError) {
-        throw new GatewayTimeoutException('Catalog service response timeout');
+        throw new GatewayTimeoutException(
+          'Katalog xizmati vaqtida javob bermadi (timeout)',
+        );
       }
       throw error;
     });
@@ -779,7 +785,9 @@ export class CatalogGatewayController {
         .pipe(timeout(8000)),
     ).catch((error: unknown) => {
       if (error instanceof TimeoutError) {
-        throw new GatewayTimeoutException('Catalog service response timeout');
+        throw new GatewayTimeoutException(
+          'Katalog xizmati vaqtida javob bermadi (timeout)',
+        );
       }
       throw error;
     });

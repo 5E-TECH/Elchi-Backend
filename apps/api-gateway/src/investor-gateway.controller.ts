@@ -120,7 +120,9 @@ export class InvestorGatewayController {
         .pipe(timeout(8000)),
     ).catch((error: unknown) => {
       if (error instanceof TimeoutError) {
-        throw new GatewayTimeoutException('Identity service response timeout');
+        throw new GatewayTimeoutException(
+          'Foydalanuvchilar xizmati vaqtida javob bermadi (timeout)',
+        );
       }
       throw error;
     });

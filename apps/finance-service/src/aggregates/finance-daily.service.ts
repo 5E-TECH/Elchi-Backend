@@ -117,11 +117,11 @@ export class FinanceDailyService {
     const rawFrom = input?.from_date;
     const rawTo = input?.to_date;
     const to = rawTo ? parseDayKey(rawTo) : today;
-    if (!to) throw new BadRequestException(`Invalid to_date: ${rawTo}`);
+    if (!to) throw new BadRequestException(`to_date noto'g'ri: ${rawTo}`);
     const from = rawFrom
       ? parseDayKey(rawFrom)
       : addDays(to, -(DEFAULT_RANGE_DAYS - 1));
-    if (!from) throw new BadRequestException(`Invalid from_date: ${rawFrom}`);
+    if (!from) throw new BadRequestException(`from_date noto'g'ri: ${rawFrom}`);
     if (from > to) {
       throw new BadRequestException("from_date to_date dan keyin bo'lmasin");
     }

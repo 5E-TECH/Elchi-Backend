@@ -2030,7 +2030,9 @@ export class OrderLifecycleService {
       lock: { mode: 'pessimistic_write' },
     });
     if (!locked || locked.status !== Order_status.WAITING) {
-      this.badRequest('Order not found or not in waiting status');
+      this.badRequest(
+        'Buyurtma topilmadi yoki kutilmoqda (waiting) holatida emas',
+      );
     }
     // T8: qulf ostidagi qator — chaqiruvchi oradagi o'zgarishlarni (masalan
     // maxsus belgilar PUT'i) shundan oladi.
@@ -2629,7 +2631,7 @@ export class OrderLifecycleService {
       where: { id: String(approvalId), isDeleted: false },
     });
     if (!approval) {
-      this.notFound('Extra cost approval not found');
+      this.notFound("Qo'shimcha xarajat so'rovi topilmadi");
     }
     if (!options.auto) {
       this.assertCanDecideExtraCostApproval(requester!, approval);
@@ -2757,7 +2759,7 @@ export class OrderLifecycleService {
       where: { id: String(approvalId), isDeleted: false },
     });
     if (!approval) {
-      this.notFound('Extra cost approval not found');
+      this.notFound("Qo'shimcha xarajat so'rovi topilmadi");
     }
     this.assertCanDecideExtraCostApproval(requester, approval);
     if (approval.status !== 'pending') {
@@ -3418,7 +3420,7 @@ export class OrderLifecycleService {
           orderCourierId === requesterId);
 
       if (!isAssignedToRequester) {
-        this.badRequest('Order is not assigned to this courier');
+        this.badRequest('Buyurtma bu kuryerga biriktirilmagan');
       }
       return requesterId;
     }
@@ -3432,19 +3434,19 @@ export class OrderLifecycleService {
         (requesterBranchId !== orderHolderBranchId &&
           requesterBranchId !== orderBranchId)
       ) {
-        this.badRequest('Order is not assigned to this manager branch');
+        this.badRequest('Buyurtma bu menejer filialiga biriktirilmagan');
       }
       return resolvedCourierId || String(requester.id);
     }
 
     if (isSuperAdmin) {
       if (!resolvedCourierId) {
-        this.badRequest('Order has no courier assigned');
+        this.badRequest('Buyurtmaga kuryer biriktirilmagan');
       }
       return resolvedCourierId;
     }
 
-    this.badRequest('Forbidden resource');
+    this.badRequest("Bu amal uchun ruxsat yo'q");
   }
 
   /**
@@ -3483,7 +3485,7 @@ export class OrderLifecycleService {
       .toLowerCase() as 'waiting' | 'cancelled' | 'cancelled_sent';
     if (!['waiting', 'cancelled', 'cancelled_sent'].includes(rollbackTarget)) {
       this.badRequest(
-        `Invalid rollback target: ${String(dto?.target_status ?? '')}`,
+        `Noto'g'ri rollback maqsadi: ${String(dto?.target_status ?? '')}`,
       );
     }
 
@@ -3631,7 +3633,7 @@ export class OrderLifecycleService {
         (requesterBranchId !== orderHolderBranchId &&
           requesterBranchId !== orderBranchId)
       ) {
-        this.badRequest('Order is not assigned to this manager branch');
+        this.badRequest('Buyurtma bu menejer filialiga biriktirilmagan');
       }
     }
 
@@ -3676,7 +3678,7 @@ export class OrderLifecycleService {
 
     const courierId = this.resolveActorCourierId(requester, order, post);
     if (!courierId) {
-      this.notFound('Courier not found');
+      this.notFound('Kuryer topilmadi');
     }
 
     /**
@@ -3717,13 +3719,13 @@ export class OrderLifecycleService {
               .then((rows) => rows[0]),
     ]);
     if (!market) {
-      this.notFound('Market not found');
+      this.notFound('Market topilmadi');
     }
     if (!financialActor) {
       this.notFound(
         !saleCourierId && isManagerRequester
-          ? 'Manager not found'
-          : 'Courier not found',
+          ? 'Menejer topilmadi'
+          : 'Kuryer topilmadi',
       );
     }
 
@@ -3739,10 +3741,10 @@ export class OrderLifecycleService {
         : Promise.resolve(null),
     ]);
     if (!marketCashbox) {
-      this.notFound('Market cashbox not found');
+      this.notFound('Market kassasi topilmadi');
     }
     if (saleCourierId && !courierCashbox) {
-      this.notFound('Courier cashbox not found');
+      this.notFound('Kuryer kassasi topilmadi');
     }
 
     // Prefer the tariffs snapshotted on the order at sale time so the reversal
@@ -3821,7 +3823,7 @@ export class OrderLifecycleService {
       this.notFound(
         extraCostParty.cashbox_type === Cashbox_type.BRANCH
           ? 'Filial kassasi topilmadi'
-          : 'Courier cashbox not found',
+          : 'Kuryer kassasi topilmadi',
       );
     }
     const isCancelledOriginal = [
@@ -3874,7 +3876,7 @@ export class OrderLifecycleService {
       this.notFound(
         saleMarketPaidParty.cashbox_type === Cashbox_type.BRANCH
           ? 'Filial kassasi topilmadi'
-          : 'Courier cashbox not found',
+          : 'Kuryer kassasi topilmadi',
       );
     }
 
@@ -4754,7 +4756,7 @@ export class OrderLifecycleService {
   ) {
     const reason = String(dto?.reason ?? '').trim();
     if (!reason) {
-      this.badRequest('reason is required');
+      this.badRequest('reason majburiy');
     }
 
     const order = await this.findById(id);
@@ -5473,7 +5475,7 @@ export class OrderLifecycleService {
       this.badRequest('market_id va requester majburiy');
     }
     if (!orderIds.length) {
-      this.badRequest('order_ids is required');
+      this.badRequest('order_ids majburiy');
     }
     if (manualOverrideByOrderId.size !== manualOverrides.length) {
       this.badRequest('manual_overrides ichida takror order bor');
@@ -6906,7 +6908,7 @@ export class OrderLifecycleService {
       new Set((orderIds ?? []).filter(Boolean)),
     );
     if (!uniqueOrderIds.length) {
-      this.badRequest('order_ids is required');
+      this.badRequest('order_ids majburiy');
     }
 
     // 0. Filial doirasi — menejer/registrator faqat o'z filialida ishlaydi.
@@ -6922,7 +6924,7 @@ export class OrderLifecycleService {
     });
 
     if (!orders.length) {
-      this.notFound('No orders found!');
+      this.notFound('Buyurtmalar topilmadi');
     }
 
     /**
@@ -7040,18 +7042,20 @@ export class OrderLifecycleService {
       );
       orders = orders.filter((o) => matchingIds.has(o.customer_id));
       if (!orders.length) {
-        this.notFound('No orders found matching search criteria');
+        this.notFound("Qidiruv bo'yicha buyurtma topilmadi");
       }
     }
 
     if (orders.length !== uniqueOrderIds.length && !search?.trim()) {
-      this.badRequest('Some orders are not found or not in NEW status');
+      this.badRequest(
+        'Buyurtmalarning bir qismi topilmadi yoki yangi (NEW) holatda emas',
+      );
     }
 
     // 4. Validate customers exist
     for (const order of orders) {
       if (!customerMap.has(order.customer_id)) {
-        this.notFound(`Customer not found for order #${order.id}`);
+        this.notFound(`Buyurtma #${order.id} mijozi topilmadi`);
       }
     }
 
@@ -7091,7 +7095,7 @@ export class OrderLifecycleService {
         null;
       if (!assignedRegion) {
         this.notFound(
-          `District/assigned region not found for order #${order.id}`,
+          `Buyurtma #${order.id} uchun tuman yoki viloyat topilmadi`,
         );
       }
       if (/^\d+$/.test(String(assignedRegion).trim())) {
@@ -7324,7 +7328,7 @@ export class OrderLifecycleService {
       ),
     );
     if (!tokens.length) {
-      this.badRequest('tokens is required');
+      this.badRequest('tokens majburiy');
     }
     /**
      * Bir so'rovda qabul qilinadigan posilka soni chegaralangan: skaner
@@ -8405,10 +8409,12 @@ export class OrderLifecycleService {
     const marketPaidAtSale = this.resolveSaleMarketPaidInput(dto?.paidAmount);
     const order = await this.findById(id);
     if (order.status !== Order_status.WAITING) {
-      this.badRequest('Order not found or not in waiting status');
+      this.badRequest(
+        'Buyurtma topilmadi yoki kutilmoqda (waiting) holatida emas',
+      );
     }
     if (!order.post_id) {
-      this.badRequest('Order has no post');
+      this.badRequest('Buyurtma hech qaysi pochtada emas');
     }
     if (marketPaidAtSale > 0 && String(order.external_id ?? '').trim()) {
       // Hamkor (BeePost) o'z daftarini faqat `settlement.payment` webhooki
@@ -8474,11 +8480,11 @@ export class OrderLifecycleService {
             .then((rows) => rows[0]),
     ]);
     if (!market) {
-      this.notFound('Market not found');
+      this.notFound('Market topilmadi');
     }
     if (!financialActor) {
       this.notFound(
-        isManagerRequester ? 'Manager not found' : 'Courier not found',
+        isManagerRequester ? 'Menejer topilmadi' : 'Kuryer topilmadi',
       );
     }
     this.assertManagerCanSellCancel(isManagerRequester, financialActor);
@@ -8495,10 +8501,10 @@ export class OrderLifecycleService {
             .catch(() => null),
     ]);
     if (!marketCashbox) {
-      this.notFound('Market cashbox not found');
+      this.notFound('Market kassasi topilmadi');
     }
     if (!courierCashbox && !isManagerRequester) {
-      this.notFound('Courier cashbox not found');
+      this.notFound('Kuryer kassasi topilmadi');
     }
 
     // Branch settlement: a non-HQ branch is a separate cash owner. Mirror the
@@ -9122,10 +9128,12 @@ export class OrderLifecycleService {
         : this.resolveCancelReason(dto?.reason, dto?.comment);
     const order = await this.findById(id);
     if (order.status !== Order_status.WAITING) {
-      this.badRequest('Order not found or not in waiting status');
+      this.badRequest(
+        'Buyurtma topilmadi yoki kutilmoqda (waiting) holatida emas',
+      );
     }
     if (!order.post_id) {
-      this.badRequest('Order has no post');
+      this.badRequest('Buyurtma hech qaysi pochtada emas');
     }
 
     const postRes = await rmqSend<{
@@ -9161,12 +9169,12 @@ export class OrderLifecycleService {
             .then((rows) => rows[0]),
     ]);
     if (!market) {
-      this.notFound('Market not found');
+      this.notFound('Market topilmadi');
     }
     // fix #4: menejer bekor qilish ruxsati — extraCost'dan QAT'I NAZAR
     // (financialActor menejer uchun yuqorida olindi). Manager bo'lmasa no-op.
     if (isManagerRequester && !financialActor) {
-      this.notFound('Manager not found');
+      this.notFound('Menejer topilmadi');
     }
     this.assertManagerCanSellCancel(isManagerRequester, financialActor);
     if (extraCost > 0) {
@@ -9174,7 +9182,7 @@ export class OrderLifecycleService {
       this.assertMarketExtraCostEnabled(market);
       if (!financialActor) {
         this.notFound(
-          isManagerRequester ? 'Manager not found' : 'Courier not found',
+          isManagerRequester ? 'Menejer topilmadi' : 'Kuryer topilmadi',
         );
       }
       await this.assertCanAddExtraCost({
@@ -9229,7 +9237,7 @@ export class OrderLifecycleService {
       ? Cashbox_type.BRANCH
       : Cashbox_type.FOR_COURIER;
     if (isManagerRequester && !actorExpenseUserId) {
-      this.badRequest('Manager branch not found');
+      this.badRequest('Menejer filiali topilmadi');
     }
     if (extraCost > 0) {
       if (isManagerRequester) {
@@ -9245,13 +9253,13 @@ export class OrderLifecycleService {
           .catch(() => null),
       ]);
       if (!marketCashbox) {
-        this.notFound('Market cashbox not found');
+        this.notFound('Market kassasi topilmadi');
       }
       if (!fetchedActorExpenseCashbox) {
         this.notFound(
           isManagerRequester
-            ? 'Branch cashbox not found'
-            : 'Courier cashbox not found',
+            ? 'Filial kassasi topilmadi'
+            : 'Kuryer kassasi topilmadi',
         );
       }
       actorExpenseCashbox = fetchedActorExpenseCashbox;
@@ -9455,15 +9463,17 @@ export class OrderLifecycleService {
   ) {
     const reason = String(dto?.reason ?? '').trim();
     if (reason.length < 10) {
-      this.badRequest('reason must be at least 10 characters');
+      this.badRequest("reason kamida 10 belgi bo'lishi kerak");
     }
 
     const order = await this.findById(id);
     if (order.status !== Order_status.ON_THE_ROAD) {
-      this.badRequest('Order not found or not in on the road status');
+      this.badRequest(
+        "Buyurtma topilmadi yoki yo'lda (on the road) holatida emas",
+      );
     }
     if (!order.post_id) {
-      this.badRequest('Order has no post');
+      this.badRequest('Buyurtma hech qaysi pochtada emas');
     }
 
     const postRes = await rmqSend<{
@@ -10013,10 +10023,12 @@ export class OrderLifecycleService {
      */
     const oldTotalPrice = Number(order.total_price ?? 0);
     if (order.status !== Order_status.WAITING) {
-      this.badRequest('Order not found or not in waiting status');
+      this.badRequest(
+        'Buyurtma topilmadi yoki kutilmoqda (waiting) holatida emas',
+      );
     }
     if (!order.post_id) {
-      this.badRequest('Order has no post');
+      this.badRequest('Buyurtma hech qaysi pochtada emas');
     }
     // (lQjt6sKP) Qisman sotuv ham AYNI darvozadan o'tadi — aks holda
     // "eskisini oldim" tasdig'ini chetlab o'tishning tayyor yo'li qolardi.
@@ -10037,12 +10049,12 @@ export class OrderLifecycleService {
     this.assertManagerSaleNotCourierHeld(isManagerRequester, order);
 
     if (!dto?.order_item_info?.length) {
-      this.badRequest('order_item_info is required');
+      this.badRequest('order_item_info majburiy');
     }
 
     const price = Number(dto.totalPrice ?? 0);
     if (!Number.isFinite(price) || price < 0) {
-      this.badRequest('totalPrice must be a non-negative number');
+      this.badRequest("totalPrice manfiy bo'lmasligi kerak");
     }
     /**
      * ⚠️ QISMAN SOTUV SUMMASI BUYURTMA SUMMASIDAN OSHMAYDI (audit M10).
@@ -10074,11 +10086,11 @@ export class OrderLifecycleService {
             .then((rows) => rows[0]),
     ]);
     if (!market) {
-      this.notFound('Market not found');
+      this.notFound('Market topilmadi');
     }
     if (!financialActor) {
       this.notFound(
-        isManagerRequester ? 'Manager not found' : 'Courier not found',
+        isManagerRequester ? 'Menejer topilmadi' : 'Kuryer topilmadi',
       );
     }
     this.assertManagerCanSellCancel(isManagerRequester, financialActor);
@@ -10095,10 +10107,10 @@ export class OrderLifecycleService {
             .catch(() => null),
     ]);
     if (!marketCashbox) {
-      this.notFound('Market cashbox not found');
+      this.notFound('Market kassasi topilmadi');
     }
     if (!courierCashbox && !isManagerRequester) {
-      this.notFound('Courier cashbox not found');
+      this.notFound('Kuryer kassasi topilmadi');
     }
 
     // Branch settlement mirror (courier → branch → HQ) for non-HQ branch sales.
@@ -10232,13 +10244,13 @@ export class OrderLifecycleService {
     const newQty = dto.order_item_info.reduce((sum, item) => {
       const qty = Number(item.quantity ?? 0);
       if (!Number.isFinite(qty) || qty < 0) {
-        this.badRequest('Item quantity must be a non-negative number');
+        this.badRequest("Mahsulot soni manfiy bo'lmasligi kerak");
       }
       return sum + qty;
     }, 0);
 
     if (newQty > oldQty) {
-      this.badRequest('Partly sell quantity cannot exceed original quantity');
+      this.badRequest('Qisman sotish soni asl sondan oshmasligi kerak');
     }
 
     const { matches: itemMatches, cancelledItems } = matchPartlySellItems(

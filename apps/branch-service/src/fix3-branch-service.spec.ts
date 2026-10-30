@@ -213,9 +213,9 @@ describe('fix3 — branch-service', () => {
     it.each([
       [
         'yuqori darajadagi 404 (RabbitMQ shakli)',
-        { statusCode: 404, message: 'Transfer batch not found', data: null },
+        { statusCode: 404, message: 'Paket topilmadi', data: null },
         404,
-        'Transfer batch not found',
+        'Paket topilmadi',
       ],
       [
         'yuqori darajadagi 409',

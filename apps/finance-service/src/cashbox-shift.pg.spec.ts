@@ -378,7 +378,7 @@ describePg('A4 — kassa/smena, haqiqiy Postgres', () => {
         cashbox_type: Cashbox_type.BRANCH,
       }),
     ).rejects.toMatchObject({
-      error: { statusCode: 400, message: 'Insufficient cash balance' },
+      error: { statusCode: 400, message: "Naqd kassada yetarli mablag' yo'q" },
     });
     await expect(
       service.spendMoney({
@@ -388,7 +388,10 @@ describePg('A4 — kassa/smena, haqiqiy Postgres', () => {
         cashbox_type: Cashbox_type.BRANCH,
       }),
     ).rejects.toMatchObject({
-      error: { statusCode: 400, message: 'Insufficient card balance' },
+      error: {
+        statusCode: 400,
+        message: "Karta hisobida yetarli mablag' yo'q",
+      },
     });
     const branchAfterManual = await cashboxRepo().findOneByOrFail({
       user_id: '15',

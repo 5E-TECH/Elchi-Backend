@@ -603,7 +603,8 @@ export class OrderAnalyticsService {
     }
     throw new RpcException({
       statusCode: 400,
-      message: 'period must be one of: daily, weekly, monthly, yearly',
+      message:
+        "period quyidagilardan biri bo'lishi kerak: daily, weekly, monthly, yearly",
     });
   }
 

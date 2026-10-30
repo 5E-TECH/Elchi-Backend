@@ -277,7 +277,7 @@ afterEach(() => {
 });
 
 describe('i75GDixP — filial kassasi: manfiy ruxsat faqat aniq tizim bayrog`i bilan', () => {
-  it('spendMoney(BRANCH, naqd, balansdan katta) → 400 "Insufficient cash balance", hech narsa saqlanmaydi', async () => {
+  it('spendMoney(BRANCH, naqd, balansdan katta) → 400 (yetarli mablag yo‘q), hech narsa saqlanmaydi', async () => {
     const env = makeEnv({ cashboxes: [branchCashbox(100_000)] });
 
     const error = await rpcErrorOf(
@@ -291,13 +291,13 @@ describe('i75GDixP — filial kassasi: manfiy ruxsat faqat aniq tizim bayrog`i b
 
     expect(error).toEqual({
       statusCode: 400,
-      message: 'Insufficient cash balance',
+      message: "Naqd kassada yetarli mablag' yo'q",
     });
     expect(env.manager.save).not.toHaveBeenCalled();
     expect(env.queryRunner.rollbackTransaction).toHaveBeenCalled();
   });
 
-  it('spendMoney(BRANCH, type=click, karta 0) → 400 "Insufficient card balance" (CLICK varianti)', async () => {
+  it('spendMoney(BRANCH, type=click, karta 0) → 400 (kartada yetarli mablag yo‘q, CLICK varianti)', async () => {
     const env = makeEnv({ cashboxes: [branchCashbox(900_000, 0)] });
 
     const error = await rpcErrorOf(
@@ -312,7 +312,7 @@ describe('i75GDixP — filial kassasi: manfiy ruxsat faqat aniq tizim bayrog`i b
 
     expect(error).toEqual({
       statusCode: 400,
-      message: 'Insufficient card balance',
+      message: "Karta hisobida yetarli mablag' yo'q",
     });
     expect(env.manager.save).not.toHaveBeenCalled();
   });
@@ -416,7 +416,7 @@ describe('i75GDixP — filial kassasi: manfiy ruxsat faqat aniq tizim bayrog`i b
 
     expect(error).toEqual({
       statusCode: 400,
-      message: 'Insufficient cash balance',
+      message: "Naqd kassada yetarli mablag' yo'q",
     });
     expect(env.manager.save).not.toHaveBeenCalled();
   });

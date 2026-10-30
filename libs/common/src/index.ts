@@ -92,3 +92,4 @@ export * from './finance/cashbox-receipt';
 export * from './telegram/verify-init-data';
 export * from './scan/scan-order-summary';
 export * from './staging/outbound-guard';
+export * from './validation/uz-validation-messages';

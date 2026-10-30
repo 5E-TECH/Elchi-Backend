@@ -211,7 +211,7 @@ describe('receiveExternalByScan — qop yorlig`i', () => {
   it('bo`sh token ro`yxati -> 400', async () => {
     const { svc } = buildSvc({});
     await expect(svc.receiveExternalByScan({ tokens: [] })).rejects.toThrow(
-      /tokens is required/,
+      /tokens majburiy/,
     );
   });
 });

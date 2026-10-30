@@ -102,7 +102,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       // Deploy'dan oldingi Telegram tokeni (`tg_id` / scope yo'q) — 401: bot
       // har so'rovda yangi token oladi, Mini App qayta ochiladi.
       if (typeof payload.tg_id !== 'string' || !payload.tg_id) {
-        throw new UnauthorizedException('Telegram token is outdated');
+        throw new UnauthorizedException('Telegram tokeni eskirgan');
       }
     }
     if (this.telegramTokens && payload.auth === 'telegram') {
@@ -112,7 +112,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
         role: roles[0] ?? null,
       });
       if (state === 'revoked') {
-        throw new UnauthorizedException('Telegram token is no longer valid');
+        throw new UnauthorizedException('Telegram tokeni endi yaroqsiz');
       }
       if (state === 'unknown') {
         throw new ServiceUnavailableException({

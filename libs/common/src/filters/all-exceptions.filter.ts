@@ -11,6 +11,14 @@ import { captureException } from '../sentry/sentry.helper';
 import { requestContext } from '../context/request-context';
 import { publicErrorData, publicErrorFields } from './public-error-fields';
 
+/**
+ * (ZDweRm02) Nest'ning o'z matni: `RolesGuard` `false` qaytarganda 403 shu
+ * so'z bilan chiqadi (kodimizda yozilmagan, shu sabab shu yerda).
+ */
+const NEST_DEFAULT_MESSAGES: Readonly<Record<string, string>> = {
+  'Forbidden resource': "Bu amal uchun ruxsat yo'q",
+};
+
 @Catch()
 export class AllExceptionsFilter implements ExceptionFilter {
   private readonly logger = new Logger(AllExceptionsFilter.name);
@@ -93,6 +101,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
     if (isUpstreamTimeout) {
       message = 'Yuqori oqim xizmati vaqtida javob bermadi (timeout)';
     }
+    message = NEST_DEFAULT_MESSAGES[message] ?? message;
 
     // (Elchi Pochta #3) Ro'yxatdagi mashina kodi (`SESSION_TOO_NEW` …) va
     // uning maydonlari — `public-error-fields.ts`; boshqa xatoda bo'sh.

@@ -355,7 +355,7 @@ describe('ScanGatewayController', () => {
     orderClient.send
       // 1) order.find_by_qr -> 404 (posilka emas, qop yorlig'i)
       .mockReturnValueOnce(
-        throwError(() => ({ statusCode: 404, message: 'Order not found' })),
+        throwError(() => ({ statusCode: 404, message: 'Buyurtma topilmadi' })),
       )
       // 2) order.find_batch_by_external_token -> qop a'zolari
       .mockReturnValueOnce(
@@ -389,10 +389,10 @@ describe('ScanGatewayController', () => {
     const { controller, orderClient } = setup();
     orderClient.send
       .mockReturnValueOnce(
-        throwError(() => ({ statusCode: 404, message: 'Order not found' })),
+        throwError(() => ({ statusCode: 404, message: 'Buyurtma topilmadi' })),
       )
       .mockReturnValueOnce(
-        throwError(() => ({ statusCode: 404, message: 'Batch not found' })),
+        throwError(() => ({ statusCode: 404, message: 'Paket topilmadi' })),
       );
 
     await expect(controller.scan('unknownTok', req)).rejects.toMatchObject({

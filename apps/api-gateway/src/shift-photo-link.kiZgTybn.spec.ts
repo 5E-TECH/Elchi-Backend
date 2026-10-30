@@ -424,7 +424,7 @@ describe('kiZgTybn — HTTP: smena hisoboti havolasi → baytlar (doira bilan)',
   it('fayl topilmasa (file-service 404) — 404', async () => {
     // file-service RPC xatosi gateway'ga oddiy obyekt bo'lib keladi.
     file.send.mockImplementation(() =>
-      throwError(() => ({ statusCode: 404, message: 'File not found' })),
+      throwError(() => ({ statusCode: 404, message: 'Fayl topilmadi' })),
     );
     const token = createFileLinkToken(KEY)!;
     const res = await request(http()).get(`/files/signed/${token}`);

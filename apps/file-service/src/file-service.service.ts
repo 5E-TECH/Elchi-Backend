@@ -165,11 +165,11 @@ export class FileServiceService implements OnModuleInit {
       ? (value.split(',').pop() ?? '')
       : value;
     if (!cleaned) {
-      throw new BadRequestException('file_base64 is required');
+      throw new BadRequestException('file_base64 majburiy');
     }
     const buffer = Buffer.from(cleaned, 'base64');
     if (!buffer.length) {
-      throw new BadRequestException('file_base64 is invalid');
+      throw new BadRequestException("file_base64 noto'g'ri");
     }
     return buffer;
   }
@@ -177,7 +177,7 @@ export class FileServiceService implements OnModuleInit {
   private validateFile(mimeType: string, size: number) {
     if (!this.allowedMime.has(mimeType)) {
       throw new BadRequestException(
-        'Unsupported mime type. Allowed: image/png, image/jpeg, image/jpg, image/webp, application/pdf, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet, video/mp4, video/quicktime, video/webm',
+        "Fayl turi qo'llab-quvvatlanmaydi. Ruxsat etilganlar: image/png, image/jpeg, image/jpg, image/webp, application/pdf, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet, video/mp4, video/quicktime, video/webm",
       );
     }
 
@@ -187,7 +187,7 @@ export class FileServiceService implements OnModuleInit {
       : this.maxSizeBytes;
     if (size > limit) {
       throw new BadRequestException(
-        `File size exceeds ${Math.round(limit / 1024 / 1024)}MB`,
+        `Fayl hajmi ${Math.round(limit / 1024 / 1024)} MB dan oshmasin`,
       );
     }
   }
@@ -200,7 +200,9 @@ export class FileServiceService implements OnModuleInit {
    */
   private assertMagicBytesMatchMime(buffer: Buffer, mimeType: string): void {
     if (buffer.length < 4) {
-      throw new BadRequestException('File content too small to validate');
+      throw new BadRequestException(
+        "Fayl juda kichik — mazmunini tekshirib bo'lmadi",
+      );
     }
 
     // Compare an exact prefix against the buffer.
@@ -259,7 +261,7 @@ export class FileServiceService implements OnModuleInit {
 
     if (!detected) {
       throw new BadRequestException(
-        'File content does not match any allowed type (magic bytes unrecognised)',
+        'Fayl mazmuni ruxsat etilgan turlarning hech biriga mos kelmadi',
       );
     }
 
@@ -270,7 +272,7 @@ export class FileServiceService implements OnModuleInit {
         `MIME mismatch: client claimed "${mimeType}", buffer signature is "${detected.token}" — rejecting`,
       );
       throw new BadRequestException(
-        `File content (${detected.token}) does not match declared mime_type (${mimeType})`,
+        `Fayl mazmuni (${detected.token}) e'lon qilingan turga (${mimeType}) mos kelmadi`,
       );
     }
   }
@@ -292,7 +294,7 @@ export class FileServiceService implements OnModuleInit {
         new HeadObjectCommand({ Bucket: this.bucket, Key: key }),
       );
     } catch {
-      throw new NotFoundException('File not found');
+      throw new NotFoundException('Fayl topilmadi');
     }
   }
 
@@ -338,8 +340,8 @@ export class FileServiceService implements OnModuleInit {
       const mimeType = String(data?.mime_type ?? '')
         .trim()
         .toLowerCase();
-      if (!fileName) throw new BadRequestException('file_name is required');
-      if (!mimeType) throw new BadRequestException('mime_type is required');
+      if (!fileName) throw new BadRequestException('file_name majburiy');
+      if (!mimeType) throw new BadRequestException('mime_type majburiy');
 
       const buffer = this.decodeBase64(String(data?.file_base64 ?? ''));
       this.validateFile(mimeType, buffer.length);
@@ -368,7 +370,7 @@ export class FileServiceService implements OnModuleInit {
   async getUrl(data: GetFileUrlDto) {
     try {
       const key = String(data?.key ?? '').trim();
-      if (!key) throw new BadRequestException('key is required');
+      if (!key) throw new BadRequestException('key majburiy');
 
       await this.ensureObjectExists(key);
 
@@ -409,14 +411,14 @@ export class FileServiceService implements OnModuleInit {
   async exists(data: { key?: string }) {
     try {
       const key = String(data?.key ?? '').trim();
-      if (!key) throw new BadRequestException('key is required');
+      if (!key) throw new BadRequestException('key majburiy');
       try {
         await this.s3.send(
           new HeadObjectCommand({ Bucket: this.bucket, Key: key }),
         );
         return this.successRes({ key, exists: true }, 200, 'File exists');
       } catch {
-        return this.successRes({ key, exists: false }, 200, 'File not found');
+        return this.successRes({ key, exists: false }, 200, 'Fayl topilmadi');
       }
     } catch (error) {
       this.toRpcError(error);
@@ -431,7 +433,7 @@ export class FileServiceService implements OnModuleInit {
   async findOwner(data: { key?: string }) {
     try {
       const key = String(data?.key ?? '').trim();
-      if (!key) throw new BadRequestException('key is required');
+      if (!key) throw new BadRequestException('key majburiy');
       const row = await this.ownership.find(key);
       return this.successRes(
         row
@@ -455,14 +457,14 @@ export class FileServiceService implements OnModuleInit {
   async read(data: { key: string }) {
     try {
       const key = String(data?.key ?? '').trim();
-      if (!key) throw new BadRequestException('key is required');
+      if (!key) throw new BadRequestException('key majburiy');
 
       const response = await this.s3.send(
         new GetObjectCommand({ Bucket: this.bucket, Key: key }),
       );
       const body = response.Body;
       if (!body || typeof body.transformToByteArray !== 'function') {
-        throw new NotFoundException('File not found');
+        throw new NotFoundException('Fayl topilmadi');
       }
 
       // Guard against OOM: read() buffers the whole object AND base64-encodes it
@@ -471,7 +473,7 @@ export class FileServiceService implements OnModuleInit {
       const size = Number(response.ContentLength ?? 0);
       if (size > this.maxVideoSizeBytes) {
         throw new BadRequestException(
-          `File too large to read into memory: ${size} bytes (limit ${this.maxVideoSizeBytes})`,
+          `Fayl juda katta: ${size} bayt (chegara ${this.maxVideoSizeBytes})`,
         );
       }
 
@@ -494,7 +496,7 @@ export class FileServiceService implements OnModuleInit {
   async remove(data: DeleteFileDto) {
     try {
       const key = String(data?.key ?? '').trim();
-      if (!key) throw new BadRequestException('key is required');
+      if (!key) throw new BadRequestException('key majburiy');
       await this.ensureObjectExists(key);
 
       await this.s3.send(
@@ -514,7 +516,7 @@ export class FileServiceService implements OnModuleInit {
   async generateQr(data: GenerateQrDto) {
     try {
       const text = String(data?.text ?? '').trim();
-      if (!text) throw new BadRequestException('text is required');
+      if (!text) throw new BadRequestException('text majburiy');
       const prefix = data?.prefix ? String(data.prefix) : '';
       const qrText = `${prefix}${text}`;
 
@@ -540,7 +542,7 @@ export class FileServiceService implements OnModuleInit {
     try {
       const content = String(data?.content ?? '').trim();
       const title = String(data?.title ?? 'Document').trim();
-      if (!content) throw new BadRequestException('content is required');
+      if (!content) throw new BadRequestException('content majburiy');
 
       const buffer = await new Promise<Buffer>((resolve, reject) => {
         const doc = new PDFDocument({ size: 'A4', margin: 50 });

@@ -71,7 +71,7 @@ export class NotificationGatewayController {
     ).catch((error: unknown) => {
       if (error instanceof TimeoutError) {
         throw new GatewayTimeoutException(
-          'Notification service response timeout',
+          'Bildirishnoma xizmati vaqtida javob bermadi (timeout)',
         );
       }
       throw error;
@@ -80,7 +80,10 @@ export class NotificationGatewayController {
 
   private requireUserId(req: AuthedRequest): string {
     const id = req.user?.sub;
-    if (!id) throw new UnauthorizedException('User not authenticated');
+    if (!id)
+      throw new UnauthorizedException(
+        "Foydalanuvchi autentifikatsiyadan o'tmagan",
+      );
     return String(id);
   }
 

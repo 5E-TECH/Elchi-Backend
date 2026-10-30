@@ -262,7 +262,10 @@ describe('MO2MLPGo — 4 ta holat tugmasi', () => {
       op === 'sell'
         ? {
             status: 400,
-            body: { message: 'Order not found or not in waiting status' },
+            body: {
+              message:
+                'Buyurtma topilmadi yoki kutilmoqda (waiting) holatida emas',
+            },
           }
         : undefined,
     );

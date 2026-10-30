@@ -61,7 +61,9 @@ export class TelegramGatewayController {
       client.send<T>(pattern, payload).pipe(timeout(8000)),
     ).catch((error: unknown) => {
       if (error instanceof TimeoutError) {
-        throw new GatewayTimeoutException('Service response timeout');
+        throw new GatewayTimeoutException(
+          'Xizmat vaqtida javob bermadi (timeout)',
+        );
       }
       throw error;
     });
@@ -69,7 +71,10 @@ export class TelegramGatewayController {
 
   private requester(req: AuthedRequest) {
     const id = req.user?.sub;
-    if (!id) throw new UnauthorizedException('User not authenticated');
+    if (!id)
+      throw new UnauthorizedException(
+        "Foydalanuvchi autentifikatsiyadan o'tmagan",
+      );
     return { id: String(id), roles: req.user?.roles ?? [] };
   }
 

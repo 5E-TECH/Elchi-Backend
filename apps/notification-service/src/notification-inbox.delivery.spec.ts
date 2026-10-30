@@ -283,7 +283,7 @@ describe('NotificationInboxService — delivery, fan-out, types', () => {
       telegramService.sendNotification.mockRejectedValue(
         new RpcException({
           statusCode: 404,
-          message: 'Telegram target group not found for market',
+          message: 'Market uchun Telegram guruhi topilmadi',
         }),
       );
       await service.dispatch({

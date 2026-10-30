@@ -412,22 +412,24 @@ export class CampaignService {
       );
     }
     const type = String(input.type ?? '').trim();
-    if (!type) throw new BadRequestException('type is required');
+    if (!type) throw new BadRequestException('type majburiy');
     if (!isKnownNotificationType(type)) {
       throw new BadRequestException(notificationTypeErrorMessage(type));
     }
     const title = String(input.title ?? '').trim();
-    if (!title) throw new BadRequestException('title is required');
-    if (title.length > 255) throw new BadRequestException('title ≤ 255');
+    if (!title) throw new BadRequestException('title majburiy');
+    if (title.length > 255)
+      throw new BadRequestException('title 255 belgidan oshmasin');
     const body =
       input.body === undefined || input.body === null
         ? null
         : String(input.body);
     if (body !== null && body.length > 4096) {
-      throw new BadRequestException('body ≤ 4096');
+      throw new BadRequestException('body 4096 belgidan oshmasin');
     }
     const link = input.link ? String(input.link) : null;
-    if (link && link.length > 512) throw new BadRequestException('link ≤ 512');
+    if (link && link.length > 512)
+      throw new BadRequestException('link 512 belgidan oshmasin');
     if (
       input.data !== undefined &&
       input.data !== null &&
@@ -1136,7 +1138,7 @@ export class CampaignService {
   private assertId(value: unknown): string {
     const id = primitiveText(value).trim();
     if (!ID_RE.test(id)) {
-      throw new BadRequestException('id must be a bigint-like numeric string');
+      throw new BadRequestException("id raqamli bo'lishi kerak");
     }
     return id;
   }

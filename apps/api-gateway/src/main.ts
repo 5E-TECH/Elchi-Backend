@@ -1,13 +1,10 @@
 import { NestFactory } from '@nestjs/core';
-import {
-  ValidationPipe,
-  VersioningType,
-  VERSION_NEUTRAL,
-} from '@nestjs/common';
+import { VersioningType, VERSION_NEUTRAL } from '@nestjs/common';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import { MicroserviceOptions } from '@nestjs/microservices';
 import { Logger } from 'nestjs-pino';
 import { ApiGatewayModule } from './api-gateway.module';
+import { UzValidationPipe } from './validation/uz-validation.pipe';
 import {
   ensureGatewayRealtimeQueue,
   gatewayRealtimeConsumerOptions,
@@ -77,7 +74,8 @@ async function bootstrap() {
   app.enableCors(gatewayCorsDelegate());
 
   app.useGlobalPipes(
-    new ValidationPipe({
+    // (ZDweRm02) class-validator standart xabarlari — o'zbekcha.
+    new UzValidationPipe({
       whitelist: true,
       forbidNonWhitelisted: true,
       transform: true,
