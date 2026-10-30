@@ -1,5 +1,5 @@
 import 'reflect-metadata';
-import { of } from 'rxjs';
+import { NEVER, of } from 'rxjs';
 import { ROLES_KEY } from './auth/roles.decorator';
 import {
   LogisticsGatewayController,
@@ -463,6 +463,27 @@ describe('T9 (HJ5sLHiz, BE-1) — pochta buyurtmalarida order_number va mahsulot
       user: { sub: '9', roles: ['superadmin'] },
     });
     expect(gone.data.allOrdersByPostId[0].items[0].product).toBeNull();
+  });
+
+  it('⭐ katalog javob bermaydi → 8000 ms dan keyin product: null, javob yiqilmaydi', async () => {
+    jest.useFakeTimers();
+    try {
+      const catalog = { send: jest.fn(() => NEVER) };
+      let settled: any;
+      const pending = controllerWith([row], catalog)
+        .getOrdersByPost('1', { user: { sub: '9', roles: ['superadmin'] } })
+        .then((r) => {
+          settled = r;
+        });
+      await jest.advanceTimersByTimeAsync(7999);
+      expect(settled).toBeUndefined();
+      await jest.advanceTimersByTimeAsync(1);
+      await pending;
+      expect(settled.data.allOrdersByPostId[0].items[0].product).toBeNull();
+      expect(settled.data.allOrdersByPostId[0].order_number).toBe('EL-100010');
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   it('rad etilganlar va qaytarish so`rovlarida ham; logistga ham (pulsiz)', async () => {

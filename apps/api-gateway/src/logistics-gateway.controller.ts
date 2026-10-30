@@ -916,8 +916,8 @@ export class LogisticsGatewayController {
   @ApiOkResponse({
     description:
       "`data.allOrdersByPostId[]` — buyurtma qatorlari (`market`, `customer`, `district` oq ro'yxat bilan). T9 (HJ5sLHiz): har buyurtma qatorida `order_number` («EL-…», ro'yxat va skan bilan bir xil) va `items[].product: {id, name} | null` (katalogda yo'q / javob bermasa — null; narx, market, rasm yo'q). " +
-      "`data.post` — pochta meta'si: `id`, `status`, `courier_id`, `courier`, `qr_code_token`, `order_quantity`, `branch_id`, `region_id`, `region`, `createdAt` va T9 `branch: {id, name} | null` — «Qayerdan» (jo'natuvchi filial; `branch_id` null — HQ; filial xizmati javob bermasa — null). " +
-      "Cheklov: kuryersiz o'tkazma pochtasini qabul qiluvchi filial ochganda `branch_id` unga ko'chadi — shundan keyin `branch` qabul qiluvchi filial bo'ladi.",
+      "`data.post` — pochta meta'si: `id`, `status`, `courier_id`, `courier`, `qr_code_token`, `order_quantity`, `branch_id`, `region_id`, `region`, `createdAt` va T9 `branch: {id, name} | null` — «Qayerdan» (pochtani JO'NATGAN filial; `branch_id` emas — u ko'pincha manzil). " +
+      "Kuryerli pochta (bekorlarni HQ'ga yuborgan menejer pochtasi ham) — shu foydalanuvchining filiali; kuryersiz yig'ilayotgan (new) — `branch_id` filiali, bo'lmasa HQ; kuryersiz o'tkazma (sent/received) — HQ; boshqa hollar yoki filial xizmati javob bermasa — null (chekda qator chiqmaydi).",
   })
   getOrdersByPost(@Param('id') id: string, @Req() req: { user: JwtUser }) {
     return firstValueFrom(
@@ -931,6 +931,8 @@ export class LogisticsGatewayController {
               roles: req.user.roles ?? [],
               branch_id: req.user.branch_id ?? null,
             },
+            // T9 (BE-2): detal — `data.post.branch` («Qayerdan»).
+            with_sender_branch: true,
           },
         )
         .pipe(timeout(8000)),

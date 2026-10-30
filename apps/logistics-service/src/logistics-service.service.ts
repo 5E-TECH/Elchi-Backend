@@ -453,6 +453,26 @@ function isTruthyFlag(value: unknown): boolean {
   return normalized === 'true' || normalized === '1';
 }
 
+/** T9 (BE-2): «Qayerdan» so'rovlari — tizim so'rovchisi (doira tekshiruvisiz). */
+const SENDER_BRANCH_SYSTEM_REQUESTER = {
+  id: 'system',
+  roles: [Roles.SUPERADMIN],
+};
+const SENDER_BRANCH_TIMEOUT_MS = 5000;
+const HQ_BRANCH_SUMMARY_TTL_MS = 5 * 60 * 1000;
+
+/** Filial obyektidan faqat `{ id, name }`; yaroqsiz — `null`. */
+function branchSummaryOf(value: unknown): { id: string; name: string } | null {
+  if (!value || typeof value !== 'object') {
+    return null;
+  }
+  const { id, name } = value as { id?: unknown; name?: unknown };
+  const branchId =
+    typeof id === 'string' || typeof id === 'number' ? String(id).trim() : '';
+  const branchName = typeof name === 'string' ? name.trim() : '';
+  return branchId && branchName ? { id: branchId, name: branchName } : null;
+}
+
 @Injectable()
 export class LogisticsServiceService implements OnModuleInit {
   private readonly logger = new Logger(LogisticsServiceService.name);
@@ -1359,43 +1379,99 @@ export class LogisticsServiceService implements OnModuleInit {
   }
 
   /**
-   * T9 (HJ5sLHiz, BE-2) — «Pochta cheki»dagi «Qayerdan»: pochtaning
-   * jo'natuvchi filiali `{ id, name }`. `branch_id` bor — `branch.find_by_id`
-   * TIZIM so'rovchisi bilan (filial nomi maxfiy emas: boshqa filial menejeri
-   * ham ko'radi, `assertCanReadBranch` uni to'smasin); `branch_id` yo'q — HQ
-   * pochtasi (`branch.find_hq`). Xato / timeout (5 s) / topilmadi — `null`,
-   * pochta javobi baribir 200.
+   * T9 (HJ5sLHiz, BE-2) — «Pochta cheki»dagi «Qayerdan»: pochtani JO'NATGAN
+   * filial `{ id, name }`. `post.branch_id` ko'p hollarda MANZIL (HQ →
+   * filial o'tkazmasi, bekorlar HQ'ga) yoki bo'sh (filial kuryeri pochtasi),
+   * shuning uchun jo'natuvchi pochta turidan aniqlanadi:
+   *   - kuryerli pochta (`courier_id` — haqiqiy foydalanuvchi: kuryer yoki
+   *     bekorlarni HQ'ga yuborgan menejer) — shu foydalanuvchining filial
+   *     biriktiruvi (`branch.user.find_by_user`; qabul tracking'idagi
+   *     jo'natuvchi bilan bir xil qoida, o10nrbkB);
+   *   - kuryersiz NEW pochta — yig'ilayotgan joy: `branch_id` bo'lsa shu
+   *     filial, bo'lmasa HQ;
+   *   - kuryersiz SENT / RECEIVED (o'tkazma) — faqat HQ jo'natadi
+   *     (`dispatchPostToBranch`) → HQ;
+   *   - boshqa hollar yoki aniqlab bo'lmasa — `null` (noto'g'ri nom emas;
+   *     FE qatorni chiqarmaydi).
+   * Barcha so'rovlar TIZIM so'rovchisi bilan (nom maxfiy emas — boshqa filial
+   * menejeri ham ko'radi). Xato / timeout (5 s) — `null`, javob baribir 200.
+   * HQ `{ id, name }` 5 daqiqa keshlanadi.
    */
   private async findPostSenderBranch(
-    branchId: string | null,
+    post: Pick<Post, 'courier_id' | 'branch_id' | 'status'>,
   ): Promise<{ id: string; name: string } | null> {
+    const courierId = String(post.courier_id ?? '').trim();
+    const branchId = String(post.branch_id ?? '').trim();
     try {
-      const response = (await lastValueFrom(
-        (branchId
-          ? this.branchClient.send(
-              { cmd: 'branch.find_by_id' },
+      if (courierId && courierId !== '0') {
+        const response = (await lastValueFrom(
+          this.branchClient
+            .send(
+              { cmd: 'branch.user.find_by_user' },
               {
-                id: branchId,
-                requester: { id: 'system', roles: [Roles.SUPERADMIN] },
+                user_id: courierId,
+                requester: SENDER_BRANCH_SYSTEM_REQUESTER,
               },
             )
-          : this.branchClient.send({ cmd: 'branch.find_hq' }, {})
-        ).pipe(timeout(5000)),
-      )) as { data?: { id?: unknown; name?: unknown } | null } | null;
-      const branch = response?.data;
-      const id =
-        typeof branch?.id === 'string' || typeof branch?.id === 'number'
-          ? String(branch.id).trim()
-          : '';
-      const name = typeof branch?.name === 'string' ? branch.name : '';
-      return id && name ? { id, name } : null;
+            .pipe(timeout(SENDER_BRANCH_TIMEOUT_MS)),
+        )) as { data?: { branch?: unknown } | null } | null;
+        return branchSummaryOf(response?.data?.branch);
+      }
+      if (post.status === Post_status.NEW && branchId) {
+        const response = (await lastValueFrom(
+          this.branchClient
+            .send(
+              { cmd: 'branch.find_by_id' },
+              { id: branchId, requester: SENDER_BRANCH_SYSTEM_REQUESTER },
+            )
+            .pipe(timeout(SENDER_BRANCH_TIMEOUT_MS)),
+        )) as { data?: unknown } | null;
+        return branchSummaryOf(response?.data);
+      }
+      if (
+        post.status === Post_status.NEW ||
+        post.status === Post_status.SENT ||
+        post.status === Post_status.RECEIVED
+      ) {
+        return await this.findHqBranchSummary();
+      }
+      return null;
     } catch (error) {
       // `logger?` — ba'zi spec'lar servisni prototipdan (konstruktorsiz) quradi.
       this.logger?.warn(
-        `getPostOrders: sender branch ${branchId ?? 'HQ'} lookup failed: ${(error as Error)?.message ?? String(error)}`,
+        `getPostOrders: sender branch lookup failed (courier ${courierId || '-'}, branch ${branchId || '-'}): ${(error as Error)?.message ?? String(error)}`,
       );
       return null;
     }
+  }
+
+  private hqBranchSummaryCache: {
+    value: { id: string; name: string };
+    expiresAt: number;
+  } | null = null;
+
+  /** HQ `{ id, name }` — 5 daqiqalik kesh (xato keshlanmaydi). */
+  private async findHqBranchSummary(): Promise<{
+    id: string;
+    name: string;
+  } | null> {
+    const cached = this.hqBranchSummaryCache;
+    if (cached && cached.expiresAt > Date.now()) {
+      return cached.value;
+    }
+    const response = (await lastValueFrom(
+      this.branchClient
+        .send({ cmd: 'branch.find_hq' }, {})
+        .pipe(timeout(SENDER_BRANCH_TIMEOUT_MS)),
+    )) as { data?: unknown } | null;
+    const value = branchSummaryOf(response?.data);
+    if (value) {
+      this.hqBranchSummaryCache = {
+        value,
+        expiresAt: Date.now() + HQ_BRANCH_SUMMARY_TTL_MS,
+      };
+    }
+    return value;
   }
 
   private async findHqBranchId(): Promise<string> {
@@ -2861,7 +2937,7 @@ export class LogisticsServiceService implements OnModuleInit {
   async getPostOrders(
     id: string,
     requester: RequesterContext,
-    options?: { readOnly?: boolean },
+    options?: { readOnly?: boolean; withSenderBranch?: boolean },
   ) {
     const post = await this.postRepo.findOne({
       where: { id },
@@ -2883,6 +2959,16 @@ export class LogisticsServiceService implements OnModuleInit {
     if (isLogist) {
       await this.assertLogistPostRegion(post, requester);
     }
+    // T9 (BE-2): jo'natuvchi filial — faqat GET /post/orders/:id detali uchun,
+    // buyurtmalar bilan PARALLEL (pochta holati/kuryeri bu yerdagi qiymat).
+    const senderBranchLookup: Promise<{ id: string; name: string } | null> =
+      options?.withSenderBranch
+        ? this.findPostSenderBranch({
+            courier_id: post.courier_id,
+            branch_id: post.branch_id,
+            status: post.status,
+          })
+        : Promise.resolve(null);
     const scopedBranchId = isLogist
       ? null
       : await this.resolveScopedBranchId(requester);
@@ -2967,7 +3053,7 @@ export class LogisticsServiceService implements OnModuleInit {
     const postBranchId = post.branch_id ? String(post.branch_id) : null;
     const [[postWithCourier], senderBranch] = await Promise.all([
       this.attachPostCouriers([post]),
-      this.findPostSenderBranch(postBranchId),
+      senderBranchLookup,
     ]);
     const region = post.region ?? null;
 
@@ -2993,8 +3079,9 @@ export class LogisticsServiceService implements OnModuleInit {
           qr_code_token: post.qr_code_token ?? null,
           order_quantity: Number(post.order_quantity ?? 0),
           branch_id: postBranchId,
-          // T9 (BE-2): «Qayerdan» — `{ id, name }`; `branch_id` null — HQ.
-          branch: senderBranch,
+          // T9 (BE-2): «Qayerdan» — jo'natuvchi filial `{ id, name }`; faqat
+          // detal so'rovi (`withSenderBranch`) — skan va dispatch so'ramaydi.
+          ...(options?.withSenderBranch ? { branch: senderBranch } : {}),
           region_id: post.region_id ? String(post.region_id) : null,
           region: region ? { id: String(region.id), name: region.name } : null,
           createdAt: post.createdAt ?? null,

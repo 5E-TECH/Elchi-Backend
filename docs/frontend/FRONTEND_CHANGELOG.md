@@ -109,10 +109,12 @@ Migratsiya yo'q. `openapi.json` qayta yaratildi. Faqat qo'shimcha maydonlar (ort
   noto'g'ri id — `null`) va **`items[].product: { id, name } | null`** (sahifadagi barcha mahsulot bitta katalog
   so'rovi bilan; katalog javob bermasa yoki mahsulot o'chirilgan — `null`, javob yiqilmaydi; narx, market, rasm yo'q).
   Rol va T7 kontakt proyeksiyalari o'zgarmadi.
-- [2026-10-30] ✏️ [logistics] — `GET /post/orders/:id` → `data.post.branch: { id, name } | null` — «Qayerdan»
-  (jo'natuvchi filial). `branch_id` null bo'lsa — HQ («Toshkent HQ»). Nom har rolga (boshqa filial menejeriga ham)
-  chiqadi; filial xizmati javob bermasa — `null`, javob 200, `branch_id` o'zgarmaydi. ⚠️ Cheklov: kuryersiz o'tkazma
-  pochtasini qabul qiluvchi filial ochganda `branch_id` unga ko'chadi — shundan keyin `branch` qabul qiluvchi filial.
+- [2026-10-30] ✏️ [logistics] — `GET /post/orders/:id` → `data.post.branch: { id, name } | null` — «Qayerdan»:
+  pochtani JO'NATGAN filial (`branch_id` emas — u ko'pincha manzil). Kuryerli pochta (bekorlarni HQ'ga yuborgan
+  menejer pochtasi ham) — shu foydalanuvchining filiali; kuryersiz yig'ilayotgan (`new`) — `branch_id` filiali, bo'lmasa
+  HQ; kuryersiz o'tkazma (`sent`/`received`, faqat HQ jo'natadi) — HQ; aniqlab bo'lmasa yoki filial xizmati javob
+  bermasa (5 s) — `null`, javob 200. Nom har rolga (boshqa filial menejeriga ham) chiqadi. Faqat shu detal yo'lida —
+  `GET /post/scan/:id`, `GET /scan/:token` javobida `branch` yo'q.
 - 🔧 FE (Elchi-Frontend#359): chekda `№{order_number}`, mahsulot nomi (`items[].product.name`) va «Qayerdan:
   `post.branch.name`»; maydon yo'q bo'lsa — mavjud zaxiralar.
 
