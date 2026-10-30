@@ -31,10 +31,16 @@ import {
  * `sanitizeLogUrl` uni logda `***` qiladi.
  */
 
-/** Gateway havola bera oladigan kalit prefikslari (smena rasmi, smena hisoboti). */
+/**
+ * Gateway havola bera oladigan kalit prefikslari (smena rasmi, smena
+ * hisoboti, T3 kassa cheki). Umumiy `GET files/:key` bu prefikslarni faqat
+ * superadmin/admin'ga ochadi; qolganlar doirasi tekshirilgan endpoint bergan
+ * imzolangan havola (300 s) orqali.
+ */
 export const FILE_LINK_PREFIXES: readonly string[] = [
   'shift-check-',
   'shift-report-',
+  'cashbox-receipt-',
 ];
 
 /** Havolaning muddati (s) — smena rasmi qisqa muddatli (PII). */

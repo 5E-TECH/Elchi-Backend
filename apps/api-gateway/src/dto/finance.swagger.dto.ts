@@ -19,6 +19,7 @@ import {
   ValidateNested,
 } from 'class-validator';
 import {
+  CASHBOX_RECEIPT_KINDS,
   Cashbox_type,
   FinancialSource_type,
   Operation_type,
@@ -1737,4 +1738,63 @@ export class CorrectPaymentAmountRequestDto extends ReversePaymentRequestDto {
   @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0.01)
   new_amount!: number;
+}
+
+/** (T3) Chek sozlamasi guruhi: «Chek rasmi majburiy» va «AI tahlili». */
+export class ReceiptGroupSettingsRequestDto {
+  @ApiPropertyOptional({
+    example: true,
+    description: "Chek rasmi majburiy. `false` — AI tahlili ham o'chadi",
+  })
+  @IsOptional()
+  @IsBoolean()
+  photo_required?: boolean;
+
+  @ApiPropertyOptional({
+    example: true,
+    description:
+      'AI tahlili. Faqat chek rasmi yoqiq bo`lganda; aks holda 400 `RECEIPT_AI_REQUIRES_PHOTO`',
+  })
+  @IsOptional()
+  @IsBoolean()
+  ai_enabled?: boolean;
+}
+
+/** (T3) PATCH /finance/receipt-settings — FAQAT superadmin. */
+export class UpdateReceiptSettingsRequestDto {
+  @ApiPropertyOptional({ type: () => ReceiptGroupSettingsRequestDto })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => ReceiptGroupSettingsRequestDto)
+  manual_expense?: ReceiptGroupSettingsRequestDto;
+
+  @ApiPropertyOptional({
+    type: () => ReceiptGroupSettingsRequestDto,
+    description: 'Kuryer → HQ va filial → HQ o`tkazmalari',
+  })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => ReceiptGroupSettingsRequestDto)
+  hq_transfer?: ReceiptGroupSettingsRequestDto;
+}
+
+/** (T3) POST /finance/receipts — chek rasmini yuklash (qoralama). */
+export class UploadReceiptRequestDto {
+  @ApiProperty({
+    enum: CASHBOX_RECEIPT_KINDS,
+    example: 'manual_expense',
+    description:
+      "Qaysi operatsiya uchun: qo'lda chiqim, kuryer → HQ yoki filial → HQ (menejer — faqat manual_expense)",
+  })
+  @IsIn([...CASHBOX_RECEIPT_KINDS])
+  kind!: string;
+}
+
+export class UploadReceiptSwaggerDto extends UploadReceiptRequestDto {
+  @ApiProperty({
+    type: 'string',
+    format: 'binary',
+    description: 'Chek rasmi: jpeg / png / webp, ≤ 5 MB (EXIF tozalanadi)',
+  })
+  photo!: unknown;
 }

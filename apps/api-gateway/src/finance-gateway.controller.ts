@@ -41,7 +41,7 @@ import {
   ApiTags,
 } from '@nestjs/swagger';
 import type { Response } from 'express';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { firstValueFrom, TimeoutError, timeout } from 'rxjs';
 import { Roles } from './auth/roles.decorator';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
@@ -53,6 +53,8 @@ import {
   FinancialSource_type,
   Operation_type,
   PAYMENT_CORRECTION_ERROR_CODES,
+  CASHBOX_RECEIPT_FILE_FOLDER,
+  CASHBOX_RECEIPT_MAX_BYTES,
   PaymentMethod,
   Roles as RoleEnum,
   Source_type,
@@ -101,6 +103,9 @@ import {
   UpdatePaymentCorrectionSettingsRequestDto,
   ReversePaymentRequestDto,
   CorrectPaymentAmountRequestDto,
+  UpdateReceiptSettingsRequestDto,
+  UploadReceiptRequestDto,
+  UploadReceiptSwaggerDto,
 } from './dto/finance.swagger.dto';
 import { BodyStatusCodeInterceptor } from './body-status-code.interceptor';
 import { resolveFinancialActors } from './financial-balance/financial-balance.util';
@@ -4273,6 +4278,173 @@ export class FinanceGatewayController {
         requester_roles: this.getUserRoles(req.user),
       },
     );
+  }
+
+  // ───────────────────────── T3: kassa cheki ─────────────────────────
+
+  @Get('receipt-settings')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.MANAGER)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: '(T3) Kassa cheki sozlamalari',
+    description:
+      "`{ manual_expense: { photo_required, ai_enabled }, hq_transfer: { photo_required, ai_enabled }, updated_at, updated_by }`. Sozlama qatori yo'q — `true` (sukut — ikkalasi yoqiq). `hq_transfer` — kuryer → HQ va filial → HQ. O'zgartirish — faqat superadmin (PATCH).",
+  })
+  async getReceiptSettings() {
+    return this.send({ cmd: 'finance.receipt.settings.get' }, {});
+  }
+
+  @Patch('receipt-settings')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN)
+  @ApiBearerAuth()
+  @ApiBody({ type: UpdateReceiptSettingsRequestDto })
+  @ApiOperation({
+    summary: "(T3) Kassa cheki sozlamalarini o'zgartirish — FAQAT superadmin",
+    description:
+      "Faqat `photo_required:false` kelsa — AI ham o'chadi; rasm qayta yoqilsa AI o'chiq qoladi; natijada AI yoqiq + rasm o'chiq → 400 `RECEIPT_AI_REQUIRES_PHOTO`. Activity-log: `finance.receipt_settings_updated`.",
+  })
+  async updateReceiptSettings(
+    @Req() req: { user: JwtUser },
+    @Body() dto: UpdateReceiptSettingsRequestDto,
+  ) {
+    return this.send(
+      { cmd: 'finance.receipt.settings.update' },
+      {
+        ...dto,
+        requester_id: String(req.user.sub),
+        requester_roles: this.getUserRoles(req.user),
+      },
+    );
+  }
+
+  @Post('receipts')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.MANAGER)
+  @ApiBearerAuth()
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({ type: UploadReceiptSwaggerDto })
+  @ApiOperation({
+    summary: '(T3) Kassa cheki rasmini yuklash (qoralama)',
+    description:
+      "`photo` — jpeg / png / webp, ≤ 5 MB, turi magic-bytes bilan tekshiriladi, EXIF/XMP tozalanadi, shaxsiy saqlanadi. `kind`: superadmin/admin — har tur; menejer — faqat `manual_expense` (filial — JWT'dan); boshqalar 403. Rasm o'chiq turga → 400 `RECEIPT_DISABLED` (fayl yuklanmaydi). 201 → `{ receipt_id, kind, state: 'draft', photo_url, photo_url_expires_in: 300 }`. Qoralama 24 soat ichida operatsiyaga biriktirilmasa o'chiriladi; biriktirilgan chek va rasmi saqlanib qoladi.",
+  })
+  @UseInterceptors(
+    FileInterceptor('photo', {
+      storage: memoryStorage(),
+      // Multer chegarasi kengroq: 5 MB dan katta rasm handler'da aniq 400
+      // oladi (multer limiti 413 berardi); juda katta tana baribir kesiladi.
+      limits: { fileSize: 2 * CASHBOX_RECEIPT_MAX_BYTES, files: 1 },
+    }),
+  )
+  async uploadReceipt(
+    @Req() req: { user: JwtUser } & OriginRequest,
+    @Body() dto: UploadReceiptRequestDto,
+    @UploadedFile()
+    photo: { buffer?: Buffer; mimetype?: string; size?: number } | undefined,
+  ) {
+    const scope = await this.resolveReceiptUploadScope(req.user);
+    const roles = this.getUserRoles(req.user);
+    // Avval rol va sozlama: rasm o'chiq bo'lsa fayl umuman yuklanmaydi.
+    await this.send(
+      { cmd: 'finance.receipt.upload_check' },
+      { kind: dto.kind, requester_roles: roles, ...scope },
+    );
+    const mime = String(photo?.mimetype ?? '').toLowerCase();
+    const buffer = photo?.buffer;
+    if (!buffer || !buffer.length) {
+      throw new BadRequestException('photo fayli majburiy');
+    }
+    if (!SHIFT_PHOTO_MIME_TYPES.has(mime)) {
+      throw new BadRequestException(
+        'Faqat jpeg, png yoki webp rasm qabul qilinadi',
+      );
+    }
+    if (buffer.length > CASHBOX_RECEIPT_MAX_BYTES) {
+      throw new BadRequestException('Rasm hajmi 5 MB dan oshmasligi kerak');
+    }
+    if (!matchesDeclaredType(buffer, mime)) {
+      throw new BadRequestException(
+        "Fayl mazmuni e'lon qilingan turga mos emas",
+      );
+    }
+    const clean = stripImageMetadata(buffer, mime);
+    if (!clean) {
+      throw new BadRequestException("Rasm buzilgan yoki o'qib bo'lmaydi");
+    }
+    const normalizedMime = mime === 'image/jpg' ? 'image/jpeg' : mime;
+    const ext =
+      normalizedMime === 'image/png'
+        ? 'png'
+        : normalizedMime === 'image/webp'
+          ? 'webp'
+          : 'jpg';
+    const uploaded = await this.sendFile<{ data?: { key?: unknown } }>(
+      { cmd: 'file.upload' },
+      {
+        file_name: `receipt.${ext}`,
+        mime_type: normalizedMime,
+        file_base64: clean.toString('base64'),
+        folder: CASHBOX_RECEIPT_FILE_FOLDER,
+      },
+      30000,
+    );
+    const key =
+      typeof uploaded?.data?.key === 'string' ? uploaded.data.key.trim() : '';
+    if (!key) {
+      throw new BadRequestException(
+        'Rasm saqlanmadi (file-service kalit qaytarmadi)',
+      );
+    }
+    let created: {
+      data?: { receipt_id?: string; kind?: string; state?: string };
+    };
+    try {
+      created = await this.send(
+        { cmd: 'finance.receipt.create_draft' },
+        {
+          kind: dto.kind,
+          file_key: key,
+          file_sha256: createHash('sha256').update(clean).digest('hex'),
+          mime: normalizedMime,
+          size_bytes: clean.length,
+          requester_id: String(req.user.sub),
+          requester_roles: roles,
+          ...scope,
+        },
+      );
+    } catch (error) {
+      // Qoralama yozilmadi — yetim fayl qolmasin.
+      void this.sendFile({ cmd: 'file.delete' }, { key }).catch(
+        () => undefined,
+      );
+      throw error;
+    }
+    const data = created?.data ?? {};
+    return {
+      statusCode: 201,
+      message: 'Receipt uploaded',
+      data: {
+        receipt_id: data.receipt_id ?? null,
+        kind: data.kind ?? dto.kind,
+        state: data.state ?? 'draft',
+        photo_url: buildFileLinkUrl(req, key),
+        photo_url_expires_in: FILE_LINK_TTL_SECONDS,
+      },
+    };
+  }
+
+  /** Menejer — o'z filiali (JWT / branch_users); superadmin/admin — doirasiz. */
+  private async resolveReceiptUploadScope(
+    user: JwtUser,
+  ): Promise<{ branch_id?: string }> {
+    if (this.isPrivileged(user)) return {};
+    const branchId = await this.resolveOwnBranchId(user);
+    if (!branchId) {
+      throw new ForbiddenException("Managerning branch'i topilmadi");
+    }
+    return { branch_id: String(branchId) };
   }
 
   @Get('shift/:id/report')

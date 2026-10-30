@@ -1,4 +1,5 @@
 import { PAYMENT_CORRECTION_ERROR_CODES as PC } from '../finance/payment-correction';
+import { CASHBOX_RECEIPT_ERROR_CODES as RC } from '../finance/cashbox-receipt';
 import { WAREHOUSE_ERROR_CODES } from '../catalog/warehouse';
 import { CONTACT_ERROR_CODES } from '../contacts/contacts';
 import { SPECIAL_CATEGORIES_ERROR_CODES } from '../order/order-special-categories';
@@ -85,6 +86,10 @@ export const PUBLIC_ERROR_CODES: Readonly<Record<string, readonly string[]>> = {
   [CONTACT_ERROR_CODES.NOT_A_MARKET]: [],
   // (T8 0OUcHZ7R) maxsus belgi bu holatda o'zgarmaydi — 409.
   [SPECIAL_CATEGORIES_ERROR_CODES.LOCKED]: [],
+  // (T3 QlLf33Ma) kassa cheki — sozlama, yuklash, bog'lash, AI.
+  ...Object.fromEntries(
+    Object.values(RC).map((code) => [code, [] as readonly string[]]),
+  ),
 };
 
 export type PublicErrorValue = string | number | boolean | null;
