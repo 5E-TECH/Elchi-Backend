@@ -50,6 +50,12 @@ interface ServiceHealth {
   error?: string;
   /** Faqat status `ok` bo'lmaganda. */
   error_kind?: ServiceHealthErrorKind;
+  /**
+   * (BOT-3a) Faqat `NOTIFICATION` qatorida: Telegram bot navbati
+   * (`NOTIFICATION_BOT`) tekshiruvi. Alohida xizmat qatori EMAS — navbat
+   * ishlamasa NOTIFICATION qatori `down` (sabab shu yerdan).
+   */
+  bot_queue?: Omit<ServiceHealth, 'service' | 'bot_queue'>;
 }
 
 const SERVICE_HEALTH_PROBES: Array<{ token: string; cmd: string }> = [
@@ -59,9 +65,6 @@ const SERVICE_HEALTH_PROBES: Array<{ token: string; cmd: string }> = [
   { token: 'LOGISTICS', cmd: 'logistics.health' },
   { token: 'FINANCE', cmd: 'finance.health' },
   { token: 'NOTIFICATION', cmd: 'notification.health' },
-  // (BOT-3a) Telegram bot navbati: handler ikkala navbatda bor — javob faqat
-  // notification-service shu navbatni tinglayotgan bo'lsa keladi.
-  { token: 'NOTIFICATION_BOT', cmd: 'notification.health' },
   { token: 'INTEGRATION', cmd: 'integration.health' },
   { token: 'ANALYTICS', cmd: 'analytics.health' },
   { token: 'BRANCH', cmd: 'branch.health' },
@@ -163,17 +166,40 @@ export class HealthController {
     summary: 'Readiness check — pings every downstream service',
     description:
       '`services[]`: `{service, status: ok|down|unknown, latency_ms?, error?, error_kind?}`. ' +
+      'BOT-3a: `NOTIFICATION` qatorida `bot_queue` (Telegram bot navbati; ishlamasa qator `down`). ' +
       'Ifpimq2x: `error_kind` (faqat ok bo‘lmaganda) — `timeout` | `down` | `reported` | `not_registered`.',
   })
   async readiness(@Res({ passthrough: true }) res: Response) {
-    const probes = await Promise.all(
-      SERVICE_HEALTH_PROBES.filter(
-        // Bot navbati mijozi (ixtiyoriy) ro'yxatdan o'tmagan bo'lsa — alohida
-        // servis emas, `unknown` bilan readiness'ni buzmaydi.
-        (probe) =>
-          probe.token !== 'NOTIFICATION_BOT' || this.clients.has(probe.token),
-      ).map((probe) => this.probeOne(probe.token, probe.cmd)),
-    );
+    // (BOT-3a) Telegram bot navbati: handler ikkala navbatda bor — javob
+    // faqat notification-service shu navbatni tinglayotgan bo'lsa keladi.
+    // Mijoz (ixtiyoriy) ro'yxatdan o'tmagan bo'lsa tekshirilmaydi.
+    const [probes, botQueue] = await Promise.all([
+      Promise.all(
+        SERVICE_HEALTH_PROBES.map((probe) =>
+          this.probeOne(probe.token, probe.cmd),
+        ),
+      ),
+      this.clients.has('NOTIFICATION_BOT')
+        ? this.probeOne('NOTIFICATION_BOT', 'notification.health')
+        : Promise.resolve(undefined),
+    ]);
+    if (botQueue) {
+      const notification = probes.find((p) => p.service === 'NOTIFICATION');
+      if (notification) {
+        const queue: ServiceHealth['bot_queue'] & object = {
+          status: botQueue.status,
+          latency_ms: botQueue.latency_ms,
+          error: botQueue.error,
+          error_kind: botQueue.error_kind,
+        };
+        notification.bot_queue = queue;
+        if (notification.status === 'ok' && queue.status !== 'ok') {
+          notification.status = queue.status;
+          notification.error = queue.error;
+          notification.error_kind = queue.error_kind;
+        }
+      }
+    }
 
     const allOk = probes.every((p) => p.status === 'ok');
     res.status(allOk ? HttpStatus.OK : HttpStatus.SERVICE_UNAVAILABLE);

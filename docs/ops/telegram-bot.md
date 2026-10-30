@@ -36,9 +36,14 @@ kechiktirmaydi. Karta hodisalari (`notification.telegram.order_status`) ATAYLAB
 umumiy navbatda qoladi — ommaviy holat o'zgarishi interaktiv bot navbatini
 tiqmasin. Navbatni iste'molchi (notification-service) ham, publisher
 (api-gateway bootstrap'ida `RmqService.ensureQueue`, ayni argumentlar bilan) ham
-e'lon qiladi — deploy tartibidan qat'i nazar update yo'qolmaydi. Readiness
-(`GET /health/readiness`) `NOTIFICATION_BOT` ni alohida tekshiradi;
-`scripts/rmq-cleanup-queues.sh` ham bu navbatni biladi.
+e'lon qiladi — xabar JIM tashlanmaydi, lekin navbatda `RMQ_RPC_TTL_MS` (60 s)
+TTL bor va DLQ'ni hech kim qayta o'ynamaydi: iste'molchi 60 s ichida turmasa
+update DLQ'ga tushadi (yo'qoladi). Update faqat consumer TTL ichida tursa
+yo'qolmaydi — **deploy'da notification-service baribir BIRINCHI**. Gateway
+bootstrap'idagi e'lon 5 s ulanish / 15 s umumiy chegara bilan, xato — faqat
+warn (listen to'silmaydi). Readiness (`GET /health/readiness`) bot navbatini
+`NOTIFICATION` qatorining `bot_queue` maydonida tekshiradi (ishlamasa qator
+`down`); `scripts/rmq-cleanup-queues.sh` ham bu navbatni biladi.
 
 ## 2. Rejimlar (`TELEGRAM_BOT_MODE`, sukut `auto`)
 

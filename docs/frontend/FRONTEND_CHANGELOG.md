@@ -24,11 +24,12 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ### 2026-10-30 — BOT-3a: Telegram bot uchun alohida RMQ navbati
 
 Deploy: **notification-service + api-gateway** (+ libs/common). Migratsiya yo'q. Yangi env
-`RABBITMQ_NOTIFICATION_BOT_QUEUE` (sukut `notification_bot_queue`); navbatni gateway ham e'lon qiladi — deploy tartibi
-muhim emas.
+`RABBITMQ_NOTIFICATION_BOT_QUEUE` (sukut `notification_bot_queue`); navbatni gateway ham e'lon qiladi, lekin navbat
+60 s TTL bilan — update faqat consumer TTL ichida tursa yo'qolmaydi: **notification-service baribir birinchi**.
 
 - [2026-10-30] 🟢 [notification] — bot update'lari alohida navbatda: bildirishnoma to'lqinida ham bot tugmalari
-  kechikmaydi. `GET /health/readiness` → `services[]` da yangi `NOTIFICATION_BOT` qatori. → FE o'zgarishi shart emas.
+  kechikmaydi. `GET /health/readiness` → `NOTIFICATION` qatorida ixtiyoriy `bot_queue: {status, latency_ms?, error?, error_kind?}`
+  (yangi xizmat qatori YO'Q; bot navbati ishlamasa `NOTIFICATION` qatori `down`). → FE o'zgarishi shart emas.
 
 ### 2026-10-30 — T8: buyurtmaning maxsus belgilari (mo'rt, diniy kitob, suyuqlik …) (0OUcHZ7R)
 

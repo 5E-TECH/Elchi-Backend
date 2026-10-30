@@ -22816,7 +22816,7 @@
     },
     "/health/readiness": {
       "get": {
-        "description": "`services[]`: `{service, status: ok|down|unknown, latency_ms?, error?, error_kind?}`. Ifpimq2x: `error_kind` (faqat ok bo‘lmaganda) — `timeout` | `down` | `reported` | `not_registered`.",
+        "description": "`services[]`: `{service, status: ok|down|unknown, latency_ms?, error?, error_kind?}`. BOT-3a: `NOTIFICATION` qatorida `bot_queue` (Telegram bot navbati; ishlamasa qator `down`). Ifpimq2x: `error_kind` (faqat ok bo‘lmaganda) — `timeout` | `down` | `reported` | `not_registered`.",
         "operationId": "HealthController_readiness",
         "parameters": [],
         "responses": {

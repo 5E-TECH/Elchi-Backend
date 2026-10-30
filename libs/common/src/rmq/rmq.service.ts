@@ -8,6 +8,11 @@ import {
 } from '@nestjs/microservices';
 import * as amqplib from 'amqplib';
 
+/** (BOT-3a) Bootstrap'dagi AMQP ulanish (TCP + handshake) chegarasi. */
+export const RMQ_BOOTSTRAP_CONNECT_TIMEOUT_MS = 5_000;
+/** (BOT-3a) `ensureQueue` umumiy chegarasi — listen'ni cheksiz to'smasin. */
+export const RMQ_ENSURE_QUEUE_TIMEOUT_MS = 15_000;
+
 export interface NackOptions {
   requeue?: boolean;
 }
@@ -54,7 +59,7 @@ export class RmqService {
   async setupDlqTopology(queueId: string): Promise<void> {
     const url = this.configService.get<string>('RABBITMQ_URI')!;
     const { main, dlq, dlx } = this.getQueueNames(queueId);
-    const connection = await amqplib.connect(url);
+    const connection = await this.connect(url);
     const channel = await connection.createChannel();
     try {
       await channel.assertExchange(dlx, 'direct', { durable: true });
@@ -79,11 +84,35 @@ export class RmqService {
    * yuborilgan xabarni RabbitMQ JIM tashlab yuboradi — publisher bootstrap'ida
    * shu chaqiriladi. Xato — faqat log (servis ishga tushaveradi).
    */
-  async ensureQueue(queueId: string): Promise<void> {
+  async ensureQueue(
+    queueId: string,
+    timeoutMs = RMQ_ENSURE_QUEUE_TIMEOUT_MS,
+  ): Promise<void> {
+    const { main } = this.getQueueNames(queueId);
+    let timer: NodeJS.Timeout | undefined;
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(
+        () => reject(new Error(`${timeoutMs} ms ichida tugamadi`)),
+        timeoutMs,
+      );
+      timer.unref?.();
+    });
+    try {
+      await Promise.race([this.declareMainQueue(queueId, main), timeout]);
+      this.logger.log(`Queue ensured for ${queueId}: ${main}`);
+    } catch (error) {
+      this.logger.warn(
+        `Navbat e'lon qilinmadi (${main}): ${(error as Error)?.message ?? String(error)}`,
+      );
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  private async declareMainQueue(queueId: string, main: string) {
     await this.setupDlqTopology(queueId);
     const url = this.configService.get<string>('RABBITMQ_URI')!;
-    const { main } = this.getQueueNames(queueId);
-    const connection = await amqplib.connect(url);
+    const connection = await this.connect(url);
     try {
       const channel = await connection.createChannel();
       channel.on('error', () => undefined);
@@ -92,14 +121,26 @@ export class RmqService {
         ...this.mainQueueArguments(queueId),
       });
       await channel.close().catch(() => undefined);
-      this.logger.log(`Queue ensured for ${queueId}: ${main}`);
-    } catch (error) {
-      this.logger.error(
-        `Navbat e'lon qilinmadi (${main}): ${(error as Error)?.message ?? String(error)}`,
-      );
     } finally {
       await connection.close().catch(() => undefined);
     }
+  }
+
+  /**
+   * (BOT-3a) Bootstrap ulanishi: handshake chegarasi + ulanish `error`
+   * tinglovchisi — osilgan broker listen'ni cheksiz to'smaydi, CONNECTION_FORCED
+   * kabi xato jarayonni uncaught `error` bilan yiqitmaydi.
+   */
+  private async connect(url: string) {
+    const connection = await amqplib.connect(url, {
+      timeout: RMQ_BOOTSTRAP_CONNECT_TIMEOUT_MS,
+    });
+    connection.on('error', (error: unknown) =>
+      this.logger.warn(
+        `RabbitMQ bootstrap ulanishi: ${(error as Error)?.message ?? String(error)}`,
+      ),
+    );
+    return connection;
   }
 
   /**
@@ -115,7 +156,7 @@ export class RmqService {
     main: string,
   ): Promise<void> {
     const expected = this.mainQueueArguments(queueId);
-    const connection = await amqplib.connect(url);
+    const connection = await this.connect(url);
     const channel = await connection.createChannel();
 
     // Kanal xatosi ulanishni yiqitmasligi uchun — biz uni O'ZIMIZ hal qilamiz.

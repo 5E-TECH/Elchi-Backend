@@ -10,6 +10,7 @@ const channel = {
 jest.mock('amqplib', () => ({
   connect: jest.fn(() =>
     Promise.resolve({
+      on: jest.fn(),
       createChannel: jest.fn(() => Promise.resolve(channel)),
       close: jest.fn().mockResolvedValue(undefined),
     }),
@@ -17,7 +18,14 @@ jest.mock('amqplib', () => ({
 }));
 
 import { Logger } from '@nestjs/common';
-import { RmqService } from './rmq.service';
+import * as amqplib from 'amqplib';
+import { RMQ_BOOTSTRAP_CONNECT_TIMEOUT_MS, RmqService } from './rmq.service';
+
+const env: Record<string, string> = {
+  RABBITMQ_URI: 'amqp://127.0.0.1:5672',
+  RABBITMQ_NOTIFICATION_BOT_QUEUE: 'notification_bot_queue',
+};
+const connectMock = amqplib.connect as unknown as jest.Mock;
 
 /**
  * BOT-3a (#592 ko'rib chiqish) — publisher navbatni o'zi e'lon qiladi
@@ -33,10 +41,6 @@ describe('RmqService.ensureQueue (BOT-3a)', () => {
   afterEach(() => jest.restoreAllMocks());
 
   it('⭐ main navbat iste`molchi bilan AYNI argumentlar bilan e`lon qilinadi (+ DLQ topologiyasi)', async () => {
-    const env: Record<string, string> = {
-      RABBITMQ_URI: 'amqp://127.0.0.1:5672',
-      RABBITMQ_NOTIFICATION_BOT_QUEUE: 'notification_bot_queue',
-    };
     const service = new RmqService({ get: (key: string) => env[key] } as never);
     await service.ensureQueue('NOTIFICATION_BOT');
 
@@ -50,5 +54,47 @@ describe('RmqService.ensureQueue (BOT-3a)', () => {
       consumer.options.queue,
       consumer.options.queueOptions,
     );
+  });
+
+  it('⭐ ulanish handshake chegarasi bilan va `error` tinglovchisi bilan ochiladi', async () => {
+    connectMock.mockClear();
+    const service = new RmqService({ get: (key: string) => env[key] } as never);
+    await service.ensureQueue('NOTIFICATION_BOT');
+    expect(connectMock).toHaveBeenCalled();
+    for (const [, options] of connectMock.mock.calls as Array<
+      [string, { timeout?: number }]
+    >) {
+      expect(options).toEqual({ timeout: RMQ_BOOTSTRAP_CONNECT_TIMEOUT_MS });
+    }
+    for (const result of connectMock.mock.results as Array<{
+      value: Promise<{ on: jest.Mock }>;
+    }>) {
+      const connection = await result.value;
+      expect(connection.on).toHaveBeenCalledWith('error', expect.any(Function));
+    }
+  });
+
+  it('⭐ osilgan broker listen`ni TO`SMAYDI: umumiy chegara — faqat warn, xato otilmaydi', async () => {
+    const warn = jest
+      .spyOn(Logger.prototype, 'warn')
+      .mockImplementation(() => undefined);
+    connectMock.mockImplementationOnce(() => new Promise(() => undefined));
+    const service = new RmqService({ get: (key: string) => env[key] } as never);
+    await expect(
+      service.ensureQueue('NOTIFICATION_BOT', 50),
+    ).resolves.toBeUndefined();
+    expect(String(warn.mock.calls[0]?.[0])).toContain('notification_bot_queue');
+  });
+
+  it('broker xatosi (CONNECTION_FORCED) — faqat warn', async () => {
+    const warn = jest
+      .spyOn(Logger.prototype, 'warn')
+      .mockImplementation(() => undefined);
+    connectMock.mockRejectedValueOnce(new Error('CONNECTION_FORCED'));
+    const service = new RmqService({ get: (key: string) => env[key] } as never);
+    await expect(
+      service.ensureQueue('NOTIFICATION_BOT'),
+    ).resolves.toBeUndefined();
+    expect(String(warn.mock.calls[0]?.[0])).toContain('CONNECTION_FORCED');
   });
 });

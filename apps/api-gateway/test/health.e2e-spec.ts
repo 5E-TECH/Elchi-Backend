@@ -13,16 +13,18 @@ import {
  * (7s1bqOT6) «Tizim holati» — backend e2e.
  *
  * TC: `GET /health` va `GET /health/readiness` turli javob beradi, readiness
- * `services` ichida barcha 14 servis nomi (+ notification bot navbati) bor. Ilova — HAQIQIY
+ * `services` ichida barcha 14 servis nomi bor (bot navbati — NOTIFICATION ichida). Ilova — HAQIQIY
  * ApiGatewayModule (kontrollerlar modul tartibida); faqat RMQ mijozlari mock.
  * Ilgari `LogisticsGatewayController` `@Get('health')` (prefikssiz) bilan
  * `GET /health` ni egallab olgan edi — javob `logistics-service` ni nomlardi.
  */
 
-// (BOT-3a) `NOTIFICATION_BOT` — notification-service'ning bot navbati ham
-// alohida tekshiriladi (iste'molchi ulanmagan bo'lsa — down).
+// (BOT-3a) `NOTIFICATION_BOT` — notification-service'ning bot navbati
+// alohida qator EMAS: `NOTIFICATION` qatorining `bot_queue` maydoni.
 type ServiceToken = GatewayClientToken;
-const SERVICES: ServiceToken[] = [...GATEWAY_CLIENT_TOKENS];
+const SERVICES: ServiceToken[] = GATEWAY_CLIENT_TOKENS.filter(
+  (token) => token !== 'NOTIFICATION_BOT',
+);
 
 const PROBE_CMD: Record<ServiceToken, string> = {
   IDENTITY: 'identity.health',
@@ -62,6 +64,7 @@ interface ReadinessBody {
     latency_ms?: number;
     error?: string;
     error_kind?: string;
+    bot_queue?: { status: string; error_kind?: string };
   }>;
 }
 
@@ -110,7 +113,7 @@ describe('7s1bqOT6 — GET /health va GET /health/readiness (e2e)', () => {
     }
   });
 
-  it('GET /health/readiness — 200 ok, `services` da 14 servis + bot navbati', async () => {
+  it('GET /health/readiness — 200 ok, `services` da 14 servis; bot navbati NOTIFICATION ichida', async () => {
     const res = await request(http()).get('/health/readiness').expect(200);
     const body = res.body as ReadinessBody;
 
@@ -123,8 +126,11 @@ describe('7s1bqOT6 — GET /health va GET /health/readiness (e2e)', () => {
       expect(entry.status).toBe('ok');
       expect(typeof entry.latency_ms).toBe('number');
     }
-    // Har servis o'z health buyrug'i bilan so'raldi.
-    for (const token of SERVICES) {
+    expect(
+      body.services.find((s) => s.service === 'NOTIFICATION')?.bot_queue,
+    ).toMatchObject({ status: 'ok' });
+    // Har servis (va bot navbati) o'z health buyrug'i bilan so'raldi.
+    for (const token of GATEWAY_CLIENT_TOKENS) {
       expect(clients.get(token)!.send).toHaveBeenCalledWith(
         { cmd: PROBE_CMD[token] },
         {},
@@ -162,6 +168,23 @@ describe('7s1bqOT6 — GET /health va GET /health/readiness (e2e)', () => {
     expect(
       body.services.filter((s) => s.service !== 'ORDER').map((s) => s.status),
     ).toEqual(Array(SERVICES.length - 1).fill('ok'));
+  });
+
+  it('⭐ BOT-3a: bot navbati iste`molchisiz — NOTIFICATION qatori down (bot_queue sababi), yangi qator yo`q', async () => {
+    down.add('NOTIFICATION_BOT');
+    const res = await request(http()).get('/health/readiness').expect(503);
+    const body = res.body as ReadinessBody;
+    expect(body.services).toHaveLength(SERVICES.length);
+    expect(body.services.map((s) => s.service)).not.toContain(
+      'NOTIFICATION_BOT',
+    );
+    expect(
+      body.services.find((s) => s.service === 'NOTIFICATION'),
+    ).toMatchObject({
+      status: 'down',
+      error_kind: 'down',
+      bot_queue: { status: 'down', error_kind: 'down' },
+    });
   });
 
   it('logistics-service health — endi `GET /logistics/health` da', async () => {
