@@ -21,6 +21,8 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 ## Yozuvlar
 
+<!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+
 ### 2026-10-30 — T8: buyurtmaning maxsus belgilari (mo'rt, diniy kitob, suyuqlik …) (0OUcHZ7R)
 
 Deploy: **order-service + api-gateway** (+ libs/common). Migratsiya **`1716000000187`**
@@ -56,6 +58,25 @@ Kodlar (kanonik tartib — API har doim shu tartibda qaytaradi): `fragile` (mo'r
   `{ special_categories }`, holat o'zgarmaydi; jurnalda `order.special_categories_changed` («Maxsus belgilar
   o'zgardi»). Qisman sotuvda qolgan qism (bekor qilingan bola buyurtma) ota buyurtmaning belgilarini oladi;
   almashtirish buyurtmasi — yo'q (o'zi tanlanadi). → Kuryer/ombor skanida va ro'yxatda belgilarni ko'rsatish.
+
+### 2026-10-30 — Chek: pochta buyurtmalarida «EL-…» raqam, mahsulot nomi va «Qayerdan» (T9, HJ5sLHiz BE-1/BE-2)
+
+Deploy: **api-gateway + logistics-service** (`libs/common` o'zgardi — order-service ham bir xil helper'ni ishlatadi).
+Migratsiya yo'q. `openapi.json` qayta yaratildi. Faqat qo'shimcha maydonlar (ortga mos).
+
+- [2026-10-30] ✏️ [gateway] — `GET /post/orders/:id`, `GET /post/orders/rejected/:id`, `GET /post/return-requests/list`:
+  har buyurtma qatorida **`order_number`** («EL-100081» — `GET /orders` ro'yxati va pochta skani bilan bir xil;
+  noto'g'ri id — `null`) va **`items[].product: { id, name } | null`** (sahifadagi barcha mahsulot bitta katalog
+  so'rovi bilan; katalog javob bermasa yoki mahsulot o'chirilgan — `null`, javob yiqilmaydi; narx, market, rasm yo'q).
+  Rol va T7 kontakt proyeksiyalari o'zgarmadi.
+- [2026-10-30] ✏️ [logistics] — `GET /post/orders/:id` → `data.post.branch: { id, name } | null` — «Qayerdan»:
+  pochtani JO'NATGAN filial (`branch_id` emas — u ko'pincha manzil). Kuryerli pochta (bekorlarni HQ'ga yuborgan
+  menejer pochtasi ham) — shu foydalanuvchining filiali; kuryersiz yig'ilayotgan (`new`) — `branch_id` filiali, bo'lmasa
+  HQ; kuryersiz o'tkazma (`sent`/`received`, faqat HQ jo'natadi) — HQ; aniqlab bo'lmasa yoki filial xizmati javob
+  bermasa (5 s) — `null`, javob 200. Nom har rolga (boshqa filial menejeriga ham) chiqadi. Faqat shu detal yo'lida —
+  `GET /post/scan/:id`, `GET /scan/:token` javobida `branch` yo'q.
+- 🔧 FE (Elchi-Frontend#359): chekda `№{order_number}`, mahsulot nomi (`items[].product.name`) va «Qayerdan:
+  `post.branch.name`»; maydon yo'q bo'lsa — mavjud zaxiralar.
 
 ### 2026-10-30 — T6: kuryerdan olingan / marketga berilgan pulni qaytarish yoki summasini tuzatish (superadmin)
 
@@ -132,27 +153,6 @@ qayta yaratildi. Maket: frontend `design/T6-pul-qaytarish`.
 - [2026-10-30] 🟢 [bot] — qaytarilgan to'lov kvitansiyasidagi tugma bosilsa: tugmalar olinadi, «Bu to'lov qaytarilgan
   yoki tuzatilgan — yangi holat bildirishnomada.»
 
-
-<!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
-
-### 2026-10-30 — Chek: pochta buyurtmalarida «EL-…» raqam, mahsulot nomi va «Qayerdan» (T9, HJ5sLHiz BE-1/BE-2)
-
-Deploy: **api-gateway + logistics-service** (`libs/common` o'zgardi — order-service ham bir xil helper'ni ishlatadi).
-Migratsiya yo'q. `openapi.json` qayta yaratildi. Faqat qo'shimcha maydonlar (ortga mos).
-
-- [2026-10-30] ✏️ [gateway] — `GET /post/orders/:id`, `GET /post/orders/rejected/:id`, `GET /post/return-requests/list`:
-  har buyurtma qatorida **`order_number`** («EL-100081» — `GET /orders` ro'yxati va pochta skani bilan bir xil;
-  noto'g'ri id — `null`) va **`items[].product: { id, name } | null`** (sahifadagi barcha mahsulot bitta katalog
-  so'rovi bilan; katalog javob bermasa yoki mahsulot o'chirilgan — `null`, javob yiqilmaydi; narx, market, rasm yo'q).
-  Rol va T7 kontakt proyeksiyalari o'zgarmadi.
-- [2026-10-30] ✏️ [logistics] — `GET /post/orders/:id` → `data.post.branch: { id, name } | null` — «Qayerdan»:
-  pochtani JO'NATGAN filial (`branch_id` emas — u ko'pincha manzil). Kuryerli pochta (bekorlarni HQ'ga yuborgan
-  menejer pochtasi ham) — shu foydalanuvchining filiali; kuryersiz yig'ilayotgan (`new`) — `branch_id` filiali, bo'lmasa
-  HQ; kuryersiz o'tkazma (`sent`/`received`, faqat HQ jo'natadi) — HQ; aniqlab bo'lmasa yoki filial xizmati javob
-  bermasa (5 s) — `null`, javob 200. Nom har rolga (boshqa filial menejeriga ham) chiqadi. Faqat shu detal yo'lida —
-  `GET /post/scan/:id`, `GET /scan/:token` javobida `branch` yo'q.
-- 🔧 FE (Elchi-Frontend#359): chekda `№{order_number}`, mahsulot nomi (`items[].product.name`) va «Qayerdan:
-  `post.branch.name`»; maydon yo'q bo'lsa — mavjud zaxiralar.
 
 ### 2026-10-30 — Aloqa raqamlari: market mas'uli, «Muammo bo'lsa» = viloyat logisti, market telefoni menejer/kuryerdan yashirildi (T7, QPq2C1co)
 
