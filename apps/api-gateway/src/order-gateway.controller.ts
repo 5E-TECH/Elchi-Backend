@@ -148,6 +148,11 @@ import {
   assertQrOrderVisible,
 } from './auth/order-qr-visibility';
 import { projectOrderPayloadForRoles } from './auth/order-role-projection';
+import { projectOrderContactsForRoles } from './auth/order-contact-projection';
+import {
+  ProblemContactsService,
+  attachProblemContacts,
+} from './contacts/problem-contacts.service';
 import { projectOrderTrackingForRoles } from './auth/order-tracking-projection';
 import {
   LogistRegionScopeService,
@@ -545,6 +550,9 @@ export class OrderGatewayController {
     @Optional()
     @Inject(AI_IMAGE_STORE)
     private readonly aiImageStore?: AiImageStore | null,
+    // T7 (QPq2C1co, B2): buyurtma javoblariga `problem_contacts`. Yo'q
+    // (eski spec'lar) — maydon qo'shilmaydi.
+    @Optional() private readonly problemContacts?: ProblemContactsService,
   ) {}
 
   private readonly logger = new Logger(OrderGatewayController.name);
@@ -3208,14 +3216,12 @@ export class OrderGatewayController {
     const lookups = await this.loadAiConfirmLookups(orders);
     if (!lookups) {
       return successRes({
-        results: orders.map(
-          (_order, index): AiConfirmResult => ({
-            index,
-            ok: false,
-            code: 'validation_unavailable',
-            reason: AI_CONFIRM_REASON_TEXT.validation_unavailable,
-          }),
-        ),
+        results: orders.map((_order, index): AiConfirmResult => ({
+          index,
+          ok: false,
+          code: 'validation_unavailable',
+          reason: AI_CONFIRM_REASON_TEXT.validation_unavailable,
+        })),
       });
     }
     const verdicts = verifyAiOrders(orders, {
@@ -3537,10 +3543,14 @@ export class OrderGatewayController {
 
     // Order service nomni o'zi qo'shadi; qo'shmagan bo'lsa (eski versiya)
     // gateway to'ldiradi — ekran nomsiz qolmasin.
+    // T7 (B3): menejerga `market` obyekti telefon/loginsiz.
     if (!Array.isArray(result)) {
-      return result;
+      return projectOrderContactsForRoles(roles, result);
     }
-    return this.enrichMarketRows(result);
+    return projectOrderContactsForRoles(
+      roles,
+      await this.enrichMarketRows(result),
+    );
   }
 
   /**
@@ -4017,13 +4027,17 @@ export class OrderGatewayController {
       );
 
       // kH2zZsz3: kuryer ro'yxati — market tarifi/filial ulushisiz.
-      return projectOrderPayloadForRoles(roles, {
-        data,
-        total,
-        page: pagination.page,
-        limit: pagination.limit,
-        ...paginationMeta,
-      });
+      // T7: `problem_contacts` proyeksiyadan OLDIN.
+      return projectOrderPayloadForRoles(
+        roles,
+        await attachProblemContacts(this.problemContacts, {
+          data,
+          total,
+          page: pagination.page,
+          limit: pagination.limit,
+          ...paginationMeta,
+        }),
+      );
     }
 
     const payload = {
@@ -4038,15 +4052,19 @@ export class OrderGatewayController {
       { cmd: 'order.find_all_enriched' },
       { cmd: 'order.find_all' },
       payload,
-    ).then((response) => {
+    ).then(async (response) => {
       // kH2zZsz3: ro'yxat qatorlari ham detal bilan AYNI rol proyeksiyasida.
+      // T7: `problem_contacts` proyeksiyadan OLDIN.
       return projectOrderPayloadForRoles(
         roles,
-        this.withPaginationMeta(
-          request.logistRegionIds
-            ? this.keepLogistRegionRows(response, request.logistRegionIds)
-            : response,
-          pagination,
+        await attachProblemContacts(
+          this.problemContacts,
+          this.withPaginationMeta(
+            request.logistRegionIds
+              ? this.keepLogistRegionRows(response, request.logistRegionIds)
+              : response,
+            pagination,
+          ),
         ),
       );
     });
@@ -4994,11 +5012,14 @@ export class OrderGatewayController {
           limit: pagination.limit,
         },
       },
-    ).then((response) =>
+    ).then(async (response) =>
       // kH2zZsz3: market — kuryer tarifi/ulushi va filial ulushisiz.
       projectOrderPayloadForRoles(
         req?.user?.roles,
-        this.withPaginationMeta(response, pagination),
+        await attachProblemContacts(
+          this.problemContacts,
+          this.withPaginationMeta(response, pagination),
+        ),
       ),
     );
   }
@@ -5130,16 +5151,19 @@ export class OrderGatewayController {
       // kH2zZsz3: kuryerning bekor qilinganlar tabi — market tarifisiz.
       return projectOrderPayloadForRoles(
         req?.user?.roles,
-        successRes(
-          {
-            data: legacyData,
-            total,
-            page: pagination.page,
-            limit: pagination.limit,
-            ...paginationMeta,
-          },
-          200,
-          'All my orders',
+        await attachProblemContacts(
+          this.problemContacts,
+          successRes(
+            {
+              data: legacyData,
+              total,
+              page: pagination.page,
+              limit: pagination.limit,
+              ...paginationMeta,
+            },
+            200,
+            'All my orders',
+          ),
         ),
       );
     }
@@ -5187,16 +5211,24 @@ export class OrderGatewayController {
         currentLimit,
       );
 
-      return successRes(
-        {
-          data: legacyData,
-          total,
-          page: currentPage,
-          limit: currentLimit,
-          ...paginationMeta,
-        },
-        200,
-        'All my orders',
+      // T7: filial doirasi (menejer/filial) — market/operator telefonlarisiz,
+      // `problem_contacts` proyeksiyadan OLDIN (kuryer yo'llari bilan bir xil).
+      return projectOrderPayloadForRoles(
+        req?.user?.roles,
+        await attachProblemContacts(
+          this.problemContacts,
+          successRes(
+            {
+              data: legacyData,
+              total,
+              page: currentPage,
+              limit: currentLimit,
+              ...paginationMeta,
+            },
+            200,
+            'All my orders',
+          ),
+        ),
       );
     }
 
@@ -5255,18 +5287,22 @@ export class OrderGatewayController {
     );
 
     // kH2zZsz3: kuryer ro'yxati — market tarifi/filial ulushisiz.
+    // T7: `problem_contacts` proyeksiyadan OLDIN.
     return projectOrderPayloadForRoles(
       req?.user?.roles,
-      successRes(
-        {
-          data: legacyData,
-          total,
-          page: currentPage,
-          limit: currentLimit,
-          ...paginationMeta,
-        },
-        200,
-        'All my orders',
+      await attachProblemContacts(
+        this.problemContacts,
+        successRes(
+          {
+            data: legacyData,
+            total,
+            page: currentPage,
+            limit: currentLimit,
+            ...paginationMeta,
+          },
+          200,
+          'All my orders',
+        ),
       ),
     );
   }
@@ -5374,11 +5410,15 @@ export class OrderGatewayController {
         ? rawResult
         : this.filterRowsByMarket(rawResult, ownMarketId);
 
+    // T7 (B3): menejer / filial — market telefonlarisiz.
     if (!Array.isArray(result)) {
-      return result;
+      return projectOrderContactsForRoles(roles, result);
     }
 
-    return this.enrichMarketRows(result as Array<Record<string, any>>);
+    return projectOrderContactsForRoles(
+      roles,
+      await this.enrichMarketRows(result as Array<Record<string, any>>),
+    );
   }
 
   /**
@@ -5547,15 +5587,19 @@ export class OrderGatewayController {
       excludeBranchSource = false;
     }
 
-    return this.sendOrderWithTimeout(
-      { cmd: 'order.find_cancelled_markets_enriched' },
-      {
-        market_id: marketId,
-        branch_id: branchId,
-        holder_type: holderType,
-        exclude_branch_source: excludeBranchSource,
-        ...this.marketListFilters(search, startDay, endDay),
-      },
+    // T7 (B3): menejer / filial — market telefonlarisiz.
+    return projectOrderContactsForRoles(
+      roles,
+      await this.sendOrderWithTimeout(
+        { cmd: 'order.find_cancelled_markets_enriched' },
+        {
+          market_id: marketId,
+          branch_id: branchId,
+          holder_type: holderType,
+          exclude_branch_source: excludeBranchSource,
+          ...this.marketListFilters(search, startDay, endDay),
+        },
+      ),
     );
   }
 
@@ -5626,8 +5670,12 @@ export class OrderGatewayController {
       { cmd: 'order.find_all' },
       payload,
     ).then((response) =>
-      this.toManagerCancelledTabResponse(
-        this.withPaginationMeta(response, pagination),
+      // T7 (B3): menejer / filial — market va operator telefonlarisiz.
+      projectOrderContactsForRoles(
+        req.user.roles,
+        this.toManagerCancelledTabResponse(
+          this.withPaginationMeta(response, pagination),
+        ),
       ),
     );
   }
@@ -5744,7 +5792,11 @@ export class OrderGatewayController {
       payload,
     );
     // kH2zZsz3: market — kuryer tarifi/ulushi va filial ulushisiz.
-    return projectOrderPayloadForRoles(roles, response);
+    // T7: yorliq chop etish ro'yxati — `problem_contacts` proyeksiyadan OLDIN.
+    return projectOrderPayloadForRoles(
+      roles,
+      await attachProblemContacts(this.problemContacts, response),
+    );
   }
 
   @Get('markets/:marketId/cancelled')
@@ -5859,7 +5911,11 @@ export class OrderGatewayController {
       },
     );
     // kH2zZsz3: market — kuryer tarifi/ulushi va filial ulushisiz.
-    return projectOrderPayloadForRoles(roles, response);
+    // T7: yorliq chop etish ro'yxati — `problem_contacts` proyeksiyadan OLDIN.
+    return projectOrderPayloadForRoles(
+      roles,
+      await attachProblemContacts(this.problemContacts, response),
+    );
   }
 
   @Post('markets/:marketId/cancelled/qr')
@@ -6203,7 +6259,7 @@ export class OrderGatewayController {
   @ApiOkResponse({
     type: OrderReceiptFieldsDto,
     description:
-      '1mOjtOVC: qisman sxema — chek maydonlari (operator_phone, secondary_operator_phone, market.phone_number); javobda boshqa maydonlar ham bor.',
+      "1mOjtOVC: qisman sxema — chek maydonlari; javobda boshqa maydonlar ham bor. T7: `problem_contacts` («Muammo bo'lsa»); `operator_phone`, `secondary_operator_phone`, `market.phone_number` menejer/filial/kuryerga YO'Q.",
   })
   async findById(@Param('id') id: string, @Req() req?: { user: JwtUser }) {
     const response = await this.sendOrderWithFallback(
@@ -6214,7 +6270,11 @@ export class OrderGatewayController {
     await this.assertCanViewOrder(req?.user, this.unwrapOrderRow(response));
     // kH2zZsz3: kuryer — market tarifi/filial ulushisiz, market — kuryer
     // tarifi/ulushi va filial ulushisiz (auth/order-role-projection).
-    return projectOrderPayloadForRoles(req?.user?.roles, response);
+    // T7: `problem_contacts` proyeksiyadan OLDIN.
+    return projectOrderPayloadForRoles(
+      req?.user?.roles,
+      await attachProblemContacts(this.problemContacts, response),
+    );
   }
 
   @Get('qr-code/:token')
@@ -6252,7 +6312,11 @@ export class OrderGatewayController {
       (response as { data?: unknown } | null)?.data,
     );
     // kH2zZsz3: QR orqali ham AYNI rol proyeksiyasi (detal bilan bir xil).
-    return projectOrderPayloadForRoles(req?.user?.roles, response);
+    // T7: `problem_contacts` proyeksiyadan OLDIN.
+    return projectOrderPayloadForRoles(
+      req?.user?.roles,
+      await attachProblemContacts(this.problemContacts, response),
+    );
   }
 
   @Post('scan-assign')
@@ -6820,12 +6884,12 @@ export class OrderGatewayController {
       },
     },
   })
-  markReturnedToMarket(
+  async markReturnedToMarket(
     @Param('id') id: string,
     @Body() body: { authorization_token?: string },
     @Req() req: { user: JwtUser },
   ) {
-    return firstValueFrom(
+    const response: unknown = await firstValueFrom(
       this.orderClient
         .send(
           { cmd: 'order.mark_returned_to_market' },
@@ -6844,7 +6908,8 @@ export class OrderGatewayController {
         throw new GatewayTimeoutException('Order service response timeout');
       }
       throw error;
-    });
+    }); // T7 (B3): javobdagi to'liq buyurtma — menejerga operator telefonlarisiz.
+    return projectOrderContactsForRoles(req.user.roles, response);
   }
 
   // Full order edit (money/status fields) — SUPERADMIN/ADMIN/REGISTRATOR only
@@ -6943,7 +7008,7 @@ export class OrderGatewayController {
       );
     }
 
-    return firstValueFrom(
+    const response = await firstValueFrom(
       this.orderClient
         .send<unknown>(
           { cmd: 'order.update_from_api' },
@@ -6963,6 +7028,9 @@ export class OrderGatewayController {
       }
       throw error;
     });
+    // T7 (B3): javobdagi operator/market telefonlari menejer/filialga
+    // qaytmaydi (GET /orders/:id bilan bir xil).
+    return projectOrderContactsForRoles(roles, response);
   }
 
   @Delete(':id')

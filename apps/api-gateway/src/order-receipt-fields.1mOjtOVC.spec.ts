@@ -7,8 +7,8 @@ import { OrderGatewayController } from './order-gateway.controller';
 /**
  * 1mOjtOVC — yangi chek uchun buyurtma javobidagi maydonlar:
  * `operator_phone`, `secondary_operator_phone` va `order.market.phone_number`
- * GET /orders qatorlarida va GET /orders/:id da buyurtmani ko'ra oladigan HAR
- * rolga qaytadi (rol proyeksiyasi telefonlarni olib tashlamaydi; pul
+ * GET /orders qatorlarida va GET /orders/:id da qaytadi — T7 (QPq2C1co) dan
+ * beri menejer / filial / kuryerdan TASHQARI (ular uchun yashiriladi; pul
  * maydonlari — rol bo'yicha, avvalgidek). Swagger'da hujjatlashtirilgan
  * (paket va pochta cheki maydonlari ham).
  */
@@ -36,17 +36,19 @@ const orderRow = () => ({
 
 const RECEIPT_KEYS = ['operator_phone', 'secondary_operator_phone'] as const;
 
+// T7 (QPq2C1co, B3): menejer, filial va kuryer market/operator telefonini
+// KO'RMAYDI (pastdagi alohida test) — ular viloyat logistiga bog'lanadi.
 const ROLES = [
   ['superadmin'],
   ['admin'],
-  ['manager'],
   ['registrator'],
   ['market'],
   ['market_operator'],
-  ['courier'],
   ['logist'],
   ['customer'],
 ];
+
+const CONTACT_HIDDEN_ROLES = [['manager'], ['branch'], ['courier']];
 
 describe('1mOjtOVC — chek maydonlari rol proyeksiyasidan o‘tadi', () => {
   it.each(ROLES)(
@@ -71,6 +73,23 @@ describe('1mOjtOVC — chek maydonlari rol proyeksiyasidan o‘tadi', () => {
           'TEST Market',
         );
       }
+    },
+  );
+
+  it.each(CONTACT_HIDDEN_ROLES)(
+    'T7 %s: operator telefonlari va market telefoni YO‘Q, market nomi bor',
+    (role) => {
+      const detail = projectOrderPayloadForRoles([role], orderRow()) as Record<
+        string,
+        unknown
+      >;
+      for (const key of RECEIPT_KEYS) {
+        expect(detail).not.toHaveProperty(key);
+      }
+      expect(detail.market).not.toHaveProperty('phone_number');
+      expect((detail.market as Record<string, unknown>).name).toBe(
+        'TEST Market',
+      );
     },
   );
 
@@ -143,6 +162,31 @@ describe('1mOjtOVC — Swagger (docs/frontend/openapi.json)', () => {
     );
     expect(okRef('/orders')).toContain('OrderListReceiptPageDto');
     expect(okRef('/orders/{id}')).toContain('OrderReceiptFieldsDto');
+  });
+
+  it('T7: problem_contacts (ProblemContactDto) bor; operator telefonlari va market.phone_number ixtiyoriy', () => {
+    const receipt = doc.components.schemas.OrderReceiptFieldsDto as {
+      properties: Record<string, any>;
+      required?: string[];
+    };
+    expect(props('OrderReceiptFieldsDto')).toContain('problem_contacts');
+    expect(JSON.stringify(receipt.properties.problem_contacts)).toContain(
+      'ProblemContactDto',
+    );
+    expect(props('ProblemContactDto')).toEqual(
+      expect.arrayContaining(['name', 'phone', 'source']),
+    );
+    for (const key of [
+      'operator_phone',
+      'secondary_operator_phone',
+      'problem_contacts',
+    ]) {
+      expect(receipt.required ?? []).not.toContain(key);
+    }
+    const market = doc.components.schemas.OrderReceiptMarketDto as {
+      required?: string[];
+    };
+    expect(market.required ?? []).not.toContain('phone_number');
   });
 
   it('⭐ paket (GET /transfer-batches/:id) va pochta (GET /post/:id) cheki maydonlari', () => {

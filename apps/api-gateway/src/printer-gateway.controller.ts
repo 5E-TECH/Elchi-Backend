@@ -4,6 +4,7 @@ import {
   Controller,
   GatewayTimeoutException,
   Inject,
+  Optional,
   Post,
   Res,
   UseGuards,
@@ -27,6 +28,7 @@ import {
   renderReceiptHtml,
   renderThermalPdf,
 } from './printer/printer.util';
+import { ProblemContactsService } from './contacts/problem-contacts.service';
 
 /**
  * Bitta so'rovdagi buyurtmalar chegarasi (fix3 RBAC-08). Ilgari cheksiz edi:
@@ -55,7 +57,12 @@ export class PrintOrdersDto {
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles(RoleEnum.ADMIN, RoleEnum.SUPERADMIN)
 export class PrinterGatewayController {
-  constructor(@Inject('ORDER') private readonly orderClient: ClientProxy) {}
+  constructor(
+    @Inject('ORDER') private readonly orderClient: ClientProxy,
+    // T7 (QPq2C1co): «Muammo bo'lsa» — `problem_contacts` (viloyat logisti /
+    // zaxira). Yo'q yoki identity javob bermasa — qator chizilmaydi.
+    @Optional() private readonly problemContacts?: ProblemContactsService,
+  ) {}
 
   private async fetchPrintRows(orderIds: string[]): Promise<PrintRow[]> {
     const ids = Array.isArray(orderIds)
@@ -88,7 +95,15 @@ export class PrinterGatewayController {
     if (!rows.length) {
       throw new BadRequestException('Hech qanday buyurtma topilmadi');
     }
-    return rows;
+    const contacts = this.problemContacts
+      ? await this.problemContacts.resolveMany(rows)
+      : null;
+    return contacts
+      ? rows.map((row, index) => ({
+          ...row,
+          problem_contacts: contacts[index] ?? [],
+        }))
+      : rows;
   }
 
   @Post('thermal-pdf')

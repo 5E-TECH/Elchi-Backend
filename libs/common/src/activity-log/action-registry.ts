@@ -500,6 +500,19 @@ export const ACTIVITY_ACTION_REGISTRY: Readonly<
     'key',
     'red',
   ),
+  // T7 (QPq2C1co) — aloqa raqamlari: market mas'uli va zaxira raqamlar.
+  'market.responsible_assigned': entry(
+    "Market mas'uli o'zgartirildi",
+    'general',
+    'user',
+    'blue',
+  ),
+  'settings.contacts_updated': entry(
+    'Aloqa sozlamalari yangilandi',
+    'general',
+    'settings',
+    'blue',
+  ),
 });
 
 const CATEGORY_LABEL: Readonly<Record<string, string>> = Object.freeze(

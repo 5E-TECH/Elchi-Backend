@@ -119,6 +119,11 @@ export interface UserFilterQuery {
    * false — yo'q (javobdagi `telegram_linked` bilan bir xil qoida).
    */
   telegram_linked?: boolean | string | null;
+  /**
+   * T7 (QPq2C1co) — faqat `identity.market.find_all` (GET /markets):
+   * `<xodim id>` — shu mas'ulga biriktirilgan, `none` — sukutdagi marketlar.
+   */
+  responsible_id?: string;
   page?: number;
   limit?: number;
 }

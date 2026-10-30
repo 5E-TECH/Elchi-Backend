@@ -70,6 +70,7 @@ export * from './integration/partner-money';
 export * from './catalog/product-measure';
 export * from './catalog/product-code';
 export * from './catalog/warehouse';
+export * from './contacts/contacts';
 export * from './order/cancel-return-stage';
 export * from './order/courier-order-list';
 export * from './order/order-create-content';

@@ -715,7 +715,13 @@ export class OrderServiceService {
       return fallbackId ? `user ID: ${fallbackId}` : 'Nomaʼlum foydalanuvchi';
     }
 
-    const name = actor.name ?? actor.username ?? actor.phone_number;
+    // T7 (QPq2C1co): market / market operatori — tavsifga login yoki telefon
+    // chiqmaydi (tarix kuryer va menejerga ham ko'rinadi), faqat ism.
+    const isMarketSide =
+      actor.role === Roles.MARKET || actor.role === Roles.MARKET_OPERATOR;
+    const name = isMarketSide
+      ? actor.name
+      : (actor.name ?? actor.username ?? actor.phone_number);
     const role = actor.role ? `, role: ${actor.role}` : '';
     return name
       ? `${name}${role}, ID: ${actor.id ?? fallbackId ?? '-'}`
@@ -3699,9 +3705,12 @@ export class OrderServiceService {
           market_name: market?.name ?? 'N/A',
           market_phone: market?.phone_number ?? '',
           operator: order.operator ?? '',
-          // VRyloH62: chekdagi "Muammo bo'lsa" — 1- va 2-operator raqami.
           operator_phone: order.operator_phone ?? '',
           secondary_operator_phone: order.secondary_operator_phone ?? '',
+          // T7 (QPq2C1co): gateway shular bo'yicha «Muammo bo'lsa» raqamini
+          // (viloyat logisti / zaxira — `problem_contacts`) qo'shadi.
+          region_id: order.region_id ? String(order.region_id) : null,
+          district_id: order.district_id ? String(order.district_id) : null,
           products: (order.items ?? []).map((i) => ({
             name: productMap.get(String(i.product_id))?.name ?? 'N/A',
             quantity: i.quantity ?? 1,

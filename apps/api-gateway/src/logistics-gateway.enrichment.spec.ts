@@ -153,11 +153,12 @@ describe('VfgcnxDa - pochta buyurtmalarining xavfsiz boyitilishi', () => {
       expect(json).not.toMatch(SECRET_KEYS);
       expect(json).not.toMatch(/password|refresh_token|tariff_|telegram_id/);
       const enriched = result.data.allOrdersByPostId[0];
-      expect(enriched.market).toEqual({
-        id: '2',
-        name: 'Market',
-        phone_number: '+998901112233',
-      });
+      // T7 (QPq2C1co, B3): menejer va kuryerga market telefoni yo'q.
+      expect(enriched.market).toEqual(
+        role === 'manager' || role === 'courier'
+          ? { id: '2', name: 'Market' }
+          : { id: '2', name: 'Market', phone_number: '+998901112233' },
+      );
     },
   );
 
@@ -248,10 +249,10 @@ describe('VfgcnxDa - pochta buyurtmalarining xavfsiz boyitilishi', () => {
       user: { sub: '9', roles: ['courier'] },
     });
     expect(JSON.stringify(result)).not.toMatch(SECRET_KEYS);
+    // T7 (QPq2C1co, B3): kuryerga market telefoni yo'q.
     expect(result.data[0].market).toEqual({
       id: '2',
       name: 'Market',
-      phone_number: '+998901112233',
     });
   });
 

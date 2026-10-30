@@ -242,27 +242,21 @@ describe('VRyloH62 — operator ismi va raqamlari', () => {
     expect(sent.secondary_operator_phone).toBeUndefined();
   });
 
-  it('⭐ TC4/TC5 chek: "Muammo bo`lsa" — 1- va 2-raqam tartib bilan; raqam yo`q — market raqami', () => {
+  // T7 (QPq2C1co): chekdagi "Muammo bo'lsa" endi operator/market raqami EMAS —
+  // faqat `problem_contacts` (viloyat logisti / zaxira raqamlar).
+  it('⭐ TC4/TC5 chek: "Muammo bo`lsa" — problem_contacts tartib bilan; operator/market raqami chiqmaydi', () => {
+    const both = contactPhonesOf({
+      problem_contacts: [
+        { name: null, phone: '+998712000000', source: 'support' },
+        { name: null, phone: '+998901234567', source: 'support' },
+      ],
+    });
+    expect(both).toEqual(['+998 71 200 00 00', '+998 90 123 45 67']);
     expect(
       contactPhonesOf({
         operator_phone: '+998712000000',
-        secondary_operator_phone: '+998901234567',
         market_phone: '+998900000037',
-      }),
-    ).toHaveLength(2);
-    const both = contactPhonesOf({
-      operator_phone: '+998712000000',
-      secondary_operator_phone: '+998901234567',
-      market_phone: '+998900000037',
-    });
-    expect(both[0]).toContain('71');
-    expect(both[1]).toContain('90');
-    expect(
-      contactPhonesOf({
-        operator_phone: '',
-        secondary_operator_phone: '',
-        market_phone: '+998900000037',
-      }),
-    ).toHaveLength(1);
+      } as never),
+    ).toEqual([]);
   });
 });

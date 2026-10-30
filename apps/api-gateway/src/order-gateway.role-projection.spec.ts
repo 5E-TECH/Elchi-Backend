@@ -138,11 +138,12 @@ function expectCourierView(row: Record<string, any>) {
   });
   expect(row.market).toMatchObject({
     name: 'TEST E2E Market',
-    phone_number: '+998887000701',
     expense_proof_conditions: ['sell_extra_cost'],
     cancelled_handover_qr_required: true,
     add_order: false,
   });
+  // T7 (QPq2C1co, B3): kuryer market telefonini ko'rmaydi (logistga bog'lanadi).
+  expect(row.market).not.toHaveProperty('phone_number');
 }
 
 function expectMarketView(row: Record<string, any>) {
@@ -213,16 +214,19 @@ function orderGateway(
 describe('kH2zZsz3 — projectOrderPayloadForRoles', () => {
   it("superadmin/admin/menejer/filial/registrator — to'liq ko'rinish (asl havola)", () => {
     const payload = { statusCode: 200, data: order25() };
-    for (const roles of [
-      ['superadmin'],
-      ['admin'],
-      ['manager'],
-      ['branch'],
-      ['registrator'],
-      ['courier', 'manager'],
-    ]) {
+    for (const roles of [['superadmin'], ['admin'], ['registrator']]) {
       expect(resolveOrderProjection(roles)).toBeNull();
       expect(projectOrderPayloadForRoles(roles, payload)).toBe(payload);
+    }
+    // T7 (QPq2C1co, B3): menejer/filial pulni to'liq ko'radi, lekin market
+    // telefonini emas (alohida aloqa proyeksiyasi).
+    for (const roles of [['manager'], ['branch'], ['courier', 'manager']]) {
+      expect(resolveOrderProjection(roles)).toBeNull();
+      const projected: any = projectOrderPayloadForRoles(roles, payload);
+      expect(projected.data.market_tariff).toBe(20000);
+      expect(projected.data.courier_tariff).toBe(15000);
+      expect(projected.data.market).not.toHaveProperty('phone_number');
+      expect(projected.data.market.name).toBe('TEST E2E Market');
     }
   });
 
@@ -355,9 +359,17 @@ describe('kH2zZsz3 — GET /orders/:id rol proyeksiyasi', () => {
     const row = order25();
     const controller = orderGateway({ 'order.find_by_id_enriched': row });
 
-    await expect(
-      controller.findById('25', user('5', ['manager'], '3')),
-    ).resolves.toBe(row);
+    const res: any = await controller.findById(
+      '25',
+      user('5', ['manager'], '3'),
+    );
+    // Pul — to'liq; market telefoni — yo'q (T7 B3).
+    expect(res).toMatchObject({
+      market_tariff: 20000,
+      courier_tariff: 15000,
+      branch_share: row.branch_share,
+    });
+    expect(res.market).not.toHaveProperty('phone_number');
   });
 });
 
@@ -527,10 +539,10 @@ describe("kH2zZsz3 — QR, ro'yxat va skan yo'llari", () => {
     for (const key of COURIER_SECRET_KEYS) {
       expect(enriched).not.toHaveProperty(key);
     }
+    // T7 (QPq2C1co, B3): kuryer pochtasida market telefoni yo'q.
     expect(enriched.market).toEqual({
       id: '16',
       name: 'TEST E2E Market',
-      phone_number: '+998887000701',
     });
     expect(enriched.courier_tariff).toBe(15000);
     expect(res.data.centerOrders.centerOrdersTotalPrice).toBe(100000);

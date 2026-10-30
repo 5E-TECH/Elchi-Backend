@@ -1,4 +1,5 @@
 import { Roles as RoleEnum } from '@app/common';
+import { projectOrderContactsForRoles } from './order-contact-projection';
 
 /**
  * kH2zZsz3 — BUYURTMA JAVOBINING ROL BO'YICHA MOLIYAVIY PROYEKSIYASI.
@@ -396,14 +397,18 @@ function projectValue(
 /**
  * Buyurtma qaytaruvchi javobni so'rovchi roliga moslab qisqartiradi
  * (kH2zZsz3). To'liq ko'rinishli rol yoki o'zgarish yo'q bo'lsa — ASL javob.
+ *
+ * T7 (QPq2C1co, B3): pul proyeksiyasidan KEYIN market/operator telefonlari
+ * ham (`order-contact-projection.ts`, alohida rol qoidasi — menejer pulni
+ * to'liq ko'radi, market telefonini esa yo'q).
  */
 export function projectOrderPayloadForRoles<T>(
   roles: string[] | undefined,
   payload: T,
 ): T {
   const projection = resolveOrderProjection(roles);
-  if (!projection) {
-    return payload;
-  }
-  return projectValue(payload, projection, 0) as T;
+  const projected = projection
+    ? (projectValue(payload, projection, 0) as T)
+    : payload;
+  return projectOrderContactsForRoles(roles, projected);
 }

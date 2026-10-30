@@ -69,6 +69,10 @@ import {
 import { SetCourierRegionsRequestDto } from './dto/courier-regions.swagger.dto';
 import { CreateInvestorUserRequestDto } from './dto/investor.swagger.dto';
 import { isRpcNotFoundError } from './order-qr-light-view';
+import {
+  projectMarketRowContactsForRoles,
+  projectUserRowContactsForRoles,
+} from './auth/order-contact-projection';
 import { ParseBigintIdPipe } from './pipes/parse-bigint-id.pipe';
 import {
   LOGIST_REGIONS_UNAVAILABLE_MESSAGE,
@@ -1259,6 +1263,11 @@ export class ApiGatewayController {
         pageItems as Array<Record<string, unknown>>,
         req,
       );
+      // T7 (B3): market / operator qatorlari — menejerga telefonlarsiz,
+      // Elchi mas'uli faqat SUPERADMIN/ADMIN ga.
+      (response as { data: { items: unknown[] } }).data.items = pageItems.map(
+        (item) => projectUserRowContactsForRoles(req?.user?.roles, item),
+      );
     }
 
     return response;
@@ -1442,11 +1451,16 @@ export class ApiGatewayController {
     // bekor qilindi. Token: GET /markets/:id/tg-token (faqat SUPERADMIN).
     // YEThmZBn: `include_branch` — kuryer/menejer/registrator filiali
     // (`branch: { id, name } | null`) javobga qo'shiladi.
-    return firstValueFrom(
+    const response = await firstValueFrom(
       this.identityClient
         .send({ cmd: 'identity.user.find_by_id' }, { id, include_branch: true })
         .pipe(timeout(8000)),
     );
+    // T7 (B3): market / operator yozuvi — menejer/filial/kuryerga
+    // telefonlarsiz; `responsible` (Elchi mas'uli) faqat SUPERADMIN/ADMIN ga.
+    const data: unknown = response?.data;
+    const row = projectUserRowContactsForRoles(req?.user?.roles, data);
+    return row === data ? response : { ...response, data: row };
   }
 
   @Patch('users/:id')
@@ -1681,9 +1695,16 @@ export class ApiGatewayController {
   })
   @ApiQuery({ name: 'page', required: false, type: Number, example: 1 })
   @ApiQuery({ name: 'limit', required: false, type: Number, example: 10 })
+  @ApiQuery({
+    name: 'responsible_id',
+    required: false,
+    type: String,
+    description:
+      "T7: faqat SUPERADMIN/ADMIN. `<xodim id>` — shu mas'ulga biriktirilgan marketlar, `none` — sukutdagi (biriktirilmagan) marketlar.",
+  })
   @ApiOkResponse({
     description:
-      "Market list. SUPERADMIN/ADMIN: to'liq qator + cashbox. MANAGER/REGISTRATOR/BRANCH: faqat {id, name, phone_number, status, tariff_home, tariff_center, default_tariff} (yiFTzkzH; tarif maydoni yo'q bo'lsa null). COURIER va LOGIST (iFAkvaht — buyurtmalar «Market» filtri): faqat {id, name, status}.",
+      "Market list. SUPERADMIN/ADMIN: to'liq qator + cashbox + T7 `responsible: {id, name, phone_number, role} | null` va `responsible_source: 'assigned' | 'default' | 'none'`. REGISTRATOR: faqat {id, name, phone_number, status, tariff_home, tariff_center, default_tariff, weight_volume_pricing} (yiFTzkzH; tarif maydoni yo'q bo'lsa null). MANAGER/BRANCH: xuddi shu, lekin `phone_number` YO'Q (T7 B3 — market telefoni menejerga ko'rinmaydi). COURIER va LOGIST (iFAkvaht — buyurtmalar «Market» filtri): faqat {id, name, status}.",
   })
   async getMarkets(
     @Req() req: { user: JwtUser },
@@ -1691,7 +1712,14 @@ export class ApiGatewayController {
     @Query('status') status?: string,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
+    @Query('responsible_id') responsibleId?: string,
   ) {
+    const view = this.marketListView(req?.user);
+    // T7: mas'ul filtri — faqat to'liq ko'rinishda (SA/admin), boshqalarga e'tiborsiz.
+    const responsibleFilter =
+      view === 'full' && typeof responsibleId === 'string'
+        ? responsibleId.trim() || undefined
+        : undefined;
     const response = await firstValueFrom(
       this.identityClient
         .send(
@@ -1702,6 +1730,9 @@ export class ApiGatewayController {
               status,
               page: page ? Number(page) : undefined,
               limit: limit ? Number(limit) : undefined,
+              ...(responsibleFilter
+                ? { responsible_id: responsibleFilter }
+                : {}),
             },
           },
         )
@@ -1719,10 +1750,13 @@ export class ApiGatewayController {
     // telefoni, username, tariflar, sozlamalar) va kassa balansini oladi.
     // Qolgan rollar ekranlari faqat tanlash ro'yxatini ko'rsatadi — ularga
     // shu ro'yxat uchun kerakli maydonlar qaytadi (kassa so'rovi ham yo'q).
-    const view = this.marketListView(req?.user);
+    // T7 (B3): menejer / filial — qatorning o'zidan ham market telefoni yo'q.
     if (view !== 'full') {
       response.data.items = items.map((market: any) =>
-        this.projectMarketListItem(market, view),
+        projectMarketRowContactsForRoles(
+          req?.user?.roles,
+          this.projectMarketListItem(market, view),
+        ),
       );
       return response;
     }

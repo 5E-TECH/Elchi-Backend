@@ -23,6 +23,73 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-10-30 — Aloqa raqamlari: market mas'uli, «Muammo bo'lsa» = viloyat logisti, market telefoni menejer/kuryerdan yashirildi (T7, QPq2C1co)
+
+Deploy: **identity-service + api-gateway + order-service** (birga; `libs/common` o'zgardi). Migratsiya
+**1716000000185-MarketResponsibleContacts** (`admins.market_responsible_id`, yangi `identity_schema.app_settings`).
+`openapi.json` qayta yaratildi. Deploy'dan keyin admin zaxira raqam va sukut mas'ulni kiritadi
+(`PATCH /settings/contacts`; F4 sahifasi bo'lmasa — Swagger).
+
+Maqsad: kuryer va filial menejeri marketga to'g'ridan-to'g'ri qo'ng'iroq qilmaydi — ular viloyat logistiga, market
+o'z Elchi mas'uliga bog'lanadi. Mijoz telefoni qoladi.
+
+- [2026-10-30] 🆕 [identity] — `GET /settings/contacts` (SA/admin) → `{ support_phones: string[], default_market_responsible:
+  {id, name, phone_number, role, status} | null, updated_at, updated_by }`.
+- [2026-10-30] 🆕 [identity] — `PATCH /settings/contacts` (SA/admin) `{ support_phones?, default_market_responsible_id? }` →
+  GET shakli. Bo'sh tana — 400. Telefon `+998XXXXXXXXX` ga normallanadi, takrorsiz, 0–2 ta — aks holda
+  **400 `code: 'SUPPORT_PHONES_INVALID'`**. Mas'ul: yo'q — 404, roli superadmin/admin/registrator/logist emas —
+  **400 `RESPONSIBLE_ROLE_INVALID`**, nofaol — **400 `RESPONSIBLE_INACTIVE`**. Jurnal: `settings.contacts_updated`.
+- [2026-10-30] 🆕 [identity] — `GET /markets/responsibles?search=` (SA/admin) → `{ candidates: [{id, name, phone_number,
+  role, status, market_count}], default_responsible_id, default_market_count }` (≤ 200 nomzod; `market_count` —
+  biriktirilganlar, nofaol mas'ulniki ham).
+- [2026-10-30] 🆕 [identity] — `POST /markets/responsible/bulk` (SA/admin) `{ responsible_id: string | null, market_ids:
+  string[] }` (1–500; `null` — sukutga) → `{ updated, moved_from: [{responsible_id, count}] }` (`updated` — mas'uli
+  haqiqatan o'zgarganlar; `moved_from` — boshqa mas'uldan ko'chganlar, sukutdagilar kirmaydi). Market bo'lmagan id —
+  **400 `NOT_A_MARKET`** (hech narsa o'zgarmaydi). Jurnal: har market — `market.responsible_assigned`.
+- [2026-10-30] 🆕 [identity] — `PATCH /markets/:id/responsible` (SA/admin) `{ responsible_id: string | null }` →
+  `{ id, responsible, responsible_source }`. Market yo'q — 404; xato kodlari yuqoridagidek.
+- [2026-10-30] ✏️ [identity] — `GET /markets` (faqat SA/admin qatori) va `GET /users/:id` (market; faqat SA/admin)
+  ga `responsible: {id, name, phone_number, role} | null` va `responsible_source: 'assigned' | 'default' | 'none'`.
+  Yangi filtr `GET /markets?responsible_id=<id>|none` (SA/admin). Market mas'uli = faol biriktirilgan → faol sukut →
+  yo'q (`none`); nofaol mas'ul biriktiruvi saqlanadi, lekin hisobda o'tkazib yuboriladi. Market qatorida yangi
+  ustun `market_responsible_id` ham ko'rinadi (SA/admin).
+- [2026-10-30] 🆕 [identity] — `GET /users/me/contacts` (har xodim roli) → `{ kind: 'market_responsible' |
+  'region_logist' | 'none', source: 'assigned' | 'default' | 'support' | null, regions: [{id, name}], contacts:
+  [{user_id, name, phone, role}] }`. Market / market operatori — Elchi mas'uli («Elchi mas'ulingiz»); kuryer — viloyati
+  logisti (super kuryer — `courier_regions` logistlari, ≤ 5; `serves_all_regions` — zaxira); menejer / branch — filial
+  viloyati logisti («Viloyatingiz logisti»). Logist / mas'ul yo'q yoki nofaol — zaxira raqamlar (`user_id`, `name`,
+  `role` — null, `source: 'support'`); ular ham bo'sh — `contacts: []`, `source: null`. Boshqa rollar — `kind: 'none'`.
+- [2026-10-30] ✏️ [gateway] — Swagger: buyurtma javobida `problem_contacts` (`ProblemContactDto`), `operator_phone`,
+  `secondary_operator_phone`, `market.phone_number` endi ixtiyoriy (menejer/filial/kuryerga kelmaydi).
+- [2026-10-30] ✏️ [gateway] — buyurtma javoblariga **`problem_contacts: [{ name: string | null, phone, source: 'logist' |
+  'support' }]`** (≤ 2, takrorsiz; HAR rolga): `GET /orders`, `GET /orders/:id`, `GET /orders/qr-code/:token`,
+  `GET /orders/courier-orders`, `GET /orders/courier/orders`, `GET /orders/market/:marketId`,
+  `GET /orders/markets/:marketId/new|cancelled` (yorliq chop etish ro'yxati), `GET /post/orders/:id`,
+  `GET /post/orders/rejected/:id`, `GET /scan/:token` (buyurtma va pochta). Hisob: buyurtma viloyati (`region_id`; yo'q — tuman viloyati) logisti
+  (`regions.logist_id`, faol), aks holda zaxira raqamlar; ikkalasi ham yo'q — `[]`. Kesh 60 s (logist almashsa ≤ 60 s).
+  identity javob bermasa maydon **yo'q** (FE «raqam yo'q» deb ko'rsatsin — market/operator raqamiga QAYTMAYDI).
+- [2026-10-30] ⚠️ [gateway] — `POST /printer/thermal-pdf`, `POST /printer/receipt`: «Muammo bo'lsa» endi FAQAT
+  `problem_contacts` (format `+998 90 111 22 33`); operator va market raqami chiqmaydi. Raqam yo'q — qator **umuman
+  chizilmaydi** («-» ham emas).
+- [2026-10-30] ⚠️ [gateway] — market telefoni menejer / filial / kuryerdan **yashirildi** (so'rovchida
+  SA/admin/registrator/logist bo'lmasa): buyurtma javoblarining istalgan joyidan `operator_phone`,
+  `secondary_operator_phone`; `market` obyektidan `phone_number`, `extra_number`, `default_operator_phone`, `username`, `telegram_username`
+  **o'chiriladi** (null emas). `customer` va `courier` ga tegilmaydi. Joylar: buyurtma qaytaradigan barcha yo'llar
+  (rol proyeksiyasi orqali), `GET /orders/markets/new|cancelled`, `GET /orders/markets/:marketId/new|cancelled`,
+  `GET /orders/branch/orders|cancelled`, `GET /orders/courier/orders` (filial doirasi), `GET /orders/external/sources`,
+  `PATCH /orders/:id` va `/:id/full` javobi, `POST /orders/:id/mark-returned-to-market` javobi,
+  `GET /transfer-batches/:id` va `/remaining` (`items[].order`), `GET /post/return-requests/list`, mahsulotlar
+  (`GET /product`, `/product/market/:marketId`, `/product/by-code/:code`, `/product/:id` — `market` obyekti),
+  `GET /markets` (menejer/filial qatorida `phone_number` yo'q; registrator — bor), `GET /users` va `GET /users/:id`
+  (market va market operatori qatorlari). `GET /orders/:id/tracking`: kuryer/menejer/filialga market va market operatori
+  aktyori `{id, name, role}`, tavsifda ularning login/telefoni yo'q. Pul proyeksiyasi o'zgarmadi.
+  Elchi mas'uli (`responsible`, `responsible_source`, `market_responsible_id`) — faqat SA/admin: market qatorlarida va
+  buyurtmadagi `market` obyektida boshqa HAMMA rolga (registrator, logist, market ham) olib tashlanadi.
+- 🔧 FE: F1 — chek/yorliq `problem_contacts` dan (bo'sh — qism yo'q); F2 — menejer/kuryerda market telefoni yo'q,
+  «Muammo bo'lsa» qatori; F3 — `GET /users/me/contacts` kartasi; F4 — «Market mas'ullari» sahifasi (yuqoridagi
+  endpointlar, xato kodlari `users.json → responsibles.*`).
+
+
 ### 2026-10-26 — Ombor jurnali: qisman sotuv bolasining qaytishi bola buyurtma raqami bilan (hfkhYrGk №1)
 
 Deploy: **catalog-service + order-service**. Migratsiya yo'q.

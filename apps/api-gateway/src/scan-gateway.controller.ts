@@ -7,6 +7,7 @@ import {
   GatewayTimeoutException,
   HttpCode,
   Inject,
+  Optional,
   Param,
   Post,
   Query,
@@ -38,6 +39,10 @@ import {
 } from './auth/order-qr-visibility';
 import { projectOrderPayloadForRoles } from './auth/order-role-projection';
 import {
+  ProblemContactsService,
+  attachProblemContacts,
+} from './contacts/problem-contacts.service';
+import {
   canScanPost,
   isPostScanToken,
   POST_SCAN_FORBIDDEN_MESSAGE,
@@ -45,10 +50,7 @@ import {
 import { isOrderQrLightView, sendOrderQrLight } from './order-qr-light-view';
 
 type ScanResponseType =
-  | 'order'
-  | 'batch'
-  | 'post'
-  | 'market_cancelled_handover';
+  'order' | 'batch' | 'post' | 'market_cancelled_handover';
 interface JwtUser {
   sub: string;
   roles?: string[];
@@ -108,6 +110,9 @@ export class ScanGatewayController {
     @Inject('ORDER') private readonly orderClient: ClientProxy,
     @Inject('BRANCH') private readonly branchClient: ClientProxy,
     @Inject('LOGISTICS') private readonly logisticsClient: ClientProxy,
+    // T7 (QPq2C1co, B2): skan qilingan buyurtma/pochtaga `problem_contacts`.
+    // Yo'q (eski spec'lar) — maydon qo'shilmaydi.
+    @Optional() private readonly problemContacts?: ProblemContactsService,
   ) {}
 
   private normalizeToken(token: string): string {
@@ -179,7 +184,8 @@ export class ScanGatewayController {
       "Prefiks bo'yicha: `BTB-`/`BTR-` → paket (`type: batch`), `POST-` (logistics haqiqiy shakli) / `PST-` → pochta (`type: post`), qolgani → buyurtma (404 bo'lsa tashqi qop). " +
       "j8hdXE1o: paketni jo'natuvchi YOKI qabul qiluvchi filial xodimi ko'radi (`GET /transfer-batches/:id` bilan bir xil). " +
       "dwJX3NjT: paket javobida qo'shimcha `source_branch` / `destination_branch` `{id, name}`, `region` `{id, name}` va `items[].order` — buyurtma xulosasi `{id, order_number, status, total_price, region, district, customer {name, phone_number}}` (xulosa xizmati javob bermasa `null`). " +
-      "X4RzXk1H: pochta — faqat superadmin/admin/branch/manager/registrator/courier (boshqalar 403) va `GET /post/orders/:id` doirasi (filial xodimi — o'z filiali, kuryer — o'z pochtasi); javob `GET /post/scan/:id` bilan bir xil: pochta qatori + `region`, `courier`, `orders[]`.",
+      "X4RzXk1H: pochta — faqat superadmin/admin/branch/manager/registrator/courier (boshqalar 403) va `GET /post/orders/:id` doirasi (filial xodimi — o'z filiali, kuryer — o'z pochtasi); javob `GET /post/scan/:id` bilan bir xil: pochta qatori + `region`, `courier`, `orders[]`. " +
+      "T7 (QPq2C1co): har buyurtma qatorida `problem_contacts: [{name, phone, source: 'logist'|'support'}]` («Muammo bo'lsa», ≤ 2); `operator_phone`, `secondary_operator_phone`, `market.phone_number` menejer/filial/kuryerga YO'Q.",
   })
   @ApiParam({
     name: 'token',
@@ -283,7 +289,10 @@ export class ScanGatewayController {
       );
       return projectOrderPayloadForRoles(
         req?.user?.roles,
-        this.shapeResponse('post', response),
+        await attachProblemContacts(
+          this.problemContacts,
+          this.shapeResponse('post', response),
+        ),
       );
     }
 
@@ -316,7 +325,11 @@ export class ScanGatewayController {
       // kH2zZsz3: skan qilingan buyurtma `GET /orders/:id` bilan AYNI rol
       // proyeksiyasida — kuryer market tarifi/filial ulushini, market esa
       // kuryer tarifi/ulushini ko'rmaydi.
-      return projectOrderPayloadForRoles(req?.user?.roles, shaped);
+      // T7: `problem_contacts` proyeksiyadan OLDIN.
+      return projectOrderPayloadForRoles(
+        req?.user?.roles,
+        await attachProblemContacts(this.problemContacts, shaped),
+      );
     } catch (error) {
       /**
        * CyCV4XHR — buyurtma topilmadi. Token QOP (`external_batch_token`)

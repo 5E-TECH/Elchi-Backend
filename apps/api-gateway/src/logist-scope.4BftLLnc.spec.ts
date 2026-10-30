@@ -309,7 +309,10 @@ describe('4BftLLnc — LOGIST proyeksiyasi (order-role-projection)', () => {
 
   it('boshqa rollar o‘zgarmagan: menejer — to‘liq, mijoz — total_price qoladi', () => {
     const payload = { data: [orderRow()] };
-    expect(projectOrderPayloadForRoles(['manager'], payload)).toBe(payload);
+    // T7 (QPq2C1co, B3): menejer pulni to'liq ko'radi, market telefonini emas.
+    const manager = projectOrderPayloadForRoles(['manager'], payload) as any;
+    expect(manager.data[0].total_price).toBe(100000);
+    expect(manager.data[0].market).not.toHaveProperty('phone_number');
     const customer = projectOrderPayloadForRoles(['customer'], payload) as any;
     expect(customer.data[0].total_price).toBe(100000);
     expect(customer.data[0].sale_collectible_amount).toBe(100000);
