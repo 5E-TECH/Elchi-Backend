@@ -21,6 +21,8 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 ## Yozuvlar
 
+<!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+
 ### 2026-10-30 — T6: kuryerdan olingan / marketga berilgan pulni qaytarish yoki summasini tuzatish (superadmin)
 
 Deploy: **finance-service + order-service + api-gateway** (+ libs/common: notification-service bir xil katalog
@@ -96,8 +98,6 @@ qayta yaratildi. Maket: frontend `design/T6-pul-qaytarish`.
 - [2026-10-30] 🟢 [bot] — qaytarilgan to'lov kvitansiyasidagi tugma bosilsa: tugmalar olinadi, «Bu to'lov qaytarilgan
   yoki tuzatilgan — yangi holat bildirishnomada.»
 
-
-<!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
 ### 2026-10-30 — Aloqa raqamlari: market mas'uli, «Muammo bo'lsa» = viloyat logisti, market telefoni menejer/kuryerdan yashirildi (T7, QPq2C1co)
 
