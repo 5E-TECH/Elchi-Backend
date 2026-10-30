@@ -1436,6 +1436,10 @@ secret (secret never reaches the gateway).
   Joi bilan bir xil, biri o'zgarsa ikkinchisi ham), gateway almashgandan keyin readiness
   darvozasi: `/health/readiness` ~3 daqiqada ketma-ket 2 marta 200 bermasa rollback.
   Readiness'ga notification'ning `degraded` holati ham kiradi (bot tokeni bor, `getMe` o'tmagan).
+- **Off-site zaxira (6RaEn5cN):** `backup-offsite` (DB) va host cron `backup-minio-offsite.sh`
+  (MinIO) → R2. `OFFSITE_ENCRYPTION_KEY` (≥ 32, sukut bo'sh) bilan rclone `crypt` orqali
+  `encrypted/` prefiksiga; kalit yaroqsiz bo'lsa run yiqiladi, ochiq nusxaga qaytmaydi. Oylik mashq:
+  `restore-drill.yml` (`RESTORE_DRILL_ENABLED`, sukut o'chiq). `docs/ops/db-backups.md` §6.7.
 - **Schemas:** `scripts/init-schemas.sql` auto-creates every `*_schema` on
   Postgres start. Per-service `DB_SCHEMA` env (defaults in `libs/common/src/config`).
 - **Migrations:** TypeORM (`typeorm.config.ts`, `migrations/`,

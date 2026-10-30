@@ -11,7 +11,8 @@
 # Env passed to the container (docker reads the files itself — values never
 # appear in argv, ps or the log):
 #   * from $ELCHI_APP_DIR/.env.production ONLY R2_*, MINIO_ENDPOINT/PORT/USE_SSL,
-#     MINIO_BUCKET and MINIO_OFFSITE_* / MINIO_BACKUP_* lines (not the DB/JWT keys);
+#     MINIO_BUCKET, MINIO_OFFSITE_* / MINIO_BACKUP_* and OFFSITE_ENCRYPTION_KEY
+#     lines (not the DB/JWT keys);
 #   * $ELCHI_OPS_DIR/minio-backup.env (0600): MINIO_BACKUP_ACCESS_KEY /
 #     MINIO_BACKUP_SECRET_KEY of the read-only MinIO user — until they are moved
 #     into .env.production (then this file may be absent).
@@ -48,7 +49,7 @@ echo "$(ts) run start" >> "$LOG"
 docker run --rm --name "elchi-minio-offsite-$$" --network "$NET" \
   --memory 256m --pids-limit 64 --user "$(id -u):$(id -g)" \
   -e HOME=/tmp -e MINIO_OFFSITE_STATE_DIR=/state \
-  --env-file <(grep -E '^(R2_[A-Z_]+|MINIO_ENDPOINT|MINIO_PORT|MINIO_USE_SSL|MINIO_BUCKET|MINIO_OFFSITE_[A-Z_]+|MINIO_BACKUP_[A-Z_]+)=' "$APP_DIR/.env.production") \
+  --env-file <(grep -E '^(R2_[A-Z_]+|MINIO_ENDPOINT|MINIO_PORT|MINIO_USE_SSL|MINIO_BUCKET|MINIO_OFFSITE_[A-Z_]+|MINIO_BACKUP_[A-Z_]+|OFFSITE_ENCRYPTION_KEY)=' "$APP_DIR/.env.production") \
   --env-file "$CREDS" \
   -v "$SCRIPT:/scripts/backup-minio-offsite.sh:ro" -v "$STATE:/state" \
   --entrypoint sh "$IMG" /scripts/backup-minio-offsite.sh >> "$LOG" 2>&1

@@ -35,6 +35,14 @@
 # / MINIO_BACKUP_SECRET_KEY — never the root or the app (readwrite) key.
 # Encryption: TLS to R2 + R2 at-rest encryption (same as the DB dump copies);
 # the R2 token is "Object Read & Write" on this one bucket only.
+# Client-side encryption (6RaEn5cN, OFF by default): OFFSITE_ENCRYPTION_KEY set ->
+# everything goes through an rclone `crypt` remote to
+# r2:<R2_BUCKET>/encrypted/<prefix>/<b>/{current,versions/<ts>}/ (content
+# encrypted, names readable). crypt has no hash in common with MinIO, so the sync
+# compares size + mtime instead of --checksum and step 3 is `rclone cryptcheck`
+# (reads every MinIO object). A bad key never falls back to plaintext. The
+# plaintext minio/ prefix is left as it is: delete it by hand after the first
+# verified encrypted run (docs/ops/minio-backups.md §2).
 #
 # rclone is configured ONLY through environment variables (RCLONE_CONFIG="",
 # RCLONE_CONFIG_R2_* / RCLONE_CONFIG_MINIO_*). Secrets are never printed.
@@ -51,6 +59,7 @@
 #   MINIO_OFFSITE_MAX_DELETE       max objects one run may move out of current/ (default 50)
 #   MINIO_OFFSITE_HEALTH_MAX_AGE_SECONDS  `--check`: last success must be younger (default 93600 = 26h)
 #   MINIO_OFFSITE_STATE_DIR        status dir (default /state)
+#   OFFSITE_ENCRYPTION_KEY         >= 32 chars; same key as backup-offsite. Empty = no client-side encryption
 #   MINIO_OFFSITE_NOW              tests only: epoch seconds used instead of the clock
 #
 # Usage:
@@ -111,6 +120,9 @@ mo_missing() {
   echo "${_mm# }"
 }
 
+# 6RaEn5cN: shablon qiymati shifrlash hisoblanmaydi.
+mo_encrypted() { ! mo_unset "${OFFSITE_ENCRYPTION_KEY:-}"; }
+
 mo_resolve_config() {
   MO_R2_BUCKET="${R2_BUCKET:-elchi-db-backups}"
   MO_SRC_BUCKETS="${MINIO_OFFSITE_BUCKETS:-${MINIO_BUCKET:-elchi-files}}"
@@ -123,6 +135,11 @@ mo_resolve_config() {
   esac
   MO_MINIO_URL="${_mr_scheme}://${MINIO_ENDPOINT:-minio}:${MINIO_PORT:-9000}"
   MO_DEST_ROOT="r2:$MO_R2_BUCKET/$MO_PREFIX"
+  MO_COMPARE="--checksum"
+  if mo_encrypted; then
+    MO_DEST_ROOT="r2crypt:encrypted/$MO_PREFIX"
+    MO_COMPARE=""
+  fi
 }
 
 # Values that end up in remote paths / URLs must be plain tokens.
@@ -165,6 +182,10 @@ mo_validate() {
         ;;
     esac
   fi
+  if mo_encrypted && [ "${#OFFSITE_ENCRYPTION_KEY}" -lt 32 ]; then
+    echo "OFFSITE_ENCRYPTION_KEY is shorter than 32 characters (openssl rand -hex 32)"
+    return 1
+  fi
   return 0
 }
 
@@ -200,6 +221,28 @@ mo_rclone_env() {
     RCLONE_CONFIG_MINIO_REGION RCLONE_CONFIG_MINIO_ENV_AUTH RCLONE_CONFIG_MINIO_NO_CHECK_BUCKET \
     RCLONE_CONFIG_MINIO_FORCE_PATH_STYLE RCLONE_CONFIG_MINIO_ACCESS_KEY_ID \
     RCLONE_CONFIG_MINIO_SECRET_ACCESS_KEY
+  mo_encrypted || return 0
+
+  # `r2crypt:` over `r2:<bucket>`. The key reaches rclone on stdin only.
+  RCLONE_CONFIG_R2CRYPT_TYPE=crypt
+  RCLONE_CONFIG_R2CRYPT_REMOTE="r2:$MO_R2_BUCKET"
+  RCLONE_CONFIG_R2CRYPT_FILENAME_ENCRYPTION=off
+  RCLONE_CONFIG_R2CRYPT_DIRECTORY_NAME_ENCRYPTION=false
+  RCLONE_CONFIG_R2CRYPT_PASSWORD="$(printf '%s\n' "$OFFSITE_ENCRYPTION_KEY" | rclone obscure -)" || return 1
+  [ -n "$RCLONE_CONFIG_R2CRYPT_PASSWORD" ] || return 1
+  export RCLONE_CONFIG_R2CRYPT_TYPE RCLONE_CONFIG_R2CRYPT_REMOTE \
+    RCLONE_CONFIG_R2CRYPT_FILENAME_ENCRYPTION RCLONE_CONFIG_R2CRYPT_DIRECTORY_NAME_ENCRYPTION \
+    RCLONE_CONFIG_R2CRYPT_PASSWORD
+}
+
+# size + MD5 against current/; through crypt the stored hash cannot match the
+# source, cryptcheck encrypts each source object with the stored nonce instead.
+mo_verify() {
+  if mo_encrypted; then
+    rclone cryptcheck "$1" "$2" --one-way --fast-list --exclude "$MO_EXCLUDE"
+  else
+    rclone check "$1" "$2" --one-way --fast-list --exclude "$MO_EXCLUDE"
+  fi
 }
 
 # ---- status file (key=value; read with sed, never sourced) --------------------
@@ -265,7 +308,8 @@ mo_sync_bucket() {
     return 1
   fi
 
-  rclone sync "$_sb_src" "$_sb_cur" --backup-dir "$_sb_ver" --checksum --fast-list \
+  # shellcheck disable=SC2086 # MO_COMPARE is one flag or nothing
+  rclone sync "$_sb_src" "$_sb_cur" --backup-dir "$_sb_ver" $MO_COMPARE --fast-list \
     --exclude "$MO_EXCLUDE" \
     --max-delete "$MO_MAX_DELETE" --transfers 4 --checkers 8 --stats 0 -v \
     > "$_sb_log" 2>&1
@@ -280,7 +324,7 @@ mo_sync_bucket() {
     return 1
   fi
 
-  rclone check "$_sb_src" "$_sb_cur" --one-way --fast-list --exclude "$MO_EXCLUDE" 2>> "$MO_RUN_ERR" || {
+  mo_verify "$_sb_src" "$_sb_cur" 2>> "$MO_RUN_ERR" || {
     MO_B_STEP="verify (size+md5)"
     return 1
   }
@@ -350,7 +394,12 @@ mo_run() {
     return 1
   }
   : > "$MO_RUN_ERR"
-  mo_rclone_env
+  mo_rclone_env || {
+    _r_why="could not derive the rclone crypt password"
+    mo_err "$_r_why — MinIO off-site copy NOT done"
+    mo_status_write error "$_r_why"
+    return 1
+  }
 
   MO_OBJECTS=0
   MO_BYTES=0
@@ -431,7 +480,10 @@ case "${1:-}" in
       exit 1
     fi
     mo_resolve_config
-    mo_rclone_env
+    mo_rclone_env || {
+      mo_err "could not derive the rclone crypt password"
+      exit 1
+    }
     exec rclone "$@"
     ;;
   *)

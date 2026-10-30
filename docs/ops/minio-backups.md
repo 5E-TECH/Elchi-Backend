@@ -49,8 +49,14 @@ yoki ilova (readwrite) kaliti ishlatilmaydi, shuning uchun MinIO root/ilova
 kalitlarini almashtirish bu zaxiraga ta'sir qilmaydi.
 
 **Shifrlash**: R2 ga TLS orqali, R2 at-rest AES-256 (DB nusxalari bilan bir
-xil daraja). Client-side (rclone crypt) shifrlash YO'Q — kerak bo'lsa kalitni
-VPS dan tashqarida (parol menejerida) saqlash sharti bilan qo'shiladi.
+xil daraja). Client-side shifrlash `OFFSITE_ENCRYPTION_KEY` bilan yoqiladi (sukut
+o'chiq, [db-backups.md §6.7](db-backups.md)): nusxa
+`r2:<R2_BUCKET>/encrypted/minio/elchi-files/{current,versions/<ts>}/` ga tushadi,
+sync `--checksum` o'rniga o'lcham + mtime bilan solishtiradi, `rclone check` o'rniga
+`rclone cryptcheck` (har run'da hamma obyektni MinIO'dan o'qiydi). Birinchi run hammasini
+qayta yuklaydi. Eski ochiq `minio/` prefiksi o'zi o'chmaydi: birinchi `state=ok` dan
+keyin qo'lda `mo purge r2:<R2_BUCKET>/minio`. Keyin `mo` buyruqlaridagi yo'llar
+`r2crypt:encrypted/minio/…` bo'ladi, wrapper `.env.production` dan kalitni oladi.
 
 **Kalitlar** (hech biri log/argv'ga chiqmaydi): cron wrapper Docker'ga
 `--env-file` bilan beradi — `.env.production` dan FAQAT `R2_*` va `MINIO_ENDPOINT/

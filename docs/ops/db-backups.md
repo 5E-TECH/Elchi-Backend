@@ -87,6 +87,7 @@ EMAS — u env_file'dan ustun turib, qiymatni jim bekor qiladi):
 | `R2_ENDPOINT` | — | ixtiyoriy: endpoint'ni to'liq berish (masalan EU jurisdiction bucket: `https://<id>.eu.r2.cloudflarestorage.com`) |
 | `OFFSITE_INTERVAL_SECONDS` | `3600` | R2 sinxronlash oralig'i (min 60) |
 | `OFFSITE_RETENTION_DAYS` | `30` | R2 dagi nusxa necha kun saqlanadi |
+| `OFFSITE_ENCRYPTION_KEY` | — | ≥ 32 belgi: nusxalarni client-side shifrlash (§6.7). Bo'sh = o'chiq, eski xulq |
 
 R2 kalitlaridan biri bo'sh (yoki `__REPLACE_WITH…__`) bo'lsa off-site o'chiq.
 
@@ -315,6 +316,35 @@ Lokal dumplar yo'q/buzilgan bo'lsa yoki yangi serverga ko'chilganda.
 - `.env.production` hamma app konteynerlariga `env_file` bo'lib beriladi —
   R2 kaliti ham ularning env'ida bo'ladi (POSTGRES paroli kabi). Token faqat
   bitta bucket'ga cheklangani — asosiy himoya.
-- Dumplar client-side shifrlanmaydi (R2 o'zi at-rest shifrlaydi), ichida
-  PII/pul ma'lumotlari — bucket public qilinmasin, token boshqa joyda
-  ishlatilmasin.
+- `OFFSITE_ENCRYPTION_KEY` bo'lmasa dumplar client-side shifrlanmaydi (R2 o'zi
+  at-rest shifrlaydi), ichida PII/pul ma'lumotlari — bucket public qilinmasin,
+  token boshqa joyda ishlatilmasin. Shifrlash: §6.7.
+
+### 6.7 Client-side shifrlash (6RaEn5cN, sukut o'chiq)
+
+`OFFSITE_ENCRYPTION_KEY` berilsa `backup-offsite` va `backup-minio-offsite` nusxalarni
+rclone `crypt` remote orqali yuklaydi: `r2:<bucket>/encrypted/{daily,pre-deploy,pre-migration}/<nom>.sql.gz.bin`
+va `encrypted/minio/…` (kontent shifrlangan, nomlar ochiq). Tekshiruv `rclone cryptcheck`.
+Kalit noto'g'ri (< 32 belgi) bo'lsa run xato bilan tugaydi, ochiq nusxaga qaytmaydi.
+
+**Yoqish** (Dilshod, serverda):
+
+1. `openssl rand -hex 32` — avval **parol menejeriga**: kalit yo'qolsa nusxalarni o'qib
+   bo'lmaydi, VPS bilan birga yo'qolsa ham.
+2. `.env.production` ga `OFFSITE_ENCRYPTION_KEY=<kalit>`, so'ng
+   `docker compose -f docker-compose.prod.yml up -d --no-deps --force-recreate backup-offsite`.
+3. MinIO cron nusxasini yangilash: `cp scripts/backup-minio-offsite.sh scripts/backup-minio-offsite-cron.sh ~/elchi-ops/`.
+4. Tekshirish: logda `-> r2crypt:encrypted`;
+   `$DC exec backup-offsite sh /scripts/backup-offsite.sh rclone lsl r2crypt:encrypted/daily`.
+5. Ochiq nusxalar: `daily/`, `pre-deploy/`, `pre-migration/` dagilari muddat bo'yicha o'chadi (yangi
+   shifrli kunlik nusxa bo'lgandagina); MinIO'ning ochiq `minio/` prefiksi — [minio-backups.md §2](minio-backups.md).
+
+**Tiklash:** §6.4 dagi yo'l, faqat manba `r2crypt:encrypted/daily/$F` (`.bin` siz nom). `$DC run … backup-offsite`
+o'rami kalitni `.env.production` dan oladi; rclone yuklashda shifrni ochadi va autentifikatsiya tegini
+tekshiradi. Repo yo'q joyda: `RCLONE_CONFIG_R2CRYPT_TYPE=crypt`,
+`RCLONE_CONFIG_R2CRYPT_REMOTE=r2:<bucket>`, `RCLONE_CONFIG_R2CRYPT_FILENAME_ENCRYPTION=off`,
+`RCLONE_CONFIG_R2CRYPT_DIRECTORY_NAME_ENCRYPTION=false`, `RCLONE_CONFIG_R2CRYPT_PASSWORD="$(rclone obscure -)"`
+(kalit stdin'dan).
+
+Haqiqiy `rclone/rclone:1.68.2` bilan lokal S3 (rclone serve s3) ustida sinalgan: DB nusxa, MinIO sync,
+versiya, prune, `restore-drill.sh`. R2'ning o'zida yoqilmagan.

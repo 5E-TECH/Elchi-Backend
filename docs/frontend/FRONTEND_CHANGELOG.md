@@ -22,6 +22,13 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+### 2026-10-31 — Ops: zaxira nusxalarni shifrlash (kalit bilan) va oylik tiklash mashqi (6RaEn5cN)
+
+Deploy: faqat skriptlar va workflow. Migratsiya **yo'q**, API kontrakti o'zgarmagan. Yangi env: `OFFSITE_ENCRYPTION_KEY`
+(sukut bo'sh, eski xulq), repo variable `RESTORE_DRILL_ENABLED` (sukut o'chiq).
+
+- [2026-10-31] 🟢 [infra] — off-site DB va MinIO nusxalari kalit berilsa client-side shifrlanadi. → FE'da ish yo'q.
+
 ### 2026-10-31 — Ops: deploy env preflight va readiness darvozasi, POSTGRES_PASSWORD validatori (AFiXurLH)
 
 Deploy: `deploy.yml` va `libs/common` o'zgargani uchun keyingi deploy BARCHA servislarni qayta build qiladi. Migratsiya
