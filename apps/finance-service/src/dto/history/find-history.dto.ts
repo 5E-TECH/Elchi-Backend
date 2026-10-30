@@ -1,5 +1,6 @@
 import { Cashbox_type, Operation_type, Source_type } from '@app/common';
 import {
+  IsBoolean,
   IsEnum,
   IsNumber,
   IsOptional,
@@ -13,6 +14,11 @@ export class FindHistoryDto {
   @IsOptional()
   @IsString()
   receipt_status?: string;
+
+  /** T3 — `receipt` blokini qo'shish (FAQAT gateway, SA/admin/menejer). */
+  @IsOptional()
+  @IsBoolean()
+  include_receipts?: boolean;
 
   @IsOptional()
   @IsString()

@@ -65,6 +65,7 @@ export * from './ai-text';
 export * from './ai';
 export * from './pii/mask-phones';
 export * from './pii/mask-payload';
+export * from './pii/mask-card-digits';
 export * from './time/tashkent-time';
 export * from './integration/status-catalog';
 export * from './integration/partner-money';

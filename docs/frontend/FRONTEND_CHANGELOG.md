@@ -257,6 +257,17 @@ qilinadigan uch operatsiyadan tashqari ortga mos.
   ≤ 366 kun, sukut — joriy oy. `counts.none` = `GET /finance/history?receipt_status=none` jami (shu davrda).
 - [2026-10-30] 🟢 [ai] — AI moliyaviy yordamchida yangi tool `get_receipt_checks` (shu xulosa; ism, rasm,
   karta yo'q).
+- [2026-10-30] 🟢 [finance] — T6 bilan **summasi tuzatilgan** kuryer to'lovining cheki yangi to'lov qatoriga
+  ko'chadi (`history_id`, `entered_amount` — yangi summa; AI o'qigan summa bilan holat qayta hisoblanadi, AI qayta
+  chaqirilmaydi). **Qaytarilgan** to'lov qatori «Chek yo'q» va xulosaga kirmaydi.
+- [2026-10-30] 🟢 [finance] — chek `ai` blokida karta raqami hech qachon chiqmaydi: ism / bank / sanada
+  (bo'sh joy, chiziqcha, `/`, `_`, vergul bilan guruhlangan bo'lsa ham) — `***`; karta raqamiga o'xshash
+  `reference` — `null` (12 raqamli RRN saqlanadi). → FE o'zgarishi shart emas.
+- [2026-10-30] 🟢 [finance] — AI'ga rasm 1568 px gacha kichraytirib yuboriladi. Buzilgan / juda katta fayl —
+  `ai_status: "unreadable"`, `ai.error_reason`: `image_decode_failed` / `too_large`.
+- [2026-10-30] 🟢 [finance] — `GET /finance/cashbox/my-cashbox` va `cashbox/user/:id/main` javobida `receipt`
+  bo'lmaydi (chek — tarix sahifasi va tafsilotda).
+
 ### 2026-10-30 — BOT-3b: chat qulfi DB ulanishini ushlamaydi, AI bot orqali fonda
 
 Deploy: **notification-service**. Migratsiya **`1716000000190`** (`notification_schema.telegram_chat_locks`,

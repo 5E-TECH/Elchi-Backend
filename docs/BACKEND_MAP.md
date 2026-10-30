@@ -706,6 +706,13 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
   (+ `PUBLIC_ERROR_CODES`). AI assistant tool `get_receipt_checks`. RMQ:
   `finance.receipt.{settings.get,settings.update,upload_check,create_draft,
   ai_result,reanalyze,get}`, `finance.receipt_checks.summary`.
+  History `receipt` blocks are FAIL CLOSED: finance attaches them only when
+  the gateway passes `include_receipts` (SA/admin/manager routes; never for
+  courier/market cashboxes or `my-cashbox`). T6 `correctAmount` moves the
+  receipt to the replacement legs in the same tx
+  (`carryOverForCorrection`); reversed legs (`notReversedSql`) are out of
+  «no receipt» and the summary. The gateway downsizes the photo (1568 px)
+  before `ai.finance.receipt_extract`.
 
 ### branch-service (`branch_schema`)
 - **Entities:** `branch` (`BranchType`, `BranchOwnership`), `branch_config`

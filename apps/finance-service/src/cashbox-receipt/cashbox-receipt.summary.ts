@@ -6,6 +6,7 @@ import {
   type CashboxReceiptKind,
 } from '@app/common';
 import {
+  notReversedSql,
   receiptStatusIdCondition,
   type ReceiptTables,
 } from './cashbox-receipt.views';
@@ -75,6 +76,7 @@ const round2 = (value: number) => Math.round(value * 100) / 100;
 function baseSql(tables: ReceiptTables, filter: ReceiptSummaryFilter) {
   const h = quote(tables.history);
   const r = quote(tables.receipts);
+  const c = quote(tables.cashbox);
   const none = receiptStatusIdCondition('hh."id"', 'none', tables);
   const params: unknown[] = [filter.start, filter.end];
   const where: string[] = [];
@@ -97,16 +99,21 @@ function baseSql(tables: ReceiptTables, filter: ReceiptSummaryFilter) {
           WHEN 'branch_to_main' THEN 'branch_to_hq' END) AS kind,
         COALESCE(r."branch_id",
           CASE WHEN r."id" IS NULL AND hh."source_type" = 'branch_to_main'
-            THEN hh."source_user_id" END) AS branch_id,
+            THEN hh."source_user_id" END,
+          -- Filial kassasidagi (menejer) cheksiz qo'lda chiqim.
+          CASE WHEN hc."cashbox_type" = 'branch' THEN hc."user_id" END)
+          AS branch_id,
         hh."expense_category_id" AS expense_category_id,
         hh."expense_category_name" AS expense_category_name,
         COALESCE(r."entered_amount", hh."amount") AS entered_amount,
         r."ai_difference" AS difference
       FROM ${h} hh
+      JOIN ${c} hc ON hc."id" = hh."cashbox_id"
       LEFT JOIN ${r} r ON r."history_id" = hh."id"
         AND r."is_deleted" = false AND r."state" = 'linked'
       WHERE hh."is_deleted" = false
         AND hh."createdAt" BETWEEN $1 AND $2
+        AND ${notReversedSql(h, 'hh')}
         AND (r."id" IS NOT NULL OR (${none.sql}))
     )
     `;

@@ -2,7 +2,11 @@ import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
   AI_MODEL_DEFAULTS,
+  CARD_MASK,
   ClaudeService,
+  hasCardLikeDigits,
+  maskCardLikeDigits,
+  maskCardLikeDigitsKeepingDates,
   type AiReceiptExtractRequest,
   type AiReceiptExtractResponse,
 } from '@app/common';
@@ -65,25 +69,45 @@ export const RECEIPT_EXTRACT_SCHEMA: Record<string, unknown> = Object.freeze({
 export const RECEIPT_EXTRACT_MAX_TOKENS = 384;
 const MEDIA_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
 
-/** Qisqa matn: uzun raqamlar (ehtimoliy PAN) maskalanadi, ≤ `max` belgi. */
+/**
+ * Referensda PAN shaklidagi (13–19 raqam) ketma-ketlik — referens rad etiladi
+ * (`null`): `***` li qiymat saqlansa, keyingi cheklarga soxta
+ * `duplicate_reference` beradi. 12 raqamli RRN (Uzcard/Humo) saqlanadi.
+ */
+export const RECEIPT_REFERENCE_PAN_MIN_DIGITS = 13;
+
+/**
+ * Qisqa matn (ism, bank): karta raqami / telefon — har qanday ajratgich bilan
+ * (`maskCardLikeDigits`), yaxlit 9+ raqam ham — `***`; ≤ `max` belgi.
+ */
 export function sanitizeText(value: unknown, max: number): string | null {
   if (typeof value !== 'string') return null;
-  const text = value
-    .replace(/\d{9,}/g, '***')
+  const text = maskCardLikeDigits(value)
+    .replace(/\d{9,}/g, CARD_MASK)
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, max);
   return text || null;
 }
 
-/** Referens: harf-raqam (PAN emas — 13+ raqamli ketma-ketlik maskalanadi). */
+/** Referens: harf-raqam; karta raqamiga o'xshash bo'lsa — `null` (niqobsiz ham, `***` ham saqlanmaydi). */
 export function sanitizeReference(value: unknown): string | null {
   if (typeof value !== 'string' && typeof value !== 'number') return null;
-  const text = String(value)
-    .replace(/\d{13,}/g, '***')
-    .replace(/[^\p{L}\p{N}\-_/#.]/gu, '')
-    .slice(0, 120);
-  return text && text !== '***' ? text : null;
+  const raw = String(value);
+  if (hasCardLikeDigits(raw, RECEIPT_REFERENCE_PAN_MIN_DIGITS)) return null;
+  const text = raw.replace(/[^\p{L}\p{N}\-_/#.]/gu, '').slice(0, 120);
+  // Filtr ajratgichlarni olib tashlagandan KEYIN ham PAN chiqmasin.
+  if (new RegExp(`\\d{${RECEIPT_REFERENCE_PAN_MIN_DIGITS},}`).test(text)) {
+    return null;
+  }
+  return text || null;
+}
+
+/** Chek sanasi: sana-vaqt saqlanadi, qolgan karta raqami niqoblanadi. */
+export function sanitizeReceiptDate(value: unknown): string | null {
+  return sanitizeDate(
+    typeof value === 'string' ? maskCardLikeDigitsKeepingDates(value) : value,
+  );
 }
 
 export function sanitizeCurrency(value: unknown): string | null {
@@ -152,7 +176,7 @@ export class ReceiptExtractService {
       ok: true,
       amount: sanitizeBalance(data.amount),
       currency: sanitizeCurrency(data.currency),
-      date: sanitizeDate(data.date),
+      date: sanitizeReceiptDate(data.date),
       recipient_name: sanitizeText(data.recipient_name, 120),
       recipient_card_last4: sanitizeLast4(data.recipient_card_last4),
       payer_name: sanitizeText(data.payer_name, 120),

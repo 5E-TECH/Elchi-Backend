@@ -1702,6 +1702,7 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
           cashbox.cashbox_type === Cashbox_type.FOR_COURIER
             ? await this.withPaymentAcks(rows)
             : rows,
+          dto.include_receipts === true ? 'brief' : 'none',
         );
 
         return this.successRes(
@@ -1779,6 +1780,7 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
           rows,
           (row) => row.cashbox?.cashbox_type === Cashbox_type.FOR_COURIER,
         ),
+        dto.include_receipts === true ? 'brief' : 'none',
       );
 
       return this.successRes(
@@ -2162,7 +2164,11 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
     },
   >(
     rows: T[],
-    receiptMode: 'brief' | 'full' = 'brief',
+    /**
+     * T3 — chek bloki. FAIL CLOSED: sukut `none` (kalit qo'shilmaydi); faqat
+     * gateway `include_receipts` bilan so'raganda (SA/admin/menejer yo'li).
+     */
+    receiptMode: 'brief' | 'full' | 'none' = 'none',
   ): Promise<Array<T & { correction: unknown; receipt?: unknown }>> {
     if (!Array.isArray(rows) || !rows.length) {
       return (rows ?? []) as Array<T & { correction: unknown }>;
@@ -2180,7 +2186,9 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
       );
       corrected = rows.map((row) => ({ ...row, correction: null }));
     }
-    return this.withReceipts(corrected, receiptMode);
+    return receiptMode === 'none'
+      ? corrected
+      : this.withReceipts(corrected, receiptMode);
   }
 
   /** T3 — chek jadvali / tarix / kassa yo'llari (TypeORM metadata). */
@@ -2457,6 +2465,7 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
       ]);
       const enrichedItems = await this.withCorrections(
         await this.enrichHistoryWithUsers(items),
+        dto.include_receipts === true ? 'brief' : 'none',
       );
 
       return this.successRes(
@@ -2485,7 +2494,7 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
 
   async findHistoryById(
     id: string,
-    options: { include_correctable?: boolean } = {},
+    options: { include_correctable?: boolean; include_receipts?: boolean } = {},
   ) {
     try {
       this.assertBigIntId(id, 'id');
@@ -2519,7 +2528,7 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
       }
       const [enrichedHistory] = await this.withCorrections(
         await this.enrichHistoryWithUsers([history]),
-        'full',
+        options.include_receipts === true ? 'full' : 'none',
       );
       // T6 — superadmin uchun: shu to'lovni qaytarish / tuzatish mumkinmi.
       const correctable = options.include_correctable
@@ -3718,6 +3727,7 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
     toDate?: string;
     sourceTypes?: string;
     source_types?: string;
+    include_receipts?: boolean;
   }) {
     try {
       const mainCashbox = await this.ensureMainCashbox();
@@ -3744,7 +3754,10 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         order: { createdAt: 'DESC' },
       });
       const { income, outcome } = this.calcIncomeOutcome(rows);
-      const cashboxHistory = await this.withCorrections(rows);
+      const cashboxHistory = await this.withCorrections(
+        rows,
+        filters?.include_receipts === true ? 'brief' : 'none',
+      );
       return this.successRes(
         { cashbox: mainCashbox, cashboxHistory, income, outcome },
         200,
@@ -3764,6 +3777,8 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
     history_source_types?: string;
     sourceTypes?: string;
     source_types?: string;
+    /** T3 — faqat gateway menejer/SA yo'lida (`my-cashbox` — hech qachon). */
+    include_receipts?: boolean;
   }) {
     try {
       this.assertBigIntId(data.id, 'id');
@@ -3829,7 +3844,12 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         cashbox.cashbox_type === Cashbox_type.FOR_MARKET;
       const [cashboxHistory, owners] = await Promise.all([
         this.enrichHistoryWithUsers(ackedHistory, { courierAck: false }).then(
-          (rows) => this.withCorrections(rows),
+          (rows) =>
+            this.withCorrections(
+              rows,
+              // Kuryer / market kassasida chek hech qachon (fail closed).
+              data.include_receipts === true && !ownerIsUser ? 'brief' : 'none',
+            ),
         ),
         ownerIsUser
           ? this.loadUsersByIds([String(cashbox.user_id)])

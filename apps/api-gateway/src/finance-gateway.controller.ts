@@ -121,6 +121,11 @@ import {
 } from './finance-receipt-projection';
 import { resolveFinancialActors } from './financial-balance/financial-balance.util';
 import {
+  AiImageDecodeError,
+  aiProcessedImageMaxBytes,
+  downscaleAiImage,
+} from './ai-order/ai-image-resize';
+import {
   buildFileLinkUrl,
   FILE_LINK_TTL_SECONDS,
   type OriginRequest,
@@ -316,6 +321,44 @@ const CARD_LEDGER_KIND_LABEL: Record<string, string> = {
 
 export const BRANCH_TO_MAIN_HQ_ONLY_MESSAGE =
   "Filial pulini HQ (superadmin yoki admin) o'zi qabul qiladi — menejer HQ'ga pul o'tkazmaydi";
+
+/**
+ * T3 — chek rasmi AI'ga KICHRAYTIRIB yuboriladi (ai-parse bilan bir xil:
+ * 1568 px, EXIF yo'q, JPEG/WebP q80 → odatda ≤ 1,5 MB). Telefon JPEG'i
+ * (4–5 MB) Anthropic rasm chegarasidan oshib doim `error` bo'lmasin va
+ * qayta tahlil urinishlarini yemasin. Natija baribir katta (sharp yo'q) —
+ * `too_large`, buzilgan fayl — `image_decode_failed` (ikkalasi `unreadable`,
+ * AI chaqirilmaydi).
+ */
+export async function prepareReceiptAiImage(
+  imageBase64: string,
+  mime: string,
+): Promise<
+  | { image_base64: string; media_type: AiReceiptMediaType }
+  | { reason: 'too_large' | 'image_decode_failed' }
+> {
+  const mediaType = (
+    mime === 'image/jpg' ? 'image/jpeg' : mime
+  ) as AiReceiptMediaType;
+  try {
+    const out = await downscaleAiImage(
+      Buffer.from(imageBase64, 'base64'),
+      mediaType,
+    );
+    if (out.buffer.length > aiProcessedImageMaxBytes()) {
+      return { reason: 'too_large' };
+    }
+    return {
+      image_base64: out.buffer.toString('base64'),
+      media_type: out.mediaType,
+    };
+  } catch (error) {
+    if (error instanceof AiImageDecodeError) {
+      return { reason: 'image_decode_failed' };
+    }
+    throw error;
+  }
+}
 
 @ApiTags('Finance')
 @Controller('finance')
@@ -1395,6 +1438,8 @@ export class FinanceGatewayController {
       fromDate?: string;
       toDate?: string;
     },
+    /** T3 — `receipt` bloki (faqat SA/admin/menejer; finance sukut — yo'q). */
+    includeReceipts = false,
   ): Promise<any[]> {
     if (!cashboxId) {
       return [];
@@ -1410,6 +1455,7 @@ export class FinanceGatewayController {
         // FE-PAY-04 / C2: sana filtri (Toshkent kuni — finance'da).
         from_date: query.fromDate,
         to_date: query.toDate,
+        include_receipts: includeReceipts,
       },
     );
     const histories = historyResponse?.data?.items ?? [];
@@ -1928,6 +1974,8 @@ export class FinanceGatewayController {
         ...requestQuery,
         history_source_types:
           requestQuery.sourceTypes ?? requestQuery.source_types,
+        // T3 — chek faqat SA/admin/menejerga (finance sukut — yo'q).
+        include_receipts: this.canSeeReceiptsOf(req?.user),
       },
     );
 
@@ -1952,6 +2000,7 @@ export class FinanceGatewayController {
           cashboxHistory: await this.loadCashboxHistory(
             String(cashbox?.id ?? ''),
             query,
+            this.canSeeReceiptsOf(req?.user),
           ),
         })),
       );
@@ -2045,6 +2094,7 @@ export class FinanceGatewayController {
       response.data.cashboxHistory = await this.loadCashboxHistory(
         String(response.data.id),
         query,
+        this.canSeeReceiptsOf(req?.user),
       );
       if (
         this.isManager(req?.user) &&
@@ -2117,11 +2167,19 @@ export class FinanceGatewayController {
       }
       return this.send(
         { cmd: 'finance.cashbox.user_by_id' },
-        { id: branchId, cashbox_type: Cashbox_type.BRANCH, ...query },
+        {
+          id: branchId,
+          cashbox_type: Cashbox_type.BRANCH,
+          ...query,
+          include_receipts: true,
+        },
       );
     }
 
-    const response = await this.send({ cmd: 'finance.cashbox.main' }, query);
+    const response = await this.send(
+      { cmd: 'finance.cashbox.main' },
+      { ...query, include_receipts: true },
+    );
     const histories = await this.attachCreatedByUsers(
       response?.data?.cashboxHistory ?? [],
     );
@@ -2170,6 +2228,8 @@ export class FinanceGatewayController {
   @Get('cashbox/user/:id/main')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.MANAGER)
+  // T3 — chek bloki finance'dan so'ralmaydi; himoya qatlami sifatida.
+  @UseInterceptors(ReceiptProjectionInterceptor)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Get cashbox by user ID with date filters' })
   @ApiParam({ name: 'id', description: 'User ID (bigint string)' })
@@ -2221,6 +2281,8 @@ export class FinanceGatewayController {
   @Get('cashbox/my-cashbox')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(RoleEnum.COURIER, RoleEnum.MARKET, RoleEnum.MANAGER)
+  // T3 — chek bloki finance'dan so'ralmaydi; himoya qatlami sifatida.
+  @UseInterceptors(ReceiptProjectionInterceptor)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Get my cashbox (courier/market)' })
   async myCashbox(
@@ -3099,18 +3161,22 @@ export class FinanceGatewayController {
         typeof file?.data?.body_base64 === 'string'
           ? file.data.body_base64
           : '';
-      if (!image) {
+      const prepared = image
+        ? await prepareReceiptAiImage(image, input.mime)
+        : null;
+      if (!prepared) {
         result = { ok: false, reason: 'network' };
+      } else if ('reason' in prepared) {
+        // Qayta urinish foyda bermaydi — AI chaqirilmaydi (`unreadable`).
+        result = { ok: false, reason: prepared.reason };
       } else if (this.aiClient) {
         result = await firstValueFrom(
           this.aiClient
             .send<AiReceiptExtractResponse>(
               { cmd: 'ai.finance.receipt_extract' },
               {
-                image_base64: image,
-                media_type: (input.mime === 'image/jpg'
-                  ? 'image/jpeg'
-                  : input.mime) as AiReceiptMediaType,
+                image_base64: prepared.image_base64,
+                media_type: prepared.media_type,
                 receipt_id: input.receipt_id,
                 requester: {
                   id: String(input.user?.sub ?? ''),
@@ -3257,6 +3323,7 @@ export class FinanceGatewayController {
             ...query,
             user_id: String(req.user.sub),
             cashbox_type: Cashbox_type.FOR_MARKET,
+            include_receipts: false,
           },
         ),
       );
@@ -3273,6 +3340,7 @@ export class FinanceGatewayController {
             ...query,
             user_id: String(req.user.sub),
             cashbox_type: Cashbox_type.FOR_COURIER,
+            include_receipts: false,
           },
         ),
       );
@@ -3300,11 +3368,13 @@ export class FinanceGatewayController {
               cashbox_type: Cashbox_type.BRANCH,
               source_type: Source_type.BRANCH_TO_MAIN,
               operation_type: Operation_type.EXPENSE,
+              include_receipts: true,
             }
           : {
               ...query,
               user_id: branchId,
               cashbox_type: Cashbox_type.BRANCH,
+              include_receipts: true,
             },
       );
 
@@ -3370,6 +3440,7 @@ export class FinanceGatewayController {
             ...query,
             user_id: branchId,
             cashbox_type: Cashbox_type.BRANCH,
+            include_receipts: false,
           },
         ),
       );
@@ -3385,9 +3456,12 @@ export class FinanceGatewayController {
     return this.attachCreatedByUsersToHistoryResponse(
       await this.send(
         { cmd: 'finance.history.find_all' },
-        hasCashboxSelector
-          ? query
-          : { ...query, cashbox_type: Cashbox_type.MAIN },
+        {
+          ...(hasCashboxSelector
+            ? query
+            : { ...query, cashbox_type: Cashbox_type.MAIN }),
+          include_receipts: this.canSeeReceiptsOf(req?.user),
+        },
       ),
     );
   }
@@ -3575,6 +3649,8 @@ export class FinanceGatewayController {
         id,
         // T6 — `correctable` bloki faqat superadminga (amal faqat unda).
         include_correctable: this.hasRole(req?.user, RoleEnum.SUPERADMIN),
+        // T3 — chek faqat SA/admin/menejerga (finance sukut — yo'q).
+        include_receipts: this.canSeeReceiptsOf(req?.user),
       },
     );
 
@@ -4704,6 +4780,11 @@ export class FinanceGatewayController {
       );
     }
     return { statusCode: 200, message: 'Receipt', data: projected };
+  }
+
+  /** T3 — finance'dan `receipt` blokini so'rash (SA/admin/menejer). */
+  private canSeeReceiptsOf(user: JwtUser | undefined): boolean {
+    return !!user && canSeeReceipts(this.getUserRoles(user));
   }
 
   /** Menejer — o'z filiali (JWT / branch_users); superadmin/admin — doirasiz. */

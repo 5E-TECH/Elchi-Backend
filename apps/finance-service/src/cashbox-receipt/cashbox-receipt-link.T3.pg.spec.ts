@@ -20,6 +20,8 @@ import { FinancialBalanceHistory } from '../entities/financial-balance-history.e
 import { Shift } from '../entities/shift.entity';
 import { FinanceNotificationService } from '../notification/finance-notification.service';
 import { FinanceRealtimeService } from '../realtime/finance-realtime.service';
+import { PaymentCorrection } from '../entities/payment-correction.entity';
+import { PaymentCorrectionService } from '../payment-correction/payment-correction.service';
 import { CashboxReceiptService } from './cashbox-receipt.service';
 
 /**
@@ -48,6 +50,7 @@ describePg('T3-2 chekni bog`lash — haqiqiy Postgres', () => {
   let db: DataSource;
   let finance: FinanceServiceService;
   let receipts: CashboxReceiptService;
+  let corrections: PaymentCorrectionService;
   let categoryId = '';
   const outbox = { enqueue: jest.fn().mockResolvedValue(undefined) };
 
@@ -66,6 +69,7 @@ describePg('T3-2 chekni bog`lash — haqiqiy Postgres', () => {
       FinanceSetting,
       Shift,
       ActivityLog,
+      PaymentCorrection,
     ];
     const bootstrap = new DataSource({
       type: 'postgres',
@@ -134,6 +138,16 @@ describePg('T3-2 chekni bog`lash — haqiqiy Postgres', () => {
     jest
       .spyOn(finance as never, 'scheduleMarketPaymentFollowUp')
       .mockResolvedValue(undefined as never);
+    corrections = new PaymentCorrectionService(
+      db,
+      finance,
+      activityLog,
+      outbox as never,
+      identityClient as never,
+      new FinanceNotificationService(outbox as never),
+      new FinanceRealtimeService(outbox as never),
+      receipts,
+    );
   }, 60_000);
 
   afterAll(async () => {
@@ -151,7 +165,8 @@ describePg('T3-2 chekni bog`lash — haqiqiy Postgres', () => {
       `TRUNCATE finance_schema.cashbox_history, finance_schema.cashboxes,
         finance_schema.cashbox_receipts, finance_schema.finance_settings,
         finance_schema.cashbox_cards, finance_schema.cashbox_expense_categories,
-        finance_schema.financial_balance_history, finance_schema.shifts
+        finance_schema.financial_balance_history, finance_schema.shifts,
+        finance_schema.payment_corrections
         RESTART IDENTITY CASCADE`,
     );
     for (const [user_id, cashbox_type, cash, card] of [
@@ -474,6 +489,7 @@ describePg('T3-2 chekni bog`lash — haqiqiy Postgres', () => {
     const list = (await finance.findAllHistory({
       page: 0,
       limit: 0,
+      include_receipts: true,
     })) as any;
     const withReceipt = list.data.items.filter((item: any) => item.receipt);
     expect(withReceipt).toHaveLength(2);
@@ -505,9 +521,9 @@ describePg('T3-2 chekni bog`lash — haqiqiy Postgres', () => {
   it('⭐ /history/:id — to`liq receipt (file_key, uploaded_by, ai_stale, can_reanalyze)', async () => {
     const receiptId = await upload('manual_expense');
     const res = await spend({ receipt_id: receiptId });
-    const detail = (await finance.findHistoryById(
-      String(res.data.history.id),
-    )) as any;
+    const detail = (await finance.findHistoryById(String(res.data.history.id), {
+      include_receipts: true,
+    })) as any;
     expect(detail.data.receipt).toMatchObject({
       id: receiptId,
       kind: 'manual_expense',
@@ -558,6 +574,7 @@ describePg('T3-2 chekni bog`lash — haqiqiy Postgres', () => {
         page: 0,
         limit: 0,
         receipt_status,
+        include_receipts: true,
       }) as Promise<any>;
 
     const pending = await find('pending');
@@ -659,7 +676,9 @@ describePg('T3-2 chekni bog`lash — haqiqiy Postgres', () => {
     expect(logs).toHaveLength(1);
     expect(JSON.stringify(logs[0])).not.toMatch(/Ijara|Kapitalbank|TX-/);
 
-    const detail = (await finance.findHistoryById(historyId)) as any;
+    const detail = (await finance.findHistoryById(historyId, {
+      include_receipts: true,
+    })) as any;
     expect(detail.data.receipt).toMatchObject({
       ai_status: 'mismatch',
       can_reanalyze: true,
@@ -802,7 +821,9 @@ describePg('T3-2 chekni bog`lash — haqiqiy Postgres', () => {
           SET ai_requested_at = now() - interval '4 minutes' WHERE id = $1`,
       [receiptId],
     );
-    const detail = (await finance.findHistoryById(historyId)) as any;
+    const detail = (await finance.findHistoryById(historyId, {
+      include_receipts: true,
+    })) as any;
     expect(detail.data.receipt).toMatchObject({
       ai_status: 'pending',
       ai_stale: true,
@@ -924,5 +945,264 @@ describePg('T3-2 chekni bog`lash — haqiqiy Postgres', () => {
         statusCode: 400,
       });
     }
+  });
+
+  // ───────────────────────── #596 ko'rib chiqish ─────────────────────────
+
+  const courierLegs = async (transferId: string) => {
+    const legs = await db.getRepository(CashboxHistory).find({
+      where: { transfer_id: transferId },
+      relations: ['cashbox'],
+    });
+    return {
+      income: legs.find((l) => l.cashbox.cashbox_type === Cashbox_type.MAIN)!,
+      expense: legs.find(
+        (l) => l.cashbox.cashbox_type === Cashbox_type.FOR_COURIER,
+      )!,
+    };
+  };
+
+  const noneTotal = async () =>
+    (
+      (await finance.findAllHistory({
+        page: 0,
+        limit: 0,
+        receipt_status: 'none',
+        include_receipts: true,
+      })) as any
+    ).data.counts.all as number;
+
+  it('⭐ fail closed: include_receipts siz — receipt kaliti yo`q; kuryer kassasida (my-cashbox) hech qachon', async () => {
+    const receiptId = await upload('courier_to_hq');
+    await payCourier({ receipt_id: receiptId });
+    const plain = (await finance.findAllHistory({ page: 0, limit: 0 })) as any;
+    expect(plain.data.items.length).toBeGreaterThan(0);
+    for (const item of plain.data.items) {
+      expect(item).not.toHaveProperty('receipt');
+    }
+    const mine = (await finance.myCashbox({
+      user_id: '301',
+      roles: ['courier'],
+    })) as any;
+    expect(mine.data.cashboxHistory.length).toBeGreaterThan(0);
+    expect(JSON.stringify(mine.data)).not.toContain('"receipt"');
+    const byId = (await finance.getCashboxByUserId({
+      id: '301',
+      cashbox_type: Cashbox_type.FOR_COURIER,
+      include_receipts: true,
+    })) as any;
+    expect(JSON.stringify(byId.data)).not.toContain('"receipt"');
+  });
+
+  it('⭐ T6 summa tuzatildi: chek yangi oyoqqa ko`chadi, holat yangi summa bilan; none ga tushmaydi', async () => {
+    const receiptId = await upload('courier_to_hq');
+    const res = await payCourier({ receipt_id: receiptId });
+    const requestId = String(res.data.receipt.ai_request_id);
+    await receipts.applyAiResult({
+      receipt_id: receiptId,
+      ai_request_id: requestId,
+      result: aiOk({ amount: 95_000 }),
+    });
+    expect((await receiptRow(receiptId)).ai_status).toBe('mismatch');
+    const before = await summary();
+    expect(before.data.counts).toMatchObject({ mismatch: 1, none: 0 });
+
+    const original = await courierLegs(res.data.transfer_id);
+    const fixed = (await corrections.correctAmount({
+      history_id: String(original.income.id),
+      new_amount: 95_000,
+      reason: 'Summa noto`g`ri yozilgan',
+      idempotency_key: randomUUID(),
+      requester_id: '1',
+      requester_roles: SA,
+    })) as any;
+    expect(fixed.statusCode).toBe(201);
+    const moved = await receiptRow(receiptId);
+    const newMain = await db
+      .getRepository(CashboxHistory)
+      .findOneByOrFail({ id: String(moved.history_id) });
+    expect(newMain.transfer_id).not.toBe(res.data.transfer_id);
+    const replacement = await courierLegs(String(newMain.transfer_id));
+    expect(moved).toMatchObject({
+      state: 'linked',
+      history_id: String(replacement.income.id),
+      counter_history_id: String(replacement.expense.id),
+      entered_amount: 95_000,
+      ai_status: 'match',
+      ai_difference: 0,
+    });
+    expect(Number(replacement.income.amount)).toBe(95_000);
+    const after = await summary();
+    expect(after.data.counts).toMatchObject({
+      match: 1,
+      mismatch: 0,
+      none: 0,
+    });
+    expect(after.data.total).toBe(1);
+    expect(after.data.mismatch_total).toBe(0);
+    expect(await noneTotal()).toBe(0);
+  });
+
+  it('T6 qaytarildi (cheksiz click) — qaytarilgan oyoq none dan chiqadi', async () => {
+    await setSettings({ hq_transfer: { photo_required: false } });
+    const res = await payCourier();
+    expect(await noneTotal()).toBe(1);
+    const legs = await courierLegs(res.data.transfer_id);
+    const reversed = (await corrections.reverse({
+      history_id: String(legs.income.id),
+      reason: "Xato kiritilgan to'lov",
+      idempotency_key: randomUUID(),
+      requester_id: '1',
+      requester_roles: SA,
+    })) as any;
+    expect(reversed.statusCode).toBe(201);
+    expect(await noneTotal()).toBe(0);
+    expect((await summary()).data.counts.none).toBe(0);
+  });
+
+  it('muddati o`tgan qoralama — qulfsiz rad (RECEIPT_NOT_FOUND), pul o`zgarmaydi', async () => {
+    const receiptId = await upload('manual_expense');
+    await db.query(
+      `UPDATE finance_schema.cashbox_receipts
+          SET uploaded_at = now() - interval '25 hours' WHERE id = $1`,
+      [receiptId],
+    );
+    const before = await mainBalance();
+    await expect(
+      rpcError(spend({ receipt_id: receiptId })),
+    ).resolves.toMatchObject({ statusCode: 400, code: 'RECEIPT_NOT_FOUND' });
+    expect(await mainBalance()).toBe(before);
+  });
+
+  it('xulosa by_branch: menejerning cheksiz qo`lda chiqimi filial kassasidan', async () => {
+    await setSettings({ manual_expense: { photo_required: false } });
+    await spend({
+      user_id: '15',
+      created_by: '31',
+      cashbox_type: Cashbox_type.BRANCH,
+    });
+    const res = await summary();
+    expect(res.data.counts.none).toBe(1);
+    expect(res.data.by_branch).toEqual([
+      { branch_id: '15', counts: expect.objectContaining({ none: 1 }) },
+    ]);
+  });
+
+  it('duplicate_photo — faqat BIRIKTIRILGAN cheklar; shu rasmli qoralama sanalmaydi', async () => {
+    // upload() har doim bir xil sha256 — qoralama qoladi.
+    await upload('manual_expense');
+    const first = await linkedReceipt(150_000);
+    await receipts.applyAiResult({
+      receipt_id: first.receiptId,
+      ai_request_id: first.requestId,
+      result: aiOk(),
+    });
+    expect((await receiptRow(first.receiptId)).ai_flags).toEqual([]);
+  });
+
+  // ───────────────────────── #598 ko'rib chiqish ─────────────────────────
+
+  const reverseCourier = async (transferId: string) => {
+    const legs = await courierLegs(transferId);
+    const res = (await corrections.reverse({
+      history_id: String(legs.income.id),
+      reason: "Xato kiritilgan to'lov",
+      idempotency_key: randomUUID(),
+      requester_id: '1',
+      requester_roles: SA,
+    })) as any;
+    expect(res.statusCode).toBe(201);
+  };
+
+  const historyCount = async (receipt_status: string) =>
+    (
+      (await finance.findAllHistory({
+        page: 0,
+        limit: 0,
+        receipt_status,
+        include_receipts: true,
+      })) as any
+    ).data.counts.all as number;
+
+  it('⭐ mismatch to`lov T6 bilan qaytarildi — summary.mismatch = tarix filtri (0)', async () => {
+    const receiptId = await upload('courier_to_hq');
+    const res = await payCourier({ receipt_id: receiptId });
+    await receipts.applyAiResult({
+      receipt_id: receiptId,
+      ai_request_id: String(res.data.receipt.ai_request_id),
+      result: aiOk({ amount: 95_000 }),
+    });
+    expect(await historyCount('mismatch')).toBe(2);
+    await reverseCourier(res.data.transfer_id);
+    const sum = await summary();
+    expect(sum.data.counts.mismatch).toBe(0);
+    expect(await historyCount('mismatch')).toBe(sum.data.counts.mismatch);
+  });
+
+  it('⭐ qaytarilgan to`lovdagi chek — shu skrinshot bilan qayta kiritish duplicate_photo / duplicate_reference EMAS', async () => {
+    const first = await upload('courier_to_hq');
+    const res = await payCourier({ receipt_id: first });
+    await receipts.applyAiResult({
+      receipt_id: first,
+      ai_request_id: String(res.data.receipt.ai_request_id),
+      result: aiOk({ amount: 90_000, reference: 'RRN430512345678' }),
+    });
+    await reverseCourier(res.data.transfer_id);
+    // upload() — o'sha sha256 (o'sha rasm).
+    const again = await upload('courier_to_hq');
+    const res2 = await payCourier({ receipt_id: again });
+    await receipts.applyAiResult({
+      receipt_id: again,
+      ai_request_id: String(res2.data.receipt.ai_request_id),
+      result: aiOk({ amount: 90_000, reference: 'RRN430512345678' }),
+    });
+    expect((await receiptRow(again)).ai_flags).toEqual([]);
+  });
+
+  it('niqoblangan (`*`) referens solishtirilmaydi — soxta duplicate_reference yo`q', async () => {
+    const a = await linkedReceipt(150_000);
+    await receipts.applyAiResult({
+      receipt_id: a.receiptId,
+      ai_request_id: a.requestId,
+      result: aiOk({ reference: 'TX***' }),
+    });
+    await db.query(
+      `UPDATE finance_schema.cashbox_receipts SET file_sha256 = $2 WHERE id = $1`,
+      [a.receiptId, 'c'.repeat(64)],
+    );
+    const b = await linkedReceipt(150_000);
+    await receipts.applyAiResult({
+      receipt_id: b.receiptId,
+      ai_request_id: b.requestId,
+      result: aiOk({ reference: 'TX***' }),
+    });
+    expect((await receiptRow(b.receiptId)).ai_flags).toEqual([]);
+  });
+
+  it('⭐ NOWAIT: chek boshqa tranzaksiyada qulflangan — spend darhol 409 RECEIPT_ALREADY_USED, MAIN o`zgarmaydi', async () => {
+    const receiptId = await upload('manual_expense');
+    const before = await mainBalance();
+    const holder = db.createQueryRunner();
+    await holder.connect();
+    await holder.startTransaction();
+    try {
+      await holder.query(
+        `SELECT id FROM finance_schema.cashbox_receipts WHERE id = $1 FOR UPDATE`,
+        [receiptId],
+      );
+      const started = Date.now();
+      await expect(
+        rpcError(spend({ receipt_id: receiptId })),
+      ).resolves.toMatchObject({
+        statusCode: 409,
+        code: 'RECEIPT_ALREADY_USED',
+      });
+      expect(Date.now() - started).toBeLessThan(5_000);
+    } finally {
+      await holder.rollbackTransaction();
+      await holder.release();
+    }
+    expect(await mainBalance()).toBe(before);
+    expect((await receiptRow(receiptId)).state).toBe('draft');
   });
 });

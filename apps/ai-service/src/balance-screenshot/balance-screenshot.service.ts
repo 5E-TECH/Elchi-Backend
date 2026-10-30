@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import {
   AI_MODEL_DEFAULTS,
   ClaudeService,
+  maskCardLikeDigitsKeepingDates,
   type AiBalanceScreenshotRequest,
   type AiBalanceScreenshotResponse,
 } from '@app/common';
@@ -64,8 +65,9 @@ export function sanitizeConfidence(value: unknown): number | null {
 
 export function sanitizeDate(value: unknown): string | null {
   if (typeof value !== 'string') return null;
-  // Sana matnidagi uzun raqamlar (ehtimoliy PAN) maskalanadi.
-  const text = value
+  // Sana matnidagi karta raqami (har qanday ajratgich bilan) va uzun
+  // raqamlar maskalanadi; sana-vaqtning o'zi saqlanadi.
+  const text = maskCardLikeDigitsKeepingDates(value)
     .replace(/\d{9,}/g, '***')
     .trim()
     .slice(0, 40);

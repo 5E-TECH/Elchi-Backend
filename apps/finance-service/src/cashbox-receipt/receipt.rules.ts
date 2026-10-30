@@ -5,7 +5,8 @@ import type { CashboxReceiptAiStatus } from '@app/common';
  * (DB yo'q) — unit test bilan qotirilgan.
  *
  * HOLAT:
- *  - AI xatosi: `refused | invalid_json | truncated` → `unreadable`
+ *  - AI xatosi: `refused | invalid_json | truncated | too_large |
+ *    image_decode_failed` → `unreadable`
  *    (rasm o'qilmaydi), boshqasi (tarmoq, timeout, limit, o'chiq) → `error`;
  *  - summa yo'q yoki ishonch < 0,5 → `unreadable`;
  *  - `difference = o'qilgan − kiritilgan`; |difference| ≤ 1 so'm va valyuta
@@ -17,7 +18,15 @@ export const RECEIPT_AI_MIN_CONFIDENCE = 0.5;
 export const RECEIPT_MATCH_TOLERANCE = 1;
 export const RECEIPT_DATE_FAR_DAYS = 3;
 export const RECEIPT_DUPLICATE_REFERENCE_DAYS = 90;
-const UNREADABLE_REASONS = new Set(['refused', 'invalid_json', 'truncated']);
+const UNREADABLE_REASONS = new Set([
+  'refused',
+  'invalid_json',
+  'truncated',
+  // Gateway rasmni AI'ga tayyorlay olmadi (kichraytirilgandan keyin ham katta
+  // yoki buzilgan fayl) — qayta urinish foyda bermaydi.
+  'too_large',
+  'image_decode_failed',
+]);
 
 export type ReceiptAiFlag =
   'duplicate_photo' | 'duplicate_reference' | 'date_far' | 'card_mismatch';
