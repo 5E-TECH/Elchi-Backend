@@ -14,6 +14,8 @@ import { APP_GUARD } from '@nestjs/core';
 import { JwtStrategy } from './auth/jwt.strategy';
 import { PasswordChangeGuard } from './auth/password-change.guard';
 import { SessionRevocationService } from './auth/session-revocation.service';
+import { TelegramTokenStateService } from './auth/telegram-token-state.service';
+import { TelegramScanScopeGuard } from './auth/telegram-scan-scope.guard';
 import { LogistRegionScopeService } from './auth/logist-scope';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
 import { RolesGuard } from './auth/roles.guard';
@@ -195,6 +197,7 @@ import { AI_IMAGE_STORE, AiImageStore } from '@app/common/ai/ai-image-store';
     // (Elchi Pochta #3) yopilgan sessiya tokenini darhol rad etish keshi —
     // JwtStrategy va auth revoke/logout endpointlari ishlatadi.
     SessionRevocationService,
+    TelegramTokenStateService,
     JwtStrategy,
     JwtAuthGuard,
     RolesGuard,
@@ -232,6 +235,9 @@ import { AI_IMAGE_STORE, AiImageStore } from '@app/common/ai/ai-image-store';
     // (NDmZMzCP) `pwd_change` claim'li token — faqat parol almashtirish
     // oqimi (`PASSWORD_CHANGE_GATE=on` bo'lganda). JwtAuthGuard'dan KEYIN.
     { provide: APP_GUARD, useClass: PasswordChangeGuard },
+    // (BOT-2 #2b) `scope: 'tg_scan'` (Telegram Mini App) tokeni — faqat skan
+    // oqimi. JwtAuthGuard'dan KEYIN.
+    { provide: APP_GUARD, useClass: TelegramScanScopeGuard },
   ],
 })
 export class ApiGatewayModule {}

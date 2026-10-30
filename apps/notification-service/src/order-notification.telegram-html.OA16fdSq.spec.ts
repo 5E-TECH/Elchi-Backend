@@ -179,14 +179,14 @@ describe('OA16fdSq TC8 — Telegram kanali: market guruhiga parse_mode HTML bila
     });
     expect(call.plain).toContain('❌ Buyurtma bekor qilindi');
     expect(call.plain).toContain('Mijoz: Ali Valiyev');
-    // Qayta urinish (429/5xx) ham HTML bilan ketadi — outbox payload'ida.
+    // (BOT-2 #4) Yuborilgach outbox qatorida matn (mijoz PII) qolmaydi.
     expect(chain.outboxRows).toEqual([
       expect.objectContaining({
         chat_id: CANCEL_GROUP,
         method: 'sendMessage',
         status: 'sent',
         source: 'notification.send',
-        payload: { text: payload.telegram!.text, parse_mode: 'HTML' },
+        payload: {},
       }),
     ]);
     expect(res.data.by_channel.telegram).toBe(1);

@@ -311,7 +311,18 @@ const migration = new TelegramBotCore1716000000120();
           VALUES ('elchi', '1', '{}', 'sent', now() - interval '4 days'),
                  ('elchi', '2', '{}', 'sent', now()),
                  ('elchi', '3', '{}', 'dead', now() - interval '31 days'),
-                 ('elchi', '4', '{}', 'pending', now() - interval '40 days')`);
+                 ('elchi', '4', '{}', 'pending', now() - interval '40 days'),
+                 ('elchi', '5', '{}', 'dead', now() - interval '8 days'),
+                 ('elchi', '6', '{}', 'dead', now() - interval '6 days')`);
+        // (BOT-2 #4) bog'lash kodlari — 30 kundan eskisi o'chadi.
+        await db.query(`
+          CREATE TABLE IF NOT EXISTS notification_schema.telegram_link_tokens (
+            "token_hash" varchar(64) PRIMARY KEY,
+            "created_at" timestamptz NOT NULL DEFAULT now()
+          )`);
+        await db.query(`
+          INSERT INTO notification_schema.telegram_link_tokens (token_hash, created_at)
+          VALUES ('old', now() - interval '31 days'), ('new', now() - interval '29 days')`);
 
         const result = await new BotMaintenanceService(db).prune();
 
@@ -323,8 +334,14 @@ const migration = new TelegramBotCore1716000000120();
         const outbox: Array<{ chat_id: string }> = await db.query(
           `SELECT chat_id FROM notification_schema.telegram_outbox ORDER BY chat_id`,
         );
-        // pending (hali yuborilmagan) HECH QACHON o'chmaydi.
-        expect(outbox.map((r) => r.chat_id)).toEqual(['2', '4']);
+        // pending (hali yuborilmagan) HECH QACHON o'chmaydi; BOT-2: dead —
+        // 7 kundan keyin.
+        expect(outbox.map((r) => r.chat_id)).toEqual(['2', '4', '6']);
+        const tokens: Array<{ token_hash: string }> = await db.query(
+          `SELECT token_hash FROM notification_schema.telegram_link_tokens`,
+        );
+        expect(tokens.map((r) => r.token_hash)).toEqual(['new']);
+        expect(result.linkTokens).toBe(1);
       });
     });
 
@@ -374,6 +391,8 @@ const migration = new TelegramBotCore1716000000120();
           [first.id],
         );
         expect(row.status).toBe('sent');
+        // (BOT-2 #4) yuborilgan xabar matni bazada qolmaydi.
+        expect(row.payload).toEqual({});
         expect(fetchMock).toHaveBeenCalledTimes(2);
       });
     });

@@ -1,4 +1,8 @@
 import { Logger } from '@nestjs/common';
+import {
+  BOT_PASSWORD_CHANGE_TEXT,
+  BotPasswordChangeRequiredError,
+} from '../bot-gateway.client';
 import { CHAT_QUEUE_FULL_TEXT } from '../bot-router.service';
 import {
   callbackUpdate,
@@ -521,5 +525,56 @@ describe('e7KhaeOO — kimga ishlaydi', () => {
         preview(0, { total_price: null, issues: ['price_missing'] }) as never,
       ),
     ).toBe(false);
+  });
+});
+
+describe('BOT-2 — parol almashtirish shart (AI qoralamasi tugmasiz qotmaydi)', () => {
+  const lastEdit = (ctx: ReturnType<typeof makeRouter>) =>
+    (
+      ctx.transport.editMessage.mock.calls.at(-1) as unknown as [
+        string,
+        string,
+        { text: string },
+      ]
+    )[2].text;
+
+  it('⭐ ai-parse → «⏳» ko‘rsatma + «🔁 Qayta urinish» ga almashadi, ko‘rsatma bir marta', async () => {
+    const { ctx } = setup({
+      parse: () => Promise.reject(new BotPasswordChangeRequiredError()),
+    });
+    await send(ctx, ORDER_TEXT);
+    expect(lastEdit(ctx)).toBe(BOT_PASSWORD_CHANGE_TEXT);
+    expect(Object.keys(editButtons(ctx))).toContain('🔁 Qayta urinish');
+    expect(sentTexts(ctx)).not.toContain(BOT_PASSWORD_CHANGE_TEXT);
+    const [draft] = [...ctx.aiDrafts.rows.values()];
+    expect(draft.status).toBe('failed');
+  });
+
+  it('⭐ ai-confirm → «Yaratilmoqda» o‘rniga ko‘rsatma + preview tugmalari; «✅ Yaratish» qayta ishlaydi', async () => {
+    let blocked = true;
+    const { ctx, calls } = setup({
+      confirm: () =>
+        blocked
+          ? Promise.reject(new BotPasswordChangeRequiredError())
+          : Promise.resolve({
+              status: 200,
+              body: {
+                data: { results: [{ index: 0, ok: true, order_id: '81' }] },
+              },
+            }),
+    });
+    await send(ctx, ORDER_TEXT);
+    await press(ctx, editButtons(ctx)['✅ Yaratish']);
+    expect(lastEdit(ctx)).toContain(BOT_PASSWORD_CHANGE_TEXT);
+    const buttons = editButtons(ctx);
+    expect(Object.keys(buttons)).toContain('✅ Yaratish');
+    const [draft] = [...ctx.aiDrafts.rows.values()];
+    expect(draft.status).toBe('preview');
+    blocked = false;
+    await press(ctx, buttons['✅ Yaratish']);
+    expect(calls.filter((c) => c.path === '/orders/ai-confirm')).toHaveLength(
+      2,
+    );
+    expect(draft.status).toBe('created');
   });
 });

@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import type { TelegramBotAction } from '../../entities/telegram-bot-action.entity';
-import { BotGatewayClient } from '../bot-gateway.client';
+import { BotGatewayClient, rethrowPasswordChange } from '../bot-gateway.client';
 import { BotTransportService } from '../bot-transport.service';
 import type { BotActionHandler, BotContext } from '../handlers/bot-context';
 
@@ -78,6 +78,7 @@ export class PaymentAckActions {
         { ack },
       );
     } catch (error) {
+      rethrowPasswordChange(error);
       this.logger.warn(
         `kvitansiya #${paymentId} (${ack}): ${error instanceof Error ? error.message : 'error'}`,
       );

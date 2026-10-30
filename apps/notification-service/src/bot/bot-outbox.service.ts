@@ -201,6 +201,9 @@ export class BotOutboxService implements OnModuleDestroy {
           sent_at: new Date(),
           updated_at: new Date(),
           last_error: null,
+          // (BOT-2 #4) Yuborilgan xabar matni (mijoz PII, summalar) bazada
+          // saqlanmaydi — qator faqat holat / vaqt uchun qoladi.
+          payload: {} as never,
         },
       );
       return { id: row.id, status: 'sent', result };

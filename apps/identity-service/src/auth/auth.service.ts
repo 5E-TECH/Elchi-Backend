@@ -37,6 +37,8 @@ import {
   Roles,
   SESSION_TOO_NEW,
   Status,
+  TELEGRAM_COURIER_ONLY,
+  TELEGRAM_SCAN_SCOPE,
   captureException,
   computeHmacSignature,
   isPasswordPolicyCompliant,
@@ -535,9 +537,38 @@ export class AuthService {
           "Telegram akkaunt Elchi'ga bog'lanmagan — avval kabinetdan «Telegram'ni ulash» ni bosing",
       });
     }
-    const payload = await this.createTokenPayload(user);
+    /**
+     * (BOT-2 #2a) Mini App (skan) — FAQAT kuryer. Ilgari superadmin ham
+     * 30 daqiqalik to'liq token olardi va rolni faqat FE tekshirardi.
+     */
+    if (via === 'mini_app' && user.role !== Roles.COURIER) {
+      throw new RpcException({
+        statusCode: 403,
+        message: 'Telegram Mini App faqat kuryerlar uchun',
+        code: TELEGRAM_COURIER_ONLY,
+      });
+    }
+    /**
+     * (BOT-2 #2) Claim'lar:
+     *  - `tg_id` — gateway har so'rovda xodim faolligi, roli va SHU Telegram
+     *    ulanishini tekshiradi (≤60 s kesh): nofaol qilingan yoki /uzish
+     *    qilgan kuryerning tokeni 30 daqiqa yashamaydi;
+     *  - `scope: 'tg_scan'` (faqat Mini App) — gateway faqat skan oqimini
+     *    o'tkazadi;
+     *  - `pwd_change` — parolni almashtirish shart bo'lsa (parol talabini
+     *    Telegram orqali chetlab o'tib bo'lmasin; `PASSWORD_CHANGE_GATE`).
+     */
+    const payload = this.withPasswordChangeClaim(
+      await this.createTokenPayload(user),
+      user,
+    );
     const accessToken = await this.jwtService.signAsync(
-      { ...payload, auth: 'telegram' },
+      {
+        ...payload,
+        auth: 'telegram',
+        tg_id: id,
+        ...(via === 'mini_app' ? { scope: TELEGRAM_SCAN_SCOPE } : {}),
+      },
       {
         expiresIn: (this.configService.get<string>(
           'TELEGRAM_ACCESS_TOKEN_TIME',
@@ -562,6 +593,38 @@ export class AuthService {
       accessToken,
       access_token_expires_at: this.extractExpMs(accessToken),
     };
+  }
+
+  /**
+   * (BOT-2 #2c) Gateway `JwtStrategy` — Telegram tokeni (Mini App va bot)
+   * hali amalda: xodim o'chirilmagan, FAOL, roli tokendagidek va Telegram
+   * hamon SHU id'ga ulangan (`tg_id` claim'i bo'lmagan eski tokenda —
+   * istalgan ulanish). Natija — `{ active }`; gateway ≤60 s keshlaydi.
+   */
+  async telegramTokenState(data: {
+    user_id?: unknown;
+    telegram_id?: unknown;
+    role?: unknown;
+  }): Promise<{ active: boolean }> {
+    const text = (value: unknown): string =>
+      typeof value === 'string' || typeof value === 'number'
+        ? String(value).trim()
+        : '';
+    const userId = text(data?.user_id);
+    if (!/^\d{1,20}$/.test(userId)) return { active: false };
+    const user = await this.users.findOne({
+      where: { id: userId, isDeleted: false },
+      select: { id: true, role: true, status: true, telegram_id: true },
+    });
+    if (!user || user.status !== Status.ACTIVE) return { active: false };
+    const role = text(data?.role).toLowerCase();
+    if (role && String(user.role).toLowerCase() !== role) {
+      return { active: false };
+    }
+    const linked = String(user.telegram_id ?? '').trim();
+    const claimed = text(data?.telegram_id);
+    if (!linked || (claimed && linked !== claimed)) return { active: false };
+    return { active: true };
   }
 
   async validateUser(userId: string) {
