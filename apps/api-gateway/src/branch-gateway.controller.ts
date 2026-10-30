@@ -424,13 +424,7 @@ export class BranchGatewayController {
         { cmd: 'branch.analytics.markets' },
         { id, requester: this.toRequester(req) },
       )
-      .pipe(
-        timeout(8000),
-        // T7 (B3): menejer/filialga market telefonlarisiz.
-        map((response: unknown) =>
-          projectOrderContactsForRoles(req?.user?.roles, response),
-        ),
-      );
+      .pipe(timeout(8000));
   }
 
   @Post('branches/transfer-batches')

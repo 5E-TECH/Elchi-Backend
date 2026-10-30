@@ -253,3 +253,88 @@ describe('T7 — ContactsService (identity)', () => {
     );
   });
 });
+
+/**
+ * T7 #10 — mas'ul yozuv tranzaksiyasi ICHIDA `FOR SHARE` bilan qayta
+ * tekshiriladi: oldindan tekshiruvdan keyin o'chirilgan / roli o'zgargan
+ * xodim biriktirilmaydi va hech narsa yozilmaydi.
+ */
+describe('T7 — tranzaksiya ichidagi qayta tekshiruv (FOR SHARE)', () => {
+  const SA = { id: '1', roles: ['superadmin'] };
+  const market = { id: '37', role: Roles.MARKET, isDeleted: false };
+  const before = user({ id: '15', role: Roles.ADMIN });
+
+  /** Tranzaksiyadagi (lock bilan) o'qish `inTx` ni qaytaradi. */
+  function racing(inTx: Row | null) {
+    const writes: string[] = [];
+    const lockedReads: Row[] = [];
+    const findOne = jest.fn(
+      ({ where, lock }: { where: Row; lock?: { mode: string } }) => {
+        if (lock) {
+          lockedReads.push(lock);
+          return Promise.resolve(inTx);
+        }
+        if (String(where.id) === '37') return Promise.resolve(market);
+        return Promise.resolve(before);
+      },
+    );
+    const userRepo = {
+      findOne,
+      find: jest.fn(() => Promise.resolve([before])),
+      update: jest.fn(() => {
+        writes.push('admins');
+        return Promise.resolve();
+      }),
+    };
+    const settingRepo = { find: jest.fn(() => Promise.resolve([])) };
+    const tx = {
+      getRepository: (entity: { name: string }) =>
+        entity.name === 'AppSetting' ? settingRepo : userRepo,
+      query: jest.fn((sql: string) => {
+        writes.push(sql.includes('app_settings') ? 'app_settings' : 'admins');
+        return Promise.resolve([{ id: '37', role: 'market' }]);
+      }),
+    };
+    const manager = {
+      getRepository: tx.getRepository,
+      transaction: (cb: (m: typeof tx) => Promise<unknown>) => cb(tx),
+    };
+    const service = new ContactsService(
+      { ...userRepo, manager } as never,
+      { manager } as never,
+      { find: jest.fn() } as never,
+      { send: jest.fn() } as never,
+      { send: jest.fn() } as never,
+      { log: jest.fn() } as never,
+    );
+    return { service, writes, lockedReads };
+  }
+
+  it.each([
+    ['o`chirilgan', null, 404, undefined],
+    [
+      'roli menejerga o`zgargan',
+      user({ id: '15', role: Roles.MANAGER }),
+      400,
+      'RESPONSIBLE_ROLE_INVALID',
+    ],
+  ])(
+    'assignOne / updateSettings / bulkAssign: %s → xato, yozuv yo`q',
+    async (_label, inTx, statusCode, code) => {
+      for (const call of [
+        (s: ContactsService) => s.assignOne('37', '15', SA),
+        (s: ContactsService) =>
+          s.updateSettings({ default_market_responsible_id: '15' }, SA),
+        (s: ContactsService) =>
+          s.bulkAssign({ responsible_id: '15', market_ids: ['37'] }, SA),
+      ]) {
+        const { service, writes, lockedReads } = racing(inTx);
+        const error = await rpcError(call(service));
+        expect(error.statusCode).toBe(statusCode);
+        expect(error.code).toBe(code);
+        expect(lockedReads).toEqual([{ mode: 'pessimistic_read' }]);
+        expect(writes).toEqual([]);
+      }
+    },
+  );
+});

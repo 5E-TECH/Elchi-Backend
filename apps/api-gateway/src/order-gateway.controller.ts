@@ -6070,11 +6070,7 @@ export class OrderGatewayController {
     )) as {
       data?: { items?: Array<Record<string, unknown>> };
     } | null;
-    // T7 (B3): menejerga operator/market telefonlarisiz.
-    return projectOrderContactsForRoles(
-      roles,
-      await this.attachReplacementCustomers(response),
-    );
+    return this.attachReplacementCustomers(response);
   }
 
   /**
@@ -6888,12 +6884,12 @@ export class OrderGatewayController {
       },
     },
   })
-  markReturnedToMarket(
+  async markReturnedToMarket(
     @Param('id') id: string,
     @Body() body: { authorization_token?: string },
     @Req() req: { user: JwtUser },
   ) {
-    return firstValueFrom(
+    const response: unknown = await firstValueFrom(
       this.orderClient
         .send(
           { cmd: 'order.mark_returned_to_market' },
@@ -6912,7 +6908,8 @@ export class OrderGatewayController {
         throw new GatewayTimeoutException('Order service response timeout');
       }
       throw error;
-    });
+    }); // T7 (B3): javobdagi to'liq buyurtma — menejerga operator telefonlarisiz.
+    return projectOrderContactsForRoles(req.user.roles, response);
   }
 
   // Full order edit (money/status fields) — SUPERADMIN/ADMIN/REGISTRATOR only

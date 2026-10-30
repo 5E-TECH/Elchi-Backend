@@ -6472,7 +6472,7 @@
     },
     "/post/orders/{id}": {
       "get": {
-        "description": "Z3pUOxou — LOGIST: pochta o'ziga biriktirilgan viloyatda bo'lsa (aks holda 403); buyurtma qatorlari pulsiz (`total_price`, tariflar yo'q), `homeOrders`/`centerOrders` da faqat sonlar.T7 (QPq2C1co): har buyurtma qatorida `problem_contacts: [{name, phone, source: 'logist'|'support'}]` («Muammo bo'lsa», ≤ 2); `operator_phone`, `secondary_operator_phone`, `market.phone_number` menejer/filial/kuryerga YO'Q.",
+        "description": "Z3pUOxou — LOGIST: pochta o'ziga biriktirilgan viloyatda bo'lsa (aks holda 403); buyurtma qatorlari pulsiz (`total_price`, tariflar yo'q), `homeOrders`/`centerOrders` da faqat sonlar. T7 (QPq2C1co): har buyurtma qatorida `problem_contacts: [{name, phone, source: 'logist'|'support'}]` («Muammo bo'lsa», ≤ 2); `operator_phone`, `secondary_operator_phone`, `market.phone_number` menejer/filial/kuryerga YO'Q.",
         "operationId": "LogisticsGatewayController_getOrdersByPost",
         "parameters": [
           {
@@ -25238,7 +25238,7 @@
           },
           "market": {
             "nullable": true,
-            "description": "Enriched javobda (GET /orders, GET /orders/:id) — market nomi va telefoni",
+            "description": "Enriched javobda (GET /orders, GET /orders/:id) — market nomi; telefoni faqat SA/admin/registrator/logist/market ga (T7).",
             "type": "object",
             "allOf": [
               {

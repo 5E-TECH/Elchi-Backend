@@ -77,12 +77,14 @@ o'z Elchi mas'uliga bog'lanadi. Mijoz telefoni qoladi.
   **o'chiriladi** (null emas). `customer` va `courier` ga tegilmaydi. Joylar: buyurtma qaytaradigan barcha yo'llar
   (rol proyeksiyasi orqali), `GET /orders/markets/new|cancelled`, `GET /orders/markets/:marketId/new|cancelled`,
   `GET /orders/branch/orders|cancelled`, `GET /orders/courier/orders` (filial doirasi), `GET /orders/external/sources`,
-  `GET /orders/replaceable`, `PATCH /orders/:id` va `/:id/full` javobi, `GET /transfer-batches/:id` va `/remaining`
-  (`items[].order`), `GET /branches/:id/analytics/markets`, `GET /post/return-requests/list`, `GET /markets`
-  (menejer/filial qatorida `phone_number` yo'q; registrator — bor), `GET /users` va `GET /users/:id` (market va market
-  operatori qatorlari; `responsible`, `responsible_source`, `market_responsible_id` — faqat SA/admin).
-  `GET /orders/:id/tracking`: kuryer/menejer/filialga market va market operatori aktyori `{id, name, role}`, tavsifda
-  ularning login/telefoni yo'q. Pul proyeksiyasi o'zgarmadi.
+  `PATCH /orders/:id` va `/:id/full` javobi, `POST /orders/:id/mark-returned-to-market` javobi,
+  `GET /transfer-batches/:id` va `/remaining` (`items[].order`), `GET /post/return-requests/list`, mahsulotlar
+  (`GET /product`, `/product/market/:marketId`, `/product/by-code/:code`, `/product/:id` — `market` obyekti),
+  `GET /markets` (menejer/filial qatorida `phone_number` yo'q; registrator — bor), `GET /users` va `GET /users/:id`
+  (market va market operatori qatorlari). `GET /orders/:id/tracking`: kuryer/menejer/filialga market va market operatori
+  aktyori `{id, name, role}`, tavsifda ularning login/telefoni yo'q. Pul proyeksiyasi o'zgarmadi.
+  Elchi mas'uli (`responsible`, `responsible_source`, `market_responsible_id`) — faqat SA/admin: market qatorlarida va
+  buyurtmadagi `market` obyektida boshqa HAMMA rolga (registrator, logist, market ham) olib tashlanadi.
 - 🔧 FE: F1 — chek/yorliq `problem_contacts` dan (bo'sh — qism yo'q); F2 — menejer/kuryerda market telefoni yo'q,
   «Muammo bo'lsa» qatori; F3 — `GET /users/me/contacts` kartasi; F4 — «Market mas'ullari» sahifasi (yuqoridagi
   endpointlar, xato kodlari `users.json → responsibles.*`).

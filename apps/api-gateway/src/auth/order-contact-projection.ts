@@ -51,8 +51,6 @@ export const HIDDEN_MARKET_CONTACT_FIELDS: readonly string[] = [
   'extra_number',
   'default_operator_phone',
   'username',
-  // Elchi mas'uli — faqat SA/admin ko'radi (market qatorida ham).
-  'market_responsible_id',
   'phoneNumber',
   'extraNumber',
   'defaultOperatorPhone',
@@ -96,6 +94,34 @@ const MARKET_CONTACT_KEYS: ReadonlySet<string> = new Set(
   HIDDEN_MARKET_CONTACT_FIELDS,
 );
 
+/**
+ * Elchi mas'uli maydonlari — faqat SUPERADMIN / ADMIN ga (market qatorida
+ * ham, buyurtmadagi `market` obyektida ham; registrator, logist, market...
+ * ko'rmaydi — market o'z mas'ulini `GET /users/me/contacts` dan oladi).
+ */
+const RESPONSIBLE_KEYS: ReadonlySet<string> = new Set([
+  'responsible',
+  'responsible_source',
+  'market_responsible_id',
+]);
+
+/** So'rovchi SUPERADMIN yoki ADMIN mi (mas'ul maydonlarini ko'radi). */
+const isSystemAdmin = (roles?: string[]): boolean => {
+  const normalized = normalizeRoles(roles);
+  return (
+    normalized.includes(RoleEnum.SUPERADMIN) ||
+    normalized.includes(RoleEnum.ADMIN)
+  );
+};
+
+/** Aylanish rejimi: qaysi kalitlar olib tashlanadi. */
+type ContactProjection = {
+  /** Javobning istalgan joyidan (operator telefonlari) — yoki null. */
+  anywhere: ReadonlySet<string> | null;
+  /** `market` obyektidan. */
+  market: ReadonlySet<string>;
+};
+
 /** `fields` olib tashlangan nusxa; hech narsa o'zgarmasa — ASL obyekt. */
 const omitKeys = (
   row: Record<string, unknown>,
@@ -108,14 +134,18 @@ const omitKeys = (
     : row;
 
 /** Copy-on-write aylanish: o'zgarmagan tarmoq ASL havolani qaytaradi. */
-function projectValue(value: unknown, depth: number): unknown {
+function projectValue(
+  value: unknown,
+  mode: ContactProjection,
+  depth: number,
+): unknown {
   if (depth > MAX_DEPTH) {
     return value;
   }
   if (Array.isArray(value)) {
     let changed = false;
     const next = value.map((item) => {
-      const projected = projectValue(item, depth + 1);
+      const projected = projectValue(item, mode, depth + 1);
       changed = changed || projected !== item;
       return projected;
     });
@@ -127,7 +157,7 @@ function projectValue(value: unknown, depth: number): unknown {
   let changed = false;
   const next: Record<string, unknown> = {};
   for (const [key, nested] of Object.entries(value)) {
-    if (OPERATOR_KEYS.has(key)) {
+    if (mode.anywhere?.has(key)) {
       changed = true;
       continue;
     }
@@ -138,27 +168,41 @@ function projectValue(value: unknown, depth: number): unknown {
     }
     const child =
       MARKET_KEYS.has(key) && isPlainObject(nested)
-        ? omitKeys(nested, MARKET_CONTACT_KEYS)
+        ? omitKeys(nested, mode.market)
         : nested;
-    const projected = projectValue(child, depth + 1);
+    const projected = projectValue(child, mode, depth + 1);
     changed = changed || projected !== nested;
     next[key] = projected;
   }
   return changed ? next : value;
 }
 
+const HIDE_CONTACTS_MODE: ContactProjection = {
+  anywhere: OPERATOR_KEYS,
+  market: new Set([...MARKET_CONTACT_KEYS, ...RESPONSIBLE_KEYS]),
+};
+const HIDE_RESPONSIBLE_MODE: ContactProjection = {
+  anywhere: null,
+  market: RESPONSIBLE_KEYS,
+};
+
 /**
  * Buyurtma qaytaruvchi javobdan market/operator telefonlarini so'rovchi
- * roliga ko'ra olib tashlaydi. To'liq ko'rinishli rol — ASL javob.
+ * roliga ko'ra olib tashlaydi; `market` obyektidagi Elchi mas'uli
+ * (`responsible`, `responsible_source`, `market_responsible_id`) —
+ * SUPERADMIN / ADMIN dan boshqa HAMMAGA olib tashlanadi. SA/admin — ASL javob.
  */
 export function projectOrderContactsForRoles<T>(
   roles: string[] | undefined,
   payload: T,
 ): T {
-  if (!shouldHideMarketContacts(roles)) {
+  if (shouldHideMarketContacts(roles)) {
+    return projectValue(payload, HIDE_CONTACTS_MODE, 0) as T;
+  }
+  if (isSystemAdmin(roles)) {
     return payload;
   }
-  return projectValue(payload, 0) as T;
+  return projectValue(payload, HIDE_RESPONSIBLE_MODE, 0) as T;
 }
 
 /**
@@ -179,13 +223,6 @@ export function projectMarketRowContactsForRoles<T>(
 const MARKET_SIDE_ROLES: ReadonlySet<string> = new Set([
   RoleEnum.MARKET,
   RoleEnum.MARKET_OPERATOR,
-]);
-
-/** Elchi mas'uli maydonlari — faqat SUPERADMIN / ADMIN ga. */
-const RESPONSIBLE_KEYS: ReadonlySet<string> = new Set([
-  'responsible',
-  'responsible_source',
-  'market_responsible_id',
 ]);
 
 /**
@@ -210,11 +247,7 @@ export function projectUserRowContactsForRoles<T>(
     roles,
     row,
   );
-  const normalized = normalizeRoles(roles);
-  if (
-    !normalized.includes(RoleEnum.SUPERADMIN) &&
-    !normalized.includes(RoleEnum.ADMIN)
-  ) {
+  if (!isSystemAdmin(roles)) {
     next = omitKeys(next, RESPONSIBLE_KEYS);
   }
   return next as T;

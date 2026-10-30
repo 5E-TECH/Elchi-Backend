@@ -164,6 +164,31 @@ describe('1mOjtOVC — Swagger (docs/frontend/openapi.json)', () => {
     expect(okRef('/orders/{id}')).toContain('OrderReceiptFieldsDto');
   });
 
+  it('T7: problem_contacts (ProblemContactDto) bor; operator telefonlari va market.phone_number ixtiyoriy', () => {
+    const receipt = doc.components.schemas.OrderReceiptFieldsDto as {
+      properties: Record<string, any>;
+      required?: string[];
+    };
+    expect(props('OrderReceiptFieldsDto')).toContain('problem_contacts');
+    expect(JSON.stringify(receipt.properties.problem_contacts)).toContain(
+      'ProblemContactDto',
+    );
+    expect(props('ProblemContactDto')).toEqual(
+      expect.arrayContaining(['name', 'phone', 'source']),
+    );
+    for (const key of [
+      'operator_phone',
+      'secondary_operator_phone',
+      'problem_contacts',
+    ]) {
+      expect(receipt.required ?? []).not.toContain(key);
+    }
+    const market = doc.components.schemas.OrderReceiptMarketDto as {
+      required?: string[];
+    };
+    expect(market.required ?? []).not.toContain('phone_number');
+  });
+
   it('⭐ paket (GET /transfer-batches/:id) va pochta (GET /post/:id) cheki maydonlari', () => {
     expect(props('TransferBatchDetailDto')).toEqual(
       expect.arrayContaining([

@@ -18,7 +18,8 @@ import {
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ClientProxy } from '@nestjs/microservices';
-import { firstValueFrom, TimeoutError, timeout } from 'rxjs';
+import { firstValueFrom, map, TimeoutError, timeout } from 'rxjs';
+import { projectOrderContactsForRoles } from './auth/order-contact-projection';
 import { PRODUCT_BARCODE_MAX_LENGTH, Roles as RoleEnum } from '@app/common';
 import {
   ApiBody,
@@ -552,7 +553,13 @@ export class CatalogGatewayController {
           ),
         },
       )
-      .pipe(timeout(8000));
+      .pipe(
+        timeout(8000),
+        // T7 (B3): `market` — menejer/filialga telefonsiz.
+        map((response: unknown) =>
+          projectOrderContactsForRoles(req?.user?.roles, response),
+        ),
+      );
   }
 
   @Get('market/:marketId')
@@ -585,6 +592,7 @@ export class CatalogGatewayController {
     @Query('limit') limit?: string,
     @Query('sort_by') sortBy?: string,
     @Query('sort_dir') sortDir?: string,
+    @Req() req?: { user: JwtUser },
   ) {
     return this.catalogClient
       .send(
@@ -600,7 +608,13 @@ export class CatalogGatewayController {
           ),
         },
       )
-      .pipe(timeout(8000));
+      .pipe(
+        timeout(8000),
+        // T7 (B3): `market` — menejer/filialga telefonsiz.
+        map((response: unknown) =>
+          projectOrderContactsForRoles(req?.user?.roles, response),
+        ),
+      );
   }
 
   @Get('my-products')
@@ -709,7 +723,7 @@ export class CatalogGatewayController {
       userId = requested || undefined;
     }
 
-    return firstValueFrom(
+    const response: unknown = await firstValueFrom(
       this.catalogClient
         .send(
           { cmd: 'catalog.product.find_by_code' },
@@ -722,6 +736,8 @@ export class CatalogGatewayController {
       }
       throw error;
     });
+    // T7 (B3): `market` — menejer/filialga telefonsiz.
+    return projectOrderContactsForRoles(req?.user?.roles, response);
   }
 
   @Get(':id')
@@ -771,7 +787,8 @@ export class CatalogGatewayController {
         );
       }
     }
-    return response;
+    // T7 (B3): `market` — menejer/filialga telefonsiz.
+    return projectOrderContactsForRoles(req?.user?.roles, response);
   }
 
   @Patch(':id')

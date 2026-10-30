@@ -52,6 +52,35 @@ describe('OrderGatewayController return flow', () => {
     );
   });
 
+  it('T7: mark-returned-to-market javobi — menejerga operator telefonlarisiz, superadminga bor', async () => {
+    const order = () => ({
+      statusCode: 200,
+      data: {
+        id: '101',
+        market_id: '16',
+        operator_phone: '+998901234500',
+        secondary_operator_phone: '+998901234501',
+      },
+    });
+    const { controller, orderClient } = setup();
+    orderClient.send.mockImplementation(() => of(order()));
+
+    const asManager: any = await controller.markReturnedToMarket(
+      '101',
+      { authorization_token: 'MHA-token' },
+      { user: { sub: '5', roles: ['manager'] } } as any,
+    );
+    expect(asManager.data).not.toHaveProperty('operator_phone');
+    expect(asManager.data).not.toHaveProperty('secondary_operator_phone');
+
+    const asSuperadmin: any = await controller.markReturnedToMarket(
+      '101',
+      { authorization_token: 'MHA-token' },
+      { user: { sub: '9', roles: ['superadmin'] } } as any,
+    );
+    expect(asSuperadmin.data.operator_phone).toBe('+998901234500');
+  });
+
   it('scopes market cancelled orders to its own HQ-held orders', async () => {
     const { controller, orderClient } = setup();
 

@@ -2,11 +2,13 @@ import { Test } from '@nestjs/testing';
 import { firstValueFrom, isObservable, of } from 'rxjs';
 import { ApiGatewayController } from './api-gateway.controller';
 import { BranchGatewayController } from './branch-gateway.controller';
+import { CatalogGatewayController } from './catalog-gateway.controller';
 import { LogisticsGatewayController } from './logistics-gateway.controller';
 import { OrderGatewayController } from './order-gateway.controller';
 import { ProblemContactsService } from './contacts/problem-contacts.service';
 import { projectUserRowContactsForRoles } from './auth/order-contact-projection';
 import { projectOrderTrackingForRoles } from './auth/order-tracking-projection';
+import { projectOrderPayloadForRoles } from './auth/order-role-projection';
 import { OrderServiceService } from '../../order-service/src/order-service.service';
 
 /**
@@ -141,7 +143,7 @@ describe('T7 #1 — GET /users va GET /users/:id: market qatori', () => {
   });
 });
 
-describe('T7 #2 — GET /transfer-batches/:id, /remaining, /branches/:id/analytics/markets', () => {
+describe('T7 #2 — GET /transfer-batches/:id va /remaining', () => {
   const batch = () => ({
     statusCode: 200,
     data: {
@@ -172,18 +174,6 @@ describe('T7 #2 — GET /transfer-batches/:id, /remaining, /branches/:id/analyti
       controller.findTransferBatchById('501', user(['registrator'])),
     );
     expect(res.data.items[0].order.operator_phone).toBe('+998901234500');
-  });
-
-  it('analytics/markets — menejerga market telefonsiz', async () => {
-    const analytics = new BranchGatewayController({
-      send: jest.fn(() =>
-        of({ data: [{ market_id: '37', market: { ...market() }, orders: 3 }] }),
-      ),
-    } as never);
-    const res = await unwrap(
-      analytics.findBranchMarketsAnalytics('3', user(['manager'])),
-    );
-    expect(res.data[0].market).not.toHaveProperty('phone_number');
   });
 });
 
@@ -414,5 +404,128 @@ describe('T7 #7 — GET /orders/:id/tracking: market/operator aktyori', () => {
         phone_number: '+998911112233',
       }),
     ).toContain('+998911112233');
+  });
+});
+
+describe('T7 #4 — buyurtmadagi market: Elchi mas`uli faqat SA/admin', () => {
+  const withResponsible = () => ({
+    data: order({
+      market: {
+        id: '37',
+        name: 'TEST Market',
+        market_responsible_id: '15',
+        responsible: { id: '15' },
+        responsible_source: 'assigned',
+        ...MARKET_PHONES,
+      },
+    }),
+  });
+
+  it.each([['registrator'], ['logist'], ['market'], ['manager'], ['courier']])(
+    '%s — market.market_responsible_id / responsible yo`q',
+    (role) => {
+      const res: any = projectOrderPayloadForRoles([role], withResponsible());
+      for (const key of [
+        'market_responsible_id',
+        'responsible',
+        'responsible_source',
+      ]) {
+        expect(res.data.market).not.toHaveProperty(key);
+      }
+      expect(res.data.market.name).toBe('TEST Market');
+    },
+  );
+
+  it('registrator / logist — market telefoni QOLADI; admin — hammasi', () => {
+    const registrator: any = projectOrderPayloadForRoles(
+      ['registrator'],
+      withResponsible(),
+    );
+    expect(registrator.data.market.phone_number).toBe('+998901234567');
+    expect(registrator.data.operator_phone).toBe('+998901234500');
+    const payload = withResponsible();
+    expect(projectOrderPayloadForRoles(['admin'], payload)).toBe(payload);
+  });
+});
+
+describe('T7 (2-ko`rib chiqish #1) — mahsulot endpointlari: market telefoni', () => {
+  const product = () => ({
+    id: '700',
+    name: 'Kitob',
+    user_id: '37',
+    market: {
+      id: '37',
+      name: 'TEST Market',
+      phone_number: '+998901234567',
+      status: 'active',
+    },
+  });
+  const build = () =>
+    new CatalogGatewayController(
+      {
+        send: jest.fn(({ cmd }: { cmd: string }) =>
+          of(
+            cmd === 'catalog.product.find_all'
+              ? { statusCode: 200, data: { items: [product()], total: 1 } }
+              : { statusCode: 200, data: product() },
+          ),
+        ),
+      } as never,
+      { send: jest.fn() } as never,
+    );
+
+  it.each([['manager'], ['branch']])(
+    '%s: /product, /product/market/:id, /product/by-code, /product/:id — phone_number yo`q',
+    async (role) => {
+      const controller = build();
+      const lists = [
+        await unwrap(
+          controller.findAll(
+            '37',
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            user([role]),
+          ),
+        ),
+        await unwrap(
+          controller.getByMarketId(
+            '37',
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            user([role]),
+          ),
+        ),
+      ];
+      for (const res of lists) {
+        expect(res.data.items[0].market).not.toHaveProperty('phone_number');
+        expect(res.data.items[0].market.name).toBe('TEST Market');
+      }
+      for (const res of [
+        await controller.findByCode('ABC', '37', user([role])),
+        await controller.findById('700', user([role])),
+      ]) {
+        expect((res as any).data.market).not.toHaveProperty('phone_number');
+      }
+    },
+  );
+
+  it('registrator: telefon bor', async () => {
+    const res = await unwrap(
+      build().getByMarketId(
+        '37',
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        user(['registrator']),
+      ),
+    );
+    expect(res.data.items[0].market.phone_number).toBe('+998901234567');
   });
 });

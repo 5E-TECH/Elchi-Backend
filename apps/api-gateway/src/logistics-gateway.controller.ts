@@ -822,7 +822,7 @@ export class LogisticsGatewayController {
   @ApiOperation({
     summary: 'Get all orders by post id',
     description:
-      "Z3pUOxou — LOGIST: pochta o'ziga biriktirilgan viloyatda bo'lsa (aks holda 403); buyurtma qatorlari pulsiz (`total_price`, tariflar yo'q), `homeOrders`/`centerOrders` da faqat sonlar." +
+      "Z3pUOxou — LOGIST: pochta o'ziga biriktirilgan viloyatda bo'lsa (aks holda 403); buyurtma qatorlari pulsiz (`total_price`, tariflar yo'q), `homeOrders`/`centerOrders` da faqat sonlar. " +
       "T7 (QPq2C1co): har buyurtma qatorida `problem_contacts: [{name, phone, source: 'logist'|'support'}]` («Muammo bo'lsa», ≤ 2); `operator_phone`, `secondary_operator_phone`, `market.phone_number` menejer/filial/kuryerga YO'Q.",
   })
   @ApiParam({ name: 'id', description: 'Post ID (id)' })

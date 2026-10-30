@@ -1231,9 +1231,10 @@ export class OrderReceiptMarketDto {
 /**
  * 1mOjtOVC — buyurtma javobining CHEK uchun kerakli maydonlari (qisman sxema:
  * javobda boshqa maydonlar ham bor, ular o'zgarmagan). `GET /orders`
- * qatorlari va `GET /orders/:id` da buyurtmani ko'ra oladigan HAR rolga
- * (rol proyeksiyasi telefonlarni olib tashlamaydi; pul maydonlari — rol
- * bo'yicha, kH2zZsz3 / 4BftLLnc).
+ * qatorlari va `GET /orders/:id`. Pul maydonlari — rol bo'yicha (kH2zZsz3 /
+ * 4BftLLnc). T7 (QPq2C1co): operator telefonlari va `market.phone_number`
+ * menejer / filial / kuryerga YO'Q; «Muammo bo'lsa» — `problem_contacts`
+ * (har rolga).
  */
 export class OrderReceiptFieldsDto {
   @ApiProperty({ example: '81' })
@@ -1282,7 +1283,7 @@ export class OrderReceiptFieldsDto {
     type: OrderReceiptMarketDto,
     nullable: true,
     description:
-      'Enriched javobda (GET /orders, GET /orders/:id) — market nomi va telefoni',
+      'Enriched javobda (GET /orders, GET /orders/:id) — market nomi; telefoni faqat SA/admin/registrator/logist/market ga (T7).',
   })
   market?: OrderReceiptMarketDto | null;
 
