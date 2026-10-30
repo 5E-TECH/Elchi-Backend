@@ -484,9 +484,9 @@ fi
     expect(r.stdout + r.stderr).not.toContain(BOT);
   });
 
-  it('sir yo`q: endpoint sog`lom bo`lsa ham job qizil', () => {
+  it('sir yo`q va sog`lom: job yashil, faqat ogohlantirish', () => {
     const r = run();
-    expect(r.status).toBe(1);
+    expect(r.status).toBe(0);
     expect(r.stdout + r.stderr).toContain('BACKUP_ALERT_TELEGRAM_BOT_TOKEN');
   });
 

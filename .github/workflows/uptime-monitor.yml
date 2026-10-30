@@ -1,5 +1,5 @@
 # (ZfI9nERJ) Tashqi uptime monitor: server butunlay o'chsa ham ishlaydi. Yiqilsa
-# Telegram xabar va job qizil, Telegram sirlari yo'q bo'lsa ham job qizil.
+# Telegram xabar va job qizil. Telegram sirlari yo'q bo'lsa faqat ogohlantirish.
 # deploy.yml ga bog'lanmagan. Runbook: docs/ops/backup-rpo-rto.md §5.
 name: Uptime monitor
 

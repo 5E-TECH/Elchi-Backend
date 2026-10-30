@@ -7,8 +7,8 @@
 # stays quiet.
 #
 # Down -> one Telegram message (scripts/ci-telegram-alert.sh) and exit 1. Missing
-# Telegram secrets -> exit 1 even when everything is up: a monitor that cannot
-# alert must not look green.
+# Telegram secrets -> warning only: the job goes red for a real outage, not every
+# 5 minutes until the secrets are added.
 #
 # Usage: bash scripts/uptime-check.sh <url>...
 set -uo pipefail
@@ -45,6 +45,5 @@ if [ "${#DOWN[@]}" -gt 0 ]; then
   exit 1
 fi
 if [ -z "${BACKUP_ALERT_TELEGRAM_BOT_TOKEN:-}" ] || [ -z "${BACKUP_ALERT_TELEGRAM_CHAT_ID:-}" ]; then
-  echo "::error::BACKUP_ALERT_TELEGRAM_BOT_TOKEN / BACKUP_ALERT_TELEGRAM_CHAT_ID secret is not set — this monitor cannot alert."
-  exit 1
+  echo "::warning::BACKUP_ALERT_TELEGRAM_BOT_TOKEN / BACKUP_ALERT_TELEGRAM_CHAT_ID secret is not set — this monitor cannot alert."
 fi
