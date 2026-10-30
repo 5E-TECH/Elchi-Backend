@@ -116,6 +116,8 @@ describe('T8 DTO — special_categories', () => {
     [['glass'], "Noma'lum maxsus belgi: glass"],
     [['fragile', 'fragile'], 'Maxsus belgi takrorlangan: fragile'],
     ['fragile', "special_categories massiv bo'lishi kerak"],
+    // JSON tanasidan keladigan obyekt — 500 emas, 400.
+    [[{ toString: null }], "Noma'lum maxsus belgi: object"],
   ])('⭐ POST /orders %j → 400 «%s»', async (value, message) => {
     expect(
       await messagesOf(CreateOrderRequestDto, {

@@ -86,6 +86,20 @@ describe('T8 normalizeSpecialCategories', () => {
     });
   });
 
+  it.each([
+    [[{ toString: null }], 'object'],
+    [[null], 'null'],
+    [[['fragile']], 'object'],
+    [['x'.repeat(100)], `${'x'.repeat(64)}…`],
+  ])('xavfsiz xabar: %#', (input, shown) => {
+    // `String(raw)` emas: `{ toString: null }` ilgari TypeError (500) berardi.
+    expect(() => normalizeSpecialCategories(input)).not.toThrow();
+    expect(normalizeSpecialCategories(input)).toEqual({
+      ok: false,
+      message: `Noma'lum maxsus belgi: ${shown}`,
+    });
+  });
+
   it('barcha 7 kod — o`tadi, ortiq bo`lishi takrorsiz mumkin emas', () => {
     const all = [
       'documents',

@@ -182,6 +182,24 @@ export const ORDER_SPECIAL_CATEGORIES: readonly OrderSpecialCategory[] =
     OrderSpecialCategory.DOCUMENTS,
   ]);
 
+/**
+ * Xato xabaridagi qiymat — `String(raw)` CHAQIRILMAYDI: `{ toString: null }`
+ * kabi obyekt TypeError (500) berardi. Satr 64 belgigacha kesiladi.
+ */
+function describeSpecialCategoryInput(raw: unknown): string {
+  if (typeof raw === 'string') {
+    return raw.length > 64 ? `${raw.slice(0, 64)}…` : raw;
+  }
+  if (
+    typeof raw === 'number' ||
+    typeof raw === 'boolean' ||
+    typeof raw === 'bigint'
+  ) {
+    return String(raw);
+  }
+  return raw === null ? 'null' : typeof raw;
+}
+
 export type NormalizeSpecialCategoriesResult =
   { ok: true; value: OrderSpecialCategory[] } | { ok: false; message: string };
 
@@ -205,12 +223,14 @@ export function normalizeSpecialCategories(
   }
   const seen = new Set<string>();
   for (const raw of input) {
-    const code = typeof raw === 'string' ? raw : String(raw);
     if (
       typeof raw !== 'string' ||
       !ORDER_SPECIAL_CATEGORIES.includes(raw as OrderSpecialCategory)
     ) {
-      return { ok: false, message: `Noma'lum maxsus belgi: ${code}` };
+      return {
+        ok: false,
+        message: `Noma'lum maxsus belgi: ${describeSpecialCategoryInput(raw)}`,
+      };
     }
     if (seen.has(raw)) {
       return { ok: false, message: `Maxsus belgi takrorlangan: ${raw}` };
