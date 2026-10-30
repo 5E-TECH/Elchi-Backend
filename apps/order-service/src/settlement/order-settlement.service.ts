@@ -105,6 +105,8 @@ const COURIER_TRANSFER_SAMPLE_LIMIT = 5;
  * indeksda navbatga turadi.
  */
 const ADVANCE_APPLIED_PATTERN = 'order.settlement.advance.applied';
+/** T6-BE-3 — `order.settlement.retreat` tokeni qo'llangani belgisi (M8 naqshi). */
+const RETREAT_APPLIED_PATTERN = 'order.settlement.retreat.applied';
 const PG_UNIQUE_VIOLATION = '23505';
 
 /**
@@ -360,7 +362,9 @@ export class OrderSettlementService {
         .find({
           where: level ? { level, isDeleted: false } : { isDeleted: false },
         });
-      return rows.filter((row) => (Number(row.amount) || 0) > 0);
+      // T6-BE-3: manfiy qoldiq (qaytarilgan to'lov qarzi) ham yig'indilarga
+      // kiradi — ishorasi bilan (zanjir qarzini OSHIRADI).
+      return rows.filter((row) => (Number(row.amount) || 0) !== 0);
     } catch {
       return [];
     }
@@ -390,10 +394,12 @@ export class OrderSettlementService {
           isDeleted: false,
         },
       });
-    return (rows ?? []).reduce((sum, row) => {
-      const amount = Number(row.amount) || 0;
-      return amount > 0 ? sum + amount : sum;
-    }, 0);
+    // T6-BE-3: ishorali — manfiy qoldiq kuryer qarzini oshiradi
+    // (balans = PENDING − qoldiq).
+    return (rows ?? []).reduce(
+      (sum, row) => sum + (Number(row.amount) || 0),
+      0,
+    );
   }
 
   /** Return the per-order settlement row (status + leg stamps) for one order. */
@@ -1008,23 +1014,44 @@ export class OrderSettlementService {
       );
     }
 
-    const result = await this.orderSettlementRepo
-      .createQueryBuilder()
-      .update(OrderSettlement)
-      .set({
-        status: SettlementStatus.PENDING,
-        courier_to_branch_at: null,
-        branch_to_hq_at: null,
-        branch_to_hq_by: null,
-      })
-      .where('order_id IN (:...orderIds)', { orderIds })
-      .andWhere('status = :status', {
-        status: SettlementStatus.BRANCH_SETTLED,
-      })
-      .andWhere('courier_id IS NULL')
-      .andWhere('branch_id IS NULL')
-      .andWhere('is_deleted = :isDeleted', { isDeleted: false })
-      .execute();
+    /**
+     * T6: FIFO endi o'z nomzodlarini FOR UPDATE (createdAt, id) tartibida
+     * qulflaydi. Bulk UPDATE qatorlarni skan tartibida qulflab, `hq_to_market`
+     * FIFO bilan deadlock berishi mumkin edi — avval AYNI tartibda SELECT …
+     * FOR UPDATE, keyin UPDATE (bitta tranzaksiyada).
+     */
+    const result = await this.dataSource.transaction(async (tx) => {
+      const rows = await tx
+        .getRepository(OrderSettlement)
+        .createQueryBuilder('s')
+        .select(['s.id'])
+        .where('s.order_id IN (:...orderIds)', { orderIds })
+        .andWhere('s.status = :status', {
+          status: SettlementStatus.BRANCH_SETTLED,
+        })
+        .andWhere('s.courier_id IS NULL')
+        .andWhere('s.branch_id IS NULL')
+        .andWhere('s.isDeleted = :isDeleted', { isDeleted: false })
+        .orderBy('s.createdAt', 'ASC')
+        .addOrderBy('s.id', 'ASC')
+        .setLock('pessimistic_write')
+        .getMany();
+      if (!rows.length) return { affected: 0 };
+      return tx
+        .createQueryBuilder()
+        .update(OrderSettlement)
+        .set({
+          status: SettlementStatus.PENDING,
+          courier_to_branch_at: null,
+          branch_to_hq_at: null,
+          branch_to_hq_by: null,
+        })
+        .where('id IN (:...ids)', { ids: rows.map((row) => row.id) })
+        .andWhere('status = :status', {
+          status: SettlementStatus.BRANCH_SETTLED,
+        })
+        .execute();
+    });
 
     const marketSettled = await this.orderSettlementRepo.find({
       where: {
@@ -1206,23 +1233,30 @@ export class OrderSettlementService {
           where: { level: params.carryLevel, party_id: params.matchValue },
           lock: { mode: 'pessimistic_write' },
         });
-        carryBefore = Math.max(Number(carryRow?.amount ?? 0) || 0, 0);
+        // T6-BE-3: MANFIY qoldiq (to'lov qaytarilganda daftarning keyingi
+        // bo'g'inga o'tib bo'lgan qismi — `retreatSettlement`) QIRQILMAYDI:
+        // u kuryer/marketning qarzi, keyingi to'lov AVVAL uni yopadi.
+        carryBefore = Number(carryRow?.amount ?? 0) || 0;
       }
 
+      // T6: qatorlar FOR UPDATE — parallel `retreatSettlement` qayta ochgan
+      // qatorni bu FIFO eski holat bilan bosib ketmasin (Postgres qulfdan
+      // keyin `status` shartini qayta tekshiradi). Tartib retreat bilan bir xil.
       const candidates = await repo.find({
         where: {
           [params.matchColumn]: params.matchValue,
           status: params.fromStatus,
           isDeleted: false,
         } as Record<string, unknown>,
-        order: { createdAt: 'ASC' },
+        order: { createdAt: 'ASC', id: 'ASC' },
+        lock: { mode: 'pessimistic_write' },
       });
 
       let remaining = lumpSum + carryBefore;
       const now = new Date();
       const advanceRow = async (row: OrderSettlement): Promise<void> => {
         await repo.update(
-          { id: row.id },
+          { id: row.id, status: params.fromStatus },
           { status: params.toStatus(row), ...params.stamp(now) },
         );
         settledOrderIds.push(String(row.order_id));
@@ -1368,7 +1402,10 @@ export class OrderSettlementService {
        * `remaining` EMAS: tortilib, lekin yozilmay qolgan kreditlar uni
        * sun'iy oshirgan bo'lishi mumkin.
        */
-      newCarry = Math.max(lumpSum + carryBefore - allocated, 0);
+      newCarry =
+        carryBefore < 0
+          ? Math.round((lumpSum + carryBefore - allocated) * 100) / 100
+          : Math.max(lumpSum + carryBefore - allocated, 0);
       // MONEY-02: hammasi yopildi, yig'indi qoldiqqa butun tiyinda teng —
       // qoldiq to'liq sarflandi (suzuvchi nuqta qoldig'i yozilmasin).
       if (carryCoveredTiyin !== null && !zeroNetRejection) {
@@ -1594,11 +1631,12 @@ export class OrderSettlementService {
   private async claimAdvanceToken(
     tx: EntityManager,
     key: string,
+    pattern: string = ADVANCE_APPLIED_PATTERN,
   ): Promise<void> {
     try {
       await tx.getRepository(IdempotencyKey).insert({
         key,
-        pattern: ADVANCE_APPLIED_PATTERN,
+        pattern,
         status: 'completed',
         completed_at: new Date(),
       });
@@ -1614,10 +1652,11 @@ export class OrderSettlementService {
   }
 
   /** M8 — token belgisi kaliti (token uzunligidan qat'i nazar 97 belgi). */
-  private advanceAppliedKey(token: string): string {
-    return `${ADVANCE_APPLIED_PATTERN}:${createHash('sha256')
-      .update(token)
-      .digest('hex')}`;
+  private advanceAppliedKey(
+    token: string,
+    pattern: string = ADVANCE_APPLIED_PATTERN,
+  ): string {
+    return `${pattern}:${createHash('sha256').update(token).digest('hex')}`;
   }
 
   /**
@@ -1666,7 +1705,10 @@ export class OrderSettlementService {
     if (!partyIds.length) {
       return;
     }
-    const carries = await this.loadCarries(level);
+    // Faqat MUSBAT qoldiq qatorlarni yopa oladi (manfiysi — qarz).
+    const carries = (await this.loadCarries(level)).filter(
+      (row) => (Number(row.amount) || 0) > 0,
+    );
     const withCarry = partyIds.filter((id) =>
       carries.some((row) => String(row.party_id) === id),
     );
@@ -1859,6 +1901,314 @@ export class OrderSettlementService {
     delete publicResult.touched;
     delete publicResult.carryPersisted;
     return successRes(publicResult, 200, 'Settlement advanced');
+  }
+
+  /**
+   * T6-BE-3 — `order.settlement.retreat`: superadmin to'lovni (kuryerdan
+   * qabul / marketga to'lov) QAYTARGANDA daftar orqaga suriladi (finance
+   * outbox'idan, pul tranzaksiyasi bilan bitta tranzaksiyada navbatga
+   * qo'yilgan). Kassa allaqachon qaytarilgan — bu yerda faqat daftar.
+   *
+   * X — qaytarilgan summa. Qadamlar (bitta tranzaksiya, qoldiq qatori
+   * QULFLANGAN):
+   *   1. qoldiqdan (`order_settlement_carry`, musbat qismi) min(qoldiq, X);
+   *   2. qolgani — shu bo'g'in yopgan, lekin KEYINGI bo'g'inga o'tmagan
+   *      qatorlar ENG YANGISIDAN qayta ochiladi: kuryerda COURIER_SETTLED
+   *      (filial qatori) va HQ kuryerining BRANCH_SETTLED qatori → PENDING;
+   *      marketda MARKET_SETTLED → BRANCH_SETTLED. Oxirgi qator ortiqcha
+   *      ochsa — ortig'i qoldiqqa (musbat);
+   *   3. yetmagani (qatorlar keyingi bo'g'inga o'tib bo'lgan) — MANFIY qoldiq:
+   *      `runFifoSettlement` uni qirqmaydi, keyingi to'lov AVVAL uni yopadi.
+   *
+   * Invariant: kuryer balansi = Σ PENDING − qoldiq — qaytarishdan keyin ham
+   * (`getCourierSettlementScope`). Idempotent: `request_id` (M8 belgisi,
+   * alohida pattern) — qayta yetkazishda hech narsa qilinmaydi.
+   * `branch_to_hq` qo'llanmaydi (alohida karta) — 400.
+   */
+  async retreatSettlement(data: {
+    level: 'courier_to_branch' | 'hq_to_market';
+    match_value: string;
+    amount: number;
+    requester_id?: string;
+    request_id?: string;
+    /** Asl to'lovni qabul qilgan kassa: `main` (HQ) yoki `branch`. */
+    receiver_cashbox_type?: string | null;
+    /** `branch` bo'lsa — filial id si. */
+    receiver_branch_id?: string | null;
+  }) {
+    const level = String(data?.level ?? '');
+    if (level !== 'courier_to_branch' && level !== 'hq_to_market') {
+      this.badRequest(`Invalid settlement retreat level: ${level}`);
+    }
+    const matchValue = String(data?.match_value ?? '').trim();
+    const amount = Math.round(Number(data?.amount ?? 0) * 100) / 100;
+    if (!/^\d+$/.test(matchValue) || !(amount > 0)) {
+      return successRes(
+        { reopened_order_ids: [], reopened: 0, carry_after: null },
+        200,
+        'No settlement to retreat',
+      );
+    }
+    const requesterId = String(data?.requester_id ?? '').trim();
+    const rawReceiver = String(data?.receiver_cashbox_type ?? '').trim();
+    const receiverBranchId =
+      String(data?.receiver_branch_id ?? '').trim() || null;
+    let receiverType: 'main' | 'branch' | null =
+      rawReceiver === 'main'
+        ? 'main'
+        : rawReceiver === 'branch' && receiverBranchId
+          ? 'branch'
+          : null;
+    // HQ filialining o'z BRANCH kassasi qabul qilgan bo'lsa — HQ qatorlari
+    // (`branch_id` NULL, c2b FIFO ularni BRANCH_SETTLED qiladi): MAIN kabi.
+    if (receiverType === 'branch' && receiverBranchId) {
+      const hqBranchId = await this.resolveHqBranchId();
+      if (!hqBranchId) {
+        // HQ aniqlanmadi (sovuq kesh / branch-service sekin): taxmin qilinmaydi
+        // — applied kaliti band qilinishidan OLDIN 503, outbox qayta yetkazadi
+        // (`reclaimFailed`). Aks holda HQ qatorlari noto'g'ri yo'l bilan
+        // qolib, takror urinish ham bo'lmasdi.
+        throw new RpcException({
+          statusCode: 503,
+          message:
+            "HQ filialini aniqlab bo'lmadi — daftar qaytarilishi keyinroq qayta uriniladi",
+        });
+      }
+      if (hqBranchId === receiverBranchId) {
+        receiverType = 'main';
+      }
+    }
+    /** Qoldiq tegi: MAIN → NULL, filial → id; qabul qiluvchi noma'lum — undefined. */
+    const receiverTag: string | null | undefined =
+      level !== 'courier_to_branch' || !receiverType
+        ? undefined
+        : receiverType === 'branch'
+          ? receiverBranchId
+          : null;
+    const token = String(data?.request_id ?? '').trim();
+    const appliedKey = token
+      ? this.advanceAppliedKey(token, RETREAT_APPLIED_PATTERN)
+      : undefined;
+    if (appliedKey) {
+      const applied = await this.findAppliedAdvance(appliedKey);
+      if (applied) {
+        return applied;
+      }
+    }
+
+    const carryEnabled = await this.isCarryTableStrict();
+    const round2 = (value: number) => Math.round(value * 100) / 100;
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+    const reopenedIds: string[] = [];
+    let reopened = 0;
+    let carryBefore = 0;
+    let carryAfter: number | null = null;
+    try {
+      const tx = queryRunner.manager;
+      if (appliedKey) {
+        await this.claimAdvanceToken(tx, appliedKey, RETREAT_APPLIED_PATTERN);
+      }
+      const repo = tx.getRepository(OrderSettlement);
+      const carryRepo = carryEnabled
+        ? tx.getRepository(OrderSettlementCarry)
+        : null;
+      let carryRow: OrderSettlementCarry | null = null;
+      if (carryRepo) {
+        await carryRepo
+          .createQueryBuilder()
+          .insert()
+          .values({ level, party_id: matchValue, branch_id: null, amount: 0 })
+          .orIgnore()
+          .execute();
+        carryRow = await carryRepo.findOne({
+          where: { level, party_id: matchValue },
+          lock: { mode: 'pessimistic_write' },
+        });
+        carryBefore = Number(carryRow?.amount ?? 0) || 0;
+      }
+
+      // Musbat qoldiq faqat SHU qabul qiluvchiniki bo'lsa ishlatiladi (boshqa
+      // filial qoldig'i bu qaytarishni qoplamaydi).
+      const carryTag = carryRow?.branch_id ? String(carryRow.branch_id) : null;
+      const carryUsable = receiverTag === undefined || carryTag === receiverTag;
+      const rest = round2(
+        amount - (carryUsable ? Math.min(Math.max(carryBefore, 0), amount) : 0),
+      );
+      if (rest > 0) {
+        // Qatorlar FOR UPDATE — FIFO (`runFifoSettlement`) bilan BIR XIL
+        // tartibda (createdAt ASC) qulflanadi (deadlock yo'q), keyin eng
+        // yangisidan yuriladi. Parallel FIFO qatorni boshqa holatga o'tkazgan
+        // bo'lsa, Postgres qulfdan keyin WHERE ni qayta tekshiradi — qator
+        // tushib qoladi (yo'qolgan yangilanish yo'q).
+        const qb = repo
+          .createQueryBuilder('s')
+          .where('s.isDeleted = :deleted', { deleted: false })
+          .orderBy('s.createdAt', 'ASC')
+          .addOrderBy('s.id', 'ASC')
+          .setLock('pessimistic_write');
+        if (level === 'courier_to_branch') {
+          qb.andWhere('s.courier_id = :party', { party: matchValue });
+          if (receiverType === 'branch' && receiverBranchId) {
+            // Asl qabul qiluvchi — filial: faqat SHU filial qatorlari.
+            qb.andWhere('s.status = :courierSettled', {
+              courierSettled: SettlementStatus.COURIER_SETTLED,
+            }).andWhere('s.branch_id = :receiverBranch', {
+              receiverBranch: receiverBranchId,
+            });
+          } else if (receiverType === 'main') {
+            // Asl qabul qiluvchi — HQ: faqat HQ qatorlari (branch_id NULL).
+            qb.andWhere('s.status = :branchSettled', {
+              branchSettled: SettlementStatus.BRANCH_SETTLED,
+            }).andWhere('s.branch_id IS NULL');
+          } else {
+            // Eski payload (qabul qiluvchisiz) — ikkala tur.
+            qb.andWhere(
+              new Brackets((w) => {
+                w.where(
+                  '(s.status = :courierSettled AND s.branch_id IS NOT NULL)',
+                  { courierSettled: SettlementStatus.COURIER_SETTLED },
+                ).orWhere(
+                  '(s.status = :branchSettled AND s.branch_id IS NULL)',
+                  { branchSettled: SettlementStatus.BRANCH_SETTLED },
+                );
+              }),
+            );
+          }
+        } else {
+          qb.andWhere('s.market_id = :party', { party: matchValue }).andWhere(
+            's.status = :marketSettled',
+            { marketSettled: SettlementStatus.MARKET_SETTLED },
+          );
+        }
+        const candidates = (await qb.getMany()).reverse();
+        const field =
+          level === 'courier_to_branch' ? 'courier_amount' : 'market_amount';
+        for (const row of candidates) {
+          if (reopened >= rest) break;
+          const leg = Number(row[field] ?? 0) || 0;
+          // Kredit / nol qator qarzni oshirmaydi — tegilmaydi.
+          if (!(leg > 0)) continue;
+          await repo.update(
+            { id: row.id },
+            level === 'courier_to_branch'
+              ? {
+                  status: SettlementStatus.PENDING,
+                  courier_to_branch_at: null,
+                  courier_to_branch_by: null,
+                }
+              : {
+                  status: SettlementStatus.BRANCH_SETTLED,
+                  hq_to_market_at: null,
+                  hq_to_market_by: null,
+                },
+          );
+          reopened = round2(reopened + leg);
+          reopenedIds.push(String(row.order_id));
+        }
+      }
+
+      if (carryRepo && carryRow) {
+        carryAfter = round2(carryBefore - amount + reopened);
+        let branchId = carryRow.branch_id ?? null;
+        if (receiverTag !== undefined) {
+          // Teg faqat qoldiq qabul qiluvchiniki bo'lib qolganda o'zgaradi
+          // (0 / manfiy — qarz shu qabul qiluvchida); boshqa filialning
+          // musbat qoldig'i o'z tegini saqlaydi.
+          if (carryAfter <= 0 || carryTag === receiverTag) {
+            branchId = receiverTag;
+          }
+        } else if (level === 'courier_to_branch' && !branchId) {
+          const sample = await repo.findOne({
+            where: { courier_id: matchValue },
+            order: { createdAt: 'DESC' },
+          });
+          branchId = sample?.branch_id ? String(sample.branch_id) : null;
+        }
+        await carryRepo.update(
+          { id: carryRow.id },
+          { amount: carryAfter, branch_id: branchId },
+        );
+      }
+
+      if (appliedKey) {
+        await tx.getRepository(IdempotencyKey).update(
+          { key: appliedKey },
+          {
+            response: {
+              reopened_order_ids: reopenedIds,
+              reopened,
+              carry_after: carryAfter,
+            },
+          },
+        );
+      }
+      await queryRunner.commitTransaction();
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      if (error instanceof AdvanceAlreadyAppliedError && appliedKey) {
+        return (
+          (await this.findAppliedAdvance(appliedKey)) ??
+          successRes(
+            { reopened_order_ids: [], reopened: 0, replayed: true },
+            200,
+            'Settlement already retreated',
+          )
+        );
+      }
+      if (error instanceof RpcException) {
+        throw error;
+      }
+      this.handleDbError(error);
+      throw new RpcException({
+        statusCode: 500,
+        message:
+          error instanceof Error ? error.message : 'Internal server error',
+      });
+    } finally {
+      await queryRunner.release();
+    }
+
+    if (carryAfter !== null && carryAfter < 0) {
+      this.logger.warn(
+        `Settlement retreat (T6): level=${level} match=${matchValue} amount=${amount} reopened=${reopened} — daftar keyingi bo'g'inga o'tib bo'lgan, manfiy qoldiq ${carryAfter} (keyingi to'lov avval uni yopadi)`,
+      );
+    }
+    if (this.activityLog) {
+      await this.activityLog
+        .log({
+          entity_type: 'Settlement',
+          entity_id: matchValue,
+          action: ActivityAction.UPDATED,
+          user_id: /^\d+$/.test(requesterId) ? requesterId : null,
+          metadata: {
+            leg: level,
+            kind: 'retreat',
+            amount,
+            reopened,
+            reopened_count: reopenedIds.length,
+            reopened_order_ids: reopenedIds.slice(
+              0,
+              SETTLEMENT_AUDIT_ORDER_IDS_MAX,
+            ),
+            carry_before: carryBefore,
+            carry_after: carryAfter,
+            request_id: token || null,
+          },
+          description: `Hisob-kitob orqaga surildi (${SETTLEMENT_LEVEL_UZ[level]}) #${matchValue}: ${moneyUz(amount)}, ${reopenedIds.length} ta buyurtma qayta ochildi`,
+        })
+        .catch((err: unknown) =>
+          this.logger.warn(
+            `settlement retreat audit failed (level=${level} match=${matchValue}): ${(err as Error)?.message ?? String(err)}`,
+          ),
+        );
+    }
+    return successRes(
+      { reopened_order_ids: reopenedIds, reopened, carry_after: carryAfter },
+      200,
+      'Settlement retreated',
+    );
   }
 
   /**

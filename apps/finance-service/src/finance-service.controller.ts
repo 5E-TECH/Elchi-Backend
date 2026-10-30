@@ -147,9 +147,14 @@ export class FinanceServiceController {
   }
 
   @MessagePattern({ cmd: 'finance.history.find_by_id' })
-  findHistoryById(@Payload() data: { id: string }, @Ctx() context: RmqContext) {
+  findHistoryById(
+    @Payload() data: { id: string; include_correctable?: boolean },
+    @Ctx() context: RmqContext,
+  ) {
     return this.executeAndAck(context, () =>
-      this.financeService.findHistoryById(data.id),
+      this.financeService.findHistoryById(data.id, {
+        include_correctable: data.include_correctable === true,
+      }),
     );
   }
 

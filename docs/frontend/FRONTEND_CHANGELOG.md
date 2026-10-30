@@ -21,6 +21,82 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 ## Yozuvlar
 
+### 2026-10-30 — T6: kuryerdan olingan / marketga berilgan pulni qaytarish yoki summasini tuzatish (superadmin)
+
+Deploy: **finance-service + order-service + api-gateway** (+ libs/common: notification-service bir xil katalog
+bilan qayta yig'iladi). Migratsiya **`1716000000186`** (`cashbox_history.transfer_id` / `reverses_history_id`,
+`payment_corrections`, enum `payment_reversal`, eski to'lovlarni bog'lash backfill'i — 365 kun). `openapi.json`
+qayta yaratildi. Maket: frontend `design/T6-pul-qaytarish`.
+
+- [2026-10-30] 🆕 [finance] — `POST /finance/history/:id/reverse` `{ "reason": "…" }` — **faqat superadmin**
+  (admin / menejer / registrator → 403). `:id` — to'lovning ISTALGAN oyog'i (kuryer, qabul qiluvchi MAIN/BRANCH yoki
+  market kassasidagi qator). `Idempotency-Key` **majburiy** (yo'q → 400 `IDEMPOTENCY_KEY_REQUIRED`). `reason` 5…500.
+  Qamrov: kuryerdan qabul (`courier_payment`: MAIN/BRANCH; cash / click / click_to_market) va marketga to'lov
+  (`market_payment`). Ta'sir: kuryer to'lovi — kuryer +X, qabul qiluvchi −X; click_to_market — + MAIN sof 0, market +X;
+  marketga to'lov — MAIN +X, market +X. Asl qatorlar o'zgarmaydi, har oyoqqa teskari qator (`source_type:
+  payment_reversal`, `comment` = sabab). Tuzatish **joriy smenaga** tushadi (yopilgan smena / o'tgan kun o'zgarmaydi).
+  Javob 201: `{ data: { correction: { id, action, payment_kind, original_amount, new_amount, reason, created_by,
+  created_at }, cashboxes: [{ id, user_id, cashbox_type, balance, balance_cash, balance_card }], idempotent: false } }`;
+  o'sha kalit bilan qayta → **200** `idempotent: true` (pul bir marta); o'sha kalit boshqa so'rovda → 409
+  `IDEMPOTENCY_KEY_REUSED`.
+- [2026-10-30] 🆕 [finance] — `POST /finance/history/:id/correct-amount` `{ "new_amount": 450000, "reason": "…" }` —
+  qaytarish + yangi summali to'lov (o'sha usul / karta / qabul qiluvchi) bitta tranzaksiyada; javob shakli yuqoridagi
+  bilan bir xil (`action: "edit"`). Tahrirdan keyingi to'lovni yana tuzatish mumkin — muddat zanjirning BIRINCHI
+  to'lovidan.
+- [2026-10-30] 🆕 [finance] — xato kodlari (`code`, matnni emas kodni tekshiring): 404 `NOT_FOUND`; 409
+  `NOT_CORRECTABLE` (tur qamrovda emas / teskari qator / kontragent kassasi o'chirilgan), `LEGACY_UNLINKED` (eski,
+  bog'lanmagan yozuv), `ALREADY_CORRECTED` (ikki superadmin bir vaqtda ham — ikkinchisiga), `WINDOW_EXPIRED` +
+  `deadline` (ISO), `INSUFFICIENT_BALANCE` (masalan filial pulni HQ'ga bergan), `CARD_ARCHIVED`, `SAME_AMOUNT`,
+  `AMOUNT_EXCEEDS` + `max` (kuryer qoldig'i + X; market qarzi + X — kichigi), `COURIER_MOVED`; 400 `SHIFT_REQUIRED` /
+  `BRANCH_SHIFT_REQUIRED`. Xatoda pul o'zgarmaydi.
+- [2026-10-30] 🆕 [finance] — `GET /finance/payment-corrections/settings` → `{ data: { window_days, updated_by,
+  updated_at } }` (qator yo'q — `window_days: 30`); `PATCH` `{ "window_days": 7 }` — butun son 1…365, aks holda 400.
+  Ikkalasi faqat superadmin.
+- [2026-10-30] ✏️ [finance] — barcha tarix javoblari (`/finance/history`, `/finance/history/:id`, `/finance/cashbox/main`,
+  `/finance/cashbox/my-cashbox`, `/finance/cashbox/user/:id/main`, `/finance/cashbox/user/:user_id` tarixi) har
+  qatorda: `transfer_id` (uuid | null), `reverses_history_id` (teskari qatorda asl qator id si) va `correction: null | {
+  id, action: "reverse"|"edit", role: "original"|"reversal"|"replacement", reason, created_by_name, created_at,
+  original_amount, new_amount, related_history_id }`. `role`: `original` — qaytarilgan asl oyoq (`related_history_id` —
+  uning teskari qatori), `reversal` — teskari qator (`related_history_id` — asl), `replacement` — tahrirdagi yangi
+  to'lov oyog'i (`related_history_id` — shu kassadagi asl oyoq). Sabab (`reason`) kuryer / market o'z kassasida ham
+  ko'rinadi.
+- [2026-10-30] ✏️ [finance] — `GET /finance/history/:id` **superadminga** qo'shimcha `correctable: { allowed, code?,
+  deadline, window_days }` (`code` — yuqoridagi kodlardan; smena / balans / karta amal paytida tekshiriladi). Boshqa
+  rollarda kalit yo'q.
+- [2026-10-30] ✏️ [finance] — `POST /finance/cashbox/payment/courier` (201) va `/payment/market` (200) javobiga
+  `data.transfer_id` qo'shildi (additive).
+- [2026-10-30] 🆕 [finance] — `POST /finance/cashbox/payment/courier/:id/ack` — qaytarilgan / tuzatilgan to'lov
+  kvitansiyasiga → 409 `PAYMENT_CORRECTED`.
+- [2026-10-30] 🆕 [notification] — yangi tur **`finance.payment_corrected`** (FINANCE, HIGH, o'chirib bo'lmaydi,
+  in_app + realtime + Telegram shaxsiy chat). Kimga: kuryer (+ BRANCH qabul qilgan bo'lsa filial boshlig'i);
+  click_to_market — + market; marketga to'lov — market. Til — oluvchiniki (uz / ru / en), sabab matnda YO'Q. Havola
+  `/cash-box`. `GET /telegram/dm-delivery?type=finance.payment_corrected` qo'llanadi.
+- [2026-10-30] 🆕 [realtime] — `finance.payment.corrected` `{ correction_id, action, payment_kind, cashbox_type,
+  branch_id?, cashbox_ids, at }` (summasiz): MAIN — superadmin/admin/registrator, BRANCH — shu filial menejerlari,
+  kuryer / market — o'z xonasi. Kassa sahifasi REST'dan qayta o'qisin.
+- [2026-10-30] 🟢 [finance] — jurnal fe'llari: `finance.payment_reversed`, `finance.payment_amount_corrected`
+  (metadata: summalar, `correction_id`, `reason`, `partner_notified: false`), `finance.payment_correction_settings_updated`.
+  Market buyurtmalari: oxirgi PAID / PARTLY_PAID buyurtmadan to'langan qism kamayadi (→ PARTLY_PAID / SOLD; CLOSED
+  tegilmaydi), fonda. `branch_to_main` tuzatilmaydi (alohida karta); hamkor marketiga xabar yuborilmaydi
+  (buyurtma holati sinxroni ham hamkorga ketmaydi).
+- [2026-10-30] 🆕 [finance] — **kuryer ko'chgan**: kuryer to'lovini (click_to_market ning kuryer oyog'i ham)
+  qaytarish / tuzatish faqat kuryerning HOZIRGI joylashuvi asl qabul qiluvchiga mos bo'lsa (MAIN ↔ kuryer HQ'da;
+  filial X ↔ kuryer X da). Aks holda 409 **`COURIER_MOVED`** «Kuryer boshqa filialga o'tgan — bu to'lovni qaytarib
+  yoki tuzatib bo'lmaydi» (TZ «Kuryer boshqa filialga o'tgan» qatori shu sukut qaror bilan almashadi, ega tasdig'i
+  kutilmoqda). `GET /finance/history/:id` superadminga shu holatda `correctable: { allowed: false, code:
+  "COURIER_MOVED" }`. Tekshiruv xizmati javob bermasa — 503.
+- [2026-10-30] ✏️ [finance] — `correct-amount` kuryer to'lovida yangi to'lov oddiy qabul qoidasi bilan: HQ qabul
+  qilgan bo'lsa kuryerda filialga tegishli topshirilmagan savdo bo'lmasligi kerak, filial qabul qilgan bo'lsa kuryer
+  o'sha filialda; aks holda 409 `NOT_CORRECTABLE` (to'liq qaytarish mumkin). O'sha `Idempotency-Key` bilan takror —
+  tekshiruvsiz 200 `idempotent: true`.
+- [2026-10-30] 🟢 [finance] — smena hisoboti: kuryer bo'lagida `received` (yalpi), `reversed` (shu smenada
+  qaytarilgan), `total` (sof), `count` — qaytarilmaganlar; matn «Topshirgan · Qaytarilgan · Sof». Qaytarilgan market
+  to'lovi manfiy qator (`reversed: true`, «qaytarildi»; bildirishnoma `data.payments[].reversed`, XLSX/PDF ham). Teskari qatorlarda
+  `source_user` (asl kontragent) to'ldiriladi.
+- [2026-10-30] 🟢 [bot] — qaytarilgan to'lov kvitansiyasidagi tugma bosilsa: tugmalar olinadi, «Bu to'lov qaytarilgan
+  yoki tuzatilgan — yangi holat bildirishnomada.»
+
+
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
 ### 2026-10-30 — Chek: pochta buyurtmalarida «EL-…» raqam, mahsulot nomi va «Qayerdan» (T9, HJ5sLHiz BE-1/BE-2)

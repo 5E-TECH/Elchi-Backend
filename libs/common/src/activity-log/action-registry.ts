@@ -259,6 +259,25 @@ export const ACTIVITY_ACTION_REGISTRY: Readonly<
     'delete',
     'red',
   ),
+  // T6: superadmin to'lovni qaytardi / summasini tuzatdi; muddat sozlamasi.
+  'finance.payment_reversed': entry(
+    "To'lov qaytarildi",
+    'finance',
+    'undo',
+    'rose',
+  ),
+  'finance.payment_amount_corrected': entry(
+    "To'lov summasi tuzatildi",
+    'finance',
+    'edit',
+    'amber',
+  ),
+  'finance.payment_correction_settings_updated': entry(
+    "To'lovni tuzatish muddati o'zgartirildi",
+    'finance',
+    'edit',
+    'blue',
+  ),
   'finance.balance_update': entry(
     "Balans o'zgartirildi",
     'finance',

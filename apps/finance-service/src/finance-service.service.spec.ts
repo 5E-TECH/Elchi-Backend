@@ -6,6 +6,14 @@ const captureExceptionMock = jest.fn();
 
 const rmqSendMock = jest.fn();
 
+// T6 — tuzatish ko'rinishi o'z spec'larida; bu yerda qatorlar o'zgarishsiz.
+jest.mock('./payment-correction/payment-correction.rules', () => ({
+  attachCorrectionViews: jest.fn((_manager: unknown, rows: unknown) =>
+    Promise.resolve(rows),
+  ),
+  evaluateCorrectable: jest.fn(),
+  readWindowSetting: jest.fn(),
+}));
 jest.mock('@app/common', () => ({
   // vf4513Zn — tarixdagi foydalanuvchi proyeksiyasi (sof funksiya) haqiqiy.
   ...jest.requireActual('@app/common/security/user-summary'),

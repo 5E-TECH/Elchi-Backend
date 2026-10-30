@@ -82,6 +82,7 @@ export * from './notification/notification-type.validator';
 export * from './notification/telegram-html';
 export * from './notification/dispatch-request-id';
 export * from './notification/telegram-dm-delivery';
+export * from './finance/payment-correction';
 export * from './telegram/verify-init-data';
 export * from './scan/scan-order-summary';
 export * from './staging/outbound-guard';

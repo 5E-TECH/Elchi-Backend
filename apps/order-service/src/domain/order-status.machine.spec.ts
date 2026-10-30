@@ -1,6 +1,7 @@
 import { Order_status } from '@app/common';
 import {
   ORDER_STATUS_TRANSITIONS,
+  isValidPaymentReversalStatusTransition,
   isValidRollbackStatusTransition,
   isValidStatusTransition,
   mapInitialStatusForTracking,
@@ -118,6 +119,32 @@ describe('order status machine', () => {
         isValidRollbackStatusTransition(
           Order_status.SOLD,
           Order_status.CANCELLED_SENT,
+        ),
+      ).toBe(false);
+    });
+  });
+
+  // T6-BE-3: faqat `order.payment_reversal.apply` yo'li.
+  describe('isValidPaymentReversalStatusTransition', () => {
+    it('PAID → PARTLY_PAID / SOLD, PARTLY_PAID → SOLD; umumiy mashinada yo`q', () => {
+      for (const [from, to] of [
+        [Order_status.PAID, Order_status.PARTLY_PAID],
+        [Order_status.PAID, Order_status.SOLD],
+        [Order_status.PARTLY_PAID, Order_status.SOLD],
+      ] as const) {
+        expect(isValidPaymentReversalStatusTransition(from, to)).toBe(true);
+        expect(isValidStatusTransition(from, to)).toBe(false);
+      }
+      expect(
+        isValidPaymentReversalStatusTransition(
+          Order_status.CLOSED,
+          Order_status.SOLD,
+        ),
+      ).toBe(false);
+      expect(
+        isValidPaymentReversalStatusTransition(
+          Order_status.PAID,
+          Order_status.CANCELLED,
         ),
       ).toBe(false);
     });

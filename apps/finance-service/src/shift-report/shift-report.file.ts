@@ -103,12 +103,18 @@ export async function buildXlsx(
     { header: 'Kuryer', width: 30 },
     { header: "To'lovlar soni", width: 14 },
     { header: 'Topshirgan', width: 18 },
+    // (T6) shu smenada qaytarilgan to'lovlar va sof summa.
+    { header: 'Qaytarilgan', width: 16 },
+    { header: 'Sof', width: 18 },
     { header: 'Qolgan qarz', width: 18 },
   ];
   for (const slice of snapshot.couriers) {
+    const reversed = slice.reversed ?? 0;
     couriers.addRow([
       slice.name ?? `#${slice.courier_id}`,
       slice.count,
+      slice.received ?? slice.total + reversed,
+      reversed,
       slice.total,
       slice.remaining_debt,
     ]);
@@ -122,6 +128,7 @@ export async function buildXlsx(
     { header: 'Karta', width: 22 },
     { header: 'Vaqt', width: 18 },
     { header: 'Qoldiq', width: 18 },
+    { header: 'Izoh', width: 14 },
   ];
   for (const slice of snapshot.markets) {
     for (const line of slice.payments) {
@@ -132,6 +139,7 @@ export async function buildXlsx(
         line.card_name ?? '',
         tashkentDateTime(line.at),
         slice.balance,
+        line.reversed ? 'qaytarildi' : '',
       ]);
     }
   }
@@ -213,7 +221,9 @@ export async function buildPdf(snapshot: ShiftReportSnapshot): Promise<Buffer> {
   for (const slice of snapshot.couriers) {
     line(
       slice.name ?? `#${slice.courier_id}`,
-      `${slice.count} ta, ${formatSom(slice.total)}; qolgan qarz ${
+      `${slice.count} ta, ${formatSom(slice.total)}${
+        slice.reversed ? ` (qaytarilgan ${formatSom(slice.reversed)})` : ''
+      }; qolgan qarz ${
         slice.remaining_debt == null ? '—' : formatSom(slice.remaining_debt)
       }`,
     );
@@ -234,7 +244,9 @@ export async function buildPdf(snapshot: ShiftReportSnapshot): Promise<Buffer> {
             `   • ${formatSom(payment.amount)} — ${
               PAYMENT_METHOD_LABELS[payment.payment_method] ??
               payment.payment_method
-            }${payment.card_name ? ` (${payment.card_name})` : ''} · ${tashkentDateTime(payment.at)}`,
+            }${payment.card_name ? ` (${payment.card_name})` : ''} · ${tashkentDateTime(payment.at)}${
+              payment.reversed ? ' — qaytarildi' : ''
+            }`,
           ),
         );
     }

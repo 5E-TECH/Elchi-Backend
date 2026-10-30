@@ -1,3 +1,4 @@
+import { PAYMENT_CORRECTION_ERROR_CODES as PC } from '../finance/payment-correction';
 import { WAREHOUSE_ERROR_CODES } from '../catalog/warehouse';
 import { CONTACT_ERROR_CODES } from '../contacts/contacts';
 
@@ -43,6 +44,24 @@ export const LOGIN_LOCKED = 'LOGIN_LOCKED';
 export const PASSWORD_CHANGE_REQUIRED = 'PASSWORD_CHANGE_REQUIRED';
 
 export const PUBLIC_ERROR_CODES: Readonly<Record<string, readonly string[]>> = {
+  // (T6) to'lovni qaytarish / summasini tuzatish — superadmin.
+  [PC.NOT_FOUND]: [],
+  [PC.NOT_CORRECTABLE]: [],
+  [PC.LEGACY_UNLINKED]: [],
+  [PC.ALREADY_CORRECTED]: [],
+  // Muddat o'tgan: `deadline` — qachongacha tuzatish mumkin edi (ISO).
+  [PC.WINDOW_EXPIRED]: ['deadline'],
+  [PC.SHIFT_REQUIRED]: [],
+  [PC.BRANCH_SHIFT_REQUIRED]: [],
+  [PC.INSUFFICIENT_BALANCE]: [],
+  [PC.CARD_ARCHIVED]: [],
+  [PC.SAME_AMOUNT]: [],
+  // Yangi summa chegarasi: `max` (kuryer qoldig'i + X; market qarzi + X).
+  [PC.AMOUNT_EXCEEDS]: ['max'],
+  [PC.IDEMPOTENCY_KEY_REUSED]: [],
+  [PC.IDEMPOTENCY_KEY_REQUIRED]: [],
+  [PC.PAYMENT_CORRECTED]: [],
+  [PC.COURIER_MOVED]: [],
   // Sessiya yaratilganiga SESSION_REVOKE_LOCK_HOURS (sukut 48) to'lmagan:
   // `available_at` — qachondan boshqa sessiyalarni yopish mumkin (ISO).
   [SESSION_TOO_NEW]: ['available_at'],

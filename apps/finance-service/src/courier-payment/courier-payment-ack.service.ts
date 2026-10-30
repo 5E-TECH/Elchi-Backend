@@ -12,6 +12,7 @@ import {
   ActivityLogService,
   Cashbox_type,
   Operation_type,
+  PAYMENT_CORRECTION_ERROR_CODES,
   Source_type,
 } from '@app/common';
 import { CashboxHistory } from '../entities/cashbox-history.entity';
@@ -92,6 +93,20 @@ export class CourierPaymentAckService {
           String(history.cashbox.user_id) !== courierId
         ) {
           throw new NotFoundException('Kvitansiya topilmadi');
+        }
+        // T6: qaytarilgan / tuzatilgan to'lov kvitansiyasi — javob qabul
+        // qilinmaydi (kuryerga yangi holat bildirishnoma bilan borgan).
+        const corrected = await manager.getRepository(CashboxHistory).findOne({
+          where: { reverses_history_id: paymentId, isDeleted: false },
+          select: ['id'],
+        });
+        if (corrected) {
+          throw new RpcException({
+            statusCode: 409,
+            code: PAYMENT_CORRECTION_ERROR_CODES.PAYMENT_CORRECTED,
+            message:
+              "To'lov qaytarilgan yoki tuzatilgan — kvitansiyaga javob berib bo'lmaydi",
+          });
         }
         const inserted: unknown = await manager.query(
           `INSERT INTO "finance_schema"."courier_payment_acks"

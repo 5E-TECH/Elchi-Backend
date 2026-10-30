@@ -64,6 +64,7 @@ import {
 import type { EntityManager } from 'typeorm';
 import { successRes } from '../../../../libs/common/helpers/response';
 import {
+  isValidPaymentReversalStatusTransition,
   isValidRollbackStatusTransition,
   isValidStatusTransition as isValidOrderStatusTransition,
   mapInitialStatusForTracking as mapInitialOrderStatusForTracking,
@@ -6471,6 +6472,23 @@ export class OrderLifecycleService {
     return fieldPath.split('.').reduce((acc, key) => acc?.[key], obj);
   }
 
+  /**
+   * `updateFull` dan keyin hamkor (tashqi) holat sinxroni. T6:
+   * `suppressExternalSync` — superadmin to'lov tuzatishi, hamkorga xabar yo'q.
+   */
+  private syncExternalAfterUpdate(
+    updated: Order,
+    oldStatus: Order_status,
+    options?: { suppressExternalSync?: boolean },
+  ): void {
+    const newStatus = updated.status;
+    if (oldStatus === newStatus || options?.suppressExternalSync) return;
+    const action = this.resolveSyncAction(oldStatus, newStatus);
+    if (action) {
+      void this.queueExternalStatusSync(updated, action, oldStatus, newStatus);
+    }
+  }
+
   private async queueExternalStatusSync(
     order: Order,
     action: 'sold' | 'canceled' | 'paid' | 'rollback' | 'waiting',
@@ -10540,6 +10558,61 @@ export class OrderLifecycleService {
     return this.updateFull(id, dto as UpdateFullDto, requester);
   }
 
+  /**
+   * T6-BE-3 — `order.payment_reversal.apply`: superadmin marketga to'lovni
+   * qaytargan / summasini tuzatgan, finance fon sinxroni (`revertPayment
+   * FromOrders`, eng YANGI to'langan buyurtmadan) buyurtmaning
+   * `paid_amount` ini kamaytiradi: PAID → PARTLY_PAID / SOLD, PARTLY_PAID →
+   * SOLD (`ORDER_PAYMENT_REVERSAL_EXTRA_TRANSITIONS` — faqat shu yo'l).
+   *
+   * Pulga TEGMAYDI (sold-holat ichida qoladi — `enqueueFinanceOnStatusChange`
+   * hech narsa yozmaydi). CLOSED / boshqa holatdagi buyurtma — o'zgarishsiz
+   * (`skipped`). Qiymatlar mutlaq (`paid_amount`, `status`), shu bois qayta
+   * yetkazish xavfsiz.
+   */
+  async applyPaymentReversal(data: {
+    order_id?: string | number;
+    paid_amount?: number | string;
+    status?: Order_status | string;
+  }) {
+    const orderId = String(data?.order_id ?? '').trim();
+    if (!/^\d+$/.test(orderId)) {
+      this.badRequest("order_id noto'g'ri");
+    }
+    const status = String(data?.status ?? '') as Order_status;
+    if (status !== Order_status.PARTLY_PAID && status !== Order_status.SOLD) {
+      this.badRequest("status: partly_paid yoki sold bo'lishi kerak");
+    }
+    const paidAmount = Math.round(Number(data?.paid_amount ?? NaN) * 100) / 100;
+    if (!Number.isFinite(paidAmount) || paidAmount < 0) {
+      this.badRequest("paid_amount noto'g'ri");
+    }
+    const order = await this.findById(orderId);
+    if (
+      order.status !== Order_status.PAID &&
+      order.status !== Order_status.PARTLY_PAID &&
+      order.status !== status
+    ) {
+      return successRes(
+        { order_id: orderId, skipped: true, status: order.status },
+        200,
+        "Buyurtma to'langan holatda emas — o'zgartirilmadi",
+      );
+    }
+    await this.updateFull(
+      orderId,
+      { paid_amount: paidAmount, status },
+      undefined,
+      undefined,
+      { paymentReversal: true, suppressExternalSync: true },
+    );
+    return successRes(
+      { order_id: orderId, skipped: false, status, paid_amount: paidAmount },
+      200,
+      "Buyurtma to'lovi qaytarildi",
+    );
+  }
+
   async updateFull(
     id: string,
     dto: {
@@ -10617,8 +10690,18 @@ export class OrderLifecycleService {
      * `rollback: true` — status o'tishi rollback qoidasi bilan tekshiriladi
      * (`isValidRollbackStatusTransition`: sotilgan → bekor). Faqat
      * `rollbackOrderToWaiting` beradi.
+     * T6 `paymentReversal: true` — to'lov qaytarilishi qirralari
+     * (`isValidPaymentReversalStatusTransition`: PAID → PARTLY_PAID / SOLD).
+     * Faqat `applyPaymentReversal` beradi.
+     * T6 `suppressExternalSync: true` — hamkor (tashqi) holat sinxroni
+     * yuborilmaydi: superadmin to'lovni tuzatganda hamkorga xabar yo'q
+     * (ega qarori, jurnalda `partner_notified: false`).
      */
-    options?: { rollback?: boolean },
+    options?: {
+      rollback?: boolean;
+      paymentReversal?: boolean;
+      suppressExternalSync?: boolean;
+    },
   ) {
     const order = await this.findById(id);
     if (!externalManager) {
@@ -10777,7 +10860,9 @@ export class OrderLifecycleService {
 
     const transitionAllowed = options?.rollback
       ? isValidRollbackStatusTransition(oldStatus, order.status)
-      : this.isValidStatusTransition(oldStatus, order.status);
+      : options?.paymentReversal
+        ? isValidPaymentReversalStatusTransition(oldStatus, order.status)
+        : this.isValidStatusTransition(oldStatus, order.status);
     if (oldStatus !== order.status && !transitionAllowed) {
       // y2RarzlT: xabar foydalanuvchiga (toast) chiqadi — xom inglizcha emas.
       this.badRequest(
@@ -11064,17 +11149,7 @@ export class OrderLifecycleService {
 
     const updated = await this.findById(order.id);
     const newStatus = updated.status;
-    if (oldStatus !== newStatus) {
-      const action = this.resolveSyncAction(oldStatus, newStatus);
-      if (action) {
-        void this.queueExternalStatusSync(
-          updated,
-          action,
-          oldStatus,
-          newStatus,
-        );
-      }
-    }
+    this.syncExternalAfterUpdate(updated, oldStatus, options);
 
     // Generic edit audit. Skipped when an internal caller already recorded a
     // richer domain event (audit: false). `items` is summarised to a count so

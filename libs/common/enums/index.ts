@@ -96,6 +96,12 @@ export enum Source_type {
   CANCEL = 'cancel',
   EXTRA_COST = 'extra_cost',
   BILLS = 'bills',
+  /**
+   * T6 — superadmin to'lovni (kuryerdan qabul / marketga to'lov) qaytargan
+   * yoki summasini tuzatgan: asl oyoqning TESKARI qatori
+   * (`cashbox_history.reverses_history_id`). Asl qatorlar o'zgarmaydi.
+   */
+  PAYMENT_REVERSAL = 'payment_reversal',
 }
 
 /**

@@ -23,13 +23,19 @@ export const DEFAULT_OUTBOX_MAX_ATTEMPTS = 10;
  *     `finance.cashbox.update_balance` (sotuv oyoqlari),
  *     `finance.financial_balance.record`, `finance.operator.earning.*`;
  *   • `order.settlement.advance` — kassa ko'chgandan keyin per-order FIFO
- *     daftarini yetkazadi (finance → order).
+ *     daftarini yetkazadi (finance → order);
+ *   • `order.settlement.retreat` — (T6) superadmin to'lovni qaytarganda
+ *     daftarni orqaga suradi (finance → order).
  *
  * Qabul qiluvchilar takroriy yetkazishga chidamli: finance yozuvlari dedup
- * kaliti bilan, advance esa `request_id` idempotentligi bilan.
+ * kaliti bilan, advance / retreat esa `request_id` idempotentligi bilan.
  */
 export const DEFAULT_PERSISTENT_OUTBOX_PATTERNS: readonly string[] =
-  Object.freeze(['finance.*', 'order.settlement.advance']);
+  Object.freeze([
+    'finance.*',
+    'order.settlement.advance',
+    'order.settlement.retreat',
+  ]);
 
 /** `pattern` doimiy (poison qilinmaydigan) ro'yxatga tushadimi. */
 export function isPersistentOutboxPattern(

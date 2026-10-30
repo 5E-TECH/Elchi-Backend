@@ -133,10 +133,11 @@ describe('isPersistentOutboxPattern — pul hodisalari ro`yxati', () => {
     expect(isPersistentOutboxPattern(pattern)).toBe(false);
   });
 
-  it('sukutdagi ro`yxat muzlatilgan va aynan finance.* + advance', () => {
+  it('sukutdagi ro`yxat muzlatilgan va aynan finance.* + advance + retreat (T6)', () => {
     expect(DEFAULT_PERSISTENT_OUTBOX_PATTERNS).toEqual([
       'finance.*',
       'order.settlement.advance',
+      'order.settlement.retreat',
     ]);
     expect(Object.isFrozen(DEFAULT_PERSISTENT_OUTBOX_PATTERNS)).toBe(true);
   });

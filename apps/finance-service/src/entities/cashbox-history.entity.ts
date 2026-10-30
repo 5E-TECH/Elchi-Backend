@@ -16,6 +16,14 @@ import { Cashbox } from './cashbox.entity';
   ['cashbox_id', 'source_type', 'source_id', 'operation_type', 'dedup_epoch'],
   { unique: true, where: 'source_id IS NOT NULL AND is_deleted = false' },
 )
+// T6 (migratsiya 186) — bitta to'lovning oyoqlari; teskari qator bir oyoqqa bitta.
+@Index('IDX_CASHBOX_HISTORY_TRANSFER', ['transfer_id'], {
+  where: 'transfer_id IS NOT NULL',
+})
+@Index('UQ_CASHBOX_HISTORY_REVERSES', ['reverses_history_id'], {
+  unique: true,
+  where: 'reverses_history_id IS NOT NULL AND is_deleted = false',
+})
 export class CashboxHistory extends BaseEntity {
   @Column({ type: 'enum', enum: Operation_type })
   operation_type!: Operation_type;
@@ -40,6 +48,22 @@ export class CashboxHistory extends BaseEntity {
 
   @Column({ type: 'bigint', nullable: true })
   source_user_id!: string | null;
+
+  /**
+   * T6 (migratsiya 186) — bitta to'lovning BARCHA oyoqlari (kuryer EXPENSE +
+   * qabul qiluvchi INCOME [+ click_to_market: MAIN EXPENSE + market EXPENSE];
+   * marketga to'lov: MAIN + market) uchun umumiy kalit. NULL — bog'lanmagan
+   * eski yozuv (tuzatib bo'lmaydi, `LEGACY_UNLINKED`) yoki boshqa tur.
+   */
+  @Column({ type: 'uuid', nullable: true })
+  transfer_id!: string | null;
+
+  /**
+   * T6 — `payment_reversal` qatori qaysi asl oyoqni qaytargani. Bitta oyoq
+   * bir marta qaytariladi (UNIQUE partial).
+   */
+  @Column({ type: 'bigint', nullable: true })
+  reverses_history_id!: string | null;
 
   /**
    * (3PE0B03q) "O'tkazma manbasi" — o'tkazmani (click) qaysi xodim kartasi
