@@ -232,11 +232,19 @@ describePg('kiZgTybn — smena yopishda karta qoldiqlari (Postgres)', () => {
         ok: true,
         balance: 100_000.5,
         last4: '1234',
+        // Sana matniga aralashgan guruhlangan karta raqami — niqoblanadi.
+        date: '30.10.2026 14.05 8600 1234 5678 9012',
         confidence: 0.95,
         model: 'mock',
       },
     })) as Rpc;
     expect(r1.data.check.ai_status).toBe('match');
+    const humoRow = await db.getRepository(ShiftAccountCheck).findOneByOrFail({
+      shift_id: shiftId,
+      cashbox_card_id: String(cards.humo.id),
+    });
+    expect(humoRow.ai_date_detected).toBe('30.10.2026 14.05 ***');
+    expect(JSON.stringify(humoRow.ai_raw)).not.toMatch(/8600|5678|9012/);
     expect(r1.data.check.ai_entered_ok).toBe(true);
     const r2 = (await checks.applyAiResult({
       shift_id: shiftId,
