@@ -9799,6 +9799,7 @@ export class OrderLifecycleService {
        * yoziladi va bu yerdagi foyda faqat market tarifi bo'lib qoladi.
        */
       if (input.action === 'sell') {
+        // Tizim oyog'i: `created_by` berilmaydi (ustun bigint, FE «Avtomatik»).
         const pay = (
           data: Parameters<typeof this.updateCashboxBalance>[0],
         ): Promise<void> =>
@@ -9816,7 +9817,6 @@ export class OrderLifecycleService {
               operation_type: Operation_type.INCOME,
               source_type: Source_type.SELL,
               source_id: String(order.id),
-              created_by: 'system',
               comment: note,
             });
           } else if (providerMarketAmount < 0) {
@@ -9827,7 +9827,6 @@ export class OrderLifecycleService {
               operation_type: Operation_type.EXPENSE,
               source_type: Source_type.SELL,
               source_id: String(order.id),
-              created_by: 'system',
               comment: note,
             });
           }

@@ -361,6 +361,45 @@ describe('i75GDixP — filial kassasi: manfiy ruxsat faqat aniq tizim bayrog`i b
     );
   });
 
+  it('⭐ updateBalance: `created_by: system` (kargo eski outbox hodisasi) — null yoziladi, rad etilmaydi', async () => {
+    const env = makeEnv({ cashboxes: [branchCashbox(100_000)] });
+
+    const res: any = await env.service.updateBalance({
+      user_id: '15',
+      cashbox_type: 'branch' as any,
+      amount: 5_000,
+      operation_type: 'income' as any,
+      source_type: 'sell' as any,
+      source_id: '778',
+      created_by: 'system',
+    });
+
+    expect(res.statusCode).toBe(200);
+    const row = env.manager.save.mock.calls
+      .map((call: any[]) => call[0])
+      .find((saved: any) => saved?.source_type === 'sell');
+    expect(row).toMatchObject({ source_id: '778', created_by: null });
+  });
+
+  it('updateBalance: raqamli `created_by` o`zgarmaydi', async () => {
+    const env = makeEnv({ cashboxes: [branchCashbox(100_000)] });
+
+    await env.service.updateBalance({
+      user_id: '15',
+      cashbox_type: 'branch' as any,
+      amount: 5_000,
+      operation_type: 'income' as any,
+      source_type: 'sell' as any,
+      source_id: '779',
+      created_by: '42',
+    });
+
+    const row = env.manager.save.mock.calls
+      .map((call: any[]) => call[0])
+      .find((saved: any) => saved?.source_type === 'sell');
+    expect(row).toMatchObject({ created_by: '42' });
+  });
+
   it('updateBalance(MANUAL_EXPENSE, BRANCH, balansdan katta) → rad, hatto allow_negative:true bilan ham', async () => {
     const env = makeEnv({ cashboxes: [branchCashbox(100_000)] });
 

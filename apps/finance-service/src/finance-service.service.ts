@@ -462,6 +462,15 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
     });
   }
 
+  /**
+   * `created_by` — bigint ustun. Kargo sotuvining eski outbox hodisalarida
+   * `'system'` qolgan: raqam bo'lmagan qiymat tizim yozuvi (null) deb olinadi,
+   * aks holda hodisa finance'dan abadiy o'tmaydi va market puli yozilmaydi.
+   */
+  private toCreatedBy(value: string | undefined): string | null {
+    return value && /^\d+$/.test(String(value)) ? String(value) : null;
+  }
+
   private assertBigIntId(value: string | undefined, fieldName: string) {
     if (!value || !/^\d+$/.test(String(value))) {
       throw new BadRequestException(
@@ -1970,7 +1979,7 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
           balance_card_after: savedCashbox.balance_card,
           payment_method: paymentMethod,
           comment: dto.comment ?? null,
-          created_by: dto.created_by ?? null,
+          created_by: this.toCreatedBy(dto.created_by),
           proof_files:
             Array.isArray(dto.proof_files) && dto.proof_files.length
               ? dto.proof_files
