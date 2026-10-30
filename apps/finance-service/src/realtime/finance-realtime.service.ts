@@ -50,6 +50,11 @@ export const FINANCE_REALTIME_EVENTS = {
    * o'tkazma, konvertatsiya). Zv3MLn0a: filial kassasi kartasi — menejerga ham.
    */
   cashboxCardChanged: 'finance.cashbox.card_changed',
+  /**
+   * (T6) Superadmin to'lovni qaytardi / summasini tuzatdi — kassa
+   * sahifalari (MAIN yoki filial, kuryer / market o'z kassasi) qayta o'qisin.
+   */
+  paymentCorrected: 'finance.payment.corrected',
 } as const;
 
 export type FinanceRealtimeEvent =
@@ -220,6 +225,46 @@ export function buildCashboxCardChangedMessage(input: {
   };
 }
 
+/**
+ * (T6) `finance.payment.corrected` — SUMMASIZ. Nishon: qabul qiluvchi MAIN
+ * kassa — superadmin/admin/registrator; BRANCH — o'sha filial menejerlari;
+ * kontragentlar (kuryer / market) — `user:<id>`.
+ */
+export function buildPaymentCorrectedMessage(input: {
+  correction_id: string | number;
+  action: 'reverse' | 'edit';
+  payment_kind: 'courier_payment' | 'market_payment';
+  receiver_cashbox_type: 'main' | 'branch';
+  branch_id?: string | number | null;
+  user_ids: Array<string | number | null | undefined>;
+  cashbox_ids: Array<string | number>;
+  at?: Date | string | null;
+}): RealtimeNotifyMessage {
+  const branchId =
+    input.receiver_cashbox_type === 'branch' && isUserId(input.branch_id)
+      ? String(input.branch_id)
+      : null;
+  const targets: FinanceRealtimeTarget[] = branchId
+    ? [{ role: BRANCH_SHIFT_ROLE, branch_id: branchId }]
+    : MAIN_SHIFT_ROLES.map((role) => ({ role }));
+  for (const id of new Set(input.user_ids.filter(isUserId).map(String))) {
+    targets.push({ user_id: id });
+  }
+  return {
+    event: FINANCE_REALTIME_EVENTS.paymentCorrected,
+    payload: {
+      correction_id: String(input.correction_id),
+      action: input.action,
+      payment_kind: input.payment_kind,
+      cashbox_type: branchId ? 'branch' : 'main',
+      ...(branchId ? { branch_id: branchId } : {}),
+      cashbox_ids: [...new Set(input.cashbox_ids.map((id) => String(id)))],
+      at: toIso(input.at),
+    },
+    targets,
+  };
+}
+
 @Injectable()
 export class FinanceRealtimeService {
   private readonly logger = new Logger(FinanceRealtimeService.name);
@@ -258,6 +303,14 @@ export class FinanceRealtimeService {
     manager?: EntityManager,
   ): Promise<void> {
     return this.enqueue(() => buildCashboxCardChangedMessage(input), manager);
+  }
+
+  /** (T6) To'lov qaytarildi / tuzatildi — pul tranzaksiyasi ichida. */
+  paymentCorrected(
+    input: Parameters<typeof buildPaymentCorrectedMessage>[0],
+    manager?: EntityManager,
+  ): Promise<void> {
+    return this.enqueue(() => buildPaymentCorrectedMessage(input), manager);
   }
 
   /**

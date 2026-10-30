@@ -1695,3 +1695,46 @@ export class PaymentsMetaQueryDto {
   @Max(10)
   top?: number;
 }
+
+/** (T6) PATCH /finance/payment-corrections/settings — FAQAT superadmin. */
+export class UpdatePaymentCorrectionSettingsRequestDto {
+  @ApiProperty({
+    example: 7,
+    minimum: 1,
+    maximum: 365,
+    description:
+      "To'lovni qaytarish / tuzatish muddati (kun): zanjirning birinchi to'lovidan `window_days × 24 soat`. Sukut 30.",
+  })
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(365)
+  window_days!: number;
+}
+
+/** (T6) POST /finance/history/:id/reverse — FAQAT superadmin. */
+export class ReversePaymentRequestDto {
+  @ApiProperty({
+    example: 'Kuryer pulni bermagan — xato bosilgan',
+    minLength: 5,
+    maxLength: 500,
+    description:
+      "Sabab (5…500 belgi). Jurnalda va kuryer/market tafsilotida ko'rinadi, bildirishnoma matnida YO'Q.",
+  })
+  @IsString()
+  @Length(5, 500)
+  reason!: string;
+}
+
+/** (T6) POST /finance/history/:id/correct-amount — FAQAT superadmin. */
+export class CorrectPaymentAmountRequestDto extends ReversePaymentRequestDto {
+  @ApiProperty({
+    example: 450000,
+    description:
+      "Yangi summa (> 0, ko'pi bilan 2 kasr). Eskisiga teng — 409 SAME_AMOUNT; `max` dan katta — 409 AMOUNT_EXCEEDS.",
+  })
+  @Type(() => Number)
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0.01)
+  new_amount!: number;
+}

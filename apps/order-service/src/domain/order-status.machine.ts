@@ -116,6 +116,29 @@ export function isValidRollbackStatusTransition(
 }
 
 /**
+ * T6-BE-3 — FAQAT superadmin marketga to'lovni QAYTARGANDA / summasini
+ * tuzatganda (`order.payment_reversal.apply`, finance fon sinxroni):
+ * to'langan buyurtmaning `paid_amount` i kamayadi va holati orqaga qaytadi.
+ * Umumiy jadvalga QO'SHILMAYDI — oddiy PATCH / finance to'lov sinxroni
+ * to'langan buyurtmani «to'lanmagan» qila olmasin.
+ */
+export const ORDER_PAYMENT_REVERSAL_EXTRA_TRANSITIONS: Partial<
+  Record<Order_status, Order_status[]>
+> = {
+  [Order_status.PAID]: [Order_status.PARTLY_PAID, Order_status.SOLD],
+  [Order_status.PARTLY_PAID]: [Order_status.SOLD],
+};
+
+/** To'lov qaytarilishi yo'lining tekshiruvi (umumiy mashina + yuqoridagi qirralar). */
+export function isValidPaymentReversalStatusTransition(
+  from: Order_status,
+  to: Order_status,
+): boolean {
+  if (isValidStatusTransition(from, to)) return true;
+  return ORDER_PAYMENT_REVERSAL_EXTRA_TRANSITIONS[from]?.includes(to) ?? false;
+}
+
+/**
  * The status a brand-new order is recorded under on the tracking timeline: NEW
  * is normalised to CREATED so the timeline starts from a stable initial state.
  */

@@ -51,6 +51,7 @@ describe('katalog (Eh8y21Ha TC12 analogi)', () => {
       'finance.shift_closed',
       'finance.shift_auto_closed',
       'finance.shift_auto_close_warning',
+      'finance.payment_corrected',
     ]);
     FINANCE_NOTIFICATION_TYPES.forEach((type) =>
       expect(isKnownNotificationType(type)).toBe(true),

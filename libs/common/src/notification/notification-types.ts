@@ -296,6 +296,23 @@ export const NOTIFICATION_TYPES: readonly NotificationTypeDefinition[] =
         NotificationChannel.TELEGRAM,
       ],
     }),
+    // (T6-BE-4) Superadmin to'lovni QAYTARDI yoki summasini TUZATDI —
+    // tomonlarga (kuryer, filial boshlig'i, market). O'chirib bo'lmaydi;
+    // Telegram faqat shaxsiy chat (guruh nishoni berilmaydi). Sabab matnda YO'Q.
+    def({
+      key: 'finance.payment_corrected',
+      category: NotificationCategory.FINANCE,
+      priority: NotificationPriority.HIGH,
+      group_key_pattern: 'finance:payment_correction:{{correction_id}}',
+      label_uz: "To'lov qaytarildi / summasi tuzatildi",
+      default_audience: [Roles.COURIER, Roles.MARKET, Roles.MANAGER],
+      user_can_mute: false,
+      default_channels: [
+        NotificationChannel.IN_APP,
+        NotificationChannel.REALTIME,
+        NotificationChannel.TELEGRAM,
+      ],
+    }),
     // (ePpLHPX2) Balans to'ldirildi (BeePost notifyBalanceTopup analogi).
     def({
       key: 'finance.balance_topup',

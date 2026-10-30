@@ -896,6 +896,52 @@ export class OrderServiceController {
   }
 
   /**
+   * T6-BE-3 — superadmin to'lovni qaytargan / tuzatgan: daftar orqaga
+   * suriladi (finance outbox'i, doimiy pattern). `reclaimFailed` va
+   * "applied" belgisi — advance bilan bir xil (M8): qayta yetkazish hech
+   * narsani ikki marta qayta ochmaydi.
+   */
+  @MessagePattern({ cmd: 'order.settlement.retreat' })
+  settlementRetreat(
+    @Payload()
+    data: {
+      level: 'courier_to_branch' | 'hq_to_market';
+      match_value: string;
+      amount: number;
+      requester_id?: string;
+      request_id?: string;
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.runIdempotent(
+      context,
+      'order.settlement.retreat',
+      data.request_id,
+      () => this.settlementService.retreatSettlement(data),
+      { reclaimFailed: true },
+    );
+  }
+
+  /**
+   * T6-BE-3 — marketga to'lov qaytarilganda buyurtmaning to'langan qismini
+   * kamaytirish (finance fon sinxroni). Qiymatlar mutlaq — idempotent.
+   */
+  @MessagePattern({ cmd: 'order.payment_reversal.apply' })
+  paymentReversalApply(
+    @Payload()
+    data: {
+      order_id: string;
+      paid_amount: number;
+      status: Order_status;
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.lifecycleService.applyPaymentReversal(data),
+    );
+  }
+
+  /**
    * C8 (CODE-06) — kuryerning SOF-NOL PENDING savdo qatorlarini yopish.
    * branch-service kuryerni o'tkazish / filialdan chiqarishdan oldin
    * (best-effort) chaqiradi: qatorlar yig'indisi AYNAN 0 tiyin va qoldiq 0
@@ -1524,16 +1570,26 @@ export class OrderServiceController {
       id: string;
       dto: Record<string, any>;
       requester?: { id?: string; roles?: string[]; note?: string | null };
+      /** T6 — finance to'lov tuzatishi sinxroni: hamkorga holat yuborilmaydi. */
+      suppress_external_sync?: boolean;
     },
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () => {
       const normalized = this.orderService.normalizeUpdatePayload(data.dto);
-      return this.lifecycleService.updateFull(
-        data.id,
-        normalized as any,
-        data.requester,
-      );
+      return data.suppress_external_sync === true
+        ? this.lifecycleService.updateFull(
+            data.id,
+            normalized as any,
+            data.requester,
+            undefined,
+            { suppressExternalSync: true },
+          )
+        : this.lifecycleService.updateFull(
+            data.id,
+            normalized as any,
+            data.requester,
+          );
     });
   }
 

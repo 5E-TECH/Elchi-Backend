@@ -1,3 +1,5 @@
+import ExcelJS from 'exceljs';
+import PDFDocument from 'pdfkit';
 import {
   buildCourierMessage,
   buildMarketMessage,
@@ -173,5 +175,110 @@ describe('gWI4gYkw — smena hisoboti xabarlari', () => {
     expect(xlsx.subarray(0, 2).toString()).toBe('PK');
     const pdf = await buildPdf(snapshot);
     expect(pdf.subarray(0, 5).toString()).toBe('%PDF-');
+  });
+});
+
+describe('T6 — qaytarilgan to`lovlar smena hisobotida', () => {
+  const reversedSnapshot: ShiftReportSnapshot = {
+    ...snapshot,
+    couriers: [
+      {
+        courier_id: '501',
+        name: 'Ali',
+        count: 1,
+        received: 700_000,
+        reversed: 500_000,
+        total: 200_000,
+        remaining_debt: 500_000,
+      },
+    ],
+    markets: [
+      {
+        market_id: '601',
+        name: 'Market A',
+        payments: [
+          {
+            history_id: '1',
+            amount: 300_000,
+            payment_method: 'cash',
+            card_name: null,
+            at: '2026-10-30T05:00:00.000Z',
+          },
+          {
+            history_id: '2',
+            amount: -300_000,
+            payment_method: 'cash',
+            card_name: null,
+            at: '2026-10-30T06:00:00.000Z',
+            reversed: true,
+          },
+        ],
+        total: 0,
+        balance: 700_000,
+      },
+    ],
+  };
+
+  it('kuryer: «Topshirgan · Qaytarilgan · Sof»; market: «qaytarildi» qatori va data.reversed', () => {
+    const courier = buildCourierMessage(
+      reversedSnapshot,
+      reversedSnapshot.couriers[0],
+    );
+    expect(courier.body).toContain(
+      "Topshirgan: 700 000 so'm (1 ta) · Qaytarilgan: 500 000 so'm · Sof: 200 000 so'm",
+    );
+    expect(courier.data).toMatchObject({
+      reversed: 500_000,
+      received: 700_000,
+    });
+    const market = buildMarketMessage(
+      reversedSnapshot,
+      reversedSnapshot.markets[0],
+    );
+    expect(market.body).toContain("−300 000 so'm — naqd — qaytarildi");
+    expect((market.data.payments as unknown[])[1]).toMatchObject({
+      amount: -300_000,
+      reversed: true,
+    });
+  });
+
+  it('XLSX: Kuryerlar — Qaytarilgan / Sof ustunlari va qiymatlari; Marketlar — Izoh «qaytarildi»; PDF matnida «qaytarilgan»', async () => {
+    const xlsx = await buildXlsx(reversedSnapshot);
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(xlsx as never);
+    const couriers = workbook.getWorksheet('Kuryerlar');
+    const header = (couriers?.getRow(1).values as unknown[]).filter(Boolean);
+    expect(header).toEqual(
+      expect.arrayContaining(['Topshirgan', 'Qaytarilgan', 'Sof']),
+    );
+    const col = (name: string) => header.indexOf(name) + 1;
+    const row = couriers!.getRow(2);
+    expect(row.getCell(col('Topshirgan')).value).toBe(700_000);
+    expect(row.getCell(col('Qaytarilgan')).value).toBe(500_000);
+    expect(row.getCell(col('Sof')).value).toBe(200_000);
+    const markets = workbook.getWorksheet('Marketlar');
+    const mHeader = (markets?.getRow(1).values as unknown[]).filter(Boolean);
+    const izoh = mHeader.indexOf('Izoh') + 1;
+    expect(izoh).toBeGreaterThan(0);
+    expect(markets!.getRow(2).getCell(izoh).value ?? '').toBe('');
+    expect(markets!.getRow(3).getCell(izoh).value).toBe('qaytarildi');
+
+    // PDF shriftli (glif kodlari) — matn `doc.text` chaqiruvlaridan olinadi.
+    const texts: string[] = [];
+    const spy = jest
+      .spyOn(PDFDocument.prototype, 'text')
+      .mockImplementation(function (
+        this: PDFKit.PDFDocument,
+        ...args: unknown[]
+      ) {
+        if (typeof args[0] === 'string') texts.push(args[0]);
+        return this;
+      });
+    const pdf = await buildPdf(reversedSnapshot);
+    spy.mockRestore();
+    expect(pdf.subarray(0, 5).toString()).toBe('%PDF-');
+    const all = texts.join('\n');
+    expect(all).toContain("qaytarilgan 500 000 so'm");
+    expect(all).toContain('— qaytarildi');
   });
 });

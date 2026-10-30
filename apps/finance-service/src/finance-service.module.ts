@@ -51,6 +51,9 @@ import { ShiftAutoCloseScheduler } from './shift-auto-close/shift-auto-close.sch
 import { ShiftReportService } from './shift-report/shift-report.service';
 import { ShiftReportController } from './shift-report/shift-report.controller';
 import { SHIFT_REPORTS } from './shift-report/shift-report.token';
+import { PaymentCorrection } from './entities/payment-correction.entity';
+import { PaymentCorrectionService } from './payment-correction/payment-correction.service';
+import { PaymentCorrectionController } from './payment-correction/payment-correction.controller';
 
 @Module({
   imports: [
@@ -120,6 +123,8 @@ import { SHIFT_REPORTS } from './shift-report/shift-report.token';
       // qzjTMWPb — kunlik balans snapshot'i (o'qish modeli, migratsiya 176).
       FinanceCashboxDaily,
       FinanceDailySnapshot,
+      // T6 — to'lovni qaytarish / summasini tuzatish jurnali (migratsiya 186).
+      PaymentCorrection,
     ]),
   ],
   controllers: [
@@ -131,6 +136,8 @@ import { SHIFT_REPORTS } from './shift-report/shift-report.token';
     // qzjTMWPb / uzWcMR1C — kunlik agregat va /payments KPI meta (o'qish).
     FinanceAggregatesController,
     ShiftReportController,
+    // T6 — to'lovni qaytarish / summasini tuzatish (superadmin).
+    PaymentCorrectionController,
   ],
   providers: [
     FinanceServiceService,
@@ -149,6 +156,7 @@ import { SHIFT_REPORTS } from './shift-report/shift-report.token';
     ShiftReportService,
     { provide: SHIFT_REPORTS, useExisting: ShiftReportService },
     ShiftAutoCloseScheduler,
+    PaymentCorrectionService,
   ],
 })
 export class FinanceServiceModule {}

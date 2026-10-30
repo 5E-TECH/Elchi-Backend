@@ -21,6 +21,14 @@ import { SettlementUnappliedController } from './settlement/settlement-unapplied
 
 const rmqSendMock = jest.fn();
 
+// T6 — tuzatish ko'rinishi o'z spec'larida; bu yerda qatorlar o'zgarishsiz.
+jest.mock('./payment-correction/payment-correction.rules', () => ({
+  attachCorrectionViews: jest.fn((_manager: unknown, rows: unknown) =>
+    Promise.resolve(rows),
+  ),
+  evaluateCorrectable: jest.fn(),
+  readWindowSetting: jest.fn(),
+}));
 jest.mock('@app/common', () => ({
   // vf4513Zn — tarixdagi foydalanuvchi proyeksiyasi (sof funksiya) haqiqiy.
   ...jest.requireActual('@app/common/security/user-summary'),
@@ -599,6 +607,13 @@ describe('znD3KaZL TC2 (finance) — tezkor yo`l: advance javobini o`qiganda', (
   });
 
   it('⭐ kassa harakatlari va advance navbati O`ZGARMAYDI (yozuvchi bilan va usiz bir xil)', async () => {
+    // T6: har to'lov yangi `transfer_id` (UUID) oladi — taqqoslashda e'tiborsiz.
+    const noTransferId = (value: unknown): unknown =>
+      JSON.parse(
+        JSON.stringify(value, (key, item: unknown) =>
+          key === 'transfer_id' ? 'T' : item,
+        ),
+      );
     const withRecorder = makeService();
     withRecorder.orderClient.send.mockReturnValue(leftoverReply());
     const a = await payCourier(withRecorder);
@@ -607,9 +622,9 @@ describe('znD3KaZL TC2 (finance) — tezkor yo`l: advance javobini o`qiganda', (
     without.orderClient.send.mockReturnValue(leftoverReply());
     const b = await payCourier(without);
 
-    expect(a).toEqual(b);
-    expect(withRecorder.manager.save.mock.calls).toEqual(
-      without.manager.save.mock.calls,
+    expect(noTransferId(a)).toEqual(noTransferId(b));
+    expect(noTransferId(withRecorder.manager.save.mock.calls)).toEqual(
+      noTransferId(without.manager.save.mock.calls),
     );
     // Navbatga qo'yilgan hodisalar (target, pattern, payload) — bir xil.
     const enqueued = (env: ReturnType<typeof makeService>) =>
