@@ -54,7 +54,7 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
 | Service | DB schema | Owns (entities/tables) | Responsibility |
 |---|---|---|---|
 | **api-gateway** | — (no DB) | — | HTTP→RMQ proxy, auth guards, RBAC, throttling, Swagger, socket.io, webhooks, excel/printer |
-| **identity-service** | `identity_schema` | `user` | Users of every role, auth (login/refresh/logout/validate), profiles, markets (+telegram token), couriers/managers/registrators/admins/customers |
+| **identity-service** | `identity_schema` | `user`, `app_settings` | Users of every role, auth (login/refresh/logout/validate), profiles, markets (+telegram token), couriers/managers/registrators/admins/customers |
 | **order-service** | `order_schema` | `order`, `order_item`, `order_tracking`, `order_settlement`, `order_custody_event`, `branch` (mirror), `branch_transfer_batch(+item,+history)`, `order_batch_inbox_message` | The core. Order lifecycle, sell/cancel/return/rollback, per-order FIFO settlement, transfer batches, order analytics source |
 | **catalog-service** | `catalog_schema` | `product`, `warehouses`, `warehouse_stock`, `stock_movements`, `stock_reservations` | Market product catalog + **temporary warehouse module** (hY7uacJu: regional-branch stock, stock-in/inventory, order reserve/out/release/return RPCs) |
 | **logistics-service** | `logistics_schema` | `region`, `district`, `post`, `delivery_tariff`, `delivery_pricing_settings` | Geo (regions/districts, SATO codes) + **posts** (courier delivery batches): create/send/receive/reassign/cancel/return-requests + **delivery pricing engine** (DAqXPeSy: versioned tariffs, formula settings, `logistics.delivery.quote`) |
@@ -79,6 +79,26 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
 
 ### identity-service (`identity_schema`)
 - **Entity:** `user` (all roles in one table; `Roles` enum, `Status`).
+- **Contacts (T7 QPq2C1co, 2026-10-30, migration 1716000000185):**
+  `admins.market_responsible_id` (MARKET only; NULL = default) + table
+  `app_settings` (`key` UNIQUE, `value` jsonb, `updated_by`; keys
+  `contacts.support_phones` 0–2, `contacts.default_market_responsible_id`).
+  `contacts/contacts.service.ts` (`identity.contacts.*`, names in
+  `libs/common/src/contacts/contacts.ts`): settings + responsible bulk/single
+  (SA/admin only, codes `SUPPORT_PHONES_INVALID` / `RESPONSIBLE_ROLE_INVALID` /
+  `RESPONSIBLE_INACTIVE` / `NOT_A_MARKET`), market responsible resolver
+  (active assigned → active default → none; responsible roles SA/admin/
+  registrator/logist), `identity.contacts.for_user` (`GET /users/me/contacts`)
+  and `identity.contacts.problem` (order region → `regions.logist_id` active
+  logist, else support phones; one logistics RPC + one IN query). Deleting a
+  responsible or changing its role to a non-responsible one resets its markets
+  and the default in the SAME transaction (`saveWithResponsibleRelease`).
+  Gateway: `contacts-gateway.controller.ts`, `contacts/problem-contacts.service.ts`
+  (`problem_contacts` on order responses before the role projection, 60 s
+  cache) and `auth/order-contact-projection.ts` (market/operator phones hidden
+  from MANAGER/BRANCH/COURIER unless SA/admin/registrator/logist; applied inside
+  `projectOrderPayloadForRoles` + market lists). Printer «Muammo bo'lsa» —
+  only `problem_contacts`, row omitted when empty.
 - **Auth:** `identity.login` / `identity.refresh` / `identity.logout` /
   `identity.validate` / `identity.user.profile`. Issues access+refresh JWT
   (gateway sets refresh as httpOnly cookie).

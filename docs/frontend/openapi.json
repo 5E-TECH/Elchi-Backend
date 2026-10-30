@@ -1146,11 +1146,20 @@
               "example": 10,
               "type": "number"
             }
+          },
+          {
+            "name": "responsible_id",
+            "required": false,
+            "in": "query",
+            "description": "T7: faqat SUPERADMIN/ADMIN. `<xodim id>` — shu mas'ulga biriktirilgan marketlar, `none` — sukutdagi (biriktirilmagan) marketlar.",
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
           "200": {
-            "description": "Market list. SUPERADMIN/ADMIN: to'liq qator + cashbox. MANAGER/REGISTRATOR/BRANCH: faqat {id, name, phone_number, status, tariff_home, tariff_center, default_tariff} (yiFTzkzH; tarif maydoni yo'q bo'lsa null). COURIER va LOGIST (iFAkvaht — buyurtmalar «Market» filtri): faqat {id, name, status}."
+            "description": "Market list. SUPERADMIN/ADMIN: to'liq qator + cashbox + T7 `responsible: {id, name, phone_number, role} | null` va `responsible_source: 'assigned' | 'default' | 'none'`. REGISTRATOR: faqat {id, name, phone_number, status, tariff_home, tariff_center, default_tariff, weight_volume_pricing} (yiFTzkzH; tarif maydoni yo'q bo'lsa null). MANAGER/BRANCH: xuddi shu, lekin `phone_number` YO'Q (T7 B3 — market telefoni menejerga ko'rinmaydi). COURIER va LOGIST (iFAkvaht — buyurtmalar «Market» filtri): faqat {id, name, status}."
           }
         },
         "security": [
@@ -1596,6 +1605,285 @@
           "superadmin",
           "admin",
           "market"
+        ]
+      }
+    },
+    "/settings/contacts": {
+      "get": {
+        "operationId": "ContactsGatewayController_getContactSettings",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContactSettingsEnvelopeDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Superadmin/admin emas"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Aloqa sozlamalari: zaxira raqamlar va sukut market mas'uli",
+        "tags": [
+          "Contacts"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
+        ]
+      },
+      "patch": {
+        "description": "Bo'sh tana — 400. `support_phones` (0–2) `+998XXXXXXXXX` ga normallanadi, takrorsiz; aks holda 400 `SUPPORT_PHONES_INVALID`. `default_market_responsible_id`: xodim yo'q — 404, rol mos emas — 400 `RESPONSIBLE_ROLE_INVALID`, nofaol — 400 `RESPONSIBLE_INACTIVE`. Javob — GET shakli. Jurnal: `settings.contacts_updated`.",
+        "operationId": "ContactsGatewayController_updateContactSettings",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateContactSettingsRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContactSettingsEnvelopeDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bo'sh tana / SUPPORT_PHONES_INVALID / RESPONSIBLE_ROLE_INVALID / RESPONSIBLE_INACTIVE"
+          },
+          "403": {
+            "description": "Superadmin/admin emas"
+          },
+          "404": {
+            "description": "Xodim topilmadi"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Aloqa sozlamalarini o'zgartirish",
+        "tags": [
+          "Contacts"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
+        ]
+      }
+    },
+    "/markets/responsibles": {
+      "get": {
+        "description": "`market_count` — xodimga biriktirilgan marketlar (nofaol mas'ul ham sanaladi), `default_market_count` — sukutdagi (biriktirilmagan) marketlar. Ko'pi bilan 200 nomzod.",
+        "operationId": "ContactsGatewayController_listResponsibles",
+        "parameters": [
+          {
+            "name": "search",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResponsiblesEnvelopeDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Superadmin/admin emas"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Market mas'uli nomzodlari (superadmin, admin, registrator, logist)",
+        "tags": [
+          "Contacts"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
+        ]
+      }
+    },
+    "/markets/responsible/bulk": {
+      "post": {
+        "description": "`responsible_id: null` — sukutga. Faqat berilgan marketlar o'zgaradi. `moved_from` — boshqa mas'uldan ko'chganlar soni. Jurnal: har market uchun `market.responsible_assigned`.",
+        "operationId": "ContactsGatewayController_bulkAssignResponsible",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MarketResponsibleBulkRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MarketResponsibleBulkEnvelopeDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "NOT_A_MARKET / RESPONSIBLE_ROLE_INVALID / RESPONSIBLE_INACTIVE"
+          },
+          "403": {
+            "description": "Superadmin/admin emas"
+          },
+          "404": {
+            "description": "Xodim topilmadi"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Marketlarni mas'ulga o'tkazish (yoki sukutga qaytarish)",
+        "tags": [
+          "Contacts"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
+        ]
+      }
+    },
+    "/markets/{id}/responsible": {
+      "patch": {
+        "operationId": "ContactsGatewayController_setMarketResponsible",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Market ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetMarketResponsibleRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MarketResponsibleEnvelopeDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "RESPONSIBLE_ROLE_INVALID / RESPONSIBLE_INACTIVE"
+          },
+          "403": {
+            "description": "Superadmin/admin emas"
+          },
+          "404": {
+            "description": "Market yoki xodim topilmadi"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Bitta marketning mas'ulini o'zgartirish",
+        "tags": [
+          "Contacts"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
+        ]
+      }
+    },
+    "/users/me/contacts": {
+      "get": {
+        "description": "Market / market operatori — Elchi mas'uli (biriktirilgan → sukut → zaxira raqamlar). Kuryer — viloyati logisti (super kuryer — `courier_regions` logistlari, ≤ 5; `serves_all_regions` — zaxira). Menejer / branch — filial viloyati logisti. Logist yo'q/nofaol — zaxira raqamlar (`user_id`/`name`/`role` null); ular ham bo'sh — `contacts: []`, `source: null`. Boshqa rollar — `kind: 'none'`.",
+        "operationId": "ContactsGatewayController_getMyContacts",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MyContactsEnvelopeDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "O'z aloqa kartasi («Elchi mas'ulingiz» / «Viloyatingiz logisti»)",
+        "tags": [
+          "Contacts"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "registrator",
+          "logist",
+          "manager",
+          "branch",
+          "courier",
+          "market",
+          "market_operator",
+          "operator",
+          "investor"
         ]
       }
     },
@@ -23020,6 +23308,518 @@
             "description": "Doimiy operator raqami (chekda 1-raqam). null — o'chirish."
           }
         }
+      },
+      "ResponsibleWithStatusDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "15"
+          },
+          "name": {
+            "type": "string",
+            "example": "Dilnoza Karimova"
+          },
+          "phone_number": {
+            "type": "string",
+            "example": "+998901112233"
+          },
+          "role": {
+            "type": "string",
+            "example": "registrator",
+            "enum": [
+              "superadmin",
+              "admin",
+              "registrator",
+              "logist"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "example": "active",
+            "enum": [
+              "active",
+              "inactive"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "phone_number",
+          "role",
+          "status"
+        ]
+      },
+      "ContactSettingsResponseDto": {
+        "type": "object",
+        "properties": {
+          "support_phones": {
+            "example": [
+              "+998712001122"
+            ],
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "default_market_responsible": {
+            "nullable": true,
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ResponsibleWithStatusDto"
+              }
+            ]
+          },
+          "updated_at": {
+            "type": "string",
+            "nullable": true,
+            "example": "2026-10-30T09:00:00.000Z"
+          },
+          "updated_by": {
+            "type": "string",
+            "nullable": true,
+            "example": "1"
+          }
+        },
+        "required": [
+          "support_phones",
+          "default_market_responsible",
+          "updated_at",
+          "updated_by"
+        ]
+      },
+      "ContactSettingsEnvelopeDto": {
+        "type": "object",
+        "properties": {
+          "statusCode": {
+            "type": "number",
+            "example": 200
+          },
+          "message": {
+            "type": "string",
+            "example": "success"
+          },
+          "data": {
+            "$ref": "#/components/schemas/ContactSettingsResponseDto"
+          }
+        },
+        "required": [
+          "statusCode",
+          "message",
+          "data"
+        ]
+      },
+      "UpdateContactSettingsRequestDto": {
+        "type": "object",
+        "properties": {
+          "support_phones": {
+            "example": [
+              "+998712001122"
+            ],
+            "description": "Zaxira raqamlar (0–2 ta). `+998XXXXXXXXX` ga normallanadi, takrorsiz. Noto'g'ri / 3 ta → 400 `SUPPORT_PHONES_INVALID`. `[]` — tozalash.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "default_market_responsible_id": {
+            "type": "string",
+            "nullable": true,
+            "example": "15",
+            "description": "Sukut market mas'uli (superadmin/admin/registrator/logist). null — sukutsiz. Xodim yo'q → 404; rol mos emas → 400 `RESPONSIBLE_ROLE_INVALID`; nofaol → 400 `RESPONSIBLE_INACTIVE`."
+          }
+        }
+      },
+      "ResponsibleCandidateDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "15"
+          },
+          "name": {
+            "type": "string",
+            "example": "Dilnoza Karimova"
+          },
+          "phone_number": {
+            "type": "string",
+            "example": "+998901112233"
+          },
+          "role": {
+            "type": "string",
+            "example": "registrator",
+            "enum": [
+              "superadmin",
+              "admin",
+              "registrator",
+              "logist"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "example": "active",
+            "enum": [
+              "active",
+              "inactive"
+            ]
+          },
+          "market_count": {
+            "type": "number",
+            "example": 12,
+            "description": "Shu xodimga biriktirilgan marketlar soni"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "phone_number",
+          "role",
+          "status",
+          "market_count"
+        ]
+      },
+      "ResponsiblesResponseDto": {
+        "type": "object",
+        "properties": {
+          "candidates": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ResponsibleCandidateDto"
+            }
+          },
+          "default_responsible_id": {
+            "type": "string",
+            "nullable": true,
+            "example": "15"
+          },
+          "default_market_count": {
+            "type": "number",
+            "example": 40,
+            "description": "Sukutdagi (biriktirilmagan) marketlar soni"
+          }
+        },
+        "required": [
+          "candidates",
+          "default_responsible_id",
+          "default_market_count"
+        ]
+      },
+      "ResponsiblesEnvelopeDto": {
+        "type": "object",
+        "properties": {
+          "statusCode": {
+            "type": "number",
+            "example": 200
+          },
+          "message": {
+            "type": "string",
+            "example": "success"
+          },
+          "data": {
+            "$ref": "#/components/schemas/ResponsiblesResponseDto"
+          }
+        },
+        "required": [
+          "statusCode",
+          "message",
+          "data"
+        ]
+      },
+      "MarketResponsibleBulkRequestDto": {
+        "type": "object",
+        "properties": {
+          "responsible_id": {
+            "type": "string",
+            "nullable": true,
+            "example": "15",
+            "description": "Yangi mas'ul. `null` — marketlar sukutga qaytadi."
+          },
+          "market_ids": {
+            "example": [
+              "101",
+              "102",
+              "103"
+            ],
+            "description": "Market id lari (1–500). Market bo'lmagan id → 400 `NOT_A_MARKET` (hech narsa o'zgarmaydi).",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "responsible_id",
+          "market_ids"
+        ]
+      },
+      "MovedFromDto": {
+        "type": "object",
+        "properties": {
+          "responsible_id": {
+            "type": "string",
+            "example": "15"
+          },
+          "count": {
+            "type": "number",
+            "example": 2
+          }
+        },
+        "required": [
+          "responsible_id",
+          "count"
+        ]
+      },
+      "MarketResponsibleBulkResponseDto": {
+        "type": "object",
+        "properties": {
+          "updated": {
+            "type": "number",
+            "example": 3,
+            "description": "Mas'uli haqiqatan o'zgargan marketlar"
+          },
+          "moved_from": {
+            "description": "Boshqa mas'uldan ko'chganlar (sukutdan ko'chganlar kirmaydi)",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MovedFromDto"
+            }
+          }
+        },
+        "required": [
+          "updated",
+          "moved_from"
+        ]
+      },
+      "MarketResponsibleBulkEnvelopeDto": {
+        "type": "object",
+        "properties": {
+          "statusCode": {
+            "type": "number",
+            "example": 200
+          },
+          "message": {
+            "type": "string",
+            "example": "Market mas'ullari yangilandi"
+          },
+          "data": {
+            "$ref": "#/components/schemas/MarketResponsibleBulkResponseDto"
+          }
+        },
+        "required": [
+          "statusCode",
+          "message",
+          "data"
+        ]
+      },
+      "SetMarketResponsibleRequestDto": {
+        "type": "object",
+        "properties": {
+          "responsible_id": {
+            "type": "string",
+            "nullable": true,
+            "example": "15",
+            "description": "Mas'ul. `null` — sukutga qaytarish."
+          }
+        },
+        "required": [
+          "responsible_id"
+        ]
+      },
+      "ResponsibleSummaryDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "15"
+          },
+          "name": {
+            "type": "string",
+            "example": "Dilnoza Karimova"
+          },
+          "phone_number": {
+            "type": "string",
+            "example": "+998901112233"
+          },
+          "role": {
+            "type": "string",
+            "example": "registrator",
+            "enum": [
+              "superadmin",
+              "admin",
+              "registrator",
+              "logist"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "phone_number",
+          "role"
+        ]
+      },
+      "MarketResponsibleResponseDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "101"
+          },
+          "responsible": {
+            "nullable": true,
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ResponsibleSummaryDto"
+              }
+            ]
+          },
+          "responsible_source": {
+            "type": "string",
+            "enum": [
+              "assigned",
+              "default",
+              "none"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "responsible",
+          "responsible_source"
+        ]
+      },
+      "MarketResponsibleEnvelopeDto": {
+        "type": "object",
+        "properties": {
+          "statusCode": {
+            "type": "number",
+            "example": 200
+          },
+          "message": {
+            "type": "string",
+            "example": "Market mas'uli yangilandi"
+          },
+          "data": {
+            "$ref": "#/components/schemas/MarketResponsibleResponseDto"
+          }
+        },
+        "required": [
+          "statusCode",
+          "message",
+          "data"
+        ]
+      },
+      "MyContactRegionDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "3"
+          },
+          "name": {
+            "type": "string",
+            "example": "Andijon viloyati"
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ]
+      },
+      "MyContactDto": {
+        "type": "object",
+        "properties": {
+          "user_id": {
+            "type": "string",
+            "nullable": true,
+            "example": "15"
+          },
+          "name": {
+            "type": "string",
+            "nullable": true,
+            "example": "Aziz Logist"
+          },
+          "phone": {
+            "type": "string",
+            "example": "+998901112233"
+          },
+          "role": {
+            "type": "string",
+            "nullable": true,
+            "example": "logist"
+          }
+        },
+        "required": [
+          "user_id",
+          "name",
+          "phone",
+          "role"
+        ]
+      },
+      "MyContactsResponseDto": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "market_responsible",
+              "region_logist",
+              "none"
+            ]
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "assigned",
+              "default",
+              "support"
+            ],
+            "nullable": true,
+            "description": "`null` — raqam yo'q (`contacts: []`) yoki `kind: none`"
+          },
+          "regions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MyContactRegionDto"
+            }
+          },
+          "contacts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MyContactDto"
+            }
+          }
+        },
+        "required": [
+          "kind",
+          "source",
+          "regions",
+          "contacts"
+        ]
+      },
+      "MyContactsEnvelopeDto": {
+        "type": "object",
+        "properties": {
+          "statusCode": {
+            "type": "number",
+            "example": 200
+          },
+          "message": {
+            "type": "string",
+            "example": "success"
+          },
+          "data": {
+            "$ref": "#/components/schemas/MyContactsResponseDto"
+          }
+        },
+        "required": [
+          "statusCode",
+          "message",
+          "data"
+        ]
       },
       "LoginRequestDto": {
         "type": "object",
