@@ -43,6 +43,17 @@ export const LOGIN_LOCKED = 'LOGIN_LOCKED';
  * almashtirish oqimiga ruxsat beradi (gateway `PASSWORD_CHANGE_GATE=on`), 403.
  */
 export const PASSWORD_CHANGE_REQUIRED = 'PASSWORD_CHANGE_REQUIRED';
+/**
+ * (BOT-2 #2) Telegram Mini App tokeni (`POST /auth/telegram`) faqat kuryerga
+ * beriladi — boshqa rol 403.
+ */
+export const TELEGRAM_COURIER_ONLY = 'TELEGRAM_COURIER_ONLY';
+/**
+ * (BOT-2 #2) Telegram Mini App tokenining `scope` claim'i — gateway u bilan
+ * faqat skan oqimini (`POST /orders/scan-assign`, `POST /telegram/scan/done`)
+ * o'tkazadi.
+ */
+export const TELEGRAM_SCAN_SCOPE = 'tg_scan';
 
 export const PUBLIC_ERROR_CODES: Readonly<Record<string, readonly string[]>> = {
   // (T6) to'lovni qaytarish / summasini tuzatish — superadmin.
@@ -72,6 +83,8 @@ export const PUBLIC_ERROR_CODES: Readonly<Record<string, readonly string[]>> = {
   [LOGIN_LOCKED]: ['retry_after_seconds'],
   // (NDmZMzCP) zaif/vaqtinchalik parol — avval parolni almashtirish, 403.
   [PASSWORD_CHANGE_REQUIRED]: [],
+  // (BOT-2) Telegram Mini App tokeni faqat kuryerga — 403.
+  [TELEGRAM_COURIER_ONLY]: [],
   // (XtcEyQjb) to'xtatilgan omborga kirim — 409.
   [WAREHOUSE_ERROR_CODES.PAUSED]: [],
   // (XtcEyQjb) market operatoriga «Ombordagi qoldiq» yopiq — 403.

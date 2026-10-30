@@ -24,6 +24,7 @@ import { Roles as RoleEnum, TELEGRAM_DM_DELIVERY_PATTERN } from '@app/common';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
 import { Roles } from './auth/roles.decorator';
 import { RolesGuard } from './auth/roles.guard';
+import { AllowTelegramScanScope } from './auth/telegram-scan-scope.guard';
 import {
   TelegramLinkCodeRequestDto,
   TelegramScanDoneRequestDto,
@@ -131,6 +132,8 @@ export class TelegramGatewayController {
    * turgan id'lar).
    */
   @Post('telegram/scan/done')
+  // BOT-2: Telegram Mini App (`tg_scan`) tokeni bilan ochiq.
+  @AllowTelegramScanScope()
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(RoleEnum.COURIER)
   @ApiBearerAuth()

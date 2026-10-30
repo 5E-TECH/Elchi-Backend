@@ -49,6 +49,7 @@ import { memoryStorage } from 'multer';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
 import { UserThrottlerGuard } from './auth/user-throttler.guard';
 import { SCAN_THROTTLE } from './auth/scan-throttle';
+import { AllowTelegramScanScope } from './auth/telegram-scan-scope.guard';
 import { Throttle } from '@nestjs/throttler';
 import { BodyStatusCodeInterceptor } from './body-status-code.interceptor';
 import { AiStatusPoller } from './ai/ai-status.poller';
@@ -6327,6 +6328,8 @@ export class OrderGatewayController {
 
   @Post('scan-assign')
   // R6R8BLGA: kuryer skaneri — filial bitta IP, yuqoriroq per-IP limit.
+  // BOT-2: Telegram Mini App (`tg_scan`) tokeni bilan ochiq.
+  @AllowTelegramScanScope()
   @Throttle(SCAN_THROTTLE)
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(RoleEnum.COURIER)

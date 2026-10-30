@@ -14,6 +14,7 @@ import {
   SessionRevocationService,
   sessionIdClaim,
 } from './session-revocation.service';
+import { TelegramTokenStateService } from './telegram-token-state.service';
 
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
@@ -22,10 +23,13 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
    * spec'lar strategiyani usiz quradi — u holda avvalgidek faqat imzo/muddat.
    */
   private readonly revocation?: SessionRevocationService;
+  /** (BOT-2 #2c) Telegram tokenlari holati. Ixtiyoriy — spec'lar usiz quradi. */
+  private readonly telegramTokens?: TelegramTokenStateService;
 
   constructor(
     configService: ConfigService,
     @Optional() revocation?: SessionRevocationService,
+    @Optional() telegramTokens?: TelegramTokenStateService,
   ) {
     const secret = configService.get<string>('ACCESS_TOKEN_KEY');
     if (!secret) {
@@ -37,6 +41,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       secretOrKey: secret,
     });
     this.revocation = revocation;
+    this.telegramTokens = telegramTokens;
   }
 
   private normalizeRoles(roles?: string[]) {
@@ -60,6 +65,8 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     roles?: string[];
     branch_id?: string | null;
     sid?: string | null;
+    auth?: string | null;
+    tg_id?: string | null;
   }) {
     // (Elchi Pochta #3) `sid` li token (login/refresh) — sessiya egasi
     // tomonidan yopilgan yoki logout qilingan bo'lsa access token muddati
@@ -87,6 +94,30 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     }
 
     const roles = this.normalizeRoles(payload.roles);
+    // (BOT-2 #2c) Telegram tokeni (Mini App va bot aktori) — sessiya emas,
+    // lekin har so'rovda (≤60 s kesh) xodim faolligi, roli va SHU Telegram
+    // ulanishi tekshiriladi: nofaol qilingan / /uzish qilgan xodim tokeni
+    // 30 daqiqa ishlamaydi. identity javob bermasa — 503 (fail closed).
+    if (this.telegramTokens && payload.auth === 'telegram') {
+      const state = await this.telegramTokens.state({
+        userId: String(payload.sub ?? ''),
+        telegramId:
+          typeof payload.tg_id === 'string' && payload.tg_id
+            ? payload.tg_id
+            : null,
+        role: roles[0] ?? null,
+      });
+      if (state === 'revoked') {
+        throw new UnauthorizedException('Telegram token is no longer valid');
+      }
+      if (state === 'unknown') {
+        throw new ServiceUnavailableException({
+          statusCode: 503,
+          message: SESSION_CHECK_UNAVAILABLE_MESSAGE,
+          code: SESSION_CHECK_UNAVAILABLE,
+        });
+      }
+    }
     // fQi6NNUL / y8CxCtcK — so'rov aktyori kontekstga: RMQ `x-audit-actor`
     // sarlavhasi orqali har servisning `ActivityLogService.log()` i
     // `user_name`/`user_role` ni o'zi to'ldiradi. `name` claim'i eski

@@ -1,7 +1,7 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { ClientProxy } from '@nestjs/microservices';
-import { rmqSend } from '@app/common';
+import { PASSWORD_CHANGE_REQUIRED, rmqSend } from '@app/common';
 
 /** docker tarmog'idagi gateway (Cloudflare'siz, ichki). */
 export const DEFAULT_GATEWAY_INTERNAL_URL = 'http://api-gateway:3004';
@@ -12,6 +12,22 @@ export interface GatewayResponse<T> {
 }
 
 type FetchLike = (url: string, init: RequestInit) => Promise<Response>;
+
+/** (BOT-2 #2d) Bot javobi: xodim avval kabinetda parolini almashtirishi shart. */
+export const BOT_PASSWORD_CHANGE_TEXT =
+  '🔐 Avval kabinetda parolni almashtiring — keyin botdan foydalanish mumkin.';
+
+/**
+ * (BOT-2 #2d) Gateway `403 PASSWORD_CHANGE_REQUIRED` qaytardi (Telegram
+ * tokenida `pwd_change`, `PASSWORD_CHANGE_GATE=on`). Har handler bu holatni
+ * alohida tekshirmasin — `BotRouterService` ushlab, aniq matn bilan javob beradi.
+ */
+export class BotPasswordChangeRequiredError extends Error {
+  constructor() {
+    super('password change required');
+    this.name = 'BotPasswordChangeRequiredError';
+  }
+}
 
 /**
  * (xC88d8kH #3 / 3ZfiXuaW DIQQAT) Bot amallari aktorning O'Z JWT'si bilan
@@ -86,6 +102,12 @@ export class BotGatewayClient {
       throw error;
     }
     const parsed = (await response.json().catch(() => null)) as T | null;
+    if (
+      response.status === 403 &&
+      (parsed as { code?: unknown } | null)?.code === PASSWORD_CHANGE_REQUIRED
+    ) {
+      throw new BotPasswordChangeRequiredError();
+    }
     return { status: response.status, body: parsed };
   }
 
