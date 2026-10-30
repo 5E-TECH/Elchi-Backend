@@ -6333,7 +6333,7 @@ export class OrderGatewayController {
   @ApiBearerAuth()
   @ApiOperation({
     summary:
-      "Scan QR and assign order to current courier. MWYaqprw: muvaffaqiyatli javobda `data.order` — { id, order_number, status, total_price, address, district, region, market, customer: { name, phone_number } } (skaner ekrani uchun; olinmasa maydon bo'lmaydi, skan baribir o'tgan).",
+      "Scan QR and assign order to current courier. MWYaqprw: muvaffaqiyatli javobda `data.order` — { id, order_number, status, total_price, address, district, region, market, customer: { name, phone_number }, special_categories (T8) } (skaner ekrani uchun; olinmasa maydon bo'lmaydi, skan baribir o'tgan).",
   })
   @ApiBody({ type: ScanAssignOrderRequestDto })
   async scanAssignOrder(

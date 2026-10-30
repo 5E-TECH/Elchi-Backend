@@ -13,6 +13,7 @@ describe('findSummariesByIds', () => {
           market_id: '7',
           district_id: '101',
           region_id: '11',
+          special_categories: ['fragile', 'liquid'],
         },
       ]),
     };
@@ -60,6 +61,8 @@ describe('findSummariesByIds', () => {
         customer_phone: '+998901234567',
         region_name: 'Toshkent',
         district_name: 'Chilonzor',
+        // T8: skanda maxsus belgilar.
+        special_categories: ['fragile', 'liquid'],
       },
     ]);
     expect(JSON.stringify(res)).not.toMatch(/MAXFIY|tariff/);

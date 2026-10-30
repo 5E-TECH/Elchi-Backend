@@ -2664,6 +2664,10 @@ export class OrderServiceService {
           customer_phone: text(customer.phone_number),
           region_name: text(order.region?.name),
           district_name: text(order.district?.name),
+          // T8: skan (pochta / paket) — maxsus belgilar.
+          special_categories: Array.isArray(order.special_categories)
+            ? order.special_categories
+            : [],
         };
       }),
       200,

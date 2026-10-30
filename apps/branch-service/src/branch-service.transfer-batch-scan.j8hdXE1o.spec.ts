@@ -40,6 +40,7 @@ const SUMMARIES: Record<string, Record<string, unknown>> = {
     customer_phone: '+998901234567',
     region_name: 'Buxoro viloyati',
     district_name: 'Buxoro tumani',
+    special_categories: ['fragile', 'liquid'],
   },
   '701': {
     id: '701',
@@ -254,12 +255,15 @@ describe('dwJX3NjT (S1) — paket skani mazmuni', () => {
         region: 'Buxoro viloyati',
         district: 'Buxoro tumani',
         customer: { name: 'Ali Valiyev', phone_number: '+998901234567' },
+        // T8: paket skanida maxsus belgilar.
+        special_categories: ['fragile', 'liquid'],
       },
     });
     // Mijozsiz xulosa — customer null (bo'sh obyekt emas).
     expect(res.data.items[1].order).toMatchObject({
       id: '701',
       customer: null,
+      special_categories: [],
     });
 
     // BITTA xulosa so'rovi (N+1 emas).

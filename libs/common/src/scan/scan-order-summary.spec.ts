@@ -19,6 +19,7 @@ describe('toScanOrderSummaryRef', () => {
         region_name: 'Buxoro viloyati',
         district_name: null,
         market_tariff: 20000,
+        special_categories: ['fragile', 7, 'battery'],
       }),
     ).toEqual({
       id: '700',
@@ -28,7 +29,16 @@ describe('toScanOrderSummaryRef', () => {
       region: 'Buxoro viloyati',
       district: null,
       customer: { name: 'Ali', phone_number: '+998901234567' },
+      special_categories: ['fragile', 'battery'],
     });
+  });
+
+  it('T8: special_categories yo`q yoki massiv emas — []', () => {
+    expect(toScanOrderSummaryRef({ id: '1' })?.special_categories).toEqual([]);
+    expect(
+      toScanOrderSummaryRef({ id: '1', special_categories: 'fragile' })
+        ?.special_categories,
+    ).toEqual([]);
   });
 
   it('mijoz ismi ham, telefoni ham yo`q — customer null; id`siz qator — null', () => {

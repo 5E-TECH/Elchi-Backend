@@ -84,6 +84,8 @@ interface OrderRow {
   current_batch_id?: string | null;
   // order-service Order_source: 'internal' | 'external' | 'branch'.
   source?: string | null;
+  /** T8: maxsus belgilar (order-service ustuni). */
+  special_categories?: string[] | null;
 }
 
 interface CourierRow {
@@ -2782,6 +2784,10 @@ export class LogisticsServiceService implements OnModuleInit {
             customer: summary?.customer ?? null,
             region: summary?.region ?? null,
             district: summary?.district ?? null,
+            // T8: kuryer/ombor skanida maxsus belgilar.
+            special_categories: Array.isArray(order.special_categories)
+              ? order.special_categories
+              : (summary?.special_categories ?? []),
           };
         }),
       },
