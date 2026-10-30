@@ -37,6 +37,8 @@ type OrderRow = {
 
 type TrackingRow = {
   order_id: string;
+  /** Berilmasa — holat o'tishi (from ≠ to) deb olinadi. */
+  from_status?: Order_status | null;
   to_status: Order_status;
   action: string | null;
   created_at: Date;
@@ -205,6 +207,9 @@ function compileTrackingPredicate(
         t.action === null || t.action !== p.cancelledPostReceived;
     case 't.created_at BETWEEN :start AND :end':
       return ({ t }) => inRange(t.created_at.getTime(), p.start, p.end);
+    // T8: holatsiz yozuv (from = to) bekor deb sanalmaydi.
+    case 't.from_status::text IS DISTINCT FROM t.to_status::text':
+      return ({ t }) => (t.from_status ?? null) !== t.to_status;
     default:
       throw new Error(`SqVMuhKo fake: noma'lum kuzatuv sharti "${sql}"`);
   }
