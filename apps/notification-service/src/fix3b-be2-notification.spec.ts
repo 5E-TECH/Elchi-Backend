@@ -290,6 +290,29 @@ describe('fix3b CODE-02 — ulash: token almashtirilmaydi, mavjud ulanish almash
     );
   });
 
+  it.each([['manual'], [null]])(
+    '⭐ BOT-3 #6 (PII): admin o‘chirgan (%s) ulanish — kod bilan qayta YOQILMAYDI (faqat admin PATCH)',
+    async (reason) => {
+      rows = [
+        {
+          id: '9',
+          market_id: '5',
+          group_id: '-100777',
+          group_type: 'create',
+          isDeleted: false,
+          is_active: false,
+          inactive_reason: reason,
+        },
+      ];
+      const res = await service.connectGroupByCodeText(CODE, '-100777');
+      expect(res).toEqual({
+        message: 'Bu guruh shu xabar turi uchun allaqachon ulangan',
+      });
+      expect(repo.update).not.toHaveBeenCalled();
+      expect(rows[0].is_active).toBe(false);
+    },
+  );
+
   it('BOT-3 #6: BOSHQA marketning nofaol ulanishi — qayta yoqilmaydi (tortib olish yo‘q)', async () => {
     rows = [
       {

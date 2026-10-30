@@ -64,7 +64,13 @@ export class BotChannelService {
         `UPDATE "notification_schema"."telegram_markets"
             SET "is_active" = false, "inactive_reason" = $2,
                 "inactive_at" = now(), "updatedAt" = now()
-          WHERE "group_id" = $1 AND "is_deleted" = false AND "is_active" = true
+          WHERE "group_id" = $1 AND "is_deleted" = false
+            AND ("is_active" = true
+                 -- (BOT-3 #6) huquq olingani uchun nofaol guruhdan bot
+                 -- keyin chiqarilsa — sabab aniqlanadi (o'zi qayta
+                 -- yoqilmasin; egasi kod bilan qayta ulaydi).
+                 OR ($2 IN ('kicked', 'left')
+                     AND "inactive_reason" = 'blocked_on_send'))
         RETURNING "id", "market_id"`,
         [chatId, reason],
       );
@@ -136,10 +142,21 @@ export class BotChannelService {
     );
     // Eski (oddiy guruh) kartalari supergroup'da tahrirlanmaydi (message_id
     // yaroqsiz) — o'chiriladi: keyingi holatda kerak bo'lsa yangi karta.
+    // Hali yuborilmagan band qilishlar (message_id NULL, BOT-3 #4) —
+    // xabar yangi id'ga ketadi, shuning uchun qator ham ko'chadi.
     await this.markets.query(
       `DELETE FROM "notification_schema"."telegram_order_cards"
-        WHERE "chat_id" = $1`,
+        WHERE "chat_id" = $1 AND "message_id" IS NOT NULL`,
       [oldChatId],
+    );
+    await this.markets.query(
+      `UPDATE "notification_schema"."telegram_order_cards" c
+          SET "chat_id" = $2
+        WHERE c."chat_id" = $1 AND c."message_id" IS NULL
+          AND NOT EXISTS (
+                SELECT 1 FROM "notification_schema"."telegram_order_cards" n
+                 WHERE n."order_id" = c."order_id" AND n."chat_id" = $2)`,
+      [oldChatId, newChatId],
     );
     for (const row of markets) {
       await this.activityLog.log({
@@ -269,7 +286,7 @@ export class BotChannelService {
         title: 'Telegram guruhingiz nofaol',
         body:
           reason === 'blocked_on_send'
-            ? "Bot guruhga xabar yubora olmayapti (huquqi olingan). Botga xabar yuborish huquqini qaytaring — guruh o'zi qayta yoqiladi."
+            ? "Bot guruhga xabar yubora olmayapti (huquqi olingan). Botga xabar yuborish huquqini qaytaring — odatda guruh bir necha daqiqada o'zi qayta yoqiladi; yoqilmasa — kabinetdan guruhni qayta ulang yoki adminga yozing."
             : "Bot guruhdan chiqarilgan — buyurtma kartalari guruhga bormaydi. Botni guruhga qo'shing va kabinetdan guruhni qayta ulang.",
         recipient_ids: markets,
         channels: [

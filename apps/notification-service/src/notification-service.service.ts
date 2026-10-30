@@ -79,6 +79,17 @@ const MANUAL_GROUP_EDIT_FORBIDDEN_MESSAGE =
  * UMUMAN yo'q (faqat env); `connect_token_hash` — `select: false`, bu yerda
  * tanlanmaydi.
  */
+/**
+ * (BOT-3 #6) Market kod bilan o'zi qayta ulay oladigan nofaollik sabablari
+ * (Telegram tomonida yuz bergan). `manual` (admin) va NULL — yo'q.
+ */
+const RECONNECTABLE_INACTIVE_REASONS = new Set([
+  'kicked',
+  'left',
+  'blocked_on_send',
+  'chat_not_found',
+]);
+
 const TG_MARKET_SELECT: FindOptionsSelect<TelegramMarket> = {
   id: true,
   createdAt: true,
@@ -378,9 +389,14 @@ export class NotificationServiceService {
     // (BOT-3 #6) Shu market, shu guruh, shu tur — lekin NOFAOL (bot
     // chiqarilgan / huquq olingan): kod bilan qayta ulash uni qayta yoqadi
     // (boshqa marketniki emas — tortib olish yo'q).
+    // Faqat Telegram sababli nofaol bo'lganlar: admin qo'lda o'chirgan
+    // (`manual`) yoki sababi noma'lum (eski, NULL) — faqat admin PATCH bilan.
     if (
       existsByGroup &&
       !existsByGroup.is_active &&
+      RECONNECTABLE_INACTIVE_REASONS.has(
+        String(existsByGroup.inactive_reason ?? ''),
+      ) &&
       String(existsByGroup.market_id) === String(input.market_id)
     ) {
       return this.reactivateBinding(existsByGroup, input, market);

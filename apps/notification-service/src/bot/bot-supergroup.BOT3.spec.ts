@@ -100,6 +100,8 @@ describe('BOT-3 #6 — outbox: supergroup', () => {
         retry_count: 0,
       }),
     );
+    // Chaqiruvchi (guruh kartasi) yakuniy chatni biladi.
+    expect(first.chat_id).toBe('-1009999');
     // Worker'da takror yo'q.
     expect(await outbox.processDue()).toBe(0);
     expect(fetchMock).toHaveBeenCalledTimes(2);
@@ -149,6 +151,51 @@ describe('BOT-3 #6 — outbox: supergroup', () => {
       expect.any(String),
       'blocked_on_send',
     );
+  });
+
+  it.each([
+    'Forbidden: bot was kicked from the supergroup chat',
+    'Forbidden: bot is not a member of the group chat',
+  ])(
+    '⭐ yuborishda chiqarilgani aniqlandi (%s) → `kicked` (huquq qaytsa o`zi yoqilmaydi)',
+    async (description) => {
+      const fetchMock = makeFetch();
+      fetchMock.mockResolvedValueOnce(
+        telegramResponse(403, { ok: false, description }),
+      );
+      const { outbox, channels } = makeOutbox(fetchMock);
+      await outbox.send({ chatId: '-100777', text: 'x', source: 'test' });
+      expect(channels.markInactive).toHaveBeenCalledWith(
+        '-100777',
+        expect.any(String),
+        'kicked',
+      );
+    },
+  );
+
+  it('⭐ migrate paytida qator boshqa ishchi tomonidan yakunlangan — QAYTA yuborilmaydi', async () => {
+    const fetchMock = makeFetch();
+    fetchMock.mockResolvedValueOnce(
+      telegramResponse(400, {
+        ok: false,
+        description:
+          'Bad Request: group chat was upgraded to a supergroup chat',
+        parameters: { migrate_to_chat_id: -1009999 },
+      }),
+    );
+    const { outbox, repo, channels } = makeOutbox(fetchMock);
+    channels.migrateChat.mockImplementation(() => {
+      // Boshqa ishchi shu orada yakunladi.
+      for (const row of repo.rows.values()) row.status = 'sent';
+      return Promise.resolve({ markets: 1, outbox: 0 });
+    });
+    const result = await outbox.send({
+      chatId: '-100777',
+      text: 'x',
+      source: 'test',
+    });
+    expect(result.status).toBe('queued');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it('HTML xatosi — faqat xabar dead, guruh nofaol QILINMAYDI', async () => {

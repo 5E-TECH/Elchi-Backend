@@ -39,6 +39,11 @@ export interface OutboxSendResult {
   error?: string;
   /** Telegram `sendMessage` natijasi (sent bo'lsa). */
   result?: { message_id?: number } | null;
+  /**
+   * (BOT-3 #6) Xabar yakunda qaysi chatga ketdi — guruh supergroup'ga
+   * aylangan bo'lsa YANGI id (karta shu id ostida yoziladi).
+   */
+  chat_id?: string;
 }
 
 /** Keyingi urinish vaqti: 429 → `retry_after`, aks holda 5s × 2^n (≤10 daqiqa). */
@@ -209,7 +214,7 @@ export class BotOutboxService implements OnModuleDestroy {
           payload: {} as never,
         },
       );
-      return { id: row.id, status: 'sent', result };
+      return { id: row.id, status: 'sent', result, chat_id: row.chat_id };
     } catch (error) {
       const reason = this.transport.describe(error).slice(0, ERROR_MAX);
       // (BOT-3 #6) Guruh supergroup'ga aylangan — ulanish va navbat yangi
@@ -233,10 +238,20 @@ export class BotOutboxService implements OnModuleDestroy {
             return false;
           });
         if (moved) {
-          await this.outbox.update(
+          const claimed = await this.outbox.update(
             { id: row.id, status: 'sending' },
             { chat_id: target, updated_at: new Date() },
           );
+          // Qator endi bizniki emas (boshqa ishchi yakunlagan) — qayta
+          // yuborilmaydi.
+          if (!claimed?.affected) {
+            return {
+              id: row.id,
+              status: 'queued',
+              error: reason,
+              chat_id: target,
+            };
+          }
           return this.attempt({ ...row, chat_id: target }, true);
         }
       }
@@ -264,7 +279,12 @@ export class BotOutboxService implements OnModuleDestroy {
             this.botSlug,
             /chat not found/i.test(error.description)
               ? 'chat_not_found'
-              : 'blocked_on_send',
+              : // Bot guruhdan chiqarilgan — huquq qaytsa ham o'zi yoqilmaydi
+                // (egasi kod bilan qayta ulaydi); faqat huquq olingani —
+                // `blocked_on_send`.
+                /kicked|not a member|deactivated/i.test(error.description)
+                ? 'kicked'
+                : 'blocked_on_send',
           )
           .catch((markError: unknown) =>
             this.logger.error(
@@ -277,7 +297,12 @@ export class BotOutboxService implements OnModuleDestroy {
           `telegram_outbox #${row.id} dead-letter (${retryCount} urinish, chat ${row.chat_id}): ${reason}`,
         );
       }
-      return { id: row.id, status: dead ? 'dead' : 'queued', error: reason };
+      return {
+        id: row.id,
+        status: dead ? 'dead' : 'queued',
+        error: reason,
+        chat_id: row.chat_id,
+      };
     }
   }
 }

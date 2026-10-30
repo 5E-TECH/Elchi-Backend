@@ -602,6 +602,34 @@ const migration = new TelegramBotCore1716000000120();
         );
         expect(chat.is_active).toBe(true);
       });
+
+      it('⭐ huquq olingani uchun nofaol guruhdan bot keyin CHIQARILSA — sabab `kicked` ga o`zgaradi, bot qayta qo`shilsa o`zi YOQILMAYDI (egasining kodi chetlab o`tilmaydi)', async () => {
+        await db.query(`
+          INSERT INTO notification_schema.telegram_markets (market_id, group_id, group_type)
+          VALUES (15, '-100950', 'create')`);
+        const dispatch = jest.fn().mockResolvedValue({});
+        const channels = channelsFor(dispatch);
+        await channels.markInactive('-100950', 'elchi', 'blocked_on_send');
+        const kicked = await channels.markInactive(
+          '-100950',
+          'elchi',
+          'kicked',
+        );
+        expect(kicked.deactivated).toBe(1);
+        // Market egasiga ikkinchi xabar to'g'ri sabab bilan.
+        expect(dispatch.mock.calls.at(-1)?.[0]).toEqual(
+          expect.objectContaining({
+            type: 'telegram.market_channel_inactive',
+            data: expect.objectContaining({ reason: 'kicked' }),
+          }),
+        );
+        await channels.markActive('-100950', 'elchi');
+        const [row]: Array<{ is_active: boolean; inactive_reason: string }> =
+          await db.query(
+            `SELECT is_active, inactive_reason FROM notification_schema.telegram_markets WHERE market_id = 15`,
+          );
+        expect(row).toEqual({ is_active: false, inactive_reason: 'kicked' });
+      });
     });
 
     describe('BOT-3b — AI fondagi ishchi (telegram_ai_drafts)', () => {

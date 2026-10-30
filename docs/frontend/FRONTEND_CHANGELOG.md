@@ -30,9 +30,13 @@ Deploy: **notification-service** (+ libs/common). Migratsiya yo'q.
   shaxsiy Telegram): «Telegram guruhingiz nofaol» — bot guruhdan chiqarildi yoki xabar yuborish huquqi olindi.
   `data: { chat_id, reason: "kicked" | "left" | "blocked_on_send" | "chat_not_found" }`. → FE: tur nomi/ikon
   (sozlamalar ro'yxatida o'chirib bo'lmaydi — `user_can_mute: false`).
-- [2026-10-30] 🟢 [notification] — huquq qaytarilsa guruh o'zi qayta faol; chiqarilgan guruhni market kabinetdagi
-  «Telegram guruhini ulash» kodi bilan qayta ulay oladi (avval «allaqachon ulangan» xatosi berardi). FE o'zgarishi
-  shart emas.
+- [2026-10-30] 🔧 [notification] — nofaol market guruhini market o'zi qayta ulay oladi: `GET
+  /notifications/me/telegram-groups` da `is_active: false` va `inactive_reason` ∈ `kicked` | `left` | `chat_not_found` |
+  `blocked_on_send` bo'lgan qator uchun kabinetdagi «Telegram guruhini ulash» kodi (avval «allaqachon ulangan» xatosi
+  berardi) o'sha qatorni qayta yoqadi. `manual` (admin o'chirgan) va sababsiz (eski) qatorlar — faqat admin PATCH orqali.
+  `blocked_on_send` (huquq olingan) — huquq qaytsa odatda bir necha daqiqada o'zi yoqiladi.
+  → FE: shu sabablardagi nofaol qatorga «Qayta ulash» tugmasi (hozir `canLink` faqat `kind === 'none'`), kuzatuvchi
+  `is_active === true` ni kutadi; `manual` / sababsiz qatorda tugma yo'q («Admin o'chirgan»).
 
 ### 2026-10-30 — T1: hamkor (marketpleys) integratsiyasini jonli sinash (RJcckQ6I)
 

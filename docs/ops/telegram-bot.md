@@ -54,9 +54,12 @@ bir marta; guruh kartasi message_id ni oladi). Eski guruh kartalari ko'chirilmay
 (message_id supergroup'da yaroqsiz) — o'chiriladi. Audit `notification.tg_group_migrated`.
 «Not enough rights» — guruh nofaol (`blocked_on_send`) + admin va market EGASIGA
 (`telegram.market_channel_inactive`, in-app + shaxsiy Telegram) xabar; huquq qaytib
-bot `member` / `administrator` bo'lsa ulanish O'ZI qayta faol. Chiqarilgan (`kicked`
-/ `left`) guruh — market kabinetdan kod bilan qayta ulaydi (o'sha marketning nofaol
-qatori qayta yoqiladi, boshqa marketniki — yo'q). HTML xatosi (`can't parse entities`)
+bot `member` / `administrator` bo'lsa ulanish O'ZI qayta faol (Telegram har doim
+`my_chat_member` yubormaydi — yoqilmasa egasi kod bilan qayta ulaydi). Yuborishda
+aniqlangan chiqarilish (`kicked` / `not a member`) — `kicked` (avvalgi `blocked_on_send`
+ham ustidan yoziladi). Chiqarilgan (`kicked` / `left` / `chat_not_found`) guruh — market
+kabinetdan kod bilan qayta ulaydi (o'sha marketning nofaol qatori qayta yoqiladi, boshqa
+marketniki — yo'q); admin o'chirgan (`manual`) yoki sababsiz qator — faqat admin PATCH. HTML xatosi (`can't parse entities`)
 — faqat o'sha xabar `dead`, guruh faol qoladi.
 
 ## 2. Rejimlar (`TELEGRAM_BOT_MODE`, sukut `auto`)
