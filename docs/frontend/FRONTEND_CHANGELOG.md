@@ -49,6 +49,9 @@ Kodlar (kanonik tartib — API har doim shu tartibda qaytaradi): `fragile` (mo'r
   faqat yuqoridagi PUT orqali.
 - [2026-10-30] 🟢 [order] — buyurtma javoblarida (`GET /orders`, `/orders/:id`, `/orders/markets/:id/new`,
   `/orders/qr-code/:token` va `?view=light` skaner javobi, `/post/orders/:id`) yangi maydon `special_categories`.
+  Skanlarda ham: `POST /orders/scan-assign` → `data.order.special_categories`; pochta skani (`GET /scan/POST-…`,
+  `GET /post/scan/:id`) → `orders[].special_categories`; paket skani (`GET /scan/BTB-…` / `BTR-…`) →
+  `items[].order.special_categories` (yo'q — `[]`).
   O'zgarish tarixida (`/orders/:id/tracking`) `action: "special_categories_changed"`, `old_value` / `new_value` —
   `{ special_categories }`, holat o'zgarmaydi; jurnalda `order.special_categories_changed` («Maxsus belgilar
   o'zgardi»). Qisman sotuvda qolgan qism (bekor qilingan bola buyurtma) ota buyurtmaning belgilarini oladi;

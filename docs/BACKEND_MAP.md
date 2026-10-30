@@ -1044,7 +1044,16 @@ Money (settlement, cashboxes) and tariffs are unchanged. Details: order-service
   with no tracking/journal; otherwise `order_tracking` `action:
   special_categories_changed` (from = to = current status, old/new
   `{special_categories}`) + activity verb `order.special_categories_changed`.
-  The column is in the scan light view (`ORDER_SCAN_LIGHT_SELECT`).
+  The column is in the scan light view (`ORDER_SCAN_LIGHT_SELECT`), the scan
+  summaries (`order.summary_by_ids` → `ScanOrderSummaryRef`: post `POST-` and
+  batch `BTB-`/`BTR-` scans) and `POST /orders/scan-assign` `data.order`.
+  `updateFull` never writes it (dropped before `save()`, so a stale PATCH read
+  cannot overwrite a concurrent PUT); a partly-sold child takes the set from the
+  row locked by `lockWaitingOrder`. Analytics cancel counts
+  (`historicallyCancelledTrackingQuery`, courier report `canceled`) skip
+  tracking rows with `from_status = to_status` (status-less edits on a
+  cancelled order). Migration: CHECK `NOT VALID`, `lock_timeout` 5 s inside
+  the block.
 - **Read scope (gateway):** `GET /orders/:id` — market own, market_operator own
   market, customer own, courier (`courier_id`/`holder_courier_id`), branch
   staff own branch triple (+ HQ staff: HQ-held), operator/investor 403;
