@@ -468,6 +468,13 @@ export const ACTIVITY_ACTION_REGISTRY: Readonly<
     'stop',
     'red',
   ),
+  // (BOT-3 #6) guruh supergroup'ga aylandi — ulanish yangi chat id'ga.
+  'notification.tg_group_migrated': entry(
+    "Telegram guruhi supergroup'ga ko'chdi",
+    'notification',
+    'link',
+    'slate',
+  ),
   'notification.tg_channel_active': entry(
     'Telegram kanali qayta faol',
     'notification',

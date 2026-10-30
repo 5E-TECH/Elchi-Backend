@@ -29,6 +29,14 @@ Chiquvchi: BotOutboxService (telegram_outbox) → BotTransportService (yagona ap
 
 Tozalash: `BotMaintenanceService` (har soat, `:17`).
 
+**Guruh holati (BOT-3 #6).** Guruh supergroup'ga aylansa (`migrate_to_chat_id`
+— yuborish javobida yoki eski guruhdagi servis xabarida) `telegram_markets.group_id`
+(trigger orqali `telegram_chats` ham), navbatdagi `telegram_outbox` qatorlari va
+kartalar YANGI id'ga ko'chadi, xabar qayta yuboriladi (urinish hisoblanmaydi;
+audit `notification.tg_group_migrated`). «Not enough rights» — guruh nofaol
+(`blocked_on_send`) + admin xabari. HTML xatosi (`can't parse entities`) — faqat
+o'sha xabar `dead`, guruh faol qoladi.
+
 ## 2. Rejimlar (`TELEGRAM_BOT_MODE`, sukut `auto`)
 
 | Holat | Natija |

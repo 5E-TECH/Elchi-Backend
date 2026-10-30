@@ -30,4 +30,10 @@ export class MembershipHandler {
     }
     this.logger.debug(`my_chat_member: e'tiborsiz holat ${status}`);
   }
+
+  /** (BOT-3 #6) Kiruvchi `migrate_to_chat_id` (eski guruhdagi servis xabari). */
+  async migrate(oldChatId: string, newChatId: string): Promise<void> {
+    if (!/^-\d{1,20}$/.test(newChatId)) return;
+    await this.channels.migrateChat(oldChatId, newChatId);
+  }
 }

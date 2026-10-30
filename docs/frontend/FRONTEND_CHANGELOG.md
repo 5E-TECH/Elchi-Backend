@@ -21,6 +21,14 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 ## Yozuvlar
 
+### 2026-10-30 — BOT-3 #6: Telegram guruhi supergroup'ga aylanganda xabarlar yo'qolmaydi
+
+Deploy: **notification-service**. Migratsiya yo'q.
+
+- [2026-10-30] 🟢 [notification] — market guruhi supergroup'ga aylansa ulanish yangi chat id'ga o'zi ko'chadi
+  (`GET /notifications` da `group_id` yangilanadi), xabarlar qayta yuboriladi. Botdan yozish huquqi olinsa — guruh nofaol
+  (`inactive_reason: "blocked_on_send"`) + adminga xabar. → FE o'zgarishi shart emas.
+
 ### 2026-10-30 — T8: buyurtmaning maxsus belgilari (mo'rt, diniy kitob, suyuqlik …) (0OUcHZ7R)
 
 Deploy: **order-service + api-gateway** (+ libs/common). Migratsiya **`1716000000187`**
