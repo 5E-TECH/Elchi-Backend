@@ -16,6 +16,7 @@ import {
 import { BotActionsService } from '../bot-actions.service';
 import {
   BotGatewayClient,
+  BOT_PASSWORD_CHANGE_TEXT,
   BotPasswordChangeRequiredError,
 } from '../bot-gateway.client';
 import { BotTransportService } from '../bot-transport.service';
@@ -210,11 +211,12 @@ export class AiOrderService {
         },
       );
     } catch (error) {
-      // Parol almashtirish shart — qoralama «🔁 Qayta urinish» holatiga,
-      // router aniq ko'rsatma bilan javob beradi.
+      // Parol almashtirish shart — «⏳» xabari aniq ko'rsatma va
+      // «🔁 Qayta urinish» bilan almashtiriladi (tugmasiz qotib qolmaydi);
+      // router'ga qaytarilmaydi — ko'rsatma ikki marta chiqmasin.
       if (error instanceof BotPasswordChangeRequiredError) {
-        await this.setStatus(draft.id, 'failed');
-        throw error;
+        await this.fail(ctx, draft, BOT_PASSWORD_CHANGE_TEXT, true);
+        return;
       }
       this.logger.warn(
         `ai draft ${draft.id}: ai-parse — ${error instanceof Error ? error.message : 'error'}`,
@@ -302,10 +304,11 @@ export class AiOrderService {
         { timeoutMs: CONFIRM_TIMEOUT_MS },
       );
     } catch (error) {
-      // Parol almashtirilgach «✅ Yaratish» ni qayta bosish mumkin bo'lsin.
+      // Parol almashtirilgach «✅ Yaratish» ni qayta bosish mumkin bo'lsin:
+      // «Yaratilmoqda…» xabari ko'rsatma + preview tugmalari bilan almashadi.
       if (error instanceof BotPasswordChangeRequiredError) {
-        await this.setStatus(draft.id, 'preview');
-        throw error;
+        await this.backToPreview(ctx, draft, BOT_PASSWORD_CHANGE_TEXT);
+        return;
       }
       this.logger.warn(
         `ai draft ${draft.id}: ai-confirm — ${error instanceof Error ? error.message : 'error'}`,
