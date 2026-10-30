@@ -43,6 +43,12 @@ describePg('T6 payment correction — haqiqiy Postgres', () => {
   const activityLog = { log: jest.fn().mockResolvedValue(undefined) };
   const languages = new Map<string, string>();
   const orderCalls: Array<{ cmd: string; payload: any }> = [];
+  // Hamkor xabari (`emitSettlementPaymentSafely`) shu client orqali ketadi.
+  const integrationClient = { send: jest.fn(() => of({})) };
+  const partnerCalls = () =>
+    (integrationClient.send.mock.calls as unknown as Array<[{ cmd: string }]>)
+      .map(([pattern]) => pattern.cmd)
+      .filter((cmd) => cmd === 'integration.partner.settlement.enqueue');
   let marketOrders: Array<Record<string, unknown>> = [];
   const syncs: Promise<void>[] = [];
 
@@ -105,7 +111,7 @@ describePg('T6 payment correction — haqiqiy Postgres', () => {
       db,
       activityLog as never,
       orderClient as never,
-      { send: jest.fn(() => of({})) } as never,
+      integrationClient as never,
       identityClient as never,
       outbox as never,
       notifications,
@@ -155,6 +161,7 @@ describePg('T6 payment correction — haqiqiy Postgres', () => {
   beforeEach(async () => {
     outbox.enqueue.mockClear();
     activityLog.log.mockClear();
+    integrationClient.send.mockClear();
     orderCalls.length = 0;
     syncs.length = 0;
     marketOrders = [];
@@ -606,11 +613,7 @@ describePg('T6 payment correction — haqiqiy Postgres', () => {
         status: 'partly_paid',
       }),
     ]);
-    expect(
-      orderCalls.some(
-        (c) => c.cmd === 'integration.partner.settlement.enqueue',
-      ),
-    ).toBe(false);
+    expect(partnerCalls()).toEqual([]);
     expect(enqueued('order.settlement.retreat')[0]).toMatchObject({
       level: 'hq_to_market',
       match_value: '501',
@@ -920,6 +923,36 @@ describePg('T6 payment correction — haqiqiy Postgres', () => {
     ]);
   });
 
+  it('smena hisoboti: S1 dagi to`lov S2 da qaytarilsa — S1 qayta yuborilganda count 1, total yalpi', async () => {
+    await seed('0', Cashbox_type.MAIN);
+    await seed('301', Cashbox_type.FOR_COURIER);
+    await sale('301', Cashbox_type.FOR_COURIER, 500_000);
+    const s1 = await db.getRepository(Shift).save(
+      db.getRepository(Shift).create({
+        cashbox_user_id: '0',
+        opened_by: '1',
+        opened_at: new Date(Date.now() - 60_000),
+        status: ShiftStatus.OPEN,
+      } as never),
+    );
+    const tid = await payCourier(500_000);
+    s1.closed_at = new Date();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await reverse(String((await legOf(tid, Cashbox_type.FOR_COURIER)).id));
+    const reports = new ShiftReportService(
+      db,
+      activityLog as never,
+      { listForShift: jest.fn().mockResolvedValue([]) } as never,
+      {} as never,
+      { send: jest.fn(() => of({ data: [] })) } as never,
+    );
+    const snapshot = await reports.buildSnapshot(s1, 2);
+    expect(snapshot.couriers).toEqual([
+      expect.objectContaining({ courier_id: '301', count: 1, total: 500_000 }),
+    ]);
+    expect(snapshot.couriers[0].reversed).toBeUndefined();
+  });
+
   it('G: marketga to`lov TAHRIRI — buyurtma sinxroni hamkorga holat yubormaydi (suppress_external_sync)', async () => {
     await seed('0', Cashbox_type.MAIN, 1_000_000);
     await seed('501', Cashbox_type.FOR_MARKET);
@@ -950,11 +983,16 @@ describePg('T6 payment correction — haqiqiy Postgres', () => {
     for (const call of writes) {
       expect(call.payload).toMatchObject({ suppress_external_sync: true });
     }
-    expect(
-      orderCalls.some(
-        (c) => c.cmd === 'integration.partner.settlement.enqueue',
-      ),
-    ).toBe(false);
+    expect(partnerCalls()).toEqual([]);
+    // Ijobiy nazorat: hamkor xabari haqiqatan shu client orqali ketadi.
+    await (
+      finance as unknown as {
+        emitSettlementPaymentSafely: (
+          i: Record<string, unknown>,
+        ) => Promise<void>;
+      }
+    ).emitSettlementPaymentSafely({ market_id: '501', amount: 1 });
+    expect(partnerCalls()).toHaveLength(1);
     expect(await box('0', Cashbox_type.MAIN)).toMatchObject({ cash: 800_000 });
   });
 

@@ -1961,12 +1961,22 @@ export class OrderSettlementService {
           : null;
     // HQ filialining o'z BRANCH kassasi qabul qilgan bo'lsa — HQ qatorlari
     // (`branch_id` NULL, c2b FIFO ularni BRANCH_SETTLED qiladi): MAIN kabi.
-    if (
-      receiverType === 'branch' &&
-      receiverBranchId &&
-      (await this.resolveHqBranchId()) === receiverBranchId
-    ) {
-      receiverType = 'main';
+    if (receiverType === 'branch' && receiverBranchId) {
+      const hqBranchId = await this.resolveHqBranchId();
+      if (!hqBranchId) {
+        // HQ aniqlanmadi (sovuq kesh / branch-service sekin): taxmin qilinmaydi
+        // — applied kaliti band qilinishidan OLDIN 503, outbox qayta yetkazadi
+        // (`reclaimFailed`). Aks holda HQ qatorlari noto'g'ri yo'l bilan
+        // qolib, takror urinish ham bo'lmasdi.
+        throw new RpcException({
+          statusCode: 503,
+          message:
+            "HQ filialini aniqlab bo'lmadi — daftar qaytarilishi keyinroq qayta uriniladi",
+        });
+      }
+      if (hqBranchId === receiverBranchId) {
+        receiverType = 'main';
+      }
     }
     /** Qoldiq tegi: MAIN → NULL, filial → id; qabul qiluvchi noma'lum — undefined. */
     const receiverTag: string | null | undefined =

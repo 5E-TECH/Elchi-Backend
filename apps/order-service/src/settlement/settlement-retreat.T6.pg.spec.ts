@@ -440,4 +440,33 @@ describePg('T6-BE-3 settlement retreat — haqiqiy Postgres', () => {
     expect(await statusOf(a.id)).toBe(SettlementStatus.PENDING);
     expect(await statusOf(b.id)).toBe(SettlementStatus.MARKET_SETTLED);
   });
+  it('2: filial qabul qiluvchi, HQ aniqlanmadi — 503, applied kaliti band qilinmaydi (qayta urinish mumkin)', async () => {
+    const blind = new OrderSettlementService(
+      db,
+      db.getRepository(OrderSettlement),
+      { send: jest.fn() } as never,
+      { getHqBranchId: () => Promise.resolve(null) } as never,
+    );
+    const r = await row({
+      courier_id: '15',
+      branch_id: '22',
+      courier_amount: 10_000,
+      status: SettlementStatus.COURIER_SETTLED,
+    });
+    const payload = {
+      level: 'courier_to_branch' as const,
+      match_value: '15',
+      amount: 10_000,
+      request_id: 'pc:50:courier_to_branch',
+      receiver_cashbox_type: 'branch',
+      receiver_branch_id: '22',
+    };
+    await expect(blind.retreatSettlement(payload)).rejects.toMatchObject({
+      error: { statusCode: 503 },
+    });
+    expect(await statusOf(r.id)).toBe(SettlementStatus.COURIER_SETTLED);
+    // Keyingi urinish (HQ ma'lum) — qo'llanadi.
+    await service.retreatSettlement(payload);
+    expect(await statusOf(r.id)).toBe(SettlementStatus.PENDING);
+  });
 });

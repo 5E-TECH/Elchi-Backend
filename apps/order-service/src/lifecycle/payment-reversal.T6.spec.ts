@@ -159,3 +159,29 @@ describe('T6 order.update_normalized — suppress_external_sync', () => {
     expect(offenders).toEqual([]);
   });
 });
+
+describe('T6 updateFull → syncExternalAfterUpdate (options uzatiladi)', () => {
+  /**
+   * `updateFull` o'nlab bog'liqlikka ega (tranzaksiya, kuzatuv, custody,
+   * qidiruv, ombor); to'liq chaqiruv o'rniga TUZILMA tekshiriladi: holat
+   * sinxroni faqat yordamchi orqali va `options` bilan — yordamchining
+   * xatti-harakati yuqorida alohida tekshirilgan. `options` tushib qolsa yoki
+   * to'g'ridan-to'g'ri `queueExternalStatusSync` qaytsa — shu test yiqiladi.
+   */
+  it('updateFull tanasida sinxron faqat syncExternalAfterUpdate(updated, oldStatus, options)', () => {
+    const src = readFileSync(
+      join(__dirname, 'order-lifecycle.service.ts'),
+      'utf8',
+    );
+    const start = src.indexOf('  async updateFull(');
+    const end = src.indexOf(
+      '\n  }\n',
+      src.indexOf('Generic edit audit', start),
+    );
+    const body = src.slice(start, end);
+    expect(body).toContain(
+      'this.syncExternalAfterUpdate(updated, oldStatus, options);',
+    );
+    expect(body).not.toContain('this.queueExternalStatusSync(');
+  });
+});

@@ -1,3 +1,5 @@
+import ExcelJS from 'exceljs';
+import PDFDocument from 'pdfkit';
 import {
   buildCourierMessage,
   buildMarketMessage,
@@ -217,7 +219,7 @@ describe('T6 — qaytarilgan to`lovlar smena hisobotida', () => {
     ],
   };
 
-  it('kuryer: «Topshirgan · Qaytarilgan · Sof»; market: «qaytarildi» qatori va data.reversed', async () => {
+  it('kuryer: «Topshirgan · Qaytarilgan · Sof»; market: «qaytarildi» qatori va data.reversed', () => {
     const courier = buildCourierMessage(
       reversedSnapshot,
       reversedSnapshot.couriers[0],
@@ -238,9 +240,45 @@ describe('T6 — qaytarilgan to`lovlar smena hisobotida', () => {
       amount: -300_000,
       reversed: true,
     });
+  });
+
+  it('XLSX: Kuryerlar — Qaytarilgan / Sof ustunlari va qiymatlari; Marketlar — Izoh «qaytarildi»; PDF matnida «qaytarilgan»', async () => {
     const xlsx = await buildXlsx(reversedSnapshot);
-    expect(xlsx.subarray(0, 2).toString()).toBe('PK');
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(xlsx as never);
+    const couriers = workbook.getWorksheet('Kuryerlar');
+    const header = (couriers?.getRow(1).values as unknown[]).filter(Boolean);
+    expect(header).toEqual(
+      expect.arrayContaining(['Topshirgan', 'Qaytarilgan', 'Sof']),
+    );
+    const col = (name: string) => header.indexOf(name) + 1;
+    const row = couriers!.getRow(2);
+    expect(row.getCell(col('Topshirgan')).value).toBe(700_000);
+    expect(row.getCell(col('Qaytarilgan')).value).toBe(500_000);
+    expect(row.getCell(col('Sof')).value).toBe(200_000);
+    const markets = workbook.getWorksheet('Marketlar');
+    const mHeader = (markets?.getRow(1).values as unknown[]).filter(Boolean);
+    const izoh = mHeader.indexOf('Izoh') + 1;
+    expect(izoh).toBeGreaterThan(0);
+    expect(markets!.getRow(2).getCell(izoh).value ?? '').toBe('');
+    expect(markets!.getRow(3).getCell(izoh).value).toBe('qaytarildi');
+
+    // PDF shriftli (glif kodlari) — matn `doc.text` chaqiruvlaridan olinadi.
+    const texts: string[] = [];
+    const spy = jest
+      .spyOn(PDFDocument.prototype, 'text')
+      .mockImplementation(function (
+        this: PDFKit.PDFDocument,
+        ...args: unknown[]
+      ) {
+        if (typeof args[0] === 'string') texts.push(args[0]);
+        return this;
+      });
     const pdf = await buildPdf(reversedSnapshot);
+    spy.mockRestore();
     expect(pdf.subarray(0, 5).toString()).toBe('%PDF-');
+    const all = texts.join('\n');
+    expect(all).toContain("qaytarilgan 500 000 so'm");
+    expect(all).toContain('— qaytarildi');
   });
 });

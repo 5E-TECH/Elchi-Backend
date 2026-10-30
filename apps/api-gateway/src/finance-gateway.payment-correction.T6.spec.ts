@@ -27,14 +27,13 @@ describe('T6 — /finance/history/:id/{reverse,correct-amount} gateway', () => {
   let controller: FinanceGatewayController;
   let context: Record<string, unknown> = {};
   let reply: Record<string, unknown> = {};
-  const finance = {
-    send: jest.fn((pattern: { cmd: string }) => {
-      if (pattern.cmd === 'finance.payment_correction.context') {
-        return of({ statusCode: 200, data: context });
-      }
-      return of(reply);
-    }),
+  const defaultFinance = (pattern: { cmd: string }) => {
+    if (pattern.cmd === 'finance.payment_correction.context') {
+      return of({ statusCode: 200, data: context });
+    }
+    return of(reply);
   };
+  const finance = { send: jest.fn(defaultFinance) };
   const branch = {
     send: jest.fn(() => of({ data: { id: '15', manager_id: '77' } })),
   };
@@ -87,6 +86,7 @@ describe('T6 — /finance/history/:id/{reverse,correct-amount} gateway', () => {
   let placement: jest.SpyInstance;
   beforeEach(() => {
     finance.send.mockClear();
+    finance.send.mockImplementation(defaultFinance);
     branch.send.mockClear();
     context = {
       payment_kind: 'courier_payment',
@@ -333,5 +333,64 @@ describe('T6 — /finance/history/:id/{reverse,correct-amount} gateway', () => {
       allowed: false,
       code: 'COURIER_MOVED',
     });
+  });
+  it('5: COURIER_MOVED — filial 15 qabul qilgan, kuryer 22 da; biriktiruv yo`q; HQ filiali = HQ — o`tadi', async () => {
+    context = {
+      payment_kind: 'courier_payment',
+      receiver_cashbox_type: 'branch',
+      receiver_branch_id: '15',
+      courier_id: '301',
+    };
+    placement.mockResolvedValueOnce({
+      branch_id: '22',
+      role: 'COURIER',
+    });
+    const moved = await request(http())
+      .post('/finance/history/845/reverse')
+      .set('Idempotency-Key', 'cm-a')
+      .send({ reason: 'Xato kiritildi' });
+    expect(moved.status).toBe(409);
+    expect(moved.body.code).toBe('COURIER_MOVED');
+
+    placement.mockResolvedValueOnce(null);
+    const none = await request(http())
+      .post('/finance/history/845/reverse')
+      .set('Idempotency-Key', 'cm-b')
+      .send({ reason: 'Xato kiritildi' });
+    expect(none.status).toBe(409);
+    expect(none.body.code).toBe('COURIER_MOVED');
+
+    // HQ filialining BRANCH kassasi (id 1 = HQ), kuryer HQ da — o'tadi.
+    context = { ...context, receiver_branch_id: '1' };
+    placement.mockResolvedValueOnce({
+      branch_id: '1',
+      role: 'COURIER',
+    });
+    const ok = await request(http())
+      .post('/finance/history/845/reverse')
+      .set('Idempotency-Key', 'cm-c')
+      .send({ reason: 'Xato kiritildi' });
+    expect(ok.status).toBe(201);
+    expect(correctionCall()?.[0]).toEqual({
+      cmd: 'finance.payment_correction.reverse',
+    });
+  });
+
+  it('7: GET /history/:id — ko`rsatish uchun branch so`rovlari qisqa (≤1500 ms) muddat bilan', async () => {
+    finance.send.mockImplementation((pattern: { cmd: string }) =>
+      of(
+        pattern.cmd === 'finance.payment_correction.context'
+          ? { data: context }
+          : {
+              statusCode: 200,
+              data: {
+                id: '845',
+                correctable: { allowed: true, deadline: 'x', window_days: 30 },
+              },
+            },
+      ),
+    );
+    await request(http()).get('/finance/history/845');
+    expect(placement).toHaveBeenCalledWith('301', expect.anything(), 1500);
   });
 });

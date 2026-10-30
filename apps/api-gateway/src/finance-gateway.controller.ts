@@ -260,6 +260,9 @@ function toNotFoundException(
 export const BRANCH_SHIFT_MANAGER_ONLY_MESSAGE =
   'Filial menejeri smenani ochishi kerak';
 
+/** (T6) `/history/:id` dagi `correctable` — faqat ko'rsatish uchun so'rovlar muddati. */
+const CORRECTABLE_DISPLAY_TIMEOUT_MS = 1500;
+
 /** Smena kassasi: markaziy asosiy (MAIN) kassa `user_id` si. */
 const MAIN_SHIFT_CASHBOX_USER_ID = '0';
 
@@ -572,12 +575,14 @@ export class FinanceGatewayController {
   private async findBranchAssignmentOrThrow(
     userId: string,
     requester?: JwtUser,
+    timeoutMs?: number,
   ): Promise<BranchAssignment | null> {
     const response = await this.sendBranch<{
       data?: Record<string, any> | null;
     }>(
       { cmd: 'branch.user.find_by_user' },
       { user_id: userId, requester: this.toRequester(requester) },
+      timeoutMs,
     );
     const row = response?.data;
     const branchId = row ? this.extractBranchId(row) : '';
@@ -660,7 +665,7 @@ export class FinanceGatewayController {
    * HQ filial id si (`branch.find_hq`), 60 s keshlanadi. Xato YUTILMAYDI —
    * chaqiruvchi hal qiladi (to'lov tekshiruvi 503 qaytaradi).
    */
-  private async resolveHqBranchId(): Promise<string> {
+  private async resolveHqBranchId(timeoutMs?: number): Promise<string> {
     const cached = this.hqBranchIdCache;
     if (
       cached &&
@@ -670,7 +675,7 @@ export class FinanceGatewayController {
     }
     const response = await this.sendBranch<{
       data?: { id?: string | number } | null;
-    }>({ cmd: 'branch.find_hq' }, {});
+    }>({ cmd: 'branch.find_hq' }, {}, timeoutMs);
     const hqBranchId = String(response?.data?.id ?? '').trim();
     if (!hqBranchId) {
       throw new NotFoundException('HQ filial topilmadi');
@@ -3422,8 +3427,19 @@ export class FinanceGatewayController {
       const correctable = response?.data?.correctable;
       if (correctable?.allowed === true) {
         try {
-          const context = await this.paymentCorrectionContext(id);
-          if ((await this.courierMovedVerdict(context, req.user)) === 'moved') {
+          // Faqat ko'rsatish — har so'rov ≤ 1500 ms; xato bo'lsa `allowed` qoladi.
+          const context = await this.paymentCorrectionContext(
+            id,
+            undefined,
+            CORRECTABLE_DISPLAY_TIMEOUT_MS,
+          );
+          if (
+            (await this.courierMovedVerdict(
+              context,
+              req.user,
+              CORRECTABLE_DISPLAY_TIMEOUT_MS,
+            )) === 'moved'
+          ) {
             response.data.correctable = {
               ...correctable,
               allowed: false,
@@ -3720,6 +3736,7 @@ export class FinanceGatewayController {
   private async paymentCorrectionContext(
     historyId: string,
     idempotencyKey?: string,
+    timeoutMs = 3000,
   ): Promise<PaymentCorrectionContext> {
     try {
       const res = await this.send<{ data?: PaymentCorrectionContext }>(
@@ -3728,7 +3745,7 @@ export class FinanceGatewayController {
           history_id: historyId,
           ...(idempotencyKey ? { idempotency_key: idempotencyKey } : {}),
         },
-        3000,
+        timeoutMs,
       );
       return res?.data ?? {};
     } catch (error) {
@@ -3815,6 +3832,8 @@ export class FinanceGatewayController {
   private async courierMovedVerdict(
     context: PaymentCorrectionContext,
     user: JwtUser,
+    /** Faqat ko'rsatish uchun (tafsilot) — qisqa muddat. */
+    timeoutMs?: number,
   ): Promise<'ok' | 'moved' | 'unavailable'> {
     const courierId = context.courier_id ? String(context.courier_id) : '';
     if (context.payment_kind !== 'courier_payment' || !courierId) return 'ok';
@@ -3824,8 +3843,8 @@ export class FinanceGatewayController {
       [expected, assignment] = await Promise.all([
         context.receiver_cashbox_type === Cashbox_type.BRANCH
           ? Promise.resolve(String(context.receiver_branch_id ?? ''))
-          : this.resolveHqBranchId(),
-        this.findBranchAssignmentOrThrow(courierId, user),
+          : this.resolveHqBranchId(timeoutMs),
+        this.findBranchAssignmentOrThrow(courierId, user, timeoutMs),
       ]);
     } catch {
       return 'unavailable';

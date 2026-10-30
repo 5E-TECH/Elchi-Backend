@@ -495,12 +495,14 @@ export class ShiftReportService {
       manager.createQueryBuilder(CashboxHistory, 'h'),
     )
       .select('h.source_user_id', 'user_id')
-      // (T6) soni — faqat qaytarilmagan to'lovlar; summa — yalpi (qaytarilgan
-      // qism pastda alohida ayiriladi).
+      // (T6) soni — shu smena oynasida qaytarilmagan to'lovlar (qaytarish
+      // keyingi smenada bo'lsa bu hisobotda sanaladi); summa — yalpi
+      // (oynadagi qaytarilgan qism pastda alohida ayiriladi).
       .addSelect(
         `COUNT(*) FILTER (WHERE NOT EXISTS (
            SELECT 1 FROM ${manager.connection.getMetadata(CashboxHistory).tablePath} r
-            WHERE r.reverses_history_id = h.id AND r.is_deleted = false))`,
+            WHERE r.reverses_history_id = h.id AND r.is_deleted = false
+              AND r."createdAt" BETWEEN :from AND :to))`,
         'count',
       )
       .addSelect('COALESCE(SUM(h.amount), 0)', 'total')
@@ -652,7 +654,12 @@ export class ShiftReportService {
           remaining_debt: balances.couriers.get(String(row.user_id)) ?? null,
         };
       })
-      .filter((slice) => slice.count > 0 || (slice.reversed ?? 0) > 0);
+      .filter(
+        (slice) =>
+          slice.count > 0 ||
+          (slice.reversed ?? 0) > 0 ||
+          (slice.received ?? slice.total) > 0,
+      );
 
     const marketMap = new Map<string, MarketSlice>();
     for (const row of marketRows) {

@@ -13,6 +13,7 @@ function makeService(marketSettled: Row[] = []) {
   const setCalls: Row[] = [];
   const whereCalls: Array<[string, Row | undefined]> = [];
   const lockCalls: string[] = [];
+  const sequence: string[] = [];
   const qb = {
     select: jest.fn(() => qb),
     update: jest.fn(() => qb),
@@ -28,14 +29,24 @@ function makeService(marketSettled: Row[] = []) {
       whereCalls.push([sql, params]);
       return qb;
     }),
-    orderBy: jest.fn(() => qb),
-    addOrderBy: jest.fn(() => qb),
+    orderBy: jest.fn((column: string, dir: string) => {
+      sequence.push(`orderBy ${column} ${dir}`);
+      return qb;
+    }),
+    addOrderBy: jest.fn((column: string, dir: string) => {
+      sequence.push(`addOrderBy ${column} ${dir}`);
+      return qb;
+    }),
     setLock: jest.fn((mode: string) => {
       lockCalls.push(mode);
+      sequence.push(`setLock ${mode}`);
       return qb;
     }),
     // T6: avval qatorlar FOR UPDATE bilan tanlanadi (deadlock'siz tartib).
-    getMany: jest.fn(() => Promise.resolve([{ id: '7' }])),
+    getMany: jest.fn(() => {
+      sequence.push('getMany');
+      return Promise.resolve([{ id: '7' }]);
+    }),
     execute: jest.fn(() => Promise.resolve({ affected: 1 })),
   };
   const tx = {
@@ -54,7 +65,16 @@ function makeService(marketSettled: Row[] = []) {
     repo as never,
     {} as never,
   );
-  return { service, setCalls, whereCalls, lockCalls, repo, qb, dataSource };
+  return {
+    service,
+    setCalls,
+    whereCalls,
+    lockCalls,
+    sequence,
+    repo,
+    qb,
+    dataSource,
+  };
 }
 
 describe('DxdZFdIk — revertProviderSettledToHq', () => {
@@ -84,6 +104,13 @@ describe('DxdZFdIk — revertProviderSettledToHq', () => {
       ]),
     );
     expect(h.lockCalls).toEqual(['pessimistic_write']);
+    // FIFO bilan AYNI qulf tartibi (createdAt, id ASC) — qulf olishdan oldin.
+    expect(h.sequence).toEqual([
+      'orderBy s.createdAt ASC',
+      'addOrderBy s.id ASC',
+      'setLock pessimistic_write',
+      'getMany',
+    ]);
     expect(
       h.whereCalls.find(([sql]) => sql === 's.status = :status')?.[1],
     ).toEqual({ status: SettlementStatus.BRANCH_SETTLED });
