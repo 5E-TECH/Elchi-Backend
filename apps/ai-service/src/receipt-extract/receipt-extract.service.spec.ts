@@ -1,7 +1,9 @@
 import {
   RECEIPT_EXTRACT_SYSTEM,
   ReceiptExtractService,
+  maskCardLikeDigits,
   sanitizeCurrency,
+  sanitizeReceiptDate,
   sanitizeReference,
   sanitizeText,
 } from './receipt-extract.service';
@@ -91,5 +93,33 @@ describe('ReceiptExtractService', () => {
     expect(sanitizeReference('8600123412341234')).toBeNull();
     expect(sanitizeReference('№ 00123')).toBe('00123');
     expect(sanitizeText('  a   b ', 10)).toBe('a b');
+  });
+
+  it.each([
+    '8600 1234 5678 9012',
+    '8600-1234-5678-9012',
+    '8600.1234.5678.9012',
+    '8600123456789012',
+    '9860 0101 2345 6789',
+  ])('⭐ guruhlangan karta raqami %s — uchala maydonda maskalanadi', (pan) => {
+    const digits = pan.replace(/\D/g, '');
+    for (const out of [
+      sanitizeReference(pan),
+      sanitizeReference(`TX ${pan}`),
+      sanitizeText(`Ali Valiyev ${pan}`, 120),
+      sanitizeReceiptDate(`30.10.2026 ${pan}`),
+    ]) {
+      expect(String(out)).not.toContain(digits);
+      expect(String(out)).not.toMatch(/\d{4}[\s.-]?\d{4}[\s.-]?\d{4}/);
+    }
+    expect(sanitizeReference(pan)).toBeNull();
+    expect(sanitizeReference(`TX ${pan}`)).toBe('TX***');
+  });
+
+  it('sana, summa, qisqa referens maskalanmaydi', () => {
+    expect(maskCardLikeDigits('30.10.2026 14:05')).toBe('30.10.2026 14:05');
+    expect(maskCardLikeDigits('150 000 so`m')).toBe('150 000 so`m');
+    expect(sanitizeReceiptDate('2026-10-30 14:05')).toBe('2026-10-30 14:05');
+    expect(sanitizeReference('TX-00123456')).toBe('TX-00123456');
   });
 });

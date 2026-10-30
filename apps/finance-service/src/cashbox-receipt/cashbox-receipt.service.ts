@@ -27,6 +27,7 @@ import {
   CASHBOX_RECEIPT_SETTING_GROUPS,
   CASHBOX_RECEIPT_SETTING_KEYS,
   Cashbox_type,
+  Operation_type,
   RECEIPT_REANALYZE_STATUS,
   Roles,
   applyReceiptSettingsPatch,
@@ -112,6 +113,15 @@ export function receiptRpcError(error: unknown): never {
     message: error instanceof Error ? error.message : 'Internal server error',
   });
 }
+
+/** Qoralama TTL'dan eski (tozalash nomzodi) — bog'lab bo'lmaydi. */
+export const isReceiptDraftExpired = (
+  uploadedAt: Date | string | null | undefined,
+  now: number = Date.now(),
+): boolean =>
+  !!uploadedAt &&
+  new Date(uploadedAt).getTime() <
+    now - CASHBOX_RECEIPT_DRAFT_TTL_HOURS * 3_600_000;
 
 const optionalText = (value: unknown): string | undefined => {
   const v = text(value);
@@ -494,10 +504,34 @@ export class CashboxReceiptService {
     }
     if (!/^\d{1,18}$/.test(receiptId)) receiptFail(400, RC.NOT_FOUND);
     const repo = manager.getRepository(CashboxReceipt);
-    const receipt = await repo.findOne({
+    // Muddati o'tgan qoralama — QULFDAN OLDIN rad (tozalash uni qulflab fayl
+    // o'chirishi mumkin; to'lov — MAIN kassa qulfi ostida — kutib qolmasin).
+    const peek = await repo.findOne({
+      select: { id: true, state: true, uploaded_at: true },
       where: { id: receiptId, isDeleted: false },
-      lock: { mode: 'pessimistic_write' },
     });
+    if (
+      !peek ||
+      (peek.state === 'draft' && isReceiptDraftExpired(peek.uploaded_at))
+    ) {
+      receiptFail(400, RC.NOT_FOUND);
+    }
+    let receipt: CashboxReceipt | null;
+    try {
+      receipt = await repo.findOne({
+        where: { id: receiptId, isDeleted: false },
+        lock: { mode: 'pessimistic_write', onLocked: 'nowait' },
+      });
+    } catch (error) {
+      // 55P03 — chek boshqa tranzaksiyada (parallel bog'lash / tozalash).
+      if (
+        error instanceof QueryFailedError &&
+        (error.driverError as { code?: string } | undefined)?.code === '55P03'
+      ) {
+        receiptFail(409, RC.ALREADY_USED);
+      }
+      throw error;
+    }
     if (!receipt) receiptFail(400, RC.NOT_FOUND);
     if (String(receipt.uploaded_by) !== text(request.requester_id)) {
       receiptFail(403, RC.NOT_OWNER);
@@ -832,6 +866,91 @@ export class CashboxReceiptService {
     }
   }
 
+  /**
+   * Shu rasm BOSHQA biriktirilgan chekda bormi. Qoralamalar sanalmaydi — rad
+   * etilgan urinishdagi qoralama qonuniy chekni «takror» qilmasin.
+   */
+  /**
+   * T6 tuzatishi (`payment-correction`) — SHU tranzaksiyada:
+   * asl to'lov oyog'iga bog'langan chek yangi (replacement) oyoqlarga
+   * ko'chadi, `entered_amount` — yangi summa. AI allaqachon o'qigan bo'lsa
+   * (match / mismatch) holat va farq SAQLANGAN o'qilgan summadan qayta
+   * hisoblanadi (AI qayta chaqirilmaydi); `pending` — natija kelganda yangi
+   * summa bilan solishtiriladi. Faqat qaytarish (replacement yo'q) — chek
+   * asl oyoqda qoladi (qaytarilgan oyoq xulosa va «Chek yo'q» dan chiqadi).
+   */
+  async carryOverForCorrection(
+    manager: EntityManager,
+    input: {
+      original_transfer_id: string;
+      replacement_transfer_id: string | null;
+      new_amount: number | null;
+    },
+  ): Promise<{ receipt_id: string } | null> {
+    if (!input.replacement_transfer_id || input.new_amount === null) {
+      return null;
+    }
+    const historyRepo = manager.getRepository(CashboxHistory);
+    const originalLegs = await historyRepo.find({
+      select: { id: true },
+      where: { transfer_id: input.original_transfer_id, isDeleted: false },
+    });
+    if (!originalLegs.length) return null;
+    const repo = manager.getRepository(CashboxReceipt);
+    const receipt = await repo.findOne({
+      where: {
+        history_id: In(originalLegs.map((leg) => String(leg.id))),
+        state: 'linked',
+        isDeleted: false,
+      },
+      lock: { mode: 'pessimistic_write' },
+    });
+    if (!receipt) return null;
+    const newLegs = await historyRepo.find({
+      where: { transfer_id: input.replacement_transfer_id, isDeleted: false },
+      relations: { cashbox: true },
+    });
+    const main = newLegs.find(
+      (leg) =>
+        leg.operation_type === Operation_type.INCOME &&
+        leg.cashbox?.cashbox_type === Cashbox_type.MAIN,
+    );
+    if (!main) return null;
+    const counter = newLegs.find(
+      (leg) =>
+        leg.operation_type === Operation_type.EXPENSE &&
+        leg.cashbox?.cashbox_type === Cashbox_type.FOR_COURIER,
+    );
+    const update: Partial<CashboxReceipt> = {
+      history_id: String(main.id),
+      counter_history_id: counter ? String(counter.id) : null,
+      entered_amount: Number(input.new_amount),
+    };
+    const readAmount =
+      receipt.ai_amount === null || receipt.ai_amount === undefined
+        ? null
+        : Number(receipt.ai_amount);
+    if (
+      (receipt.ai_status === 'match' || receipt.ai_status === 'mismatch') &&
+      readAmount !== null
+    ) {
+      const derived = deriveReceiptOutcome(
+        {
+          ok: true,
+          amount: readAmount,
+          currency: receipt.ai_currency,
+          // match/mismatch — ishonch allaqachon chegaradan o'tgan.
+          confidence: Number(receipt.ai_confidence ?? 1),
+        },
+        Number(input.new_amount),
+      );
+      update.ai_status = derived.status;
+      update.ai_difference = derived.difference;
+    }
+    await repo.update({ id: receipt.id }, update);
+    return { receipt_id: String(receipt.id) };
+  }
+
   private async hasDuplicatePhoto(
     manager: EntityManager,
     row: CashboxReceipt,
@@ -841,6 +960,7 @@ export class CashboxReceiptService {
         where: {
           file_sha256: row.file_sha256,
           isDeleted: false,
+          state: 'linked',
           id: Not(row.id),
         },
       })) > 0

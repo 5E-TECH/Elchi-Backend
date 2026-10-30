@@ -65,10 +65,24 @@ export const RECEIPT_EXTRACT_SCHEMA: Record<string, unknown> = Object.freeze({
 export const RECEIPT_EXTRACT_MAX_TOKENS = 384;
 const MEDIA_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
 
-/** Qisqa matn: uzun raqamlar (ehtimoliy PAN) maskalanadi, ≤ `max` belgi. */
+/** Shu qadar raqamli guruhlangan ketma-ketlik — ehtimoliy karta raqami (PAN). */
+export const RECEIPT_PAN_MIN_DIGITS = 12;
+
+/**
+ * Raqamlar orasidagi bitta bo'sh joy / `-` / `.` bilan guruhlangan
+ * ketma-ketlik («8600 1234 5678 9012», «8600-1234-…») ham, yaxlit ham —
+ * ≥ 12 raqam bo'lsa `***`. Sana («30.10.2026 14:05») va summa qoladi.
+ */
+export function maskCardLikeDigits(text: string): string {
+  return text.replace(/\d(?:[\s.-]?\d)*/g, (run) =>
+    run.replace(/\D/g, '').length >= RECEIPT_PAN_MIN_DIGITS ? '***' : run,
+  );
+}
+
+/** Qisqa matn: uzun raqamlar (ehtimoliy PAN, telefon) maskalanadi, ≤ `max` belgi. */
 export function sanitizeText(value: unknown, max: number): string | null {
   if (typeof value !== 'string') return null;
-  const text = value
+  const text = maskCardLikeDigits(value)
     .replace(/\d{9,}/g, '***')
     .replace(/\s+/g, ' ')
     .trim()
@@ -76,14 +90,21 @@ export function sanitizeText(value: unknown, max: number): string | null {
   return text || null;
 }
 
-/** Referens: harf-raqam (PAN emas — 13+ raqamli ketma-ketlik maskalanadi). */
+/** Referens: harf-raqam; karta raqamiga o'xshash ketma-ketlik AVVAL maskalanadi. */
 export function sanitizeReference(value: unknown): string | null {
   if (typeof value !== 'string' && typeof value !== 'number') return null;
-  const text = String(value)
+  const text = maskCardLikeDigits(String(value))
     .replace(/\d{13,}/g, '***')
-    .replace(/[^\p{L}\p{N}\-_/#.]/gu, '')
+    .replace(/[^\p{L}\p{N}\-_/#.*]/gu, '')
     .slice(0, 120);
-  return text && text !== '***' ? text : null;
+  return text && !/^\**$/.test(text) ? text : null;
+}
+
+/** Chek sanasi: guruhlangan karta raqami ham maskalanadi. */
+export function sanitizeReceiptDate(value: unknown): string | null {
+  return sanitizeDate(
+    typeof value === 'string' ? maskCardLikeDigits(value) : value,
+  );
 }
 
 export function sanitizeCurrency(value: unknown): string | null {
@@ -152,7 +173,7 @@ export class ReceiptExtractService {
       ok: true,
       amount: sanitizeBalance(data.amount),
       currency: sanitizeCurrency(data.currency),
-      date: sanitizeDate(data.date),
+      date: sanitizeReceiptDate(data.date),
       recipient_name: sanitizeText(data.recipient_name, 120),
       recipient_card_last4: sanitizeLast4(data.recipient_card_last4),
       payer_name: sanitizeText(data.payer_name, 120),
