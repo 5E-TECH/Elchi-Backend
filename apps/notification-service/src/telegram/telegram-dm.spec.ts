@@ -8,6 +8,7 @@ import { StartHandler } from '../bot/handlers/start.handler';
 import { makeCtx } from '../bot/testing/bot-kit-spec';
 import { NotificationInboxService } from '../notification-inbox.service';
 import {
+  TELEGRAM_BLOCK_PROBE_DAYS,
   TELEGRAM_DM_DELIVER_PATTERN,
   TelegramDmService,
 } from './telegram-dm.service';
@@ -167,6 +168,14 @@ describe('rCFZAmOz — TelegramDmService', () => {
     expect(String(notifications.query.mock.calls[0][0])).toContain(
       '"telegram_blocked_chats"',
     );
+    // Zaxira: 30 kundan eski blokda bitta sinov xabari (yo'qolgan `member`).
+    expect(String(notifications.query.mock.calls[0][0])).toContain(
+      '"blocked_at" > now()',
+    );
+    expect(notifications.query.mock.calls[0][1]).toEqual([
+      ['5550011'],
+      TELEGRAM_BLOCK_PROBE_DAYS,
+    ]);
   });
 
   it('DM tugmalari: data.telegram_buttons → url (faqat https) va bot amali (egasi = qabul qiluvchi)', async () => {

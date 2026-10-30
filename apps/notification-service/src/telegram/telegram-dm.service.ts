@@ -79,6 +79,9 @@ const metricType = (type: unknown) => {
  * Idempotent: `deliver` qatorni avval `queued → sending` bilan DA'VO qiladi
  * (shartli UPDATE) — outbox qayta yetkazsa ham bitta xabar ikki marta ketmaydi.
  */
+/** (BOT-3c) Shundan eski blok — bitta sinov xabari (403 → blok yangilanadi). */
+export const TELEGRAM_BLOCK_PROBE_DAYS = 30;
+
 @Injectable()
 export class TelegramDmService {
   private readonly logger = new Logger(TelegramDmService.name);
@@ -189,14 +192,20 @@ export class TelegramDmService {
     return map;
   }
 
-  /** Botni bloklagan shaxsiy chatlar (`telegram_blocked_chats`, BOT-3c — muddatsiz). */
+  /**
+   * Botni bloklagan shaxsiy chatlar (`telegram_blocked_chats`, BOT-3c).
+   * Zaxira: `my_chat_member: member` yangilanishi yo'qolsa odam DM'dan
+   * abadiy uzilib qolmasin — `TELEGRAM_BLOCK_PROBE_DAYS` (30) kundan eski
+   * blokda bitta xabar urinib ko'riladi; yana 403 bo'lsa blok yangilanadi.
+   */
   private async blockedChats(chatIds: string[]): Promise<Set<string>> {
     if (!chatIds.length) return new Set();
     try {
       const rows: Array<{ chat_id: string }> = await this.notifications.query(
         `SELECT "chat_id" FROM "notification_schema"."telegram_blocked_chats"
-          WHERE "chat_id" = ANY($1::varchar[])`,
-        [chatIds],
+          WHERE "chat_id" = ANY($1::varchar[])
+            AND "blocked_at" > now() - ($2::int * interval '1 day')`,
+        [chatIds, TELEGRAM_BLOCK_PROBE_DAYS],
       );
       return new Set(
         (Array.isArray(rows) ? rows : []).map((row) => String(row.chat_id)),

@@ -173,12 +173,16 @@ export class BotChannelService {
    */
   async markActive(chatId: string, botSlug: string): Promise<void> {
     if (BotChannelService.isGroupChat(chatId)) return;
-    const deleted: unknown = await this.markets.query(
-      `DELETE FROM "notification_schema"."telegram_blocked_chats"
-        WHERE "chat_id" = $1
-      RETURNING "chat_id"`,
-      [chatId],
-    );
+    // Bir marta qayta urinish: yo'qolgan blok olib tashlash odamni DM'dan
+    // uzib qo'yadi (zaxira — 30 kunlik sinov, TelegramDmService).
+    const unblock = () =>
+      this.markets.query<unknown>(
+        `DELETE FROM "notification_schema"."telegram_blocked_chats"
+          WHERE "chat_id" = $1
+        RETURNING "chat_id"`,
+        [chatId],
+      );
+    const deleted: unknown = await unblock().catch(() => unblock());
     const rows = Array.isArray(deleted)
       ? Array.isArray(deleted[0])
         ? (deleted[0] as unknown[])

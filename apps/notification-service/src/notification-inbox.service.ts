@@ -1424,6 +1424,11 @@ export class NotificationInboxService {
   ): Promise<GroupRelay> {
     const target = dto.telegram!;
     const notificationIds = persisted.map((row) => String(row.id));
+    // SAVEPOINT: relay xatosi (statement / lock timeout, ustun yo'q …)
+    // dispatch tranzaksiyasini ABORT qilmasin — aks holda COMMIT jimgina
+    // ROLLBACK bo'lib, inbox qatorlari, push/SMS/DM navbati, eskalatsiya va
+    // dedup kaliti yo'qolardi, javob esa baribir «dispatched» edi.
+    await manager.query('SAVEPOINT "telegram_relay"');
     try {
       const ids = await this.telegramService.enqueueGroupRelay(
         manager,
@@ -1443,8 +1448,16 @@ export class NotificationInboxService {
           [notificationIds],
         );
       }
+      await manager.query('RELEASE SAVEPOINT "telegram_relay"');
       return { ids };
     } catch (error) {
+      // Faqat relay qismi bekor; dispatch tranzaksiyasi davom etadi. Savepoint
+      // ham tiklanmasa — tranzaksiya buzilgan: xato chaqiruvchiga (rollback,
+      // RMQ qayta yetkazadi), «dispatched» deb aytilmaydi.
+      await manager.query('ROLLBACK TO SAVEPOINT "telegram_relay"');
+      this.logger.warn(
+        `telegram relay navbatga qo'yilmadi (dispatch davom etadi): ${shortReason(error)}`,
+      );
       return { ids: null, error };
     }
   }

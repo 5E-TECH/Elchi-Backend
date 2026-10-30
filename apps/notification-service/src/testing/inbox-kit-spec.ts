@@ -84,6 +84,10 @@ export function makeInbox(
     ),
     count: jest.fn().mockResolvedValue(0),
   };
+  const deliveryPatches: Array<{
+    ids: string[];
+    patch: Record<string, string>;
+  }> = [];
   const manager = {
     getRepository: () => txRepo,
     // (BOT-3c) relay: tranzaksiyada `delivery.telegram = queued`.
@@ -106,11 +110,39 @@ export function makeInbox(
     manager: {
       transaction: (work: (m: unknown) => Promise<unknown>) => work(manager),
     },
+    // (BOT-3c) recordDelivery: `delivery || :patch` id bo'yicha store'ga
+    // qo'llanadi va yoziladi (`deliveryPatches`) — testlar patch tarkibini
+    // tekshiradi.
     createQueryBuilder: () => {
+      const current: { patch: Record<string, string>; ids: string[] } = {
+        patch: {},
+        ids: [],
+      };
       const qb: Record<string, jest.Mock> = {};
-      for (const key of ['update', 'set', 'setParameter', 'whereInIds'])
-        qb[key] = jest.fn(() => qb);
-      qb.execute = jest.fn().mockResolvedValue({ affected: 1 });
+      for (const key of ['update', 'set']) qb[key] = jest.fn(() => qb);
+      qb.setParameter = jest.fn((name: string, value: string) => {
+        if (name === 'patch') {
+          current.patch = JSON.parse(value) as Record<string, string>;
+        }
+        return qb;
+      });
+      qb.whereInIds = jest.fn((ids: string[]) => {
+        current.ids = ids.map(String);
+        return qb;
+      });
+      qb.execute = jest.fn(() => {
+        deliveryPatches.push({ ids: current.ids, patch: current.patch });
+        for (const id of current.ids) {
+          const row = store.get(id);
+          if (row) {
+            store.set(id, {
+              ...row,
+              delivery: { ...(row.delivery ?? {}), ...current.patch },
+            });
+          }
+        }
+        return Promise.resolve({ affected: current.ids.length });
+      });
       return qb;
     },
   };
@@ -139,7 +171,15 @@ export function makeInbox(
     undefined,
     (options.dedup ?? undefined) as DispatchDedupService | undefined,
   );
-  return { service, store, txRepo, telegramService, activityLog };
+  return {
+    service,
+    store,
+    txRepo,
+    telegramService,
+    activityLog,
+    manager,
+    deliveryPatches,
+  };
 }
 
 /**

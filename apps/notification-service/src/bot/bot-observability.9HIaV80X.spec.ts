@@ -536,6 +536,31 @@ describe('9HIaV80X — activity_log: holat o‘zgartiruvchi callback', () => {
   });
 });
 
+describe('BOT-3c — blok olib tashlash bir marta qayta urinadi', () => {
+  it('⭐ DELETE birinchi urinishda yiqilsa — qayta urinadi, blok o‘chadi', async () => {
+    const query = jest
+      .fn()
+      .mockRejectedValueOnce(new Error('connection reset'))
+      .mockResolvedValue([{ chat_id: '5550007' }]);
+    const sessions = {
+      load: jest.fn().mockResolvedValue({ state: {} }),
+      update: jest.fn(),
+    };
+    const activityLog = { log: jest.fn().mockResolvedValue(undefined) };
+    const channels = new BotChannelService(
+      { query } as never,
+      sessions as never,
+      activityLog as never,
+      {} as never,
+    );
+    await channels.markActive('5550007', 'elchi');
+    expect(query).toHaveBeenCalledTimes(2);
+    expect(activityLog.log).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'notification.tg_channel_active' }),
+    );
+  });
+});
+
 describe('BOT-3c — shaxsiy chatda /start blok belgisini o‘chiradi', () => {
   it.each(['/start', '/start abc_DEF-123'])(
     '%s → markActive(chat, slug); guruhda va boshqa matnda — yo‘q',

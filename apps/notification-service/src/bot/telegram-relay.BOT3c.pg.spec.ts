@@ -1,5 +1,5 @@
 import { Logger } from '@nestjs/common';
-import { DataSource } from 'typeorm';
+import { DataSource, EntityManager } from 'typeorm';
 import { TelegramBotCore1716000000120 } from '../../../../migrations/1716000000120-TelegramBotCore';
 import { TelegramMarketInactiveReason1716000000150 } from '../../../../migrations/1716000000150-TelegramMarketInactiveReason';
 import { TelegramOutboxDeliveryBlocks1716000000192 } from '../../../../migrations/1716000000192-TelegramOutboxDeliveryBlocks';
@@ -7,6 +7,7 @@ import { TelegramMarket } from '../entities/telegram-market.entity';
 import { TelegramOutbox } from '../entities/telegram-outbox.entity';
 import { TelegramSession } from '../entities/telegram-session.entity';
 import { NotificationServiceService } from '../notification-service.service';
+import { NotificationInboxService } from '../notification-inbox.service';
 import { BotChannelService } from './bot-channel.service';
 import { BotMaintenanceService } from './bot-maintenance.service';
 import { BotOutboxService } from './bot-outbox.service';
@@ -261,6 +262,51 @@ const env = {
         telegram_error: expect.stringContaining('too long') as unknown,
       });
       expect(await deliveryOf(alreadySent)).toEqual({ telegram: 'sent' });
+    });
+
+    it('⭐ relay DB xatosi tranzaksiya ichida — SAVEPOINT: dispatch qatorlari COMMIT bo‘ladi (jim ROLLBACK yo‘q)', async () => {
+      const inbox = Object.assign(
+        Object.create(NotificationInboxService.prototype) as object,
+        {
+          logger: { warn: jest.fn() },
+          telegramService: {
+            enqueueGroupRelay: (manager: EntityManager) =>
+              manager.query(
+                `SELECT * FROM notification_schema.yoq_jadval_statement_timeout`,
+              ),
+          },
+        },
+      ) as unknown as {
+        enqueueGroupRelay: (
+          manager: EntityManager,
+          dto: unknown,
+          persisted: unknown[],
+        ) => Promise<{ ids: string[] | null; error?: unknown }>;
+      };
+      const ids = await db.transaction(async (manager) => {
+        const [before]: Array<{ id: string }> = await manager.query(
+          `INSERT INTO notification_schema.notifications (delivery)
+           VALUES ('{}'::jsonb) RETURNING id`,
+        );
+        const relay = await inbox.enqueueGroupRelay(
+          manager,
+          { title: 'x', telegram: { market_id: '5' } },
+          [{ id: before.id }],
+        );
+        expect(relay.ids).toBeNull();
+        expect(relay.error).toBeTruthy();
+        // Tranzaksiya ABORT emas — keyingi yozuvlar ishlaydi.
+        const [after]: Array<{ id: string }> = await manager.query(
+          `INSERT INTO notification_schema.notifications (delivery)
+           VALUES ('{}'::jsonb) RETURNING id`,
+        );
+        return [String(before.id), String(after.id)];
+      });
+      const rows: unknown[] = await db.query(
+        `SELECT id FROM notification_schema.notifications WHERE id = ANY($1::bigint[])`,
+        [ids],
+      );
+      expect(rows).toHaveLength(2);
     });
 
     it('market guruhi yo‘q — null (not_eligible), outbox qatori yo‘q', async () => {
