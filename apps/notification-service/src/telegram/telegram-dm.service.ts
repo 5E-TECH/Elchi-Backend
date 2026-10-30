@@ -189,13 +189,13 @@ export class TelegramDmService {
     return map;
   }
 
-  /** Botni bloklagan shaxsiy chatlar (`telegram_sessions.state.blocked_at`). */
+  /** Botni bloklagan shaxsiy chatlar (`telegram_blocked_chats`, BOT-3c — muddatsiz). */
   private async blockedChats(chatIds: string[]): Promise<Set<string>> {
     if (!chatIds.length) return new Set();
     try {
       const rows: Array<{ chat_id: string }> = await this.notifications.query(
-        `SELECT "chat_id" FROM "notification_schema"."telegram_sessions"
-          WHERE "chat_id" = ANY($1::varchar[]) AND "state" ? 'blocked_at'`,
+        `SELECT "chat_id" FROM "notification_schema"."telegram_blocked_chats"
+          WHERE "chat_id" = ANY($1::varchar[])`,
         [chatIds],
       );
       return new Set(
@@ -292,16 +292,24 @@ export class TelegramDmService {
                 row.data,
                 row.link,
               );
-              await this.sendWithMedia(
+              const status = await this.sendWithMedia(
                 chat,
                 this.text(row),
                 row.data,
                 reply_markup,
+                String(row.id),
               );
+              // (BOT-3c) 429/5xx — outbox qayta yuboradi: `sent` EMAS;
+              // yakuniy holatni outbox ishchisi yozadi.
               return {
                 id: String(row.id),
                 type: row.type,
-                patch: { telegram: NotificationDeliveryStatus.SENT },
+                patch: {
+                  telegram:
+                    status === 'queued'
+                      ? NotificationDeliveryStatus.RETRYING
+                      : NotificationDeliveryStatus.SENT,
+                },
               };
             } catch (error) {
               const reason = short(error);
@@ -428,7 +436,9 @@ export class TelegramDmService {
     text: string,
     data: Record<string, unknown> | null | undefined,
     reply_markup: InlineKeyboardMarkup | null,
-  ): Promise<void> {
+    notificationId: string,
+  ): Promise<'sent' | 'queued'> {
+    let status: 'sent' | 'queued' = 'sent';
     const keys = Array.isArray(data?.telegram_media)
       ? (data.telegram_media as unknown[])
           .map((key) => str(key))
@@ -469,7 +479,9 @@ export class TelegramDmService {
         parse_mode: 'HTML',
         ...(reply_markup ? { reply_markup } : {}),
         source: 'notification.dm',
+        notification_ids: [notificationId],
       });
+      if ((sent as { status?: string })?.status === 'queued') status = 'queued';
       messageId =
         (sent as { result?: { message_id?: number } | null })?.result
           ?.message_id ?? messageId;
@@ -483,6 +495,7 @@ export class TelegramDmService {
         .attachMessage(callbacks, messageId)
         .catch(() => undefined);
     }
+    return status;
   }
 
   private async readFiles(
@@ -526,15 +539,20 @@ export class TelegramDmService {
 
   private async patch(ids: string[], patch: Record<string, string>) {
     if (!ids.length) return;
-    await this.notifications
+    const query = this.notifications
       .createQueryBuilder()
       .update(Notification)
       .set({
         delivery: () => `COALESCE("delivery", '{}'::jsonb) || :patch::jsonb`,
       })
       .setParameter('patch', JSON.stringify(patch))
-      .whereInIds(ids)
-      .execute();
+      .whereInIds(ids);
+    // (BOT-3c) `retrying` — faqat hali `sending` bo'lsa: outbox ishchisi
+    // yakuniy holatni allaqachon yozgan bo'lsa, bosib ketilmaydi.
+    if (patch.telegram === NotificationDeliveryStatus.RETRYING) {
+      query.andWhere(`"delivery"->>'telegram' = 'sending'`);
+    }
+    await query.execute();
   }
 
   // ==================== ulash (9uNhwTZp / 6jXw0DDr / 4TfLyTrL) ====================

@@ -10,7 +10,12 @@ import {
 import { ModuleRef } from '@nestjs/core';
 import { ClientProxy, RpcException } from '@nestjs/microservices';
 import { InjectRepository } from '@nestjs/typeorm';
-import { FindOptionsSelect, FindOptionsWhere, Repository } from 'typeorm';
+import {
+  EntityManager,
+  FindOptionsSelect,
+  FindOptionsWhere,
+  Repository,
+} from 'typeorm';
 import {
   ActivityAction,
   ActivityLogQuery,
@@ -850,6 +855,8 @@ export class NotificationServiceService {
     disable_web_page_preview?: boolean;
     reply_markup?: InlineKeyboardMarkup;
     source?: string;
+    /** (BOT-3c) `queued` bo'lsa yakuniy holatni outbox shu qatorlarga yozadi. */
+    notification_ids?: string[];
   }) {
     const result = await this.botOutbox.send({
       chatId: data.group_id,
@@ -858,6 +865,7 @@ export class NotificationServiceService {
       disable_web_page_preview: data.disable_web_page_preview,
       reply_markup: data.reply_markup,
       source: data.source ?? 'notification.direct',
+      notificationIds: data.notification_ids,
     });
     if (result.status === 'dead') {
       throw new BadRequestException(result.error ?? 'Telegram send failed');
@@ -866,6 +874,78 @@ export class NotificationServiceService {
       success: true,
       status: result.status,
       result: result.result ?? null,
+    };
+  }
+
+  /**
+   * (BOT-3c) Inbox dispatch'ining guruh relay'i (bekor / market guruhi
+   * xabari) — dispatch TRANZAKSIYASI ichida: nishon guruhlar shu
+   * tranzaksiyada o'qiladi, har biriga `telegram_outbox` qatori (`pending`,
+   * yakuniy natija `notificationIds` ga). Rollback → xabar yo'q; commit'dan
+   * keyin servis yiqilsa ham worker yuboradi. Guruh yo'q — `null`.
+   * Commit'dan keyin `flushGroupRelay` bilan darhol yuboriladi.
+   */
+  async enqueueGroupRelay(
+    manager: EntityManager,
+    target: { market_id?: string; group_id?: string; group_type?: Group_type },
+    message: string,
+    notificationIds: string[],
+  ): Promise<string[] | null> {
+    let chats: string[];
+    if (target.group_id) {
+      chats = [target.group_id];
+    } else if (target.market_id) {
+      this.assertBigIntId(target.market_id, 'market_id');
+      const where: FindOptionsWhere<TelegramMarket> = {
+        market_id: target.market_id,
+        isDeleted: false,
+        is_active: true,
+      };
+      if (target.group_type) where.group_type = target.group_type;
+      const rows = await manager
+        .getRepository(TelegramMarket)
+        .find({ select: TG_MARKET_SELECT, where });
+      // Bir guruh ikki turga ulangan bo'lsa — bir marta.
+      chats = [...new Set(rows.map((row) => String(row.group_id)))];
+    } else {
+      return null;
+    }
+    if (!chats.length) return null;
+    const ids: string[] = [];
+    for (const chatId of chats) {
+      ids.push(
+        await this.botOutbox.enqueue(manager, {
+          chatId,
+          text: message,
+          parse_mode: 'HTML',
+          source: 'notification.relay',
+          notificationIds,
+        }),
+      );
+    }
+    return ids;
+  }
+
+  /**
+   * (BOT-3c) `enqueueGroupRelay` qatorlarini commit'dan keyin darhol yuborish.
+   * Javob — `sendNotification` ning `data` ko'rinishi (relay natijasi uchun).
+   */
+  async flushGroupRelay(ids: string[]) {
+    const results = await this.botOutbox.sendNow(ids);
+    const success = results.filter((item) => item.status === 'sent').length;
+    const queued = results.filter((item) => item.status === 'queued').length;
+    return {
+      data: {
+        total: results.length,
+        success,
+        failed: results.length - success - queued,
+        queued,
+        results: results.map((item) => ({
+          ok: item.status === 'sent',
+          ...(item.status === 'queued' ? { queued: true } : {}),
+          ...(item.error ? { error: item.error } : {}),
+        })),
+      },
     };
   }
 

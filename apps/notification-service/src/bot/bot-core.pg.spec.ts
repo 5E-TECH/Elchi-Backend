@@ -2,6 +2,7 @@ import { Logger } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import { TelegramBotCore1716000000120 } from '../../../../migrations/1716000000120-TelegramBotCore';
 import { TelegramMarketInactiveReason1716000000150 } from '../../../../migrations/1716000000150-TelegramMarketInactiveReason';
+import { TelegramOutboxDeliveryBlocks1716000000192 } from '../../../../migrations/1716000000192-TelegramOutboxDeliveryBlocks';
 import { TelegramBotAction } from '../entities/telegram-bot-action.entity';
 import { TelegramMarket } from '../entities/telegram-market.entity';
 import { TelegramOutbox } from '../entities/telegram-outbox.entity';
@@ -59,6 +60,11 @@ const migration = new TelegramBotCore1716000000120();
       const runner = db.createQueryRunner();
       try {
         await migration[direction](runner);
+        // (BOT-3c) outbox entity'sida `notification_ids` — 120 qayta
+        // yaratgan jadvalga ham ustun kerak.
+        if (direction === 'up') {
+          await new TelegramOutboxDeliveryBlocks1716000000192().up(runner);
+        }
       } finally {
         await runner.release();
       }

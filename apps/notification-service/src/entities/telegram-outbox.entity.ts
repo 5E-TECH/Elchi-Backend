@@ -60,4 +60,11 @@ export class TelegramOutbox {
 
   @Column({ type: 'timestamptz', default: () => 'now()' })
   updated_at!: Date;
+
+  /**
+   * (BOT-3c) Shu xabar yetkazilishi yakunlaydigan inbox qatorlari —
+   * `sent` / `dead` da ularning `delivery.telegram` ini outbox ishchisi yozadi.
+   */
+  @Column({ type: 'bigint', array: true, nullable: true })
+  notification_ids!: string[] | null;
 }

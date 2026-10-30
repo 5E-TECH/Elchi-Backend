@@ -97,6 +97,7 @@ const REACHED_STATUSES: readonly string[] = Object.freeze([
   'emitted',
   'delivered',
   'queued',
+  'retrying',
   'pending',
   'processing',
   'accepted',

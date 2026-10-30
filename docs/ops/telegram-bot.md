@@ -25,7 +25,8 @@ Chiquvchi: BotOutboxService (telegram_outbox) → BotTransportService (yagona ap
 | `telegram_sessions` | chat holati (PII yo'q), TTL 24 soat; `poll:<slug>` — polling offset |
 | `telegram_bot_actions` | inline tugma holati, `callback_data = a:<16 belgi>` |
 | `telegram_rate_limits` | kiruvchi 20/daqiqa, bog'lash kodi 5/daqiqa → 15 daqiqa blok, update dedup |
-| `telegram_outbox` | chiquvchi xabarlar: 429/5xx → qayta urinish, 403/400 → dead |
+| `telegram_outbox` | chiquvchi xabarlar: 429/5xx → qayta urinish, 403/400 → dead; `notification_ids` — yakuniy holatni shu inbox qatorlariga yozadi (BOT-3c) |
+| `telegram_blocked_chats` | botni bloklagan shaxsiy chatlar — MUDDATSIZ (BOT-3c), `member` / `/start` da o'chadi |
 
 Tozalash: `BotMaintenanceService` (har soat, `:17`).
 
@@ -174,6 +175,18 @@ bazasiga o'zi yozmaydi, doira/holat mashinasi/isbot/extra-cost — serverda.
   ICHIDA egallanadi; takror (outbox / RMQ redelivery) → `duplicate: true`,
   ikkinchi inbox yangilanishi va ikkinchi Telegram xabari YO'Q. 7 kundan
   eski kalitlar soatlik tozalashda.
+- (BOT-3c) Guruh relay'i (bekor / market guruhi xabari) — dispatch
+  TRANZAKSIYASI ichida `telegram_outbox` ga (`pending`) + inbox qatorlari
+  `delivery.telegram = queued`; commit'dan keyin darhol bir urinish, servis
+  yiqilsa ham worker (har 5 s) yuboradi. Rollback → xabar yo'q.
+- (BOT-3c) `delivery.telegram`: `queued` (relay navbatda) / `retrying` (DM,
+  429/5xx — outbox qayta uradi) — `sent` EMAS; yakuniy `sent` / `failed`
+  (+ `telegram_error`) ni outbox ishchisi yozadi, yakunlangan qator qayta
+  yozilmaydi. Migratsiya `1716000000192`.
+- (BOT-3c) Botni bloklagan odam — `telegram_blocked_chats` (ilgari 24 soatlik
+  sessiyada edi — sessiya tozalangach yana urinilardi); `my_chat_member:
+  member` yoki shaxsiy `/start` da o'chadi. Migratsiya eski sessiya
+  belgilarini ko'chiradi.
 - `notification.send` (`POST /notifications/send`) — ESKIRGAN, faqat
   superadminning qo'lda guruh relay'i; servislar `notification.dispatch`.
 - `NOTIFICATION_ADMIN_GROUP_ID` / `TELEGRAM_ADMIN_GROUP_ID` — ixtiyoriy

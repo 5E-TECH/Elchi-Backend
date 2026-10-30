@@ -386,6 +386,12 @@ export enum NotificationDeliveryStatus {
   SKIPPED = 'skipped',
   /** Navbatga qo'yildi (push/SMS outbox) — yetkazish keyin, asinxron. */
   QUEUED = 'queued',
+  /**
+   * (BOT-3c) Telegram: birinchi urinish 429/5xx — xabar `telegram_outbox` da
+   * qayta urinishda; yakuniy `sent` / `failed` ni outbox ishchisi yozadi.
+   * `sent` EMAS.
+   */
+  RETRYING = 'retrying',
   /** Realtime: brokerga emit qilindi (ack yo'q — `sent` EMAS). */
   EMITTED = 'emitted',
   /** Kanal so'raldi, lekin provayder ulanmagan (email, SMS akkaunti yo'q). */

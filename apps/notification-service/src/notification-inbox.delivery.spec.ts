@@ -2,6 +2,7 @@ import { RpcException } from '@nestjs/microservices';
 import { Logger } from '@nestjs/common';
 import { of, throwError, TimeoutError } from 'rxjs';
 import { NotificationInboxService } from './notification-inbox.service';
+import { withGroupRelay } from './testing/inbox-kit-spec';
 
 const rmqSendMock = jest.fn();
 
@@ -85,7 +86,10 @@ describe('NotificationInboxService — delivery, fan-out, types', () => {
       }),
       findOne: jest.fn(),
     };
-    const manager = { getRepository: jest.fn(() => txRepo) };
+    const manager = {
+      getRepository: jest.fn(() => txRepo),
+      query: jest.fn().mockResolvedValue([]),
+    };
     repo = {
       findOne: jest.fn(),
       findAndCount: jest.fn(),
@@ -128,7 +132,7 @@ describe('NotificationInboxService — delivery, fan-out, types', () => {
       },
     };
     gatewayClient = { emit: jest.fn(() => of(null)) };
-    telegramService = { sendNotification: jest.fn() };
+    telegramService = withGroupRelay({ sendNotification: jest.fn() });
     activityLog = { log: jest.fn().mockResolvedValue(undefined) };
     pushDelivery = { enqueue: jest.fn().mockResolvedValue(undefined) };
     smsDispatch = {
