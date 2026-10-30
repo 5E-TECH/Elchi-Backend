@@ -189,8 +189,7 @@ export function publicErrorFields(
 export const PUBLIC_ERROR_DATA_KEYS = ['reason', 'usage', 'details'] as const;
 
 export type PublicErrorDetailsItem =
-  | PublicErrorValue
-  | Record<string, PublicErrorValue>;
+  PublicErrorValue | Record<string, PublicErrorValue>;
 
 export type PublicErrorData = {
   reason?: string;

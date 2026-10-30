@@ -1,6 +1,6 @@
-import { randomUUID } from 'node:crypto';
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { Interval } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import {
@@ -19,6 +19,7 @@ import {
   BOT_PASSWORD_CHANGE_TEXT,
   BotPasswordChangeRequiredError,
 } from '../bot-gateway.client';
+import { BotOutboxService } from '../bot-outbox.service';
 import { BotTransportService } from '../bot-transport.service';
 import type { BotContext } from '../handlers/bot-context';
 import type { InlineKeyboardButton } from '../telegram.types';
@@ -50,6 +51,21 @@ export const AI_CREATING_TEXT = '⏳ Buyurtmalar yaratilmoqda…';
 export const AI_ALREADY_CREATED_TEXT = 'ℹ️ Bu ro‘yxat allaqachon yaratilgan.';
 export const AI_CONFIRM_FAILED_TEXT =
   '❌ Javob olinmadi — «✅ Yaratish» ni qayta bosing (takroriy buyurtma yaratilmaydi).';
+/** (BOT-3b) 2 daqiqadan eski `parsing` — ishchi yiqilgan / qotgan. */
+export const AI_STALE_TEXT =
+  '⏳ AI javobi kechikdi. Matningiz saqlangan — «🔁 Qayta urinish» ni bosing.';
+
+/**
+ * (BOT-3b) Shundan eski (ishchi olgan) `parsing` / `creating` — qotgan,
+ * tiklanadi. Eng yomon budjetdan (getFile + 429 kutish + yuklab olish +
+ * token + ai-parse 95 s ≈ 3 daqiqa) katta; baribir kech natija da'vo tokeni
+ * bilan tashlanadi.
+ */
+export const AI_STALE_AFTER_MS = 4 * 60_000;
+/** Yangi qoralamani zaxira tick shuncha kutadi (start «⏳» message_id ni yozsin). */
+const AI_TICK_MIN_AGE_MS = 5_000;
+/** (BOT-3b) Bir replikada bir vaqtda ishlanadigan AI qoralamalar. */
+export const AI_WORKER_PARALLEL = 5;
 
 const PARSE_TIMEOUT_MS = 95_000;
 const CONFIRM_TIMEOUT_MS = 90_000;
@@ -58,6 +74,11 @@ const RETRYABLE_REASONS = new Set(['network', 'ai_error']);
 
 const str = (value: unknown): string =>
   typeof value === 'string' || typeof value === 'number' ? String(value) : '';
+
+const isUniqueViolation = (error: unknown): boolean => {
+  const e = error as { code?: string; driverError?: { code?: string } };
+  return e?.code === '23505' || e?.driverError?.code === '23505';
+};
 
 const rowsOf = <T>(result: unknown): T[] => {
   if (!Array.isArray(result)) return [];
@@ -95,9 +116,23 @@ interface ConfirmResult {
  * faqat bittasi o'tadi (server dedupe — ikkinchi qatlam). Xato xabarlari
  * serverniki (`message`), bot o'zi AI matni yasamaydi.
  */
+/*
+ * (BOT-3b) AI FONDA. Avval ai-parse (95 s gacha) va ai-confirm (90 s gacha)
+ * bot update'i ichida — chat qulfi va RMQ xabari ostida — bajarilardi:
+ * ack ish oxirida bo'lgani uchun AI to'lqinida kuryer tugmalari ham
+ * kutardi, xato bo'lsa router update'ni QAYTA ishlab AI'ni ikki marta
+ * chaqirardi. Endi update «⏳» xabari bilan darhol tugaydi; qoralamani
+ * fondagi ishchi oladi (`worker_at`), QAYTA URINMAYDI (xato — «🔁 Qayta
+ * urinish» tugmasi). Qoralama id'si update'dan deterministik — takror
+ * update ikkinchi qoralama ochmaydi. 2 daqiqadan eski `parsing` /
+ * `creating` (ishchi yiqilgan) tiklanadi.
+ */
 @Injectable()
-export class AiOrderService {
+export class AiOrderService implements OnModuleDestroy {
   private readonly logger = new Logger(AiOrderService.name);
+  private readonly inflight = new Set<Promise<void>>();
+  private ticking = false;
+  private stopped = false;
 
   constructor(
     @InjectRepository(TelegramAiDraft)
@@ -106,7 +141,19 @@ export class AiOrderService {
     private readonly actions: BotActionsService,
     private readonly transport: BotTransportService,
     private readonly config: ConfigService,
+    private readonly outbox: BotOutboxService,
   ) {}
+
+  onModuleDestroy() {
+    this.stopped = true;
+  }
+
+  /** Fondagi ishlar tugashini kutadi (testlar va shutdown uchun). */
+  async idle(): Promise<void> {
+    while (this.inflight.size) {
+      await Promise.allSettled([...this.inflight]);
+    }
+  }
 
   get cabinetUrl(): string {
     return (
@@ -122,20 +169,31 @@ export class AiOrderService {
     };
   }
 
-  /** Yangi qoralama: "⏳" xabari → ai-parse → preview (yoki xato). */
+  /**
+   * Yangi qoralama: "⏳" xabari, keyin FONDA ai-parse → preview (yoki xato).
+   * Id update'dan deterministik: router update'ni qayta ishlasa ham ikkinchi
+   * qoralama (va ikkinchi AI chaqiruvi) bo'lmaydi.
+   */
   async start(
     ctx: BotContext,
     actorUserId: string,
     input: TelegramAiDraftInput,
   ): Promise<void> {
     const draft: Partial<TelegramAiDraft> = {
-      id: randomUUID(),
+      id: deterministicUuid(
+        `telegram-ai-draft:${ctx.chatId}:${str(ctx.update?.update_id)}`,
+      ),
       chat_id: ctx.chatId,
       actor_user_id: actorUserId,
       status: 'parsing',
       input,
     };
-    await this.drafts.insert(draft as never);
+    try {
+      await this.drafts.insert(draft as never);
+    } catch (error) {
+      if (isUniqueViolation(error)) return;
+      throw error;
+    }
     const working = await ctx.reply(AI_WORKING_TEXT);
     const messageId = working.result?.message_id;
     if (messageId) {
@@ -145,10 +203,10 @@ export class AiOrderService {
         { message_id: String(messageId) },
       );
     }
-    await this.runParse(ctx, draft as TelegramAiDraft);
+    this.schedule(String(draft.id), 'parsing');
   }
 
-  /** `🔁 Qayta urinish` — saqlangan kirish bilan (failed → parsing). */
+  /** `🔁 Qayta urinish` — saqlangan kirish bilan (failed → parsing), fonda. */
   async retry(ctx: BotContext, draftId: string): Promise<void> {
     const draft = await this.claim(draftId, ['failed'], 'parsing');
     if (!draft) {
@@ -156,7 +214,165 @@ export class AiOrderService {
       return;
     }
     await this.show(ctx, draft, AI_WORKING_TEXT, []);
-    await this.runParse(ctx, draft);
+    this.schedule(draft.id, 'parsing');
+  }
+
+  /** Shu replikada darhol fonda ishlash (interval — zaxira / restartdan keyin). */
+  private schedule(draftId: string, status: 'parsing' | 'creating'): void {
+    if (this.stopped) return;
+    // Replikadagi AI parallelligi chegarasi: band bo'lsa qoralama navbatda
+    // qoladi (`worker_at` NULL) — zaxira tick bo'shaganda oladi.
+    if (this.inflight.size >= AI_WORKER_PARALLEL) return;
+    const job: Promise<void> = this.claimAndWork(draftId, status)
+      .catch((error: unknown) =>
+        this.logger.error(
+          `ai draft ${draftId}: fondagi ish — ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      )
+      .finally(() => {
+        this.inflight.delete(job);
+      });
+    this.inflight.add(job);
+  }
+
+  private async claimAndWork(
+    draftId: string,
+    status: 'parsing' | 'creating',
+  ): Promise<void> {
+    const rows = rowsOf<TelegramAiDraft>(
+      await this.drafts.query(
+        `UPDATE "notification_schema"."telegram_ai_drafts"
+            SET "worker_at" = now(), "worker_token" = gen_random_uuid(),
+                "updated_at" = now()
+          WHERE "id" = $1 AND "status" = $2 AND "worker_at" IS NULL
+            AND "expires_at" > now()
+        RETURNING *`,
+        [draftId, status],
+      ),
+    );
+    if (rows[0]) await this.work(rows[0]);
+  }
+
+  /** Bitta qoralama: parse yoki confirm. QAYTA URINMAYDI — xato tugma bilan. */
+  private async work(draft: TelegramAiDraft): Promise<void> {
+    const ctx = this.workerContext(draft);
+    try {
+      if (draft.status === 'creating') await this.runConfirm(ctx, draft);
+      else await this.runParse(ctx, draft);
+    } catch (error) {
+      this.logger.warn(
+        `ai draft ${draft.id}: ${draft.status} — ${this.transport.describe(error)}`,
+      );
+      if (draft.status === 'creating') {
+        await this.backToPreview(ctx, draft, AI_CONFIRM_FAILED_TEXT);
+      } else {
+        await this.fail(ctx, draft, AI_NETWORK_TEXT, true);
+      }
+    }
+  }
+
+  /**
+   * Fondagi ishchi uchun kontekst: AI faqat SHAXSIY chatda (handler
+   * `isPrivate`), ya'ni chat id = Telegram aktori id'si.
+   */
+  private workerContext(draft: TelegramAiDraft): BotContext {
+    const chatId = String(draft.chat_id);
+    return {
+      chatId,
+      fromId: chatId,
+      isPrivate: true,
+      reply: (text, extra) =>
+        this.outbox.send({
+          chatId,
+          text,
+          parse_mode: extra?.parse_mode,
+          reply_markup: extra?.reply_markup,
+          source: 'bot.ai_order',
+        }),
+    } as BotContext;
+  }
+
+  /**
+   * (BOT-3b) Zaxira: restart / boshqa replika yiqilganidan keyin olinmay
+   * qolgan qoralamalar va `AI_STALE_AFTER_MS` dan eski qotganlar.
+   */
+  @Interval('telegram-ai-worker', 5_000)
+  async tick(): Promise<number> {
+    if (this.ticking || this.stopped) return 0;
+    this.ticking = true;
+    try {
+      await this.recoverStale();
+      const capacity = AI_WORKER_PARALLEL - this.inflight.size;
+      if (capacity <= 0) return 0;
+      const rows = rowsOf<TelegramAiDraft>(
+        await this.drafts.query(
+          `UPDATE "notification_schema"."telegram_ai_drafts" d
+              SET "worker_at" = now(), "worker_token" = gen_random_uuid(),
+                  "updated_at" = now()
+            WHERE d."id" IN (
+                  SELECT "id" FROM "notification_schema"."telegram_ai_drafts"
+                   WHERE "status" IN ('parsing', 'creating')
+                     AND "worker_at" IS NULL AND "expires_at" > now()
+                     AND "updated_at" < now() - ($2::int * interval '1 millisecond')
+                   ORDER BY "updated_at"
+                   LIMIT $1
+                   FOR UPDATE SKIP LOCKED)
+          RETURNING d.*`,
+          [capacity, AI_TICK_MIN_AGE_MS],
+        ),
+      );
+      for (const row of rows) {
+        const job: Promise<void> = this.work(row).finally(() => {
+          this.inflight.delete(job);
+        });
+        this.inflight.add(job);
+      }
+      return rows.length;
+    } catch (error) {
+      this.logger.error(
+        `AI ishchisi: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return 0;
+    } finally {
+      this.ticking = false;
+    }
+  }
+
+  /** 2 daqiqadan eski parsing → «🔁 Qayta urinish»; creating → preview. */
+  private async recoverStale(): Promise<void> {
+    const rows = rowsOf<TelegramAiDraft & { old_status: string }>(
+      await this.drafts.query(
+        `WITH stale AS (
+           SELECT "id", "status" AS "old_status"
+             FROM "notification_schema"."telegram_ai_drafts"
+            WHERE "status" IN ('parsing', 'creating')
+              AND "worker_at" IS NOT NULL
+              AND "worker_at" < now() - ($1::int * interval '1 millisecond')
+              AND "expires_at" > now()
+            FOR UPDATE SKIP LOCKED)
+         UPDATE "notification_schema"."telegram_ai_drafts" d
+            SET "status" = CASE WHEN s."old_status" = 'parsing' THEN 'failed' ELSE 'preview' END,
+                "worker_at" = NULL, "worker_token" = NULL, "updated_at" = now()
+           FROM stale s
+          WHERE d."id" = s."id"
+        RETURNING d.*, s."old_status"`,
+        [AI_STALE_AFTER_MS],
+      ),
+    );
+    for (const row of rows) {
+      const ctx = this.workerContext(row);
+      try {
+        if (row.old_status === 'creating') {
+          await this.backToPreview(ctx, row, AI_CONFIRM_FAILED_TEXT);
+        } else {
+          await this.fail(ctx, row, AI_STALE_TEXT, true);
+        }
+      } catch (error) {
+        this.logger.warn(
+          `ai draft ${row.id}: qotgan holatni tiklab bo'lmadi — ${this.transport.describe(error)}`,
+        );
+      }
+    }
   }
 
   async runParse(ctx: BotContext, draft: TelegramAiDraft): Promise<void> {
@@ -250,20 +466,20 @@ export class AiOrderService {
     }
     const orders = Array.isArray(data.orders) ? data.orders : [];
     if (!orders.length) {
-      await this.setStatus(draft.id, 'empty');
+      if (!(await this.finish(draft, { status: 'empty' }))) return;
       await this.show(ctx, draft, AI_EMPTY_TEXT, []);
       return;
     }
-    await this.drafts.update(
-      { id: draft.id },
-      {
+    if (
+      !(await this.finish(draft, {
         status: 'preview',
-        orders: orders as never,
+        orders,
         ai_draft_id: str(data.draft_id) || null,
         error: null,
-        updated_at: new Date(),
-      },
-    );
+      }))
+    ) {
+      return;
+    }
     const rows: InlineKeyboardButton[][] = [];
     const creatable = orders.filter(isCreatable).length;
     if (creatable) {
@@ -278,19 +494,29 @@ export class AiOrderService {
     await this.show(ctx, draft, aiPreviewText(orders), rows, 'HTML');
   }
 
-  /** `✅ Yaratish`: preview → creating (faqat bitta bosish o'tadi). */
+  /**
+   * `✅ Yaratish`: preview → creating (faqat bitta bosish o'tadi), "⏳" va
+   * ai-confirm FONDA.
+   */
   async confirm(ctx: BotContext, draftId: string): Promise<void> {
     const draft = await this.claim(draftId, ['preview'], 'creating');
     if (!draft) {
       await this.explainState(ctx, draftId);
       return;
     }
+    await this.show(ctx, draft, AI_CREATING_TEXT, []);
+    this.schedule(draft.id, 'creating');
+  }
+
+  private async runConfirm(
+    ctx: BotContext,
+    draft: TelegramAiDraft,
+  ): Promise<void> {
     const previews = (draft.orders ?? []) as AiPreviewOrder[];
     const ready = previews.filter(isCreatable);
     const telegramId = ctx.fromId ?? ctx.chatId;
     let res: { status: number; body: unknown };
     try {
-      await this.show(ctx, draft, AI_CREATING_TEXT, []);
       res = await this.gateway.request(
         telegramId,
         'POST',
@@ -331,10 +557,14 @@ export class AiOrderService {
       return;
     }
     const results = body.data.results;
-    await this.drafts.update(
-      { id: draft.id },
-      { status: 'created', results: results as never, updated_at: new Date() },
-    );
+    if (
+      !(await this.finish(draft, {
+        status: 'created',
+        results,
+      }))
+    ) {
+      return;
+    }
     const lines = results.map((result) => {
       const order = ready[result.index];
       const n = (order?.index ?? result.index) + 1;
@@ -380,7 +610,7 @@ export class AiOrderService {
     draft: TelegramAiDraft,
     text: string,
   ) {
-    await this.setStatus(draft.id, 'preview');
+    if (!(await this.finish(draft, { status: 'preview' }))) return;
     const rows: InlineKeyboardButton[][] = [
       [await this.button(ctx, draft, '✅ Yaratish', AI_ORDER_ACTIONS.confirm)],
       [
@@ -404,10 +634,14 @@ export class AiOrderService {
     text: string,
     retryable: boolean,
   ) {
-    await this.drafts.update(
-      { id: draft.id },
-      { status: 'failed', error: text.slice(0, 300), updated_at: new Date() },
-    );
+    if (
+      !(await this.finish(draft, {
+        status: 'failed',
+        error: text.slice(0, 300),
+      }))
+    ) {
+      return;
+    }
     const rows: InlineKeyboardButton[][] = retryable
       ? [
           [
@@ -449,7 +683,8 @@ export class AiOrderService {
     const rows = rowsOf<TelegramAiDraft>(
       await this.drafts.query(
         `UPDATE "notification_schema"."telegram_ai_drafts"
-            SET "status" = $3, "updated_at" = now()
+            SET "status" = $3, "worker_at" = NULL, "worker_token" = NULL,
+                "updated_at" = now()
           WHERE "id" = $1 AND "status" = ANY($2::varchar[]) AND "expires_at" > now()
         RETURNING *`,
         [draftId, from, to],
@@ -458,8 +693,44 @@ export class AiOrderService {
     return rows[0] ?? null;
   }
 
-  private async setStatus(id: string, status: TelegramAiDraftStatus) {
-    await this.drafts.update({ id }, { status, updated_at: new Date() });
+  /**
+   * (BOT-3b) Yakuniy yozuv. Ishchi olgan qoralama — faqat da'vo tokeni hali
+   * SHU ish bo'lsa (`worker_token`): qotgan deb tiklangan / qayta urinilgan
+   * qoralamaning kech natijasi tashlanadi (xabar ham tahrirlanmaydi) — AI
+   * natijasi ustidan yozilmaydi, buyurtma ikki marta yaratilmaydi. Da'vo
+   * tugaydi (`worker_*` NULL). `false` — natija tashlandi.
+   */
+  private async finish(
+    draft: TelegramAiDraft,
+    patch: Partial<
+      Pick<
+        TelegramAiDraft,
+        'status' | 'orders' | 'ai_draft_id' | 'error' | 'results'
+      >
+    >,
+  ): Promise<boolean> {
+    const values = {
+      ...patch,
+      worker_at: null,
+      worker_token: null,
+      updated_at: new Date(),
+    };
+    if (!draft.worker_token) {
+      await this.drafts.update({ id: draft.id }, values as never);
+      return true;
+    }
+    const res = await this.drafts.update(
+      { id: draft.id, worker_token: draft.worker_token },
+      values as never,
+    );
+    if (res?.affected) {
+      draft.worker_token = null;
+      return true;
+    }
+    this.logger.warn(
+      `ai draft ${draft.id}: natija kech keldi (qoralama boshqa holatda) — tashlandi`,
+    );
+    return false;
   }
 
   private async button(

@@ -15,7 +15,7 @@ notification-service  BotController → BotRouterService
         ├─ botSlug tekshiruvi (noto'g'ri → jim)
         ├─ my_chat_member → BotChannelService (kanal nofaol + admin inbox)
         ├─ kiruvchi cheklov: chat 20/daqiqa (telegram_rate_limits)
-        ├─ ChatSequencer: chat bo'yicha ketma-ket (advisory lock, replikalararo)
+        ├─ ChatSequencer: chat bo'yicha ketma-ket (BOT-3b: `telegram_chat_locks` lease, ulanish ushlanmaydi)
         └─ handlerlar: start / group / market (+ `a:<id>` tugmalar → telegram_bot_actions)
 Chiquvchi: BotOutboxService (telegram_outbox) → BotTransportService (yagona api.telegram.org nuqtasi)
 ```
@@ -294,6 +294,20 @@ bazasiga o'zi yozmaydi, doira/holat mashinasi/isbot/extra-cost — serverda.
   (keyin qo'shilgan odam eski xabarlarni ham o'qiy oladi).
 
 ## 12. AI orqali buyurtma (e7KhaeOO) — bot faqat CHAQIRUVCHI
+
+> **BOT-3b — AI fonda.** Matn / rasm → qoralama (`telegram_ai_drafts`, id
+> update'dan deterministik — takror update ikkinchi qoralama ochmaydi) + «⏳»
+> xabari; bot update'i shu bilan TUGAYDI. ai-parse va ai-confirm'ni fondagi
+> ishchi (`AiOrderService`, shu replikada darhol, zaxira — har 5 s, bir
+> replikada 5 tagacha parallel) bajaradi: `worker_at` bilan bir marta oladi,
+> QAYTA URINMAYDI (xato — «🔁 Qayta urinish»). Ishchi olganiga 4 daqiqadan
+> oshgan `parsing` → `failed` + «🔁 Qayta urinish», `creating` → preview +
+> «✅ Yaratish» ni qayta bosish (server dedupe); navbatdagi (hali olinmagan)
+> qoralama tegilmaydi. Har yakuniy yozuv da'vo tokeni (`worker_token`) bilan:
+> tiklangan qoralamaning kech natijasi tashlanadi, xabar tahrirlanmaydi.
+> Zaxira tick 5 s dan yangi qoralamani olmaydi. Chat qulfi lease 12 s,
+> uzaytirish har 4 s. Migratsiya `1716000000190` (`worker_at`, `worker_token`,
+> `telegram_chat_locks`).
 
 - Market / market operatori shaxsiy chatda buyruq emas MATN (telefon raqami
   bor — kamida 7 ta raqam) yoki RASM tashlaydi → `POST /orders/ai-parse`
