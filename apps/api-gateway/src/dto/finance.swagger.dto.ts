@@ -129,6 +129,15 @@ export class FindCashboxByUserQueryDto {
   limit?: number;
 }
 
+/**
+ * AG1Mlikw — `payment_reversal` faqat ichki tur: teskari qatorni
+ * `PaymentCorrectionService` yozadi, `PATCH /finance/cashbox/balance` uni
+ * 400 bilan rad etadi (finance-service `updateBalance` da ham shu qoida).
+ */
+const MANUAL_BALANCE_SOURCE_TYPES = Object.values(Source_type).filter(
+  (type) => type !== Source_type.PAYMENT_REVERSAL,
+);
+
 export class UpdateCashboxBalanceRequestDto {
   @ApiPropertyOptional({ example: '1001' })
   @IsOptional()
@@ -157,8 +166,11 @@ export class UpdateCashboxBalanceRequestDto {
   @IsEnum(Operation_type)
   operation_type!: Operation_type;
 
-  @ApiProperty({ enum: Source_type, example: Source_type.COURIER_PAYMENT })
-  @IsEnum(Source_type)
+  @ApiProperty({
+    enum: MANUAL_BALANCE_SOURCE_TYPES,
+    example: Source_type.COURIER_PAYMENT,
+  })
+  @IsIn(MANUAL_BALANCE_SOURCE_TYPES)
   source_type!: Source_type;
 
   @ApiPropertyOptional({ enum: PaymentMethod, example: PaymentMethod.CASH })
@@ -1751,7 +1763,7 @@ export class UpdatePaymentCorrectionSettingsRequestDto {
     description:
       "To'lovni qaytarish / tuzatish muddati (kun): zanjirning birinchi to'lovidan `window_days × 24 soat`. Sukut 30.",
   })
-  @Type(() => Number)
+  // AG1Mlikw: `@Type(() => Number)` EMAS — u `true` ni 1 ga aylantirardi.
   @IsInt()
   @Min(1)
   @Max(365)

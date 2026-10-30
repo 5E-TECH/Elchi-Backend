@@ -1067,4 +1067,244 @@ describePg('T6 payment correction — haqiqiy Postgres', () => {
     });
     await assertInvariant();
   });
+
+  // ───────────────── iPlY5yop: karta 4–6-bandlari ─────────────────
+
+  const detailOf = async (id: unknown) =>
+    (
+      (await finance.findHistoryById(String(id), {
+        include_correctable: true,
+      })) as any
+    ).data;
+
+  it('iPlY5yop #4: INSUFFICIENT_BALANCE + required (kassa, nomli karta); NOT_CORRECTABLE + reason; WINDOW_EXPIRED + window_days', async () => {
+    const main = await seed('0', Cashbox_type.MAIN);
+    await seed('301', Cashbox_type.FOR_COURIER);
+    await sale('301', Cashbox_type.FOR_COURIER, 700_000);
+    const tid = await payCourier(500_000);
+    const leg = await legOf(tid, Cashbox_type.FOR_COURIER);
+
+    await db.query(
+      `UPDATE "${schema}".cashboxes SET balance_cash = 100000, balance = 100000 WHERE user_id = '0'`,
+    );
+    expect(
+      await reverse(String(leg.id)).catch((e) => e.getError()),
+    ).toMatchObject({ code: 'INSUFFICIENT_BALANCE', required: 500_000 });
+    // Tahrirda ham: avval X chiqadi, keyin yangi summa kiradi.
+    expect(
+      await correct(String(leg.id), 300_000).catch((e) => e.getError()),
+    ).toMatchObject({ code: 'INSUFFICIENT_BALANCE', required: 500_000 });
+    await db.query(
+      `UPDATE "${schema}".cashboxes SET balance_cash = 500000, balance = 500000 WHERE user_id = '0'`,
+    );
+
+    // Nomli karta qoldig'i yetmaydi.
+    const card = await db.getRepository(CashboxCard).save(
+      db.getRepository(CashboxCard).create({
+        cashbox_id: String(main.id),
+        name: 'Uzcard 1',
+        balance: 0,
+        is_default: false,
+        is_active: true,
+        sort_order: 1,
+      }),
+    );
+    const onCard = await payCourier(100_000, {
+      payment_method: PaymentMethod.CLICK,
+      card_id: String(card.id),
+    });
+    await db
+      .getRepository(CashboxCard)
+      .update({ id: card.id }, { balance: 40_000 });
+    expect(
+      await reverse(String((await legOf(onCard, Cashbox_type.MAIN)).id)).catch(
+        (e) => e.getError(),
+      ),
+    ).toMatchObject({ code: 'INSUFFICIENT_BALANCE', required: 100_000 });
+
+    // Sabab: tur qamrovda emas / teskari qator / kassa o'chirilgan.
+    const sell = await db.getRepository(CashboxHistory).findOneByOrFail({
+      source_type: Source_type.SELL,
+    });
+    expect(
+      await reverse(String(sell.id)).catch((e) => e.getError()),
+    ).toMatchObject({ code: 'NOT_CORRECTABLE', reason: 'unsupported_type' });
+
+    await reverse(String(leg.id));
+    const reversalRow = await db.getRepository(CashboxHistory).findOneByOrFail({
+      reverses_history_id: String(leg.id),
+    });
+    expect(
+      await reverse(String(reversalRow.id)).catch((e) => e.getError()),
+    ).toMatchObject({ code: 'NOT_CORRECTABLE', reason: 'reversal_row' });
+
+    const third = await payCourier(50_000);
+    await db.query(
+      `UPDATE "${schema}".cashboxes SET is_deleted = true WHERE user_id = '301'`,
+    );
+    const moved = await legOf(third, Cashbox_type.MAIN);
+    expect(
+      await reverse(String(moved.id)).catch((e) => e.getError()),
+    ).toMatchObject({ code: 'NOT_CORRECTABLE', reason: 'cashbox_deleted' });
+    await db.query(
+      `UPDATE "${schema}".cashboxes SET is_deleted = false WHERE user_id = '301'`,
+    );
+
+    await corrections.updateSettings({ window_days: 7, ...SA });
+    await db.query(
+      `UPDATE "${schema}".cashbox_history SET "createdAt" = now() - interval '8 days' WHERE transfer_id = $1`,
+      [third],
+    );
+    expect(
+      await reverse(String(moved.id)).catch((e) => e.getError()),
+    ).toMatchObject({
+      code: 'WINDOW_EXPIRED',
+      window_days: 7,
+      deadline: expect.any(String),
+    });
+  });
+
+  it('iPlY5yop #5: correction — payment_kind va related (asl → yangi/teskari; teskari/yangi → asl)', async () => {
+    await seed('0', Cashbox_type.MAIN);
+    await seed('301', Cashbox_type.FOR_COURIER);
+    await sale('301', Cashbox_type.FOR_COURIER, 500_000);
+    const tid = await payCourier(500_000);
+    const original = await legOf(tid, Cashbox_type.MAIN);
+    const edited = await correct(String(original.id), 200_000);
+    const journal = await db.getRepository(PaymentCorrection).findOneByOrFail({
+      id: edited.data.correction.id,
+    });
+    const replacement = await legOf(
+      String(journal.replacement_transfer_id),
+      Cashbox_type.MAIN,
+    );
+    const reversal = await db.getRepository(CashboxHistory).findOneByOrFail({
+      reverses_history_id: String(original.id),
+    });
+
+    expect((await detailOf(original.id)).correction).toMatchObject({
+      role: 'original',
+      payment_kind: 'courier_payment',
+      related_history_id: String(reversal.id),
+      related: {
+        id: String(replacement.id),
+        role: 'replacement',
+        source_type: Source_type.COURIER_PAYMENT,
+        operation_type: Operation_type.INCOME,
+        amount: 200_000,
+        created_at: expect.anything(),
+      },
+    });
+    expect((await detailOf(reversal.id)).correction.related).toMatchObject({
+      id: String(original.id),
+      role: 'original',
+      operation_type: Operation_type.INCOME,
+      amount: 500_000,
+    });
+    expect((await detailOf(replacement.id)).correction.related).toMatchObject({
+      id: String(original.id),
+      role: 'original',
+    });
+
+    // Sof qaytarish: asl → teskari qator.
+    await sale('301', Cashbox_type.FOR_COURIER, 100_000);
+    const second = await payCourier(100_000);
+    const secondLeg = await legOf(second, Cashbox_type.FOR_COURIER);
+    await reverse(String(secondLeg.id));
+    const secondReversal = await db
+      .getRepository(CashboxHistory)
+      .findOneByOrFail({ reverses_history_id: String(secondLeg.id) });
+    expect((await detailOf(secondLeg.id)).correction.related).toMatchObject({
+      id: String(secondReversal.id),
+      role: 'reversal',
+      source_type: Source_type.PAYMENT_REVERSAL,
+      operation_type: Operation_type.INCOME,
+    });
+  });
+
+  it('iPlY5yop #5: click_to_market — MAIN dagi ikki oyoq o`z juftini oladi', async () => {
+    await seed('0', Cashbox_type.MAIN);
+    await seed('301', Cashbox_type.FOR_COURIER);
+    await seed('401', Cashbox_type.FOR_MARKET);
+    await sale('301', Cashbox_type.FOR_COURIER, 300_000);
+    await sale('401', Cashbox_type.FOR_MARKET, 300_000);
+    const tid = await payCourier(300_000, {
+      payment_method: PaymentMethod.CLICK_TO_MARKET,
+      market_id: '401',
+    });
+    const income = await legOf(tid, Cashbox_type.MAIN, Operation_type.INCOME);
+    const expense = await legOf(tid, Cashbox_type.MAIN, Operation_type.EXPENSE);
+    await correct(String(income.id), 100_000);
+    expect((await detailOf(income.id)).correction.related).toMatchObject({
+      role: 'replacement',
+      source_type: Source_type.COURIER_PAYMENT,
+      operation_type: Operation_type.INCOME,
+    });
+    expect((await detailOf(expense.id)).correction.related).toMatchObject({
+      role: 'replacement',
+      source_type: Source_type.MARKET_PAYMENT,
+      operation_type: Operation_type.EXPENSE,
+    });
+  });
+
+  it('iPlY5yop #6: correctable — reason, root_history_id; qamrovdan tashqari tur → null', async () => {
+    await seed('0', Cashbox_type.MAIN);
+    await seed('301', Cashbox_type.FOR_COURIER);
+    await sale('301', Cashbox_type.FOR_COURIER, 500_000);
+    const tid = await payCourier(400_000);
+    const leg = await legOf(tid, Cashbox_type.FOR_COURIER);
+
+    expect((await detailOf(leg.id)).correctable).toMatchObject({
+      allowed: true,
+      root_history_id: String(leg.id),
+    });
+
+    // Zanjir: yangi oyoqda root — birinchi to'lovning shu kassadagi oyog'i.
+    const edited = await correct(String(leg.id), 300_000);
+    const journal = await db.getRepository(PaymentCorrection).findOneByOrFail({
+      id: edited.data.correction.id,
+    });
+    const next = await legOf(
+      String(journal.replacement_transfer_id),
+      Cashbox_type.FOR_COURIER,
+    );
+    expect((await detailOf(next.id)).correctable).toMatchObject({
+      allowed: true,
+      root_history_id: String(leg.id),
+    });
+    expect((await detailOf(leg.id)).correctable).toMatchObject({
+      allowed: false,
+      code: 'ALREADY_CORRECTED',
+      root_history_id: String(leg.id),
+    });
+
+    const reversal = await db.getRepository(CashboxHistory).findOneByOrFail({
+      reverses_history_id: String(leg.id),
+    });
+    const reversalBlock = (await detailOf(reversal.id)).correctable;
+    expect(reversalBlock).toMatchObject({
+      allowed: false,
+      code: 'NOT_CORRECTABLE',
+      reason: 'reversal_row',
+      root_history_id: String(leg.id),
+    });
+
+    // Qamrovdan tashqari tur — kalit bor, qiymat null.
+    const sell = await db.getRepository(CashboxHistory).findOneByOrFail({
+      source_type: Source_type.SELL,
+    });
+    const detail = await detailOf(sell.id);
+    expect(detail).toHaveProperty('correctable', null);
+
+    // Eski yozuv: zanjir yo'q.
+    await db.query(
+      `UPDATE "${schema}".cashbox_history SET transfer_id = NULL WHERE id = $1`,
+      [String(next.id)],
+    );
+    expect((await detailOf(next.id)).correctable).toMatchObject({
+      allowed: false,
+      code: 'LEGACY_UNLINKED',
+      root_history_id: null,
+    });
+  });
 });

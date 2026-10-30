@@ -94,7 +94,8 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
   responsible or changing its role to a non-responsible one resets its markets
   and the default in the SAME transaction (`saveWithResponsibleRelease`).
   Gateway: `contacts-gateway.controller.ts`, `contacts/problem-contacts.service.ts`
-  (`problem_contacts` on order responses before the role projection, 60 s
+  (`problem_contacts` on order responses, incl. `GET /transfer-batches/:id`,
+  `/remaining` and the short post-scan `orders[]`, before the role projection, 60 s
   cache) and `auth/order-contact-projection.ts` (market/operator phones hidden
   from MANAGER/BRANCH/COURIER unless SA/admin/registrator/logist; applied inside
   `projectOrderPayloadForRoles` + market lists). Printer «Muammo bo'lsa» —
@@ -675,19 +676,23 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
   `finance.payment_received` / PAYMENT audit). Journal
   `finance_schema.payment_corrections` (`original_transfer_id` and
   `idempotency_key` UNIQUE, chain `root_transfer_id` / `root_created_at`).
+  `payment_reversal` is internal-only: `PATCH /finance/cashbox/balance` (DTO)
+  and `updateBalance` (RMQ) reject it with 400 (AG1Mlikw).
   Window `finance_settings` `payment_correction.window_days` (1…365, none → 30)
   from the chain root. Same tx outbox: `order.settlement.retreat` (persistent
   pattern; courier → `courier_to_branch`, market leg → `hq_to_market`), then
   (edit) `order.settlement.advance`, `finance.payment_corrected` per recipient
-  (recipient language via `identity.audience.resolve`), realtime
+  (BRANCH: gateway passes `branch_users` MANAGERs + legacy `branches.manager_id`,
+  deduped; recipient language via `identity.audience.resolve`), realtime
   `finance.payment.corrected`. After commit: audit
   `finance.payment_reversed` / `finance.payment_amount_corrected`
   (`partner_notified: false`) and, for market legs, background
   `revertPaymentFromOrders` (newest PAID/PARTLY_PAID → `order.payment_
   reversal.apply`) then `applyPaymentToOrders(new)`. Coded errors in
   `libs/common/src/finance/payment-correction.ts` (+ `PUBLIC_ERROR_CODES`).
-  History responses carry `transfer_id`, `reverses_history_id`, `correction`;
-  `/history/:id` gives SA `correctable`. Courier ack on a corrected payment →
+  History responses carry `transfer_id`, `reverses_history_id`, `correction`
+  (+ `payment_kind`, `related` leg, batched in `attachCorrectionViews`);
+  `/history/:id` gives SA `correctable` (`null` for out-of-scope types). Courier ack on a corrected payment →
   409 `PAYMENT_CORRECTED`. Gateway (via `finance.payment_correction.context`:
   receiver, courier, `replay`) refuses a courier payment whose courier no
   longer sits at the original receiver (409 `COURIER_MOVED`) and, for

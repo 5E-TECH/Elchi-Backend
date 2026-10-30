@@ -722,6 +722,9 @@ export class FinanceGatewayController {
 
   /** `branch_users.role` dagi kuryer qiymati (BranchUserRole.COURIER). */
   private static readonly COURIER_BRANCH_ROLE = 'COURIER';
+
+  /** `branch_users.role` dagi menejer qiymati (BranchUserRole.MANAGER). */
+  private static readonly MANAGER_BRANCH_ROLE = 'MANAGER';
   /** C3: identity'da soft-delete qilingan (404) foydalanuvchi holati. */
   private static readonly DELETED_USER_STATUS = 'deleted';
 
@@ -3647,7 +3650,12 @@ export class FinanceGatewayController {
   // T3 — tarixdagi `receipt`: rol bo'yicha (kuryer/market/registrator — yo'q).
   @UseInterceptors(ReceiptProjectionInterceptor)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Find cashbox history detail by id' })
+  @ApiOperation({
+    summary: 'Find cashbox history detail by id',
+    description:
+      "T6 (iPlY5yop): `correction` — `null` yoki `{ id, action, payment_kind, role, reason, created_by_name, created_at, original_amount, new_amount, related_history_id, related }`; `related` — o'sha kassadagi juft oyoq `{ id, source_type, role, operation_type, amount, created_at }` (asl → yangi/teskari; teskari/yangi → asl). " +
+      "Superadminga `correctable: { allowed, code?, reason?, deadline, window_days, root_history_id }`, qamrovdan tashqari turda `correctable: null`; boshqa rollarda kalit yo'q.",
+  })
   @ApiParam({ name: 'id', description: 'History id (bigint string)' })
   async findHistoryById(
     @Param('id') id: string,
@@ -3929,8 +3937,8 @@ export class FinanceGatewayController {
 
   /**
    * (T6) Umumiy: `Idempotency-Key` majburiy; BRANCH qabul qilgan to'lovda
-   * filial boshlig'i (`branches.manager_id`) bildirishnomaga qo'shiladi
-   * (best-effort — topilmasa faqat kuryer/market). Superadmin tekshiruvi
+   * filial menejerlari bildirishnomaga qo'shiladi (best-effort — topilmasa
+   * faqat kuryer/market). Superadmin tekshiruvi
    * servisda ham (`requester_roles`).
    */
   private async sendPaymentCorrection(
@@ -4096,23 +4104,46 @@ export class FinanceGatewayController {
       : 'moved';
   }
 
+  /**
+   * (CsEZD8EX) Qabul qiluvchi filial menejerlari: `branch_users` (MANAGER) —
+   * `POST /managers` faqat shu yerga yozadi — va eski `branches.manager_id`.
+   * Best-effort: o'qish xatosi tuzatishni to'xtatmaydi; takror id yuborilmaydi.
+   */
   private async paymentCorrectionManagerIds(
     context: PaymentCorrectionContext,
     user: JwtUser,
   ): Promise<string[]> {
-    try {
-      const branchId = context.receiver_branch_id;
-      if (!branchId) return [];
-      const res = await this.sendBranch<{ data?: { manager_id?: unknown } }>(
-        { cmd: 'branch.find_by_id' },
-        { id: String(branchId), requester: this.toRequester(user) },
+    const branchId = context.receiver_branch_id;
+    if (!branchId) return [];
+    const requester = this.toRequester(user);
+    const [users, branch] = await Promise.allSettled([
+      this.sendBranch<{ data?: unknown }>(
+        { cmd: 'branch.user.find_by_branch' },
+        { branch_id: String(branchId), requester },
         3000,
-      );
-      const managerId = toText(res?.data?.manager_id);
-      return /^\d+$/.test(managerId) ? [managerId] : [];
-    } catch {
-      return [];
+      ),
+      this.sendBranch<{ data?: { manager_id?: unknown } }>(
+        { cmd: 'branch.find_by_id' },
+        { id: String(branchId), requester },
+        3000,
+      ),
+    ]);
+    const rows =
+      users.status === 'fulfilled' && Array.isArray(users.value?.data)
+        ? (users.value.data as Array<Record<string, unknown> | null>)
+        : [];
+    const ids = rows
+      .filter(
+        (row) =>
+          row?.isDeleted !== true &&
+          toText(row?.role).toUpperCase() ===
+            FinanceGatewayController.MANAGER_BRANCH_ROLE,
+      )
+      .map((row) => toText(row?.user_id));
+    if (branch.status === 'fulfilled') {
+      ids.push(toText(branch.value?.data?.manager_id));
     }
+    return [...new Set(ids.filter((id) => /^\d+$/.test(id)))];
   }
 
   /**

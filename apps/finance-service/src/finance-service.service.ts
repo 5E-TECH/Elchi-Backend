@@ -116,7 +116,9 @@ import {
 import {
   attachCorrectionViews,
   evaluateCorrectable,
+  isCorrectableType,
   readWindowSetting,
+  resolveRootHistoryId,
   type HistoryWithCashbox,
 } from './payment-correction/payment-correction.rules';
 
@@ -1824,6 +1826,13 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
     let auditedCashbox: Cashbox | null = null;
     let auditedLedger: FinancialBalanceHistory | null = null;
     try {
+      // AG1Mlikw — `payment_reversal` faqat ichki: teskari qatorni FAQAT
+      // `PaymentCorrectionService` yozadi (reverses_history_id, transfer_id).
+      if (dto.source_type === Source_type.PAYMENT_REVERSAL) {
+        throw new BadRequestException(
+          "payment_reversal turini qo'lda yozib bo'lmaydi",
+        );
+      }
       this.assertPositiveAmount(Number(dto.amount));
       const paymentMethod = dto.payment_method ?? PaymentMethod.CASH;
       const queryRunner = this.dataSource.createQueryRunner();
@@ -2537,7 +2546,7 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         {
           ...enrichedHistory,
           order,
-          ...(correctable ? { correctable } : {}),
+          ...(options.include_correctable ? { correctable } : {}),
         },
         200,
         'Cashbox history detail',
@@ -2548,11 +2557,18 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * T6 — `/history/:id` dagi `correctable: { allowed, code?, deadline,
-   * window_days }`. Smena / balans / karta amal paytida tekshiriladi.
+   * T6 — `/history/:id` dagi `correctable: { allowed, code?, reason?,
+   * deadline, window_days, root_history_id }`. Smena / balans / karta amal
+   * paytida tekshiriladi. Qamrovdan tashqari tur — `null` (iPlY5yop).
    */
   private async correctableBlock(history: HistoryWithCashbox) {
     try {
+      if (
+        !isCorrectableType(history.source_type) &&
+        history.source_type !== Source_type.PAYMENT_REVERSAL
+      ) {
+        return null;
+      }
       const { window_days } = await readWindowSetting(this.dataSource.manager);
       const verdict = await evaluateCorrectable(
         this.dataSource.manager,
@@ -2562,8 +2578,14 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
       return {
         allowed: verdict.allowed,
         ...(verdict.code ? { code: verdict.code } : {}),
+        ...(verdict.reason ? { reason: verdict.reason } : {}),
         deadline: verdict.deadline,
         window_days: verdict.window_days,
+        root_history_id: await resolveRootHistoryId(
+          this.dataSource.manager,
+          history,
+          verdict.root,
+        ),
       };
     } catch (error) {
       this.logger.warn(

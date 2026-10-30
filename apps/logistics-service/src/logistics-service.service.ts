@@ -2906,6 +2906,9 @@ export class LogisticsServiceService implements OnModuleInit {
             customer: summary?.customer ?? null,
             region: summary?.region ?? null,
             district: summary?.district ?? null,
+            // CqBD8V4p: gateway `problem_contacts` shu id lar bilan aniqlaydi.
+            region_id: order.region_id ?? null,
+            district_id: order.district_id ?? null,
             // T8: kuryer/ombor skanida maxsus belgilar.
             special_categories: Array.isArray(order.special_categories)
               ? order.special_categories

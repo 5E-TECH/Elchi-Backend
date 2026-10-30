@@ -202,6 +202,8 @@ const SOURCE_TYPES = [
   'cancel',
   'extra_cost',
   'bills',
+  // AG1Mlikw (T6) — qaytarilgan to'lovning teskari qatori.
+  'payment_reversal',
 ] as const;
 
 async function readFinancialBalance(

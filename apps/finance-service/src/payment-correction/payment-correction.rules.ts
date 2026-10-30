@@ -1,4 +1,4 @@
-import { EntityManager, In } from 'typeorm';
+import { EntityManager, In, type FindOptionsWhere } from 'typeorm';
 import {
   Cashbox_type,
   Operation_type,
@@ -6,10 +6,12 @@ import {
   PAYMENT_CORRECTION_ERROR_CODES,
   PAYMENT_CORRECTION_MAX_WINDOW_DAYS,
   PAYMENT_CORRECTION_MIN_WINDOW_DAYS,
+  PAYMENT_CORRECTION_NOT_CORRECTABLE_REASONS,
   PAYMENT_CORRECTION_WINDOW_KEY,
   PaymentMethod,
   Source_type,
   type PaymentCorrectionErrorCode,
+  type PaymentCorrectionNotCorrectableReason,
 } from '@app/common';
 import { Cashbox } from '../entities/cashbox.entity';
 import { CashboxHistory } from '../entities/cashbox-history.entity';
@@ -243,10 +245,19 @@ export async function isTransferCorrected(
 export interface CorrectableVerdict {
   allowed: boolean;
   code?: PaymentCorrectionErrorCode;
+  /** (iPlY5yop) Faqat `NOT_CORRECTABLE` da. */
+  reason?: PaymentCorrectionNotCorrectableReason;
   deadline: string | null;
   window_days: number;
   shape?: TransferShape;
   root?: { root_transfer_id: string; root_created_at: Date };
+}
+
+/** Tuzatish qamrovidagi turmi (teskari qator — alohida, `reversal_row`). */
+export function isCorrectableType(type: Source_type): boolean {
+  return (
+    type === Source_type.COURIER_PAYMENT || type === Source_type.MARKET_PAYMENT
+  );
 }
 
 /**
@@ -260,14 +271,20 @@ export async function evaluateCorrectable(
   options: { windowDays: number; now?: Date },
 ): Promise<CorrectableVerdict> {
   const C = PAYMENT_CORRECTION_ERROR_CODES;
+  const R = PAYMENT_CORRECTION_NOT_CORRECTABLE_REASONS;
   const base = { window_days: options.windowDays, deadline: null };
+  const notCorrectable = {
+    allowed: false,
+    code: C.NOT_CORRECTABLE,
+  };
   if (
     history.source_type === Source_type.PAYMENT_REVERSAL ||
-    history.reverses_history_id ||
-    (history.source_type !== Source_type.COURIER_PAYMENT &&
-      history.source_type !== Source_type.MARKET_PAYMENT)
+    history.reverses_history_id
   ) {
-    return { ...base, allowed: false, code: C.NOT_CORRECTABLE };
+    return { ...base, ...notCorrectable, reason: R.REVERSAL_ROW };
+  }
+  if (!isCorrectableType(history.source_type)) {
+    return { ...base, ...notCorrectable, reason: R.UNSUPPORTED_TYPE };
   }
   if (!history.transfer_id) {
     return { ...base, allowed: false, code: C.LEGACY_UNLINKED };
@@ -275,7 +292,7 @@ export async function evaluateCorrectable(
   const legs = await loadTransferLegs(manager, history.transfer_id);
   const shape = classifyTransfer(legs);
   if (!shape) {
-    return { ...base, allowed: false, code: C.NOT_CORRECTABLE };
+    return { ...base, ...notCorrectable, reason: R.UNSUPPORTED_TYPE };
   }
   const root = await resolveChainRoot(manager, history.transfer_id, legs);
   const deadline = correctionDeadline(
@@ -293,7 +310,7 @@ export async function evaluateCorrectable(
     return { ...verdict, allowed: false, code: C.ALREADY_CORRECTED };
   }
   if (legs.some((leg) => leg.cashbox?.isDeleted)) {
-    return { ...verdict, allowed: false, code: C.NOT_CORRECTABLE };
+    return { ...verdict, ...notCorrectable, reason: R.CASHBOX_DELETED };
   }
   const now = options.now ?? new Date();
   if (now.getTime() > new Date(deadline).getTime()) {
@@ -302,11 +319,67 @@ export async function evaluateCorrectable(
   return { ...verdict, allowed: true };
 }
 
+/**
+ * (iPlY5yop) `correctable.root_history_id` — zanjirning birinchi to'lovidagi
+ * oyoq, shu kassadagisi (bir kassada ikki oyoq bo'lsa tur va amal ham mos).
+ * Zanjir boshi — qatorning o'zi; teskari qator zanjiri jurnaldan; eski yozuvda
+ * zanjir yo'q — `null`.
+ */
+export async function resolveRootHistoryId(
+  manager: EntityManager,
+  history: HistoryWithCashbox,
+  root?: CorrectableVerdict['root'],
+): Promise<string | null> {
+  if (!history.transfer_id) return null;
+  const transferId = String(history.transfer_id);
+  const rootTransferId =
+    root?.root_transfer_id ??
+    (
+      await manager.findOne(PaymentCorrection, {
+        where: { reversal_transfer_id: transferId, isDeleted: false },
+        select: ['id', 'root_transfer_id'],
+      })
+    )?.root_transfer_id;
+  if (!rootTransferId) return null;
+  if (rootTransferId === transferId) return String(history.id);
+  const legs = await manager.find(CashboxHistory, {
+    where: { transfer_id: rootTransferId, isDeleted: false },
+    select: ['id', 'cashbox_id', 'source_type', 'operation_type'],
+    order: { id: 'ASC' },
+  });
+  const sameBox = legs.filter(
+    (leg) => String(leg.cashbox_id) === String(history.cashbox_id),
+  );
+  const leg =
+    sameBox.find(
+      (item) =>
+        item.source_type === history.source_type &&
+        item.operation_type === history.operation_type,
+    ) ??
+    sameBox[0] ??
+    legs[0];
+  return leg ? String(leg.id) : null;
+}
+
 export type CorrectionRole = 'original' | 'reversal' | 'replacement';
+
+/**
+ * (iPlY5yop, ega qarori «Bog'liq yozuv») — o'sha kassadagi juft oyoq:
+ * asl → yangi (tahrir) / teskari (qaytarish); teskari / yangi → asl.
+ */
+export interface CorrectionRelatedRow {
+  id: string;
+  source_type: Source_type;
+  role: CorrectionRole;
+  operation_type: Operation_type;
+  amount: number;
+  created_at: Date;
+}
 
 export interface CorrectionView {
   id: string;
   action: string;
+  payment_kind: PaymentCorrectionKind;
   role: CorrectionRole;
   reason: string;
   created_by_name: string | null;
@@ -314,13 +387,16 @@ export interface CorrectionView {
   original_amount: number;
   new_amount: number | null;
   related_history_id: string | null;
+  related: CorrectionRelatedRow | null;
 }
 
 /**
  * Tarix qatorlariga `correction` bloki: asl to'lov oyog'i (`original`),
  * teskari qator (`reversal`) va tahrirdagi yangi to'lov oyog'i
  * (`replacement`; o'zi keyin yana tuzatilsa — `original`). `related_history_id` — shu kassadagi juft qator (asl ↔
- * teskari; yangi → asl). Tuzatilmagan qator — `correction: null`.
+ * teskari; yangi → asl); `related` — «Bog'liq yozuv» qatori (iPlY5yop).
+ * Bog'liq oyoqlar BITTA so'rovda (N+1 yo'q). Tuzatilmagan qator —
+ * `correction: null`.
  */
 export async function attachCorrectionViews<
   T extends {
@@ -328,6 +404,8 @@ export async function attachCorrectionViews<
     cashbox_id: string;
     transfer_id?: string | null;
     reverses_history_id?: string | null;
+    source_type?: unknown;
+    operation_type?: unknown;
   },
 >(
   manager: EntityManager,
@@ -368,48 +446,91 @@ export async function attachCorrectionViews<
     }
   }
 
-  // Juft qatorlar: asl oyoq → uning teskari qatori; yangi oyoq → shu
-  // kassadagi asl oyoq.
-  const originalLegIds = rows
-    .filter((row) => row.transfer_id && byOriginal.has(row.transfer_id))
-    .map((row) => String(row.id));
-  const reversalsOf = new Map<string, string>();
-  if (originalLegIds.length) {
-    const reversals = await manager.find(CashboxHistory, {
-      where: { reverses_history_id: In(originalLegIds), isDeleted: false },
-      select: ['id', 'reverses_history_id'],
-    });
-    for (const reversal of reversals) {
-      reversalsOf.set(
-        String(reversal.reverses_history_id),
-        String(reversal.id),
-      );
+  // Juft qatorlar, BITTA so'rov: asl oyoq → teskari qator va yangi oyoq;
+  // teskari qator → asl oyoq; yangi oyoq → asl oyoq.
+  const legIds = new Set<string>();
+  const originalLegIds = new Set<string>();
+  const transfers = new Set<string>();
+  for (const row of rows) {
+    const tid = row.transfer_id ? String(row.transfer_id) : '';
+    if (!tid) continue;
+    const original = byOriginal.get(tid);
+    if (byReversal.has(tid)) {
+      if (row.reverses_history_id) legIds.add(String(row.reverses_history_id));
+    } else if (original) {
+      originalLegIds.add(String(row.id));
+      if (original.replacement_transfer_id) {
+        transfers.add(original.replacement_transfer_id);
+      }
+    } else if (byReplacement.has(tid)) {
+      transfers.add(byReplacement.get(tid)!.original_transfer_id);
     }
   }
-  const replacementRows = rows.filter(
-    (row) => row.transfer_id && byReplacement.has(row.transfer_id),
-  );
-  const originalByCashbox = new Map<string, string>();
-  if (replacementRows.length) {
-    const originals = await manager.find(CashboxHistory, {
-      where: {
-        transfer_id: In(
-          replacementRows.map(
-            (row) =>
-              byReplacement.get(String(row.transfer_id))!.original_transfer_id,
-          ),
-        ),
-        isDeleted: false,
-      },
-      select: ['id', 'cashbox_id', 'transfer_id'],
-    });
-    for (const original of originals) {
-      originalByCashbox.set(
-        `${String(original.transfer_id)}:${String(original.cashbox_id)}`,
-        String(original.id),
-      );
+  const legFilters: FindOptionsWhere<CashboxHistory>[] = [
+    ...(legIds.size ? [{ id: In([...legIds]) }] : []),
+    ...(originalLegIds.size
+      ? [{ reverses_history_id: In([...originalLegIds]) }]
+      : []),
+    ...(transfers.size ? [{ transfer_id: In([...transfers]) }] : []),
+  ].map((filter) => ({ ...filter, isDeleted: false }));
+  const legs = legFilters.length
+    ? await manager.find(CashboxHistory, {
+        where: legFilters,
+        select: [
+          'id',
+          'cashbox_id',
+          'transfer_id',
+          'reverses_history_id',
+          'source_type',
+          'operation_type',
+          'amount',
+          'createdAt',
+        ],
+      })
+    : [];
+  const legById = new Map<string, CashboxHistory>();
+  const reversalsOf = new Map<string, CashboxHistory>();
+  const legsByTransfer = new Map<string, CashboxHistory[]>();
+  for (const leg of legs) {
+    legById.set(String(leg.id), leg);
+    if (leg.reverses_history_id) {
+      reversalsOf.set(String(leg.reverses_history_id), leg);
+    }
+    if (leg.transfer_id) {
+      const group = legsByTransfer.get(String(leg.transfer_id)) ?? [];
+      group.push(leg);
+      legsByTransfer.set(String(leg.transfer_id), group);
     }
   }
+  // click_to_market: MAIN da ikki oyoq — tur va amal bo'yicha o'z jufti.
+  const pairOf = (transferId: string, row: T) => {
+    const sameBox = (legsByTransfer.get(transferId) ?? []).filter(
+      (leg) => String(leg.cashbox_id) === String(row.cashbox_id),
+    );
+    return (
+      sameBox.find(
+        (leg) =>
+          leg.source_type === row.source_type &&
+          leg.operation_type === row.operation_type,
+      ) ??
+      sameBox[0] ??
+      null
+    );
+  };
+  const relatedRow = (
+    leg: CashboxHistory | null | undefined,
+    role: CorrectionRole,
+  ): CorrectionRelatedRow | null =>
+    leg
+      ? {
+          id: String(leg.id),
+          source_type: leg.source_type,
+          role,
+          operation_type: leg.operation_type,
+          amount: Number(leg.amount),
+          created_at: leg.createdAt,
+        }
+      : null;
 
   const names = await nameOf([
     ...new Set(corrections.map((correction) => String(correction.created_by))),
@@ -419,26 +540,34 @@ export async function attachCorrectionViews<
     const tid = row.transfer_id ? String(row.transfer_id) : '';
     let correction: PaymentCorrection | undefined;
     let role: CorrectionRole | null = null;
-    let related: string | null = null;
+    let relatedId: string | null = null;
+    let related: CorrectionRelatedRow | null = null;
     if (tid && byReversal.has(tid)) {
       correction = byReversal.get(tid);
       role = 'reversal';
-      related = row.reverses_history_id
+      relatedId = row.reverses_history_id
         ? String(row.reverses_history_id)
         : null;
+      related = relatedRow(legById.get(relatedId ?? ''), 'original');
     } else if (tid && byOriginal.has(tid)) {
       // Tahrirdagi yangi to'lov keyin yana tuzatilgan bo'lsa — joriy holat
       // (u ham endi `original`).
       correction = byOriginal.get(tid);
       role = 'original';
-      related = reversalsOf.get(String(row.id)) ?? null;
+      const reversal = reversalsOf.get(String(row.id));
+      relatedId = reversal ? String(reversal.id) : null;
+      const replacement = correction!.replacement_transfer_id
+        ? pairOf(correction!.replacement_transfer_id, row)
+        : null;
+      related = replacement
+        ? relatedRow(replacement, 'replacement')
+        : relatedRow(reversal, 'reversal');
     } else if (tid && byReplacement.has(tid)) {
       correction = byReplacement.get(tid);
       role = 'replacement';
-      related =
-        originalByCashbox.get(
-          `${correction!.original_transfer_id}:${String(row.cashbox_id)}`,
-        ) ?? null;
+      const original = pairOf(correction!.original_transfer_id, row);
+      relatedId = original ? String(original.id) : null;
+      related = relatedRow(original, 'original');
     }
     if (!correction || !role) {
       return { ...row, correction: null };
@@ -448,6 +577,7 @@ export async function attachCorrectionViews<
       correction: {
         id: String(correction.id),
         action: correction.action,
+        payment_kind: correction.payment_kind,
         role,
         reason: correction.reason,
         created_by_name: names.get(String(correction.created_by)) ?? null,
@@ -457,7 +587,8 @@ export async function attachCorrectionViews<
           correction.new_amount === null || correction.new_amount === undefined
             ? null
             : Number(correction.new_amount),
-        related_history_id: related,
+        related_history_id: relatedId,
+        related,
       },
     };
   });

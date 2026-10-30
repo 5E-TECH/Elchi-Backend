@@ -22,6 +22,26 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+### 2026-10-31 — `problem_contacts` paket va pochta skanida (CqBD8V4p)
+
+- ✏️ [order] — `GET /transfer-batches/:id` va `GET /transfer-batches/:id/remaining`: `items[].order.problem_contacts: [{ name, phone, source }]` (paket sahifasi ham chop etadi).
+- ✏️ [order] — `GET /scan/POST-…` va `GET /post/scan/:id`: `orders[]` qisqa shaklda `problem_contacts`, `region_id`, `district_id` qo'shildi (additive). Mantiq `GET /orders/:id` bilan bir xil: viloyat logisti, u yo'q — zaxira raqam, hech biri — `[]`; identity javob bermasa maydon yo'q.
+
+### 2026-10-31 — To'lov tuzatish xabari filial menejerlariga (CsEZD8EX)
+
+- 🟢 [notification] — `finance.payment_corrected`: BRANCH qabul qilgan to'lovda endi `branch_users` dagi MANAGER lar xabar oladi (`POST /managers` bilan yaratilganlar ham); eski `branches.manager_id` qiymati bo'lsa u ham, takror yuborilmaydi. FE'da o'zgarish shart emas.
+
+### 2026-10-31 — To'lov tuzatish: xato maydonlari, `correction.related`, `correctable` (iPlY5yop)
+
+- ✏️ [finance] — `POST /finance/history/:id/reverse` va `/correct-amount` xatolari (additive): `INSUFFICIENT_BALANCE` + `required` (kassa usuli yoki kartasi qoldig'ida kerak bo'lgan summa; kuryer to'lovida X, tahrirda ham X — avval X chiqadi; marketga to'lov tahririda farq), `NOT_CORRECTABLE` + `reason` (`unsupported_type` | `reversal_row` | `cashbox_deleted`), `WINDOW_EXPIRED` + `window_days` (`deadline` bilan birga). Istisno: `correct-amount` da kuryer joylashuvi mos kelmasa (gateway, 409 `NOT_CORRECTABLE`) `reason` yo'q, matn tushuntiradi.
+- ✏️ [finance] — tarix javoblaridagi `correction` ga `payment_kind` (`courier_payment` | `market_payment`) va `related: null | { id, source_type, role, operation_type, amount, created_at }` qo'shildi: o'sha kassadagi juft oyoq — asl → yangi (tahrir) yoki teskari (qaytarish), teskari / yangi → asl. `related_history_id` o'zgarmagan.
+- ✏️ [finance] — `GET /finance/history/:id` superadminga `correctable: { allowed, code?, reason?, deadline, window_days, root_history_id }`: `root_history_id` — zanjir birinchi to'lovining shu kassadagi oyog'i (eski yozuvda `null`). ⚠️ Qamrovdan tashqari turda (sotuv, qo'lda kirim/chiqim...) endi `correctable: null` (avval `allowed: false, code: "NOT_CORRECTABLE"`); teskari qatorda blok qoladi (`reason: "reversal_row"`). Boshqa rollarda kalit yo'q.
+
+### 2026-10-31 — To'lov tuzatish: `payment_reversal` faqat ichki, `window_days` qat'iy (AG1Mlikw)
+
+- ⚠️ [finance] — `PATCH /finance/cashbox/balance` `source_type: "payment_reversal"` → **400** (avval 200 qaytib, kassaga bog'lanmagan qator yozardi). Tur faqat ichki: teskari qatorni `POST /finance/history/:id/reverse` va `/correct-amount` yozadi. Filtrlar (`source_types=…,payment_reversal`) o'zgarmagan.
+- ⚠️ [finance] — `PATCH /finance/payment-corrections/settings`: `window_days` faqat JSON butun son. `true`, `"7"` → 400 (avval `true` 1 bo'lib yozilardi). Forma `number` yuborsin.
+
 ### 2026-10-30 — Kargo to'lovi: `Idempotency-Key` (N3yNa6rO)
 
 `POST /integrations/:id/remittances` endi ixtiyoriy `Idempotency-Key` sarlavhasini qabul qiladi. Ayni kalit bilan takror so'rov yangi to'lov ochmaydi, kassaga ikkinchi marta yozmaydi va birinchi to'lovni `idempotent_replay: true` bilan qaytaradi (200). Migratsiya 196. Deploy: integration-service, api-gateway.

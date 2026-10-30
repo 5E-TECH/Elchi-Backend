@@ -17,6 +17,7 @@ import {
   PAYMENT_CORRECTION_ERROR_CODES,
   PAYMENT_CORRECTION_MAX_WINDOW_DAYS,
   PAYMENT_CORRECTION_MIN_WINDOW_DAYS,
+  PAYMENT_CORRECTION_NOT_CORRECTABLE_REASONS,
   PAYMENT_CORRECTION_REASON_MAX,
   PAYMENT_CORRECTION_REASON_MIN,
   PAYMENT_CORRECTION_WINDOW_KEY,
@@ -46,11 +47,13 @@ import { FinanceRealtimeService } from '../realtime/finance-realtime.service';
 import {
   evaluateCorrectable,
   readWindowSetting,
+  type CorrectableVerdict,
   type HistoryWithCashbox,
   type TransferShape,
 } from './payment-correction.rules';
 
 const C = PAYMENT_CORRECTION_ERROR_CODES;
+const R = PAYMENT_CORRECTION_NOT_CORRECTABLE_REASONS;
 const MAIN_CASHBOX_USER_ID = '0';
 const PG_UNIQUE_VIOLATION = '23505';
 
@@ -128,6 +131,18 @@ const opposite = (op: Operation_type) =>
 
 const isCardMethod = (method: PaymentMethod) =>
   method === PaymentMethod.CLICK || method === PaymentMethod.CLICK_TO_MARKET;
+
+/**
+ * Qabul qiluvchi kassadan oraliqda eng ko'p chiqadigan summa (`required`):
+ * kuryer to'lovida avval X chiqadi (tahrirda keyin yangi summa kiradi);
+ * click_to_market da MAIN sof 0; marketga to'lov tahririda — farq.
+ */
+const peakOutflow = (shape: TransferShape, newAmount: number | null) => {
+  if (shape.kind === 'courier_payment') {
+    return shape.clickToMarket ? 0 : shape.amount;
+  }
+  return newAmount === null ? 0 : round2(newAmount - shape.amount);
+};
 
 /**
  * T6-BE-2 — SUPERADMIN to'lovni (kuryerdan qabul / marketga to'lov) TO'LIQ
@@ -330,7 +345,7 @@ export class PaymentCorrectionService {
         windowDays,
       });
       if (!pre.allowed || !pre.shape) {
-        this.failVerdict(pre.code ?? C.NOT_CORRECTABLE, pre.deadline);
+        this.failVerdict(pre);
       }
       const languages = await this.resolveLanguages(
         this.recipientIds(pre.shape, input.managerIds),
@@ -355,6 +370,8 @@ export class PaymentCorrectionService {
       shape: TransferShape;
       cashboxes: Cashbox[];
     } | null = null;
+    // Pul funksiyasi kodsiz yiqilsa ham javobda `required` bo'lsin.
+    let required = 0;
     try {
       const tx = queryRunner.manager;
       const verdictBefore = await evaluateCorrectable(tx, history, {
@@ -362,7 +379,7 @@ export class PaymentCorrectionService {
       });
       const shapeBefore = verdictBefore.shape;
       if (!shapeBefore) {
-        this.failVerdict(verdictBefore.code ?? C.NOT_CORRECTABLE, null);
+        this.failVerdict(verdictBefore);
       }
 
       // Qulf: kuryer → MAIN/BRANCH → market (oddiy to'lov tartibi).
@@ -378,7 +395,7 @@ export class PaymentCorrectionService {
           lock: { mode: 'pessimistic_write' },
         });
         if (!cashbox || cashbox.isDeleted) {
-          failCode(409, C.NOT_CORRECTABLE);
+          failCode(409, C.NOT_CORRECTABLE, { reason: R.CASHBOX_DELETED });
         }
         locked.set(id, cashbox);
       }
@@ -391,9 +408,10 @@ export class PaymentCorrectionService {
       }
       const verdict = await evaluateCorrectable(tx, history, { windowDays });
       if (!verdict.allowed || !verdict.shape || !verdict.root) {
-        this.failVerdict(verdict.code ?? C.NOT_CORRECTABLE, verdict.deadline);
+        this.failVerdict(verdict);
       }
       const shape = verdict.shape;
+      required = peakOutflow(shape, input.newAmount);
       const box = (id: string | undefined | null) =>
         id ? (locked.get(String(id)) ?? null) : null;
       const courierBox = box(shape.courierLeg?.cashbox_id);
@@ -550,7 +568,7 @@ export class PaymentCorrectionService {
         if (replay) return replay;
         failCode(409, C.ALREADY_CORRECTED);
       }
-      throw this.mapMoneyError(error);
+      throw this.mapMoneyError(error, required);
     } finally {
       await queryRunner.release();
     }
@@ -731,7 +749,6 @@ export class PaymentCorrectionService {
     receiverBox: Cashbox,
     newAmount: number | null,
   ) {
-    const X = shape.amount;
     const receiverLeg =
       shape.kind === 'market_payment' ? shape.mainMarketLeg : shape.receiverLeg;
     const method = shape.payment_method;
@@ -744,37 +761,28 @@ export class PaymentCorrectionService {
         : null;
     if (receiverLeg?.card_id && method === PaymentMethod.CLICK) {
       if (!card || String(card.cashbox_id) !== String(receiverBox.id)) {
-        failCode(409, C.NOT_CORRECTABLE);
+        failCode(409, C.NOT_CORRECTABLE, { reason: R.CASHBOX_DELETED });
       }
       if (!card.is_active && !card.is_default) {
         failCode(409, C.CARD_ARCHIVED);
       }
     }
-    // Qabul qiluvchidan chiqadigan sof summa (oxirgi holat bo'yicha).
-    let outflow = 0;
-    if (shape.kind === 'courier_payment' && !shape.clickToMarket) {
-      outflow = X - (newAmount ?? 0);
-    } else if (shape.kind === 'market_payment' && newAmount !== null) {
-      outflow = newAmount - X;
-    }
-    // Oraliq holat ham: kuryer to'lovida avval X chiqadi (keyin yangi summa kiradi).
-    const peak =
-      shape.kind === 'courier_payment' && !shape.clickToMarket ? X : outflow;
+    const peak = peakOutflow(shape, newAmount);
     if (!(peak > 0)) return;
+    const insufficient = () =>
+      failCode(409, C.INSUFFICIENT_BALANCE, { required: peak });
     const bucket = isCardMethod(method)
       ? Number(receiverBox.balance_card)
       : Number(receiverBox.balance_cash);
-    if (round2(bucket - peak) < 0) failCode(409, C.INSUFFICIENT_BALANCE);
+    if (round2(bucket - peak) < 0) insufficient();
     if (method !== PaymentMethod.CLICK) return;
     if (card && !card.is_default) {
-      if (round2(Number(card.balance) - peak) < 0) {
-        failCode(409, C.INSUFFICIENT_BALANCE);
-      }
+      if (round2(Number(card.balance) - peak) < 0) insufficient();
       return;
     }
     const named = await sumNamedCardBalances(tx, String(receiverBox.id));
     if (round2(Number(receiverBox.balance_card) - named - peak) < 0) {
-      failCode(409, C.INSUFFICIENT_BALANCE);
+      insufficient();
     }
   }
 
@@ -1103,12 +1111,16 @@ export class PaymentCorrectionService {
     };
   }
 
-  private failVerdict(
-    code: PaymentCorrectionErrorCode,
-    deadline: string | null,
-  ): never {
+  private failVerdict(verdict: CorrectableVerdict): never {
+    const code = verdict.code ?? C.NOT_CORRECTABLE;
     if (code === C.WINDOW_EXPIRED) {
-      failCode(409, code, { deadline });
+      failCode(409, code, {
+        deadline: verdict.deadline,
+        window_days: verdict.window_days,
+      });
+    }
+    if (code === C.NOT_CORRECTABLE) {
+      failCode(409, code, { reason: verdict.reason ?? R.UNSUPPORTED_TYPE });
     }
     failCode(code === C.NOT_FOUND ? 404 : 409, code);
   }
@@ -1151,7 +1163,7 @@ export class PaymentCorrectionService {
    * Pul funksiyalarining kodsiz xatolari (qo'riqchilar oldindan tekshirgan,
    * lekin himoya qatlami) — aniq kodga.
    */
-  private mapMoneyError(error: unknown): unknown {
+  private mapMoneyError(error: unknown, required: number): unknown {
     if (!(error instanceof BadRequestException)) return error;
     const message = error.message ?? '';
     if (/arxivlangan/i.test(message)) {
@@ -1166,6 +1178,7 @@ export class PaymentCorrectionService {
         statusCode: 409,
         code: C.INSUFFICIENT_BALANCE,
         message: MESSAGES.INSUFFICIENT_BALANCE,
+        ...(required > 0 ? { required } : {}),
       });
     }
     if (/oshib ketdi/i.test(message)) {

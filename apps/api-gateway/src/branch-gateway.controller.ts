@@ -17,8 +17,12 @@ import {
 } from '@nestjs/common';
 import { ClientProxy } from '@nestjs/microservices';
 import { Roles as RoleEnum } from '@app/common';
-import { firstValueFrom, map, timeout } from 'rxjs';
+import { firstValueFrom, map, switchMap, timeout } from 'rxjs';
 import { projectOrderContactsForRoles } from './auth/order-contact-projection';
+import {
+  ProblemContactsService,
+  attachProblemContacts,
+} from './contacts/problem-contacts.service';
 import {
   ApiBearerAuth,
   ApiBody,
@@ -108,6 +112,9 @@ export class BranchGatewayController {
     // Z3pUOxou — logist viloyatlari. Yo'q bo'lsa logist so'rovi 503
     // (fail-closed); boshqa rollar unga bog'liq emas.
     @Optional() private readonly logistScope?: LogistRegionScopeService,
+    // T7 (CqBD8V4p): paket buyurtmalariga `problem_contacts`. Yo'q (eski
+    // spec'lar) — maydon qo'shilmaydi.
+    @Optional() private readonly problemContacts?: ProblemContactsService,
   ) {}
 
   /** Z3pUOxou: logistning viloyatlari (xizmat yo'q/xato — 503). */
@@ -644,7 +651,8 @@ export class BranchGatewayController {
     summary: 'Get transfer batch by id',
     description:
       "3HKvAyhm: javobda `source_branch` / `destination_branch` `{ id, name }` — menejer ham filial nomini ko'radi (`GET branches/:id` faqat SA/admin). " +
-      "Z3pUOxou — LOGIST: paket o'z viloyatiga (`target_region_id`) boruvchi bo'lsa, aks holda 403; `total_price`, `items[].snapshot_price` va `items[].order` dagi pul maydonlari yo'q.",
+      "Z3pUOxou — LOGIST: paket o'z viloyatiga (`target_region_id`) boruvchi bo'lsa, aks holda 403; `total_price`, `items[].snapshot_price` va `items[].order` dagi pul maydonlari yo'q. " +
+      "T7 (CqBD8V4p): `items[].order.problem_contacts: [{name, phone, source: 'logist'|'support'}]` — chop etish uchun.",
   })
   @ApiParam({ name: 'id', description: 'Transfer batch ID (bigint string)' })
   @ApiOkResponse({ type: TransferBatchDetailDto })
@@ -662,6 +670,10 @@ export class BranchGatewayController {
       )
       .pipe(
         timeout(BATCH_RPC_TIMEOUT_MS),
+        // T7 (CqBD8V4p): `problem_contacts` proyeksiyadan OLDIN, bitta RPC.
+        switchMap((response: unknown) =>
+          attachProblemContacts(this.problemContacts, response),
+        ),
         // T7 (B3): `items[].order` — menejer/filialga market va operator
         // telefonlarisiz.
         map((response: unknown) =>
@@ -687,7 +699,10 @@ export class BranchGatewayController {
         )
         .pipe(timeout(BATCH_RPC_TIMEOUT_MS)),
     );
-    return projectLogistPayload(req?.user?.roles, response);
+    return projectLogistPayload(
+      req?.user?.roles,
+      await attachProblemContacts(this.problemContacts, response),
+    );
   }
 
   @Get('transfer-batches/:id/history')
@@ -727,6 +742,8 @@ export class BranchGatewayController {
   )
   @ApiOperation({
     summary: 'Get remaining (not sent) items of transfer batch by id',
+    description:
+      "T7 (CqBD8V4p): `items[].order.problem_contacts: [{name, phone, source: 'logist'|'support'}]` — chop etish uchun.",
   })
   @ApiParam({ name: 'id', description: 'Transfer batch ID (bigint string)' })
   findRemainingTransferBatchById(
@@ -740,6 +757,10 @@ export class BranchGatewayController {
       )
       .pipe(
         timeout(BATCH_RPC_TIMEOUT_MS),
+        // T7 (CqBD8V4p): `problem_contacts` proyeksiyadan OLDIN, bitta RPC.
+        switchMap((response: unknown) =>
+          attachProblemContacts(this.problemContacts, response),
+        ),
         // T7 (B3): menejer/filialga market va operator telefonlarisiz.
         map((response: unknown) =>
           projectOrderContactsForRoles(req?.user?.roles, response),

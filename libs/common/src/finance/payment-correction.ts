@@ -8,19 +8,19 @@
 export const PAYMENT_CORRECTION_ERROR_CODES = {
   /** 404 — tarix qatori topilmadi. */
   NOT_FOUND: 'NOT_FOUND',
-  /** 409 — tur qamrovda emas / teskari qator / kontragent kassasi o'chirilgan. */
+  /** 409 — tur qamrovda emas / teskari qator / kontragent kassasi o'chirilgan; `reason`. */
   NOT_CORRECTABLE: 'NOT_CORRECTABLE',
   /** 409 — eski yozuv, oyoqlari bog'lanmagan (`transfer_id` NULL). */
   LEGACY_UNLINKED: 'LEGACY_UNLINKED',
   /** 409 — to'lov allaqachon qaytarilgan / tuzatilgan. */
   ALREADY_CORRECTED: 'ALREADY_CORRECTED',
-  /** 409 — muddat o'tgan; `deadline` (ISO). */
+  /** 409 — muddat o'tgan; `deadline` (ISO), `window_days`. */
   WINDOW_EXPIRED: 'WINDOW_EXPIRED',
   /** 400 — asosiy kassada ochiq smena yo'q. */
   SHIFT_REQUIRED: 'SHIFT_REQUIRED',
   /** 400 — filial kassasida ochiq smena yo'q. */
   BRANCH_SHIFT_REQUIRED: 'BRANCH_SHIFT_REQUIRED',
-  /** 409 — qabul qiluvchi kassada (yoki kartada) pul yetmaydi. */
+  /** 409 — qabul qiluvchi kassada (yoki kartada) pul yetmaydi; `required`. */
   INSUFFICIENT_BALANCE: 'INSUFFICIENT_BALANCE',
   /** 409 — to'lov kartasi arxivlangan. */
   CARD_ARCHIVED: 'CARD_ARCHIVED',
@@ -43,6 +43,19 @@ export const PAYMENT_CORRECTION_ERROR_CODES = {
 
 export type PaymentCorrectionErrorCode =
   (typeof PAYMENT_CORRECTION_ERROR_CODES)[keyof typeof PAYMENT_CORRECTION_ERROR_CODES];
+
+/** (iPlY5yop) `NOT_CORRECTABLE` javobidagi `reason`. */
+export const PAYMENT_CORRECTION_NOT_CORRECTABLE_REASONS = {
+  /** Tur qamrovda emas yoki oyoqlar to'lov shakliga tushmaydi. */
+  UNSUPPORTED_TYPE: 'unsupported_type',
+  /** Teskari qatorning o'zini qaytarib / tuzatib bo'lmaydi. */
+  REVERSAL_ROW: 'reversal_row',
+  /** Oyoq kassasi yoki to'lov kartasi o'chirilgan. */
+  CASHBOX_DELETED: 'cashbox_deleted',
+} as const;
+
+export type PaymentCorrectionNotCorrectableReason =
+  (typeof PAYMENT_CORRECTION_NOT_CORRECTABLE_REASONS)[keyof typeof PAYMENT_CORRECTION_NOT_CORRECTABLE_REASONS];
 
 /** `finance_settings` kaliti (qiymat — butun son, kunlar). */
 export const PAYMENT_CORRECTION_WINDOW_KEY = 'payment_correction.window_days';
