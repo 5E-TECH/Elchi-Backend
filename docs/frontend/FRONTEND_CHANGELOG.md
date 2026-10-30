@@ -22,6 +22,12 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+### 2026-10-31 — To'lov tuzatish: xato maydonlari, `correction.related`, `correctable` (iPlY5yop)
+
+- ✏️ [finance] — `POST /finance/history/:id/reverse` va `/correct-amount` xatolari (additive): `INSUFFICIENT_BALANCE` + `required` (kassa usuli yoki kartasi qoldig'ida kerak bo'lgan summa; kuryer to'lovida X, tahrirda ham X — avval X chiqadi; marketga to'lov tahririda farq), `NOT_CORRECTABLE` + `reason` (`unsupported_type` | `reversal_row` | `cashbox_deleted`), `WINDOW_EXPIRED` + `window_days` (`deadline` bilan birga). Istisno: `correct-amount` da kuryer joylashuvi mos kelmasa (gateway, 409 `NOT_CORRECTABLE`) `reason` yo'q, matn tushuntiradi.
+- ✏️ [finance] — tarix javoblaridagi `correction` ga `payment_kind` (`courier_payment` | `market_payment`) va `related: null | { id, source_type, role, operation_type, amount, created_at }` qo'shildi: o'sha kassadagi juft oyoq — asl → yangi (tahrir) yoki teskari (qaytarish), teskari / yangi → asl. `related_history_id` o'zgarmagan.
+- ✏️ [finance] — `GET /finance/history/:id` superadminga `correctable: { allowed, code?, reason?, deadline, window_days, root_history_id }`: `root_history_id` — zanjir birinchi to'lovining shu kassadagi oyog'i (eski yozuvda `null`). ⚠️ Qamrovdan tashqari turda (sotuv, qo'lda kirim/chiqim...) endi `correctable: null` (avval `allowed: false, code: "NOT_CORRECTABLE"`); teskari qatorda blok qoladi (`reason: "reversal_row"`). Boshqa rollarda kalit yo'q.
+
 ### 2026-10-31 — To'lov tuzatish: `payment_reversal` faqat ichki, `window_days` qat'iy (AG1Mlikw)
 
 - ⚠️ [finance] — `PATCH /finance/cashbox/balance` `source_type: "payment_reversal"` → **400** (avval 200 qaytib, kassaga bog'lanmagan qator yozardi). Tur faqat ichki: teskari qatorni `POST /finance/history/:id/reverse` va `/correct-amount` yozadi. Filtrlar (`source_types=…,payment_reversal`) o'zgarmagan.

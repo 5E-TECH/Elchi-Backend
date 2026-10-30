@@ -116,7 +116,9 @@ import {
 import {
   attachCorrectionViews,
   evaluateCorrectable,
+  isCorrectableType,
   readWindowSetting,
+  resolveRootHistoryId,
   type HistoryWithCashbox,
 } from './payment-correction/payment-correction.rules';
 
@@ -2544,7 +2546,7 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         {
           ...enrichedHistory,
           order,
-          ...(correctable ? { correctable } : {}),
+          ...(options.include_correctable ? { correctable } : {}),
         },
         200,
         'Cashbox history detail',
@@ -2555,11 +2557,18 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * T6 — `/history/:id` dagi `correctable: { allowed, code?, deadline,
-   * window_days }`. Smena / balans / karta amal paytida tekshiriladi.
+   * T6 — `/history/:id` dagi `correctable: { allowed, code?, reason?,
+   * deadline, window_days, root_history_id }`. Smena / balans / karta amal
+   * paytida tekshiriladi. Qamrovdan tashqari tur — `null` (iPlY5yop).
    */
   private async correctableBlock(history: HistoryWithCashbox) {
     try {
+      if (
+        !isCorrectableType(history.source_type) &&
+        history.source_type !== Source_type.PAYMENT_REVERSAL
+      ) {
+        return null;
+      }
       const { window_days } = await readWindowSetting(this.dataSource.manager);
       const verdict = await evaluateCorrectable(
         this.dataSource.manager,
@@ -2569,8 +2578,14 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
       return {
         allowed: verdict.allowed,
         ...(verdict.code ? { code: verdict.code } : {}),
+        ...(verdict.reason ? { reason: verdict.reason } : {}),
         deadline: verdict.deadline,
         window_days: verdict.window_days,
+        root_history_id: await resolveRootHistoryId(
+          this.dataSource.manager,
+          history,
+          verdict.root,
+        ),
       };
     } catch (error) {
       this.logger.warn(

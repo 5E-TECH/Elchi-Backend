@@ -688,8 +688,9 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
   `revertPaymentFromOrders` (newest PAID/PARTLY_PAID → `order.payment_
   reversal.apply`) then `applyPaymentToOrders(new)`. Coded errors in
   `libs/common/src/finance/payment-correction.ts` (+ `PUBLIC_ERROR_CODES`).
-  History responses carry `transfer_id`, `reverses_history_id`, `correction`;
-  `/history/:id` gives SA `correctable`. Courier ack on a corrected payment →
+  History responses carry `transfer_id`, `reverses_history_id`, `correction`
+  (+ `payment_kind`, `related` leg, batched in `attachCorrectionViews`);
+  `/history/:id` gives SA `correctable` (`null` for out-of-scope types). Courier ack on a corrected payment →
   409 `PAYMENT_CORRECTED`. Gateway (via `finance.payment_correction.context`:
   receiver, courier, `replay`) refuses a courier payment whose courier no
   longer sits at the original receiver (409 `COURIER_MOVED`) and, for

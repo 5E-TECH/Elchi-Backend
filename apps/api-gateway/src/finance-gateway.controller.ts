@@ -3647,7 +3647,12 @@ export class FinanceGatewayController {
   // T3 — tarixdagi `receipt`: rol bo'yicha (kuryer/market/registrator — yo'q).
   @UseInterceptors(ReceiptProjectionInterceptor)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Find cashbox history detail by id' })
+  @ApiOperation({
+    summary: 'Find cashbox history detail by id',
+    description:
+      "T6 (iPlY5yop): `correction` — `null` yoki `{ id, action, payment_kind, role, reason, created_by_name, created_at, original_amount, new_amount, related_history_id, related }`; `related` — o'sha kassadagi juft oyoq `{ id, source_type, role, operation_type, amount, created_at }` (asl → yangi/teskari; teskari/yangi → asl). " +
+      "Superadminga `correctable: { allowed, code?, reason?, deadline, window_days, root_history_id }`, qamrovdan tashqari turda `correctable: null`; boshqa rollarda kalit yo'q.",
+  })
   @ApiParam({ name: 'id', description: 'History id (bigint string)' })
   async findHistoryById(
     @Param('id') id: string,

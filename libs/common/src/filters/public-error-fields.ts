@@ -73,14 +73,17 @@ export const PASSWORD_SMS_DAILY_LIMIT = 'PASSWORD_SMS_DAILY_LIMIT';
 export const PUBLIC_ERROR_CODES: Readonly<Record<string, readonly string[]>> = {
   // (T6) to'lovni qaytarish / summasini tuzatish — superadmin.
   [PC.NOT_FOUND]: [],
-  [PC.NOT_CORRECTABLE]: [],
+  // `reason`: unsupported_type | reversal_row | cashbox_deleted (iPlY5yop).
+  [PC.NOT_CORRECTABLE]: ['reason'],
   [PC.LEGACY_UNLINKED]: [],
   [PC.ALREADY_CORRECTED]: [],
-  // Muddat o'tgan: `deadline` — qachongacha tuzatish mumkin edi (ISO).
-  [PC.WINDOW_EXPIRED]: ['deadline'],
+  // Muddat o'tgan: `deadline` — qachongacha tuzatish mumkin edi (ISO),
+  // `window_days` — amaldagi sozlama.
+  [PC.WINDOW_EXPIRED]: ['deadline', 'window_days'],
   [PC.SHIFT_REQUIRED]: [],
   [PC.BRANCH_SHIFT_REQUIRED]: [],
-  [PC.INSUFFICIENT_BALANCE]: [],
+  // `required` — kassa (usul / karta) qoldig'ida kerak bo'lgan summa.
+  [PC.INSUFFICIENT_BALANCE]: ['required'],
   [PC.CARD_ARCHIVED]: [],
   [PC.SAME_AMOUNT]: [],
   // Yangi summa chegarasi: `max` (kuryer qoldig'i + X; market qarzi + X).
