@@ -26,6 +26,8 @@ import {
   courierPostOrdersQuery,
   dispatchNoteBranchId,
   FULFILLMENT_SOURCES,
+  formatOrderNumber,
+  ORDER_NUMBER_OFFSET,
   WAREHOUSE_KINDS,
   Order_status,
   OutboxService,
@@ -89,8 +91,8 @@ const MAX_FETCH_ALL = 5000;
 export const parseOrderNumberSearch = (search: string): string | null =>
   /^\d{1,18}$/.test(search) ? search : null;
 
-/** Mijozga ko'rinadigan raqam: «EL-» + (id + 100000) — `formatOrderNumber` bilan bir xil. */
-export const ORDER_NUMBER_OFFSET = 100000;
+/** Mijozga ko'rinadigan raqam: «EL-» + (id + 100000) — `libs/common` dagi yagona manba. */
+export { ORDER_NUMBER_OFFSET };
 const EL_ORDER_NUMBER_SEARCH = /^[#№]?\s*EL[-\s]?(\d{1,18})$/iu;
 
 /**
@@ -2614,9 +2616,7 @@ export class OrderServiceService {
    * noyob. Noto'g'ri/bo'sh id → '' (yorliqda raqam ko'rsatilmaydi).
    */
   private formatOrderNumber(id: string | number | null | undefined): string {
-    const n = Number(id);
-    if (!Number.isFinite(n) || n <= 0) return '';
-    return 'EL-' + (n + ORDER_NUMBER_OFFSET);
+    return formatOrderNumber(id) ?? '';
   }
 
   /**

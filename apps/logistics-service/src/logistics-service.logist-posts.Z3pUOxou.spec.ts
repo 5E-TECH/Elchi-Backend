@@ -220,7 +220,12 @@ describe('Z3pUOxou — GET /post/orders/:id (logist)', () => {
     expect(res.data.centerOrders).toEqual({ centerOrders: 1 });
     expect(res.data.post).not.toHaveProperty('post_total_price');
     expect(postRepo.save).not.toHaveBeenCalled();
-    expect(branchClient.send).not.toHaveBeenCalled();
+    // Filial doirasi so'ralmaydi; faqat T9 «Qayerdan» nomi (tizim so'rovchisi).
+    expect(
+      branchClient.send.mock.calls.map(
+        (call: [{ cmd: string }, ...unknown[]]) => call[0].cmd,
+      ),
+    ).toEqual(['branch.find_by_id']);
   });
 
   it('⛔ boshqa viloyat — 403, buyurtmalar so‘ralmaydi', async () => {

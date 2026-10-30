@@ -189,6 +189,8 @@ describe('4YZcTTDQ — GET /post/orders/:id: data.post', () => {
       qr_code_token: 'POST-QR-90',
       order_quantity: 3,
       branch_id: '1',
+      // T9 (BE-2): branch xizmati mock'da topmadi — null.
+      branch: null,
       region_id: '6',
       region: { id: '6', name: 'Buxoro' },
       createdAt: new Date('2026-08-24T12:33:00.000Z'),

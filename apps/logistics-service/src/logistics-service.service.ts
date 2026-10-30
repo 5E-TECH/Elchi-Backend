@@ -1358,6 +1358,46 @@ export class LogisticsServiceService implements OnModuleInit {
     return (await this.findHqBranchId()) === assignment.branchId;
   }
 
+  /**
+   * T9 (HJ5sLHiz, BE-2) — «Pochta cheki»dagi «Qayerdan»: pochtaning
+   * jo'natuvchi filiali `{ id, name }`. `branch_id` bor — `branch.find_by_id`
+   * TIZIM so'rovchisi bilan (filial nomi maxfiy emas: boshqa filial menejeri
+   * ham ko'radi, `assertCanReadBranch` uni to'smasin); `branch_id` yo'q — HQ
+   * pochtasi (`branch.find_hq`). Xato / timeout (5 s) / topilmadi — `null`,
+   * pochta javobi baribir 200.
+   */
+  private async findPostSenderBranch(
+    branchId: string | null,
+  ): Promise<{ id: string; name: string } | null> {
+    try {
+      const response = (await lastValueFrom(
+        (branchId
+          ? this.branchClient.send(
+              { cmd: 'branch.find_by_id' },
+              {
+                id: branchId,
+                requester: { id: 'system', roles: [Roles.SUPERADMIN] },
+              },
+            )
+          : this.branchClient.send({ cmd: 'branch.find_hq' }, {})
+        ).pipe(timeout(5000)),
+      )) as { data?: { id?: unknown; name?: unknown } | null } | null;
+      const branch = response?.data;
+      const id =
+        typeof branch?.id === 'string' || typeof branch?.id === 'number'
+          ? String(branch.id).trim()
+          : '';
+      const name = typeof branch?.name === 'string' ? branch.name : '';
+      return id && name ? { id, name } : null;
+    } catch (error) {
+      // `logger?` — ba'zi spec'lar servisni prototipdan (konstruktorsiz) quradi.
+      this.logger?.warn(
+        `getPostOrders: sender branch ${branchId ?? 'HQ'} lookup failed: ${(error as Error)?.message ?? String(error)}`,
+      );
+      return null;
+    }
+  }
+
   private async findHqBranchId(): Promise<string> {
     try {
       const response = await lastValueFrom(
@@ -2924,7 +2964,11 @@ export class LogisticsServiceService implements OnModuleInit {
     // 4YZcTTDQ: pochtaning o'z ma'lumoti (sarlavha, holat rozetkasi, QR,
     // kuryer) — frontend uni router state'dan yoki buyurtmalardan taxmin
     // qilmasin. Kuryer — faqat {id, name, phone_number}, o'chirilgan → null.
-    const [postWithCourier] = await this.attachPostCouriers([post]);
+    const postBranchId = post.branch_id ? String(post.branch_id) : null;
+    const [[postWithCourier], senderBranch] = await Promise.all([
+      this.attachPostCouriers([post]),
+      this.findPostSenderBranch(postBranchId),
+    ]);
     const region = post.region ?? null;
 
     return successRes(
@@ -2948,7 +2992,9 @@ export class LogisticsServiceService implements OnModuleInit {
           courier: postWithCourier.courier,
           qr_code_token: post.qr_code_token ?? null,
           order_quantity: Number(post.order_quantity ?? 0),
-          branch_id: post.branch_id ? String(post.branch_id) : null,
+          branch_id: postBranchId,
+          // T9 (BE-2): «Qayerdan» — `{ id, name }`; `branch_id` null — HQ.
+          branch: senderBranch,
           region_id: post.region_id ? String(post.region_id) : null,
           region: region ? { id: String(region.id), name: region.name } : null,
           createdAt: post.createdAt ?? null,

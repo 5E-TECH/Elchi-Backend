@@ -3,7 +3,11 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { AI_BOT_IMAGE_MAX_BYTES, deterministicUuid } from '@app/common';
+import {
+  AI_BOT_IMAGE_MAX_BYTES,
+  deterministicUuid,
+  formatOrderNumber,
+} from '@app/common';
 import {
   TelegramAiDraft,
   TelegramAiDraftInput,
@@ -57,12 +61,7 @@ const rowsOf = <T>(result: unknown): T[] => {
 };
 
 /** EL-<id+100000> — mijozga ko'rinadigan raqam (order-service bilan bir xil). */
-const orderNumber = (id: unknown) => {
-  const numeric = Number(id);
-  return Number.isSafeInteger(numeric) && numeric > 0
-    ? `EL-${numeric + 100000}`
-    : `#${str(id)}`;
-};
+const orderNumber = (id: unknown) => formatOrderNumber(id) ?? `#${str(id)}`;
 
 interface ParseData {
   ok?: boolean;

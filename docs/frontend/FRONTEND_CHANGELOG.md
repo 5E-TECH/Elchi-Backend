@@ -23,6 +23,23 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-10-30 — Chek: pochta buyurtmalarida «EL-…» raqam, mahsulot nomi va «Qayerdan» (T9, HJ5sLHiz BE-1/BE-2)
+
+Deploy: **api-gateway + logistics-service** (`libs/common` o'zgardi — order-service ham bir xil helper'ni ishlatadi).
+Migratsiya yo'q. `openapi.json` qayta yaratildi. Faqat qo'shimcha maydonlar (ortga mos).
+
+- [2026-10-30] ✏️ [gateway] — `GET /post/orders/:id`, `GET /post/orders/rejected/:id`, `GET /post/return-requests/list`:
+  har buyurtma qatorida **`order_number`** («EL-100081» — `GET /orders` ro'yxati va pochta skani bilan bir xil;
+  noto'g'ri id — `null`) va **`items[].product: { id, name } | null`** (sahifadagi barcha mahsulot bitta katalog
+  so'rovi bilan; katalog javob bermasa yoki mahsulot o'chirilgan — `null`, javob yiqilmaydi; narx, market, rasm yo'q).
+  Rol va T7 kontakt proyeksiyalari o'zgarmadi.
+- [2026-10-30] ✏️ [logistics] — `GET /post/orders/:id` → `data.post.branch: { id, name } | null` — «Qayerdan»
+  (jo'natuvchi filial). `branch_id` null bo'lsa — HQ («Toshkent HQ»). Nom har rolga (boshqa filial menejeriga ham)
+  chiqadi; filial xizmati javob bermasa — `null`, javob 200, `branch_id` o'zgarmaydi. ⚠️ Cheklov: kuryersiz o'tkazma
+  pochtasini qabul qiluvchi filial ochganda `branch_id` unga ko'chadi — shundan keyin `branch` qabul qiluvchi filial.
+- 🔧 FE (Elchi-Frontend#359): chekda `№{order_number}`, mahsulot nomi (`items[].product.name`) va «Qayerdan:
+  `post.branch.name`»; maydon yo'q bo'lsa — mavjud zaxiralar.
+
 ### 2026-10-30 — Aloqa raqamlari: market mas'uli, «Muammo bo'lsa» = viloyat logisti, market telefoni menejer/kuryerdan yashirildi (T7, QPq2C1co)
 
 Deploy: **identity-service + api-gateway + order-service** (birga; `libs/common` o'zgardi). Migratsiya
