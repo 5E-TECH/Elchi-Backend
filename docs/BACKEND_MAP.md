@@ -58,7 +58,7 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
 | **order-service** | `order_schema` | `order`, `order_item`, `order_tracking`, `order_settlement`, `order_custody_event`, `branch` (mirror), `branch_transfer_batch(+item,+history)`, `order_batch_inbox_message` | The core. Order lifecycle, sell/cancel/return/rollback, per-order FIFO settlement, transfer batches, order analytics source |
 | **catalog-service** | `catalog_schema` | `product`, `warehouses`, `warehouse_stock`, `stock_movements`, `stock_reservations` | Market product catalog + **temporary warehouse module** (hY7uacJu: regional-branch stock, stock-in/inventory, order reserve/out/release/return RPCs) |
 | **logistics-service** | `logistics_schema` | `region`, `district`, `post`, `delivery_tariff`, `delivery_pricing_settings` | Geo (regions/districts, SATO codes) + **posts** (courier delivery batches): create/send/receive/reassign/cancel/return-requests + **delivery pricing engine** (DAqXPeSy: versioned tariffs, formula settings, `logistics.delivery.quote`) |
-| **finance-service** | `finance_schema` | `cashbox`, `cashbox_history`, `shift`, `user_salary`, `operator_earning`, `operator_payment`, `financial_balance_history`, `payment_corrections` (T6) | Cashboxes (main/courier/market/branch), payments, shifts, salaries, operator earnings, company P&L ledger |
+| **finance-service** | `finance_schema` | `cashbox`, `cashbox_history`, `shift`, `user_salary`, `operator_earning`, `operator_payment`, `financial_balance_history`, `payment_corrections` (T6), `cashbox_receipts` (T3) | Cashboxes (main/courier/market/branch), payments, shifts, salaries, operator earnings, company P&L ledger |
 | **branch-service** | `branch_schema` | `branch`, `branch_config`, `branch_user` | Branch tree (HQ→regional→pickup), per-branch config (ownership/compensation), branch staff, transfer-batch orchestration, branch analytics/dashboard |
 | **investor-service** | `investor_schema` | `investor`, `investment`, `profit_share` | Investor capital, investments, profit-share calculation/payout |
 | **integration-service** | `integration_schema` | `external_integration`, `provider_shipment`, `provider_receivable`, `provider_remittance`, `sync_queue`, `sync_history`, `provider_webhook_log` | External providers (cargo/marketplace): credentials (AES-encrypted), sync queue, dispatch shipments, COD receivables/remittances, inbound HMAC webhooks |
@@ -643,6 +643,26 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
   «Xarajat kategoriyasini tanlang»), `comment` is optional; the
   `finance.cashbox.spend` RMQ handler still accepts no category (internal
   spends such as the investor profit payout).
+- **Cashbox receipts (T3, 2026-10-30, migr `1716000000188`):** photo + AI
+  check for manual expenses (`manual_expense`) and click courier → HQ /
+  branch → HQ transfers (`courier_to_hq` / `branch_to_hq`).
+  `cashbox-receipt/`: `CashboxReceiptService` (settings in `finance_settings`
+  `receipt.{manual_expense,hq_transfer}.{photo_required,ai_enabled}`, SA-only
+  update; draft upload; `linkInTx` inside the payment tx — `spendMoney`,
+  `paymentsFromCourier`, `paymentFromBranchToMain` pass `receipt_policy` /
+  `receipt_id`, injected via the `CASHBOX_RECEIPTS` token; `applyAiResult`,
+  `requestReanalyze`, `summary`), hourly draft cleanup (24 h, advisory lock;
+  linked receipts and files are never deleted), `receipt.rules.ts` (outcome
+  + flags, pure), `cashbox-receipt.views.ts` (`RECEIPT_EXPECTED_SQL` — the
+  single «no receipt» predicate shared by the history filter and the summary).
+  Gateway uploads the photo to file-service (`cashbox-receipt-` key, signed
+  300 s links), runs `ai.finance.receipt_extract` in the background and posts
+  `finance.receipt.ai_result`; `ReceiptProjectionInterceptor` hides receipts
+  from non SA/admin/manager roles. Realtime `finance.receipt.checked` (outbox).
+  Coded errors in `libs/common/src/finance/cashbox-receipt.ts`
+  (+ `PUBLIC_ERROR_CODES`). AI assistant tool `get_receipt_checks`. RMQ:
+  `finance.receipt.{settings.get,settings.update,upload_check,create_draft,
+  ai_result,reanalyze,get}`, `finance.receipt_checks.summary`.
 
 ### branch-service (`branch_schema`)
 - **Entities:** `branch` (`BranchType`, `BranchOwnership`), `branch_config`
