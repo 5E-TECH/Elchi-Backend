@@ -1,6 +1,11 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform, Type } from 'class-transformer';
-import { normalizeUzPhone } from '@app/common';
+import {
+  normalizeUzPhone,
+  PRODUCT_WEIGHT_KG_DECIMALS,
+  PRODUCT_WEIGHT_KG_MAX,
+  PRODUCT_WEIGHT_KG_MIN,
+} from '@app/common';
 import {
   ArrayMaxSize,
   ArrayNotEmpty,
@@ -18,6 +23,10 @@ import {
   Min,
   ValidateNested,
 } from 'class-validator';
+import { DimensionField, MaxDecimals } from './delivery-pricing.swagger.dto';
+
+const ITEM_MEASURE_NOTE =
+  "Yuborilsa `external_product_id` bo'yicha yaratilgan mahsulotga yoziladi.";
 
 export class ShipmentCustomerDto {
   @ApiProperty({ example: 'Ali Valiyev' })
@@ -83,6 +92,44 @@ export class ShipmentItemDto {
   @IsString()
   @IsNotEmpty()
   external_product_id?: string;
+
+  /**
+   * 6tGZzupr: o'lchov IXTIYORIY — eski hamkor so'rovi o'zgarishsiz o'tadi.
+   * Yuborilgani avtomatik mahsulotga yoziladi; yuborilmasa posilka baribir
+   * qabul qilinadi, mahsulot «o'lchov kutilmoqda» bo'lib qoladi.
+   */
+  @ApiPropertyOptional({
+    type: Number,
+    minimum: PRODUCT_WEIGHT_KG_MIN,
+    maximum: PRODUCT_WEIGHT_KG_MAX,
+    example: 1.2,
+    description: `Og'irlik, kg (ko'pi bilan ${PRODUCT_WEIGHT_KG_DECIMALS} kasr). ${ITEM_MEASURE_NOTE}`,
+  })
+  @IsOptional()
+  @IsNumber(
+    { allowNaN: false, allowInfinity: false },
+    { message: 'weight_kg — 0 dan katta son (kg)' },
+  )
+  @MaxDecimals(
+    PRODUCT_WEIGHT_KG_DECIMALS,
+    `weight_kg — ko'pi bilan ${PRODUCT_WEIGHT_KG_DECIMALS} kasrli son (kg)`,
+  )
+  @Min(PRODUCT_WEIGHT_KG_MIN, {
+    message: "weight_kg 0 dan katta bo'lishi kerak",
+  })
+  @Max(PRODUCT_WEIGHT_KG_MAX, {
+    message: `weight_kg ${PRODUCT_WEIGHT_KG_MAX} kg dan oshmasligi kerak`,
+  })
+  weight_kg?: number;
+
+  @DimensionField('length_cm', 'Uzunlik', 30, ITEM_MEASURE_NOTE)
+  length_cm?: number;
+
+  @DimensionField('width_cm', 'Kenglik', 22, ITEM_MEASURE_NOTE)
+  width_cm?: number;
+
+  @DimensionField('height_cm', 'Balandlik', 15, ITEM_MEASURE_NOTE)
+  height_cm?: number;
 }
 
 /** `POST /partner/shipments` — kontrakt: docs/public/MARKETPLACE_API.md §5.2. */

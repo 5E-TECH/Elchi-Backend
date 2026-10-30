@@ -16,7 +16,7 @@ export const DELIVERY_PRICING_PATTERNS = {
   SETTINGS_GET: 'logistics.delivery.settings.get',
   SETTINGS_UPDATE: 'logistics.delivery.settings.update',
   SETTINGS_HISTORY: 'logistics.delivery.settings.history',
-  /** KmWO9gTA — sotuvda market tarifi uchun (order-service, ichki). */
+  /** KmWO9gTA — sotuvda market tarifi uchun (order-service; 6tGZzupr: hamkor tarifi). */
   SALE_QUOTE: 'logistics.delivery.sale_quote',
 } as const;
 
@@ -92,11 +92,16 @@ export interface DeliveryQuotePayload {
 
 /**
  * KmWO9gTA — `logistics.delivery.sale_quote`: sotuv paytidagi market tarifi
- * uchun. Gateway'ga CHIQMAYDI (faqat order-service). `quote` dan farqi:
+ * uchun. Ichki RPC (HTTP'ga to'g'ridan chiqmaydi). `quote` dan farqi:
  * jo'natuvchi hududi ixtiyoriy (market profilida bo'lmasa — shahar emas),
  * elementlar faqat `product_id` (NULL — katalogsiz, o'lchovsiz), egalik
  * tekshiruvi yo'q, element soni cheklanmaydi; javobda DARVOZA 1/2 uchun
  * sozlamalar va center/address bazalari ham bor.
+ *
+ * 6tGZzupr — `GET /partner/tariff` ham shuni chaqiradi (sotuvdagi AYNI hisob):
+ * mahsulot katalogda bo'lmasligi mumkin, shuning uchun element to'g'ridan
+ * o'lchov bilan ham keladi; `express` / `pickup_count` faqat hamkor hisobida
+ * (sotuv yuborilmaydi — sukut o'chiq).
  */
 export interface DeliverySaleQuotePayload {
   where_deliver: string;
@@ -107,7 +112,13 @@ export interface DeliverySaleQuotePayload {
   items: Array<{
     product_id?: string | number | null;
     quantity?: number | null;
+    weight_kg?: number | null;
+    length_cm?: number | null;
+    width_cm?: number | null;
+    height_cm?: number | null;
   }>;
+  express?: boolean;
+  pickup_count?: number;
 }
 
 export interface ListDeliveryTariffsPayload {

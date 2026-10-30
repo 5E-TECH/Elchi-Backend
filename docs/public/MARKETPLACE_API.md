@@ -182,6 +182,19 @@ klassifikatori kodi. Agar sizning tizimingizda ham SOATO bo'lsa, tumanlarni
 
 ### `GET /partner/tariff?elchi_market_id=121&where_deliver=center`
 
+| Query | Majburiy | Izoh |
+|---|---|---|
+| `elchi_market_id` | ✅ | Sizning sotuvchingiz marketi (§5.1) |
+| `where_deliver` | — | `center` (punktdan olib ketish) yoki `address` (uyga yetkazish). Standart: `address` |
+| `weight_kg` | — | Posilkaning **jami** og'irligi, kg (0.001–10000, ko'pi bilan 3 kasr). Bir nechta mahsulot bo'lsa — yig'indi |
+| `length_cm`, `width_cm`, `height_cm` | — | Posilka o'lchami, sm (butun son, 1–1000). **Uchalasi birga** — bittasi yetishmasa 400 |
+| `express` | — | `true` / `false` — tezkor yetkazish |
+| `pickup` | — | `true` / `false` — kuryer chaqiruvi (bitta posilkali tashrif) |
+| `region_id`, `district_id` | — | Qabul qiluvchi hududi (§4). Berilmasa yo'nalish `where_deliver` bo'yicha olinadi — Toshkent shahri ichidagi arzonroq tarif hisobga olinmaydi |
+
+Yangi parametrlarsiz so'rov avvalgidek ishlaydi: `market_tariff` o'zgarmaydi,
+javobga qo'shimcha maydonlar qo'shiladi xolos.
+
 ```json
 {
   "statusCode": 200,
@@ -189,13 +202,69 @@ klassifikatori kodi. Agar sizning tizimingizda ham SOATO bo'lsa, tumanlarni
   "data": {
     "elchi_market_id": "121",
     "where_deliver": "center",
-    "market_tariff": 15000
+    "market_tariff": 15000,
+    "tariff_source": "profile",
+    "estimated": false,
+    "quote": {
+      "tariffId": "center",
+      "base": 40000,
+      "perExtraKg": 4000,
+      "actualKg": 3,
+      "volumetricKg": 4.8,
+      "volumetricFromKg": 0,
+      "volumetricApplied": true,
+      "billableKg": 4.8,
+      "extraKg": 4,
+      "extra": 16000,
+      "subtotal": 56000,
+      "expressFee": 0,
+      "pickupFee": 0,
+      "total": 56000,
+      "totalWithPickup": 56000,
+      "basis": "volume",
+      "missingDimensionItems": 0,
+      "estimated": false,
+      "daysMin": 1,
+      "daysMax": 2,
+      "days": [1, 2],
+      "cityRoute": false
+    }
   }
 }
 ```
 
-Narxni mijozga ko'rsatishdan oldin shu bilan tekshiring. `where_deliver`:
-`center` (punktdan olib ketish) yoki `address` (uyga yetkazish).
+| Javob maydoni | Ma'nosi |
+|---|---|
+| `market_tariff` | **Elchi sotuvda oladigan summa** — mijozga shuni ko'rsating. Sotuv hisobi bilan bitta manbadan chiqadi |
+| `tariff_source` | `profile` — market profilidagi kelishilgan tarif; `engine` — vazn/hajm dvigateli (standart narx + qo'shimcha) |
+| `estimated` | `true` — narx **taxminiy**: o'lchov berilmagan yoki to'liq emas, ya'ni baza tarif olingan. Haqiqiy narx mahsulot o'lchangandan keyin farq qilishi mumkin |
+| `quote` | Dvigatel hisobi (`billableKg`, `extra`, `total` va h.k.). O'lchov, `express` yoki `pickup` berilganda keladi; dvigatel o'chiq bo'lsa ham ma'lumot uchun qaytadi. Boshqa holatda `null` |
+
+- **`market_tariff` va `quote.total` farq qiladi.** Birinchisi — market
+  shartnomasidagi narx (+ yoqilgan bo'lsa vazn/hajm qo'shimchasi), ikkinchisi —
+  Elchi umumiy tarif jadvali. Mijozga `market_tariff` ko'rsatiladi.
+- **`express` va `pickup`** faqat `quote` da (`expressFee`, `pickupFee`,
+  `totalWithPickup`); `market_tariff` ga kirmaydi.
+- **Profilda tarif yo'q (`null`)** — `market_tariff` tarif jadvalidagi baza
+  (jimgina 0 emas), `estimated: true`. Tarif jadvali ham javob bermasa — **503**,
+  keyinroq qayta so'rang.
+- **Profilda aniq `0`** (§5.1: tarif berilmasa — 0) — bu kelishuv: `market_tariff`
+  `0` qoladi, chunki sotuvda ham 0 olinadi. Taqqoslash uchun `quote` qaytadi.
+- Dvigatel vaqtincha javob bermasa — so'rov yiqilmaydi: profil tarifi,
+  `estimated: true`, `quote: null`.
+- `elchi_market_id` sizniki bo'lmasa — **404**. Noto'g'ri o'lchov — **400**.
+
+#### Savatdagi narx va Elchi oladigan narx
+
+Tarif so'rovida qanday o'lchov bersangiz, posilkada ham shuni yuboring (§5.2) —
+aks holda savatdagi narx bilan Elchi oladigan narx ajraladi:
+
+| Holat | Savatda (`market_tariff`) | Elchi sotuvda | Farq |
+|---|---|---|---|
+| Vazn/hajm narxi o'chiq (hozirgi holat) | Profil tarifi | Profil tarifi | Yo'q |
+| Yoqiq, posilka `{ name, quantity }` — katalogsiz | Profil tarifi | Profil tarifi (o'lchovsiz — qo'shimcha 0) | Yo'q, faqat minimal narx qoidasi sotuvda tarifni ko'tarishi mumkin |
+| Yoqiq, mahsulot o'lchovi Elchi'da bor, tarif o'lchovsiz so'ralgan | Profil tarifi, `estimated: true` | Profil + vazn/hajm qo'shimchasi | **Bor** — o'lchovni `GET /partner/tariff` ga yuboring |
+| Tarif savat va sotuv orasida o'zgardi | Eski tarif | Yangi tarif | **Bor** — tarif sotuv paytida qotiriladi |
 
 ---
 
@@ -311,7 +380,7 @@ Content-Type: application/json
 | `region_id` | — | §4 dan. Berilmasa tumandan aniqlanadi |
 | `where_deliver` | — | `center` \| `address` (**standart: `center`** — punktdan olib ketish) |
 | `address` | — | Uyga yetkazish manzili. ⚠️ `where_deliver: "address"` da bo'sh manzil ham **qabul qilinadi** (rad etilmaydi) — lekin kuryer manzilni mijozdan so'rab aniqlaydi, shuning uchun **yuboring** |
-| `items[]` | — | `{ name, quantity?, external_product_id? }` |
+| `items[]` | — | `{ name, quantity?, external_product_id?, weight_kg?, length_cm?, width_cm?, height_cm? }` — o'lchov ixtiyoriy (pastga qara) |
 | `cod_amount` | ✅ | Kuryer mijozdan **yig'adigan** summa. `0` = oldindan to'langan |
 | `subtotal` | ✅ | Buyurtma summasi — **`cod_amount` bilan teng yuboring** (pastga qara). Berilmasa `cod_amount` olinadi |
 | `label_token` | — | Sizning **yorlig'ingizdagi QR** qiymati: 8–128 belgi, faqat `A-Z a-z 0-9 _ -`. Berilsa Elchi uni posilkaga yozadi va yorliq **QR sifatida chop etiladi / skanerlanadi**. Boshqa posilkada band bo'lsa — **409**. Berilmasa Elchi o'z tokenini yaratadi (javobdagi `qr_code_token`) |
@@ -352,6 +421,22 @@ dublikat paydo bo'lmaydi va hisobot buzilmaydi.
 
 Berilmasa nom faqat matn bo'lib qoladi: posilka ishlaydi, lekin mahsulot
 bo'yicha hisobotda qatnashmaydi.
+
+#### Mahsulot o'lchovi — `weight_kg`, `length_cm`, `width_cm`, `height_cm`
+
+Ixtiyoriy: eski so'rovlar o'zgarishsiz ishlaydi. O'lchov yetkazish narxiga
+kiradi, shuning uchun imkon bo'lsa yuboring.
+
+- Birliklar: og'irlik — kg (0.001–1000, ko'pi bilan 3 kasr), o'lchamlar — sm
+  (butun son, 1–1000). `length_cm`, `width_cm`, `height_cm` **uchalasi birga** —
+  bittasi yetishmasa **400**.
+- O'lchov **`external_product_id` bilan birga** ishlaydi: Elchi uni avtomatik
+  yaratilayotgan mahsulotga yozadi. Mahsulot avval o'lchovsiz yaratilgan bo'lsa,
+  bo'sh maydonlari to'ldiriladi. Elchi xodimi kiritgan o'lchov **almashtirilmaydi**.
+  `external_product_id` siz o'lchov saqlanmaydi (saqlaydigan mahsulot yo'q).
+- O'lchovsiz mahsulot ham **qabul qilinadi** — posilka rad etilmaydi. Mahsulot
+  Elchi'da «o'lchov kutilmoqda» deb belgilanadi va xodim o'lchaguncha narx baza
+  tarifga tushadi.
 
 #### Idempotentlik
 

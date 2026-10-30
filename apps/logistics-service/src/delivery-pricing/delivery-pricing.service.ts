@@ -408,10 +408,11 @@ export class DeliveryPricingService {
    *   • jo'natuvchi hududi (market profili) ixtiyoriy — yo'q yoki topilmasa
    *     shahar zonasi EMAS deb olinadi (tarif = `where_deliver`); qabul
    *     qiluvchi ham shunday (sotuv hudud yo'qligi uchun to'xtamasin);
-   *   • elementlar faqat `product_id` + soni: o'lchov catalog'dan JONLI
-   *     o'qiladi (qulflangan qaror — order_items da o'lchov snapshoti yo'q);
-   *     katalogsiz yoki o'chirilgan mahsulot — o'lchovsiz (`unmeasuredItems`),
-   *     narx jimgina 0 ga tushmaydi (kamida standart narx);
+   *   • elementlar `product_id` + soni: o'lchov catalog'dan JONLI o'qiladi
+   *     (qulflangan qaror — order_items da o'lchov snapshoti yo'q); katalogsiz
+   *     yoki o'chirilgan mahsulot — o'lchovsiz (`unmeasuredItems`), narx
+   *     jimgina 0 ga tushmaydi (kamida standart narx). 6tGZzupr: hamkor tarifi
+   *     `product_id` siz to'g'ridan o'lchov ham yuboradi;
    *   • egalik tekshiruvi va element chegarasi yo'q (ichki RPC);
    *   • javobda DARVOZA 1/2 uchun `min_delivery_price`,
    *     `extra_cost_limit_amount` va `center`/`address` bazalari.
@@ -436,6 +437,8 @@ export class DeliveryPricingService {
     });
 
     const productQty = new Map<string, number>();
+    // 6tGZzupr: hamkor tarifi — to'g'ridan o'lchov (catalog'ga bormaydi).
+    const directItems: DeliveryPricingItem[] = [];
     let unmeasuredQty = 0;
     for (const raw of rawItems) {
       const quantity = Math.trunc(Number(raw?.quantity ?? 1));
@@ -444,6 +447,18 @@ export class DeliveryPricingService {
         raw?.product_id == null ? '' : String(raw.product_id).trim();
       if (productId && /^\d{1,18}$/.test(productId)) {
         productQty.set(productId, (productQty.get(productId) ?? 0) + quantity);
+      } else if (
+        [raw?.weight_kg, raw?.length_cm, raw?.width_cm, raw?.height_cm].some(
+          (value) => value !== null && value !== undefined,
+        )
+      ) {
+        directItems.push({
+          weight_kg: raw.weight_kg ?? null,
+          length_cm: raw.length_cm ?? null,
+          width_cm: raw.width_cm ?? null,
+          height_cm: raw.height_cm ?? null,
+          quantity,
+        });
       } else {
         unmeasuredQty += quantity;
       }
@@ -479,6 +494,7 @@ export class DeliveryPricingService {
         };
       },
     );
+    items.push(...directItems);
     if (unmeasuredQty > 0) {
       items.push({ weight_kg: null, quantity: unmeasuredQty });
     }
@@ -489,8 +505,8 @@ export class DeliveryPricingService {
         items,
         tariff,
         settings,
-        express: false,
-        pickupCount: 0,
+        express: payload.express === true,
+        pickupCount: payload.pickup_count ?? 0,
       });
     } catch (error) {
       if (error instanceof DeliveryPricingInputError) {

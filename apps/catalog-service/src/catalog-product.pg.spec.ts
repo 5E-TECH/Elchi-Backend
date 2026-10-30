@@ -1143,6 +1143,57 @@ const nameIndexDefs = async (db: DataSource): Promise<string[]> => {
         const byName = await svc.findAll({ user_id: MARKET, search: 'inchi' });
         expect(byName.total).toBe(3);
       });
+
+      it('⭐ 6tGZzupr: «o`lchov kutilmoqda» filtri (haqiqiy SQL) va bo`sh o`lchovni to`ldirish', async () => {
+        const svc = makeService();
+        const system = { id: 'system', roles: ['system'], via: 'partner:7' };
+        const bare = await svc.create(
+          { name: 'Bosh', user_id: MARKET },
+          system,
+        );
+        const weightOnly = await svc.create(
+          { name: 'Faqat vazn', user_id: MARKET, weight_kg: '1' },
+          system,
+        );
+        const flat = await svc.create(
+          {
+            name: 'Hajmsiz',
+            user_id: MARKET,
+            weight_kg: '1',
+            volumetric_enabled: false,
+          },
+          system,
+        );
+        const full = await svc.create({
+          name: 'To`liq',
+          user_id: MARKET,
+          ...MEASURED,
+        });
+        const ids = async (needs_measurement: boolean) =>
+          (await svc.findAll({ user_id: MARKET, needs_measurement })).data
+            .map((p) => p.id)
+            .sort();
+
+        expect(await ids(true)).toEqual([bare.id, weightOnly.id].sort());
+        expect(await ids(false)).toEqual([flat.id, full.id].sort());
+        const listed = await svc.findAll({ user_id: MARKET, limit: 10 });
+        expect(listed.total).toBe(4);
+        expect(
+          listed.data.find((p) => p.id === bare.id)?.needs_measurement,
+        ).toBe(true);
+
+        await svc.fillMissingMeasure(
+          bare.id,
+          { user_id: MARKET, ...MEASURED },
+          system,
+        );
+        expect(await svc.findById(bare.id)).toMatchObject({
+          weight_kg: 1.2,
+          length_cm: 30,
+          needs_measurement: false,
+        });
+        expect(await ids(true)).toEqual([weightOnly.id]);
+      });
     });
   },
 );

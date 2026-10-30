@@ -5,6 +5,7 @@ import {
   Get,
   HttpCode,
   Inject,
+  Logger,
   NotFoundException,
   Param,
   Patch,
@@ -12,11 +13,17 @@ import {
   Query,
   Req,
   Res,
+  ServiceUnavailableException,
   UseGuards,
 } from '@nestjs/common';
 import type { Response } from 'express';
 import { ClientProxy } from '@nestjs/microservices';
 import { firstValueFrom, timeout } from 'rxjs';
+import {
+  isSalePricingEngineActive,
+  readSalePricingConfig,
+  resolveOrderTariffDetailed,
+} from '@app/common';
 import { successRes } from '../../../libs/common/helpers/response';
 import {
   ApiBody,
@@ -44,6 +51,15 @@ import {
   PartnerShipmentsStatusRequestDto,
   UpdatePartnerShipmentRequestDto,
 } from './dto/partner-shipment.swagger.dto';
+import {
+  buildPartnerQuotePayload,
+  parsePartnerTariffQuery,
+  PARTNER_TARIFF_WEIGHT_KG_MAX,
+  type PartnerTariffPayload,
+  toPartnerEngineQuote,
+  toPartnerQuote,
+} from './partner-tariff';
+import type { PartnerTariffQuery } from './partner-tariff';
 
 /**
  * Elchi Partner API HTTP kirish nuqtasi (`/partner/*`).
@@ -162,6 +178,8 @@ export function isPartnerProvisionedMarket(
 @Public()
 @Controller('partner')
 export class PartnerGatewayController {
+  private readonly logger = new Logger(PartnerGatewayController.name);
+
   constructor(
     @Inject('LOGISTICS') private readonly logisticsClient: ClientProxy,
     @Inject('IDENTITY') private readonly identityClient: ClientProxy,
@@ -289,21 +307,81 @@ export class PartnerGatewayController {
 
   /**
    * Yetkazish tarifi (narx preview). Elchi tarifni SOTUVCHI-MARKET bo‘yicha
-   * belgilaydi (region/district faqat yo‘nalish uchun) — shu bois tarif
-   * `elchi_market_id` bilan olinadi. `where_deliver`: center → markazga tarif,
-   * address → uyga tarif.
+   * belgilaydi — shu bois tarif `elchi_market_id` bilan olinadi.
+   * `where_deliver`: center → markazga tarif, address → uyga tarif.
+   *
+   * 6tGZzupr — dvigatelga ulandi, mustaqil tarif tanlovi olib tashlandi:
+   *   - `market_tariff` — ELCHI SOTUVDA OLADIGAN summa
+   *     (`resolveOrderTariffDetailed`, sotuv bilan yagona manba; kalitlar ham
+   *     AYNI). `SALE_PRICING_ENGINE` o'chiq (sukut) — profil tarifi, prod narxi
+   *     o'zgarmaydi. Sotuvchi hali noma'lum — floor faqat `min_delivery_price`
+   *     (`saleMarketPaidMaxOf` qoidasi);
+   *   - `quote` — dvigatel hisobi: o'lchov/express/pickup berilsa, kalit
+   *     o'chiq bo'lsa ham; `logistics.delivery.sale_quote` — sotuvdagi AYNI
+   *     hisob (`quote` emas: u market hududi yo'q bo'lsa 400 berardi);
+   *   - o'lchov yo'q — `estimated: true` va baza tarif. Profilda tarif NULL —
+   *     jadval bazasi (jimgina 0 emas), u ham yo'q — 503. Profilda aniq 0
+   *     (hamkor tarif bermagan market, §5.1) — sotuvda ham 0, shuning uchun 0
+   *     qoladi, yonida `quote` qaytadi;
+   *   - yangi parametrsiz eski so'rov va tarifi bor market — logistics'ga
+   *     BORILMAYDI; dvigatel javob bermasa sotuvdagidek profil tarifi.
+   *
+   * Noma'lum query'lar avvalgidek e'tiborsiz (DTO emas: `forbidNonWhitelisted`
+   * eski hamkorni 400 ga tushirardi).
    */
   @Get('tariff')
-  @ApiOperation({ summary: 'Yetkazish tarifi (market bo‘yicha, narx preview)' })
+  @ApiOperation({
+    summary: 'Yetkazish tarifi (market bo‘yicha, narx preview)',
+    description:
+      "`market_tariff` — Elchi sotuvda oladigan summa. O'lchov berilsa `quote` da dvigatel hisobi; o'lchovsiz — `estimated: true` va baza tarif (jimgina 0 emas).",
+  })
   @ApiQuery({ name: 'elchi_market_id', required: true, type: String })
   @ApiQuery({
     name: 'where_deliver',
     required: false,
     enum: ['center', 'address'],
   })
+  @ApiQuery({
+    name: 'weight_kg',
+    required: false,
+    type: Number,
+    description: `Jami og'irlik, kg (ko'pi bilan 3 kasr, ${PARTNER_TARIFF_WEIGHT_KG_MAX} gacha)`,
+  })
+  @ApiQuery({
+    name: 'length_cm',
+    required: false,
+    type: Number,
+    description: 'Uzunlik, sm — L/W/H uchalasi birga',
+  })
+  @ApiQuery({
+    name: 'width_cm',
+    required: false,
+    type: Number,
+    description: 'Kenglik, sm — L/W/H uchalasi birga',
+  })
+  @ApiQuery({
+    name: 'height_cm',
+    required: false,
+    type: Number,
+    description: 'Balandlik, sm — L/W/H uchalasi birga',
+  })
+  @ApiQuery({ name: 'express', required: false, type: Boolean })
+  @ApiQuery({ name: 'pickup', required: false, type: Boolean })
+  @ApiQuery({
+    name: 'region_id',
+    required: false,
+    type: String,
+    description: 'Qabul qiluvchi viloyati (yo‘nalish tarifi uchun)',
+  })
+  @ApiQuery({
+    name: 'district_id',
+    required: false,
+    type: String,
+    description: 'Qabul qiluvchi tumani (yo‘nalish tarifi uchun)',
+  })
   @ApiOkResponse({
     description:
-      '{ statusCode, message, data: { elchi_market_id, where_deliver, market_tariff } }',
+      '{ statusCode, message, data: { elchi_market_id, where_deliver, market_tariff, tariff_source, estimated, quote } }',
   })
   @ApiNotFoundResponse({
     description: 'Market topilmadi yoki shu hamkorga tegishli emas',
@@ -312,25 +390,24 @@ export class PartnerGatewayController {
     @Query('elchi_market_id') elchiMarketId?: string,
     @Query('where_deliver') whereDeliver?: string,
     @Req() request?: { partner?: PartnerPrincipal },
-  ): Promise<
-    PartnerEnvelope<{
-      elchi_market_id: string;
-      where_deliver: string;
-      market_tariff: number;
-    }>
-  > {
+    @Query() query?: PartnerTariffQuery,
+  ): Promise<PartnerEnvelope<PartnerTariffPayload>> {
     if (!elchiMarketId?.trim()) {
       throw new BadRequestException('elchi_market_id majburiy');
     }
     const mode = whereDeliver === 'center' ? 'center' : 'address';
+    const input = parsePartnerTariffQuery(query);
     const res = await firstValueFrom(
       this.identityClient
         .send<{
           data?: Array<{
             id: string | number;
             username?: string | null;
-            tariff_home?: number;
-            tariff_center?: number;
+            tariff_home?: number | null;
+            tariff_center?: number | null;
+            region_id?: string | null;
+            district_id?: string | null;
+            weight_volume_pricing?: boolean | null;
           }>;
         }>({ cmd: 'identity.market.find_by_ids' }, { ids: [elchiMarketId] })
         .pipe(timeout(8000)),
@@ -341,19 +418,84 @@ export class PartnerGatewayController {
     if (!market || !isPartnerProvisionedMarket(market, request?.partner?.id)) {
       throw new NotFoundException('Market topilmadi');
     }
-    const tariff =
-      mode === 'center'
-        ? (market.tariff_center ?? 0)
-        : (market.tariff_home ?? 0);
+
+    const tariffInput = {
+      snapshot: null,
+      isCenter: mode === 'center',
+      centerTariff: market.tariff_center,
+      homeTariff: market.tariff_home,
+    };
+    const profile = resolveOrderTariffDetailed(tariffInput);
+    const engineActive = isSalePricingEngineActive(
+      readSalePricingConfig(),
+      elchiMarketId,
+      market,
+    );
+    const quote =
+      input.measure ||
+      input.express ||
+      input.pickup ||
+      engineActive ||
+      !profile.standard
+        ? await this.fetchPartnerQuote(
+            buildPartnerQuotePayload(mode, market, input),
+          )
+        : null;
+    if (profile.standard === null && !quote) {
+      throw new ServiceUnavailableException(
+        'Yetkazish tarifini hisoblab bo‘lmadi, keyinroq qayta urinib ko‘ring',
+      );
+    }
+    const resolution =
+      quote && (engineActive || profile.standard === null)
+        ? resolveOrderTariffDetailed({
+            ...tariffInput,
+            engine: toPartnerEngineQuote(quote),
+          })
+        : profile;
+
     return successRes(
       {
         elchi_market_id: String(elchiMarketId),
         where_deliver: mode,
-        market_tariff: Number(tariff),
+        market_tariff: resolution.tariff,
+        tariff_source: resolution.source,
+        estimated: quote ? quote.estimated === true : true,
+        quote: quote ? toPartnerQuote(quote) : null,
       },
       200,
       'tariff',
     );
+  }
+
+  /**
+   * Dvigatel hisobi. Kirish xatosi (400) — hamkorga; boshqa har qanday xato —
+   * `null`: tarif sotuvdagidek profilga tushadi, hamkor oqimi to'xtamaydi.
+   */
+  private async fetchPartnerQuote(
+    payload: ReturnType<typeof buildPartnerQuotePayload>,
+  ): Promise<Record<string, unknown> | null> {
+    try {
+      const res = await firstValueFrom(
+        this.logisticsClient
+          .send<{
+            data?: Record<string, unknown>;
+          }>({ cmd: 'logistics.delivery.sale_quote' }, payload)
+          .pipe(timeout(8000)),
+      );
+      return res?.data ?? null;
+    } catch (error) {
+      const failure = error as { statusCode?: unknown; message?: unknown };
+      const message =
+        typeof failure?.message === 'string' ? failure.message : String(error);
+      if (failure?.statusCode === 400) {
+        throw new BadRequestException(message);
+      }
+      this.logger.warn(
+        `6tGZzupr: yetkazish narxi dvigateli javob bermadi, profil tarifi olindi: ${message}`,
+      );
+      return null;
+    }
   }
 
   /**

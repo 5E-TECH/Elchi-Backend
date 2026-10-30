@@ -258,7 +258,11 @@ describe('QjkMUMIR / Pc4CAFdB — mahsulot ruxsat matritsasi (frontend bilan izc
     );
     expect(catalogSend).toHaveBeenCalledWith(
       { cmd: 'catalog.product.create' },
-      { dto: { name: 'Olma', image_url: undefined, user_id: '121' } },
+      {
+        dto: { name: 'Olma', image_url: undefined, user_id: '121' },
+        // 6tGZzupr: `remove` naqshi — jurnal uchun aktyor.
+        requester: { id: '77', roles: ['registrator'] },
+      },
     );
   });
 
