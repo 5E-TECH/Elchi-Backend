@@ -14,6 +14,7 @@ import {
   PipeTransform,
   Post,
   Query,
+  Headers,
   Req,
   UseGuards,
   Optional,
@@ -24,6 +25,7 @@ import { Roles as RoleEnum, STATUS_CATALOG } from '@app/common';
 import {
   ApiBearerAuth,
   ApiBody,
+  ApiHeader,
   ApiOkResponse,
   ApiOperation,
   ApiParam,
@@ -835,12 +837,25 @@ export class IntegrationGatewayController {
     summary: 'Record a provider remittance and settle receivables',
   })
   @ApiParam({ name: 'id', description: 'Integration id' })
+  @ApiHeader({
+    name: 'Idempotency-Key',
+    required: false,
+    description:
+      'N3yNa6rO: ayni kalit bilan takror so\'rov birinchi to\'lovni qaytaradi (idempotent_replay: true), kassaga ikkinchi marta yozilmaydi.',
+  })
   @ApiBody({ type: CreateRemittanceRequestDto })
   createRemittance(
     @Param('id', ParseIntegrationIdPipe) id: string,
     @Body() dto: CreateRemittanceRequestDto,
     @Req() req: { user?: { sub?: string } },
+    @Headers('idempotency-key') idempotencyKey?: string,
   ) {
+    const key = String(idempotencyKey ?? '').trim();
+    if (key.length > 255) {
+      throw new BadRequestException(
+        'Idempotency-Key 255 belgidan oshmasligi kerak',
+      );
+    }
     return this.integrationClient
       .send(
         { cmd: 'integration.remittance.create' },
@@ -851,6 +866,7 @@ export class IntegrationGatewayController {
           note: dto.note ?? null,
           order_ids: dto.order_ids ?? undefined,
           created_by: req.user?.sub ?? null,
+          idempotency_key: key || null,
         },
       )
       .pipe(timeout(PROVIDER_RPC_TIMEOUT_MS));

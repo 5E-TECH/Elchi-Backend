@@ -59,6 +59,14 @@ export class ProviderRemittance extends BaseEntity {
   @Column({ type: 'bigint', nullable: true })
   created_by!: string | null;
 
+  /**
+   * N3yNa6rO (migratsiya 196) — mijozning `Idempotency-Key` sarlavhasi. Bir
+   * hamkorda takrorlanmaydi (qisman UNIQUE): ayni kalitli takror so'rov yangi
+   * to'lov ochmaydi va pulni kassaga ikkinchi marta yozmaydi.
+   */
+  @Column({ type: 'varchar', length: 255, nullable: true })
+  idempotency_key!: string | null;
+
   /** DxdZFdIk (migratsiya 081) — 'active' | 'cancelled'. */
   @Column({ type: 'varchar', length: 16, default: RemittanceStatus.ACTIVE })
   status!: RemittanceStatus;

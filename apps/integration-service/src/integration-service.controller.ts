@@ -753,6 +753,7 @@ export class IntegrationServiceController {
       note?: string | null;
       order_ids?: string[];
       created_by?: string | null;
+      idempotency_key?: string | null;
     },
     @Ctx() context: RmqContext,
   ) {

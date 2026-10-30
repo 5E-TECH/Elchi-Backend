@@ -22,6 +22,12 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+### 2026-10-30 — Kargo to'lovi: `Idempotency-Key` (N3yNa6rO)
+
+`POST /integrations/:id/remittances` endi ixtiyoriy `Idempotency-Key` sarlavhasini qabul qiladi. Ayni kalit bilan takror so'rov yangi to'lov ochmaydi, kassaga ikkinchi marta yozmaydi va birinchi to'lovni `idempotent_replay: true` bilan qaytaradi (200). Migratsiya 196. Deploy: integration-service, api-gateway.
+
+→ Frontend: to'lov oynasi har ochilganda bitta kalit yaratib yuborsin (tarmoq takrorida ham pul ikki marta yozilmaydi). Hozir UI kalit yubormaydi, ikki marta bosish esa bitta so'rov bilan himoyalangan.
+
 ### 2026-10-30 — Inglizcha xatolar o'zbekchaga: 4xx/5xx matnlari va class-validator (ZDweRm02)
 
 Deploy: **api-gateway, identity, order, logistics, finance, branch, investor, notification, file, catalog, c2c** (faqat
