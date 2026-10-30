@@ -51,6 +51,7 @@ import { ShiftAutoCloseScheduler } from './shift-auto-close/shift-auto-close.sch
 import { ShiftReportService } from './shift-report/shift-report.service';
 import { ShiftReportController } from './shift-report/shift-report.controller';
 import { SHIFT_REPORTS } from './shift-report/shift-report.token';
+import { PaymentCorrection } from './entities/payment-correction.entity';
 
 @Module({
   imports: [
@@ -120,6 +121,8 @@ import { SHIFT_REPORTS } from './shift-report/shift-report.token';
       // qzjTMWPb — kunlik balans snapshot'i (o'qish modeli, migratsiya 176).
       FinanceCashboxDaily,
       FinanceDailySnapshot,
+      // T6 — to'lovni qaytarish / summasini tuzatish jurnali (migratsiya 186).
+      PaymentCorrection,
     ]),
   ],
   controllers: [

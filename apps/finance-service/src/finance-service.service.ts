@@ -65,6 +65,7 @@ import {
 } from '@app/common';
 import { ClientProxy } from '@nestjs/microservices';
 import { firstValueFrom, timeout } from 'rxjs';
+import { randomUUID } from 'node:crypto';
 import { CreateCashboxDto } from './dto/cashbox/create-cashbox.dto';
 import { FindCashboxByUserDto } from './dto/cashbox/find-cashbox-by-user.dto';
 import { UpdateCashboxBalanceDto } from './dto/cashbox/update-cashbox-balance.dto';
@@ -103,6 +104,43 @@ interface MarketPayableOrder {
   paid_amount?: number | string | null;
   extra_cost?: number | string | null;
   createdAt?: string | Date | null;
+}
+
+/** `paymentsFromCourier` / `applyCourierPaymentInTx` kirishi. */
+export interface CourierPaymentInput {
+  courier_id: string;
+  amount: number;
+  payment_method: PaymentMethod;
+  payment_date?: string;
+  comment?: string;
+  market_id?: string;
+  created_by?: string;
+  receiver_user_id?: string;
+  receiver_cashbox_type?: Cashbox_type;
+  // Per-request idempotency token from the gateway; dedupes RMQ redelivery /
+  // double-submit so the cash is never moved twice. (Audit P0-3.)
+  dedup_epoch?: string;
+  /**
+   * Zv3MLn0a — CLICK pul QABUL QILUVCHI kassaning (HQ MAIN yoki menejer
+   * yo'lida filial kassasi) qaysi kartasiga tushdi. Yo'q — Asosiy karta.
+   */
+  card_id?: string;
+}
+
+/** `paymentsToMarket` / `applyMarketPaymentInTx` kirishi. */
+export interface MarketPaymentInput {
+  market_id: string;
+  amount: number;
+  payment_method: PaymentMethod;
+  payment_date?: string;
+  comment?: string;
+  created_by?: string;
+  // Per-request idempotency token from the gateway. (Audit P0-3.)
+  dedup_epoch?: string;
+  // (3PE0B03q) "O'tkazma manbasi" — faqat audit.
+  transfer_source_user_id?: string;
+  // 3PE0B03q — CLICK to'lov MAIN kassaning qaysi nomli kartasidan.
+  card_id?: string;
 }
 
 /** (8OYPuz7J) Smena qatori + ochgan / yopgan xodim ismi (identity'dan). */
@@ -3796,25 +3834,7 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
     };
   }
 
-  async paymentsFromCourier(data: {
-    courier_id: string;
-    amount: number;
-    payment_method: PaymentMethod;
-    payment_date?: string;
-    comment?: string;
-    market_id?: string;
-    created_by?: string;
-    receiver_user_id?: string;
-    receiver_cashbox_type?: Cashbox_type;
-    // Per-request idempotency token from the gateway; dedupes RMQ redelivery /
-    // double-submit so the cash is never moved twice. (Audit P0-3.)
-    dedup_epoch?: string;
-    /**
-     * Zv3MLn0a — CLICK pul QABUL QILUVCHI kassaning (HQ MAIN yoki menejer
-     * yo'lida filial kassasi) qaysi kartasiga tushdi. Yo'q — Asosiy karta.
-     */
-    card_id?: string;
-  }) {
+  async paymentsFromCourier(data: CourierPaymentInput) {
     // (2crjWf7v #3) Kvitansiyadagi "Qabul qildi: <xodim>" — tranzaksiyadan
     // OLDIN, qisqa muddat bilan; xato/timeout — umumiy so'z (pul amali kutmaydi).
     const acceptedByName = await this.userDisplayName(data.created_by);
@@ -3825,62 +3845,12 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
     // transaction is committed and the runner released (never inside the tx).
     let auditedCourierCashboxId: string | null = null;
     try {
-      this.assertBigIntId(data.courier_id, 'courier_id');
-      this.assertPositiveAmount(Number(data.amount));
-      const isClickToMarket =
-        data.payment_method === PaymentMethod.CLICK_TO_MARKET;
-      if (isClickToMarket && !data.market_id) {
-        throw new BadRequestException(
-          "Click_to_market usulida market_id bo'lishi shart va majburiy !!!",
-        );
-      }
-      /**
-       * ⚠️ AUDIT M4. "Marketga o'tkazma" filial kassasi orqali TAQIQLANADI.
-       *
-       * Menejer yo'lida qabul qiluvchi — filial kassasi: unga +X, darhol −X
-       * (MARKET_PAYMENT) yozilardi, market kassasi esa −X. Ledger'da faqat
-       * `courier_to_branch` siljirdi — kuryer qatorlari COURIER_SETTLED
-       * ("pul filialda, HQ'ga qarz") bo'lardi, filial kassasi esa 0. Natijada
-       * abadiy soxta filial qarzi paydo bo'lardi (filial → HQ "Insufficient
-       * cash balance" bilan to'xtardi) va kompaniya holati X ga oshib
-       * ko'rinardi. Bu usul faqat HQ (MAIN) kassasi orqali qoladi.
-       */
-      if (
-        isClickToMarket &&
-        (data.receiver_cashbox_type ?? Cashbox_type.MAIN) ===
-          Cashbox_type.BRANCH
-      ) {
-        throw new BadRequestException(
-          "Marketga o'tkazma (click_to_market) faqat HQ kassasi orqali qabul qilinadi — filial kassasi bu usulda qabul qila olmaydi",
-        );
-      }
-
-      // Lock order: courier → main → market. Same order in paymentsToMarket
-      // and updateBalance to avoid deadlocks across concurrent payments.
-      const courierCashbox = await queryRunner.manager.findOne(Cashbox, {
-        where: {
-          user_id: data.courier_id,
-          cashbox_type: Cashbox_type.FOR_COURIER,
-          isDeleted: false,
-        },
-        lock: { mode: 'pessimistic_write' },
-      });
-      if (!courierCashbox)
-        throw new NotFoundException('Courier cashbox not found');
-
-      // Idempotency: under the courier-cashbox lock, bail out if this exact
-      // payment was already applied (duplicate delivery / double-submit).
-      const dedupKey = String(data.dedup_epoch ?? '').trim();
-      const paymentSourceId = dedupKey ? String(data.courier_id) : null;
-      if (
-        await this.isDuplicateTransfer(queryRunner.manager, {
-          cashbox_id: String(courierCashbox.id),
-          source_type: Source_type.COURIER_PAYMENT,
-          source_id: String(data.courier_id),
-          operation_type: Operation_type.EXPENSE,
-          dedup_epoch: dedupKey,
-        })
-      ) {
+      const applied = await this.applyCourierPaymentInTx(
+        queryRunner.manager,
+        data,
+        { notify: true, acceptedByName },
+      );
+      if (applied.idempotent) {
         await queryRunner.commitTransaction();
         return this.successRes(
           { idempotent: true },
@@ -3888,271 +3858,14 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
           "To'lov allaqachon qabul qilingan (takroriy so'rov)",
         );
       }
-
-      // (QTCUUgjA) Qabul qiluvchi kassada ochiq smena (darvoza yoqilgan
-      // bo'lsa; MAIN — `main`/`all`, menejer yo'lida filial kassasi — faqat
-      // `all`, R6). Idempotentlikdan KEYIN — haqiqiy takroriy so'rov baribir
-      // `idempotent` javob oladi.
-      await this.requireOpenShift(queryRunner.manager, {
-        user_id: String(
-          data.receiver_user_id ?? FinanceServiceService.MAIN_CASHBOX_USER_ID,
-        ),
-        cashbox_type: data.receiver_cashbox_type ?? Cashbox_type.MAIN,
-      });
-
-      // Over-remit guard (Faza 1c / Audit I1): a courier cannot remit more cash
-      // than their cashbox holds. FOR_COURIER allows a negative balance (so
-      // sale-time COD legs work), which means a duplicate-key-evading double
-      // submit, or a wrong amount, would otherwise silently drive the courier
-      // cashbox negative — cash that never physically existed. We check AFTER the
-      // idempotency short-circuit so a genuine retry still returns idempotent.
-      // 1bz6tOle: kuryer kassasi qarz hisobi (naqd/karta ajratmasi yo'q) —
-      // shuning uchun qo'riqchi usuldan qat'i nazar JAMI `balance` bilan;
-      // qabul qiluvchi MAIN/BRANCH kassasi esa updateBalancesByMethod'da usul
-      // bo'yicha tekshiriladi.
-      if (Number(data.amount) > Number(courierCashbox.balance)) {
-        throw new BadRequestException(
-          `To'lov miqdori courier qoldig'idan oshib ketdi (qoldiq: ${Number(
-            courierCashbox.balance,
-          )})`,
-        );
-      }
-
-      const receiverUserId = String(
-        data.receiver_user_id ?? FinanceServiceService.MAIN_CASHBOX_USER_ID,
-      );
-      const receiverCashboxType =
-        data.receiver_cashbox_type ?? Cashbox_type.MAIN;
-
-      let receiverCashbox = await queryRunner.manager.findOne(Cashbox, {
-        where: {
-          user_id: receiverUserId,
-          cashbox_type: receiverCashboxType,
-          isDeleted: false,
-        },
-        lock: { mode: 'pessimistic_write' },
-      });
-      if (!receiverCashbox) {
-        receiverCashbox = await queryRunner.manager.save(
-          queryRunner.manager.create(Cashbox, {
-            user_id: receiverUserId,
-            cashbox_type: receiverCashboxType,
-            balance: 0,
-            balance_cash: 0,
-            balance_card: 0,
-          }),
-        );
-      }
-
-      /**
-       * Marketga o'tkazmada market kassasi ham shu yerda qulflanadi (tartib:
-       * courier → main → market) va pul ko'chishidan OLDIN tekshiriladi
-       * (audit M4): to'lov marketga qarzdan oshmasin — `paymentsToMarket`
-       * dagi qo'riqchi bilan bir xil. Ilgari tekshiruv yo'q edi va noto'g'ri
-       * tanlangan market kassasi jimgina manfiyga ketardi.
-       */
-      let clickMarketCashbox: Cashbox | null = null;
-      if (isClickToMarket) {
-        clickMarketCashbox = await queryRunner.manager.findOne(Cashbox, {
-          where: {
-            user_id: data.market_id,
-            cashbox_type: Cashbox_type.FOR_MARKET,
-            // gEdrZxMz — o'chirilgan (soft-delete) market kassasi tanlanmasin.
-            isDeleted: false,
-          },
-          lock: { mode: 'pessimistic_write' },
-        });
-        if (!clickMarketCashbox)
-          throw new NotFoundException('Market cashbox topilmadi');
-        const marketPayable = Number(clickMarketCashbox.balance ?? 0);
-        if (Number(data.amount) > marketPayable) {
-          throw new BadRequestException(
-            `To'lov miqdori marketga qarzdan oshib ketdi (qarz: ${marketPayable})`,
-          );
-        }
-      }
-
-      this.updateBalancesByMethod(
+      const {
         courierCashbox,
-        Number(data.amount),
-        Operation_type.EXPENSE,
-        data.payment_method ?? PaymentMethod.CASH,
-      );
-      await queryRunner.manager.save(courierCashbox);
-
-      const courierHistory = queryRunner.manager.create(CashboxHistory, {
-        operation_type: Operation_type.EXPENSE,
-        cashbox_id: courierCashbox.id,
-        source_type: Source_type.COURIER_PAYMENT,
-        source_id: paymentSourceId,
-        dedup_epoch: dedupKey,
-        amount: Number(data.amount),
-        balance_after: courierCashbox.balance,
-        balance_cash_after: courierCashbox.balance_cash,
-        balance_card_after: courierCashbox.balance_card,
-        comment: data.comment ?? null,
-        created_by: data.created_by ?? null,
-        payment_date: this.parseDate(data.payment_date ?? null) ?? null,
-        payment_method: data.payment_method,
-        source_user_id: data.courier_id,
-      });
-      const savedCourierHistory =
-        await queryRunner.manager.save(courierHistory);
-
-      this.updateBalancesByMethod(
         receiverCashbox,
-        Number(data.amount),
-        Operation_type.INCOME,
-        data.payment_method ?? PaymentMethod.CASH,
-      );
-      // Zv3MLn0a — qabul qiluvchi kassaning tanlangan kartasi (kassa qulfi
-      // ostida; faqat click; boshqa kassa kartasi 403).
-      const receiverCardId = await applyCashboxCardSelection(
-        queryRunner.manager,
-        receiverCashbox,
-        {
-          card_id: data.card_id ?? null,
-          operation: Operation_type.INCOME,
-          amount: Number(data.amount),
-          payment_method: data.payment_method ?? PaymentMethod.CASH,
-        },
-      );
-      await queryRunner.manager.save(receiverCashbox);
-
-      const receiverHistory = queryRunner.manager.create(CashboxHistory, {
-        operation_type: Operation_type.INCOME,
-        cashbox_id: receiverCashbox.id,
-        card_id: receiverCardId,
-        source_type: Source_type.COURIER_PAYMENT,
-        amount: Number(data.amount),
-        balance_after: receiverCashbox.balance,
-        balance_cash_after: receiverCashbox.balance_cash,
-        balance_card_after: receiverCashbox.balance_card,
-        comment: data.comment ?? null,
-        created_by: data.created_by ?? null,
-        payment_date: this.parseDate(data.payment_date ?? null) ?? null,
-        payment_method: data.payment_method,
-        source_user_id: data.courier_id,
-      });
-      await queryRunner.manager.save(receiverHistory);
-
-      // (ePpLHPX2) Marketga o'tkazmada market kassasi tarix qatori — market
-      // bildirishnomasidagi to'lov raqami.
-      let clickMarketHistory: CashboxHistory | null = null;
-      if (clickMarketCashbox) {
-        const marketCashbox = clickMarketCashbox;
-
-        this.updateBalancesByMethod(
-          receiverCashbox,
-          Number(data.amount),
-          Operation_type.EXPENSE,
-          data.payment_method,
-        );
-        await queryRunner.manager.save(receiverCashbox);
-        await queryRunner.manager.save(
-          queryRunner.manager.create(CashboxHistory, {
-            operation_type: Operation_type.EXPENSE,
-            cashbox_id: receiverCashbox.id,
-            source_type: Source_type.MARKET_PAYMENT,
-            amount: Number(data.amount),
-            balance_after: receiverCashbox.balance,
-            balance_cash_after: receiverCashbox.balance_cash,
-            balance_card_after: receiverCashbox.balance_card,
-            comment: data.comment ?? null,
-            created_by: data.created_by ?? null,
-            payment_date: this.parseDate(data.payment_date ?? null) ?? null,
-            payment_method: data.payment_method,
-            source_user_id: data.market_id,
-          }),
-        );
-
-        this.updateBalancesByMethod(
-          marketCashbox,
-          Number(data.amount),
-          Operation_type.EXPENSE,
-          data.payment_method,
-        );
-        await queryRunner.manager.save(marketCashbox);
-        clickMarketHistory = await queryRunner.manager.save(
-          queryRunner.manager.create(CashboxHistory, {
-            operation_type: Operation_type.EXPENSE,
-            cashbox_id: marketCashbox.id,
-            source_type: Source_type.MARKET_PAYMENT,
-            amount: Number(data.amount),
-            balance_after: marketCashbox.balance,
-            balance_cash_after: marketCashbox.balance_cash,
-            balance_card_after: marketCashbox.balance_card,
-            comment: data.comment ?? null,
-            created_by: data.created_by ?? null,
-            payment_date: this.parseDate(data.payment_date ?? null) ?? null,
-            payment_method: data.payment_method,
-            source_user_id: data.market_id,
-          }),
-        );
-      }
-
-      // Advance the per-order FIFO settlement ledger (courier → branch) in the
-      // SAME transaction as the cashbox move (Faza 2a). Reliable outbox delivery
-      // to order-service replaces the old best-effort gateway bridge.
-      const advancePayload = await this.enqueueSettlementAdvance(
-        queryRunner.manager,
-        'courier_to_branch',
-        String(data.courier_id),
-        Number(data.amount),
-        data.created_by,
+        clickMarketCashbox,
+        advancePayload,
+        marketAdvancePayload,
         dedupKey,
-      );
-      /**
-       * Marketga o'tkazma — market bo'g'ini ham yopiladi (audit M4): ayni
-       * tranzaksiyada `hq_to_market` siljishi navbatga qo'yiladi. Ilgari
-       * faqat `courier_to_branch` siljirdi va market qatorlari hech qachon
-       * MARKET_SETTLED bo'lmasdi (db-reconcile marketni −X deb ko'rsatardi).
-       * Token alohida (`:m`) — order-service ikki siljishni bir-biridan
-       * farqlab dedup qiladi; token bo'lmasa dedup ham yo'q (avvalgidek).
-       */
-      const marketAdvancePayload = clickMarketCashbox
-        ? await this.enqueueSettlementAdvance(
-            queryRunner.manager,
-            'hq_to_market',
-            String(data.market_id),
-            Number(data.amount),
-            data.created_by,
-            dedupKey ? `${dedupKey}:m` : '',
-          )
-        : null;
-
-      // (ePpLHPX2) `finance.payment_received` — puli ketgan tomon (kuryer:
-      // topshirgani qabul qilindi) va o'tkazmada puli kelgan tomon (market).
-      // Faqat outbox, AYNAN shu tranzaksiyada (oxirgi qadam — oldingi har
-      // qanday xato bildirishnomani ham yozdirmaydi).
-      await this.financeNotifications?.paymentReceived(
-        {
-          kind: 'courier_payment',
-          recipient_id: data.courier_id,
-          payment_id: savedCourierHistory?.id,
-          amount: Number(data.amount),
-          payment_method: data.payment_method,
-          // (2crjWf7v #3) kvitansiya: kim qabul qildi, kuryerda qolgan naqd.
-          balance_after: savedCourierHistory?.balance_after ?? null,
-          payment_date: data.payment_date ?? null,
-          accepted_by_name: acceptedByName,
-        },
-        queryRunner.manager,
-      );
-      if (clickMarketCashbox) {
-        await this.financeNotifications?.paymentReceived(
-          {
-            kind: 'market_payment',
-            recipient_id: data.market_id,
-            payment_id: clickMarketHistory?.id,
-            amount: Number(data.amount),
-            payment_method: data.payment_method,
-            balance_after: clickMarketHistory?.balance_after ?? null,
-            payment_date: data.payment_date ?? null,
-          },
-          queryRunner.manager,
-        );
-      }
+      } = applied;
 
       await queryRunner.commitTransaction();
       // Immediate best-effort publish to close the outbox-poll lag (Faza 2c).
@@ -4202,6 +3915,8 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
             balance_card: receiverCashbox.balance_card,
             updated_at: receiverCashbox.updatedAt,
           },
+          // T6 — to'lov oyoqlari kaliti (qaytarish / tahrirlash shu bilan).
+          transfer_id: applied.transferId,
         },
         201,
         "To'lov qabul qilindi !!! ",
@@ -4238,6 +3953,387 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         });
       }
     }
+  }
+
+  /**
+   * T6 — kuryerdan pul qabul qilishning PUL QISMI chaqiruvchining
+   * tranzaksiyasida (`manager`). `paymentsFromCourier` (oddiy to'lov) va
+   * to'lov summasini tuzatish (`PaymentCorrectionService`: teskari qatorlardan
+   * keyin yangi summa bilan, AYNI tranzaksiyada) ishlatadi.
+   *
+   * Barcha oyoqlar bitta `transfer_id` bilan yoziladi. Commit, tezkor
+   * publish, fon ishlari va audit — chaqiruvchida.
+   *
+   * `opts.notify` — `finance.payment_received` (kvitansiya). Tuzatishda YO'Q
+   * (tomonlarga `finance.payment_corrected` boradi).
+   * `opts.skipShiftGate` — smena tekshiruvini chaqiruvchi o'zi (kod bilan)
+   * qilgan bo'lsa.
+   */
+  async applyCourierPaymentInTx(
+    manager: EntityManager,
+    data: CourierPaymentInput,
+    opts: {
+      notify: boolean;
+      acceptedByName?: string | null;
+      transferId?: string;
+      skipShiftGate?: boolean;
+    },
+  ): Promise<
+    | { idempotent: true }
+    | {
+        idempotent: false;
+        transferId: string;
+        dedupKey: string;
+        courierCashbox: Cashbox;
+        receiverCashbox: Cashbox;
+        clickMarketCashbox: Cashbox | null;
+        courierHistory: CashboxHistory;
+        advancePayload: Record<string, unknown>;
+        marketAdvancePayload: Record<string, unknown> | null;
+      }
+  > {
+    this.assertBigIntId(data.courier_id, 'courier_id');
+    this.assertPositiveAmount(Number(data.amount));
+    const isClickToMarket =
+      data.payment_method === PaymentMethod.CLICK_TO_MARKET;
+    if (isClickToMarket && !data.market_id) {
+      throw new BadRequestException(
+        "Click_to_market usulida market_id bo'lishi shart va majburiy !!!",
+      );
+    }
+    /**
+     * ⚠️ AUDIT M4. "Marketga o'tkazma" filial kassasi orqali TAQIQLANADI.
+     *
+     * Menejer yo'lida qabul qiluvchi — filial kassasi: unga +X, darhol −X
+     * (MARKET_PAYMENT) yozilardi, market kassasi esa −X. Ledger'da faqat
+     * `courier_to_branch` siljirdi — kuryer qatorlari COURIER_SETTLED
+     * ("pul filialda, HQ'ga qarz") bo'lardi, filial kassasi esa 0. Natijada
+     * abadiy soxta filial qarzi paydo bo'lardi (filial → HQ "Insufficient
+     * cash balance" bilan to'xtardi) va kompaniya holati X ga oshib
+     * ko'rinardi. Bu usul faqat HQ (MAIN) kassasi orqali qoladi.
+     */
+    if (
+      isClickToMarket &&
+      (data.receiver_cashbox_type ?? Cashbox_type.MAIN) === Cashbox_type.BRANCH
+    ) {
+      throw new BadRequestException(
+        "Marketga o'tkazma (click_to_market) faqat HQ kassasi orqali qabul qilinadi — filial kassasi bu usulda qabul qila olmaydi",
+      );
+    }
+
+    // Lock order: courier → main → market. Same order in paymentsToMarket
+    // and updateBalance to avoid deadlocks across concurrent payments.
+    const courierCashbox = await manager.findOne(Cashbox, {
+      where: {
+        user_id: data.courier_id,
+        cashbox_type: Cashbox_type.FOR_COURIER,
+        isDeleted: false,
+      },
+      lock: { mode: 'pessimistic_write' },
+    });
+    if (!courierCashbox)
+      throw new NotFoundException('Courier cashbox not found');
+
+    // Idempotency: under the courier-cashbox lock, bail out if this exact
+    // payment was already applied (duplicate delivery / double-submit).
+    const dedupKey = String(data.dedup_epoch ?? '').trim();
+    const paymentSourceId = dedupKey ? String(data.courier_id) : null;
+    if (
+      await this.isDuplicateTransfer(manager, {
+        cashbox_id: String(courierCashbox.id),
+        source_type: Source_type.COURIER_PAYMENT,
+        source_id: String(data.courier_id),
+        operation_type: Operation_type.EXPENSE,
+        dedup_epoch: dedupKey,
+      })
+    ) {
+      return { idempotent: true };
+    }
+
+    // (QTCUUgjA) Qabul qiluvchi kassada ochiq smena (darvoza yoqilgan
+    // bo'lsa; MAIN — `main`/`all`, menejer yo'lida filial kassasi — faqat
+    // `all`, R6). Idempotentlikdan KEYIN — haqiqiy takroriy so'rov baribir
+    // `idempotent` javob oladi.
+    if (!opts.skipShiftGate) {
+      await this.requireOpenShift(manager, {
+        user_id: String(
+          data.receiver_user_id ?? FinanceServiceService.MAIN_CASHBOX_USER_ID,
+        ),
+        cashbox_type: data.receiver_cashbox_type ?? Cashbox_type.MAIN,
+      });
+    }
+
+    // Over-remit guard (Faza 1c / Audit I1): a courier cannot remit more cash
+    // than their cashbox holds. FOR_COURIER allows a negative balance (so
+    // sale-time COD legs work), which means a duplicate-key-evading double
+    // submit, or a wrong amount, would otherwise silently drive the courier
+    // cashbox negative — cash that never physically existed. We check AFTER the
+    // idempotency short-circuit so a genuine retry still returns idempotent.
+    // 1bz6tOle: kuryer kassasi qarz hisobi (naqd/karta ajratmasi yo'q) —
+    // shuning uchun qo'riqchi usuldan qat'i nazar JAMI `balance` bilan;
+    // qabul qiluvchi MAIN/BRANCH kassasi esa updateBalancesByMethod'da usul
+    // bo'yicha tekshiriladi.
+    if (Number(data.amount) > Number(courierCashbox.balance)) {
+      throw new BadRequestException(
+        `To'lov miqdori courier qoldig'idan oshib ketdi (qoldiq: ${Number(
+          courierCashbox.balance,
+        )})`,
+      );
+    }
+
+    const receiverUserId = String(
+      data.receiver_user_id ?? FinanceServiceService.MAIN_CASHBOX_USER_ID,
+    );
+    const receiverCashboxType = data.receiver_cashbox_type ?? Cashbox_type.MAIN;
+
+    let receiverCashbox = await manager.findOne(Cashbox, {
+      where: {
+        user_id: receiverUserId,
+        cashbox_type: receiverCashboxType,
+        isDeleted: false,
+      },
+      lock: { mode: 'pessimistic_write' },
+    });
+    if (!receiverCashbox) {
+      receiverCashbox = await manager.save(
+        manager.create(Cashbox, {
+          user_id: receiverUserId,
+          cashbox_type: receiverCashboxType,
+          balance: 0,
+          balance_cash: 0,
+          balance_card: 0,
+        }),
+      );
+    }
+
+    /**
+     * Marketga o'tkazmada market kassasi ham shu yerda qulflanadi (tartib:
+     * courier → main → market) va pul ko'chishidan OLDIN tekshiriladi
+     * (audit M4): to'lov marketga qarzdan oshmasin — `paymentsToMarket`
+     * dagi qo'riqchi bilan bir xil. Ilgari tekshiruv yo'q edi va noto'g'ri
+     * tanlangan market kassasi jimgina manfiyga ketardi.
+     */
+    let clickMarketCashbox: Cashbox | null = null;
+    if (isClickToMarket) {
+      clickMarketCashbox = await manager.findOne(Cashbox, {
+        where: {
+          user_id: data.market_id,
+          cashbox_type: Cashbox_type.FOR_MARKET,
+          // gEdrZxMz — o'chirilgan (soft-delete) market kassasi tanlanmasin.
+          isDeleted: false,
+        },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!clickMarketCashbox)
+        throw new NotFoundException('Market cashbox topilmadi');
+      const marketPayable = Number(clickMarketCashbox.balance ?? 0);
+      if (Number(data.amount) > marketPayable) {
+        throw new BadRequestException(
+          `To'lov miqdori marketga qarzdan oshib ketdi (qarz: ${marketPayable})`,
+        );
+      }
+    }
+
+    const transferId = opts.transferId ?? randomUUID();
+
+    this.updateBalancesByMethod(
+      courierCashbox,
+      Number(data.amount),
+      Operation_type.EXPENSE,
+      data.payment_method ?? PaymentMethod.CASH,
+    );
+    await manager.save(courierCashbox);
+
+    const courierHistory = manager.create(CashboxHistory, {
+      operation_type: Operation_type.EXPENSE,
+      cashbox_id: courierCashbox.id,
+      source_type: Source_type.COURIER_PAYMENT,
+      source_id: paymentSourceId,
+      dedup_epoch: dedupKey,
+      transfer_id: transferId,
+      amount: Number(data.amount),
+      balance_after: courierCashbox.balance,
+      balance_cash_after: courierCashbox.balance_cash,
+      balance_card_after: courierCashbox.balance_card,
+      comment: data.comment ?? null,
+      created_by: data.created_by ?? null,
+      payment_date: this.parseDate(data.payment_date ?? null) ?? null,
+      payment_method: data.payment_method,
+      source_user_id: data.courier_id,
+    });
+    const savedCourierHistory = await manager.save(courierHistory);
+
+    this.updateBalancesByMethod(
+      receiverCashbox,
+      Number(data.amount),
+      Operation_type.INCOME,
+      data.payment_method ?? PaymentMethod.CASH,
+    );
+    // Zv3MLn0a — qabul qiluvchi kassaning tanlangan kartasi (kassa qulfi
+    // ostida; faqat click; boshqa kassa kartasi 403).
+    const receiverCardId = await applyCashboxCardSelection(
+      manager,
+      receiverCashbox,
+      {
+        card_id: data.card_id ?? null,
+        operation: Operation_type.INCOME,
+        amount: Number(data.amount),
+        payment_method: data.payment_method ?? PaymentMethod.CASH,
+      },
+    );
+    await manager.save(receiverCashbox);
+
+    const receiverHistory = manager.create(CashboxHistory, {
+      operation_type: Operation_type.INCOME,
+      cashbox_id: receiverCashbox.id,
+      card_id: receiverCardId,
+      source_type: Source_type.COURIER_PAYMENT,
+      transfer_id: transferId,
+      amount: Number(data.amount),
+      balance_after: receiverCashbox.balance,
+      balance_cash_after: receiverCashbox.balance_cash,
+      balance_card_after: receiverCashbox.balance_card,
+      comment: data.comment ?? null,
+      created_by: data.created_by ?? null,
+      payment_date: this.parseDate(data.payment_date ?? null) ?? null,
+      payment_method: data.payment_method,
+      source_user_id: data.courier_id,
+    });
+    await manager.save(receiverHistory);
+
+    // (ePpLHPX2) Marketga o'tkazmada market kassasi tarix qatori — market
+    // bildirishnomasidagi to'lov raqami.
+    let clickMarketHistory: CashboxHistory | null = null;
+    if (clickMarketCashbox) {
+      const marketCashbox = clickMarketCashbox;
+
+      this.updateBalancesByMethod(
+        receiverCashbox,
+        Number(data.amount),
+        Operation_type.EXPENSE,
+        data.payment_method,
+      );
+      await manager.save(receiverCashbox);
+      await manager.save(
+        manager.create(CashboxHistory, {
+          operation_type: Operation_type.EXPENSE,
+          cashbox_id: receiverCashbox.id,
+          source_type: Source_type.MARKET_PAYMENT,
+          transfer_id: transferId,
+          amount: Number(data.amount),
+          balance_after: receiverCashbox.balance,
+          balance_cash_after: receiverCashbox.balance_cash,
+          balance_card_after: receiverCashbox.balance_card,
+          comment: data.comment ?? null,
+          created_by: data.created_by ?? null,
+          payment_date: this.parseDate(data.payment_date ?? null) ?? null,
+          payment_method: data.payment_method,
+          source_user_id: data.market_id,
+        }),
+      );
+
+      this.updateBalancesByMethod(
+        marketCashbox,
+        Number(data.amount),
+        Operation_type.EXPENSE,
+        data.payment_method,
+      );
+      await manager.save(marketCashbox);
+      clickMarketHistory = await manager.save(
+        manager.create(CashboxHistory, {
+          operation_type: Operation_type.EXPENSE,
+          cashbox_id: marketCashbox.id,
+          source_type: Source_type.MARKET_PAYMENT,
+          transfer_id: transferId,
+          amount: Number(data.amount),
+          balance_after: marketCashbox.balance,
+          balance_cash_after: marketCashbox.balance_cash,
+          balance_card_after: marketCashbox.balance_card,
+          comment: data.comment ?? null,
+          created_by: data.created_by ?? null,
+          payment_date: this.parseDate(data.payment_date ?? null) ?? null,
+          payment_method: data.payment_method,
+          source_user_id: data.market_id,
+        }),
+      );
+    }
+
+    // Advance the per-order FIFO settlement ledger (courier → branch) in the
+    // SAME transaction as the cashbox move (Faza 2a). Reliable outbox delivery
+    // to order-service replaces the old best-effort gateway bridge.
+    const advancePayload = await this.enqueueSettlementAdvance(
+      manager,
+      'courier_to_branch',
+      String(data.courier_id),
+      Number(data.amount),
+      data.created_by,
+      dedupKey,
+    );
+    /**
+     * Marketga o'tkazma — market bo'g'ini ham yopiladi (audit M4): ayni
+     * tranzaksiyada `hq_to_market` siljishi navbatga qo'yiladi. Ilgari
+     * faqat `courier_to_branch` siljirdi va market qatorlari hech qachon
+     * MARKET_SETTLED bo'lmasdi (db-reconcile marketni −X deb ko'rsatardi).
+     * Token alohida (`:m`) — order-service ikki siljishni bir-biridan
+     * farqlab dedup qiladi; token bo'lmasa dedup ham yo'q (avvalgidek).
+     */
+    const marketAdvancePayload = clickMarketCashbox
+      ? await this.enqueueSettlementAdvance(
+          manager,
+          'hq_to_market',
+          String(data.market_id),
+          Number(data.amount),
+          data.created_by,
+          dedupKey ? `${dedupKey}:m` : '',
+        )
+      : null;
+
+    if (opts.notify) {
+      // (ePpLHPX2) `finance.payment_received` — puli ketgan tomon (kuryer:
+      // topshirgani qabul qilindi) va o'tkazmada puli kelgan tomon (market).
+      // Faqat outbox, AYNAN shu tranzaksiyada (oxirgi qadam — oldingi har
+      // qanday xato bildirishnomani ham yozdirmaydi).
+      await this.financeNotifications?.paymentReceived(
+        {
+          kind: 'courier_payment',
+          recipient_id: data.courier_id,
+          payment_id: savedCourierHistory?.id,
+          amount: Number(data.amount),
+          payment_method: data.payment_method,
+          // (2crjWf7v #3) kvitansiya: kim qabul qildi, kuryerda qolgan naqd.
+          balance_after: savedCourierHistory?.balance_after ?? null,
+          payment_date: data.payment_date ?? null,
+          accepted_by_name: opts.acceptedByName ?? null,
+        },
+        manager,
+      );
+      if (clickMarketCashbox) {
+        await this.financeNotifications?.paymentReceived(
+          {
+            kind: 'market_payment',
+            recipient_id: data.market_id,
+            payment_id: clickMarketHistory?.id,
+            amount: Number(data.amount),
+            payment_method: data.payment_method,
+            balance_after: clickMarketHistory?.balance_after ?? null,
+            payment_date: data.payment_date ?? null,
+          },
+          manager,
+        );
+      }
+    }
+
+    return {
+      idempotent: false,
+      transferId,
+      dedupKey,
+      courierCashbox,
+      receiverCashbox,
+      clickMarketCashbox,
+      courierHistory: savedCourierHistory,
+      advancePayload,
+      marketAdvancePayload,
+    };
   }
 
   /**
@@ -4476,20 +4572,7 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  async paymentsToMarket(data: {
-    market_id: string;
-    amount: number;
-    payment_method: PaymentMethod;
-    payment_date?: string;
-    comment?: string;
-    created_by?: string;
-    // Per-request idempotency token from the gateway. (Audit P0-3.)
-    dedup_epoch?: string;
-    // (3PE0B03q) "O'tkazma manbasi" — faqat audit.
-    transfer_source_user_id?: string;
-    // 3PE0B03q — CLICK to'lov MAIN kassaning qaysi nomli kartasidan.
-    card_id?: string;
-  }) {
+  async paymentsToMarket(data: MarketPaymentInput) {
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
     await queryRunner.startTransaction();
@@ -4497,44 +4580,12 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
     // transaction is committed and the runner released (never inside the tx).
     let auditedMarketCashboxId: string | null = null;
     try {
-      this.assertBigIntId(data.market_id, 'market_id');
-      this.assertPositiveAmount(Number(data.amount));
-      const transferSourceUserId = this.resolveTransferSourceUserId(data);
-
-      // Lock order: main → market (same order as paymentsFromCourier to avoid
-      // cross-method deadlocks).
-      const mainCashbox = await queryRunner.manager.findOne(Cashbox, {
-        where: {
-          user_id: FinanceServiceService.MAIN_CASHBOX_USER_ID,
-          cashbox_type: Cashbox_type.MAIN,
-        },
-        lock: { mode: 'pessimistic_write' },
-      });
-      if (!mainCashbox) throw new NotFoundException('Main cashbox not found');
-
-      const marketCashbox = await queryRunner.manager.findOne(Cashbox, {
-        where: {
-          user_id: data.market_id,
-          cashbox_type: Cashbox_type.FOR_MARKET,
-        },
-        lock: { mode: 'pessimistic_write' },
-      });
-      if (!marketCashbox)
-        throw new NotFoundException('Market cashbox not found');
-
-      // Idempotency: under the main+market cashbox locks, bail out if already
-      // applied (duplicate delivery / double-submit). (Audit P0-3.)
-      const dedupKey = String(data.dedup_epoch ?? '').trim();
-      const paymentSourceId = dedupKey ? String(data.market_id) : null;
-      if (
-        await this.isDuplicateTransfer(queryRunner.manager, {
-          cashbox_id: String(mainCashbox.id),
-          source_type: Source_type.MARKET_PAYMENT,
-          source_id: String(data.market_id),
-          operation_type: Operation_type.EXPENSE,
-          dedup_epoch: dedupKey,
-        })
-      ) {
+      const applied = await this.applyMarketPaymentInTx(
+        queryRunner.manager,
+        data,
+        { notify: true },
+      );
+      if (applied.idempotent) {
         await queryRunner.commitTransaction();
         return this.successRes(
           { idempotent: true },
@@ -4542,132 +4593,7 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
           "To'lov allaqachon bajarilgan (takroriy so'rov)",
         );
       }
-
-      // (QTCUUgjA) Pul MAIN kassadan chiqadi — ochiq smena shart (darvoza
-      // yoqilgan bo'lsa). Idempotentlikdan KEYIN.
-      await this.requireOpenShift(queryRunner.manager, {
-        user_id: FinanceServiceService.MAIN_CASHBOX_USER_ID,
-        cashbox_type: Cashbox_type.MAIN,
-      });
-
-      /**
-       * ORTIQCHA TO'LOV QO'RIQCHISI (audit M9).
-       *
-       * Kuryerdan pul qabul qilishda bunday tekshiruv bor edi
-       * (`paymentsFromCourier`), marketga to'lashda esa yo'q: operator xato
-       * raqam kiritsa market kassasi jimgina manfiyga ketardi (FOR_MARKET
-       * manfiy balansga ruxsat beradi), ya'ni "market bizga qarzdor" degan
-       * soxta holat paydo bo'lardi va uni hech narsa ko'rsatmasdi.
-       *
-       * Tekshiruv idempotentlik qisqa tutashuvidan KEYIN turadi, shunda
-       * haqiqiy takroriy so'rov baribir `idempotent` javobini oladi.
-       */
-      const marketPayable = Number(marketCashbox.balance ?? 0);
-      if (Number(data.amount) > marketPayable) {
-        throw new BadRequestException(
-          `To'lov miqdori marketga qarzdan oshib ketdi (qarz: ${marketPayable})`,
-        );
-      }
-
-      this.updateBalancesByMethod(
-        mainCashbox,
-        Number(data.amount),
-        Operation_type.EXPENSE,
-        data.payment_method ?? PaymentMethod.CASH,
-      );
-      const mainCardId = await applyCashboxCardSelection(
-        queryRunner.manager,
-        mainCashbox,
-        {
-          card_id: data.card_id ?? null,
-          operation: Operation_type.EXPENSE,
-          amount: Number(data.amount),
-          payment_method: data.payment_method ?? PaymentMethod.CASH,
-        },
-      );
-      await queryRunner.manager.save(mainCashbox);
-      await queryRunner.manager.save(
-        queryRunner.manager.create(CashboxHistory, {
-          operation_type: Operation_type.EXPENSE,
-          cashbox_id: mainCashbox.id,
-          card_id: mainCardId,
-          source_type: Source_type.MARKET_PAYMENT,
-          source_id: paymentSourceId,
-          dedup_epoch: dedupKey,
-          amount: Number(data.amount),
-          balance_after: mainCashbox.balance,
-          balance_cash_after: mainCashbox.balance_cash,
-          balance_card_after: mainCashbox.balance_card,
-          comment: data.comment ?? null,
-          created_by: data.created_by ?? null,
-          payment_date: this.parseDate(data.payment_date ?? null) ?? null,
-          payment_method: data.payment_method,
-          source_user_id: data.market_id,
-          transfer_source_user_id: transferSourceUserId,
-        }),
-      );
-
-      // The FOR_MARKET cashbox balance is HQ's PAYABLE to the market (money HQ
-      // owes them): a sale ACCRUES it (+income, order-lifecycle sell) and
-      // financialBalance() reads it as `market_payable` and SUBTRACTS it. Paying
-      // the market must CLEAR that payable (-expense), mirroring the courier
-      // cashbox (sale income → payment expense → nets to 0). Crediting it here
-      // double-counted the payable, so a fully-paid market showed 2× owed and
-      // financial-balanse went negative on every settled order.
-      // (Live-E2E money audit 2026-08-13.)
-      this.updateBalancesByMethod(
-        marketCashbox,
-        Number(data.amount),
-        Operation_type.EXPENSE,
-        data.payment_method ?? PaymentMethod.CASH,
-      );
-      await queryRunner.manager.save(marketCashbox);
-      const marketHistory = await queryRunner.manager.save(
-        queryRunner.manager.create(CashboxHistory, {
-          operation_type: Operation_type.EXPENSE,
-          cashbox_id: marketCashbox.id,
-          source_type: Source_type.MARKET_PAYMENT,
-          amount: Number(data.amount),
-          balance_after: marketCashbox.balance,
-          balance_cash_after: marketCashbox.balance_cash,
-          balance_card_after: marketCashbox.balance_card,
-          comment: data.comment ?? null,
-          created_by: data.created_by ?? null,
-          payment_date: this.parseDate(data.payment_date ?? null) ?? null,
-          payment_method: data.payment_method,
-          source_user_id: data.market_id,
-          transfer_source_user_id: transferSourceUserId,
-        }),
-      );
-
-      // Advance the per-order FIFO settlement ledger (HQ → market) in the SAME
-      // transaction as the cashbox move (Faza 2a). Reliable outbox delivery to
-      // order-service replaces the old best-effort gateway bridge.
-      const advancePayload = await this.enqueueSettlementAdvance(
-        queryRunner.manager,
-        'hq_to_market',
-        String(data.market_id),
-        Number(data.amount),
-        data.created_by,
-        dedupKey,
-      );
-
-      // (ePpLHPX2) `finance.payment_received` — puli kelgan tomon (market).
-      // Faqat outbox, AYNAN shu tranzaksiyada: rollback bo'lsa xabar ham
-      // yo'q; notification-service o'chiq bo'lsa ham to'lov o'tadi.
-      await this.financeNotifications?.paymentReceived(
-        {
-          kind: 'market_payment',
-          recipient_id: data.market_id,
-          payment_id: marketHistory?.id,
-          amount: Number(data.amount),
-          payment_method: data.payment_method,
-          // (VICfJuoi #3) summa, sana, qoldiq (oldin → keyin) xabarda.
-          balance_after: marketHistory?.balance_after ?? null,
-          payment_date: data.payment_date ?? null,
-        },
-        queryRunner.manager,
-      );
+      const { marketCashbox, advancePayload, dedupKey } = applied;
 
       await queryRunner.commitTransaction();
       // Immediate best-effort publish to close the outbox-poll lag (Faza 2c).
@@ -4688,7 +4614,11 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         dedup_key: dedupKey,
       });
 
-      return this.successRes({}, 200, `Marketga ${data.amount} so'm to'landi`);
+      return this.successRes(
+        { transfer_id: applied.transferId },
+        200,
+        `Marketga ${data.amount} so'm to'landi`,
+      );
     } catch (error) {
       await queryRunner.rollbackTransaction();
       this.toRpcError(error);
@@ -4717,6 +4647,209 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         });
       }
     }
+  }
+
+  /**
+   * T6 — marketga to'lovning PUL QISMI chaqiruvchining tranzaksiyasida
+   * (`applyCourierPaymentInTx` bilan bir xil naqsh). Ikkala oyoq bitta
+   * `transfer_id` bilan. `opts.notify` — `finance.payment_received`
+   * (tuzatishda yo'q).
+   */
+  async applyMarketPaymentInTx(
+    manager: EntityManager,
+    data: MarketPaymentInput,
+    opts: { notify: boolean; transferId?: string; skipShiftGate?: boolean },
+  ): Promise<
+    | { idempotent: true }
+    | {
+        idempotent: false;
+        transferId: string;
+        dedupKey: string;
+        mainCashbox: Cashbox;
+        marketCashbox: Cashbox;
+        marketHistory: CashboxHistory;
+        advancePayload: Record<string, unknown>;
+      }
+  > {
+    this.assertBigIntId(data.market_id, 'market_id');
+    this.assertPositiveAmount(Number(data.amount));
+    const transferSourceUserId = this.resolveTransferSourceUserId(data);
+
+    // Lock order: main → market (same order as paymentsFromCourier to avoid
+    // cross-method deadlocks).
+    const mainCashbox = await manager.findOne(Cashbox, {
+      where: {
+        user_id: FinanceServiceService.MAIN_CASHBOX_USER_ID,
+        cashbox_type: Cashbox_type.MAIN,
+      },
+      lock: { mode: 'pessimistic_write' },
+    });
+    if (!mainCashbox) throw new NotFoundException('Main cashbox not found');
+
+    const marketCashbox = await manager.findOne(Cashbox, {
+      where: {
+        user_id: data.market_id,
+        cashbox_type: Cashbox_type.FOR_MARKET,
+      },
+      lock: { mode: 'pessimistic_write' },
+    });
+    if (!marketCashbox) throw new NotFoundException('Market cashbox not found');
+
+    // Idempotency: under the main+market cashbox locks, bail out if already
+    // applied (duplicate delivery / double-submit). (Audit P0-3.)
+    const dedupKey = String(data.dedup_epoch ?? '').trim();
+    const paymentSourceId = dedupKey ? String(data.market_id) : null;
+    if (
+      await this.isDuplicateTransfer(manager, {
+        cashbox_id: String(mainCashbox.id),
+        source_type: Source_type.MARKET_PAYMENT,
+        source_id: String(data.market_id),
+        operation_type: Operation_type.EXPENSE,
+        dedup_epoch: dedupKey,
+      })
+    ) {
+      return { idempotent: true };
+    }
+
+    // (QTCUUgjA) Pul MAIN kassadan chiqadi — ochiq smena shart (darvoza
+    // yoqilgan bo'lsa). Idempotentlikdan KEYIN.
+    if (!opts.skipShiftGate) {
+      await this.requireOpenShift(manager, {
+        user_id: FinanceServiceService.MAIN_CASHBOX_USER_ID,
+        cashbox_type: Cashbox_type.MAIN,
+      });
+    }
+
+    /**
+     * ORTIQCHA TO'LOV QO'RIQCHISI (audit M9).
+     *
+     * Kuryerdan pul qabul qilishda bunday tekshiruv bor edi
+     * (`paymentsFromCourier`), marketga to'lashda esa yo'q: operator xato
+     * raqam kiritsa market kassasi jimgina manfiyga ketardi (FOR_MARKET
+     * manfiy balansga ruxsat beradi), ya'ni "market bizga qarzdor" degan
+     * soxta holat paydo bo'lardi va uni hech narsa ko'rsatmasdi.
+     *
+     * Tekshiruv idempotentlik qisqa tutashuvidan KEYIN turadi, shunda
+     * haqiqiy takroriy so'rov baribir `idempotent` javobini oladi.
+     */
+    const marketPayable = Number(marketCashbox.balance ?? 0);
+    if (Number(data.amount) > marketPayable) {
+      throw new BadRequestException(
+        `To'lov miqdori marketga qarzdan oshib ketdi (qarz: ${marketPayable})`,
+      );
+    }
+
+    const transferId = opts.transferId ?? randomUUID();
+
+    this.updateBalancesByMethod(
+      mainCashbox,
+      Number(data.amount),
+      Operation_type.EXPENSE,
+      data.payment_method ?? PaymentMethod.CASH,
+    );
+    const mainCardId = await applyCashboxCardSelection(manager, mainCashbox, {
+      card_id: data.card_id ?? null,
+      operation: Operation_type.EXPENSE,
+      amount: Number(data.amount),
+      payment_method: data.payment_method ?? PaymentMethod.CASH,
+    });
+    await manager.save(mainCashbox);
+    await manager.save(
+      manager.create(CashboxHistory, {
+        operation_type: Operation_type.EXPENSE,
+        cashbox_id: mainCashbox.id,
+        card_id: mainCardId,
+        source_type: Source_type.MARKET_PAYMENT,
+        source_id: paymentSourceId,
+        dedup_epoch: dedupKey,
+        transfer_id: transferId,
+        amount: Number(data.amount),
+        balance_after: mainCashbox.balance,
+        balance_cash_after: mainCashbox.balance_cash,
+        balance_card_after: mainCashbox.balance_card,
+        comment: data.comment ?? null,
+        created_by: data.created_by ?? null,
+        payment_date: this.parseDate(data.payment_date ?? null) ?? null,
+        payment_method: data.payment_method,
+        source_user_id: data.market_id,
+        transfer_source_user_id: transferSourceUserId,
+      }),
+    );
+
+    // The FOR_MARKET cashbox balance is HQ's PAYABLE to the market (money HQ
+    // owes them): a sale ACCRUES it (+income, order-lifecycle sell) and
+    // financialBalance() reads it as `market_payable` and SUBTRACTS it. Paying
+    // the market must CLEAR that payable (-expense), mirroring the courier
+    // cashbox (sale income → payment expense → nets to 0). Crediting it here
+    // double-counted the payable, so a fully-paid market showed 2× owed and
+    // financial-balanse went negative on every settled order.
+    // (Live-E2E money audit 2026-08-13.)
+    this.updateBalancesByMethod(
+      marketCashbox,
+      Number(data.amount),
+      Operation_type.EXPENSE,
+      data.payment_method ?? PaymentMethod.CASH,
+    );
+    await manager.save(marketCashbox);
+    const marketHistory = await manager.save(
+      manager.create(CashboxHistory, {
+        operation_type: Operation_type.EXPENSE,
+        cashbox_id: marketCashbox.id,
+        source_type: Source_type.MARKET_PAYMENT,
+        transfer_id: transferId,
+        amount: Number(data.amount),
+        balance_after: marketCashbox.balance,
+        balance_cash_after: marketCashbox.balance_cash,
+        balance_card_after: marketCashbox.balance_card,
+        comment: data.comment ?? null,
+        created_by: data.created_by ?? null,
+        payment_date: this.parseDate(data.payment_date ?? null) ?? null,
+        payment_method: data.payment_method,
+        source_user_id: data.market_id,
+        transfer_source_user_id: transferSourceUserId,
+      }),
+    );
+
+    // Advance the per-order FIFO settlement ledger (HQ → market) in the SAME
+    // transaction as the cashbox move (Faza 2a). Reliable outbox delivery to
+    // order-service replaces the old best-effort gateway bridge.
+    const advancePayload = await this.enqueueSettlementAdvance(
+      manager,
+      'hq_to_market',
+      String(data.market_id),
+      Number(data.amount),
+      data.created_by,
+      dedupKey,
+    );
+
+    if (opts.notify) {
+      // (ePpLHPX2) `finance.payment_received` — puli kelgan tomon (market).
+      // Faqat outbox, AYNAN shu tranzaksiyada: rollback bo'lsa xabar ham
+      // yo'q; notification-service o'chiq bo'lsa ham to'lov o'tadi.
+      await this.financeNotifications?.paymentReceived(
+        {
+          kind: 'market_payment',
+          recipient_id: data.market_id,
+          payment_id: marketHistory?.id,
+          amount: Number(data.amount),
+          payment_method: data.payment_method,
+          // (VICfJuoi #3) summa, sana, qoldiq (oldin → keyin) xabarda.
+          balance_after: marketHistory?.balance_after ?? null,
+          payment_date: data.payment_date ?? null,
+        },
+        manager,
+      );
+    }
+
+    return {
+      idempotent: false,
+      transferId,
+      dedupKey,
+      mainCashbox,
+      marketCashbox,
+      marketHistory,
+      advancePayload,
+    };
   }
 
   async allCashboxesTotal(filters?: {
