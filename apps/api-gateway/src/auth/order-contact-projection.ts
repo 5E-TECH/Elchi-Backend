@@ -51,6 +51,9 @@ export const HIDDEN_MARKET_CONTACT_FIELDS: readonly string[] = [
   'extra_number',
   'default_operator_phone',
   'username',
+  // Telegram manzili ham aloqa kanali (FE uni faqat o'z profilida o'qiydi).
+  'telegram_username',
+  'telegramUsername',
   'phoneNumber',
   'extraNumber',
   'defaultOperatorPhone',

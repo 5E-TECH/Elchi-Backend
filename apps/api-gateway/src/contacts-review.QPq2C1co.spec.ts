@@ -19,6 +19,7 @@ import { OrderServiceService } from '../../order-service/src/order-service.servi
 type Row = Record<string, any>;
 
 const MARKET_PHONES = {
+  telegram_username: 'test_market_tg',
   phone_number: '+998901234567',
   extra_number: '+998901234568',
   default_operator_phone: '+998901234569',

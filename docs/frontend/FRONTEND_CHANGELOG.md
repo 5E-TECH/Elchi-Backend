@@ -73,7 +73,7 @@ o'z Elchi mas'uliga bog'lanadi. Mijoz telefoni qoladi.
   chizilmaydi** («-» ham emas).
 - [2026-10-30] ⚠️ [gateway] — market telefoni menejer / filial / kuryerdan **yashirildi** (so'rovchida
   SA/admin/registrator/logist bo'lmasa): buyurtma javoblarining istalgan joyidan `operator_phone`,
-  `secondary_operator_phone`; `market` obyektidan `phone_number`, `extra_number`, `default_operator_phone`, `username`
+  `secondary_operator_phone`; `market` obyektidan `phone_number`, `extra_number`, `default_operator_phone`, `username`, `telegram_username`
   **o'chiriladi** (null emas). `customer` va `courier` ga tegilmaydi. Joylar: buyurtma qaytaradigan barcha yo'llar
   (rol proyeksiyasi orqali), `GET /orders/markets/new|cancelled`, `GET /orders/markets/:marketId/new|cancelled`,
   `GET /orders/branch/orders|cancelled`, `GET /orders/courier/orders` (filial doirasi), `GET /orders/external/sources`,
