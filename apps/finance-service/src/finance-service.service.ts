@@ -1824,6 +1824,13 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
     let auditedCashbox: Cashbox | null = null;
     let auditedLedger: FinancialBalanceHistory | null = null;
     try {
+      // AG1Mlikw — `payment_reversal` faqat ichki: teskari qatorni FAQAT
+      // `PaymentCorrectionService` yozadi (reverses_history_id, transfer_id).
+      if (dto.source_type === Source_type.PAYMENT_REVERSAL) {
+        throw new BadRequestException(
+          "payment_reversal turini qo'lda yozib bo'lmaydi",
+        );
+      }
       this.assertPositiveAmount(Number(dto.amount));
       const paymentMethod = dto.payment_method ?? PaymentMethod.CASH;
       const queryRunner = this.dataSource.createQueryRunner();

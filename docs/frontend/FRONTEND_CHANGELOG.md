@@ -22,6 +22,11 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+### 2026-10-31 — To'lov tuzatish: `payment_reversal` faqat ichki, `window_days` qat'iy (AG1Mlikw)
+
+- ⚠️ [finance] — `PATCH /finance/cashbox/balance` `source_type: "payment_reversal"` → **400** (avval 200 qaytib, kassaga bog'lanmagan qator yozardi). Tur faqat ichki: teskari qatorni `POST /finance/history/:id/reverse` va `/correct-amount` yozadi. Filtrlar (`source_types=…,payment_reversal`) o'zgarmagan.
+- ⚠️ [finance] — `PATCH /finance/payment-corrections/settings`: `window_days` faqat JSON butun son. `true`, `"7"` → 400 (avval `true` 1 bo'lib yozilardi). Forma `number` yuborsin.
+
 ### 2026-10-30 — Kargo to'lovi: `Idempotency-Key` (N3yNa6rO)
 
 `POST /integrations/:id/remittances` endi ixtiyoriy `Idempotency-Key` sarlavhasini qabul qiladi. Ayni kalit bilan takror so'rov yangi to'lov ochmaydi, kassaga ikkinchi marta yozmaydi va birinchi to'lovni `idempotent_replay: true` bilan qaytaradi (200). Migratsiya 196. Deploy: integration-service, api-gateway.

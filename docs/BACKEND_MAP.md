@@ -675,6 +675,8 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
   `finance.payment_received` / PAYMENT audit). Journal
   `finance_schema.payment_corrections` (`original_transfer_id` and
   `idempotency_key` UNIQUE, chain `root_transfer_id` / `root_created_at`).
+  `payment_reversal` is internal-only: `PATCH /finance/cashbox/balance` (DTO)
+  and `updateBalance` (RMQ) reject it with 400 (AG1Mlikw).
   Window `finance_settings` `payment_correction.window_days` (1…365, none → 30)
   from the chain root. Same tx outbox: `order.settlement.retreat` (persistent
   pattern; courier → `courier_to_branch`, market leg → `hq_to_market`), then
