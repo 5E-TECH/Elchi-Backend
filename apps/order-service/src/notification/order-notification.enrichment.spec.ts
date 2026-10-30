@@ -395,7 +395,9 @@ describe('OA16fdSq 6-band: Telegram matni BeePost mazmunida (faqat market guruhi
     await expect(service.onStatusChange(cancelled)).resolves.toBeUndefined();
     expect(outbox.enqueue).toHaveBeenCalledTimes(1);
     const text: string = lastPayload().telegram.text;
-    expect(text).toContain('👤 <b>Mijoz:</b> -');
+    // (BOT-2 #1) market sozlamasi o'qilmadi — FAIL-CLOSED: ism qatori yo'q.
+    expect(text).not.toContain('👤 <b>Mijoz:</b>');
+    expect(text).toContain('📞 <b>Telefon:</b> -');
     expect(text).toContain('🚚 <b>Kuryer:</b> -');
     expect(text).toContain('1. Mahsulot #700 — 2 dona');
     expect(text).toContain('2. Hamkor kitobi — 1 dona');
