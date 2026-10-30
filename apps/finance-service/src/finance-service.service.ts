@@ -2197,7 +2197,7 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
       );
       // T6 — superadmin uchun: shu to'lovni qaytarish / tuzatish mumkinmi.
       const correctable = options.include_correctable
-        ? await this.correctableBlock(history as HistoryWithCashbox)
+        ? await this.correctableBlock(history)
         : undefined;
 
       return this.successRes(

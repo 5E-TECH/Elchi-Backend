@@ -3516,7 +3516,7 @@ export class FinanceGatewayController {
     summary:
       "(T6) To'lovni qaytarish / tuzatish muddatini o'zgartirish — FAQAT superadmin",
     description:
-      "`window_days` — butun son 1…365, aks holda 400. Activity-log: `finance.payment_correction_settings_updated`.",
+      '`window_days` — butun son 1…365, aks holda 400. Activity-log: `finance.payment_correction_settings_updated`.',
   })
   updatePaymentCorrectionSettings(
     @Req() req: { user: JwtUser },
