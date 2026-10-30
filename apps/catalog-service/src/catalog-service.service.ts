@@ -21,7 +21,10 @@ import {
   PRODUCT_SKU_PREFIX,
   PRODUCT_WEIGHT_KG_DECIMALS,
   PRODUCT_WEIGHT_KG_MAX,
+  PRODUCT_SYSTEM_ROLE,
   ProductDimensionField,
+  productNeedsMeasurement,
+  ProductRequester,
 } from '@app/common';
 
 interface MarketInfo {
@@ -51,6 +54,12 @@ function toMarketInfo(raw: unknown): MarketInfo | null {
     status: str(row.status),
   };
 }
+
+/** Javobdagi mahsulot: market va 6tGZzupr «o'lchov kutilmoqda» holati bilan. */
+type ProductView = Product & {
+  market: MarketInfo | null;
+  needs_measurement: boolean;
+};
 
 /**
  * Aws1oApe: mahsulot nomi normalizatsiyasi (BeePost product.service.ts
@@ -97,6 +106,20 @@ export type ProductCreateDto = ProductWriteDto & {
   name: string;
   user_id: string;
 };
+
+/** 6tGZzupr: `catalog.product.fill_missing_measure` yuki. */
+export type ProductMeasureFillDto = Pick<
+  ProductWriteDto,
+  'weight_kg' | 'length_cm' | 'width_cm' | 'height_cm'
+> & { user_id: string };
+
+/**
+ * 6tGZzupr: «o'lchov kutilmoqda» ro'yxat filtri — `productNeedsMeasurement`
+ * (`@app/common`) bilan AYNI shart, ikkalasi birga o'zgaradi.
+ */
+export const PRODUCT_NEEDS_MEASUREMENT_SQL =
+  '(product.weight_kg IS NULL OR (product.volumetric_enabled = true AND ' +
+  '(product.length_cm IS NULL OR product.width_cm IS NULL OR product.height_cm IS NULL)))';
 
 /** `findByCode` javobidagi qatorlar soni chegarasi. */
 export const PRODUCT_BY_CODE_LIMIT = 50;
@@ -156,6 +179,14 @@ export class CatalogServiceService {
       user_id: requester?.id ? String(requester.id) : null,
       user_role: roles.length ? roles.join(',') : null,
     };
+  }
+
+  /** 6tGZzupr: jurnalda mahsulot kim yo'lidan yaratilgani ko'rinsin. */
+  private productSource(
+    requester?: ProductRequester,
+  ): 'system' | 'staff' | 'unknown' {
+    if (!requester) return 'unknown';
+    return requester.roles?.includes(PRODUCT_SYSTEM_ROLE) ? 'system' : 'staff';
   }
 
   private notFound(message: string): never {
@@ -590,9 +621,8 @@ export class CatalogServiceService {
     }
   }
 
-  private async attachMarket(
-    product: Product,
-  ): Promise<Product & { market: MarketInfo | null }> {
+  private async attachMarket(product: Product): Promise<ProductView> {
+    const needs_measurement = productNeedsMeasurement(product);
     try {
       const result = await lastValueFrom(
         this.identityClient
@@ -602,16 +632,15 @@ export class CatalogServiceService {
 
       return {
         ...product,
+        needs_measurement,
         market: toMarketInfo(result?.data),
       };
     } catch {
-      return { ...product, market: null };
+      return { ...product, needs_measurement, market: null };
     }
   }
 
-  private async attachMarkets(
-    products: Product[],
-  ): Promise<Array<Product & { market: MarketInfo | null }>> {
+  private async attachMarkets(products: Product[]): Promise<ProductView[]> {
     if (products.length === 0) {
       return [];
     }
@@ -640,6 +669,7 @@ export class CatalogServiceService {
 
     return products.map((product) => ({
       ...product,
+      needs_measurement: productNeedsMeasurement(product),
       market: byId.get(product.user_id) ?? null,
     }));
   }
@@ -663,14 +693,25 @@ export class CatalogServiceService {
 
   /**
    * Pc4CAFdB: HTTP'da mahsulot yaratish faqat xodimga (superadmin, admin,
-   * registrator, menejer) — cheklov FAQAT api-gateway dekoratorida
-   * (`PRODUCT_WRITE_ROLES`). Bu servis qatlami himoyalanmagan (requester
-   * parametri yo'q): hamkor posilkasidan avtomatik mahsulot yaratish yo'li
-   * (integration-service `createCatalogProduct`) shu RMQ'ni to'g'ridan-to'g'ri
-   * chaqiradi va rol qoidasini CHETLAB O'TADI. Bu epikning 8-kartasida hal
-   * qilinadi.
+   * registrator, menejer) — asosiy cheklov api-gateway dekoratorida
+   * (`PRODUCT_WRITE_ROLES`).
+   *
+   * 6tGZzupr: `remove` naqshi bo'yicha requester keladi. Hamkor posilkasidan
+   * avtomatik mahsulot yaratish (integration-service `createCatalogProduct`)
+   * shu RMQ'ni to'g'ridan-to'g'ri chaqiradi va gateway rol qoidasidan o'tmaydi
+   * — u ATAYLAB `system` deb belgilanadi: endi bu yo'l jurnalda KO'RINADI
+   * (`user_role`, `metadata.source`, `metadata.via`, `needs_measurement`).
+   * Requester'siz chaqiruv rad etilmaydi (deploy paytidagi eski gateway),
+   * jurnalda `source: 'unknown'`.
    */
-  async create(dto: ProductCreateDto) {
+  async create(dto: ProductCreateDto, requester?: ProductRequester) {
+    if (
+      requester?.roles?.some((role) =>
+        ['market', 'market_operator'].includes(role),
+      )
+    ) {
+      this.forbidden('You are not allowed to create product');
+    }
     // Aws1oApe: nom normalizatsiyasi (registr saqlanadi) va registrga befarq
     // dublikat tekshiruvi; bo'sh nom / noto'g'ri narx / o'lchov / shtrix
     // kod — market so'rovidan OLDIN 400.
@@ -737,7 +778,13 @@ export class CatalogServiceService {
       entity_id: saved.id,
       action: ActivityAction.CREATED,
       new_value: this.auditSnapshot(saved),
-      metadata: { user_id: saved.user_id },
+      metadata: {
+        user_id: saved.user_id,
+        source: this.productSource(requester),
+        ...(requester?.via ? { via: requester.via } : {}),
+        needs_measurement: productNeedsMeasurement(saved),
+      },
+      ...this.auditActor(requester),
     });
 
     return this.findById(saved.id);
@@ -750,6 +797,8 @@ export class CatalogServiceService {
     limit?: number;
     sort_by?: string;
     sort_dir?: string;
+    /** 6tGZzupr: registrator ro'yxati — «o'lchov kutilmoqda» filtri. */
+    needs_measurement?: boolean;
   }) {
     const { user_id, search, page = 1, limit = 10 } = query;
 
@@ -781,6 +830,14 @@ export class CatalogServiceService {
             where.orWhere('product.barcode IN (:...barcodes)', { barcodes });
           }
         }),
+      );
+    }
+
+    if (query.needs_measurement !== undefined) {
+      qb.andWhere(
+        query.needs_measurement
+          ? PRODUCT_NEEDS_MEASUREMENT_SQL
+          : `NOT ${PRODUCT_NEEDS_MEASUREMENT_SQL}`,
       );
     }
 
@@ -901,6 +958,71 @@ export class CatalogServiceService {
     });
 
     return this.findById(saved.id);
+  }
+
+  /**
+   * 6tGZzupr: hamkor keyinroq o'lchov yuborsa, avval o'lchovsiz yaratilgan
+   * mahsulot to'ldiriladi — aks holda bog'langan mahsulotlar hech qachon
+   * o'lchov ololmasdi. Faqat BO'SH maydon: xodim kiritgan o'lchov
+   * almashtirilmaydi (o'lchovni Elchi xodimi tasdiqlaydi). Mos kelmasa — jim
+   * no-op (`updated: false`), posilka oqimi to'xtamasin.
+   */
+  async fillMissingMeasure(
+    id: string,
+    dto: ProductMeasureFillDto,
+    requester?: ProductRequester,
+  ) {
+    const product = await this.findByIdEntity(id);
+    if (!dto?.user_id || product.user_id !== String(dto.user_id)) {
+      this.forbidden('You can update only your own product');
+    }
+
+    const weightKg = this.normalizeWeightKg(dto.weight_kg, 'create');
+    const dimensions: Partial<Record<ProductDimensionField, number>> = {};
+    for (const field of PRODUCT_DIMENSION_FIELDS) {
+      const value = this.normalizeDimensionCm(dto[field], field, 'create');
+      if (value !== undefined) dimensions[field] = value;
+    }
+    this.assertDimensionsComplete(dimensions);
+
+    const before = this.auditSnapshot(product);
+    let updated = false;
+    if (weightKg !== undefined && product.weight_kg === null) {
+      product.weight_kg = weightKg;
+      updated = true;
+    }
+    if (dimensions.length_cm !== undefined && product.length_cm === null) {
+      Object.assign(product, dimensions);
+      updated = true;
+    }
+    if (!updated) {
+      return successRes({ id: product.id, updated }, 200, "O'lchov o'zgarmadi");
+    }
+
+    let saved: Product;
+    try {
+      saved = await this.productRepo.save(product);
+    } catch (error) {
+      this.handleDbError(error);
+    }
+
+    void this.syncProductToSearch(saved);
+
+    void this.activityLog.logChange({
+      entity_type: 'Product',
+      entity_id: saved.id,
+      old_value: before,
+      new_value: this.auditSnapshot(saved),
+      action: ActivityAction.UPDATED,
+      metadata: {
+        user_id: saved.user_id,
+        source: this.productSource(requester),
+        ...(requester?.via ? { via: requester.via } : {}),
+      },
+      ...this.auditActor(requester),
+    });
+
+    return successRes({ id: saved.id, updated }, 200, "O'lchov yozildi");
   }
 
   async updateOwn(

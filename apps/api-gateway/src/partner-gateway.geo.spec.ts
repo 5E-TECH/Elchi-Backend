@@ -130,10 +130,14 @@ describe('PartnerGatewayController — geo passthrough (C1.4)', () => {
       { cmd: 'identity.market.find_by_ids' },
       { ids: ['77'] },
     );
+    // 6tGZzupr: eski maydonlar AYNI; o'lchovsiz so'rov — `estimated: true`.
     expect(center.data).toEqual({
       elchi_market_id: '77',
       where_deliver: 'center',
       market_tariff: 10000,
+      tariff_source: 'profile',
+      estimated: true,
+      quote: null,
     });
 
     const address = await makeController(jest.fn(), identity).getTariff(

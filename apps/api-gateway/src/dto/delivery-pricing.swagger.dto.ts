@@ -99,6 +99,7 @@ export const DimensionField = (
   field: 'length_cm' | 'width_cm' | 'height_cm',
   label: string,
   example: number,
+  note = '`product_id` bilan yuborilmaydi.',
 ) =>
   applyDecorators(
     ApiPropertyOptional({
@@ -106,7 +107,7 @@ export const DimensionField = (
       minimum: PRODUCT_DIMENSION_CM_MIN,
       maximum: PRODUCT_DIMENSION_CM_MAX,
       example,
-      description: `${label}, sm (butun son). Uzunlik, kenglik, balandlik — uchalasi birga yoki hech biri. \`product_id\` bilan yuborilmaydi.`,
+      description: `${label}, sm (butun son). Uzunlik, kenglik, balandlik — uchalasi birga yoki hech biri. ${note}`,
     }),
     ValidateIf((o: Parameters<typeof hasAnyDimension>[0]) =>
       hasAnyDimension(o),

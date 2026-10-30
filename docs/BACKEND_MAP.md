@@ -475,9 +475,9 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
   `logistics.delivery_tariff_created`,
   `logistics.delivery_pricing_settings_updated`). No cache. Pickup fee is
   returned separately and never part of `total`. **Sale wiring (KmWO9gTA)**:
-  `logistics.delivery.sale_quote` (internal, order-service only; optional
-  `from` = market region, unknown → not city; `product_id` items, unknown →
-  unmeasured; returns `extra`, table bases, `min_delivery_price`,
+  `logistics.delivery.sale_quote` (internal: order-service and the partner
+  tariff; optional `from` = market region, unknown → not city; `product_id`
+  items, unknown → unmeasured; returns `extra`, table bases, `min_delivery_price`,
   `extra_cost_limit_amount` — migration `1716000000183`). order-service
   `pricing/sale-pricing.ts` + `domain/order-money.ts`
   `resolveOrderTariffDetailed`: snapshot first; with
@@ -491,6 +491,22 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
   and rollback (snapshot) untouched. `orders.quoted_market_tariff`
   (migration `1716000000184`) = open-time quote; drift →
   `order.delivery_price_changed` activity log.
+  **Partner tariff (6tGZzupr)**: `GET /partner/tariff` (gateway) no longer has
+  its own center/home ternary — `market_tariff` comes from
+  `resolveOrderTariffDetailed`, moved with `readSalePricingConfig` /
+  `isSalePricingEngineActive` to `libs/common/src/pricing/sale-tariff.ts`
+  (order-service re-exports them, behaviour unchanged). Same switches as the
+  sale: engine off → profile tariff, on → standard + surcharge, floored at
+  `min_delivery_price` only (seller share unknown before the sale). The gateway
+  calls `logistics.delivery.sale_quote` (not `quote`: `from` must stay optional
+  like in the sale) only when measures/`express`/`pickup` are given, the engine
+  is active or the profile tariff is NULL/0; `sale_quote` gained raw measure
+  items and `express` / `pickup_count` (sale payload unchanged). Response adds
+  `estimated`, `tariff_source`, `quote`; a NULL profile → table base, never a
+  silent 0 (no quote → 503); an explicit 0 stays 0 (contract, sale charges 0).
+  Engine failure → profile tariff, `estimated: true`, `quote: null`.
+  External import `delivery_price` is the shop's own price: it only joins
+  `total_price`, never `market_tariff` (guard spec).
   Volumetric threshold (AQ9lkgVB, migration `1716000000154`):
   `delivery_pricing_settings.volumetric_from_kg` numeric(10,3) DEFAULT 0 —
   shipment volumetric weight below it is ignored (billable = actual weight),
@@ -751,6 +767,16 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
   without a region → 400, logistics transport/5xx → 503 (partner retries). It
   passes `paid_online_amount = subtotal − cod_amount` to `order.create`, which
   now persists it (§5.2).
+- **6tGZzupr (2026-10-30):** partner `items[]` accept `weight_kg`, `length_cm`,
+  `width_cm`, `height_cm` (optional, `ShipmentItemDto`, L/W/H together).
+  `resolvePartnerOrderItems`: with `external_product_id` the measures go to the
+  auto-created product (`createCatalogProduct`, `system` requester) or, for an
+  existing ref / same-name product, to `catalog.product.fill_missing_measure`
+  (NULL fields only). Without measures the shipment is still accepted, the
+  product stays `needs_measurement` and a warning is logged (price falls to the
+  base tariff at sale). Measures without `external_product_id` are not stored
+  (logged). Marketplace repo is separate: its `ElchiTariffInput` and checkout
+  still send no measures — tracked outside this repo.
 
 ### investor-service (`investor_schema`)
 - **Entities:** `investor`, `investment`, `profit_share`.
@@ -836,7 +862,23 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
     removed (Pc4CAFdB): product create/delete/update is staff-only
     (superadmin/admin/registrator/manager), market/market_operator read only.
     Service level (`catalog.product.create`) keeps measures optional —
-    `integration-service` partner path still creates `{ name, user_id }`.
+    the `integration-service` partner path may create `{ name, user_id }`.
+  - **6tGZzupr (2026-10-30, no migration):** `catalog.product.create` takes
+    `{ dto, requester? }` (`remove` pattern). Gateway sends the HTTP user; the
+    partner path sends `PRODUCT_SYSTEM_REQUESTER` (`{ id: 'system', roles:
+    ['system'], via: 'partner:<id>' }`), so auto-created products are visible
+    in `activity_log` (`user_role = 'system'`, `metadata.source`, `via`,
+    `needs_measurement`). `market`/`market_operator` requester → 403; no
+    requester still works (rolling deploy, `source: 'unknown'`).
+    `needs_measurement` is **derived, not stored**
+    (`productNeedsMeasurement`, same rule as the engine's `estimated`: no
+    weight, or volumetric on and L/W/H missing) — returned on product rows and
+    filterable: `GET /product?needs_measurement=true|false`
+    (`catalog.product.find_all`); a registrator PATCH clears it. Legacy
+    products without measures are included. New RMQ
+    `catalog.product.fill_missing_measure { id, dto: { user_id, …measures },
+    requester }` fills only NULL measures (a staff value is never replaced;
+    other market → 403).
   - `update` and `update_own` use the same field whitelist (name, image_url,
     price, measures, barcode); `update_own` only adds the ownership check.
   - New RMQ `catalog.product.find_by_code {code, user_id?}` → `{data, total,

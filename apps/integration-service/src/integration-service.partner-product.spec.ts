@@ -81,6 +81,7 @@ describe('Hamkor mahsuloti → Elchi katalogi', () => {
     // katalogi bulg'anmasin.
     expect(create).toHaveBeenCalledWith({
       dto: { name: 'Qalam', user_id: '55' },
+      requester: { id: 'system', roles: ['system'], via: 'partner:7' },
     });
     expect(saveRef).toHaveBeenCalledWith(
       expect.objectContaining({

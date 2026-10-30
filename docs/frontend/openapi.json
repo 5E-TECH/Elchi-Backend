@@ -2532,6 +2532,15 @@
               ],
               "type": "string"
             }
+          },
+          {
+            "name": "needs_measurement",
+            "required": false,
+            "in": "query",
+            "description": "6tGZzupr: true — «o'lchov kutilmoqda» (og'irlik yoki o'lcham yo'q) mahsulotlar, false — o'lchovi to'liqlar. Qatorlarda `needs_measurement` qaytadi.",
+            "schema": {
+              "type": "boolean"
+            }
           }
         ],
         "responses": {
@@ -20184,6 +20193,7 @@
     },
     "/partner/tariff": {
       "get": {
+        "description": "`market_tariff` — Elchi sotuvda oladigan summa. O'lchov berilsa `quote` da dvigatel hisobi; o'lchovsiz — `estimated: true` va baza tarif (jimgina 0 emas).",
         "operationId": "PartnerGatewayController_getTariff",
         "parameters": [
           {
@@ -20214,11 +20224,81 @@
               ],
               "type": "string"
             }
+          },
+          {
+            "name": "district_id",
+            "required": false,
+            "in": "query",
+            "description": "Qabul qiluvchi tumani (yo‘nalish tarifi uchun)",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "region_id",
+            "required": false,
+            "in": "query",
+            "description": "Qabul qiluvchi viloyati (yo‘nalish tarifi uchun)",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "pickup",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "express",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "height_cm",
+            "required": false,
+            "in": "query",
+            "description": "Balandlik, sm — L/W/H uchalasi birga",
+            "schema": {
+              "type": "number"
+            }
+          },
+          {
+            "name": "width_cm",
+            "required": false,
+            "in": "query",
+            "description": "Kenglik, sm — L/W/H uchalasi birga",
+            "schema": {
+              "type": "number"
+            }
+          },
+          {
+            "name": "length_cm",
+            "required": false,
+            "in": "query",
+            "description": "Uzunlik, sm — L/W/H uchalasi birga",
+            "schema": {
+              "type": "number"
+            }
+          },
+          {
+            "name": "weight_kg",
+            "required": false,
+            "in": "query",
+            "description": "Jami og'irlik, kg (ko'pi bilan 3 kasr, 10000 gacha)",
+            "schema": {
+              "type": "number"
+            }
           }
         ],
         "responses": {
           "200": {
-            "description": "{ statusCode, message, data: { elchi_market_id, where_deliver, market_tariff } }"
+            "description": "{ statusCode, message, data: { elchi_market_id, where_deliver, market_tariff, tariff_source, estimated, quote } }"
           },
           "404": {
             "description": "Market topilmadi yoki shu hamkorga tegishli emas"
@@ -32274,6 +32354,34 @@
             "type": "string",
             "description": "Hamkor tizimidagi mahsulot id — katalog bog‘lanishi shu bo‘yicha (nom bo‘yicha emas)",
             "example": "a3f1c8e2-7b44-4d91-9f02-1c5e6d8a4b30"
+          },
+          "weight_kg": {
+            "type": "number",
+            "minimum": 0.001,
+            "maximum": 1000,
+            "example": 1.2,
+            "description": "Og'irlik, kg (ko'pi bilan 3 kasr). Yuborilsa `external_product_id` bo'yicha yaratilgan mahsulotga yoziladi."
+          },
+          "length_cm": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000,
+            "example": 30,
+            "description": "Uzunlik, sm (butun son). Uzunlik, kenglik, balandlik — uchalasi birga yoki hech biri. Yuborilsa `external_product_id` bo'yicha yaratilgan mahsulotga yoziladi."
+          },
+          "width_cm": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000,
+            "example": 22,
+            "description": "Kenglik, sm (butun son). Uzunlik, kenglik, balandlik — uchalasi birga yoki hech biri. Yuborilsa `external_product_id` bo'yicha yaratilgan mahsulotga yoziladi."
+          },
+          "height_cm": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000,
+            "example": 15,
+            "description": "Balandlik, sm (butun son). Uzunlik, kenglik, balandlik — uchalasi birga yoki hech biri. Yuborilsa `external_product_id` bo'yicha yaratilgan mahsulotga yoziladi."
           }
         },
         "required": [

@@ -81,6 +81,7 @@ export * from './order/order-special-categories';
 export * from './order/order-tracking-notes';
 export * from './order/order-number';
 export * from './pricing/delivery-pricing';
+export * from './pricing/sale-tariff';
 export * from './notification/notification-types';
 export * from './notification/notification-type.validator';
 export * from './notification/telegram-html';

@@ -143,6 +143,42 @@ Deploy: **notification-service** (+ libs/common). Migratsiya yo'q.
   → FE: shu sabablardagi nofaol qatorga «Qayta ulash» tugmasi (hozir `canLink` faqat `kind === 'none'`), kuzatuvchi
   `is_active === true` ni kutadi; `manual` / sababsiz qatorda tugma yo'q («Admin o'chirgan»).
 
+### 2026-10-30 — Narx: hamkor tarifi dvigatelga ulandi, «o'lchov kutilmoqda» (6tGZzupr)
+
+Deploy: **api-gateway + catalog-service + integration-service + logistics-service + order-service** (+ libs/common).
+Migratsiya **yo'q**, yangi env **yo'q** (gateway mavjud `SALE_PRICING_ENGINE` / `SALE_PRICING_ENGINE_MARKET_IDS` ni o'qiydi,
+sukut `off` — prod narxlari o'zgarmaydi). `openapi.json` qayta yaratildi.
+
+- [2026-10-30] ✏️ [catalog] — mahsulot qatorlariga `needs_measurement: boolean` qo'shildi (`GET /product`, `/product/:id`,
+  `/product/market/:id`, `/product/my-products`). Saqlanmaydi — o'lchovdan kelib chiqadi: og'irlik yo'q yoki hajm yoqiq va
+  L/W/H yo'q (narx dvigateli `estimated` qoidasi bilan AYNI). Registrator `PATCH /product/:id` bilan o'lchov kiritsa o'zi
+  `false` bo'ladi. O'lchovsiz **eski** mahsulotlar ham `true`.
+- [2026-10-30] 🆕 [catalog] — `GET /product?needs_measurement=true|false` (`1`/`0` ham) — «O'lchov kutilmoqda» filtri;
+  boshqa qiymat 400. Soni uchun javobdagi `total` (`limit=1` yetarli). → **Registrator ro'yxati (frontend ishi):**
+  `/products` hozir v1 (`src/pages/products/list/index.tsx`) — jadval v2 `DataTable` + `Pagination` ga o'tadi, nom yonida
+  `Badge` «O'lchov kutilmoqda» va holat filtri (taklif; maketda joyi yo'q — ega qarori kerak), o'lchov tahrirlash oynasida
+  `weight_kg`, `length_cm`, `width_cm`, `height_cm`, `volumetric_enabled` maydonlari. Kunduzgi/tungi va 390px skrinshot,
+  `npm run design:guard -- --diff`.
+- [2026-10-30] ✏️ [partner] — `GET /partner/tariff`: yangi ixtiyoriy query `weight_kg`, `length_cm`, `width_cm`, `height_cm`,
+  `express`, `pickup`, `region_id`, `district_id`; javobga `estimated`, `tariff_source` (`profile`|`engine`), `quote`
+  (dvigatel hisobi yoki `null`) qo'shildi. `market_tariff` — Elchi sotuvda oladigan summa (`SALE_PRICING_ENGINE` o'chiq —
+  profil tarifi, avvalgidek). O'lchovsiz — `estimated: true` va baza tarif; profilda tarif `null` bo'lsa tarif jadvali bazasi
+  (jimgina 0 emas), u ham bo'lmasa 503; profilda aniq 0 — 0 qoladi (sotuvda ham 0), yonida `quote`.
+  Kontrakt: `docs/public/MARKETPLACE_API.md` §4. Hamkor kabineti ekrani ishlatmaydi — FE o'zgarishi shart emas.
+- [2026-10-30] ✏️ [partner] — `POST /partner/shipments`, `PATCH /partner/shipments/:id`: `items[]` ga ixtiyoriy `weight_kg`,
+  `length_cm`, `width_cm`, `height_cm` (L/W/H uchalasi birga). `external_product_id` bilan yuborilsa avtomatik mahsulotga
+  yoziladi, mavjud mahsulotda faqat bo'sh maydon to'ldiriladi (xodim o'lchovi almashtirilmaydi). Eski so'rov o'zgarishsiz.
+- [2026-10-30] 🟢 [catalog] — hamkor yo'lidan yaratilgan mahsulot jurnalda `user_role: "system"`, `metadata.source: "system"`,
+  `metadata.via: "partner:<id>"`, `metadata.needs_measurement` bilan ko'rinadi.
+- [2026-10-30] 🟢 [marketplace — alohida repo, alohida karta] — Elchi tomoni tayyor, marketplace hali o'lchov yubormaydi:
+  `apps/elchi-integration/src/elchi-api.client.ts` `ElchiTariffInput` (`weight_kg`, `length_cm`, `width_cm`, `height_cm`,
+  `region_id`, `district_id`) va `getTariff`; `apps/checkout-service/src/checkout.service.ts` `quote()` savat o'lchovini
+  yuborishi kerak (hozir `regionId`/`districtId` klientda jimgina tashlab yuboriladi); `confirm-sales-order.service.ts`
+  posilka `items` ga `external_product_id` va o'lchov qo'shishi kerak (hozir `{ name, quantity }`). Solishtirish
+  (`marketplace` a01e861 o'qildi): hozir savatdagi `deliveryFee` = `market_tariff` = profil tarifi = Elchi sotuvda oladigan
+  summa, farq yo'q. Dvigatel yoqilgach ham erkin matnli posilkada qo'shimcha 0 — farq faqat minimal narx qoidasida
+  (`min_delivery_price`, kuryer + filial ulushi) va savat bilan sotuv orasida tarif o'zgarsa. Marketplace o'lchov yuborishni
+  posilkada boshlab, tarif so'rovida boshlamasa — savat past chiqadi. To'liq jadval: `MARKETPLACE_API.md` §4.
 ### 2026-10-30 — T1: hamkor (marketpleys) integratsiyasini jonli sinash (RJcckQ6I)
 
 Deploy: **integration-service + api-gateway** (+ libs/common). Migratsiya **yo'q**. `openapi.json` qayta yaratildi.
