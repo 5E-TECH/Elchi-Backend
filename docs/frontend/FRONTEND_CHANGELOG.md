@@ -23,6 +23,39 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-10-30 — T8: buyurtmaning maxsus belgilari (mo'rt, diniy kitob, suyuqlik …) (0OUcHZ7R)
+
+Deploy: **order-service + api-gateway** (+ libs/common). Migratsiya **`1716000000187`**
+(`orders.special_categories varchar(32)[]`, sukut `{}`, CHECK — faqat 7 kod). `openapi.json` qayta yaratildi.
+
+Kodlar (kanonik tartib — API har doim shu tartibda qaytaradi): `fragile` (mo'rt), `religious_book` (diniy kitob),
+`liquid` (suyuqlik), `perishable` (tez buziladi), `battery` (batareya), `heavy` (og'ir), `documents` (hujjat).
+
+- [2026-10-30] ✏️ [order] — `POST /orders`, `POST /orders/external` va ai-confirm (`orders[]` ning HAR biri alohida)
+  tanasida ixtiyoriy `special_categories: string[]`. Berilmasa — `[]`. Noma'lum kod → 400 «Noma'lum maxsus belgi:
+  glass», takror kod → 400 «Maxsus belgi takrorlangan: fragile». Yuborilgan tartib muhim emas:
+  `["liquid","fragile"]` → javobda `["fragile","liquid"]`. → Yaratish formasida va AI tasdiqlash kartasida
+  belgilar tanlovi.
+- [2026-10-30] 🆕 [order] — `PUT /orders/:id/special-categories` `{ "special_categories": ["fragile"] }` — yangi
+  TO'LIQ to'plam (`[]` — hammasini olib tashlash; maydonsiz tana → 400). Rollar — `POST /orders` bilan bir xil
+  (superadmin, admin, registrator, market, menejer, filial, market operatori); kuryer / investor → 403.
+  Market / market operatori — faqat o'z buyurtmasi va faqat `created`, `new` holatida; xodimlar (o'z filiali
+  doirasida) — yana `received`, `on the road`, `waiting`, `waiting_customer`, `cancelled`, `cancelled (sent)`.
+  `sold`, `paid`, `partly_paid`, `closed`, `returned_to_market` — hech kim: **409**
+  `{ code: "SPECIAL_CATEGORIES_LOCKED", message: "Bu holatda maxsus belgini o'zgartirib bo'lmaydi" }`.
+  Begona buyurtma → 403, yo'q / o'chirilgan → 404. Javob 200:
+  `{ statusCode: 200, message: "success", data: { id, special_categories, changed } }`; to'plam o'zgarmagan bo'lsa
+  `changed: false` (tarixga yozilmaydi). → Buyurtma kartasida «Maxsus belgilar»ni tahrirlash; tugmani holat/rolga
+  qarab yashirish, 409 da `code` bo'yicha xabar.
+- [2026-10-30] ⚠️ [order] — `PATCH /orders/:id` va `/:id/full` `special_categories` ni **qabul qilmaydi** (400) —
+  faqat yuqoridagi PUT orqali.
+- [2026-10-30] 🟢 [order] — buyurtma javoblarida (`GET /orders`, `/orders/:id`, `/orders/markets/:id/new`,
+  `/orders/qr-code/:token` va `?view=light` skaner javobi, `/post/orders/:id`) yangi maydon `special_categories`.
+  O'zgarish tarixida (`/orders/:id/tracking`) `action: "special_categories_changed"`, `old_value` / `new_value` —
+  `{ special_categories }`, holat o'zgarmaydi; jurnalda `order.special_categories_changed` («Maxsus belgilar
+  o'zgardi»). Qisman sotuvda qolgan qism (bekor qilingan bola buyurtma) ota buyurtmaning belgilarini oladi;
+  almashtirish buyurtmasi — yo'q (o'zi tanlanadi). → Kuryer/ombor skanida va ro'yxatda belgilarni ko'rsatish.
+
 ### 2026-10-30 — T6: kuryerdan olingan / marketga berilgan pulni qaytarish yoki summasini tuzatish (superadmin)
 
 Deploy: **finance-service + order-service + api-gateway** (+ libs/common: notification-service bir xil katalog

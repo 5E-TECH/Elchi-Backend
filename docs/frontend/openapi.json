@@ -5816,6 +5816,59 @@
         ]
       }
     },
+    "/orders/{id}/special-categories": {
+      "put": {
+        "description": "Yangi TO'LIQ to'plam yuboriladi (`[]` — hammasini olib tashlash); javobda kanonik tartibda. Market / market operatori — faqat `created`, `new`; xodimlar — yana `received`, `on the road`, `waiting`, `waiting_customer`, `cancelled`, `cancelled (sent)`. Yakunlangan buyurtma (sold, paid, partly_paid, closed, returned_to_market) — hech kim: 409 `SPECIAL_CATEGORIES_LOCKED`. To`plam o`zgarmasa — `changed: false` (tarixga yozilmaydi). Begona buyurtma — 403, yo'q/o'chirilgan — 404, noma'lum/takror kod — 400.",
+        "operationId": "OrderGatewayController_setSpecialCategories",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Order ID (bigint)",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetOrderSpecialCategoriesRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "{ statusCode: 200, message: 'success', data: { id, special_categories, changed } }"
+          },
+          "409": {
+            "description": "SPECIAL_CATEGORIES_LOCKED — bu holatda maxsus belgini o'zgartirib bo'lmaydi"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Buyurtmaning maxsus belgilarini o'zgartirish (T8)",
+        "tags": [
+          "Orders"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "registrator",
+          "market",
+          "manager",
+          "branch",
+          "market_operator"
+        ]
+      }
+    },
     "/orders/{id}/full": {
       "patch": {
         "operationId": "OrderGatewayController_updateFull",
@@ -24913,6 +24966,28 @@
             "items": {
               "$ref": "#/components/schemas/OrderItemDto"
             }
+          },
+          "special_categories": {
+            "type": "array",
+            "maxItems": 7,
+            "uniqueItems": true,
+            "example": [
+              "fragile",
+              "liquid"
+            ],
+            "description": "Maxsus belgilar (T8): fragile — mo'rt, religious_book — diniy kitob, liquid — suyuqlik, perishable — tez buziladi, battery — batareya, heavy — og‘ir, documents — hujjat. Javobda har doim shu kanonik tartibda. Noma'lum yoki takror kod — 400.",
+            "items": {
+              "type": "string",
+              "enum": [
+                "fragile",
+                "religious_book",
+                "liquid",
+                "perishable",
+                "battery",
+                "heavy",
+                "documents"
+              ]
+            }
           }
         },
         "required": [
@@ -25123,6 +25198,28 @@
             "type": "boolean",
             "default": false,
             "description": "txmkXVBa: mavjud mijoz kartasi shu buyurtmadagi ma`lumot bilan yangilansinmi (POST /orders `update_customer_card` bilan bir xil). Berilmasa — karta o`zgarmaydi."
+          },
+          "special_categories": {
+            "type": "array",
+            "maxItems": 7,
+            "uniqueItems": true,
+            "example": [
+              "fragile",
+              "liquid"
+            ],
+            "description": "Maxsus belgilar (T8): fragile — mo'rt, religious_book — diniy kitob, liquid — suyuqlik, perishable — tez buziladi, battery — batareya, heavy — og‘ir, documents — hujjat. Javobda har doim shu kanonik tartibda. Noma'lum yoki takror kod — 400.",
+            "items": {
+              "type": "string",
+              "enum": [
+                "fragile",
+                "religious_book",
+                "liquid",
+                "perishable",
+                "battery",
+                "heavy",
+                "documents"
+              ]
+            }
           }
         },
         "required": [
@@ -25355,6 +25452,28 @@
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/OrderItemDto"
+            }
+          },
+          "special_categories": {
+            "type": "array",
+            "maxItems": 7,
+            "uniqueItems": true,
+            "example": [
+              "fragile",
+              "liquid"
+            ],
+            "description": "Maxsus belgilar (T8): fragile — mo'rt, religious_book — diniy kitob, liquid — suyuqlik, perishable — tez buziladi, battery — batareya, heavy — og‘ir, documents — hujjat. Javobda har doim shu kanonik tartibda. Noma'lum yoki takror kod — 400.",
+            "items": {
+              "type": "string",
+              "enum": [
+                "fragile",
+                "religious_book",
+                "liquid",
+                "perishable",
+                "battery",
+                "heavy",
+                "documents"
+              ]
             }
           },
           "external_id": {
@@ -25855,6 +25974,36 @@
         },
         "required": [
           "reason"
+        ]
+      },
+      "SetOrderSpecialCategoriesRequestDto": {
+        "type": "object",
+        "properties": {
+          "special_categories": {
+            "type": "array",
+            "maxItems": 7,
+            "uniqueItems": true,
+            "example": [
+              "fragile",
+              "liquid"
+            ],
+            "description": "Maxsus belgilar (T8): fragile — mo'rt, religious_book — diniy kitob, liquid — suyuqlik, perishable — tez buziladi, battery — batareya, heavy — og‘ir, documents — hujjat. Javobda har doim shu kanonik tartibda. Noma'lum yoki takror kod — 400. Yangi TO‘LIQ to‘plam yuboriladi; `[]` — barcha belgilarni olib tashlash.",
+            "items": {
+              "type": "string",
+              "enum": [
+                "fragile",
+                "religious_book",
+                "liquid",
+                "perishable",
+                "battery",
+                "heavy",
+                "documents"
+              ]
+            }
+          }
+        },
+        "required": [
+          "special_categories"
         ]
       },
       "UpdateOrderByIdRequestDto": {
