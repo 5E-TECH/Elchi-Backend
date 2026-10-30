@@ -22,6 +22,18 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+### 2026-10-30 — BOT-3 #6 tuzatishlari: supergroup va nofaol guruh
+
+Deploy: **notification-service** (+ libs/common). Migratsiya yo'q.
+
+- [2026-10-30] 🆕 [notification] — yangi bildirishnoma turi `telegram.market_channel_inactive` (market EGASIGA, in-app +
+  shaxsiy Telegram): «Telegram guruhingiz nofaol» — bot guruhdan chiqarildi yoki xabar yuborish huquqi olindi.
+  `data: { chat_id, reason: "kicked" | "left" | "blocked_on_send" | "chat_not_found" }`. → FE: tur nomi/ikon
+  (sozlamalar ro'yxatida o'chirib bo'lmaydi — `user_can_mute: false`).
+- [2026-10-30] 🟢 [notification] — huquq qaytarilsa guruh o'zi qayta faol; chiqarilgan guruhni market kabinetdagi
+  «Telegram guruhini ulash» kodi bilan qayta ulay oladi (avval «allaqachon ulangan» xatosi berardi). FE o'zgarishi
+  shart emas.
+
 ### 2026-10-30 — T1: hamkor (marketpleys) integratsiyasini jonli sinash (RJcckQ6I)
 
 Deploy: **integration-service + api-gateway** (+ libs/common). Migratsiya **yo'q**. `openapi.json` qayta yaratildi.

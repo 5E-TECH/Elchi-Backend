@@ -3,6 +3,7 @@ import { DataSource } from 'typeorm';
 import { TelegramBotCore1716000000120 } from '../../../../migrations/1716000000120-TelegramBotCore';
 import { TelegramMarketInactiveReason1716000000150 } from '../../../../migrations/1716000000150-TelegramMarketInactiveReason';
 import { TelegramChats1716000000126 } from '../../../../migrations/1716000000126-TelegramChats';
+import { TelegramOrderCards1716000000122 } from '../../../../migrations/1716000000122-TelegramOrderCards';
 import { TelegramAiDrafts1716000000128 } from '../../../../migrations/1716000000128-TelegramAiDrafts';
 import { TelegramChatLocksAiWorker1716000000190 } from '../../../../migrations/1716000000190-TelegramChatLocksAiWorker';
 import { TelegramBotAction } from '../entities/telegram-bot-action.entity';
@@ -452,13 +453,18 @@ const migration = new TelegramBotCore1716000000120();
         } finally {
           await reasonRunner.release();
         }
-        expect(dispatch).toHaveBeenCalledTimes(1);
+        // Admin xabari bitta + (BOT-3 #6) market egasiga bitta.
+        expect(dispatch).toHaveBeenCalledTimes(2);
+        expect(dispatch.mock.calls.map(([dto]) => dto.type)).toEqual([
+          'telegram.channel_inactive',
+          'telegram.market_channel_inactive',
+        ]);
         // Takror — o'zgarish yo'q, qayta xabar yo'q.
         expect(
           (await channels.markInactive('-100555', 'elchi', 'kicked'))
             .deactivated,
         ).toBe(0);
-        expect(dispatch).toHaveBeenCalledTimes(1);
+        expect(dispatch).toHaveBeenCalledTimes(2);
       });
     });
 
@@ -467,12 +473,21 @@ const migration = new TelegramBotCore1716000000120();
         const runner = db.createQueryRunner();
         try {
           await new TelegramChats1716000000126().up(runner);
+          // (#595 ko'rib chiqish) karta qatorlari ham haqiqiy jadvalda.
+          await new TelegramOrderCards1716000000122().up(runner);
         } finally {
           await runner.release();
         }
       });
+      const channelsFor = (dispatch = jest.fn().mockResolvedValue({})) =>
+        new BotChannelService(
+          db.getRepository(TelegramMarket),
+          {} as never,
+          { log: jest.fn().mockResolvedValue(undefined) } as never,
+          { get: () => ({ dispatch }) } as never,
+        );
 
-      it('⭐ ulanish (trigger telegram_chats ham) va navbatdagi xabarlar yangi id`ga; yuborilganlar tegilmaydi', async () => {
+      it('⭐ ulanish (trigger telegram_chats ham) va navbatdagi xabarlar yangi id`ga; `sending` (boshqa urinishda) — faqat chat_id, holati tegilmaydi; yuborilganlar tegilmaydi', async () => {
         await db.query(`DELETE FROM notification_schema.telegram_outbox`);
         await db.query(`
           INSERT INTO notification_schema.telegram_markets (market_id, group_id, group_type)
@@ -506,7 +521,8 @@ const migration = new TelegramBotCore1716000000120();
           );
         expect(outbox).toEqual([
           { chat_id: '-1009009', status: 'pending' },
-          { chat_id: '-1009009', status: 'pending' },
+          // Ikkinchi ishchi uni olmaydi — xabar ikki marta ketmaydi.
+          { chat_id: '-1009009', status: 'sending' },
           { chat_id: '-100900', status: 'sent' },
         ]);
         // Takror (kiruvchi xabar ham keldi) — idempotent.
@@ -514,6 +530,77 @@ const migration = new TelegramBotCore1716000000120();
           markets: 0,
           outbox: 0,
         });
+      });
+
+      it('⭐ eski guruh kartalari KO`CHIRILMAYDI (message_id supergroup`da yaroqsiz) — o`chiriladi; yangi chatdagi karta tegilmaydi', async () => {
+        await db.query(`
+          INSERT INTO notification_schema.telegram_order_cards
+            (order_id, chat_id, message_id, kind, status)
+          VALUES (71, '-100910', '11', 'group', 'new'),
+                 (72, '-100910', '12', 'group', 'new'),
+                 (72, '-1009109', '13', 'group', 'new')`);
+        await channelsFor().migrateChat('-100910', '-1009109');
+        const cards: Array<{ order_id: string; chat_id: string }> =
+          await db.query(
+            `SELECT order_id::text, chat_id FROM notification_schema.telegram_order_cards
+              WHERE order_id IN (71, 72) ORDER BY order_id, chat_id`,
+          );
+        expect(cards).toEqual([{ order_id: '72', chat_id: '-1009109' }]);
+      });
+
+      it('⭐ ikki parallel migrate (javob + kiruvchi xabar) — xatosiz, natija bir xil', async () => {
+        await db.query(`
+          INSERT INTO notification_schema.telegram_markets (market_id, group_id, group_type)
+          VALUES (12, '-100920', 'create')`);
+        await db.query(`
+          INSERT INTO notification_schema.telegram_order_cards
+            (order_id, chat_id, message_id, kind, status)
+          VALUES (73, '-100920', '14', 'group', 'new')`);
+        const results = await Promise.all([
+          channelsFor().migrateChat('-100920', '-1009209'),
+          channelsFor().migrateChat('-100920', '-1009209'),
+        ]);
+        expect(results.reduce((sum, r) => sum + r.markets, 0)).toBe(1);
+        const [market]: Array<{ group_id: string }> = await db.query(
+          `SELECT group_id FROM notification_schema.telegram_markets WHERE market_id = 12`,
+        );
+        expect(market.group_id).toBe('-1009209');
+      });
+
+      it('⭐ «not enough rights» bilan nofaol guruh — bot qayta member/administrator bo`lsa O`ZI qayta faol; chiqarilgan (kicked) — yo`q; market egasiga xabar', async () => {
+        await db.query(`
+          INSERT INTO notification_schema.telegram_markets (market_id, group_id, group_type)
+          VALUES (13, '-100930', 'create'), (14, '-100940', 'create')`);
+        const dispatch = jest.fn().mockResolvedValue({});
+        const channels = channelsFor(dispatch);
+        await channels.markInactive('-100930', 'elchi', 'blocked_on_send');
+        await channels.markInactive('-100940', 'elchi', 'kicked');
+        // Admin + market egasi (shaxsiy Telegram) xabari.
+        expect(dispatch).toHaveBeenCalledWith(
+          expect.objectContaining({
+            type: 'telegram.market_channel_inactive',
+            recipient_ids: ['13'],
+          }),
+        );
+        await channels.markActive('-100930', 'elchi');
+        await channels.markActive('-100940', 'elchi');
+        const rows: Array<{
+          market_id: string;
+          is_active: boolean;
+          inactive_reason: string | null;
+        }> = await db.query(
+          `SELECT market_id::text, is_active, inactive_reason
+             FROM notification_schema.telegram_markets
+            WHERE market_id IN (13, 14) ORDER BY market_id`,
+        );
+        expect(rows).toEqual([
+          { market_id: '13', is_active: true, inactive_reason: null },
+          { market_id: '14', is_active: false, inactive_reason: 'kicked' },
+        ]);
+        const [chat]: Array<{ is_active: boolean }> = await db.query(
+          `SELECT is_active FROM notification_schema.telegram_chats WHERE chat_id = '-100930'`,
+        );
+        expect(chat.is_active).toBe(true);
       });
     });
 

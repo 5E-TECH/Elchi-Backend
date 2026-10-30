@@ -119,28 +119,28 @@ export class BotChannelService {
         [oldChatId, newChatId],
       ),
     );
+    // Navbatdagi (`pending`) xabarlar yangi id'ga va darhol muddati keladi.
+    // `sending` — boshqa urinish ICHIDA (masalan throttle kutishida): faqat
+    // `chat_id` yangilanadi, holatiga TEGILMAYDI — u o'z urinishini o'zi
+    // yakunlaydi (aks holda ikkinchi ishchi ham olib, xabar ikki marta ketardi).
     const outbox = changed<{ id: string }>(
       await this.markets.query(
         `UPDATE "notification_schema"."telegram_outbox"
-            SET "chat_id" = $2, "status" = CASE WHEN "status" = 'sending' THEN 'pending' ELSE "status" END,
-                "next_attempt_at" = now(), "updated_at" = now()
+            SET "chat_id" = $2,
+                "next_attempt_at" = CASE WHEN "status" = 'pending' THEN now() ELSE "next_attempt_at" END,
+                "updated_at" = CASE WHEN "status" = 'pending' THEN now() ELSE "updated_at" END
           WHERE "chat_id" = $1 AND "status" IN ('pending', 'sending')
         RETURNING "id"`,
         [oldChatId, newChatId],
       ),
     );
-    await this.markets
-      .query(
-        `UPDATE "notification_schema"."telegram_order_cards"
-            SET "chat_id" = $2
-          WHERE "chat_id" = $1
-            AND NOT EXISTS (
-              SELECT 1 FROM "notification_schema"."telegram_order_cards" c
-               WHERE c."order_id" = "telegram_order_cards"."order_id"
-                 AND c."chat_id" = $2)`,
-        [oldChatId, newChatId],
-      )
-      .catch(() => undefined);
+    // Eski (oddiy guruh) kartalari supergroup'da tahrirlanmaydi (message_id
+    // yaroqsiz) — o'chiriladi: keyingi holatda kerak bo'lsa yangi karta.
+    await this.markets.query(
+      `DELETE FROM "notification_schema"."telegram_order_cards"
+        WHERE "chat_id" = $1`,
+      [oldChatId],
+    );
     for (const row of markets) {
       await this.activityLog.log({
         entity_type: 'TelegramMarket',
@@ -161,9 +161,18 @@ export class BotChannelService {
     return { markets: markets.length, outbox: outbox.length };
   }
 
-  /** Shaxsiy chat botni qayta ishga tushirdi (`member`) — blok olib tashlanadi. */
+  /**
+   * Bot qayta `member` / `administrator`:
+   *  - shaxsiy chat — blok olib tashlanadi;
+   *  - guruh — faqat huquq olingani uchun (`blocked_on_send`, «not enough
+   *    rights») nofaol bo'lgan ulanish qayta FAOL (huquq qaytdi). Chiqarilgan
+   *    (`kicked` / `left`) ulanish avvalgidek admin / qayta ulash orqali.
+   */
   async markActive(chatId: string, botSlug: string): Promise<void> {
-    if (BotChannelService.isGroupChat(chatId)) return;
+    if (BotChannelService.isGroupChat(chatId)) {
+      await this.reactivateGroup(chatId);
+      return;
+    }
     const session = await this.sessions.load(chatId, botSlug);
     if (!session.state.blocked_at) return;
     await this.sessions.update(chatId, botSlug, (current) => {
@@ -177,6 +186,34 @@ export class BotChannelService {
       action: 'notification.tg_channel_active',
       metadata: { chat_type: 'private' },
     });
+  }
+
+  private async reactivateGroup(chatId: string): Promise<void> {
+    const rows = await this.markets.query(
+      `UPDATE "notification_schema"."telegram_markets"
+          SET "is_active" = true, "inactive_reason" = NULL,
+              "inactive_at" = NULL, "updatedAt" = now()
+        WHERE "group_id" = $1 AND "is_deleted" = false AND "is_active" = false
+          AND "inactive_reason" = 'blocked_on_send'
+      RETURNING "id", "market_id"`,
+      [chatId],
+    );
+    const changed = (
+      Array.isArray(rows) && Array.isArray(rows[0]) ? rows[0] : rows
+    ) as Array<{ id: string; market_id: string }>;
+    for (const row of Array.isArray(changed) ? changed : []) {
+      await this.activityLog.log({
+        entity_type: 'TelegramMarket',
+        entity_id: String(row.id),
+        action: 'notification.tg_channel_active',
+        metadata: { group_id: chatId, market_id: String(row.market_id) },
+      });
+    }
+    if (Array.isArray(changed) && changed.length) {
+      this.logger.log(
+        `Telegram guruh ${chatId}: bot huquqi qaytdi — ${changed.length} ta ulanish qayta faol`,
+      );
+    }
   }
 
   private async alertAdmins(
@@ -205,6 +242,47 @@ export class BotChannelService {
     } catch (error) {
       this.logger.error(
         `telegram.channel_inactive admin xabari yuborilmadi: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    await this.alertMarkets(chatId, reason, rows);
+  }
+
+  /**
+   * (BOT-3 #6) Market EGASIGA ham (in-app + shaxsiy Telegram): guruhga
+   * kartalar endi bormaydi. Huquq olingan bo'lsa — qaytarilgach o'zi qayta
+   * yoqiladi; chiqarilgan bo'lsa — botni qo'shib, kabinetdan qayta ulash.
+   */
+  private async alertMarkets(
+    chatId: string,
+    reason: ChannelInactiveReason,
+    rows: Array<{ id: string; market_id: string }>,
+  ): Promise<void> {
+    try {
+      const inbox = this.moduleRef.get(NotificationInboxService, {
+        strict: false,
+      });
+      const markets = [...new Set(rows.map((row) => String(row.market_id)))];
+      await inbox.dispatch({
+        type: 'telegram.market_channel_inactive',
+        category: NotificationCategory.SYSTEM,
+        priority: NotificationPriority.HIGH,
+        title: 'Telegram guruhingiz nofaol',
+        body:
+          reason === 'blocked_on_send'
+            ? "Bot guruhga xabar yubora olmayapti (huquqi olingan). Botga xabar yuborish huquqini qaytaring — guruh o'zi qayta yoqiladi."
+            : "Bot guruhdan chiqarilgan — buyurtma kartalari guruhga bormaydi. Botni guruhga qo'shing va kabinetdan guruhni qayta ulang.",
+        recipient_ids: markets,
+        channels: [
+          NotificationChannel.IN_APP,
+          NotificationChannel.REALTIME,
+          NotificationChannel.TELEGRAM,
+        ],
+        group_key: `telegram:market_channel_inactive:${chatId}`,
+        data: { chat_id: chatId, reason },
+      });
+    } catch (error) {
+      this.logger.error(
+        `telegram.market_channel_inactive xabari yuborilmadi: ${error instanceof Error ? error.message : String(error)}`,
       );
     }
   }

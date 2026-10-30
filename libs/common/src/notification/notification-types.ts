@@ -628,6 +628,22 @@ export const NOTIFICATION_TYPES: readonly NotificationTypeDefinition[] =
       default_audience: [Roles.SUPERADMIN, Roles.ADMIN],
       user_can_mute: false,
     }),
+    // (BOT-3 #6) Market guruhi nofaol bo'ldi (bot chiqarildi / huquq olindi) —
+    // market EGASI ham biladi (avval faqat admin bilardi).
+    def({
+      key: 'telegram.market_channel_inactive',
+      category: NotificationCategory.SYSTEM,
+      priority: NotificationPriority.HIGH,
+      group_key_pattern: 'telegram:market_channel_inactive:{{chat_id}}',
+      label_uz: 'Telegram guruhingiz nofaol',
+      default_audience: [Roles.MARKET],
+      user_can_mute: false,
+      default_channels: [
+        NotificationChannel.IN_APP,
+        NotificationChannel.REALTIME,
+        NotificationChannel.TELEGRAM,
+      ],
+    }),
 
     // ---- Marketing ----
     def({

@@ -58,6 +58,7 @@ describe('fix3b CODE-02 — ulash: token almashtirilmaydi, mavjud ulanish almash
     findAndCount: jest.Mock;
     save: jest.Mock;
     create: jest.Mock;
+    update: jest.Mock;
   };
   let activityLog: { log: jest.Mock; logChange: jest.Mock };
 
@@ -112,6 +113,13 @@ describe('fix3b CODE-02 — ulash: token almashtirilmaydi, mavjud ulanish almash
         Promise.resolve({ id: '41', ...value }),
       ),
       create: jest.fn((value: Record<string, unknown>) => ({ ...value })),
+      update: jest.fn(
+        (where: { id: string }, patch: Record<string, unknown>) => {
+          const row = rows.find((item) => item.id === where.id);
+          if (row) Object.assign(row, patch);
+          return Promise.resolve({ affected: row ? 1 : 0 });
+        },
+      ),
     };
     activityLog = {
       log: jest.fn().mockResolvedValue(undefined),
@@ -246,6 +254,58 @@ describe('fix3b CODE-02 — ulash: token almashtirilmaydi, mavjud ulanish almash
 
     expect(res).toEqual({ message: 'Market topilmadi' });
     expect(repo.save).not.toHaveBeenCalled();
+  });
+
+  it('⭐ BOT-3 #6: shu marketning NOFAOL (bot chiqarilgan / huquq olingan) ulanishi — kod bilan qayta ulash uni qayta YOQADI (yangi qator emas)', async () => {
+    rows = [
+      {
+        id: '9',
+        market_id: '5',
+        group_id: '-100777',
+        group_type: 'create',
+        isDeleted: false,
+        is_active: false,
+        inactive_reason: 'kicked',
+      },
+    ];
+    const res = await service.connectGroupByCodeText(CODE, '-100777');
+    expect(res).toEqual(
+      expect.objectContaining({
+        message: expect.stringContaining('qayta ulandi'),
+      }),
+    );
+    expect(rows[0]).toEqual(
+      expect.objectContaining({
+        is_active: true,
+        inactive_reason: null,
+        inactive_at: null,
+      }),
+    );
+    expect(repo.save).not.toHaveBeenCalled();
+    expect(activityLog.log).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'notification.tg_group_connected',
+        metadata: expect.objectContaining({ reactivated: true }),
+      }),
+    );
+  });
+
+  it('BOT-3 #6: BOSHQA marketning nofaol ulanishi — qayta yoqilmaydi (tortib olish yo‘q)', async () => {
+    rows = [
+      {
+        id: '9',
+        market_id: '7',
+        group_id: '-100777',
+        group_type: 'create',
+        isDeleted: false,
+        is_active: false,
+      },
+    ];
+    const res = await service.connectGroupByCodeText(CODE, '-100777');
+    expect(res).toEqual({
+      message: 'Bu guruh shu xabar turi uchun allaqachon ulangan',
+    });
+    expect(repo.update).not.toHaveBeenCalled();
   });
 
   it('guruh shu tur uchun boshqa marketga ulangan — o‘zbekcha xabar', async () => {

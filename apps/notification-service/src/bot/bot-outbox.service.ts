@@ -169,13 +169,16 @@ export class BotOutboxService implements OnModuleDestroy {
     }
   }
 
-  private async attempt(row: {
-    id: string;
-    chat_id: string;
-    payload: Record<string, unknown>;
-    retry_count: number;
-    max_attempts: number;
-  }): Promise<OutboxSendResult> {
+  private async attempt(
+    row: {
+      id: string;
+      chat_id: string;
+      payload: Record<string, unknown>;
+      retry_count: number;
+      max_attempts: number;
+    },
+    migratedOnce = false,
+  ): Promise<OutboxSendResult> {
     const payload = row.payload as {
       text?: string;
       parse_mode?: TelegramParseMode;
@@ -210,34 +213,31 @@ export class BotOutboxService implements OnModuleDestroy {
     } catch (error) {
       const reason = this.transport.describe(error).slice(0, ERROR_MAX);
       // (BOT-3 #6) Guruh supergroup'ga aylangan — ulanish va navbat yangi
-      // id'ga ko'chadi, shu xabar DARHOL qayta yuboriladi (urinish
-      // hisoblanmaydi).
+      // id'ga ko'chadi, shu xabar SHU urinishda yangi id'ga DARHOL qayta
+      // yuboriladi (urinish hisoblanmaydi; natija chaqiruvchiga — masalan
+      // guruh kartasining message_id si yoziladi). Faqat bir marta.
       if (
+        !migratedOnce &&
         error instanceof TelegramApiError &&
         error.kind === 'migrated' &&
         error.migrateToChatId
       ) {
+        const target = error.migrateToChatId;
         const moved = await this.channels
-          .migrateChat(row.chat_id, error.migrateToChatId)
+          .migrateChat(row.chat_id, target)
           .then(() => true)
           .catch((migrateError: unknown) => {
             this.logger.error(
-              `guruh ko'chirilmadi (${row.chat_id} → ${error.migrateToChatId}): ${this.transport.describe(migrateError)}`,
+              `guruh ko'chirilmadi (${row.chat_id} → ${target}): ${this.transport.describe(migrateError)}`,
             );
             return false;
           });
         if (moved) {
           await this.outbox.update(
-            { id: row.id },
-            {
-              chat_id: error.migrateToChatId,
-              status: 'pending',
-              next_attempt_at: new Date(),
-              last_error: reason,
-              updated_at: new Date(),
-            },
+            { id: row.id, status: 'sending' },
+            { chat_id: target, updated_at: new Date() },
           );
-          return { id: row.id, status: 'queued', error: reason };
+          return this.attempt({ ...row, chat_id: target }, true);
         }
       }
       const retryCount = row.retry_count + 1;
