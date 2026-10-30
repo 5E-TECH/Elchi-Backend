@@ -10006,7 +10006,8 @@ export class IntegrationServiceService {
    * it. If `order_ids` is given only those are settled; otherwise pending
    * receivables are settled oldest-first up to `amount`. (N3yNa6rO) Summa
    * MAIN kassaga avtomatik kirim qilinadi (idempotent `dedup_epoch`), natija
-   * javobda `cashbox_posted`.
+   * javobda `cashbox_posted`. Ayni `idempotency_key` bilan takror so'rov
+   * birinchi to'lovni qaytaradi: pul ikkinchi marta yozilmaydi.
    */
   async createRemittance(input: {
     integration_id: string;
@@ -10015,6 +10016,7 @@ export class IntegrationServiceService {
     note?: string | null;
     order_ids?: string[];
     created_by?: string | null;
+    idempotency_key?: string | null;
   }) {
     const integrationId = String(input.integration_id ?? '').trim();
     const amount = Number(input.amount ?? 0);
@@ -10032,6 +10034,7 @@ export class IntegrationServiceService {
       this.notFound('Integration not found');
     }
 
+    const idempotencyKey = String(input.idempotency_key ?? '').trim() || null;
     const settledOrderIds: string[] = [];
     const result = await this.receivableRepo.manager.transaction(
       async (manager) => {
@@ -10042,6 +10045,19 @@ export class IntegrationServiceService {
         // navbatda: avans ikki parallel to'lovda IKKI MARTA ishlatilmasin va
         // bitta qarz qatori ikki to'lov bilan yopilmasin.
         await this.lockRemittanceFlow(manager, integrationId);
+
+        // N3yNa6rO: qulf ostida tekshiriladi — parallel takror ham shu yerda
+        // birinchisining natijasini ko'radi.
+        if (idempotencyKey) {
+          const replayed = await remittanceRepo.findOne({
+            where: {
+              integration_id: integrationId,
+              idempotency_key: idempotencyKey,
+            },
+          });
+          if (replayed) return { replayed } as const;
+        }
+
         const advanceBefore = Math.max(
           0,
           await this.computeRemittanceAdvance(remittanceRepo, integrationId),
@@ -10072,6 +10088,7 @@ export class IntegrationServiceService {
             reference: input.reference ?? null,
             note: input.note ?? null,
             created_by: input.created_by ?? null,
+            idempotency_key: idempotencyKey,
             settled_count: 0,
           }),
         );
@@ -10160,6 +10177,25 @@ export class IntegrationServiceService {
         };
       },
     );
+
+    if (result.replayed) {
+      const { replayed } = result;
+      return successRes(
+        {
+          remittance_id: replayed.id,
+          integration_id: integrationId,
+          remitted_amount: Number(replayed.amount),
+          settled_amount: Number(replayed.settled_amount ?? 0),
+          settled_count: replayed.settled_count,
+          unapplied_amount: Number(replayed.unapplied_amount ?? 0),
+          advance_applied: Number(replayed.advance_applied ?? 0),
+          cashbox_posted: replayed.cashbox_posted === true,
+          idempotent_replay: true,
+        },
+        200,
+        'Remittance already recorded',
+      );
+    }
 
     /**
      * ⚠️ HISOB-KITOB ENDI KASSAGA HAM YOZILADI (audit M5).

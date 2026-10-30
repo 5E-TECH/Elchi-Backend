@@ -30,6 +30,7 @@ function makeSvc() {
     create: jest.fn((x: unknown) => x),
     save: jest.fn((x: any) => Promise.resolve({ id: '77', ...x })),
     createQueryBuilder: jest.fn(() => advanceQb),
+    findOne: jest.fn(() => Promise.resolve(null)),
   };
   const receivableRepo = {
     find: jest.fn(() => Promise.resolve([])),
@@ -51,6 +52,7 @@ function makeSvc() {
   svc.financeClient = { name: 'FINANCE' };
   svc.orderClient = { name: 'ORDER' };
   svc.activityLog = { log: jest.fn(() => Promise.resolve()) };
+  svc.remittanceRepoInTx = remittanceRepo;
   return svc;
 }
 
@@ -98,6 +100,59 @@ describe('createRemittance — MAIN kassaga yozuv va cashbox_posted (N3yNa6rO)',
     expect(fills).toHaveLength(1);
     // Debitor qarz yig'imi: foyda sotuvda yozilgan, kirim P&L ga kirmaydi.
     expect(fills[0][2].financial_ledger).toBeUndefined();
+  });
+
+  it('⭐ ayni Idempotency-Key bilan takror: yangi to`lov yo`q, kassaga ikkinchi marta yozilmaydi', async () => {
+    rmqSendMock.mockResolvedValue({ statusCode: 200 });
+    const svc = makeSvc();
+    svc.remittanceRepoInTx.findOne.mockResolvedValue({
+      id: '77',
+      amount: '150000.00',
+      settled_amount: '100000.00',
+      unapplied_amount: '50000.00',
+      advance_applied: '0.00',
+      settled_count: 1,
+      cashbox_posted: true,
+    });
+
+    const res: any = await svc.createRemittance({
+      integration_id: '2',
+      amount: 150000,
+      created_by: '1',
+      idempotency_key: ' kalit-1 ',
+    });
+
+    expect(svc.remittanceRepoInTx.findOne).toHaveBeenCalledWith({
+      where: { integration_id: '2', idempotency_key: 'kalit-1' },
+    });
+    expect(svc.remittanceRepoInTx.save).not.toHaveBeenCalled();
+    expect(rmqSendMock).not.toHaveBeenCalled();
+    expect(res.statusCode).toBe(200);
+    expect(res.data).toMatchObject({
+      remittance_id: '77',
+      idempotent_replay: true,
+      cashbox_posted: true,
+    });
+  });
+
+  it('kalitsiz so`rov tekshirilmaydi, kalit yozuvga saqlanadi', async () => {
+    rmqSendMock.mockResolvedValue({ statusCode: 200 });
+    const svc = makeSvc();
+
+    await svc.createRemittance({ integration_id: '2', amount: 1000 });
+    expect(svc.remittanceRepoInTx.findOne).not.toHaveBeenCalled();
+    expect(svc.remittanceRepoInTx.create).toHaveBeenCalledWith(
+      expect.objectContaining({ idempotency_key: null }),
+    );
+
+    await svc.createRemittance({
+      integration_id: '2',
+      amount: 1000,
+      idempotency_key: 'kalit-2',
+    });
+    expect(svc.remittanceRepoInTx.create).toHaveBeenLastCalledWith(
+      expect.objectContaining({ idempotency_key: 'kalit-2' }),
+    );
   });
 
   it('kassa yozuvi yiqilsa — remittance saqlanadi, lekin cashbox_posted=false va xato log', async () => {
