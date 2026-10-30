@@ -1,0 +1,14 @@
+# Ops sidecar'lari (qUEE0Bgd): migration-runner, db-reconcile, activity-log-prune.
+# TypeScript skriptlar ts-node bilan ishlaydi, shuning uchun dev deps va manba kod
+# kerak. Ilgari har ishga tushishda `npm ci --include=dev` serverdagi repo ichiga
+# (./:/app, root nomidan) yozardi — endi hammasi build paytida image'ga kiradi.
+# Birinchi 4 qator servis Dockerfile'larining builder bosqichi bilan BIR XIL:
+# `npm ci` qatlami ular bilan umumiy, qayta o'rnatilmaydi. .env* image'ga
+# tushmaydi (.dockerignore), sozlama compose'dagi env_file orqali keladi.
+FROM node:22-alpine
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci
+COPY . .
+# Fayllar root'niki, node faqat o'qiydi. npm logi $HOME ga, ts-node diskka yozmaydi.
+USER node

@@ -6,6 +6,18 @@ x-json-logging: &json-logging
     max-size: '10m'
     max-file: '5'
 
+# Konteyner qotirish (qUEE0Bgd). Ilova va ops image'lari root emas (USER node),
+# Linux capability kerak emas (port > 1024, fayl egasi o'zgarmaydi), setuid
+# orqali imtiyoz ko'tarish yopiq. x-svc-limits / x-hot-svc-limits orqali hamma
+# app servisiga tushadi. postgres / rabbitmq / minio bu yerda EMAS: entrypoint
+# root'da chown qilib o'z foydalanuvchisiga tushadi, cap_drop: ALL ularni
+# buzadi, ta'rifi o'zgarsa esa deploy postgres/minio ni qayta yaratadi.
+x-hardening: &hardening
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+
 # Resource ceilings (Audit devops P2: no limits → one leaking/forking service
 # could starve the host and take every other service down with it). These are
 # deliberately GENEROUS safety ceilings — sized well above steady-state so they
@@ -15,6 +27,7 @@ x-json-logging: &json-logging
 # mem_limit DOWN only with real production memory profiling — too tight causes
 # OOM-kill restart loops.
 x-svc-limits: &svc-limits
+  <<: *hardening
   mem_limit: 1g
   mem_reservation: 256m
   pids_limit: 512
@@ -22,9 +35,34 @@ x-svc-limits: &svc-limits
 # Hot paths (gateway + order + finance): more headroom for larger DB pools and
 # bigger in-flight result sets.
 x-hot-svc-limits: &hot-svc-limits
+  <<: *hardening
   mem_limit: 1536m
   mem_reservation: 512m
   pids_limit: 512
+
+# Backup sidecar'lari root bo'lib QOLADI (qUEE0Bgd): ./backups/daily root'niki
+# (0700), ./backups/pre-deploy dump'lari esa host'dagi deploy foydalanuvchisiniki
+# (umask 077 = 0600) — postgres/rclone foydalanuvchisi ularga yetmaydi, root ham
+# faqat DAC capability bilan yetadi. Boshqa hamma capability olib tashlangan.
+x-backup-hardening: &backup-hardening
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+  cap_add:
+    - DAC_OVERRIDE
+    - DAC_READ_SEARCH
+
+# Ops sidecar'lari (qUEE0Bgd): migration-runner, db-reconcile, activity-log-prune
+# — bitta Dockerfile.ops dan (kod + dev deps image ichida, USER node). `npm ci`
+# ishga tushishda emas, repo bind-mount yo'q. Kod image'ga build paytida kirgani
+# uchun deploy.yml ularni o'zi yangilaydi: migration-runner `up --build`, qolgan
+# ikkisi faqat ishlayotgan bo'lsa (`OPS_SIDECARS`).
+x-ops: &ops
+  <<: *hardening
+  build:
+    context: .
+    dockerfile: Dockerfile.ops
 
 # Cloudflare Tunnel connector (ZfI9nERJ). Two identical replicas of the SAME
 # tunnel (TUNNEL_TOKEN): Cloudflare spreads requests over every connected
@@ -40,7 +78,10 @@ x-hot-svc-limits: &hot-svc-limits
 # * No depends_on api-gateway: the tunnel stays up while the gateway is swapped.
 # * stop_grace_period > cloudflared's own 30 s --grace-period: in-flight
 #   requests finish before Docker kills it. ~40 MiB RSS each — 256m is ample.
+# * qUEE0Bgd: image o'zi root emas (nonroot). Hardening konteyner keyingi safar
+#   rolling qayta yaratilganda kuchga kiradi — deploy buning uchun tegmaydi.
 x-cloudflared: &cloudflared
+  <<: *hardening
   image: cloudflare/cloudflared:2026.9.1@sha256:b269e8abd07a5bf6f3f4be65d5050b2174eca89c56a0241a8ff32a16aec454e4
   command: tunnel --no-autoupdate run
   env_file: .env.production
@@ -53,7 +94,15 @@ x-cloudflared: &cloudflared
 
 services:
   rabbitmq:
-    image: rabbitmq:3-management
+    # qUEE0Bgd: tag + digest bilan qotirilgan — `3-management` tag'i bilan aynan bir
+    # xil image (3.13.7; digest 2026-10-30 da Docker Hub'da solishtirilgan).
+    # ⚠️ deploy.yml bu konteynerni `--no-recreate` bilan ko'taradi va shunday
+    # qolishi SHART: `hostname:` yo'q, node nomi = konteyner id (rabbit@<id>).
+    # Qayta yaratilsa volume'da YANGI bo'sh mnesia ochiladi: foydalanuvchilar
+    # (rotatsiyadagi `elchi`, docs/ops/secret-rotation.md) yo'qoladi, guest qaytadi
+    # va hamma servis brokerga ulana olmaydi. Image qatorini o'zgartirish
+    # shuning uchun o'z-o'zidan kuchga kirmaydi — qo'lda, rejali ish.
+    image: rabbitmq:3.13.7-management@sha256:e582c0bc7766f3342496d8485efb5a1df782b5ce3886ad017e2eaae442311f69
     container_name: elchi-rabbitmq
     restart: unless-stopped
     # Faqat localhost'ga bog'lanadi — internetga ochiq emas.
@@ -70,7 +119,13 @@ services:
       retries: 10
 
   postgres:
+    # qUEE0Bgd: `pull_policy: missing` — serverda bor image yangilanmaydi. Ilgari
+    # deploy'dagi `pull` minio xatosida to'xtab (fail-fast) postgres'ga yetmasdi;
+    # minio o'tkazib yuborilgach u yangi 15.x ni tortib, keyingi `up -d` da prod
+    # DB'ni kutilmaganda qayta yaratardi. pull_policy config hash'ga kirmaydi:
+    # konteyner qayta yaratilmaydi. Minor yangilash — alohida, rejali ish.
     image: postgres:15
+    pull_policy: missing
     container_name: elchi-postgres
     restart: unless-stopped
     # Scale NOW-2: raise max_connections from the image default (100) to 200.
@@ -98,7 +153,17 @@ services:
       retries: 10
 
   minio:
+    # qUEE0Bgd: `minio/minio` Docker Hub'dan yo'qolgan (2026-10-30 da repo 404), image
+    # serverda faqat lokal nusxa (staging'da `docker load`, docs/ops/staging.md).
+    # Tag + digest'ga o'tkazib bo'lmaydi: serverdagi digest tekshirilmagan, mos
+    # kelmasa `up` pull qilishga urinadi va deploy yiqiladi. Shuning uchun lokal
+    # image qotiriladi: `pull_policy: never` — `latest` registry'dan hech qachon
+    # olinmaydi (o'sha nom bilan chiqqan begona image ham), deploy'dagi `pull` uni
+    # o'tkazib yuboradi, konteyner qayta yaratilmaydi. Dev mashinadagi nusxa:
+    # RELEASE.2025-09-07T16-13-09Z, sha256:14cea493d9a3… (serverdagisi bilan
+    # solishtirilmagan).
     image: minio/minio:latest
+    pull_policy: never
     container_name: elchi-minio
     restart: unless-stopped
     command: server /data --console-address ':9001'
@@ -118,13 +183,10 @@ services:
       retries: 10
 
   migration-runner:
-    image: node:22-alpine
+    <<: *ops
     container_name: elchi-migration-runner
-    working_dir: /app
     env_file: .env.production
-    volumes:
-      - ./:/app
-    command: sh -c "npm ci --include=dev && npm run db:prepare"
+    command: ['npm', 'run', 'db:prepare']
     depends_on:
       postgres:
         condition: service_healthy
@@ -142,6 +204,7 @@ services:
   # separate: ./backups/pre-deploy (scripts/pre-deploy-backup.sh).
   # Runbook: docs/ops/db-backups.md.
   db-backup:
+    <<: *backup-hardening
     image: postgres:15
     container_name: elchi-db-backup
     env_file: .env.production
@@ -178,6 +241,7 @@ services:
   # (healthy). deploy.yml starts it but never waits for or gates on it.
   # Runbook: docs/ops/db-backups.md.
   backup-offsite:
+    <<: *backup-hardening
     image: rclone/rclone:1.68.2
     container_name: elchi-backup-offsite
     env_file: .env.production
@@ -202,17 +266,14 @@ services:
   # Scheduled cashbox reconciliation (Audit money P1: the invariant check existed
   # but was never scheduled). Runs db:reconcile (--reconcile-strict) on a loop;
   # any cashbox I1/I2 drift or settlement mismatch is reported to Sentry. Reuses
-  # the migration-runner pattern (repo mount + dev deps for ts-node).
+  # the migration-runner image (Dockerfile.ops: dev deps for ts-node).
   db-reconcile:
-    image: node:22-alpine
+    <<: *ops
     container_name: elchi-db-reconcile
-    working_dir: /app
     env_file: .env.production
     environment:
       RECONCILE_INTERVAL_SECONDS: ${RECONCILE_INTERVAL_SECONDS:-3600}
-    volumes:
-      - ./:/app
-    command: sh -c "npm ci --include=dev && sh scripts/reconcile-cron.sh"
+    command: ['sh', 'scripts/reconcile-cron.sh']
     depends_on:
       postgres:
         condition: service_healthy
@@ -229,16 +290,12 @@ services:
   # are MOVED to each schema's activity_logs_archive (migration 1716000000101),
   # never just deleted; a schema without that table is skipped (exit 1).
   activity-log-prune:
-    <<: *svc-limits
-    image: node:22-alpine
+    <<: [*svc-limits, *ops]
     container_name: elchi-activity-log-prune
-    working_dir: /app
     env_file: .env.production
     environment:
       ACTIVITY_LOG_PRUNE_INTERVAL_SECONDS: ${ACTIVITY_LOG_PRUNE_INTERVAL_SECONDS:-86400}
-    volumes:
-      - ./:/app
-    command: sh -c "npm ci --include=dev && sh scripts/prune-activity-logs-cron.sh"
+    command: ['sh', 'scripts/prune-activity-logs-cron.sh']
     depends_on:
       postgres:
         condition: service_healthy

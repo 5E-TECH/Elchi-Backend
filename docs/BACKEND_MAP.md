@@ -1280,6 +1280,24 @@ secret (secret never reaches the gateway).
 - **docker-compose.prod.yml** services: `rabbitmq`, `postgres`, `minio`,
   `migration-runner`, `api-gateway`, `cloudflared`, + all 13 other services.
   Volumes: `rabbitmq_data`, `postgres_data`, `minio_data`.
+- **Konteyner qotirish (qUEE0Bgd):** servis image'lari `USER node` (fayllar
+  root'niki, `/app` ga yozilmaydi — ilova diskka yozmasligi kerak, kerak bo'lsa
+  faqat `/tmp`). Compose: `x-hardening` (`no-new-privileges`, `cap_drop: ALL`) app
+  servislari, cloudflared va ops sidecar'lariga; `x-backup-hardening`
+  (+ `DAC_OVERRIDE`, `DAC_READ_SEARCH`) `db-backup` / `backup-offsite` ga — ular
+  root qoladi, chunki `backups/` dagi dump'lar 0600 va turli egalarniki.
+  postgres/rabbitmq/minio ta'rifiga hardening qo'shilmagan (entrypoint root'da
+  ishlaydi; ta'rif o'zgarsa deploy qayta yaratadi).
+- **Ops sidecar'lari (qUEE0Bgd):** `migration-runner`, `db-reconcile`,
+  `activity-log-prune` — `Dockerfile.ops` (kod + dev deps image ichida, repo
+  bind-mount va ishga tushishdagi `npm ci` yo'q). Kod image'da bo'lgani uchun
+  `deploy.yml` ishlayotgan sidecar'larni har deploy'da yangilaydi; ularni o'zi
+  yoqmaydi.
+- **Image'lar (qUEE0Bgd):** rabbitmq va cloudflared — tag + digest. rabbitmq
+  deploy'da `--no-recreate`: qayta yaratilsa broker foydalanuvchilari yo'qoladi
+  (`docs/ops/secret-rotation.md` §3). minio — `pull_policy: never`
+  (`minio/minio` Docker Hub'da 404, digest'ga o'tish uchun serverdagi image
+  tekshirilishi kerak), postgres — `pull_policy: missing`.
 - **Schemas:** `scripts/init-schemas.sql` auto-creates every `*_schema` on
   Postgres start. Per-service `DB_SCHEMA` env (defaults in `libs/common/src/config`).
 - **Migrations:** TypeORM (`typeorm.config.ts`, `migrations/`,
