@@ -9,6 +9,7 @@ import { Reflector } from '@nestjs/core';
 import { of, throwError } from 'rxjs';
 import { JwtStrategy } from './jwt.strategy';
 import {
+  TELEGRAM_TOKEN_ACTIVE_GRACE_MS,
   TELEGRAM_TOKEN_STATE_TTL_MS,
   TelegramTokenStateService,
 } from './telegram-token-state.service';
@@ -123,6 +124,31 @@ describe('BOT-2 #2c — Telegram token holati (JwtStrategy)', () => {
 
   it('identity javob bermadi (hech tasdiqlanmagan) → 503 fail closed', async () => {
     const h = build(() => throwError(() => new Error('down')));
+    await expect(h.strategy.validate(payload)).rejects.toBeInstanceOf(
+      ServiceUnavailableException,
+    );
+  });
+
+  it('⭐ deploy`dan oldingi Telegram tokeni (tg_id yo`q) — 401, identity so`ralmaydi', async () => {
+    const h = build(() => of({ active: true }));
+    const old: Record<string, unknown> = { ...payload };
+    delete old.tg_id;
+    await expect(h.strategy.validate(old)).rejects.toBeInstanceOf(
+      UnauthorizedException,
+    );
+    expect(h.identity.send).not.toHaveBeenCalled();
+  });
+
+  it('⭐ grace TTL dan oshmaydi: identity o`chiq, faol tasdiq 60 s dan eski → 503', async () => {
+    let up = true;
+    const h = build(() =>
+      up ? of({ active: true }) : throwError(() => new Error('down')),
+    );
+    await h.strategy.validate(payload);
+    up = false;
+    h.advance(TELEGRAM_TOKEN_STATE_TTL_MS + 1);
+    // Kesh eskirdi, oxirgi «faol» tasdiq grace'dan (60 s) eski → 503.
+    expect(TELEGRAM_TOKEN_ACTIVE_GRACE_MS).toBe(TELEGRAM_TOKEN_STATE_TTL_MS);
     await expect(h.strategy.validate(payload)).rejects.toBeInstanceOf(
       ServiceUnavailableException,
     );

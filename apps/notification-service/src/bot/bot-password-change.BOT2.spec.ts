@@ -5,6 +5,12 @@ import {
 } from './bot-gateway.client';
 import { of } from 'rxjs';
 import { BotRouterService } from './bot-router.service';
+import {
+  callbackUpdate,
+  courierActor,
+  makeRouter,
+  sentTexts,
+} from './testing/bot-kit-spec';
 
 /**
  * BOT-2 #2d — gateway `403 PASSWORD_CHANGE_REQUIRED` → bot aniq javob
@@ -74,5 +80,44 @@ describe('BOT-2 #2d — BotRouterService javobi', () => {
     const { r, reply } = router(new Error('boom'));
     await expect(r.process({ update_id: 1 }, '7')).rejects.toThrow('boom');
     expect(reply).not.toHaveBeenCalled();
+  });
+});
+
+describe('BOT-2 #2d — haqiqiy handler orqali (catch xatoni yutmaydi)', () => {
+  it('⭐ kvitansiya «👍» — gateway 403 PASSWORD_CHANGE_REQUIRED → «Avval kabinetda parolni almashtiring», «aloqa xatosi» EMAS', async () => {
+    const gateway = jest.fn(() =>
+      Promise.reject(new BotPasswordChangeRequiredError()),
+    );
+    const ctx = makeRouter({ actor: courierActor('44'), gateway });
+    const ok = await ctx.actions.create({
+      chatId: '44',
+      action: 'fp.ok',
+      actorUserId: '44',
+      payload: { payment_id: '701' },
+      oneShot: false,
+    });
+    await ctx.router.dispatch(
+      'elchi',
+      callbackUpdate(ok, { chatId: 44, fromId: 44 }),
+    );
+    expect(gateway).toHaveBeenCalledTimes(1);
+    expect(sentTexts(ctx)).toEqual([BOT_PASSWORD_CHANGE_TEXT]);
+  });
+
+  it('⭐ kuryer /kun — parol xatosi umumiy «Ma`lumotni olib bo`lmadi» bilan yutilmaydi', async () => {
+    const gateway = jest.fn(() =>
+      Promise.reject(new BotPasswordChangeRequiredError()),
+    );
+    const ctx = makeRouter({ actor: courierActor('44'), gateway });
+    await ctx.router.dispatch('elchi', {
+      update_id: 9,
+      message: {
+        message_id: 1,
+        chat: { id: 44, type: 'private' },
+        from: { id: 44 },
+        text: '/kun',
+      },
+    });
+    expect(sentTexts(ctx)).toEqual([BOT_PASSWORD_CHANGE_TEXT]);
   });
 });

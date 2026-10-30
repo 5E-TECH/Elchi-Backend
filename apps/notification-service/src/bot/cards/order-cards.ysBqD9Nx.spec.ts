@@ -123,8 +123,32 @@ function makeSync(
     }),
     update: jest.fn(() => Promise.resolve()),
   };
+  /**
+   * `where` hurmat qilinadi (BOT-2 #591 ko'rib chiqish): egasi, faolligi,
+   * scope va `chat_id IN (...)`. Berilmagan maydon — mos deb hisoblanadi.
+   */
   const chatRepo = {
-    find: jest.fn(() => Promise.resolve(options.groups ?? [])),
+    find: jest.fn(({ where }: { where: Record<string, unknown> }) =>
+      Promise.resolve(
+        (options.groups ?? []).filter((group) =>
+          Object.entries(where).every(([key, expected]) => {
+            const actual = (group as Record<string, unknown>)[key];
+            if (actual === undefined) return true;
+            const operator = expected as { type?: string; value?: unknown };
+            if (operator && typeof operator === 'object' && operator.type) {
+              return operator.type === 'in'
+                ? (operator.value as unknown[]).includes(actual)
+                : true;
+            }
+            const text = (value: unknown) =>
+              typeof value === 'string' || typeof value === 'number'
+                ? String(value)
+                : JSON.stringify(value);
+            return text(actual) === text(expected);
+          }),
+        ),
+      ),
+    ),
   };
   const queries: string[] = [];
   const manager = {
@@ -295,6 +319,56 @@ describe('ysBqD9Nx #4 / h9newLsd #5 — karta sinxroni', () => {
     });
     expect(result.edited).toBe(0);
     expect(env.transport.editMessage).not.toHaveBeenCalled();
+  });
+
+  it('⭐ BOT-2: chat hamon faol, lekin BOSHQA marketga ulangan — eski karta tahrirlanmaydi (market_id hodisada yo`q)', async () => {
+    const env = makeSync({
+      cards: [
+        { order_id: '81', chat_id: '-1001', message_id: '901', kind: 'group' },
+      ],
+      // Guruh A (5) dan uzilib B (7) ga ulangan; kartaning buyurtmasi A niki.
+      groups: [
+        {
+          chat_id: '-1001',
+          owner_type: 'market',
+          owner_id: '7',
+          scope: 'create',
+          is_active: true,
+        },
+      ],
+      card: cardData({ status: 'cancelled', market_id: '5' }),
+    });
+    const result = await env.service.sync({
+      order_id: '81',
+      from_status: 'waiting',
+      to_status: 'cancelled',
+    });
+    expect(result.edited).toBe(0);
+    expect(env.transport.editMessage).not.toHaveBeenCalled();
+  });
+
+  it('BOT-2: o`z marketining create guruhi — tahrirlanadi (market_id kartadan)', async () => {
+    const env = makeSync({
+      cards: [
+        { order_id: '81', chat_id: '-1001', message_id: '901', kind: 'group' },
+      ],
+      groups: [
+        {
+          chat_id: '-1001',
+          owner_type: 'market',
+          owner_id: '5',
+          scope: 'create',
+          is_active: true,
+        },
+      ],
+      card: cardData({ status: 'cancelled', market_id: '5' }),
+    });
+    const result = await env.service.sync({
+      order_id: '81',
+      from_status: 'waiting',
+      to_status: 'cancelled',
+    });
+    expect(result.edited).toBe(1);
   });
 
   it('created → new ketma-ket — guruhda allaqachon karta bor: ikkinchi karta YUBORILMAYDI', async () => {

@@ -181,3 +181,31 @@ describe('KJNHAlGW — findMyTelegramGroups', () => {
     ]);
   });
 });
+
+describe('BOT-2 #5 — admin qo`lda yaratgan guruh (POST /notifications) linked_by', () => {
+  it('⭐ createTelegramMarket — linked_by = admin id (egasi emas → linked_by_owner false)', async () => {
+    const repo = {
+      findOne: jest.fn().mockResolvedValue(null),
+      create: jest.fn((row: Record<string, unknown>) => row),
+      save: jest.fn((row: Record<string, unknown>) =>
+        Promise.resolve({ id: '10', ...row }),
+      ),
+    };
+    const service = new NotificationServiceService(
+      repo as never,
+      {} as never,
+      { log: jest.fn().mockResolvedValue(undefined) } as never,
+      {} as never,
+      {} as never,
+    );
+    await service.createTelegramMarket({
+      market_id: '37',
+      group_id: '-100777',
+      group_type: 'create',
+      requester: { id: '1', roles: ['admin'] },
+    } as never);
+    expect(repo.create).toHaveBeenCalledWith(
+      expect.objectContaining({ market_id: '37', linked_by: '1' }),
+    );
+  });
+});

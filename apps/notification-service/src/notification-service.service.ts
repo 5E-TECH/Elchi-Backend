@@ -560,11 +560,20 @@ export class NotificationServiceService {
         );
       }
 
+      const rawRequesterId = (dto as { requester?: { id?: unknown } }).requester
+        ?.id;
+      const requesterId =
+        typeof rawRequesterId === 'string' || typeof rawRequesterId === 'number'
+          ? String(rawRequesterId)
+          : '';
       const entity = this.tgMarketRepo.create({
         market_id: dto.market_id,
         group_id: dto.group_id,
         group_type: dto.group_type,
         is_active: dto.is_active ?? true,
+        // (BOT-2 #5) admin qo'lda yaratgan ulanish — kim yaratgan; egasi
+        // emas → `linked_by_owner: false`.
+        linked_by: /^\d{1,19}$/.test(requesterId) ? requesterId : null,
         // (G085w5Qr) nofaol yaratilsa — qo'lda.
         ...(dto.is_active === false
           ? { inactive_reason: 'manual' as const, inactive_at: new Date() }

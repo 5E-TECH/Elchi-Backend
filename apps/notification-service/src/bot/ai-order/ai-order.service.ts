@@ -14,7 +14,10 @@ import {
   TelegramAiDraftStatus,
 } from '../../entities/telegram-ai-draft.entity';
 import { BotActionsService } from '../bot-actions.service';
-import { BotGatewayClient } from '../bot-gateway.client';
+import {
+  BotGatewayClient,
+  BotPasswordChangeRequiredError,
+} from '../bot-gateway.client';
 import { BotTransportService } from '../bot-transport.service';
 import type { BotContext } from '../handlers/bot-context';
 import type { InlineKeyboardButton } from '../telegram.types';
@@ -207,6 +210,12 @@ export class AiOrderService {
         },
       );
     } catch (error) {
+      // Parol almashtirish shart — qoralama «🔁 Qayta urinish» holatiga,
+      // router aniq ko'rsatma bilan javob beradi.
+      if (error instanceof BotPasswordChangeRequiredError) {
+        await this.setStatus(draft.id, 'failed');
+        throw error;
+      }
       this.logger.warn(
         `ai draft ${draft.id}: ai-parse — ${error instanceof Error ? error.message : 'error'}`,
       );
@@ -293,6 +302,11 @@ export class AiOrderService {
         { timeoutMs: CONFIRM_TIMEOUT_MS },
       );
     } catch (error) {
+      // Parol almashtirilgach «✅ Yaratish» ni qayta bosish mumkin bo'lsin.
+      if (error instanceof BotPasswordChangeRequiredError) {
+        await this.setStatus(draft.id, 'preview');
+        throw error;
+      }
       this.logger.warn(
         `ai draft ${draft.id}: ai-confirm — ${error instanceof Error ? error.message : 'error'}`,
       );

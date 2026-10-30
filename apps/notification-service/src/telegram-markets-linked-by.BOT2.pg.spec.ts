@@ -8,18 +8,19 @@ import { TelegramMarketsLinkedBy1716000000189 } from '../../../migrations/171600
  *  - trigger yangi / yangilangan qatorda `telegram_chats.linked_by` ni yozadi;
  *  - ikki marta up — xatosiz; down — ustun o'chadi, trigger ishlayveradi.
  *
- *   TG_LINKED_BY_PG_TEST_URI=postgres://postgres@127.0.0.1:55432/elchi_tg_linked_test \
+ * CI `bot-postgres-specs` job'i bilan (`BOT_PG_TEST_URI`); o'z bazasini
+ * (`elchi_tg_linked_test`) yaratadi — bot-core.pg bilan to'qnashmaydi.
+ *
+ *   BOT_PG_TEST_URI=postgres://postgres@127.0.0.1:55443/elchi_bot_test \
  *     npx jest telegram-markets-linked-by
  */
-const uri = process.env.TG_LINKED_BY_PG_TEST_URI;
+const uri = process.env.BOT_PG_TEST_URI;
 const local = (() => {
   if (!uri) return false;
   const url = new URL(uri);
-  return (
-    ['127.0.0.1', 'localhost'].includes(url.hostname) &&
-    url.pathname === '/elchi_tg_linked_test'
-  );
+  return ['127.0.0.1', 'localhost'].includes(url.hostname);
 })();
+const DB = 'elchi_tg_linked_test';
 
 (local ? describe : describe.skip)(
   'BOT-2 #5 — telegram_markets.linked_by (migratsiya 189)',
@@ -42,7 +43,17 @@ const local = (() => {
     };
 
     beforeAll(async () => {
-      db = new DataSource({ type: 'postgres', url: uri });
+      const admin = new DataSource({ type: 'postgres', url: uri });
+      await admin.initialize();
+      const exists: unknown[] = await admin.query(
+        `SELECT 1 FROM pg_database WHERE datname = $1`,
+        [DB],
+      );
+      if (!exists.length) await admin.query(`CREATE DATABASE ${DB}`);
+      await admin.destroy();
+      const url = new URL(uri!);
+      url.pathname = `/${DB}`;
+      db = new DataSource({ type: 'postgres', url: url.toString() });
       await db.initialize();
       await db.query('DROP SCHEMA IF EXISTS notification_schema CASCADE');
       await db.query('CREATE SCHEMA notification_schema');
@@ -66,6 +77,7 @@ const local = (() => {
           "entity_id" varchar(100) NOT NULL,
           "action" varchar(64) NOT NULL,
           "metadata" jsonb,
+          "user_id" varchar(100),
           "created_at" timestamptz NOT NULL DEFAULT now()
         )`);
       await db.query(`
@@ -78,6 +90,11 @@ const local = (() => {
                ('TelegramMarket', '1', 'notification.tg_group_connected', '{"linked_by": "5"}', now() - interval '1 day'),
                ('TelegramMarket', '2', 'notification.tg_group_connected', '{"via": "code"}', now()),
                ('TelegramMarket', '3', 'notification.tg_group_connected', '{"linked_by": "abc"}', now())`);
+      // Admin qo'lda yaratgan (POST /notifications) — `created`, user_id.
+      await db.query(`
+        INSERT INTO notification_schema.activity_logs (entity_type, entity_id, action, metadata, user_id)
+        VALUES ('TelegramMarket', '2', 'created', '{}', '1'),
+               ('TelegramMarket', '3', 'created', '{}', 'system')`);
     });
 
     afterAll(async () => {
@@ -94,12 +111,13 @@ const local = (() => {
         await db.query(
           `SELECT id, linked_by FROM notification_schema.telegram_markets ORDER BY id`,
         );
-      // Eng so'nggi audit yozuvi; linked_by yo'q / raqam emas — NULL.
-      expect(markets.map((r) => r.linked_by)).toEqual(['5', null, null]);
+      // Eng so'nggi ulash yozuvi; admin yaratgani — `created` dagi user_id;
+      // raqam emas — NULL.
+      expect(markets.map((r) => r.linked_by)).toEqual(['5', '1', null]);
       const chats: Array<{ linked_by: string | null }> = await db.query(
         `SELECT linked_by FROM notification_schema.telegram_chats ORDER BY source_market_row_id`,
       );
-      expect(chats.map((r) => r.linked_by)).toEqual(['5', null, null]);
+      expect(chats.map((r) => r.linked_by)).toEqual(['5', '1', null]);
     });
 
     it('⭐ trigger: yangi ulanish va yangilanishda telegram_chats.linked_by', async () => {

@@ -35,7 +35,7 @@ const order = {
   status: Order_status.CANCELLED,
   total_price: 150000,
   address: "Navoiy ko'chasi 12-uy",
-  comment: null,
+  comment: 'Ikkinchi raqam +998931112299, oluvchi Dilnoza',
   return_reason: null,
   createdAt: new Date('2026-10-09T09:05:00.000Z'),
   items: [],
@@ -90,6 +90,10 @@ describe('BOT-2 #1 — bekor guruhi xabari va mijoz PII sozlamasi', () => {
     expect(text).toContain('📍 <b>Manzil:</b> Chilonzor');
     expect(text).not.toContain('Navoiy');
     expect(text).not.toContain('Toshkent sh.');
+    // Izoh (ikkinchi telefon, oluvchi ismi) ham chiqmaydi.
+    expect(text).not.toContain('Izoh');
+    expect(text).not.toContain('+998931112299');
+    expect(text).not.toContain('Dilnoza');
   });
 
   it('sozlama YOQIQ (sukut) — hozirgidek to`liq', async () => {
@@ -100,6 +104,7 @@ describe('BOT-2 #1 — bekor guruhi xabari va mijoz PII sozlamasi', () => {
       expect(text).toContain(
         "📍 <b>Manzil:</b> Toshkent sh., Chilonzor, Navoiy ko'chasi 12-uy",
       );
+      expect(text).toContain('📝 <b>Izoh:</b> Ikkinchi raqam +998931112299');
     }
   });
 

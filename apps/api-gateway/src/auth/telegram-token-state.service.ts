@@ -11,8 +11,12 @@ export const TELEGRAM_TOKEN_STATE_PATTERN = {
 export const TELEGRAM_TOKEN_STATE_TTL_MS = 60_000;
 /** identity javob bermasa — «noma'lum» shuncha saqlanadi (fail closed, 503). */
 export const TELEGRAM_TOKEN_UNKNOWN_TTL_MS = 5_000;
-/** identity javob bermaganda yaqinda «faol» tasdiqlangan token o'tadi. */
-export const TELEGRAM_TOKEN_ACTIVE_GRACE_MS = 5 * 60_000;
+/**
+ * identity javob bermaganda yaqinda «faol» tasdiqlangan token o'tadi —
+ * lekin TTL dan uzoq EMAS: «nofaol / uzilgan xodim ≤ 60 s da 401» kontrakti
+ * identity sekin bo'lganda ham buzilmaydi.
+ */
+export const TELEGRAM_TOKEN_ACTIVE_GRACE_MS = TELEGRAM_TOKEN_STATE_TTL_MS;
 const TELEGRAM_TOKEN_STATE_TIMEOUT_MS = 1_500;
 const TELEGRAM_TOKEN_CACHE_MAX = 10_000;
 
@@ -96,8 +100,9 @@ export class TelegramTokenStateService {
       this.write(key, state, TELEGRAM_TOKEN_UNKNOWN_TTL_MS);
       return state;
     }
+    // delete + set: Map oxiriga ko'chadi — hajm chegarasida eng ESKI chiqadi.
+    this.lastActiveAt.delete(key);
     if (state === 'active') this.lastActiveAt.set(key, this.now());
-    else this.lastActiveAt.delete(key);
     this.write(key, state, TELEGRAM_TOKEN_STATE_TTL_MS);
     return state;
   }

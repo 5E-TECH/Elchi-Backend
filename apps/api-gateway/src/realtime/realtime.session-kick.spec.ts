@@ -120,6 +120,21 @@ describe('Elchi Pochta #3 (2026-10-24) — realtime: yopilgan sessiya socketdan 
   };
 
   describe('ulanish', () => {
+    it('⭐ BOT-2: Telegram tokeni (Mini App tg_scan va bot aktori) — socket RAD, hech qaysi xonaga kirmaydi', async () => {
+      for (const extra of [
+        { auth: 'telegram', scope: 'tg_scan', tg_id: '5550007' },
+        { auth: 'telegram', tg_id: '5550007' },
+      ]) {
+        const { client, joined } = socket(
+          jwt.sign({ sub: '25', roles: ['COURIER'], ...extra }),
+        );
+        await gateway.handleConnection(client as never);
+        expect(joined).toEqual([]);
+        expect(client.disconnect).toHaveBeenCalled();
+        expect(gateway.isOnline('25')).toBe(false);
+      }
+    });
+
     it('⭐ ochiq sessiya: avval `session:<sid>`, keyin `user:`/`role:`; `connected` da `session_id`', async () => {
       const { client, joined } = socket(token(SID_PHONE.toUpperCase()));
       await gateway.handleConnection(client as never);

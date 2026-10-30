@@ -5,7 +5,7 @@ import {
 } from '@app/common';
 import type { TelegramBotAction } from '../../entities/telegram-bot-action.entity';
 import { BotActionsService } from '../bot-actions.service';
-import { BotGatewayClient } from '../bot-gateway.client';
+import { BotGatewayClient, rethrowPasswordChange } from '../bot-gateway.client';
 import { BotTransportService } from '../bot-transport.service';
 import type { BotActionHandler, BotContext } from '../handlers/bot-context';
 import type { InlineKeyboardButton } from '../telegram.types';
@@ -144,6 +144,7 @@ export class ExtraCostActions {
         { timeoutMs: 60_000 },
       );
     } catch (error) {
+      rethrowPasswordChange(error);
       this.logger.warn(
         `extra-cost ${decision} #${approvalId}: ${error instanceof Error ? error.message : 'error'}`,
       );

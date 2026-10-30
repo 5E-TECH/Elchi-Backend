@@ -30,6 +30,15 @@ export class BotPasswordChangeRequiredError extends Error {
 }
 
 /**
+ * Handler'dagi `catch` uni «aloqa xatosi» deb YUTMASIN — router aniq
+ * «Avval kabinetda parolni almashtiring» javobini beradi. Gateway'ga
+ * boradigan har `try/catch` / `.catch()` boshida chaqiriladi.
+ */
+export function rethrowPasswordChange(error: unknown): void {
+  if (error instanceof BotPasswordChangeRequiredError) throw error;
+}
+
+/**
  * (xC88d8kH #3 / 3ZfiXuaW DIQQAT) Bot amallari aktorning O'Z JWT'si bilan
  * MAVJUD gateway endpointlariga boradi — bot uchun "qulayroq" parallel
  * endpoint YO'Q, RBAC bitta joyda (assertCanViewOrder, isCourier doirasi…).

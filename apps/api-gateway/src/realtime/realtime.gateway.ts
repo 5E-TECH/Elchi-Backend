@@ -428,7 +428,15 @@ export class RealtimeGateway
         branch_id?: string | number | null;
         sid?: string | null;
         exp?: number;
+        auth?: string | null;
       }>(raw);
+      /**
+       * (BOT-2) Telegram tokenlari (Mini App `tg_scan` va bot aktori) socket
+       * ishlatmaydi: ular sessiya emas (`sid` yo'q — sessiya tekshiruvi
+       * o'tkazib yuborilardi) va `user:` / `role:` xonalaridan nofaol
+       * qilingandan keyin ham 30 daqiqagacha hodisa olardi. Rad etiladi.
+       */
+      if (payload.auth === 'telegram') return null;
       const branchId =
         payload.branch_id == null ? '' : String(payload.branch_id).trim();
       return {

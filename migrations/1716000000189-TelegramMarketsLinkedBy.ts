@@ -6,7 +6,8 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  *
  *  - Eski qatorlar audit jurnalidan to'ldiriladi
  *    (`activity_logs`: `TelegramMarket` / `notification.tg_group_connected`,
- *    `metadata.linked_by`); topilmasa NULL (noma'lum) qoladi.
+ *    `metadata.linked_by`; admin qo'lda yaratgan — `created`, `user_id`);
+ *    topilmasa NULL (noma'lum) qoladi.
  *  - `telegram_markets_sync_chats` trigger funksiyasi (1716000000126) endi
  *    `linked_by` ni ham `telegram_chats` ga aks ettiradi; mavjud
  *    `telegram_chats` qatorlari ham to'ldiriladi.
@@ -37,6 +38,23 @@ export class TelegramMarketsLinkedBy1716000000189 implements MigrationInterface 
            WHERE al."entity_type" = 'TelegramMarket'
              AND al."action" = 'notification.tg_group_connected'
              AND (al."metadata"->>'linked_by') ~ '^[0-9]{1,18}$'
+           ORDER BY al."entity_id", al."created_at" DESC
+        ) src
+       WHERE src."entity_id" = tm."id"::text
+         AND tm."linked_by" IS NULL
+    `);
+    // Admin qo'lda yaratgan ulanishlar (POST /notifications) — `created`.
+    await queryRunner.query(`
+      UPDATE "notification_schema"."telegram_markets" tm
+         SET "linked_by" = src."linked_by"
+        FROM (
+          SELECT DISTINCT ON (al."entity_id")
+                 al."entity_id",
+                 al."user_id"::bigint AS "linked_by"
+            FROM "notification_schema"."activity_logs" al
+           WHERE al."entity_type" = 'TelegramMarket'
+             AND al."action" = 'created'
+             AND al."user_id" ~ '^[0-9]{1,18}$'
            ORDER BY al."entity_id", al."created_at" DESC
         ) src
        WHERE src."entity_id" = tm."id"::text

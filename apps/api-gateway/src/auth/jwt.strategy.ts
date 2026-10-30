@@ -98,13 +98,17 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     // lekin har so'rovda (≤60 s kesh) xodim faolligi, roli va SHU Telegram
     // ulanishi tekshiriladi: nofaol qilingan / /uzish qilgan xodim tokeni
     // 30 daqiqa ishlamaydi. identity javob bermasa — 503 (fail closed).
+    if (payload.auth === 'telegram') {
+      // Deploy'dan oldingi Telegram tokeni (`tg_id` / scope yo'q) — 401: bot
+      // har so'rovda yangi token oladi, Mini App qayta ochiladi.
+      if (typeof payload.tg_id !== 'string' || !payload.tg_id) {
+        throw new UnauthorizedException('Telegram token is outdated');
+      }
+    }
     if (this.telegramTokens && payload.auth === 'telegram') {
       const state = await this.telegramTokens.state({
         userId: String(payload.sub ?? ''),
-        telegramId:
-          typeof payload.tg_id === 'string' && payload.tg_id
-            ? payload.tg_id
-            : null,
+        telegramId: String(payload.tg_id),
         role: roles[0] ?? null,
       });
       if (state === 'revoked') {

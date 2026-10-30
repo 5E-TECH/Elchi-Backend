@@ -370,7 +370,12 @@ export function buildOrderTelegramText(
       CANCEL_REASON_UZ[String(order.return_reason)] ?? order.return_reason;
     lines.push(`↩️ <b>Sabab:</b> ${field(reason, 200)}`);
   }
-  lines.push(`📝 <b>Izoh:</b> ${field(order.comment, 800)}`);
+  // (BOT-2) Izohga operatorlar ikkinchi telefon, mo'ljal, oluvchi ismini
+  // yozadi — sozlama o'chiq bo'lsa PII sifatida chiqarilmaydi (guruh
+  // kartasi ham izohni ko'rsatmaydi).
+  if (showPii) {
+    lines.push(`📝 <b>Izoh:</b> ${field(order.comment, 800)}`);
+  }
 
   // Chegaradan oshsa — butun satrlar bo'yicha kesiladi (teg/entity buzilmaydi).
   let text = '';
