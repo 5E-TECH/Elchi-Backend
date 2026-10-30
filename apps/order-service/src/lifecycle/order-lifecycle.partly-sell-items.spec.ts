@@ -150,6 +150,7 @@ function setup(existingItems: Row[], orderExtra: Record<string, unknown> = {}) {
     });
 
   return {
+    service: s,
     partlySell,
     savedItems,
     childItems,
@@ -244,6 +245,26 @@ describe('partlySellOrder — katalogsiz (hamkor) qatorlar', () => {
       parent_order_id: '120',
       special_categories: ['fragile', 'battery'],
     });
+  });
+
+  it('T8: oradagi PUT — bola QULF ostidagi qatordan oladi (eski nusxadan emas)', async () => {
+    const t = setup(
+      [{ id: '5501', product_id: null, product_name: 'tv', quantity: 2 }],
+      { special_categories: ['fragile'] },
+    );
+    // findById (qulfdan oldin) — ['fragile']; qulf paytida PUT allaqachon
+    // ['fragile','liquid'] yozgan.
+    Object.assign(t.service, {
+      lockWaitingOrder: jest.fn().mockResolvedValue({
+        id: '120',
+        status: Order_status.WAITING,
+        special_categories: ['fragile', 'liquid'],
+      }),
+    });
+
+    await t.partlySell([{ order_item_id: '5501', quantity: 1 }]);
+
+    expect(t.childOrders[0]?.special_categories).toEqual(['fragile', 'liquid']);
   });
 
   it('T8: belgisiz eski buyurtma — bolada ham `[]`', async () => {

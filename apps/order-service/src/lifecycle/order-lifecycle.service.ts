@@ -1995,7 +1995,7 @@ export class OrderLifecycleService {
   private async lockWaitingOrder(
     tx: EntityManager,
     orderId: string,
-  ): Promise<void> {
+  ): Promise<Order> {
     const locked = await tx.getRepository(Order).findOne({
       where: { id: String(orderId) },
       lock: { mode: 'pessimistic_write' },
@@ -2003,6 +2003,9 @@ export class OrderLifecycleService {
     if (!locked || locked.status !== Order_status.WAITING) {
       this.badRequest('Order not found or not in waiting status');
     }
+    // T8: qulf ostidagi qator — chaqiruvchi oradagi o'zgarishlarni (masalan
+    // maxsus belgilar PUT'i) shundan oladi.
+    return locked;
   }
 
   private async updateCashboxBalance(
@@ -10213,7 +10216,7 @@ export class OrderLifecycleService {
     await queryRunner.startTransaction();
     try {
       const tx = queryRunner.manager;
-      await this.lockWaitingOrder(tx, id);
+      const lockedOrder = await this.lockWaitingOrder(tx, id);
       const txOrderItemRepo = tx.getRepository(OrderItem);
       const pay = (
         // `typeof this.…` bu yerda TS 5.9 da hal bo'lmaydi (metodda boshqa
@@ -10459,7 +10462,12 @@ export class OrderLifecycleService {
           qr_code_token: `CANCEL-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`,
           parent_order_id: String(order.id),
           // T8: qolgan mahsulotlar o'sha posilka — belgilar meros.
-          special_categories: [...(order.special_categories ?? [])],
+          // Qulf ostidagi qatordan — oradagi PUT eski nusxa bilan bosilmasin.
+          special_categories: [
+            ...(lockedOrder?.special_categories ??
+              order.special_categories ??
+              []),
+          ],
           source: order.source,
           // 6kHnNH9j: bola ota buyurtma bandida — omborga qaytishi uchun.
           ...(this.orderWarehouse?.inheritedFields(order) ?? {}),
@@ -11021,6 +11029,10 @@ export class OrderLifecycleService {
 
     // Prevent TypeORM cascade on stale one-to-many relation from nulling order_id.
     delete (order as Partial<Order> & { items?: OrderItem[] }).items;
+    // T8: maxsus belgilarni faqat `setSpecialCategories` (FOR UPDATE) yozadi.
+    // Qulfsiz o'qilgan eski massiv `save()` da parallel PUT'ni bosib
+    // ketmasin — ustun bu yerda umuman yozilmaydi.
+    delete (order as Partial<Order>).special_categories;
 
     /**
      * ⚠️ hn9zr9A1 — `branch_id` O'ZGARSA, ESKI `branch` RELATSIYASI OLIB
