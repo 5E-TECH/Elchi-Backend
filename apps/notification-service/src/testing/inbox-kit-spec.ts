@@ -84,24 +84,75 @@ export function makeInbox(
     ),
     count: jest.fn().mockResolvedValue(0),
   };
-  const manager = { getRepository: () => txRepo };
+  const deliveryPatches: Array<{
+    ids: string[];
+    patch: Record<string, string>;
+  }> = [];
+  const manager = {
+    getRepository: () => txRepo,
+    // (BOT-3c) relay: tranzaksiyada `delivery.telegram = queued`.
+    query: jest.fn((sql: string, params: unknown[] = []) => {
+      if (/"telegram":"queued"/.test(sql)) {
+        for (const id of (params[0] as string[]) ?? []) {
+          const row = store.get(String(id));
+          if (row) {
+            store.set(String(id), {
+              ...row,
+              delivery: { ...(row.delivery ?? {}), telegram: 'queued' },
+            });
+          }
+        }
+      }
+      return Promise.resolve([]);
+    }),
+  };
   const repo = {
     manager: {
       transaction: (work: (m: unknown) => Promise<unknown>) => work(manager),
     },
+    // (BOT-3c) recordDelivery: `delivery || :patch` id bo'yicha store'ga
+    // qo'llanadi va yoziladi (`deliveryPatches`) — testlar patch tarkibini
+    // tekshiradi.
     createQueryBuilder: () => {
+      const current: { patch: Record<string, string>; ids: string[] } = {
+        patch: {},
+        ids: [],
+      };
       const qb: Record<string, jest.Mock> = {};
-      for (const key of ['update', 'set', 'setParameter', 'whereInIds'])
-        qb[key] = jest.fn(() => qb);
-      qb.execute = jest.fn().mockResolvedValue({ affected: 1 });
+      for (const key of ['update', 'set']) qb[key] = jest.fn(() => qb);
+      qb.setParameter = jest.fn((name: string, value: string) => {
+        if (name === 'patch') {
+          current.patch = JSON.parse(value) as Record<string, string>;
+        }
+        return qb;
+      });
+      qb.whereInIds = jest.fn((ids: string[]) => {
+        current.ids = ids.map(String);
+        return qb;
+      });
+      qb.execute = jest.fn(() => {
+        deliveryPatches.push({ ids: current.ids, patch: current.patch });
+        for (const id of current.ids) {
+          const row = store.get(id);
+          if (row) {
+            store.set(id, {
+              ...row,
+              delivery: { ...(row.delivery ?? {}), ...current.patch },
+            });
+          }
+        }
+        return Promise.resolve({ affected: current.ids.length });
+      });
       return qb;
     },
   };
-  const telegramService = options.telegramService ?? {
-    sendNotification: jest.fn().mockResolvedValue({
-      data: { success: 1, failed: 0, results: [{ ok: true }] },
-    }),
-  };
+  const telegramService = withGroupRelay(
+    options.telegramService ?? {
+      sendNotification: jest.fn().mockResolvedValue({
+        data: { success: 1, failed: 0, results: [{ ok: true }] },
+      }),
+    },
+  );
   const activityLog = { log: jest.fn().mockResolvedValue(undefined) };
   const service = new NotificationInboxService(
     repo as never,
@@ -120,5 +171,53 @@ export function makeInbox(
     undefined,
     (options.dedup ?? undefined) as DispatchDedupService | undefined,
   );
-  return { service, store, txRepo, telegramService, activityLog };
+  return {
+    service,
+    store,
+    txRepo,
+    telegramService,
+    activityLog,
+    manager,
+    deliveryPatches,
+  };
+}
+
+/**
+ * (BOT-3c) Guruh relay'i endi ikki qadam: dispatch tranzaksiyasi ichida
+ * `enqueueGroupRelay` (outbox qatori), commit'dan keyin `flushGroupRelay`.
+ * Mavjud spec'lar relay natijasini `sendNotification` mock'i orqali
+ * boshqaradi — bu yordamchi ikkala qadamni shu mock'ga ulaydi (yuborilgan
+ * payload — avvalgidek `{market_id, group_id, group_type, message, parse_mode}`).
+ */
+export function withGroupRelay<T extends { sendNotification: jest.Mock }>(
+  service: T,
+): T & { enqueueGroupRelay: jest.Mock; flushGroupRelay: jest.Mock } {
+  const pending = new Map<string, Record<string, unknown>>();
+  let seq = 0;
+  const enqueueGroupRelay = jest.fn(
+    (
+      _manager: unknown,
+      target: Record<string, unknown>,
+      message: string,
+      notificationIds: string[],
+    ) => {
+      seq += 1;
+      const id = `relay-${seq}`;
+      pending.set(id, {
+        market_id: target.market_id,
+        group_id: target.group_id,
+        group_type: target.group_type,
+        message,
+        parse_mode: 'HTML',
+        notification_ids: notificationIds,
+      });
+      return Promise.resolve([id]);
+    },
+  );
+  const flushGroupRelay = jest.fn(async (ids: string[]) => {
+    const payload = { ...pending.get(ids[0]) };
+    delete payload.notification_ids;
+    return (await service.sendNotification(payload)) as unknown;
+  });
+  return Object.assign(service, { enqueueGroupRelay, flushGroupRelay });
 }

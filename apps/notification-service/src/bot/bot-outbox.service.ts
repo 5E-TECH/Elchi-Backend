@@ -2,7 +2,7 @@ import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Interval } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { EntityManager, Repository } from 'typeorm';
 import { TelegramOutbox } from '../entities/telegram-outbox.entity';
 import { resolveBotConfig } from './bot-config';
 import {
@@ -36,7 +36,23 @@ export interface OutboxMessage {
    * band qilish qatori o'chiriladi.
    */
   cardOrderId?: string | null;
+
+  /**
+   * (BOT-3c) Yakuniy natija (`sent` / `dead`) shu inbox qatorlarining
+   * `delivery.telegram` iga yoziladi — `queued` / `retrying` jim qolmaydi.
+   */
+  notificationIds?: string[];
 }
+
+type OutboxRow = {
+  id: string;
+  chat_id: string;
+  payload: Record<string, unknown>;
+  retry_count: number;
+  max_attempts: number;
+  card_order_id?: string | null;
+  notification_ids?: string[] | null;
+};
 
 export type OutboxSendStatus = 'sent' | 'queued' | 'dead';
 
@@ -109,6 +125,70 @@ export class BotOutboxService implements OnModuleDestroy {
 
   /** Yozish + darhol bitta urinish. Throw qilmaydi (natija holatda). */
   async send(message: OutboxMessage): Promise<OutboxSendResult> {
+    const row = await this.insertRow(this.outbox, message, 'sending');
+    return this.attempt(row);
+  }
+
+  /**
+   * (BOT-3c) Chaqiruvchi TRANZAKSIYASI ichida navbatga (`pending`, darhol
+   * muddati kelgan): rollback → xabar yo'q; commit'dan keyin servis yiqilsa
+   * ham worker yuboradi. Commit'dan keyin `sendNow` bilan darhol urinish.
+   */
+  async enqueue(
+    manager: EntityManager,
+    message: OutboxMessage,
+  ): Promise<string> {
+    const row = await this.insertRow(
+      manager.getRepository(TelegramOutbox),
+      message,
+      'pending',
+    );
+    return row.id;
+  }
+
+  /**
+   * (BOT-3c) `enqueue` qilingan qatorlarni darhol bir marta yuborish (worker
+   * kutmasdan). Faqat hali urinilmagan `pending` qatorlar da'vo qilinadi —
+   * worker allaqachon olgan yoki 429 dan keyin qayta urinish navbatidagi
+   * qator takror yuborilmaydi (natija `queued`).
+   */
+  async sendNow(ids: string[]): Promise<OutboxSendResult[]> {
+    if (!ids.length) return [];
+    let rows: OutboxRow[] = [];
+    try {
+      const claimed: unknown = await this.outbox.query(
+        `UPDATE "notification_schema"."telegram_outbox"
+            SET "status" = 'sending', "updated_at" = now()
+          WHERE "id" = ANY($1::bigint[]) AND "status" = 'pending'
+            AND "retry_count" = 0
+        RETURNING "id", "chat_id", "payload", "retry_count", "max_attempts",
+                  "notification_ids"`,
+        [ids],
+      );
+      rows = rowsOf<OutboxRow>(claimed);
+    } catch (error) {
+      this.logger.warn(
+        `telegram_outbox sendNow: ${this.transport.describe(error)} — worker yuboradi`,
+      );
+    }
+    const results: OutboxSendResult[] = [];
+    for (const row of rows) {
+      results.push(await this.attempt({ ...row, id: String(row.id) }));
+    }
+    const done = new Set(results.map((result) => result.id));
+    for (const id of ids) {
+      if (!done.has(String(id))) {
+        results.push({ id: String(id), status: 'queued' });
+      }
+    }
+    return results;
+  }
+
+  private async insertRow(
+    repo: Repository<TelegramOutbox>,
+    message: OutboxMessage,
+    status: 'sending' | 'pending',
+  ): Promise<OutboxRow> {
     // Dasturchi xatosi (64 baytdan uzun callback_data) navbatga tushmasin.
     assertCallbackDataFits(message.reply_markup);
     const payload: Record<string, unknown> = { text: message.text };
@@ -117,29 +197,34 @@ export class BotOutboxService implements OnModuleDestroy {
     if (message.disable_web_page_preview !== undefined) {
       payload.disable_web_page_preview = message.disable_web_page_preview;
     }
-    const inserted = await this.outbox.insert({
+    const maxAttempts = Math.max(1, message.maxAttempts ?? OUTBOX_MAX_ATTEMPTS);
+    const notificationIds = message.notificationIds?.length
+      ? message.notificationIds.map(String)
+      : null;
+    const inserted = await repo.insert({
       bot_slug: this.botSlug,
       chat_id: message.chatId,
       method: 'sendMessage',
       payload: payload as never,
-      status: 'sending',
+      status,
       retry_count: 0,
-      max_attempts: Math.max(1, message.maxAttempts ?? OUTBOX_MAX_ATTEMPTS),
+      max_attempts: maxAttempts,
       source: message.source.slice(0, 48),
       card_order_id: message.cardOrderId ?? null,
+      ...(notificationIds ? { notification_ids: notificationIds } : {}),
     });
     const id = String(
       (inserted.identifiers[0] as { id?: string } | undefined)?.id ?? '',
     );
-    const row = {
+    return {
       id,
       chat_id: message.chatId,
       payload,
       retry_count: 0,
-      max_attempts: Math.max(1, message.maxAttempts ?? OUTBOX_MAX_ATTEMPTS),
+      max_attempts: maxAttempts,
       card_order_id: message.cardOrderId ?? null,
+      notification_ids: notificationIds,
     };
-    return this.attempt(row);
   }
 
   /** Worker: muddati kelgan `pending` va qolib ketgan `sending` qatorlar. */
@@ -148,14 +233,7 @@ export class BotOutboxService implements OnModuleDestroy {
     if (this.draining || this.stopped) return 0;
     this.draining = true;
     try {
-      const claimed: Array<{
-        id: string;
-        chat_id: string;
-        payload: Record<string, unknown>;
-        retry_count: number;
-        max_attempts: number;
-        card_order_id: string | null;
-      }> = await this.outbox.query(
+      const claimed: OutboxRow[] = await this.outbox.query(
         `UPDATE "notification_schema"."telegram_outbox" o
             SET "status" = 'sending', "updated_at" = now()
           WHERE o."id" IN (
@@ -165,7 +243,8 @@ export class BotOutboxService implements OnModuleDestroy {
                  ORDER BY "id"
                  LIMIT ${BATCH}
                  FOR UPDATE SKIP LOCKED)
-        RETURNING o."id", o."chat_id", o."payload", o."retry_count", o."max_attempts", o."card_order_id"`,
+        RETURNING o."id", o."chat_id", o."payload", o."retry_count", o."max_attempts",
+                  o."card_order_id", o."notification_ids"`,
         [STALE_SENDING_MS],
       );
       const rows = Array.isArray(claimed[0])
@@ -186,14 +265,7 @@ export class BotOutboxService implements OnModuleDestroy {
   }
 
   private async attempt(
-    row: {
-      id: string;
-      chat_id: string;
-      payload: Record<string, unknown>;
-      retry_count: number;
-      max_attempts: number;
-      card_order_id?: string | null;
-    },
+    row: OutboxRow,
     migratedOnce = false,
   ): Promise<OutboxSendResult> {
     const payload = row.payload as {
@@ -233,6 +305,7 @@ export class BotOutboxService implements OnModuleDestroy {
           result.message_id,
         );
       }
+      await this.settle(row.notification_ids, 'sent', null);
       return { id: row.id, status: 'sent', result, chat_id: row.chat_id };
     } catch (error) {
       const reason = this.transport.describe(error).slice(0, ERROR_MAX);
@@ -315,6 +388,7 @@ export class BotOutboxService implements OnModuleDestroy {
         await this.releaseCard(row.card_order_id, row.chat_id);
       }
       if (dead) {
+        await this.settle(row.notification_ids, 'dead', reason);
         this.logger.warn(
           `telegram_outbox #${row.id} dead-letter (${retryCount} urinish, chat ${row.chat_id}): ${reason}`,
         );
@@ -387,4 +461,45 @@ export class BotOutboxService implements OnModuleDestroy {
         ),
       );
   }
+
+  /**
+   * (BOT-3c) Inbox qatorlarining yakuniy `delivery.telegram` i — faqat hali
+   * oraliq holatda (`queued` / `retrying` / `sending`) bo'lganlari: bir
+   * nechta guruhga relay'da birinchi yakun qoladi, yakunlangan qayta yozilmaydi.
+   * Best-effort: xato — faqat log (xabar baribir ketgan / dead).
+   */
+  private async settle(
+    notificationIds: string[] | null | undefined,
+    outcome: 'sent' | 'dead',
+    reason: string | null,
+  ): Promise<void> {
+    if (!notificationIds?.length) return;
+    const patch =
+      outcome === 'sent'
+        ? { telegram: 'sent' }
+        : {
+            telegram: 'failed',
+            telegram_error: (reason ?? 'telegram_failed').slice(0, 200),
+          };
+    try {
+      await this.outbox.query(
+        `UPDATE "notification_schema"."notifications"
+            SET "delivery" = (COALESCE("delivery", '{}'::jsonb) - 'telegram_error') || $2::jsonb
+          WHERE "id" = ANY($1::bigint[])
+            AND "delivery"->>'telegram' IN ('queued', 'retrying', 'sending')`,
+        [notificationIds, JSON.stringify(patch)],
+      );
+    } catch (error) {
+      this.logger.error(
+        `telegram_outbox: inbox holati yozilmadi (${notificationIds.length} qator): ${this.transport.describe(error)}`,
+      );
+    }
+  }
 }
+
+const rowsOf = <T>(result: unknown): T[] => {
+  if (!Array.isArray(result)) return [];
+  // pg UPDATE … RETURNING: TypeORM `query` → [rows, count].
+  if (Array.isArray(result[0])) return result[0] as T[];
+  return result as T[];
+};

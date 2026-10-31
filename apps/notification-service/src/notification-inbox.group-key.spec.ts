@@ -8,6 +8,7 @@ import {
   buildCourierAssignedPayload,
   buildOrderNotificationPayload,
 } from '../../order-service/src/notification/order-notification.service';
+import { withGroupRelay } from './testing/inbox-kit-spec';
 
 /**
  * OA16fdSq TC7 — bir buyurtma bo'yicha ketma-ket 3 ta status o'zgarishi
@@ -95,15 +96,18 @@ describe('NotificationInboxService — group_key: bir buyurtma = inboxda bitta q
       createQueryBuilder: jest.fn(() => qb),
       manager: {
         transaction: jest.fn((work: (manager: any) => Promise<unknown>) =>
-          work({ getRepository: () => txRepo }),
+          work({
+            getRepository: () => txRepo,
+            query: jest.fn().mockResolvedValue([]),
+          }),
         ),
       },
     };
-    telegramService = {
+    telegramService = withGroupRelay({
       sendNotification: jest.fn().mockResolvedValue({
         data: { success: 1, failed: 0, results: [{ ok: true }] },
       }),
-    };
+    });
     service = new NotificationInboxService(
       repo,
       { send: jest.fn() } as any,

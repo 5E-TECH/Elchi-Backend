@@ -5,6 +5,7 @@ import { DispatchNotificationDto } from './dto/dispatch-notification.dto';
 import { NotificationEscalationService } from './escalation/notification-escalation.service';
 import { NotificationInboxService } from './notification-inbox.service';
 import { NotificationPreferencesService } from './preferences/notification-preferences.service';
+import { withGroupRelay } from './testing/inbox-kit-spec';
 
 const rmqSendMock = jest.fn();
 
@@ -66,7 +67,10 @@ describe('NotificationInboxService — sozlamalar va kanal rejasi', () => {
         ),
       ),
     };
-    const manager = { getRepository: jest.fn(() => txRepo) };
+    const manager = {
+      getRepository: jest.fn(() => txRepo),
+      query: jest.fn().mockResolvedValue([]),
+    };
     transaction = jest.fn((work: (m: unknown) => Promise<unknown>) =>
       work(manager),
     );
@@ -129,11 +133,11 @@ describe('NotificationInboxService — sozlamalar va kanal rejasi', () => {
     );
     pushDelivery = { enqueue: jest.fn().mockResolvedValue(undefined) };
     gatewayClient = { emit: jest.fn(() => of(null)) };
-    telegramService = {
+    telegramService = withGroupRelay({
       sendNotification: jest
         .fn()
         .mockResolvedValue({ data: { success: 1, failed: 0 } }),
-    };
+    });
     service = new NotificationInboxService(
       repo,
       { send: jest.fn() } as any,

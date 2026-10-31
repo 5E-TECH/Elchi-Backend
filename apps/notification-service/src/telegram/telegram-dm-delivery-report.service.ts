@@ -73,6 +73,7 @@ const bucketOf = (status: string | null): Bucket => {
     case 'failed':
       return 'failed';
     case 'queued':
+    case 'retrying':
     case 'sending':
     case 'pending':
       return 'pending';

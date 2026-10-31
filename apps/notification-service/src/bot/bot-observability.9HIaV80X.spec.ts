@@ -19,10 +19,12 @@ import {
   redactToken,
 } from './bot-transport.service';
 import { MembershipHandler } from './handlers/membership.handler';
+import { StartHandler } from './handlers/start.handler';
 import type { BotActionHandler } from './handlers/bot-context';
 import {
   ENV_BOT_TOKEN,
   callbackUpdate,
+  makeCtx,
   makeFetch,
   makeOutbox,
   makeOutboxRepo,
@@ -106,24 +108,36 @@ describe('9HIaV80X — my_chat_member (bot chiqarildi / bloklandi)', () => {
     },
   );
 
-  it('shaxsiy chat bloklasa — sessiyada blocked_at; qayta `member` — blok olib tashlanadi', async () => {
+  it('⭐ BOT-3c: shaxsiy chat bloklasa — telegram_blocked_chats (muddatsiz, sessiyada EMAS); qayta `member` — blok o‘chadi', async () => {
     const deps = makeChannels([]);
     const handler = new MembershipHandler(deps.channels);
     await handler.handle('elchi', {
       chat: { id: 5550007, type: 'private' },
       new_chat_member: { status: 'kicked' },
     });
-    expect(deps.query).not.toHaveBeenCalled();
-    expect(deps.sessions.update).toHaveBeenCalledWith(
-      '5550007',
-      'elchi',
-      expect.any(Function),
+    const [insertSql, insertParams] = deps.query.mock.calls[0] as [
+      string,
+      unknown[],
+    ];
+    expect(insertSql).toContain(
+      'INSERT INTO "notification_schema"."telegram_blocked_chats"',
     );
+    expect(insertParams).toEqual(['5550007', 'kicked']);
+    expect(deps.sessions.update).not.toHaveBeenCalled();
+    deps.query.mockResolvedValue([{ chat_id: '5550007' }]);
     await handler.handle('elchi', {
       chat: { id: 5550007, type: 'private' },
       new_chat_member: { status: 'member' },
     });
-    expect(deps.sessions.update).toHaveBeenCalledTimes(2);
+    const [deleteSql] = deps.query.mock.calls[1] as [string];
+    expect(deleteSql).toContain(
+      'DELETE FROM "notification_schema"."telegram_blocked_chats"',
+    );
+    // Eski sessiya belgisi ham tozalanadi.
+    expect(deps.sessions.update).toHaveBeenCalledTimes(1);
+    expect(deps.activityLog.log).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'notification.tg_channel_active' }),
+    );
     expect(deps.dispatch).not.toHaveBeenCalled();
   });
 });
@@ -520,4 +534,55 @@ describe('9HIaV80X — activity_log: holat o‘zgartiruvchi callback', () => {
     );
     expect(handle).toHaveBeenCalledTimes(1);
   });
+});
+
+describe('BOT-3c — blok olib tashlash bir marta qayta urinadi', () => {
+  it('⭐ DELETE birinchi urinishda yiqilsa — qayta urinadi, blok o‘chadi', async () => {
+    const query = jest
+      .fn()
+      .mockRejectedValueOnce(new Error('connection reset'))
+      .mockResolvedValue([{ chat_id: '5550007' }]);
+    const sessions = {
+      load: jest.fn().mockResolvedValue({ state: {} }),
+      update: jest.fn(),
+    };
+    const activityLog = { log: jest.fn().mockResolvedValue(undefined) };
+    const channels = new BotChannelService(
+      { query } as never,
+      sessions as never,
+      activityLog as never,
+      {} as never,
+    );
+    await channels.markActive('5550007', 'elchi');
+    expect(query).toHaveBeenCalledTimes(2);
+    expect(activityLog.log).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'notification.tg_channel_active' }),
+    );
+  });
+});
+
+describe('BOT-3c — shaxsiy chatda /start blok belgisini o‘chiradi', () => {
+  it.each(['/start', '/start abc_DEF-123'])(
+    '%s → markActive(chat, slug); guruhda va boshqa matnda — yo‘q',
+    async (text) => {
+      const channels = { markActive: jest.fn().mockResolvedValue(undefined) };
+      const handler = new StartHandler(
+        {
+          linkAttempt: jest.fn().mockResolvedValue({ allowed: true }),
+        } as never,
+        { log: jest.fn().mockResolvedValue(undefined) } as never,
+        { get: () => undefined } as never,
+        undefined,
+        channels as never,
+      );
+      await handler.handle(makeCtx({ text, chatId: '5550007' }).ctx);
+      expect(channels.markActive).toHaveBeenCalledWith('5550007', 'elchi');
+      channels.markActive.mockClear();
+      await handler.handle(
+        makeCtx({ text, chatId: '-100555', chatType: 'group' }).ctx,
+      );
+      await handler.handle(makeCtx({ text: '/help', chatId: '5550007' }).ctx);
+      expect(channels.markActive).not.toHaveBeenCalled();
+    },
+  );
 });

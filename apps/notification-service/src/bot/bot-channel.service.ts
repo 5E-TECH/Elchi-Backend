@@ -20,7 +20,8 @@ export type ChannelInactiveReason =
  * bloklasa tizim abadiy urinavermaydi.
  *  - guruh → `telegram_markets.is_active = false` + activity log + admin
  *    inbox'iga `telegram.channel_inactive`;
- *  - shaxsiy chat → sessiyada `blocked_at` (qayta `member` bo'lsa tozalanadi).
+ *  - shaxsiy chat → `telegram_blocked_chats` (BOT-3c: MUDDATSIZ; ilgari 24
+ *    soatlik sessiyada edi) — qayta `member` yoki `/start` da o'chadi.
  * Guruh qayta faollashtirilishi faqat admin orqali (PATCH /notifications/:id).
  */
 @Injectable()
@@ -45,9 +46,14 @@ export class BotChannelService {
     reason: ChannelInactiveReason,
   ): Promise<{ deactivated: number }> {
     if (!BotChannelService.isGroupChat(chatId)) {
-      await this.sessions.update(chatId, botSlug, (session) => ({
-        state: { ...session.state, blocked_at: new Date().toISOString() },
-      }));
+      await this.markets.query(
+        `INSERT INTO "notification_schema"."telegram_blocked_chats"
+                ("chat_id", "reason", "blocked_at")
+         VALUES ($1, $2, now())
+         ON CONFLICT ("chat_id") DO UPDATE
+            SET "reason" = EXCLUDED."reason", "blocked_at" = EXCLUDED."blocked_at"`,
+        [chatId, reason],
+      );
       await this.activityLog.log({
         entity_type: 'TelegramChat',
         entity_id: chatId,
@@ -180,7 +186,7 @@ export class BotChannelService {
 
   /**
    * Bot qayta `member` / `administrator`:
-   *  - shaxsiy chat — blok olib tashlanadi;
+   *  - shaxsiy chat (`/start` ham) — blok olib tashlanadi (eski sessiya belgisi ham);
    *  - guruh — faqat huquq olingani uchun (`blocked_on_send`, «not enough
    *    rights») nofaol bo'lgan ulanish qayta FAOL (huquq qaytdi). Chiqarilgan
    *    (`kicked` / `left`) ulanish avvalgidek admin / qayta ulash orqali.
@@ -190,13 +196,30 @@ export class BotChannelService {
       await this.reactivateGroup(chatId);
       return;
     }
+    // Bir marta qayta urinish: yo'qolgan blok olib tashlash odamni DM'dan
+    // uzib qo'yadi (zaxira — 30 kunlik sinov, TelegramDmService).
+    const unblock = () =>
+      this.markets.query<unknown>(
+        `DELETE FROM "notification_schema"."telegram_blocked_chats"
+          WHERE "chat_id" = $1
+        RETURNING "chat_id"`,
+        [chatId],
+      );
+    const deleted: unknown = await unblock().catch(() => unblock());
+    const rows = Array.isArray(deleted)
+      ? Array.isArray(deleted[0])
+        ? (deleted[0] as unknown[])
+        : deleted
+      : [];
     const session = await this.sessions.load(chatId, botSlug);
-    if (!session.state.blocked_at) return;
-    await this.sessions.update(chatId, botSlug, (current) => {
-      const state = { ...current.state };
-      delete state.blocked_at;
-      return { state };
-    });
+    if (session.state.blocked_at) {
+      await this.sessions.update(chatId, botSlug, (current) => {
+        const state = { ...current.state };
+        delete state.blocked_at;
+        return { state };
+      });
+    }
+    if (!rows.length && !session.state.blocked_at) return;
     await this.activityLog.log({
       entity_type: 'TelegramChat',
       entity_id: chatId,

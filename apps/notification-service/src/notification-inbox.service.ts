@@ -105,6 +105,13 @@ interface TelegramOutcome extends DeliveryPatch {
   telegram: NotificationDeliveryStatus;
 }
 
+/** (BOT-3c) Tranzaksiyada navbatga qo'yilgan guruh relay'i (outbox id'lari). */
+interface GroupRelay {
+  /** `null` — guruh topilmadi (yoki xato). */
+  ids: string[] | null;
+  error?: unknown;
+}
+
 /** Qabul qiluvchi bo'yicha boshlang'ich `delivery` (kanal rejasi, 7Ec56EIw). */
 type DeliveryFor = (recipientId: string) => Record<string, string>;
 
@@ -592,6 +599,13 @@ export class NotificationInboxService {
       //    navbati to'xtab qolardi.
       let pushQueued = 0;
       let telegramQueued = 0;
+      // (BOT-3c) Guruh relay'i (DM emas) — outbox qatorlari dispatch
+      // tranzaksiyasi ichida; `undefined` — tranzaksiya ochilmadi.
+      const wantsGroupRelay =
+        channels.includes(NotificationChannel.TELEGRAM) &&
+        !dmPlan &&
+        Boolean(dto.telegram?.market_id || dto.telegram?.group_id);
+      let relay: GroupRelay | undefined;
       const redelivery = { duplicate: false };
       const rows =
         !targets.length && !internal && !dedupKey
@@ -655,6 +669,9 @@ export class NotificationInboxService {
                   escalationDueAt,
                 );
               }
+              if (wantsGroupRelay) {
+                relay = await this.enqueueGroupRelay(manager, dto, persisted);
+              }
               await internal?.afterPersist?.(manager, persisted);
               return persisted;
             });
@@ -681,15 +698,29 @@ export class NotificationInboxService {
       let telegram: unknown = null;
       let telegramOutcome: TelegramOutcome | null = null;
       if (channels.includes(NotificationChannel.TELEGRAM) && !dmPlan) {
-        const relayed = await this.relayTelegram(dto);
+        if (wantsGroupRelay && !relay) {
+          // Qatorsiz dispatch (tranzaksiya ochilmadi) — navbat alohida.
+          relay = await this.repo.manager.transaction((manager) =>
+            this.enqueueGroupRelay(manager, dto, []),
+          );
+        }
+        const relayed = await this.relayTelegram(dto, relay);
         telegram = relayed.result;
         telegramOutcome = relayed.outcome;
       }
 
       // 4) Kanal natijalari dispatch oxirida BITTA bulk UPDATE bilan (sikl
       //    ichida save YO'Q). Email — provayder yo'q: `no_provider` qatorga
-      //    INSERT paytida yozilgan (persistRows).
-      await this.recordDelivery(rows, realtime, telegramOutcome);
+      //    INSERT paytida yozilgan (persistRows). (BOT-3c) Telegram `queued`
+      //    tranzaksiyada yozilgan — yakunini outbox ishchisi yozadi (bu yerda
+      //    qayta yozilsa, ishchining `sent` ini bosib ketishi mumkin edi).
+      await this.recordDelivery(
+        rows,
+        realtime,
+        telegramOutcome?.telegram === NotificationDeliveryStatus.QUEUED
+          ? null
+          : telegramOutcome,
+      );
 
       // Audit: ONE row per dispatch operation (never one per recipient).
       await this.activityLog.log({
@@ -1379,11 +1410,74 @@ export class NotificationInboxService {
    * `telegram.text` bermasa sarlavha/tana HTML-escape qilinadi (`<`/`&`
    * bo'lsa Telegram butun xabarni rad etardi).
    */
+  /**
+   * (BOT-3c) Guruh relay'ini dispatch tranzaksiyasi ichida navbatga qo'yadi
+   * va qatorlarga `delivery.telegram = queued` yozadi (rollback → ikkalasi
+   * ham yo'q). Guruh yo'q — `null` (not_eligible). Xato — `{ error }`:
+   * tranzaksiya buzilmagan bo'lsa dispatch davom etadi (relay best-effort).
+   */
+  private async enqueueGroupRelay(
+    manager: EntityManager,
+    dto: DispatchNotificationDto,
+    persisted: Notification[],
+  ): Promise<GroupRelay> {
+    const target = dto.telegram!;
+    const notificationIds = persisted.map((row) => String(row.id));
+    // SAVEPOINT: relay xatosi (statement / lock timeout, ustun yo'q …)
+    // dispatch tranzaksiyasini ABORT qilmasin — aks holda COMMIT jimgina
+    // ROLLBACK bo'lib, inbox qatorlari, push/SMS/DM navbati, eskalatsiya va
+    // dedup kaliti yo'qolardi, javob esa baribir «dispatched» edi.
+    await manager.query('SAVEPOINT "telegram_relay"');
+    try {
+      const ids = await this.telegramService.enqueueGroupRelay(
+        manager,
+        {
+          market_id: target.market_id,
+          group_id: target.group_id,
+          group_type: target.group_type,
+        },
+        this.relayMessage(dto),
+        notificationIds,
+      );
+      if (ids && notificationIds.length) {
+        await manager.query(
+          `UPDATE "notification_schema"."notifications"
+              SET "delivery" = COALESCE("delivery", '{}'::jsonb) || '{"telegram":"queued"}'::jsonb
+            WHERE "id" = ANY($1::bigint[])`,
+          [notificationIds],
+        );
+      }
+      await manager.query('RELEASE SAVEPOINT "telegram_relay"');
+      return { ids };
+    } catch (error) {
+      // Faqat relay qismi bekor; dispatch tranzaksiyasi davom etadi. Savepoint
+      // ham tiklanmasa — tranzaksiya buzilgan: xato chaqiruvchiga (rollback,
+      // RMQ qayta yetkazadi), «dispatched» deb aytilmaydi.
+      await manager.query('ROLLBACK TO SAVEPOINT "telegram_relay"');
+      this.logger.warn(
+        `telegram relay navbatga qo'yilmadi (dispatch davom etadi): ${shortReason(error)}`,
+      );
+      return { ids: null, error };
+    }
+  }
+
+  private relayMessage(dto: DispatchNotificationDto): string {
+    const target = dto.telegram;
+    const message =
+      typeof target?.text === 'string' && target.text.trim()
+        ? target.text
+        : dto.body
+          ? `${escapeTelegramHtml(dto.title)}\n\n${escapeTelegramHtml(dto.body)}`
+          : escapeTelegramHtml(dto.title);
+    return message.slice(0, 4096);
+  }
+
   private async relayTelegram(
     dto: DispatchNotificationDto,
+    relay: GroupRelay | undefined,
   ): Promise<{ result: unknown; outcome: TelegramOutcome }> {
     const target = dto.telegram;
-    if (!target?.market_id && !target?.group_id) {
+    if (!relay || (!target?.market_id && !target?.group_id)) {
       return {
         result: null,
         outcome: {
@@ -1392,20 +1486,19 @@ export class NotificationInboxService {
         },
       };
     }
-    const message =
-      typeof target.text === 'string' && target.text.trim()
-        ? target.text
-        : dto.body
-          ? `${escapeTelegramHtml(dto.title)}\n\n${escapeTelegramHtml(dto.body)}`
-          : escapeTelegramHtml(dto.title);
     try {
-      const res = (await this.telegramService.sendNotification({
-        market_id: target.market_id,
-        group_id: target.group_id,
-        group_type: target.group_type,
-        message: message.slice(0, 4096),
-        parse_mode: 'HTML',
-      })) as {
+      if (relay.error) {
+        throw relay.error instanceof Error
+          ? relay.error
+          : new Error(String(relay.error));
+      }
+      if (!relay.ids) {
+        throw new RpcException({
+          statusCode: 404,
+          message: 'Telegram target group not found for market',
+        });
+      }
+      const res = (await this.telegramService.flushGroupRelay(relay.ids)) as {
         data?: {
           success?: number;
           failed?: number;

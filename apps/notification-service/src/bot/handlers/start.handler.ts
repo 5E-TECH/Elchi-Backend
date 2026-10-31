@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { ActivityLogService } from '@app/common';
 import { TelegramDmService } from '../../telegram/telegram-dm.service';
 import { BotRateLimiterService } from '../bot-rate-limiter.service';
+import { BotChannelService } from '../bot-channel.service';
 import { Roles } from '@app/common';
 import type { BotContext, BotMessageHandler } from './bot-context';
 
@@ -40,11 +41,24 @@ export class StartHandler implements BotMessageHandler {
     private readonly activityLog: ActivityLogService,
     private readonly config: ConfigService,
     @Optional() private readonly telegramDm?: TelegramDmService,
+    @Optional() private readonly channels?: BotChannelService,
   ) {}
 
   async handle(ctx: BotContext): Promise<boolean> {
     const text = ctx.text;
     if (!text) return false;
+
+    // (BOT-3c) Shaxsiy chatda `/start` — odam botga qaytdi: blok belgisi
+    // (muddatsiz) o'chadi. Xato javobni to'smaydi.
+    if (
+      ctx.isPrivate &&
+      this.channels &&
+      (START_COMMAND_RE.test(text) || START_LINK_RE.test(text))
+    ) {
+      await this.channels
+        .markActive(ctx.chatId, ctx.slug)
+        .catch(() => undefined);
+    }
 
     if (GROUP_ID_COMMAND_RE.test(text)) {
       await ctx.reply(`Group ID: ${ctx.chatId}`);

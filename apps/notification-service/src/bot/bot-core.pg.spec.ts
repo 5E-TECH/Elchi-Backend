@@ -8,6 +8,7 @@ import { TelegramAiDrafts1716000000128 } from '../../../../migrations/1716000000
 import { TelegramChatLocksAiWorker1716000000190 } from '../../../../migrations/1716000000190-TelegramChatLocksAiWorker';
 import { TelegramOrderCards1716000000122 } from '../../../../migrations/1716000000122-TelegramOrderCards';
 import { TelegramOrderCardsPending1716000000191 } from '../../../../migrations/1716000000191-TelegramOrderCardsPending';
+import { TelegramOutboxDeliveryBlocks1716000000192 } from '../../../../migrations/1716000000192-TelegramOutboxDeliveryBlocks';
 import { TelegramBotAction } from '../entities/telegram-bot-action.entity';
 import { TelegramMarket } from '../entities/telegram-market.entity';
 import { TelegramOutbox } from '../entities/telegram-outbox.entity';
@@ -71,6 +72,11 @@ const migration = new TelegramBotCore1716000000120();
       const runner = db.createQueryRunner();
       try {
         await migration[direction](runner);
+        // (BOT-3c) outbox entity'sida `notification_ids` — 120 qayta
+        // yaratgan jadvalga ham ustun kerak.
+        if (direction === 'up') {
+          await new TelegramOutboxDeliveryBlocks1716000000192().up(runner);
+        }
       } finally {
         await runner.release();
       }

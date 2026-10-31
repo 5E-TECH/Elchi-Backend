@@ -8,10 +8,12 @@ import { StartHandler } from '../bot/handlers/start.handler';
 import { makeCtx } from '../bot/testing/bot-kit-spec';
 import { NotificationInboxService } from '../notification-inbox.service';
 import {
+  TELEGRAM_BLOCK_PROBE_DAYS,
   TELEGRAM_DM_DELIVER_PATTERN,
   TelegramDmService,
 } from './telegram-dm.service';
 import { makeLinks } from '../bot/testing/bot-kit-spec';
+import { withGroupRelay } from '../testing/inbox-kit-spec';
 
 const rmqSendMock = jest.fn();
 jest.mock('@app/common', () => {
@@ -32,6 +34,7 @@ describe('rCFZAmOz — TelegramDmService', () => {
   let outbox: { enqueue: jest.Mock };
   let notifications: { query: jest.Mock; createQueryBuilder: jest.Mock };
   let patches: Array<{ ids: string[]; patch: Record<string, string> }>;
+  let conditions: string[];
   let env: Record<string, string>;
   let links: ReturnType<typeof makeLinks>;
 
@@ -79,6 +82,7 @@ describe('rCFZAmOz — TelegramDmService', () => {
       ['G'.repeat(43)]: { owner_id: '5', group_type: 'create' },
     });
     patches = [];
+    conditions = [];
     contacts = {
       contacts: jest.fn(
         (ids: string[]) =>
@@ -105,6 +109,10 @@ describe('rCFZAmOz — TelegramDmService', () => {
         });
         qb.whereInIds = jest.fn((ids: string[]) => {
           patches.push({ ids, patch });
+          return qb;
+        });
+        qb.andWhere = jest.fn((condition: string) => {
+          conditions.push(condition);
           return qb;
         });
         qb.execute = jest.fn().mockResolvedValue({ affected: 1 });
@@ -156,9 +164,18 @@ describe('rCFZAmOz — TelegramDmService', () => {
       telegram: 'skipped',
       telegram_reason: 'bot_blocked',
     });
+    // (BOT-3c) Blok belgisi muddatsiz jadvalda (24 soatlik sessiyada emas).
     expect(String(notifications.query.mock.calls[0][0])).toContain(
-      '"state" ? \'blocked_at\'',
+      '"telegram_blocked_chats"',
     );
+    // Zaxira: 30 kundan eski blokda bitta sinov xabari (yo'qolgan `member`).
+    expect(String(notifications.query.mock.calls[0][0])).toContain(
+      '"blocked_at" > now()',
+    );
+    expect(notifications.query.mock.calls[0][1]).toEqual([
+      ['5550011'],
+      TELEGRAM_BLOCK_PROBE_DAYS,
+    ]);
   });
 
   it('DM tugmalari: data.telegram_buttons → url (faqat https) va bot amali (egasi = qabul qiluvchi)', async () => {
@@ -245,6 +262,8 @@ describe('rCFZAmOz — TelegramDmService', () => {
       message: 'A &lt;b&gt;\n\nx &amp; y',
       parse_mode: 'HTML',
       source: 'notification.dm',
+      // (BOT-3c) 429 bo'lsa yakuniy holatni outbox shu qatorga yozadi.
+      notification_ids: ['1'],
     });
     expect(patches).toEqual(
       expect.arrayContaining([
@@ -254,6 +273,31 @@ describe('rCFZAmOz — TelegramDmService', () => {
           patch: { telegram: 'skipped', telegram_reason: 'no_telegram_id' },
         },
       ]),
+    );
+  });
+
+  it('⭐ BOT-3c: 429 (outbox navbatida) → delivery.telegram = retrying, `sent` EMAS; yakunni outbox yozadi', async () => {
+    notifications.query.mockResolvedValueOnce([
+      { id: '1', recipient_id: '11', title: 'A', body: null },
+    ]);
+    telegram.sendDirectToGroup.mockResolvedValue({
+      success: true,
+      status: 'queued',
+      result: null,
+    });
+    expect(await make().deliver({ notification_ids: ['1'] })).toEqual({
+      processed: 1,
+      sent: 0,
+      failed: 0,
+    });
+    expect(patches.at(-1)).toEqual({
+      ids: ['1'],
+      patch: { telegram: 'retrying' },
+    });
+    // Outbox ishchisi allaqachon yakunlagan bo'lsa bosib ketilmaydi.
+    expect(conditions).toContain(`"delivery"->>'telegram' = 'sending'`);
+    expect(telegram.sendDirectToGroup).toHaveBeenCalledWith(
+      expect.objectContaining({ notification_ids: ['1'] }),
     );
   });
 
@@ -539,7 +583,10 @@ describe('rCFZAmOz — dispatch TELEGRAM kanali (guruh nishonisiz → shaxsiy DM
         Promise.resolve((where.id?.value ?? []).map((id) => store.get(id))),
       ),
     };
-    const manager = { getRepository: () => txRepo };
+    const manager = {
+      getRepository: () => txRepo,
+      query: jest.fn().mockResolvedValue([]),
+    };
     const repo = {
       manager: {
         transaction: (work: (m: unknown) => Promise<unknown>) => work(manager),
@@ -566,7 +613,7 @@ describe('rCFZAmOz — dispatch TELEGRAM kanali (guruh nishonisiz → shaxsiy DM
       ),
       enqueue: jest.fn().mockResolvedValue(undefined),
     };
-    telegramService = { sendNotification: jest.fn() };
+    telegramService = withGroupRelay({ sendNotification: jest.fn() });
     service = new NotificationInboxService(
       repo as never,
       { send: jest.fn() } as never,

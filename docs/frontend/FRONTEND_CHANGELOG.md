@@ -299,6 +299,20 @@ sukut `off` — prod narxlari o'zgarmaydi). `openapi.json` qayta yaratildi.
   summa, farq yo'q. Dvigatel yoqilgach ham erkin matnli posilkada qo'shimcha 0 — farq faqat minimal narx qoidasida
   (`min_delivery_price`, kuryer + filial ulushi) va savat bilan sotuv orasida tarif o'zgarsa. Marketplace o'lchov yuborishni
   posilkada boshlab, tarif so'rovida boshlamasa — savat past chiqadi. To'liq jadval: `MARKETPLACE_API.md` §4.
+### 2026-10-30 — BOT-3c: Telegram yetkazish holati jim yo'qolmaydi
+
+Deploy: **notification-service** (+ libs/common enum). Migratsiya **`1716000000192`** (`telegram_outbox.notification_ids`,
+yangi `telegram_blocked_chats` + eski sessiya blok belgilarini ko'chirish) — servisdan OLDIN.
+
+- [2026-10-30] ✏️ [notification] — `delivery.telegram` da yangi qiymat **`retrying`**: shaxsiy Telegram xabari 429/5xx
+  ga uchradi, outbox qayta yuboryapti (`sent` EMAS; ilgari `sent` deb ko'rsatilardi). Guruh relay'ida (bekor / market
+  guruhi) `queued` — xabar navbatda. Ikkalasining yakuni (`sent` / `failed` + `telegram_error`) keyinroq yoziladi.
+  → FE: `retrying` ni «⏳ qayta urinilmoqda» (`queued` bilan bir guruh, «yuborildi» EMAS) deb ko'rsating; noma'lum
+  holat sifatida «yuborildi» ga tushmasin.
+- [2026-10-30] 🟢 [notification] — bekor guruhi xabari dispatch tranzaksiyasi ichida navbatga yoziladi (servis restartida
+  ham ketadi); botni bloklagan odamga 24 soatdan keyin ham urinilmaydi (`member` / `/start` da qayta ochiladi).
+  → FE o'zgarishi shart emas.
+
 ### 2026-10-30 — T1: hamkor (marketpleys) integratsiyasini jonli sinash (RJcckQ6I)
 
 Deploy: **integration-service + api-gateway** (+ libs/common). Migratsiya **yo'q**. `openapi.json` qayta yaratildi.
