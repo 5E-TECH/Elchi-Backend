@@ -205,7 +205,11 @@ bazasiga o'zi yozmaydi, doira/holat mashinasi/isbot/extra-cost — serverda.
   (`idempotency_keys.pattern` = `order.sell:<id>:<sha256(dto)[:32]>`, isbot fayl
   kalitlari kirmaydi). Ayni kalit boshqa amal, buyurtma yoki tana bilan → **422**,
   eski natija qaytmaydi. Yiqilgan urinish qayta egallanadi (`reclaimFailed`);
-  ishlayotgan takror → **409**; lease 90 s (gateway timeout 60 s dan uzun).
+  ishlayotgan takror → **409** (`IDEMPOTENCY_IN_PROGRESS`; bot uni «natija
+  noma'lum» deb ko'rsatadi, tugma qoladi); lease 90 s (gateway timeout 60 s dan
+  uzun). Handler xatosida xabar requeue qilinmaydi (ack) — qayta yetkazish
+  amalni fonda yuritmaydi; `markCompleted`/`markFailed` faqat `in_progress`
+  qatorni yangilaydi. Isbot holati yakuniy natijadan keyin tozalanadi.
   Isbotli amal kaliti — o'sha «✅ Tugatdim» tugmasi (`proof:<action_id>`): har
   isbot urinishiga yangi, qayta urinishda o'zgarmaydi. Handler xatosida bir
   martalik «✅ Ha» / «✅ Tugatdim» qayta ochiladi (`retrySafe`).

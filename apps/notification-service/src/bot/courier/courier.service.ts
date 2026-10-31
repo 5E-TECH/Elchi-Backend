@@ -2,7 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { escapeTelegramHtml } from '@app/common';
+import { IDEMPOTENCY_ERROR_CODES, escapeTelegramHtml } from '@app/common';
 import { TelegramOrderCard } from '../../entities/telegram-order-card.entity';
 import { BotActionsService } from '../bot-actions.service';
 import { BotGatewayClient, rethrowPasswordChange } from '../bot-gateway.client';
@@ -362,6 +362,16 @@ export class CourierService {
     // Gateway / order-service javob bermadi (inglizcha 504 matni odamga
     // chiqmaydi) — natija noma'lum.
     if (res.status === 502 || res.status === 503 || res.status === 504) {
+      return { kind: 'error', message: COURIER_OP_UNKNOWN_TEXT };
+    }
+    // (BOT-3d) Ayni kalitli birinchi urinish hali bajarilmoqda (masalan
+    // gateway 504 dan keyin darhol qayta bosildi) — yakuniy xato EMAS:
+    // natija noma'lum, «✅ Ha» qoladi.
+    if (
+      res.status === 409 &&
+      (res.body as { code?: unknown } | null)?.code ===
+        IDEMPOTENCY_ERROR_CODES.IN_PROGRESS
+    ) {
       return { kind: 'error', message: COURIER_OP_UNKNOWN_TEXT };
     }
     const text = messageOf(res.body);

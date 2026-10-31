@@ -211,8 +211,10 @@ export class IdempotencyService {
   }
 
   async markCompleted(key: string, response: unknown): Promise<void> {
+    // (BOT-3d) faqat hali `in_progress` qator: lease qayta egallanib boshqa
+    // urinish tugatgan natijani kech kelgan yozuv bosib ketmasin.
     await this.repo.update(
-      { key },
+      { key, status: 'in_progress' },
       {
         status: 'completed',
         response: response as object,
@@ -222,8 +224,10 @@ export class IdempotencyService {
   }
 
   async markFailed(key: string, error: unknown): Promise<void> {
+    // (BOT-3d) faqat hali `in_progress` qator: lease qayta egallanib boshqa
+    // urinish tugatgan natijani kech kelgan yozuv bosib ketmasin.
     await this.repo.update(
-      { key },
+      { key, status: 'in_progress' },
       {
         status: 'failed',
         error: error as object,

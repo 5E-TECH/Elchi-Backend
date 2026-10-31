@@ -1,6 +1,7 @@
 import { RmqContext, RpcException } from '@nestjs/microservices';
 import { RmqService } from '../rmq/rmq.service';
 import { executeAndAck } from '../rmq/execute-and-ack.helper';
+import { IDEMPOTENCY_ERROR_CODES } from './idempotency-error-codes';
 import {
   IdempotencyService,
   type TryAcquireOptions,
@@ -48,6 +49,12 @@ export interface IdempotentExecuteOptions {
    * `RpcException({statusCode:409})` — gateway 409 qaytaradi (500 emas).
    */
   inProgressConflict?: boolean;
+  /**
+   * (BOT-3d) Handler xatosida xabar REQUEUE qilinmaydi (ack): `reclaimFailed`
+   * bilan qayta yetkazilgan xabar yiqilgan qatorni egallab amalni FONDA qayta
+   * yuritmasin (mijoz allaqachon «bajarilmadi» olgan).
+   */
+  ackOnFailure?: boolean;
 }
 
 /** (BOT-3d) 422 matni — kalit boshqa amal / obyekt uchun ishlatilgan. */
@@ -97,6 +104,7 @@ export async function executeIdempotent<T>(
     binding,
     leaseMs,
     inProgressConflict,
+    ackOnFailure,
   } = options;
 
   if (!requestId) {
@@ -126,6 +134,7 @@ export async function executeIdempotent<T>(
     throw new RpcException({
       statusCode: 422,
       message: IDEMPOTENCY_KEY_MISMATCH_MESSAGE,
+      code: IDEMPOTENCY_ERROR_CODES.KEY_MISMATCH,
     });
   }
 
@@ -147,6 +156,7 @@ export async function executeIdempotent<T>(
     throw new RpcException({
       statusCode: 409,
       message: IDEMPOTENCY_IN_PROGRESS_MESSAGE,
+      code: IDEMPOTENCY_ERROR_CODES.IN_PROGRESS,
     });
   }
 
@@ -177,7 +187,11 @@ export async function executeIdempotent<T>(
         ? handlerError.getError()
         : { message: (handlerError as Error)?.message ?? 'unknown error' };
     await idempotencyService.markFailed(key, errorPayload);
-    rmqService.nackForError(context, handlerError);
+    if (ackOnFailure) {
+      rmqService.ack(context);
+    } else {
+      rmqService.nackForError(context, handlerError);
+    }
     throw handlerError;
   }
 }

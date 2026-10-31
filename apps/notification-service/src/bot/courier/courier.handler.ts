@@ -47,7 +47,7 @@ import {
 export const COURIER_OP_ACK_TEXT = '⏳ Bajarilmoqda…';
 /** (BOT-3d) Natija noma'lum — «✅ Ha» ayni kalit bilan qayta yuboriladi. */
 export const COURIER_OP_UNKNOWN_RETRY_TEXT =
-  "⏳ Natija noma'lum. «✅ Ha» ni qayta bosing — amal takrorlanmaydi; yoki /ishim orqali holatni tekshiring.";
+  "⏳ Natija noma'lum. Tugmani («✅ Ha» / «✅ Tugatdim») qayta bosing — amal takrorlanmaydi; yoki /ishim orqali holatni tekshiring.";
 
 /** (z2FRwu2c #6) bitta amalga ko'pi bilan 3 ta isbot fayli. */
 export const PROOF_MAX_FILES = 3;
@@ -726,12 +726,19 @@ export class CourierActions {
       );
       return;
     }
-    await this.clearProof(ctx);
     // (BOT-3d) Kalit — shu «✅ Tugatdim» tugmasi (har isbot urinishiga
     // yangi; release / qayta urinishda o'zgarmaydi). Avvalgi
     // `proof:<order>:<n>` har urinishda bir xil edi: sell → ortga → sell
-    // keshdagi eski javobni qaytarardi.
-    await this.execute(ctx, proof, `proof:${action.action_id}`);
+    // keshdagi eski javobni qaytarardi. Isbot holati YAKUNIY natijadan keyin
+    // tozalanadi (execute ichida) — natija noma'lum / handler xatosida
+    // qayta ochilgan «✅ Tugatdim» o'sha isbot bilan qayta ishlaydi.
+    await this.execute(
+      ctx,
+      proof,
+      `proof:${action.action_id}`,
+      action.action_id,
+      true,
+    );
   }
 
   private async onProofStop(ctx: BotContext) {
@@ -756,6 +763,8 @@ export class CourierActions {
      * bosish AYNI kalit bilan ketadi, backend amalni ikkinchi marta bajarmaydi.
      */
     retryActionId?: string,
+    /** (BOT-3d) Isbot oqimidan — yakuniy natijadan keyin isbot holati tozalanadi. */
+    fromProof = false,
   ) {
     const actor = await ctx.actor();
     if (!ctx.fromId || !actor) return;
@@ -786,6 +795,7 @@ export class CourierActions {
       await this.showOutcome(ctx, COURIER_OP_UNKNOWN_RETRY_TEXT, true);
       return;
     }
+    if (fromProof) await this.clearProof(ctx);
     await this.showOutcome(ctx, outcome.message);
     if (outcome.kind === 'ok') {
       await this.courier.refreshCard(

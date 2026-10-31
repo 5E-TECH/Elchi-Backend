@@ -207,6 +207,7 @@ export class OrderServiceController {
           reclaimFailed: true,
           leaseMs: COURIER_OP_LEASE_MS,
           inProgressConflict: true,
+          ackOnFailure: true,
         },
         handler,
       );

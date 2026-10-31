@@ -4,6 +4,7 @@ import { WAREHOUSE_ERROR_CODES } from '../catalog/warehouse';
 import { CONTACT_ERROR_CODES } from '../contacts/contacts';
 import { SPECIAL_CATEGORIES_ERROR_CODES } from '../order/order-special-categories';
 import { PARTNER_MARKET_ERROR_CODES } from '../integration/partner-markets';
+import { IDEMPOTENCY_ERROR_CODES } from '../idempotency/idempotency-error-codes';
 
 /**
  * (Elchi Pochta #3) Xato javobidagi mashina o'qiydigan qo'shimcha maydonlar.
@@ -71,6 +72,10 @@ export const PASSWORD_SMS_COOLDOWN = 'PASSWORD_SMS_COOLDOWN';
 export const PASSWORD_SMS_DAILY_LIMIT = 'PASSWORD_SMS_DAILY_LIMIT';
 
 export const PUBLIC_ERROR_CODES: Readonly<Record<string, readonly string[]>> = {
+  // (BOT-3d) kuryer amali Idempotency-Key: boshqa amal/buyurtma/tana — 422;
+  // ayni kalitli so'rov hali bajarilmoqda — 409.
+  [IDEMPOTENCY_ERROR_CODES.KEY_MISMATCH]: [],
+  [IDEMPOTENCY_ERROR_CODES.IN_PROGRESS]: [],
   // (T6) to'lovni qaytarish / summasini tuzatish — superadmin.
   [PC.NOT_FOUND]: [],
   // `reason`: unsupported_type | reversal_row | cashbox_deleted (iPlY5yop).

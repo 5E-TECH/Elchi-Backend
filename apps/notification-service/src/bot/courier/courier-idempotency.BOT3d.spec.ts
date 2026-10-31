@@ -175,4 +175,83 @@ describe('BOT-3d — kuryer amali idempotent (NIMA 12)', () => {
     expect(second).not.toBe(first);
     expect(inner.orders.get('101')!.status).toBe('sold');
   });
+
+  it('⭐ 409 IDEMPOTENCY_IN_PROGRESS (birinchi urinish hali ishlayapti) — yakuniy xato EMAS: «noma‘lum», «✅ Ha» qoladi', async () => {
+    const gateway = fakeOrdersGateway([gatewayOrder('101', 'waiting')], {
+      op: () => ({
+        status: 409,
+        body: {
+          statusCode: 409,
+          code: 'IDEMPOTENCY_IN_PROGRESS',
+          message: "Takroriy so'rov: bu amal hozir bajarilmoqda",
+        },
+      }),
+    });
+    const ctx = makeRouter({ actor: courierActor(), gateway: gateway.request });
+    await openIshim(ctx);
+    await press(ctx, lastButtons(ctx)['✅ Sotildi']);
+    const yes = lastButtons(ctx)['✅ Ha'];
+    await press(ctx, yes);
+    expect(shownTexts(ctx).join('\n')).toContain("Natija noma'lum");
+    expect(shownTexts(ctx).join('\n')).not.toContain('Amal bajarilmadi');
+    expect(ctx.actions.rows.get(yes.slice(2))!.consumed_at).toBeNull();
+  });
+
+  it('⭐ isbotli amal: javob yo‘qolsa isbot SAQLANADI — «✅ Tugatdim» qayta → ayni kalit, natija ko‘rinadi, isbot keyin tozalanadi', async () => {
+    const inner = fakeOrdersGateway([
+      gatewayOrder('101', 'waiting', {
+        market: { id: '3', expense_proof_conditions: ['sell_any'] },
+      }),
+    ]);
+    const cache = new Map<string, unknown>();
+    let lose = true;
+    const request = jest.fn(
+      async (
+        tg: string,
+        method: string,
+        path: string,
+        body?: unknown,
+        opts?: { idempotencyKey?: string },
+      ) => {
+        const key = opts?.idempotencyKey;
+        if (method === 'POST' && key && path === '/orders/sell/101') {
+          if (cache.has(key)) return cache.get(key);
+          const result = await inner.request(tg, method, path, body, opts);
+          cache.set(key, result);
+          if (lose) {
+            lose = false;
+            return { status: 504, body: { message: 'Gateway Timeout' } };
+          }
+          return result;
+        }
+        return inner.request(tg, method, path, body, opts);
+      },
+    );
+    const ctx = makeRouter({ actor: courierActor(), gateway: request });
+    await openIshim(ctx);
+    await press(ctx, lastButtons(ctx)['✅ Sotildi']);
+    await press(ctx, lastButtons(ctx)['✅ Ha']);
+    const done = lastButtons(ctx)['✅ Tugatdim'];
+    await ctx.router.dispatch('elchi', {
+      update_id: 7001,
+      message: {
+        message_id: 7001,
+        chat: { id: 25, type: 'private' },
+        from: { id: 25 },
+        photo: [{ file_id: 'p1', file_size: 10_000 }],
+      },
+    });
+    await press(ctx, done);
+    expect(shownTexts(ctx).join('\n')).toContain("Natija noma'lum");
+    expect(ctx.sessions.states.get('25')?.proof).toBeDefined();
+    await press(ctx, done);
+    const keys = request.mock.calls
+      .filter((call) => call[2] === '/orders/sell/101')
+      .map((call) => (call[4] as { idempotencyKey?: string }).idempotencyKey);
+    expect(keys).toHaveLength(2);
+    expect(keys[1]).toBe(keys[0]);
+    expect(inner.orders.get('101')!.status).toBe('sold');
+    expect(shownTexts(ctx)).toContain('#101 — sotildi ✅');
+    expect(ctx.sessions.states.get('25')?.proof).toBeUndefined();
+  });
 });

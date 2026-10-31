@@ -15,6 +15,7 @@ export * from './idempotency/idempotency-key.entity';
 export * from './idempotency/idempotency.service';
 export * from './idempotency/idempotency.module';
 export * from './idempotency/idempotent-execute.helper';
+export * from './idempotency/idempotency-error-codes';
 
 export * from './outbox/outbox-event.entity';
 export * from './outbox/outbox.service';

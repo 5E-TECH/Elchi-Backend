@@ -522,3 +522,22 @@ describe('IdempotencyService.tryAcquire — binding (BOT-3d)', () => {
     expect(repo._updateBuilder.execute).not.toHaveBeenCalled();
   });
 });
+
+describe('IdempotencyService.markCompleted / markFailed (BOT-3d)', () => {
+  it('faqat in_progress qatorni yangilaydi — kech kelgan yozuv tugagan natijani bosib ketmaydi', async () => {
+    const repo = makeRepo();
+    const svc = makeService(repo);
+    await svc.markCompleted('k', { ok: true });
+    await svc.markFailed('k', { message: 'x' });
+    expect(repo.update).toHaveBeenNthCalledWith(
+      1,
+      { key: 'k', status: 'in_progress' },
+      expect.objectContaining({ status: 'completed' }),
+    );
+    expect(repo.update).toHaveBeenNthCalledWith(
+      2,
+      { key: 'k', status: 'in_progress' },
+      expect.objectContaining({ status: 'failed' }),
+    );
+  });
+});

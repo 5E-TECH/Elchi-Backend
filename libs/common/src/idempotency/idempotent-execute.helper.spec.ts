@@ -619,6 +619,7 @@ describe('executeIdempotent — binding mismatch (BOT-3d)', () => {
       expect(error.getError()).toEqual({
         statusCode: 422,
         message: IDEMPOTENCY_KEY_MISMATCH_MESSAGE,
+        code: 'IDEMPOTENCY_KEY_MISMATCH',
       });
     });
     expect(idem.tryAcquire).toHaveBeenCalledWith(
@@ -653,6 +654,7 @@ describe('executeIdempotent — inProgressConflict / leaseMs (BOT-3d)', () => {
       expect(error.getError()).toEqual({
         statusCode: 409,
         message: IDEMPOTENCY_IN_PROGRESS_MESSAGE,
+        code: 'IDEMPOTENCY_IN_PROGRESS',
       }),
     );
     expect(rmq.ack).toHaveBeenCalledTimes(1);

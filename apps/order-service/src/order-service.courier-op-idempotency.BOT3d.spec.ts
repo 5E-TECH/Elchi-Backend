@@ -37,8 +37,15 @@ function memoryRepo() {
       Promise.resolve(rows.get(where.key) ?? null),
     ),
     update: jest.fn(
-      ({ key }: { key: string }, patch: Record<string, unknown>) => {
-        rows.set(key, { ...rows.get(key), ...patch });
+      (
+        { key, status }: { key: string; status?: string },
+        patch: Record<string, unknown>,
+      ) => {
+        const row = rows.get(key);
+        if (!row || (status && row.status !== status)) {
+          return Promise.resolve({ affected: 0 });
+        }
+        rows.set(key, { ...row, ...patch });
         return Promise.resolve({ affected: 1 });
       },
     ),
@@ -96,6 +103,10 @@ function setup() {
       statusCode: 200,
       data: { id: '101', status: 'sold' },
     }),
+    partlySellOrder: jest.fn().mockResolvedValue({
+      statusCode: 200,
+      data: { id: '101', status: 'partly_paid' },
+    }),
     cancelOrder: jest.fn().mockResolvedValue({
       statusCode: 200,
       data: { id: '101', status: 'cancelled' },
@@ -143,9 +154,38 @@ describe('BOT-3d — kuryer amali Idempotency-Key bog‘lanishi', () => {
       expect(error.getError()).toEqual({
         statusCode: 422,
         message: IDEMPOTENCY_KEY_MISMATCH_MESSAGE,
+        code: 'IDEMPOTENCY_KEY_MISMATCH',
       }),
     );
     expect(lifecycle.cancelOrder).not.toHaveBeenCalled();
+  });
+
+  it('⭐ ayni kalit: sell → partly_sell → 422 (finance epoch to‘qnashmaydi)', async () => {
+    const { controller, lifecycle } = setup();
+    await controller.sell(
+      stub({ id: '101', dto: {}, requester, request_id: KEY }),
+      ctx,
+    );
+    await expect(
+      controller.partlySell(
+        stub({ id: '101', dto: { items: [] }, requester, request_id: KEY }),
+        ctx,
+      ),
+    ).rejects.toBeInstanceOf(RpcException);
+    expect(lifecycle.partlySellOrder).not.toHaveBeenCalled();
+  });
+
+  it('⭐ handler xatosi (RpcException emas) — requeue YO‘Q (ack): qayta yetkazilgan xabar amalni fonda yuritmaydi', async () => {
+    const { controller, lifecycle, rmqService } = setup();
+    lifecycle.sellOrder.mockRejectedValueOnce(new Error('deadlock detected'));
+    await expect(
+      controller.sell(
+        stub({ id: '101', dto: {}, requester, request_id: KEY }),
+        ctx,
+      ),
+    ).rejects.toThrow('deadlock');
+    expect(rmqService.nackForError).not.toHaveBeenCalled();
+    expect(rmqService.ack).toHaveBeenCalled();
   });
 
   it('⭐ ayni kalit BOSHQA buyurtma bilan → 422', async () => {
