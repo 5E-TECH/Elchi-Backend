@@ -3,7 +3,8 @@
 # Metrika: notification-service `GET /metrics` (ichki port 3016) →
 #   bot_token_healthy{bot="elchi", service="notification-service"}  0|1
 #   bot_linked_users{role="courier|market|…", service="notification-service"}
-#   bot_send_total{result="sent|retry|blocked|failed"}
+#   bot_send_total{result="sent|retry|blocked|failed"}   (urinishlar)
+#   bot_outbox_dead_total                                 (yakuniy dead-letter, zDUUxyH2; bot_send_total ga KIRMAYDI)
 #   bot_dm_delivery_total{type="finance.payment_received|…", status="planned|skipped|no_provider|sent|failed"}
 # (apps/notification-service/src/bot/bot-metrics.ts).
 #

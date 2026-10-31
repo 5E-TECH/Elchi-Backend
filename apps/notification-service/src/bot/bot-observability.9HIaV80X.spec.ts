@@ -6,7 +6,12 @@ import { NotificationServiceController } from '../notification-service.controlle
 import { NotificationServiceService } from '../notification-service.service';
 import { HealthController } from '../../../api-gateway/src/health.controller';
 import { BotChannelService } from './bot-channel.service';
-import { botSendTotal, botTokenHealthy, BOT_METRICS } from './bot-metrics';
+import {
+  botOutboxDeadTotal,
+  botSendTotal,
+  botTokenHealthy,
+  BOT_METRICS,
+} from './bot-metrics';
 import {
   POLL_BACKOFF_MAX_MS,
   BotRuntimeService,
@@ -174,8 +179,14 @@ describe('9HIaV80X — sendMessage xato turlari va outbox', () => {
       source: 'test',
     });
     expect(result.status).toBe('dead');
-    // (zDUUxyH2) yakuniy dead-letter metrikada.
+    // (zDUUxyH2) yakuniy dead-letter alohida counter'da; bot_send_total'ga
+    // `dead` qo'shilmaydi (bitta xabar ikki marta sanalmaydi).
     expect(await deadCount()).toBe(deadBefore + 1);
+    expect(
+      (await botSendTotal.get()).values.some(
+        (value) => value.labels.result === 'dead',
+      ),
+    ).toBe(false);
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(repo.rows.get(result.id)!.status).toBe('dead');
     expect(channels.markInactive).toHaveBeenCalledWith(
@@ -407,6 +418,8 @@ describe('9HIaV80X — readiness va metrikalar', () => {
         // (2crjWf7v) shaxsiy bildirishnoma yetkazish metrikasi.
         'bot_dm_delivery_total',
         'bot_linked_users',
+        // (zDUUxyH2) yakuniy dead-letter.
+        'bot_outbox_dead_total',
         'bot_send_latency_ms',
         'bot_send_total',
         'bot_token_healthy',
@@ -590,10 +603,7 @@ describe('BOT-3c — shaxsiy chatda /start blok belgisini o‘chiradi', () => {
   );
 });
 
-/** `bot_send_total{result="dead"}` joriy qiymati. */
+/** `bot_outbox_dead_total` joriy qiymati. */
 async function deadCount(): Promise<number> {
-  const metric = await botSendTotal.get();
-  return (
-    metric.values.find((value) => value.labels.result === 'dead')?.value ?? 0
-  );
+  return (await botOutboxDeadTotal.get()).values[0]?.value ?? 0;
 }

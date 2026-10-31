@@ -17,8 +17,19 @@ export const botUpdatesTotal = new Counter({
 
 export const botSendTotal = new Counter({
   name: 'bot_send_total',
-  help: "Chiquvchi Telegram xabarlari natija bo'yicha (sent|retry|blocked|failed|dead)",
+  help: "Chiquvchi Telegram urinishlari natija bo'yicha (sent|retry|blocked|failed)",
   labelNames: ['result'],
+  registers: [],
+});
+
+/**
+ * (zDUUxyH2) Yakuniy dead-letter (`telegram_outbox.status='dead'`) — alohida
+ * counter: `bot_send_total` URINISH natijasini sanaydi (blocked/failed), dead
+ * u yerga qo'shilsa bitta xabar ikki marta sanalib nisbat buzilardi.
+ */
+export const botOutboxDeadTotal = new Counter({
+  name: 'bot_outbox_dead_total',
+  help: "telegram_outbox da yakuniy dead-letter bo'lgan xabarlar",
   registers: [],
 });
 
@@ -60,6 +71,7 @@ export const botDmDeliveryTotal = new Counter({
 export const BOT_METRICS = [
   botUpdatesTotal,
   botSendTotal,
+  botOutboxDeadTotal,
   botSendLatencyMs,
   botLinkedUsers,
   botTokenHealthy,

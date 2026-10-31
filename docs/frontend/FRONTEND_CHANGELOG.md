@@ -24,7 +24,7 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 ### 2026-10-31 — Telegram bot kuzatuvi (zDUUxyH2)
 
-- 🟢 [ops] — `scripts/bot-alert.sh` (cron): bot tokeni, webhook, `telegram_outbox` navbati va notification-service konteynerini tekshiradi, buzilsa ntfy / alohida bot / heartbeat orqali xabar beradi. Metrika `bot_send_total{result="dead"}`. API o'zgarmagan.
+- 🟢 [ops] — `scripts/bot-alert.sh` (cron): bot tokeni, webhook, `telegram_outbox` navbati va notification-service konteynerini tekshiradi, buzilsa ntfy / alohida bot / heartbeat orqali xabar beradi. Metrika `bot_outbox_dead_total`. API o'zgarmagan.
 
 → Frontend: o'zgarish shart emas.
 

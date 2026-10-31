@@ -6,6 +6,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -14,38 +15,63 @@ import { join } from 'node:path';
 /**
  * zDUUxyH2 — scripts/bot-alert.sh (cron, har 5 daqiqa): soxta `docker` va
  * `curl` bilan (tarmoq va Docker yo'q). Har tekshiruv soxta javob bilan;
- * sir (bot tokenlari) argv'ga ham, logga ham tushmaydi.
+ * sir (bot tokenlari, URL'lar) argv'ga ham, logga ham tushmaydi. Muammo faqat
+ * ketma-ket 2 yugurishda takrorlansa xabar qilinadi (debounce).
  */
 const ROOT = join(__dirname, '..', '..', '..');
 const SCRIPT = join(ROOT, 'scripts', 'bot-alert.sh');
 const MAIN_TOKEN = '111111:MAIN-BOT-TOKEN-never-in-argv';
 const ALERT_TOKEN = '222222:ALERT-BOT-TOKEN-never-in-argv';
-const OK_WEBHOOK =
-  '{"ok":true,"result":{"url":"https://api.elchi.test/telegram/webhook/elchi","pending_update_count":0}}';
+const SECRET = 'webhook_secret_abcdefghijklmnop';
+const HOOK_URL = 'https://api.elchi.test/telegram/webhook/elchi';
+const webhookInfo = (extra: Record<string, unknown> = {}) =>
+  JSON.stringify({
+    ok: true,
+    result: { url: HOOK_URL, pending_update_count: 0, ...extra },
+  });
 
-// docker ps -q --filter … -> $FAKE_NS_ID; docker inspect … <name> -> $FAKE_<name>;
-// docker exec … psql … -> $FAKE_PSQL (two lines: overdue age s, dead count) or fail.
+// docker ps … -> $FAKE_NS_IDS (newline list); docker inspect … <id> -> $FAKE_<id>;
+// docker exec … psql … -> $FAKE_PSQL (lines) or fail; FAKE_DOCKER_HANG=1 -> sleep.
 const FAKE_DOCKER = `#!/usr/bin/env bash
 echo "docker $*" >> "$FAKE_LOG"
+[ "\${FAKE_DOCKER_HANG:-}" = 1 ] && sleep 5
 case "$1" in
-  ps) echo "\${FAKE_NS_ID:-}" ;;
-  inspect) name="\${@: -1}"; v="FAKE_\${name//-/_}"; [ -n "\${!v:-}" ] || exit 1; echo "\${!v}" ;;
+  ps) printf '%b' "\${FAKE_NS_IDS:-}" ;;
+  inspect) id="\${@: -1}"; v="FAKE_\${id//-/_}"; [ -n "\${!v:-}" ] || exit 1; echo "\${!v}" ;;
   exec) [ -n "\${FAKE_PSQL:-}" ] || exit 2; printf '%b\\n' "$FAKE_PSQL" ;;
 esac
 `;
-// curl -K - : URL (with the token) comes on stdin. getMe / getWebhookInfo -> fake JSON.
+// curl -K - : URL (with the token) comes on stdin. Bot API: body + "\\n<code>" (-w).
 const FAKE_CURL = `#!/usr/bin/env bash
 a="$*"; echo "curl \${a//$'\\n'/ | }" >> "$FAKE_LOG"
 cfg="$(cat)"; echo "$cfg" >> "$FAKE_LOG.stdin"
 case "$cfg" in
-  *getMe*) printf '%s' "\${FAKE_GETME:-{\\"ok\\":true}}" ;;
-  *getWebhookInfo*) printf '%s' "$FAKE_WEBHOOK" ;;
-  *) echo -n 200 ;;
+  *getMe*)
+    [ "\${FAKE_GETME_EXIT:-0}" != 0 ] && exit "$FAKE_GETME_EXIT"
+    printf '%s\\n%s' "\${FAKE_GETME:-{\\"ok\\":true}}" "\${FAKE_GETME_CODE:-200}" ;;
+  *getWebhookInfo*) printf '%s\\n200' "$FAKE_WEBHOOK" ;;
+  *) [ "\${FAKE_SEND_FAIL:-}" = 1 ] && exit 22; echo -n 200 ;;
 esac
 `;
 
 describe('bot-alert.sh (zDUUxyH2)', () => {
   let dir: string;
+  const now = Math.floor(Date.now() / 1000);
+  const startedLongAgo = new Date((now - 3600) * 1000).toISOString();
+  const healthy: Record<string, string> = {
+    FAKE_NS_IDS: 'ns1\\n',
+    FAKE_ns1: `running healthy 0 ${startedLongAgo}`,
+    FAKE_PSQL: '0\\n0\\n0',
+    FAKE_WEBHOOK: webhookInfo(),
+  };
+  const writeEnv = (extra = '') =>
+    writeFileSync(
+      join(dir, 'app', '.env.production'),
+      `TELEGRAM_BOT_TOKEN=${MAIN_TOKEN}\nTELEGRAM_WEBHOOK_SECRET=${SECRET}\nPOSTGRES_USER=elchi\nPOSTGRES_DB=elchi\n${extra}`,
+    );
+  const writeConf = (body: string) =>
+    writeFileSync(join(dir, 'ops', 'bot-alert.env'), body);
+
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), 'bot-alert-'));
     mkdirSync(join(dir, 'bin'));
@@ -55,24 +81,13 @@ describe('bot-alert.sh (zDUUxyH2)', () => {
     writeFileSync(join(dir, 'bin', 'curl'), FAKE_CURL);
     chmodSync(join(dir, 'bin', 'docker'), 0o755);
     chmodSync(join(dir, 'bin', 'curl'), 0o755);
-    writeFileSync(
-      join(dir, 'app', '.env.production'),
-      `TELEGRAM_BOT_TOKEN=${MAIN_TOKEN}\nPOSTGRES_USER=elchi\nPOSTGRES_DB=elchi\n`,
-    );
-    writeFileSync(
-      join(dir, 'ops', 'bot-alert.env'),
+    writeEnv();
+    writeConf(
       `BOT_ALERT_TELEGRAM_CHAT_ID=42\nBOT_ALERT_TELEGRAM_BOT_TOKEN=${ALERT_TOKEN}\n`,
     );
   });
   afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
-  const now = Math.floor(Date.now() / 1000);
-  const healthy: Record<string, string> = {
-    FAKE_NS_ID: 'ns1',
-    FAKE_ns1: 'running healthy',
-    FAKE_PSQL: '0\\n0',
-    FAKE_WEBHOOK: OK_WEBHOOK,
-  };
   const run = (env: Record<string, string> = {}, args: string[] = []) =>
     spawnSync('bash', [SCRIPT, ...args], {
       encoding: 'utf8',
@@ -87,13 +102,21 @@ describe('bot-alert.sh (zDUUxyH2)', () => {
         ...env,
       },
     });
-  const sends = () =>
+  const calls = () =>
     existsSync(join(dir, 'calls.log'))
       ? readFileSync(join(dir, 'calls.log'), 'utf8')
-          .split('\n')
-          .filter((line) => line.includes('chat_id='))
-      : [];
-  const dry = (env: Record<string, string>) => run(env, ['--dry-run']).stdout;
+      : '';
+  const sends = () =>
+    calls()
+      .split('\n')
+      .filter((line) => line.includes('chat_id='));
+  /** Ikki ketma-ket yugurish (debounce), ikkinchisining --dry-run natijasi. */
+  const twice = (env: Record<string, string>) => {
+    run({ ...env, BOT_ALERT_NOW: String(now - 300) });
+    return run(env, ['--dry-run']).stdout;
+  };
+  const logText = () =>
+    readFileSync(join(dir, 'ops', 'logs', 'bot-alert.log'), 'utf8');
 
   it('⭐ hammasi joyida — xabar yo‘q, chiqish kodi 0', () => {
     const r = run();
@@ -101,139 +124,300 @@ describe('bot-alert.sh (zDUUxyH2)', () => {
     expect(sends()).toEqual([]);
   });
 
-  it('⭐ token buzuq (getMe ok:false) — muammo', () => {
-    expect(
-      dry({ FAKE_GETME: '{"ok":false,"description":"Unauthorized"}' }),
-    ).toMatch(/Token: getMe xato \(Unauthorized\)/);
+  it('⭐ debounce: bitta yugurishdagi muammo xabar qilinmaydi, ikkinchisida — xabar', () => {
+    const bad = { FAKE_ns1: `exited no-healthcheck 0 ${startedLongAgo}` };
+    expect(run(bad).status).toBe(1);
+    expect(sends()).toEqual([]);
+    expect(run({ ...bad, BOT_ALERT_NOW: String(now + 300) }).status).toBe(1);
+    expect(sends()).toHaveLength(1);
+    expect(sends()[0]).toMatch(/notification-service: exited no-healthcheck/);
   });
 
-  it('⭐ webhook boshqa manzilda / o‘rnatilmagan / navbat to‘lgan / yaqinda xato', () => {
+  it('⭐ token buzuq (401) va Telegram javob bermadi (curl exit 28 / 5xx) — alohida muammolar', () => {
     expect(
-      dry({
-        FAKE_WEBHOOK:
-          '{"ok":true,"result":{"url":"https://evil.test/hook","pending_update_count":0}}',
+      twice({ FAKE_GETME_CODE: '401', FAKE_GETME: '{"ok":false}' }),
+    ).toMatch(/Token: getMe 401/);
+    rmSync(join(dir, 'ops', 'state'), { recursive: true, force: true });
+    const unreachable = twice({ FAKE_GETME_EXIT: '28' });
+    expect(unreachable).toMatch(/Telegram API javob bermadi \(HTTP 000\)/);
+    expect(unreachable).not.toMatch(/Token:/);
+    rmSync(join(dir, 'ops', 'state'), { recursive: true, force: true });
+    expect(
+      twice({ FAKE_GETME_CODE: '502', FAKE_GETME: 'bad gateway' }),
+    ).toMatch(/Telegram API javob bermadi \(HTTP 502\)/);
+  });
+
+  it('⭐ qisqa uzilish (1 yugurish) — xabar ham, «tiklandi» ham yo‘q', () => {
+    run();
+    run({ FAKE_GETME_EXIT: '28', BOT_ALERT_NOW: String(now + 300) });
+    run({ BOT_ALERT_NOW: String(now + 600) });
+    expect(sends()).toEqual([]);
+  });
+
+  it('⭐ webhook: boshqa manzil / o‘rnatilmagan / navbat to‘lgan / yaqinda xato; eski xato — ok', () => {
+    expect(
+      twice({
+        FAKE_WEBHOOK: webhookInfo({ url: 'https://evil.test/hook' }),
       }),
     ).toMatch(/Webhook: boshqa manzil/);
+    rmSync(join(dir, 'ops', 'state'), { recursive: true, force: true });
+    expect(twice({ FAKE_WEBHOOK: webhookInfo({ url: '' }) })).toMatch(
+      /Webhook: o'rnatilmagan/,
+    );
+    rmSync(join(dir, 'ops', 'state'), { recursive: true, force: true });
     expect(
-      dry({
-        FAKE_WEBHOOK:
-          '{"ok":true,"result":{"url":"","pending_update_count":0}}',
-      }),
-    ).toMatch(/Webhook: o'rnatilmagan/);
-    expect(
-      dry({
-        FAKE_WEBHOOK:
-          '{"ok":true,"result":{"url":"https://api.elchi.test/telegram/webhook/elchi","pending_update_count":250}}',
-      }),
+      twice({ FAKE_WEBHOOK: webhookInfo({ pending_update_count: 250 }) }),
     ).toMatch(/Webhook: navbatda 250 ta update/);
+    rmSync(join(dir, 'ops', 'state'), { recursive: true, force: true });
     expect(
-      dry({
-        FAKE_WEBHOOK: `{"ok":true,"result":{"url":"https://api.elchi.test/telegram/webhook/elchi","pending_update_count":3,"last_error_date":${now - 120},"last_error_message":"Wrong response from the webhook: 503"}}`,
+      twice({
+        FAKE_WEBHOOK: webhookInfo({
+          last_error_date: now - 120,
+          last_error_message: 'Wrong response from the webhook: 503',
+        }),
       }),
     ).toMatch(/Webhook: Telegram yetkaza olmadi \(Wrong response/);
-    // Eski xato (chegaradan oldin) — muammo emas.
+    rmSync(join(dir, 'ops', 'state'), { recursive: true, force: true });
     expect(
-      dry({
-        FAKE_WEBHOOK: `{"ok":true,"result":{"url":"https://api.elchi.test/telegram/webhook/elchi","pending_update_count":0,"last_error_date":${now - 3600},"last_error_message":"old"}}`,
+      twice({
+        FAKE_WEBHOOK: webhookInfo({
+          last_error_date: now - 3600,
+          last_error_message: 'old',
+        }),
       }),
     ).toMatch(/state=ok/);
   });
 
-  it('polling rejimida webhook tekshirilmaydi', () => {
-    writeFileSync(
-      join(dir, 'app', '.env.production'),
-      `TELEGRAM_BOT_TOKEN=${MAIN_TOKEN}\nTELEGRAM_BOT_MODE=polling\n`,
-    );
-    expect(dry({ FAKE_WEBHOOK: '{"ok":true,"result":{"url":""}}' })).toMatch(
-      /state=ok/,
-    );
+  it('⭐ TELEGRAM_WEBHOOK_URL berilsa — aniq tenglik (suffix yetmaydi)', () => {
+    writeEnv(`TELEGRAM_WEBHOOK_URL=${HOOK_URL}\n`);
+    expect(
+      twice({
+        FAKE_WEBHOOK: webhookInfo({
+          url: 'https://attacker.example/telegram/webhook/elchi',
+        }),
+      }),
+    ).toMatch(/Webhook: boshqa manzil \(TELEGRAM_WEBHOOK_URL kutilgan\)/);
   });
 
-  it('⭐ outbox: 10 daqiqadan eski pending, ko‘p dead, SQL bajarilmadi — muammo; SQL faqat o‘qiydi', () => {
-    expect(dry({ FAKE_PSQL: '900\\n0' })).toMatch(
+  it('webhook faqat webhook rejimida tekshiriladi (resolveBotConfig kabi): secret yo‘q / polling / off', () => {
+    const empty = { FAKE_WEBHOOK: '{"ok":true,"result":{"url":""}}' };
+    writeFileSync(
+      join(dir, 'app', '.env.production'),
+      `TELEGRAM_BOT_TOKEN=${MAIN_TOKEN}\nTELEGRAM_BOT_MODE= Polling \n`,
+    );
+    expect(twice(empty)).toMatch(/state=ok/);
+    writeFileSync(
+      join(dir, 'app', '.env.production'),
+      `TELEGRAM_BOT_TOKEN=${MAIN_TOKEN}\nTELEGRAM_BOT_MODE=auto\nBOT_POLLING_LEADER=true\n`,
+    );
+    expect(twice(empty)).toMatch(/state=ok/);
+    writeFileSync(
+      join(dir, 'app', '.env.production'),
+      `TELEGRAM_BOT_TOKEN=${MAIN_TOKEN}\nTELEGRAM_BOT_MODE=off\nTELEGRAM_WEBHOOK_SECRET=${SECRET}\n`,
+    );
+    expect(twice(empty)).toMatch(/state=ok/);
+  });
+
+  it('⭐ outbox: eski pending, ko‘p dead, qotgan sending, SQL bajarilmadi; SQL faqat o‘qiydi, timeout bilan', () => {
+    expect(twice({ FAKE_PSQL: '900\\n0\\n0' })).toMatch(
       /Outbox: eng eski kutilayotgan xabar 15 daq/,
     );
-    expect(dry({ FAKE_PSQL: '0\\n35' })).toMatch(
+    rmSync(join(dir, 'ops', 'state'), { recursive: true, force: true });
+    expect(twice({ FAKE_PSQL: '0\\n35\\n0' })).toMatch(
       /Outbox: oxirgi soatda 35 ta dead/,
     );
-    expect(dry({ FAKE_PSQL: '' })).toMatch(/Outbox: so'rov bajarilmadi/);
-    const log = readFileSync(join(dir, 'calls.log'), 'utf8');
+    rmSync(join(dir, 'ops', 'state'), { recursive: true, force: true });
+    expect(twice({ FAKE_PSQL: '0\\n0\\n4' })).toMatch(
+      /Outbox: 4 ta xabar 'sending' holatida qotgan/,
+    );
+    rmSync(join(dir, 'ops', 'state'), { recursive: true, force: true });
+    expect(twice({ FAKE_PSQL: '' })).toMatch(/Outbox: tekshirib bo'lmadi/);
+    const log = calls();
     expect(log).toMatch(/BEGIN READ ONLY; SELECT/);
+    expect(log).toMatch(/psql -X -q -t -A -v ON_ERROR_STOP=1/);
+    expect(log).toMatch(
+      /PGOPTIONS=-c statement_timeout=10s -c lock_timeout=5s/,
+    );
     expect(log).not.toMatch(/\b(UPDATE|DELETE|INSERT)\b/);
   });
 
-  it('⭐ notification-service konteyneri o‘chiq / topilmadi — muammo', () => {
-    expect(dry({ FAKE_ns1: 'exited no-healthcheck' })).toMatch(
-      /notification-service: exited no-healthcheck/,
-    );
-    expect(dry({ FAKE_NS_ID: '' })).toMatch(/notification-service: missing/);
+  it('⭐ docker qotsa — timeout, «tekshirib bo‘lmadi» (jarayon to‘planmaydi)', () => {
+    const started = Date.now();
+    run({ FAKE_DOCKER_HANG: '1', BOT_ALERT_CMD_TIMEOUT: '1' });
+    const out = run(
+      {
+        FAKE_DOCKER_HANG: '1',
+        BOT_ALERT_CMD_TIMEOUT: '1',
+        BOT_ALERT_NOW: String(now + 300),
+      },
+      ['--dry-run'],
+    ).stdout;
+    expect(Date.now() - started).toBeLessThan(15_000);
+    expect(out).toMatch(/Outbox: tekshirib bo'lmadi/);
+    expect(out).toMatch(/notification-service: tekshirib bo'lmadi/);
   });
 
-  it('⭐ takrorsiz: muammo → 1 xabar (alohida bot, token faqat stdin); 6 soatgacha jim; keyin eslatma; tiklanganda «tiklandi»', () => {
-    expect(run().status).toBe(0);
-    const bad = { FAKE_ns1: 'running unhealthy' };
-    expect(run({ ...bad, BOT_ALERT_NOW: String(now + 60) }).status).toBe(1);
+  it('⭐ konteyner: o‘chiq, restarting, topilmadi, bir nechta mos — muammo; compose filtrlari', () => {
+    expect(
+      twice({ FAKE_ns1: `restarting healthy 3 ${startedLongAgo}` }),
+    ).toMatch(/notification-service: restarting healthy/);
+    rmSync(join(dir, 'ops', 'state'), { recursive: true, force: true });
+    expect(twice({ FAKE_NS_IDS: '' })).toMatch(
+      /notification-service: konteyner topilmadi/,
+    );
+    rmSync(join(dir, 'ops', 'state'), { recursive: true, force: true });
+    expect(twice({ FAKE_NS_IDS: 'ns1\\nns2\\n' })).toMatch(
+      /notification-service: 2 ta konteyner mos keldi/,
+    );
+    writeConf('BOT_ALERT_COMPOSE_PROJECT=elchi\n');
+    run({ BOT_ALERT_NOW: String(now + 900) });
+    expect(calls()).toMatch(
+      /--filter label=com\.docker\.compose\.oneoff=False --filter label=com\.docker\.compose\.project=elchi/,
+    );
+  });
+
+  it('⭐ healthcheck «starting»: yangi ishga tushgan — ok; grace’dan eski — muammo', () => {
+    const fresh = new Date((now - 20) * 1000).toISOString();
+    expect(twice({ FAKE_ns1: `running starting 0 ${fresh}` })).toMatch(
+      /state=ok/,
+    );
+    rmSync(join(dir, 'ops', 'state'), { recursive: true, force: true });
+    expect(twice({ FAKE_ns1: `running starting 0 ${startedLongAgo}` })).toMatch(
+      /healthcheck 90s dan beri 'starting'/,
+    );
+  });
+
+  it('⭐ crash-loop: RestartCount o‘ssa — muammo, yolg‘on «tiklandi» yo‘q', () => {
+    const fresh = (s: number) => new Date((now + s - 20) * 1000).toISOString();
+    run({ FAKE_ns1: `running healthy 1 ${startedLongAgo}` });
+    run({
+      FAKE_ns1: `running starting 2 ${fresh(300)}`,
+      BOT_ALERT_NOW: String(now + 300),
+    });
+    run({
+      FAKE_ns1: `running starting 3 ${fresh(600)}`,
+      BOT_ALERT_NOW: String(now + 600),
+    });
+    expect(sends()).toHaveLength(1);
+    expect(sends()[0]).toMatch(/qayta ishga tushmoqda \(RestartCount 2 → 3\)/);
+    run({
+      FAKE_ns1: `running starting 4 ${fresh(900)}`,
+      BOT_ALERT_NOW: String(now + 900),
+    });
+    expect(sends().join('\n')).not.toMatch(/tiklandi/);
+  });
+
+  it('⭐ takrorsiz: 1 xabar (alohida bot, token faqat stdin); 6 soatgacha jim; eslatma; «tiklandi»; holat/log 0600', () => {
+    const bad = { FAKE_ns1: `exited no-healthcheck 0 ${startedLongAgo}` };
+    run(bad);
+    expect(run({ ...bad, BOT_ALERT_NOW: String(now + 300) }).status).toBe(1);
     expect(sends()).toHaveLength(1);
     expect(sends()[0]).toMatch(/-K -/);
-    expect(sends()[0]).toMatch(/notification-service: running unhealthy/);
-    const argv = readFileSync(join(dir, 'calls.log'), 'utf8');
-    expect(argv).not.toContain(MAIN_TOKEN);
-    expect(argv).not.toContain(ALERT_TOKEN);
+    expect(calls()).not.toContain(MAIN_TOKEN);
+    expect(calls()).not.toContain(ALERT_TOKEN);
     expect(readFileSync(join(dir, 'calls.log.stdin'), 'utf8')).toContain(
       `bot${ALERT_TOKEN}/sendMessage`,
     );
-
-    expect(run({ ...bad, BOT_ALERT_NOW: String(now + 900) }).status).toBe(1);
+    run({ ...bad, BOT_ALERT_NOW: String(now + 900) });
     expect(sends()).toHaveLength(1);
-    expect(run({ ...bad, BOT_ALERT_NOW: String(now + 7 * 3600) }).status).toBe(
-      1,
-    );
+    run({ ...bad, BOT_ALERT_NOW: String(now + 7 * 3600) });
     expect(sends()).toHaveLength(2);
-
-    expect(run({ BOT_ALERT_NOW: String(now + 7 * 3600 + 60) }).status).toBe(0);
+    run({ BOT_ALERT_NOW: String(now + 7 * 3600 + 300) });
     expect(sends()).toHaveLength(3);
     expect(sends()[2]).toMatch(/tiklandi/);
-    const log = readFileSync(join(dir, 'ops', 'logs', 'bot-alert.log'), 'utf8');
-    expect(log).not.toContain(MAIN_TOKEN);
-    expect(log).not.toContain(ALERT_TOKEN);
+    expect(logText()).not.toContain(MAIN_TOKEN);
+    expect(logText()).not.toContain(ALERT_TOKEN);
+    for (const file of [
+      join(dir, 'ops', 'logs', 'bot-alert.log'),
+      join(dir, 'ops', 'state', 'bot-alert.state'),
+    ]) {
+      expect(statSync(file).mode & 0o777).toBe(0o600);
+    }
   });
 
-  it('⭐ alert boti asosiy bot bilan bir xil — rad etiladi (bot buzilsa alert ham yetmasdi)', () => {
-    writeFileSync(
-      join(dir, 'ops', 'bot-alert.env'),
+  it('signature faqat tekshiruv kodi: son o‘zgarsa (15 → 16 daq) yangi xabar ketmaydi', () => {
+    run({ FAKE_PSQL: '900\\n0\\n0' });
+    run({ FAKE_PSQL: '960\\n0\\n0', BOT_ALERT_NOW: String(now + 300) });
+    run({ FAKE_PSQL: '1020\\n0\\n0', BOT_ALERT_NOW: String(now + 600) });
+    expect(sends()).toHaveLength(1);
+    expect(
+      readFileSync(join(dir, 'ops', 'state', 'bot-alert.state'), 'utf8'),
+    ).toMatch(/^sig=outbox_pending$/m);
+  });
+
+  it('⭐ yuborish yiqilsa holat oldinga surilmaydi — keyingi yugurish qayta yuboradi', () => {
+    const bad = { FAKE_ns1: `exited no-healthcheck 0 ${startedLongAgo}` };
+    run(bad);
+    run({ ...bad, FAKE_SEND_FAIL: '1', BOT_ALERT_NOW: String(now + 300) });
+    expect(
+      readFileSync(join(dir, 'ops', 'state', 'bot-alert.state'), 'utf8'),
+    ).toMatch(/^state=ok$/m);
+    run({ ...bad, BOT_ALERT_NOW: String(now + 600) });
+    expect(sends().filter((line) => line.includes('NOSOG'))).toHaveLength(2);
+    expect(
+      readFileSync(join(dir, 'ops', 'state', 'bot-alert.state'), 'utf8'),
+    ).toMatch(/^state=problem$/m);
+  });
+
+  it('⭐ alert boti asosiy bot bilan bir xil — rad etiladi', () => {
+    writeConf(
       `BOT_ALERT_TELEGRAM_CHAT_ID=42\nBOT_ALERT_TELEGRAM_BOT_TOKEN=${MAIN_TOKEN}\n`,
     );
-    expect(run({ FAKE_ns1: 'exited' }).status).toBe(1);
+    const bad = { FAKE_ns1: `exited x 0 ${startedLongAgo}` };
+    run(bad);
+    run({ ...bad, BOT_ALERT_NOW: String(now + 300) });
     expect(sends()).toEqual([]);
-    expect(
-      readFileSync(join(dir, 'ops', 'logs', 'bot-alert.log'), 'utf8'),
-    ).toMatch(/asosiy bot bilan bir xil — rad etildi/);
+    expect(logText()).toMatch(/asosiy bot bilan bir xil — rad etildi/);
   });
 
-  it('webhook kanali (ntfy) va heartbeat: ok → GET url, muammo → GET url/fail', () => {
-    writeFileSync(
-      join(dir, 'ops', 'bot-alert.env'),
+  it('⭐ config: qator oxiridagi izoh, CRLF va qo‘shtirnoq qiymatga qo‘shilmaydi (izohli token ham rad etiladi)', () => {
+    writeConf(
+      [
+        'BOT_ALERT_WEBHOOK_URL="https://ntfy.test/elchi-bot"   # ntfy topic',
+        "BOT_ALERT_TELEGRAM_CHAT_ID='42'\r",
+        `BOT_ALERT_TELEGRAM_BOT_TOKEN=${MAIN_TOKEN}  # asosiy bilan bir xil`,
+        'BOT_ALERT_HEARTBEAT_URL=https://hc.test/ping/abc # dead-man',
+        '',
+      ].join('\n'),
+    );
+    const bad = { FAKE_ns1: `exited x 0 ${startedLongAgo}` };
+    run(bad);
+    run({ ...bad, BOT_ALERT_NOW: String(now + 300) });
+    const stdin = readFileSync(join(dir, 'calls.log.stdin'), 'utf8');
+    expect(stdin).toContain('url = "https://ntfy.test/elchi-bot"\n');
+    expect(stdin).toContain('url = "https://hc.test/ping/abc/fail"\n');
+    expect(stdin).not.toContain('#');
+    // Izoh olib tashlangach token asosiy bilan bir xil — Telegram kanali rad etiladi.
+    expect(sends()).toEqual([]);
+    expect(logText()).toMatch(/asosiy bot bilan bir xil — rad etildi/);
+  });
+
+  it('webhook kanali (ntfy) va heartbeat: ok → GET url, muammo → GET url/fail; URL’lar argv’da yo‘q', () => {
+    writeConf(
       'BOT_ALERT_WEBHOOK_URL=https://ntfy.test/elchi-bot\nBOT_ALERT_HEARTBEAT_URL=https://hc.test/ping/abc\n',
     );
+    const bad = { FAKE_ns1: `exited x 0 ${startedLongAgo}` };
     expect(run().status).toBe(0);
-    expect(
-      run({ FAKE_ns1: 'exited', BOT_ALERT_NOW: String(now + 60) }).status,
-    ).toBe(1);
+    run({ ...bad, BOT_ALERT_NOW: String(now + 300) });
+    run({ ...bad, BOT_ALERT_NOW: String(now + 600) });
     const stdin = readFileSync(join(dir, 'calls.log.stdin'), 'utf8');
     expect(stdin).toContain('url = "https://hc.test/ping/abc"');
     expect(stdin).toContain('url = "https://hc.test/ping/abc/fail"');
     expect(stdin).toContain('url = "https://ntfy.test/elchi-bot"');
-    const argv = readFileSync(join(dir, 'calls.log'), 'utf8');
-    expect(argv).not.toContain('ntfy.test');
-    expect(argv).not.toContain('hc.test');
+    expect(calls()).not.toContain('ntfy.test');
+    expect(calls()).not.toContain('hc.test');
   });
 
-  it('--test bitta test xabar yuboradi; --dry-run hech narsa yubormaydi va holatni o‘zgartirmaydi', () => {
+  it('--test xabar yuboradi va heartbeat’ni tekshiradi; --dry-run hech narsa yubormaydi, holatni o‘zgartirmaydi', () => {
+    writeConf(
+      `BOT_ALERT_TELEGRAM_CHAT_ID=42\nBOT_ALERT_TELEGRAM_BOT_TOKEN=${ALERT_TOKEN}\nBOT_ALERT_HEARTBEAT_URL=https://hc.test/ping/abc\n`,
+    );
     run({}, ['--test']);
     expect(sends()).toHaveLength(1);
     expect(sends()[0]).toMatch(/test xabar/);
-    const r = run({ FAKE_ns1: 'exited' }, ['--dry-run']);
-    expect(r.stdout).toMatch(/send=problem/);
+    expect(logText()).toMatch(/test: heartbeat ok/);
+    const r = run({ FAKE_ns1: `exited x 0 ${startedLongAgo}` }, ['--dry-run']);
+    expect(r.stdout).toMatch(/send=none raw=ns_unhealthy/);
     expect(sends()).toHaveLength(1);
     expect(existsSync(join(dir, 'ops', 'state', 'bot-alert.state'))).toBe(
       false,
@@ -242,10 +426,10 @@ describe('bot-alert.sh (zDUUxyH2)', () => {
 
   it('kanal sozlanmagan — faqat log satri', () => {
     rmSync(join(dir, 'ops', 'bot-alert.env'));
-    expect(run({ FAKE_ns1: 'exited' }).status).toBe(1);
+    const bad = { FAKE_ns1: `exited x 0 ${startedLongAgo}` };
+    run(bad);
+    expect(run({ ...bad, BOT_ALERT_NOW: String(now + 300) }).status).toBe(1);
     expect(sends()).toEqual([]);
-    expect(
-      readFileSync(join(dir, 'ops', 'logs', 'bot-alert.log'), 'utf8'),
-    ).toMatch(/kanal sozlanmagan/);
+    expect(logText()).toMatch(/kanal sozlanmagan/);
   });
 });
