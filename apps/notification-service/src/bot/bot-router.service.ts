@@ -13,7 +13,11 @@ import {
   BOT_PASSWORD_CHANGE_TEXT,
   BotPasswordChangeRequiredError,
 } from './bot-gateway.client';
-import { BotActorService, type BotActor } from './bot-actor.service';
+import {
+  BotActorService,
+  BotIdentityUnavailableError,
+  type BotActor,
+} from './bot-actor.service';
 import { resolveBotConfig } from './bot-config';
 import { checkIncomingMedia } from './bot-media';
 import { botUpdatesTotal } from './bot-metrics';
@@ -47,6 +51,12 @@ export const ACTION_EXPIRED_TEXT =
   "⌛ Bu ro'yxat eskirgan — menyuni qayta oching: /start";
 export const ACTION_CONSUMED_TEXT = '✔️ Bu amal allaqachon bajarilgan.';
 export const ACTION_FOREIGN_TEXT = '🔒 Bu tugma siz uchun emas.';
+/** (BOT-3d) Update ikki marta xato berdi — odam jim qolmasin. */
+export const BOT_ERROR_TEXT =
+  "⚠️ Xatolik yuz berdi — birozdan so'ng qayta urinib ko'ring.";
+/** (BOT-3d) identity-service javob bermadi (odam bog'lanmagan EMAS). */
+export const BOT_IDENTITY_UNAVAILABLE_TEXT =
+  "⚠️ Tizim vaqtincha ishlamayapti — birozdan so'ng qayta urinib ko'ring.";
 export const CHAT_QUEUE_FULL_TEXT =
   '⏳ Juda ko‘p xabar navbatda — oldingilari tugashini kuting.';
 
@@ -202,6 +212,13 @@ export class BotRouterService implements OnModuleDestroy {
       this.logger.error(
         `Update ${update.update_id} ikki marta xato — tashlandi: ${this.transport.describe(error)}`,
       );
+      // (BOT-3d) Oxirgi xato — shaxsiy chatda odam jim qolmasin. Guruhga yo'q
+      // (spam / ichki xato matni ko'rinmasin).
+      if (chatIdIsPrivate(update)) {
+        await this.outbox
+          .send({ chatId, text: BOT_ERROR_TEXT, source: 'bot.error' })
+          .catch(() => undefined);
+      }
     }
   }
 
@@ -213,6 +230,11 @@ export class BotRouterService implements OnModuleDestroy {
       // (BOT-2 #2d) Qayta urinish befoyda — aniq ko'rsatma bilan javob.
       if (error instanceof BotPasswordChangeRequiredError) {
         await ctx.reply(BOT_PASSWORD_CHANGE_TEXT);
+        return;
+      }
+      // (BOT-3d) identity ishlamayapti — «avval ulang» EMAS; qayta urinilmaydi.
+      if (error instanceof BotIdentityUnavailableError) {
+        if (ctx.isPrivate) await ctx.reply(BOT_IDENTITY_UNAVAILABLE_TEXT);
         return;
       }
       throw error;
@@ -292,7 +314,16 @@ export class BotRouterService implements OnModuleDestroy {
     const action = lookup.action;
     const handler = this.actionHandlers.get(action.action);
     if (action.actor_user_id) {
-      const actor = await ctx.actor();
+      // (BOT-3d) identity uzilsa — tugma aylanib qolmasin (guruhda ham javob).
+      const actor = await ctx.actor().catch(async (error: unknown) => {
+        if (error instanceof BotIdentityUnavailableError) {
+          await this.transport.answerCallbackQuery(
+            callback.id,
+            BOT_IDENTITY_UNAVAILABLE_TEXT,
+          );
+        }
+        throw error;
+      });
       if (!actor || actor.user_id !== String(action.actor_user_id)) {
         await this.transport.answerCallbackQuery(
           callback.id,

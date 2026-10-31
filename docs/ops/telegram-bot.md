@@ -74,6 +74,16 @@ jufti bo'linmaydi, bo'sh bo'lak yuborilmaydi. Outbox ko'p bo'lakli xabarda yetka
 yetkazilganlar qayta yuborilmaydi. Istisno (qabul qilingan): bo'lak yetib, lekin
 `parts_sent` yozilmay qolsa — o'sha bitta bo'lak takror chiqishi mumkin.
 
+**Javob kafolati (BOT-3d A).** Webhook update'ning brokerga uzatilishini kutadi
+(3 s): RMQ xatosi / timeout → 503, Telegram qayta yuboradi; takror update
+iste'molchida `update_id` bo'yicha tashlanadi (`telegram_rate_limits`
+`upd:<id>`, 1 kun). Update ikki marta xato bersa shaxsiy chatga «⚠️ Xatolik yuz
+berdi» (guruhga yo'q). identity javob bermasa «⚠️ Tizim vaqtincha ishlamayapti»
+(«avval ulang» emas); tugma bosilganda ham shu matn callback javobida.
+Chegara: 503 faqat brokerga UZATISH xatosini qoplaydi. Uzatilgan xabar
+persistent emas (navbatda 60 s TTL), DLQ avtomatik qayta o'ynalmaydi — shu
+oraliqda iste'molchi tushsa update yo'qolishi mumkin.
+
 ## 2. Rejimlar (`TELEGRAM_BOT_MODE`, sukut `auto`)
 
 | Holat | Natija |
