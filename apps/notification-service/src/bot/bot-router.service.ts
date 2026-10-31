@@ -315,7 +315,11 @@ export class BotRouterService implements OnModuleDestroy {
       );
       return;
     }
-    await this.transport.answerCallbackQuery(callback.id);
+    // (BOT-3d) Spinner DARHOL (15 s chegarasi) — uzoq amal (65 s) ham
+    // «query is too old» bermaydi; natija keyin xabar tahriri bilan.
+    await (handler.ackText
+      ? this.transport.answerCallbackQuery(callback.id, handler.ackText)
+      : this.transport.answerCallbackQuery(callback.id));
     await this.activityLog.log({
       entity_type: action.order_id ? 'Order' : 'TelegramChat',
       entity_id: action.order_id ? String(action.order_id) : ctx.chatId,

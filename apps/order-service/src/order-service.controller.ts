@@ -137,6 +137,39 @@ export class OrderServiceController {
     );
   }
 
+  /**
+   * (BOT-3d) Kuryer amallari (sell / cancel / could-not-deliver / partly-sell /
+   * rollback). Gateway `Idempotency-Key` ni `idem:<user>:<sha256(kalit)>`
+   * ko'rinishida yuboradi — shu shakl uchun kalit amallar o'rtasida UMUMIY
+   * (`courier-op:` prefiksi) va bog'lanishi `<amal>:<buyurtma>` saqlanadi:
+   * ayni kalit takror kelsa — keshlangan natija (amal ikkinchi marta
+   * bajarilmaydi); BOSHQA amal yoki buyurtma bilan kelsa — 422 (eski natija
+   * qaytmaydi). Kalitsiz (tasodifiy UUID) — avvalgidek.
+   */
+  private runIdempotentCourierOp<T>(
+    context: RmqContext,
+    pattern: string,
+    orderId: string,
+    requestId: string | undefined,
+    handler: () => Promise<T> | T,
+  ): Promise<T> {
+    if (requestId && CLIENT_KEY_REQUEST_ID_RE.test(requestId)) {
+      return executeIdempotent(
+        this.rmqService,
+        this.idempotencyService,
+        context,
+        {
+          requestId,
+          pattern,
+          keyPrefix: 'courier-op',
+          binding: `${pattern}:${String(orderId ?? '')}`.slice(0, 128),
+        },
+        handler,
+      );
+    }
+    return this.runIdempotent(context, pattern, requestId, handler);
+  }
+
   @MessagePattern({ cmd: 'salom_ber_order' })
   health(@Ctx() context: RmqContext) {
     return this.executeAndAck(context, () => ({
@@ -615,13 +648,18 @@ export class OrderServiceController {
     },
     @Ctx() context: RmqContext,
   ) {
-    return this.runIdempotent(context, 'order.sell', data.request_id, () =>
-      this.lifecycleService.sellOrder(
-        data.requester,
-        data.id,
-        data.dto ?? {},
-        data.request_id,
-      ),
+    return this.runIdempotentCourierOp(
+      context,
+      'order.sell',
+      data.id,
+      data.request_id,
+      () =>
+        this.lifecycleService.sellOrder(
+          data.requester,
+          data.id,
+          data.dto ?? {},
+          data.request_id,
+        ),
     );
   }
 
@@ -660,16 +698,21 @@ export class OrderServiceController {
     },
     @Ctx() context: RmqContext,
   ) {
-    return this.runIdempotent(context, 'order.cancel', data.request_id, () =>
-      // (ZDweRm02) Hamkor yo'lida xato matni — tashqi shartnoma, o'zgarmaydi.
-      keepPartnerCancelMessage(data.requester, () =>
-        this.lifecycleService.cancelOrder(
-          data.requester,
-          data.id,
-          data.dto ?? {},
-          data.request_id,
+    return this.runIdempotentCourierOp(
+      context,
+      'order.cancel',
+      data.id,
+      data.request_id,
+      () =>
+        // (ZDweRm02) Hamkor yo'lida xato matni — tashqi shartnoma, o'zgarmaydi.
+        keepPartnerCancelMessage(data.requester, () =>
+          this.lifecycleService.cancelOrder(
+            data.requester,
+            data.id,
+            data.dto ?? {},
+            data.request_id,
+          ),
         ),
-      ),
     );
   }
 
@@ -684,9 +727,10 @@ export class OrderServiceController {
     },
     @Ctx() context: RmqContext,
   ) {
-    return this.runIdempotent(
+    return this.runIdempotentCourierOp(
       context,
       'order.could_not_deliver',
+      data.id,
       data.request_id,
       () =>
         this.lifecycleService.couldNotDeliverOrder(
@@ -718,9 +762,10 @@ export class OrderServiceController {
     },
     @Ctx() context: RmqContext,
   ) {
-    return this.runIdempotent(
+    return this.runIdempotentCourierOp(
       context,
       'order.partly_sell',
+      data.id,
       data.request_id,
       () =>
         this.lifecycleService.partlySellOrder(
@@ -800,9 +845,10 @@ export class OrderServiceController {
     },
     @Ctx() context: RmqContext,
   ) {
-    return this.runIdempotent(
+    return this.runIdempotentCourierOp(
       context,
       'order.rollback_waiting',
+      data.id,
       data.request_id,
       () =>
         this.lifecycleService.rollbackOrderToWaiting(

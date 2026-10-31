@@ -22,6 +22,14 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+### 2026-10-31 — Kuryer amallarida `Idempotency-Key` (BOT-3d)
+
+- ✏️ [order] — `POST /orders/sell/:id`, `POST /orders/cancel/:id`, `POST /orders/:id/could-not-deliver`, `POST /orders/partly-sell/:id`, `POST /orders/rollback/:id` endi ixtiyoriy **`Idempotency-Key`** header'ini qabul qiladi (≤255 belgi, foydalanuvchi bo'yicha ajratiladi). Ayni kalit bilan takroriy so'rov (qayta urinish, ikki marta bosish) amalni ikkinchi marta bajarmaydi — birinchi natija qaytadi.
+- ⚠️ [order] — kalit **amal + buyurtma** ga bog'lanadi: ayni `Idempotency-Key` boshqa amal yoki boshqa buyurtma bilan yuborilsa → **422** (`Idempotency-Key boshqa amal yoki buyurtma uchun ishlatilgan — yangi kalit yuboring`), eski natija qaytmaydi.
+- Header'siz so'rov avvalgidek ishlaydi. Deploy: api-gateway + order-service.
+
+→ Frontend: o'zgarish shart emas. Ikki marta bosishdan himoya kerak bo'lsa — har amal (har bosish emas, har tasdiqlangan amal) uchun bitta UUID yaratib `Idempotency-Key` sifatida yuboring; 422 kelsa yangi kalit bilan qayta yuboring.
+
 ### 2026-10-31 — Kuryer ro'yxati: `where_deliver` filtri (yKtzKXeM)
 
 `GET /orders/courier/orders?where_deliver=center|address` endi qabul qilinadi (kuryer, menejer, filial, bekor qilinganlar tabi). Berilmasa hammasi; noma'lum qiymat 400. Deploy: api-gateway.

@@ -37,6 +37,11 @@ export interface BotActionHandler {
   readonly expiredText?: string;
   /** Tugma boshqa odamga tegishli bo'lsa (bo'lmasa umumiy). */
   readonly foreignText?: string;
+  /**
+   * (BOT-3d) Spinner o'chirilganda ko'rsatiladigan qisqa matn (masalan «⏳
+   * Bajarilmoqda…») — uzoq amalda odam bosilganini biladi.
+   */
+  readonly ackText?: string;
   handle(ctx: BotContext, action: TelegramBotAction): Promise<void>;
 }
 

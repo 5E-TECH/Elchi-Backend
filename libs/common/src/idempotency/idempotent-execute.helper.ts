@@ -31,7 +31,17 @@ export interface IdempotentExecuteOptions {
    * tashlanadi — matn RMQ orqali gateway'ga yetib boradi.
    */
   markReplay?: boolean;
+  /**
+   * (BOT-3d) Kalit bog'lanishi (`TryAcquireOptions.binding`). Ayni kalit boshqa
+   * bog'lanish bilan kelsa — handler ishlamaydi,
+   * `RpcException({statusCode:422})` (eski natija qaytmaydi).
+   */
+  binding?: string;
 }
+
+/** (BOT-3d) 422 matni — kalit boshqa amal / obyekt uchun ishlatilgan. */
+export const IDEMPOTENCY_KEY_MISMATCH_MESSAGE =
+  'Idempotency-Key boshqa amal yoki buyurtma uchun ishlatilgan — yangi kalit yuboring';
 
 /** Keshdagi javob `{...}` bilan kengaytirsa bo'ladigan oddiy obyektmi (null/massiv emas). */
 function isReplayMarkable(value: unknown): value is Record<string, unknown> {
@@ -69,6 +79,7 @@ export async function executeIdempotent<T>(
     completedTtlMs,
     reclaimFailed,
     markReplay,
+    binding,
   } = options;
 
   if (!requestId) {
@@ -79,8 +90,12 @@ export async function executeIdempotent<T>(
   // ⚠️ Yangi opsiyalar berilmasa `opts` ham `undefined` — mavjud chaqiruvchilar
   // (order.create va boshqalar) uchun `tryAcquire` xatti-harakati AYNAN avvalgidek.
   const acquireOpts: TryAcquireOptions | undefined =
-    completedTtlMs !== undefined || reclaimFailed
-      ? { completedTtlMs, reclaimFailed }
+    completedTtlMs !== undefined || reclaimFailed || binding !== undefined
+      ? {
+          completedTtlMs,
+          reclaimFailed,
+          ...(binding !== undefined ? { binding } : {}),
+        }
       : undefined;
   const acquire = await idempotencyService.tryAcquire<T>(
     key,
@@ -88,6 +103,14 @@ export async function executeIdempotent<T>(
     undefined,
     acquireOpts,
   );
+
+  if (acquire.status === 'mismatch') {
+    rmqService.ack(context);
+    throw new RpcException({
+      statusCode: 422,
+      message: IDEMPOTENCY_KEY_MISMATCH_MESSAGE,
+    });
+  }
 
   if (acquire.status === 'cached') {
     rmqService.ack(context);

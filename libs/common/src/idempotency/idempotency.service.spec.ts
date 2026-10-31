@@ -469,3 +469,56 @@ describe('IdempotencyService.prunePattern', () => {
     await expect(svc.prunePattern('p', 1_000)).resolves.toBe(0);
   });
 });
+
+describe('IdempotencyService.tryAcquire — binding (BOT-3d)', () => {
+  it('stores the binding in `pattern` on a fresh key', async () => {
+    const repo = makeRepo();
+    repo.insert.mockResolvedValue(undefined);
+    const svc = makeService(repo);
+
+    await svc.tryAcquire('courier-op:k', 'order.sell', undefined, {
+      binding: 'order.sell:101',
+    });
+
+    expect(repo.insert).toHaveBeenCalledWith(
+      expect.objectContaining({ pattern: 'order.sell:101' }),
+    );
+  });
+
+  it('same key, same binding → cached result returned', async () => {
+    const repo = repoWithExisting({
+      pattern: 'order.sell:101',
+      status: 'completed' as const,
+      response: { ok: true },
+    });
+    const result = await makeService(repo).tryAcquire(
+      'k',
+      'order.sell',
+      undefined,
+      {
+        binding: 'order.sell:101',
+      },
+    );
+    expect(result).toEqual({ status: 'cached', response: { ok: true } });
+  });
+
+  it('same key, other action/order → "mismatch", old result NOT returned', async () => {
+    const repo = repoWithExisting({
+      pattern: 'order.sell:101',
+      status: 'completed' as const,
+      response: { ok: true },
+    });
+    const svc = makeService(repo);
+    await expect(
+      svc.tryAcquire('k', 'order.cancel', undefined, {
+        binding: 'order.cancel:101',
+      }),
+    ).resolves.toEqual({ status: 'mismatch', binding: 'order.sell:101' });
+    await expect(
+      svc.tryAcquire('k', 'order.sell', undefined, {
+        binding: 'order.sell:102',
+      }),
+    ).resolves.toEqual({ status: 'mismatch', binding: 'order.sell:101' });
+    expect(repo._updateBuilder.execute).not.toHaveBeenCalled();
+  });
+});

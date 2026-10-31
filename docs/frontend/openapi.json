@@ -5489,6 +5489,23 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "idempotency-key",
+            "required": true,
+            "in": "header",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "BOT-3d: ixtiyoriy barqaror kalit (≤255 belgi, foydalanuvchi bo'yicha ajratiladi) — takroriy so'rov (qayta urinish, ikki marta bosish) amalni ikkinchi marta bajarmaydi. Kalit amal + buyurtmaga bog'lanadi: ayni kalit boshqa amal yoki buyurtma bilan → 422.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "requestBody": {
@@ -5535,6 +5552,23 @@
             "required": true,
             "in": "path",
             "description": "Order ID (id)",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "idempotency-key",
+            "required": true,
+            "in": "header",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "BOT-3d: ixtiyoriy barqaror kalit (≤255 belgi, foydalanuvchi bo'yicha ajratiladi) — takroriy so'rov (qayta urinish, ikki marta bosish) amalni ikkinchi marta bajarmaydi. Kalit amal + buyurtmaga bog'lanadi: ayni kalit boshqa amal yoki buyurtma bilan → 422.",
+            "required": false,
             "schema": {
               "type": "string"
             }
@@ -5701,6 +5735,23 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "idempotency-key",
+            "required": true,
+            "in": "header",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "BOT-3d: ixtiyoriy barqaror kalit (≤255 belgi, foydalanuvchi bo'yicha ajratiladi) — takroriy so'rov (qayta urinish, ikki marta bosish) amalni ikkinchi marta bajarmaydi. Kalit amal + buyurtmaga bog'lanadi: ayni kalit boshqa amal yoki buyurtma bilan → 422.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "requestBody": {
@@ -5742,6 +5793,23 @@
             "required": true,
             "in": "path",
             "description": "Order ID (id)",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "idempotency-key",
+            "required": true,
+            "in": "header",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "BOT-3d: ixtiyoriy barqaror kalit (≤255 belgi, foydalanuvchi bo'yicha ajratiladi) — takroriy so'rov (qayta urinish, ikki marta bosish) amalni ikkinchi marta bajarmaydi. Kalit amal + buyurtmaga bog'lanadi: ayni kalit boshqa amal yoki buyurtma bilan → 422.",
+            "required": false,
             "schema": {
               "type": "string"
             }
@@ -5791,6 +5859,23 @@
             "required": true,
             "in": "path",
             "description": "Order ID (id)",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "idempotency-key",
+            "required": true,
+            "in": "header",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "BOT-3d: ixtiyoriy barqaror kalit (≤255 belgi, foydalanuvchi bo'yicha ajratiladi) — takroriy so'rov (qayta urinish, ikki marta bosish) amalni ikkinchi marta bajarmaydi. Kalit amal + buyurtmaga bog'lanadi: ayni kalit boshqa amal yoki buyurtma bilan → 422.",
+            "required": false,
             "schema": {
               "type": "string"
             }

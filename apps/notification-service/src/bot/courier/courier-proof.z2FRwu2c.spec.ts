@@ -8,6 +8,7 @@ import {
   lastButtons,
   makeRouter,
   sentTexts,
+  shownTexts,
   textUpdate,
 } from '../testing/bot-kit-spec';
 import {
@@ -167,7 +168,7 @@ describe('z2FRwu2c — isbot oqimi', () => {
       (call) => call.path === '/orders/sell/101',
     )!;
     expect(sell.body).toEqual({ proofFileKeys: ['fake-key'] });
-    expect(sentTexts(ctx).join('\n')).toContain('Isbot fayli tasdiqlanmadi');
+    expect(shownTexts(ctx).join('\n')).toContain('Isbot fayli tasdiqlanmadi');
     expect(sentTexts(ctx).at(-1)).toBe(PROOF_PROMPT_TEXT);
     expect(gateway.orders.get('101')!.status).toBe('waiting');
   });

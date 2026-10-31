@@ -276,6 +276,14 @@ export function makeActionsStore(now: () => number = Date.now) {
       action.consumed_at = new Date(now());
       return Promise.resolve(true);
     }),
+    /** (BOT-3d) handler xatosida bir martalik tugma qayta ochiladi. */
+    release: jest.fn((id: string) => {
+      const action = rows.get(id);
+      if (action && action.expires_at.getTime() > now()) {
+        action.consumed_at = null;
+      }
+      return Promise.resolve();
+    }),
     attachMessage: jest.fn((data: string[], messageId: number) => {
       for (const item of data) {
         const action = rows.get(item.slice(2));
@@ -464,6 +472,7 @@ export function makeRouter(
     actions as never,
     sessions as never,
     courier,
+    transport as never,
   );
   const extraCost = new ExtraCostActions(
     gateway as never,
@@ -929,4 +938,27 @@ export function lastButtons(ctx: {
       .flat()
       .map((b) => [b.text, b.callback_data ?? b.url ?? '']),
   );
+}
+
+/**
+ * (BOT-3d) Odamga ko'ringan matnlar xronologik: yangi xabarlar (outbox) va
+ * tahrirlar (`editMessage`, masalan kuryer amali natijasi tasdiq xabariga
+ * yoziladi) — chaqiruv tartibida.
+ */
+export function shownTexts(ctx: {
+  outbox: { send: jest.Mock };
+  transport: { editMessage: jest.Mock };
+}): string[] {
+  const sends = ctx.outbox.send.mock.calls.map((call, i) => ({
+    order: ctx.outbox.send.mock.invocationCallOrder[i],
+    text: (call[0] as { text?: string }).text ?? '',
+  }));
+  const edits = ctx.transport.editMessage.mock.calls.map((call, i) => ({
+    order: ctx.transport.editMessage.mock.invocationCallOrder[i],
+    text: (call[2] as { text?: string } | undefined)?.text ?? '',
+  }));
+  return [...sends, ...edits]
+    .sort((a, b) => a.order - b.order)
+    .map((entry) => entry.text)
+    .filter(Boolean);
 }

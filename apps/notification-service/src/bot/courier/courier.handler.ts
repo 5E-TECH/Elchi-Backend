@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import { ModuleRef } from '@nestjs/core';
 import {
   NotificationCategory,
@@ -36,7 +36,17 @@ import {
   proofRequired,
   type CourierOp,
 } from './courier-cards';
-import { COURIER_PAGE_SIZE, CourierService } from './courier.service';
+import {
+  COURIER_OP_UNKNOWN_TEXT,
+  COURIER_PAGE_SIZE,
+  CourierService,
+} from './courier.service';
+
+/** (BOT-3d) Uzoq amal — spinner darhol shu matn bilan o'chiriladi. */
+export const COURIER_OP_ACK_TEXT = '⏳ Bajarilmoqda…';
+/** (BOT-3d) Natija noma'lum — «✅ Ha» ayni kalit bilan qayta yuboriladi. */
+export const COURIER_OP_UNKNOWN_RETRY_TEXT =
+  "⏳ Natija noma'lum. «✅ Ha» ni qayta bosing — amal takrorlanmaydi; yoki /ishim orqali holatni tekshiring.";
 
 /** (z2FRwu2c #6) bitta amalga ko'pi bilan 3 ta isbot fayli. */
 export const PROOF_MAX_FILES = 3;
@@ -393,6 +403,8 @@ export class CourierActions {
     private readonly actions: BotActionsService,
     private readonly sessions: BotSessionService,
     private readonly handler: CourierHandler,
+    /** (BOT-3d) natijani tasdiq xabariga yozish; yo'q bo'lsa — yangi xabar. */
+    @Optional() private readonly transport?: BotTransportService,
   ) {
     const privateOnly =
       (fn: (ctx: BotContext, action: TelegramBotAction) => Promise<void>) =>
@@ -419,6 +431,7 @@ export class CourierActions {
       {
         action: COURIER_ACTIONS.confirm,
         expiredText: COURIER_LIST_EXPIRED_TEXT,
+        ackText: COURIER_OP_ACK_TEXT,
         handle: privateOnly((ctx, action) => this.onConfirm(ctx, action)),
       },
       {
@@ -436,6 +449,7 @@ export class CourierActions {
       },
       {
         action: COURIER_ACTIONS.proofDone,
+        ackText: COURIER_OP_ACK_TEXT,
         handle: privateOnly((ctx) => this.onProofDone(ctx)),
       },
       {
@@ -579,6 +593,7 @@ export class CourierActions {
       ctx,
       { op, order_id: orderId, reason, keys: [] },
       action.action_id,
+      action.action_id,
     );
   }
 
@@ -660,6 +675,11 @@ export class CourierActions {
     ctx: BotContext,
     proof: ProofState,
     idempotencyKey: string,
+    /**
+     * (BOT-3d) Natija noma'lum bo'lsa qayta ochiladigan «✅ Ha» tugmasi — qayta
+     * bosish AYNI kalit bilan ketadi, backend amalni ikkinchi marta bajarmaydi.
+     */
+    retryActionId?: string,
   ) {
     const actor = await ctx.actor();
     if (!ctx.fromId || !actor) return;
@@ -681,11 +701,16 @@ export class CourierActions {
       outcome.kind === 'proof' &&
       (proof.op === 'sell' || proof.op === 'cancel')
     ) {
-      await ctx.reply(outcome.message);
+      await this.showOutcome(ctx, outcome.message);
       await this.startProof(ctx, { ...proof, keys: [] });
       return;
     }
-    await ctx.reply(outcome.message);
+    if (outcome.message === COURIER_OP_UNKNOWN_TEXT && retryActionId) {
+      await this.actions.release(retryActionId).catch(() => undefined);
+      await this.showOutcome(ctx, COURIER_OP_UNKNOWN_RETRY_TEXT, true);
+      return;
+    }
+    await this.showOutcome(ctx, outcome.message);
     if (outcome.kind === 'ok') {
       await this.courier.refreshCard(
         ctx,
@@ -703,5 +728,33 @@ export class CourierActions {
         "⏳ Market tasdig'i kutilmoqda",
       );
     }
+  }
+
+  /**
+   * (BOT-3d) Natija tasdiq xabarining O'ZIGA yoziladi (tugmalar olinadi —
+   * qayta bosilmaydi); `keepButtons` — «✅ Ha» qayta bosish uchun qoladi.
+   * Tahrirlab bo'lmasa — yangi xabar.
+   */
+  private async showOutcome(
+    ctx: BotContext,
+    text: string,
+    keepButtons = false,
+  ): Promise<void> {
+    const message = ctx.update.callback_query?.message;
+    if (message?.message_id && this.transport) {
+      const edited = await this.transport.editMessage(
+        ctx.chatId,
+        message.message_id,
+        {
+          text,
+          reply_markup:
+            keepButtons && message.reply_markup
+              ? message.reply_markup
+              : { inline_keyboard: [] },
+        },
+      );
+      if (edited) return;
+    }
+    await ctx.reply(text);
   }
 }
