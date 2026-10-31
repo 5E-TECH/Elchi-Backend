@@ -18,6 +18,7 @@ import {
   gatewayOrder,
   lastButtons,
   makeRouter,
+  openIshim,
   sentTexts,
   textUpdate,
 } from '../testing/bot-kit-spec';
@@ -69,13 +70,19 @@ describe('h9newLsd — /ishim', () => {
       /^\/orders\?status=waiting&status=on\+the\+road&status=waiting_customer&page=1&limit=10$/,
     );
     const texts = sentTexts(ctx);
+    // (BOT-3d) BITTA ro'yxat xabari (12 emas) — kartalar tugma bilan ochiladi.
+    expect(texts).toHaveLength(1);
     expect(texts[0]).toContain('jami 2 ta');
     expect(texts[0]).toContain('📍 Chilonzor — 1 ta');
-    expect(texts.join('\n')).toContain('#101');
-    expect(texts.join('\n')).toContain('#102');
-    expect(texts.join('\n')).not.toContain('#201');
-    // Kartalar saqlanadi (keyin tahrirlash uchun).
-    expect(ctx.cards.rows.size).toBe(2);
+    expect(texts[0]).toContain('#101');
+    expect(texts[0]).toContain('#102');
+    expect(texts[0]).not.toContain('#201');
+    expect(Object.keys(lastButtons(ctx))).toEqual(['#102', '#101']);
+    expect(ctx.cards.rows.size).toBe(0);
+    // Tugma — karta (saqlanadi, keyin tahrirlash uchun).
+    await press(ctx, lastButtons(ctx)['#101']);
+    expect(sentTexts(ctx)).toHaveLength(2);
+    expect(ctx.cards.rows.size).toBe(1);
   });
 
   it('⭐ WAITING kartada Sotildi/Bekor (+ kabinet), ON_THE_ROAD — Yetkazib bo‘lmadi, SOLD — faqat Ortga', () => {
@@ -89,7 +96,7 @@ describe('h9newLsd — /ishim', () => {
   it('karta tugmalari: WAITING → ✅ Sotildi, ❌ Bekor, 🌐 Kabinetda ochish (partly-sell tugma emas)', async () => {
     const gateway = fakeOrdersGateway([gatewayOrder('101', 'waiting')]);
     const ctx = makeRouter({ actor: courierActor(), gateway: gateway.request });
-    await ctx.router.dispatch('elchi', textUpdate('/ishim', { chatId: 25 }));
+    await openIshim(ctx);
     const buttons = lastButtons(ctx);
     expect(Object.keys(buttons)).toEqual([
       '✅ Sotildi',
@@ -113,12 +120,21 @@ describe('h9newLsd — /ishim', () => {
     await ctx.router.dispatch('elchi', textUpdate('/ishim', { chatId: 25 }));
     const more = lastButtons(ctx)['⬇️ Yana'];
     expect(more).toBeDefined();
-    expect(sentTexts(ctx).filter((text) => text.includes('#3'))).toHaveLength(
-      10,
-    );
+    expect(
+      Object.keys(lastButtons(ctx)).filter((text) => text.startsWith('#3')),
+    ).toHaveLength(10);
+    expect(sentTexts(ctx)).toHaveLength(1);
     await press(ctx, more);
     expect(gateway.calls.at(-1)?.path).toContain('page=2');
-    expect(sentTexts(ctx).join('\n')).toContain('#312');
+    // (BOT-3d) «Yana» shu xabarni TAHRIRLAYDI (yangi xabar emas).
+    const edit = ctx.transport.editMessage.mock.calls.at(-1) as unknown as [
+      string,
+      number,
+      { text: string },
+    ];
+    expect(edit[2].text).toContain('#312');
+    expect(edit[2].text).toContain('2-sahifa');
+    expect(sentTexts(ctx)).toHaveLength(1);
     // "Yana" bir martalik emas — qayta bosilsa ham ishlaydi.
     await press(ctx, more);
     expect(
@@ -126,10 +142,65 @@ describe('h9newLsd — /ishim', () => {
     ).toHaveLength(2);
   });
 
+  it('⭐ BOT-3d: ro‘yxat tugmalarining callback_data ≤64 bayt', async () => {
+    const orders = Array.from({ length: 13 }, (_, i) =>
+      gatewayOrder(String(9_000_000_000_000 + i), 'waiting'),
+    );
+    const gateway = fakeOrdersGateway(orders);
+    const ctx = makeRouter({ actor: courierActor(), gateway: gateway.request });
+    await ctx.router.dispatch('elchi', textUpdate('/ishim', { chatId: 25 }));
+    const data = Object.values(lastButtons(ctx)).filter((value) =>
+      value.startsWith('a:'),
+    );
+    expect(data.length).toBeGreaterThanOrEqual(11);
+    for (const value of data) {
+      expect(Buffer.byteLength(value, 'utf8')).toBeLessThanOrEqual(64);
+    }
+  });
+
+  it('⭐ BOT-3d: eski (deploydan oldingi) /ishim tugmalari ishlaydi — karta amali va «⬇️ Yana»', async () => {
+    const orders = Array.from({ length: 13 }, (_, i) =>
+      gatewayOrder(String(300 + i), 'waiting'),
+    );
+    const gateway = fakeOrdersGateway(orders);
+    const ctx = makeRouter({ actor: courierActor(), gateway: gateway.request });
+    // Eski versiya yaratgan tugmalar: karta «✅ Sotildi» va ro'yxat «⬇️ Yana».
+    const actorUserId = '25';
+    const oldSell = await ctx.actions.create({
+      chatId: '25',
+      action: COURIER_ACTIONS.op,
+      actorUserId,
+      orderId: '300',
+      payload: { op: 'sell' },
+      oneShot: false,
+    });
+    const oldMore = await ctx.actions.create({
+      chatId: '25',
+      action: COURIER_ACTIONS.page,
+      actorUserId,
+      payload: { page: 2 },
+      oneShot: false,
+    });
+    await press(ctx, oldSell);
+    expect(sentTexts(ctx).at(-1)).toBe(
+      'Buyurtma #300 — ✅ Sotildi. Tasdiqlaysizmi?',
+    );
+    await press(ctx, oldMore);
+    expect(gateway.calls.at(-1)?.path).toContain('page=2');
+    expect(
+      [
+        ...sentTexts(ctx),
+        ...ctx.transport.editMessage.mock.calls.map(
+          (call) => ((call as unknown[])[2] as { text?: string }).text ?? '',
+        ),
+      ].join('\n'),
+    ).toContain('2-sahifa');
+  });
+
   it('muddati o‘tgan ro‘yxat tugmasi — "bu ro‘yxat eskirgan, /ishim ni qayta yuboring"', async () => {
     const gateway = fakeOrdersGateway([gatewayOrder('101', 'waiting')]);
     const ctx = makeRouter({ actor: courierActor(), gateway: gateway.request });
-    await ctx.router.dispatch('elchi', textUpdate('/ishim', { chatId: 25 }));
+    await openIshim(ctx);
     const sell = lastButtons(ctx)['✅ Sotildi'];
     const row = ctx.actions.rows.get(sell.slice(2))!;
     row.expires_at = new Date(Date.now() - 1);
@@ -178,8 +249,7 @@ describe('MO2MLPGo — 4 ta holat tugmasi', () => {
     const ctx = makeRouter({ actor: courierActor(), gateway: gateway.request });
     return { ctx, gateway };
   };
-  const openList = (ctx: ReturnType<typeof makeRouter>) =>
-    ctx.router.dispatch('elchi', textUpdate('/ishim', { chatId: 25 }));
+  const openList = (ctx: ReturnType<typeof makeRouter>) => openIshim(ctx);
 
   it('⭐ ✅ Sotildi → tasdiq → Ha → POST /orders/sell/:id, buyurtma SOLD, karta yangilanadi (Ortga)', async () => {
     const { ctx, gateway } = setup();

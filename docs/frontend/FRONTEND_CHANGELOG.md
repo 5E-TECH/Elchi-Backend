@@ -22,6 +22,12 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+### 2026-10-31 — Telegram bot: `/ishim` bitta xabar, chat tezligi, uzun xabar bo'laklari (BOT-3d)
+
+- 🟢 [notification] — `/ishim` endi BITTA ro'yxat xabari (kartalar buyurtma tugmasi bilan ochiladi), shaxsiy chatga ~1 xabar/s, uzun HTML xabar teg ichida kesilmaydi. Migratsiya **`1716000000199`** (`telegram_outbox.parts_sent`) — servisdan OLDIN. Deploy: notification-service.
+
+→ Frontend: o'zgarish shart emas.
+
 ### 2026-10-31 — Kuryer ro'yxati: `where_deliver` filtri (yKtzKXeM)
 
 `GET /orders/courier/orders?where_deliver=center|address` endi qabul qilinadi (kuryer, menejer, filial, bekor qilinganlar tabi). Berilmasa hammasi; noma'lum qiymat 400. Deploy: api-gateway.

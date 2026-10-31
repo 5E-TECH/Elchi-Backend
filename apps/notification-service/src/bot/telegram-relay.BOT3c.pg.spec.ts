@@ -3,6 +3,9 @@ import { DataSource, EntityManager } from 'typeorm';
 import { TelegramBotCore1716000000120 } from '../../../../migrations/1716000000120-TelegramBotCore';
 import { TelegramMarketInactiveReason1716000000150 } from '../../../../migrations/1716000000150-TelegramMarketInactiveReason';
 import { TelegramOutboxDeliveryBlocks1716000000192 } from '../../../../migrations/1716000000192-TelegramOutboxDeliveryBlocks';
+import { TelegramOutboxPartsSent1716000000199 } from '../../../../migrations/1716000000199-TelegramOutboxPartsSent';
+import { TelegramOrderCards1716000000122 } from '../../../../migrations/1716000000122-TelegramOrderCards';
+import { TelegramOrderCardsPending1716000000191 } from '../../../../migrations/1716000000191-TelegramOrderCardsPending';
 import { TelegramMarket } from '../entities/telegram-market.entity';
 import { TelegramOutbox } from '../entities/telegram-outbox.entity';
 import { TelegramSession } from '../entities/telegram-session.entity';
@@ -140,12 +143,16 @@ const env = {
         VALUES (5, '-100556', 'cancel'), (5, '-100557', 'create')`);
       await run(new TelegramBotCore1716000000120());
       await run(new TelegramMarketInactiveReason1716000000150());
+      // (BOT-3 #4, #594) telegram_outbox.card_order_id — outbox entity'sida bor.
+      await run(new TelegramOrderCards1716000000122());
+      await run(new TelegramOrderCardsPending1716000000191());
       // Migratsiyadan OLDIN bloklagan chat (eski 24 soatlik sessiya belgisi).
       await db.query(`
         INSERT INTO notification_schema.telegram_sessions
           (chat_id, bot_slug, state, expires_at)
         VALUES ('5550099', 'elchi', '{"blocked_at": "2026-10-01T10:00:00Z"}', now() + interval '1 hour')`);
       await run(new TelegramOutboxDeliveryBlocks1716000000192());
+      await run(new TelegramOutboxPartsSent1716000000199());
     });
 
     afterAll(async () => {

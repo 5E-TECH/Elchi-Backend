@@ -20,7 +20,8 @@ import type {
  *  - xato turlari ajratiladi (`TelegramApiError.kind`): 403 bloklangan →
  *    qayta URINILMAYDI; 429 → `retry_after` kutiladi; 5xx/tarmoq → qisqa
  *    eksponensial backoff; 401/404 (buzuq token) → darhol;
- *  - chiquvchi token-bucket: global ~25 xabar/s, guruh chatiga ~20/daqiqa;
+ *  - chiquvchi token-bucket: global ~25 xabar/s, guruh chatiga ~20/daqiqa,
+ *    shaxsiy chatga ~1 xabar/s (3 tagacha portlash, BOT-3d);
  *  - Telegram qattiq chegaralari: xabar 4096 belgi (bo'linadi), callback_data
  *    64 bayt (oshsa — dasturchi xatosi, yuborilmaydi);
  *  - loglarda token HECH QACHON chop etilmaydi (`redactToken`).
@@ -34,7 +35,14 @@ export const TELEGRAM_LIMITS = {
   GLOBAL_SEND_PER_SEC: 25,
   /** Chiquvchi: bitta guruh chatiga xabar/daqiqa. */
   GROUP_SEND_PER_MIN: 20,
+  /** (BOT-3d) Chiquvchi: bitta shaxsiy chatga xabar/s (Telegram ~1/s). */
+  PRIVATE_SEND_PER_SEC: 1,
+  /** (BOT-3d) Shaxsiy chatga ketma-ket portlash (keyin 1/s). */
+  PRIVATE_SEND_BURST: 3,
 } as const;
+
+/** Xotirada saqlanadigan chat bucket'lari chegarasi (eskilari tashlanadi). */
+const MAX_CHAT_BUCKETS = 10_000;
 
 /** Yagona joy — boshqa fayllar (spec'lar ham) shu doimiydan foydalanadi. */
 export const TELEGRAM_API_BASE = 'https://api.telegram.org';
@@ -166,6 +174,82 @@ export function splitMessage(
     rest = rest.slice(cut).replace(/^\n/, '');
   }
   if (rest.length > 0) chunks.push(rest);
+  return chunks;
+}
+
+const HTML_TAG_RE = /^<\/?([a-zA-Z][a-zA-Z0-9-]*)[^>]*>/;
+
+/**
+ * (BOT-3d) HTML (`parse_mode: HTML`) matnni ≤ max bo'laklarga bo'ladi —
+ * teg yoki `&…;` entity ICHIDA kesmaydi; bo'lak oxirida ochiq teglar
+ * yopiladi va keyingi bo'lak boshida qayta ochiladi (avval kesish, keyin
+ * teg balansi — Telegram «can't parse entities» bermaydi). Iloji bo'lsa
+ * qator chegarasidan kesadi.
+ */
+export function splitHtmlMessage(
+  text: string,
+  max: number = TELEGRAM_LIMITS.MESSAGE_MAX_CHARS,
+): string[] {
+  const chunks: string[] = [];
+  let body = String(text ?? '');
+  while (body.length > max) {
+    type Open = { name: string; raw: string };
+    const stack: Open[] = [];
+    // Xavfsiz kesish nuqtalari: [indeks, o'sha paytdagi ochiq teglar].
+    let best: { at: number; open: Open[] } | null = null;
+    let bestNewline: { at: number; open: Open[] } | null = null;
+    const closingLen = (open: Open[]) =>
+      open.reduce((sum, tag) => sum + tag.name.length + 3, 0);
+    let i = 0;
+    while (i < body.length) {
+      const fits = (at: number) => at + closingLen(stack) <= max;
+      if (i > 0 && fits(i)) {
+        const point = { at: i, open: [...stack] };
+        best = point;
+        if (body[i - 1] === '\n') bestNewline = point;
+      }
+      if (i > max) break;
+      if (body[i] === '<') {
+        const match = HTML_TAG_RE.exec(body.slice(i));
+        if (match) {
+          const name = match[1].toLowerCase();
+          if (match[0].startsWith('</')) {
+            const idx = stack.map((tag) => tag.name).lastIndexOf(name);
+            if (idx >= 0) stack.splice(idx, 1);
+          } else if (!match[0].endsWith('/>')) {
+            stack.push({ name, raw: match[0] });
+          }
+          i += match[0].length;
+          continue;
+        }
+      }
+      if (body[i] === '&') {
+        const entity = /^&(#\d{1,7}|#x[0-9a-fA-F]{1,6}|[a-zA-Z]{2,8});/.exec(
+          body.slice(i, i + 12),
+        );
+        if (entity) {
+          i += entity[0].length;
+          continue;
+        }
+      }
+      i += 1;
+    }
+    const cut = bestNewline && bestNewline.at >= max * 0.5 ? bestNewline : best;
+    if (!cut) {
+      // Bitta teg max dan uzun (amalda bo'lmaydi) — oddiy kesish.
+      chunks.push(body.slice(0, max));
+      body = body.slice(max);
+      continue;
+    }
+    const closing = [...cut.open]
+      .reverse()
+      .map((tag) => `</${tag.name}>`)
+      .join('');
+    const reopen = cut.open.map((tag) => tag.raw).join('');
+    chunks.push(body.slice(0, cut.at).replace(/\n$/, '') + closing);
+    body = reopen + body.slice(cut.at).replace(/^\n/, '');
+  }
+  if (body.length > 0) chunks.push(body);
   return chunks;
 }
 
@@ -344,8 +428,17 @@ export interface BotCallOptions {
 export class BotTransportService {
   private readonly logger = new Logger(BotTransportService.name);
   private readonly envToken: string;
+  /**
+   * (BOT-3d) Token bucket'lar JARAYON ICHIDA (in-process, xotirada): har
+   * notification-service nusxasi o'z hisobini yuritadi. Prod'da bot bitta
+   * replika (webhook + outbox relay bitta jarayonda) — chegaralar to'g'ri.
+   * Replika ko'paytirilsa haqiqiy tezlik N baravar oshadi (Telegram 429 →
+   * `retry_after` bilan qayta urinish baribir himoya qiladi); u holda
+   * bucket'ni umumiy saqlovga (Redis / Postgres) ko'chirish kerak.
+   */
   private readonly globalBucket: TokenBucket;
   private readonly groupBuckets = new Map<string, TokenBucket>();
+  private readonly privateBuckets = new Map<string, TokenBucket>();
   /** Sinovlarda almashtiriladi. */
   sleep: (ms: number) => Promise<void> = (ms) =>
     new Promise((resolve) => setTimeout(resolve, ms));
@@ -440,12 +533,22 @@ export class BotTransportService {
       reply_markup?: InlineKeyboardMarkup;
       disable_web_page_preview?: boolean;
     } = {},
-    options: Omit<BotCallOptions, 'chatId'> = {},
+    options: Omit<BotCallOptions, 'chatId'> & {
+      /**
+       * (BOT-3d) Shuncha bo'lak allaqachon yuborilgan — o'tkazib yuboriladi
+       * (outbox qayta urinishda takror bo'lak yo'q).
+       */
+      skipParts?: number;
+      /** (BOT-3d) Har bo'lak yuborilgach (outbox `parts_sent` ni yozadi). */
+      onPartSent?: (sent: number) => Promise<void>;
+    } = {},
   ): Promise<unknown> {
     assertCallbackDataFits(extra.reply_markup);
-    const chunks = splitMessage(text);
+    const { skipParts = 0, onPartSent, ...callOptions } = options;
+    const chunks =
+      extra.parse_mode === 'HTML' ? splitHtmlMessage(text) : splitMessage(text);
     let last: unknown = null;
-    for (let i = 0; i < chunks.length; i += 1) {
+    for (let i = Math.max(0, skipParts); i < chunks.length; i += 1) {
       const isLast = i === chunks.length - 1;
       last = await this.call(
         'sendMessage',
@@ -460,8 +563,9 @@ export class BotTransportService {
             ? { reply_markup: extra.reply_markup }
             : {}),
         },
-        { ...options, chatId },
+        { ...callOptions, chatId },
       );
+      if (onPartSent && i < chunks.length - 1) await onPartSent(i + 1);
     }
     return last;
   }
@@ -709,15 +813,26 @@ export class BotTransportService {
       if (wait === 0) break;
       await this.sleep(wait);
     }
-    if (!chatId || !chatId.startsWith('-')) return;
-    let bucket = this.groupBuckets.get(chatId);
+    if (!chatId) return;
+    const group = chatId.startsWith('-');
+    const buckets = group ? this.groupBuckets : this.privateBuckets;
+    let bucket = buckets.get(chatId);
     if (!bucket) {
-      bucket = new TokenBucket(
-        TELEGRAM_LIMITS.GROUP_SEND_PER_MIN,
-        TELEGRAM_LIMITS.GROUP_SEND_PER_MIN / 60_000,
-        () => this.now(),
-      );
-      this.groupBuckets.set(chatId, bucket);
+      if (buckets.size >= MAX_CHAT_BUCKETS) buckets.clear();
+      bucket = group
+        ? new TokenBucket(
+            TELEGRAM_LIMITS.GROUP_SEND_PER_MIN,
+            TELEGRAM_LIMITS.GROUP_SEND_PER_MIN / 60_000,
+            () => this.now(),
+          )
+        : // (BOT-3d) shaxsiy chat ~1 xabar/s — /ishim kabi ketma-ket
+          // xabarlarda 429 yo'q.
+          new TokenBucket(
+            TELEGRAM_LIMITS.PRIVATE_SEND_BURST,
+            TELEGRAM_LIMITS.PRIVATE_SEND_PER_SEC / 1000,
+            () => this.now(),
+          );
+      buckets.set(chatId, bucket);
     }
     for (;;) {
       const wait = bucket.take();
