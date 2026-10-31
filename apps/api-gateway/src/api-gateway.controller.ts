@@ -986,8 +986,10 @@ export class ApiGatewayController {
       ? branchRows.data.items
       : [];
 
+    const branchById = new Map<string, any>();
     const branchByManagerId = new Map<string, any>();
     for (const branch of branches) {
+      branchById.set(String(branch?.id ?? '').trim(), branch);
       const managerIds = [
         branch?.manager_id,
         branch?.payment?.user_id,
@@ -1016,7 +1018,11 @@ export class ApiGatewayController {
               )
               .pipe(timeout(8000)),
           ).catch(() => null);
-          branch = assignment?.data?.branch ?? null;
+          // Filialning qo'shimcha menejeri: `assignment` dagi filialda
+          // `berilishi_kerak` yo'q, summa `branch.find_all` yozuvidan olinadi.
+          const assigned = assignment?.data?.branch ?? null;
+          branch =
+            branchById.get(String(assigned?.id ?? '').trim()) ?? assigned;
         }
 
         const branchId = String(branch?.id ?? '').trim();

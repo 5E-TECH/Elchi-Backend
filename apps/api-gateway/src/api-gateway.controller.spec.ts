@@ -110,6 +110,62 @@ describe('ApiGatewayController', () => {
     ]);
   });
 
+  // «Pul qabul qilish» qatori: filialda bir nechta menejer bo'lsa ham summa ko'rinadi.
+  it("filialning ikkinchi menejeri ham filial summasini oladi (branch_users yo'li)", async () => {
+    identityClient.send.mockReturnValueOnce(
+      of({
+        data: {
+          items: [
+            { id: '10', name: 'Ikkinchi menejer', role: 'manager' },
+            { id: '9', name: 'Birinchi menejer', role: 'manager' },
+          ],
+          meta: { total: 2, page: 1, limit: 10000, totalPages: 1 },
+        },
+      }),
+    );
+    branchClient.send.mockImplementation(({ cmd }: { cmd: string }) => {
+      if (cmd === 'branch.find_all') {
+        return of({
+          data: {
+            items: [
+              {
+                id: '16',
+                name: 'Asosiy filial',
+                manager_id: '9',
+                berilishi_kerak: 1451000,
+              },
+            ],
+          },
+        });
+      }
+      if (cmd === 'branch.user.find_by_user') {
+        return of({ data: { branch: { id: '16', name: 'Asosiy filial' } } });
+      }
+      return of({ data: null });
+    });
+    financeClient.send.mockReturnValue(of({ data: { id: 'cashbox-16' } }));
+
+    const response = await apiGatewayController.getManagers(
+      undefined,
+      undefined,
+      undefined,
+      '10000',
+      { user: { sub: '1', username: 'admin', roles: ['admin'] } },
+    );
+
+    expect(
+      response.data.items.map(
+        (manager: { id: string; berilishi_kerak: number }) => [
+          manager.id,
+          manager.berilishi_kerak,
+        ],
+      ),
+    ).toEqual([
+      ['10', 1451000],
+      ['9', 1451000],
+    ]);
+  });
+
   /**
    * C7 — GET /couriers filial so'rovchisi uchun: filial kuryerlari AVVAL
    * branch_users'dan olinadi, identity esa `user_ids` bilan sahifalanadi.
