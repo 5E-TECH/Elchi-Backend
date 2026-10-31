@@ -68,8 +68,9 @@ portlash). Token bucket'lar jarayon ichida (in-process) — prod'da bot bitta
 replika; replika ko'paysa chegarani umumiy saqlovga ko'chirish kerak. Bucket'lar
 soni 10 000 dan oshsa faqat eng eski (LRU) o'chiriladi. Uzun HTML xabar
 teg/entity ichida kesilmaydi (teglar yopilib, keyingi bo'lakda qayta ochiladi);
-xavfsiz nuqta bo'lmasa (masalan 4096 dan uzun havola) — qattiq kesish, surrogat
-jufti bo'linmaydi, bo'sh bo'lak yuborilmaydi. Outbox ko'p bo'lakli xabarda yetkazilgan bo'laklarni eslaydi
+bo'lakka sig'maydigan uzun teg (masalan 1024+ belgili havola) olib tashlanadi,
+matni qoladi; ko'rinadigan matnli nuqta bo'lmasa ham teglar yopilib, keyingi
+bo'lakda qayta ochiladi; surrogat jufti bo'linmaydi, bo'sh bo'lak yuborilmaydi. Outbox ko'p bo'lakli xabarda yetkazilgan bo'laklarni eslaydi
 (`telegram_outbox.parts_sent`, migratsiya `1716000000199`) — qayta urinishda
 yetkazilganlar qayta yuborilmaydi. Istisno (qabul qilingan): bo'lak yetib, lekin
 `parts_sent` yozilmay qolsa — o'sha bitta bo'lak takror chiqishi mumkin.

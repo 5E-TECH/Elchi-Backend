@@ -70,15 +70,34 @@ describe('BOT-3d — splitHtmlMessage', () => {
 });
 
 describe('BOT-3d — splitHtmlMessage chegaraviy holatlar', () => {
-  it('⭐ max dan uzun havola tegi — cheksiz tsikl YO‘Q, har bo‘lak oldinga siljiydi va ≤ max', () => {
+  it('⭐ max dan uzun havola tegi — cheksiz tsikl YO‘Q; sig‘maydigan teg olib tashlanadi, matn qoladi, teglar balansli', () => {
     const text = `<b><a href="https://x/?q=${'a'.repeat(4080)}">x</a></b>`;
     const chunks = splitHtmlMessage(text);
-    expect(chunks.length).toBeGreaterThan(1);
-    expect(chunks.length).toBeLessThan(5);
+    expect(chunks).toEqual(['<b>x</b>']);
+  });
+
+  it('⭐ uzun teg ichida uzun matn — har bo‘lak ≤ max va teg balansli (qattiq kesishda ham teglar yopilib, qayta ochiladi)', () => {
+    const body = 'y'.repeat(9000);
+    const text = `<b><a href="https://x/?q=${'a'.repeat(4080)}">${body}</a></b>`;
+    const chunks = splitHtmlMessage(text);
+    expect(chunks.length).toBeGreaterThan(2);
+    for (const chunk of chunks) {
+      expect(chunk.length).toBeLessThanOrEqual(
+        TELEGRAM_LIMITS.MESSAGE_MAX_CHARS,
+      );
+      expect(balanced(chunk)).toBe(true);
+      expect(chunk.startsWith('<b>')).toBe(true);
+    }
+    expect(chunks.join('').replace(/<\/?b>/g, '')).toBe(body);
+  });
+
+  it('bo‘lakka sig‘adigan oddiy havola saqlanadi', () => {
+    const text = `<a href="https://x.uz/o/1">${'z'.repeat(400)}</a>`;
+    const chunks = splitHtmlMessage(text, 200);
+    expect(chunks.every(balanced)).toBe(true);
     expect(
-      chunks.every((c) => c.length <= TELEGRAM_LIMITS.MESSAGE_MAX_CHARS),
+      chunks.every((c) => c.startsWith('<a href="https://x.uz/o/1">')),
     ).toBe(true);
-    expect(chunks.join('').replace(/<\/?b>/g, '')).toContain('a'.repeat(4000));
   });
 
   it('surrogat jufti (emoji) bo‘linmaydi', () => {

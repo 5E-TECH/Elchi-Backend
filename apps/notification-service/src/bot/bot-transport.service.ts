@@ -180,6 +180,49 @@ export function splitMessage(
 const HTML_TAG_RE = /^<\/?([a-zA-Z][a-zA-Z0-9-]*)[^>]*>/;
 
 /**
+ * (BOT-3d) Bitta bo'lakka sig'maydigan darajada uzun teg (masalan 4000+
+ * belgili `<a href>`) — ochilishi va mos yopilishi olib tashlanadi, ichidagi
+ * matn qoladi. Aks holda bunday teg atrofida teg-balansli kesish nuqtasi
+ * bo'lmaydi va bo'lak qattiq kesilib, Telegram «can't parse entities» berardi.
+ */
+function dropOversizedTags(text: string, limit: number): string {
+  const re = /<\/?([a-zA-Z][a-zA-Z0-9-]*)[^>]*>/g;
+  const stack: Array<{ name: string; dropped: boolean }> = [];
+  const drop: Array<[number, number]> = [];
+  for (const match of text.matchAll(re)) {
+    const raw = match[0];
+    const name = match[1].toLowerCase();
+    const at = match.index ?? 0;
+    if (raw.startsWith('</')) {
+      let idx = -1;
+      for (let k = stack.length - 1; k >= 0; k -= 1) {
+        if (stack[k].name === name) {
+          idx = k;
+          break;
+        }
+      }
+      if (idx < 0) continue;
+      const [entry] = stack.splice(idx, 1);
+      if (entry.dropped) drop.push([at, at + raw.length]);
+    } else if (!raw.endsWith('/>')) {
+      const dropped = raw.length > limit;
+      stack.push({ name, dropped });
+      if (dropped) drop.push([at, at + raw.length]);
+    } else if (raw.length > limit) {
+      drop.push([at, at + raw.length]);
+    }
+  }
+  if (!drop.length) return text;
+  let out = '';
+  let from = 0;
+  for (const [start, end] of drop.sort((a, b) => a[0] - b[0])) {
+    out += text.slice(from, start);
+    from = end;
+  }
+  return out + text.slice(from);
+}
+
+/**
  * (BOT-3d) HTML (`parse_mode: HTML`) matnni ≤ max bo'laklarga bo'ladi —
  * teg yoki `&…;` entity ICHIDA kesmaydi; bo'lak oxirida ochiq teglar
  * yopiladi va keyingi bo'lak boshida qayta ochiladi (avval kesish, keyin
@@ -192,6 +235,7 @@ export function splitHtmlMessage(
 ): string[] {
   const chunks: string[] = [];
   let body = String(text ?? '');
+  if (body.length > max) body = dropOversizedTags(body, Math.floor(max / 4));
   // Oldingi bo'lakdan qayta ochilgan teglar uzunligi: kesish shundan KEYIN
   // bo'lishi shart (aks holda bo'lak oldinga siljimaydi — cheksiz tsikl).
   let prefixLen = 0;
@@ -202,6 +246,8 @@ export function splitHtmlMessage(
     // Xavfsiz kesish nuqtalari: [indeks, o'sha paytdagi ochiq teglar].
     let best: { at: number; open: Open[] } | null = null;
     let bestNewline: { at: number; open: Open[] } | null = null;
+    // Ko'rinadigan matn shartisiz eng yaxshi teg-balansli nuqta (zaxira).
+    let bestAny: { at: number; open: Open[] } | null = null;
     const closingLen = (open: Open[]) =>
       open.reduce((sum, tag) => sum + tag.name.length + 3, 0);
     // Prefiksdan keyin ko'rinadigan (bo'sh bo'lmagan) matn bo'ldimi — bo'lak
@@ -210,6 +256,13 @@ export function splitHtmlMessage(
     let i = 0;
     while (i < body.length) {
       const fits = (at: number) => at + closingLen(stack) <= max;
+      if (
+        i > prefixLen &&
+        fits(i) &&
+        !isHighSurrogate(body.charCodeAt(i - 1))
+      ) {
+        bestAny = { at: i, open: [...stack] };
+      }
       if (
         visible &&
         i > prefixLen &&
@@ -248,10 +301,15 @@ export function splitHtmlMessage(
       if (i >= prefixLen && body[i].trim() !== '') visible = true;
       i += 1;
     }
-    const cut = bestNewline && bestNewline.at >= max * 0.5 ? bestNewline : best;
+    // Ko'rinadigan matnli nuqta bo'lmasa — teg-balansli zaxira nuqta (teglar
+    // baribir yopilib, keyingi bo'lakda qayta ochiladi).
+    const cut =
+      (bestNewline && bestNewline.at >= max * 0.5 ? bestNewline : best) ??
+      bestAny;
     if (!cut) {
-      // Xavfsiz nuqta yo'q (masalan bitta teg / havola max dan uzun) — qattiq
-      // kesish (surrogat juftini bo'lmasdan); bo'lak baribir oldinga siljiydi.
+      // Teg-balansli nuqta umuman yo'q (amalda yetib bo'lmaydi: uzun teglar
+      // oldindan olib tashlangan) — oxirgi chora qattiq kesish (surrogat
+      // juftini bo'lmasdan); bo'lak baribir oldinga siljiydi.
       let at = max;
       if (isHighSurrogate(body.charCodeAt(at - 1))) at -= 1;
       chunks.push(body.slice(0, at));

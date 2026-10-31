@@ -22,6 +22,12 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+### 2026-10-31 — Telegram bot: uzun HTML xabar bo'laklari (BOT-3d, kichik)
+
+- 🟢 [notification] — bo'lakka sig'maydigan uzun teg (masalan 1024+ belgili havola) olib tashlanadi (matni qoladi); qattiq kesishda ham teglar yopilib, keyingi bo'lakda qayta ochiladi. Deploy: notification-service.
+
+→ Frontend: o'zgarish shart emas.
+
 ### 2026-10-31 — Kuryer amallarida `Idempotency-Key` (BOT-3d)
 
 - ✏️ [order] — `POST /orders/sell/:id`, `POST /orders/cancel/:id`, `POST /orders/:id/could-not-deliver`, `POST /orders/partly-sell/:id`, `POST /orders/rollback/:id` endi ixtiyoriy **`Idempotency-Key`** header'ini qabul qiladi (≤255 belgi, foydalanuvchi bo'yicha ajratiladi; uzunroq → **400**). Ayni kalit bilan takroriy so'rov (qayta urinish, ikki marta bosish) amalni ikkinchi marta bajarmaydi — birinchi muvaffaqiyatli natija qaytadi. Yiqilgan urinish saqlanmaydi: ayni kalit bilan qayta urinish amalni qayta bajaradi.
