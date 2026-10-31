@@ -22,6 +22,12 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+### 2026-10-31 — Kuryer ro'yxati: `where_deliver` filtri (yKtzKXeM)
+
+`GET /orders/courier/orders?where_deliver=center|address` endi qabul qilinadi (kuryer, menejer, filial, bekor qilinganlar tabi). Berilmasa hammasi; noma'lum qiymat 400. Deploy: api-gateway.
+
+→ Frontend: «Yetkazish: barchasi» Select (v2, ≥768) shu parametrga ulansin.
+
 ### 2026-10-31 — Chiqimda «nima uchun?»: moliyaviy balansda kategoriya, xarajat hisoboti (ljVOuNz4)
 
 Kassa qismi (`expense_category_id`, majburiy) oldin bajarilgan, o'zgarmagan. Qo'shilgani — daftar (moliyaviy balans), filtrlar va hisobot. Mavjud FE buzilmaydi: majburiylik kalit bilan, sukut o'chiq.

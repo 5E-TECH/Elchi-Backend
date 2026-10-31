@@ -734,6 +734,18 @@ export class OrderGatewayController {
     };
   }
 
+  /** yKtzKXeM: kuryer ro'yxati `where_deliver` filtri; noma'lum qiymat — 400. */
+  private parseCourierWhereDeliver(value?: string): Where_deliver | undefined {
+    const normalized = String(value ?? '')
+      .trim()
+      .toLowerCase();
+    if (!normalized) return undefined;
+    if (!Object.values(Where_deliver).includes(normalized as Where_deliver)) {
+      throw new BadRequestException(`Noto'g'ri where_deliver qiymati: ${value}`);
+    }
+    return normalized as Where_deliver;
+  }
+
   private async findCourierCancelledRows(
     reqUser: JwtUser | undefined,
     filters: Record<string, unknown>,
@@ -5161,6 +5173,12 @@ export class OrderGatewayController {
     enum: [10, 25, 50, 100],
     schema: { default: 10 } as any,
   })
+  @ApiQuery({
+    name: 'where_deliver',
+    required: false,
+    enum: Where_deliver,
+    description: 'yKtzKXeM: yetkazish turi; berilmasa hammasi',
+  })
   async findCourierOrdersLegacy(
     @Query('status') status?: string | string[],
     @Query('search') search?: string,
@@ -5169,9 +5187,12 @@ export class OrderGatewayController {
     @Query('page') page?: string,
     @Query('limit') limit?: string,
     @Req() req?: { user: JwtUser },
+    @Query('where_deliver') whereDeliver?: string,
   ) {
     const pagination = this.parsePaginationQuery(page, limit);
     const statuses = this.parseStatusQuery(status);
+    // yKtzKXeM: «Yetkazish: barchasi» — bo'sh qiymat filtrsiz.
+    const deliverFilter = this.parseCourierWhereDeliver(whereDeliver);
     const normalizedRoles = this.normalizeRoles(req?.user?.roles);
     const isBranchScopedRequester =
       normalizedRoles.includes(RoleEnum.BRANCH) ||
@@ -5187,7 +5208,12 @@ export class OrderGatewayController {
     if (isCancelledTab) {
       const { data, total } = await this.findCourierCancelledRows(
         req?.user,
-        { search, start_day: startDate, end_day: endDate },
+        {
+          search,
+          start_day: startDate,
+          end_day: endDate,
+          where_deliver: deliverFilter,
+        },
         pagination.page,
         pagination.limit,
       );
@@ -5241,6 +5267,7 @@ export class OrderGatewayController {
           search,
           start_day: startDate,
           end_day: endDate,
+          where_deliver: deliverFilter,
           page: pagination.page,
           limit: pagination.limit,
         },
@@ -5311,6 +5338,7 @@ export class OrderGatewayController {
         search,
         start_day: startDate,
         end_day: endDate,
+        where_deliver: deliverFilter,
         page: pagination.page,
         limit: pagination.limit,
       },

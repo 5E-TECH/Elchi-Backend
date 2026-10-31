@@ -457,4 +457,48 @@ describe('OrderGatewayController pagination', () => {
       expect.objectContaining({ id: 'partial-child' }),
     ]);
   });
+
+  describe('yKtzKXeM: kuryer ro`yxati `where_deliver` filtri', () => {
+    const courier = { user: { sub: '77', username: 'c', roles: ['courier'] } };
+    const list = (controller: any, whereDeliver?: string) =>
+      controller.findCourierOrdersLegacy(
+        'cancelled',
+        undefined,
+        undefined,
+        undefined,
+        '1',
+        '10',
+        courier,
+        whereDeliver,
+      );
+
+    it('filtr order-service so`roviga uzatiladi, katta harf ham', async () => {
+      const { controller, orderClient } = makeController();
+      orderClient.send.mockReturnValue(of({ data: [], total: 0 }));
+
+      await list(controller, ' ADDRESS ');
+
+      expect(orderClient.send.mock.calls[0][1].query).toEqual(
+        expect.objectContaining({ where_deliver: 'address' }),
+      );
+    });
+
+    it('berilmasa hammasi: filtr yo`q', async () => {
+      const { controller, orderClient } = makeController();
+      orderClient.send.mockReturnValue(of({ data: [], total: 0 }));
+
+      await list(controller);
+
+      expect(
+        orderClient.send.mock.calls[0][1].query.where_deliver,
+      ).toBeUndefined();
+    });
+
+    it('noma`lum qiymat: 400, so`rov ketmaydi', async () => {
+      const { controller, orderClient } = makeController();
+
+      await expect(list(controller, 'door')).rejects.toThrow('where_deliver');
+      expect(orderClient.send).not.toHaveBeenCalled();
+    });
+  });
 });

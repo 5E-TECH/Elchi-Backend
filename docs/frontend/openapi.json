@@ -4379,6 +4379,19 @@
             }
           },
           {
+            "name": "where_deliver",
+            "required": false,
+            "in": "query",
+            "description": "yKtzKXeM: yetkazish turi; berilmasa hammasi",
+            "schema": {
+              "enum": [
+                "center",
+                "address"
+              ],
+              "type": "string"
+            }
+          },
+          {
             "name": "status",
             "required": false,
             "in": "query",
