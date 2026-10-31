@@ -5,6 +5,7 @@ import { RmqService } from '../rmq/rmq.service';
 import { IdempotencyKey, IdempotencyStatus } from './idempotency-key.entity';
 import { AcquireResult, IdempotencyService } from './idempotency.service';
 import {
+  IDEMPOTENCY_IN_PROGRESS_MESSAGE,
   IDEMPOTENCY_KEY_MISMATCH_MESSAGE,
   IdempotentExecuteOptions,
   executeIdempotent,
@@ -629,5 +630,38 @@ describe('executeIdempotent — binding mismatch (BOT-3d)', () => {
     expect(handler).not.toHaveBeenCalled();
     expect(rmq.ack).toHaveBeenCalledTimes(1);
     expect(idem.markCompleted).not.toHaveBeenCalled();
+  });
+});
+
+describe('executeIdempotent — inProgressConflict / leaseMs (BOT-3d)', () => {
+  it('in_progress + inProgressConflict → ack (requeue YO‘Q) va 409', async () => {
+    const rmq = makeRmq();
+    const idem = makeIdem({ status: 'in_progress' });
+    const promise = run(
+      rmq,
+      idem,
+      {
+        requestId: 'idem:25:' + 'c'.repeat(64),
+        pattern: 'order.sell',
+        inProgressConflict: true,
+        leaseMs: 90_000,
+      },
+      jest.fn(),
+    );
+    await expect(promise).rejects.toBeInstanceOf(RpcException);
+    await promise.catch((error: RpcException) =>
+      expect(error.getError()).toEqual({
+        statusCode: 409,
+        message: IDEMPOTENCY_IN_PROGRESS_MESSAGE,
+      }),
+    );
+    expect(rmq.ack).toHaveBeenCalledTimes(1);
+    expect(rmq.nack).not.toHaveBeenCalled();
+    expect(idem.tryAcquire).toHaveBeenCalledWith(
+      expect.any(String),
+      'order.sell',
+      90_000,
+      undefined,
+    );
   });
 });

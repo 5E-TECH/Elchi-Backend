@@ -180,9 +180,14 @@ bazasiga o'zi yozmaydi, doira/holat mashinasi/isbot/extra-cost — serverda.
 - **Idempotentlik (BOT-3d).** Har kuryer amali (`sell`, `cancel`,
   `could-not-deliver`, `partly-sell`, `rollback`) `Idempotency-Key: <action_id>`
   bilan yuboriladi. Gateway uni `idem:<user>:<sha256(kalit)>` ga aylantiradi;
-  order-service kalitni **amal + buyurtma** ga bog'laydi (`idempotency_keys.pattern`
-  = `order.sell:<id>`). Ayni kalit boshqa amal yoki buyurtma bilan kelsa → **422**,
-  eski natija qaytmaydi.
+  order-service kalitni **amal + buyurtma + tana barmoq izi** ga bog'laydi
+  (`idempotency_keys.pattern` = `order.sell:<id>:<sha256(dto)[:32]>`, isbot fayl
+  kalitlari kirmaydi). Ayni kalit boshqa amal, buyurtma yoki tana bilan → **422**,
+  eski natija qaytmaydi. Yiqilgan urinish qayta egallanadi (`reclaimFailed`);
+  ishlayotgan takror → **409**; lease 90 s (gateway timeout 60 s dan uzun).
+  Isbotli amal kaliti — o'sha «✅ Tugatdim» tugmasi (`proof:<action_id>`): har
+  isbot urinishiga yangi, qayta urinishda o'zgarmaydi. Handler xatosida bir
+  martalik «✅ Ha» / «✅ Tugatdim» qayta ochiladi (`retrySafe`).
 - «✅ Ha» bosilganda darhol `answerCallbackQuery("⏳ Bajarilmoqda…")`; bot javobni
   **65 s** kutadi (`COURIER_OP_TIMEOUT_MS`), natija tasdiq xabarini TAHRIRLAB yoziladi.
   Timeout / 502–504 → "Natija noma'lum" va «✅ Ha» tugmasi qaytariladi: qayta bosish

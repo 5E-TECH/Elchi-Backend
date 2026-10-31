@@ -25,24 +25,54 @@ describe('BOT-3d — kuryer amali Idempotency-Key → request_id', () => {
       ).map(([, payload]) => payload.request_id);
     return { controller, requestIds };
   };
-  const req = (sub: string) =>
-    ({ user: { sub, username: 'k', roles: ['courier'] } }) as never;
+  const req = (sub: string, key?: string) =>
+    ({
+      user: { sub, username: 'k', roles: ['courier'] },
+      headers: key === undefined ? {} : { 'idempotency-key': key },
+    }) as never;
+  type Call = (
+    c: OrderGatewayController,
+    key?: string,
+    sub?: string,
+  ) => Promise<unknown>;
 
-  it.each([
+  it.each<[string, Call]>([
+    [
+      'sell',
+      (c, key, sub = '25') => c.sellOrder('81', {}, undefined, req(sub, key)),
+    ],
+    [
+      'cancel',
+      (c, key, sub = '25') =>
+        c.cancelOrder(
+          '81',
+          { reason: 'customer_refused' } as never,
+          undefined,
+          req(sub, key),
+        ),
+    ],
+    [
+      'partly-sell',
+      (c, key, sub = '25') =>
+        c.partlySellOrder(
+          '81',
+          { items: [] } as never,
+          undefined,
+          req(sub, key),
+        ),
+    ],
     [
       'could-not-deliver',
-      (c: OrderGatewayController, key?: string, sub = '25') =>
+      (c, key, sub = '25') =>
         c.couldNotDeliverOrder(
           '81',
           { reason: 'Mijoz telefonni olmadi' },
-          req(sub),
-          key,
+          req(sub, key),
         ),
     ],
     [
       'rollback',
-      (c: OrderGatewayController, key?: string, sub = '25') =>
-        c.rollbackOrder('81', {}, req(sub), key),
+      (c, key, sub = '25') => c.rollbackOrder('81', {}, req(sub, key)),
     ],
   ])(
     '⭐ %s: ayni kalit — ayni request_id; boshqa foydalanuvchi — boshqa; kalitsiz — UUID',
@@ -62,4 +92,11 @@ describe('BOT-3d — kuryer amali Idempotency-Key → request_id', () => {
       );
     },
   );
+
+  it('255 belgidan uzun kalit → 400', () => {
+    const { controller } = make();
+    expect(() =>
+      controller.rollbackOrder('81', {}, req('25', 'k'.repeat(256))),
+    ).toThrow(/255/);
+  });
 });

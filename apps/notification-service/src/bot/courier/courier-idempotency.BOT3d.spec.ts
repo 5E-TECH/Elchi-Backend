@@ -113,4 +113,66 @@ describe('BOT-3d — kuryer amali idempotent (NIMA 12)', () => {
     );
     expect(edited).toContain('#101 — sotildi ✅');
   });
+
+  it('⭐ isbot urinishlari — har biriga YANGI kalit: sell → ortga → yana sell haqiqatan bajariladi (keshdagi eski javob emas)', async () => {
+    // Backend kalit bo'yicha natijani abadiy eslaydi (order-service kabi).
+    const inner = fakeOrdersGateway([
+      gatewayOrder('101', 'waiting', {
+        market: { id: '3', expense_proof_conditions: ['sell_any'] },
+      }),
+    ]);
+    const cache = new Map<string, unknown>();
+    const request = jest.fn(
+      async (
+        tg: string,
+        method: string,
+        path: string,
+        body?: unknown,
+        opts?: { idempotencyKey?: string },
+      ) => {
+        const key = opts?.idempotencyKey;
+        if (method === 'POST' && key && path.startsWith('/orders/')) {
+          if (cache.has(key)) return cache.get(key);
+          const result = await inner.request(tg, method, path, body, opts);
+          cache.set(key, result);
+          return result;
+        }
+        return inner.request(tg, method, path, body, opts);
+      },
+    );
+    const ctx = makeRouter({ actor: courierActor(), gateway: request });
+    let updateId = 5000;
+    const sellWithProof = async () => {
+      await ctx.router.dispatch('elchi', textUpdate('/ishim', { chatId: 25 }));
+      await press(ctx, lastButtons(ctx)['✅ Sotildi']);
+      await press(ctx, lastButtons(ctx)['✅ Ha']);
+      const done = lastButtons(ctx)['✅ Tugatdim'];
+      updateId += 1;
+      await ctx.router.dispatch('elchi', {
+        update_id: updateId,
+        message: {
+          message_id: updateId,
+          chat: { id: 25, type: 'private' },
+          from: { id: 25 },
+          photo: [{ file_id: `f${updateId}`, file_size: 10_000 }],
+        },
+      });
+      await press(ctx, done);
+    };
+    const sellKeys = () =>
+      request.mock.calls
+        .filter((call) => call[1] === 'POST' && call[2] === '/orders/sell/101')
+        .map((call) => (call[4] as { idempotencyKey?: string }).idempotencyKey);
+
+    await sellWithProof();
+    expect(inner.orders.get('101')!.status).toBe('sold');
+    // Ortga qaytarildi (boshqa yo'l bilan) — yana sotiladi.
+    inner.orders.get('101')!.status = 'waiting';
+    await sellWithProof();
+    const [first, second] = sellKeys();
+    expect(first).toBeTruthy();
+    expect(second).toBeTruthy();
+    expect(second).not.toBe(first);
+    expect(inner.orders.get('101')!.status).toBe('sold');
+  });
 });

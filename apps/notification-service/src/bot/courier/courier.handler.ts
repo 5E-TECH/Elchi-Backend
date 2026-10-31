@@ -432,6 +432,9 @@ export class CourierActions {
         action: COURIER_ACTIONS.confirm,
         expiredText: COURIER_LIST_EXPIRED_TEXT,
         ackText: COURIER_OP_ACK_TEXT,
+        // (BOT-3d) Amal `action_id` kaliti bilan (Idempotency-Key) — qayta
+        // ochilgan «✅ Ha» backend'da ikkinchi amal bermaydi.
+        retrySafe: true,
         handle: privateOnly((ctx, action) => this.onConfirm(ctx, action)),
       },
       {
@@ -450,7 +453,9 @@ export class CourierActions {
       {
         action: COURIER_ACTIONS.proofDone,
         ackText: COURIER_OP_ACK_TEXT,
-        handle: privateOnly((ctx) => this.onProofDone(ctx)),
+        // Isbot urinishi kaliti (nonce) — release va qayta urinishda o'zgarmaydi.
+        retrySafe: true,
+        handle: privateOnly((ctx, action) => this.onProofDone(ctx, action)),
       },
       {
         action: COURIER_ACTIONS.proofStop,
@@ -634,7 +639,7 @@ export class CourierActions {
     });
   }
 
-  private async onProofDone(ctx: BotContext) {
+  private async onProofDone(ctx: BotContext, action: TelegramBotAction) {
     const session = await this.sessions.load(ctx.chatId, ctx.slug);
     const proof = session.state.proof as ProofState | undefined;
     if (!proof) {
@@ -651,11 +656,11 @@ export class CourierActions {
       return;
     }
     await this.clearProof(ctx);
-    await this.execute(
-      ctx,
-      proof,
-      `proof:${proof.order_id}:${proof.keys.length}`,
-    );
+    // (BOT-3d) Kalit — shu «✅ Tugatdim» tugmasi (har isbot urinishiga
+    // yangi; release / qayta urinishda o'zgarmaydi). Avvalgi
+    // `proof:<order>:<n>` har urinishda bir xil edi: sell → ortga → sell
+    // keshdagi eski javobni qaytarardi.
+    await this.execute(ctx, proof, `proof:${action.action_id}`);
   }
 
   private async onProofStop(ctx: BotContext) {

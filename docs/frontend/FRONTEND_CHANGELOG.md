@@ -24,11 +24,12 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 ### 2026-10-31 — Kuryer amallarida `Idempotency-Key` (BOT-3d)
 
-- ✏️ [order] — `POST /orders/sell/:id`, `POST /orders/cancel/:id`, `POST /orders/:id/could-not-deliver`, `POST /orders/partly-sell/:id`, `POST /orders/rollback/:id` endi ixtiyoriy **`Idempotency-Key`** header'ini qabul qiladi (≤255 belgi, foydalanuvchi bo'yicha ajratiladi). Ayni kalit bilan takroriy so'rov (qayta urinish, ikki marta bosish) amalni ikkinchi marta bajarmaydi — birinchi natija qaytadi.
-- ⚠️ [order] — kalit **amal + buyurtma** ga bog'lanadi: ayni `Idempotency-Key` boshqa amal yoki boshqa buyurtma bilan yuborilsa → **422** (`Idempotency-Key boshqa amal yoki buyurtma uchun ishlatilgan — yangi kalit yuboring`), eski natija qaytmaydi.
-- Header'siz so'rov avvalgidek ishlaydi. Deploy: api-gateway + order-service.
+- ✏️ [order] — `POST /orders/sell/:id`, `POST /orders/cancel/:id`, `POST /orders/:id/could-not-deliver`, `POST /orders/partly-sell/:id`, `POST /orders/rollback/:id` endi ixtiyoriy **`Idempotency-Key`** header'ini qabul qiladi (≤255 belgi, foydalanuvchi bo'yicha ajratiladi; uzunroq → **400**). Ayni kalit bilan takroriy so'rov (qayta urinish, ikki marta bosish) amalni ikkinchi marta bajarmaydi — birinchi muvaffaqiyatli natija qaytadi. Yiqilgan urinish saqlanmaydi: ayni kalit bilan qayta urinish amalni qayta bajaradi.
+- ⚠️ [order] — kalit **amal + buyurtma + tana** ga bog'lanadi: ayni `Idempotency-Key` boshqa amal, boshqa buyurtma yoki boshqa tana (sabab, summa va h.k.; isbot fayl kalitlaridan tashqari) bilan yuborilsa → **422** (`Idempotency-Key boshqa amal, buyurtma yoki ma'lumot uchun ishlatilgan — yangi kalit yuboring`), eski natija qaytmaydi.
+- ✏️ [order] — ayni kalitli so'rov hali bajarilayotgan bo'lsa → **409** (`Takroriy so'rov: bu amal hozir bajarilmoqda…`).
+- Header'siz so'rov avvalgidek ishlaydi. Deploy: api-gateway + order-service (+ notification-service bot).
 
-→ Frontend: o'zgarish shart emas. Ikki marta bosishdan himoya kerak bo'lsa — har amal (har bosish emas, har tasdiqlangan amal) uchun bitta UUID yaratib `Idempotency-Key` sifatida yuboring; 422 kelsa yangi kalit bilan qayta yuboring.
+→ Frontend: o'zgarish shart emas. Ishlatilsa — **har amal + buyurtma + tana uchun noyob kalit** (masalan har tasdiqlangan amalga yangi UUID); faqat ayni so'rovni qayta yuborishda kalit takrorlanadi. 422 → yangi kalit bilan yuboring; 409 → biroz kutib holatni yangilang.
 
 ### 2026-10-31 — Kuryer ro'yxati: `where_deliver` filtri (yKtzKXeM)
 

@@ -331,7 +331,16 @@ export class BotRouterService implements OnModuleDestroy {
         order_id: action.order_id ? String(action.order_id) : null,
       },
     });
-    await handler.handle(ctx, action);
+    try {
+      await handler.handle(ctx, action);
+    } catch (error) {
+      // (BOT-3d) Amal bajarilmadi — bir martalik tugma qayta ochiladi, faqat
+      // takrorlash xavfsiz bo'lsa (deterministik kalit, backend dedupe).
+      if (action.one_shot && handler.retrySafe) {
+        await this.actions.release(action.action_id).catch(() => undefined);
+      }
+      throw error;
+    }
   }
 
   private buildContext(update: TelegramUpdate, chatId: string): BotContext {
