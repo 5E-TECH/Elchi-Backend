@@ -124,7 +124,13 @@ RESTART_WINDOW_S=$((RESTART_WINDOW_MIN * 60))
 # One cron interval: a restart is dated by StartedAt but seen only on the next run, so a loop
 # with a period equal to the window is still caught.
 CRON_SLACK_S=300
-FLAP_WINDOW_S=$(($(num "$(cfg BOT_ALERT_FLAP_WINDOW_MIN)" 60) * 60))
+FLAP_WINDOW_MIN="$(num "$(cfg BOT_ALERT_FLAP_WINDOW_MIN)" 60)"
+if [ "$FLAP_WINDOW_MIN" -lt 10 ]; then
+  # < 10 would silently disable the flapping protection (one cron interval is 5 min).
+  log "WARN: BOT_ALERT_FLAP_WINDOW_MIN=$FLAP_WINDOW_MIN rad etildi (kamida 10) — 60 ishlatiladi"
+  FLAP_WINDOW_MIN=60
+fi
+FLAP_WINDOW_S=$((FLAP_WINDOW_MIN * 60))
 
 PENDING_UPDATES_MAX="$(num "$(cfg BOT_ALERT_PENDING_UPDATES_MAX)" 100)"
 WEBHOOK_ERROR_MIN="$(num "$(cfg BOT_ALERT_WEBHOOK_ERROR_MIN)" 15)"
@@ -264,6 +270,7 @@ NS_ID="$(cfg BOT_ALERT_NS_CONTAINER)"
 NS_RESTARTS=""
 NS_PS_FAILED=false
 started_s=0
+ns_status=""
 if [ -z "$NS_ID" ]; then
   project="$(cfg BOT_ALERT_COMPOSE_PROJECT)"
   [ -n "$project" ] || project="$(cfg COMPOSE_PROJECT_NAME)"
@@ -350,8 +357,11 @@ fi
 if [ -n "$NS_RESTARTS" ] && [ "$NS_ID" = "$PREV_NS_ID" ] && [ -n "$PREV_NS_RESTARTS" ]; then
   grown=$(($(num "$NS_RESTARTS" 0) - PREV_NS_RESTARTS))
   if [ "$grown" -gt 0 ]; then
+    # Running: StartedAt is this restart. Not running (restarting/exited): StartedAt is the
+    # previous start — the restart is happening now.
     t_restart="$NOW"
-    [ "$started_s" -gt 0 ] && [ "$started_s" -le "$NOW" ] && t_restart="$started_s"
+    [ "$ns_status" = running ] && [ "$started_s" -gt 0 ] && [ "$started_s" -le "$NOW" ] &&
+      t_restart="$started_s"
     [ "$grown" -gt 3 ] && grown=3
     while [ "$grown" -gt 0 ]; do
       RESTART_TIMES="${RESTART_TIMES:+$RESTART_TIMES,}$t_restart"
@@ -439,7 +449,9 @@ for c in ${PREV_SIG//,/ }; do
   [ "$c" = ok ] && continue
   if [ "$c" = unstable ]; then
     recent_any && add_active unstable
-  elif recent "$c"; then
+  elif recent "$c" && { has "$R1" "$c" || has "$R2" "$c" || has "$R3" "$c"; }; then
+    # Failing now after >= 3 clean runs (possible only while HOLD/FLAP kept it in SIG):
+    # it has left — a fresh failure goes through the join rule (debounce) below.
     add_active "$c"
   fi
 done
@@ -463,7 +475,10 @@ fi
 # Nothing alerted any more, but checks still fail (not confirmed yet): no false
 # "tiklandi" — hold the incident silently with the previous set.
 HOLD=false
-if [ "${#ACTIVE[@]}" -eq 0 ] && [ "$PREV" = problem ] && { recent_any || [ "$LEGACY_HOLD" = true ]; }; then
+# The decision uses the 2-run rule even in FLAP mode: the alerted codes have already left
+# under the 4-run rule, so a rare unconfirmed blip must not keep the incident open for hours.
+if [ "${#ACTIVE[@]}" -eq 0 ] && [ "$PREV" = problem ] &&
+  { [ -n "$RAW" ] || [ -n "$R1" ] || [ "$LEGACY_HOLD" = true ]; }; then
   HOLD=true
   for c in ${PREV_SIG//,/ }; do [ "$c" = ok ] || add_active "$c"; done
 fi
@@ -489,6 +504,9 @@ for c in "${ACTIVE[@]:-}"; do
   line=""
   for i in "${!CODES[@]}"; do [ "${CODES[$i]}" = "$c" ] && line="${TEXTS[$i]}"; done
   [ "$c" = unstable ] && line="Bir nechta tekshiruv navbatma-navbat yiqilmoqda (so'nggi 4 yugurish): ${UNION:-$(printf '%s,%s,%s,%s' "$RAW" "$R1" "$R2" "$R3" | csv_sort)}"
+  if [ -z "$line" ] && [ "$HOLD" = true ]; then
+    line="$c: tiklangan, boshqa tekshiruvlar hali beqaror"
+  fi
   [ -n "$line" ] || line="$c: oxirgi tekshiruvda o'tdi, lekin hali barqaror emas"
   CONF_TEXTS+=("$line")
 done
@@ -497,6 +515,22 @@ done
 # New codes (not alerted in this incident) → message now; ns_restart and ns_unhealthy
 # are one root cause (a crash-looping container is also unhealthy). Only removals →
 # wait for full recovery.
+# A check that has been clean for 4 runs leaves ALERTED (its next failure is a new problem
+# even if the incident stayed open because of other checks / HOLD / FLAP); `unstable`
+# leaves ALERTED when it leaves the alerted set.
+prune_alerted() {
+  local c kept=""
+  for c in ${ALERTED//,/ }; do
+    if [ "$c" = unstable ]; then
+      has "$SIG" unstable || continue
+    elif ! has "$RAW" "$c" && ! has "$R1" "$c" && ! has "$R2" "$c" && ! has "$R3" "$c"; then
+      continue
+    fi
+    kept="${kept:+$kept,}$c"
+  done
+  ALERTED="$kept"
+}
+prune_alerted
 is_new() {
   has "$ALERTED" "$1" && return 1
   case "$1" in
@@ -531,6 +565,8 @@ ALERTED_IN="$ALERTED"
 FLAP_IN="$FLAP"
 if [ "$CUR" = problem ]; then
   ALERTED="$(printf '%s,%s' "$ALERTED" "$(minus "$SIG" ok)" | csv_sort)"
+  # HOLD re-adds the previous codes to SIG: drop the long-clean ones again.
+  prune_alerted
   if [ "$PREV" != problem ]; then
     FLAP=""
     [ -n "$PREV_RECOVERED_AT" ] && [ $((NOW - PREV_RECOVERED_AT)) -lt "$FLAP_WINDOW_S" ] && FLAP=1

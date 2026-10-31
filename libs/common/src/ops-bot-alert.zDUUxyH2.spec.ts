@@ -604,6 +604,9 @@ describe('bot-alert.sh (zDUUxyH2)', () => {
     const C = { FAKE_PSQL: '0\\n50\\n0' }; // outbox_dead
     const D = { FAKE_WEBHOOK: webhookInfo({ pending_update_count: 500 }) }; // webhook_pending
     const T = () => ({ FAKE_GETME_CODE: '401', FAKE_GETME: '{"ok":false}' }); // token_invalid
+    // Satr ko'rinishidagi stsenariy: A ns, e/B outbox, D webhook, T 401, o ok.
+    const seq = (ch: string) => () =>
+      (({ A, B, e: B, D, T: T(), o: {} }) as Record<string, Step>)[ch];
     const simulate = (steps: Array<(i: number) => Step>, extra: Step = {}) => {
       let seen = 0;
       return steps
@@ -788,6 +791,36 @@ describe('bot-alert.sh (zDUUxyH2)', () => {
         '.A.R.A' + '.'.repeat(18),
         {},
       ],
+      // --- #609 tekshiruvi: 4 toza yugurishdan keyin kod ALERTED'dan chiqadi ----------
+      [
+        'G1) TTAATTTTTTAAAATTTTTT — hodisa ochiq turganda 401 4 toza yugurishdan keyin qaytsa, yana alert',
+        () => [...'TTAATTTTTTAAAATTTTTT'].map(seq),
+        '.A.A.......A...A....',
+        {},
+      ],
+      [
+        'G1) AAAATTTTTTAAAATTTTTT — konteyner 6 yugurishdan keyin yana exit, alert',
+        () => [...'AAAATTTTTTAAAATTTTTT'].map(seq),
+        '.A...A.....A...A....',
+        {},
+      ],
+      [
+        'G1) AAooAAeeooDooTTTTTT — flap hodisasi ichida yangi 401 2-yugurishda alert',
+        () => [...'AAooAAeeooDooTTTTTT'].map(seq),
+        '.A.R.A.A....R.A....',
+        {},
+      ],
+      [
+        'G1) M3: ns_unhealthy alert, hodisa outbox bilan ochiq, 1 soatdan keyin crash-loop — alert',
+        () =>
+          Array.from({ length: 20 }, (_, k) => (i: number) => {
+            if (k < 2) return { ...A, ...B };
+            const restarts = k < 14 ? 0 : k - 13;
+            return { ...B, ...ns(i, restarts, 'healthy', 60) };
+          }),
+        '.A.............A....',
+        {},
+      ],
     ])('%s', (_label, steps, expected, extra) => {
       if (Object.keys(extra).length) {
         writeConf(
@@ -828,6 +861,30 @@ describe('bot-alert.sh (zDUUxyH2)', () => {
     it('6) eski state (problem) + sog‘lom — «tiklandi» 2-toza yugurishda (1-sida emas)', () => {
       legacyState('problem');
       expect(simulate([ok, ok, ok])).toBe('.R.');
+    });
+    it('#609-2) hold eslatmasi: tiklangan kod «tiklangan, boshqa tekshiruvlar hali beqaror» deb yoziladi', () => {
+      mkdirSync(join(dir, 'ops', 'state'), { recursive: true });
+      writeFileSync(
+        join(dir, 'ops', 'state', 'bot-alert.state'),
+        `state=problem\nsig=ns_unhealthy\nraw=outbox_pending\nraw2=\nraw3=\nsince=${now - 8 * 3600}\nlast_sent=${now - 7 * 3600}\nalerted=ns_unhealthy\n`,
+      );
+      const out = run(T(), ['--dry-run']).stdout;
+      expect(out).toMatch(/send=problem/);
+      expect(out).toMatch(
+        /ns_unhealthy: tiklangan, boshqa tekshiruvlar hali beqaror/,
+      );
+      expect(out).toMatch(/Hali tasdiqlanmagan: token_invalid/);
+    });
+    it('#609-3) BOT_ALERT_FLAP_WINDOW_MIN=0 — rad etiladi (ogohlantirish), 60 ishlatiladi', () => {
+      writeConf(
+        `BOT_ALERT_TELEGRAM_CHAT_ID=42\nBOT_ALERT_TELEGRAM_BOT_TOKEN=${ALERT_TOKEN}\nBOT_ALERT_FLAP_WINDOW_MIN=0\n`,
+      );
+      expect(
+        simulate(
+          Array.from({ length: 24 }, (_, k) => (k % 4 < 2 ? () => A : ok)),
+        ),
+      ).toBe('.A.R.A' + '.'.repeat(18));
+      expect(logText()).toMatch(/FLAP_WINDOW_MIN=0 rad etildi/);
     });
     it('5) BOT_ALERT_RESTART_WINDOW_MIN=0 — rad etiladi (ogohlantirish), crash-loop baribir ushlanadi', () => {
       writeConf(

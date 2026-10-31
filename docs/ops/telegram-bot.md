@@ -465,11 +465,17 @@ chaqiruvi `timeout -k 5` bilan (`BOT_ALERT_CMD_TIMEOUT`, 30 s), SQL `statement_t
     hammasida) yiqilgan bo'lsa — bitta «unstable» yozuvi. Shu hodisada allaqachon ogohlantirilgan kodlar
     sanalmaydi (tiklanish dumi «unstable» emas; 2 ta shovqinli tekshiruv ham bermaydi);
   - kod faqat ketma-ket 2 TOZA yugurishdan keyin chiqadi. Hodisa oldingi «tiklandi» dan
-    `BOT_ALERT_FLAP_WINDOW_MIN` (60) ichida qayta boshlansa (flapping) — 4 toza yugurish kerak;
+    `BOT_ALERT_FLAP_WINDOW_MIN` (60; < 10 rad etiladi → 60) ichida qayta boshlansa (flapping) — 4 toza
+    yugurish kerak (alert qilingan kodlar chiqqach, «tiklandi» qarori baribir 2 toza yugurish bo'yicha);
   - «✅ tiklandi» faqat to'plam bo'sh VA so'nggi 2 (flapping'da 4) yugurish to'liq toza bo'lsa. To'plam
     bo'shab, lekin hali tasdiqlanmagan yangi kod yiqilayotgan bo'lsa — hodisa jim ushlab turiladi.
   - Shu hodisada hali ogohlantirilmagan kod qo'shilganda — xabar (`ns_restart` va `ns_unhealthy` bitta
-    sabab); kod chiqib, qayta kirsa — jim; kod chiqib ketganda — jim (to'liq tiklanishni kutadi).
+    sabab); kod chiqib, qayta kirsa — jim; kod chiqib ketganda — jim (to'liq tiklanishni kutadi). Kod
+    4 yugurish ketma-ket toza bo'lsa hodisaning «alert qilingan» ro'yxatidan chiqadi — hodisa boshqa
+    tekshiruv tufayli ochiq tursa ham, uning keyingi buzilishi yangi alert (2-yugurishda).
+  - Eskalatsiya bir ildizda (`ns_unhealthy` → crash-loop → `exited`) yangi xabar bermaydi — yangi holat
+    faqat 6 soatlik eslatmada ko'rinadi. Restart vaqti: konteyner `running` bo'lsa `StartedAt`, aks holda
+    yugurish vaqti. Konteyner id almashsa (qayta yaratildi, deploy) restart tarixi boshidan boshlanadi.
   - `docker ps` yiqilsa konteyner id, `RestartCount` va restart vaqtlari oldingi holatdan ko'chiriladi
     (bitta xato davom etayotgan crash-loop'ni o'chirmaydi).
   - Eski formatdagi holat fayli: `ok` bo'lsa tarix bo'sh boshlanadi (yangilanishdagi blip darhol alert
