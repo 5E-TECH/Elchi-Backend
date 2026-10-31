@@ -37,6 +37,13 @@ export interface BotActionHandler {
   readonly expiredText?: string;
   /** Tugma boshqa odamga tegishli bo'lsa (bo'lmasa umumiy). */
   readonly foreignText?: string;
+  /**
+   * (BOT-3d) Handler xato bersa bir martalik tugmani QAYTA OCHISH xavfsiz:
+   * qayta bosish ayni deterministik kalit (masalan `action_id` →
+   * `Idempotency-Key`) bilan ketadi va backend takrorni o'zi ushlaydi. Bayroq
+   * yo'q — tugma yopiq qoladi (qisman bajarilgan amal ikki marta ketmasin).
+   */
+  readonly retrySafe?: boolean;
   handle(ctx: BotContext, action: TelegramBotAction): Promise<void>;
 }
 

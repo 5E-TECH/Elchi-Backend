@@ -8,6 +8,7 @@ import {
   Param,
   Post,
   Req,
+  ServiceUnavailableException,
   UnauthorizedException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -15,6 +16,7 @@ import { ClientProxy } from '@nestjs/microservices';
 import { ApiExcludeController } from '@nestjs/swagger';
 import { SkipThrottle } from '@nestjs/throttler';
 import type { Request } from 'express';
+import { firstValueFrom, timeout } from 'rxjs';
 import { Public } from './auth/public.decorator';
 
 /** notification-service `BotController` shu hodisani tinglaydi. */
@@ -25,6 +27,8 @@ export const TELEGRAM_UPDATE_EVENT = 'notification.telegram.webhook_update';
 export const TELEGRAM_SECRET_HEADER = 'x-telegram-bot-api-secret-token';
 const SECRET_RE = /^[A-Za-z0-9_-]{16,256}$/;
 const SLUG_RE = /^[a-z0-9_-]{1,32}$/;
+/** (BOT-3d) RMQ'ga uzatish chegarasi — Telegram webhook javobini kutadi. */
+export const TELEGRAM_EMIT_TIMEOUT_MS = 3_000;
 
 /**
  * Doimiy vaqtli solishtirish. Ikkala qiymat SHA-256 bilan bir xil uzunlikka
@@ -49,8 +53,10 @@ export function secretMatches(
  *   `timingSafeEqual`. Mos kelmasa yoki server sekreti sozlanmagan bo'lsa —
  *   401 + log, RMQ'ga HECH NIMA uzatilmaydi.
  * - Gateway faqat o'tkazgich: update RMQ HODISASI (`emit`) bo'lib
- *   notification-service'ga ketadi va Telegram'ga DARHOL 200 qaytadi
- *   (ishlov kutilmaydi — Telegram 60 s dan keyin qayta yuboradi).
+ *   notification-service'ga ketadi; ishlov kutilmaydi, lekin brokerga
+ *   UZATILISHI kutiladi (BOT-3d): RMQ xatosi / ${TELEGRAM_EMIT_TIMEOUT_MS} ms
+ *   timeout → 503, Telegram update'ni keyin qayta yuboradi (avval 200
+ *   qaytib update jim yo'qolardi).
  * - IP-throttle o'chiq: hamma so'rov Telegram IP'laridan keladi; cheklov
  *   notification-service'da chat_id/from.id bo'yicha (GL2GgtEc).
  * - Noto'g'ri `botSlug` ham uzatiladi — router jim tashlaydi (ZlpXb4Wh).
@@ -77,11 +83,11 @@ export class TelegramWebhookController {
   @Public()
   @Post(':botSlug')
   @HttpCode(200)
-  receive(
+  async receive(
     @Param('botSlug') botSlug: string,
     @Headers(TELEGRAM_SECRET_HEADER) secretHeader: string | undefined,
     @Req() req: Request,
-  ): { ok: true } {
+  ): Promise<{ ok: true }> {
     if (!this.secret) {
       if (!this.missingSecretLogged) {
         this.missingSecretLogged = true;
@@ -109,15 +115,21 @@ export class TelegramWebhookController {
       this.logger.warn("Telegram webhook: yaroqsiz update — e'tiborsiz");
       return { ok: true };
     }
-    // `emit` — javob kutilmaydi; xato faqat logga (Telegram'ga baribir 200).
-    this.notificationClient
-      .emit({ cmd: TELEGRAM_UPDATE_EVENT }, { bot_slug: slug, update })
-      .subscribe({
-        error: (error: unknown) =>
-          this.logger.error(
-            `Telegram update RMQ'ga uzatilmadi: ${error instanceof Error ? error.message : String(error)}`,
-          ),
-      });
+    // `emit` — ishlov kutilmaydi, lekin brokerga uzatilishi kutiladi: xato
+    // bo'lsa 503 — Telegram qayta yuboradi (update yo'qolmaydi).
+    try {
+      await firstValueFrom(
+        this.notificationClient
+          .emit({ cmd: TELEGRAM_UPDATE_EVENT }, { bot_slug: slug, update })
+          .pipe(timeout(TELEGRAM_EMIT_TIMEOUT_MS)),
+        { defaultValue: undefined },
+      );
+    } catch (error) {
+      this.logger.error(
+        `Telegram update RMQ'ga uzatilmadi — 503 (Telegram qayta yuboradi): ${error instanceof Error ? error.message : String(error)}`,
+      );
+      throw new ServiceUnavailableException();
+    }
     return { ok: true };
   }
 }
