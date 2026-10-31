@@ -178,6 +178,34 @@ describe('BOT-3d — kuryer amali Idempotency-Key bog‘lanishi', () => {
     expect(lifecycle.cancelOrder).toHaveBeenCalledTimes(1);
   });
 
+  it('⭐ barmoq izi kalitlar TARTIBIGA bog‘liq emas — o‘z qayta urinishi (ayni tana, boshqa tartib) 422 olmaydi', async () => {
+    const { controller, lifecycle } = setup();
+    await controller.sell(
+      stub({
+        id: '101',
+        dto: { comment: 'ok', paidAmount: 5000, extraCost: 0 },
+        requester,
+        request_id: KEY,
+      }),
+      ctx,
+    );
+    await expect(
+      controller.sell(
+        stub({
+          id: '101',
+          dto: { extraCost: 0, paidAmount: 5000, comment: 'ok' },
+          requester,
+          request_id: KEY,
+        }),
+        ctx,
+      ),
+    ).resolves.toEqual({
+      statusCode: 200,
+      data: { id: '101', status: 'sold' },
+    });
+    expect(lifecycle.sellOrder).toHaveBeenCalledTimes(1);
+  });
+
   it('isbot fayl kalitlari barmoq iziga kirmaydi (multipart qayta yuklash — 422 emas)', async () => {
     const { controller, lifecycle } = setup();
     const send = (keys: string[]) =>
