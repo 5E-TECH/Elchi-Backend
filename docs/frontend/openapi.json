@@ -8796,7 +8796,8 @@
                 "cancel",
                 "extra_cost",
                 "bills",
-                "payment_reversal"
+                "payment_reversal",
+                "pickup_fee"
               ]
             }
           },
@@ -9100,7 +9101,8 @@
                 "manual_expense",
                 "salary",
                 "correction",
-                "bills"
+                "bills",
+                "pickup_fee"
               ],
               "type": "string"
             }
@@ -9631,7 +9633,8 @@
                 "cancel",
                 "extra_cost",
                 "bills",
-                "payment_reversal"
+                "payment_reversal",
+                "pickup_fee"
               ]
             }
           },
@@ -9891,7 +9894,8 @@
                 "cancel",
                 "extra_cost",
                 "bills",
-                "payment_reversal"
+                "payment_reversal",
+                "pickup_fee"
               ]
             }
           },
@@ -22087,6 +22091,169 @@
         ]
       }
     },
+    "/finance/pickup-visits": {
+      "post": {
+        "description": "Bitta tashrif — bitta yozuv. 1…(`pickup_free_from_count` − 1) posilka → `pickup_fee` market qarzini oshiradi (market kassasida `source_type=pickup_fee` chiqim, P&L daftarida kirim), `pickup_free_from_count` va undan ko'p → `fee: 0`, `is_free: true` (yozuv baribir yaratiladi). Buyurtma narxi va settlement'iga tegmaydi. Ayni `Idempotency-Key` bilan takror — 200 va o'sha yozuv (`idempotent: true`); ayni kalit boshqa tashrif bilan — 409.",
+        "operationId": "PickupVisitGatewayController_create",
+        "parameters": [
+          {
+            "name": "idempotency-key",
+            "required": true,
+            "in": "header",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreatePickupVisitRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PickupVisitCreatedDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Pickup tashrifini qayd qilish",
+        "tags": [
+          "Finance"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "registrator"
+        ]
+      },
+      "get": {
+        "description": "Yangisi tepada; `summary` — AYNI filtr bo'yicha: daromad, pullik va tekin tashriflar soni, posilkalar. MARKET — faqat o'zi.",
+        "operationId": "PickupVisitGatewayController_findAll",
+        "parameters": [
+          {
+            "name": "market_id",
+            "required": false,
+            "in": "query",
+            "description": "MARKET roli uchun faqat o'z id si (boshqasi — 403).",
+            "schema": {
+              "example": "12",
+              "type": "string"
+            }
+          },
+          {
+            "name": "courier_id",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "example": "55",
+              "type": "string"
+            }
+          },
+          {
+            "name": "is_free",
+            "required": false,
+            "in": "query",
+            "description": "Faqat tekin (`true`) yoki faqat pullik (`false`) tashriflar.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "true",
+                "false"
+              ]
+            }
+          },
+          {
+            "name": "from_date",
+            "required": false,
+            "in": "query",
+            "description": "Tashrif sanasi, Toshkent kuni.",
+            "schema": {
+              "example": "2026-10-01",
+              "type": "string"
+            }
+          },
+          {
+            "name": "to_date",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "example": "2026-10-31",
+              "type": "string"
+            }
+          },
+          {
+            "name": "page",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "example": 1,
+              "type": "number"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "description": "1…100",
+            "schema": {
+              "example": 20,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PickupVisitListDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Pickup tashriflari ro'yxati",
+        "tags": [
+          "Finance"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "registrator",
+          "market"
+        ]
+      }
+    },
     "/public/delivery-quote": {
       "post": {
         "description": "Autentifikatsiyasiz (elchipochta.uz kalkulyatori). Hisob tokenli `POST /delivery/quote` bilan AYNI dvigatel (logistics `logistics.delivery.quote`). Posilka: yuqori darajadagi `weight_kg` (+ ixtiyoriy `length_cm`/`width_cm`/`height_cm` — uchalasi birga, `volumetric_enabled`) YOKI `items[]` (≤ 20, bitta jo'natma). `product_id` qabul qilinmaydi (400). `pickup: true` — bitta posilkali tashrif: `pickupFee` va `totalWithPickup` ga kiradi, `total` ga emas. Tarif: ikkala viloyat ham shahar zonasida → `city`, aks holda `where_deliver`. Javobda faqat hisob — tarif/sozlama id'lari yo'q. Xatolar: 400 (validatsiya, yo'q viloyat), 409 (faol tarif yo'q), 429 (per-IP limit, sukut 30/daqiqa), 504. Javob ≤ 30 s keshlanadi.",
@@ -28002,7 +28169,8 @@
               "manual_expense",
               "salary",
               "correction",
-              "bills"
+              "bills",
+              "pickup_fee"
             ],
             "example": "manual_expense"
           },
@@ -33692,6 +33860,227 @@
             "description": "(KmWO9gTA) DARVOZA 2 — dvigatel yoqilgan sotuvda kuryer qo'shimcha xarajatining aniq chegarasi, so'm. null — tarif jadvalidagi `address.base − center.base` (teng bo'lsa center.base ning 50%i)."
           }
         }
+      },
+      "PickupVisitCreatedDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "301"
+          },
+          "market_id": {
+            "type": "string",
+            "example": "12"
+          },
+          "courier_id": {
+            "type": "string",
+            "example": "55"
+          },
+          "parcel_count": {
+            "type": "number",
+            "example": 9
+          },
+          "fee": {
+            "type": "number",
+            "example": 20000,
+            "description": "Tekin tashrifda 0"
+          },
+          "is_free": {
+            "type": "boolean",
+            "example": false,
+            "description": "«10+ posilka — tekin» holati alohida ko`rsatiladi."
+          },
+          "created_by": {
+            "type": "string",
+            "example": "7"
+          },
+          "occurred_at": {
+            "type": "string",
+            "example": "2026-10-31T09:30:00.000Z"
+          },
+          "cashbox_history_id": {
+            "type": "object",
+            "example": "9001",
+            "nullable": true,
+            "description": "Market kassasidagi `pickup_fee` tarix qatori."
+          },
+          "idempotent": {
+            "type": "boolean",
+            "example": false,
+            "description": "true — shu Idempotency-Key bilan tashrif allaqachon yozilgan."
+          }
+        },
+        "required": [
+          "id",
+          "market_id",
+          "courier_id",
+          "parcel_count",
+          "fee",
+          "is_free",
+          "created_by",
+          "occurred_at",
+          "cashbox_history_id",
+          "idempotent"
+        ]
+      },
+      "PickupVisitRowDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "301"
+          },
+          "market_id": {
+            "type": "string",
+            "example": "12"
+          },
+          "courier_id": {
+            "type": "string",
+            "example": "55"
+          },
+          "parcel_count": {
+            "type": "number",
+            "example": 9
+          },
+          "fee": {
+            "type": "number",
+            "example": 20000,
+            "description": "Tekin tashrifda 0"
+          },
+          "is_free": {
+            "type": "boolean",
+            "example": false,
+            "description": "«10+ posilka — tekin» holati alohida ko`rsatiladi."
+          },
+          "created_by": {
+            "type": "string",
+            "example": "7"
+          },
+          "occurred_at": {
+            "type": "string",
+            "example": "2026-10-31T09:30:00.000Z"
+          },
+          "cashbox_history_id": {
+            "type": "object",
+            "example": "9001",
+            "nullable": true,
+            "description": "Market kassasidagi `pickup_fee` tarix qatori."
+          },
+          "market_name": {
+            "type": "string",
+            "nullable": true
+          },
+          "courier_name": {
+            "type": "string",
+            "nullable": true
+          },
+          "created_by_name": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "market_id",
+          "courier_id",
+          "parcel_count",
+          "fee",
+          "is_free",
+          "created_by",
+          "occurred_at",
+          "cashbox_history_id"
+        ]
+      },
+      "PickupVisitSummaryDto": {
+        "type": "object",
+        "properties": {
+          "income": {
+            "type": "number",
+            "example": 40000,
+            "description": "Pickup daromadi, so`m"
+          },
+          "visits": {
+            "type": "number",
+            "example": 3
+          },
+          "paid_visits": {
+            "type": "number",
+            "example": 2
+          },
+          "free_visits": {
+            "type": "number",
+            "example": 1
+          },
+          "parcels": {
+            "type": "number",
+            "example": 21
+          }
+        },
+        "required": [
+          "income",
+          "visits",
+          "paid_visits",
+          "free_visits",
+          "parcels"
+        ]
+      },
+      "PickupVisitListDto": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PickupVisitRowDto"
+            }
+          },
+          "summary": {
+            "$ref": "#/components/schemas/PickupVisitSummaryDto"
+          },
+          "pagination": {
+            "type": "object",
+            "example": {
+              "total": 3,
+              "page": 1,
+              "limit": 20,
+              "totalPages": 1
+            }
+          }
+        },
+        "required": [
+          "items",
+          "summary",
+          "pagination"
+        ]
+      },
+      "CreatePickupVisitRequestDto": {
+        "type": "object",
+        "properties": {
+          "market_id": {
+            "type": "string",
+            "example": "12",
+            "description": "Market (foydalanuvchi id)"
+          },
+          "courier_id": {
+            "type": "string",
+            "example": "55",
+            "description": "Olib ketgan kuryer"
+          },
+          "parcel_count": {
+            "type": "number",
+            "example": 9,
+            "description": "Shu BITTA tashrifda olib ketilgan posilkalar soni. `pickup_free_from_count` va undan ko'p — tekin."
+          },
+          "occurred_at": {
+            "type": "string",
+            "example": "2026-10-31T09:30:00.000Z",
+            "description": "Tashrif vaqti (ISO). Berilmasa — hozir."
+          }
+        },
+        "required": [
+          "market_id",
+          "courier_id",
+          "parcel_count"
+        ]
       },
       "PublicDeliveryTariffDto": {
         "type": "object",

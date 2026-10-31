@@ -133,9 +133,11 @@ export class FindCashboxByUserQueryDto {
  * AG1Mlikw — `payment_reversal` faqat ichki tur: teskari qatorni
  * `PaymentCorrectionService` yozadi, `PATCH /finance/cashbox/balance` uni
  * 400 bilan rad etadi (finance-service `updateBalance` da ham shu qoida).
+ * B824gOu5 — `pickup_fee` ham: faqat `POST /finance/pickup-visits`.
  */
 const MANUAL_BALANCE_SOURCE_TYPES = Object.values(Source_type).filter(
-  (type) => type !== Source_type.PAYMENT_REVERSAL,
+  (type) =>
+    type !== Source_type.PAYMENT_REVERSAL && type !== Source_type.PICKUP_FEE,
 );
 
 export class UpdateCashboxBalanceRequestDto {

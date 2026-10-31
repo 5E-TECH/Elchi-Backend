@@ -679,7 +679,12 @@ export class PaymentCorrectionService {
           dedup_epoch: ctx.epoch,
           card_id: shape.receiverLeg?.card_id ?? undefined,
         },
-        { notify: false, transferId: ctx.transferId, skipShiftGate: true },
+        {
+          notify: false,
+          transferId: ctx.transferId,
+          skipShiftGate: true,
+          skipPickupFifo: true,
+        },
       );
       if (result.idempotent) {
         failCode(409, C.ALREADY_CORRECTED);
@@ -700,7 +705,12 @@ export class PaymentCorrectionService {
         transfer_source_user_id: original.transfer_source_user_id ?? undefined,
         card_id: original.card_id ?? undefined,
       },
-      { notify: false, transferId: ctx.transferId, skipShiftGate: true },
+      {
+        notify: false,
+        transferId: ctx.transferId,
+        skipShiftGate: true,
+        skipPickupFifo: true,
+      },
     );
     if (result.idempotent) {
       failCode(409, C.ALREADY_CORRECTED);

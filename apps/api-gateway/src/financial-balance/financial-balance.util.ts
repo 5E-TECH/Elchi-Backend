@@ -68,6 +68,7 @@ export const FINANCIAL_SOURCE_LABEL_UZ: Readonly<
   [FinancialSource_type.SALARY]: 'Maosh',
   [FinancialSource_type.CORRECTION]: 'Tuzatish (rollback)',
   [FinancialSource_type.BILLS]: 'Hisob-fakturalar',
+  [FinancialSource_type.PICKUP_FEE]: 'Pickup haqi',
 });
 
 export const FINANCIAL_BALANCE_EXPORT_COLUMNS: ExcelColumn[] = [

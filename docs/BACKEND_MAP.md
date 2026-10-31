@@ -520,7 +520,8 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
 - **Entities:** `cashbox` (`Cashbox_type`: main/couriers/markets/branch),
   `cashbox_history` (per-cashbox movements, `Source_type`), `shift`,
   `user_salary`, `operator_earning`, `operator_payment`,
-  `financial_balance_history` (company P&L ledger, `FinancialSource_type`).
+  `financial_balance_history` (company P&L ledger, `FinancialSource_type`),
+  `pickup_visits` (B824gOu5).
 - **Patterns:** cashbox create/find/main/my/all_info/user_by_id, `update_balance`,
   `fill`, `spend`, payments (`payment_courier`, `payment_market`,
   `payment_branch_main`), `financial_balance.{record,history}`, history list,
@@ -700,6 +701,43 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
   an HQ-branch BRANCH receiver to MAIN and only spends carry tagged for the
   same receiver. RMQ: `finance.payment_correction.{reverse,
   correct_amount,context,settings.get,settings.update}`.
+- **Pickup visits (B824gOu5, 2026-10-31, migr `1716000000198`):** a courier
+  call is an independent record (`finance_schema.pickup_visits`: market,
+  courier, `parcel_count`, `fee`, `is_free`, `occurred_at`, UNIQUE
+  `idempotency_key`), NOT anchored to `POST /orders/receive` or
+  `assign-to-courier`: neither says how many parcels one visit carried.
+  `POST /finance/pickup-visits` (SA/ADMIN/REGISTRATOR, `Idempotency-Key`
+  required; gateway reads `pickup_fee` / `pickup_free_from_count` from
+  `logistics.delivery.settings.get`, the client cannot send them) →
+  `finance.pickup_visit.record`. `computePickupFee` (`libs/common`, shared with
+  `computeDeliveryQuote`): `parcel_count >= pickup_free_from_count` → 0. In one
+  tx under the market cashbox lock (`applyPickupFeeInTx`): visit row,
+  FOR_MARKET **EXPENSE** `source_type=pickup_fee` (`source_id` = visit id; HQ
+  owes the market less = market debt grows; a free visit is a 0-amount row so
+  it shows in the history) and P&L **+fee** `FinancialSource_type.pickup_fee`
+  (`dedup_key pickup-visit:<id>`, none when free). No cash moves (MAIN, shift),
+  nothing goes to order-service: `order_settlement`, tariffs and
+  `computeSaleLegs` are untouched, so the conservation identity holds. Replay
+  with the same key returns the stored row (200, `idempotent: true`, fee not
+  recomputed); same key with another visit → 409. `pickup_fee` is internal:
+  `PATCH /finance/cashbox/balance` → 400.
+  **FIFO (`PickupFifoService`):** the fee lowers the cashbox (`B`) but not the
+  open orders (`U`), and a payment cannot exceed `B`, so a pool equal to the
+  payment would leave the last orders open forever. The NEXT market payment
+  (`applyMarketPaymentInTx`, or `click_to_market` in `applyCourierPaymentInTx`)
+  claims the open fees under the cashbox lock (`fifo_applied_at`,
+  `fifo_transfer_id`) and sends `amount + fees` to `order.settlement.advance`
+  and the order status sync; the partner webhook still gets the cash amount.
+  Invariant: `B = U − hq_to_market carry − open fees`;
+  `scripts/check-cashbox-invariant.ts` subtracts open fees from the
+  settlement↔cashbox recon. No visits → pool unchanged. T6 replacement legs
+  skip the claim (`skipPickupFifo`), a reversal keeps the fee netted. There is
+  no visit cancel/correct flow yet. Market payment with `B <= 0` is still 400:
+  the debt is recovered from later sales.
+  History rows (`withCorrections`) add `parcel_count`, `is_free`,
+  `pickup_visit`. `GET /finance/pickup-visits` (+ MARKET: own only) returns
+  `items`, `summary {income,visits,paid_visits,free_visits,parcels}`,
+  `pagination`. Report: `finance.pickup_visit.income_summary` (by `occurred_at`).
 - **Expense categories (Elchi Pochta №1):** `cashbox_expense_categories`
   (superadmin CRUD, soft delete); a manual `spend` stores the category id +
   name snapshot on its history row. Since 2026-10-22 the HTTP
@@ -1009,6 +1047,12 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
   MANAGER/REGISTRATOR/BRANCH (empty report when the branch can't be
   resolved); `report.finance` monthly buckets use Tashkent months. (Order
   revenue chart buckets in order-service also use the Tashkent wall clock.)
+- **Pickup income (B824gOu5):** order profit (`PROFIT_SQL`) has no pickup money
+  by design. SA/ADMIN company dashboard adds `orders.pickup`,
+  `orders.pickupIncome` and `orders.profitWithPickup` (`profit` stays equal to
+  `sell_profit`; finance down → the fields are absent, `failed_parts:
+  ['pickup']`), and `report.finance` adds `pickup` (`null` when finance is down). Branch cuts: none (a fee has
+  no branch).
 
 ### file-service (MinIO + `file_schema`)
 - `file.{upload,get_url,delete,exists,read,find_owner,generate_pdf,generate_qr}`.
@@ -1275,6 +1319,8 @@ Who keeps what:
 Finance mirrors this in cashboxes (`payment_courier`/`payment_market`/
 `payment_branch_main`) and the company P&L ledger (`financial_balance_history`,
 `FinancialSource_type.sell_profit` = market tariff − courier tariff).
+A pickup fee (B824gOu5) is NOT a leg of this chain: it belongs to a visit, not
+an order — see finance-service › Pickup visits.
 **Details:** memory `settlement_compensation_initiative.md`, `order_flow_money_fixes.md`.
 
 **fix3 money rules (2026-10-01):**

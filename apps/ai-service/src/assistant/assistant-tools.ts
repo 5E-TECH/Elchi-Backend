@@ -204,6 +204,8 @@ const SOURCE_TYPES = [
   'bills',
   // AG1Mlikw (T6) — qaytarilgan to'lovning teskari qatori.
   'payment_reversal',
+  // B824gOu5 — pickup tashrifi haqi (market kassasi chiqimi).
+  'pickup_fee',
 ] as const;
 
 async function readFinancialBalance(

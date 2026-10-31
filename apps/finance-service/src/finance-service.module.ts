@@ -59,6 +59,11 @@ import { CashboxReceiptService } from './cashbox-receipt/cashbox-receipt.service
 import { CashboxReceiptController } from './cashbox-receipt/cashbox-receipt.controller';
 import { CashboxReceiptCleanupScheduler } from './cashbox-receipt/cashbox-receipt-cleanup.scheduler';
 import { CASHBOX_RECEIPTS } from './cashbox-receipt/cashbox-receipt.token';
+import { PickupVisit } from './entities/pickup-visit.entity';
+import { PickupFifoService } from './pickup-visit/pickup-fifo.service';
+import { PICKUP_FIFO } from './pickup-visit/pickup-fifo.token';
+import { PickupVisitService } from './pickup-visit/pickup-visit.service';
+import { PickupVisitController } from './pickup-visit/pickup-visit.controller';
 
 @Module({
   imports: [
@@ -132,6 +137,8 @@ import { CASHBOX_RECEIPTS } from './cashbox-receipt/cashbox-receipt.token';
       PaymentCorrection,
       // T3 — kassa cheki (migratsiya 188).
       CashboxReceipt,
+      // B824gOu5 — pickup tashrifi va haqi (migratsiya 198).
+      PickupVisit,
     ]),
   ],
   controllers: [
@@ -147,6 +154,8 @@ import { CASHBOX_RECEIPTS } from './cashbox-receipt/cashbox-receipt.token';
     PaymentCorrectionController,
     // T3 — kassa cheki (sozlama, yuklash, bog'lash, AI).
     CashboxReceiptController,
+    // B824gOu5 — pickup tashrifi yozuvi, ro'yxat, daromad yig'indisi.
+    PickupVisitController,
   ],
   providers: [
     FinanceServiceService,
@@ -169,6 +178,9 @@ import { CASHBOX_RECEIPTS } from './cashbox-receipt/cashbox-receipt.token';
     CashboxReceiptService,
     { provide: CASHBOX_RECEIPTS, useExisting: CashboxReceiptService },
     CashboxReceiptCleanupScheduler,
+    PickupFifoService,
+    { provide: PICKUP_FIFO, useExisting: PickupFifoService },
+    PickupVisitService,
   ],
 })
 export class FinanceServiceModule {}

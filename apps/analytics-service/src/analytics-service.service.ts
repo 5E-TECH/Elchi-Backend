@@ -590,6 +590,24 @@ export class AnalyticsServiceService {
     return `${shifted.getUTCFullYear()}-${String(shifted.getUTCMonth() + 1).padStart(2, '0')}`;
   }
 
+  /**
+   * B824gOu5 — `finance.pickup_visit.income_summary` javobi. Finance javob
+   * bermasa — null (0 EMAS: «daromad yo'q» deb ko'rsatilmasin).
+   */
+  private pickupIncome(response: unknown) {
+    const data = this.unwrap<any>(response as any);
+    if (!data || typeof data !== 'object' || data.income === undefined) {
+      return null;
+    }
+    return {
+      income: this.parseNumber(data.income),
+      visits: this.parseNumber(data.visits),
+      paid_visits: this.parseNumber(data.paid_visits),
+      free_visits: this.parseNumber(data.free_visits),
+      parcels: this.parseNumber(data.parcels),
+    };
+  }
+
   private sanitizeDashboardOverview(overview: any, hideFinancials: boolean) {
     if (!hideFinancials || !overview || typeof overview !== 'object') {
       return overview;
@@ -991,6 +1009,8 @@ export class AnalyticsServiceService {
     // (6CYRjoZG) SA/ADMIN filial ko'rinishi: «Kunlik daromad», holat donut,
     // «Kuryerlar reytingi» — xuddi shu parallel bosqichda (byudjet o'zgarmaydi).
     const isAdminBranchView = adminBranchId !== null;
+    // B824gOu5 — kompaniya kesimi (filialsiz SA/ADMIN).
+    const isCompanyView = isAdminRole && !branchId;
     const [
       orders,
       markets,
@@ -1002,6 +1022,7 @@ export class AnalyticsServiceService {
       statusDistribution,
       topCouriers,
       trend,
+      pickup,
     ] = await Promise.all([
       this.readPart(
         this.orderClient,
@@ -1076,6 +1097,17 @@ export class AnalyticsServiceService {
         failedParts,
         'trend',
       ),
+      // B824gOu5 — pickup daromadi buyurtmadan kelmaydi (`PROFIT_SQL` da yo'q)
+      // va filialga bog'lanmagan: faqat kompaniya kesimi (SA/ADMIN).
+      isCompanyView
+        ? this.readPart(
+            this.financeClient,
+            'finance.pickup_visit.income_summary',
+            { from_date: normalized.startDate, to_date: normalized.endDate },
+            failedParts,
+            'pickup',
+          )
+        : Promise.resolve(null),
     ]);
     this.requirePart(orders, 'overview');
     if (
@@ -1098,9 +1130,22 @@ export class AnalyticsServiceService {
       rankingWindow,
     );
 
+    const pickupIncome = this.pickupIncome(pickup);
+
     return successRes(
       {
-        orders: safeOrdersOverview,
+        orders: pickupIncome
+          ? {
+              ...safeOrdersOverview,
+              pickup: pickupIncome,
+              pickupIncome: pickupIncome.income,
+              // `profit` — `sell_profit` daftari bilan teng qoladi; pickup
+              // bilan birga jami alohida maydonda.
+              profitWithPickup:
+                this.parseNumber(safeOrdersOverview?.profit) +
+                pickupIncome.income,
+            }
+          : safeOrdersOverview,
         markets: this.projectStatsRows(markets, 'market'),
         couriers: this.projectStatsRows(couriers, 'courier'),
         topMarkets: topMarketsRanking.items,
@@ -1639,7 +1684,7 @@ export class AnalyticsServiceService {
     this.assertFinancialAccess(requester);
     const normalized = this.normalizeDateRangeAny(filter);
     const pagination = this.normalizePagination(filter);
-    const [allInfo, balance, branchesResponse] = await Promise.all([
+    const [allInfo, balance, branchesResponse, pickup] = await Promise.all([
       rmqSend(
         this.financeClient,
         { cmd: 'finance.cashbox.all_info' },
@@ -1667,6 +1712,12 @@ export class AnalyticsServiceService {
             limit: 1000,
           },
         },
+      ).catch(() => null),
+      // B824gOu5 — pickup daromadi (yo'q bo'lsa null: hisobot to'xtamaydi).
+      rmqSend(
+        this.financeClient,
+        { cmd: 'finance.pickup_visit.income_summary' },
+        { from_date: normalized.startDate, to_date: normalized.endDate },
       ).catch(() => null),
     ]);
 
@@ -1738,6 +1789,7 @@ export class AnalyticsServiceService {
         totalIncome,
         totalOutcome,
         net: Number((totalIncome - totalOutcome).toFixed(2)),
+        pickup: this.pickupIncome(pickup),
         balances: balanceData,
         cashflowHistory: histories,
         monthlyDynamics,

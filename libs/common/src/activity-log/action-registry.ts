@@ -310,6 +310,12 @@ export const ACTIVITY_ACTION_REGISTRY: Readonly<
     'edit',
     'blue',
   ),
+  'finance.pickup_visit_recorded': entry(
+    'Pickup tashrifi yozildi',
+    'finance',
+    'wallet',
+    'blue',
+  ),
   'finance.balance_update': entry(
     "Balans o'zgartirildi",
     'finance',

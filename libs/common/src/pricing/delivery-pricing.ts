@@ -232,6 +232,51 @@ export function resolveDeliveryTariffId(params: {
     : (params.whereDeliver as DeliveryWhereDeliver);
 }
 
+/** B824gOu5 — bitta pickup tashrifi haqining kirishi (sozlamadan). */
+export interface PickupFeeInput {
+  /** Tashrifda olib ketilgan posilkalar soni (butun son ≥ 1). */
+  parcelCount: Numeric;
+  /** `delivery_pricing_settings.pickup_fee`, so'm. */
+  pickupFee: Numeric;
+  /** `pickup_free_from_count`; NULL — hech qachon tekin emas. */
+  pickupFreeFromCount?: Numeric;
+}
+
+export interface PickupFeeResult {
+  fee: number;
+  /** Haq olinmadi: `fee === 0` — «10+ posilka — tekin» alohida ko'rsatiladi. */
+  isFree: boolean;
+}
+
+/**
+ * B824gOu5 — pickup tashrifi haqi: `fee = parcel_count >= pickup_free_from_count
+ * ? 0 : pickup_fee`. Haq TASHRIFGA tegishli: posilkalarga bo'linmaydi,
+ * buyurtma narxiga qo'shilmaydi. Summa va chegara kodga qotirilmaydi.
+ */
+export function computePickupFee(input: PickupFeeInput): PickupFeeResult {
+  const parcelCount = requireNumber(
+    input.parcelCount,
+    'parcel_count',
+    (n) => Number.isInteger(n) && n >= 1,
+    "1 dan kichik bo'lmagan butun son bo'lishi kerak",
+  );
+  const feeT = toTiyin(
+    requireNumber(
+      input.pickupFee,
+      'pickup_fee',
+      (n) => n >= 0,
+      "manfiy bo'lmasligi kerak",
+    ),
+  );
+  const freeFrom = optionalPositive(
+    input.pickupFreeFromCount,
+    'pickup_free_from_count',
+  );
+  const fee =
+    freeFrom !== null && parcelCount >= freeFrom ? 0 : fromTiyin(feeT);
+  return { fee, isFree: fee === 0 };
+}
+
 /** Yetkazish narxi — sof hisob (yuqoridagi formula). */
 export function computeDeliveryQuote(input: DeliveryQuoteInput): DeliveryQuote {
   const { settings, tariff } = input;
@@ -299,18 +344,14 @@ export function computeDeliveryQuote(input: DeliveryQuoteInput): DeliveryQuote {
       "1 dan kichik bo'lmasligi kerak",
     ) * 1000,
   );
-  const pickupFeeT = toTiyin(
-    requireNumber(
-      settings.pickup_fee,
-      'pickup_fee',
-      (n) => n >= 0,
-      "manfiy bo'lmasligi kerak",
-    ),
-  );
-  const freeFrom = optionalPositive(
-    settings.pickup_free_from_count,
-    'pickup_free_from_count',
-  );
+  // B824gOu5: sozlama har qanday hisobda tekshiriladi (pickup so'ralmasa ham).
+  const pickupFeeOf = (parcelCount: number) =>
+    computePickupFee({
+      parcelCount,
+      pickupFee: settings.pickup_fee,
+      pickupFreeFromCount: settings.pickup_free_from_count,
+    }).fee;
+  pickupFeeOf(1);
 
   const baseT = toTiyin(
     requireNumber(
@@ -370,7 +411,6 @@ export function computeDeliveryQuote(input: DeliveryQuoteInput): DeliveryQuote {
       quantity;
   });
 
-  const freePickup = (n: number) => freeFrom !== null && n >= freeFrom;
   const pickupCount =
     input.pickupCount === null || input.pickupCount === undefined
       ? 0
@@ -404,7 +444,7 @@ export function computeDeliveryQuote(input: DeliveryQuoteInput): DeliveryQuote {
   const expressFeeT = input.express
     ? Math.round((subtotalT * (multiplierMilli - 1000)) / 1000)
     : 0;
-  const pickupT = pickupCount > 0 && !freePickup(pickupCount) ? pickupFeeT : 0;
+  const pickupT = pickupCount > 0 ? toTiyin(pickupFeeOf(pickupCount)) : 0;
   const roundTo = (tiyin: number) => Math.round(tiyin / roundToT) * roundToT;
 
   const daysMin = toNumberOrNull(tariff.days_min);
