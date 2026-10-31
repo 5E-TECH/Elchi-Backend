@@ -197,6 +197,23 @@ describe('h9newLsd — /ishim', () => {
     ).toContain('2-sahifa');
   });
 
+  it('⭐ BOT-3d: boshqa xabardagi «📋 Topshiriqlarim» (skan xulosasi) — xulosa USTIDAN yozilmaydi, yangi ro‘yxat xabari', async () => {
+    const gateway = fakeOrdersGateway([gatewayOrder('101', 'waiting')]);
+    const ctx = makeRouter({ actor: courierActor(), gateway: gateway.request });
+    // Skan xulosasidagi tugma — `nav` bayrog'isiz (courier-scan-summary).
+    const fromSummary = await ctx.actions.create({
+      chatId: '25',
+      action: COURIER_ACTIONS.page,
+      actorUserId: '25',
+      payload: { page: 1 },
+      oneShot: false,
+    });
+    await press(ctx, fromSummary);
+    expect(ctx.transport.editMessage).not.toHaveBeenCalled();
+    expect(sentTexts(ctx)).toHaveLength(1);
+    expect(sentTexts(ctx)[0]).toContain('#101');
+  });
+
   it('muddati o‘tgan ro‘yxat tugmasi — "bu ro‘yxat eskirgan, /ishim ni qayta yuboring"', async () => {
     const gateway = fakeOrdersGateway([gatewayOrder('101', 'waiting')]);
     const ctx = makeRouter({ actor: courierActor(), gateway: gateway.request });

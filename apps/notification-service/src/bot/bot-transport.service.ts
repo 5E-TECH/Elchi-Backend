@@ -42,7 +42,7 @@ export const TELEGRAM_LIMITS = {
 } as const;
 
 /** Xotirada saqlanadigan chat bucket'lari chegarasi (eskilari tashlanadi). */
-const MAX_CHAT_BUCKETS = 10_000;
+export const MAX_CHAT_BUCKETS = 10_000;
 
 /** Yagona joy — boshqa fayllar (spec'lar ham) shu doimiydan foydalanadi. */
 export const TELEGRAM_API_BASE = 'https://api.telegram.org';
@@ -192,6 +192,10 @@ export function splitHtmlMessage(
 ): string[] {
   const chunks: string[] = [];
   let body = String(text ?? '');
+  // Oldingi bo'lakdan qayta ochilgan teglar uzunligi: kesish shundan KEYIN
+  // bo'lishi shart (aks holda bo'lak oldinga siljimaydi — cheksiz tsikl).
+  let prefixLen = 0;
+  const isHighSurrogate = (code: number) => code >= 0xd800 && code <= 0xdbff;
   while (body.length > max) {
     type Open = { name: string; raw: string };
     const stack: Open[] = [];
@@ -200,10 +204,18 @@ export function splitHtmlMessage(
     let bestNewline: { at: number; open: Open[] } | null = null;
     const closingLen = (open: Open[]) =>
       open.reduce((sum, tag) => sum + tag.name.length + 3, 0);
+    // Prefiksdan keyin ko'rinadigan (bo'sh bo'lmagan) matn bo'ldimi — bo'lak
+    // faqat teglardan / bo'shliqdan iborat bo'lmasin.
+    let visible = false;
     let i = 0;
     while (i < body.length) {
       const fits = (at: number) => at + closingLen(stack) <= max;
-      if (i > 0 && fits(i)) {
+      if (
+        visible &&
+        i > prefixLen &&
+        fits(i) &&
+        !isHighSurrogate(body.charCodeAt(i - 1))
+      ) {
         const point = { at: i, open: [...stack] };
         best = point;
         if (body[i - 1] === '\n') bestNewline = point;
@@ -228,17 +240,23 @@ export function splitHtmlMessage(
           body.slice(i, i + 12),
         );
         if (entity) {
+          if (i >= prefixLen) visible = true;
           i += entity[0].length;
           continue;
         }
       }
+      if (i >= prefixLen && body[i].trim() !== '') visible = true;
       i += 1;
     }
     const cut = bestNewline && bestNewline.at >= max * 0.5 ? bestNewline : best;
     if (!cut) {
-      // Bitta teg max dan uzun (amalda bo'lmaydi) — oddiy kesish.
-      chunks.push(body.slice(0, max));
-      body = body.slice(max);
+      // Xavfsiz nuqta yo'q (masalan bitta teg / havola max dan uzun) — qattiq
+      // kesish (surrogat juftini bo'lmasdan); bo'lak baribir oldinga siljiydi.
+      let at = max;
+      if (isHighSurrogate(body.charCodeAt(at - 1))) at -= 1;
+      chunks.push(body.slice(0, at));
+      body = body.slice(at);
+      prefixLen = 0;
       continue;
     }
     const closing = [...cut.open]
@@ -248,9 +266,11 @@ export function splitHtmlMessage(
     const reopen = cut.open.map((tag) => tag.raw).join('');
     chunks.push(body.slice(0, cut.at).replace(/\n$/, '') + closing);
     body = reopen + body.slice(cut.at).replace(/^\n/, '');
+    prefixLen = reopen.length;
   }
   if (body.length > 0) chunks.push(body);
-  return chunks;
+  // Faqat teglar / bo'shliqdan iborat bo'lak yuborilmaydi (Telegram: bo'sh matn).
+  return chunks.filter((chunk) => chunk.replace(/<[^>]*>/g, '').trim() !== '');
 }
 
 /**
@@ -817,8 +837,18 @@ export class BotTransportService {
     const group = chatId.startsWith('-');
     const buckets = group ? this.groupBuckets : this.privateBuckets;
     let bucket = buckets.get(chatId);
-    if (!bucket) {
-      if (buckets.size >= MAX_CHAT_BUCKETS) buckets.clear();
+    if (bucket) {
+      // (BOT-3d) LRU: ishlatilgan chat Map oxiriga ko'chadi.
+      buckets.delete(chatId);
+      buckets.set(chatId, bucket);
+    } else {
+      // To'lsa — FAQAT eng eski (uzoq ishlatilmagan, tokeni allaqachon
+      // to'lgan) bucket o'chiriladi; hammasini tozalash faol chatlarning
+      // limitini nolga tushirardi.
+      if (buckets.size >= MAX_CHAT_BUCKETS) {
+        const oldest = buckets.keys().next().value;
+        if (oldest !== undefined) buckets.delete(oldest);
+      }
       bucket = group
         ? new TokenBucket(
             TELEGRAM_LIMITS.GROUP_SEND_PER_MIN,

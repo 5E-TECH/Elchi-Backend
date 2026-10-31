@@ -179,7 +179,7 @@ export class CourierHandler implements BotMessageHandler {
           chatId: ctx.chatId,
           action: COURIER_ACTIONS.page,
           actorUserId: actor.user_id,
-          payload: { page: page - 1 },
+          payload: { page: page - 1, nav: true },
           oneShot: false,
         }),
       });
@@ -191,7 +191,7 @@ export class CourierHandler implements BotMessageHandler {
           chatId: ctx.chatId,
           action: COURIER_ACTIONS.page,
           actorUserId: actor.user_id,
-          payload: { page: page + 1 },
+          payload: { page: page + 1, nav: true },
           oneShot: false,
         }),
       });
@@ -472,7 +472,12 @@ export class CourierActions {
           this.handler.sendPage(
             ctx,
             Number(action.payload.page) || 1,
-            ctx.update.callback_query?.message?.message_id,
+            // (BOT-3d) Faqat ro'yxatning o'z ⬆️/⬇️ tugmasi shu xabarni
+            // tahrirlaydi; boshqa xabardagi «📋 Topshiriqlarim» (masalan skan
+            // xulosasi) — yangi ro'yxat xabari, xulosa yo'qolmaydi.
+            action.payload.nav === true
+              ? ctx.update.callback_query?.message?.message_id
+              : undefined,
           ),
         ),
       },

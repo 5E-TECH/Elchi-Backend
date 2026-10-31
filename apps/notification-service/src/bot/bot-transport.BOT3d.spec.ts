@@ -1,5 +1,9 @@
 import { Logger } from '@nestjs/common';
-import { TELEGRAM_LIMITS, splitHtmlMessage } from './bot-transport.service';
+import {
+  MAX_CHAT_BUCKETS,
+  TELEGRAM_LIMITS,
+  splitHtmlMessage,
+} from './bot-transport.service';
 import {
   makeFetch,
   makeOutbox,
@@ -62,6 +66,82 @@ describe('BOT-3d — splitHtmlMessage', () => {
       chunks.every((c) => c.length <= TELEGRAM_LIMITS.MESSAGE_MAX_CHARS),
     ).toBe(true);
     expect(chunks.every(balanced)).toBe(true);
+  });
+});
+
+describe('BOT-3d — splitHtmlMessage chegaraviy holatlar', () => {
+  it('⭐ max dan uzun havola tegi — cheksiz tsikl YO‘Q, har bo‘lak oldinga siljiydi va ≤ max', () => {
+    const text = `<b><a href="https://x/?q=${'a'.repeat(4080)}">x</a></b>`;
+    const chunks = splitHtmlMessage(text);
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.length).toBeLessThan(5);
+    expect(
+      chunks.every((c) => c.length <= TELEGRAM_LIMITS.MESSAGE_MAX_CHARS),
+    ).toBe(true);
+    expect(chunks.join('').replace(/<\/?b>/g, '')).toContain('a'.repeat(4000));
+  });
+
+  it('surrogat jufti (emoji) bo‘linmaydi', () => {
+    const text = '😀'.repeat(300);
+    const chunks = splitHtmlMessage(text, 101);
+    for (const chunk of chunks) {
+      expect(chunk.length).toBeLessThanOrEqual(101);
+      expect(chunk).not.toMatch(/^[\udc00-\udfff]|[\ud800-\udbff]$/);
+    }
+    expect(chunks.join('')).toBe(text);
+  });
+
+  it('faqat bo‘shliq / teglardan iborat oxirgi bo‘lak yuborilmaydi', () => {
+    const text = `${'x'.repeat(90)}${' '.repeat(20)}`;
+    const chunks = splitHtmlMessage(text, 100);
+    expect(chunks.length).toBe(1);
+    expect(chunks.every((c) => c.replace(/<[^>]*>/g, '').trim() !== '')).toBe(
+      true,
+    );
+  });
+
+  it('⭐ >4096 HTML xabar (ko‘p teg) — har bo‘lak teg balansli', () => {
+    const line =
+      '<b>Buyurtma</b> <i>#1</i> <a href="https://x.uz/o/1">ochish</a>';
+    const text = `<u>${Array(200).fill(line).join('\n')}</u>`;
+    expect(text.length).toBeGreaterThan(TELEGRAM_LIMITS.MESSAGE_MAX_CHARS);
+    const chunks = splitHtmlMessage(text);
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.every(balanced)).toBe(true);
+  });
+});
+
+describe('BOT-3d — bucket LRU', () => {
+  it('⭐ to‘lganda faqat eng eski bucket o‘chadi — faol chat limiti nolga tushmaydi', async () => {
+    const fetchMock = makeFetch();
+    const transport = makeTransport(fetchMock);
+    let clock = Date.now();
+    transport.now = () => clock;
+    const sleeps: number[] = [];
+    transport.sleep = jest.fn((ms: number) => {
+      sleeps.push(ms);
+      clock += ms;
+      return Promise.resolve();
+    });
+    const internals = transport as unknown as {
+      throttle: (chatId?: string) => Promise<void>;
+      privateBuckets: Map<string, unknown>;
+    };
+    const throttle = internals.throttle.bind(transport);
+    await throttle('5550044');
+    const active = internals.privateBuckets.get('5550044');
+    for (let i = 0; i < MAX_CHAT_BUCKETS; i += 1) {
+      await throttle(String(7_000_000 + i));
+      // Faol chat oradan qayta ishlatiladi (LRU oxiriga ko'chadi).
+      if (i === MAX_CHAT_BUCKETS / 2) await throttle('5550044');
+    }
+    expect(internals.privateBuckets.size).toBeLessThanOrEqual(MAX_CHAT_BUCKETS);
+    // Faol chat bucket'i AYNAN o'sha (nolga tushmagan); eng eski chiqarildi.
+    expect(internals.privateBuckets.get('5550044')).toBe(active);
+    expect(internals.privateBuckets.has('7000000')).toBe(false);
+    expect(
+      internals.privateBuckets.has(String(7_000_000 + MAX_CHAT_BUCKETS - 1)),
+    ).toBe(true);
   });
 });
 
