@@ -1,9 +1,5 @@
-import { escapeTelegramHtml } from '@app/common';
-import {
-  STATUS_LABEL_UZ,
-  cabinetButton,
-  formatSum,
-} from '../courier/courier-cards';
+import { cabinetLinks, escapeTelegramHtml } from '@app/common';
+import { STATUS_LABEL_UZ, formatSum } from '../courier/courier-cards';
 import { STATUS_EMOJI } from '../handlers/market.handler';
 import type { InlineKeyboardButton } from '../telegram.types';
 
@@ -60,5 +56,13 @@ export function groupCardKeyboard(
   cabinetUrl: string,
   orderId: string,
 ): InlineKeyboardButton[][] {
-  return [[cabinetButton(cabinetUrl, orderId)]];
+  // (PIJN1lGp) guruh kartasi — buyurtma tafsiloti sahifasi.
+  return [
+    [
+      {
+        text: '🌐 Kabinetda ochish',
+        url: cabinetLinks(cabinetUrl).orderDetail(orderId),
+      },
+    ],
+  ];
 }

@@ -105,7 +105,7 @@ describe('h9newLsd — /ishim', () => {
       '🌐 Kabinetda ochish',
     ]);
     expect(buttons['🌐 Kabinetda ochish']).toBe(
-      'https://admin.elchi.test/orders?search=101',
+      'https://admin.elchi.test/orders?status=waiting&orderSearch=EL-100101',
     );
     for (const data of [buttons['✅ Sotildi'], buttons['❌ Bekor']]) {
       expect(Buffer.byteLength(data, 'utf8')).toBeLessThanOrEqual(64);

@@ -1,6 +1,7 @@
 import { Injectable, Logger, Optional } from '@nestjs/common';
 import { ModuleRef } from '@nestjs/core';
 import {
+  cabinetLinks,
   NotificationCategory,
   NotificationChannel,
   NotificationPriority,
@@ -254,7 +255,12 @@ export class CourierHandler implements BotMessageHandler {
       channels: [NotificationChannel.IN_APP, NotificationChannel.TELEGRAM],
       data: {
         telegram_buttons: [
-          [{ text: '🌐 Kabinetda ochish', url: this.courier.cabinetUrl }],
+          [
+            {
+              text: '🌐 Kabinetda ochish',
+              url: cabinetLinks(this.courier.cabinetUrl).home(),
+            },
+          ],
         ],
       },
     } as never);

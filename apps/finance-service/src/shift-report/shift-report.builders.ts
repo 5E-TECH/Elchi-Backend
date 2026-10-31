@@ -1,4 +1,9 @@
-import { escapeTelegramHtml } from '@app/common';
+import {
+  DEFAULT_CABINET_URL as CABINET_DEFAULT_URL,
+  WEB_ROUTES,
+  cabinetLinks,
+  escapeTelegramHtml,
+} from '@app/common';
 import {
   autoClosedLabel,
   tashkentDateTime,
@@ -13,21 +18,16 @@ import {
  * Boshqa kuryer / market ma'lumoti builder'ga UMUMAN berilmaydi (IDOR).
  */
 
-/** Panel manzili (notification-service `ELCHI_CABINET_URL` sukuti bilan bir xil). */
-export const DEFAULT_CABINET_URL = 'https://admin.elchipochta.uz';
+/** Panel manzili sukuti — yagona manba `libs/common` `cabinet-links` (PIJN1lGp). */
+export const DEFAULT_CABINET_URL = CABINET_DEFAULT_URL;
 
-const cabinetLink = (base: string): string => {
-  const clean = String(base ?? '')
-    .trim()
-    .replace(/\/+$/, '');
-  if (!/^https:\/\/[\w.-]+(:\d+)?(\/[\w\-./]*)?$/.test(clean)) return '';
-  return `\n\n🌐 <a href="${clean}${SELF_CASHBOX_LINK}">Kabinetda ochish</a>`;
-};
+const cabinetLink = (base: string): string =>
+  `\n\n🌐 <a href="${cabinetLinks(base).selfCashbox()}">Kabinetda ochish</a>`;
 
 export const SHIFT_REPORT_LINK = (shiftId: string) =>
-  `/payments/shift-report/${shiftId}`;
+  WEB_ROUTES.shiftReport.replace(':id', encodeURIComponent(shiftId));
 /** Kuryer / market o'z kassasi sahifasi. */
-export const SELF_CASHBOX_LINK = '/cash-box';
+export const SELF_CASHBOX_LINK = WEB_ROUTES.cashbox;
 
 export interface ShiftMoneyBlock {
   opening_balance: number | null;

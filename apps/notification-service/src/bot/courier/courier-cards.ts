@@ -1,4 +1,4 @@
-import { escapeTelegramHtml } from '@app/common';
+import { escapeTelegramHtml, cabinetLinks } from '@app/common';
 import type { InlineKeyboardButton } from '../telegram.types';
 import { STATUS_EMOJI } from '../handlers/market.handler';
 
@@ -168,9 +168,12 @@ export function courierCardText(
   return lines.join('\n').slice(0, 4000);
 }
 
-/** Kabinet havolasi (partly-sell va katta isbot — brauzerda). */
+/**
+ * Kuryer kartasining kabinet havolasi (partly-sell va katta isbot —
+ * brauzerda): kuryer ro'yxati shu buyurtma bilan (`cabinetLinks`).
+ */
 export function cabinetOrderUrl(base: string, orderId: string): string {
-  return `${base.replace(/\/+$/, '')}/orders?search=${encodeURIComponent(orderId)}`;
+  return cabinetLinks(base).courierOrder(orderId);
 }
 
 export function cabinetButton(

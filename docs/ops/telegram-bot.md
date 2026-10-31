@@ -423,3 +423,23 @@ bazasiga o'zi yozmaydi, doira/holat mashinasi/isbot/extra-cost — serverda.
   (`order.find_all`); xabar `notification.dispatch` (in-app + shaxsiy
   Telegram) bilan, «📋 Topshiriqlarim» = `/ishim` 1-sahifa.
 - Ega qarori (2026-09-20) kuchda: skan chat orqali qilinmaydi.
+
+## 14. Kabinet havolalari (PIJN1lGp)
+
+Botdagi «🌐 Kabinetda …» tugmalarining yagona manbasi — `libs/common/src/telegram/cabinet-links.ts`
+(`cabinetLinks(ELCHI_CABINET_URL)`; asos faqat `https://`, aks holda `https://admin.elchipochta.uz`).
+Yo'llar FE `src/app/lib/routes.tsx` / `design/kit/route-map.json` bilan sinxron (`WEB_ROUTES`;
+`cabinet-links.spec.ts` solishtiradi va kodda eski `/orders/create`, `/orders?search=` qolmaganini tekshiradi).
+
+| Tugma | Funksiya | Yo'l |
+|---|---|---|
+| AI buyurtma — «Kabinetda yaratish» | `orderCreate()` | `/new-orders/create` |
+| Guruh kartasi — «Kabinetda ochish» | `orderDetail(id)` | `/orders/edit/<id>` (ichki id) |
+| Kuryer kartasi, «Video juda katta», «Faylni yuklab bo'lmadi» | `courierOrder(id)` | `/orders?status=waiting&orderSearch=EL-<id+100000>` |
+| `/kun` hisoboti | `home()` | `/` |
+| To'lov xabarlari | `selfCashbox()` | `/cash-box` |
+| Smena hisoboti (va in-app bildirishnoma havolasi) | `shiftReport(id)` | `/payments/shifts/<id>` (eski `/payments/shift-report/<id>` ni FE yo'naltiradi) |
+
+Buyurtmalar ro'yxati filtri kaliti — `orderSearch` (FE `ORDER_FILTER_KEYS.search`); eski `search` kaliti
+yangi havolalarda ishlatilmaydi (FE uni faqat eski chat xabarlari uchun o'qiydi).
+
