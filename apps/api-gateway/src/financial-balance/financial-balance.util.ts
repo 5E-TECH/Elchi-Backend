@@ -94,6 +94,7 @@ export const FINANCIAL_SOURCE_LABEL_UZ: Readonly<
   [FinancialSource_type.SALARY]: 'Maosh',
   [FinancialSource_type.CORRECTION]: 'Tuzatish (rollback)',
   [FinancialSource_type.BILLS]: 'Hisob-fakturalar',
+  [FinancialSource_type.PICKUP_FEE]: 'Pickup haqi',
 });
 
 /** ljVOuNz4 — kategoriya nomlari (karta ro'yxati bilan bir xil). */

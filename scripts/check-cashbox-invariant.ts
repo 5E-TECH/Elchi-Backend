@@ -313,6 +313,22 @@ async function main(): Promise<void> {
 
     // Per-market: FOR_MARKET cashbox balance (what HQ owes the market) vs the
     // sum of market_amount for that market's not-yet-MARKET_SETTLED orders.
+    //
+    // B824gOu5 — pickup haqi market kassasidan chiqim, buyurtmaga esa tegmaydi:
+    // keyingi to'lov FIFO'ga olguncha kassa shu summaga kam turadi. Bu
+    // nomuvofiqlik emas, shuning uchun ochiq haqlar ayiriladi. Migratsiya 198
+    // dan oldingi `--snapshot` da jadval yo'q — 0.
+    const [{ pickup_table: pickupTable }]: Array<{
+      pickup_table: string | null;
+    }> = await ds.query(
+      `SELECT to_regclass('finance_schema.pickup_visits')::text AS pickup_table`,
+    );
+    const openPickupFees = pickupTable
+      ? `SELECT market_id, SUM(fee) AS open_fee
+           FROM finance_schema.pickup_visits
+          WHERE fifo_applied_at IS NULL AND is_deleted = false
+          GROUP BY market_id`
+      : `SELECT NULL::bigint AS market_id, 0::numeric AS open_fee WHERE false`;
     const marketRecon: Array<{
       market_id: string;
       cashbox_balance: string;
@@ -321,16 +337,17 @@ async function main(): Promise<void> {
     }> = await ds.query(`
       SELECT os.market_id AS market_id,
              cb.balance::text AS cashbox_balance,
-             COALESCE(SUM(os.market_amount),0)::text AS unsettled_owed,
-             (cb.balance - COALESCE(SUM(os.market_amount),0))::text AS diff
+             (COALESCE(SUM(os.market_amount),0) - COALESCE(pf.open_fee,0))::text AS unsettled_owed,
+             (cb.balance - COALESCE(SUM(os.market_amount),0) + COALESCE(pf.open_fee,0))::text AS diff
       FROM order_schema.order_settlement os
       JOIN finance_schema.cashboxes cb
         ON cb.user_id = os.market_id
        AND cb.cashbox_type = 'markets'
        AND cb.is_deleted = false
+      LEFT JOIN (${openPickupFees}) pf ON pf.market_id = os.market_id
       WHERE os.is_deleted = false AND os.status <> 'market_settled'
-      GROUP BY os.market_id, cb.balance
-      ORDER BY ABS(cb.balance - COALESCE(SUM(os.market_amount),0)) DESC
+      GROUP BY os.market_id, cb.balance, pf.open_fee
+      ORDER BY ABS(cb.balance - COALESCE(SUM(os.market_amount),0) + COALESCE(pf.open_fee,0)) DESC
       LIMIT 20
     `);
     /**

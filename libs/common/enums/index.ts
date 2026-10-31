@@ -102,6 +102,12 @@ export enum Source_type {
    * (`cashbox_history.reverses_history_id`). Asl qatorlar o'zgarmaydi.
    */
   PAYMENT_REVERSAL = 'payment_reversal',
+  /**
+   * B824gOu5 — pickup tashrifi haqi: market kassasidagi CHIQIM (market qarzi
+   * oshadi), `source_id` = `pickup_visits.id`. Tekin tashrif — 0 so'mli qator.
+   * Faqat ichki: `PATCH /finance/cashbox/balance` rad etadi.
+   */
+  PICKUP_FEE = 'pickup_fee',
 }
 
 /**
@@ -117,6 +123,7 @@ export enum FinancialSource_type {
   SALARY = 'salary', // Salary paid out
   CORRECTION = 'correction', // Adjustment / rollback
   BILLS = 'bills', // Invoices / utility bills
+  PICKUP_FEE = 'pickup_fee', // B824gOu5: pickup visit fee charged to a market (income)
 }
 
 /**

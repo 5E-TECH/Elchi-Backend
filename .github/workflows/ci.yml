@@ -281,6 +281,8 @@ jobs:
           apps/order-service/src/lifecycle/order-special-categories.T8.pg.spec.ts
           apps/finance-service/src/cashbox-receipt/cashbox-receipt.T3.pg.spec.ts
           apps/finance-service/src/cashbox-receipt/cashbox-receipt-link.T3.pg.spec.ts
+          apps/finance-service/src/pickup-visit/pickup-visit.B824gOu5.pg.spec.ts
+          apps/finance-service/src/pickup-visit/pickup-visit.migration.B824gOu5.pg.spec.ts
         env:
           NODE_ENV: test
           CATALOG_PG_TEST_URI: postgres://postgres@127.0.0.1:5432/elchi_e_test

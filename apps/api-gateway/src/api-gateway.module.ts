@@ -64,6 +64,7 @@ import { AiAssistantGatewayController } from './ai-assistant-gateway.controller'
 import { MarketOperatorGatewayController } from './market-operator-gateway.controller';
 import { CustomerGatewayController } from './customer-gateway.controller';
 import { DeliveryPricingGatewayController } from './delivery-pricing-gateway.controller';
+import { PickupVisitGatewayController } from './pickup-visit-gateway.controller';
 // mSkzzNBJ: ochiq kalkulyator — POST /public/delivery-quote, GET /public/delivery-tariffs.
 import { PublicDeliveryPricingController } from './public-delivery-pricing/public-delivery-pricing.controller';
 import { WarehouseGatewayController } from './warehouse-gateway.controller';
@@ -174,6 +175,7 @@ import { AI_IMAGE_STORE, AiImageStore } from '@app/common/ai/ai-image-store';
     // DAqXPeSy: yetkazish narxi dvigateli (/delivery/quote, /delivery/tariffs,
     // /delivery/pricing-settings) — logistics-service.
     DeliveryPricingGatewayController,
+    PickupVisitGatewayController,
     // mSkzzNBJ: o'sha dvigatelning ochiq (tokensiz) yo'li — /public/delivery-*.
     PublicDeliveryPricingController,
     // hY7uacJu: vaqtinchalik ombor moduli (/warehouses, /market/warehouse-stock,

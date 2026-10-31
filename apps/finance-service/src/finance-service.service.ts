@@ -109,6 +109,8 @@ import {
   type ReceiptTables,
 } from './cashbox-receipt/cashbox-receipt.views';
 import type { CashboxReceipt } from './entities/cashbox-receipt.entity';
+import type { PickupFifoService } from './pickup-visit/pickup-fifo.service';
+import { PICKUP_FIFO } from './pickup-visit/pickup-fifo.token';
 
 /**
  * T3 — entity NOMI bo'yicha (sinf importi emas): eski spec'lar `@app/common`
@@ -266,6 +268,11 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
     @Optional()
     @Inject(CASHBOX_RECEIPTS)
     private readonly receipts?: CashboxReceiptService,
+    // B824gOu5 — pickup haqi market to'lovining FIFO hovuziga; tarix qatoriga
+    // `parcel_count` / `is_free`. Ixtiyoriy: eski spec'lar usiz quradi.
+    @Optional()
+    @Inject(PICKUP_FIFO)
+    private readonly pickupFifo?: PickupFifoService,
   ) {}
 
   /**
@@ -777,7 +784,8 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
    * tufayli bu qarz hovuzga qaytmasdi va «marketga hamma pulni to'lasam ham
    * oxirgi buyurtmalar yopilmaydi» nuqsoni chiqardi (qisilgan qoldiqlar
    * yig'indisi kassa balansidan katta bo'lardi). Endi ishorali — yig'indi aynan
-   * kassa balansiga teng.
+   * kassa balansiga teng (B824gOu5: FIFO'ga hali olinmagan pickup haqi
+   * bo'lsa, kassa shu summaga kam; to'lov hovuzi uni qo'shib oladi).
    *   musbat — marketga qarzdormiz;  manfiy — market bizga qarzdor.
    */
   private marketOrderRemaining(order: MarketPayableOrder): number {
@@ -1121,15 +1129,21 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
   private scheduleMarketPaymentFollowUp(input: {
     market_id: string;
     amount: number;
+    /**
+     * B824gOu5 — to'lovga qo'shilgan pickup haqi: buyurtma sinxroni hovuziga
+     * kiradi, hamkor xabariga EMAS (u haqiqiy to'lov summasini oladi).
+     */
+    pickup_fifo_amount?: number;
     payment_date?: number | string | null;
     dedup_key?: string | null;
   }): Promise<void> {
     const marketId = String(input.market_id);
     const amount = Number(input.amount);
+    const syncAmount = this.addMoney(amount, input.pickup_fifo_amount ?? 0);
 
     const previous = this.marketOrderSyncChains.get(marketId);
     const sync = (previous ?? Promise.resolve())
-      .then(() => this.syncMarketPaymentsSafely(marketId, amount))
+      .then(() => this.syncMarketPaymentsSafely(marketId, syncAmount))
       .catch(() => undefined);
     this.marketOrderSyncChains.set(marketId, sync);
     void sync.then(() => {
@@ -1839,9 +1853,14 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
     try {
       // AG1Mlikw — `payment_reversal` faqat ichki: teskari qatorni FAQAT
       // `PaymentCorrectionService` yozadi (reverses_history_id, transfer_id).
-      if (dto.source_type === Source_type.PAYMENT_REVERSAL) {
+      // B824gOu5 — `pickup_fee` ham: qatorni faqat `applyPickupFeeInTx` yozadi
+      // (tashrif yozuvisiz qator FIFO hisobidan tashqarida qolardi).
+      if (
+        dto.source_type === Source_type.PAYMENT_REVERSAL ||
+        dto.source_type === Source_type.PICKUP_FEE
+      ) {
         throw new BadRequestException(
-          "payment_reversal turini qo'lda yozib bo'lmaydi",
+          `${dto.source_type} turini qo'lda yozib bo'lmaydi`,
         );
       }
       this.assertPositiveAmount(Number(dto.amount));
@@ -2206,9 +2225,13 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
       );
       corrected = rows.map((row) => ({ ...row, correction: null }));
     }
+    // B824gOu5 — faqat `pickup_fee` qatorlariga (boshqa tur tegilmaydi).
+    const withPickup = this.pickupFifo
+      ? await this.pickupFifo.attachToHistory(corrected)
+      : corrected;
     return receiptMode === 'none'
-      ? corrected
-      : this.withReceipts(corrected, receiptMode);
+      ? withPickup
+      : this.withReceipts(withPickup, receiptMode);
   }
 
   /** T3 — chek jadvali / tarix / kassa yo'llari (TypeORM metadata). */
@@ -4493,6 +4516,7 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         clickMarketCashbox,
         advancePayload,
         marketAdvancePayload,
+        pickupFifoAmount,
         dedupKey,
       } = applied;
 
@@ -4525,6 +4549,7 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         void this.scheduleMarketPaymentFollowUp({
           market_id: String(data.market_id),
           amount: Number(data.amount),
+          pickup_fifo_amount: pickupFifoAmount,
           payment_date: data.payment_date,
           dedup_key: dedupKey,
         });
@@ -4623,6 +4648,8 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
       acceptedByName?: string | null;
       transferId?: string;
       skipShiftGate?: boolean;
+      /** B824gOu5 — `applyMarketPaymentInTx` dagi bilan bir xil. */
+      skipPickupFifo?: boolean;
     },
   ): Promise<
     | { idempotent: true }
@@ -4636,6 +4663,8 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         courierHistory: CashboxHistory;
         advancePayload: Record<string, unknown>;
         marketAdvancePayload: Record<string, unknown> | null;
+        /** B824gOu5 — market FIFO hovuziga qo'shilgan pickup haqi. */
+        pickupFifoAmount: number;
       }
   > {
     this.assertBigIntId(data.courier_id, 'courier_id');
@@ -4923,12 +4952,20 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
      * Token alohida (`:m`) — order-service ikki siljishni bir-biridan
      * farqlab dedup qiladi; token bo'lmasa dedup ham yo'q (avvalgidek).
      */
+    const pickupFifoAmount =
+      clickMarketCashbox && !opts.skipPickupFifo
+        ? await this.claimPickupFifoInTx(
+            manager,
+            String(data.market_id),
+            transferId,
+          )
+        : 0;
     const marketAdvancePayload = clickMarketCashbox
       ? await this.enqueueSettlementAdvance(
           manager,
           'hq_to_market',
           String(data.market_id),
-          Number(data.amount),
+          this.addMoney(Number(data.amount), pickupFifoAmount),
           data.created_by,
           dedupKey ? `${dedupKey}:m` : '',
         )
@@ -4979,7 +5016,103 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
       courierHistory: savedCourierHistory,
       advancePayload,
       marketAdvancePayload,
+      pickupFifoAmount,
     };
+  }
+
+  /** To'lovga pickup haqini qo'shish (tiyin aniqligida); haq yo'q — o'zi. */
+  private addMoney(amount: number, pickupFifo: number): number {
+    return pickupFifo > 0
+      ? Math.round((amount + pickupFifo) * 100) / 100
+      : amount;
+  }
+
+  /**
+   * B824gOu5 — market kassasi qulfi ostida ochiq pickup haqlarini shu to'lovning
+   * FIFO hovuziga olish (`PickupFifoService.claimInTx` izohi). Pickup yozuvi
+   * yo'q marketda 0 — to'lov avvalgidek.
+   */
+  private async claimPickupFifoInTx(
+    manager: EntityManager,
+    marketId: string,
+    transferId: string,
+  ): Promise<number> {
+    return this.pickupFifo
+      ? this.pickupFifo.claimInTx(manager, marketId, transferId)
+      : 0;
+  }
+
+  /**
+   * B824gOu5 — pickup tashrifi haqining PUL QISMI chaqiruvchining
+   * tranzaksiyasida (market kassasi qulflangan bo'lishi shart).
+   *
+   * Yo'nalish: market → Elchi. Market kassasi HQ'ning marketga QARZI
+   * (musbat — marketga qarzmiz, manfiy — market bizga qarzdor), shuning uchun
+   * haq kassadan CHIQIM: HQ qarzi kamayadi, market qarzi oshadi. Naqd
+   * ko'chmaydi (MAIN tegilmaydi, smena shart emas). Xuddi shu summa P&L
+   * daftariga `pickup_fee` KIRIMI — kompaniya holati formulasi
+   * (`main + chain + provider − market_payable`) ham shu summaga oshadi.
+   *
+   * Buyurtmaga TEGMAYDI: `order_settlement`, tariflar va sotuv oyoqlari
+   * (`computeSaleLegs`) o'zgarmaydi, order-service'ga hech narsa ketmaydi.
+   * Tekin tashrif — 0 so'mli tarix qatori (market tarixida ko'rinsin), balans
+   * va daftar o'zgarmaydi.
+   */
+  async applyPickupFeeInTx(
+    manager: EntityManager,
+    input: {
+      marketCashbox: Cashbox;
+      visit_id: string;
+      market_id: string;
+      fee: number;
+      parcel_count: number;
+      occurred_at: Date;
+      created_by: string;
+    },
+  ): Promise<CashboxHistory> {
+    const { marketCashbox } = input;
+    const fee = Number(input.fee);
+    const comment =
+      fee > 0
+        ? `Pickup tashrifi #${input.visit_id}: ${input.parcel_count} posilka`
+        : `Pickup tashrifi #${input.visit_id}: ${input.parcel_count} posilka (tekin)`;
+    if (fee > 0) {
+      this.updateBalancesByMethod(
+        marketCashbox,
+        fee,
+        Operation_type.EXPENSE,
+        PaymentMethod.CASH,
+      );
+      await manager.save(marketCashbox);
+    }
+    const history = await manager.save(
+      manager.create(CashboxHistory, {
+        operation_type: Operation_type.EXPENSE,
+        cashbox_id: marketCashbox.id,
+        source_type: Source_type.PICKUP_FEE,
+        source_id: String(input.visit_id),
+        source_user_id: String(input.market_id),
+        amount: fee,
+        balance_after: marketCashbox.balance,
+        balance_cash_after: marketCashbox.balance_cash,
+        balance_card_after: marketCashbox.balance_card,
+        payment_method: PaymentMethod.CASH,
+        comment,
+        created_by: String(input.created_by),
+        payment_date: input.occurred_at,
+      }),
+    );
+    if (fee > 0) {
+      await this.appendFinancialBalanceInTx(manager, {
+        amount: fee,
+        source_type: FinancialSource_type.PICKUP_FEE,
+        dedup_key: `pickup-visit:${input.visit_id}`,
+        related_user_id: String(input.market_id),
+        comment,
+        created_by: String(input.created_by),
+      });
+    }
+    return history;
   }
 
   /**
@@ -5283,7 +5416,8 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
           "To'lov allaqachon bajarilgan (takroriy so'rov)",
         );
       }
-      const { marketCashbox, advancePayload, dedupKey } = applied;
+      const { marketCashbox, advancePayload, dedupKey, pickupFifoAmount } =
+        applied;
 
       await queryRunner.commitTransaction();
       // Immediate best-effort publish to close the outbox-poll lag (Faza 2c).
@@ -5300,6 +5434,7 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
       void this.scheduleMarketPaymentFollowUp({
         market_id: String(data.market_id),
         amount: Number(data.amount),
+        pickup_fifo_amount: pickupFifoAmount,
         payment_date: data.payment_date,
         dedup_key: dedupKey,
       });
@@ -5348,7 +5483,16 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
   async applyMarketPaymentInTx(
     manager: EntityManager,
     data: MarketPaymentInput,
-    opts: { notify: boolean; transferId?: string; skipShiftGate?: boolean },
+    opts: {
+      notify: boolean;
+      transferId?: string;
+      skipShiftGate?: boolean;
+      /**
+       * B824gOu5 — T6 tahriri: ochiq pickup haqi bu to'lovga olinmaydi
+       * (tuzatish sinxroni uni bilmaydi), keyingi oddiy to'lovga qoladi.
+       */
+      skipPickupFifo?: boolean;
+    },
   ): Promise<
     | { idempotent: true }
     | {
@@ -5359,6 +5503,8 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         marketCashbox: Cashbox;
         marketHistory: CashboxHistory;
         advancePayload: Record<string, unknown>;
+        /** B824gOu5 — FIFO hovuziga qo'shilgan pickup haqi. */
+        pickupFifoAmount: number;
       }
   > {
     this.assertBigIntId(data.market_id, 'market_id');
@@ -5503,11 +5649,18 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
     // Advance the per-order FIFO settlement ledger (HQ → market) in the SAME
     // transaction as the cashbox move (Faza 2a). Reliable outbox delivery to
     // order-service replaces the old best-effort gateway bridge.
+    const pickupFifoAmount = opts.skipPickupFifo
+      ? 0
+      : await this.claimPickupFifoInTx(
+          manager,
+          String(data.market_id),
+          transferId,
+        );
     const advancePayload = await this.enqueueSettlementAdvance(
       manager,
       'hq_to_market',
       String(data.market_id),
-      Number(data.amount),
+      this.addMoney(Number(data.amount), pickupFifoAmount),
       data.created_by,
       dedupKey,
     );
@@ -5539,6 +5692,7 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
       marketCashbox,
       marketHistory,
       advancePayload,
+      pickupFifoAmount,
     };
   }
 
