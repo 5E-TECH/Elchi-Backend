@@ -363,6 +363,8 @@ export type OrderListQuery = {
   post_id?: string;
   post_ids?: string[];
   exclude_statuses?: Order_status[];
+  /** 6qypMFeT: `status`/`exclude_statuses` ga qo'shimcha (OR) — skan bilan olingan. */
+  scan_taken_courier_id?: string;
   canceled_post_id?: string;
   canceled_post_unassigned?: boolean;
   holder_type?: OrderHolderType;
@@ -1096,6 +1098,7 @@ export class OrderServiceService {
       post_id,
       post_ids,
       exclude_statuses,
+      scan_taken_courier_id,
       canceled_post_id,
       canceled_post_unassigned,
       holder_type,
@@ -1215,11 +1218,37 @@ export class OrderServiceService {
     if (qr_code_token) {
       qb.andWhere('order.qr_code_token = :qr_code_token', { qr_code_token });
     }
+    // 6qypMFeT: kuryer doirasi — skan bilan olingan ON_THE_ROAD qator holat
+    // filtridan qat'i nazar kiradi (`isCourierScanTakenOrder` ning SQL nusxasi).
+    // Buzuq id bazaga yetmaydi (bigint ustun).
+    const scanTakenCourierId = /^[0-9]{1,19}$/.test(
+      String(scan_taken_courier_id ?? '').trim(),
+    )
+      ? String(scan_taken_courier_id).trim()
+      : null;
+    const withScanTaken = (statusSql: string) =>
+      scanTakenCourierId
+        ? `(${statusSql} OR (order.status = :scan_taken_status
+            AND order.holder_type = 'COURIER'
+            AND order.holder_courier_id = :scan_taken_courier_id
+            AND order.last_handover_by = :scan_taken_courier_id
+            AND order.return_requested = false))`
+        : statusSql;
+    const scanTakenParams = scanTakenCourierId
+      ? {
+          scan_taken_status: Order_status.ON_THE_ROAD,
+          scan_taken_courier_id: scanTakenCourierId,
+        }
+      : {};
     if (statusFilter?.length) {
-      qb.andWhere('order.status IN (:...statuses)', { statuses: statusFilter });
+      qb.andWhere(withScanTaken('order.status IN (:...statuses)'), {
+        statuses: statusFilter,
+        ...scanTakenParams,
+      });
     } else if (exclude_statuses?.length) {
-      qb.andWhere('order.status NOT IN (:...exclude_statuses)', {
+      qb.andWhere(withScanTaken('order.status NOT IN (:...exclude_statuses)'), {
         exclude_statuses,
+        ...scanTakenParams,
       });
     }
     if (cancel_stages?.length) {
@@ -1801,6 +1830,7 @@ export class OrderServiceService {
    * (limit 1) sanaladi, `total` — o'sha `countQb.getCount()`:
    * - waiting   — post_ids + status WAITING;
    * - all       — post_ids, CREATED/NEW/RECEIVED/ON_THE_ROAD dan tashqari;
+   *   (6qypMFeT: ikkalasida ham kuryer skan bilan olgan posilka bor);
    * - cancelled — findCourierCancelledRows doirasi (9Rdi2gJF: kuryer /
    *   ushlab turgan kuryer / eski pochta, courier_cancelled_tab).
    * Pochtasi yo'q kuryer: waiting/all = 0 (ro'yxat ham bo'sh), cancelled —
@@ -1827,9 +1857,13 @@ export class OrderServiceService {
     // aLx7Di99: waiting / all — ro'yxat bilan AYNI ta'rif (`courierPostOrdersQuery`).
     const [waiting, all, cancelled] = await Promise.all([
       postIds.length
-        ? countOf(courierPostOrdersQuery(postIds, [Order_status.WAITING]))
+        ? countOf(
+            courierPostOrdersQuery(postIds, [Order_status.WAITING], courierId),
+          )
         : 0,
-      postIds.length ? countOf(courierPostOrdersQuery(postIds)) : 0,
+      postIds.length
+        ? countOf(courierPostOrdersQuery(postIds, undefined, courierId))
+        : 0,
       countOf({
         status: [Order_status.CANCELLED],
         courier_ids: [courierId],
@@ -3247,6 +3281,7 @@ export class OrderServiceService {
     canceled_post_unassigned?: boolean;
     holder_type?: OrderHolderType;
     exclude_statuses?: Order_status[];
+    scan_taken_courier_id?: string;
     status?: Order_status | Order_status[] | string | string[];
     where_deliver?: Where_deliver;
     search?: string;

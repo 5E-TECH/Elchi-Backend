@@ -575,7 +575,7 @@ describe('aLx7Di99 — my/district-stats = /orders ro‘yxati to‘plami', () =>
     );
     expect(findOrders).toHaveBeenCalledTimes(1);
     expect(findOrders.mock.calls[0][0]).toEqual({
-      ...courierPostOrdersQuery(['p77a', 'p77b']),
+      ...courierPostOrdersQuery(['p77a', 'p77b'], undefined, '77'),
       start_day: '2026-10-01',
       end_day: '2026-10-26',
       fetch_all: true,
@@ -616,6 +616,38 @@ describe('aLx7Di99 — my/district-stats = /orders ro‘yxati to‘plami', () =>
     expect(inDistricts + res.data.summary.outsideDistrictsOrders).toBe(
       res.data.summary.totalOrders,
     );
+  });
+
+  it('6qypMFeT: skan bilan olingan «Yo‘lda» sanaladi, qabul qilinmagan pochta sanalmaydi', async () => {
+    const { service, findOrders } = setup({
+      courierRegion: { '77': '5' },
+      postsByCourier: POSTS,
+    });
+    findOrders.mockResolvedValue([
+      ...SCOPED_ORDERS,
+      {
+        id: 's8',
+        region_id: '5',
+        district_id: '501',
+        courier_id: '77',
+        holder_type: 'COURIER',
+        holder_courier_id: '77',
+        last_handover_by: '77',
+        return_requested: false,
+        post_id: 'p77a',
+        branch_id: '7',
+        status: Order_status.ON_THE_ROAD,
+        total_price: 40_000,
+      },
+    ] as never);
+    const res: any = await service.getMyRegionDistrictStats(
+      '2026-10-01',
+      '2026-10-26',
+      COURIER,
+    );
+    // s6 (`last_handover_by` yo'q — jo'natilgan pochta) hamon sanalmaydi.
+    expect(res.data.summary.totalOrders).toBe(4);
+    expect(res.data.summary.pendingOrders).toBe(1);
   });
 
   it('pochtasi yo‘q kuryer → ro‘yxat kabi 0 (buyurtmalar so‘ralmaydi), viloyat va tumanlar bor', async () => {

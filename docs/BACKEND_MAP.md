@@ -1198,6 +1198,13 @@ and assigned to couriers (`logistics.order.assign_to_courier`,
 / `could_not_deliver`. Return: `initiate_return` → `mark_returned_to_market`.
 `rollback_waiting` reverses sold/cancelled (settlement-aware). Full history in
 `order_tracking`; custody in `order_custody_event`.
+`order.scan_assign` takes `new`/`received`/`waiting`/`waiting_customer`, re-scan
+of an own `on the road`/`waiting` order is idempotent. The courier list
+(`courierPostOrdersQuery`, also counts and `/region/my/district-stats`) hides
+`on the road` until the post is received, except a parcel the courier took by
+scan himself (`isCourierScanTakenOrder`: holder = courier, `last_handover_by` =
+courier, no `return_requested`); it stays `on the road`, so sell/cancel still
+wait for the post receive (6qypMFeT).
 
 **Warehouse orders (6kHnNH9j):** `fulfillment_source = WAREHOUSE` orders skip
 HQ intake and posts — created `received` at the regional warehouse branch

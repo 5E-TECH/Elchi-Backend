@@ -1,5 +1,5 @@
 import { DataSource } from 'typeorm';
-import { Order_status } from '@app/common';
+import { courierPostOrdersQuery, Order_status } from '@app/common';
 import { OrderServiceService } from './order-service.service';
 import { Order } from './entities/order.entity';
 import { OrderItem } from './entities/order-item.entity';
@@ -86,6 +86,18 @@ const SCHEMAS = ['order_schema', 'branch_schema', 'logistics_schema'];
         );
       }
 
+      // 6qypMFeT — pochta 5 dagi ON_THE_ROAD: biri kuryer skan bilan o'zi olgan
+      // (`last_handover_by` = kuryer), biri pochta qabulida rad etilgan.
+      await db.query(
+        `INSERT INTO order_schema.orders (
+           market_id, customer_id, status, post_id, courier_id,
+           holder_courier_id, holder_type, last_handover_by, return_requested
+         )
+         VALUES
+           (1, 2, 'on the road', 5, 119, 119, 'COURIER', 119, false),
+           (1, 2, 'on the road', 5, 119, 119, 'COURIER', 119, true)`,
+      );
+
       service = new OrderServiceService(
         db,
         db.getRepository(Order),
@@ -122,12 +134,14 @@ const SCHEMAS = ['order_schema', 'branch_schema', 'logistics_schema'];
       }
     });
 
-    it("uchala tab ham to'g'ri son: waiting 4, all 8, cancelled 3", async () => {
+    it("uchala tab ham to'g'ri son: waiting 5, all 9, cancelled 3", async () => {
       const counts = await service.courierOrderCounts({
         courier_id: COURIER_ID,
         post_ids: ['5', '6'],
       });
-      expect(counts).toEqual({ waiting: 4, all: 8, cancelled: 3 });
+      // 6qypMFeT: +1 skan bilan olingan; qabul qilinmagan pochta (seed'dagi
+      // ON_THE_ROAD) va rad etilgani sanalmaydi.
+      expect(counts).toEqual({ waiting: 5, all: 9, cancelled: 3 });
     });
 
     it("son ro'yxat total'i bilan bir xil (gateway tab so'rovlari, limit 10)", async () => {
@@ -136,19 +150,16 @@ const SCHEMAS = ['order_schema', 'branch_schema', 'logistics_schema'];
         post_ids: ['5', '6'],
       });
       const waitingList = await service.findAll({
-        post_ids: ['5', '6'],
-        status: [Order_status.WAITING],
+        ...courierPostOrdersQuery(
+          ['5', '6'],
+          [Order_status.WAITING],
+          COURIER_ID,
+        ),
         page: 1,
         limit: 10,
       });
       const allList = await service.findAll({
-        post_ids: ['5', '6'],
-        exclude_statuses: [
-          Order_status.CREATED,
-          Order_status.NEW,
-          Order_status.RECEIVED,
-          Order_status.ON_THE_ROAD,
-        ],
+        ...courierPostOrdersQuery(['5', '6'], undefined, COURIER_ID),
         page: 1,
         limit: 10,
       });
@@ -165,7 +176,16 @@ const SCHEMAS = ['order_schema', 'branch_schema', 'logistics_schema'];
       expect(counts.waiting).toBe(waitingList.total);
       expect(counts.all).toBe(allList.total);
       expect(counts.cancelled).toBe(cancelledList.total);
-      expect(allList.data).toHaveLength(8);
+      expect(allList.data).toHaveLength(9);
+    });
+
+    it('6qypMFeT: status-counts (GET /orders doirasi) skan bilan olinganni ham sanaydi', async () => {
+      const counts = await service.statusCounts({
+        query: { courier_ids: [COURIER_ID] },
+      });
+      // Seed'dagi 1 ta + skan bilan olingan + rad etilgan: doira `courier_id`,
+      // holat filtrisiz — bu ro'yxat `on the road`ni hech qachon yashirmagan.
+      expect(counts.by_status[Order_status.ON_THE_ROAD]).toBe(3);
     });
 
     it("buyurtma sotilgach «Kutilayotgan» darhol kamayadi (kesh yo'q, har so'rov SQL)", async () => {
@@ -178,7 +198,20 @@ const SCHEMAS = ['order_schema', 'branch_schema', 'logistics_schema'];
         courier_id: COURIER_ID,
         post_ids: ['5', '6'],
       });
-      expect(counts).toEqual({ waiting: 3, all: 8, cancelled: 3 });
+      expect(counts).toEqual({ waiting: 4, all: 9, cancelled: 3 });
+    });
+
+    it('6qypMFeT: pochta qabul qilingach qator ikki hisoblanmaydi (WAITING, on the road emas)', async () => {
+      await db.query(
+        `UPDATE order_schema.orders SET status = 'waiting'
+         WHERE status = 'on the road' AND last_handover_by = 119
+           AND return_requested = false`,
+      );
+      const counts = await service.courierOrderCounts({
+        courier_id: COURIER_ID,
+        post_ids: ['5', '6'],
+      });
+      expect(counts).toEqual({ waiting: 4, all: 9, cancelled: 3 });
     });
   },
 );

@@ -29,7 +29,7 @@ export const SCAN_ASSIGN_MESSAGES = {
   // Mavjud matn ATAYLAB qayta ishlatiladi (filial kuryeri ham aynan shuni oladi).
   WITH_OTHER_COURIER: 'Order allaqachon boshqa courierga biriktirilgan',
   WRONG_STATUS:
-    "Order holati noto'g'ri: faqat RECEIVED yoki WAITING_CUSTOMER bo'lishi kerak",
+    "Buyurtma holati noto'g'ri: faqat qabul qilingan yoki kutilayotgan buyurtmani olish mumkin",
 } as const;
 
 /** Yakunlangan holatlar — bunday buyurtmani hech bir kuryerga berib bo'lmaydi. */
@@ -104,7 +104,8 @@ const reject = (
  *    (ON_THE_ROAD, boshqa kuryer) yoki boshqa filialda (403).
  * 6. ON_THE_ROAD → faqat shu kuryerning o'zi qayta skanlasa ruxsat.
  * 7. Buyurtma pochtasi boshqa birovga jo'natilgan (SENT) → yo'lda.
- * 8. RECEIVED yoki WAITING_CUSTOMER → ruxsat.
+ * 8. RECEIVED, WAITING yoki WAITING_CUSTOMER → ruxsat (6qypMFeT: WAITING —
+ *    menejerning assign-to-courier yo'li bilan bir xil).
  * 9. Qolgan hamma holat → noto'g'ri holat.
  */
 export function assessHqCourierScan(
@@ -177,6 +178,7 @@ export function assessHqCourierScan(
 
   if (
     status === String(Order_status.RECEIVED) ||
+    status === String(Order_status.WAITING) ||
     status === String(Order_status.WAITING_CUSTOMER)
   ) {
     return null;

@@ -22,6 +22,21 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+### 2026-10-31 — Kuryer skani: ro'yxatda darhol ko'rinadi, `waiting` ham olinadi (6qypMFeT)
+
+Deploy: **api-gateway + order-service + logistics-service**. Migratsiya yo'q.
+
+- [2026-10-31] ✏️ [order] — Kuryer skan bilan o'zi olgan posilka endi `GET /orders/courier/orders` da («Barchasi» va
+  `status=waiting`), `GET /orders/courier/orders/counts` da (`waiting`, `all`) va `GET /region/my/district-stats` da
+  darhol chiqadi. Qator holati `on the road` qoladi: sotish va bekor qilish avvalgidek pochta qabulidan keyin
+  (`waiting`). Menejer biriktirgan, hali qabul qilinmagan pochta yashirin qoladi. Bosh sahifa va `status-counts`
+  uni avvaldan sanaydi.
+- [2026-10-31] ✏️ [logistics] — `POST /orders/scan-assign` endi `waiting` buyurtmani ham qabul qiladi
+  (`assign-to-courier` bilan bir xil). O'z `waiting` buyurtmasini qayta skanlash — `idempotent: true`, holat o'zgarmaydi.
+  Boshqa kuryer qo'lidagi posilka (`holder_courier_id`) — 400. Noto'g'ri holat xatosi o'zbekcha.
+- [2026-10-31] 🔧 [frontend, ixtiyoriy] — «Kutilayotgan» tabida `on the road` qator keladi: «Sotish» / «Bekor qilish»
+  (`ACTIVE_STATUSES`) bosilsa backend 400 qaytaradi. Bu qatorda tugma o'rniga «Pochtani qabul qiling» ko'rsatish mumkin.
+
 ### 2026-10-31 — BOT-3d A: Telegram bot javob kafolati
 
 Deploy: **api-gateway + notification-service**. Migratsiya yo'q.

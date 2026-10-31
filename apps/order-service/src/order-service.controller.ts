@@ -292,6 +292,7 @@ export class OrderServiceController {
         post_id?: string;
         post_ids?: string[];
         exclude_statuses?: Order_status[];
+        scan_taken_courier_id?: string;
         canceled_post_id?: string;
         canceled_post_unassigned?: boolean;
         holder_type?: OrderHolderType;
