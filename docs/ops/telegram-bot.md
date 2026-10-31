@@ -68,9 +68,10 @@ marketniki — yo'q); admin o'chirgan (`manual`) yoki sababsiz qator — faqat a
 iste'molchida `update_id` bo'yicha tashlanadi (`telegram_rate_limits`
 `upd:<id>`, 1 kun). Update ikki marta xato bersa shaxsiy chatga «⚠️ Xatolik yuz
 berdi» (guruhga yo'q). identity javob bermasa «⚠️ Tizim vaqtincha ishlamayapti»
-(«avval ulang» emas). Handler xatosida bir martalik tugma faqat `retrySafe`
-handler'da qayta ochiladi (deterministik kalit — backend takrorni ushlaydi;
-kuryer «✅ Ha» / «✅ Tugatdim»); qolganlarida tugma yopiq qoladi.
+(«avval ulang» emas); tugma bosilganda ham shu matn callback javobida.
+Chegara: 503 faqat brokerga UZATISH xatosini qoplaydi. Uzatilgan xabar
+persistent emas (navbatda 60 s TTL), DLQ avtomatik qayta o'ynalmaydi — shu
+oraliqda iste'molchi tushsa update yo'qolishi mumkin.
 
 ## 2. Rejimlar (`TELEGRAM_BOT_MODE`, sukut `auto`)
 

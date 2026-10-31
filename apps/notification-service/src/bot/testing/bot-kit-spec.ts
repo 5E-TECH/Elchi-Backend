@@ -276,14 +276,6 @@ export function makeActionsStore(now: () => number = Date.now) {
       action.consumed_at = new Date(now());
       return Promise.resolve(true);
     }),
-    /** (BOT-3d) handler xatosida bir martalik tugma qayta ochiladi. */
-    release: jest.fn((id: string) => {
-      const action = rows.get(id);
-      if (action && action.expires_at.getTime() > now()) {
-        action.consumed_at = null;
-      }
-      return Promise.resolve();
-    }),
     attachMessage: jest.fn((data: string[], messageId: number) => {
       for (const item of data) {
         const action = rows.get(item.slice(2));

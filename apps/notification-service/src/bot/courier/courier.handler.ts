@@ -419,9 +419,6 @@ export class CourierActions {
       {
         action: COURIER_ACTIONS.confirm,
         expiredText: COURIER_LIST_EXPIRED_TEXT,
-        // (BOT-3d) Amal `action_id` kaliti bilan (Idempotency-Key) — qayta
-        // ochilgan «✅ Ha» backend'da ikkinchi amal bermaydi.
-        retrySafe: true,
         handle: privateOnly((ctx, action) => this.onConfirm(ctx, action)),
       },
       {
@@ -439,8 +436,6 @@ export class CourierActions {
       },
       {
         action: COURIER_ACTIONS.proofDone,
-        // `proof:<order>:<n>` kaliti — deterministik.
-        retrySafe: true,
         handle: privateOnly((ctx) => this.onProofDone(ctx)),
       },
       {

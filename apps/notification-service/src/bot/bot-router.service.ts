@@ -314,7 +314,16 @@ export class BotRouterService implements OnModuleDestroy {
     const action = lookup.action;
     const handler = this.actionHandlers.get(action.action);
     if (action.actor_user_id) {
-      const actor = await ctx.actor();
+      // (BOT-3d) identity uzilsa — tugma aylanib qolmasin (guruhda ham javob).
+      const actor = await ctx.actor().catch(async (error: unknown) => {
+        if (error instanceof BotIdentityUnavailableError) {
+          await this.transport.answerCallbackQuery(
+            callback.id,
+            BOT_IDENTITY_UNAVAILABLE_TEXT,
+          );
+        }
+        throw error;
+      });
       if (!actor || actor.user_id !== String(action.actor_user_id)) {
         await this.transport.answerCallbackQuery(
           callback.id,
@@ -349,16 +358,7 @@ export class BotRouterService implements OnModuleDestroy {
         order_id: action.order_id ? String(action.order_id) : null,
       },
     });
-    try {
-      await handler.handle(ctx, action);
-    } catch (error) {
-      // (BOT-3d) Amal bajarilmadi — bir martalik tugma qayta ochiladi, faqat
-      // takrorlash xavfsiz bo'lsa (deterministik kalit, backend dedupe).
-      if (action.one_shot && handler.retrySafe) {
-        await this.actions.release(action.action_id).catch(() => undefined);
-      }
-      throw error;
-    }
+    await handler.handle(ctx, action);
   }
 
   private buildContext(update: TelegramUpdate, chatId: string): BotContext {

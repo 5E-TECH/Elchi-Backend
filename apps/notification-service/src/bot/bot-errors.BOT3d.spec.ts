@@ -22,8 +22,7 @@ import {
  * BOT-3d (NIMA 10–11) — xato jim yutilmaydi:
  *  - update ikki marta xato bersa shaxsiy chatga «⚠️ Xatolik yuz berdi»
  *    (guruhga yo'q);
- *  - handler xatosida bir martalik tugma QAYTA OCHILADI — «✅ Ha» ni qayta
- *    bosish ishlaydi, bir kalit — bitta amal;
+ *  - callback'da identity uzilsa tugma aylanib qolmaydi (javob matni);
  *  - identity javob bermasa «Tizim vaqtincha ishlamayapti» («avval ulang»
  *    EMAS).
  */
@@ -33,7 +32,7 @@ beforeEach(() => {
 });
 afterEach(() => jest.restoreAllMocks());
 
-const flaky = (failures: number, retrySafe = true) => {
+const flaky = (failures: number) => {
   let calls = 0;
   const handle = jest.fn(() => {
     calls += 1;
@@ -43,7 +42,6 @@ const flaky = (failures: number, retrySafe = true) => {
   });
   const handler: BotActionHandler = {
     action: 'test.confirm',
-    retrySafe,
     handle,
   };
   return { handler, handle };
@@ -71,7 +69,21 @@ describe('BOT-3d — handler xatosi: tugma qayta ochiladi, oxirgi xatoda matn', 
       }),
     );
 
-  it('⭐ ikki marta xato — tugma QAYTA OCHIQ, shaxsiy chatga «⚠️ Xatolik yuz berdi»; keyingi bosish ishlaydi (bitta amal)', async () => {
+  it('⭐ ikki marta xato — shaxsiy chatga «⚠️ Xatolik yuz berdi»', async () => {
+    const { handler, handle } = flaky(2);
+    const ctx = setup(handler);
+    const data = await ctx.actions.create({
+      chatId: '44',
+      action: 'test.confirm',
+      actorUserId: '44',
+      oneShot: false,
+    });
+    await press(ctx, data);
+    expect(handle).toHaveBeenCalledTimes(2);
+    expect(sentTexts(ctx)).toEqual([BOT_ERROR_TEXT]);
+  });
+
+  it('bir martalik tugma xatoda YOPIQ qoladi (qayta ochish — B, kalit bilan): amal ikkinchi marta ketmaydi', async () => {
     const { handler, handle } = flaky(2);
     const ctx = setup(handler);
     const data = await ctx.actions.create({
@@ -81,47 +93,8 @@ describe('BOT-3d — handler xatosi: tugma qayta ochiladi, oxirgi xatoda matn', 
       oneShot: true,
     });
     await press(ctx, data);
-    expect(handle).toHaveBeenCalledTimes(2);
-    expect(sentTexts(ctx)).toEqual([BOT_ERROR_TEXT]);
-    const [action] = [...ctx.actions.rows.values()];
-    expect(action.consumed_at).toBeNull();
-    // «✅ Ha» qayta — endi ishlaydi, keyin tugma yopiq.
-    await press(ctx, data);
-    expect(handle).toHaveBeenCalledTimes(3);
-    expect(action.consumed_at).not.toBeNull();
-    await press(ctx, data);
-    expect(handle).toHaveBeenCalledTimes(3);
-  });
-
-  it('bir marta xato — ichki qayta urinish ishlaydi (tugma qayta ochilgani uchun), matn yo`q', async () => {
-    const { handler, handle } = flaky(1);
-    const ctx = setup(handler);
-    const data = await ctx.actions.create({
-      chatId: '44',
-      action: 'test.confirm',
-      actorUserId: '44',
-      oneShot: true,
-    });
-    await press(ctx, data);
-    expect(handle).toHaveBeenCalledTimes(2);
-    expect(sentTexts(ctx)).toEqual([]);
-    expect([...ctx.actions.rows.values()][0].consumed_at).not.toBeNull();
-  });
-
-  it('⭐ retrySafe EMAS (kalitsiz amal) — xatoda tugma YOPIQ qoladi: qisman bajarilgan amal ikkinchi marta ketmaydi', async () => {
-    const { handler, handle } = flaky(2, false);
-    const ctx = setup(handler);
-    const data = await ctx.actions.create({
-      chatId: '44',
-      action: 'test.confirm',
-      actorUserId: '44',
-      oneShot: true,
-    });
-    await press(ctx, data);
-    // Ichki qayta urinish tugmani band ko'radi — handler bir marta.
     expect(handle).toHaveBeenCalledTimes(1);
     expect([...ctx.actions.rows.values()][0].consumed_at).not.toBeNull();
-    expect(ctx.actions.release).not.toHaveBeenCalled();
     await press(ctx, data);
     expect(handle).toHaveBeenCalledTimes(1);
   });
@@ -133,7 +106,7 @@ describe('BOT-3d — handler xatosi: tugma qayta ochiladi, oxirgi xatoda matn', 
       chatId: '-100555',
       action: 'test.confirm',
       actorUserId: '44',
-      oneShot: true,
+      oneShot: false,
     });
     await press(ctx, data, -100555);
     expect(sentTexts(ctx)).toEqual([]);
@@ -149,6 +122,33 @@ describe('BOT-3d — identity ishlamayapti', () => {
     await ctx.router.dispatch('elchi', textUpdate('/ishim', { chatId: 44 }));
     expect(sentTexts(ctx)).toEqual([BOT_IDENTITY_UNAVAILABLE_TEXT]);
     expect(ctx.actors.resolve).toHaveBeenCalledTimes(1);
+  });
+
+  it('⭐ tugma bosilganda identity uzilsa — tugma aylanib qolmaydi (guruhda ham javob)', async () => {
+    const handle = jest.fn(() => Promise.resolve());
+    const ctx = makeRouter({
+      actor: courierActor('44'),
+      actionHandlers: [{ action: 'test.confirm', handle }],
+    });
+    ctx.actors.resolve.mockImplementation(() =>
+      Promise.reject(new BotIdentityUnavailableError(new Error('timeout'))),
+    );
+    const data = await ctx.actions.create({
+      chatId: '-100555',
+      action: 'test.confirm',
+      actorUserId: '44',
+      oneShot: true,
+    });
+    await ctx.router.dispatch(
+      'elchi',
+      callbackUpdate(data, { chatId: -100555, fromId: 44, chatType: 'group' }),
+    );
+    expect(ctx.transport.answerCallbackQuery).toHaveBeenCalledWith(
+      expect.any(String),
+      BOT_IDENTITY_UNAVAILABLE_TEXT,
+    );
+    expect(handle).not.toHaveBeenCalled();
+    expect(sentTexts(ctx)).toEqual([]);
   });
 });
 

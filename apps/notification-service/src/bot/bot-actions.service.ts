@@ -102,23 +102,6 @@ export class BotActionsService {
     return (result.affected ?? 0) > 0;
   }
 
-  /**
-   * (BOT-3d) Handler xato berdi — bir martalik tugma qayta ochiladi (amal
-   * bajarilmagan; «✅ Ha» ni qayta bosish ishlaydi). Muddati o'tgan tugma
-   * ochilmaydi.
-   */
-  async release(actionId: string): Promise<void> {
-    await this.actions
-      .createQueryBuilder()
-      .update(TelegramBotAction)
-      .set({ consumed_at: null })
-      .where('action_id = :actionId AND expires_at > :now', {
-        actionId,
-        now: this.now(),
-      })
-      .execute();
-  }
-
   /** Tugmalar yuborilgan xabar id'si (keyin tahrirlash uchun). */
   async attachMessage(callbackData: string[], messageId: number | string) {
     const ids = callbackData
