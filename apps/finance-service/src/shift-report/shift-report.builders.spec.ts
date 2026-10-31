@@ -126,9 +126,13 @@ describe('gWI4gYkw — smena hisoboti xabarlari', () => {
     expect(text).not.toContain('601');
     expect(text).not.toContain('Ali');
     expect(message.group_text).toContain('<b>');
+    // Guruh xabari — bosh sahifa: guruhdagi operator /cash-box da 403 olardi.
     expect(message.group_text).toContain(
-      '<a href="https://admin.elchipochta.uz/cash-box">Kabinetda ochish</a>',
+      '<a href="https://admin.elchipochta.uz/">Kabinetni ochish</a>',
     );
+    expect(message.group_text).not.toContain('/cash-box');
+    // Kassa havolasi — faqat egasining shaxsiy xabarida.
+    expect(message.link).toBe('/cash-box');
     expect(message.group_text).not.toContain('120 000');
   });
 

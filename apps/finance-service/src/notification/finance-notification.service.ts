@@ -1,3 +1,4 @@
+import { WEB_ROUTES } from '@app/common/telegram/cabinet-links';
 import { Injectable, Logger } from '@nestjs/common';
 import { EntityManager } from 'typeorm';
 import {
@@ -67,8 +68,8 @@ export const COURIER_PAYMENT_ACK_ACTIONS = {
 export type FinanceNotificationType =
   (typeof FINANCE_NOTIFICATION_TYPES)[number];
 
-/** Market / kuryerning o'z kassasi sahifasi (frontend `MyCashboxPage`). */
-export const FINANCE_SELF_CASHBOX_LINK = '/cash-box';
+/** Market / kuryerning o'z kassasi sahifasi — yagona manba `WEB_ROUTES` (PIJN1lGp). */
+export const FINANCE_SELF_CASHBOX_LINK = WEB_ROUTES.cashbox;
 
 /**
  * `market_payment` — marketga pul o'tkazildi (HQ to'lovi yoki kuryerning
