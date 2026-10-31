@@ -13,6 +13,8 @@ export interface BotPruneResult {
   aiDrafts: number;
   /** (BOT-2 #4) 30 kundan eski bog'lash kodlari. */
   linkTokens: number;
+  /** (BOT-3 #4) Yetim karta band qilishlari (yuborilmagan, outbox'da navbati yo'q). */
+  cardClaims: number;
 }
 
 const rowCount = (result: unknown): number => {
@@ -32,7 +34,9 @@ const rowCount = (result: unknown): number => {
  *    qayta yuborish / tahlil uchun 7 kun qoladi);
  *  - `telegram_link_tokens`: 30 kundan eski bog'lash kodlari (BOT-2);
  *  - `notification_dispatch_keys`: 7 kundan eski dispatch dedup kalitlari;
- *  - `telegram_ai_drafts`: `expires_at` (24 soat) o'tgan qoralamalar (PII).
+ *  - `telegram_ai_drafts`: `expires_at` (24 soat) o'tgan qoralamalar (PII);
+ *  - `telegram_order_cards`: 1 soatdan eski `message_id` NULL band qilishlar,
+ *    outbox'da navbati yo'q (jarayon claim va yuborish orasida o'lgan).
  * DELETE idempotent — ko'p replikada ham xavfsiz.
  */
 @Injectable()
@@ -51,6 +55,7 @@ export class BotMaintenanceService {
       dispatchKeys: 0,
       aiDrafts: 0,
       linkTokens: 0,
+      cardClaims: 0,
     };
     // (BOT-2 #4) Har qadam ALOHIDA: bitta jadval xatosi qolgan tozalashni
     // (masalan bog'lash kodlari yoki PII li qoralamalar) to'xtatmasin.
@@ -92,6 +97,17 @@ export class BotMaintenanceService {
         `DELETE FROM "notification_schema"."telegram_link_tokens"
           WHERE "created_at" < now() - interval '30 days'`,
       ],
+      [
+        'cardClaims',
+        `DELETE FROM "notification_schema"."telegram_order_cards" c
+          WHERE c."message_id" IS NULL
+            AND c."updated_at" < now() - interval '1 hour'
+            AND NOT EXISTS (
+                  SELECT 1 FROM "notification_schema"."telegram_outbox" o
+                   WHERE o."card_order_id" = c."order_id"
+                     AND o."chat_id" = c."chat_id"
+                     AND o."status" IN ('pending', 'sending'))`,
+      ],
     ];
     for (const [key, sql] of steps) {
       try {
@@ -104,7 +120,7 @@ export class BotMaintenanceService {
     }
     if (Object.values(result).some((count) => count > 0)) {
       this.logger.log(
-        `telegram bot prune: sessiya ${result.sessions}, tugma ${result.actions}, limit ${result.rateLimits}, outbox ${result.outbox}, dedup ${result.dispatchKeys}, ai-draft ${result.aiDrafts}, ulash kodi ${result.linkTokens}`,
+        `telegram bot prune: sessiya ${result.sessions}, tugma ${result.actions}, limit ${result.rateLimits}, outbox ${result.outbox}, dedup ${result.dispatchKeys}, ai-draft ${result.aiDrafts}, ulash kodi ${result.linkTokens}, yetim karta ${result.cardClaims}`,
       );
     }
     return result;

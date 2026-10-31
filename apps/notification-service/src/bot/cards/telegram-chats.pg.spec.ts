@@ -4,6 +4,7 @@ import { TelegramChats1716000000126 } from '../../../../../migrations/1716000000
 import { TelegramChat } from '../../entities/telegram-chat.entity';
 import { TelegramMarket } from '../../entities/telegram-market.entity';
 import { TelegramOrderCard } from '../../entities/telegram-order-card.entity';
+import { TelegramOutbox } from '../../entities/telegram-outbox.entity';
 import { BotChannelService } from '../bot-channel.service';
 import { OrderCardSyncService } from './order-card-sync.service';
 
@@ -62,7 +63,8 @@ const DB = 'elchi_telegram_chats_test';
         type: 'postgres',
         url: urlFor(),
         schema: 'notification_schema',
-        entities: [TelegramMarket, TelegramOrderCard],
+        // (BOT-3 #4) telegram_outbox — yetim band qilishni qayta olish uni o'qiydi.
+        entities: [TelegramMarket, TelegramOrderCard, TelegramOutbox],
       });
       await base.initialize();
       await base.query('DROP SCHEMA IF EXISTS notification_schema CASCADE');

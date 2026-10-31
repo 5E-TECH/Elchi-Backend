@@ -263,6 +263,15 @@ bazasiga o'zi yozmaydi, doira/holat mashinasi/isbot/extra-cost — serverda.
 
 ## 11. Market guruhi kartalari va kartalarni yangilash (ysBqD9Nx, h9newLsd #5)
 
+> BOT-3 #4: karta sinxronining tranzaksiyasi faqat qisqa — buyurtma qulfi,
+> kartalarni o'qish va yangi guruh kartasiga JOY BAND QILISH
+> (`telegram_order_cards.message_id` NULL). Telegram'ga yuborish / tahrir va
+> `order.telegram_card` RPC tranzaksiyadan TASHQARIDA. Karta 429 bilan
+> navbatga tushsa, outbox (`card_order_id`) yuborilganda `message_id` ni
+> o'zi yozadi — keyingi holat hodisasi uni tahrirlaydi; yuborib bo'lmasa
+> band qilish bo'shatiladi. Migratsiya `1716000000191`. notification-service
+> `DB_POOL_MAX=20` (docker-compose.prod.yml).
+>
 > BOT-2: karta faqat guruh `telegram_chats` da hamon FAOL bo'lsa tahrirlanadi
 > (uzilgan / nofaol guruhdagi eski karta yangilanmaydi). Bekor guruhi xabari
 > ham `tg_group_show_customer_pii` ga bo'ysunadi (o'chiq — ism yo'q, telefon

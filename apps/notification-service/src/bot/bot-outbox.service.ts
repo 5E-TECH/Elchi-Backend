@@ -29,6 +29,13 @@ export interface OutboxMessage {
   /** Kim yubordi (`notification.send`, `bot.reply`, …) — kuzatuv uchun. */
   source: string;
   maxAttempts?: number;
+  /**
+   * (BOT-3 #4) Guruh kartasi xabari — qaysi buyurtmaniki. Navbatga tushib
+   * keyin yuborilsa, `telegram_order_cards.message_id` ni outbox o'zi
+   * yozadi (kechikkan karta ham keyingi hodisada tahrirlanadi); dead —
+   * band qilish qatori o'chiriladi.
+   */
+  cardOrderId?: string | null;
 }
 
 export type OutboxSendStatus = 'sent' | 'queued' | 'dead';
@@ -83,6 +90,7 @@ export class BotOutboxService implements OnModuleDestroy {
   private readonly logger = new Logger(BotOutboxService.name);
   private readonly botSlug: string;
   private draining = false;
+  private cardSent?: (orderId: string) => Promise<unknown>;
   private stopped = false;
 
   constructor(
@@ -118,6 +126,7 @@ export class BotOutboxService implements OnModuleDestroy {
       retry_count: 0,
       max_attempts: Math.max(1, message.maxAttempts ?? OUTBOX_MAX_ATTEMPTS),
       source: message.source.slice(0, 48),
+      card_order_id: message.cardOrderId ?? null,
     });
     const id = String(
       (inserted.identifiers[0] as { id?: string } | undefined)?.id ?? '',
@@ -128,6 +137,7 @@ export class BotOutboxService implements OnModuleDestroy {
       payload,
       retry_count: 0,
       max_attempts: Math.max(1, message.maxAttempts ?? OUTBOX_MAX_ATTEMPTS),
+      card_order_id: message.cardOrderId ?? null,
     };
     return this.attempt(row);
   }
@@ -144,6 +154,7 @@ export class BotOutboxService implements OnModuleDestroy {
         payload: Record<string, unknown>;
         retry_count: number;
         max_attempts: number;
+        card_order_id: string | null;
       }> = await this.outbox.query(
         `UPDATE "notification_schema"."telegram_outbox" o
             SET "status" = 'sending', "updated_at" = now()
@@ -154,7 +165,7 @@ export class BotOutboxService implements OnModuleDestroy {
                  ORDER BY "id"
                  LIMIT ${BATCH}
                  FOR UPDATE SKIP LOCKED)
-        RETURNING o."id", o."chat_id", o."payload", o."retry_count", o."max_attempts"`,
+        RETURNING o."id", o."chat_id", o."payload", o."retry_count", o."max_attempts", o."card_order_id"`,
         [STALE_SENDING_MS],
       );
       const rows = Array.isArray(claimed[0])
@@ -181,6 +192,7 @@ export class BotOutboxService implements OnModuleDestroy {
       payload: Record<string, unknown>;
       retry_count: number;
       max_attempts: number;
+      card_order_id?: string | null;
     },
     migratedOnce = false,
   ): Promise<OutboxSendResult> {
@@ -214,6 +226,13 @@ export class BotOutboxService implements OnModuleDestroy {
           payload: {} as never,
         },
       );
+      if (row.card_order_id && result?.message_id) {
+        await this.recordCard(
+          row.card_order_id,
+          row.chat_id,
+          result.message_id,
+        );
+      }
       return { id: row.id, status: 'sent', result, chat_id: row.chat_id };
     } catch (error) {
       const reason = this.transport.describe(error).slice(0, ERROR_MAX);
@@ -292,6 +311,9 @@ export class BotOutboxService implements OnModuleDestroy {
             ),
           );
       }
+      if (dead && row.card_order_id) {
+        await this.releaseCard(row.card_order_id, row.chat_id);
+      }
       if (dead) {
         this.logger.warn(
           `telegram_outbox #${row.id} dead-letter (${retryCount} urinish, chat ${row.chat_id}): ${reason}`,
@@ -304,5 +326,65 @@ export class BotOutboxService implements OnModuleDestroy {
         chat_id: row.chat_id,
       };
     }
+  }
+
+  /**
+   * (BOT-3 #4) Karta yuborilgach chaqiriladi (`OrderCardSyncService`):
+   * navbatda turganda holat o'zgargan bo'lsa (`resync_pending`) karta
+   * oxirgi holatga qayta sinxronlanadi. Kutilmaydi — buyurtma navbati
+   * (sync ichidagi darhol yuborish) o'zini kutib qolmasin.
+   */
+  onCardSent(listener: (orderId: string) => Promise<unknown>): void {
+    this.cardSent = listener;
+  }
+
+  /** (BOT-3 #4) Kechikib yuborilgan guruh kartasi — message_id yoziladi. */
+  private async recordCard(
+    orderId: string,
+    chatId: string,
+    messageId: number,
+  ): Promise<void> {
+    try {
+      const updated: unknown = await this.outbox.query(
+        `UPDATE "notification_schema"."telegram_order_cards"
+            SET "message_id" = $3, "updated_at" = now()
+          WHERE "order_id" = $1 AND "chat_id" = $2 AND "message_id" IS NULL
+        RETURNING "resync_pending"`,
+        [orderId, chatId, String(messageId)],
+      );
+      const rows = (
+        Array.isArray(updated) && Array.isArray(updated[0])
+          ? updated[0]
+          : Array.isArray(updated)
+            ? updated
+            : []
+      ) as Array<{ resync_pending?: boolean }>;
+      if (rows[0]?.resync_pending && this.cardSent) {
+        void this.cardSent(orderId).catch((error: unknown) =>
+          this.logger.warn(
+            `karta #${orderId} qayta sinxronlanmadi: ${this.transport.describe(error)}`,
+          ),
+        );
+      }
+    } catch (error) {
+      this.logger.warn(
+        `karta #${orderId} message_id yozilmadi: ${this.transport.describe(error)}`,
+      );
+    }
+  }
+
+  /** (BOT-3 #4) Yuborib bo'lmagan karta — band qilish bo'shatiladi. */
+  private async releaseCard(orderId: string, chatId: string): Promise<void> {
+    await this.outbox
+      .query(
+        `DELETE FROM "notification_schema"."telegram_order_cards"
+          WHERE "order_id" = $1 AND "chat_id" = $2 AND "message_id" IS NULL`,
+        [orderId, chatId],
+      )
+      .catch((error: unknown) =>
+        this.logger.warn(
+          `karta #${orderId} band qilishi bo'shatilmadi (tozalovchi o'chiradi): ${this.transport.describe(error)}`,
+        ),
+      );
   }
 }

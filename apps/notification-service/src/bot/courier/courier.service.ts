@@ -220,7 +220,8 @@ export class CourierService {
     const card = await this.cards.findOne({
       where: { order_id: orderId, chat_id: ctx.chatId },
     });
-    if (!card) return;
+    if (!card?.message_id) return;
+    const messageId = card.message_id;
     const order = await this.getOrder(telegramId, orderId).catch(
       (error: unknown) => {
         rethrowPasswordChange(error);
@@ -231,7 +232,7 @@ export class CourierService {
     const keyboard = note
       ? []
       : await this.cardKeyboard(ctx, order, actorUserId);
-    await this.transport.editMessage(ctx.chatId, card.message_id, {
+    await this.transport.editMessage(ctx.chatId, messageId, {
       text: courierCardText(order, note),
       parse_mode: 'HTML',
       reply_markup: { inline_keyboard: keyboard },
@@ -257,7 +258,9 @@ export class CourierService {
     const card = await this.cards.findOne({
       where: { order_id: orderId, chat_id: chatId },
     });
-    if (!card || !actorUserId) return 'skipped';
+    // (BOT-3 #4) message_id'siz qator — faqat guruh kartasi «yuborilmoqda».
+    if (!card?.message_id || !actorUserId) return 'skipped';
+    const messageId = card.message_id;
     let res: { status: number; body: unknown };
     try {
       res = await this.gateway.request<unknown>(
@@ -270,7 +273,7 @@ export class CourierService {
       return 'skipped';
     }
     if (res.status === 403 || res.status === 404) {
-      await this.transport.editMessage(chatId, card.message_id, {
+      await this.transport.editMessage(chatId, messageId, {
         text: `📦 <b>#${escapeTelegramHtml(orderId)}</b>\n${ORDER_NOT_YOURS_NOTE}`,
         parse_mode: 'HTML',
         reply_markup: { inline_keyboard: [] },
@@ -288,7 +291,7 @@ export class CourierService {
     );
     if (!order) return 'skipped';
     const keyboard = await this.cardKeyboard({ chatId }, order, actorUserId);
-    await this.transport.editMessage(chatId, card.message_id, {
+    await this.transport.editMessage(chatId, messageId, {
       text: courierCardText(order),
       parse_mode: 'HTML',
       reply_markup: { inline_keyboard: keyboard },

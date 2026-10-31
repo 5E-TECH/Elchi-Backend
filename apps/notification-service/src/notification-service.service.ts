@@ -75,11 +75,6 @@ const MANUAL_GROUP_EDIT_FORBIDDEN_MESSAGE =
   "Faqat is_active o'zgartiriladi. Guruhni almashtirish uchun ulanishni o'chirib, bir martalik bot havolasi orqali qayta ulang.";
 
 /**
- * (bOMYoOtV) Telegram ulanishining o'qiladigan ustunlari. Bot TOKENI bazada
- * UMUMAN yo'q (faqat env); `connect_token_hash` — `select: false`, bu yerda
- * tanlanmaydi.
- */
-/**
  * (BOT-3 #6) Market kod bilan o'zi qayta ulay oladigan nofaollik sabablari
  * (Telegram tomonida yuz bergan). `manual` (admin) va NULL — yo'q.
  */
@@ -90,6 +85,11 @@ const RECONNECTABLE_INACTIVE_REASONS = new Set([
   'chat_not_found',
 ]);
 
+/**
+ * (bOMYoOtV) Telegram ulanishining o'qiladigan ustunlari. Bot TOKENI bazada
+ * UMUMAN yo'q (faqat env); `connect_token_hash` — `select: false`, bu yerda
+ * tanlanmaydi.
+ */
 const TG_MARKET_SELECT: FindOptionsSelect<TelegramMarket> = {
   id: true,
   createdAt: true,

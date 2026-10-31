@@ -6,6 +6,8 @@ import { TelegramChats1716000000126 } from '../../../../migrations/1716000000126
 import { TelegramOrderCards1716000000122 } from '../../../../migrations/1716000000122-TelegramOrderCards';
 import { TelegramAiDrafts1716000000128 } from '../../../../migrations/1716000000128-TelegramAiDrafts';
 import { TelegramChatLocksAiWorker1716000000190 } from '../../../../migrations/1716000000190-TelegramChatLocksAiWorker';
+import { TelegramOrderCards1716000000122 } from '../../../../migrations/1716000000122-TelegramOrderCards';
+import { TelegramOrderCardsPending1716000000191 } from '../../../../migrations/1716000000191-TelegramOrderCardsPending';
 import { TelegramBotAction } from '../entities/telegram-bot-action.entity';
 import { TelegramMarket } from '../entities/telegram-market.entity';
 import { TelegramOutbox } from '../entities/telegram-outbox.entity';
@@ -18,6 +20,10 @@ import { BotOutboxService } from './bot-outbox.service';
 import { BotRateLimiterService } from './bot-rate-limiter.service';
 import { BotSessionService } from './bot-session.service';
 import { ChatSequencer } from './chat-sequencer';
+import { OrderCardSyncService } from './cards/order-card-sync.service';
+import { TelegramChat } from '../entities/telegram-chat.entity';
+import { TelegramOrderCard } from '../entities/telegram-order-card.entity';
+import { of } from 'rxjs';
 import { TelegramAiDraft } from '../entities/telegram-ai-draft.entity';
 import { AI_STALE_TEXT, AiOrderService } from './ai-order/ai-order.service';
 import {
@@ -84,6 +90,8 @@ const migration = new TelegramBotCore1716000000120();
           TelegramOutbox,
           TelegramMarket,
           TelegramAiDraft,
+          TelegramChat,
+          TelegramOrderCard,
         ],
         extra: { max: 10 },
       });
@@ -118,6 +126,10 @@ const migration = new TelegramBotCore1716000000120();
         await new TelegramAiDrafts1716000000128().up(reasonRunner);
         await new TelegramChatLocksAiWorker1716000000190().up(reasonRunner);
         await new TelegramChatLocksAiWorker1716000000190().up(reasonRunner);
+        // (BOT-3 #4) karta band qilish + outbox.card_order_id (ikki marta).
+        await new TelegramOrderCards1716000000122().up(reasonRunner);
+        await new TelegramOrderCardsPending1716000000191().up(reasonRunner);
+        await new TelegramOrderCardsPending1716000000191().up(reasonRunner);
       } finally {
         await reasonRunner.release();
       }
@@ -357,6 +369,17 @@ const migration = new TelegramBotCore1716000000120();
     });
 
     describe('telegram_outbox worker (9HIaV80X #3)', () => {
+      // 120-migratsiyaning down→up testi telegram_outbox ni qayta yaratadi —
+      // BOT-3 #4 ustuni (card_order_id) qayta qo'shiladi.
+      beforeAll(async () => {
+        const runner = db.createQueryRunner();
+        try {
+          await new TelegramOrderCardsPending1716000000191().up(runner);
+        } finally {
+          await runner.release();
+        }
+      });
+
       it('⭐ 429 → pending (retry_count++), worker keyin yuboradi → sent', async () => {
         await db.query(`DELETE FROM notification_schema.telegram_outbox`);
         const fetchMock = makeFetch();
@@ -405,6 +428,50 @@ const migration = new TelegramBotCore1716000000120();
         // (BOT-2 #4) yuborilgan xabar matni bazada qolmaydi.
         expect(row.payload).toEqual({});
         expect(fetchMock).toHaveBeenCalledTimes(2);
+      });
+
+      it('⭐ BOT-3 #4: navbatga tushgan guruh kartasi keyin yuborilsa — message_id kartaga yoziladi', async () => {
+        await db.query(`DELETE FROM notification_schema.telegram_outbox`);
+        await db.query(`
+          INSERT INTO notification_schema.telegram_order_cards
+            (order_id, chat_id, message_id, kind)
+          VALUES (81, '-100555', NULL, 'group')`);
+        const fetchMock = makeFetch();
+        fetchMock.mockResolvedValueOnce(
+          telegramResponse(429, {
+            ok: false,
+            description: 'Too Many Requests: retry after 1',
+            parameters: { retry_after: 1 },
+          }),
+        );
+        const env = {
+          TELEGRAM_BOT_TOKEN: '1234567890:ENV_TOKEN_aaaaaaaaaaaaaaaaaaaaaaaaa',
+        };
+        const outbox = new BotOutboxService(
+          db.getRepository(TelegramOutbox),
+          makeTransport(fetchMock, env),
+          makeChannels() as never,
+          {
+            get: (key: string) => (env as Record<string, unknown>)[key],
+          } as never,
+        );
+        const first = await outbox.send({
+          chatId: '-100555',
+          text: 'karta',
+          source: 'bot.group_card',
+          cardOrderId: '81',
+        });
+        expect(first.status).toBe('queued');
+        await db.query(
+          `UPDATE notification_schema.telegram_outbox SET next_attempt_at = now()`,
+        );
+        fetchMock.mockResolvedValueOnce(okResponse());
+        expect(await outbox.processDue()).toBe(1);
+        const [card]: Array<{ message_id: string | null }> = await db.query(
+          `SELECT message_id FROM notification_schema.telegram_order_cards
+            WHERE order_id = 81 AND chat_id = '-100555'`,
+        );
+        expect(card.message_id).not.toBeNull();
       });
     });
 
@@ -629,6 +696,241 @@ const migration = new TelegramBotCore1716000000120();
             `SELECT is_active, inactive_reason FROM notification_schema.telegram_markets WHERE market_id = 15`,
           );
         expect(row).toEqual({ is_active: false, inactive_reason: 'kicked' });
+      });
+    });
+
+    describe('BOT-3 #4 — karta band qilish (OrderCardSyncService, haqiqiy SQL)', () => {
+      const cardFor = (orderId: string, status = 'new') => ({
+        id: orderId,
+        order_number: `EL-${orderId}`,
+        market_id: '11',
+        status,
+        total_price: 1000,
+        district_name: 'Asaka',
+        operator: null,
+        show_customer_pii: false,
+        customer_name: null,
+        customer_phone: null,
+      });
+      const make = (
+        fetchMock = makeFetch(),
+        status = 'new',
+        channels: unknown = makeChannels(),
+      ) => {
+        const env = {
+          TELEGRAM_BOT_TOKEN: '1234567890:ENV_TOKEN_aaaaaaaaaaaaaaaaaaaaaaaaa',
+        };
+        const transport = makeTransport(fetchMock, env);
+        const outbox = new BotOutboxService(
+          db.getRepository(TelegramOutbox),
+          transport,
+          channels as never,
+          {
+            get: (key: string) => (env as Record<string, unknown>)[key],
+          } as never,
+        );
+        const current = { status };
+        const orders = {
+          send: jest.fn((_p: unknown, payload: { order_id: string }) =>
+            of({ data: cardFor(payload.order_id, current.status) }),
+          ),
+        };
+        const sync = new OrderCardSyncService(
+          db,
+          orders as never,
+          outbox,
+          transport,
+          { refreshCardForChat: jest.fn() } as never,
+          { log: jest.fn().mockResolvedValue(undefined) } as never,
+          { get: () => undefined } as never,
+        );
+        sync.onModuleInit();
+        return { sync, outbox, fetchMock, current };
+      };
+      const creation = (orderId: string) => ({
+        order_id: orderId,
+        from_status: 'created',
+        to_status: 'new',
+        market_id: '11',
+      });
+      const cardRow = async (orderId: string) => {
+        const rows: Array<{
+          message_id: string | null;
+          resync_pending: boolean;
+          status: string | null;
+        }> = await db.query(
+          `SELECT message_id, resync_pending, status
+             FROM notification_schema.telegram_order_cards
+            WHERE order_id = $1 AND chat_id = '-100111'`,
+          [orderId],
+        );
+        return rows[0];
+      };
+      const rateLimited = () =>
+        telegramResponse(429, {
+          ok: false,
+          description: 'Too Many Requests: retry after 1',
+          parameters: { retry_after: 1 },
+        });
+      const due = () =>
+        db.query(
+          `UPDATE notification_schema.telegram_outbox SET next_attempt_at = now()`,
+        );
+
+      beforeAll(async () => {
+        const runner = db.createQueryRunner();
+        try {
+          await new TelegramChats1716000000126().up(runner);
+        } finally {
+          await runner.release();
+        }
+        // Trigger telegram_chats ga ham yozadi (market 11, create guruhi).
+        await db.query(`
+          INSERT INTO notification_schema.telegram_markets (market_id, group_id, group_type)
+          VALUES (11, '-100111', 'create')`);
+      });
+      beforeEach(async () => {
+        await db.query(`DELETE FROM notification_schema.telegram_outbox`);
+      });
+
+      it('⭐ band qilish → 429 navbatda → worker 400 (dead) — band qilish qatori o`chadi', async () => {
+        const fetchMock = makeFetch();
+        fetchMock.mockResolvedValueOnce(rateLimited()).mockResolvedValueOnce(
+          telegramResponse(400, {
+            ok: false,
+            description: 'Bad Request: chat not found',
+          }),
+        );
+        const { sync, outbox } = make(fetchMock);
+        await sync.sync(creation('91'));
+        expect(await cardRow('91')).toMatchObject({ message_id: null });
+        await due();
+        expect(await outbox.processDue()).toBe(1);
+        expect(await cardRow('91')).toBeUndefined();
+      });
+
+      it('⭐ navbatda turganda holat o`zgardi — resync_pending; worker yuborgach karta OXIRGI holatga tahrirlanadi', async () => {
+        const fetchMock = makeFetch();
+        fetchMock.mockResolvedValueOnce(rateLimited());
+        const { sync, outbox, current } = make(fetchMock);
+        await sync.sync(creation('92'));
+        current.status = 'sold';
+        await sync.sync({
+          order_id: '92',
+          from_status: 'new',
+          to_status: 'sold',
+        });
+        expect(await cardRow('92')).toMatchObject({
+          message_id: null,
+          resync_pending: true,
+        });
+        await due();
+        expect(await outbox.processDue()).toBe(1);
+        // onCardSent → resync (fonda) — kutib turamiz.
+        for (let i = 0; i < 50; i += 1) {
+          const row = await cardRow('92');
+          if (row?.status === 'sold' && !row.resync_pending) break;
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        }
+        expect(await cardRow('92')).toMatchObject({
+          status: 'sold',
+          resync_pending: false,
+        });
+        const methods = fetchMock.mock.calls.map(([url]) =>
+          String(url).split('/').pop(),
+        );
+        expect(methods).toEqual([
+          'sendMessage',
+          'sendMessage',
+          'editMessageText',
+        ]);
+      });
+
+      it('⭐ yetim band qilish (5 daqiqadan eski, outbox navbati yo`q) qayta olinadi; yangisi olinmaydi', async () => {
+        await db.query(`
+          INSERT INTO notification_schema.telegram_order_cards
+            (order_id, chat_id, message_id, kind, updated_at)
+          VALUES (93, '-100111', NULL, 'group', now() - interval '10 minutes'),
+                 (94, '-100111', NULL, 'group', now())`);
+        const { sync, fetchMock } = make();
+        expect((await sync.sync(creation('93'))).sent).toBe(1);
+        expect((await cardRow('93'))?.message_id).not.toBeNull();
+        expect((await sync.sync(creation('94'))).sent).toBe(0);
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+      });
+
+      it('⭐ eski band qilish, lekin outbox`da navbati BOR (pending) — qayta olinmaydi, ikkinchi karta yuborilmaydi', async () => {
+        await db.query(`
+          INSERT INTO notification_schema.telegram_order_cards
+            (order_id, chat_id, message_id, kind, updated_at)
+          VALUES (97, '-100111', NULL, 'group', now() - interval '10 minutes')`);
+        await db.query(`
+          INSERT INTO notification_schema.telegram_outbox
+            (bot_slug, chat_id, payload, status, card_order_id, next_attempt_at)
+          VALUES ('elchi', '-100111', '{"text":"k"}', 'pending', 97, now() + interval '1 hour')`);
+        const { sync, fetchMock } = make();
+        expect((await sync.sync(creation('97'))).sent).toBe(0);
+        expect(fetchMock).not.toHaveBeenCalled();
+        expect(await cardRow('97')).toMatchObject({ message_id: null });
+      });
+
+      it('⭐ #599: yuborilmagan karta (band qilish) supergroup migratsiyasiga uriladi — message_id YANGI chat ostida, takror yaratish hodisasi hech narsa yubormaydi', async () => {
+        await db.query(`
+          INSERT INTO notification_schema.telegram_markets (market_id, group_id, group_type)
+          VALUES (16, '-100160', 'create')`);
+        const fetchMock = makeFetch();
+        fetchMock
+          .mockResolvedValueOnce(
+            telegramResponse(400, {
+              ok: false,
+              description:
+                'Bad Request: group chat was upgraded to a supergroup chat',
+              parameters: { migrate_to_chat_id: -1001609 },
+            }),
+          )
+          .mockResolvedValue(okResponse({ message_id: 5151 }));
+        const channels = new BotChannelService(
+          db.getRepository(TelegramMarket),
+          {} as never,
+          { log: jest.fn().mockResolvedValue(undefined) } as never,
+          {} as never,
+        );
+        const { sync } = make(fetchMock, 'new', channels);
+        const event = {
+          order_id: '98',
+          from_status: 'created',
+          to_status: 'new',
+          market_id: '16',
+        };
+        expect((await sync.sync(event)).sent).toBe(1);
+        const cards: Array<{ chat_id: string; message_id: string | null }> =
+          await db.query(
+            `SELECT chat_id, message_id FROM notification_schema.telegram_order_cards
+              WHERE order_id = 98`,
+          );
+        expect(cards).toEqual([{ chat_id: '-1001609', message_id: '5151' }]);
+        // Takror yaratish hodisasi (telegram_chats ham yangi id'da) — yuborilmaydi.
+        expect((await sync.sync(event)).sent).toBe(0);
+        const sends = fetchMock.mock.calls.filter(([url]) =>
+          String(url).endsWith('/sendMessage'),
+        );
+        expect(sends).toHaveLength(2);
+      });
+
+      it('tozalovchi: 1 soatdan eski yetim band qilish o`chadi, outbox navbatidagisi qoladi', async () => {
+        await db.query(`
+          INSERT INTO notification_schema.telegram_order_cards
+            (order_id, chat_id, message_id, kind, updated_at)
+          VALUES (95, '-100111', NULL, 'group', now() - interval '2 hours'),
+                 (96, '-100111', NULL, 'group', now() - interval '2 hours')`);
+        await db.query(`
+          INSERT INTO notification_schema.telegram_outbox
+            (bot_slug, chat_id, payload, status, card_order_id)
+          VALUES ('elchi', '-100111', '{"text":"k"}', 'pending', 96)`);
+        const result = await new BotMaintenanceService(db).prune();
+        expect(result.cardClaims).toBe(1);
+        expect(await cardRow('95')).toBeUndefined();
+        expect(await cardRow('96')).toBeDefined();
       });
     });
 
