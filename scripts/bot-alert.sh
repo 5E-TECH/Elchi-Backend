@@ -105,8 +105,14 @@ cfg() {
   esac
   printf '%s' "$v"
 }
-# Decimal integer or the default ("08" is 8, not an octal error under set -u).
-num() { case "$1" in '' | *[!0-9]*) printf '%s' "$2" ;; *) printf '%s' "$((10#$1))" ;; esac; }
+# Decimal integer or the default ("08" is 8, not an octal error under set -u). More than 15
+# digits is capped (bash arithmetic would wrap to a negative number).
+num() {
+  case "$1" in
+    '' | *[!0-9]*) printf '%s' "$2" ;;
+    *) if [ "${#1}" -gt 15 ]; then printf '999999999999999'; else printf '%s' "$((10#$1))"; fi ;;
+  esac
+}
 lower() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
 
 HOST_LABEL="${BOT_ALERT_HOST_LABEL:-$(cfg BOT_ALERT_HOST_LABEL)}"
@@ -115,9 +121,9 @@ TG_API="${BOT_ALERT_TELEGRAM_API:-$(cfg BOT_ALERT_TELEGRAM_API)}"
 TG_API="${TG_API:-https://api.telegram.org}"
 CMD_TIMEOUT="$(num "${BOT_ALERT_CMD_TIMEOUT:-$(cfg BOT_ALERT_CMD_TIMEOUT)}" 30)"
 RESTART_WINDOW_MIN="$(num "$(cfg BOT_ALERT_RESTART_WINDOW_MIN)" 30)"
-if [ "$RESTART_WINDOW_MIN" -eq 0 ]; then
-  # 0 would silently disable crash-loop detection.
-  log "WARN: BOT_ALERT_RESTART_WINDOW_MIN=0 rad etildi — 30 ishlatiladi"
+if [ "$RESTART_WINDOW_MIN" -eq 0 ] || [ "$RESTART_WINDOW_MIN" -gt 10080 ]; then
+  # 0 would silently disable crash-loop detection; a huge value overflows the arithmetic.
+  log "WARN: BOT_ALERT_RESTART_WINDOW_MIN=$RESTART_WINDOW_MIN rad etildi (1..10080) — 30 ishlatiladi"
   RESTART_WINDOW_MIN=30
 fi
 RESTART_WINDOW_S=$((RESTART_WINDOW_MIN * 60))
@@ -125,9 +131,10 @@ RESTART_WINDOW_S=$((RESTART_WINDOW_MIN * 60))
 # with a period equal to the window is still caught.
 CRON_SLACK_S=300
 FLAP_WINDOW_MIN="$(num "$(cfg BOT_ALERT_FLAP_WINDOW_MIN)" 60)"
-if [ "$FLAP_WINDOW_MIN" -lt 10 ]; then
-  # < 10 would silently disable the flapping protection (one cron interval is 5 min).
-  log "WARN: BOT_ALERT_FLAP_WINDOW_MIN=$FLAP_WINDOW_MIN rad etildi (kamida 10) — 60 ishlatiladi"
+if [ "$FLAP_WINDOW_MIN" -lt 10 ] || [ "$FLAP_WINDOW_MIN" -gt 10080 ]; then
+  # < 10 would silently disable the flapping protection (one cron interval is 5 min); a
+  # huge value overflows the arithmetic.
+  log "WARN: BOT_ALERT_FLAP_WINDOW_MIN=$FLAP_WINDOW_MIN rad etildi (10..10080) — 60 ishlatiladi"
   FLAP_WINDOW_MIN=60
 fi
 FLAP_WINDOW_S=$((FLAP_WINDOW_MIN * 60))
@@ -449,9 +456,10 @@ for c in ${PREV_SIG//,/ }; do
   [ "$c" = ok ] && continue
   if [ "$c" = unstable ]; then
     recent_any && add_active unstable
-  elif recent "$c" && { has "$R1" "$c" || has "$R2" "$c" || has "$R3" "$c"; }; then
-    # Failing now after >= 3 clean runs (possible only while HOLD/FLAP kept it in SIG):
-    # it has left — a fresh failure goes through the join rule (debounce) below.
+  elif recent "$c" && has "$ALERTED" "$c" && { has "$R1" "$c" || has "$R2" "$c" || has "$R3" "$c"; }; then
+    # Not sticky any more when it failed now after >= 3 clean runs, or when it already left
+    # ALERTED (HOLD keeps a long-clean code in SIG for display only): its next failure goes
+    # through the join rule (debounce) below and is a new alert.
     add_active "$c"
   fi
 done
@@ -564,9 +572,8 @@ fi
 ALERTED_IN="$ALERTED"
 FLAP_IN="$FLAP"
 if [ "$CUR" = problem ]; then
-  ALERTED="$(printf '%s,%s' "$ALERTED" "$(minus "$SIG" ok)" | csv_sort)"
-  # HOLD re-adds the previous codes to SIG: drop the long-clean ones again.
-  prune_alerted
+  # HOLD only re-shows the previous set: it must not re-arm codes that already left ALERTED.
+  [ "$HOLD" = true ] || ALERTED="$(printf '%s,%s' "$ALERTED" "$(minus "$SIG" ok)" | csv_sort)"
   if [ "$PREV" != problem ]; then
     FLAP=""
     [ -n "$PREV_RECOVERED_AT" ] && [ $((NOW - PREV_RECOVERED_AT)) -lt "$FLAP_WINDOW_S" ] && FLAP=1

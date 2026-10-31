@@ -821,6 +821,18 @@ describe('bot-alert.sh (zDUUxyH2)', () => {
         '.A.............A....',
         {},
       ],
+      [
+        'G1/HOLD) AAoDoBoDoBAAAAAAoo — hodisa tasdiqlanmagan shovqin bilan HOLDda, ns ≥ 4 toza yugurishdan keyin yana yiqilsa — alert',
+        () => [...'AAoDoBoDoBAAAAAAoo'].map(seq),
+        '.A.........A.....R',
+        {},
+      ],
+      [
+        'G1/HOLD) AAoDoBAAAAAAoo — aniq 4 toza yugurishdan keyin qayta buzilish — alert',
+        () => [...'AAoDoBAAAAAAoo'].map(seq),
+        '.A.....A.....R',
+        {},
+      ],
     ])('%s', (_label, steps, expected, extra) => {
       if (Object.keys(extra).length) {
         writeConf(
@@ -874,6 +886,20 @@ describe('bot-alert.sh (zDUUxyH2)', () => {
         /ns_unhealthy: tiklangan, boshqa tekshiruvlar hali beqaror/,
       );
       expect(out).toMatch(/Hali tasdiqlanmagan: token_invalid/);
+    });
+    it('#609-3) ulkan qiymat (200000000000000000) — toshib ketmaydi: WARN + sukut', () => {
+      writeConf(
+        `BOT_ALERT_TELEGRAM_CHAT_ID=42\nBOT_ALERT_TELEGRAM_BOT_TOKEN=${ALERT_TOKEN}\nBOT_ALERT_FLAP_WINDOW_MIN=200000000000000000\nBOT_ALERT_RESTART_WINDOW_MIN=200000000000000000\n`,
+      );
+      expect(
+        simulate(
+          Array.from({ length: 12 }, (_, k) => (k % 4 < 2 ? () => A : ok)),
+        ),
+      ).toBe('.A.R.A......');
+      expect(logText()).toMatch(/FLAP_WINDOW_MIN=999999999999999 rad etildi/);
+      expect(logText()).toMatch(
+        /RESTART_WINDOW_MIN=999999999999999 rad etildi/,
+      );
     });
     it('#609-3) BOT_ALERT_FLAP_WINDOW_MIN=0 — rad etiladi (ogohlantirish), 60 ishlatiladi', () => {
       writeConf(
