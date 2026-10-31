@@ -31,6 +31,13 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 → Frontend: o'zgarish shart emas. Ishlatilsa — **har amal + buyurtma + tana uchun noyob kalit** (masalan har tasdiqlangan amalga yangi UUID); faqat ayni so'rovni qayta yuborishda kalit takrorlanadi. 422 → yangi kalit bilan yuboring; 409 → biroz kutib holatni yangilang.
 
+### 2026-10-31 — BOT-3d A: Telegram bot javob kafolati
+
+Deploy: **api-gateway + notification-service**. Migratsiya yo'q.
+
+- [2026-10-31] 🟢 [notification] — Telegram webhook RMQ ishlamasa 503 (Telegram qayta yuboradi, takror update bir marta
+  ishlanadi); botda ikki marta xato / identity ishlamasa aniq o'zbekcha matn. FE o'zgarishi shart emas.
+
 ### 2026-10-31 — Kuryer ro'yxati: `where_deliver` filtri (yKtzKXeM)
 
 `GET /orders/courier/orders?where_deliver=center|address` endi qabul qilinadi (kuryer, menejer, filial, bekor qilinganlar tabi). Berilmasa hammasi; noma'lum qiymat 400. Deploy: api-gateway.
