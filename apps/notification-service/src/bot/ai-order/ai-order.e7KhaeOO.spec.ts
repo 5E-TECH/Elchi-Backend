@@ -339,7 +339,7 @@ describe('e7KhaeOO — matn → AI preview (mavjud endpoint, operator JWT)', () 
       [
         {
           text: '🌐 Kabinetda yaratish',
-          url: 'https://admin.elchi.test/orders/create',
+          url: 'https://admin.elchi.test/new-orders/create',
         },
       ],
     ]);

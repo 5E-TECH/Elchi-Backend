@@ -93,7 +93,7 @@ Holati: <b>Yangi</b>
       [
         {
           text: '🌐 Kabinetda ochish',
-          url: 'https://admin.elchi.test/orders?search=81',
+          url: 'https://admin.elchi.test/orders/edit/81',
         },
       ],
     ]);
@@ -364,7 +364,7 @@ describe('ysBqD9Nx #4 / h9newLsd #5 — karta sinxroni', () => {
             [
               {
                 text: '🌐 Kabinetda ochish',
-                url: 'https://admin.elchi.test/orders?search=81',
+                url: 'https://admin.elchi.test/orders/edit/81',
               },
             ],
           ],

@@ -142,7 +142,7 @@ describe('gWI4gYkw — smena hisoboti xabarlari', () => {
     expect(message.body).toContain("Kuryerlar: 2 ta, 700 000 so'm");
     expect(message.body.length).toBeLessThanOrEqual(900);
     expect(message.data.telegram_media).toEqual(['shift-report-1.pdf']);
-    expect(message.link).toBe('/payments/shift-report/77');
+    expect(message.link).toBe('/payments/shifts/77');
   });
 
   it("yetkazish holati: Telegram ulanmagan / yuborildi / guruh yo'q", () => {

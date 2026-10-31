@@ -10,6 +10,7 @@ import { ClientProxy, RpcException } from '@nestjs/microservices';
 import { InjectRepository } from '@nestjs/typeorm';
 import { EntityManager, Repository } from 'typeorm';
 import {
+  cabinetBaseUrl,
   NotificationChannel,
   NotificationDeliveryStatus,
   OutboxService,
@@ -424,11 +425,8 @@ export class TelegramDmService {
     if (data?.telegram_cabinet_link !== true) return null;
     const path = typeof link === 'string' ? link.trim() : '';
     if (!/^\/[\w\-./?=&%]*$/.test(path)) return null;
-    const base = (
-      this.config.get<string>('ELCHI_CABINET_URL') ??
-      'https://admin.elchipochta.uz'
-    ).replace(/\/+$/, '');
-    if (!/^https:\/\//.test(base)) return null;
+    // (PIJN1lGp) panel manzili — yagona manba (`cabinetBaseUrl`, faqat https).
+    const base = cabinetBaseUrl(this.config.get<string>('ELCHI_CABINET_URL'));
     return { text: '🌐 Kabinetda ochish', url: `${base}${path}` };
   }
 

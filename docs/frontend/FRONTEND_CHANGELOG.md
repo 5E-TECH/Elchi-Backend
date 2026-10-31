@@ -28,6 +28,22 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 → Frontend: o'zgarish shart emas.
 
+### 2026-10-31 — Telegram bot «Kabinetda …» havolalari (PIJN1lGp)
+
+Bot tugmalari endi quyidagi yo'llarni ochadi (asos — `ELCHI_CABINET_URL`). Deploy: notification-service + finance-service.
+
+| Tugma | Yo'l va query |
+|---|---|
+| AI buyurtma — «🌐 Kabinetda yaratish» | `/new-orders/create` (avval mavjud bo'lmagan `/orders/create`) |
+| Guruh kartasi — «🌐 Kabinetda ochish» | `/orders/edit/<id>` (`id` — ichki buyurtma id; avval `/orders?search=<id>`) |
+| Kuryer kartasi, «Video juda katta», «Faylni yuklab bo'lmadi» | `/orders?status=waiting&orderSearch=EL-<id+100000>` — query kalitlari **`status`** va **`orderSearch`** (avval `/orders?search=<id>`) |
+| `/kun` hisoboti | `/` |
+| To'lov xabarlari | `/cash-box` (o'zgarmagan) |
+| Smena hisoboti (Telegram va in-app bildirishnoma havolasi) | `/payments/shifts/<id>` (avval `/payments/shift-report/<id>` — FE uni yo'naltiradi) |
+
+- 🔧 [frontend] — eski chat xabarlaridagi havolalar ishlashi uchun: `/orders/create` → `/new-orders/create` ga yo'naltirish; buyurtmalar ro'yxati va kuryer ro'yxati `orderSearch ?? search` ni o'qisin (eski `search` kaliti). Yangi havolalarda faqat `orderSearch`.
+- → Frontend: yuqoridagi ikki o'zgarish + `botLinks.test.ts` (shu jadvaldagi yo'llar `route-map.json` dagi sahifalarga mos).
+
 ### 2026-10-31 — Kuryer amallarida `Idempotency-Key` (BOT-3d)
 
 - ✏️ [order] — `POST /orders/sell/:id`, `POST /orders/cancel/:id`, `POST /orders/:id/could-not-deliver`, `POST /orders/partly-sell/:id`, `POST /orders/rollback/:id` endi ixtiyoriy **`Idempotency-Key`** header'ini qabul qiladi (≤255 belgi, foydalanuvchi bo'yicha ajratiladi; uzunroq → **400**). Ayni kalit bilan takroriy so'rov (qayta urinish, ikki marta bosish) amalni ikkinchi marta bajarmaydi — birinchi muvaffaqiyatli natija qaytadi. Yiqilgan urinish saqlanmaydi: ayni kalit bilan qayta urinish amalni qayta bajaradi.

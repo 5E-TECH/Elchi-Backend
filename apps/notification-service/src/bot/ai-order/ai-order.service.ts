@@ -4,6 +4,7 @@ import { Interval } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import {
+  cabinetLinks,
   AI_BOT_IMAGE_MAX_BYTES,
   deterministicUuid,
   formatOrderNumber,
@@ -165,7 +166,8 @@ export class AiOrderService implements OnModuleDestroy {
   cabinetCreateButton(): InlineKeyboardButton {
     return {
       text: '🌐 Kabinetda yaratish',
-      url: `${this.cabinetUrl}/orders/create`,
+      // (PIJN1lGp) «Buyurtma yaratish» sahifasi (avvalgi yo'l mavjud emas edi).
+      url: cabinetLinks(this.cabinetUrl).orderCreate(),
     };
   }
 

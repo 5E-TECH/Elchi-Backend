@@ -126,7 +126,9 @@ describe('z2FRwu2c — isbot oqimi', () => {
       },
     });
     expect(sentTexts(ctx).at(-1)).toBe(PROOF_TOO_LARGE_TEXT);
-    expect(lastButtons(ctx)['🌐 Kabinetda ochish']).toContain('search=101');
+    expect(lastButtons(ctx)['🌐 Kabinetda ochish']).toContain(
+      'orderSearch=EL-100101',
+    );
     expect(ctx.transport.downloadFile).not.toHaveBeenCalled();
     expect(gateway.orders.get('101')!.status).toBe('waiting');
     expect(ctx.sessions.states.get('25')?.proof).toBeDefined();

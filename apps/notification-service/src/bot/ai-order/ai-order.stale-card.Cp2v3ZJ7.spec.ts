@@ -141,8 +141,7 @@ function setup() {
   const toast = () =>
     (
       ctx.transport.answerCallbackQuery.mock.calls.at(-1) as unknown as
-        | [string, string?]
-        | undefined
+        [string, string?] | undefined
     )?.[1];
   return { ctx, calls, send, press, botDraftOf, button, confirms, toast };
 }
