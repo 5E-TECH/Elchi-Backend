@@ -7,7 +7,9 @@ export type AcquireResult<T = unknown> =
   | { status: 'new' }
   | { status: 'cached'; response: T }
   | { status: 'in_progress' }
-  | { status: 'failed'; error: unknown };
+  | { status: 'failed'; error: unknown }
+  /** (BOT-3d) Kalit boshqa bog'lanish (amal / obyekt) bilan band. */
+  | { status: 'mismatch'; binding: string };
 
 const PG_UNIQUE_VIOLATION = '23505';
 
@@ -45,6 +47,13 @@ export interface TryAcquireOptions {
    * zaharlab, keyingi haqiqiy urinishni ham abadiy rad etmasligi uchun.
    */
   reclaimFailed?: boolean;
+  /**
+   * (BOT-3d) Kalit nima uchun ishlatilgani (masalan `order.sell:81`) — qatorning
+   * `pattern` ustunida saqlanadi. Ayni kalit BOSHQA bog'lanish bilan kelsa
+   * `mismatch` qaytadi (eski natija berilmaydi): mijoz kalitni noto'g'ri
+   * qayta ishlatsa boshqa buyurtmaning javobi qaytib qolmasin.
+   */
+  binding?: string;
 }
 
 @Injectable()
@@ -80,7 +89,11 @@ export class IdempotencyService {
     opts?: TryAcquireOptions,
   ): Promise<AcquireResult<T>> {
     try {
-      await this.repo.insert({ key, pattern, status: 'in_progress' });
+      await this.repo.insert({
+        key,
+        pattern: opts?.binding ?? pattern,
+        status: 'in_progress',
+      });
       return { status: 'new' };
     } catch (error) {
       if (
@@ -95,6 +108,9 @@ export class IdempotencyService {
     const existing = await this.repo.findOne({ where: { key } });
     if (!existing) {
       return { status: 'new' };
+    }
+    if (opts?.binding !== undefined && existing.pattern !== opts.binding) {
+      return { status: 'mismatch', binding: existing.pattern };
     }
 
     if (existing.status === 'completed') {
@@ -195,8 +211,10 @@ export class IdempotencyService {
   }
 
   async markCompleted(key: string, response: unknown): Promise<void> {
+    // (BOT-3d) faqat hali `in_progress` qator: lease qayta egallanib boshqa
+    // urinish tugatgan natijani kech kelgan yozuv bosib ketmasin.
     await this.repo.update(
-      { key },
+      { key, status: 'in_progress' },
       {
         status: 'completed',
         response: response as object,
@@ -206,8 +224,10 @@ export class IdempotencyService {
   }
 
   async markFailed(key: string, error: unknown): Promise<void> {
+    // (BOT-3d) faqat hali `in_progress` qator: lease qayta egallanib boshqa
+    // urinish tugatgan natijani kech kelgan yozuv bosib ketmasin.
     await this.repo.update(
-      { key },
+      { key, status: 'in_progress' },
       {
         status: 'failed',
         error: error as object,

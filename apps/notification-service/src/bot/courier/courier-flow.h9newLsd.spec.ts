@@ -20,6 +20,7 @@ import {
   makeRouter,
   openIshim,
   sentTexts,
+  shownTexts,
   textUpdate,
 } from '../testing/bot-kit-spec';
 import {
@@ -283,7 +284,7 @@ describe('MO2MLPGo — 4 ta holat tugmasi', () => {
     expect(post.options).toEqual(
       expect.objectContaining({ idempotencyKey: expect.any(String) }),
     );
-    expect(sentTexts(ctx).at(-1)).toBe('#101 — sotildi ✅');
+    expect(shownTexts(ctx)).toContain('#101 — sotildi ✅');
     expect(gateway.orders.get('101')!.status).toBe('sold');
     const edit = ctx.transport.editMessage.mock.calls.at(-1) as unknown as [
       string,
@@ -359,7 +360,7 @@ describe('MO2MLPGo — 4 ta holat tugmasi', () => {
     await openList(ctx);
     await press(ctx, lastButtons(ctx)['✅ Sotildi']);
     await press(ctx, lastButtons(ctx)['✅ Ha']);
-    expect(sentTexts(ctx).at(-1)).toBe('⚠️ Bu holatda bu amal mumkin emas.');
+    expect(shownTexts(ctx).at(-1)).toBe('⚠️ Bu holatda bu amal mumkin emas.');
   });
 
   it('⭐ extraCost > 0 — 202: "Market tasdig‘i kutilmoqda", karta ⏳ holatda tugmasiz qoladi', async () => {
@@ -375,7 +376,7 @@ describe('MO2MLPGo — 4 ta holat tugmasi', () => {
     await press(ctx, lastButtons(ctx)['❌ Bekor']);
     await press(ctx, lastButtons(ctx)['🙅 Mijoz rad etdi']);
     await press(ctx, lastButtons(ctx)['✅ Ha']);
-    expect(sentTexts(ctx).at(-1)).toContain("Market tasdig'i kutilmoqda");
+    expect(shownTexts(ctx).join('\n')).toContain("Market tasdig'i kutilmoqda");
     const edit = ctx.transport.editMessage.mock.calls.at(-1) as unknown as [
       string,
       string,

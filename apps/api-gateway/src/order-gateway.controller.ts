@@ -186,6 +186,16 @@ import {
   type OrderExportPage,
 } from './order-export/orders-xlsx.export';
 
+/**
+ * (BOT-3d) Kuryer amali so'rovi. `Idempotency-Key` `req.headers` dan o'qiladi
+ * (`@Headers()` emas — Swagger uni majburiy parametr qilib chiqarardi; hujjat
+ * `@ApiHeader({ required: false })` da).
+ */
+type CourierOpRequest = {
+  user: JwtUser;
+  headers?: Record<string, unknown>;
+};
+
 interface JwtUser {
   sub: string;
   username: string;
@@ -741,7 +751,9 @@ export class OrderGatewayController {
       .toLowerCase();
     if (!normalized) return undefined;
     if (!Object.values(Where_deliver).includes(normalized as Where_deliver)) {
-      throw new BadRequestException(`Noto'g'ri where_deliver qiymati: ${value}`);
+      throw new BadRequestException(
+        `Noto'g'ri where_deliver qiymati: ${value}`,
+      );
     }
     return normalized as Where_deliver;
   }
@@ -6613,6 +6625,12 @@ export class OrderGatewayController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(RoleEnum.COURIER, RoleEnum.MANAGER)
   @ApiBearerAuth()
+  @ApiHeader({
+    name: 'Idempotency-Key',
+    required: false,
+    description:
+      "BOT-3d: ixtiyoriy barqaror kalit (≤255 belgi, foydalanuvchi bo'yicha ajratiladi) — takroriy so'rov (qayta urinish, ikki marta bosish) amalni ikkinchi marta bajarmaydi. Har amal + buyurtma + tana uchun noyob kalit: ayni kalit boshqa amal, buyurtma yoki tana bilan → 422; ayni kalitli so'rov hali bajarilayotgan bo'lsa → 409; 255 belgidan uzun → 400.",
+  })
   @ApiOperation({ summary: 'Sell order (courier)' })
   @ApiParam({ name: 'id', description: 'Order ID (id)' })
   @ApiConsumes('multipart/form-data', 'application/json')
@@ -6627,7 +6645,7 @@ export class OrderGatewayController {
     @Param('id') id: string,
     @Body() dto: SellOrderRequestDto,
     @UploadedFile() proof: UploadedProofFile | undefined,
-    @Req() req: { user: JwtUser },
+    @Req() req: CourierOpRequest,
   ) {
     const dtoWithProof = await this.withUploadedProof(dto, proof, req.user);
     return firstValueFrom(
@@ -6642,7 +6660,12 @@ export class OrderGatewayController {
               roles: this.normalizeRoles(req.user.roles),
               branch_id: req.user.branch_id ?? null,
             },
-            request_id: randomUUID(),
+            // (BOT-3d) Idempotency-Key → barqaror request_id (bot qayta
+            // urinishi / ikki bosish — amal bir marta); kalitsiz — UUID.
+            request_id: resolveOrderCreateRequestId(
+              req.user.sub,
+              req.headers?.['idempotency-key'],
+            ),
           },
         )
         .pipe(timeout(PROOF_OPERATION_TIMEOUT_MS)),
@@ -6660,6 +6683,12 @@ export class OrderGatewayController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(RoleEnum.COURIER, RoleEnum.MANAGER)
   @ApiBearerAuth()
+  @ApiHeader({
+    name: 'Idempotency-Key',
+    required: false,
+    description:
+      "BOT-3d: ixtiyoriy barqaror kalit (≤255 belgi, foydalanuvchi bo'yicha ajratiladi) — takroriy so'rov (qayta urinish, ikki marta bosish) amalni ikkinchi marta bajarmaydi. Har amal + buyurtma + tana uchun noyob kalit: ayni kalit boshqa amal, buyurtma yoki tana bilan → 422; ayni kalitli so'rov hali bajarilayotgan bo'lsa → 409; 255 belgidan uzun → 400.",
+  })
   @ApiOperation({ summary: 'Cancel order (courier)' })
   @ApiParam({ name: 'id', description: 'Order ID (id)' })
   @ApiConsumes('multipart/form-data', 'application/json')
@@ -6674,7 +6703,7 @@ export class OrderGatewayController {
     @Param('id') id: string,
     @Body() dto: CancelOrderRequestDto,
     @UploadedFile() proof: UploadedProofFile | undefined,
-    @Req() req: { user: JwtUser },
+    @Req() req: CourierOpRequest,
   ) {
     const dtoWithProof = await this.withUploadedProof(dto, proof, req.user);
     return firstValueFrom(
@@ -6689,7 +6718,12 @@ export class OrderGatewayController {
               roles: this.normalizeRoles(req.user.roles),
               branch_id: req.user.branch_id ?? null,
             },
-            request_id: randomUUID(),
+            // (BOT-3d) Idempotency-Key → barqaror request_id (bot qayta
+            // urinishi / ikki bosish — amal bir marta); kalitsiz — UUID.
+            request_id: resolveOrderCreateRequestId(
+              req.user.sub,
+              req.headers?.['idempotency-key'],
+            ),
           },
         )
         .pipe(timeout(PROOF_OPERATION_TIMEOUT_MS)),
@@ -6800,13 +6834,19 @@ export class OrderGatewayController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(RoleEnum.COURIER, RoleEnum.MANAGER)
   @ApiBearerAuth()
+  @ApiHeader({
+    name: 'Idempotency-Key',
+    required: false,
+    description:
+      "BOT-3d: ixtiyoriy barqaror kalit (≤255 belgi, foydalanuvchi bo'yicha ajratiladi) — takroriy so'rov (qayta urinish, ikki marta bosish) amalni ikkinchi marta bajarmaydi. Har amal + buyurtma + tana uchun noyob kalit: ayni kalit boshqa amal, buyurtma yoki tana bilan → 422; ayni kalitli so'rov hali bajarilayotgan bo'lsa → 409; 255 belgidan uzun → 400.",
+  })
   @ApiOperation({ summary: "Mark order as couldn't deliver (courier)" })
   @ApiParam({ name: 'id', description: 'Order ID (id)' })
   @ApiBody({ type: CouldNotDeliverOrderRequestDto })
   couldNotDeliverOrder(
     @Param('id') id: string,
     @Body() dto: CouldNotDeliverOrderRequestDto,
-    @Req() req: { user: JwtUser },
+    @Req() req: CourierOpRequest,
   ) {
     return firstValueFrom(
       this.orderClient
@@ -6820,7 +6860,12 @@ export class OrderGatewayController {
               roles: this.normalizeRoles(req.user.roles),
               branch_id: req.user.branch_id ?? null,
             },
-            request_id: randomUUID(),
+            // (BOT-3d) Idempotency-Key → barqaror request_id (bot qayta
+            // urinishi / ikki bosish — amal bir marta); kalitsiz — UUID.
+            request_id: resolveOrderCreateRequestId(
+              req.user.sub,
+              req.headers?.['idempotency-key'],
+            ),
           },
         )
         .pipe(timeout(8000)),
@@ -6838,6 +6883,12 @@ export class OrderGatewayController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(RoleEnum.COURIER, RoleEnum.MANAGER)
   @ApiBearerAuth()
+  @ApiHeader({
+    name: 'Idempotency-Key',
+    required: false,
+    description:
+      "BOT-3d: ixtiyoriy barqaror kalit (≤255 belgi, foydalanuvchi bo'yicha ajratiladi) — takroriy so'rov (qayta urinish, ikki marta bosish) amalni ikkinchi marta bajarmaydi. Har amal + buyurtma + tana uchun noyob kalit: ayni kalit boshqa amal, buyurtma yoki tana bilan → 422; ayni kalitli so'rov hali bajarilayotgan bo'lsa → 409; 255 belgidan uzun → 400.",
+  })
   @ApiOperation({ summary: 'Partly sell order (courier)' })
   @ApiParam({ name: 'id', description: 'Order ID (id)' })
   @ApiConsumes('multipart/form-data', 'application/json')
@@ -6852,7 +6903,7 @@ export class OrderGatewayController {
     @Param('id') id: string,
     @Body() dto: PartlySellOrderRequestDto,
     @UploadedFile() proof: UploadedProofFile | undefined,
-    @Req() req: { user: JwtUser },
+    @Req() req: CourierOpRequest,
   ) {
     const dtoWithProof = await this.withUploadedProof(dto, proof, req.user);
     return firstValueFrom(
@@ -6867,7 +6918,12 @@ export class OrderGatewayController {
               roles: this.normalizeRoles(req.user.roles),
               branch_id: req.user.branch_id ?? null,
             },
-            request_id: randomUUID(),
+            // (BOT-3d) Idempotency-Key → barqaror request_id (bot qayta
+            // urinishi / ikki bosish — amal bir marta); kalitsiz — UUID.
+            request_id: resolveOrderCreateRequestId(
+              req.user.sub,
+              req.headers?.['idempotency-key'],
+            ),
           },
         )
         .pipe(timeout(PROOF_OPERATION_TIMEOUT_MS)),
@@ -6885,6 +6941,12 @@ export class OrderGatewayController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(RoleEnum.COURIER, RoleEnum.MANAGER, RoleEnum.SUPERADMIN)
   @ApiBearerAuth()
+  @ApiHeader({
+    name: 'Idempotency-Key',
+    required: false,
+    description:
+      "BOT-3d: ixtiyoriy barqaror kalit (≤255 belgi, foydalanuvchi bo'yicha ajratiladi) — takroriy so'rov (qayta urinish, ikki marta bosish) amalni ikkinchi marta bajarmaydi. Har amal + buyurtma + tana uchun noyob kalit: ayni kalit boshqa amal, buyurtma yoki tana bilan → 422; ayni kalitli so'rov hali bajarilayotgan bo'lsa → 409; 255 belgidan uzun → 400.",
+  })
   @ApiOperation({
     summary:
       'Rollback sold/cancelled order to waiting/cancelled/cancelled_sent',
@@ -6894,7 +6956,7 @@ export class OrderGatewayController {
   rollbackOrder(
     @Param('id') id: string,
     @Body() dto: RollbackOrderRequestDto,
-    @Req() req: { user: JwtUser },
+    @Req() req: CourierOpRequest,
   ) {
     return firstValueFrom(
       this.orderClient
@@ -6908,7 +6970,12 @@ export class OrderGatewayController {
               branch_id: req.user.branch_id ?? null,
             },
             dto,
-            request_id: randomUUID(),
+            // (BOT-3d) Idempotency-Key → barqaror request_id (bot qayta
+            // urinishi / ikki bosish — amal bir marta); kalitsiz — UUID.
+            request_id: resolveOrderCreateRequestId(
+              req.user.sub,
+              req.headers?.['idempotency-key'],
+            ),
           },
         )
         .pipe(timeout(8000)),

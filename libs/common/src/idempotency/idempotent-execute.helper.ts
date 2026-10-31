@@ -1,6 +1,7 @@
 import { RmqContext, RpcException } from '@nestjs/microservices';
 import { RmqService } from '../rmq/rmq.service';
 import { executeAndAck } from '../rmq/execute-and-ack.helper';
+import { IDEMPOTENCY_ERROR_CODES } from './idempotency-error-codes';
 import {
   IdempotencyService,
   type TryAcquireOptions,
@@ -31,7 +32,38 @@ export interface IdempotentExecuteOptions {
    * tashlanadi — matn RMQ orqali gateway'ga yetib boradi.
    */
   markReplay?: boolean;
+  /**
+   * (BOT-3d) Kalit bog'lanishi (`TryAcquireOptions.binding`). Ayni kalit boshqa
+   * bog'lanish bilan kelsa — handler ishlamaydi,
+   * `RpcException({statusCode:422})` (eski natija qaytmaydi).
+   */
+  binding?: string;
+  /**
+   * (BOT-3d) Lease (ms) — uzoq amal (gateway 60 s timeout) tugaguncha takror
+   * so'rov lease'ni egallab olmasin (sukut 30 s).
+   */
+  leaseMs?: number;
+  /**
+   * (BOT-3d) Ayni kalit bilan ishlayotgan so'rov bor — xabar ack qilinadi
+   * (requeue YO'Q: qayta yetkazilgan xabar amalni qayta yuritmasin) va
+   * `RpcException({statusCode:409})` — gateway 409 qaytaradi (500 emas).
+   */
+  inProgressConflict?: boolean;
+  /**
+   * (BOT-3d) Handler xatosida xabar REQUEUE qilinmaydi (ack): `reclaimFailed`
+   * bilan qayta yetkazilgan xabar yiqilgan qatorni egallab amalni FONDA qayta
+   * yuritmasin (mijoz allaqachon «bajarilmadi» olgan).
+   */
+  ackOnFailure?: boolean;
 }
+
+/** (BOT-3d) 422 matni — kalit boshqa amal / obyekt uchun ishlatilgan. */
+export const IDEMPOTENCY_KEY_MISMATCH_MESSAGE =
+  "Idempotency-Key boshqa amal, buyurtma yoki ma'lumot uchun ishlatilgan — yangi kalit yuboring";
+
+/** (BOT-3d) Ayni kalit bilan so'rov hali bajarilmoqda (409). */
+export const IDEMPOTENCY_IN_PROGRESS_MESSAGE =
+  "Takroriy so'rov: bu amal hozir bajarilmoqda — biroz kuting va holatni tekshiring";
 
 /** Keshdagi javob `{...}` bilan kengaytirsa bo'ladigan oddiy obyektmi (null/massiv emas). */
 function isReplayMarkable(value: unknown): value is Record<string, unknown> {
@@ -69,6 +101,10 @@ export async function executeIdempotent<T>(
     completedTtlMs,
     reclaimFailed,
     markReplay,
+    binding,
+    leaseMs,
+    inProgressConflict,
+    ackOnFailure,
   } = options;
 
   if (!requestId) {
@@ -79,15 +115,28 @@ export async function executeIdempotent<T>(
   // ⚠️ Yangi opsiyalar berilmasa `opts` ham `undefined` — mavjud chaqiruvchilar
   // (order.create va boshqalar) uchun `tryAcquire` xatti-harakati AYNAN avvalgidek.
   const acquireOpts: TryAcquireOptions | undefined =
-    completedTtlMs !== undefined || reclaimFailed
-      ? { completedTtlMs, reclaimFailed }
+    completedTtlMs !== undefined || reclaimFailed || binding !== undefined
+      ? {
+          completedTtlMs,
+          reclaimFailed,
+          ...(binding !== undefined ? { binding } : {}),
+        }
       : undefined;
   const acquire = await idempotencyService.tryAcquire<T>(
     key,
     pattern,
-    undefined,
+    leaseMs,
     acquireOpts,
   );
+
+  if (acquire.status === 'mismatch') {
+    rmqService.ack(context);
+    throw new RpcException({
+      statusCode: 422,
+      message: IDEMPOTENCY_KEY_MISMATCH_MESSAGE,
+      code: IDEMPOTENCY_ERROR_CODES.KEY_MISMATCH,
+    });
+  }
 
   if (acquire.status === 'cached') {
     rmqService.ack(context);
@@ -100,6 +149,15 @@ export async function executeIdempotent<T>(
   if (acquire.status === 'failed') {
     rmqService.ack(context);
     throw new RpcException(acquire.error as object);
+  }
+
+  if (acquire.status === 'in_progress' && inProgressConflict) {
+    rmqService.ack(context);
+    throw new RpcException({
+      statusCode: 409,
+      message: IDEMPOTENCY_IN_PROGRESS_MESSAGE,
+      code: IDEMPOTENCY_ERROR_CODES.IN_PROGRESS,
+    });
   }
 
   if (acquire.status === 'in_progress') {
@@ -129,7 +187,11 @@ export async function executeIdempotent<T>(
         ? handlerError.getError()
         : { message: (handlerError as Error)?.message ?? 'unknown error' };
     await idempotencyService.markFailed(key, errorPayload);
-    rmqService.nackForError(context, handlerError);
+    if (ackOnFailure) {
+      rmqService.ack(context);
+    } else {
+      rmqService.nackForError(context, handlerError);
+    }
     throw handlerError;
   }
 }

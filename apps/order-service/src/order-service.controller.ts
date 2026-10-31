@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { Controller, Optional } from '@nestjs/common';
 import {
   Ctx,
@@ -86,6 +87,38 @@ const AI_STABLE_CREATE_OPTIONS = {
  */
 export const ORDER_CREATE_CLIENT_KEY_PREFIX = 'idem:';
 const CLIENT_KEY_REQUEST_ID_RE = /^idem:\d{1,19}:[0-9a-f]{64}$/;
+/**
+ * (BOT-3d) Kuryer amali lease'i — gateway `PROOF_OPERATION_TIMEOUT_MS` (60 s)
+ * dan uzun: ishlayotgan so'rov tugaguncha takror uni egallab olmaydi.
+ */
+const COURIER_OP_LEASE_MS = 90_000;
+
+/**
+ * (BOT-3d) Kuryer amali tanasining barmoq izi (kalit bog'lanishi uchun).
+ * Isbot fayl kalitlari kirmaydi: multipart isbot har urinishda yangi kalit
+ * bilan yuklanadi — qonuniy qayta urinish 422 olmasin.
+ */
+function courierOpFingerprint(dto: unknown): string {
+  const stable = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(stable);
+    if (value && typeof value === 'object') {
+      return Object.fromEntries(
+        Object.keys(value as Record<string, unknown>)
+          .filter(
+            (key) => key !== 'proofFileKeys' && key !== 'proofFileKeysVerified',
+          )
+          .sort()
+          .map((key) => [key, stable((value as Record<string, unknown>)[key])]),
+      );
+    }
+    return value ?? null;
+  };
+  return createHash('sha256')
+    .update(JSON.stringify(stable(dto ?? null)))
+    .digest('hex')
+    .slice(0, 32);
+}
+
 const CLIENT_KEY_CREATE_OPTIONS = {
   reclaimFailed: true,
   markReplay: true,
@@ -135,6 +168,51 @@ export class OrderServiceController {
       { requestId, pattern, ...extra },
       handler,
     );
+  }
+
+  /**
+   * (BOT-3d) Kuryer amallari (sell / cancel / could-not-deliver / partly-sell /
+   * rollback). Gateway `Idempotency-Key` ni `idem:<user>:<sha256(kalit)>`
+   * ko'rinishida yuboradi — shu shakl uchun kalit amallar o'rtasida UMUMIY
+   * (`courier-op:` prefiksi) va bog'lanishi `<amal>:<buyurtma>` saqlanadi:
+   * ayni kalit takror kelsa — keshlangan natija (amal ikkinchi marta
+   * bajarilmaydi); BOSHQA amal, buyurtma yoki tana (dto barmoq izi) bilan
+   * kelsa — 422 (eski natija qaytmaydi). Yiqilgan urinish keshlanmaydi
+   * (`reclaimFailed` — vaqtinchalik xatodan keyin qayta urinish ishlaydi);
+   * ishlayotgan takror → 409; lease gateway timeout'idan uzun. Kalitsiz
+   * (tasodifiy UUID) — avvalgidek.
+   */
+  private runIdempotentCourierOp<T>(
+    context: RmqContext,
+    pattern: string,
+    orderId: string,
+    requestId: string | undefined,
+    dto: unknown,
+    handler: () => Promise<T> | T,
+  ): Promise<T> {
+    if (requestId && CLIENT_KEY_REQUEST_ID_RE.test(requestId)) {
+      return executeIdempotent(
+        this.rmqService,
+        this.idempotencyService,
+        context,
+        {
+          requestId,
+          pattern,
+          keyPrefix: 'courier-op',
+          binding:
+            `${pattern}:${String(orderId ?? '')}:${courierOpFingerprint(dto)}`.slice(
+              0,
+              128,
+            ),
+          reclaimFailed: true,
+          leaseMs: COURIER_OP_LEASE_MS,
+          inProgressConflict: true,
+          ackOnFailure: true,
+        },
+        handler,
+      );
+    }
+    return this.runIdempotent(context, pattern, requestId, handler);
   }
 
   @MessagePattern({ cmd: 'salom_ber_order' })
@@ -616,13 +694,19 @@ export class OrderServiceController {
     },
     @Ctx() context: RmqContext,
   ) {
-    return this.runIdempotent(context, 'order.sell', data.request_id, () =>
-      this.lifecycleService.sellOrder(
-        data.requester,
-        data.id,
-        data.dto ?? {},
-        data.request_id,
-      ),
+    return this.runIdempotentCourierOp(
+      context,
+      'order.sell',
+      data.id,
+      data.request_id,
+      data.dto,
+      () =>
+        this.lifecycleService.sellOrder(
+          data.requester,
+          data.id,
+          data.dto ?? {},
+          data.request_id,
+        ),
     );
   }
 
@@ -661,16 +745,22 @@ export class OrderServiceController {
     },
     @Ctx() context: RmqContext,
   ) {
-    return this.runIdempotent(context, 'order.cancel', data.request_id, () =>
-      // (ZDweRm02) Hamkor yo'lida xato matni — tashqi shartnoma, o'zgarmaydi.
-      keepPartnerCancelMessage(data.requester, () =>
-        this.lifecycleService.cancelOrder(
-          data.requester,
-          data.id,
-          data.dto ?? {},
-          data.request_id,
+    return this.runIdempotentCourierOp(
+      context,
+      'order.cancel',
+      data.id,
+      data.request_id,
+      data.dto,
+      () =>
+        // (ZDweRm02) Hamkor yo'lida xato matni — tashqi shartnoma, o'zgarmaydi.
+        keepPartnerCancelMessage(data.requester, () =>
+          this.lifecycleService.cancelOrder(
+            data.requester,
+            data.id,
+            data.dto ?? {},
+            data.request_id,
+          ),
         ),
-      ),
     );
   }
 
@@ -685,10 +775,12 @@ export class OrderServiceController {
     },
     @Ctx() context: RmqContext,
   ) {
-    return this.runIdempotent(
+    return this.runIdempotentCourierOp(
       context,
       'order.could_not_deliver',
+      data.id,
       data.request_id,
+      data.dto,
       () =>
         this.lifecycleService.couldNotDeliverOrder(
           data.requester,
@@ -719,10 +811,12 @@ export class OrderServiceController {
     },
     @Ctx() context: RmqContext,
   ) {
-    return this.runIdempotent(
+    return this.runIdempotentCourierOp(
       context,
       'order.partly_sell',
+      data.id,
       data.request_id,
+      data.dto,
       () =>
         this.lifecycleService.partlySellOrder(
           data.requester,
@@ -801,10 +895,12 @@ export class OrderServiceController {
     },
     @Ctx() context: RmqContext,
   ) {
-    return this.runIdempotent(
+    return this.runIdempotentCourierOp(
       context,
       'order.rollback_waiting',
+      data.id,
       data.request_id,
+      data.dto,
       () =>
         this.lifecycleService.rollbackOrderToWaiting(
           data.requester,

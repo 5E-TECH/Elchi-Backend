@@ -37,6 +37,8 @@ export interface TelegramMessage {
   from?: TelegramUser;
   text?: string;
   caption?: string;
+  /** (BOT-3d) Callback kelgan xabarning tugmalari (natija tahririda qoldirish). */
+  reply_markup?: InlineKeyboardMarkup;
   photo?: TelegramPhotoSize[];
   document?: TelegramFile;
   video?: TelegramFile;
