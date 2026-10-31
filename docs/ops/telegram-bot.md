@@ -438,11 +438,13 @@ chaqiruvi `timeout -k 5` bilan (`BOT_ALERT_CMD_TIMEOUT`, 30 s), SQL `statement_t
 | `telegram_outbox` (`BEGIN READ ONLY` SELECT, `elchi-postgres` ichida) | muddati o'tgan `pending` juda eski; oxirgi soatda `dead` ko'p; `sending` da qotgan; so'rov bajarilmadi / timeout | `BOT_ALERT_OUTBOX_PENDING_MIN` (10), `BOT_ALERT_OUTBOX_DEAD_MAX` (20) |
 | notification-service konteyneri — aniq 1 ta (`com.docker.compose.project` = `BOT_ALERT_COMPOSE_PROJECT`/`COMPOSE_PROJECT_NAME`, `oneoff=False`; yoki `BOT_ALERT_NS_CONTAINER`) | topilmadi / bir nechta / docker javob bermadi; `running healthy` emas; crash-loop (`RestartCount` oynada ≥ 2 marta o'sdi); health `starting` `StartedAt` dan uzoq | `BOT_ALERT_NS_START_GRACE_S` (90), `BOT_ALERT_RESTART_WINDOW_MIN` (30) |
 
-- **Debounce:** tekshiruv shu yugurishda VA oldingi 2 yugurishdan birida yiqilgan bo'lsa xabar qilinadi
-  (qisqa uzilish jim o'tadi, har ikkinchi yugurishda yiqiladigan «flapping» ham ushlanadi). Crash-loop
-  (oynada ≥ 2 restart) — darhol.
-- **Tiklanish:** «✅ tiklandi» faqat ketma-ket 2 ta TOZA yugurishdan keyin. Undan oldin (masalan muammolar
-  to'plami almashganda yoki konteyner hali `starting`) holat saqlanadi, xabar ketmaydi.
+- **Ogohlantirilgan to'plam tekshiruv kodi bo'yicha «yopishqoq»:**
+  - kod shu yugurishda VA oldingi 2 yugurishdan birida yiqilsa qo'shiladi (qisqa uzilish jim o'tadi,
+    «flapping» ham ushlanadi); crash-loop (oynada ≥ 2 restart) — darhol, oynada restart turgan ekan saqlanadi;
+  - hech narsa ogohlantirilmagan, lekin so'nggi 4 yugurishdan 3 tasi navbatma-navbat turli tekshiruvlarda
+    yiqilgan bo'lsa — bitta «unstable» yozuvi;
+  - kod faqat ketma-ket 2 TOZA yugurishdan keyin chiqadi; to'plam bo'shaganda bitta «✅ tiklandi».
+  - Yangi kod qo'shilganda — xabar; kod chiqib ketganda — jim (to'liq tiklanishni kutadi).
 - Takrorsizlik tekshiruv KODI bo'yicha (son yoki Telegram matni o'zgarsa yangi xabar ketmaydi): muammo
   paydo bo'lganda yoki kodlar to'plami o'zgarganda bitta; davom etsa har `BOT_ALERT_REPEAT_HOURS` (6) da
   eslatma; tiklanganda bitta «✅ tiklandi».

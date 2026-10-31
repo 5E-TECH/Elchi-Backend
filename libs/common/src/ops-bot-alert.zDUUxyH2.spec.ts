@@ -15,8 +15,11 @@ import { join } from 'node:path';
 /**
  * zDUUxyH2 — scripts/bot-alert.sh (cron, har 5 daqiqa): soxta `docker` va
  * `curl` bilan (tarmoq va Docker yo'q). Har tekshiruv soxta javob bilan;
- * sir (bot tokenlari, URL'lar) argv'ga ham, logga ham tushmaydi. Muammo faqat
- * ketma-ket 2 yugurishda takrorlansa xabar qilinadi (debounce).
+ * sir (bot tokenlari, URL'lar) argv'ga ham, logga ham tushmaydi. Ogohlantirilgan
+ * to'plam tekshiruv kodi bo'yicha «yopishqoq»: kod joriy + oldingi 2 yugurishdan
+ * birida yiqilsa qo'shiladi, faqat ketma-ket 2 toza yugurishdan keyin chiqadi;
+ * crash-loop darhol, oynada restart turgan ekan saqlanadi. Oxirida — jadvalli
+ * stsenariy simulyatsiyasi (har qadam = bitta cron yugurishi, +300 s).
  */
 const ROOT = join(__dirname, '..', '..', '..');
 const SCRIPT = join(ROOT, 'scripts', 'bot-alert.sh');
@@ -578,5 +581,137 @@ describe('bot-alert.sh (zDUUxyH2)', () => {
     expect(
       twice({ FAKE_WEBHOOK: '{"ok":true,"result":{"url":""}}' }),
     ).not.toMatch(/Webhook:/);
+  });
+  // -------------------------------------------------------------------------
+  // Jadvalli stsenariy simulyatsiyasi: har qadam = bitta yugurish (+300 s).
+  // Natija qatori: har qadam uchun '.' (xabar yo'q), 'A' (NOSOG'LOM), 'R' (tiklandi).
+  // -------------------------------------------------------------------------
+  describe('stsenariy simulyatsiyasi (jadval)', () => {
+    jest.setTimeout(120_000);
+    type Step = Record<string, string>;
+    const at = (i: number) => now + i * 300;
+    const iso = (t: number) => new Date(t * 1000).toISOString();
+    const ns = (
+      i: number,
+      restarts = 0,
+      health = 'healthy',
+      startedAgo = 3600,
+    ) => ({
+      FAKE_ns1: `running ${health} ${restarts} ${iso(at(i) - startedAgo)}`,
+    });
+    const A = { FAKE_ns1: `exited x 0 ${startedLongAgo}` }; // ns_unhealthy
+    const B = { FAKE_PSQL: '900\\n0\\n0' }; // outbox_pending
+    const C = { FAKE_PSQL: '0\\n50\\n0' }; // outbox_dead
+    const simulate = (steps: Array<(i: number) => Step>, extra: Step = {}) => {
+      let seen = 0;
+      return steps
+        .map((step, i) => {
+          run({ ...extra, ...step(i), BOT_ALERT_NOW: String(at(i)) });
+          const all = sends();
+          const fresh = all.slice(seen);
+          seen = all.length;
+          if (!fresh.length) return '.';
+          return fresh
+            .map((line) => (line.includes('tiklandi') ? 'R' : 'A'))
+            .join('');
+        })
+        .join('');
+    };
+    const ok = () => ({});
+
+    it.each<[string, () => Array<(i: number) => Step>, string, Step]>([
+      [
+        'A) barqaror A + B flapping (A, AB, A, AB…) — 2 xabar, soatiga 11 emas',
+        () =>
+          Array.from({ length: 12 }, (_, k) =>
+            k % 2 ? () => ({ ...A, ...B }) : () => A,
+          ),
+        '.A.A........',
+        {},
+      ],
+      [
+        'B) 20 daqiqalik crash-loop — 2-restartda bitta alert, sikl ichida «tiklandi» yo‘q; to‘xtagach oyna tugashi (+2 toza) → bitta «tiklandi»',
+        () =>
+          Array.from({ length: 24 }, (_, k) => (i: number) => {
+            const restarts = Math.min(Math.floor((k + 4) / 4), 5);
+            return ns(i, restarts, 'healthy', 3600);
+          }),
+        '........A..............R',
+        {},
+      ],
+      [
+        '10 daqiqalik loop + bir marta docker inspect yiqilishi — bitta alert, flapping yo‘q',
+        () =>
+          Array.from({ length: 10 }, (_, k) =>
+            k === 3
+              ? () => ({
+                  FAKE_INSPECT_ERR: 'Cannot connect to the Docker daemon',
+                })
+              : (i: number) => ns(i, Math.floor(k / 2), 'healthy', 3600),
+          ),
+        '....A.....',
+        {},
+      ],
+      [
+        'D) A, B, C navbatma-navbat (hech biri ketma-ket takrorlanmaydi) — 3-yugurishda bitta «unstable» alert, aylanish qayta xabar bermaydi',
+        () => [() => A, () => B, () => C, () => A, () => B, () => C],
+        '..A...',
+        {},
+      ],
+      [
+        'tg_unreachable → 401 → tiklanish: har yangi kod — bitta xabar, oraliqda «tiklandi» yo‘q; 2 toza yugurishdan keyin «tiklandi»',
+        () => [
+          () => ({ FAKE_GETME_EXIT: '28' }),
+          () => ({ FAKE_GETME_EXIT: '28' }),
+          () => ({ FAKE_GETME_CODE: '401', FAKE_GETME: '{"ok":false}' }),
+          () => ({ FAKE_GETME_CODE: '401', FAKE_GETME: '{"ok":false}' }),
+          ok,
+          ok,
+          ok,
+        ],
+        '.A.A.R.',
+        {},
+      ],
+      [
+        "'08' config (oktal emas) — skript yiqilmaydi, crash-loop alert",
+        () =>
+          Array.from(
+            { length: 4 },
+            (_, k) => (i: number) => ns(i, k, 'healthy', 3600),
+          ),
+        '..A.',
+        { BOT_ALERT_RESTART_WINDOW_MIN: '08' },
+      ],
+    ])('%s', (_label, steps, expected, extra) => {
+      if (Object.keys(extra).length) {
+        writeConf(
+          `BOT_ALERT_TELEGRAM_CHAT_ID=42\nBOT_ALERT_TELEGRAM_BOT_TOKEN=${ALERT_TOKEN}\n` +
+            Object.entries(extra)
+              .map(([k, v]) => `${k}=${v}\n`)
+              .join(''),
+        );
+      }
+      expect(simulate(steps())).toBe(expected);
+      if (Object.keys(extra).length)
+        expect(logText()).not.toMatch(/value too great|syntax error/);
+    });
+
+    it('flapping (F, P, F, P…) 6 soatdan ortiq — bitta alert + 6 soatlik eslatma, «tiklandi» yo‘q', () => {
+      const steps = Array.from({ length: 80 }, (_, k) =>
+        k % 2 ? ok : () => A,
+      );
+      const result = simulate(steps);
+      expect(result.replace(/\./g, '')).toBe('AA');
+      expect(result.indexOf('A')).toBe(2);
+      expect(
+        result.lastIndexOf('A') - result.indexOf('A'),
+      ).toBeGreaterThanOrEqual(72);
+    });
+
+    it('401 da webhook tekshiruvi o‘tkazib yuboriladi (ikkinchi soxta qator yo‘q)', () => {
+      const out = twice({ FAKE_GETME_CODE: '401', FAKE_GETME: '{"ok":false}' });
+      expect(out).toMatch(/Token: getMe 401/);
+      expect(out).not.toMatch(/getWebhookInfo/);
+    });
   });
 });
