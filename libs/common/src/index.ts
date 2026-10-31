@@ -94,6 +94,7 @@ export * from './finance/expense-category';
 export * from './finance/cashbox-receipt';
 export * from './telegram/verify-init-data';
 export * from './telegram/cabinet-links';
+export * from './telegram/telegram-events';
 export * from './scan/scan-order-summary';
 export * from './staging/outbound-guard';
 export * from './validation/uz-validation-messages';

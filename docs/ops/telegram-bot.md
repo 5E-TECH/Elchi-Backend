@@ -130,7 +130,7 @@ oraliqda iste'molchi tushsa update yo'qolishi mumkin.
 | notification-bot `/start <token>` (shaxsiy) | akkauntni ulash (rCFZAmOz) | `StartHandler` + bog'lash kodi cheklovi 5/daqiqa → 15 daqiqa blok + activity log |
 | notification-bot `/stop` | uzish | `StartHandler` (`/stop` va `/uzish`) + activity log |
 | notification-bot `/start`, `/help` (guruh) | ulash ko'rsatmasi | `GroupHandler` (o'zgarmagan matn) |
-| notification-bot `group_token-…` (guruh) | guruhni ulash | `GroupHandler` → `connectGroupByTokenText` (+ cheklov) |
+| notification-bot `group_token-…` (guruh) | guruhni ulash | O'CHIRILDI (6jXw0DDr) — faqat kabinetdagi bir martalik deep-link kodi; matnli token → `GROUP_TOKEN_REMOVED_TEXT` |
 | notification-bot `salom` | salomlashish | `StartHandler` (shaxsiy chat) |
 | order-bot `pollLoop`, `ORDER_BOT_TOKEN` | ikkinchi bot | O'CHIRILDI — bitta token (`TELEGRAM_BOT_TOKEN`) |
 | order-bot `TOKEN_RE` market tokeni bilan kirish + `links` Map | chat → market | TASHLANDI (ZlpXb4Wh #3): aktor `users.telegram_id` → `identity.telegram.resolve` (restartdan keyin ham) |
@@ -444,3 +444,62 @@ Yo'llar FE `src/app/lib/routes.tsx` / `design/kit/route-map.json` bilan sinxron 
 Buyurtmalar ro'yxati filtri kaliti — `orderSearch` (FE `ORDER_FILTER_KEYS.search`); eski `search` kaliti
 yangi havolalarda ishlatilmaydi (FE uni faqat eski chat xabarlari uchun o'qiydi).
 
+## 15. Kuzatuv — bot buzilsa xabar (zDUUxyH2)
+
+`scripts/bot-alert.sh` — host cron'da har 5 daqiqada (`backup-alert.sh` naqshi; yangi konteyner yo'q,
+kanal botga bog'liq emas). Faqat o'qiydi. Bir vaqtda bitta nusxa (`flock`); har `docker`/`psql`
+chaqiruvi `timeout -k 5` bilan (`BOT_ALERT_CMD_TIMEOUT`, 30 s), SQL `statement_timeout=10s`. Qo'lda
+`--dry-run`/`--test` paytida boshqa nusxa ishlayotgan bo'lsa — stderr'ga xabar va kod 3.
+
+| Tekshiruv | Muammo | Chegara (env, sukut) |
+|---|---|---|
+| `getMe` | token buzuq (401/404) — yoki alohida: «Telegram API javob bermadi» (tarmoq / 5xx) | — |
+| `getWebhookInfo` — faqat webhook rejimida (`resolveBotConfig` kabi: `TELEGRAM_BOT_MODE`, `TELEGRAM_WEBHOOK_SECRET`, `BOT_POLLING_LEADER`) | url `TELEGRAM_WEBHOOK_URL` ga teng emas (berilmagan bo'lsa `https://…/telegram/webhook/<slug>` emas) yoki bo'sh; yaqinda yetkazish xatosi; navbat to'lgan | `BOT_ALERT_WEBHOOK_ERROR_MIN` (15), `BOT_ALERT_PENDING_UPDATES_MAX` (100) |
+| `telegram_outbox` (`BEGIN READ ONLY` SELECT, `elchi-postgres` ichida) | muddati o'tgan `pending` juda eski; oxirgi soatda `dead` ko'p; `sending` da qotgan; so'rov bajarilmadi / timeout | `BOT_ALERT_OUTBOX_PENDING_MIN` (10), `BOT_ALERT_OUTBOX_DEAD_MAX` (20) |
+| notification-service konteyneri — aniq 1 ta (`com.docker.compose.project` = `BOT_ALERT_COMPOSE_PROJECT`/`COMPOSE_PROJECT_NAME`, `oneoff=False`; yoki `BOT_ALERT_NS_CONTAINER`) | topilmadi / bir nechta / docker javob bermadi; `running healthy` emas; crash-loop (`RestartCount` oynada ≥ 2 marta o'sdi); health `starting` `StartedAt` dan uzoq | `BOT_ALERT_NS_START_GRACE_S` (90), `BOT_ALERT_RESTART_WINDOW_MIN` (30) |
+
+- **Ogohlantirilgan to'plam tekshiruv kodi bo'yicha «yopishqoq»:**
+  - kod shu yugurishda VA oldingi 2 yugurishdan birida yiqilsa qo'shiladi (qisqa uzilish jim o'tadi,
+    «flapping» ham ushlanadi); crash-loop (oynada ≥ 2 restart) — darhol, oynada restart turgan ekan saqlanadi;
+  - hech narsa ogohlantirilmagan, lekin so'nggi 4 yugurishdan 3 tasi navbatma-navbat turli tekshiruvlarda
+    yiqilgan bo'lsa — bitta «unstable» yozuvi;
+  - kod faqat ketma-ket 2 TOZA yugurishdan keyin chiqadi; to'plam bo'shaganda bitta «✅ tiklandi».
+  - Yangi kod qo'shilganda — xabar; kod chiqib ketganda — jim (to'liq tiklanishni kutadi).
+- Takrorsizlik tekshiruv KODI bo'yicha (son yoki Telegram matni o'zgarsa yangi xabar ketmaydi): muammo
+  paydo bo'lganda yoki kodlar to'plami o'zgarganda bitta; davom etsa har `BOT_ALERT_REPEAT_HOURS` (6) da
+  eslatma; tiklanganda bitta «✅ tiklandi».
+- Hech bir kanal qabul qilmasa holat oldinga surilmaydi — keyingi yugurish qayta yuboradi.
+- Sirlar (tokenlar, URL'lar) argv/log'ga tushmaydi (`curl -K -`); holat va log fayllari `0600`.
+- Metrika: yakuniy dead-letter — `bot_outbox_dead_total` (alohida counter; `bot_send_total` urinishlarni sanaydi).
+
+**O'rnatish (serverda, qo'lda — repo'da sir yo'q):**
+
+1. Skriptni ko'chiring: `cp scripts/bot-alert.sh ~/elchi-ops/ && chmod 700 ~/elchi-ops/bot-alert.sh`.
+2. `~/elchi-ops/bot-alert.env` (`chmod 600`; `KEY=VALUE`, skript uni `source` qilmaydi). Izohlar —
+   faqat ALOHIDA qatorda. Kamida bitta kanal:
+   ```
+   # ntfy / Slack-mos relay
+   BOT_ALERT_WEBHOOK_URL=https://ntfy.sh/<maxfiy-topic>
+   # ixtiyoriy Telegram kanali — ALOHIDA alert boti (asosiy token bilan bir xil bo'lsa rad etiladi)
+   BOT_ALERT_TELEGRAM_CHAT_ID=<chat-id>
+   BOT_ALERT_TELEGRAM_BOT_TOKEN=<alohida-alert-bot-tokeni>
+   # dead-man switch (server o'chsa ham bilinadi)
+   BOT_ALERT_HEARTBEAT_URL=https://hc-ping.com/<uuid>
+   # bir xostda bir nechta compose loyiha bo'lsa
+   BOT_ALERT_COMPOSE_PROJECT=<compose-loyiha-nomi>
+   ```
+   `TELEGRAM_BOT_TOKEN`, `TELEGRAM_BOT_SLUG`, `TELEGRAM_BOT_MODE`, `TELEGRAM_WEBHOOK_SECRET`,
+   `TELEGRAM_WEBHOOK_URL`, `BOT_POLLING_LEADER`, `POSTGRES_USER`, `POSTGRES_DB` — `.env.production` dan
+   o'qiladi. Chegaralarni shu faylda o'zgartirish mumkin (jadvaldagi nomlar). `BOT_ALERT_CMD_TIMEOUT`,
+   `BOT_ALERT_HOST_LABEL`, `BOT_ALERT_TELEGRAM_API` — fayldan yoki shu nomdagi env'dan (env ustun).
+3. Tekshirish: `ELCHI_APP_DIR=<backend-katalogi> ~/elchi-ops/bot-alert.sh --dry-run` (hech narsa
+   yubormaydi, holatni o'zgartirmaydi), `… --test` (kanallarga test xabar + heartbeat ping).
+4. Cron (`docker` guruhidagi foydalanuvchi):
+   `*/5 * * * * ELCHI_APP_DIR=/home/<user>/apps/backend /home/<user>/elchi-ops/bot-alert.sh`.
+5. Log: `~/elchi-ops/logs/bot-alert.log`; holat: `~/elchi-ops/state/bot-alert.state`.
+
+**Ogohlantirish kelsa:** token — BotFather / `.env.production` (§4); webhook — `npm run telegram:setup`;
+outbox tiqilgan / `dead` ko'p — notification-service loglari va `telegram_outbox.last_error`;
+konteyner / crash-loop — `docker compose -f docker-compose.prod.yml ps notification-service` va loglari.
+
+Keyin (alohida karta): Prometheus + Alertmanager (`libs/common/src/metrics/alerts/telegram-bot.rules.yml`).

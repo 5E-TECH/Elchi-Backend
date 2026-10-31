@@ -44,6 +44,12 @@ Bot tugmalari endi quyidagi yo'llarni ochadi (asos — `ELCHI_CABINET_URL`). Dep
 - 🔧 [frontend] — eski chat xabarlaridagi havolalar ishlashi uchun: `/orders/create` → `/new-orders/create` ga yo'naltirish; buyurtmalar ro'yxati va kuryer ro'yxati `orderSearch ?? search` ni o'qisin (eski `search` kaliti). Yangi havolalarda faqat `orderSearch`.
 - → Frontend: yuqoridagi ikki o'zgarish + `botLinks.test.ts` (shu jadvaldagi yo'llar `route-map.json` dagi sahifalarga mos).
 
+### 2026-10-31 — Telegram bot kuzatuvi (zDUUxyH2)
+
+- 🟢 [ops] — `scripts/bot-alert.sh` (cron): bot tokeni, webhook, `telegram_outbox` navbati va notification-service konteynerini tekshiradi, buzilsa ntfy / alohida bot / heartbeat orqali xabar beradi. Metrika `bot_outbox_dead_total`. API o'zgarmagan.
+
+→ Frontend: o'zgarish shart emas.
+
 ### 2026-10-31 — Kuryer amallarida `Idempotency-Key` (BOT-3d)
 
 - ✏️ [order] — `POST /orders/sell/:id`, `POST /orders/cancel/:id`, `POST /orders/:id/could-not-deliver`, `POST /orders/partly-sell/:id`, `POST /orders/rollback/:id` endi ixtiyoriy **`Idempotency-Key`** header'ini qabul qiladi (≤255 belgi, foydalanuvchi bo'yicha ajratiladi; uzunroq → **400**). Ayni kalit bilan takroriy so'rov (qayta urinish, ikki marta bosish) amalni ikkinchi marta bajarmaydi — birinchi muvaffaqiyatli natija qaytadi. Yiqilgan urinish saqlanmaydi: ayni kalit bilan qayta urinish amalni qayta bajaradi.

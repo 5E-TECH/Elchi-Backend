@@ -870,26 +870,17 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
     of record regardless of channel outcome. `role`/`broadcast` targeting can't
     reach superadmin/customer (excluded by `identity.user.find_all`) — use
     explicit `recipient_id` for those.
-- **Telegram patterns (unchanged):** config CRUD, `connect_by_token`, `send`. Also
-  runs the **order-create telegram bot** + group alert bot (tokens in env).
-- **fix3 (2026-10-01) — Telegram group binding (CODE-02):** the bot text and
-  REST `connect_by_token` share one parser. A bind needs the market's
-  **current secret** `market_tg_token` (`group_token-<32 hex>`, optional
-  `-create`/`-cancel` suffix = group type), resolved via
-  `identity.market.find_by_tg_token`; the old `group_token-<marketId>` form and
-  the saved-token fallback are rejected. The token is **not rotated** after a
-  bind (it stays the order-bot credential) and is not stored in
-  `telegram_market.token` (sends use the env bot). An existing (market, group
-  type) binding — active or inactive, not deleted — is **never overwritten** by
-  the bot/token ("Bu market uchun bu turdagi guruh allaqachon ulangan — admin
-  orqali o'zgartiring"); re-binding goes only through admin
-  `PATCH/DELETE /notifications/:id`. The notification bot answers `/id` /
-  `/id@<bot>` with `Group ID: <chat.id>`; bot texts are Uzbek and unexpected
-  errors are not echoed into the group. Order bot `/status`: only for the
-  token-linked market's own orders; a missing and a foreign order get the same
-  "❌ #N buyurtma topilmadi." (CODE-18). **No service sends automatic
-  new/cancelled-order alerts** to bound groups — only manual
-  `POST /notifications/send` and `notification.dispatch`'s optional relay.
+- **Telegram bot (zDUUxyH2 — rewritten, 2026-10-31):** ONE bot, one token
+  (`TELEGRAM_BOT_TOKEN`), one core in `apps/notification-service/src/bot/`
+  (the old order-bot and group-alert bot were merged, ZlpXb4Wh). Incoming:
+  api-gateway `POST /telegram/webhook/:botSlug` → RMQ event
+  `notification.telegram.webhook_update` (`TELEGRAM_UPDATE_EVENT`, single
+  constant in `libs/common`) on the `NOTIFICATION_BOT` queue → `BotController`.
+  Groups and personal chats are linked only with a **one-time deep-link code**
+  from the cabinet (`telegram_link_tokens`); the text `group_token-…` form is
+  removed (6jXw0DDr). Outgoing messages go through `telegram_outbox`
+  (retry, dead-letter, `parts_sent`). Full description, modes, rollout and
+  monitoring: [`docs/ops/telegram-bot.md`](ops/telegram-bot.md).
 - **Gateway routes:** `GET/PATCH/DELETE /notifications/inbox*` (any authed user,
   own inbox), `POST /notifications/dispatch` (`@Roles(superadmin, admin)`).
 
