@@ -428,16 +428,21 @@ bazasiga o'zi yozmaydi, doira/holat mashinasi/isbot/extra-cost — serverda.
 
 `scripts/bot-alert.sh` — host cron'da har 5 daqiqada (`backup-alert.sh` naqshi; yangi konteyner yo'q,
 kanal botga bog'liq emas). Faqat o'qiydi. Bir vaqtda bitta nusxa (`flock`); har `docker`/`psql`
-chaqiruvi `timeout` bilan (`BOT_ALERT_CMD_TIMEOUT`, 30 s), SQL `statement_timeout=10s`.
+chaqiruvi `timeout -k 5` bilan (`BOT_ALERT_CMD_TIMEOUT`, 30 s), SQL `statement_timeout=10s`. Qo'lda
+`--dry-run`/`--test` paytida boshqa nusxa ishlayotgan bo'lsa — stderr'ga xabar va kod 3.
 
 | Tekshiruv | Muammo | Chegara (env, sukut) |
 |---|---|---|
 | `getMe` | token buzuq (401/404) — yoki alohida: «Telegram API javob bermadi» (tarmoq / 5xx) | — |
 | `getWebhookInfo` — faqat webhook rejimida (`resolveBotConfig` kabi: `TELEGRAM_BOT_MODE`, `TELEGRAM_WEBHOOK_SECRET`, `BOT_POLLING_LEADER`) | url `TELEGRAM_WEBHOOK_URL` ga teng emas (berilmagan bo'lsa `https://…/telegram/webhook/<slug>` emas) yoki bo'sh; yaqinda yetkazish xatosi; navbat to'lgan | `BOT_ALERT_WEBHOOK_ERROR_MIN` (15), `BOT_ALERT_PENDING_UPDATES_MAX` (100) |
 | `telegram_outbox` (`BEGIN READ ONLY` SELECT, `elchi-postgres` ichida) | muddati o'tgan `pending` juda eski; oxirgi soatda `dead` ko'p; `sending` da qotgan; so'rov bajarilmadi / timeout | `BOT_ALERT_OUTBOX_PENDING_MIN` (10), `BOT_ALERT_OUTBOX_DEAD_MAX` (20) |
-| notification-service konteyneri — aniq 1 ta (`com.docker.compose.project` = `BOT_ALERT_COMPOSE_PROJECT`/`COMPOSE_PROJECT_NAME`, `oneoff=False`; yoki `BOT_ALERT_NS_CONTAINER`) | topilmadi / bir nechta; `running healthy` emas; `RestartCount` o'sgan (crash-loop); health `starting` `StartedAt` dan uzoq | `BOT_ALERT_NS_START_GRACE_S` (90) |
+| notification-service konteyneri — aniq 1 ta (`com.docker.compose.project` = `BOT_ALERT_COMPOSE_PROJECT`/`COMPOSE_PROJECT_NAME`, `oneoff=False`; yoki `BOT_ALERT_NS_CONTAINER`) | topilmadi / bir nechta / docker javob bermadi; `running healthy` emas; crash-loop (`RestartCount` oynada ≥ 2 marta o'sdi); health `starting` `StartedAt` dan uzoq | `BOT_ALERT_NS_START_GRACE_S` (90), `BOT_ALERT_RESTART_WINDOW_MIN` (30) |
 
-- Muammo faqat **ketma-ket 2 yugurishda** takrorlansa xabar qilinadi (qisqa uzilish jim o'tadi).
+- **Debounce:** tekshiruv shu yugurishda VA oldingi 2 yugurishdan birida yiqilgan bo'lsa xabar qilinadi
+  (qisqa uzilish jim o'tadi, har ikkinchi yugurishda yiqiladigan «flapping» ham ushlanadi). Crash-loop
+  (oynada ≥ 2 restart) — darhol.
+- **Tiklanish:** «✅ tiklandi» faqat ketma-ket 2 ta TOZA yugurishdan keyin. Undan oldin (masalan muammolar
+  to'plami almashganda yoki konteyner hali `starting`) holat saqlanadi, xabar ketmaydi.
 - Takrorsizlik tekshiruv KODI bo'yicha (son yoki Telegram matni o'zgarsa yangi xabar ketmaydi): muammo
   paydo bo'lganda yoki kodlar to'plami o'zgarganda bitta; davom etsa har `BOT_ALERT_REPEAT_HOURS` (6) da
   eslatma; tiklanganda bitta «✅ tiklandi».
@@ -463,7 +468,8 @@ chaqiruvi `timeout` bilan (`BOT_ALERT_CMD_TIMEOUT`, 30 s), SQL `statement_timeou
    ```
    `TELEGRAM_BOT_TOKEN`, `TELEGRAM_BOT_SLUG`, `TELEGRAM_BOT_MODE`, `TELEGRAM_WEBHOOK_SECRET`,
    `TELEGRAM_WEBHOOK_URL`, `BOT_POLLING_LEADER`, `POSTGRES_USER`, `POSTGRES_DB` — `.env.production` dan
-   o'qiladi. Chegaralarni shu faylda o'zgartirish mumkin (jadvaldagi nomlar).
+   o'qiladi. Chegaralarni shu faylda o'zgartirish mumkin (jadvaldagi nomlar). `BOT_ALERT_CMD_TIMEOUT`,
+   `BOT_ALERT_HOST_LABEL`, `BOT_ALERT_TELEGRAM_API` — fayldan yoki shu nomdagi env'dan (env ustun).
 3. Tekshirish: `ELCHI_APP_DIR=<backend-katalogi> ~/elchi-ops/bot-alert.sh --dry-run` (hech narsa
    yubormaydi, holatni o'zgartirmaydi), `… --test` (kanallarga test xabar + heartbeat ping).
 4. Cron (`docker` guruhidagi foydalanuvchi):

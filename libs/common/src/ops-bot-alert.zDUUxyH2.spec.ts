@@ -37,7 +37,11 @@ echo "docker $*" >> "$FAKE_LOG"
 [ "\${FAKE_DOCKER_HANG:-}" = 1 ] && sleep 5
 case "$1" in
   ps) printf '%b' "\${FAKE_NS_IDS:-}" ;;
-  inspect) id="\${@: -1}"; v="FAKE_\${id//-/_}"; [ -n "\${!v:-}" ] || exit 1; echo "\${!v}" ;;
+  inspect)
+    [ -n "\${FAKE_INSPECT_ERR:-}" ] && { echo "$FAKE_INSPECT_ERR" >&2; exit 1; }
+    id="\${@: -1}"; v="FAKE_\${id//-/_}"
+    [ -n "\${!v:-}" ] || { echo "Error: No such object: $id" >&2; exit 1; }
+    echo "\${!v}" ;;
   exec) [ -n "\${FAKE_PSQL:-}" ] || exit 2; printf '%b\\n' "$FAKE_PSQL" ;;
 esac
 `;
@@ -299,7 +303,9 @@ describe('bot-alert.sh (zDUUxyH2)', () => {
       BOT_ALERT_NOW: String(now + 600),
     });
     expect(sends()).toHaveLength(1);
-    expect(sends()[0]).toMatch(/qayta ishga tushmoqda \(RestartCount 2 → 3\)/);
+    expect(sends()[0]).toMatch(
+      /qayta ishga tushmoqda \(2 marta 30 daq ichida, RestartCount 3\)/,
+    );
     run({
       FAKE_ns1: `running starting 4 ${fresh(900)}`,
       BOT_ALERT_NOW: String(now + 900),
@@ -322,7 +328,10 @@ describe('bot-alert.sh (zDUUxyH2)', () => {
     expect(sends()).toHaveLength(1);
     run({ ...bad, BOT_ALERT_NOW: String(now + 7 * 3600) });
     expect(sends()).toHaveLength(2);
+    // Tiklanish ham debounce: 1-toza yugurish — jim, 2-chisi — «tiklandi».
     run({ BOT_ALERT_NOW: String(now + 7 * 3600 + 300) });
+    expect(sends()).toHaveLength(2);
+    run({ BOT_ALERT_NOW: String(now + 7 * 3600 + 600) });
     expect(sends()).toHaveLength(3);
     expect(sends()[2]).toMatch(/tiklandi/);
     expect(logText()).not.toContain(MAIN_TOKEN);
@@ -431,5 +440,143 @@ describe('bot-alert.sh (zDUUxyH2)', () => {
     expect(run({ ...bad, BOT_ALERT_NOW: String(now + 300) }).status).toBe(1);
     expect(sends()).toEqual([]);
     expect(logText()).toMatch(/kanal sozlanmagan/);
+  });
+  it('⭐ to‘plam almashsa yolg‘on «tiklandi» yo‘q: ns tasdiqlangan → ns yaxshi, yangi outbox muammo → jim → outbox tasdiqlanadi', () => {
+    const ns = { FAKE_ns1: `exited x 0 ${startedLongAgo}` };
+    run(ns);
+    run({ ...ns, BOT_ALERT_NOW: String(now + 300) });
+    expect(sends()).toHaveLength(1);
+    run({ FAKE_PSQL: '900\\n0\\n0', BOT_ALERT_NOW: String(now + 600) });
+    expect(sends()).toHaveLength(1);
+    run({ FAKE_PSQL: '900\\n0\\n0', BOT_ALERT_NOW: String(now + 900) });
+    expect(sends()).toHaveLength(2);
+    expect(sends()[1]).toMatch(/Outbox: eng eski kutilayotgan xabar/);
+    expect(sends().join('\n')).not.toMatch(/tiklandi/);
+  });
+
+  it('⭐ sekin crash-loop (~10 daqiqada bir restart) — xabar keladi', () => {
+    const at = (s: number, n: number, h = 'healthy') => ({
+      FAKE_ns1: `running ${h} ${n} ${new Date((now + s - 400) * 1000).toISOString()}`,
+      BOT_ALERT_NOW: String(now + s),
+    });
+    run(at(0, 0));
+    run(at(300, 0));
+    run(at(600, 1)); // restart, keyingi tekshiruvda yana healthy
+    run(at(900, 1));
+    run(at(1200, 2));
+    expect(sends()).toHaveLength(1);
+    expect(sends()[0]).toMatch(/qayta ishga tushmoqda \(2 marta/);
+  });
+
+  it('⭐ problem → «starting» (RestartCount o‘smagan) darhol «tiklandi» bermaydi', () => {
+    const bad = { FAKE_ns1: `exited x 0 ${startedLongAgo}` };
+    run(bad);
+    run({ ...bad, BOT_ALERT_NOW: String(now + 300) });
+    expect(sends()).toHaveLength(1);
+    const fresh = new Date((now + 600 - 20) * 1000).toISOString();
+    run({
+      FAKE_ns1: `running starting 0 ${fresh}`,
+      BOT_ALERT_NOW: String(now + 600),
+    });
+    expect(sends()).toHaveLength(1);
+    run({ ...bad, BOT_ALERT_NOW: String(now + 900) });
+    expect(sends().join('\n')).not.toMatch(/tiklandi/);
+  });
+
+  it('⭐ flapping (har ikkinchi yugurishda yiqiladi) — alert keladi, «tiklandi» ketma-ket 2 toza yugurishdan keyin', () => {
+    const bad = { FAKE_ns1: `exited x 0 ${startedLongAgo}` };
+    run(bad);
+    run({ BOT_ALERT_NOW: String(now + 300) });
+    run({ ...bad, BOT_ALERT_NOW: String(now + 600) });
+    expect(sends()).toHaveLength(1);
+    run({ BOT_ALERT_NOW: String(now + 900) });
+    run({ ...bad, BOT_ALERT_NOW: String(now + 1200) });
+    expect(sends()).toHaveLength(1);
+    run({ BOT_ALERT_NOW: String(now + 1500) });
+    run({ BOT_ALERT_NOW: String(now + 1800) });
+    expect(sends()).toHaveLength(2);
+    expect(sends()[1]).toMatch(/tiklandi/);
+  });
+
+  it('eski state formati (raw= yo‘q, state=problem) — yangilanishdan keyin yolg‘on «tiklandi» yo‘q', () => {
+    mkdirSync(join(dir, 'ops', 'state'), { recursive: true });
+    writeFileSync(
+      join(dir, 'ops', 'state', 'bot-alert.state'),
+      `state=problem\nsig=abc\nsince=${now - 600}\nlast_sent=${now - 600}\nchecked_at=${now - 300}\n`,
+    );
+    run({ FAKE_ns1: `exited x 0 ${startedLongAgo}` });
+    run({ BOT_ALERT_NOW: String(now + 300) });
+    expect(sends().join('\n')).not.toMatch(/tiklandi/);
+  });
+
+  it('⭐ «tiklandi» yuborilmasa — keyingi yugurishda qayta yuboriladi', () => {
+    const bad = { FAKE_ns1: `exited x 0 ${startedLongAgo}` };
+    run(bad);
+    run({ ...bad, BOT_ALERT_NOW: String(now + 300) });
+    run({ BOT_ALERT_NOW: String(now + 600) });
+    run({ FAKE_SEND_FAIL: '1', BOT_ALERT_NOW: String(now + 900) });
+    expect(sends().filter((line) => line.includes('tiklandi'))).toHaveLength(1);
+    run({ BOT_ALERT_NOW: String(now + 1200) });
+    expect(sends().filter((line) => line.includes('tiklandi'))).toHaveLength(2);
+    expect(
+      readFileSync(join(dir, 'ops', 'state', 'bot-alert.state'), 'utf8'),
+    ).toMatch(/^state=ok$/m);
+  });
+
+  it('⭐ flock: bir vaqtda ikkinchi nusxa — cron jim (0), --dry-run aniq xabar bilan (3)', () => {
+    mkdirSync(join(dir, 'ops', 'state'), { recursive: true });
+    const lock = join(dir, 'ops', 'state', 'bot-alert.lock');
+    const holder = (args: string) =>
+      spawnSync(
+        'bash',
+        ['-c', `exec 8>"${lock}"; flock 8; bash "${SCRIPT}" ${args}`],
+        {
+          encoding: 'utf8',
+          env: {
+            PATH: `${join(dir, 'bin')}:/usr/bin:/bin`,
+            HOME: dir,
+            ELCHI_APP_DIR: join(dir, 'app'),
+            ELCHI_OPS_DIR: join(dir, 'ops'),
+            FAKE_LOG: join(dir, 'calls.log'),
+            ...healthy,
+            FAKE_ns1: `exited x 0 ${startedLongAgo}`,
+          },
+        },
+      );
+    expect(holder('').status).toBe(0);
+    const dry = holder('--dry-run');
+    expect(dry.status).toBe(3);
+    expect(dry.stderr).toMatch(/boshqa nusxa ishlayapti/);
+    expect(calls()).not.toMatch(/docker/);
+  });
+
+  it('docker inspect: «No such object» — topilmadi; boshqa xato — tekshirib bo‘lmadi', () => {
+    expect(twice({ FAKE_NS_IDS: 'gone\\n' })).toMatch(
+      /notification-service: konteyner topilmadi \(gone\)/,
+    );
+    rmSync(join(dir, 'ops', 'state'), { recursive: true, force: true });
+    expect(
+      twice({ FAKE_INSPECT_ERR: 'Cannot connect to the Docker daemon' }),
+    ).toMatch(
+      /notification-service: tekshirib bo'lmadi \(docker inspect: kod 1\)/,
+    );
+  });
+
+  it('config: qo‘shtirnoqli qiymat ichidagi « #» saqlanadi; placeholder token — bot o‘chiq (webhook tekshirilmaydi)', () => {
+    writeConf('BOT_ALERT_WEBHOOK_URL="https://ntfy.test/elchi #bot"  # izoh\n');
+    const bad = { FAKE_ns1: `exited x 0 ${startedLongAgo}` };
+    run(bad);
+    run({ ...bad, BOT_ALERT_NOW: String(now + 300) });
+    expect(readFileSync(join(dir, 'calls.log.stdin'), 'utf8')).toContain(
+      'url = "https://ntfy.test/elchi #bot"\n',
+    );
+    rmSync(join(dir, 'ops', 'state'), { recursive: true, force: true });
+    writeFileSync(
+      join(dir, 'app', '.env.production'),
+      `TELEGRAM_BOT_TOKEN=123:Your_Token_Here\nTELEGRAM_WEBHOOK_SECRET=${SECRET}\n`,
+    );
+    expect(
+      twice({ FAKE_WEBHOOK: '{"ok":true,"result":{"url":""}}' }),
+    ).not.toMatch(/Webhook:/);
   });
 });
