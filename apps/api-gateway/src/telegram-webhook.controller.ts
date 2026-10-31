@@ -1,3 +1,4 @@
+import { TELEGRAM_UPDATE_EVENT } from '@app/common';
 import { createHash, timingSafeEqual } from 'node:crypto';
 import {
   Controller,
@@ -19,11 +20,8 @@ import type { Request } from 'express';
 import { firstValueFrom, timeout } from 'rxjs';
 import { Public } from './auth/public.decorator';
 
-/** notification-service `BotController` shu hodisani tinglaydi. */
-// ⚠️ `notification.telegram.update` EMAS — u nom allaqachon admin RPC'si
-// (telegram_markets guruhini yangilash) uchun band: hodisa o'sha handler'ga
-// tushib, xato bilan DLQ'ga ketardi (2026-10-17 prod: /start javobsiz qoldi).
-export const TELEGRAM_UPDATE_EVENT = 'notification.telegram.webhook_update';
+/** notification-service `BotController` shu hodisani tinglaydi (yagona manba — libs/common). */
+export { TELEGRAM_UPDATE_EVENT };
 export const TELEGRAM_SECRET_HEADER = 'x-telegram-bot-api-secret-token';
 const SECRET_RE = /^[A-Za-z0-9_-]{16,256}$/;
 const SLUG_RE = /^[a-z0-9_-]{1,32}$/;

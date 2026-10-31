@@ -6,7 +6,7 @@ import { NotificationServiceController } from '../notification-service.controlle
 import { NotificationServiceService } from '../notification-service.service';
 import { HealthController } from '../../../api-gateway/src/health.controller';
 import { BotChannelService } from './bot-channel.service';
-import { botTokenHealthy, BOT_METRICS } from './bot-metrics';
+import { botSendTotal, botTokenHealthy, BOT_METRICS } from './bot-metrics';
 import {
   POLL_BACKOFF_MAX_MS,
   BotRuntimeService,
@@ -167,12 +167,15 @@ describe('9HIaV80X — sendMessage xato turlari va outbox', () => {
 
     fetchMock.mockClear();
     const { outbox, repo, channels } = makeOutbox(fetchMock);
+    const deadBefore = await deadCount();
     const result = await outbox.send({
       chatId: '5550007',
       text: 'x',
       source: 'test',
     });
     expect(result.status).toBe('dead');
+    // (zDUUxyH2) yakuniy dead-letter metrikada.
+    expect(await deadCount()).toBe(deadBefore + 1);
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(repo.rows.get(result.id)!.status).toBe('dead');
     expect(channels.markInactive).toHaveBeenCalledWith(
@@ -586,3 +589,11 @@ describe('BOT-3c — shaxsiy chatda /start blok belgisini o‘chiradi', () => {
     },
   );
 });
+
+/** `bot_send_total{result="dead"}` joriy qiymati. */
+async function deadCount(): Promise<number> {
+  const metric = await botSendTotal.get();
+  return (
+    metric.values.find((value) => value.labels.result === 'dead')?.value ?? 0
+  );
+}

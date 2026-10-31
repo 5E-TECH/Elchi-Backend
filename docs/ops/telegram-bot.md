@@ -129,7 +129,7 @@ oraliqda iste'molchi tushsa update yo'qolishi mumkin.
 | notification-bot `/start <token>` (shaxsiy) | akkauntni ulash (rCFZAmOz) | `StartHandler` + bog'lash kodi cheklovi 5/daqiqa → 15 daqiqa blok + activity log |
 | notification-bot `/stop` | uzish | `StartHandler` (`/stop` va `/uzish`) + activity log |
 | notification-bot `/start`, `/help` (guruh) | ulash ko'rsatmasi | `GroupHandler` (o'zgarmagan matn) |
-| notification-bot `group_token-…` (guruh) | guruhni ulash | `GroupHandler` → `connectGroupByTokenText` (+ cheklov) |
+| notification-bot `group_token-…` (guruh) | guruhni ulash | O'CHIRILDI (6jXw0DDr) — faqat kabinetdagi bir martalik deep-link kodi; matnli token → `GROUP_TOKEN_REMOVED_TEXT` |
 | notification-bot `salom` | salomlashish | `StartHandler` (shaxsiy chat) |
 | order-bot `pollLoop`, `ORDER_BOT_TOKEN` | ikkinchi bot | O'CHIRILDI — bitta token (`TELEGRAM_BOT_TOKEN`) |
 | order-bot `TOKEN_RE` market tokeni bilan kirish + `links` Map | chat → market | TASHLANDI (ZlpXb4Wh #3): aktor `users.telegram_id` → `identity.telegram.resolve` (restartdan keyin ham) |
@@ -423,3 +423,43 @@ bazasiga o'zi yozmaydi, doira/holat mashinasi/isbot/extra-cost — serverda.
   (`order.find_all`); xabar `notification.dispatch` (in-app + shaxsiy
   Telegram) bilan, «📋 Topshiriqlarim» = `/ishim` 1-sahifa.
 - Ega qarori (2026-09-20) kuchda: skan chat orqali qilinmaydi.
+
+## 15. Kuzatuv — bot buzilsa xabar (zDUUxyH2)
+
+`scripts/bot-alert.sh` — host cron'da har 5 daqiqada (`backup-alert.sh` naqshi; yangi konteyner yo'q,
+kanal botga bog'liq emas). Faqat o'qiydi.
+
+| Tekshiruv | Muammo | Chegara (env, sukut) |
+|---|---|---|
+| `getMe` | token buzuq / topilmadi | — |
+| `getWebhookInfo` (`TELEGRAM_BOT_MODE=polling` da o'tkaziladi) | url `…/telegram/webhook/<TELEGRAM_BOT_SLUG\|elchi>` emas yoki bo'sh; yaqinda yetkazish xatosi; navbat to'lgan | `BOT_ALERT_WEBHOOK_ERROR_MIN` (15), `BOT_ALERT_PENDING_UPDATES_MAX` (100) |
+| `telegram_outbox` (`BEGIN READ ONLY` SELECT, `elchi-postgres` ichida) | eng eski muddati o'tgan `pending` juda eski; oxirgi soatda `dead` ko'p | `BOT_ALERT_OUTBOX_PENDING_MIN` (10), `BOT_ALERT_OUTBOX_DEAD_MAX` (20) |
+| notification-service konteyneri | `running healthy` emas | `BOT_ALERT_NS_CONTAINER` (sukut — compose label bo'yicha) |
+
+Xabar: muammo paydo bo'lganda yoki to'plami o'zgarganda bitta; davom etsa har `BOT_ALERT_REPEAT_HOURS` (6) da
+eslatma; tiklanganda bitta «✅ tiklandi». Sirlar (tokenlar, URL'lar) argv/log'ga tushmaydi (`curl -K -`).
+Metrika: yakuniy dead-letter `bot_send_total{result="dead"}` ga yoziladi.
+
+**O'rnatish (serverda, qo'lda — repo'da sir yo'q):**
+
+1. Skriptni ko'chiring: `cp scripts/bot-alert.sh ~/elchi-ops/ && chmod 700 ~/elchi-ops/bot-alert.sh`.
+2. `~/elchi-ops/bot-alert.env` (`chmod 600`; `KEY=VALUE`, skript uni `source` qilmaydi) — kamida bitta kanal:
+   ```
+   BOT_ALERT_WEBHOOK_URL=https://ntfy.sh/<maxfiy-topic>        # ntfy / Slack-mos relay
+   BOT_ALERT_TELEGRAM_CHAT_ID=<chat-id>                         # ixtiyoriy, ALOHIDA bot bilan
+   BOT_ALERT_TELEGRAM_BOT_TOKEN=<alohida-alert-bot-tokeni>      # asosiy token bilan bir xil bo'lsa rad etiladi
+   BOT_ALERT_HEARTBEAT_URL=https://hc-ping.com/<uuid>           # dead-man switch (server o'chsa ham bilinadi)
+   ```
+   `TELEGRAM_BOT_TOKEN`, `TELEGRAM_BOT_SLUG`, `TELEGRAM_BOT_MODE`, `POSTGRES_USER`, `POSTGRES_DB` —
+   `.env.production` dan o'qiladi. Chegaralarni shu faylda o'zgartirish mumkin (jadvaldagi nomlar).
+3. Tekshirish: `~/elchi-ops/bot-alert.sh --dry-run` (hech narsa yubormaydi, holatni o'zgartirmaydi),
+   `~/elchi-ops/bot-alert.sh --test` (kanallarga test xabar).
+4. Cron (`docker` guruhidagi foydalanuvchi): `*/5 * * * * /home/<user>/elchi-ops/bot-alert.sh`.
+5. Log: `~/elchi-ops/logs/bot-alert.log`; holat: `~/elchi-ops/state/bot-alert.state`.
+
+**Ogohlantirish kelsa:** token — BotFather / `.env.production` (§4); webhook — `npm run telegram:setup`;
+outbox tiqilgan / `dead` ko'p — notification-service loglari va `telegram_outbox.last_error`;
+konteyner — `docker compose -f docker-compose.prod.yml ps notification-service` va loglari.
+
+Keyin (alohida karta): Prometheus + Alertmanager (`libs/common/src/metrics/alerts/telegram-bot.rules.yml`).
+

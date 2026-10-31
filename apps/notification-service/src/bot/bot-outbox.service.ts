@@ -1,3 +1,4 @@
+import { botSendTotal } from './bot-metrics';
 import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Interval } from '@nestjs/schedule';
@@ -406,6 +407,9 @@ export class BotOutboxService implements OnModuleDestroy {
         await this.releaseCard(row.card_order_id, row.chat_id);
       }
       if (dead) {
+        // (zDUUxyH2) dead-letter metrikasi — transport faqat urinish natijasini
+        // (retry/blocked/failed) yozadi, yakuniy `dead` shu yerda.
+        botSendTotal.inc({ result: 'dead' });
         await this.settle(row.notification_ids, 'dead', reason);
         this.logger.warn(
           `telegram_outbox #${row.id} dead-letter (${retryCount} urinish, chat ${row.chat_id}): ${reason}`,
