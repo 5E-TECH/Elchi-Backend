@@ -63,6 +63,16 @@ kabinetdan kod bilan qayta ulaydi (o'sha marketning nofaol qatori qayta yoqiladi
 marketniki — yo'q); admin o'chirgan (`manual`) yoki sababsiz qator — faqat admin PATCH. HTML xatosi (`can't parse entities`)
 — faqat o'sha xabar `dead`, guruh faol qoladi.
 
+**Javob kafolati (BOT-3d A).** Webhook update'ning brokerga uzatilishini kutadi
+(3 s): RMQ xatosi / timeout → 503, Telegram qayta yuboradi; takror update
+iste'molchida `update_id` bo'yicha tashlanadi (`telegram_rate_limits`
+`upd:<id>`, 1 kun). Update ikki marta xato bersa shaxsiy chatga «⚠️ Xatolik yuz
+berdi» (guruhga yo'q). identity javob bermasa «⚠️ Tizim vaqtincha ishlamayapti»
+(«avval ulang» emas); tugma bosilganda ham shu matn callback javobida.
+Chegara: 503 faqat brokerga UZATISH xatosini qoplaydi. Uzatilgan xabar
+persistent emas (navbatda 60 s TTL), DLQ avtomatik qayta o'ynalmaydi — shu
+oraliqda iste'molchi tushsa update yo'qolishi mumkin.
+
 ## 2. Rejimlar (`TELEGRAM_BOT_MODE`, sukut `auto`)
 
 | Holat | Natija |
