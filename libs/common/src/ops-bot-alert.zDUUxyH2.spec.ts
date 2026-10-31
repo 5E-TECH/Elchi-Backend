@@ -896,10 +896,55 @@ describe('bot-alert.sh (zDUUxyH2)', () => {
           Array.from({ length: 12 }, (_, k) => (k % 4 < 2 ? () => A : ok)),
         ),
       ).toBe('.A.R.A......');
-      expect(logText()).toMatch(/FLAP_WINDOW_MIN=999999999999999 rad etildi/);
       expect(logText()).toMatch(
-        /RESTART_WINDOW_MIN=999999999999999 rad etildi/,
+        /FLAP_WINDOW_MIN=200000000000000000 rad etildi/,
       );
+      expect(logText()).toMatch(
+        /RESTART_WINDOW_MIN=200000000000000000 rad etildi/,
+      );
+    });
+    it('knob) FLAP_WINDOW_MIN=10 amalda ishlamaydi — rad etiladi (11..10080), 60 ishlatiladi', () => {
+      writeConf(
+        `BOT_ALERT_TELEGRAM_CHAT_ID=42\nBOT_ALERT_TELEGRAM_BOT_TOKEN=${ALERT_TOKEN}\nBOT_ALERT_FLAP_WINDOW_MIN=10\n`,
+      );
+      expect(
+        simulate(
+          Array.from({ length: 12 }, (_, k) => (k % 4 < 2 ? () => A : ok)),
+        ),
+      ).toBe('.A.R.A......');
+      expect(logText()).toMatch(
+        /BOT_ALERT_FLAP_WINDOW_MIN=10 rad etildi \(11\.\.10080\) — 60/,
+      );
+    });
+    it('knob) bosh nollar: OUTBOX_PENDING_MIN=0000000000000010 — qiymati 10 (o‘chib qolmaydi), WARN yo‘q', () => {
+      writeConf(
+        `BOT_ALERT_TELEGRAM_CHAT_ID=42\nBOT_ALERT_TELEGRAM_BOT_TOKEN=${ALERT_TOKEN}\nBOT_ALERT_OUTBOX_PENDING_MIN=0000000000000010\nBOT_ALERT_RESTART_WINDOW_MIN=0000000000000045\n`,
+      );
+      expect(twice({ FAKE_PSQL: '900\\n0\\n0' })).toMatch(
+        /Outbox: eng eski kutilayotgan xabar 15 daq \(chegara 10\)/,
+      );
+      expect(logText()).not.toMatch(/rad etildi/);
+    });
+    it('knob) yaroqsiz qiymatlar — xom qiymat bilan WARN + sukut; sog‘ tizimda alert yo‘q', () => {
+      writeConf(
+        `BOT_ALERT_TELEGRAM_CHAT_ID=42\nBOT_ALERT_TELEGRAM_BOT_TOKEN=${ALERT_TOKEN}\n` +
+          'BOT_ALERT_RESTART_WINDOW_MIN=45m\nBOT_ALERT_FLAP_WINDOW_MIN=-5\nBOT_ALERT_REPEAT_HOURS=0\n' +
+          'BOT_ALERT_OUTBOX_PENDING_MIN=0\nBOT_ALERT_PENDING_UPDATES_MAX=0\nBOT_ALERT_WEBHOOK_ERROR_MIN=0\n' +
+          'BOT_ALERT_CMD_TIMEOUT=1e9\n',
+      );
+      expect(twice({})).toMatch(/state=ok/);
+      expect(sends()).toEqual([]);
+      const log = logText();
+      for (const re of [
+        /RESTART_WINDOW_MIN=45m rad etildi \(1\.\.10080\) — 30/,
+        /FLAP_WINDOW_MIN=-5 rad etildi \(11\.\.10080\) — 60/,
+        /REPEAT_HOURS=0 rad etildi \(1\.\.720\) — 6/,
+        /OUTBOX_PENDING_MIN=0 rad etildi \(1\.\.10080\) — 10/,
+        /PENDING_UPDATES_MAX=0 rad etildi \(1\.\.100000000\) — 100/,
+        /WEBHOOK_ERROR_MIN=0 rad etildi \(1\.\.10080\) — 15/,
+        /CMD_TIMEOUT=1e9 rad etildi \(1\.\.600\) — 30/,
+      ])
+        expect(log).toMatch(re);
     });
     it('#609-3) BOT_ALERT_FLAP_WINDOW_MIN=0 — rad etiladi (ogohlantirish), 60 ishlatiladi', () => {
       writeConf(

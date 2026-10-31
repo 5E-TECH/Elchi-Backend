@@ -456,7 +456,7 @@ chaqiruvi `timeout -k 5` bilan (`BOT_ALERT_CMD_TIMEOUT`, 30 s), SQL `statement_t
 | `getMe` | token buzuq (401/404) — yoki alohida: «Telegram API javob bermadi» (tarmoq / 5xx) | — |
 | `getWebhookInfo` — faqat webhook rejimida (`resolveBotConfig` kabi: `TELEGRAM_BOT_MODE`, `TELEGRAM_WEBHOOK_SECRET`, `BOT_POLLING_LEADER`) | url `TELEGRAM_WEBHOOK_URL` ga teng emas (berilmagan bo'lsa `https://…/telegram/webhook/<slug>` emas) yoki bo'sh; yaqinda yetkazish xatosi; navbat to'lgan | `BOT_ALERT_WEBHOOK_ERROR_MIN` (15), `BOT_ALERT_PENDING_UPDATES_MAX` (100) |
 | `telegram_outbox` (`BEGIN READ ONLY` SELECT, `elchi-postgres` ichida) | muddati o'tgan `pending` juda eski; oxirgi soatda `dead` ko'p; `sending` da qotgan; so'rov bajarilmadi / timeout | `BOT_ALERT_OUTBOX_PENDING_MIN` (10), `BOT_ALERT_OUTBOX_DEAD_MAX` (20) |
-| notification-service konteyneri — aniq 1 ta (`com.docker.compose.project` = `BOT_ALERT_COMPOSE_PROJECT`/`COMPOSE_PROJECT_NAME`, `oneoff=False`; yoki `BOT_ALERT_NS_CONTAINER`) | topilmadi / bir nechta / docker javob bermadi; `running healthy` emas; crash-loop (`RestartCount` oynada ≥ 2 marta o'sdi; restart vaqti `State.StartedAt` dan, oynaga +1 cron intervali zaxira; `0` yoki > 10080 rad etiladi → 30); health `starting` `StartedAt` dan uzoq | `BOT_ALERT_NS_START_GRACE_S` (90), `BOT_ALERT_RESTART_WINDOW_MIN` (30) |
+| notification-service konteyneri — aniq 1 ta (`com.docker.compose.project` = `BOT_ALERT_COMPOSE_PROJECT`/`COMPOSE_PROJECT_NAME`, `oneoff=False`; yoki `BOT_ALERT_NS_CONTAINER`) | topilmadi / bir nechta / docker javob bermadi; `running healthy` emas; crash-loop (`RestartCount` oynada ≥ 2 marta o'sdi; restart vaqti `State.StartedAt` dan, oynaga +1 cron intervali zaxira; 1..10080); health `starting` `StartedAt` dan uzoq | `BOT_ALERT_NS_START_GRACE_S` (90), `BOT_ALERT_RESTART_WINDOW_MIN` (30) |
 
 - **Ogohlantirilgan to'plam tekshiruv kodi bo'yicha «yopishqoq»:**
   - kod shu yugurishda VA oldingi 2 yugurishdan birida yiqilsa qo'shiladi (qisqa uzilish jim o'tadi,
@@ -465,7 +465,7 @@ chaqiruvi `timeout -k 5` bilan (`BOT_ALERT_CMD_TIMEOUT`, 30 s), SQL `statement_t
     hammasida) yiqilgan bo'lsa — bitta «unstable» yozuvi. Shu hodisada allaqachon ogohlantirilgan kodlar
     sanalmaydi (tiklanish dumi «unstable» emas; 2 ta shovqinli tekshiruv ham bermaydi);
   - kod faqat ketma-ket 2 TOZA yugurishdan keyin chiqadi. Hodisa oldingi «tiklandi» dan
-    `BOT_ALERT_FLAP_WINDOW_MIN` (60; 10..10080 dan tashqari rad etiladi → 60) ichida qayta boshlansa (flapping) — 4 toza
+    `BOT_ALERT_FLAP_WINDOW_MIN` (60; 11..10080) ichida qayta boshlansa (flapping) — 4 toza
     yugurish kerak (alert qilingan kodlar chiqqach, «tiklandi» qarori baribir 2 toza yugurish bo'yicha);
   - «✅ tiklandi» faqat to'plam bo'sh VA so'nggi 2 (flapping'da 4) yugurish to'liq toza bo'lsa. To'plam
     bo'shab, lekin hali tasdiqlanmagan yangi kod yiqilayotgan bo'lsa — hodisa jim ushlab turiladi.
@@ -505,7 +505,14 @@ chaqiruvi `timeout -k 5` bilan (`BOT_ALERT_CMD_TIMEOUT`, 30 s), SQL `statement_t
    ```
    `TELEGRAM_BOT_TOKEN`, `TELEGRAM_BOT_SLUG`, `TELEGRAM_BOT_MODE`, `TELEGRAM_WEBHOOK_SECRET`,
    `TELEGRAM_WEBHOOK_URL`, `BOT_POLLING_LEADER`, `POSTGRES_USER`, `POSTGRES_DB` — `.env.production` dan
-   o'qiladi. Chegaralarni shu faylda o'zgartirish mumkin (jadvaldagi nomlar). `BOT_ALERT_CMD_TIMEOUT`,
+   o'qiladi. Chegaralarni shu faylda o'zgartirish mumkin (jadvaldagi nomlar). Har son oraliqda
+   tekshiriladi; raqam bo'lmagan yoki oraliqdan tashqari qiymat (`0`, `-5`, `45m`, ulkan son) rad
+   etiladi: logga xom qiymat bilan `WARN` yoziladi va sukut ishlatiladi. Oraliqlar:
+   `BOT_ALERT_CMD_TIMEOUT` 1..600 (30), `BOT_ALERT_RESTART_WINDOW_MIN` 1..10080 (30),
+   `BOT_ALERT_FLAP_WINDOW_MIN` 11..10080 (60), `BOT_ALERT_REPEAT_HOURS` 1..720 (6),
+   `BOT_ALERT_OUTBOX_PENDING_MIN` 1..10080 (10), `BOT_ALERT_WEBHOOK_ERROR_MIN` 1..10080 (15),
+   `BOT_ALERT_PENDING_UPDATES_MAX` ≥ 1 (100), `BOT_ALERT_OUTBOX_DEAD_MAX` ≥ 0 (20),
+   `BOT_ALERT_NS_START_GRACE_S` 0..86400 (90). Bosh nollar e'tiborsiz (`010` = 10). `BOT_ALERT_CMD_TIMEOUT`,
    `BOT_ALERT_HOST_LABEL`, `BOT_ALERT_TELEGRAM_API` — fayldan yoki shu nomdagi env'dan (env ustun).
 3. Tekshirish: `ELCHI_APP_DIR=<backend-katalogi> ~/elchi-ops/bot-alert.sh --dry-run` (hech narsa
    yubormaydi, holatni o'zgartirmaydi), `… --test` (kanallarga test xabar + heartbeat ping).
