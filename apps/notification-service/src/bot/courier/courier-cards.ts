@@ -11,6 +11,8 @@ export const COURIER_ACTIONS = {
   confirm: 'c.ok',
   back: 'c.back',
   page: 'c.page',
+  /** (BOT-3d) /ishim ro'yxatidan bitta buyurtma kartasini ochish. */
+  open: 'c.open',
   proofDone: 'c.pdone',
   proofStop: 'c.pstop',
 } as const;
@@ -124,13 +126,9 @@ export function toCourierOrderView(row: unknown): CourierOrderView | null {
   if (!id) return null;
   const district = order.district as { name?: unknown } | null | undefined;
   const customer = order.customer as
-    | { name?: unknown; phone_number?: unknown }
-    | null
-    | undefined;
+    { name?: unknown; phone_number?: unknown } | null | undefined;
   const market = order.market as
-    | { id?: unknown; expense_proof_conditions?: unknown }
-    | null
-    | undefined;
+    { id?: unknown; expense_proof_conditions?: unknown } | null | undefined;
   const conditions = Array.isArray(market?.expense_proof_conditions)
     ? (market.expense_proof_conditions as unknown[]).map((item) => text(item))
     : [];

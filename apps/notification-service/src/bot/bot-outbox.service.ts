@@ -52,6 +52,8 @@ type OutboxRow = {
   max_attempts: number;
   card_order_id?: string | null;
   notification_ids?: string[] | null;
+  /** (BOT-3d) Ko'p bo'lakli xabarning allaqachon yetkazilgan bo'laklari. */
+  parts_sent?: number | null;
 };
 
 export type OutboxSendStatus = 'sent' | 'queued' | 'dead';
@@ -162,7 +164,7 @@ export class BotOutboxService implements OnModuleDestroy {
           WHERE "id" = ANY($1::bigint[]) AND "status" = 'pending'
             AND "retry_count" = 0
         RETURNING "id", "chat_id", "payload", "retry_count", "max_attempts",
-                  "notification_ids"`,
+                  "notification_ids", "parts_sent"`,
         [ids],
       );
       rows = rowsOf<OutboxRow>(claimed);
@@ -244,7 +246,7 @@ export class BotOutboxService implements OnModuleDestroy {
                  LIMIT ${BATCH}
                  FOR UPDATE SKIP LOCKED)
         RETURNING o."id", o."chat_id", o."payload", o."retry_count", o."max_attempts",
-                  o."card_order_id", o."notification_ids"`,
+                  o."card_order_id", o."notification_ids", o."parts_sent"`,
         [STALE_SENDING_MS],
       );
       const rows = Array.isArray(claimed[0])
@@ -283,8 +285,19 @@ export class BotOutboxService implements OnModuleDestroy {
           reply_markup: payload.reply_markup,
           disable_web_page_preview: payload.disable_web_page_preview,
         },
-        // Outbox o'zi qayta uradi — so'rov ichida 60 s kutib turilmaydi.
-        { maxAttempts: 1 },
+        {
+          // Outbox o'zi qayta uradi — so'rov ichida 60 s kutib turilmaydi.
+          maxAttempts: 1,
+          // (BOT-3d) Uzun xabar: yetkazilgan bo'laklar qayta yuborilmaydi.
+          skipParts: Number(row.parts_sent ?? 0),
+          onPartSent: async (sent) => {
+            row.parts_sent = sent;
+            await this.outbox.update(
+              { id: row.id },
+              { parts_sent: sent, updated_at: new Date() },
+            );
+          },
+        },
       )) as { message_id?: number } | null;
       await this.outbox.update(
         { id: row.id },

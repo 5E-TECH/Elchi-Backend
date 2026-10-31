@@ -9,6 +9,7 @@ import { TelegramChatLocksAiWorker1716000000190 } from '../../../../migrations/1
 import { TelegramOrderCards1716000000122 } from '../../../../migrations/1716000000122-TelegramOrderCards';
 import { TelegramOrderCardsPending1716000000191 } from '../../../../migrations/1716000000191-TelegramOrderCardsPending';
 import { TelegramOutboxDeliveryBlocks1716000000192 } from '../../../../migrations/1716000000192-TelegramOutboxDeliveryBlocks';
+import { TelegramOutboxPartsSent1716000000199 } from '../../../../migrations/1716000000199-TelegramOutboxPartsSent';
 import { TelegramBotAction } from '../entities/telegram-bot-action.entity';
 import { TelegramMarket } from '../entities/telegram-market.entity';
 import { TelegramOutbox } from '../entities/telegram-outbox.entity';
@@ -76,6 +77,7 @@ const migration = new TelegramBotCore1716000000120();
         // yaratgan jadvalga ham ustun kerak.
         if (direction === 'up') {
           await new TelegramOutboxDeliveryBlocks1716000000192().up(runner);
+          await new TelegramOutboxPartsSent1716000000199().up(runner);
         }
       } finally {
         await runner.release();

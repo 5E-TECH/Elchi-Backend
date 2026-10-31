@@ -1,9 +1,14 @@
-import { Logger, UnauthorizedException } from '@nestjs/common';
+import {
+  Logger,
+  ServiceUnavailableException,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
-import { NEVER, of } from 'rxjs';
+import { NEVER, of, throwError } from 'rxjs';
 import { IS_PUBLIC_KEY } from './auth/public.decorator';
 import {
+  TELEGRAM_EMIT_TIMEOUT_MS,
   TELEGRAM_UPDATE_EVENT,
   TelegramWebhookController,
   secretMatches,
@@ -18,7 +23,8 @@ import {
  * uCrzrElu — long-polling → webhook:
  *  - `POST /telegram/webhook/:botSlug` @Public, YAGONA himoya — secret_token
  *    (timingSafeEqual); noto'g'ri/yo'q → 401, RMQ'ga HECH NIMA uzatilmaydi;
- *  - to'g'ri secret → DARHOL 200, ishlov asinxron (emit, kutilmaydi);
+ *  - to'g'ri secret → brokerga uzatilgach 200 (ishlov kutilmaydi); RMQ xatosi /
+ *    timeout → 503 (BOT-3d);
  *  - scripts/telegram-setup.ts `allowed_updates` da `my_chat_member`;
  *  - eski pollLoop hech bir faylda qolmagan.
  */
@@ -55,27 +61,27 @@ describe('uCrzrElu — Telegram webhook (gateway)', () => {
     ['secret yo‘q', undefined],
     ['bo‘sh secret', ''],
     ['prefiks mos, uzunroq', `${SECRET}x`],
-  ])('⭐ %s → 401, RMQ’ga hech narsa uzatilmaydi', (_label, header) => {
+  ])('⭐ %s → 401, RMQ’ga hech narsa uzatilmaydi', async (_label, header) => {
     const { controller, emit } = makeController();
-    expect(() => controller.receive('elchi', header, req(update))).toThrow(
-      UnauthorizedException,
-    );
+    await expect(
+      controller.receive('elchi', header, req(update)),
+    ).rejects.toBeInstanceOf(UnauthorizedException);
     expect(emit).not.toHaveBeenCalled();
   });
 
-  it('server sekreti sozlanmagan → har so‘rov 401 (fail-closed)', () => {
+  it('server sekreti sozlanmagan → har so‘rov 401 (fail-closed)', async () => {
     const { controller, emit } = makeController('');
-    expect(() => controller.receive('elchi', SECRET, req(update))).toThrow(
-      UnauthorizedException,
-    );
+    await expect(
+      controller.receive('elchi', SECRET, req(update)),
+    ).rejects.toBeInstanceOf(UnauthorizedException);
     expect(emit).not.toHaveBeenCalled();
   });
 
-  it('⭐ to‘g‘ri secret → DARHOL {ok:true}, ishlov asinxron (handler kutilmaydi)', () => {
-    // NEVER — notification-service hech qachon javob bermasa ham gateway kutmaydi.
-    const { controller, emit } = makeController(SECRET, NEVER as never);
-    const result = controller.receive('elchi', SECRET, req(update));
-    expect(result).toEqual({ ok: true });
+  it('⭐ to‘g‘ri secret → brokerga uzatilgach {ok:true}; ishlov (handler) kutilmaydi', async () => {
+    const { controller, emit } = makeController();
+    await expect(
+      controller.receive('elchi', SECRET, req(update)),
+    ).resolves.toEqual({ ok: true });
     expect(emit).toHaveBeenCalledWith(
       { cmd: TELEGRAM_UPDATE_EVENT },
       { bot_slug: 'elchi', update },
@@ -84,14 +90,39 @@ describe('uCrzrElu — Telegram webhook (gateway)', () => {
     expect(TELEGRAM_UPDATE_EVENT).toBe(NOTIFICATION_SIDE_EVENT);
   });
 
-  it('to‘g‘ri secret, yaroqsiz tana → 200, uzatilmaydi (Telegram qayta yubormasin)', () => {
+  it('⭐ BOT-3d: RMQ xatosi → 503 (Telegram qayta yuboradi, update jim yo‘qolmaydi)', async () => {
+    const { controller } = makeController(
+      SECRET,
+      throwError(() => new Error('channel closed')),
+    );
+    await expect(
+      controller.receive('elchi', SECRET, req(update)),
+    ).rejects.toBeInstanceOf(ServiceUnavailableException);
+  });
+
+  it('⭐ BOT-3d: broker osilib qolsa — chegaradan keyin 503 (cheksiz kutilmaydi)', async () => {
+    jest.useFakeTimers();
+    try {
+      const { controller } = makeController(SECRET, NEVER);
+      const pending = controller.receive('elchi', SECRET, req(update));
+      const assertion = expect(pending).rejects.toBeInstanceOf(
+        ServiceUnavailableException,
+      );
+      await jest.advanceTimersByTimeAsync(TELEGRAM_EMIT_TIMEOUT_MS + 10);
+      await assertion;
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('to‘g‘ri secret, yaroqsiz tana → 200, uzatilmaydi (Telegram qayta yubormasin)', async () => {
     const { controller, emit } = makeController();
-    expect(controller.receive('elchi', SECRET, req({ foo: 1 }))).toEqual({
-      ok: true,
-    });
-    expect(controller.receive('Bad Slug!', SECRET, req(update))).toEqual({
-      ok: true,
-    });
+    await expect(
+      controller.receive('elchi', SECRET, req({ foo: 1 })),
+    ).resolves.toEqual({ ok: true });
+    await expect(
+      controller.receive('Bad Slug!', SECRET, req(update)),
+    ).resolves.toEqual({ ok: true });
     expect(emit).not.toHaveBeenCalled();
   });
 

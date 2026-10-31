@@ -22,6 +22,19 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+### 2026-10-31 — BOT-3d: Telegram bot javoblari, idempotentlik va tezlik
+
+Deploy: **api-gateway + notification-service**. Migratsiya **`1716000000199`** (`telegram_outbox.parts_sent`) —
+servisdan OLDIN. `openapi.json` qayta yaratildi.
+
+- [2026-10-31] ✏️ [order] — `POST /orders/sell/:id`, `POST /orders/cancel/:id`, `POST /orders/:id/could-not-deliver`,
+  `POST /orders/partly-sell/:id`, `POST /orders/rollback/:id` endi ixtiyoriy **`Idempotency-Key`** sarlavhasini qabul
+  qiladi (≤255 belgi, foydalanuvchi bo'yicha ajratiladi): ayni kalit bilan takroriy so'rov (qayta urinish, ikki marta
+  bosish) amalni ikkinchi marta bajarmaydi. Kalitsiz — avvalgidek. → FE ixtiyoriy: kuryer amal tugmalarida bosish
+  sessiyasiga barqaror kalit yuborish mumkin (majburiy emas).
+- [2026-10-31] 🟢 [notification] — Telegram bot: `/ishim` bitta ro'yxat xabari (kartalar tugma bilan ochiladi), xato /
+  timeout'da aniq o'zbekcha matn, webhook RMQ ishlamasa 503. FE o'zgarishi shart emas.
+
 ### 2026-10-31 — Kuryer ro'yxati: `where_deliver` filtri (yKtzKXeM)
 
 `GET /orders/courier/orders?where_deliver=center|address` endi qabul qilinadi (kuryer, menejer, filial, bekor qilinganlar tabi). Berilmasa hammasi; noma'lum qiymat 400. Deploy: api-gateway.

@@ -63,6 +63,16 @@ kabinetdan kod bilan qayta ulaydi (o'sha marketning nofaol qatori qayta yoqiladi
 marketniki — yo'q); admin o'chirgan (`manual`) yoki sababsiz qator — faqat admin PATCH. HTML xatosi (`can't parse entities`)
 — faqat o'sha xabar `dead`, guruh faol qoladi.
 
+**Javob va tezlik (BOT-3d).** Webhook update'ni brokerga uzatilishini kutadi
+(3 s): RMQ xatosi / timeout → 503 (Telegram qayta yuboradi, update jim
+yo'qolmaydi). Update ikki marta xato bersa shaxsiy chatga «⚠️ Xatolik yuz
+berdi» (guruhga yo'q); identity javob bermasa «⚠️ Tizim vaqtincha ishlamayapti»
+(«avval ulang» emas). Shaxsiy chatga ~1 xabar/s (3 tagacha portlash); uzun HTML
+xabar teg/entity ichida kesilmaydi (teglar yopilib, keyingi bo'lakda qayta
+ochiladi); outbox ko'p bo'lakli xabarda yetkazilgan bo'laklarni eslaydi
+(`telegram_outbox.parts_sent`, migratsiya `1716000000199`) — qayta urinishda
+takror bo'lak yo'q.
+
 ## 2. Rejimlar (`TELEGRAM_BOT_MODE`, sukut `auto`)
 
 | Holat | Natija |
@@ -159,7 +169,7 @@ bazasiga o'zi yozmaydi, doira/holat mashinasi/isbot/extra-cost — serverda.
 
 | Buyruq / tugma | Endpoint |
 |---|---|
-| `/ishim` | `GET /orders?status=waiting&status=on the road&status=waiting_customer&page&limit=10` (tuman bo'yicha, "⬇️ Yana") |
+| `/ishim` | `GET /orders?status=waiting&status=on the road&status=waiting_customer&page&limit=10` — BITTA ro'yxat xabari (tuman bo'yicha, har buyurtma tugmasi → karta `GET /orders/:id`; "⬇️ Yana" / "⬆️ Oldingi" shu xabarni tahrirlaydi, BOT-3d) |
 | ✅ Sotildi → tasdiq → Ha | `POST /orders/sell/:id` (`proofFileKeys` isbot bilan) |
 | ❌ Bekor → sabab (CancelReason enum) → Ha | `POST /orders/cancel/:id { reason }` |
 | 🕗 Yetkazib bo'lmadi → sabab → Ha | `POST /orders/:id/could-not-deliver { reason }` |
@@ -174,6 +184,11 @@ bazasiga o'zi yozmaydi, doira/holat mashinasi/isbot/extra-cost — serverda.
 - Natija: 200 → karta tahrirlanadi (`telegram_order_cards`); 202 → "⏳ Market
   tasdig'i kutilmoqda" (karta tugmasiz); isbot talabi → isbot rejimi; holat rad →
   "Bu holatda bu amal mumkin emas".
+- (BOT-3d) Amal 65 s kutiladi (gateway 60 s dan uzun) va tugma kaliti bilan
+  `Idempotency-Key` → gateway `request_id = idem:<user>:<sha256>` (order-service
+  bir marta bajaradi). Timeout yoki 502/503/504 → «⏳ Natija noma'lum — /ishim
+  orqali tekshiring» (inglizcha xato chiqmaydi). Handler xato bersa bir martalik
+  tugma qayta ochiladi («✅ Ha» qayta ishlaydi).
 - Avtomatik kunlik hisobot: `COURIER_DAILY_REPORT_CRON` (Asia/Tashkent, bo'sh —
   o'chiq); faqat ulangan kuryerlarga, kuniga bitta (deterministik
   `client_request_id`); botni bloklagan chat o'tkaziladi.
