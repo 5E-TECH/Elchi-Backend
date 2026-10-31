@@ -30,6 +30,10 @@ import {
   ExcelColumn,
 } from './excel/excel.util';
 import {
+  EXPENSE_CATEGORY_NONE,
+  isExpenseCategory,
+} from '@app/common/finance/expense-category';
+import {
   FINANCIAL_BALANCE_EXPORT_COLUMNS,
   resolveFinancialActors,
   toFinancialBalanceExportRow,
@@ -417,6 +421,7 @@ export class ExcelGatewayController {
     summary: 'Moliyaviy balans tarixini Excel (.xlsx) ga eksport qilish',
   })
   @ApiQuery({ name: 'source_type', required: false, type: String })
+  @ApiQuery({ name: 'expense_category', required: false, type: String })
   @ApiQuery({ name: 'from_date', required: false, type: String })
   @ApiQuery({ name: 'to_date', required: false, type: String })
   @ApiQuery({ name: 'fromDate', required: false, type: String })
@@ -428,12 +433,19 @@ export class ExcelGatewayController {
     @Query('to_date') to_date?: string,
     @Query('fromDate') fromDate?: string,
     @Query('toDate') toDate?: string,
+    @Query('expense_category') expense_category?: string,
   ): Promise<void> {
     // Noma'lum manba turi (eski havola) — "barcha manbalar", 500 emas.
     const filters = {
       source_type:
         source_type && FINANCIAL_SOURCE_TYPES.has(source_type)
           ? source_type
+          : undefined,
+      // ljVOuNz4 — jadval filtri bilan bir xil; noma'lum qiymat — filtrsiz.
+      expense_category:
+        expense_category === EXPENSE_CATEGORY_NONE ||
+        isExpenseCategory(expense_category)
+          ? expense_category
           : undefined,
       from_date: from_date ?? fromDate,
       to_date: to_date ?? toDate,

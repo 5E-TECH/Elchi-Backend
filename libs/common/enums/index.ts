@@ -120,6 +120,33 @@ export enum FinancialSource_type {
 }
 
 /**
+ * ljVOuNz4 — xarajat kategoriyasi: pul NIMAGA ketgani (`FinancialSource_type`
+ * esa pul QAYERDAN yozilganini aytadi). YOPIQ ro'yxat, BeePost bilan bir xil
+ * 14 ta + Elchi'ga xos 3 ta, "Boshqa" HAR DOIM oxirgi. Daftar ustuni va
+ * manba qoidalari — `libs/common/src/finance/expense-category.ts`.
+ */
+export enum ExpenseCategory {
+  FOOD = 'food',
+  TRANSPORT = 'transport',
+  FUEL = 'fuel',
+  RENT = 'rent',
+  UTILITIES = 'utilities',
+  COMMUNICATION = 'communication',
+  STATIONERY = 'stationery',
+  REPAIR = 'repair',
+  MARKETING = 'marketing',
+  TAX = 'tax',
+  BANK_FEE = 'bank_fee',
+  GIFT = 'gift',
+  CLEANING = 'cleaning',
+  PACKAGING = 'packaging',
+  SALARY = 'salary',
+  COURIER_FEE = 'courier_fee',
+  VEHICLE_REPAIR = 'vehicle_repair',
+  OTHER = 'other',
+}
+
+/**
  * Situations in which a market may require a courier to attach file proof
  * (image/video) for an order operation. A market stores a SET of enabled
  * conditions (admins.expense_proof_conditions). When a sell/cancel operation

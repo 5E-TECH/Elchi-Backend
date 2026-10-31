@@ -1,4 +1,9 @@
 import { FinancialSource_type } from '@app/common';
+import { ExpenseCategory } from '@app/common/enums';
+import {
+  LEDGER_SOURCE_CATEGORY,
+  ledgerSourceAsksCategory,
+} from '@app/common/finance/expense-category';
 import { excelDate, excelNumber, type ExcelColumn } from '../excel/excel.util';
 
 /**
@@ -12,6 +17,27 @@ export interface FinancialActor {
   name: string | null;
   role: string | null;
 }
+
+const flagOn = (value: string | undefined) =>
+  String(value ?? '')
+    .trim()
+    .toLowerCase() === 'on';
+
+/**
+ * ljVOuNz4 — `POST /financial-balance/entries` da kategoriya majburiy
+ * (`manual_expense`, `bills`). Sukut o'chiq: hozirgi FE payload'i `{ amount,
+ * source_type, comment }`. Tanlov oynasi chiqqandan keyin yoqiladi.
+ */
+export const financialEntryCategoryRequired = () =>
+  flagOn(process.env.FINANCIAL_ENTRY_CATEGORY_REQUIRED);
+
+/**
+ * ljVOuNz4 — `PATCH /cashbox/spend` da izoh majburiy. Sukut o'chiq (ega
+ * 2026-10-22: xarajat kategoriya orqali, izoh ixtiyoriy; FE bo'sh izohni
+ * yubormaydi).
+ */
+export const cashboxSpendCommentRequired = () =>
+  flagOn(process.env.CASHBOX_SPEND_COMMENT_REQUIRED);
 
 const asText = (value: unknown): string =>
   typeof value === 'string' || typeof value === 'number' ? String(value) : '';
@@ -70,6 +96,45 @@ export const FINANCIAL_SOURCE_LABEL_UZ: Readonly<
   [FinancialSource_type.BILLS]: 'Hisob-fakturalar',
 });
 
+/** ljVOuNz4 — kategoriya nomlari (karta ro'yxati bilan bir xil). */
+export const EXPENSE_CATEGORY_LABEL_UZ: Readonly<
+  Record<ExpenseCategory, string>
+> = Object.freeze({
+  [ExpenseCategory.FOOD]: 'Ovqat',
+  [ExpenseCategory.TRANSPORT]: 'Transport',
+  [ExpenseCategory.FUEL]: "Yoqilg'i",
+  [ExpenseCategory.RENT]: 'Ijara',
+  [ExpenseCategory.UTILITIES]: 'Kommunal',
+  [ExpenseCategory.COMMUNICATION]: 'Aloqa/Internet',
+  [ExpenseCategory.STATIONERY]: 'Kanstovar',
+  [ExpenseCategory.REPAIR]: "Ta'mirlash",
+  [ExpenseCategory.MARKETING]: 'Reklama/Marketing',
+  [ExpenseCategory.TAX]: 'Soliq',
+  [ExpenseCategory.BANK_FEE]: 'Bank/komissiya',
+  [ExpenseCategory.GIFT]: "Sovg'a/mehmon",
+  [ExpenseCategory.CLEANING]: 'Tozalash',
+  [ExpenseCategory.PACKAGING]: 'Ombor/qadoqlash',
+  [ExpenseCategory.SALARY]: 'Oylik/maosh',
+  [ExpenseCategory.COURIER_FEE]: 'Kuryer haqi',
+  [ExpenseCategory.VEHICLE_REPAIR]: "Transport ta'miri",
+  [ExpenseCategory.OTHER]: 'Boshqa',
+});
+
+/**
+ * Daftar qatorining kategoriya matni: xarajatda hisobot bilan bir xil qoida
+ * (kategoriya → manba ma'nosi → «Kategoriyasiz»), xarajat emas — bo'sh.
+ */
+const expenseCategoryLabel = (row: Record<string, unknown>): string => {
+  const source = asText(row.source_type) as FinancialSource_type;
+  const category =
+    (row.expense_category as ExpenseCategory | null | undefined) ??
+    LEDGER_SOURCE_CATEGORY[source];
+  if (category) {
+    return EXPENSE_CATEGORY_LABEL_UZ[category] ?? category;
+  }
+  return ledgerSourceAsksCategory(source) ? 'Kategoriyasiz' : '';
+};
+
 export const FINANCIAL_BALANCE_EXPORT_COLUMNS: ExcelColumn[] = [
   { header: 'ID', key: 'id', width: 10 },
   { header: 'Sana', key: 'date', width: 22 },
@@ -80,6 +145,7 @@ export const FINANCIAL_BALANCE_EXPORT_COLUMNS: ExcelColumn[] = [
   { header: 'Izoh', key: 'comment', width: 40 },
   { header: 'Kim kiritgan', key: 'created_by', width: 22 },
   { header: 'Buyurtma ID', key: 'order_id', width: 14 },
+  { header: 'Kategoriya', key: 'category', width: 20 },
 ];
 
 /**
@@ -109,5 +175,6 @@ export const toFinancialBalanceExportRow = (
     comment: asText(row.comment),
     created_by: createdBy ? (actor?.name ?? `#${createdBy}`) : 'Avtomatik',
     order_id: asText(row.order_id),
+    category: expenseCategoryLabel(row),
   };
 };

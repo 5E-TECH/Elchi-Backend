@@ -6,6 +6,7 @@ import {
   CASHBOX_EXPENSE_CATEGORY_SEED,
   CreateCashboxExpenseCategories1716000000129,
 } from '../../../../migrations/1716000000129-CreateCashboxExpenseCategories';
+import { FinancialExpenseCategory1716000000197 } from '../../../../migrations/1716000000197-FinancialExpenseCategory';
 import { FinanceServiceService } from '../finance-service.service';
 import { Cashbox } from '../entities/cashbox.entity';
 import { CashboxHistory } from '../entities/cashbox-history.entity';
@@ -62,6 +63,8 @@ describePg('Elchi Pochta №1 — xarajat kategoriyalari, haqiqiy Postgres', () 
   let categories: ExpenseCategoryService;
   let finance: FinanceServiceService;
   const migration = new CreateCashboxExpenseCategories1716000000129();
+  // ljVOuNz4 — `ledger_category` entity'da, ustuni migratsiya 197 da.
+  const ledgerMigration = new FinancialExpenseCategory1716000000197();
   const ORIGINAL_ENV = process.env.FINANCE_REQUIRE_OPEN_SHIFT;
 
   const dbUrl = () => {
@@ -112,6 +115,7 @@ describePg('Elchi Pochta №1 — xarajat kategoriyalari, haqiqiy Postgres', () 
     await db.initialize();
     const runner = db.createQueryRunner();
     await migration.up(runner);
+    await ledgerMigration.up(runner);
     await runner.release();
 
     const activityLog = { log: jest.fn().mockResolvedValue(undefined) };
@@ -172,6 +176,7 @@ describePg('Elchi Pochta №1 — xarajat kategoriyalari, haqiqiy Postgres', () 
     try {
       await migration.down(runner);
       await migration.up(runner);
+      await ledgerMigration.up(runner);
     } finally {
       await runner.release();
     }

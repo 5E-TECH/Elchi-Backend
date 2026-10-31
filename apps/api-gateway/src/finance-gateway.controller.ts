@@ -112,6 +112,7 @@ import {
   UploadReceiptRequestDto,
   ReceiptSummaryQueryDto,
   UploadReceiptSwaggerDto,
+  SPEND_CATEGORY_REQUIRED_MESSAGE,
 } from './dto/finance.swagger.dto';
 import { BodyStatusCodeInterceptor } from './body-status-code.interceptor';
 import {
@@ -119,7 +120,16 @@ import {
   canSeeReceipts,
   projectFullReceipt,
 } from './finance-receipt-projection';
-import { resolveFinancialActors } from './financial-balance/financial-balance.util';
+import {
+  cashboxSpendCommentRequired,
+  financialEntryCategoryRequired,
+  resolveFinancialActors,
+} from './financial-balance/financial-balance.util';
+import {
+  EXPENSE_CATEGORY_NONE,
+  isExpenseCategory,
+  resolveLedgerExpenseCategory,
+} from '@app/common/finance/expense-category';
 import {
   AiImageDecodeError,
   aiProcessedImageMaxBytes,
@@ -2841,6 +2851,18 @@ export class FinanceGatewayController {
         "Idempotency-Key 1-255 belgi bo'lishi kerak",
       );
     }
+    // ljVOuNz4 — manba qoidasi; majburiylik FAQAT shu marshrutda (ichki
+    // chaqiruvchilar: investor to'lovi, sotuv oqimlari kategoriyasiz).
+    const category = resolveLedgerExpenseCategory(
+      dto.source_type,
+      dto.expense_category,
+    );
+    if (category.message) {
+      throw new BadRequestException(category.message);
+    }
+    if (category.missing && financialEntryCategoryRequired()) {
+      throw new BadRequestException(SPEND_CATEGORY_REQUIRED_MESSAGE);
+    }
     const actorId = String(req.user?.sub ?? '');
     return this.send<{ statusCode?: number; data?: unknown }>(
       { cmd: 'finance.financial_balance.record' },
@@ -2877,6 +2899,12 @@ export class FinanceGatewayController {
     required: false,
     enum: FinancialSource_type,
   })
+  @ApiQuery({
+    name: 'expense_category',
+    required: false,
+    description:
+      "(ljVOuNz4) `ExpenseCategory` qiymati yoki `none` — kategoriyasiz qo'lda chiqim / `bills`. Boshqa qiymat → 400.",
+  })
   @ApiQuery({ name: 'from_date', required: false })
   @ApiQuery({ name: 'to_date', required: false })
   @ApiQuery({ name: 'fromDate', required: false })
@@ -2897,7 +2925,15 @@ export class FinanceGatewayController {
     @Query('page') page?: string,
     @Query('limit') limit?: string,
     @Query('offset') offset?: string,
+    @Query('expense_category') expense_category?: string,
   ) {
+    if (
+      expense_category &&
+      expense_category !== EXPENSE_CATEGORY_NONE &&
+      !isExpenseCategory(expense_category)
+    ) {
+      throw new BadRequestException("expense_category noto'g'ri");
+    }
     const normalizedLimit = limit ? Number(limit) : undefined;
     const normalizedPage = page ? Math.max(Number(page), 1) : undefined;
     const normalizedOffset = offset
@@ -2910,6 +2946,7 @@ export class FinanceGatewayController {
       { cmd: 'finance.financial_balance.history' },
       {
         source_type,
+        expense_category,
         from_date: from_date ?? fromDate,
         to_date: to_date ?? toDate,
         limit: normalizedLimit,
@@ -2938,6 +2975,64 @@ export class FinanceGatewayController {
   ) {
     return this.send(
       { cmd: 'finance.financial_balance.analytics' },
+      {
+        from_date: from_date ?? fromDate,
+        to_date: to_date ?? toDate,
+      },
+    );
+  }
+
+  /**
+   * ljVOuNz4 — xarajat kategoriyalari bo'yicha jamlama (Balans → Tahlil):
+   * kassa + daftar, qo'shaloq yozuv bir marta, ko'chirishlar kirmaydi,
+   * «Kategoriyasiz» ayrim.
+   */
+  @Get('financial-balance/expense-report')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Xarajatlar kategoriya bo`yicha',
+    description:
+      "ljVOuNz4. `categories[]` — `{ category, total_amount, transaction_count, percentage }` (kattasi tepada), `uncategorized` — kategoriyasi noma'lum chiqimlar, «Boshqa» ga qo'shilmaydi. `total_amount` = hammasi yig'indisi. Kassalar orasidagi ko'chirishlar (`courier_payment`, `market_payment`, `branch_to_main`), kirim, foyda va tuzatishlar kirmaydi; kassa + daftar juftligi (operator to'lovi, qo'lda chiqim) bir marta sanaladi.",
+  })
+  @ApiQuery({ name: 'fromDate', required: false })
+  @ApiQuery({ name: 'toDate', required: false })
+  @ApiQuery({ name: 'from_date', required: false })
+  @ApiQuery({ name: 'to_date', required: false })
+  @ApiOkResponse({
+    schema: {
+      example: {
+        statusCode: 200,
+        message: 'Expense report',
+        data: {
+          total_amount: 2150000,
+          transaction_count: 4,
+          categories: [
+            {
+              category: 'utilities',
+              total_amount: 2000000,
+              transaction_count: 1,
+              percentage: 93.02,
+            },
+          ],
+          uncategorized: {
+            total_amount: 150000,
+            transaction_count: 3,
+            percentage: 6.98,
+          },
+        },
+      },
+    },
+  })
+  financialBalanceExpenseReport(
+    @Query('fromDate') fromDate?: string,
+    @Query('toDate') toDate?: string,
+    @Query('from_date') from_date?: string,
+    @Query('to_date') to_date?: string,
+  ) {
+    return this.send(
+      { cmd: 'finance.financial_balance.expense_report' },
       {
         from_date: from_date ?? fromDate,
         to_date: to_date ?? toDate,
@@ -3076,7 +3171,7 @@ export class FinanceGatewayController {
   @ApiOperation({
     summary: 'Spend money from main cashbox',
     description:
-      "Elchi Pochta №1 — `expense_category_id` MAJBURIY (`GET /finance/cashbox/expense-categories`, raqamli satr): yo'q/bo'sh/raqam emas → 400 «Xarajat kategoriyasini tanlang»; mavjud va o'chirilmagan bo'lishi shart (aks holda 400). `comment` ixtiyoriy. `data.history` va kassa tarixi qatorlarida `expense_category_id` + `expense_category_name` (snapshot).",
+      "Elchi Pochta №1 — `expense_category_id` MAJBURIY (`GET /finance/cashbox/expense-categories`, raqamli satr): yo'q/bo'sh/raqam emas → 400 «Xarajat kategoriyasini tanlang»; mavjud va o'chirilmagan bo'lishi shart (aks holda 400). `comment` ixtiyoriy (ljVOuNz4: `CASHBOX_SPEND_COMMENT_REQUIRED=on` bo'lsa bo'sh izoh → 400 «Izoh majburiy»). `data.history` va kassa tarixi qatorlarida `expense_category_id` + `expense_category_name` (snapshot); `data.financial_balance_entry.expense_category` — yopiq ro'yxatdagi mosi.",
   })
   @ApiBody({ type: MainCashboxSpendRequestDto })
   async spendMoney(
@@ -3084,6 +3179,10 @@ export class FinanceGatewayController {
     @Body() dto: MainCashboxSpendRequestDto,
     @Headers('idempotency-key') idempotencyKey?: string,
   ) {
+    // ljVOuNz4 — kalit bilan (sukut: izoh ixtiyoriy, ega 2026-10-22).
+    if (cashboxSpendCommentRequired() && !String(dto.comment ?? '').trim()) {
+      throw new BadRequestException('Izoh majburiy');
+    }
     const isManager = this.isManager(req?.user);
     const branchId = isManager
       ? this.extractBranchId(req.user) ||

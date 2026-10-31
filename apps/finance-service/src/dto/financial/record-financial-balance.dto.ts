@@ -5,7 +5,7 @@ import {
   IsString,
   Matches,
 } from 'class-validator';
-import { FinancialSource_type } from '@app/common';
+import { ExpenseCategory, FinancialSource_type } from '@app/common';
 
 export class RecordFinancialBalanceDto {
   // Signed: positive = income, negative = expense. The caller chooses the
@@ -49,4 +49,12 @@ export class RecordFinancialBalanceDto {
   @IsOptional()
   @IsString()
   dedup_key?: string | null;
+
+  /**
+   * ljVOuNz4 — ICHKI DTO'da ixtiyoriy: majburiylik faqat gateway'da, aks holda
+   * sotuv / investor oqimlari buziladi. Manba qoidasini servis qo'llaydi.
+   */
+  @IsOptional()
+  @IsEnum(ExpenseCategory)
+  expense_category?: ExpenseCategory | null;
 }

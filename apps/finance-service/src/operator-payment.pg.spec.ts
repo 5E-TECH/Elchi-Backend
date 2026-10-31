@@ -148,6 +148,10 @@ describePg('FJVqcUTv - operator tolovi, haqiqiy Postgres', () => {
     const ledger = await db.getRepository(FinancialBalanceHistory).find();
     expect(ledger).toHaveLength(1);
     expect(Number(ledger[0].amount)).toBe(-5000);
+    // ljVOuNz4 — kassa SALARY + daftar SALARY: kategoriya majburiy emas,
+    // daftar qatori avtomatik `salary`, kassa qatorida kategoriya yo'q.
+    expect(ledger[0].expense_category).toBe('salary');
+    expect(history[0].expense_category_id).toBeNull();
     const cashbox = await db.getRepository(Cashbox).findOneByOrFail({
       user_id: '0',
       cashbox_type: Cashbox_type.MAIN,

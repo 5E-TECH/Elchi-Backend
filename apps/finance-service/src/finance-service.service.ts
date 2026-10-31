@@ -32,6 +32,16 @@ import { Shift, ShiftStatus } from './entities/shift.entity';
 import { applyCashboxCardSelection } from './cashbox-card/cashbox-card.service';
 import { resolveSpendExpenseCategory } from './expense-category/expense-category.service';
 import {
+  aggregateExpenseReport,
+  buildExpenseReportSql,
+} from './expense-category/expense-report';
+import { ExpenseCategory } from '@app/common/enums';
+import {
+  EXPENSE_CATEGORY_NONE,
+  isExpenseCategory,
+  resolveLedgerExpenseCategory,
+} from '@app/common/finance/expense-category';
+import {
   BRANCH_SHIFT_REQUIRED_MESSAGE,
   SHIFT_REQUIRED_MESSAGE,
   isShiftRequiredFor,
@@ -46,6 +56,7 @@ import { UserSalary } from './entities/user-salary.entity';
 import { OperatorEarning } from './entities/operator-earning.entity';
 import { OperatorPayment } from './entities/operator-payment.entity';
 import { FinancialBalanceHistory } from './entities/financial-balance-history.entity';
+import { CashboxExpenseCategory } from './entities/cashbox-expense-category.entity';
 import {
   ActivityAction,
   ActivityDescribeUz,
@@ -2046,6 +2057,8 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
               dedup_key: `cashbox-history:${String(savedHistory.id)}`,
               comment: options.financialLedger.comment ?? null,
               created_by: dto.created_by ?? null,
+              // ljVOuNz4 — kassa kategoriyasining yopiq ro'yxatdagi mosi.
+              expense_category: expenseCategory?.ledger_category ?? null,
             },
           );
         }
@@ -2332,6 +2345,20 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
           (alias) => receiptStatusIdCondition(alias, status, tables).sql,
           receiptStatusIdCondition('x', status, tables).params,
         );
+      }
+      // ljVOuNz4 — kategoriya filtri. `none` — kategoriyasiz qo'lda chiqim:
+      // boshqa turlar (sotuv, to'lov) ham NULL, ular kategoriyasiz chiqim emas.
+      if (
+        dto.expense_category_id !== undefined &&
+        dto.expense_category_id !== ''
+      ) {
+        if (dto.expense_category_id === EXPENSE_CATEGORY_NONE) {
+          where.expense_category_id = IsNull();
+          where.source_type ??= Source_type.MANUAL_EXPENSE;
+        } else {
+          this.assertBigIntId(dto.expense_category_id, 'expense_category_id');
+          where.expense_category_id = dto.expense_category_id;
+        }
       }
       if (historyCashboxType) {
         const cashboxesByType = await this.cashboxRepo.find({
@@ -6252,6 +6279,7 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
             related_user_id: operatorId,
             comment: `Operator #${operatorId} komissiya to'lovi`,
             created_by: paidById,
+            expense_category: ExpenseCategory.SALARY,
           }),
         );
 
@@ -6522,6 +6550,7 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
       related_user_id?: string | null;
       comment?: string | null;
       created_by?: string | null;
+      expense_category?: ExpenseCategory | null;
     },
   ): Promise<FinancialBalanceHistory> {
     await manager.query('SELECT pg_advisory_xact_lock($1::bigint)', [
@@ -6542,6 +6571,7 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
           : null,
         comment: input.comment ?? null,
         created_by: input.created_by ? String(input.created_by) : null,
+        expense_category: input.expense_category ?? null,
       }),
     );
   }
@@ -6569,11 +6599,23 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
      * rollback → qayta sotuv zanjiri uchun).
      */
     dedup_key?: string | null;
+    /** ljVOuNz4 — ixtiyoriy (majburiylik gateway'da, ichki oqimlar yubormaydi). */
+    expense_category?: ExpenseCategory | null;
   }) {
     const amount = Number(input.amount);
     if (!Number.isFinite(amount) || amount === 0) {
       // A zero-impact event has nothing to ledger.
       return this.successRes(null, 200, 'zero amount — ledger entry skipped');
+    }
+
+    // ljVOuNz4 — manba qoidasi: `salary` avtomatik, kirim/tuzatish NULL; RMQ
+    // payload'idagi yot qiymat Postgres 500'i emas, 400.
+    const category = resolveLedgerExpenseCategory(
+      input.source_type,
+      input.expense_category,
+    );
+    if (category.message) {
+      throw new RpcException({ statusCode: 400, message: category.message });
     }
 
     const queryRunner = this.dataSource.createQueryRunner();
@@ -6622,7 +6664,9 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
                 String(input.created_by ?? '') ||
               String(existing.related_user_id ?? '') !==
                 String(input.related_user_id ?? '') ||
-              String(existing.comment ?? '') !== String(input.comment ?? ''))
+              String(existing.comment ?? '') !== String(input.comment ?? '') ||
+              String(existing.expense_category ?? '') !==
+                String(category.category ?? ''))
           ) {
             throw new RpcException({
               statusCode: 409,
@@ -6657,6 +6701,7 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
           : null,
         comment: input.comment ?? null,
         created_by: input.created_by ? String(input.created_by) : null,
+        expense_category: category.category,
       });
       const saved = await queryRunner.manager.save(entity);
       await queryRunner.commitTransaction();
@@ -6669,6 +6714,7 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
           amount,
           balance_after: balanceAfter,
           source_type: input.source_type,
+          ...(category.category ? { expense_category: category.category } : {}),
         },
         user_id: input.created_by ? String(input.created_by) : null,
         metadata: { order_id: input.order_id ?? null },
@@ -6685,6 +6731,8 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
 
   async findFinancialBalanceHistory(input: {
     source_type?: FinancialSource_type;
+    /** ljVOuNz4 — `ExpenseCategory` qiymati yoki `none` (kategoriyasiz chiqim). */
+    expense_category?: string;
     from_date?: string;
     to_date?: string;
     limit?: number;
@@ -6710,6 +6758,23 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
           );
         }
         where.source_type = input.source_type;
+      }
+      if (input.expense_category) {
+        if (input.expense_category === EXPENSE_CATEGORY_NONE) {
+          // Faqat kategoriya so'raladigan manbalar: foyda / kirim qatorlari
+          // ham NULL, ular «Kategoriyasiz chiqim» emas.
+          where.expense_category = IsNull();
+          where.source_type ??= In([
+            FinancialSource_type.MANUAL_EXPENSE,
+            FinancialSource_type.BILLS,
+          ]);
+        } else if (isExpenseCategory(input.expense_category)) {
+          where.expense_category = input.expense_category;
+        } else {
+          throw new BadRequestException(
+            `expense_category noto'g'ri: ${String(input.expense_category)}`,
+          );
+        }
       }
       // Toshkent kuni (C2 / CODE-22): 'YYYY-MM-DD' — butun kun (ilgari UTC
       // yarim tuni, oxirgi kun esa umuman kirmasdi); to'liq ISO o'zgarishsiz.
@@ -6802,10 +6867,47 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
       balance_before: Number(history.balance_before ?? 0),
       balance_after: Number(history.balance_after ?? 0),
       comment: history.comment,
+      expense_category: history.expense_category ?? null,
       created_by: history.created_by,
       related_user_id: history.related_user_id,
       order_id: history.order_id,
     };
+  }
+
+  /**
+   * ljVOuNz4 — xarajat kategoriyalari bo'yicha jamlama (Tahlil). Qoidalar —
+   * `expense-category/expense-report.ts`.
+   */
+  async financialBalanceExpenseReport(input: {
+    from_date?: string;
+    to_date?: string;
+  }) {
+    try {
+      const { start, end } = this.parseDateRange(
+        input.from_date,
+        input.to_date,
+      );
+      const { sql, params } = buildExpenseReportSql(
+        {
+          ledger: this.dataSource.getMetadata(FinancialBalanceHistory)
+            .tablePath,
+          history: this.dataSource.getMetadata(CashboxHistory).tablePath,
+          cashbox: this.dataSource.getMetadata(Cashbox).tablePath,
+          categories: this.dataSource.getMetadata(CashboxExpenseCategory)
+            .tablePath,
+        },
+        { start, end },
+      );
+      return this.successRes(
+        aggregateExpenseReport(
+          await this.dataSource.manager.query(sql, params),
+        ),
+        200,
+        'Expense report',
+      );
+    } catch (error) {
+      this.toRpcError(error);
+    }
   }
 
   async financialBalanceAnalytics(input: {

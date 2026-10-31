@@ -9160,6 +9160,15 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "expense_category",
+            "required": false,
+            "in": "query",
+            "description": "(ljVOuNz4) `ExpenseCategory` qiymati yoki `none` — kategoriyasiz qo'lda chiqim / `bills`. Boshqa qiymat → 400.",
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -9230,6 +9239,91 @@
           }
         ],
         "summary": "Get financial balance analytics and impact analysis",
+        "tags": [
+          "Finance"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
+        ]
+      }
+    },
+    "/finance/financial-balance/expense-report": {
+      "get": {
+        "description": "ljVOuNz4. `categories[]` — `{ category, total_amount, transaction_count, percentage }` (kattasi tepada), `uncategorized` — kategoriyasi noma'lum chiqimlar, «Boshqa» ga qo'shilmaydi. `total_amount` = hammasi yig'indisi. Kassalar orasidagi ko'chirishlar (`courier_payment`, `market_payment`, `branch_to_main`), kirim, foyda va tuzatishlar kirmaydi; kassa + daftar juftligi (operator to'lovi, qo'lda chiqim) bir marta sanaladi.",
+        "operationId": "FinanceGatewayController_financialBalanceExpenseReport",
+        "parameters": [
+          {
+            "name": "fromDate",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "toDate",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from_date",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "to_date",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "example": {
+                    "statusCode": 200,
+                    "message": "Expense report",
+                    "data": {
+                      "total_amount": 2150000,
+                      "transaction_count": 4,
+                      "categories": [
+                        {
+                          "category": "utilities",
+                          "total_amount": 2000000,
+                          "transaction_count": 1,
+                          "percentage": 93.02
+                        }
+                      ],
+                      "uncategorized": {
+                        "total_amount": 150000,
+                        "transaction_count": 3,
+                        "percentage": 6.98
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Xarajatlar kategoriya bo`yicha",
         "tags": [
           "Finance"
         ],
@@ -9443,7 +9537,7 @@
     },
     "/finance/cashbox/spend": {
       "patch": {
-        "description": "Elchi Pochta №1 — `expense_category_id` MAJBURIY (`GET /finance/cashbox/expense-categories`, raqamli satr): yo'q/bo'sh/raqam emas → 400 «Xarajat kategoriyasini tanlang»; mavjud va o'chirilmagan bo'lishi shart (aks holda 400). `comment` ixtiyoriy. `data.history` va kassa tarixi qatorlarida `expense_category_id` + `expense_category_name` (snapshot).",
+        "description": "Elchi Pochta №1 — `expense_category_id` MAJBURIY (`GET /finance/cashbox/expense-categories`, raqamli satr): yo'q/bo'sh/raqam emas → 400 «Xarajat kategoriyasini tanlang»; mavjud va o'chirilmagan bo'lishi shart (aks holda 400). `comment` ixtiyoriy (ljVOuNz4: `CASHBOX_SPEND_COMMENT_REQUIRED=on` bo'lsa bo'sh izoh → 400 «Izoh majburiy»). `data.history` va kassa tarixi qatorlarida `expense_category_id` + `expense_category_name` (snapshot); `data.financial_balance_entry.expense_category` — yopiq ro'yxatdagi mosi.",
         "operationId": "FinanceGatewayController_spendMoney",
         "parameters": [
           {
@@ -9535,6 +9629,16 @@
         "description": "GaBIPi3Z (2-band): `data.counts` — `{ all, income, expense }` tab sonlari («Barchasi / Kirim / Chiqim»): AYNI filtrlar va rol doirasi (kassa, kassa turi, manba, sana, foydalanuvchi), faqat `operation_type` SIZ — tanlangan tabdan qat'i nazar. `all = income + expense`. `pagination.total` — joriy (tabli) ro'yxat jami.",
         "operationId": "FinanceGatewayController_findHistory",
         "parameters": [
+          {
+            "name": "expense_category_id",
+            "required": false,
+            "in": "query",
+            "description": "(ljVOuNz4) Kassa xarajati kategoriyasi ID si (`GET /finance/cashbox/expense-categories`) yoki `none` — kategoriyasiz qo'lda chiqim (`manual_expense`, eski qatorlar). `counts` ham shu filtr bilan.",
+            "schema": {
+              "example": "2",
+              "type": "string"
+            }
+          },
           {
             "name": "receipt_status",
             "required": false,
@@ -19691,6 +19795,14 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "expense_category",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -28019,6 +28131,31 @@
           "comment": {
             "type": "string",
             "example": "Ofis ijarasi"
+          },
+          "expense_category": {
+            "type": "string",
+            "enum": [
+              "food",
+              "transport",
+              "fuel",
+              "rent",
+              "utilities",
+              "communication",
+              "stationery",
+              "repair",
+              "marketing",
+              "tax",
+              "bank_fee",
+              "gift",
+              "cleaning",
+              "packaging",
+              "salary",
+              "courier_fee",
+              "vehicle_repair",
+              "other"
+            ],
+            "example": "rent",
+            "description": "(ljVOuNz4) Xarajat kategoriyasi. `manual_expense` — 18 talik ro'yxat; `bills` — faqat `utilities`, `communication`, `rent`, `tax`, `bank_fee`, `other` (boshqasi → 400); `salary` — so'ralmaydi, avtomatik `salary`; `correction`, `manual_income` — so'ralmaydi, NULL. `FINANCIAL_ENTRY_CATEGORY_REQUIRED=on` bo'lsa `manual_expense` va `bills` da majburiy (yo'q → 400 «Xarajat kategoriyasini tanlang»)."
           }
         },
         "required": [

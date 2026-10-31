@@ -27,6 +27,7 @@ import {
   PaymentMethod,
   Source_type,
 } from '@app/common';
+import { ExpenseCategory } from '@app/common/enums';
 
 export class CreateCashboxRequestDto {
   @ApiProperty({ example: '12345' })
@@ -207,6 +208,16 @@ export class UpdateCashboxBalanceRequestDto {
 }
 
 export class FindHistoryQueryDto {
+  /** ljVOuNz4 — kassa xarajati kategoriyasi bo'yicha filtr. */
+  @ApiPropertyOptional({
+    example: '2',
+    description:
+      "(ljVOuNz4) Kassa xarajati kategoriyasi ID si (`GET /finance/cashbox/expense-categories`) yoki `none` — kategoriyasiz qo'lda chiqim (`manual_expense`, eski qatorlar). `counts` ham shu filtr bilan.",
+  })
+  @IsOptional()
+  @Matches(/^(\d+|none)$/)
+  expense_category_id?: string;
+
   /** T3 — «Chek holati» filtri (faqat SA/admin/menejer; boshqa rol → 403). */
   @ApiPropertyOptional({
     enum: CASHBOX_RECEIPT_FILTER_STATUSES,
@@ -1493,6 +1504,21 @@ export class RecordFinancialBalanceRequestDto {
   @IsOptional()
   @IsString()
   comment?: string;
+
+  /**
+   * ljVOuNz4 — ro'yxat `IsIn` bilan bu yerda, manbaga qarab cheklov va
+   * majburiylik controller'da (`resolveExpenseCategory`): u `source_type`
+   * ga bog'liq va `FINANCIAL_ENTRY_CATEGORY_REQUIRED` kaliti bilan yoqiladi.
+   */
+  @ApiPropertyOptional({
+    enum: ExpenseCategory,
+    example: ExpenseCategory.RENT,
+    description:
+      "(ljVOuNz4) Xarajat kategoriyasi. `manual_expense` — 18 talik ro'yxat; `bills` — faqat `utilities`, `communication`, `rent`, `tax`, `bank_fee`, `other` (boshqasi → 400); `salary` — so'ralmaydi, avtomatik `salary`; `correction`, `manual_income` — so'ralmaydi, NULL. `FINANCIAL_ENTRY_CATEGORY_REQUIRED=on` bo'lsa `manual_expense` va `bills` da majburiy (yo'q → 400 «Xarajat kategoriyasini tanlang»).",
+  })
+  @IsOptional()
+  @IsIn(Object.values(ExpenseCategory))
+  expense_category?: ExpenseCategory;
 }
 
 export class CreateOperatorPaymentRequestDto {
