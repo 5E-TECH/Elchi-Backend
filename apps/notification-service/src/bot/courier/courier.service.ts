@@ -33,6 +33,14 @@ export const COURIER_ACTIVE_STATUSES = [
   'waiting_customer',
 ] as const;
 const PROOF_TIMEOUT_MS = 60_000;
+/**
+ * (BOT-3d) Kuryer amali kutish chegarasi — gateway'ning eng uzun RMQ
+ * chegarasidan (60 s) KATTA: gateway javobi yo'qolib ketmasin.
+ */
+export const COURIER_OP_TIMEOUT_MS = 65_000;
+/** (BOT-3d) Natija noma'lum (timeout / 502–504) — qayta bosish o'rniga tekshirish. */
+export const COURIER_OP_UNKNOWN_TEXT =
+  "⏳ Natija noma'lum — /ishim orqali buyurtma holatini tekshiring.";
 
 export type CourierOpOutcome =
   | { kind: 'ok'; message: string }
@@ -331,8 +339,7 @@ export class CourierService {
         OP_PATH[op](encodeURIComponent(orderId)),
         body,
         {
-          timeoutMs:
-            op === 'sell' || op === 'cancel' ? PROOF_TIMEOUT_MS : 10_000,
+          timeoutMs: COURIER_OP_TIMEOUT_MS,
           idempotencyKey: options.idempotencyKey,
         },
       );
@@ -341,11 +348,21 @@ export class CourierService {
       this.logger.warn(
         `courier ${op} #${orderId}: ${error instanceof Error ? error.message : 'error'}`,
       );
+      // So'rov yuborilgan bo'lishi mumkin (javob kelmadi) — «bajarilmadi»
+      // deyilmaydi; qayta bosilsa ham ayni kalit amalni takrorlamaydi.
+      if (isTimeout(error)) {
+        return { kind: 'error', message: COURIER_OP_UNKNOWN_TEXT };
+      }
       return {
         kind: 'error',
         message:
           "❌ Amal bajarilmadi (aloqa xatosi) — birozdan so'ng qayta urinib ko'ring.",
       };
+    }
+    // Gateway / order-service javob bermadi (inglizcha 504 matni odamga
+    // chiqmaydi) — natija noma'lum.
+    if (res.status === 502 || res.status === 503 || res.status === 504) {
+      return { kind: 'error', message: COURIER_OP_UNKNOWN_TEXT };
     }
     const text = messageOf(res.body);
     if (res.status === 202) {
@@ -425,4 +442,10 @@ export class CourierService {
     }
     return key;
   }
+}
+
+/** fetch `AbortSignal.timeout` — `TimeoutError` (yoki eski muhitda `AbortError`). */
+function isTimeout(error: unknown): boolean {
+  const name = (error as { name?: unknown } | null)?.name;
+  return name === 'TimeoutError' || name === 'AbortError';
 }

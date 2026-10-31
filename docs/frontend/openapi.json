@@ -5489,6 +5489,15 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "BOT-3d: ixtiyoriy barqaror kalit (≤255 belgi, foydalanuvchi bo'yicha ajratiladi) — takroriy so'rov (qayta urinish, ikki marta bosish) amalni ikkinchi marta bajarmaydi. Har amal + buyurtma + tana uchun noyob kalit: ayni kalit boshqa amal, buyurtma yoki tana bilan → 422; ayni kalitli so'rov hali bajarilayotgan bo'lsa → 409; 255 belgidan uzun → 400.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "requestBody": {
@@ -5535,6 +5544,15 @@
             "required": true,
             "in": "path",
             "description": "Order ID (id)",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "BOT-3d: ixtiyoriy barqaror kalit (≤255 belgi, foydalanuvchi bo'yicha ajratiladi) — takroriy so'rov (qayta urinish, ikki marta bosish) amalni ikkinchi marta bajarmaydi. Har amal + buyurtma + tana uchun noyob kalit: ayni kalit boshqa amal, buyurtma yoki tana bilan → 422; ayni kalitli so'rov hali bajarilayotgan bo'lsa → 409; 255 belgidan uzun → 400.",
+            "required": false,
             "schema": {
               "type": "string"
             }
@@ -5701,6 +5719,15 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "BOT-3d: ixtiyoriy barqaror kalit (≤255 belgi, foydalanuvchi bo'yicha ajratiladi) — takroriy so'rov (qayta urinish, ikki marta bosish) amalni ikkinchi marta bajarmaydi. Har amal + buyurtma + tana uchun noyob kalit: ayni kalit boshqa amal, buyurtma yoki tana bilan → 422; ayni kalitli so'rov hali bajarilayotgan bo'lsa → 409; 255 belgidan uzun → 400.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "requestBody": {
@@ -5742,6 +5769,15 @@
             "required": true,
             "in": "path",
             "description": "Order ID (id)",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "BOT-3d: ixtiyoriy barqaror kalit (≤255 belgi, foydalanuvchi bo'yicha ajratiladi) — takroriy so'rov (qayta urinish, ikki marta bosish) amalni ikkinchi marta bajarmaydi. Har amal + buyurtma + tana uchun noyob kalit: ayni kalit boshqa amal, buyurtma yoki tana bilan → 422; ayni kalitli so'rov hali bajarilayotgan bo'lsa → 409; 255 belgidan uzun → 400.",
+            "required": false,
             "schema": {
               "type": "string"
             }
@@ -5791,6 +5827,15 @@
             "required": true,
             "in": "path",
             "description": "Order ID (id)",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "BOT-3d: ixtiyoriy barqaror kalit (≤255 belgi, foydalanuvchi bo'yicha ajratiladi) — takroriy so'rov (qayta urinish, ikki marta bosish) amalni ikkinchi marta bajarmaydi. Har amal + buyurtma + tana uchun noyob kalit: ayni kalit boshqa amal, buyurtma yoki tana bilan → 422; ayni kalitli so'rov hali bajarilayotgan bo'lsa → 409; 255 belgidan uzun → 400.",
+            "required": false,
             "schema": {
               "type": "string"
             }

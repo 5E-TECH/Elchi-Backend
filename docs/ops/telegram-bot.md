@@ -198,6 +198,21 @@ bazasiga o'zi yozmaydi, doira/holat mashinasi/isbot/extra-cost — serverda.
 - Avtomatik kunlik hisobot: `COURIER_DAILY_REPORT_CRON` (Asia/Tashkent, bo'sh —
   o'chiq); faqat ulangan kuryerlarga, kuniga bitta (deterministik
   `client_request_id`); botni bloklagan chat o'tkaziladi.
+- **Idempotentlik (BOT-3d).** Har kuryer amali (`sell`, `cancel`,
+  `could-not-deliver`, `partly-sell`, `rollback`) `Idempotency-Key: <action_id>`
+  bilan yuboriladi. Gateway uni `idem:<user>:<sha256(kalit)>` ga aylantiradi;
+  order-service kalitni **amal + buyurtma + tana barmoq izi** ga bog'laydi
+  (`idempotency_keys.pattern` = `order.sell:<id>:<sha256(dto)[:32]>`, isbot fayl
+  kalitlari kirmaydi). Ayni kalit boshqa amal, buyurtma yoki tana bilan → **422**,
+  eski natija qaytmaydi. Yiqilgan urinish qayta egallanadi (`reclaimFailed`);
+  ishlayotgan takror → **409**; lease 90 s (gateway timeout 60 s dan uzun).
+  Isbotli amal kaliti — o'sha «✅ Tugatdim» tugmasi (`proof:<action_id>`): har
+  isbot urinishiga yangi, qayta urinishda o'zgarmaydi. Handler xatosida bir
+  martalik «✅ Ha» / «✅ Tugatdim» qayta ochiladi (`retrySafe`).
+- «✅ Ha» bosilganda darhol `answerCallbackQuery("⏳ Bajarilmoqda…")`; bot javobni
+  **65 s** kutadi (`COURIER_OP_TIMEOUT_MS`), natija tasdiq xabarini TAHRIRLAB yoziladi.
+  Timeout / 502–504 → "Natija noma'lum" va «✅ Ha» tugmasi qaytariladi: qayta bosish
+  ayni kalit bilan ketadi, backend amalni ikkinchi marta bajarmaydi (keshdagi javob).
 
 ## 8. Qo'shimcha xarajat tasdig'i (DuST9k8j, 1tnpaIqd)
 
