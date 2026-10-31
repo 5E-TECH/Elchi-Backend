@@ -296,7 +296,7 @@ describe('LogisticsServiceService scanAssignOrder', () => {
         { qr_token: 'ORD-abc123' },
       ),
       400,
-      "Order holati noto'g'ri",
+      "Buyurtma holati noto'g'ri",
     );
   });
 
@@ -341,6 +341,105 @@ describe('LogisticsServiceService scanAssignOrder', () => {
       ([pattern]: [{ cmd: string }]) => pattern.cmd === 'order.update',
     );
     expect(updateCalls).toHaveLength(0);
+  });
+
+  // ===== 6qypMFeT — filial qabul qilgan WAITING buyurtma =====
+
+  describe('6qypMFeT — WAITING (assign-to-courier bilan bir xil)', () => {
+    const orderUpdates = (orderClient: { send: jest.Mock }) =>
+      orderClient.send.mock.calls.filter(
+        ([pattern]: [{ cmd: string }]) => pattern.cmd === 'order.update',
+      );
+
+    it('filial pochtadan qabul qilgan, kuryersiz WAITING — biriktiriladi', async () => {
+      const { service, orderClient } = setup({
+        order: { status: Order_status.WAITING, post_id: 'p-branch' },
+        openPost: {
+          id: 'p-open',
+          courier_id: 'c1',
+          status: Post_status.SENT,
+          order_quantity: 1,
+          post_total_price: 1000,
+        },
+      });
+
+      const result: any = await service.scanAssignOrder(
+        { id: 'c1', roles: ['courier'] },
+        { qr_token: 'ORD-abc123' },
+      );
+
+      expect(result.statusCode).toBe(200);
+      expect(result.data.idempotent).toBe(false);
+      const updates = orderUpdates(orderClient);
+      // RECEIVED oldi-qadami yo'q: WAITING → ON_THE_ROAD bitta yozuv.
+      expect(updates).toHaveLength(1);
+      expect(updates[0][1].dto).toEqual(
+        expect.objectContaining({
+          courier_id: 'c1',
+          status: Order_status.ON_THE_ROAD,
+          post_id: 'p-open',
+        }),
+      );
+    });
+
+    it('o‘z WAITING buyurtmasini qayta skan — idempotent, ON_THE_ROAD ga qaytmaydi', async () => {
+      const { service, orderClient, postRepo } = setup({
+        order: {
+          status: Order_status.WAITING,
+          courier_id: 'c1',
+          post_id: 'p-open',
+        },
+        linkedPost: {
+          id: 'p-open',
+          courier_id: 'c1',
+          status: Post_status.RECEIVED,
+        },
+      });
+
+      const result: any = await service.scanAssignOrder(
+        { id: 'c1', roles: ['courier'] },
+        { qr_token: 'ORD-abc123' },
+      );
+
+      expect(result.data).toEqual(
+        expect.objectContaining({ idempotent: true, post_created: false }),
+      );
+      expect(orderUpdates(orderClient)).toHaveLength(0);
+      expect(postRepo.save).not.toHaveBeenCalled();
+    });
+
+    it('boshqa kuryer qo‘lidagi WAITING (holder_courier_id) — 400, yozuv yo‘q', async () => {
+      const { service, orderClient } = setup({
+        order: { status: Order_status.WAITING, holder_courier_id: 'c2' },
+      });
+
+      await expectRpcStatus(
+        service.scanAssignOrder(
+          { id: 'c1', roles: ['courier'] },
+          { qr_token: 'ORD-abc123' },
+        ),
+        400,
+        'boshqa courierga biriktirilgan',
+      );
+      expect(orderUpdates(orderClient)).toHaveLength(0);
+    });
+
+    it('HQ kuryeri: HQ da turgan kuryersiz WAITING — biriktiriladi', async () => {
+      const { service, orderClient } = setup({
+        order: { status: Order_status.WAITING, branch_id: '1' },
+        branchId: '1',
+        branchType: 'HQ',
+        hqBranchId: '1',
+      });
+
+      const result: any = await service.scanAssignOrder(
+        { id: 'c1', roles: ['courier'] },
+        { qr_token: 'ORD-abc123' },
+      );
+
+      expect(result.data.idempotent).toBe(false);
+      expect(orderUpdates(orderClient)).toHaveLength(1);
+    });
   });
 
   // ===== P1b — skan bilan avtomatik filial qabuli =====

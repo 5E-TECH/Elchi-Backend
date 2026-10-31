@@ -9,6 +9,7 @@ import { TelegramChatLocksAiWorker1716000000190 } from '../../../../migrations/1
 import { TelegramOrderCards1716000000122 } from '../../../../migrations/1716000000122-TelegramOrderCards';
 import { TelegramOrderCardsPending1716000000191 } from '../../../../migrations/1716000000191-TelegramOrderCardsPending';
 import { TelegramOutboxDeliveryBlocks1716000000192 } from '../../../../migrations/1716000000192-TelegramOutboxDeliveryBlocks';
+import { TelegramOutboxPartsSent1716000000199 } from '../../../../migrations/1716000000199-TelegramOutboxPartsSent';
 import { TelegramBotAction } from '../entities/telegram-bot-action.entity';
 import { TelegramMarket } from '../entities/telegram-market.entity';
 import { TelegramOutbox } from '../entities/telegram-outbox.entity';
@@ -76,6 +77,7 @@ const migration = new TelegramBotCore1716000000120();
         // yaratgan jadvalga ham ustun kerak.
         if (direction === 'up') {
           await new TelegramOutboxDeliveryBlocks1716000000192().up(runner);
+          await new TelegramOutboxPartsSent1716000000199().up(runner);
         }
       } finally {
         await runner.release();
@@ -434,6 +436,69 @@ const migration = new TelegramBotCore1716000000120();
         // (BOT-2 #4) yuborilgan xabar matni bazada qolmaydi.
         expect(row.payload).toEqual({});
         expect(fetchMock).toHaveBeenCalledTimes(2);
+      });
+
+      it('⭐ BOT-3d: ko`p bo`lakli xabar, 2-bo`lakda 429 — processDue faqat 2-bo`lakni yuboradi (parts_sent haqiqiy SQL RETURNING orqali)', async () => {
+        await db.query(`DELETE FROM notification_schema.telegram_outbox`);
+        const runner = db.createQueryRunner();
+        try {
+          await new TelegramOutboxPartsSent1716000000199().up(runner);
+        } finally {
+          await runner.release();
+        }
+        const fetchMock = makeFetch();
+        fetchMock
+          .mockResolvedValueOnce(okResponse({ message_id: 1 }))
+          .mockResolvedValueOnce(
+            telegramResponse(429, {
+              ok: false,
+              description: 'Too Many Requests: retry after 1',
+              parameters: { retry_after: 1 },
+            }),
+          );
+        const env = {
+          TELEGRAM_BOT_TOKEN: '1234567890:ENV_TOKEN_aaaaaaaaaaaaaaaaaaaaaaaaa',
+        };
+        const outbox = new BotOutboxService(
+          db.getRepository(TelegramOutbox),
+          makeTransport(fetchMock, env),
+          makeChannels() as never,
+          {
+            get: (key: string) => (env as Record<string, unknown>)[key],
+          } as never,
+        );
+        const first = await outbox.send({
+          chatId: '5550044',
+          text: `${'a'.repeat(4000)}\n${'b'.repeat(500)}`,
+          source: 'test',
+        });
+        expect(first.status).toBe('queued');
+        const [queued]: Array<{ parts_sent: number }> = await db.query(
+          `SELECT parts_sent FROM notification_schema.telegram_outbox WHERE id = $1`,
+          [first.id],
+        );
+        expect(queued.parts_sent).toBe(1);
+        await db.query(
+          `UPDATE notification_schema.telegram_outbox SET next_attempt_at = now() WHERE id = $1`,
+          [first.id],
+        );
+        fetchMock.mockResolvedValueOnce(okResponse({ message_id: 2 }));
+        expect(await outbox.processDue()).toBe(1);
+        const texts = fetchMock.mock.calls.map(
+          ([, init]) =>
+            (
+              JSON.parse(String((init as { body?: string }).body)) as {
+                text: string;
+              }
+            ).text,
+        );
+        // 1-bo'lak QAYTA yuborilmadi.
+        expect(texts.map((text) => text[0])).toEqual(['a', 'b', 'b']);
+        const [row]: Array<{ status: string }> = await db.query(
+          `SELECT status FROM notification_schema.telegram_outbox WHERE id = $1`,
+          [first.id],
+        );
+        expect(row.status).toBe('sent');
       });
 
       it('⭐ BOT-3 #4: navbatga tushgan guruh kartasi keyin yuborilsa — message_id kartaga yoziladi', async () => {

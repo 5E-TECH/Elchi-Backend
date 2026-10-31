@@ -6,9 +6,9 @@ import {
   gatewayOrder,
   lastButtons,
   makeRouter,
+  openIshim,
   sentTexts,
   shownTexts,
-  textUpdate,
 } from '../testing/bot-kit-spec';
 
 /**
@@ -68,7 +68,7 @@ describe('BOT-3d — kuryer amali idempotent (NIMA 12)', () => {
   it('⭐ birinchi urinish backend’ga yetgan, javob yo‘qolgan → «Ha» qayta → backend’da BITTA amal', async () => {
     const backend = lossyBackend();
     const ctx = makeRouter({ actor: courierActor(), gateway: backend.request });
-    await ctx.router.dispatch('elchi', textUpdate('/ishim', { chatId: 25 }));
+    await openIshim(ctx);
     await press(ctx, lastButtons(ctx)['✅ Sotildi']);
     const yes = lastButtons(ctx)['✅ Ha'];
 
@@ -96,7 +96,7 @@ describe('BOT-3d — kuryer amali idempotent (NIMA 12)', () => {
   it('«Ha» bosilganda darhol «⏳» javob (answerCallbackQuery), natija tasdiq xabarini tahrirlab yoziladi', async () => {
     const gateway = fakeOrdersGateway([gatewayOrder('101', 'waiting')]);
     const ctx = makeRouter({ actor: courierActor(), gateway: gateway.request });
-    await ctx.router.dispatch('elchi', textUpdate('/ishim', { chatId: 25 }));
+    await openIshim(ctx);
     await press(ctx, lastButtons(ctx)['✅ Sotildi']);
     const sendsBefore = sentTexts(ctx).length;
     await press(ctx, lastButtons(ctx)['✅ Ha']);
@@ -143,7 +143,7 @@ describe('BOT-3d — kuryer amali idempotent (NIMA 12)', () => {
     const ctx = makeRouter({ actor: courierActor(), gateway: request });
     let updateId = 5000;
     const sellWithProof = async () => {
-      await ctx.router.dispatch('elchi', textUpdate('/ishim', { chatId: 25 }));
+      await openIshim(ctx);
       await press(ctx, lastButtons(ctx)['✅ Sotildi']);
       await press(ctx, lastButtons(ctx)['✅ Ha']);
       const done = lastButtons(ctx)['✅ Tugatdim'];

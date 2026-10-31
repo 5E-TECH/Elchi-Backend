@@ -148,8 +148,9 @@ describe('MWYaqprw — /ishim dagi "📷 Skaner" tugmasi', () => {
     await ctx.router.dispatch('elchi', textUpdate('/ishim', { chatId: 25 }));
     const [summary] = sent(ctx);
     expect(summary.text).toContain('Topshiriqlar');
-    expect(summary.reply_markup?.inline_keyboard).toEqual([
-      [{ text: '📷 Skaner', web_app: { url: SCAN_URL } }],
+    // (BOT-3d) bitta ro'yxat xabari: buyurtma tugmalari + oxirida Skaner.
+    expect(summary.reply_markup?.inline_keyboard.at(-1)).toEqual([
+      { text: '📷 Skaner', web_app: { url: SCAN_URL } },
     ]);
     expect(SCAN_URL).not.toMatch(/token|\?/);
   });

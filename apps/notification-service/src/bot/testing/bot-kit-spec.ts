@@ -85,6 +85,8 @@ export interface OutboxRow {
   last_error?: string | null;
   next_attempt_at?: Date;
   source?: string | null;
+  /** (BOT-3d) ko'p bo'lakli xabar — yetkazilgan bo'laklar. */
+  parts_sent?: number;
 }
 
 /** `telegram_outbox` repozitoriyasi — xotirada. */
@@ -961,4 +963,30 @@ export function shownTexts(ctx: {
     .sort((a, b) => a.order - b.order)
     .map((entry) => entry.text)
     .filter(Boolean);
+}
+
+/**
+ * (BOT-3d) `/ishim` endi BITTA ro'yxat xabari — kartalar buyurtma tugmasi
+ * bosilganda ochiladi. Kartalar bilan ishlaydigan oqim testlari uchun:
+ * ro'yxatni yuboradi va undagi har `#id` tugmasini bosadi (avvalgi
+ * «ro'yxat + kartalar» holati).
+ */
+export async function openIshim(
+  ctx: ReturnType<typeof makeRouter>,
+  options: { chatId?: number; fromId?: number } = {},
+): Promise<string[]> {
+  const chatId = options.chatId ?? 25;
+  const fromId = options.fromId ?? chatId;
+  await ctx.router.dispatch('elchi', textUpdate('/ishim', { chatId }));
+  const list = lastButtons(ctx);
+  const opened: string[] = [];
+  for (const [text, data] of Object.entries(list)) {
+    if (!text.startsWith('#')) continue;
+    await ctx.router.dispatch(
+      'elchi',
+      callbackUpdate(data, { chatId, fromId }),
+    );
+    opened.push(text.slice(1));
+  }
+  return opened;
 }

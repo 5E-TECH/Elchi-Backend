@@ -5346,7 +5346,7 @@ export class OrderGatewayController {
     // raqamlari ham shu ta'rif bilan sanaladi).
     const payload = {
       query: {
-        ...courierPostOrdersQuery(courierPostIds, statuses),
+        ...courierPostOrdersQuery(courierPostIds, statuses, req?.user?.sub),
         search,
         start_day: startDate,
         end_day: endDate,

@@ -63,6 +63,17 @@ kabinetdan kod bilan qayta ulaydi (o'sha marketning nofaol qatori qayta yoqiladi
 marketniki — yo'q); admin o'chirgan (`manual`) yoki sababsiz qator — faqat admin PATCH. HTML xatosi (`can't parse entities`)
 — faqat o'sha xabar `dead`, guruh faol qoladi.
 
+**Tezlik va uzun xabarlar (BOT-3d).** Shaxsiy chatga ~1 xabar/s (3 tagacha
+portlash). Token bucket'lar jarayon ichida (in-process) — prod'da bot bitta
+replika; replika ko'paysa chegarani umumiy saqlovga ko'chirish kerak. Bucket'lar
+soni 10 000 dan oshsa faqat eng eski (LRU) o'chiriladi. Uzun HTML xabar
+teg/entity ichida kesilmaydi (teglar yopilib, keyingi bo'lakda qayta ochiladi);
+xavfsiz nuqta bo'lmasa (masalan 4096 dan uzun havola) — qattiq kesish, surrogat
+jufti bo'linmaydi, bo'sh bo'lak yuborilmaydi. Outbox ko'p bo'lakli xabarda yetkazilgan bo'laklarni eslaydi
+(`telegram_outbox.parts_sent`, migratsiya `1716000000199`) — qayta urinishda
+yetkazilganlar qayta yuborilmaydi. Istisno (qabul qilingan): bo'lak yetib, lekin
+`parts_sent` yozilmay qolsa — o'sha bitta bo'lak takror chiqishi mumkin.
+
 **Javob kafolati (BOT-3d A).** Webhook update'ning brokerga uzatilishini kutadi
 (3 s): RMQ xatosi / timeout → 503, Telegram qayta yuboradi; takror update
 iste'molchida `update_id` bo'yicha tashlanadi (`telegram_rate_limits`
@@ -169,7 +180,7 @@ bazasiga o'zi yozmaydi, doira/holat mashinasi/isbot/extra-cost — serverda.
 
 | Buyruq / tugma | Endpoint |
 |---|---|
-| `/ishim` | `GET /orders?status=waiting&status=on the road&status=waiting_customer&page&limit=10` (tuman bo'yicha, "⬇️ Yana") |
+| `/ishim` | `GET /orders?status=waiting&status=on the road&status=waiting_customer&page&limit=10` — BITTA ro'yxat xabari (tuman bo'yicha, har buyurtma tugmasi → karta `GET /orders/:id`; "⬇️ Yana" / "⬆️ Oldingi" shu xabarni tahrirlaydi, BOT-3d; boshqa xabardagi «📋 Topshiriqlarim», masalan skan xulosasi — yangi ro'yxat xabari). Deploydan oldingi karta va «⬇️ Yana» tugmalari ishlashda davom etadi |
 | ✅ Sotildi → tasdiq → Ha | `POST /orders/sell/:id` (`proofFileKeys` isbot bilan) |
 | ❌ Bekor → sabab (CancelReason enum) → Ha | `POST /orders/cancel/:id { reason }` |
 | 🕗 Yetkazib bo'lmadi → sabab → Ha | `POST /orders/:id/could-not-deliver { reason }` |

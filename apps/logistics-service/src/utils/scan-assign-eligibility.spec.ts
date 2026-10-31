@@ -36,7 +36,7 @@ describe('assessHqCourierScan', () => {
         'Buyurtma HQ da emas — boshqa filialda turibdi. HQ kuryeri faqat HQ da turgan buyurtmani oladi.',
       WITH_OTHER_COURIER: 'Order allaqachon boshqa courierga biriktirilgan',
       WRONG_STATUS:
-        "Order holati noto'g'ri: faqat RECEIVED yoki WAITING_CUSTOMER bo'lishi kerak",
+        "Buyurtma holati noto'g'ri: faqat qabul qilingan yoki kutilayotgan buyurtmani olish mumkin",
     });
   });
 
@@ -354,18 +354,18 @@ describe('assessHqCourierScan', () => {
   });
 
   describe('9. noto‘g‘ri holat', () => {
-    it('HQ dagi WAITING (kuryer c1) → 400 WRONG_STATUS', () => {
+    // 6qypMFeT: WAITING — assign-to-courier bilan bir xil, ruxsat.
+    it('HQ dagi WAITING (kuryersiz yoki o‘z kuryeri) → ruxsat', () => {
+      expect(
+        assess({ status: Order_status.WAITING, branch_id: '1' }),
+      ).toBeNull();
       expect(
         assess({
           status: Order_status.WAITING,
           branch_id: '1',
           courier_id: 'c1',
         }),
-      ).toEqual({
-        statusCode: 400,
-        message: SCAN_ASSIGN_MESSAGES.WRONG_STATUS,
-        reason: 'WRONG_STATUS',
-      });
+      ).toBeNull();
     });
 
     it('CREATED → WRONG_STATUS', () => {

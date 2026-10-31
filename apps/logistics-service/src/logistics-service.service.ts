@@ -44,6 +44,7 @@ import {
   BranchType,
   courierPostOrdersQuery,
   COURIER_LIST_HIDDEN_STATUSES,
+  isCourierScanTakenOrder,
   fetchScanOrderSummaries,
   Order_status,
   POST_RECEIVED_TRACKING_NOTES,
@@ -76,6 +77,7 @@ interface OrderRow {
   home_branch_id?: string | null;
   courier_id?: string | null;
   assigned_at?: string | Date | null;
+  last_handover_by?: string | null;
   region_id?: string | null;
   district_id?: string | null;
   customer_id?: string;
@@ -936,6 +938,7 @@ export class LogisticsServiceService implements OnModuleInit {
       // (menejer: branch_id; kuryer: post_ids + exclude_statuses).
       branch_id?: string;
       exclude_statuses?: Order_status[];
+      scan_taken_courier_id?: string;
       start_day?: string;
       end_day?: string;
       fetch_all?: boolean;
@@ -4529,23 +4532,35 @@ export class LogisticsServiceService implements OnModuleInit {
     }
 
     const currentCourierId = String(order.courier_id ?? '').trim();
-    if (currentCourierId && currentCourierId !== requesterId) {
+    // 6qypMFeT: WAITING ochilgach ushlovchi ham tekshiriladi — boshqa kuryer
+    // qo'lidagi posilkani skan bilan olib bo'lmaydi.
+    const currentHolderCourierId = String(order.holder_courier_id ?? '').trim();
+    if (
+      (currentCourierId && currentCourierId !== requesterId) ||
+      (currentHolderCourierId && currentHolderCourierId !== requesterId)
+    ) {
       this.badRequest('Order allaqachon boshqa courierga biriktirilgan');
     }
 
+    // 6qypMFeT: o'z WAITING buyurtmasini qayta skanlash ham idempotent — aks
+    // holda qabul qilingan posilka ON_THE_ROAD ga qaytib, sotuvdan chiqardi.
     const currentStatus = order.status;
     const isAlreadyAssignedToCurrentCourier =
       currentCourierId === requesterId &&
-      currentStatus === Order_status.ON_THE_ROAD;
+      (currentStatus === Order_status.ON_THE_ROAD ||
+        currentStatus === Order_status.WAITING);
 
     if (!isAlreadyAssignedToCurrentCourier) {
+      // 6qypMFeT: WAITING — `assignOrdersToCourier` bilan bir xil (filial
+      // pochtadan qabul qilgan, kuryersiz buyurtma).
       if (
         currentStatus !== Order_status.NEW &&
         currentStatus !== Order_status.RECEIVED &&
+        currentStatus !== Order_status.WAITING &&
         currentStatus !== Order_status.WAITING_CUSTOMER
       ) {
         this.badRequest(
-          "Order holati noto'g'ri: faqat NEW, RECEIVED yoki WAITING_CUSTOMER bo'lishi kerak",
+          "Buyurtma holati noto'g'ri: faqat yangi, qabul qilingan yoki kutilayotgan buyurtmani olish mumkin",
         );
       }
     }
@@ -6918,8 +6933,8 @@ export class LogisticsServiceService implements OnModuleInit {
    *  - kuryer — GET /orders/courier/orders: kuryer pochtalari
    *    (`courierPostsWhere`, gateway `findAllCourierPostIds` bilan bir xil)
    *    + `courierPostOrdersQuery` (holatsiz «Barchasi»: created / new /
-   *    received / on the road ko'rinmaydi). Pochtasi yo'q — bo'sh (ro'yxat
-   *    ham bo'sh);
+   *    received / on the road ko'rinmaydi, 6qypMFeT: skan bilan olingan
+   *    posilkadan tashqari). Pochtasi yo'q — bo'sh (ro'yxat ham bo'sh);
    *  - filial xodimi — GET /orders (`resolveOrderListRequest`): faqat
    *    `branch_id` (order-service: branch_id / holder_branch_id /
    *    home_branch_id), holat filtrisiz.
@@ -6941,7 +6956,7 @@ export class LogisticsServiceService implements OnModuleInit {
       if (!postIds.length) {
         return [];
       }
-      const query = courierPostOrdersQuery(postIds);
+      const query = courierPostOrdersQuery(postIds, undefined, courierId);
       const postIdSet = new Set(postIds);
       const hidden = new Set<string>(COURIER_LIST_HIDDEN_STATUSES);
       const rows = await this.findOrders({
@@ -6953,7 +6968,8 @@ export class LogisticsServiceService implements OnModuleInit {
       return rows.filter(
         (order) =>
           postIdSet.has(String(order.post_id ?? '').trim()) &&
-          !hidden.has(String(order.status ?? '')),
+          (!hidden.has(String(order.status ?? '')) ||
+            isCourierScanTakenOrder(order, courierId)),
       );
     }
 
