@@ -707,6 +707,26 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
   «Xarajat kategoriyasini tanlang»), `comment` is optional; the
   `finance.cashbox.spend` RMQ handler still accepts no category (internal
   spends such as the investor profit payout).
+- **Ledger expense category (ljVOuNz4, 2026-10-31, migr `1716000000197`):**
+  closed enum `ExpenseCategory` (18, `libs/common/enums`), column
+  `financial_balance_history.expense_category`; rules in
+  `libs/common/src/finance/expense-category.ts` (`resolveLedgerExpenseCategory`):
+  `manual_expense` full list, `bills` six values, `salary` automatic,
+  everything else NULL. Required only at the gateway (`POST
+  /financial-balance/entries`) behind `FINANCIAL_ENTRY_CATEGORY_REQUIRED=on`
+  (default off, the current FE does not send it); internal RMQ callers stay
+  optional. The kassa list stays superadmin-managed:
+  `cashbox_expense_categories.ledger_category` maps a kassa category to the
+  enum, and a manual spend copies it to its ledger row (no mapping → `other`;
+  no CRUD for the column yet). `GET /finance/financial-balance/expense-report`
+  (`expense-category/expense-report.ts`, RMQ
+  `finance.financial_balance.expense_report`): ledger plus kassa rows that have
+  no ledger twin (`cashbox-history:<id>`, `operator-payment:<source_id>`,
+  `dedup_epoch`), transfers excluded by allow-list, unknown rows in a separate
+  `uncategorized`. Filters: `expense_category` (ledger history + xlsx),
+  `expense_category_id` (`GET /finance/history`), both accept `none`.
+  `CASHBOX_SPEND_COMMENT_REQUIRED=on` makes the spend comment mandatory
+  (default off, owner decision 2026-10-22).
 - **Cashbox receipts (T3, 2026-10-30, migr `1716000000188`):** photo + AI
   check for manual expenses (`manual_expense`) and click courier → HQ /
   branch → HQ transfers (`courier_to_hq` / `branch_to_hq`).

@@ -1,9 +1,6 @@
 import { Column, Entity, Index } from 'typeorm';
-import {
-  BaseEntity,
-  FinancialSource_type,
-  numericTransformer,
-} from '@app/common';
+import { BaseEntity, numericTransformer } from '@app/common';
+import { ExpenseCategory, FinancialSource_type } from '@app/common/enums';
 
 /**
  * Append-only ledger of the company's overall financial position.
@@ -22,6 +19,9 @@ import {
 @Index('IDX_FBH_CREATED_AT', ['createdAt'])
 @Index('IDX_FBH_SOURCE_TYPE', ['source_type'])
 @Index('IDX_FBH_ORDER', ['order_id'])
+@Index('IDX_FBH_EXPENSE_CATEGORY', ['expense_category'], {
+  where: 'expense_category IS NOT NULL',
+})
 export class FinancialBalanceHistory extends BaseEntity {
   // numeric(20,2) — exact fixed-point so the running P&L ledger
   // (balance_after = balance_before + amount) never drifts. API stays `number`.
@@ -77,6 +77,19 @@ export class FinancialBalanceHistory extends BaseEntity {
 
   @Column({ type: 'text', nullable: true })
   comment!: string | null;
+
+  /**
+   * ljVOuNz4 (migratsiya 197) — xarajat kategoriyasi, `comment` YONIDA.
+   * NULL — so'ralmaydigan manba (kirim, tuzatish, sotuv) yoki kategoriyasiz
+   * eski qator; "Boshqa" emas. Qoidalar — `resolveLedgerExpenseCategory`.
+   */
+  @Column({
+    type: 'enum',
+    enum: ExpenseCategory,
+    enumName: 'expense_category_enum',
+    nullable: true,
+  })
+  expense_category!: ExpenseCategory | null;
 
   /** Actor who triggered the entry; null for system-generated entries. */
   @Column({ type: 'bigint', nullable: true })

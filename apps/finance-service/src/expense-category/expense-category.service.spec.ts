@@ -425,7 +425,11 @@ describe('Elchi Pochta №1 — resolveSpendExpenseCategory (qo`lda chiqim)', ()
         ...manualExpense,
         expense_category_id: '5',
       }),
-    ).resolves.toEqual({ id: '5', name: "Yoqilg'i" });
+    ).resolves.toEqual({
+      id: '5',
+      name: "Yoqilg'i",
+      ledger_category: 'other',
+    });
     expect(manager.findOne).toHaveBeenCalledWith(CashboxExpenseCategory, {
       where: { id: '5', isDeleted: false },
       lock: { mode: 'pessimistic_read' },

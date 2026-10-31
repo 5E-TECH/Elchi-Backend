@@ -1,5 +1,6 @@
 import { Column, Entity } from 'typeorm';
 import { BaseEntity } from '@app/common';
+import { ExpenseCategory } from '@app/common/enums';
 
 /**
  * Elchi Pochta №1 — kassa xarajati kategoriyasi (migratsiya 1716000000129).
@@ -30,4 +31,17 @@ export class CashboxExpenseCategory extends BaseEntity {
   /** Oxirgi tahrirlagan / o'chirgan foydalanuvchi. */
   @Column({ type: 'bigint', nullable: true })
   updated_by!: string | null;
+
+  /**
+   * ljVOuNz4 (migratsiya 197) — kassa kategoriyasining yopiq ro'yxatdagi
+   * mosi: qo'lda chiqimning daftar qatori va xarajat hisoboti shundan oladi.
+   * NULL — aniq mosi yo'q (`other` deb yoziladi).
+   */
+  @Column({
+    type: 'enum',
+    enum: ExpenseCategory,
+    enumName: 'expense_category_enum',
+    nullable: true,
+  })
+  ledger_category!: ExpenseCategory | null;
 }

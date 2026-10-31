@@ -499,6 +499,7 @@ export class FinanceServiceController {
     @Payload()
     data: {
       source_type?: FinancialSource_type;
+      expense_category?: string;
       from_date?: string;
       to_date?: string;
       limit?: number;
@@ -508,6 +509,20 @@ export class FinanceServiceController {
   ) {
     return this.executeAndAck(context, () =>
       this.financeService.findFinancialBalanceHistory(data),
+    );
+  }
+
+  @MessagePattern({ cmd: 'finance.financial_balance.expense_report' })
+  financialBalanceExpenseReport(
+    @Payload()
+    data: {
+      from_date?: string;
+      to_date?: string;
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.financeService.financialBalanceExpenseReport(data),
     );
   }
 

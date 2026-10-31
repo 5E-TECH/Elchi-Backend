@@ -15,6 +15,11 @@ export class FindHistoryDto {
   @IsString()
   receipt_status?: string;
 
+  /** ljVOuNz4 — kassa kategoriyasi ID si yoki `none` (kategoriyasiz chiqim). */
+  @IsOptional()
+  @IsString()
+  expense_category_id?: string;
+
   /** T3 — `receipt` blokini qo'shish (FAQAT gateway, SA/admin/menejer). */
   @IsOptional()
   @IsBoolean()

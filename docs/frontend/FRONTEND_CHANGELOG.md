@@ -22,6 +22,22 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+### 2026-10-31 — Chiqimda «nima uchun?»: moliyaviy balansda kategoriya, xarajat hisoboti (ljVOuNz4)
+
+Kassa qismi (`expense_category_id`, majburiy) oldin bajarilgan, o'zgarmagan. Qo'shilgani — daftar (moliyaviy balans), filtrlar va hisobot. Mavjud FE buzilmaydi: majburiylik kalit bilan, sukut o'chiq.
+
+- 🆕 [finance] — yopiq ro'yxat `ExpenseCategory` (18): `food` Ovqat · `transport` Transport · `fuel` Yoqilg'i · `rent` Ijara · `utilities` Kommunal · `communication` Aloqa/Internet · `stationery` Kanstovar · `repair` Ta'mirlash · `marketing` Reklama/Marketing · `tax` Soliq · `bank_fee` Bank/komissiya · `gift` Sovg'a/mehmon · `cleaning` Tozalash · `packaging` Ombor/qadoqlash · `salary` Oylik/maosh · `courier_fee` Kuryer haqi · `vehicle_repair` Transport ta'miri · `other` Boshqa. Uchala tilda tarjima FE'da, qo'shimcha `expenseCategoryUncategorized` («Kategoriyasiz»).
+- ✏️ [finance] — `POST /finance/financial-balance/entries`: ixtiyoriy `expense_category` (FE tayyor bo'lgach majburiy, pastga qarang):
+  - `manual_expense` — 18 talik ro'yxat; `bills` — faqat `utilities`, `communication`, `rent`, `tax`, `bank_fee`, `other` (boshqasi → 400);
+  - `salary` — select yashiriladi, server o'zi `salary` qo'yadi; `correction`, `manual_income` — select yashiriladi, ustun NULL (yuborilsa ham e'tiborsiz);
+  - ayni `Idempotency-Key` boshqa kategoriya bilan → 409. `salary` manbasi avvalgidek 201 (T5).
+- ✏️ [finance] — `GET /finance/financial-balance/history`, `top-impacts`, `analytics.topTransactions` qatorlarida `expense_category: string|null`; `?expense_category=<qiymat>|none` filtri (`none` — kategoriyasiz `manual_expense`/`bills`; boshqa qiymat → 400). `GET /export/financial-balance.xlsx` ham shu filtrni oladi, oxirida «Kategoriya» ustuni. Filtr ustun bo'yicha: eski `salary` qatorlari (NULL) `?expense_category=salary` ga tushmaydi, hisobotda esa «Oylik».
+- ✏️ [finance] — `GET /finance/history?expense_category_id=<id>|none` (`none` — kategoriyasiz qo'lda chiqim; `counts` ham shu filtr bilan). `cashDetail` filtri uchun shu marshrut `cashbox_id` bilan: `GET /finance/cashbox/user/:id` filtr olmaydi.
+- ✏️ [finance] — `PATCH /finance/cashbox/spend` javobidagi `data.financial_balance_entry.expense_category`: kassa kategoriyasining yopiq ro'yxatdagi mosi (mosi yo'q, masalan superadmin qo'shgan kategoriya — `other`). Kassa tarixida `expense_category_id` + `expense_category_name` o'zgarmagan.
+- 🆕 [finance] — `GET /finance/financial-balance/expense-report?from_date&to_date` (superadmin, admin) — Balans → Tahlil: `{ total_amount, transaction_count, categories: [{ category, total_amount, transaction_count, percentage }], uncategorized: { total_amount, transaction_count, percentage } }`. `categories` kattasi tepada, summalar son. Kategoriya yig'indisi + `uncategorized` = `total_amount`. «Kategoriyasiz» alohida qator, «Boshqa» ga qo'shmang. Ko'chirishlar, kirim, foyda, tuzatish kirmaydi; kassa + daftar juftligi bir marta.
+- 🔧 Frontendda qoladi: (1) `FinancialEntryModal` + `manualEntry.ts` — «Manba turi» ostida «Kategoriya *», ro'yxat manbaga qarab, `buildManualEntryPayload` `expense_category` ni qo'shadi, `salary`/`correction`/`manual_income` da yashirin; (2) Moliyaviy balans → Tarix: ustun, filtr; (3) Tahlil: `expense-report` jamlamasi; (4) kassa tarixi va `cashDetail`: kategoriya filtri (chip bor); (5) 18 nom uz/ru/en, mobil kenglikda ko'rib chiqish; (6) kassa formasida izoh majburiy bo'lsa — `requireComment`.
+- 🔧 [ops] — FE (1) chiqqandan keyin `FINANCIAL_ENTRY_CATEGORY_REQUIRED=on` (api-gateway): `manual_expense`/`bills` kategoriyasiz → 400 «Xarajat kategoriyasini tanlang». Karta TC'si bo'yicha izoh ham majburiy bo'lsa, FE (6) dan keyin `CASHBOX_SPEND_COMMENT_REQUIRED=on`: bo'sh izoh → 400 «Izoh majburiy». Sukut — ega 2026-10-22 qarori (izoh ixtiyoriy).
+
 ### 2026-10-31 — `problem_contacts` paket va pochta skanida (CqBD8V4p)
 
 - ✏️ [order] — `GET /transfer-batches/:id` va `GET /transfer-batches/:id/remaining`: `items[].order.problem_contacts: [{ name, phone, source }]` (paket sahifasi ham chop etadi).

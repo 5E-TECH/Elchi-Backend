@@ -6,6 +6,7 @@ import {
 import { RpcException } from '@nestjs/microservices';
 import { DataSource, EntityManager } from 'typeorm';
 import { ActivityLogService, Operation_type, Source_type } from '@app/common';
+import { ExpenseCategory } from '@app/common/enums';
 import { CashboxExpenseCategory } from '../entities/cashbox-expense-category.entity';
 
 /**
@@ -144,7 +145,9 @@ const duplicateNameMessage = (name: string) =>
  *   • kategoriya mavjud va o'chirilmagan bo'lishi shart — aks holda 400
  *     (tanlov ro'yxatidan eskirgan qiymat kelgan).
  *
- * Qaytaradi: tarix qatoriga yoziladigan `{ id, name }` (nom — snapshot).
+ * Qaytaradi: tarix qatoriga yoziladigan `{ id, name }` (nom — snapshot) va
+ * daftar qatoriga yoziladigan `ledger_category` (ljVOuNz4; aniq mosi yo'q
+ * kategoriya — `other`, kategoriya baribir tanlangan, noma'lum emas).
  */
 export async function resolveSpendExpenseCategory(
   manager: EntityManager,
@@ -153,7 +156,11 @@ export async function resolveSpendExpenseCategory(
     operation_type: Operation_type;
     source_type: Source_type;
   },
-): Promise<{ id: string; name: string } | null> {
+): Promise<{
+  id: string;
+  name: string;
+  ledger_category: ExpenseCategory;
+} | null> {
   const raw = input.expense_category_id;
   if (raw === undefined || raw === null || raw === '') {
     return null;
@@ -176,7 +183,11 @@ export async function resolveSpendExpenseCategory(
       "Xarajat kategoriyasi topilmadi yoki o'chirilgan — ro'yxatdan faol kategoriya tanlang",
     );
   }
-  return { id: String(category.id), name: category.name };
+  return {
+    id: String(category.id),
+    name: category.name,
+    ledger_category: category.ledger_category ?? ExpenseCategory.OTHER,
+  };
 }
 
 export type ExpenseCategoryView = {
