@@ -3,6 +3,7 @@ import { DataSource, EntityManager } from 'typeorm';
 import { TelegramBotCore1716000000120 } from '../../../../migrations/1716000000120-TelegramBotCore';
 import { TelegramMarketInactiveReason1716000000150 } from '../../../../migrations/1716000000150-TelegramMarketInactiveReason';
 import { TelegramOutboxDeliveryBlocks1716000000192 } from '../../../../migrations/1716000000192-TelegramOutboxDeliveryBlocks';
+import { TelegramOutboxPartsSent1716000000199 } from '../../../../migrations/1716000000199-TelegramOutboxPartsSent';
 import { TelegramOrderCards1716000000122 } from '../../../../migrations/1716000000122-TelegramOrderCards';
 import { TelegramOrderCardsPending1716000000191 } from '../../../../migrations/1716000000191-TelegramOrderCardsPending';
 import { TelegramMarket } from '../entities/telegram-market.entity';
@@ -151,6 +152,7 @@ const env = {
           (chat_id, bot_slug, state, expires_at)
         VALUES ('5550099', 'elchi', '{"blocked_at": "2026-10-01T10:00:00Z"}', now() + interval '1 hour')`);
       await run(new TelegramOutboxDeliveryBlocks1716000000192());
+      await run(new TelegramOutboxPartsSent1716000000199());
     });
 
     afterAll(async () => {

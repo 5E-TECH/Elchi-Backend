@@ -74,4 +74,8 @@ export class TelegramOutbox {
    */
   @Column({ type: 'bigint', array: true, nullable: true })
   notification_ids!: string[] | null;
+
+  /** (BOT-3d) Ko'p bo'lakli xabar: yetkazilgan bo'laklar (qayta urinish qolganini). */
+  @Column({ type: 'integer', default: 0 })
+  parts_sent!: number;
 }

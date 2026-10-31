@@ -36,6 +36,11 @@ Deploy: **api-gateway + order-service + logistics-service**. Migratsiya yo'q.
   Boshqa kuryer qo'lidagi posilka (`holder_courier_id`) — 400. Noto'g'ri holat xatosi o'zbekcha.
 - [2026-10-31] 🔧 [frontend, ixtiyoriy] — «Kutilayotgan» tabida `on the road` qator keladi: «Sotish» / «Bekor qilish»
   (`ACTIVE_STATUSES`) bosilsa backend 400 qaytaradi. Bu qatorda tugma o'rniga «Pochtani qabul qiling» ko'rsatish mumkin.
+### 2026-10-31 — Telegram bot: `/ishim` bitta xabar, chat tezligi, uzun xabar bo'laklari (BOT-3d)
+
+- 🟢 [notification] — `/ishim` endi BITTA ro'yxat xabari (kartalar buyurtma tugmasi bilan ochiladi), shaxsiy chatga ~1 xabar/s, uzun HTML xabar teg ichida kesilmaydi. Migratsiya **`1716000000199`** (`telegram_outbox.parts_sent`) — servisdan OLDIN. Deploy: notification-service.
+
+→ Frontend: o'zgarish shart emas.
 
 ### 2026-10-31 — BOT-3d A: Telegram bot javob kafolati
 

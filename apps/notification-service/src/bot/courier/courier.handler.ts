@@ -29,6 +29,7 @@ import {
   COURIER_ACTIONS,
   COURIER_LIST_EXPIRED_TEXT,
   OP_LABEL,
+  STATUS_LABEL_UZ,
   cabinetButton,
   cancelReasonValid,
   cndReasonText,
@@ -105,7 +106,17 @@ export class CourierHandler implements BotMessageHandler {
   }
 
   /** (h9newLsd #2-#3) Bugungi topshiriqlar: tuman bo'yicha, 10 tadan, "⬇️ Yana". */
-  async sendPage(ctx: BotContext, page: number): Promise<void> {
+  /**
+   * (BOT-3d) `/ishim` — BITTA ro'yxat xabari (avval sarlavha + 10 karta +
+   * «Yana» = 12 xabar edi, shaxsiy chat chegarasida 429). Har buyurtma uchun
+   * tugma — karta faqat bosilganda ochiladi; «⬇️ Yana» / «⬆️ Oldingi» shu
+   * xabarni TAHRIRLAYDI (`editMessageId`).
+   */
+  async sendPage(
+    ctx: BotContext,
+    page: number,
+    editMessageId?: number | string,
+  ): Promise<void> {
     const actor = await ctx.actor();
     if (!actor || !ctx.fromId) return;
     const { orders, total, hasNext } = await this.courier.listActive(
@@ -129,49 +140,76 @@ export class CourierHandler implements BotMessageHandler {
     const sorted = [...orders].sort((a, b) =>
       (a.district ?? '').localeCompare(b.district ?? ''),
     );
-    await ctx.reply(
-      [
-        `📋 Topshiriqlar: jami ${total} ta (${page}-sahifa)`,
-        ...[...byDistrict.entries()]
-          .sort(([a], [b]) => a.localeCompare(b))
-          .map(([district, count]) => `📍 ${district} — ${count} ta`),
-      ].join('\n'),
-      page === 1 ? this.scannerMarkup() : undefined,
-    );
-    for (const order of sorted) {
-      await this.courier.sendCard(ctx, order, actor.user_id);
+    const shownFrom = (page - 1) * COURIER_PAGE_SIZE;
+    const text = [
+      `📋 Topshiriqlar: jami ${total} ta (${page}-sahifa)`,
+      ...[...byDistrict.entries()]
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([district, count]) => `📍 ${district} — ${count} ta`),
+      '',
+      ...sorted.map(
+        (order, index) =>
+          `${shownFrom + index + 1}. #${order.id} — ${order.district ?? '—'} — ${STATUS_LABEL_UZ[order.status] ?? order.status}`,
+      ),
+      '',
+      `Ko'rsatildi: ${shownFrom + orders.length} / ${total}. Kartani ochish — buyurtma tugmasi.`,
+    ].join('\n');
+    const keyboard: InlineKeyboardButton[][] = [];
+    for (let i = 0; i < sorted.length; i += 2) {
+      const row: InlineKeyboardButton[] = [];
+      for (const order of sorted.slice(i, i + 2)) {
+        row.push({
+          text: `#${order.id}`,
+          callback_data: await this.actions.create({
+            chatId: ctx.chatId,
+            action: COURIER_ACTIONS.open,
+            actorUserId: actor.user_id,
+            orderId: order.id,
+            oneShot: false,
+          }),
+        });
+      }
+      keyboard.push(row);
+    }
+    const nav: InlineKeyboardButton[] = [];
+    if (page > 1) {
+      nav.push({
+        text: '⬆️ Oldingi',
+        callback_data: await this.actions.create({
+          chatId: ctx.chatId,
+          action: COURIER_ACTIONS.page,
+          actorUserId: actor.user_id,
+          payload: { page: page - 1, nav: true },
+          oneShot: false,
+        }),
+      });
     }
     if (hasNext) {
-      await ctx.reply(
-        `Ko'rsatildi: ${(page - 1) * COURIER_PAGE_SIZE + orders.length} / ${total}`,
-        {
-          reply_markup: {
-            inline_keyboard: [
-              [
-                {
-                  text: '⬇️ Yana',
-                  callback_data: await this.actions.create({
-                    chatId: ctx.chatId,
-                    action: COURIER_ACTIONS.page,
-                    actorUserId: actor.user_id,
-                    payload: { page: page + 1 },
-                    oneShot: false,
-                  }),
-                },
-              ],
-            ],
-          },
-        },
-      );
+      nav.push({
+        text: '⬇️ Yana',
+        callback_data: await this.actions.create({
+          chatId: ctx.chatId,
+          action: COURIER_ACTIONS.page,
+          actorUserId: actor.user_id,
+          payload: { page: page + 1, nav: true },
+          oneShot: false,
+        }),
+      });
     }
+    if (nav.length) keyboard.push(nav);
+    const scanner = this.scannerMarkup()?.reply_markup.inline_keyboard ?? [];
+    if (page === 1) keyboard.push(...scanner);
+    if (editMessageId) {
+      const edited = await this.transport.editMessage(
+        ctx.chatId,
+        editMessageId,
+        { text, reply_markup: { inline_keyboard: keyboard } },
+      );
+      if (edited) return;
+    }
+    await ctx.reply(text, { reply_markup: { inline_keyboard: keyboard } });
   }
 
-  /**
-   * (MWYaqprw #1) "📷 Skaner" — skan Mini App'i (web_app). Skan chatda
-   * EMAS: har skan yangi xabar bo'lardi. URL'da token yo'q — Mini App
-   * initData bilan `POST /auth/telegram` dan JWT oladi. Manzil sozlanmagan
-   * bo'lsa tugma chiqmaydi.
-   */
   private scannerMarkup() {
     const url = this.courier.scannerUrl;
     return url
@@ -431,8 +469,22 @@ export class CourierActions {
         action: COURIER_ACTIONS.page,
         expiredText: COURIER_LIST_EXPIRED_TEXT,
         handle: privateOnly((ctx, action) =>
-          this.handler.sendPage(ctx, Number(action.payload.page) || 1),
+          this.handler.sendPage(
+            ctx,
+            Number(action.payload.page) || 1,
+            // (BOT-3d) Faqat ro'yxatning o'z ⬆️/⬇️ tugmasi shu xabarni
+            // tahrirlaydi; boshqa xabardagi «📋 Topshiriqlarim» (masalan skan
+            // xulosasi) — yangi ro'yxat xabari, xulosa yo'qolmaydi.
+            action.payload.nav === true
+              ? ctx.update.callback_query?.message?.message_id
+              : undefined,
+          ),
         ),
+      },
+      {
+        action: COURIER_ACTIONS.open,
+        expiredText: COURIER_LIST_EXPIRED_TEXT,
+        handle: privateOnly((ctx, action) => this.onOpen(ctx, action)),
       },
       {
         action: COURIER_ACTIONS.proofDone,
@@ -467,6 +519,25 @@ export class CourierActions {
   }
 
   /** Karta tugmasi → sabab (bekor / yetkazib bo'lmadi) yoki darhol tasdiq. */
+  /** (BOT-3d) /ishim ro'yxatidagi buyurtma — kartasi (kuryerning o'z JWT'si). */
+  private async onOpen(ctx: BotContext, action: TelegramBotAction) {
+    const actor = await ctx.actor();
+    if (!actor || !action.order_id) return;
+    const order = await this.courier
+      .getOrder(ctx.fromId!, String(action.order_id))
+      .catch((error: unknown) => {
+        rethrowPasswordChange(error);
+        return null;
+      });
+    if (!order) {
+      await ctx.reply(
+        "⚠️ Bu buyurtma ro'yxatingizda yo'q yoki ma'lumot olinmadi — /ishim ni qayta yuboring.",
+      );
+      return;
+    }
+    await this.courier.sendCard(ctx, order, actor.user_id);
+  }
+
   private async onOp(ctx: BotContext, action: TelegramBotAction) {
     const op = action.payload.op;
     const orderId = str(action.order_id);

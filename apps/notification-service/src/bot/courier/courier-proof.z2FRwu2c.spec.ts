@@ -7,6 +7,7 @@ import {
   gatewayOrder,
   lastButtons,
   makeRouter,
+  openIshim,
   sentTexts,
   textUpdate,
 } from '../testing/bot-kit-spec';
@@ -60,7 +61,7 @@ const media = (
   });
 
 const startSell = async (ctx: ReturnType<typeof makeRouter>) => {
-  await ctx.router.dispatch('elchi', textUpdate('/ishim', { chatId: 25 }));
+  await openIshim(ctx);
   await press(ctx, lastButtons(ctx)['✅ Sotildi']);
   await press(ctx, lastButtons(ctx)['✅ Ha']);
 };
