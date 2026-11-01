@@ -25,17 +25,41 @@ export class CreateDistrictRequestDto {
   @IsNumberString()
   region_id!: string;
 
-  @ApiProperty({ example: '1712234', required: false })
-  @IsOptional()
+  @ApiProperty({
+    example: '1712234',
+    minLength: 7,
+    maxLength: 7,
+    pattern: '^\\d{7}$',
+    description:
+      "MAJBURIY. Tuman SOATO kodi — aniq 7 raqam (viloyat kodi 4 raqam); viloyatning SOATO kodi bilan boshlanadi va tizimda (boshqa tuman yoki viloyatda) takrorlanmaydi. Rasmiy ro'yxatda bo'lishi shart emas (yangi tumanlar).",
+  })
+  // Bo'sh joylar kesiladi: ' 1712234 ' ham qabul qilinadi.
+  @Transform(({ value }: { value: unknown }) =>
+    typeof value === 'string' ? value.trim() : value,
+  )
+  @IsNotEmpty({ message: 'Tuman SOATO kodi majburiy' })
   @IsString()
-  @Matches(/^\d+$/)
-  sato_code?: string;
+  @Matches(/^\d{7}$/, {
+    message: "Tuman SOATO kodi aniq 7 ta raqamdan iborat bo'lishi kerak",
+  })
+  sato_code!: string;
 }
 
 export class UpdateDistrictRequestDto {
-  @ApiProperty({ example: '1' })
+  @ApiProperty({
+    example: '1',
+    type: String,
+    description:
+      "Tuman biriktiriladigan viloyat id'si. Raqam (7) ham, satr ('7') ham qabul qilinadi.",
+  })
+  // Avval faqat satr ('7') o'tardi: FE id'ni raqam (7) sifatida yuborsa
+  // `@IsNumberString` 400 qaytarib, biriktirish jim ishlamay qolardi.
+  @Transform(({ value }: { value: unknown }) => idToString(value))
   @IsNotEmpty()
-  @IsNumberString()
+  // Naqsh shu yerda: BIGINT_ID_PATTERN fayl pastida e'lon qilingan (TDZ).
+  @Matches(/^\d{1,19}$/, {
+    message: "assigned_region musbat butun son (viloyat id'si) bo'lishi kerak",
+  })
   assigned_region!: string;
 }
 
@@ -47,10 +71,22 @@ export class UpdateDistrictNameRequestDto {
 }
 
 export class UpdateDistrictSatoCodeRequestDto {
-  @ApiProperty({ example: '1712234' })
-  @IsNotEmpty()
+  @ApiProperty({
+    example: '1712234',
+    minLength: 7,
+    maxLength: 7,
+    pattern: '^\\d{7}$',
+    description:
+      'Tuman SOATO kodi — aniq 7 raqam; tumanning geografik viloyati SOATO kodi bilan boshlanadi va tizimda (boshqa tuman yoki viloyatda) takrorlanmaydi.',
+  })
+  @Transform(({ value }: { value: unknown }) =>
+    typeof value === 'string' ? value.trim() : value,
+  )
+  @IsNotEmpty({ message: 'Tuman SOATO kodi majburiy' })
   @IsString()
-  @Matches(/^\d+$/)
+  @Matches(/^\d{7}$/, {
+    message: "Tuman SOATO kodi aniq 7 ta raqamdan iborat bo'lishi kerak",
+  })
   sato_code!: string;
 }
 

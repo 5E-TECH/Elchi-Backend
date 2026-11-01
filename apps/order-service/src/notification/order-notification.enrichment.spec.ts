@@ -40,6 +40,24 @@ const REGIONS = {
   ],
 };
 
+/**
+ * Ko'chirilgan tuman: Chust (42) geografik jihatdan Andijon (4) da, lekin
+ * `assigned_region` — Toshkent sh. (3). `districts` — geografik ro'yxat.
+ */
+const REGIONS_MOVED = {
+  ...REGIONS,
+  data: [
+    REGIONS.data[0],
+    {
+      ...REGIONS.data[1],
+      districts: [
+        { id: '41', name: 'Asaka', assigned_region: null },
+        { id: '42', name: 'Chust', assigned_region: '3' },
+      ],
+    },
+  ],
+};
+
 const baseOrder = (overrides: Record<string, unknown> = {}) =>
   ({
     id: '81',
@@ -219,6 +237,37 @@ describe('OA16fdSq 5-band: nishon — market + operator + viloyat logisti', () =
     });
     await service.onStatusChange(sold);
     expect(lastPayload().recipient_ids).toEqual(['5', '9']);
+  });
+});
+
+describe('LC-13: tuman → XIZMAT viloyati (assigned_region ?? region_id)', () => {
+  it('ko‘chirilgan tuman biriktirilgan viloyatga, nomi o‘zgarmaydi', () => {
+    const directory = buildRegionDirectory(REGIONS_MOVED)!;
+    expect(directory.regionByDistrict.get('42')).toBe('3');
+    expect(directory.districtName.get('42')).toBe('Chust');
+  });
+
+  it('assigned_region NULL / yo‘q — tumanning o‘z viloyati', () => {
+    const directory = buildRegionDirectory(REGIONS_MOVED)!;
+    expect(directory.regionByDistrict.get('41')).toBe('4');
+    expect(directory.regionByDistrict.get('31')).toBe('3');
+  });
+
+  it('viloyatlar tartibiga bog‘liq emas', () => {
+    const reversed = buildRegionDirectory([...REGIONS_MOVED.data].reverse())!;
+    expect(reversed.regionByDistrict).toEqual(
+      buildRegionDirectory(REGIONS_MOVED)!.regionByDistrict,
+    );
+    expect(reversed.regionByDistrict.get('42')).toBe('3');
+  });
+
+  it('region_id yo‘q buyurtma — ko‘chirilgan tuman viloyati (3) logistiga', async () => {
+    const { service, lastPayload } = makeService({
+      order: baseOrder({ region_id: null, district_id: '42' }),
+      logistics: () => of(REGIONS_MOVED),
+    });
+    await service.onStatusChange(sold);
+    expect(lastPayload().recipient_ids).toEqual(['5', '9', '77']);
   });
 });
 
