@@ -118,16 +118,18 @@ num() {
       ;;
   esac
 }
-# Integer config knob: knob NAME DEFAULT MIN MAX [RAW]. Unset/empty → DEFAULT silently;
-# not a decimal integer or outside MIN..MAX → WARN with the raw value (to stderr, so the
-# $(...) capture stays clean) and DEFAULT.
+# Integer config knob: knob NAME DEFAULT MIN MAX [RAW [SOURCE]]. Unset/empty → DEFAULT
+# silently; not a decimal integer or outside MIN..MAX → WARN with the raw value (printable
+# ASCII only, 40 chars, plus its source when not the config file; to stderr, so the $(...)
+# capture stays clean) and DEFAULT.
 knob() {
-  local raw v
+  local raw v src=""
   if [ "$#" -ge 5 ]; then raw="$5"; else raw="$(cfg "$1")"; fi
+  [ -n "${6:-}" ] && src=" ($6)"
   [ -n "$raw" ] || { printf '%s' "$2"; return; }
   v="$(num "$raw" "")"
   if [ -z "$v" ] || [ "$v" -lt "$3" ] || [ "$v" -gt "$4" ]; then
-    log "WARN: $1=$(printf '%s' "$raw" | cut -c1-40) rad etildi ($3..$4) — $2 ishlatiladi" >&2
+    log "WARN: $1=$(printf '%s' "$raw" | LC_ALL=C tr -cd '[:print:]' | cut -c1-40)$src rad etildi ($3..$4) — $2 ishlatiladi" >&2
     printf '%s' "$2"
     return
   fi
@@ -141,15 +143,20 @@ TG_API="${BOT_ALERT_TELEGRAM_API:-$(cfg BOT_ALERT_TELEGRAM_API)}"
 TG_API="${TG_API:-https://api.telegram.org}"
 # Bounded: 0 or a huge value would disable the hang protection (a hung docker keeps the lock
 # and every later cron run exits silently).
-CMD_TIMEOUT="$(knob BOT_ALERT_CMD_TIMEOUT 30 1 600 "${BOT_ALERT_CMD_TIMEOUT:-$(cfg BOT_ALERT_CMD_TIMEOUT)}")"
+if [ -n "${BOT_ALERT_CMD_TIMEOUT:-}" ]; then
+  CMD_TIMEOUT="$(knob BOT_ALERT_CMD_TIMEOUT 30 1 600 "$BOT_ALERT_CMD_TIMEOUT" env)"
+else
+  CMD_TIMEOUT="$(knob BOT_ALERT_CMD_TIMEOUT 30 1 600)"
+fi
 # 0 would silently disable crash-loop detection; a huge value overflows the arithmetic.
 RESTART_WINDOW_MIN="$(knob BOT_ALERT_RESTART_WINDOW_MIN 30 1 10080)"
 RESTART_WINDOW_S=$((RESTART_WINDOW_MIN * 60))
 # One cron interval: a restart is dated by StartedAt but seen only on the next run, so a loop
 # with a period equal to the window is still caught.
 CRON_SLACK_S=300
-# A new incident is confirmed at the earliest 2 runs (600 s) after "tiklandi" and the check
-# is strict (<): 10 would never apply, so the minimum is 11.
+# A new incident is usually confirmed 2 runs (600 s) after "tiklandi" and the check is strict
+# (<): 10 would apply only when a crash-loop (ns_restart, joins at once) returns right away.
+# 11 is a policy choice so the window always covers a debounced re-failure.
 FLAP_WINDOW_MIN="$(knob BOT_ALERT_FLAP_WINDOW_MIN 60 11 10080)"
 FLAP_WINDOW_S=$((FLAP_WINDOW_MIN * 60))
 
@@ -396,16 +403,21 @@ fi
 kept=""
 for t in ${RESTART_TIMES//,/ }; do
   # No subshell per entry (a long crash-loop with a 7-day window has thousands).
+  # Junk, 16+ digits, or dated in the future (broken state / clock went back) is dropped.
   case "$t" in '' | *[!0-9]* | ????????????????*) continue ;; esac
+  [ $((10#$t)) -gt $((NOW + CRON_SLACK_S)) ] && continue
   [ $((NOW - 10#$t)) -lt $((RESTART_WINDOW_S + CRON_SLACK_S)) ] && kept="${kept:+$kept,}$t"
 done
-# Only ">= 2" / ">= 1" matters: keep the newest 100 entries so the state stays small.
+restarts_in_window="$(printf '%s' "$kept" | tr ',' '\n' | grep -c . || true)"
+# Only ">= 2" / ">= 1" matters: keep the newest 100 entries so the state stays small (the
+# message then says "100+": the real count is no longer known).
 RESTART_TIMES="$(printf '%s' "$kept" | tr ',' '\n' | tail -n 100 | tr '\n' ',' | sed 's/,$//')"
-restarts_in_window="$(printf '%s' "$RESTART_TIMES" | tr ',' '\n' | grep -c . || true)"
+restarts_label="$restarts_in_window"
+[ "$restarts_in_window" -ge 100 ] && restarts_label="100+"
 # >= 2 restarts in the window → crash-loop; while it is active, >= 1 keeps it (hysteresis,
 # so a loop with a period close to the window does not flap alert/"tiklandi").
 if [ "$restarts_in_window" -ge 2 ] || { has "$PREV_SIG" ns_restart && [ "$restarts_in_window" -ge 1 ]; }; then
-  problem ns_restart "notification-service: qayta ishga tushmoqda (${restarts_in_window} marta $((RESTART_WINDOW_S / 60)) daq ichida, RestartCount ${NS_RESTARTS:-?})"
+  problem ns_restart "notification-service: qayta ishga tushmoqda (${restarts_label} marta $((RESTART_WINDOW_S / 60)) daq ichida, RestartCount ${NS_RESTARTS:-?})"
 fi
 
 RAW="$(printf '%s\n' "${CODES[@]:-}" | grep . | sort -u | tr '\n' ',' | sed 's/,$//')"

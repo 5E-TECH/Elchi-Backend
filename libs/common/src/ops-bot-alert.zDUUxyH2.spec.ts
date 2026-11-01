@@ -903,7 +903,7 @@ describe('bot-alert.sh (zDUUxyH2)', () => {
         /RESTART_WINDOW_MIN=200000000000000000 rad etildi/,
       );
     });
-    it('knob) FLAP_WINDOW_MIN=10 amalda ishlamaydi — rad etiladi (11..10080), 60 ishlatiladi', () => {
+    it('knob) FLAP_WINDOW_MIN=10 — faqat crash-loop darhol qaytganda qo‘llanardi; rad etiladi (11..10080, siyosat), 60 ishlatiladi', () => {
       writeConf(
         `BOT_ALERT_TELEGRAM_CHAT_ID=42\nBOT_ALERT_TELEGRAM_BOT_TOKEN=${ALERT_TOKEN}\nBOT_ALERT_FLAP_WINDOW_MIN=10\n`,
       );
@@ -914,6 +914,79 @@ describe('bot-alert.sh (zDUUxyH2)', () => {
       ).toBe('.A.R.A......');
       expect(logText()).toMatch(
         /BOT_ALERT_FLAP_WINDOW_MIN=10 rad etildi \(11\.\.10080\) — 60/,
+      );
+    });
+    const stateFile = () => join(dir, 'ops', 'state', 'bot-alert.state');
+    const writeState = (body: string) => {
+      mkdirSync(join(dir, 'ops', 'state'), { recursive: true });
+      writeFileSync(stateFile(), body);
+    };
+    const stateKey = (key: string) =>
+      (readFileSync(stateFile(), 'utf8').match(
+        new RegExp(`^${key}=(.*)$`, 'm'),
+      ) ?? [])[1] ?? '';
+    it('restart_times: 10080 daq oynada 150 yozuv — eng yangi 100 tasi qoladi, matn «100+ marta», qaror o‘zgarmaydi', () => {
+      writeConf(
+        `BOT_ALERT_TELEGRAM_CHAT_ID=42\nBOT_ALERT_TELEGRAM_BOT_TOKEN=${ALERT_TOKEN}\nBOT_ALERT_RESTART_WINDOW_MIN=10080\n`,
+      );
+      const times = Array.from({ length: 150 }, (_, k) => now - (150 - k) * 60);
+      writeState(
+        `state=problem\nsig=ns_restart\nraw=ns_restart\nraw2=ns_restart\nraw3=ns_restart\nsince=${now - 9000}\nlast_sent=${now - 600}\nchecked_at=${now - 300}\nns_id=ns1\nns_restarts=150\nrestart_times=${times.join(',')}\nalerted=ns_restart\nflap=\nrecovered_at=\n`,
+      );
+      const env = { FAKE_ns1: `running healthy 150 ${iso(now - 60)}` };
+      const dry = run(env, ['--dry-run']).stdout;
+      expect(dry).toMatch(/state=problem prev=problem send=none/);
+      run(env);
+      expect(sends()).toEqual([]);
+      const kept = stateKey('restart_times').split(',');
+      expect(kept).toHaveLength(100);
+      expect(kept[0]).toBe(String(times[50]));
+      expect(kept[99]).toBe(String(times[149]));
+      expect(stateKey('state')).toBe('problem');
+      expect(stateKey('sig')).toBe('ns_restart');
+      // Majburiy eslatma (last_sent eski) — matnda haqiqiy son o'rniga «100+».
+      writeState(
+        readFileSync(stateFile(), 'utf8').replace(
+          /^last_sent=.*$/m,
+          `last_sent=${now - 7 * 3600}`,
+        ),
+      );
+      const reminder = run(env, ['--dry-run']).stdout;
+      expect(reminder).toMatch(
+        /qayta ishga tushmoqda \(100\+ marta 10080 daq ichida/,
+      );
+    });
+    it('restart_times: junk, 16+ xonali va kelajak sanali yozuvlar tashlanadi', () => {
+      writeState(
+        `state=ok\nsig=ok\nraw=\nraw2=\nraw3=\nns_id=ns1\nns_restarts=0\nrestart_times=abc,1234567890123456,${now + 3600},${now - 60},-5\n`,
+      );
+      run();
+      expect(stateKey('restart_times')).toBe(String(now - 60));
+    });
+    it('knob) OUTBOX_DEAD_MAX va NS_START_GRACE_S chegaralari; env CMD_TIMEOUT ustun, noto‘g‘risi «(env)» bilan', () => {
+      writeConf(
+        `BOT_ALERT_TELEGRAM_CHAT_ID=42\nBOT_ALERT_TELEGRAM_BOT_TOKEN=${ALERT_TOKEN}\nBOT_ALERT_OUTBOX_DEAD_MAX=0\nBOT_ALERT_NS_START_GRACE_S=0\nBOT_ALERT_CMD_TIMEOUT=junk\n`,
+      );
+      // 0 qabul qilinadi: bitta dead — muammo; env'dagi to'g'ri qiymat fayldagi junk'dan ustun.
+      expect(
+        twice({ FAKE_PSQL: '0\\n1\\n0', BOT_ALERT_CMD_TIMEOUT: '20' }),
+      ).toMatch(/Outbox: oxirgi soatda 1 ta dead \(chegara 0\)/);
+      expect(logText()).not.toMatch(/rad etildi/);
+      rmSync(join(dir, 'ops', 'state'), { recursive: true, force: true });
+      writeConf(
+        `BOT_ALERT_TELEGRAM_CHAT_ID=42\nBOT_ALERT_TELEGRAM_BOT_TOKEN=${ALERT_TOKEN}\nBOT_ALERT_OUTBOX_DEAD_MAX=100000001\nBOT_ALERT_NS_START_GRACE_S=86401\n`,
+      );
+      run({ BOT_ALERT_CMD_TIMEOUT: 'ju\nnk€' });
+      const log = logText();
+      expect(log).toMatch(
+        /OUTBOX_DEAD_MAX=100000001 rad etildi \(0\.\.100000000\) — 20/,
+      );
+      expect(log).toMatch(
+        /NS_START_GRACE_S=86401 rad etildi \(0\.\.86400\) — 90/,
+      );
+      // Faqat chop etiladigan ASCII, bitta qator, manba ko'rsatilgan.
+      expect(log).toMatch(
+        /WARN: BOT_ALERT_CMD_TIMEOUT=junk \(env\) rad etildi \(1\.\.600\) — 30 ishlatiladi\n/,
       );
     });
     it('knob) bosh nollar: OUTBOX_PENDING_MIN=0000000000000010 — qiymati 10 (o‘chib qolmaydi), WARN yo‘q', () => {

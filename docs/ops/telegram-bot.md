@@ -506,12 +506,14 @@ chaqiruvi `timeout -k 5` bilan (`BOT_ALERT_CMD_TIMEOUT`, 30 s), SQL `statement_t
    `TELEGRAM_BOT_TOKEN`, `TELEGRAM_BOT_SLUG`, `TELEGRAM_BOT_MODE`, `TELEGRAM_WEBHOOK_SECRET`,
    `TELEGRAM_WEBHOOK_URL`, `BOT_POLLING_LEADER`, `POSTGRES_USER`, `POSTGRES_DB` — `.env.production` dan
    o'qiladi. Chegaralarni shu faylda o'zgartirish mumkin (jadvaldagi nomlar). Har son oraliqda
-   tekshiriladi; raqam bo'lmagan yoki oraliqdan tashqari qiymat (`0`, `-5`, `45m`, ulkan son) rad
+   tekshiriladi; raqam bo'lmagan yoki oraliqdan tashqari qiymat (`-5`, `45m`, ulkan son; `0` — oraliq 1 dan
+   boshlanadiganlarda, `BOT_ALERT_OUTBOX_DEAD_MAX` va `BOT_ALERT_NS_START_GRACE_S` uchun `0` qabul qilinadi) rad
    etiladi: logga xom qiymat bilan `WARN` yoziladi va sukut ishlatiladi. Oraliqlar:
    `BOT_ALERT_CMD_TIMEOUT` 1..600 (30), `BOT_ALERT_RESTART_WINDOW_MIN` 1..10080 (30),
-   `BOT_ALERT_FLAP_WINDOW_MIN` 11..10080 (60), `BOT_ALERT_REPEAT_HOURS` 1..720 (6),
+   `BOT_ALERT_FLAP_WINDOW_MIN` 11..10080 (60; 10 faqat crash-loop darhol qaytganda qo'llanardi,
+   11 — siyosat tanlovi), `BOT_ALERT_REPEAT_HOURS` 1..720 (6),
    `BOT_ALERT_OUTBOX_PENDING_MIN` 1..10080 (10), `BOT_ALERT_WEBHOOK_ERROR_MIN` 1..10080 (15),
-   `BOT_ALERT_PENDING_UPDATES_MAX` ≥ 1 (100), `BOT_ALERT_OUTBOX_DEAD_MAX` ≥ 0 (20),
+   `BOT_ALERT_PENDING_UPDATES_MAX` 1..100000000 (100), `BOT_ALERT_OUTBOX_DEAD_MAX` 0..100000000 (20),
    `BOT_ALERT_NS_START_GRACE_S` 0..86400 (90). Bosh nollar e'tiborsiz (`010` = 10). `BOT_ALERT_CMD_TIMEOUT`,
    `BOT_ALERT_HOST_LABEL`, `BOT_ALERT_TELEGRAM_API` — fayldan yoki shu nomdagi env'dan (env ustun).
 3. Tekshirish: `ELCHI_APP_DIR=<backend-katalogi> ~/elchi-ops/bot-alert.sh --dry-run` (hech narsa
