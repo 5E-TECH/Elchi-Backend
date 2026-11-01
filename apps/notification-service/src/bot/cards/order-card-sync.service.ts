@@ -2,7 +2,7 @@ import { Inject, Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { ClientProxy } from '@nestjs/microservices';
 import { DataSource, In } from 'typeorm';
-import { ActivityLogService, rmqSend } from '@app/common';
+import { ActivityLogService, rmqSend, cabinetBaseUrl } from '@app/common';
 import { TelegramChat } from '../../entities/telegram-chat.entity';
 import { TelegramOrderCard } from '../../entities/telegram-order-card.entity';
 import { BotOutboxService } from '../bot-outbox.service';
@@ -76,10 +76,7 @@ export class OrderCardSyncService implements OnModuleInit {
   ) {}
 
   private get cabinetUrl(): string {
-    return (
-      this.config.get<string>('ELCHI_CABINET_URL') ??
-      'https://admin.elchipochta.uz'
-    );
+    return cabinetBaseUrl(this.config.get<string>('ELCHI_CABINET_URL'));
   }
 
   onModuleInit() {

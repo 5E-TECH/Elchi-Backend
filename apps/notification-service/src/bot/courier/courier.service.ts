@@ -2,7 +2,11 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { IDEMPOTENCY_ERROR_CODES, escapeTelegramHtml } from '@app/common';
+import {
+  IDEMPOTENCY_ERROR_CODES,
+  escapeTelegramHtml,
+  cabinetBaseUrl,
+} from '@app/common';
 import { TelegramOrderCard } from '../../entities/telegram-order-card.entity';
 import { BotActionsService } from '../bot-actions.service';
 import { BotGatewayClient, rethrowPasswordChange } from '../bot-gateway.client';
@@ -94,9 +98,7 @@ export class CourierService {
     private readonly cards: Repository<TelegramOrderCard>,
     config: ConfigService,
   ) {
-    this.cabinetUrl = String(
-      config.get<string>('ELCHI_CABINET_URL') ?? 'https://admin.elchipochta.uz',
-    ).trim();
+    this.cabinetUrl = cabinetBaseUrl(config.get<string>('ELCHI_CABINET_URL'));
     const scanner = String(
       config.get<string>('TELEGRAM_SCAN_WEBAPP_URL') ?? '',
     ).trim();

@@ -23,6 +23,13 @@ export const DEFAULT_CABINET_URL = CABINET_DEFAULT_URL;
 
 const cabinetLink = (base: string): string =>
   `\n\n🌐 <a href="${cabinetLinks(base).selfCashbox()}">Kabinetda ochish</a>`;
+/**
+ * Market GURUHI xabari havolasi — bosh sahifa. `/cash-box` guruhdagi
+ * operator / kuryerga 403 (FE `hasSelfCashboxAccess`: courier/market/manager);
+ * kassa havolasi faqat egasining shaxsiy xabarida.
+ */
+const cabinetHomeLink = (base: string): string =>
+  `\n\n🌐 <a href="${cabinetLinks(base).home()}">Kabinetni ochish</a>`;
 
 export const SHIFT_REPORT_LINK = (shiftId: string) =>
   WEB_ROUTES.shiftReport.replace(':id', encodeURIComponent(shiftId));
@@ -302,7 +309,7 @@ export function buildMarketMessage(
      */
     group_text: `<b>${escapeTelegramHtml(MARKET_GROUP_NOTICE_TITLE)}</b>\n\n${escapeTelegramHtml(
       `Smena #${snapshot.shift_id} yakunlandi — to'lovlarni kabinetda ko'ring.`,
-    )}${cabinetLink(cabinetUrl)}`,
+    )}${cabinetHomeLink(cabinetUrl)}`,
   };
 }
 

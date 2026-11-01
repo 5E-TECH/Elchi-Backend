@@ -22,6 +22,12 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+### 2026-10-31 — Telegram: market guruhidagi smena xabari havolasi (PIJN1lGp follow-up)
+
+- 🟢 [finance] — market GURUHIGA ketadigan summasiz smena xabaridagi «🌐 Kabinetni ochish» endi `/` (bosh sahifa) ni ochadi (avval `/cash-box` — guruhdagi market operatori u yerda 403 olardi). Egasining shaxsiy xabari va in-app havolasi — avvalgidek `/cash-box`. Deploy: finance-service + notification-service.
+
+→ Frontend: o'zgarish shart emas.
+
 ### 2026-10-31 — Telegram bot: uzun HTML xabar bo'laklari (BOT-3d, kichik)
 
 - 🟢 [notification] — bo'lakka sig'maydigan uzun teg (masalan 1024+ belgili havola) olib tashlanadi (matni qoladi); qattiq kesishda ham teglar yopilib, keyingi bo'lakda qayta ochiladi. Deploy: notification-service.
