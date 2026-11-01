@@ -7070,15 +7070,19 @@ export class OrderLifecycleService {
       }
     }
 
-    // 5. Fetch district data via RMQ (batch) to get assigned_region
+    // 5. Fetch district data via RMQ (batch) — xizmat hududi
+    // `assigned_region ?? region_id` (LC-13): biriktirilmagan (NULL) eski
+    // tuman o'z viloyatiga xizmat qiladi, 404 emas.
     const districtIds = [
       ...new Set(orders.map((o) => o.district_id).filter(Boolean) as string[]),
     ];
     const districtsRes = await rmqSend<{
       data: Array<{
         id: string;
-        assigned_region?: string;
-        assignedToRegion?: { id: string };
+        assigned_region?: string | number | null;
+        assignedToRegion?: { id?: string | number | null } | null;
+        region_id?: string | number | null;
+        region?: { id?: string | number | null } | null;
       }>;
     }>(
       this.logisticsClient,
@@ -7100,18 +7104,23 @@ export class OrderLifecycleService {
     const regionByOrderId = new Map<string, string>();
     for (const order of orders) {
       const district = districtMap.get(order.district_id!);
+      // LC-13 `resolveRegionIdForDistrict` bilan bir xil tartib: birinchi
+      // raqamli qiymat — `assigned_region ?? region_id`.
       const assignedRegion =
-        district?.assigned_region ??
-        (district?.assignedToRegion as { id?: string } | undefined)?.id ??
-        null;
+        [
+          district?.assigned_region,
+          district?.assignedToRegion?.id,
+          district?.region_id,
+          district?.region?.id,
+        ]
+          .map((candidate) => String(candidate ?? '').trim())
+          .find((candidate) => /^\d+$/.test(candidate)) ?? null;
       if (!assignedRegion) {
         this.notFound(
           `Buyurtma #${order.id} uchun tuman yoki viloyat topilmadi`,
         );
       }
-      if (/^\d+$/.test(String(assignedRegion).trim())) {
-        regionByOrderId.set(String(order.id), String(assignedRegion).trim());
-      }
+      regionByOrderId.set(String(order.id), assignedRegion);
       logisticsPayload.push({
         order_id: order.id,
         assigned_region: assignedRegion,
@@ -7176,13 +7185,14 @@ export class OrderLifecycleService {
         };
         /**
          * ⚠️ YfWZXu9g — `region_id` QABULDA TO'LDIRILADI. Hudud yuqorida
-         * tumandan (`assigned_region`) aniqlanib FAQAT pochtaga uzatilardi,
-         * buyurtmaning o'ziga yozilmasdi: HQ'da yaratilgan (region_id
-         * yuborilmagan) buyurtma NULL hudud bilan qolardi (jonli E2E #31) —
-         * filialga dispatch va hudud filtrlari unga tayanadi. Faqat BO'SH
-         * bo'lsa yoziladi (yaratishda berilgan hudud ustidan yozilmaydi);
-         * qiymat — pochta tanlangan hudud (LC-13 `resolveRegionIdForDistrict`
-         * bilan bir xil tartib: avval `assigned_region`).
+         * tumandan (`assigned_region ?? region_id`) aniqlanib FAQAT pochtaga
+         * uzatilardi, buyurtmaning o'ziga yozilmasdi: HQ'da yaratilgan
+         * (region_id yuborilmagan) buyurtma NULL hudud bilan qolardi (jonli
+         * E2E #31) — filialga dispatch va hudud filtrlari unga tayanadi.
+         * Faqat BO'SH bo'lsa yoziladi (yaratishda berilgan hudud ustidan
+         * yozilmaydi); qiymat — pochta tanlangan hudud (LC-13
+         * `resolveRegionIdForDistrict` bilan bir xil tartib: avval
+         * `assigned_region`, bo'lmasa tumanning o'z `region_id` si).
          */
         const regionFill = String(order.region_id ?? '').trim()
           ? null

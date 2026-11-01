@@ -7624,6 +7624,7 @@
         ]
       },
       "post": {
+        "description": "`sato_code` MAJBURIY: aniq 7 raqam (bo‘sh joylar kesiladi; bo‘sh/yo‘q yoki 7 raqam emas — 400). Viloyatning SOATO kodi bo'lsa, tuman kodi shu bilan boshlanishi shart (aks holda 400, `data.reason = region_prefix_mismatch`, `data.details.expected_prefix`). Kod tizimda takrorlanmaydi: boshqa tumanda yoki viloyatda bo'lsa — 409. Rasmiy SOATO ro'yxatida bo'lishi shart emas (yangi tumanlar).",
         "operationId": "LogisticsGatewayController_create",
         "parameters": [],
         "requestBody": {
@@ -7860,6 +7861,7 @@
     },
     "/district/sato/{id}": {
       "patch": {
+        "description": "`sato_code` — aniq 7 raqam (bo‘sh joylar kesiladi; aks holda 400). Tumanning GEOGRAFIK viloyati (`region_id`, `assigned_region` emas) SOATO kodi bo'lsa, kod shu bilan boshlanishi shart (aks holda 400, `data.reason = region_prefix_mismatch`). Kod boshqa tumanda yoki viloyatda bo'lsa — 409 (tumanning o'z kodi hisobga olinmaydi).",
         "operationId": "LogisticsGatewayController_updateDistrictSato",
         "parameters": [
           {
@@ -23996,7 +23998,7 @@
             "type": "string",
             "example": "41",
             "nullable": true,
-            "description": "DtKKY0V8 — kuryer tumani (raqamli satr). Tuman mavjud va kuryer viloyatiga (filial viloyati) tegishli bo'lishi kerak, aks holda 400 («Tuman topilmadi» / «Tuman foydalanuvchining viloyatiga tegishli emas»); viloyati yo'q (HQ) — faqat mavjudligi. Berilmasa / null — tumansiz. Logistika javob bermasa — 503, kuryer yaratilmaydi."
+            "description": "DtKKY0V8 — kuryer tumani (raqamli satr). Tuman mavjud va kuryer viloyatiga (filial viloyati) tegishli bo'lishi kerak — tumanning geografik viloyati YOKI biriktirilgan xizmat viloyati (assigned_region), aks holda 400 («Tuman topilmadi» / «Tuman foydalanuvchining viloyatiga tegishli emas»); viloyati yo'q (HQ) — faqat mavjudligi. Berilmasa / null — tumansiz. Logistika javob bermasa — 503, kuryer yaratilmaydi."
           }
         },
         "required": [
@@ -24192,7 +24194,7 @@
             "type": "string",
             "example": "12",
             "nullable": true,
-            "description": "Tuman ID (raqamli satr). Tuman mavjud va foydalanuvchining viloyatiga (region_id) tegishli bo'lishi kerak, aks holda 400; viloyati yo'q foydalanuvchida (mijoz) — faqat mavjudligi. null — tumanni tozalash. Viloyat bu maydon bilan o'zgarmaydi."
+            "description": "Tuman ID (raqamli satr). Tuman mavjud va foydalanuvchining viloyatiga tegishli bo'lishi kerak: tumanning geografik viloyati (region_id) YOKI u biriktirilgan xizmat viloyati (assigned_region), aks holda 400; o'zgarmagan district_id qayta yuborilsa — faqat mavjudligi; viloyati yo'q foydalanuvchida (mijoz) — faqat mavjudligi. null — tumanni tozalash. Viloyat bu maydon bilan o'zgarmaydi."
           },
           "commission_type": {
             "type": "string",
@@ -27483,12 +27485,17 @@
           },
           "sato_code": {
             "type": "string",
-            "example": "1712234"
+            "example": "1712234",
+            "minLength": 7,
+            "maxLength": 7,
+            "pattern": "^\\d{7}$",
+            "description": "MAJBURIY. Tuman SOATO kodi — aniq 7 raqam (viloyat kodi 4 raqam); viloyatning SOATO kodi bilan boshlanadi va tizimda (boshqa tuman yoki viloyatda) takrorlanmaydi. Rasmiy ro'yxatda bo'lishi shart emas (yangi tumanlar)."
           }
         },
         "required": [
           "name",
-          "region_id"
+          "region_id",
+          "sato_code"
         ]
       },
       "UpdateDistrictRequestDto": {
@@ -27496,7 +27503,8 @@
         "properties": {
           "assigned_region": {
             "type": "string",
-            "example": "1"
+            "example": "1",
+            "description": "Tuman biriktiriladigan viloyat id'si. Raqam (7) ham, satr ('7') ham qabul qilinadi."
           }
         },
         "required": [
@@ -27520,7 +27528,11 @@
         "properties": {
           "sato_code": {
             "type": "string",
-            "example": "1712234"
+            "example": "1712234",
+            "minLength": 7,
+            "maxLength": 7,
+            "pattern": "^\\d{7}$",
+            "description": "Tuman SOATO kodi — aniq 7 raqam; tumanning geografik viloyati SOATO kodi bilan boshlanadi va tizimda (boshqa tuman yoki viloyatda) takrorlanmaydi."
           }
         },
         "required": [

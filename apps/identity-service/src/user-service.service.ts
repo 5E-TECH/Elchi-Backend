@@ -2147,8 +2147,10 @@ export class UserServiceService implements OnModuleInit {
     /**
      * YEThmZBn — tuman (`district_id`). Ilgari DTO'da yo'q edi: PATCH
      * forbidNonWhitelisted tufayli 400 qaytarardi. Tuman mavjud va
-     * foydalanuvchining viloyatiga (`region_id`) tegishli bo'lishi shart;
-     * viloyati yo'q foydalanuvchida (mijoz) — faqat mavjudligi. `null` —
+     * foydalanuvchining viloyatiga (geografik `region_id` yoki biriktirilgan
+     * `assigned_region`) tegishli bo'lishi shart; viloyati yo'q
+     * foydalanuvchida (mijoz) — faqat mavjudligi. O'zgarmagan `district_id`
+     * (forma hamma maydonni qayta yuborgan) — faqat mavjudligi. `null` —
      * tozalash. Viloyat bu yerda O'ZGARMAYDI (kuryer hududi faqat «Boshqa
      * filialga o'tkazish» orqali). Tarif bilan bir xil qoida: o'zini
      * tahrirlayotgan oddiy foydalanuvchi o'zgartira olmaydi.
@@ -2160,6 +2162,7 @@ export class UserServiceService implements OnModuleInit {
       admin.district_id = await this.resolveUserDistrictId(
         dto.district_id,
         admin.region_id,
+        admin.district_id,
       );
     }
 
@@ -2376,13 +2379,17 @@ export class UserServiceService implements OnModuleInit {
   /**
    * YEThmZBn — PATCH /users/:id `district_id`: `null` → tozalash; aks holda
    * raqamli id, logistics'da mavjud tuman (yo'q — 400) va foydalanuvchida
-   * viloyat bo'lsa — AYNAN shu viloyat tumani (boshqa viloyat — 400).
+   * viloyat bo'lsa — shu viloyat tumani: geografik (`region_id`) yoki
+   * biriktirilgan xizmat viloyati (`assigned_region`); boshqasi — 400.
+   * `currentDistrictId` bilan bir xil tuman (bog'lanish o'zgarmagan) —
+   * viloyat mosligi qayta tekshirilmaydi, faqat mavjudligi.
    * RMQ'da ValidationPipe yo'q — format shu yerda ham tekshiriladi.
    * Logistika javob bermasa — 503 (tekshirilmagan tuman yozilmaydi).
    */
   private async resolveUserDistrictId(
     value: unknown,
     userRegionId: string | null | undefined,
+    currentDistrictId?: string | null,
   ): Promise<string | null> {
     if (value === null) {
       return null;
@@ -2392,7 +2399,12 @@ export class UserServiceService implements OnModuleInit {
       this.badRequest("district_id raqamli ID bo'lishi kerak");
     }
 
-    type DistrictRow = { id?: unknown; region_id?: unknown };
+    type DistrictRow = {
+      id?: unknown;
+      region_id?: unknown;
+      assigned_region?: unknown;
+      assignedToRegion?: { id?: unknown } | null;
+    };
     let district: DistrictRow | null;
     try {
       const res = await lastValueFrom(
@@ -2426,8 +2438,22 @@ export class UserServiceService implements OnModuleInit {
       this.badRequest('Tuman topilmadi');
     }
 
+    // Tuman boshqa viloyatga biriktirilishi mumkin (PATCH /district/:id →
+    // `assigned_region`; xizmat viloyati = assigned_region ?? region_id).
+    // Shuning uchun geografik viloyat (`region_id`) HAM, xizmat ko'rsatuvchi
+    // viloyat (`assigned_region`) HAM foydalanuvchisini shu tumanga bog'lash
+    // mumkin. `assignedToRegion.id` — relation shakli (alias).
+    // Bog'lanish o'zgarmagan bo'lsa (tuman keyin boshqa viloyatga
+    // biriktirilgan bo'lishi mumkin) — mavjud bog'lanish uchun 400 bermaymiz.
     const regionId = primitiveText(userRegionId).trim();
-    if (regionId && !sameEntityId(district.region_id, regionId)) {
+    const assignedRegionId =
+      district.assigned_region ?? district.assignedToRegion?.id;
+    if (
+      regionId &&
+      !sameEntityId(districtId, currentDistrictId) &&
+      !sameEntityId(district.region_id, regionId) &&
+      !sameEntityId(assignedRegionId, regionId)
+    ) {
       this.badRequest('Tuman foydalanuvchining viloyatiga tegishli emas');
     }
     return primitiveText(district.id).trim() || districtId;
@@ -3630,7 +3656,8 @@ export class UserServiceService implements OnModuleInit {
 
     await this.validateRegionExists(dto.region_id);
     // DtKKY0V8 — tuman (ixtiyoriy): PATCH /users/:id dagi qoida — mavjud va
-    // kuryer viloyatiga tegishli (viloyatsiz HQ kuryeri — faqat mavjudligi);
+    // kuryer viloyatiga (geografik `region_id` yoki biriktirilgan
+    // `assigned_region`) tegishli (viloyatsiz HQ kuryeri — faqat mavjudligi);
     // aks holda 400, logistika javob bermasa 503. Hammasi user yozilishidan
     // OLDIN — xatoda kompensatsiya kerak emas.
     const districtId =

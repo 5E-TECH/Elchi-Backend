@@ -22,6 +22,26 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+### 2026-11-01 — Tumanni boshqa viloyatga biriktirish, tuman SOATO kodi
+
+- ✏️ [logistics] — `GET /region` va `GET /region/:id`: har viloyatda yangi `assignedDistricts: District[]` maydoni bor. Bu shu viloyatga **biriktirilgan** tumanlar (`assigned_region ?? region_id`; har birida `region` — geografik viloyati). `districts` (geografik, `region_id`) o'zgarmagan. Avval faqat `districts` qaytgani uchun `PATCH /district/:id` dan keyin ko'chirilgan tuman eski viloyatda qolib ko'rinardi.
+  → **Frontendda:** 🔧 SATO-management drag&drop ustunlarini `assignedDistricts` dan chizing (PCS bilan bir xil maydon). Geografik ro'yxat kerak bo'lsa `districts`.
+- 🟢 [logistics] — `PATCH /district/:id`: `assigned_region` raqam (`7`) ham, satr (`'7'`) ham qabul qilinadi (avval raqamda 400 qaytardi).
+- ⚠️ [logistics] — `POST /district`: `sato_code` endi **MAJBURIY** — aniq 7 raqam (masalan `1703206`).
+  - Tanlangan viloyatning SOATO kodi bilan boshlanishi kerak (viloyatda kod bo'lsa). Aks holda 400, `data.reason = 'region_prefix_mismatch'`, `data.details.expected_prefix`.
+  - Boshqa tuman yoki viloyatda bor kod — 409.
+  - Bo'sh yoki formatga mos bo'lmagan kod gateway validatsiyasida 400 qaytaradi.
+  - Rasmiy ro'yxatda bo'lishi shart emas (yangi tumanlar ham qo'shiladi).
+  - `PATCH /district/sato/:id` — xuddi shu qoidalar (prefiks tumanning geografik viloyati bo'yicha).
+  → **Frontendda:** 🔧 «Tuman qo'shish» formasiga majburiy «SOATO kodi» maydonini qo'shing (7 raqam, viloyat kodi bilan boshlanadi). Hozirgi forma kod yubormaydi va endi 400 oladi.
+- ✏️ [logistics] — `DELETE /region/:id`: boshqa viloyatlardan shu viloyatga tuman biriktirilgan bo'lsa — 400, `data.reason = 'region_has_assigned_districts'`, `data.usage.assigned_districts`. Avval viloyat o'chirilar, ko'chirilgan tumanlar esa jimgina geografik viloyatiga qaytardi.
+  → **Frontendda:** xabarni ko'rsating. Ixtiyoriy: `GET /region/:id` → `assignedDistricts` ga havola bering, admin tumanlarni `PATCH /district/:id` bilan boshqa viloyatga o'tkazsin.
+- 🟢 [identity] — `PATCH /users/:id` va kuryer yaratishda `district_id`: tuman foydalanuvchi viloyatiga tegishli deb hisoblanadi, agar uning **geografik** viloyati YOKI **biriktirilgan** viloyati (`assigned_region`) foydalanuvchi viloyati bo'lsa. O'zgarmagan `district_id` qayta yuborilsa viloyat qayta tekshirilmaydi.
+  → **Frontendda:** ixtiyoriy — kuryer tuman tanlovida `GET /district?region_id=` (geografik) bilan birga `GET /region/:id` → `assignedDistricts` ni ham taklif qiling.
+- 🟢 [order] — HQ qabuli (`POST /orders/receive`, `/orders/external/receive-by-scan`): `assigned_region` bo'sh (eski) tuman buyurtmasi endi 404 «tuman yoki viloyat topilmadi» bermaydi, tumanning o'z viloyati pochtasiga tushadi.
+
+Deploy: logistics-service, api-gateway, identity-service, order-service.
+
 ### 2026-10-31 — Telegram: market guruhidagi smena xabari havolasi (PIJN1lGp follow-up)
 
 - 🟢 [finance] — market GURUHIGA ketadigan summasiz smena xabaridagi «🌐 Kabinetni ochish» endi `/` (bosh sahifa) ni ochadi (avval `/cash-box` — guruhdagi market operatori u yerda 403 olardi). Egasining shaxsiy xabari va in-app havolasi — avvalgidek `/cash-box`. Deploy: finance-service + notification-service.
