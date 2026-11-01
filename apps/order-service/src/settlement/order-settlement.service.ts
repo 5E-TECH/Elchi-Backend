@@ -108,6 +108,13 @@ const ADVANCE_APPLIED_PATTERN = 'order.settlement.advance.applied';
 /** T6-BE-3 — `order.settlement.retreat` tokeni qo'llangani belgisi (M8 naqshi). */
 const RETREAT_APPLIED_PATTERN = 'order.settlement.retreat.applied';
 const PG_UNIQUE_VIOLATION = '23505';
+/**
+ * Naqdi kargoda turgan qator — kuryersiz, filialsiz PENDING
+ * (`recordSaleSettlement`: `cashHeldByProvider`; `markProviderSettledToHq` ham
+ * shu belgiga tayanadi). Ichki sotuv bunday qator qoldirmaydi: kuryersiz HQ
+ * sotuvi darhol BRANCH_SETTLED, filial sotuvi COURIER_SETTLED bo'ladi.
+ */
+const PROVIDER_HELD_ROW_SQL = `settlement.status = '${SettlementStatus.PENDING}' AND settlement.courier_id IS NULL AND settlement.branch_id IS NULL`;
 
 /**
  * znD3KaZL — FIFO qoldig'i (`leftover` > 0) haqidagi hodisa: order-service
@@ -430,6 +437,16 @@ export class OrderSettlementService {
    * turganidan (kuryer/filial) va filialga bog'langan-bog'lanmaganidan qat'i
    * nazar hisoblanadi. Filiallar kesimi (`branches`) operatsion ko'rinish
    * uchun qoladi; HQ qatorlari `hq` bandiga yig'iladi.
+   *
+   * ⚠️ KARGO QATORI ZANJIRGA KIRMAYDI. Filial filtri olib tashlangach,
+   * kuryersiz va filialsiz PENDING qator (naqd kargoda, `cashHeldByProvider`)
+   * ham `hq` bandiga tushib qoldi, finance esa o'sha pulni
+   * `provider_receivables` dan yana qo'shardi — test bazasida holat 571 000
+   * o'rniga 2 571 000 ko'rinardi. Endi u alohida `provider_held` bo'lib
+   * qaytadi: uni tashlab yuborish mumkin emas, chunki `provider_receivables`
+   * qatori yozilmay qolishi yoki bekor bo'lishi mumkin (sotuv javobi
+   * yo'qolsa, kargo bekor qilishi rad etilsa), o'shanda pul hech qayerda
+   * sanalmasdi.
    */
   async getFinancialBalanceSettlementSummary() {
     const activeStatuses = [
@@ -447,12 +464,20 @@ export class OrderSettlementService {
         .createQueryBuilder('settlement')
         .select('settlement.branch_id', 'branch_id')
         .addSelect('COALESCE(SUM(settlement.branch_amount), 0)', 'amount')
+        .addSelect(
+          `COALESCE(SUM(settlement.branch_amount) FILTER (WHERE ${PROVIDER_HELD_ROW_SQL}), 0)`,
+          'provider_held',
+        )
         .where('settlement.isDeleted = :isDeleted', { isDeleted: false })
         .andWhere('settlement.status IN (:...statuses)', {
           statuses: branchReceivableStatuses,
         })
         .groupBy('settlement.branch_id')
-        .getRawMany<{ branch_id: string | null; amount: string }>(),
+        .getRawMany<{
+          branch_id: string | null;
+          amount: string;
+          provider_held?: string;
+        }>(),
       this.orderSettlementRepo
         .createQueryBuilder('settlement')
         .select('settlement.market_id', 'market_id')
@@ -468,9 +493,15 @@ export class OrderSettlementService {
 
     // Qirqish YO'Q: manfiy qoldiq ham haqiqiy ma'lumot (HQ o'sha bo'g'inga
     // ustama to'lagan). Ilgari `Math.max(x, 0)` uni jimgina yo'qotardi.
-    let hqAmount = branchRows
-      .filter((row) => !row.branch_id)
-      .reduce((sum, row) => sum + (Number(row.amount) || 0), 0);
+    const providerHeld = branchRows.reduce(
+      (sum, row) => sum + (Number(row.provider_held) || 0),
+      0,
+    );
+    let hqAmount =
+      branchRows
+        .filter((row) => !row.branch_id)
+        .reduce((sum, row) => sum + (Number(row.amount) || 0), 0) -
+      providerHeld;
     const branches = branchRows
       .filter((row) => Boolean(row.branch_id))
       .map((row) => ({
@@ -538,6 +569,8 @@ export class OrderSettlementService {
         market_payable: markets.reduce((sum, row) => sum + row.amount, 0),
         branches,
         markets,
+        // Kargo qo'lidagi naqd, daftar bo'yicha. Kalit faqat bor bo'lsa qo'shiladi.
+        ...(providerHeld ? { provider_held: providerHeld } : {}),
         // znD3KaZL — faqat KO'RSATKICH (yuqoridagi yig'indilarga qo'shimcha
         // ta'siri yo'q, ular qoldiqni allaqachon ayirgan). Qoldiq bo'lmasa
         // kalit qo'shilmaydi — javob shakli avvalgidek; finance yo'q kalitni

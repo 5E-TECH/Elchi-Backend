@@ -297,6 +297,32 @@ describe('OrderSettlementService settlement (FIFO)', () => {
     expect(() => service.settleHqToMarket()).toThrow();
   });
 
+  it('kargo qatorini zanjirdan ajratib provider_held da qaytaradi', async () => {
+    const { service, settlementRepo } = makeService([]);
+    const makeQb = (rows: any[]) => ({
+      select: jest.fn().mockReturnThis(),
+      addSelect: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      groupBy: jest.fn().mockReturnThis(),
+      getRawMany: jest.fn().mockResolvedValue(rows),
+    });
+    settlementRepo.createQueryBuilder
+      .mockReturnValueOnce(
+        makeQb([
+          { branch_id: '10', amount: '150000', provider_held: '0' },
+          { branch_id: null, amount: '290000', provider_held: '200000' },
+        ]),
+      )
+      .mockReturnValueOnce(makeQb([]));
+
+    const response: any = await service.getFinancialBalanceSettlementSummary();
+
+    expect(response.data.chain_receivable).toBe(240000);
+    expect(response.data.hq_receivable).toBe(90000);
+    expect(response.data.provider_held).toBe(200000);
+  });
+
   it('summarizes the whole chain receivable — HQ rows (branch_id NULL) included', async () => {
     const { service, settlementRepo } = makeService([]);
     const makeQb = (rows: any[]) => ({

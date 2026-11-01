@@ -528,6 +528,61 @@ describe('FinanceServiceService.financialBalance', () => {
     expect(response.data.currentSituation).toBe(25000);
   });
 
+  describe('kargo puli bir marta sanaladi', () => {
+    const balanceWith = async (
+      providerHeld: number,
+      outstanding: number | Error,
+    ) => {
+      const manager = makeManager();
+      const { service, cashboxRepo } = makeService(manager);
+      cashboxRepo.findOne.mockResolvedValue({
+        id: 'main-1',
+        user_id: '0',
+        cashbox_type: 'main',
+        balance: 0,
+      });
+      cashboxRepo.createQueryBuilder = jest.fn().mockReturnValue({
+        select: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        andWhere: jest.fn().mockReturnThis(),
+        getRawOne: jest
+          .fn()
+          .mockResolvedValueOnce({ total: '170000' })
+          .mockResolvedValue({ total: '0' }),
+      });
+      rmqSendMock.mockImplementation((_client: unknown, pattern: any) => {
+        if (pattern?.cmd === 'integration.receivable.outstanding_total') {
+          return outstanding instanceof Error
+            ? Promise.reject(outstanding)
+            : Promise.resolve({ data: { outstanding_amount: outstanding } });
+        }
+        return Promise.resolve({
+          data: { chain_receivable: 0, provider_held: providerHeld },
+        });
+      });
+      const response: any = await service.financialBalance();
+      return response.data;
+    };
+
+    it.each([
+      ['ikkala manba teng', 200000, 200000],
+      ['kargo yozuvi yo`qolgan yoki bekor qilingan', 200000, 0],
+      ['daftar qatori yo`q', 0, 200000],
+    ])('%s', async (_name, held, outstanding) => {
+      const data = await balanceWith(held, outstanding);
+
+      expect(data.chain.providerReceivable).toBe(200000);
+      expect(data.currentSituation).toBe(30000);
+    });
+
+    it('integratsiya javob bermasa, daftar bo`yicha sanaladi', async () => {
+      const data = await balanceWith(200000, new Error('timeout'));
+
+      expect(data.chain.providerReceivable).toBe(200000);
+      expect(data.currentSituation).toBe(30000);
+    });
+  });
+
   /**
    * 03avx8hG — filial 13 kassasida 280 000, daftarda qarzi 0: bu naqd holat
    * raqamlarining hech birida ko'rinmasdi. Endi nazorat ro'yxatiga tushadi;
@@ -947,6 +1002,62 @@ describe('FinanceServiceService operator earnings & payments', () => {
     // 10% of 100000 = 10000 overwrites the prior 5000
     expect(earningRepo.save).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'e9', amount: 10000 }),
+    );
+  });
+
+  it('restores a rolled-back earning when the order is sold again', async () => {
+    const manager = makeManager();
+    const { service, earningRepo } = makeService(manager);
+
+    rmqSendMock.mockResolvedValueOnce({
+      data: { commission_type: 'percent', commission_value: 10 },
+    });
+    earningRepo.findOne.mockResolvedValueOnce({
+      id: 'e9',
+      order_id: '1005',
+      amount: 15000,
+      isDeleted: true,
+    });
+
+    await service.recordOperatorEarning({
+      order_id: '1005',
+      operator_id: '42',
+      total_price: 150000,
+    });
+
+    expect(earningRepo.save).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'e9', amount: 15000, isDeleted: false }),
+    );
+  });
+
+  it('logs the restore even when the amount is unchanged', async () => {
+    const manager = makeManager();
+    const { service, earningRepo, activityLog } = makeService(manager);
+
+    rmqSendMock.mockResolvedValueOnce({
+      data: { commission_type: 'percent', commission_value: 10 },
+    });
+    earningRepo.findOne.mockResolvedValueOnce({
+      id: 'e9',
+      order_id: '1005',
+      amount: 15000,
+      isDeleted: true,
+    });
+    earningRepo.save.mockImplementationOnce((row: unknown) =>
+      Promise.resolve(row),
+    );
+
+    await service.recordOperatorEarning({
+      order_id: '1005',
+      operator_id: '42',
+      total_price: 150000,
+    });
+
+    expect(activityLog.logChange).toHaveBeenCalledWith(
+      expect.objectContaining({
+        old_value: expect.objectContaining({ isDeleted: true }),
+        new_value: expect.objectContaining({ isDeleted: false }),
+      }),
     );
   });
 

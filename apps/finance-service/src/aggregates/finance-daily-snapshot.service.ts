@@ -249,21 +249,24 @@ export class FinanceDailySnapshotService
   }
 
   private async fetchLiveReceivables(): Promise<LiveReceivables> {
-    const chain = this.orderClient
+    const settlement = this.orderClient
       ? await rmqSend<{
-          data?: { chain_receivable?: unknown; branch_receivable?: unknown };
+          data?: {
+            chain_receivable?: unknown;
+            branch_receivable?: unknown;
+            provider_held?: unknown;
+          };
         }>(
           this.orderClient,
           { cmd: 'order.settlement.financial_balance_summary' },
           {},
         )
-          .then((res) =>
-            moneyOrNull(
-              res?.data?.chain_receivable ?? res?.data?.branch_receivable,
-            ),
-          )
+          .then((res) => res?.data ?? null)
           .catch(() => null)
       : null;
+    const chain = moneyOrNull(
+      settlement?.chain_receivable ?? settlement?.branch_receivable,
+    );
     const provider = this.integrationClient
       ? await rmqSend<{ data?: { outstanding_amount?: unknown } }>(
           this.integrationClient,
@@ -273,7 +276,13 @@ export class FinanceDailySnapshotService
           .then((res) => moneyOrNull(res?.data?.outstanding_amount ?? 0))
           .catch(() => null)
       : null;
-    return { chain_receivable: chain, provider_receivable: provider };
+    // `financialBalance` bilan bir xil: kargo puli bir marta, kattarog'i olinadi.
+    const providerHeld = moneyOrNull(settlement?.provider_held ?? 0) ?? 0;
+    return {
+      chain_receivable: chain,
+      provider_receivable:
+        provider === null ? null : Math.max(provider, providerHeld),
+    };
   }
 
   /**

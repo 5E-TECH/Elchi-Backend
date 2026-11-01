@@ -5989,6 +5989,8 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
           branch_receivable?: number;
           hq_receivable?: number;
           market_payable?: number;
+          // Kargo qo'lidagi naqd, order daftari bo'yicha.
+          provider_held?: number;
           branches?: Array<{ branch_id: string; amount: number }>;
           markets?: Array<{ market_id: string; amount: number }>;
           // znD3KaZL — taqsimlanmagan qoldiq (faqat ko'rsatkich).
@@ -6036,7 +6038,7 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
        * summaga manfiyga og'ib turardi. Integration servisi javob bermasa 0
        * olinadi: bu ko'rsatkich hisobotni to'xtatib qo'ymasligi kerak.
        */
-      const providerReceivable = await rmqSend<{
+      const providerOutstanding = await rmqSend<{
         data?: { outstanding_amount?: number };
       }>(
         this.integrationClient,
@@ -6045,6 +6047,17 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
       )
         .then((res) => Number(res?.data?.outstanding_amount ?? 0) || 0)
         .catch(() => 0);
+      /**
+       * Kargo puli bir marta sanaladi: `chainReceivable` uni o'z ichiga
+       * olmaydi, ikki manbadan kattasi olinadi. `provider_receivables`
+       * daftardan kam bo'lishi mumkin (sotuv javobi yo'qolgan, bekor qilish
+       * rad etilgan, integratsiya javob bermagan): marketga qarz o'sha pul
+       * bilan yozilgan, demak u holatda sanalishi kerak.
+       */
+      const providerReceivable = Math.max(
+        providerOutstanding,
+        Number(settlement.provider_held ?? 0) || 0,
+      );
       const branchReceivable = Number(settlement.branch_receivable ?? 0);
       const hqReceivable = Number(settlement.hq_receivable ?? 0);
       const [courierCashboxTotal, branchCashboxTotal] = await Promise.all([
@@ -6199,12 +6212,19 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
       });
 
       if (existing) {
-        const before = { amount: existing.amount };
+        const before = {
+          amount: existing.amount,
+          isDeleted: existing.isDeleted,
+        };
         existing.amount = amount;
         existing.operator_id = operatorId;
         existing.market_id = input.market_id
           ? String(input.market_id)
           : existing.market_id;
+        // Rollback qatorni soft-delete qilgan bo'lsa, qayta sotuvda daromad
+        // qaytadi: `findOne` o'chirilgan qatorni ham topadi, ya'ni yangi qator
+        // yozilmaydi va operator bu buyurtma daromadini yo'qotardi.
+        existing.isDeleted = false;
         existing.commission_type = operator?.commission_type ?? null;
         existing.commission_value = Number(operator?.commission_value ?? 0);
         existing.order_total_price = totalPrice;
@@ -6213,7 +6233,7 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
           entity_type: 'OperatorEarning',
           entity_id: saved.id,
           old_value: before,
-          new_value: { amount: saved.amount },
+          new_value: { amount: saved.amount, isDeleted: saved.isDeleted },
           metadata: { order_id: input.order_id, operator_id: operatorId },
         });
         return this.successRes(saved, 200, 'operator earning updated');
