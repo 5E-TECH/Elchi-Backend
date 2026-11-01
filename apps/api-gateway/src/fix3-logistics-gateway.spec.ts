@@ -1,4 +1,7 @@
 import 'reflect-metadata';
+import { plainToInstance } from 'class-transformer';
+import { validateSync } from 'class-validator';
+import { UpdateDistrictRequestDto } from './dto/logistics.swagger.dto';
 import { GoneException } from '@nestjs/common';
 import { firstValueFrom, of } from 'rxjs';
 import { ROLES_KEY } from './auth/roles.decorator';
@@ -129,6 +132,36 @@ describe('FIX3 CODE-12 — eski pochta route lari o‘chiq', () => {
       expect(logisticsClient.send).not.toHaveBeenCalled();
       // Rollar o'zgarmagan (registrator hamon yo'q).
       expect(rolesOf(method)).toEqual(['superadmin', 'admin']);
+    },
+  );
+});
+
+/**
+ * PATCH /district/:id — `assigned_region` raqam (7) yoki satr ('7') bo'lishi
+ * mumkin; avval faqat satr o'tardi (raqamda 400, biriktirish ishlamasdi).
+ */
+describe('UpdateDistrictRequestDto — assigned_region raqam ham, satr ham', () => {
+  const check = (body: unknown) => {
+    const dto = plainToInstance(UpdateDistrictRequestDto, body);
+    return { dto, errors: validateSync(dto) };
+  };
+
+  it.each([
+    [7, '7'],
+    ['7', '7'],
+    [' 12 ', '12'],
+  ])('%p → %p', (input, expected) => {
+    const { dto, errors } = check({ assigned_region: input });
+    expect(errors).toEqual([]);
+    expect(dto.assigned_region).toBe(expected);
+  });
+
+  it.each([[0.5], ['abc'], [''], [null], [-3], ['1e3']])(
+    '%p — rad etiladi',
+    (input) => {
+      expect(check({ assigned_region: input }).errors.length).toBeGreaterThan(
+        0,
+      );
     },
   );
 });

@@ -33,9 +33,20 @@ export class CreateDistrictRequestDto {
 }
 
 export class UpdateDistrictRequestDto {
-  @ApiProperty({ example: '1' })
+  @ApiProperty({
+    example: '1',
+    type: String,
+    description:
+      "Tuman biriktiriladigan viloyat id'si. Raqam (7) ham, satr ('7') ham qabul qilinadi.",
+  })
+  // Avval faqat satr ('7') o'tardi: FE id'ni raqam (7) sifatida yuborsa
+  // `@IsNumberString` 400 qaytarib, biriktirish jim ishlamay qolardi.
+  @Transform(({ value }: { value: unknown }) => idToString(value))
   @IsNotEmpty()
-  @IsNumberString()
+  // Naqsh shu yerda: BIGINT_ID_PATTERN fayl pastida e'lon qilingan (TDZ).
+  @Matches(/^\d{1,19}$/, {
+    message: "assigned_region musbat butun son (viloyat id'si) bo'lishi kerak",
+  })
   assigned_region!: string;
 }
 

@@ -6319,7 +6319,46 @@ export class LogisticsServiceService implements OnModuleInit {
       relations: ['districts'],
       order: { createdAt: 'DESC' },
     });
-    return successRes(rows);
+    return successRes(await this.withAssignedDistricts(rows));
+  }
+
+  /**
+   * Tumanni boshqa viloyatga biriktirish (`PATCH /district/:id`) natijasi
+   * viloyat ro'yxatida ko'rinishi uchun: `districts` — geografik (tumanning
+   * O'Z viloyati, `region_id`; o'zgarmaydi), `assignedDistricts` — shu
+   * viloyatga BIRIKTIRILGAN tumanlar (`assigned_region ?? region_id`;
+   * PCS `GET /region` bilan bir xil maydon). Avval faqat `districts`
+   * qaytardi — ko'chirilgan tuman eski viloyatda qolib ko'rinardi va
+   * biriktirish «ishlamayapti» deb qabul qilinardi.
+   */
+  private async withAssignedDistricts<T extends Region>(
+    regions: T[],
+  ): Promise<Array<T & { assignedDistricts: District[] }>> {
+    if (!regions.length) {
+      return [];
+    }
+    const regionIds = regions.map((region) => String(region.id));
+    const districts = await this.districtRepo.find({
+      where: [
+        { assigned_region: In(regionIds) },
+        // Eski qatorlar: biriktirilmagan (NULL) tuman o'z viloyatiga xizmat qiladi.
+        { assigned_region: IsNull(), region_id: In(regionIds) },
+      ],
+      relations: ['region'],
+      order: { name: 'ASC' },
+    });
+    const byRegion = new Map<string, District[]>();
+    for (const district of districts) {
+      const key = String(district.assigned_region ?? district.region_id);
+      const bucket = byRegion.get(key);
+      if (bucket) bucket.push(district);
+      else byRegion.set(key, [district]);
+    }
+    return regions.map((region) =>
+      Object.assign(region, {
+        assignedDistricts: byRegion.get(String(region.id)) ?? [],
+      }),
+    );
   }
 
   /**
@@ -6999,7 +7038,8 @@ export class LogisticsServiceService implements OnModuleInit {
     if (!region) {
       this.notFound('Viloyat topilmadi');
     }
-    return successRes(region);
+    const [withAssigned] = await this.withAssignedDistricts([region]);
+    return successRes(withAssigned);
   }
 
   async receiveOrdersIntoPosts(
