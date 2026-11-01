@@ -47,7 +47,9 @@ const ORDER = {
  * `recordSaleSettlement` ATAYLAB haqiqiy qoladi: tekshiriladigan narsa aynan
  * uning yozgan qatori.
  */
-function makeService(opts: { isManager?: boolean } = {}) {
+function makeService(
+  opts: { isManager?: boolean; market?: Record<string, unknown> } = {},
+) {
   const saved: SettlementRow[] = [];
   const cashboxLegs: Record<string, unknown>[] = [];
 
@@ -95,6 +97,7 @@ function makeService(opts: { isManager?: boolean } = {}) {
           tariff_center: 45000,
           tariff_home: 70000,
           expense_proof_conditions: [],
+          ...opts.market,
         },
       ]),
       getCouriersByIds: jest.fn().mockResolvedValue([
@@ -199,6 +202,20 @@ describe("sotuvda qo'shimcha xarajat daftardan ham ayiriladi", () => {
     expect(settlement.courier_amount).toBe(250000);
     expect(settlement.branch_amount).toBe(245000);
     expect(settlement.market_amount).toBe(200000);
+  });
+
+  it("market tasdig'i o'chiq: tarifsiz menejer xarajatli sotolmaydi, pul yozilmaydi", async () => {
+    const { s, requester, saved, cashboxLegs } = makeService({
+      isManager: true,
+      market: { extra_cost_requires_approval: false },
+    });
+
+    await expect(
+      s.sellOrder(requester, '7001', { extraCost: 5000 }),
+    ).rejects.toBeDefined();
+
+    expect(saved).toEqual([]);
+    expect(cashboxLegs).toEqual([]);
   });
 });
 

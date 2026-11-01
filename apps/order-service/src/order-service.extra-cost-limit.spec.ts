@@ -102,6 +102,50 @@ describe("Elchi — qo'shimcha xarajat chegarasi (SOTUV)", () => {
       }),
     ).not.toThrow();
   });
+
+  it("TC7a: market tasdig'i yoqiq — MANAGER ozod qoladi", () => {
+    expect(() =>
+      check({
+        extraCost: 999999,
+        whereDeliver: Where_deliver.ADDRESS,
+        isManager: true,
+        approvalRequired: true,
+      }),
+    ).not.toThrow();
+  });
+
+  it("TC7b: market tasdig'i o'chiq — MANAGER ham uyga yoza olmaydi", () => {
+    expect(
+      msg(() =>
+        check({
+          extraCost: 1000,
+          whereDeliver: Where_deliver.ADDRESS,
+          isManager: true,
+          approvalRequired: false,
+        }),
+      ),
+    ).toMatch(/Uyga yetkaziladigan/);
+  });
+
+  it("TC7c: market tasdig'i o'chiq — MANAGER tarif chegarasidan oshmaydi", () => {
+    const manager = { isManager: true, approvalRequired: false };
+    expect(msg(() => check({ extraCost: 10001, ...manager }))).toMatch(
+      /maksimal 10000/,
+    );
+    expect(() => check({ extraCost: 10000, ...manager })).not.toThrow();
+  });
+
+  it("TC7d: market tasdig'i o'chiq, tarifsiz MANAGER yoza olmaydi", () => {
+    expect(() =>
+      check({
+        extraCost: 1000,
+        tariffCenter: 0,
+        tariffHome: 0,
+        isManager: true,
+        approvalRequired: false,
+      }),
+    ).toThrow();
+  });
 });
 
 describe("Elchi — qo'shimcha xarajat chegarasi (BEKOR QILISH)", () => {

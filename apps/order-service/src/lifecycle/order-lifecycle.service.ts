@@ -2969,10 +2969,15 @@ export class OrderLifecycleService {
      * (`requestExtraCostApprovalIfNeeded`).
      */
     isManager?: boolean;
+    /**
+     * `false` — market tasdig'i o'chiq (w2bDrE3i), xarajat darhol yoziladi:
+     * managerda tasdiq nazorati qolmaydi, chegara unga ham qo'llanadi.
+     */
+    approvalRequired?: boolean;
   }): void {
     const { extraCost, mode, whereDeliver } = params;
     if (!(extraCost > 0)) return;
-    if (params.isManager) return;
+    if (params.isManager && params.approvalRequired !== false) return;
 
     const center = Math.max(0, Number(params.tariffCenter) || 0);
     const home = Math.max(0, Number(params.tariffHome) || 0);
@@ -4220,6 +4225,10 @@ export class OrderLifecycleService {
       // keyingi rollback uni ikkinchi marta qaytarardi).
       const saleMarketPaidReset =
         saleMarketPaidAmount > 0 ? { sale_market_paid_amount: null } : {};
+      // Sotuv qaytarildi: tarif snapshoti ham tozalanadi. Qolsa, keyingi sotuv
+      // eski sotuvchining tarifini olardi (menejer sotib qaytarsa, kuryerga
+      // menejer tarifi qo'llanardi).
+      const saleTariffReset = { courier_tariff: null };
 
       // Single final status write inside the transaction, then commit.
       if (
@@ -4274,6 +4283,7 @@ export class OrderLifecycleService {
             sold_at: null,
             ...extraCostReset,
             ...saleMarketPaidReset,
+            ...saleTariffReset,
           },
           {
             id: requester.id,
@@ -4296,6 +4306,7 @@ export class OrderLifecycleService {
             sale_collectible_amount: null,
             ...extraCostReset,
             ...saleMarketPaidReset,
+            ...saleTariffReset,
           },
           {
             id: requester.id,
@@ -8609,6 +8620,10 @@ export class OrderLifecycleService {
         isManager:
           this.hasRole(requester, Roles.MANAGER) &&
           !this.hasRole(requester, Roles.COURIER),
+        approvalRequired: this.isExtraCostApprovalRequired({
+          extraCost,
+          market,
+        }),
       });
     }
     // T0UGh8bL: X chegarasi — tasdiq so'rovi (extra-cost approval) va
@@ -9201,6 +9216,10 @@ export class OrderLifecycleService {
         isManager:
           this.hasRole(requester, Roles.MANAGER) &&
           !this.hasRole(requester, Roles.COURIER),
+        approvalRequired: this.isExtraCostApprovalRequired({
+          extraCost,
+          market,
+        }),
       });
     }
 
@@ -10194,6 +10213,10 @@ export class OrderLifecycleService {
         isManager:
           this.hasRole(requester, Roles.MANAGER) &&
           !this.hasRole(requester, Roles.COURIER),
+        approvalRequired: this.isExtraCostApprovalRequired({
+          extraCost,
+          market,
+        }),
       });
     }
     // Partly-sell is a sell variant → evaluated against SELL_* conditions, with

@@ -287,6 +287,14 @@ describe('M1 / LC-01 — teskari oyoqlar sotuv yozganidan, so`rovchidan emas', (
     expect(h.queryRunner.commitTransaction).toHaveBeenCalled();
   });
 
+  it('⭐ qaytarilgan sotuvning kuryer tarifi snapshoti tozalanadi: keyingi sotuvchi o`z tarifini oladi', async () => {
+    const h = makeRollbackService({ settlement: courierSettlement() });
+
+    await h.s.rollbackOrderToWaiting(MANAGER, '7001', undefined, 'rb-1');
+
+    expect(h.updates[0]).toMatchObject({ courier_tariff: null });
+  });
+
   it('menejer rollbacki kuryerning o`z rollbacki bilan AYNAN bir xil oyoqlarni yozadi', async () => {
     const byManager = makeRollbackService({
       settlement: courierSettlement(),
