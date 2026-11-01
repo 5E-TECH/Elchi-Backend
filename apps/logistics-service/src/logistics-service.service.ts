@@ -5672,6 +5672,68 @@ export class LogisticsServiceService implements OnModuleInit {
     );
   }
 
+  /**
+   * Tuman SOATO kodi qoidasi (POST district va PATCH district/sato/:id):
+   * majburiy, aniq 7 raqam (viloyat kodi — 4 raqam, `data/sato-codes.ts`),
+   * tumanning GEOGRAFIK viloyati (`region_id`) rasmiy kodi bo'lsa — shu
+   * prefiks bilan boshlanadi (`applyDistrictSatoCodes` dagi
+   * `region_prefix_mismatch` kabi). Rasmiy ro'yxatda bo'lishi SHART EMAS:
+   * 2022-yildan keyin tuzilgan tumanlar ham qo'shila olsin. Qaytaradi —
+   * kesilgan (trim) kod.
+   */
+  private normalizeDistrictSatoCode(
+    raw: unknown,
+    region: { sato_code?: string | null } | null,
+  ): string {
+    const satoCode = typeof raw === 'string' ? raw.trim() : '';
+    if (!satoCode) {
+      this.badRequest('Tuman SOATO kodi majburiy', {
+        reason: 'sato_code_required',
+      });
+    }
+    if (!/^\d{7}$/.test(satoCode)) {
+      this.badRequest(
+        "Tuman SOATO kodi aniq 7 ta raqamdan iborat bo'lishi kerak (masalan, 1703206)",
+        { reason: 'sato_code_format' },
+      );
+    }
+    const regionCode = region?.sato_code?.trim();
+    if (regionCode && !satoCode.startsWith(regionCode)) {
+      this.badRequest(
+        `Tuman SOATO kodi viloyat SOATO kodi (${regionCode}) bilan boshlanishi kerak`,
+        {
+          reason: 'region_prefix_mismatch',
+          details: { expected_prefix: regionCode },
+        },
+      );
+    }
+    return satoCode;
+  }
+
+  /**
+   * SOATO kod tizimda takrorlanmasin: boshqa tumanda ham (o'zidan tashqari),
+   * viloyatda ham bo'lmasin (viloyat kodlari 4 raqamli — himoya uchun).
+   */
+  private async assertDistrictSatoCodeFree(
+    satoCode: string,
+    excludeDistrictId?: string,
+  ): Promise<void> {
+    const districtHolder = await this.districtRepo.findOne({
+      where: excludeDistrictId
+        ? { sato_code: satoCode, id: Not(excludeDistrictId) }
+        : { sato_code: satoCode },
+    });
+    if (districtHolder) {
+      this.conflict('Bunday SOATO kodli tuman allaqachon mavjud');
+    }
+    const regionHolder = await this.regionRepo.findOne({
+      where: { sato_code: satoCode },
+    });
+    if (regionHolder) {
+      this.conflict('Bunday SOATO kodli viloyat allaqachon mavjud');
+    }
+  }
+
   async createDistrict(dto: CreateDistrictDto) {
     const region = await this.regionRepo.findOne({
       where: { id: dto.region_id },
@@ -5681,7 +5743,8 @@ export class LogisticsServiceService implements OnModuleInit {
     }
 
     const trimmedName = dto.name.trim();
-    const satoCode = dto.sato_code?.trim() ?? '';
+    // Yangi tuman SOATO kodisiz qo'shilmaydi (mahsulot egasi qarori).
+    const satoCode = this.normalizeDistrictSatoCode(dto.sato_code, region);
 
     const exists = await this.districtRepo.findOne({
       where: { name: trimmedName, region_id: dto.region_id },
@@ -5690,19 +5753,11 @@ export class LogisticsServiceService implements OnModuleInit {
       this.conflict('Bu viloyatda shunday tuman allaqachon mavjud');
     }
 
-    if (satoCode) {
-      const existingBySato = await this.districtRepo.findOne({
-        where: { sato_code: satoCode },
-      });
-      if (existingBySato) {
-        this.conflict('Bunday SATO kodli tuman allaqachon mavjud');
-      }
-    }
+    await this.assertDistrictSatoCodeFree(satoCode);
 
     const district = this.districtRepo.create({
       name: trimmedName,
-      // SlMjauWC: bo'sh kod — NOMA'LUM (NULL), '' emas (unique indeks).
-      sato_code: satoCode || null,
+      sato_code: satoCode,
       region_id: dto.region_id,
       assigned_region: dto.region_id,
     });
@@ -5710,8 +5765,9 @@ export class LogisticsServiceService implements OnModuleInit {
     try {
       saved = await this.districtRepo.save(district);
     } catch (err) {
+      // SlMjauWC: tekshiruv va yozish orasidagi poyga — unique indeks 23505.
       if (this.isUniqueViolation(err)) {
-        this.conflict('Bunday SATO kodli tuman allaqachon mavjud');
+        this.conflict('Bunday SOATO kodli tuman allaqachon mavjud');
       }
       throw err;
     }
@@ -5857,17 +5913,12 @@ export class LogisticsServiceService implements OnModuleInit {
 
     const before = { sato_code: district.sato_code };
 
-    const satoCode = dto.sato_code.trim();
-    if (!satoCode) {
-      this.badRequest('Tuman SATO kodi majburiy');
-    }
-
-    const existingWithCode = await this.districtRepo.findOne({
-      where: { sato_code: satoCode },
+    // Prefiks — tumanning GEOGRAFIK viloyati bo'yicha (`assigned_region` emas).
+    const region = await this.regionRepo.findOne({
+      where: { id: district.region_id },
     });
-    if (existingWithCode && existingWithCode.id !== id) {
-      this.conflict('Bunday SATO kodli tuman allaqachon mavjud');
-    }
+    const satoCode = this.normalizeDistrictSatoCode(dto?.sato_code, region);
+    await this.assertDistrictSatoCodeFree(satoCode, id);
 
     district.sato_code = satoCode;
     let savedDistrict: District;
@@ -5876,7 +5927,7 @@ export class LogisticsServiceService implements OnModuleInit {
     } catch (err) {
       // SlMjauWC: tekshiruv va yozish orasidagi poyga — unique indeks 23505.
       if (this.isUniqueViolation(err)) {
-        this.conflict('Bunday SATO kodli tuman allaqachon mavjud');
+        this.conflict('Bunday SOATO kodli tuman allaqachon mavjud');
       }
       throw err;
     }
@@ -7869,6 +7920,10 @@ export class LogisticsServiceService implements OnModuleInit {
      * (`order_schema.branch_transfer_batches.target_region_id`),
      * foydalanuvchi, filial va pochta. Buyurtma/jo'natma/foydalanuvchi/
      * filial — faqat o'chirilmaganlari (oNAE3LW9 prod 2-tur).
+     * Boshqa viloyatlardan shu viloyatga BIRIKTIRILGAN (xizmat ko'rsatuvchi)
+     * tumanlar ham tekshiriladi: `District.assigned_region` `onDelete: SET
+     * NULL` — viloyat o'chsa ular jimgina o'z geografik viloyatiga qaytardi
+     * (HQ intake/jo'natish yo'nalishi o'zgarardi).
      */
     const districtCount = await this.districtRepo.count({
       where: { region_id: String(id) },
@@ -7885,6 +7940,18 @@ export class LogisticsServiceService implements OnModuleInit {
       this.badRequest(
         `Bu viloyatda ${districtCount} ta tuman bor, shuning uchun uni o'chirib bo'lmaydi. Avval tumanlarni o'chiring yoki boshqa viloyatdagi tumanga birlashtiring.`,
         { reason: 'region_has_districts', districts: districtCount },
+      );
+    }
+    const assignedCount = await this.districtRepo.count({
+      where: { assigned_region: String(id), region_id: Not(String(id)) },
+    });
+    if (assignedCount > 0) {
+      this.badRequest(
+        `Bu viloyatga boshqa viloyatlardan ${assignedCount} ta tuman biriktirilgan, shuning uchun uni o'chirib bo'lmaydi. Avval bu tumanlarni boshqa viloyatga biriktiring.`,
+        {
+          reason: 'region_has_assigned_districts',
+          usage: { assigned_districts: assignedCount },
+        },
       );
     }
     const usage = await this.collectGeoUsage({ region_id: String(id) });

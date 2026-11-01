@@ -1,7 +1,9 @@
 /* eslint-disable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access */
 import { RpcException } from '@nestjs/microservices';
 import { of } from 'rxjs';
+import { Not } from 'typeorm';
 import { LogisticsServiceService } from './logistics-service.service';
+import { CreateDistrictDto } from './dto/create-district.dto';
 import { districtCodeFitsRegion, matchDistricts } from './utils/sato-matcher';
 import {
   DISTRICT_SATO_UNIQUE_INDEX,
@@ -137,7 +139,12 @@ describe('SlMjauWC — matchDistricts', () => {
 });
 
 describe('SlMjauWC — applyDistrictSatoCodes / create / update', () => {
-  function setup(rows: D[], holderFor: Record<string, unknown> = {}) {
+  /** `regionHolderFor` — shu SOATO kodli VILOYAT (kod → viloyat). */
+  function setup(
+    rows: D[],
+    holderFor: Record<string, unknown> = {},
+    regionHolderFor: Record<string, unknown> = {},
+  ) {
     const districtRepo = {
       find: jest.fn((opts: { where?: Record<string, unknown> }) =>
         Promise.resolve(
@@ -157,8 +164,22 @@ describe('SlMjauWC — applyDistrictSatoCodes / create / update', () => {
         Promise.resolve({ id: '99', ...e }),
       ),
     };
+    const regionsById: Record<string, unknown> = {
+      '1': ANDIJON,
+      '2': NAMANGAN,
+      '3': TOSH_VIL,
+      // Rasmiy kodi yo'q viloyat — prefiks tekshirilmaydi.
+      '9': { id: '9', name: 'Kodsiz viloyat', sato_code: null },
+    };
     const regionRepo = {
-      findOne: jest.fn().mockResolvedValue(ANDIJON),
+      // `where` ga qarab: id — viloyat, sato_code — kodni egallagan viloyat.
+      findOne: jest.fn((opts: { where: Record<string, unknown> }) =>
+        Promise.resolve(
+          (opts.where.id !== undefined
+            ? regionsById[String(opts.where.id as string)]
+            : regionHolderFor[String(opts.where.sato_code as string)]) ?? null,
+        ),
+      ),
     };
     const activityLog = {
       log: jest.fn().mockResolvedValue(undefined),
@@ -177,7 +198,17 @@ describe('SlMjauWC — applyDistrictSatoCodes / create / update', () => {
     jest
       .spyOn(service as any, 'syncDistrictToSearch')
       .mockResolvedValue(undefined);
-    return { service, districtRepo };
+    return { service, districtRepo, regionRepo, activityLog };
+  }
+
+  async function errorOf(p: Promise<unknown>): Promise<any> {
+    try {
+      await p;
+      return undefined;
+    } catch (err) {
+      expect(err).toBeInstanceOf(RpcException);
+      return (err as RpcException).getError();
+    }
   }
 
   async function statusOf(p: Promise<unknown>): Promise<number | undefined> {
@@ -248,7 +279,7 @@ describe('SlMjauWC — applyDistrictSatoCodes / create / update', () => {
     ]);
   });
 
-  it('createDistrict: 23505 poygasi — 409; bo‘sh kod NULL yoziladi', async () => {
+  it('createDistrict: 23505 poygasi — 409', async () => {
     const { service, districtRepo } = setup([]);
     districtRepo.findOne.mockResolvedValue(null);
     districtRepo.save.mockRejectedValueOnce(
@@ -263,15 +294,152 @@ describe('SlMjauWC — applyDistrictSatoCodes / create / update', () => {
         } as any),
       ),
     ).toBe(409);
+  });
 
-    await service.createDistrict({
-      name: 'Kodsiz',
+  /**
+   * Mahsulot egasi: yangi tuman SOATO kodisiz qo'shilmaydi (ilgari bo'sh
+   * kod NULL yozilardi) va kod tizimda takrorlanmaydi.
+   */
+  it.each([[undefined], [''], ['   '], [null]])(
+    'createDistrict: SOATO kodi %p — 400 «majburiy», yozilmaydi',
+    async (sato_code) => {
+      const { service, districtRepo } = setup([]);
+      const err = await errorOf(
+        service.createDistrict({
+          name: 'Kodsiz',
+          region_id: '1',
+          sato_code,
+        } as CreateDistrictDto),
+      );
+      expect(err.statusCode).toBe(400);
+      expect(err.message).toBe('Tuman SOATO kodi majburiy');
+      expect(err.data).toEqual({ reason: 'sato_code_required' });
+      expect(districtRepo.create).not.toHaveBeenCalled();
+      expect(districtRepo.save).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([['170320'], ['17032060'], ['1703 206'], ['17O3206'], ['1703']])(
+    'createDistrict: 7 raqam emas (%p) — 400 sato_code_format',
+    async (sato_code) => {
+      const { service, districtRepo } = setup([]);
+      const err = await errorOf(
+        service.createDistrict({
+          name: 'Yangi',
+          region_id: '1',
+          sato_code,
+        }),
+      );
+      expect(err.statusCode).toBe(400);
+      expect(err.data).toEqual({ reason: 'sato_code_format' });
+      expect(districtRepo.save).not.toHaveBeenCalled();
+    },
+  );
+
+  it('createDistrict: kod kesiladi (trim) va yoziladi (NULL emas); jurnalda ham', async () => {
+    const { service, districtRepo, activityLog } = setup([]);
+    const res: any = await service.createDistrict({
+      name: ' Yangi tuman ',
       region_id: '1',
-      sato_code: '  ',
-    } as any);
-    expect(districtRepo.create).toHaveBeenLastCalledWith(
-      expect.objectContaining({ sato_code: null }),
+      sato_code: ' 1703206 ',
+    });
+    expect(res.statusCode).toBe(201);
+    expect(districtRepo.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: 'Yangi tuman',
+        sato_code: '1703206',
+        region_id: '1',
+      }),
     );
+    expect(res.data.sato_code).toBe('1703206');
+    expect(activityLog.log).toHaveBeenCalledWith(
+      expect.objectContaining({
+        new_value: expect.objectContaining({ sato_code: '1703206' }),
+      }),
+    );
+  });
+
+  it("createDistrict: rasmiy ro'yxatda yo'q, lekin viloyat prefiksi mos kod — qabul qilinadi", async () => {
+    const { service, districtRepo } = setup([]);
+    // 1703999 — Andijon (1703) prefiksi, sato-codes.ts da yo'q (yangi tuman).
+    const res: any = await service.createDistrict({
+      name: 'Yangi tuman',
+      region_id: '1',
+      sato_code: '1703999',
+    });
+    expect(res.statusCode).toBe(201);
+    expect(districtRepo.save).toHaveBeenCalledTimes(1);
+  });
+
+  it('createDistrict: boshqa viloyat prefiksi — 400 region_prefix_mismatch, kutilgan prefiks bilan', async () => {
+    const { service, districtRepo } = setup([]);
+    // Kosonsoy (Namangan, 1714207) Andijon viloyatiga.
+    const err = await errorOf(
+      service.createDistrict({
+        name: 'Kosonsoy',
+        region_id: '1',
+        sato_code: '1714207',
+      }),
+    );
+    expect(err.statusCode).toBe(400);
+    expect(err.message).toContain('1703');
+    expect(err.data).toEqual({
+      reason: 'region_prefix_mismatch',
+      details: { expected_prefix: '1703' },
+    });
+    expect(districtRepo.save).not.toHaveBeenCalled();
+  });
+
+  it("createDistrict: viloyatning rasmiy kodi yo'q — prefiks tekshirilmaydi", async () => {
+    const { service } = setup([]);
+    const res: any = await service.createDistrict({
+      name: 'Yangi',
+      region_id: '9',
+      sato_code: '1799001',
+    });
+    expect(res.statusCode).toBe(201);
+  });
+
+  it('createDistrict: kod boshqa tumanda bor — 409, yozilmaydi', async () => {
+    const { service, districtRepo } = setup([], {
+      '1703206': { id: '77', name: 'Baliqchi', sato_code: '1703206' },
+    });
+    const err = await errorOf(
+      service.createDistrict({
+        name: 'Yangi',
+        region_id: '1',
+        sato_code: '1703206',
+      }),
+    );
+    expect(err.statusCode).toBe(409);
+    expect(err.message).toBe('Bunday SOATO kodli tuman allaqachon mavjud');
+    expect(districtRepo.findOne).toHaveBeenCalledWith({
+      where: { sato_code: '1703206' },
+    });
+    expect(districtRepo.save).not.toHaveBeenCalled();
+  });
+
+  it('createDistrict: kod viloyatda bor — 409 (himoya), yozilmaydi', async () => {
+    const { service, districtRepo, regionRepo } = setup(
+      [],
+      {},
+      {
+        '1703206': { id: '5', name: 'Xato viloyat', sato_code: '1703206' },
+      },
+    );
+    const err = await errorOf(
+      service.createDistrict({
+        name: 'Yangi',
+        region_id: '1',
+        sato_code: '1703206',
+      }),
+    );
+    expect(err.statusCode).toBe(409);
+    expect(err.message).toBe('Bunday SOATO kodli viloyat allaqachon mavjud');
+    expect(regionRepo.findOne).toHaveBeenCalledWith({
+      where: { sato_code: '1703206' },
+    });
+    expect(districtRepo.save).not.toHaveBeenCalled();
   });
 
   it('updateDistrictSatoCode: 23505 poygasi — 409', async () => {
@@ -287,6 +455,88 @@ describe('SlMjauWC — applyDistrictSatoCodes / create / update', () => {
         service.updateDistrictSatoCode('10', { sato_code: '1703206' } as any),
       ),
     ).toBe(409);
+  });
+
+  /** Andijon (1) dagi tuman, Namangan (2) ga biriktirilgan (xizmat viloyati). */
+  const baliqchi = () => ({
+    id: '10',
+    name: 'Baliqchi',
+    sato_code: null,
+    region_id: '1',
+    assigned_region: '2',
+  });
+
+  it.each([['170320'], ['17032060'], ['abcdefg'], ['   ']])(
+    'updateDistrictSatoCode: noto‘g‘ri kod (%p) — 400, yozilmaydi',
+    async (sato_code) => {
+      const { service, districtRepo } = setup([]);
+      districtRepo.findOne.mockResolvedValueOnce(baliqchi());
+      expect(
+        await statusOf(service.updateDistrictSatoCode('10', { sato_code })),
+      ).toBe(400);
+      expect(districtRepo.save).not.toHaveBeenCalled();
+    },
+  );
+
+  it('updateDistrictSatoCode: prefiks GEOGRAFIK viloyat bo‘yicha (assigned_region emas)', async () => {
+    const { service, districtRepo, regionRepo } = setup([]);
+    districtRepo.findOne.mockResolvedValueOnce(baliqchi());
+    // Namangan (assigned_region) kodi — rad etiladi.
+    const err = await errorOf(
+      service.updateDistrictSatoCode('10', { sato_code: '1714207' }),
+    );
+    expect(err.statusCode).toBe(400);
+    expect(err.data).toEqual({
+      reason: 'region_prefix_mismatch',
+      details: { expected_prefix: '1703' },
+    });
+    expect(regionRepo.findOne).toHaveBeenCalledWith({ where: { id: '1' } });
+    expect(districtRepo.save).not.toHaveBeenCalled();
+  });
+
+  it('updateDistrictSatoCode: o‘zidan boshqa tumanda bor — 409; o‘zi hisobga olinmaydi', async () => {
+    const { service, districtRepo } = setup([], {
+      '1703206': { id: '77', name: 'Eski Baliqchi', sato_code: '1703206' },
+    });
+    districtRepo.findOne.mockResolvedValueOnce(baliqchi());
+    const err = await errorOf(
+      service.updateDistrictSatoCode('10', { sato_code: '1703206' }),
+    );
+    expect(err.statusCode).toBe(409);
+    expect(err.message).toBe('Bunday SOATO kodli tuman allaqachon mavjud');
+    expect(districtRepo.findOne).toHaveBeenLastCalledWith({
+      where: { sato_code: '1703206', id: Not('10') },
+    });
+    expect(districtRepo.save).not.toHaveBeenCalled();
+  });
+
+  it('updateDistrictSatoCode: kod viloyatda bor — 409', async () => {
+    const { service, districtRepo } = setup(
+      [],
+      {},
+      {
+        '1703206': { id: '5', sato_code: '1703206' },
+      },
+    );
+    districtRepo.findOne.mockResolvedValueOnce(baliqchi());
+    const err = await errorOf(
+      service.updateDistrictSatoCode('10', { sato_code: '1703206' }),
+    );
+    expect(err.statusCode).toBe(409);
+    expect(err.message).toBe('Bunday SOATO kodli viloyat allaqachon mavjud');
+    expect(districtRepo.save).not.toHaveBeenCalled();
+  });
+
+  it('updateDistrictSatoCode: to‘g‘ri kod kesiladi va yoziladi', async () => {
+    const { service, districtRepo } = setup([]);
+    districtRepo.findOne.mockResolvedValueOnce(baliqchi());
+    const res: any = await service.updateDistrictSatoCode('10', {
+      sato_code: ' 1703206 ',
+    });
+    expect(res.statusCode).toBe(200);
+    expect(districtRepo.save).toHaveBeenCalledWith(
+      expect.objectContaining({ id: '10', sato_code: '1703206' }),
+    );
   });
 });
 
