@@ -6,7 +6,9 @@ import {
   WEB_ROUTES,
   cabinetBaseUrl,
   cabinetLinks,
+  resetCabinetBaseUrlWarning,
 } from './cabinet-links';
+import { Logger } from '@nestjs/common';
 
 /**
  * PIJN1lGp — botdagi «🌐 Kabinetda …» havolalari FE sahifalariga mos. `WEB_ROUTES`
@@ -111,5 +113,20 @@ describe('PIJN1lGp — cabinetLinks', () => {
     walk(join(root, 'apps', 'finance-service', 'src'));
     walk(join(root, 'libs', 'common', 'src'));
     expect(offenders).toEqual([]);
+  });
+
+  it('yaroqsiz ELCHI_CABINET_URL — jarayonda BIR marta ogohlantirish; bo‘sh qiymatda yo‘q', () => {
+    resetCabinetBaseUrlWarning();
+    const warn = jest
+      .spyOn(Logger.prototype, 'warn')
+      .mockImplementation(() => undefined);
+    cabinetBaseUrl(undefined);
+    cabinetBaseUrl('');
+    expect(warn).not.toHaveBeenCalled();
+    expect(cabinetBaseUrl('http://admin.elchi.test')).toBe(DEFAULT_CABINET_URL);
+    cabinetBaseUrl('http://admin.elchi.test');
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0][0])).toMatch(/ELCHI_CABINET_URL yaroqsiz/);
+    warn.mockRestore();
   });
 });

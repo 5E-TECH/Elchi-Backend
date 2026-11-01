@@ -4,6 +4,7 @@ import { Interval } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import {
+  cabinetBaseUrl,
   cabinetLinks,
   AI_BOT_IMAGE_MAX_BYTES,
   deterministicUuid,
@@ -157,10 +158,7 @@ export class AiOrderService implements OnModuleDestroy {
   }
 
   get cabinetUrl(): string {
-    return (
-      this.config.get<string>('ELCHI_CABINET_URL') ??
-      'https://admin.elchipochta.uz'
-    ).replace(/\/+$/, '');
+    return cabinetBaseUrl(this.config.get<string>('ELCHI_CABINET_URL'));
   }
 
   cabinetCreateButton(): InlineKeyboardButton {

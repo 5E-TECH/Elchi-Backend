@@ -431,6 +431,8 @@ Botdagi «🌐 Kabinetda …» tugmalarining yagona manbasi — `libs/common/src
 (`cabinetLinks(ELCHI_CABINET_URL)`; asos faqat `https://`, aks holda `https://admin.elchipochta.uz`).
 Yo'llar FE `src/app/lib/routes.tsx` / `design/kit/route-map.json` bilan sinxron (`WEB_ROUTES`;
 `cabinet-links.spec.ts` solishtiradi va kodda eski `/orders/create`, `/orders?search=` qolmaganini tekshiradi).
+`ELCHI_CABINET_URL` berilgan, lekin yaroqsiz bo'lsa (http, noto'g'ri belgilar) — sukut ishlatiladi va jarayonda bir marta
+`CabinetLinks` ogohlantirish logi yoziladi.
 
 | Tugma | Funksiya | Yo'l |
 |---|---|---|
@@ -438,7 +440,8 @@ Yo'llar FE `src/app/lib/routes.tsx` / `design/kit/route-map.json` bilan sinxron 
 | Guruh kartasi — «Kabinetda ochish» | `orderDetail(id)` | `/orders/edit/<id>` (ichki id) |
 | Kuryer kartasi, «Video juda katta», «Faylni yuklab bo'lmadi» | `courierOrder(id)` | `/orders?status=waiting&orderSearch=EL-<id+100000>` |
 | `/kun` hisoboti | `home()` | `/` |
-| To'lov xabarlari | `selfCashbox()` | `/cash-box` |
+| To'lov xabarlari, smena yakuni — egasining SHAXSIY xabari | `selfCashbox()` | `/cash-box` |
+| Smena yakuni — market GURUHI xabari (summasiz) | `home()` | `/` (guruhdagi operator `/cash-box` da 403 olardi) |
 | Smena hisoboti (va in-app bildirishnoma havolasi) | `shiftReport(id)` | `/payments/shifts/<id>` (eski `/payments/shift-report/<id>` ni FE yo'naltiradi) |
 
 Buyurtmalar ro'yxati filtri kaliti — `orderSearch` (FE `ORDER_FILTER_KEYS.search`); eski `search` kaliti

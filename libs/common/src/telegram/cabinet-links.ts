@@ -1,3 +1,4 @@
+import { Logger } from '@nestjs/common';
 import { formatOrderNumber } from '../order/order-number';
 
 /**
@@ -36,13 +37,27 @@ export const ORDER_LIST_QUERY_KEYS = {
 } as const;
 
 /** `ELCHI_CABINET_URL` → toza `https://…` asos (oxirgi `/` siz); yaroqsiz yoki https emas → sukut. */
+let warnedInvalidBase = false;
+
 export function cabinetBaseUrl(raw?: string | null): string {
   const clean = String(raw ?? '')
     .trim()
     .replace(/\/+$/, '');
-  return /^https:\/\/[\w.-]+(:\d+)?(\/[\w\-./]*)?$/.test(clean)
-    ? clean
-    : DEFAULT_CABINET_URL;
+  if (/^https:\/\/[\w.-]+(:\d+)?(\/[\w\-./]*)?$/.test(clean)) return clean;
+  // Berilgan, lekin yaroqsiz (http, yo'l belgilari) — jim almashtirilmaydi:
+  // jarayonda bir marta ogohlantirish (noto'g'ri sozlama tez topilsin).
+  if (clean && !warnedInvalidBase) {
+    warnedInvalidBase = true;
+    new Logger('CabinetLinks').warn(
+      `ELCHI_CABINET_URL yaroqsiz (faqat https://host[/yo'l]) — sukut ${DEFAULT_CABINET_URL} ishlatiladi`,
+    );
+  }
+  return DEFAULT_CABINET_URL;
+}
+
+/** Faqat testlar uchun: ogohlantirish bayrog'ini tiklash. */
+export function resetCabinetBaseUrlWarning(): void {
+  warnedInvalidBase = false;
 }
 
 const fill = (route: string, id: string | number): string =>
