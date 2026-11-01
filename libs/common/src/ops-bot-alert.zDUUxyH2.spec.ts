@@ -962,6 +962,9 @@ describe('bot-alert.sh (zDUUxyH2)', () => {
       );
       run();
       expect(stateKey('restart_times')).toBe(String(now - 60));
+      expect(logText()).toMatch(
+        /restart_times: 1 ta kelajak yozuvi tashlandi \(soat orqaga ketdimi\?\)/,
+      );
     });
     it('knob) OUTBOX_DEAD_MAX va NS_START_GRACE_S chegaralari; env CMD_TIMEOUT ustun, noto‘g‘risi «(env)» bilan', () => {
       writeConf(
@@ -984,9 +987,9 @@ describe('bot-alert.sh (zDUUxyH2)', () => {
       expect(log).toMatch(
         /NS_START_GRACE_S=86401 rad etildi \(0\.\.86400\) — 90/,
       );
-      // Faqat chop etiladigan ASCII, bitta qator, manba ko'rsatilgan.
+      // Chop etilmaydigan baytlar '?' (rad etilgan qiymat to'g'ridek ko'rinmaydi), bitta qator, manba.
       expect(log).toMatch(
-        /WARN: BOT_ALERT_CMD_TIMEOUT=junk \(env\) rad etildi \(1\.\.600\) — 30 ishlatiladi\n/,
+        /WARN: BOT_ALERT_CMD_TIMEOUT=ju\?nk\?\?\? \(env\) rad etildi \(1\.\.600\) — 30 ishlatiladi\n/,
       );
     });
     it('knob) bosh nollar: OUTBOX_PENDING_MIN=0000000000000010 — qiymati 10 (o‘chib qolmaydi), WARN yo‘q', () => {

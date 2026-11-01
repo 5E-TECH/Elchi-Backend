@@ -119,8 +119,8 @@ num() {
   esac
 }
 # Integer config knob: knob NAME DEFAULT MIN MAX [RAW [SOURCE]]. Unset/empty → DEFAULT
-# silently; not a decimal integer or outside MIN..MAX → WARN with the raw value (printable
-# ASCII only, 40 chars, plus its source when not the config file; to stderr, so the $(...)
+# silently; not a decimal integer or outside MIN..MAX → WARN with the raw value (other than
+# printable ASCII shown as '?', so a rejected value never looks valid; 40 chars, plus its source when not the config file; to stderr, so the $(...)
 # capture stays clean) and DEFAULT.
 knob() {
   local raw v src=""
@@ -129,7 +129,7 @@ knob() {
   [ -n "$raw" ] || { printf '%s' "$2"; return; }
   v="$(num "$raw" "")"
   if [ -z "$v" ] || [ "$v" -lt "$3" ] || [ "$v" -gt "$4" ]; then
-    log "WARN: $1=$(printf '%s' "$raw" | LC_ALL=C tr -cd '[:print:]' | cut -c1-40)$src rad etildi ($3..$4) — $2 ishlatiladi" >&2
+    log "WARN: $1=$(printf '%s' "$raw" | LC_ALL=C tr -c '[:print:]' '?' | cut -c1-40)$src rad etildi ($3..$4) — $2 ishlatiladi" >&2
     printf '%s' "$2"
     return
   fi
@@ -401,13 +401,18 @@ if [ -n "$NS_RESTARTS" ] && [ "$NS_ID" = "$PREV_NS_ID" ] && [ -n "$PREV_NS_RESTA
 fi
 [ "$NS_ID" = "$PREV_NS_ID" ] || RESTART_TIMES=""
 kept=""
+future=0
 for t in ${RESTART_TIMES//,/ }; do
   # No subshell per entry (a long crash-loop with a 7-day window has thousands).
   # Junk, 16+ digits, or dated in the future (broken state / clock went back) is dropped.
   case "$t" in '' | *[!0-9]* | ????????????????*) continue ;; esac
-  [ $((10#$t)) -gt $((NOW + CRON_SLACK_S)) ] && continue
+  if [ $((10#$t)) -gt $((NOW + CRON_SLACK_S)) ]; then
+    future=$((future + 1))
+    continue
+  fi
   [ $((NOW - 10#$t)) -lt $((RESTART_WINDOW_S + CRON_SLACK_S)) ] && kept="${kept:+$kept,}$t"
 done
+[ "$future" -gt 0 ] && log "WARN: restart_times: $future ta kelajak yozuvi tashlandi (soat orqaga ketdimi?)"
 restarts_in_window="$(printf '%s' "$kept" | tr ',' '\n' | grep -c . || true)"
 # Only ">= 2" / ">= 1" matters: keep the newest 100 entries so the state stays small (the
 # message then says "100+": the real count is no longer known).

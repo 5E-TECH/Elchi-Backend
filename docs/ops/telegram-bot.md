@@ -508,7 +508,9 @@ chaqiruvi `timeout -k 5` bilan (`BOT_ALERT_CMD_TIMEOUT`, 30 s), SQL `statement_t
    o'qiladi. Chegaralarni shu faylda o'zgartirish mumkin (jadvaldagi nomlar). Har son oraliqda
    tekshiriladi; raqam bo'lmagan yoki oraliqdan tashqari qiymat (`-5`, `45m`, ulkan son; `0` — oraliq 1 dan
    boshlanadiganlarda, `BOT_ALERT_OUTBOX_DEAD_MAX` va `BOT_ALERT_NS_START_GRACE_S` uchun `0` qabul qilinadi) rad
-   etiladi: logga xom qiymat bilan `WARN` yoziladi va sukut ishlatiladi. Oraliqlar:
+   etiladi: logga `WARN` yoziladi — xom qiymat (faqat chop etiladigan ASCII, boshqa baytlar `?`,
+   ko'pi bilan 40 belgi; env'dan kelgan bo'lsa «(env)») — va sukut ishlatiladi. Env'dagi noto'g'ri
+   `BOT_ALERT_CMD_TIMEOUT` fayldagi qiymatga emas, sukut 30 ga tushadi. Oraliqlar:
    `BOT_ALERT_CMD_TIMEOUT` 1..600 (30), `BOT_ALERT_RESTART_WINDOW_MIN` 1..10080 (30),
    `BOT_ALERT_FLAP_WINDOW_MIN` 11..10080 (60; 10 faqat crash-loop darhol qaytganda qo'llanardi,
    11 — siyosat tanlovi), `BOT_ALERT_REPEAT_HOURS` 1..720 (6),
