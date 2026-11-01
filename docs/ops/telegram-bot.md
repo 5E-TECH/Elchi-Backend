@@ -459,17 +459,32 @@ chaqiruvi `timeout -k 5` bilan (`BOT_ALERT_CMD_TIMEOUT`, 30 s), SQL `statement_t
 | `getMe` | token buzuq (401/404) — yoki alohida: «Telegram API javob bermadi» (tarmoq / 5xx) | — |
 | `getWebhookInfo` — faqat webhook rejimida (`resolveBotConfig` kabi: `TELEGRAM_BOT_MODE`, `TELEGRAM_WEBHOOK_SECRET`, `BOT_POLLING_LEADER`) | url `TELEGRAM_WEBHOOK_URL` ga teng emas (berilmagan bo'lsa `https://…/telegram/webhook/<slug>` emas) yoki bo'sh; yaqinda yetkazish xatosi; navbat to'lgan | `BOT_ALERT_WEBHOOK_ERROR_MIN` (15), `BOT_ALERT_PENDING_UPDATES_MAX` (100) |
 | `telegram_outbox` (`BEGIN READ ONLY` SELECT, `elchi-postgres` ichida) | muddati o'tgan `pending` juda eski; oxirgi soatda `dead` ko'p; `sending` da qotgan; so'rov bajarilmadi / timeout | `BOT_ALERT_OUTBOX_PENDING_MIN` (10), `BOT_ALERT_OUTBOX_DEAD_MAX` (20) |
-| notification-service konteyneri — aniq 1 ta (`com.docker.compose.project` = `BOT_ALERT_COMPOSE_PROJECT`/`COMPOSE_PROJECT_NAME`, `oneoff=False`; yoki `BOT_ALERT_NS_CONTAINER`) | topilmadi / bir nechta / docker javob bermadi; `running healthy` emas; crash-loop (`RestartCount` oynada ≥ 2 marta o'sdi); health `starting` `StartedAt` dan uzoq | `BOT_ALERT_NS_START_GRACE_S` (90), `BOT_ALERT_RESTART_WINDOW_MIN` (30) |
+| notification-service konteyneri — aniq 1 ta (`com.docker.compose.project` = `BOT_ALERT_COMPOSE_PROJECT`/`COMPOSE_PROJECT_NAME`, `oneoff=False`; yoki `BOT_ALERT_NS_CONTAINER`) | topilmadi / bir nechta / docker javob bermadi; `running healthy` emas; crash-loop (`RestartCount` oynada ≥ 2 marta o'sdi; restart vaqti `State.StartedAt` dan, oynaga +1 cron intervali zaxira; `0` yoki > 10080 rad etiladi → 30); health `starting` `StartedAt` dan uzoq | `BOT_ALERT_NS_START_GRACE_S` (90), `BOT_ALERT_RESTART_WINDOW_MIN` (30) |
 
 - **Ogohlantirilgan to'plam tekshiruv kodi bo'yicha «yopishqoq»:**
   - kod shu yugurishda VA oldingi 2 yugurishdan birida yiqilsa qo'shiladi (qisqa uzilish jim o'tadi,
     «flapping» ham ushlanadi); crash-loop (oynada ≥ 2 restart) — darhol, oynada restart turgan ekan saqlanadi;
-  - hech narsa ogohlantirilmagan, lekin so'nggi 4 yugurishdan 3 tasi navbatma-navbat turli tekshiruvlarda
-    yiqilgan bo'lsa — bitta «unstable» yozuvi;
-  - kod faqat ketma-ket 2 TOZA yugurishdan keyin chiqadi; to'plam bo'shaganda bitta «✅ tiklandi».
-  - Yangi kod qo'shilganda — xabar; kod chiqib ketganda — jim (to'liq tiklanishni kutadi).
+  - hech narsa ogohlantirilmagan, lekin so'nggi 4 yugurishdan 3 tasida ≥ 3 XIL tekshiruv (yoki 4 tasining
+    hammasida) yiqilgan bo'lsa — bitta «unstable» yozuvi. Shu hodisada allaqachon ogohlantirilgan kodlar
+    sanalmaydi (tiklanish dumi «unstable» emas; 2 ta shovqinli tekshiruv ham bermaydi);
+  - kod faqat ketma-ket 2 TOZA yugurishdan keyin chiqadi. Hodisa oldingi «tiklandi» dan
+    `BOT_ALERT_FLAP_WINDOW_MIN` (60; 10..10080 dan tashqari rad etiladi → 60) ichida qayta boshlansa (flapping) — 4 toza
+    yugurish kerak (alert qilingan kodlar chiqqach, «tiklandi» qarori baribir 2 toza yugurish bo'yicha);
+  - «✅ tiklandi» faqat to'plam bo'sh VA so'nggi 2 (flapping'da 4) yugurish to'liq toza bo'lsa. To'plam
+    bo'shab, lekin hali tasdiqlanmagan yangi kod yiqilayotgan bo'lsa — hodisa jim ushlab turiladi.
+  - Shu hodisada hali ogohlantirilmagan kod qo'shilganda — xabar (`ns_restart` va `ns_unhealthy` bitta
+    sabab); kod chiqib, qayta kirsa — jim; kod chiqib ketganda — jim (to'liq tiklanishni kutadi). Kod
+    4 yugurish ketma-ket toza bo'lsa hodisaning «alert qilingan» ro'yxatidan chiqadi — hodisa boshqa
+    tekshiruv tufayli ochiq tursa ham, uning keyingi buzilishi yangi alert (2-yugurishda).
+  - Eskalatsiya bir ildizda (`ns_unhealthy` → crash-loop → `exited`) yangi xabar bermaydi — yangi holat
+    faqat 6 soatlik eslatmada ko'rinadi. Restart vaqti: konteyner `running` bo'lsa `StartedAt`, aks holda
+    yugurish vaqti. Konteyner id almashsa (qayta yaratildi, deploy) restart tarixi boshidan boshlanadi.
+  - `docker ps` yiqilsa konteyner id, `RestartCount` va restart vaqtlari oldingi holatdan ko'chiriladi
+    (bitta xato davom etayotgan crash-loop'ni o'chirmaydi).
+  - Eski formatdagi holat fayli: `ok` bo'lsa tarix bo'sh boshlanadi (yangilanishdagi blip darhol alert
+    bermaydi); `problem` va hozir sog'lom bo'lsa — «tiklandi» 2-toza yugurishda.
 - Takrorsizlik tekshiruv KODI bo'yicha (son yoki Telegram matni o'zgarsa yangi xabar ketmaydi): muammo
-  paydo bo'lganda yoki kodlar to'plami o'zgarganda bitta; davom etsa har `BOT_ALERT_REPEAT_HOURS` (6) da
+  paydo bo'lganda yoki hodisaga yangi kod qo'shilganda bitta; davom etsa har `BOT_ALERT_REPEAT_HOURS` (6) da
   eslatma; tiklanganda bitta «✅ tiklandi».
 - Hech bir kanal qabul qilmasa holat oldinga surilmaydi — keyingi yugurish qayta yuboradi.
 - Sirlar (tokenlar, URL'lar) argv/log'ga tushmaydi (`curl -K -`); holat va log fayllari `0600`.
@@ -497,7 +512,9 @@ chaqiruvi `timeout -k 5` bilan (`BOT_ALERT_CMD_TIMEOUT`, 30 s), SQL `statement_t
    `BOT_ALERT_HOST_LABEL`, `BOT_ALERT_TELEGRAM_API` — fayldan yoki shu nomdagi env'dan (env ustun).
 3. Tekshirish: `ELCHI_APP_DIR=<backend-katalogi> ~/elchi-ops/bot-alert.sh --dry-run` (hech narsa
    yubormaydi, holatni o'zgartirmaydi), `… --test` (kanallarga test xabar + heartbeat ping).
-4. Cron (`docker` guruhidagi foydalanuvchi):
+4. Cron (`docker` guruhidagi foydalanuvchi). **Server cron'ini #607 follow-up PR (yolg'on «tiklandi»,
+   takroriy alert, `docker ps` xatosi tuzatishlari) dev'ga merge bo'lgach yoqing** — undan oldingi
+   versiya shovqinli:
    `*/5 * * * * ELCHI_APP_DIR=/home/<user>/apps/backend /home/<user>/elchi-ops/bot-alert.sh`.
 5. Log: `~/elchi-ops/logs/bot-alert.log`; holat: `~/elchi-ops/state/bot-alert.state`.
 

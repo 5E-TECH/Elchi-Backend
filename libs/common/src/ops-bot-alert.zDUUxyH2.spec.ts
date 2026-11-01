@@ -39,7 +39,7 @@ const FAKE_DOCKER = `#!/usr/bin/env bash
 echo "docker $*" >> "$FAKE_LOG"
 [ "\${FAKE_DOCKER_HANG:-}" = 1 ] && sleep 5
 case "$1" in
-  ps) printf '%b' "\${FAKE_NS_IDS:-}" ;;
+  ps) [ "\${FAKE_PS_FAIL:-}" = 1 ] && exit 1; printf '%b' "\${FAKE_NS_IDS:-}" ;;
   inspect)
     [ -n "\${FAKE_INSPECT_ERR:-}" ] && { echo "$FAKE_INSPECT_ERR" >&2; exit 1; }
     id="\${@: -1}"; v="FAKE_\${id//-/_}"
@@ -602,6 +602,11 @@ describe('bot-alert.sh (zDUUxyH2)', () => {
     const A = { FAKE_ns1: `exited x 0 ${startedLongAgo}` }; // ns_unhealthy
     const B = { FAKE_PSQL: '900\\n0\\n0' }; // outbox_pending
     const C = { FAKE_PSQL: '0\\n50\\n0' }; // outbox_dead
+    const D = { FAKE_WEBHOOK: webhookInfo({ pending_update_count: 500 }) }; // webhook_pending
+    const T = () => ({ FAKE_GETME_CODE: '401', FAKE_GETME: '{"ok":false}' }); // token_invalid
+    // Satr ko'rinishidagi stsenariy: A ns, e/B outbox, D webhook, T 401, o ok.
+    const seq = (ch: string) => () =>
+      (({ A, B, e: B, D, T: T(), o: {} }) as Record<string, Step>)[ch];
     const simulate = (steps: Array<(i: number) => Step>, extra: Step = {}) => {
       let seen = 0;
       return steps
@@ -632,11 +637,12 @@ describe('bot-alert.sh (zDUUxyH2)', () => {
       [
         'B) 20 daqiqalik crash-loop — 2-restartda bitta alert, sikl ichida «tiklandi» yo‘q; to‘xtagach oyna tugashi (+2 toza) → bitta «tiklandi»',
         () =>
-          Array.from({ length: 24 }, (_, k) => (i: number) => {
+          Array.from({ length: 25 }, (_, k) => (i: number) => {
             const restarts = Math.min(Math.floor((k + 4) / 4), 5);
-            return ns(i, restarts, 'healthy', 3600);
+            const lastRestart = Math.min(Math.floor(k / 4) * 4, 16);
+            return ns(i, restarts, 'healthy', (k - lastRestart) * 300 + 60);
           }),
-        '........A..............R',
+        '........A...............R',
         {},
       ],
       [
@@ -647,7 +653,8 @@ describe('bot-alert.sh (zDUUxyH2)', () => {
               ? () => ({
                   FAKE_INSPECT_ERR: 'Cannot connect to the Docker daemon',
                 })
-              : (i: number) => ns(i, Math.floor(k / 2), 'healthy', 3600),
+              : (i: number) =>
+                  ns(i, Math.floor(k / 2), 'healthy', (k % 2) * 300 + 60),
           ),
         '....A.....',
         {},
@@ -677,10 +684,154 @@ describe('bot-alert.sh (zDUUxyH2)', () => {
         () =>
           Array.from(
             { length: 4 },
-            (_, k) => (i: number) => ns(i, k, 'healthy', 3600),
+            (_, k) => (i: number) => ns(i, k, 'healthy', 60),
           ),
         '..A.',
         { BOT_ALERT_RESTART_WINDOW_MIN: '08' },
+      ],
+      // --- #607 yakuniy tekshiruvi (follow-up) -------------------------------
+      [
+        '1) AoAoTTTT — hamma narsa yiqilgan holda yolg‘on «tiklandi» yo‘q (yangi kod tasdiqlanguncha jim), keyin 401 alert',
+        () => [() => A, ok, () => A, ok, T, T, T, T],
+        '..A..A..',
+        {},
+      ],
+      [
+        '1) AAAoBooo — tasdiqlanmagan B: tiklanish dumida «unstable» ham, yolg‘on «tiklandi» ham yo‘q; 2 toza yugurishdan keyin «tiklandi»',
+        () => [() => A, () => A, () => A, ok, () => B, ok, ok, ok],
+        '.A....R.',
+        {},
+      ],
+      [
+        '3) AAoTTT — tiklanish paytida yolg‘on «unstable» yo‘q, 401 2-yugurishda alert',
+        () => [() => A, () => A, ok, T, T, T],
+        '.A..A.',
+        {},
+      ],
+      [
+        '2) AAoT sikli 40 yugurish — bitta alert (hodisa bo‘yi alerted to‘plami), 11 emas',
+        () =>
+          Array.from({ length: 40 }, (_, k) =>
+            k % 4 === 3 ? T : k % 4 === 2 ? ok : () => A,
+          ),
+        '.A' + '.'.repeat(38),
+        {},
+      ],
+      [
+        '2) SRSSR tez loop (restarting ↔ starting) 2,5 soat — bitta alert; ns_unhealthy qaytib kelsa qayta xabar yo‘q',
+        () =>
+          Array.from({ length: 30 }, (_, k) => (i: number) => {
+            const restarts = Array.from({ length: k + 1 }, (_, j) => j).filter(
+              (j) => j % 5 === 1 || j % 5 === 4,
+            ).length;
+            return k % 5 === 1 || k % 5 === 4
+              ? {
+                  FAKE_ns1: `restarting unhealthy ${restarts} ${iso(at(i) - 30)}`,
+                }
+              : ns(i, restarts, 'starting', 30);
+          }),
+        '....A' + '.'.repeat(25),
+        {},
+      ],
+      [
+        '2) «doim restarting» — ns_unhealthy va ns_restart bitta sabab: 5 daqiqa farq bilan ikkinchi alert yo‘q',
+        () =>
+          Array.from({ length: 6 }, (_, k) => (i: number) => ({
+            FAKE_ns1: `restarting unhealthy ${k} ${iso(at(i) - 30)}`,
+          })),
+        '.A....',
+        {},
+      ],
+      [
+        '4) 10 daqiqalik loop, har 4-yugurishda docker ps yiqiladi (3 soat) — bitta alert, yolg‘on «tiklandi» yo‘q',
+        () =>
+          Array.from({ length: 36 }, (_, k) =>
+            k % 4 === 3
+              ? () => ({ FAKE_PS_FAIL: '1' })
+              : (i: number) =>
+                  ns(i, Math.floor(k / 2), 'healthy', (k % 2) * 300 + 60),
+          ),
+        '....A' + '.'.repeat(31),
+        {},
+      ],
+      [
+        '5) aynan 30 daqiqalik loop (oyna = davr) — StartedAt + 1 interval zaxira bilan ushlanadi',
+        () =>
+          Array.from({ length: 20 }, () => (i: number) => {
+            const since = at(i) - (now + 150);
+            const restarts = since < 0 ? 0 : Math.floor(since / 1800) + 1;
+            return ns(i, restarts, 'healthy', since < 0 ? 3600 : since % 1800);
+          }),
+        '.......A............',
+        {},
+      ],
+      [
+        '7) ikki shovqinli tekshiruv (A, B, ok, A …) — 2 xil kod «unstable» bermaydi',
+        () => {
+          const burst = [() => A, () => B, ok, () => A];
+          const quiet = Array.from({ length: 8 }, () => ok);
+          return [...burst, ...quiet, () => B, () => A, ok, () => B, ...quiet];
+        },
+        '.'.repeat(24),
+        {},
+      ],
+      [
+        '7) A/B/C/D/ok/ok aylanishi — bitta «unstable», «tiklandi», tez qaytgach qayta «unstable» va endi 4 toza yugurish kerak',
+        () =>
+          Array.from(
+            { length: 24 },
+            (_, k) => [() => A, () => B, () => C, () => D, ok, ok][k % 6],
+          ),
+        '..A..R..A' + '.'.repeat(15),
+        {},
+      ],
+      [
+        '8) bitta tekshiruv FFPP flapping 2 soat — tiklanishdan 60 daq ichida qaytsa, chiqish uchun 4 toza yugurish (6A+6R emas)',
+        () => Array.from({ length: 24 }, (_, k) => (k % 4 < 2 ? () => A : ok)),
+        '.A.R.A' + '.'.repeat(18),
+        {},
+      ],
+      // --- #609 tekshiruvi: 4 toza yugurishdan keyin kod ALERTED'dan chiqadi ----------
+      [
+        'G1) TTAATTTTTTAAAATTTTTT — hodisa ochiq turganda 401 4 toza yugurishdan keyin qaytsa, yana alert',
+        () => [...'TTAATTTTTTAAAATTTTTT'].map(seq),
+        '.A.A.......A...A....',
+        {},
+      ],
+      [
+        'G1) AAAATTTTTTAAAATTTTTT — konteyner 6 yugurishdan keyin yana exit, alert',
+        () => [...'AAAATTTTTTAAAATTTTTT'].map(seq),
+        '.A...A.....A...A....',
+        {},
+      ],
+      [
+        'G1) AAooAAeeooDooTTTTTT — flap hodisasi ichida yangi 401 2-yugurishda alert',
+        () => [...'AAooAAeeooDooTTTTTT'].map(seq),
+        '.A.R.A.A....R.A....',
+        {},
+      ],
+      [
+        'G1) M3: ns_unhealthy alert, hodisa outbox bilan ochiq, 1 soatdan keyin crash-loop — alert',
+        () =>
+          Array.from({ length: 20 }, (_, k) => (i: number) => {
+            if (k < 2) return { ...A, ...B };
+            const restarts = k < 14 ? 0 : k - 13;
+            return { ...B, ...ns(i, restarts, 'healthy', 60) };
+          }),
+        '.A.............A....',
+        {},
+      ],
+      [
+        'G1/HOLD) AAoDoBoDoBAAAAAAoo — hodisa tasdiqlanmagan shovqin bilan HOLDda, ns ≥ 4 toza yugurishdan keyin yana yiqilsa — alert',
+        () => [...'AAoDoBoDoBAAAAAAoo'].map(seq),
+        '.A.........A.....R',
+        {},
+      ],
+      [
+        'G1/HOLD) AAoDoBAAAAAAoo — aniq 4 toza yugurishdan keyin qayta buzilish — alert',
+        () => [...'AAoDoBAAAAAAoo'].map(seq),
+        '.A.....A.....R',
+        {},
       ],
     ])('%s', (_label, steps, expected, extra) => {
       if (Object.keys(extra).length) {
@@ -706,6 +857,72 @@ describe('bot-alert.sh (zDUUxyH2)', () => {
       expect(
         result.lastIndexOf('A') - result.indexOf('A'),
       ).toBeGreaterThanOrEqual(72);
+    });
+
+    const legacyState = (state: 'ok' | 'problem') => {
+      mkdirSync(join(dir, 'ops', 'state'), { recursive: true });
+      writeFileSync(
+        join(dir, 'ops', 'state', 'bot-alert.state'),
+        `state=${state}\nsig=abc\nsince=${now - 600}\nlast_sent=${now - 600}\nchecked_at=${now - 300}\n`,
+      );
+    };
+    it('6) eski state (ok) + yangilanish yugurishida blip — darhol alert yo‘q', () => {
+      legacyState('ok');
+      expect(simulate([() => A, ok, ok])).toBe('...');
+    });
+    it('6) eski state (problem) + sog‘lom — «tiklandi» 2-toza yugurishda (1-sida emas)', () => {
+      legacyState('problem');
+      expect(simulate([ok, ok, ok])).toBe('.R.');
+    });
+    it('#609-2) hold eslatmasi: tiklangan kod «tiklangan, boshqa tekshiruvlar hali beqaror» deb yoziladi', () => {
+      mkdirSync(join(dir, 'ops', 'state'), { recursive: true });
+      writeFileSync(
+        join(dir, 'ops', 'state', 'bot-alert.state'),
+        `state=problem\nsig=ns_unhealthy\nraw=outbox_pending\nraw2=\nraw3=\nsince=${now - 8 * 3600}\nlast_sent=${now - 7 * 3600}\nalerted=ns_unhealthy\n`,
+      );
+      const out = run(T(), ['--dry-run']).stdout;
+      expect(out).toMatch(/send=problem/);
+      expect(out).toMatch(
+        /ns_unhealthy: tiklangan, boshqa tekshiruvlar hali beqaror/,
+      );
+      expect(out).toMatch(/Hali tasdiqlanmagan: token_invalid/);
+    });
+    it('#609-3) ulkan qiymat (200000000000000000) — toshib ketmaydi: WARN + sukut', () => {
+      writeConf(
+        `BOT_ALERT_TELEGRAM_CHAT_ID=42\nBOT_ALERT_TELEGRAM_BOT_TOKEN=${ALERT_TOKEN}\nBOT_ALERT_FLAP_WINDOW_MIN=200000000000000000\nBOT_ALERT_RESTART_WINDOW_MIN=200000000000000000\n`,
+      );
+      expect(
+        simulate(
+          Array.from({ length: 12 }, (_, k) => (k % 4 < 2 ? () => A : ok)),
+        ),
+      ).toBe('.A.R.A......');
+      expect(logText()).toMatch(/FLAP_WINDOW_MIN=999999999999999 rad etildi/);
+      expect(logText()).toMatch(
+        /RESTART_WINDOW_MIN=999999999999999 rad etildi/,
+      );
+    });
+    it('#609-3) BOT_ALERT_FLAP_WINDOW_MIN=0 — rad etiladi (ogohlantirish), 60 ishlatiladi', () => {
+      writeConf(
+        `BOT_ALERT_TELEGRAM_CHAT_ID=42\nBOT_ALERT_TELEGRAM_BOT_TOKEN=${ALERT_TOKEN}\nBOT_ALERT_FLAP_WINDOW_MIN=0\n`,
+      );
+      expect(
+        simulate(
+          Array.from({ length: 24 }, (_, k) => (k % 4 < 2 ? () => A : ok)),
+        ),
+      ).toBe('.A.R.A' + '.'.repeat(18));
+      expect(logText()).toMatch(/FLAP_WINDOW_MIN=0 rad etildi/);
+    });
+    it('5) BOT_ALERT_RESTART_WINDOW_MIN=0 — rad etiladi (ogohlantirish), crash-loop baribir ushlanadi', () => {
+      writeConf(
+        `BOT_ALERT_TELEGRAM_CHAT_ID=42\nBOT_ALERT_TELEGRAM_BOT_TOKEN=${ALERT_TOKEN}\nBOT_ALERT_RESTART_WINDOW_MIN=0\n`,
+      );
+      const steps = Array.from(
+        { length: 4 },
+        (_, k) => (i: number) => ns(i, k * 2, 'healthy', 60),
+      );
+      // RestartCount yugurishlar orasida 2 ga o'sdi — 2 restart, darhol crash-loop.
+      expect(simulate(steps)).toBe('.A..');
+      expect(logText()).toMatch(/RESTART_WINDOW_MIN=0 rad etildi/);
     });
 
     it('401 da webhook tekshiruvi o‘tkazib yuboriladi (ikkinchi soxta qator yo‘q)', () => {

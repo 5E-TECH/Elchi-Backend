@@ -19,9 +19,12 @@
 #              `starting` accepted only within BOT_ALERT_NS_START_GRACE_S (90) of StartedAt
 # Alerted set is sticky per check code: a check joins when it fails on this run and on one
 # of the 2 previous runs (flapping included); a crash-loop (>= 2 restarts within
-# BOT_ALERT_RESTART_WINDOW_MIN, 30) joins at once and stays while a restart is still in the
-# window; when 3 of the last 4 runs fail with rotating checks, an `unstable` entry joins. A check
-# leaves only after 2 consecutive clean runs; "tiklandi" when the set becomes empty.
+# BOT_ALERT_RESTART_WINDOW_MIN, 30, dated by State.StartedAt, + one cron interval of slack)
+# joins at once and stays while a restart is still in the window; when 3 of the last 4 runs
+# fail with >= 3 different not-yet-alerted checks (or all 4 fail), an `unstable` entry joins.
+# A check leaves only after 2 consecutive clean runs (4 when the incident started within
+# BOT_ALERT_FLAP_WINDOW_MIN, 60, of the previous "tiklandi"); "tiklandi" only when nothing is
+# alerted AND the last 2 (4) runs were fully clean — otherwise the incident is held silently.
 #
 # Sends (only what is configured; nothing configured = log line only). The channel does
 # NOT depend on the main bot: if the bot token is broken the alert must still arrive.
@@ -29,8 +32,9 @@
 #   Telegram  BOT_ALERT_TELEGRAM_CHAT_ID + BOT_ALERT_TELEGRAM_BOT_TOKEN — a SEPARATE bot;
 #             refused when it equals the main TELEGRAM_BOT_TOKEN
 #   Heartbeat BOT_ALERT_HEARTBEAT_URL — GET on every healthy run, GET <url>/fail on a problem
-# De-duplicated by check codes (not by free text): a message on OK->PROBLEM, when the set
-# of failing checks changes, every BOT_ALERT_REPEAT_HOURS (6) while it lasts, and one
+# De-duplicated by check codes (not by free text): a message on OK->PROBLEM, when a check
+# not yet alerted in this incident joins (ns_restart and ns_unhealthy count as one),
+# every BOT_ALERT_REPEAT_HOURS (6) while it lasts, and one
 # "tiklandi" on recovery. If no channel accepted the message the state is NOT advanced,
 # so the next run retries. Secrets never reach argv/ps or the log (curl -K -).
 #
@@ -101,8 +105,14 @@ cfg() {
   esac
   printf '%s' "$v"
 }
-# Decimal integer or the default ("08" is 8, not an octal error under set -u).
-num() { case "$1" in '' | *[!0-9]*) printf '%s' "$2" ;; *) printf '%s' "$((10#$1))" ;; esac; }
+# Decimal integer or the default ("08" is 8, not an octal error under set -u). More than 15
+# digits is capped (bash arithmetic would wrap to a negative number).
+num() {
+  case "$1" in
+    '' | *[!0-9]*) printf '%s' "$2" ;;
+    *) if [ "${#1}" -gt 15 ]; then printf '999999999999999'; else printf '%s' "$((10#$1))"; fi ;;
+  esac
+}
 lower() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
 
 HOST_LABEL="${BOT_ALERT_HOST_LABEL:-$(cfg BOT_ALERT_HOST_LABEL)}"
@@ -110,7 +120,24 @@ HOST_LABEL="${HOST_LABEL:-$(hostname 2>/dev/null || echo server)}"
 TG_API="${BOT_ALERT_TELEGRAM_API:-$(cfg BOT_ALERT_TELEGRAM_API)}"
 TG_API="${TG_API:-https://api.telegram.org}"
 CMD_TIMEOUT="$(num "${BOT_ALERT_CMD_TIMEOUT:-$(cfg BOT_ALERT_CMD_TIMEOUT)}" 30)"
-RESTART_WINDOW_S=$(($(num "$(cfg BOT_ALERT_RESTART_WINDOW_MIN)" 30) * 60))
+RESTART_WINDOW_MIN="$(num "$(cfg BOT_ALERT_RESTART_WINDOW_MIN)" 30)"
+if [ "$RESTART_WINDOW_MIN" -eq 0 ] || [ "$RESTART_WINDOW_MIN" -gt 10080 ]; then
+  # 0 would silently disable crash-loop detection; a huge value overflows the arithmetic.
+  log "WARN: BOT_ALERT_RESTART_WINDOW_MIN=$RESTART_WINDOW_MIN rad etildi (1..10080) — 30 ishlatiladi"
+  RESTART_WINDOW_MIN=30
+fi
+RESTART_WINDOW_S=$((RESTART_WINDOW_MIN * 60))
+# One cron interval: a restart is dated by StartedAt but seen only on the next run, so a loop
+# with a period equal to the window is still caught.
+CRON_SLACK_S=300
+FLAP_WINDOW_MIN="$(num "$(cfg BOT_ALERT_FLAP_WINDOW_MIN)" 60)"
+if [ "$FLAP_WINDOW_MIN" -lt 10 ] || [ "$FLAP_WINDOW_MIN" -gt 10080 ]; then
+  # < 10 would silently disable the flapping protection (one cron interval is 5 min); a
+  # huge value overflows the arithmetic.
+  log "WARN: BOT_ALERT_FLAP_WINDOW_MIN=$FLAP_WINDOW_MIN rad etildi (10..10080) — 60 ishlatiladi"
+  FLAP_WINDOW_MIN=60
+fi
+FLAP_WINDOW_S=$((FLAP_WINDOW_MIN * 60))
 
 PENDING_UPDATES_MAX="$(num "$(cfg BOT_ALERT_PENDING_UPDATES_MAX)" 100)"
 WEBHOOK_ERROR_MIN="$(num "$(cfg BOT_ALERT_WEBHOOK_ERROR_MIN)" 15)"
@@ -248,6 +275,9 @@ fi
 # d) notification-service container: exactly one (this compose project, not a one-off run)
 NS_ID="$(cfg BOT_ALERT_NS_CONTAINER)"
 NS_RESTARTS=""
+NS_PS_FAILED=false
+started_s=0
+ns_status=""
 if [ -z "$NS_ID" ]; then
   project="$(cfg BOT_ALERT_COMPOSE_PROJECT)"
   [ -n "$project" ] || project="$(cfg COMPOSE_PROJECT_NAME)"
@@ -264,6 +294,7 @@ if [ -z "$NS_ID" ]; then
     fi
   else
     problem ns_unchecked "notification-service: tekshirib bo'lmadi (docker javob bermadi)"
+    NS_PS_FAILED=true
   fi
 fi
 if [ -n "$NS_ID" ]; then
@@ -302,6 +333,13 @@ fi
 # ---- previous state ------------------------------------------------------------
 sget() { [ -f "$STATE" ] && sed -n "s/^$1=//p" "$STATE" | head -n 1; }
 has() { case ",$1," in *",$2,"*) return 0 ;; *) return 1 ;; esac; }
+# CSV $1 without the codes listed in CSV $2.
+minus() {
+  local out="" c
+  for c in ${1//,/ }; do has "$2" "$c" || out="${out:+$out,}$c"; done
+  printf '%s' "$out"
+}
+csv_sort() { tr ',' '\n' | grep . | sort -u | tr '\n' ',' | sed 's/,$//'; }
 PREV="$(sget state)"
 PREV_SIG="$(sget sig)"
 LAST_SENT="$(num "$(sget last_sent)" "")"
@@ -309,17 +347,40 @@ SINCE="$(sget since)"
 PREV_NS_ID="$(sget ns_id)"
 PREV_NS_RESTARTS="$(num "$(sget ns_restarts)" "")"
 RESTART_TIMES="$(sget restart_times)"
+PREV_ALERTED="$(sget alerted)"
+PREV_FLAP="$(sget flap)"
+PREV_RECOVERED_AT="$(num "$(sget recovered_at)" "")"
 
-# Crash-loop: RestartCount increases of the same container inside the window.
-if [ -n "$NS_RESTARTS" ] && [ "$NS_ID" = "$PREV_NS_ID" ] &&
-  [ -n "$PREV_NS_RESTARTS" ] && [ "$(num "$NS_RESTARTS" 0)" -gt "$PREV_NS_RESTARTS" ]; then
-  RESTART_TIMES="${RESTART_TIMES:+$RESTART_TIMES,}$NOW"
+# docker ps failed: nothing is known about the container on this run — carry the last
+# known id / RestartCount / restart times forward (a single ps error must not wipe an
+# ongoing crash-loop).
+if [ "$NS_PS_FAILED" = true ]; then
+  NS_ID="$PREV_NS_ID"
+  NS_RESTARTS="$PREV_NS_RESTARTS"
+fi
+
+# Crash-loop: RestartCount increases of the same container, dated by State.StartedAt
+# (when the restart happened, not when this run saw it).
+if [ -n "$NS_RESTARTS" ] && [ "$NS_ID" = "$PREV_NS_ID" ] && [ -n "$PREV_NS_RESTARTS" ]; then
+  grown=$(($(num "$NS_RESTARTS" 0) - PREV_NS_RESTARTS))
+  if [ "$grown" -gt 0 ]; then
+    # Running: StartedAt is this restart. Not running (restarting/exited): StartedAt is the
+    # previous start — the restart is happening now.
+    t_restart="$NOW"
+    [ "$ns_status" = running ] && [ "$started_s" -gt 0 ] && [ "$started_s" -le "$NOW" ] &&
+      t_restart="$started_s"
+    [ "$grown" -gt 3 ] && grown=3
+    while [ "$grown" -gt 0 ]; do
+      RESTART_TIMES="${RESTART_TIMES:+$RESTART_TIMES,}$t_restart"
+      grown=$((grown - 1))
+    done
+  fi
 fi
 [ "$NS_ID" = "$PREV_NS_ID" ] || RESTART_TIMES=""
 kept=""
 for t in ${RESTART_TIMES//,/ }; do
   t="$(num "$t" 0)"
-  [ $((NOW - t)) -lt "$RESTART_WINDOW_S" ] && kept="${kept:+$kept,}$t"
+  [ $((NOW - t)) -lt $((RESTART_WINDOW_S + CRON_SLACK_S)) ] && kept="${kept:+$kept,}$t"
 done
 RESTART_TIMES="$kept"
 restarts_in_window="$(printf '%s' "$RESTART_TIMES" | tr ',' '\n' | grep -c . || true)"
@@ -330,51 +391,112 @@ if [ "$restarts_in_window" -ge 2 ] || { has "$PREV_SIG" ns_restart && [ "$restar
 fi
 
 RAW="$(printf '%s\n' "${CODES[@]:-}" | grep . | sort -u | tr '\n' ',' | sed 's/,$//')"
+LEGACY_HOLD=false
 if [ -f "$STATE" ] && ! grep -q '^raw=' "$STATE"; then
-  # State written by an older version (no raw=, sig was a hash): adopt the current
-  # checks as history and as the alerted set — no false "tiklandi", no duplicate alert.
-  R1="$RAW"
-  R2="$RAW"
+  # State written by an older version (no raw=, sig was a hash): no history.
+  #  - was ok: start clean (a blip on the upgrade run is not confirmed yet);
+  #  - was problem with failing checks now: adopt them as history and as the alerted set
+  #    (no duplicate alert, no false "tiklandi");
+  #  - was problem, clean now: hold — "tiklandi" after the 2nd clean run.
+  R1=""
+  R2=""
   R3=""
-  [ "$PREV" = problem ] && PREV_SIG="${RAW:-ok}"
+  if [ "$PREV" = problem ]; then
+    if [ -n "$RAW" ]; then
+      R1="$RAW"
+      R2="$RAW"
+      PREV_SIG="$RAW"
+    else
+      PREV_SIG=ok
+      LEGACY_HOLD=true
+    fi
+  fi
 else
   R1="$(sget raw)"
   R2="$(sget raw2)"
   R3="$(sget raw3)"
 fi
+# Codes already alerted in this incident (state from before alerted= existed: the sig).
+if [ "$PREV" = problem ]; then
+  if [ -f "$STATE" ] && grep -q '^alerted=' "$STATE"; then
+    ALERTED="$PREV_ALERTED"
+  else
+    ALERTED="$(minus "$PREV_SIG" ok)"
+  fi
+else
+  ALERTED=""
+fi
+# Flapping incident (started soon after the previous "tiklandi"): leave/recover needs 4
+# clean runs instead of 2.
+FLAP=""
+[ "$PREV" = problem ] && FLAP="$PREV_FLAP"
+
+# A code is "recent" while it failed within the leave window (this + previous run; with
+# FLAP the last 4 runs).
+recent() {
+  has "$RAW" "$1" || has "$R1" "$1" ||
+    { [ "$FLAP" = 1 ] && { has "$R2" "$1" || has "$R3" "$1"; }; }
+}
+recent_any() {
+  [ -n "$RAW" ] || [ -n "$R1" ] || { [ "$FLAP" = 1 ] && { [ -n "$R2" ] || [ -n "$R3" ]; }; }
+}
 
 # ACTIVE (= the alerted set, SIG) is sticky per check code:
 #  - a code JOINS when it fails now and failed on one of the 2 previous runs
 #    (debounce; catches flapping), ns_restart joins at once;
-#  - when nothing is alerted yet but the last 4 runs are mostly failing (>= 3 non-empty)
-#    with rotating checks (A, B, C), one `unstable` entry joins (listing them) and stays
-#    until 2 consecutive fully clean runs — rotation does not re-alert;
-#  - a code LEAVES only after it was absent on 2 consecutive runs (this one and the
-#    previous) — ns_restart: while the window still holds a restart.
-nonempty=0
-for r in "$RAW" "$R1" "$R2" "$R3"; do [ -n "$r" ] && nonempty=$((nonempty + 1)); done
-UNION="$(printf '%s,%s,%s,%s' "$RAW" "$R1" "$R2" "$R3" | tr ',' '\n' | grep . | sort -u | tr '\n' ',' | sed 's/,$//')"
+#  - when nothing is alerted but the last 4 runs keep failing with rotating checks (>= 3
+#    runs with >= 3 different checks, or all 4 runs) one `unstable` entry joins (listing
+#    them) and stays until the runs are fully clean — rotation does not re-alert. Codes of
+#    this incident are not counted (a recovery tail is not "unstable");
+#  - a code LEAVES only when it is no longer recent — ns_restart: while the window still
+#    holds a restart.
 ACTIVE=()
 add_active() { has "$(IFS=,; echo "${ACTIVE[*]:-}")" "$1" || ACTIVE+=("$1"); }
 for c in ${PREV_SIG//,/ }; do
   [ "$c" = ok ] && continue
   if [ "$c" = unstable ]; then
-    # Rotating failures: stays until 2 consecutive fully clean runs.
-    if [ -n "$RAW" ] || [ -n "$R1" ]; then add_active unstable; fi
-  elif has "$RAW" "$c" || has "$R1" "$c"; then
+    recent_any && add_active unstable
+  elif recent "$c" && has "$ALERTED" "$c" && { has "$R1" "$c" || has "$R2" "$c" || has "$R3" "$c"; }; then
+    # Not sticky any more when it failed now after >= 3 clean runs, or when it already left
+    # ALERTED (HOLD keeps a long-clean code in SIG for display only): its next failure goes
+    # through the join rule (debounce) below and is a new alert.
     add_active "$c"
   fi
 done
 for c in ${RAW//,/ }; do
   if [ "$c" = ns_restart ] || has "$R1" "$c" || has "$R2" "$c"; then add_active "$c"; fi
 done
-if [ "${#ACTIVE[@]}" -eq 0 ] && [ "$nonempty" -ge 3 ]; then
+SEEN="$PREV_SIG,$ALERTED"
+U0="$(minus "$RAW" "$SEEN")"
+U1="$(minus "$R1" "$SEEN")"
+U2="$(minus "$R2" "$SEEN")"
+U3="$(minus "$R3" "$SEEN")"
+nonempty=0
+for r in "$U0" "$U1" "$U2" "$U3"; do [ -n "$r" ] && nonempty=$((nonempty + 1)); done
+UNION="$(printf '%s,%s,%s,%s' "$U0" "$U1" "$U2" "$U3" | csv_sort)"
+distinct="$(printf '%s' "$UNION" | tr ',' '\n' | grep -c . || true)"
+if [ "${#ACTIVE[@]}" -eq 0 ] &&
+  { [ "$nonempty" -eq 4 ] || { [ "$nonempty" -ge 3 ] && [ "$distinct" -ge 3 ]; }; }; then
   add_active unstable
+fi
+
+# Nothing alerted any more, but checks still fail (not confirmed yet): no false
+# "tiklandi" — hold the incident silently with the previous set.
+HOLD=false
+# The decision uses the 2-run rule even in FLAP mode: the alerted codes have already left
+# under the 4-run rule, so a rare unconfirmed blip must not keep the incident open for hours.
+if [ "${#ACTIVE[@]}" -eq 0 ] && [ "$PREV" = problem ] &&
+  { [ -n "$RAW" ] || [ -n "$R1" ] || [ "$LEGACY_HOLD" = true ]; }; then
+  HOLD=true
+  for c in ${PREV_SIG//,/ }; do [ "$c" = ok ] || add_active "$c"; done
 fi
 
 if [ "${#ACTIVE[@]}" -gt 0 ]; then
   CUR=problem
   SIG="$(printf '%s\n' "${ACTIVE[@]}" | sort -u | tr '\n' ',' | sed 's/,$//')"
+elif [ "$HOLD" = true ]; then
+  CUR=problem
+  SIG="${PREV_SIG:-ok}"
 else
   CUR=ok
   SIG=ok
@@ -389,27 +511,79 @@ for c in "${ACTIVE[@]:-}"; do
   [ -n "$c" ] || continue
   line=""
   for i in "${!CODES[@]}"; do [ "${CODES[$i]}" = "$c" ] && line="${TEXTS[$i]}"; done
-  [ "$c" = unstable ] && line="Bir nechta tekshiruv navbatma-navbat yiqilmoqda (so'nggi 4 yugurish): $UNION"
+  [ "$c" = unstable ] && line="Bir nechta tekshiruv navbatma-navbat yiqilmoqda (so'nggi 4 yugurish): ${UNION:-$(printf '%s,%s,%s,%s' "$RAW" "$R1" "$R2" "$R3" | csv_sort)}"
+  if [ -z "$line" ] && [ "$HOLD" = true ]; then
+    line="$c: tiklangan, boshqa tekshiruvlar hali beqaror"
+  fi
   [ -n "$line" ] || line="$c: oxirgi tekshiruvda o'tdi, lekin hali barqaror emas"
   CONF_TEXTS+=("$line")
 done
+[ "$HOLD" = true ] && [ -n "$RAW" ] && CONF_TEXTS+=("Hali tasdiqlanmagan: $RAW")
 
-# New codes (not alerted before) → message now; only removals → wait for full recovery.
+# New codes (not alerted in this incident) → message now; ns_restart and ns_unhealthy
+# are one root cause (a crash-looping container is also unhealthy). Only removals →
+# wait for full recovery.
+# A check that has been clean for 4 runs leaves ALERTED (its next failure is a new problem
+# even if the incident stayed open because of other checks / HOLD / FLAP); `unstable`
+# leaves ALERTED when it leaves the alerted set.
+prune_alerted() {
+  local c kept=""
+  for c in ${ALERTED//,/ }; do
+    if [ "$c" = unstable ]; then
+      has "$SIG" unstable || continue
+    elif ! has "$RAW" "$c" && ! has "$R1" "$c" && ! has "$R2" "$c" && ! has "$R3" "$c"; then
+      continue
+    fi
+    kept="${kept:+$kept,}$c"
+  done
+  ALERTED="$kept"
+}
+prune_alerted
+is_new() {
+  has "$ALERTED" "$1" && return 1
+  case "$1" in
+    ns_restart) has "$ALERTED" ns_unhealthy && return 1 ;;
+    ns_unhealthy) has "$ALERTED" ns_restart && return 1 ;;
+  esac
+  return 0
+}
 NEW_CODES=""
 for c in "${ACTIVE[@]:-}"; do
-  [ -n "$c" ] && ! has "$PREV_SIG" "$c" && NEW_CODES="${NEW_CODES:+$NEW_CODES,}$c"
+  [ -n "$c" ] && is_new "$c" && NEW_CODES="${NEW_CODES:+$NEW_CODES,}$c"
 done
 
+repeat_due() { [ -z "$LAST_SENT" ] || [ $((NOW - LAST_SENT)) -ge $((REPEAT_H * 3600)) ]; }
 SEND=""
 if [ "$MODE" = test ]; then
   SEND=test
+elif [ "$HOLD" = true ]; then
+  # Held incident: only the periodic reminder (nothing new is confirmed).
+  [ "${#CONF_TEXTS[@]}" -gt 0 ] && [ -n "$LAST_SENT" ] && repeat_due && SEND=problem
 elif [ "$CUR" = problem ]; then
-  if [ "$PREV" != problem ] || [ -n "$NEW_CODES" ] ||
-    [ -z "$LAST_SENT" ] || [ $((NOW - LAST_SENT)) -ge $((REPEAT_H * 3600)) ]; then
+  if [ "$PREV" != problem ] || [ -n "$NEW_CODES" ] || repeat_due; then
     SEND=problem
   fi
 elif [ "$PREV" = problem ]; then
   SEND=recovered
+fi
+
+# Incident bookkeeping for the next run (ALERTED_IN/FLAP_IN: restored when no channel
+# accepted the message).
+ALERTED_IN="$ALERTED"
+FLAP_IN="$FLAP"
+if [ "$CUR" = problem ]; then
+  # HOLD only re-shows the previous set: it must not re-arm codes that already left ALERTED.
+  [ "$HOLD" = true ] || ALERTED="$(printf '%s,%s' "$ALERTED" "$(minus "$SIG" ok)" | csv_sort)"
+  if [ "$PREV" != problem ]; then
+    FLAP=""
+    [ -n "$PREV_RECOVERED_AT" ] && [ $((NOW - PREV_RECOVERED_AT)) -lt "$FLAP_WINDOW_S" ] && FLAP=1
+  fi
+  RECOVERED_AT="$PREV_RECOVERED_AT"
+else
+  ALERTED=""
+  FLAP=""
+  RECOVERED_AT="$PREV_RECOVERED_AT"
+  [ "$PREV" = problem ] && RECOVERED_AT="$NOW"
 fi
 
 case "$SEND" in
@@ -500,6 +674,9 @@ if [ -n "$SEND" ] && [ "$sent_any" != true ] && [ -n "$(cfg BOT_ALERT_WEBHOOK_UR
   SIG="${PREV_SIG:-ok}"
   LAST_SENT="$(num "$(sget last_sent)" "")"
   SINCE="$(sget since)"
+  ALERTED="$ALERTED_IN"
+  FLAP="$FLAP_IN"
+  RECOVERED_AT="$PREV_RECOVERED_AT"
 fi
 
 {
@@ -514,6 +691,9 @@ fi
   echo "ns_id=$NS_ID"
   echo "ns_restarts=$NS_RESTARTS"
   echo "restart_times=$RESTART_TIMES"
+  echo "alerted=$ALERTED"
+  echo "flap=$FLAP"
+  echo "recovered_at=${RECOVERED_AT:-}"
 } > "$STATE.tmp" && mv -f "$STATE.tmp" "$STATE"
 
 tail -n 2000 "$LOG" > "$LOG.tmp" 2>/dev/null && mv -f "$LOG.tmp" "$LOG"
