@@ -360,6 +360,12 @@ export const ACTIVITY_ACTION_REGISTRY: Readonly<
     'amber',
   ),
   'branch.post_dispatch': entry("Pochta jo'natildi", 'branch', 'send', 'blue'),
+  'branch.post_reassign': entry(
+    "Pochta boshqa filialga o'tkazildi",
+    'branch',
+    'swap',
+    'amber',
+  ),
   'branch.config_set': entry(
     "Filial sozlamasi o'zgardi",
     'branch',
@@ -381,6 +387,12 @@ export const ACTIVITY_ACTION_REGISTRY: Readonly<
   ),
 
   // ---- logistika ----
+  'logistics.post_reassign_branch': entry(
+    'Pochta filiali almashtirildi',
+    'logistics',
+    'swap',
+    'amber',
+  ),
   'logistics.post_assign_orders': entry(
     'Pochtaga buyurtmalar biriktirildi',
     'logistics',
