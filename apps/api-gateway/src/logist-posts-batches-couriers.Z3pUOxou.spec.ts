@@ -80,14 +80,17 @@ function logistRoutes(controller: { prototype: object }) {
 }
 
 describe('Z3pUOxou — @Roles: faqat o‘qish yo‘llari', () => {
-  it('Logistics: GET /post, /post/:id, /post/orders/:id (+ region stats); yozish yo‘q', () => {
+  it('Logistics: GET /post, /post/:id, /post/orders/:id, /post/:id/orders.xlsx, /post/:id/receipt (+ region stats); yozish yo‘q', () => {
     const routes = logistRoutes(LogisticsGatewayController);
     expect(routes.map((r) => r.name).sort()).toEqual(
       [
+        // Eski pochtalar (ega qarori 3): Excel va chek — pulsiz, o'qish.
+        'exportPostOrdersXlsx',
         'getAllPosts',
         'getAllRegionStats',
         'getOrdersByPost',
         'getPostById',
+        'getPostReceipt',
         'getRegionStatsById',
       ].sort(),
     );

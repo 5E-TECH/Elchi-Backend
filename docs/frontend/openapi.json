@@ -6692,6 +6692,19 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "view",
+            "required": false,
+            "in": "query",
+            "description": "Eski pochtalar: `all` — pochtaga HAR QACHON kirgan buyurtmalar (har qatorda `in_post_now`, `membership {joined_at, left_at, next_post_id} | null`, `current_post_id`), `current` — faqat hozir pochtadagilar. Berilmasa: qabul qilingan (received / canceled_received) pochta — `all`, qolganlari — `current`. Boshqa qiymat — 400.",
+            "schema": {
+              "enum": [
+                "current",
+                "all"
+              ],
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -6705,6 +6718,98 @@
           }
         ],
         "summary": "Get all orders by post id",
+        "tags": [
+          "Logistics"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "branch",
+          "manager",
+          "registrator",
+          "courier",
+          "logist"
+        ]
+      }
+    },
+    "/post/{id}/orders.xlsx": {
+      "get": {
+        "description": "Eski pochtalar: ro'yxat `GET /post/orders/:id?view=all` bilan bir xil (doira ham: filial xodimi — o'z filiali pochtasi yoki o'zi yuborgan pochta, kuryer — faqat o'z pochtasi, logist — o'z viloyati; boshqasi 403). Ustunlar `GET /orders/export/excel` bilan bir xil + «Pochtaga kirgan», «Pochtadan chiqqan», «Hozir pochtada» (ha/yo'q), «Hozirgi holat». Oxirida «Jami» qatori. LOGIST — «Narxi» ustuni va jami summa yo'q. Fayl: `pochta-<id>-<YYYY-MM-DD>.xlsx`. Tarix olinmasa faylda DIQQAT qatori.",
+        "operationId": "LogisticsGatewayController_exportPostOrdersXlsx",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Post ID (id)",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Pochta buyurtmalari Excel (.xlsx) — pochtaga har qachon kirganlar",
+        "tags": [
+          "Logistics"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "branch",
+          "manager",
+          "registrator",
+          "courier",
+          "logist"
+        ]
+      }
+    },
+    "/post/{id}/receipt": {
+      "get": {
+        "description": "Ega qarori 2: «Yorliq» — POCHTA CHEKI (bitta buyurtma yorlig'i emas): pochta QR'i (`qr_code_token`), kuryer (ism, telefon), viloyat, «Qayerdan» filial, sana, soni, jami summa va buyurtmalar ro'yxati (EL raqam, mijoz, telefon, manzil/tuman, summa, holat, hozir pochtada). Ro'yxat va doira `GET /post/orders/:id?view=all` bilan bir xil. LOGIST — summa ustuni va jami summa yo'q. `format`: `80mm` (sukut, termal lenta) yoki `a4`; boshqa qiymat — 400.",
+        "operationId": "LogisticsGatewayController_getPostReceipt",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Post ID (id)",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "format",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "enum": [
+                "80mm",
+                "a4"
+              ],
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "text/html; charset=utf-8"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Pochta cheki (HTML, chop etish uchun)",
         "tags": [
           "Logistics"
         ],

@@ -44,7 +44,7 @@ export const ORDER_EXPORT_HEADERS = {
   truncated: 'X-Export-Truncated',
 } as const;
 
-const XLSX_CONTENT_TYPE =
+export const XLSX_CONTENT_TYPE =
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 
 /**
@@ -306,7 +306,7 @@ export function toOrderExportRow(order: Obj, index: number): Obj {
   };
 }
 
-const formatCount = (n: number) =>
+export const formatCount = (n: number) =>
   String(Math.trunc(n)).replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
 
 export const orderExportFileName = (now: Date = new Date()) =>

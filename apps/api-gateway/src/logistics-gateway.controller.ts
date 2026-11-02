@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Delete,
@@ -14,10 +15,12 @@ import {
   Post,
   Query,
   Req,
+  Res,
   ServiceUnavailableException,
   UseGuards,
 } from '@nestjs/common';
 import { ClientProxy } from '@nestjs/microservices';
+import type { Response } from 'express';
 import { formatOrderNumber, Roles as RoleEnum } from '@app/common';
 import { firstValueFrom, map, switchMap, TimeoutError, timeout } from 'rxjs';
 import {
@@ -43,7 +46,14 @@ import {
   ProblemContactsService,
   attachProblemContacts,
 } from './contacts/problem-contacts.service';
-import { projectLogistPayload } from './auth/logist-scope';
+import { isLogistRequester, projectLogistPayload } from './auth/logist-scope';
+import { writePostOrdersXlsx } from './order-export/post-orders-xlsx.export';
+import {
+  POST_RECEIPT_FORMATS,
+  renderPostReceiptHtml,
+  type PostReceiptFormat,
+  type PostReceiptPost,
+} from './printer/printer.util';
 import {
   AssignRegionLogistRequestDto,
   BulkAssignRegionLogistRequestDto,
@@ -173,6 +183,83 @@ function pickPostOrderDistrict(value: unknown) {
 /** CODE-12 — o'chirilgan eski pochta route'lari (PATCH post/:id, post/reassign/:id). */
 export const LEGACY_POST_ROUTE_DISABLED_MESSAGE =
   "Bu eski pochta amali o'chirilgan (buyurtma custody'sini tekshiruvsiz o'zgartirardi). Pochtani filialga POST /branches/posts/:postId/dispatch, kuryerga esa POST /orders/assign-to-courier yoki skan orqali bering";
+
+/**
+ * Eski pochtalar — `GET /post/orders/:id?view=`: `all` — pochtaga HAR QACHON
+ * kirgan buyurtmalar, `current` — faqat hozirgilari. Berilmasa logistics
+ * pochta holatidan tanlaydi (qabul qilingan — `all`).
+ */
+export const POST_ORDERS_VIEWS = ['current', 'all'] as const;
+export type PostOrdersView = (typeof POST_ORDERS_VIEWS)[number];
+
+/** Bo'sh — `undefined` (logistics sukuti); noma'lum qiymat — 400. */
+export function parsePostOrdersView(raw: unknown): PostOrdersView | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  // Takroriy `?view=a&view=b` (massiv) — 400.
+  const value = typeof raw === 'string' ? raw.trim().toLowerCase() : null;
+  if (value === '') return undefined;
+  if (value && (POST_ORDERS_VIEWS as readonly string[]).includes(value)) {
+    return value as PostOrdersView;
+  }
+  throw new BadRequestException(
+    "view faqat 'current' yoki 'all' bo'lishi mumkin",
+  );
+}
+
+/** `GET /post/:id/receipt?format=` — bo'sh: 80mm; noma'lum qiymat — 400. */
+export function parsePostReceiptFormat(raw: unknown): PostReceiptFormat {
+  if (raw === undefined || raw === null) return '80mm';
+  const value = typeof raw === 'string' ? raw.trim().toLowerCase() : null;
+  if (value === '') return '80mm';
+  if (value && (POST_RECEIPT_FORMATS as readonly string[]).includes(value)) {
+    return value as PostReceiptFormat;
+  }
+  throw new BadRequestException(
+    "format faqat '80mm' yoki 'a4' bo'lishi mumkin",
+  );
+}
+
+/**
+ * Eski pochta Excel / cheki: logistics `all` ko'rinishi (tarix + sobiq
+ * a'zolarni `order.find_all` bilan olish) GET /post/orders/:id dan og'irroq.
+ * GET /post/orders/:id ham `view` `current` bo'lmasa (qabul qilingan pochta
+ * sukuti `all`) shu chegarani oladi: logistics order-service'ga ketma-ket
+ * ikki marta boradi va 8 s da `history_incomplete` zaxirasiga yetmaydi.
+ */
+export const POST_EXPORT_TIMEOUT_MS = 15000;
+
+/**
+ * Sof kuryer — COURIER va xodim rollaridan (logistics COURIER_STAFF_ROLES)
+ * birortasi yo'q. Ega qarori 3: Excel / chek — faqat o'z pochtasi.
+ */
+const POST_EXPORT_COURIER_STAFF_ROLES: readonly string[] = [
+  RoleEnum.SUPERADMIN,
+  RoleEnum.ADMIN,
+  RoleEnum.BRANCH,
+  RoleEnum.MANAGER,
+  RoleEnum.REGISTRATOR,
+];
+
+export function isPureCourierRequester(roles?: readonly unknown[]): boolean {
+  const normalized = (roles ?? []).map((role) =>
+    typeof role === 'string' ? role.trim().toLowerCase() : '',
+  );
+  return (
+    normalized.includes(RoleEnum.COURIER) &&
+    !normalized.some((role) => POST_EXPORT_COURIER_STAFF_ROLES.includes(role))
+  );
+}
+
+/** logistics.post.orders_by_post (`view: 'all'`) javobi — Excel / chek uchun. */
+interface PostOrdersExportResponse {
+  data?: {
+    allOrdersByPostId?: OrderRowForEnrichment[];
+    post?: Record<string, unknown> | null;
+    history_incomplete?: boolean;
+    [key: string]: unknown;
+  };
+  [key: string]: unknown;
+}
 
 /** logistics.post.return_requests javobi: kuryer bo'yicha guruhlangan qatorlar. */
 interface ReturnRequestsResponse {
@@ -925,7 +1012,21 @@ export class LogisticsGatewayController {
       "`data.post` — pochta meta'si: `id`, `status`, `courier_id`, `courier`, `qr_code_token`, `order_quantity`, `branch_id`, `region_id`, `region`, `createdAt` va T9 `branch: {id, name} | null` — «Qayerdan» (pochtani JO'NATGAN filial; `branch_id` emas — u ko'pincha manzil). " +
       "Kuryerli pochta (bekorlarni HQ'ga yuborgan menejer pochtasi ham) — shu foydalanuvchining filiali; kuryersiz yig'ilayotgan (new) — `branch_id` filiali, bo'lmasa HQ; kuryersiz o'tkazma (sent/received) — HQ; boshqa hollar yoki filial xizmati javob bermasa — null (chekda qator chiqmaydi).",
   })
-  getOrdersByPost(@Param('id') id: string, @Req() req: { user: JwtUser }) {
+  @ApiQuery({
+    name: 'view',
+    required: false,
+    enum: POST_ORDERS_VIEWS,
+    description:
+      'Eski pochtalar: `all` — pochtaga HAR QACHON kirgan buyurtmalar (har qatorda `in_post_now`, `membership {joined_at, left_at, next_post_id} | null`, `current_post_id`), `current` — faqat hozir pochtadagilar. Berilmasa: qabul qilingan (received / canceled_received) pochta — `all`, qolganlari — `current`. Boshqa qiymat — 400.',
+  })
+  getOrdersByPost(
+    @Param('id') id: string,
+    @Req() req: { user: JwtUser },
+    @Query('view') view?: string,
+  ) {
+    const postView = parsePostOrdersView(view);
+    // `all` (yoki sukut — qabul qilingan pochta) tarix bilan og'irroq.
+    const rpcTimeoutMs = postView === 'current' ? 8000 : POST_EXPORT_TIMEOUT_MS;
     return firstValueFrom(
       this.logisticsClient
         .send(
@@ -939,9 +1040,11 @@ export class LogisticsGatewayController {
             },
             // T9 (BE-2): detal — `data.post.branch` («Qayerdan»).
             with_sender_branch: true,
+            // Eski pochtalar: berilmasa logistics pochta holatidan tanlaydi.
+            ...(postView ? { view: postView } : {}),
           },
         )
-        .pipe(timeout(8000)),
+        .pipe(timeout(rpcTimeoutMs)),
     ).then(async (response) =>
       // kH2zZsz3: kuryer pochta buyurtmalari — market tarifi/filial ulushisiz
       // (GET /orders/:id bilan AYNI rol proyeksiyasi). T7: `problem_contacts`
@@ -954,6 +1057,173 @@ export class LogisticsGatewayController {
         ),
       ),
     );
+  }
+
+  /**
+   * Eski pochta Excel / cheki uchun ro'yxat: logistics `view: 'all'` —
+   * pochtaga HAR QACHON kirgan buyurtmalar. Doira GET /post/orders/:id bilan
+   * AYNI (so'rovchi uzatiladi: filial — o'z filiali / o'zi yuborgan pochta,
+   * kuryer — faqat o'z pochtasi, logist — o'z viloyati), boyitish va rol
+   * proyeksiyasi ham o'sha. LOGIST — `hideMoney` (pul ustunlari yo'q).
+   */
+  private async loadPostOrdersForExport(id: string, user: JwtUser) {
+    const response = await firstValueFrom(
+      this.logisticsClient
+        .send<PostOrdersExportResponse | null>(
+          { cmd: 'logistics.post.orders_by_post' },
+          {
+            id,
+            requester: {
+              id: user.sub,
+              roles: user.roles ?? [],
+              branch_id: user.branch_id ?? null,
+            },
+            // «Qayerdan» — chekdagi jo'natuvchi filial.
+            with_sender_branch: true,
+            view: 'all',
+          },
+        )
+        .pipe(timeout(POST_EXPORT_TIMEOUT_MS)),
+    ).catch((error: unknown) => {
+      if (error instanceof TimeoutError) {
+        throw new GatewayTimeoutException(
+          'Logistika xizmati vaqtida javob bermadi (timeout)',
+        );
+      }
+      throw error;
+    });
+    // Ega qarori 3: sof kuryer — faqat o'z pochtasi. Logistics kuryersiz
+    // pochtani (filial o'tkazmasi, kuryersiz qaytarish) kuryerga filial
+    // doirasi bo'yicha ochib qo'yadi — Excel / chek u yerda to'xtaydi.
+    if (isPureCourierRequester(user.roles)) {
+      const rawCourierId = response?.data?.post?.courier_id;
+      const postCourierId =
+        typeof rawCourierId === 'string' || typeof rawCourierId === 'number'
+          ? String(rawCourierId).trim()
+          : '';
+      if (!postCourierId || postCourierId !== String(user.sub ?? '').trim()) {
+        throw new ForbiddenException(
+          "Kuryer faqat o'z pochtasining ro'yxati va chekini yuklab oladi",
+        );
+      }
+    }
+    const projected = projectOrderPayloadForRoles(
+      user.roles,
+      await this.enrichOrdersByPostResponse(response ?? {}),
+    );
+    const data: NonNullable<PostOrdersExportResponse['data']> = projected.data;
+    const rawPost =
+      data.post && typeof data.post === 'object' && !Array.isArray(data.post)
+        ? data.post
+        : {};
+    const post = {
+      ...rawPost,
+      id:
+        typeof rawPost.id === 'string' || typeof rawPost.id === 'number'
+          ? String(rawPost.id)
+          : id,
+    } as PostReceiptPost;
+    const rows: Array<Record<string, unknown>> = Array.isArray(
+      data.allOrdersByPostId,
+    )
+      ? data.allOrdersByPostId
+      : [];
+    return {
+      post,
+      rows,
+      historyIncomplete: data.history_incomplete === true,
+      hideMoney: isLogistRequester(user.roles),
+    };
+  }
+
+  @Get('post/:id/orders.xlsx')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(
+    RoleEnum.SUPERADMIN,
+    RoleEnum.ADMIN,
+    RoleEnum.BRANCH,
+    RoleEnum.MANAGER,
+    RoleEnum.REGISTRATOR,
+    RoleEnum.COURIER,
+    // Ega qarori 3: logist — o'z viloyati pochtasi, pul ustunlarisiz.
+    RoleEnum.LOGIST,
+  )
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary:
+      'Pochta buyurtmalari Excel (.xlsx) — pochtaga har qachon kirganlar',
+    description:
+      "Eski pochtalar: ro'yxat `GET /post/orders/:id?view=all` bilan bir xil (doira ham: filial xodimi — o'z filiali pochtasi yoki o'zi yuborgan pochta, kuryer — faqat o'z pochtasi, logist — o'z viloyati; boshqasi 403). " +
+      "Ustunlar `GET /orders/export/excel` bilan bir xil + «Pochtaga kirgan», «Pochtadan chiqqan», «Hozir pochtada» (ha/yo'q), «Hozirgi holat». Oxirida «Jami» qatori. " +
+      "LOGIST — «Narxi» ustuni va jami summa yo'q. Fayl: `pochta-<id>-<YYYY-MM-DD>.xlsx`. Tarix olinmasa faylda DIQQAT qatori.",
+  })
+  @ApiParam({ name: 'id', description: 'Post ID (id)' })
+  @ApiOkResponse({
+    description:
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  })
+  async exportPostOrdersXlsx(
+    @Param('id', ParseBigintIdPipe) id: string,
+    @Req() req: { user: JwtUser },
+    @Res() res: Response,
+  ): Promise<void> {
+    const loaded = await this.loadPostOrdersForExport(id, req.user);
+    await writePostOrdersXlsx(res, {
+      postId: loaded.post.id,
+      rows: loaded.rows,
+      hideMoney: loaded.hideMoney,
+      historyIncomplete: loaded.historyIncomplete,
+      courierName:
+        typeof loaded.post.courier?.name === 'string'
+          ? loaded.post.courier.name
+          : undefined,
+    });
+  }
+
+  @Get('post/:id/receipt')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(
+    RoleEnum.SUPERADMIN,
+    RoleEnum.ADMIN,
+    RoleEnum.BRANCH,
+    RoleEnum.MANAGER,
+    RoleEnum.REGISTRATOR,
+    RoleEnum.COURIER,
+    // Ega qarori 3: logist — o'z viloyati pochtasi, summasiz.
+    RoleEnum.LOGIST,
+  )
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Pochta cheki (HTML, chop etish uchun)',
+    description:
+      "Ega qarori 2: «Yorliq» — POCHTA CHEKI (bitta buyurtma yorlig'i emas): pochta QR'i (`qr_code_token`), kuryer (ism, telefon), viloyat, «Qayerdan» filial, sana, soni, jami summa va buyurtmalar ro'yxati (EL raqam, mijoz, telefon, manzil/tuman, summa, holat, hozir pochtada). " +
+      "Ro'yxat va doira `GET /post/orders/:id?view=all` bilan bir xil. LOGIST — summa ustuni va jami summa yo'q. `format`: `80mm` (sukut, termal lenta) yoki `a4`; boshqa qiymat — 400.",
+  })
+  @ApiParam({ name: 'id', description: 'Post ID (id)' })
+  @ApiQuery({ name: 'format', required: false, enum: POST_RECEIPT_FORMATS })
+  @ApiOkResponse({ description: 'text/html; charset=utf-8' })
+  async getPostReceipt(
+    @Param('id', ParseBigintIdPipe) id: string,
+    @Req() req: { user: JwtUser },
+    @Res() res: Response,
+    @Query('format') format?: string,
+  ): Promise<void> {
+    const receiptFormat = parsePostReceiptFormat(format);
+    const loaded = await this.loadPostOrdersForExport(id, req.user);
+    const html = await renderPostReceiptHtml(
+      loaded.post,
+      loaded.rows,
+      receiptFormat,
+      {
+        hideMoney: loaded.hideMoney,
+        historyIncomplete: loaded.historyIncomplete,
+      },
+    );
+    res.set({
+      'Content-Type': 'text/html; charset=utf-8',
+      'Cache-Control': 'no-store',
+    });
+    res.end(html);
   }
 
   @Get('post/orders/rejected/:id')

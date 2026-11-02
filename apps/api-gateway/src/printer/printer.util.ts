@@ -10,6 +10,8 @@
  *                           (203 DPI). One page per order.
  *   - renderReceiptHtml() → A4 sheet, 2 × 6 = 12 receipts per page, auto-prints
  *                           in the browser.
+ *   - renderPostReceiptHtml() → pochta cheki (80 mm yoki A4): pochta QR'i va
+ *                           buyurtmalar ro'yxati (GET /post/:id/receipt).
  *
  * Input is the enriched row returned by order-service `order.print.find`, so
  * there is no DB access here.
@@ -17,9 +19,21 @@
 import * as fs from 'node:fs';
 import PDFDocument from 'pdfkit';
 import * as QRCode from 'qrcode';
-import { formatContactPhone, PROBLEM_CONTACTS_MAX } from '@app/common';
+import {
+  formatContactPhone,
+  formatOrderNumber,
+  PROBLEM_CONTACTS_MAX,
+} from '@app/common';
 import type { ProblemContact } from '@app/common';
 import { ELCHI_LOGO_PATHS, ELCHI_LOGO_VIEWBOX } from './elchi-logo';
+import {
+  formatTashkentDateTime,
+  orderExportStatusLabel,
+} from '../order-export/orders-xlsx.export';
+import {
+  isInPostNow,
+  postOrderLocationLabel,
+} from '../order-export/post-orders-xlsx.export';
 
 export interface PrintRow {
   id: string;
@@ -657,6 +671,268 @@ export async function renderReceiptHtml(rows: PrintRow[]): Promise<string> {
 </head>
 <body>
 ${pages.join('\n')}
+<script>window.onload=function(){window.print();}</script>
+</body>
+</html>`;
+}
+
+/** Pochta cheki formati: 80 mm termal lenta yoki A4 varaq. */
+export type PostReceiptFormat = '80mm' | 'a4';
+export const POST_RECEIPT_FORMATS: readonly PostReceiptFormat[] = [
+  '80mm',
+  'a4',
+];
+
+/**
+ * Pochta cheki sarlavhasi — logistics `logistics.post.orders_by_post`
+ * javobidagi `data.post` (`with_sender_branch: true` — `branch` «Qayerdan»).
+ */
+export interface PostReceiptPost {
+  id: string;
+  status?: string | null;
+  qr_code_token?: string | null;
+  courier?: { name?: string | null; phone_number?: string | null } | null;
+  region?: { name?: string | null } | null;
+  /** «Qayerdan» — pochtani jo'natgan filial. */
+  branch?: { name?: string | null } | null;
+  createdAt?: string | number | Date | null;
+}
+
+export interface PostReceiptOptions {
+  /** LOGIST — summa ustuni va «Jami summa» yo'q. */
+  hideMoney?: boolean;
+  /** logistics `history_incomplete` — chekda ogohlantirish qatori. */
+  historyIncomplete?: boolean;
+  now?: Date;
+}
+
+const POST_RECEIPT_STATUS_LABELS: Readonly<Record<string, string>> = {
+  new: 'Yangi',
+  sent: "Jo'natilgan",
+  received: 'Qabul qilingan',
+  canceled: "Qaytarish — jo'natilgan",
+  canceled_received: 'Qaytarish — qabul qilingan',
+};
+
+const receiptObj = (value: unknown): Record<string, unknown> =>
+  value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+
+const receiptText = (...values: unknown[]): string => {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim()) return value.trim();
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      return String(value);
+    }
+  }
+  return '';
+};
+
+/**
+ * Eski pochta CHEKI (`GET /post/:id/receipt`) — pochta QR'i (`qr_code_token`),
+ * kuryer, viloyat, «Qayerdan» filial, sana, soni, summa va buyurtmalar
+ * ro'yxati (EL raqam, mijoz, telefon, manzil/tuman, summa, holat, hozir
+ * pochtadami). Bitta buyurtma yorlig'i EMAS (ega qarori 2). Qatorlar —
+ * gateway boyitgan va rol proyeksiyasidan o'tgan `allOrdersByPostId`.
+ * Barcha matn HTML-escape qilinadi.
+ */
+export async function renderPostReceiptHtml(
+  post: PostReceiptPost,
+  rows: Array<Record<string, unknown>>,
+  format: PostReceiptFormat,
+  options: PostReceiptOptions = {},
+): Promise<string> {
+  const isA4 = format === 'a4';
+  const hideMoney = Boolean(options.hideMoney);
+  const postId = receiptText(post?.id);
+  const orders = Array.isArray(rows) ? rows : [];
+
+  const logoSvg = `<svg class="logo-svg" viewBox="0 0 ${ELCHI_LOGO_VIEWBOX.width} ${ELCHI_LOGO_VIEWBOX.height}" xmlns="http://www.w3.org/2000/svg">${ELCHI_LOGO_PATHS.map(
+    (p) => `<path d="${p.d}" fill="${p.fill}"/>`,
+  ).join('')}</svg>`;
+
+  const qrToken = receiptText(post?.qr_code_token);
+  let qrDataUrl = '';
+  if (qrToken) {
+    try {
+      qrDataUrl = await QRCode.toDataURL(qrToken, {
+        width: isA4 ? 180 : 220,
+        margin: 0,
+      });
+    } catch {
+      // QR yaratilmadi — cheksiz QR chiqadi
+    }
+  }
+
+  const courier = receiptObj(post?.courier);
+  const courierName = receiptText(courier.name);
+  const courierPhone = formatPhoneNumber(receiptText(courier.phone_number));
+  const regionName = formatRegionName(
+    receiptText(receiptObj(post?.region).name),
+  );
+  const branchName = receiptText(receiptObj(post?.branch).name);
+  const postDate = formatTashkentDateTime(post?.createdAt);
+  const statusRaw = receiptText(post?.status).toLowerCase();
+  const statusLabel = POST_RECEIPT_STATUS_LABELS[statusRaw] ?? statusRaw;
+
+  let sum = 0;
+  let inPostNowCount = 0;
+  const items = orders.map((order, index) => {
+    const customer = receiptObj(order.customer);
+    const district = receiptObj(order.district);
+    const customerDistrict = receiptObj(customer.district);
+    const inPostNow = isInPostNow(order);
+    if (inPostNow) inPostNowCount += 1;
+    const price = Number(order.total_price) || 0;
+    if (!hideMoney) sum += price;
+    const location = postOrderLocationLabel(order, postId);
+    return {
+      n: index + 1,
+      number:
+        receiptText(order.order_number) ||
+        formatOrderNumber(order.id) ||
+        receiptText(order.id),
+      customer: receiptText(customer.name),
+      phone: formatPhoneNumber(
+        receiptText(customer.phone_number, order.phone_number),
+      ),
+      address: [
+        receiptText(district.name, customerDistrict.name),
+        receiptText(order.address, customer.address),
+      ]
+        .filter(Boolean)
+        .join(', '),
+      price,
+      status: orderExportStatusLabel(order),
+      inPost: inPostNow ? 'ha' : `yo'q (${location})`,
+    };
+  });
+
+  const metaRows: Array<[string, string]> = [
+    ['Kuryer', [courierName, courierPhone].filter(Boolean).join(' · ') || '-'],
+    ['Viloyat', regionName || '-'],
+    ['Qayerdan', branchName || '-'],
+    ['Sana', postDate || '-'],
+    ...(statusLabel ? [['Holat', statusLabel] as [string, string]] : []),
+    [
+      'Buyurtmalar',
+      `${items.length} ta (hozir pochtada: ${inPostNowCount} ta)`,
+    ],
+    ...(hideMoney
+      ? []
+      : [['Jami summa', formatCurrency(sum)] as [string, string]]),
+  ];
+  const metaHtml = metaRows
+    .map(
+      ([label, value]) =>
+        `<tr><td class="m-lbl">${escapeHtml(label)}:</td><td class="m-val">${escapeHtml(value)}</td></tr>`,
+    )
+    .join('');
+
+  const warningHtml = options.historyIncomplete
+    ? `<div class="warn">DIQQAT: pochta tarixi to'liq olinmadi — ro'yxatda faqat hozir pochtadagi buyurtmalar bo'lishi mumkin.</div>`
+    : '';
+
+  let ordersHtml: string;
+  if (!items.length) {
+    ordersHtml = `<div class="empty">Buyurtmalar yo'q</div>`;
+  } else if (isA4) {
+    const head = [
+      '№',
+      'Buyurtma',
+      'Mijoz',
+      'Telefon',
+      'Manzil / tuman',
+      ...(hideMoney ? [] : ['Summa']),
+      'Holat',
+      'Hozir pochtada',
+    ]
+      .map((h) => `<th>${escapeHtml(h)}</th>`)
+      .join('');
+    const body = items
+      .map(
+        (item) =>
+          `<tr><td>${item.n}</td><td class="nowrap"><b>${escapeHtml(item.number)}</b></td><td>${escapeHtml(item.customer || '-')}</td><td class="nowrap">${escapeHtml(item.phone || '-')}</td><td>${escapeHtml(item.address || '-')}</td>${hideMoney ? '' : `<td class="num">${escapeHtml(formatCurrency(item.price))}</td>`}<td>${escapeHtml(item.status)}</td><td>${escapeHtml(item.inPost)}</td></tr>`,
+      )
+      .join('');
+    ordersHtml = `<table class="orders"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
+  } else {
+    ordersHtml = items
+      .map(
+        (item) =>
+          `<div class="o-item"><div class="o-top"><b>${item.n}. ${escapeHtml(item.number)}</b>${hideMoney ? '' : `<b class="o-price">${escapeHtml(formatCurrency(item.price))}</b>`}</div><div>${escapeHtml([item.customer, item.phone].filter(Boolean).join(' · ') || '-')}</div><div>${escapeHtml(item.address || '-')}</div><div class="o-state">${escapeHtml(item.status)} · hozir pochtada: ${escapeHtml(item.inPost)}</div></div>`,
+      )
+      .join('');
+  }
+
+  const printedAt = formatTashkentDateTime(options.now ?? new Date());
+  const pageCss = isA4
+    ? `@page{size:A4;margin:10mm}
+  body{font-size:11px}
+  .sheet{max-width:190mm;margin:0 auto}
+  .head{display:flex;gap:6mm;align-items:flex-start;border-bottom:1px solid #000;padding-bottom:3mm;margin-bottom:3mm}
+  .head-qr{text-align:center;flex-shrink:0}
+  .qr{width:34mm;height:34mm}
+  .head-info{flex:1;min-width:0}
+  .orders{width:100%;border-collapse:collapse;margin-top:2mm}
+  .orders th,.orders td{border:0.5px solid #555;padding:2px 4px;text-align:left;vertical-align:top}
+  .orders th{background:#f0f0f0}
+  .orders .num{text-align:right;white-space:nowrap}
+  .orders .nowrap{white-space:nowrap}`
+    : `@page{size:80mm auto;margin:0}
+  body{font-size:11px;width:72mm;margin:0 auto;padding:2mm 0}
+  .head{text-align:center;border-bottom:1px dashed #000;padding-bottom:2mm;margin-bottom:2mm}
+  .qr{width:40mm;height:40mm}
+  .head-info{text-align:left;margin-top:2mm}
+  .o-item{border-bottom:1px dashed #999;padding:1.5mm 0;word-break:break-word}
+  .o-top{display:flex;justify-content:space-between;gap:2mm}
+  .o-price{white-space:nowrap}
+  .o-state{font-size:10px;color:#333}`;
+
+  return `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Elchi - Pochta #${escapeHtml(postId)} cheki</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  html,body{background:#fff;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  body{font-family:'Segoe UI',Arial,sans-serif;color:#000}
+  .brand-row{display:flex;align-items:center;justify-content:center;gap:3px}
+  .logo-svg{width:16px;height:15px}
+  .brand-text{font-size:14px;font-weight:bold;letter-spacing:0.4px}
+  .title{font-size:13px;font-weight:bold;margin-top:1mm}
+  .post-no{font-size:16px;font-weight:bold}
+  .token{font-size:9px;word-break:break-all;color:#333}
+  .meta{border-collapse:collapse;width:100%}
+  .m-lbl{font-weight:bold;white-space:nowrap;padding:1px 4px 1px 0;vertical-align:top}
+  .m-val{padding:1px 0;word-break:break-word}
+  .warn{font-weight:bold;color:#c00000;margin:2mm 0}
+  .empty{text-align:center;padding:3mm 0}
+  .sign{margin-top:5mm;display:flex;justify-content:space-between;gap:4mm}
+  .sign div{flex:1;border-top:1px solid #000;padding-top:1mm;font-size:10px;text-align:center}
+  .printed{margin-top:3mm;font-size:9px;color:#555;text-align:center}
+  ${pageCss}
+</style>
+</head>
+<body class="f-${isA4 ? 'a4' : '80mm'}">
+<div class="sheet">
+  <div class="head">
+    <div class="head-qr">
+      <div class="brand-row">${logoSvg}<span class="brand-text">${BRAND_TEXT}</span></div>
+      <div class="title">POCHTA CHEKI</div>
+      <div class="post-no">#${escapeHtml(postId)}</div>
+      ${qrDataUrl ? `<img class="qr" src="${qrDataUrl}" alt="QR"/>` : ''}
+      ${qrToken ? `<div class="token">${escapeHtml(qrToken)}</div>` : ''}
+    </div>
+    <div class="head-info"><table class="meta">${metaHtml}</table></div>
+  </div>
+  ${warningHtml}
+  ${ordersHtml}
+  <div class="sign"><div>Topshirdi</div><div>Qabul qildi</div></div>
+  <div class="printed">Chop etilgan: ${escapeHtml(printedAt)}</div>
+</div>
 <script>window.onload=function(){window.print();}</script>
 </body>
 </html>`;

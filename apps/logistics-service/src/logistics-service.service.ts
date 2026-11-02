@@ -141,6 +141,108 @@ const RETURN_REQUEST_STATUSES: Order_status[] = [
 /** findOrders ning odatiy order.find_all kutish vaqti. */
 const FIND_ORDERS_TIMEOUT_MS = 5000;
 
+/**
+ * Pochta tarixi (`order.post_membership.find`) kutish vaqti. Joriy a'zolar
+ * so'rovi bilan PARALLEL ketadi.
+ */
+const POST_MEMBERSHIP_TIMEOUT_MS = 3000;
+/**
+ * order-service `POST_MEMBERSHIP_MAX_ROWS`: shuncha qator kelsa tarix
+ * kesilgan — `history_incomplete: true`.
+ */
+const POST_MEMBERSHIP_MAX_ROWS = 20_000;
+/** Sobiq a'zolarni `order.find_all` ga bir so'rovda nechtadan berish. */
+const POST_HISTORY_ORDER_CHUNK = 1000;
+/**
+ * Sobiq a'zolar soni chegarasi (shartnoma: 5000) — ortig'i olinmaydi,
+ * `history_incomplete: true`. Ko'pi bilan 5 ta parallel `order.find_all`.
+ */
+const POST_HISTORY_MAX_ORDERS = 5000;
+/**
+ * `all` ko'rinishi: `getPostOrders` boshidan sobiq a'zolar so'rovi tugashi
+ * kerak bo'lgan payt (gateway `GET /post/orders/:id` — 8 s). Sobiq a'zolar
+ * `order.find_all` i qolgan vaqtni oladi (ko'pi bilan ..._MAX_TIMEOUT_MS);
+ * ..._MIN_TIMEOUT_MS dan kam qolsa so'ralmaydi — `history_incomplete: true`.
+ */
+const POST_HISTORY_BUDGET_MS = 6500;
+const POST_HISTORY_ORDERS_MAX_TIMEOUT_MS = 2500;
+const POST_HISTORY_ORDERS_MIN_TIMEOUT_MS = 500;
+/**
+ * Ruxsat faqat pochta tarixi orqali bo'lishi mumkin edi, lekin tarix olinmadi
+ * (javob kelmadi / byudjet tugadi / kesildi) — 403 emas, qayta urinsa
+ * bo'ladigan 503 (ma'lumot berilmaydi — fail-closed).
+ */
+export const POST_HISTORY_UNAVAILABLE_MESSAGE =
+  "Pochta tarixi vaqtincha olinmadi, qayta urinib ko'ring";
+
+/**
+ * Sof kuryerning o'z eski pochtasi (`all` — JSON, Excel, chek): sobiq a'zo
+ * hozir BOSHQA kuryerda bo'lsa (`courier_id` / `holder_courier_id` o'zi
+ * emas), qatordan o'sha kuryerning shaxsi va puli olib tashlanadi. Buyurtma
+ * o'zi (id, QR, mijoz, manzil, tuman, summa, holat, a'zolik, hozirgi pochta)
+ * qoladi — kuryer buyurtma qayerga ketganini ko'radi. Market tarifi / filial
+ * ulushini gateway kuryer proyeksiyasi (COURIER_HIDDEN_ORDER_FIELDS) oladi.
+ */
+export const FOREIGN_COURIER_ORDER_FIELDS: readonly string[] = [
+  // Boshqa kuryer shaxsi va unga o'tish izi.
+  'courier_id',
+  'holder_courier_id',
+  'assigned_at',
+  'last_handover_at',
+  'last_handover_by',
+  // Boshqa kuryer haqi, sotuv/hisob-kitob summalari va sotuv isboti.
+  'courier_tariff',
+  'courier_share',
+  'to_be_paid',
+  'paid_amount',
+  'sale_collectible_amount',
+  'sale_market_paid_amount',
+  'branch_cashbox_amount',
+  'extra_cost',
+  'proof_files',
+];
+
+/**
+ * Eski pochta ko'rinishi: `current` — faqat hozir pochtada turgan buyurtmalar
+ * (skan/qabul ekranlari); `all` — pochtaga HAR QACHON kirgan buyurtmalar
+ * (`order_schema.post_order_memberships` ∪ joriy ko'rsatkichlar).
+ */
+export type PostOrdersView = 'current' | 'all';
+
+/** `order.post_membership.find` qatori (order-service shartnomasi). */
+interface PostMembershipRow {
+  order_id: string;
+  post_id: string;
+  kind: 'DELIVERY' | 'CANCELED';
+  joined_at: string | Date;
+  left_at: string | Date | null;
+  next_post_id: string | null;
+}
+
+/**
+ * Sukut: qabul qilingan (RECEIVED / CANCELED_RECEIVED) — eski pochta, `all`;
+ * qolganlari (NEW / SENT / CANCELED) — `current`.
+ */
+export function defaultPostOrdersView(status: Post_status): PostOrdersView {
+  return status === Post_status.RECEIVED ||
+    status === Post_status.CANCELED_RECEIVED
+    ? 'all'
+    : 'current';
+}
+
+/** Qatordagi a'zolik: birinchi kirgan, oxirgi chiqqan payt va keyingi pochta. */
+interface PostMembershipSummary {
+  joined_at: string | Date | null;
+  left_at: string | Date | null;
+  next_post_id: string | null;
+}
+
+/** Saralash uchun vaqt (ms); yaroqsiz — 0. */
+function postMembershipTime(value: string | Date | null | undefined): number {
+  const time = value ? new Date(value).getTime() : NaN;
+  return Number.isFinite(time) ? time : 0;
+}
+
 const REGION_STATS_DELIVERED_STATUSES = new Set<Order_status>([
   Order_status.SOLD,
   Order_status.PAID,
@@ -224,6 +326,17 @@ const ROLES_WITH_OWN_POST_SCOPE: readonly string[] = [
   Roles.MARKET,
   Roles.MARKET_OPERATOR,
   Roles.CUSTOMER,
+];
+/**
+ * Pochta buyurtmalari: shu rollardan biri bo'lsa so'rovchi "sof kuryer"
+ * emas — kuryerning "faqat o'z pochtasi" qoidasi unga qo'llanmaydi.
+ */
+const COURIER_STAFF_ROLES: readonly string[] = [
+  Roles.SUPERADMIN,
+  Roles.ADMIN,
+  Roles.BRANCH,
+  Roles.MANAGER,
+  Roles.REGISTRATOR,
 ];
 export const LOGIST_REGION_FILTER_MESSAGE = 'Bu viloyat sizga biriktirilmagan';
 export const LOGIST_POST_FORBIDDEN_MESSAGE =
@@ -675,6 +788,19 @@ export class LogisticsServiceService implements OnModuleInit {
   }
 
   /** Z3pUOxou — sof logist (boshqa doirali rolsiz) so'rovchi. */
+  /** Sof kuryer: COURIER roli bor, filial/tizim xodimi rollaridan hech biri yo'q. */
+  private isPureCourierRequester(requester?: RequesterContext): boolean {
+    const roles = (requester?.roles ?? []).map((role) =>
+      String(role ?? '')
+        .trim()
+        .toLowerCase(),
+    );
+    return (
+      roles.includes(Roles.COURIER) &&
+      !roles.some((role) => COURIER_STAFF_ROLES.includes(role))
+    );
+  }
+
   private isLogistRequester(requester?: RequesterContext): boolean {
     const roles = (requester?.roles ?? []).map((role) =>
       String(role ?? '')
@@ -1064,6 +1190,9 @@ export class LogisticsServiceService implements OnModuleInit {
       post_id?: string;
       post_ids?: string[];
       canceled_post_id?: string;
+      // Eski pochta tarixi: aniq buyurtma id'lari (order-service `findAll`
+      // dagi `order.id IN (...)` filtri).
+      search_order_ids?: string[];
       status?: Order_status | Order_status[] | string | string[];
       return_requested?: boolean;
       // order.find_all o'zi filtrlaydi (order.holder_type = :holder_type).
@@ -1517,6 +1646,77 @@ export class LogisticsServiceService implements OnModuleInit {
     requester: RequesterContext,
   ): Promise<string> {
     return (await this.findCourierAssignment(requester)).branchId;
+  }
+
+  /**
+   * Kuryer pochtasining `branch_id` si — kuryerning filiali (HQ kuryeri — HQ
+   * filiali): filial menejerining eski pochtalari (`post.branch_id = filial`)
+   * o'z kuryerlari pochtalarini ham ko'rsatadi. Tizim so'rovchisi bilan;
+   * aniqlab bo'lmasa — `null` (pochta avvalgidek, qabul to'xtamaydi).
+   */
+  private async findCourierPostBranchId(
+    courierId: string | null | undefined,
+  ): Promise<string | null> {
+    const normalizedCourierId = String(courierId ?? '').trim();
+    if (!normalizedCourierId || normalizedCourierId === '0') {
+      return null;
+    }
+    try {
+      const response = (await lastValueFrom(
+        this.branchClient
+          .send(
+            { cmd: 'branch.user.find_by_user' },
+            {
+              user_id: normalizedCourierId,
+              requester: SENDER_BRANCH_SYSTEM_REQUESTER,
+            },
+          )
+          .pipe(timeout(SENDER_BRANCH_TIMEOUT_MS)),
+      )) as { data?: { branch_id?: unknown } | null } | null;
+      const branchId = response?.data?.branch_id;
+      return (typeof branchId === 'string' || typeof branchId === 'number') &&
+        /^\d{1,19}$/.test(String(branchId).trim())
+        ? String(branchId).trim()
+        : null;
+    } catch (error) {
+      this.logger?.warn(
+        `courier ${normalizedCourierId}: filialini aniqlab bo'lmadi — pochta filialsiz qoladi: ${(error as Error)?.message ?? String(error)}`,
+      );
+      return null;
+    }
+  }
+
+  /**
+   * Ega qarori 4: kuryer pochtasi QABUL QILINGANDA (RECEIVED) kuryer
+   * filialiga bog'lanadi — faqat bo'sh `branch_id` to'ldiriladi. SENT
+   * kuryer pochtasi esa doim filialsiz (`branch_id = null`): `branch_id` li
+   * SENT pochta filial o'tkazmasi hisoblanadi (HQ → filial dispatch
+   * `receiveOrdersIntoPosts` maqsadi, menejerning «Yangi» ro'yxati,
+   * `receivePost` buyurtma filialini qayta yozishi) — RECEIVED pochta qayta
+   * SENT ga qaytsa (qisman qabul), filial tozalanadi. Kuryersiz ('0') va
+   * bekor (CANCELED / CANCELED_RECEIVED) pochtalarga tegilmaydi.
+   * Chaqiruvchi `post.status` ni yangi holatga qo'yib, saqlashdan OLDIN
+   * chaqiradi.
+   */
+  private async syncCourierPostBranch(post: Post): Promise<void> {
+    const courierId = String(post?.courier_id ?? '').trim();
+    if (!post || !courierId || courierId === '0') {
+      return;
+    }
+    if (post.status === Post_status.SENT) {
+      post.branch_id = null;
+      return;
+    }
+    if (
+      post.status !== Post_status.RECEIVED ||
+      String(post.branch_id ?? '').trim()
+    ) {
+      return;
+    }
+    const branchId = await this.findCourierPostBranchId(courierId);
+    if (branchId) {
+      post.branch_id = branchId;
+    }
   }
 
   /**
@@ -2258,7 +2458,27 @@ export class LogisticsServiceService implements OnModuleInit {
       ];
     }
     // YfrqN70i — filtrlar har bir OR tarmog'iga qo'shiladi (AND).
-    const filterClause = filterWhere.where;
+    const filterClause: Record<string, unknown> = { ...filterWhere.where };
+    // Sof kuryer: qabul qilingan kuryer pochtasi endi kuryer filialiga
+    // (`branch_id`) bog'lanadi — filial doirasi boshqa kuryerlar pochtasini
+    // ro'yxatda ko'rsatmasin. Faqat filial o'tkazmasi (courier_id '0') va
+    // o'z pochtasi.
+    if (requester && this.isPureCourierRequester(requester)) {
+      const ownId = canonicalBigintId(String(requester.id ?? '').trim());
+      const allowed = ownId ? ['0', ownId] : ['0'];
+      const requested = filterClause.courier_id;
+      if (typeof requested === 'string') {
+        if (!allowed.includes(requested)) {
+          return successRes(
+            postListPage([], 0, paging, EMPTY_POST_LIST_TOTALS),
+            200,
+            'All posts (paginated)',
+          );
+        }
+      } else {
+        filterClause.courier_id = In(allowed);
+      }
+    }
     queryWhere = Array.isArray(queryWhere)
       ? queryWhere.map((clause) => ({ ...clause, ...filterClause }))
       : { ...queryWhere, ...filterClause };
@@ -2965,6 +3185,23 @@ export class LogisticsServiceService implements OnModuleInit {
         'Post found',
       );
     }
+    // Sof kuryer — faqat o'z kuryerli pochtasi (getPostOrders qoidasi): qabul
+    // qilingan kuryer pochtasi kuryer filialiga (`branch_id`) bog'langani
+    // uchun filial doirasi boshqa kuryer pochtasini ochib qo'ymasin. O'z
+    // pochtasi — filial/buyurtma doirasisiz (bo'shab qolgan eski pochta ham
+    // 403 bermasin). Filial o'tkazmasi (courier_id '0') — pastdagi doira.
+    const postCourierId = String(post.courier_id ?? '').trim();
+    if (
+      requester &&
+      this.isPureCourierRequester(requester) &&
+      postCourierId &&
+      postCourierId !== '0'
+    ) {
+      if (postCourierId !== String(requester.id ?? '').trim()) {
+        this.forbidden("Kuryer faqat o'z pochtasini ko'ra oladi");
+      }
+      return successRes(await this.withPostCourier(post), 200, 'Post found');
+    }
     const scopedBranchId = await this.resolveScopedBranchId(requester);
     let belongsToScopedBranch = false;
     if (scopedBranchId && String(post.branch_id ?? '') !== scopedBranchId) {
@@ -3120,8 +3357,10 @@ export class LogisticsServiceService implements OnModuleInit {
       this.notFound('Pochta topilmadi');
     }
 
+    // Skan — faqat hozir pochtada turganlar (eski pochta tarixi emas).
     const view = (await this.getPostOrders(String(post.id), requester, {
       readOnly: true,
+      view: 'current',
     })) as {
       data: {
         allOrdersByPostId: OrderRow[];
@@ -3201,15 +3440,193 @@ export class LogisticsServiceService implements OnModuleInit {
   }
 
   /**
+   * Eski pochta tarixi — `order.post_membership.find` (order-service,
+   * `order_schema.post_order_memberships`). `null` — javob kelmadi yoki
+   * shakli noma'lum (chaqiruvchi joriy a'zolar bilan davom etadi).
+   */
+  private async findPostMemberships(
+    postId: string,
+  ): Promise<PostMembershipRow[] | null> {
+    try {
+      const res = (await lastValueFrom(
+        this.orderClient
+          .send({ cmd: 'order.post_membership.find' }, { post_ids: [postId] })
+          .pipe(timeout(POST_MEMBERSHIP_TIMEOUT_MS)),
+      )) as { data?: unknown } | unknown[] | null;
+      const data = Array.isArray(res) ? res : res?.data;
+      const rows = Array.isArray(data) ? (data as unknown[]) : null;
+      if (!rows) {
+        this.logger?.warn(
+          `order.post_membership.find: noma'lum javob shakli (post ${postId})`,
+        );
+        return null;
+      }
+      return (rows as PostMembershipRow[]).filter(
+        (row) =>
+          row &&
+          String(row.order_id ?? '').trim() &&
+          String(row.post_id ?? '').trim() === String(postId),
+      );
+    } catch (error) {
+      this.logger?.warn(
+        `order.post_membership.find failed (post ${postId}): ${(error as Error)?.message ?? String(error)}`,
+      );
+      return null;
+    }
+  }
+
+  /**
+   * Buyurtma bo'yicha bitta yozuv: birinchi kirgan payt (`joined_at`) va eng
+   * oxirgi bo'lishdagi chiqish (`left_at`, `next_post_id`). Bir buyurtma
+   * pochtaga bir necha marta kirgan bo'lishi mumkin.
+   */
+  private groupPostMemberships(
+    rows: PostMembershipRow[],
+  ): Map<string, PostMembershipSummary> {
+    const sorted = [...rows].sort(
+      (left, right) =>
+        postMembershipTime(left.joined_at) -
+        postMembershipTime(right.joined_at),
+    );
+    const byOrder = new Map<string, PostMembershipSummary>();
+    for (const row of sorted) {
+      const orderId = String(row.order_id ?? '').trim();
+      if (!orderId) continue;
+      const previous = byOrder.get(orderId);
+      const nextPostId = String(row.next_post_id ?? '').trim();
+      byOrder.set(orderId, {
+        joined_at: previous?.joined_at ?? row.joined_at ?? null,
+        left_at: row.left_at ?? null,
+        next_post_id: nextPostId || null,
+      });
+    }
+    return byOrder;
+  }
+
+  /**
+   * Sobiq a'zolar (hozir boshqa pochtada / pochtasiz) — `order.find_all`
+   * id bo'yicha, bo'laklab (chaqiruvchining `timeoutMs` i — `all` byudjeti;
+   * id'lar soni POST_HISTORY_MAX_ORDERS bilan cheklangan).
+   * `null` — order-service javob bermadi.
+   */
+  private async findPostHistoryOrders(
+    orderIds: string[],
+    postId: string,
+    timeoutMs: number,
+  ): Promise<OrderRow[] | null> {
+    const ids = [
+      ...new Set(
+        orderIds
+          .map((orderId) => String(orderId ?? '').trim())
+          .filter((orderId) => /^\d{1,19}$/.test(orderId)),
+      ),
+    ];
+    if (!ids.length) {
+      return [];
+    }
+    const chunks: string[][] = [];
+    for (let index = 0; index < ids.length; index += POST_HISTORY_ORDER_CHUNK) {
+      chunks.push(ids.slice(index, index + POST_HISTORY_ORDER_CHUNK));
+    }
+    try {
+      const groups = await Promise.all(
+        chunks.map((chunk) =>
+          this.findOrders(
+            {
+              search_order_ids: chunk,
+              fetch_all: true,
+              page: 1,
+              limit: 1000,
+            },
+            { timeoutMs },
+          ),
+        ),
+      );
+      return groups.flat();
+    } catch (error) {
+      this.logger?.warn(
+        `post ${postId}: sobiq a'zolarni olib bo'lmadi (ids=${ids.length}): ${(error as Error)?.message ?? String(error)}`,
+      );
+      return null;
+    }
+  }
+
+  /** `all` ko'rinishi qatori: buyurtma + pochtadagi o'rni («hozir qayerda»). */
+  private withPostMembership(
+    order: OrderRow,
+    currentOrderIds: Set<string>,
+    membershipByOrder: Map<string, PostMembershipSummary>,
+  ): OrderRow & {
+    in_post_now: boolean;
+    membership: PostMembershipSummary | null;
+    current_post_id: string | null;
+    current_canceled_post_id: string | null;
+  } {
+    const orderId = String(order.id);
+    const currentPostId = String(order.post_id ?? '').trim();
+    const currentCanceledPostId = String(order.canceled_post_id ?? '').trim();
+    return {
+      ...order,
+      in_post_now: currentOrderIds.has(orderId),
+      membership: membershipByOrder.get(orderId) ?? null,
+      current_post_id: currentPostId || null,
+      current_canceled_post_id: currentCanceledPostId || null,
+    };
+  }
+
+  /**
+   * Sof kuryerning o'z eski pochtasi (`all`): hozir pochtada bo'lmagan
+   * (`in_post_now: false`) va BOSHQA kuryerdagi (`courier_id` /
+   * `holder_courier_id` so'rovchi emas) qatordan FOREIGN_COURIER_ORDER_FIELDS
+   * olib tashlanadi. Joriy a'zo va hozir o'zidagi qator — o'zgarishsiz.
+   */
+  private withoutForeignCourierFields(
+    order: OrderRow & { in_post_now?: boolean },
+    requesterId: string,
+  ): OrderRow {
+    if (order.in_post_now !== false) {
+      return order;
+    }
+    const isForeign = (value: string | null | undefined) => {
+      const id = String(value ?? '').trim();
+      return Boolean(id) && id !== requesterId;
+    };
+    if (!isForeign(order.courier_id) && !isForeign(order.holder_courier_id)) {
+      return order;
+    }
+    const stripped: Record<string, unknown> = { ...order };
+    for (const key of FOREIGN_COURIER_ORDER_FIELDS) {
+      delete stripped[key];
+    }
+    return stripped as unknown as OrderRow;
+  }
+
+  /**
    * `options.readOnly` — X4RzXk1H: pochta QR skani (`findPostWithQr`) shu
    * ruxsat va ro'yxatni ishlatadi, lekin filial o'tkazmasi pochtasining
    * `branch_id` sini qabul qiluvchi filialga ko'chirmaydi (skan — o'qish).
+   *
+   * `options.view` — eski pochtalar: `all` — pochtaga HAR QACHON kirgan
+   * buyurtmalar (`order.post_membership.find` ∪ joriy ko'rsatkichlar), har
+   * qatorda `in_post_now`, `membership {joined_at, left_at, next_post_id}`,
+   * `current_post_id`, `current_canceled_post_id`; `current` — faqat hozir
+   * pochtadagilar (avvalgi xulq). Sukut — `defaultPostOrdersView` (qabul
+   * qilingan pochta — `all`), lekin: yo'ldagi joriy a'zosi bor RECEIVED
+   * pochta (hali qabul qilinadi) va sof kuryerning o'ziniki bo'lmagan pochtasi
+   * — `current`. Sof kuryer o'ziniki bo'lmagan pochtada `all` so'rasa — 403.
+   * Skan (`findPostWithQr`) doim `current`.
    */
   async getPostOrders(
     id: string,
     requester: RequesterContext,
-    options?: { readOnly?: boolean; withSenderBranch?: boolean },
+    options?: {
+      readOnly?: boolean;
+      withSenderBranch?: boolean;
+      view?: PostOrdersView;
+    },
   ) {
+    // `all` ko'rinishi byudjeti (POST_HISTORY_BUDGET_MS) shu paytdan sanaladi.
+    const startedAt = Date.now();
     const post = await this.postRepo.findOne({
       where: { id },
       // 4YZcTTDQ: javobdagi `post.region` (detal sarlavhasi) uchun.
@@ -3218,11 +3635,35 @@ export class LogisticsServiceService implements OnModuleInit {
     if (!post) {
       this.notFound('Pochta topilmadi');
     }
-    const isCourier = (requester.roles ?? []).some(
-      (role) => String(role).toLowerCase() === Roles.COURIER,
+    const requesterRoles = (requester.roles ?? []).map((role) =>
+      String(role ?? '')
+        .trim()
+        .toLowerCase(),
     );
-    const isOwnCourierPost =
-      isCourier && String(post.courier_id ?? '') === String(requester.id ?? '');
+    const isCourier = requesterRoles.includes(Roles.COURIER);
+    // Pochtani yuborgan foydalanuvchi (kuryer yoki bekorlarni HQ'ga yuborgan
+    // menejer — `courier_id`) — har qanday rolda o'z pochtasini ochadi:
+    // bo'shab qolgan eski pochta ham 403 bermasin.
+    const requesterId = String(requester.id ?? '').trim();
+    const postCourierId = String(post.courier_id ?? '').trim();
+    const isOwnPost = Boolean(requesterId) && postCourierId === requesterId;
+    // Sof kuryer — faqat o'z kuryerli pochtasi: qabul qilingan kuryer pochtasi
+    // endi kuryer filialiga (`branch_id`) bog'langani uchun filial doirasi
+    // boshqa kuryer pochtasini ochib qo'ymasin.
+    const isPureCourier = this.isPureCourierRequester(requester);
+    if (isPureCourier && postCourierId && postCourierId !== '0' && !isOwnPost) {
+      this.forbidden("Kuryer faqat o'z pochtasini ko'ra oladi");
+    }
+    // Ega qarori 3: sof kuryer pochta TARIXINI (`all` — Excel va chek ham)
+    // faqat o'z pochtasida ko'radi. Filial o'tkazmasi pochtasi (courier_id
+    // '0') filial doirasidan ochilsa — avvalgidek faqat joriy a'zolar.
+    const isForeignToPureCourier = isPureCourier && !isOwnPost;
+    if (isForeignToPureCourier && options?.view === 'all') {
+      this.forbidden("Kuryer faqat o'z pochtasi tarixini ko'ra oladi");
+    }
+    let view: PostOrdersView =
+      options?.view ??
+      (isForeignToPureCourier ? 'current' : defaultPostOrdersView(post.status));
 
     // Z3pUOxou: logist — faqat o'z viloyati pochtasi (aks holda 403), faqat
     // o'qish (filial doirasi yo'q — branch_id ko'chirilmaydi).
@@ -3243,36 +3684,129 @@ export class LogisticsServiceService implements OnModuleInit {
     const scopedBranchId = isLogist
       ? null
       : await this.resolveScopedBranchId(requester);
-    const [ordersByPostId, ordersByCanceledPostId] = await Promise.all([
-      this.findOrders({
-        post_id: id,
-        page: 1,
-        limit: 1000,
-      }),
-      post.status === Post_status.CANCELED
-        ? this.findCanceledPostGroup(post).then(({ orders }) => orders)
-        : this.findOrders({
-            canceled_post_id: id,
-            page: 1,
-            limit: 1000,
-          }),
-    ]);
-    const orderBranchIds = new Set(
-      [...ordersByPostId, ...ordersByCanceledPostId]
-        .map((order) => this.getOrderBranchScope(order))
-        .filter(Boolean),
+    const [ordersByPostId, ordersByCanceledPostId, memberships] =
+      await Promise.all([
+        this.findOrders({
+          post_id: id,
+          page: 1,
+          limit: 1000,
+        }),
+        post.status === Post_status.CANCELED
+          ? this.findCanceledPostGroup(post).then(({ orders }) => orders)
+          : this.findOrders({
+              canceled_post_id: id,
+              page: 1,
+              limit: 1000,
+            }),
+        // Eski pochta tarixi — joriy a'zolar bilan PARALLEL.
+        view === 'all'
+          ? this.findPostMemberships(id)
+          : Promise.resolve<PostMembershipRow[] | null>([]),
+      ]);
+    const currentOrders = [...ordersByPostId, ...ordersByCanceledPostId];
+    const currentOrderIds = new Set(
+      currentOrders.map((order) => String(order.id)),
     );
-    const belongsToScopedBranch =
-      Boolean(scopedBranchId) &&
-      orderBranchIds.size === 1 &&
-      orderBranchIds.has(String(scopedBranchId));
+    // Hali qabul qilinadigan RECEIVED pochta (yo'ldagi joriy a'zosi bor —
+    // `receivePost` uni qabul qiladi): qabul ekrani faqat joriy a'zolarni
+    // ko'rsatadi, sukut `current` (aniq `view: 'all'` — tarix).
+    if (
+      !options?.view &&
+      view === 'all' &&
+      post.status === Post_status.RECEIVED &&
+      ordersByPostId.some((order) => order.status === Order_status.ON_THE_ROAD)
+    ) {
+      view = 'current';
+    }
+    // Tarix olinmadi (order-service javob bermadi) yoki kesilgan — ro'yxat
+    // olinganicha qaytadi, `history_incomplete: true` (gateway/FE ogohlantiradi).
+    let historyIncomplete =
+      view === 'all' &&
+      (memberships === null || memberships.length >= POST_MEMBERSHIP_MAX_ROWS);
+    const membershipByOrder =
+      view === 'all'
+        ? this.groupPostMemberships(memberships ?? [])
+        : new Map<string, PostMembershipSummary>();
+    let formerOrders: OrderRow[] = [];
+    if (view === 'all') {
+      let formerIds = [...membershipByOrder.keys()].filter(
+        (orderId) => !currentOrderIds.has(orderId),
+      );
+      if (formerIds.length > POST_HISTORY_MAX_ORDERS) {
+        formerIds = formerIds.slice(0, POST_HISTORY_MAX_ORDERS);
+        historyIncomplete = true;
+      }
+      // Gateway 8 s byudjeti: joriy a'zolar so'rovidan qolgan vaqt.
+      const historyTimeoutMs = Math.min(
+        POST_HISTORY_ORDERS_MAX_TIMEOUT_MS,
+        POST_HISTORY_BUDGET_MS - (Date.now() - startedAt),
+      );
+      let fetched: OrderRow[] | null = null;
+      if (
+        formerIds.length &&
+        historyTimeoutMs < POST_HISTORY_ORDERS_MIN_TIMEOUT_MS
+      ) {
+        this.logger?.warn(
+          `post ${id}: sobiq a'zolar (${formerIds.length} ta) uchun vaqt qolmadi — history_incomplete`,
+        );
+      } else {
+        fetched = await this.findPostHistoryOrders(
+          formerIds,
+          id,
+          historyTimeoutMs,
+        );
+      }
+      if (fetched === null) {
+        historyIncomplete = true;
+      } else {
+        const joinedAt = (order: OrderRow) =>
+          postMembershipTime(
+            membershipByOrder.get(String(order.id))?.joined_at,
+          );
+        formerOrders = fetched
+          .filter((order) => !currentOrderIds.has(String(order.id)))
+          .sort((left, right) => joinedAt(left) - joinedAt(right));
+      }
+    }
+    const isSingleScopedBranch = (rows: OrderRow[]) => {
+      const branchIds = new Set(
+        rows.map((order) => this.getOrderBranchScope(order)).filter(Boolean),
+      );
+      return (
+        Boolean(scopedBranchId) &&
+        branchIds.size === 1 &&
+        branchIds.has(String(scopedBranchId))
+      );
+    };
+    const belongsToScopedBranch = isSingleScopedBranch(currentOrders);
+    // Bo'shab qolgan eski pochta: doira pochtaga HAR QACHON kirgan
+    // buyurtmalardan ham olinadi (faqat ruxsat uchun — filial o'tkazmasi
+    // `branch_id` ko'chirilishi joriy a'zolar bo'yicha qoladi).
+    const historyBelongsToScopedBranch =
+      view === 'all' &&
+      formerOrders.length > 0 &&
+      isSingleScopedBranch([...currentOrders, ...formerOrders]);
 
     if (
       scopedBranchId &&
       String(post.branch_id ?? '') !== scopedBranchId &&
       !belongsToScopedBranch &&
-      !isOwnCourierPost
+      !historyBelongsToScopedBranch &&
+      !isOwnPost
     ) {
+      // Tarix olinmadi (javob kelmadi / byudjet tugadi / kesildi) va olingan
+      // qatorlarning hech biri boshqa filialda emas — ruxsat faqat tarix
+      // orqali bo'lishi mumkin edi: 403 emas, qayta urinsa bo'ladigan 503
+      // (ma'lumot berilmaydi). Olingan qator boshqa filialda — haqiqiy 403.
+      const loadedRowsInScope = [...currentOrders, ...formerOrders].every(
+        (order) => {
+          const scope = this.getOrderBranchScope(order);
+          return !scope || scope === String(scopedBranchId);
+        },
+      );
+      if (view === 'all' && historyIncomplete && loadedRowsInScope) {
+        throw new RpcException(errorRes(POST_HISTORY_UNAVAILABLE_MESSAGE, 503));
+      }
       this.forbidden("Siz bu branch pochtasidagi orderlarni ko'ra olmaysiz");
     }
 
@@ -3291,13 +3825,25 @@ export class LogisticsServiceService implements OnModuleInit {
     }
 
     const orderMap = new Map<string, OrderRow>();
-    for (const order of [...ordersByPostId, ...ordersByCanceledPostId]) {
+    for (const order of currentOrders) {
       orderMap.set(String(order.id), order);
     }
 
     let orders = Array.from(orderMap.values());
 
-    if (post.status === Post_status.SENT && isCourier) {
+    if (view === 'all') {
+      // Joriy a'zolar avvalgi tartibda, keyin sobiqlar (kirgan vaqti bo'yicha).
+      orders = [...orders, ...formerOrders].map((order) =>
+        this.withPostMembership(order, currentOrderIds, membershipByOrder),
+      );
+      // Sof kuryer: hozir boshqa kuryerdagi sobiq a'zo — o'sha kuryerning
+      // shaxsi va pulisiz (Excel va chek ham shu ro'yxatdan).
+      if (isPureCourier) {
+        orders = orders.map((order) =>
+          this.withoutForeignCourierFields(order, requesterId),
+        );
+      }
+    } else if (post.status === Post_status.SENT && isCourier) {
       orders = orders.filter(
         (order) => order.status === Order_status.ON_THE_ROAD,
       );
@@ -3339,6 +3885,11 @@ export class LogisticsServiceService implements OnModuleInit {
         centerOrders: isLogist
           ? { centerOrders }
           : { centerOrders, centerOrdersTotalPrice },
+        // Eski pochtalar (additive, faqat `all` ko'rinishida — `current`
+        // javobi avvalgidek): tarix olinmagan bo'lsa `history_incomplete`.
+        ...(view === 'all'
+          ? { view, history_incomplete: historyIncomplete }
+          : {}),
         // yokjwjXG (additive): pochtaning o'zi — frontend savatni
         // (`POST /post/delete`) faqat `status = 'new'` da ko'rsatadi.
         // 4YZcTTDQ (additive): holat bilan birga pochta meta'si.
@@ -3840,6 +4391,10 @@ export class LogisticsServiceService implements OnModuleInit {
     post.status = hasRemainingReceivableOrders
       ? Post_status.SENT
       : Post_status.RECEIVED;
+    // Ega qarori 4: to'liq qabul qilingan kuryer pochtasi — kuryer filialida
+    // (buyurtmalar filiali yuqorida `targetBranchId` bilan yozilib bo'lgan);
+    // yo'ldagi qolgani uchun SENT ga qaytgan kuryer pochtasi — filialsiz.
+    await this.syncCourierPostBranch(post);
     const failedSelectedSet = new Set(failedSelectedOrderIds);
     const savedPost = await this.savePostWithArrivalNotification(
       post,
@@ -4167,6 +4722,8 @@ export class LogisticsServiceService implements OnModuleInit {
           });
           if (!remaining.length) {
             post.status = Post_status.RECEIVED;
+            // Ega qarori 4: qabul qilingan kuryer pochtasi — kuryer filialida.
+            await this.syncCourierPostBranch(post);
             const savedPost = await this.postRepo.save(post);
             void this.syncPostToSearch(savedPost);
             continue;
@@ -4588,6 +5145,8 @@ export class LogisticsServiceService implements OnModuleInit {
     }
 
     post.status = Post_status.RECEIVED;
+    // Ega qarori 4: qabul qilingan kuryer pochtasi — kuryer filialida.
+    await this.syncCourierPostBranch(post);
     const savedPost = await this.postRepo.save(post);
     void this.syncPostToSearch(savedPost);
 
@@ -4643,6 +5202,8 @@ export class LogisticsServiceService implements OnModuleInit {
     let postReceived = false;
     if (!remaining.length) {
       post.status = Post_status.RECEIVED;
+      // Ega qarori 4: qabul qilingan kuryer pochtasi — kuryer filialida.
+      await this.syncCourierPostBranch(post);
       const savedPost = await this.postRepo.save(post);
       void this.syncPostToSearch(savedPost);
       postReceived = true;
@@ -5882,10 +6443,34 @@ export class LogisticsServiceService implements OnModuleInit {
     const remainingOrders = allOrders.filter((order) =>
       remainingOrderIds.includes(String(order.id)),
     );
+    // Qabul qilingan bekor pochta hisoblagichlari nolga tushirilmaydi: har
+    // pochtada AYNAN qabul qilingan buyurtmalar soni/summasi qoladi (eski
+    // pochtalar ro'yxati va cheki). Qabul qilinmay qayta navbatga qo'yilganlar
+    // yangi qaytarish pochtasida hisoblanadi.
+    const receivedOrderIdSet = new Set(canceledOrderIds.map(String));
+    const receivedTotalsByPost = new Map<
+      string,
+      { count: number; total: number }
+    >();
+    for (const order of allOrders) {
+      if (!receivedOrderIdSet.has(String(order.id))) continue;
+      const postKey =
+        String(order.canceled_post_id ?? '').trim() || String(post.id);
+      const totals = receivedTotalsByPost.get(postKey) ?? {
+        count: 0,
+        total: 0,
+      };
+      totals.count += 1;
+      totals.total += Number(order.total_price ?? 0) || 0;
+      receivedTotalsByPost.set(postKey, totals);
+    }
     let savedPost = post;
     for (const groupedPost of groupedCanceledPosts) {
-      groupedPost.order_quantity = 0;
-      groupedPost.post_total_price = 0;
+      const receivedTotals = receivedTotalsByPost.get(
+        String(groupedPost.id),
+      ) ?? { count: 0, total: 0 };
+      groupedPost.order_quantity = receivedTotals.count;
+      groupedPost.post_total_price = receivedTotals.total;
       groupedPost.status = Post_status.CANCELED_RECEIVED;
       let savedGroupedPost: Post;
 
@@ -5898,8 +6483,8 @@ export class LogisticsServiceService implements OnModuleInit {
           }`,
         );
         await this.postRepo.update(groupedPost.id, {
-          order_quantity: 0,
-          post_total_price: 0,
+          order_quantity: receivedTotals.count,
+          post_total_price: receivedTotals.total,
           status: Post_status.CANCELED_RECEIVED,
         });
         savedGroupedPost =
@@ -8124,6 +8709,10 @@ export class LogisticsServiceService implements OnModuleInit {
           region_id: regionId,
           status: targetPostStatus,
           branch_id: assignedBranch || IsNull(),
+          // HQ → filial o'tkazmasi faqat kuryersiz ('0') SENT pochtaga
+          // qo'shiladi: filial kuryerining faol pochtasi (branch_id bilan)
+          // hech qachon dispatch maqsadi bo'lmasin.
+          ...(targetPostStatus === Post_status.SENT ? { courier_id: '0' } : {}),
         },
       });
 

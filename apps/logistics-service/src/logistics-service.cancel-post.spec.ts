@@ -627,11 +627,13 @@ describe('LogisticsServiceService createCanceledPost', () => {
         },
       },
     );
+    // Eski pochtalar: qabul qilingan bekor pochta hisoblagichlari nolga
+    // tushmaydi — AYNAN qabul qilingan buyurtmalar soni/summasi qoladi.
     expect(postRepo.save).toHaveBeenCalledWith(
       expect.objectContaining({
         status: Post_status.CANCELED_RECEIVED,
-        order_quantity: 0,
-        post_total_price: 0,
+        order_quantity: 1,
+        post_total_price: 1_000_000,
       }),
     );
   });
@@ -724,12 +726,14 @@ describe('LogisticsServiceService createCanceledPost', () => {
         },
       }),
     );
+    // Eski pochtalar: qabul qilingani qoladi, qayta navbatga qo'yilgani
+    // (102) — yangi qaytarish pochtasida.
     expect(postRepo.save).toHaveBeenCalledWith(
       expect.objectContaining({
         id: '55',
         status: Post_status.CANCELED_RECEIVED,
-        order_quantity: 0,
-        post_total_price: 0,
+        order_quantity: 1,
+        post_total_price: 1_000_000,
       }),
     );
   });
@@ -1171,12 +1175,14 @@ describe('LogisticsServiceService createCanceledPost', () => {
         },
       }),
     );
+    // Eski pochtalar: qabul qilingani qoladi, qayta navbatga qo'yilgani
+    // (102) — yangi qaytarish pochtasida.
     expect(postRepo.save).toHaveBeenCalledWith(
       expect.objectContaining({
         id: '77',
         status: Post_status.CANCELED_RECEIVED,
-        order_quantity: 0,
-        post_total_price: 0,
+        order_quantity: 1,
+        post_total_price: 1_000_000,
       }),
     );
   });
