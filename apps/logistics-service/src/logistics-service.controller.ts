@@ -761,6 +761,85 @@ export class LogisticsServiceController {
     );
   }
 
+  /**
+   * Tuman boshqa viloyatga o'tkazilgach HQ NEW pochtalaridagi ochiq
+   * buyurtmalarini yangi xizmat viloyati pochtasiga ko'chirish (faqat
+   * superadmin/admin; idempotent; `order.region_id` o'zgarmaydi).
+   */
+  @MessagePattern({ cmd: 'logistics.district.rehome_open_orders' })
+  rehomeOpenDistrictOrders(
+    @Payload()
+    payload: {
+      id?: unknown;
+      requester?: { id?: string; roles?: string[] };
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    const requester = payload?.requester
+      ? {
+          id: String(payload.requester.id ?? ''),
+          roles: payload.requester.roles ?? [],
+        }
+      : undefined;
+    return this.executeAndAck(context, () =>
+      this.logisticsService.rehomeOpenDistrictOrders(payload?.id, requester),
+    );
+  }
+
+  /**
+   * Tuman ↔ filial qamrovi — filialning xizmat tumanlari (ALMASHTIRISH
+   * semantikasi; faqat superadmin/admin).
+   */
+  @MessagePattern({ cmd: 'logistics.district.set_serving_branch' })
+  setDistrictServingBranch(
+    @Payload()
+    payload: {
+      branch_id?: unknown;
+      district_ids?: unknown;
+      requester?: { id?: string; roles?: string[] };
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    const requester = payload?.requester
+      ? {
+          id: String(payload.requester.id ?? ''),
+          roles: payload.requester.roles ?? [],
+        }
+      : undefined;
+    return this.executeAndAck(context, () =>
+      this.logisticsService.setDistrictServingBranch(
+        payload?.branch_id,
+        payload?.district_ids,
+        requester,
+      ),
+    );
+  }
+
+  /** Tuman ↔ filial qamrovi — filialga biriktirilgan tumanlar. */
+  @MessagePattern({ cmd: 'logistics.district.find_by_branch' })
+  findDistrictsByServingBranch(
+    @Payload() payload: { branch_id?: unknown },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.logisticsService.findDistrictsByServingBranch(payload?.branch_id),
+    );
+  }
+
+  /**
+   * ICHKI: filial o'chirilgach / nofaol qilingach uning tumanlarini bo'shatish
+   * (branch-service chaqiradi).
+   */
+  @MessagePattern({ cmd: 'logistics.district.clear_serving_branch' })
+  clearDistrictServingBranch(
+    @Payload() payload: { branch_id?: unknown },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.logisticsService.clearDistrictServingBranch(payload?.branch_id),
+    );
+  }
+
   @MessagePattern({ cmd: 'logistics.district.update_name' })
   updateDistrictName(
     @Payload() payload: { id: string; dto: UpdateDistrictNameDto },

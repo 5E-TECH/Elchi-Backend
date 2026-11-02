@@ -393,6 +393,12 @@ export const ACTIVITY_ACTION_REGISTRY: Readonly<
     'group',
     'cyan',
   ),
+  'logistics.post_rehome_district_orders': entry(
+    "Tuman buyurtmalari yangi viloyat pochtasiga ko'chirildi",
+    'logistics',
+    'swap',
+    'blue',
+  ),
   'logistics.return_approve': entry(
     'Qaytarish tasdiqlandi',
     'logistics',

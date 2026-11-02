@@ -22,6 +22,51 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+### 2026-11-02 — Tuman ↔ filial qamrovi: filial faqat o'z tumanlari buyurtmasini kuryerga beradi
+
+Ega qarori: filial menejeri o'z filialiga biriktirilmagan tuman buyurtmasini o'z kuryeriga bera olmaydi. Filial boshqa tumanga buyurtma **yarata oladi**: buyurtma partiya yoki HQ orqali tumanining filialiga ketadi.
+
+**Qoida** (hamma joyda bir xil):
+- HQ cheklanmaydi.
+- Tumanga filial biriktirilgan bo'lsa (`district.serving_branch_id`), faqat o'sha filial xizmat qiladi.
+- Biriktirilmagan bo'lsa (o'tish davri), tumanning xizmat viloyati (`assigned_region ?? region_id`) filial viloyatiga (`branch.region_id`) teng bo'lishi kerak.
+- Filial viloyati yo'q bo'lsa, filial faqat o'ziga biriktirilgan tumanlarga xizmat qiladi.
+
+**Endpointlar va o'zgarishlar:**
+- 🆕 [logistics] `GET /branches/:id/districts` (SUPERADMIN, ADMIN, MANAGER, REGISTRATOR) — filialga biriktirilgan tumanlar (`District[]`, `region`, `assignedToRegion` bilan).
+- 🆕 [logistics] `PUT /branches/:id/districts` (SUPERADMIN, ADMIN), tana `{ district_ids: string[] }`. Bu almashtirish: ro'yxatda yo'q, lekin shu filialga biriktirilgan tumanlar bo'shatiladi; `[]` hammasini bo'shatadi.
+  - Javob: `{ branch_id, district_ids, added[], removed[], moved[{district_id, from_branch_id}] }`.
+  - Xatolar:
+    - 400 `branch_is_hq`, `branch_inactive`, `branch_type_not_serving` (faqat REGIONAL/HYBRID);
+    - 400 `district_region_mismatch` (`details.district_ids`), ya'ni tuman boshqa viloyatga xizmat qiladi;
+    - 404 `district_not_found`.
+  - Boshqa filialdan olingan tuman `moved` da qaytadi.
+- ✏️ [logistics] `District` javoblarida yangi `serving_branch_id: string | null` maydoni bor.
+- ⚠️ [logistics] `POST /orders/assign-to-courier` va `POST /orders/scan-assign`: buyurtma tumani filial qamrovida bo'lmasa 403, `data.reason = 'district_not_served_by_branch'`. Hech narsa yozilmaydi; HQ cheklanmaydi.
+  - Skanerda buyurtma partiyadan qabul qilingan bo'lsa, xabar posilka filialda qolganini aytadi.
+- ⚠️ [branch] `POST /branches/posts/:postId/dispatch` (HQ → filial): tanlangan buyurtmalardan birining tumani manzil filialga tegishli bo'lmasa, butun so'rov 409 qaytaradi.
+  - `data.reason = 'district_not_served_by_branch'`, `data.details.{order_ids, district_ids}`.
+- ✏️ [branch] Filial o'chirilsa, nofaol qilinsa, boshqa viloyatga o'tsa yoki turi REGIONAL/HYBRID'dan boshqa turga o'zgarsa, uning tumanlari biriktiruvdan bo'shatiladi.
+- ✏️ [logistics] `PATCH /district/:id` (tuman boshqa viloyatga o'tkazilsa): `serving_branch_id` tozalanadi (eski filial eski viloyatniki). Javobda `serving_branch_cleared`.
+- 🆕 [logistics] Tuman ko'chirilgach, HQ'da eski viloyat YANGI pochtasida qolgan buyurtmalar uchun yo'l:
+  - `POST /district/:id/rehome-open-orders` (SUPERADMIN, ADMIN) yoki `PATCH /district/:id` da `rehome_open_orders: true` (natija `data.rehome`);
+  - jo'natilmagan (RECEIVED, HQ'da turgan) buyurtmalar tumanning yangi xizmat viloyati YANGI pochtasiga ko'chadi; buyurtma viloyati o'zgarmaydi;
+  - javob: `{ district_id, target_region_id, moved, order_ids[], from_post_ids[], to_post_id, to_post_ids[], deleted_post_ids[], skipped[{order_id, reason}] }`.
+- ✏️ [logistics] `POST /post/cancel` (kuryer): boshqa kuryer yoki filialga tegishli, allaqachon jo'natilgan qaytish (CANCELLED_SENT) buyurtmasini o'z qaytish pochtasiga olib bo'lmaydi — 403.
+- ✏️ [order] Qaytarish partiyasi (`POST /branches/:id/return-batches`) faqat haqiqatan shu filialda turgan buyurtmalarni oladi. Boshqacha holatda 400:
+  - `order_not_held_by_source` — buyurtma boshqa filialda yoki kuryerda;
+  - tashqi manbadan kelgan YANGI buyurtma;
+  - `cancel_post_not_received` — qaytish pochtasi hali qabul qilinmagan.
+
+→ **Frontendda:**
+- 🔧 Admin ekrani «Filial tumanlari»: filial kartasida tumanlar ro'yxati (`GET`) va tanlash (`PUT`, filial viloyatining tumanlari — `GET /region/:id` → `assignedDistricts`).
+- 🔧 403/409 `district_not_served_by_branch` xabarini ko'rsating.
+- Tuman ko'chirish oynasida «ochiq buyurtmalarni ham ko'chirish» belgisi (`rehome_open_orders`).
+
+**Deploydan oldin (ops):** viloyati yo'q oddiy filiallar hech qaysi tumanga xizmat qilmaydi va kuryerga biriktira olmay qoladi. Ro'yxat: `SELECT id, name FROM branch_schema.branches WHERE region_id IS NULL AND type <> 'HQ' AND is_deleted = false`. Bunday filialga viloyat bering yoki `PUT /branches/:id/districts` bilan tumanlarini biriktiring.
+
+Migratsiya: `1716000000200-DistrictServingBranch` (ustun + indeks, faqat qo'shish). Deploy: logistics-service, branch-service, order-service, api-gateway.
+
 ### 2026-11-01 — Tumanni boshqa viloyatga biriktirish, tuman SOATO kodi
 
 - ✏️ [logistics] — `GET /region` va `GET /region/:id`: har viloyatda yangi `assignedDistricts: District[]` maydoni bor. Bu shu viloyatga **biriktirilgan** tumanlar (`assigned_region ?? region_id`; har birida `region` — geografik viloyati). `districts` (geografik, `region_id`) o'zgarmagan. Avval faqat `districts` qaytgani uchun `PATCH /district/:id` dan keyin ko'chirilgan tuman eski viloyatda qolib ko'rinardi.

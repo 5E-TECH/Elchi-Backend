@@ -5,6 +5,7 @@ import {
   ArrayMinSize,
   ArrayUnique,
   IsArray,
+  IsBoolean,
   IsNotEmpty,
   IsNumberString,
   IsOptional,
@@ -61,6 +62,21 @@ export class UpdateDistrictRequestDto {
     message: "assigned_region musbat butun son (viloyat id'si) bo'lishi kerak",
   })
   assigned_region!: string;
+
+  // logistics `updateDistrict`: true va yangilash muvaffaqiyatli bo'lsa —
+  // `logistics.district.rehome_open_orders` mantiqi chaqiriladi, natija
+  // `data.rehome` da (alohida amal: POST /district/:id/rehome-open-orders).
+  @ApiPropertyOptional({
+    type: Boolean,
+    example: false,
+    description:
+      "true — viloyat o'zgargach HQ'dagi hali jo'natilmagan, boshqa viloyat YANGI pochtasida qolgan shu tuman buyurtmalari tumanning yangi (xizmat) viloyati YANGI pochtasiga ko'chiriladi; " +
+      "natija javobning `data.rehome` maydonida (`POST /district/:id/rehome-open-orders` javobi bilan bir xil shakl). Buyurtma viloyati (`region_id`) o'zgarmaydi. " +
+      "Sukut — false: buyurtmalar ko'chirilmaydi (keyin `POST /district/:id/rehome-open-orders` bilan ko'chirsa bo'ladi).",
+  })
+  @IsOptional()
+  @IsBoolean({ message: "rehome_open_orders true yoki false bo'lishi kerak" })
+  rehome_open_orders?: boolean;
 }
 
 export class UpdateDistrictNameRequestDto {

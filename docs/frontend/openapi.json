@@ -7815,6 +7815,65 @@
         ]
       }
     },
+    "/district/{id}/rehome-open-orders": {
+      "post": {
+        "description": "HQ'dagi hali jo'natilmagan, boshqa viloyat YANGI pochtasida qolgan shu tuman buyurtmalarini tumanning xizmat viloyati (`assigned_region ?? region_id`) YANGI pochtasiga ko'chiradi. Buyurtma viloyati (`region_id`) O'ZGARMAYDI — faqat pochta a'zoligi ko'chadi. Kerak bo'ladigan holat: tuman boshqa viloyatga o'tkazilgan (`PATCH /district/:id`), uning buyurtmalari esa eski viloyat pochtasida qolib, jo'natishda 409 `district_not_served_by_branch` beryapti. `PATCH /district/:id` da `rehome_open_orders: true` — xuddi shu amal (natija `data.rehome`). Tana yo'q. Faqat SUPERADMIN/ADMIN (boshqasi — 403); `id` raqam emas — 400. Javob `data`: `district_id`; `target_region_id` — tumanning xizmat viloyati; `moved` — ko'chirilganlar soni; `order_ids[]` — ko'chirilgan buyurtmalar; `from_post_ids[]` — buyurtmalar olingan pochtalar; `to_post_id` — qabul qilgan YANGI pochta (ko'chadigani bo'lmasa — null); `skipped[]` `{ order_id, reason }` — ko'chirilmagan buyurtmalar va sababi.",
+        "operationId": "LogisticsGatewayController_rehomeDistrictOpenOrders",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "District ID (id)",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "example": {
+                    "statusCode": 200,
+                    "message": "success",
+                    "data": {
+                      "district_id": "1401",
+                      "target_region_id": "9",
+                      "moved": 2,
+                      "order_ids": [
+                        "1001",
+                        "1002"
+                      ],
+                      "from_post_ids": [
+                        "900"
+                      ],
+                      "to_post_id": "905",
+                      "skipped": []
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Tumanning ochiq HQ buyurtmalarini xizmat viloyati pochtasiga ko'chirish",
+        "tags": [
+          "Logistics"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
+        ]
+      }
+    },
     "/district/name/{id}": {
       "patch": {
         "operationId": "LogisticsGatewayController_updateName",
@@ -17703,6 +17762,86 @@
         ]
       }
     },
+    "/branches/{id}/districts": {
+      "get": {
+        "description": "Javob `{ statusCode, message, data: District[] }` — `serving_branch_id = :id` bo'lgan tumanlar, nom bo'yicha (A→Z), `region` va `assignedToRegion` bilan. Filial biriktirilmagan tumanlar bu ro'yxatda yo'q: ularga viloyat qoidasi qo'llanadi (tumanning xizmat viloyati `assigned_region ?? region_id` filial viloyatiga teng bo'lsa, o'sha viloyat filiali xizmat qiladi). SUPERADMIN/ADMIN — istalgan filial. MANAGER/REGISTRATOR — faqat o'zi ko'ra oladigan filial (o'z filiali; menejerga quyi filiallari ham), boshqasi 403. Boshqa rollar (LOGIST ham) — 403. Faqat o'qish.",
+        "operationId": "BranchGatewayController_findBranchDistricts",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Branch ID (bigint string)",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Filialga biriktirilgan (xizmat qiladigan) tumanlar",
+        "tags": [
+          "Branch"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "manager",
+          "registrator"
+        ]
+      },
+      "put": {
+        "description": "Ega qarori: filial menejeri o'z filialiga biriktirilmagan tuman buyurtmasini o'z kuryeriga bera olmaydi; filial xodimi boshqa filial tumaniga buyurtma yaratishi mumkin, lekin u paket/HQ orqali to'g'ri filialga boradi. Qaysi filial qaysi tumanga xizmat qilishi shu yerda belgilanadi. ALMASHTIRISH: `district_ids` dagi tumanlar shu filialga biriktiriladi; ilgari shu filialga biriktirilgan, lekin ro'yxatda yo'q tumanlar bo'shatiladi (filialsiz — viloyat qoidasi). `district_ids: []` — filialning barcha tumanlari bo'shatiladi. Filial mavjud, FAOL va HQ EMAS bo'lishi shart (HQ hamma tumanga xizmat qiladi — 400 `data.reason = branch_is_hq`; nofaol — 400 `branch_inactive`; yo'q — 404). Faqat kuryerli filial turi (REGIONAL yoki HYBRID) — PICKUP va boshqalar 400 `data.reason = branch_type_not_serving`. Har bir tuman mavjud bo'lishi shart (yo'q — 404 `district_not_found`, `data.details.district_ids`). Filialning viloyati bo'lsa, tumanning xizmat viloyati (`assigned_region ?? region_id`) unga teng bo'lishi shart — aks holda 400 `data.reason = district_region_mismatch`, `data.details.district_ids`. Boshqa filialga biriktirilgan tuman shu filialga KO'CHADI (ruxsat etiladi) va javobdagi `moved[]` da qaytadi. Javob `data`: `{ branch_id, district_ids, added[], removed[], moved: [{ district_id, from_branch_id }] }`. Faqat SUPERADMIN/ADMIN.",
+        "operationId": "BranchGatewayController_setBranchDistricts",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Branch ID (bigint string)",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetBranchDistrictsRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Filial xizmat qiladigan tumanlarni belgilash (almashtirish)",
+        "tags": [
+          "Branch"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
+        ]
+      }
+    },
     "/branches/transfer-batches": {
       "post": {
         "operationId": "BranchGatewayController_createTransferBatches",
@@ -27505,6 +27644,11 @@
             "type": "string",
             "example": "1",
             "description": "Tuman biriktiriladigan viloyat id'si. Raqam (7) ham, satr ('7') ham qabul qilinadi."
+          },
+          "rehome_open_orders": {
+            "type": "boolean",
+            "example": false,
+            "description": "true — viloyat o'zgargach HQ'dagi hali jo'natilmagan, boshqa viloyat YANGI pochtasida qolgan shu tuman buyurtmalari tumanning yangi (xizmat) viloyati YANGI pochtasiga ko'chiriladi; natija javobning `data.rehome` maydonida (`POST /district/:id/rehome-open-orders` javobi bilan bir xil shakl). Buyurtma viloyati (`region_id`) o'zgarmaydi. Sukut — false: buyurtmalar ko'chirilmaydi (keyin `POST /district/:id/rehome-open-orders` bilan ko'chirsa bo'ladi)."
           }
         },
         "required": [
@@ -32043,6 +32187,27 @@
           "statusCode",
           "message",
           "data"
+        ]
+      },
+      "SetBranchDistrictsRequestDto": {
+        "type": "object",
+        "properties": {
+          "district_ids": {
+            "example": [
+              "101",
+              "102"
+            ],
+            "maxItems": 500,
+            "uniqueItems": true,
+            "description": "Filial xizmat qiladigan tumanlar — TO'LIQ ro'yxat (ALMASHTIRISH): ro'yxatdagilar shu filialga biriktiriladi, ilgari shu filialga biriktirilgan, lekin ro'yxatda yo'q tumanlar bo'shatiladi. `[]` — barcha tumanlar bo'shatiladi. Tuman filial viloyatida bo'lishi shart (xizmat viloyati `assigned_region ?? region_id`); HQ filialiga biriktirilmaydi. Boshqa filialdagi tuman shu filialga ko'chadi (javobda `moved[]`). Id raqam (42) yoki satr ('42'), takrorlanmasin, ko'pi bilan 500 ta.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "district_ids"
         ]
       },
       "CreateBranchTransferBatchesRequestDto": {

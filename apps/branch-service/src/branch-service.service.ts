@@ -14,7 +14,9 @@ import {
   BranchType,
   BranchUserRole,
   Cashbox_type,
+  CoverageDistrict,
   fetchScanOrderSummaries,
+  isOrderServedByBranch,
   Order_status,
   Post_status,
   Roles,
@@ -158,6 +160,22 @@ const DISPATCH_MESSAGE_ORDER_ID_LIMIT = 20;
  * buyurtma ishora qiladimi, qayta so'raladi (`order.find_all`, post_id).
  */
 const DISPATCH_POST_RECHECK_TIMEOUT_MS = 5000;
+
+/**
+ * Tuman ↔ filial qamrovi — jo'natiladigan buyurtmalar tumanlari
+ * (`logistics.district.find_by_ids`). Javob kelmasa yoki buzuq bo'lsa — 503
+ * (fail-closed), hech narsa ko'chirilmaydi.
+ */
+const DISPATCH_DISTRICT_LOOKUP_TIMEOUT_MS = 5000;
+const DISPATCH_DISTRICT_CHECK_UNAVAILABLE_MESSAGE =
+  "Buyurtmalar tumanini tekshirib bo'lmadi (logistika xizmati javob bermadi) — pochta jo'natilmadi. Birozdan so'ng qayta urinib ko'ring.";
+
+/**
+ * Filial o'chirilgach / nofaol qilingach / viloyati yoki turi o'zgargach unga
+ * biriktirilgan tumanlarni bo'shatish (`logistics.district.clear_serving_branch`)
+ * — best-effort.
+ */
+const BRANCH_DISTRICT_RELEASE_TIMEOUT_MS = 5000;
 
 /**
  * CODE-07 — jo'natish manzil filialining FAOL menejerini identity'dan
@@ -4126,6 +4144,21 @@ export class BranchServiceService implements OnModuleInit {
       );
     }
 
+    // Tuman ↔ filial qamrovi (ega qarori, 2026-11-02): HAR BIR buyurtmaning
+    // tumani manzil filialga biriktirilgan bo'lishi shart (yagona qoida —
+    // `isOrderServedByBranch`). Yuqoridagi LC-09 pochta hududi tekshiruvi
+    // o'z joyida qoladi; bu — buyurtma darajasidagi qat'iyroq tekshiruv.
+    // Bittasi bo'lsa ham BUTUN so'rov 409, hech narsa yozilmaydi.
+    await this.assertOrdersServedByDestination(
+      eligibleOrders,
+      destinationBranch,
+      {
+        post_id: postId,
+        source_branch_id: sourceBranchId,
+        destination_branch_id: destinationBranchId,
+      },
+    );
+
     const requesterId = String(requester?.id ?? '').trim() || '0';
     const note = `Post #${postId} HQ'dan branch #${destinationBranchId} ga dispatch qilindi`;
 
@@ -4220,6 +4253,136 @@ export class BranchServiceService implements OnModuleInit {
     );
   }
 
+  /**
+   * Tuman ↔ filial qamrovi — jo'natiladigan buyurtmalar manzil filial
+   * qamrovidami (`isOrderServedByBranch`, @app/common). Tumanlar BITTA
+   * `logistics.district.find_by_ids` bilan o'qiladi (tumansiz buyurtmalar
+   * bo'lsa — buyurtma viloyati bo'yicha, RPC'siz). Buyurtmada tuman bor, lekin
+   * logistikada topilmadi — xizmat qilmaydi. Mos kelmaganlar bo'lsa — 409,
+   * id'lar XABARDA (gateway xato tanasidan `data` ni tashlab yuboradi).
+   *
+   * O'tish holati: buyurtma HQ pochtasiga A viloyati bo'yicha yig'ilgach
+   * tumani B viloyatiga o'tkazilsa, A filialiga bu tekshiruv, B filialiga
+   * esa LC-09 (pochta hududi) yo'l bermaydi. Chiqish yo'li — admin bunday
+   * buyurtmalarni B viloyati YANGI pochtasiga ko'chiradi:
+   * `POST /district/:id/rehome-open-orders` (yoki `PATCH /district/:id` da
+   * `rehome_open_orders: true`). Shu sabab 409 xabarida ham aytiladi.
+   */
+  private async assertOrdersServedByDestination(
+    orders: Array<Record<string, unknown>>,
+    destinationBranch: Branch,
+    context: {
+      post_id: string;
+      source_branch_id: string;
+      destination_branch_id: string;
+    },
+  ): Promise<void> {
+    const districtIds = Array.from(
+      new Set(
+        orders
+          .map((order) => this.normalizeRegionId(order?.district_id))
+          .filter((id): id is string => Boolean(id)),
+      ),
+    );
+    const districtsById = await this.loadDispatchDistricts(districtIds);
+
+    const notServedOrders = orders.filter((order) => {
+      const districtId = this.normalizeRegionId(order?.district_id);
+      const district = districtId ? districtsById.get(districtId) : null;
+      if (districtId && !district) {
+        return true;
+      }
+      return !isOrderServedByBranch(
+        { district, orderRegionId: order?.region_id },
+        destinationBranch,
+      );
+    });
+    const notServedOrderIds = notServedOrders
+      .map((order) => this.canonicalId(order?.id))
+      .filter(Boolean);
+    if (!notServedOrderIds.length) {
+      return;
+    }
+    // Admin `POST /district/:id/rehome-open-orders` ni qaysi tuman uchun
+    // chaqirishini bilishi uchun tumanlar ham qaytariladi (gateway faqat
+    // reason/usage/details ni tashqariga chiqaradi — ro'yxatlar `details` da).
+    const notServedDistrictIds = Array.from(
+      new Set(
+        notServedOrders
+          .map((order) => this.normalizeRegionId(order?.district_id))
+          .filter((id): id is string => Boolean(id)),
+      ),
+    );
+
+    throw new RpcException(
+      errorRes(
+        `Quyidagi buyurtmalar tumani tanlangan filialga biriktirilmagan: ${this.formatOrderIdsForMessage(notServedOrderIds)}. ` +
+          "Ularni tumaniga xizmat qiladigan filialga jo'nating yoki tanlovdan olib tashlang. " +
+          (notServedDistrictIds.length
+            ? `Tuman(lar): ${this.formatOrderIdsForMessage(notServedDistrictIds)}. `
+            : '') +
+          "Agar tuman boshqa viloyatga o'tkazilgan bo'lsa, admin bunday buyurtmalarni POST /district/:id/rehome-open-orders bilan tumanning yangi viloyati pochtasiga ko'chira oladi. " +
+          "Hech narsa jo'natilmadi",
+        409,
+        {
+          reason: 'district_not_served_by_branch',
+          order_ids: notServedOrderIds,
+          district_ids: notServedDistrictIds,
+          details: {
+            order_ids: notServedOrderIds,
+            district_ids: notServedDistrictIds,
+          },
+          ...context,
+        },
+      ),
+    );
+  }
+
+  /**
+   * Jo'natish uchun tumanlar (id → qator). Javob kelmasa, timeout yoki shakli
+   * buzuq bo'lsa — 503 (fail-closed: "bilmasak — jo'natmaymiz").
+   */
+  private async loadDispatchDistricts(
+    districtIds: string[],
+  ): Promise<Map<string, CoverageDistrict>> {
+    const districtsById = new Map<string, CoverageDistrict>();
+    if (!districtIds.length) {
+      return districtsById;
+    }
+
+    let rows: unknown;
+    try {
+      const response = await lastValueFrom(
+        this.logisticsClient
+          .send<{
+            data?: unknown;
+          }>({ cmd: 'logistics.district.find_by_ids' }, { ids: districtIds })
+          .pipe(timeout(DISPATCH_DISTRICT_LOOKUP_TIMEOUT_MS)),
+      );
+      rows = response?.data;
+      if (!Array.isArray(rows)) {
+        throw new Error(
+          "logistics.district.find_by_ids: javob shakli noto'g'ri",
+        );
+      }
+    } catch (error) {
+      this.logger.warn(
+        `dispatch: buyurtma tumanlarini o'qib bo'lmadi (ids=${districtIds.length}): ${this.describeRpcFailure(error)}`,
+      );
+      throw new RpcException(
+        errorRes(DISPATCH_DISTRICT_CHECK_UNAVAILABLE_MESSAGE, 503),
+      );
+    }
+
+    for (const row of rows as CoverageDistrict[]) {
+      const id = this.normalizeRegionId(row?.id);
+      if (id) {
+        districtsById.set(id, row);
+      }
+    }
+    return districtsById;
+  }
+
   /** Raqamli hudud id'si (kanonik) yoki null (bo'sh, '0' emas, raqam emas). */
   private normalizeRegionId(value: unknown): string | null {
     const normalized = String((value ?? '') as string).trim();
@@ -4280,8 +4443,11 @@ export class BranchServiceService implements OnModuleInit {
    *
    * - Kirish: superadmin/admin yoki HQ registratori (qolganlar — 403).
    * - Faqat FAOL REGIONAL/HYBRID filiallar (HQ va PICKUP hech qachon), ixtiyoriy
-   *   region_id filtri bilan — dispatchPostToBranch qabul qiladigan manzillar
-   *   bilan bir xil qoida.
+   *   region_id filtri bilan — dispatchPostToBranch'ning filial darajasidagi
+   *   qoidasi (tur/holat/hudud). Tuman ↔ filial qamrovi bu yerda HISOBGA
+   *   OLINMAYDI: u har bir buyurtma bo'yicha jo'natish paytida tekshiriladi
+   *   (`assertOrdersServedByDestination`, 409 `district_not_served_by_branch`)
+   *   — bir viloyatda tumanlarni bo'lishgan ikki filial ham ro'yxatda chiqadi.
    * - PUL MAYDONLARI YO'Q (branch.find_all'dan farqli: u menejer oyligi,
    *   kuryer balanslari va olinishi_kerak/berilishi_kerak ni qaytaradi —
    *   registrator ularni ko'rmasligi kerak).
@@ -5585,6 +5751,9 @@ export class BranchServiceService implements OnModuleInit {
     if (typeof dto?.status !== 'undefined') {
       branch.status = this.parseStatus(dto.status) ?? branch.status;
     }
+    const deactivates =
+      beforeSnapshot.status !== Status.INACTIVE &&
+      branch.status === Status.INACTIVE;
 
     // CODE-20: kuryerlar (va ochiq ishlar) turgan filialning turi, holati
     // yoki hududi ularni "osilib" qoldiradigan tarzda o'zgarmaydi. Hech narsa
@@ -5616,7 +5785,58 @@ export class BranchServiceService implements OnModuleInit {
       ...this.auditActor(requester),
     });
 
+    // Tuman ↔ filial qamrovi: biriktirilgan tumanlariga endi xizmat qila
+    // olmaydigan filialning tumanlari bo'shatiladi (saqlangandan KEYIN,
+    // best-effort) — aks holda `serving_branch_id` ustunligi tufayli bu
+    // tumanlar buyurtmalarini hech bir filialga jo'natib bo'lmay HQ'da qolardi:
+    //   - nofaol qilinsa (nofaol filialga pochta jo'natilmaydi);
+    //   - viloyati o'zgarsa (tumanlar eski viloyatda qoladi — LC-09 ularning
+    //     pochtasini yangi viloyatdagi filialga jo'natmaydi; tuman tomonida
+    //     ham viloyat o'zgarsa `serving_branch_id` tozalanadi);
+    //   - tur pochta qabul qila olmaydigan turga o'tsa (faqat REGIONAL/HYBRID
+    //     manzil bo'la oladi).
+    // Bo'shagan tuman xizmat viloyati bo'yicha qoidaga qaytadi.
+    const regionChanges =
+      String(beforeSnapshot.region_id ?? '').trim() !==
+      String(saved.region_id ?? '').trim();
+    const losesDispatchDestination =
+      beforeSnapshot.type !== saved.type &&
+      saved.type !== BranchType.REGIONAL &&
+      saved.type !== BranchType.HYBRID;
+    if (deactivates || regionChanges || losesDispatchDestination) {
+      this.releaseBranchDistricts(String(branch.id));
+    }
+
     return successRes(saved, 200, 'Branch updated');
+  }
+
+  /**
+   * Tuman ↔ filial qamrovi — filial o'chirilgach, nofaol qilingach, viloyati
+   * yoki turi (REGIONAL/HYBRID'dan boshqasiga) o'zgargach unga biriktirilgan
+   * tumanlar bo'shatiladi (`logistics.district.clear_serving_branch`;
+   * bo'shagan tuman xizmat viloyati bo'yicha qoidaga qaytadi). Best-effort:
+   * filial o'zgarishi allaqachon saqlangan — xato faqat log'ga yoziladi va
+   * javob KUTILMAYDI (gateway 8 s chegarasi; o'chirish tekshiruvlarining
+   * o'zi 5 s gacha oladi).
+   */
+  private releaseBranchDistricts(branchId: string): void {
+    const release = async () => {
+      try {
+        await lastValueFrom(
+          this.logisticsClient
+            .send(
+              { cmd: 'logistics.district.clear_serving_branch' },
+              { branch_id: branchId },
+            )
+            .pipe(timeout(BRANCH_DISTRICT_RELEASE_TIMEOUT_MS)),
+        );
+      } catch (error) {
+        this.logger.warn(
+          `filial #${branchId} tumanlarini bo'shatib bo'lmadi (logistics.district.clear_serving_branch): ${this.describeRpcFailure(error)}`,
+        );
+      }
+    };
+    void release();
   }
 
   /**
@@ -5883,6 +6103,9 @@ export class BranchServiceService implements OnModuleInit {
       old_value: { name: deletedName, code: deletedCode },
       ...this.auditActor(requester),
     });
+
+    // Tuman ↔ filial qamrovi: o'chirilgan filial tumanlari bo'shatiladi.
+    this.releaseBranchDistricts(String(branch.id));
 
     return successRes({ id }, 200, 'Branch deleted');
   }

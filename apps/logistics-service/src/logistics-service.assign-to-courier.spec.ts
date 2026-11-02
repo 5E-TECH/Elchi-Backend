@@ -66,6 +66,12 @@ describe('LogisticsServiceService assignOrdersToCourier', () => {
               branch_id: options?.managerBranchId ?? '10',
               role: options?.managerRole ?? 'MANAGER',
               user_id: payload.user_id,
+              // Filial qatori (tuman qamrovi): 1-viloyat = buyurtmalar viloyati.
+              branch: {
+                id: options?.managerBranchId ?? '10',
+                type: 'REGIONAL',
+                region_id: '1',
+              },
             },
           });
         }

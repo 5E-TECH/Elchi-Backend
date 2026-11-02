@@ -51,7 +51,14 @@ describe('FIX3 CODE-11 — assignOrdersToCourier qo‘shimcha to‘siqlar', () =
     const branchClient = {
       send: jest.fn((pattern: { cmd: string }) => {
         if (pattern.cmd === 'branch.user.find_by_user') {
-          return of({ data: { branch_id: '10', role: 'MANAGER' } });
+          // Filial qatori (tuman qamrovi): 10-filial, 1-viloyat.
+          return of({
+            data: {
+              branch_id: '10',
+              role: 'MANAGER',
+              branch: { id: '10', type: 'REGIONAL', region_id: '1' },
+            },
+          });
         }
         if (pattern.cmd === 'branch.user.find_by_branch') {
           return of({ data: [{ user_id: '44', role: 'COURIER' }] });
@@ -232,6 +239,8 @@ describe('FIX3 CODE-25 — scanAssignOrder qoldiqlari', () => {
             branch: {
               id: options.courierBranch.branch_id,
               type: options.courierBranch.type,
+              // Tuman qamrovi: filial 1-viloyatga xizmat qiladi.
+              region_id: '1',
             },
           },
         });
@@ -359,6 +368,7 @@ describe('FIX3 CODE-25 — scanAssignOrder qoldiqlari', () => {
         courier_id: null,
         post_id: 'p-received',
         total_price: 120_000,
+        region_id: '1',
       },
       courierBranch: { branch_id: '10', type: 'REGIONAL' },
       posts: [

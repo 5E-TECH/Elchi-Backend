@@ -10,6 +10,7 @@ import {
   Param,
   Patch,
   Post,
+  Put,
   Query,
   Req,
   ServiceUnavailableException,
@@ -54,6 +55,7 @@ import {
   ReceiveTransferBatchOrdersRequestDto,
   SendTransferBatchRequestDto,
   SetBranchConfigRequestDto,
+  SetBranchDistrictsRequestDto,
   TransferBatchDetailDto,
   TransferBatchHistoryResponseDto,
   TransferCourierBranchRequestDto,
@@ -102,6 +104,25 @@ const unwrapData = (value: unknown): Record<string, unknown> | null => {
   return record && 'data' in record ? asRecord(record.data) : record;
 };
 
+// Tuman qamrovi (ega qarori 2026-11-02): filial tumanlarini yozish —
+// logistics'da filial tekshiruvi (branch RPC, 5 s), tranzaksiya va har o'zgargan
+// tuman uchun activity log (500 tagacha). 8 s chegarasi katta ro'yxatda yetmay
+// qolishi mumkin (mijoz 504 oladi, yozuv orqada baribir yakunlanadi).
+const DISTRICT_COVERAGE_WRITE_RPC_TIMEOUT_MS = 15_000;
+const LOGISTICS_UNAVAILABLE_MESSAGE =
+  "Logistika xizmati mavjud emas — birozdan so'ng qayta urinib ko'ring";
+
+const SYSTEM_PRIVILEGED_ROLES: readonly string[] = [
+  RoleEnum.SUPERADMIN,
+  RoleEnum.ADMIN,
+];
+
+/** So'rovchi superadmin yoki admin (katta-kichik harfga qaramay). */
+const isSystemPrivilegedRoles = (roles?: readonly unknown[] | null): boolean =>
+  (roles ?? []).some((role) =>
+    SYSTEM_PRIVILEGED_ROLES.includes(text(role).toLowerCase()),
+  );
+
 @ApiTags('Branch')
 @ApiBearerAuth()
 @Controller()
@@ -115,7 +136,27 @@ export class BranchGatewayController {
     // T7 (CqBD8V4p): paket buyurtmalariga `problem_contacts`. Yo'q (eski
     // spec'lar) — maydon qo'shilmaydi.
     @Optional() private readonly problemContacts?: ProblemContactsService,
+    // Tuman qamrovi (`branches/:id/districts`): tumanlar logistics'da. Oxirida
+    // va @Optional — mavjud pozitsion konstruktor chaqiruvlari buzilmasin;
+    // yo'q bo'lsa shu marshrutlar 503 (fail-closed).
+    @Optional()
+    @Inject('LOGISTICS')
+    private readonly logisticsClient?: ClientProxy,
   ) {}
+
+  /** Tuman qamrovi: logistics'ga RPC (mijoz yo'q — 503). */
+  private async sendDistrictCoverage(
+    cmd: string,
+    payload: object,
+    timeoutMs: number,
+  ): Promise<unknown> {
+    if (!this.logisticsClient) {
+      throw new ServiceUnavailableException(LOGISTICS_UNAVAILABLE_MESSAGE);
+    }
+    return firstValueFrom(
+      this.logisticsClient.send({ cmd }, payload).pipe(timeout(timeoutMs)),
+    );
+  }
 
   /** Z3pUOxou: logistning viloyatlari (xizmat yo'q/xato — 503). */
   private async logistRegionIds(req: {
@@ -432,6 +473,93 @@ export class BranchGatewayController {
         { id, requester: this.toRequester(req) },
       )
       .pipe(timeout(8000));
+  }
+
+  /**
+   * Tuman qamrovi (ega qarori 2026-11-02): filial xizmat qiladigan tumanlar
+   * (`districts.serving_branch_id = :id`). Yagona qoida — `@app/common`
+   * `isOrderServedByBranch`: filial menejeri o'z filialiga biriktirilmagan
+   * tuman buyurtmasini o'z kuryeriga bera olmaydi.
+   *
+   * Doira: SA/ADMIN — istalgan filial; MANAGER/REGISTRATOR — avval
+   * `branch.find_by_id` o'z requester'i bilan (branch-service
+   * `assertCanReadBranch`: o'z filiali, menejerga quyi filiallari ham;
+   * boshqasi 403 va tumanlar so'ralmaydi). LOGIST — yo'q (ega LG-S1: logist
+   * faqat buyurtma/tracking/pochta/paket/kuryerlarni ko'radi).
+   */
+  @Get('branches/:id/districts')
+  @Roles(
+    RoleEnum.SUPERADMIN,
+    RoleEnum.ADMIN,
+    RoleEnum.MANAGER,
+    RoleEnum.REGISTRATOR,
+  )
+  @ApiOperation({
+    summary: 'Filialga biriktirilgan (xizmat qiladigan) tumanlar',
+    description:
+      "Javob `{ statusCode, message, data: District[] }` — `serving_branch_id = :id` bo'lgan tumanlar, nom bo'yicha (A→Z), `region` va `assignedToRegion` bilan. " +
+      "Filial biriktirilmagan tumanlar bu ro'yxatda yo'q: ularga viloyat qoidasi qo'llanadi (tumanning xizmat viloyati `assigned_region ?? region_id` filial viloyatiga teng bo'lsa, o'sha viloyat filiali xizmat qiladi). " +
+      "SUPERADMIN/ADMIN — istalgan filial. MANAGER/REGISTRATOR — faqat o'zi ko'ra oladigan filial (o'z filiali; menejerga quyi filiallari ham), boshqasi 403. " +
+      "Boshqa rollar (LOGIST ham) — 403. Faqat o'qish.",
+  })
+  @ApiParam({ name: 'id', description: 'Branch ID (bigint string)' })
+  async findBranchDistricts(
+    @Param('id', ParseBigintIdPipe) id: string,
+    @Req() req: { user?: { sub?: string; roles?: string[] } },
+  ) {
+    if (!isSystemPrivilegedRoles(req?.user?.roles)) {
+      // Filial xodimi: o'qish huquqi branch-service'da tekshiriladi (403
+      // xatosi shu yerdan qaytadi, tumanlar so'ralmaydi).
+      await firstValueFrom(
+        this.branchClient
+          .send(
+            { cmd: 'branch.find_by_id' },
+            { id, requester: this.toRequester(req) },
+          )
+          .pipe(timeout(8000)),
+      );
+    }
+    return this.sendDistrictCoverage(
+      'logistics.district.find_by_branch',
+      { branch_id: id },
+      8000,
+    );
+  }
+
+  /**
+   * Tuman qamrovi: filial xizmat tumanlarini belgilash (ALMASHTIRISH). Barcha
+   * tekshiruv logistics'da (`logistics.district.set_serving_branch`): rol,
+   * filial (mavjud, faol, HQ emas), tumanlar mavjudligi va viloyati.
+   */
+  @Put('branches/:id/districts')
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiOperation({
+    summary: 'Filial xizmat qiladigan tumanlarni belgilash (almashtirish)',
+    description:
+      "Ega qarori: filial menejeri o'z filialiga biriktirilmagan tuman buyurtmasini o'z kuryeriga bera olmaydi; filial xodimi boshqa filial tumaniga buyurtma yaratishi mumkin, lekin u paket/HQ orqali to'g'ri filialga boradi. Qaysi filial qaysi tumanga xizmat qilishi shu yerda belgilanadi. " +
+      "ALMASHTIRISH: `district_ids` dagi tumanlar shu filialga biriktiriladi; ilgari shu filialga biriktirilgan, lekin ro'yxatda yo'q tumanlar bo'shatiladi (filialsiz — viloyat qoidasi). `district_ids: []` — filialning barcha tumanlari bo'shatiladi. " +
+      "Filial mavjud, FAOL va HQ EMAS bo'lishi shart (HQ hamma tumanga xizmat qiladi — 400 `data.reason = branch_is_hq`; nofaol — 400 `branch_inactive`; yo'q — 404). " +
+      'Faqat kuryerli filial turi (REGIONAL yoki HYBRID) — PICKUP va boshqalar 400 `data.reason = branch_type_not_serving`. ' +
+      "Har bir tuman mavjud bo'lishi shart (yo'q — 404 `district_not_found`, `data.details.district_ids`). Filialning viloyati bo'lsa, tumanning xizmat viloyati (`assigned_region ?? region_id`) unga teng bo'lishi shart — aks holda 400 `data.reason = district_region_mismatch`, `data.details.district_ids`. " +
+      "Boshqa filialga biriktirilgan tuman shu filialga KO'CHADI (ruxsat etiladi) va javobdagi `moved[]` da qaytadi. " +
+      'Javob `data`: `{ branch_id, district_ids, added[], removed[], moved: [{ district_id, from_branch_id }] }`. Faqat SUPERADMIN/ADMIN.',
+  })
+  @ApiParam({ name: 'id', description: 'Branch ID (bigint string)' })
+  @ApiBody({ type: SetBranchDistrictsRequestDto })
+  setBranchDistricts(
+    @Param('id', ParseBigintIdPipe) id: string,
+    @Body() dto: SetBranchDistrictsRequestDto,
+    @Req() req: { user?: { sub?: string; roles?: string[] } },
+  ) {
+    return this.sendDistrictCoverage(
+      'logistics.district.set_serving_branch',
+      {
+        branch_id: id,
+        district_ids: dto.district_ids,
+        requester: this.toRequester(req),
+      },
+      DISTRICT_COVERAGE_WRITE_RPC_TIMEOUT_MS,
+    );
   }
 
   @Post('branches/transfer-batches')
