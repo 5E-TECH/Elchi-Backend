@@ -5,6 +5,7 @@ import {
   MessagePattern,
   Payload,
   RmqContext,
+  RpcException,
 } from '@nestjs/microservices';
 import {
   RmqService,
@@ -33,6 +34,7 @@ import {
   Order_source,
 } from './entities/order.entity';
 import { AiPreviewService } from './ai/ai-preview.service';
+import { PostMembershipService } from './post-membership/post-membership.service';
 import type { AiResolvePreviewRequest } from './ai/ai-preview.types';
 import {
   isAiStableRequestId,
@@ -139,6 +141,10 @@ export class OrderServiceController {
     // controllerni 8 argument bilan quradi.
     @Optional()
     private readonly orderNotifications?: OrderNotificationService,
+    // Pochta ↔ buyurtma tarixi. Ixtiyoriy: eski spec'lar controllerni
+    // pozitsion argumentlar bilan quradi.
+    @Optional()
+    private readonly postMembership?: PostMembershipService,
   ) {}
 
   private executeAndAck<T>(
@@ -445,6 +451,27 @@ export class OrderServiceController {
     return this.executeAndAck(context, () =>
       this.orderService.findSummariesByIds(data?.ids),
     );
+  }
+
+  /**
+   * Pochta ↔ buyurtma tarixi (eski pochta ro'yxati, logistika
+   * `logistics.post.orders_by_post` view='all'): berilgan pochtalarga
+   * qachondir kirgan buyurtmalar, `joined_at` bo'yicha. Faqat o'qish.
+   */
+  @MessagePattern({ cmd: 'order.post_membership.find' })
+  findPostMemberships(
+    @Payload() data: { post_ids?: unknown },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () => {
+      if (!this.postMembership) {
+        throw new RpcException({
+          statusCode: 503,
+          message: 'Pochta tarixi servisi ulanmagan',
+        });
+      }
+      return this.postMembership.findByPostIds(data);
+    });
   }
 
   /** Dalil faylining egasi — fayl kirish nazorati uchun (audit S5). */

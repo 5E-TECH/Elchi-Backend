@@ -326,12 +326,18 @@ export class LogisticsServiceController {
       requester: { id: string; roles?: string[] };
       // T9 (BE-2): faqat gateway detali (GET /post/orders/:id) — «Qayerdan».
       with_sender_branch?: boolean;
+      // Eski pochtalar: `all` — pochtaga har qachon kirgan buyurtmalar,
+      // `current` — faqat hozirgilari; berilmasa pochta holatidan.
+      view?: string;
     },
     @Ctx() context: RmqContext,
   ) {
+    const view =
+      data?.view === 'all' || data?.view === 'current' ? data.view : undefined;
     return this.executeAndAck(context, () =>
       this.logisticsService.getPostOrders(data.id, data.requester, {
         withSenderBranch: data?.with_sender_branch === true,
+        view,
       }),
     );
   }

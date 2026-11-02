@@ -49,6 +49,7 @@ import { OrderBatchInboxMessage } from './entities/order-batch-inbox-message.ent
 import { MarketCancelledHandoverSession } from './entities/market-cancelled-handover-session.entity';
 import { OrderExtraCostApproval } from './entities/order-extra-cost-approval.entity';
 
+import { PostMembershipService } from './post-membership/post-membership.service';
 import { CustomerSegmentService } from './segment/customer-segment.service';
 import { OrderWarehouseService } from './warehouse/order-warehouse.service';
 import { CustomerSegmentController } from './segment/customer-segment.controller';
@@ -150,6 +151,8 @@ import { CustomerSegmentController } from './segment/customer-segment.controller
     DistrictLlmFallbackService,
     // 6kHnNH9j: ombor ↔ buyurtma (yaratishda band, kuryerga chiqim, qaytish).
     OrderWarehouseService,
+    // Pochta ↔ buyurtma tarixi (`order.post_membership.find`, migratsiya 201).
+    PostMembershipService,
   ],
 })
 export class OrderServiceModule {}
