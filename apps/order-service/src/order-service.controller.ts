@@ -1317,6 +1317,14 @@ export class OrderServiceController {
           role?: string | null;
           branch_id?: string | null;
         } | null;
+        /** Jo'natilgan pochta boshqa filialga o'tkazildi (branch-service). */
+        post_branch_reassign?: {
+          post_id?: string | null;
+          from_branch_id?: string | null;
+          from_branch_name?: string | null;
+          to_branch_id?: string | null;
+          to_branch_name?: string | null;
+        } | null;
       };
     },
     @Ctx() context: RmqContext,

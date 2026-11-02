@@ -1034,6 +1034,44 @@ export class BranchGatewayController {
       .pipe(timeout(BATCH_RPC_TIMEOUT_MS));
   }
 
+  @Post('branches/posts/:postId/reassign')
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiOperation({
+    summary: 'Move a sent, not yet received branch post to another branch',
+    description:
+      "Eski pochtalar → «Filialga o'tkazish». The post (same id) and all its on-the-road orders move to the destination branch. Rules: post status 'sent' without courier; destination is an active REGIONAL/HYBRID branch of the post's region with a manager and serves every order's district; every order is still on the road (not received). 409 data.reasons: post_not_sent, post_partly_received, empty_post, district_not_served_by_branch, reassign_failed.",
+  })
+  @ApiParam({ name: 'postId', description: 'Logistics post ID' })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      required: ['destination_branch_id'],
+      properties: {
+        destination_branch_id: {
+          type: 'string',
+          example: '12',
+          description: 'Destination branch ID',
+        },
+      },
+    },
+  })
+  reassignPostToBranch(
+    @Param('postId') postId: string,
+    @Body('destination_branch_id') destinationBranchId: string,
+    @Req() req: { user?: { sub?: string; roles?: string[] } },
+  ) {
+    return this.branchClient
+      .send(
+        { cmd: 'branch.post.reassign_branch' },
+        {
+          post_id: postId,
+          destination_branch_id: destinationBranchId,
+          requester: this.toRequester(req),
+        },
+      )
+      .pipe(timeout(BATCH_RPC_TIMEOUT_MS));
+  }
+
   @Patch('branches/:id')
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiOperation({ summary: 'Update branch' })

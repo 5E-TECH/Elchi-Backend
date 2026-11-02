@@ -344,6 +344,21 @@ export class BranchServiceController {
     );
   }
 
+  // Jo'natilgan, hali qabul qilinmagan pochtani boshqa filialga o'tkazish.
+  @MessagePattern({ cmd: 'branch.post.reassign_branch' })
+  reassignPostToBranch(
+    @Payload() data: Record<string, any>,
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.branchService.reassignPostToBranch(
+        data?.post_id,
+        data?.destination_branch_id,
+        this.getRequester(data),
+      ),
+    );
+  }
+
   // Pochta jo'natish oynasi uchun manzil filiallar (pul maydonlarisiz).
   @MessagePattern({ cmd: 'branch.dispatch_destinations' })
   findDispatchDestinations(

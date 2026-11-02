@@ -274,6 +274,21 @@ export class LogisticsServiceController {
     );
   }
 
+  @MessagePattern({ cmd: 'logistics.post.reassign_branch' })
+  reassignPostBranch(
+    @Payload()
+    data: { post_id: string; from_branch_id: string; to_branch_id: string },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.logisticsService.reassignPostBranch(
+        data.post_id,
+        data.from_branch_id,
+        data.to_branch_id,
+      ),
+    );
+  }
+
   @MessagePattern({ cmd: 'logistics.post.find_by_ids' })
   findPostsByIds(
     @Payload() data: { ids: string[] },

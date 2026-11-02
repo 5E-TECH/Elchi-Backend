@@ -3452,6 +3452,58 @@ export class LogisticsServiceService implements OnModuleInit {
     return successRes({ id }, 200, 'Post deleted');
   }
 
+  /**
+   * Jo'natilgan filial pochtasini boshqa filialga o'tkazish — pochta qismi
+   * (`branch.post.reassign_branch` buyurtmalarni ko'chirib bo'lgach
+   * chaqiradi). Shartli yozuv: faqat hali 'sent', kuryersiz va AYNAN eski
+   * filialda turgan pochta o'zgaradi — shu orada filial qabul qilgan bo'lsa,
+   * 409 (chaqiruvchi buyurtmalarni qaytaradi). Pochta allaqachon yangi
+   * filialda bo'lsa (buyurtmalar ko'chgach `repairSentPostBranchAssignments`
+   * o'zi tiklagan yoki qayta urinish) — muvaffaqiyat.
+   */
+  async reassignPostBranch(
+    postId: string,
+    fromBranchId: string,
+    toBranchId: string,
+  ) {
+    const id = String(postId ?? '').trim();
+    const from = String(fromBranchId ?? '').trim();
+    const to = String(toBranchId ?? '').trim();
+    if (![id, from, to].every((value) => /^\d+$/.test(value))) {
+      this.badRequest('post_id, from_branch_id va to_branch_id majburiy');
+    }
+    const result = await this.postRepo.update(
+      {
+        id,
+        status: Post_status.SENT,
+        courier_id: '0',
+        branch_id: from,
+        isDeleted: false,
+      },
+      { branch_id: to },
+    );
+    const post = await this.postRepo.findOne({ where: { id } });
+    if (!post || post.isDeleted) {
+      this.notFound('Pochta topilmadi');
+    }
+    if (
+      !result.affected &&
+      !(post.status === Post_status.SENT && String(post.branch_id) === to)
+    ) {
+      this.conflict(
+        "Pochta o'zgargan (filial qabul qilgan yoki boshqa filialga o'tgan) — sahifani yangilang",
+      );
+    }
+    void this.syncPostToSearch(post);
+    await this.activityLog.log({
+      entity_type: 'Post',
+      entity_id: id,
+      action: 'logistics.post_reassign_branch',
+      metadata: { from_branch_id: from, to_branch_id: to },
+    });
+    return successRes(post, 200, "Pochta boshqa filialga o'tkazildi");
+  }
+
   async findPostsByIds(ids: string[]) {
     if (!ids.length) {
       return successRes([], 200, 'Posts found');

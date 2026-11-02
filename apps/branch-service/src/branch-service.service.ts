@@ -4254,6 +4254,334 @@ export class BranchServiceService implements OnModuleInit {
   }
 
   /**
+   * Jo'natilgan pochtani boshqa filialga o'tkazish (BeePost «Kuryerni
+   * o'zgartirish» ning filial ko'rinishi): HQ adashib 1-filialga jo'natgan,
+   * 1-filial hali QABUL QILMAGAN pochta shu viloyatdagi boshqa filialga
+   * o'tadi. Pochta id'si o'zgarmaydi.
+   *
+   * Pochta VA undagi har bir buyurtma birga ko'chadi: logistics pochtaning
+   * branch_id'sini buyurtmalarning `holder_branch_id ?? branch_id` sidan
+   * tiklaydi (repairSentPostBranchAssignments, findPostById, getPostOrders,
+   * receivePost) — faqat pochtani o'zgartirish keyingi ochilishda bekor
+   * bo'lardi va 1-filial qabul qilib, sotuv puli uning kassasiga tushardi.
+   * Pul (settlement, filial kassasi, ulush) sotuvda `holder_branch_id ??
+   * branch_id` dan olinadi — yo'ldagi buyurtmada hali pul yozuvi yo'q.
+   *
+   * Faqat superadmin/admin. Shartlar: pochta 'sent', kuryersiz, filialga
+   * jo'natilgan; manzil — dispatch qoidalari (faol REGIONAL/HYBRID, menejeri
+   * bor, pochta hududida, har buyurtma tumani qamrovda). Pochtadagi HAR BIR
+   * tirik buyurtma yo'lda (ON_THE_ROAD, kuryersiz, qaytarish so'ralmagan) va
+   * eski (yoki allaqachon yangi) filialda bo'lishi shart — bittasi qabul
+   * qilingan bo'lsa ham BUTUN so'rov 409, hech narsa ko'chirilmaydi.
+   *
+   * Xizmatlararo tranzaksiya yo'q: avval buyurtmalar (`order.update`, holat
+   * o'zgarmaydi — tarixga «o'tkazildi» qatori yoziladi), oxirida pochta
+   * (`logistics.post.reassign_branch`, shartli). Yarmida yiqilsa — ko'chgan
+   * buyurtmalar eski filialga qaytariladi. Qayta urinish xavfsiz: yangi
+   * filialda turgan buyurtmalar o'tkazib yuboriladi.
+   */
+  async reassignPostToBranch(
+    postIdInput: string,
+    destinationBranchIdInput: string,
+    requester?: RequesterContext,
+  ) {
+    const postId = this.canonicalId(postIdInput);
+    const destinationBranchId = this.canonicalId(destinationBranchIdInput);
+    if (!postId || !destinationBranchId) {
+      this.badRequest('post_id va destination_branch_id majburiy');
+    }
+    if (!this.isSystemPrivileged(requester)) {
+      this.forbidden(
+        "Pochtani boshqa filialga faqat superadmin yoki admin o'tkaza oladi",
+      );
+    }
+
+    const postsResponse = await this.sendLogisticsCommand<{
+      data?: Array<Record<string, unknown>>;
+    }>('logistics.post.find_by_ids', { ids: [postId] });
+    const post = (
+      Array.isArray(postsResponse?.data) ? postsResponse.data : []
+    ).find((row) => this.canonicalId(row?.id) === postId);
+    if (!post || Boolean(post.isDeleted ?? post.is_deleted)) {
+      this.notFound(`Pochta #${postId} topilmadi`);
+    }
+
+    const courierId = this.idText(post.courier_id);
+    if (this.hasCourierRef(courierId)) {
+      throw new RpcException(
+        errorRes(
+          `Pochta #${postId} kuryerga biriktirilgan — kuryer pochtasini filialga o'tkazib bo'lmaydi`,
+          400,
+          {
+            post_id: postId,
+            destination_branch_id: destinationBranchId,
+            reasons: { post_has_courier: true },
+          },
+        ),
+      );
+    }
+    const postStatus = this.idText(post.status).toLowerCase();
+    const sourceBranchId = this.canonicalId(post.branch_id);
+    if (postStatus !== Post_status.SENT || !sourceBranchId) {
+      const message =
+        postStatus === Post_status.NEW
+          ? `Pochta #${postId} hali jo'natilmagan — uni «Jo'natish» orqali kerakli filialga yuboring`
+          : postStatus === Post_status.RECEIVED
+            ? `Pochta #${postId} filialda qabul qilingan — uni boshqa filialga o'tkazib bo'lmaydi`
+            : `Pochta #${postId} holati "${postStatus || "noma'lum"}" — faqat filialga jo'natilgan, hali qabul qilinmagan pochta o'tkaziladi`;
+      throw new RpcException(
+        errorRes(message, 409, {
+          post_id: postId,
+          destination_branch_id: destinationBranchId,
+          post_status: postStatus || null,
+          reasons: { post_not_sent: true },
+        }),
+      );
+    }
+    if (sourceBranchId === destinationBranchId) {
+      throw new RpcException(
+        errorRes(
+          `Pochta #${postId} allaqachon shu filialga jo'natilgan — boshqa filialni tanlang`,
+          400,
+          {
+            post_id: postId,
+            source_branch_id: sourceBranchId,
+            destination_branch_id: destinationBranchId,
+            reasons: { same_branch: true },
+          },
+        ),
+      );
+    }
+
+    const sourceBranch = await this.branchRepo.findOne({
+      where: { id: sourceBranchId },
+    });
+    const destinationBranch = await this.getBranchOrThrow(destinationBranchId);
+    this.assertValidDispatchDestination(
+      sourceBranch ?? ({ id: sourceBranchId } as Branch),
+      destinationBranch,
+    );
+    await this.assertBranchHasManager(destinationBranch);
+
+    // LC-09: pochta hududi bo'yicha yig'ilgan — faqat SHU hududdagi filialga.
+    const postRegionId = this.normalizeRegionId(post.region_id);
+    const destinationRegionId = this.normalizeRegionId(
+      destinationBranch.region_id,
+    );
+    if (
+      postRegionId &&
+      destinationRegionId &&
+      postRegionId !== destinationRegionId
+    ) {
+      throw new RpcException(
+        errorRes(
+          `Pochta #${postId} boshqa hudud uchun (hudud #${postRegionId}), tanlangan filial esa hudud #${destinationRegionId} da. ` +
+            "Pochtani faqat o'z hududidagi filialga o'tkazish mumkin. Hech narsa o'tkazilmadi",
+          400,
+          {
+            post_id: postId,
+            source_branch_id: sourceBranchId,
+            destination_branch_id: destinationBranchId,
+            post_region_id: postRegionId,
+            destination_region_id: destinationRegionId,
+            reasons: { region_mismatch: true },
+          },
+        ),
+      );
+    }
+
+    const requesterPayload = {
+      id: String(requester?.id ?? ''),
+      roles: requester?.roles ?? [],
+    };
+    const postOrdersResponse = await this.sendLogisticsCommand<{
+      data?:
+        | Array<Record<string, unknown>>
+        | { allOrdersByPostId?: Array<Record<string, unknown>> };
+    }>('logistics.post.orders_by_post', {
+      id: postId,
+      requester: requesterPayload,
+    });
+    const rawData = postOrdersResponse?.data;
+    const orders = (
+      Array.isArray(rawData)
+        ? rawData
+        : Array.isArray(rawData?.allOrdersByPostId)
+          ? rawData.allOrdersByPostId
+          : []
+    ).filter((order) => !(order?.isDeleted ?? order?.is_deleted));
+    if (!orders.length) {
+      throw new RpcException(
+        errorRes(`Pochta #${postId} ichida buyurtma yo'q`, 409, {
+          post_id: postId,
+          source_branch_id: sourceBranchId,
+          destination_branch_id: destinationBranchId,
+          reasons: { empty_post: true },
+        }),
+      );
+    }
+
+    // Har bir buyurtma: yo'lda, kuryersiz, qaytarish so'ralmagan, eski yoki
+    // (oldingi yarim urinishdan) yangi filialda. Qolgani — 1-filial qabul
+    // qilgan / kuryerga bergan / bekor bo'lgan: pochta o'tkazilmaydi.
+    const holderBranchOf = (order: Record<string, unknown>) =>
+      this.canonicalId(order?.holder_branch_id ?? order?.branch_id);
+    const blockedOrderIds = orders
+      .filter((order) => {
+        const status = this.idText(order?.status).toLowerCase();
+        const holder = holderBranchOf(order);
+        return (
+          status !== Order_status.ON_THE_ROAD ||
+          this.hasCourierRef(order?.courier_id) ||
+          this.hasCourierRef(order?.holder_courier_id) ||
+          order?.return_requested === true ||
+          (holder !== sourceBranchId && holder !== destinationBranchId)
+        );
+      })
+      .map((order) => this.canonicalId(order?.id));
+    if (blockedOrderIds.length) {
+      throw new RpcException(
+        errorRes(
+          `Pochtadagi ${blockedOrderIds.length} ta buyurtma filialda qabul qilingan yoki yo'lda emas: ${this.formatOrderIdsForMessage(blockedOrderIds)}. ` +
+            "Qabul qilina boshlagan pochtani boshqa filialga o'tkazib bo'lmaydi. Hech narsa o'tkazilmadi",
+          409,
+          {
+            post_id: postId,
+            source_branch_id: sourceBranchId,
+            destination_branch_id: destinationBranchId,
+            blocked_order_ids: blockedOrderIds,
+            reasons: { post_partly_received: true },
+          },
+        ),
+      );
+    }
+
+    await this.assertOrdersServedByDestination(orders, destinationBranch, {
+      post_id: postId,
+      source_branch_id: sourceBranchId,
+      destination_branch_id: destinationBranchId,
+    });
+
+    const sourceBranchName = sourceBranch?.name ?? `#${sourceBranchId}`;
+    const destinationBranchName =
+      destinationBranch.name ?? `#${destinationBranchId}`;
+    const orderRequester = (
+      from: string,
+      to: string,
+      fromName: string,
+      toName: string,
+    ) => ({
+      id: String(requester?.id ?? '').trim() || '0',
+      roles: requester?.roles ?? [],
+      note: `Pochta #${postId} ${fromName} filialidan ${toName} filialiga o'tkazildi`,
+      post_branch_reassign: {
+        post_id: postId,
+        from_branch_id: from,
+        from_branch_name: fromName,
+        to_branch_id: to,
+        to_branch_name: toName,
+      },
+    });
+    const toMoveIds = orders
+      .filter((order) => holderBranchOf(order) === sourceBranchId)
+      .map((order) => this.canonicalId(order?.id));
+    const movedIds: string[] = [];
+    try {
+      for (const orderId of toMoveIds) {
+        await this.sendOrderCommand('order.update', {
+          id: orderId,
+          dto: { branch_id: destinationBranchId },
+          requester: orderRequester(
+            sourceBranchId,
+            destinationBranchId,
+            sourceBranchName,
+            destinationBranchName,
+          ),
+        });
+        movedIds.push(orderId);
+      }
+      await this.sendLogisticsCommand('logistics.post.reassign_branch', {
+        post_id: postId,
+        from_branch_id: sourceBranchId,
+        to_branch_id: destinationBranchId,
+      });
+    } catch (error) {
+      // Ko'chgan buyurtmalar eski filialga qaytariladi: pochta ham, ular ham
+      // 1-filialda qoladi (yarim holat — ikki filial ham pochtani ocholmaydi).
+      const notReverted: string[] = [];
+      for (const orderId of [...movedIds].reverse()) {
+        try {
+          await this.sendOrderCommand('order.update', {
+            id: orderId,
+            dto: { branch_id: sourceBranchId },
+            requester: orderRequester(
+              destinationBranchId,
+              sourceBranchId,
+              destinationBranchName,
+              sourceBranchName,
+            ),
+          });
+        } catch {
+          notReverted.push(orderId);
+        }
+      }
+      const cause = error instanceof RpcException ? error.getError() : null;
+      const causeStatus = Number(
+        (cause as { statusCode?: unknown } | null)?.statusCode,
+      );
+      this.logger.error(
+        `branch.post.reassign_branch post=${postId} ${sourceBranchId}→${destinationBranchId}: ${(error as Error)?.message ?? String(error)}; moved=${movedIds.length} not_reverted=${notReverted.join(',') || '-'}`,
+      );
+      throw new RpcException(
+        errorRes(
+          (causeStatus === 409
+            ? `Pochta #${postId} shu paytda o'zgardi (filial qabul qilgan bo'lishi mumkin) — sahifani yangilang.`
+            : `Pochta #${postId} ni o'tkazib bo'lmadi — qayta urinib ko'ring.`) +
+            (notReverted.length
+              ? ` ${notReverted.length} ta buyurtma eski filialga qaytmadi (${this.formatOrderIdsForMessage(notReverted)}) — qayta urinish o'tkazishni tugatadi`
+              : " Hech narsa o'tkazilmadi"),
+          causeStatus === 409 ? 409 : 503,
+          {
+            post_id: postId,
+            source_branch_id: sourceBranchId,
+            destination_branch_id: destinationBranchId,
+            not_reverted_order_ids: notReverted,
+            reasons: { reassign_failed: true },
+          },
+        ),
+      );
+    }
+
+    await this.activityLog.log({
+      entity_type: 'Post',
+      entity_id: String(postId),
+      action: 'branch.post_reassign',
+      metadata: {
+        source_branch_id: sourceBranchId,
+        destination_branch_id: destinationBranchId,
+        order_count: orders.length,
+        moved_order_ids: movedIds.slice(0, 20),
+      },
+      ...this.auditActor(requester),
+    });
+
+    return successRes(
+      {
+        post_id: postId,
+        source_branch_id: sourceBranchId,
+        source_branch_name: sourceBranch?.name ?? null,
+        destination_branch_id: destinationBranchId,
+        destination_branch_name: destinationBranch.name ?? null,
+        order_count: orders.length,
+        moved_orders_count: movedIds.length,
+        moved_order_ids: movedIds,
+      },
+      200,
+      `Pochta ${destinationBranchName} filialiga o'tkazildi`,
+    );
+  }
+
+  /**
    * Tuman ↔ filial qamrovi — jo'natiladigan buyurtmalar manzil filial
    * qamrovidami (`isOrderServedByBranch`, @app/common). Tumanlar BITTA
    * `logistics.district.find_by_ids` bilan o'qiladi (tumansiz buyurtmalar

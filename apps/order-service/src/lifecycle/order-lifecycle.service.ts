@@ -391,6 +391,8 @@ type ExternalSyncAction =
 const PARTNER_ONLY_SYNC_ACTIONS: ReadonlySet<ExternalSyncAction> =
   new Set<ExternalSyncAction>(['received', 'on_the_road']);
 
+/** Tracking: jo'natilgan pochta boshqa filialga o'tkazildi (holat o'zgarmaydi). */
+export const POST_BRANCH_REASSIGNED_TRACKING_ACTION = 'post_branch_reassigned';
 /**
  * Order lifecycle: the write/mutation core (create/receive/sell/partly-sell/
  * cancel/could-not-deliver/rollback/return/provider-mark/market-cancelled
@@ -11020,6 +11022,18 @@ export class OrderLifecycleService {
         role?: string | null;
         branch_id?: string | null;
       } | null;
+      /**
+       * Jo'natilgan pochta boshqa filialga o'tkazildi (branch-service
+       * `reassignPostToBranch`). Holat o'zgarmaydi (yo'lda), shuning uchun
+       * status tracking'i yozilmaydi — tarixda «o'tkazildi» qatori shundan.
+       */
+      post_branch_reassign?: {
+        post_id?: string | null;
+        from_branch_id?: string | null;
+        from_branch_name?: string | null;
+        to_branch_id?: string | null;
+        to_branch_name?: string | null;
+      } | null;
     },
     externalManager?: EntityManager,
     /**
@@ -11367,6 +11381,54 @@ export class OrderLifecycleService {
                   received_by: requester?.id ? String(requester.id) : null,
                 }
               : statusTrackingExtras?.metadata,
+            note: requester?.note ?? null,
+          },
+          trackingRepo,
+        );
+      }
+
+      // Jo'natilgan pochta boshqa filialga o'tkazildi: holat bir xil (yo'lda),
+      // shuning uchun yuqoridagi status tracking'i yozilmaydi — tarixda
+      // «1-filialga jo'natildi» yolg'iz qolmasin. Holder o'zgarganda — bir marta.
+      const postBranchReassign = requester?.post_branch_reassign;
+      if (
+        postBranchReassign &&
+        oldStatus === order.status &&
+        String(previousHolderBranchId ?? '') !==
+          String(order.holder_branch_id ?? '')
+      ) {
+        const fromName =
+          postBranchReassign.from_branch_name ??
+          `#${postBranchReassign.from_branch_id ?? previousHolderBranchId ?? '?'}`;
+        const toName =
+          postBranchReassign.to_branch_name ??
+          `#${postBranchReassign.to_branch_id ?? order.holder_branch_id ?? '?'}`;
+        await this.custody.createTrackingEvent(
+          {
+            order_id: order.id,
+            from_status: oldStatus,
+            to_status: order.status,
+            changed_by: String(requester?.id ?? 'system'),
+            changed_by_role: requester?.id
+              ? this.custody.toTrackingRole(requester.roles)
+              : 'system',
+            action: POST_BRANCH_REASSIGNED_TRACKING_ACTION,
+            description: `Pochta ${fromName} filialidan ${toName} filialiga o'tkazildi`,
+            old_value: { branch_id: previousHolderBranchId ?? null },
+            new_value: { branch_id: order.holder_branch_id ?? null },
+            metadata: {
+              post_id: postBranchReassign.post_id ?? order.post_id ?? null,
+              from_branch_id:
+                postBranchReassign.from_branch_id ??
+                previousHolderBranchId ??
+                null,
+              from_branch_name: postBranchReassign.from_branch_name ?? null,
+              to_branch_id:
+                postBranchReassign.to_branch_id ??
+                order.holder_branch_id ??
+                null,
+              to_branch_name: postBranchReassign.to_branch_name ?? null,
+            },
             note: requester?.note ?? null,
           },
           trackingRepo,
