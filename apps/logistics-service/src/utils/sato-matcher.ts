@@ -325,7 +325,7 @@ export type DistrictUnmatchedReason =
  * Tumanning viloyatini SATO ro'yxatidan topish: avval DB viloyatining rasmiy
  * kodi bo'yicha (aniq), bo'lmasa nomi bo'yicha.
  */
-function findSatoRegionFor(
+export function findSatoRegionFor(
   region?: { name?: string | null; sato_code?: string | null } | null,
 ): SatoRegion | undefined {
   if (!region) return undefined;

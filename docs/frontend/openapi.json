@@ -7762,6 +7762,41 @@
         ]
       }
     },
+    "/district/sato-official/{regionId}": {
+      "get": {
+        "description": "District create form: official SOATO districts of the region with their 7-digit codes. `taken_by` is set when the code is already used by a district or region (it cannot be added again). Empty `items` when the region is not in the official list.",
+        "operationId": "LogisticsGatewayController_listOfficialDistrictSatoCodes",
+        "parameters": [
+          {
+            "name": "regionId",
+            "required": true,
+            "in": "path",
+            "description": "Region id",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Region's official SATO district list",
+        "tags": [
+          "Logistics"
+        ],
+        "x-roles": [
+          "admin",
+          "superadmin"
+        ]
+      }
+    },
     "/district/sato/{satoCode}": {
       "get": {
         "operationId": "LogisticsGatewayController_getDistrictBySato",

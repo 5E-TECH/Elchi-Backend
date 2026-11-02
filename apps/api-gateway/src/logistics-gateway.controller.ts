@@ -1965,6 +1965,25 @@ export class LogisticsGatewayController {
       .pipe(timeout(8000));
   }
 
+  @Get('district/sato-official/:regionId')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.ADMIN, RoleEnum.SUPERADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: "Region's official SATO district list",
+    description:
+      'District create form: official SOATO districts of the region with their 7-digit codes. `taken_by` is set when the code is already used by a district or region (it cannot be added again). Empty `items` when the region is not in the official list.',
+  })
+  @ApiParam({ name: 'regionId', description: 'Region id' })
+  listOfficialDistrictSatoCodes(@Param('regionId') regionId: string) {
+    return this.logisticsClient
+      .send(
+        { cmd: 'logistics.district.sato_official' },
+        { region_id: regionId },
+      )
+      .pipe(timeout(8000));
+  }
+
   @Get('district/sato/:satoCode')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(

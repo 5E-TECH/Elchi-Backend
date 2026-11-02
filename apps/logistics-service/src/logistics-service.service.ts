@@ -50,7 +50,7 @@ import { ReceivePostDto } from './dto/receive-post.dto';
 import { SendPostDto } from './dto/send-post.dto';
 import { PostIdDto } from './dto/post-id.dto';
 import { errorRes, successRes } from '../../../libs/common/helpers/response';
-import { matchDistricts } from './utils/sato-matcher';
+import { findSatoRegionFor, matchDistricts } from './utils/sato-matcher';
 import { assessHqCourierScan } from './utils/scan-assign-eligibility';
 import { LogisticsNotificationService } from './notification/logistics-notification.service';
 import {
@@ -8214,6 +8214,69 @@ export class LogisticsServiceService implements OnModuleInit {
       this.notFound('Tuman topilmadi');
     }
     return successRes(district);
+  }
+
+  /**
+   * «Yangi tuman qo'shish» formasi uchun: viloyatning RASMIY SOATO ro'yxati
+   * (`data/sato-codes.ts`) — admin kodni yoddan bilishi shart emas, ro'yxatdan
+   * tanlaydi. `taken_by` — kod tizimda band (tuman yoki viloyatda), qo'shib
+   * bo'lmaydi (`assertDistrictSatoCodeFree` bilan bir xil qoida). Viloyat
+   * rasmiy ro'yxatda topilmasa — bo'sh ro'yxat (kod qo'lda kiritiladi).
+   */
+  async listOfficialDistrictSatoCodes(regionId: string) {
+    // bigint ustuni: raqam bo'lmagan id SQL xatosi (500) emas, 404 bo'lsin.
+    const region = /^\d+$/.test(String(regionId ?? ''))
+      ? await this.regionRepo.findOne({ where: { id: regionId } })
+      : null;
+    if (!region) {
+      this.notFound('Viloyat topilmadi');
+    }
+    const official = findSatoRegionFor(region);
+    if (!official) {
+      return successRes({
+        region_id: region.id,
+        region_sato_code: region.sato_code ?? null,
+        items: [],
+      });
+    }
+    const codes = official.districts.map((district) => district.sato_code);
+    const [districtHolders, regionHolders] = await Promise.all([
+      this.districtRepo.find({
+        where: { sato_code: In(codes) },
+        select: { id: true, name: true, sato_code: true, region_id: true },
+      }),
+      this.regionRepo.find({
+        where: { sato_code: In(codes) },
+        select: { id: true, name: true, sato_code: true },
+      }),
+    ]);
+    const holderByCode = new Map<
+      string,
+      { kind: 'district' | 'region'; id: string; name: string }
+    >();
+    for (const holder of regionHolders) {
+      holderByCode.set(holder.sato_code!, {
+        kind: 'region',
+        id: String(holder.id),
+        name: holder.name,
+      });
+    }
+    for (const holder of districtHolders) {
+      holderByCode.set(holder.sato_code!, {
+        kind: 'district',
+        id: String(holder.id),
+        name: holder.name,
+      });
+    }
+    return successRes({
+      region_id: region.id,
+      region_sato_code: official.sato_code,
+      items: official.districts.map((district) => ({
+        name: district.name,
+        sato_code: district.sato_code,
+        taken_by: holderByCode.get(district.sato_code) ?? null,
+      })),
+    });
   }
 
   async matchDistrictSatoCodes() {

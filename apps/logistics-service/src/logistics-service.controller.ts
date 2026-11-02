@@ -866,6 +866,16 @@ export class LogisticsServiceController {
     );
   }
 
+  @MessagePattern({ cmd: 'logistics.district.sato_official' })
+  listOfficialDistrictSatoCodes(
+    @Payload() payload: { region_id: string },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.logisticsService.listOfficialDistrictSatoCodes(payload.region_id),
+    );
+  }
+
   @MessagePattern({ cmd: 'logistics.district.sato_match_preview' })
   matchDistrictSatoCodes(@Ctx() context: RmqContext) {
     return this.executeAndAck(context, () =>
