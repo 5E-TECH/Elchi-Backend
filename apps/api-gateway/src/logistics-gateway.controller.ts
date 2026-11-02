@@ -1681,7 +1681,13 @@ export class LogisticsGatewayController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(RoleEnum.ADMIN, RoleEnum.SUPERADMIN)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Create district' })
+  @ApiOperation({
+    summary: 'Create district',
+    description:
+      '`sato_code` MAJBURIY: aniq 7 raqam (bo‘sh joylar kesiladi; bo‘sh/yo‘q yoki 7 raqam emas — 400). ' +
+      "Viloyatning SOATO kodi bo'lsa, tuman kodi shu bilan boshlanishi shart (aks holda 400, `data.reason = region_prefix_mismatch`, `data.details.expected_prefix`). " +
+      "Kod tizimda takrorlanmaydi: boshqa tumanda yoki viloyatda bo'lsa — 409. Rasmiy SOATO ro'yxatida bo'lishi shart emas (yangi tumanlar).",
+  })
   @ApiBody({ type: CreateDistrictRequestDto })
   create(@Body() dto: CreateDistrictRequestDto) {
     return this.logisticsClient
@@ -1779,7 +1785,13 @@ export class LogisticsGatewayController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(RoleEnum.ADMIN, RoleEnum.SUPERADMIN)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Update district sato_code' })
+  @ApiOperation({
+    summary: 'Update district sato_code',
+    description:
+      '`sato_code` — aniq 7 raqam (bo‘sh joylar kesiladi; aks holda 400). ' +
+      "Tumanning GEOGRAFIK viloyati (`region_id`, `assigned_region` emas) SOATO kodi bo'lsa, kod shu bilan boshlanishi shart (aks holda 400, `data.reason = region_prefix_mismatch`). " +
+      "Kod boshqa tumanda yoki viloyatda bo'lsa — 409 (tumanning o'z kodi hisobga olinmaydi).",
+  })
   @ApiParam({ name: 'id', description: 'District ID (id)' })
   @ApiBody({ type: UpdateDistrictSatoCodeRequestDto })
   updateDistrictSato(

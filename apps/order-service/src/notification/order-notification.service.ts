@@ -548,7 +548,12 @@ export function buildCourierAssignedPayload(
   };
 }
 
-/** `logistics.region.find_all` dan qurilgan xarita (keshlanadi). */
+/**
+ * `logistics.region.find_all` dan qurilgan xarita (keshlanadi).
+ * `regionByDistrict` — tumanning XIZMAT viloyati (`assigned_region ??
+ * region_id`): ko'chirilgan tuman buyurtmasi biriktirilgan viloyat
+ * logistiga boradi, geografik viloyatnikiga emas.
+ */
 export interface RegionDirectory {
   logistByRegion: Map<string, string>;
   regionByDistrict: Map<string, string>;
@@ -560,7 +565,11 @@ type RegionRow = {
   id?: unknown;
   name?: unknown;
   logist_id?: unknown;
-  districts?: Array<{ id?: unknown; name?: unknown }> | null;
+  districts?: Array<{
+    id?: unknown;
+    name?: unknown;
+    assigned_region?: unknown;
+  }> | null;
 };
 
 /** `successRes(rows)` yoki xom massiv → xarita; tanilmagan javob → `null`. */
@@ -590,7 +599,12 @@ export function buildRegionDirectory(
       : []) {
       const districtId = idOrNull(district?.id);
       if (!districtId) continue;
-      directory.regionByDistrict.set(districtId, regionId);
+      // `districts` — geografik (har tuman bir marta, o'z viloyatida);
+      // xizmat viloyati — `assigned_region`, bo'lmasa shu viloyat.
+      directory.regionByDistrict.set(
+        districtId,
+        idOrNull(district.assigned_region) ?? regionId,
+      );
       const districtName = clip(district.name, 120);
       if (districtName) directory.districtName.set(districtId, districtName);
     }
@@ -598,7 +612,10 @@ export function buildRegionDirectory(
   return directory;
 }
 
-/** Buyurtma viloyati: `region_id`, bo'lmasa tumanning viloyati. */
+/**
+ * Buyurtma viloyati: `region_id`, bo'lmasa tumanning XIZMAT viloyati
+ * (`assigned_region ?? region_id`, `buildRegionDirectory`).
+ */
 function regionOf(
   order: Pick<Order, 'region_id' | 'district_id'>,
   directory: RegionDirectory,

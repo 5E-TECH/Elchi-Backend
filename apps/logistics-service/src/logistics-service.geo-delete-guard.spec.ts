@@ -1,4 +1,5 @@
 import { Observable, of, throwError } from 'rxjs';
+import { Not } from 'typeorm';
 import { ACTIVITY_ACTION_REGISTRY, publicErrorData } from '@app/common';
 import { LogisticsServiceService } from './logistics-service.service';
 
@@ -53,6 +54,11 @@ function make(
     usageDown?: boolean;
     posts?: number;
     regionDistricts?: number;
+    /**
+     * Boshqa viloyatlardan shu viloyatga biriktirilgan tumanlar
+     * (`assigned_region = id AND region_id != id`).
+     */
+    assignedDistricts?: number;
     /** Oddiy (A → B) ko'chirish yiqilishi. */
     forwardFault?: Partial<Record<Kind, Fault>>;
     /** Kompensatsiya (ID rejimi, B → A) yiqilishi. */
@@ -91,7 +97,14 @@ function make(
       d.id = undefined;
       return Promise.resolve(d);
     }),
-    count: jest.fn(() => Promise.resolve(opts.regionDistricts ?? 0)),
+    // `where` ga qarab: biriktirilganlar (`assigned_region`) yoki geografik.
+    count: jest.fn(({ where }: { where?: { assigned_region?: unknown } }) =>
+      Promise.resolve(
+        where?.assigned_region !== undefined
+          ? (opts.assignedDistricts ?? 0)
+          : (opts.regionDistricts ?? 0),
+      ),
+    ),
     manager: {
       transaction: jest.fn(async (cb: (m: unknown) => Promise<unknown>) => {
         const pending: string[] = [];
@@ -404,6 +417,54 @@ describe('deleteRegion — himoya (oNAE3LW9)', () => {
       expect.objectContaining({ type: 'region', sourceId: '3' }),
     );
   });
+
+  /* eslint-disable @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call -- `any` mock'lar (fayldagi naqsh) */
+  /**
+   * `District.assigned_region` `onDelete: SET NULL`: boshqa viloyatlardan
+   * shu viloyatga biriktirilgan tumanlar viloyat o'chsa jimgina o'z geografik
+   * viloyatiga qaytardi (HQ intake/jo'natish yo'nalishi o'zgarardi).
+   */
+  it('⭐ boshqa viloyatlardan 2 ta tuman biriktirilgan → 400 (reason/usage), o`chirilmaydi, servislar so`ralmaydi', async () => {
+    const { svc, calls } = make({ assignedDistricts: 2 });
+    const err = await errorOf(svc.deleteRegion('3'));
+    expect(err.statusCode).toBe(400);
+    expect(err.message).toBe(
+      "Bu viloyatga boshqa viloyatlardan 2 ta tuman biriktirilgan, shuning uchun uni o'chirib bo'lmaydi. Avval bu tumanlarni boshqa viloyatga biriktiring.",
+    );
+    expect(err.data).toEqual({
+      reason: 'region_has_assigned_districts',
+      usage: { assigned_districts: 2 },
+    });
+    // Gateway filtridan o'tadi (FE `data.reason`/`data.usage` ni ko'radi).
+    expect(publicErrorData(err)).toEqual({
+      reason: 'region_has_assigned_districts',
+      usage: { assigned_districts: 2 },
+    });
+    expect(svc.regionRepo.remove).not.toHaveBeenCalled();
+    expect(calls).toHaveLength(0);
+    expect(svc.postRepo.count).not.toHaveBeenCalled();
+    expect(svc.activityLog.log).not.toHaveBeenCalled();
+  });
+
+  it('geografik tuman + biriktirilgan tuman — avval geografik sabab (region_has_districts)', async () => {
+    const { svc } = make({ regionDistricts: 1, assignedDistricts: 2 });
+    const err = await errorOf(svc.deleteRegion('3'));
+    expect(err.statusCode).toBe(400);
+    expect(err.data.reason).toBe('region_has_districts');
+    expect(svc.regionRepo.remove).not.toHaveBeenCalled();
+  });
+
+  it('biriktirilganlar sanog`i: assigned_region = id va region_id != id', async () => {
+    const { svc } = make();
+    await svc.deleteRegion('3');
+    expect(svc.districtRepo.count).toHaveBeenNthCalledWith(1, {
+      where: { region_id: '3' },
+    });
+    expect(svc.districtRepo.count).toHaveBeenNthCalledWith(2, {
+      where: { assigned_region: '3', region_id: Not('3') },
+    });
+  });
+  /* eslint-enable @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call */
 });
 
 describe('mergeDistricts — birlashtirish (oNAE3LW9 TC5)', () => {

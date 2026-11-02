@@ -135,6 +135,83 @@ describe('DtKKY0V8 — POST /couriers district_id', () => {
     expect(saves).toHaveLength(0);
   });
 
+  describe('boshqa viloyatga biriktirilgan tuman (assigned_region)', () => {
+    // Tuman geografik jihatdan Toshkent (1), xizmat viloyati — Andijon (3).
+    const movedDistrict = () => ({
+      data: {
+        id: '77',
+        name: 'Chilonzor',
+        region_id: '1',
+        assigned_region: '3',
+        assignedToRegion: { id: '3', name: 'Andijon' },
+      },
+    });
+
+    it('⭐ xizmat viloyati (B) kuryeri — shu tuman bilan yaratiladi', async () => {
+      const { service, saves } = makeService(movedDistrict);
+
+      const res = (await service.createCourier(
+        courierDto({ region_id: '3', district_id: '77' }),
+        superadmin,
+      )) as { statusCode: number };
+
+      expect(res.statusCode).toBe(201);
+      expect(saves[0]).toMatchObject({ district_id: '77', region_id: '3' });
+    });
+
+    it('geografik viloyat (A) kuryeri ham — yaratiladi', async () => {
+      const { service, saves } = makeService(movedDistrict);
+
+      await service.createCourier(
+        courierDto({ region_id: '1', district_id: '77' }),
+        superadmin,
+      );
+
+      expect(saves[0]).toMatchObject({ district_id: '77', region_id: '1' });
+    });
+
+    it('uchinchi viloyat (C) kuryeri — 400, kuryer yozilmaydi', async () => {
+      const { service, saves } = makeService(movedDistrict);
+
+      const err = await rpcErrorOf(
+        service.createCourier(
+          courierDto({ region_id: '5', district_id: '77' }),
+          superadmin,
+        ),
+      );
+
+      expect(err).toMatchObject({
+        statusCode: 400,
+        message: 'Tuman foydalanuvchining viloyatiga tegishli emas',
+      });
+      expect(saves).toHaveLength(0);
+    });
+
+    it('assigned_region null — eski qoida: boshqa viloyat kuryeri 400', async () => {
+      const { service, saves } = makeService(() => ({
+        data: {
+          id: '77',
+          region_id: '1',
+          assigned_region: null,
+          assignedToRegion: null,
+        },
+      }));
+
+      const err = await rpcErrorOf(
+        service.createCourier(
+          courierDto({ region_id: '3', district_id: '77' }),
+          superadmin,
+        ),
+      );
+
+      expect(err).toMatchObject({
+        statusCode: 400,
+        message: 'Tuman foydalanuvchining viloyatiga tegishli emas',
+      });
+      expect(saves).toHaveLength(0);
+    });
+  });
+
   it('tuman topilmadi — 400, kuryer yozilmaydi', async () => {
     const { service, saves } = makeService(() => ({ data: null }));
 

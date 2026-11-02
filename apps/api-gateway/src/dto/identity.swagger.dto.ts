@@ -205,9 +205,11 @@ export class UpdateAdminRequestDto {
     nullable: true,
     description:
       'Tuman ID (raqamli satr). Tuman mavjud va foydalanuvchining viloyatiga ' +
-      "(region_id) tegishli bo'lishi kerak, aks holda 400; viloyati yo'q " +
-      'foydalanuvchida (mijoz) — faqat mavjudligi. null — tumanni tozalash. ' +
-      "Viloyat bu maydon bilan o'zgarmaydi.",
+      "tegishli bo'lishi kerak: tumanning geografik viloyati (region_id) YOKI " +
+      'u biriktirilgan xizmat viloyati (assigned_region), aks holda 400; ' +
+      "o'zgarmagan district_id qayta yuborilsa — faqat mavjudligi; viloyati " +
+      "yo'q foydalanuvchida (mijoz) — faqat mavjudligi. null — tumanni " +
+      "tozalash. Viloyat bu maydon bilan o'zgarmaydi.",
   })
   @IsOptional()
   @IsString()
@@ -505,7 +507,8 @@ export class CreateCourierRequestDto {
     nullable: true,
     description:
       'DtKKY0V8 — kuryer tumani (raqamli satr). Tuman mavjud va kuryer ' +
-      "viloyatiga (filial viloyati) tegishli bo'lishi kerak, aks holda 400 " +
+      "viloyatiga (filial viloyati) tegishli bo'lishi kerak — tumanning " +
+      'geografik viloyati YOKI biriktirilgan xizmat viloyati (assigned_region), aks holda 400 ' +
       '(«Tuman topilmadi» / «Tuman foydalanuvchining viloyatiga tegishli ' +
       "emas»); viloyati yo'q (HQ) — faqat mavjudligi. Berilmasa / null — " +
       'tumansiz. Logistika javob bermasa — 503, kuryer yaratilmaydi.',

@@ -312,6 +312,173 @@ describe('YEThmZBn (b) — PATCH /users/:id district_id', () => {
     expect(saved[0]).toMatchObject({ district_id: '77', region_id: null });
   });
 
+  describe('boshqa viloyatga biriktirilgan tuman (assigned_region)', () => {
+    // Tuman geografik jihatdan Toshkent (1), xizmat viloyati — Andijon (3).
+    const movedDistrict = () => ({
+      data: {
+        id: '77',
+        name: 'Chilonzor',
+        region_id: '1',
+        assigned_region: '3',
+        assignedToRegion: { id: '3', name: 'Andijon' },
+      },
+    });
+
+    it('⭐ xizmat viloyati (B) foydalanuvchisi — 200, saqlanadi', async () => {
+      const { service, saved } = makeService(courierRow({ region_id: '3' }), {
+        district: movedDistrict,
+      });
+
+      const res = (await service.updateUser(
+        '26',
+        { district_id: '77' },
+        SUPERADMIN,
+      )) as { statusCode: number };
+
+      expect(res.statusCode).toBe(200);
+      expect(saved[0]).toMatchObject({ district_id: '77', region_id: '3' });
+    });
+
+    it('geografik viloyat (A) foydalanuvchisi ham — 200', async () => {
+      const { service, saved } = makeService(courierRow({ region_id: '1' }), {
+        district: movedDistrict,
+      });
+
+      await service.updateUser('26', { district_id: '77' }, SUPERADMIN);
+
+      expect(saved[0]).toMatchObject({ district_id: '77', region_id: '1' });
+    });
+
+    it('uchinchi viloyat (C) foydalanuvchisi — 400, saqlanmaydi', async () => {
+      const { service, saved } = makeService(courierRow({ region_id: '5' }), {
+        district: movedDistrict,
+      });
+
+      const err = await rpcError(
+        service.updateUser('26', { district_id: '77' }, SUPERADMIN),
+      );
+
+      expect(err).toMatchObject({
+        statusCode: 400,
+        message: 'Tuman foydalanuvchining viloyatiga tegishli emas',
+      });
+      expect(saved).toEqual([]);
+    });
+
+    it('faqat relation shakli (assignedToRegion.id) — ham hisobga olinadi', async () => {
+      const { service, saved } = makeService(courierRow({ region_id: '3' }), {
+        district: () => ({
+          data: { id: '77', region_id: '1', assignedToRegion: { id: 3 } },
+        }),
+      });
+
+      await service.updateUser('26', { district_id: '77' }, SUPERADMIN);
+
+      expect(saved[0]).toMatchObject({ district_id: '77' });
+    });
+
+    it('assigned_region null — eski qoida: faqat geografik viloyat', async () => {
+      const unassigned = () => ({
+        data: {
+          id: '77',
+          region_id: '1',
+          assigned_region: null,
+          assignedToRegion: null,
+        },
+      });
+      const other = makeService(courierRow({ region_id: '3' }), {
+        district: unassigned,
+      });
+      const own = makeService(courierRow({ region_id: '1' }), {
+        district: unassigned,
+      });
+
+      const err = await rpcError(
+        other.service.updateUser('26', { district_id: '77' }, SUPERADMIN),
+      );
+      await own.service.updateUser('26', { district_id: '77' }, SUPERADMIN);
+
+      expect(err).toMatchObject({
+        statusCode: 400,
+        message: 'Tuman foydalanuvchining viloyatiga tegishli emas',
+      });
+      expect(other.saved).toEqual([]);
+      expect(own.saved[0]).toMatchObject({ district_id: '77' });
+    });
+
+    describe('o`zgarmagan district_id — tuman keyin boshqa viloyatga ko`chirilgan', () => {
+      // Kuryer (B=3) tumanga assigned_region=3 orqali bog'langan edi; admin
+      // tumanni C (5) ga qayta biriktirdi. Forma hamma maydonni qayta yuboradi.
+      const reassignedAway = () => ({
+        data: {
+          id: '77',
+          region_id: '1',
+          assigned_region: '5',
+          assignedToRegion: { id: '5', name: 'Namangan' },
+        },
+      });
+
+      it('⭐ faqat ism o`zgardi — 200, bog`lanish saqlanadi (400 emas)', async () => {
+        const { service, saved, calls } = makeService(
+          courierRow({ region_id: '3', district_id: '77' }),
+          { district: reassignedAway },
+        );
+
+        const res = (await service.updateUser(
+          '26',
+          { name: 'Yangi ism', district_id: '77' },
+          SUPERADMIN,
+        )) as { statusCode: number };
+
+        expect(res.statusCode).toBe(200);
+        expect(saved[0]).toMatchObject({
+          name: 'Yangi ism',
+          district_id: '77',
+          region_id: '3',
+        });
+        // Mavjudlik baribir tekshiriladi.
+        expect(calls).toContainEqual({
+          cmd: 'logistics.district.find_by_id',
+          payload: { id: '77' },
+        });
+      });
+
+      it('o`zgarmagan, lekin tuman o`chirilgan — 400 «Tuman topilmadi»', async () => {
+        const { service, saved } = makeService(
+          courierRow({ region_id: '3', district_id: '77' }),
+          { district: () => ({ data: null }) },
+        );
+
+        const err = await rpcError(
+          service.updateUser('26', { district_id: '77' }, SUPERADMIN),
+        );
+
+        expect(err).toMatchObject({
+          statusCode: 400,
+          message: 'Tuman topilmadi',
+        });
+        expect(saved).toEqual([]);
+      });
+
+      it('boshqa tumandan shu tumanga o`tish — viloyat tekshiriladi, 400', async () => {
+        const { service, saved } = makeService(
+          courierRow({ region_id: '3', district_id: '41' }),
+          { district: reassignedAway },
+        );
+
+        const err = await rpcError(
+          service.updateUser('26', { district_id: '77' }, SUPERADMIN),
+        );
+
+        expect(err).toMatchObject({
+          statusCode: 400,
+          message: 'Tuman foydalanuvchining viloyatiga tegishli emas',
+        });
+        expect(saved).toEqual([]);
+      });
+    });
+  });
+
   it('district_id yuborilmasa tuman o`zgarmaydi', async () => {
     const { service, saved, calls } = makeService(
       courierRow({ district_id: '41' }),

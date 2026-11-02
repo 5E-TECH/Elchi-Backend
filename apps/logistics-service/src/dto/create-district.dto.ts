@@ -1,10 +1,4 @@
-import {
-  IsNotEmpty,
-  IsNumberString,
-  IsOptional,
-  IsString,
-  Matches,
-} from 'class-validator';
+import { IsNotEmpty, IsNumberString, IsString, Matches } from 'class-validator';
 
 export class CreateDistrictDto {
   @IsNotEmpty()
@@ -15,8 +9,11 @@ export class CreateDistrictDto {
   @IsNumberString()
   region_id!: string;
 
-  @IsOptional()
+  /** Majburiy: tuman SOATO kodi — aniq 7 raqam (viloyat kodi 4 raqam). */
+  @IsNotEmpty({ message: 'Tuman SOATO kodi majburiy' })
   @IsString()
-  @Matches(/^\d+$/, { message: 'sato_code must contain only digits' })
-  sato_code?: string;
+  @Matches(/^\d{7}$/, {
+    message: "Tuman SOATO kodi aniq 7 ta raqamdan iborat bo'lishi kerak",
+  })
+  sato_code!: string;
 }

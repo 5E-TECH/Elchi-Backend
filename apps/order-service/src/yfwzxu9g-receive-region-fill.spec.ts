@@ -14,6 +14,7 @@ jest.mock('@app/common', () => {
   return { ...actual, rmqSend: jest.fn() };
 });
 
+import { RpcException } from '@nestjs/microservices';
 import { Order_status, rmqSend as rmqSendFn } from '@app/common';
 import { OrderLifecycleService } from './lifecycle/order-lifecycle.service';
 import { OrderHolderType, Order_source } from './entities/order.entity';
@@ -118,7 +119,24 @@ function makeSvc(rows: Row[], districts: Row[]) {
       (call) =>
         (call[1] as { cmd: string }).cmd === 'logistics.post.receive_orders',
     )?.[2] as { orders: Row[] } | undefined;
-  return { receive, setFor, syncOrderToSearch, receivePayload };
+  const receiveCalled = () =>
+    rmqSend.mock.calls.some(
+      (call) =>
+        (call[1] as { cmd: string }).cmd === 'logistics.post.receive_orders',
+    );
+  return { receive, setFor, syncOrderToSearch, receivePayload, receiveCalled };
+}
+
+async function rpcError(promise: Promise<unknown>) {
+  const error = await promise.then(
+    () => null,
+    (e: unknown) => e,
+  );
+  expect(error).toBeInstanceOf(RpcException);
+  return (error as RpcException).getError() as {
+    statusCode?: number;
+    message?: string;
+  };
 }
 
 describe('YfWZXu9g — HQ qabuli bo`sh region_id ni tumandan to`ldiradi', () => {
@@ -148,17 +166,20 @@ describe('YfWZXu9g — HQ qabuli bo`sh region_id ni tumandan to`ldiradi', () => 
     ]);
   });
 
-  it('assignedToRegion relatsiyasi orqali kelgan hudud ham yoziladi', async () => {
+  it('assignedToRegion relatsiyasi orqali kelgan hudud ham yoziladi (region_id dan ustun)', async () => {
+    // Relation qiymati geografik region_id dan farq qiladi — tartib
+    // (assigned_region → assignedToRegion.id → region_id) haqiqatan tekshiriladi.
     const h = makeSvc(
       [order()],
-      [{ id: '120', region_id: '13', assignedToRegion: { id: '13' } }],
+      [{ id: '120', region_id: '13', assignedToRegion: { id: '5' } }],
     );
 
     await h.receive();
 
-    expect(h.setFor('31')).toEqual(
-      expect.objectContaining({ region_id: '13' }),
-    );
+    expect(h.setFor('31')).toEqual(expect.objectContaining({ region_id: '5' }));
+    expect(h.receivePayload()?.orders).toEqual([
+      expect.objectContaining({ order_id: '31', assigned_region: '5' }),
+    ]);
   });
 
   it('⭐ TC4 (regressiya): region_id to`lgan buyurtma — ustidan yozilmaydi', async () => {
@@ -188,5 +209,74 @@ describe('YfWZXu9g — HQ qabuli bo`sh region_id ni tumandan to`ldiradi', () => 
       expect.objectContaining({ region_id: '13' }),
     );
     expect(h.setFor('32')).not.toHaveProperty('region_id');
+  });
+});
+
+/**
+ * LC-13 — HQ qabulida xizmat hududi `assigned_region ?? region_id`
+ * (`OrderLookupService.resolveRegionIdForDistrict` bilan bir xil tartib:
+ * `assigned_region`, `assignedToRegion.id`, `region_id`, `region.id` —
+ * birinchi raqamli qiymat). Ilgari biriktirilmagan (`assigned_region`
+ * NULL) eski tuman butun partiyani 404 bilan to'xtatardi.
+ */
+describe('LC-13 — HQ qabuli: xizmat hududi assigned_region ?? region_id', () => {
+  it('⭐ assigned_region NULL eski tuman — o`z viloyati (region_id) bo`yicha qabul, 404 emas', async () => {
+    const h = makeSvc(
+      [order()],
+      [{ id: '120', region_id: '13', assigned_region: null }],
+    );
+
+    await expect(h.receive()).resolves.toMatchObject({ statusCode: 200 });
+
+    expect(h.receivePayload()?.orders).toEqual([
+      expect.objectContaining({ order_id: '31', assigned_region: '13' }),
+    ]);
+    expect(h.setFor('31')).toEqual(
+      expect.objectContaining({ region_id: '13' }),
+    );
+  });
+
+  it('faqat region relatsiyasi ({ id }) kelsa ham ishlaydi', async () => {
+    const h = makeSvc([order()], [{ id: '120', region: { id: '13' } }]);
+
+    await expect(h.receive()).resolves.toMatchObject({ statusCode: 200 });
+
+    expect(h.receivePayload()?.orders).toEqual([
+      expect.objectContaining({ order_id: '31', assigned_region: '13' }),
+    ]);
+  });
+
+  it('ko`chirilgan tuman — assigned_region region_id dan ustun', async () => {
+    const h = makeSvc(
+      [order()],
+      [{ id: '120', region_id: '13', assigned_region: '5' }],
+    );
+
+    await expect(h.receive()).resolves.toMatchObject({ statusCode: 200 });
+
+    expect(h.receivePayload()?.orders).toEqual([
+      expect.objectContaining({ order_id: '31', assigned_region: '5' }),
+    ]);
+  });
+
+  it('tumanda hech qanday hudud yo`q — 404, pochtaga uzatilmaydi', async () => {
+    const h = makeSvc(
+      [order()],
+      [{ id: '120', region_id: null, assigned_region: null }],
+    );
+
+    const error = await rpcError(h.receive());
+
+    expect(error.statusCode).toBe(404);
+    expect(h.receiveCalled()).toBe(false);
+  });
+
+  it('tuman logistikada topilmadi — 404, pochtaga uzatilmaydi', async () => {
+    const h = makeSvc([order()], []);
+
+    const error = await rpcError(h.receive());
+
+    expect(error.statusCode).toBe(404);
+    expect(h.receiveCalled()).toBe(false);
   });
 });
