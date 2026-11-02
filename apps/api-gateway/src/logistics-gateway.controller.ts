@@ -1753,6 +1753,8 @@ export class LogisticsGatewayController {
     @Body() dto: UpdateDistrictRequestDto,
     @Req() req: { user: JwtUser },
   ) {
+    // `rehome_open_orders: true` — har buyurtma uchun alohida order.update
+    // (POST district/:id/rehome-open-orders bilan bir xil 30 s).
     return this.logisticsClient
       .send(
         { cmd: 'logistics.district.update' },
@@ -1762,7 +1764,66 @@ export class LogisticsGatewayController {
           requester: { id: req.user.sub, roles: req.user.roles ?? [] },
         },
       )
-      .pipe(timeout(8000));
+      .pipe(timeout(dto?.rehome_open_orders === true ? 30000 : 8000));
+  }
+
+  // Tuman boshqa viloyatga o'tkazilgach HQ'ning eski viloyat YANGI
+  // pochtasida qolgan buyurtmalar hech qaysi filialga jo'natilmaydi (qamrov
+  // tekshiruvi + LC-09). Bu amal ularni tumanning xizmat viloyati pochtasiga
+  // ko'chiradi (PATCH district/:id dagi `rehome_open_orders: true` bilan bir
+  // xil mantiq). Rolni logistics ham tekshiradi (403). Uch bo'lakli yo'l —
+  // district/:id va district/sato-match/apply bilan to'qnashmaydi.
+  @Post('district/:id/rehome-open-orders')
+  @HttpCode(200)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary:
+      "Tumanning ochiq HQ buyurtmalarini xizmat viloyati pochtasiga ko'chirish",
+    description:
+      "HQ'dagi hali jo'natilmagan, boshqa viloyat YANGI pochtasida qolgan shu tuman buyurtmalarini tumanning xizmat viloyati " +
+      "(`assigned_region ?? region_id`) YANGI pochtasiga ko'chiradi. Buyurtma viloyati (`region_id`) O'ZGARMAYDI — faqat pochta a'zoligi ko'chadi. " +
+      "Kerak bo'ladigan holat: tuman boshqa viloyatga o'tkazilgan (`PATCH /district/:id`), uning buyurtmalari esa eski viloyat pochtasida qolib, " +
+      "jo'natishda 409 `district_not_served_by_branch` beryapti. `PATCH /district/:id` da `rehome_open_orders: true` — xuddi shu amal (natija `data.rehome`). " +
+      "Tana yo'q. Faqat SUPERADMIN/ADMIN (boshqasi — 403); `id` raqam emas — 400. " +
+      "Javob `data`: `district_id`; `target_region_id` — tumanning xizmat viloyati; `moved` — ko'chirilganlar soni; `order_ids[]` — ko'chirilgan buyurtmalar; " +
+      "`from_post_ids[]` — buyurtmalar olingan pochtalar; `to_post_id` — qabul qilgan YANGI pochta (ko'chadigani bo'lmasa — null); " +
+      "`skipped[]` `{ order_id, reason }` — ko'chirilmagan buyurtmalar va sababi.",
+  })
+  @ApiParam({ name: 'id', description: 'District ID (id)' })
+  @ApiOkResponse({
+    schema: {
+      example: {
+        statusCode: 200,
+        message: 'success',
+        data: {
+          district_id: '1401',
+          target_region_id: '9',
+          moved: 2,
+          order_ids: ['1001', '1002'],
+          from_post_ids: ['900'],
+          to_post_id: '905',
+          skipped: [],
+        },
+      },
+    },
+  })
+  rehomeDistrictOpenOrders(
+    @Param('id', ParseBigintIdPipe) id: string,
+    @Req() req: { user: JwtUser },
+  ) {
+    // Bir nechta ketma-ket RPC (buyurtmalarni topish, pochta tanlash,
+    // ko'chirish) — oddiy 8 s yetmasligi mumkin.
+    return this.logisticsClient
+      .send(
+        { cmd: 'logistics.district.rehome_open_orders' },
+        {
+          id,
+          requester: { id: req.user.sub, roles: req.user.roles ?? [] },
+        },
+      )
+      .pipe(timeout(30000));
   }
 
   @Patch('district/name/:id')

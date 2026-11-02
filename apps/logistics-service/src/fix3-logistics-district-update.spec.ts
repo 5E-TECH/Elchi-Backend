@@ -9,13 +9,25 @@ import { LogisticsServiceService } from './logistics-service.service';
  * Ilgari gateway COURIER va MARKET ga ham ruxsat berardi, logistics esa
  * so'rovchini umuman tekshirmas va kim o'zgartirganini yozmasdi.
  */
+type DistrictResponse = {
+  statusCode: number;
+  data: Record<string, unknown>;
+};
+
 describe('FIX3 LC-08 — updateDistrict faqat admin/superadmin, actor log qilinadi', () => {
-  function setup() {
+  function setup(
+    overrides: {
+      district?: Record<string, unknown>;
+      region?: Record<string, unknown>;
+    } = {},
+  ) {
     const district = {
       id: '12',
       name: 'Chilonzor',
       region_id: '1',
       assigned_region: '1',
+      serving_branch_id: null,
+      ...overrides.district,
     };
     const districtRepo = {
       findOne: jest.fn().mockResolvedValue({ ...district }),
@@ -24,7 +36,9 @@ describe('FIX3 LC-08 — updateDistrict faqat admin/superadmin, actor log qilina
       ),
     };
     const regionRepo = {
-      findOne: jest.fn().mockResolvedValue({ id: '7', name: 'Namangan' }),
+      findOne: jest
+        .fn()
+        .mockResolvedValue(overrides.region ?? { id: '7', name: 'Namangan' }),
     };
     const activityLog = {
       log: jest.fn().mockResolvedValue(undefined),
@@ -76,24 +90,89 @@ describe('FIX3 LC-08 — updateDistrict faqat admin/superadmin, actor log qilina
   it('superadmin — saqlanadi va logChange ga user_id/user_role yoziladi', async () => {
     const ctx = setup();
 
-    const response: any = await ctx.service.updateDistrict(
+    const response = (await ctx.service.updateDistrict(
       '12',
       { assigned_region: '7' },
       { id: '1', roles: ['superadmin'] },
-    );
+    )) as DistrictResponse;
 
     expect(response.statusCode).toBe(200);
     expect(ctx.districtRepo.save).toHaveBeenCalledWith(
       expect.objectContaining({ id: '12', assigned_region: '7' }),
     );
+    expect(response.data.serving_branch_cleared).toBe(false);
     expect(ctx.activityLog.logChange).toHaveBeenCalledWith({
       entity_type: 'District',
       entity_id: '12',
       action: ActivityAction.UPDATED,
-      old_value: { assigned_region: '1' },
-      new_value: { assigned_region: '7' },
+      old_value: { assigned_region: '1', serving_branch_id: null },
+      new_value: {
+        assigned_region: '7',
+        serving_branch_id: null,
+        serving_branch_cleared: false,
+      },
       user_id: '1',
       user_role: 'superadmin',
     });
+  });
+
+  /**
+   * Tuman ↔ filial qamrovi: xizmat viloyati o'zgarsa eski xizmat filiali
+   * (eski viloyatniki) bo'shatiladi — javob va logda `serving_branch_cleared`.
+   */
+  it('xizmat viloyati o‘zgardi — serving_branch_id NULL, javob/logda serving_branch_cleared: true', async () => {
+    const ctx = setup({ district: { serving_branch_id: '30' } });
+
+    const response = (await ctx.service.updateDistrict(
+      '12',
+      { assigned_region: '7' },
+      { id: '1', roles: ['superadmin'] },
+    )) as DistrictResponse;
+
+    expect(response.statusCode).toBe(200);
+    expect(ctx.districtRepo.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: '12',
+        assigned_region: '7',
+        serving_branch_id: null,
+      }),
+    );
+    expect(response.data).toMatchObject({
+      id: '12',
+      assigned_region: '7',
+      serving_branch_id: null,
+      serving_branch_cleared: true,
+    });
+    expect(ctx.activityLog.logChange).toHaveBeenCalledWith(
+      expect.objectContaining({
+        old_value: { assigned_region: '1', serving_branch_id: '30' },
+        new_value: {
+          assigned_region: '7',
+          serving_branch_id: null,
+          serving_branch_cleared: true,
+        },
+      }),
+    );
+  });
+
+  it('assigned_region o‘zgardi, lekin xizmat viloyati o‘sha (region_id) — filial saqlanadi', async () => {
+    const ctx = setup({
+      district: { assigned_region: null, serving_branch_id: '30' },
+      region: { id: '1', name: 'Toshkent' },
+    });
+
+    const response = (await ctx.service.updateDistrict(
+      '12',
+      { assigned_region: '1' },
+      { id: '1', roles: ['superadmin'] },
+    )) as DistrictResponse;
+
+    expect(ctx.districtRepo.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        assigned_region: '1',
+        serving_branch_id: '30',
+      }),
+    );
+    expect(response.data.serving_branch_cleared).toBe(false);
   });
 });

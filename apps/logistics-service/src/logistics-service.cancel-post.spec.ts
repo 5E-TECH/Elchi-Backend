@@ -432,10 +432,22 @@ describe('LogisticsServiceService createCanceledPost', () => {
     };
     const postRepo = {
       find: jest.fn().mockResolvedValue([]),
-      findOne: jest
-        .fn()
-        .mockResolvedValueOnce(null)
-        .mockResolvedValueOnce(null),
+      // Faol CANCELED pochta yo'q; 'old-post' — kuryerning O'Z nofaol
+      // (filial qisman qabul qilgan) qaytish pochtasi: egalik tekshiruvi uni
+      // holat filtrisiz o'qiydi va ruxsat beradi (qonuniy hol).
+      findOne: jest.fn(
+        (query: { where?: { id?: string; status?: Post_status } }) =>
+          Promise.resolve(
+            query?.where?.id === 'old-post' && query.where.status === undefined
+              ? {
+                  id: 'old-post',
+                  courier_id: '7',
+                  branch_id: '10',
+                  status: Post_status.CANCELED_RECEIVED,
+                }
+              : null,
+          ),
+      ),
       create: jest.fn((payload) => payload),
       save: jest.fn((post) =>
         Promise.resolve({ ...post, id: post.id ?? '55' }),

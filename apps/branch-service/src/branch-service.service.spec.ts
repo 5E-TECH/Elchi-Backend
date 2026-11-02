@@ -1566,8 +1566,23 @@ describe('BranchServiceService', () => {
   describe('dispatchPostToBranch — HQ registratori va manzil tekshiruvi', () => {
     const branchesById: Record<string, Record<string, unknown>> = {
       '10': { id: '10', type: 'HQ', status: 'active', isDeleted: false },
-      '20': { id: '20', type: 'REGIONAL', status: 'active', isDeleted: false },
-      '21': { id: '21', type: 'HYBRID', status: 'active', isDeleted: false },
+      // Tuman ↔ filial qamrovi: manzil filiallar buyurtmalar tumani (#1401)
+      // xizmat viloyatida (#14) — tumanga filial biriktirilmagan, viloyat
+      // bo'yicha qoida.
+      '20': {
+        id: '20',
+        type: 'REGIONAL',
+        status: 'active',
+        isDeleted: false,
+        region_id: '14',
+      },
+      '21': {
+        id: '21',
+        type: 'HYBRID',
+        status: 'active',
+        isDeleted: false,
+        region_id: '14',
+      },
       '40': { id: '40', type: 'PICKUP', status: 'active', isDeleted: false },
       '50': {
         id: '50',
@@ -1585,6 +1600,7 @@ describe('BranchServiceService', () => {
       branch_id: '10',
       status: 'received',
       region_id: '14',
+      district_id: '1401',
       total_price: 150000,
       courier_id: null,
       holder_type: 'HQ',
@@ -1650,6 +1666,17 @@ describe('BranchServiceService', () => {
           if (cmd === 'logistics.post.orders_by_post') {
             return of({ data: postOrders });
           }
+          // Tuman ↔ filial qamrovi: buyurtmalar tumani (filial biriktirilmagan).
+          if (cmd === 'logistics.district.find_by_ids') {
+            return of({
+              data: (payload?.ids ?? []).map((id: string) => ({
+                id,
+                region_id: '14',
+                assigned_region: null,
+                serving_branch_id: null,
+              })),
+            });
+          }
           if (cmd === 'logistics.post.receive_orders') {
             return of({
               data: (payload?.orders ?? []).map((row: any) => ({
@@ -1711,13 +1738,19 @@ describe('BranchServiceService', () => {
         }),
       );
       // Pochta avval (buyurtmalardan oldin) faqat-o'qish chaqiruvi bilan
-      // tekshiriladi, keyin buyurtmalar o'qiladi va ko'chiriladi.
+      // tekshiriladi, keyin buyurtmalar o'qiladi, ularning tumanlari qamrov
+      // uchun tekshiriladi (yozuvlardan OLDIN) va ko'chiriladi.
       expect(logisticsCmds()).toEqual([
         'logistics.post.find_by_ids',
         'logistics.post.orders_by_post',
+        'logistics.district.find_by_ids',
         'logistics.post.receive_orders',
         'logistics.post.delete',
       ]);
+      expect(logisticsClient.send).toHaveBeenCalledWith(
+        { cmd: 'logistics.district.find_by_ids' },
+        { ids: ['1401'] },
+      );
       expect(logisticsClient.send).toHaveBeenCalledWith(
         { cmd: 'logistics.post.find_by_ids' },
         { ids: ['900'] },

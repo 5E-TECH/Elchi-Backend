@@ -1,4 +1,4 @@
-import { Injectable, Optional } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { RpcException } from '@nestjs/microservices';
 import { DataSource, In, IsNull, Repository } from 'typeorm';
@@ -20,6 +20,7 @@ import {
   Order_status,
   endOfTashkentDay,
   endOfTashkentMonth,
+  isHqBranch,
   startOfTashkentDay,
   startOfTashkentMonth,
   startOfTashkentWeek,
@@ -46,6 +47,8 @@ import { OrderLifecycleService } from '../lifecycle/order-lifecycle.service';
  */
 @Injectable()
 export class BranchTransferBatchService {
+  private readonly logger = new Logger(BranchTransferBatchService.name);
+
   constructor(
     private readonly dataSource: DataSource,
     @InjectRepository(BranchTransferBatch)
@@ -553,6 +556,13 @@ export class BranchTransferBatchService {
         'market_id',
         'total_price',
         'status',
+        // Ushlovchi (custody) tekshiruvi uchun — pastda.
+        'holder_type',
+        'holder_branch_id',
+        'courier_id',
+        'holder_courier_id',
+        'source',
+        'canceled_post_id',
       ],
     });
 
@@ -580,6 +590,122 @@ export class BranchTransferBatchService {
         `Quyidagi buyurtmalar holati return paketiga mos emas (avval rollback qiling): ${ineligibleReturn
           .map((order) => String(order.id))
           .join(', ')}`,
+      );
+    }
+
+    // Tuman ↔ filial qamrovi (ega qarori): return paketiga faqat MANBA filial
+    // haqiqatan ushlab turgan buyurtma kiradi. Ilgari ushlovchi tekshirilmasdi —
+    // boshqa filial yoki kuryer qo'lidagi buyurtmani shu filialning return
+    // paketiga qo'shib yuborish mumkin edi. Hammasi HECH NARSA yozilmasdan oldin.
+    const rejectOrders = (
+      reason: string,
+      message: string,
+      rejected: Order[],
+    ): never => {
+      const rejectedIds = rejected.map((order) => String(order.id));
+      // `order_ids` — `details` ichida: gateway `publicErrorData` faqat
+      // reason/usage/details ni FE'ga o'tkazadi.
+      throw new RpcException({
+        statusCode: 400,
+        message: `${message}: ${rejectedIds.join(', ')}`,
+        data: { reason, details: { order_ids: rejectedIds } },
+      });
+    };
+
+    // Kuryer qo'lidagi buyurtma filialda emas — avval filialga qabul qilinadi.
+    const withCourier = orders.filter(
+      (order) =>
+        order.holder_type === OrderHolderType.COURIER ||
+        Boolean(String(order.courier_id ?? '').trim()) ||
+        Boolean(String(order.holder_courier_id ?? '').trim()),
+    );
+    if (withCourier.length) {
+      rejectOrders(
+        'order_with_courier',
+        "Quyidagi buyurtmalar kuryer qo'lida — avval filialga qabul qiling, keyin return paketiga qo'shing",
+        withCourier,
+      );
+    }
+
+    // Bekor pochta jo'natilgan, lekin hali qabul qilinmagan (`cancelled (sent)`
+    // / `canceled_post_id` bor): jo'natishda holder allaqachon maqsadga
+    // o'tadi, lekin posilka hali kuryerda yoki yo'lda. Market topshirish
+    // filtri bilan bir xil — qabul `canceled_post_id` ni tozalaydi.
+    const cancelPostNotReceived = orders.filter(
+      (order) =>
+        order.status === Order_status.CANCELLED_SENT ||
+        Boolean(String(order.canceled_post_id ?? '').trim()),
+    );
+    if (cancelPostNotReceived.length) {
+      rejectOrders(
+        'cancel_post_not_received',
+        "Quyidagi buyurtmalarning bekor pochtasi hali qabul qilinmagan — avval bekor pochtani qabul qiling, keyin return paketiga qo'shing",
+        cancelPostNotReceived,
+      );
+    }
+
+    // CODE-11 (logistics `assignOrdersToCourier` bilan bir xil qoida) — tashqi
+    // manbadan kelgan NEW posilka faqat skan bilan qabul qilinadi; jismonan
+    // qabul qilinmagan posilka paketga qo'shilmaydi.
+    const unscannedExternal = orders.filter(
+      (order) =>
+        order.status === Order_status.NEW &&
+        String(order.source ?? '')
+          .trim()
+          .toLowerCase() === 'external',
+    );
+    if (unscannedExternal.length) {
+      rejectOrders(
+        'external_order_not_received',
+        'Quyidagi buyurtmalar tashqi manbadan kelgan va hali qabul qilinmagan — avval skanerlab qabul qiling (Kiruvchi posilkalar ekrani)',
+        unscannedExternal,
+      );
+    }
+
+    // Ushlovchi doirasi: `holder_branch_id ?? branch_id` manba filialga teng
+    // bo'lishi shart; marketga topshirilgan (MARKET) buyurtma hech qaysi
+    // filialda emas. HQ ushlagan buyurtma (holder_branch_id yo'q) faqat manba
+    // HQ bo'lsa o'tadi — filial turi `branch_schema.branches` dan (faqat HQ
+    // ushlagan buyurtma bo'lganda) o'qiladi. Turi aniqlanmasa (so'rov yiqildi
+    // yoki filial topilmadi) — zaxira: `branch_id` manba filialga teng bo'lsa.
+    const isHqHeld = (order: Order): boolean =>
+      !String(order.holder_branch_id ?? '').trim() &&
+      (!order.holder_type || order.holder_type === OrderHolderType.HQ);
+    // null — manba turi aniqlanmadi.
+    let sourceIsHq: boolean | null = null;
+    if (orders.some(isHqHeld)) {
+      try {
+        const rows = await this.dataSource.query<Array<{ type?: unknown }>>(
+          `SELECT "type"::text AS "type"
+             FROM "branch_schema"."branches"
+            WHERE "id" = $1::bigint
+            LIMIT 1`,
+          [sourceBranchId],
+        );
+        if (rows?.[0]) {
+          sourceIsHq = isHqBranch(rows[0]);
+        }
+      } catch (error) {
+        this.logger.warn(
+          `Return paketi: manba filial #${sourceBranchId} turini o'qib bo'lmadi — ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
+    }
+    const notHeldBySource = orders.filter((order) => {
+      if (order.holder_type === OrderHolderType.MARKET) return true;
+      if (isHqHeld(order) && sourceIsHq !== null) return !sourceIsHq;
+      return (
+        String(order.holder_branch_id ?? order.branch_id ?? '').trim() !==
+        sourceBranchId
+      );
+    });
+    if (notHeldBySource.length) {
+      rejectOrders(
+        'order_not_held_by_source',
+        "Quyidagi buyurtmalar manba filialda emas (boshqa filial yoki HQ ushlab turibdi) — ularni bu filialning return paketiga qo'shib bo'lmaydi",
+        notHeldBySource,
       );
     }
 
@@ -2422,25 +2548,60 @@ export class BranchTransferBatchService {
 
       await queryRunner.commitTransaction();
 
+      // Qabul allaqachon COMMIT qilingan: qayta batchlash xatosi (masalan,
+      // return paketi ushlovchi tekshiruvi — 400) qabulni xato qilib
+      // ko'rsatmasin. Qolgan buyurtmalar paketdan ajratilgan holda qoladi —
+      // ro'yxati paket tarixi va activity log'ga yoziladi.
+      let requeueFailedOrderIds: string[] = [];
       if (remainingOrderIdsForRequeue.length > 0) {
-        // Re-batch the un-received orders preserving the original direction —
-        // returns stay returns, forwards stay forwards.
-        if (batch.direction === BranchTransferDirection.RETURN) {
-          await this.createBranchReturnBatches({
-            source_branch_id: String(batch.source_branch_id),
-            order_ids: remainingOrderIdsForRequeue,
-            request_key: `rtn_from_partial_receive_${batchId}_${Date.now()}`,
-            requester_id: requesterId,
-          });
-        } else {
-          await this.createBranchTransferBatches({
-            source_branch_id: String(batch.source_branch_id),
-            destination_branch_id: String(batch.destination_branch_id),
-            direction: BranchTransferDirection.FORWARD,
-            order_ids: remainingOrderIdsForRequeue,
-            request_key: `fwd_from_partial_receive_${batchId}_${Date.now()}`,
-            requester_id: requesterId,
-          });
+        try {
+          // Re-batch the un-received orders preserving the original direction —
+          // returns stay returns, forwards stay forwards.
+          if (batch.direction === BranchTransferDirection.RETURN) {
+            await this.createBranchReturnBatches({
+              source_branch_id: String(batch.source_branch_id),
+              order_ids: remainingOrderIdsForRequeue,
+              request_key: `rtn_from_partial_receive_${batchId}_${Date.now()}`,
+              requester_id: requesterId,
+            });
+          } else {
+            await this.createBranchTransferBatches({
+              source_branch_id: String(batch.source_branch_id),
+              destination_branch_id: String(batch.destination_branch_id),
+              direction: BranchTransferDirection.FORWARD,
+              order_ids: remainingOrderIdsForRequeue,
+              request_key: `fwd_from_partial_receive_${batchId}_${Date.now()}`,
+              requester_id: requesterId,
+            });
+          }
+        } catch (requeueError) {
+          requeueFailedOrderIds = remainingOrderIdsForRequeue;
+          // RpcException ham `message` ni xato obyektidan oladi.
+          this.logger.warn(
+            `Batch #${batchId}: qabul qilinmagan buyurtmalar qayta batchlanmadi (${requeueFailedOrderIds.join(', ')}) — ${
+              requeueError instanceof Error
+                ? requeueError.message
+                : String(requeueError)
+            }`,
+          );
+          try {
+            await this.transferBatchHistoryRepo.save(
+              this.transferBatchHistoryRepo.create({
+                batch_id: batchId,
+                user_id: requesterId,
+                action: BranchTransferBatchAction.RECEIVED,
+                notes: `Qabul qilinmagan ${requeueFailedOrderIds.length} ta order qayta batchlanmadi (paketsiz qoldi): ${requeueFailedOrderIds.join(', ')}`,
+              }),
+            );
+          } catch (historyError) {
+            this.logger.warn(
+              `Batch #${batchId}: qayta batchlash xatosi tarixga yozilmadi — ${
+                historyError instanceof Error
+                  ? historyError.message
+                  : String(historyError)
+              }`,
+            );
+          }
         }
       }
 
@@ -2454,7 +2615,11 @@ export class BranchTransferBatchService {
           batch_id: batchId,
           order_count: selectedOrderIds.length,
           order_ids: selectedOrderIds.slice(0, 20),
-          requeued_count: remainingOrderIdsForRequeue.length,
+          requeued_count:
+            remainingOrderIdsForRequeue.length - requeueFailedOrderIds.length,
+          ...(requeueFailedOrderIds.length
+            ? { requeue_failed_order_ids: requeueFailedOrderIds.slice(0, 20) }
+            : {}),
         },
       });
 

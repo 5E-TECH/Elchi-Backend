@@ -40,6 +40,12 @@ const BRANCH_USERS: Record<string, Row[]> = {
   ],
 };
 
+// Tuman qamrovi: ikkala filial ham buyurtmalar viloyatiga (1) xizmat qiladi.
+const BRANCHES: Record<string, Row> = {
+  '10': { id: '10', type: 'REGIONAL', region_id: '1', status: 'active' },
+  '20': { id: '20', type: 'REGIONAL', region_id: '1', status: 'active' },
+};
+
 function setup(orders: Row[]) {
   const ordersMap = new Map(orders.map((o) => [String(o.id), { ...o }]));
   const orderClient = {
@@ -60,9 +66,12 @@ function setup(orders: Row[]) {
         return of({
           data:
             String(payload.user_id) === '77'
-              ? { branch_id: '10', role: 'MANAGER' }
+              ? { branch_id: '10', role: 'MANAGER', branch: BRANCHES['10'] }
               : null,
         });
+      }
+      if (pattern.cmd === 'branch.find_by_id') {
+        return of({ data: BRANCHES[String(payload.id)] ?? null });
       }
       if (pattern.cmd === 'branch.user.find_by_branch') {
         return of({ data: BRANCH_USERS[String(payload.branch_id)] ?? [] });

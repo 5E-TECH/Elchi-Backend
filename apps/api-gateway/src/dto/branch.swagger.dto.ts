@@ -1,6 +1,8 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { BranchOwnership, BranchType } from '@app/common';
 import {
+  ArrayMaxSize,
+  ArrayUnique,
   IsArray,
   IsEnum,
   IsNumberString,
@@ -615,4 +617,45 @@ export class HqBranchResponseDto {
 
   @ApiProperty({ type: HqBranchDto })
   data!: HqBranchDto;
+}
+
+/**
+ * Tuman qamrovi (ega qarori 2026-11-02) — `PUT /branches/:id/districts`.
+ * Tuman id: raqam (42) ham, satr ('42') ham qabul qilinadi va satrga
+ * keltiriladi (logistics.swagger.dto `idToString` bilan bir xil).
+ */
+const DISTRICT_ID_PATTERN = /^\d{1,19}$/;
+const districtIdToString = (value: unknown): unknown => {
+  if (typeof value === 'number' && Number.isSafeInteger(value)) {
+    return String(value);
+  }
+  return typeof value === 'string' ? value.trim() : value;
+};
+
+export class SetBranchDistrictsRequestDto {
+  @ApiProperty({
+    type: [String],
+    example: ['101', '102'],
+    maxItems: 500,
+    uniqueItems: true,
+    description:
+      "Filial xizmat qiladigan tumanlar — TO'LIQ ro'yxat (ALMASHTIRISH): ro'yxatdagilar shu filialga biriktiriladi, " +
+      "ilgari shu filialga biriktirilgan, lekin ro'yxatda yo'q tumanlar bo'shatiladi. `[]` — barcha tumanlar bo'shatiladi. " +
+      "Tuman filial viloyatida bo'lishi shart (xizmat viloyati `assigned_region ?? region_id`); HQ filialiga biriktirilmaydi. " +
+      "Boshqa filialdagi tuman shu filialga ko'chadi (javobda `moved[]`). Id raqam (42) yoki satr ('42'), takrorlanmasin, ko'pi bilan 500 ta.",
+  })
+  @Transform(({ value }: { value: unknown }) =>
+    Array.isArray(value) ? value.map(districtIdToString) : value,
+  )
+  @IsArray({ message: "district_ids massiv bo'lishi kerak" })
+  @ArrayMaxSize(500, {
+    message: "Bir filialga ko'pi bilan 500 ta tuman biriktiriladi",
+  })
+  @ArrayUnique({ message: 'district_ids takrorlanmasligi kerak' })
+  @Matches(DISTRICT_ID_PATTERN, {
+    each: true,
+    message:
+      "district_ids faqat tuman id'laridan (musbat butun son) iborat bo'lishi kerak",
+  })
+  district_ids!: string[];
 }

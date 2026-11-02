@@ -5,6 +5,7 @@ import { Region } from './region.entity';
 @Entity({ name: 'districts' })
 @Index('IDX_DISTRICT_REGION', ['region_id'])
 @Index('IDX_DISTRICT_SATO_CODE', ['sato_code'])
+@Index('IDX_DISTRICT_SERVING_BRANCH', ['serving_branch_id'])
 /**
  * SlMjauWC (N5): bitta rasmiy kod = bitta (o'chirilmagan) tuman. Qisman
  * unique indeks, migratsiya 1716000000160 (prod'da takroriy kod bo'lsa
@@ -33,6 +34,17 @@ export class District extends BaseEntity {
 
   @Column({ type: 'bigint', nullable: true })
   assigned_region!: string | null;
+
+  /**
+   * Tuman ↔ filial qamrovi — tumanga xizmat qiladigan filial (branch-service
+   * filial id; boshqa sxema, FK yo'q). `null` — filial biriktirilmagan:
+   * qamrov tumanning xizmat viloyati bo'yicha (`isOrderServedByBranch`).
+   * Faqat `logistics.district.set_serving_branch` / `clear_serving_branch`
+   * yozadi; viloyat biriktiruvi o'zgarsa (`updateDistrict`) bo'shatiladi.
+   * Migratsiya 1716000000200.
+   */
+  @Column({ type: 'bigint', nullable: true })
+  serving_branch_id!: string | null;
 
   @ManyToOne(() => Region, (region) => region.districts, {
     onDelete: 'CASCADE',

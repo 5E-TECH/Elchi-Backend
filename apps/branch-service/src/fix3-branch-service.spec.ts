@@ -590,12 +590,15 @@ describe('fix3 — branch-service', () => {
   describe('dispatchPostToBranch — E2E-DISPATCH-SKIP, LC-13, LC-02, CODE-07', () => {
     const branchesById: Record<string, Record<string, unknown>> = {
       '10': { id: '10', type: 'HQ', status: 'active', isDeleted: false },
+      // Tuman ↔ filial qamrovi: tumansiz buyurtmalar (#14) viloyati bo'yicha
+      // shu filial qamrovida.
       '20': {
         id: '20',
         name: 'Samarqand',
         type: 'REGIONAL',
         status: 'active',
         isDeleted: false,
+        region_id: '14',
       },
     };
     const hqOrder = (id: string, extra: Record<string, unknown> = {}) => ({
@@ -611,6 +614,8 @@ describe('fix3 — branch-service', () => {
 
     let postRow: Record<string, unknown>;
     let postOrders: Array<Record<string, unknown>>;
+    // logistics.district.find_by_ids qatorlari (tuman ↔ filial qamrovi).
+    let districtRows: Array<Record<string, unknown>>;
     let managerRows: Array<Record<string, unknown>>;
     let identityUsers: Record<string, Record<string, unknown>>;
     let identityReply: ((payload: any) => Observable<unknown>) | null;
@@ -619,6 +624,7 @@ describe('fix3 — branch-service', () => {
     beforeEach(() => {
       postRow = { id: '48', courier_id: '0', status: 'new', region_id: '14' };
       postOrders = ['56', '57', '58'].map((id) => hqOrder(id));
+      districtRows = [];
       managerRows = [{ branch_id: '20', user_id: '198', role: 'MANAGER' }];
       identityUsers = {
         '198': { id: '198', role: 'manager', status: 'active' },
@@ -668,6 +674,13 @@ describe('fix3 — branch-service', () => {
           }
           if (cmd === 'logistics.post.orders_by_post') {
             return of({ data: { allOrdersByPostId: postOrders } });
+          }
+          if (cmd === 'logistics.district.find_by_ids') {
+            return of({
+              data: districtRows.filter((row) =>
+                (payload?.ids ?? []).includes(row.id),
+              ),
+            });
           }
           if (cmd === 'logistics.post.receive_orders') {
             return of({
@@ -742,7 +755,13 @@ describe('fix3 — branch-service', () => {
 
     // ------------------------------------------ LC-13
     it('hududsiz buyurtma — manba pochta hududi bilan jo`natiladi', async () => {
-      postOrders = [hqOrder('56', { region_id: null }), hqOrder('57')];
+      // Qamrov uchun buyurtmaning tumani (#1401, viloyat #14) o'qiladi —
+      // na tumani, na viloyati bo'lmagan buyurtma qamrovda hisoblanmaydi.
+      districtRows = [{ id: '1401', region_id: '14' }];
+      postOrders = [
+        hqOrder('56', { region_id: null, district_id: '1401' }),
+        hqOrder('57'),
+      ];
 
       const res: any = await dispatch(['56', '57']);
 
@@ -770,7 +789,7 @@ describe('fix3 — branch-service', () => {
     // ------------------------------------------ LC-09
     describe('LC-09 — pochta hududi', () => {
       afterEach(() => {
-        delete branchesById['20'].region_id;
+        branchesById['20'].region_id = '14';
       });
 
       it('manzil filial boshqa hududda — 400, buyurtmalar o`qilmaydi, hech narsa yozilmaydi', async () => {
@@ -803,7 +822,13 @@ describe('fix3 — branch-service', () => {
       });
 
       it('SENT pochta MANBA pochta hududi bo`yicha (tumani boshqa hududga o`tkazilgan buyurtma)', async () => {
-        postOrders = [hqOrder('56', { region_id: '9' }), hqOrder('57')];
+        // Geografik viloyati #9, tumani esa #14 ga biriktirilgan (LC-13) —
+        // qamrov tumanning XIZMAT viloyati bo'yicha: filial #14 xizmat qiladi.
+        districtRows = [{ id: '901', region_id: '9', assigned_region: '14' }];
+        postOrders = [
+          hqOrder('56', { region_id: '9', district_id: '901' }),
+          hqOrder('57'),
+        ];
 
         const res: any = await dispatch(['56', '57']);
 
@@ -814,9 +839,9 @@ describe('fix3 — branch-service', () => {
         ]);
       });
 
-      it("manba pochtada hudud yo'q — buyurtma hududi olinadi, hudud tekshiruvi o'tkazib yuboriladi", async () => {
+      it("manba pochtada hudud yo'q — buyurtma hududi olinadi, LC-09 tekshiruvi o'tkazib yuboriladi", async () => {
         postRow = { ...postRow, region_id: null };
-        branchesById['20'].region_id = '15';
+        branchesById['20'].region_id = '9';
         postOrders = [hqOrder('56', { region_id: '9' })];
 
         const res: any = await dispatch(['56']);
@@ -825,6 +850,24 @@ describe('fix3 — branch-service', () => {
         expect(receivePayload()?.orders).toEqual([
           expect.objectContaining({ order_id: '56', assigned_region: '9' }),
         ]);
+      });
+
+      it("manba pochtada hudud yo'q, buyurtma boshqa viloyatda — LC-09 o'tkazilsa ham qamrov 409 beradi", async () => {
+        // Ilgari (tuman ↔ filial qamrovigacha) bu holat jo'natilardi.
+        postRow = { ...postRow, region_id: null };
+        branchesById['20'].region_id = '15';
+        postOrders = [hqOrder('56', { region_id: '9' })];
+
+        const err = await rpcErrorOf(dispatch(['56']));
+
+        expect(err.statusCode).toBe(409);
+        expect(err.data).toEqual(
+          expect.objectContaining({
+            reason: 'district_not_served_by_branch',
+            order_ids: ['56'],
+          }),
+        );
+        expectNothingWritten();
       });
     });
 

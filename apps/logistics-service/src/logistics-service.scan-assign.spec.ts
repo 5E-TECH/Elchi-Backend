@@ -19,6 +19,8 @@ describe('LogisticsServiceService scanAssignOrder', () => {
     // `branch` qatori javobda yo'q (eski javob / o'chirilgan filial) → find_hq zaxirasi
     omitBranch?: boolean;
     findHqError?: boolean;
+    // Tuman qamrovi: kuryer filialining viloyati (odatiy '1' = buyurtma viloyati)
+    branchRegionId?: string | null;
   }) {
     const order = {
       id: '101',
@@ -82,6 +84,19 @@ describe('LogisticsServiceService scanAssignOrder', () => {
           return of({ data: { id: options?.hqBranchId ?? '1' } });
         }
         const branchId = options?.branchId ?? '10';
+        const branchRegionId =
+          options?.branchRegionId === undefined ? '1' : options.branchRegionId;
+        if (pattern.cmd === 'branch.find_by_id') {
+          // Javobda branch qatori bo'lmasa — tuman qamrovi zaxirasi.
+          return of({
+            data: {
+              id: branchId,
+              type: options?.branchType ?? 'REGIONAL',
+              region_id: branchRegionId,
+              status: 'active',
+            },
+          });
+        }
         return of({
           data: {
             branch_id: branchId,
@@ -91,6 +106,7 @@ describe('LogisticsServiceService scanAssignOrder', () => {
                   branch: {
                     id: branchId,
                     type: options?.branchType ?? 'REGIONAL',
+                    region_id: branchRegionId,
                   },
                 }),
           },
