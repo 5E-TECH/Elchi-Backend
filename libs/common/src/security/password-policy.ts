@@ -3,15 +3,15 @@ import {
   ValidationOptions,
   registerDecorator,
 } from 'class-validator';
-import { Roles } from '../../enums';
 
 /**
  * (NDmZMzCP, 2026-10-26) Parol siyosati — YANGI parol o'rnatilganda /
  * almashtirilganda (yaratish, tahrirlash, o'z profili). LOGIN'ga TEGMAYDI:
- * mavjud foydalanuvchi eski (qisqa) paroli bilan kira oladi — u faqat
+ * mavjud foydalanuvchi eski paroli bilan kira oladi — u faqat
  * `must_change_password` bilan belgilanadi (auth.service `login`).
  *
- *  - kamida 8 belgi; xodimlar (`STAFF_PASSWORD_ROLES`) — kamida 10;
+ *  - ega qarori 2026-11-02: hamma rol uchun kamida 6 belgi, kamida 1 ta
+ *    katta harf, 1 ta kichik harf va 1 ta raqam (ilgari 8, xodimlar 10);
  *  - ko'pi bilan 72 bayt (bcrypt shundan keyingisini e'tiborsiz qoldiradi);
  *  - taqiqlangan ro'yxat: keng tarqalgan parollar (`12345678`, `password`,
  *    `qwerty123`, `elchi123` …), bitta belgining takrori (`aaaaaaaa`),
@@ -22,25 +22,9 @@ import { Roles } from '../../enums';
  * xeshlashdan OLDIN `passwordPolicyError` bilan o'zi ham tekshiradi; DTO
  * dekoratori (`@IsPasswordPolicy`) faqat gateway'dagi birinchi to'siq.
  */
-export const PASSWORD_MIN_LENGTH = 8;
-export const STAFF_PASSWORD_MIN_LENGTH = 10;
+export const PASSWORD_MIN_LENGTH = 6;
 /** bcrypt 72 baytdan keyingisini kesib tashlaydi — undan uzun parol aldaydi. */
 export const PASSWORD_MAX_BYTES = 72;
-
-/**
- * «Xodim» — kompaniya ichidagi rollar (admin paneli, kassa, kuryer): parol
- * kamida 10 belgi. Market, market operatori, mijoz va investor — 8.
- */
-export const STAFF_PASSWORD_ROLES: readonly string[] = [
-  Roles.SUPERADMIN,
-  Roles.ADMIN,
-  Roles.MANAGER,
-  Roles.REGISTRATOR,
-  Roles.OPERATOR,
-  Roles.LOGIST,
-  Roles.BRANCH,
-  Roles.COURIER,
-];
 
 /** Keng tarqalgan parollar (kichik harfda). Tekshiruv — to'liq moslik. */
 const COMMON_PASSWORDS: ReadonlySet<string> = new Set([
@@ -152,18 +136,8 @@ function isSequential(value: string): boolean {
   });
 }
 
-/** Rol uchun minimal uzunlik (rol noma'lum — 8). */
-export function passwordMinLength(role?: string | null): number {
-  const normalized = String(role ?? '')
-    .trim()
-    .toLowerCase();
-  return STAFF_PASSWORD_ROLES.includes(normalized)
-    ? STAFF_PASSWORD_MIN_LENGTH
-    : PASSWORD_MIN_LENGTH;
-}
-
 export interface PasswordPolicyContext {
-  /** Parol egasining roli — xodim bo'lsa 10 belgi. */
+  /** Parol egasining roli (qoida hamma rolga bir xil). */
   role?: string | null;
   /** Egasining telefoni — parol telefon raqamining o'zi bo'lmasin. */
   phone?: string | null;
@@ -180,15 +154,23 @@ export function passwordPolicyError(
   if (typeof password !== 'string' || password.length === 0) {
     return "Parol bo'sh bo'lmasligi kerak";
   }
-  const min = passwordMinLength(context.role);
-  if (password.length < min) {
-    return `Parol kamida ${min} belgidan iborat bo'lishi kerak`;
+  if (password.length < PASSWORD_MIN_LENGTH) {
+    return `Parol kamida ${PASSWORD_MIN_LENGTH} belgidan iborat bo'lishi kerak`;
   }
   if (Buffer.byteLength(password, 'utf8') > PASSWORD_MAX_BYTES) {
     return `Parol ${PASSWORD_MAX_BYTES} baytdan oshmasligi kerak`;
   }
   if (password.trim() !== password) {
     return "Parol boshida yoki oxirida bo'sh joy bo'lmasligi kerak";
+  }
+  if (!/\p{Lu}/u.test(password)) {
+    return "Parolda kamida 1 ta katta harf bo'lishi kerak";
+  }
+  if (!/\p{Ll}/u.test(password)) {
+    return "Parolda kamida 1 ta kichik harf bo'lishi kerak";
+  }
+  if (!/\d/.test(password)) {
+    return "Parolda kamida 1 ta raqam bo'lishi kerak";
   }
   const lower = password.toLowerCase();
   if (
@@ -232,9 +214,9 @@ export function isPasswordPolicyCompliant(
 
 /**
  * DTO dekoratori. `role` — qat'iy rol (masalan, `Roles.COURIER`) yoki
- * `(dto) => rol` (DTO'dagi `role` maydonidan). Berilmasa — 8 belgi qoidasi
- * (xodim uchun 10 ni identity-service egasining roli bo'yicha baribir
- * tekshiradi). Bo'sh/berilmagan qiymat — `@IsOptional` / `@IsNotEmpty` ishi.
+ * `(dto) => rol` (DTO'dagi `role` maydonidan). Qoida hamma rolga bir xil;
+ * identity-service xeshlashdan oldin baribir o'zi ham tekshiradi.
+ * Bo'sh/berilmagan qiymat — `@IsOptional` / `@IsNotEmpty` ishi.
  */
 export function IsPasswordPolicy(
   role?: string | ((dto: Record<string, unknown>) => string | null | undefined),

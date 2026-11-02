@@ -64,7 +64,7 @@ const statusOf = (error: unknown): number | undefined =>
 const dto = {
   name: 'Ali Investor',
   phone_number: '+998901234567',
-  password: 'secret12',
+  password: 'Secret12',
 };
 const superadmin: RequesterContext = { id: '1', roles: ['superadmin'] };
 const admin: RequesterContext = { id: '2', roles: ['admin'] };

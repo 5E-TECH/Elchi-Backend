@@ -6163,9 +6163,6 @@ export class UserServiceService implements OnModuleInit {
       this.badRequest("Operator ismi 2-100 belgi bo'lishi kerak");
     }
     const password = typeof dto?.password === 'string' ? dto.password : '';
-    if (password.length < 4) {
-      this.badRequest("Parol kamida 4 belgi bo'lishi kerak");
-    }
     // Telefon serverda kanonik ko'rinishga keltiriladi (+998XXXXXXXXX):
     // '998901234567' va '+998901234567' — bitta odam, takroriylik tekshiruvi
     // aylanib o'tilmasin (BeePost'dagi saboq).

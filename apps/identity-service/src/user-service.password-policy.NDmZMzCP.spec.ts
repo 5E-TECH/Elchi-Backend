@@ -6,7 +6,7 @@ import { UserServiceService } from './user-service.service';
 
 /**
  * (NDmZMzCP) Parol siyosati identity-service ICHIDA ham (RMQ'da
- * ValidationPipe yo'q): yaratish / tahrirlash / o'z profili — min 8, xodim 10,
+ * ValidationPipe yo'q): yaratish / tahrirlash / o'z profili — min 6, katta va kichik harf, raqam,
  * oddiy parollar taqiqlangan; rad etilsa xeshlanmaydi va saqlanmaydi.
  * O'zi parolni almashtirsa `must_change_password` tushadi.
  */
@@ -67,7 +67,7 @@ async function rpcErrorOf(promise: Promise<unknown>) {
 describe('NDmZMzCP — parol siyosati identity-service ichida', () => {
   it.each([
     ['createAdmin', '123456789'],
-    ['createRegistrator', 'Qisqa-123'],
+    ['createRegistrator', 'qisqa-123'],
     ['createLogist', '0990'],
     ['createManager', '1234567890'],
   ] as const)(
@@ -98,14 +98,14 @@ describe('NDmZMzCP — parol siyosati identity-service ichida', () => {
     },
   );
 
-  it('createCourier: 9 belgi — 400 (kuryer xodim, kamida 10)', async () => {
+  it('createCourier: katta harfsiz parol — 400 (ega qarori 2026-11-02)', async () => {
     const t = makeService();
     const error = await rpcErrorOf(
       t.service.createCourier(
         {
           name: 'TEST Kuryer',
           phone_number: '+998935557711',
-          password: 'Kuryer-12',
+          password: 'kuryer-12',
           tariff_home: 1,
           tariff_center: 1,
         } as never,
@@ -114,7 +114,7 @@ describe('NDmZMzCP — parol siyosati identity-service ichida', () => {
     );
     expect(error).toMatchObject({
       statusCode: 400,
-      message: "Parol kamida 10 belgidan iborat bo'lishi kerak",
+      message: "Parolda kamida 1 ta katta harf bo'lishi kerak",
     });
     expect(t.encrypt).not.toHaveBeenCalled();
   });
@@ -122,7 +122,7 @@ describe('NDmZMzCP — parol siyosati identity-service ichida', () => {
   it('createUserForAuth (mijoz): oddiy parol — 400', async () => {
     const t = makeService();
     const error = await rpcErrorOf(
-      t.service.createUserForAuth('mijoz', 'password', '+998935557711'),
+      t.service.createUserForAuth('mijoz', 'Password1', '+998935557711'),
     );
     expect(error).toMatchObject({
       statusCode: 400,
@@ -130,7 +130,7 @@ describe('NDmZMzCP — parol siyosati identity-service ichida', () => {
     });
   });
 
-  it('updateUser: admin kuryerga qisqa parol o‘rnata olmaydi (rol bo‘yicha 10)', async () => {
+  it('updateUser: admin kuryerga qisqa parol o‘rnata olmaydi (kamida 6)', async () => {
     const t = makeService({
       id: '26',
       role: Roles.COURIER,
@@ -142,11 +142,7 @@ describe('NDmZMzCP — parol siyosati identity-service ichida', () => {
       must_change_password: false,
     });
     const error = await rpcErrorOf(
-      t.service.updateUser(
-        '26',
-        { password: 'Yangi-123' } as never,
-        superadmin,
-      ),
+      t.service.updateUser('26', { password: 'Yan-1' } as never, superadmin),
     );
     expect(error.statusCode).toBe(400);
     expect(t.saves).toEqual([]);

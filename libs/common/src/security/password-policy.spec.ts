@@ -3,83 +3,74 @@ import { Roles } from '../../enums';
 import {
   IsPasswordPolicy,
   PASSWORD_MIN_LENGTH,
-  STAFF_PASSWORD_MIN_LENGTH,
   isPasswordPolicyCompliant,
-  passwordMinLength,
   passwordPolicyError,
 } from './password-policy';
 
-/** (NDmZMzCP) Parol siyosati: min 8 / xodim 10 + taqiqlangan ro'yxat. */
+/**
+ * (NDmZMzCP) Parol siyosati. Ega qarori 2026-11-02: hamma rol uchun kamida 6
+ * belgi, 1 ta katta harf, 1 ta kichik harf va 1 ta raqam + taqiqlangan ro'yxat.
+ */
 describe('NDmZMzCP — parol siyosati', () => {
-  it('xodim rollari 10, qolganlari 8 (rol noma’lum — 8)', () => {
+  it('hamma rol uchun bir xil: 6 belgi — OK, 5 — rad', () => {
+    expect(PASSWORD_MIN_LENGTH).toBe(6);
     for (const role of [
       Roles.SUPERADMIN,
       Roles.ADMIN,
-      Roles.MANAGER,
-      Roles.REGISTRATOR,
-      Roles.OPERATOR,
-      Roles.LOGIST,
-      Roles.BRANCH,
       Roles.COURIER,
-    ]) {
-      expect(passwordMinLength(role)).toBe(STAFF_PASSWORD_MIN_LENGTH);
-    }
-    for (const role of [
       Roles.MARKET,
       Roles.MARKET_OPERATOR,
       Roles.CUSTOMER,
-      Roles.INVESTOR,
+      undefined,
     ]) {
-      expect(passwordMinLength(role)).toBe(PASSWORD_MIN_LENGTH);
+      expect(passwordPolicyError('Bozor7', { role })).toBeNull();
+      expect(passwordPolicyError('Boz7a', { role })).toBe(
+        "Parol kamida 6 belgidan iborat bo'lishi kerak",
+      );
     }
-    expect(passwordMinLength(undefined)).toBe(PASSWORD_MIN_LENGTH);
-    expect(passwordMinLength('ADMIN')).toBe(STAFF_PASSWORD_MIN_LENGTH);
   });
 
-  it('uzunlik: market 8 belgi — OK, 7 — rad; admin 9 — rad, 10 — OK', () => {
-    expect(passwordPolicyError('Bozor-2x', { role: Roles.MARKET })).toBeNull();
-    expect(passwordPolicyError('Bozor-2', { role: Roles.MARKET })).toBe(
-      "Parol kamida 8 belgidan iborat bo'lishi kerak",
+  it('katta harf, kichik harf va raqam majburiy', () => {
+    expect(passwordPolicyError('bozor77')).toBe(
+      "Parolda kamida 1 ta katta harf bo'lishi kerak",
     );
-    expect(passwordPolicyError('Admin-29x', { role: Roles.ADMIN })).toBe(
-      "Parol kamida 10 belgidan iborat bo'lishi kerak",
+    expect(passwordPolicyError('BOZOR77')).toBe(
+      "Parolda kamida 1 ta kichik harf bo'lishi kerak",
     );
-    expect(passwordPolicyError('Admin-29xy', { role: Roles.ADMIN })).toBeNull();
+    expect(passwordPolicyError('Bozorcha')).toBe(
+      "Parolda kamida 1 ta raqam bo'lishi kerak",
+    );
+    expect(passwordPolicyError('QWERT12345')).toBe(
+      "Parolda kamida 1 ta kichik harf bo'lishi kerak",
+    );
+    // Kirill harflari ham harf hisoblanadi.
+    expect(passwordPolicyError('Бозор77')).toBeNull();
+    expect(isPasswordPolicyCompliant('Kuchli-Parol-2026')).toBe(true);
   });
 
   it.each([
-    '12345678',
-    '1234567890',
-    'password123',
+    'Password123',
     'Qwerty123',
-    'ELCHI123',
-    'elchipochta',
-    'aaaaaaaaaa',
-    '1111111111',
-    '3456789012',
-    '9876543210',
-    'abcdefghij',
+    'Elchi123',
+    'Elchipochta1',
+    'Admin12345',
+    'Aa123456',
+    'Test1234',
   ])('oddiy parol rad etiladi: %s', (password) => {
     expect(passwordPolicyError(password, { role: Roles.MARKET })).toBe(
       'Parol juda oddiy — boshqa parol tanlang',
     );
   });
 
-  it('telefon raqamining o‘zi parol bo‘lmaydi', () => {
+  it('faqat raqamdan iborat parol (telefon ham) harf talabi bilan rad etiladi', () => {
     expect(
       passwordPolicyError('935557711', {
         role: Roles.MARKET,
         phone: '+998935557711',
       }),
-    ).toBe("Parol telefon raqami bo'lmasligi kerak");
+    ).toBe("Parolda kamida 1 ta katta harf bo'lishi kerak");
     expect(
-      passwordPolicyError('998935557711', {
-        role: Roles.MARKET,
-        phone: '+998935557711',
-      }),
-    ).toBe("Parol telefon raqami bo'lmasligi kerak");
-    expect(
-      isPasswordPolicyCompliant('935557712', {
+      isPasswordPolicyCompliant('Tel935557711', {
         role: Roles.MARKET,
         phone: '+998935557711',
       }),
@@ -97,8 +88,9 @@ describe('NDmZMzCP — parol siyosati', () => {
     expect(passwordPolicyError('x'.repeat(73))).toBe(
       'Parol 72 baytdan oshmasligi kerak',
     );
-    const message = passwordPolicyError('Sir-123', { role: Roles.ADMIN });
-    expect(message).not.toContain('Sir-123');
+    const message = passwordPolicyError('sir-1234', { role: Roles.ADMIN });
+    expect(message).toBeTruthy();
+    expect(message).not.toContain('sir-1234');
   });
 
   it('@IsPasswordPolicy: qat’iy rol va DTO’dagi rol bo‘yicha', async () => {
@@ -111,13 +103,13 @@ describe('NDmZMzCP — parol siyosati', () => {
       @IsPasswordPolicy((dto) => dto.role as string)
       password!: string;
     }
-    const fixed = Object.assign(new Fixed(), { password: 'Kuryer-12' });
+    const fixed = Object.assign(new Fixed(), { password: 'Kur-1' });
     const fixedErrors = await validate(fixed);
     expect(fixedErrors[0]?.constraints?.isPasswordPolicy).toBe(
-      "Parol kamida 10 belgidan iborat bo'lishi kerak",
+      "Parol kamida 6 belgidan iborat bo'lishi kerak",
     );
     expect(
-      await validate(Object.assign(new Fixed(), { password: 'Kuryer-123' })),
+      await validate(Object.assign(new Fixed(), { password: 'Kuryer1' })),
     ).toEqual([]);
 
     expect(
@@ -128,9 +120,9 @@ describe('NDmZMzCP — parol siyosati', () => {
         }),
       ),
     ).toEqual([]);
-    const staff = await validate(
-      Object.assign(new ByRole(), { role: Roles.ADMIN, password: 'Mijoz-12' }),
+    const weak = await validate(
+      Object.assign(new ByRole(), { role: Roles.ADMIN, password: 'mijoz-12' }),
     );
-    expect(staff[0]?.constraints?.isPasswordPolicy).toContain('10 belgi');
+    expect(weak[0]?.constraints?.isPasswordPolicy).toContain('katta harf');
   });
 });
