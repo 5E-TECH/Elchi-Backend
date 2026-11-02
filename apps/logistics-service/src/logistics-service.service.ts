@@ -9,6 +9,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { ClientProxy, RpcException } from '@nestjs/microservices';
 import {
   Between,
+  EntityManager,
   FindOptionsWhere,
   In,
   IsNull,
@@ -22,6 +23,21 @@ import { lastValueFrom, timeout } from 'rxjs';
 import { Post } from './entities/post.entity';
 import { Region } from './entities/region.entity';
 import { District } from './entities/district.entity';
+import { DistrictCoverageExemption } from './entities/district-coverage-exemption.entity';
+import {
+  OPEN_CUSTODY_MAX_DISTRICT_IDS,
+  OPEN_CUSTODY_PAGE_LIMIT,
+  computeCoverageExemptions,
+  coverageExemptionCandidateBranchIds,
+  coverageExemptionDeleteQuery,
+  coverageExemptionInsertQuery,
+  coverageExemptionRetargetQuery,
+  parseOpenCustodyPage,
+  summarizeCoverageExemptions,
+  type CoverageExemption,
+  type CreatedCoverageExemption,
+  type OpenCustodyRow,
+} from './coverage/district-coverage-exemption';
 import { regions } from './data/regions-districts.data';
 import { CreateDistrictDto } from './dto/create-district.dto';
 import { UpdateDistrictDto } from './dto/update-district.dto';
@@ -42,6 +58,7 @@ import {
   ActivityLogService,
   ActivityLogQuery,
   BranchType,
+  type CoverageDistrict,
   courierPostOrdersQuery,
   COURIER_LIST_HIDDEN_STATUSES,
   effectiveDistrictRegionId,
@@ -635,6 +652,63 @@ function branchCoverageRowOf(value: unknown): BranchCoverageRow | null {
 /** Qamrov rad javobidagi xabarda ko'rsatiladigan buyurtma id'lari soni. */
 const COVERAGE_MESSAGE_ORDER_IDS = 10;
 
+/**
+ * Tuman qamrovi imtiyozlari (ega qarori, 2026-11-02): ko'chishdan oldin
+ * `order.open_custody_by_district` sahifalab o'qiladi. Bir sahifa kutish
+ * vaqti; jami sahifalar chegarasi (oshsa — fail-closed, 503); bitta INSERT
+ * dagi qatorlar soni.
+ */
+const COVERAGE_CUSTODY_TIMEOUT_MS = 5000;
+const COVERAGE_CUSTODY_MAX_PAGES = 100;
+const COVERAGE_EXEMPTION_INSERT_CHUNK = 1000;
+export const COVERAGE_EXEMPTION_UNAVAILABLE_MESSAGE =
+  "Tuman buyurtmalarini tekshirib bo'lmadi — birozdan so'ng qayta urinib ko'ring";
+
+/** Imtiyozni qaysi amal yozdi (`district_coverage_exemptions.source`). */
+type CoverageExemptionSource =
+  | 'district_update'
+  | 'set_serving_branch'
+  | 'clear_serving_branch'
+  | 'district_merge';
+
+/**
+ * Bitta tuman ko'chishi: `district_id` dagi buyurtmalar uchun qamrov
+ * `before` qatoridan `after` qatoriga o'tadi. `target_district_id` —
+ * ko'chishdan KEYINGI buyurtma tumani (imtiyozda saqlanadi; birlashtirishda
+ * B), yo'q — `district_id`. `order_ids` — faqat shu buyurtmalar
+ * (birlashtirishdan keyingi qayta snapshot: A dan B ga ko'chganlar).
+ */
+interface CoverageDistrictMove {
+  district_id: string;
+  before: CoverageDistrict;
+  after: CoverageDistrict;
+  target_district_id?: string;
+  order_ids?: ReadonlySet<string>;
+}
+
+/**
+ * Ko'chishdan OLDIN o'qilgan custody: so'ralgan tumanlar, ularning ochiq
+ * buyurtmalari va mas'ul filial qatorlari (noma'lum filial — `null`).
+ */
+interface CoverageCustody {
+  district_ids: ReadonlySet<string>;
+  rows: OpenCustodyRow[];
+  branchesById: Map<string, BranchCoverageRow | null>;
+}
+
+/**
+ * Ko'chishdan oldingi va keyingi (qayta) snapshot natijalari birga — javob
+ * va audit soni uchun. Hech biri bajarilmagan (`null`) — `null`.
+ */
+function combineCoverageCreated(
+  ...runs: Array<CreatedCoverageExemption[] | null>
+): CreatedCoverageExemption[] | null {
+  const done = runs.filter(
+    (run): run is CreatedCoverageExemption[] => run !== null,
+  );
+  return done.length ? done.flat() : null;
+}
+
 /** `rehomeOpenDistrictOrders` javobi (`logistics.district.rehome_open_orders`). */
 interface DistrictRehomeResult {
   district_id: string;
@@ -717,6 +791,12 @@ export class LogisticsServiceService implements OnModuleInit {
     // spec'lar servisni 8 argument bilan quradi — u holda bildirishnoma yo'q.
     @Optional()
     private readonly logisticsNotifications?: LogisticsNotificationService,
+    // Tuman qamrovi imtiyozlari (migratsiya 1716000000203). Ixtiyoriy va
+    // OXIRGI: eski spec'lar servisni 8–9 argument bilan quradi — u holda
+    // imtiyoz yozilmaydi va qamrov tekshiruvi avvalgidek.
+    @Optional()
+    @InjectRepository(DistrictCoverageExemption)
+    private readonly coverageExemptionRepo?: Repository<DistrictCoverageExemption>,
   ) {}
 
   /**
@@ -1928,19 +2008,33 @@ export class LogisticsServiceService implements OnModuleInit {
       districts.map((district) => [String(district.id), district]),
     );
 
-    const notServedIds = orders
-      .filter((order) => {
-        const districtId = canonicalBigintId(order.district_id);
-        // Tuman qatori topilmasa — buyurtma viloyati bo'yicha (qoida 4-band).
-        const district = districtId
-          ? (districtById.get(districtId) ?? null)
-          : null;
-        return !isOrderServedByBranch(
-          { district, orderRegionId: order.region_id },
-          branch,
+    const notServed = orders.filter((order) => {
+      const districtId = canonicalBigintId(order.district_id);
+      // Tuman qatori topilmasa — buyurtma viloyati bo'yicha (qoida 4-band).
+      const district = districtId
+        ? (districtById.get(districtId) ?? null)
+        : null;
+      return !isOrderServedByBranch(
+        { district, orderRegionId: order.region_id },
+        branch,
+      );
+    });
+    let notServedIds = notServed.map((order) => String(order.id));
+
+    // Tuman qamrovi imtiyozi (ega qarori, 2026-11-02): tuman ko'chgan paytda
+    // shu filial / uning kuryeri qo'lida bo'lgan buyurtma shu filialda
+    // tugaydi. Imtiyoz ishlatilganda O'CHMAYDI (kuryer qaytarib bergach ham).
+    if (notServed.length) {
+      const exemptIds = await this.findCoverageExemptOrderIds(
+        notServed,
+        branch.id,
+      );
+      if (exemptIds.size) {
+        notServedIds = notServedIds.filter(
+          (id) => !exemptIds.has(canonicalBigintId(id) ?? id),
         );
-      })
-      .map((order) => String(order.id));
+      }
+    }
 
     if (notServedIds.length) {
       const shown = notServedIds
@@ -1954,6 +2048,64 @@ export class LogisticsServiceService implements OnModuleInit {
       this.forbidden(
         `Bu buyurtma(lar) tumani filialingizga biriktirilmagan — ${receivedNote}o'z filialiga partiya/HQ orqali jo'nating: ${shown}${rest > 0 ? ` va yana ${rest} ta` : ''}`,
         { reason: 'district_not_served_by_branch', order_ids: notServedIds },
+      );
+    }
+  }
+
+  /**
+   * Shu filialning AMALDAGI (`revoked_at IS NULL`) qamrov imtiyozi bor
+   * buyurtmalari (kanonik id). Imtiyoz faqat tumani buyurtmaning HOZIRGI
+   * tumaniga teng bo'lsa (yoki eski qatorda tuman yo'q — NULL) hisobga
+   * olinadi: ko'chishdan keyin buyurtma tumani tahrirlansa imtiyoz endi
+   * yordam bermaydi. Bitta lokal so'rov. Imtiyoz repo ulanmagan (eski spec
+   * simlari) — bo'sh to'plam (avvalgidek). DB xatosi — 503 (fail closed:
+   * imtiyozni tekshirmasdan rad ham, ruxsat ham berilmaydi).
+   */
+  private async findCoverageExemptOrderIds(
+    orders: ReadonlyArray<Pick<OrderRow, 'id' | 'district_id'>>,
+    branchId: string,
+  ): Promise<Set<string>> {
+    const repo = this.coverageExemptionRepo;
+    const districtByOrderId = new Map<string, string | null>();
+    for (const order of orders) {
+      const orderId = canonicalBigintId(order.id);
+      if (orderId) {
+        districtByOrderId.set(orderId, canonicalBigintId(order.district_id));
+      }
+    }
+    if (!repo || !districtByOrderId.size) {
+      return new Set();
+    }
+    try {
+      const rows = await repo.find({
+        select: { order_id: true, district_id: true },
+        where: {
+          order_id: In(Array.from(districtByOrderId.keys())),
+          branch_id: branchId,
+          revoked_at: IsNull(),
+        },
+      });
+      const exempt = new Set<string>();
+      for (const row of rows) {
+        const orderId = canonicalBigintId(row.order_id);
+        if (!orderId || !districtByOrderId.has(orderId)) {
+          continue;
+        }
+        const exemptionDistrictId = canonicalBigintId(row.district_id);
+        if (
+          exemptionDistrictId === null ||
+          exemptionDistrictId === districtByOrderId.get(orderId)
+        ) {
+          exempt.add(orderId);
+        }
+      }
+      return exempt;
+    } catch (error) {
+      this.logger.error(
+        `filial #${branchId}: tuman qamrovi imtiyozlarini o'qib bo'lmadi: ${(error as Error)?.message ?? String(error)}`,
+      );
+      throw new RpcException(
+        errorRes(COVERAGE_EXEMPTION_UNAVAILABLE_MESSAGE, 503),
       );
     }
   }
@@ -6702,6 +6854,366 @@ export class LogisticsServiceService implements OnModuleInit {
     return successRes(districts);
   }
 
+  /** Imtiyoz custody'si o'qilmadi / yozilmadi — 503 (fail closed). */
+  private coverageExemptionUnavailable(reason: string): never {
+    this.logger.error(`tuman qamrovi imtiyozlari: ${reason}`);
+    throw new RpcException(
+      errorRes(COVERAGE_EXEMPTION_UNAVAILABLE_MESSAGE, 503),
+    );
+  }
+
+  /**
+   * `order.open_custody_by_district` — tumanlarning ochiq buyurtmalari
+   * (≤ 50 tumandan bo'lib, har bo'lak `next_after_id` bilan sahifalanadi).
+   * Javob kelmasa / noto'g'ri bo'lsa / sahifa oldinga siljimasa / jami
+   * sahifalar chegarasidan oshsa — 503 (to'liq bo'lmagan ro'yxat bilan
+   * imtiyoz yozilmaydi).
+   */
+  private async fetchOpenCustodyRows(
+    districtIds: readonly string[],
+  ): Promise<OpenCustodyRow[]> {
+    const rows: OpenCustodyRow[] = [];
+    let pages = 0;
+    for (
+      let offset = 0;
+      offset < districtIds.length;
+      offset += OPEN_CUSTODY_MAX_DISTRICT_IDS
+    ) {
+      const chunk = districtIds.slice(
+        offset,
+        offset + OPEN_CUSTODY_MAX_DISTRICT_IDS,
+      );
+      let afterId: string | null = null;
+      for (;;) {
+        pages += 1;
+        if (pages > COVERAGE_CUSTODY_MAX_PAGES) {
+          this.coverageExemptionUnavailable(
+            `ochiq buyurtmalar ${COVERAGE_CUSTODY_MAX_PAGES} sahifadan oshdi (tumanlar: ${districtIds.join(', ')})`,
+          );
+        }
+        let response: unknown;
+        try {
+          response = await lastValueFrom(
+            this.orderClient
+              .send(
+                { cmd: 'order.open_custody_by_district' },
+                {
+                  district_ids: chunk,
+                  after_id: afterId,
+                  limit: OPEN_CUSTODY_PAGE_LIMIT,
+                },
+              )
+              .pipe(timeout(COVERAGE_CUSTODY_TIMEOUT_MS)),
+          );
+        } catch (error) {
+          this.coverageExemptionUnavailable(
+            `order.open_custody_by_district javob bermadi (tumanlar: ${chunk.join(', ')}): ${this.geoErrorText(error)}`,
+          );
+        }
+        const page = parseOpenCustodyPage(response);
+        if (!page) {
+          this.coverageExemptionUnavailable(
+            `order.open_custody_by_district javobi noto'g'ri (tumanlar: ${chunk.join(', ')})`,
+          );
+        }
+        rows.push(...page.rows);
+        if (!page.next_after_id) {
+          break;
+        }
+        if (afterId !== null && BigInt(page.next_after_id) <= BigInt(afterId)) {
+          this.coverageExemptionUnavailable(
+            `order.open_custody_by_district sahifasi oldinga siljimadi (after_id ${afterId})`,
+          );
+        }
+        afterId = page.next_after_id;
+      }
+    }
+    return rows;
+  }
+
+  /**
+   * Ko'chishdan OLDIN: tumanlarning ochiq buyurtmalari va ularning mas'ul
+   * filial qatorlari (`findBranchCoverageRow`; 404 — noma'lum filial, imtiyoz
+   * yo'q). `orderIds` berilsa — faqat shu buyurtmalar qoladi (filial qatori
+   * ham faqat ularniki so'raladi: birlashtirishdan keyin B ning o'z
+   * buyurtmalari filial xizmati xatosi bilan qayta snapshot'ni yiqitmasin).
+   * Har qanday xato — 503.
+   */
+  private async loadCoverageCustody(
+    districtIds: readonly string[],
+    orderIds?: ReadonlySet<string>,
+  ): Promise<CoverageCustody> {
+    const ids = Array.from(
+      new Set(
+        districtIds
+          .map((id) => canonicalBigintId(id))
+          .filter((id): id is string => !!id),
+      ),
+    );
+    const fetched = ids.length ? await this.fetchOpenCustodyRows(ids) : [];
+    const rows = orderIds
+      ? fetched.filter((row) => orderIds.has(row.id))
+      : fetched;
+    const branchesById = new Map<string, BranchCoverageRow | null>();
+    try {
+      await Promise.all(
+        coverageExemptionCandidateBranchIds(rows).map(async (branchId) => {
+          branchesById.set(
+            branchId,
+            await this.findBranchCoverageRow(branchId),
+          );
+        }),
+      );
+    } catch (error) {
+      this.coverageExemptionUnavailable(
+        `filial qatorini olib bo'lmadi: ${this.geoErrorText(error)}`,
+      );
+    }
+    return { district_ids: new Set(ids), rows, branchesById };
+  }
+
+  /**
+   * O'qilgan custody bo'yicha har ko'chish uchun imtiyozlar. Ko'chayotgan
+   * tuman custody'da yo'q (oraliqda holat o'zgardi) — 503, qayta urinish.
+   */
+  private coverageExemptionsFor(
+    custody: CoverageCustody,
+    moves: readonly CoverageDistrictMove[],
+  ): CoverageExemption[] {
+    const rowsByDistrict = new Map<string, OpenCustodyRow[]>();
+    for (const row of custody.rows) {
+      const key = row.district_id ?? '';
+      const list = rowsByDistrict.get(key) ?? [];
+      list.push(row);
+      rowsByDistrict.set(key, list);
+    }
+    const exemptions = new Map<string, CoverageExemption>();
+    for (const move of moves) {
+      const districtId = canonicalBigintId(move.district_id);
+      if (!districtId || !custody.district_ids.has(districtId)) {
+        this.coverageExemptionUnavailable(
+          `tuman #${move.district_id} ochiq buyurtmalari oldindan o'qilmagan (holat o'zgardi)`,
+        );
+      }
+      const orderIds = move.order_ids;
+      const rows = rowsByDistrict.get(districtId) ?? [];
+      for (const exemption of computeCoverageExemptions({
+        rows: orderIds ? rows.filter((row) => orderIds.has(row.id)) : rows,
+        before: move.before,
+        after: move.after,
+        branchesById: custody.branchesById,
+        targetDistrictId: move.target_district_id ?? districtId,
+      })) {
+        exemptions.set(
+          `${exemption.order_id}:${exemption.branch_id}`,
+          exemption,
+        );
+      }
+    }
+    return Array.from(exemptions.values());
+  }
+
+  /**
+   * Imtiyozlarni yozish — bo'laklab `INSERT … ON CONFLICT (order_id,
+   * branch_id) DO UPDATE … RETURNING` (`manager` — chaqiruvchi
+   * tranzaksiyasi). Faqat yangi yoki boshqa tumanga qayta yo'naltirilgan
+   * qatorlar qaytadi (`coverageExemptionInsertQuery`). DB xatosi — 503.
+   */
+  private async saveCoverageExemptions(
+    exemptions: readonly CoverageExemption[],
+    source: CoverageExemptionSource,
+    manager?: EntityManager,
+  ): Promise<CreatedCoverageExemption[]> {
+    const runner = manager ?? this.coverageExemptionRepo?.manager;
+    if (!exemptions.length || !runner) {
+      return [];
+    }
+    const created: CreatedCoverageExemption[] = [];
+    try {
+      for (
+        let offset = 0;
+        offset < exemptions.length;
+        offset += COVERAGE_EXEMPTION_INSERT_CHUNK
+      ) {
+        const { sql, params } = coverageExemptionInsertQuery(
+          exemptions.slice(offset, offset + COVERAGE_EXEMPTION_INSERT_CHUNK),
+          source,
+        );
+        const inserted: unknown = await runner.query(sql, params);
+        for (const row of Array.isArray(inserted) ? inserted : []) {
+          const orderId = canonicalBigintId(
+            (row as { order_id?: unknown })?.order_id,
+          );
+          const branchId = canonicalBigintId(
+            (row as { branch_id?: unknown })?.branch_id,
+          );
+          if (orderId && branchId) {
+            created.push({
+              order_id: orderId,
+              branch_id: branchId,
+              district_id: canonicalBigintId(
+                (row as { district_id?: unknown })?.district_id,
+              ),
+            });
+          }
+        }
+      }
+    } catch (error) {
+      this.coverageExemptionUnavailable(
+        `imtiyozlarni yozib bo'lmadi (${source}): ${this.geoErrorText(error)}`,
+      );
+    }
+    return created;
+  }
+
+  /**
+   * Tuman ko'chishidan OLDIN (va COMMIT'dan keyin qayta —
+   * `resnapshotCoverageExemptions`) qamrov imtiyozlarini yozish (o'qish +
+   * hisoblash + yozish). Imtiyoz repo ulanmagan (eski spec simlari) —
+   * `null`, hech narsa qilinmaydi. Xato — 503 (fail closed); best-effort
+   * chaqiruvchi (`clearDistrictServingBranch`) xatoni o'zi ushlaydi.
+   */
+  private async snapshotCoverageExemptions(input: {
+    moves: readonly CoverageDistrictMove[];
+    source: CoverageExemptionSource;
+    manager?: EntityManager;
+  }): Promise<CreatedCoverageExemption[] | null> {
+    if (!this.coverageExemptionRepo) {
+      return null;
+    }
+    if (!input.moves.length) {
+      return [];
+    }
+    // Har ko'chish faqat o'z buyurtmalariga (`order_ids`) cheklangan bo'lsa —
+    // custody ham faqat shularga (birlashtirishdan keyingi qayta snapshot).
+    const orderIds = input.moves.every((move) => move.order_ids)
+      ? new Set(input.moves.flatMap((move) => [...(move.order_ids ?? [])]))
+      : undefined;
+    const custody = await this.loadCoverageCustody(
+      input.moves.map((move) => move.district_id),
+      orderIds,
+    );
+    return this.saveCoverageExemptions(
+      this.coverageExemptionsFor(custody, input.moves),
+      input.source,
+      input.manager,
+    );
+  }
+
+  /**
+   * Ko'chish COMMIT bo'lgach imtiyozlarni QAYTA yozish (shu before/after
+   * bilan): oldingi snapshot va ko'chish orasida eski filial / uning kuryeri
+   * custody'siga kirgan buyurtma ham imtiyozli bo'lsin. Yozish idempotent
+   * (aynan bir xil qator tegilmaydi). BEST-EFFORT: xato so'rovni yiqitmaydi
+   * — ERROR log (tuman id'lari bilan) va `null`.
+   */
+  private async resnapshotCoverageExemptions(input: {
+    moves: readonly CoverageDistrictMove[];
+    source: CoverageExemptionSource;
+    context: string;
+  }): Promise<CreatedCoverageExemption[] | null> {
+    try {
+      return await this.snapshotCoverageExemptions({
+        moves: input.moves,
+        source: input.source,
+      });
+    } catch (error) {
+      this.logger.error(
+        `${input.context}: tuman(lar) ${input.moves.map((move) => `#${move.district_id}`).join(', ')} ko'chgandan keyin qamrov imtiyozlarini qayta yozib bo'lmadi: ${this.geoErrorText(error)}`,
+      );
+      return null;
+    }
+  }
+
+  /**
+   * Birlashtirilgach (A o'chdi): A dan B ga ko'chgan buyurtmalarning OLDINGI
+   * ko'chishlardan qolgan A tumanli imtiyozlari B ga qayta yo'naltiriladi
+   * (`coverageExemptionRetargetQuery`) — aks holda to'siq ularni hisobga
+   * olmaydi (buyurtma endi B da) va eski filial buyurtmasi qotib qoladi;
+   * birlashtirishning o'z snapshot'i ularni qayta bermaydi (eski filial A ga
+   * allaqachon xizmat qilmaydi). BEST-EFFORT: xato — ERROR log (tumanlar
+   * bilan), so'rov yiqilmaydi.
+   */
+  private async retargetMergedCoverageExemptions(
+    fromId: string,
+    toId: string,
+    movedOrderIds: ReadonlySet<string>,
+  ): Promise<void> {
+    const runner = this.coverageExemptionRepo?.manager;
+    const fromDistrictId = canonicalBigintId(fromId);
+    const toDistrictId = canonicalBigintId(toId);
+    if (!runner || !fromDistrictId || !toDistrictId || !movedOrderIds.size) {
+      return;
+    }
+    try {
+      const { sql, params } = coverageExemptionRetargetQuery(
+        fromDistrictId,
+        toDistrictId,
+        Array.from(movedOrderIds),
+      );
+      await runner.query(sql, params);
+    } catch (error) {
+      this.logger.error(
+        `mergeDistricts #${fromId} → #${toId}: ko'chgan buyurtmalarning tuman #${fromId} imtiyozlarini #${toId} ga o'tkazib bo'lmadi: ${this.geoErrorText(error)}`,
+      );
+    }
+  }
+
+  /**
+   * Birlashtirish BEKOR bo'ldi (A o'chmadi, buyurtmalar A ga qaytdi): shu
+   * birlashtirishning oldingi snapshot'i yozgan (yangi yoki qayta
+   * yo'naltirilgan) B tumanli imtiyozlar o'chiriladi — qolsa, buyurtma keyin
+   * qo'lda B ga tahrirlanganda eski filial imtiyozi yana ishlab qolardi
+   * (tahrir — imtiyoz yordam bermaydi). Har bir bunday filial A ga xizmat
+   * qiladi (imtiyoz sharti), demak A dagi buyurtma uchun qator kerak emas.
+   * A ga qaytmagan (B da qolgan) buyurtmalarniki qoladi; qolganlarning
+   * ID'lari noma'lum bo'lsa — hech biri o'chirilmaydi (qaysi biri A da
+   * ekani noma'lum). BEST-EFFORT: xato — ERROR log (tumanlar bilan).
+   */
+  private async dropAbortedMergeCoverageExemptions(ctx: {
+    fromId: string;
+    toId: string;
+    created: readonly CreatedCoverageExemption[] | null | undefined;
+    stranded: readonly GeoStranded[];
+  }): Promise<void> {
+    const { fromId, toId, created, stranded } = ctx;
+    const runner = this.coverageExemptionRepo?.manager;
+    const toDistrictId = canonicalBigintId(toId);
+    if (!runner || !toDistrictId || !created?.length) {
+      return;
+    }
+    const strandedOrders = stranded.filter((s) => s.kind === 'orders');
+    if (strandedOrders.some((s) => s.ids === null)) {
+      this.logger.warn(
+        `mergeDistricts #${fromId} → #${toId} bekor qilindi: B da qolgan buyurtmalar ID'lari noma'lum — tuman #${toId} imtiyozlari o'chirilmadi`,
+      );
+      return;
+    }
+    const stillInB = new Set(
+      strandedOrders.flatMap((s) =>
+        (s.ids ?? []).map((orderId) => canonicalBigintId(orderId) ?? orderId),
+      ),
+    );
+    const drop = created.filter(
+      (row) => row.district_id === toDistrictId && !stillInB.has(row.order_id),
+    );
+    if (!drop.length) {
+      return;
+    }
+    try {
+      const { sql, params } = coverageExemptionDeleteQuery(
+        drop,
+        toDistrictId,
+        'district_merge',
+      );
+      await runner.query(sql, params);
+    } catch (error) {
+      this.logger.error(
+        `mergeDistricts #${fromId} → #${toId} bekor qilindi: tuman #${toId} imtiyozlarini (${drop.length} ta) o'chirib bo'lmadi: ${this.geoErrorText(error)}`,
+      );
+    }
+  }
+
   /**
    * Tuman ↔ filial qamrovi — filialning xizmat tumanlari (ALMASHTIRISH):
    * `district_ids` dagilar shu filialga biriktiriladi, ilgari shu filialga
@@ -6813,17 +7325,36 @@ export class LogisticsServiceService implements OnModuleInit {
       }
     }
 
-    const changes = await this.districtRepo.manager.transaction(
-      async (manager) => {
+    // Tegiladigan tumanlar: tanlanganlar + filialning hozirgilari
+    // (audit va javob uchun "oldin" holati).
+    const touchedWhere: FindOptionsWhere<District>[] = [
+      { serving_branch_id: branchId },
+    ];
+    if (districtIds.length) {
+      touchedWhere.push({ id: In(districtIds) });
+    }
+    const selectedIds = new Set(districtIds);
+
+    // Tuman qamrovi imtiyozlari (ega qarori): xizmat filiali o'zgaradigan
+    // tumanlarning ochiq buyurtmalari TRANZAKSIYADAN OLDIN o'qiladi (RMQ
+    // tranzaksiya ichida kutilmasin). Xato — 503, hech narsa o'zgarmaydi.
+    let coverageCustody: CoverageCustody | null = null;
+    if (this.coverageExemptionRepo) {
+      const preTouched = await this.districtRepo.find({ where: touchedWhere });
+      coverageCustody = await this.loadCoverageCustody(
+        preTouched
+          .filter(
+            (district) =>
+              districtServingBranchId(district) !==
+              (selectedIds.has(String(district.id)) ? branchId : null),
+          )
+          .map((district) => String(district.id)),
+      );
+    }
+
+    const { changes, coverageCreated, coverageMoves } =
+      await this.districtRepo.manager.transaction(async (manager) => {
         const repo = manager.getRepository(District);
-        // Tegiladigan tumanlar: tanlanganlar + filialning hozirgilari
-        // (audit va javob uchun "oldin" holati).
-        const touchedWhere: FindOptionsWhere<District>[] = [
-          { serving_branch_id: branchId },
-        ];
-        if (districtIds.length) {
-          touchedWhere.push({ id: In(districtIds) });
-        }
         const touched = await repo.find({ where: touchedWhere });
         const before = new Map(
           touched.map((district) => [
@@ -6846,15 +7377,55 @@ export class LogisticsServiceService implements OnModuleInit {
           );
         }
 
-        const selected = new Set(districtIds);
-        return Array.from(before.entries())
+        const txChanges = Array.from(before.entries())
           .map(([districtId, previous]) => ({
             district_id: districtId,
             previous_branch_id: previous,
-            branch_id: selected.has(districtId) ? branchId : null,
+            branch_id: selectedIds.has(districtId) ? branchId : null,
           }))
           .filter((change) => change.previous_branch_id !== change.branch_id);
-      },
+
+        // Imtiyozlar SHU tranzaksiyada: oldin — tumanning tranzaksiyadagi
+        // qatori, keyin — yangi xizmat filiali bilan. Yozish yiqilsa tuman
+        // o'zgarishi ham rollback (fail closed).
+        let created: CreatedCoverageExemption[] | null = null;
+        let moves: CoverageDistrictMove[] = [];
+        if (coverageCustody) {
+          const touchedById = new Map(
+            touched.map((district) => [String(district.id), district]),
+          );
+          moves = txChanges.map((change) => {
+            const row = touchedById.get(change.district_id) as District;
+            return {
+              district_id: change.district_id,
+              before: { ...row },
+              after: { ...row, serving_branch_id: change.branch_id },
+            };
+          });
+          created = await this.saveCoverageExemptions(
+            this.coverageExemptionsFor(coverageCustody, moves),
+            'set_serving_branch',
+            manager,
+          );
+        }
+        return {
+          changes: txChanges,
+          coverageCreated: created,
+          coverageMoves: moves,
+        };
+      });
+
+    // COMMIT'dan keyin qayta snapshot (best-effort): tranzaksiyadan oldingi
+    // o'qish va COMMIT orasida eski filial custody'siga kirganlar ham.
+    const coverageAll = combineCoverageCreated(
+      coverageCreated,
+      coverageCreated && coverageMoves.length
+        ? await this.resnapshotCoverageExemptions({
+            moves: coverageMoves,
+            source: 'set_serving_branch',
+            context: `setDistrictServingBranch: filial #${branchId}`,
+          })
+        : null,
     );
 
     for (const change of changes) {
@@ -6865,7 +7436,17 @@ export class LogisticsServiceService implements OnModuleInit {
           ? ActivityAction.ASSIGN
           : ActivityAction.UNASSIGN,
         old_value: { serving_branch_id: change.previous_branch_id },
-        new_value: { serving_branch_id: change.branch_id },
+        new_value: {
+          serving_branch_id: change.branch_id,
+          ...(coverageAll
+            ? {
+                coverage_exemptions: summarizeCoverageExemptions(
+                  coverageAll,
+                  change.district_id,
+                ),
+              }
+            : {}),
+        },
         metadata: { source: 'set_serving_branch', branch_id: branchId },
         ...this.auditActor(requester),
       });
@@ -6888,7 +7469,18 @@ export class LogisticsServiceService implements OnModuleInit {
       }));
 
     return successRes(
-      { branch_id: branchId, district_ids: districtIds, added, removed, moved },
+      {
+        branch_id: branchId,
+        district_ids: districtIds,
+        added,
+        removed,
+        moved,
+        ...(coverageAll
+          ? {
+              coverage_exemptions: summarizeCoverageExemptions(coverageAll),
+            }
+          : {}),
+      },
       200,
       'Filial xizmat tumanlari yangilandi',
     );
@@ -6923,10 +7515,48 @@ export class LogisticsServiceService implements OnModuleInit {
     if (!touched.length) {
       return successRes({ branch_id: branchId, cleared: 0 });
     }
+
+    // Tuman qamrovi imtiyozlari — BEST-EFFORT (bo'shatishdan OLDIN): filial
+    // allaqachon o'chirilgan / nofaol / boshqa viloyatda — o'chgan filialga
+    // ishora qiluvchi tuman yangi buyurtmalarni ham qotirib qo'yardi, shuning
+    // uchun imtiyoz yozilmasa ham bo'shatish bajariladi (ERROR log).
+    const coverageMoves: CoverageDistrictMove[] = touched.map((district) => ({
+      district_id: String(district.id),
+      before: { ...district },
+      after: { ...district, serving_branch_id: null },
+    }));
+    let coverageBefore: CreatedCoverageExemption[] | null = null;
+    let coverageBeforeFailed = false;
+    try {
+      coverageBefore = await this.snapshotCoverageExemptions({
+        moves: coverageMoves,
+        source: 'clear_serving_branch',
+      });
+    } catch (error) {
+      coverageBeforeFailed = true;
+      this.logger.error(
+        `clearDistrictServingBranch: filial #${branchId} tumanlari (${touched.map((district) => String(district.id)).join(', ')}) imtiyozsiz bo'shatiladi — imtiyozlarni yozib bo'lmadi: ${this.geoErrorText(error)}`,
+      );
+    }
+
     const result = await this.districtRepo.update(
       { serving_branch_id: branchId },
       { serving_branch_id: null },
     );
+
+    // Bo'shatilgach qayta snapshot (best-effort). Oldingisi yiqilgan bo'lsa
+    // ham urinadi; ikkalasi ham yiqilsa — `coverage_exemptions_failed`
+    // (oldingisi yiqilgan bo'lsa repo ulangan: `null` — faqat xato).
+    const coverageAfter = await this.resnapshotCoverageExemptions({
+      moves: coverageMoves,
+      source: 'clear_serving_branch',
+      context: `clearDistrictServingBranch: filial #${branchId}`,
+    });
+    const coverageCreated = combineCoverageCreated(
+      coverageBefore,
+      coverageAfter,
+    );
+    const coverageFailed = coverageBeforeFailed && coverageAfter === null;
 
     for (const district of touched) {
       await this.activityLog.logChange({
@@ -6934,7 +7564,18 @@ export class LogisticsServiceService implements OnModuleInit {
         entity_id: String(district.id),
         action: ActivityAction.UNASSIGN,
         old_value: { serving_branch_id: branchId },
-        new_value: { serving_branch_id: null },
+        new_value: {
+          serving_branch_id: null,
+          ...(coverageCreated
+            ? {
+                coverage_exemptions: summarizeCoverageExemptions(
+                  coverageCreated,
+                  String(district.id),
+                ),
+              }
+            : {}),
+          ...(coverageFailed ? { coverage_exemptions_failed: true } : {}),
+        },
         metadata: { source: 'clear_serving_branch', branch_id: branchId },
       });
     }
@@ -6942,6 +7583,10 @@ export class LogisticsServiceService implements OnModuleInit {
     return successRes({
       branch_id: branchId,
       cleared: Number(result?.affected ?? touched.length),
+      ...(coverageCreated
+        ? { coverage_exemptions: summarizeCoverageExemptions(coverageCreated) }
+        : {}),
+      ...(coverageFailed ? { coverage_exemptions_failed: true } : {}),
     });
   }
 
@@ -6969,6 +7614,13 @@ export class LogisticsServiceService implements OnModuleInit {
       serving_branch_id: districtServingBranchId(district),
     };
     const beforeRegionId = effectiveDistrictRegionId(district);
+    // Qamrov imtiyozlari uchun ko'chishdan oldingi qator (o'zgartirishdan oldin).
+    const beforeCoverage: CoverageDistrict = {
+      id: district.id,
+      region_id: district.region_id,
+      assigned_region: district.assigned_region,
+      serving_branch_id: district.serving_branch_id,
+    };
 
     if (district.assigned_region === dto.assigned_region) {
       this.badRequest('Tuman allaqachon shu viloyatga biriktirilgan');
@@ -6995,8 +7647,51 @@ export class LogisticsServiceService implements OnModuleInit {
       district.serving_branch_id = null;
     }
 
+    // Tuman qamrovi imtiyozlari (ega qarori): xizmat viloyati o'zgarsa (xizmat
+    // filiali bo'shashi ham shu holatda) — hozir eski filial / uning kuryeri
+    // qo'lidagi ochiq buyurtmalar eski filialda tugaydi. Tuman SAQLANISHIDAN
+    // OLDIN; xato — 503, tuman o'zgarmaydi (fail closed). Saqlash keyin
+    // yiqilsa ortiqcha imtiyoz zararsiz (filial baribir xizmat qiladi).
+    const coverageMoves: CoverageDistrictMove[] =
+      effectiveDistrictRegionId(district) !== beforeRegionId
+        ? [
+            {
+              district_id: String(district.id),
+              before: beforeCoverage,
+              after: {
+                id: district.id,
+                region_id: district.region_id,
+                assigned_region: district.assigned_region,
+                serving_branch_id: district.serving_branch_id,
+              },
+            },
+          ]
+        : [];
+    const coverageCreated = coverageMoves.length
+      ? await this.snapshotCoverageExemptions({
+          moves: coverageMoves,
+          source: 'district_update',
+        })
+      : null;
+
     const saved = await this.districtRepo.save(district);
     void this.syncDistrictToSearch(saved);
+
+    // Saqlangach qayta snapshot (best-effort): oldingi o'qish va saqlash
+    // orasida eski filial custody'siga kirganlar ham imtiyozli.
+    const coverageAll = combineCoverageCreated(
+      coverageCreated,
+      coverageCreated
+        ? await this.resnapshotCoverageExemptions({
+            moves: coverageMoves,
+            source: 'district_update',
+            context: 'updateDistrict',
+          })
+        : null,
+    );
+    const coverageSummary = coverageAll
+      ? summarizeCoverageExemptions(coverageAll)
+      : null;
 
     await this.activityLog.logChange({
       entity_type: 'District',
@@ -7007,6 +7702,7 @@ export class LogisticsServiceService implements OnModuleInit {
         assigned_region: saved.assigned_region,
         serving_branch_id: districtServingBranchId(saved),
         serving_branch_cleared: servingBranchCleared,
+        ...(coverageSummary ? { coverage_exemptions: coverageSummary } : {}),
       },
       ...this.auditActor(requester),
     });
@@ -7014,6 +7710,7 @@ export class LogisticsServiceService implements OnModuleInit {
     const responseData: Record<string, unknown> = {
       ...saved,
       serving_branch_cleared: servingBranchCleared,
+      ...(coverageSummary ? { coverage_exemptions: coverageSummary } : {}),
     };
     // Ixtiyoriy (ega qarori): HQ NEW pochtalaridagi shu tuman ochiq
     // buyurtmalarini yangi xizmat viloyati pochtasiga ko'chirish — tuman
@@ -9083,6 +9780,8 @@ export class LogisticsServiceService implements OnModuleInit {
     reason: string;
     failure: GeoMergeFailure;
     uncertain?: GeoMoveStep;
+    /** Shu birlashtirish oldindan yozgan qamrov imtiyozlari (B tumanli). */
+    coverageCreated?: CreatedCoverageExemption[] | null;
   }): Promise<never> {
     const { fromId, toId, done, status, reason, failure } = ctx;
     const stranded = await this.compensateDistrictMerge(fromId, toId, done);
@@ -9095,6 +9794,12 @@ export class LogisticsServiceService implements OnModuleInit {
       );
       if (check) stranded.push(check);
     }
+    await this.dropAbortedMergeCoverageExemptions({
+      fromId,
+      toId,
+      created: ctx.coverageCreated,
+      stranded,
+    });
     const rolledBack: Partial<Record<GeoMoveKind, number>> = {};
     for (const { step, moved } of done) {
       const lost =
@@ -9300,6 +10005,28 @@ export class LogisticsServiceService implements OnModuleInit {
       this.collectGeoUsage({ district_id: fromId }, 'birlashtirish'),
       this.collectGeoUsage({ district_id: toId }, 'birlashtirish'),
     ]);
+    // Tuman qamrovi imtiyozlari (ega qarori): A buyurtmalari B ga o'tadi —
+    // hozir A ga xizmat qilib, B ga xizmat qilmaydigan filial (yoki uning
+    // kuryeri) qo'lidagilari o'sha filialda tugaydi. BIRINCHI ko'chirishdan
+    // OLDIN; xato — 503, hech narsa ko'chmaydi (fail closed). Imtiyozda B
+    // saqlanadi (buyurtmaning ko'chishdan keyingi tumani); birlashtirish
+    // bekor bo'lsa A ga qaytgan buyurtmalarning shu qatorlari o'chiriladi
+    // (`dropAbortedMergeCoverageExemptions`). Nusxalar —
+    // `manager.remove(from)` entity id'sini o'chiradi.
+    const coverageFrom: CoverageDistrict = { ...from };
+    const coverageTo: CoverageDistrict = { ...to };
+    const coverageCreated = await this.snapshotCoverageExemptions({
+      moves: [
+        {
+          district_id: fromId,
+          before: coverageFrom,
+          after: coverageTo,
+          target_district_id: toId,
+        },
+      ],
+      source: 'district_merge',
+    });
+
     const done: Array<{ step: GeoMoveStep; moved: GeoMoved }> = [];
     const abort = (
       status: 409 | 503,
@@ -9316,6 +10043,7 @@ export class LogisticsServiceService implements OnModuleInit {
         reason,
         failure,
         uncertain,
+        coverageCreated,
       });
 
     // 2. Ko'chirish — ketma-ket, har servis o'z tranzaksiyasida.
@@ -9438,6 +10166,43 @@ export class LogisticsServiceService implements OnModuleInit {
     }
 
     void this.removeDistrictFromSearch(searchRef);
+
+    // Birlashtirilgach qayta snapshot (best-effort): A dan ko'chgan
+    // buyurtmalar endi B da — B o'qiladi, lekin faqat ko'chganlari (B ning
+    // o'z buyurtmalari A qamroviga tegishli emas). Oldingi o'qish va
+    // ko'chirish orasida eski filial custody'siga kirganlar ham imtiyozli.
+    // Undan oldin ko'chganlarning oldingi ko'chishlardagi A tumanli
+    // imtiyozlari B ga o'tkaziladi (best-effort).
+    const movedOrderIds = new Set(
+      done
+        .filter(({ step }) => step.kind === 'orders')
+        .flatMap(({ moved }) => moved.ids)
+        .map((orderId) => canonicalBigintId(orderId))
+        .filter((orderId): orderId is string => !!orderId),
+    );
+    await this.retargetMergedCoverageExemptions(fromId, toId, movedOrderIds);
+    const coverageAll = combineCoverageCreated(
+      coverageCreated,
+      coverageCreated && movedOrderIds.size
+        ? await this.resnapshotCoverageExemptions({
+            moves: [
+              {
+                district_id: toId,
+                before: coverageFrom,
+                after: coverageTo,
+                target_district_id: toId,
+                order_ids: movedOrderIds,
+              },
+            ],
+            source: 'district_merge',
+            context: `mergeDistricts #${fromId} → #${toId}`,
+          })
+        : null,
+    );
+    const coverageSummary = coverageAll
+      ? summarizeCoverageExemptions(coverageAll)
+      : null;
+
     // (ILq3WNL1) alohida amal `district.merge` («Tuman birlashtirildi») —
     // jurnalda topiladi/filtrlanadi. Eski `deleted` + `merged_into`
     // yozuvlari migratsiyasiz qoladi.
@@ -9447,7 +10212,10 @@ export class LogisticsServiceService implements OnModuleInit {
       action: 'district.merge',
       description: `Tuman birlashtirildi: ${from.name} (#${fromId}) → ${to.name} (#${toId})`,
       old_value: snapshot,
-      new_value: { merged_into: toId },
+      new_value: {
+        merged_into: toId,
+        ...(coverageSummary ? { coverage_exemptions: coverageSummary } : {}),
+      },
       metadata: {
         moved: movedCounts,
         moved_live: movedLive,
@@ -9465,6 +10233,7 @@ export class LogisticsServiceService implements OnModuleInit {
         moved_live: movedLive,
         target_before: beforeB,
         target_after: after.to,
+        ...(coverageSummary ? { coverage_exemptions: coverageSummary } : {}),
       },
       200,
       'District merged',

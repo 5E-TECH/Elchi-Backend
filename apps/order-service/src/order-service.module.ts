@@ -50,6 +50,7 @@ import { MarketCancelledHandoverSession } from './entities/market-cancelled-hand
 import { OrderExtraCostApproval } from './entities/order-extra-cost-approval.entity';
 
 import { PostMembershipService } from './post-membership/post-membership.service';
+import { OpenCustodyByDistrictService } from './custody/open-custody-by-district.service';
 import { CustomerSegmentService } from './segment/customer-segment.service';
 import { OrderWarehouseService } from './warehouse/order-warehouse.service';
 import { CustomerSegmentController } from './segment/customer-segment.controller';
@@ -153,6 +154,8 @@ import { CustomerSegmentController } from './segment/customer-segment.controller
     OrderWarehouseService,
     // Pochta ↔ buyurtma tarixi (`order.post_membership.find`, migratsiya 201).
     PostMembershipService,
+    // Tuman ko'chganda ochiq custody buyurtmalari (RMQ: order.open_custody_by_district).
+    OpenCustodyByDistrictService,
   ],
 })
 export class OrderServiceModule {}

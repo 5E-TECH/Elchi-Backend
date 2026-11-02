@@ -22,6 +22,35 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+### 2026-11-02 — Tuman ko'chirilganda eski filialdagi buyurtmalar o'sha yerda tugaydi
+
+Ega savoli: bugun tumanga buyurtma chiqib, ertaga tuman boshqa viloyatga o'tkazilsa, bugungi buyurtmalar nima bo'ladi? Avval eski filialda yoki kuryerda turgan buyurtmalar «qotib» qolardi: eski filial ularni kuryerga bera olmasdi, yangi filialga o'tkazish yo'li ham yo'q edi.
+
+**Ega qarori:** ko'chirish paytida eski filialda, uning kuryerida yoki eski filialga yo'lda turgan buyurtmalar eski filialda tugaydi. Ko'chirishdan keyin kelganlari faqat yangi filialga boradi.
+
+**Qoida:**
+- Tumanni ko'chirish paytida tizim tumanning ochiq buyurtmalarini ko'rib chiqadi va tumanni yo'qotgan filial uchun «imtiyoz» yozadi. Bunga quyidagilar kiradi:
+  - filialda turgan buyurtma;
+  - shu filial kuryeridagi buyurtma;
+  - shu filialga yo'lda turgan buyurtma (HQ pochtasi bilan jo'natilgan yoki partiyada);
+  - bekor qilingan yoki sotilgan, lekin shu filial yoki kuryer qo'lidagi buyurtma (WAITING ga qaytarilsa kerak bo'ladi).
+- Imtiyozli buyurtmani eski filial o'z kuryeriga beradi (`POST /orders/assign-to-courier`, `POST /orders/scan-assign`). Kuryer qaytarib bergandan keyin ham beradi.
+- Imtiyoz faqat buyurtmaning hozirgi tumaniga amal qiladi. Buyurtma manzili boshqa tumanga o'zgartirilsa, imtiyoz ishlamaydi.
+- HQ'dan filialga jo'natish (`POST /branches/posts/:postId/dispatch`) imtiyozni hisobga olmaydi: ko'chirishdan keyin faqat yangi filialga jo'natiladi.
+- Yangi viloyat yoki filial bu buyurtmalarga ham xizmat qila oladi; imtiyoz faqat qo'shimcha ruxsat beradi.
+
+**Endpointlar:**
+- ✏️ [logistics] `PATCH /district/:id`: viloyat o'zgarsa, javobda `data.coverage_exemptions: { created, by_branch: [{ branch_id, count }] }` qaytadi. Tuman buyurtmalarini tekshirib bo'lmasa — 503 va tuman o'zgarmaydi. Gateway timeout 30 s (avval 8 s).
+- ✏️ [logistics] `PUT /branches/:id/districts`: javobda `coverage_exemptions` (xuddi shu shakl), 503 qoidasi bir xil. Timeout 30 s (avval 15 s).
+- ✏️ [logistics] `POST /district/:id/merge`: ko'chishdan oldin tekshiradi (yiqilsa 503, hech narsa ko'chmaydi). Javobda `coverage_exemptions` bo'lishi mumkin.
+- 🟢 Filial o'chirilganda yoki nofaol qilinganda tumanlarni bo'shatish ham imtiyoz yozadi (best-effort).
+
+**Frontendda:**
+- 🔧 Tumanni ko'chirish va filial tumanlari ekranida `coverage_exemptions.created > 0` bo'lsa, xabar ko'rsating: «N ta buyurtma eski filialda tugaydi». Kerak bo'lsa `by_branch` bo'yicha ham.
+- 🔧 503 da «Qayta urinish» tugmasini chiqaring (tuman o'zgarmagan bo'ladi).
+
+**Ops:** migratsiya `1716000000203` (`logistics_schema.district_coverage_exemptions` jadvali; FK yo'q, unique `(order_id, branch_id)`).
+
 ### 2026-11-02 — Eski pochtalar: tarix, pochta cheki va Excel
 
 Ega xabari: eski pochtalar bo'm-bo'sh ko'rinadi, yorlig'i va buyurtmalar Excel ro'yxatini olib bo'lmaydi. Sabab: buyurtma keyingi pochtaga o'tganda `post_id` ustiga yoziladi, shuning uchun eski pochtada hech narsa qolmasdi. Endi har bir pochtaga kirgan-chiqqan buyurtmalar tarixi saqlanadi.
