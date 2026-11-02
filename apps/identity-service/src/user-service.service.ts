@@ -66,6 +66,7 @@ import {
   ActivityLogService,
   Cashbox_type,
   Commission_type,
+  ExpenseProofCondition,
   generateTempPassword,
   isPasswordSwitchOn,
   OLD_PASSWORD_INVALID,
@@ -3613,7 +3614,13 @@ export class UserServiceService implements OnModuleInit {
       add_order: dto.add_order ?? false,
       cancelled_handover_qr_required:
         dto.cancelled_handover_qr_required ?? true,
-      expense_proof_conditions: dto.expense_proof_conditions ?? null,
+      // Ega qarori 2026-11-02: YANGI marketda sotishda va bekor qilishda
+      // qo'shimcha xarajat isboti sukut bo'yicha majburiy. Admin yaratishda
+      // boshqa to'plam (bo'sh ham) yuborsa — o'shasi saqlanadi.
+      expense_proof_conditions: dto.expense_proof_conditions ?? [
+        ExpenseProofCondition.SELL_EXTRA_COST,
+        ExpenseProofCondition.CANCEL_EXTRA_COST,
+      ],
       // w2bDrE3i: YANGI market — sukut yopiq, tasdiq talab qilinadi.
       extra_cost_enabled: dto.extra_cost_enabled ?? false,
       extra_cost_requires_approval: dto.extra_cost_requires_approval ?? true,

@@ -374,7 +374,7 @@ export class CreateMarketRequestDto {
     isArray: true,
     enum: ExpenseProofCondition,
     description:
-      'Isbot (rasm/video) majburiy bo‘ladigan vaziyatlar to‘plami. Bo‘sh = isbot talab qilinmaydi.',
+      'Isbot (rasm/video) majburiy bo‘ladigan vaziyatlar to‘plami. Bo‘sh = isbot talab qilinmaydi. Yaratishda berilmasa — sotish va bekor qilishdagi qo‘shimcha xarajat isboti (sell_extra_cost, cancel_extra_cost).',
     example: [
       ExpenseProofCondition.CANCEL_EXTRA_COST,
       ExpenseProofCondition.CANCEL_ZERO_TOTAL,

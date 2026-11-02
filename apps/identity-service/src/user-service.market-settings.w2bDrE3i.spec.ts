@@ -91,7 +91,20 @@ describe('w2bDrE3i / VRyloH62 — market sozlamalari (identity)', () => {
         extra_cost_requires_approval: true,
         require_operator_phone: false,
         default_operator_phone: null,
+        // Ega qarori 2026-11-02: qo'shimcha xarajat isboti sukut bo'yicha yoqiq.
+        expense_proof_conditions: ['sell_extra_cost', 'cancel_extra_cost'],
       }),
+    );
+  });
+
+  it('isbot to`plamini admin yaratishda o`zi bersa — o`shasi saqlanadi (bo`sh ham)', async () => {
+    const { service, users } = makeService();
+    await service.createMarket(
+      { ...baseCreate, expense_proof_conditions: [] } as never,
+      ADMIN as never,
+    );
+    expect(users.create).toHaveBeenCalledWith(
+      expect.objectContaining({ expense_proof_conditions: [] }),
     );
   });
 
