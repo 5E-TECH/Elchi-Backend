@@ -26,9 +26,12 @@
  * Chegara (`bound`): mavjud tarixning eng erta qatori (E) va seed vaqti
  * (`cutoffUs`, migratsiya 201) dan kichigi. Undan keyingi davrni trigger
  * aniq yozgan — backfill faqat undan OLDINGI yopiq turishlarni qo'shadi.
+ * Chegara yugurishning MONOTONLANGAN boshlanishiga qo'llanadi (xom `ts_us`
+ * ga emas) — qayta yurgizish birinchisi bilan ayni yugurishlarni ko'radi.
  * Oxirgi turish E bilan AYNI pochta bo'lsa — bu E ning o'zi: yangi qator
  * yozilmaydi, faqat seed qatorining `joined_at` i (migratsiya vaqti, haqiqiy
- * emas) tarixdagi kirgan vaqtga to'g'rilanadi.
+ * emas) tarixdagi kirgan vaqtga to'g'rilanadi — BIR marta: faqat hali
+ * tegilmagan seed (`joined_at = created_at`).
  */
 
 export type MembershipKind = 'DELIVERY' | 'CANCELED';
@@ -63,6 +66,8 @@ export interface ExistingMembership {
   kind: MembershipKind;
   post_id: string;
   joined_at_us: number;
+  /** Qator yozilgan vaqt (`created_at`, epoch mikrosekund). */
+  created_at_us: number;
   source: string | null;
 }
 
@@ -200,6 +205,15 @@ function earliest(
 }
 
 /**
+ * Seed qatori va `joined_at` i hali migratsiya qo'ygan qiymatda: seed ikkala
+ * ustunni ayni `now()` bilan yozadi. Backfill uni bir marta suradi — keyin
+ * `joined_at` `created_at` dan farq qiladi va qayta surilmaydi.
+ */
+export function isPristineSeed(row: ExistingMembership): boolean {
+  return row.source === SEED_SOURCE && row.joined_at_us === row.created_at_us;
+}
+
+/**
  * Bitta (buyurtma, tur) rejasi: `bound` dan OLDINGI yopiq turishlar va
  * (kerak bo'lsa) seed qatorining `joined_at` tuzatishi.
  */
@@ -212,8 +226,15 @@ export function planOrderKind(input: {
   const bound = first
     ? Math.min(first.joined_at_us, input.cutoffUs)
     : input.cutoffUs;
-  const before = input.observations.filter((obs) => obs.ts_us < bound);
-  const runs = toRuns(selectByPriority(before));
+  // Yugurishlar BARCHA kuzatuvlardan (birinchi yurgizishdagi ayni tanlash va
+  // monotonlash), chegara esa MONOTONLANGAN boshlanishga qo'llanadi. Xom
+  // `ts_us` bo'yicha oldindan kesilsa: outbox `created_at` — tranzaksiya
+  // BOSHI, id bo'yicha kechroq kuzatuvning xom vaqti chegaradan oldinga
+  // tushadi va qayta yurgizish soxta orqaga turish qo'shardi yoki seed
+  // `joined_at` ini yana surardi. `start_us` monoton — bu prefiks.
+  const runs = toRuns(selectByPriority(input.observations)).filter(
+    (run) => run.start_us < bound,
+  );
   const stays: PlannedStay[] = [];
   let joinedAtFix: JoinedAtFix | null = null;
   // E chegarada turibdi — u oxirgi yugurishning davomi bo'lishi mumkin.
@@ -224,8 +245,8 @@ export function planOrderKind(input: {
     if (run.post_id === null) continue;
     const next = runs[index + 1];
     const base = {
-      order_id: before[0].order_id,
-      kind: before[0].kind,
+      order_id: input.observations[0].order_id,
+      kind: input.observations[0].kind,
       post_id: run.post_id,
       joined_at_us: run.start_us,
       source: `backfill_${run.source}` satisfies BackfillRowSource,
@@ -240,11 +261,8 @@ export function planOrderKind(input: {
     }
     if (atBound && atBound.post_id === run.post_id) {
       // Ayni turish — yangi qator emas. Seed `joined_at` i migratsiya vaqti:
-      // tarixdagi haqiqiy kirgan vaqtga suriladi (faqat seed qatori).
-      if (
-        atBound.source === SEED_SOURCE &&
-        run.start_us < atBound.joined_at_us
-      ) {
+      // tarixdagi haqiqiy kirgan vaqtga suriladi (faqat tegilmagan seed).
+      if (isPristineSeed(atBound) && run.start_us < atBound.joined_at_us) {
         joinedAtFix = {
           id: atBound.id,
           order_id: atBound.order_id,

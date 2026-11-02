@@ -12,10 +12,14 @@ import { District } from './entities/district.entity';
  * Migratsiya `logistics_schema` / `branch_schema` ga qattiq bog'langan, shu
  * bois o'z vaqtinchalik bazasini yaratadi va oxirida o'chiradi.
  *
- *  • filialsiz QABUL QILINGAN kuryer pochtasi — pochta yaratilgan paytdagi
- *    COURIER biriktiruvi filiali (kuryer filial almashtirgan bo'lsa eski
- *    pochtalar eski filialda); undan oldingi pochta — faol biriktiruv;
- *    o'chirilgan kuryer — eng oxirgi biriktiruvi;
+ *  • filialsiz QABUL QILINGAN kuryer pochtasi — faqat ANIQ filial: hamma
+ *    qatorlari bitta filialda bo'lgan kuryer — o'sha filial (eski va yangi
+ *    pochtalar); aks holda yagona faol COURIER qatori pochtadan OLDIN beri
+ *    o'zgarmagan bo'lsa — o'sha filial; qolgani NULL (A → B dan oldingi
+ *    pochta, A → B → A tiklashida B davri, ikki faol qator, roli
+ *    almashgan qator, ko'p filialli o'chirilgan kuryer);
+ *  • A → B → A (eski qator tiklanadi, `createdAt` eskiligicha) — hech qachon
+ *    B emas;
  *  • yo'ldagi (`sent`) kuryer pochtasi, `branch_id` bor, kuryersiz ('0'),
  *    `new` / bekor pochtalar va COURIER bo'lmagan foydalanuvchi pochtasi —
  *    tegilmaydi;
@@ -81,6 +85,49 @@ const localTestDatabase = (() => {
       return String(saved.id);
     };
 
+    /**
+     * branch_users qatori — branch-service kabi: yaratilganda `updatedAt` =
+     * `createdAt`, o'chirish/tiklash/rol almashishi `updatedAt` ni yangilaydi.
+     */
+    const insertBranchUsers = async (
+      rows: Array<{
+        user_id: number;
+        branch_id: number;
+        role?: 'COURIER' | 'MANAGER' | 'REGISTRATOR';
+        is_deleted: boolean;
+        /** Qator yaratilgan payt — `now()` dan necha kun oldin. */
+        createdDaysAgo: number;
+        /** Oxirgi o'zgarish — necha kun oldin (bo'lmasa `createdDaysAgo`). */
+        updatedDaysAgo?: number;
+      }>,
+    ): Promise<void> => {
+      for (const row of rows) {
+        await db.query(
+          `INSERT INTO "branch_schema"."branch_users"
+             ("user_id", "branch_id", "role", "is_deleted", "createdAt", "updatedAt")
+           VALUES ($1, $2, $3, $4,
+                   now() - make_interval(days => $5),
+                   now() - make_interval(days => $6))`,
+          [
+            row.user_id,
+            row.branch_id,
+            row.role ?? 'COURIER',
+            row.is_deleted,
+            row.createdDaysAgo,
+            row.updatedDaysAgo ?? row.createdDaysAgo,
+          ],
+        );
+      }
+    };
+
+    const receivedPost = (courierId: string, daysAgo?: number) =>
+      insertPost({
+        courier_id: courierId,
+        branch_id: null,
+        status: Post_status.RECEIVED,
+        daysAgo,
+      });
+
     const branchOf = async (id: string): Promise<string | null> => {
       const [row]: Array<{ branch_id: string | null }> = await db.query(
         `SELECT "branch_id"::text AS "branch_id" FROM "logistics_schema"."posts" WHERE "id" = $1`,
@@ -132,23 +179,45 @@ const localTestDatabase = (() => {
     });
 
     it('qabul qilingan filialsiz kuryer pochtalari to`ldiriladi, qolganlari tegilmaydi; qayta yurgizish xavfsiz', async () => {
-      await db.query(`
-        INSERT INTO "branch_schema"."branch_users"
-          ("user_id", "branch_id", "role", "is_deleted", "createdAt")
-        VALUES
-          -- 44: filial 20 dan 10 ga ko'chgan (faol — 10)
-          (44, 20, 'COURIER', true,  now() - interval '30 days'),
-          (44, 10, 'COURIER', false, now() - interval '10 days'),
-          -- 45: HQ kuryeri
-          (45, 1,  'COURIER', false, now() - interval '1 day'),
-          -- 46: o'chirilgan kuryer — eng oxirgi biriktiruvi (30)
-          (46, 31, 'COURIER', true,  now() - interval '20 days'),
-          (46, 30, 'COURIER', true,  now() - interval '5 days'),
-          -- 77: menejer (kuryer emas)
-          (77, 10, 'MANAGER', false, now())
-      `);
+      await insertBranchUsers([
+        // 44: 10 kun oldin filial 20 dan 10 ga ko'chgan (faol — 10)
+        {
+          user_id: 44,
+          branch_id: 20,
+          is_deleted: true,
+          createdDaysAgo: 30,
+          updatedDaysAgo: 10,
+        },
+        { user_id: 44, branch_id: 10, is_deleted: false, createdDaysAgo: 10 },
+        // 45: HQ kuryeri
+        { user_id: 45, branch_id: 1, is_deleted: false, createdDaysAgo: 1 },
+        // 46: o'chirilgan kuryer, ikki filialda bo'lgan — noaniq
+        {
+          user_id: 46,
+          branch_id: 31,
+          is_deleted: true,
+          createdDaysAgo: 20,
+          updatedDaysAgo: 5,
+        },
+        {
+          user_id: 46,
+          branch_id: 30,
+          is_deleted: true,
+          createdDaysAgo: 5,
+          updatedDaysAgo: 2,
+        },
+        // 77: menejer (kuryer emas)
+        {
+          user_id: 77,
+          branch_id: 10,
+          role: 'MANAGER',
+          is_deleted: false,
+          createdDaysAgo: 0,
+        },
+      ]);
 
-      // 44 — filial 20 davridagi pochta 20 da, 10 davridagisi 10 da qoladi.
+      // 44 — ko'chishdan keyingi pochta 10 da; undan oldingilari NULL
+      // (filial 20 davri ham, biriktiruvdan oldingisi ham — noaniq).
       const received44InOldBranch = await insertPost({
         courier_id: '44',
         branch_id: null,
@@ -161,7 +230,7 @@ const localTestDatabase = (() => {
         status: Post_status.RECEIVED,
         daysAgo: 5,
       });
-      // Biriktiruvlardan oldingi pochta — faol biriktiruv (10).
+      // Biriktiruvlardan oldingi pochta — noaniq (NULL).
       const received44BeforeAny = await insertPost({
         courier_id: '44',
         branch_id: null,
@@ -217,12 +286,12 @@ const localTestDatabase = (() => {
 
       await runUp();
 
-      expect(await branchOf(received44InOldBranch)).toBe('20');
+      expect(await branchOf(received44InOldBranch)).toBeNull();
       expect(await branchOf(received44InNewBranch)).toBe('10');
-      expect(await branchOf(received44BeforeAny)).toBe('10');
+      expect(await branchOf(received44BeforeAny)).toBeNull();
       expect(await branchOf(sent44)).toBeNull();
       expect(await branchOf(received45)).toBe('1');
-      expect(await branchOf(received46)).toBe('30');
+      expect(await branchOf(received46)).toBeNull();
       expect(await branchOf(withBranch)).toBe('99');
       expect(await branchOf(transfer)).toBeNull();
       expect(await branchOf(newPost)).toBeNull();
@@ -236,8 +305,115 @@ const localTestDatabase = (() => {
       );
       await runUp();
       expect(await branchOf(received44InNewBranch)).toBe('10');
-      expect(await branchOf(received44BeforeAny)).toBe('10');
+      expect(await branchOf(received44InOldBranch)).toBeNull();
       expect(await branchOf(sent44)).toBeNull();
+    });
+
+    it('bitta filialli kuryer — eski va yangi pochtalar o`sha filialga (o`chirilgan/tiklangan qator ham)', async () => {
+      await insertBranchUsers([
+        // 60: filial 5 — 30 kun oldin chiqarilgan, 3 kun oldin tiklangan
+        {
+          user_id: 60,
+          branch_id: 5,
+          is_deleted: false,
+          createdDaysAgo: 50,
+          updatedDaysAgo: 3,
+        },
+        // 65: filial 6 — hozir o'chirilgan (filialsiz kuryer)
+        {
+          user_id: 65,
+          branch_id: 6,
+          is_deleted: true,
+          createdDaysAgo: 20,
+          updatedDaysAgo: 10,
+        },
+      ]);
+      const before60 = await receivedPost('60', 60);
+      const old60 = await receivedPost('60', 45);
+      const gap60 = await receivedPost('60', 20);
+      const new60 = await receivedPost('60', 1);
+      const old65 = await receivedPost('65', 15);
+      const orphan65 = await receivedPost('65', 2);
+
+      await runUp();
+
+      expect(await branchOf(before60)).toBe('5');
+      expect(await branchOf(old60)).toBe('5');
+      expect(await branchOf(gap60)).toBe('5');
+      expect(await branchOf(new60)).toBe('5');
+      expect(await branchOf(old65)).toBe('6');
+      expect(await branchOf(orphan65)).toBe('6');
+    });
+
+    it('A → B → A (eski qator tiklangan, createdAt eski) — tiklashdan keyingi pochta A, hech qachon B emas', async () => {
+      await insertBranchUsers([
+        // R_A: 30 kun oldin yaratilgan, 15 kun oldin o'chirilib (B ga
+        // o'tish), 5 kun oldin tiklangan — oxirgi o'zgarish 5 kun oldin.
+        {
+          user_id: 61,
+          branch_id: 7,
+          is_deleted: false,
+          createdDaysAgo: 30,
+          updatedDaysAgo: 5,
+        },
+        // R_B: 15 kun oldin yaratilgan, 5 kun oldin o'chirilgan.
+        {
+          user_id: 61,
+          branch_id: 8,
+          is_deleted: true,
+          createdDaysAgo: 15,
+          updatedDaysAgo: 5,
+        },
+      ]);
+      const firstA = await receivedPost('61', 20);
+      const duringB = await receivedPost('61', 10);
+      const afterRevival = await receivedPost('61', 2);
+
+      await runUp();
+
+      // Eski qoida (eng oxirgi `createdAt <= pochta`) bu yerda B (8) berardi.
+      expect(await branchOf(afterRevival)).toBe('7');
+      expect(await branchOf(duringB)).toBeNull();
+      expect(await branchOf(firstA)).toBeNull();
+    });
+
+    it('ikki faol qator yoki roli almashgan (COURIER → MANAGER) qator — noaniq, NULL', async () => {
+      await insertBranchUsers([
+        // 62: ikki faol COURIER qatori
+        { user_id: 62, branch_id: 11, is_deleted: false, createdDaysAgo: 20 },
+        { user_id: 62, branch_id: 12, is_deleted: false, createdDaysAgo: 10 },
+        // 63: filial 13 da kuryer edi → 14 ga o'tdi → chiqarildi → menejer
+        // sifatida 13 ga biriktirildi (eski qator MANAGER roli bilan tiklandi).
+        {
+          user_id: 63,
+          branch_id: 13,
+          role: 'MANAGER',
+          is_deleted: false,
+          createdDaysAgo: 30,
+          updatedDaysAgo: 5,
+        },
+        {
+          user_id: 63,
+          branch_id: 14,
+          is_deleted: true,
+          createdDaysAgo: 20,
+          updatedDaysAgo: 6,
+        },
+      ]);
+      const twoActive = await receivedPost('62', 5);
+      const twoActiveOld = await receivedPost('62', 15);
+      const courierIn13 = await receivedPost('63', 25);
+      const courierIn14 = await receivedPost('63', 15);
+      const asManager = await receivedPost('63', 2);
+
+      await runUp();
+
+      expect(await branchOf(twoActive)).toBeNull();
+      expect(await branchOf(twoActiveOld)).toBeNull();
+      // Faqat COURIER qatorlari hisoblansa — 14 (noto'g'ri) bo'lardi.
+      expect(await branchOf(courierIn13)).toBeNull();
+      expect(await branchOf(courierIn14)).toBeNull();
+      expect(await branchOf(asManager)).toBeNull();
     });
 
     it('down() xatosiz (ataylab hech narsa qilmaydi)', async () => {

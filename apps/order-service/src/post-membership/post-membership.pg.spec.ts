@@ -12,7 +12,10 @@ import {
   PostMembershipService,
   type PostMembershipRow,
 } from './post-membership.service';
-import { runPostMembershipBackfill } from './post-membership-backfill.runner';
+import {
+  FIX_JOINED_AT_SQL,
+  runPostMembershipBackfill,
+} from './post-membership-backfill.runner';
 
 /**
  * Pochta ↔ buyurtma tarixi HAQIQIY Postgres'da (ORDER_POST_MEMBERSHIP_PG_TEST_URI
@@ -26,7 +29,9 @@ import { runPostMembershipBackfill } from './post-membership-backfill.runner';
  *    CANCELED alohida, CASCADE;
  *  • `order.post_membership.find` o'qishi;
  *  • backfill: dry-run hech narsa yozmaydi, apply yozadi, qayta apply — 0;
- *    bir buyurtmaning ko'p turishi INSERT bo'laklariga bo'linmaydi.
+ *    bir buyurtmaning ko'p turishi INSERT bo'laklariga bo'linmaydi; outbox
+ *    id va created_at teskari bo'lsa ham qayta apply — 0 (orqaga turish
+ *    yo'q, seed joined_at qayta surilmaydi).
  */
 const pgUri = process.env.ORDER_POST_MEMBERSHIP_PG_TEST_URI;
 const describePg = pgUri ? describe : describe.skip;
@@ -141,6 +146,10 @@ describePg('post_order_memberships — haqiqiy Postgres', () => {
     // Backfill uchun: tarixi migratsiyadan oldingi buyurtmalar.
     await insertOrder(8, 103);
     await insertOrder(9, null);
+    // Outbox id va created_at teskari (uzun tranzaksiya): #94 pochtasiz,
+    // #95 — seed qatori bilan.
+    await insertOrder(94, null);
+    await insertOrder(95, 33);
     await run('up');
   }, 60_000);
 
@@ -168,6 +177,7 @@ describePg('post_order_memberships — haqiqiy Postgres', () => {
         { order_id: '3', kind: 'DELIVERY', post_id: '11' },
         { order_id: '5', kind: 'DELIVERY', post_id: '12' },
         { order_id: '8', kind: 'DELIVERY', post_id: '103' },
+        { order_id: '95', kind: 'DELIVERY', post_id: '33' },
       ]);
     });
 
@@ -670,6 +680,114 @@ describePg('post_order_memberships — haqiqiy Postgres', () => {
         });
         expect(again.staysPlanned).toBe(0);
         expect(again.staysInserted).toBe(0);
+      } finally {
+        await runner.release();
+      }
+    });
+
+    it('outbox id va created_at teskari (uzun tranzaksiya): qayta apply — 0, orqaga turish yo`q, seed qayta surilmaydi', async () => {
+      // T1 08:00 da boshlanadi; T2 09:00 da boshlanib ko'chiradi va commit
+      // qiladi; keyin T1 ko'chiradi — T1 surati id bo'yicha kech, vaqti erta.
+      const event = (orderId: string, postId: string | null, iso: string) => ({
+        target: 'SEARCH',
+        pattern: 'search.index.upsert',
+        payload: {
+          source: 'order',
+          type: 'order',
+          sourceId: orderId,
+          metadata: { post_id: postId },
+        },
+        created_at: at(iso),
+      });
+      await db
+        .getRepository(OutboxEvent)
+        .insert([
+          event('94', '11', '2025-10-01T09:00:00.000Z'),
+          event('94', '22', '2025-10-01T08:00:00.000Z'),
+          event('94', null, '2025-10-01T10:00:00.000Z'),
+          event('95', '11', '2025-10-01T09:00:00.000Z'),
+          event('95', '33', '2025-10-01T08:00:00.000Z'),
+        ]);
+      const t9 = at('2025-10-01T09:00:00.000Z');
+      const t10 = at('2025-10-01T10:00:00.000Z');
+      const history = async () =>
+        db.query<Array<Record<string, unknown>>>(
+          `SELECT order_id::text, post_id::text, joined_at, left_at,
+                  next_post_id::text, source
+             FROM order_schema.post_order_memberships
+            WHERE order_id IN (94, 95)
+            ORDER BY order_id, joined_at, left_at, id`,
+        );
+      // T1 ning erta (08:00) vaqti id tartibida 09:00 ga monotonlanadi.
+      const expected = [
+        {
+          order_id: '94',
+          post_id: '11',
+          joined_at: t9,
+          left_at: t9,
+          next_post_id: '22',
+          source: 'backfill_outbox',
+        },
+        {
+          order_id: '94',
+          post_id: '22',
+          joined_at: t9,
+          left_at: t10,
+          next_post_id: null,
+          source: 'backfill_outbox',
+        },
+        {
+          order_id: '95',
+          post_id: '11',
+          joined_at: t9,
+          left_at: t9,
+          next_post_id: '33',
+          source: 'backfill_outbox',
+        },
+        {
+          order_id: '95',
+          post_id: '33',
+          joined_at: t9,
+          left_at: null,
+          next_post_id: null,
+          source: 'seed_current',
+        },
+      ];
+
+      const runner = db.createQueryRunner();
+      await runner.connect();
+      try {
+        const first = await runPostMembershipBackfill(runner, {
+          apply: true,
+          batchSize: 500,
+          reportLimit: 50,
+        });
+        expect(first.staysInserted).toBe(3);
+        expect(first.joinedAtFixesApplied).toBe(1);
+        expect(await history()).toEqual(expected);
+
+        const again = await runPostMembershipBackfill(runner, {
+          apply: true,
+          batchSize: 500,
+          reportLimit: 50,
+        });
+        expect(again.staysPlanned).toBe(0);
+        expect(again.staysInserted).toBe(0);
+        expect(again.joinedAtFixesPlanned).toBe(0);
+        expect(again.joinedAtFixesApplied).toBe(0);
+        // Eski xato: 22 [08:00, 09:00) → 11 qo'shilardi, seed 08:00 ga surilardi.
+        expect(await history()).toEqual(expected);
+
+        // SQL qo'riqchisi ham: tegilgan seed qatori qayta surilmaydi.
+        const [seedRow] = await db.query<Array<{ id: string }>>(
+          `SELECT id::text FROM order_schema.post_order_memberships
+            WHERE order_id = 95 AND source = 'seed_current'`,
+        );
+        await db.query(FIX_JOINED_AT_SQL, [
+          [seedRow.id],
+          ['2025-10-01T08:00:00.000Z'],
+        ]);
+        expect(await history()).toEqual(expected);
       } finally {
         await runner.release();
       }

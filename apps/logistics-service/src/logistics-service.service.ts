@@ -167,6 +167,40 @@ const POST_HISTORY_MAX_ORDERS = 5000;
 const POST_HISTORY_BUDGET_MS = 6500;
 const POST_HISTORY_ORDERS_MAX_TIMEOUT_MS = 2500;
 const POST_HISTORY_ORDERS_MIN_TIMEOUT_MS = 500;
+/**
+ * Ruxsat faqat pochta tarixi orqali bo'lishi mumkin edi, lekin tarix olinmadi
+ * (javob kelmadi / byudjet tugadi / kesildi) — 403 emas, qayta urinsa
+ * bo'ladigan 503 (ma'lumot berilmaydi — fail-closed).
+ */
+export const POST_HISTORY_UNAVAILABLE_MESSAGE =
+  "Pochta tarixi vaqtincha olinmadi, qayta urinib ko'ring";
+
+/**
+ * Sof kuryerning o'z eski pochtasi (`all` — JSON, Excel, chek): sobiq a'zo
+ * hozir BOSHQA kuryerda bo'lsa (`courier_id` / `holder_courier_id` o'zi
+ * emas), qatordan o'sha kuryerning shaxsi va puli olib tashlanadi. Buyurtma
+ * o'zi (id, QR, mijoz, manzil, tuman, summa, holat, a'zolik, hozirgi pochta)
+ * qoladi — kuryer buyurtma qayerga ketganini ko'radi. Market tarifi / filial
+ * ulushini gateway kuryer proyeksiyasi (COURIER_HIDDEN_ORDER_FIELDS) oladi.
+ */
+export const FOREIGN_COURIER_ORDER_FIELDS: readonly string[] = [
+  // Boshqa kuryer shaxsi va unga o'tish izi.
+  'courier_id',
+  'holder_courier_id',
+  'assigned_at',
+  'last_handover_at',
+  'last_handover_by',
+  // Boshqa kuryer haqi, sotuv/hisob-kitob summalari va sotuv isboti.
+  'courier_tariff',
+  'courier_share',
+  'to_be_paid',
+  'paid_amount',
+  'sale_collectible_amount',
+  'sale_market_paid_amount',
+  'branch_cashbox_amount',
+  'extra_cost',
+  'proof_files',
+];
 
 /**
  * Eski pochta ko'rinishi: `current` — faqat hozir pochtada turgan buyurtmalar
@@ -1655,18 +1689,26 @@ export class LogisticsServiceService implements OnModuleInit {
   /**
    * Ega qarori 4: kuryer pochtasi QABUL QILINGANDA (RECEIVED) kuryer
    * filialiga bog'lanadi — faqat bo'sh `branch_id` to'ldiriladi. SENT
-   * paytida EMAS: `branch_id` li SENT pochta filial o'tkazmasi hisoblanadi
-   * (HQ → filial dispatch `receiveOrdersIntoPosts` maqsadi, menejerning
-   * «Yangi» ro'yxati, `receivePost` buyurtma filialini qayta yozishi).
-   * Chaqiruvchi `post.status` ni RECEIVED qilib, saqlashdan OLDIN chaqiradi.
+   * kuryer pochtasi esa doim filialsiz (`branch_id = null`): `branch_id` li
+   * SENT pochta filial o'tkazmasi hisoblanadi (HQ → filial dispatch
+   * `receiveOrdersIntoPosts` maqsadi, menejerning «Yangi» ro'yxati,
+   * `receivePost` buyurtma filialini qayta yozishi) — RECEIVED pochta qayta
+   * SENT ga qaytsa (qisman qabul), filial tozalanadi. Kuryersiz ('0') va
+   * bekor (CANCELED / CANCELED_RECEIVED) pochtalarga tegilmaydi.
+   * Chaqiruvchi `post.status` ni yangi holatga qo'yib, saqlashdan OLDIN
+   * chaqiradi.
    */
-  private async fillCourierPostBranchOnReceive(post: Post): Promise<void> {
+  private async syncCourierPostBranch(post: Post): Promise<void> {
     const courierId = String(post?.courier_id ?? '').trim();
+    if (!post || !courierId || courierId === '0') {
+      return;
+    }
+    if (post.status === Post_status.SENT) {
+      post.branch_id = null;
+      return;
+    }
     if (
-      !post ||
       post.status !== Post_status.RECEIVED ||
-      !courierId ||
-      courierId === '0' ||
       String(post.branch_id ?? '').trim()
     ) {
       return;
@@ -3143,6 +3185,23 @@ export class LogisticsServiceService implements OnModuleInit {
         'Post found',
       );
     }
+    // Sof kuryer — faqat o'z kuryerli pochtasi (getPostOrders qoidasi): qabul
+    // qilingan kuryer pochtasi kuryer filialiga (`branch_id`) bog'langani
+    // uchun filial doirasi boshqa kuryer pochtasini ochib qo'ymasin. O'z
+    // pochtasi — filial/buyurtma doirasisiz (bo'shab qolgan eski pochta ham
+    // 403 bermasin). Filial o'tkazmasi (courier_id '0') — pastdagi doira.
+    const postCourierId = String(post.courier_id ?? '').trim();
+    if (
+      requester &&
+      this.isPureCourierRequester(requester) &&
+      postCourierId &&
+      postCourierId !== '0'
+    ) {
+      if (postCourierId !== String(requester.id ?? '').trim()) {
+        this.forbidden("Kuryer faqat o'z pochtasini ko'ra oladi");
+      }
+      return successRes(await this.withPostCourier(post), 200, 'Post found');
+    }
     const scopedBranchId = await this.resolveScopedBranchId(requester);
     let belongsToScopedBranch = false;
     if (scopedBranchId && String(post.branch_id ?? '') !== scopedBranchId) {
@@ -3516,6 +3575,33 @@ export class LogisticsServiceService implements OnModuleInit {
   }
 
   /**
+   * Sof kuryerning o'z eski pochtasi (`all`): hozir pochtada bo'lmagan
+   * (`in_post_now: false`) va BOSHQA kuryerdagi (`courier_id` /
+   * `holder_courier_id` so'rovchi emas) qatordan FOREIGN_COURIER_ORDER_FIELDS
+   * olib tashlanadi. Joriy a'zo va hozir o'zidagi qator — o'zgarishsiz.
+   */
+  private withoutForeignCourierFields(
+    order: OrderRow & { in_post_now?: boolean },
+    requesterId: string,
+  ): OrderRow {
+    if (order.in_post_now !== false) {
+      return order;
+    }
+    const isForeign = (value: string | null | undefined) => {
+      const id = String(value ?? '').trim();
+      return Boolean(id) && id !== requesterId;
+    };
+    if (!isForeign(order.courier_id) && !isForeign(order.holder_courier_id)) {
+      return order;
+    }
+    const stripped: Record<string, unknown> = { ...order };
+    for (const key of FOREIGN_COURIER_ORDER_FIELDS) {
+      delete stripped[key];
+    }
+    return stripped as unknown as OrderRow;
+  }
+
+  /**
    * `options.readOnly` — X4RzXk1H: pochta QR skani (`findPostWithQr`) shu
    * ruxsat va ro'yxatni ishlatadi, lekin filial o'tkazmasi pochtasining
    * `branch_id` sini qabul qiluvchi filialga ko'chirmaydi (skan — o'qish).
@@ -3708,6 +3794,19 @@ export class LogisticsServiceService implements OnModuleInit {
       !historyBelongsToScopedBranch &&
       !isOwnPost
     ) {
+      // Tarix olinmadi (javob kelmadi / byudjet tugadi / kesildi) va olingan
+      // qatorlarning hech biri boshqa filialda emas — ruxsat faqat tarix
+      // orqali bo'lishi mumkin edi: 403 emas, qayta urinsa bo'ladigan 503
+      // (ma'lumot berilmaydi). Olingan qator boshqa filialda — haqiqiy 403.
+      const loadedRowsInScope = [...currentOrders, ...formerOrders].every(
+        (order) => {
+          const scope = this.getOrderBranchScope(order);
+          return !scope || scope === String(scopedBranchId);
+        },
+      );
+      if (view === 'all' && historyIncomplete && loadedRowsInScope) {
+        throw new RpcException(errorRes(POST_HISTORY_UNAVAILABLE_MESSAGE, 503));
+      }
       this.forbidden("Siz bu branch pochtasidagi orderlarni ko'ra olmaysiz");
     }
 
@@ -3737,6 +3836,13 @@ export class LogisticsServiceService implements OnModuleInit {
       orders = [...orders, ...formerOrders].map((order) =>
         this.withPostMembership(order, currentOrderIds, membershipByOrder),
       );
+      // Sof kuryer: hozir boshqa kuryerdagi sobiq a'zo — o'sha kuryerning
+      // shaxsi va pulisiz (Excel va chek ham shu ro'yxatdan).
+      if (isPureCourier) {
+        orders = orders.map((order) =>
+          this.withoutForeignCourierFields(order, requesterId),
+        );
+      }
     } else if (post.status === Post_status.SENT && isCourier) {
       orders = orders.filter(
         (order) => order.status === Order_status.ON_THE_ROAD,
@@ -4286,8 +4392,9 @@ export class LogisticsServiceService implements OnModuleInit {
       ? Post_status.SENT
       : Post_status.RECEIVED;
     // Ega qarori 4: to'liq qabul qilingan kuryer pochtasi — kuryer filialida
-    // (buyurtmalar filiali yuqorida `targetBranchId` bilan yozilib bo'lgan).
-    await this.fillCourierPostBranchOnReceive(post);
+    // (buyurtmalar filiali yuqorida `targetBranchId` bilan yozilib bo'lgan);
+    // yo'ldagi qolgani uchun SENT ga qaytgan kuryer pochtasi — filialsiz.
+    await this.syncCourierPostBranch(post);
     const failedSelectedSet = new Set(failedSelectedOrderIds);
     const savedPost = await this.savePostWithArrivalNotification(
       post,
@@ -4616,7 +4723,7 @@ export class LogisticsServiceService implements OnModuleInit {
           if (!remaining.length) {
             post.status = Post_status.RECEIVED;
             // Ega qarori 4: qabul qilingan kuryer pochtasi — kuryer filialida.
-            await this.fillCourierPostBranchOnReceive(post);
+            await this.syncCourierPostBranch(post);
             const savedPost = await this.postRepo.save(post);
             void this.syncPostToSearch(savedPost);
             continue;
@@ -5039,7 +5146,7 @@ export class LogisticsServiceService implements OnModuleInit {
 
     post.status = Post_status.RECEIVED;
     // Ega qarori 4: qabul qilingan kuryer pochtasi — kuryer filialida.
-    await this.fillCourierPostBranchOnReceive(post);
+    await this.syncCourierPostBranch(post);
     const savedPost = await this.postRepo.save(post);
     void this.syncPostToSearch(savedPost);
 
@@ -5096,7 +5203,7 @@ export class LogisticsServiceService implements OnModuleInit {
     if (!remaining.length) {
       post.status = Post_status.RECEIVED;
       // Ega qarori 4: qabul qilingan kuryer pochtasi — kuryer filialida.
-      await this.fillCourierPostBranchOnReceive(post);
+      await this.syncCourierPostBranch(post);
       const savedPost = await this.postRepo.save(post);
       void this.syncPostToSearch(savedPost);
       postReceived = true;

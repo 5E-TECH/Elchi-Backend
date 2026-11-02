@@ -38,13 +38,17 @@ Ega xabari: eski pochtalar bo'm-bo'sh ko'rinadi, yorlig'i va buyurtmalar Excel r
   - Ikkala route rollari: SUPERADMIN, ADMIN, REGISTRATOR, MANAGER, BRANCH (ochishi mumkin bo'lgan pochtalar), LOGIST (o'z viloyati, pulsiz), COURIER (faqat o'z pochtasi).
 - ✏️ [logistics] Kuryer pochtasi QABUL QILINGANDA (`received`) kuryer filialiga bog'lanadi (`post.branch_id`). Natija: filial menejerining `GET /post` «eski» ro'yxatida o'z kuryerlarining qabul qilingan pochtalari ham ko'rinadi. SENT paytida `branch_id` bo'sh qoladi (HQ jo'natmasi va «Yangi» ro'yxati avvalgidek).
 - ✏️ [logistics] `GET /post` (sof kuryer): faqat filial o'tkazmasi pochtalari (`courier_id = '0'`) va o'z pochtalari. Boshqa kuryer bo'yicha `courier_id` filtri — bo'sh sahifa.
+- ✏️ [logistics] `GET /post/:id` (sof kuryer): boshqa kuryer pochtasi — 403; o'z pochtasi (bo'shab qolgan eski pochta ham) — 200.
+- ✏️ [logistics] Sof kuryerning o'z eski pochtasida (`view=all`, Excel, chek) hozir boshqa kuryerdagi sobiq buyurtma qatoridan o'sha kuryerning shaxsi va puli olib tashlanadi (`courier_id`, `holder_courier_id`, `courier_tariff`, `courier_share`, `to_be_paid`, `paid_amount`, sotuv summalari va h.k.). Buyurtmaning o'zi, holati va «hozir qayerda» qoladi.
+- ✏️ [logistics] Qisman qabul qilinib qayta `sent` ga qaytgan kuryer pochtasi filialsiz bo'ladi — menejerning «Yangi» ro'yxatida chiqmaydi.
+- 🔧 [logistics] `GET /post/orders/:id` va eksport: pochtani ochish huquqi faqat tarix orqali bo'lsa-yu, tarix vaqtincha olinmasa — 403 emas, **503** («Pochta tarixi vaqtincha olinmadi, qayta urinib ko'ring»). FE: 503 da «Qayta urinish» tugmasini ko'rsating.
 - ✏️ [logistics] Qabul qilingan qaytish pochtasi (`canceled_received`) hisoblagichlari (`order_quantity`, `post_total_price`) endi nolga tushmaydi — aynan qabul qilingan buyurtmalar soni va summasi qoladi.
 
 **Frontendda:**
 - 🔧 Eski pochta sahifasida `in_post_now` / `membership` asosida «hozir qayerda» va kirgan/chiqqan vaqtlarini ko'rsating; `history_incomplete: true` bo'lsa ogohlantirish chiqaring.
 - 🔧 Pochta kartasiga «Chek» (`/post/:id/receipt`) va «Excel» (`/post/:id/orders.xlsx`) tugmalarini qo'shing (Bearer token bilan blob sifatida yuklab oling).
 
-**Ops (deploydan keyin):** migratsiyalar `1716000000201` (`order_schema.post_order_memberships` jadvali, trigger va joriy pochtalar seed'i) va `1716000000202` (qabul qilingan kuryer pochtalariga `branch_id`). Migratsiyadan oldingi tarix uchun bir martalik skript (sukut DRY-RUN, `--apply` bilan yozadi, qayta yurgizish xavfsiz):
+**Ops (deploydan keyin):** migratsiyalar `1716000000201` (`order_schema.post_order_memberships` jadvali, trigger va joriy pochtalar seed'i) va `1716000000202` (qabul qilingan kuryer pochtalariga `branch_id`; kuryer butun tarixida bitta filialda bo'lgan yoki pochta hozirgi faol biriktiruvdan keyin yaratilgan bo'lsa — aniq bo'lmaganlari bo'sh qoladi, ular tarix orqali ochiladi, faqat menejerning eski ro'yxatida chiqmaydi). Migratsiyadan oldingi tarix uchun bir martalik skript (sukut DRY-RUN, `--apply` bilan yozadi, qayta yurgizish xavfsiz):
 `POSTGRES_URI=... node -r ts-node/register -r tsconfig-paths/register scripts/backfill-post-order-memberships.ts [--apply] [--batch=N]`
 
 ### 2026-11-02 — Tuman ↔ filial qamrovi: filial faqat o'z tumanlari buyurtmasini kuryerga beradi

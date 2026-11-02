@@ -1,4 +1,5 @@
 import {
+  type BackfillPlan,
   type BackfillReport,
   type BackfillSource,
   type ExistingMembership,
@@ -7,6 +8,7 @@ import {
   type PointerObservation,
   chunkStaysByKey,
   formatBackfillReport,
+  isPristineSeed,
   normalizeObservedPostId,
   parseBackfillArgs,
   planBackfill,
@@ -43,9 +45,34 @@ function seed(
     kind: 'DELIVERY',
     post_id: post,
     joined_at_us: CUTOFF,
+    // Migratsiya seed'i: `joined_at` va `created_at` — ayni `now()`.
+    created_at_us: CUTOFF,
     source: 'seed_current',
     ...overrides,
   };
+}
+
+/** Rejani mavjud tarixga qo'llaydi (runner yozgandek): turish + seed tuzatish. */
+function applyPlan(
+  existing: readonly ExistingMembership[],
+  plan: BackfillPlan,
+): ExistingMembership[] {
+  const fixes = new Map(plan.joinedAtFixes.map((f) => [f.id, f.joined_at_us]));
+  return [
+    ...existing.map((row) => ({
+      ...row,
+      joined_at_us: fixes.get(row.id) ?? row.joined_at_us,
+    })),
+    ...plan.stays.map((stay, index) => ({
+      id: String(1000 + existing.length + index),
+      order_id: stay.order_id,
+      kind: stay.kind,
+      post_id: stay.post_id,
+      joined_at_us: stay.joined_at_us,
+      created_at_us: CUTOFF + 1,
+      source: stay.source,
+    })),
+  ];
 }
 
 describe('normalizeObservedPostId', () => {
@@ -295,12 +322,22 @@ describe('planOrderKind', () => {
         kind: stay.kind,
         post_id: stay.post_id,
         joined_at_us: stay.joined_at_us,
+        created_at_us: CUTOFF + 1,
         source: stay.source,
       })),
     ];
     expect(planOrderKind({ observations, existing, cutoffUs: CUTOFF })).toEqual(
       { stays: [], joinedAtFix: null },
     );
+  });
+
+  it('tegilgan seed (joined_at ≠ created_at) qayta surilmaydi', () => {
+    const plan = planOrderKind({
+      observations: [obs('outbox', 1, 100, 'C')],
+      existing: [seed('C', { joined_at_us: 500 })],
+      cutoffUs: CUTOFF,
+    });
+    expect(plan).toEqual({ stays: [], joinedAtFix: null });
   });
 
   it('turishlar doim joined_at <= left_at (vaqt teskari bo`lsa ham)', () => {
@@ -361,6 +398,77 @@ describe('planBackfill', () => {
     expect(plan.joinedAtFixes).toEqual([
       expect.objectContaining({ id: '900', joined_at_us: 400 }),
     ]);
+  });
+});
+
+describe('qayta yurgizish: outbox id va created_at teskari (uzun tranzaksiya)', () => {
+  // T1 t=90 da boshlanadi; T2 t=100 da boshlanib ko'chiradi va commit
+  // qiladi; keyin T1 ko'chiradi — T1 surati id bo'yicha kech, vaqti erta.
+  const shape = (plan: BackfillPlan) =>
+    plan.stays.map((s) => [
+      s.post_id,
+      s.joined_at_us,
+      s.left_at_us,
+      s.next_post_id,
+    ]);
+
+  it('ikkinchi reja bo`sh: soxta orqaga turish (22 [90,100) → 11) yo`q', () => {
+    const observations = [
+      obs('outbox', 1, 100, '11', 'DELIVERY', '7'),
+      obs('outbox', 2, 90, '22', 'DELIVERY', '7'),
+      obs('outbox', 3, 110, null, 'DELIVERY', '7'),
+    ];
+    const first = planBackfill({
+      observations,
+      existing: [],
+      cutoffUs: CUTOFF,
+    });
+    expect(shape(first)).toEqual([
+      ['11', 100, 100, '22'],
+      ['22', 100, 110, null],
+    ]);
+    expect(first.joinedAtFixes).toEqual([]);
+
+    const second = planBackfill({
+      observations,
+      existing: applyPlan([], first),
+      cutoffUs: CUTOFF,
+    });
+    expect(second.stays).toEqual([]);
+    expect(second.joinedAtFixes).toEqual([]);
+  });
+
+  it('seed varianti: seed joined_at bir marta suriladi, ikkinchi rejada tuzatish yo`q', () => {
+    const observations = [
+      obs('outbox', 1, 100, '11'),
+      obs('outbox', 2, 90, '33'),
+    ];
+    const existing = [seed('33')];
+    const first = planBackfill({ observations, existing, cutoffUs: CUTOFF });
+    expect(shape(first)).toEqual([['11', 100, 100, '33']]);
+    expect(first.joinedAtFixes).toEqual([
+      expect.objectContaining({
+        id: '900',
+        joined_at_us: 100,
+        previous_us: CUTOFF,
+      }),
+    ]);
+
+    const second = planBackfill({
+      observations,
+      existing: applyPlan(existing, first),
+      cutoffUs: CUTOFF,
+    });
+    expect(second.stays).toEqual([]);
+    expect(second.joinedAtFixes).toEqual([]);
+  });
+});
+
+describe('isPristineSeed', () => {
+  it('faqat seed va joined_at = created_at', () => {
+    expect(isPristineSeed(seed('A'))).toBe(true);
+    expect(isPristineSeed(seed('A', { joined_at_us: 100 }))).toBe(false);
+    expect(isPristineSeed(seed('A', { source: 'trigger' }))).toBe(false);
   });
 });
 

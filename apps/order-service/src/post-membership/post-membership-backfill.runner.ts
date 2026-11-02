@@ -25,7 +25,8 @@ import {
  *
  * Idempotent: faqat eng erta mavjud qatordan OLDINGI yopiq turishlar
  * qo'shiladi (+ INSERT ichida `NOT EXISTS` qo'riqchisi), seed `joined_at`
- * faqat kamayadi. Parallel ikki yurgizish — advisory lock bilan to'silgan.
+ * faqat kamayadi va faqat BIR marta (tegilmagan seed: `joined_at =
+ * created_at`). Parallel ikki yurgizish — advisory lock bilan to'silgan.
  * Bitta (buyurtma, tur) turishlari doim BITTA INSERT'da (`chunkStaysByKey`)
  * — aks holda qo'riqchi oldingi bo'lak yozganini ko'rib qolganini tashlardi.
  */
@@ -135,13 +136,18 @@ export const INSERT_STAYS_SQL = `
          )
   RETURNING 1`;
 
-/** Seed `joined_at` — faqat seed qatori va faqat ERTAROQ vaqtga. */
+/**
+ * Seed `joined_at` — faqat seed qatori, faqat ERTAROQ vaqtga va faqat bir
+ * marta: seed `joined_at` va `created_at` ni ayni `now()` bilan yozadi —
+ * surilgandan keyin ular farq qiladi va qator qayta tegilmaydi.
+ */
 export const FIX_JOINED_AT_SQL = `
   UPDATE ${TABLE} m
      SET "joined_at" = v."joined_at"
     FROM unnest($1::bigint[], $2::timestamptz[]) AS v("id", "joined_at")
    WHERE m."id" = v."id"
      AND m."source" = '${SEED_SOURCE}'
+     AND m."joined_at" = m."created_at"
      AND m."joined_at" > v."joined_at"
   RETURNING 1`;
 
@@ -421,12 +427,14 @@ export async function runPostMembershipBackfill(
         kind: MembershipKind;
         post_id: string;
         joined_at_us: string;
+        created_at_us: string;
         source: string | null;
       }>(
         runner,
         `SELECT m."id"::text AS "id", m."order_id"::text AS "order_id",
                 m."kind", m."post_id"::text AS "post_id",
                 ${EPOCH_US('m."joined_at"')}::text AS "joined_at_us",
+                ${EPOCH_US('m."created_at"')}::text AS "created_at_us",
                 m."source"
            FROM ${TABLE} m
           WHERE m."order_id" = ANY($1::bigint[])`,
@@ -435,6 +443,7 @@ export async function runPostMembershipBackfill(
       const existing: ExistingMembership[] = existingRows.map((row) => ({
         ...row,
         joined_at_us: Number(row.joined_at_us),
+        created_at_us: Number(row.created_at_us),
       }));
 
       const plan = planBackfill({ observations, existing, cutoffUs });

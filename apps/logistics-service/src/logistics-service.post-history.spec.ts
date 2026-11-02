@@ -4,8 +4,10 @@ import type { RmqContext } from '@nestjs/microservices';
 import { of, throwError } from 'rxjs';
 import { Order_status, Post_status, Where_deliver } from '@app/common';
 import {
+  FOREIGN_COURIER_ORDER_FIELDS,
   LOGIST_POST_FORBIDDEN_MESSAGE,
   LogisticsServiceService,
+  POST_HISTORY_UNAVAILABLE_MESSAGE,
   defaultPostOrdersView,
 } from './logistics-service.service';
 import { LogisticsServiceController } from './logistics-service.controller';
@@ -1249,7 +1251,10 @@ describe('kuryer pochtasi: SENT paytida filialsiz, qabul qilinganda (RECEIVED) k
     );
   });
 
-  function receivePostService(stillOnTheRoad: Row[]) {
+  function receivePostService(
+    stillOnTheRoad: Row[],
+    post: Row = sentCourierPost(),
+  ) {
     const order: Row = {
       id: '101',
       post_id: '450',
@@ -1258,7 +1263,7 @@ describe('kuryer pochtasi: SENT paytida filialsiz, qabul qilinganda (RECEIVED) k
       total_price: 100_000,
     };
     const env = baseService({
-      postFindOne: jest.fn(() => Promise.resolve(sentCourierPost())),
+      postFindOne: jest.fn(() => Promise.resolve({ ...post })),
     });
     jest
       .spyOn(env.service as any, 'findOrders')
@@ -1314,6 +1319,105 @@ describe('kuryer pochtasi: SENT paytida filialsiz, qabul qilinganda (RECEIVED) k
         branch_id: null,
       }),
     );
+  });
+
+  it('⭐ RECEIVED kuryer pochtasi (branch_id bor) qisman qabulda SENT ga qaytsa — branch_id null; keyin to`liq qabul — RECEIVED + kuryer filiali', async () => {
+    // Kuryer yetkazilmaganlarni skan bilan o'z RECEIVED pochtasiga qaytargan.
+    const receivedWithBranch = sentCourierPost({
+      status: Post_status.RECEIVED,
+      branch_id: BRANCH,
+    });
+    const partial = receivePostService(
+      [{ id: '102', status: Order_status.ON_THE_ROAD }],
+      receivedWithBranch,
+    );
+
+    await partial.service.receivePost({ id: '44', roles: ['courier'] }, '450', {
+      order_ids: ['101'],
+    });
+
+    expect(findByUserCalls(partial.branchSend)).toHaveLength(0);
+    expect(partial.postRepo.save).toHaveBeenCalledTimes(1);
+    const sentAgain: Row = partial.postRepo.save.mock.calls[0][0];
+    // SENT kuryer pochtasi filialsiz — menejerning «Yangi» ro'yxatida va
+    // filial o'tkazmasi sifatida qabulda chiqmaydi.
+    expect(sentAgain).toEqual(
+      expect.objectContaining({
+        id: '450',
+        status: Post_status.SENT,
+        branch_id: null,
+      }),
+    );
+
+    const full = receivePostService([], sentAgain);
+    await full.service.receivePost({ id: '44', roles: ['courier'] }, '450', {
+      order_ids: ['101'],
+    });
+
+    expect(findByUserCalls(full.branchSend)).toHaveLength(1);
+    expect(full.postRepo.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: '450',
+        status: Post_status.RECEIVED,
+        branch_id: BRANCH,
+      }),
+    );
+  });
+
+  it('RECEIVED kuryer pochtasi (branch_id bor) to`liq qabulda — RECEIVED, branch_id saqlanadi', async () => {
+    const { service, postRepo, branchSend } = receivePostService(
+      [],
+      sentCourierPost({ status: Post_status.RECEIVED, branch_id: BRANCH }),
+    );
+
+    await service.receivePost({ id: '44', roles: ['courier'] }, '450', {
+      order_ids: ['101'],
+    });
+
+    expect(findByUserCalls(branchSend)).toHaveLength(0);
+    expect(postRepo.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: '450',
+        status: Post_status.RECEIVED,
+        branch_id: BRANCH,
+      }),
+    );
+  });
+
+  it('syncCourierPostBranch — kuryersiz (0), bekor va NEW pochtalarga tegmaydi', async () => {
+    const { service, branchSend } = baseService();
+    const sync = (post: Row) =>
+      (service as any).syncCourierPostBranch(post).then(() => post);
+
+    expect(
+      await sync({
+        courier_id: '0',
+        status: Post_status.SENT,
+        branch_id: BRANCH,
+      }),
+    ).toEqual(expect.objectContaining({ branch_id: BRANCH }));
+    expect(
+      await sync({
+        courier_id: '44',
+        status: Post_status.CANCELED,
+        branch_id: HQ,
+      }),
+    ).toEqual(expect.objectContaining({ branch_id: HQ }));
+    expect(
+      await sync({
+        courier_id: '44',
+        status: Post_status.CANCELED_RECEIVED,
+        branch_id: HQ,
+      }),
+    ).toEqual(expect.objectContaining({ branch_id: HQ }));
+    expect(
+      await sync({
+        courier_id: '44',
+        status: Post_status.NEW,
+        branch_id: null,
+      }),
+    ).toEqual(expect.objectContaining({ branch_id: null }));
+    expect(findByUserCalls(branchSend)).toHaveLength(0);
   });
 
   it('releaseReturnSourcePosts — oxirgi yo`ldagi chiqqan kuryer pochtasi RECEIVED + kuryer filiali', async () => {
@@ -1556,5 +1660,403 @@ describe('receiveCanceledPost — qabul qilingan bekor pochta hisoblagichlari sa
         }),
       ]),
     );
+  });
+});
+
+describe('findPostById — sof kuryer faqat o`z kuryerli pochtasini ochadi', () => {
+  const forbiddenWith = (message: string) =>
+    expect.objectContaining({
+      error: expect.objectContaining({ statusCode: 403, message }),
+    });
+
+  it('⭐ boshqa kuryerning RECEIVED pochtasi (branch_id = o`z filiali) — 403', async () => {
+    const { service, findOrders } = makeService({
+      post: oldBranchPost({ courier_id: '44', branch_id: BRANCH }),
+      scopedBranchId: BRANCH,
+    });
+
+    await expect(
+      service.findPostById('500', { id: '45', roles: ['courier'] }),
+    ).rejects.toEqual(forbiddenWith("Kuryer faqat o'z pochtasini ko'ra oladi"));
+    expect(findOrders).not.toHaveBeenCalled();
+  });
+
+  it('⭐ o`z bo`shab qolgan pochtasi (branch_id boshqa / bo`sh, a`zosi yo`q) — 200', async () => {
+    for (const branchId of [OTHER_BRANCH, null]) {
+      const { service, findOrders } = makeService({
+        post: oldBranchPost({ courier_id: '44', branch_id: branchId }),
+        current: [],
+        scopedBranchId: BRANCH,
+      });
+
+      const res: any = await service.findPostById('500', {
+        id: '44',
+        roles: ['courier'],
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.data).toEqual(
+        expect.objectContaining({ id: '500', courier_id: '44' }),
+      );
+      expect(findOrders).not.toHaveBeenCalled();
+    }
+  });
+
+  it('filial o`tkazmasi pochtasi (courier_id 0) — sof kuryerga avvalgidek filial doirasi', async () => {
+    const own = makeService({
+      post: oldBranchPost({ courier_id: '0', branch_id: BRANCH }),
+      scopedBranchId: BRANCH,
+    });
+    const res: any = await own.service.findPostById('500', {
+      id: '45',
+      roles: ['courier'],
+    });
+    expect(res.statusCode).toBe(200);
+
+    const foreign = makeService({
+      post: oldBranchPost({ courier_id: '0', branch_id: OTHER_BRANCH }),
+      current: [],
+      scopedBranchId: BRANCH,
+    });
+    await expect(
+      foreign.service.findPostById('500', { id: '45', roles: ['courier'] }),
+    ).rejects.toEqual(forbiddenWith("Siz bu branch pochtasini ko'ra olmaysiz"));
+  });
+
+  it('menejer (va kuryer + menejer rolli foydalanuvchi) — o`zgarmagan filial doirasi', async () => {
+    for (const requester of [
+      MANAGER,
+      { id: '45', roles: ['courier', 'manager'] },
+    ]) {
+      const sameBranch = makeService({
+        post: oldBranchPost({ courier_id: '44', branch_id: BRANCH }),
+        scopedBranchId: BRANCH,
+      });
+      const res: any = await sameBranch.service.findPostById('500', requester);
+      expect(res.statusCode).toBe(200);
+
+      const otherBranch = makeService({
+        post: oldBranchPost({ courier_id: '44', branch_id: OTHER_BRANCH }),
+        current: [],
+        scopedBranchId: BRANCH,
+      });
+      await expect(
+        otherBranch.service.findPostById('500', requester),
+      ).rejects.toEqual(
+        forbiddenWith("Siz bu branch pochtasini ko'ra olmaysiz"),
+      );
+    }
+  });
+});
+
+describe('getPostOrders — sof kuryer eski pochtasida boshqa kuryer shaxsi va puli yo`q', () => {
+  const COURIER = { id: '44', roles: ['courier'] };
+  const OTHER_COURIER = '55';
+
+  /** Kuryer 44 ning qabul qilingan eski pochtasi. */
+  const ownPost = () => oldBranchPost({ courier_id: COURIER.id });
+
+  const orderIdentity = {
+    qr_code_token: 'ORDER-QR-101',
+    customer_id: '9001',
+    address: 'Buxoro, Navoiy ko`chasi 1',
+    district_id: '61',
+    region_id: '6',
+    where_deliver: Where_deliver.ADDRESS,
+    total_price: 100_000,
+    branch_id: BRANCH,
+    holder_branch_id: null,
+  };
+
+  /** Qaytarish tasdiqlangan, kuryer 55 ga berilgan va sotilgan — sobiq a'zo. */
+  const foreignSold: Row = {
+    id: '101',
+    post_id: '600',
+    canceled_post_id: null,
+    status: Order_status.SOLD,
+    holder_type: 'COURIER',
+    ...orderIdentity,
+    courier_id: OTHER_COURIER,
+    holder_courier_id: OTHER_COURIER,
+    assigned_at: '2026-10-03T09:00:00.000Z',
+    last_handover_at: '2026-10-03T09:00:00.000Z',
+    last_handover_by: OTHER_COURIER,
+    courier_tariff: 25_000,
+    courier_share: 25_000,
+    to_be_paid: 80_000,
+    paid_amount: 0,
+    sale_collectible_amount: 100_000,
+    sale_market_paid_amount: 0,
+    branch_cashbox_amount: 75_000,
+    extra_cost: 5_000,
+    proof_files: ['proof/55/101.jpg'],
+  };
+
+  /** Faqat `holder_courier_id` boshqa kuryerda (topshirish jarayonida). */
+  const foreignHolder: Row = {
+    id: '104',
+    post_id: null,
+    canceled_post_id: null,
+    status: Order_status.WAITING,
+    holder_type: 'COURIER',
+    ...orderIdentity,
+    qr_code_token: 'ORDER-QR-104',
+    courier_id: null,
+    holder_courier_id: OTHER_COURIER,
+    courier_tariff: 25_000,
+    to_be_paid: 0,
+    paid_amount: 0,
+  };
+
+  /** Hozir ham kuryer 44 da (boshqa pochtasida) — sobiq a'zo, lekin o'ziniki. */
+  const ownFormer: Row = {
+    id: '102',
+    post_id: '601',
+    canceled_post_id: null,
+    status: Order_status.WAITING,
+    holder_type: 'COURIER',
+    ...orderIdentity,
+    qr_code_token: 'ORDER-QR-102',
+    courier_id: COURIER.id,
+    holder_courier_id: COURIER.id,
+    courier_tariff: 20_000,
+    courier_share: 20_000,
+    to_be_paid: 0,
+    paid_amount: 0,
+  };
+
+  /** Filialga qaytgan (kuryersiz) sobiq a'zo. */
+  const branchFormer: Row = {
+    id: '103',
+    post_id: null,
+    canceled_post_id: null,
+    status: Order_status.WAITING,
+    holder_type: 'BRANCH',
+    ...orderIdentity,
+    qr_code_token: 'ORDER-QR-103',
+    courier_id: null,
+    holder_courier_id: null,
+    last_handover_by: '77',
+    to_be_paid: 0,
+    paid_amount: 0,
+  };
+
+  /** Hozir ham shu pochtada — joriy a'zo. */
+  const currentMember: Row = {
+    id: '301',
+    post_id: '500',
+    canceled_post_id: null,
+    status: Order_status.WAITING,
+    holder_type: 'COURIER',
+    ...orderIdentity,
+    qr_code_token: 'ORDER-QR-301',
+    courier_id: COURIER.id,
+    holder_courier_id: COURIER.id,
+    courier_tariff: 20_000,
+    courier_share: 20_000,
+  };
+
+  const memberships: Row[] = ['101', '102', '103', '104', '301'].map(
+    (orderId, index) => ({
+      order_id: orderId,
+      post_id: '500',
+      kind: 'DELIVERY',
+      joined_at: `2026-10-01T08:0${index}:00.000Z`,
+      left_at: orderId === '301' ? null : '2026-10-02T08:00:00.000Z',
+      next_post_id: orderId === '101' ? '600' : null,
+    }),
+  );
+
+  const historyEnv = (post: Row = ownPost()) =>
+    makeService({
+      post,
+      current: [currentMember],
+      memberships,
+      history: [foreignSold, ownFormer, branchFormer, foreignHolder],
+      scopedBranchId: BRANCH,
+    });
+
+  const rowById = (res: any, id: string): Row =>
+    res.data.allOrdersByPostId.find((order: Row) => order.id === id);
+
+  it('⭐ boshqa kuryerdagi sobiq a`zo — kuryer shaxsi va pul maydonlarisiz, buyurtma o`zi va a`zoligi qoladi', async () => {
+    const { service } = historyEnv();
+
+    const res: any = await service.getPostOrders('500', COURIER, {
+      view: 'all',
+    });
+
+    const row = rowById(res, '101');
+    for (const key of FOREIGN_COURIER_ORDER_FIELDS) {
+      expect(row).not.toHaveProperty(key);
+    }
+    expect(row).toEqual(
+      expect.objectContaining({
+        id: '101',
+        status: Order_status.SOLD,
+        ...orderIdentity,
+        in_post_now: false,
+        current_post_id: '600',
+        membership: expect.objectContaining({ next_post_id: '600' }),
+      }),
+    );
+    // Faqat `holder_courier_id` boshqa kuryerda — ham tozalanadi.
+    const holderRow = rowById(res, '104');
+    for (const key of FOREIGN_COURIER_ORDER_FIELDS) {
+      expect(holderRow).not.toHaveProperty(key);
+    }
+    expect(holderRow.qr_code_token).toBe('ORDER-QR-104');
+    // Summalar (total_price) — avvalgidek.
+    expect(res.data.homeOrders.homeOrdersTotalPrice).toBe(500_000);
+  });
+
+  it('o`z joriy va hozir o`zidagi / filialdagi sobiq a`zolar — to`liq qator', async () => {
+    const { service } = historyEnv();
+
+    const res: any = await service.getPostOrders('500', COURIER, {
+      view: 'all',
+    });
+
+    expect(rowById(res, '301')).toEqual(
+      expect.objectContaining({ ...currentMember, in_post_now: true }),
+    );
+    expect(rowById(res, '102')).toEqual(
+      expect.objectContaining({ ...ownFormer, in_post_now: false }),
+    );
+    expect(rowById(res, '103')).toEqual(
+      expect.objectContaining({ ...branchFormer, in_post_now: false }),
+    );
+  });
+
+  it('xodim (menejer) — boshqa kuryerdagi sobiq a`zo ham to`liq qator', async () => {
+    const { service } = historyEnv();
+
+    const res: any = await service.getPostOrders('500', MANAGER, {
+      view: 'all',
+    });
+
+    expect(rowById(res, '101')).toEqual(
+      expect.objectContaining({ ...foreignSold, in_post_now: false }),
+    );
+    expect(rowById(res, '104')).toEqual(
+      expect.objectContaining({ ...foreignHolder, in_post_now: false }),
+    );
+  });
+});
+
+describe('getPostOrders — ruxsat faqat tarix orqali, tarix olinmadi — 503 (403 emas)', () => {
+  const unavailable = expect.objectContaining({
+    error: {
+      statusCode: 503,
+      message: POST_HISTORY_UNAVAILABLE_MESSAGE,
+      data: null,
+    },
+  });
+  const forbidden = expect.objectContaining({
+    error: expect.objectContaining({
+      statusCode: 403,
+      message: "Siz bu branch pochtasidagi orderlarni ko'ra olmaysiz",
+    }),
+  });
+
+  /** HQ → filial pochtasi, `branch_id` bo'sh, bo'shab qolgan. */
+  const emptiedPost = () => oldBranchPost({ branch_id: null });
+
+  it('⭐ a`zolik tarixi javob bermadi — 503, ma`lumot yo`q', async () => {
+    const { service, postRepo } = makeService({
+      post: emptiedPost(),
+      current: [],
+      memberships: 'down',
+      scopedBranchId: BRANCH,
+    });
+
+    await expect(service.getPostOrders('500', MANAGER)).rejects.toEqual(
+      unavailable,
+    );
+    expect(postRepo.save).not.toHaveBeenCalled();
+  });
+
+  it('⭐ sobiq a`zolarni olib bo`lmadi — 503', async () => {
+    const { service } = makeService({
+      post: emptiedPost(),
+      current: [],
+      memberships: movedMemberships,
+      history: 'down',
+      scopedBranchId: BRANCH,
+    });
+
+    await expect(service.getPostOrders('500', MANAGER)).rejects.toEqual(
+      unavailable,
+    );
+  });
+
+  it('vaqt byudjeti tugadi (sobiq a`zolar so`ralmadi) — 503', async () => {
+    const { service } = makeService({
+      post: emptiedPost(),
+      current: [],
+      memberships: movedMemberships,
+      history: movedOrders,
+      scopedBranchId: BRANCH,
+    });
+    const now = jest
+      .spyOn(Date, 'now')
+      .mockReturnValueOnce(1_000)
+      .mockReturnValue(7_300);
+
+    try {
+      await expect(service.getPostOrders('500', MANAGER)).rejects.toEqual(
+        unavailable,
+      );
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it('haqiqiy boshqa filial pochtasi — 403: tarix to`liq va boshqa filialda', async () => {
+    const { service } = makeService({
+      post: emptiedPost(),
+      current: [],
+      memberships: movedMemberships,
+      history: movedOrders,
+      scopedBranchId: OTHER_BRANCH,
+    });
+
+    await expect(
+      service.getPostOrders('500', { id: '88', roles: ['manager'] }),
+    ).rejects.toEqual(forbidden);
+  });
+
+  it('haqiqiy boshqa filial pochtasi — 403: tarix olinmasa ham joriy a`zo boshqa filialda', async () => {
+    const { service } = makeService({
+      post: emptiedPost(),
+      current: [
+        {
+          id: '301',
+          post_id: '500',
+          status: Order_status.WAITING,
+          branch_id: OTHER_BRANCH,
+        },
+      ],
+      memberships: 'down',
+      scopedBranchId: BRANCH,
+    });
+
+    await expect(service.getPostOrders('500', MANAGER)).rejects.toEqual(
+      forbidden,
+    );
+  });
+
+  it('o`z filiali pochtasi tarix olinmasa ham ochiladi (history_incomplete)', async () => {
+    const { service } = makeService({
+      post: oldBranchPost(),
+      current: [],
+      memberships: 'down',
+      scopedBranchId: BRANCH,
+    });
+
+    const res: any = await service.getPostOrders('500', MANAGER);
+
+    expect(res.data.history_incomplete).toBe(true);
+    expect(res.data.allOrdersByPostId).toEqual([]);
   });
 });
