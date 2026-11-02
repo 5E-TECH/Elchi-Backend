@@ -203,7 +203,7 @@ const marketReq = (id: string): RequesterContext => ({
 const dto = {
   name: '  Ali   Valiyev ',
   phone_number: '998901234567',
-  password: 'secret123',
+  password: 'Secret123',
 };
 
 async function statusOf(
@@ -242,8 +242,8 @@ describe('UserServiceService — market operatorlari (i76gGjyq)', () => {
         isDeleted: false,
       });
       // Parol faqat hash holida saqlanadi va javobda umuman yo'q.
-      expect(bcrypt.encrypt).toHaveBeenCalledWith('secret123');
-      expect(stored?.password).toBe('bcrypt$secret123');
+      expect(bcrypt.encrypt).toHaveBeenCalledWith('Secret123');
+      expect(stored?.password).toBe('bcrypt$Secret123');
       expect(res.data).not.toHaveProperty('password');
       expect(res.data).not.toHaveProperty('refresh_token');
       expect(res.data).toMatchObject({

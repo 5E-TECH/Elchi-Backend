@@ -28,7 +28,7 @@ const PASSWORD_MODE_DESCRIPTION =
 const MUST_CHANGE_PASSWORD_DESCRIPTION =
   '(aidsxJ2H) Faqat `manual` da: true — birinchi kirishda parolni almashtirish majburiy (login javobida `must_change_password: true`, almashtirmaguncha boshqa API 403 `PASSWORD_CHANGE_REQUIRED`). `generate_sms` da doim true (false — 400).';
 const MANUAL_PASSWORD_DESCRIPTION =
-  "(aidsxJ2H) Faqat `password_mode: 'manual'` da (yoki `password_mode` yuborilmagan eski so'rovda). Kamida 8 belgi (xodim — 10), oddiy parollar taqiqlangan";
+  "(aidsxJ2H) Faqat `password_mode: 'manual'` da (yoki `password_mode` yuborilmagan eski so'rovda). Kamida 6 belgi: 1 ta katta harf, 1 ta kichik harf va 1 ta raqam; oddiy parollar taqiqlangan";
 
 export class CreateAdminRequestDto {
   @ApiProperty({ example: 'Admin User' })
@@ -119,7 +119,8 @@ export class UpdateAdminRequestDto {
   @ApiPropertyOptional({
     example: 'Kuchli-Parol-2026',
     minLength: 8,
-    description: 'Kamida 8 belgi (xodim — 10), oddiy parollar taqiqlangan',
+    description:
+      'Kamida 6 belgi: 1 ta katta harf, 1 ta kichik harf va 1 ta raqam; oddiy parollar taqiqlangan',
   })
   @IsOptional()
   @IsString()
@@ -609,7 +610,8 @@ export class UpdateMarketRequestDto {
   @ApiPropertyOptional({
     example: 'Kuchli-Parol-2026',
     minLength: 8,
-    description: 'Kamida 8 belgi (xodim — 10), oddiy parollar taqiqlangan',
+    description:
+      'Kamida 6 belgi: 1 ta katta harf, 1 ta kichik harf va 1 ta raqam; oddiy parollar taqiqlangan',
   })
   @IsOptional()
   @IsString()

@@ -21,7 +21,7 @@ export const AllowDuringPasswordChange = () =>
   SetMetadata(ALLOW_DURING_PASSWORD_CHANGE_KEY, true);
 
 export const PASSWORD_CHANGE_REQUIRED_MESSAGE =
-  'Avval parolingizni almashtiring — yangi parol kamida 8 belgi (xodimlar 10), oddiy parollar taqiqlangan';
+  'Avval parolingizni almashtiring — yangi parol kamida 6 belgi, 1 ta katta harf, 1 ta kichik harf va 1 ta raqam, oddiy parollar taqiqlangan';
 
 /** `PASSWORD_CHANGE_GATE` = `on` / `true` / `1` — darvoza yoqilgan. */
 export const isPasswordChangeGateEnabled = isPasswordSwitchOn;

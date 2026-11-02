@@ -298,7 +298,7 @@ describe('MarketOperatorGatewayController ↔ identity (i76gGjyq)', () => {
   const operatorBody = {
     name: 'Ali Valiyev',
     phone_number: '+998901234567',
-    password: 'secret123',
+    password: 'Secret123',
   };
 
   it('kontrakt: gateway yuboradigan har bir cmd identity`da handlerga ega', () => {
@@ -359,7 +359,7 @@ describe('MarketOperatorGatewayController ↔ identity (i76gGjyq)', () => {
 
     // Bazada parol hash holida.
     const stored = repo.rows.find((row) => row.id === created.body.data.id);
-    expect(stored?.password).toBe('bcrypt$secret123');
+    expect(stored?.password).toBe('bcrypt$Secret123');
   });
 
   it('TC3: market rolida GET /market-operators → 200 (bo`sh ro`yxat ham)', async () => {

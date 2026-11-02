@@ -242,7 +242,8 @@ export class CreateInvestorUserRequestDto {
   @ApiProperty({
     example: 'Kuchli-Parol-2026',
     minLength: 8,
-    description: 'Kamida 8 belgi (xodim — 10), oddiy parollar taqiqlangan',
+    description:
+      'Kamida 6 belgi: 1 ta katta harf, 1 ta kichik harf va 1 ta raqam; oddiy parollar taqiqlangan',
   })
   @IsString()
   @IsPasswordPolicy(Roles.INVESTOR)

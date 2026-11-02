@@ -708,18 +708,18 @@ describe('aidsxJ2H — o‘z parolini almashtirish: eski parol (US:1548)', () =>
     );
   });
 
-  it('min 8 / xodim 10 — siyosat baribir ishlaydi', async () => {
+  it('min 6 — siyosat baribir ishlaydi', async () => {
     const t = makeHarness({ existing: manager });
     const error = await rpcErrorOf(
       t.service.updateUser(
         '25',
-        { password: 'Qisqa-12', old_password: 'Vaqtinchalik7K' },
+        { password: 'Qis-1', old_password: 'Vaqtinchalik7K' },
         self,
       ),
     );
     expect(error).toMatchObject({
       statusCode: 400,
-      message: "Parol kamida 10 belgidan iborat bo'lishi kerak",
+      message: "Parol kamida 6 belgidan iborat bo'lishi kerak",
     });
   });
 

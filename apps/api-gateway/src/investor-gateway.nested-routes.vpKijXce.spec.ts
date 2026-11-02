@@ -316,7 +316,7 @@ describe('vpKijXce — POST/GET /investor-users (investor logini, BeePost naqshi
   const body = {
     name: 'Ali Investor',
     phone_number: '+998901234567',
-    password: 'secret12',
+    password: 'Secret12',
   };
 
   it('⭐ superadmin POST /investor-users → identity.investor_user.create (dto + requester)', async () => {

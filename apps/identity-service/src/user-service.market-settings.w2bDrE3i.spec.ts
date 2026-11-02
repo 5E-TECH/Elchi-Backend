@@ -76,7 +76,7 @@ const baseCreate = {
   name: 'Yangi market',
   phone_number: '+998901112233',
   username: 'yangi',
-  password: 'secret123',
+  password: 'Secret123',
   tariff_home: 30000,
   tariff_center: 20000,
 };
