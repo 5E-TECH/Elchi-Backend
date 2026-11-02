@@ -107,8 +107,10 @@ const unwrapData = (value: unknown): Record<string, unknown> | null => {
 // Tuman qamrovi (ega qarori 2026-11-02): filial tumanlarini yozish —
 // logistics'da filial tekshiruvi (branch RPC, 5 s), tranzaksiya va har o'zgargan
 // tuman uchun activity log (500 tagacha). 8 s chegarasi katta ro'yxatda yetmay
-// qolishi mumkin (mijoz 504 oladi, yozuv orqada baribir yakunlanadi).
-const DISTRICT_COVERAGE_WRITE_RPC_TIMEOUT_MS = 15_000;
+// qolishi mumkin (mijoz 504 oladi, yozuv orqada baribir yakunlanadi). Filial
+// almashsa logistics avval tumanlarning ochiq buyurtmalarini order-service'dan
+// sahifalab o'qiydi (eski filialda tugaydiganlarga imtiyoz) — 30 s.
+const DISTRICT_COVERAGE_WRITE_RPC_TIMEOUT_MS = 30_000;
 const LOGISTICS_UNAVAILABLE_MESSAGE =
   "Logistika xizmati mavjud emas — birozdan so'ng qayta urinib ko'ring";
 
@@ -542,7 +544,8 @@ export class BranchGatewayController {
       'Faqat kuryerli filial turi (REGIONAL yoki HYBRID) — PICKUP va boshqalar 400 `data.reason = branch_type_not_serving`. ' +
       "Har bir tuman mavjud bo'lishi shart (yo'q — 404 `district_not_found`, `data.details.district_ids`). Filialning viloyati bo'lsa, tumanning xizmat viloyati (`assigned_region ?? region_id`) unga teng bo'lishi shart — aks holda 400 `data.reason = district_region_mismatch`, `data.details.district_ids`. " +
       "Boshqa filialga biriktirilgan tuman shu filialga KO'CHADI (ruxsat etiladi) va javobdagi `moved[]` da qaytadi. " +
-      'Javob `data`: `{ branch_id, district_ids, added[], removed[], moved: [{ district_id, from_branch_id }] }`. Faqat SUPERADMIN/ADMIN.',
+      'Javob `data`: `{ branch_id, district_ids, added[], removed[], moved: [{ district_id, from_branch_id }], coverage_exemptions?: { created, by_branch: [{ branch_id, count }] } }`. ' +
+      "Tumanini yo'qotgan filialda yoki uning kuryerida (yoki unga yo'lda) turgan ochiq buyurtmalar o'sha filialda tugaydi (`coverage_exemptions`); tuman buyurtmalarini tekshirib bo'lmasa — 503, hech narsa o'zgarmaydi. Faqat SUPERADMIN/ADMIN.",
   })
   @ApiParam({ name: 'id', description: 'Branch ID (bigint string)' })
   @ApiBody({ type: SetBranchDistrictsRequestDto })

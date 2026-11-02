@@ -2015,7 +2015,12 @@ export class LogisticsGatewayController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(RoleEnum.ADMIN, RoleEnum.SUPERADMIN)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Assign district to another region' })
+  @ApiOperation({
+    summary: 'Assign district to another region',
+    description:
+      "Ega qarori: ko'chirish paytida ESKI filialda, uning kuryerida yoki eski filialga yo'lda (HQ pochtasi / SENT partiya) turgan ochiq buyurtmalar eski filialda tugaydi — eski filial ularni o'z kuryeriga bera oladi (kuryer qaytargandan keyin ham, bekor/sotilgan buyurtma WAITING ga qaytarilsa ham). Ko'chirishdan keyin kelganlari faqat yangi filialga. " +
+      "Viloyat o'zgarsa javob `data.coverage_exemptions: { created, by_branch: [{ branch_id, count }] }` — nechta buyurtma qaysi eski filialda tugashi. Tuman buyurtmalarini tekshirib bo'lmasa — 503, tuman o'zgarmaydi.",
+  })
   @ApiParam({ name: 'id', description: 'District ID (id)' })
   @ApiBody({ type: UpdateDistrictRequestDto })
   update(
@@ -2023,8 +2028,10 @@ export class LogisticsGatewayController {
     @Body() dto: UpdateDistrictRequestDto,
     @Req() req: { user: JwtUser },
   ) {
-    // `rehome_open_orders: true` — har buyurtma uchun alohida order.update
-    // (POST district/:id/rehome-open-orders bilan bir xil 30 s).
+    // Viloyat o'zgarsa logistics avval tumanning ochiq buyurtmalarini
+    // order-service'dan sahifalab o'qiydi (eski filialda tugaydiganlarga
+    // imtiyoz), `rehome_open_orders: true` da esa har buyurtma uchun alohida
+    // order.update — ikkalasi uchun ham 30 s.
     return this.logisticsClient
       .send(
         { cmd: 'logistics.district.update' },
@@ -2034,7 +2041,7 @@ export class LogisticsGatewayController {
           requester: { id: req.user.sub, roles: req.user.roles ?? [] },
         },
       )
-      .pipe(timeout(dto?.rehome_open_orders === true ? 30000 : 8000));
+      .pipe(timeout(30000));
   }
 
   // Tuman boshqa viloyatga o'tkazilgach HQ'ning eski viloyat YANGI

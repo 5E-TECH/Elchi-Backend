@@ -18,6 +18,7 @@ import { DistrictResolverService } from './district-resolver/district-resolver.s
 import { LogisticsNotificationService } from './notification/logistics-notification.service';
 import { DeliveryTariff } from './entities/delivery-tariff.entity';
 import { DeliveryPricingSettings } from './entities/delivery-pricing-settings.entity';
+import { DistrictCoverageExemption } from './entities/district-coverage-exemption.entity';
 import { DeliveryPricingController } from './delivery-pricing/delivery-pricing.controller';
 import { DeliveryPricingService } from './delivery-pricing/delivery-pricing.service';
 
@@ -55,6 +56,8 @@ import { DeliveryPricingService } from './delivery-pricing/delivery-pricing.serv
       District,
       DeliveryTariff,
       DeliveryPricingSettings,
+      // Tuman qamrovi imtiyozlari (migratsiya 1716000000203).
+      DistrictCoverageExemption,
     ]),
     ActivityLogModule.forService('logistics-service'),
   ],

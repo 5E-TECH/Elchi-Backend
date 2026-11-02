@@ -35,6 +35,7 @@ import {
 } from './entities/order.entity';
 import { AiPreviewService } from './ai/ai-preview.service';
 import { PostMembershipService } from './post-membership/post-membership.service';
+import { OpenCustodyByDistrictService } from './custody/open-custody-by-district.service';
 import type { AiResolvePreviewRequest } from './ai/ai-preview.types';
 import {
   isAiStableRequestId,
@@ -145,6 +146,10 @@ export class OrderServiceController {
     // pozitsion argumentlar bilan quradi.
     @Optional()
     private readonly postMembership?: PostMembershipService,
+    // Tuman ko'chganda eski filial custody'sidagi ochiq buyurtmalar.
+    // Ixtiyoriy: eski spec'lar controllerni pozitsion argumentlar bilan quradi.
+    @Optional()
+    private readonly openCustodyByDistrict?: OpenCustodyByDistrictService,
   ) {}
 
   private executeAndAck<T>(
@@ -471,6 +476,28 @@ export class OrderServiceController {
         });
       }
       return this.postMembership.findByPostIds(data);
+    });
+  }
+
+  /**
+   * Tuman ko'chirilganda (logistika): berilgan tumanlardagi ochiq custody
+   * buyurtmalari — eski filialda/kuryerida turganlari eski filialda tugaydi.
+   * Keyset sahifalash (`after_id`, `limit` ≤ 1000). Faqat o'qish.
+   */
+  @MessagePattern({ cmd: 'order.open_custody_by_district' })
+  findOpenCustodyByDistrict(
+    @Payload()
+    data: { district_ids?: unknown; after_id?: unknown; limit?: unknown },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () => {
+      if (!this.openCustodyByDistrict) {
+        throw new RpcException({
+          statusCode: 503,
+          message: 'Ochiq custody servisi ulanmagan',
+        });
+      }
+      return this.openCustodyByDistrict.findOpenCustodyByDistrict(data);
     });
   }
 
