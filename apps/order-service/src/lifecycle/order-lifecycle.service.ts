@@ -10952,6 +10952,49 @@ export class OrderLifecycleService {
     );
   }
 
+  /**
+   * Pochtani boshqa filialga o'tkazish (branch-service `reassignPostToBranch`)
+   * har bir buyurtmani alohida yozadi — shu orada filial pochtani qabul qilishi
+   * mumkin. Buyurtma hali yo'lda, kuryersiz, «kelmadi» belgisisiz va eski yoki
+   * yangi filialda bo'lsagina o'zgaradi; aks holda 409 — qabul qilingan
+   * buyurtma boshqa filialga (va keyin sotuv puli o'sha kassaga) yozilmaydi,
+   * chaqiruvchi o'tkazishni qaytaradi.
+   */
+  private assertPostBranchReassignable(
+    order: Order,
+    reassign?: {
+      from_branch_id?: string | null;
+      to_branch_id?: string | null;
+    } | null,
+  ): void {
+    if (!reassign) return;
+    const hasCourier = (value: unknown) => {
+      const text =
+        typeof value === 'string' || typeof value === 'number'
+          ? String(value).trim()
+          : '';
+      return text !== '' && !/^0+$/.test(text);
+    };
+    const holder = String(order.holder_branch_id ?? order.branch_id ?? '');
+    const allowed = [reassign.from_branch_id, reassign.to_branch_id].map(
+      (branchId) => String(branchId ?? ''),
+    );
+    if (
+      order.status !== Order_status.ON_THE_ROAD ||
+      hasCourier(order.courier_id) ||
+      hasCourier(order.holder_courier_id) ||
+      order.return_requested === true ||
+      !holder ||
+      !allowed.includes(holder)
+    ) {
+      throw new RpcException({
+        statusCode: 409,
+        message: `Buyurtma #${order.id} holati o'zgardi (filial qabul qilgan bo'lishi mumkin) — pochta boshqa filialga o'tkazilmadi`,
+        reason: 'post_branch_reassign_conflict',
+      });
+    }
+  }
+
   async updateFull(
     id: string,
     dto: {
@@ -11055,6 +11098,7 @@ export class OrderLifecycleService {
     },
   ) {
     const order = await this.findById(id);
+    this.assertPostBranchReassignable(order, requester?.post_branch_reassign);
     if (!externalManager) {
       this.assertCommercialFieldsEditable(order, dto);
       await this.assertDeliveryDetailsEditable(order, dto);

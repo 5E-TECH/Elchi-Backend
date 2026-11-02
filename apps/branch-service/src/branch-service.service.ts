@@ -4486,8 +4486,14 @@ export class BranchServiceService implements OnModuleInit {
       .filter((order) => holderBranchOf(order) === sourceBranchId)
       .map((order) => this.canonicalId(order?.id));
     const movedIds: string[] = [];
+    // Javobi kelmagan (timeout) `order.update` — order-service uni bajargan
+    // bo'lishi mumkin, shuning uchun u ham qaytariladi.
+    let inFlightId: string | null = null;
+    let postStepStarted = false;
+    const expectedOrderQuantity = Number(post.order_quantity);
     try {
       for (const orderId of toMoveIds) {
+        inFlightId = orderId;
         await this.sendOrderCommand('order.update', {
           id: orderId,
           dto: { branch_id: destinationBranchId },
@@ -4499,56 +4505,85 @@ export class BranchServiceService implements OnModuleInit {
           ),
         });
         movedIds.push(orderId);
+        inFlightId = null;
       }
+      postStepStarted = true;
       await this.sendLogisticsCommand('logistics.post.reassign_branch', {
         post_id: postId,
         from_branch_id: sourceBranchId,
         to_branch_id: destinationBranchId,
+        ...(Number.isInteger(expectedOrderQuantity)
+          ? { expected_order_quantity: expectedOrderQuantity }
+          : {}),
       });
     } catch (error) {
-      // Ko'chgan buyurtmalar eski filialga qaytariladi: pochta ham, ular ham
-      // 1-filialda qoladi (yarim holat — ikki filial ham pochtani ocholmaydi).
-      const notReverted: string[] = [];
-      for (const orderId of [...movedIds].reverse()) {
-        try {
-          await this.sendOrderCommand('order.update', {
-            id: orderId,
-            dto: { branch_id: sourceBranchId },
-            requester: orderRequester(
-              destinationBranchId,
-              sourceBranchId,
-              destinationBranchName,
-              sourceBranchName,
-            ),
-          });
-        } catch {
-          notReverted.push(orderId);
-        }
-      }
       const cause = error instanceof RpcException ? error.getError() : null;
       const causeStatus = Number(
         (cause as { statusCode?: unknown } | null)?.statusCode,
       );
-      this.logger.error(
-        `branch.post.reassign_branch post=${postId} ${sourceBranchId}→${destinationBranchId}: ${(error as Error)?.message ?? String(error)}; moved=${movedIds.length} not_reverted=${notReverted.join(',') || '-'}`,
-      );
-      throw new RpcException(
-        errorRes(
-          (causeStatus === 409
-            ? `Pochta #${postId} shu paytda o'zgardi (filial qabul qilgan bo'lishi mumkin) — sahifani yangilang.`
-            : `Pochta #${postId} ni o'tkazib bo'lmadi — qayta urinib ko'ring.`) +
-            (notReverted.length
-              ? ` ${notReverted.length} ta buyurtma eski filialga qaytmadi (${this.formatOrderIdsForMessage(notReverted)}) — qayta urinish o'tkazishni tugatadi`
-              : " Hech narsa o'tkazilmadi"),
-          causeStatus === 409 ? 409 : 503,
-          {
-            post_id: postId,
-            source_branch_id: sourceBranchId,
-            destination_branch_id: destinationBranchId,
-            not_reverted_order_ids: notReverted,
-            reasons: { reassign_failed: true },
-          },
-        ),
+      // Pochta qadami javob bermadi, lekin logistics uni bajargan bo'lsa
+      // (pochta yangi filialda) — o'tkazish tugagan, buyurtmalar qaytarilmaydi.
+      const completed =
+        postStepStarted &&
+        causeStatus !== 409 &&
+        (await this.isSentPostAtBranch(postId, destinationBranchId));
+      if (!completed) {
+        // Ko'chgan buyurtmalar eski filialga qaytariladi: pochta ham, ular ham
+        // 1-filialda qoladi. 409 bilan rad etilgan buyurtma (shu orada qabul
+        // qilingan) o'zgarmagan — qaytarilmaydi.
+        const revertIds = [
+          ...movedIds,
+          ...(inFlightId && causeStatus !== 409 ? [inFlightId] : []),
+        ].reverse();
+        const notReverted: string[] = [];
+        for (const orderId of revertIds) {
+          try {
+            await this.sendOrderCommand('order.update', {
+              id: orderId,
+              dto: { branch_id: sourceBranchId },
+              requester: orderRequester(
+                destinationBranchId,
+                sourceBranchId,
+                destinationBranchName,
+                sourceBranchName,
+              ),
+            });
+          } catch (revertError) {
+            // 409 — buyurtma endi yo'lda emas (filial qabul qilgan): qaytarish
+            // kerak emas. Qolgani — qayta urinish o'tkazishni tugatadi.
+            const revertStatus = Number(
+              (revertError instanceof RpcException
+                ? (revertError.getError() as { statusCode?: unknown })
+                : null
+              )?.statusCode,
+            );
+            if (revertStatus !== 409) notReverted.push(orderId);
+          }
+        }
+        this.logger.error(
+          `branch.post.reassign_branch post=${postId} ${sourceBranchId}→${destinationBranchId}: ${(error as Error)?.message ?? String(error)}; moved=${movedIds.length} not_reverted=${notReverted.join(',') || '-'}`,
+        );
+        throw new RpcException(
+          errorRes(
+            (causeStatus === 409
+              ? `Pochta #${postId} shu paytda o'zgardi (filial qabul qilgan yoki yangi buyurtma qo'shilgan bo'lishi mumkin) — sahifani yangilang.`
+              : `Pochta #${postId} ni o'tkazib bo'lmadi — qayta urinib ko'ring.`) +
+              (notReverted.length
+                ? ` ${notReverted.length} ta buyurtma eski filialga qaytmadi (${this.formatOrderIdsForMessage(notReverted)}) — qayta urinish o'tkazishni tugatadi`
+                : " Hech narsa o'tkazilmadi"),
+            causeStatus === 409 ? 409 : 503,
+            {
+              post_id: postId,
+              source_branch_id: sourceBranchId,
+              destination_branch_id: destinationBranchId,
+              not_reverted_order_ids: notReverted,
+              reasons: { reassign_failed: true },
+            },
+          ),
+        );
+      }
+      this.logger.warn(
+        `branch.post.reassign_branch post=${postId}: pochta qadami javob bermadi, lekin pochta ${destinationBranchId}-filialda — o'tkazish tugagan`,
       );
     }
 
@@ -4579,6 +4614,28 @@ export class BranchServiceService implements OnModuleInit {
       200,
       `Pochta ${destinationBranchName} filialiga o'tkazildi`,
     );
+  }
+
+  /** Pochta hali 'sent' va berilgan filialda (o'tkazishning pochta qadami bajarilganmi). */
+  private async isSentPostAtBranch(
+    postId: string,
+    branchId: string,
+  ): Promise<boolean> {
+    try {
+      const response = await this.sendLogisticsCommand<{
+        data?: Array<Record<string, unknown>>;
+      }>('logistics.post.find_by_ids', { ids: [postId] });
+      const post = (Array.isArray(response?.data) ? response.data : []).find(
+        (row) => this.canonicalId(row?.id) === postId,
+      );
+      return (
+        Boolean(post) &&
+        this.idText(post?.status).toLowerCase() === Post_status.SENT &&
+        this.canonicalId(post?.branch_id) === branchId
+      );
+    } catch {
+      return false;
+    }
   }
 
   /**

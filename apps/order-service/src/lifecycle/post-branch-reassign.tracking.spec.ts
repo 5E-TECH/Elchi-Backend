@@ -123,4 +123,28 @@ describe("post_branch_reassigned — pochta boshqa filialga o'tkazilganda tarix"
     );
     expect(service.custody.createTrackingEvent).not.toHaveBeenCalled();
   });
+
+  it.each([
+    ['filial qabul qilgan (kutilmoqda)', { status: Order_status.WAITING }],
+    ['«kelmadi» belgisi bor', { return_requested: true }],
+    ['kuryerda', { courier_id: '77', holder_courier_id: '77' }],
+    ['boshqa filialda', { branch_id: '40', holder_branch_id: '40' }],
+  ])('409 — buyurtma %s: hech narsa yozilmaydi', async (_label, extra) => {
+    const order = { ...onTheRoad(), ...extra };
+    const { service, manager } = makeService(order, '22');
+    let status: number | undefined;
+    try {
+      await service.updateFull(
+        '501',
+        { branch_id: '22' },
+        reassignRequester,
+        manager,
+      );
+    } catch (err: any) {
+      status = err?.getError?.()?.statusCode;
+    }
+    expect(status).toBe(409);
+    expect(order.branch_id).toBe(extra.branch_id ?? '20');
+    expect(service.custody.createTrackingEvent).not.toHaveBeenCalled();
+  });
 });

@@ -145,6 +145,7 @@ describe("reassignPostToBranch — pochtani boshqa filialga o'tkazish", () => {
       status: 'sent',
       branch_id: '20',
       region_id: '14',
+      order_quantity: 2,
     };
     postOrders = [onTheRoad('501'), onTheRoad('502')];
     districtsById = {
@@ -252,7 +253,12 @@ describe("reassignPostToBranch — pochtani boshqa filialga o'tkazish", () => {
       },
     });
     expect(callsOf(logisticsClient, 'logistics.post.reassign_branch')).toEqual([
-      { post_id: '900', from_branch_id: '20', to_branch_id: '22' },
+      {
+        post_id: '900',
+        from_branch_id: '20',
+        to_branch_id: '22',
+        expected_order_quantity: 2,
+      },
     ]);
     const seq = sequence().filter(
       (cmd) =>
@@ -390,7 +396,7 @@ describe("reassignPostToBranch — pochtani boshqa filialga o'tkazish", () => {
     ).toHaveLength(1);
   });
 
-  it('yarmida yiqilsa — ko`chganlar 1-filialga qaytadi, pochta tegilmaydi, 503', async () => {
+  it('yarmida yiqilsa — ko`chganlar (javobsiz qolgani ham) 1-filialga qaytadi, pochta tegilmaydi, 503', async () => {
     orderUpdate = (payload) =>
       payload.id === '502' && payload.dto?.branch_id === '22'
         ? throwError(() => ({ statusCode: 500, message: 'db down' }))
@@ -404,9 +410,10 @@ describe("reassignPostToBranch — pochtani boshqa filialga o'tkazish", () => {
     expect(updates.map((u) => [u.id, u.dto?.branch_id])).toEqual([
       ['501', '22'],
       ['502', '22'],
+      ['502', '20'],
       ['501', '20'],
     ]);
-    expect(updates[2].requester).toMatchObject({
+    expect(updates[3].requester).toMatchObject({
       post_branch_reassign: { from_branch_id: '22', to_branch_id: '20' },
     });
     expect(
@@ -415,6 +422,62 @@ describe("reassignPostToBranch — pochtani boshqa filialga o'tkazish", () => {
     expect(activityLog.log).not.toHaveBeenCalledWith(
       expect.objectContaining({ action: 'branch.post_reassign' }),
     );
+  });
+
+  it('buyurtma shu paytda qabul qilingan (order-service 409) — u tegilmaydi, ko`chganlar qaytadi, 409', async () => {
+    orderUpdate = (payload) =>
+      payload.id === '502' && payload.dto?.branch_id === '22'
+        ? throwError(() => ({
+            statusCode: 409,
+            message: "Buyurtma #502 holati o'zgardi",
+          }))
+        : of({ data: {} });
+    const err = await rpcErrorOf(
+      service.reassignPostToBranch('900', '22', ADMIN),
+    );
+    expect(err.statusCode).toBe(409);
+    expect(err.message).toContain("shu paytda o'zgardi");
+    expect(
+      callsOf(orderClient, 'order.update').map((u) => [u.id, u.dto?.branch_id]),
+    ).toEqual([
+      ['501', '22'],
+      ['502', '22'],
+      ['501', '20'],
+    ]);
+    expect(
+      callsOf(logisticsClient, 'logistics.post.reassign_branch'),
+    ).toHaveLength(0);
+  });
+
+  it('pochta qadami javob bermadi, lekin pochta 2-filialda — muvaffaqiyat, buyurtmalar qaytarilmaydi', async () => {
+    reassignReply = () => {
+      postRow = { ...postRow, branch_id: '22' };
+      return throwError(() => ({ statusCode: 500, message: 'timeout' }));
+    };
+    const res = (await service.reassignPostToBranch('900', '22', ADMIN)) as {
+      data: Record<string, unknown>;
+    };
+    expect(res.data).toMatchObject({ moved_orders_count: 2 });
+    expect(
+      callsOf(orderClient, 'order.update').map((u) => u.dto?.branch_id),
+    ).toEqual(['22', '22']);
+    expect(activityLog.log).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'branch.post_reassign' }),
+    );
+  });
+
+  it('qaytarishda 409 (shu orada qabul qilingan) — «qaytmadi» ro`yxatiga kirmaydi', async () => {
+    orderUpdate = (payload) =>
+      payload.id === '501' && payload.dto?.branch_id === '20'
+        ? throwError(() => ({ statusCode: 409, message: 'qabul qilingan' }))
+        : of({ data: {} });
+    reassignReply = () =>
+      throwError(() => ({ statusCode: 500, message: 'logistics down' }));
+    const err = await rpcErrorOf(
+      service.reassignPostToBranch('900', '22', ADMIN),
+    );
+    expect(err.statusCode).toBe(503);
+    expect(err.data?.not_reverted_order_ids).toEqual([]);
   });
 
   it('pochta shu paytda qabul qilingan (logistics 409) — buyurtmalar qaytadi, 409', async () => {

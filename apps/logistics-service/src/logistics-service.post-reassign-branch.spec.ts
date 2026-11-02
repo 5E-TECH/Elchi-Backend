@@ -71,6 +71,27 @@ describe('reassignPostBranch', () => {
     );
   });
 
+  it('kutilgan buyurtmalar soni shartga qo`shiladi (HQ shu orada qo`shgan bo`lsa — yozilmaydi)', async () => {
+    const { service, postRepo } = setup(
+      { id: '900', status: 'sent', branch_id: '20', isDeleted: false },
+      0,
+    );
+    expect(
+      await statusOf(service.reassignPostBranch('900', '20', '22', 6)),
+    ).toBe(409);
+    expect(postRepo.update).toHaveBeenCalledWith(
+      {
+        id: '900',
+        status: 'sent',
+        courier_id: '0',
+        branch_id: '20',
+        isDeleted: false,
+        order_quantity: 6,
+      },
+      { branch_id: '22' },
+    );
+  });
+
   it('pochta allaqachon yangi filialda (o`zi tiklangan / qayta urinish) — muvaffaqiyat', async () => {
     const { service } = setup(
       { id: '900', status: 'sent', branch_id: '22', isDeleted: false },

@@ -277,7 +277,12 @@ export class LogisticsServiceController {
   @MessagePattern({ cmd: 'logistics.post.reassign_branch' })
   reassignPostBranch(
     @Payload()
-    data: { post_id: string; from_branch_id: string; to_branch_id: string },
+    data: {
+      post_id: string;
+      from_branch_id: string;
+      to_branch_id: string;
+      expected_order_quantity?: number | null;
+    },
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
@@ -285,6 +290,7 @@ export class LogisticsServiceController {
         data.post_id,
         data.from_branch_id,
         data.to_branch_id,
+        data.expected_order_quantity,
       ),
     );
   }

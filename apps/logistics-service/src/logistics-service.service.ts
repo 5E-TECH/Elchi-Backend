@@ -3465,6 +3465,7 @@ export class LogisticsServiceService implements OnModuleInit {
     postId: string,
     fromBranchId: string,
     toBranchId: string,
+    expectedOrderQuantity?: number | null,
   ) {
     const id = String(postId ?? '').trim();
     const from = String(fromBranchId ?? '').trim();
@@ -3472,6 +3473,11 @@ export class LogisticsServiceService implements OnModuleInit {
     if (![id, from, to].every((value) => /^\d+$/.test(value))) {
       this.badRequest('post_id, from_branch_id va to_branch_id majburiy');
     }
+    // Buyurtmalar ko'chayotgan soniyalarda HQ shu pochtaga (eski filialga)
+    // yangi buyurtma qo'shsa (`receiveOrdersIntoPosts` SENT pochtani qayta
+    // ishlatadi) — soni o'zgaradi, pochta o'tkazilmaydi (409, chaqiruvchi
+    // buyurtmalarni qaytaradi): yangi buyurtma eski filialda qoladi.
+    const quantity = Number(expectedOrderQuantity);
     const result = await this.postRepo.update(
       {
         id,
@@ -3479,6 +3485,9 @@ export class LogisticsServiceService implements OnModuleInit {
         courier_id: '0',
         branch_id: from,
         isDeleted: false,
+        ...(expectedOrderQuantity != null && Number.isInteger(quantity)
+          ? { order_quantity: quantity }
+          : {}),
       },
       { branch_id: to },
     );
@@ -3491,7 +3500,7 @@ export class LogisticsServiceService implements OnModuleInit {
       !(post.status === Post_status.SENT && String(post.branch_id) === to)
     ) {
       this.conflict(
-        "Pochta o'zgargan (filial qabul qilgan yoki boshqa filialga o'tgan) — sahifani yangilang",
+        "Pochta o'zgargan (filial qabul qilgan, yangi buyurtma qo'shilgan yoki boshqa filialga o'tgan) — sahifani yangilang",
       );
     }
     void this.syncPostToSearch(post);
