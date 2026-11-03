@@ -1325,7 +1325,7 @@ export class LogisticsGatewayController {
   @ApiOperation({
     summary: 'Receive post (branch/courier)',
     description:
-      "anKpzwxk: HQ → filial o'tkazma pochtasini (`courier_id: '0'`) FAQAT manzil filial MENEJERI qabul qiladi; registrator, BRANCH akkaunti, kuryer, boshqa filial yoki HQ menejeri — 403 `data.reason = post_receive_manager_only` (`details.{post_id, branch_id}`). SUPERADMIN/ADMIN qabul qila oladi (activity log `logistics.post_receive_override`). Kuryer pochtalari (haqiqiy `courier_id`) o'zgarmagan.",
+      "anKpzwxk: HQ → filial o'tkazma pochtasini (`courier_id: '0'`) FAQAT manzil filial MENEJERI qabul qiladi; manzil filialning registratori, BRANCH akkaunti yoki kuryeri — 403 `data.reason = post_receive_manager_only` (`details.post_id`). Boshqa filial (HQ menejeri ham) — kodsiz va ma'lumotsiz umumiy 403 «Siz bu branch pochtasini qabul qila olmaysiz» (manzil filial oshkor qilinmaydi). SUPERADMIN/ADMIN qabul qila oladi (activity log `logistics.post_receive_override`). Kuryer pochtalari (haqiqiy `courier_id`) o'zgarmagan.",
   })
   @ApiParam({ name: 'id', description: 'Post ID (id)' })
   @ApiBody({ type: ReceivePostRequestDto })

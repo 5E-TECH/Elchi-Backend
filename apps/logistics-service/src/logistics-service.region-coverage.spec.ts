@@ -652,10 +652,8 @@ describe('anKpzwxk 4-band — HQ → filial pochtasini faqat manzil menejeri qab
     ['filial registratori', USERS.registrator10],
     ['filial akkaunti (BRANCH)', USERS.branchAccount10],
     ['filial kuryeri', USERS.courier44],
-    ['boshqa filial (Urgut) menejeri', USERS.manager11],
-    ['HQ menejeri', USERS.hqManager],
   ])(
-    '⭐ %s — 403 post_receive_manager_only, hech narsa yozilmaydi',
+    '⭐ %s (manzil filial xodimi) — 403 post_receive_manager_only, details faqat post_id, hech narsa yozilmaydi',
     async (_label, requester) => {
       const ctx = transferSetup();
 
@@ -667,8 +665,30 @@ describe('anKpzwxk 4-band — HQ → filial pochtasini faqat manzil menejeri qab
       expect(error.message).toBe(POST_RECEIVE_MANAGER_ONLY_MESSAGE);
       expect(gatewayData(error)).toEqual({
         reason: 'post_receive_manager_only',
-        details: { post_id: '40', branch_id: '10' },
+        details: { post_id: '40' },
       });
+      ctx.expectNothingWritten();
+    },
+  );
+
+  it.each([
+    ['boshqa filial (Urgut) menejeri', USERS.manager11],
+    ['HQ menejeri', USERS.hqManager],
+  ])(
+    '⭐ %s (begona filial) — ma‘lumotsiz umumiy 403: kod ham, manzil filial ham oshkor qilinmaydi',
+    async (_label, requester) => {
+      const ctx = transferSetup();
+
+      const error = await rpcError(
+        ctx.service.receivePost(requester, '40', { order_ids: ['101'] }),
+      );
+
+      expect(error.statusCode).toBe(403);
+      expect(error.message).toBe(
+        'Siz bu branch pochtasini qabul qila olmaysiz',
+      );
+      expect(JSON.stringify(gatewayData(error) ?? null)).not.toContain('10');
+      expect(gatewayData(error)?.reason).toBeUndefined();
       ctx.expectNothingWritten();
     },
   );

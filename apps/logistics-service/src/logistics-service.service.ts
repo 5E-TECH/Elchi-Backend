@@ -4772,23 +4772,6 @@ export class LogisticsServiceService implements OnModuleInit {
       !String(post.courier_id ?? '').trim() ||
       String(post.courier_id ?? '').trim() === '0';
     const isPrivileged = this.isSystemPrivileged(requester);
-    // anKpzwxk (ega qarori, 4-band): HQ → filial o'tkazma pochtasini
-    // (courier_id '0') FAQAT manzil filial MENEJERI qabul qiladi; SA/ADMIN —
-    // favqulodda (jurnalga `override: true` bilan yoziladi). Filial
-    // registratori, filial akkaunti (BRANCH) va kuryer — 403. Kuryer
-    // pochtalari (courier_id — haqiqiy kuryer) — avvalgi qoidalar.
-    const transferReceiveDenied = rejectionData('post_receive_manager_only', {
-      post_id: String(post.id),
-      branch_id: String(post.branch_id ?? '').trim() || null,
-    });
-    if (
-      isBranchTransferPost &&
-      !isPrivileged &&
-      !requesterRoles.includes(Roles.MANAGER)
-    ) {
-      this.forbidden(POST_RECEIVE_MANAGER_ONLY_MESSAGE, transferReceiveDenied);
-    }
-
     const waitingOrderIds = [
       ...new Set((dto.order_ids ?? []).map((orderId) => String(orderId))),
     ];
@@ -4813,14 +4796,29 @@ export class LogisticsServiceService implements OnModuleInit {
       !belongsToScopedBranch &&
       !isOwnCourierPost
     ) {
-      // O'tkazma pochtasi — boshqa filial menejeri ham manzil menejeri emas.
-      if (isBranchTransferPost) {
-        this.forbidden(
-          POST_RECEIVE_MANAGER_ONLY_MESSAGE,
-          transferReceiveDenied,
-        );
-      }
+      // Begona filial (o'tkazma pochtasi ham) — ma'lumotsiz umumiy 403:
+      // pochta qaysi filialga ketayotgani oshkor qilinmaydi.
       this.forbidden('Siz bu branch pochtasini qabul qila olmaysiz');
+    }
+
+    // anKpzwxk (ega qarori, 4-band): HQ → filial o'tkazma pochtasini
+    // (courier_id '0') FAQAT manzil filial MENEJERI qabul qiladi; SA/ADMIN —
+    // favqulodda (jurnalga `override: true` bilan yoziladi). O'z filiali
+    // registratori, filial akkaunti (BRANCH) va kuryeri — 403 kod bilan
+    // (yuqoridagi doiradan KEYIN: begona filial kodni ham, manzilni ham
+    // olmaydi; `details` da faqat `post_id`). Kuryer pochtalari
+    // (courier_id — haqiqiy kuryer) — avvalgi qoidalar.
+    if (
+      isBranchTransferPost &&
+      !isPrivileged &&
+      !requesterRoles.includes(Roles.MANAGER)
+    ) {
+      this.forbidden(
+        POST_RECEIVE_MANAGER_ONLY_MESSAGE,
+        rejectionData('post_receive_manager_only', {
+          post_id: String(post.id),
+        }),
+      );
     }
 
     if (

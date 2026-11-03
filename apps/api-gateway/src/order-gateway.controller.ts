@@ -6874,7 +6874,8 @@ export class OrderGatewayController {
       "`order_not_in_your_branch`, buyurtma ma'lumotisiz. «O'z filialida»: `holder_branch_id ?? branch_id` — " +
       "so'rovchi filiali (HQ->filial pochtasi jo'natilgach manzil filiali), yoki SENT paket manzili — so'rovchi " +
       'filiali, yoki (kuryer) buyurtma shu kuryerda. SA/admin, HQ xodimi va HQ kuryeri — cheklanmaydi; market — ' +
-      "faqat o'z posilkasi (o'zgarmagan). Filialni aniqlab bo'lmasa — 503 `branch_scope_unavailable`.",
+      "faqat o'z posilkasi (o'zgarmagan). So'rovchi hech qaysi filialga biriktirilmagan — 403 `branch_not_assigned` " +
+      "(ma'lumotsiz; kuryerga o'zidagi buyurtma baribir ko'rinadi). Filialni aniqlab bo'lmasa — 503 `branch_scope_unavailable`.",
   })
   @ApiParam({ name: 'token', description: 'Order QR token' })
   @ApiQuery({
