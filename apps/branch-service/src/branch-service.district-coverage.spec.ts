@@ -4,17 +4,21 @@ import { NEVER, Observable, of, throwError, TimeoutError } from 'rxjs';
 import { BranchServiceService } from './branch-service.service';
 
 /**
- * Tuman ↔ filial qamrovi (ega qarori, 2026-11-02) — branch-service:
+ * Buyurtma ↔ filial qamrovi — branch-service. Viloyat qoidasi (ega qarori,
+ * Trello anKpzwxk, 2026-11-03; #617 dagi tuman → filial qoidasi o'rniga):
  *   - HQ → filial pochta jo'natishda (dispatchPostToBranch) HAR BIR buyurtma
- *     tumani manzil filial qamrovida bo'lishi shart (`isOrderServedByBranch`):
- *     tumanda `serving_branch_id` bo'lsa — faqat o'sha filial; bo'lmasa —
- *     tumanning xizmat viloyati (assigned_region ?? region_id) filial
- *     viloyatiga teng. Mos kelmasa — 409, hech narsa yozilmaydi; logistika
- *     javob bermasa — 503 (fail-closed).
+ *     manzil filial qamrovida bo'lishi shart (`isOrderServedByBranch`):
+ *     buyurtmaning xizmat viloyati (tuman assigned_region ?? region_id;
+ *     tumansiz — buyurtma viloyati) filial viloyatiga teng. Viloyatdagi
+ *     istalgan faol filial — to'g'ri manzil; `serving_branch_id` HISOBGA
+ *     OLINMAYDI. Mos kelmasa — 409 «Boshqa viloyat buyurtmasi», hech narsa
+ *     yozilmaydi; logistika javob bermasa — 503 (fail-closed).
+ *   - LC-09: pochta yoki manzil filial viloyati bo'sh — 400
+ *     `branch_region_missing` (endi o'tkazib yuborilmaydi).
  *   - Filial o'chirilgach / nofaol qilingach / viloyati yoki turi
  *     (REGIONAL/HYBRID'dan boshqasiga) o'zgargach
  *     `logistics.district.clear_serving_branch` (best-effort, filial amalini
- *     to'smaydi).
+ *     to'smaydi; endi faqat ustunni toza saqlaydi).
  */
 type RepoMock = {
   findOne: jest.Mock;
@@ -118,7 +122,7 @@ describe('Tuman ↔ filial qamrovi — branch-service', () => {
     new Promise<void>((resolve) => setImmediate(resolve));
 
   // ------------------------------------------------------------ dispatch
-  describe('dispatchPostToBranch — buyurtma tumani manzil filial qamrovida', () => {
+  describe('dispatchPostToBranch — buyurtma manzil filial qamrovida (viloyat qoidasi)', () => {
     let branchesById: Record<string, Record<string, unknown>>;
     let postRow: Record<string, unknown>;
     let postOrders: Array<Record<string, unknown>>;
@@ -166,8 +170,26 @@ describe('Tuman ↔ filial qamrovi — branch-service', () => {
           region_id: null,
           isDeleted: false,
         },
+        // Shu viloyatdagi (#14) ikkinchi filial.
+        '22': {
+          id: '22',
+          name: 'Urgut',
+          type: 'HYBRID',
+          status: 'active',
+          region_id: '14',
+          isDeleted: false,
+        },
+        // Boshqa viloyat (#6) filiali.
+        '30': {
+          id: '30',
+          name: 'Buxoro',
+          type: 'REGIONAL',
+          status: 'active',
+          region_id: '6',
+          isDeleted: false,
+        },
       };
-      postRow = { id: '900', courier_id: '0', status: 'new', region_id: null };
+      postRow = { id: '900', courier_id: '0', status: 'new', region_id: '14' };
       postOrders = [hqOrder('1001')];
       districtsById = { '1401': district('1401') };
       districtReply = null;
@@ -261,14 +283,23 @@ describe('Tuman ↔ filial qamrovi — branch-service', () => {
       expect(activityLog.log).not.toHaveBeenCalled();
     };
 
-    it("tuman BOSHQA filialga biriktirilgan (viloyati mos bo'lsa ham) — 409, id xabarda, hech narsa yozilmaydi", async () => {
+    it("⭐ tuman BOSHQA filialga biriktirilgan (serving_branch_id), viloyati mos — jo'natiladi (avval 409 edi)", async () => {
       districtsById['1401'] = district('1401', { serving_branch_id: '30' });
+
+      const res = await dispatch(['1001']);
+
+      expect(res.statusCode).toBe(200);
+      expect(updatedIds()).toEqual(['1001']);
+    });
+
+    it('buyurtma tumanining xizmat viloyati boshqa — 409 «Boshqa viloyat buyurtmasi», id xabarda, hech narsa yozilmaydi', async () => {
+      districtsById['1401'] = district('1401', { assigned_region: '6' });
 
       const err = await rpcErrorOf(dispatch(['1001']));
 
       expect(err.statusCode).toBe(409);
       expect(err.message).toContain(
-        'Quyidagi buyurtmalar tumani tanlangan filialga biriktirilmagan: #1001',
+        "Boshqa viloyat buyurtmasi — bu filialga jo'natilmaydi: #1001",
       );
       expect(err.message).toContain("Hech narsa jo'natilmadi");
       // Admin rehome'ni qaysi tuman uchun chaqirishini bilsin.
@@ -289,8 +320,8 @@ describe('Tuman ↔ filial qamrovi — branch-service', () => {
       expectNothingWritten();
     });
 
-    it("aralash tanlov: bittasi qamrovda, bittasi boshqa filialniki — BUTUN so'rov 409, faqat mos kelmagan id", async () => {
-      districtsById['1402'] = district('1402', { serving_branch_id: '30' });
+    it("aralash tanlov: bittasi qamrovda, bittasi boshqa viloyatniki — BUTUN so'rov 409, faqat mos kelmagan id", async () => {
+      districtsById['1402'] = district('1402', { assigned_region: '6' });
       postOrders = [hqOrder('1001'), hqOrder('1002', { district_id: '1402' })];
 
       const err = await rpcErrorOf(dispatch(['1001', '1002']));
@@ -302,27 +333,33 @@ describe('Tuman ↔ filial qamrovi — branch-service', () => {
       expectNothingWritten();
     });
 
-    it("tuman AYNAN manzil filialga biriktirilgan — viloyati boshqa bo'lsa ham jo'natiladi", async () => {
+    it("⭐ tuman AYNAN manzil filialga biriktirilgan, lekin viloyati boshqa — 409 (avval jo'natilardi)", async () => {
       districtsById['1401'] = district('1401', {
         region_id: '9',
         serving_branch_id: '20',
       });
 
+      const err = await rpcErrorOf(dispatch(['1001']));
+
+      expect(err.statusCode).toBe(409);
+      expect(err.data?.reason).toBe('district_not_served_by_branch');
+      expectNothingWritten();
+    });
+
+    it('qamrov tekshiruvi har qanday yozuvdan OLDIN', async () => {
       const res = await dispatch(['1001']);
 
       expect(res.statusCode).toBe(200);
       expect(res.data).toEqual(
         expect.objectContaining({ moved_order_ids: ['1001'] }),
       );
-      expect(updatedIds()).toEqual(['1001']);
-      // Qamrov tekshiruvi har qanday yozuvdan OLDIN.
       const cmds = cmdsOf(logisticsClient);
       expect(cmds.indexOf('logistics.district.find_by_ids')).toBeLessThan(
         cmds.indexOf('logistics.post.receive_orders'),
       );
     });
 
-    it("tumanga filial biriktirilmagan — xizmat viloyati (assigned_region) bo'yicha jo'natiladi", async () => {
+    it("tumanning xizmat viloyati (assigned_region) bo'yicha jo'natiladi — geografik viloyat boshqa bo'lsa ham", async () => {
       districtsById['1401'] = district('1401', {
         region_id: '9',
         assigned_region: '14',
@@ -334,7 +371,7 @@ describe('Tuman ↔ filial qamrovi — branch-service', () => {
       expect(updatedIds()).toEqual(['1001']);
     });
 
-    it("tumanga filial biriktirilmagan, xizmat viloyati boshqa (tuman o'tkazilgan) — 409", async () => {
+    it("xizmat viloyati boshqa (tuman o'tkazilgan) — 409", async () => {
       districtsById['1401'] = district('1401', {
         region_id: '14',
         assigned_region: '9',
@@ -357,11 +394,71 @@ describe('Tuman ↔ filial qamrovi — branch-service', () => {
       expectNothingWritten();
     });
 
-    it("manzil filialda viloyat yo'q va tumanga filial biriktirilmagan — 409", async () => {
+    it("⭐ manzil filialda viloyat yo'q — 400 branch_region_missing (tuman unga biriktirilgan bo'lsa ham), buyurtmalar o'qilmaydi", async () => {
+      districtsById['1401'] = district('1401', { serving_branch_id: '21' });
+
       const err = await rpcErrorOf(dispatch(['1001'], '21'));
 
-      expect(err.statusCode).toBe(409);
-      expect(err.data?.destination_branch_id).toBe('21');
+      expect(err.statusCode).toBe(400);
+      expect(err.message).toContain(
+        'manzil filial («Eski») viloyati belgilanmagan',
+      );
+      expect(err.message).toContain("Hech narsa jo'natilmadi");
+      expect(err.data).toEqual({
+        reason: 'branch_region_missing',
+        details: {
+          missing: ['destination_branch_region'],
+          post_id: '900',
+          destination_branch_id: '21',
+          post_region_id: '14',
+          destination_region_id: null,
+        },
+        post_id: '900',
+        source_branch_id: '10',
+        destination_branch_id: '21',
+      });
+      expect(cmdsOf(logisticsClient)).not.toContain(
+        'logistics.post.orders_by_post',
+      );
+      expect(districtLookups()).toEqual([]);
+      expectNothingWritten();
+    });
+
+    it("⭐ pochtada viloyat yo'q — 400 branch_region_missing (LC-09 endi o'tkazib yuborilmaydi)", async () => {
+      postRow = { ...postRow, region_id: null };
+
+      const err = await rpcErrorOf(dispatch(['1001']));
+
+      expect(err.statusCode).toBe(400);
+      expect(err.message).toContain(
+        'pochta #900 viloyati (hududi) belgilanmagan',
+      );
+      expect(err.data?.reason).toBe('branch_region_missing');
+      expect(err.data?.details).toEqual(
+        expect.objectContaining({
+          missing: ['post_region'],
+          post_region_id: null,
+          destination_region_id: '14',
+        }),
+      );
+      expect(cmdsOf(logisticsClient)).not.toContain(
+        'logistics.post.orders_by_post',
+      );
+      expectNothingWritten();
+    });
+
+    it("pochtada ham, manzil filialda ham viloyat yo'q — 400, ikkalasi details.missing da", async () => {
+      postRow = { ...postRow, region_id: '0' };
+
+      const err = await rpcErrorOf(dispatch(['1001'], '21'));
+
+      expect(err.statusCode).toBe(400);
+      expect(err.data?.reason).toBe('branch_region_missing');
+      expect(err.data?.details).toEqual(
+        expect.objectContaining({
+          missing: ['destination_branch_region', 'post_region'],
+        }),
+      );
       expectNothingWritten();
     });
 
@@ -441,6 +538,71 @@ describe('Tuman ↔ filial qamrovi — branch-service', () => {
       expect(err.message).toContain('Pochta #900 boshqa hudud uchun');
       expect(districtLookups()).toEqual([]);
       expectNothingWritten();
+    });
+
+    // Kartadagi qabul mezoni 1: Urgut tumani (Samarqand viloyati, #14)
+    // buyurtmasi «Samarqand filiali» ga ham, «Urgut filiali» ga ham
+    // jo'natiladi, Buxoro filialiga — yo'q.
+    describe('AC1 — Urgut tumani buyurtmasi (Samarqand viloyati)', () => {
+      beforeEach(() => {
+        // Urgut tumani: Samarqand viloyati; Urgut filialiga «biriktirilgan»
+        // (serving_branch_id endi ahamiyatsiz).
+        districtsById['1405'] = district('1405', { serving_branch_id: '22' });
+        postOrders = [hqOrder('1001', { district_id: '1405' })];
+      });
+
+      it.each([
+        ['Samarqand filiali', '20'],
+        ['Urgut filiali', '22'],
+      ])("%s ga jo'natiladi", async (_label, destinationId) => {
+        const res = await dispatch(['1001'], destinationId);
+
+        expect(res.statusCode).toBe(200);
+        expect(updatedIds()).toEqual(['1001']);
+        const receive = (logisticsClient.send.mock.calls as unknown[][]).find(
+          ([pattern]) =>
+            (pattern as { cmd: string }).cmd ===
+            'logistics.post.receive_orders',
+        )?.[1] as { orders: Array<Record<string, unknown>> };
+        expect(receive.orders).toEqual([
+          expect.objectContaining({
+            order_id: '1001',
+            assigned_region: '14',
+            assigned_branch: destinationId,
+          }),
+        ]);
+      });
+
+      it('Buxoro filialiga — Samarqand pochtasi 400 `region_mismatch` (LC-09), hech narsa yozilmaydi', async () => {
+        const err = await rpcErrorOf(dispatch(['1001'], '30'));
+
+        expect(err.statusCode).toBe(400);
+        // Gateway faqat reason/usage/details ni o'tkazadi — mashina kodi bor.
+        expect(err.data?.reason).toBe('region_mismatch');
+        expect(err.data?.details).toEqual({
+          post_id: '900',
+          destination_branch_id: '30',
+          post_region_id: '14',
+          destination_region_id: '6',
+        });
+        expect(err.data?.reasons).toEqual({ region_mismatch: true });
+        expectNothingWritten();
+      });
+
+      it("Buxoro filialiga — pochta Buxoroniki bo'lsa ham buyurtma o'zi 409 «Boshqa viloyat buyurtmasi»", async () => {
+        postRow = { ...postRow, region_id: '6' };
+
+        const err = await rpcErrorOf(dispatch(['1001'], '30'));
+
+        expect(err.statusCode).toBe(409);
+        expect(err.message).toContain('Boshqa viloyat buyurtmasi');
+        expect(err.data?.reason).toBe('district_not_served_by_branch');
+        expect(err.data?.details).toEqual({
+          order_ids: ['1001'],
+          district_ids: ['1405'],
+        });
+        expectNothingWritten();
+      });
     });
   });
 
@@ -585,9 +747,9 @@ describe('Tuman ↔ filial qamrovi — branch-service', () => {
       ]);
     });
 
-    // Viloyati yoki turi o'zgargan filial eski tumanlariga xizmat qila olmaydi:
-    // `serving_branch_id` ustun bo'lgani uchun ular bo'shatilmasa, bu tumanlar
-    // buyurtmalari hech bir filialga jo'natilmay HQ'da qolardi.
+    // Viloyati yoki turi o'zgargan filialning tumanlari bo'shatiladi. Viloyat
+    // qoidasidan beri `serving_branch_id` qamrovga ta'sir qilmaydi — bu faqat
+    // ustunni toza saqlash (keyin olib tashlanadi).
     it.each([
       ['hudud boshqa viloyatga', { region_id: '9' }],
       ['hudud olib tashlandi', { region_id: null }],

@@ -30,6 +30,11 @@ export const SCAN_ASSIGN_MESSAGES = {
   WITH_OTHER_COURIER: 'Order allaqachon boshqa courierga biriktirilgan',
   WRONG_STATUS:
     "Buyurtma holati noto'g'ri: faqat qabul qilingan yoki kutilayotgan buyurtmani olish mumkin",
+  // anKpzwxk (ega qarori, 6-band) — HQ kuryeri faqat HQ viloyati buyurtmasini oladi.
+  HQ_REGION_MISSING:
+    "HQ filialiga viloyat biriktirilmagan — HQ kuryeriga buyurtma berib bo'lmaydi. Administrator HQ filiali viloyatini belgilashi kerak.",
+  OUT_OF_HQ_REGION:
+    'Boshqa viloyat buyurtmasi — HQ kuryeri faqat HQ viloyati buyurtmasini oladi',
 } as const;
 
 /** Yakunlangan holatlar — bunday buyurtmani hech bir kuryerga berib bo'lmaydi. */
@@ -53,12 +58,25 @@ export type HqCourierScanRejectionReason =
   | 'IN_BATCH'
   | 'IN_TRANSIT'
   | 'NOT_AT_HQ'
-  | 'WRONG_STATUS';
+  | 'WRONG_STATUS'
+  | 'HQ_REGION_MISSING'
+  | 'OUT_OF_HQ_REGION';
+
+/**
+ * Gateway'ga o'tadigan mashina kodi (`details.reason`). Faqat anKpzwxk
+ * rad javoblarida bor (viloyat qoidasi va chiquvchi partiya) — eski rad
+ * javoblari avvalgidek kodsiz.
+ */
+export type HqCourierScanRejectionCode =
+  | 'branch_region_missing'
+  | 'hq_courier_region_only'
+  | 'order_in_outgoing_batch';
 
 export interface HqCourierScanRejection {
-  statusCode: 400 | 403;
+  statusCode: 400 | 403 | 409;
   message: string;
   reason: HqCourierScanRejectionReason;
+  details?: { reason: HqCourierScanRejectionCode };
 }
 
 type IdLike = string | number | null | undefined;
@@ -76,6 +94,14 @@ export interface HqCourierScanInput {
   orderPost: { status?: string | null; courier_id?: IdLike } | null;
   hqBranchId: IdLike;
   requesterId: IdLike;
+  /** HQ filialining viloyati (`branches.region_id`); bo'sh — fail-closed. */
+  hqRegionId: IdLike;
+  /**
+   * Buyurtmaning XIZMAT viloyati (`effectiveOrderRegionId`: tuman qatori
+   * bor — `assigned_region ?? region_id`, yo'q — `order.region_id`).
+   * Chaqiruvchi hisoblaydi (bu fayl I/O qilmaydi).
+   */
+  orderRegionId: IdLike;
 }
 
 const normalizeId = (value: IdLike): string => String(value ?? '').trim();
@@ -86,10 +112,14 @@ const normalizeStatus = (value?: string | null): string =>
     .toLowerCase();
 
 const reject = (
-  statusCode: 400 | 403,
+  statusCode: 400 | 403 | 409,
   message: string,
   reason: HqCourierScanRejectionReason,
-): HqCourierScanRejection => ({ statusCode, message, reason });
+  code?: HqCourierScanRejectionCode,
+): HqCourierScanRejection =>
+  code
+    ? { statusCode, message, reason, details: { reason: code } }
+    : { statusCode, message, reason };
 
 /**
  * HQ kuryeri skanini baholaydi. `null` — ruxsat (odatdagi biriktirish yoki
@@ -99,13 +129,22 @@ const reject = (
  * 1. NEW → hali HQ qabul qilmagan.
  * 2. Yakunlangan holat (sotilgan, bekor, qaytarilgan...) → berib bo'lmaydi.
  * 3. Boshqa kuryerda (`courier_id` yoki `holder_courier_id`) → band.
- * 4. Paketda (`current_batch_id`) → yo'lda (ON_THE_ROAD) yoki paketga joylangan.
+ * 4. Paketda (`current_batch_id`) → yo'lda (ON_THE_ROAD, 400) yoki paketga
+ *    joylangan — 409 `order_in_outgoing_batch` (anKpzwxk, 2b-band: HQ
+ *    menejerining assign-to-courier yo'li va filial kuryeri skani bilan bir
+ *    xil status va kod).
  * 5. HQ da emas (`branch_id` yoki `holder_branch_id` boshqa filial) → yo'lda
  *    (ON_THE_ROAD, boshqa kuryer) yoki boshqa filialda (403).
  * 6. ON_THE_ROAD → faqat shu kuryerning o'zi qayta skanlasa ruxsat.
  * 7. Buyurtma pochtasi boshqa birovga jo'natilgan (SENT) → yo'lda.
- * 8. RECEIVED, WAITING yoki WAITING_CUSTOMER → ruxsat (6qypMFeT: WAITING —
- *    menejerning assign-to-courier yo'li bilan bir xil).
+ * 8. RECEIVED, WAITING yoki WAITING_CUSTOMER (6qypMFeT: WAITING —
+ *    menejerning assign-to-courier yo'li bilan bir xil) → viloyat qoidasi
+ *    (anKpzwxk, 6-band): HQ viloyati yo'q — 400 `branch_region_missing`
+ *    (fail-closed); buyurtma xizmat viloyati HQ viloyatiga teng emas — 403
+ *    `hq_courier_region_only`; teng — ruxsat. O'z buyurtmasini qayta
+ *    skanlash (ON_THE_ROAD — 6-qoida, o'z WAITING buyurtmasi — shu yerda)
+ *    yangi biriktirish emas — viloyat tekshirilmaydi, `scanAssignOrder`
+ *    idempotent javob qaytaradi (filial kuryeri bilan bir xil).
  * 9. Qolgan hamma holat → noto'g'ri holat.
  */
 export function assessHqCourierScan(
@@ -147,7 +186,12 @@ export function assessHqCourierScan(
     // buyurtma uchun. PENDING paketdagi buyurtma hamon HQ da RECEIVED turadi.
     return isOnTheRoad
       ? reject(400, SCAN_ASSIGN_MESSAGES.IN_TRANSIT, 'IN_TRANSIT')
-      : reject(400, SCAN_ASSIGN_MESSAGES.IN_BATCH, 'IN_BATCH');
+      : reject(
+          409,
+          SCAN_ASSIGN_MESSAGES.IN_BATCH,
+          'IN_BATCH',
+          'order_in_outgoing_batch',
+        );
   }
 
   if (
@@ -181,6 +225,28 @@ export function assessHqCourierScan(
     status === String(Order_status.WAITING) ||
     status === String(Order_status.WAITING_CUSTOMER)
   ) {
+    // O'z WAITING buyurtmasini qayta skanlash — idempotent (yangi
+    // biriktirish emas): tumani HQ viloyatidan ko'chgan bo'lsa ham 403 emas.
+    if (status === String(Order_status.WAITING) && courierId === requesterId) {
+      return null;
+    }
+    const hqRegionId = normalizeId(input.hqRegionId);
+    if (!hqRegionId) {
+      return reject(
+        400,
+        SCAN_ASSIGN_MESSAGES.HQ_REGION_MISSING,
+        'HQ_REGION_MISSING',
+        'branch_region_missing',
+      );
+    }
+    if (normalizeId(input.orderRegionId) !== hqRegionId) {
+      return reject(
+        403,
+        SCAN_ASSIGN_MESSAGES.OUT_OF_HQ_REGION,
+        'OUT_OF_HQ_REGION',
+        'hq_courier_region_only',
+      );
+    }
     return null;
   }
 

@@ -336,8 +336,79 @@ describe("reassignPostToBranch — pochtani boshqa filialga o'tkazish", () => {
       service.reassignPostToBranch('900', '30', ADMIN),
     );
     expect(err.statusCode).toBe(400);
+    // Gateway faqat reason/usage/details ni o'tkazadi — mashina kodi bor.
+    expect(err.data?.reason).toBe('region_mismatch');
+    expect(err.data?.details).toEqual({
+      post_id: '900',
+      destination_branch_id: '30',
+      post_region_id: '14',
+      destination_region_id: '15',
+    });
     expect(err.data?.reasons).toEqual({ region_mismatch: true });
     expect(callsOf(orderClient, 'order.update')).toHaveLength(0);
+  });
+
+  // Viloyat qoidasi (anKpzwxk, 3-band): LC-09 hududlardan biri bo'sh bo'lsa
+  // endi O'TKAZIB YUBORILMAYDI — 400 `branch_region_missing` (avval
+  // tekshiruv o'tkazib yuborilib, buyurtma darajasida chalg'ituvchi 409
+  // «Boshqa viloyat buyurtmasi» berardi). Buyurtmalar o'qilmaydi, hech narsa
+  // ko'chmaydi.
+  it('⭐ manzil filial viloyatsiz — 400 branch_region_missing, hech narsa ko`chmaydi', async () => {
+    branchesById['23'] = {
+      id: '23',
+      name: 'Viloyatsiz',
+      type: 'REGIONAL',
+      status: 'active',
+      region_id: null,
+      isDeleted: false,
+    };
+    const err = await rpcErrorOf(
+      service.reassignPostToBranch('900', '23', ADMIN),
+    );
+    expect(err.statusCode).toBe(400);
+    expect(err.message).toContain('«Viloyatsiz») viloyati belgilanmagan');
+    expect(err.message).toContain("Hech narsa o'tkazilmadi");
+    expect(err.data?.reason).toBe('branch_region_missing');
+    expect(err.data?.details).toEqual({
+      missing: ['destination_branch_region'],
+      post_id: '900',
+      destination_branch_id: '23',
+      post_region_id: '14',
+      destination_region_id: null,
+    });
+    expect(callsOf(logisticsClient, 'logistics.post.orders_by_post')).toEqual(
+      [],
+    );
+    expect(callsOf(orderClient, 'order.update')).toHaveLength(0);
+    expect(
+      callsOf(logisticsClient, 'logistics.post.reassign_branch'),
+    ).toHaveLength(0);
+  });
+
+  it('⭐ pochta viloyatsiz — 400 branch_region_missing, hech narsa ko`chmaydi', async () => {
+    postRow.region_id = null;
+    const err = await rpcErrorOf(
+      service.reassignPostToBranch('900', '22', ADMIN),
+    );
+    expect(err.statusCode).toBe(400);
+    expect(err.message).toContain(
+      'pochta #900 viloyati (hududi) belgilanmagan',
+    );
+    expect(err.data?.reason).toBe('branch_region_missing');
+    expect(err.data?.details).toEqual({
+      missing: ['post_region'],
+      post_id: '900',
+      destination_branch_id: '22',
+      post_region_id: null,
+      destination_region_id: '14',
+    });
+    expect(callsOf(logisticsClient, 'logistics.post.orders_by_post')).toEqual(
+      [],
+    );
+    expect(callsOf(orderClient, 'order.update')).toHaveLength(0);
+    expect(
+      callsOf(logisticsClient, 'logistics.post.reassign_branch'),
+    ).toHaveLength(0);
   });
 
   it('nofaol yoki HQ filial — 400 (jo`natish qoidasi)', async () => {
@@ -373,12 +444,25 @@ describe("reassignPostToBranch — pochtani boshqa filialga o'tkazish", () => {
     },
   );
 
-  it('tuman 2-filial qamrovida emas (1-filialga biriktirilgan) — 409, hech narsa ko`chmaydi', async () => {
+  it('⭐ viloyat qoidasi: tuman 1-filialga biriktirilgan (serving_branch_id) bo`lsa ham — viloyatdagi 2-filialga o`tadi', async () => {
+    // Avval (#617) 409 edi; endi serving_branch_id qamrovga ta'sir qilmaydi.
     districtsById['1401'].serving_branch_id = '20';
+    const res = await service.reassignPostToBranch('900', '22', ADMIN);
+    expect(res.statusCode).toBe(200);
+    expect(callsOf(orderClient, 'order.update').map((u) => u.id)).toEqual([
+      '501',
+      '502',
+    ]);
+  });
+
+  it('buyurtma tumani boshqa viloyatga o`tkazilgan — 409 «Boshqa viloyat buyurtmasi», hech narsa ko`chmaydi', async () => {
+    districtsById['1401'].assigned_region = '15';
     const err = await rpcErrorOf(
       service.reassignPostToBranch('900', '22', ADMIN),
     );
     expect(err.statusCode).toBe(409);
+    expect(err.message).toContain('Boshqa viloyat buyurtmasi');
+    expect(err.data?.reason).toBe('district_not_served_by_branch');
     expect(callsOf(orderClient, 'order.update')).toHaveLength(0);
   });
 

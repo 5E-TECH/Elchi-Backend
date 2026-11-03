@@ -336,6 +336,8 @@ describe('FIX3 CODE-25 — scanAssignOrder qoldiqlari', () => {
         courier_id: null,
         post_id: 'p-region',
         total_price: 120_000,
+        // anKpzwxk: HQ kuryeri — faqat HQ viloyati ('1') buyurtmasi.
+        region_id: '1',
       },
       courierBranch: { branch_id: '1', type: 'HQ' },
       posts: [{ id: 'p-region', courier_id: '0', status: Post_status.NEW }],

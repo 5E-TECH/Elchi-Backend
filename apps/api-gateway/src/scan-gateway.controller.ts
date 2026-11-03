@@ -38,6 +38,10 @@ import {
   canLookupOrderByQr,
   qrBatchScope,
 } from './auth/order-qr-visibility';
+import {
+  createQrOrderBranchScope,
+  qrOrderBranchScopeRpcDeps,
+} from './auth/order-qr-branch-scope';
 import { projectOrderPayloadForRoles } from './auth/order-role-projection';
 import {
   ProblemContactsService,
@@ -187,6 +191,7 @@ export class ScanGatewayController {
       "dwJX3NjT: paket javobida qo'shimcha `source_branch` / `destination_branch` `{id, name}`, `region` `{id, name}` va `items[].order` — buyurtma xulosasi `{id, order_number, status, total_price, region, district, customer {name, phone_number}}` (xulosa xizmati javob bermasa `null`). " +
       "X4RzXk1H: pochta — faqat superadmin/admin/branch/manager/registrator/courier (boshqalar 403) va `GET /post/orders/:id` doirasi (filial xodimi — o'z filiali, kuryer — o'z pochtasi); javob `GET /post/scan/:id` bilan bir xil: pochta qatori + `region`, `courier`, `orders[]`. " +
       "T7 (QPq2C1co): har buyurtma qatorida `problem_contacts: [{name, phone, source: 'logist'|'support'}]` («Muammo bo'lsa», ≤ 2); `operator_phone`, `secondary_operator_phone`, `market.phone_number` menejer/filial/kuryerga YO'Q. " +
+      "anKpzwxk: buyurtma tokeni — `GET /orders/qr-code/:token` bilan AYNI filial doirasi: filial xodimi yoki HQ bo'lmagan filial kuryeri o'z filialida bo'lmagan buyurtmaga 403 «Bu buyurtma sizning filialingizda emas» (`data.reason` `order_not_in_your_branch`), filialga biriktirilmagan — 403 `branch_not_assigned`, ma'lumotsiz. " +
       "Sm3LZ6EN: tashqi qop javobida `batch` `{external_batch_token, size, received_count, pending_count, scanned_count}` (`scanned_count` — qabulni kutayotganlari, hech narsa qabul qilinmagan); son `GET /orders/external` `meta.batches` bilan bir xil doirada, doirada a'zo bo'lmasa `batch: null`. Market faqat o'z a'zolarini ko'radi, begona qop — 404. Keldi = `received_count + pending_count`.",
   })
   @ApiParam({
@@ -305,10 +310,35 @@ export class ScanGatewayController {
     if (!canLookupOrderByQr(req?.user?.roles)) {
       throw new ForbiddenException("Bu buyurtmani ko'rishga ruxsat yo'q");
     }
+    // anKpzwxk (7): begona QR — `GET /orders/qr-code/:token` bilan AYNI
+    // filial doirasi (auth/order-qr-branch-scope).
+    const branchScope = createQrOrderBranchScope(
+      req?.user,
+      qrOrderBranchScopeRpcDeps(req?.user, {
+        sendOrder: (pattern, payload) =>
+          this.sendWithTimeout('order', pattern, payload),
+        sendBranch: (pattern, payload) =>
+          this.sendWithTimeout('branch', pattern, payload),
+      }),
+    );
+    const light = isOrderQrLightView(view);
     try {
+      // Yengil javobda filial maydonlari YO'Q: cheklangan so'rovchi uchun
+      // doira AVVAL to'liq qatordan. 403/503 quyidagi 404 ushlagichiga
+      // tushmaydi; 404 (token — qop) esa avvalgidek qop qidiruviga o'tadi.
+      if (light && !(await branchScope.isUnrestricted())) {
+        const scopeRow: unknown = await this.sendWithTimeout(
+          'order',
+          { cmd: 'order.find_by_qr' },
+          { token: normalizedToken },
+        );
+        await branchScope.assertVisible(
+          (scopeRow as { data?: unknown } | null)?.data,
+        );
+      }
       // D148eHMA — `?view=light` OPT-IN; parametrsiz so'rov AYNAN avvalgidek.
       // 404 yengil yo'lda ham shu yerga tushadi -> quyida QOP qidiruvi.
-      const response: unknown = isOrderQrLightView(view)
+      const response: unknown = light
         ? await sendOrderQrLight(
             (pattern) =>
               this.sendWithTimeout('order', pattern, {
@@ -324,6 +354,9 @@ export class ScanGatewayController {
           );
       const shaped = this.shapeResponse('order', response);
       assertQrOrderVisible(req?.user, shaped.data);
+      if (!light) {
+        await branchScope.assertVisible(shaped.data);
+      }
       // kH2zZsz3: skan qilingan buyurtma `GET /orders/:id` bilan AYNI rol
       // proyeksiyasida — kuryer market tarifi/filial ulushini, market esa
       // kuryer tarifi/ulushini ko'rmaydi.

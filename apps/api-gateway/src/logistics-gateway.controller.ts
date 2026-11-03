@@ -571,7 +571,8 @@ export class LogisticsGatewayController {
     summary: 'List all posts (with pagination)',
     description:
       'tveJKICY: javobda `orders_total`, `amount_total` — joriy filtr bo‘yicha (sahifadan qat’i nazar) yig‘indilar. ' +
-      "Z3pUOxou — LOGIST: faqat o'ziga biriktirilgan viloyatlar pochtalari (`region_id` — faqat o'z viloyati, boshqasi 400; biriktirilmagan — bo'sh), `post_total_price` va `amount_total` yo'q.",
+      "Z3pUOxou — LOGIST: faqat o'ziga biriktirilgan viloyatlar pochtalari (`region_id` — faqat o'z viloyati, boshqasi 400; biriktirilmagan — bo'sh), `post_total_price` va `amount_total` yo'q. " +
+      "anKpzwxk — sof kuryer: hali qabul qilinmagan HQ → filial o'tkazma pochtalari (`courier_id: '0'`, `sent`) ro'yxatda YO'Q (status filtri bilan ham).",
   })
   @ApiOkResponse({ type: PostListPageResponseDto })
   @ApiQuery({
@@ -658,7 +659,11 @@ export class LogisticsGatewayController {
     RoleEnum.REGISTRATOR,
   )
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'List new posts' })
+  @ApiOperation({
+    summary: 'List new posts',
+    description:
+      'anKpzwxk: «Yangi pochtalar» FAQAT HQ uchun — SUPERADMIN, ADMIN, HQ filialiga biriktirilgan REGISTRATOR/MANAGER. Boshqasi 403 `data.reason = new_posts_hq_only`; filial xizmati javob bermasa — 503 (qayta urinish).',
+  })
   @ApiQuery({
     name: 'search',
     required: false,
@@ -859,7 +864,8 @@ export class LogisticsGatewayController {
     summary: 'Get post by id',
     description:
       "Z3pUOxou — LOGIST: pochta o'ziga biriktirilgan viloyatda bo'lsa (aks holda 403), `post_total_price` siz. " +
-      '1mOjtOVC: javobda `courier { id, name, phone_number } | null` — pochta chekidagi haydovchi (kuryersiz pochta — null).',
+      '1mOjtOVC: javobda `courier { id, name, phone_number } | null` — pochta chekidagi haydovchi (kuryersiz pochta — null). ' +
+      "anKpzwxk: sof kuryer hali qabul qilinmagan HQ → filial o'tkazma pochtasini (`courier_id: '0'`, `sent`) ocholmaydi — 403 `data.reason = post_not_visible_to_courier` (`GET /post/orders/:id`, `GET /post/scan/:id` ham).",
   })
   @ApiParam({ name: 'id', description: 'Post ID (id)' })
   @ApiOkResponse({ type: PostReceiptResponseDto })
@@ -1316,7 +1322,11 @@ export class LogisticsGatewayController {
     RoleEnum.COURIER,
   )
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Receive post (branch/courier)' })
+  @ApiOperation({
+    summary: 'Receive post (branch/courier)',
+    description:
+      "anKpzwxk: HQ → filial o'tkazma pochtasini (`courier_id: '0'`) FAQAT manzil filial MENEJERI qabul qiladi; registrator, BRANCH akkaunti, boshqa filial yoki HQ menejeri — 403 `data.reason = post_receive_manager_only` (`details.{post_id, branch_id}`). SUPERADMIN/ADMIN qabul qila oladi (activity log `logistics.post_receive_override`). Kuryer pochtalari o'zgarmagan.",
+  })
   @ApiParam({ name: 'id', description: 'Post ID (id)' })
   @ApiBody({ type: ReceivePostRequestDto })
   receivePost(

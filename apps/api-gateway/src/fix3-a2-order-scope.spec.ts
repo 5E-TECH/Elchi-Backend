@@ -435,8 +435,23 @@ describe('fix3 A2 — QR lookup (C11)', () => {
     ).resolves.toMatchObject({ data: { id: '77' } });
   });
 
-  it('KURYER — skan oqimi uchun cheklanmaydi (O‘zimga olish)', async () => {
-    const { controller } = setup({ order: qrOrder('202') });
+  // anKpzwxk (7): kuryer hali o'zida bo'lmagan buyurtmani O'Z filialida
+  // ko'radi (O‘zimga olish); begona filialniki — order-gateway.foreign-qr spec.
+  it('KURYER — o‘z filialidagi buyurtma skan oqimi uchun ochiq (O‘zimga olish)', async () => {
+    const { controller } = setup({
+      order: {
+        'order.find_by_qr_enriched': {
+          statusCode: 200,
+          data: { id: '77', market_id: '202', branch_id: '5' },
+        },
+      },
+      branch: {
+        'branch.user.find_by_user': {
+          statusCode: 200,
+          data: { branch_id: '5', role: 'COURIER' },
+        },
+      },
+    });
     await expect(
       controller.findByQrCode('ORD-x', user('179', ['courier'])),
     ).resolves.toMatchObject({ data: { id: '77' } });

@@ -50,6 +50,16 @@ describe('FIX3 LC-03 — newPosts yetim buyurtmalarni faqat HQ custody bo‘yich
             ? throwError(() => new Error('branch-service down'))
             : of({ data: { id: '1' } });
         }
+        // anKpzwxk: «Yangi pochtalar» — HQ registratori ('5' — HQ '1' da).
+        if (pattern.cmd === 'branch.user.find_by_user') {
+          return of({
+            data: {
+              branch_id: '1',
+              role: 'REGISTRATOR',
+              branch: { id: '1', type: 'HQ', region_id: '14' },
+            },
+          });
+        }
         return of({ data: null });
       }),
     };

@@ -108,8 +108,9 @@ const unwrapData = (value: unknown): Record<string, unknown> | null => {
 // logistics'da filial tekshiruvi (branch RPC, 5 s), tranzaksiya va har o'zgargan
 // tuman uchun activity log (500 tagacha). 8 s chegarasi katta ro'yxatda yetmay
 // qolishi mumkin (mijoz 504 oladi, yozuv orqada baribir yakunlanadi). Filial
-// almashsa logistics avval tumanlarning ochiq buyurtmalarini order-service'dan
-// sahifalab o'qiydi (eski filialda tugaydiganlarga imtiyoz) — 30 s.
+// almashsa (#619) logistics tumanlarning ochiq buyurtmalarini o'qirdi — 30 s.
+// anKpzwxk: xizmat filiali viloyatni o'zgartirmaydi, o'qish endi yo'q; chegara
+// katta ro'yxat uchun o'zgarmay qoldi.
 const DISTRICT_COVERAGE_WRITE_RPC_TIMEOUT_MS = 30_000;
 const LOGISTICS_UNAVAILABLE_MESSAGE =
   "Logistika xizmati mavjud emas — birozdan so'ng qayta urinib ko'ring";
@@ -478,10 +479,11 @@ export class BranchGatewayController {
   }
 
   /**
-   * Tuman qamrovi (ega qarori 2026-11-02): filial xizmat qiladigan tumanlar
-   * (`districts.serving_branch_id = :id`). Yagona qoida — `@app/common`
-   * `isOrderServedByBranch`: filial menejeri o'z filialiga biriktirilmagan
-   * tuman buyurtmasini o'z kuryeriga bera olmaydi.
+   * Filialga biriktirilgan tumanlar (`districts.serving_branch_id = :id`).
+   * anKpzwxk: bu biriktiruv endi QAMROVGA TA'SIR QILMAYDI — qamrov viloyat
+   * qoidasi (`@app/common` `isOrderServedByBranch`: buyurtmaning xizmat
+   * viloyati `assigned_region ?? region_id` filial viloyatiga teng). Ustun
+   * keyingi tozalashgacha saqlanadi.
    *
    * Doira: SA/ADMIN — istalgan filial; MANAGER/REGISTRATOR — avval
    * `branch.find_by_id` o'z requester'i bilan (branch-service
@@ -497,10 +499,11 @@ export class BranchGatewayController {
     RoleEnum.REGISTRATOR,
   )
   @ApiOperation({
-    summary: 'Filialga biriktirilgan (xizmat qiladigan) tumanlar',
+    summary:
+      "Filialga biriktirilgan tumanlar (eskirgan — qamrovga ta'sir qilmaydi)",
     description:
       "Javob `{ statusCode, message, data: District[] }` — `serving_branch_id = :id` bo'lgan tumanlar, nom bo'yicha (A→Z), `region` va `assignedToRegion` bilan. " +
-      "Filial biriktirilmagan tumanlar bu ro'yxatda yo'q: ularga viloyat qoidasi qo'llanadi (tumanning xizmat viloyati `assigned_region ?? region_id` filial viloyatiga teng bo'lsa, o'sha viloyat filiali xizmat qiladi). " +
+      "anKpzwxk: bu biriktiruv endi QAMROVNI BELGILAMAYDI. Qamrov — viloyat qoidasi: tumanning xizmat viloyati `assigned_region ?? region_id` filial viloyatiga (`branches.region_id`) teng bo'lsa, o'sha viloyatning ISTALGAN filiali xizmat qiladi; HQ cheklanmagan; viloyatsiz filial hech narsaga xizmat qilmaydi. " +
       "SUPERADMIN/ADMIN — istalgan filial. MANAGER/REGISTRATOR — faqat o'zi ko'ra oladigan filial (o'z filiali; menejerga quyi filiallari ham), boshqasi 403. " +
       "Boshqa rollar (LOGIST ham) — 403. Faqat o'qish.",
   })
@@ -529,23 +532,27 @@ export class BranchGatewayController {
   }
 
   /**
-   * Tuman qamrovi: filial xizmat tumanlarini belgilash (ALMASHTIRISH). Barcha
-   * tekshiruv logistics'da (`logistics.district.set_serving_branch`): rol,
-   * filial (mavjud, faol, HQ emas), tumanlar mavjudligi va viloyati.
+   * Filialga tumanlarni biriktirish (ALMASHTIRISH) — ESKIRGAN (anKpzwxk):
+   * `serving_branch_id` endi qamrovga ta'sir qilmaydi (viloyat qoidasi),
+   * marshrut faqat moslik uchun qoldi. Tekshiruv logistics'da
+   * (`logistics.district.set_serving_branch`): rol, filial (mavjud, faol,
+   * HQ emas), tumanlar mavjudligi va viloyati.
    */
   @Put('branches/:id/districts')
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiOperation({
-    summary: 'Filial xizmat qiladigan tumanlarni belgilash (almashtirish)',
+    summary:
+      "Filialga tumanlarni biriktirish (eskirgan — qamrovga ta'sir qilmaydi)",
+    deprecated: true,
     description:
-      "Ega qarori: filial menejeri o'z filialiga biriktirilmagan tuman buyurtmasini o'z kuryeriga bera olmaydi; filial xodimi boshqa filial tumaniga buyurtma yaratishi mumkin, lekin u paket/HQ orqali to'g'ri filialga boradi. Qaysi filial qaysi tumanga xizmat qilishi shu yerda belgilanadi. " +
+      "ESKIRGAN (anKpzwxk): qaysi filial qaysi buyurtmaga xizmat qilishini endi VILOYAT belgilaydi — tumanning xizmat viloyati `assigned_region ?? region_id` filial viloyatiga teng bo'lsa, o'sha viloyatning istalgan filiali buyurtmani qabul qiladi va istalgan kuryeriga beradi. Bu marshrut faqat `serving_branch_id` ustunini yozadi (moslik uchun) va qamrovni O'ZGARTIRMAYDI; tumanni boshqa viloyatga o'tkazish — `PATCH /district/:id` (`assigned_region`). " +
       "ALMASHTIRISH: `district_ids` dagi tumanlar shu filialga biriktiriladi; ilgari shu filialga biriktirilgan, lekin ro'yxatda yo'q tumanlar bo'shatiladi (filialsiz — viloyat qoidasi). `district_ids: []` — filialning barcha tumanlari bo'shatiladi. " +
       "Filial mavjud, FAOL va HQ EMAS bo'lishi shart (HQ hamma tumanga xizmat qiladi — 400 `data.reason = branch_is_hq`; nofaol — 400 `branch_inactive`; yo'q — 404). " +
       'Faqat kuryerli filial turi (REGIONAL yoki HYBRID) — PICKUP va boshqalar 400 `data.reason = branch_type_not_serving`. ' +
       "Har bir tuman mavjud bo'lishi shart (yo'q — 404 `district_not_found`, `data.details.district_ids`). Filialning viloyati bo'lsa, tumanning xizmat viloyati (`assigned_region ?? region_id`) unga teng bo'lishi shart — aks holda 400 `data.reason = district_region_mismatch`, `data.details.district_ids`. " +
       "Boshqa filialga biriktirilgan tuman shu filialga KO'CHADI (ruxsat etiladi) va javobdagi `moved[]` da qaytadi. " +
       'Javob `data`: `{ branch_id, district_ids, added[], removed[], moved: [{ district_id, from_branch_id }], coverage_exemptions?: { created, by_branch: [{ branch_id, count }] } }`. ' +
-      "Tumanini yo'qotgan filialda yoki uning kuryerida (yoki unga yo'lda) turgan ochiq buyurtmalar o'sha filialda tugaydi (`coverage_exemptions`); tuman buyurtmalarini tekshirib bo'lmasa — 503, hech narsa o'zgarmaydi. Faqat SUPERADMIN/ADMIN.",
+      "`coverage_exemptions` doim `{ created: 0, by_branch: [] }` — xizmat filiali almashishi viloyatni o'zgartirmaydi, shuning uchun imtiyoz yozilmaydi va tuman buyurtmalari o'qilmaydi (order-service ishlamasa ham 503 bo'lmaydi). «Eski filialda tugasin» imtiyozlari faqat tuman VILOYATI o'zgarganda (`PATCH /district/:id`, tumanlarni birlashtirish) yoziladi. Faqat SUPERADMIN/ADMIN.",
   })
   @ApiParam({ name: 'id', description: 'Branch ID (bigint string)' })
   @ApiBody({ type: SetBranchDistrictsRequestDto })
@@ -982,7 +989,14 @@ export class BranchGatewayController {
     RoleEnum.MANAGER,
     RoleEnum.REGISTRATOR,
   )
-  @ApiOperation({ summary: 'Dispatch HQ post to destination branch' })
+  @ApiOperation({
+    summary: 'Dispatch HQ post to destination branch',
+    description:
+      "anKpzwxk — viloyat qoidasi: pochta viloyatidagi ISTALGAN faol REGIONAL/HYBRID filialga (menejeri bor) jo'natiladi; tuman ↔ filial biriktiruvi (`serving_branch_id`) hisobga olinmaydi. " +
+      '400 `data.reason = region_mismatch` — pochta viloyati manzil filial viloyatiga teng emas (`details: { post_id, destination_branch_id, post_region_id, destination_region_id }`); ' +
+      '400 `branch_region_missing` — manzil filial yoki pochta viloyatsiz (`details.missing`); ' +
+      "409 `district_not_served_by_branch` — buyurtma xizmat viloyati (`assigned_region ?? region_id`) manzil filialniki emas (`details.{order_ids, district_ids}`). Hech narsa jo'natilmaydi.",
+  })
   @ApiParam({ name: 'postId', description: 'Logistics post ID' })
   @ApiBody({
     schema: {
@@ -1039,7 +1053,8 @@ export class BranchGatewayController {
   @ApiOperation({
     summary: 'Move a sent, not yet received branch post to another branch',
     description:
-      "Eski pochtalar → «Filialga o'tkazish». The post (same id) and all its on-the-road orders move to the destination branch. Rules: post status 'sent' without courier; destination is an active REGIONAL/HYBRID branch of the post's region with a manager and serves every order's district; every order is still on the road (not received). 409 data.reasons: post_not_sent, post_partly_received, empty_post, district_not_served_by_branch, reassign_failed.",
+      "Eski pochtalar → «Filialga o'tkazish». The post (same id) and all its on-the-road orders move to the destination branch. Rules: post status 'sent' without courier; destination is an active REGIONAL/HYBRID branch of the post's region with a manager and serves every order's district; every order is still on the road (not received). 409 data.reasons: post_not_sent, post_partly_received, empty_post, district_not_served_by_branch, reassign_failed. " +
+      "anKpzwxk: coverage is the region rule (any branch of the order's service region); 400 `data.reason = region_mismatch` (post region ≠ destination region) or `branch_region_missing` (post or destination has no region, `details.missing`) — nothing moves.",
   })
   @ApiParam({ name: 'postId', description: 'Logistics post ID' })
   @ApiBody({

@@ -7,9 +7,15 @@ import {
 } from '@app/common';
 
 /**
- * Tuman ko'chirilganda (boshqa viloyatga yoki boshqa xizmat filialiga) ESKI
- * filialda / uning kuryerida turgan ochiq buyurtmalar eski filialda tugaydi
- * (ega qarori, 2026-11-02) — imtiyoz (exemption) qoidasi.
+ * Tuman ko'chirilganda (boshqa XIZMAT VILOYATIGA) ESKI filialda / uning
+ * kuryerida turgan ochiq buyurtmalar eski filialda tugaydi (ega qarori,
+ * 2026-11-02) — imtiyoz (exemption) qoidasi.
+ *
+ * Viloyat qoidasi (anKpzwxk, 2026-11-03): qamrov endi faqat viloyat bo'yicha
+ * (`isOrderServedByBranch`), `serving_branch_id` hisobga olinmaydi — shu
+ * sabab imtiyoz faqat tumanning xizmat viloyati (`assigned_region ??
+ * region_id`) o'zgarganda paydo bo'ladi; faqat xizmat filiali almashishi
+ * (`PUT /branches/:id/districts`) imtiyoz bermaydi.
  *
  * Ko'chish PAYTIDA eski filial (yoki uning kuryeri) qo'lidagi buyurtma uchun
  * `logistics_schema.district_coverage_exemptions` ga (buyurtma, filial)
@@ -24,7 +30,8 @@ import {
  * pochtasi: custody jo'natishda filialga o'tadi); aks holda `branch_id`.
  *
  * Imtiyoz (buyurtma o, filial b): b = mas'ul filial, HQ emas, ko'chishdan
- * OLDIN b xizmat qilardi va KEYIN xizmat qilmaydi (`isOrderServedByBranch`).
+ * OLDIN b xizmat qilardi va KEYIN xizmat qilmaydi (`isOrderServedByBranch`,
+ * ya'ni eski xizmat viloyati = b viloyati ≠ yangi xizmat viloyati).
  * Faqat ochiq custody holatlari va MARKET qo'lida bo'lmagan buyurtmalar.
  * Imtiyozda ko'chishdan KEYINGI buyurtma tumani saqlanadi: qamrov to'sig'i
  * imtiyozni faqat buyurtma hozir o'sha tumanda bo'lsa hisobga oladi.

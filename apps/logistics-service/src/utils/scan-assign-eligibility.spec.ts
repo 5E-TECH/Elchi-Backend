@@ -10,18 +10,23 @@ import {
 /**
  * ITEM 5 — HQ kuryeri skani uchun sof qoidalar. HQ = '1', skanlayotgan
  * kuryer = 'c1'. Har bir qoida, qoidalarning ustunlik tartibi va har bir
- * holatning aniq kodi/matni qulflanadi.
+ * holatning aniq kodi/matni qulflanadi. HQ viloyati = buyurtma viloyati =
+ * '14' (anKpzwxk viloyat qoidasi alohida blokda).
  */
 describe('assessHqCourierScan', () => {
   const assess = (
     order: HqCourierScanInput['order'],
     orderPost: HqCourierScanInput['orderPost'] = null,
+    regions: { hqRegionId?: string | null; orderRegionId?: string | null } = {},
   ) =>
     assessHqCourierScan({
       order,
       orderPost,
       hqBranchId: '1',
       requesterId: 'c1',
+      hqRegionId: regions.hqRegionId === undefined ? '14' : regions.hqRegionId,
+      orderRegionId:
+        regions.orderRegionId === undefined ? '14' : regions.orderRegionId,
     });
 
   it('matnlar kelishilgan shartnomadagi kabi (aniq)', () => {
@@ -37,6 +42,10 @@ describe('assessHqCourierScan', () => {
       WITH_OTHER_COURIER: 'Order allaqachon boshqa courierga biriktirilgan',
       WRONG_STATUS:
         "Buyurtma holati noto'g'ri: faqat qabul qilingan yoki kutilayotgan buyurtmani olish mumkin",
+      HQ_REGION_MISSING:
+        "HQ filialiga viloyat biriktirilmagan — HQ kuryeriga buyurtma berib bo'lmaydi. Administrator HQ filiali viloyatini belgilashi kerak.",
+      OUT_OF_HQ_REGION:
+        'Boshqa viloyat buyurtmasi — HQ kuryeri faqat HQ viloyati buyurtmasini oladi',
     });
   });
 
@@ -161,16 +170,17 @@ describe('assessHqCourierScan', () => {
       });
     });
 
-    it('HQ da RECEIVED, PENDING paketda → 400 IN_BATCH ("yo‘lda" emas)', () => {
+    it('HQ da RECEIVED, PENDING paketda → 409 IN_BATCH, details.reason order_in_outgoing_batch ("yo‘lda" emas)', () => {
       const result = assess({
         status: Order_status.RECEIVED,
         branch_id: '1',
         current_batch_id: 'b1',
       });
       expect(result).toEqual({
-        statusCode: 400,
+        statusCode: 409,
         message: SCAN_ASSIGN_MESSAGES.IN_BATCH,
         reason: 'IN_BATCH',
+        details: { reason: 'order_in_outgoing_batch' },
       });
       expect(result?.message).not.toContain("yo'lda");
     });
@@ -348,6 +358,8 @@ describe('assessHqCourierScan', () => {
           orderPost: null,
           hqBranchId: '1',
           requesterId: 'c1',
+          hqRegionId: 14,
+          orderRegionId: '14',
         }),
       ).toBeNull();
     });
@@ -371,6 +383,129 @@ describe('assessHqCourierScan', () => {
     it('CREATED → WRONG_STATUS', () => {
       expect(
         assess({ status: Order_status.CREATED, branch_id: '1' })?.reason,
+      ).toBe('WRONG_STATUS');
+    });
+  });
+  describe('anKpzwxk 6-band — HQ kuryeri faqat HQ viloyati buyurtmasini oladi', () => {
+    it('buyurtma viloyati HQ viloyatiga teng — ruxsat', () => {
+      expect(
+        assess({ status: Order_status.RECEIVED, branch_id: '1' }, null, {
+          hqRegionId: '14',
+          orderRegionId: '14',
+        }),
+      ).toBeNull();
+    });
+
+    it('boshqa viloyat (Samarqand) — 403 OUT_OF_HQ_REGION, details.reason hq_courier_region_only', () => {
+      expect(
+        assess({ status: Order_status.RECEIVED, branch_id: '1' }, null, {
+          hqRegionId: '14',
+          orderRegionId: '8',
+        }),
+      ).toEqual({
+        statusCode: 403,
+        message: SCAN_ASSIGN_MESSAGES.OUT_OF_HQ_REGION,
+        reason: 'OUT_OF_HQ_REGION',
+        details: { reason: 'hq_courier_region_only' },
+      });
+    });
+
+    it('buyurtma viloyati aniqlanmadi — 403 (fail closed)', () => {
+      expect(
+        assess({ status: Order_status.WAITING, branch_id: '1' }, null, {
+          orderRegionId: null,
+        })?.details,
+      ).toEqual({ reason: 'hq_courier_region_only' });
+    });
+
+    it('HQ viloyati yo‘q — 400 HQ_REGION_MISSING, details.reason branch_region_missing', () => {
+      expect(
+        assess({ status: Order_status.RECEIVED, branch_id: '1' }, null, {
+          hqRegionId: null,
+          orderRegionId: '14',
+        }),
+      ).toEqual({
+        statusCode: 400,
+        message: SCAN_ASSIGN_MESSAGES.HQ_REGION_MISSING,
+        reason: 'HQ_REGION_MISSING',
+        details: { reason: 'branch_region_missing' },
+      });
+    });
+
+    it('oldingi qoidalar ustun: NEW / paket / HQ da emas — o‘z sababi bilan', () => {
+      const foreign = { hqRegionId: '14', orderRegionId: '8' };
+      expect(
+        assess({ status: Order_status.NEW, branch_id: '1' }, null, foreign)
+          ?.reason,
+      ).toBe('NOT_ACCEPTED');
+      expect(
+        assess(
+          {
+            status: Order_status.RECEIVED,
+            branch_id: '1',
+            current_batch_id: 'b1',
+          },
+          null,
+          foreign,
+        )?.reason,
+      ).toBe('IN_BATCH');
+      expect(
+        assess(
+          { status: Order_status.RECEIVED, branch_id: '20' },
+          null,
+          foreign,
+        )?.reason,
+      ).toBe('NOT_AT_HQ');
+    });
+
+    it('o‘z buyurtmasini qayta skanlash (ON_THE_ROAD, c1) — yangi biriktirish emas, viloyat tekshirilmaydi', () => {
+      expect(
+        assess(
+          {
+            status: Order_status.ON_THE_ROAD,
+            branch_id: '1',
+            courier_id: 'c1',
+          },
+          null,
+          { hqRegionId: null, orderRegionId: '8' },
+        ),
+      ).toBeNull();
+    });
+
+    it('o‘z WAITING buyurtmasini qayta skanlash (c1) — tumani boshqa viloyatga ko‘chgan bo‘lsa ham ruxsat (idempotent)', () => {
+      expect(
+        assess(
+          { status: Order_status.WAITING, branch_id: '1', courier_id: 'c1' },
+          null,
+          { hqRegionId: '14', orderRegionId: '8' },
+        ),
+      ).toBeNull();
+    });
+
+    it('kuryersiz WAITING yoki o‘z WAITING_CUSTOMER — viloyat tekshiriladi (403)', () => {
+      const foreign = { hqRegionId: '14', orderRegionId: '8' };
+      expect(
+        assess({ status: Order_status.WAITING, branch_id: '1' }, null, foreign)
+          ?.reason,
+      ).toBe('OUT_OF_HQ_REGION');
+      expect(
+        assess(
+          {
+            status: Order_status.WAITING_CUSTOMER,
+            branch_id: '1',
+            courier_id: 'c1',
+          },
+          null,
+          foreign,
+        )?.reason,
+      ).toBe('OUT_OF_HQ_REGION');
+    });
+
+    it('noto‘g‘ri holat — WRONG_STATUS viloyatdan ustun', () => {
+      expect(
+        assess({ status: Order_status.CREATED, branch_id: '1' }, null, {
+          orderRegionId: '8',
+        })?.reason,
       ).toBe('WRONG_STATUS');
     });
   });

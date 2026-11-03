@@ -151,6 +151,11 @@ import {
   ORDER_QR_LOOKUP_ROLES,
   assertQrOrderVisible,
 } from './auth/order-qr-visibility';
+import {
+  type QrOrderBranchScope,
+  createQrOrderBranchScope,
+  qrOrderBranchScopeRpcDeps,
+} from './auth/order-qr-branch-scope';
 import { projectOrderPayloadForRoles } from './auth/order-role-projection';
 import { projectOrderContactsForRoles } from './auth/order-contact-projection';
 import {
@@ -6410,7 +6415,16 @@ export class OrderGatewayController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(...ORDER_QR_LOOKUP_ROLES)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Get order by QR code (Post Control style)' })
+  @ApiOperation({
+    summary: 'Get order by QR code (Post Control style)',
+    description:
+      "anKpzwxk: filial xodimi (MANAGER, REGISTRATOR, BRANCH) yoki HQ bo'lmagan filial kuryeri o'z filialida " +
+      "bo'lmagan buyurtmani so'rasa — 403 «Bu buyurtma sizning filialingizda emas», `data.reason` " +
+      "`order_not_in_your_branch`, buyurtma ma'lumotisiz. «O'z filialida»: `holder_branch_id ?? branch_id` — " +
+      "so'rovchi filiali (HQ->filial pochtasi jo'natilgach manzil filiali), yoki SENT paket manzili — so'rovchi " +
+      'filiali, yoki (kuryer) buyurtma shu kuryerda. SA/admin, HQ xodimi va HQ kuryeri — cheklanmaydi; market — ' +
+      "faqat o'z posilkasi (o'zgarmagan). Filialni aniqlab bo'lmasa — 503 `branch_scope_unavailable`.",
+  })
   @ApiParam({ name: 'token', description: 'Order QR token' })
   @ApiQuery({
     name: 'view',
@@ -6424,8 +6438,23 @@ export class OrderGatewayController {
     @Req() req?: { user: JwtUser },
     @Query('view') view?: string,
   ) {
+    const light = isOrderQrLightView(view);
+    // anKpzwxk (7): begona QR — filial doirasi (auth/order-qr-branch-scope).
+    const branchScope = this.qrOrderBranchScope(req?.user);
+    // Yengil javobda filial maydonlari YO'Q: cheklangan so'rovchi uchun
+    // doira AVVAL to'liq qatordan tekshiriladi — rad etilsa yengil javob
+    // umuman olinmaydi. HQ va SA/admin uchun qo'shimcha so'rov yo'q.
+    if (light && !(await branchScope.isUnrestricted())) {
+      const scopeRow: unknown = await this.sendOrderWithTimeout(
+        { cmd: 'order.find_by_qr' },
+        { token },
+      );
+      await branchScope.assertVisible(
+        (scopeRow as { data?: unknown } | null)?.data,
+      );
+    }
     // D148eHMA — `?view=light` OPT-IN: parametrsiz so'rov AYNAN avvalgidek.
-    const response: unknown = isOrderQrLightView(view)
+    const response: unknown = light
       ? await sendOrderQrLight(
           (pattern) => this.sendOrderWithTimeout(pattern, { token }),
           { cmd: 'order.find_by_qr_enriched' },
@@ -6440,12 +6469,34 @@ export class OrderGatewayController {
       req?.user,
       (response as { data?: unknown } | null)?.data,
     );
+    if (!light) {
+      await branchScope.assertVisible(
+        (response as { data?: unknown } | null)?.data,
+      );
+    }
     // kH2zZsz3: QR orqali ham AYNI rol proyeksiyasi (detal bilan bir xil).
     // T7: `problem_contacts` proyeksiyadan OLDIN.
     return projectOrderPayloadForRoles(
       req?.user?.roles,
       await attachProblemContacts(this.problemContacts, response),
     );
+  }
+
+  /**
+   * anKpzwxk (7) — begona QR doirasi: manbalar `GET /scan/:token` bilan
+   * bitta (`qrOrderBranchScopeRpcDeps`), HQ — shu controller'ning 60 s
+   * keshidan (`resolveHqBranchId`).
+   */
+  private qrOrderBranchScope(user: JwtUser | undefined): QrOrderBranchScope {
+    return createQrOrderBranchScope(user, {
+      ...qrOrderBranchScopeRpcDeps(user, {
+        sendOrder: (pattern, payload) =>
+          this.sendOrderWithTimeout(pattern, payload),
+        sendBranch: (pattern, payload) =>
+          this.sendBranchWithTimeout(pattern, payload),
+      }),
+      resolveHqBranchId: () => this.resolveHqBranchId(),
+    });
   }
 
   @Post('scan-assign')
@@ -6459,6 +6510,8 @@ export class OrderGatewayController {
   @ApiOperation({
     summary:
       "Scan QR and assign order to current courier. MWYaqprw: muvaffaqiyatli javobda `data.order` — { id, order_number, status, total_price, address, district, region, market, customer: { name, phone_number }, special_categories (T8) } (skaner ekrani uchun; olinmasa maydon bo'lmaydi, skan baribir o'tgan).",
+    description:
+      "anKpzwxk — viloyat qoidasi. Filial kuryeri: o'z filiali viloyatidagi buyurtma (tuman ↔ filial biriktiruvi hisobga olinmaydi); boshqa viloyat (tranzit) — 403 `data.reason = district_not_served_by_branch` «Boshqa viloyat buyurtmasi …» (`details.order_ids`). HQ kuryeri: faqat HQ viloyati buyurtmasi — 403 `hq_courier_region_only`; HQ viloyatsiz — 400 `branch_region_missing`. Partiyadagi buyurtma — 409 `order_in_outgoing_batch` (`details.order_ids`). O'z WAITING / ON_THE_ROAD buyurtmasini qayta skanlash — idempotent 200.",
   })
   @ApiBody({ type: ScanAssignOrderRequestDto })
   async scanAssignOrder(
@@ -6525,7 +6578,8 @@ export class OrderGatewayController {
     description:
       "(1gxmqLj5) SUPERADMIN/ADMIN ham biriktiradi: barcha orderlar BITTA filialda bo'lishi, kuryer shu filialning " +
       "COURIER a'zosi bo'lishi shart (aks holda 400). `branch_id` (ixtiyoriy) — UI'dagi filial tanlovi: berilsa " +
-      "orderlar filialiga mos bo'lishi kerak (400). Menejer/registrator uchun o'zgarishsiz (o'z filiali, `branch_id` e'tiborsiz).",
+      "orderlar filialiga mos bo'lishi kerak (400). Menejer/registrator uchun o'zgarishsiz (o'z filiali, `branch_id` e'tiborsiz). " +
+      "anKpzwxk — filial o'z viloyati buyurtmasini ISTAGAN kuryeriga beradi. 409 `data.reason = order_in_outgoing_batch` — buyurtma partiyada; 403 `district_not_served_by_branch` — boshqa viloyat (tranzit) buyurtmasi; HQ da: 403 `hq_courier_region_only` — buyurtma HQ viloyatidan emas, 400 `branch_region_missing` — HQ viloyatsiz. Id'lar `details.order_ids` da; hech narsa yozilmaydi.",
   })
   @ApiBody({ type: AssignOrdersToCourierRequestDto })
   assignOrdersToCourier(

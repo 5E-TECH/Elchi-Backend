@@ -772,17 +772,19 @@ describe('fix3 — branch-service', () => {
       ]);
     });
 
-    it("buyurtmada ham, pochtada ham hudud yo'q — 400 id bilan, HECH NARSA yozilmaydi", async () => {
+    it("buyurtmada ham, pochtada ham hudud yo'q — 400 branch_region_missing (pochta hududi majburiy), HECH NARSA yozilmaydi", async () => {
+      // Avval «N ta buyurtmaning hududi aniqlanmadi» edi; viloyat qoidasidan
+      // (anKpzwxk) beri pochta hududi bo'sh bo'lsa buyurtmalar o'qilmaydi.
       postRow = { ...postRow, region_id: null };
       postOrders = [hqOrder('56', { region_id: null }), hqOrder('57')];
 
       const err = await rpcErrorOf(dispatch(['56', '57']));
 
       expect(err.statusCode).toBe(400);
-      expect(err.message).toContain(
-        '1 ta buyurtmaning hududi (viloyati) aniqlanmadi: #56',
+      expect(err.data).toMatchObject({ reason: 'branch_region_missing' });
+      expect(cmdsOf(logisticsClient)).not.toContain(
+        'logistics.post.orders_by_post',
       );
-      expect(err.data.regionless_order_ids).toEqual(['56']);
       expectNothingWritten();
     });
 
@@ -839,28 +841,44 @@ describe('fix3 — branch-service', () => {
         ]);
       });
 
-      it("manba pochtada hudud yo'q — buyurtma hududi olinadi, LC-09 tekshiruvi o'tkazib yuboriladi", async () => {
+      it("⭐ manba pochtada hudud yo'q — LC-09 endi o'tkazib yuborilmaydi: 400 branch_region_missing (avval buyurtma hududi bilan jo'natilardi)", async () => {
         postRow = { ...postRow, region_id: null };
         branchesById['20'].region_id = '9';
         postOrders = [hqOrder('56', { region_id: '9' })];
 
-        const res: any = await dispatch(['56']);
+        const err = await rpcErrorOf(dispatch(['56']));
 
-        expect(res.statusCode).toBe(200);
-        expect(receivePayload()?.orders).toEqual([
-          expect.objectContaining({ order_id: '56', assigned_region: '9' }),
-        ]);
+        expect(err.statusCode).toBe(400);
+        expect(err.data).toMatchObject({
+          reason: 'branch_region_missing',
+          details: { missing: ['post_region'] },
+        });
+        expect(cmdsOf(logisticsClient)).not.toContain(
+          'logistics.post.orders_by_post',
+        );
+        expectNothingWritten();
       });
 
-      it("manba pochtada hudud yo'q, buyurtma boshqa viloyatda — LC-09 o'tkazilsa ham qamrov 409 beradi", async () => {
-        // Ilgari (tuman ↔ filial qamrovigacha) bu holat jo'natilardi.
-        postRow = { ...postRow, region_id: null };
-        branchesById['20'].region_id = '15';
+      it("⭐ manzil filialda hudud yo'q — 400 branch_region_missing (avval o'tkazib yuborilardi)", async () => {
+        branchesById['20'].region_id = null;
+
+        const err = await rpcErrorOf(dispatch(['56']));
+
+        expect(err.statusCode).toBe(400);
+        expect(err.data).toMatchObject({
+          reason: 'branch_region_missing',
+          details: { missing: ['destination_branch_region'] },
+        });
+        expectNothingWritten();
+      });
+
+      it('pochta manzil filial hududida, lekin buyurtma boshqa viloyatda — qamrov 409 «Boshqa viloyat buyurtmasi»', async () => {
         postOrders = [hqOrder('56', { region_id: '9' })];
 
         const err = await rpcErrorOf(dispatch(['56']));
 
         expect(err.statusCode).toBe(409);
+        expect(err.message).toContain('Boshqa viloyat buyurtmasi');
         expect(err.data).toEqual(
           expect.objectContaining({
             reason: 'district_not_served_by_branch',
@@ -1014,7 +1032,8 @@ describe('fix3 — branch-service', () => {
           type: 'REGIONAL',
           status: 'active',
           phone_number: null,
-          region_id: null,
+          // Viloyatsiz filial ro'yxatga chiqmaydi (anKpzwxk).
+          region_id: '14',
           isDeleted: false,
         },
         {
@@ -1024,7 +1043,7 @@ describe('fix3 — branch-service', () => {
           type: 'HYBRID',
           status: 'active',
           phone_number: null,
-          region_id: null,
+          region_id: '6',
           isDeleted: false,
         },
       ]);

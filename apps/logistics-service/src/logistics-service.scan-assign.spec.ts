@@ -66,7 +66,8 @@ describe('LogisticsServiceService scanAssignOrder', () => {
             );
           }
           const payload = options?.receiveByScan ?? { received: false };
-          if (payload.received) {
+          // Tranzit ham posilkani filialga qabul qiladi (NEW) — anKpzwxk.
+          if (payload.received || payload.reason === 'transit') {
             scanReceiveDone = true;
           }
           return of({ data: payload });
@@ -658,11 +659,19 @@ describe('LogisticsServiceService scanAssignOrder', () => {
     expect(updateCalls).toHaveLength(0);
   });
 
-  it('P1b: tranzit buyurtma (boshqa hudud) -> 400 aniq xabar, kuryerga biriktirilmaydi', async () => {
+  // anKpzwxk (2a-band): tranzit posilka filialga qabul qilinadi (NEW), lekin
+  // boshqa viloyat buyurtmasi kuryerga berilmaydi — viloyat qoidasi, 403
+  // `district_not_served_by_branch` «Boshqa viloyat buyurtmasi».
+  it('P1b: tranzit buyurtma (boshqa viloyat) -> 403 «Boshqa viloyat buyurtmasi», kuryerga biriktirilmaydi', async () => {
     const { service, orderClient } = setup({
       order: { branch_id: '99', status: Order_status.ON_THE_ROAD },
       branchId: '10',
       receiveByScan: { received: false, reason: 'transit' },
+      orderAfterReceive: {
+        branch_id: '10',
+        status: Order_status.NEW,
+        region_id: '2',
+      },
     });
 
     await expectRpcStatus(
@@ -670,8 +679,8 @@ describe('LogisticsServiceService scanAssignOrder', () => {
         { id: 'c1', roles: ['courier'] },
         { qr_token: 'ORD-abc123' },
       ),
-      400,
-      'boshqa hudud uchun (tranzit)',
+      403,
+      'Boshqa viloyat buyurtmasi — posilka filialingizga qabul qilindi',
     );
 
     const updateCalls = orderClient.send.mock.calls.filter(
@@ -859,9 +868,21 @@ describe('LogisticsServiceService scanAssignOrder', () => {
         const payload = (error as RpcException).getError() as {
           statusCode?: number;
           message?: string;
+          data?: unknown;
         };
+        // anKpzwxk (2b): HQ menejerining assign-to-courier yo'li bilan bir
+        // xil — 409 `order_in_outgoing_batch`, `details.order_ids`.
         expect(payload).toEqual(
-          expect.objectContaining({ statusCode: 400, message: IN_BATCH }),
+          expect.objectContaining({
+            statusCode: 409,
+            message: IN_BATCH,
+            data: expect.objectContaining({
+              reason: 'order_in_outgoing_batch',
+              details: expect.objectContaining({
+                order_ids: [expect.any(String)],
+              }),
+            }),
+          }),
         );
         expect(payload.message).not.toContain("yo'lda");
       }

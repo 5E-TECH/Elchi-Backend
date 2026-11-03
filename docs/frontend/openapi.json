@@ -5208,6 +5208,7 @@
     },
     "/orders/qr-code/{token}": {
       "get": {
+        "description": "anKpzwxk: filial xodimi (MANAGER, REGISTRATOR, BRANCH) yoki HQ bo'lmagan filial kuryeri o'z filialida bo'lmagan buyurtmani so'rasa — 403 «Bu buyurtma sizning filialingizda emas», `data.reason` `order_not_in_your_branch`, buyurtma ma'lumotisiz. «O'z filialida»: `holder_branch_id ?? branch_id` — so'rovchi filiali (HQ->filial pochtasi jo'natilgach manzil filiali), yoki SENT paket manzili — so'rovchi filiali, yoki (kuryer) buyurtma shu kuryerda. SA/admin, HQ xodimi va HQ kuryeri — cheklanmaydi; market — faqat o'z posilkasi (o'zgarmagan). Filialni aniqlab bo'lmasa — 503 `branch_scope_unavailable`.",
         "operationId": "OrderGatewayController_findByQrCode",
         "parameters": [
           {
@@ -5259,6 +5260,7 @@
     },
     "/orders/scan-assign": {
       "post": {
+        "description": "anKpzwxk — viloyat qoidasi. Filial kuryeri: o'z filiali viloyatidagi buyurtma (tuman ↔ filial biriktiruvi hisobga olinmaydi); boshqa viloyat (tranzit) — 403 `data.reason = district_not_served_by_branch` «Boshqa viloyat buyurtmasi …» (`details.order_ids`). HQ kuryeri: faqat HQ viloyati buyurtmasi — 403 `hq_courier_region_only`; HQ viloyatsiz — 400 `branch_region_missing`. Partiyadagi buyurtma — 409 `order_in_outgoing_batch` (`details.order_ids`). O'z WAITING / ON_THE_ROAD buyurtmasini qayta skanlash — idempotent 200.",
         "operationId": "OrderGatewayController_scanAssignOrder",
         "parameters": [],
         "requestBody": {
@@ -5292,7 +5294,7 @@
     },
     "/orders/assign-to-courier": {
       "post": {
-        "description": "(1gxmqLj5) SUPERADMIN/ADMIN ham biriktiradi: barcha orderlar BITTA filialda bo'lishi, kuryer shu filialning COURIER a'zosi bo'lishi shart (aks holda 400). `branch_id` (ixtiyoriy) — UI'dagi filial tanlovi: berilsa orderlar filialiga mos bo'lishi kerak (400). Menejer/registrator uchun o'zgarishsiz (o'z filiali, `branch_id` e'tiborsiz).",
+        "description": "(1gxmqLj5) SUPERADMIN/ADMIN ham biriktiradi: barcha orderlar BITTA filialda bo'lishi, kuryer shu filialning COURIER a'zosi bo'lishi shart (aks holda 400). `branch_id` (ixtiyoriy) — UI'dagi filial tanlovi: berilsa orderlar filialiga mos bo'lishi kerak (400). Menejer/registrator uchun o'zgarishsiz (o'z filiali, `branch_id` e'tiborsiz). anKpzwxk — filial o'z viloyati buyurtmasini ISTAGAN kuryeriga beradi. 409 `data.reason = order_in_outgoing_batch` — buyurtma partiyada; 403 `district_not_served_by_branch` — boshqa viloyat (tranzit) buyurtmasi; HQ da: 403 `hq_courier_region_only` — buyurtma HQ viloyatidan emas, 400 `branch_region_missing` — HQ viloyatsiz. Id'lar `details.order_ids` da; hech narsa yozilmaydi.",
         "operationId": "OrderGatewayController_assignOrdersToCourier",
         "parameters": [],
         "requestBody": {
@@ -6089,7 +6091,7 @@
     },
     "/post": {
       "get": {
-        "description": "tveJKICY: javobda `orders_total`, `amount_total` — joriy filtr bo‘yicha (sahifadan qat’i nazar) yig‘indilar. Z3pUOxou — LOGIST: faqat o'ziga biriktirilgan viloyatlar pochtalari (`region_id` — faqat o'z viloyati, boshqasi 400; biriktirilmagan — bo'sh), `post_total_price` va `amount_total` yo'q.",
+        "description": "tveJKICY: javobda `orders_total`, `amount_total` — joriy filtr bo‘yicha (sahifadan qat’i nazar) yig‘indilar. Z3pUOxou — LOGIST: faqat o'ziga biriktirilgan viloyatlar pochtalari (`region_id` — faqat o'z viloyati, boshqasi 400; biriktirilmagan — bo'sh), `post_total_price` va `amount_total` yo'q. anKpzwxk — sof kuryer: hali qabul qilinmagan HQ → filial o'tkazma pochtalari (`courier_id: '0'`, `sent`) ro'yxatda YO'Q (status filtri bilan ham).",
         "operationId": "LogisticsGatewayController_getAllPosts",
         "parameters": [
           {
@@ -6210,6 +6212,7 @@
     },
     "/post/new": {
       "get": {
+        "description": "anKpzwxk: «Yangi pochtalar» FAQAT HQ uchun — SUPERADMIN, ADMIN, HQ filialiga biriktirilgan REGISTRATOR/MANAGER. Boshqasi 403 `data.reason = new_posts_hq_only`; filial xizmati javob bermasa — 503 (qayta urinish).",
         "operationId": "LogisticsGatewayController_getNewPosts",
         "parameters": [
           {
@@ -6447,7 +6450,7 @@
     },
     "/post/{id}": {
       "get": {
-        "description": "Z3pUOxou — LOGIST: pochta o'ziga biriktirilgan viloyatda bo'lsa (aks holda 403), `post_total_price` siz. 1mOjtOVC: javobda `courier { id, name, phone_number } | null` — pochta chekidagi haydovchi (kuryersiz pochta — null).",
+        "description": "Z3pUOxou — LOGIST: pochta o'ziga biriktirilgan viloyatda bo'lsa (aks holda 403), `post_total_price` siz. 1mOjtOVC: javobda `courier { id, name, phone_number } | null` — pochta chekidagi haydovchi (kuryersiz pochta — null). anKpzwxk: sof kuryer hali qabul qilinmagan HQ → filial o'tkazma pochtasini (`courier_id: '0'`, `sent`) ocholmaydi — 403 `data.reason = post_not_visible_to_courier` (`GET /post/orders/:id`, `GET /post/scan/:id` ham).",
         "operationId": "LogisticsGatewayController_getPostById",
         "parameters": [
           {
@@ -6955,6 +6958,7 @@
     },
     "/post/receive/{id}": {
       "patch": {
+        "description": "anKpzwxk: HQ → filial o'tkazma pochtasini (`courier_id: '0'`) FAQAT manzil filial MENEJERI qabul qiladi; registrator, BRANCH akkaunti, boshqa filial yoki HQ menejeri — 403 `data.reason = post_receive_manager_only` (`details.{post_id, branch_id}`). SUPERADMIN/ADMIN qabul qila oladi (activity log `logistics.post_receive_override`). Kuryer pochtalari o'zgarmagan.",
         "operationId": "LogisticsGatewayController_receivePost",
         "parameters": [
           {
@@ -17993,7 +17997,7 @@
     },
     "/branches/{id}/districts": {
       "get": {
-        "description": "Javob `{ statusCode, message, data: District[] }` — `serving_branch_id = :id` bo'lgan tumanlar, nom bo'yicha (A→Z), `region` va `assignedToRegion` bilan. Filial biriktirilmagan tumanlar bu ro'yxatda yo'q: ularga viloyat qoidasi qo'llanadi (tumanning xizmat viloyati `assigned_region ?? region_id` filial viloyatiga teng bo'lsa, o'sha viloyat filiali xizmat qiladi). SUPERADMIN/ADMIN — istalgan filial. MANAGER/REGISTRATOR — faqat o'zi ko'ra oladigan filial (o'z filiali; menejerga quyi filiallari ham), boshqasi 403. Boshqa rollar (LOGIST ham) — 403. Faqat o'qish.",
+        "description": "Javob `{ statusCode, message, data: District[] }` — `serving_branch_id = :id` bo'lgan tumanlar, nom bo'yicha (A→Z), `region` va `assignedToRegion` bilan. anKpzwxk: bu biriktiruv endi QAMROVNI BELGILAMAYDI. Qamrov — viloyat qoidasi: tumanning xizmat viloyati `assigned_region ?? region_id` filial viloyatiga (`branches.region_id`) teng bo'lsa, o'sha viloyatning ISTALGAN filiali xizmat qiladi; HQ cheklanmagan; viloyatsiz filial hech narsaga xizmat qilmaydi. SUPERADMIN/ADMIN — istalgan filial. MANAGER/REGISTRATOR — faqat o'zi ko'ra oladigan filial (o'z filiali; menejerga quyi filiallari ham), boshqasi 403. Boshqa rollar (LOGIST ham) — 403. Faqat o'qish.",
         "operationId": "BranchGatewayController_findBranchDistricts",
         "parameters": [
           {
@@ -18016,7 +18020,7 @@
             "bearer": []
           }
         ],
-        "summary": "Filialga biriktirilgan (xizmat qiladigan) tumanlar",
+        "summary": "Filialga biriktirilgan tumanlar (eskirgan — qamrovga ta'sir qilmaydi)",
         "tags": [
           "Branch"
         ],
@@ -18028,7 +18032,8 @@
         ]
       },
       "put": {
-        "description": "Ega qarori: filial menejeri o'z filialiga biriktirilmagan tuman buyurtmasini o'z kuryeriga bera olmaydi; filial xodimi boshqa filial tumaniga buyurtma yaratishi mumkin, lekin u paket/HQ orqali to'g'ri filialga boradi. Qaysi filial qaysi tumanga xizmat qilishi shu yerda belgilanadi. ALMASHTIRISH: `district_ids` dagi tumanlar shu filialga biriktiriladi; ilgari shu filialga biriktirilgan, lekin ro'yxatda yo'q tumanlar bo'shatiladi (filialsiz — viloyat qoidasi). `district_ids: []` — filialning barcha tumanlari bo'shatiladi. Filial mavjud, FAOL va HQ EMAS bo'lishi shart (HQ hamma tumanga xizmat qiladi — 400 `data.reason = branch_is_hq`; nofaol — 400 `branch_inactive`; yo'q — 404). Faqat kuryerli filial turi (REGIONAL yoki HYBRID) — PICKUP va boshqalar 400 `data.reason = branch_type_not_serving`. Har bir tuman mavjud bo'lishi shart (yo'q — 404 `district_not_found`, `data.details.district_ids`). Filialning viloyati bo'lsa, tumanning xizmat viloyati (`assigned_region ?? region_id`) unga teng bo'lishi shart — aks holda 400 `data.reason = district_region_mismatch`, `data.details.district_ids`. Boshqa filialga biriktirilgan tuman shu filialga KO'CHADI (ruxsat etiladi) va javobdagi `moved[]` da qaytadi. Javob `data`: `{ branch_id, district_ids, added[], removed[], moved: [{ district_id, from_branch_id }], coverage_exemptions?: { created, by_branch: [{ branch_id, count }] } }`. Tumanini yo'qotgan filialda yoki uning kuryerida (yoki unga yo'lda) turgan ochiq buyurtmalar o'sha filialda tugaydi (`coverage_exemptions`); tuman buyurtmalarini tekshirib bo'lmasa — 503, hech narsa o'zgarmaydi. Faqat SUPERADMIN/ADMIN.",
+        "deprecated": true,
+        "description": "ESKIRGAN (anKpzwxk): qaysi filial qaysi buyurtmaga xizmat qilishini endi VILOYAT belgilaydi — tumanning xizmat viloyati `assigned_region ?? region_id` filial viloyatiga teng bo'lsa, o'sha viloyatning istalgan filiali buyurtmani qabul qiladi va istalgan kuryeriga beradi. Bu marshrut faqat `serving_branch_id` ustunini yozadi (moslik uchun) va qamrovni O'ZGARTIRMAYDI; tumanni boshqa viloyatga o'tkazish — `PATCH /district/:id` (`assigned_region`). ALMASHTIRISH: `district_ids` dagi tumanlar shu filialga biriktiriladi; ilgari shu filialga biriktirilgan, lekin ro'yxatda yo'q tumanlar bo'shatiladi (filialsiz — viloyat qoidasi). `district_ids: []` — filialning barcha tumanlari bo'shatiladi. Filial mavjud, FAOL va HQ EMAS bo'lishi shart (HQ hamma tumanga xizmat qiladi — 400 `data.reason = branch_is_hq`; nofaol — 400 `branch_inactive`; yo'q — 404). Faqat kuryerli filial turi (REGIONAL yoki HYBRID) — PICKUP va boshqalar 400 `data.reason = branch_type_not_serving`. Har bir tuman mavjud bo'lishi shart (yo'q — 404 `district_not_found`, `data.details.district_ids`). Filialning viloyati bo'lsa, tumanning xizmat viloyati (`assigned_region ?? region_id`) unga teng bo'lishi shart — aks holda 400 `data.reason = district_region_mismatch`, `data.details.district_ids`. Boshqa filialga biriktirilgan tuman shu filialga KO'CHADI (ruxsat etiladi) va javobdagi `moved[]` da qaytadi. Javob `data`: `{ branch_id, district_ids, added[], removed[], moved: [{ district_id, from_branch_id }], coverage_exemptions?: { created, by_branch: [{ branch_id, count }] } }`. `coverage_exemptions` doim `{ created: 0, by_branch: [] }` — xizmat filiali almashishi viloyatni o'zgartirmaydi, shuning uchun imtiyoz yozilmaydi va tuman buyurtmalari o'qilmaydi (order-service ishlamasa ham 503 bo'lmaydi). «Eski filialda tugasin» imtiyozlari faqat tuman VILOYATI o'zgarganda (`PATCH /district/:id`, tumanlarni birlashtirish) yoziladi. Faqat SUPERADMIN/ADMIN.",
         "operationId": "BranchGatewayController_setBranchDistricts",
         "parameters": [
           {
@@ -18061,7 +18066,7 @@
             "bearer": []
           }
         ],
-        "summary": "Filial xizmat qiladigan tumanlarni belgilash (almashtirish)",
+        "summary": "Filialga tumanlarni biriktirish (eskirgan — qamrovga ta'sir qilmaydi)",
         "tags": [
           "Branch"
         ],
@@ -18583,6 +18588,7 @@
     },
     "/branches/posts/{postId}/dispatch": {
       "post": {
+        "description": "anKpzwxk — viloyat qoidasi: pochta viloyatidagi ISTALGAN faol REGIONAL/HYBRID filialga (menejeri bor) jo'natiladi; tuman ↔ filial biriktiruvi (`serving_branch_id`) hisobga olinmaydi. 400 `data.reason = region_mismatch` — pochta viloyati manzil filial viloyatiga teng emas (`details: { post_id, destination_branch_id, post_region_id, destination_region_id }`); 400 `branch_region_missing` — manzil filial yoki pochta viloyatsiz (`details.missing`); 409 `district_not_served_by_branch` — buyurtma xizmat viloyati (`assigned_region ?? region_id`) manzil filialniki emas (`details.{order_ids, district_ids}`). Hech narsa jo'natilmaydi.",
         "operationId": "BranchGatewayController_dispatchPostToBranch",
         "parameters": [
           {
@@ -18652,7 +18658,7 @@
     },
     "/branches/posts/{postId}/reassign": {
       "post": {
-        "description": "Eski pochtalar → «Filialga o'tkazish». The post (same id) and all its on-the-road orders move to the destination branch. Rules: post status 'sent' without courier; destination is an active REGIONAL/HYBRID branch of the post's region with a manager and serves every order's district; every order is still on the road (not received). 409 data.reasons: post_not_sent, post_partly_received, empty_post, district_not_served_by_branch, reassign_failed.",
+        "description": "Eski pochtalar → «Filialga o'tkazish». The post (same id) and all its on-the-road orders move to the destination branch. Rules: post status 'sent' without courier; destination is an active REGIONAL/HYBRID branch of the post's region with a manager and serves every order's district; every order is still on the road (not received). 409 data.reasons: post_not_sent, post_partly_received, empty_post, district_not_served_by_branch, reassign_failed. anKpzwxk: coverage is the region rule (any branch of the order's service region); 400 `data.reason = region_mismatch` (post region ≠ destination region) or `branch_region_missing` (post or destination has no region, `details.missing`) — nothing moves.",
         "operationId": "BranchGatewayController_reassignPostToBranch",
         "parameters": [
           {
@@ -19419,7 +19425,7 @@
     },
     "/scan/{token}": {
       "get": {
-        "description": "Prefiks bo'yicha: `BTB-`/`BTR-` → paket (`type: batch`), `POST-` (logistics haqiqiy shakli) / `PST-` → pochta (`type: post`), qolgani → buyurtma (404 bo'lsa tashqi qop). j8hdXE1o: paketni jo'natuvchi YOKI qabul qiluvchi filial xodimi ko'radi (`GET /transfer-batches/:id` bilan bir xil). dwJX3NjT: paket javobida qo'shimcha `source_branch` / `destination_branch` `{id, name}`, `region` `{id, name}` va `items[].order` — buyurtma xulosasi `{id, order_number, status, total_price, region, district, customer {name, phone_number}}` (xulosa xizmati javob bermasa `null`). X4RzXk1H: pochta — faqat superadmin/admin/branch/manager/registrator/courier (boshqalar 403) va `GET /post/orders/:id` doirasi (filial xodimi — o'z filiali, kuryer — o'z pochtasi); javob `GET /post/scan/:id` bilan bir xil: pochta qatori + `region`, `courier`, `orders[]`. T7 (QPq2C1co): har buyurtma qatorida `problem_contacts: [{name, phone, source: 'logist'|'support'}]` («Muammo bo'lsa», ≤ 2); `operator_phone`, `secondary_operator_phone`, `market.phone_number` menejer/filial/kuryerga YO'Q. Sm3LZ6EN: tashqi qop javobida `batch` `{external_batch_token, size, received_count, pending_count, scanned_count}` (`scanned_count` — qabulni kutayotganlari, hech narsa qabul qilinmagan); son `GET /orders/external` `meta.batches` bilan bir xil doirada, doirada a'zo bo'lmasa `batch: null`. Market faqat o'z a'zolarini ko'radi, begona qop — 404. Keldi = `received_count + pending_count`.",
+        "description": "Prefiks bo'yicha: `BTB-`/`BTR-` → paket (`type: batch`), `POST-` (logistics haqiqiy shakli) / `PST-` → pochta (`type: post`), qolgani → buyurtma (404 bo'lsa tashqi qop). j8hdXE1o: paketni jo'natuvchi YOKI qabul qiluvchi filial xodimi ko'radi (`GET /transfer-batches/:id` bilan bir xil). dwJX3NjT: paket javobida qo'shimcha `source_branch` / `destination_branch` `{id, name}`, `region` `{id, name}` va `items[].order` — buyurtma xulosasi `{id, order_number, status, total_price, region, district, customer {name, phone_number}}` (xulosa xizmati javob bermasa `null`). X4RzXk1H: pochta — faqat superadmin/admin/branch/manager/registrator/courier (boshqalar 403) va `GET /post/orders/:id` doirasi (filial xodimi — o'z filiali, kuryer — o'z pochtasi); javob `GET /post/scan/:id` bilan bir xil: pochta qatori + `region`, `courier`, `orders[]`. T7 (QPq2C1co): har buyurtma qatorida `problem_contacts: [{name, phone, source: 'logist'|'support'}]` («Muammo bo'lsa», ≤ 2); `operator_phone`, `secondary_operator_phone`, `market.phone_number` menejer/filial/kuryerga YO'Q. anKpzwxk: buyurtma tokeni — `GET /orders/qr-code/:token` bilan AYNI filial doirasi: filial xodimi yoki HQ bo'lmagan filial kuryeri o'z filialida bo'lmagan buyurtmaga 403 «Bu buyurtma sizning filialingizda emas» (`data.reason` `order_not_in_your_branch`), filialga biriktirilmagan — 403 `branch_not_assigned`, ma'lumotsiz. Sm3LZ6EN: tashqi qop javobida `batch` `{external_batch_token, size, received_count, pending_count, scanned_count}` (`scanned_count` — qabulni kutayotganlari, hech narsa qabul qilinmagan); son `GET /orders/external` `meta.batches` bilan bir xil doirada, doirada a'zo bo'lmasa `batch: null`. Market faqat o'z a'zolarini ko'radi, begona qop — 404. Keldi = `received_count + pending_count`.",
         "operationId": "ScanGatewayController_scan",
         "parameters": [
           {

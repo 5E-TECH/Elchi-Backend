@@ -22,6 +22,62 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+### 2026-11-03 — Filial qamrovi qayta viloyat bo'yicha: filial istagan kuryeriga beradi, qabul va ko'rish faqat manzil filialda, begona QR yopiq (anKpzwxk)
+
+Ega qarori (Trello anKpzwxk): 2026-11-02 dagi «tuman ↔ filial» biriktiruvi (`serving_branch_id`) qamrovni endi **belgilamaydi**. Qamrov — viloyat qoidasi.
+
+**Qoida** (hamma joyda bir xil, `@app/common` `isOrderServedByBranch`):
+- Buyurtmaning xizmat viloyati: tumanning `assigned_region ?? region_id` (tuman qatori yo'q — `order.region_id`).
+- Oddiy filial xizmat viloyati o'z viloyatiga (`branch.region_id`) teng bo'lgan **hamma** buyurtmaga xizmat qiladi. Bir viloyatda bir nechta filial bo'lsa, ularning hammasi.
+- Viloyati yo'q filial hech narsaga xizmat qilmaydi.
+- HQ jo'natishda cheklanmaydi, lekin HQ **kuryeri** faqat HQ viloyati buyurtmasini oladi.
+- «Eski filialda tugasin» imtiyozlari (#619) endi faqat tumanning **viloyati** o'zgarganda yoziladi (`PATCH /district/:id`, tumanlarni birlashtirish).
+
+**Xato kodlari** (`data.reason`; id'lar `data.details` da):
+
+| HTTP | `data.reason` | Qayerda | Qachon |
+|---|---|---|---|
+| 400 | `region_mismatch` (🆕 kod; avval kodsiz 400) | `POST /branches/posts/:postId/dispatch`, `POST /branches/posts/:postId/reassign` | Pochta viloyati manzil filial viloyatiga teng emas. `details: { post_id, destination_branch_id, post_region_id, destination_region_id }` |
+| 400 | `branch_region_missing` | dispatch, reassign | Manzil filial yoki pochtaning viloyati yo'q. `details.missing`: `destination_branch_region` va/yoki `post_region`. Hech narsa jo'natilmaydi |
+| 409 | `district_not_served_by_branch` | dispatch | Buyurtma xizmat viloyati manzil filialniki emas. `details.{order_ids, district_ids}` |
+| 409 | `order_in_outgoing_batch` 🆕 | `POST /orders/assign-to-courier`, `POST /orders/scan-assign` (filial va HQ kuryeri) | Buyurtma partiyada (`current_batch_id`). «Buyurtma chiquvchi partiyada — kuryerga berilmaydi (avval partiyadan chiqaring)». `details.order_ids`. HQ kuryeri skanida matn — «Buyurtma paketga joylangan — …» (avval kodsiz 400) |
+| 403 | `district_not_served_by_branch` | assign-to-courier, scan-assign | Boshqa viloyat (tranzit) buyurtmasi: «Boshqa viloyat buyurtmasi — kuryerga berilmaydi: #12, #13». Kuryer skanida partiyadan qabul qilingan bo'lsa: «… — posilka filialingizga qabul qilindi, lekin kuryerga berilmaydi …». `details.order_ids` |
+| 403 | `hq_courier_region_only` 🆕 | assign-to-courier (HQ), scan-assign (HQ kuryeri) | Buyurtma HQ viloyatidan emas. `details.order_ids` |
+| 400 | `branch_region_missing` | assign-to-courier (HQ), scan-assign (HQ kuryeri) | HQ filialining viloyati yo'q. `details.branch_id` |
+| 403 | `post_receive_manager_only` 🆕 | `PATCH /post/receive/:id` (HQ → filial o'tkazma pochtasi, `courier_id: '0'`) | Qabul qiluvchi manzil filial MENEJERI emas (registrator, BRANCH akkaunti, boshqa filial yoki HQ menejeri). SUPERADMIN/ADMIN qabul qila oladi — activity log `logistics.post_receive_override`. `details.{post_id, branch_id}` |
+| 403 | `post_not_visible_to_courier` 🆕 | `GET /post/:id`, `GET /post/orders/:id`, pochta QR (`GET /post/scan/:id`, `GET /scan/:token` — `POST-…`) | Sof kuryer hali qabul qilinmagan (SENT) filial o'tkazma pochtasini ochdi. `details.post_id` |
+| 403 | `new_posts_hq_only` 🆕 | `GET /post/new` («Yangi pochtalar») | So'rovchi HQ xodimi emas (SUPERADMIN, ADMIN, HQ registratori/menejeri bo'lmasa). Filial xizmati javob bermasa — 503 (kodsiz, qayta urinish) |
+| 403 | `order_not_in_your_branch` 🆕 | `GET /orders/qr-code/:token` (to'liq va `?view=light`), `GET /scan/:token` (buyurtma tokeni) | Filial xodimi (MANAGER, REGISTRATOR, BRANCH) yoki HQ bo'lmagan filial kuryeri o'z filialida bo'lmagan buyurtmani ochdi: «Bu buyurtma sizning filialingizda emas». **Buyurtma ma'lumoti yo'q** |
+| 403 | `branch_not_assigned` 🆕 | o'sha QR yo'llari | So'rovchi hech qaysi filialga biriktirilmagan: «Siz hech qaysi filialga biriktirilmagansiz — administratorga murojaat qiling». Kuryerga o'zidagi buyurtma baribir ko'rinadi |
+| 503 | `branch_scope_unavailable` 🆕 | o'sha QR yo'llari | Filial, HQ yoki paketni aniqlab bo'lmadi — qayta urinish |
+
+«Sizning filialingizda» (QR): mas'ul filial (`holder_branch_id ?? branch_id`) sizniki, yoki buyurtma sizning filialingizga jo'natilgan (SENT) paketda, yoki (kuryer) buyurtma sizda. HQ xodimi, HQ kuryeri, SUPERADMIN va ADMIN cheklanmaydi. HQ → filial pochtasi jo'natilganda buyurtma darhol manzil filialniki bo'ladi, shuning uchun hali qabul qilinmagan kelayotgan pochta buyurtmasi ham QR orqali ochiladi (pochtaning o'zi kuryerga ko'rinmaydi).
+
+**Endpointlar:**
+- ⚠️ [branch] `POST /branches/posts/:postId/dispatch`: buyurtma viloyatdagi istalgan filialga jo'natiladi (masalan, Urgut buyurtmasi «Samarqand filiali»ga ham, «Urgut filiali»ga ham). Viloyatsiz manzil yoki pochta — 400 `branch_region_missing` (avval tekshiruv o'tkazib yuborilardi).
+- ✏️ [branch] `GET /branches/dispatch-destinations` (HQ jo'natish oynasi): viloyati yo'q filiallar ro'yxatda yo'q — ro'yxatdagi har filialga jo'natish mumkin.
+- ⚠️ [logistics] `POST /orders/assign-to-courier`, `POST /orders/scan-assign`: filial o'z viloyati buyurtmasini **istagan** kuryeriga beradi (tuman biriktiruvi talab qilinmaydi). Boshqa viloyat (tranzit) va partiyadagi buyurtma — yuqoridagi kodlar. HQ kuryeri — faqat HQ viloyati. O'z WAITING yoki ON_THE_ROAD buyurtmasini qayta skanlash — avvalgidek idempotent 200.
+- ⚠️ [logistics] `PATCH /post/receive/:id`: HQ → filial o'tkazma pochtasini faqat manzil filial menejeri (yoki SUPERADMIN/ADMIN) qabul qiladi. Kuryer pochtalari va skaner bilan qabul o'zgarmagan.
+- ⚠️ [logistics] `GET /post` (sof kuryer): hali qabul qilinmagan filial o'tkazma pochtalari (`courier_id: '0'`, SENT) ro'yxatda yo'q (status filtri bilan ham). Ularni to'g'ridan-to'g'ri ochish — 403 `post_not_visible_to_courier`.
+- ⚠️ [logistics] `GET /post/new` faqat HQ uchun.
+- ⚠️ [gateway] Begona QR (`GET /orders/qr-code/:token`, `GET /scan/:token`): 403 `order_not_in_your_branch`, ma'lumotsiz.
+- ✏️ [logistics] `PUT /branches/:id/districts` — **eskirgan** (`deprecated`). U faqat `serving_branch_id` ustunini yozadi, qamrovni o'zgartirmaydi. `coverage_exemptions` doim `{ created: 0, by_branch: [] }`; tuman buyurtmalari o'qilmaydi, ya'ni order-service ishlamasa ham 503 bo'lmaydi. `GET /branches/:id/districts` ham faqat ma'lumot uchun.
+
+→ **Frontendda:**
+- 🔧 Yuqoridagi yangi `data.reason` kodlari uchun xabarni ko'rsating (`message` tayyor matn). `order_not_in_your_branch` da buyurtma kartasini **ochmang**, faqat xabar.
+- 🔧 Admin ekrani «Filial tumanlari» (`PUT /branches/:id/districts`) — yashiring yoki «ma'lumot uchun» deb belgilang: qamrovni endi tuman viloyati belgilaydi (`PATCH /district/:id` → `assigned_region`).
+- 🔧 Kuryer ilovasida kelayotgan filial pochtalari ko'rinmaydi. Menejerda «Yangi pochtalar» bo'limi faqat HQ xodimlarida.
+- 🔧 Filial pochtasini qabul qilish tugmasi faqat manzil filial menejeriga (registratorga — yo'q).
+
+**Deploydan oldin (ops):**
+- HQ filialiga viloyat bering. Aks holda HQ kuryeriga hech narsa berilmaydi (400 `branch_region_missing`). Tekshiruv: `SELECT id, name, region_id FROM branch_schema.branches WHERE type = 'HQ' AND is_deleted = false`.
+- Viloyati yo'q oddiy filiallar hech narsaga xizmat qilmaydi (jo'natish ham, kuryerga berish ham yo'q). Ro'yxat: `SELECT id, name FROM branch_schema.branches WHERE region_id IS NULL AND type <> 'HQ' AND is_deleted = false`.
+- `serving_branch_id` boshqa viloyat filialini ko'rsatgan tumanlar endi o'z viloyati filiallariga xizmat qiladi.
+
+**Ma'lum cheklov:** «Eski filialda tugasin» imtiyozi HQ ga yozilmaydi. HQ viloyatidan boshqa viloyatga ko'chgan tuman buyurtmasi HQ da tursa, uni HQ kuryeriga emas, yangi viloyat filialiga jo'nating.
+
+Migratsiya yo'q. Deploy: branch-service, logistics-service, api-gateway.
+
 ### 2026-11-03 — HQ ro'yxatchisi yaratgan buyurtma HQ «Qabul va yaratish»da ko'rinadi
 
 Xato: HQ ro'yxatchisi (yoki HQ menejeri) market uchun yaratgan buyurtma `source: 'branch'`, `branch_id: HQ` bo'ladi. Superadmin/admin «Qabul va yaratish → Marketlar» filial manbali buyurtmalarni yashirgani uchun ular faqat «Buyurtmalar»da ko'rinib, HQ qabul qila olmasdi.

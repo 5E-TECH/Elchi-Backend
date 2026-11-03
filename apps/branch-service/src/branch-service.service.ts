@@ -3865,23 +3865,39 @@ export class BranchServiceService implements OnModuleInit {
       destination_branch_id: destinationBranchId,
     });
     // LC-09: HQ pochtasi hudud (tumanning assigned_region'i) bo'yicha
-    // yig'iladi — u faqat SHU hududdagi filialga jo'natiladi. Ikkala hudud
-    // ma'lum bo'lib, farq qilsa — butun so'rov 400, hech narsa ko'chirilmaydi.
+    // yig'iladi — u faqat SHU hududdagi filialga jo'natiladi. Viloyat
+    // qoidasi (anKpzwxk): hududlardan biri bo'sh bo'lsa tekshiruv endi
+    // O'TKAZIB YUBORILMAYDI — 400 `branch_region_missing` (fail-closed).
+    // Farq qilsa — butun so'rov 400, hech narsa ko'chirilmaydi.
     const sourcePostRegionId = this.normalizeRegionId(sourcePost?.region_id);
     const destinationRegionId = this.normalizeRegionId(
       destinationBranch.region_id,
     );
-    if (
-      sourcePostRegionId &&
-      destinationRegionId &&
-      sourcePostRegionId !== destinationRegionId
-    ) {
+    if (!sourcePostRegionId || !destinationRegionId) {
+      this.throwDispatchRegionMissing({
+        postId,
+        sourceBranchId,
+        destinationBranch,
+        postRegionId: sourcePostRegionId,
+        destinationRegionId,
+      });
+    }
+    if (sourcePostRegionId !== destinationRegionId) {
       throw new RpcException(
         errorRes(
           `Pochta #${postId} boshqa hudud uchun yig'ilgan (hudud #${sourcePostRegionId}), manzil filial esa hudud #${destinationRegionId} da. ` +
             "Pochtani o'z hududidagi filialga jo'nating. Hech narsa jo'natilmadi",
           400,
           {
+            // Gateway faqat reason/usage/details ni o'tkazadi — mashina kodi
+            // `reason` da, id'lar `details` da.
+            reason: 'region_mismatch',
+            details: {
+              post_id: postId,
+              destination_branch_id: destinationBranchId,
+              post_region_id: sourcePostRegionId,
+              destination_region_id: destinationRegionId,
+            },
             post_id: postId,
             source_branch_id: sourceBranchId,
             destination_branch_id: destinationBranchId,
@@ -4110,45 +4126,20 @@ export class BranchServiceService implements OnModuleInit {
     // LC-13/LC-09: manzil SENT pochtasi MANBA pochtaning hududi bo'yicha
     // guruhlanadi (HQ pochtasi aynan shu hudud bo'yicha yig'ilgan; buyurtmaning
     // geografik region_id'si tuman boshqa hududga o'tkazilgan bo'lsa farq
-    // qiladi). Manba pochtada hudud bo'lmasa — buyurtmaning hududi. Ikkalasi
-    // ham yo'q bo'lsa ('' bigint ustunga ketib 22P02/5xx berardi) — HECH NARSA
-    // yozilmasdan 400, id'lar bilan.
+    // qiladi). Pochta hududi yuqorida majburiy qilingan (`branch_region_missing`)
+    // — hududsiz buyurtma ham shu hudud bilan yoziladi ('' bigint ustunga
+    // ketmaydi).
     const eligibleOrders = candidateOrders.filter((order) =>
       eligibleIdSet.has(this.canonicalId(order?.id)),
     );
-    const regionByOrderId = new Map<string, string>();
-    const regionlessOrderIds: string[] = [];
-    for (const order of eligibleOrders) {
-      const orderId = this.canonicalId(order?.id);
-      const regionId =
-        sourcePostRegionId ?? this.normalizeRegionId(order?.region_id);
-      if (regionId) {
-        regionByOrderId.set(orderId, regionId);
-      } else {
-        regionlessOrderIds.push(orderId);
-      }
-    }
-    if (regionlessOrderIds.length) {
-      throw new RpcException(
-        errorRes(
-          `${regionlessOrderIds.length} ta buyurtmaning hududi (viloyati) aniqlanmadi: ${this.formatOrderIdsForMessage(regionlessOrderIds)}. ` +
-            "Buyurtmaga hudud belgilang yoki uni tanlovdan chiqaring. Hech narsa jo'natilmadi",
-          400,
-          {
-            post_id: postId,
-            source_branch_id: sourceBranchId,
-            destination_branch_id: destinationBranchId,
-            regionless_order_ids: regionlessOrderIds,
-          },
-        ),
-      );
-    }
 
-    // Tuman ↔ filial qamrovi (ega qarori, 2026-11-02): HAR BIR buyurtmaning
-    // tumani manzil filialga biriktirilgan bo'lishi shart (yagona qoida —
-    // `isOrderServedByBranch`). Yuqoridagi LC-09 pochta hududi tekshiruvi
-    // o'z joyida qoladi; bu — buyurtma darajasidagi qat'iyroq tekshiruv.
-    // Bittasi bo'lsa ham BUTUN so'rov 409, hech narsa yozilmaydi.
+    // Buyurtma ↔ filial qamrovi (viloyat qoidasi, anKpzwxk): HAR BIR
+    // buyurtmaning xizmat viloyati (tuman `assigned_region ?? region_id`,
+    // tumansiz — buyurtma viloyati) manzil filial viloyatiga teng bo'lishi
+    // shart (yagona qoida — `isOrderServedByBranch`): viloyatdagi istalgan
+    // faol filial — to'g'ri manzil. Yuqoridagi LC-09 pochta hududi tekshiruvi
+    // o'z joyida qoladi; bu — buyurtma darajasidagi tekshiruv. Bittasi
+    // bo'lsa ham BUTUN so'rov 409, hech narsa yozilmaydi.
     await this.assertOrdersServedByDestination(
       eligibleOrders,
       destinationBranch,
@@ -4169,7 +4160,7 @@ export class BranchServiceService implements OnModuleInit {
         const orderId = this.canonicalId(order?.id);
         return {
           order_id: orderId,
-          assigned_region: regionByOrderId.get(orderId) as string,
+          assigned_region: sourcePostRegionId,
           assigned_branch: destinationBranchId,
           assigned_post_status: Post_status.SENT,
           total_price: Number(order?.total_price ?? 0),
@@ -4364,21 +4355,37 @@ export class BranchServiceService implements OnModuleInit {
     await this.assertBranchHasManager(destinationBranch);
 
     // LC-09: pochta hududi bo'yicha yig'ilgan — faqat SHU hududdagi filialga.
+    // Viloyat qoidasi (anKpzwxk): hududlardan biri bo'sh bo'lsa tekshiruv
+    // O'TKAZIB YUBORILMAYDI — 400 `branch_region_missing` (jo'natishdagi
+    // kabi), hech narsa o'qilmaydi va ko'chirilmaydi.
     const postRegionId = this.normalizeRegionId(post.region_id);
     const destinationRegionId = this.normalizeRegionId(
       destinationBranch.region_id,
     );
-    if (
-      postRegionId &&
-      destinationRegionId &&
-      postRegionId !== destinationRegionId
-    ) {
+    if (!postRegionId || !destinationRegionId) {
+      this.throwDispatchRegionMissing({
+        postId,
+        sourceBranchId,
+        destinationBranch,
+        postRegionId,
+        destinationRegionId,
+        mode: 'reassign',
+      });
+    }
+    if (postRegionId !== destinationRegionId) {
       throw new RpcException(
         errorRes(
           `Pochta #${postId} boshqa hudud uchun (hudud #${postRegionId}), tanlangan filial esa hudud #${destinationRegionId} da. ` +
             "Pochtani faqat o'z hududidagi filialga o'tkazish mumkin. Hech narsa o'tkazilmadi",
           400,
           {
+            reason: 'region_mismatch',
+            details: {
+              post_id: postId,
+              destination_branch_id: destinationBranchId,
+              post_region_id: postRegionId,
+              destination_region_id: destinationRegionId,
+            },
             post_id: postId,
             source_branch_id: sourceBranchId,
             destination_branch_id: destinationBranchId,
@@ -4639,12 +4646,69 @@ export class BranchServiceService implements OnModuleInit {
   }
 
   /**
-   * Tuman ↔ filial qamrovi — jo'natiladigan buyurtmalar manzil filial
-   * qamrovidami (`isOrderServedByBranch`, @app/common). Tumanlar BITTA
+   * LC-09 (viloyat qoidasi, anKpzwxk): HQ → filial jo'natishda (va jo'natilgan
+   * pochtani boshqa filialga o'tkazishda — `mode: 'reassign'`) pochta yoki
+   * manzil filial viloyati bo'sh — 400 `branch_region_missing` (tekshiruv
+   * endi o'tkazib yuborilmaydi; viloyatsiz filial hech narsaga xizmat
+   * qilmaydi). Hech narsa yozilmaydi.
+   */
+  private throwDispatchRegionMissing(input: {
+    postId: string;
+    sourceBranchId: string;
+    destinationBranch: Branch;
+    postRegionId: string | null;
+    destinationRegionId: string | null;
+    mode?: 'dispatch' | 'reassign';
+  }): never {
+    const reassign = input.mode === 'reassign';
+    const destinationBranchId = String(input.destinationBranch.id);
+    const missing: string[] = [];
+    const parts: string[] = [];
+    if (!input.destinationRegionId) {
+      missing.push('destination_branch_region');
+      parts.push(
+        `manzil filial («${input.destinationBranch.name ?? `#${destinationBranchId}`}») viloyati belgilanmagan — avval filialga viloyat biriktiring`,
+      );
+    }
+    if (!input.postRegionId) {
+      missing.push('post_region');
+      parts.push(
+        reassign
+          ? `pochta #${input.postId} viloyati (hududi) belgilanmagan`
+          : `pochta #${input.postId} viloyati (hududi) belgilanmagan — buyurtmalarni viloyati bo'yicha yangi pochtaga yig'ing`,
+      );
+    }
+    throw new RpcException(
+      errorRes(
+        reassign
+          ? `O'tkazib bo'lmaydi: ${parts.join('; ')}. Hech narsa o'tkazilmadi`
+          : `Jo'natib bo'lmaydi: ${parts.join('; ')}. Hech narsa jo'natilmadi`,
+        400,
+        {
+          reason: 'branch_region_missing',
+          details: {
+            missing,
+            post_id: input.postId,
+            destination_branch_id: destinationBranchId,
+            post_region_id: input.postRegionId,
+            destination_region_id: input.destinationRegionId,
+          },
+          post_id: input.postId,
+          source_branch_id: input.sourceBranchId,
+          destination_branch_id: destinationBranchId,
+        },
+      ),
+    );
+  }
+
+  /**
+   * Buyurtma ↔ filial qamrovi (viloyat qoidasi) — jo'natiladigan buyurtmalar
+   * manzil filial qamrovidami (`isOrderServedByBranch`, @app/common): xizmat
+   * viloyati manzil filial viloyatiga teng. Tumanlar BITTA
    * `logistics.district.find_by_ids` bilan o'qiladi (tumansiz buyurtmalar
    * bo'lsa — buyurtma viloyati bo'yicha, RPC'siz). Buyurtmada tuman bor, lekin
-   * logistikada topilmadi — xizmat qilmaydi. Mos kelmaganlar bo'lsa — 409,
-   * id'lar XABARDA (gateway xato tanasidan `data` ni tashlab yuboradi).
+   * logistikada topilmadi — xizmat qilmaydi. Mos kelmaganlar bo'lsa — 409
+   * «Boshqa viloyat buyurtmasi», id'lar XABARDA va `details` da.
    *
    * O'tish holati: buyurtma HQ pochtasiga A viloyati bo'yicha yig'ilgach
    * tumani B viloyatiga o'tkazilsa, A filialiga bu tekshiruv, B filialiga
@@ -4701,8 +4765,8 @@ export class BranchServiceService implements OnModuleInit {
 
     throw new RpcException(
       errorRes(
-        `Quyidagi buyurtmalar tumani tanlangan filialga biriktirilmagan: ${this.formatOrderIdsForMessage(notServedOrderIds)}. ` +
-          "Ularni tumaniga xizmat qiladigan filialga jo'nating yoki tanlovdan olib tashlang. " +
+        `Boshqa viloyat buyurtmasi — bu filialga jo'natilmaydi: ${this.formatOrderIdsForMessage(notServedOrderIds)}. ` +
+          "Ularni o'z viloyatidagi filialga jo'nating yoki tanlovdan olib tashlang. " +
           (notServedDistrictIds.length
             ? `Tuman(lar): ${this.formatOrderIdsForMessage(notServedDistrictIds)}. `
             : '') +
@@ -4827,12 +4891,14 @@ export class BranchServiceService implements OnModuleInit {
    * Pochta jo'natish oynasi uchun manzil filiallar ro'yxati.
    *
    * - Kirish: superadmin/admin yoki HQ registratori (qolganlar — 403).
-   * - Faqat FAOL REGIONAL/HYBRID filiallar (HQ va PICKUP hech qachon), ixtiyoriy
-   *   region_id filtri bilan — dispatchPostToBranch'ning filial darajasidagi
-   *   qoidasi (tur/holat/hudud). Tuman ↔ filial qamrovi bu yerda HISOBGA
-   *   OLINMAYDI: u har bir buyurtma bo'yicha jo'natish paytida tekshiriladi
+   * - Faqat FAOL, VILOYATI BOR REGIONAL/HYBRID filiallar (HQ va PICKUP hech
+   *   qachon; viloyatsiz filial — 400 `branch_region_missing` bo'lardi),
+   *   ixtiyoriy region_id filtri bilan — dispatchPostToBranch'ning filial
+   *   darajasidagi qoidasi (tur/holat/hudud). Buyurtma qamrovi (viloyat qoidasi) har bir
+   *   buyurtma bo'yicha jo'natish paytida tekshiriladi
    *   (`assertOrdersServedByDestination`, 409 `district_not_served_by_branch`)
-   *   — bir viloyatda tumanlarni bo'lishgan ikki filial ham ro'yxatda chiqadi.
+   *   — bir viloyatdagi barcha filiallar ro'yxatda chiqadi va hammasi to'g'ri
+   *   manzil.
    * - PUL MAYDONLARI YO'Q (branch.find_all'dan farqli: u menejer oyligi,
    *   kuryer balanslari va olinishi_kerak/berilishi_kerak ni qaytaradi —
    *   registrator ularni ko'rmasligi kerak).
@@ -4850,15 +4916,20 @@ export class BranchServiceService implements OnModuleInit {
       this.badRequest("region_id noto'g'ri");
     }
 
-    const branches = await this.branchRepo.find({
-      where: {
-        isDeleted: false,
-        status: Status.ACTIVE,
-        type: In([BranchType.REGIONAL, BranchType.HYBRID]),
-        ...(regionId ? { region_id: regionId } : {}),
-      },
-      order: { name: 'ASC' },
-    });
+    // Viloyati yo'q filial ro'yxatga chiqmaydi: viloyat qoidasida u hech
+    // narsaga xizmat qilmaydi, jo'natish esa 400 `branch_region_missing`
+    // berardi (dispatchPostToBranch bilan bir xil `normalizeRegionId`).
+    const branches = (
+      await this.branchRepo.find({
+        where: {
+          isDeleted: false,
+          status: Status.ACTIVE,
+          type: In([BranchType.REGIONAL, BranchType.HYBRID]),
+          ...(regionId ? { region_id: regionId } : {}),
+        },
+        order: { name: 'ASC' },
+      })
+    ).filter((branch) => this.normalizeRegionId(branch.region_id) !== null);
 
     const branchIds = branches.map((branch) => String(branch.id));
     const managerAssignments = branchIds.length
@@ -6172,8 +6243,9 @@ export class BranchServiceService implements OnModuleInit {
 
     // Tuman ↔ filial qamrovi: biriktirilgan tumanlariga endi xizmat qila
     // olmaydigan filialning tumanlari bo'shatiladi (saqlangandan KEYIN,
-    // best-effort) — aks holda `serving_branch_id` ustunligi tufayli bu
-    // tumanlar buyurtmalarini hech bir filialga jo'natib bo'lmay HQ'da qolardi:
+    // best-effort). Viloyat qoidasidan (anKpzwxk) beri `serving_branch_id`
+    // qamrovga ta'sir qilmaydi — bu faqat ustunni toza saqlash (keyin
+    // olib tashlanadi):
     //   - nofaol qilinsa (nofaol filialga pochta jo'natilmaydi);
     //   - viloyati o'zgarsa (tumanlar eski viloyatda qoladi — LC-09 ularning
     //     pochtasini yangi viloyatdagi filialga jo'natmaydi; tuman tomonida

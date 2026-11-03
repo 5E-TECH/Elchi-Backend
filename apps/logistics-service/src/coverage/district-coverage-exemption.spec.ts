@@ -19,6 +19,10 @@ import {
  * tugaydi; HQ, MARKET, marketga jo'natilgan bekor va yakunlangan holatlar,
  * ko'chishdan keyin ham xizmat qiladigan filial va noma'lum filial —
  * imtiyozsiz. Yo'ldagi (SENT) partiya — borayotgan filialniki.
+ *
+ * Viloyat qoidasi (anKpzwxk, 2026-11-03): imtiyoz faqat tumanning XIZMAT
+ * VILOYATI o'zgarganda paydo bo'ladi; `serving_branch_id` o'zgarishi
+ * (`PUT /branches/:id/districts`) endi imtiyoz bermaydi.
  */
 type Branch = { id: string; type: string; region_id: string | null };
 
@@ -52,7 +56,7 @@ const branchesById = new Map<string, Branch | null>([
   ['20', branch('20', { region_id: '2' })],
 ]);
 
-/** Tuman 5: viloyat 1, xizmat filiali yo'q. */
+/** Tuman 5: viloyat 1, xizmat filiali yo'q (u endi qamrovga ta'sir qilmaydi). */
 const district5 = (overrides: Record<string, unknown> = {}) => ({
   id: '5',
   region_id: '1',
@@ -205,7 +209,11 @@ describe('computeCoverageExemptions', () => {
   ) =>
     computeCoverageExemptions({ rows, before, after, branchesById: branches });
 
-  // Xizmat filiali ko'chishi: P (10) → B (11).
+  // Tumanning xizmat viloyati ko'chishi: 1 → 2 (filial 10 va 11 — viloyat 1,
+  // filial 20 — viloyat 2).
+  const regionMoveBefore = district5();
+  const regionMoveAfter = district5({ assigned_region: '2' });
+  // Faqat xizmat filiali ko'chishi (viloyat o'zgarmaydi): P (10) → B (11).
   const servingMoveBefore = district5({ serving_branch_id: '10' });
   const servingMoveAfter = district5({ serving_branch_id: '11' });
 
@@ -213,8 +221,8 @@ describe('computeCoverageExemptions', () => {
     expect(
       compute(
         [row({ status: Order_status.WAITING })],
-        servingMoveBefore,
-        servingMoveAfter,
+        regionMoveBefore,
+        regionMoveAfter,
       ),
     ).toEqual([{ order_id: '101', branch_id: '10', district_id: '5' }]);
   });
@@ -232,8 +240,8 @@ describe('computeCoverageExemptions', () => {
             branch_id: '10',
           }),
         ],
-        servingMoveBefore,
-        servingMoveAfter,
+        regionMoveBefore,
+        regionMoveAfter,
       ),
     ).toEqual([{ order_id: '101', branch_id: '10', district_id: '5' }]);
   });
@@ -250,8 +258,8 @@ describe('computeCoverageExemptions', () => {
             current_batch_id: '900',
           }),
         ],
-        servingMoveBefore,
-        servingMoveAfter,
+        regionMoveBefore,
+        regionMoveAfter,
       ),
     ).toEqual([{ order_id: '101', branch_id: '10', district_id: '5' }]);
   });
@@ -269,8 +277,8 @@ describe('computeCoverageExemptions', () => {
             batch_destination_branch_id: '10',
           }),
         ],
-        servingMoveBefore,
-        servingMoveAfter,
+        regionMoveBefore,
+        regionMoveAfter,
       ),
     ).toEqual([{ order_id: '101', branch_id: '10', district_id: '5' }]);
   });
@@ -285,8 +293,8 @@ describe('computeCoverageExemptions', () => {
             batch_destination_branch_id: '1',
           }),
         ],
-        servingMoveBefore,
-        servingMoveAfter,
+        regionMoveBefore,
+        regionMoveAfter,
       ),
     ).toEqual([]);
   });
@@ -295,8 +303,8 @@ describe('computeCoverageExemptions', () => {
     expect(
       compute(
         [row({ current_batch_id: '902', batch_destination_branch_id: null })],
-        servingMoveBefore,
-        servingMoveAfter,
+        regionMoveBefore,
+        regionMoveAfter,
       ),
     ).toEqual([{ order_id: '101', branch_id: '10', district_id: '5' }]);
   });
@@ -305,8 +313,8 @@ describe('computeCoverageExemptions', () => {
     expect(
       computeCoverageExemptions({
         rows: [row()],
-        before: servingMoveBefore,
-        after: servingMoveAfter,
+        before: regionMoveBefore,
+        after: regionMoveAfter,
         branchesById,
         targetDistrictId: '06',
       }),
@@ -317,8 +325,8 @@ describe('computeCoverageExemptions', () => {
     expect(
       compute(
         [row({ holder_type: 'MARKET', holder_branch_id: null })],
-        servingMoveBefore,
-        servingMoveAfter,
+        regionMoveBefore,
+        regionMoveAfter,
       ),
     ).toEqual([]);
   });
@@ -327,7 +335,7 @@ describe('computeCoverageExemptions', () => {
     '⭐ filial qo‘lidagi %s (WAITING ga qaytarilishi mumkin) — imtiyoz',
     (status) => {
       expect(
-        compute([row({ status })], servingMoveBefore, servingMoveAfter),
+        compute([row({ status })], regionMoveBefore, regionMoveAfter),
       ).toEqual([{ order_id: '101', branch_id: '10', district_id: '5' }]);
     },
   );
@@ -336,8 +344,8 @@ describe('computeCoverageExemptions', () => {
     expect(
       compute(
         [row({ status: Order_status.CANCELLED_SENT })],
-        servingMoveBefore,
-        servingMoveAfter,
+        regionMoveBefore,
+        regionMoveAfter,
       ),
     ).toEqual([]);
   });
@@ -351,7 +359,7 @@ describe('computeCoverageExemptions', () => {
     'yakunlangan holat (%s) — imtiyoz yo‘q (shartnoma ham filtrlaydi)',
     (status) => {
       expect(
-        compute([row({ status })], servingMoveBefore, servingMoveAfter),
+        compute([row({ status })], regionMoveBefore, regionMoveAfter),
       ).toEqual([]);
     },
   );
@@ -383,6 +391,15 @@ describe('computeCoverageExemptions', () => {
         district5({ serving_branch_id: null }),
       ),
     ).toEqual([]);
+    // Viloyat 1 → 2: viloyat 2 filiali (20) oldin ham, keyin ham — ko'chishdan
+    // keyin xizmat qiladi (yutadi).
+    expect(
+      compute(
+        [row({ holder_branch_id: '20', branch_id: '20' })],
+        regionMoveBefore,
+        regionMoveAfter,
+      ),
+    ).toEqual([]);
     // Viloyat o'zgarmadi (assigned_region = region_id).
     expect(
       compute([row()], district5(), district5({ assigned_region: '1' })),
@@ -390,20 +407,27 @@ describe('computeCoverageExemptions', () => {
   });
 
   it('ko‘chishdan OLDIN xizmat qilmagan filial — imtiyoz yo‘q', () => {
-    // P → B ko'chishida uchinchi filial (viloyat 1, filial 12) — oldin ham
-    // xizmat qilmasdi (tuman 10 niki edi).
-    const branches = new Map(branchesById).set('12', branch('12'));
+    // Viloyat 1 → 2 ko'chishida viloyat 3 filiali (12) va viloyatsiz filial
+    // (13) — oldin ham xizmat qilmasdi.
+    const branches = new Map(branchesById)
+      .set('12', branch('12', { region_id: '3' }))
+      .set('13', branch('13', { region_id: null }));
     expect(
       compute(
-        [row({ holder_branch_id: '12', branch_id: '12' })],
-        servingMoveBefore,
-        servingMoveAfter,
+        [
+          row({ id: '101', holder_branch_id: '12', branch_id: '12' }),
+          row({ id: '102', holder_branch_id: '13', branch_id: '13' }),
+        ],
+        regionMoveBefore,
+        regionMoveAfter,
         branches,
       ),
     ).toEqual([]);
   });
 
-  it('⭐ xizmat filiali P → B: faqat P qo‘lidagilar, B qo‘lidagi — yo‘q', () => {
+  it('⭐ faqat xizmat filiali P → B (viloyat o‘sha): imtiyoz YO‘Q — serving_branch_id endi qamrov emas', () => {
+    // Avval (#617) P qo'lidagi 101 imtiyoz olardi; viloyat qoidasida P ham,
+    // B ham ko'chishdan oldin va keyin xizmat qiladi.
     expect(
       compute(
         [
@@ -413,7 +437,15 @@ describe('computeCoverageExemptions', () => {
         servingMoveBefore,
         servingMoveAfter,
       ),
-    ).toEqual([{ order_id: '101', branch_id: '10', district_id: '5' }]);
+    ).toEqual([]);
+    expect(
+      isCoverageExemptionEligible({
+        row: row(),
+        before: servingMoveBefore,
+        after: servingMoveAfter,
+        branch: branch('10'),
+      }),
+    ).toBe(false);
   });
 
   it('⭐ viloyat ko‘chishi, xizmat filialisiz: eski viloyat filiallari imtiyozli', () => {
@@ -434,7 +466,9 @@ describe('computeCoverageExemptions', () => {
     ]);
   });
 
-  it('⭐ viloyat ko‘chishi, xizmat filiali bor edi (bo‘shatiladi): faqat o‘sha filial', () => {
+  it('⭐ viloyat ko‘chishi, xizmat filiali bor edi (bo‘shatiladi): eski viloyatning BARCHA filiallari imtiyozli', () => {
+    // Avval faqat xizmat filiali (10) imtiyoz olardi; endi serving_branch_id
+    // hisobga olinmaydi — viloyat 1 dagi 10 ham, 11 ham.
     expect(
       compute(
         [
@@ -444,10 +478,14 @@ describe('computeCoverageExemptions', () => {
         servingMoveBefore,
         district5({ assigned_region: '2', serving_branch_id: null }),
       ),
-    ).toEqual([{ order_id: '101', branch_id: '10', district_id: '5' }]);
+    ).toEqual([
+      { order_id: '101', branch_id: '10', district_id: '5' },
+      { order_id: '102', branch_id: '11', district_id: '5' },
+    ]);
   });
 
-  it('xizmat filiali biriktirildi (null → B): viloyatdagi boshqa filiallar imtiyozli', () => {
+  it('xizmat filiali biriktirildi (null → B), viloyat o‘sha: imtiyoz YO‘Q', () => {
+    // Avval viloyatdagi boshqa filial (10) imtiyoz olardi.
     expect(
       compute(
         [
@@ -457,19 +495,19 @@ describe('computeCoverageExemptions', () => {
         district5(),
         district5({ serving_branch_id: '11' }),
       ),
-    ).toEqual([{ order_id: '101', branch_id: '10', district_id: '5' }]);
+    ).toEqual([]);
   });
 
   it('noma‘lum filial (qatori yo‘q / null) — imtiyoz yo‘q', () => {
     const branches = new Map<string, Branch | null>([['10', null]]);
     expect(
-      compute([row()], servingMoveBefore, servingMoveAfter, branches),
+      compute([row()], regionMoveBefore, regionMoveAfter, branches),
     ).toEqual([]);
     expect(
       compute(
         [row({ holder_branch_id: '77', branch_id: '77' })],
-        servingMoveBefore,
-        servingMoveAfter,
+        regionMoveBefore,
+        regionMoveAfter,
       ),
     ).toEqual([]);
   });
@@ -478,8 +516,8 @@ describe('computeCoverageExemptions', () => {
     expect(
       compute(
         [row({ holder_type: null, holder_branch_id: null, branch_id: '10' })],
-        servingMoveBefore,
-        servingMoveAfter,
+        regionMoveBefore,
+        regionMoveAfter,
       ),
     ).toEqual([{ order_id: '101', branch_id: '10', district_id: '5' }]);
   });
@@ -488,8 +526,8 @@ describe('computeCoverageExemptions', () => {
     expect(
       compute(
         [row(), row(), row({ id: 'x' })],
-        servingMoveBefore,
-        servingMoveAfter,
+        regionMoveBefore,
+        regionMoveAfter,
       ),
     ).toEqual([{ order_id: '101', branch_id: '10', district_id: '5' }]);
   });
@@ -498,8 +536,8 @@ describe('computeCoverageExemptions', () => {
     expect(
       isCoverageExemptionEligible({
         row: row({ holder_branch_id: '11', branch_id: '11' }),
-        before: servingMoveBefore,
-        after: servingMoveAfter,
+        before: regionMoveBefore,
+        after: regionMoveAfter,
         branch: branch('10'),
       }),
     ).toBe(false);

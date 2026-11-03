@@ -1619,7 +1619,15 @@ describe('BranchServiceService', () => {
 
     beforeEach(() => {
       // Kuryersiz HQ pochtasi: logistics uni courier_id = '0' bilan yaratadi.
-      postRow = { id: '900', courier_id: '0', status: 'new', branch_id: null };
+      // Viloyat qoidasi (anKpzwxk): pochta viloyati majburiy (#14 — manzil
+      // filiallar viloyati), aks holda 400 `branch_region_missing`.
+      postRow = {
+        id: '900',
+        courier_id: '0',
+        status: 'new',
+        branch_id: null,
+        region_id: '14',
+      };
       postOrders = [hqOrder('1001')];
       requesterRows = [];
       managerRows = [
@@ -2296,6 +2304,19 @@ describe('BranchServiceService', () => {
         type: 'HYBRID',
         status: 'active',
         phone_number: null,
+        region_id: '7',
+        manager_id: null,
+        isDeleted: false,
+      },
+      // Viloyat qoidasi (anKpzwxk): viloyatsiz filial hech narsaga xizmat
+      // qilmaydi — jo'natish 400 `branch_region_missing`; ro'yxatga chiqmaydi.
+      {
+        id: '18',
+        name: 'Viloyatsiz filial',
+        code: 'NOREG',
+        type: 'REGIONAL',
+        status: 'active',
+        phone_number: null,
         region_id: null,
         manager_id: null,
         isDeleted: false,
@@ -2381,14 +2402,14 @@ describe('BranchServiceService', () => {
         type: 'HYBRID',
         status: 'active',
         phone_number: null,
-        region_id: null,
-        region: null,
+        region_id: '7',
+        region: { id: '7', name: 'Sirdaryo viloyati' },
         has_manager: false,
         manager: null,
       },
     ];
 
-    it('superadmin: faol REGIONAL/HYBRID filiallar menejeri bilan; pul maydonlari yo‘q', async () => {
+    it('superadmin: faol, viloyati bor REGIONAL/HYBRID filiallar menejeri bilan; viloyatsiz filial yo‘q; pul maydonlari yo‘q', async () => {
       const res = await service.findDispatchDestinations(
         {},
         { id: '1', roles: ['superadmin'] },
@@ -2396,6 +2417,9 @@ describe('BranchServiceService', () => {
 
       expect(res.statusCode).toBe(200);
       expect(res.data).toEqual({ items: expectedItems, total: 2 });
+      // Viloyatsiz filial (#18) DB'dan kelsa ham ro'yxatda yo'q.
+      const { items } = res.data as { items: Array<{ id: string }> };
+      expect(items.map((item) => item.id)).toEqual(['14', '17']);
 
       const [{ where }] = branchRepo.find.mock.calls[0];
       expect(where).toEqual(

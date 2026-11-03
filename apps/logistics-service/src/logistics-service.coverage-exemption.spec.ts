@@ -11,8 +11,11 @@ import type { OpenCustodyRow } from './coverage/district-coverage-exemption';
 
 /**
  * Tuman qamrovi IMTIYOZLARI (ega qarori, 2026-11-02): tuman ko'chirilganda
- * (boshqa viloyatga / boshqa xizmat filialiga) shu paytda eski filial yoki
- * uning kuryeri qo'lidagi ochiq buyurtmalar eski filialda tugaydi.
+ * shu paytda eski filial yoki uning kuryeri qo'lidagi ochiq buyurtmalar eski
+ * filialda tugaydi. Viloyat qoidasidan (anKpzwxk, 2026-11-03) beri imtiyoz
+ * faqat tumanning XIZMAT VILOYATI o'zgarganda paydo bo'ladi;
+ * `serving_branch_id` almashishi (setDistrictServingBranch /
+ * clearDistrictServingBranch) qamrovni o'zgartirmaydi — imtiyoz yo'q.
  *
  *  - snapshot: `order.open_custody_by_district` sahifalab o'qiladi (≤ 50
  *    tuman bo'lagi, `next_after_id`, sahifa chegarasi), xato — 503 va tuman
@@ -578,10 +581,11 @@ describe('snapshotCoverageExemptions — custody sahifalash va fail-closed', () 
       service as unknown as { snapshotCoverageExemptions: Snapshot }
     ).snapshotCoverageExemptions.bind(service);
 
-  const moveP_to_B = (districtId = '5') => ({
+  // Tumanning xizmat viloyati 1 → 2 (viloyat qoidasi: imtiyoz faqat shunda).
+  const moveRegion1_to_2 = (districtId = '5') => ({
     district_id: districtId,
-    before: district({ id: districtId, serving_branch_id: '10' }),
-    after: district({ id: districtId, serving_branch_id: '11' }),
+    before: district({ id: districtId }),
+    after: district({ id: districtId, assigned_region: '2' }),
   });
 
   it('⭐ ko‘p sahifa: next_after_id bo‘yicha oxirigacha o‘qiladi, hammasi yoziladi', async () => {
@@ -594,8 +598,8 @@ describe('snapshotCoverageExemptions — custody sahifalash va fail-closed', () 
     });
 
     const created = await snapshotOf(ctx.service)({
-      moves: [moveP_to_B()],
-      source: 'set_serving_branch',
+      moves: [moveRegion1_to_2()],
+      source: 'district_update',
     });
 
     expect(created).toHaveLength(5);
@@ -635,10 +639,16 @@ describe('snapshotCoverageExemptions — custody sahifalash va fail-closed', () 
     const snapshot = snapshotOf(ctx.service);
 
     expect(
-      await snapshot({ moves: [moveP_to_B()], source: 'set_serving_branch' }),
+      await snapshot({
+        moves: [moveRegion1_to_2()],
+        source: 'district_update',
+      }),
     ).toHaveLength(1);
     expect(
-      await snapshot({ moves: [moveP_to_B()], source: 'set_serving_branch' }),
+      await snapshot({
+        moves: [moveRegion1_to_2()],
+        source: 'district_update',
+      }),
     ).toEqual([]);
     expect(ctx.exemptions.rows).toHaveLength(1);
   });
@@ -646,10 +656,10 @@ describe('snapshotCoverageExemptions — custody sahifalash va fail-closed', () 
   it('51 tuman — 50 + 1 bo‘lakda so‘raladi', async () => {
     const ctx = districtSetup({ districts: [], custody: { rows: [] } });
     const moves = Array.from({ length: 51 }, (_, index) =>
-      moveP_to_B(String(index + 1)),
+      moveRegion1_to_2(String(index + 1)),
     );
 
-    await snapshotOf(ctx.service)({ moves, source: 'set_serving_branch' });
+    await snapshotOf(ctx.service)({ moves, source: 'district_update' });
 
     const sizes = custodyCalls(ctx.orderClient).map(
       ([, payload]) => (payload.district_ids as string[]).length,
@@ -676,8 +686,8 @@ describe('snapshotCoverageExemptions — custody sahifalash va fail-closed', () 
 
       const error = await rpcError(
         snapshotOf(ctx.service)({
-          moves: [moveP_to_B()],
-          source: 'set_serving_branch',
+          moves: [moveRegion1_to_2()],
+          source: 'district_update',
         }),
       );
 
@@ -706,8 +716,8 @@ describe('snapshotCoverageExemptions — custody sahifalash va fail-closed', () 
 
     const error = await rpcError(
       snapshotOf(ctx.service)({
-        moves: [moveP_to_B()],
-        source: 'set_serving_branch',
+        moves: [moveRegion1_to_2()],
+        source: 'district_update',
       }),
     );
 
@@ -724,8 +734,8 @@ describe('snapshotCoverageExemptions — custody sahifalash va fail-closed', () 
     });
     const error = await rpcError(
       snapshotOf(down.service)({
-        moves: [moveP_to_B()],
-        source: 'set_serving_branch',
+        moves: [moveRegion1_to_2()],
+        source: 'district_update',
       }),
     );
     expect(error.statusCode).toBe(503);
@@ -738,8 +748,8 @@ describe('snapshotCoverageExemptions — custody sahifalash va fail-closed', () 
     });
     expect(
       await snapshotOf(unknown.service)({
-        moves: [moveP_to_B()],
-        source: 'set_serving_branch',
+        moves: [moveRegion1_to_2()],
+        source: 'district_update',
       }),
     ).toEqual([]);
   });
@@ -775,7 +785,9 @@ describe('updateDistrict — viloyat ko‘chishida imtiyoz (tuman saqlanishidan 
     }),
   ];
 
-  it('⭐ xizmat filiali bor edi (10): faqat 10 qo‘lidagilar imtiyozli; javob va auditda', async () => {
+  it('⭐ AC6 «Eski filialda tugasin»: xizmat filiali bor edi (10) — eski viloyatning BARCHA filiallari (10, 11) imtiyozli; javob va auditda', async () => {
+    // Viloyat qoidasi (anKpzwxk): serving_branch_id hisobga olinmaydi —
+    // avval faqat 10 imtiyoz olardi.
     const ctx = districtSetup({
       districts: [district({ id: '5', serving_branch_id: '10' })],
       custody: { rows },
@@ -785,7 +797,7 @@ describe('updateDistrict — viloyat ko‘chishida imtiyoz (tuman saqlanishidan 
       ctx.service.updateDistrict('5', { assigned_region: '2' }, SA),
     );
 
-    expect(ctx.pairs()).toEqual(['101@10']);
+    expect(ctx.pairs()).toEqual(['101@10', '102@11']);
     expect(ctx.exemptions.rows[0]).toMatchObject({
       district_id: '5',
       source: 'district_update',
@@ -796,8 +808,11 @@ describe('updateDistrict — viloyat ko‘chishida imtiyoz (tuman saqlanishidan 
       serving_branch_id: null,
       serving_branch_cleared: true,
       coverage_exemptions: {
-        created: 1,
-        by_branch: [{ branch_id: '10', count: 1 }],
+        created: 2,
+        by_branch: [
+          { branch_id: '10', count: 1 },
+          { branch_id: '11', count: 1 },
+        ],
       },
     });
     expect(ctx.activityLog.logChange).toHaveBeenCalledWith(
@@ -810,8 +825,11 @@ describe('updateDistrict — viloyat ko‘chishida imtiyoz (tuman saqlanishidan 
           serving_branch_id: null,
           serving_branch_cleared: true,
           coverage_exemptions: {
-            created: 1,
-            by_branch: [{ branch_id: '10', count: 1 }],
+            created: 2,
+            by_branch: [
+              { branch_id: '10', count: 1 },
+              { branch_id: '11', count: 1 },
+            ],
           },
         },
       }),
@@ -854,6 +872,35 @@ describe('updateDistrict — viloyat ko‘chishida imtiyoz (tuman saqlanishidan 
 
     expect(error.statusCode).toBe(503);
     expect(error.message).toBe(COVERAGE_EXEMPTION_UNAVAILABLE_MESSAGE);
+    expect(ctx.districtRepo.save).not.toHaveBeenCalled();
+    expect(ctx.districtRepo.rows.get('5')).toMatchObject({
+      assigned_region: null,
+      serving_branch_id: '10',
+    });
+    expect(ctx.activityLog.logChange).not.toHaveBeenCalled();
+  });
+
+  // Viloyat qoidasi (anKpzwxk): imtiyoz yozuvchi faqat viloyat ko'chishlari
+  // (updateDistrict, mergeDistricts) — INSERT xatosining fail-closed yo'li
+  // shu yerda qoplanadi (avval setDistrictServingBranch'da edi).
+  it('⭐ fail closed: imtiyoz yozish (INSERT) yiqildi — 503, tuman O‘ZGARMAYDI, audit yo‘q', async () => {
+    const exemptions = exemptionRepoOf();
+    exemptions.failInserts();
+    const ctx = districtSetup({
+      districts: [district({ id: '5', serving_branch_id: '10' })],
+      custody: { rows },
+      exemptions,
+    });
+
+    const error = await rpcError(
+      ctx.service.updateDistrict('5', { assigned_region: '2' }, SA),
+    );
+
+    expect(error.statusCode).toBe(503);
+    expect(error.message).toBe(COVERAGE_EXEMPTION_UNAVAILABLE_MESSAGE);
+    // INSERT haqiqatan chaqirildi (10 va 11 imtiyozlari) va yiqildi.
+    expect(ctx.exemptions.manager.query).toHaveBeenCalledTimes(1);
+    expect(ctx.exemptions.rows).toHaveLength(0);
     expect(ctx.districtRepo.save).not.toHaveBeenCalled();
     expect(ctx.districtRepo.rows.get('5')).toMatchObject({
       assigned_region: null,
@@ -1009,8 +1056,12 @@ describe('updateDistrict — viloyat ko‘chishida imtiyoz (tuman saqlanishidan 
 
 // ------------------------------------------------------ setDistrictServingBranch
 
-describe('setDistrictServingBranch — xizmat filiali o‘zgarganda imtiyoz (shu tranzaksiyada)', () => {
-  it('⭐ ko‘chdi (11 → 10) va biriktirildi (null → 10): yo‘qotgan filiallar imtiyozli', async () => {
+describe('setDistrictServingBranch — viloyat qoidasida xizmat filiali almashishi imtiyoz BERMAYDI', () => {
+  // Viloyat qoidasi (anKpzwxk, 2026-11-03): `serving_branch_id` qamrovga
+  // ta'sir qilmaydi — bir viloyatdagi barcha filiallar (10, 11) ko'chishdan
+  // oldin ham, keyin ham xizmat qiladi. Avval (#617) bu holatlarda yo'qotgan
+  // filialga imtiyoz yozilardi; endi custody o'qilsa ham imtiyoz yo'q.
+  it('⭐ ko‘chdi (11 → 10) va biriktirildi (null → 10): imtiyoz YO‘Q (avval 11 ga 2 ta edi)', async () => {
     const ctx = districtSetup({
       districts: [
         district({ id: '4', serving_branch_id: '11' }),
@@ -1019,7 +1070,6 @@ describe('setDistrictServingBranch — xizmat filiali o‘zgarganda imtiyoz (shu
       ],
       custody: {
         rows: [
-          // 4: 11 qo'lidagi — imtiyoz; 10 qo'lidagi — 10 yutadi, imtiyoz yo'q.
           custodyRow({
             id: '401',
             district_id: '4',
@@ -1027,7 +1077,6 @@ describe('setDistrictServingBranch — xizmat filiali o‘zgarganda imtiyoz (shu
             branch_id: '11',
           }),
           custodyRow({ id: '402', district_id: '4' }),
-          // 3: viloyat qoidasidan 10 ga — 11 kuryeridagi imtiyozli.
           custodyRow({
             id: '301',
             district_id: '3',
@@ -1057,42 +1106,16 @@ describe('setDistrictServingBranch — xizmat filiali o‘zgarganda imtiyoz (shu
       added: ['4', '3'],
       removed: [],
       moved: [{ district_id: '4', from_branch_id: '11' }],
-      coverage_exemptions: {
-        created: 2,
-        by_branch: [{ branch_id: '11', count: 2 }],
-      },
+      coverage_exemptions: { created: 0, by_branch: [] },
     });
-    expect(ctx.pairs()).toEqual(['301@11', '401@11']);
-    // Faqat o'zgaradigan tumanlar so'raldi — TRANZAKSIYADAN OLDIN, so'ng
-    // COMMIT'dan keyin qayta (yangi qator yo'q — sonlar ikki marta emas).
-    const calls = custodyCalls(ctx.orderClient);
-    expect(calls).toHaveLength(2);
-    for (const [, payload] of calls) {
-      expect((payload.district_ids as string[]).sort()).toEqual(['3', '4']);
-    }
-    // Birinchi o'qish — tranzaksiyadan OLDIN, ikkinchisi — COMMIT'dan KEYIN
-    // (tranzaksiya callback'i ichida emas).
-    expect(ctx.districtRepo.manager.transaction).toHaveBeenCalledTimes(1);
-    expect(ctx.orderClient.custodyReads.map((read) => read.commits)).toEqual([
-      0, 1,
-    ]);
-    // Har tuman auditida o'z soni.
-    expect(ctx.activityLog.logChange).toHaveBeenCalledWith(
-      expect.objectContaining({
-        entity_id: '4',
-        old_value: { serving_branch_id: '11' },
-        new_value: {
-          serving_branch_id: '10',
-          coverage_exemptions: {
-            created: 1,
-            by_branch: [{ branch_id: '11', count: 1 }],
-          },
-        },
-      }),
-    );
+    expect(ctx.pairs()).toEqual([]);
+    expect(ctx.exemptions.manager.query).not.toHaveBeenCalled();
+    // Tuman ustuni baribir yoziladi (PUT /branches/:id/districts chaqirilaveradi).
+    expect(ctx.districtRepo.rows.get('4')?.serving_branch_id).toBe('10');
+    expect(ctx.districtRepo.rows.get('3')?.serving_branch_id).toBe('10');
   });
 
-  it('⭐ bo‘shatildi (10 → null), filial viloyatsiz — 10 qo‘lidagilar imtiyozli', async () => {
+  it('⭐ bo‘shatildi (10 → null), filial viloyatsiz — imtiyoz YO‘Q (viloyatsiz filial oldin ham xizmat qilmasdi)', async () => {
     const ctx = districtSetup({
       districts: [district({ id: '1', serving_branch_id: '10' })],
       custody: {
@@ -1105,12 +1128,9 @@ describe('setDistrictServingBranch — xizmat filiali o‘zgarganda imtiyoz (shu
 
     expect(res.data).toMatchObject({
       removed: ['1'],
-      coverage_exemptions: {
-        created: 1,
-        by_branch: [{ branch_id: '10', count: 1 }],
-      },
+      coverage_exemptions: { created: 0, by_branch: [] },
     });
-    expect(ctx.pairs()).toEqual(['111@10']);
+    expect(ctx.pairs()).toEqual([]);
     expect(ctx.districtRepo.rows.get('1')?.serving_branch_id).toBeNull();
   });
 
@@ -1126,23 +1146,22 @@ describe('setDistrictServingBranch — xizmat filiali o‘zgarganda imtiyoz (shu
     expect(ctx.exemptions.rows).toHaveLength(0);
   });
 
-  it('⭐ fail closed: custody o‘qilmadi — 503, tranzaksiya ochilmaydi, tumanlar o‘zgarmaydi', async () => {
+  it('⭐ order-service ishlamaydi — custody O‘QILMAYDI, 503 emas: tuman yoziladi (viloyat o‘zgarmaydi — imtiyoz bo‘lmaydi)', async () => {
     const ctx = districtSetup({
       districts: [district({ id: '4', serving_branch_id: '11' })],
       custody: 'down',
     });
 
-    const error = await rpcError(
-      ctx.service.setDistrictServingBranch('10', ['4'], SA),
-    );
+    const res = await ok(ctx.service.setDistrictServingBranch('10', ['4'], SA));
 
-    expect(error.statusCode).toBe(503);
-    expect(ctx.districtRepo.manager.transaction).not.toHaveBeenCalled();
-    expect(ctx.districtRepo.rows.get('4')?.serving_branch_id).toBe('11');
-    expect(ctx.activityLog.logChange).not.toHaveBeenCalled();
+    expect(res.statusCode).toBe(200);
+    expect(res.data.coverage_exemptions).toEqual({ created: 0, by_branch: [] });
+    expect(custodyCalls(ctx.orderClient)).toHaveLength(0);
+    expect(ctx.districtRepo.rows.get('4')?.serving_branch_id).toBe('10');
+    expect(ctx.activityLog.logChange).toHaveBeenCalled();
   });
 
-  it('⭐ imtiyoz yozish yiqildi — tranzaksiya rollback (tuman o‘zgarmaydi), 503', async () => {
+  it('⭐ yoziladigan imtiyoz yo‘q — INSERT chaqirilmaydi, uning xatosi ko‘chishni to‘xtatmaydi (avval rollback + 503 edi)', async () => {
     const exemptions = exemptionRepoOf();
     exemptions.failInserts();
     const ctx = districtSetup({
@@ -1160,16 +1179,14 @@ describe('setDistrictServingBranch — xizmat filiali o‘zgarganda imtiyoz (shu
       exemptions,
     });
 
-    const error = await rpcError(
-      ctx.service.setDistrictServingBranch('10', ['4'], SA),
-    );
+    const res = await ok(ctx.service.setDistrictServingBranch('10', ['4'], SA));
 
-    expect(error.statusCode).toBe(503);
-    expect(ctx.districtRepo.rows.get('4')?.serving_branch_id).toBe('11');
-    expect(ctx.activityLog.logChange).not.toHaveBeenCalled();
+    expect(res.statusCode).toBe(200);
+    expect(ctx.exemptions.manager.query).not.toHaveBeenCalled();
+    expect(ctx.districtRepo.rows.get('4')?.serving_branch_id).toBe('10');
   });
 
-  it('⭐ COMMIT‘dan keyin qayta snapshot: oraliqda 11 custody‘siga kirgan buyurtma ham imtiyozli', async () => {
+  it('⭐ COMMIT‘dan keyin qayta snapshot: oraliqda 11 custody‘siga kirgan buyurtma ham imtiyozsiz', async () => {
     const ctx = districtSetup({
       districts: [district({ id: '4', serving_branch_id: '11' })],
       custody: {
@@ -1198,26 +1215,20 @@ describe('setDistrictServingBranch — xizmat filiali o‘zgarganda imtiyoz (shu
 
     const res = await ok(ctx.service.setDistrictServingBranch('10', ['4'], SA));
 
-    expect(ctx.pairs()).toEqual(['401@11', '402@11']);
-    expect(res.data.coverage_exemptions).toEqual({
-      created: 2,
-      by_branch: [{ branch_id: '11', count: 2 }],
-    });
+    expect(ctx.pairs()).toEqual([]);
+    expect(res.data.coverage_exemptions).toEqual({ created: 0, by_branch: [] });
     expect(ctx.activityLog.logChange).toHaveBeenCalledWith(
       expect.objectContaining({
         entity_id: '4',
         new_value: {
           serving_branch_id: '10',
-          coverage_exemptions: {
-            created: 2,
-            by_branch: [{ branch_id: '11', count: 2 }],
-          },
+          coverage_exemptions: { created: 0, by_branch: [] },
         },
       }),
     );
   });
 
-  it('⭐ qayta snapshot yiqildi — tumanlar ko‘chgan, so‘rov muvaffaqiyatli, ERROR log', async () => {
+  it('⭐ qayta snapshot YO‘Q (viloyat o‘zgarmaydi) — tumanlar ko‘chgan, custody o‘qilmagan, ERROR log yo‘q', async () => {
     const ctx = districtSetup({
       districts: [district({ id: '4', serving_branch_id: '11' })],
       custody: {
@@ -1237,22 +1248,20 @@ describe('setDistrictServingBranch — xizmat filiali o‘zgarganda imtiyoz (shu
 
     expect(res.statusCode).toBe(200);
     expect(ctx.districtRepo.rows.get('4')?.serving_branch_id).toBe('10');
-    expect(res.data.coverage_exemptions).toEqual({
-      created: 1,
-      by_branch: [{ branch_id: '11', count: 1 }],
-    });
-    expect(ctx.logger.error).toHaveBeenCalledWith(
-      expect.stringContaining(
-        'setDistrictServingBranch: filial #10: tuman(lar) #4',
-      ),
-    );
+    expect(res.data.coverage_exemptions).toEqual({ created: 0, by_branch: [] });
+    expect(custodyCalls(ctx.orderClient)).toHaveLength(0);
+    expect(ctx.logger.error).not.toHaveBeenCalled();
   });
 });
 
 // --------------------------------------------------- clearDistrictServingBranch
 
 describe('clearDistrictServingBranch — best-effort imtiyoz', () => {
-  it('filial viloyati o‘zgardi (1 → 2): 10 qo‘lidagilar imtiyozli, tumanlar bo‘shatiladi', async () => {
+  // Viloyat qoidasi (anKpzwxk): xizmat filialini bo'shatish qamrovni
+  // o'zgartirmaydi — imtiyoz yozilmaydi (avval yo'qotgan filialga yozilardi).
+  // Filial viloyati o'zgargan bo'lsa, u ko'chishdan oldin ham (joriy filial
+  // qatori bo'yicha) eski viloyat tumaniga xizmat qilmaydi.
+  it('⭐ filial viloyati o‘zgardi (1 → 2): tumanlar bo‘shatiladi, imtiyoz YO‘Q (avval 10 ga 1 ta edi)', async () => {
     const ctx = districtSetup({
       districts: [
         district({ id: '1', serving_branch_id: '10' }),
@@ -1277,29 +1286,24 @@ describe('clearDistrictServingBranch — best-effort imtiyoz', () => {
     expect(res.data).toEqual({
       branch_id: '10',
       cleared: 2,
-      coverage_exemptions: {
-        created: 1,
-        by_branch: [{ branch_id: '10', count: 1 }],
-      },
+      coverage_exemptions: { created: 0, by_branch: [] },
     });
-    expect(ctx.pairs()).toEqual(['111@10']);
-    expect(ctx.exemptions.rows[0].source).toBe('clear_serving_branch');
+    expect(ctx.pairs()).toEqual([]);
+    expect(ctx.exemptions.manager.query).not.toHaveBeenCalled();
     expect(ctx.districtRepo.rows.get('1')?.serving_branch_id).toBeNull();
+    expect(ctx.districtRepo.rows.get('2')?.serving_branch_id).toBeNull();
     expect(ctx.activityLog.logChange).toHaveBeenCalledWith(
       expect.objectContaining({
         entity_id: '1',
         new_value: {
           serving_branch_id: null,
-          coverage_exemptions: {
-            created: 1,
-            by_branch: [{ branch_id: '10', count: 1 }],
-          },
+          coverage_exemptions: { created: 0, by_branch: [] },
         },
       }),
     );
   });
 
-  it('⭐ custody o‘qilmadi — ERROR log (filial id bilan), tumanlar BAribir bo‘shatiladi', async () => {
+  it('⭐ order-service ishlamaydi — custody O‘QILMAYDI (viloyat o‘zgarmaydi), tumanlar bo‘shatiladi, xato yo‘q', async () => {
     const ctx = districtSetup({
       districts: [district({ id: '1', serving_branch_id: '10' })],
       custody: 'down',
@@ -1310,24 +1314,23 @@ describe('clearDistrictServingBranch — best-effort imtiyoz', () => {
     expect(res.data).toEqual({
       branch_id: '10',
       cleared: 1,
-      coverage_exemptions_failed: true,
+      coverage_exemptions: { created: 0, by_branch: [] },
     });
+    expect(custodyCalls(ctx.orderClient)).toHaveLength(0);
     expect(ctx.districtRepo.rows.get('1')?.serving_branch_id).toBeNull();
-    expect(ctx.logger.error).toHaveBeenCalledWith(
-      expect.stringContaining('filial #10'),
-    );
+    expect(ctx.logger.error).not.toHaveBeenCalled();
     expect(ctx.activityLog.logChange).toHaveBeenCalledWith(
       expect.objectContaining({
         entity_id: '1',
         new_value: {
           serving_branch_id: null,
-          coverage_exemptions_failed: true,
+          coverage_exemptions: { created: 0, by_branch: [] },
         },
       }),
     );
   });
 
-  it('⭐ bo‘shatilgach qayta snapshot: oraliqda kirgan buyurtma ham; oldingisi yiqilsa ham keyingisi yozadi', async () => {
+  it('⭐ bo‘shatishda custody umuman o‘qilmaydi — oraliqda kirgan buyurtma ham imtiyozsiz; filial xizmati ham chaqirilmaydi', async () => {
     const ctx = districtSetup({
       districts: [district({ id: '1', serving_branch_id: '10' })],
       custody: {
@@ -1341,14 +1344,12 @@ describe('clearDistrictServingBranch — best-effort imtiyoz', () => {
 
     const res = await ok(ctx.service.clearDistrictServingBranch('10'));
 
-    expect(ctx.pairs()).toEqual(['111@10', '112@10']);
+    expect(ctx.pairs()).toEqual([]);
+    expect(custodyCalls(ctx.orderClient)).toHaveLength(0);
     expect(res.data).toEqual({
       branch_id: '10',
       cleared: 1,
-      coverage_exemptions: {
-        created: 2,
-        by_branch: [{ branch_id: '10', count: 2 }],
-      },
+      coverage_exemptions: { created: 0, by_branch: [] },
     });
 
     // Oldingi snapshot yiqildi (filial xizmati), keyingisi muvaffaqiyatli.
@@ -1368,14 +1369,11 @@ describe('clearDistrictServingBranch — best-effort imtiyoz', () => {
 
     const recovered = await ok(flaky.service.clearDistrictServingBranch('10'));
 
-    expect(flaky.pairs()).toEqual(['111@10']);
+    expect(flaky.pairs()).toEqual([]);
     expect(recovered.data).toEqual({
       branch_id: '10',
       cleared: 1,
-      coverage_exemptions: {
-        created: 1,
-        by_branch: [{ branch_id: '10', count: 1 }],
-      },
+      coverage_exemptions: { created: 0, by_branch: [] },
     });
   });
 });
@@ -1383,12 +1381,15 @@ describe('clearDistrictServingBranch — best-effort imtiyoz', () => {
 // --------------------------------------------------------------- mergeDistricts
 
 describe('mergeDistricts — A → B ko‘chishida imtiyoz (birinchi ko‘chirishdan OLDIN)', () => {
+  // Viloyat qoidasi (anKpzwxk): imtiyoz faqat xizmat viloyati o'zgarganda —
+  // A (5) viloyat 1 da (filiallar 10, 11), B (6) viloyat 2 da (filial 20).
+  // serving_branch_id endi ahamiyatsiz (avval A — 10 niki, B — 11 niki edi).
   const districts = [
     district({ id: '5', serving_branch_id: '10' }),
-    district({ id: '6', serving_branch_id: '11' }),
+    district({ id: '6', region_id: '2', serving_branch_id: '20' }),
   ];
 
-  it('A ga xizmat qilib B ga xizmat qilmaydigan filial (10) qo‘lidagilar imtiyozli', async () => {
+  it('A ga xizmat qilib B ga xizmat qilmaydigan filial (10) qo‘lidagilar imtiyozli; B viloyati filiali (20) — yo‘q', async () => {
     const ctx = districtSetup({
       districts,
       custody: {
@@ -1397,8 +1398,8 @@ describe('mergeDistricts — A → B ko‘chishida imtiyoz (birinchi ko‘chiris
           custodyRow({
             id: '502',
             district_id: '5',
-            holder_branch_id: '11',
-            branch_id: '11',
+            holder_branch_id: '20',
+            branch_id: '20',
           }),
         ],
       },
@@ -1451,6 +1452,32 @@ describe('mergeDistricts — A → B ko‘chishida imtiyoz (birinchi ko‘chiris
     expect(cmds).not.toContain('branch.reassign_district');
     expect(ctx.districtRepo.manager.transaction).not.toHaveBeenCalled();
     expect(ctx.districtRepo.rows.has('5')).toBe(true);
+  });
+
+  it('⭐ fail closed: imtiyoz yozish (INSERT) yiqildi — 503, hech narsa ko‘chmaydi, A o‘chmaydi', async () => {
+    const exemptions = exemptionRepoOf();
+    exemptions.failInserts();
+    const ctx = districtSetup({
+      districts,
+      custody: { rows: [custodyRow({ id: '501', district_id: '5' })] },
+      exemptions,
+    });
+
+    const error = await rpcError(ctx.service.mergeDistricts('5', '6'));
+
+    expect(error.statusCode).toBe(503);
+    expect(error.message).toBe(COVERAGE_EXEMPTION_UNAVAILABLE_MESSAGE);
+    expect(ctx.exemptions.manager.query).toHaveBeenCalledTimes(1);
+    expect(ctx.exemptions.rows).toHaveLength(0);
+    const cmds = [
+      ...ctx.orderClient.send.mock.calls,
+      ...ctx.branchClient.send.mock.calls,
+    ].map(([pattern]) => pattern.cmd);
+    expect(cmds).not.toContain('order.geo.reassign_district');
+    expect(cmds).not.toContain('branch.reassign_district');
+    expect(ctx.districtRepo.manager.transaction).not.toHaveBeenCalled();
+    expect(ctx.districtRepo.rows.has('5')).toBe(true);
+    expect(ctx.activityLog.log).not.toHaveBeenCalled();
   });
 
   it('⭐ birlashtirilgach qayta snapshot: oraliqda 10 ga kirgan A buyurtmasi imtiyozli (tuman B), B ning o‘z buyurtmasi — yo‘q', async () => {
@@ -1550,15 +1577,18 @@ describe('mergeDistricts — A → B ko‘chishida imtiyoz (birinchi ko‘chiris
     expect(lookedUp).not.toContain('30');
   });
 
-  /** A (5) va B (6) ikkalasi 11 niki: 10 ning imtiyozlari oldingi ko'chishdan. */
-  const servedBy11 = [
-    district({ id: '5', serving_branch_id: '11' }),
-    district({ id: '6', serving_branch_id: '11' }),
+  /**
+   * A (5) va B (6) ikkalasi viloyat 2 da (filial 20): 10 ning imtiyozlari
+   * oldingi (viloyat 1 → 2) ko'chishdan; birlashtirish yangi imtiyoz bermaydi.
+   */
+  const servedBy20 = [
+    district({ id: '5', assigned_region: '2' }),
+    district({ id: '6', region_id: '2' }),
   ];
 
   it('⭐ oldingi ko‘chish imtiyozi (tuman A) ko‘chgan buyurtma bilan B ga o‘tadi; birlashtirishdan oldin B ga tahrirlangani — o‘tmaydi', async () => {
     const ctx = districtSetup({
-      districts: servedBy11,
+      districts: servedBy20,
       exemptions: exemptionRepoOf([
         { order_id: '501', branch_id: '10', district_id: '5' },
         // 502 birlashtirishdan OLDIN 5 → 6 tahrirlangan (ko'chmaydi).
@@ -1594,7 +1624,7 @@ describe('mergeDistricts — A → B ko‘chishida imtiyoz (birinchi ko‘chiris
     ]);
     exemptions.failQueries('UPDATE');
     const ctx = districtSetup({
-      districts: servedBy11,
+      districts: servedBy20,
       exemptions,
       custody: { rows: [custodyRow({ id: '501', district_id: '5' })] },
     });
@@ -1728,11 +1758,13 @@ describe('mergeDistricts — A → B ko‘chishida imtiyoz (birinchi ko‘chiris
 // ------------------------------------------------------------ qamrov to'sig'i
 
 describe('assertOrdersServedByBranch — imtiyozli buyurtma eski filial kuryeriga beriladi', () => {
-  // Tuman 5 filial 10 dan 11 ga ko'chgan (serving_branch_id = 11); tuman 7
-  // ham 11 niki (buyurtma tumani ko'chishdan keyin 7 ga tahrirlanadi).
+  // Viloyat qoidasi (anKpzwxk): tuman 5 viloyat 1 dan (filiallar 10, 11)
+  // viloyat 2 ga (filial 20) ko'chgan (assigned_region = 2); tuman 7 ham
+  // viloyat 2 da (buyurtma tumani ko'chishdan keyin 7 ga tahrirlanadi).
+  // Avval (#617) bu serving_branch_id 10 → 11 ko'chishi edi.
   const districts = [
-    district({ id: '5', serving_branch_id: '11' }),
-    district({ id: '7', serving_branch_id: '11' }),
+    district({ id: '5', assigned_region: '2' }),
+    district({ id: '7', region_id: '2' }),
   ];
   const order = (overrides: Row): Row => ({
     branch_id: '10',
@@ -1832,9 +1864,11 @@ describe('assertOrdersServedByBranch — imtiyozli buyurtma eski filial kuryerig
     const error = await rpcError(assign(ctx.service, ['101', '102']));
 
     expect(error.statusCode).toBe(403);
+    // Gateway faqat reason/usage/details ni o'tkazadi — id'lar `details` da ham.
     expect(error.data).toEqual({
       reason: 'district_not_served_by_branch',
       order_ids: ['102'],
+      details: { order_ids: ['102'] },
     });
     expect(ctx.updates()).toHaveLength(0);
   });
@@ -1859,10 +1893,10 @@ describe('assertOrdersServedByBranch — imtiyozli buyurtma eski filial kuryerig
     );
   });
 
-  it('⭐ yangi filial (11) — avvalgidek ruxsat, imtiyoz so‘ralmaydi', async () => {
+  it('⭐ yangi viloyat filiali (20) — avvalgidek ruxsat, imtiyoz so‘ralmaydi', async () => {
     const ctx = assignSetup({
-      orders: [order({ id: '101', branch_id: '11' })],
-      managerBranchId: '11',
+      orders: [order({ id: '101', branch_id: '20' })],
+      managerBranchId: '20',
     });
 
     const res = await ok<Row>(assign(ctx.service, ['101']));
@@ -2002,6 +2036,7 @@ describe('assertOrdersServedByBranch — imtiyozli buyurtma eski filial kuryerig
     expect(error.data).toEqual({
       reason: 'district_not_served_by_branch',
       order_ids: ['101'],
+      details: { order_ids: ['101'] },
     });
 
     const legacy = assignSetup({
@@ -2015,8 +2050,12 @@ describe('assertOrdersServedByBranch — imtiyozli buyurtma eski filial kuryerig
     ).toBe(1);
   });
 
-  /** Tuman 5 ni filial 10 dan 11 ga ko'chirish (imtiyozlar `exemptions` ga). */
-  async function moveDistrict5To11(
+  /**
+   * Tuman 5 ni viloyat 1 dan viloyat 2 ga ko'chirish (`updateDistrict`,
+   * imtiyozlar `exemptions` ga). Avval bu serving_branch_id 10 → 11 edi —
+   * viloyat qoidasida u imtiyoz bermaydi.
+   */
+  async function moveDistrict5ToRegion2(
     rows: OpenCustodyRow[],
     exemptions: ExemptionRepo,
   ) {
@@ -2025,12 +2064,12 @@ describe('assertOrdersServedByBranch — imtiyozli buyurtma eski filial kuryerig
       custody: { rows },
       exemptions,
     });
-    await ok(move.service.setDistrictServingBranch('11', ['5'], SA));
+    await ok(move.service.updateDistrict('5', { assigned_region: '2' }, SA));
   }
 
   it('⭐ ko‘chishda 10 qo‘lidagi BEKOR buyurtma: imtiyozli, WAITING ga qaytarilgach 10 kuryeriga beriladi', async () => {
     const exemptions = exemptionRepoOf();
-    await moveDistrict5To11(
+    await moveDistrict5ToRegion2(
       [
         custodyRow({ id: '101', status: Order_status.CANCELLED }),
         custodyRow({
@@ -2072,12 +2111,13 @@ describe('assertOrdersServedByBranch — imtiyozli buyurtma eski filial kuryerig
     expect(error.data).toEqual({
       reason: 'district_not_served_by_branch',
       order_ids: ['103'],
+      details: { order_ids: ['103'] },
     });
   });
 
   it('⭐ ko‘chishdan keyin buyurtma tumani tahrirlandi (5 → 7) — imtiyoz endi yordam bermaydi: 403', async () => {
     const exemptions = exemptionRepoOf();
-    await moveDistrict5To11([custodyRow({ id: '101' })], exemptions);
+    await moveDistrict5ToRegion2([custodyRow({ id: '101' })], exemptions);
     expect(exemptions.rows).toHaveLength(1);
 
     const ctx = assignSetup({
@@ -2091,13 +2131,14 @@ describe('assertOrdersServedByBranch — imtiyozli buyurtma eski filial kuryerig
     expect(error.data).toEqual({
       reason: 'district_not_served_by_branch',
       order_ids: ['101'],
+      details: { order_ids: ['101'] },
     });
     expect(ctx.updates()).toHaveLength(0);
   });
 
-  it('⭐ ko‘chish (5: 10 → 11), so‘ng birlashtirish (5 → 7): 10 imtiyozi buyurtma bilan o‘tadi — beriladi; oldin 7 ga tahrirlangani — 403', async () => {
+  it('⭐ ko‘chish (5: viloyat 1 → 2), so‘ng birlashtirish (5 → 7): 10 imtiyozi buyurtma bilan o‘tadi — beriladi; oldin 7 ga tahrirlangani — 403', async () => {
     const exemptions = exemptionRepoOf();
-    await moveDistrict5To11(
+    await moveDistrict5ToRegion2(
       [custodyRow({ id: '101' }), custodyRow({ id: '102' })],
       exemptions,
     );
@@ -2130,16 +2171,14 @@ describe('assertOrdersServedByBranch — imtiyozli buyurtma eski filial kuryerig
     expect(error.data).toEqual({
       reason: 'district_not_served_by_branch',
       order_ids: ['102'],
+      details: { order_ids: ['102'] },
     });
   });
 
   it('⭐ bekor bo‘lgan birlashtirish (5 → 7): uning imtiyozi qolmaydi — buyurtma keyin 7 ga tahrirlansa 403', async () => {
     const exemptions = exemptionRepoOf();
     const merge = districtSetup({
-      districts: [
-        district({ id: '5', serving_branch_id: '10' }),
-        district({ id: '7', serving_branch_id: '11' }),
-      ],
+      districts: [district({ id: '5' }), district({ id: '7', region_id: '2' })],
       custody: { rows: [custodyRow({ id: '101' })] },
       exemptions,
     });
@@ -2164,6 +2203,7 @@ describe('assertOrdersServedByBranch — imtiyozli buyurtma eski filial kuryerig
     expect(error.data).toEqual({
       reason: 'district_not_served_by_branch',
       order_ids: ['101'],
+      details: { order_ids: ['101'] },
     });
   });
 });

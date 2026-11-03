@@ -393,6 +393,13 @@ export const ACTIVITY_ACTION_REGISTRY: Readonly<
     'swap',
     'amber',
   ),
+  // anKpzwxk — HQ → filial pochtasini SA/admin manzil menejeri o'rniga qabul qildi.
+  'logistics.post_receive_override': entry(
+    'Pochta favqulodda qabul qilindi (admin)',
+    'logistics',
+    'warning',
+    'amber',
+  ),
   'logistics.canceled_post_partial_receive': entry(
     'Bekor pochtadan buyurtmalar qabul qilindi',
     'logistics',

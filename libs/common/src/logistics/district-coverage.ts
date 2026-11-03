@@ -1,17 +1,23 @@
 /**
- * Tuman ↔ filial qamrovi — butun backend uchun YAGONA qoida (ega qarori,
- * 2026-11-02): «filialga biriktirilmagan tuman buyurtmasi o'sha filial
- * kuryeriga berilmasin va o'sha filialga jo'natilmasin».
+ * Buyurtma ↔ filial qamrovi — butun backend uchun YAGONA qoida.
+ *
+ * VILOYAT qoidasi (ega qarori, Trello anKpzwxk, 2026-11-03 — #617 dagi
+ * «tuman → filial» qoidasi o'rniga):
  *
  * Qoida (`isOrderServedByBranch`):
- *  1. HQ filiali — cheklanmaydi (markaziy ombor hamma tumanni ko'radi).
- *  2. Tumanda `serving_branch_id` bo'lsa — FAQAT o'sha filial xizmat qiladi
- *     (bir viloyatda bir nechta filial bo'lsa tumanlar shu bilan bo'linadi).
- *  3. Tumanga filial biriktirilmagan bo'lsa (o'tish davri) — tumanning XIZMAT
- *     viloyati (`assigned_region ?? region_id`, LC-13) filial viloyatiga
- *     (`branches.region_id`) teng bo'lsa. Filial viloyati yo'q — xizmat qilmaydi.
- *  4. Buyurtmada tuman yo'q — buyurtma viloyati (`order.region_id`) bilan 3-band.
- *  Hech narsa aniqlanmasa — `false` (fail-closed).
+ *  1. HQ filiali — cheklanmaydi (markaziy ombor hamma viloyatni ko'radi).
+ *  2. Boshqa filial buyurtmaga xizmat qiladi ⇔ buyurtmaning XIZMAT viloyati
+ *     (`effectiveOrderRegionId`: tuman qatori bor — `assigned_region ??
+ *     region_id`, LC-13; tuman qatori yo'q — `order.region_id`) filial
+ *     viloyatiga (`branches.region_id`) teng. Bir viloyatdagi HAR QANDAY
+ *     filial shu viloyat buyurtmasiga xizmat qiladi (masalan Urgut tumani
+ *     buyurtmasi — «Samarqand filiali» ham, «Urgut filiali» ham).
+ *  3. Filial viloyati yo'q — hech narsaga xizmat qilmaydi (fail-closed).
+ *  Buyurtma viloyati aniqlanmasa — `false` (fail-closed).
+ *
+ * `districts.serving_branch_id` endi HISOBGA OLINMAYDI (ustun qoladi;
+ * `PUT /branches/:id/districts` chaqirilaveradi, lekin qamrovga ta'sir
+ * qilmaydi — keyin tozalanadi).
  *
  * Sof funksiya: DB/RMQ yo'q. Tuman qatori `logistics.district.find_by_ids`
  * javobi shaklida (ustun yoki relation) kelishi mumkin.
@@ -23,6 +29,7 @@ export interface CoverageDistrict {
   region?: { id?: unknown } | null;
   assigned_region?: unknown;
   assignedToRegion?: { id?: unknown } | null;
+  /** Endi qamrovga ta'sir qilmaydi (faqat audit / eski javoblar uchun). */
   serving_branch_id?: unknown;
 }
 
@@ -58,7 +65,24 @@ export function effectiveDistrictRegionId(
   );
 }
 
-/** Tumanga biriktirilgan xizmat filiali (yo'q — null). */
+/**
+ * Buyurtmaning xizmat viloyati: tuman qatori bor — uning xizmat viloyati
+ * (`effectiveDistrictRegionId`); tuman qatori yo'q — `orderRegionId`.
+ * Aniqlanmasa — `null`.
+ */
+export function effectiveOrderRegionId(input: {
+  district?: CoverageDistrict | null;
+  orderRegionId?: unknown;
+}): string | null {
+  return input.district
+    ? effectiveDistrictRegionId(input.district)
+    : asId(input.orderRegionId);
+}
+
+/**
+ * Tumanga biriktirilgan xizmat filiali (yo'q — null). Endi qamrovga ta'sir
+ * QILMAYDI — faqat audit / javoblar uchun.
+ */
 export function districtServingBranchId(
   district: CoverageDistrict | null | undefined,
 ): string | null {
@@ -74,8 +98,8 @@ export function isHqBranch(branch: CoverageBranch | null | undefined): boolean {
 }
 
 /**
- * Buyurtma (tumani yoki viloyati) shu filial qamroviga kiradimi. Yuqoridagi
- * qoida; `district` — buyurtma tumani qatori (yo'q bo'lsa `null`).
+ * Buyurtma shu filial qamroviga kiradimi (yuqoridagi viloyat qoidasi).
+ * `district` — buyurtma tumani qatori (yo'q bo'lsa `null`).
  */
 export function isOrderServedByBranch(
   input: { district?: CoverageDistrict | null; orderRegionId?: unknown },
@@ -83,15 +107,8 @@ export function isOrderServedByBranch(
 ): boolean {
   if (!branch) return false;
   if (isHqBranch(branch)) return true;
-  const branchId = asId(branch.id);
-  const servingBranchId = districtServingBranchId(input.district);
-  if (servingBranchId) {
-    return !!branchId && servingBranchId === branchId;
-  }
   const branchRegionId = asId(branch.region_id);
   if (!branchRegionId) return false;
-  const regionId = input.district
-    ? effectiveDistrictRegionId(input.district)
-    : asId(input.orderRegionId);
+  const regionId = effectiveOrderRegionId(input);
   return !!regionId && regionId === branchRegionId;
 }

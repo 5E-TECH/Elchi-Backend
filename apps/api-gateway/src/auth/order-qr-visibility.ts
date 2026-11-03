@@ -37,6 +37,11 @@ export function canLookupOrderByQr(roles?: string[]): boolean {
  * kerak, shuning uchun xodim rollari bu yerda cheklanmaydi. MARKET esa boshqa
  * market posilkasini qo'lida tutmaydi — u faqat o'z buyurtmasini ko'radi.
  * Buyurtma yo'q (topilmadi) bo'lsa — hech narsa qilinmaydi.
+ *
+ * anKpzwxk (7): `GET /orders/qr-code/:token` da filial xodimi va HQ
+ * bo'lmagan filial kuryeri uchun QO'SHIMCHA filial doirasi bor —
+ * `auth/order-qr-branch-scope` (async: filial va HQ aniqlanadi). Bu
+ * funksiya (market qoidasi) o'zgarmagan.
  */
 export function assertQrOrderVisible(
   user: { sub?: string; roles?: string[] } | undefined,

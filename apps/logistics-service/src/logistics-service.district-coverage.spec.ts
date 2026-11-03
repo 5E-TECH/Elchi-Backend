@@ -6,11 +6,14 @@ import { LogisticsServiceService } from './logistics-service.service';
 import { LogisticsServiceController } from './logistics-service.controller';
 
 /**
- * Tuman ↔ filial qamrovi (ega qarori, 2026-11-02): «filialga biriktirilmagan
- * tuman buyurtmasi o'sha filial kuryeriga berilmasin» — logistics tomoni.
+ * Buyurtma ↔ filial qamrovi — logistics tomoni. Viloyat qoidasi (ega qarori,
+ * Trello anKpzwxk, 2026-11-03; #617 dagi «tuman → filial» qoidasi o'rniga):
+ * filial o'z viloyati buyurtmasini o'z kuryeriga beradi; boshqa viloyat
+ * (tranzit) buyurtmasi — 403 «Boshqa viloyat buyurtmasi».
  *
  *  - `logistics.district.set_serving_branch` (ALMASHTIRISH semantikasi),
- *    `find_by_branch`, `clear_serving_branch`;
+ *    `find_by_branch`, `clear_serving_branch` — chaqirilaveradi, lekin
+ *    `serving_branch_id` qamrovga ta'sir QILMAYDI;
  *  - assign-to-courier va scan-assign qamrov to'sig'i (`isOrderServedByBranch`);
  *  - createCanceledPost: begona CANCELLED_SENT kuryer pochtasiga tortilmaydi.
  *
@@ -641,20 +644,35 @@ describe('assignOrdersToCourier — tuman qamrovi to‘sig‘i', () => {
     const error = await rpcError(assign(ctx.service, ['101', '102', '103']));
 
     expect(error.statusCode).toBe(403);
-    expect(error.message).toContain('filialingizga biriktirilmagan');
+    expect(error.message).toContain('Boshqa viloyat buyurtmasi');
     expect(error.message).toContain('#102, #103');
+    // Gateway faqat reason/usage/details ni o'tkazadi — id'lar `details` da ham.
     expect(error.data).toEqual({
       reason: 'district_not_served_by_branch',
       order_ids: ['102', '103'],
+      details: { order_ids: ['102', '103'] },
     });
     expectNothingWritten(ctx);
   });
 
-  it('⭐ serving_branch_id viloyatdan ustun: viloyat mos, lekin tuman boshqa filialniki — 403', async () => {
+  it('⭐ serving_branch_id endi HISOBGA OLINMAYDI: viloyat mos, tuman boshqa filialga biriktirilgan — biriktiriladi (avval 403)', async () => {
     const ctx = setup({
       orders: [order({ id: '101', district_id: '5' })],
       districts: [
         district({ id: '5', region_id: '1', serving_branch_id: '11' }),
+      ],
+    });
+
+    const res = await ok(assign(ctx.service, ['101']));
+
+    expect(res.data.assigned_count).toBe(1);
+  });
+
+  it('⭐ tuman AYNAN shu filialga biriktirilgan, lekin viloyati boshqa — 403 «Boshqa viloyat buyurtmasi» (avval biriktirilardi)', async () => {
+    const ctx = setup({
+      orders: [order({ id: '101', district_id: '5', region_id: '2' })],
+      districts: [
+        district({ id: '5', region_id: '2', serving_branch_id: '10' }),
       ],
     });
 
@@ -665,30 +683,33 @@ describe('assignOrdersToCourier — tuman qamrovi to‘sig‘i', () => {
     expectNothingWritten(ctx);
   });
 
-  it('serving_branch_id = shu filial — viloyat boshqa bo‘lsa ham biriktiriladi', async () => {
-    const ctx = setup({
-      orders: [order({ id: '101', district_id: '5', region_id: '2' })],
-      districts: [
-        district({ id: '5', region_id: '2', serving_branch_id: '10' }),
-      ],
-    });
-
-    const res = await ok(assign(ctx.service, ['101']));
-
-    expect(res.data.assigned_count).toBe(1);
-  });
-
-  it('HQ filiali — cheklanmaydi (tuman so‘ralmaydi)', async () => {
+  // anKpzwxk (6-band, AC5): HQ filial qamrovi bilan cheklanmaydi, lekin HQ
+  // kuryeri faqat HQ viloyati (#1) buyurtmasini oladi.
+  it('HQ kuryeri — HQ viloyati buyurtmasi biriktiriladi', async () => {
     const ctx = setup({
       orders: [order({ id: '101', branch_id: '1', district_id: '6' })],
-      districts: [district({ id: '6', region_id: '2' })],
+      districts: [district({ id: '6', region_id: '1' })],
       branches: { '1': branch('1', { type: 'HQ', region_id: '1' }) },
     });
 
     const res = await ok(assign(ctx.service, ['101'], SA));
 
     expect(res.data.assigned_count).toBe(1);
-    expect(ctx.districtRepo.find).not.toHaveBeenCalled();
+  });
+
+  it('⭐ AC5: HQ kuryeriga boshqa viloyat (Samarqand) buyurtmasi — 403 hq_courier_region_only, hech narsa yozilmaydi', async () => {
+    const ctx = setup({
+      orders: [order({ id: '101', branch_id: '1', district_id: '6' })],
+      districts: [district({ id: '6', region_id: '2' })],
+      branches: { '1': branch('1', { type: 'HQ', region_id: '1' }) },
+    });
+
+    const error = await rpcError(assign(ctx.service, ['101'], SA));
+
+    expect(error.statusCode).toBe(403);
+    expect(error.data?.reason).toBe('hq_courier_region_only');
+    expect(error.data?.order_ids).toEqual(['101']);
+    expectNothingWritten(ctx);
   });
 
   it('SA/admin: doira filiali — buyurtmalar filiali (branch.find_by_id), qamrov tekshiriladi', async () => {
@@ -735,10 +756,12 @@ describe('assignOrdersToCourier — tuman qamrovi to‘sig‘i', () => {
     expectNothingWritten(ctx);
   });
 
-  it('filial viloyatsiz va tumanga filial biriktirilmagan — 403 (fail closed)', async () => {
+  it('filial viloyatsiz — 403 (fail closed), tuman unga biriktirilgan bo‘lsa ham', async () => {
     const ctx = setup({
       orders: [order({ id: '101', district_id: '5' })],
-      districts: [district({ id: '5', region_id: '1' })],
+      districts: [
+        district({ id: '5', region_id: '1', serving_branch_id: '10' }),
+      ],
       managerBranch: branch('10', { region_id: null }),
     });
 
@@ -848,7 +871,7 @@ describe('scanAssignOrder — tuman qamrovi to‘sig‘i', () => {
     expect(ctx.calls('order.update')).toHaveLength(2);
   });
 
-  it('⭐ to‘g‘ridan-to‘g‘ri yo‘l: tuman boshqa filialniki — 403, NEW → RECEIVED ham, pochta ham yo‘q', async () => {
+  it('⭐ serving_branch_id hisobga olinmaydi: tuman boshqa filialga biriktirilgan, viloyat mos — biriktiriladi', async () => {
     const ctx = setup({
       order: baseOrder(),
       courierBranch: branch('10'),
@@ -857,12 +880,25 @@ describe('scanAssignOrder — tuman qamrovi to‘sig‘i', () => {
       ],
     });
 
+    const res = await ok(scan(ctx.service));
+
+    expect(res.data.idempotent).toBe(false);
+  });
+
+  it('⭐ to‘g‘ridan-to‘g‘ri yo‘l: tuman boshqa viloyatniki — 403, NEW → RECEIVED ham, pochta ham yo‘q', async () => {
+    const ctx = setup({
+      order: baseOrder(),
+      courierBranch: branch('10'),
+      districts: [district({ id: '5', region_id: '1', assigned_region: '2' })],
+    });
+
     const error = await rpcError(scan(ctx.service));
 
     expect(error.statusCode).toBe(403);
     expect(error.data).toEqual({
       reason: 'district_not_served_by_branch',
       order_ids: ['101'],
+      details: { order_ids: ['101'] },
     });
     expect(error.message).not.toContain('qabul qilindi');
     expect(ctx.calls('order.update')).toHaveLength(0);
@@ -911,7 +947,25 @@ describe('scanAssignOrder — tuman qamrovi to‘sig‘i', () => {
     expect(ctx.calls('order.update')).toHaveLength(1);
   });
 
-  it('HQ kuryeri — cheklanmaydi (tuman so‘ralmaydi)', async () => {
+  // anKpzwxk (6-band, AC5): HQ kuryeri faqat HQ viloyati (#1) buyurtmasini oladi.
+  it('HQ kuryeri — HQ viloyati buyurtmasini skan qilib oladi', async () => {
+    const ctx = setup({
+      order: baseOrder({
+        branch_id: '1',
+        status: Order_status.RECEIVED,
+        holder_type: 'HQ',
+        district_id: '6',
+      }),
+      courierBranch: branch('1', { type: 'HQ' }),
+      districts: [district({ id: '6', region_id: '1' })],
+    });
+
+    const res = await ok(scan(ctx.service));
+
+    expect(res.data.idempotent).toBe(false);
+  });
+
+  it('⭐ AC5: HQ kuryeri boshqa viloyat (Samarqand) buyurtmasini ololmaydi — 403 hq_courier_region_only', async () => {
     const ctx = setup({
       order: baseOrder({
         branch_id: '1',
@@ -923,10 +977,12 @@ describe('scanAssignOrder — tuman qamrovi to‘sig‘i', () => {
       districts: [district({ id: '6', region_id: '2' })],
     });
 
-    const res = await ok(scan(ctx.service));
+    const error = await rpcError(scan(ctx.service));
 
-    expect(res.data.idempotent).toBe(false);
-    expect(ctx.districtRepo.find).not.toHaveBeenCalled();
+    expect(error.statusCode).toBe(403);
+    expect(error.data?.reason).toBe('hq_courier_region_only');
+    expect(ctx.calls('order.update')).toHaveLength(0);
+    expect(ctx.postRepo.save).not.toHaveBeenCalled();
   });
 });
 

@@ -926,13 +926,26 @@ describe('findAllPosts — sof kuryer boshqa kuryerlar pochtasini ro`yxatda ko`r
   }
   const PURE_COURIER = { id: '44', roles: ['courier'] };
 
-  it('⭐ courier_id IN (0, o`zi) — filial o`tkazmasi va o`z pochtasi', async () => {
+  it('⭐ o`z pochtasi va filial o`tkazmasi (courier_id 0) — o`tkazma faqat SENT emas (anKpzwxk)', async () => {
     const { service, postRepo } = listService();
     await service.findAllPosts(1, 10, {}, PURE_COURIER);
     const where = (postRepo.findAndCount.mock.calls[0] as any[])[0].where;
-    expect(where.branch_id).toBe(BRANCH);
-    expect(where.courier_id).toEqual(
-      expect.objectContaining({ _type: 'in', _value: ['0', '44'] }),
+    expect(where).toHaveLength(2);
+    expect(where[0].branch_id).toBe(BRANCH);
+    expect(where[0].courier_id).toBe('44');
+    expect(where[0].status).toEqual(
+      expect.objectContaining({ _type: 'not', _value: Post_status.NEW }),
+    );
+    expect(where[1].branch_id).toBe(BRANCH);
+    expect(where[1].courier_id).toBe('0');
+    expect(where[1].status).toEqual(
+      expect.objectContaining({
+        _type: 'not',
+        _value: expect.objectContaining({
+          _type: 'in',
+          _value: [Post_status.NEW, Post_status.SENT],
+        }),
+      }),
     );
   });
 
