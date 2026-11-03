@@ -77,3 +77,40 @@ describe('LogisticsGatewayController — bekor pochtani filialga qaytarish', () 
     expect(dto.order_ids).toEqual(['101', '102']);
   });
 });
+
+describe('LogisticsGatewayController — kuryer «buyurtma kelmagan» so‘rovi', () => {
+  const rolesOf = (method: keyof LogisticsGatewayController) => {
+    const descriptor = Object.getOwnPropertyDescriptor(
+      LogisticsGatewayController.prototype,
+      method,
+    );
+    return Reflect.getMetadata(ROLES_KEY, descriptor?.value) as string[];
+  };
+
+  it('faqat kuryer', () => {
+    expect(rolesOf('requestCourierOrderReturn')).toEqual(['courier']);
+  });
+
+  it('logistics.post.return_request.create ga pochta, buyurtma va kuryerni uzatadi', async () => {
+    const logisticsClient = {
+      send: jest.fn(() => of({ statusCode: 200, data: {} })),
+    };
+    const controller = new LogisticsGatewayController(
+      logisticsClient as any,
+      { send: jest.fn(() => of({ data: null })) } as any,
+    );
+
+    await controller.requestCourierOrderReturn('98', '101', {
+      user: { sub: 'c1', roles: ['courier'], branch_id: '10' } as any,
+    });
+
+    expect(logisticsClient.send).toHaveBeenCalledWith(
+      { cmd: 'logistics.post.return_request.create' },
+      {
+        post_id: '98',
+        order_id: '101',
+        requester: { id: 'c1', roles: ['courier'], branch_id: '10' },
+      },
+    );
+  });
+});

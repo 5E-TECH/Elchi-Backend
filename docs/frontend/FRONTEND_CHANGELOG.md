@@ -22,6 +22,18 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+### 2026-11-03 — Kuryer: «Bu buyurtma kelmagan — qaytarish so'rovi» (BeePost kabi)
+
+Ega talabi: kuryer yangi pochtasidagi jismonan kelmagan buyurtma uchun qaytarish so'rovini yubora olsin.
+
+**Qoida:** buyurtma yo'lda qoladi va `return_requested: true` bo'ladi (qisman qabuldagi so'rov bilan bir xil). U «Qaytarish» ro'yxatiga tushadi; tasdiqlansa — kelgan omboriga (HQ kuryeri → HQ, filial kuryeri → filial) qaytadi, rad etilsa — kuryerda qoladi. Pochta shu so'rovda yopilmaydi — tasdiq yopadi. Kuryer o'zi skanerlab olgan yoki qabul qilgan buyurtmaga — rad.
+
+**Endpointlar:**
+- 🆕 [logistics] `POST /post/:postId/orders/:orderId/return-request` (faqat kuryer, body yo'q). Javob `data`: `{ order_id, post_id, return_requested: true, already_requested, remaining_receivable }` (`remaining_receivable` — pochtada hali qabul qilinadigan, so'rovsiz yo'ldagi buyurtmalar). 404 — pochta kuryerniki emas; 400 — pochta qabul qilingan, buyurtma yo'lda emas yoki o'zi skanerlab olgan; 409 — buyurtma boshqa pochtada / kuryer hisobida emas / shu orada o'zgargan. Qayta bosish — idempotent (`already_requested: true`).
+- 🆕 [order] tracking action `courier_return_requested` (`from_status` = `to_status` = `on the road`), `metadata: { post_id }`.
+
+**Frontendda:** kuryerning yangi pochtasida har qabul qilinmagan buyurtma ostida tugma; so'rov yuborilganlar qabul ro'yxatidan chiqadi (`GET /post/orders/:id` qatorida `return_requested`).
+
 ### 2026-11-03 — Filial va kuryer pochtalari: har kun — alohida pochta (sanali kartalar)
 
 Ega talabi: filial va kuryerning «Pochta» sahifasida har kunning pochtasi alohida karta bo'lsin (BeePost kabi). Avval ochiq pochtaga keyingi kunlarning buyurtmalari ham qo'shilib borardi (filial to'liq qabul qilmaguncha yoki kuryer hammasini yetkazmaguncha).

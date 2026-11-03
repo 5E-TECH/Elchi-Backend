@@ -399,6 +399,12 @@ export const ACTIVITY_ACTION_REGISTRY: Readonly<
     'check',
     'blue',
   ),
+  'logistics.return_request': entry(
+    "Kuryer: buyurtma kelmagan — qaytarish so'rovi",
+    'logistics',
+    'undo',
+    'amber',
+  ),
   'logistics.canceled_post_return': entry(
     'Bekor buyurtmalar filialga qaytarildi',
     'logistics',

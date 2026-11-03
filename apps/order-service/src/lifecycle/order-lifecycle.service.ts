@@ -400,6 +400,12 @@ export const POST_BRANCH_REASSIGNED_TRACKING_ACTION = 'post_branch_reassigned';
 export const CANCELLED_POST_RETURNED_TRACKING_ACTION =
   'cancelled_post_returned';
 /**
+ * Tracking: kuryer yangi pochtadagi buyurtma kelmaganini bildirdi — qaytarish
+ * so'rovi («Bu buyurtma kelmagan»; holat o'zgarmaydi — `on the road`).
+ */
+export const COURIER_RETURN_REQUESTED_TRACKING_ACTION =
+  'courier_return_requested';
+/**
  * Order lifecycle: the write/mutation core (create/receive/sell/partly-sell/
  * cancel/could-not-deliver/rollback/return/provider-mark/market-cancelled
  * handover/update/delete) plus the settlement WRITE helpers that run inside its
@@ -9509,6 +9515,18 @@ export class OrderLifecycleService {
         "Buyurtma topilmadi yoki yo'lda (on the road) holatida emas",
       );
     }
+    // Qaytarish so'rovi kutilayotgan buyurtma (kuryer «kelmagan» degan yoki
+    // qisman qabulda qolgan) — «yetkaza olmadi» qilinsa so'rov «Qaytarish»
+    // ro'yxatidan jimgina tushib qolardi (bot bu tugmani yo'ldagi har
+    // buyurtmada ko'rsatadi). Avval so'rov ko'rib chiqiladi.
+    if (order.return_requested === true) {
+      throw new RpcException({
+        statusCode: 409,
+        message:
+          "Bu buyurtma uchun qaytarish so'rovi yuborilgan — u «Qaytarish»da ko'rib chiqilmaguncha «yetkaza olmadi» qilib bo'lmaydi",
+        reason: 'courier_return_request_pending',
+      });
+    }
     if (!order.post_id) {
       this.badRequest('Buyurtma hech qaysi pochtada emas');
     }
@@ -11026,6 +11044,31 @@ export class OrderLifecycleService {
     }
   }
 
+  /**
+   * Kuryer «Bu buyurtma kelmagan» (logistics `requestCourierOrderReturn`):
+   * buyurtma hali shu pochtada yo'lda va so'rovsiz bo'lsagina belgilanadi —
+   * shu orada qabul qilingan (WAITING) posilka qaytarish ro'yxatiga tushmasin
+   * (aks holda tasdiq kuryer qo'lidagi posilkani olib qo'yardi). Aks holda 409.
+   */
+  private assertCourierReturnRequestable(
+    order: Order,
+    marker?: { post_id?: string | null } | null,
+  ): void {
+    const expectedPostId = String(marker?.post_id ?? '').trim();
+    if (!expectedPostId) return;
+    if (
+      order.status !== Order_status.ON_THE_ROAD ||
+      String(order.post_id ?? '').trim() !== expectedPostId ||
+      order.return_requested === true
+    ) {
+      throw new RpcException({
+        statusCode: 409,
+        message: `Buyurtma #${order.id} holati o'zgardi (qabul qilingan yoki so'rov allaqachon yuborilgan) — sahifani yangilang`,
+        reason: 'courier_return_request_conflict',
+      });
+    }
+  }
+
   async updateFull(
     id: string,
     dto: {
@@ -11123,6 +11166,11 @@ export class OrderLifecycleService {
         to_branch_id?: string | null;
         to_branch_name?: string | null;
       } | null;
+      /**
+       * Kuryer «Bu buyurtma kelmagan» — qaytarish so'rovi: holat o'zgarmaydi
+       * (`on the road`), tarixdagi qator va qulf ostidagi tekshiruv shundan.
+       */
+      courier_return_request?: { post_id?: string | null } | null;
     },
     externalManager?: EntityManager,
     /**
@@ -11146,6 +11194,10 @@ export class OrderLifecycleService {
     const order = await this.findById(id);
     this.assertPostBranchReassignable(order, requester?.post_branch_reassign);
     this.assertCanceledPostUnchanged(order, requester?.canceled_post_guard);
+    this.assertCourierReturnRequestable(
+      order,
+      requester?.courier_return_request,
+    );
     if (!externalManager) {
       this.assertCommercialFieldsEditable(order, dto);
       await this.assertDeliveryDetailsEditable(order, dto);
@@ -11156,6 +11208,7 @@ export class OrderLifecycleService {
     // o'zgarishlar qo'llanishidan OLDIN saqlab qo'yamiz (audit M4).
     const previousSoldAt = order.sold_at;
     const previousCanceledPostId = order.canceled_post_id;
+    const previousReturnRequested = order.return_requested === true;
     const previousHolderType = order.holder_type;
     const previousHolderBranchId = order.holder_branch_id;
     const previousHolderCourierId = order.holder_courier_id;
@@ -11382,6 +11435,20 @@ export class OrderLifecycleService {
           requester?.canceled_post_guard,
         );
       }
+      if (String(requester?.courier_return_request?.post_id ?? '').trim()) {
+        // Kuryer «kelmagan»: shu orada qabul (skan) bilan poyga — qulf ostida.
+        const locked = await orderRepo.findOne({
+          where: { id: String(order.id) },
+          lock: { mode: 'pessimistic_write' },
+        });
+        if (!locked) {
+          this.notFound(`Buyurtma #${order.id} topilmadi`);
+        }
+        this.assertCourierReturnRequestable(
+          locked,
+          requester?.courier_return_request,
+        );
+      }
       if (replacementItems) {
         await this.replaceOrderItems(order.id, replacementItems, manager);
       }
@@ -11535,6 +11602,40 @@ export class OrderLifecycleService {
                 order.holder_branch_id ??
                 null,
               to_branch_name: postBranchReassign.to_branch_name ?? null,
+            },
+            note: requester?.note ?? null,
+          },
+          trackingRepo,
+        );
+      }
+
+      // Kuryer «Bu buyurtma kelmagan»: holat bir xil (`on the road`), shuning
+      // uchun yuqoridagi status tracking'i yozilmaydi — tarixda so'rov qatori
+      // shu yerda (belgi endi qo'yilganda — bir marta).
+      const courierReturnRequest = requester?.courier_return_request;
+      if (
+        courierReturnRequest &&
+        oldStatus === Order_status.ON_THE_ROAD &&
+        order.status === Order_status.ON_THE_ROAD &&
+        !previousReturnRequested &&
+        order.return_requested === true
+      ) {
+        await this.custody.createTrackingEvent(
+          {
+            order_id: order.id,
+            from_status: oldStatus,
+            to_status: order.status,
+            changed_by: String(requester?.id ?? 'system'),
+            changed_by_role: requester?.id
+              ? this.custody.toTrackingRole(requester.roles)
+              : 'system',
+            action: COURIER_RETURN_REQUESTED_TRACKING_ACTION,
+            description:
+              "Kuryer buyurtma kelmaganini bildirdi — qaytarish so'rovi yuborildi",
+            old_value: { return_requested: false },
+            new_value: { return_requested: true },
+            metadata: {
+              post_id: courierReturnRequest.post_id ?? order.post_id ?? null,
             },
             note: requester?.note ?? null,
           },

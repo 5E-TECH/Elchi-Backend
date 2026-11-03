@@ -1545,6 +1545,8 @@ export class LogisticsServiceService implements OnModuleInit {
         to_branch_id: string;
         to_branch_name: string | null;
       } | null;
+      /** Kuryer «Bu buyurtma kelmagan»: qulf ostida tekshiruv va tarix qatori. */
+      courier_return_request?: { post_id: string } | null;
     },
   ): Promise<void> {
     try {
@@ -5471,12 +5473,119 @@ export class LogisticsServiceService implements OnModuleInit {
   }
 
   /**
-   * CODE-25 — buyurtma HQ hudud NEW pochtasidan kuryer pochtasiga o'tdi: NEW
-   * pochtaning saqlangan hisobi kamayadi (`GREATEST(..., 0)`, atomik). Faqat
-   * NEW pochta — SENT/RECEIVED pochtaning hisobi tarix (necha posilka shu
-   * pochtada kelgan) va o'zgarmaydi. Xato skan natijasini buzmaydi: buyurtma
-   * allaqachon kuryerda, hisob esa order.post_id dan qayta hisoblanadi.
+   * Kuryer «Bu buyurtma kelmagan — qaytarish so'rovi» (egasi qarori
+   * 2026-11-03, BeePost kabi): yangi (SENT) pochtadagi hali qabul qilinmagan
+   * buyurtma jismonan kelmagan. Buyurtma yo'lda qoladi va `return_requested`
+   * belgisi qo'yiladi — qisman qabuldagi so'rov bilan bir xil: «Qaytarish»
+   * ro'yxatiga tushadi, tasdiqlansa kelgan omboriga (HQ yoki filial) qaytadi,
+   * rad etilsa kuryerda qoladi. Pochta shu yerda yopilmaydi — tasdiq yopadi
+   * (`releaseReturnSourcePosts`). Kuryer o'zi skan qilib olgan posilka (u
+   * qo'lida) va qabul qilingani — rad.
    */
+  async requestCourierOrderReturn(
+    requester: RequesterContext,
+    postId: string,
+    orderId: string,
+  ) {
+    const post = await this.postRepo.findOne({
+      where: { id: String(postId), courier_id: requester.id },
+    });
+    if (!post) {
+      this.notFound('Pochta topilmadi yoki bu kuryerga biriktirilmagan');
+    }
+    if (post.status !== Post_status.SENT) {
+      this.badRequest(
+        "Bu pochta allaqachon qabul qilingan — qaytarish so'rovini yuborib bo'lmaydi",
+      );
+    }
+
+    const order = await this.findOrderById(orderId);
+    if (String(order.post_id ?? '').trim() !== String(post.id)) {
+      this.conflict(
+        "Buyurtma bu pochtada emas (boshqa pochtaga o'tgan bo'lishi mumkin) — sahifani yangilang",
+      );
+    }
+    if (order.status !== Order_status.ON_THE_ROAD) {
+      this.badRequest(
+        "Bu buyurtma allaqachon qabul qilingan yoki yo'lda emas — qaytarish so'rovini yuborib bo'lmaydi",
+      );
+    }
+
+    const remainingReceivable = async (): Promise<number> => {
+      const onTheRoad = await this.findOrders({
+        post_id: String(post.id),
+        status: Order_status.ON_THE_ROAD,
+        fetch_all: true,
+        page: 1,
+        limit: 100,
+      });
+      return onTheRoad.filter((row) => row.return_requested !== true).length;
+    };
+
+    if (order.return_requested === true) {
+      return successRes(
+        {
+          order_id: String(order.id),
+          post_id: String(post.id),
+          return_requested: true,
+          already_requested: true,
+          remaining_receivable: await remainingReceivable(),
+        },
+        200,
+        "Qaytarish so'rovi allaqachon yuborilgan",
+      );
+    }
+    if (String(order.holder_type ?? '').toUpperCase() !== 'COURIER') {
+      this.conflict(
+        "Buyurtma kuryer hisobida emas — qaytarish so'rovini yuborib bo'lmaydi, sahifani yangilang",
+      );
+    }
+    if (isCourierScanTakenOrder(order, requester.id)) {
+      this.badRequest(
+        "Bu buyurtmani o'zingiz skanerlab olgansiz — u sizda, «kelmagan» deb bo'lmaydi",
+      );
+    }
+
+    await this.updateOrder(
+      String(order.id),
+      { return_requested: true },
+      {
+        id: requester.id,
+        roles: requester.roles ?? [Roles.COURIER],
+        note: 'Courier reported the order did not arrive — return requested',
+        courier_return_request: { post_id: String(post.id) },
+      },
+    );
+
+    await Promise.resolve(
+      this.activityLog.log({
+        entity_type: 'Order',
+        entity_id: String(order.id),
+        action: 'logistics.return_request',
+        old_value: { return_requested: false },
+        new_value: { return_requested: true },
+        ...this.auditActor(requester),
+        metadata: {
+          post_id: String(post.id),
+          courier_id: String(post.courier_id ?? ''),
+          source: 'courier_not_arrived',
+        },
+      }),
+    ).catch(() => undefined);
+
+    return successRes(
+      {
+        order_id: String(order.id),
+        post_id: String(post.id),
+        return_requested: true,
+        already_requested: false,
+        remaining_receivable: await remainingReceivable(),
+      },
+      200,
+      "Qaytarish so'rovi yuborildi",
+    );
+  }
+
   /**
    * Har kun — alohida pochta: skan buyurtmani kuryerning kechagi ochiq (SENT)
    * pochtasidan bugungisiga ko'chirdi. Eski pochta hisobidan ayiriladi va
@@ -5527,6 +5636,13 @@ export class LogisticsServiceService implements OnModuleInit {
     }
   }
 
+  /**
+   * CODE-25 — buyurtma HQ hudud NEW pochtasidan kuryer pochtasiga o'tdi: NEW
+   * pochtaning saqlangan hisobi kamayadi (`GREATEST(..., 0)`, atomik). Faqat
+   * NEW pochta — SENT/RECEIVED pochtaning hisobi tarix (necha posilka shu
+   * pochtada kelgan) va o'zgarmaydi. Xato skan natijasini buzmaydi: buyurtma
+   * allaqachon kuryerda, hisob esa order.post_id dan qayta hisoblanadi.
+   */
   private async releaseOrderFromNewRegionPost(order: OrderRow): Promise<void> {
     const oldPostId = String(order.post_id ?? '').trim();
     if (!oldPostId) {

@@ -1436,6 +1436,38 @@ export class LogisticsGatewayController {
     );
   }
 
+  // Kuryer «Bu buyurtma kelmagan — qaytarish so'rovi»: yangi pochtadagi hali
+  // qabul qilinmagan buyurtma «Qaytarish» ro'yxatiga tushadi (tasdiqlansa —
+  // kelgan omboriga qaytadi). Doira logistics tomonida (o'z SENT pochtasi).
+  @Post('post/:postId/orders/:orderId/return-request')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.COURIER)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary:
+      'Courier: this order did not arrive — return request (order stays on the road with return_requested)',
+  })
+  @ApiParam({ name: 'postId', description: "Courier's SENT post ID" })
+  @ApiParam({ name: 'orderId', description: 'Order ID in that post' })
+  requestCourierOrderReturn(
+    @Param('postId') postId: string,
+    @Param('orderId') orderId: string,
+    @Req() req: { user: JwtUser },
+  ) {
+    return this.sendLogisticsWithTimeout(
+      { cmd: 'logistics.post.return_request.create' },
+      {
+        post_id: postId,
+        order_id: orderId,
+        requester: {
+          id: req.user.sub,
+          roles: req.user.roles ?? [],
+          branch_id: req.user.branch_id ?? null,
+        },
+      },
+    );
+  }
+
   // HQ «Filialga qaytarish»: filialdan kelgan bekor pochtaning tanlangan
   // buyurtmalari jo'natgan filialga qaytadi, qolganlari pochtada qoladi.
   // Doira logistics tomonida (faqat HQ ga kelgan pochta, HQ xodimi).

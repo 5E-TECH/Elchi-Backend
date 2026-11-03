@@ -450,7 +450,12 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
     are reused only within the same Tashkent day (owner decision 2026-11-03,
     per-day cards): HQ→branch SENT transfer posts, courier SENT posts
     (assign/scan-assign), courier CANCELED posts and requeue return posts;
-    `findCanceledPostGroup` groups only same-day posts. HQ NEW region posts and
+    `findCanceledPostGroup` groups only same-day posts. A courier can flag a
+    not-arrived order in his SENT post (`post.return_request.create`,
+    `POST /post/:postId/orders/:orderId/return-request`): it stays ON_THE_ROAD
+    with `return_requested` (order-service `courier_return_request` locked
+    recheck, tracking `courier_return_requested`) and goes to the return-request
+    list; approval closes the post. HQ NEW region posts and
     the manager→HQ CANCELED post are unchanged. A partial
     **branch** receipt of a cancelled post sends unreceived parcels back to the
     real sender (LC-06). At **HQ** (owner decision 2026-11-03) unselected

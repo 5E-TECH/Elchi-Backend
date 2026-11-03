@@ -7147,6 +7147,48 @@
         ]
       }
     },
+    "/post/{postId}/orders/{orderId}/return-request": {
+      "post": {
+        "operationId": "LogisticsGatewayController_requestCourierOrderReturn",
+        "parameters": [
+          {
+            "name": "postId",
+            "required": true,
+            "in": "path",
+            "description": "Courier's SENT post ID",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "orderId",
+            "required": true,
+            "in": "path",
+            "description": "Order ID in that post",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Courier: this order did not arrive — return request (order stays on the road with return_requested)",
+        "tags": [
+          "Logistics"
+        ],
+        "x-roles": [
+          "courier"
+        ]
+      }
+    },
     "/post/cancel/return/{id}": {
       "post": {
         "operationId": "LogisticsGatewayController_returnCanceledOrdersToSender",

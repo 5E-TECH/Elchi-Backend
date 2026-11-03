@@ -525,6 +525,26 @@ export class LogisticsServiceController {
     );
   }
 
+  // Kuryer «Bu buyurtma kelmagan — qaytarish so'rovi» (yangi pochtada).
+  @MessagePattern({ cmd: 'logistics.post.return_request.create' })
+  requestCourierOrderReturn(
+    @Payload()
+    data: {
+      post_id: string;
+      order_id: string;
+      requester: { id: string; roles?: string[]; branch_id?: string | null };
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.logisticsService.requestCourierOrderReturn(
+        data.requester,
+        data.post_id,
+        data.order_id,
+      ),
+    );
+  }
+
   // HQ «Filialga qaytarish»: bekor pochtaning tanlangan buyurtmalari
   // jo'natgan filialga qaytadi, qolganlari pochtada qoladi.
   @MessagePattern({ cmd: 'logistics.post.cancel.return' })
