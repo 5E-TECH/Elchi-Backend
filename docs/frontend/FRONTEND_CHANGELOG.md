@@ -22,6 +22,19 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+### 2026-11-03 — Filial va kuryer pochtalari: har kun — alohida pochta (sanali kartalar)
+
+Ega talabi: filial va kuryerning «Pochta» sahifasida har kunning pochtasi alohida karta bo'lsin (BeePost kabi). Avval ochiq pochtaga keyingi kunlarning buyurtmalari ham qo'shilib borardi (filial to'liq qabul qilmaguncha yoki kuryer hammasini yetkazmaguncha).
+
+**Qoida (Toshkent kuni, `createdAt`):**
+- HQ → filial o'tkazmasi (`POST /branches/posts/:postId/dispatch`) faqat SHU kuni ochilgan kuryersiz SENT pochtaga qo'shiladi; kechagi qisman qabul qilingani o'zicha qoladi, bugungisi — yangi pochta.
+- Kuryerga biriktirish (`POST /orders/assign-to-courier`, `POST /orders/scan-assign`) faqat kuryerning bugungi ochiq pochtasiga; skanda buyurtmaning avvalgi pochtasi faqat bugungi ochiq (SENT) bo'lsa qayta ishlatiladi.
+- Kuryer qaytarishi (`POST /post/cancel`, kuryer) va qayta navbatga qo'yilgan qaytarishlar — bugungi ochiq bekor pochtaga; kechagi ochiq pochtadagi buyurtma o'sha pochtada qoladi.
+- Bekor pochta guruhi (`GET /post/rejected`, `/post/courier/rejected` sonlari, pochtani ochish va qabul) faqat bir kunning pochtalarini birlashtiradi.
+- HQ hudud (NEW) pochtalari va menejerning HQ ga bekor pochtasi o'zgarmagan.
+
+**Frontendda:** filial menejeri (HQ emas) va kuryerda pochta ro'yxati — har pochta o'z sanasi bilan karta. Bir filial/kuryerda bir nechta ochiq pochta (har kunniki) bo'lishi mumkin — ro'yxatni to'liq oling (menejer «Bugungi»: limit 100).
+
 ### 2026-11-03 — HQ bekor pochtasi: qisman qabul qilinganda qolgani pochtada qoladi, «Filialga qaytarish» alohida
 
 Ega talabi: HQ filialdan kelgan bekor pochtadan (masalan Samarqand, 20 ta) 15 tasini qabul qilsa, qolgan 5 tasi o'zi filialga qaytib ketmasin — HQ da tursin. Faqat admin shu 5 tasini tanlab «Filialga qaytarish»ni bossa, filialga qaytsin.

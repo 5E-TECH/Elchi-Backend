@@ -73,6 +73,8 @@ import {
   Roles,
   Status,
   Where_deliver,
+  endOfTashkentDay,
+  startOfTashkentDay,
   tashkentDayRange,
   type PostReceiveKind,
 } from '@app/common';
@@ -1376,6 +1378,19 @@ export class LogisticsServiceService implements OnModuleInit {
     });
     const sourceBranchId = String(sourcePost.branch_id ?? '').trim();
     const sourceRegionId = String(sourcePost.region_id ?? '').trim();
+    // Har kun — alohida pochta (egasi qarori 2026-11-03): boshqa kunning ochiq
+    // bekor pochtasi shu pochta bilan qo'shilmaydi (ro'yxat soni, ochilgan
+    // pochta va qabul — har kun o'zicha). Sanasi yo'q eski yozuv — avvalgidek.
+    const sourceCreatedAt = sourcePost.createdAt
+      ? new Date(sourcePost.createdAt)
+      : null;
+    const sourceDay =
+      sourceCreatedAt && !Number.isNaN(sourceCreatedAt.getTime())
+        ? {
+            start: startOfTashkentDay(sourceCreatedAt).getTime(),
+            end: endOfTashkentDay(sourceCreatedAt).getTime(),
+          }
+        : null;
     const postsById = new Map<string, Post>([
       [String(sourcePost.id), sourcePost],
     ]);
@@ -1391,8 +1406,16 @@ export class LogisticsServiceService implements OnModuleInit {
         !sourceRegionId ||
         !candidateRegionId ||
         candidateRegionId === sourceRegionId;
+      const candidateCreatedAt = candidate.createdAt
+        ? new Date(candidate.createdAt).getTime()
+        : Number.NaN;
+      const sameDay =
+        !sourceDay ||
+        Number.isNaN(candidateCreatedAt) ||
+        (candidateCreatedAt >= sourceDay.start &&
+          candidateCreatedAt <= sourceDay.end);
 
-      if (sameBranch && sameRegion) {
+      if (sameBranch && sameRegion && sameDay) {
         postsById.set(String(candidate.id), candidate);
       }
     }
@@ -5454,6 +5477,56 @@ export class LogisticsServiceService implements OnModuleInit {
    * pochtada kelgan) va o'zgarmaydi. Xato skan natijasini buzmaydi: buyurtma
    * allaqachon kuryerda, hisob esa order.post_id dan qayta hisoblanadi.
    */
+  /**
+   * Har kun — alohida pochta: skan buyurtmani kuryerning kechagi ochiq (SENT)
+   * pochtasidan bugungisiga ko'chirdi. Eski pochta hisobidan ayiriladi va
+   * unda kuryer qo'lidagi (yo'lda yoki mijoz kutmoqda) buyurtma qolmasa
+   * yopiladi (RECEIVED, kuryer filialida) — aks holda u bo'sh «yo'lda» karta
+   * bo'lib abadiy qolardi. Skan allaqachon bajarilgan: xato faqat logga.
+   */
+  private async releaseCourierPostAfterMove(
+    post: Post,
+    order: OrderRow,
+  ): Promise<void> {
+    const postId = String(post.id);
+    try {
+      const total = Number(order.total_price ?? 0);
+      await this.postRepo
+        .createQueryBuilder()
+        .update(Post)
+        .set({
+          order_quantity: () => 'GREATEST(order_quantity - 1, 0)',
+          post_total_price: () =>
+            `GREATEST(post_total_price - ${Number.isFinite(total) ? total : 0}, 0)`,
+        })
+        .where('id = :id', { id: postId })
+        .execute();
+
+      const fresh = await this.postRepo.findOne({ where: { id: postId } });
+      if (!fresh) return;
+      if (fresh.status === Post_status.SENT) {
+        const held = await this.findOrders({
+          post_id: postId,
+          status: [Order_status.ON_THE_ROAD, Order_status.WAITING_CUSTOMER],
+          page: 1,
+          limit: 10,
+        });
+        if (!held.length) {
+          fresh.status = Post_status.RECEIVED;
+          await this.syncCourierPostBranch(fresh);
+          const saved = await this.postRepo.save(fresh);
+          void this.syncPostToSearch(saved);
+          return;
+        }
+      }
+      void this.syncPostToSearch(fresh);
+    } catch (error) {
+      this.logger.warn(
+        `Old courier post release failed post=${postId} order=${order.id}: ${(error as Error)?.message ?? error}`,
+      );
+    }
+  }
+
   private async releaseOrderFromNewRegionPost(order: OrderRow): Promise<void> {
     const oldPostId = String(order.post_id ?? '').trim();
     if (!oldPostId) {
@@ -5611,13 +5684,6 @@ export class LogisticsServiceService implements OnModuleInit {
       });
     }
 
-    if (!targetPost) {
-      targetPost = await this.postRepo.findOne({
-        where: { courier_id: requesterId, status: Post_status.SENT },
-        order: { createdAt: 'DESC' },
-      });
-    }
-
     // CODE-25 — idempotent javob pochta YARATILISHIDAN OLDIN qaytadi. Ilgari
     // kuryerda SENT pochta bo'lmasa, qayta skan bo'sh SENT pochta yaratib
     // qo'yardi (buyurtma unga biriktirilmasdi — abadiy bo'sh pochta).
@@ -5646,6 +5712,32 @@ export class LogisticsServiceService implements OnModuleInit {
           (await this.findBranchCoverageRow(courierBranchId)),
         { receivedIntoBranch: receivedIntoBranchByScan },
       );
+    }
+
+    // Har kun — kuryerning alohida pochtasi (Toshkent kuni): buyurtmaning
+    // avvalgi pochtasi faqat bugungi ochiq (SENT) pochta bo'lsa qayta
+    // ishlatiladi — kechagi yoki yopilgan (RECEIVED) pochta qayta ochilmaydi.
+    const todayStart = startOfTashkentDay(new Date());
+    // Buyurtmaning o'z (kechagi) kuryer pochtasi — ko'chgandan keyin yopiladi.
+    const previousOwnPost = targetPost;
+    if (
+      targetPost &&
+      !(
+        targetPost.status === Post_status.SENT &&
+        new Date(targetPost.createdAt).getTime() >= todayStart.getTime()
+      )
+    ) {
+      targetPost = null;
+    }
+    if (!targetPost) {
+      targetPost = await this.postRepo.findOne({
+        where: {
+          courier_id: requesterId,
+          status: Post_status.SENT,
+          createdAt: MoreThanOrEqual(todayStart),
+        },
+        order: { createdAt: 'DESC' },
+      });
     }
 
     const createdNewPost = !targetPost;
@@ -5720,7 +5812,15 @@ export class LogisticsServiceService implements OnModuleInit {
           `Post counter update failed for post=${targetPost.id} order=${order.id}: ${(err as Error)?.message ?? err}`,
         );
       }
-      await this.releaseOrderFromNewRegionPost(order);
+      if (
+        previousOwnPost &&
+        previousOwnPost.status === Post_status.SENT &&
+        String(previousOwnPost.id) !== String(targetPost.id)
+      ) {
+        await this.releaseCourierPostAfterMove(previousOwnPost, order);
+      } else {
+        await this.releaseOrderFromNewRegionPost(order);
+      }
     }
 
     await this.activityLog.log({
@@ -5942,8 +6042,14 @@ export class LogisticsServiceService implements OnModuleInit {
       this.badRequest("Kuryer faol emas — unga buyurtma biriktirib bo'lmaydi");
     }
 
+    // Har kun — kuryerning alohida pochtasi (Toshkent kuni): kechagi ochiq
+    // pochtaga (yetkazilmay qolganlari bilan) bugungi buyurtma qo'shilmaydi.
     let targetPost = await this.postRepo.findOne({
-      where: { courier_id: courierId, status: Post_status.SENT },
+      where: {
+        courier_id: courierId,
+        status: Post_status.SENT,
+        createdAt: MoreThanOrEqual(startOfTashkentDay(new Date())),
+      },
       order: { createdAt: 'DESC' },
     });
 
@@ -6099,11 +6205,15 @@ export class LogisticsServiceService implements OnModuleInit {
       this.badRequest('Buyurtmalar tanlanmagan');
     }
     const courierBranchId = await this.findCourierBranchId(requester);
+    // Har kun — alohida qaytarish pochtasi (Toshkent kuni): filial hali qabul
+    // qilmagan kechagi pochtaga bugungi qaytarish qo'shilmaydi. Kechagi
+    // pochtadagi buyurtma o'sha pochtada qoladi (`isOrderInActiveCanceledPost`).
     let canceledPost = await this.postRepo.findOne({
       where: {
         courier_id: requester.id,
         branch_id: courierBranchId,
         status: Post_status.CANCELED,
+        createdAt: MoreThanOrEqual(startOfTashkentDay(new Date())),
       },
     });
 
@@ -6529,6 +6639,9 @@ export class LogisticsServiceService implements OnModuleInit {
           branch_id: group.branchId,
           region_id: group.regionId,
           status: Post_status.CANCELED,
+          // Har kun — alohida pochta: kechagi ochiq qaytarish pochtasiga
+          // qo'shilmaydi.
+          createdAt: MoreThanOrEqual(startOfTashkentDay(new Date())),
         } as any,
       });
       const createdReturnPost = !returnPost;
@@ -9987,8 +10100,15 @@ export class LogisticsServiceService implements OnModuleInit {
           branch_id: assignedBranch || IsNull(),
           // HQ → filial o'tkazmasi faqat kuryersiz ('0') SENT pochtaga
           // qo'shiladi: filial kuryerining faol pochtasi (branch_id bilan)
-          // hech qachon dispatch maqsadi bo'lmasin.
-          ...(targetPostStatus === Post_status.SENT ? { courier_id: '0' } : {}),
+          // hech qachon dispatch maqsadi bo'lmasin. Har kun — alohida pochta
+          // (egasi qarori 2026-11-03, BeePost kabi): kechagi qisman qabul
+          // qilingan o'tkazmaga bugungi jo'natma qo'shilmaydi.
+          ...(targetPostStatus === Post_status.SENT
+            ? {
+                courier_id: '0',
+                createdAt: MoreThanOrEqual(startOfTashkentDay(new Date())),
+              }
+            : {}),
         },
       });
 

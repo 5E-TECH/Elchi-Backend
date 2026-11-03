@@ -1,7 +1,7 @@
 import { RpcException } from '@nestjs/microservices';
 import { of } from 'rxjs';
 import { LogisticsServiceService } from './logistics-service.service';
-import { Order_status, Post_status } from '@app/common';
+import { Order_status, Post_status, startOfTashkentDay } from '@app/common';
 
 describe('LogisticsServiceService assignOrdersToCourier', () => {
   function setup(options?: {
@@ -187,6 +187,23 @@ describe('LogisticsServiceService assignOrdersToCourier', () => {
     );
     expect(result.data.assigned_count).toBe(2);
     expect(result.data.post_id).toBe('p-open');
+  });
+
+  it('har kun alohida pochta: faqat bugungi ochiq pochta qayta ishlatiladi (Toshkent kuni)', async () => {
+    const { service, postRepo } = setup();
+
+    await service.assignOrdersToCourier(
+      { id: '77', roles: ['branch'] },
+      { order_ids: ['101', '102'], courier_id: '44' },
+    );
+
+    const sentLookup = postRepo.findOne.mock.calls
+      .map(([query]: [any]) => query?.where)
+      .find((where: any) => where?.status === Post_status.SENT);
+    expect(sentLookup?.createdAt?.type).toBe('moreThanOrEqual');
+    expect(sentLookup?.createdAt?.value).toEqual(
+      startOfTashkentDay(new Date()),
+    );
   });
 
   it('creates new post when courier has no open SENT post', async () => {

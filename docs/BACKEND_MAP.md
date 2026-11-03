@@ -446,7 +446,12 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
     `POST /orders/assign-to-courier` or a scan.
   - `post.receive` keeps the post SENT while any ON_THE_ROAD order remains and
     adds top-level `failures` / `not_received_order_ids` (LC-11); `post.new`
-    adopts only orphan RECEIVED orders in **HQ custody** (LC-03); a partial
+    adopts only orphan RECEIVED orders in **HQ custody** (LC-03). Open posts
+    are reused only within the same Tashkent day (owner decision 2026-11-03,
+    per-day cards): HQ→branch SENT transfer posts, courier SENT posts
+    (assign/scan-assign), courier CANCELED posts and requeue return posts;
+    `findCanceledPostGroup` groups only same-day posts. HQ NEW region posts and
+    the manager→HQ CANCELED post are unchanged. A partial
     **branch** receipt of a cancelled post sends unreceived parcels back to the
     real sender (LC-06). At **HQ** (owner decision 2026-11-03) unselected
     parcels stay in the same CANCELED post; only `post.cancel.return`

@@ -1,7 +1,7 @@
 import { RpcException } from '@nestjs/microservices';
 import { of, throwError } from 'rxjs';
 import { LogisticsServiceService } from './logistics-service.service';
-import { Order_status, Post_status } from '@app/common';
+import { Order_status, Post_status, startOfTashkentDay } from '@app/common';
 
 describe('LogisticsServiceService scanAssignOrder', () => {
   function setup(options?: {
@@ -21,6 +21,8 @@ describe('LogisticsServiceService scanAssignOrder', () => {
     findHqError?: boolean;
     // Tuman qamrovi: kuryer filialining viloyati (odatiy '1' = buyurtma viloyati)
     branchRegionId?: string | null;
+    // `order.find_all` — eski pochtada kuryer qo'lida qolgan buyurtmalar
+    heldOrders?: Array<Record<string, unknown>>;
   }) {
     const order = {
       id: '101',
@@ -40,6 +42,9 @@ describe('LogisticsServiceService scanAssignOrder', () => {
 
     const orderClient = {
       send: jest.fn((pattern: { cmd: string }) => {
+        if (pattern.cmd === 'order.find_all') {
+          return of({ data: { data: options?.heldOrders ?? [] } });
+        }
         if (pattern.cmd === 'order.find_by_qr') {
           if (options?.orderLookupError) {
             return throwError(() => options.orderLookupError);
@@ -250,6 +255,129 @@ describe('LogisticsServiceService scanAssignOrder', () => {
     expect(postUpdateQb.execute).toHaveBeenCalled();
     expect(result.data.idempotent).toBe(false);
     expect(result.data.post_created).toBe(false);
+  });
+
+  describe('har kun — alohida pochta (Toshkent kuni)', () => {
+    const yesterday = () => new Date(Date.now() - 36 * 60 * 60 * 1000);
+    const postIdOfUpdate = (orderClient: { send: jest.Mock }) =>
+      orderClient.send.mock.calls
+        .filter(([pattern]) => pattern.cmd === 'order.update')
+        .map(([, payload]) => payload?.dto?.post_id)
+        .find(Boolean);
+
+    it('ochiq pochta faqat bugungisi izlanadi (createdAt >= Toshkent kuni boshi)', async () => {
+      const { service, postRepo } = setup();
+      await service.scanAssignOrder(
+        { id: 'c1', roles: ['courier'] },
+        { qr_token: 'ORD-abc123' },
+      );
+      const sentLookup = postRepo.findOne.mock.calls
+        .map(([query]) => query?.where)
+        .find((where) => where?.status === Post_status.SENT);
+      expect(sentLookup?.createdAt?.type).toBe('moreThanOrEqual');
+      expect(sentLookup?.createdAt?.value).toEqual(
+        startOfTashkentDay(new Date()),
+      );
+    });
+
+    it('kechagi SENT pochtadagi buyurtma bugungi pochtaga tushadi', async () => {
+      const { service, orderClient } = setup({
+        order: { post_id: 'p-old' },
+        linkedPost: {
+          id: 'p-old',
+          courier_id: 'c1',
+          status: Post_status.SENT,
+          createdAt: yesterday(),
+        },
+      });
+      await service.scanAssignOrder(
+        { id: 'c1', roles: ['courier'] },
+        { qr_token: 'ORD-abc123' },
+      );
+      expect(postIdOfUpdate(orderClient)).toBe('p-open');
+    });
+
+    it('kechagi pochta bo‘shasa — hisobidan ayiriladi va yopiladi (RECEIVED)', async () => {
+      const { service, postRepo, postUpdateQb } = setup({
+        order: { post_id: 'p-old', total_price: 50000 },
+        linkedPost: {
+          id: 'p-old',
+          courier_id: 'c1',
+          status: Post_status.SENT,
+          createdAt: yesterday(),
+        },
+      });
+      await service.scanAssignOrder(
+        { id: 'c1', roles: ['courier'] },
+        { qr_token: 'ORD-abc123' },
+      );
+      expect(postUpdateQb.where).toHaveBeenCalledWith('id = :id', {
+        id: 'p-old',
+      });
+      expect(postRepo.save).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'p-old', status: Post_status.RECEIVED }),
+      );
+    });
+
+    it('kechagi pochtada mijozni kutayotgan buyurtma qolsa — pochta ochiq qoladi', async () => {
+      const { service, postRepo } = setup({
+        order: { post_id: 'p-old' },
+        linkedPost: {
+          id: 'p-old',
+          courier_id: 'c1',
+          status: Post_status.SENT,
+          createdAt: yesterday(),
+        },
+        heldOrders: [
+          {
+            id: '205',
+            status: Order_status.WAITING_CUSTOMER,
+            post_id: 'p-old',
+          },
+        ],
+      });
+      await service.scanAssignOrder(
+        { id: 'c1', roles: ['courier'] },
+        { qr_token: 'ORD-abc123' },
+      );
+      expect(postRepo.save).not.toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'p-old', status: Post_status.RECEIVED }),
+      );
+    });
+
+    it('bugungi o‘z pochtasi qayta ishlatiladi', async () => {
+      const { service, orderClient } = setup({
+        order: { post_id: 'p-old' },
+        linkedPost: {
+          id: 'p-old',
+          courier_id: 'c1',
+          status: Post_status.SENT,
+          createdAt: new Date(),
+        },
+      });
+      await service.scanAssignOrder(
+        { id: 'c1', roles: ['courier'] },
+        { qr_token: 'ORD-abc123' },
+      );
+      expect(postIdOfUpdate(orderClient)).toBe('p-old');
+    });
+
+    it('yopilgan (RECEIVED) pochta qayta ochilmaydi', async () => {
+      const { service, orderClient } = setup({
+        order: { post_id: 'p-old' },
+        linkedPost: {
+          id: 'p-old',
+          courier_id: 'c1',
+          status: Post_status.RECEIVED,
+          createdAt: new Date(),
+        },
+      });
+      await service.scanAssignOrder(
+        { id: 'c1', roles: ['courier'] },
+        { qr_token: 'ORD-abc123' },
+      );
+      expect(postIdOfUpdate(orderClient)).toBe('p-open');
+    });
   });
 
   it('creates new post when courier has no open post', async () => {
