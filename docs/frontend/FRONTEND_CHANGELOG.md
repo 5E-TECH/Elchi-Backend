@@ -38,12 +38,12 @@ Ega qarori (Trello anKpzwxk): 2026-11-02 dagi «tuman ↔ filial» biriktiruvi (
 | HTTP | `data.reason` | Qayerda | Qachon |
 |---|---|---|---|
 | 400 | `region_mismatch` (🆕 kod; avval kodsiz 400) | `POST /branches/posts/:postId/dispatch`, `POST /branches/posts/:postId/reassign` | Pochta viloyati manzil filial viloyatiga teng emas. `details: { post_id, destination_branch_id, post_region_id, destination_region_id }` |
-| 400 | `branch_region_missing` | dispatch, reassign | Manzil filial yoki pochtaning viloyati yo'q. `details.missing`: `destination_branch_region` va/yoki `post_region`. Hech narsa jo'natilmaydi |
-| 409 | `district_not_served_by_branch` | dispatch | Buyurtma xizmat viloyati manzil filialniki emas. `details.{order_ids, district_ids}` |
+| 400 | `branch_region_missing` 🆕 (avval tekshiruv o'tkazib yuborilardi) | dispatch, reassign | Manzil filial yoki pochtaning viloyati yo'q. `details.missing`: `destination_branch_region` va/yoki `post_region`. Hech narsa jo'natilmaydi |
+| 409 | `district_not_served_by_branch` | dispatch, reassign | Buyurtma xizmat viloyati manzil filialniki emas. `details.{order_ids, district_ids}` |
 | 409 | `order_in_outgoing_batch` 🆕 | `POST /orders/assign-to-courier`, `POST /orders/scan-assign` (filial va HQ kuryeri) | Buyurtma partiyada (`current_batch_id`). «Buyurtma chiquvchi partiyada — kuryerga berilmaydi (avval partiyadan chiqaring)». `details.order_ids`. HQ kuryeri skanida matn — «Buyurtma paketga joylangan — …» (avval kodsiz 400) |
 | 403 | `district_not_served_by_branch` | assign-to-courier, scan-assign | Boshqa viloyat (tranzit) buyurtmasi: «Boshqa viloyat buyurtmasi — kuryerga berilmaydi: #12, #13». Kuryer skanida partiyadan qabul qilingan bo'lsa: «… — posilka filialingizga qabul qilindi, lekin kuryerga berilmaydi …». `details.order_ids` |
 | 403 | `hq_courier_region_only` 🆕 | assign-to-courier (HQ), scan-assign (HQ kuryeri) | Buyurtma HQ viloyatidan emas. `details.order_ids` |
-| 400 | `branch_region_missing` | assign-to-courier (HQ), scan-assign (HQ kuryeri) | HQ filialining viloyati yo'q. `details.branch_id` |
+| 400 | `branch_region_missing` 🆕 | assign-to-courier (HQ), scan-assign (HQ kuryeri) | HQ filialining viloyati yo'q. `details.branch_id` |
 | 403 | `post_receive_manager_only` 🆕 | `PATCH /post/receive/:id` (HQ → filial o'tkazma pochtasi, `courier_id: '0'`) | Qabul qiluvchi manzil filial MENEJERI emas (registrator, BRANCH akkaunti, boshqa filial yoki HQ menejeri). SUPERADMIN/ADMIN qabul qila oladi — activity log `logistics.post_receive_override`. `details.{post_id, branch_id}` |
 | 403 | `post_not_visible_to_courier` 🆕 | `GET /post/:id`, `GET /post/orders/:id`, pochta QR (`GET /post/scan/:id`, `GET /scan/:token` — `POST-…`) | Sof kuryer hali qabul qilinmagan (SENT) filial o'tkazma pochtasini ochdi. `details.post_id` |
 | 403 | `new_posts_hq_only` 🆕 | `GET /post/new` («Yangi pochtalar») | So'rovchi HQ xodimi emas (SUPERADMIN, ADMIN, HQ registratori/menejeri bo'lmasa). Filial xizmati javob bermasa — 503 (kodsiz, qayta urinish) |
@@ -55,7 +55,7 @@ Ega qarori (Trello anKpzwxk): 2026-11-02 dagi «tuman ↔ filial» biriktiruvi (
 
 **Endpointlar:**
 - ⚠️ [branch] `POST /branches/posts/:postId/dispatch`: buyurtma viloyatdagi istalgan filialga jo'natiladi (masalan, Urgut buyurtmasi «Samarqand filiali»ga ham, «Urgut filiali»ga ham). Viloyatsiz manzil yoki pochta — 400 `branch_region_missing` (avval tekshiruv o'tkazib yuborilardi).
-- ✏️ [branch] `GET /branches/dispatch-destinations` (HQ jo'natish oynasi): viloyati yo'q filiallar ro'yxatda yo'q — ro'yxatdagi har filialga jo'natish mumkin.
+- ✏️ [branch] `GET /branches/dispatch-destinations` (HQ jo'natish oynasi): viloyati yo'q filiallar ro'yxatda yo'q. Pochta viloyati bo'yicha (`region_id`) olingan ro'yxatdagi har filial (`has_manager: true`) — to'g'ri manzil: bir viloyatdagi filiallarning hammasi.
 - ⚠️ [logistics] `POST /orders/assign-to-courier`, `POST /orders/scan-assign`: filial o'z viloyati buyurtmasini **istagan** kuryeriga beradi (tuman biriktiruvi talab qilinmaydi). Boshqa viloyat (tranzit) va partiyadagi buyurtma — yuqoridagi kodlar. HQ kuryeri — faqat HQ viloyati. O'z WAITING yoki ON_THE_ROAD buyurtmasini qayta skanlash — avvalgidek idempotent 200.
 - ⚠️ [logistics] `PATCH /post/receive/:id`: HQ → filial o'tkazma pochtasini faqat manzil filial menejeri (yoki SUPERADMIN/ADMIN) qabul qiladi. Kuryer pochtalari va skaner bilan qabul o'zgarmagan.
 - ⚠️ [logistics] `GET /post` (sof kuryer): hali qabul qilinmagan filial o'tkazma pochtalari (`courier_id: '0'`, SENT) ro'yxatda yo'q (status filtri bilan ham). Ularni to'g'ridan-to'g'ri ochish — 403 `post_not_visible_to_courier`.
@@ -74,7 +74,7 @@ Ega qarori (Trello anKpzwxk): 2026-11-02 dagi «tuman ↔ filial» biriktiruvi (
 - Viloyati yo'q oddiy filiallar hech narsaga xizmat qilmaydi (jo'natish ham, kuryerga berish ham yo'q). Ro'yxat: `SELECT id, name FROM branch_schema.branches WHERE region_id IS NULL AND type <> 'HQ' AND is_deleted = false`.
 - `serving_branch_id` boshqa viloyat filialini ko'rsatgan tumanlar endi o'z viloyati filiallariga xizmat qiladi.
 
-**Ma'lum cheklov:** «Eski filialda tugasin» imtiyozi HQ ga yozilmaydi. HQ viloyatidan boshqa viloyatga ko'chgan tuman buyurtmasi HQ da tursa, uni HQ kuryeriga emas, yangi viloyat filialiga jo'nating.
+**Ma'lum cheklov:** «Eski filialda tugasin» imtiyozi HQ ga yozilmaydi. HQ viloyatidan boshqa viloyatga ko'chgan tuman buyurtmasi HQ da tursa, u HQ ning eski viloyat YANGI pochtasida qoladi: HQ kuryeriga berib bo'lmaydi (403 `hq_courier_region_only`), to'g'ridan-to'g'ri jo'natib ham bo'lmaydi (yangi viloyat filialiga — 400 `region_mismatch`, eski viloyat filialiga — 409 `district_not_served_by_branch`). Avval admin (SUPERADMIN/ADMIN) uni tumanning yangi viloyati YANGI pochtasiga ko'chiradi — `POST /district/:id/rehome-open-orders` yoki `PATCH /district/:id` da `rehome_open_orders: true`; keyin o'sha pochta yangi viloyat filialiga jo'natiladi.
 
 Migratsiya yo'q. Deploy: branch-service, logistics-service, api-gateway.
 

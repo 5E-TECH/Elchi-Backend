@@ -21,7 +21,8 @@ export const SCAN_ASSIGN_MESSAGES = {
   IN_TRANSIT:
     "Buyurtma yo'lda — filiallar orasidagi pochta yoki paket ichida. U qabul qilinmaguncha HQ kuryeri uni ololmaydi.",
   // `current_batch_id` PENDING (hali jo'natilmagan) paketda ham qo'yiladi —
-  // buyurtma o'shanda HQ da RECEIVED turadi, "yo'lda" deyish yolg'on bo'lardi.
+  // buyurtma o'shanda HQ da turadi (odatda NEW: FORWARD partiya faqat NEW
+  // buyurtmani oladi; ba'zan RECEIVED), "yo'lda" deyish yolg'on bo'lardi.
   IN_BATCH:
     "Buyurtma paketga joylangan — paket jo'natilib qabul qilinmaguncha HQ kuryeri uni ololmaydi.",
   NOT_AT_HQ:
@@ -126,7 +127,9 @@ const reject = (
  * kuryerning o'z buyurtmasini qayta skanlashi), aks holda rad etish sababi.
  *
  * Qoidalar TARTIB BILAN tekshiriladi, birinchi mos kelgani g'olib:
- * 1. NEW → hali HQ qabul qilmagan.
+ * 1. NEW → hali HQ qabul qilmagan. Istisno: NEW + `current_batch_id`
+ *    (HQ → filial FORWARD partiyasi faqat NEW buyurtmani oladi va u PENDING
+ *    paytida NEW turadi) → 4-qoida javobi (409 `order_in_outgoing_batch`).
  * 2. Yakunlangan holat (sotilgan, bekor, qaytarilgan...) → berib bo'lmaydi.
  * 3. Boshqa kuryerda (`courier_id` yoki `holder_courier_id`) → band.
  * 4. Paketda (`current_batch_id`) → yo'lda (ON_THE_ROAD, 400) yoki paketga
@@ -162,6 +165,16 @@ export function assessHqCourierScan(
   const isOnTheRoad = status === String(Order_status.ON_THE_ROAD);
 
   if (status === String(Order_status.NEW)) {
+    // anKpzwxk (2b): partiyadagi NEW — HQ menejerining assign-to-courier
+    // yo'li bilan bir xil 409 (NEW hech qachon ON_THE_ROAD emas).
+    if (batchId) {
+      return reject(
+        409,
+        SCAN_ASSIGN_MESSAGES.IN_BATCH,
+        'IN_BATCH',
+        'order_in_outgoing_batch',
+      );
+    }
     return reject(400, SCAN_ASSIGN_MESSAGES.NOT_ACCEPTED_HQ, 'NOT_ACCEPTED');
   }
 
@@ -183,7 +196,7 @@ export function assessHqCourierScan(
 
   if (batchId) {
     // "Yo'lda" matni FAQAT haqiqatan yo'ldagi (jo'natilgan FORWARD paket)
-    // buyurtma uchun. PENDING paketdagi buyurtma hamon HQ da RECEIVED turadi.
+    // buyurtma uchun. PENDING paketdagi buyurtma hamon HQ da turadi.
     return isOnTheRoad
       ? reject(400, SCAN_ASSIGN_MESSAGES.IN_TRANSIT, 'IN_TRANSIT')
       : reject(

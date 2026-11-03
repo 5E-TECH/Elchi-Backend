@@ -1053,7 +1053,9 @@ export class BranchGatewayController {
   @ApiOperation({
     summary: 'Move a sent, not yet received branch post to another branch',
     description:
-      "Eski pochtalar → «Filialga o'tkazish». The post (same id) and all its on-the-road orders move to the destination branch. Rules: post status 'sent' without courier; destination is an active REGIONAL/HYBRID branch of the post's region with a manager and serves every order's district; every order is still on the road (not received). 409 data.reasons: post_not_sent, post_partly_received, empty_post, district_not_served_by_branch, reassign_failed. " +
+      "Eski pochtalar → «Filialga o'tkazish». The post (same id) and all its on-the-road orders move to the destination branch. Rules: post status 'sent' without courier; destination is an active REGIONAL/HYBRID branch of the post's region with a manager and serves every order's service region; every order is still on the road (not received). " +
+      'The 409s for post not sent / partly received / empty post / concurrent change (and 503 reassign failure, 400 post has courier / same branch) carry NO machine code in the response — show `message`. ' +
+      'Machine codes come only as `data.reason`: 409 `district_not_served_by_branch` (`details.{order_ids, district_ids}`), 400 `region_mismatch`, 400 `branch_region_missing`. ' +
       "anKpzwxk: coverage is the region rule (any branch of the order's service region); 400 `data.reason = region_mismatch` (post region ≠ destination region) or `branch_region_missing` (post or destination has no region, `details.missing`) — nothing moves.",
   })
   @ApiParam({ name: 'postId', description: 'Logistics post ID' })

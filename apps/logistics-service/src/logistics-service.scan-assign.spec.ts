@@ -889,6 +889,41 @@ describe('LogisticsServiceService scanAssignOrder', () => {
       expectUntouched(ctx);
     });
 
+    it('H5c: HQ → filial PENDING partiyadagi NEW buyurtma — 409 order_in_outgoing_batch (400 «qabul qilinmagan» emas)', async () => {
+      const ctx = hqSetup({
+        order: {
+          branch_id: '1',
+          status: Order_status.NEW,
+          current_batch_id: 'b1',
+        },
+      });
+
+      try {
+        await scanAsC1(ctx.service);
+        throw new Error('Expected RpcException');
+      } catch (error) {
+        expect(error).toBeInstanceOf(RpcException);
+        const payload = (error as RpcException).getError() as {
+          statusCode?: number;
+          message?: string;
+          data?: unknown;
+        };
+        expect(payload).toEqual(
+          expect.objectContaining({
+            statusCode: 409,
+            message: IN_BATCH,
+            data: expect.objectContaining({
+              reason: 'order_in_outgoing_batch',
+              details: expect.objectContaining({
+                order_ids: [expect.any(String)],
+              }),
+            }),
+          }),
+        );
+      }
+      expectUntouched(ctx);
+    });
+
     it('H6: boshqa filialda turgan (RECEIVED) buyurtma — 403 HQ da emas', async () => {
       const ctx = hqSetup({
         order: { branch_id: '20', status: Order_status.RECEIVED },

@@ -58,19 +58,19 @@ describe('assessHqCourierScan', () => {
       });
     });
 
-    it('NEW + current_batch_id → baribir NOT_ACCEPTED_HQ (NEW g‘olib)', () => {
+    it('NEW + current_batch_id (PENDING FORWARD partiya) → 409 IN_BATCH, order_in_outgoing_batch (anKpzwxk 2b)', () => {
       expect(
         assess({
           status: Order_status.NEW,
           branch_id: '1',
           current_batch_id: 'b1',
         }),
-      ).toEqual(
-        expect.objectContaining({
-          statusCode: 400,
-          message: SCAN_ASSIGN_MESSAGES.NOT_ACCEPTED_HQ,
-        }),
-      );
+      ).toEqual({
+        statusCode: 409,
+        message: SCAN_ASSIGN_MESSAGES.IN_BATCH,
+        reason: 'IN_BATCH',
+        details: { reason: 'order_in_outgoing_batch' },
+      });
     });
 
     it('boshqa filialdagi NEW ham NOT_ACCEPTED_HQ', () => {

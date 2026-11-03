@@ -6579,7 +6579,7 @@ export class OrderGatewayController {
       "(1gxmqLj5) SUPERADMIN/ADMIN ham biriktiradi: barcha orderlar BITTA filialda bo'lishi, kuryer shu filialning " +
       "COURIER a'zosi bo'lishi shart (aks holda 400). `branch_id` (ixtiyoriy) — UI'dagi filial tanlovi: berilsa " +
       "orderlar filialiga mos bo'lishi kerak (400). Menejer/registrator uchun o'zgarishsiz (o'z filiali, `branch_id` e'tiborsiz). " +
-      "anKpzwxk — filial o'z viloyati buyurtmasini ISTAGAN kuryeriga beradi. 409 `data.reason = order_in_outgoing_batch` — buyurtma partiyada; 403 `district_not_served_by_branch` — boshqa viloyat (tranzit) buyurtmasi; HQ da: 403 `hq_courier_region_only` — buyurtma HQ viloyatidan emas, 400 `branch_region_missing` — HQ viloyatsiz. Id'lar `details.order_ids` da; hech narsa yozilmaydi.",
+      "anKpzwxk — filial o'z viloyati buyurtmasini ISTAGAN kuryeriga beradi. 409 `data.reason = order_in_outgoing_batch` — buyurtma partiyada; 403 `district_not_served_by_branch` — boshqa viloyat (tranzit) buyurtmasi; HQ da: 403 `hq_courier_region_only` — buyurtma HQ viloyatidan emas, 400 `branch_region_missing` — HQ viloyatsiz (`details.branch_id`). Qolgan kodlarda buyurtma id'lari `details.order_ids` da; hech narsa yozilmaydi.",
   })
   @ApiBody({ type: AssignOrdersToCourierRequestDto })
   assignOrdersToCourier(
