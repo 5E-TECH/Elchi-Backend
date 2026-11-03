@@ -1759,6 +1759,41 @@ export class OrderGatewayController {
     return Number.isFinite(n) && n >= 0 ? n : null;
   }
 
+  /**
+   * Buyurtmani tahrirlashda (`PATCH orders/:id(/full)`) QO'SHILGAN mahsulot
+   * ham aynan shu buyurtma marketiniki bo'lsin — yaratishdagi UER0MpMX bilan
+   * bir xil (oynada «Mahsulot qo'shish» bor). Buyurtmada allaqachon turgan
+   * mahsulotlar qayta tekshirilmaydi: katalogdan keyin o'chirilgan bo'lsa ham
+   * son o'zgartirish ishlayveradi.
+   */
+  private async assertAddedOrderProductsOwned(
+    orderId: string,
+    items: Array<{ product_id?: string | null }> | undefined,
+  ): Promise<void> {
+    if (!Array.isArray(items) || !items.some((item) => item?.product_id)) {
+      return;
+    }
+    const order = await this.findOrderRowForScope(orderId);
+    if (!order) {
+      throw new NotFoundException('Buyurtma topilmadi');
+    }
+    const orderItems: unknown[] = Array.isArray(order.items) ? order.items : [];
+    const existing = new Set(
+      orderItems.map((item) => {
+        const row = (item ?? {}) as {
+          product_id?: unknown;
+          product?: { id?: unknown } | null;
+        };
+        return this.asStr(row.product_id ?? row.product?.id).trim();
+      }),
+    );
+    const added = items.filter((item) => {
+      const productId = this.asStr(item?.product_id).trim();
+      return Boolean(productId) && !existing.has(productId);
+    });
+    await this.assertOrderProductsOwned(this.asStr(order.market_id), added);
+  }
+
   /** UER0MpMX: har `product_id` aynan shu marketniki bo'lishi shart (IDOR). */
   private async assertOrderProductsOwned(
     marketId: string | undefined,
@@ -7268,6 +7303,7 @@ export class OrderGatewayController {
         "Bu buyurtma sizning filialingizga tegishli emas — uni o'zgartira olmaysiz",
       );
     }
+    await this.assertAddedOrderProductsOwned(id, dto.items);
 
     const response = await firstValueFrom(
       this.orderClient
