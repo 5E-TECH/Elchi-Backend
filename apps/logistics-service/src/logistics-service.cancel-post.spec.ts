@@ -1068,44 +1068,54 @@ describe('LogisticsServiceService createCanceledPost', () => {
             role: 'MANAGER',
             branch_id: '10',
           },
+          // Shu orada boshqa xodim qabul qilgan/qaytargan bo'lsa — 409.
+          canceled_post_guard: { post_id: '77' },
         },
       },
     );
   });
 
-  it('returns unreceived HQ canceled orders back to the manager branch post', async () => {
+  it('keeps unreceived HQ canceled orders in the post until HQ returns them', async () => {
+    // Egasi qarori (2026-11-03): HQ qisman qabul qilsa qolgani o'zi filialga
+    // qaytmaydi — pochtada kutadi (qaytarish — `returnCanceledOrdersToSender`).
+    const rows = [
+      {
+        id: '101',
+        status: Order_status.CANCELLED_SENT,
+        canceled_post_id: '77',
+        total_price: 1_000_000,
+        region_id: '14',
+      },
+      {
+        id: '102',
+        status: Order_status.CANCELLED_SENT,
+        canceled_post_id: '77',
+        total_price: 500_000,
+        region_id: '14',
+      },
+    ];
     const orderClient = {
-      send: jest.fn((pattern: { cmd: string }) => {
-        if (pattern.cmd === 'order.find_all') {
-          return of({
-            data: {
-              data: [
-                {
-                  id: '101',
-                  status: Order_status.CANCELLED_SENT,
-                  canceled_post_id: '77',
-                  total_price: 1_000_000,
-                  region_id: '14',
-                  branch_id: '10',
-                  holder_type: 'BRANCH',
-                  holder_branch_id: '10',
-                },
-                {
-                  id: '102',
-                  status: Order_status.CANCELLED_SENT,
-                  canceled_post_id: '77',
-                  total_price: 500_000,
-                  region_id: '14',
-                  branch_id: '10',
-                  holder_type: 'BRANCH',
-                  holder_branch_id: '10',
-                },
-              ],
-            },
-          });
-        }
-        return of({ statusCode: 200 });
-      }),
+      send: jest.fn(
+        (
+          pattern: { cmd: string },
+          payload?: { id?: string; dto?: Record<string, unknown> },
+        ) => {
+          if (pattern.cmd === 'order.find_all') {
+            return of({
+              data: {
+                data: rows.filter(
+                  (row) => row.status === Order_status.CANCELLED_SENT,
+                ),
+              },
+            });
+          }
+          if (pattern.cmd === 'order.update') {
+            const row = rows.find(({ id }) => id === payload?.id);
+            if (row) Object.assign(row, payload?.dto);
+          }
+          return of({ statusCode: 200 });
+        },
+      ),
     };
     const sourcePost = {
       id: '77',
@@ -1117,18 +1127,17 @@ describe('LogisticsServiceService createCanceledPost', () => {
       post_total_price: 1_500_000,
     };
     const branchClient = {
-      send: jest.fn(() => of({ data: { id: '1', type: 'HQ' } })),
+      send: jest.fn((pattern: { cmd: string }) =>
+        pattern.cmd === 'branch.user.find_by_user'
+          ? of({ data: { branch_id: '10', role: 'MANAGER' } })
+          : of({ data: { id: '1', type: 'HQ' } }),
+      ),
     };
     const postRepo = {
       find: jest.fn().mockResolvedValue([]),
-      findOne: jest
-        .fn()
-        .mockResolvedValueOnce(sourcePost)
-        .mockResolvedValueOnce(null),
+      findOne: jest.fn().mockResolvedValue({ ...sourcePost }),
       create: jest.fn((payload) => payload),
-      save: jest.fn((post) =>
-        Promise.resolve({ ...post, id: post.id ?? '88' }),
-      ),
+      save: jest.fn((post) => Promise.resolve(post)),
     };
     const service = new LogisticsServiceService(
       postRepo as any,
@@ -1151,39 +1160,20 @@ describe('LogisticsServiceService createCanceledPost', () => {
       expect.objectContaining({
         order_ids: ['101'],
         remaining_order_ids: ['102'],
-        requeued_post_ids: ['88'],
+        requeued_post_ids: [],
+        post_status: Post_status.CANCELED,
+        post_closed: false,
       }),
     );
-    expect(postRepo.create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        courier_id: '8',
-        branch_id: '10',
-        region_id: '14',
-        status: Post_status.CANCELED,
-      }),
-    );
-    expect(orderClient.send).toHaveBeenCalledWith(
-      { cmd: 'order.update' },
-      expect.objectContaining({
-        id: '102',
-        dto: {
-          status: Order_status.CANCELLED_SENT,
-          branch_id: '10',
-          courier_id: null,
-          assigned_at: null,
-          canceled_post_id: '88',
-        },
-      }),
-    );
-    // Eski pochtalar: qabul qilingani qoladi, qayta navbatga qo'yilgani
-    // (102) — yangi qaytarish pochtasida.
-    expect(postRepo.save).toHaveBeenCalledWith(
-      expect.objectContaining({
-        id: '77',
-        status: Post_status.CANCELED_RECEIVED,
-        order_quantity: 1,
-        post_total_price: 1_000_000,
-      }),
-    );
+    expect(postRepo.create).not.toHaveBeenCalled();
+    expect(
+      orderClient.send.mock.calls.some(
+        ([pattern, payload]) =>
+          pattern.cmd === 'order.update' &&
+          (payload as { id?: string })?.id === '102',
+      ),
+    ).toBe(false);
+    // Hisob o'zgarmadi (qabul qilingan + kutayotgan) — saqlash shart emas.
+    expect(postRepo.save).not.toHaveBeenCalled();
   });
 });

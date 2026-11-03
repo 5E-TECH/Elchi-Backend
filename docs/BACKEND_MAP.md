@@ -446,9 +446,16 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
     `POST /orders/assign-to-courier` or a scan.
   - `post.receive` keeps the post SENT while any ON_THE_ROAD order remains and
     adds top-level `failures` / `not_received_order_ids` (LC-11); `post.new`
-    adopts only orphan RECEIVED orders in **HQ custody** (LC-03); a partial HQ
-    receipt of a cancelled post sends unreceived parcels back to the real
-    sender (LC-06); scanner receives write `return_requested:false` (CODE-09);
+    adopts only orphan RECEIVED orders in **HQ custody** (LC-03); a partial
+    **branch** receipt of a cancelled post sends unreceived parcels back to the
+    real sender (LC-06). At **HQ** (owner decision 2026-11-03) unselected
+    parcels stay in the same CANCELED post; only `post.cancel.return`
+    (`POST /post/cancel/return/:id`, selected `order_ids`) sends them back to
+    the sender branch (HQ-courier posts and unknown senders: 400), and the
+    post becomes CANCELED_RECEIVED once nothing is pending (counters = HQ
+    received). Both HQ actions pass `canceled_post_guard` (order-service 409 if
+    the order already left the post); a return writes tracking
+    `cancelled_post_returned`; scanner receives write `return_requested:false` (CODE-09);
     `assign_to_courier` refuses NEW external orders and inactive/deleted
     couriers (CODE-11); return-request approve/reject update orders in chunks
     of 5 (CODE-10); `district.update` takes the requester and is SA/ADMIN only

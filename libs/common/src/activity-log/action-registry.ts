@@ -393,6 +393,18 @@ export const ACTIVITY_ACTION_REGISTRY: Readonly<
     'swap',
     'amber',
   ),
+  'logistics.canceled_post_partial_receive': entry(
+    'Bekor pochtadan buyurtmalar qabul qilindi',
+    'logistics',
+    'check',
+    'blue',
+  ),
+  'logistics.canceled_post_return': entry(
+    'Bekor buyurtmalar filialga qaytarildi',
+    'logistics',
+    'undo',
+    'amber',
+  ),
   'logistics.post_assign_orders': entry(
     'Pochtaga buyurtmalar biriktirildi',
     'logistics',

@@ -525,6 +525,27 @@ export class LogisticsServiceController {
     );
   }
 
+  // HQ «Filialga qaytarish»: bekor pochtaning tanlangan buyurtmalari
+  // jo'natgan filialga qaytadi, qolganlari pochtada qoladi.
+  @MessagePattern({ cmd: 'logistics.post.cancel.return' })
+  returnCanceledOrdersToSender(
+    @Payload()
+    data: {
+      id: string;
+      dto: ReceivePostDto;
+      requester: { id: string; roles?: string[]; branch_id?: string | null };
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.logisticsService.returnCanceledOrdersToSender(
+        data.requester,
+        data.id,
+        data.dto,
+      ),
+    );
+  }
+
   // Qaytarish so'rovlari so'rovchi doirasida: menejer/registrator — o'z
   // filiali, superadmin/admin (va HQ registratori) — HQ kuryerlari.
   @MessagePattern({ cmd: 'logistics.post.return_requests' })

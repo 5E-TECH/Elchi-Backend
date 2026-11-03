@@ -708,3 +708,30 @@ export class DeletePostOrdersRequestDto {
   @Length(3, 500, { message: "Sabab 3–500 belgi bo'lishi kerak" })
   reason!: string;
 }
+
+/**
+ * HQ «Filialga qaytarish» (`POST /post/cancel/return/:id`): bekor pochtaning
+ * tanlangan buyurtmalari — kamida bitta, takrorsiz.
+ */
+export class ReturnCanceledOrdersRequestDto {
+  @ApiProperty({
+    type: [String],
+    example: ['700', '701'],
+    description:
+      "Jo'natgan filialga qaytariladigan buyurtmalar; tanlanmaganlari pochtada qoladi",
+  })
+  @Transform(({ value }: { value: unknown }) =>
+    Array.isArray(value)
+      ? value.map((item: unknown) => toIdString({ value: item }))
+      : value,
+  )
+  @IsArray()
+  @ArrayMinSize(1, { message: 'Qaytarish uchun kamida bitta buyurtma tanlang' })
+  @ArrayUnique({ message: 'order_ids takrorlanmasligi kerak' })
+  @IsString({ each: true })
+  @Matches(POSITIVE_ID_STRING, {
+    each: true,
+    message: "order_ids ichida faqat musbat butun son bo'ladi",
+  })
+  order_ids!: string[];
+}

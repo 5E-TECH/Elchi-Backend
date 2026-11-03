@@ -1513,6 +1513,15 @@ export class LogisticsServiceService implements OnModuleInit {
         role: string | null;
         branch_id: string | null;
       } | null;
+      /** HQ bekor pochta amali: buyurtma hali shu pochtada kutayotgan bo'lsin (aks holda 409). */
+      canceled_post_guard?: { post_id: string } | null;
+      /** HQ «Filialga qaytarish»: tarixdagi «HQ filialga qaytardi» qatori uchun. */
+      canceled_post_return?: {
+        post_id: string;
+        return_post_id: string;
+        to_branch_id: string;
+        to_branch_name: string | null;
+      } | null;
     },
   ): Promise<void> {
     try {
@@ -6445,6 +6454,17 @@ export class LogisticsServiceService implements OnModuleInit {
      */
     returnToCourier: boolean;
     requester: RequesterContext;
+    /**
+     * HQ «Filialga qaytarish» tugmasi (`returnCanceledOrdersToSender`): har
+     * buyurtma faqat hali shu pochtada kutayotgan bo'lsa yoziladi (409 —
+     * boshqa xodim shu orada qabul qilgan yoki qaytargan) va tarixga
+     * «HQ filialga qaytardi» qatori yoziladi.
+     */
+    explicitReturn?: boolean;
+    /** Har bir qaytarilgan buyurtmadan keyin (yarim yo'lda yiqilsa ham). */
+    onReturned?: (orderId: string) => void;
+    /** `fallbackBranchId` filialining nomi — tarix qatori uchun. */
+    fallbackBranchName?: string | null;
   }): Promise<string[]> {
     const {
       sourcePost,
@@ -6454,6 +6474,9 @@ export class LogisticsServiceService implements OnModuleInit {
       isHqReceipt,
       returnToCourier,
       requester,
+      explicitReturn = false,
+      onReturned,
+      fallbackBranchName,
     } = params;
     const requeuedPostIds = new Set<string>();
     const groups = new Map<
@@ -6508,6 +6531,7 @@ export class LogisticsServiceService implements OnModuleInit {
           status: Post_status.CANCELED,
         } as any,
       });
+      const createdReturnPost = !returnPost;
 
       if (!returnPost) {
         returnPost = await this.postRepo.save(
@@ -6523,53 +6547,125 @@ export class LogisticsServiceService implements OnModuleInit {
         );
       }
 
+      // Yarim yo'lda yiqilsa ham (masalan 409) allaqachon ko'chgan buyurtmalar
+      // qaytarish pochtasining hisobida qoladi.
+      let returnedCount = 0;
       let returnedTotal = 0;
-      for (const order of group.orders) {
-        await this.updateOrder(
-          order.id,
-          {
-            status: Order_status.CANCELLED_SENT,
-            branch_id: group.branchId,
-            courier_id: returnToCourier ? sourcePost.courier_id : null,
-            assigned_at: null,
-            canceled_post_id: returnPost.id,
-          },
-          {
-            id: requester.id,
-            roles: requester.roles ?? [Roles.MANAGER],
-            note: isHqReceipt
+      let failure: unknown = null;
+      try {
+        for (const order of group.orders) {
+          const note = explicitReturn
+            ? 'Canceled order returned to sender branch by HQ'
+            : isHqReceipt
               ? returnToCourier
                 ? 'Canceled order returned to courier after partial HQ receive'
                 : 'Canceled order returned to branch after partial HQ receive'
-              : 'Canceled order returned to courier after partial branch receive',
-          },
-        );
-        returnedTotal += Number(order.total_price ?? 0);
+              : 'Canceled order returned to courier after partial branch receive';
+          const fromPostId =
+            String(order.canceled_post_id ?? '').trim() ||
+            String(sourcePost.id);
+          await this.updateOrder(
+            order.id,
+            {
+              status: Order_status.CANCELLED_SENT,
+              branch_id: group.branchId,
+              courier_id: returnToCourier ? sourcePost.courier_id : null,
+              assigned_at: null,
+              canceled_post_id: returnPost.id,
+            },
+            {
+              id: requester.id,
+              roles: requester.roles ?? [Roles.MANAGER],
+              note,
+              ...(explicitReturn
+                ? {
+                    canceled_post_guard: { post_id: fromPostId },
+                    canceled_post_return: {
+                      post_id: fromPostId,
+                      return_post_id: String(returnPost.id),
+                      to_branch_id: group.branchId,
+                      to_branch_name:
+                        group.branchId === String(fallbackBranchId ?? '').trim()
+                          ? (fallbackBranchName ?? null)
+                          : null,
+                    },
+                  }
+                : {}),
+            },
+          );
+          returnedCount += 1;
+          returnedTotal += Number(order.total_price ?? 0);
+          onReturned?.(String(order.id));
+        }
+      } catch (error) {
+        failure = error;
+        throw error;
+      } finally {
+        if (returnedCount > 0) {
+          returnPost.order_quantity =
+            Number(returnPost.order_quantity ?? 0) + returnedCount;
+          returnPost.post_total_price =
+            Number(returnPost.post_total_price ?? 0) + returnedTotal;
+          const savedReturnPost = await this.postRepo.save(returnPost);
+          void this.syncPostToSearch(savedReturnPost);
+          requeuedPostIds.add(String(savedReturnPost.id));
+        } else if (
+          createdReturnPost &&
+          this.isDefiniteOrderRejection(failure)
+        ) {
+          // Birorta buyurtma ko'chmadi va order-service ANIQ rad etdi (4xx —
+          // hech narsa yozilmagan): filialda bo'sh pochta qolmasin. Timeout /
+          // 5xx da pochta qoladi — kechikkan yozuv shu pochtaga tushadi.
+          await this.postRepo
+            .delete({ id: returnPost.id })
+            .catch((error: unknown) =>
+              this.logger?.warn(
+                `empty return post ${returnPost?.id} cleanup failed: ${
+                  (error as Error)?.message ?? error
+                }`,
+              ),
+            );
+        }
       }
-
-      returnPost.order_quantity =
-        Number(returnPost.order_quantity ?? 0) + group.orders.length;
-      returnPost.post_total_price =
-        Number(returnPost.post_total_price ?? 0) + returnedTotal;
-      const savedReturnPost = await this.postRepo.save(returnPost);
-      void this.syncPostToSearch(savedReturnPost);
-      requeuedPostIds.add(String(savedReturnPost.id));
     }
 
     return Array.from(requeuedPostIds);
   }
 
-  async receiveCanceledPost(
+  /** `updateOrder` xatosi order-service'ning aniq rad javobimi (4xx; timeout — 502). */
+  private isDefiniteOrderRejection(error: unknown): boolean {
+    const downstream = error instanceof RpcException ? error.getError() : error;
+    const statusCode = Number(
+      (downstream as { statusCode?: number } | null)?.statusCode,
+    );
+    return statusCode >= 400 && statusCode < 500;
+  }
+
+  /**
+   * Bekor pochta ustidagi amal (qabul yoki HQ «Filialga qaytarish») uchun
+   * pochta va doira: faqat ochiq (CANCELED) pochta; HQ xodimi faqat HQ ga
+   * kelgan pochtani, filial xodimi faqat o'z filialinikini.
+   */
+  private async loadCanceledPostForAction(
     requester: RequesterContext,
     id: string,
-    dto: ReceivePostDto,
-  ) {
+    action: 'receive' | 'return',
+  ): Promise<{
+    post: Post;
+    targetBranchId: string;
+    hqBranchId: string;
+    isHqReceipt: boolean;
+  }> {
     const post = await this.postRepo.findOne({ where: { id } });
     if (!post) {
       this.notFound('Pochta topilmadi');
     }
     if (post.status !== Post_status.CANCELED) {
-      this.badRequest("Bu holatdagi pochtani qabul qilib bo'lmaydi");
+      this.badRequest(
+        action === 'return'
+          ? "Bu pochta yopilgan — undagi buyurtmalarni qaytarib bo'lmaydi"
+          : "Bu holatdagi pochtani qabul qilib bo'lmaydi",
+      );
     }
     const scopedBranchId = await this.resolveScopedBranchId(requester);
     const targetBranchId =
@@ -6593,11 +6689,181 @@ export class LogisticsServiceService implements OnModuleInit {
     if (!post.branch_id) {
       post.branch_id = targetBranchId;
     }
+    return { post, targetBranchId, hqBranchId, isHqReceipt };
+  }
+
+  /**
+   * o10nrbkB (BG5) / LC-06 — pochta jo'natuvchisi (post.courier_id) kim:
+   * kuryermi yoki menejermi, qaysi filialdan (hozirgi biriktiruvi). Qabul
+   * tracking'ining manbasi va custody hodisasi shundan (order-service);
+   * qaytarilganlar ham shu jo'natuvchiga boradi. Qidiruv yiqilsa — null
+   * (qabul to'xtamaydi).
+   */
+  private async resolveCanceledPostSender(post: Post): Promise<{
+    role: string;
+    branchName: string | null;
+    sender: {
+      user_id: string | null;
+      role: string | null;
+      branch_id: string | null;
+    };
+  }> {
+    const senderUserId = String(post.courier_id ?? '').trim();
+    const senderAssignment = senderUserId
+      ? await this.findBranchAssignmentByUserId(senderUserId, {
+          id: senderUserId,
+          roles: [Roles.MANAGER],
+        })
+      : null;
+    const role = String(senderAssignment?.role ?? '')
+      .trim()
+      .toUpperCase();
+    return {
+      role,
+      branchName: branchSummaryOf(senderAssignment?.branch)?.name ?? null,
+      sender: {
+        user_id: senderUserId || null,
+        role: role || null,
+        branch_id: String(senderAssignment?.branch_id ?? '').trim() || null,
+      },
+    };
+  }
+
+  /**
+   * HQ bekor pochtasi — qabul yoki «Filialga qaytarish»dan keyin guruhdagi har
+   * pochtaning holati. Pochtada hali kutayotgan (CANCELLED_SENT) buyurtma
+   * bo'lsa — CANCELED (HQ «Bekor qilingan pochtalar»ida qoladi), qolmasa —
+   * CANCELED_RECEIVED («Eski pochtalar»). Kutayotganlar amaldan KEYIN qayta
+   * o'qiladi: shu orada filial yangi buyurtma qo'shgan bo'lsa pochta
+   * yopilmaydi.
+   *
+   * Hisoblagich: ochiq pochtada — HQ qabul qilganlar + kutayotganlar (yangi
+   * jo'natma `+=` bilan qo'shiladi), yopilganda — faqat HQ qabul qilganlar
+   * (eski pochtalar ro'yxati va cheki). Qaytarilganlar ayiriladi — ular
+   * filialning qaytarish pochtasida hisoblanadi.
+   */
+  private async settleHqCanceledPostGroup(
+    posts: Post[],
+    ordersBefore: OrderRow[],
+    processed: {
+      received: ReadonlySet<string>;
+      returned: ReadonlySet<string>;
+    },
+  ): Promise<{ posts: Post[]; remainingOrderIds: string[] }> {
+    const zero = () => ({ count: 0, total: 0 });
+    const receivedByPost = new Map<string, { count: number; total: number }>();
+    const returnedByPost = new Map<string, { count: number; total: number }>();
+    for (const order of ordersBefore) {
+      const orderId = String(order.id);
+      const bucket = processed.received.has(orderId)
+        ? receivedByPost
+        : processed.returned.has(orderId)
+          ? returnedByPost
+          : null;
+      if (!bucket) continue;
+      const postKey = String(order.canceled_post_id ?? '').trim();
+      const totals = bucket.get(postKey) ?? zero();
+      totals.count += 1;
+      totals.total += Number(order.total_price ?? 0) || 0;
+      bucket.set(postKey, totals);
+    }
+
+    const settledPosts: Post[] = [];
+    const remainingOrderIds: string[] = [];
+    for (const groupedPost of posts) {
+      const postId = String(groupedPost.id);
+      let pending: OrderRow[];
+      try {
+        pending = await this.findOrders({
+          canceled_post_id: postId,
+          status: Order_status.CANCELLED_SENT,
+          fetch_all: true,
+          page: 1,
+          limit: 100,
+        });
+      } catch (error) {
+        this.logger?.warn(
+          `canceled post ${postId}: pending re-read failed, using snapshot: ${
+            (error as Error)?.message ?? error
+          }`,
+        );
+        pending = ordersBefore.filter(
+          (order) =>
+            String(order.canceled_post_id ?? '').trim() === postId &&
+            !processed.received.has(String(order.id)) &&
+            !processed.returned.has(String(order.id)),
+        );
+      }
+      remainingOrderIds.push(...pending.map((order) => String(order.id)));
+      const pendingTotal = pending.reduce(
+        (sum, order) => sum + (Number(order.total_price ?? 0) || 0),
+        0,
+      );
+      const fresh =
+        (await this.postRepo.findOne({ where: { id: groupedPost.id } })) ??
+        groupedPost;
+      const received = receivedByPost.get(postId) ?? zero();
+      const returned = returnedByPost.get(postId) ?? zero();
+      const keptCount = Math.max(
+        received.count,
+        Number(fresh.order_quantity ?? 0) - returned.count - pending.length,
+      );
+      const keptTotal = Math.max(
+        received.total,
+        Number(fresh.post_total_price ?? 0) - returned.total - pendingTotal,
+      );
+      const closed = pending.length === 0;
+      const next = {
+        status: closed ? Post_status.CANCELED_RECEIVED : Post_status.CANCELED,
+        order_quantity: closed ? keptCount : keptCount + pending.length,
+        post_total_price: closed ? keptTotal : keptTotal + pendingTotal,
+      };
+      if (
+        fresh.status === next.status &&
+        Number(fresh.order_quantity ?? 0) === next.order_quantity &&
+        Number(fresh.post_total_price ?? 0) === next.post_total_price
+      ) {
+        settledPosts.push(fresh);
+        continue;
+      }
+
+      Object.assign(fresh, next);
+      let savedPost: Post;
+      try {
+        savedPost = await this.postRepo.save(fresh);
+      } catch (error) {
+        this.logger.warn(
+          `post ${postId} save failed after HQ canceled post action, retrying minimal update: ${
+            (error as Error)?.message ?? error
+          }`,
+        );
+        await this.postRepo.update(fresh.id, next);
+        savedPost =
+          (await this.postRepo.findOne({ where: { id: fresh.id } })) ?? fresh;
+      }
+      void this.syncPostToSearch(savedPost);
+      settledPosts.push(savedPost);
+    }
+
+    return { posts: settledPosts, remainingOrderIds };
+  }
+
+  async receiveCanceledPost(
+    requester: RequesterContext,
+    id: string,
+    dto: ReceivePostDto,
+  ) {
+    const { post, targetBranchId, isHqReceipt } =
+      await this.loadCanceledPostForAction(requester, id, 'receive');
 
     const { posts: groupedCanceledPosts, orders: allOrders } =
       await this.findCanceledPostGroup(post);
 
     const canceledOrderIds = [...new Set(dto.order_ids ?? [])];
+    // HQ: tanlanmagan buyurtmalar pochtada qoladi — bo'sh qabul ma'nosiz.
+    if (isHqReceipt && !canceledOrderIds.length) {
+      this.badRequest('Qabul qilish uchun kamida bitta buyurtma tanlang');
+    }
     const allOrderIdsForPost = allOrders.map((o) => o.id);
     const invalidIds = canceledOrderIds.filter(
       (orderId) => !allOrderIdsForPost.includes(orderId),
@@ -6609,44 +6875,108 @@ export class LogisticsServiceService implements OnModuleInit {
       );
     }
 
-    // o10nrbkB (BG5) / LC-06 — pochta jo'natuvchisi (post.courier_id) kim:
-    // kuryermi yoki menejermi, qaysi filialdan. Qabul tracking'ining manbasi
-    // va custody hodisasi shundan (order-service); qabul qilinmaganlar ham shu
-    // jo'natuvchiga qaytadi. Qidiruv yiqilsa — null (qabul to'xtamaydi).
-    const senderUserId = String(post.courier_id ?? '').trim();
-    const senderAssignment = senderUserId
-      ? await this.findBranchAssignmentByUserId(senderUserId, {
-          id: senderUserId,
-          roles: [Roles.MANAGER],
-        })
-      : null;
-    const senderRole = String(senderAssignment?.role ?? '')
-      .trim()
-      .toUpperCase();
-    const canceledPostSender = {
-      user_id: senderUserId || null,
-      role: senderRole || null,
-      branch_id: String(senderAssignment?.branch_id ?? '').trim() || null,
-    };
+    const { role: senderRole, sender: canceledPostSender } =
+      await this.resolveCanceledPostSender(post);
+    const orderById = new Map(
+      allOrders.map((order) => [String(order.id), order]),
+    );
 
-    for (const orderId of canceledOrderIds) {
-      await this.updateOrder(
-        orderId,
+    const receivedOrderIds: string[] = [];
+    let receiveError: unknown = null;
+    try {
+      for (const orderId of canceledOrderIds) {
+        const fromPostId =
+          String(
+            orderById.get(String(orderId))?.canceled_post_id ?? '',
+          ).trim() || String(post.id);
+        await this.updateOrder(
+          orderId,
+          {
+            status: Order_status.CANCELLED,
+            branch_id: targetBranchId,
+            courier_id: null,
+            assigned_at: null,
+            canceled_post_id: null,
+          },
+          {
+            id: requester.id,
+            roles: requester.roles ?? [Roles.MANAGER],
+            note: isHqReceipt
+              ? 'Canceled order received by HQ and held for market handover'
+              : 'Canceled order received by branch manager',
+            canceled_post_sender: canceledPostSender,
+            // HQ: shu orada boshqa xodim qabul qilgan yoki qaytargan buyurtma
+            // qayta yozilmaydi (order-service 409).
+            ...(isHqReceipt
+              ? { canceled_post_guard: { post_id: fromPostId } }
+              : {}),
+          },
+        );
+        receivedOrderIds.push(String(orderId));
+      }
+    } catch (error) {
+      if (!isHqReceipt) throw error;
+      receiveError = error;
+    }
+
+    if (isHqReceipt) {
+      // Egasi qarori (2026-11-03): HQ da tanlanmagan buyurtmalar o'zi filialga
+      // QAYTMAYDI (LC-06 avtomatik qaytarish faqat filial qabulida qoldi) —
+      // pochtada kutib turadi; qaytarish — alohida «Filialga qaytarish»
+      // (`returnCanceledOrdersToSender`). Pochta hammasi qabul qilinganda yoki
+      // qaytarilganda yopiladi. Yarim yo'lda yiqilsa ham holat yangilanadi.
+      const settled = await this.settleHqCanceledPostGroup(
+        groupedCanceledPosts,
+        allOrders,
+        { received: new Set(receivedOrderIds), returned: new Set() },
+      );
+      const sourcePost =
+        settled.posts.find(({ id: postId }) => String(postId) === String(id)) ??
+        post;
+      const postClosed = sourcePost.status === Post_status.CANCELED_RECEIVED;
+      if (receivedOrderIds.length) {
+        await Promise.resolve(
+          this.activityLog.log({
+            entity_type: 'Post',
+            entity_id: String(sourcePost.id),
+            action: postClosed
+              ? ActivityAction.STATUS_CHANGE
+              : 'logistics.canceled_post_partial_receive',
+            ...(postClosed ? { new_value: { status: sourcePost.status } } : {}),
+            ...this.auditActor(requester),
+            metadata: {
+              order_count: receivedOrderIds.length,
+              order_ids: receivedOrderIds.slice(0, 10),
+              remaining_order_count: settled.remainingOrderIds.length,
+              grouped_post_ids: groupedCanceledPosts.map(({ id: postId }) =>
+                String(postId),
+              ),
+              branch_id: targetBranchId,
+              courier_id: sourcePost.courier_id,
+            },
+          }),
+        ).catch(() => undefined);
+      }
+      if (receiveError) {
+        throw receiveError;
+      }
+
+      return successRes(
         {
-          status: Order_status.CANCELLED,
+          order_ids: receivedOrderIds,
+          remaining_order_ids: settled.remainingOrderIds,
+          requeued_post_ids: [],
+          grouped_post_ids: groupedCanceledPosts.map(({ id: postId }) =>
+            String(postId),
+          ),
           branch_id: targetBranchId,
-          courier_id: null,
-          assigned_at: null,
-          canceled_post_id: null,
+          post_status: sourcePost.status,
+          post_closed: postClosed,
         },
-        {
-          id: requester.id,
-          roles: requester.roles ?? [Roles.MANAGER],
-          note: isHqReceipt
-            ? 'Canceled order received by HQ and held for market handover'
-            : 'Canceled order received by branch manager',
-          canceled_post_sender: canceledPostSender,
-        },
+        200,
+        postClosed
+          ? 'Canceled orders received by HQ'
+          : 'Canceled orders received by HQ; the rest stays in the post',
       );
     }
 
@@ -6714,21 +7044,15 @@ export class LogisticsServiceService implements OnModuleInit {
 
     let requeuedPostIds: string[] = [];
     if (remainingOrders.length) {
-      // LC-06 — qabul qilinmagan posilka jo'natuvchiga (yuqorida aniqlangan)
-      // qaytadi. Qidiruv yiqilsa (null) — avvalgi xatti-harakat: filial
-      // qabulida kuryerga, HQ qabulida HQ da, kuryersiz.
-      const fallbackReturnBranchId = isHqReceipt
-        ? String(senderAssignment?.branch_id ?? '').trim()
-        : targetBranchId;
-      const returnToCourier = senderRole
-        ? senderRole === 'COURIER'
-        : !isHqReceipt;
+      // LC-06 — filial qabulida qabul qilinmagan posilka jo'natuvchiga
+      // (yuqorida aniqlangan) qaytadi. Qidiruv yiqilsa (null) — kuryerga.
+      const returnToCourier = senderRole ? senderRole === 'COURIER' : true;
       requeuedPostIds = await this.requeueUnreceivedCanceledOrders({
         sourcePost: post,
         orders: remainingOrders,
         targetBranchId,
-        fallbackBranchId: fallbackReturnBranchId,
-        isHqReceipt,
+        fallbackBranchId: targetBranchId,
+        isHqReceipt: false,
         returnToCourier,
         requester,
       });
@@ -6759,11 +7083,142 @@ export class LogisticsServiceService implements OnModuleInit {
         requeued_post_ids: requeuedPostIds,
         grouped_post_ids: groupedCanceledPosts.map(({ id }) => String(id)),
         branch_id: targetBranchId,
+        post_status: savedPost.status,
+        post_closed: true,
       },
       200,
-      isHqReceipt
-        ? 'Canceled orders received by HQ'
-        : 'Canceled orders received by branch',
+      'Canceled orders received by branch',
+    );
+  }
+
+  /**
+   * HQ «Filialga qaytarish» (egasi qarori, 2026-11-03): filialdan kelgan bekor
+   * pochtaning TANLANGAN buyurtmalari jo'natgan filialga qaytadi — filial
+   * ularni «Rad etilgan pochtalar»dan qabul qiladi (LC-06 dagi qaytarish
+   * pochtasi). Tanlanmaganlar pochtada qoladi; pochta hammasi qabul
+   * qilinganda yoki qaytarilganda yopiladi.
+   *
+   * Faqat HQ ga kelgan pochta va jo'natuvchi HQ dan boshqa filial bo'lsa: HQ
+   * kuryeri olib kelgan pochta qaytarilmaydi (qaytarish pochtasi yana HQ ga
+   * tushib, shu pochta bilan qo'shilib ketardi), jo'natuvchi aniqlanmasa ham.
+   */
+  async returnCanceledOrdersToSender(
+    requester: RequesterContext,
+    id: string,
+    dto: ReceivePostDto,
+  ) {
+    const { post, targetBranchId, hqBranchId, isHqReceipt } =
+      await this.loadCanceledPostForAction(requester, id, 'return');
+    if (!isHqReceipt) {
+      this.badRequest(
+        'Bekor qilingan buyurtmalarni filialga faqat HQ qaytara oladi',
+      );
+    }
+
+    const orderIds = [
+      ...new Set((dto.order_ids ?? []).map((orderId) => String(orderId))),
+    ].filter(Boolean);
+    if (!orderIds.length) {
+      this.badRequest('Qaytarish uchun kamida bitta buyurtma tanlang');
+    }
+
+    const { posts: groupedCanceledPosts, orders: allOrders } =
+      await this.findCanceledPostGroup(post);
+    const groupOrderIds = new Set(allOrders.map((order) => String(order.id)));
+    const invalidIds = orderIds.filter(
+      (orderId) => !groupOrderIds.has(orderId),
+    );
+    if (invalidIds.length) {
+      this.badRequest(
+        `Bu buyurtmalar ushbu pochtada emas (qabul qilingan yoki qaytarilgan bo'lishi mumkin): ${invalidIds.join(', ')}`,
+      );
+    }
+
+    const {
+      role: senderRole,
+      branchName: senderBranchName,
+      sender,
+    } = await this.resolveCanceledPostSender(post);
+    const senderBranchId = sender.branch_id;
+    if (!senderBranchId) {
+      this.badRequest(
+        "Pochtani jo'natgan filial aniqlanmadi — buyurtmalarni qaytarib bo'lmaydi",
+      );
+    }
+    if (senderBranchId === hqBranchId) {
+      this.badRequest(
+        "Bu pochtani HQ kuryeri olib kelgan — uni filialga qaytarib bo'lmaydi, buyurtmalarni qabul qiling",
+      );
+    }
+
+    const selectedIds = new Set(orderIds);
+    const selectedOrders = allOrders.filter((order) =>
+      selectedIds.has(String(order.id)),
+    );
+    const returnedOrderIds: string[] = [];
+    let requeuedPostIds: string[] = [];
+    let returnError: unknown = null;
+    try {
+      requeuedPostIds = await this.requeueUnreceivedCanceledOrders({
+        sourcePost: post,
+        orders: selectedOrders,
+        targetBranchId,
+        fallbackBranchId: senderBranchId,
+        fallbackBranchName: senderBranchName,
+        isHqReceipt: true,
+        returnToCourier: senderRole === 'COURIER',
+        requester,
+        explicitReturn: true,
+        onReturned: (orderId) => returnedOrderIds.push(orderId),
+      });
+    } catch (error) {
+      returnError = error;
+    }
+
+    const settled = await this.settleHqCanceledPostGroup(
+      groupedCanceledPosts,
+      allOrders,
+      { received: new Set(), returned: new Set(returnedOrderIds) },
+    );
+    const sourcePost =
+      settled.posts.find(({ id: postId }) => String(postId) === String(id)) ??
+      post;
+    const postClosed = sourcePost.status === Post_status.CANCELED_RECEIVED;
+    if (returnedOrderIds.length) {
+      await Promise.resolve(
+        this.activityLog.log({
+          entity_type: 'Post',
+          entity_id: String(sourcePost.id),
+          action: 'logistics.canceled_post_return',
+          ...this.auditActor(requester),
+          metadata: {
+            order_count: returnedOrderIds.length,
+            order_ids: returnedOrderIds.slice(0, 10),
+            remaining_order_count: settled.remainingOrderIds.length,
+            requeued_post_ids: requeuedPostIds,
+            return_branch_id: senderBranchId,
+            post_closed: postClosed,
+            courier_id: sourcePost.courier_id,
+          },
+        }),
+      ).catch(() => undefined);
+    }
+    if (returnError) {
+      throw returnError;
+    }
+
+    return successRes(
+      {
+        order_ids: returnedOrderIds,
+        remaining_order_ids: settled.remainingOrderIds,
+        requeued_post_ids: requeuedPostIds,
+        return_branch_id: senderBranchId,
+        return_branch_name: senderBranchName,
+        post_status: sourcePost.status,
+        post_closed: postClosed,
+      },
+      200,
+      'Canceled orders returned to the sender branch',
     );
   }
 

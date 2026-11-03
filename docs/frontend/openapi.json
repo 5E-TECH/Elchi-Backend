@@ -7147,6 +7147,52 @@
         ]
       }
     },
+    "/post/cancel/return/{id}": {
+      "post": {
+        "operationId": "LogisticsGatewayController_returnCanceledOrdersToSender",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Canceled post ID (id)",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReturnCanceledOrdersRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Return selected canceled orders to the sender branch (HQ only); the rest stays in the post",
+        "tags": [
+          "Logistics"
+        ],
+        "x-roles": [
+          "manager",
+          "registrator",
+          "admin",
+          "superadmin"
+        ]
+      }
+    },
     "/post/return-requests/list": {
       "get": {
         "operationId": "LogisticsGatewayController_getReturnRequests",
@@ -27709,6 +27755,25 @@
               "1",
               "2"
             ],
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "order_ids"
+        ]
+      },
+      "ReturnCanceledOrdersRequestDto": {
+        "type": "object",
+        "properties": {
+          "order_ids": {
+            "example": [
+              "700",
+              "701"
+            ],
+            "description": "Jo'natgan filialga qaytariladigan buyurtmalar; tanlanmaganlari pochtada qoladi",
             "type": "array",
             "items": {
               "type": "string"

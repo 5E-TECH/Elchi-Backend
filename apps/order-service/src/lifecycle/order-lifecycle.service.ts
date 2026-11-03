@@ -394,6 +394,12 @@ const PARTNER_ONLY_SYNC_ACTIONS: ReadonlySet<ExternalSyncAction> =
 /** Tracking: jo'natilgan pochta boshqa filialga o'tkazildi (holat o'zgarmaydi). */
 export const POST_BRANCH_REASSIGNED_TRACKING_ACTION = 'post_branch_reassigned';
 /**
+ * Tracking: HQ bekor qilingan buyurtmani jo'natgan filialga qaytardi («Filialga
+ * qaytarish»; holat o'zgarmaydi — `cancelled (sent)`).
+ */
+export const CANCELLED_POST_RETURNED_TRACKING_ACTION =
+  'cancelled_post_returned';
+/**
  * Order lifecycle: the write/mutation core (create/receive/sell/partly-sell/
  * cancel/could-not-deliver/rollback/return/provider-mark/market-cancelled
  * handover/update/delete) plus the settlement WRITE helpers that run inside its
@@ -10995,6 +11001,31 @@ export class OrderLifecycleService {
     }
   }
 
+  /**
+   * HQ bekor pochta amali (logistics: qabul yoki «Filialga qaytarish») har
+   * buyurtmani alohida yozadi — shu orada boshqa xodim uni qabul qilgan yoki
+   * qaytargan bo'lishi mumkin. Buyurtma hali o'sha pochtada kutayotgan
+   * (CANCELLED_SENT) bo'lsagina o'zgaradi; aks holda 409 — qabul qilingan
+   * buyurtma filialga, qaytarilgani HQ ga qayta yozilmaydi.
+   */
+  private assertCanceledPostUnchanged(
+    order: Order,
+    guard?: { post_id?: string | null } | null,
+  ): void {
+    const expectedPostId = String(guard?.post_id ?? '').trim();
+    if (!expectedPostId) return;
+    if (
+      order.status !== Order_status.CANCELLED_SENT ||
+      String(order.canceled_post_id ?? '').trim() !== expectedPostId
+    ) {
+      throw new RpcException({
+        statusCode: 409,
+        message: `Buyurtma #${order.id} holati o'zgardi (boshqa xodim qabul qilgan yoki qaytargan bo'lishi mumkin) — sahifani yangilang`,
+        reason: 'canceled_post_conflict',
+      });
+    }
+  }
+
   async updateFull(
     id: string,
     dto: {
@@ -11077,6 +11108,21 @@ export class OrderLifecycleService {
         to_branch_id?: string | null;
         to_branch_name?: string | null;
       } | null;
+      /**
+       * HQ bekor pochta amali (logistics `receiveCanceledPost` HQ qabuli va
+       * `returnCanceledOrdersToSender`): buyurtma hali shu pochtada bo'lsin.
+       */
+      canceled_post_guard?: { post_id?: string | null } | null;
+      /**
+       * HQ «Filialga qaytarish»: holat o'zgarmaydi (`cancelled (sent)`),
+       * shuning uchun tarixdagi «HQ filialga qaytardi» qatori shundan.
+       */
+      canceled_post_return?: {
+        post_id?: string | null;
+        return_post_id?: string | null;
+        to_branch_id?: string | null;
+        to_branch_name?: string | null;
+      } | null;
     },
     externalManager?: EntityManager,
     /**
@@ -11099,6 +11145,7 @@ export class OrderLifecycleService {
   ) {
     const order = await this.findById(id);
     this.assertPostBranchReassignable(order, requester?.post_branch_reassign);
+    this.assertCanceledPostUnchanged(order, requester?.canceled_post_guard);
     if (!externalManager) {
       this.assertCommercialFieldsEditable(order, dto);
       await this.assertDeliveryDetailsEditable(order, dto);
@@ -11319,6 +11366,22 @@ export class OrderLifecycleService {
       const orderRepo = manager.getRepository(Order);
       const trackingRepo = manager.getRepository(OrderTracking);
       const custodyRepo = manager.getRepository(OrderCustodyEvent);
+      if (String(requester?.canceled_post_guard?.post_id ?? '').trim()) {
+        // HQ bekor pochta amali: yuqoridagi tekshiruv qulfsiz — bir vaqtda
+        // ikki xodim (qabul va qaytarish) bosganda ikkinchisi birinchining
+        // commit'ini kutadi va 409 oladi (`lockWaitingOrder` kabi).
+        const locked = await orderRepo.findOne({
+          where: { id: String(order.id) },
+          lock: { mode: 'pessimistic_write' },
+        });
+        if (!locked) {
+          this.notFound(`Buyurtma #${order.id} topilmadi`);
+        }
+        this.assertCanceledPostUnchanged(
+          locked,
+          requester?.canceled_post_guard,
+        );
+      }
       if (replacementItems) {
         await this.replaceOrderItems(order.id, replacementItems, manager);
       }
@@ -11472,6 +11535,73 @@ export class OrderLifecycleService {
                 order.holder_branch_id ??
                 null,
               to_branch_name: postBranchReassign.to_branch_name ?? null,
+            },
+            note: requester?.note ?? null,
+          },
+          trackingRepo,
+        );
+      }
+
+      // HQ «Filialga qaytarish»: holat bir xil (`cancelled (sent)`), shuning
+      // uchun yuqoridagi status tracking'i yozilmaydi — tarixda «HQ filialga
+      // qaytardi» qatori shu yerda (pochta almashganda — bir marta).
+      const canceledPostReturn = requester?.canceled_post_return;
+      if (
+        canceledPostReturn &&
+        oldStatus === Order_status.CANCELLED_SENT &&
+        order.status === Order_status.CANCELLED_SENT &&
+        String(previousCanceledPostId ?? '') !==
+          String(order.canceled_post_id ?? '')
+      ) {
+        const toBranchId =
+          canceledPostReturn.to_branch_id ?? order.holder_branch_id ?? null;
+        // Tizim nomidan: HQ registratori boshqa filialni o'qiy olmaydi (403).
+        // Qidiruv yiqilsa (`branch ID: N`) — logistics bergan nom.
+        const resolvedLabel = await this.resolveBranchTrackingLabel(
+          toBranchId,
+          null,
+        );
+        const providedName = String(
+          canceledPostReturn.to_branch_name ?? '',
+        ).trim();
+        const toLabel =
+          providedName &&
+          (!resolvedLabel || resolvedLabel.startsWith('branch ID:'))
+            ? toBranchId
+              ? `${providedName} (ID: ${toBranchId})`
+              : providedName
+            : (resolvedLabel ?? 'filial');
+        await this.custody.createTrackingEvent(
+          {
+            order_id: order.id,
+            from_status: oldStatus,
+            to_status: order.status,
+            changed_by: String(requester?.id ?? 'system'),
+            changed_by_role: requester?.id
+              ? this.custody.toTrackingRole(requester.roles)
+              : 'system',
+            action: CANCELLED_POST_RETURNED_TRACKING_ACTION,
+            description: `HQ bekor qilingan buyurtmani ${toLabel} filialiga qaytardi`,
+            old_value: {
+              canceled_post_id: previousCanceledPostId ?? null,
+              holder_type: previousHolderType ?? null,
+              holder_branch_id: previousHolderBranchId ?? null,
+            },
+            new_value: {
+              canceled_post_id: order.canceled_post_id ?? null,
+              holder_type: order.holder_type ?? null,
+              holder_branch_id: order.holder_branch_id ?? null,
+            },
+            metadata: {
+              post_id:
+                canceledPostReturn.post_id ?? previousCanceledPostId ?? null,
+              return_post_id:
+                canceledPostReturn.return_post_id ??
+                order.canceled_post_id ??
+                null,
+              from_branch: 'HQ',
+              to_branch_id: toBranchId,
+              to_branch_name: canceledPostReturn.to_branch_name ?? null,
             },
             note: requester?.note ?? null,
           },

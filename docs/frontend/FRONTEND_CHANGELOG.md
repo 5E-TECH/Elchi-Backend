@@ -22,6 +22,24 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+### 2026-11-03 — HQ bekor pochtasi: qisman qabul qilinganda qolgani pochtada qoladi, «Filialga qaytarish» alohida
+
+Ega talabi: HQ filialdan kelgan bekor pochtadan (masalan Samarqand, 20 ta) 15 tasini qabul qilsa, qolgan 5 tasi o'zi filialga qaytib ketmasin — HQ da tursin. Faqat admin shu 5 tasini tanlab «Filialga qaytarish»ni bossa, filialga qaytsin.
+
+**Qoida (faqat HQ ga kelgan bekor pochta):**
+- Qabul qilish faqat tanlangan buyurtmalarga ishlaydi. Tanlanmaganlari o'sha pochtada (`status: canceled`) qoladi, pochta «Bekor qilingan pochtalar»da qolgan sonlar bilan ko'rinadi.
+- Pochtada kutayotgan buyurtma qolmaganda (hammasi qabul qilingan yoki qaytarilgan) pochta yopiladi: `canceled_received`. Hisobida faqat HQ qabul qilganlari bo'ladi.
+- «Filialga qaytarish» tanlangan buyurtmalarni jo'natgan filialga yuboradi: filialda yangi bekor pochta (yoki filialning ochiq qaytarish pochtasi), filial uni «Rad etilgan pochtalar»dan qabul qiladi. Buyurtma tarixida `cancelled_post_returned` qatori yoziladi.
+- HQ kuryeri olib kelgan pochtani (jo'natuvchi filiali = HQ) va jo'natuvchi aniqlanmagan pochtani qaytarib bo'lmaydi — 400.
+- Filial menejeri kuryerdan bekor pochta qabul qilganda — o'zgarishsiz (qabul qilinmaganlari kuryerga qaytadi).
+
+**Endpointlar:**
+- 🆕 [logistics] `POST /post/cancel/return/:id` — body `{ order_ids: string[] }` (kamida 1, takrorsiz, musbat id). Rollar: superadmin, admin, registrator, manager (doira logistics'da: faqat HQ xodimi va HQ ga kelgan pochta). Javob `data`: `{ order_ids, remaining_order_ids, requeued_post_ids, return_branch_id, return_branch_name, post_status, post_closed }`. 400 — HQ kuryeri pochtasi, jo'natuvchi noma'lum, buyurtma pochtada emas, pochta yopilgan; 409 — buyurtmani shu orada boshqa xodim qabul qilgan yoki qaytargan.
+- ✏️ [logistics] `POST /post/cancel/receive/:id` — HQ qabulida `order_ids: []` endi 400. Javobga `post_status` va `post_closed` qo'shildi; HQ da `requeued_post_ids` doim `[]`, `remaining_order_ids` — pochtada qolganlar. 409 — buyurtma shu orada pochtadan chiqib ketgan. Filial qabulida javob avvalgidek (+ `post_closed: true`).
+- 🆕 [order] tracking action `cancelled_post_returned` (`from_status` = `to_status` = `cancelled (sent)`), `metadata: { post_id, return_post_id, from_branch: 'HQ', to_branch_id, to_branch_name }`.
+
+**Frontendda:** HQ uchun rad etilgan pochta sahifasida ikkinchi tugma «Filialga qaytarish» (faqat jo'natuvchi filial HQ bo'lmasa: `GET /post/orders/:id` → `post.branch.id !== post.branch_id`). Qisman qabuldan keyin sahifada qolganlar ko'rinadi; `post_closed` bo'lsa ro'yxatga qaytiladi.
+
 ### 2026-11-02 — Tuman ko'chirilganda eski filialdagi buyurtmalar o'sha yerda tugaydi
 
 Ega savoli: bugun tumanga buyurtma chiqib, ertaga tuman boshqa viloyatga o'tkazilsa, bugungi buyurtmalar nima bo'ladi? Avval eski filialda yoki kuryerda turgan buyurtmalar «qotib» qolardi: eski filial ularni kuryerga bera olmasdi, yangi filialga o'tkazish yo'li ham yo'q edi.

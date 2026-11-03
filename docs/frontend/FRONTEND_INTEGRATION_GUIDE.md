@@ -719,7 +719,9 @@ of CLOSED/PAID/PARTLY_PAID and of a courier-remitted sale. (`PATCH /post/{id}`
   (`GET /orders/markets/cancelled`, `/orders/markets/{id}/cancelled`) and the
   cancelled-goods handover, like superadmin/admin.
 - Logistics: `GET /region`, post receive (reassign — 410), return-requests
-  approve/reject, cancel-receive check.
+  approve/reject, cancel-receive check. The **HQ** registrator (like
+  superadmin/admin and an HQ manager) also gets `POST /post/cancel/return/{id}`
+  («Filialga qaytarish» for a cancelled post a branch sent to HQ).
 - Finance: shifts (`GET /finance/shift`, open/close — allowed by the backend;
   Elchi-Frontend wires shifts for superadmin/admin only); `GET /finance/history`
   only for the own branch's BRANCH cashbox. Salary create is superadmin/admin

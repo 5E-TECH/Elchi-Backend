@@ -70,6 +70,7 @@ import {
   ReassignPostRequestDto,
   PostIdRequestDto,
   ReceivePostRequestDto,
+  ReturnCanceledOrdersRequestDto,
   ReturnRequestsActionRequestDto,
   SendPostRequestDto,
   UpdateRegionRequestDto,
@@ -1423,6 +1424,43 @@ export class LogisticsGatewayController {
   ) {
     return this.sendLogisticsWithTimeout(
       { cmd: 'logistics.post.cancel.receive' },
+      {
+        id,
+        dto,
+        requester: {
+          id: req.user.sub,
+          roles: req.user.roles ?? [],
+          branch_id: req.user.branch_id ?? null,
+        },
+      },
+    );
+  }
+
+  // HQ «Filialga qaytarish»: filialdan kelgan bekor pochtaning tanlangan
+  // buyurtmalari jo'natgan filialga qaytadi, qolganlari pochtada qoladi.
+  // Doira logistics tomonida (faqat HQ ga kelgan pochta, HQ xodimi).
+  @Post('post/cancel/return/:id')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(
+    RoleEnum.MANAGER,
+    RoleEnum.REGISTRATOR,
+    RoleEnum.ADMIN,
+    RoleEnum.SUPERADMIN,
+  )
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary:
+      'Return selected canceled orders to the sender branch (HQ only); the rest stays in the post',
+  })
+  @ApiParam({ name: 'id', description: 'Canceled post ID (id)' })
+  @ApiBody({ type: ReturnCanceledOrdersRequestDto })
+  returnCanceledOrdersToSender(
+    @Param('id') id: string,
+    @Body() dto: ReturnCanceledOrdersRequestDto,
+    @Req() req: { user: JwtUser },
+  ) {
+    return this.sendLogisticsWithTimeout(
+      { cmd: 'logistics.post.cancel.return' },
       {
         id,
         dto,

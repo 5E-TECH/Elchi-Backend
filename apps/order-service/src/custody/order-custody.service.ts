@@ -125,6 +125,10 @@ export class OrderCustodyService {
         'HQ bekor qilingan pochtani qabul qildi',
       'canceled order received by branch manager':
         'Branch manager bekor qilingan pochtani qabul qildi',
+      'canceled order returned to sender branch by hq':
+        'HQ bekor qilingan buyurtmani filialga qaytardi',
+      'canceled order returned to courier after partial branch receive':
+        'Filial qabul qilmagan bekor buyurtma kuryerga qaytdi',
       'canceled post created':
         "Courier bekor qilingan pochtani branchga jo'natdi",
       // vbu7Wr3o #1: pochta qabuli (odatda tavsif yozuvning o'zida bor).
