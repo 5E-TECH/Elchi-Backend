@@ -122,7 +122,7 @@ describe('CU4zfcds — market ro‘yxatlari search va sana', () => {
         market_id: '37',
         status: 'new',
         unbatched_only: true,
-        exclude_sources: ['branch'],
+        exclude_branch_source_except_hq: true,
         search: 'Ali',
         start_day: '2026-10-01',
         disable_pagination: true,

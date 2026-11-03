@@ -22,6 +22,14 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+### 2026-11-03 — HQ ro'yxatchisi yaratgan buyurtma HQ «Qabul va yaratish»da ko'rinadi
+
+Xato: HQ ro'yxatchisi (yoki HQ menejeri) market uchun yaratgan buyurtma `source: 'branch'`, `branch_id: HQ` bo'ladi. Superadmin/admin «Qabul va yaratish → Marketlar» filial manbali buyurtmalarni yashirgani uchun ular faqat «Buyurtmalar»da ko'rinib, HQ qabul qila olmasdi.
+
+**Qoida (egasi qarori):** HQ ro'yxatchisi yaratgan buyurtma HQ ning hamma xodimiga (superadmin, admin, HQ ro'yxatchilari) «Marketlar» tabida, o'z marketi ichida ko'rinadi. Faqat HQ dan boshqa filialda yaratilgan (filial paketi bilan keladigan) YANGI buyurtmalar yashiriladi. Eski buyurtmalar ham (YANGI, paketsiz) o'zi ko'rinadi — ma'lumot o'zgarmaydi.
+
+**Endpointlar (javob shakli o'zgarmagan):** `GET /orders/markets/new`, `GET /orders/markets/:marketId/new` (qidiruv bilan ham), «Qabul va yaratish» soni (`new_incoming`). Bekor qilinganlar ro'yxatlari o'zgarmagan. Market va market operatori ham o'z marketiga HQ ro'yxatchisi yaratgan YANGI buyurtmalarni shu ro'yxat va sonda ko'radi (`GET /orders` da avvaldan ko'rinardi).
+
 ### 2026-11-03 — Kuryer: «Bu buyurtma kelmagan — qaytarish so'rovi» (BeePost kabi)
 
 Ega talabi: kuryer yangi pochtasidagi jismonan kelmagan buyurtma uchun qaytarish so'rovini yubora olsin.

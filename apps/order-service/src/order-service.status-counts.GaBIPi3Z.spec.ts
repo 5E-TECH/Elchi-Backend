@@ -180,6 +180,22 @@ describe('GaBIPi3Z — OrderServiceService.statusCounts', () => {
     expect(sql).toContain('order.status IN (:...statuses)');
   });
 
+  it('new_incoming (SA): HQ filialida yaratilgan filial manbali buyurtma sanaladi (HQ ro‘yxatchisi)', async () => {
+    const { service, badge: badges } = setup({ badgeCount: 9 });
+    Object.assign(service as object, {
+      lookup: { getHqBranchId: jest.fn().mockResolvedValue('1') },
+    });
+    await service.statusCounts({
+      query: {},
+      new_incoming: { exclude_branch_source: true },
+    });
+    const [badge] = badges();
+    expect(badge.andWhere).toHaveBeenCalledWith(
+      '(order.source != :branch_source_excluded OR order.branch_id = :branch_source_hq_id)',
+      { branch_source_excluded: 'branch', branch_source_hq_id: '1' },
+    );
+  });
+
   it('⭐ new_incoming: NEW + partiyasiz; filial — branch_id, SA/market — source != branch (+ market)', async () => {
     const { service, badge: badges } = setup({ badgeCount: 7 });
     const res = await service.statusCounts({
@@ -193,7 +209,8 @@ describe('GaBIPi3Z — OrderServiceService.statusCounts', () => {
     });
     const sql = andWhereSql(badge);
     expect(sql).toContain('order.current_batch_id IS NULL');
-    expect(sql).toContain('order.source != :branch_source');
+    // HQ id noma'lum (lookup yo'q) — avvalgidek filial manbali hammasi chiqariladi.
+    expect(sql).toContain('order.source != :branch_source_excluded');
     expect(sql).toContain('order.market_id = :market_id');
     expect(sql).not.toContain('order.branch_id = :branch_id');
 

@@ -4434,7 +4434,7 @@ export class OrderGatewayController {
       '"cancelled (sent)" — for branch staff / HQ registrator / courier it is the total of their own ' +
       'cancelled tab (GET /orders?status=cancelled,cancelled (sent) — inventory / courier cancelled tab). ' +
       '`new_incoming` — «Qabul va yaratish» badge: NEW orders not yet received into a batch, scoped like ' +
-      'GET /orders/markets/new (branch staff — own branch; SA/admin — all except branch-created; market — own); ' +
+      'GET /orders/markets/new (branch staff — own branch; SA/admin — all except orders created at a non-HQ branch; market — own); ' +
       'it ignores the list filters; `null` for roles without that section (operator, courier, logist, customer). ' +
       '`by_status` — raw count per status. Logist with no regions — all zeros. No money fields.',
   })
@@ -5828,7 +5828,7 @@ export class OrderGatewayController {
     description:
       "(nCAFnqIe) MARKET_OPERATOR — faqat o'zi biriktirilgan market (`:marketId` = operator marketi); " +
       'boshqa market yoki marketga biriktirilmagan operator — 403. Javob market roli bilan bir xil ' +
-      "(kuryer tarifi/ulushi va filial ulushisiz, `source='branch'` buyurtmalarsiz).",
+      "(kuryer tarifi/ulushi va filial ulushisiz, HQ dan boshqa filialda yaratilgan `source='branch'` buyurtmalarsiz).",
   })
   @ApiParam({ name: 'marketId', description: 'Market ID (id)' })
   @ApiQuery({

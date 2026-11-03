@@ -400,6 +400,15 @@ export type OrderListQuery = {
   branch_id?: string;
   source?: Order_source | 'internal' | 'external' | 'branch';
   exclude_sources?: Array<Order_source | 'internal' | 'external' | 'branch'>;
+  /**
+   * ICHKI: HQ «Qabul va yaratish» — filialda yaratilgan (source = branch) YANGI
+   * buyurtmalar chiqariladi, HQ filialining o'zinikidan tashqari (HQ
+   * ro'yxatchisi/menejeri yaratgani — HQ buyurtmasi). `findAll` HQ id'ni
+   * `branch_source_hq_branch_id` ga qo'yadi.
+   */
+  exclude_branch_source_except_hq?: boolean;
+  /** ICHKI: yuqoridagi uchun HQ filial id'si (faqat `findAll` qo'yadi). */
+  branch_source_hq_branch_id?: string | null;
   /** 6kHnNH9j: `HQ` | `WAREHOUSE` (gateway tekshiradi). */
   fulfillment_source?: string;
   /**
@@ -986,11 +995,22 @@ export class OrderServiceService {
     // VkKDSNNn: HQ id — FAQAT `warehouse_kind` (HQ | REGIONAL) yoki ichki
     // `exclude_hq_warehouse` berilganda; aks holda so'rov bugungidek (lookup
     // chaqirilmaydi).
+    const needsHqBranchId =
+      this.wantsWarehouseKindFilter(query) ||
+      query.exclude_hq_warehouse ||
+      query.exclude_branch_source_except_hq;
+    const hqBranchId = needsHqBranchId ? await this.loadListHqBranchId() : null;
     const qb = this.buildOrderListQuery(
-      this.wantsWarehouseKindFilter(query) || query.exclude_hq_warehouse
+      needsHqBranchId
         ? {
             ...query,
-            warehouse_hq_branch_id: await this.loadListHqBranchId(),
+            ...(this.wantsWarehouseKindFilter(query) ||
+            query.exclude_hq_warehouse
+              ? { warehouse_hq_branch_id: hqBranchId }
+              : {}),
+            ...(query.exclude_branch_source_except_hq
+              ? { branch_source_hq_branch_id: hqBranchId }
+              : {}),
           }
         : query,
     );
@@ -1053,6 +1073,35 @@ export class OrderServiceService {
     return Promise.resolve(this.lookup?.getHqBranchId())
       .then((id) => String(id ?? '').trim() || null)
       .catch(() => null);
+  }
+
+  /**
+   * HQ «Qabul va yaratish» (superadmin/admin): filialda yaratilgan
+   * (source = branch) YANGI buyurtma Marketlar ro'yxatiga kirmaydi — u filial
+   * paketi bilan keladi. HQ filialining o'zida (HQ ro'yxatchisi yoki menejeri)
+   * yaratilgani esa HQ buyurtmasi — kiradi (egasi qarori 2026-11-03: HQ
+   * ro'yxatchisi yaratgani HQ ning hamma xodimiga ko'rinsin). YANGI buyurtmada
+   * `branch_id` hali yaratilgan joy. HQ id noma'lum — avvalgidek hammasi
+   * chiqariladi (fail-closed).
+   */
+  private excludeBranchSourceExceptHq(
+    qb: SelectQueryBuilder<Order>,
+    hqBranchId: string | null | undefined,
+  ): void {
+    const hqId = String(hqBranchId ?? '').trim();
+    if (hqId) {
+      qb.andWhere(
+        '(order.source != :branch_source_excluded OR order.branch_id = :branch_source_hq_id)',
+        {
+          branch_source_excluded: Order_source.BRANCH,
+          branch_source_hq_id: hqId,
+        },
+      );
+      return;
+    }
+    qb.andWhere('order.source != :branch_source_excluded', {
+      branch_source_excluded: Order_source.BRANCH,
+    });
   }
 
   /**
@@ -1124,6 +1173,8 @@ export class OrderServiceService {
       branch_id,
       source,
       exclude_sources,
+      exclude_branch_source_except_hq,
+      branch_source_hq_branch_id,
       fulfillment_source,
       warehouse_id,
       warehouse_kind,
@@ -1319,6 +1370,9 @@ export class OrderServiceService {
       qb.andWhere('order.source NOT IN (:...excludeSourceFilters)', {
         excludeSourceFilters,
       });
+    }
+    if (exclude_branch_source_except_hq) {
+      this.excludeBranchSourceExceptHq(qb, branch_source_hq_branch_id);
     }
     // 6kHnNH9j: «Ombordan» filtri. Noto'g'ri qiymat — 400 (bazaga yetmaydi).
     const fulfillmentFilter = String(fulfillment_source ?? '')
@@ -1625,9 +1679,7 @@ export class OrderServiceService {
       qb.andWhere('order.branch_id = :branch_id', { branch_id });
     }
     if (exclude_branch_source) {
-      qb.andWhere('order.source != :branch_source', {
-        branch_source: Order_source.BRANCH,
-      });
+      this.excludeBranchSourceExceptHq(qb, await this.loadListHqBranchId());
     }
     this.applyCreatedDayRange(qb, days.start_day, days.end_day);
 
@@ -1661,7 +1713,7 @@ export class OrderServiceService {
       status: Order_status.NEW,
       unbatched_only: true,
       ...(exclude_branch_source
-        ? { exclude_sources: [Order_source.BRANCH] }
+        ? { exclude_branch_source_except_hq: true }
         : {}),
       ...(days.start_day ? { start_day: days.start_day } : {}),
       ...(days.end_day ? { end_day: days.end_day } : {}),
@@ -1941,8 +1993,8 @@ export class OrderServiceService {
         })()
       : Promise.resolve(null);
     const newIncomingTask = payload?.new_incoming
-      ? (() => {
-          const scope = payload.new_incoming;
+      ? (async () => {
+          const scope = payload.new_incoming!;
           const qb = this.orderRepo
             .createQueryBuilder('order')
             .where('order.isDeleted = :isDeleted', { isDeleted: false })
@@ -1954,9 +2006,10 @@ export class OrderServiceService {
             });
           }
           if (scope.exclude_branch_source) {
-            qb.andWhere('order.source != :branch_source', {
-              branch_source: Order_source.BRANCH,
-            });
+            this.excludeBranchSourceExceptHq(
+              qb,
+              await this.loadListHqBranchId(),
+            );
           }
           if (scope.market_id) {
             qb.andWhere('order.market_id = :market_id', {
@@ -3303,6 +3356,8 @@ export class OrderServiceService {
     /** CU4zfcds: market NEW ro'yxati (`findNewByMarketEnriched`) — `findAll` ga o'tadi. */
     unbatched_only?: boolean;
     exclude_sources?: Order_source[];
+    /** HQ «Qabul va yaratish» — `findAll` ga o'tadi (HQ filialiniki ko'rinadi). */
+    exclude_branch_source_except_hq?: boolean;
     // `source`/`fetch_all` — tashqi (EXTERNAL) posilkalar ro'yxati uchun
     // (findAllExternal shu yo'lni ishlatadi, DL6FCdrh). findAll ularni
     // qo'llab-quvvatlaydi; bu yerda faqat tip ochiladi.
@@ -3519,7 +3574,7 @@ export class OrderServiceService {
         status: Order_status.NEW,
         unbatched_only: true,
         ...(exclude_branch_source
-          ? { exclude_sources: [Order_source.BRANCH] }
+          ? { exclude_branch_source_except_hq: true }
           : {}),
         search: filters.search,
         start_day: filters.start_day,

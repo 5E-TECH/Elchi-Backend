@@ -3975,7 +3975,7 @@
     },
     "/orders/status-counts": {
       "get": {
-        "description": "GaBIPi3Z. Filters and role scope are EXACTLY those of GET /orders (same query params except `status`/`page`/`limit`/`sort_*`/`fetch_all`, which are ignored). One GROUP BY status query. `all` = GET /orders total without status; `paid` = paid + partly_paid; `cancelled` = cancelled + \"cancelled (sent)\" — for branch staff / HQ registrator / courier it is the total of their own cancelled tab (GET /orders?status=cancelled,cancelled (sent) — inventory / courier cancelled tab). `new_incoming` — «Qabul va yaratish» badge: NEW orders not yet received into a batch, scoped like GET /orders/markets/new (branch staff — own branch; SA/admin — all except branch-created; market — own); it ignores the list filters; `null` for roles without that section (operator, courier, logist, customer). `by_status` — raw count per status. Logist with no regions — all zeros. No money fields.",
+        "description": "GaBIPi3Z. Filters and role scope are EXACTLY those of GET /orders (same query params except `status`/`page`/`limit`/`sort_*`/`fetch_all`, which are ignored). One GROUP BY status query. `all` = GET /orders total without status; `paid` = paid + partly_paid; `cancelled` = cancelled + \"cancelled (sent)\" — for branch staff / HQ registrator / courier it is the total of their own cancelled tab (GET /orders?status=cancelled,cancelled (sent) — inventory / courier cancelled tab). `new_incoming` — «Qabul va yaratish» badge: NEW orders not yet received into a batch, scoped like GET /orders/markets/new (branch staff — own branch; SA/admin — all except orders created at a non-HQ branch; market — own); it ignores the list filters; `null` for roles without that section (operator, courier, logist, customer). `by_status` — raw count per status. Logist with no regions — all zeros. No money fields.",
         "operationId": "OrderGatewayController_statusCounts",
         "parameters": [
           {
@@ -4685,7 +4685,7 @@
     },
     "/orders/markets/{marketId}/new": {
       "get": {
-        "description": "(nCAFnqIe) MARKET_OPERATOR — faqat o'zi biriktirilgan market (`:marketId` = operator marketi); boshqa market yoki marketga biriktirilmagan operator — 403. Javob market roli bilan bir xil (kuryer tarifi/ulushi va filial ulushisiz, `source='branch'` buyurtmalarsiz).",
+        "description": "(nCAFnqIe) MARKET_OPERATOR — faqat o'zi biriktirilgan market (`:marketId` = operator marketi); boshqa market yoki marketga biriktirilmagan operator — 403. Javob market roli bilan bir xil (kuryer tarifi/ulushi va filial ulushisiz, HQ dan boshqa filialda yaratilgan `source='branch'` buyurtmalarsiz).",
         "operationId": "OrderGatewayController_findNewOrdersByMarket",
         "parameters": [
           {
