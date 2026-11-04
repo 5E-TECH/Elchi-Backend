@@ -200,7 +200,7 @@ describe('OfRSoRUX — POST /orders MARKET_OPERATOR (qo‘lda yaratish)', () => 
     expect(sentCreate(orderClient)[0][1].dto.operator).toBe('Sevinch Operator');
   });
 
-  it('`operator` yozilgan bo‘lsa — o‘zgarmaydi', async () => {
+  it('`operator` yozilgan bo‘lsa — operator ismi bilan almashtirilmaydi (faqat bosh harflar katta)', async () => {
     const { controller, orderClient } = makeController();
 
     await controller.create(
@@ -208,7 +208,8 @@ describe('OfRSoRUX — POST /orders MARKET_OPERATOR (qo‘lda yaratish)', () => 
       operatorReq(),
     );
 
-    expect(sentCreate(orderClient)[0][1].dto.operator).toBe('Kecha smenasi');
+    // 2026-11-04: yozilgan operator — odam ismi, har so'z bosh harfi katta.
+    expect(sentCreate(orderClient)[0][1].dto.operator).toBe('Kecha Smenasi');
   });
 
   it('⭐ marketga biriktirilmagan operator — 400, mijoz va buyurtma yaratilmaydi', async () => {

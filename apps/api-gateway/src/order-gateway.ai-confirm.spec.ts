@@ -333,7 +333,8 @@ describe('OrderGatewayController — POST /orders/ai-confirm', () => {
         where_deliver: 'center',
         total_price: 100001,
         comment: 'Kechqurun',
-        operator: 'sevinch',
+        // 2026-11-04: operator — odam ismi, har so'z bosh harfi katta.
+        operator: 'Sevinch',
         items: [
           { product_id: '15', quantity: 2 },
           { product_name: 'Katalogda yo‘q', quantity: 1 },
@@ -672,7 +673,7 @@ describe('OrderGatewayController — POST /orders/ai-confirm', () => {
       );
       const dto = createdDto(fx.order);
       expect(dto.operator_id).toBeNull();
-      expect(dto.operator).toBe('sevinch');
+      expect(dto.operator).toBe('Sevinch');
     });
 
     it('MARKET_OPERATOR → operator_id = token sub (matndan emas)', async () => {
@@ -683,8 +684,36 @@ describe('OrderGatewayController — POST /orders/ai-confirm', () => {
       );
       const dto = createdDto(fx.order);
       expect(dto.operator_id).toBe('501');
-      expect(dto.operator).toBe('sevinch');
+      expect(dto.operator).toBe('Sevinch');
       expect(dto.market_id).toBe(MARKET_ID);
+    });
+  });
+
+  describe('2026-11-04: operator matni — odam ismi (Telegram bot ham shu yo‘l)', () => {
+    it('har so‘z bosh harfi katta, qolgani kiritilganidek, bo‘shliqlar tekislanadi', async () => {
+      const fx = makeController();
+      await fx.controller.aiConfirm(
+        {
+          orders: [
+            confirmOrder(1, { operator: '  sevinch   karimova ' }),
+            confirmOrder(2, { operator: "o'tkir" }),
+            confirmOrder(3, { operator: 'ALI' }),
+          ],
+        },
+        marketReq,
+      );
+      expect(createdDto(fx.order, 0).operator).toBe('Sevinch Karimova');
+      expect(createdDto(fx.order, 1).operator).toBe("O'tkir");
+      expect(createdDto(fx.order, 2).operator).toBe('ALI');
+    });
+
+    it('tashqi integratsiya belgisi (external_*) tegilmaydi', async () => {
+      const fx = makeController();
+      await fx.controller.aiConfirm(
+        { orders: [confirmOrder(1, { operator: 'external_beepost' })] },
+        marketReq,
+      );
+      expect(createdDto(fx.order).operator).toBe('external_beepost');
     });
   });
 

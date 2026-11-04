@@ -2,6 +2,7 @@ import { createHash } from 'crypto';
 import {
   AI_AUDITED_FIELDS,
   maskPhoneForLog,
+  normalizePersonName,
   normalizeUzPhone,
   type AiAuditedField,
   type AiDraftPreviewSnapshot,
@@ -149,8 +150,12 @@ export function computeEditedFields(
 ): AiAuditedField[] {
   const changed = new Set<AiAuditedField>();
   const differs = (a: unknown, b: unknown) => text(a) !== text(b);
+  // Ism bosh harfini forma va server o'zi to'g'rilaydi («ali» → «Ali») — bu
+  // operator tahriri emas, auditga yozilmaydi.
+  const differsName = (a: unknown, b: unknown) =>
+    normalizePersonName(text(a)) !== normalizePersonName(text(b));
 
-  if (differs(preview.customer_name, confirmed.customer?.name)) {
+  if (differsName(preview.customer_name, confirmed.customer?.name)) {
     changed.add('customer_name');
   }
   if (
@@ -187,7 +192,9 @@ export function computeEditedFields(
     changed.add('where_deliver');
   }
   if (differs(preview.comment, confirmed.comment)) changed.add('comment');
-  if (differs(preview.operator, confirmed.operator)) changed.add('operator');
+  if (differsName(preview.operator, confirmed.operator)) {
+    changed.add('operator');
+  }
   if (itemsKey(preview.items) !== itemsKey(confirmed.items)) {
     changed.add('items');
   }

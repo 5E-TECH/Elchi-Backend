@@ -127,6 +127,7 @@ import {
   Roles as RoleEnum,
   Where_deliver,
   matchesDeclaredType,
+  normalizePersonName,
   normalizeUzPhone,
   parseUzPhoneSearch,
   recordReceiveByScanOutcome,
@@ -2589,6 +2590,17 @@ export class OrderGatewayController {
           req.user,
           requesterName,
         );
+    // 2026-11-04: yozilgan `operator` — odam ismi («Operator ismi»): har so'z
+    // bosh harfi katta (veb forma va AI paneli bilan bir xil). Shu yerdan
+    // `POST /orders`, `POST /orders/ai-confirm` (veb AI va Telegram bot) va
+    // `POST /orders/telegram/bot/create` o'tadi. Bo'sh matn va tashqi
+    // integratsiya belgisi (`external_*`) tegilmaydi.
+    const typedOperator =
+      typeof safeOrderDto.operator === 'string' &&
+      safeOrderDto.operator.trim() &&
+      !safeOrderDto.operator.startsWith('external_')
+        ? normalizePersonName(safeOrderDto.operator)
+        : null;
 
     // txmkXVBa: mavjud kartaning shu marketda buyurtmasi bormi (customer_id
     // yo'lida doira tekshiruvidan ma'lum; telefon yo'lida — kerak bo'lsa
@@ -2690,7 +2702,9 @@ export class OrderGatewayController {
                 ? { operator: chosenOperator.name || null }
                 : filledOperatorName
                   ? { operator: filledOperatorName }
-                  : {}),
+                  : typedOperator
+                    ? { operator: typedOperator }
+                    : {}),
               ...(operatorPhones.operator_phone
                 ? { operator_phone: operatorPhones.operator_phone }
                 : {}),

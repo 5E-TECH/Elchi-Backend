@@ -68,6 +68,21 @@ describe('computeEditedFields', () => {
     expect(computeEditedFields(snap, confirmedFrom())).toEqual([]);
   });
 
+  it("ism bosh harfini avtomatik to'g'rilash (sevinch → Sevinch) — tahrir emas; boshqa ism — tahrir", () => {
+    expect(
+      computeEditedFields(
+        snap,
+        confirmedFrom({
+          customer: { name: 'Dilnoza', phone_number: '90 123 45 67' },
+          operator: 'Sevinch',
+        }),
+      ),
+    ).toEqual([]);
+    expect(
+      computeEditedFields(snap, confirmedFrom({ operator: 'Madina' })),
+    ).toEqual(['operator']);
+  });
+
   it('TC4: tuman o‘zgarsa district_id (va viloyat o‘zgarsa region_id)', () => {
     expect(
       computeEditedFields(snap, confirmedFrom({ district_id: '16' })),

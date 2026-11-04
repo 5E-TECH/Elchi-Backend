@@ -22,6 +22,28 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+### 2026-11-04 — Odam ismida har so'zning bosh harfi katta (kichik kiritilsa ham)
+
+Ega talabi: «Ism so'ragan har qanday joyda birinchi harf katta bo'lsin — biz kichik kiritsak ham katta bo'lsin».
+
+**Qoida** (umumiy yordamchi `normalizePersonName`, `libs/common/src/text/person-name.ts`; Elchi-Frontend'da ham ayni qoida):
+- Faqat **odam ismlari**: mijoz (qabul qiluvchi) va xodim rollari — superadmin, admin, menejer, registrator, logist, kuryer, investor (login va investor yozuvi), market operatori, buyurtmadagi yozilgan operator ismi. **Market (biznes) nomi, eski filial hisobi (`branch`) nomi, mahsulot, filial, viloyat nomlari, izoh va manzilga qo'llanmaydi.**
+- Har so'zning birinchi **harfi** katta qilinadi, qolgan harflar aynan kiritilganidek qoladi: «ali valiyev» → «Ali Valiyev», «o'tkir» → «O'tkir», «ALI» → «ALI», «mcDonald» → «McDonald», «иван петров» → «Иван Петров». So'zlar probel va defis bo'yicha ajratiladi: «abdulla-ugli» → «Abdulla-Ugli». So'z boshidagi harf bo'lmagan belgilar (qo'shtirnoq, qavs) o'tkazib yuboriladi: «"ali"» → «"Ali"».
+- Chetdagi bo'shliqlar olib tashlanadi, ketma-ket bo'shliqlar bitta probelga aylanadi.
+- **Eski yozuvlar ko'chirilmaydi** — faqat yangi yoki tahrirlangan ism. O'zgarmagan ism (forma hamma maydonni qayta yuborganda) tegilmaydi.
+
+**Endpointlar** (javobdagi `name` endi keltirilgan qiymat):
+- ✏️ [identity] Mijoz: `POST /orders` (forma), Telegram bot (`POST /orders/telegram/bot/create`), AI tasdiqlash, `POST /orders/external`, hamkor va tashqi sayt importi — hammasi `identity.customer.create` orqali, yangi mijoz ismi keltirib yoziladi. Mavjud mijoz (bot / hamkor / import yangilashi) va «Kartani ham yangilash» (`update_customer_card: true`) — ism faqat haqiqatan o'zgargan bo'lsa yoziladi. Faqat harf katta-kichikligi farqi («ali» ↔ kartada «Ali») o'zgarish hisoblanmaydi: `customer_card_changed_fields` da `name` chiqmaydi.
+- ✏️ [identity] Xodim yaratish: `POST /admins`, `POST /registrators`, `POST /logists`, `POST /couriers`, `POST /managers`, `POST /investor-users`, `POST /market-operators` — `name` keltirib saqlanadi.
+- ✏️ [identity] `PATCH /users/:id` va `PATCH /auth/my-profile` — `name` o'zgarsa keltiriladi. Nishon **market** yoki eski filial hisobi (**branch** — «Filial (eski rol)», nomi filial nomi) bo'lsa nom kiritilganidek qoladi (`POST /markets`, `PATCH /admin/markets/:id` ham o'zgarmagan). Rollar ro'yxati — umumiy `isPersonNameRole` (frontenddagi bilan ayni).
+- ✏️ [investor] `POST /investors` va `PATCH /investors/:id` — investor nomi («Investor ismi», «Ism va familiya») keltirib saqlanadi. PATCH'da o'zgarmagan ism tegilmaydi.
+- ✏️ [gateway] Buyurtmaning yozilgan `operator` matni («Operator ismi») — `POST /orders`, `POST /orders/ai-confirm` (veb AI paneli va Telegram bot) va `POST /orders/telegram/bot/create` da har so'z bosh harfi katta qilib saqlanadi: «sevinch» → «Sevinch». Bo'sh matn va tashqi integratsiya belgisi (`external_*`) tegilmaydi. Tanlangan operator (`operator_id`) va avtomatik to'ldirilgan so'rovchi ismi — identity'dagi ism (o'zgarishsiz).
+- 🟢 Telefon bo'yicha mijoz qidirish/takror tekshiruvi o'zgarmagan. Buyurtmada mijoz ismi nusxasi yo'q (`order.customer` — identity kartasi), shuning uchun order-service o'zgarmagan.
+
+→ **Frontendda:** 🟢 o'zgarish shart emas — backend saqlashda keltiradi. Ixtiyoriy: forma maydonida ham ayni qoida bilan ko'rsatish (saqlangandan keyin javobdagi `name` ni ko'rsating).
+
+Migratsiya yo'q. Deploy: identity-service, investor-service, api-gateway.
+
 ### 2026-11-04 — «Almashtirish» (lQjt6sKP) frontendi: market operatori ham eski buyurtmani tanlaydi
 
 - ✏️ [gateway] `GET /orders/replaceable` — `MARKET_OPERATOR` ham chaqira oladi (ilgari 403): market — operatorning identity `user.market_id` si (tanadagi/so'rovdagi `market_id` e'tiborsiz), marketga biriktirilmagan operator — 400. `POST /orders` dagi market aniqlash bilan bir xil.

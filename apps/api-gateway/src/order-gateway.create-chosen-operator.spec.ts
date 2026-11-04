@@ -383,7 +383,7 @@ describe('«Operator» tanlovi — POST /orders operator_id', () => {
       ).toHaveLength(0);
     });
 
-    it('market: operator_id null, yozilgan matn saqlanadi', async () => {
+    it('market: operator_id null, yozilgan matn saqlanadi (bosh harflar katta)', async () => {
       const { controller, orderClient } = makeController();
 
       await controller.create(
@@ -392,9 +392,10 @@ describe('«Operator» tanlovi — POST /orders operator_id', () => {
       );
 
       const [sent] = sentCreates(orderClient);
+      // 2026-11-04: yozilgan operator — odam ismi, har so'z bosh harfi katta.
       expect(sent.dto).toMatchObject({
         operator_id: null,
-        operator: 'Kecha smenasi',
+        operator: 'Kecha Smenasi',
       });
       expect(sent).not.toHaveProperty('verified_operator_id');
     });
@@ -429,9 +430,10 @@ describe('«Operator» tanlovi — POST /orders operator_id', () => {
         );
 
         const [sent] = sentCreates(orderClient);
+        // 2026-11-04: yozilgan operator — har so'z bosh harfi katta.
         expect(sent.dto).toMatchObject({
           operator_id: null,
-          operator: 'Admin yozgan',
+          operator: 'Admin Yozgan',
         });
         expect(sent).not.toHaveProperty('verified_operator_id');
         expect(

@@ -218,7 +218,7 @@ describe('RBAC-19: admin o‘z profilini tahrirlaydi', () => {
 
     const res = await h.service.updateUser(
       '10',
-      { password: 'Yangi-Parol-2026', name: 'Yangi ism' } as never,
+      { password: 'Yangi-Parol-2026', name: 'Yangi Ism' } as never,
       admin10,
     );
 
@@ -226,7 +226,7 @@ describe('RBAC-19: admin o‘z profilini tahrirlaydi', () => {
     expect(h.saves.at(-1)).toEqual(
       expect.objectContaining({
         password: 'hashed:Yangi-Parol-2026',
-        name: 'Yangi ism',
+        name: 'Yangi Ism',
       }),
     );
   });
@@ -316,12 +316,12 @@ describe('RBAC-09: parol/telefon o‘zgarsa sessiyalar yopiladi', () => {
 
     await h.service.updateUser(
       '9',
-      { name: 'Boshqa ism', phone_number: '+998900009911' } as never,
+      { name: 'Boshqa Ism', phone_number: '+998900009911' } as never,
       superadmin,
     );
 
     expect(h.saves.at(-1)).toEqual(
-      expect.objectContaining({ name: 'Boshqa ism', refresh_token: OLD_HASH }),
+      expect.objectContaining({ name: 'Boshqa Ism', refresh_token: OLD_HASH }),
     );
   });
 

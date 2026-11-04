@@ -426,13 +426,13 @@ describe('YEThmZBn (b) — PATCH /users/:id district_id', () => {
 
         const res = (await service.updateUser(
           '26',
-          { name: 'Yangi ism', district_id: '77' },
+          { name: 'Yangi Ism', district_id: '77' },
           SUPERADMIN,
         )) as { statusCode: number };
 
         expect(res.statusCode).toBe(200);
         expect(saved[0]).toMatchObject({
-          name: 'Yangi ism',
+          name: 'Yangi Ism',
           district_id: '77',
           region_id: '3',
         });
@@ -484,9 +484,9 @@ describe('YEThmZBn (b) — PATCH /users/:id district_id', () => {
       courierRow({ district_id: '41' }),
     );
 
-    await service.updateUser('26', { name: 'Yangi ism' }, SUPERADMIN as never);
+    await service.updateUser('26', { name: 'Yangi Ism' }, SUPERADMIN as never);
 
-    expect(saved[0]).toMatchObject({ name: 'Yangi ism', district_id: '41' });
+    expect(saved[0]).toMatchObject({ name: 'Yangi Ism', district_id: '41' });
     expect(calls.map((c) => c.cmd)).not.toContain(
       'logistics.district.find_by_id',
     );

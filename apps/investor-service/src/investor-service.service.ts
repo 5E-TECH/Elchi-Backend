@@ -11,6 +11,7 @@ import {
   Roles,
   Status,
   TASHKENT_OFFSET_MINUTES,
+  normalizePersonName,
   rmqSend,
 } from '@app/common';
 import { Investor } from './entities/investor.entity';
@@ -277,7 +278,9 @@ export class InvestorServiceService {
     dto: CreateInvestorDto,
     requester?: { id?: string; roles?: string[] } | null,
   ) {
-    const name = String(dto.name ?? '').trim();
+    // 2026-11-04: investor — shaxs (forma «Investor ismi», «Ism va
+    // familiya»): har so'z bosh harfi katta.
+    const name = normalizePersonName(String(dto.name ?? ''));
     const phoneNumber = String(dto.phone_number ?? '').trim();
     if (!name) {
       this.badRequest('Nomi majburiy');
@@ -430,11 +433,15 @@ export class InvestorServiceService {
     const before = { ...investor };
 
     if (dto.name !== undefined) {
-      const name = String(dto.name).trim();
-      if (!name) {
+      const typed = String(dto.name).trim();
+      if (!typed) {
         this.badRequest("Nomi bo'sh bo'lmasligi kerak");
       }
-      investor.name = name;
+      // 2026-11-04: odam ismi — har so'z bosh harfi katta. O'zgarmagan ism
+      // (forma hamma maydonni qayta yuboradi) tegilmaydi — eski yozuv
+      // ko'chirilmaydi.
+      investor.name =
+        typed === investor.name ? typed : normalizePersonName(typed);
     }
     if (dto.phone_number !== undefined) {
       const phoneNumber = String(dto.phone_number ?? '').trim();

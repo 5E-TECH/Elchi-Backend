@@ -74,6 +74,8 @@ import {
   Roles,
   Status,
   isMarketResponsibleRole,
+  isPersonNameRole,
+  normalizePersonName,
   normalizeUzPhone,
   parseUzPhoneSearch,
   passwordPolicyError,
@@ -1519,7 +1521,8 @@ export class UserServiceService implements OnModuleInit {
     );
 
     const admin = this.users.create({
-      name: dto.name,
+      // 2026-11-04: odam ismi — har so'z bosh harfi katta.
+      name: normalizePersonName(dto.name),
       phone_number: dto.phone_number,
       username: null,
       password: hashedPassword,
@@ -1573,7 +1576,8 @@ export class UserServiceService implements OnModuleInit {
     );
 
     const registrator = this.users.create({
-      name: dto.name,
+      // 2026-11-04: odam ismi — har so'z bosh harfi katta.
+      name: normalizePersonName(dto.name),
       phone_number: dto.phone_number,
       username: null,
       password: hashedPassword,
@@ -1643,7 +1647,8 @@ export class UserServiceService implements OnModuleInit {
     );
 
     const logist = this.users.create({
-      name: dto.name,
+      // 2026-11-04: odam ismi — har so'z bosh harfi katta.
+      name: normalizePersonName(dto.name),
       phone_number: dto.phone_number,
       username: null,
       password: hashedPassword,
@@ -1694,7 +1699,8 @@ export class UserServiceService implements OnModuleInit {
   ) {
     this.assertRequesterCanCreateInvestorUser(requester);
 
-    const name = String(dto?.name ?? '').trim();
+    // 2026-11-04: odam ismi — har so'z bosh harfi katta.
+    const name = normalizePersonName(String(dto?.name ?? ''));
     const phoneNumber = String(dto?.phone_number ?? '').trim();
     const password = String(dto?.password ?? '');
     if (!name || !phoneNumber || !password) {
@@ -1993,7 +1999,15 @@ export class UserServiceService implements OnModuleInit {
     }
 
     if (typeof dto.name !== 'undefined') {
-      admin.name = dto.name;
+      // 2026-11-04: odam ismi — har so'z bosh harfi katta. Market (biznes)
+      // nomi va eski filial hisobi (Roles.BRANCH) nomi kiritilganidek qoladi
+      // (`isPersonNameRole`) — rol saqlangan yozuvdan olinadi (bu so'rov
+      // rolni o'zgartirmaydi). O'zgarmagan ism (forma hamma maydonni qayta
+      // yuboradi) tegilmaydi — eski yozuvlar ko'chirilmaydi.
+      admin.name =
+        !isPersonNameRole(admin.role) || dto.name === admin.name
+          ? dto.name
+          : normalizePersonName(dto.name);
     }
 
     // (C4R3YyvH) Til — o'zi ham (profil), admin ham o'zgartira oladi. RMQ'da
@@ -3705,7 +3719,8 @@ export class UserServiceService implements OnModuleInit {
     );
 
     const courier = this.users.create({
-      name: dto.name,
+      // 2026-11-04: odam ismi — har so'z bosh harfi katta.
+      name: normalizePersonName(dto.name),
       phone_number: dto.phone_number,
       username: null,
       password: hashedPassword,
@@ -3841,7 +3856,8 @@ export class UserServiceService implements OnModuleInit {
     );
 
     const manager = this.users.create({
-      name: dto.name,
+      // 2026-11-04: odam ismi — har so'z bosh harfi katta.
+      name: normalizePersonName(dto.name),
       phone_number: dto.phone_number,
       username: null,
       password: hashedPassword,
@@ -3969,8 +3985,16 @@ export class UserServiceService implements OnModuleInit {
        * eski ism/tuman/manzilni O'CHIRMASLIGI kerak.
        */
       const patch: Partial<User> = {};
-      if (dto.name != null && dto.name !== existing.name) {
-        patch.name = dto.name;
+      // 2026-11-04: ism bosh harflari katta qilib yoziladi. Kiritilgan matn
+      // kartadagidan farq qilmasa (yoki faqat shu keltirish farqi bo'lsa) —
+      // ism o'zgarmagan, eski yozuv ko'chirilmaydi.
+      const name = normalizePersonName(dto.name);
+      if (
+        name != null &&
+        dto.name !== existing.name &&
+        name !== existing.name
+      ) {
+        patch.name = name;
       }
       if (dto.district_id != null && dto.district_id !== existing.district_id) {
         patch.district_id = dto.district_id;
@@ -4008,7 +4032,8 @@ export class UserServiceService implements OnModuleInit {
     // this value, but it must not be guessable if a password path is ever enabled.
     const generatedPassword = `cust_${randomBytes(12).toString('hex')}`;
     const customer = this.users.create({
-      name: dto.name,
+      // 2026-11-04: odam ismi — har so'z bosh harfi katta.
+      name: normalizePersonName(dto.name),
       // zfPNDCCr: doim kanonik +998XXXXXXXXX.
       phone_number: phone,
       extra_number: dto.extra_number ?? null,
@@ -4080,8 +4105,13 @@ export class UserServiceService implements OnModuleInit {
     for (const field of fields) {
       const raw = dto?.[field];
       if (raw === null || raw === undefined) continue;
-      const value = primitiveText(raw).trim();
-      if (!value || value === primitiveText(existing[field]).trim()) continue;
+      const typed = primitiveText(raw).trim();
+      const current = primitiveText(existing[field]).trim();
+      if (!typed || typed === current) continue;
+      // 2026-11-04: ism — har so'z bosh harfi katta. Faqat shu keltirish
+      // farqi bo'lsa («ali» → kartada «Ali») — ism o'zgarmagan.
+      const value = field === 'name' ? normalizePersonName(typed) : typed;
+      if (value === current) continue;
       before[field] = existing[field] ?? null;
       after[field] = value;
       (patch as Record<string, unknown>)[field] = value;
@@ -6187,7 +6217,9 @@ export class UserServiceService implements OnModuleInit {
   ) {
     const scopedMarketId = this.resolveMarketOperatorScope(marketId, requester);
 
-    const name = primitiveText(dto?.name).trim().replace(/\s+/g, ' ');
+    // 2026-11-04: odam ismi — har so'z bosh harfi katta (bo'shliqlar ham
+    // shu yerda tekislanadi).
+    const name = normalizePersonName(primitiveText(dto?.name));
     if (name.length < 2 || name.length > 100) {
       this.badRequest("Operator ismi 2-100 belgi bo'lishi kerak");
     }
