@@ -169,6 +169,54 @@ describe('OrderServiceService extra cost approval flow', () => {
     expect(orderRepo.save).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['sellOrder', 'sell'],
+    ['cancelOrder', 'cancel'],
+  ] as const)(
+    "iMNLvs06: %s — kasrli extraCost (RMQ, gateway'siz) butun so'mga kesiladi",
+    async (method, action) => {
+      const { service, extraCostApprovalRepo } = makeService();
+
+      const res: any = await service[method](
+        { id: '301', roles: ['courier'], branch_id: '77' },
+        '7001',
+        { extraCost: 1500.5, comment: 'Yo‘l xarajati' },
+      );
+
+      expect(res.statusCode).toBe(202);
+      expect(extraCostApprovalRepo.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action,
+          amount: 1500,
+          operation_payload: expect.objectContaining({ extraCost: 1500 }),
+        }),
+      );
+    },
+  );
+
+  it('iMNLvs06: partly-sell — kasrli extraCost butun so‘mga kesiladi', async () => {
+    const { service, extraCostApprovalRepo } = makeService();
+
+    await service.partlySellOrder(
+      { id: '201', roles: ['manager'], branch_id: '77' },
+      '7001',
+      {
+        totalPrice: 180000,
+        extraCost: 9000.99,
+        comment: 'Qisman sotildi',
+        order_item_info: [{ product_id: 'p-1', quantity: 1 }],
+      },
+    );
+
+    expect(extraCostApprovalRepo.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'partly_sell',
+        amount: 9000,
+        operation_payload: expect.objectContaining({ extraCost: 9000 }),
+      }),
+    );
+  });
+
   it('proof ON bo‘lsa proofsiz extra cost approvalga ham chiqmaydi', async () => {
     const { service, extraCostApprovalRepo } = makeService({
       marketProofConditions: [ExpenseProofCondition.SELL_EXTRA_COST],

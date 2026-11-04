@@ -22,6 +22,16 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+### 2026-11-05 — Qo'shimcha xarajat faqat butun so'm (iMNLvs06, migratsiya 1716000000205)
+
+Ilgari `extraCost` ga faqat `@IsNumber` qo'yilgan edi: API orqali 1500.5 o'tib, so'rov `amount` ga kasr bo'lib yozilardi. Market tasdiqlaganda `orders.extra_cost` (int) ga yozilmay, so'rov abadiy «kutilmoqda» qolardi (tasdiq o'chiq marketda esa sotuvning o'zi yiqilardi).
+
+✏️ **Kontrakt:** `POST /orders/sell/:id`, `POST /orders/cancel/:id`, `POST /orders/partly-sell/:id` — `extraCost` endi butun, manfiy bo'lmagan so'm (BeePost kabi). Kasr qismi tashlanadi (`1500.5` → `1500`, `"9999.5"` → `9999`); raqam bo'lmagan qiymat — 400 «Qo'shimcha xarajat butun son (so'm) bo'lishi kerak»; manfiy — 400 «Qo'shimcha xarajat manfiy bo'lishi mumkin emas» (ilgari jimgina 0 qilinardi). order-service ham kesadi (RMQ chaqiruvlari uchun).
+
+**Migratsiya `1716000000205-TruncFractionalExtraCostApprovals`:** kutilayotgan (`pending`) so'rovlardagi kasr `amount` va `operation_payload.extraCost` butun songa keltiriladi; yakunlangan so'rovlarga tegilmaydi, qayta yurgizish xavfsiz, `down()` bo'sh.
+
+→ **Frontendda:** 🟢 o'zgarish shart emas — pul maydoni (`TextInput mode="money"`) baribir faqat raqam yuboradi.
+
 ### 2026-11-04 — HQ filialiga viloyat: Toshkent shahri (migratsiya 1716000000204, anKpzwxk 4-qaror)
 
 anKpzwxk 4-qarori: «HQ kuryerlari faqat HQ joylashgan viloyat buyurtmalarini oladi». Qoida HQ filialining `region_id` sini o'qiydi; u bo'sh bo'lsa HQ kuryeriga hech narsa berilmaydi (400 `branch_region_missing`). HQ esa viloyatsiz yaratiladi va admin UI uni belgilay olmaydi. Ega: HQ — Toshkent shahrida.

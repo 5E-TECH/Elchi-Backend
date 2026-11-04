@@ -78,6 +78,19 @@ const parseFormattedNumber = (value: unknown): unknown => {
 };
 
 /**
+ * (iMNLvs06) Qo'shimcha xarajat — butun so'm. Kasr qismi tashlanadi (BeePost
+ * kabi: 1500.5 → 1500): `orders.extra_cost` int, kasr tasdiqda sotuvni
+ * yiqitib so'rovni abadiy «kutilmoqda» qoldirardi. Raqam bo'lmagan qiymat
+ * o'zgarmaydi — `@IsInt` uni 400 bilan rad etadi.
+ */
+const parseWholeSom = (value: unknown): unknown => {
+  const parsed = parseFormattedNumber(value);
+  return typeof parsed === 'number' && Number.isFinite(parsed)
+    ? Math.trunc(parsed)
+    : parsed;
+};
+
+/**
  * Mijoz telefoni (zfPNDCCr): qabul qilinadigan har shakl ("998901112233",
  * "+998 90 111 22 33", "90 111 22 33", "0901112233") kanonik
  * `+998XXXXXXXXX` ga keltiriladi — umumiy `normalizeUzPhone` (hamkor DTO,
@@ -845,8 +858,9 @@ export class SellOrderRequestDto {
 
   @ApiPropertyOptional({ example: 5000, minimum: 0 })
   @IsOptional()
-  @Transform(({ value }) => parseFormattedNumber(value))
-  @IsNumber()
+  @Transform(({ value }) => parseWholeSom(value))
+  @IsInt({ message: "Qo'shimcha xarajat butun son (so'm) bo'lishi kerak" })
+  @Min(0, { message: "Qo'shimcha xarajat manfiy bo'lishi mumkin emas" })
   extraCost?: number;
 
   /**
@@ -923,8 +937,9 @@ export class CancelOrderRequestDto {
 
   @ApiPropertyOptional({ example: 5000, minimum: 0 })
   @IsOptional()
-  @Transform(({ value }) => parseFormattedNumber(value))
-  @IsNumber()
+  @Transform(({ value }) => parseWholeSom(value))
+  @IsInt({ message: "Qo'shimcha xarajat butun son (so'm) bo'lishi kerak" })
+  @Min(0, { message: "Qo'shimcha xarajat manfiy bo'lishi mumkin emas" })
   extraCost?: number;
 
   @ApiPropertyOptional({
@@ -1031,8 +1046,9 @@ export class PartlySellOrderRequestDto {
 
   @ApiPropertyOptional({ example: 2000, minimum: 0 })
   @IsOptional()
-  @Transform(({ value }) => parseFormattedNumber(value))
-  @IsNumber()
+  @Transform(({ value }) => parseWholeSom(value))
+  @IsInt({ message: "Qo'shimcha xarajat butun son (so'm) bo'lishi kerak" })
+  @Min(0, { message: "Qo'shimcha xarajat manfiy bo'lishi mumkin emas" })
   extraCost?: number;
 
   @ApiPropertyOptional({ example: 'Customer bought only 1 unit' })

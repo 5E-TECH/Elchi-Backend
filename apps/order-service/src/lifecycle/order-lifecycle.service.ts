@@ -2242,6 +2242,16 @@ export class OrderLifecycleService {
   }
 
   /**
+   * (iMNLvs06) So'rovdagi qo'shimcha xarajat — butun, manfiy bo'lmagan so'm.
+   * Gateway ham kesadi; bu RMQ orqali to'g'ridan-to'g'ri kelgan chaqiruvlar
+   * uchun ikkinchi himoya: `orders.extra_cost` int, kasr tasdiqdagi sotuvni
+   * yiqitib so'rovni abadiy «kutilmoqda» qoldirardi.
+   */
+  private wholeExtraCost(value: unknown): number {
+    return Math.max(Math.trunc(Number(value ?? 0)) || 0, 0);
+  }
+
+  /**
    * w2bDrE3i: market bo'yicha qo'shimcha xarajat DARVOZASI — kuryer/menejer
    * `can_add_extra_cost` ruxsatidan OLDIN (AND: ikkalasi ham ochiq bo'lishi
    * shart). Faqat aniq `false` yopadi: maydon yo'q (eski identity) —
@@ -8648,7 +8658,7 @@ export class OrderLifecycleService {
       : courierCashbox;
 
     const totalPrice = Number(order.total_price ?? 0);
-    const extraCost = Math.max(Number(dto?.extraCost ?? 0), 0);
+    const extraCost = this.wholeExtraCost(dto?.extraCost);
     if (extraCost > 0) {
       // w2bDrE3i: market darvozasi — shaxsiy ruxsatdan OLDIN.
       this.assertMarketExtraCostEnabled(market);
@@ -9212,7 +9222,7 @@ export class OrderLifecycleService {
     const post = postRes?.data;
     const actorCourierId = this.resolveActorCourierId(requester, order, post);
 
-    const extraCost = Math.max(Number(dto?.extraCost ?? 0), 0);
+    const extraCost = this.wholeExtraCost(dto?.extraCost);
     const totalPrice = Number(order.total_price ?? 0);
     const finalComment = this.generateSaleComment(
       order.comment,
@@ -10253,7 +10263,7 @@ export class OrderLifecycleService {
       ? branchCashbox
       : courierCashbox;
 
-    const extraCost = Math.max(Number(dto?.extraCost ?? 0), 0);
+    const extraCost = this.wholeExtraCost(dto?.extraCost);
     if (extraCost > 0) {
       // w2bDrE3i: market darvozasi — shaxsiy ruxsatdan OLDIN.
       this.assertMarketExtraCostEnabled(market);

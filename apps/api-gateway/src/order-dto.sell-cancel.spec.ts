@@ -16,6 +16,7 @@ import { validate } from 'class-validator';
 import { CancelReason } from '@app/common';
 import {
   CancelOrderRequestDto,
+  PartlySellOrderRequestDto,
   SellOrderRequestDto,
 } from './dto/order.swagger.dto';
 
@@ -132,5 +133,59 @@ describe('CancelOrderRequestDto', () => {
   it('ro`yxatda yo`q reason — 400', async () => {
     const errors = await errorsFor(CancelOrderRequestDto, { reason: 'BORED' });
     expect(errors.map((e) => e.property)).toContain('reason');
+  });
+});
+
+/**
+ * iMNLvs06 — qo'shimcha xarajat butun so'm (BeePost kabi): kasr qismi
+ * tashlanadi, raqam bo'lmagan yoki manfiy qiymat — 400. `orders.extra_cost`
+ * int: kasr ilgari tasdiqdagi sotuvni yiqitib, so'rovni abadiy
+ * «kutilmoqda» qoldirardi.
+ */
+describe("iMNLvs06: extraCost — butun so'm", () => {
+  const DTOS = [
+    ['SellOrderRequestDto', SellOrderRequestDto],
+    ['CancelOrderRequestDto', CancelOrderRequestDto],
+    ['PartlySellOrderRequestDto', PartlySellOrderRequestDto],
+  ] as const;
+
+  const extraCostErrors = async (
+    cls: (typeof DTOS)[number][1],
+    extraCost: unknown,
+  ) =>
+    (
+      await validate(plainToInstance(cls, { extraCost }), {
+        whitelist: true,
+        forbidNonWhitelisted: true,
+      })
+    ).find((e) => e.property === 'extraCost');
+
+  describe.each(DTOS)('%s', (_name, cls) => {
+    it.each([
+      [1500.5, 1500],
+      ['9999.5', 9999],
+      ['10 000', 10000],
+      [5000, 5000],
+      [0, 0],
+    ])('extraCost=%p → %p, xatosiz', async (input, expected) => {
+      expect(plainToInstance(cls, { extraCost: input }).extraCost).toBe(
+        expected,
+      );
+      expect(await extraCostErrors(cls, input)).toBeUndefined();
+    });
+
+    it.each([
+      ['abc', "Qo'shimcha xarajat butun son (so'm) bo'lishi kerak"],
+      [-1, "Qo'shimcha xarajat manfiy bo'lishi mumkin emas"],
+      ['-500', "Qo'shimcha xarajat manfiy bo'lishi mumkin emas"],
+    ])('extraCost=%p — 400 (%s)', async (input, message) => {
+      const error = await extraCostErrors(cls, input);
+      expect(error).toBeDefined();
+      expect(Object.values(error?.constraints ?? {})).toContain(message);
+    });
+
+    it('extraCost yuborilmasa — xato yo`q (ixtiyoriy)', async () => {
+      expect(await extraCostErrors(cls, undefined)).toBeUndefined();
+    });
   });
 });
