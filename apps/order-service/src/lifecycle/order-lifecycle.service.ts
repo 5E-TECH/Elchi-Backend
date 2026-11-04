@@ -2055,13 +2055,18 @@ export class OrderLifecycleService {
     const itemRepo = manager.getRepository(OrderItem);
     const parentOrder =
       (await orderRepo.findOne({ where: { id: String(order.id) } })) ?? order;
+    // (hwTkXsGi) Qoldiqlar QULF bilan o'qiladi — boshqa yo'llar kabi avval
+    // buyurtma, keyin so'rov (aks holda qoldiqni sotish / tasdiqlash bilan
+    // teskari tartib — deadlock). Qulf ostida parallel ochilgan so'rov ham
+    // pastdagi `void` ga tushadi.
     const children = await orderRepo.find({
       where: {
         parent_order_id: String(order.id),
         status: In([Order_status.CANCELLED, Order_status.WAITING]),
         isDeleted: false,
       },
-      order: { createdAt: 'ASC' },
+      order: { createdAt: 'ASC', id: 'ASC' },
+      lock: { mode: 'pessimistic_write' },
     });
 
     if (!children.length) {
@@ -2146,7 +2151,10 @@ export class OrderLifecycleService {
       where: { id: String(orderId) },
       lock: { mode: 'pessimistic_write' },
     });
-    if (!locked || locked.status !== Order_status.WAITING) {
+    // (hwTkXsGi) O'chirilgan buyurtma ham (rollback qo'shib yuborgan qisman
+    // sotuv qoldig'i — holati WAITING bo'lib qoladi): unga sotuv yoki yangi
+    // so'rov yozilmaydi.
+    if (!locked || locked.isDeleted || locked.status !== Order_status.WAITING) {
       this.badRequest(ORDER_NOT_WAITING_MESSAGE);
     }
     // T8: qulf ostidagi qator — chaqiruvchi oradagi o'zgarishlarni (masalan
@@ -2804,8 +2812,21 @@ export class OrderLifecycleService {
          * OXIRGI niyati ustun: eski so'rov yopiladi (hwTkXsGi: `void` — market
          * rad etmagan) va yangisi ochiladi. Market faqat oxirgi so'rovni
          * ko'radi va tasdiqlaydi.
+         *
+         * (hwTkXsGi) Eski so'rov faqat hali tasdiqlab bo'ladigan bo'lsa
+         * qaytariladi: ochilgandan keyin buyurtma holati o'zgargan (masalan
+         * filialga qaytib, qayta jo'natilgan) so'rovni tasdiq darvozasi
+         * baribir yopadi — kuryer 202 olib, amali jimgina yo'qolardi. Boshqa
+         * foydalanuvchining so'rovi ham qaytarilmaydi: qayta ijro so'rov
+         * egasi nomidan bajariladi (pul uning kassasiga yoziladi).
          */
+        const changedTo = await this.extraCostStatusChangedSince(
+          tx,
+          String(existing.id),
+        );
         const isSameRequest =
+          !changedTo &&
+          String(existing.requested_by_user_id) === String(requester.id) &&
           this.extraCostRequestFingerprint(
             existing.action,
             existing.amount,
@@ -2824,11 +2845,13 @@ export class OrderLifecycleService {
         }
         await this.voidOpenExtraCostApprovals(repo, {
           orderIds: [String(order.id)],
-          reason: EXTRA_COST_CLOSE_REASON.superseded(
-            action,
-            extraCost,
-            existing.action,
-          ),
+          reason: changedTo
+            ? EXTRA_COST_CLOSE_REASON.statusChanged(changedTo)
+            : EXTRA_COST_CLOSE_REASON.superseded(
+                action,
+                extraCost,
+                existing.action,
+              ),
           actorId: requester.id,
         });
       }
@@ -3394,6 +3417,13 @@ export class OrderLifecycleService {
      */
     engineLimit?: SaleExtraCostEngineLimit | null;
     /**
+     * (hwTkXsGi) Dvigatel yoqilgan, lekin javob bermadi (`SaleMarketPricing`
+     * `engineError`) — chegara standart narxdan olinadi va u qattiqroq.
+     * Undan oshsa 503: chegarani aniqlab bo'lmadi (400 bo'lsa market
+     * tasdig'ini qayta ijroda so'rov biznes xatosi deb `void` bo'lardi).
+     */
+    engineError?: string | null;
+    /**
      * Manager kuryer emas — unda tarif tushunchasi YO'Q (`tariff_*` = 0).
      * Tarifga asoslangan chegarani unga qo'llasak, maksimum 0 chiqib manager
      * umuman xarajat yoza olmasdi. Manager uchun nazorat boshqa: uning
@@ -3458,6 +3488,14 @@ export class OrderLifecycleService {
       tariffHome: home,
     });
     if (extraCost > max) {
+      if (params.engineError) {
+        throw new RpcException({
+          statusCode: 503,
+          message:
+            "Yetkazish narxi dvigateli javob bermadi — qo'shimcha xarajat " +
+            "chegarasini aniqlab bo'lmadi, birozdan so'ng qayta urinib ko'ring",
+        });
+      }
       this.badRequest(
         `Qo'shimcha xarajat maksimal ${max} so'm bo'lishi mumkin ` +
           `(markaz tarifi: ${center}, uy tarifi: ${home})`,
@@ -3486,9 +3524,20 @@ export class OrderLifecycleService {
       );
     }
 
-    const assignment = await this.lookup.getBranchAssignmentByUser(
-      String(requester.id),
-    );
+    // (hwTkXsGi) Filial ma'lumoti o'qilmasa — 503, «ruxsat yo'q» 403 emas:
+    // market tasdig'ini qayta ijroda 403 biznes xatosi (so'rov `void`),
+    // 503 esa infratuzilma (so'rov `pending` qoladi, qayta urinish mumkin).
+    const branchUnavailable = (): never => {
+      throw new RpcException({
+        statusCode: 503,
+        message:
+          "Filial ma'lumotini o'qib bo'lmadi — qo'shimcha xarajat ruxsatini " +
+          "tekshirib bo'lmadi, birozdan so'ng qayta urinib ko'ring",
+      });
+    };
+    const assignment = await this.lookup
+      .getBranchAssignmentByUserStrict(String(requester.id))
+      .catch(branchUnavailable);
     const courierBranchId = String(assignment?.branch_id ?? '').trim();
     if (!courierBranchId) {
       this.forbidden(
@@ -3507,14 +3556,24 @@ export class OrderLifecycleService {
       );
     }
 
-    const branchUsers = await this.lookup.getBranchUsers(courierBranchId);
-    const branchManagerAllows = branchUsers.some((item) => {
-      const role = String(item?.role ?? item?.user?.role ?? '')
-        .trim()
-        .toUpperCase();
-      return role === 'MANAGER' && Boolean(item?.user?.can_add_extra_cost);
-    });
+    const branchUsers = await this.lookup
+      .getBranchUsersStrict(courierBranchId)
+      .catch(branchUnavailable);
+    const managers = branchUsers.filter(
+      (item) =>
+        String(item?.role ?? item?.user?.role ?? '')
+          .trim()
+          .toUpperCase() === 'MANAGER',
+    );
+    const branchManagerAllows = managers.some((item) =>
+      Boolean(item?.user?.can_add_extra_cost),
+    );
     if (!branchManagerAllows) {
+      // branch-service menejer foydalanuvchisini identity'dan o'qiy olmasa
+      // `user: null` qaytaradi — ruxsat noma'lum, «berilmagan» emas.
+      if (managers.some((item) => !item?.user)) {
+        branchUnavailable();
+      }
       this.forbidden(
         "Bu filial manageriga qo'shimcha xarajat ruxsati berilmagan",
       );
@@ -3838,6 +3897,13 @@ export class OrderLifecycleService {
       holder_courier_id?: string | null;
     },
     post: { courier_id?: string | null } | null | undefined,
+    /**
+     * (hwTkXsGi) `logistics.post.find_by_id` javob bermadi — kuryer faqat
+     * pochta orqali biriktirilgan bo'lsa «biriktirilmagan» 400 noto'g'ri:
+     * market tasdig'ini qayta ijroda bu so'rovni `void` qilardi. 503 —
+     * infratuzilma, so'rov `pending` qoladi.
+     */
+    postLookupFailed = false,
   ): string {
     const isSuperAdmin = this.hasRole(requester, Roles.SUPERADMIN);
     const isCourier = this.hasRole(requester, Roles.COURIER);
@@ -3857,6 +3923,13 @@ export class OrderLifecycleService {
           orderCourierId === requesterId);
 
       if (!isAssignedToRequester) {
+        if (postLookupFailed) {
+          throw new RpcException({
+            statusCode: 503,
+            message:
+              "Pochta ma'lumotini o'qib bo'lmadi — birozdan so'ng qayta urinib ko'ring",
+          });
+        }
         this.badRequest('Buyurtma bu kuryerga biriktirilmagan');
       }
       return requesterId;
@@ -8928,15 +9001,25 @@ export class OrderLifecycleService {
      * `collectible` ga o'tkazildi (pastda).
      */
 
+    // (hwTkXsGi) Pochta o'qilmasa — kuryer tekshiruvi 503 beradi, 400 emas.
+    let postLookupFailed = false;
     const postRes = await rmqSend<{
       data?: { id: string; courier_id?: string | null };
     }>(
       this.logisticsClient,
       { cmd: 'logistics.post.find_by_id' },
       { id: String(order.post_id) },
-    ).catch(() => ({ data: undefined }));
+    ).catch(() => {
+      postLookupFailed = true;
+      return { data: undefined };
+    });
     const post = postRes?.data;
-    const actorCourierId = this.resolveActorCourierId(requester, order, post);
+    const actorCourierId = this.resolveActorCourierId(
+      requester,
+      order,
+      post,
+      postLookupFailed,
+    );
     const isManagerRequester =
       this.hasRole(requester, Roles.MANAGER) &&
       !this.hasRole(requester, Roles.COURIER);
@@ -9081,6 +9164,7 @@ export class OrderLifecycleService {
         // KmWO9gTA DARVOZA 2: narx dvigateldan bo'lsa chegara tarif
         // jadvali / sozlamadan (kuryer tariflari farqiga tayanmaydi).
         engineLimit: this.saleExtraCostEngineLimit(marketPricing),
+        engineError: marketPricing.engineError,
         isManager:
           this.hasRole(requester, Roles.MANAGER) &&
           !this.hasRole(requester, Roles.COURIER),
@@ -9621,15 +9705,25 @@ export class OrderLifecycleService {
       this.badRequest('Buyurtma hech qaysi pochtada emas');
     }
 
+    // (hwTkXsGi) Pochta o'qilmasa — kuryer tekshiruvi 503 beradi, 400 emas.
+    let postLookupFailed = false;
     const postRes = await rmqSend<{
       data?: { id: string; courier_id?: string | null };
     }>(
       this.logisticsClient,
       { cmd: 'logistics.post.find_by_id' },
       { id: String(order.post_id) },
-    ).catch(() => ({ data: undefined }));
+    ).catch(() => {
+      postLookupFailed = true;
+      return { data: undefined };
+    });
     const post = postRes?.data;
-    const actorCourierId = this.resolveActorCourierId(requester, order, post);
+    const actorCourierId = this.resolveActorCourierId(
+      requester,
+      order,
+      post,
+      postLookupFailed,
+    );
 
     const extraCost = this.wholeExtraCost(dto?.extraCost);
     const totalPrice = Number(order.total_price ?? 0);
@@ -10544,15 +10638,25 @@ export class OrderLifecycleService {
       dto?.oldItemCollected,
     );
 
+    // (hwTkXsGi) Pochta o'qilmasa — kuryer tekshiruvi 503 beradi, 400 emas.
+    let postLookupFailed = false;
     const postRes = await rmqSend<{
       data?: { id: string; courier_id?: string | null };
     }>(
       this.logisticsClient,
       { cmd: 'logistics.post.find_by_id' },
       { id: String(order.post_id) },
-    ).catch(() => ({ data: undefined }));
+    ).catch(() => {
+      postLookupFailed = true;
+      return { data: undefined };
+    });
     const post = postRes?.data;
-    const actorCourierId = this.resolveActorCourierId(requester, order, post);
+    const actorCourierId = this.resolveActorCourierId(
+      requester,
+      order,
+      post,
+      postLookupFailed,
+    );
     this.assertManagerSaleNotCourierHeld(isManagerRequester, order);
 
     if (!dto?.order_item_info?.length) {
@@ -10698,6 +10802,7 @@ export class OrderLifecycleService {
         // KmWO9gTA DARVOZA 2: narx dvigateldan bo'lsa chegara tarif
         // jadvali / sozlamadan (kuryer tariflari farqiga tayanmaydi).
         engineLimit: this.saleExtraCostEngineLimit(marketPricing),
+        engineError: marketPricing.engineError,
         isManager:
           this.hasRole(requester, Roles.MANAGER) &&
           !this.hasRole(requester, Roles.COURIER),

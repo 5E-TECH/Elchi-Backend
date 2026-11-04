@@ -314,7 +314,14 @@ export class OrderLookupService implements OnModuleInit {
     return districtId || null;
   }
 
-  async getBranchUsers(branchId: string) {
+  /**
+   * Filial foydalanuvchilari — xato YUTILMAYDI (hwTkXsGi). Yagona chaqiruvchi
+   * `assertCanAddExtraCost`: ilgari transport xatosi `[]` bo'lib qaytib
+   * "manager ruxsati berilmagan" 403 ga aylanardi — market tasdig'ini qayta
+   * ijroda bu biznes xatosi deb olinib, so'rov abadiy `void` bo'lardi.
+   * Endi xato chaqiruvchiga uzatiladi (u 503 qiladi), so'rov `pending` qoladi.
+   */
+  async getBranchUsersStrict(branchId: string) {
     const response = await rmqSend<{
       data?: Array<{
         user_id?: string | null;
@@ -333,7 +340,7 @@ export class OrderLookupService implements OnModuleInit {
         requester: { id: 'system', roles: ['superadmin'] },
       },
       { attachRequestId: false, retries: 1 },
-    ).catch(() => ({ data: [] }));
+    );
 
     return response?.data ?? [];
   }

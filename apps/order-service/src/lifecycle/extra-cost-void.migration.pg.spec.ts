@@ -202,7 +202,9 @@ type Row = {
         await order(4, 'waiting');
         ids.cState = await approval({ order: 4, status: 'approved' });
         // Bekor qilishda faqat `cancelled` ga o'tish hisoblanadi: sotuv
-        // o'tishi (keyin rollback) bekor so'rovini «bajarilgan» qilmaydi.
+        // o'tishi (keyin rollback) bekor so'rovini «bajarilgan» qilmaydi —
+        // lekin holat so'rovdan keyin o'zgargan: eskirgan, `void` (qayta
+        // ochilsa `createdAt` yangilanib, darvoza o'tib ketardi).
         await order(5, 'waiting');
         ids.cStateCancel = await approval({
           order: 5,
@@ -245,6 +247,44 @@ type Row = {
           status: 'approved',
           createdAt: new Date('2026-11-02T10:00:00Z'),
         });
+
+        // 3: bekor qilish C holati, holat o'zgarmagan — qayta pending.
+        await order(11, 'waiting');
+        ids.cStateCancelFresh = await approval({
+          order: 11,
+          status: 'approved',
+          action: 'cancel',
+        });
+        // 3a: sotuv C holati, keyin filialga qaytib qayta jo'natilgan — void.
+        await order(12, 'waiting');
+        ids.cStateRedispatched = await approval({
+          order: 12,
+          status: 'approved',
+        });
+        await tracking(
+          12,
+          'waiting',
+          'on the road',
+          new Date('2026-11-01T12:00:00Z'),
+        );
+        await tracking(
+          12,
+          'on the road',
+          'waiting',
+          new Date('2026-11-01T13:00:00Z'),
+        );
+        // Tegilmaydi (darvoza ham hisoblamaydi): from = to yozuvi.
+        await order(13, 'waiting');
+        ids.cStateSameStatusRow = await approval({
+          order: 13,
+          status: 'approved',
+        });
+        await tracking(
+          13,
+          'waiting',
+          'waiting',
+          new Date('2026-11-01T12:00:00Z'),
+        );
 
         // 4-band: bitta buyurtmada bir nechta ochiq so'rov.
         await order(10, 'waiting');
@@ -290,7 +330,12 @@ type Row = {
       });
 
       it('⭐ C holatidagi approved → pending: qaror maydonlari tozalanadi, createdAt yangilanadi', () => {
-        for (const key of ['cState', 'cStateCancel', 'newerC']) {
+        for (const key of [
+          'cState',
+          'cStateCancelFresh',
+          'cStateSameStatusRow',
+          'newerC',
+        ]) {
           const row = after[ids[key]];
           expect(row).toMatchObject({
             status: 'pending',
@@ -304,6 +349,19 @@ type Row = {
           expect(row.createdAt.getTime()).toBeGreaterThan(
             before[ids[key]].createdAt.getTime(),
           );
+        }
+      });
+
+      it('⭐ C holati, lekin so‘rovdan keyin buyurtma holati o‘zgargan — qayta ochilmaydi, void (qaror maydonlari, createdAt saqlanadi)', () => {
+        for (const key of ['cStateCancel', 'cStateRedispatched']) {
+          expect(after[ids[key]]).toMatchObject({
+            status: 'void',
+            closed_reason:
+              "So'rov ochilgandan keyin buyurtma holati o'zgargan — eski tasdiq bajarilmagan edi, qayta ochilmadi",
+            closed_at: expect.any(Date),
+            decided_by_user_id: before[ids[key]].decided_by_user_id,
+            createdAt: before[ids[key]].createdAt,
+          });
         }
       });
 

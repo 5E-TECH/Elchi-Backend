@@ -84,7 +84,10 @@ describe('OrderServiceService extra cost approval flow', () => {
       getBranchAssignmentByUser: jest
         .fn()
         .mockResolvedValue({ branch_id: '77' }),
-      getBranchUsers: jest.fn().mockResolvedValue([]),
+      getBranchAssignmentByUserStrict: jest
+        .fn()
+        .mockResolvedValue({ branch_id: '77' }),
+      getBranchUsersStrict: jest.fn().mockResolvedValue([]),
       getHqBranchId: jest.fn().mockResolvedValue('1'),
       getIntegrationById: jest.fn().mockResolvedValue(null),
       getDefaultDistrictId: jest.fn().mockResolvedValue(null),

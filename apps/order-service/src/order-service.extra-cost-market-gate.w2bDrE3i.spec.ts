@@ -76,7 +76,10 @@ describe('w2bDrE3i — market qo`shimcha xarajat darvozasi', () => {
       getBranchAssignmentByUser: jest
         .fn()
         .mockResolvedValue({ branch_id: '77' }),
-      getBranchUsers: jest.fn().mockResolvedValue([]),
+      getBranchAssignmentByUserStrict: jest
+        .fn()
+        .mockResolvedValue({ branch_id: '77' }),
+      getBranchUsersStrict: jest.fn().mockResolvedValue([]),
       getHqBranchId: jest.fn().mockResolvedValue('1'),
     };
     const service = new OrderLifecycleService(

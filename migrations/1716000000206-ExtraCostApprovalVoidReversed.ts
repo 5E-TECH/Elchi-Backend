@@ -16,10 +16,14 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  *     shu amalning o'tishi yo'q VA finance'da shu tasdiq tokeni
  *     (`req:extra-cost-approval:<id>`) bilan kassa yozuvi yo'q — aks holda
  *     qayta tasdiq o'sha tokenni qayta ishlatib, finance kassa oyoqlarini
- *     jimgina tashlab yuborardi. Shu buyurtmada boshqa ochiq so'rov bo'lsa —
- *     kuryerning keyingi niyati ustun, eskisi `void`. Qaytgan so'rov yangi
- *     ochilgandek: `createdAt = now()` (avtomatik tasdiq muddati va darvoza
- *     shundan sanaladi), qaror maydonlari tozalanadi.
+ *     jimgina tashlab yuborardi. So'rovdan keyin buyurtma holati o'zgargan
+ *     bo'lsa (masalan sotilib, orqaga qaytarilgan) — qayta ochilmaydi, `void`:
+ *     kodning tasdiq darvozasi ham shunday so'rovni yopadi, qayta ochish esa
+ *     `createdAt` ni yangilab, o'sha izni o'chirib yuborardi (eski amal eski
+ *     xarajat bilan qayta bajarilardi). Shu buyurtmada boshqa ochiq so'rov
+ *     bo'lsa — kuryerning keyingi niyati ustun, eskisi `void`. Qaytgan so'rov
+ *     yangi ochilgandek: `createdAt = now()` (avtomatik tasdiq muddati va
+ *     darvoza shundan sanaladi), qaror maydonlari tozalanadi.
  *  4. Bitta buyurtmada bir nechta `pending` — eng yangisi qoladi, qolgani `void`.
  *  5. Partial unique indeks: bitta buyurtmada bittadan ortiq ochiq so'rov yo'q.
  *
@@ -82,7 +86,13 @@ export class ExtraCostApprovalVoidReversed1716000000206 implements MigrationInte
          )`
       : '';
     const unexecuted = (await queryRunner.query(`
-      SELECT a."id"::text AS "id"
+      SELECT a."id"::text AS "id",
+             EXISTS (
+               SELECT 1 FROM "order_schema"."order_tracking" t2
+                WHERE t2."order_id" = a."order_id"
+                  AND t2."created_at" > a."createdAt"
+                  AND t2."from_status"::text IS DISTINCT FROM t2."to_status"::text
+             ) AS "stale"
         FROM "order_schema"."order_extra_cost_approvals" a
         JOIN "order_schema"."orders" o
           ON o."id" = a."order_id"
@@ -103,12 +113,33 @@ export class ExtraCostApprovalVoidReversed1716000000206 implements MigrationInte
               )
          )
          ${noFinanceLegs}
-    `)) as Array<{ id: string }>;
-    const unexecutedIds = unexecuted.map((row) => row.id);
+    `)) as Array<{ id: string; stale: boolean }>;
+    // 3a. So'rovdan keyin buyurtma holati o'zgargan — eskirgan, `void`
+    // (darvoza `extraCostStatusChangedSince` bilan bir xil qoida).
+    const staleIds = unexecuted.filter((row) => row.stale).map((row) => row.id);
+    const unexecutedIds = unexecuted
+      .filter((row) => !row.stale)
+      .map((row) => row.id);
+    let voidedStale: unknown = [];
+    if (staleIds.length) {
+      voidedStale = await queryRunner.query(
+        `
+        UPDATE "order_schema"."order_extra_cost_approvals" a
+           SET "status" = 'void',
+               "closed_reason" = 'So''rov ochilgandan keyin buyurtma holati o''zgargan — eski tasdiq bajarilmagan edi, qayta ochilmadi',
+               "closed_at" = now(),
+               "updatedAt" = now()
+         WHERE a."id" = ANY ($1::bigint[])
+           AND a."status" = 'approved'
+        RETURNING a."id"
+        `,
+        [staleIds],
+      );
+    }
     let voidedSuperseded: unknown = [];
     let reopened: unknown = [];
     if (unexecutedIds.length) {
-      // 3a. Shu buyurtmada boshqa ochiq so'rov (yoki keyinroq ochilgan
+      // 3b. Shu buyurtmada boshqa ochiq so'rov (yoki keyinroq ochilgan
       // boshqa C holati) bor — eng yangi niyat qoladi, eskisi `void`.
       voidedSuperseded = await queryRunner.query(
         `
@@ -135,6 +166,7 @@ export class ExtraCostApprovalVoidReversed1716000000206 implements MigrationInte
         `,
         [unexecutedIds],
       );
+      // 3c. Qolgani — qayta `pending`, market qayta tasdiqlaydi.
       reopened = await queryRunner.query(
         `
         UPDATE "order_schema"."order_extra_cost_approvals" a
@@ -182,6 +214,7 @@ export class ExtraCostApprovalVoidReversed1716000000206 implements MigrationInte
 
     console.log(
       `[migration 206] extra-cost: void (buyurtma kutilmoqda emas) ${count(voidedNotWaiting)}, ` +
+        `void (eskirgan, bajarilmagan tasdiq) ${count(voidedStale)}, ` +
         `void (almashtirilgan, bajarilmagan tasdiq) ${count(voidedSuperseded)}, ` +
         `qayta pending (tasdiq yozilib sotuv yo'q) ${count(reopened)}, ` +
         `void (takroriy ochiq so'rov) ${count(voidedDuplicates)}`,

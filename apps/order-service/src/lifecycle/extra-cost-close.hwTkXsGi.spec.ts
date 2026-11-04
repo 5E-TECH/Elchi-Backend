@@ -263,10 +263,297 @@ describe('hwTkXsGi — orqaga qaytarishda', () => {
     );
 
     expect(merged).toBe(1);
+    // Qoldiqlar qulf bilan o'qiladi (buyurtma → so'rov tartibi, deadlock yo'q).
+    expect(orderRepo.find).toHaveBeenCalledWith(
+      expect.objectContaining({ lock: { mode: 'pessimistic_write' } }),
+    );
     expect(table.row('7')).toMatchObject({
       status: 'void',
       closed_reason: 'Buyurtma orqaga qaytarildi',
     });
     expect(table.row('8')!.status).toBe('pending');
+  });
+});
+
+/**
+ * (hwTkXsGi, ko'rib chiqish) Market tasdig'ini qayta ijroda biznes xatosi
+ * (400/403/404/409) so'rovni `void` qiladi, infratuzilma xatosi esa `pending`
+ * qoldiradi. Lookup'lar RPC xatosini yutib, uni «ruxsat yo'q» 403 / «biriktirilmagan»
+ * 400 / standart chegara 400 ga aylantirmasligi kerak — endi 503.
+ */
+describe('hwTkXsGi — infratuzilma xatosi biznes xatosi bo‘lib ko‘rinmaydi', () => {
+  type Infra = {
+    assertCanAddExtraCost: (params: {
+      actor: { can_add_extra_cost?: boolean | null } | undefined;
+      requester: { id: string; roles?: string[]; branch_id?: string | null };
+      order: { branch_id?: string | null };
+    }) => Promise<void>;
+    assertExtraCostWithinLimit: (params: {
+      extraCost: number;
+      mode: 'sell' | 'cancel';
+      whereDeliver: string;
+      tariffCenter: number;
+      tariffHome: number;
+      engineError?: string | null;
+    }) => void;
+    resolveActorCourierId: (
+      requester: { id: string; roles?: string[] },
+      order: Row,
+      post: Row | undefined,
+      postLookupFailed?: boolean,
+    ) => string;
+    settleFailedExtraCostReplay: (
+      approval: Row,
+      error: unknown,
+      actorId: string | null,
+    ) => Promise<never>;
+    lockWaitingOrder: (tx: unknown, orderId: string) => Promise<Row>;
+  };
+
+  const COURIER = { id: '289', roles: ['courier'], branch_id: '77' };
+  const ORDER = { branch_id: '77' };
+  const timeout = () => Promise.reject(new Error('Timeout has occurred'));
+
+  function infra(lookup: Row = {}) {
+    const svc = Object.create(OrderLifecycleService.prototype) as Infra &
+      Record<string, unknown>;
+    Object.assign(svc, {
+      logger: { warn: jest.fn(), log: jest.fn(), error: jest.fn() },
+      lookup,
+    });
+    return svc;
+  }
+
+  const statusOf = async (promise: Promise<unknown>) => {
+    const error = await promise.then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(error).toBeInstanceOf(RpcException);
+    return (error as RpcException).getError() as {
+      statusCode: number;
+      message: string;
+    };
+  };
+
+  it('⭐ filial biriktiruvi o‘qilmadi (timeout) — 503, 403 emas', async () => {
+    const svc = infra({
+      getBranchAssignmentByUserStrict: jest.fn(timeout),
+      getBranchUsersStrict: jest.fn(),
+    });
+
+    const error = await statusOf(
+      svc.assertCanAddExtraCost({
+        actor: { can_add_extra_cost: false },
+        requester: COURIER,
+        order: ORDER,
+      }),
+    );
+
+    expect(error.statusCode).toBe(503);
+    expect(error.message).toMatch(/Filial ma'lumotini o'qib bo'lmadi/);
+  });
+
+  it('⭐ filial foydalanuvchilari o‘qilmadi — 503', async () => {
+    const svc = infra({
+      getBranchAssignmentByUserStrict: jest
+        .fn()
+        .mockResolvedValue({ branch_id: '77' }),
+      getBranchUsersStrict: jest.fn(timeout),
+    });
+
+    const error = await statusOf(
+      svc.assertCanAddExtraCost({
+        actor: undefined,
+        requester: COURIER,
+        order: ORDER,
+      }),
+    );
+
+    expect(error.statusCode).toBe(503);
+  });
+
+  it("⭐ menejer identity'dan o‘qilmagan (`user: null`) — ruxsat noma’lum, 503", async () => {
+    const svc = infra({
+      getBranchAssignmentByUserStrict: jest
+        .fn()
+        .mockResolvedValue({ branch_id: '77' }),
+      getBranchUsersStrict: jest
+        .fn()
+        .mockResolvedValue([{ role: 'manager', user: null }]),
+    });
+
+    const error = await statusOf(
+      svc.assertCanAddExtraCost({
+        actor: undefined,
+        requester: COURIER,
+        order: ORDER,
+      }),
+    );
+
+    expect(error.statusCode).toBe(503);
+  });
+
+  it('haqiqiy biznes holatlari o‘zgarmagan: biriktirilmagan — 403, menejer ruxsat bermagan — 403, ruxsat bor — o‘tadi', async () => {
+    const unassigned = infra({
+      getBranchAssignmentByUserStrict: jest.fn().mockResolvedValue(null),
+    });
+    expect(
+      (
+        await statusOf(
+          unassigned.assertCanAddExtraCost({
+            actor: undefined,
+            requester: COURIER,
+            order: ORDER,
+          }),
+        )
+      ).statusCode,
+    ).toBe(403);
+
+    const branch = (canAdd: boolean) =>
+      infra({
+        getBranchAssignmentByUserStrict: jest
+          .fn()
+          .mockResolvedValue({ branch_id: '77' }),
+        getBranchUsersStrict: jest.fn().mockResolvedValue([
+          { role: 'courier', user: { id: '289' } },
+          { role: 'manager', user: { id: '5', can_add_extra_cost: canAdd } },
+        ]),
+      });
+    expect(
+      (
+        await statusOf(
+          branch(false).assertCanAddExtraCost({
+            actor: undefined,
+            requester: COURIER,
+            order: ORDER,
+          }),
+        )
+      ).statusCode,
+    ).toBe(403);
+    await expect(
+      branch(true).assertCanAddExtraCost({
+        actor: undefined,
+        requester: COURIER,
+        order: ORDER,
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it('⭐ narx dvigateli javob bermagan va standart chegaradan oshgan — 503; dvigatel xatosiz — avvalgidek 400', () => {
+    const svc = infra();
+    const limit = (engineError: string | null) => () =>
+      svc.assertExtraCostWithinLimit({
+        extraCost: 9000,
+        mode: 'sell',
+        whereDeliver: 'center',
+        tariffCenter: 15000,
+        tariffHome: 20000,
+        engineError,
+      });
+
+    const unavailable = (() => {
+      try {
+        limit('timeout')();
+      } catch (e) {
+        return (e as RpcException).getError() as { statusCode: number };
+      }
+    })();
+    expect(unavailable).toMatchObject({ statusCode: 503 });
+
+    const business = (() => {
+      try {
+        limit(null)();
+      } catch (e) {
+        return (e as RpcException).getError() as { statusCode: number };
+      }
+    })();
+    expect(business).toMatchObject({ statusCode: 400 });
+  });
+
+  it('⭐ pochta o‘qilmagan va kuryer faqat pochta orqali bog‘langan — 503; o‘qilgan — 400; buyurtmada biriktirilgan bo‘lsa pochta kerak emas', () => {
+    const svc = infra();
+    const failed = (() => {
+      try {
+        svc.resolveActorCourierId(
+          COURIER,
+          { courier_id: null, holder_courier_id: null },
+          undefined,
+          true,
+        );
+      } catch (e) {
+        return (e as RpcException).getError() as { statusCode: number };
+      }
+    })();
+    expect(failed).toMatchObject({ statusCode: 503 });
+
+    expect(() =>
+      svc.resolveActorCourierId(
+        COURIER,
+        { courier_id: null, holder_courier_id: null },
+        { courier_id: '999' },
+      ),
+    ).toThrow(RpcException);
+
+    expect(
+      svc.resolveActorCourierId(
+        COURIER,
+        { courier_id: null, holder_courier_id: '289' },
+        undefined,
+        true,
+      ),
+    ).toBe('289');
+  });
+
+  it('⭐ qayta ijroda 503 — so‘rov pending qoladi, xato o‘zgarmay qaytadi; 403 — void + 409', async () => {
+    const table = extraCostApprovalTable([request()]);
+    const svc = infra();
+    Object.assign(svc, { extraCostApprovalRepo: table });
+    const unavailable = new RpcException({
+      statusCode: 503,
+      message: "Filial ma'lumotini o'qib bo'lmadi",
+    });
+
+    await expect(
+      svc.settleFailedExtraCostReplay(request(), unavailable, '501'),
+    ).rejects.toBe(unavailable);
+    expect(table.row('7')!.status).toBe('pending');
+
+    const closed = await svc
+      .settleFailedExtraCostReplay(
+        request(),
+        new RpcException({
+          statusCode: 403,
+          message: "Bu filial manageriga qo'shimcha xarajat ruxsati berilmagan",
+        }),
+        '501',
+      )
+      .catch((e: unknown) => e);
+    expect(closed).toBeInstanceOf(ExtraCostRequestClosedError);
+    expect(table.row('7')).toMatchObject({
+      status: 'void',
+      closed_reason:
+        "amalni bajarib bo'lmadi: Bu filial manageriga qo'shimcha xarajat ruxsati berilmagan",
+    });
+  });
+
+  it('o‘chirilgan buyurtma (qo‘shib yuborilgan qisman sotuv qoldig‘i) — sotuv / so‘rov qulfi 400', async () => {
+    const svc = infra();
+    const tx = {
+      getRepository: () => ({
+        findOne: jest.fn().mockResolvedValue({
+          id: '7101',
+          status: Order_status.WAITING,
+          isDeleted: true,
+        }),
+      }),
+    };
+
+    const error = await statusOf(svc.lockWaitingOrder(tx, '7101'));
+
+    expect(error).toEqual({
+      statusCode: 400,
+      message: 'Buyurtma topilmadi yoki kutilmoqda (waiting) holatida emas',
+    });
   });
 });

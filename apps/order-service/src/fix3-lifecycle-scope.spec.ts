@@ -989,7 +989,14 @@ describe('RBAC-05 (himoya chuqurligi) — sotuv qaydisiz "sotilgan" buyurtma', (
  * `order-service.extra-cost-approval.spec.ts` dagi kabi haqiqiy servis
  * (konstruktor orqali) — sotuv/bekor tasdiq so'rovigacha boradi.
  */
-function makeApprovalService(pendingApproval: Row | null) {
+/**
+ * `changedTo` — so'rov ochilgandan keyin buyurtma holati o'zgarganmi
+ * (`order_tracking`; hwTkXsGi darvozasi), `null` — o'zgarmagan.
+ */
+function makeApprovalService(
+  pendingApproval: Row | null,
+  changedTo: string | null = null,
+) {
   const order = {
     id: '7001',
     status: Order_status.WAITING,
@@ -1014,7 +1021,7 @@ function makeApprovalService(pendingApproval: Row | null) {
       : [],
   );
   const dataSource = extraCostDataSource(
-    extraCostManager({ table: extraCostApprovalRepo, orderRepo }),
+    extraCostManager({ table: extraCostApprovalRepo, orderRepo, changedTo }),
     extraCostApprovalRepo,
   );
   const lookup = {
@@ -1050,7 +1057,10 @@ function makeApprovalService(pendingApproval: Row | null) {
     ensureBranchCashbox: jest.fn().mockResolvedValue(undefined),
     resolveBranchShare: jest.fn().mockResolvedValue(0),
     getBranchAssignmentByUser: jest.fn().mockResolvedValue({ branch_id: '77' }),
-    getBranchUsers: jest.fn().mockResolvedValue([]),
+    getBranchAssignmentByUserStrict: jest
+      .fn()
+      .mockResolvedValue({ branch_id: '77' }),
+    getBranchUsersStrict: jest.fn().mockResolvedValue([]),
     getHqBranchId: jest.fn().mockResolvedValue(HQ_ID),
   };
   const service = new OrderLifecycleService(
@@ -1202,6 +1212,55 @@ describe('M3 — kutilayotgan tasdiq faqat AYNAN shu so`rov bo`lsa qaytariladi',
     expect(res.statusCode).toBe(202);
     expect(res.data.approval.id).toBe('approval-1');
     expect(h.save).not.toHaveBeenCalled();
+  });
+
+  it('⭐ hwTkXsGi: aynan shu so`rov, lekin ochilgandan keyin buyurtma holati o`zgargan — eski void (sabab bilan), yangisi ochiladi', async () => {
+    const h = makeApprovalService(
+      pending({
+        action: 'sell',
+        amount: 12000,
+        operation_payload: { extraCost: 12000 },
+      }),
+      Order_status.ON_THE_ROAD,
+    );
+
+    const res = (await h.service.sellOrder(APPROVAL_COURIER, '7001', {
+      extraCost: 12000,
+    })) as ApprovalResponse;
+
+    expect(res.statusCode).toBe(202);
+    expect(res.data.approval.id).not.toBe('approval-1');
+    expect(h.states()).toEqual([
+      ['sell', 'void'],
+      ['sell', 'pending'],
+    ]);
+    expect(h.table.row('approval-1')!.closed_reason).toBe(
+      "so'rov ochilgandan keyin buyurtma holati o'zgargan (on the road)",
+    );
+  });
+
+  it('⭐ hwTkXsGi: aynan shu so`rovni BOSHQA foydalanuvchi yuborsa — eskisi qaytarilmaydi (qayta ijro egasi nomidan bo`lardi), void + yangi', async () => {
+    const h = makeApprovalService(
+      pending({
+        action: 'sell',
+        amount: 12000,
+        operation_payload: { extraCost: 12000 },
+        requested_by_user_id: '201',
+        requested_by_role: 'manager',
+      }),
+    );
+
+    const res = (await h.service.sellOrder(APPROVAL_COURIER, '7001', {
+      extraCost: 12000,
+    })) as ApprovalResponse;
+
+    expect(res.statusCode).toBe(202);
+    expect(res.data.approval.id).not.toBe('approval-1');
+    expect(h.states()).toEqual([
+      ['sell', 'void'],
+      ['sell', 'pending'],
+    ]);
+    expect(h.table.rows[1]).toMatchObject({ requested_by_user_id: '301' });
   });
 
   it('qisman sotuvda yangi narx farq qilsa — yangi so`rov (eski narx bilan tasdiqlanmaydi)', async () => {
