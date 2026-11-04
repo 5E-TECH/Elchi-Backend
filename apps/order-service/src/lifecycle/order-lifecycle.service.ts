@@ -110,7 +110,10 @@ import {
   ScannedExternalBatch,
   toScannedBatch,
 } from '../lookup/external-batch-counts';
-import { OrderLookupService } from '../lookup/order-lookup.service';
+import {
+  OrderLookupService,
+  rpcErrorStatusOf,
+} from '../lookup/order-lookup.service';
 import {
   isIntegrationOrderCreate,
   resolveOrderCreateContent,
@@ -250,6 +253,13 @@ interface SaleMarketPricing {
   engineActive: boolean;
   /** Dvigatel yoqilgan, lekin javob bermagan — sabab (standart narx olindi). */
   engineError: string | null;
+  /**
+   * (hwTkXsGi) Dvigatel INFRATUZILMA sababli javob bermadi (timeout, 5xx) —
+   * standart narx bilan chiqqan 400 (chegara, tarif ulushlarni qoplamaydi)
+   * aslida aniqlab bo'lmagan narx: 503 bo'ladi. Dvigatelning aniq 4xx javobi
+   * (tarif / sozlama yo'q) — `false`, avvalgi 400 qoladi.
+   */
+  engineUnavailable: boolean;
 }
 
 /** KmWO9gTA — DARVOZA 2 ning dvigatel rejimidagi manbasi. */
@@ -1567,11 +1577,13 @@ export class OrderLifecycleService {
     const standardOnly = (
       engineActive: boolean,
       engineError: string | null,
+      engineUnavailable = false,
     ): SaleMarketPricing => ({
       resolution: resolveOrderTariffDetailed(tariffInput),
       quote: null,
       engineActive,
       engineError,
+      engineUnavailable,
     });
     if (order.market_tariff != null || !market) {
       return standardOnly(false, null);
@@ -1609,7 +1621,12 @@ export class OrderLifecycleService {
       this.logger.warn(
         `KmWO9gTA: order ${order.id} — yetkazish narxi dvigateli javob bermadi, standart narx olindi: ${message}`,
       );
-      return standardOnly(true, message);
+      const status = rpcErrorStatusOf(error);
+      return standardOnly(
+        true,
+        message,
+        !(status !== null && status >= 400 && status < 500),
+      );
     }
     return {
       resolution: resolveOrderTariffDetailed({
@@ -1620,6 +1637,7 @@ export class OrderLifecycleService {
       quote,
       engineActive: true,
       engineError: null,
+      engineUnavailable: false,
     };
   }
 
@@ -1771,6 +1789,11 @@ export class OrderLifecycleService {
     marketTariff: number;
     courierShare: number;
     branchShare: number;
+    /**
+     * (hwTkXsGi) Dvigatel infratuzilma sababli javob bermagan — tarif
+     * standart narxdan (ulushlar tagisiz) olingan: kamomad aniq emas, 503.
+     */
+    engineUnavailable?: boolean;
   }): void {
     const shortfall = computeTariffShortfall(
       params.marketTariff,
@@ -1779,6 +1802,14 @@ export class OrderLifecycleService {
     );
     if (shortfall <= 0) {
       return;
+    }
+    if (params.engineUnavailable) {
+      throw new RpcException({
+        statusCode: 503,
+        message:
+          'Yetkazish narxi dvigateli javob bermadi — market tarifini aniqlab ' +
+          "bo'lmadi, birozdan so'ng qayta urinib ko'ring",
+      });
     }
     const branchPart =
       params.branchShare > 0
@@ -3417,12 +3448,13 @@ export class OrderLifecycleService {
      */
     engineLimit?: SaleExtraCostEngineLimit | null;
     /**
-     * (hwTkXsGi) Dvigatel yoqilgan, lekin javob bermadi (`SaleMarketPricing`
-     * `engineError`) — chegara standart narxdan olinadi va u qattiqroq.
-     * Undan oshsa 503: chegarani aniqlab bo'lmadi (400 bo'lsa market
-     * tasdig'ini qayta ijroda so'rov biznes xatosi deb `void` bo'lardi).
+     * (hwTkXsGi) Dvigatel infratuzilma sababli javob bermadi
+     * (`SaleMarketPricing.engineUnavailable`) — chegara standart narxdan
+     * olinadi va u qattiqroq. Undan oshsa 503: chegarani aniqlab bo'lmadi
+     * (400 bo'lsa market tasdig'ini qayta ijroda so'rov biznes xatosi deb
+     * `void` bo'lardi).
      */
-    engineError?: string | null;
+    engineUnavailable?: boolean;
     /**
      * Manager kuryer emas — unda tarif tushunchasi YO'Q (`tariff_*` = 0).
      * Tarifga asoslangan chegarani unga qo'llasak, maksimum 0 chiqib manager
@@ -3488,7 +3520,7 @@ export class OrderLifecycleService {
       tariffHome: home,
     });
     if (extraCost > max) {
-      if (params.engineError) {
+      if (params.engineUnavailable) {
         throw new RpcException({
           statusCode: 503,
           message:
@@ -3570,9 +3602,19 @@ export class OrderLifecycleService {
     );
     if (!branchManagerAllows) {
       // branch-service menejer foydalanuvchisini identity'dan o'qiy olmasa
-      // `user: null` qaytaradi — ruxsat noma'lum, «berilmagan» emas.
-      if (managers.some((item) => !item?.user)) {
-        branchUnavailable();
+      // `user: null` qaytaradi — identity javob bermagan bo'lishi ham,
+      // menejer o'chirilgan (eski filial yozuvi qolgan) bo'lishi ham mumkin.
+      // Ajratish uchun identity'dan to'g'ridan-to'g'ri so'raladi: o'chirilgan
+      // — e'tiborsiz; javob yo'q — 503; ruxsati bor — o'tadi.
+      for (const item of managers) {
+        const userId = String(item?.user_id ?? '').trim();
+        if (item?.user || !userId) continue;
+        const manager = await this.lookup
+          .getUserByIdStrict(userId)
+          .catch(branchUnavailable);
+        if (manager?.can_add_extra_cost) {
+          return;
+        }
       }
       this.forbidden(
         "Bu filial manageriga qo'shimcha xarajat ruxsati berilmagan",
@@ -3886,6 +3928,35 @@ export class OrderLifecycleService {
       delete sanitized.source;
     }
     return sanitized;
+  }
+
+  /**
+   * Kuryer tekshiruvi uchun buyurtma pochtasi (hwTkXsGi). Xato yutiladi —
+   * pochtasiz ham buyurtmadagi biriktiruv bo'yicha tekshirish mumkin; lekin
+   * timeout / 5xx `postLookupFailed` bo'ladi (kuryer faqat pochta orqali
+   * bog'langan bo'lsa — 503). Aniq 4xx (masalan «Pochta topilmadi») —
+   * biznes javobi, infra emas.
+   */
+  private async readOrderPost(postId: string | null | undefined): Promise<{
+    post: { id: string; courier_id?: string | null } | undefined;
+    postLookupFailed: boolean;
+  }> {
+    try {
+      const response = await rmqSend<{
+        data?: { id: string; courier_id?: string | null };
+      }>(
+        this.logisticsClient,
+        { cmd: 'logistics.post.find_by_id' },
+        { id: String(postId) },
+      );
+      return { post: response?.data, postLookupFailed: false };
+    } catch (error) {
+      const status = rpcErrorStatusOf(error);
+      return {
+        post: undefined,
+        postLookupFailed: status === null || status >= 500,
+      };
+    }
   }
 
   private resolveActorCourierId(
@@ -9002,18 +9073,7 @@ export class OrderLifecycleService {
      */
 
     // (hwTkXsGi) Pochta o'qilmasa — kuryer tekshiruvi 503 beradi, 400 emas.
-    let postLookupFailed = false;
-    const postRes = await rmqSend<{
-      data?: { id: string; courier_id?: string | null };
-    }>(
-      this.logisticsClient,
-      { cmd: 'logistics.post.find_by_id' },
-      { id: String(order.post_id) },
-    ).catch(() => {
-      postLookupFailed = true;
-      return { data: undefined };
-    });
-    const post = postRes?.data;
+    const { post, postLookupFailed } = await this.readOrderPost(order.post_id);
     const actorCourierId = this.resolveActorCourierId(
       requester,
       order,
@@ -9132,7 +9192,12 @@ export class OrderLifecycleService {
     // Tarif qoplamasa sotuv shu yerda to'xtaydi — tranzaksiyadan OLDIN, ya'ni
     // hech bir kassa oyog'i yozilmaydi. Dvigatel narxi floor bilan
     // ko'tarilgan — bu yerdan doim o'tadi (KmWO9gTA DARVOZA 1).
-    this.assertTariffCoversShares({ marketTariff, courierShare, branchShare });
+    this.assertTariffCoversShares({
+      marketTariff,
+      courierShare,
+      branchShare,
+      engineUnavailable: marketPricing.engineUnavailable,
+    });
     const actorExpenseUserId = isManagerRequester
       ? String(requester.branch_id ?? '')
       : actorCourierId;
@@ -9164,7 +9229,7 @@ export class OrderLifecycleService {
         // KmWO9gTA DARVOZA 2: narx dvigateldan bo'lsa chegara tarif
         // jadvali / sozlamadan (kuryer tariflari farqiga tayanmaydi).
         engineLimit: this.saleExtraCostEngineLimit(marketPricing),
-        engineError: marketPricing.engineError,
+        engineUnavailable: marketPricing.engineUnavailable,
         isManager:
           this.hasRole(requester, Roles.MANAGER) &&
           !this.hasRole(requester, Roles.COURIER),
@@ -9706,18 +9771,7 @@ export class OrderLifecycleService {
     }
 
     // (hwTkXsGi) Pochta o'qilmasa — kuryer tekshiruvi 503 beradi, 400 emas.
-    let postLookupFailed = false;
-    const postRes = await rmqSend<{
-      data?: { id: string; courier_id?: string | null };
-    }>(
-      this.logisticsClient,
-      { cmd: 'logistics.post.find_by_id' },
-      { id: String(order.post_id) },
-    ).catch(() => {
-      postLookupFailed = true;
-      return { data: undefined };
-    });
-    const post = postRes?.data;
+    const { post, postLookupFailed } = await this.readOrderPost(order.post_id);
     const actorCourierId = this.resolveActorCourierId(
       requester,
       order,
@@ -10639,18 +10693,7 @@ export class OrderLifecycleService {
     );
 
     // (hwTkXsGi) Pochta o'qilmasa — kuryer tekshiruvi 503 beradi, 400 emas.
-    let postLookupFailed = false;
-    const postRes = await rmqSend<{
-      data?: { id: string; courier_id?: string | null };
-    }>(
-      this.logisticsClient,
-      { cmd: 'logistics.post.find_by_id' },
-      { id: String(order.post_id) },
-    ).catch(() => {
-      postLookupFailed = true;
-      return { data: undefined };
-    });
-    const post = postRes?.data;
+    const { post, postLookupFailed } = await this.readOrderPost(order.post_id);
     const actorCourierId = this.resolveActorCourierId(
       requester,
       order,
@@ -10771,7 +10814,12 @@ export class OrderLifecycleService {
     // Qisman sotuvda ham kuryer to'liq tarifini oladi va market to'liq tarif
     // bilan hisoblanadi, ya'ni tarif qoplamaslik zarari bu yo'lda ham xuddi
     // shunday yuzaga keladi — sellOrder bilan bir xil qo'riqchi.
-    this.assertTariffCoversShares({ marketTariff, courierShare, branchShare });
+    this.assertTariffCoversShares({
+      marketTariff,
+      courierShare,
+      branchShare,
+      engineUnavailable: marketPricing.engineUnavailable,
+    });
     const actorExpenseUserId = isManagerRequester
       ? String(requester.branch_id ?? '')
       : actorCourierId;
@@ -10802,7 +10850,7 @@ export class OrderLifecycleService {
         // KmWO9gTA DARVOZA 2: narx dvigateldan bo'lsa chegara tarif
         // jadvali / sozlamadan (kuryer tariflari farqiga tayanmaydi).
         engineLimit: this.saleExtraCostEngineLimit(marketPricing),
-        engineError: marketPricing.engineError,
+        engineUnavailable: marketPricing.engineUnavailable,
         isManager:
           this.hasRole(requester, Roles.MANAGER) &&
           !this.hasRole(requester, Roles.COURIER),

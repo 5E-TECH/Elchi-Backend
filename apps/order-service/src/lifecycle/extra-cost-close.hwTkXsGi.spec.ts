@@ -1,5 +1,6 @@
 import { Order_status } from '@app/common';
 import { RpcException } from '@nestjs/microservices';
+import { of, throwError } from 'rxjs';
 import {
   EXTRA_COST_CLOSE_REASON,
   ExtraCostExecutionOptions,
@@ -294,8 +295,22 @@ describe('hwTkXsGi — infratuzilma xatosi biznes xatosi bo‘lib ko‘rinmaydi'
       whereDeliver: string;
       tariffCenter: number;
       tariffHome: number;
-      engineError?: string | null;
+      engineUnavailable?: boolean;
     }) => void;
+    assertTariffCoversShares: (params: {
+      marketTariff: number;
+      courierShare: number;
+      branchShare: number;
+      engineUnavailable?: boolean;
+    }) => void;
+    readOrderPost: (
+      postId: string,
+    ) => Promise<{ post: Row | undefined; postLookupFailed: boolean }>;
+    resolveSaleMarketPricing: (params: {
+      order: Row;
+      market: Row;
+      sharesFloor: number;
+    }) => Promise<{ engineError: string | null; engineUnavailable: boolean }>;
     resolveActorCourierId: (
       requester: { id: string; roles?: string[] },
       order: Row,
@@ -373,25 +388,60 @@ describe('hwTkXsGi — infratuzilma xatosi biznes xatosi bo‘lib ko‘rinmaydi'
     expect(error.statusCode).toBe(503);
   });
 
-  it("⭐ menejer identity'dan o‘qilmagan (`user: null`) — ruxsat noma’lum, 503", async () => {
-    const svc = infra({
-      getBranchAssignmentByUserStrict: jest
-        .fn()
-        .mockResolvedValue({ branch_id: '77' }),
-      getBranchUsersStrict: jest
-        .fn()
-        .mockResolvedValue([{ role: 'manager', user: null }]),
-    });
-
-    const error = await statusOf(
+  describe("menejer identity'dan o‘qilmagan (`user: null`) — identity'dan to‘g‘ridan-to‘g‘ri so‘raladi", () => {
+    const branchWithUnreadManager = (getUserByIdStrict: jest.Mock) =>
+      infra({
+        getBranchAssignmentByUserStrict: jest
+          .fn()
+          .mockResolvedValue({ branch_id: '77' }),
+        getBranchUsersStrict: jest
+          .fn()
+          .mockResolvedValue([{ role: 'manager', user_id: '5', user: null }]),
+        getUserByIdStrict,
+      });
+    const run = (svc: Infra) =>
       svc.assertCanAddExtraCost({
         actor: undefined,
         requester: COURIER,
         order: ORDER,
-      }),
-    );
+      });
 
-    expect(error.statusCode).toBe(503);
+    it('⭐ identity javob bermadi — ruxsat noma’lum, 503', async () => {
+      const getUserByIdStrict = jest.fn(timeout);
+      const error = await statusOf(
+        run(branchWithUnreadManager(getUserByIdStrict)),
+      );
+
+      expect(error.statusCode).toBe(503);
+      expect(getUserByIdStrict).toHaveBeenCalledWith('5');
+    });
+
+    it('⭐ menejer o‘chirilgan (identity 404 → null) — doimiy 503 emas, 403', async () => {
+      const error = await statusOf(
+        run(branchWithUnreadManager(jest.fn().mockResolvedValue(null))),
+      );
+
+      expect(error.statusCode).toBe(403);
+    });
+
+    it('identity’dan o‘qilgan menejerda ruxsat bor — o‘tadi; yo‘q — 403', async () => {
+      await expect(
+        run(
+          branchWithUnreadManager(
+            jest.fn().mockResolvedValue({ id: '5', can_add_extra_cost: true }),
+          ),
+        ),
+      ).resolves.toBeUndefined();
+
+      const error = await statusOf(
+        run(
+          branchWithUnreadManager(
+            jest.fn().mockResolvedValue({ id: '5', can_add_extra_cost: false }),
+          ),
+        ),
+      );
+      expect(error.statusCode).toBe(403);
+    });
   });
 
   it('haqiqiy biznes holatlari o‘zgarmagan: biriktirilmagan — 403, menejer ruxsat bermagan — 403, ruxsat bor — o‘tadi', async () => {
@@ -442,19 +492,19 @@ describe('hwTkXsGi — infratuzilma xatosi biznes xatosi bo‘lib ko‘rinmaydi'
 
   it('⭐ narx dvigateli javob bermagan va standart chegaradan oshgan — 503; dvigatel xatosiz — avvalgidek 400', () => {
     const svc = infra();
-    const limit = (engineError: string | null) => () =>
+    const limit = (engineUnavailable: boolean) => () =>
       svc.assertExtraCostWithinLimit({
         extraCost: 9000,
         mode: 'sell',
         whereDeliver: 'center',
         tariffCenter: 15000,
         tariffHome: 20000,
-        engineError,
+        engineUnavailable,
       });
 
     const unavailable = (() => {
       try {
-        limit('timeout')();
+        limit(true)();
       } catch (e) {
         return (e as RpcException).getError() as { statusCode: number };
       }
@@ -463,12 +513,122 @@ describe('hwTkXsGi — infratuzilma xatosi biznes xatosi bo‘lib ko‘rinmaydi'
 
     const business = (() => {
       try {
-        limit(null)();
+        limit(false)();
       } catch (e) {
         return (e as RpcException).getError() as { statusCode: number };
       }
     })();
     expect(business).toMatchObject({ statusCode: 400 });
+  });
+
+  it('⭐ tarif ulushlarni qoplamaydi: dvigatel javob bermagan — 503; dvigatel ishlagan — avvalgidek 400', () => {
+    const svc = infra();
+    const guard = (engineUnavailable: boolean) => {
+      try {
+        svc.assertTariffCoversShares({
+          marketTariff: 15000,
+          courierShare: 16000,
+          branchShare: 0,
+          engineUnavailable,
+        });
+      } catch (e) {
+        return (e as RpcException).getError() as { statusCode: number };
+      }
+      return null;
+    };
+
+    expect(guard(true)).toMatchObject({ statusCode: 503 });
+    expect(guard(false)).toMatchObject({ statusCode: 400 });
+    expect(
+      svc.assertTariffCoversShares({
+        marketTariff: 20000,
+        courierShare: 16000,
+        branchShare: 0,
+        engineUnavailable: true,
+      }),
+    ).toBeUndefined();
+  });
+
+  describe('narx dvigateli xatosi: aniq 4xx — biznes javobi, timeout / 5xx — infra', () => {
+    const previous = process.env.SALE_PRICING_ENGINE;
+    beforeAll(() => {
+      process.env.SALE_PRICING_ENGINE = 'on';
+    });
+    afterAll(() => {
+      if (previous === undefined) delete process.env.SALE_PRICING_ENGINE;
+      else process.env.SALE_PRICING_ENGINE = previous;
+    });
+
+    const pricing = (error: unknown) => {
+      const svc = infra();
+      Object.assign(svc, {
+        logisticsClient: { send: jest.fn(() => throwError(() => error)) },
+      });
+      return svc.resolveSaleMarketPricing({
+        order: {
+          id: '7001',
+          market_id: '501',
+          market_tariff: null,
+          where_deliver: 'center',
+          region_id: '1',
+          district_id: '2',
+          items: [],
+        },
+        market: { id: '501', tariff_center: 15000, tariff_home: 20000 },
+        sharesFloor: 15000,
+      });
+    };
+
+    it.each([
+      [400, false],
+      [404, false],
+      [500, true],
+      [503, true],
+    ])('statusCode %i → engineUnavailable %s', async (statusCode, expected) => {
+      const result = await pricing({ statusCode, message: 'dvigatel' });
+
+      expect(result.engineError).toBe('dvigatel');
+      expect(result.engineUnavailable).toBe(expected);
+    });
+
+    it('timeout (statussiz xato) — engineUnavailable', async () => {
+      const result = await pricing(new Error('Timeout has occurred'));
+
+      expect(result.engineUnavailable).toBe(true);
+    });
+  });
+
+  it('⭐ pochta so‘rovi: 404 — «o‘qilmadi» emas (400 yo‘li); timeout / 5xx — o‘qilmadi (503 yo‘li)', async () => {
+    const read = (send: jest.Mock) => {
+      const svc = infra();
+      Object.assign(svc, { logisticsClient: { send } });
+      return svc.readOrderPost('31');
+    };
+
+    await expect(
+      read(
+        jest.fn(() =>
+          throwError(() => ({ statusCode: 404, message: 'Pochta topilmadi' })),
+        ),
+      ),
+    ).resolves.toEqual({ post: undefined, postLookupFailed: false });
+    await expect(
+      read(
+        jest.fn(() =>
+          throwError(() => ({ statusCode: 500, message: 'Internal' })),
+        ),
+      ),
+    ).resolves.toEqual({ post: undefined, postLookupFailed: true });
+    await expect(
+      read(jest.fn(() => throwError(() => new Error('Timeout has occurred')))),
+    ).resolves.toEqual({ post: undefined, postLookupFailed: true });
+
+    await expect(
+      read(jest.fn(() => of({ data: { id: '31', courier_id: '289' } }))),
+    ).resolves.toEqual({
+      post: { id: '31', courier_id: '289' },
+      postLookupFailed: false,
+    });
   });
 
   it('⭐ pochta o‘qilmagan va kuryer faqat pochta orqali bog‘langan — 503; o‘qilgan — 400; buyurtmada biriktirilgan bo‘lsa pochta kerak emas', () => {

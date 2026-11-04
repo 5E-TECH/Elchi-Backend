@@ -13,7 +13,7 @@ import {
  * keladi; mahalliy `RpcException` ham hisobga olinadi. Aniqlanmasa — null
  * (timeout va boshqalar).
  */
-function rpcErrorStatusOf(error: unknown): number | null {
+export function rpcErrorStatusOf(error: unknown): number | null {
   const payload =
     error instanceof RpcException ? (error.getError() as unknown) : error;
   if (!payload || typeof payload !== 'object') {
@@ -174,6 +174,30 @@ export class OrderLookupService implements OnModuleInit {
     ).catch(() => ({ data: undefined }));
 
     return response?.data;
+  }
+
+  /**
+   * `getUserById` bilan AYNI so'rov, lekin xato YUTILMAYDI (hwTkXsGi):
+   * 404 (foydalanuvchi o'chirilgan / yo'q) — `null`; boshqa xato (timeout,
+   * 5xx) — chaqiruvchiga uzatiladi. Infratuzilma xatosi «foydalanuvchi yo'q»
+   * bilan aralashmasin.
+   */
+  async getUserByIdStrict(id: string) {
+    try {
+      const response = await rmqSend<{
+        data?: { id: string; can_add_extra_cost?: boolean | null } | null;
+      }>(
+        this.identityClient,
+        { cmd: 'identity.user.find_by_id' },
+        { id: String(id) },
+      );
+      return response?.data ?? null;
+    } catch (error) {
+      if (rpcErrorStatusOf(error) === 404) {
+        return null;
+      }
+      throw error;
+    }
   }
 
   async getBranchAssignmentByUser(userId: string) {
