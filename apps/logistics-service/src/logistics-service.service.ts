@@ -6152,7 +6152,7 @@ export class LogisticsServiceService implements OnModuleInit {
         skipped_order_ids: skippedOrderIds,
       },
       200,
-      "Qaytarish so'rovlari rad etildi — buyurtmalar kuryerda qoldi",
+      "Qaytarish so'rovlari rad etildi — buyurtmalar joyida qoldi (kuryerda yoki filial pochtasida)",
     );
   }
 
