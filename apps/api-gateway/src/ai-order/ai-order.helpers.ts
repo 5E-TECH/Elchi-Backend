@@ -361,6 +361,8 @@ export interface AiSignatureOrderInput {
     | null
     | undefined
   > | null;
+  /** Almashtirilayotgan eski buyurtma (bo'lsa imzoga kiradi). */
+  replaced_order_id?: unknown;
 }
 
 /**
@@ -392,6 +394,11 @@ function compareText(a: string, b: string): number {
  *
  * Ism, izoh, manzil, operator imzoga KIRMAYDI: bir xil telefon + tuman + narx
  * + mahsulotlar — bir xil buyurtma. Itemlar tartibi ahamiyatsiz.
+ *
+ * Almashtirish: `replaced_order_id` bo'lsa oxiriga `r<id>` qo'shiladi
+ * (BeePost `orderSignature` kabi) — aks holda bir mijozning bir xil
+ * mahsulotli (narx 0) IKKI almashtirishi dublikat deb ikkinchisi
+ * yaratilmasdi. Oddiy buyurtma imzosi o'zgarmaydi.
  */
 export function aiOrderSignature(
   marketId: string,
@@ -415,6 +422,8 @@ export function aiOrderSignature(
     textOf(order?.where_deliver).toLowerCase(),
     ...items,
   ];
+  const replacedOrderId = textOf(order?.replaced_order_id);
+  if (replacedOrderId) parts.push(`r${replacedOrderId}`);
   return createHash('sha256').update(parts.join('|')).digest('hex');
 }
 

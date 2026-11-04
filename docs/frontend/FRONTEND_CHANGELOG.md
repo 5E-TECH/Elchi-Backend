@@ -22,6 +22,23 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+### 2026-11-04 — AI buyurtma: almashtirish (kafolat) eski buyurtmaga bog'lanadi (Telegram bot, BeePost kabi)
+
+AI matnda almashtirish/kafolatni topsa (`is_replacement: true`), backend telefonning oxirgi 9 raqami bo'yicha shu marketning eski buyurtmasini topib, eng yangisini avtomatik tanlaydi. Telegram bot endi almashtirish buyurtmasini yaratadi (ilgari rad etardi).
+
+- ✏️ [gateway] `POST /orders/ai-parse` — faqat `is_replacement: true` preview'da yangi kalitlar:
+  - `replacement_lookup: 'found' | 'not_found' | 'taken' | 'unavailable'` — `found`: eski buyurtma bog'landi; `not_found`: mos eski buyurtma yo'q (yoki telefon 9 raqamdan kam) — oddiy buyurtma; `taken`: nomzodlar hammasi shu xabardagi oldingi almashtirishga bog'landi; `unavailable`: qidiruv ishlamadi (xato/timeout) — bu "topilmadi" EMAS;
+  - `replaced_order_id: string | null` — eng yangi (yaratilgan vaqt) mos eski buyurtma, faqat `found` da. Bitta eski buyurtma bitta xabarda faqat bir preview'ga bog'lanadi;
+  - `replacement_candidates: { id, order_number, created_at, items, total_price }[]` — ko'pi bilan 10 ta, yangisi birinchi. `order_number` — `EL-…`, `created_at` — ISO, `items` — «Atir 50 ml ×2, Krem ×1» matni. Mijoz ma'lumoti yo'q;
+  - `replacement_candidates_total: number` — barcha mos eski buyurtmalar soni (10 dan ko'p bo'lishi mumkin).
+  - Nomzodlar `GET /orders/replaceable` bilan ayni qoidada: shu market (market operatori — o'z marketi), sold/paid/partly_paid, hali almashtirilmagan. Faqat telefonining oxirgi 9 raqami AYNAN teng mijozlar olinadi (raqami ichida shu raqamlar bor begona mijoz emas). Qidiruv ishlamasa preview baribir qaytadi (`replacement_lookup: 'unavailable'`).
+  - Eski buyurtma bog'lansa shu preview'ning `issues` idan `price_missing` / `price_confirm` olib tashlanadi va `ready` qayta hisoblanadi. `total_price` o'zgarmaydi (bo'sh bo'lishi mumkin). Oddiy (almashtirishsiz) preview o'zgarmagan.
+- ✏️ [gateway] `POST /orders/ai-confirm` — `orders[i].replaced_order_id` (ixtiyoriy, raqamli id; `POST /orders` dagi qoida, aks holda 400). Shu maydon bo'lsa `total_price` ni yubormasa ham bo'ladi — buyurtma 0 narx bilan yaratiladi (bepul almashtirish). Eski buyurtma begona/yetkazilmagan/allaqachon almashtirilgan bo'lsa — o'sha buyurtma natijasi `ok: false, code: 'create_failed'` va sababi. Dublikat imzosiga ham kiradi: faqat eski buyurtmasi farq qiladigan ikki almashtirish ikkalasi yaratiladi. `openapi.json` qayta yaratildi (`total_price` sxemada endi ixtiyoriy, `replaced_order_id` qo'shildi).
+
+→ **Frontendda:** 🟢 o'zgarish shart emas — veb AI sahifasi yangi kalitlarni o'qimaydi va almashtirishni avvalgidek oddiy buyurtma qilib yuboradi. Ixtiyoriy: AI kartasida «Almashtirish — eski EL-… o'rniga» ko'rsatib (`replacement_lookup === 'found'`), `replaced_order_id` ni ai-confirm'ga yuborish (nomzodni almashtirish — `replacement_candidates` dan).
+
+Migratsiya yo'q. Deploy: api-gateway, notification-service (birga).
+
 ### 2026-11-04 — Odam ismida har so'zning bosh harfi katta (kichik kiritilsa ham)
 
 Ega talabi: «Ism so'ragan har qanday joyda birinchi harf katta bo'lsin — biz kichik kiritsak ham katta bo'lsin».

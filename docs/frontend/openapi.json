@@ -26621,7 +26621,13 @@
           "total_price": {
             "type": "number",
             "example": 150000,
-            "minimum": 0
+            "minimum": 0,
+            "description": "Majburiy. Faqat `replaced_order_id` bilan (almashtirish) berilmasa bo‘ladi — buyurtma 0 narx bilan (bepul almashtirish) yaratiladi."
+          },
+          "replaced_order_id": {
+            "type": "string",
+            "example": "1024",
+            "description": "Almashtiriladigan eski buyurtma ID si (ai-parse `replacement_candidates`, GET /orders/replaceable). Faqat shu marketning yetkazilgan buyurtmasi; boshqa marketniki, yetkazilmagan yoki allaqachon almashtirilgani — natijada `create_failed` (sababi bilan)."
           },
           "where_deliver": {
             "type": "string",
@@ -26687,7 +26693,6 @@
           "customer",
           "district_id",
           "items",
-          "total_price",
           "where_deliver"
         ]
       },

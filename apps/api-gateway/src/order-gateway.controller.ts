@@ -80,6 +80,18 @@ import {
 } from '@app/common/ai/ai-image-store';
 import { observeAiParseStage } from './ai-order/ai-parse-metrics';
 import {
+  AI_REPLACEMENT_FETCH_LIMIT,
+  AI_REPLACEMENT_LOOKUP_TIMEOUT_MS,
+  AI_REPLACEMENT_MIN_BUDGET_MS,
+  aiReplacementCustomerIds,
+  aiReplacementPhone9,
+  applyAiReplacement,
+  isAiReplacementPreview,
+  pickAiReplacementRows,
+  toAiReplacementCandidates,
+  type AiReplacementFound,
+} from './ai-order/ai-replacement';
+import {
   aiStableRequestId,
   buildPreviewSnapshots,
   computeEditedFields,
@@ -368,7 +380,12 @@ type AiSuccessEnvelope<T> = { statusCode: number; message: string; data: T };
  */
 type AiParseResponseData = {
   ok: boolean;
-  /** order-service'ning `AiOrderPreview[]` i — gateway o'zgartirmasdan uzatadi. */
+  /**
+   * order-service'ning `AiOrderPreview[]` i. Gateway faqat almashtirish
+   * preview'iga `replacement_lookup` / `replaced_order_id` /
+   * `replacement_candidates(_total)` qo'shadi (`attachAiReplacements`);
+   * qolgani o'zgartirmasdan.
+   */
   orders?: unknown[];
   draft_id?: string;
   reason?: AiParseFailureReason;
@@ -1632,6 +1649,128 @@ export class OrderGatewayController {
     return null;
   }
 
+  /**
+   * ALMASHTIRISH (BeePost `resolveReplacement`): AI `is_replacement` degan
+   * har preview'ga telefonning oxirgi 9 raqami bo'yicha shu marketning eski
+   * buyurtmasini bog'laydi — `replaced_order_id` (eng yangisi, avtomatik),
+   * `replacement_candidates` va `replacement_lookup` (`applyAiReplacement`).
+   * Telefon 9 raqamdan kam bo'lsa — qidirilmaydi (`not_found`, oddiy
+   * buyurtma). FAIL-OPEN: qidiruv xatosi / timeout / byudjet qolmagani
+   * ai-parse'ni BUZMAYDI, lekin "topilmadi" deb ham ko'rsatilmaydi
+   * (`unavailable` — bot yaratmaydi). Bir telefon — bitta qidiruv; bitta
+   * eski buyurtma shu xabarda faqat BIR preview'ga bog'lanadi.
+   * ⚠️ Telefon log'ga YOZILMAYDI.
+   */
+  private async attachAiReplacements(
+    previews: unknown[],
+    marketId: string,
+    budgetMs: number,
+  ): Promise<void> {
+    const targets = previews.filter(isAiReplacementPreview);
+    if (!targets.length) return;
+    const found = new Map<string, AiReplacementFound>();
+    const phones = [
+      ...new Set(
+        targets
+          .map((preview) => aiReplacementPhone9(preview.phone_number))
+          .filter((phone): phone is string => phone !== null),
+      ),
+    ];
+    const ms = Math.min(AI_REPLACEMENT_LOOKUP_TIMEOUT_MS, budgetMs);
+    if (phones.length && ms >= AI_REPLACEMENT_MIN_BUDGET_MS) {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const lookups = Promise.all(
+        phones.map((phone9) =>
+          this.findAiReplacementCandidates(marketId, phone9, ms).then(
+            (result) => {
+              found.set(phone9, result);
+            },
+            (error: unknown) => {
+              this.logger.warn(
+                `ai-parse: almashtirish nomzodlari olinmadi (${this.errorName(error)}) — tekshirilmadi`,
+              );
+            },
+          ),
+        ),
+      );
+      await Promise.race([
+        lookups,
+        new Promise<void>((resolve) => {
+          timer = setTimeout(resolve, ms);
+        }),
+      ]);
+      clearTimeout(timer);
+    } else if (phones.length) {
+      this.logger.warn(
+        'ai-parse: almashtirish qidiruviga byudjet qolmadi — tekshirilmadi',
+      );
+    }
+    const used = new Set<string>();
+    for (const preview of targets) {
+      const phone9 = aiReplacementPhone9(preview.phone_number);
+      // Qidiruvsiz (telefon qisqa) — topilmadi; natijasi yo'q — tekshirilmadi.
+      applyAiReplacement(
+        preview,
+        phone9 ? (found.get(phone9) ?? null) : { candidates: [], total: 0 },
+        used,
+      );
+    }
+  }
+
+  /**
+   * Bitta telefon uchun nomzodlar — `GET /orders/replaceable` ning telefon
+   * yo'li bilan AYNI: identity `customer.search` → `customer_ids` →
+   * order-service `order.replaceable` (shu market, yetkazilgan, hali
+   * almashtirilmagan) → mahsulot nomlari katalogdan. Qidiruv raqamni matn
+   * ichidan izlaydi — avto-tanlov uchun faqat telefoni AYNAN shu raqamli
+   * mijozlar olinadi (`aiReplacementCustomerIds`). Qatorlar kengroq olinib
+   * (`AI_REPLACEMENT_FETCH_LIMIT`) yaratilgan vaqt bo'yicha 10 tasi tanlanadi.
+   */
+  private async findAiReplacementCandidates(
+    marketId: string,
+    phone9: string,
+    timeoutMs: number,
+  ): Promise<AiReplacementFound> {
+    const customers: unknown = await firstValueFrom(
+      this.identityClient
+        .send(
+          { cmd: 'identity.customer.search' },
+          { search: phone9, limit: 50 },
+        )
+        .pipe(timeout(timeoutMs)),
+    );
+    const customerIds = aiReplacementCustomerIds(
+      this.extractRows(customers),
+      phone9,
+    );
+    if (!customerIds.length) return { candidates: [], total: 0 };
+    const response = (await firstValueFrom(
+      this.orderClient
+        .send(
+          { cmd: 'order.replaceable' },
+          {
+            market_id: marketId,
+            customer_ids: customerIds,
+            page: 1,
+            limit: AI_REPLACEMENT_FETCH_LIMIT,
+          },
+        )
+        .pipe(timeout(timeoutMs)),
+    )) as { data?: { items?: unknown; total?: unknown } } | null;
+    const rows = pickAiReplacementRows(
+      Array.isArray(response?.data?.items)
+        ? (response.data.items as Array<Record<string, unknown>>)
+        : [],
+      marketId,
+    );
+    if (!rows.length) return { candidates: [], total: 0 };
+    await this.attachReplacementProductNames(rows);
+    return {
+      candidates: toAiReplacementCandidates(rows, marketId),
+      total: Number(response?.data?.total) || 0,
+    };
+  }
+
   private distinctIds(values: unknown[]): string[] {
     return Array.from(
       new Set(values.map((value) => this.asStr(value).trim()).filter(Boolean)),
@@ -1957,9 +2096,16 @@ export class OrderGatewayController {
       region_id: item.regionId,
       address: order.address ?? order.customer.address ?? null,
       where_deliver: order.where_deliver,
-      total_price: order.total_price,
+      // Narxsiz faqat almashtirish o'tadi (DTO) — bepul almashtirish, 0
+      // (BeePost). Imzoda ham bo'sh narx 0 hisoblanadi.
+      total_price: order.total_price ?? 0,
       comment: order.comment ?? null,
       operator: order.operator ?? null,
+      // Almashtirish: order-service eski buyurtmani shu market (ctx.marketId —
+      // server aniqlagan) bo'yicha tekshiradi; begona buyurtma — 400.
+      ...(order.replaced_order_id
+        ? { replaced_order_id: order.replaced_order_id }
+        : {}),
       items: order.items.map((orderItem) =>
         orderItem.product_id
           ? {
@@ -3179,6 +3325,14 @@ export class OrderGatewayController {
       return successRes(toParseFailure({ reason: 'ai_error' }));
     }
 
+    // Almashtirish: eski buyurtma (BeePost kabi avto-tanlov) — umumiy 85s
+    // byudjet ichida; xato bo'lsa preview baribir qaytadi (`unavailable`).
+    await this.attachAiReplacements(
+      previews,
+      market.marketId,
+      AI_PARSE_TOTAL_BUDGET_MS - (Date.now() - startedAt),
+    );
+
     const totalMs = finish('ok', extractMs, previewMs);
     // vncdmXOy: AI taklifi audit izi uchun (fire-and-forget) + WHMAIqyo #5
     // bosqich vaqtlari.
@@ -3292,6 +3446,9 @@ export class OrderGatewayController {
    *  4) Yaratish: 3 ta yo'lak (bir telefon — bitta yo'lak, ketma-ket),
    *     75s muddat; har buyurtma o'z try/catch'i bilan — biri yiqilsa
    *     qolganlari yaratiladi.
+   * Almashtirish: `replaced_order_id` `POST /orders` ga uzatiladi (narx
+   * berilmasa 0), eski buyurtma tekshiruvi order-service'da; u dublikat
+   * imzosiga ham kiradi.
    * Javob: `successRes({results})` — har kiruvchi buyurtmaga AYNAN bitta
    * natija, `index` bo'yicha tartiblangan.
    */

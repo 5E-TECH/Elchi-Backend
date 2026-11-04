@@ -23,7 +23,11 @@ import type {
   BotContext,
   BotMessageHandler,
 } from '../handlers/bot-context';
-import type { InlineKeyboardButton } from '../telegram.types';
+import type {
+  InlineKeyboardButton,
+  InlineKeyboardMarkup,
+  TelegramCallbackQuery,
+} from '../telegram.types';
 import {
   CANCEL_REASONS,
   CND_REASONS,
@@ -35,6 +39,7 @@ import {
   cancelReasonValid,
   cndReasonText,
   formatSum,
+  oldItemToCollect,
   proofRequired,
   type CourierOp,
 } from './courier-cards';
@@ -46,9 +51,13 @@ import {
 
 /** (BOT-3d) Uzoq amal — spinner darhol shu matn bilan o'chiriladi. */
 export const COURIER_OP_ACK_TEXT = '⏳ Bajarilmoqda…';
-/** (BOT-3d) Natija noma'lum — «✅ Ha» ayni kalit bilan qayta yuboriladi. */
+/**
+ * (BOT-3d) Natija noma'lum — bosilgan tugma («✅ Ha» / «✅ Oldim — sotish» /
+ * «✅ Tugatdim») ayni kalit bilan qayta yuboriladi. Xabarda faqat shu tugma
+ * qoladi, shuning uchun matn tugma nomini aytmaydi.
+ */
 export const COURIER_OP_UNKNOWN_RETRY_TEXT =
-  "⏳ Natija noma'lum. Tugmani («✅ Ha» / «✅ Tugatdim») qayta bosing — amal takrorlanmaydi; yoki /ishim orqali holatni tekshiring.";
+  "⏳ Natija noma'lum. Xuddi shu tugmani qayta bosing — amal takrorlanmaydi; yoki /ishim orqali holatni tekshiring.";
 
 /** (z2FRwu2c #6) bitta amalga ko'pi bilan 3 ta isbot fayli. */
 export const PROOF_MAX_FILES = 3;
@@ -62,11 +71,17 @@ export const PROOF_TOO_LARGE_TEXT =
 export const PROOF_FORMAT_TEXT =
   '❌ Format qabul qilinmaydi — JPG/PNG surat yoki MP4/MOV video yuboring.';
 
+/** (lQjt6sKP) Almashtirish buyurtmasini sotishdan oldingi savol. */
+export const COURIER_OLD_ITEM_ASK_TEXT =
+  '🔄 Bu almashtirish buyurtmasi. Mijozdan eski mahsulotni oldingizmi?';
+
 interface ProofState {
   op: CourierOp;
   order_id: string;
   reason?: string | null;
   keys: string[];
+  /** (lQjt6sKP) «✅ Oldim — sotish» — sotuv `oldItemCollected: true` bilan. */
+  old_item_collected?: boolean;
 }
 
 const OPS: readonly CourierOp[] = ['sell', 'cancel', 'cnd', 'rollback'];
@@ -483,9 +498,7 @@ export class CourierActions {
       },
       {
         action: COURIER_ACTIONS.back,
-        handle: privateOnly((ctx) =>
-          ctx.reply('⬅️ Amal bekor qilindi.').then(() => undefined),
-        ),
+        handle: privateOnly((ctx, action) => this.onBack(ctx, action)),
       },
       {
         action: COURIER_ACTIONS.page,
@@ -541,6 +554,20 @@ export class CourierActions {
         oneShot,
       })
       .then((callback_data) => ({ text, callback_data }));
+  }
+
+  /**
+   * «⬅️ Orqaga» / «↩️ Ortga». Shu buyurtmaning ochiq isbot rejimi ham
+   * yopiladi — aks holda «bekor qilindi» deyilgach keyingi rasm isbotga
+   * qo'shilib, tirik «✅ Tugatdim» amalni baribir bajarardi.
+   */
+  private async onBack(ctx: BotContext, action: TelegramBotAction) {
+    const session = await this.sessions.load(ctx.chatId, ctx.slug);
+    const proof = session.state.proof as ProofState | undefined;
+    if (proof && proof.order_id === str(action.order_id)) {
+      await this.clearProof(ctx);
+    }
+    await ctx.reply('⬅️ Amal bekor qilindi.');
   }
 
   /** Karta tugmasi → sabab (bekor / yetkazib bo'lmadi) yoki darhol tasdiq. */
@@ -601,6 +628,12 @@ export class CourierActions {
       });
       return;
     }
+    // (lQjt6sKP) Karta almashtirish deb belgilagan (eski mahsulot hali
+    // olinmagan) — «Tasdiqlaysizmi?» o'rniga «eskisini oldingizmi?».
+    if (op === 'sell' && action.payload.replacement === true) {
+      await this.askOldItem(ctx, actor.user_id, orderId);
+      return;
+    }
     await this.askConfirm(ctx, actor.user_id, op, orderId, null);
   }
 
@@ -653,12 +686,58 @@ export class CourierActions {
     });
   }
 
+  /**
+   * (lQjt6sKP) Almashtirish buyurtmasini sotish — kuryer eski mahsulotni
+   * mijozdan olganini ANIQ tasdiqlaydi. «✅ Oldim — sotish» — bir martalik
+   * «✅ Ha» ning o'zi (`c.ok`: kalit — shu tugma, isbot kerak bo'lsa avval
+   * isbot), sotuv `oldItemCollected: true` bilan. «↩️ Ortga» — hech narsa
+   * yuborilmaydi (ochiq isbot rejimi bo'lsa yopiladi — `onBack`).
+   */
+  private async askOldItem(
+    ctx: BotContext,
+    actorUserId: string,
+    orderId: string,
+  ) {
+    await ctx.reply(
+      `Buyurtma #${orderId} — ${OP_LABEL.sell}.\n${COURIER_OLD_ITEM_ASK_TEXT}`,
+      {
+        reply_markup: {
+          inline_keyboard: [
+            [
+              await this.button(
+                ctx,
+                actorUserId,
+                '✅ Oldim — sotish',
+                COURIER_ACTIONS.confirm,
+                orderId,
+                { op: 'sell', reason: null, old_item_collected: true },
+                true,
+              ),
+              await this.button(
+                ctx,
+                actorUserId,
+                '↩️ Ortga',
+                COURIER_ACTIONS.back,
+                orderId,
+                {},
+              ),
+            ],
+          ],
+        },
+      },
+    );
+  }
+
   /** ✅ Ha (bir martalik): isbot kerak bo'lsa — avval isbot, aks holda amal. */
   private async onConfirm(ctx: BotContext, action: TelegramBotAction) {
     const op = action.payload.op;
     const orderId = str(action.order_id);
     const reason = str(action.payload.reason) || null;
     if (!isOp(op) || !orderId || !ctx.fromId) return;
+    const proof: ProofState = { op, order_id: orderId, reason, keys: [] };
+    if (op === 'sell' && action.payload.old_item_collected === true) {
+      proof.old_item_collected = true;
+    }
     if (op === 'sell' || op === 'cancel') {
       const order = await this.courier
         .getOrder(ctx.fromId, orderId)
@@ -666,17 +745,37 @@ export class CourierActions {
           rethrowPasswordChange(error);
           return null;
         });
+      // (lQjt6sKP) Almashtirish belgisisiz «✅ Ha» (deploydan oldingi karta)
+      // — sotuv 400 olmasin: avval «eskisini oldingizmi?».
+      if (
+        order &&
+        op === 'sell' &&
+        !proof.old_item_collected &&
+        oldItemToCollect(order)
+      ) {
+        const actor = await ctx.actor();
+        if (actor) await this.askOldItem(ctx, actor.user_id, orderId);
+        return;
+      }
       if (order && proofRequired(order, op)) {
-        await this.startProof(ctx, { op, order_id: orderId, reason, keys: [] });
+        // Tasdiq xabaridagi «Orqaga» / «Ortga» endi kerak emas — isbot
+        // xabarida «✖️ Bekor» bor; tirik qolsa natija noma'lum paytda ham
+        // «bekor qilindi» deyishi mumkin edi.
+        await this.dropButtons(ctx);
+        await this.startProof(ctx, proof);
         return;
       }
     }
-    await this.execute(
-      ctx,
-      { op, order_id: orderId, reason, keys: [] },
-      action.action_id,
-      action.action_id,
-    );
+    await this.execute(ctx, proof, action.action_id, action.action_id);
+  }
+
+  /** Callback kelgan xabarning tugmalarini olib tashlash (matn o'zgarmaydi). */
+  private async dropButtons(ctx: BotContext): Promise<void> {
+    const messageId = ctx.update.callback_query?.message?.message_id;
+    if (!messageId || !this.transport) return;
+    await this.transport.editMessage(ctx.chatId, messageId, {
+      reply_markup: { inline_keyboard: [] },
+    });
   }
 
   private async startProof(
@@ -786,6 +885,7 @@ export class CourierActions {
         reason: reason ?? undefined,
         proofFileKeys: proof.keys,
         idempotencyKey,
+        oldItemCollected: proof.old_item_collected === true,
       },
     );
     if (
@@ -794,6 +894,23 @@ export class CourierActions {
     ) {
       await this.showOutcome(ctx, outcome.message);
       await this.startProof(ctx, { ...proof, keys: [] });
+      return;
+    }
+    if (outcome.kind === 'old_item') {
+      // (lQjt6sKP) Eskirgan karta: server «eskisini oldim» tasdig'ini
+      // so'radi — sotilmadi. Karta yangilanadi (🔄 qatori bilan) va savol
+      // beriladi; «Oldim» bilan yuborilgan bo'lsa qayta so'ralmaydi (sikl yo'q).
+      if (fromProof) await this.clearProof(ctx);
+      await this.showOutcome(ctx, outcome.message);
+      await this.courier.refreshCard(
+        ctx,
+        ctx.fromId,
+        proof.order_id,
+        actor.user_id,
+      );
+      if (!proof.old_item_collected) {
+        await this.askOldItem(ctx, actor.user_id, proof.order_id);
+      }
       return;
     }
     if (outcome.message === COURIER_OP_UNKNOWN_TEXT && retryActionId) {
@@ -824,29 +941,45 @@ export class CourierActions {
 
   /**
    * (BOT-3d) Natija tasdiq xabarining O'ZIGA yoziladi (tugmalar olinadi —
-   * qayta bosilmaydi); `keepButtons` — «✅ Ha» qayta bosish uchun qoladi.
-   * Tahrirlab bo'lmasa — yangi xabar.
+   * qayta bosilmaydi); `keepButtons` — faqat BOSILGAN tugma qayta bosish
+   * uchun qoladi. «Orqaga» / «Bekor» olinadi: natija noma'lum paytda
+   * «bekor qilindi» deyolmaydi. Tahrirlab bo'lmasa — yangi xabar.
    */
   private async showOutcome(
     ctx: BotContext,
     text: string,
     keepButtons = false,
   ): Promise<void> {
-    const message = ctx.update.callback_query?.message;
+    const query = ctx.update.callback_query;
+    const message = query?.message;
     if (message?.message_id && this.transport) {
       const edited = await this.transport.editMessage(
         ctx.chatId,
         message.message_id,
         {
           text,
-          reply_markup:
-            keepButtons && message.reply_markup
-              ? message.reply_markup
-              : { inline_keyboard: [] },
+          reply_markup: (keepButtons && retryMarkup(query)) || {
+            inline_keyboard: [],
+          },
         },
       );
       if (edited) return;
     }
     await ctx.reply(text);
   }
+}
+
+/**
+ * Natija noma'lum — xabarda faqat bosilgan tugma qoladi; topilmasa
+ * (eski xabar) — avvalgi tugmalar o'zgarmaydi.
+ */
+function retryMarkup(
+  query: TelegramCallbackQuery | undefined,
+): InlineKeyboardMarkup | undefined {
+  const markup = query?.message?.reply_markup;
+  if (!markup) return undefined;
+  const pressed = markup.inline_keyboard
+    .flat()
+    .filter((button) => button.callback_data === query?.data);
+  return pressed.length ? { inline_keyboard: [pressed] } : markup;
 }

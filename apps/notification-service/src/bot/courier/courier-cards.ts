@@ -1,4 +1,8 @@
-import { escapeTelegramHtml, cabinetLinks } from '@app/common';
+import {
+  escapeTelegramHtml,
+  cabinetLinks,
+  formatOrderNumber,
+} from '@app/common';
 import type { InlineKeyboardButton } from '../telegram.types';
 import { STATUS_EMOJI } from '../handlers/market.handler';
 
@@ -113,10 +117,32 @@ export interface CourierOrderView {
   customer_phone: string | null;
   market_id: string | null;
   proof_conditions: string[];
+  /** (lQjt6sKP) Almashtirish: qaysi eski (yetkazilgan) buyurtma o'rniga. */
+  replacement_of_order_id: string | null;
+  /** (lQjt6sKP) `awaiting_old_pickup` | `old_collected` | `old_returned`. */
+  replacement_state: string | null;
 }
 
 const text = (value: unknown): string =>
   typeof value === 'string' || typeof value === 'number' ? String(value) : '';
+
+/** (lQjt6sKP) Eski mahsulot allaqachon olingan holatlar — sotuv tasdiqsiz o'tadi. */
+const OLD_ITEM_DONE_STATES = ['old_collected', 'old_returned'];
+/** Kartadagi «eskisini olib keling» qatori — faqat sotuvgacha bo'lgan holatlarda. */
+const OLD_ITEM_NOTE_STATUSES = ['waiting', 'on the road', 'waiting_customer'];
+
+/**
+ * (lQjt6sKP) Almashtirish buyurtmasida kuryer eski mahsulotni hali olmagan
+ * bo'lsa — eski buyurtma raqami, aks holda `null`. order-service sotuv
+ * darvozasi (`assertReplacementSaleAllowed`) bilan AYNI qoida: holat
+ * `old_collected` / `old_returned` bo'lmaguncha sotuv «Oldim» tasdig'isiz 400.
+ */
+export function oldItemToCollect(order: CourierOrderView): string | null {
+  if (!order.replacement_of_order_id) return null;
+  return OLD_ITEM_DONE_STATES.includes(order.replacement_state ?? '')
+    ? null
+    : order.replacement_of_order_id;
+}
 
 /** Gateway buyurtma qatori (enrichOrders) → kartaga kerakli maydonlar. */
 export function toCourierOrderView(row: unknown): CourierOrderView | null {
@@ -141,6 +167,8 @@ export function toCourierOrderView(row: unknown): CourierOrderView | null {
     customer_phone: text(customer?.phone_number) || null,
     market_id: text(order.market_id ?? market?.id) || null,
     proof_conditions: conditions,
+    replacement_of_order_id: text(order.replacement_of_order_id) || null,
+    replacement_state: text(order.replacement_state) || null,
   };
 }
 
@@ -163,6 +191,18 @@ export function courierCardText(
   }
   if (order.customer_phone) {
     lines.push(`📞 ${escapeTelegramHtml(order.customer_phone.slice(0, 32))}`);
+  }
+  // (lQjt6sKP) Almashtirish — yangisini topshirib, eskisini qaytarib olish.
+  const oldId = OLD_ITEM_NOTE_STATUSES.includes(order.status)
+    ? oldItemToCollect(order)
+    : null;
+  if (oldId) {
+    // Eski buyurtma — chek / yorliqdagi raqam («EL-…»), kabinet va AI
+    // ko'rinishi bilan bir xil; raqam bo'lmasa — xom qiymat.
+    const shown = formatOrderNumber(oldId) ?? oldId;
+    lines.push(
+      `🔄 Almashtirish — mijozdan eski mahsulotni (№${escapeTelegramHtml(shown.slice(0, 30))}) olib keling.`,
+    );
   }
   if (note) lines.push('', note);
   return lines.join('\n').slice(0, 4000);

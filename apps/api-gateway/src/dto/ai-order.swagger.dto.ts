@@ -289,13 +289,46 @@ export class AiConfirmOrderDto {
   @Type(() => AiConfirmItemDto)
   items!: AiConfirmItemDto[];
 
-  @ApiProperty({ example: 150000, minimum: 0 })
+  // Sxemada ixtiyoriy: `replaced_order_id` bilan berilmasa ham bo'ladi —
+  // qolgan holatda majburiyligini ValidateIf tutadi.
+  @ApiPropertyOptional({
+    example: 150000,
+    minimum: 0,
+    description:
+      'Majburiy. Faqat `replaced_order_id` bilan (almashtirish) berilmasa bo‘ladi — buyurtma 0 narx bilan (bepul almashtirish) yaratiladi.',
+  })
+  // Almashtirish (BeePost): eski buyurtma bog'langan bo'lsa narx so'ralmaydi.
+  @ValidateIf(
+    (order: AiConfirmOrderDto) =>
+      !hasValue(order.replaced_order_id) || hasValue(order.total_price),
+  )
   @IsNumber(
     { allowNaN: false, allowInfinity: false },
     { message: "total_price son bo'lishi kerak" },
   )
   @Min(0, { message: "total_price manfiy bo'lishi mumkin emas" })
-  total_price!: number;
+  total_price?: number;
+
+  /**
+   * ALMASHTIRISH (kafolat-swap): `POST /orders` dagi `replaced_order_id`
+   * bilan AYNI qoida. Egalik/holat/takror — order-service'da (market —
+   * server aniqlagan so'rovchi marketi).
+   */
+  @ApiPropertyOptional({
+    example: '1024',
+    description:
+      'Almashtiriladigan eski buyurtma ID si (ai-parse `replacement_candidates`, GET /orders/replaceable). Faqat shu marketning yetkazilgan buyurtmasi; ' +
+      'boshqa marketniki, yetkazilmagan yoki allaqachon almashtirilgani — natijada `create_failed` (sababi bilan).',
+  })
+  @IsOptional()
+  @Transform(({ value }: { value: unknown }): unknown =>
+    typeof value === 'number' ? String(value) : value,
+  )
+  @IsString()
+  @Matches(/^\d{1,18}$/, {
+    message: "replaced_order_id buyurtma raqami (ID) bo'lishi kerak",
+  })
+  replaced_order_id?: string;
 
   @ApiProperty({ enum: Where_deliver, example: Where_deliver.CENTER })
   @Transform(toLowerCase)

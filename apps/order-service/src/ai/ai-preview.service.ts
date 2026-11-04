@@ -71,7 +71,11 @@ const LOGISTICS_RPC_TIMEOUT_MS = 6_000;
 const IDENTITY_RPC_TIMEOUT_MS = 3_000;
 /** `logistics.district.resolve_by_text` bitta so'rovdagi maksimal element (C7). */
 const DISTRICT_BATCH_MAX = 50;
-/** Almashtirish buyurtmasi belgisi — Elchi DTO'sida parent_order_id yo'q (MVP). */
+/**
+ * Almashtirish buyurtmasi belgisi (izohda). Eski buyurtmani gateway
+ * telefon bo'yicha bog'laydi (`replaced_order_id`, narx kamchiliklari ham
+ * o'sha yerda) — bu yerda market buyurtmalari o'qilmaydi.
+ */
 const REPLACEMENT_MARK = '[ALMASHTIRISH]';
 
 type WhereDeliver = 'center' | 'address';

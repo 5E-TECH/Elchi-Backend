@@ -515,7 +515,7 @@ describe('e7KhaeOO — kimga ishlaydi', () => {
     );
   });
 
-  it('isCreatable: tuman yo‘q / almashtirish — yo‘q; narxni tasdiqlash va katalogda yo‘q mahsulot — ha', () => {
+  it('isCreatable: tuman yo‘q / narx yo‘q / tekshirilmagan almashtirish — yo‘q; narxni tasdiqlash, katalogda yo‘q mahsulot va almashtirish — ha', () => {
     expect(
       isCreatable(
         preview(0, { issues: ['price_confirm', 'item_unresolved'] }) as never,
@@ -529,9 +529,39 @@ describe('e7KhaeOO — kimga ishlaydi', () => {
         }) as never,
       ),
     ).toBe(false);
+    // TGREPL: almashtirish endi botdan yaratiladi — eski buyurtma topilsa
+    // `replaced_order_id` bilan (narxsiz ham), topilmasa oddiy buyurtma
+    // (narx bilan). Qidiruv natijasi yo'q (eski draft / tekshirib
+    // bo'lmagan) — ilgarigidek yo'q.
     expect(isCreatable(preview(0, { is_replacement: true }) as never)).toBe(
       false,
     );
+    expect(
+      isCreatable(
+        preview(0, {
+          is_replacement: true,
+          replacement_lookup: 'unavailable',
+        }) as never,
+      ),
+    ).toBe(false);
+    expect(
+      isCreatable(
+        preview(0, {
+          is_replacement: true,
+          replacement_lookup: 'not_found',
+        }) as never,
+      ),
+    ).toBe(true);
+    expect(
+      isCreatable(
+        preview(0, {
+          is_replacement: true,
+          replacement_lookup: 'found',
+          replaced_order_id: '555',
+          total_price: null,
+        }) as never,
+      ),
+    ).toBe(true);
     expect(
       isCreatable(
         preview(0, { total_price: null, issues: ['price_missing'] }) as never,

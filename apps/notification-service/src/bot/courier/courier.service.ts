@@ -19,6 +19,7 @@ import {
   OP_LABEL,
   cabinetButton,
   courierCardText,
+  oldItemToCollect,
   opsForStatus,
   toCourierOrderView,
   type CourierOp,
@@ -45,11 +46,15 @@ export const COURIER_OP_TIMEOUT_MS = 65_000;
 /** (BOT-3d) Natija noma'lum (timeout / 502–504) — qayta bosish o'rniga tekshirish. */
 export const COURIER_OP_UNKNOWN_TEXT =
   "⏳ Natija noma'lum — /ishim orqali buyurtma holatini tekshiring.";
+/** (lQjt6sKP) Server almashtirish sotuvini eski mahsulot tasdig'isiz rad etdi. */
+export const courierOldItemRequiredText = (orderId: string) =>
+  `🔄 #${orderId} sotilmadi — bu almashtirish buyurtmasi. Avval mijozdan eski mahsulotni olganingizni tasdiqlang.`;
 
 export type CourierOpOutcome =
   | { kind: 'ok'; message: string }
   | { kind: 'pending'; message: string }
   | { kind: 'proof'; message: string }
+  | { kind: 'old_item'; message: string }
   | { kind: 'denied'; message: string }
   | { kind: 'error'; message: string };
 
@@ -171,7 +176,14 @@ export class CourierService {
           action: COURIER_ACTIONS.op,
           actorUserId,
           orderId: order.id,
-          payload: { op },
+          // (lQjt6sKP) Eski mahsulot hali olinmagan almashtirish — «✅ Sotildi»
+          // oddiy «Tasdiqlaysizmi?» o'rniga «eskisini oldingizmi?» so'raydi.
+          // Oddiy buyurtma hech qachon almashtirishga aylanmaydi
+          // (`replacement_of_order_id` faqat yaratishda) — unda payload o'zgarmagan.
+          payload:
+            op === 'sell' && oldItemToCollect(order)
+              ? { op, replacement: true }
+              : { op },
           oneShot: false,
         }),
       });
@@ -326,6 +338,8 @@ export class CourierService {
       reason?: string;
       proofFileKeys?: string[];
       idempotencyKey?: string;
+      /** (lQjt6sKP) Almashtirish: kuryer «✅ Oldim — sotish» ni bosgan. */
+      oldItemCollected?: boolean;
     },
   ): Promise<CourierOpOutcome> {
     const body: Record<string, unknown> = {};
@@ -333,6 +347,7 @@ export class CourierService {
     if (op === 'cnd') body.reason = options.reason;
     if (options.proofFileKeys?.length)
       body.proofFileKeys = options.proofFileKeys;
+    if (op === 'sell' && options.oldItemCollected) body.oldItemCollected = true;
     let res: { status: number; body: unknown };
     try {
       res = await this.gateway.request(
@@ -385,6 +400,15 @@ export class CourierService {
     }
     if (res.status >= 200 && res.status < 300) {
       return { kind: 'ok', message: `#${orderId} — ${OP_DONE[op]}` };
+    }
+    // (lQjt6sKP) Almashtirish sotuvi «eskisini oldim» tasdig'isiz (eskirgan
+    // karta / tugma) — inglizcha-texnik matn emas, aniq ko'rsatma.
+    if (
+      op === 'sell' &&
+      res.status === 400 &&
+      /eski mahsulot|old_item_collected/i.test(text)
+    ) {
+      return { kind: 'old_item', message: courierOldItemRequiredText(orderId) };
     }
     if (/isbot majburiy/i.test(text)) {
       return {
