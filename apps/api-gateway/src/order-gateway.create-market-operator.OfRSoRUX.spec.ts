@@ -165,10 +165,11 @@ describe('OfRSoRUX — POST /orders MARKET_OPERATOR (qo‘lda yaratish)', () => 
   it('⭐ operator_id — operatorning o‘zi (komissiya/atributsiya), requester roli uzatiladi; filial/source qo‘yilmaydi', async () => {
     const { controller, orderClient } = makeController();
 
+    // Begona `operator_id` endi 400 («Operator» tanlovi — operator faqat
+    // o'zini tanlaydi): order-gateway.create-chosen-operator.spec.ts.
     await controller.create(
       {
         ...dto,
-        operator_id: '5',
         branch_id: '22',
         source: 'branch',
         status: 'sold',

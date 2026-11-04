@@ -182,6 +182,11 @@ import {
   resolveOrderOperatorPhones,
   type OrderMarketPhonePolicy,
 } from './order-create/order-operator-phone';
+import {
+  MARKET_OPERATOR_SELECTABLE_CMD,
+  resolveChosenOrderOperator,
+} from './order-create/order-chosen-operator';
+import { resolveMarketOperatorMarketId } from './auth/market-operator-market';
 import { isOrderQrLightView, sendOrderQrLight } from './order-qr-light-view';
 import { scanOrderSummary } from './order-scan-summary';
 import {
@@ -463,6 +468,8 @@ const CREATE_LIFECYCLE_FIELDS = [
   'to_be_paid',
   'paid_amount',
   'qr_code_token',
+  // Formadagi tanlov (`operator_id`) bu yerdan EMAS — `createOrderInternal`
+  // uni alohida tekshiradi (`resolveChosenOrderOperator`), admin uchun ham.
   'operator_id',
 ] as const;
 
@@ -1042,15 +1049,10 @@ export class OrderGatewayController {
   /**
    * MARKET_OPERATOR biriktirilgan market (identity `user.market_id`).
    * Topilmasa yoki identity javob bermasa — '' (chaqiruvchi rad etadi).
+   * Manba `GET /market-operators/selectable` bilan umumiy.
    */
   private async resolveMarketOperatorMarketId(user: JwtUser): Promise<string> {
-    const profile: unknown = await this.sendIdentityWithTimeout(
-      { cmd: 'identity.user.find_by_id' },
-      { id: user?.sub },
-    ).catch(() => null);
-    return this.asStr(
-      (profile as { data?: { market_id?: unknown } } | null)?.data?.market_id,
-    ).trim();
+    return resolveMarketOperatorMarketId(this.identityClient, user?.sub);
   }
 
   /**
@@ -2263,7 +2265,10 @@ export class OrderGatewayController {
       'Kalitsiz — har so`rov alohida buyurtma (avvalgidek). ' +
       'OfRSoRUX: MARKET_OPERATOR ham yaratadi — market server tomonda (operator biriktirilgan market; ' +
       "tanadagi `market_id` e'tiborsiz, marketga biriktirilmagan operator — 400), `operator` bo'sh bo'lsa " +
-      'operator ismi yoziladi, javob market proyeksiyasida (kuryer tarifi/ulushi va filial ulushisiz).',
+      'operator ismi yoziladi, javob market proyeksiyasida (kuryer tarifi/ulushi va filial ulushisiz). ' +
+      '«Operator» tanlovi: ixtiyoriy `operator_id` (GET /market-operators/selectable) — buyurtma marketining faol ' +
+      "operatori bo'lmasa 400 «Tanlangan operator bu marketga tegishli emas yoki faol emas» (admin ham); to'g'ri " +
+      "bo'lsa `operator_id` va `operator` = operator ismi. Market operatori faqat o'zini tanlaydi (boshqasi — 400).",
   })
   @ApiHeader({
     name: 'Idempotency-Key',
@@ -2560,12 +2565,30 @@ export class OrderGatewayController {
       secondaryOperatorPhone: dto.secondary_operator_phone,
       strict: opts?.createdVia !== 'bot',
     });
-    const filledOperatorName = await this.resolveCreateOperatorName(
-      safeOrderDto.operator,
+    // Formadagi «Operator» tanlovi (`operator_id`) — yakuniy market
+    // aniqlangach, mijoz yaratilishidan OLDIN: shu marketning faol operatori
+    // bo'lmasa 400 (SUPERADMIN/ADMIN ham). Bot va AI yo'llari uni yubormaydi.
+    const chosenOperator = await resolveChosenOrderOperator({
+      operatorId: dto.operator_id,
       roles,
-      req.user,
-      requesterName,
-    );
+      requesterId: req.user.sub,
+      marketId: resolvedMarketId,
+      loadSelectable: (payload) =>
+        this.sendIdentityWithTimeout(
+          { cmd: MARKET_OPERATOR_SELECTABLE_CMD },
+          payload,
+        ),
+    });
+    // Operator tanlangan bo'lsa ism — uniki (yozilgan matn ham, so'rovchi
+    // ismi ham ishlatilmaydi).
+    const filledOperatorName = chosenOperator
+      ? null
+      : await this.resolveCreateOperatorName(
+          safeOrderDto.operator,
+          roles,
+          req.user,
+          requesterName,
+        );
 
     // txmkXVBa: mavjud kartaning shu marketda buyurtmasi bormi (customer_id
     // yo'lida doira tekshiruvidan ma'lum; telefon yo'lida — kerak bo'lsa
@@ -2663,7 +2686,11 @@ export class OrderGatewayController {
                 'operator_phone',
                 'secondary_operator_phone',
               ]),
-              ...(filledOperatorName ? { operator: filledOperatorName } : {}),
+              ...(chosenOperator
+                ? { operator: chosenOperator.name || null }
+                : filledOperatorName
+                  ? { operator: filledOperatorName }
+                  : {}),
               ...(operatorPhones.operator_phone
                 ? { operator_phone: operatorPhones.operator_phone }
                 : {}),
@@ -2687,9 +2714,12 @@ export class OrderGatewayController {
               // inline mijozniki (bot, filial); mavjud mijozniki va viloyat —
               // order-service'da.
               district_id: orderCreateDistrictId(dto),
-              operator_id:
-                roles.includes(RoleEnum.REGISTRATOR) ||
-                roles.includes(RoleEnum.MARKET_OPERATOR)
+              // Tekshirilgan tanlov; bo'lmasa — rol bo'yicha (registrator /
+              // market operatori — o'zi, qolganlar — null).
+              operator_id: chosenOperator
+                ? chosenOperator.id
+                : roles.includes(RoleEnum.REGISTRATOR) ||
+                    roles.includes(RoleEnum.MARKET_OPERATOR)
                   ? req.user.sub
                   : null,
               // Filial xodimi — o'z filiali; SUPERADMIN/ADMIN — so'raganicha;
@@ -2719,6 +2749,12 @@ export class OrderGatewayController {
             ...(opts?.aiSignature ? { ai_signature: opts.aiSignature } : {}),
             ...(opts?.aiAudit ? { ai_audit: opts.aiAudit } : {}),
             ...(opts?.createdVia ? { created_via: opts.createdVia } : {}),
+            // Tanlangan operator — YUQORI darajada: order-service admin
+            // bo'lmagan so'rovchida DTO'dagi `operator_id` ni olib tashlaydi,
+            // bu kalitni esa faqat gateway (tekshiruvdan keyin) qo'yadi.
+            ...(chosenOperator
+              ? { verified_operator_id: chosenOperator.id }
+              : {}),
           },
         )
         .pipe(timeout(8000)),

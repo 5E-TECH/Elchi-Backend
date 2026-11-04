@@ -1,4 +1,4 @@
-import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional, OmitType } from '@nestjs/swagger';
 import { ProblemContactDto } from './contacts.swagger.dto';
 import {
   ArrayNotEmpty,
@@ -357,6 +357,35 @@ export class CreateOrderRequestDto {
   @IsOptional()
   @IsString()
   operator?: string | null;
+
+  /**
+   * Formadagi «Operator» tanlovi (BeePost `operator_id` select) — ro'yxat
+   * `GET /market-operators/selectable`. Server buyurtmaning YAKUNIY marketi
+   * bo'yicha qayta tekshiradi (`order-create/order-chosen-operator.ts`);
+   * bo'sh satr — tanlanmagan.
+   */
+  @ApiPropertyOptional({
+    type: String,
+    example: '26',
+    description:
+      'Tanlangan market operatori ID si (GET /market-operators/selectable ro`yxatidan). Buyurtma marketining faol, ' +
+      "o'chirilmagan operatori bo'lishi SHART, aks holda 400 «Tanlangan operator bu marketga tegishli emas yoki faol emas» " +
+      "(superadmin/admin ham tekshiriladi). To'g'ri bo'lsa buyurtmaga `operator_id` va `operator` = operator ismi " +
+      "yoziladi (`operator` matni e'tiborsiz). Market operatori faqat o'zini tanlay oladi (boshqasi — 400). " +
+      "Berilmasa — avvalgidek: `operator` matni; registrator / market operatori — o'zi.",
+  })
+  @IsOptional()
+  @Transform(({ value }: { value: unknown }) => {
+    if (typeof value === 'number') return String(value);
+    // Bo'sh satr — «tanlanmagan» (forma select'ining bo'sh qiymati).
+    if (typeof value === 'string' && value.trim() === '') return undefined;
+    return value;
+  })
+  @IsString()
+  @Matches(/^\d{1,19}$/, {
+    message: "operator_id operator ID si (raqam) bo'lishi kerak",
+  })
+  operator_id?: string | null;
 
   /**
    * VRyloH62 — formadagi operator raqami. Server uni market sozlamasi
@@ -1039,7 +1068,15 @@ export class PartlySellOrderRequestDto {
   oldItemCollected?: boolean;
 }
 
-export class CreateExternalOrderRequestDto extends CreateOrderRequestDto {
+/**
+ * `POST /orders/external` — `operator_id` (formadagi «Operator» tanlovi) YO'Q:
+ * u faqat `POST /orders` da tekshiriladi; bu yerda avvalgidek 400
+ * (forbidNonWhitelisted), admin uchun ham tekshiruvsiz o'tmaydi.
+ */
+export class CreateExternalOrderRequestDto extends OmitType(
+  CreateOrderRequestDto,
+  ['operator_id'] as const,
+) {
   @ApiPropertyOptional({ example: 'EXT-ORDER-1001' })
   @IsOptional()
   @IsString()

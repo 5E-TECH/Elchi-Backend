@@ -2910,7 +2910,7 @@
     },
     "/orders": {
       "post": {
-        "description": "gpCIsGjH: `Idempotency-Key` sarlavhasi bilan takroriy so'rov (ikki marta bosish, retry) ikkinchi buyurtma yaratmaydi — keshlangan javob `idempotent_replay: true` bilan qaytadi; birinchisi hali bajarilayotgan bo'lsa 409. Kalitsiz — har so`rov alohida buyurtma (avvalgidek). OfRSoRUX: MARKET_OPERATOR ham yaratadi — market server tomonda (operator biriktirilgan market; tanadagi `market_id` e'tiborsiz, marketga biriktirilmagan operator — 400), `operator` bo'sh bo'lsa operator ismi yoziladi, javob market proyeksiyasida (kuryer tarifi/ulushi va filial ulushisiz).",
+        "description": "gpCIsGjH: `Idempotency-Key` sarlavhasi bilan takroriy so'rov (ikki marta bosish, retry) ikkinchi buyurtma yaratmaydi — keshlangan javob `idempotent_replay: true` bilan qaytadi; birinchisi hali bajarilayotgan bo'lsa 409. Kalitsiz — har so`rov alohida buyurtma (avvalgidek). OfRSoRUX: MARKET_OPERATOR ham yaratadi — market server tomonda (operator biriktirilgan market; tanadagi `market_id` e'tiborsiz, marketga biriktirilmagan operator — 400), `operator` bo'sh bo'lsa operator ismi yoziladi, javob market proyeksiyasida (kuryer tarifi/ulushi va filial ulushisiz). «Operator» tanlovi: ixtiyoriy `operator_id` (GET /market-operators/selectable) — buyurtma marketining faol operatori bo'lmasa 400 «Tanlangan operator bu marketga tegishli emas yoki faol emas» (admin ham); to'g'ri bo'lsa `operator_id` va `operator` = operator ismi. Market operatori faqat o'zini tanlaydi (boshqasi — 400).",
         "operationId": "OrderGatewayController_create",
         "parameters": [
           {
@@ -22066,6 +22066,52 @@
         ]
       }
     },
+    "/market-operators/selectable": {
+      "get": {
+        "description": "BeePost `GET user/operators/selectable` kabi. Faqat faol, o'chirilmagan market operatorlari — `{ id, name }`, ism bo`yicha (katta-kichik harf farqsiz). Market — o`zi (boshqa `market_id` → 400); market operatori — biriktirilgan marketi (boshqa `market_id` → 400, biriktirilmagan → 400); superadmin, admin, registrator, menejer, filial — `market_id` MAJBURIY. Tanlangan id `POST /orders` `operator_id` ga yuboriladi.",
+        "operationId": "MarketOperatorGatewayController_selectable",
+        "parameters": [
+          {
+            "name": "market_id",
+            "required": false,
+            "in": "query",
+            "description": "Market ID. Market / market operatori uchun ixtiyoriy (faqat o`ziniki); qolgan rollar uchun majburiy",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "{ statusCode: 200, message, data: { items: [{ id: string, name: string }] } }"
+          },
+          "400": {
+            "description": "market_id yo'q / noto'g'ri / begona; operator marketga biriktirilmagan"
+          },
+          "403": {
+            "description": "Rol ruxsat etilmagan"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Buyurtma formasidagi «Operator» tanlovi — marketning faol operatorlari",
+        "tags": [
+          "Market operators"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "registrator",
+          "manager",
+          "branch",
+          "market",
+          "market_operator"
+        ]
+      }
+    },
     "/market-operators": {
       "get": {
         "operationId": "MarketOperatorGatewayController_list",
@@ -26302,6 +26348,11 @@
             "type": "object",
             "example": "Operator",
             "description": "Bo'sh bo'lsa registrator / market operatori uchun server uning ismini yozadi (VRyloH62)"
+          },
+          "operator_id": {
+            "type": "string",
+            "example": "26",
+            "description": "Tanlangan market operatori ID si (GET /market-operators/selectable ro`yxatidan). Buyurtma marketining faol, o'chirilmagan operatori bo'lishi SHART, aks holda 400 «Tanlangan operator bu marketga tegishli emas yoki faol emas» (superadmin/admin ham tekshiriladi). To'g'ri bo'lsa buyurtmaga `operator_id` va `operator` = operator ismi yoziladi (`operator` matni e'tiborsiz). Market operatori faqat o'zini tanlay oladi (boshqasi — 400). Berilmasa — avvalgidek: `operator` matni; registrator / market operatori — o'zi."
           },
           "operator_phone": {
             "type": "object",

@@ -308,7 +308,15 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
   takes an optional `commission_type` + `commission_value` (B3ZtzCCx; both
   or neither, same bounds as `update_commission` via shared
   `parseMarketOperatorCommission` / `assertMarketOperatorCommissionBounds`),
-  saved in the same INSERT.
+  saved in the same INSERT. Exception — `selectable` (`{ market_id,
+  operator_id? }` → `{ items: [{ id, name }] }`, active non-deleted
+  operators of that market, name-sorted case-insensitive, cap 500, no
+  requester): the order-form «Operator» pick list. Scope is resolved in the
+  gateway (`GET /market-operators/selectable`: SA/ADMIN/REGISTRATOR/MANAGER/
+  BRANCH — `market_id` required; MARKET — own; MARKET_OPERATOR — its
+  `user.market_id`, shared helper `auth/market-operator-market.ts`); with
+  `operator_id` it returns only that row — `POST /orders` validates the chosen
+  operator through the same query.
 
 ### order-service (`order_schema`) — the core
 - **Entities:** `order` (key cols incl. `status` (`Order_status`), `total_price`;
@@ -1239,6 +1247,15 @@ Money (settlement, cashboxes) and tariffs are unchanged. Details: order-service
   Requester-less internal imports are unchanged; the site import derives
   `region_id` from the district and skips unresolvable rows
   (`region_unresolved`).
+  Exception — the `POST /orders` «Operator» pick (`operator_id`, 2026-11-04):
+  the gateway checks it against `identity.market_operator.selectable` of the
+  order's final market (every role, SA/ADMIN too; MARKET_OPERATOR may pick
+  only itself; else 400, nothing created), then sets `operator_id` +
+  `operator` = that name and sends the id at the payload TOP level
+  (`verified_operator_id`). order-service prefers it over `dto.operator_id`
+  (still stripped for non-admins); without it the old rule holds
+  (REGISTRATOR / MARKET_OPERATOR → requester). `/orders/external`, bot, AI
+  and partner paths never send it.
 - **Edit** (`PATCH /orders/:id`, `/:id/full` → `order.update_from_api`):
   SA/ADMIN/REGISTRATOR only. `status`, `market_id`, `to_be_paid`,
   `paid_amount` → 400 for everyone, SA included (status changes only through

@@ -164,6 +164,12 @@ const MARKET_OPERATOR_PERCENT_MAX = 100;
 const MARKET_OPERATOR_FIXED_MAX = 1_000_000;
 
 /**
+ * Buyurtma formasidagi «Operator» tanlovi ro'yxati chegarasi — bitta marketda
+ * bundan ko'p faol operator amalda yo'q; cheksiz javob RMQ'ni og'irlashtirardi.
+ */
+const MARKET_OPERATOR_SELECTABLE_LIMIT = 500;
+
+/**
  * (GvL6ZFAd) market_tg_token — bearer sir: uni order-bot yoki bildirishnoma
  * botiga yuborgan HAR KIM o'sha marketni o'z chatiga bog'laydi. Ko'rish va
  * almashtirish FAQAT SUPERADMIN (gateway RolesGuard + shu servisdagi qayta
@@ -6329,6 +6335,53 @@ export class UserServiceService implements OnModuleInit {
         totalPages: Math.max(1, Math.ceil(total / limit)),
       },
     });
+  }
+
+  /**
+   * identity.market_operator.selectable — buyurtma yaratish formasidagi
+   * «Operator» tanlovi (BeePost `GET user/operators/selectable`): shu
+   * marketning FAOL, o'chirilmagan operatorlari, faqat `{ id, name }`, ism
+   * bo'yicha (katta-kichik harf farqsiz). Qaysi market — gateway rol bo'yicha
+   * hal qiladi (market — o'zi, market operatori — biriktirilgan marketi,
+   * admin/filial xodimi — formadagi market), bu yerda faqat id shakli.
+   * `operatorId` berilsa — faqat o'sha operator: `POST /orders` tanlangan
+   * operatorni ro'yxat bilan AYNI qoida bo'yicha tekshiradi.
+   */
+  async findSelectableMarketOperators(marketId: unknown, operatorId?: unknown) {
+    const rawMarketId = primitiveText(marketId).trim();
+    if (!/^\d{1,19}$/.test(rawMarketId)) {
+      this.badRequest("market_id noto'g'ri");
+    }
+    const rawOperatorId = primitiveText(operatorId).trim();
+    if (rawOperatorId && !/^\d{1,19}$/.test(rawOperatorId)) {
+      this.badRequest("operator_id noto'g'ri");
+    }
+
+    const rows = await this.users.find({
+      where: {
+        role: Roles.MARKET_OPERATOR,
+        market_id: BigInt(rawMarketId).toString(),
+        status: Status.ACTIVE,
+        isDeleted: false,
+        ...(rawOperatorId ? { id: BigInt(rawOperatorId).toString() } : {}),
+      },
+      select: { id: true, name: true },
+      order: { name: 'ASC', id: 'ASC' },
+      take: MARKET_OPERATOR_SELECTABLE_LIMIT,
+    });
+
+    // DB tartibi collation'ga bog'liq — yakuniy tartib shu yerda.
+    const items = rows
+      .map((row) => ({
+        id: String(row.id),
+        name: primitiveText(row.name).trim(),
+      }))
+      .sort(
+        (a, b) =>
+          a.name.toLowerCase().localeCompare(b.name.toLowerCase()) ||
+          Number(BigInt(a.id) - BigInt(b.id)),
+      );
+    return successRes({ items });
   }
 
   /**

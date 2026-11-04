@@ -55,6 +55,7 @@ import type {
   CreateMarketOperatorPayload,
   DeleteMarketOperatorPayload,
   FindMarketOperatorsPayload,
+  SelectableMarketOperatorsPayload,
   SetMarketOperatorStatusPayload,
   UpdateMarketOperatorCommissionPayload,
   UpdateMarketOperatorWarehouseAccessPayload,
@@ -813,6 +814,21 @@ export class IdentityController {
         payload?.market_id,
         payload?.query,
         payload?.requester,
+      ),
+    );
+  }
+
+  // Buyurtma formasidagi «Operator» tanlovi: market gateway'da rol bo'yicha
+  // aniqlanadi (market, market operatori, admin/filial xodimi).
+  @MessagePattern({ cmd: 'identity.market_operator.selectable' })
+  findSelectableMarketOperators(
+    @Payload() payload: SelectableMarketOperatorsPayload,
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.userService.findSelectableMarketOperators(
+        payload?.market_id,
+        payload?.operator_id,
       ),
     );
   }

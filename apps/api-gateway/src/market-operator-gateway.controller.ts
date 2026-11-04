@@ -28,9 +28,10 @@ import {
   ApiQuery,
   ApiTags,
 } from '@nestjs/swagger';
-import { timeout } from 'rxjs';
+import { firstValueFrom, timeout } from 'rxjs';
 import { Roles as RoleEnum } from '@app/common';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
+import { resolveMarketOperatorMarketId } from './auth/market-operator-market';
 import { Roles } from './auth/roles.decorator';
 import { RolesGuard } from './auth/roles.guard';
 import {
@@ -64,9 +65,11 @@ const MARKET_OPERATOR_RPC_TIMEOUT_MS = 8000;
  * forbidNonWhitelisted 400). Identity uni requester bilan qayta tekshiradi;
  * begona operator — 404 (id mavjudligi oshkor qilinmaydi).
  *
- * Barcha yo'llar FAQAT MARKET uchun (karta: "@Roles(MARKET), requester.sub =
+ * Boshqaruv yo'llari FAQAT MARKET uchun (karta: "@Roles(MARKET), requester.sub =
  * market_id majburiy" — BeePost `getMyOperators` ko'lam modeli). Admin uchun
- * mavjud `/users` yo'llari bor.
+ * mavjud `/users` yo'llari bor. Istisno — `GET selectable` (buyurtma
+ * formasidagi «Operator» tanlovi, faqat `{ id, name }`): buyurtma yaratadigan
+ * rollarga ochiq, market esa rol bo'yicha serverda aniqlanadi.
  */
 @ApiTags('Market operators')
 @ApiBearerAuth()
@@ -129,6 +132,99 @@ export class MarketOperatorGatewayController {
       return own;
     }
     throw new ForbiddenException('Bu amal uchun ruxsat yoq');
+  }
+
+  /**
+   * «Operator» tanlovi ko'lami — `POST /orders` dagi yakuniy market bilan
+   * AYNI (tanlangan operator yaratishda shu market bo'yicha tekshiriladi):
+   *  - MARKET — o'zi (JWT sub); boshqa `market_id` → 400;
+   *  - MARKET_OPERATOR — biriktirilgan marketi (identity `user.market_id`);
+   *    boshqa `market_id` → 400, biriktirilmagan → 400;
+   *  - qolganlar (superadmin, admin, registrator, menejer, filial) —
+   *    formada tanlangan `market_id` MAJBURIY.
+   */
+  private async resolveSelectableMarketId(
+    req: { user: JwtUser },
+    requestedMarketId?: string,
+  ): Promise<string> {
+    const roles = this.rolesOf(req);
+    if (roles.includes(RoleEnum.MARKET)) {
+      return this.resolveListMarketId(req, requestedMarketId);
+    }
+    const requested = String(requestedMarketId ?? '').trim();
+    if (requested && !BIGINT_ID_RE.test(requested)) {
+      throw new BadRequestException("market_id noto'g'ri");
+    }
+    if (roles.includes(RoleEnum.MARKET_OPERATOR)) {
+      const own = await resolveMarketOperatorMarketId(
+        this.identityClient,
+        req?.user?.sub,
+      );
+      if (!BIGINT_ID_RE.test(own)) {
+        throw new BadRequestException(
+          'Operator hech qaysi marketga biriktirilmagan',
+        );
+      }
+      if (requested && BigInt(requested) !== BigInt(own)) {
+        throw new BadRequestException(
+          "Market operatori faqat o'z marketi operatorlarini ko'ra oladi (market_id yubormang)",
+        );
+      }
+      return own;
+    }
+    if (!requested) {
+      throw new BadRequestException('market_id majburiy');
+    }
+    return requested;
+  }
+
+  // ⚠️ `:id` li yo'llardan OLDIN e'lon qilingan (statik `selectable`
+  // segmenti hech qachon id sifatida ushlanmasin).
+  @Get('selectable')
+  @Roles(
+    RoleEnum.SUPERADMIN,
+    RoleEnum.ADMIN,
+    RoleEnum.REGISTRATOR,
+    RoleEnum.MANAGER,
+    RoleEnum.BRANCH,
+    RoleEnum.MARKET,
+    RoleEnum.MARKET_OPERATOR,
+  )
+  @ApiOperation({
+    summary:
+      'Buyurtma formasidagi «Operator» tanlovi — marketning faol operatorlari',
+    description:
+      "BeePost `GET user/operators/selectable` kabi. Faqat faol, o'chirilmagan market operatorlari — `{ id, name }`, " +
+      'ism bo`yicha (katta-kichik harf farqsiz). Market — o`zi (boshqa `market_id` → 400); market operatori — ' +
+      'biriktirilgan marketi (boshqa `market_id` → 400, biriktirilmagan → 400); superadmin, admin, registrator, ' +
+      'menejer, filial — `market_id` MAJBURIY. Tanlangan id `POST /orders` `operator_id` ga yuboriladi.',
+  })
+  @ApiQuery({
+    name: 'market_id',
+    required: false,
+    type: String,
+    description:
+      'Market ID. Market / market operatori uchun ixtiyoriy (faqat o`ziniki); qolgan rollar uchun majburiy',
+  })
+  @ApiOkResponse({
+    description:
+      '{ statusCode: 200, message, data: { items: [{ id: string, name: string }] } }',
+  })
+  @ApiBadRequestResponse({
+    description:
+      "market_id yo'q / noto'g'ri / begona; operator marketga biriktirilmagan",
+  })
+  @ApiForbiddenResponse({ description: 'Rol ruxsat etilmagan' })
+  async selectable(
+    @Req() req: { user: JwtUser },
+    @Query('market_id') marketId?: string,
+  ) {
+    const scopedMarketId = await this.resolveSelectableMarketId(req, marketId);
+    return firstValueFrom<unknown>(
+      this.send('identity.market_operator.selectable', {
+        market_id: scopedMarketId,
+      }),
+    );
   }
 
   @Get()

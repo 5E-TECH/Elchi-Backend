@@ -73,6 +73,17 @@ function makeRepo(seed: Row[]) {
         return Promise.resolve([page.map((row) => ({ ...row })), all.length]);
       },
     ),
+    // «Operator» tanlovi: DB tartibi ATAYLAB ism bo'yicha emas (id kamayishi)
+    // — servis yakuniy tartibni o'zi beradi.
+    find: jest.fn(({ where, take }: { where: unknown; take?: number }) => {
+      const found = rows
+        .filter((row) =>
+          whereClauses(where).some((clause) => matches(row, clause)),
+        )
+        .sort((a, b) => Number(b.id) - Number(a.id))
+        .slice(0, take);
+      return Promise.resolve(found.map((row) => ({ ...row })));
+    }),
     create: jest.fn((value: Row) => ({ ...value })),
     save: jest.fn((entity: Row) => {
       if (!entity.id) {
@@ -484,6 +495,120 @@ describe('UserServiceService — market operatorlari (i76gGjyq)', () => {
           service.findMarketOperators(MARKET_A, { status: 'bogus' }, req),
         ),
       ).toBe(400);
+    });
+  });
+
+  /**
+   * identity.market_operator.selectable — buyurtma formasidagi «Operator»
+   * tanlovi (BeePost `operators/selectable`). Ko'lam gateway'da; bu yerda —
+   * filtr (faol, o'chirilmagan, shu market, rol), tartib va id shakli.
+   */
+  describe('findSelectableMarketOperators («Operator» tanlovi)', () => {
+    const operatorRow = (id: string, name: string, extra: Row = {}): Row => ({
+      isDeleted: false,
+      username: null,
+      id,
+      role: Roles.MARKET_OPERATOR,
+      status: Status.ACTIVE,
+      name,
+      phone_number: `+99890100${id.padStart(4, '0')}`,
+      market_id: MARKET_A,
+      password: 'bcrypt$secret',
+      commission_type: Commission_type.PERCENT,
+      commission_value: 5,
+      ...extra,
+    });
+
+    const selectableSeed = (): Row[] => [
+      ...seedRows(),
+      operatorRow('71', 'bobur'),
+      operatorRow('72', 'Anvar'),
+      operatorRow('73', 'aziz'),
+      operatorRow('74', 'Zafar nofaol', { status: Status.INACTIVE }),
+      operatorRow('75', "Olim o'chirilgan", { isDeleted: true }),
+      // Rol boshqa, market_id A — operator emas.
+      operatorRow('76', 'Kuryer A', { role: Roles.COURIER }),
+    ];
+
+    const itemsOf = (res: { data: unknown }) =>
+      (res.data as { items: Array<{ id: string; name: string }> }).items;
+
+    it('⭐ faqat shu marketning FAOL, o`chirilmagan operatorlari — { id, name }, ism bo`yicha (harf farqsiz)', async () => {
+      const { service, repo } = makeService(selectableSeed());
+
+      const res = await service.findSelectableMarketOperators(MARKET_A);
+
+      expect(res).toEqual({
+        statusCode: 200,
+        message: 'success',
+        data: {
+          items: [
+            { id: '72', name: 'Anvar' },
+            { id: '73', name: 'aziz' },
+            { id: '71', name: 'bobur' },
+          ],
+        },
+      });
+      // Parol, telefon, komissiya — tanlov javobida yo'q.
+      expect(Object.keys(itemsOf(res)[0]).sort()).toEqual(['id', 'name']);
+      expect(repo.find).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: {
+            role: Roles.MARKET_OPERATOR,
+            market_id: MARKET_A,
+            status: Status.ACTIVE,
+            isDeleted: false,
+          },
+          take: 500,
+        }),
+      );
+    });
+
+    it('boshqa market (B) — faqat B operatori; operatorsiz market — bo`sh ro`yxat', async () => {
+      const { service } = makeService(selectableSeed());
+
+      const b = await service.findSelectableMarketOperators(MARKET_B);
+      expect(itemsOf(b)).toEqual([{ id: '50', name: 'B operatori' }]);
+
+      const none = await service.findSelectableMarketOperators('999');
+      expect(itemsOf(none)).toEqual([]);
+    });
+
+    it("market_id kanonik: '010' ≡ '10'", async () => {
+      const { service } = makeService(selectableSeed());
+      const res = await service.findSelectableMarketOperators('010');
+      expect(itemsOf(res).map((item) => item.id)).toEqual(['72', '73', '71']);
+    });
+
+    it('⭐ operator_id bilan — faqat o`sha operator (yaratishdagi tekshiruv); nofaol/o`chirilgan/begona — bo`sh', async () => {
+      const { service } = makeService(selectableSeed());
+
+      const one = await service.findSelectableMarketOperators(MARKET_A, '073');
+      expect(itemsOf(one)).toEqual([{ id: '73', name: 'aziz' }]);
+
+      for (const id of ['74', '75', '76', '50', '9999']) {
+        const res = await service.findSelectableMarketOperators(MARKET_A, id);
+        expect(itemsOf(res)).toEqual([]);
+      }
+    });
+
+    it.each([[undefined], [''], ['abc'], ['1;drop'], ['-5'], [{ id: '10' }]])(
+      "noto'g'ri market_id %p → 400",
+      async (marketId) => {
+        const { service, repo } = makeService(selectableSeed());
+        expect(
+          await statusOf(service.findSelectableMarketOperators(marketId)),
+        ).toBe(400);
+        expect(repo.find).not.toHaveBeenCalled();
+      },
+    );
+
+    it("noto'g'ri operator_id → 400", async () => {
+      const { service, repo } = makeService(selectableSeed());
+      expect(
+        await statusOf(service.findSelectableMarketOperators(MARKET_A, 'x1')),
+      ).toBe(400);
+      expect(repo.find).not.toHaveBeenCalled();
     });
   });
 

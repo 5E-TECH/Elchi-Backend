@@ -29,6 +29,18 @@ export interface FindMarketOperatorsPayload {
   requester?: RequesterContext;
 }
 
+/**
+ * identity.market_operator.selectable — buyurtma yaratish formasidagi
+ * «Operator» tanlovi. Qaysi market — gateway rol bo'yicha hal qiladi
+ * (`GET /market-operators/selectable`), shu sabab requester yo'q.
+ * `operator_id` — `POST /orders` da tanlangan operatorni ro'yxat bilan AYNI
+ * qoida bo'yicha tekshirish uchun (faqat o'sha qator qaytadi).
+ */
+export interface SelectableMarketOperatorsPayload {
+  market_id: string;
+  operator_id?: string;
+}
+
 export interface DeleteMarketOperatorPayload {
   id: string;
   market_id: string;

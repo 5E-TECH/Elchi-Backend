@@ -6049,9 +6049,12 @@ export class OrderLifecycleService {
     // oq ro'yxatdan o'tkazgan) — CREATED yozuvining metadata'siga qo'shiladi.
     // Celz3rKJ: `createdVia` — yaratish kanali (controller oq ro'yxati,
     // hozir faqat 'bot'); DTO'dagi `created_via` HECH QACHON o'qilmaydi.
+    // `verifiedOperatorId` — formada tanlangan, gateway tekshirgan operator
+    // (payload yuqori darajasidan); DTO'dagi `operator_id` dan USTUN.
     opts?: {
       auditMetadata?: Record<string, unknown> | null;
       createdVia?: OrderCreatedVia | null;
+      verifiedOperatorId?: string | null;
     },
     warehousePlan: WarehouseCreatePlan | null = null,
     /** VkKDSNNn: `create()` boshlangan vaqt (pochtaga biriktirish muddati). */
@@ -6083,8 +6086,12 @@ export class OrderLifecycleService {
     );
     const isOperatorRequester =
       roles.has(Roles.REGISTRATOR) || roles.has(Roles.MARKET_OPERATOR);
+    // Formadagi tanlov faqat ishonchli yo'ldan (gateway tekshiruvi): admin
+    // bo'lmagan so'rovchining `dto.operator_id` si yuqorida olib tashlangan.
     const operatorId =
-      dto.operator_id ?? (isOperatorRequester ? (requester?.id ?? null) : null);
+      opts?.verifiedOperatorId ??
+      dto.operator_id ??
+      (isOperatorRequester ? (requester?.id ?? null) : null);
 
     // 6kHnNH9j: ombor buyurtmasi — darhol viloyat filialida (HQ qabuli va
     // pochtasiz), kuryerga biriktirishga tayyor.

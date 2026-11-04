@@ -22,6 +22,33 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+### 2026-11-04 — Buyurtma formasida «Operator» tanlovi (BeePost kabi), chekda operator ismi
+
+Ega talabi: «Chekda operator ismi chiqmayapti, loyihada operatorni tanlash imkoni yo'q». Avval formada operator faqat erkin matn edi: buyurtmaga `operator_id` yozilmasdi (market yaratgan buyurtmada operator komissiyasi hisoblanmasdi), market operatorini tanlab bo'lmasdi.
+
+**Qoida (BeePost bilan bir xil):**
+- Tanlov ro'yxati — buyurtma marketining **faol, o'chirilmagan** market operatorlari, ism bo'yicha (katta-kichik harf farqsiz).
+- Tanlangan operator buyurtmaning yakuniy marketiga tegishli va faol bo'lishi shart. Market — o'zi (token), market operatori — biriktirilgan marketi, qolganlar — tanadagi `market_id`. Superadmin/admin ham tekshiriladi.
+- To'g'ri bo'lsa buyurtmaga `operator_id` va `operator` = operator ismi yoziladi. Yozilgan `operator` matni e'tiborsiz qoladi. Sotuvda operator komissiyasi shu `operator_id` bo'yicha yoziladi.
+- Market operatori faqat o'zini tanlay oladi. Tanlamasa — avvalgidek o'zi.
+- `operator_id` yuborilmasa hammasi avvalgidek: erkin `operator` matni; registrator va market operatori — o'zi (bo'sh matnga ismi yoziladi).
+- Telegram bot, AI tasdiqlash, `POST /orders/external` va hamkor yo'llari o'zgarmagan (`POST /orders/external` da `operator_id` avvalgidek 400).
+
+**Endpointlar:**
+- 🆕 [identity] `GET /market-operators/selectable?market_id=<id>` — rollar: superadmin, admin, registrator, manager, branch, market, market_operator. Javob: `{ statusCode: 200, message, data: { items: [{ id: string, name: string }] } }`.
+  - market: `market_id` ixtiyoriy, faqat o'ziniki (boshqasi → 400);
+  - market_operator: `market_id` ixtiyoriy, faqat o'z marketi (boshqasi → 400, marketga biriktirilmagan → 400);
+  - qolgan rollar: `market_id` majburiy (yo'q yoki raqam emas → 400);
+  - boshqa rollar → 403.
+- ✏️ [order] `POST /orders` — ixtiyoriy `operator_id` (raqamli satr; son ham qabul qilinadi, bo'sh satr = tanlanmagan). Xatolar (400): «Tanlangan operator bu marketga tegishli emas yoki faol emas» (begona market, nofaol, o'chirilgan, mavjud emas); «Market operatori faqat o'zini operator qilib tanlay oladi»; raqam emas — validatsiya xatosi. Rad etilsa mijoz ham, buyurtma ham yaratilmaydi.
+
+→ **Frontendda:**
+- 🔧 Yaratish formasida (superadmin, admin, manager, registrator, market, market_operator) «Operator» — `select`: ro'yxat `GET /market-operators/selectable` dan (market/market operatori — `market_id` siz, qolganlar — formada tanlangan market bilan; market almashsa ro'yxat va tanlov yangilanadi). Tanlanganda `operator_id` va ko'rsatish uchun ism; tanlanmasa yoki ro'yxat bo'sh bo'lsa — avvalgi erkin `operator` matni.
+- 🔧 Market operatorida maydon avvalgidek o'z ismi (o'zgartirib bo'lmaydi); `operator_id` yubormasa ham bo'ladi.
+- 🔧 Chek: «Jo'natuvchi: **Market** / Operator» — `order.operator` da ism bo'lsa; bo'sh bo'lsa faqat market.
+
+Migratsiya yo'q. Deploy: identity-service, order-service, api-gateway.
+
 ### 2026-11-03 — Filial qamrovi qayta viloyat bo'yicha: filial istagan kuryeriga beradi, qabul va ko'rish faqat manzil filialda, begona QR yopiq (anKpzwxk)
 
 Ega qarori (Trello anKpzwxk): 2026-11-02 dagi «tuman ↔ filial» biriktiruvi (`serving_branch_id`) qamrovni endi **belgilamaydi**. Qamrov — viloyat qoidasi.

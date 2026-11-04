@@ -297,6 +297,12 @@ export class OrderServiceController {
        * yuboradi, YUQORI darajada (mijoz DTO'sida emas).
        */
       created_via?: string;
+      /**
+       * Formada tanlangan va gateway TEKSHIRGAN market operatori
+       * (`identity.market_operator.selectable`). YUQORI darajada: DTO'dagi
+       * `operator_id` admin bo'lmagan so'rovchida olib tashlanadi.
+       */
+      verified_operator_id?: string;
     },
     @Ctx() context: RmqContext,
   ) {
@@ -317,9 +323,16 @@ export class OrderServiceController {
     // (Celz3rKJ) oq ro'yxat: faqat aynan 'bot'; boshqa qiymat e'tiborsiz.
     const createdVia =
       data.created_via === OrderCreatedVia.BOT ? OrderCreatedVia.BOT : null;
+    // Tekshirilgan operator — faqat raqamli id; boshqasi e'tiborsiz.
+    const verifiedOperatorId =
+      typeof data.verified_operator_id === 'string' &&
+      /^\d{1,19}$/.test(data.verified_operator_id)
+        ? data.verified_operator_id
+        : null;
     const lifecycleOpts = {
       ...(auditMetadata ? { auditMetadata } : {}),
       ...(createdVia ? { createdVia } : {}),
+      ...(verifiedOperatorId ? { verifiedOperatorId } : {}),
     };
     // opts bo'sh bo'lsa umuman uzatilmaydi — oddiy yo'l o'zgarmaydi.
     const create = () =>

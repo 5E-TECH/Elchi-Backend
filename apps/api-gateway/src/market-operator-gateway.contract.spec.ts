@@ -94,6 +94,16 @@ function makeUsersRepo(seed: Row[]) {
         return Promise.resolve([page.map((row) => ({ ...row })), all.length]);
       },
     ),
+    find: jest.fn(({ where, take }: { where: unknown; take?: number }) =>
+      Promise.resolve(
+        rows
+          .filter((row) =>
+            clauses(where).some((clause) => matches(row, clause)),
+          )
+          .slice(0, take)
+          .map((row) => ({ ...row })),
+      ),
+    ),
     create: jest.fn((value: Row) => ({ ...value })),
     save: jest.fn((entity: Row) => {
       if (!entity.id) {
@@ -309,11 +319,13 @@ describe('MarketOperatorGatewayController ↔ identity (i76gGjyq)', () => {
         'identity.market_operator.delete',
         'identity.market_operator.update_commission',
         'identity.market_operator.set_status',
+        'identity.market_operator.selectable',
+        'identity.user.find_by_id',
       ]),
     );
   });
 
-  it('rollar: hamma yo`l — faqat market', () => {
+  it('rollar: boshqaruv yo`llari — faqat market; «Operator» tanlovi — yaratuvchi rollar', () => {
     const rolesOf = (method: keyof MarketOperatorGatewayController) =>
       Reflect.getMetadata(
         ROLES_KEY,
@@ -327,6 +339,17 @@ describe('MarketOperatorGatewayController ↔ identity (i76gGjyq)', () => {
     expect(rolesOf('remove')).toEqual(['market']);
     expect(rolesOf('updateCommission')).toEqual(['market']);
     expect(rolesOf('updateStatus')).toEqual(['market']);
+    expect([...rolesOf('selectable')].sort()).toEqual(
+      [
+        'superadmin',
+        'admin',
+        'registrator',
+        'manager',
+        'branch',
+        'market',
+        'market_operator',
+      ].sort(),
+    );
   });
 
   it('TC1: market operator yaratadi → u ro`yxatda market_operator sifatida chiqadi', async () => {
@@ -557,6 +580,178 @@ describe('MarketOperatorGatewayController ↔ identity (i76gGjyq)', () => {
       .expect(403);
     await http().get('/market-operators').set('x-test-user', admin).expect(403);
     await createOperator(admin, operatorBody).expect(403);
+  });
+
+  /**
+   * GET /market-operators/selectable — buyurtma formasidagi «Operator»
+   * tanlovi (BeePost `operators/selectable`). Market rol bo'yicha serverda:
+   * market — o'zi, market operatori — biriktirilgan marketi, qolganlar —
+   * `market_id` majburiy. Javob — faqat faol operatorlar `{ id, name }`.
+   */
+  describe('GET /market-operators/selectable («Operator» tanlovi)', () => {
+    const selectable = (user: string, query = '') =>
+      http()
+        .get(`/market-operators/selectable${query}`)
+        .set('x-test-user', user);
+    const itemsOf = (res: { body: unknown }) =>
+      (res.body as { data?: { items?: unknown } }).data?.items;
+
+    const seedOperators = () => {
+      const base = {
+        isDeleted: false,
+        username: null,
+        role: Roles.MARKET_OPERATOR,
+        status: Status.ACTIVE,
+        commission_type: null,
+        commission_value: null,
+      };
+      repo.rows.push(
+        {
+          ...base,
+          id: '61',
+          name: 'vali',
+          phone_number: '+998905550061',
+          market_id: MARKET_A,
+        },
+        {
+          ...base,
+          id: '62',
+          name: 'Aziza',
+          phone_number: '+998905550062',
+          market_id: MARKET_A,
+        },
+        {
+          ...base,
+          id: '63',
+          name: 'Nofaol',
+          phone_number: '+998905550063',
+          market_id: MARKET_A,
+          status: Status.INACTIVE,
+        },
+        {
+          ...base,
+          id: '64',
+          name: "O'chirilgan",
+          phone_number: '+998905550064-d1',
+          market_id: MARKET_A,
+          isDeleted: true,
+        },
+        // Marketga biriktirilmagan operator.
+        {
+          ...base,
+          id: '65',
+          name: 'Yetim',
+          phone_number: '+998905550065',
+          market_id: null,
+        },
+      );
+    };
+
+    const A_ITEMS = [
+      { id: '62', name: 'Aziza' },
+      { id: '61', name: 'vali' },
+    ];
+
+    beforeEach(seedOperators);
+
+    it('⭐ market — o`z faol operatorlari { id, name }, ism bo`yicha; `:id` yo`llari ushlamaydi', async () => {
+      const res = await selectable(marketA).expect(200);
+      expect(res.body).toEqual({
+        statusCode: 200,
+        message: 'success',
+        data: { items: A_ITEMS },
+      });
+      expect(transport.send).toHaveBeenCalledWith(
+        { cmd: 'identity.market_operator.selectable' },
+        { market_id: MARKET_A },
+      );
+    });
+
+    it('market: o`z market_id → 200; boshqa yoki noto`g`ri market_id → 400, identity`ga yetmaydi', async () => {
+      await selectable(marketA, `?market_id=${MARKET_A}`).expect(200);
+      transport.send.mockClear();
+      await selectable(marketA, `?market_id=${MARKET_B}`).expect(400);
+      await selectable(marketA, '?market_id=abc').expect(400);
+      expect(transport.send).not.toHaveBeenCalled();
+    });
+
+    it('⭐ market operatori — biriktirilgan marketi (identity user.market_id), tanadagi emas', async () => {
+      const res = await selectable(asUser('61', 'market_operator')).expect(200);
+      expect(itemsOf(res)).toEqual(A_ITEMS);
+      expect(transport.send).toHaveBeenCalledWith(
+        { cmd: 'identity.user.find_by_id' },
+        { id: '61' },
+      );
+
+      // B operatori — B ro'yxati.
+      const b = await selectable(asUser('50', 'market_operator')).expect(200);
+      expect(itemsOf(b)).toEqual([{ id: '50', name: 'B operatori' }]);
+    });
+
+    it('market operatori: o`z market_id → 200; begona market_id → 400 (ro`yxat so`ralmaydi)', async () => {
+      await selectable(
+        asUser('61', 'market_operator'),
+        `?market_id=${MARKET_A}`,
+      ).expect(200);
+      transport.send.mockClear();
+      await selectable(
+        asUser('61', 'market_operator'),
+        `?market_id=${MARKET_B}`,
+      ).expect(400);
+      expect(transport.send).not.toHaveBeenCalledWith(
+        { cmd: 'identity.market_operator.selectable' },
+        expect.anything(),
+      );
+    });
+
+    it('marketga biriktirilmagan market operatori → 400', async () => {
+      const res = await selectable(asUser('65', 'market_operator')).expect(400);
+      expect(JSON.stringify(res.body)).toContain(
+        'Operator hech qaysi marketga biriktirilmagan',
+      );
+      expect(transport.send).not.toHaveBeenCalledWith(
+        { cmd: 'identity.market_operator.selectable' },
+        expect.anything(),
+      );
+    });
+
+    it.each([
+      ['superadmin'],
+      ['admin'],
+      ['registrator'],
+      ['manager'],
+      ['branch'],
+    ])(
+      '⭐ %s — market_id MAJBURIY (yo`q / noto`g`ri → 400), berilsa — o`sha market',
+      async (role) => {
+        const user = asUser('1', role);
+        await selectable(user).expect(400);
+        await selectable(user, '?market_id=abc').expect(400);
+        expect(transport.send).not.toHaveBeenCalled();
+
+        const a = await selectable(user, `?market_id=${MARKET_A}`).expect(200);
+        expect(itemsOf(a)).toEqual(A_ITEMS);
+        const b = await selectable(user, `?market_id=${MARKET_B}`).expect(200);
+        expect(itemsOf(b)).toEqual([{ id: '50', name: 'B operatori' }]);
+      },
+    );
+
+    it.each([
+      ['courier'],
+      ['operator'],
+      ['customer'],
+      ['logist'],
+      ['investor'],
+    ])('%s roli → 403 (RolesGuard), identity`ga yetmaydi', async (role) => {
+      await selectable(asUser('77', role), `?market_id=${MARKET_A}`).expect(
+        403,
+      );
+      expect(transport.send).not.toHaveBeenCalled();
+    });
+
+    it('JWT yo`q → 401', async () => {
+      await http().get('/market-operators/selectable').expect(401);
+    });
   });
 
   describe('mFkrqvMi — PATCH /market-operators/:id/status', () => {
