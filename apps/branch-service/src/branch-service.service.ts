@@ -7424,9 +7424,10 @@ export class BranchServiceService implements OnModuleInit {
    * "tushib ketmaydi"). Javob — so'ralgan HAR id uchun bitta element
    * (biriktirilmagan — `branch: null`), so'ralgan tartibda; faqat `{ id, name }`.
    *
-   * Kim: GET /users bilan bir xil — superadmin, admin, menejer (menejer ham
-   * barcha foydalanuvchilarni ko'radi, fix #3). Raqamli bo'lmagan id'lar
-   * tashlanadi, ko'pi bilan USER_BRANCH_LOOKUP_MAX ta.
+   * Kim: GET /users bilan bir xil — superadmin, admin, menejer (2026-11-04
+   * dan menejer GET /users da faqat o'z filiali a'zolarini ko'radi; bu
+   * yerga ham faqat o'sha sahifadagi id'lar keladi). Raqamli bo'lmagan
+   * id'lar tashlanadi, ko'pi bilan USER_BRANCH_LOOKUP_MAX ta.
    */
   async findBranchesByUserIds(user_ids: unknown, requester?: RequesterContext) {
     const roles = (requester?.roles ?? []).map((role) =>

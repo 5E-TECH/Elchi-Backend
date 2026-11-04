@@ -5,9 +5,10 @@ import { UserServiceService } from './user-service.service';
 
 /**
  * 2CBnPAeg — menejer ko'lami `identity.user.find_all` SO'ROVIDA
- * (`query.branch_scope.user_ids`): kuryer / filial roli faqat menejer
- * filialiga biriktirilganlar, boshqa rollar cheklanmaydi. Shart `baseQb` da —
- * ro'yxat SQL'i ham, `countsByRole` (GROUP BY) SQL'i ham bir xil doirada.
+ * (`query.branch_scope.user_ids`). Shart `baseQb` da — ro'yxat SQL'i ham,
+ * `countsByRole` (GROUP BY) SQL'i ham bir xil doirada.
+ * 2026-11-04: ko'lam QAT'IY — `admin.id IN (...)` (har qanday rol; market,
+ * admin, logist, boshqa filial xodimi chiqmaydi), bo'sh ko'lam — `1 = 0`.
  * Haqiqiy TypeORM (bazasiz, faqat metadata) SQL'i tekshiriladi; semantika —
  * user-service.users-batch-a.pg.spec.ts (haqiqiy Postgres).
  */
@@ -61,10 +62,9 @@ describe('2CBnPAeg — findAllAdmins branch_scope (SQL)', () => {
     );
   };
 
-  const SCOPE_SQL =
-    /\("admin"\."role" NOT IN \(\$\d+, \$\d+\) OR "admin"\."id" IN \(\$\d+, \$\d+\)\)/;
+  const SCOPE_SQL = /"admin"\."id" IN \(\$\d+, \$\d+\)/;
 
-  it('⭐ ro`yxat va countsByRole SQL`i bir xil ko`lam sharti bilan', async () => {
+  it('⭐ ro`yxat va countsByRole SQL`i bir xil QAT`IY ko`lam sharti bilan', async () => {
     await makeService().findAllAdmins({
       role: 'courier',
       branch_scope: { user_ids: ['101', '300'] },
@@ -75,24 +75,53 @@ describe('2CBnPAeg — findAllAdmins branch_scope (SQL)', () => {
     expect(list.sql).toMatch(SCOPE_SQL);
     expect(counts.sql).toMatch(SCOPE_SQL);
     expect(counts.sql).toContain('GROUP BY "admin"."role"');
+    // Rol bo'yicha istisno YO'Q (ilgari kuryer/filialdan boshqa rollar
+    // ko'lamsiz o'tardi).
+    for (const { sql } of [list, counts]) {
+      expect(sql).not.toContain('NOT IN');
+      expect(sql).not.toMatch(/ OR "admin"\."id" IN/);
+    }
     // Rol filtri faqat ro'yxatda (tab sonlari barcha rollar uchun).
     expect(list.sql).toContain('"admin"."role" = $');
     expect(counts.sql).not.toMatch(/"admin"\."role" = \$/);
     for (const { params } of [list, counts]) {
-      expect(params).toEqual(
-        expect.arrayContaining([Roles.COURIER, Roles.BRANCH, '101', '300']),
-      );
+      expect(params).toEqual(expect.arrayContaining(['101', '300']));
     }
+    // Sonlar SQL'ida rol parametri umuman yo'q (ilgari NOT IN (courier, branch)).
+    expect(counts.params).not.toContain(Roles.COURIER);
+    expect(counts.params).not.toContain(Roles.BRANCH);
   });
 
-  it('filialda hech kim yo`q — faqat NOT IN (kuryer/filial umuman chiqmaydi)', async () => {
+  it('?role=market ham ko`lamda — market faqat a`zolar ichida bo`lsa (amalda hech qachon)', async () => {
+    await makeService().findAllAdmins({
+      role: 'market',
+      branch_scope: { user_ids: ['101'] },
+    });
+
+    const list = captured.find((c) => c.kind === 'list')!;
+    expect(list.sql).toMatch(/"admin"\."id" IN \(\$\d+\)/);
+    expect(list.params).toEqual(expect.arrayContaining([Roles.MARKET, '101']));
+  });
+
+  it('⭐ filialda hech kim yo`q / biriktirilmagan — `1 = 0` (hech qanday qator, sonlar 0)', async () => {
     await makeService().findAllAdmins({ branch_scope: { user_ids: [] } });
 
     for (const kind of ['list', 'counts']) {
       const { sql } = captured.find((c) => c.kind === kind)!;
-      expect(sql).toMatch(/"admin"\."role" NOT IN \(\$\d+, \$\d+\)/);
+      expect(sql).toContain('1 = 0');
+      expect(sql).not.toContain('NOT IN');
       expect(sql).not.toMatch(/"admin"\."id" IN/);
     }
+  });
+
+  it('faqat raqam bo`lmagan id`lar — bo`sh ko`lam (hammasi EMAS)', async () => {
+    await makeService().findAllAdmins({
+      branch_scope: { user_ids: ['abc', "1' OR 1=1"] },
+    });
+
+    const list = captured.find((c) => c.kind === 'list')!;
+    expect(list.sql).toContain('1 = 0');
+    expect(list.params).not.toContain("1' OR 1=1");
   });
 
   it('raqam bo`lmagan id`lar tashlanadi (SQL`ga yetmaydi)', async () => {
@@ -101,7 +130,7 @@ describe('2CBnPAeg — findAllAdmins branch_scope (SQL)', () => {
     });
 
     const list = captured.find((c) => c.kind === 'list')!;
-    expect(list.sql).toMatch(/"admin"\."id" IN \(\$\d+\)\)/);
+    expect(list.sql).toMatch(/"admin"\."id" IN \(\$\d+\)/);
     expect(list.params).toContain('101');
     expect(list.params).not.toContain("1' OR 1=1");
   });

@@ -109,9 +109,10 @@ export interface UserFilterQuery {
   user_ids?: string[];
   /**
    * 2CBnPAeg — menejer ko'lami (faqat `identity.user.find_all`, GET /users):
-   * kuryer va filial rolidagi foydalanuvchi faqat `user_ids` ichida bo'lsa
-   * chiqadi (menejer filialiga biriktirilganlar); boshqa rollar cheklanmaydi.
-   * Ro'yxat ham, `total` / `countsByRole` ham shu shart bilan sanaladi.
+   * faqat `user_ids` ichidagi foydalanuvchilar chiqadi (menejer filialining
+   * `branch_users` a'zolari) — 2026-11-04 dan har qanday rol uchun (market,
+   * admin, logist, boshqa filial xodimi ham chiqmaydi). Bo'sh massiv — hech
+   * qanday qator. Ro'yxat ham, `total` / `countsByRole` ham shu shart bilan.
    */
   branch_scope?: { user_ids?: string[] } | null;
   /**

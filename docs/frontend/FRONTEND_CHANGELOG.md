@@ -22,6 +22,40 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+### 2026-11-04 — Yangi menejerda «Sotish / bekor qilish» sukut bo'yicha yoqiq
+
+Ega qarori: viloyat va aralash filial menejerida sotish/bekor qilish sukut bo'yicha yoqiq bo'lsin.
+
+- ✏️ [identity] `POST /managers` — yangi menejer `can_sell_cancel: true` bilan yaratiladi (ilgari `false`, admin qo'lda yoqardi). `PATCH /users/:id/role` bilan menejerga o'tkazilgan foydalanuvchida ham `true` bo'ladi. Admin xohlasa `PATCH /users/:id { can_sell_cancel: false }` bilan o'chiradi. Mavjud menejerlarga tegilmagan; ustun sukuti (boshqa rollar) o'zgarmagan.
+
+→ **Frontendda:** o'zgarish shart emas — foydalanuvchi tafsilotidagi «Sotish / bekor qilish» kaliti yangi menejerda yoqiq ko'rinadi.
+
+Migratsiya yo'q. Deploy: identity-service.
+
+### 2026-11-04 — Filialda faqat o'z filialining foydalanuvchilari: menejer `GET /users`, kuryer reytingi, filial dashboardi, fail-closed
+
+Ega shikoyati: menejer va kuryerda hamma foydalanuvchilar ko'rinyapti (test: menejer /all-users «Hammasi 70 · Marketlar 33» — adminlar, boshqa filial menejerlari, logist, marketlar). Qoida: filialda faqat shu filialga tegishli foydalanuvchilar. Filialga yagona bog'lanish — `branch_users` (MANAGER / REGISTRATOR / COURIER); marketlarning filiali yo'q, shuning uchun menejer ko'rinishidan marketlar olib tashlandi (menejer `GET /users/:id` bilan market ochganda allaqachon 403 olardi).
+
+**Endpointlar:**
+- ⚠️ [gateway/identity] `GET /users` (MANAGER) — faqat o'z filialining faol `branch_users` a'zolari (o'zi, boshqa menejerlar, registratorlar, kuryerlar). Admin, logist, investor, operatorlar, boshqa filial xodimlari va **marketlar chiqmaydi**; `?role=market` (va `market_operator`, `admin`, `logist`…) — bo'sh sahifa. `meta.total`, `totalPages`, `totalUsers`, `totalMarket` (endi 0), `totalEmployees`, `countsByRole` — shu doirada (bitta shart). Ilgari («fix #3») faqat kuryer/filial roli cheklanardi, qolgan rollar butun tizimdan chiqardi.
+  - Filialga biriktirilmagan menejer: **bo'sh sahifa** (200, `items: []`, meta shakli o'zgarmaydi, hamma son 0). Ilgari HQ'ga fallback qilinardi va amalda 403 qaytardi. HQ'ga fallback olib tashlandi.
+  - SUPERADMIN / ADMIN — o'zgarish yo'q (hamma foydalanuvchi).
+  - Menejer chaqiradigan boshqa joylar (/payments «Kim yaratgan» filtri, asosiy kassa «Maosh» oynasi `GET /users?limit=…`) endi faqat filial xodimlarini oladi. Xato bermaydi, faqat qatorlar kamroq.
+- ✏️ [analytics] `GET /analytics/dashboard` (COURIER) — `topCouriers`, `myRank`, `myRanking` endi **faqat kuryerning o'z filiali kuryerlari** orasida (ilgari butun kompaniya, FE sarlavhasida esa filial nomi turardi). Tartib va javob shakli o'zgarmagan, `myRank` filial ichidagi o'rin. Filialga biriktirilmagan kuryer: `topCouriers: []`, `myRank: null`, `myRanking: null` (degraded emas). Filial a'zolari olinmasa: `topCouriers: []`, `failed_parts: ['topCouriers']`.
+- ✏️ [analytics] `GET /analytics/dashboard` (MANAGER / REGISTRATOR / BRANCH) — `couriers` jadvali faqat filialning faol kuryerlari. Ilgari filialga tegib o'tgan pochtalarning har bir kuryeri chiqardi, boshqa filial kuryerlari ham. Filial a'zolari olinmasa: `couriers: null`, `failed_parts: ['couriers']`.
+- ⚠️ [analytics] `GET /analytics/dashboard` (MANAGER / REGISTRATOR / BRANCH, filialga **biriktirilmagan**) — ilgari kompaniya bo'yicha dashboard qaytardi. Endi neytral javob: oddiy filial javobi bilan bir xil kalitlar, `orders` raqamlari 0 (registratorda moliyaviy maydonlarsiz), `markets` / `couriers` / `topMarkets` / `topBranches` bo'sh, `*Meta: null`, `branchDashboard: null`, `previous: null`, `series: null`, `degraded: false` va qo'shimcha `branch_assigned: false`. Filialni aniqlab bo'lmasa (branch-service xatosi) — avvalgidek 503.
+- ⚠️ [gateway] `GET /couriers` (MANAGER / REGISTRATOR / BRANCH) — klient `branch_id` qiymati endi **doim e'tiborsiz**, faqat o'z filiali. Filialga biriktirilmagan so'rovchi **bo'sh sahifa** oladi (`items: []`, `meta: { page, limit, total: 0, totalPages: 1 }`). Ilgari klient `branch_id` si bilan istalgan filial kuryerlarini, `branch_id` siz esa barcha kuryerlarni olardi (menejerga kassa balanslari bilan). `branch_id` filtri faqat SUPERADMIN/ADMIN uchun. LOGIST yo'li o'zgarmagan.
+- ⚠️ [gateway] `PATCH /users/:id`, `POST /users/:id/password/resend-sms`, `GET /users/:id/password/sms-status` (MANAGER) — nishon endi menejer filialining **faol `branch_users` a'zosi** bo'lishi shart (`GET /users/:id` bilan bir xil), identity'dagi «o'zi yaratgan» (`created_by`) sharti qo'shimcha bo'lib qoladi. Ilgari faqat `created_by` tekshirilardi: boshqa filialga o'tkazilgan kuryerni yaratgan menejer uni ko'ra olmasa-da (403), PATCH bilan parolini, telefonini, maoshini o'zgartira olardi. Endi bunday holat va filialga biriktirilmagan menejer — **403**. Menejer o'zini tahrirlashi (`:id` = o'zi) o'zgarmagan. SUPERADMIN / ADMIN — o'zgarish yo'q.
+- ✏️ [gateway] `GET /finance/cashbox/user/:id` (menejer, o'z id si) — javobdagi `meta.couriers` **olib tashlandi** (ko'lamsiz edi: menejer yaratgan, boshqa filialga o'tkazilgan kuryerlarning to'liq qatori chiqardi). Frontend uni o'qimaydi; menejer kuryerlari — `GET /couriers`.
+- ✏️ [analytics] `GET /analytics/dashboard` (MANAGER / REGISTRATOR / BRANCH va COURIER reytingi) — filial endi **doim bazadan** (`branch_users`), tokendagi `branch_id` ga ishonilmaydi. Filialdan chiqarilgan yoki boshqa filialga o'tkazilgan xodim token muddati tugashini kutmasdan darhol neytral javobni (`branch_assigned: false`) yoki yangi filial raqamlarini ko'radi. Javob shakli o'zgarmagan.
+
+→ **Frontendda:**
+- 🔧 Menejer /all-users: «Marketlar» tabi va market sonini olib tashlang (backend menejerga marketlarni qaytarmaydi, `countsByRole.market = 0`). Ro'yxatda faqat filial xodimlari (menejer, registrator, kuryer).
+- 🟢 Kuryer dashboardi «Top kuryerlar»: kod o'zgarishi shart emas, sarlavhadagi filial nomi endi to'g'ri. `topCouriers` bo'sh bo'lsa karta yashiringan holda qoladi.
+- 🟢 Ixtiyoriy: dashboard javobida `branch_assigned === false` bo'lsa «Siz hali filialga biriktirilmagansiz» deb ko'rsatish mumkin.
+
+Migratsiya yo'q. Deploy: identity-service, analytics-service, api-gateway (branch-service — faqat izoh).
+
 ### 2026-11-04 — Buyurtma formasida «Operator» tanlovi (BeePost kabi), chekda operator ismi
 
 Ega talabi: «Chekda operator ismi chiqmayapti, loyihada operatorni tanlash imkoni yo'q». Avval formada operator faqat erkin matn edi: buyurtmaga `operator_id` yozilmasdi (market yaratgan buyurtmada operator komissiyasi hisoblanmasdi), market operatorini tanlab bo'lmasdi.

@@ -6,7 +6,8 @@ import { UserServiceService } from './user-service.service';
 /**
  * Foydalanuvchilar paketi (batch A, 2026-10-24) — haqiqiy Postgres:
  *   - 2CBnPAeg: menejer ko'lami (`branch_scope`) so'rovda — total va
- *     countsByRole filial doirasida, sahifalashdan oldin.
+ *     countsByRole filial doirasida, sahifalashdan oldin. 2026-11-04: ko'lam
+ *     QAT'IY — faqat `user_ids` (market, boshqa menejer ham chiqmaydi).
  *   - yA31z7Rr: `telegram_linked` filtri — sahifalash va total to'g'ri,
  *     javobdagi `telegram_linked` bilan bir xil qoida.
  *   - x6IO746K: market operatori qatorida `market: { id, name } | null`
@@ -60,9 +61,9 @@ type Meta = {
       return String(row.id);
     };
 
-    // 2CBnPAeg: menejer filiali — 3 kuryer + 1 filial akkaunti; boshqa
-    // filialda — 4 kuryer + 1 filial akkaunti; ko'lamsiz rollar: 2 menejer,
-    // 2 market.
+    // 2CBnPAeg: menejer filiali — 3 kuryer + 1 filial akkaunti + 1 menejer;
+    // boshqa filialda — 4 kuryer + 1 filial akkaunti; filialsiz: 1 menejer,
+    // 2 market (2026-11-04 dan menejer ko'lamida ular ham yo'q).
     const scoped: string[] = [];
     const outOfScope: string[] = [];
 
@@ -117,24 +118,34 @@ type Meta = {
       ).data;
 
     describe('2CBnPAeg — menejer ko`lami so`rovda', () => {
-      it('⭐ rolsiz, limit 2: total/totalUsers — butun ko`lam (sahifa emas)', async () => {
+      it('⭐ rolsiz, limit 2: total/totalUsers — butun ko`lam (sahifa emas), faqat filial a`zolari', async () => {
         const res = await list({
           branch_scope: { user_ids: scoped },
           page: 1,
           limit: 2,
         });
 
-        // 3 kuryer + 1 filial + 2 menejer + 2 market = 8.
+        // 3 kuryer + 1 filial + 1 menejer = 5 (filialsiz menejer va 2 market
+        // — 2026-11-04 dan ko'lamda emas).
         expect(res.items).toHaveLength(2);
-        expect(res.meta.total).toBe(8);
-        expect(res.meta.totalUsers).toBe(8);
-        expect(res.meta.totalPages).toBe(4);
+        expect(res.meta.total).toBe(5);
+        expect(res.meta.totalUsers).toBe(5);
+        expect(res.meta.totalPages).toBe(3);
         expect(res.meta.countsByRole).toMatchObject({
           [Roles.COURIER]: 3,
           [Roles.BRANCH]: 1,
-          [Roles.MANAGER]: 2,
-          [Roles.MARKET]: 2,
+          [Roles.MANAGER]: 1,
+          [Roles.MARKET]: 0,
         });
+      });
+
+      it('⭐ ?role=market — bo`sh (market filialga bog`lanmagan)', async () => {
+        const res = await list({
+          role: 'market',
+          branch_scope: { user_ids: scoped },
+        });
+        expect(res.items).toEqual([]);
+        expect(res.meta.total).toBe(0);
       });
 
       it('?role=courier: faqat filial kuryerlari; tab soni = ro`yxat total', async () => {
@@ -150,7 +161,7 @@ type Meta = {
         expect(res.meta.total).toBe(3);
         expect(res.meta.countsByRole[Roles.COURIER]).toBe(res.meta.total);
         // Boshqa tablar ham shu doirada.
-        expect(res.meta.countsByRole[Roles.MANAGER]).toBe(2);
+        expect(res.meta.countsByRole[Roles.MANAGER]).toBe(1);
         expect(res.items.some((u) => outOfScope.includes(String(u.id)))).toBe(
           false,
         );
@@ -165,11 +176,14 @@ type Meta = {
         expect(res.meta.total).toBe(1);
       });
 
-      it('bo`sh ko`lam — kuryer/filial 0, qolganlar to`liq', async () => {
+      it('⭐ bo`sh ko`lam (biriktirilmagan menejer) — hech kim, hamma son 0', async () => {
         const res = await list({ branch_scope: { user_ids: [] } });
-        expect(res.meta.countsByRole[Roles.COURIER]).toBe(0);
-        expect(res.meta.countsByRole[Roles.BRANCH]).toBe(0);
-        expect(res.meta.total).toBe(4);
+        expect(res.items).toEqual([]);
+        expect(res.meta.total).toBe(0);
+        expect(res.meta.totalUsers).toBe(0);
+        expect(
+          Object.values(res.meta.countsByRole).every((count) => count === 0),
+        ).toBe(true);
       });
 
       it('ko`lamsiz (superadmin) — hammasi: 7 kuryer, 2 filial', async () => {

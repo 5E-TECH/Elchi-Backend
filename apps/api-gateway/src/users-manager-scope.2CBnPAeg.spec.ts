@@ -10,6 +10,10 @@ import { ApiGatewayController } from './api-gateway.controller';
  * `totalUsers` ni sahifada qolgan qatorlar soniga tenglardi (10 tadan 2 tasi
  * qolsa total = 2), `countsByRole` esa ko'lamsiz edi. Endi gateway identity
  * javobiga TEGMAYDI — total va countsByRole identity'dan, filial doirasida.
+ *
+ * 2026-11-04: ko'lam QAT'IY — identity faqat `branch_scope.user_ids` ni
+ * qaytaradi (har qanday rol; market/admin/boshqa filial xodimi yo'q).
+ * Biriktirilmagan menejer: HQ'ga fallback ham, 403 ham yo'q — bo'sh ko'lam.
  */
 type Row = Record<string, unknown>;
 type Pattern = { cmd: string };
@@ -141,23 +145,50 @@ describe('2CBnPAeg — menejer ro`yxati: ko`lam identity so`rovida', () => {
     expect(identityQuery().branch_scope).toEqual({ user_ids: [] });
   });
 
-  it('biriktirilmagan menejer — HQ filiali ko`lami', async () => {
-    branchReplies(null, [{ user_id: '7', role: 'COURIER' }], { id: '1' });
+  it('menejer ?role=market — ko`lam baribir yuboriladi (identity bo`sh qaytaradi)', async () => {
+    branchReplies({ branch_id: '3', role: 'MANAGER' }, [
+      { user_id: '101', role: 'COURIER' },
+    ]);
 
-    await listUsers(MANAGER);
+    await listUsers(MANAGER, 'market');
 
-    expect(branchClient.send).toHaveBeenCalledWith(
-      { cmd: 'branch.user.find_by_branch' },
-      expect.objectContaining({ branch_id: '1' }),
-    );
-    expect(identityQuery().branch_scope).toEqual({ user_ids: ['7'] });
+    expect(identityQuery()).toMatchObject({
+      role: 'market',
+      branch_scope: { user_ids: ['101'] },
+    });
   });
 
-  it('biriktirilmagan menejer va HQ yo`q — 403 (avvalgidek), identity`ga so`rov yo`q', async () => {
+  it('⭐ biriktirilmagan menejer — HQ`ga fallback YO`Q, 403 emas: bo`sh ko`lam', async () => {
+    branchReplies(null, [{ user_id: '7', role: 'COURIER' }], { id: '1' });
+
+    const res = await listUsers(MANAGER);
+
+    const cmds = branchClient.send.mock.calls.map(([p]: [Pattern]) => p.cmd);
+    expect(cmds).not.toContain('branch.find_hq');
+    expect(cmds).not.toContain('branch.user.find_by_branch');
+    expect(identityQuery().branch_scope).toEqual({ user_ids: [] });
+    // Javob shakli identity'dan (bo'sh sahifa, meta va countsByRole bilan).
+    expect(res.data).toHaveProperty('meta');
+  });
+
+  it('biriktirilmagan menejer va HQ yo`q — ham bo`sh ko`lam (avvalgi 403 emas)', async () => {
     branchReplies(null, [], null);
 
-    await expect(listUsers(MANAGER)).rejects.toBeInstanceOf(ForbiddenException);
-    expect(identityClient.send).not.toHaveBeenCalled();
+    await expect(listUsers(MANAGER)).resolves.toBeDefined();
+    expect(identityQuery().branch_scope).toEqual({ user_ids: [] });
+  });
+
+  it('menejer tokenida `sub` yo`q — ko`lamsiz EMAS, bo`sh ko`lam', async () => {
+    branchReplies({ branch_id: '3', role: 'MANAGER' }, [
+      { user_id: '101', role: 'COURIER' },
+    ]);
+
+    await listUsers({ user: { roles: ['manager'] } });
+
+    const cmds = branchClient.send.mock.calls.map(([p]: [Pattern]) => p.cmd);
+    expect(cmds).not.toContain('branch.user.find_by_user');
+    expect(cmds).not.toContain('branch.user.find_by_branch');
+    expect(identityQuery().branch_scope).toEqual({ user_ids: [] });
   });
 
   it.each([
@@ -176,4 +207,131 @@ describe('2CBnPAeg — menejer ro`yxati: ko`lam identity so`rovida', () => {
       expect(res.data.meta.total).toBe(37);
     },
   );
+});
+
+/**
+ * 2026-11-04 — menejer faqat O'Z FILIALINING faol a'zosini boshqaradi:
+ * PATCH /users/:id, POST /users/:id/password/resend-sms va GET
+ * /users/:id/password/sms-status. Ilgari («fix #3») faqat identity'dagi
+ * `created_by` tekshirilardi: menejer A filialida kuryer 263 ni yaratib,
+ * admin uni B filialiga o'tkazgandan keyin ham GET /users/263 — 403, lekin
+ * PATCH /users/263 {password} bilan parolni almashtirib, B filiali kuryeri
+ * sifatida kira olardi (maosh, telefon, to'liq qator ham ochiq edi).
+ */
+describe('2026-11-04 — menejer tahrirlash / parol SMS: faqat o`z filiali a`zosi', () => {
+  let controller: ApiGatewayController;
+  let identityClient: { send: jest.Mock };
+  let branchClient: { send: jest.Mock };
+
+  const OWN_BRANCH_MEMBERS: Row[] = [
+    { user_id: '25', role: 'MANAGER' },
+    { user_id: '101', role: 'COURIER' },
+    { user_id: '300', role: 'REGISTRATOR' },
+  ];
+
+  const branchReplies = (assignment: Row | null, branchUsers: Row[]) =>
+    branchClient.send.mockImplementation(({ cmd }: Pattern) => {
+      if (cmd === 'branch.user.find_by_user') return of({ data: assignment });
+      if (cmd === 'branch.user.find_by_branch') {
+        return of({ data: branchUsers });
+      }
+      return of({ data: [] });
+    });
+
+  beforeEach(async () => {
+    identityClient = {
+      send: jest.fn(() => of({ statusCode: 200, data: { id: 'ok' } })),
+    };
+    branchClient = { send: jest.fn() };
+    const app: TestingModule = await Test.createTestingModule({
+      controllers: [ApiGatewayController],
+      providers: [
+        { provide: 'IDENTITY', useValue: identityClient },
+        { provide: 'FINANCE', useValue: { send: jest.fn() } },
+        { provide: 'BRANCH', useValue: branchClient },
+      ],
+    }).compile();
+    controller = app.get(ApiGatewayController);
+  });
+
+  const identityCmds = () =>
+    identityClient.send.mock.calls.map(([p]: [Pattern]) => p.cmd);
+
+  const routes: Array<[string, (id: string, req: Row) => Promise<unknown>]> = [
+    [
+      'PATCH /users/:id',
+      (id, req) =>
+        controller.updateUser(
+          id,
+          { password: 'Yangi-parol-123' },
+          req as never,
+        ),
+    ],
+    [
+      'POST /users/:id/password/resend-sms',
+      (id, req) => controller.resendTempPasswordSms(id, req as never),
+    ],
+    [
+      'GET /users/:id/password/sms-status',
+      (id, req) => controller.tempPasswordSmsStatus(id, req as never),
+    ],
+  ];
+
+  describe.each(routes)('%s', (_label, call) => {
+    it('⭐ o`zi yaratgan, lekin boshqa filialga o`tkazilgan kuryer (263) — 403, identity`ga so`rov yo`q', async () => {
+      branchReplies({ branch_id: '3', role: 'MANAGER' }, OWN_BRANCH_MEMBERS);
+
+      await expect(call('263', MANAGER)).rejects.toBeInstanceOf(
+        ForbiddenException,
+      );
+      expect(identityClient.send).not.toHaveBeenCalled();
+      expect(branchClient.send).toHaveBeenCalledWith(
+        { cmd: 'branch.user.find_by_branch' },
+        expect.objectContaining({ branch_id: '3' }),
+      );
+    });
+
+    it('o`z filiali kuryeri (101) — identity`ga uzatiladi (created_by qarori identity`da)', async () => {
+      branchReplies({ branch_id: '3', role: 'MANAGER' }, OWN_BRANCH_MEMBERS);
+
+      await call('101', MANAGER);
+
+      expect(identityClient.send).toHaveBeenCalledTimes(1);
+      expect(identityClient.send.mock.calls[0][1]).toMatchObject({
+        id: '101',
+        requester: { id: '25', roles: ['manager'] },
+      });
+    });
+
+    it('filialga biriktirilmagan menejer — 403, identity`ga so`rov yo`q', async () => {
+      branchReplies(null, []);
+
+      await expect(call('101', MANAGER)).rejects.toBeInstanceOf(
+        ForbiddenException,
+      );
+      expect(identityClient.send).not.toHaveBeenCalled();
+      const cmds = branchClient.send.mock.calls.map(([p]: [Pattern]) => p.cmd);
+      expect(cmds).not.toContain('branch.user.find_by_branch');
+    });
+
+    it.each([
+      ['superadmin', SUPERADMIN],
+      ['admin', ADMIN],
+    ])(
+      '%s — filial tekshiruvi yo`q, to`g`ridan-to`g`ri identity`ga',
+      async (_l, req) => {
+        await call('263', req);
+
+        expect(branchClient.send).not.toHaveBeenCalled();
+        expect(identityCmds()).toHaveLength(1);
+      },
+    );
+  });
+
+  it('menejer o`zini PATCH qiladi — filial tekshiruvisiz (identity allowSelf)', async () => {
+    await controller.updateUser('25', { name: 'Shodiyor' }, MANAGER);
+
+    expect(branchClient.send).not.toHaveBeenCalled();
+    expect(identityCmds()).toEqual(['identity.user.update']);
+  });
 });

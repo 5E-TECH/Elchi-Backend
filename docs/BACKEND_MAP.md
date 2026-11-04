@@ -278,7 +278,21 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
   active `branch_users` row LEFT JOIN live `branches`, `user_id = ANY(...)`;
   superadmin / admin / manager only, ≤500 ids). Branch-service down / 3 s
   timeout → `branch: null`, list still 200; `identity.user.find_all` itself is
-  unchanged.
+  unchanged. Manager scope (2CBnPAeg, strict since 2026-11-04): the gateway
+  sends `query.branch_scope.user_ids` = the manager's branch `branch_users`
+  ids and `findAllAdmins` adds `admin.id IN (...)` (empty → `1 = 0`) to the
+  base query, so list, `total`, `totalUsers` and `countsByRole` only cover
+  branch members (no markets, admins, logists or other branches' staff); an
+  unassigned manager gets an empty page (no HQ fallback). SA/ADMIN: no scope.
+  `GET /couriers`: non-SA/ADMIN, non-logist requesters always get their own
+  branch's couriers (client `branch_id` ignored); unassigned → empty page.
+  Manager mutations (`PATCH /users/:id`, `POST /users/:id/password/resend-sms`,
+  `GET /users/:id/password/sms-status`): the gateway
+  (`assertManagerTargetInOwnBranch`) requires the target to be an active
+  `branch_users` member of the manager's branch (self is exempt; unassigned
+  manager → 403); identity still also requires `created_by === manager`.
+  The manager's own cashbox (`GET /finance/cashbox/user/:id`) no longer adds
+  the unscoped `meta.couriers`.
 - **Market specifics:** telegram token (`market.find_by_tg_token`, `rotate_tg_token`),
   `expense_proof_conditions`. Creating a user also creates its cashbox
   (`finance.cashbox.create`) and may assign to a branch (`branch.user.assign`),
@@ -1083,6 +1097,17 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
   MANAGER/REGISTRATOR/BRANCH (empty report when the branch can't be
   resolved); `report.finance` monthly buckets use Tashkent months. (Order
   revenue chart buckets in order-service also use the Tashkent wall clock.)
+- **Branch-only courier data (2026-11-04):** the COURIER dashboard leaderboard
+  (`topCouriers`, `myRank`, `myRanking`) keeps only active COURIER members of
+  the requester's branch (`branch.user.find_by_branch`, fetched in parallel
+  with the order parts); no branch → `[]`/`null`, lookup failure →
+  `failed_parts: ['topCouriers']`. Branch roles' `couriers` rows are filtered
+  the same way (failure → `couriers: null`, `failed_parts: ['couriers']`).
+  A branch role with no branch assignment gets a neutral dashboard (zeros,
+  empty lists, `branch_assigned: false`, no order-service calls) instead of
+  the company-wide one. Dashboard paths (`failClosed`) always resolve the
+  branch via `branch.user.find_by_user` (DB), never the JWT `branch_id`, so a
+  removed/moved user is not shown the old branch until the token expires.
 - **Pickup income (B824gOu5):** order profit (`PROFIT_SQL`) has no pickup money
   by design. SA/ADMIN company dashboard adds `orders.pickup`,
   `orders.pickupIncome` and `orders.profitWithPickup` (`profit` stays equal to

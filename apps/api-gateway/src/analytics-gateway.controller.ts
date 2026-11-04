@@ -70,7 +70,10 @@ export class AnalyticsGatewayController {
     description:
       "Admin/filial kesimi javobida qo'shimcha: orders.lostRevenue (l9NNdsCH, bekor summasi), " +
       'targets {successRate} (l9NNdsCH), previous {from,to,acceptedCount,soldAndPaid,cancelled,totalRevenue,profit,lostRevenue} ' +
-      'va series[14] {date,…} (DwrMygfo; registratorda moliyaviy maydonlarsiz; «Barchasi»da previous=null).',
+      'va series[14] {date,…} (DwrMygfo; registratorda moliyaviy maydonlarsiz; «Barchasi»da previous=null). ' +
+      "Kuryer: topCouriers / myRank / myRanking — faqat o'z filiali kuryerlari orasida (filialga biriktirilmagan — [] / null; " +
+      "filial a'zolari olinmasa — failed_parts: ['topCouriers']). MANAGER / REGISTRATOR / BRANCH: couriers — faqat filialning " +
+      "faol kuryerlari; filialga biriktirilmagan — neytral javob (raqamlar 0, ro'yxatlar bo'sh, branch_assigned: false).",
   })
   @ApiQuery({ name: 'startDate', required: false, type: String })
   @ApiQuery({ name: 'endDate', required: false, type: String })

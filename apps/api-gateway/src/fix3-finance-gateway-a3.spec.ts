@@ -566,6 +566,49 @@ describe('BE-PAY-14 — menejerning kuryer sahifasi kuryer kassasini ko`rsatadi'
       expect.objectContaining({ user_id: '15', cashbox_type: 'branch' }),
     );
   });
+
+  /**
+   * 2026-11-04: menejerning o'z kassasi (with_history berilmagan → bare
+   * kassa) javobiga ilgari `meta.couriers` qo'shilardi — identity'dan
+   * KO'LAMSIZ kuryerlar, `created_by` bo'yicha filtr: boshqa filialga
+   * o'tkazilgan kuryerning to'liq qatori (telefon, maosh) chiqardi. Olib
+   * tashlandi — frontend uni o'qimaydi.
+   */
+  it('⭐ menejerning o`z kassasi — `meta.couriers` yo`q, identity.user.find_all chaqirilmaydi', async () => {
+    const env = setup();
+    route(env.branchClient, {
+      'branch.cashbox.resolve_for_manager': () => ({
+        data: { branch_id: '15' },
+      }),
+    });
+    route(env.identityClient, {
+      // Boshqa filialga o'tkazilgan, lekin shu menejer yaratgan kuryer.
+      'identity.user.find_all': () => ({
+        data: {
+          items: [
+            { ...courierUser('263'), created_by: '208', salary: 3_000_000 },
+          ],
+        },
+      }),
+    });
+    route(env.financeClient, {
+      'finance.cashbox.find_by_user': () => ({
+        data: { id: 'b15', cashbox_type: 'branch', balance: 0 },
+      }),
+      'finance.history.find_all': () => ({ data: { items: [] } }),
+    });
+
+    const response: any = await env.controller.findCashboxByUser(
+      '208',
+      {},
+      manager15,
+    );
+
+    expect(cmdsOf(env.identityClient)).not.toContain('identity.user.find_all');
+    expect(response.meta?.couriers).toBeUndefined();
+    expect(JSON.stringify(response)).not.toContain('263');
+    expect(response.data.cashboxHistory).toEqual([]);
+  });
 });
 
 describe('C2 / FE-PAY-04 — kassa sahifasi sana filtri', () => {

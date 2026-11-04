@@ -144,6 +144,16 @@ describe('UserServiceService.createManager — HQ ga menejer yo‘q', () => {
     );
   });
 
+  it("ega qarori 2026-11-04: yangi menejerda sotish/bekor ruxsati sukut bo'yicha yoqiq", async () => {
+    const { service, repo } = makeService(branchServiceWithHq('1'));
+
+    await service.createManager(managerDto('15'), superadmin);
+
+    expect(repo.save).toHaveBeenCalledWith(
+      expect.objectContaining({ role: 'manager', can_sell_cancel: true }),
+    );
+  });
+
   /**
    * Postgres '+1', ' 1 ', '0x1' kabi satrlarni ham bigint 1 ga (HQ'ga)
    * aylantiradi — satr taqqoslashi esa ularni HQ'dan farqli deb o'tkazib

@@ -276,6 +276,19 @@ describe('9zbSDkUI — dashboard reyting oynasi ("Bugun" → oxirgi 30 kun)', ()
   });
 
   it('filial roli — 30 kunlik reyting ham o`z filiali bilan cheklangan', async () => {
+    // 2026-11-04: dashboard filialni DOIM bazadan oladi (JWT `branch_id`
+    // eskirgan bo'lishi mumkin) — branch.user.find_by_user javobi.
+    const baseImpl = rmqSendMock.getMockImplementation()!;
+    rmqSendMock.mockImplementation(
+      (
+        c: unknown,
+        pattern: { cmd: string },
+        payload: Record<string, unknown>,
+      ) =>
+        pattern.cmd === 'branch.user.find_by_user'
+          ? Promise.resolve({ data: { branch_id: '3' } })
+          : baseImpl(c, pattern, payload),
+    );
     await dashboard(
       { period: 'today' },
       { id: '9', roles: ['manager'], branch_id: '3' },

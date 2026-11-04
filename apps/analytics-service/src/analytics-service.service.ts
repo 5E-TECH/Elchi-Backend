@@ -506,20 +506,38 @@ export class AnalyticsServiceService {
    * order-service javobidan qat'i nazar faqat oq ro'yxatdagi 5 maydon.
    * `myRank` — so'rovchining to'liq reytingdagi o'rni (chegaradan o'tmagan
    * yoki davrda buyurtmasi yo'q bo'lsa `null`), `myRanking` — o'z qatori.
+   *
+   * 2026-11-04: reyting faqat `branchCourierIds` (so'rovchi filialining faol
+   * kuryerlari) ichida — kompaniya bo'yicha emas; `myRank` ham filial ichida.
+   * Tartib order-service'niki (filtrlash uni buzmaydi). Meta (`min_orders`,
+   * davr) o'zgarmaydi; `filtered_out` — `min_orders = 1` da doim 0.
    */
-  private courierLeaderboard(response: unknown, requesterId: string) {
+  private courierLeaderboard(
+    response: unknown,
+    requesterId: string,
+    branchCourierIds: ReadonlySet<string>,
+  ) {
     const { items, meta } = this.ranking(response);
-    const rows = items.map((row: any) => ({
-      courier_id:
-        row?.courier_id !== null && row?.courier_id !== undefined
-          ? String(row.courier_id)
-          : null,
-      courier_name:
-        typeof row?.courier_name === 'string' ? row.courier_name : null,
-      total_orders: this.parseNumber(row?.total_orders),
-      successful_orders: this.parseNumber(row?.successful_orders),
-      success_rate: this.parseNumber(row?.success_rate),
-    }));
+    const rows = items
+      .filter((row: { courier_id?: string | number | null } | null) => {
+        const courierId = row?.courier_id;
+        return (
+          courierId !== null &&
+          courierId !== undefined &&
+          branchCourierIds.has(String(courierId))
+        );
+      })
+      .map((row: any) => ({
+        courier_id:
+          row?.courier_id !== null && row?.courier_id !== undefined
+            ? String(row.courier_id)
+            : null,
+        courier_name:
+          typeof row?.courier_name === 'string' ? row.courier_name : null,
+        total_orders: this.parseNumber(row?.total_orders),
+        successful_orders: this.parseNumber(row?.successful_orders),
+        success_rate: this.parseNumber(row?.success_rate),
+      }));
     const index = requesterId
       ? rows.findIndex((row) => row.courier_id === requesterId)
       : -1;
@@ -561,15 +579,38 @@ export class AnalyticsServiceService {
       return new Set();
     }
 
-    const response = await rmqSend<any>(
-      this.branchClient,
-      { cmd: 'branch.user.find_by_branch' },
-      { branch_id: branchId, requester },
-      ANALYTICS_READ_OPTIONS,
-    ).catch(() => null);
-    const rows = this.unwrap<any>(response);
+    return (await this.fetchBranchCourierIds(branchId, requester)) ?? new Set();
+  }
+
+  /**
+   * Filialning faol COURIER a'zolari (`branch_users`, rol katta-kichik
+   * harfga qaramay). `null` — branch-service javob bermadi / buzuq javob
+   * (chaqiruvchi bo'lakni «olinmadi» deb belgilaydi, kompaniya bo'yicha
+   * ro'yxatga TUSHMAYDI); bo'sh to'plam — filialda kuryer yo'q.
+   * So'rovchi o'z filialini o'qiy oladi (branch-service `assertCanReadBranch`:
+   * har qanday biriktirilgan rol, kuryer ham).
+   */
+  private async fetchBranchCourierIds(
+    branchId: string,
+    requester: RequesterContext | undefined,
+  ): Promise<Set<string> | null> {
+    let response: unknown;
+    try {
+      response = await rmqSend<any>(
+        this.branchClient,
+        { cmd: 'branch.user.find_by_branch' },
+        { branch_id: branchId, requester },
+        ANALYTICS_READ_OPTIONS,
+      );
+    } catch (error) {
+      this.logger.warn(
+        `Analytics filial kuryerlari olinmadi: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return null;
+    }
+    const rows = this.unwrap<any>(response as any);
     if (!Array.isArray(rows)) {
-      return new Set();
+      return null;
     }
 
     return new Set(
@@ -580,6 +621,27 @@ export class AnalyticsServiceService {
         .map((row: any) => String(row?.user_id ?? '').trim())
         .filter(Boolean),
     );
+  }
+
+  /**
+   * 2026-11-04 — kuryer dashboardi «Top kuryerlar»: so'rovchi kuryer
+   * filialining kuryerlari. Filialga biriktirilmagan — bo'sh to'plam (reyting
+   * bo'sh, `myRank: null`); filial aniqlanmasa / branch-service javob
+   * bermasa — `null` (bo'lak «olinmadi»).
+   */
+  private async resolveOwnBranchCourierIds(
+    requester: RequesterContext | undefined,
+  ): Promise<Set<string> | null> {
+    let branchId: string | null;
+    try {
+      branchId = await this.resolveRequesterBranchId(requester, true);
+    } catch {
+      return null;
+    }
+    if (!branchId) {
+      return new Set();
+    }
+    return this.fetchBranchCourierIds(branchId, requester);
   }
 
   /** `date` tushgan Toshkent oyi, 'YYYY-MM' (CODE-22: UTC oy emas). */
@@ -787,6 +849,12 @@ export class AnalyticsServiceService {
    * `failClosed` (dashboard): branch-service javob bermasa 503 — filial
    * doirasini aniqlay olmagan holda kompaniya bo'yicha raqamlar chiqmasin
    * (VkwhHqvW: 2,5 s / qayta urinishsiz rejimda bu ehtimol oshgan edi).
+   *
+   * 2026-11-04: `failClosed` (dashboard) — filial DOIM bazadan
+   * (`branch_users`), JWT `branch_id` ga ishonilmaydi: u faqat login/refresh'da
+   * yoziladi va filialdan chiqarilgan / ko'chirilgan xodim token muddati
+   * tugaguncha eski filial raqamlarini ko'rardi (neytral
+   * `branch_assigned: false` javobi ishlamasdi).
    */
   private async resolveRequesterBranchId(
     requester: RequesterContext | undefined,
@@ -795,7 +863,7 @@ export class AnalyticsServiceService {
     if (!requester?.id) {
       return null;
     }
-    if (requester.branch_id) {
+    if (requester.branch_id && !failClosed) {
       return String(requester.branch_id);
     }
 
@@ -874,7 +942,11 @@ export class AnalyticsServiceService {
     if (roles.has(Roles.COURIER)) {
       // (5tUEVG1B) kuryer o'z o'rnini ko'rsin: reyting tanlangan davr
       // bo'yicha `order.analytics.top_couriers` dan (PQt3n1N0), parallel.
-      const [myStat, topCouriersRes] = await Promise.all([
+      // 2026-11-04: reyting faqat kuryerning O'Z filiali kuryerlari orasida
+      // (ilgari butun kompaniya; FE sarlavhasida esa filial nomi turardi).
+      // Filial a'zolari order bo'laklari bilan PARALLEL olinadi (filial
+      // aniqlash + a'zolar = 2 bosqich, vaqt byudjeti o'zgarmaydi).
+      const [myStat, topCouriersRes, branchCourierIds] = await Promise.all([
         this.readPart(
           this.orderClient,
           'order.analytics.courier_stat',
@@ -893,11 +965,16 @@ export class AnalyticsServiceService {
           failedParts,
           'topCouriers',
         ),
+        this.resolveOwnBranchCourierIds(requester),
       ]);
       this.requirePart(myStat, 'myStat');
+      if (branchCourierIds === null && !failedParts.includes('topCouriers')) {
+        failedParts.push('topCouriers');
+      }
       const leaderboard = this.courierLeaderboard(
         topCouriersRes,
         String(requester?.id ?? ''),
+        branchCourierIds ?? new Set<string>(),
       );
       const unwrappedMyStat = this.unwrap<any>(myStat);
       const courierScopedStats = unwrappedMyStat
@@ -992,6 +1069,15 @@ export class AnalyticsServiceService {
       );
     }
 
+    // 2026-11-04 (fail-closed): filial roli (menejer / registrator / filial)
+    // filialga biriktirilmagan — ilgari `branch_id` siz, ya'ni KOMPANIYA
+    // bo'yicha dashboard qaytardi. Endi neytral javob: shakl o'zgarmaydi
+    // (FE normalizatori hamma maydonni o'qiydi), raqamlar 0, ro'yxatlar bo'sh,
+    // order-service'ga so'rov yo'q.
+    if (isBranchRole && !branchId) {
+      return this.unassignedBranchDashboard(normalized, isRegistrator);
+    }
+
     const branchDashboardFilter = {
       ...normalized,
       period: filter.period,
@@ -1023,6 +1109,7 @@ export class AnalyticsServiceService {
       topCouriers,
       trend,
       pickup,
+      branchCourierIds,
     ] = await Promise.all([
       this.readPart(
         this.orderClient,
@@ -1108,6 +1195,12 @@ export class AnalyticsServiceService {
             'pickup',
           )
         : Promise.resolve(null),
+      // 2026-11-04: filial roli — `couriers` jadvali faqat filialning faol
+      // kuryerlari (order-service `courier_stats` filialga tegib o'tgan
+      // pochtalarning HAR kuryerini qaytaradi, boshqa filial kuryerlari ham).
+      isBranchRole && branchId
+        ? this.fetchBranchCourierIds(branchId, requester)
+        : Promise.resolve(undefined),
     ]);
     this.requirePart(orders, 'overview');
     if (
@@ -1131,6 +1224,11 @@ export class AnalyticsServiceService {
     );
 
     const pickupIncome = this.pickupIncome(pickup);
+    const courierRows = this.branchCourierStatsRows(
+      this.projectStatsRows(couriers, 'courier'),
+      branchCourierIds,
+      failedParts,
+    );
 
     return successRes(
       {
@@ -1147,7 +1245,7 @@ export class AnalyticsServiceService {
             }
           : safeOrdersOverview,
         markets: this.projectStatsRows(markets, 'market'),
-        couriers: this.projectStatsRows(couriers, 'courier'),
+        couriers: courierRows,
         topMarkets: topMarketsRanking.items,
         topMarketsMeta: topMarketsRanking.meta,
         topBranches: topBranchesRanking.items,
@@ -1171,6 +1269,83 @@ export class AnalyticsServiceService {
       },
       200,
       allTime?.message ?? 'Dashboard infos',
+    );
+  }
+
+  /**
+   * 2026-11-04 — filial roli dashboardidagi `couriers` qatorlari faqat
+   * filialning faol kuryerlari. `branchCourierIds`:
+   *   - `undefined` — filtr yo'q (SA/ADMIN, kompaniya yoki filial kesimi);
+   *   - `null` — filial a'zolari olinmadi: `couriers` bo'lagi «olinmadi»
+   *     (`null`, `failed_parts: ['couriers']`), begona kuryerlar chiqmaydi;
+   *   - to'plam — faqat shu id'lar.
+   * `courier_stats` o'zi olinmagan bo'lsa (`null`) — o'z holicha.
+   */
+  private branchCourierStatsRows(
+    rows: unknown,
+    branchCourierIds: Set<string> | null | undefined,
+    failedParts: string[],
+  ): unknown {
+    if (branchCourierIds === undefined || !Array.isArray(rows)) {
+      return rows;
+    }
+    if (branchCourierIds === null) {
+      if (!failedParts.includes('couriers')) {
+        failedParts.push('couriers');
+      }
+      return null;
+    }
+    return (rows as Array<{ courier?: AnalyticsPartyRef | null }>).filter(
+      (row) => branchCourierIds.has(String(row?.courier?.id ?? '')),
+    );
+  }
+
+  /**
+   * 2026-11-04 — filialga biriktirilmagan filial roli uchun neytral dashboard:
+   * oddiy filial javobi bilan AYNI kalitlar, raqamlar 0, ro'yxatlar bo'sh,
+   * `branchDashboard: null`, `previous`/`series` — `null` (FE «oldingi davr
+   * yo'q» deb chizadi). Registratorda moliyaviy maydonlar yo'q (oddiy javob
+   * kabi). Qo'shimcha `branch_assigned: false` — FE xohlasa «filialga
+   * biriktirilmagansiz» deb yozadi.
+   */
+  private unassignedBranchDashboard(
+    normalized: { startDate: string; endDate: string },
+    hideFinancials: boolean,
+  ) {
+    const overview = this.sanitizeDashboardOverview(
+      {
+        acceptedCount: 0,
+        total: 0,
+        totalOrders: 0,
+        ordersCount: 0,
+        cancelled: 0,
+        lostRevenue: 0,
+        soldAndPaid: 0,
+        profit: 0,
+        totalRevenue: 0,
+        from: new Date(normalized.startDate).getTime(),
+        to: new Date(normalized.endDate).getTime(),
+      },
+      hideFinancials,
+    );
+    return successRes(
+      {
+        orders: overview,
+        markets: [],
+        couriers: [],
+        topMarkets: [],
+        topMarketsMeta: null,
+        topBranches: [],
+        topBranchesMeta: null,
+        branchDashboard: null,
+        targets: DASHBOARD_TARGETS,
+        ...this.dashboardTrendParts(null, hideFinancials),
+        branch_assigned: false,
+        degraded: false,
+        failed_parts: [],
+      },
+      200,
+      'Dashboard infos',
     );
   }
 

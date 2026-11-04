@@ -118,7 +118,8 @@ describe('yA31z7Rr — findAllAdmins telegram_linked (SQL)', () => {
     });
     for (const { sql } of captured) {
       expect(sql).toContain(`COALESCE("admin"."telegram_id", '') = ''`);
-      expect(sql).toContain('"admin"."role" NOT IN (');
+      // 2026-11-04: menejer ko'lami QAT'IY — `admin.id IN (...)`.
+      expect(sql).toMatch(/"admin"\."id" IN \(\$\d+\)/);
     }
   });
 });

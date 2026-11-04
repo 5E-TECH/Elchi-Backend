@@ -103,6 +103,17 @@ describe('K3scaE0W — changeUserRole', () => {
     }
   });
 
+  it("ro'yxatchi → menejer: sotish/bekor ruxsati yoqiladi (yangi menejer sukuti, 2026-11-04)", async () => {
+    const w = seed();
+
+    await w.service.changeUserRole('10', 'manager', SUPERADMIN);
+
+    expect(w.rows.find((r) => r.id === '10')).toMatchObject({
+      role: Roles.MANAGER,
+      can_sell_cancel: true,
+    });
+  });
+
   it('menejer → admin: faqat menejerga xos maydonlar tozalanadi (sell/cancel, xarajat, tarif)', async () => {
     const w = seed();
 

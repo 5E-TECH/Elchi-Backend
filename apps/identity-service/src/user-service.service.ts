@@ -1112,6 +1112,9 @@ export class UserServiceService implements OnModuleInit {
 
       // fix #3: branch_users (allowed_user_ids) o'rniga — manager faqat O'ZI
       // YARATGAN userni (created_by === requester.id) tahrirlay oladi.
+      // 2026-11-04: bu QO'SHIMCHA shart — filial a'zoligini (nishon menejer
+      // filialining faol `branch_users` a'zosi) gateway tekshiradi
+      // (assertManagerTargetInOwnBranch: PATCH /users/:id, parol SMS).
       const targetCreatedBy = String(options.targetCreatedBy ?? '').trim();
       if (
         !targetCreatedBy ||
@@ -1774,7 +1777,9 @@ export class UserServiceService implements OnModuleInit {
    * (aidsxJ2H) Parol SMS'ini qayta yuborish / holatini ko'rish huquqi:
    * superadmin — hammasi; admin — admin/superadmin'dan boshqasi; menejer —
    * faqat O'Z kuryeri (`created_by` — tahrirlash huquqi bilan bir xil
-   * qoida). O'ziga — yo'q (o'z paroli profil orqali almashtiriladi).
+   * qoida; 2026-11-04 dan gateway qo'shimcha ravishda kuryer hozir menejer
+   * filialida ekanini tekshiradi). O'ziga — yo'q (o'z paroli profil orqali
+   * almashtiriladi).
    */
   private async findTempPasswordTarget(
     id: string,
@@ -2733,7 +2738,8 @@ export class UserServiceService implements OnModuleInit {
    *     bo'lmasa 503, rol o'zgarmaydi).
    * Rolga bog'liq maydonlar qayta hisoblanadi: `can_sell_cancel`,
    * `can_add_extra_cost`, `tariff_home`/`tariff_center` faqat menejerda
-   * ma'noli — boshqa rolga o'tganda tozalanadi. Komissiya (operator) va
+   * ma'noli — boshqa rolga o'tganda tozalanadi; menejerga o'tganda
+   * `can_sell_cancel` yoqiladi (yangi menejer sukuti, 2026-11-04). Komissiya (operator) va
    * maosh tegilmaydi. Barcha sessiyalar yopiladi (`invalidateAllSessions`):
    * JWT eski rolni olib yurgani uchun foydalanuvchi qayta kiradi (access
    * token ≤ ACCESS_TOKEN_TIME).
@@ -2796,6 +2802,10 @@ export class UserServiceService implements OnModuleInit {
     };
     const previousRole = user.role;
     user.role = target.role;
+    if (target.role === Roles.MANAGER && previousRole !== Roles.MANAGER) {
+      // Yangi menejer — `createManager` kabi sotish/bekor sukut bo'yicha yoqiq.
+      user.can_sell_cancel = true;
+    }
     if (target.role !== Roles.MANAGER) {
       user.can_sell_cancel = false;
       user.can_add_extra_cost = false;
@@ -3372,23 +3382,25 @@ export class UserServiceService implements OnModuleInit {
     /**
      * 2CBnPAeg — menejer ko'lami SO'ROVDA (ilgari gateway sahifadan keyin
      * filtrlardi: `meta.total` sahifadagi qatorlar soni, `countsByRole`
-     * ko'lamsiz). Kuryer / filial roli — faqat menejer filialiga
-     * biriktirilganlar; qolgan rollar cheklanmaydi. `baseQb` ga qo'shiladi —
-     * ro'yxat, `total` va `countsByRole` bir xil doirada.
+     * ko'lamsiz). `baseQb` ga qo'shiladi — ro'yxat, `total`, `totalUsers` va
+     * `countsByRole` bir xil doirada.
+     *
+     * 2026-11-04 (ega: «filialda faqat shu filialning foydalanuvchilari
+     * ko'rinishi kerak»): ko'lam QAT'IY — faqat menejer filialining faol
+     * `branch_users` a'zolari (menejer, registrator, kuryer). Ilgari faqat
+     * kuryer / filial roli cheklanardi, admin, logist, investor, boshqa
+     * filiallarning menejer/registratorlari va BARCHA marketlar (market
+     * filialga bog'lanmagan) menejerga ko'rinardi. Bo'sh ko'lam (filialda
+     * hech kim yo'q / biriktirilmagan menejer) — hech qanday qator.
      */
     if (branch_scope_user_ids) {
-      baseQb.andWhere(
-        new Brackets((scoped) => {
-          scoped.where('admin.role NOT IN (:...branchScopedRoles)', {
-            branchScopedRoles: [Roles.COURIER, Roles.BRANCH],
-          });
-          if (branch_scope_user_ids.length) {
-            scoped.orWhere('admin.id IN (:...branchScopeUserIds)', {
-              branchScopeUserIds: branch_scope_user_ids,
-            });
-          }
-        }),
-      );
+      if (branch_scope_user_ids.length) {
+        baseQb.andWhere('admin.id IN (:...branchScopeUserIds)', {
+          branchScopeUserIds: branch_scope_user_ids,
+        });
+      } else {
+        baseQb.andWhere('1 = 0');
+      }
     }
 
     const listQb = baseQb.clone();
@@ -3844,6 +3856,10 @@ export class UserServiceService implements OnModuleInit {
       tariff_center: dto.tariff_center ?? null,
       add_order: false,
       can_add_extra_cost: false,
+      // Ega qarori (2026-11-04): viloyat va aralash filial menejerida
+      // sotish/bekor qilish SUKUT bo'yicha YOQIQ — admin xohlasa o'chiradi
+      // (PATCH /users/:id). Boshqa filial turlarida bayroq ishlatilmaydi.
+      can_sell_cancel: true,
       default_tariff: null,
       isDeleted: false,
     });

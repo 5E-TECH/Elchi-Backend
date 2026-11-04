@@ -102,7 +102,10 @@ describe('analytics downstream failures', () => {
           : Promise.resolve(
               pattern.cmd === 'order.analytics.overview'
                 ? { acceptedCount: 4 }
-                : { data: [] },
+                : pattern.cmd === 'branch.user.find_by_user'
+                  ? // 2026-11-04: dashboard filiali bazadan (JWT emas).
+                    { data: { branch_id: '16' } }
+                  : { data: [] },
             ),
     );
     const response = await make().getDashboard(

@@ -237,6 +237,15 @@ describe('FIX3 A7 — analytics scoping', () => {
             });
           case 'branch.dashboard':
             return Promise.resolve({ data: { branchId: '16' } });
+          // 2026-11-04: filial roli `couriers` jadvali — faqat filial
+          // kuryerlari (ko'lam: analytics-courier-branch-scope.spec.ts).
+          case 'branch.user.find_by_branch':
+            return Promise.resolve({
+              data: [{ user_id: '31', role: 'COURIER' }],
+            });
+          // 2026-11-04: dashboard filiali bazadan (JWT `branch_id` emas).
+          case 'branch.user.find_by_user':
+            return Promise.resolve({ data: { branch_id: '16' } });
           default:
             return Promise.resolve({ data: [] });
         }

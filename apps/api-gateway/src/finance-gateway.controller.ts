@@ -2025,34 +2025,12 @@ export class FinanceGatewayController {
           ),
         })),
       );
-      if (
-        this.isManager(req?.user) &&
-        String(user_id) === String(req?.user?.sub ?? '')
-      ) {
-        try {
-          const couriersResponse = await this.sendIdentity<{
-            data?: { items?: any[] };
-          }>(
-            { cmd: 'identity.user.find_all' },
-            { query: { role: RoleEnum.COURIER, limit: 500, page: 1 } },
-          );
-          const allCouriers = couriersResponse?.data?.items ?? [];
-          response.meta = {
-            ...(response.meta ?? {}),
-            couriers: allCouriers.filter((courier) => {
-              const sameCreator =
-                String(courier?.created_by ?? '') === String(req.user.sub);
-              const sameBranch =
-                String(courier?.branch_id ?? '') &&
-                String(courier?.branch_id ?? '') ===
-                  String(req.user.branch_id ?? '');
-              return sameCreator || sameBranch;
-            }),
-          };
-        } catch {
-          response.meta = { ...(response.meta ?? {}), couriers: [] };
-        }
-      }
+      // 2026-11-04: menejerning o'z kassasi javobidagi `meta.couriers`
+      // OLIB TASHLANDI — ko'lamsiz edi (identity'dan kompaniyaning so'nggi
+      // kuryerlari, `created_by` bo'yicha filtr: boshqa filialga o'tkazilgan
+      // kuryerning to'liq qatori — telefon, maosh, komissiya — chiqardi, o'z
+      // filialining boshqalar yaratgan kuryerlari esa yo'q). Frontend uni
+      // o'qimaydi; menejer kuryerlari — GET /couriers (filial `branch_users`).
       return response;
     }
 
@@ -2117,34 +2095,12 @@ export class FinanceGatewayController {
         query,
         this.canSeeReceiptsOf(req?.user),
       );
-      if (
-        this.isManager(req?.user) &&
-        String(user_id) === String(req?.user?.sub ?? '')
-      ) {
-        try {
-          const couriersResponse = await this.sendIdentity<{
-            data?: { items?: any[] };
-          }>(
-            { cmd: 'identity.user.find_all' },
-            { query: { role: RoleEnum.COURIER, limit: 500, page: 1 } },
-          );
-          const allCouriers = couriersResponse?.data?.items ?? [];
-          response.meta = {
-            ...(response.meta ?? {}),
-            couriers: allCouriers.filter((courier) => {
-              const sameCreator =
-                String(courier?.created_by ?? '') === String(req.user.sub);
-              const sameBranch =
-                String(courier?.branch_id ?? '') &&
-                String(courier?.branch_id ?? '') ===
-                  String(req.user.branch_id ?? '');
-              return sameCreator || sameBranch;
-            }),
-          };
-        } catch {
-          response.meta = { ...(response.meta ?? {}), couriers: [] };
-        }
-      }
+      // 2026-11-04: menejerning o'z kassasi javobidagi `meta.couriers`
+      // OLIB TASHLANDI — ko'lamsiz edi (identity'dan kompaniyaning so'nggi
+      // kuryerlari, `created_by` bo'yicha filtr: boshqa filialga o'tkazilgan
+      // kuryerning to'liq qatori — telefon, maosh, komissiya — chiqardi, o'z
+      // filialining boshqalar yaratgan kuryerlari esa yo'q). Frontend uni
+      // o'qimaydi; menejer kuryerlari — GET /couriers (filial `branch_users`).
       return response;
     }
 

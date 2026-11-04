@@ -45,6 +45,20 @@ function route(myStat: unknown = { totalOrders: 9, soldOrders: 7 }) {
       if (pattern.cmd === 'order.analytics.overview') {
         return Promise.resolve({ acceptedCount: 1 });
       }
+      // 2026-11-04: reyting faqat kuryer filiali kuryerlari orasida — bu
+      // spec'da hamma 12 kuryer bitta filialda (filial ko'lami alohida:
+      // analytics-courier-branch-scope.spec.ts).
+      if (pattern.cmd === 'branch.user.find_by_user') {
+        return Promise.resolve({ data: { branch_id: '16' } });
+      }
+      if (pattern.cmd === 'branch.user.find_by_branch') {
+        return Promise.resolve({
+          data: ranked.map((row) => ({
+            user_id: row.courier_id,
+            role: 'COURIER',
+          })),
+        });
+      }
       return Promise.resolve({ data: [] });
     },
   );

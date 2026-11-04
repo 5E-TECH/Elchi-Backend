@@ -177,15 +177,22 @@ describe('AnalyticsServiceService', () => {
   });
 
   it('removes all financial totals from registrator all-time dashboard', async () => {
-    rmqSendMock.mockResolvedValue({
-      data: {
-        acceptedCount: 100,
-        soldAndPaid: 70,
-        profit: 1200,
-        totalRevenue: 5000,
-        total_revenue: 5000,
-      },
-    });
+    rmqSendMock.mockImplementation((_client: any, pattern: any) =>
+      Promise.resolve(
+        // 2026-11-04: dashboard filiali bazadan (branch.user.find_by_user).
+        pattern?.cmd === 'branch.user.find_by_user'
+          ? { data: { branch_id: '16' } }
+          : {
+              data: {
+                acceptedCount: 100,
+                soldAndPaid: 70,
+                profit: 1200,
+                totalRevenue: 5000,
+                total_revenue: 5000,
+              },
+            },
+      ),
+    );
 
     const res = await service.getDashboard(
       { id: 'registrator-1', roles: ['registrator'], branch_id: '16' },
@@ -223,7 +230,9 @@ describe('AnalyticsServiceService', () => {
     },
   );
 
-  it('uses requester branch_id for manager branch dashboard', async () => {
+  // 2026-11-04: filial JWT `branch_id` dan EMAS, bazadan (branch_users) —
+  // token eski filial (9) bilan berilgan, menejer hozir filial 16 da.
+  it('uses DB branch assignment (not stale JWT branch_id) for manager branch dashboard', async () => {
     jest.useFakeTimers().setSystemTime(new Date('2026-06-11T10:00:00.000Z'));
     const scopedCommands = new Set([
       'order.analytics.overview',
@@ -249,18 +258,24 @@ describe('AnalyticsServiceService', () => {
           return Promise.resolve({ data: { branchId: '16' } });
         }
         if (pattern?.cmd === 'branch.user.find_by_user') {
-          throw new Error('branch assignment lookup should not be needed');
+          expect(payload.user_id).toBe('2');
+          return Promise.resolve({ data: { branch_id: '16' } });
         }
         return Promise.resolve({ data: [] });
       },
     );
 
     const res = await service.getDashboard(
-      { id: '2', roles: ['manager'], branch_id: '16' },
+      { id: '2', roles: ['manager'], branch_id: '9' },
       { period: 'today' },
     );
 
     expect(res.data.branchDashboard).toEqual({ branchId: '16' });
+    expect(
+      rmqSendMock.mock.calls.filter(
+        ([, pattern]) => pattern?.cmd === 'branch.user.find_by_user',
+      ),
+    ).toHaveLength(1);
   });
 
   it('keeps manager branch dashboard on all-time filter', async () => {
@@ -272,6 +287,9 @@ describe('AnalyticsServiceService', () => {
             expect.objectContaining({ all: true }),
           );
           return Promise.resolve({ data: { branchId: '16', all: true } });
+        }
+        if (pattern?.cmd === 'branch.user.find_by_user') {
+          return Promise.resolve({ data: { branch_id: '16' } });
         }
         return Promise.resolve({ data: [] });
       },

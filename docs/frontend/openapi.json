@@ -436,7 +436,7 @@
         ]
       },
       "get": {
-        "description": "Z3pUOxou — LOGIST: faqat `region_id` si o'ziga biriktirilgan viloyatlardan biri bo'lgan kuryerlar (`region_id` filtri — faqat o'z viloyati, boshqasi 400; biriktirilmagan — bo'sh). Maosh va moliya maydonlari (salary, payment_day, compensation_mode, commission_*, tariff_*, balanslar) yo'q; `branch_id` filtri logist uchun e'tiborsiz.",
+        "description": "Z3pUOxou — LOGIST: faqat `region_id` si o'ziga biriktirilgan viloyatlardan biri bo'lgan kuryerlar (`region_id` filtri — faqat o'z viloyati, boshqasi 400; biriktirilmagan — bo'sh). Maosh va moliya maydonlari (salary, payment_day, compensation_mode, commission_*, tariff_*, balanslar) yo'q; `branch_id` filtri logist uchun e'tiborsiz. MANAGER / REGISTRATOR / BRANCH: faqat o'z filiali (`branch_users`) kuryerlari, `branch_id` filtri e'tiborsiz; filialga biriktirilmagan — bo'sh sahifa (`items: []`, `total: 0`). `branch_id` filtri faqat SUPERADMIN/ADMIN uchun.",
         "operationId": "ApiGatewayController_getCouriers",
         "parameters": [
           {
@@ -731,6 +731,7 @@
     },
     "/users": {
       "get": {
+        "description": "SUPERADMIN/ADMIN — barcha foydalanuvchilar (superadmin va mijozsiz). MANAGER — faqat o'z filialining faol a'zolari (`branch_users`: menejer, registrator, kuryer); admin, logist, investor, boshqa filial xodimlari va marketlar chiqmaydi (`role=market` — bo'sh). `meta.total`, `totalUsers`, `totalMarket`, `totalEmployees` va `countsByRole` ham shu doirada. Filialga biriktirilmagan menejer — bo'sh sahifa (meta shakli o'zgarmaydi, sonlar 0).",
         "operationId": "ApiGatewayController_getUsers",
         "parameters": [
           {
@@ -866,7 +867,7 @@
         ]
       },
       "patch": {
-        "description": "`password` berilsa (parolni tiklash): shu foydalanuvchining BARCHA sessiyalari darhol yopiladi (`password_changed`; 48 soatlik qulfga bog'liq emas) — uning access tokenlari keyingi so'rovdayoq 401, refresh ham 401. O'zini tahrirlasa (`:id` = o'zi) — joriy sessiya qoladi, qolganlari yopiladi. Javobga `sessions_revoked: <n>` qo'shiladi.",
+        "description": "`password` berilsa (parolni tiklash): shu foydalanuvchining BARCHA sessiyalari darhol yopiladi (`password_changed`; 48 soatlik qulfga bog'liq emas) — uning access tokenlari keyingi so'rovdayoq 401, refresh ham 401. O'zini tahrirlasa (`:id` = o'zi) — joriy sessiya qoladi, qolganlari yopiladi. Javobga `sessions_revoked: <n>` qo'shiladi. MANAGER: faqat o'z filialining faol a'zosi (`branch_users`) VA o'zi yaratgan foydalanuvchi; boshqa filialga o'tkazilgan xodim yoki filialga biriktirilmagan menejer — 403.",
         "operationId": "ApiGatewayController_updateUser",
         "parameters": [
           {
@@ -953,7 +954,7 @@
     },
     "/users/{id}/password/resend-sms": {
       "post": {
-        "description": "Yangi vaqtinchalik parol yaratib SMS bilan yuboradi (`password_mode: 'generate_sms'` bilan yaratilgan foydalanuvchi uchun «SMS kelmadimi? Qayta yuborish»). Rollar: superadmin; admin (admin/superadmin'dan boshqasi); menejer — faqat o'zi yaratgan kuryer. Nishon roli: admin, registrator, logist, courier, manager, market (boshqasi 400); o'ziga — 403. Eski parol darhol ishlamaydi, barcha sessiyalar yopiladi (`sessions_revoked`), birinchi kirishda parol almashtirish majburiy. Javob `data`: `user_id`, `must_change_password: true`, `password_sms` { `status`: `pending | sent | delivered | failed`, `failure_reason`, `failure_message`, `requested_at`, `sent_at`, `delivered_at`, `resend_available_at`, `resends_left_today` }. SMS yuborilmasa ham 200 (`status: failed` + sabab). 429 — `PASSWORD_SMS_COOLDOWN` (60 s) / `PASSWORD_SMS_DAILY_LIMIT` (kuniga 5), `retry_after_seconds`.",
+        "description": "Yangi vaqtinchalik parol yaratib SMS bilan yuboradi (`password_mode: 'generate_sms'` bilan yaratilgan foydalanuvchi uchun «SMS kelmadimi? Qayta yuborish»). Rollar: superadmin; admin (admin/superadmin'dan boshqasi); menejer — faqat o'zi yaratgan va hozir o'z filialida (`branch_users`) bo'lgan kuryer. Nishon roli: admin, registrator, logist, courier, manager, market (boshqasi 400); o'ziga — 403. Eski parol darhol ishlamaydi, barcha sessiyalar yopiladi (`sessions_revoked`), birinchi kirishda parol almashtirish majburiy. Javob `data`: `user_id`, `must_change_password: true`, `password_sms` { `status`: `pending | sent | delivered | failed`, `failure_reason`, `failure_message`, `requested_at`, `sent_at`, `delivered_at`, `resend_available_at`, `resends_left_today` }. SMS yuborilmasa ham 200 (`status: failed` + sabab). 429 — `PASSWORD_SMS_COOLDOWN` (60 s) / `PASSWORD_SMS_DAILY_LIMIT` (kuniga 5), `retry_after_seconds`.",
         "operationId": "ApiGatewayController_resendTempPasswordSms",
         "parameters": [
           {
@@ -19557,7 +19558,7 @@
     },
     "/analytics/dashboard": {
       "get": {
-        "description": "Admin/filial kesimi javobida qo'shimcha: orders.lostRevenue (l9NNdsCH, bekor summasi), targets {successRate} (l9NNdsCH), previous {from,to,acceptedCount,soldAndPaid,cancelled,totalRevenue,profit,lostRevenue} va series[14] {date,…} (DwrMygfo; registratorda moliyaviy maydonlarsiz; «Barchasi»da previous=null).",
+        "description": "Admin/filial kesimi javobida qo'shimcha: orders.lostRevenue (l9NNdsCH, bekor summasi), targets {successRate} (l9NNdsCH), previous {from,to,acceptedCount,soldAndPaid,cancelled,totalRevenue,profit,lostRevenue} va series[14] {date,…} (DwrMygfo; registratorda moliyaviy maydonlarsiz; «Barchasi»da previous=null). Kuryer: topCouriers / myRank / myRanking — faqat o'z filiali kuryerlari orasida (filialga biriktirilmagan — [] / null; filial a'zolari olinmasa — failed_parts: ['topCouriers']). MANAGER / REGISTRATOR / BRANCH: couriers — faqat filialning faol kuryerlari; filialga biriktirilmagan — neytral javob (raqamlar 0, ro'yxatlar bo'sh, branch_assigned: false).",
         "operationId": "AnalyticsGatewayController_getDashboard",
         "parameters": [
           {

@@ -175,9 +175,11 @@ export class User extends BaseEntity {
   @Column({ type: 'boolean', default: false })
   can_add_extra_cost: boolean;
 
-  // Per-manager SELL/CANCEL ruxsati (#4). HYBRID filial menejeriga sotish va
-  // bekor qilish tugmalari faqat shu bayroq TRUE bo'lsagina ishlaydi. Superadmin
-  // boshqaradi; default FALSE — ya'ni ruxsat ATAYLAB berilmaguncha yopiq.
+  // Per-manager SELL/CANCEL ruxsati (#4). Viloyat va aralash filial menejeriga
+  // sotish va bekor qilish tugmalari faqat shu bayroq TRUE bo'lsagina ishlaydi.
+  // Admin/superadmin boshqaradi. Ustun sukuti FALSE (boshqa rollar uchun), lekin
+  // yangi menejer `createManager` / rolni menejerga o'zgartirishda TRUE bilan
+  // yaratiladi (ega qarori 2026-11-04).
   @Column({ type: 'boolean', default: false })
   can_sell_cancel: boolean;
 
