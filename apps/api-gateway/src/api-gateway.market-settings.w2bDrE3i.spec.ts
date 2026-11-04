@@ -72,6 +72,25 @@ describe('w2bDrE3i — PATCH /admin/markets/:id', () => {
     ).toThrow();
     expect(identitySend).not.toHaveBeenCalled();
   });
+
+  it('⭐ kassa qarzi: faqat cashbox_debt_enabled yuborilsa ham o`tadi va o`zi uzatiladi', async () => {
+    const { controller, identitySend } = setup();
+    await lastValueFrom(
+      controller.updateMarketExtraCost(
+        '37',
+        { cashbox_debt_enabled: true },
+        req('1', ['superadmin']),
+      ),
+    );
+    expect(identitySend).toHaveBeenCalledWith(
+      { cmd: 'identity.market.update' },
+      {
+        id: '37',
+        dto: { cashbox_debt_enabled: true },
+        requester: expect.objectContaining({ id: '1' }),
+      },
+    );
+  });
 });
 
 describe('VRyloH62 — PATCH /markets/:id/operator-phone', () => {

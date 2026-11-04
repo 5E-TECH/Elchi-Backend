@@ -2297,6 +2297,8 @@ export class ApiGatewayController {
    * talabini boshqarish. Faqat admin/superadmin (identity ham tekshiradi).
    * Sukut: yangi market — yopiq; mavjud marketlar migratsiya 114 da ochiq
    * qoldirilgan (ortga-moslik).
+   * `cashbox_debt_enabled` — market kassasi qarzga ishlaydimi (sukut o'chiq,
+   * migratsiya 207); finance marketga ortiqcha to'lovda shuni o'qiydi.
    */
   @Patch('admin/markets/:id')
   @UseGuards(JwtAuthGuard, RolesGuard)
@@ -2304,7 +2306,7 @@ export class ApiGatewayController {
   @ApiBearerAuth()
   @ApiOperation({
     summary:
-      "Market qo'shimcha xarajat sozlamasi (extra_cost_enabled, extra_cost_requires_approval)",
+      "Market sozlamasi: qo'shimcha xarajat (extra_cost_enabled, extra_cost_requires_approval) va kassa qarzi (cashbox_debt_enabled)",
   })
   @ApiParam({ name: 'id', description: 'Market user ID' })
   @ApiBody({ type: UpdateMarketExtraCostRequestDto })
@@ -2318,10 +2320,11 @@ export class ApiGatewayController {
     this.assertMarketIdParam(id);
     if (
       dto.extra_cost_enabled === undefined &&
-      dto.extra_cost_requires_approval === undefined
+      dto.extra_cost_requires_approval === undefined &&
+      dto.cashbox_debt_enabled === undefined
     ) {
       throw new BadRequestException(
-        'extra_cost_enabled yoki extra_cost_requires_approval dan kamida bittasi kerak',
+        'extra_cost_enabled, extra_cost_requires_approval yoki cashbox_debt_enabled dan kamida bittasi kerak',
       );
     }
     return this.identityClient
@@ -2338,6 +2341,9 @@ export class ApiGatewayController {
                   extra_cost_requires_approval:
                     dto.extra_cost_requires_approval,
                 }
+              : {}),
+            ...(dto.cashbox_debt_enabled !== undefined
+              ? { cashbox_debt_enabled: dto.cashbox_debt_enabled }
               : {}),
           },
           requester: this.toRequester(req),

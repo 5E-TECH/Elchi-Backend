@@ -22,6 +22,17 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+### 2026-11-05 — Market kassasi qarzga ishlashi: market bo'yicha toggle (migratsiya 1716000000207)
+
+Ilgari marketga qarzdan ortiq to'lab bo'lmasdi: «To'lov miqdori marketga qarzdan oshib ketdi» (400). Endi admin/superadmin market sozlamasida «Kassa qarzga ishlaydi» ni yoqsa, shu marketga qarzdan ortiq to'lash mumkin — market kassasi manfiyga tushadi (market bizga qarzdor), ortig'i keyingi buyurtmalarga hisoblanadi. Sukut — hamma market uchun o'chiq, avvalgi xulq.
+
+✏️ **Kontrakt:**
+- [identity] Market obyektida yangi maydon `cashbox_debt_enabled: boolean` (sukut `false`) — `GET /users/:id` va boshqa market javoblarida.
+- [gateway] `PATCH /admin/markets/:id` endi `cashbox_debt_enabled` ni ham qabul qiladi (faqat admin/superadmin; market o'zi yoki menejer — 403). Tanada `extra_cost_enabled`, `extra_cost_requires_approval`, `cashbox_debt_enabled` dan kamida bittasi bo'lishi kerak.
+- [finance] Marketga to'lov (`POST /finance/cashbox/payment/market`) va kuryerning «Marketga o'tkazma» (`click_to_market`) — yoqilgan market uchun qarzdan oshsa ham o'tadi; o'chiq bo'lsa xato avvalgidek.
+
+🔧 **Frontend:** market tafsilotida admin/superadmin uchun «Kassa qarzga ishlaydi» toggle'i (`PATCH /admin/markets/:id { cashbox_debt_enabled }`).
+
 ### 2026-11-05 — Qo'shimcha xarajat so'rovi «kutilmoqda» bo'lib osilib qolmaydi, tasdiq bir martada yoziladi (hwTkXsGi, migratsiya 1716000000206)
 
 Ilgari kuryer xarajat bilan sotib, keyin xarajatsiz qayta sotsa (yoki ommaviy sotuv / bot / tasdiq o'chiq market), eski so'rov «kutilmoqda» qolardi: market tasdiqlasa 400, kuryerni o'tkazish va filialdan chiqarish 409 bilan to'silardi. Orqaga qaytarishda ham ochiq so'rov qolib, keyin tasdiqlansa eski amal eski xarajat bilan qayta bajarilardi. Tasdiq esa ikki bo'lakda yozilardi (avval «tasdiqlandi», keyin sotuv): oraliqda jarayon to'xtasa, so'rov «tasdiqlandi», sotuv esa yo'q qolardi.

@@ -205,3 +205,74 @@ describe('w2bDrE3i / VRyloH62 — market sozlamalari (identity)', () => {
     expect(other.users.save).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * Market kassasi qarzga ishlaydi (`cashbox_debt_enabled`): sukut o'chiq,
+ * faqat admin/superadmin yoqadi/o'chiradi.
+ */
+describe('market kassasi qarz toggle — cashbox_debt_enabled (identity)', () => {
+  it.each([
+    ['superadmin', SUPERADMIN],
+    ['admin', ADMIN],
+  ])('⭐ %s yoqadi va o`chiradi; jurnalda oldin/keyin', async (_label, who) => {
+    const { service, saved } = makeService(existingMarket());
+
+    await service.updateMarket(
+      '37',
+      { cashbox_debt_enabled: true },
+      who as never,
+    );
+    expect(saved.at(-1)).toMatchObject({ cashbox_debt_enabled: true });
+    expect(
+      (service as unknown as { activityLog: { logChange: jest.Mock } })
+        .activityLog.logChange,
+    ).toHaveBeenCalledWith(
+      expect.objectContaining({
+        old_value: expect.objectContaining({ cashbox_debt_enabled: false }),
+        new_value: expect.objectContaining({ cashbox_debt_enabled: true }),
+      }),
+    );
+
+    const off = makeService({
+      ...existingMarket(),
+      cashbox_debt_enabled: true,
+    });
+    await off.service.updateMarket(
+      '37',
+      { cashbox_debt_enabled: false },
+      who as never,
+    );
+    expect(off.saved.at(-1)).toMatchObject({ cashbox_debt_enabled: false });
+  });
+
+  it.each([
+    ['market o`zi', MARKET],
+    ['menejer', { id: '22', roles: [Roles.MANAGER] }],
+  ])('%s — 403, saqlanmaydi', async (_label, who) => {
+    const { service, users } = makeService(existingMarket());
+    expect(
+      await rpcError(
+        service.updateMarket(
+          '37',
+          { cashbox_debt_enabled: true },
+          who as never,
+        ),
+      ),
+    ).toMatchObject({ statusCode: 403 });
+    expect(users.save).not.toHaveBeenCalled();
+  });
+
+  it('boolean bo`lmagan qiymat — 400', async () => {
+    const { service, users } = makeService(existingMarket());
+    expect(
+      await rpcError(
+        service.updateMarket(
+          '37',
+          { cashbox_debt_enabled: 'ha' as never },
+          ADMIN as never,
+        ),
+      ),
+    ).toMatchObject({ statusCode: 400 });
+    expect(users.save).not.toHaveBeenCalled();
+  });
+});

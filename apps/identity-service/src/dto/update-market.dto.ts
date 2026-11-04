@@ -74,6 +74,11 @@ export class UpdateMarketDto {
   @IsBoolean()
   extra_cost_requires_approval?: boolean;
 
+  /** Market kassasi qarzga ishlaydimi: faqat admin/superadmin. */
+  @IsOptional()
+  @IsBoolean()
+  cashbox_debt_enabled?: boolean;
+
   /** (ysBqD9Nx) guruh kartasida mijoz PII: market o'zi (gateway — o'z id'si) yoki admin. */
   @IsOptional()
   @IsBoolean()

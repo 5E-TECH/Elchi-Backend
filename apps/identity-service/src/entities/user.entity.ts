@@ -216,6 +216,15 @@ export class User extends BaseEntity {
   extra_cost_requires_approval: boolean;
 
   /**
+   * Market kassasi qarzga ishlaydimi. FALSE (sukut, hamma market — migratsiya
+   * 1716000000207): marketga to'lov qarzdan oshmaydi (400). TRUE — faqat
+   * admin/superadmin yoqadi: ortiqcha to'lov o'tadi, market kassasi manfiyga
+   * tushadi (finance `paymentsToMarket` / `click_to_market`).
+   */
+  @Column({ type: 'boolean', default: false })
+  cashbox_debt_enabled: boolean;
+
+  /**
    * (ysBqD9Nx, EGA QARORI 2026-09-20) Market Telegram guruhi kartasida mijoz
    * ismi va telefoni ko'rinadimi. Sukut TRUE (ega tanlovi: operator kabinetni
    * ochmay qo'ng'iroq qilsin); FALSE — ism yo'q, telefon niqoblangan.

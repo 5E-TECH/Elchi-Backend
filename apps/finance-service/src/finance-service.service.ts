@@ -4801,12 +4801,11 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
       });
       if (!clickMarketCashbox)
         throw new NotFoundException('Market cashbox topilmadi');
-      const marketPayable = Number(clickMarketCashbox.balance ?? 0);
-      if (Number(data.amount) > marketPayable) {
-        throw new BadRequestException(
-          `To'lov miqdori marketga qarzdan oshib ketdi (qarz: ${marketPayable})`,
-        );
-      }
+      await this.assertMarketPayoutWithinDebt(
+        String(data.market_id),
+        Number(data.amount),
+        Number(clickMarketCashbox.balance ?? 0),
+      );
     }
 
     const transferId = opts.transferId ?? randomUUID();
@@ -5475,6 +5474,49 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
+   * Marketga to'lov qarzdan (`FOR_MARKET` balansi) oshmasin — oshsa, faqat
+   * market sozlamasida `cashbox_debt_enabled` yoqilgan bo'lsa o'tadi (market
+   * kassasi manfiyga tushadi, ortig'i `hq_to_market` qoldig'i bo'ladi).
+   * Identity faqat oshganda so'raladi — oddiy to'lov unga bog'liq emas.
+   * Identity javob bermasa — yopiq deb olinadi (avvalgi 400).
+   */
+  private async assertMarketPayoutWithinDebt(
+    marketId: string,
+    amount: number,
+    marketPayable: number,
+  ): Promise<void> {
+    if (amount <= marketPayable) {
+      return;
+    }
+    if (await this.isMarketCashboxDebtEnabled(marketId)) {
+      return;
+    }
+    throw new BadRequestException(
+      `To'lov miqdori marketga qarzdan oshib ketdi (qarz: ${marketPayable})`,
+    );
+  }
+
+  private async isMarketCashboxDebtEnabled(marketId: string): Promise<boolean> {
+    try {
+      const response = await rmqSend<{
+        data?: { role?: unknown; cashbox_debt_enabled?: unknown };
+      }>(
+        this.identityClient,
+        { cmd: 'identity.user.find_by_id' },
+        { id: marketId },
+        { timeoutMs: 3000, retries: 0 },
+      );
+      const market = response?.data;
+      return market?.role === 'market' && market.cashbox_debt_enabled === true;
+    } catch (err) {
+      this.logger.warn(
+        `Market ${marketId} kassa qarzi sozlamasini o'qib bo'lmadi: ${(err as Error).message}`,
+      );
+      return false;
+    }
+  }
+
+  /**
    * T6 — marketga to'lovning PUL QISMI chaqiruvchining tranzaksiyasida
    * (`applyCourierPaymentInTx` bilan bir xil naqsh). Ikkala oyoq bitta
    * `transfer_id` bilan. `opts.notify` — `finance.payment_received`
@@ -5567,13 +5609,13 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
      *
      * Tekshiruv idempotentlik qisqa tutashuvidan KEYIN turadi, shunda
      * haqiqiy takroriy so'rov baribir `idempotent` javobini oladi.
+     * Admin market uchun «kassa qarzga ishlaydi» ni yoqqan bo'lsa — o'tadi.
      */
-    const marketPayable = Number(marketCashbox.balance ?? 0);
-    if (Number(data.amount) > marketPayable) {
-      throw new BadRequestException(
-        `To'lov miqdori marketga qarzdan oshib ketdi (qarz: ${marketPayable})`,
-      );
-    }
+    await this.assertMarketPayoutWithinDebt(
+      String(data.market_id),
+      Number(data.amount),
+      Number(marketCashbox.balance ?? 0),
+    );
 
     const transferId = opts.transferId ?? randomUUID();
 

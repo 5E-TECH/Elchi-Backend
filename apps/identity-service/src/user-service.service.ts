@@ -4188,6 +4188,7 @@ export class UserServiceService implements OnModuleInit {
       expense_proof_conditions: market.expense_proof_conditions,
       extra_cost_enabled: market.extra_cost_enabled,
       extra_cost_requires_approval: market.extra_cost_requires_approval,
+      cashbox_debt_enabled: market.cashbox_debt_enabled ?? false,
       require_operator_phone: market.require_operator_phone,
       default_operator_phone: market.default_operator_phone,
       tg_group_show_customer_pii: market.tg_group_show_customer_pii,
@@ -4198,6 +4199,7 @@ export class UserServiceService implements OnModuleInit {
 
     // w2bDrE3i: tekshiruvlar HECH NARSA o'zgartirilmasdan OLDIN.
     this.assertCanSetMarketExtraCost(dto, requester);
+    this.assertCanSetMarketCashboxDebt(dto, requester);
     this.assertCanSetMarketWarehouseOrder(dto, requester);
     this.assertCanSetMarketWeightVolumePricing(dto, requester);
     const defaultOperatorPhone = this.resolveDefaultOperatorPhone(
@@ -4290,6 +4292,10 @@ export class UserServiceService implements OnModuleInit {
       market.extra_cost_requires_approval = dto.extra_cost_requires_approval;
     }
 
+    if (typeof dto.cashbox_debt_enabled !== 'undefined') {
+      market.cashbox_debt_enabled = dto.cashbox_debt_enabled;
+    }
+
     if (typeof dto.require_operator_phone !== 'undefined') {
       market.require_operator_phone = dto.require_operator_phone;
     }
@@ -4345,6 +4351,7 @@ export class UserServiceService implements OnModuleInit {
         expense_proof_conditions: saved.expense_proof_conditions,
         extra_cost_enabled: saved.extra_cost_enabled,
         extra_cost_requires_approval: saved.extra_cost_requires_approval,
+        cashbox_debt_enabled: saved.cashbox_debt_enabled ?? false,
         require_operator_phone: saved.require_operator_phone,
         default_operator_phone: saved.default_operator_phone,
         tg_group_show_customer_pii: saved.tg_group_show_customer_pii,
@@ -4418,6 +4425,33 @@ export class UserServiceService implements OnModuleInit {
    * (kuryer/menejer) bilan bir xil qoida; market o'zi yoki menejer — 403.
    * Qiymat boolean bo'lmasa — 400 (RMQ'da ValidationPipe yo'q).
    */
+  /**
+   * Market kassasini qarzga ishlatish (`cashbox_debt_enabled`) — faqat
+   * SUPERADMIN/ADMIN; market o'zi yoki menejer — 403. Boolean bo'lmasa — 400
+   * (RMQ'da ValidationPipe yo'q).
+   */
+  private assertCanSetMarketCashboxDebt(
+    dto: { cashbox_debt_enabled?: unknown },
+    requester?: RequesterContext,
+  ): void {
+    if (dto.cashbox_debt_enabled === undefined) {
+      return;
+    }
+    if (
+      !this.hasRole(requester, Roles.SUPERADMIN) &&
+      !this.hasRole(requester, Roles.ADMIN)
+    ) {
+      this.forbidden(
+        'Market kassasini qarzga ishlatishni faqat admin yoki superadmin yoqa oladi',
+      );
+    }
+    if (typeof dto.cashbox_debt_enabled !== 'boolean') {
+      this.badRequest(
+        "cashbox_debt_enabled boolean (true/false) bo'lishi kerak",
+      );
+    }
+  }
+
   private assertCanSetMarketExtraCost(
     dto: {
       extra_cost_enabled?: unknown;

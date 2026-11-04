@@ -728,6 +728,15 @@ export class UpdateMarketExtraCostRequestDto {
   @IsOptional()
   @IsBoolean()
   extra_cost_requires_approval?: boolean;
+
+  @ApiPropertyOptional({
+    example: false,
+    description:
+      "Market kassasi qarzga ishlaydimi (sukut FALSE). TRUE — marketga qarzdan ortiq to'lash mumkin, market kassasi manfiyga tushadi; FALSE — ortiqcha to'lov 400.",
+  })
+  @IsOptional()
+  @IsBoolean()
+  cashbox_debt_enabled?: boolean;
 }
 
 /**

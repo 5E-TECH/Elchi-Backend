@@ -834,6 +834,150 @@ describe('M4 — "Marketga o`tkazma" (click_to_market)', () => {
   });
 });
 
+/**
+ * Market kassasi qarzga ishlaydi (`cashbox_debt_enabled`, sukut o'chiq):
+ * marketga qarzdan ortiq to'lov faqat admin yoqqan market uchun o'tadi.
+ */
+describe('market kassasi qarz toggle — qarzdan ortiq to`lov', () => {
+  const mainCashbox = () => ({
+    id: 'main-1',
+    user_id: '0',
+    cashbox_type: 'main',
+    balance: 5_000_000,
+    balance_cash: 5_000_000,
+    balance_card: 0,
+  });
+  const marketCashbox = (balance = 1_000_000) => ({
+    id: 'mk-201',
+    user_id: '201',
+    cashbox_type: 'markets',
+    balance,
+    balance_cash: balance,
+    balance_card: 0,
+  });
+  const market = (data: Record<string, unknown> | null) => () => ({ data });
+
+  function payoutEnv() {
+    const env = makeService();
+    env.manager.findOne
+      .mockResolvedValueOnce(mainCashbox())
+      .mockResolvedValueOnce(marketCashbox())
+      .mockResolvedValueOnce(null); // isDuplicateTransfer
+    jest
+      .spyOn(env.service as any, 'scheduleMarketPaymentFollowUp')
+      .mockResolvedValue(undefined);
+    return env;
+  }
+
+  const pay = (env: ReturnType<typeof makeService>, amount: number) =>
+    env.service
+      .paymentsToMarket({
+        market_id: '201',
+        amount,
+        payment_method: 'cash' as any,
+        created_by: '1',
+        dedup_epoch: 'debt-1',
+      })
+      .catch((caught: unknown) => caught);
+
+  it('⭐ yoqilgan — 1 500 000 (qarz 1 000 000) o`tadi, market kassasi −500 000', async () => {
+    routeRmq({
+      'identity.user.find_by_id': market({
+        id: '201',
+        role: 'market',
+        cashbox_debt_enabled: true,
+      }),
+    });
+    const env = payoutEnv();
+
+    const res: any = await pay(env, 1_500_000);
+
+    expect(res.statusCode).toBe(200);
+    expect(callsOf('identity.user.find_by_id')[0][2]).toEqual({ id: '201' });
+    expect(env.manager.save).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'mk-201', balance: -500_000 }),
+    );
+    expect(env.outbox.enqueue).toHaveBeenCalledWith(
+      'ORDER',
+      'order.settlement.advance',
+      expect.objectContaining({ level: 'hq_to_market', amount: 1_500_000 }),
+      expect.anything(),
+    );
+  });
+
+  it.each([
+    ['o`chiq (sukut)', market({ role: 'market', cashbox_debt_enabled: false })],
+    ['maydon yo`q', market({ role: 'market' })],
+    ['market emas', market({ role: 'courier', cashbox_debt_enabled: true })],
+    [
+      'identity javob bermadi',
+      () => {
+        throw rpcError(504, 'timeout');
+      },
+    ],
+  ])('%s — 400, pul ko`chmaydi', async (_label, handler) => {
+    routeRmq({ 'identity.user.find_by_id': handler });
+    const env = payoutEnv();
+
+    const error: unknown = await pay(env, 1_500_000);
+
+    expect((error as RpcException).getError()).toEqual({
+      statusCode: 400,
+      message: "To'lov miqdori marketga qarzdan oshib ketdi (qarz: 1000000)",
+    });
+    expect(env.manager.save).not.toHaveBeenCalled();
+    expect(env.outbox.enqueue).not.toHaveBeenCalled();
+  });
+
+  it('qarz ichidagi to`lov — identity so`ralmaydi', async () => {
+    const env = payoutEnv();
+
+    const res: any = await pay(env, 1_000_000);
+
+    expect(res.statusCode).toBe(200);
+    expect(callsOf('identity.user.find_by_id')).toHaveLength(0);
+  });
+
+  it('click_to_market: yoqilgan market — qarzdan ortig`i o`tadi', async () => {
+    routeRmq({
+      'identity.user.find_by_id': market({
+        role: 'market',
+        cashbox_debt_enabled: true,
+      }),
+    });
+    const env = makeService();
+    env.manager.findOne
+      .mockResolvedValueOnce({
+        id: 'cb-209',
+        user_id: '209',
+        cashbox_type: 'couriers',
+        balance: 300_000,
+        balance_cash: 300_000,
+        balance_card: 0,
+      })
+      .mockResolvedValueOnce(null) // isDuplicateTransfer
+      .mockResolvedValueOnce({ ...mainCashbox(), balance: 0, balance_cash: 0 })
+      .mockResolvedValueOnce(marketCashbox(100_000));
+    jest
+      .spyOn(env.service as any, 'scheduleMarketPaymentFollowUp')
+      .mockResolvedValue(undefined);
+
+    const res: any = await env.service.paymentsFromCourier({
+      courier_id: '209',
+      amount: 300_000,
+      payment_method: 'click_to_market' as any,
+      market_id: '201',
+      created_by: '1',
+      dedup_epoch: 'tok-1',
+    });
+
+    expect(res.statusCode).toBe(201);
+    expect(env.manager.save).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'mk-201', balance: -200_000 }),
+    );
+  });
+});
+
 describe('M16 — "Berilishi kerak" faqat musbat market kassalari', () => {
   it('allCashboxesTotal marketPayableTotal ni GREATEST(balance, 0) bilan beradi', async () => {
     const { service, cashboxRepo, historyRepo } = makeService();
