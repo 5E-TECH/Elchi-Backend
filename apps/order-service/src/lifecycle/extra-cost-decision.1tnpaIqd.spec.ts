@@ -3,6 +3,7 @@ import { RpcException } from '@nestjs/microservices';
 import { ExtraCostRejectReason, Order_status } from '@app/common';
 import {
   ExtraCostExecutionOptions,
+  ExtraCostRequestClosedError,
   OrderLifecycleService,
 } from './order-lifecycle.service';
 import {
@@ -67,6 +68,11 @@ function makeService(rows: Row[]) {
   const manager = extraCostManager({ table: repo, orderRepo });
   const outbox = { enqueue: jest.fn().mockResolvedValue(undefined) };
   const activityLog = { log: jest.fn().mockResolvedValue(undefined) };
+  // «… topilmadi» (404) qayta ijroda — market / xodim identity'da bormi
+  // (hwTkXsGi): sukut — bor (lookup xatoni yutgan, so'rov pending qoladi).
+  const lookup = {
+    getUserByIdStrict: jest.fn((id: string) => Promise.resolve({ id })),
+  };
   const svc = Object.create(
     OrderLifecycleService.prototype,
   ) as OrderLifecycleService;
@@ -76,6 +82,7 @@ function makeService(rows: Row[]) {
     dataSource: { manager },
     outbox,
     activityLog,
+    lookup,
     logger: { warn: jest.fn(), log: jest.fn(), error: jest.fn() },
   });
   const executed: string[] = [];
@@ -127,6 +134,7 @@ function makeService(rows: Row[]) {
   return {
     svc,
     repo,
+    lookup,
     order,
     manager,
     outbox,
@@ -299,6 +307,27 @@ describe('1tnpaIqd + hwTkXsGi — atomik qaror', () => {
       expect(repo.row('7')!.closed_reason).toBeUndefined();
     },
   );
+
+  it('⭐ «Market topilmadi», market identity’da haqiqatan o‘chirilgan — so‘rov void, 409 (abadiy pending emas)', async () => {
+    const { svc, repo, lookup, failures } = makeService([pending()]);
+    lookup.getUserByIdStrict.mockResolvedValueOnce(null as never);
+    failures.push(
+      new RpcException({ statusCode: 404, message: 'Market topilmadi' }),
+    );
+
+    const error = await svc
+      .approveExtraCostApproval(market, '7')
+      .catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(ExtraCostRequestClosedError);
+    expect(lookup.getUserByIdStrict).toHaveBeenCalledWith(
+      String(pending().market_id),
+    );
+    expect(repo.row('7')).toMatchObject({
+      status: 'void',
+      closed_reason: "amalni bajarib bo'lmadi: Market topilmadi",
+    });
+  });
 
   it.each([400, 403, 404, 409])(
     '⭐ qayta ijro biznes xatosi (%s) — so‘rov sababi bilan void, 409 «allaqachon yakunlangan — …»',

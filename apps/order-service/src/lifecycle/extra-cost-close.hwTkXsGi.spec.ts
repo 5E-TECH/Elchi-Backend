@@ -697,6 +697,74 @@ describe('hwTkXsGi — infratuzilma xatosi biznes xatosi bo‘lib ko‘rinmaydi'
     });
   });
 
+  describe('qayta ijroda «… topilmadi» (404) — lookup xatoni yutgan bo‘lishi mumkin: identity’dan aniqlanadi', () => {
+    const notFound = (message: string) =>
+      new RpcException({ statusCode: 404, message });
+    const replay = (getUserByIdStrict: jest.Mock) => {
+      const table = extraCostApprovalTable([request()]);
+      const svc = infra({ getUserByIdStrict });
+      Object.assign(svc, { extraCostApprovalRepo: table });
+      return { svc, table };
+    };
+
+    it('⭐ so‘rov yozgan menejer / kuryer o‘chirilgan (identity 404 → null) — void + 409, abadiy pending emas', async () => {
+      for (const message of ['Menejer topilmadi', 'Kuryer topilmadi']) {
+        const getUserByIdStrict = jest.fn().mockResolvedValue(null);
+        const { svc, table } = replay(getUserByIdStrict);
+
+        const closed = await svc
+          .settleFailedExtraCostReplay(request(), notFound(message), '501')
+          .catch((e: unknown) => e);
+
+        expect(closed).toBeInstanceOf(ExtraCostRequestClosedError);
+        expect(getUserByIdStrict).toHaveBeenCalledWith('289');
+        expect(table.row('7')).toMatchObject({
+          status: 'void',
+          closed_reason: `amalni bajarib bo'lmadi: ${message}`,
+        });
+      }
+    });
+
+    it('⭐ market o‘chirilgan — void; market identity’da bor (lookup yutgan) — pending, xato o‘zgarmaydi', async () => {
+      const deleted = replay(jest.fn().mockResolvedValue(null));
+      await expect(
+        deleted.svc.settleFailedExtraCostReplay(
+          request(),
+          notFound('Market topilmadi'),
+          '501',
+        ),
+      ).rejects.toBeInstanceOf(ExtraCostRequestClosedError);
+      expect(deleted.table.row('7')!.status).toBe('void');
+
+      const getUserByIdStrict = jest.fn().mockResolvedValue({ id: '501' });
+      const alive = replay(getUserByIdStrict);
+      const error = notFound('Market topilmadi');
+      await expect(
+        alive.svc.settleFailedExtraCostReplay(request(), error, '501'),
+      ).rejects.toBe(error);
+      expect(getUserByIdStrict).toHaveBeenCalledWith('501');
+      expect(alive.table.row('7')!.status).toBe('pending');
+    });
+
+    it('identity ham javob bermadi — pending; kassa topilmadi — identity so‘ralmaydi, pending', async () => {
+      const down = replay(jest.fn(timeout));
+      const error = notFound('Kuryer topilmadi');
+      await expect(
+        down.svc.settleFailedExtraCostReplay(request(), error, '501'),
+      ).rejects.toBe(error);
+      expect(down.table.row('7')!.status).toBe('pending');
+
+      const getUserByIdStrict = jest.fn().mockResolvedValue(null);
+      const cashbox = replay(getUserByIdStrict);
+      const cashboxError = notFound('Market kassasi topilmadi');
+      await expect(
+        cashbox.svc.settleFailedExtraCostReplay(request(), cashboxError, '501'),
+      ).rejects.toBe(cashboxError);
+      expect(getUserByIdStrict).not.toHaveBeenCalled();
+      expect(cashbox.table.row('7')!.status).toBe('pending');
+    });
+  });
+
   it('o‘chirilgan buyurtma (qo‘shib yuborilgan qisman sotuv qoldig‘i) — sotuv / so‘rov qulfi 400', async () => {
     const svc = infra();
     const tx = {

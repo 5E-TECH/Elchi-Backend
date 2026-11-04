@@ -461,10 +461,12 @@ const ORDER_NOT_WAITING_MESSAGE =
   'Buyurtma topilmadi yoki kutilmoqda (waiting) holatida emas';
 
 /**
- * (hwTkXsGi) Qayta ijroda 404 bo'lib ko'rinadigan, lekin aslida xizmat
- * javob bermagani: lookup'lar (`getMarketsByIds`, `getCouriersByIds`,
- * `getUserById`, `getCashboxByUser`) RPC xatosini yutib bo'sh qaytaradi.
- * Bunday xatoda so'rov yopilmaydi — `pending` qoladi.
+ * (hwTkXsGi) Qayta ijroda 404 bo'lib ko'rinadigan, lekin xizmat javob
+ * bermagani ham bo'lishi mumkin: lookup'lar (`getMarketsByIds`,
+ * `getCouriersByIds`, `getUserById`, `getCashboxByUser`) RPC xatosini yutib
+ * bo'sh qaytaradi. Bunday xatoda so'rov faqat market / so'rov yozgan xodim
+ * identity'da haqiqatan o'chirilgani aniq bo'lsa yopiladi
+ * (`extraCostPartyDeleted`), aks holda `pending` qoladi.
  */
 const EXTRA_COST_INFRA_MESSAGES: readonly RegExp[] = [
   /^(Market|Kuryer|Menejer) topilmadi$/,
@@ -2556,9 +2558,12 @@ export class OrderLifecycleService {
             : typeof bodyMessage === 'string'
               ? bodyMessage
               : '';
+      if (![400, 403, 404, 409].includes(statusCode)) {
+        throw error;
+      }
       if (
-        ![400, 403, 404, 409].includes(statusCode) ||
-        EXTRA_COST_INFRA_MESSAGES.some((pattern) => pattern.test(message))
+        EXTRA_COST_INFRA_MESSAGES.some((pattern) => pattern.test(message)) &&
+        !(await this.extraCostPartyDeleted(approval, message))
       ) {
         throw error;
       }
@@ -2585,6 +2590,32 @@ export class OrderLifecycleService {
       `extra cost #${approval.id} (buyurtma #${approval.order_id}) yopildi (void): ${reason}`,
     );
     throw new ExtraCostRequestClosedError(reason);
+  }
+
+  /**
+   * (hwTkXsGi) «Market / Kuryer / Menejer topilmadi» — lookup xatoni yutgani
+   * (infra) yoki yozuv haqiqatan o'chirilgani. Identity'dan to'g'ridan-to'g'ri
+   * so'raladi: 404 — o'chirilgan, so'rovni bajarib bo'lmaydi (biznes, `void`);
+   * topildi yoki javob yo'q — infra (`pending` qoladi). Kassa topilmasa —
+   * doim infra.
+   */
+  private async extraCostPartyDeleted(
+    approval: OrderExtraCostApproval,
+    message: string,
+  ): Promise<boolean> {
+    const userId =
+      message === 'Market topilmadi'
+        ? approval.market_id
+        : message === 'Kuryer topilmadi' || message === 'Menejer topilmadi'
+          ? approval.requested_by_user_id
+          : null;
+    if (!userId) {
+      return false;
+    }
+    const user = await this.lookup
+      .getUserByIdStrict(String(userId))
+      .catch(() => undefined);
+    return user === null;
   }
 
   private isUniqueViolation(error: unknown, constraint: string): boolean {
