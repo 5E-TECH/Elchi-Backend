@@ -23,6 +23,8 @@ import {
   computeSaleMarketPaymentLimit,
   computeSalePaymentState,
 } from './domain/order-money';
+import { OrderExtraCostApproval } from './entities/order-extra-cost-approval.entity';
+import { extraCostApprovalTable } from './testing/extra-cost-kit-spec';
 
 type Row = Record<string, any>;
 
@@ -86,7 +88,11 @@ function makeService(
     release: jest.fn(),
     manager: {
       getRepository: jest.fn((entity: unknown) =>
-        entity === OrderSettlement ? settlementRepo : { update: jest.fn() },
+        entity === OrderExtraCostApproval
+          ? extraCostApprovalTable()
+          : entity === OrderSettlement
+            ? settlementRepo
+            : { update: jest.fn() },
       ),
     },
   };

@@ -34,6 +34,7 @@ import {
   type MarketHandoverAuthorizedVia,
 } from '../entities/market-cancelled-handover-session.entity';
 import {
+  EXTRA_COST_PENDING_UNIQUE_INDEX,
   ExtraCostApprovalAction,
   OrderExtraCostApproval,
 } from '../entities/order-extra-cost-approval.entity';
@@ -425,6 +426,76 @@ export const RETURN_REQUEST_REVIEW_CONFLICT_REASON =
  * buyurtma shu orada pochtadan chiqqan (masalan HQ «Qaytarish» tasdig'i).
  */
 export const POST_RECEIVE_CONFLICT_REASON = 'post_receive_conflict';
+
+/**
+ * (hwTkXsGi) Qo'shimcha xarajat so'rovi yopilish (`void` / `reversed`)
+ * sabablari — `closed_reason` ga yoziladi va 409 javobida ko'rinadi.
+ */
+export const EXTRA_COST_CLOSE_REASON = {
+  executed: "Buyurtma boshqa so'rov bilan yakunlandi — eski so'rov yopildi",
+  rolledBack: 'Buyurtma orqaga qaytarildi',
+  reversed: 'Buyurtma orqaga qaytarildi — tasdiqlangan xarajat teskari yozildi',
+  orderMissing: "buyurtma topilmadi yoki o'chirilgan",
+  notWaiting: (status: string) =>
+    `buyurtma endi «kutilmoqda» holatida emas (${status})`,
+  statusChanged: (status: string) =>
+    `so'rov ochilgandan keyin buyurtma holati o'zgargan (${status})`,
+  superseded: (action: string, amount: number, oldAction: string) =>
+    `Yangi so'rov bilan almashtirildi (${action}, ${amount} so'm) — ` +
+    `eski ${oldAction} so'rovi yopildi`,
+  failed: (message: string) => `amalni bajarib bo'lmadi: ${message}`,
+} as const;
+
+/** `lockWaitingOrder` va sotuv/bekor/qisman sotuvning WAITING tekshiruvi. */
+const ORDER_NOT_WAITING_MESSAGE =
+  'Buyurtma topilmadi yoki kutilmoqda (waiting) holatida emas';
+
+/**
+ * (hwTkXsGi) Qayta ijroda 404 bo'lib ko'rinadigan, lekin aslida xizmat
+ * javob bermagani: lookup'lar (`getMarketsByIds`, `getCouriersByIds`,
+ * `getUserById`, `getCashboxByUser`) RPC xatosini yutib bo'sh qaytaradi.
+ * Bunday xatoda so'rov yopilmaydi — `pending` qoladi.
+ */
+const EXTRA_COST_INFRA_MESSAGES: readonly RegExp[] = [
+  /^(Market|Kuryer|Menejer) topilmadi$/,
+  /kassasi topilmadi/,
+];
+
+/**
+ * (hwTkXsGi) Tasdiqlangan so'rovni qayta ijro: «tasdiqlandi» sotuv bilan
+ * BITTA tranzaksiyada yoziladi (`applyExtraCostApprovalsOnExecution`).
+ */
+export type ExtraCostApprovalClaim = {
+  id: string;
+  patch: Pick<
+    OrderExtraCostApproval,
+    'decided_by_user_id' | 'decided_at' | 'decision_comment' | 'auto_approved'
+  >;
+};
+
+/** Sotish / bekor qilish / qisman sotishning ichki (RMQ'dan kelmaydigan) parametrlari. */
+export type ExtraCostExecutionOptions = {
+  extraCostApproval?: ExtraCostApprovalClaim;
+};
+
+/**
+ * (hwTkXsGi) So'rov yopilgan: `closeReason` bor — tasdiqlab bo'lmaydi va
+ * so'rov shu sabab bilan `void` qilinadi; `null` — qarorni boshqa joy
+ * allaqachon yozgan (so'rovga tegilmaydi). Ikkalasi ham 409 «Bu so'rov
+ * allaqachon yakunlangan» — Telegram ✅ va veb shu matnni tanib tugmalarni
+ * olib tashlaydi.
+ */
+export class ExtraCostRequestClosedError extends RpcException {
+  constructor(readonly closeReason: string | null = null) {
+    super({
+      statusCode: 409,
+      message: closeReason
+        ? `Bu so'rov allaqachon yakunlangan — ${closeReason}`
+        : "Bu so'rov allaqachon yakunlangan",
+    });
+  }
+}
+
 /**
  * Order lifecycle: the write/mutation core (create/receive/sell/partly-sell/
  * cancel/could-not-deliver/rollback/return/provider-mark/market-cancelled
@@ -1978,6 +2049,7 @@ export class OrderLifecycleService {
   private async mergePartialChildrenBack(
     manager: EntityManager,
     order: Order,
+    requester: { id: string },
   ): Promise<number> {
     const orderRepo = manager.getRepository(Order);
     const itemRepo = manager.getRepository(OrderItem);
@@ -1995,6 +2067,17 @@ export class OrderLifecycleService {
     if (!children.length) {
       return 0;
     }
+
+    // (hwTkXsGi) Qoldiq buyurtma o'chiriladi — undagi ochiq qo'shimcha
+    // xarajat so'rovi ham yopiladi (aks holda o'chgan buyurtmada osilib qolardi).
+    await this.voidOpenExtraCostApprovals(
+      manager.getRepository(OrderExtraCostApproval),
+      {
+        orderIds: children.map((child) => String(child.id)),
+        reason: EXTRA_COST_CLOSE_REASON.rolledBack,
+        actorId: requester.id,
+      },
+    );
 
     const parentItems = await itemRepo.find({
       where: { order_id: String(parentOrder.id) },
@@ -2064,9 +2147,7 @@ export class OrderLifecycleService {
       lock: { mode: 'pessimistic_write' },
     });
     if (!locked || locked.status !== Order_status.WAITING) {
-      this.badRequest(
-        'Buyurtma topilmadi yoki kutilmoqda (waiting) holatida emas',
-      );
+      this.badRequest(ORDER_NOT_WAITING_MESSAGE);
     }
     // T8: qulf ostidagi qator — chaqiruvchi oradagi o'zgarishlarni (masalan
     // maxsus belgilar PUT'i) shundan oladi.
@@ -2252,6 +2333,236 @@ export class OrderLifecycleService {
   }
 
   /**
+   * (hwTkXsGi) Ochiq (`pending`) so'rovlarni `void` qiladi. Shartli UPDATE —
+   * shu payt boshqa qaror yozilgan qatorga tegmaydi. Yopilgan id'lar qaytadi.
+   * `repo` — tranzaksiya ichida `tx.getRepository(...)`, tashqarida
+   * `extraCostApprovalRepo`.
+   */
+  private async voidOpenExtraCostApprovals(
+    repo: Repository<OrderExtraCostApproval>,
+    params: {
+      reason: string;
+      orderIds?: string[];
+      /** Faqat shu so'rov (tasdiq darvozasi / qayta ijro xatosi). */
+      approvalId?: string;
+      /** Shu so'rovdan tashqari (qayta ijroda o'zi tasdiqlanadi). */
+      exceptId?: string;
+      actorId?: string | number | null;
+    },
+  ): Promise<string[]> {
+    const orderIds = (params.orderIds ?? []).map(String).filter(Boolean);
+    if (!orderIds.length && !params.approvalId) return [];
+    const qb = repo
+      .createQueryBuilder()
+      .update(OrderExtraCostApproval)
+      .set({
+        status: 'void',
+        closed_reason: params.reason,
+        closed_at: () => 'now()',
+        // Hamkor amali (`partner:N`) yoki tizim — NULL (bigint ustun).
+        closed_by_user_id: this.numericActorId(params.actorId),
+      } as never)
+      .where('status = :pending AND is_deleted = false', {
+        pending: 'pending',
+      });
+    if (params.approvalId) {
+      qb.andWhere('id = :approvalId', { approvalId: params.approvalId });
+    } else {
+      qb.andWhere('order_id IN (:...orderIds)', { orderIds });
+    }
+    if (params.exceptId) {
+      qb.andWhere('id <> :exceptId', { exceptId: params.exceptId });
+    }
+    const result = await qb.returning(['id']).execute();
+    return (Array.isArray(result.raw) ? result.raw : []).map(
+      (row: { id: unknown }) => String(row.id),
+    );
+  }
+
+  /**
+   * (hwTkXsGi) So'rov ochilgandan keyin buyurtma holati o'zgarganmi —
+   * `order_tracking` dagi haqiqiy o'tish (from ≠ to; maxsus belgi, pochta
+   * filiali o'zgarishi kabi from = to yozuvlari hisobga olinmaydi). Vaqtlar
+   * DB'ning o'zida, so'rovning `createdAt` i bilan solishtiriladi. Yangi
+   * holat (yo'q bo'lsa `null`).
+   */
+  private async extraCostStatusChangedSince(
+    manager: EntityManager,
+    approvalId: string,
+  ): Promise<string | null> {
+    const row = await manager
+      .getRepository(OrderTracking)
+      .createQueryBuilder('t')
+      .innerJoin(
+        OrderExtraCostApproval,
+        'a',
+        'a.id = :approvalId AND a.order_id = t.order_id',
+        { approvalId },
+      )
+      .select('t.to_status', 'to_status')
+      .where('t.created_at > a.createdAt')
+      .andWhere('t.from_status IS DISTINCT FROM t.to_status')
+      .orderBy('t.created_at', 'ASC')
+      .limit(1)
+      .getRawOne<{ to_status: string }>();
+    return row ? String(row.to_status) : null;
+  }
+
+  /**
+   * (hwTkXsGi) Sotish / bekor qilish / qisman sotish HAQIQATDA bajarilganda —
+   * `lockWaitingOrder` dan keyin, pul yozuvlaridan OLDIN, shu tranzaksiyada:
+   *  • oddiy amal (ommaviy sotuv, bot, tasdiq o'chiq market, xarajatsiz
+   *    qayta sotish) — buyurtmaning ochiq so'rovlari `void`;
+   *  • market tasdig'ini qayta ijro — darvoza (holat so'rovdan keyin
+   *    o'zgarmagan), so'ng shartli «tasdiqlandi» (claim). Claim va sotuv
+   *    birga commit bo'ladi: biri yozilmasa, ikkinchisi ham yozilmaydi.
+   */
+  private async applyExtraCostApprovalsOnExecution(
+    tx: EntityManager,
+    orderId: string,
+    requester: { id: string },
+    options?: ExtraCostExecutionOptions,
+  ): Promise<void> {
+    const repo = tx.getRepository(OrderExtraCostApproval);
+    const claim = options?.extraCostApproval;
+    if (claim) {
+      const changedTo = await this.extraCostStatusChangedSince(tx, claim.id);
+      if (changedTo) {
+        throw new ExtraCostRequestClosedError(
+          EXTRA_COST_CLOSE_REASON.statusChanged(changedTo),
+        );
+      }
+      const claimed = await this.claimExtraCostDecision(
+        claim.id,
+        { status: 'approved', ...claim.patch, reject_reason: null },
+        repo,
+      );
+      if (!claimed) {
+        throw new ExtraCostRequestClosedError();
+      }
+    }
+    await this.voidOpenExtraCostApprovals(repo, {
+      orderIds: [String(orderId)],
+      reason: EXTRA_COST_CLOSE_REASON.executed,
+      actorId: requester.id,
+      exceptId: claim?.id,
+    });
+  }
+
+  /**
+   * (hwTkXsGi) Orqaga qaytarishda — qulf ostidagi qayta tekshiruvdan keyin,
+   * kassa yozuvlaridan OLDIN, shu tranzaksiyada: ochiq so'rovlar `void`,
+   * tasdiqlanganlari `reversed` (pulni qaytarish rollback'ning o'zida,
+   * o'zgarmagan). Asosiy buyurtmaga qo'shiladigan qisman sotuv qoldiqlaridagi
+   * ochiq so'rovlar `mergePartialChildrenBack` da yopiladi.
+   */
+  private async closeExtraCostApprovalsOnRollback(
+    tx: EntityManager,
+    orderId: string,
+    requester: { id: string },
+  ): Promise<void> {
+    const repo = tx.getRepository(OrderExtraCostApproval);
+    await this.voidOpenExtraCostApprovals(repo, {
+      orderIds: [String(orderId)],
+      reason: EXTRA_COST_CLOSE_REASON.rolledBack,
+      actorId: requester.id,
+    });
+    await repo
+      .createQueryBuilder()
+      .update(OrderExtraCostApproval)
+      .set({
+        status: 'reversed',
+        closed_reason: EXTRA_COST_CLOSE_REASON.reversed,
+        closed_at: () => 'now()',
+        closed_by_user_id: this.numericActorId(requester.id),
+      } as never)
+      .where(
+        'order_id = :orderId AND status = :approved AND is_deleted = false',
+        { orderId: String(orderId), approved: 'approved' },
+      )
+      .execute();
+  }
+
+  /**
+   * (hwTkXsGi) Tasdiq qayta ijrosi xato berdi — so'rov taqdiri (karta, 5-band):
+   *  • darvoza (buyurtma «kutilmoqda» emas, holati o'zgargan) yoki biznes
+   *    xatosi (400/403/404/409) — so'rov sababi bilan `void`, javob 409
+   *    «Bu so'rov allaqachon yakunlangan — …»;
+   *  • qarorni boshqa joy yozgan — 409, so'rovga tegilmaydi;
+   *  • infratuzilma (timeout, 5xx, DB/tarmoq, javob bermagan lookup) — xato
+   *    o'zgarmaydi, so'rov `pending` qoladi (claim sotuv bilan birga qaytgan).
+   */
+  private async settleFailedExtraCostReplay(
+    approval: OrderExtraCostApproval,
+    error: unknown,
+    actorId: string | null,
+  ): Promise<never> {
+    let reason: string;
+    if (error instanceof ExtraCostRequestClosedError) {
+      if (!error.closeReason) throw error;
+      reason = error.closeReason;
+    } else {
+      const raw = error instanceof RpcException ? error.getError() : null;
+      const body =
+        raw && typeof raw === 'object'
+          ? (raw as { statusCode?: unknown; message?: unknown })
+          : null;
+      const statusCode = Number(body?.statusCode);
+      const bodyMessage = body?.message;
+      const message =
+        typeof raw === 'string'
+          ? raw
+          : Array.isArray(bodyMessage)
+            ? bodyMessage.map(String).join('; ')
+            : typeof bodyMessage === 'string'
+              ? bodyMessage
+              : '';
+      if (
+        ![400, 403, 404, 409].includes(statusCode) ||
+        EXTRA_COST_INFRA_MESSAGES.some((pattern) => pattern.test(message))
+      ) {
+        throw error;
+      }
+      if (message === ORDER_NOT_WAITING_MESSAGE) {
+        const order = await this.orderRepo.findOne({
+          where: { id: String(approval.order_id) },
+        });
+        reason =
+          order && !order.isDeleted
+            ? EXTRA_COST_CLOSE_REASON.notWaiting(String(order.status))
+            : EXTRA_COST_CLOSE_REASON.orderMissing;
+      } else {
+        reason = EXTRA_COST_CLOSE_REASON.failed(message);
+      }
+    }
+    const closed = await this.voidOpenExtraCostApprovals(
+      this.extraCostApprovalRepo,
+      { approvalId: String(approval.id), reason, actorId },
+    );
+    if (!closed.length) {
+      throw new ExtraCostRequestClosedError();
+    }
+    this.logger.warn(
+      `extra cost #${approval.id} (buyurtma #${approval.order_id}) yopildi (void): ${reason}`,
+    );
+    throw new ExtraCostRequestClosedError(reason);
+  }
+
+  private isUniqueViolation(error: unknown, constraint: string): boolean {
+    if (!(error instanceof QueryFailedError)) return false;
+    const pgError = error.driverError as {
+      code?: string;
+      constraint?: string;
+      message?: string;
+    };
+    return (
+      pgError?.code === '23505' &&
+      (pgError.constraint === constraint ||
+        String(pgError.message ?? '').includes(constraint))
+    );
+  }
+
+  /**
    * w2bDrE3i: market bo'yicha qo'shimcha xarajat DARVOZASI — kuryer/menejer
    * `can_add_extra_cost` ruxsatidan OLDIN (AND: ikkalasi ham ochiq bo'lishi
    * shart). Faqat aniq `false` yopadi: maydon yo'q (eski identity) —
@@ -2307,6 +2618,9 @@ export class OrderLifecycleService {
       // tasdiqlanadi. Avtomatik tasdiq o'chiq (env yo'q) yoki so'rov yopilgan — null.
       auto_approve_at: this.extraCostAutoApproveAt(approval),
       reject_reason: approval.reject_reason ?? null,
+      // (hwTkXsGi) `void` / `reversed` sababi va vaqti (boshqa holatlarda null).
+      closed_reason: approval.closed_reason ?? null,
+      closed_at: approval.closed_at ?? null,
       createdAt: approval.createdAt,
       updatedAt: approval.updatedAt,
     };
@@ -2435,85 +2749,130 @@ export class OrderLifecycleService {
     dto: Record<string, unknown>;
     /** w2bDrE3i: `extra_cost_requires_approval` sozlamasi. */
     market?: { extra_cost_requires_approval?: boolean | null } | null;
+    /**
+     * (hwTkXsGi) Market tasdig'ini qayta ijro — so'rov ochilmaydi. Ilgari
+     * bu belgi `dto.extraCostApproved` edi; endi faqat ichki parametr (RMQ
+     * yuklamasidagi belgi tasdiqni chetlab o'tmaydi).
+     */
+    options?: ExtraCostExecutionOptions;
   }) {
     const { order, requester, action, extraCost, proofFiles, dto } = params;
     if (
-      Boolean(dto.extraCostApproved) ||
+      params.options?.extraCostApproval ||
       !this.isExtraCostApprovalRequired({ extraCost, market: params.market })
     ) {
       return null;
     }
 
-    const existing = await this.extraCostApprovalRepo.findOne({
-      where: {
-        order_id: String(order.id),
-        status: 'pending',
-        isDeleted: false,
-      },
-      order: { createdAt: 'DESC' },
-    });
-    if (existing) {
-      /**
-       * ⚠️ ESKI SO'ROV FAQAT AYNAN SHU SO'ROV BO'LSA QAYTARILADI (audit M3).
-       *
-       * Ilgari kutilayotgan so'rov faqat `order_id` bo'yicha topilib, yangi
-       * so'rov (boshqa amal yoki summa) jimgina tashlab yuborilardi. Kuryer
-       * SOTISH (xarajat 5 000) so'rovidan keyin mijoz rad etib BEKOR (xarajat
-       * 3 000) yuborsa, unga eski #1 qaytardi; market #1 ni tasdiqlaganda
-       * `sellOrder` bajarilardi — qaytayotgan tovar uchun soxta sotuv
-       * (kuryerga yig'ilmagan naqd qarzi, marketga kirim). Teskarisi ham:
-       * bekor kutilayotganda sotuv so'rovi BEKORni bajartirardi.
-       *
-       * Endi: amal, summa va amalning pul maydonlari bir xil bo'lsa — takroriy
-       * yuborish, eski so'rov qaytadi. Farq qilsa — kuryerning OXIRGI niyati
-       * ustun: eski so'rov yopiladi (`rejected`, izoh bilan) va yangisi
-       * ochiladi. Market faqat oxirgi so'rovni ko'radi va tasdiqlaydi.
-       */
-      const isSameRequest =
-        this.extraCostRequestFingerprint(
-          existing.action,
-          existing.amount,
-          existing.operation_payload,
-        ) === this.extraCostRequestFingerprint(action, extraCost, dto);
-      if (isSameRequest) {
-        return successRes(
-          {
-            approval_required: true,
-            approval: this.serializeExtraCostApproval(existing),
-          },
-          202,
-          "Market tasdig'i kutilmoqda",
-        );
+    /**
+     * (hwTkXsGi) So'rov BUYURTMA QULFI ostida yoziladi — sotuv, rollback va
+     * tasdiq bilan bir tartibda (avval buyurtma, keyin so'rov). Shu payt
+     * sotilayotgan buyurtmaga yangi so'rov ochilmaydi, eski so'rovni
+     * almashtirish esa parallel tasdiqni ustidan yozmaydi (shartli UPDATE).
+     */
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+    let saved: OrderExtraCostApproval;
+    try {
+      const tx = queryRunner.manager;
+      await this.lockWaitingOrder(tx, String(order.id));
+      const repo = tx.getRepository(OrderExtraCostApproval);
+      const existing = await repo.findOne({
+        where: {
+          order_id: String(order.id),
+          status: 'pending',
+          isDeleted: false,
+        },
+        order: { createdAt: 'DESC' },
+      });
+      if (existing) {
+        /**
+         * ⚠️ ESKI SO'ROV FAQAT AYNAN SHU SO'ROV BO'LSA QAYTARILADI (audit M3).
+         *
+         * Ilgari kutilayotgan so'rov faqat `order_id` bo'yicha topilib, yangi
+         * so'rov (boshqa amal yoki summa) jimgina tashlab yuborilardi. Kuryer
+         * SOTISH (xarajat 5 000) so'rovidan keyin mijoz rad etib BEKOR
+         * (xarajat 3 000) yuborsa, unga eski #1 qaytardi; market #1 ni
+         * tasdiqlaganda `sellOrder` bajarilardi — qaytayotgan tovar uchun
+         * soxta sotuv (kuryerga yig'ilmagan naqd qarzi, marketga kirim).
+         * Teskarisi ham: bekor kutilayotganda sotuv so'rovi BEKORni
+         * bajartirardi.
+         *
+         * Endi: amal, summa va amalning pul maydonlari bir xil bo'lsa —
+         * takroriy yuborish, eski so'rov qaytadi. Farq qilsa — kuryerning
+         * OXIRGI niyati ustun: eski so'rov yopiladi (hwTkXsGi: `void` — market
+         * rad etmagan) va yangisi ochiladi. Market faqat oxirgi so'rovni
+         * ko'radi va tasdiqlaydi.
+         */
+        const isSameRequest =
+          this.extraCostRequestFingerprint(
+            existing.action,
+            existing.amount,
+            existing.operation_payload,
+          ) === this.extraCostRequestFingerprint(action, extraCost, dto);
+        if (isSameRequest) {
+          await queryRunner.commitTransaction();
+          return successRes(
+            {
+              approval_required: true,
+              approval: this.serializeExtraCostApproval(existing),
+            },
+            202,
+            "Market tasdig'i kutilmoqda",
+          );
+        }
+        await this.voidOpenExtraCostApprovals(repo, {
+          orderIds: [String(order.id)],
+          reason: EXTRA_COST_CLOSE_REASON.superseded(
+            action,
+            extraCost,
+            existing.action,
+          ),
+          actorId: requester.id,
+        });
       }
-      existing.status = 'rejected';
-      existing.decided_by_user_id = String(requester.id);
-      existing.decided_at = new Date();
-      existing.decision_comment =
-        `Yangi so'rov bilan almashtirildi (${action}, ${extraCost} so'm) — ` +
-        `eski ${existing.action} so'rovi bekor qilindi`;
-      await this.extraCostApprovalRepo.save(existing);
-    }
 
-    const approval = this.extraCostApprovalRepo.create({
-      order_id: String(order.id),
-      market_id: String(order.market_id),
-      requested_by_user_id: String(requester.id),
-      requested_by_role: this.requesterPrimaryRole(requester),
-      requester_branch_id: requester.branch_id
-        ? String(requester.branch_id)
-        : null,
-      action,
-      amount: extraCost,
-      proof_file_keys: proofFiles,
-      operation_payload: {
-        ...dto,
-        extraCost,
-        proofFileKeys: proofFiles,
-        proofFileKeysVerified: true,
-      },
-      status: 'pending',
-    });
-    const saved = await this.extraCostApprovalRepo.save(approval);
+      saved = await repo.save(
+        repo.create({
+          order_id: String(order.id),
+          market_id: String(order.market_id),
+          requested_by_user_id: String(requester.id),
+          requested_by_role: this.requesterPrimaryRole(requester),
+          requester_branch_id: requester.branch_id
+            ? String(requester.branch_id)
+            : null,
+          action,
+          amount: extraCost,
+          proof_file_keys: proofFiles,
+          operation_payload: {
+            ...dto,
+            extraCost,
+            proofFileKeys: proofFiles,
+            proofFileKeysVerified: true,
+          },
+          status: 'pending',
+        }),
+      );
+      await queryRunner.commitTransaction();
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      if (error instanceof RpcException) {
+        throw error;
+      }
+      // Partial unique indeks (bitta buyurtmada bitta ochiq so'rov) — qulf
+      // ortidagi oxirgi to'siq.
+      if (this.isUniqueViolation(error, EXTRA_COST_PENDING_UNIQUE_INDEX)) {
+        throw new RpcException({
+          statusCode: 409,
+          message:
+            "Bu buyurtmaga shu payt boshqa qo'shimcha xarajat so'rovi ochildi — qaytadan urinib ko'ring",
+        });
+      }
+      this.handleDbError(error);
+    } finally {
+      await queryRunner.release();
+    }
     // (DuST9k8j #2) market EGASIGA xabar (in-app + Telegram DM, tugmalar
     // bilan). BEST-EFFORT: yuborib bo'lmasa ham kuryerning 202 javobi o'zgarmaydi.
     await this.notifyExtraCostRequested(saved, order);
@@ -2655,12 +3014,18 @@ export class OrderLifecycleService {
   }
 
   /**
-   * (1tnpaIqd) Qaror ATOMIK: avval shartli UPDATE (`status = 'pending'`
-   * bo'lsa) — ikki parallel bosishdan (yoki approve + reject) faqat BITTASI
-   * o'tadi; ikkinchisi "allaqachon yakunlangan" va biznes amali UMUMAN
-   * chaqirilmaydi. Biznes amali (sell/cancel/partly_sell) faqat UPDATE
-   * muvaffaqiyatli bo'lgandan KEYIN; u xato bersa — so'rov `pending` ga
-   * qaytariladi (qayta urinish mumkin).
+   * (1tnpaIqd → hwTkXsGi) Qaror ATOMIK va BIR MARTADA: «tasdiqlandi» (shartli
+   * UPDATE, `status = 'pending'` bo'lsa) va biznes amali (sell/cancel/
+   * partly_sell) BITTA tranzaksiyada — qayta ijro tranzaksiyasi ichida,
+   * buyurtma qulfidan keyin (`applyExtraCostApprovalsOnExecution`). Biri
+   * yozilmasa, ikkinchisi ham yozilmaydi: ilgari claim alohida commit
+   * bo'lib, jarayon oraliqda to'xtasa so'rov «tasdiqlandi», sotuv esa yo'q
+   * qolardi. Ikki parallel bosishdan (yoki approve + reject) faqat BITTASI
+   * o'tadi, ikkinchisi 409 «allaqachon yakunlangan».
+   *
+   * Darvoza: buyurtma «kutilmoqda» emas yoki so'rov ochilgandan keyin holati
+   * o'zgargan — so'rov `void`, 409. Qayta ijro xatosi —
+   * `settleFailedExtraCostReplay`.
    *
    * `auto` — muddat o'tib avtomatik tasdiq (ega qarori): `decided_by_user_id`
    * NULL, `auto_approved = true`, sabab matni bilan.
@@ -2680,26 +3045,37 @@ export class OrderLifecycleService {
     if (!options.auto) {
       this.assertCanDecideExtraCostApproval(requester!, approval);
     }
-    // Tezkor rad (o'qilgan holat); haqiqiy himoya — pastdagi atomik UPDATE.
+    // Tezkor rad (o'qilgan holat); haqiqiy himoya — tranzaksiyadagi shartli UPDATE.
     if (approval.status !== 'pending') {
-      this.badRequest("Bu so'rov allaqachon yakunlangan");
+      throw new ExtraCostRequestClosedError();
+    }
+    const actorId = options.auto ? null : String(requester!.id);
+    // Darvozaning qulfsiz tezkor yo'li — qayta ijroning RPC'laridan OLDIN.
+    // Qulf ostida sotuv tranzaksiyasida yana tekshiriladi.
+    const gateReason = await this.extraCostApprovalGateReason(approval);
+    if (gateReason) {
+      await this.settleFailedExtraCostReplay(
+        approval,
+        new ExtraCostRequestClosedError(gateReason),
+        actorId,
+      );
     }
     const decidedAt = new Date();
     const comment = options.auto
       ? (dto?.comment ??
         'Muddat ichida javob berilmadi — avtomatik tasdiqlandi')
       : (dto?.comment ?? null);
-    const claimed = await this.claimExtraCostDecision(approval.id, {
-      status: 'approved',
-      decided_by_user_id: options.auto ? null : String(requester!.id),
-      decided_at: decidedAt,
-      decision_comment: comment,
-      auto_approved: Boolean(options.auto),
-      reject_reason: null,
-    });
-    if (!claimed) {
-      this.badRequest("Bu so'rov allaqachon yakunlangan");
-    }
+    const execution: ExtraCostExecutionOptions = {
+      extraCostApproval: {
+        id: String(approval.id),
+        patch: {
+          decided_by_user_id: actorId,
+          decided_at: decidedAt,
+          decision_comment: comment,
+          auto_approved: Boolean(options.auto),
+        },
+      },
+    };
 
     const actor = {
       id: String(approval.requested_by_user_id),
@@ -2710,6 +3086,7 @@ export class OrderLifecycleService {
       ...(approval.operation_payload ?? {}),
       extraCostApproved: true,
     } as any;
+    const requestId = `extra-cost-approval:${approval.id}`;
 
     let result: unknown;
     try {
@@ -2718,48 +3095,33 @@ export class OrderLifecycleService {
           actor,
           String(approval.order_id),
           payload,
-          `extra-cost-approval:${approval.id}`,
+          requestId,
+          execution,
         );
       } else if (approval.action === 'partly_sell') {
         result = await this.partlySellOrder(
           actor,
           String(approval.order_id),
           payload,
-          `extra-cost-approval:${approval.id}`,
+          requestId,
+          execution,
         );
       } else {
         result = await this.sellOrder(
           actor,
           String(approval.order_id),
           payload,
-          `extra-cost-approval:${approval.id}`,
+          requestId,
+          execution,
         );
       }
     } catch (error) {
-      // Kompensatsiya: faqat O'ZIMIZ yozgan qarorni qaytaramiz.
-      await this.extraCostApprovalRepo
-        .createQueryBuilder()
-        .update(OrderExtraCostApproval)
-        .set({
-          status: 'pending',
-          decided_by_user_id: null,
-          decided_at: null,
-          decision_comment: null,
-          auto_approved: false,
-        })
-        .where('id = :id AND status = :status AND decided_at = :decidedAt', {
-          id: approval.id,
-          status: 'approved',
-          decidedAt,
-        })
-        .execute()
-        .catch(() => undefined);
-      throw error;
+      await this.settleFailedExtraCostReplay(approval, error, actorId);
     }
 
     Object.assign(approval, {
       status: 'approved',
-      decided_by_user_id: options.auto ? null : String(requester!.id),
+      decided_by_user_id: actorId,
       decided_at: decidedAt,
       decision_comment: comment,
       auto_approved: Boolean(options.auto),
@@ -2794,6 +3156,30 @@ export class OrderLifecycleService {
     );
   }
 
+  /**
+   * (hwTkXsGi) Tasdiq darvozasining qulfsiz tezkor yo'li: buyurtma bor,
+   * «kutilmoqda» va so'rov ochilgandan keyin holati o'zgarmagan. Yopish
+   * sababi yoki `null`.
+   */
+  private async extraCostApprovalGateReason(
+    approval: OrderExtraCostApproval,
+  ): Promise<string | null> {
+    const order = await this.orderRepo.findOne({
+      where: { id: String(approval.order_id) },
+    });
+    if (!order || order.isDeleted) {
+      return EXTRA_COST_CLOSE_REASON.orderMissing;
+    }
+    if (order.status !== Order_status.WAITING) {
+      return EXTRA_COST_CLOSE_REASON.notWaiting(String(order.status));
+    }
+    const changedTo = await this.extraCostStatusChangedSince(
+      this.dataSource.manager,
+      String(approval.id),
+    );
+    return changedTo ? EXTRA_COST_CLOSE_REASON.statusChanged(changedTo) : null;
+  }
+
   async rejectExtraCostApproval(
     requester: { id: string; roles?: string[] },
     approvalId: string,
@@ -2807,7 +3193,7 @@ export class OrderLifecycleService {
     }
     this.assertCanDecideExtraCostApproval(requester, approval);
     if (approval.status !== 'pending') {
-      this.badRequest("Bu so'rov allaqachon yakunlangan");
+      throw new ExtraCostRequestClosedError();
     }
     const reason = dto?.reason ? String(dto.reason) : null;
     if (
@@ -2831,7 +3217,7 @@ export class OrderLifecycleService {
       reject_reason: reason,
     });
     if (!claimed) {
-      this.badRequest("Bu so'rov allaqachon yakunlangan");
+      throw new ExtraCostRequestClosedError();
     }
     Object.assign(approval, {
       status: 'rejected',
@@ -2853,12 +3239,14 @@ export class OrderLifecycleService {
   /**
    * `UPDATE … WHERE id AND status = 'pending' AND is_deleted = false
    * RETURNING id` — affected=0 → boshqa qaror allaqachon yozilgan.
+   * `repo` — tasdiqda sotuv tranzaksiyasining repozitoriysi (hwTkXsGi).
    */
   private async claimExtraCostDecision(
     approvalId: string,
     patch: Partial<OrderExtraCostApproval>,
+    repo: Repository<OrderExtraCostApproval> = this.extraCostApprovalRepo,
   ): Promise<boolean> {
-    const result = await this.extraCostApprovalRepo
+    const result = await repo
       .createQueryBuilder()
       .update(OrderExtraCostApproval)
       .set(patch as never)
@@ -4006,6 +4394,15 @@ export class OrderLifecycleService {
         );
       }
 
+      // (hwTkXsGi) Qo'shimcha xarajat so'rovlari — kassa yozuvlaridan OLDIN:
+      // ochiq so'rov `void` (aks holda keyin tasdiqlansa eski amal eski
+      // xarajat bilan qayta bajarilardi), tasdiqlangani `reversed`.
+      await this.closeExtraCostApprovalsOnRollback(
+        tx,
+        String(order.id),
+        requester,
+      );
+
       // fix3b (M6): superadmin kredit yo'li — qoldiq QULFI ostida, oyoqlardan
       // OLDIN (qator qayta tekshiriladi; o'zgargan bo'lsa hech narsa yozilmaydi).
       if (remittedCourierCredit) {
@@ -4362,7 +4759,11 @@ export class OrderLifecycleService {
         );
       }
 
-      mergedPartialChildren = await this.mergePartialChildrenBack(tx, order);
+      mergedPartialChildren = await this.mergePartialChildrenBack(
+        tx,
+        order,
+        requester,
+      );
 
       await queryRunner.commitTransaction();
     } catch (error) {
@@ -8458,6 +8859,8 @@ export class OrderLifecycleService {
       oldItemCollected?: boolean | string;
     },
     requestId?: string,
+    /** (hwTkXsGi) Ichki: market tasdig'ini qayta ijro (claim). */
+    options?: ExtraCostExecutionOptions,
   ) {
     /**
      * T0UGh8bL — `paidAmount` = SOTUVCHI MARKETGA TO'G'RIDAN-TO'G'RI BERGAN
@@ -8718,6 +9121,7 @@ export class OrderLifecycleService {
       proofFiles,
       dto: dto ?? {},
       market,
+      options,
     });
     if (pendingApproval) {
       return pendingApproval;
@@ -8816,6 +9220,9 @@ export class OrderLifecycleService {
     try {
       const tx = queryRunner.manager;
       await this.lockWaitingOrder(tx, id);
+      // (hwTkXsGi) Ochiq so'rovlar yopiladi yoki tasdiq shu tranzaksiyada
+      // yoziladi — pul yozuvlaridan OLDIN.
+      await this.applyExtraCostApprovalsOnExecution(tx, id, requester, options);
       const pay = (
         data: Parameters<typeof this.updateCashboxBalance>[0],
       ): Promise<void> =>
@@ -9178,6 +9585,8 @@ export class OrderLifecycleService {
       extraCostApproved?: boolean;
     },
     requestId?: string,
+    /** (hwTkXsGi) Ichki: market tasdig'ini qayta ijro (claim). */
+    options?: ExtraCostExecutionOptions,
   ) {
     const isManagerRequester =
       this.hasRole(requester, Roles.MANAGER) &&
@@ -9199,7 +9608,7 @@ export class OrderLifecycleService {
     // tekshirilgan; bu qoida kiritilishidan oldin ochilgan tasdiqlar esa
     // sababsiz bo'lishi mumkin — ular `OTHER` bilan yakunlanadi.
     const cancelReason =
-      dto?.extraCostApproved && !dto?.reason && !dto?.comment?.trim()
+      options?.extraCostApproval && !dto?.reason && !dto?.comment?.trim()
         ? CancelReason.OTHER
         : this.resolveCancelReason(dto?.reason, dto?.comment);
     const order = await this.findById(id);
@@ -9302,6 +9711,7 @@ export class OrderLifecycleService {
       proofFiles,
       dto: dto ?? {},
       market,
+      options,
     });
     if (pendingApproval) {
       return pendingApproval;
@@ -9368,6 +9778,9 @@ export class OrderLifecycleService {
     try {
       const tx = queryRunner.manager;
       await this.lockWaitingOrder(tx, id);
+      // (hwTkXsGi) Ochiq so'rovlar yopiladi yoki tasdiq shu tranzaksiyada
+      // yoziladi — pul yozuvlaridan OLDIN.
+      await this.applyExtraCostApprovalsOnExecution(tx, id, requester, options);
       const pay = (
         data: Parameters<typeof this.updateCashboxBalance>[0],
       ): Promise<void> =>
@@ -10101,6 +10514,8 @@ export class OrderLifecycleService {
       oldItemCollected?: boolean | string;
     },
     requestId?: string,
+    /** (hwTkXsGi) Ichki: market tasdig'ini qayta ijro (claim). */
+    options?: ExtraCostExecutionOptions,
   ) {
     const isManagerRequester =
       this.hasRole(requester, Roles.MANAGER) &&
@@ -10310,6 +10725,7 @@ export class OrderLifecycleService {
       proofFiles,
       dto: dto ?? {},
       market,
+      options,
     });
     if (pendingApproval) {
       return pendingApproval;
@@ -10474,6 +10890,9 @@ export class OrderLifecycleService {
     try {
       const tx = queryRunner.manager;
       const lockedOrder = await this.lockWaitingOrder(tx, id);
+      // (hwTkXsGi) Ochiq so'rovlar yopiladi yoki tasdiq shu tranzaksiyada
+      // yoziladi — pul yozuvlaridan OLDIN.
+      await this.applyExtraCostApprovalsOnExecution(tx, id, requester, options);
       const txOrderItemRepo = tx.getRepository(OrderItem);
       const pay = (
         // `typeof this.…` bu yerda TS 5.9 da hal bo'lmaydi (metodda boshqa

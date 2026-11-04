@@ -15,6 +15,8 @@ import { of } from 'rxjs';
 import { Cashbox_type, Order_status, Where_deliver } from '@app/common';
 import { OrderLifecycleService } from './lifecycle/order-lifecycle.service';
 import { OrderSettlement } from './entities/order-settlement.entity';
+import { OrderExtraCostApproval } from './entities/order-extra-cost-approval.entity';
+import { extraCostApprovalTable } from './testing/extra-cost-kit-spec';
 
 type Row = Record<string, any>;
 
@@ -86,7 +88,11 @@ function makeService(orders: Row[], identity = makeIdentity()) {
     };
     const manager = {
       getRepository: jest.fn((entity: unknown) =>
-        entity === OrderSettlement ? settlementRepo : { update: jest.fn() },
+        entity === OrderExtraCostApproval
+          ? extraCostApprovalTable()
+          : entity === OrderSettlement
+            ? settlementRepo
+            : { update: jest.fn() },
       ),
       __ops: ops,
     };

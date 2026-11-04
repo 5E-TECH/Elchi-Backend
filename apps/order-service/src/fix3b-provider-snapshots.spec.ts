@@ -23,6 +23,8 @@ import { OrderLifecycleService } from './lifecycle/order-lifecycle.service';
 import { OrderSettlementService } from './settlement/order-settlement.service';
 import { Order } from './entities/order.entity';
 import { OrderSettlement } from './entities/order-settlement.entity';
+import { OrderExtraCostApproval } from './entities/order-extra-cost-approval.entity';
+import { extraCostApprovalTable } from './testing/extra-cost-kit-spec';
 
 type Row = Record<string, unknown>;
 type Svc = OrderLifecycleService & Record<string, any>;
@@ -76,6 +78,7 @@ function makeProviderHarness(order: Row) {
     release: jest.fn(),
     manager: {
       getRepository: jest.fn((entity: unknown) => {
+        if (entity === OrderExtraCostApproval) return extraCostApprovalTable();
         if (entity === Order) {
           return {
             save: jest.fn((value: Row) => {
@@ -124,9 +127,11 @@ function makeRollbackHarness(order: Row, settlement: Row) {
     release: jest.fn(),
     manager: {
       getRepository: jest.fn((entity: unknown) =>
-        entity === Order
-          ? { findOne: jest.fn().mockResolvedValue({ ...order }) }
-          : {},
+        entity === OrderExtraCostApproval
+          ? extraCostApprovalTable()
+          : entity === Order
+            ? { findOne: jest.fn().mockResolvedValue({ ...order }) }
+            : {},
       ),
     },
   };

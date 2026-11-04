@@ -63,7 +63,13 @@ describe('CODE-28 — kuryer kesimida qoldiq qat`iy o`qiladi', () => {
         return qb;
       }),
     };
-    const approvalRepo = { count: jest.fn().mockResolvedValue(0) };
+    const approvalQb = {
+      innerJoin: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      getCount: jest.fn().mockResolvedValue(0),
+    };
+    const approvalRepo = { createQueryBuilder: jest.fn(() => approvalQb) };
     const dataSource = {
       options: { schema: 'order_schema' },
       query: jest.fn().mockResolvedValue([{ t: 'order_settlement_carry' }]),

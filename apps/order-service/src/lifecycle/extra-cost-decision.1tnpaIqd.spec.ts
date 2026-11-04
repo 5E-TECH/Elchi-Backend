@@ -1,14 +1,23 @@
 import { Logger } from '@nestjs/common';
 import { RpcException } from '@nestjs/microservices';
-import { ExtraCostRejectReason } from '@app/common';
-import { OrderLifecycleService } from './order-lifecycle.service';
+import { ExtraCostRejectReason, Order_status } from '@app/common';
+import {
+  ExtraCostExecutionOptions,
+  OrderLifecycleService,
+} from './order-lifecycle.service';
+import {
+  extraCostApprovalTable,
+  extraCostManager,
+} from '../testing/extra-cost-kit-spec';
 import { ExtraCostAutoApproveScheduler } from './extra-cost-auto-approve.scheduler';
 
 /**
  * 1tnpaIqd + DuST9k8j (order-service tomoni):
  *  - qaror ATOMIK shartli UPDATE: ikki parallel approve (yoki approve +
- *    reject) — faqat bittasi; biznes amali faqat claim'dan keyin, BIR marta;
- *  - biznes amali xato bersa — so'rov `pending` ga qaytadi;
+ *    reject) — faqat bittasi; biznes amali BIR marta;
+ *  - (hwTkXsGi) «tasdiqlandi» sotuv bilan BITTA tranzaksiyada; darvoza
+ *    (buyurtma «kutilmoqda», holati o'zgarmagan) yoki biznes xatosi —
+ *    so'rov `void` + 409; faqat infratuzilma xatosida `pending` qoladi;
  *  - rad etish sababi yopiq ro'yxat;
  *  - so'rov yaratilganda `extra_cost.requested` (outbox, best-effort);
  *  - ega qarori: muddat o'tsa AVTOMATIK tasdiq (env), eslatma, audit.
@@ -34,74 +43,28 @@ const pending = (overrides: Row = {}): Row => ({
   ...overrides,
 });
 
-/** Xotiradagi jadval: shartli UPDATE'lar haqiqiy "status = pending" semantikasi bilan. */
-function makeRepo(rows: Row[]) {
-  const byId = new Map(rows.map((row) => [String(row.id), row]));
-  const repo = {
-    rows: byId,
-    findOne: jest.fn(({ where }: { where: Row }) =>
-      Promise.resolve(
-        byId.has(String(where.id)) ? { ...byId.get(String(where.id)) } : null,
-      ),
-    ),
-    createQueryBuilder: jest.fn(() => {
-      let patch: Row = {};
-      let params: Row = {};
-      let sql = '';
-      const filters: Array<(row: Row) => boolean> = [];
-      const qb: Record<string, any> = {
-        update: () => qb,
-        set: (value: Row) => ((patch = value), qb),
-        where: (clause: string, p: Row) => (
-          (sql = clause),
-          (params = p ?? {}),
-          qb
-        ),
-        andWhere: (clause: string, p: Row) => {
-          if (clause.includes('reminder_sent_at IS NULL'))
-            filters.push((r) => !r.reminder_sent_at);
-          if (clause.includes(':reminderAt')) {
-            filters.push(
-              (r) => r.createdAt <= p.reminderAt && r.createdAt > p.deadline,
-            );
-          } else if (clause.includes(':deadline')) {
-            filters.push((r) => r.createdAt <= p.deadline);
-          }
-          return qb;
-        },
-        orderBy: () => qb,
-        take: () => qb,
-        returning: () => qb,
-        getMany: () =>
-          Promise.resolve(
-            [...byId.values()].filter(
-              (row) => row.status === 'pending' && filters.every((f) => f(row)),
-            ),
-          ),
-        execute: () => {
-          const row = byId.get(String(params.id));
-          let ok = Boolean(row);
-          if (ok && sql.includes('status = :pending'))
-            ok = row!.status === 'pending';
-          if (ok && sql.includes('reminder_sent_at IS NULL'))
-            ok = !row!.reminder_sent_at;
-          if (ok && sql.includes('decided_at = :decidedAt')) {
-            ok =
-              row!.status === params.status &&
-              row!.decided_at === params.decidedAt;
-          }
-          if (ok) Object.assign(row!, patch);
-          return Promise.resolve({ affected: ok ? 1 : 0 });
-        },
-      };
-      return qb;
-    }),
-  };
-  return repo;
-}
+const NOT_WAITING =
+  'Buyurtma topilmadi yoki kutilmoqda (waiting) holatida emas';
 
+/**
+ * Jadval — haqiqiy WHERE semantikasi bilan (`testing/extra-cost-kit-spec`).
+ * Qayta ijro (`sellOrder` / `cancelOrder`) soxta, lekin uning TRANZAKSIYASI
+ * modellashtirilgan (hwTkXsGi): buyurtma qulfi (navbat) → WAITING tekshiruvi →
+ * HAQIQIY `applyExtraCostApprovalsOnExecution` (darvoza + claim) → pul;
+ * xato bo'lsa jadval holati qaytadi. `failures` — claim'dan keyin, pul
+ * yozilayotganda chiqadigan xatolar navbati.
+ */
 function makeService(rows: Row[]) {
-  const repo = makeRepo(rows);
+  const repo = extraCostApprovalTable(rows);
+  const order = {
+    id: '7001',
+    status: Order_status.WAITING as Order_status,
+    isDeleted: false,
+  };
+  const orderRepo = {
+    findOne: jest.fn(() => Promise.resolve({ ...order })),
+  };
+  const manager = extraCostManager({ table: repo, orderRepo });
   const outbox = { enqueue: jest.fn().mockResolvedValue(undefined) };
   const activityLog = { log: jest.fn().mockResolvedValue(undefined) };
   const svc = Object.create(
@@ -109,20 +72,70 @@ function makeService(rows: Row[]) {
   ) as OrderLifecycleService;
   Object.assign(svc, {
     extraCostApprovalRepo: repo,
+    orderRepo,
+    dataSource: { manager },
     outbox,
     activityLog,
     logger: { warn: jest.fn(), log: jest.fn(), error: jest.fn() },
   });
+  const executed: string[] = [];
+  const failures: unknown[] = [];
+  let orderLock: Promise<unknown> = Promise.resolve();
+  const replay =
+    (name: 'sellOrder' | 'cancelOrder') =>
+    async (
+      actor: { id: string },
+      orderId: string,
+      _payload: unknown,
+      _requestId?: string,
+      options?: ExtraCostExecutionOptions,
+    ) => {
+      await new Promise((resolve) => setImmediate(resolve));
+      const run = orderLock.then(() =>
+        repo.transaction(async () => {
+          if (order.status !== Order_status.WAITING) {
+            throw new RpcException({ statusCode: 400, message: NOT_WAITING });
+          }
+          await (
+            svc as unknown as {
+              applyExtraCostApprovalsOnExecution: (
+                ...args: unknown[]
+              ) => Promise<void>;
+            }
+          ).applyExtraCostApprovalsOnExecution(
+            manager,
+            orderId,
+            actor,
+            options,
+          );
+          if (failures.length) throw failures.shift();
+          order.status =
+            name === 'cancelOrder' ? Order_status.CANCELLED : Order_status.SOLD;
+          executed.push(name);
+          return { statusCode: 200, message: 'ok', data: {} };
+        }),
+      );
+      orderLock = run.catch(() => undefined);
+      return run as never;
+    };
   const sellOrder = jest
     .spyOn(svc, 'sellOrder')
-    .mockImplementation(async () => {
-      await new Promise((resolve) => setImmediate(resolve));
-      return { statusCode: 200, message: 'Order sold', data: {} } as never;
-    });
+    .mockImplementation(replay('sellOrder'));
   const cancelOrder = jest
     .spyOn(svc, 'cancelOrder')
-    .mockResolvedValue({ statusCode: 200, message: 'ok', data: {} } as never);
-  return { svc, repo, outbox, activityLog, sellOrder, cancelOrder };
+    .mockImplementation(replay('cancelOrder'));
+  return {
+    svc,
+    repo,
+    order,
+    manager,
+    outbox,
+    activityLog,
+    sellOrder,
+    cancelOrder,
+    executed,
+    failures,
+  };
 }
 
 const errorOf = (promise: Promise<unknown>) =>
@@ -143,9 +156,9 @@ beforeEach(() => {
 });
 afterEach(() => jest.restoreAllMocks());
 
-describe('1tnpaIqd — atomik qaror', () => {
-  it('⭐ ikki parallel approve — biri 200, ikkinchisi "allaqachon yakunlangan", sellOrder BIR marta', async () => {
-    const { svc, sellOrder, repo } = makeService([pending()]);
+describe('1tnpaIqd + hwTkXsGi — atomik qaror', () => {
+  it('⭐ ikki parallel approve — biri 200, ikkinchisi "allaqachon yakunlangan", sotuv BIR marta', async () => {
+    const { svc, executed, repo } = makeService([pending()]);
     const [first, second] = await Promise.all([
       svc.approveExtraCostApproval(market, '7').then(
         (res) => ({ ok: true, res }),
@@ -159,15 +172,22 @@ describe('1tnpaIqd — atomik qaror', () => {
     const results = [first, second];
     expect(results.filter((r) => r.ok)).toHaveLength(1);
     const failed = results.find((r) => !r.ok) as { error: RpcException };
-    expect((failed.error.getError() as { message: string }).message).toBe(
-      "Bu so'rov allaqachon yakunlangan",
+    expect(failed.error.getError()).toEqual({
+      statusCode: 409,
+      message: "Bu so'rov allaqachon yakunlangan",
+    });
+    expect(executed).toEqual(['sellOrder']);
+    expect(repo.row('7')).toEqual(
+      expect.objectContaining({
+        status: 'approved',
+        decided_by_user_id: '501',
+      }),
     );
-    expect(sellOrder).toHaveBeenCalledTimes(1);
-    expect(repo.rows.get('7')!.status).toBe('approved');
+    expect(repo.row('7')!.closed_reason).toBeUndefined();
   });
 
   it('⭐ approve + reject bir vaqtda — faqat bittasi o‘tadi, status aralashmaydi', async () => {
-    const { svc, sellOrder, repo } = makeService([pending()]);
+    const { svc, executed, repo } = makeService([pending()]);
     const outcomes = await Promise.allSettled([
       svc.approveExtraCostApproval(market, '7'),
       svc.rejectExtraCostApproval(market, '7', {
@@ -175,33 +195,194 @@ describe('1tnpaIqd — atomik qaror', () => {
       }),
     ]);
     expect(outcomes.filter((o) => o.status === 'fulfilled')).toHaveLength(1);
-    const status = repo.rows.get('7')!.status;
+    const status = repo.row('7')!.status;
     expect(['approved', 'rejected']).toContain(status);
-    expect(sellOrder).toHaveBeenCalledTimes(status === 'approved' ? 1 : 0);
+    expect(executed).toHaveLength(status === 'approved' ? 1 : 0);
   });
 
-  it('⭐ yakunlangan so‘rovga qayta qaror — 400, DB o‘zgarmaydi, biznes amali yo‘q', async () => {
+  it('⭐ yakunlangan so‘rovga qayta qaror — 409, DB o‘zgarmaydi, biznes amali yo‘q', async () => {
     const { svc, sellOrder, repo } = makeService([
       pending({ status: 'rejected', decision_comment: 'x' }),
     ]);
     expect(await errorOf(svc.approveExtraCostApproval(market, '7'))).toEqual({
-      statusCode: 400,
+      statusCode: 409,
+      message: "Bu so'rov allaqachon yakunlangan",
+    });
+    expect(
+      await errorOf(
+        svc.rejectExtraCostApproval(market, '7', {
+          reason: ExtraCostRejectReason.TOO_EXPENSIVE,
+        }),
+      ),
+    ).toEqual({
+      statusCode: 409,
       message: "Bu so'rov allaqachon yakunlangan",
     });
     expect(sellOrder).not.toHaveBeenCalled();
-    expect(repo.rows.get('7')!.status).toBe('rejected');
+    expect(repo.row('7')!.status).toBe('rejected');
   });
 
-  it('biznes amali xato bersa — so‘rov pending ga qaytadi (qayta urinish mumkin)', async () => {
-    const { svc, sellOrder, repo } = makeService([pending()]);
-    sellOrder.mockRejectedValueOnce(
-      new RpcException({ statusCode: 400, message: 'boom' }),
+  it('⭐ TC8 bir martada: muvaffaqiyatda «tasdiqlandi» claim sotuv tranzaksiyasi ICHIDA yoziladi', async () => {
+    const { svc, sellOrder, repo, order } = makeService([pending()]);
+    const res = await svc.approveExtraCostApproval(market, '7', {
+      comment: 'mayli',
+    });
+    expect(res.statusCode).toBe(200);
+    // Qayta ijroga claim parametri beriladi — qaror oldindan yozilmaydi.
+    expect(sellOrder).toHaveBeenCalledWith(
+      { id: '301', roles: ['courier'], branch_id: '77' },
+      '7001',
+      expect.objectContaining({ extraCost: 12000 }),
+      'extra-cost-approval:7',
+      {
+        extraCostApproval: {
+          id: '7',
+          patch: {
+            decided_by_user_id: '501',
+            decided_at: expect.any(Date),
+            decision_comment: 'mayli',
+            auto_approved: false,
+          },
+        },
+      },
     );
+    expect(order.status).toBe(Order_status.SOLD);
+    expect(repo.row('7')).toEqual(
+      expect.objectContaining({
+        status: 'approved',
+        decided_by_user_id: '501',
+        decision_comment: 'mayli',
+        reject_reason: null,
+      }),
+    );
+  });
+
+  it("⭐ TC8 bir martada: sotuv tranzaksiyasi claim'dan KEYIN infratuzilma xatosi bersa — so‘rov «tasdiqlandi» bo‘lib qolmaydi, pending", async () => {
+    const { svc, repo, executed, failures } = makeService([pending()]);
+    const timeout = new Error('RMQ timeout');
+    failures.push(timeout);
+    await expect(svc.approveExtraCostApproval(market, '7')).rejects.toBe(
+      timeout,
+    );
+    expect(executed).toHaveLength(0);
+    expect(repo.row('7')!.status).toBe('pending');
+    expect(repo.row('7')!.decided_at).toBeUndefined();
+    expect(repo.row('7')!.decided_by_user_id).toBeUndefined();
+    // Qayta urinish mumkin — keyingi tasdiq o'tadi.
+    await svc.approveExtraCostApproval(market, '7');
+    expect(repo.row('7')!.status).toBe('approved');
+    expect(executed).toEqual(['sellOrder']);
+  });
+
+  it.each([
+    ['5xx', new RpcException({ statusCode: 500, message: 'DB xatosi' })],
+    [
+      'javob bermagan lookup (Market)',
+      new RpcException({ statusCode: 404, message: 'Market topilmadi' }),
+    ],
+    [
+      'javob bermagan lookup (kassa)',
+      new RpcException({
+        statusCode: 404,
+        message: 'Kuryer kassasi topilmadi',
+      }),
+    ],
+  ])(
+    'infratuzilma xatosi (%s) — xato o‘zgarmaydi, so‘rov pending qoladi',
+    async (_label, error) => {
+      const { svc, repo, failures } = makeService([pending()]);
+      failures.push(error);
+      await expect(svc.approveExtraCostApproval(market, '7')).rejects.toBe(
+        error,
+      );
+      expect(repo.row('7')!.status).toBe('pending');
+      expect(repo.row('7')!.closed_reason).toBeUndefined();
+    },
+  );
+
+  it.each([400, 403, 404, 409])(
+    '⭐ qayta ijro biznes xatosi (%s) — so‘rov sababi bilan void, 409 «allaqachon yakunlangan — …»',
+    async (statusCode) => {
+      const { svc, repo, failures, executed } = makeService([pending()]);
+      failures.push(
+        new RpcException({ statusCode, message: 'Kuryer bloklangan' }),
+      );
+      expect(await errorOf(svc.approveExtraCostApproval(market, '7'))).toEqual({
+        statusCode: 409,
+        message:
+          "Bu so'rov allaqachon yakunlangan — amalni bajarib bo'lmadi: Kuryer bloklangan",
+      });
+      expect(executed).toHaveLength(0);
+      expect(repo.row('7')).toEqual(
+        expect.objectContaining({
+          status: 'void',
+          closed_reason: "amalni bajarib bo'lmadi: Kuryer bloklangan",
+          closed_by_user_id: '501',
+          closed_at: expect.any(Date),
+        }),
+      );
+      expect(repo.row('7')!.decided_at).toBeUndefined();
+    },
+  );
+
+  it('⭐ TC2 darvoza: buyurtma endi «kutilmoqda» emas — void + 409, qayta ijro chaqirilmaydi', async () => {
+    const { svc, repo, order, sellOrder } = makeService([pending()]);
+    order.status = Order_status.SOLD;
+    expect(await errorOf(svc.approveExtraCostApproval(market, '7'))).toEqual({
+      statusCode: 409,
+      message:
+        "Bu so'rov allaqachon yakunlangan — buyurtma endi «kutilmoqda» holatida emas (sold)",
+    });
+    expect(sellOrder).not.toHaveBeenCalled();
+    expect(repo.row('7')).toEqual(
+      expect.objectContaining({
+        status: 'void',
+        closed_reason: 'buyurtma endi «kutilmoqda» holatida emas (sold)',
+      }),
+    );
+  });
+
+  it('⭐ TC6 darvoza: so‘rovdan keyin holat o‘zgargan (sotilib, orqaga qaytarilgan) — void + 409', async () => {
+    const { svc, repo, manager, sellOrder } = makeService([pending()]);
+    manager.tracking.state.changedTo = Order_status.SOLD;
+    expect(await errorOf(svc.approveExtraCostApproval(market, '7'))).toEqual({
+      statusCode: 409,
+      message:
+        "Bu so'rov allaqachon yakunlangan — so'rov ochilgandan keyin buyurtma holati o'zgargan (sold)",
+    });
+    expect(sellOrder).not.toHaveBeenCalled();
+    expect(repo.row('7')!.status).toBe('void');
+  });
+
+  it('darvoza qulf ostida ham: tezkor tekshiruvdan keyin holat o‘zgarsa — claim yo‘q, void + 409', async () => {
+    const { svc, repo, manager, executed } = makeService([pending()]);
+    // Tezkor (qulfsiz) darvoza o'tadi, keyin — sotuv tranzaksiyasigacha — o'zgaradi.
+    const qb = manager.tracking.qb;
+    qb.getRawOne
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce({ to_status: Order_status.CANCELLED });
+    expect(
+      (await errorOf(svc.approveExtraCostApproval(market, '7'))).statusCode,
+    ).toBe(409);
+    expect(executed).toHaveLength(0);
+    expect(repo.row('7')).toEqual(
+      expect.objectContaining({
+        status: 'void',
+        closed_reason:
+          "so'rov ochilgandan keyin buyurtma holati o'zgargan (cancelled)",
+      }),
+    );
+  });
+
+  it('avtomatik tasdiq darvozadan o‘tmasa — void, yopuvchi NULL (tizim)', async () => {
+    const { svc, repo, order } = makeService([pending()]);
+    order.status = Order_status.CANCELLED;
     await expect(
-      svc.approveExtraCostApproval(market, '7'),
+      svc.approveExtraCostApproval(null, '7', undefined, { auto: true }),
     ).rejects.toBeInstanceOf(RpcException);
-    expect(repo.rows.get('7')!.status).toBe('pending');
-    expect(repo.rows.get('7')!.decided_at).toBeNull();
+    expect(repo.row('7')).toEqual(
+      expect.objectContaining({ status: 'void', closed_by_user_id: null }),
+    );
   });
 
   it('⭐ rad etish sababi — yopiq ro‘yxat: noto‘g‘ri → 400; to‘g‘ri → reject_reason + izoh', async () => {
@@ -215,13 +396,13 @@ describe('1tnpaIqd — atomik qaror', () => {
         )
       ).statusCode,
     ).toBe(400);
-    expect(bad.repo.rows.get('7')!.status).toBe('pending');
+    expect(bad.repo.row('7')!.status).toBe('pending');
     const ok = makeService([pending()]);
     await ok.svc.rejectExtraCostApproval(market, '7', {
       reason: ExtraCostRejectReason.NO_PROOF,
       comment: 'rasm xira',
     });
-    expect(ok.repo.rows.get('7')).toEqual(
+    expect(ok.repo.row('7')).toEqual(
       expect.objectContaining({
         status: 'rejected',
         reject_reason: 'NO_PROOF',
@@ -301,7 +482,12 @@ describe('1tnpaIqd — ega qarori: muddat o‘tsa avtomatik tasdiq', () => {
   it('⭐ muddati o‘tgan — avtomatik tasdiq: decided_by NULL, auto_approved, sabab, audit, marketga xabar', async () => {
     const { svc, repo, sellOrder, activityLog, outbox } = makeService([
       pending({ id: '7', createdAt: new Date('2026-10-16T10:00:00Z') }),
-      pending({ id: '8', createdAt: new Date('2026-10-16T10:55:00Z') }),
+      // Boshqa buyurtma: bitta buyurtmada bittadan ortiq ochiq so'rov yo'q (hwTkXsGi).
+      pending({
+        id: '8',
+        order_id: '7002',
+        createdAt: new Date('2026-10-16T10:55:00Z'),
+      }),
     ]);
     const stats = await svc.runExtraCostAutoApproval({
       minutes: 30,
@@ -309,7 +495,7 @@ describe('1tnpaIqd — ega qarori: muddat o‘tsa avtomatik tasdiq', () => {
       now,
     });
     expect(stats.approved).toBe(1);
-    expect(repo.rows.get('7')).toEqual(
+    expect(repo.row('7')).toEqual(
       expect.objectContaining({
         status: 'approved',
         decided_by_user_id: null,
@@ -317,7 +503,7 @@ describe('1tnpaIqd — ega qarori: muddat o‘tsa avtomatik tasdiq', () => {
         decision_comment: expect.stringContaining('avtomatik'),
       }),
     );
-    expect(repo.rows.get('8')!.status).toBe('pending');
+    expect(repo.row('8')!.status).toBe('pending');
     expect(sellOrder).toHaveBeenCalledTimes(1);
     expect(activityLog.log).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -351,7 +537,7 @@ describe('1tnpaIqd — ega qarori: muddat o‘tsa avtomatik tasdiq', () => {
     });
     expect(first.reminded).toBe(1);
     expect(second.reminded).toBe(0);
-    expect(repo.rows.get('9')!.reminder_sent_at).toEqual(now);
+    expect(repo.row('9')!.reminder_sent_at).toEqual(now);
     expect(
       outbox.enqueue.mock.calls.filter(
         ([, , payload]) => payload.type === 'order.extra_cost_reminder',

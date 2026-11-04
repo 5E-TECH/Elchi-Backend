@@ -1,14 +1,37 @@
 import { Logger } from '@nestjs/common';
-import { DataSource } from 'typeorm';
+import { RpcException } from '@nestjs/microservices';
+import { DataSource, QueryFailedError } from 'typeorm';
+import { Order_status } from '@app/common';
 import { CreateOrderExtraCostApprovals1716000000026 } from '../../../../migrations/1716000000026-CreateOrderExtraCostApprovals';
 import { ExtraCostAutoApprove1716000000123 } from '../../../../migrations/1716000000123-ExtraCostAutoApprove';
-import { OrderExtraCostApproval } from '../entities/order-extra-cost-approval.entity';
-import { OrderLifecycleService } from './order-lifecycle.service';
+import { ExtraCostApprovalVoidReversed1716000000206 } from '../../../../migrations/1716000000206-ExtraCostApprovalVoidReversed';
+import { Branch } from '../entities/branch.entity';
+import { OrderCustodyEvent } from '../entities/order-custody-event.entity';
+import {
+  EXTRA_COST_PENDING_UNIQUE_INDEX,
+  OrderExtraCostApproval,
+} from '../entities/order-extra-cost-approval.entity';
+import { OrderItem } from '../entities/order-item.entity';
+import { OrderTracking } from '../entities/order-tracking.entity';
+import { Order } from '../entities/order.entity';
+import {
+  ExtraCostExecutionOptions,
+  OrderLifecycleService,
+} from './order-lifecycle.service';
 
 /**
- * 1tnpaIqd — atomik qaror HAQIQIY Postgres'da (faqat lokal test bazasi):
- * migratsiya 026 + 123, ikki parallel approve / approve+reject — faqat
- * bittasi o'tadi, biznes amali bir marta.
+ * 1tnpaIqd + hwTkXsGi — atomik qaror HAQIQIY Postgres'da (faqat lokal test
+ * bazasi): migratsiya 026 + 123 + 206.
+ *
+ *  - ikki parallel approve / approve+reject — faqat bittasi o'tadi, sotuv
+ *    bir marta;
+ *  - «tasdiqlandi» (claim) sotuv bilan BITTA tranzaksiyada: sotuv yiqilsa
+ *    claim ham qaytadi (real ROLLBACK);
+ *  - darvoza `order_tracking` dan (so'rovdan keyin holat o'zgargan) — void;
+ *  - void / reversed SQL'i, partial unique indeks (23505).
+ *
+ * Qayta ijro (`sellOrder`) soxta, lekin uning tranzaksiyasi HAQIQIY:
+ * haqiqiy `applyExtraCostApprovalsOnExecution` + (soxta) pul, so'ng COMMIT.
  *
  *   BOT_PG_TEST_URI=postgres://postgres@127.0.0.1:55443/elchi_bot_test npx jest extra-cost-decision.pg
  * (spec yonma-yon `elchi_extra_cost_test` bazasini yaratadi.)
@@ -21,8 +44,17 @@ const localTestDatabase = (() => {
 })();
 const DB = 'elchi_extra_cost_test';
 
+type ApprovalRow = {
+  status: string;
+  auto_approved: boolean;
+  decided_at: Date | null;
+  closed_reason: string | null;
+  closed_at: Date | null;
+  closed_by_user_id: string | null;
+};
+
 (localTestDatabase ? describe : describe.skip)(
-  'extra-cost qarori — lokal Postgres (1tnpaIqd)',
+  'extra-cost qarori — lokal Postgres (1tnpaIqd + hwTkXsGi)',
   () => {
     jest.setTimeout(30_000);
     let db: DataSource;
@@ -43,17 +75,49 @@ const DB = 'elchi_extra_cost_test';
         type: 'postgres',
         url: url.toString(),
         schema: 'order_schema',
-        entities: [OrderExtraCostApproval],
+        // Darvoza so'rovi OrderTracking ↔ OrderExtraCostApproval join'i —
+        // metadata uchun bog'liq entity'lar (jadval yaratilmaydi).
+        entities: [
+          OrderExtraCostApproval,
+          OrderTracking,
+          Order,
+          OrderItem,
+          OrderCustodyEvent,
+          Branch,
+        ],
         extra: { max: 10 },
       });
       await db.initialize();
       await db.query('DROP SCHEMA IF EXISTS order_schema CASCADE');
       await db.query('CREATE SCHEMA order_schema');
+      const statuses = Object.values(Order_status)
+        .map((status) => `'${status}'`)
+        .join(', ');
+      await db.query(
+        `CREATE TYPE order_schema.orders_status_enum AS ENUM (${statuses})`,
+      );
+      // Prod'dagi ustun turlari (enum) bilan, faqat migratsiya 206 va
+      // darvoza o'qiydigan ustunlar.
+      await db.query(`
+        CREATE TABLE order_schema.orders (
+          id bigint PRIMARY KEY,
+          status order_schema.orders_status_enum NOT NULL DEFAULT 'waiting',
+          is_deleted boolean NOT NULL DEFAULT false
+        )`);
+      await db.query(`
+        CREATE TABLE order_schema.order_tracking (
+          id bigserial PRIMARY KEY,
+          order_id bigint NOT NULL,
+          from_status order_schema.orders_status_enum,
+          to_status order_schema.orders_status_enum NOT NULL,
+          created_at timestamptz NOT NULL DEFAULT now()
+        )`);
       const runner = db.createQueryRunner();
       try {
         await new CreateOrderExtraCostApprovals1716000000026().up(runner);
         await new ExtraCostAutoApprove1716000000123().up(runner);
         await new ExtraCostAutoApprove1716000000123().up(runner);
+        await new ExtraCostApprovalVoidReversed1716000000206().up(runner);
       } finally {
         await runner.release();
       }
@@ -67,70 +131,289 @@ const DB = 'elchi_extra_cost_test';
       jest.restoreAllMocks();
     });
 
-    const insert = async () => {
+    let nextOrder = 7000;
+    const insert = async (
+      overrides: { orderId?: number; status?: string } = {},
+    ) => {
+      const orderId = overrides.orderId ?? ++nextOrder;
       const [row]: Array<{ id: string }> = await db.query(
         `INSERT INTO order_schema.order_extra_cost_approvals
            (order_id, market_id, requested_by_user_id, requested_by_role, action, amount, operation_payload, status)
-         VALUES (7001, 501, 301, 'courier', 'sell', 12000, '{}'::jsonb, 'pending')
+         VALUES ($1, 501, 301, 'courier', 'sell', 12000, '{}'::jsonb, $2)
          RETURNING id`,
+        [orderId, overrides.status ?? 'pending'],
       );
-      return String(row.id);
+      return { id: String(row.id), orderId: String(orderId) };
     };
 
-    const makeService = () => {
+    const read = async (id: string): Promise<ApprovalRow> => {
+      const [row]: ApprovalRow[] = await db.query(
+        `SELECT status, auto_approved, decided_at, closed_reason, closed_at,
+                closed_by_user_id::text AS closed_by_user_id
+           FROM order_schema.order_extra_cost_approvals WHERE id = $1`,
+        [id],
+      );
+      return row;
+    };
+
+    type Private = {
+      applyExtraCostApprovalsOnExecution: (...args: unknown[]) => Promise<void>;
+      closeExtraCostApprovalsOnRollback: (...args: unknown[]) => Promise<void>;
+      isUniqueViolation: (error: unknown, constraint: string) => boolean;
+    };
+
+    /** `failure` — claim'dan keyin, pul yozilayotganda chiqadigan xato. */
+    const makeService = (failure?: Error) => {
       const svc = Object.create(
         OrderLifecycleService.prototype,
       ) as OrderLifecycleService;
       Object.assign(svc, {
         extraCostApprovalRepo: db.getRepository(OrderExtraCostApproval),
+        orderRepo: {
+          findOne: jest.fn().mockResolvedValue({
+            id: '0',
+            status: Order_status.WAITING,
+            isDeleted: false,
+          }),
+        },
+        dataSource: db,
         outbox: { enqueue: jest.fn() },
         activityLog: { log: jest.fn().mockResolvedValue(undefined) },
         logger: { warn: jest.fn(), log: jest.fn() },
       });
+      const executed: string[] = [];
       const sellOrder = jest
         .spyOn(svc, 'sellOrder')
-        .mockImplementation(async () => {
-          await new Promise((resolve) => setTimeout(resolve, 50));
-          return { statusCode: 200 } as never;
-        });
-      return { svc, sellOrder };
+        .mockImplementation(
+          async (
+            actor: { id: string },
+            orderId: string,
+            _payload: unknown,
+            _requestId?: string,
+            options?: ExtraCostExecutionOptions,
+          ) => {
+            const runner = db.createQueryRunner();
+            await runner.connect();
+            await runner.startTransaction();
+            try {
+              await (
+                svc as unknown as Private
+              ).applyExtraCostApprovalsOnExecution(
+                runner.manager,
+                orderId,
+                actor,
+                options,
+              );
+              // Pul yozuvlari vaqti — parallel claim'lar shu payt kutadi.
+              await new Promise((resolve) => setTimeout(resolve, 50));
+              if (failure) throw failure;
+              executed.push(orderId);
+              await runner.commitTransaction();
+              return { statusCode: 200 } as never;
+            } catch (error) {
+              await runner.rollbackTransaction();
+              throw error;
+            } finally {
+              await runner.release();
+            }
+          },
+        );
+      return {
+        svc,
+        /** Tranzaksiya ichidagi yordamchilar (private). */
+        helpers: svc as unknown as Private,
+        sellOrder,
+        executed,
+      };
     };
 
-    it('⭐ ikki parallel approve — bittasi o‘tadi, sellOrder BIR marta (real UPDATE … WHERE status=pending)', async () => {
-      const id = await insert();
-      const { svc, sellOrder } = makeService();
-      const market = { id: '501', roles: ['market'] };
+    const market = { id: '501', roles: ['market'] };
+    const errorOf = (promise: Promise<unknown>) =>
+      promise.then(
+        () => null,
+        (error: unknown) => (error as RpcException).getError(),
+      );
+
+    it('⭐ uch parallel approve — bittasi o‘tadi, sotuv BIR marta, qolgani 409 (real UPDATE … WHERE status=pending, bitta tranzaksiyada)', async () => {
+      const { id } = await insert();
+      const { svc, executed } = makeService();
       const results = await Promise.allSettled([
         svc.approveExtraCostApproval(market, id),
         svc.approveExtraCostApproval(market, id),
         svc.approveExtraCostApproval(market, id),
       ]);
       expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
-      expect(sellOrder).toHaveBeenCalledTimes(1);
-      const [row]: Array<{ status: string; auto_approved: boolean }> =
-        await db.query(
-          `SELECT status, auto_approved FROM order_schema.order_extra_cost_approvals WHERE id = $1`,
-          [id],
-        );
-      expect(row).toEqual({ status: 'approved', auto_approved: false });
+      for (const result of results.filter((r) => r.status === 'rejected')) {
+        expect((result.reason as RpcException).getError()).toEqual({
+          statusCode: 409,
+          message: "Bu so'rov allaqachon yakunlangan",
+        });
+      }
+      expect(executed).toHaveLength(1);
+      expect(await read(id)).toMatchObject({
+        status: 'approved',
+        auto_approved: false,
+        decided_at: expect.any(Date),
+        closed_reason: null,
+      });
     });
 
     it('⭐ approve + reject bir vaqtda — faqat bittasi, holat aralashmaydi', async () => {
-      const id = await insert();
-      const { svc, sellOrder } = makeService();
-      const market = { id: '501', roles: ['market'] };
+      const { id } = await insert();
+      const { svc, executed } = makeService();
       const results = await Promise.allSettled([
         svc.rejectExtraCostApproval(market, id, { reason: 'DUPLICATE' }),
         svc.approveExtraCostApproval(market, id),
       ]);
       expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
-      const [row]: Array<{ status: string }> = await db.query(
-        `SELECT status FROM order_schema.order_extra_cost_approvals WHERE id = $1`,
-        [id],
+      const row = await read(id);
+      expect(['approved', 'rejected']).toContain(row.status);
+      expect(executed).toHaveLength(row.status === 'approved' ? 1 : 0);
+    });
+
+    it('⭐ TC8: sotuv tranzaksiyasi claim’dan keyin yiqilsa (infra) — real ROLLBACK, so‘rov pending, qaror yozilmagan', async () => {
+      const { id } = await insert();
+      const timeout = new Error('RMQ timeout');
+      const { svc } = makeService(timeout);
+      await expect(svc.approveExtraCostApproval(market, id)).rejects.toBe(
+        timeout,
       );
-      expect(sellOrder).toHaveBeenCalledTimes(
-        row.status === 'approved' ? 1 : 0,
+      expect(await read(id)).toMatchObject({
+        status: 'pending',
+        decided_at: null,
+        closed_reason: null,
+      });
+    });
+
+    it('⭐ qayta ijro biznes xatosi — so‘rov void (sabab, vaqt, kim), 409', async () => {
+      const { id } = await insert();
+      const { svc } = makeService(
+        new RpcException({ statusCode: 400, message: 'Kuryer bloklangan' }),
       );
+      expect(await errorOf(svc.approveExtraCostApproval(market, id))).toEqual({
+        statusCode: 409,
+        message:
+          "Bu so'rov allaqachon yakunlangan — amalni bajarib bo'lmadi: Kuryer bloklangan",
+      });
+      expect(await read(id)).toMatchObject({
+        status: 'void',
+        decided_at: null,
+        closed_reason: "amalni bajarib bo'lmadi: Kuryer bloklangan",
+        closed_at: expect.any(Date),
+        closed_by_user_id: '501',
+      });
+    });
+
+    it('⭐ TC6 darvoza: so‘rovdan keyin buyurtma sotilib qaytarilgan (order_tracking) — void + 409, sotuv yo‘q', async () => {
+      const { id, orderId } = await insert();
+      // So'rovdan keyin: sotildi, keyin orqaga qaytarildi — buyurtma yana WAITING.
+      await db.query(
+        `INSERT INTO order_schema.order_tracking (order_id, from_status, to_status, created_at)
+         VALUES ($1, 'waiting', 'sold', now() + interval '1 second'),
+                ($1, 'sold', 'waiting', now() + interval '2 second'),
+                ($1, 'waiting', 'waiting', now() + interval '3 second')`,
+        [orderId],
+      );
+      // Boshqa buyurtmaning tarixi hisobga olinmaydi.
+      const other = await insert();
+      await db.query(
+        `INSERT INTO order_schema.order_tracking (order_id, from_status, to_status, created_at)
+         VALUES ($1, 'waiting', 'sold', now() + interval '1 second')`,
+        [Number(other.orderId) + 1000],
+      );
+      const { svc, executed } = makeService();
+
+      expect(await errorOf(svc.approveExtraCostApproval(market, id))).toEqual({
+        statusCode: 409,
+        message:
+          "Bu so'rov allaqachon yakunlangan — so'rov ochilgandan keyin buyurtma holati o'zgargan (sold)",
+      });
+      expect(await read(id)).toMatchObject({ status: 'void' });
+
+      // Faqat from = to yozuvi (masalan pochta o'zgarishi) — darvoza o'tadi.
+      const sameStatus = await insert();
+      await db.query(
+        `INSERT INTO order_schema.order_tracking (order_id, from_status, to_status, created_at)
+         VALUES ($1, 'waiting', 'waiting', now() + interval '1 second')`,
+        [sameStatus.orderId],
+      );
+      await svc.approveExtraCostApproval(market, sameStatus.id);
+      expect(await read(sameStatus.id)).toMatchObject({ status: 'approved' });
+      expect(executed).toEqual([sameStatus.orderId]);
+    });
+
+    it('⭐ TC1 haqiqiy amal: ochiq so‘rov void (real UPDATE … RETURNING), hamkor amali — yopuvchi NULL', async () => {
+      const own = await insert();
+      const partner = await insert();
+      const { helpers } = makeService();
+
+      await helpers.applyExtraCostApprovalsOnExecution(
+        db.manager,
+        own.orderId,
+        {
+          id: '289',
+        },
+      );
+      await helpers.applyExtraCostApprovalsOnExecution(
+        db.manager,
+        partner.orderId,
+        { id: 'partner:4' },
+      );
+
+      expect(await read(own.id)).toMatchObject({
+        status: 'void',
+        closed_reason:
+          "Buyurtma boshqa so'rov bilan yakunlandi — eski so'rov yopildi",
+        closed_at: expect.any(Date),
+        closed_by_user_id: '289',
+      });
+      expect(await read(partner.id)).toMatchObject({
+        status: 'void',
+        closed_by_user_id: null,
+      });
+    });
+
+    it('⭐ TC6/TC7 orqaga qaytarish: pending → void, approved → reversed', async () => {
+      const approved = await insert({ status: 'approved' });
+      const pending = await insert({ orderId: Number(approved.orderId) });
+      const { helpers } = makeService();
+
+      await helpers.closeExtraCostApprovalsOnRollback(
+        db.manager,
+        approved.orderId,
+        { id: '1' },
+      );
+
+      expect(await read(pending.id)).toMatchObject({
+        status: 'void',
+        closed_reason: 'Buyurtma orqaga qaytarildi',
+      });
+      expect(await read(approved.id)).toMatchObject({
+        status: 'reversed',
+        closed_reason:
+          'Buyurtma orqaga qaytarildi — tasdiqlangan xarajat teskari yozildi',
+        closed_by_user_id: '1',
+      });
+    });
+
+    it('⭐ TC9: bitta buyurtmada ikkinchi ochiq so‘rov — 23505 partial unique indeksda (tanib olinadi)', async () => {
+      const first = await insert();
+      const error = await insert({ orderId: Number(first.orderId) }).catch(
+        (e: unknown) => e,
+      );
+      expect(error).toBeInstanceOf(QueryFailedError);
+      const { helpers } = makeService();
+      expect(
+        helpers.isUniqueViolation(error, EXTRA_COST_PENDING_UNIQUE_INDEX),
+      ).toBe(true);
+      // Yopilgan (void) yonida yangi ochiq so'rov — mumkin.
+      await db.query(
+        `UPDATE order_schema.order_extra_cost_approvals SET status = 'void' WHERE id = $1`,
+        [first.id],
+      );
+      await expect(
+        insert({ orderId: Number(first.orderId) }),
+      ).resolves.toBeDefined();
     });
   },
 );

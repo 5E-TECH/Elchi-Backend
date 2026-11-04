@@ -26,6 +26,8 @@ import { OrderLifecycleService } from './lifecycle/order-lifecycle.service';
 import { Order, Order_source } from './entities/order.entity';
 import { OrderItem } from './entities/order-item.entity';
 import { OrderSettlement } from './entities/order-settlement.entity';
+import { OrderExtraCostApproval } from './entities/order-extra-cost-approval.entity';
+import { extraCostApprovalTable } from './testing/extra-cost-kit-spec';
 
 type Row = Record<string, unknown>;
 type Svc = OrderLifecycleService & Record<string, any>;
@@ -68,18 +70,20 @@ function makeCreateHarness() {
     release: jest.fn(),
     manager: {
       getRepository: jest.fn((entity: unknown) =>
-        entity === Order
-          ? {
-              create: mocks.orderCreate,
-              save: mocks.orderSave,
-              update: jest.fn(),
-            }
-          : // IR2OHIiN: mahsulot qatorlari endi DOIM yoziladi.
-            {
-              createQueryBuilder: () => ({
-                insert: () => ({ values: () => ({ execute: jest.fn() }) }),
-              }),
-            },
+        entity === OrderExtraCostApproval
+          ? extraCostApprovalTable()
+          : entity === Order
+            ? {
+                create: mocks.orderCreate,
+                save: mocks.orderSave,
+                update: jest.fn(),
+              }
+            : // IR2OHIiN: mahsulot qatorlari endi DOIM yoziladi.
+              {
+                createQueryBuilder: () => ({
+                  insert: () => ({ values: () => ({ execute: jest.fn() }) }),
+                }),
+              },
       ),
     },
   };
@@ -252,6 +256,7 @@ function makeSellHarness(order: Row) {
   };
   const tx = {
     getRepository: jest.fn((entity: unknown) => {
+      if (entity === OrderExtraCostApproval) return extraCostApprovalTable();
       if (entity === OrderSettlement) return settlementRepo;
       if (entity === OrderItem) return {};
       return {};

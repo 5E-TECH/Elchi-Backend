@@ -922,13 +922,35 @@ export class OrderSettlementService {
           .orderBy('o.id', 'ASC')
           .limit(COURIER_TRANSFER_SAMPLE_LIMIT)
           .getRawMany<{ id: string; status: string }>(),
-        this.dataSource.getRepository(OrderExtraCostApproval).count({
-          where: {
-            requested_by_user_id: courierId,
-            status: 'pending',
+        /**
+         * (hwTkXsGi) Faqat haqiqatda kutayotgan so'rovlar: buyurtmasi hali
+         * «kutilmoqda» va shu kuryerda (ushlovchi yoki `courier_id` — sotuv
+         * yo'li bilan bir xil). Ilgari buyurtmasi allaqachon sotilgan /
+         * qaytarilgan eski so'rov ham sanalib, kuryerni o'tkazish va
+         * filialdan chiqarish abadiy 409 bilan to'silardi.
+         */
+        this.dataSource
+          .getRepository(OrderExtraCostApproval)
+          .createQueryBuilder('a')
+          .innerJoin(Order, 'o', 'o.id = a.order_id')
+          .where('a.requested_by_user_id = :courierId', { courierId })
+          .andWhere('a.status = :pending AND a.isDeleted = :isDeleted', {
+            pending: 'pending',
             isDeleted: false,
-          },
-        }),
+          })
+          .andWhere('o.isDeleted = :isDeleted AND o.status = :waiting', {
+            isDeleted: false,
+            waiting: Order_status.WAITING,
+          })
+          .andWhere(
+            new Brackets((w) => {
+              w.where(
+                'o.holder_type = :courierHolder AND o.holder_courier_id = :courierId',
+                { courierHolder: OrderHolderType.COURIER, courierId },
+              ).orWhere('o.courier_id = :courierId', { courierId });
+            }),
+          )
+          .getCount(),
       ]);
 
       return successRes(

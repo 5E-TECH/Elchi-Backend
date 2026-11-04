@@ -35,6 +35,8 @@ import {
 import { OrderLifecycleService } from './lifecycle/order-lifecycle.service';
 import { OrderSettlement } from './entities/order-settlement.entity';
 import { computeSaleMarketPaymentLimit } from './domain/order-money';
+import { OrderExtraCostApproval } from './entities/order-extra-cost-approval.entity';
+import { extraCostApprovalTable } from './testing/extra-cost-kit-spec';
 
 type Row = Record<string, any>;
 
@@ -112,7 +114,11 @@ function makeWorld(opts: { markets: Row[]; couriers: Row[]; orders: Row[] }) {
     };
     const manager = {
       getRepository: jest.fn((entity: unknown) =>
-        entity === OrderSettlement ? settlementRepo : { update: jest.fn() },
+        entity === OrderExtraCostApproval
+          ? extraCostApprovalTable()
+          : entity === OrderSettlement
+            ? settlementRepo
+            : { update: jest.fn() },
       ),
     };
     pending.set(manager, ops);

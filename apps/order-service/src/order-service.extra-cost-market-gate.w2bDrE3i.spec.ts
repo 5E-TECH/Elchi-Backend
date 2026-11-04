@@ -2,6 +2,11 @@ import { RpcException } from '@nestjs/microservices';
 import { of } from 'rxjs';
 import { Cashbox_type, ExpenseProofCondition, Order_status } from '@app/common';
 import { OrderLifecycleService } from './lifecycle/order-lifecycle.service';
+import {
+  extraCostApprovalTable,
+  extraCostDataSource,
+  extraCostManager,
+} from './testing/extra-cost-kit-spec';
 
 /**
  * w2bDrE3i — market bo'yicha qo'shimcha xarajat darvozasi:
@@ -29,17 +34,12 @@ describe('w2bDrE3i — market qo`shimcha xarajat darvozasi', () => {
   const MANAGER = { id: '201', roles: ['manager'], branch_id: '77' };
 
   function makeService(market: Record<string, unknown>) {
-    const extraCostApprovalRepo = {
-      findOne: jest.fn().mockResolvedValue(null),
-      create: jest.fn((entity: any) => entity),
-      save: jest.fn((entity: any) => ({
-        id: 'approval-1',
-        createdAt: new Date('2026-10-16T10:00:00.000Z'),
-        updatedAt: new Date('2026-10-16T10:00:00.000Z'),
-        isDeleted: false,
-        ...entity,
-      })),
-    };
+    const orderRepo = { findOne: jest.fn().mockResolvedValue(order) };
+    const extraCostApprovalRepo = extraCostApprovalTable();
+    const dataSource = extraCostDataSource(
+      extraCostManager({ table: extraCostApprovalRepo, orderRepo }),
+      extraCostApprovalRepo,
+    );
     const lookup = {
       getMarketsByIds: jest.fn().mockResolvedValue([
         {
@@ -80,8 +80,8 @@ describe('w2bDrE3i — market qo`shimcha xarajat darvozasi', () => {
       getHqBranchId: jest.fn().mockResolvedValue('1'),
     };
     const service = new OrderLifecycleService(
-      {} as any,
-      { findOne: jest.fn().mockResolvedValue(order) } as any,
+      dataSource as any,
+      orderRepo as any,
       {} as any,
       {} as any,
       {} as any,

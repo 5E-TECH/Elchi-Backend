@@ -2,7 +2,18 @@ import { Column, Entity, Index } from 'typeorm';
 import { BaseEntity, numericTransformer } from '@app/common';
 
 export type ExtraCostApprovalAction = 'sell' | 'cancel' | 'partly_sell';
-export type ExtraCostApprovalStatus = 'pending' | 'approved' | 'rejected';
+/**
+ * (hwTkXsGi) `void` — market qaror qilmagan, so'rov yopildi (buyurtma boshqa
+ * amal bilan yakunlandi, orqaga qaytarildi, yangi so'rov bilan almashtirildi
+ * yoki tasdiqda buyurtma endi «kutilmoqda» emas). `reversed` — tasdiqlangan
+ * xarajat buyurtma orqaga qaytarilganda teskari yozildi.
+ */
+export type ExtraCostApprovalStatus =
+  'pending' | 'approved' | 'rejected' | 'void' | 'reversed';
+
+/** (hwTkXsGi) Bitta buyurtmada bittadan ortiq ochiq so'rov yo'q — migratsiya 206. */
+export const EXTRA_COST_PENDING_UNIQUE_INDEX =
+  'UQ_ORDER_EXTRA_COST_APPROVAL_PENDING';
 
 @Entity({ name: 'order_extra_cost_approvals' })
 @Index('IDX_ORDER_EXTRA_COST_APPROVAL_MARKET_STATUS', [
@@ -11,6 +22,10 @@ export type ExtraCostApprovalStatus = 'pending' | 'approved' | 'rejected';
   'createdAt',
 ])
 @Index('IDX_ORDER_EXTRA_COST_APPROVAL_ORDER_STATUS', ['order_id', 'status'])
+@Index(EXTRA_COST_PENDING_UNIQUE_INDEX, ['order_id'], {
+  unique: true,
+  where: `"status" = 'pending' AND "is_deleted" = false`,
+})
 export class OrderExtraCostApproval extends BaseEntity {
   @Column({ type: 'bigint' })
   order_id!: string;
@@ -72,4 +87,19 @@ export class OrderExtraCostApproval extends BaseEntity {
   /** (DuST9k8j) Rad etish sababi — ExtraCostRejectReason (yopiq ro'yxat). */
   @Column({ type: 'varchar', length: 40, nullable: true })
   reject_reason!: string | null;
+
+  /**
+   * (hwTkXsGi) `void` / `reversed` sababi va vaqti. Market qarori
+   * (`decided_*`, `decision_comment`) ustidan yozilmaydi — tasdiqlangan
+   * xarajat teskari qaytarilsa ham kim tasdiqlagani saqlanadi.
+   */
+  @Column({ type: 'text', nullable: true })
+  closed_reason!: string | null;
+
+  @Column({ type: 'timestamptz', nullable: true })
+  closed_at!: Date | null;
+
+  /** Yopishga sabab bo'lgan foydalanuvchi; tizim yoki hamkor — NULL. */
+  @Column({ type: 'bigint', nullable: true })
+  closed_by_user_id!: string | null;
 }

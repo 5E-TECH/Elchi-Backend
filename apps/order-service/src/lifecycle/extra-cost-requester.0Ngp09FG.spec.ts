@@ -1,6 +1,8 @@
 import { Logger } from '@nestjs/common';
 import { of, throwError } from 'rxjs';
+import { Order_status } from '@app/common';
 import { OrderLifecycleService } from './order-lifecycle.service';
+import { extraCostManager } from '../testing/extra-cost-kit-spec';
 
 /**
  * 0Ngp09FG — qo'shimcha xarajat so'rovida so'rovchi ismi va buyurtma raqami.
@@ -72,6 +74,15 @@ function makeService(
   ) as OrderLifecycleService;
   Object.assign(svc, {
     extraCostApprovalRepo: repo,
+    // (hwTkXsGi) tasdiq darvozasi: buyurtma «kutilmoqda», holati o'zgarmagan.
+    orderRepo: {
+      findOne: jest.fn().mockResolvedValue({
+        id: '76',
+        status: Order_status.WAITING,
+        isDeleted: false,
+      }),
+    },
+    dataSource: { manager: extraCostManager({ table: repo as never }) },
     identityClient: { send: identitySend },
     outbox: { enqueue: jest.fn().mockResolvedValue(undefined) },
     activityLog: { log: jest.fn().mockResolvedValue(undefined) },

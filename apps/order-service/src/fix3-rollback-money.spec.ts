@@ -35,6 +35,11 @@ import {
   isCourierRemittedSettlement,
   resolveRollbackReversalActor,
 } from './domain/order-money';
+import { OrderExtraCostApproval } from './entities/order-extra-cost-approval.entity';
+import {
+  extraCostApprovalTable,
+  extraCostReplay,
+} from './testing/extra-cost-kit-spec';
 
 type Leg = Record<string, unknown>;
 type Row = Record<string, unknown>;
@@ -109,9 +114,11 @@ function makeRollbackService(
     release: jest.fn(),
     manager: {
       getRepository: jest.fn((entity: unknown) =>
-        entity === Order
-          ? { findOne: jest.fn().mockResolvedValue({ ...order }) }
-          : {},
+        entity === OrderExtraCostApproval
+          ? extraCostApprovalTable()
+          : entity === Order
+            ? { findOne: jest.fn().mockResolvedValue({ ...order }) }
+            : {},
       ),
     },
   };
@@ -774,6 +781,7 @@ function makeSellService(
   };
   const tx = {
     getRepository: jest.fn((entity: unknown) => {
+      if (entity === OrderExtraCostApproval) return extraCostApprovalTable();
       if (entity === OrderSettlement) return settlementRepo;
       if (entity === OrderItem) {
         return {
@@ -933,6 +941,7 @@ describe('M13 — qo`shimcha xarajat P&L yozuvlari urinish tokeni bilan', () => 
       '7001',
       { extraCost: 5000, extraCostApproved: true },
       'cancel-req-1',
+      extraCostReplay(h.s),
     );
 
     const [entry] = ledgerOf(h.enqueued, 'cancel_extra_cost');

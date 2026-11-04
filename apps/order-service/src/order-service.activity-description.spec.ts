@@ -9,6 +9,8 @@ import { Cashbox_type, Order_status, Where_deliver } from '@app/common';
 import { OrderLifecycleService } from './lifecycle/order-lifecycle.service';
 import { Order } from './entities/order.entity';
 import { OrderSettlement } from './entities/order-settlement.entity';
+import { OrderExtraCostApproval } from './entities/order-extra-cost-approval.entity';
+import { extraCostApprovalTable } from './testing/extra-cost-kit-spec';
 
 const ORDER = {
   id: '7001',
@@ -33,7 +35,11 @@ function makeService() {
   };
   const tx = {
     getRepository: jest.fn((entity: unknown) =>
-      entity === OrderSettlement ? settlementRepo : { update: jest.fn() },
+      entity === OrderExtraCostApproval
+        ? extraCostApprovalTable()
+        : entity === OrderSettlement
+          ? settlementRepo
+          : { update: jest.fn() },
     ),
   };
   const queryRunner = {

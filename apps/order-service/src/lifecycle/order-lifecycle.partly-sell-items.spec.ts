@@ -4,6 +4,8 @@ import { Order_status } from '@app/common';
 import { Order } from '../entities/order.entity';
 import { OrderItem } from '../entities/order-item.entity';
 import { OrderLifecycleService } from './order-lifecycle.service';
+import { OrderExtraCostApproval } from '../entities/order-extra-cost-approval.entity';
+import { extraCostApprovalTable } from '../testing/extra-cost-kit-spec';
 
 /**
  * QISMAN SOTUV — katalogsiz (hamkor) qatorlar butun oqim bo'ylab.
@@ -30,6 +32,10 @@ function setup(existingItems: Row[], orderExtra: Record<string, unknown> = {}) {
   const savedItems: Array<{ id: string; quantity: number }> = [];
   const childItems: Array<Record<string, unknown>> = [];
   const orderUpdates: Array<Record<string, unknown>> = [];
+  // (hwTkXsGi) buyurtmada kuryerning eski ochiq xarajat so'rovi bor.
+  const approvals = extraCostApprovalTable([
+    { id: '7', order_id: '120', status: 'pending', action: 'sell' },
+  ]);
   const queryRunner = {
     connect: jest.fn(),
     startTransaction: jest.fn(),
@@ -38,6 +44,7 @@ function setup(existingItems: Row[], orderExtra: Record<string, unknown> = {}) {
     release: jest.fn(),
     manager: {
       getRepository: (entity: unknown) => {
+        if (entity === OrderExtraCostApproval) return approvals;
         if (entity === OrderItem) {
           return {
             save: jest.fn((row: Row) => {
@@ -157,6 +164,7 @@ function setup(existingItems: Row[], orderExtra: Record<string, unknown> = {}) {
     childOrders,
     orderUpdates,
     queryRunner,
+    approvals,
   };
 }
 
@@ -175,6 +183,21 @@ describe('partlySellOrder — katalogsiz (hamkor) qatorlar', () => {
     ]);
     expect(t.orderUpdates).toContainEqual({ product_quantity: 1 });
     expect(t.queryRunner.commitTransaction).toHaveBeenCalled();
+  });
+
+  it('hwTkXsGi: qisman sotuv haqiqatda bajarilsa — eski ochiq xarajat so`rovi void', async () => {
+    const t = setup([
+      { id: '5501', product_id: null, product_name: 'tv', quantity: 2 },
+    ]);
+
+    await t.partlySell([{ order_item_id: '5501', quantity: 1 }]);
+
+    expect(t.approvals.row('7')).toMatchObject({
+      status: 'void',
+      closed_reason:
+        "Buyurtma boshqa so'rov bilan yakunlandi — eski so'rov yopildi",
+      closed_by_user_id: '301',
+    });
   });
 
   it('ikkita katalogsiz qator — har biri o`z qatori bo`yicha kamayadi', async () => {

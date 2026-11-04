@@ -2,9 +2,10 @@ import { RpcException } from '@nestjs/microservices';
 import type { RmqContext } from '@nestjs/microservices';
 import { PATTERN_METADATA } from '@nestjs/microservices/constants';
 import { Brackets, QueryFailedError } from 'typeorm';
+import { Order_status } from '@app/common';
 import { OrderServiceController } from './order-service.controller';
 import { OrderSettlementService } from './settlement/order-settlement.service';
-import { Order } from './entities/order.entity';
+import { Order, OrderHolderType } from './entities/order.entity';
 import { OrderExtraCostApproval } from './entities/order-extra-cost-approval.entity';
 import { OrderSettlementCarry } from './entities/order-settlement-carry.entity';
 
@@ -128,8 +129,15 @@ describe('OrderSettlementService.getCourierTransferCheck', () => {
         ),
       ),
     };
+    const approvalQb: any = {
+      innerJoin: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      getCount: jest.fn().mockResolvedValue(opts.approvals ?? 0),
+    };
     const approvalRepo = {
-      count: jest.fn().mockResolvedValue(opts.approvals ?? 0),
+      createQueryBuilder: jest.fn(() => approvalQb),
+      qb: approvalQb,
     };
     const dataSource = {
       options: { schema: 'order_schema' },
@@ -397,12 +405,34 @@ describe('OrderSettlementService.getCourierTransferCheck', () => {
       courier_id: '263',
     });
 
-    expect(approvalRepo.count).toHaveBeenCalledWith({
-      where: {
-        requested_by_user_id: '263',
-        status: 'pending',
-        isDeleted: false,
-      },
+    // (hwTkXsGi) faqat buyurtmasi hali «kutilmoqda» va shu kuryerda turgan
+    // pending so'rovlar — sotilgan/qaytarilgan buyurtmaning eski so'rovi emas.
+    const qb = approvalRepo.qb;
+    expect(approvalRepo.createQueryBuilder).toHaveBeenCalledWith('a');
+    expect(qb.innerJoin).toHaveBeenCalledWith(Order, 'o', 'o.id = a.order_id');
+    expect(qb.where).toHaveBeenCalledWith(
+      'a.requested_by_user_id = :courierId',
+      { courierId: '263' },
+    );
+    expect(qb.andWhere).toHaveBeenCalledWith(
+      'a.status = :pending AND a.isDeleted = :isDeleted',
+      { pending: 'pending', isDeleted: false },
+    );
+    expect(qb.andWhere).toHaveBeenCalledWith(
+      'o.isDeleted = :isDeleted AND o.status = :waiting',
+      { isDeleted: false, waiting: Order_status.WAITING },
+    );
+    const holder = (qb.andWhere.mock.calls as unknown[][])
+      .map(([condition]) => condition)
+      .find((condition) => condition instanceof Brackets) as Brackets;
+    const inner = { where: jest.fn().mockReturnThis(), orWhere: jest.fn() };
+    holder.whereFactory(inner as never);
+    expect(inner.where).toHaveBeenCalledWith(
+      'o.holder_type = :courierHolder AND o.holder_courier_id = :courierId',
+      { courierHolder: OrderHolderType.COURIER, courierId: '263' },
+    );
+    expect(inner.orWhere).toHaveBeenCalledWith('o.courier_id = :courierId', {
+      courierId: '263',
     });
     expect(res.data.pending_extra_cost_approvals).toBe(2);
   });
@@ -461,7 +491,7 @@ describe('OrderSettlementService.getCourierTransferCheck', () => {
 
     it('qo`shimcha xarajat so`rovlari hisobi yiqilsa ham — RpcException 500', async () => {
       const { service, approvalRepo } = makeService();
-      approvalRepo.count.mockRejectedValue(new Error('pool exhausted'));
+      approvalRepo.qb.getCount.mockRejectedValue(new Error('pool exhausted'));
 
       const err = await rpcErrorOf(
         service.getCourierTransferCheck({ courier_id: '263' }),

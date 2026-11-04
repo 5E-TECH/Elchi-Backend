@@ -24,6 +24,12 @@ import { Cashbox_type, Order_status, Where_deliver } from '@app/common';
 import { OrderLifecycleService } from './lifecycle/order-lifecycle.service';
 import { Order, OrderHolderType, Order_source } from './entities/order.entity';
 import { OrderSettlement } from './entities/order-settlement.entity';
+import { OrderExtraCostApproval } from './entities/order-extra-cost-approval.entity';
+import {
+  extraCostApprovalTable,
+  extraCostDataSource,
+  extraCostManager,
+} from './testing/extra-cost-kit-spec';
 
 type Row = Record<string, unknown>;
 type Svc = OrderLifecycleService & Record<string, any>;
@@ -611,8 +617,9 @@ const COURIER_HELD: Row = {
   courier_id: '289',
 };
 
-function makeSellHarness(orderOver: Row = {}) {
+function makeSellHarness(orderOver: Row = {}, approvalRows: Row[] = []) {
   const order: Row = { ...BRANCH_HELD_WAITING, ...orderOver };
+  const approvals = extraCostApprovalTable(approvalRows);
   const updates: Row[] = [];
   const settlementRepo = {
     findOne: jest.fn().mockResolvedValue(null),
@@ -628,7 +635,11 @@ function makeSellHarness(orderOver: Row = {}) {
     release: jest.fn(),
     manager: {
       getRepository: jest.fn((entity: unknown) =>
-        entity === OrderSettlement ? settlementRepo : {},
+        entity === OrderSettlement
+          ? settlementRepo
+          : entity === OrderExtraCostApproval
+            ? approvals
+            : {},
       ),
     },
   };
@@ -691,7 +702,7 @@ function makeSellHarness(orderOver: Row = {}) {
     queueExternalStatusSync: jest.fn().mockResolvedValue(undefined),
     updateCashboxBalance: jest.fn().mockResolvedValue(undefined),
   });
-  return { s, mocks, updates };
+  return { s, mocks, updates, approvals };
 }
 
 describe('LC-04 — menejer kuryer qo`lidagi buyurtmani sotmaydi', () => {
@@ -773,6 +784,54 @@ describe('CODE-09 — sotuv eski qaytarish so`rovi belgisini tozalaydi', () => {
       status: Order_status.SOLD,
       return_requested: false,
     });
+  });
+});
+
+describe('hwTkXsGi — amal haqiqatda bajarilsa ochiq so`rov yopiladi', () => {
+  const open = [
+    {
+      id: '7',
+      order_id: '7001',
+      status: 'pending',
+      action: 'sell',
+      amount: 10000,
+    },
+    {
+      id: '8',
+      order_id: '7002',
+      status: 'pending',
+      action: 'sell',
+      amount: 10000,
+    },
+  ];
+
+  it('⭐ TC1: xarajatsiz sotuv — eski so`rov shu tranzaksiyada void, boshqa buyurtmaniki tegilmaydi', async () => {
+    const h = makeSellHarness({}, open);
+
+    await h.s.sellOrder(MANAGER, '7001', {});
+
+    expect(h.approvals.row('7')).toMatchObject({
+      status: 'void',
+      closed_reason:
+        "Buyurtma boshqa so'rov bilan yakunlandi — eski so'rov yopildi",
+      closed_by_user_id: MANAGER.id,
+    });
+    expect(h.approvals.row('8')!.status).toBe('pending');
+    expect(h.mocks.createQueryRunner).toHaveBeenCalledTimes(1);
+  });
+
+  it('sotuv yiqilsa (WAITING emas) — so`rov o`zgarmaydi', async () => {
+    const h = makeSellHarness({}, open);
+    (
+      h.s as unknown as { lockWaitingOrder: jest.Mock }
+    ).lockWaitingOrder.mockRejectedValue(
+      new RpcException({ statusCode: 400, message: 'WAITING emas' }),
+    );
+
+    await expect(h.s.sellOrder(MANAGER, '7001', {})).rejects.toBeInstanceOf(
+      RpcException,
+    );
+    expect(h.approvals.row('7')!.status).toBe('pending');
   });
 });
 
@@ -943,23 +1002,21 @@ function makeApprovalService(pendingApproval: Row | null) {
     holder_branch_id: '77',
     comment: null,
   };
-  const saved: Row[] = [];
-  const extraCostApprovalRepo = {
-    findOne: jest
-      .fn()
-      .mockResolvedValue(pendingApproval ? { ...pendingApproval } : null),
-    create: jest.fn((entity: Row) => entity),
-    save: jest.fn((entity: Row) => {
-      saved.push({ ...entity });
-      return Promise.resolve({
-        id: entity.id ?? 'approval-new',
-        createdAt: new Date('2026-10-01T10:00:00.000Z'),
-        updatedAt: new Date('2026-10-01T10:00:00.000Z'),
-        isDeleted: false,
-        ...entity,
-      });
-    }),
-  };
+  const orderRepo = { findOne: jest.fn().mockResolvedValue(order) };
+  const extraCostApprovalRepo = extraCostApprovalTable(
+    pendingApproval
+      ? [
+          {
+            createdAt: new Date('2026-10-01T10:00:00.000Z'),
+            ...pendingApproval,
+          },
+        ]
+      : [],
+  );
+  const dataSource = extraCostDataSource(
+    extraCostManager({ table: extraCostApprovalRepo, orderRepo }),
+    extraCostApprovalRepo,
+  );
   const lookup = {
     getMarketsByIds: jest.fn().mockResolvedValue([
       {
@@ -997,8 +1054,8 @@ function makeApprovalService(pendingApproval: Row | null) {
     getHqBranchId: jest.fn().mockResolvedValue(HQ_ID),
   };
   const service = new OrderLifecycleService(
-    {} as never,
-    { findOne: jest.fn().mockResolvedValue(order) } as never,
+    dataSource as never,
+    orderRepo as never,
     {} as never,
     {} as never,
     {} as never,
@@ -1018,7 +1075,14 @@ function makeApprovalService(pendingApproval: Row | null) {
     lookup as never,
     {} as never,
   );
-  return { service, saved, save: extraCostApprovalRepo.save };
+  return {
+    service,
+    table: extraCostApprovalRepo,
+    save: extraCostApprovalRepo.save,
+    /** [amal, holat] — jadval tartibida (eski, keyin yangi). */
+    states: () =>
+      extraCostApprovalRepo.rows.map((row) => [row.action, row.status]),
+  };
 }
 
 const APPROVAL_COURIER = { id: '301', roles: ['courier'], branch_id: '77' };
@@ -1062,18 +1126,19 @@ describe('M3 — kutilayotgan tasdiq faqat AYNAN shu so`rov bo`lsa qaytariladi',
       action: 'cancel',
       amount: 15000,
     });
-    expect(h.saved).toHaveLength(2);
     // 1) eski SOTISH so'rovi endi kutilmaydi — market uni tasdiqlay olmaydi.
-    expect(h.saved[0]).toMatchObject({
-      id: 'approval-1',
+    // (hwTkXsGi) `void`, `rejected` emas: market rad etmagan, qaror maydonlari bo'sh.
+    expect(h.table.row('approval-1')).toMatchObject({
       action: 'sell',
-      status: 'rejected',
-      decided_by_user_id: '301',
+      status: 'void',
+      closed_by_user_id: '301',
+      closed_reason:
+        "Yangi so'rov bilan almashtirildi (cancel, 15000 so'm) — eski sell so'rovi yopildi",
     });
-    expect(h.saved[0].decided_at).toBeInstanceOf(Date);
-    expect(String(h.saved[0].decision_comment)).toContain('almashtirildi');
+    expect(h.table.row('approval-1')!.closed_at).toBeInstanceOf(Date);
+    expect(h.table.row('approval-1')!.decided_at).toBeUndefined();
     // 2) yangi BEKOR so'rovi — o'z summasi bilan.
-    expect(h.saved[1]).toMatchObject({
+    expect(h.table.row('approval-new')).toMatchObject({
       action: 'cancel',
       amount: 15000,
       status: 'pending',
@@ -1094,8 +1159,8 @@ describe('M3 — kutilayotgan tasdiq faqat AYNAN shu so`rov bo`lsa qaytariladi',
     })) as ApprovalResponse;
 
     expect(res.data.approval).toMatchObject({ action: 'sell', amount: 12000 });
-    expect(h.saved.map((row) => [row.action, row.status])).toEqual([
-      ['cancel', 'rejected'],
+    expect(h.states()).toEqual([
+      ['cancel', 'void'],
       ['sell', 'pending'],
     ]);
   });
@@ -1114,7 +1179,10 @@ describe('M3 — kutilayotgan tasdiq faqat AYNAN shu so`rov bo`lsa qaytariladi',
     })) as ApprovalResponse;
 
     expect(res.data.approval).toMatchObject({ action: 'sell', amount: 8000 });
-    expect(h.saved.map((row) => row.status)).toEqual(['rejected', 'pending']);
+    expect(h.states()).toEqual([
+      ['sell', 'void'],
+      ['sell', 'pending'],
+    ]);
   });
 
   it('aynan shu so`rov qayta yuborilsa (izoh boshqa) — eski so`rov qaytadi, yangisi ochilmaydi', async () => {
@@ -1158,8 +1226,8 @@ describe('M3 — kutilayotgan tasdiq faqat AYNAN shu so`rov bo`lsa qaytariladi',
     })) as ApprovalResponse;
 
     expect(res.data.approval.id).toBe('approval-new');
-    expect(h.saved.map((row) => [row.action, row.status])).toEqual([
-      ['partly_sell', 'rejected'],
+    expect(h.states()).toEqual([
+      ['partly_sell', 'void'],
       ['partly_sell', 'pending'],
     ]);
   });
@@ -1200,7 +1268,7 @@ describe('M3 — kutilayotgan tasdiq faqat AYNAN shu so`rov bo`lsa qaytariladi',
       pending({
         action: 'sell',
         amount: 12000,
-        status: 'rejected',
+        status: 'void',
         operation_payload: { extraCost: 12000 },
       }),
     );
@@ -1213,7 +1281,10 @@ describe('M3 — kutilayotgan tasdiq faqat AYNAN shu so`rov bo`lsa qaytariladi',
       ),
     );
 
-    expect(error.statusCode).toBe(400);
+    expect(error).toMatchObject({
+      statusCode: 409,
+      message: "Bu so'rov allaqachon yakunlangan",
+    });
     expect(sellSpy).not.toHaveBeenCalled();
   });
 });

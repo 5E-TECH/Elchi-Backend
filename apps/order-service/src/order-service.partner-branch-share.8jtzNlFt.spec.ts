@@ -12,6 +12,8 @@ import { OrderLookupService } from './lookup/order-lookup.service';
 import { OrderSettlement } from './entities/order-settlement.entity';
 import { computeSellProfit } from './domain/order-money';
 import { createMemoryBranchService } from '../../branch-service/test/branch-memory-repo';
+import { OrderExtraCostApproval } from './entities/order-extra-cost-approval.entity';
+import { extraCostApprovalTable } from './testing/extra-cost-kit-spec';
 
 /**
  * 8jtzNlFt — hamkor filial ulushi REAL MA'LUMOT bilan.
@@ -187,7 +189,11 @@ function makeSaleWorld(
     };
     const manager = {
       getRepository: jest.fn((entity: unknown) =>
-        entity === OrderSettlement ? settlementRepo : { update: jest.fn() },
+        entity === OrderExtraCostApproval
+          ? extraCostApprovalTable()
+          : entity === OrderSettlement
+            ? settlementRepo
+            : { update: jest.fn() },
       ),
     };
     pending.set(manager, ops);

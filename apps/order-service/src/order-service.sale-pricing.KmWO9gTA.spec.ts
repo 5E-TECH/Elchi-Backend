@@ -48,6 +48,11 @@ import {
   readSalePricingConfig,
   SALE_QUOTE_PATTERN,
 } from './pricing/sale-pricing';
+import { OrderExtraCostApproval } from './entities/order-extra-cost-approval.entity';
+import {
+  extraCostApprovalTable,
+  extraCostReplay,
+} from './testing/extra-cost-kit-spec';
 
 type Row = Record<string, any>;
 type Leg = Record<string, unknown>;
@@ -211,6 +216,7 @@ function makeSaleWorld(opts: WorldOpts = {}) {
   };
   const tx = {
     getRepository: jest.fn((entity: unknown) => {
+      if (entity === OrderExtraCostApproval) return extraCostApprovalTable();
       if (entity === OrderSettlement) return settlementRepo;
       if (entity === OrderItem) {
         return {
@@ -332,9 +338,11 @@ function makeRollbackWorld(order: Row, settlement: Row, market: Row = MARKET) {
     release: jest.fn(),
     manager: {
       getRepository: jest.fn((entity: unknown) =>
-        entity === Order
-          ? { findOne: jest.fn().mockResolvedValue({ ...order }) }
-          : {},
+        entity === OrderExtraCostApproval
+          ? extraCostApprovalTable()
+          : entity === Order
+            ? { findOne: jest.fn().mockResolvedValue({ ...order }) }
+            : {},
       ),
     },
   };
@@ -414,6 +422,7 @@ function makeProviderWorld(opts: { market?: Row; quote?: Row } = {}) {
     release: jest.fn(),
     manager: {
       getRepository: jest.fn((entity: unknown) => {
+        if (entity === OrderExtraCostApproval) return extraCostApprovalTable();
         if (entity === Order) {
           return {
             save: jest.fn((value: Row) => {
@@ -1173,6 +1182,7 @@ describe('KmWO9gTA — bekor qilish (TC8)', () => {
       '7001',
       { extraCost: 5000, extraCostApproved: true },
       'cancel-req-1',
+      extraCostReplay(off.s),
     );
     engineOn();
     const on = makeSaleWorld();
@@ -1181,6 +1191,7 @@ describe('KmWO9gTA — bekor qilish (TC8)', () => {
       '7001',
       { extraCost: 5000, extraCostApproved: true },
       'cancel-req-1',
+      extraCostReplay(on.s),
     );
     expect(on.quoteCalls()).toHaveLength(0);
     expect(shape(on.legs)).toEqual(shape(off.legs));

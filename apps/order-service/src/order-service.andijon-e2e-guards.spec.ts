@@ -26,6 +26,11 @@ import {
 import { OrderLifecycleService } from './lifecycle/order-lifecycle.service';
 import { Order } from './entities/order.entity';
 import { OrderSettlement } from './entities/order-settlement.entity';
+import { OrderExtraCostApproval } from './entities/order-extra-cost-approval.entity';
+import {
+  extraCostApprovalTable,
+  extraCostReplay,
+} from './testing/extra-cost-kit-spec';
 
 type Row = Record<string, unknown>;
 
@@ -68,7 +73,11 @@ function makeService(opts: { items?: Row[] } = {}) {
   };
   const tx = {
     getRepository: jest.fn((entity: unknown) =>
-      entity === OrderSettlement ? settlementRepo : { update: jest.fn() },
+      entity === OrderExtraCostApproval
+        ? extraCostApprovalTable()
+        : entity === OrderSettlement
+          ? settlementRepo
+          : { update: jest.fn() },
     ),
   };
   const queryRunner = {
@@ -220,6 +229,33 @@ describe('T0UGh8bL / PUvKXWVw / pLmAsEsj — bekor qilish', () => {
     expect(updateFull).not.toHaveBeenCalled();
   });
 
+  it('hwTkXsGi: bekor qilish haqiqatda bajarilsa — ochiq so`rovlar shu tranzaksiyada yopiladi (qulfdan keyin)', async () => {
+    const { s, requester, updateFull } = makeService();
+    const close = jest.spyOn(
+      s as unknown as Record<string, () => Promise<void>>,
+      'applyExtraCostApprovalsOnExecution',
+    );
+
+    await s.cancelOrder(requester, '7001', {
+      reason: CancelReason.CUSTOMER_REFUSED,
+    });
+
+    expect(close).toHaveBeenCalledWith(
+      expect.objectContaining({ getRepository: expect.any(Function) }),
+      '7001',
+      requester,
+      undefined,
+    );
+    const lock = (s as unknown as { lockWaitingOrder: jest.Mock })
+      .lockWaitingOrder;
+    expect(lock.mock.invocationCallOrder[0]).toBeLessThan(
+      close.mock.invocationCallOrder[0],
+    );
+    expect(close.mock.invocationCallOrder[0]).toBeLessThan(
+      updateFull.mock.invocationCallOrder[0],
+    );
+  });
+
   it('⭐ reason=CUSTOMER_REFUSED — return_reason yoziladi, to_be_paid 0', async () => {
     const { s, requester, updateFull } = makeService();
 
@@ -351,10 +387,13 @@ describe('T0UGh8bL / PUvKXWVw / pLmAsEsj — bekor qilish', () => {
   it('bu qoidadan oldin ochilgan market tasdig`i sababsiz ham yakunlanadi', async () => {
     const { s, requester, updateFull } = makeService();
 
-    await s.cancelOrder(requester, '7001', {
-      extraCost: 5000,
-      extraCostApproved: true,
-    });
+    await s.cancelOrder(
+      requester,
+      '7001',
+      { extraCost: 5000, extraCostApproved: true },
+      undefined,
+      extraCostReplay(s),
+    );
 
     expect(updateFull).toHaveBeenCalledWith(
       '7001',

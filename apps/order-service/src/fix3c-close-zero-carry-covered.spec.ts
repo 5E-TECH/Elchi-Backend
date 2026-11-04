@@ -42,6 +42,8 @@ import { OrderSettlementService } from './settlement/order-settlement.service';
 import { Order, OrderHolderType } from './entities/order.entity';
 import { OrderSettlement } from './entities/order-settlement.entity';
 import { OrderSettlementCarry } from './entities/order-settlement-carry.entity';
+import { OrderExtraCostApproval } from './entities/order-extra-cost-approval.entity';
+import { extraCostApprovalTable } from './testing/extra-cost-kit-spec';
 
 type Row = Record<string, any>;
 
@@ -268,6 +270,7 @@ function makeWorld(opts: { carryTable?: boolean } = {}) {
     }),
   };
   const repoFor = (entity: unknown): Row => {
+    if (entity === OrderExtraCostApproval) return extraCostApprovalTable();
     if (entity === Order) return orderRepo;
     if (entity === OrderSettlement) return settlementRepo;
     if (entity === OrderSettlementCarry) return carryRepo;

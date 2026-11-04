@@ -6593,13 +6593,19 @@ export class OrderGatewayController {
       "`requested_by: { id, name }` (so'rovchi ismi; identity javob bermasa `name: null`). " +
       'Eski maydonlar (`order_id`, `requested_by_user_id`, `requested_by_role`) o`zgarmagan. ' +
       "(6QLF7nst) MARKET_OPERATOR — faqat o'qish, faqat o'zi biriktirilgan market so'rovlari " +
-      "(marketga biriktirilmagan bo'lsa 403); approve/reject operatorga 403.",
+      "(marketga biriktirilmagan bo'lsa 403); approve/reject operatorga 403. " +
+      "(hwTkXsGi) Yangi holatlar: `void` (market qaror qilmagan, so'rov yopildi) va " +
+      '`reversed` (tasdiqlangan xarajat orqaga qaytarishda teskari yozildi); sababi va ' +
+      'vaqti — `closed_reason`, `closed_at` (boshqa holatlarda null). Approve/reject: ' +
+      "yakunlangan so'rovga 409 «Bu so'rov allaqachon yakunlangan[ — sabab]» (ilgari 400).",
   })
   @ApiQuery({
     name: 'status',
     required: false,
     example: 'pending',
-    enum: ['pending', 'approved', 'rejected'],
+    // (hwTkXsGi) void — market qaror qilmagan, so'rov yopildi (closed_reason);
+    // reversed — tasdiqlangan xarajat buyurtma orqaga qaytarilganda teskari yozildi.
+    enum: ['pending', 'approved', 'rejected', 'void', 'reversed'],
   })
   @ApiQuery({
     name: 'auto_approved',

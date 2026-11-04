@@ -22,6 +22,23 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+### 2026-11-05 — Qo'shimcha xarajat so'rovi «kutilmoqda» bo'lib osilib qolmaydi, tasdiq bir martada yoziladi (hwTkXsGi, migratsiya 1716000000206)
+
+Ilgari kuryer xarajat bilan sotib, keyin xarajatsiz qayta sotsa (yoki ommaviy sotuv / bot / tasdiq o'chiq market), eski so'rov «kutilmoqda» qolardi: market tasdiqlasa 400, kuryerni o'tkazish va filialdan chiqarish 409 bilan to'silardi. Orqaga qaytarishda ham ochiq so'rov qolib, keyin tasdiqlansa eski amal eski xarajat bilan qayta bajarilardi. Tasdiq esa ikki bo'lakda yozilardi (avval «tasdiqlandi», keyin sotuv): oraliqda jarayon to'xtasa, so'rov «tasdiqlandi», sotuv esa yo'q qolardi.
+
+✏️ **Kontrakt:**
+- [order] So'rov holatlariga ikkitasi qo'shildi: `void` — «Bekor bo'ldi» (market qaror qilmagan; amal boshqa yo'l bilan bajarilgan, buyurtma orqaga qaytarilgan, yangi so'rov eskisini almashtirgan yoki tasdiqni bajarib bo'lmagan) va `reversed` — «Teskari qaytarildi» (tasdiqlangan xarajatli buyurtma orqaga qaytarilgan; pul hozirgidek qaytariladi). Yangi maydonlar `closed_reason` (sabab matni) va `closed_at` (boshqa holatlarda `null`). `GET /orders/extra-cost-approvals?status=` endi `void` va `reversed` ni ham qabul qiladi.
+- ⚠️ [order] `POST /orders/extra-cost-approvals/:id/approve` va `/reject`: yakunlangan so'rovga **409** «Bu so'rov allaqachon yakunlangan» (ilgari 400). Tasdiqlashda buyurtma endi «kutilmoqda» bo'lmasa yoki so'rov ochilgandan keyin holati o'zgargan bo'lsa (masalan sotilib, orqaga qaytarilgan) yoki amalni bajarib bo'lmasa (biznes xatosi 400/403/404/409), so'rov sababi bilan `void` bo'ladi va 409 «Bu so'rov allaqachon yakunlangan — <sabab>». Faqat infratuzilma xatosida (timeout, 5xx) javob o'zgarmaydi va so'rov `pending` qoladi — qayta tasdiqlash mumkin.
+- ✏️ [order] Yangi so'rov eskisini almashtirganda eskisi `rejected` emas, `void` (market rad etmagan; `decided_*` bo'sh).
+- 🆕 [order] Bitta buyurtmada bir vaqtda faqat bitta ochiq so'rov. Parallel ikkinchi so'rov — 409 «Bu buyurtmaga shu payt boshqa qo'shimcha xarajat so'rovi ochildi — qaytadan urinib ko'ring».
+- ✏️ [order] Kuryerni o'tkazish tekshiruvi (`pending_extra_cost_approvals`) faqat buyurtmasi hali «kutilmoqda» va shu kuryerda turgan so'rovlarni sanaydi.
+
+**Migratsiya `1716000000206-ExtraCostApprovalVoidReversed`:** ustunlar `closed_reason`, `closed_at`, `closed_by_user_id`; buyurtmasi endi «kutilmoqda» bo'lmagan `pending` → `void`; «tasdiqlandi», lekin buyurtma hali «kutilmoqda» va amal yozilmagan so'rovlar → `pending` (market qayta tasdiqlaydi; shu buyurtmada boshqa ochiq so'rov bo'lsa — `void`); takroriy ochiq so'rovlardan eng yangisi qoladi; so'ng partial unique indeks. Nechta qator o'zgargani logga yoziladi, qayta yurgizish hech narsani o'zgartirmaydi; `down()` indeks va ustunlarni olib tashlaydi.
+
+→ **Frontendda:**
+- 🔧 Holat yorliqlari: `void` — «Bekor bo'ldi», `reversed` — «Teskari qaytarildi»; `closed_reason` ni izoh sifatida ko'rsatish (GykuOz8f sahifasida qilinadi).
+- 🟢 Tasdiqlash/rad etish tugmalari 409 yoki «allaqachon yakunlangan» matnini allaqachon «yakunlangan» deb taniydi — o'zgarish shart emas. Telegram ✅/❌ ham shu matnni tanib tugmalarni olib tashlaydi.
+
 ### 2026-11-05 — Qo'shimcha xarajat faqat butun so'm (iMNLvs06, migratsiya 1716000000205)
 
 Ilgari `extraCost` ga faqat `@IsNumber` qo'yilgan edi: API orqali 1500.5 o'tib, so'rov `amount` ga kasr bo'lib yozilardi. Market tasdiqlaganda `orders.extra_cost` (int) ga yozilmay, so'rov abadiy «kutilmoqda» qolardi (tasdiq o'chiq marketda esa sotuvning o'zi yiqilardi).

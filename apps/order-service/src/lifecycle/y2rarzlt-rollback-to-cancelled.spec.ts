@@ -20,6 +20,8 @@ import {
 } from '@app/common';
 import { OrderLifecycleService } from './order-lifecycle.service';
 import { Order } from '../entities/order.entity';
+import { OrderExtraCostApproval } from '../entities/order-extra-cost-approval.entity';
+import { extraCostApprovalTable } from '../testing/extra-cost-kit-spec';
 
 type Row = Record<string, unknown>;
 type Enqueued = { cmd: string; payload: Row };
@@ -75,6 +77,13 @@ function makeService(orderOver: Row = {}) {
   const enqueued: Enqueued[] = [];
   const saved: Row[] = [];
   const tracking: Row[] = [];
+  // (hwTkXsGi) shu buyurtmaning tasdiqlangan va (eski kod qoldirgan) ochiq
+  // xarajat so'rovlari.
+  const approvals = extraCostApprovalTable([
+    { id: '7', order_id: '62', status: 'approved', action: 'sell' },
+    { id: '8', order_id: '62', status: 'pending', action: 'sell' },
+    { id: '9', order_id: '63', status: 'approved', action: 'sell' },
+  ]);
 
   const orderRepo = {
     // Rollback tranzaksiyasidagi qulf: status hali o'zgarmagan.
@@ -86,7 +95,11 @@ function makeService(orderOver: Row = {}) {
   };
   const manager = {
     getRepository: jest.fn((entity: unknown) =>
-      entity === Order ? orderRepo : {},
+      entity === OrderExtraCostApproval
+        ? approvals
+        : entity === Order
+          ? orderRepo
+          : {},
     ),
   };
   const queryRunner = {
@@ -155,7 +168,7 @@ function makeService(orderOver: Row = {}) {
     queueExternalStatusSync: jest.fn().mockResolvedValue(undefined),
   });
 
-  return { s, legs, enqueued, saved, tracking, queryRunner };
+  return { s, legs, enqueued, saved, tracking, queryRunner, approvals };
 }
 
 const shape = (legs: Row[]) =>
@@ -294,6 +307,33 @@ describe('y2RarzlT — rollback «Bekor qilish» (sold → cancelled)', () => {
     ).resolves.toMatchObject({ statusCode: 200 });
     expect(h.saved[0]).toMatchObject({ status: Order_status.CANCELLED });
   });
+});
+
+describe('hwTkXsGi — orqaga qaytarish xarajat so`rovlarini yopadi', () => {
+  it.each(['waiting', 'cancelled'] as const)(
+    '⭐ TC6/TC7 (%s): tasdiqlangani reversed, ochig`i void — shu tranzaksiyada',
+    async (target) => {
+      const h = makeService();
+
+      await h.s.rollbackOrderToWaiting(SUPERADMIN, '62', {
+        target_status: target,
+      });
+
+      expect(h.approvals.row('7')).toMatchObject({
+        status: 'reversed',
+        closed_reason:
+          'Buyurtma orqaga qaytarildi — tasdiqlangan xarajat teskari yozildi',
+        closed_by_user_id: '1',
+      });
+      expect(h.approvals.row('8')).toMatchObject({
+        status: 'void',
+        closed_reason: 'Buyurtma orqaga qaytarildi',
+      });
+      // Boshqa buyurtmaniki tegilmaydi.
+      expect(h.approvals.row('9')!.status).toBe('approved');
+      expect(h.queryRunner.commitTransaction).toHaveBeenCalled();
+    },
+  );
 });
 
 describe('y2RarzlT — oddiy (rollbacksiz) yo`l sotilgan buyurtmani bekor qila olmaydi', () => {

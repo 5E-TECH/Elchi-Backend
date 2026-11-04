@@ -24,6 +24,11 @@ import {
 import { OrderLifecycleService } from './lifecycle/order-lifecycle.service';
 import { Order } from './entities/order.entity';
 import { OrderSettlement } from './entities/order-settlement.entity';
+import { OrderExtraCostApproval } from './entities/order-extra-cost-approval.entity';
+import {
+  extraCostApprovalTable,
+  extraCostReplay,
+} from './testing/extra-cost-kit-spec';
 
 type SettlementRow = Record<string, unknown>;
 
@@ -65,7 +70,11 @@ function makeService(
 
   const tx = {
     getRepository: jest.fn((entity: unknown) =>
-      entity === OrderSettlement ? settlementRepo : { update: jest.fn() },
+      entity === OrderExtraCostApproval
+        ? extraCostApprovalTable()
+        : entity === OrderSettlement
+          ? settlementRepo
+          : { update: jest.fn() },
     ),
   };
   const queryRunner = {
@@ -294,10 +303,13 @@ describe("bekor qilingan buyurtmaning qo'shimcha xarajati", () => {
   it('manager to`lasa kredit filial bo`g`inida boshlanadi', async () => {
     const { s, requester, saved } = makeService({ isManager: true });
 
-    await s.cancelOrder(requester, '7001', {
-      extraCost: 5000,
-      extraCostApproved: true,
-    });
+    await s.cancelOrder(
+      requester,
+      '7001',
+      { extraCost: 5000, extraCostApproved: true },
+      undefined,
+      extraCostReplay(s),
+    );
 
     const settlement = row(saved);
     expect(settlement.courier_id).toBeNull();

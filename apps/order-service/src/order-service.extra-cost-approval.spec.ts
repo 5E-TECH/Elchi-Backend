@@ -1,7 +1,13 @@
 import { RpcException } from '@nestjs/microservices';
+import { QueryFailedError } from 'typeorm';
 import { of } from 'rxjs';
 import { Cashbox_type, ExpenseProofCondition, Order_status } from '@app/common';
 import { OrderLifecycleService } from './lifecycle/order-lifecycle.service';
+import {
+  extraCostApprovalTable,
+  extraCostDataSource,
+  extraCostManager,
+} from './testing/extra-cost-kit-spec';
 
 describe('OrderServiceService extra cost approval flow', () => {
   const order = {
@@ -25,37 +31,15 @@ describe('OrderServiceService extra cost approval flow', () => {
       findOne: jest.fn().mockResolvedValue(order),
       save: jest.fn((entity: any) => entity),
     };
-    const extraCostApprovalRepo = {
-      findOne: jest.fn().mockResolvedValue(options?.pendingApproval ?? null),
-      create: jest.fn((entity: any) => entity),
-      save: jest.fn((entity: any) => ({
-        id: entity.id ?? 'approval-1',
-        createdAt: new Date('2026-09-10T10:00:00.000Z'),
-        updatedAt: new Date('2026-09-10T10:00:00.000Z'),
-        isDeleted: false,
-        ...entity,
-      })),
-      find: jest.fn().mockResolvedValue([]),
-      // (1tnpaIqd) qaror atomik shartli UPDATE bilan — yozilgan patch'lar.
-      claims: [] as Array<Record<string, unknown>>,
-      createQueryBuilder: jest.fn(() => {
-        let patch: Record<string, unknown> = {};
-        const qb = {
-          update: () => qb,
-          set: (value: Record<string, unknown>) => {
-            patch = value;
-            return qb;
-          },
-          where: () => qb,
-          returning: () => qb,
-          execute: () => {
-            extraCostApprovalRepo.claims.push(patch);
-            return Promise.resolve({ affected: 1 });
-          },
-        };
-        return qb;
-      }),
-    };
+    // (hwTkXsGi) so'rov buyurtma qulfi ostida, o'z tranzaksiyasida yoziladi.
+    const extraCostApprovalRepo = extraCostApprovalTable(
+      options?.pendingApproval ? [options.pendingApproval] : [],
+    );
+    const manager = extraCostManager({
+      table: extraCostApprovalRepo,
+      orderRepo,
+    });
+    const dataSource = extraCostDataSource(manager, extraCostApprovalRepo);
     const logisticsClient = {
       send: jest.fn(() => of({ data: { id: '9001', courier_id: '301' } })),
     };
@@ -108,7 +92,7 @@ describe('OrderServiceService extra cost approval flow', () => {
     };
 
     const service = new OrderLifecycleService(
-      {} as any,
+      dataSource as any,
       orderRepo as any,
       {} as any,
       {} as any,
@@ -128,7 +112,13 @@ describe('OrderServiceService extra cost approval flow', () => {
       {} as any,
     );
 
-    return { service, orderRepo, extraCostApprovalRepo, fileClient };
+    return {
+      service,
+      orderRepo,
+      extraCostApprovalRepo,
+      fileClient,
+      dataSource,
+    };
   }
 
   async function expectRpc(promise: Promise<unknown>, code: number) {
@@ -217,6 +207,52 @@ describe('OrderServiceService extra cost approval flow', () => {
     );
   });
 
+  it('hwTkXsGi: so‘rov buyurtma qulfi ostida yoziladi — buyurtma shu payt «kutilmoqda» emas bo‘lsa 400, so‘rov ochilmaydi', async () => {
+    const { service, extraCostApprovalRepo, orderRepo, dataSource } =
+      makeService();
+    // Darvozadan oldingi o'qish WAITING, qulf ostidagi qayta o'qish — sotilgan.
+    orderRepo.findOne
+      .mockResolvedValueOnce(order)
+      .mockResolvedValue({ ...order, status: Order_status.SOLD });
+
+    await expectRpc(
+      service.sellOrder(
+        { id: '301', roles: ['courier'], branch_id: '77' },
+        '7001',
+        { extraCost: 12000, comment: 'Yo‘l xarajati' },
+      ),
+      400,
+    );
+    expect(extraCostApprovalRepo.rows).toHaveLength(0);
+    expect(dataSource.runner.rollbackTransaction).toHaveBeenCalled();
+  });
+
+  it('hwTkXsGi TC9: parallel ikkinchi so‘rov unique indeksga urilsa — 409, qator qo‘shilmaydi', async () => {
+    const { service, extraCostApprovalRepo, dataSource } = makeService();
+    extraCostApprovalRepo.save.mockRejectedValueOnce(
+      new QueryFailedError('INSERT ...', [], {
+        code: '23505',
+        constraint: 'UQ_ORDER_EXTRA_COST_APPROVAL_PENDING',
+      } as never),
+    );
+
+    await expect(
+      service.sellOrder(
+        { id: '301', roles: ['courier'], branch_id: '77' },
+        '7001',
+        { extraCost: 12000, comment: 'Yo‘l xarajati' },
+      ),
+    ).rejects.toMatchObject({
+      error: {
+        statusCode: 409,
+        message:
+          "Bu buyurtmaga shu payt boshqa qo'shimcha xarajat so'rovi ochildi — qaytadan urinib ko'ring",
+      },
+    });
+    expect(extraCostApprovalRepo.rows).toHaveLength(0);
+    expect(dataSource.runner.rollbackTransaction).toHaveBeenCalled();
+  });
+
   it('proof ON bo‘lsa proofsiz extra cost approvalga ham chiqmaydi', async () => {
     const { service, extraCostApprovalRepo } = makeService({
       marketProofConditions: [ExpenseProofCondition.SELL_EXTRA_COST],
@@ -285,7 +321,7 @@ describe('OrderServiceService extra cost approval flow', () => {
     );
   });
 
-  it('market approve qilsa asl amal extraCostApproved=true bilan bajariladi', async () => {
+  it('market approve qilsa asl amal qayta ijro qilinadi — «tasdiqlandi» sotuv tranzaksiyasida (hwTkXsGi)', async () => {
     const pendingApproval = {
       id: 'approval-7',
       order_id: '7001',
@@ -314,18 +350,25 @@ describe('OrderServiceService extra cost approval flow', () => {
     expect(sellSpy).toHaveBeenCalledWith(
       { id: '301', roles: ['courier'], branch_id: '77' },
       '7001',
-      expect.objectContaining({ extraCost: 12000, extraCostApproved: true }),
+      expect.objectContaining({ extraCost: 12000 }),
       'extra-cost-approval:approval-7',
+      {
+        extraCostApproval: {
+          id: 'approval-7',
+          patch: expect.objectContaining({
+            decided_by_user_id: '501',
+            decided_at: expect.any(Date),
+            auto_approved: false,
+          }),
+        },
+      },
     );
-    // (1tnpaIqd) qaror atomik UPDATE bilan yoziladi (save emas).
-    expect(extraCostApprovalRepo.claims).toEqual([
-      expect.objectContaining({
-        status: 'approved',
-        decided_by_user_id: '501',
-        decided_at: expect.any(Date),
-        auto_approved: false,
-      }),
-    ]);
+    // Qaror sotuvdan OLDIN alohida yozilmaydi — claim sotuv tranzaksiyasida
+    // (`applyExtraCostApprovalsOnExecution`; bu yerda sotuv soxta).
+    expect(extraCostApprovalRepo.updates).toEqual([]);
+    expect(res.data.approval).toEqual(
+      expect.objectContaining({ id: 'approval-7', status: 'approved' }),
+    );
   });
 
   it('market reject qilsa amal bajarilmaydi va so‘rov rejected bo‘ladi', async () => {
@@ -354,11 +397,15 @@ describe('OrderServiceService extra cost approval flow', () => {
 
     expect(res.statusCode).toBe(200);
     expect(cancelSpy).not.toHaveBeenCalled();
-    expect(extraCostApprovalRepo.claims).toEqual([
-      expect.objectContaining({
-        status: 'rejected',
-        decision_comment: 'Tasdiqlanmadi',
-      }),
+    expect(extraCostApprovalRepo.updates).toEqual([
+      {
+        patch: expect.objectContaining({
+          status: 'rejected',
+          decision_comment: 'Tasdiqlanmadi',
+        }),
+        ids: ['approval-8'],
+      },
     ]);
+    expect(extraCostApprovalRepo.row('approval-8')!.status).toBe('rejected');
   });
 });
