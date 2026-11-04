@@ -3,7 +3,7 @@ import { ExecutionContext, INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
-import { of } from 'rxjs';
+import { of, throwError } from 'rxjs';
 import request from 'supertest';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
 import { ROLES_KEY } from './auth/roles.decorator';
@@ -81,6 +81,7 @@ describe('lQjt6sKP — almashtirish: GET /orders/replaceable va /replacement/ret
   let app: INestApplication;
   const orderSend = jest.fn();
   const identitySend = jest.fn();
+  const catalogSend = jest.fn();
   const noop = { send: jest.fn(() => of({ data: {} })) };
   let user: { sub: string; roles: string[] } = {
     sub: '1',
@@ -95,6 +96,7 @@ describe('lQjt6sKP — almashtirish: GET /orders/replaceable va /replacement/ret
         { provide: 'IDENTITY', useValue: { send: identitySend } },
         { provide: 'LOGISTICS', useValue: noop },
         { provide: 'BRANCH', useValue: noop },
+        { provide: 'CATALOG', useValue: { send: catalogSend } },
       ],
     })
       .overrideGuard(JwtAuthGuard)
@@ -120,6 +122,8 @@ describe('lQjt6sKP — almashtirish: GET /orders/replaceable va /replacement/ret
   beforeEach(() => {
     orderSend.mockReset();
     identitySend.mockReset();
+    catalogSend.mockReset();
+    catalogSend.mockReturnValue(of({ data: [] }));
     orderSend.mockReturnValue(
       of({
         statusCode: 200,
@@ -171,6 +175,59 @@ describe('lQjt6sKP — almashtirish: GET /orders/replaceable va /replacement/ret
       name: 'Ali Valiyev',
       phone_number: '+998901234567',
     });
+  });
+
+  it("mahsulot nomi bo'sh qatorlar katalogdan bitta so'rov bilan to'ldiriladi; katalog yiqilsa — nomsiz, 200", async () => {
+    // Har chaqiruvga yangi obyekt: gateway qatorlarni joyida to'ldiradi.
+    orderSend.mockImplementation(() =>
+      of({
+        statusCode: 200,
+        data: {
+          items: [
+            {
+              id: '120',
+              customer_id: '801',
+              items: [
+                { product_id: '5', product_name: null, quantity: 1 },
+                { product_id: '6', product_name: "Qo'lda nom", quantity: 2 },
+              ],
+            },
+            {
+              id: '121',
+              customer_id: '801',
+              items: [{ product_id: '5', product_name: null, quantity: 3 }],
+            },
+          ],
+          total: 2,
+          page: 1,
+          limit: 20,
+        },
+      }),
+    );
+    catalogSend.mockReturnValue(
+      of({ data: [{ id: '5', name: 'Telefon chexoli' }] }),
+    );
+    const res = await request(app.getHttpServer())
+      .get('/orders/replaceable?market_id=3')
+      .expect(200);
+    expect(catalogSend).toHaveBeenCalledTimes(1);
+    expect(catalogSend).toHaveBeenCalledWith(
+      { cmd: 'catalog.product.find_by_ids' },
+      { ids: ['5'] },
+    );
+    expect(res.body.data.items[0].items).toEqual([
+      { product_id: '5', product_name: 'Telefon chexoli', quantity: 1 },
+      { product_id: '6', product_name: "Qo'lda nom", quantity: 2 },
+    ]);
+    expect(res.body.data.items[1].items[0].product_name).toBe(
+      'Telefon chexoli',
+    );
+
+    catalogSend.mockReturnValue(throwError(() => new Error('catalog down')));
+    const down = await request(app.getHttpServer())
+      .get('/orders/replacement/returns')
+      .expect(200);
+    expect(down.body.data.items[0].items[0].product_name).toBeNull();
   });
 
   it("market operatori: marketi identity'dan (query market_id e'tiborsiz) — @Roles ochiq", async () => {

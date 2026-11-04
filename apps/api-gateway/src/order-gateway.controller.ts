@@ -6352,7 +6352,49 @@ export class OrderGatewayController {
         ? { id: customerId, ...c }
         : { id: customerId, name: null, phone_number: null };
     }
+    await this.attachReplacementProductNames(items);
     return response;
+  }
+
+  /**
+   * Almashtirish qatorlari mahsulotlari: `order_items.product_name` katalog
+   * mahsulotida bo'sh (faqat `product_id`) — nom katalogdan BITTA
+   * `catalog.product.find_by_ids` bilan to'ldiriladi (BeePost kabi qatorda
+   * mahsulot nomi ko'rinsin: bir xil mahsulotli buyurtmalarni ajratish uchun).
+   * Katalog javob bermasa — nomlar bo'sh qoladi (fail-open, faqat yorliq).
+   */
+  private async attachReplacementProductNames(
+    rows: Array<Record<string, unknown>>,
+  ): Promise<void> {
+    type ItemRow = { product_id?: unknown; product_name?: unknown };
+    const lines = rows.flatMap((row) =>
+      Array.isArray(row.items) ? (row.items as ItemRow[]) : [],
+    );
+    const ids = [
+      ...new Set(
+        lines
+          .filter((item) => !this.asStr(item?.product_name).trim())
+          .map((item) => replacementIdText(item?.product_id))
+          .filter((id) => /^\d{1,18}$/.test(id)),
+      ),
+    ];
+    if (!ids.length || !this.catalogClient) return;
+    const products = await firstValueFrom(
+      this.catalogClient
+        .send<unknown>({ cmd: 'catalog.product.find_by_ids' }, { ids })
+        .pipe(timeout(3000)),
+    ).catch(() => null);
+    const nameById = new Map(
+      this.extractRows(products).map((product) => [
+        replacementIdText(product?.id),
+        this.asStr(product?.name).trim(),
+      ]),
+    );
+    for (const item of lines) {
+      if (this.asStr(item?.product_name).trim()) continue;
+      const name = nameById.get(replacementIdText(item?.product_id));
+      if (name) item.product_name = name;
+    }
   }
 
   /**
