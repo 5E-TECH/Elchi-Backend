@@ -4,6 +4,7 @@ import {
   isValidPaymentReversalStatusTransition,
   isValidRollbackStatusTransition,
   isValidStatusTransition,
+  isValidTransferReturnStatusTransition,
   mapInitialStatusForTracking,
 } from './order-status.machine';
 
@@ -147,6 +148,37 @@ describe('order status machine', () => {
           Order_status.CANCELLED,
         ),
       ).toBe(false);
+    });
+  });
+
+  // 2026-11-04 — HQ «Qaytarish» tasdig'i: filialga kelmagan o'tkazma
+  // buyurtmasi HQ omboriga `received` bo'lib qaytadi (faqat shu yo'lda).
+  describe('isValidTransferReturnStatusTransition', () => {
+    it('adds only ON_THE_ROAD → RECEIVED on top of the general machine', () => {
+      expect(
+        isValidTransferReturnStatusTransition(
+          Order_status.ON_THE_ROAD,
+          Order_status.RECEIVED,
+        ),
+      ).toBe(true);
+      expect(
+        isValidStatusTransition(
+          Order_status.ON_THE_ROAD,
+          Order_status.RECEIVED,
+        ),
+      ).toBe(false);
+      expect(
+        isValidTransferReturnStatusTransition(
+          Order_status.WAITING,
+          Order_status.RECEIVED,
+        ),
+      ).toBe(false);
+      expect(
+        isValidTransferReturnStatusTransition(
+          Order_status.ON_THE_ROAD,
+          Order_status.WAITING,
+        ),
+      ).toBe(true);
     });
   });
 

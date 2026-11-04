@@ -87,8 +87,12 @@ describe('LogisticsGatewayController — kuryer «buyurtma kelmagan» so‘rovi'
     return Reflect.getMetadata(ROLES_KEY, descriptor?.value) as string[];
   };
 
-  it('faqat kuryer', () => {
-    expect(rolesOf('requestCourierOrderReturn')).toEqual(['courier']);
+  it('kuryer va filial menejeri (2026-11-04); registrator, admin — yo‘q', () => {
+    const roles = rolesOf('requestCourierOrderReturn');
+    expect(roles).toEqual(['courier', 'manager']);
+    expect(roles).not.toContain('registrator');
+    expect(roles).not.toContain('admin');
+    expect(roles).not.toContain('superadmin');
   });
 
   it('logistics.post.return_request.create ga pochta, buyurtma va kuryerni uzatadi', async () => {
@@ -110,6 +114,29 @@ describe('LogisticsGatewayController — kuryer «buyurtma kelmagan» so‘rovi'
         post_id: '98',
         order_id: '101',
         requester: { id: 'c1', roles: ['courier'], branch_id: '10' },
+      },
+    );
+  });
+
+  it('menejer — o‘sha buyruq, JWT filiali bilan (doira logistics tomonida)', async () => {
+    const logisticsClient = {
+      send: jest.fn(() => of({ statusCode: 200, data: {} })),
+    };
+    const controller = new LogisticsGatewayController(
+      logisticsClient as any,
+      { send: jest.fn(() => of({ data: null })) } as any,
+    );
+
+    await controller.requestCourierOrderReturn('98', '101', {
+      user: { sub: 'm1', roles: ['manager'], branch_id: '10' },
+    });
+
+    expect(logisticsClient.send).toHaveBeenCalledWith(
+      { cmd: 'logistics.post.return_request.create' },
+      {
+        post_id: '98',
+        order_id: '101',
+        requester: { id: 'm1', roles: ['manager'], branch_id: '10' },
       },
     );
   });

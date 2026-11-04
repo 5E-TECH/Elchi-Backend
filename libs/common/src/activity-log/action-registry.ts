@@ -406,8 +406,10 @@ export const ACTIVITY_ACTION_REGISTRY: Readonly<
     'check',
     'blue',
   ),
+  // Kuryer (metadata.source `courier_not_arrived`) yoki filial menejeri
+  // (`branch_not_arrived`, HQ → filial o'tkazma pochtasi).
   'logistics.return_request': entry(
-    "Kuryer: buyurtma kelmagan — qaytarish so'rovi",
+    "Buyurtma kelmagan — qaytarish so'rovi (kuryer yoki filial)",
     'logistics',
     'undo',
     'amber',

@@ -39,6 +39,8 @@ describe('LogisticsServiceService — qaytarish so‘rovlari', () => {
     // pochta id → shu pochtaning qolgan ON_THE_ROAD so'rovi (order.find_all) xatosi
     remainingErrors?: Record<string, Error>;
     postFindError?: Error;
+    // HQ hudud NEW pochtalari (region_id bo'yicha topiladi)
+    newPosts?: Row[];
   }) {
     const orderById = new Map(
       (options?.orders ?? []).map((order) => [String(order.id), order]),
@@ -142,11 +144,23 @@ describe('LogisticsServiceService — qaytarish so‘rovlari', () => {
           ? Promise.reject(options.postFindError)
           : Promise.resolve([...postById.values()]),
       ),
-      findOne: jest.fn((query: { where?: { id?: string } }) =>
-        Promise.resolve(postById.get(String(query?.where?.id)) ?? null),
+      findOne: jest.fn(
+        (query: { where?: { id?: string; region_id?: string } }) =>
+          Promise.resolve(
+            // HQ hudud NEW pochtasi (filial o'tkazmasi tasdig'i) — hudud bo'yicha.
+            query?.where?.region_id !== undefined
+              ? ((options?.newPosts ?? []).find(
+                  (post) =>
+                    String(post.region_id) === String(query.where?.region_id),
+                ) ?? null)
+              : (postById.get(String(query?.where?.id)) ?? null),
+          ),
       ),
       create: jest.fn((payload: Row) => payload),
-      save: jest.fn((entity: Row) => Promise.resolve({ ...entity })),
+      // Yangi yaratilgan pochta — id '900'.
+      save: jest.fn((entity: Row) =>
+        Promise.resolve({ id: entity.id ?? '900', ...entity }),
+      ),
     };
 
     const activityLog = {
@@ -423,6 +437,12 @@ describe('LogisticsServiceService — qaytarish so‘rovlari', () => {
             id: '198',
             roles: ['manager'],
             note: "Qaytarish so'rovi tasdiqlandi — buyurtma kuryerdan filial omboriga qaytarildi",
+            // Shartli yozuv: order-service qulf ostida qayta tekshiradi.
+            return_request_review: {
+              post_id: '55',
+              status: Order_status.WAITING,
+              source: 'courier',
+            },
           },
         },
       ]);
@@ -835,6 +855,11 @@ describe('LogisticsServiceService — qaytarish so‘rovlari', () => {
             id: '198',
             roles: ['manager'],
             note: "Qaytarish so'rovi rad etildi — buyurtma kuryerda qoldi",
+            return_request_review: {
+              post_id: '55',
+              status: Order_status.ON_THE_ROAD,
+              source: 'courier',
+            },
           },
         },
       ]);
@@ -876,6 +901,446 @@ describe('LogisticsServiceService — qaytarish so‘rovlari', () => {
         404,
         NONE_PENDING_MESSAGE,
       );
+    });
+  });
+
+  // Filial menejeri «Bu buyurtma kelmagan» (2026-11-04) yoki qisman qabulda
+  // qolgan HQ → filial o'tkazmasi qatori: manba ombori HQ — faqat HQ doirasida
+  // ko'riladi, tasdiqlansa HQ omboriga dispatch oldidagi holatida (RECEIVED,
+  // hudud NEW pochtasi) qaytadi va o'tkazma pochtasini yopadi.
+  describe('filial o‘tkazmasi «kelmagan» so‘rovi (HQ doirasi)', () => {
+    const transferPost = {
+      id: '98',
+      courier_id: '0',
+      branch_id: '10',
+      region_id: '14',
+      status: Post_status.SENT,
+    };
+    // Shu hududning HQ NEW pochtasi (dispatch shu yerdan olgan).
+    const regionNewPost = {
+      id: '700',
+      courier_id: '0',
+      branch_id: null,
+      region_id: '14',
+      status: Post_status.NEW,
+    };
+    const transferRequest = (overrides: Row = {}): Row =>
+      flagged({
+        id: '301',
+        holder_type: 'BRANCH',
+        holder_branch_id: '10',
+        holder_courier_id: null,
+        courier_id: null,
+        branch_id: '10',
+        post_id: '98',
+        region_id: '14',
+        ...overrides,
+      });
+    const transferReview = {
+      post_id: '98',
+      status: Order_status.ON_THE_ROAD,
+      source: 'branch_transfer',
+    };
+    // order-service qulf ostidagi shartli yozuv rad javobi.
+    const staleConflict = () =>
+      new RpcException({
+        statusCode: 409,
+        message: "Buyurtma #301 qaytarish so'rovi shu orada o'zgardi",
+        reason: 'return_request_review_conflict',
+      });
+
+    it('T1: HQ ro‘yxatida — alohida branch_transfer guruhi; kuryer pochtasidagi BRANCH qator kirmaydi', async () => {
+      const { service, orderClient } = setup({
+        listRows: [
+          transferRequest(),
+          // filial qatori, lekin pochta kuryerniki — o'tkazma emas
+          transferRequest({ id: '302', post_id: '55' }),
+          flagged({
+            id: '104',
+            holder_courier_id: '211',
+            holder_branch_id: '1',
+            branch_id: '1',
+          }),
+        ],
+        posts: [transferPost, { id: '55', courier_id: '209' }],
+      });
+
+      const result: any = await service.getReturnRequests(admin);
+
+      const listQueries = orderClient.send.mock.calls
+        .filter(([pattern]) => pattern.cmd === 'order.find_all')
+        .map(([, payload]) => (payload as { query: Row }).query);
+      expect(listQueries[1]).toEqual(
+        expect.objectContaining({
+          status: Order_status.ON_THE_ROAD,
+          return_requested: true,
+          holder_type: 'BRANCH',
+          fetch_all: true,
+        }),
+      );
+      expect(result.data.total).toBe(2);
+      const transferGroup = result.data.groups.find(
+        (group: Row) => group.source === 'branch_transfer',
+      );
+      expect(transferGroup).toEqual(
+        expect.objectContaining({
+          courier: null,
+          courier_id: null,
+          source: 'branch_transfer',
+          branch_id: '10',
+        }),
+      );
+      expect(transferGroup.orders.map((o: Row) => o.id)).toEqual(['301']);
+    });
+
+    it('T1b: initiate-return (marketga qaytarish, `return_reason`) belgisi «kelmagan» so‘rovi emas — ro‘yxatda yo‘q, tasdiqlab bo‘lmaydi', async () => {
+      const marketReturn = transferRequest({
+        id: '303',
+        return_reason: 'Mijoz bekor qildi',
+      });
+      const listed = setup({
+        listRows: [transferRequest(), marketReturn],
+        posts: [transferPost],
+      });
+
+      const result: any = await listed.service.getReturnRequests(admin);
+
+      expect(result.data.total).toBe(1);
+      expect(
+        result.data.groups.flatMap((group: Row) =>
+          (group.orders as Row[]).map((o) => o.id),
+        ),
+      ).toEqual(['301']);
+
+      const approving = setup({
+        orders: [marketReturn],
+        posts: [transferPost],
+      });
+      await expectRpcError(
+        approving.service.approveReturnRequests({ order_ids: ['303'] }, admin),
+        404,
+        NONE_PENDING_MESSAGE,
+      );
+      expect(approving.updateCalls()).toHaveLength(0);
+    });
+
+    it('T2: manzil filial menejeri o‘z so‘rovini ro‘yxatda ko‘rmaydi (HQ ko‘rib chiqadi)', async () => {
+      const { service, orderClient } = setup({
+        listRows: [transferRequest()],
+        posts: [transferPost],
+      });
+
+      const result: any = await service.getReturnRequests(manager10);
+
+      expect(result.data.total).toBe(0);
+      expect(
+        orderClient.send.mock.calls.filter(
+          ([pattern, payload]) =>
+            pattern.cmd === 'order.find_all' &&
+            (payload as { query: Row }).query.holder_type === 'BRANCH',
+        ),
+      ).toHaveLength(0);
+    });
+
+    it('T3: HQ tasdig‘i — HQ omboriga dispatch oldidagi holatda (RECEIVED, branch_id 1, hudud NEW pochtasi), o‘tkazma pochtasi yopiladi', async () => {
+      const { service, postRepo, postUpdateQb, updateCalls } = setup({
+        orders: [transferRequest()],
+        posts: [transferPost],
+        newPosts: [regionNewPost],
+        remainingOnTheRoad: [],
+      });
+
+      const result: any = await service.approveReturnRequests(
+        { order_ids: ['301'] },
+        admin,
+      );
+
+      expect(updateCalls()).toEqual([
+        {
+          id: '301',
+          dto: {
+            status: Order_status.RECEIVED,
+            return_requested: false,
+            courier_id: null,
+            assigned_at: null,
+            post_id: '700',
+            branch_id: '1',
+          },
+          requester: {
+            id: '2',
+            roles: ['admin'],
+            note: "Qaytarish so'rovi tasdiqlandi — filialga kelmagan buyurtma HQ omboriga qaytarildi (qayta jo'natish mumkin)",
+            return_request_review: transferReview,
+          },
+        },
+      ]);
+      // Mavjud NEW pochta — yangisi yaratilmaydi; hisobi oshadi.
+      expect(postRepo.findOne).toHaveBeenCalledWith({
+        where: { region_id: '14', status: Post_status.NEW },
+      });
+      expect(postRepo.create).not.toHaveBeenCalled();
+      expect(postUpdateQb.where).toHaveBeenCalledWith('id = :id', {
+        id: '700',
+      });
+      const increment = postUpdateQb.set.mock.calls[0][0] as Record<
+        string,
+        () => string
+      >;
+      expect(increment.order_quantity()).toBe('order_quantity + 1');
+      expect(increment.post_total_price()).toBe('post_total_price + 120000');
+      // O'tkazma pochtasi hisobdan chiqadi va yopiladi.
+      expect(postUpdateQb.where).toHaveBeenCalledWith('id = :id', { id: '98' });
+      expect(postRepo.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: '98',
+          courier_id: '0',
+          branch_id: '10',
+          status: Post_status.RECEIVED,
+        }),
+      );
+      expect(result.data).toEqual({
+        approved: 1,
+        order_ids: ['301'],
+        skipped_order_ids: [],
+      });
+    });
+
+    it('T3a: hududda NEW pochta yo‘q — yaratiladi (HQ, filialsiz) va buyurtma unga tushadi', async () => {
+      const { service, postRepo, updateCalls } = setup({
+        orders: [transferRequest()],
+        posts: [transferPost],
+        newPosts: [],
+      });
+
+      await service.approveReturnRequests({ order_ids: ['301'] }, admin);
+
+      expect(postRepo.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          courier_id: '0',
+          region_id: '14',
+          branch_id: null,
+          status: Post_status.NEW,
+        }),
+      );
+      expect(updateCalls()[0].dto).toEqual(
+        expect.objectContaining({
+          status: Order_status.RECEIVED,
+          post_id: '900',
+        }),
+      );
+    });
+
+    it('T3b: pochtada hali qabul qilinadigan buyurtma bor — SENT qoladi', async () => {
+      const { service, postRepo, postUpdateQb } = setup({
+        orders: [transferRequest()],
+        posts: [transferPost],
+        newPosts: [regionNewPost],
+        remainingOnTheRoad: [{ id: '303', status: Order_status.ON_THE_ROAD }],
+      });
+
+      await service.approveReturnRequests({ order_ids: ['301'] }, admin);
+
+      // NEW pochta oshishi + o'tkazma pochtasi kamayishi.
+      expect(postUpdateQb.execute).toHaveBeenCalledTimes(2);
+      expect(postRepo.save).not.toHaveBeenCalled();
+    });
+
+    it('T3c: HQ registratori (JWT branch 1) ham tasdiqlaydi', async () => {
+      const { service, updateCalls } = setup({
+        orders: [transferRequest()],
+        posts: [transferPost],
+        newPosts: [regionNewPost],
+      });
+
+      await service.approveReturnRequests(
+        { order_ids: ['301'] },
+        { id: '5', roles: ['registrator'], branch_id: '1' },
+      );
+
+      expect(updateCalls()[0].dto).toEqual(
+        expect.objectContaining({ branch_id: '1' }),
+      );
+    });
+
+    it('T3d: NEW pochtani tayyorlashdagi xom DB xatosi — 503, hech narsa yozilmaydi', async () => {
+      const { service, postRepo, updateCalls } = setup({
+        orders: [transferRequest()],
+        posts: [transferPost],
+      });
+      postRepo.findOne.mockRejectedValueOnce(new Error('connection reset'));
+
+      await expectRpcError(
+        service.approveReturnRequests({ order_ids: ['301'] }, admin),
+        503,
+      );
+      expect(updateCalls()).toHaveLength(0);
+    });
+
+    it('T4: manzil filial menejeri o‘zi tasdiqlay olmaydi (403, hech narsa yozilmaydi)', async () => {
+      const { service, updateCalls } = setup({
+        orders: [transferRequest()],
+        posts: [transferPost],
+      });
+
+      await expectRpcError(
+        service.approveReturnRequests({ order_ids: ['301'] }, manager10),
+        403,
+        FOREIGN_BRANCH_MESSAGE,
+      );
+      expect(updateCalls()).toHaveLength(0);
+    });
+
+    it('T5: HQ rad etadi — belgi olinadi, buyurtma o‘tkazma pochtasida qoladi', async () => {
+      const { service, updateCalls, postUpdateQb } = setup({
+        orders: [transferRequest()],
+        posts: [transferPost],
+      });
+
+      await service.rejectReturnRequests({ order_ids: ['301'] }, admin);
+
+      expect(updateCalls()).toEqual([
+        {
+          id: '301',
+          dto: { return_requested: false },
+          requester: {
+            id: '2',
+            roles: ['admin'],
+            note: "Qaytarish so'rovi rad etildi — buyurtma filial pochtasida qoldi",
+            return_request_review: transferReview,
+          },
+        },
+      ]);
+      expect(postUpdateQb.execute).not.toHaveBeenCalled();
+    });
+
+    it('T6: belgisiz o‘tkazma buyurtmasi — HQ doirasida, lekin kutilayotgan so‘rov yo‘q (404)', async () => {
+      const { service, updateCalls } = setup({
+        orders: [transferRequest({ return_requested: false })],
+        posts: [transferPost],
+      });
+
+      await expectRpcError(
+        service.approveReturnRequests({ order_ids: ['301'] }, admin),
+        404,
+        NONE_PENDING_MESSAGE,
+      );
+      expect(updateCalls()).toHaveLength(0);
+    });
+
+    it('T7: pochtalarni o‘qishdagi xom DB xatosi — 503 RpcException', async () => {
+      const { service } = setup({
+        orders: [transferRequest()],
+        posts: [transferPost],
+        postFindError: new Error('connection terminated'),
+      });
+
+      await expectRpcError(
+        service.approveReturnRequests({ order_ids: ['301'] }, admin),
+        503,
+      );
+    });
+
+    // Poyga: HQ tasdig'i ↔ filial qabuli. order-service qulf ostida 409
+    // `return_request_review_conflict` beradi — eskirgan tanlov.
+    it('T8: tasdiq paytida filial qabul qilgan (qulf ostida 409) — o‘tkazib yuboriladi, pochta hisobiga tegilmaydi', async () => {
+      const { service, postUpdateQb, activityLog } = setup({
+        orders: [
+          transferRequest(),
+          transferRequest({ id: '302', total_price: 50000 }),
+        ],
+        posts: [transferPost],
+        newPosts: [regionNewPost],
+        updateErrors: { '301': staleConflict() },
+      });
+
+      const result: any = await service.approveReturnRequests(
+        { order_ids: ['301', '302'] },
+        admin,
+      );
+
+      expect(result.data).toEqual({
+        approved: 1,
+        order_ids: ['302'],
+        skipped_order_ids: ['301'],
+      });
+      // Faqat 302: NEW pochta +1 / 50 000, o'tkazma pochtasi −1 / 50 000.
+      const [increment, decrement] = postUpdateQb.set.mock.calls.map(
+        ([arg]) => arg as Record<string, () => string>,
+      );
+      expect(increment.post_total_price()).toBe('post_total_price + 50000');
+      expect(decrement.order_quantity()).toBe(
+        'GREATEST(order_quantity - 1, 0)',
+      );
+      expect(decrement.post_total_price()).toBe(
+        'GREATEST(post_total_price - 50000, 0)',
+      );
+      expect(activityLog.log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: 'logistics.return_approve',
+          metadata: expect.objectContaining({ order_ids: ['302'] }),
+        }),
+      );
+    });
+
+    it('T8b: hammasi eskirgan — 409, hech narsa hisoblanmaydi', async () => {
+      const { service, postUpdateQb, activityLog } = setup({
+        orders: [transferRequest()],
+        posts: [transferPost],
+        newPosts: [regionNewPost],
+        updateErrors: { '301': staleConflict() },
+      });
+
+      await expectRpcError(
+        service.approveReturnRequests({ order_ids: ['301'] }, admin),
+        409,
+      );
+      expect(postUpdateQb.execute).not.toHaveBeenCalled();
+      expect(activityLog.log).not.toHaveBeenCalled();
+    });
+
+    it('T8c: boshqa xato (502) — avvalgidek xato qaytadi', async () => {
+      const { service } = setup({
+        orders: [transferRequest()],
+        posts: [transferPost],
+        newPosts: [regionNewPost],
+        updateErrors: {
+          '301': new RpcException({ statusCode: 502, message: 'timeout' }),
+        },
+      });
+
+      await expectRpcError(
+        service.approveReturnRequests({ order_ids: ['301'] }, admin),
+        502,
+      );
+    });
+
+    it('T9: rad etishda eskirgan — o‘tkazib yuboriladi; hammasi eskirgan — 409', async () => {
+      const mixed = setup({
+        orders: [transferRequest(), transferRequest({ id: '302' })],
+        posts: [transferPost],
+        updateErrors: { '301': staleConflict() },
+      });
+
+      const result: any = await mixed.service.rejectReturnRequests(
+        { order_ids: ['301', '302'] },
+        admin,
+      );
+      expect(result.data).toEqual({
+        rejected: 1,
+        order_ids: ['302'],
+        skipped_order_ids: ['301'],
+      });
+
+      const allStale = setup({
+        orders: [transferRequest()],
+        posts: [transferPost],
+        updateErrors: { '301': staleConflict() },
+      });
+      await expectRpcError(
+        allStale.service.rejectReturnRequests({ order_ids: ['301'] }, admin),
+        409,
+      );
+      expect(allStale.activityLog.log).not.toHaveBeenCalled();
     });
   });
 });

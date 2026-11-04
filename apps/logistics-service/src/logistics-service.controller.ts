@@ -525,7 +525,8 @@ export class LogisticsServiceController {
     );
   }
 
-  // Kuryer «Bu buyurtma kelmagan — qaytarish so'rovi» (yangi pochtada).
+  // Kuryer «Bu buyurtma kelmagan — qaytarish so'rovi» (yangi pochtada); filial
+  // menejeri — o'z filialiga jo'natilgan SENT o'tkazma pochtasida (2026-11-04).
   @MessagePattern({ cmd: 'logistics.post.return_request.create' })
   requestCourierOrderReturn(
     @Payload()

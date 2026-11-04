@@ -283,6 +283,50 @@ describe('Tuman ↔ filial qamrovi — branch-service', () => {
       expect(activityLog.log).not.toHaveBeenCalled();
     };
 
+    // 2026-11-04 — HQ «Qaytarish» tasdig'i filialga kelmagan o'tkazma
+    // buyurtmasini dispatch oldidagi holatiga qaytaradi (logistics
+    // `approveReturnRequests`: RECEIVED, branch_id HQ, kuryersiz, holder HQ,
+    // o'tkazma pochtasi hududining NEW pochtasida) — u o'sha filialga qayta
+    // jo'natiladi. Avvalgi tasdiq holati (WAITING, pochtasiz) bilan bo'lmasdi.
+    it("HQ «Qaytarish» tasdig'idan qaytgan o'tkazma buyurtmasi — o'sha filialga qayta jo'natiladi", async () => {
+      postOrders = [
+        hqOrder('1001', {
+          post_id: '900',
+          holder_type: 'HQ',
+          holder_branch_id: null,
+          return_requested: false,
+          assigned_at: null,
+        }),
+      ];
+
+      const res = await dispatch(['1001']);
+
+      expect(res.statusCode).toBe(200);
+      const [update] = orderClient.send.mock.calls.filter(
+        ([pattern]) => (pattern as { cmd: string }).cmd === 'order.update',
+      );
+      expect(update[1]).toEqual(
+        expect.objectContaining({
+          id: '1001',
+          dto: expect.objectContaining({
+            status: 'on the road',
+            branch_id: '20',
+            holder_branch_id: '20',
+            post_id: '777',
+          }),
+        }),
+      );
+    });
+
+    it("tasdiqdan qaytgan buyurtma WAITING bo'lganda jo'natib bo'lmasdi — 400 (shuning uchun tasdiq RECEIVED yozadi)", async () => {
+      postOrders = [hqOrder('1001', { status: 'waiting', holder_type: 'HQ' })];
+
+      const err = await rpcErrorOf(dispatch(['1001']));
+
+      expect(err.statusCode).toBe(400);
+      expectNothingWritten();
+    });
+
     it("⭐ tuman BOSHQA filialga biriktirilgan (serving_branch_id), viloyati mos — jo'natiladi (avval 409 edi)", async () => {
       districtsById['1401'] = district('1401', { serving_branch_id: '30' });
 

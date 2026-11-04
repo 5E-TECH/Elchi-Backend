@@ -243,6 +243,9 @@ describe('FIX3 LC-11 — receivePost yo‘lda qolgan buyurtma bo‘lsa pochtani 
         id: '198',
         roles: ['manager'],
         note: 'Post received by branch',
+        // Shartli yozuv (2026-11-04): buyurtma hali shu pochtada va o'sha
+        // holatda bo'lsin — order-service qulf ostida tekshiradi.
+        post_receive_guard: { post_id: '40', status: Order_status.ON_THE_ROAD },
       });
     }
   });
@@ -275,6 +278,10 @@ describe('FIX3 LC-11 — receivePost yo‘lda qolgan buyurtma bo‘lsa pochtani 
           id: '102',
           roles: ['courier'],
           note: 'Post received by courier',
+          post_receive_guard: {
+            post_id: '40',
+            status: Order_status.ON_THE_ROAD,
+          },
         },
       }),
     );

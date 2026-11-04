@@ -22,6 +22,21 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+### 2026-11-04 — Filial menejeri: «Bu buyurtma kelmagan — qaytarish so'rovi» (o'tkazma pochtasida, kuryerniki kabi)
+
+Ega talabi: HQ filialga pochta jo'natganda, filial menejeri hali to'liq qabul qilinmagan (SENT) pochtadagi kelmagan buyurtmani belgilay olsin — kuryer o'z pochtasida qilgandek.
+
+**Qoida:** endpoint o'sha — kuryer o'z SENT pochtasida (o'zgarmagan) VA manzil filial **menejeri** o'z filialiga jo'natilgan SENT o'tkazma pochtasida (`courier_id` bo'sh yoki `'0'`). Boshqa hamma (registrator, filial akkaunti, boshqa filial menejeri, market, admin) — 403. Buyurtma yo'lda qoladi, `return_requested: true` bo'ladi va **HQ** «Qaytarish so'rovlari» ro'yxatiga tushadi (filial menejerining o'z ro'yxatiga emas). HQ tasdiqlasa — buyurtma HQ omboriga **dispatch oldidagi holatida** qaytadi: `received`, holder HQ, o'tkazma pochtasi hududining HQ «Yangi» (NEW) pochtasida — HQ uni o'sha (yoki shu viloyatdagi boshqa) filialga oddiy jo'natish bilan qayta yubora oladi; rad etsa — o'tkazma pochtasida qoladi va filial uni qabul qiladi. Pochtani tasdiq yopadi (qolganini filial qabul qilgan bo'lsa — `received`). Pochta qisman qabul qilinganda qolgan buyurtmalar ham (avvaldan `return_requested`) endi shu HQ ro'yxatida chiqadi. Marketga qaytarish belgisi (initiate-return, `return_reason` bor) bu ro'yxatga kirmaydi.
+
+**Endpointlar:**
+- ✏️ [logistics] `POST /post/:postId/orders/:orderId/return-request` — rollar: `courier`, `manager` (body yo'q, javob shakli o'zgarmagan: `{ order_id, post_id, return_requested: true, already_requested, remaining_receivable }`). Menejer uchun: 403 `reason: 'return_request_not_allowed'` — pochta uning filialiga jo'natilmagan / kuryer pochtasi; 404 — pochta yo'q; 400 — pochta qabul qilingan yoki buyurtma yo'lda emas; 409 — buyurtma boshqa pochtada / filial pochtasi hisobida emas / shu orada o'zgargan; 409 `reason: 'market_return_requested'` — buyurtmada marketga qaytarish so'rovi turibdi. Qayta bosish — idempotent (`already_requested: true`).
+- ✏️ [logistics] `GET /post/return-requests/list` — HQ doirasida (SA/admin/HQ registratori va menejeri) filial o'tkazmasi so'rovlari alohida guruhda: `{ courier: null, courier_id: null, source: 'branch_transfer', branch_id, orders }`. Kuryer guruhlari o'zgarmagan. `approve` / `reject` shu qatorlarni ham qabul qiladi (manzil filial menejeri o'zi tasdiqlay olmaydi — 403).
+- ✏️ [logistics] `POST /post/return-requests/approve` / `reject` (kuryer va filial qatorlari) — shu orada qabul qilingan yoki boshqa xodim ko'rib chiqqan buyurtma yozilmaydi va `skipped_order_ids` da qaytadi (avval eskirgan surat bilan yozilardi); tanlanganlarning hammasi shunday bo'lsa — 409 «sahifani yangilang». Javob shakli o'zgarmagan.
+- 🆕 [order] tracking action `branch_return_requested` (`from_status` = `to_status` = `on the road`), `metadata: { post_id, branch_id }`, `description`: «Filial menejeri buyurtma filialga kelmaganini bildirdi — qaytarish so'rovi yuborildi» (kuryer qatori `courier_return_requested` — o'zgarmagan). Faoliyat jurnalida (`logistics.return_request`) `metadata: { post_id, branch_id, source: 'branch_not_arrived' }` — `source` tracking metadata'sida yo'q.
+- ✏️ [order] HQ tasdig'i (filial o'tkazmasi) tarixda oddiy holat qatori: `on the road → received`, izoh «Qaytarish so'rovi tasdiqlandi — filialga kelmagan buyurtma HQ omboriga qaytarildi (qayta jo'natish mumkin)».
+
+**Frontendda:** menejer o'z filialiga kelgan SENT o'tkazma pochtasida har qabul qilinmagan buyurtma ostida kuryerdagi kabi tugma; so'rov yuborilganlar qabul ro'yxatidan chiqadi (`GET /post/orders/:id` qatorida `return_requested`). HQ «Qaytarish» sahifasida `source: 'branch_transfer'` guruhini kuryer o'rniga filial nomi bilan ko'rsatish mumkin (hozirgi sahifa ham ishlaydi — «noma'lum kuryer» guruhida chiqadi).
+
 ### 2026-11-04 — AI buyurtma: almashtirish (kafolat) eski buyurtmaga bog'lanadi (Telegram bot, BeePost kabi)
 
 AI matnda almashtirish/kafolatni topsa (`is_replacement: true`), backend telefonning oxirgi 9 raqami bo'yicha shu marketning eski buyurtmasini topib, eng yangisini avtomatik tanlaydi. Telegram bot endi almashtirish buyurtmasini yaratadi (ilgari rad etardi).

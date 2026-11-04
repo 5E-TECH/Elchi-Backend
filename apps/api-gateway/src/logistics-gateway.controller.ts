@@ -1449,15 +1449,21 @@ export class LogisticsGatewayController {
   // Kuryer «Bu buyurtma kelmagan — qaytarish so'rovi»: yangi pochtadagi hali
   // qabul qilinmagan buyurtma «Qaytarish» ro'yxatiga tushadi (tasdiqlansa —
   // kelgan omboriga qaytadi). Doira logistics tomonida (o'z SENT pochtasi).
+  // Filial menejeri ham (2026-11-04) — faqat o'z filialiga jo'natilgan SENT
+  // o'tkazma pochtasida (courier_id '0'); so'rov HQ «Qaytarish»iga tushadi.
   @Post('post/:postId/orders/:orderId/return-request')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.COURIER)
+  @Roles(RoleEnum.COURIER, RoleEnum.MANAGER)
   @ApiBearerAuth()
   @ApiOperation({
     summary:
-      'Courier: this order did not arrive — return request (order stays on the road with return_requested)',
+      "This order did not arrive — return request (order stays on the road with return_requested). Courier: own SENT post; branch manager: SENT HQ→branch transfer post addressed to the manager's branch",
   })
-  @ApiParam({ name: 'postId', description: "Courier's SENT post ID" })
+  @ApiParam({
+    name: 'postId',
+    description:
+      "Courier's SENT post ID, or the SENT branch transfer post ID (manager)",
+  })
   @ApiParam({ name: 'orderId', description: 'Order ID in that post' })
   requestCourierOrderReturn(
     @Param('postId') postId: string,
@@ -1534,7 +1540,7 @@ export class LogisticsGatewayController {
   })
   @ApiOkResponse({
     description:
-      '`data.groups[].orders[]` — qaytariladigan buyurtma qatorlari. T9 (HJ5sLHiz): har qatorda `order_number` («EL-…») va `items[].product: {id, name} | null`.',
+      "`data.groups[].orders[]` — qaytariladigan buyurtma qatorlari. T9 (HJ5sLHiz): har qatorda `order_number` («EL-…») va `items[].product: {id, name} | null`. HQ doirasida filial o'tkazmasi so'rovlari (menejer «kelmagan» degan / qisman qabulda qolgan) alohida guruhda: `{ courier: null, courier_id: null, source: 'branch_transfer', branch_id }`.",
   })
   async getReturnRequests(@Req() req: { user: JwtUser }) {
     const response = (await this.sendLogisticsWithTimeout(
@@ -1565,7 +1571,7 @@ export class LogisticsGatewayController {
   @ApiBearerAuth()
   @ApiOperation({
     summary:
-      'Approve courier return requests: orders go back to the custody stock (own branch for manager/registrator, HQ for SA/admin/HQ registrator)',
+      "Approve return requests: courier rows go back to the custody stock (own branch for manager/registrator, HQ for SA/admin/HQ registrator); HQ→branch transfer rows (HQ scope) go back to HQ as received in the region's new post, ready to dispatch again. Rows changed meanwhile are skipped (skipped_order_ids); 409 if all were",
   })
   @ApiBody({ type: ReturnRequestsActionRequestDto })
   approveReturnRequests(
@@ -1596,7 +1602,7 @@ export class LogisticsGatewayController {
   @ApiBearerAuth()
   @ApiOperation({
     summary:
-      'Reject courier return requests: orders stay with the courier (same scope as approve)',
+      'Reject return requests: courier rows stay with the courier, transfer rows stay in the transfer post (same scope as approve). Rows changed meanwhile are skipped (skipped_order_ids); 409 if all were',
   })
   @ApiBody({ type: ReturnRequestsActionRequestDto })
   rejectReturnRequests(

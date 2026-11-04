@@ -79,6 +79,7 @@ import {
   isValidPaymentReversalStatusTransition,
   isValidRollbackStatusTransition,
   isValidStatusTransition as isValidOrderStatusTransition,
+  isValidTransferReturnStatusTransition,
   mapInitialStatusForTracking as mapInitialOrderStatusForTracking,
 } from '../domain/order-status.machine';
 import {
@@ -405,6 +406,25 @@ export const CANCELLED_POST_RETURNED_TRACKING_ACTION =
  */
 export const COURIER_RETURN_REQUESTED_TRACKING_ACTION =
   'courier_return_requested';
+/**
+ * Tracking: filial menejeri HQ → filial o'tkazma pochtasidagi buyurtma
+ * filialga kelmaganini bildirdi — qaytarish so'rovi (holat o'zgarmaydi —
+ * `on the road`). Kuryer qatoridan farqi — kim bildirgani tarixda ko'rinadi.
+ */
+export const BRANCH_RETURN_REQUESTED_TRACKING_ACTION =
+  'branch_return_requested';
+/**
+ * `return_request_review` (logistics «Qaytarish» tasdig'i / radi) qulf
+ * ostida mos kelmadi — buyurtma shu orada qabul qilingan yoki ko'rib
+ * chiqilgan. Logistics bu sababni «eskirgan tanlov» deb o'tkazib yuboradi.
+ */
+export const RETURN_REQUEST_REVIEW_CONFLICT_REASON =
+  'return_request_review_conflict';
+/**
+ * `post_receive_guard` (logistics `receivePost`) qulf ostida mos kelmadi —
+ * buyurtma shu orada pochtadan chiqqan (masalan HQ «Qaytarish» tasdig'i).
+ */
+export const POST_RECEIVE_CONFLICT_REASON = 'post_receive_conflict';
 /**
  * Order lifecycle: the write/mutation core (create/receive/sell/partly-sell/
  * cancel/could-not-deliver/rollback/return/provider-mark/market-cancelled
@@ -11056,6 +11076,8 @@ export class OrderLifecycleService {
    * buyurtma hali shu pochtada yo'lda va so'rovsiz bo'lsagina belgilanadi —
    * shu orada qabul qilingan (WAITING) posilka qaytarish ro'yxatiga tushmasin
    * (aks holda tasdiq kuryer qo'lidagi posilkani olib qo'yardi). Aks holda 409.
+   * Filial menejeri (`branch_return_request`, o'tkazma pochtasi) — xuddi shu
+   * tekshiruv: shu orada filial qabul qilgan posilka HQ ga qaytarilmasin.
    */
   private assertCourierReturnRequestable(
     order: Order,
@@ -11072,6 +11094,75 @@ export class OrderLifecycleService {
         statusCode: 409,
         message: `Buyurtma #${order.id} holati o'zgardi (qabul qilingan yoki so'rov allaqachon yuborilgan) — sahifani yangilang`,
         reason: 'courier_return_request_conflict',
+      });
+    }
+  }
+
+  /**
+   * «Qaytarish» tasdig'i / radi (logistics `approveReturnRequests` /
+   * `rejectReturnRequests`): logistics buyurtmani qulfsiz o'qigan — u hali
+   * o'sha so'rov holatida bo'lsagina yoziladi: belgi turibdi, pochta va
+   * holat o'qilgandek, egasi — kuryer (`courier`) yoki kuryersiz filial
+   * o'tkazmasi (`branch_transfer`). Aks holda 409
+   * `return_request_review_conflict`: shu orada filial qabul qilgan posilka
+   * HQ ga, HQ qaytargani filialga yozilmaydi.
+   */
+  private assertReturnRequestUnderReview(
+    order: Order,
+    review?: {
+      post_id?: string | null;
+      status?: string | null;
+      source?: string | null;
+    } | null,
+  ): void {
+    if (!review) return;
+    const hasCourierRef = (value: string | null | undefined) => {
+      const id = String(value ?? '').trim();
+      return !!id && id !== '0';
+    };
+    const holderMatches =
+      review.source === 'branch_transfer'
+        ? order.holder_type === OrderHolderType.BRANCH &&
+          !hasCourierRef(order.courier_id) &&
+          !hasCourierRef(order.holder_courier_id)
+        : order.holder_type === OrderHolderType.COURIER;
+    const expectedStatus = String(review.status ?? '').trim();
+    if (
+      order.return_requested !== true ||
+      String(order.post_id ?? '').trim() !==
+        String(review.post_id ?? '').trim() ||
+      (expectedStatus && String(order.status) !== expectedStatus) ||
+      !holderMatches
+    ) {
+      throw new RpcException({
+        statusCode: 409,
+        message: `Buyurtma #${order.id} qaytarish so'rovi shu orada o'zgardi (qabul qilingan yoki ko'rib chiqilgan) — sahifani yangilang`,
+        reason: RETURN_REQUEST_REVIEW_CONFLICT_REASON,
+      });
+    }
+  }
+
+  /**
+   * Pochta qabuli (logistics `receivePost`): buyurtma ro'yxati qulfsiz
+   * o'qilgan — buyurtma hali shu pochtada va o'qilgan holatida bo'lsagina
+   * yoziladi. Aks holda 409 `post_receive_conflict`: shu orada HQ «Qaytarish»
+   * tasdig'i HQ omboriga olgan buyurtma filialga qayta yozilmaydi.
+   */
+  private assertPostReceiveUnchanged(
+    order: Order,
+    guard?: { post_id?: string | null; status?: string | null } | null,
+  ): void {
+    const expectedPostId = String(guard?.post_id ?? '').trim();
+    if (!expectedPostId) return;
+    const expectedStatus = String(guard?.status ?? '').trim();
+    if (
+      String(order.post_id ?? '').trim() !== expectedPostId ||
+      (expectedStatus && String(order.status) !== expectedStatus)
+    ) {
+      throw new RpcException({
+        statusCode: 409,
+        message: `Buyurtma #${order.id} shu orada pochtadan chiqdi yoki holati o'zgardi — sahifani yangilang`,
+        reason: POST_RECEIVE_CONFLICT_REASON,
       });
     }
   }
@@ -11178,6 +11269,27 @@ export class OrderLifecycleService {
        * (`on the road`), tarixdagi qator va qulf ostidagi tekshiruv shundan.
        */
       courier_return_request?: { post_id?: string | null } | null;
+      /**
+       * Filial menejeri «Bu buyurtma kelmagan» (HQ → filial o'tkazma
+       * pochtasi) — kuryerniki bilan bir xil, tarixda alohida qator.
+       */
+      branch_return_request?: { post_id?: string | null } | null;
+      /**
+       * «Qaytarish» tasdig'i / radi (logistics): buyurtma hali o'qilgan so'rov
+       * holatida bo'lsin (qulf ostida, aks holda 409). `branch_transfer`
+       * tasdig'i — yagona `on the road → received` ruxsati (HQ omboriga,
+       * qayta jo'natish uchun).
+       */
+      return_request_review?: {
+        post_id?: string | null;
+        status?: string | null;
+        source?: 'courier' | 'branch_transfer' | null;
+      } | null;
+      /** Pochta qabuli (logistics `receivePost`): buyurtma hali shu pochtada. */
+      post_receive_guard?: {
+        post_id?: string | null;
+        status?: string | null;
+      } | null;
     },
     externalManager?: EntityManager,
     /**
@@ -11201,10 +11313,17 @@ export class OrderLifecycleService {
     const order = await this.findById(id);
     this.assertPostBranchReassignable(order, requester?.post_branch_reassign);
     this.assertCanceledPostUnchanged(order, requester?.canceled_post_guard);
-    this.assertCourierReturnRequestable(
+    // «Bu buyurtma kelmagan» — kuryer yoki filial menejeri; tekshiruv bir xil.
+    const notArrivedRequest =
+      requester?.courier_return_request ??
+      requester?.branch_return_request ??
+      null;
+    this.assertCourierReturnRequestable(order, notArrivedRequest);
+    this.assertReturnRequestUnderReview(
       order,
-      requester?.courier_return_request,
+      requester?.return_request_review,
     );
+    this.assertPostReceiveUnchanged(order, requester?.post_receive_guard);
     if (!externalManager) {
       this.assertCommercialFieldsEditable(order, dto);
       await this.assertDeliveryDetailsEditable(order, dto);
@@ -11364,7 +11483,11 @@ export class OrderLifecycleService {
       ? isValidRollbackStatusTransition(oldStatus, order.status)
       : options?.paymentReversal
         ? isValidPaymentReversalStatusTransition(oldStatus, order.status)
-        : this.isValidStatusTransition(oldStatus, order.status);
+        : requester?.return_request_review?.source === 'branch_transfer'
+          ? // HQ «Qaytarish» tasdig'i: filialga kelmagan buyurtma HQ
+            // omboriga `received` (yuqorida va qulf ostida tekshirilgan).
+            isValidTransferReturnStatusTransition(oldStatus, order.status)
+          : this.isValidStatusTransition(oldStatus, order.status);
     if (oldStatus !== order.status && !transitionAllowed) {
       // y2RarzlT: xabar foydalanuvchiga (toast) chiqadi — xom inglizcha emas.
       this.badRequest(
@@ -11442,8 +11565,9 @@ export class OrderLifecycleService {
           requester?.canceled_post_guard,
         );
       }
-      if (String(requester?.courier_return_request?.post_id ?? '').trim()) {
-        // Kuryer «kelmagan»: shu orada qabul (skan) bilan poyga — qulf ostida.
+      if (String(notArrivedRequest?.post_id ?? '').trim()) {
+        // Kuryer / filial «kelmagan»: shu orada qabul (skan yoki filial
+        // qabuli) bilan poyga — qulf ostida.
         const locked = await orderRepo.findOne({
           where: { id: String(order.id) },
           lock: { mode: 'pessimistic_write' },
@@ -11451,10 +11575,27 @@ export class OrderLifecycleService {
         if (!locked) {
           this.notFound(`Buyurtma #${order.id} topilmadi`);
         }
-        this.assertCourierReturnRequestable(
+        this.assertCourierReturnRequestable(locked, notArrivedRequest);
+      }
+      if (
+        requester?.return_request_review ||
+        String(requester?.post_receive_guard?.post_id ?? '').trim()
+      ) {
+        // «Qaytarish» tasdig'i/radi va filial qabuli bir-biri bilan poyga
+        // qiladi (HQ tasdiqlaydi ↔ filial qabul qiladi) — ikkalasi ham qulf
+        // ostida qayta tekshiriladi, ikkinchisi 409 oladi.
+        const locked = await orderRepo.findOne({
+          where: { id: String(order.id) },
+          lock: { mode: 'pessimistic_write' },
+        });
+        if (!locked) {
+          this.notFound(`Buyurtma #${order.id} topilmadi`);
+        }
+        this.assertReturnRequestUnderReview(
           locked,
-          requester?.courier_return_request,
+          requester?.return_request_review,
         );
+        this.assertPostReceiveUnchanged(locked, requester?.post_receive_guard);
       }
       if (replacementItems) {
         await this.replaceOrderItems(order.id, replacementItems, manager);
@@ -11616,12 +11757,15 @@ export class OrderLifecycleService {
         );
       }
 
-      // Kuryer «Bu buyurtma kelmagan»: holat bir xil (`on the road`), shuning
-      // uchun yuqoridagi status tracking'i yozilmaydi — tarixda so'rov qatori
-      // shu yerda (belgi endi qo'yilganda — bir marta).
-      const courierReturnRequest = requester?.courier_return_request;
+      // Kuryer / filial menejeri «Bu buyurtma kelmagan»: holat bir xil (`on
+      // the road`), shuning uchun yuqoridagi status tracking'i yozilmaydi —
+      // tarixda so'rov qatori shu yerda (belgi endi qo'yilganda — bir marta).
+      // Kim bildirgani — alohida action (kuryer / filial).
+      const isBranchNotArrived =
+        !requester?.courier_return_request &&
+        Boolean(requester?.branch_return_request);
       if (
-        courierReturnRequest &&
+        notArrivedRequest &&
         oldStatus === Order_status.ON_THE_ROAD &&
         order.status === Order_status.ON_THE_ROAD &&
         !previousReturnRequested &&
@@ -11636,13 +11780,22 @@ export class OrderLifecycleService {
             changed_by_role: requester?.id
               ? this.custody.toTrackingRole(requester.roles)
               : 'system',
-            action: COURIER_RETURN_REQUESTED_TRACKING_ACTION,
-            description:
-              "Kuryer buyurtma kelmaganini bildirdi — qaytarish so'rovi yuborildi",
+            action: isBranchNotArrived
+              ? BRANCH_RETURN_REQUESTED_TRACKING_ACTION
+              : COURIER_RETURN_REQUESTED_TRACKING_ACTION,
+            description: isBranchNotArrived
+              ? "Filial menejeri buyurtma filialga kelmaganini bildirdi — qaytarish so'rovi yuborildi"
+              : "Kuryer buyurtma kelmaganini bildirdi — qaytarish so'rovi yuborildi",
             old_value: { return_requested: false },
             new_value: { return_requested: true },
             metadata: {
-              post_id: courierReturnRequest.post_id ?? order.post_id ?? null,
+              post_id: notArrivedRequest.post_id ?? order.post_id ?? null,
+              ...(isBranchNotArrived
+                ? {
+                    branch_id:
+                      order.holder_branch_id ?? order.branch_id ?? null,
+                  }
+                : {}),
             },
             note: requester?.note ?? null,
           },

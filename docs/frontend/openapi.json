@@ -7161,7 +7161,7 @@
             "name": "postId",
             "required": true,
             "in": "path",
-            "description": "Courier's SENT post ID",
+            "description": "Courier's SENT post ID, or the SENT branch transfer post ID (manager)",
             "schema": {
               "type": "string"
             }
@@ -7186,12 +7186,13 @@
             "bearer": []
           }
         ],
-        "summary": "Courier: this order did not arrive — return request (order stays on the road with return_requested)",
+        "summary": "This order did not arrive — return request (order stays on the road with return_requested). Courier: own SENT post; branch manager: SENT HQ→branch transfer post addressed to the manager's branch",
         "tags": [
           "Logistics"
         ],
         "x-roles": [
-          "courier"
+          "courier",
+          "manager"
         ]
       }
     },
@@ -7247,7 +7248,7 @@
         "parameters": [],
         "responses": {
           "200": {
-            "description": "`data.groups[].orders[]` — qaytariladigan buyurtma qatorlari. T9 (HJ5sLHiz): har qatorda `order_number` («EL-…») va `items[].product: {id, name} | null`."
+            "description": "`data.groups[].orders[]` — qaytariladigan buyurtma qatorlari. T9 (HJ5sLHiz): har qatorda `order_number` («EL-…») va `items[].product: {id, name} | null`. HQ doirasida filial o'tkazmasi so'rovlari (menejer «kelmagan» degan / qisman qabulda qolgan) alohida guruhda: `{ courier: null, courier_id: null, source: 'branch_transfer', branch_id }`."
           }
         },
         "security": [
@@ -7291,7 +7292,7 @@
             "bearer": []
           }
         ],
-        "summary": "Approve courier return requests: orders go back to the custody stock (own branch for manager/registrator, HQ for SA/admin/HQ registrator)",
+        "summary": "Approve return requests: courier rows go back to the custody stock (own branch for manager/registrator, HQ for SA/admin/HQ registrator); HQ→branch transfer rows (HQ scope) go back to HQ as received in the region's new post, ready to dispatch again. Rows changed meanwhile are skipped (skipped_order_ids); 409 if all were",
         "tags": [
           "Logistics"
         ],
@@ -7327,7 +7328,7 @@
             "bearer": []
           }
         ],
-        "summary": "Reject courier return requests: orders stay with the courier (same scope as approve)",
+        "summary": "Reject return requests: courier rows stay with the courier, transfer rows stay in the transfer post (same scope as approve). Rows changed meanwhile are skipped (skipped_order_ids); 409 if all were",
         "tags": [
           "Logistics"
         ],

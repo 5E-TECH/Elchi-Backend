@@ -477,7 +477,21 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
     `POST /post/:postId/orders/:orderId/return-request`): it stays ON_THE_ROAD
     with `return_requested` (order-service `courier_return_request` locked
     recheck, tracking `courier_return_requested`) and goes to the return-request
-    list; approval closes the post. HQ NEW region posts and
+    list; approval closes the post. The destination branch MANAGER can do the
+    same on a SENT HQ→branch transfer post (courier_id empty/'0', branch scope
+    as in `receivePost`; marker `branch_return_request`, tracking
+    `branch_return_requested`, activity `source: 'branch_not_arrived'`). Such
+    transfer rows (and partial-receive leftovers of a transfer post; not
+    initiate-return rows with `return_reason`) are listed, approved and
+    rejected only in the HQ scope (`source: 'branch_transfer'` group);
+    approval returns them to their pre-dispatch HQ state (RECEIVED, holder HQ,
+    in the HQ NEW post of the transfer post's region — the only
+    `on the road → received` edge, order-service `return_request_review.source:
+    'branch_transfer'`), so `dispatchPostToBranch` can resend them, and closes
+    the post. Approve/reject writes are conditional (`return_request_review`,
+    locked recheck, stale rows → `skipped_order_ids`), as are `receivePost`
+    order writes (`post_receive_guard`), so HQ approval and the branch receive
+    cannot overwrite each other. Day reuse: HQ NEW region posts and
     the manager→HQ CANCELED post are unchanged. A partial
     **branch** receipt of a cancelled post sends unreceived parcels back to the
     real sender (LC-06). At **HQ** (owner decision 2026-11-03) unselected

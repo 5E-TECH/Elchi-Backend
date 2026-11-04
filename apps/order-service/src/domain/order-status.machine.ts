@@ -139,6 +139,30 @@ export function isValidPaymentReversalStatusTransition(
 }
 
 /**
+ * 2026-11-04 — FAQAT HQ «Qaytarish» tasdig'i, filial o'tkazmasi so'rovi
+ * (logistics `approveReturnRequests`, `return_request_review.source:
+ * 'branch_transfer'`): filialga kelmagan buyurtma HQ omboriga dispatch
+ * oldidagi holatida (`received`, hudud NEW pochtasida) qaytadi — HQ uni
+ * qayta jo'nata oladi (`dispatchPostToBranch` faqat `received` ni oladi).
+ * Umumiy jadvalga QO'SHILMAYDI: oddiy PATCH yo'ldagi buyurtmani «qabul
+ * qilingan» qila olmasin; ruxsat qulf ostidagi tekshiruv bilan birga.
+ */
+export const ORDER_TRANSFER_RETURN_EXTRA_TRANSITIONS: Partial<
+  Record<Order_status, Order_status[]>
+> = {
+  [Order_status.ON_THE_ROAD]: [Order_status.RECEIVED],
+};
+
+/** Filial o'tkazmasi qaytarish tasdig'i yo'lining tekshiruvi (umumiy mashina + yuqoridagi qirra). */
+export function isValidTransferReturnStatusTransition(
+  from: Order_status,
+  to: Order_status,
+): boolean {
+  if (isValidStatusTransition(from, to)) return true;
+  return ORDER_TRANSFER_RETURN_EXTRA_TRANSITIONS[from]?.includes(to) ?? false;
+}
+
+/**
  * The status a brand-new order is recorded under on the tracking timeline: NEW
  * is normalised to CREATED so the timeline starts from a stable initial state.
  */
