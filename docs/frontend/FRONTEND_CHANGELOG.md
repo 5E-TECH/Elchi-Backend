@@ -22,6 +22,14 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+### 2026-11-04 — «Almashtirish» (lQjt6sKP) frontendi: market operatori ham eski buyurtmani tanlaydi
+
+- ✏️ [gateway] `GET /orders/replaceable` — `MARKET_OPERATOR` ham chaqira oladi (ilgari 403): market — operatorning identity `user.market_id` si (tanadagi/so'rovdagi `market_id` e'tiborsiz), marketga biriktirilmagan operator — 400. `POST /orders` dagi market aniqlash bilan bir xil.
+
+→ **Frontendda:** buyurtma formasida «Almashtirish (ixtiyoriy)» bloki (`replaced_order_id`), kuryer sotish oynasida «Eski mahsulotni oldim» (`oldItemCollected: true`), «Almashtirish qaytarmalari» sahifasi (`GET /orders/replacement/returns`).
+
+Migratsiya yo'q. Deploy: api-gateway.
+
 ### 2026-11-04 — Yangi menejerda «Sotish / bekor qilish» sukut bo'yicha yoqiq
 
 Ega qarori: viloyat va aralash filial menejerida sotish/bekor qilish sukut bo'yicha yoqiq bo'lsin.

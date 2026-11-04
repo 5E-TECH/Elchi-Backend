@@ -6164,9 +6164,11 @@ export class OrderGatewayController {
   /**
    * (lQjt6sKP) ALMASHTIRISH (kafolat-swap) — buyurtma yaratish formasida
    * eski (YETKAZILGAN) buyurtmani tanlash. Market — faqat o'z buyurtmalari;
-   * boshqa yaratuvchi rollar `market_id` beradi (POST /orders bilan AYNI
-   * doira). `q`: 1–6 raqam — buyurtma ID; telefon — shu marketdagi mijoz;
-   * boshqa matn — izoh yoki mahsulot nomi.
+   * market operatori — o'z marketi (identity `user.market_id`, query
+   * `market_id` e'tiborsiz; BeePost OPERATOR kabi); boshqa yaratuvchi rollar
+   * `market_id` beradi (POST /orders bilan AYNI doira). `q`: 1–6 raqam —
+   * buyurtma ID; telefon — shu marketdagi mijoz; boshqa matn — izoh yoki
+   * mahsulot nomi.
    * ⚠️ `@Get(':id')` dan OLDIN e'lon qilingan.
    */
   @Get('replaceable')
@@ -6178,6 +6180,7 @@ export class OrderGatewayController {
     RoleEnum.MARKET,
     RoleEnum.MANAGER,
     RoleEnum.BRANCH,
+    RoleEnum.MARKET_OPERATOR,
   )
   @ApiBearerAuth()
   @ApiOperation({
@@ -6200,9 +6203,28 @@ export class OrderGatewayController {
     @Req() req: { user: JwtUser },
   ) {
     const roles = this.normalizeRoles(req.user.roles);
-    const marketId = roles.includes(RoleEnum.MARKET)
-      ? String(req.user.sub)
-      : String(marketIdRaw ?? '').trim();
+    let marketId: string;
+    if (roles.includes(RoleEnum.MARKET)) {
+      marketId = String(req.user.sub);
+    } else if (roles.includes(RoleEnum.MARKET_OPERATOR)) {
+      // Operator marketi — `POST /orders` dagi kabi identity'dan (yaratish
+      // formasi `replaced_order_id` ni shu market buyurtmalaridan oladi).
+      const operatorProfile = await this.sendIdentityWithTimeout(
+        { cmd: 'identity.user.find_by_id' },
+        { id: req.user.sub },
+      ).catch(() => null);
+      marketId = String(
+        (operatorProfile as { data?: { market_id?: string | null } } | null)
+          ?.data?.market_id ?? '',
+      ).trim();
+      if (!marketId) {
+        throw new BadRequestException(
+          'Operator hech qaysi marketga biriktirilmagan',
+        );
+      }
+    } else {
+      marketId = String(marketIdRaw ?? '').trim();
+    }
     if (!/^\d{1,18}$/.test(marketId)) {
       throw new BadRequestException(
         'market_id majburiy — almashtirish faqat shu market buyurtmalari ichidan',

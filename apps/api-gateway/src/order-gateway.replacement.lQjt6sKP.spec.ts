@@ -6,6 +6,7 @@ import { validate } from 'class-validator';
 import { of } from 'rxjs';
 import request from 'supertest';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
+import { ROLES_KEY } from './auth/roles.decorator';
 import { RolesGuard } from './auth/roles.guard';
 import { UserThrottlerGuard } from './auth/user-throttler.guard';
 import { OrderGatewayController } from './order-gateway.controller';
@@ -170,6 +171,48 @@ describe('lQjt6sKP — almashtirish: GET /orders/replaceable va /replacement/ret
       name: 'Ali Valiyev',
       phone_number: '+998901234567',
     });
+  });
+
+  it("market operatori: marketi identity'dan (query market_id e'tiborsiz) — @Roles ochiq", async () => {
+    expect(
+      Reflect.getMetadata(
+        ROLES_KEY,
+        OrderGatewayController.prototype.listReplaceableOrders,
+      ),
+    ).toContain('market_operator');
+    user = { sub: '77', roles: ['market_operator'] };
+    identitySend.mockImplementation((pattern: { cmd: string }) =>
+      of(
+        pattern.cmd === 'identity.user.find_by_id'
+          ? { data: { id: '77', market_id: '41' } }
+          : { data: [] },
+      ),
+    );
+    await request(app.getHttpServer())
+      .get('/orders/replaceable?market_id=3&customer_id=801')
+      .expect(200);
+    expect(identitySend).toHaveBeenCalledWith(
+      { cmd: 'identity.user.find_by_id' },
+      { id: '77' },
+    );
+    expect(orderCall('order.replaceable')).toMatchObject({
+      market_id: '41',
+      customer_id: '801',
+    });
+  });
+
+  it('marketga biriktirilmagan operator → 400, order-service chaqirilmaydi', async () => {
+    user = { sub: '78', roles: ['market_operator'] };
+    identitySend.mockImplementation(() =>
+      of({ data: { id: '78', market_id: null } }),
+    );
+    const res = await request(app.getHttpServer())
+      .get('/orders/replaceable?market_id=3')
+      .expect(400);
+    expect(String(res.body.message)).toContain(
+      'Operator hech qaysi marketga biriktirilmagan',
+    );
+    expect(orderSend).not.toHaveBeenCalled();
   });
 
   it('boshqa rollar uchun market_id majburiy → 400', async () => {

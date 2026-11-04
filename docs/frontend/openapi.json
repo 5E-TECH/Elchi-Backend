@@ -4966,7 +4966,8 @@
           "registrator",
           "market",
           "manager",
-          "branch"
+          "branch",
+          "market_operator"
         ]
       }
     },
