@@ -22,6 +22,15 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+### 2026-11-04 — HQ filialiga viloyat: Toshkent shahri (migratsiya 1716000000204, anKpzwxk 4-qaror)
+
+anKpzwxk 4-qarori: «HQ kuryerlari faqat HQ joylashgan viloyat buyurtmalarini oladi». Qoida HQ filialining `region_id` sini o'qiydi; u bo'sh bo'lsa HQ kuryeriga hech narsa berilmaydi (400 `branch_region_missing`). HQ esa viloyatsiz yaratiladi va admin UI uni belgilay olmaydi. Ega: HQ — Toshkent shahrida.
+
+**Migratsiya `1716000000204-HqBranchRegion`:** viloyati BO'SH HQ filialiga Toshkent shahri (SOATO `1726`) yoziladi. Qo'lda qo'yilgan viloyat ustidan yozilmaydi, boshqa qatorlarga tegilmaydi, qayta yurgizish hech narsani o'zgartirmaydi; `down()` bo'sh.
+
+→ **Frontendda:** 🟢 o'zgarish shart emas. Deploydan keyin HQ kuryeri faqat Toshkent shahri buyurtmalarini oladi (boshqa viloyat — 403 `hq_courier_region_only`, matn tayyor).
+- 🟢 Bo'sh bazada (`db:prepare`) HQ migratsiyalardan keyin yaratiladi — u yerda HQ viloyati qo'lda beriladi.
+
 ### 2026-11-04 — Filial menejeri: «Bu buyurtma kelmagan — qaytarish so'rovi» (o'tkazma pochtasida, kuryerniki kabi)
 
 Ega talabi: HQ filialga pochta jo'natganda, filial menejeri hali to'liq qabul qilinmagan (SENT) pochtadagi kelmagan buyurtmani belgilay olsin — kuryer o'z pochtasida qilgandek.
@@ -193,7 +202,7 @@ Ega qarori (Trello anKpzwxk): 2026-11-02 dagi «tuman ↔ filial» biriktiruvi (
 - 🔧 Filial pochtasini qabul qilish tugmasi faqat manzil filial menejeriga (registratorga — yo'q).
 
 **Deploydan oldin (ops):**
-- HQ filialiga viloyat bering. Aks holda HQ kuryeriga hech narsa berilmaydi (400 `branch_region_missing`). Tekshiruv: `SELECT id, name, region_id FROM branch_schema.branches WHERE type = 'HQ' AND is_deleted = false`.
+- HQ filialiga viloyat bering. Aks holda HQ kuryeriga hech narsa berilmaydi (400 `branch_region_missing`). Tekshiruv: `SELECT id, name, region_id FROM branch_schema.branches WHERE type = 'HQ' AND is_deleted = false`. (2026-11-04: migratsiya `1716000000204` bo'sh HQ viloyatiga Toshkent shahrini yozadi — yuqoridagi yozuv.)
 - Viloyati yo'q oddiy filiallar hech narsaga xizmat qilmaydi (jo'natish ham, kuryerga berish ham yo'q). Ro'yxat: `SELECT id, name FROM branch_schema.branches WHERE region_id IS NULL AND type <> 'HQ' AND is_deleted = false`.
 - `serving_branch_id` boshqa viloyat filialini ko'rsatgan tumanlar endi o'z viloyati filiallariga xizmat qiladi.
 
