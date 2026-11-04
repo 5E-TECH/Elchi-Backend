@@ -60,6 +60,7 @@ import type {
   UpdateMarketOperatorCommissionPayload,
   UpdateMarketOperatorWarehouseAccessPayload,
 } from './contracts/market-operator.payloads';
+import type { CreatePasswordFields } from './temp-password/create-password';
 
 @Controller()
 export class IdentityController {
@@ -281,7 +282,7 @@ export class IdentityController {
   createInvestorUser(
     @Payload()
     payload: {
-      dto: { name: string; phone_number: string; password: string };
+      dto: { name: string; phone_number: string } & CreatePasswordFields;
       requester?: CreateUserPayload['requester'];
     },
     @Ctx() context: RmqContext,

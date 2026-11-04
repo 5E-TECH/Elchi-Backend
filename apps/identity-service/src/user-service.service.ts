@@ -1690,11 +1690,15 @@ export class UserServiceService implements OnModuleInit {
    * yaratishning birorta yo'li yo'q edi — `/investors/me` ni hech kim
    * ishlata olmasdi. Faqat kirish uchun: ism, telefon, parol. Maosh, to'lov
    * kuni, filial, kassa YO'Q (roleToCashboxType → null). Kapital/ulush/foyda
-   * investor-service'da; login `PATCH /investors/:id {user_id}` bilan
-   * bog'lanadi.
+   * investor-service'da; gateway login yaratilgach investor yozuvini shu
+   * loginga bog'laydi (`investor.login.attach`).
+   *
+   * Parol — boshqa rollardagi kabi (aidsxJ2H): `generate_sms` (sukut) yoki
+   * `manual`; `password_mode` siz, `password` bilan kelgan eski so'rov —
+   * `manual`.
    */
   async createInvestorUser(
-    dto: { name: string; phone_number: string; password: string },
+    dto: { name: string; phone_number: string } & CreatePasswordFields,
     requester?: RequesterContext,
   ) {
     this.assertRequesterCanCreateInvestorUser(requester);
@@ -1702,21 +1706,27 @@ export class UserServiceService implements OnModuleInit {
     // 2026-11-04: odam ismi — har so'z bosh harfi katta.
     const name = normalizePersonName(String(dto?.name ?? ''));
     const phoneNumber = String(dto?.phone_number ?? '').trim();
-    const password = String(dto?.password ?? '');
-    if (!name || !phoneNumber || !password) {
-      this.badRequest('name, phone_number va password majburiy');
+    if (!name || !phoneNumber) {
+      this.badRequest('name va phone_number majburiy');
     }
 
     await this.ensurePhoneUnique(phoneNumber);
 
-    this.assertPasswordPolicy(password, Roles.INVESTOR, phoneNumber);
-    const hashedPassword = await this.bcryptEncryption.encrypt(password);
+    const initialPassword = this.resolveInitialPassword(
+      dto,
+      Roles.INVESTOR,
+      phoneNumber,
+    );
+    const hashedPassword = await this.bcryptEncryption.encrypt(
+      initialPassword.password,
+    );
 
     const investorUser = this.users.create({
       name,
       phone_number: phoneNumber,
       username: null,
       password: hashedPassword,
+      ...this.initialPasswordFlags(initialPassword),
       salary: 0,
       role: Roles.INVESTOR,
       status: Status.ACTIVE,
@@ -1737,7 +1747,12 @@ export class UserServiceService implements OnModuleInit {
       },
       ...this.auditActor(requester),
     });
-    return successRes(this.sanitize(saved), 201, 'Investor login yaratildi');
+    return this.createdUserReply(
+      saved,
+      initialPassword,
+      requester,
+      'Investor login yaratildi',
+    );
   }
 
   /**

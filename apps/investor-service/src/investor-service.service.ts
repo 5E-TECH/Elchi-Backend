@@ -335,6 +335,77 @@ export class InvestorServiceService {
     return successRes(saved, 201, 'investor created');
   }
 
+  /**
+   * «Foydalanuvchi qo'shish» → Investor (BeePost `POST /users/investor`
+   * naqshi): gateway investor LOGINI yaratgach, shu telefondagi investor
+   * yozuvini topib loginga bog'laydi, yozuv yo'q bo'lsa — yaratadi. Shunda
+   * investor «Investorlar» ro'yxatida chiqadi va `/investors/me` ishlaydi.
+   *
+   * `dry_run` — login yaratilishidan OLDINGI tekshiruv (keyin SMS ketgan
+   * loginni o'chirishga to'g'ri kelmasin): telefon boshqa loginga bog'langan
+   * yozuvda bo'lsa — 409, aks holda bog'lanadigan yozuv id'si (yoki null).
+   */
+  async attachLogin(
+    dto: {
+      user_id?: unknown;
+      name?: unknown;
+      phone_number?: unknown;
+      dry_run?: boolean;
+    },
+    requester?: Requester,
+  ) {
+    const phoneNumber =
+      typeof dto?.phone_number === 'string' ? dto.phone_number.trim() : '';
+    this.validateUzPhoneNumber(phoneNumber);
+
+    const existing = await this.investorRepo.findOne({
+      where: { phone_number: phoneNumber, isDeleted: false },
+    });
+    const userId = this.normalizeLinkedUserId(dto?.user_id);
+    const linkedTo = existing ? String(existing.user_id) : '0';
+    if (existing && linkedTo !== '0' && linkedTo !== userId) {
+      this.conflict(
+        "Bu telefon raqamli investor allaqachon boshqa loginga bog'langan",
+      );
+    }
+
+    if (dto?.dry_run) {
+      return successRes({ investor_id: existing ? String(existing.id) : null });
+    }
+
+    if (!userId) {
+      this.badRequest("user_id musbat butun son bo'lishi kerak");
+    }
+    await this.assertUserIdFree(userId, existing?.id);
+
+    if (existing) {
+      if (linkedTo === userId) {
+        return successRes(existing, 200, 'investor already linked');
+      }
+      const before = { ...existing };
+      existing.user_id = userId;
+      const saved = await this.investorRepo.save(existing);
+      await this.activityLog.logChange({
+        entity_type: 'Investor',
+        entity_id: String(saved.id),
+        old_value: before,
+        new_value: saved as unknown as Record<string, unknown>,
+        action: ActivityAction.UPDATED,
+        ...this.auditActor(requester),
+      });
+      return successRes(saved, 200, 'investor linked');
+    }
+
+    return this.createInvestor(
+      {
+        name: typeof dto?.name === 'string' ? dto.name : '',
+        phone_number: phoneNumber,
+        user_id: userId,
+      },
+      requester,
+    );
+  }
+
   async findAllInvestors(query: InvestorQuery) {
     const { search, status } = query ?? {};
     const { page, limit, skip } = this.normalizePagination(

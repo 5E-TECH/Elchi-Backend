@@ -168,3 +168,61 @@ describe('vpKijXce — identity.investor_user.create (investor logini)', () => {
     expect(userService.createInvestorUser).toHaveBeenCalledWith(dto, admin);
   });
 });
+
+/**
+ * «Foydalanuvchi qo'shish» → Investor: parol boshqa rollardagi kabi
+ * (aidsxJ2H) — `generate_sms` (sukut) yoki `manual`.
+ */
+describe('investor logini — parol rejimi (aidsxJ2H)', () => {
+  const base = { name: 'Ali Investor', phone_number: '+998901234567' };
+
+  it('⭐ generate_sms (parolsiz) — tizim paroli, birinchi kirishda almashtiriladi', async () => {
+    const ctx = makeService();
+
+    const res: any = await ctx.service.createInvestorUser(
+      { ...base, password_mode: 'generate_sms' },
+      superadmin,
+    );
+
+    expect(res.statusCode).toBe(201);
+    expect(res.data.password_mode).toBe('generate_sms');
+    expect(res.data.password).toBeUndefined();
+    expect(ctx.repo.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        role: Roles.INVESTOR,
+        password: 'hashed-pw',
+        must_change_password: true,
+        password_change_forced: true,
+      }),
+    );
+  });
+
+  it('manual + must_change_password — admin kiritgan parol, bayroq saqlanadi', async () => {
+    const ctx = makeService();
+
+    const res: any = await ctx.service.createInvestorUser(
+      { ...dto, password_mode: 'manual', must_change_password: true },
+      superadmin,
+    );
+
+    expect(res.data.password_mode).toBe('manual');
+    expect(res.data.password_sms).toBeNull();
+    expect(ctx.repo.create).toHaveBeenCalledWith(
+      expect.objectContaining({ must_change_password: true }),
+    );
+  });
+
+  it.each([
+    ['manual, parolsiz', { ...base, password_mode: 'manual' }],
+    ['generate_sms + parol', { ...dto, password_mode: 'generate_sms' }],
+  ])('%s — 400, yaratilmaydi', async (_label, body) => {
+    const ctx = makeService();
+
+    const err = await ctx.service
+      .createInvestorUser(body, superadmin)
+      .catch((e: unknown) => e);
+
+    expect(statusOf(err)).toBe(400);
+    expect(ctx.repo.save).not.toHaveBeenCalled();
+  });
+});

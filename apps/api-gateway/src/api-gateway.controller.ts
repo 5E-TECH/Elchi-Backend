@@ -133,6 +133,11 @@ export class ApiGatewayController {
     // Z3pUOxou — logist viloyatlari (GET /couriers). Yo'q bo'lsa logist
     // so'rovi 503 (fail-closed); boshqa rollar unga bog'liq emas.
     @Optional() private readonly logistScope?: LogistRegionScopeService,
+    // POST /investor-users — login ↔ investor yozuvi. Yo'q bo'lsa 503
+    // (fail-closed); boshqa marshrutlar unga bog'liq emas.
+    @Optional()
+    @Inject('INVESTOR')
+    private readonly investorClient?: ClientProxy,
   ) {}
 
   private toRequester(req: { user: JwtUser }) {
@@ -508,10 +513,18 @@ export class ApiGatewayController {
   /**
    * vpKijXce — investor LOGINI (identity, rol = investor). BeePost
    * `POST /users/investor` naqshi: faqat kirish uchun (ism, telefon, parol),
-   * maosh/filial/kassa yo'q. Keyingi qadam — `POST /investors` yoki
-   * `PATCH /investors/:id` da `user_id` = shu login id si; `/investors/me`
-   * investorni aynan shu bog'lanish orqali topadi. O'chirish — umumiy
-   * `DELETE /users/:id`.
+   * maosh/filial/kassa yo'q. O'chirish — umumiy `DELETE /users/:id`.
+   *
+   * «Foydalanuvchi qo'shish» → Investor: login yaratilgach shu telefondagi
+   * investor yozuvi loginga bog'lanadi (yo'q bo'lsa — yaratiladi), javob
+   * `data.investor` da. Shunda investor «Investorlar» ro'yxatida chiqadi va
+   * `/investors/me` ishlaydi — alohida `PATCH /investors/:id {user_id}` shart
+   * emas. Tartib:
+   *  1) oldindan tekshiruv (`dry_run`): telefon boshqa loginga bog'langan
+   *     investorda bo'lsa — 409, login YARATILMAYDI (SMS ham ketmaydi);
+   *  2) login (`generate_sms` da identity SMS yuboradi);
+   *  3) bog'lash; xato bo'lsa login o'chiriladi — loginsiz investor ham,
+   *     investorsiz login ham qolmaydi.
    */
   @Post('investor-users')
   @UseGuards(JwtAuthGuard, RolesGuard)
@@ -519,18 +532,72 @@ export class ApiGatewayController {
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Create investor login (role = investor)' })
   @ApiBody({ type: CreateInvestorUserRequestDto })
-  @ApiCreatedResponse({ description: 'Investor login created' })
+  @ApiCreatedResponse({
+    description: 'Investor login created; `data.investor` — linked record',
+  })
   @ApiConflictResponse({ description: 'Phone number already exists' })
-  createInvestorUser(
+  async createInvestorUser(
     @Body() dto: CreateInvestorUserRequestDto,
     @Req() req: { user: JwtUser },
   ) {
-    return this.identityClient
-      .send(
-        { cmd: 'identity.investor_user.create' },
-        { dto, requester: this.toRequester(req) },
-      )
-      .pipe(timeout(8000));
+    const investorClient = this.investorClient;
+    if (!investorClient) {
+      throw new ServiceUnavailableException('Investor xizmati ulanmagan');
+    }
+    const requester = this.toRequester(req);
+    const attach = (payload: Record<string, unknown>) =>
+      firstValueFrom(
+        investorClient
+          .send({ cmd: 'investor.login.attach' }, { dto: payload, requester })
+          .pipe(timeout(8000)),
+      );
+
+    await attach({ phone_number: dto.phone_number, dry_run: true });
+
+    const created = await firstValueFrom(
+      this.identityClient
+        .send({ cmd: 'identity.investor_user.create' }, { dto, requester })
+        .pipe(timeout(8000)),
+    );
+    const user = (created as { data?: Record<string, unknown> } | null)?.data;
+    const rawUserId = user?.id;
+    const userId =
+      typeof rawUserId === 'string' || typeof rawUserId === 'number'
+        ? String(rawUserId)
+        : '';
+    if (!userId) {
+      throw new ServiceUnavailableException(
+        'Investor logini yaratildi, lekin javobda id yo‘q',
+      );
+    }
+
+    try {
+      const linked = await attach({
+        user_id: userId,
+        name: user?.name,
+        phone_number: user?.phone_number,
+      });
+      return {
+        ...(created as Record<string, unknown>),
+        data: {
+          ...user,
+          investor: (linked as { data?: unknown } | null)?.data ?? null,
+        },
+      };
+    } catch (error) {
+      await firstValueFrom(
+        this.identityClient
+          .send({ cmd: 'identity.user.delete' }, { id: userId, requester })
+          .pipe(timeout(8000)),
+      ).catch((deleteError: unknown) => {
+        this.logger.error(
+          `Investor logini ${userId} investor yozuviga bog'lanmadi va o'chirilmadi: ${
+            (deleteError as Error)?.message ?? String(deleteError)
+          }`,
+        );
+      });
+      throw error;
+    }
   }
 
   @Get('investor-users')

@@ -1,9 +1,17 @@
-import { Status, IsPasswordPolicy, Roles } from '@app/common';
+import {
+  Status,
+  IsPasswordPolicy,
+  Roles,
+  PASSWORD_MODES,
+  type PasswordMode,
+} from '@app/common';
 import { ApiProperty, ApiPropertyOptional, OmitType } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
 import {
+  IsBoolean,
   IsDateString,
   IsEnum,
+  IsIn,
   IsNumber,
   IsOptional,
   IsPhoneNumber,
@@ -226,8 +234,12 @@ export class CreateInvestorProfitShareDto extends OmitType(
 /**
  * vpKijXce: investor LOGINI (identity, rol = investor) — BeePost
  * `POST /users/investor` naqshi: faqat kirish uchun (ism, telefon, parol),
- * maosh/kassa yo'q. Keyin `POST/PATCH /investors {user_id}` bilan investor
- * yozuviga bog'lanadi va `/investors/me` shu orqali topadi.
+ * maosh/kassa yo'q. Gateway shu telefondagi investor yozuvini loginga
+ * bog'laydi (yo'q bo'lsa — yaratadi), javob `data.investor` da; `/investors/me`
+ * shu bog'lanish orqali topiladi.
+ *
+ * Parol — boshqa rollardagi kabi (aidsxJ2H): `generate_sms` (sukut) yoki
+ * `manual`. `password_mode` siz, `password` bilan kelgan eski so'rov — `manual`.
  */
 export class CreateInvestorUserRequestDto {
   @ApiProperty({ example: 'Investor Ismi' })
@@ -239,13 +251,33 @@ export class CreateInvestorUserRequestDto {
   @IsPhoneNumber('UZ')
   phone_number!: string;
 
-  @ApiProperty({
+  @ApiPropertyOptional({
     example: 'Kuchli-Parol-2026',
     minLength: 8,
     description:
-      'Kamida 6 belgi: 1 ta katta harf, 1 ta kichik harf va 1 ta raqam; oddiy parollar taqiqlangan',
+      "Faqat `password_mode: 'manual'` da (yoki `password_mode` yuborilmagan eski so'rovda). Kamida 6 belgi: 1 ta katta harf, 1 ta kichik harf va 1 ta raqam; oddiy parollar taqiqlangan",
   })
+  @IsOptional()
   @IsString()
   @IsPasswordPolicy(Roles.INVESTOR)
-  password!: string;
+  password?: string;
+
+  @ApiPropertyOptional({
+    enum: PASSWORD_MODES,
+    default: 'generate_sms',
+    description:
+      '`generate_sms` (sukut) — tizim parol yaratadi va SMS qiladi, `password` yuborilmaydi; `manual` — `password` majburiy.',
+  })
+  @IsOptional()
+  @IsIn(PASSWORD_MODES)
+  password_mode?: PasswordMode;
+
+  @ApiPropertyOptional({
+    example: true,
+    description:
+      'Faqat `manual` da: birinchi kirishda parolni almashtirish majburiy. `generate_sms` da doim true.',
+  })
+  @IsOptional()
+  @IsBoolean()
+  must_change_password?: boolean;
 }

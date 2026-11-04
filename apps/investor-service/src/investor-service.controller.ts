@@ -81,6 +81,26 @@ export class InvestorServiceController {
     );
   }
 
+  /** «Foydalanuvchi qo'shish» → Investor: login ↔ investor yozuvi (gateway). */
+  @MessagePattern({ cmd: 'investor.login.attach' })
+  attachLogin(
+    @Payload()
+    data: {
+      dto?: {
+        user_id?: unknown;
+        name?: unknown;
+        phone_number?: unknown;
+        dry_run?: boolean;
+      };
+      requester?: { id?: string; roles?: string[] };
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.investorService.attachLogin(data?.dto ?? {}, data?.requester),
+    );
+  }
+
   @MessagePattern({ cmd: 'investor.find_all' })
   findAll(@Payload() data: any, @Ctx() context: RmqContext) {
     return this.executeAndAck(context, () =>

@@ -4,8 +4,9 @@ import {
   ValidationPipe,
 } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
-import { of } from 'rxjs';
+import { of, throwError } from 'rxjs';
 import request from 'supertest';
+import { AllExceptionsFilter, RpcExceptionFilter } from '@app/common';
 import { ApiGatewayController } from './api-gateway.controller';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
 import { InvestorGatewayController } from './investor-gateway.controller';
@@ -271,8 +272,32 @@ describe('vpKijXce — ichki investor marshrutlari va login bog‘lash', () => {
 
 describe('vpKijXce — POST/GET /investor-users (investor logini, BeePost naqshi)', () => {
   let app: INestApplication;
-  const identitySend = jest.fn(() =>
-    of({ statusCode: 201, data: { id: '31' } }),
+  const identitySend = jest.fn((pattern: { cmd: string }) =>
+    of(
+      pattern.cmd === 'identity.user.delete'
+        ? { statusCode: 200, data: {} }
+        : {
+            statusCode: 201,
+            message: 'Investor login yaratildi',
+            data: {
+              id: '31',
+              name: 'Ali Investor',
+              phone_number: '+998901234567',
+              role: 'investor',
+              password_mode: 'manual',
+              password_sms: null,
+            },
+          },
+    ),
+  );
+  // «Foydalanuvchi qo'shish» → Investor: login ↔ investor yozuvi.
+  const investorSend = jest.fn(
+    (_pattern: { cmd: string }, payload: { dto: { dry_run?: boolean } }) =>
+      of(
+        payload.dto.dry_run
+          ? { statusCode: 200, data: { investor_id: null } }
+          : { statusCode: 201, data: { id: '5', user_id: '31' } },
+      ),
   );
   let user: object = { sub: '1', username: 'sa', roles: ['superadmin'] };
 
@@ -283,6 +308,7 @@ describe('vpKijXce — POST/GET /investor-users (investor logini, BeePost naqshi
         { provide: 'IDENTITY', useValue: { send: identitySend } },
         { provide: 'FINANCE', useValue: { send: jest.fn() } },
         { provide: 'BRANCH', useValue: { send: jest.fn() } },
+        { provide: 'INVESTOR', useValue: { send: investorSend } },
       ],
     })
       .overrideGuard(JwtAuthGuard)
@@ -301,6 +327,7 @@ describe('vpKijXce — POST/GET /investor-users (investor logini, BeePost naqshi
         transform: true,
       }),
     );
+    app.useGlobalFilters(new AllExceptionsFilter(), new RpcExceptionFilter());
     await app.init();
   });
 
@@ -310,6 +337,7 @@ describe('vpKijXce — POST/GET /investor-users (investor logini, BeePost naqshi
 
   beforeEach(() => {
     identitySend.mockClear();
+    investorSend.mockClear();
     user = { sub: '1', username: 'sa', roles: ['superadmin'] };
   });
 
@@ -328,6 +356,101 @@ describe('vpKijXce — POST/GET /investor-users (investor logini, BeePost naqshi
     expect(identitySend).toHaveBeenCalledWith(
       { cmd: 'identity.investor_user.create' },
       { dto: body, requester: { id: '1', roles: ['superadmin'] } },
+    );
+  });
+
+  it('⭐ login yaratilgach investor yozuvi shu loginga bog‘lanadi — javobda data.investor', async () => {
+    const requester = { id: '1', roles: ['superadmin'] };
+
+    const res = await request(app.getHttpServer())
+      .post('/investor-users')
+      .send({ ...body, password_mode: 'manual', must_change_password: true });
+
+    expect(res.status).toBe(201);
+    expect(investorSend).toHaveBeenNthCalledWith(
+      1,
+      { cmd: 'investor.login.attach' },
+      { dto: { phone_number: '+998901234567', dry_run: true }, requester },
+    );
+    expect(investorSend).toHaveBeenNthCalledWith(
+      2,
+      { cmd: 'investor.login.attach' },
+      {
+        dto: {
+          user_id: '31',
+          name: 'Ali Investor',
+          phone_number: '+998901234567',
+        },
+        requester,
+      },
+    );
+    // Tekshiruv login'dan OLDIN, bog'lash — keyin.
+    expect(investorSend.mock.invocationCallOrder[0]).toBeLessThan(
+      identitySend.mock.invocationCallOrder[0],
+    );
+    expect(res.body.data).toEqual(
+      expect.objectContaining({
+        id: '31',
+        role: 'investor',
+        password_mode: 'manual',
+        investor: { id: '5', user_id: '31' },
+      }),
+    );
+  });
+
+  it('SMS rejimi (parolsiz) ham qabul qilinadi', async () => {
+    const withoutPassword = {
+      name: body.name,
+      phone_number: body.phone_number,
+    };
+
+    const res = await request(app.getHttpServer())
+      .post('/investor-users')
+      .send({ ...withoutPassword, password_mode: 'generate_sms' });
+
+    expect(res.status).toBe(201);
+    expect(identitySend).toHaveBeenCalledWith(
+      { cmd: 'identity.investor_user.create' },
+      expect.objectContaining({
+        dto: { ...withoutPassword, password_mode: 'generate_sms' },
+      }),
+    );
+  });
+
+  it('telefon boshqa loginga bog‘langan investorda — 409, login YARATILMAYDI', async () => {
+    investorSend.mockImplementationOnce(() =>
+      throwError(() => ({
+        statusCode: 409,
+        message:
+          "Bu telefon raqamli investor allaqachon boshqa loginga bog'langan",
+      })),
+    );
+
+    const res = await request(app.getHttpServer())
+      .post('/investor-users')
+      .send(body);
+
+    expect(res.status).toBe(409);
+    expect(identitySend).not.toHaveBeenCalled();
+  });
+
+  it('bog‘lab bo‘lmadi — login o‘chiriladi, xato qaytadi', async () => {
+    investorSend
+      .mockImplementationOnce(() =>
+        of({ statusCode: 200, data: { investor_id: null } }),
+      )
+      .mockImplementationOnce(() =>
+        throwError(() => ({ statusCode: 400, message: 'bog‘lanmadi' })),
+      );
+
+    const res = await request(app.getHttpServer())
+      .post('/investor-users')
+      .send(body);
+
+    expect(res.status).toBe(400);
+    expect(identitySend).toHaveBeenCalledWith(
+      { cmd: 'identity.user.delete' },
+      { id: '31', requester: { id: '1', roles: ['superadmin'] } },
     );
   });
 
@@ -364,6 +487,7 @@ describe('vpKijXce — POST/GET /investor-users (investor logini, BeePost naqshi
 
       expect(res.status).toBe(403);
       expect(identitySend).not.toHaveBeenCalled();
+      expect(investorSend).not.toHaveBeenCalled();
     },
   );
 
